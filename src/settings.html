@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>设置</title>
+    <link rel="stylesheet" href="settings.css">
+</head>
+<body>
+    <div class="settings-container">
+        <h2>设置</h2>
+
+        <div class="settings-section">
+            <h3 class="section-title">推理</h3>
+            <div class="setting-group">
+                <label>当前运行硬件</label>
+                <div id="currentHardwareInfo" class="info-box" style="margin-bottom: 12px;">
+                    <span id="currentHardwareText">未初始化</span>
+                </div>
+            </div>
+            <div class="setting-group">
+                <label for="inferenceDevice">推理硬件</label>
+                <select id="inferenceDevice">
+                    <option value="auto">自动选择</option>
+                </select>
+                <p class="hint">选择用于 DirectML 推理的 GPU 设备。自动模式优先选择独显，若无独显则选择显存最大的 GPU。</p>
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <h3 class="section-title">音频输出</h3>
+
+            <div class="setting-group">
+                <label for="audioOutputMode">输出模式</label>
+                <select id="audioOutputMode">
+                    <option value="shared">共享模式 (WASAPI Shared)</option>
+                    <option value="exclusive">独占模式 (WASAPI Exclusive)</option>
+                </select>
+                <p class="hint">独占模式绕过 Windows 音频混音器，可获得更低延迟和更高音质，但其他应用将无法同时使用音频设备。</p>
+            </div>
+
+            <div class="setting-group">
+                <label for="audioOutputDevice">输出设备</label>
+                <select id="audioOutputDevice">
+                    <option value="default">系统默认</option>
+                </select>
+                <p class="hint">选择音频输出设备。独占模式下仅支持 WASAPI 设备。</p>
+            </div>
+
+            <div class="setting-group">
+                <label for="audioSampleRate">采样率</label>
+                <select id="audioSampleRate">
+                    <option value="22050">22050 Hz</option>
+                    <option value="24000">24000 Hz (模型原生)</option>
+                    <option value="44100">44100 Hz (CD 品质)</option>
+                    <option value="48000">48000 Hz (标准)</option>
+                    <option value="96000">96000 Hz (高品质)</option>
+                    <option value="192000">192000 Hz (录音棚)</option>
+                </select>
+                <p class="hint">输出采样率。独占模式下需设备支持所选采样率，否则将回退到共享模式。</p>
+            </div>
+
+            <div class="setting-group">
+                <label for="audioBitDepth">位深度</label>
+                <select id="audioBitDepth">
+                    <option value="float32">32-bit Float (推荐)</option>
+                    <option value="int32">32-bit Integer</option>
+                    <option value="int24">24-bit Integer</option>
+                    <option value="int16">16-bit Integer (CD 品质)</option>
+                </select>
+                <p class="hint">独占模式下的输出位深度。32-bit Float 提供最高精度动态范围。</p>
+            </div>
+
+            <div class="setting-group">
+                <label for="audioBufferSize">缓冲区大小</label>
+                <select id="audioBufferSize">
+                    <option value="64">64 采样 (超低延迟 ~1.3ms@48kHz)</option>
+                    <option value="128">128 采样 (低延迟 ~2.7ms@48kHz)</option>
+                    <option value="256">256 采样 (中等 ~5.3ms@48kHz)</option>
+                    <option value="512">512 采样 (标准 ~10.7ms@48kHz)</option>
+                    <option value="1024" selected>1024 采样 (稳定 ~21.3ms@48kHz)</option>
+                    <option value="2048">2048 采样 (高稳定 ~42.7ms@48kHz)</option>
+                    <option value="4096">4096 采样 (最高稳定 ~85.3ms@48kHz)</option>
+                </select>
+                <p class="hint">较小的缓冲区降低延迟但增加 CPU 负载和爆音风险。独占模式下建议 256 以下。</p>
+            </div>
+
+            <div class="setting-group">
+                <label for="audioVolume">主音量 <span id="volumeValue">100%</span></label>
+                <input type="range" id="audioVolume" min="0" max="100" value="100" step="1">
+                <p class="hint">主输出音量控制。独占模式下由软件控制音量，共享模式下由系统混音器控制。</p>
+            </div>
+
+            <div class="setting-group" id="exclusiveInfo" style="display: none;">
+                <div class="info-box">
+                    <strong>WASAPI 独占模式说明</strong>
+                    <ul>
+                        <li>独占模式直接访问音频硬件，绕过 Windows 音频混音器</li>
+                        <li>可实现位完美 (bit-perfect) 音频输出</li>
+                        <li>延迟可低至 1-3ms（取决于缓冲区大小）</li>
+                        <li>独占模式运行时，其他应用无法播放音频</li>
+                        <li>如果设备不支持所选采样率/位深度，将自动回退到共享模式</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+
+        <div class="setting-actions">
+            <span id="settings-version" class="settings-version-text">v-</span>
+            <button id="saveBtn">保存</button>
+            <button id="cancelBtn">取消</button>
+        </div>
+    </div>
+    <script src="settings.js"></script>
+</body>
+</html>

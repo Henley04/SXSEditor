@@ -1,0 +1,60 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>分片编辑</title>
+  </head>
+  <body>
+    <div id="app">
+      <div id="model-loading-overlay">
+        <div class="loading-content">
+          <div class="loading-spinner"></div>
+          <div class="loading-text">正在加载推理模型，请稍候...</div>
+        </div>
+      </div>
+      <div id="toolbar">
+        <div class="toolbar-group">
+          <button id="btn-save">💾 保存</button>
+          <button id="btn-close">✖ 关闭</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+          <span id="fragment-name">分片</span>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+          <button id="btn-play-fragment">▶ 播放</button>
+          <button id="btn-export-fragment">💿 导出</button>
+          <button id="btn-import-midi">🎵 导入MIDI</button>
+          <input type="checkbox" id="autoShiftCheck" checked><label for="autoShiftCheck">Auto Shift</label>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group param-group">
+          <button id="btn-param-MIDI" class="btn-param active">MIDI</button>
+          <button id="btn-param-Pitch" class="btn-param">Pitch</button>
+          <button id="btn-param-VOL" class="btn-param">VOL</button>
+          <button id="btn-param-PAN" class="btn-param">L/R</button>
+        </div>
+        <div class="toolbar-divider" id="pitch-tools-divider" style="display:none"></div>
+        <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
+          <button id="btn-pitch-toggle" class="btn-pitch-tool active" title="启用/禁用音高曲线">🎵 曲线</button>
+          <button id="btn-pitch-anchor" class="btn-pitch-tool active" title="锚点编辑模式">⚓ 锚点</button>
+          <button id="btn-pitch-brush" class="btn-pitch-tool" title="画笔绘制模式">🖌 画笔</button>
+          <button id="btn-pitch-reset" class="btn-pitch-tool" title="重置为MIDI自动曲线">↺ 重置</button>
+        </div>
+      </div>
+      <div id="main-content">
+        <div id="left-sidebar">
+          <div id="piano-keys-container">
+            <canvas id="piano-keys"></canvas>
+          </div>
+        </div>
+        <div id="right-content">
+          <div id="piano-roll-container">
+            <canvas id="piano-roll"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

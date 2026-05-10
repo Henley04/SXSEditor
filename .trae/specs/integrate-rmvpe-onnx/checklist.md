@@ -1,0 +1,8 @@
+- [x] RmvpePitchDetector类创建成功，能正确加载RMVPE ONNX模型
+- [x] 音频重采样功能正确（44100Hz -> 16000Hz）
+- [x] IPC handler `extractF0:onnx` 在main.js中正确实现
+- [x] preload.js正确暴露extractF0 API
+- [x] audioPreprocess.js使用真实RMVPE模型替代模拟数据
+- [x] 点击"自动获取F0和音高"按钮能触发真实推理
+- [ ] 提取的F0数据显示正确
+- [ ] 提取的MIDI音符显示在钢琴卷帘中

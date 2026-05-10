@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>功能特性 - SXSEditor</title>
+  <meta name="description" content="了解 SXSEditor 的完整功能特性：多轨编辑、钢琴卷帘、神经网络歌声合成、歌手管理、音频预处理等。">
+  <meta property="og:title" content="功能特性 - SXSEditor">
+  <meta property="og:description" content="了解 SXSEditor 的完整功能特性">
+  <meta property="og:image" content="images/icon.png">
+  <link rel="icon" type="image/png" href="images/icon.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="noise-overlay"></div>
+
+  <nav>
+    <div class="nav-inner">
+      <a href="index.html" class="nav-logo">
+        <img src="images/icon.png" alt="SXSEditor">
+        <span>SXSEditor</span>
+      </a>
+      <button class="mobile-toggle" aria-label="菜单">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+      <ul class="nav-links">
+        <li><a href="index.html">首页</a></li>
+        <li><a href="features.html">功能特性</a></li>
+        <li><a href="download.html">下载</a></li>
+        <li><a href="about.html">关于</a></li>
+        <li><a href="download.html" class="nav-cta">立即下载</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main>
+    <section class="page-header">
+      <h1>功能特性</h1>
+      <p>探索 SXSEditor 的强大功能</p>
+    </section>
+
+    <section class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon">🎹</div>
+        <h3>多轨时间线编辑</h3>
+        <p>在可视化多轨时间线上自由排列歌曲片段，支持拖拽调整位置和大小，像专业 DAW 一样管理你的项目。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🎼</div>
+        <h3>钢琴卷帘编辑器</h3>
+        <p>在钢琴卷帘视图中精确编辑音符、歌词和音高曲线。支持添加、删除、移动和调整音符长度。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🧠</div>
+        <h3>神经网络歌声合成</h3>
+        <p>使用 SoulX-Singer 声学模型，基于 ONNX Runtime 高效推理，将音符和歌词转化为自然真实的歌声。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🎤</div>
+        <h3>歌手管理</h3>
+        <p>创建和管理多个歌手，为每个歌手配置参考音频、头像、颜色标识和预处理 F0 数据。支持导出为 .sxssinger 文件。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">📊</div>
+        <h3>音频预处理</h3>
+        <p>内置 RMVPE 和 Basic Pitch 音高检测器，自动从参考音频中提取 F0 与音符数据，为歌手创建提供完整支持。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">▶️</div>
+        <h3>实时播放与试听</h3>
+        <p>直接在编辑器中合成并播放整个项目，支持暂停、停止和实时控制，即时感受创作效果。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">📦</div>
+        <h3>WAV 导出</h3>
+        <p>将完成的混音项目导出为标准 WAV 文件，采样率 24000 Hz，可直接用于后续音频制作。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">⚡</div>
+        <h3>GPU 加速</h3>
+        <p>通过 DirectML 支持 NVIDIA / AMD / Intel 独立显卡自动加速，大幅提升推理性能。同时支持 CPU 回退。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🖥️</div>
+        <h3>跨平台桌面应用</h3>
+        <p>基于 Electron 构建，原生级桌面体验。支持 Windows、macOS 和 Linux 三大平台打包分发。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">📐</div>
+        <h3>包络编辑器</h3>
+        <p>精细编辑音高曲线、音量包络等参数，为每一个音符注入丰富的情感表达。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🔧</div>
+        <h3>灵活的推理配置</h3>
+        <p>在设置界面选择推理设备（自动选择或指定 GPU），灵活平衡性能与功耗。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">🧪</div>
+        <h3>完整的测试覆盖</h3>
+        <p>160 余个自动化测试用例覆盖 WAV 编码、轨道管理、SVS 流水线、音高检测等核心功能模块。</p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="index.html">首页</a>
+        <a href="features.html">功能特性</a>
+        <a href="download.html">下载</a>
+        <a href="about.html">关于</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank">GitHub</a>
+      </div>
+      <div class="footer-copy">
+        &copy; 2026 SXSEditor. MIT License.
+      </div>
+    </div>
+  </footer>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SXSEditor - AI 歌声合成工作台</title>
+  <meta name="description" content="SXSEditor 是一款开源的 AI 歌声合成与编辑桌面应用，基于 ONNX Runtime 和 Electron，支持多轨编辑、钢琴卷帘和神经网络歌声合成。">
+  <meta property="og:title" content="SXSEditor - AI 歌声合成工作台">
+  <meta property="og:description" content="一款开源的 AI 歌声合成与编辑桌面应用">
+  <meta property="og:image" content="images/icon.png">
+  <link rel="icon" type="image/png" href="images/icon.png">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div class="noise-overlay"></div>
+
+  <nav>
+    <div class="nav-inner">
+      <a href="index.html" class="nav-logo">
+        <img src="images/icon.png" alt="SXSEditor">
+        <span>SXSEditor</span>
+      </a>
+      <button class="mobile-toggle" aria-label="菜单">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+      <ul class="nav-links">
+        <li><a href="index.html">首页</a></li>
+        <li><a href="features.html">功能特性</a></li>
+        <li><a href="download.html">下载</a></li>
+        <li><a href="about.html">关于</a></li>
+        <li><a href="download.html" class="nav-cta">立即下载</a></li>
+      </ul>
+    </div>
+  </nav>
+
+  <main>
+    <section class="hero">
+      <div class="hero-bg-grid"></div>
+      <div class="hero-content">
+        <div class="hero-badge">
+          <span class="hero-badge-dot"></span>
+          v1.0.0 · 开源 AI 歌声合成
+        </div>
+        <h1>
+          用 AI 创造<br>
+          <span class="gradient-text">属于你的歌声</span>
+        </h1>
+        <p>
+          SXSEditor 是一款开源的桌面歌声合成工作台。
+          结合钢琴卷帘编辑器和神经网络 SVS 流水线，
+          让你轻松创作、编辑和合成专业级歌声。
+        </p>
+        <div class="hero-actions">
+          <a href="download.html" class="btn btn-primary btn-lg">
+            免费下载
+            <span class="icon-arrow">→</span>
+          </a>
+          <a href="features.html" class="btn btn-secondary btn-lg">
+            了解功能
+          </a>
+        </div>
+        <div class="hero-visual">
+          <div class="waveform-visual">
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+            <div class="waveform-bar"></div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="index.html">首页</a>
+        <a href="features.html">功能特性</a>
+        <a href="download.html">下载</a>
+        <a href="about.html">关于</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank">GitHub</a>
+      </div>
+      <div class="footer-copy">
+        &copy; 2026 SXSEditor. MIT License.
+      </div>
+    </div>
+  </footer>
+
+  <script src="js/main.js"></script>
+</body>
+</html>

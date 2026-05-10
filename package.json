@@ -1,0 +1,61 @@
+{
+  "name": "sxseditor",
+  "productName": "SXSEditor",
+  "version": "1.0.0",
+  "description": "SoulX Singer Editor - AI歌声合成工作台",
+  "main": ".webpack/main",
+  "private": true,
+  "scripts": {
+    "start": "electron-forge start",
+    "package": "electron-forge package",
+    "make": "electron-forge make",
+    "publish": "electron-forge publish",
+    "lint": "echo \"No linting configured\"",
+    "test": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --reporter spec",
+    "test:coverage": "nyc --reporter=text --reporter=html npm test",
+    "test:watch": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --watch"
+  },
+  "keywords": ["electron", "svs", "ai", "music", "singing"],
+  "author": {
+    "name": "SXSEditor Dev",
+    "email": "dev@sxseditor.local"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/preset-env": "^7.29.2",
+    "@babel/register": "^7.28.6",
+    "@electron-forge/cli": "^7.11.1",
+    "@electron-forge/maker-deb": "^7.11.1",
+    "@electron-forge/maker-rpm": "^7.11.1",
+    "@electron-forge/maker-squirrel": "^7.11.1",
+    "@electron-forge/maker-zip": "^7.11.1",
+    "@electron-forge/plugin-auto-unpack-natives": "^7.11.1",
+    "@electron-forge/plugin-fuses": "^7.11.1",
+    "@electron-forge/plugin-webpack": "^7.11.1",
+    "@electron/fuses": "^1.8.0",
+    "@electron/rebuild": "^4.0.4",
+    "@playwright/test": "^1.59.1",
+    "@vercel/webpack-asset-relocator-loader": "^1.7.3",
+    "babel-loader": "^10.1.1",
+    "chai": "^6.2.2",
+    "copy-webpack-plugin": "^14.0.0",
+    "css-loader": "^6.11.0",
+    "electron-rebuild": "^3.2.9",
+    "jsdom": "^29.0.2",
+    "mocha": "^11.7.5",
+    "node-loader": "^2.1.0",
+    "nyc": "^18.0.0",
+    "sinon": "^21.1.2",
+    "style-loader": "^3.3.4",
+    "electron": "^41.3.0",
+    "electron-squirrel-startup": "^1.0.1",
+    "webpack-cli": "^7.0.2"
+  },
+  "dependencies": {
+    "@tensorflow/tfjs": "^4.22.0",
+    "naudiodon": "^2.3.6",
+    "onnxruntime-node": "^1.24.3",
+    "pinyin-pro": "^3.28.1"
+  }
+}

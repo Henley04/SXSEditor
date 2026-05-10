@@ -1,0 +1,1775 @@
+const path = require('node:path');
+const fs = require('node:fs');
+const ort = require('onnxruntime-node');
+const { pinyin } = require('pinyin-pro');
+
+const SAMPLE_RATE = 24000;
+const HOP_SIZE = 480;
+const MEL_DIM = 128;
+const EMBED_DIM = 512;
+const COND_DIM = 1024;
+const N_FFT = 1920;
+const NUM_MELS = 128;
+const MEL_MEAN = -4.92;
+const MEL_VAR = 8.14;
+const F0_BIN = 361;
+const F0_MIN = 32.7031956625;
+const CFG_STRENGTH = 3.0;
+const CFG_RESCALE = 0.75;
+const DEFAULT_DIFF_STEPS = 32;
+const VOCODER_CHUNK_FRAMES = 128;
+
+const ONNX_MODEL_FILES = [
+    'note_text_encoder.onnx',
+    'note_pitch_encoder.onnx',
+    'note_type_encoder.onnx',
+    'f0_encoder.onnx',
+    'preflow.onnx',
+    'cond_emb.onnx',
+    'diff_step_dml.onnx',
+    'vocoder.onnx',
+    'mel_transform.onnx',
+];
+
+function parseWavBuffer(buffer) {
+    const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
+    const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+
+    const riff = String.fromCharCode(view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3));
+    if (riff !== 'RIFF') {
+        throw new Error('Not a WAV file: missing RIFF header');
+    }
+    const wave = String.fromCharCode(view.getUint8(8), view.getUint8(9), view.getUint8(10), view.getUint8(11));
+    if (wave !== 'WAVE') {
+        throw new Error('Not a WAV file: missing WAVE format');
+    }
+
+    let offset = 12;
+    let fmtOffset = -1;
+    let dataOffset = -1;
+    let dataSize = 0;
+
+    while (offset < buf.byteLength - 8) {
+        const chunkId = String.fromCharCode(
+            view.getUint8(offset), view.getUint8(offset + 1),
+            view.getUint8(offset + 2), view.getUint8(offset + 3)
+        );
+        const chunkSize = view.getUint32(offset + 4, true);
+
+        if (chunkId === 'fmt ') {
+            fmtOffset = offset + 8;
+        } else if (chunkId === 'data') {
+            dataOffset = offset + 8;
+            dataSize = chunkSize;
+        }
+
+        offset += 8 + chunkSize;
+        if (chunkSize % 2 !== 0) offset++;
+    }
+
+    if (fmtOffset === -1) throw new Error('WAV file missing fmt chunk');
+    if (dataOffset === -1) throw new Error('WAV file missing data chunk');
+
+    const audioFormat = view.getUint16(fmtOffset, true);
+    const numChannels = view.getUint16(fmtOffset + 2, true);
+    const sampleRate = view.getUint32(fmtOffset + 4, true);
+    const bitsPerSample = view.getUint16(fmtOffset + 14, true);
+    const bytesPerSample = bitsPerSample / 8;
+    const totalSamples = Math.floor(dataSize / bytesPerSample);
+    const numFrames = Math.floor(totalSamples / numChannels);
+    const audioFloat = new Float32Array(numFrames);
+
+    for (let f = 0; f < numFrames; f++) {
+        let sum = 0;
+        for (let ch = 0; ch < numChannels; ch++) {
+            const i = f * numChannels + ch;
+            const byteOffset = dataOffset + i * bytesPerSample;
+            let sample = 0;
+            if (audioFormat === 3 && bitsPerSample === 32) {
+                sample = view.getFloat32(byteOffset, true);
+            } else if (audioFormat === 1 && bitsPerSample === 16) {
+                sample = view.getInt16(byteOffset, true) / 32768;
+            } else if (audioFormat === 1 && bitsPerSample === 24) {
+                const low = view.getUint16(byteOffset, true);
+                const high = view.getInt8(byteOffset + 2);
+                sample = ((high << 16) | low) / 8388608;
+            } else if (audioFormat === 1 && bitsPerSample === 32) {
+                sample = view.getInt32(byteOffset, true) / 2147483648;
+            }
+            sum += sample;
+        }
+        audioFloat[f] = sum / numChannels;
+    }
+
+    return { data: audioFloat, sampleRate };
+}
+
+function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
+    if (srcSampleRate === dstSampleRate) return audioFloat;
+    const ratio = dstSampleRate / srcSampleRate;
+    const newLength = Math.floor(audioFloat.length * ratio);
+    const out = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+        const srcPos = i / ratio;
+        const idx0 = Math.floor(srcPos);
+        const idx1 = Math.min(idx0 + 1, audioFloat.length - 1);
+        const t = srcPos - idx0;
+        out[i] = audioFloat[idx0] * (1 - t) + audioFloat[idx1] * t;
+    }
+    return out;
+}
+
+function extractMelSpectrogram(audioFloat, sr) {
+    const padLength = (N_FFT - HOP_SIZE) / 2;
+    const padded = new Float32Array(audioFloat.length + 2 * padLength);
+    for (let i = 0; i < padLength; i++) {
+        padded[i] = audioFloat[padLength - i];
+        padded[padded.length - 1 - i] = audioFloat[audioFloat.length - 1 - (padLength - i)];
+    }
+    padded.set(audioFloat, padLength);
+
+    const numFrames = Math.floor((padded.length - N_FFT) / HOP_SIZE) + 1;
+    const melBands = NUM_MELS;
+
+    const window = new Float32Array(N_FFT);
+    for (let i = 0; i < N_FFT; i++) {
+        window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (N_FFT - 1)));
+    }
+
+    const real = new Float32Array(N_FFT);
+    const imag = new Float32Array(N_FFT);
+    const magnitude = new Float32Array(N_FFT / 2 + 1);
+
+    const powerSpec = new Float32Array(numFrames * (N_FFT / 2 + 1));
+
+    for (let f = 0; f < numFrames; f++) {
+        const start = f * HOP_SIZE;
+        for (let i = 0; i < N_FFT; i++) {
+            real[i] = padded[start + i] * window[i];
+            imag[i] = 0;
+        }
+
+        for (let len = N_FFT; len >= 2; len /= 2) {
+            const halfLen = len / 2;
+            const angle = -2 * Math.PI / len;
+            for (let i = 0; i < N_FFT; i += len) {
+                for (let j = 0; j < halfLen; j++) {
+                    const idx1 = i + j;
+                    const idx2 = i + j + halfLen;
+                    const cosVal = Math.cos(angle * j);
+                    const sinVal = Math.sin(angle * j);
+                    const tReal = real[idx1];
+                    const tImag = imag[idx1];
+                    const uReal = real[idx2];
+                    const uImag = imag[idx2];
+                    real[idx1] = tReal + uReal;
+                    imag[idx1] = tImag + uImag;
+                    real[idx2] = (tReal - uReal) * cosVal - (tImag - uImag) * sinVal;
+                    imag[idx2] = (tReal - uReal) * sinVal + (tImag - uImag) * cosVal;
+                }
+            }
+        }
+
+        for (let i = 0; i <= N_FFT / 2; i++) {
+            magnitude[i] = real[i] * real[i] + imag[i] * imag[i];
+            powerSpec[f * (N_FFT / 2 + 1) + i] = magnitude[i];
+        }
+    }
+
+    const fmax = sr / 2;
+    const melFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
+
+    const melSpec = new Float32Array(numFrames * melBands);
+    for (let f = 0; f < numFrames; f++) {
+        for (let m = 0; m < melBands; m++) {
+            let sum = 0;
+            for (let k = 0; k <= N_FFT / 2; k++) {
+                sum += powerSpec[f * (N_FFT / 2 + 1) + k] * melFilterbank[m * (N_FFT / 2 + 1) + k];
+            }
+            melSpec[f * melBands + m] = Math.log(Math.max(sum, 1e-10));
+        }
+    }
+
+    const melStd = Math.sqrt(MEL_VAR);
+    for (let i = 0; i < melSpec.length; i++) {
+        melSpec[i] = (melSpec[i] - MEL_MEAN) / melStd;
+    }
+
+    return { data: melSpec, frames: numFrames, melBands };
+}
+
+function hzToMel(hz) {
+    return 2595 * Math.log10(1 + hz / 700);
+}
+
+function melToHz(mel) {
+    return 700 * (Math.pow(10, mel / 2595) - 1);
+}
+
+function createMelFilterbank(numBands, fftSize, sampleRate, fmin, fmax) {
+    const numFftBins = fftSize / 2 + 1;
+    const melMin = hzToMel(fmin);
+    const melMax = hzToMel(fmax);
+    const melPoints = new Float32Array(numBands + 2);
+    for (let i = 0; i < melPoints.length; i++) {
+        melPoints[i] = melMin + (melMax - melMin) * i / (melPoints.length - 1);
+    }
+
+    const binPoints = new Float32Array(melPoints.length);
+    for (let i = 0; i < melPoints.length; i++) {
+        binPoints[i] = Math.floor((fftSize + 1) * melToHz(melPoints[i]) / sampleRate);
+    }
+
+    const filterbank = new Float32Array(numBands * numFftBins);
+    for (let m = 0; m < numBands; m++) {
+        const fLeft = binPoints[m];
+        const fCenter = binPoints[m + 1];
+        const fRight = binPoints[m + 2];
+
+        for (let k = fLeft; k < fCenter; k++) {
+            if (k >= 0 && k < numFftBins) {
+                filterbank[m * numFftBins + k] = (k - fLeft) / Math.max(fCenter - fLeft, 1);
+            }
+        }
+        for (let k = fCenter; k < fRight; k++) {
+            if (k >= 0 && k < numFftBins) {
+                filterbank[m * numFftBins + k] = (fRight - k) / Math.max(fRight - fCenter, 1);
+            }
+        }
+    }
+
+    return filterbank;
+}
+
+function istftReconstruction(magPhaseData, numFrames, nFft, hopLength, winLength) {
+    const numFreqBins = nFft / 2 + 1;
+    const magData = new Float32Array(numFrames * numFreqBins);
+    const phaseData = new Float32Array(numFrames * numFreqBins);
+
+    for (let f = 0; f < numFrames; f++) {
+        for (let k = 0; k < numFreqBins; k++) {
+            magData[f * numFreqBins + k] = Math.exp(Math.min(magPhaseData[f * (numFreqBins * 2) + k], 100));
+            phaseData[f * numFreqBins + k] = magPhaseData[f * (numFreqBins * 2) + numFreqBins + k];
+        }
+    }
+
+    const window = new Float32Array(winLength);
+    for (let i = 0; i < winLength; i++) {
+        window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (winLength - 1)));
+    }
+
+    const outputLength = (numFrames - 1) * hopLength + winLength;
+    const output = new Float32Array(outputLength);
+    const windowSum = new Float32Array(outputLength);
+
+    for (let f = 0; f < numFrames; f++) {
+        const realPart = new Float32Array(nFft);
+        const imagPart = new Float32Array(nFft);
+
+        for (let k = 0; k < numFreqBins; k++) {
+            const mag = magData[f * numFreqBins + k];
+            const phase = phaseData[f * numFreqBins + k];
+            realPart[k] = mag * Math.cos(phase);
+            imagPart[k] = mag * Math.sin(phase);
+        }
+        for (let k = numFreqBins; k < nFft; k++) {
+            const mirrorK = nFft - k;
+            if (mirrorK > 0 && mirrorK < numFreqBins) {
+                realPart[k] = realPart[mirrorK];
+                imagPart[k] = -imagPart[mirrorK];
+            }
+        }
+
+        const ifftReal = new Float32Array(nFft);
+        const ifftImag = new Float32Array(nFft);
+        for (let k = 0; k < nFft; k++) {
+            for (let n = 0; n < nFft; n++) {
+                const angle = 2 * Math.PI * k * n / nFft;
+                ifftReal[n] += realPart[k] * Math.cos(angle) - imagPart[k] * Math.sin(angle);
+                ifftImag[n] += realPart[k] * Math.sin(angle) + imagPart[k] * Math.cos(angle);
+            }
+        }
+
+        const frameStart = f * hopLength;
+        for (let n = 0; n < winLength; n++) {
+            const outIdx = frameStart + n;
+            if (outIdx < outputLength) {
+                output[outIdx] += ifftReal[n] * window[n] / nFft;
+                windowSum[outIdx] += window[n] * window[n];
+            }
+        }
+    }
+
+    for (let i = 0; i < outputLength; i++) {
+        if (windowSum[i] > 1e-8) {
+            output[i] /= windowSum[i];
+        }
+    }
+
+    return output;
+}
+
+const DUMMY_TEST_INPUTS = {
+    noteTextEncoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([1n, 2n, 3n]), [1, 3]) },
+    notePitchEncoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([60n, 62n, 64n]), [1, 3]) },
+    noteTypeEncoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([0n, 0n, 0n]), [1, 3]) },
+    f0Encoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([100n, 100n, 100n]), [1, 3]) },
+    preflow: { features: new ort.Tensor('float32', new Float32Array(3 * EMBED_DIM), [1, 3, EMBED_DIM]) },
+    condEmb: { cond_code: new ort.Tensor('float32', new Float32Array(3 * EMBED_DIM), [1, 3, EMBED_DIM]) },
+    diffStep: {
+        xt_input: new ort.Tensor('float32', new Float32Array(3 * MEL_DIM), [1, 3, MEL_DIM]),
+        t: new ort.Tensor('float32', new Float32Array([0.5]), [1]),
+        cond: new ort.Tensor('float32', new Float32Array(3 * COND_DIM), [1, 3, COND_DIM]),
+        xt_mask: new ort.Tensor('float32', new Float32Array([1, 1, 1]), [1, 3]),
+    },
+    vocoder: { mel: new ort.Tensor('float32', new Float32Array(3 * MEL_DIM), [1, 3, MEL_DIM]) },
+    melTransform: { waveform: new ort.Tensor('float32', new Float32Array(HOP_SIZE * 3), [1, HOP_SIZE * 3]) },
+};
+
+function isDiscreteGPUByName(name) {
+    const n = name.toLowerCase();
+    if (n.includes('nvidia') || n.includes('geforce') || n.includes('rtx') || n.includes('gtx') || n.includes('quadro')) return true;
+    if (n.includes('radeon rx') || n.includes('radeon pro') || n.includes('radeon instinct')) return true;
+    if (n.includes('amd') && (n.includes('rx ') || n.includes('pro w') || n.includes('pro v'))) return true;
+    if (n.includes('intel') && n.includes('arc') && /\barc\s*a\d/i.test(n)) return true;
+    if (n.includes('intel')) return false;
+    if (n.includes('radeon') && !n.includes('rx') && !n.includes('pro') && !n.includes('instinct')) return false;
+    if (n.includes('microsoft') && n.includes('basic')) return false;
+    return undefined;
+}
+
+function getVendorName(vendorId) {
+    const vendors = {
+        0x10DE: 'NVIDIA',
+        0x1002: 'AMD',
+        0x8086: 'Intel',
+        0x1414: 'Microsoft',
+    };
+    return vendors[vendorId] || '';
+}
+
+async function enumerateGPUsViaDXGI() {
+    const { execFile } = require('child_process');
+
+    const csharpCode = [
+        'using System;',
+        'using System.Runtime.InteropServices;',
+        'using System.Text;',
+        '',
+        'public class DXGIEnum',
+        '{',
+        '    [DllImport("dxgi.dll")]',
+        '    static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr ppFactory);',
+        '',
+        '    [UnmanagedFunctionPointer(CallingConvention.StdCall)]',
+        '    delegate int EnumAdapters1Del(IntPtr This, uint Adapter, out IntPtr ppAdapter);',
+        '',
+        '    [UnmanagedFunctionPointer(CallingConvention.StdCall)]',
+        '    delegate int GetDesc1Del(IntPtr This, IntPtr pDesc);',
+        '',
+        '    [UnmanagedFunctionPointer(CallingConvention.StdCall)]',
+        '    delegate uint ReleaseDel(IntPtr This);',
+        '',
+        '    public static string GetAdapters()',
+        '    {',
+        '        var factoryGuid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");',
+        '        IntPtr factoryPtr;',
+        '        int hr = CreateDXGIFactory1(ref factoryGuid, out factoryPtr);',
+        '        if (hr != 0) return "";',
+        '',
+        '        var sb = new StringBuilder();',
+        '        try',
+        '        {',
+        '            IntPtr vtbl = Marshal.ReadIntPtr(factoryPtr);',
+        '            IntPtr enumAdapters1Ptr = Marshal.ReadIntPtr(vtbl, IntPtr.Size * 12);',
+        '            var enumAdapters1 = (EnumAdapters1Del)Marshal.GetDelegateForFunctionPointer(enumAdapters1Ptr, typeof(EnumAdapters1Del));',
+        '',
+        '            for (uint i = 0; i < 16; i++)',
+        '            {',
+        '                IntPtr adapterPtr;',
+        '                hr = enumAdapters1(factoryPtr, i, out adapterPtr);',
+        '                if (hr != 0) break;',
+        '',
+        '                try',
+        '                {',
+        '                    IntPtr adapterVtbl = Marshal.ReadIntPtr(adapterPtr);',
+        '                    IntPtr getDesc1Ptr = Marshal.ReadIntPtr(adapterVtbl, IntPtr.Size * 10);',
+        '                    var getDesc1 = (GetDesc1Del)Marshal.GetDelegateForFunctionPointer(getDesc1Ptr, typeof(GetDesc1Del));',
+        '',
+        '                    IntPtr descPtr = Marshal.AllocHGlobal(320);',
+        '                    try',
+        '                    {',
+        '                        hr = getDesc1(adapterPtr, descPtr);',
+        '                        if (hr != 0) continue;',
+        '',
+        '                        uint flags = (uint)Marshal.ReadInt32(descPtr, 304);',
+        '                        if ((flags & 2) != 0) continue;',
+        '',
+        '                        string description = Marshal.PtrToStringUni(descPtr);',
+        '                        uint vendorId = (uint)Marshal.ReadInt32(descPtr, 256);',
+        '                        uint deviceId = (uint)Marshal.ReadInt32(descPtr, 260);',
+        '                        long dedicatedVideoMemory = Marshal.ReadInt64(descPtr, 272);',
+        '',
+        '                        if (sb.Length > 0) sb.Append(";");',
+        '                        sb.Append(i);',
+        '                        sb.Append("|");',
+        '                        sb.Append((description ?? "").Replace("|", "_"));',
+        '                        sb.Append("|");',
+        '                        sb.Append(dedicatedVideoMemory);',
+        '                        sb.Append("|");',
+        '                        sb.Append(vendorId);',
+        '                        sb.Append("|");',
+        '                        sb.Append(deviceId);',
+        '                    }',
+        '                    finally',
+        '                    {',
+        '                        Marshal.FreeHGlobal(descPtr);',
+        '                    }',
+        '                }',
+        '                finally',
+        '                {',
+        '                    IntPtr avtbl = Marshal.ReadIntPtr(adapterPtr);',
+        '                    IntPtr relPtr = Marshal.ReadIntPtr(avtbl, IntPtr.Size * 2);',
+        '                    var release = (ReleaseDel)Marshal.GetDelegateForFunctionPointer(relPtr, typeof(ReleaseDel));',
+        '                    release(adapterPtr);',
+        '                }',
+        '            }',
+        '        }',
+        '        finally',
+        '        {',
+        '            IntPtr fvtbl = Marshal.ReadIntPtr(factoryPtr);',
+        '            IntPtr relPtr = Marshal.ReadIntPtr(fvtbl, IntPtr.Size * 2);',
+        '            var release = (ReleaseDel)Marshal.GetDelegateForFunctionPointer(relPtr, typeof(ReleaseDel));',
+        '            release(factoryPtr);',
+        '        }',
+        '',
+        '        return sb.ToString();',
+        '    }',
+        '}',
+    ].join('\n');
+
+    const psScript = `Add-Type -TypeDefinition @"\n${csharpCode}\n"@\n[DXGIEnum]::GetAdapters()`;
+    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+
+    return new Promise((resolve) => {
+        execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { timeout: 15000 }, (err, stdout) => {
+            if (err) {
+                console.warn('[OnnxSVSPipeline] DXGI GPU 枚举失败:', err.message);
+                resolve([]);
+                return;
+            }
+            try {
+                const output = stdout.trim();
+                if (!output) {
+                    resolve([]);
+                    return;
+                }
+                const entries = output.split(';').filter(l => l.trim());
+                const devices = entries.map(entry => {
+                    const parts = entry.split('|');
+                    const vramBytes = parseInt(parts[2]) || 0;
+                    const gb = vramBytes / (1024 * 1024 * 1024);
+                    const vramStr = gb >= 1 ? `${Math.round(gb * 10) / 10} GB` : `${Math.round(vramBytes / (1024 * 1024))} MB`;
+                    const vendorId = parseInt(parts[3]) || 0;
+                    const isDiscrete = isDiscreteGPUByName(parts[1]);
+                    return {
+                        name: parts[1],
+                        type: 1,
+                        isDiscrete: isDiscrete !== undefined ? isDiscrete : (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024),
+                        dxgiAdapterNumber: parseInt(parts[0]),
+                        vram: vramStr,
+                        vramBytes: vramBytes,
+                        vendor: getVendorName(vendorId),
+                        source: 'dxgi',
+                    };
+                });
+                resolve(devices);
+            } catch (e) {
+                console.warn('[OnnxSVSPipeline] DXGI GPU 枚举结果解析失败:', e.message);
+                resolve([]);
+            }
+        });
+    });
+}
+
+async function enumerateDMLDevicesInProcess(modelDir) {
+    const probeModel = path.join(modelDir, 'note_text_encoder.onnx');
+    try {
+        await fs.promises.access(probeModel);
+    } catch (_) {
+        return [];
+    }
+
+    const origWrite = process.stderr.write.bind(process.stderr);
+    let stderrBuf = '';
+    process.stderr.write = function(chunk, encoding, callback) {
+        if (typeof chunk === 'string') stderrBuf += chunk;
+        else if (Buffer.isBuffer(chunk)) stderrBuf += chunk.toString('utf-8');
+        return origWrite(chunk, encoding, callback);
+    };
+
+    ort.env.logLevel = 'verbose';
+
+    try {
+        const session = await ort.InferenceSession.create(probeModel, {
+            executionProviders: [{ name: 'dml', deviceId: 0 }, 'cpu']
+        });
+        session.release();
+    } catch (_) {}
+
+    await new Promise(r => setTimeout(r, 500));
+
+    process.stderr.write = origWrite;
+    ort.env.logLevel = 'warning';
+
+    const devices = [];
+    const lines = stderrBuf.split('\n');
+    for (const line of lines) {
+        if (!line.includes('Discovered OrtHardwareDevice')) continue;
+
+        const descMatch = line.match(/Description=([^,\]]+)/);
+        const typeMatch = line.match(/type:(\d+)/);
+        const discreteMatch = line.match(/Discrete=(\d)/);
+        const adapterMatch = line.match(/DxgiAdapterNumber=(\d+)/);
+        const vramMatch = line.match(/DxgiVideoMemory=(\d+)\s*([MG]B)/);
+        const vendorMatch = line.match(/vendor:([^,\]]+)/);
+
+        if (!descMatch || !typeMatch) continue;
+
+        const gpuName = descMatch[1].trim();
+        const typeVal = parseInt(typeMatch[1]);
+
+        const isDiscreteFromFlag = discreteMatch ? discreteMatch[1] === '1' : undefined;
+        const isDiscreteFromName = isDiscreteGPUByName(gpuName);
+        let isDiscrete;
+        if (isDiscreteFromName !== undefined) {
+            isDiscrete = isDiscreteFromName || (isDiscreteFromFlag === true);
+        } else if (isDiscreteFromFlag !== undefined) {
+            isDiscrete = isDiscreteFromFlag;
+        } else {
+            isDiscrete = false;
+        }
+
+        let vramStr = undefined;
+        let vramBytes = 0;
+        if (vramMatch) {
+            const vramVal = parseInt(vramMatch[1]);
+            const vramUnit = vramMatch[2];
+            vramStr = `${vramVal} ${vramUnit}`;
+            if (vramUnit === 'GB') vramBytes = vramVal * 1024 * 1024 * 1024;
+            else if (vramUnit === 'MB') vramBytes = vramVal * 1024 * 1024;
+        }
+
+        if (typeVal !== 1) continue;
+
+        devices.push({
+            name: gpuName,
+            type: typeVal,
+            isDiscrete: isDiscrete,
+            dxgiAdapterNumber: adapterMatch ? parseInt(adapterMatch[1]) : undefined,
+            vram: vramStr,
+            vramBytes: vramBytes,
+            vendor: vendorMatch ? vendorMatch[1].trim() : '',
+            source: 'dml',
+        });
+    }
+
+    return devices;
+}
+
+async function enumerateDMLDevices(modelDir) {
+    let devices = await enumerateGPUsViaDXGI();
+
+    if (devices.length > 0) {
+        console.log(`[OnnxSVSPipeline] DXGI 枚举发现 ${devices.length} 个 GPU 设备`);
+        return devices;
+    }
+
+    console.log('[OnnxSVSPipeline] DXGI 枚举未发现 GPU，尝试 ONNX Runtime verbose 日志枚举...');
+    if (modelDir) {
+        devices = await enumerateDMLDevicesInProcess(modelDir);
+    }
+
+    return devices;
+}
+
+async function detectBestGPU(modelDir) {
+    let devices = await enumerateDMLDevices(modelDir);
+
+    if (devices.length === 0) {
+        console.log('[OnnxSVSPipeline] 未发现任何 GPU 设备，将使用 CPU');
+        return { deviceId: undefined, name: '', devices: [] };
+    }
+
+    console.log(`[OnnxSVSPipeline] 发现 ${devices.length} 个 GPU 设备:`);
+    for (const d of devices) {
+        const vramStr = d.vram ? ` (${d.vram})` : '';
+        const discreteStr = d.isDiscrete ? ' [独显]' : ' [核显]';
+        const adapterStr = d.dxgiAdapterNumber !== undefined ? ` deviceId=${d.dxgiAdapterNumber}` : '';
+        const sourceStr = d.source ? ` (${d.source})` : '';
+        console.log(`  - ${d.name}${vramStr}${discreteStr}${adapterStr}${sourceStr}`);
+    }
+
+    const gpus = devices.filter(d => d.dxgiAdapterNumber !== undefined);
+    if (gpus.length === 0) {
+        return { deviceId: undefined, name: '', devices };
+    }
+
+    const discrete = gpus.filter(d => d.isDiscrete);
+    let best;
+    if (discrete.length > 0) {
+        best = discrete.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
+    } else {
+        best = gpus.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
+    }
+    const vramStr = best.vram ? ` (${best.vram})` : '';
+    const discreteStr = best.isDiscrete ? ' [独显]' : ' [核显]';
+
+    console.log(`[OnnxSVSPipeline] 自动选择: ${best.name}${vramStr}${discreteStr} (deviceId=${best.dxgiAdapterNumber})`);
+
+    return {
+        deviceId: best.dxgiAdapterNumber,
+        name: `${best.name}${vramStr}`,
+        devices,
+    };
+}
+
+async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId) {
+    const modelName = path.basename(modelPath);
+    const dummyInputs = DUMMY_TEST_INPUTS[sessionKey];
+    const gpuTag = gpuDeviceName ? ` [${gpuDeviceName}]` : '';
+
+    if (!dummyInputs) {
+        const session = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
+        console.log(`[OnnxSVSPipeline] ${modelName} 加载成功 [CPU] (无验证输入)`);
+        return { session, ep: 'cpu' };
+    }
+
+    let dmlSession = null;
+    try {
+        const dmlOpts = typeof dmlDeviceId === 'number'
+            ? { name: 'dml', deviceId: dmlDeviceId }
+            : 'dml';
+        dmlSession = await ort.InferenceSession.create(modelPath, { executionProviders: [dmlOpts, 'cpu'] });
+        await dmlSession.run(dummyInputs);
+        console.log(`[OnnxSVSPipeline] ${modelName} 加载成功 [DML]${gpuTag} (推理验证通过)`);
+        return { session: dmlSession, ep: 'dml' };
+    } catch (dmlErr) {
+        if (dmlSession) {
+            try { dmlSession.release(); } catch (e) {
+                console.warn(`[OnnxSVSPipeline] 释放 DML 会话失败 (${modelName}):`, e.message);
+            }
+        }
+        const reason = dmlErr.message.includes('Reshape')
+            ? 'DML 不支持动态 Reshape (89个节点)'
+            : dmlErr.message.includes('ConvTranspose')
+            ? 'DML 不支持大 stride ConvTranspose (stride=480)'
+            : `DML 推理验证失败 (${dmlErr.message.substring(0, 60).split('\n')[0]})`;
+        console.log(`[OnnxSVSPipeline] ${modelName} DML 不可用: ${reason}`);
+    }
+
+    // DML不可用，尝试使用DML优化版本模型（在CPU上运行）
+    const dmlModelPath = modelPath.replace('.onnx', '_dml.onnx');
+    if (dmlModelPath !== modelPath) {
+        let dmlModelExists = false;
+        try { await fs.promises.access(dmlModelPath); dmlModelExists = true; } catch (_) {}
+        if (dmlModelExists) {
+            try {
+                const dmlModelSession = await ort.InferenceSession.create(dmlModelPath, { executionProviders: ['cpu'] });
+                await dmlModelSession.run(dummyInputs);
+                console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} 加载成功 [CPU] (DML优化模型，推理验证通过)`);
+                return { session: dmlModelSession, ep: 'cpu' };
+            } catch (dmlModelErr) {
+                console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} DML优化模型加载失败: ${dmlModelErr.message.substring(0, 60).split('\n')[0]}`);
+            }
+        }
+    }
+
+    const cpuSession = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
+    await cpuSession.run(dummyInputs);
+    console.log(`[OnnxSVSPipeline] ${modelName} 加载成功 [CPU] (推理验证通过)`);
+    return { session: cpuSession, ep: 'cpu' };
+}
+
+class OnnxSVSPipeline {
+    constructor(modelDir, options = {}) {
+        this.modelDir = path.resolve(modelDir);
+        this.sessions = {};
+        this.sessionEPs = {};
+        this.gpuDeviceName = '';
+        this.dmlDeviceId = undefined;
+        this.initialized = false;
+        this.phone2idx = {};
+        this.enG2pDict = {};
+        this.userDeviceId = options.deviceId;
+        this._synthCache = null;
+        this._initPromise = null;
+        this._loadPhoneSet();
+        this._loadEnG2pDict();
+    }
+
+    _loadPhoneSet() {
+        const searchPaths = [
+            path.join(__dirname, 'phone_set.json'),
+            path.join(__dirname, '..', 'inference', 'phone_set.json'),
+            path.join(__dirname, '..', '..', 'src', 'inference', 'phone_set.json'),
+        ];
+        for (const phoneSetPath of searchPaths) {
+            try {
+                if (fs.existsSync(phoneSetPath)) {
+                    const phoneList = JSON.parse(fs.readFileSync(phoneSetPath, 'utf-8'));
+                    for (let i = 0; i < phoneList.length; i++) {
+                        this.phone2idx[phoneList[i]] = i;
+                    }
+                    console.log(`[OnnxSVSPipeline] 音素词汇表已加载: ${phoneList.length} 个音素 (路径: ${phoneSetPath})`);
+                    return;
+                }
+            } catch (e) {
+                console.warn(`[OnnxSVSPipeline] 加载音素词汇表失败 (${phoneSetPath}):`, e.message);
+            }
+        }
+        console.error('[OnnxSVSPipeline] 加载音素词汇表失败: 所有搜索路径均未找到 phone_set.json');
+    }
+
+    _loadEnG2pDict() {
+        const searchPaths = [
+            path.join(__dirname, 'en_g2p_dict.json'),
+            path.join(__dirname, '..', 'inference', 'en_g2p_dict.json'),
+            path.join(__dirname, '..', '..', 'src', 'inference', 'en_g2p_dict.json'),
+        ];
+        for (const dictPath of searchPaths) {
+            try {
+                if (fs.existsSync(dictPath)) {
+                    this.enG2pDict = JSON.parse(fs.readFileSync(dictPath, 'utf-8'));
+                    console.log(`[OnnxSVSPipeline] 英文G2P词典已加载(CMUdict): ${Object.keys(this.enG2pDict).length} 个词 (路径: ${dictPath})`);
+                    return;
+                }
+            } catch (e) {
+                console.warn(`[OnnxSVSPipeline] 加载英文G2P词典失败 (${dictPath}):`, e.message);
+            }
+        }
+        console.warn('[OnnxSVSPipeline] 英文G2P词典未找到，英文歌词将使用字母级回退');
+    }
+
+    _englishG2p(word) {
+        const lower = word.toLowerCase();
+        if (this.enG2pDict[lower]) {
+            return this.enG2pDict[lower];
+        }
+        console.warn(`[OnnxSVSPipeline] 英文单词 "${word}" 不在CMUdict中，使用字母级回退`);
+        const letterMap = {
+            a: 'EY1', b: 'B IY1', c: 'S IY1', d: 'D IY1', e: 'IY1',
+            f: 'EH1 F', g: 'JH IY1', h: 'EY1 CH', i: 'AY1', j: 'JH EY1',
+            k: 'K EY1', l: 'EH1 L', m: 'EH1 M', n: 'EH1 N', o: 'OW1',
+            p: 'P IY1', q: 'K Y UW1', r: 'AA1 R', s: 'EH1 S', t: 'T IY1',
+            u: 'Y UW1', v: 'V IY1', w: 'D AH1 B AH0 L Y UW0', x: 'EH1 K S',
+            y: 'W AY1', z: 'Z IY1',
+        };
+        const phonemes = [];
+        for (const ch of lower) {
+            if (letterMap[ch]) {
+                phonemes.push(...letterMap[ch].split(' '));
+            }
+        }
+        return phonemes.length > 0 ? phonemes.join(' ') : null;
+    }
+
+    _lookupPhonemeId(lyric) {
+        if (!lyric || lyric.trim().length === 0) {
+            return this.phone2idx['<SP>'] || 1;
+        }
+        const trimmed = lyric.trim();
+        if (this.phone2idx[trimmed] !== undefined) {
+            return this.phone2idx[trimmed];
+        }
+        if (this.phone2idx['zh_' + trimmed] !== undefined) {
+            return this.phone2idx['zh_' + trimmed];
+        }
+        if (this.phone2idx['en_' + trimmed] !== undefined) {
+            return this.phone2idx['en_' + trimmed];
+        }
+        if (this.phone2idx['yue_' + trimmed] !== undefined) {
+            return this.phone2idx['yue_' + trimmed];
+        }
+        const zhPhoneme = this._charToZhPhoneme(trimmed);
+        if (zhPhoneme && this.phone2idx[zhPhoneme] !== undefined) {
+            return this.phone2idx[zhPhoneme];
+        }
+        console.warn(`[OnnxSVSPipeline] 未知音素: "${trimmed}"${zhPhoneme ? ` (转换后: ${zhPhoneme})` : ''}, 使用 <UNK>`);
+        return this.phone2idx['<UNK>'] || 3;
+    }
+
+    _charToZhPhoneme(char) {
+        if (!/[\u4e00-\u9fff]/.test(char)) {
+            return null;
+        }
+        try {
+            const py = pinyin(char, { toneType: 'num', type: 'array' });
+            if (py && py.length > 0 && py[0]) {
+                return 'zh_' + py[0];
+            }
+        } catch (e) {
+            console.warn(`[OnnxSVSPipeline] 拼音转换失败 ("${char}"):`, e.message);
+        }
+        return null;
+    }
+
+    async init() {
+        if (this.initialized) return true;
+
+        if (this._initPromise) {
+            return this._initPromise;
+        }
+
+        this._initPromise = this._doInit();
+        try {
+            return await this._initPromise;
+        } finally {
+            this._initPromise = null;
+        }
+    }
+
+    async _doInit() {
+        console.log('[OnnxSVSPipeline] 开始初始化 (ONNX Runtime + DirectML)...');
+        console.log('[OnnxSVSPipeline] 模型目录:', this.modelDir);
+
+        const gpuInfo = await detectBestGPU(this.modelDir);
+        this.allDevices = gpuInfo.devices || [];
+
+        if (this.userDeviceId !== undefined && this.userDeviceId !== null) {
+            this.dmlDeviceId = this.userDeviceId;
+            const selectedDevice = this.allDevices.find(d => d.dxgiAdapterNumber === this.userDeviceId);
+            this.gpuDeviceName = selectedDevice ? `${selectedDevice.name}${selectedDevice.vram ? ` (${selectedDevice.vram})` : ''}` : `deviceId=${this.userDeviceId}`;
+            console.log(`[OnnxSVSPipeline] 使用用户指定设备: ${this.gpuDeviceName} (deviceId=${this.dmlDeviceId})`);
+        } else {
+            this.dmlDeviceId = gpuInfo.deviceId;
+            this.gpuDeviceName = gpuInfo.name || '无 GPU (仅 CPU)';
+            console.log(`[OnnxSVSPipeline] GPU 设备 (自动): ${this.gpuDeviceName}${this.dmlDeviceId !== undefined ? ` (deviceId=${this.dmlDeviceId})` : ''}`);
+        }
+
+        const resolvedModelFiles = [...ONNX_MODEL_FILES];
+        const dmlIdx = resolvedModelFiles.indexOf('diff_step_dml.onnx');
+        if (dmlIdx >= 0) {
+            const dmlPath = path.join(this.modelDir, 'diff_step_dml.onnx');
+            let dmlExists = false;
+            try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
+            if (!dmlExists) {
+                resolvedModelFiles[dmlIdx] = 'diff_step.onnx';
+                console.log('[OnnxSVSPipeline] diff_step_dml.onnx 不存在，使用 diff_step.onnx');
+            }
+        }
+
+        for (const modelFile of resolvedModelFiles) {
+            const filePath = path.join(this.modelDir, modelFile);
+            let stats;
+            try {
+                stats = await fs.promises.stat(filePath);
+            } catch (_) {
+                throw new Error(`模型文件不存在: ${filePath}`);
+            }
+            console.log(`[OnnxSVSPipeline] ${modelFile}: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+        }
+
+        const sessionKeys = [
+            'noteTextEncoder',
+            'notePitchEncoder',
+            'noteTypeEncoder',
+            'f0Encoder',
+            'preflow',
+            'condEmb',
+            'diffStep',
+            'vocoder',
+            'melTransform',
+        ];
+
+        const loadedSessions = [];
+        try {
+            for (let i = 0; i < resolvedModelFiles.length; i++) {
+                const modelPath = path.join(this.modelDir, resolvedModelFiles[i]);
+                const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId);
+                this.sessions[sessionKeys[i]] = session;
+                this.sessionEPs[sessionKeys[i]] = ep;
+                loadedSessions.push(sessionKeys[i]);
+            }
+
+            const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
+            const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
+            console.log(`[OnnxSVSPipeline] 初始化完成: ${dmlCount} 个模型使用 DML, ${cpuCount} 个模型使用 CPU`);
+        } catch (err) {
+            console.error('[OnnxSVSPipeline] ONNX Runtime 初始化失败:', err.message);
+            for (const key of loadedSessions) {
+                if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
+                    try { this.sessions[key].release(); } catch (_) {}
+                }
+                delete this.sessions[key];
+                delete this.sessionEPs[key];
+            }
+            throw err;
+        }
+
+        this.initialized = true;
+        console.log('[OnnxSVSPipeline] 初始化完成: ONNX Runtime 已就绪');
+        return true;
+    }
+
+    midiToFreq(pitch) {
+        return 440 * Math.pow(2, (pitch - 69) / 12);
+    }
+
+    interpolateEnvelope(envelope, beatTime) {
+        const kfs = envelope.keyframes;
+        if (kfs.length === 0) return 0;
+        if (kfs.length === 1) return kfs[0].value;
+        if (beatTime <= kfs[0].time) return kfs[0].value;
+        if (beatTime >= kfs[kfs.length - 1].time) return kfs[kfs.length - 1].value;
+        for (let i = 0; i < kfs.length - 1; i++) {
+            if (beatTime >= kfs[i].time && beatTime < kfs[i + 1].time) {
+                const t = (beatTime - kfs[i].time) / (kfs[i + 1].time - kfs[i].time);
+                return kfs[i].value + t * (kfs[i + 1].value - kfs[i].value);
+            }
+        }
+        return kfs[kfs.length - 1].value;
+    }
+
+    buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0) {
+        if (notes.length === 0) return new Float32Array(0);
+        const lastNote = notes[notes.length - 1];
+        const totalBeats = lastNote.start + lastNote.duration;
+        const totalSeconds = (totalBeats / bpm) * 60;
+        const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / HOP_SIZE);
+
+        if (pitchCurveF0 && pitchCurveF0.length > 0) {
+            const srcData = pitchCurveF0 instanceof Float32Array ? pitchCurveF0 : new Float32Array(pitchCurveF0);
+            const f0 = new Float32Array(totalFrames);
+            for (let i = 0; i < totalFrames; i++) {
+                f0[i] = i < srcData.length ? srcData[i] : 0;
+            }
+            return f0;
+        }
+
+        const f0 = new Float32Array(totalFrames);
+        f0.fill(0);
+        for (const note of notes) {
+            let effectivePitch = note.pitch;
+            if (f0Envelope && f0Envelope.keyframes && f0Envelope.keyframes.length > 0) {
+                const noteCenterBeat = note.start + note.duration / 2;
+                const semitoneShift = this.interpolateEnvelope(f0Envelope, noteCenterBeat);
+                effectivePitch = note.pitch + semitoneShift;
+            }
+            const freq = this.midiToFreq(effectivePitch);
+            const startSec = (note.start / bpm) * 60;
+            const endSec = ((note.start + note.duration) / bpm) * 60;
+            const startFrame = Math.floor(startSec * SAMPLE_RATE / HOP_SIZE);
+            const endFrame = Math.min(totalFrames, Math.floor(endSec * SAMPLE_RATE / HOP_SIZE));
+            for (let i = startFrame; i < endFrame; i++) {
+                f0[i] = freq;
+            }
+        }
+        return f0;
+    }
+
+    quantizeF0(f0Frames, f0Shift = 0) {
+        const seq = new Int32Array(f0Frames.length);
+        for (let i = 0; i < f0Frames.length; i++) {
+            const f = f0Frames[i];
+            if (f <= 0) {
+                seq[i] = 0;
+            } else {
+                const f0Cents = 1200 * Math.log2(Math.max(f, F0_MIN) / F0_MIN);
+                let bin = Math.round(f0Cents / 20) + 1;
+                if (f0Shift !== 0 && bin > 0) {
+                    bin = Math.max(1, Math.min(F0_BIN - 1, bin + f0Shift * 5));
+                }
+                seq[i] = Math.max(1, Math.min(F0_BIN - 1, bin));
+            }
+        }
+        return seq;
+    }
+
+    notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift = 0) {
+        const PAD_ID = this.phone2idx['<PAD>'] || 0;
+        const BOW_ID = this.phone2idx['<BOW>'] || 4;
+        const EOW_ID = this.phone2idx['<EOW>'] || 5;
+        const SEP_ID = this.phone2idx['<SEP>'] || 9;
+
+        const noteDurations = [];
+        for (let i = 0; i < notes.length; i++) {
+            noteDurations.push((notes[i].duration / bpm) * 60);
+        }
+
+        const totalDuration = noteDurations.reduce((a, b) => a + b, 0);
+        const totalFrames = Math.floor(totalDuration * SAMPLE_RATE / HOP_SIZE);
+
+        if (totalFrames === 0) {
+            return {
+                f0Ids: new Int32Array(0),
+                noteTextSeq: new Int32Array([PAD_ID]),
+                notePitchSeq: new Int32Array([0]),
+                noteTypeSeq: new Int32Array([1]),
+                mel2token: new Int32Array(0),
+                tokenCount: 1,
+            };
+        }
+
+        const phLocations = [];
+        const newPhonemes = [PAD_ID];
+        const note2origin = [];
+        const notePitches = [0];
+        const noteTypes = [1];
+
+        let durSum = 0;
+
+        for (let phIdx = 0; phIdx < notes.length; phIdx++) {
+            const note = notes[phIdx];
+            const lyric = note.lyric || '';
+            const pitch = note.pitch;
+            let noteType;
+            if (lyric.trim().length === 0) {
+                noteType = 1;
+            } else if (note.isSlur || note.isContinuation) {
+                noteType = 3;
+            } else {
+                noteType = 2;
+            }
+
+            let dur = Math.round(durSum * SAMPLE_RATE / HOP_SIZE);
+            dur = Math.min(dur, totalFrames - 1);
+
+            newPhonemes.push(BOW_ID);
+            note2origin.push(phIdx);
+            notePitches.push(pitch);
+            noteTypes.push(noteType);
+
+            if (lyric.startsWith('en_') && lyric.includes('-')) {
+                const subParts = lyric.slice(3).split('-');
+                const enPhIds = [];
+                for (let s = 0; s < subParts.length; s++) {
+                    enPhIds.push(this._lookupPhonemeId('en_' + subParts[s].trim()));
+                }
+                enPhIds.push(SEP_ID);
+                phLocations.push([dur, Math.max(1, enPhIds.length)]);
+                for (let e = 0; e < enPhIds.length; e++) {
+                    newPhonemes.push(enPhIds[e]);
+                    note2origin.push(phIdx);
+                    notePitches.push(pitch);
+                    noteTypes.push(noteType);
+                }
+            } else if (/^[a-zA-Z]+$/.test(lyric) && !lyric.startsWith('en_') && !lyric.startsWith('zh_') && !lyric.startsWith('yue_')) {
+                const g2pResult = this._englishG2p(lyric);
+                if (g2pResult) {
+                    const phParts = g2pResult.split(' ');
+                    const enPhIds = [];
+                    for (let s = 0; s < phParts.length; s++) {
+                        enPhIds.push(this._lookupPhonemeId('en_' + phParts[s].trim()));
+                    }
+                    enPhIds.push(SEP_ID);
+                    phLocations.push([dur, Math.max(1, enPhIds.length)]);
+                    for (let e = 0; e < enPhIds.length; e++) {
+                        newPhonemes.push(enPhIds[e]);
+                        note2origin.push(phIdx);
+                        notePitches.push(pitch);
+                        noteTypes.push(noteType);
+                    }
+                } else {
+                    const phId = this._lookupPhonemeId(lyric);
+                    phLocations.push([dur, 1]);
+                    newPhonemes.push(phId);
+                    note2origin.push(phIdx);
+                    notePitches.push(pitch);
+                    noteTypes.push(noteType);
+                }
+            } else {
+                const phId = this._lookupPhonemeId(lyric);
+                phLocations.push([dur, 1]);
+                newPhonemes.push(phId);
+                note2origin.push(phIdx);
+                notePitches.push(pitch);
+                noteTypes.push(noteType);
+            }
+
+            newPhonemes.push(EOW_ID);
+            note2origin.push(phIdx);
+            notePitches.push(pitch);
+            noteTypes.push(noteType);
+
+            durSum += noteDurations[phIdx];
+        }
+
+        const mel2token = this._buildMel2token(phLocations, newPhonemes.length, totalFrames);
+
+        const f0Hz = new Float32Array(totalFrames);
+        if (pitchCurveF0 && pitchCurveF0.length > 0) {
+            const srcData = pitchCurveF0 instanceof Float32Array ? pitchCurveF0 : new Float32Array(pitchCurveF0);
+            let frameOffset = 0;
+            for (let i = 0; i < notes.length; i++) {
+                const note = notes[i];
+                const lyric = note.lyric || '';
+                const noteDurationSec = noteDurations[i];
+                const noteFrames = Math.round(noteDurationSec * SAMPLE_RATE / HOP_SIZE);
+                const noteStartSec = (note.start / bpm) * 60;
+                const noteFreq = lyric.trim().length === 0 ? 0 : this.midiToFreq(note.pitch);
+                for (let f = 0; f < noteFrames && frameOffset + f < totalFrames; f++) {
+                    const absTimeSec = noteStartSec + f * HOP_SIZE / SAMPLE_RATE;
+                    const srcFrame = Math.floor(absTimeSec * SAMPLE_RATE / HOP_SIZE);
+                    if (srcFrame >= 0 && srcFrame < srcData.length && srcData[srcFrame] > 0) {
+                        f0Hz[frameOffset + f] = srcData[srcFrame];
+                    } else {
+                        f0Hz[frameOffset + f] = noteFreq;
+                    }
+                }
+                frameOffset += noteFrames;
+            }
+        } else {
+            let frameOffset = 0;
+            for (let i = 0; i < notes.length; i++) {
+                const note = notes[i];
+                const lyric = note.lyric || '';
+                let effectivePitch = note.pitch;
+                if (f0Envelope && f0Envelope.keyframes && f0Envelope.keyframes.length > 0) {
+                    const noteCenterBeat = note.start + note.duration / 2;
+                    const semitoneShift = this.interpolateEnvelope(f0Envelope, noteCenterBeat);
+                    effectivePitch = note.pitch + semitoneShift;
+                }
+                const freq = lyric.trim().length === 0 ? 0 : this.midiToFreq(effectivePitch);
+                const noteFrames = Math.round(noteDurations[i] * SAMPLE_RATE / HOP_SIZE);
+                for (let f = 0; f < noteFrames && frameOffset + f < totalFrames; f++) {
+                    f0Hz[frameOffset + f] = freq;
+                }
+                frameOffset += noteFrames;
+            }
+        }
+
+        const f0Ids = this.quantizeF0(f0Hz, f0Shift);
+
+        const tokenCount = newPhonemes.length;
+        const noteTextSeq = new Int32Array(tokenCount);
+        const notePitchSeq = new Int32Array(tokenCount);
+        const noteTypeSeq = new Int32Array(tokenCount);
+
+        for (let t = 0; t < tokenCount; t++) {
+            noteTextSeq[t] = newPhonemes[t];
+            notePitchSeq[t] = notePitches[t];
+            noteTypeSeq[t] = noteTypes[t];
+        }
+
+        if (f0Shift !== 0) {
+            for (let t = 0; t < tokenCount; t++) {
+                if (notePitchSeq[t] > 0) {
+                    notePitchSeq[t] = Math.max(0, Math.min(255, notePitchSeq[t] + f0Shift));
+                }
+            }
+        }
+
+        return {
+            f0Ids,
+            noteTextSeq,
+            notePitchSeq,
+            noteTypeSeq,
+            mel2token,
+            tokenCount,
+        };
+    }
+
+    _buildMel2token(phLocations, tokenCount, totalFrames) {
+        const mel2token = new Int32Array(totalFrames);
+        mel2token.fill(0);
+
+        if (phLocations.length === 0) return mel2token;
+
+        let phIdx = 1;
+        for (let idx = 0; idx < phLocations.length; idx++) {
+            let i = phLocations[idx][0];
+            const j = phLocations[idx][1];
+            const nextPhonemeStart = idx < phLocations.length - 1 ? phLocations[idx + 1][0] : totalFrames;
+            if (i >= totalFrames || i + j > totalFrames) {
+                break;
+            }
+            if (i < totalFrames && mel2token[i] > 0) {
+                while (i < totalFrames && mel2token[i] > 0) {
+                    i += 1;
+                }
+            }
+            mel2token[i] = phIdx;
+            let k = i + 1;
+            while (k + j < nextPhonemeStart) {
+                for (let m = 0; m < j; m++) {
+                    mel2token[k + m] = phIdx + m + 1;
+                }
+                k += j;
+            }
+            mel2token[nextPhonemeStart - 1] = phIdx + j + 1;
+            phIdx += j + 2;
+        }
+
+        let maxVal = 0;
+        for (let f = 0; f < totalFrames; f++) {
+            if (mel2token[f] > maxVal) maxVal = mel2token[f];
+        }
+        if (maxVal > tokenCount - 1) {
+            for (let f = 0; f < totalFrames; f++) {
+                mel2token[f] = Math.min(mel2token[f], tokenCount - 1);
+            }
+        }
+
+        return mel2token;
+    }
+
+    randomNoise(frameLen, melDim) {
+        const data = new Float32Array(frameLen * melDim);
+        for (let i = 0; i < data.length; i += 2) {
+            const u1 = Math.random();
+            const u2 = Math.random();
+            const r = Math.sqrt(-2.0 * Math.log(u1 + 1e-10));
+            const theta = 2.0 * Math.PI * u2;
+            data[i] = r * Math.cos(theta);
+            if (i + 1 < data.length) {
+                data[i + 1] = r * Math.sin(theta);
+            }
+        }
+        return { data, dims: [1, frameLen, melDim] };
+    }
+
+    _extractRefMel(refAudioWavBuffer) {
+        const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(refAudioWavBuffer);
+        const resampled = resampleLinear(audioFloat, srcSr, SAMPLE_RATE);
+        const melResult = extractMelSpectrogram(resampled, SAMPLE_RATE);
+        return melResult;
+    }
+
+    async _extractRefMelOnnx(refAudioWavBuffer) {
+        const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(refAudioWavBuffer);
+        const resampled = resampleLinear(audioFloat, srcSr, SAMPLE_RATE);
+        const waveform = new ort.Tensor('float32', resampled, [1, resampled.length]);
+        const results = await this.sessions.melTransform.run({ waveform });
+        const melOutput = results['mel_spectrogram'];
+        const melData = new Float32Array(melOutput.data);
+        const melDims = melOutput.dims;
+        const frames = melDims[1];
+        return { data: melData, frames, melBands: MEL_DIM };
+    }
+
+    async _runEncoder(sequences, tokenCount, totalFrames, ptFrameCount = 0) {
+        const phonemeIds = new BigInt64Array(tokenCount);
+        const pitchIds = new BigInt64Array(tokenCount);
+        const typeIds = new BigInt64Array(tokenCount);
+        const f0IdsArr = new BigInt64Array(totalFrames);
+
+        for (let i = 0; i < tokenCount; i++) {
+            phonemeIds[i] = BigInt(sequences.noteTextSeq[i]);
+            pitchIds[i] = BigInt(sequences.notePitchSeq[i]);
+            typeIds[i] = BigInt(sequences.noteTypeSeq[i]);
+        }
+        for (let i = 0; i < totalFrames; i++) {
+            f0IdsArr[i] = BigInt(sequences.f0Ids[i]);
+        }
+
+        const textInput = new ort.Tensor('int64', phonemeIds, [1, tokenCount]);
+        const textResults = await this.sessions.noteTextEncoder.run({ input_ids: textInput });
+        const textEmb = new Float32Array(textResults['embeddings'].data);
+
+        const pitchInput = new ort.Tensor('int64', pitchIds, [1, tokenCount]);
+        const pitchResults = await this.sessions.notePitchEncoder.run({ input_ids: pitchInput });
+        const pitchEmb = new Float32Array(pitchResults['embeddings'].data);
+
+        const typeInput = new ort.Tensor('int64', typeIds, [1, tokenCount]);
+        const typeResults = await this.sessions.noteTypeEncoder.run({ input_ids: typeInput });
+        const typeEmb = new Float32Array(typeResults['embeddings'].data);
+
+        const f0Input = new ort.Tensor('int64', f0IdsArr, [1, totalFrames]);
+        const f0Results = await this.sessions.f0Encoder.run({ input_ids: f0Input });
+        const f0Emb = new Float32Array(f0Results['embeddings'].data);
+
+        const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
+        for (let t = 0; t < tokenCount; t++) {
+            for (let d = 0; d < EMBED_DIM; d++) {
+                tokenEmb[t * EMBED_DIM + d] =
+                    textEmb[t * EMBED_DIM + d] +
+                    pitchEmb[t * EMBED_DIM + d] +
+                    typeEmb[t * EMBED_DIM + d];
+            }
+        }
+
+        const featuresTensor = new ort.Tensor('float32', tokenEmb, [1, tokenCount, EMBED_DIM]);
+        const preflowResults = await this.sessions.preflow.run({ features: featuresTensor });
+        const processedTokenEmb = new Float32Array(preflowResults['processed_features'].data);
+
+        const mel2token = sequences.mel2token;
+        const expandedEmb = new Float32Array(totalFrames * EMBED_DIM);
+        for (let f = 0; f < totalFrames; f++) {
+            const tokenIdx = mel2token[f];
+            for (let d = 0; d < EMBED_DIM; d++) {
+                expandedEmb[f * EMBED_DIM + d] = processedTokenEmb[tokenIdx * EMBED_DIM + d];
+            }
+        }
+
+        const combinedFeatures = new Float32Array(totalFrames * EMBED_DIM);
+        for (let f = 0; f < totalFrames; f++) {
+            for (let d = 0; d < EMBED_DIM; d++) {
+                combinedFeatures[f * EMBED_DIM + d] =
+                    expandedEmb[f * EMBED_DIM + d] +
+                    f0Emb[f * EMBED_DIM + d];
+            }
+        }
+
+        const totalCondFrames = ptFrameCount > 0 ? ptFrameCount + totalFrames : totalFrames;
+        const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
+        for (let f = 0; f < totalFrames; f++) {
+            for (let d = 0; d < EMBED_DIM; d++) {
+                condCodeData[(ptFrameCount + f) * EMBED_DIM + d] = combinedFeatures[f * EMBED_DIM + d];
+            }
+        }
+
+        const condCodeTensor = new ort.Tensor('float32', condCodeData, [1, totalCondFrames, EMBED_DIM]);
+        const condEmbResults = await this.sessions.condEmb.run({ cond_code: condCodeTensor });
+        const cond = new Float32Array(condEmbResults['cond_embedding'].data);
+
+        return cond;
+    }
+
+    async _runDiffStep(xtInputData, tVal, condData, maskData, totalFramesWithPrompt) {
+        const xtTensor = new ort.Tensor('float32', xtInputData, [1, totalFramesWithPrompt, MEL_DIM]);
+        const tTensor = new ort.Tensor('float32', new Float32Array([tVal]), [1]);
+        const condTensor = new ort.Tensor('float32', condData, [1, totalFramesWithPrompt, COND_DIM]);
+        const maskTensor = new ort.Tensor('float32', maskData, [1, totalFramesWithPrompt]);
+
+        const results = await this.sessions.diffStep.run({
+            xt_input: xtTensor,
+            t: tTensor,
+            cond: condTensor,
+            xt_mask: maskTensor,
+        });
+
+        return new Float32Array(results['flow_pred'].data);
+    }
+
+    async _runVocoderChunked(melData, totalFrames) {
+        const allAudio = [];
+        const chunkSize = VOCODER_CHUNK_FRAMES;
+        const numChunks = Math.ceil(totalFrames / chunkSize);
+
+        for (let c = 0; c < numChunks; c++) {
+            const startFrame = c * chunkSize;
+            const endFrame = Math.min(startFrame + chunkSize, totalFrames);
+            const currentChunkFrames = endFrame - startFrame;
+
+            const chunkMel = new Float32Array(chunkSize * MEL_DIM);
+            for (let f = 0; f < currentChunkFrames; f++) {
+                for (let d = 0; d < MEL_DIM; d++) {
+                    chunkMel[f * MEL_DIM + d] = melData[(startFrame + f) * MEL_DIM + d];
+                }
+            }
+
+            const melTensor = new ort.Tensor('float32', chunkMel, [1, chunkSize, MEL_DIM]);
+            const results = await this.sessions.vocoder.run({ mel: melTensor });
+            const waveform = new Float32Array(results['waveform'].data);
+
+            const validSamples = currentChunkFrames * HOP_SIZE;
+            const samplesToKeep = Math.min(waveform.length, validSamples);
+            for (let i = 0; i < samplesToKeep; i++) {
+                allAudio.push(waveform[i]);
+            }
+        }
+
+        return allAudio;
+    }
+
+    _hashArray(arr) {
+        if (!arr) return 0;
+        let h = 0;
+        const step = Math.max(1, Math.floor(arr.length / 2000));
+        for (let i = 0; i < arr.length; i += step) {
+            h = ((h << 5) - h + (arr[i] | 0)) | 0;
+        }
+        return h;
+    }
+
+    _computeSynthCacheKey(notes, bpm, options) {
+        const f0Envelope = options.f0Envelope || null;
+        const pitchCurveF0 = options.pitchCurveF0 || null;
+        const refAudioWavBuffer = options.refAudioWavBuffer || null;
+        const totalSteps = options.nSteps || DEFAULT_DIFF_STEPS;
+        const cfgStrength = options.cfg || CFG_STRENGTH;
+        const autoShift = options.autoShift || false;
+        const pitchShift = options.pitchShift || 0;
+
+        let notesHash = 0;
+        for (let i = 0; i < notes.length; i++) {
+            const n = notes[i];
+            const s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}`;
+            for (let j = 0; j < s.length; j++) {
+                notesHash = ((notesHash << 5) - notesHash + s.charCodeAt(j)) | 0;
+            }
+        }
+
+        const f0EnvHash = f0Envelope ? this._hashArray(
+            f0Envelope.keyframes ? f0Envelope.keyframes.flatMap(kf => [kf.time, kf.value * 1000]) : []
+        ) : 0;
+
+        const f0Hash = this._hashArray(pitchCurveF0);
+
+        let refHash = 0;
+        if (refAudioWavBuffer) {
+            const buf = refAudioWavBuffer instanceof ArrayBuffer ? new Uint8Array(refAudioWavBuffer) :
+                        Buffer.isBuffer(refAudioWavBuffer) ? refAudioWavBuffer : null;
+            if (buf) {
+                refHash = buf.length;
+                for (let i = 0; i < Math.min(buf.length, 4000); i += Math.max(1, Math.floor(buf.length / 2000))) {
+                    refHash = ((refHash << 5) - refHash + buf[i]) | 0;
+                }
+            }
+        }
+
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${autoShift}_${pitchShift}`;
+    }
+
+    clearSynthCache() {
+        this._synthCache = null;
+    }
+
+    _fillNoteGaps(notes) {
+        if (!notes || notes.length <= 1) return notes;
+
+        const sorted = [...notes].sort((a, b) => a.start - b.start);
+        const result = [sorted[0]];
+        let currentTime = sorted[0].start + sorted[0].duration;
+
+        for (let i = 1; i < sorted.length; i++) {
+            const note = sorted[i];
+            const gap = note.start - currentTime;
+            if (gap > 0.01) {
+                result.push({
+                    lyric: '',
+                    pitch: 0,
+                    start: currentTime,
+                    duration: gap,
+                });
+            }
+            result.push(note);
+            currentTime = Math.max(currentTime, note.start + note.duration);
+        }
+
+        return result;
+    }
+
+    async synthesize(notes, bpm, options = {}) {
+        if (!this.initialized) {
+            await this.init();
+        }
+        const onProgress = options.onProgress || (() => {});
+        const f0Envelope = options.f0Envelope || null;
+        const pitchCurveF0 = options.pitchCurveF0 || null;
+        const refAudioWavBuffer = options.refAudioWavBuffer || null;
+        const totalSteps = options.nSteps || DEFAULT_DIFF_STEPS;
+        const cfgStrength = options.cfg || CFG_STRENGTH;
+        const autoShift = options.autoShift || false;
+        const pitchShift = options.pitchShift || 0;
+
+        const filledNotes = this._fillNoteGaps(notes);
+
+        const cacheKey = this._computeSynthCacheKey(notes, bpm, options);
+        if (this._synthCache && this._synthCache.key === cacheKey) {
+            console.log('[OnnxSVSPipeline] 缓存命中，复用上次生成的音频');
+            onProgress(100);
+            return this._synthCache.audio;
+        }
+
+        let currentProgress = 0;
+        onProgress(currentProgress);
+
+        let f0Shift = 0;
+        if (autoShift && pitchShift === 0) {
+            const targetF0 = this.buildF0FrameSequence(filledNotes, bpm, f0Envelope, pitchCurveF0);
+            const targetNonZero = [];
+            for (let i = 0; i < targetF0.length; i++) {
+                if (targetF0[i] > 0) targetNonZero.push(targetF0[i]);
+            }
+            const targetNotePitches = [];
+            for (const note of filledNotes) {
+                if (note.pitch >= 1) targetNotePitches.push(note.pitch);
+            }
+
+            let refF0 = null;
+            if (refAudioWavBuffer) {
+                try {
+                    refF0 = this._extractRefF0FromWav(refAudioWavBuffer);
+                } catch (e) {
+                    console.warn('[OnnxSVSPipeline] 参考音频F0提取失败:', e.message);
+                }
+            }
+
+            if (refF0 && refF0.length > 0) {
+                const refNonZero = [];
+                for (let i = 0; i < refF0.length; i++) {
+                    if (refF0[i] > 0) refNonZero.push(refF0[i]);
+                }
+                if (refNonZero.length > 0 && targetNonZero.length > 0) {
+                    const refMedian = this._median(refNonZero);
+                    const targetMedian = this._median(targetNonZero);
+                    f0Shift = Math.round(Math.log2(refMedian / targetMedian) * 1200 / 100);
+                } else if (targetNotePitches.length > 0) {
+                    const refNotePitches = this._extractRefNotePitches(refAudioWavBuffer);
+                    if (refNotePitches && refNotePitches.length > 0) {
+                        const refMedianPitch = this._median(refNotePitches);
+                        const targetMedianPitch = this._median(targetNotePitches);
+                        f0Shift = Math.round(refMedianPitch - targetMedianPitch);
+                    }
+                }
+            } else if (targetNotePitches.length > 0) {
+                const refNotePitches = options.refNotePitches || null;
+                if (refNotePitches && refNotePitches.length > 0) {
+                    const refMedianPitch = this._median(refNotePitches);
+                    const targetMedianPitch = this._median(targetNotePitches);
+                    f0Shift = Math.round(refMedianPitch - targetMedianPitch);
+                }
+            }
+        } else {
+            f0Shift = pitchShift;
+        }
+
+        const sequences = this.notesToSequences(filledNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
+        const totalFrames = sequences.f0Ids.length;
+        const tokenCount = sequences.tokenCount;
+
+        if (totalFrames === 0) {
+            return [];
+        }
+
+        console.log(`[OnnxSVSPipeline] 合成参数: frames=${totalFrames}, tokens=${tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
+
+        let ptMelData = null;
+        let ptFrameCount = 0;
+
+        if (refAudioWavBuffer) {
+            try {
+                const melResult = await this._extractRefMelOnnx(refAudioWavBuffer);
+                ptMelData = melResult.data;
+                ptFrameCount = melResult.frames;
+                console.log(`[OnnxSVSPipeline] 参考音频mel: ${ptFrameCount}帧`);
+            } catch (err) {
+                console.warn('[OnnxSVSPipeline] 参考音频mel提取失败，尝试JS回退:', err.message);
+                try {
+                    const melResult = this._extractRefMel(refAudioWavBuffer);
+                    ptMelData = melResult.data;
+                    ptFrameCount = melResult.frames;
+                    console.log(`[OnnxSVSPipeline] 参考音频mel(JS回退): ${ptFrameCount}帧`);
+                } catch (err2) {
+                    console.warn('[OnnxSVSPipeline] JS回退也失败，使用零prompt:', err2.message);
+                }
+            }
+        }
+
+        if (!ptMelData || ptFrameCount === 0) {
+            ptFrameCount = Math.min(50, Math.max(10, Math.floor(totalFrames * 0.1)));
+            ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
+            console.log(`[OnnxSVSPipeline] 使用零prompt: ${ptFrameCount}帧`);
+        }
+
+        const totalFramesWithPrompt = ptFrameCount + totalFrames;
+
+        console.log('[OnnxSVSPipeline] 运行编码器...');
+        const combinedCond = await this._runEncoder(sequences, tokenCount, totalFrames, ptFrameCount);
+        console.log(`[OnnxSVSPipeline] 编码器输出维度: [1, ${totalFramesWithPrompt}, ${COND_DIM}]`);
+
+        currentProgress = 30;
+        onProgress(currentProgress);
+
+        const xt = this.randomNoise(totalFrames, MEL_DIM);
+        const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
+        const targetMask = new Float32Array(totalFrames).fill(1);
+
+        const diffStartProgress = 40;
+        const diffEndProgress = 90;
+        const diffRange = diffEndProgress - diffStartProgress;
+        const diffProgressPerStep = diffRange / totalSteps;
+
+        for (let step = 0; step < totalSteps; step++) {
+            const tVal = (step + 0.5) / totalSteps;
+
+            const xtInputData = new Float32Array(totalFramesWithPrompt * MEL_DIM);
+            for (let f = 0; f < ptFrameCount; f++) {
+                for (let d = 0; d < MEL_DIM; d++) {
+                    xtInputData[f * MEL_DIM + d] = ptMelData[f * MEL_DIM + d];
+                }
+            }
+            for (let f = 0; f < totalFrames; f++) {
+                for (let d = 0; d < MEL_DIM; d++) {
+                    xtInputData[(ptFrameCount + f) * MEL_DIM + d] = xt.data[f * MEL_DIM + d];
+                }
+            }
+
+            const predData = await this._runDiffStep(xtInputData, tVal, combinedCond, frameMask, totalFramesWithPrompt);
+            const dt = 1.0 / totalSteps;
+
+            if (cfgStrength > 0) {
+                const xtTargetOnly = new Float32Array(totalFrames * MEL_DIM);
+                for (let i = 0; i < totalFrames * MEL_DIM; i++) {
+                    xtTargetOnly[i] = xt.data[i];
+                }
+                const uncondCondTarget = new Float32Array(totalFrames * COND_DIM);
+                const uncondPred = await this._runDiffStep(xtTargetOnly, tVal, uncondCondTarget, targetMask, totalFrames);
+
+                const targetLen = totalFrames * MEL_DIM;
+                let posSum = 0;
+                for (let f = 0; f < totalFrames; f++) {
+                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        posSum += predData[tgtOffset + d];
+                    }
+                }
+                const posMean = posSum / targetLen;
+                let posVarSum = 0;
+                for (let f = 0; f < totalFrames; f++) {
+                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const diff = predData[tgtOffset + d] - posMean;
+                        posVarSum += diff * diff;
+                    }
+                }
+                const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
+
+                const cfgPred = new Float32Array(totalFrames * MEL_DIM);
+                let cfgAdjSum = 0;
+                for (let f = 0; f < totalFrames; f++) {
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const condVal = predData[(ptFrameCount + f) * MEL_DIM + d];
+                        const uncondVal = uncondPred[f * MEL_DIM + d];
+                        const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
+                        cfgPred[f * MEL_DIM + d] = cfgVal;
+                        cfgAdjSum += cfgVal;
+                    }
+                }
+                const cfgAdjMean = cfgAdjSum / targetLen;
+                let cfgAdjVarSum = 0;
+                for (let i = 0; i < targetLen; i++) {
+                    const diff = cfgPred[i] - cfgAdjMean;
+                    cfgAdjVarSum += diff * diff;
+                }
+                const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
+                const rescale = posStd / (cfgAdjStd + 1e-8);
+
+                for (let f = 0; f < totalFrames; f++) {
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const cfgVal = cfgPred[f * MEL_DIM + d];
+                        const rescaledVal = CFG_RESCALE * (cfgVal * rescale) + (1 - CFG_RESCALE) * cfgVal;
+                        xt.data[f * MEL_DIM + d] += rescaledVal * dt;
+                    }
+                }
+            } else {
+                for (let f = 0; f < totalFrames; f++) {
+                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        xt.data[f * MEL_DIM + d] += predData[tgtOffset + d] * dt;
+                    }
+                }
+            }
+
+            currentProgress = diffStartProgress + (step + 1) * diffProgressPerStep;
+            onProgress(Math.min(Math.round(currentProgress), 90));
+            if (step % 2 === 0) {
+                await new Promise(r => setTimeout(r, 0));
+            }
+        }
+
+        currentProgress = 90;
+        onProgress(currentProgress);
+
+        console.log(`[OnnxSVSPipeline] 扩散完成，开始声码器重建 (${totalFrames}帧)...`);
+        const audioData = await this._runVocoderChunked(xt.data, totalFrames);
+
+        this._synthCache = { key: cacheKey, audio: audioData };
+        console.log('[OnnxSVSPipeline] 音频已缓存');
+
+        onProgress(100);
+        return audioData;
+    }
+
+    _median(arr) {
+        if (!arr || arr.length === 0) return 0;
+        const sorted = [...arr].sort((a, b) => a - b);
+        const mid = Math.floor(sorted.length / 2);
+        return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+    }
+
+    _extractRefF0FromWav(wavBuffer) {
+        const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(wavBuffer);
+        const resampled = resampleLinear(audioFloat, srcSr, SAMPLE_RATE);
+        const f0 = new Float32Array(Math.floor(resampled.length / HOP_SIZE));
+        const minRms = 0.01;
+        const frameSize = HOP_SIZE;
+        for (let i = 0; i < f0.length; i++) {
+            const start = i * frameSize;
+            const end = Math.min(start + frameSize, resampled.length);
+            let rms = 0;
+            for (let j = start; j < end; j++) {
+                rms += resampled[j] * resampled[j];
+            }
+            rms = Math.sqrt(rms / (end - start));
+            if (rms < minRms) {
+                f0[i] = 0;
+                continue;
+            }
+            let bestLag = 0;
+            let bestCorr = 0;
+            const minLag = Math.floor(SAMPLE_RATE / 1000);
+            const maxLag = Math.floor(SAMPLE_RATE / 50);
+            for (let lag = minLag; lag <= maxLag; lag++) {
+                let corr = 0;
+                let energy = 0;
+                for (let j = 0; j < Math.min(frameSize, resampled.length - start - lag); j++) {
+                    corr += resampled[start + j] * resampled[start + j + lag];
+                    energy += resampled[start + j] * resampled[start + j];
+                }
+                if (energy > 0) corr /= energy;
+                if (corr > bestCorr) {
+                    bestCorr = corr;
+                    bestLag = lag;
+                }
+            }
+            if (bestCorr > 0.3 && bestLag > 0) {
+                f0[i] = SAMPLE_RATE / bestLag;
+            } else {
+                f0[i] = 0;
+            }
+        }
+        return f0;
+    }
+
+    _extractRefNotePitches(wavBuffer) {
+        return null;
+    }
+
+    getHardwareInfo() {
+        if (!this.initialized) {
+            return null;
+        }
+        const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
+        const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
+        const totalModels = Object.keys(this.sessionEPs).length;
+        return {
+            gpuDeviceName: this.gpuDeviceName || '无 GPU (仅 CPU)',
+            dmlDeviceId: this.dmlDeviceId,
+            dmlModelCount: dmlCount,
+            cpuModelCount: cpuCount,
+            totalModels,
+            isUsingDML: dmlCount > 0,
+        };
+    }
+
+    dispose() {
+        for (const key of Object.keys(this.sessions)) {
+            if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
+                try { this.sessions[key].release(); } catch (e) {
+                    console.warn(`[OnnxSVSPipeline] 释放会话失败 (${key}):`, e.message);
+                }
+            }
+        }
+        this.sessions = {};
+        this.sessionEPs = {};
+        this.initialized = false;
+        this._initPromise = null;
+        this._synthCache = null;
+        console.log('[OnnxSVSPipeline] ONNX Runtime 会话已释放');
+    }
+}
+
+module.exports = { OnnxSVSPipeline, NativeSVSPipeline: OnnxSVSPipeline, SAMPLE_RATE, enumerateDMLDevices };

@@ -1,0 +1,55 @@
+# Tasks
+- [ ] Task 1: Git备份当前状态
+  - [ ] SubTask 1.1: 执行git commit备份
+- [x] Task 2: 统一播放头同步机制
+  - [x] SubTask 2.1: 创建共享的播放状态管理对象，包含currentTime、isPlaying等
+  - [x] SubTask 2.2: 修改startPlayback函数，确保同时更新波形和MIDI的播放头
+  - [x] SubTask 2.3: 修改pausePlayback函数，确保暂停时同步两个播放头位置
+  - [x] SubTask 2.4: 修改stopPlayback函数，确保停止时同步重置
+  - [x] SubTask 2.5: 修改波形点击跳转逻辑，同步更新pianoRoll的currentTime
+- [x] Task 3: 修复RMVPE音高线渲染异常
+  - [x] SubTask 3.1: 分析滚轮滑动时音高线"抽风"的原因（可能是坐标转换问题）
+  - [x] SubTask 3.2: 修复F0曲线在缩放和滚动时的坐标映射计算
+  - [x] SubTask 3.3: 确保F0曲线与钢琴卷帘网格坐标系统一致
+  - [x] SubTask 3.4: 测试验证滚轮缩放和滚动时F0曲线显示正常
+- [x] Task 4: 解决Basic Pitch和RMVPE数据冲突
+  - [x] SubTask 4.1: 分析现有数据冲突原因
+  - [x] SubTask 4.2: 实现f0Data和notes独立存储
+  - [x] SubTask 4.3: 确保两个模型提取的数据可以同时显示
+  - [x] SubTask 4.4: 修改渲染逻辑，F0曲线和音符块互不干扰
+- [x] Task 5: 明确模型用途和UI描述
+  - [x] SubTask 5.1: 修改按钮文字，明确RMVPE用于F0提取，Basic Pitch用于MIDI提取
+  - [x] SubTask 5.2: 更新相关提示信息
+  - [x] SubTask 5.3: 验证按钮功能与描述一致
+- [x] Task 6: 增强钢琴卷帘功能
+  - [x] SubTask 6.1: 为pianoRoll对象添加钢琴键绘制函数（参考fragmentEditor）
+  - [x] SubTask 6.2: 添加网格绘制，包括小节线、拍线和小节编号
+  - [x] SubTask 6.3: 完善音符绘制，包括选中高亮、hover效果
+  - [x] SubTask 6.4: 添加音符时长调整功能（右边缘拖拽）
+  - [x] SubTask 6.5: 完善滚动和缩放逻辑，确保与波形同步
+- [x] Task 7: 实现歌词编辑功能
+  - [x] SubTask 7.1: 添加双击事件处理，弹出歌词编辑对话框
+  - [x] SubTask 7.2: 实现音符lyric字段存储和显示
+  - [x] SubTask 7.3: 在音符绘制时显示歌词文字
+  - [x] SubTask 7.4: 确保保存数据时包含lyric字段
+- [x] Task 8: 完善数据格式兼容性
+  - [x] SubTask 8.1: 确保notes数组每个元素包含lyric字段
+  - [x] SubTask 8.2: 在保存数据时正确映射到singer数据格式
+  - [x] SubTask 8.3: 验证与现有singerCreator数据格式的兼容性
+- [x] Task 9: 测试验证
+  - [x] SubTask 9.1: 验证播放头同步功能
+  - [x] SubTask 9.2: 验证F0曲线在滚轮操作时不再异常
+  - [x] SubTask 9.3: 验证两个模型数据可以共存
+  - [x] SubTask 9.4: 验证钢琴卷帘功能完整性
+  - [x] SubTask 9.5: 验证歌词编辑功能
+  - [x] SubTask 9.6: 验证数据保存兼容性
+
+# Task Dependencies
+- Task 2 depends on Task 1
+- Task 3 depends on Task 2
+- Task 4 depends on Task 3
+- Task 5 depends on Task 4
+- Task 6 depends on Task 5
+- Task 7 depends on Task 6
+- Task 8 depends on Task 7
+- Task 9 depends on Task 8
