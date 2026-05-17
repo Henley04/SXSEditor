@@ -1855,6 +1855,7 @@ canvas.addEventListener('mousemove', (e) => {
         ap.pitch = Math.max(0, Math.min(127, pitchDragStartValue + dyPitch));
       }
     }
+    invalidatePitchCurveCache();
     render();
     return;
   }
@@ -2047,6 +2048,7 @@ canvas.addEventListener('contextmenu', (e) => {
     for (const idx of indicesToDelete) {
       pitchCurve.anchorPoints.splice(idx, 1);
     }
+    invalidatePitchCurveCache();
     selectedAnchorIndices.clear();
     const newSnapshot = clonePitchCurveState();
     history.push({
@@ -2382,6 +2384,7 @@ document.addEventListener('keydown', (e) => {
         for (const idx of indicesToDelete) {
           pitchCurve.anchorPoints.splice(idx, 1);
         }
+        invalidatePitchCurveCache();
         selectedAnchorIndices.clear();
         const newSnapshot = clonePitchCurveState();
         history.push({
@@ -2449,6 +2452,7 @@ document.addEventListener('keydown', (e) => {
           else if (e.key === 'ArrowRight') ap.time = Math.max(0, ap.time + timeStep);
         }
       }
+      invalidatePitchCurveCache();
       const newSnapshot = clonePitchCurveState();
       history.push({
         undo() { applyPitchCurveSnapshot(oldSnapshot); },
@@ -2554,6 +2558,7 @@ async function handleFragmentData(data) {
       brushSegments: [],
     };
   }
+  invalidatePitchCurveCache();
 
   history.clear();
   dragOperation = null;
