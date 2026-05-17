@@ -109,6 +109,46 @@
     .file-status.complete { color: #22c55e; }
     .file-status.error { color: #ef4444; }
     .file-status.downloading { color: #818cf8; }
+    .dir-info {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 8px 12px;
+      background: #2a2a4a;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .dir-info .dir-label {
+      color: #888;
+      flex-shrink: 0;
+    }
+    .dir-info .dir-path {
+      color: #ccc;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .dir-info .btn-change-dir {
+      padding: 4px 12px;
+      background: #3a3a5a;
+      color: #aaa;
+      border: 1px solid #4a4a6a;
+      border-radius: 4px;
+      font-size: 11px;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: all 0.2s;
+    }
+    .dir-info .btn-change-dir:hover {
+      background: #4a4a6a;
+      color: #fff;
+    }
+    .dir-info .btn-change-dir:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
     .speed-info {
       text-align: center;
       font-size: 11px;
@@ -192,6 +232,12 @@
     <div class="progress-bar-bg">
       <div class="progress-bar-fill" id="overallBar"></div>
     </div>
+  </div>
+
+  <div class="dir-info" id="dirInfo" style="display:none;">
+    <span class="dir-label">下载位置:</span>
+    <span class="dir-path" id="dirPath"></span>
+    <button class="btn-change-dir" id="changeDirBtn">更换</button>
   </div>
 
   <div class="speed-info" id="speedInfo"></div>

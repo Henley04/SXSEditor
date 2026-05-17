@@ -106,4 +106,6 @@ contextBridge.exposeInMainWorld('electronAPI', {
   modelDownloadStart: () => ipcRenderer.invoke('model-download:start'),
   modelDownloadCancel: () => ipcRenderer.invoke('model-download:cancel'),
   modelDownloadCheck: () => ipcRenderer.invoke('model-download:check'),
+  modelDownloadChangeDir: () => ipcRenderer.invoke('model-download:change-dir'),
+  modelDownloadGetDir: () => ipcRenderer.invoke('model-download:get-dir'),
 });

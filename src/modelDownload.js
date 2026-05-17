@@ -3,6 +3,27 @@ const fileStates = {};
 let downloadStartTime = 0;
 let lastOverallDownloaded = 0;
 let lastSpeedTime = 0;
+let isDownloading = false;
+
+async function loadModelDir() {
+  try {
+    const dir = await window.electronAPI.modelDownloadGetDir();
+    document.getElementById('dirPath').textContent = dir;
+    document.getElementById('dirInfo').style.display = 'flex';
+  } catch (_) {}
+}
+
+function updateMissingFiles(newMissingFiles) {
+  missingFiles.length = 0;
+  missingFiles.push(...newMissingFiles);
+  for (const file of newMissingFiles) {
+    if (!fileStates[file.filePath] || fileStates[file.filePath].status === 'pending') {
+      fileStates[file.filePath] = { status: 'pending', progress: 0, downloaded: 0, total: 0 };
+    }
+  }
+  document.getElementById('statusText').textContent = `需要下载 ${newMissingFiles.length} 个模型文件`;
+  renderFileList();
+}
 
 function formatBytes(bytes) {
   if (bytes === 0) return '0 B';
@@ -83,6 +104,7 @@ window.electronAPI.onModelDownloadMissingFiles((files) => {
   document.getElementById('startBtn').style.display = 'inline-block';
   document.getElementById('closeBtn').style.display = 'inline-block';
   renderFileList();
+  loadModelDir();
 });
 
 window.electronAPI.onModelDownloadProgress((data) => {
@@ -115,11 +137,13 @@ window.electronAPI.onModelDownloadComplete(() => {
   document.getElementById('speedInfo').textContent = '';
   document.getElementById('cancelBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'inline-block';
+  document.getElementById('changeDirBtn').disabled = true;
   document.getElementById('overallBar').style.width = '100%';
   document.getElementById('overallPercent').textContent = '100%';
   for (const key in fileStates) {
     fileStates[key].status = 'complete';
   }
+  isDownloading = false;
   renderFileList();
 });
 
@@ -130,16 +154,20 @@ window.electronAPI.onModelDownloadError((data) => {
   document.getElementById('errorMessage').style.display = 'block';
   document.getElementById('cancelBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'inline-block';
+  document.getElementById('changeDirBtn').disabled = false;
+  isDownloading = false;
 });
 
 document.getElementById('startBtn').addEventListener('click', () => {
   document.getElementById('startBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'none';
   document.getElementById('cancelBtn').style.display = 'inline-block';
+  document.getElementById('changeDirBtn').disabled = true;
   document.getElementById('progressSection').style.display = 'block';
   downloadStartTime = Date.now();
   lastSpeedTime = downloadStartTime;
   lastOverallDownloaded = 0;
+  isDownloading = true;
   window.electronAPI.modelDownloadStart();
 });
 
@@ -149,8 +177,26 @@ document.getElementById('cancelBtn').addEventListener('click', () => {
   document.getElementById('speedInfo').textContent = '';
   document.getElementById('cancelBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'inline-block';
+  document.getElementById('changeDirBtn').disabled = false;
+  isDownloading = false;
 });
 
 document.getElementById('closeBtn').addEventListener('click', () => {
   window.close();
+});
+
+document.getElementById('changeDirBtn').addEventListener('click', async () => {
+  if (isDownloading) return;
+  const result = await window.electronAPI.modelDownloadChangeDir();
+  if (result.canceled) return;
+  document.getElementById('dirPath').textContent = result.modelDir;
+  updateMissingFiles(result.missing);
+  if (result.missing.length === 0) {
+    document.getElementById('statusText').textContent = '所选目录中模型文件已就绪';
+    document.getElementById('startBtn').style.display = 'none';
+    document.getElementById('closeBtn').style.display = 'inline-block';
+  } else {
+    document.getElementById('startBtn').style.display = 'inline-block';
+    document.getElementById('closeBtn').style.display = 'inline-block';
+  }
 });

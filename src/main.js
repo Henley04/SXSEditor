@@ -211,6 +211,7 @@ function openSettingsWindow() {
 
 let modelDownloadWindow = null;
 let downloadAbortController = null;
+let customModelDir = null;
 
 function createModelDownloadWindow(missingFiles) {
   if (modelDownloadWindow) {
@@ -296,6 +297,18 @@ async function startModelDownload(modelDir, missingFiles) {
 }
 
 async function checkAndDownloadModels() {
+  if (app.isPackaged) {
+    const settings = loadSettings();
+    if (settings.modelDir && typeof settings.modelDir === 'string') {
+      try {
+        fs.mkdirSync(settings.modelDir, { recursive: true });
+        customModelDir = settings.modelDir;
+      } catch (_) {
+        customModelDir = null;
+      }
+    }
+  }
+
   const modelDir = getModelDir();
   console.log('[Main] 检查模型文件，目录:', modelDir);
   const { missing, existing } = checkMissingFiles(modelDir);
@@ -303,6 +316,45 @@ async function checkAndDownloadModels() {
   if (missing.length === 0) {
     console.log('[Main] 所有模型文件已就绪');
     return true;
+  }
+
+  if (app.isPackaged && !customModelDir) {
+    const defaultDir = path.join(app.getPath('userData'), 'onnx_models');
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择模型文件下载位置（默认位置无需管理员权限）',
+      defaultPath: defaultDir,
+      properties: ['openDirectory'],
+      buttonLabel: '选择此文件夹',
+    });
+
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      console.log('[Main] 用户取消了模型下载位置选择');
+      return false;
+    }
+
+    let downloadDir = result.filePaths[0];
+    if (!downloadDir.endsWith(path.sep)) {
+      downloadDir = downloadDir + path.sep;
+    }
+
+    customModelDir = downloadDir;
+    const settings = loadSettings();
+    settings.modelDir = downloadDir;
+    await saveSettingsFile(settings);
+
+    try {
+      fs.mkdirSync(downloadDir, { recursive: true });
+    } catch (_) {}
+
+    const recheck = checkMissingFiles(downloadDir);
+    if (recheck.missing.length === 0) {
+      console.log('[Main] 所选目录中模型文件已就绪');
+      return true;
+    }
+
+    console.log(`[Main] 缺少 ${recheck.missing.length} 个模型文件:`, recheck.missing.map(f => f.filePath));
+    createModelDownloadWindow(recheck.missing);
+    return false;
   }
 
   console.log(`[Main] 缺少 ${missing.length} 个模型文件:`, missing.map(f => f.filePath));
@@ -330,6 +382,41 @@ ipcMain.handle('model-download:check', async () => {
   const modelDir = getModelDir();
   const { missing, existing } = checkMissingFiles(modelDir);
   return { missing, existing };
+});
+
+ipcMain.handle('model-download:change-dir', async () => {
+  const defaultDir = customModelDir || path.join(app.getPath('userData'), 'onnx_models');
+  const result = await dialog.showOpenDialog(modelDownloadWindow || mainWindow, {
+    title: '选择模型文件下载位置（默认位置无需管理员权限）',
+    defaultPath: defaultDir,
+    properties: ['openDirectory'],
+    buttonLabel: '选择此文件夹',
+  });
+
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+    return { canceled: true };
+  }
+
+  let downloadDir = result.filePaths[0];
+  if (!downloadDir.endsWith(path.sep)) {
+    downloadDir = downloadDir + path.sep;
+  }
+
+  customModelDir = downloadDir;
+  const settings = loadSettings();
+  settings.modelDir = downloadDir;
+  await saveSettingsFile(settings);
+
+  try {
+    fs.mkdirSync(downloadDir, { recursive: true });
+  } catch (_) {}
+
+  const { missing, existing } = checkMissingFiles(downloadDir);
+  return { canceled: false, modelDir: downloadDir, missing, existing };
+});
+
+ipcMain.handle('model-download:get-dir', async () => {
+  return getModelDir();
 });
 
 app.on('second-instance', () => {
@@ -444,14 +531,34 @@ ipcMain.handle('file:readFileBuffer', async (event, filePath) => {
   }
 });
 
+function getUnpackedModelDir() {
+  let appPath = app.getAppPath();
+  if (appPath.endsWith('.asar')) {
+    appPath = appPath + '.unpacked';
+  }
+  return path.join(appPath, 'onnx_models') + path.sep;
+}
+
 function getModelDir() {
   if (!app.isPackaged) {
-    let appPath = app.getAppPath();
-    if (appPath.endsWith('.asar')) {
-      appPath = appPath + '.unpacked';
-    }
-    return path.join(appPath, 'onnx_models') + path.sep;
+    return getUnpackedModelDir();
   }
+
+  if (customModelDir) {
+    try {
+      fs.mkdirSync(customModelDir, { recursive: true });
+    } catch (_) {}
+    return customModelDir;
+  }
+
+  const unpackedDir = getUnpackedModelDir();
+  const { missing } = checkMissingFiles(unpackedDir);
+  if (missing.length === 0) {
+    console.log('[Main] 在 app.asar.unpacked 中找到完整模型文件');
+    return unpackedDir;
+  }
+
+  console.log('[Main] app.asar.unpacked 中模型文件不完整，缺少', missing.length, '个文件');
   const userDataDir = app.getPath('userData');
   const modelDir = path.join(userDataDir, 'onnx_models');
   fs.mkdirSync(modelDir, { recursive: true });
