@@ -445,14 +445,16 @@ ipcMain.handle('file:readFileBuffer', async (event, filePath) => {
 });
 
 function getModelDir() {
-  let appPath = app.getAppPath();
-  if (appPath.endsWith('.asar')) {
-    appPath = appPath + '.unpacked';
+  if (!app.isPackaged) {
+    let appPath = app.getAppPath();
+    if (appPath.endsWith('.asar')) {
+      appPath = appPath + '.unpacked';
+    }
+    return path.join(appPath, 'onnx_models') + path.sep;
   }
-  const modelDir = path.join(appPath, 'onnx_models');
-  if (!fs.existsSync(modelDir)) {
-    fs.mkdirSync(modelDir, { recursive: true });
-  }
+  const userDataDir = app.getPath('userData');
+  const modelDir = path.join(userDataDir, 'onnx_models');
+  fs.mkdirSync(modelDir, { recursive: true });
   return modelDir + path.sep;
 }
 
