@@ -128,6 +128,13 @@
       cursor: pointer;
       transition: all 0.2s;
     }
+    .btn-start {
+      background: #6366f1;
+      color: #fff;
+    }
+    .btn-start:hover {
+      background: #818cf8;
+    }
     .btn-cancel {
       background: #2a2a4a;
       color: #aaa;
@@ -177,7 +184,7 @@
     <p id="statusText">正在检测模型文件...</p>
   </div>
 
-  <div class="overall-progress">
+  <div class="overall-progress" id="progressSection" style="display:none;">
     <div class="label">
       <span id="overallLabel">总进度</span>
       <span id="overallPercent">0%</span>
@@ -194,6 +201,7 @@
   <div class="error-message" id="errorMessage"></div>
 
   <div class="actions">
+    <button class="btn btn-start" id="startBtn" style="display:none;">开始下载</button>
     <button class="btn btn-cancel" id="cancelBtn" style="display:none;">取消下载</button>
     <button class="btn btn-close" id="closeBtn" style="display:none;">关闭</button>
   </div>

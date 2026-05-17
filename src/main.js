@@ -227,6 +227,7 @@ function createModelDownloadWindow(missingFiles) {
     minimizable: true,
     maximizable: false,
     closable: true,
+    parent: mainWindow,
     webPreferences: {
       preload: MODEL_DOWNLOAD_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -240,6 +241,7 @@ function createModelDownloadWindow(missingFiles) {
 
   modelDownloadWindow.webContents.once('did-finish-load', () => {
     modelDownloadWindow.webContents.send('model-download:missing-files', missingFiles);
+    modelDownloadWindow.focus();
   });
 
   modelDownloadWindow.on('closed', () => {

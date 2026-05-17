@@ -80,12 +80,9 @@ window.electronAPI.onModelDownloadMissingFiles((files) => {
     fileStates[file.filePath] = { status: 'pending', progress: 0, downloaded: 0, total: 0 };
   }
   document.getElementById('statusText').textContent = `需要下载 ${files.length} 个模型文件`;
-  document.getElementById('cancelBtn').style.display = 'inline-block';
-  downloadStartTime = Date.now();
-  lastSpeedTime = downloadStartTime;
-  lastOverallDownloaded = 0;
+  document.getElementById('startBtn').style.display = 'inline-block';
+  document.getElementById('closeBtn').style.display = 'inline-block';
   renderFileList();
-  window.electronAPI.modelDownloadStart();
 });
 
 window.electronAPI.onModelDownloadProgress((data) => {
@@ -133,6 +130,17 @@ window.electronAPI.onModelDownloadError((data) => {
   document.getElementById('errorMessage').style.display = 'block';
   document.getElementById('cancelBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'inline-block';
+});
+
+document.getElementById('startBtn').addEventListener('click', () => {
+  document.getElementById('startBtn').style.display = 'none';
+  document.getElementById('closeBtn').style.display = 'none';
+  document.getElementById('cancelBtn').style.display = 'inline-block';
+  document.getElementById('progressSection').style.display = 'block';
+  downloadStartTime = Date.now();
+  lastSpeedTime = downloadStartTime;
+  lastOverallDownloaded = 0;
+  window.electronAPI.modelDownloadStart();
 });
 
 document.getElementById('cancelBtn').addEventListener('click', () => {
