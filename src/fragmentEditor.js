@@ -134,7 +134,6 @@ function saveFragmentData() {
   }
 }
 
-let pitchEditMode = 'anchor';
 let selectedNoteId = null;
 let dragMode = null;
 let dragStartX = 0;
@@ -547,7 +546,7 @@ function renderPitchCurve() {
     const autoPoints = generateAutoPitchPoints();
     if (autoPoints.length === 0) return;
 
-    ctx.strokeStyle = 'rgba(46, 204, 113, 0.5)';
+    ctx.strokeStyle = 'rgba(46, 204, 113, 0.6)';
     ctx.lineWidth = 2;
     ctx.setLineDash([6, 4]);
     ctx.beginPath();
@@ -561,7 +560,41 @@ function renderPitchCurve() {
     }
     ctx.stroke();
     ctx.setLineDash([]);
+
+    for (const note of notes) {
+      const startX = timeToX(note.start);
+      const endX = timeToX(note.start + note.duration);
+      const y = pitchToY(note.pitch);
+      if (endX < 0 || startX > w) continue;
+
+      ctx.fillStyle = 'rgba(46, 204, 113, 0.4)';
+      ctx.beginPath();
+      ctx.arc(startX, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(endX, y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
     return;
+  }
+
+  const autoPoints = generateAutoPitchPoints();
+  if (autoPoints.length > 0) {
+    ctx.strokeStyle = 'rgba(46, 204, 113, 0.25)';
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    let first = true;
+    for (const pt of autoPoints) {
+      if (pt.time < startBeat - 1 || pt.time > endBeat + 1) continue;
+      const px = timeToX(pt.time);
+      const py = pitchToY(pt.pitch);
+      if (first) { ctx.moveTo(px, py); first = false; }
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.setLineDash([]);
   }
 
   if (pitchCurve.anchorPoints.length > 0) {
@@ -601,17 +634,26 @@ function renderPitchCurve() {
 
       ctx.fillStyle = isSelected ? '#ffffff' : '#2ecc71';
       ctx.beginPath();
-      ctx.arc(px, py, 5, 0, Math.PI * 2);
+      ctx.arc(px, py, isSelected ? 7 : 6, 0, Math.PI * 2);
       ctx.fill();
-      ctx.strokeStyle = isSelected ? '#ffffff' : '#1a1a1a';
-      ctx.lineWidth = isSelected ? 2 : 1;
+
+      ctx.strokeStyle = isSelected ? '#3498db' : 'rgba(0, 0, 0, 0.5)';
+      ctx.lineWidth = isSelected ? 2.5 : 1.5;
       ctx.stroke();
+
+      if (isSelected) {
+        ctx.strokeStyle = 'rgba(52, 152, 219, 0.4)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(px, py, 12, 0, Math.PI * 2);
+        ctx.stroke();
+      }
     }
   }
 
   for (const seg of pitchCurve.brushSegments) {
     if (seg.points.length < 2) continue;
-    ctx.strokeStyle = '#27ae60';
+    ctx.strokeStyle = '#e67e22';
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     let first = true;
@@ -837,6 +879,10 @@ function updateParamModeButtons() {
   const pitchTools = document.getElementById('pitch-tools');
   const pitchDivider = document.getElementById('pitch-tools-divider');
   if (currentParamMode === 'Pitch') {
+    if (!pitchCurve.enabled) {
+      pitchCurve.enabled = true;
+      scheduleAutoSave();
+    }
     if (pitchTools) pitchTools.style.display = 'flex';
     if (pitchDivider) pitchDivider.style.display = '';
   } else {
@@ -848,33 +894,12 @@ function updateParamModeButtons() {
 }
 
 function updatePitchToolButtons() {
-  const toggleBtn = document.getElementById('btn-pitch-toggle');
-  const anchorBtn = document.getElementById('btn-pitch-anchor');
-  const brushBtn = document.getElementById('btn-pitch-brush');
-
-  if (toggleBtn) {
+  const resetBtn = document.getElementById('btn-pitch-reset');
+  if (resetBtn) {
     if (pitchCurve.enabled) {
-      toggleBtn.classList.add('active');
-      toggleBtn.classList.remove('disabled-mode');
+      resetBtn.classList.remove('disabled-mode');
     } else {
-      toggleBtn.classList.remove('active');
-      toggleBtn.classList.add('disabled-mode');
-    }
-  }
-
-  if (anchorBtn) {
-    if (pitchEditMode === 'anchor' && pitchCurve.enabled) {
-      anchorBtn.classList.add('active');
-    } else {
-      anchorBtn.classList.remove('active');
-    }
-  }
-
-  if (brushBtn) {
-    if (pitchEditMode === 'brush' && pitchCurve.enabled) {
-      brushBtn.classList.add('active');
-    } else {
-      brushBtn.classList.remove('active');
+      resetBtn.classList.add('disabled-mode');
     }
   }
 }
@@ -890,31 +915,6 @@ document.querySelectorAll('[id^="btn-param-"]').forEach(btn => {
     updateParamModeButtons();
     render();
   });
-});
-
-document.getElementById('btn-pitch-toggle').addEventListener('click', () => {
-  const oldEnabled = pitchCurve.enabled;
-  pitchCurve.enabled = !pitchCurve.enabled;
-  const newEnabled = pitchCurve.enabled;
-  history.push({
-    undo() { pitchCurve.enabled = oldEnabled; },
-    redo() { pitchCurve.enabled = newEnabled; }
-  });
-  updatePitchToolButtons();
-  render();
-  scheduleAutoSave();
-});
-
-document.getElementById('btn-pitch-anchor').addEventListener('click', () => {
-  pitchEditMode = 'anchor';
-  updatePitchToolButtons();
-  canvas.style.cursor = 'crosshair';
-});
-
-document.getElementById('btn-pitch-brush').addEventListener('click', () => {
-  pitchEditMode = 'brush';
-  updatePitchToolButtons();
-  canvas.style.cursor = 'crosshair';
 });
 
 document.getElementById('btn-pitch-reset').addEventListener('click', () => {
@@ -1417,7 +1417,16 @@ canvas.addEventListener('mousedown', (e) => {
 
 function handlePitchMouseDown(e, pos) {
   pitchCurveSnapshotBeforeDrag = clonePitchCurveState();
-  if (pitchEditMode === 'anchor') {
+  if (e.shiftKey) {
+    isBrushDrawing = true;
+    const time = xToTime(pos.x);
+    const pitch = yToPitch(pos.y);
+    currentBrushStroke = {
+      points: [{ time: Math.max(0, time), pitch: Math.max(0, Math.min(127, pitch)) }],
+    };
+    dragMode = 'pitch-brush';
+    dragOperation = { type: 'pitchBrush' };
+  } else {
     const anchorIdx = findAnchorPointAt(pos.x, pos.y);
     if (anchorIdx >= 0) {
       pitchDragAnchorIdx = anchorIdx;
@@ -1445,15 +1454,6 @@ function handlePitchMouseDown(e, pos) {
       dragOperation = { type: 'pitchAnchorAdd' };
       scheduleAutoSave();
     }
-  } else if (pitchEditMode === 'brush') {
-    isBrushDrawing = true;
-    const time = xToTime(pos.x);
-    const pitch = yToPitch(pos.y);
-    currentBrushStroke = {
-      points: [{ time: Math.max(0, time), pitch: Math.max(0, Math.min(127, pitch)) }],
-    };
-    dragMode = 'pitch-brush';
-    dragOperation = { type: 'pitchBrush' };
   }
   render();
 }
@@ -1541,8 +1541,12 @@ canvas.addEventListener('mousemove', (e) => {
 
   if (!dragMode) {
     if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
-      const anchorIdx = findAnchorPointAt(pos.x, pos.y);
-      canvas.style.cursor = anchorIdx >= 0 ? 'grab' : 'crosshair';
+      if (e.shiftKey) {
+        canvas.style.cursor = 'crosshair';
+      } else {
+        const anchorIdx = findAnchorPointAt(pos.x, pos.y);
+        canvas.style.cursor = anchorIdx >= 0 ? 'grab' : 'crosshair';
+      }
       return;
     }
     const hit = findNoteAt(pos.x, pos.y);

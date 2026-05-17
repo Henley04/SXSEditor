@@ -143,10 +143,10 @@ html, body {
   border-radius: 3px !important;
 }
 
-.btn-pitch-tool.active {
-  background-color: #2ecc71 !important;
+.btn-pitch-tool:hover {
+  background-color: #c0392b !important;
   color: #ffffff !important;
-  border-color: #27ae60 !important;
+  border-color: #e74c3c !important;
 }
 
 .btn-pitch-tool.disabled-mode {
@@ -155,8 +155,19 @@ html, body {
   border-color: #666666 !important;
 }
 
+.pitch-hint {
+  font-size: 10px;
+  color: #777777;
+  white-space: nowrap;
+  user-select: none;
+  padding: 2px 6px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .pitch-tools-group {
-  gap: 3px !important;
+  gap: 8px !important;
 }
 
 #fragment-name {
