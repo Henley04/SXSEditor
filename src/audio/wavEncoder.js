@@ -124,7 +124,9 @@ function _interpEnv(envelope, time) {
   for (let i = 0; i < kfs.length - 1; i++) {
     if (time >= kfs[i].time && time <= kfs[i + 1].time) {
       const t = (time - kfs[i].time) / (kfs[i + 1].time - kfs[i].time);
-      return kfs[i].value + t * (kfs[i + 1].value - kfs[i].value);
+      const smoothness = (kfs[i].smoothness || 0) / 100;
+      const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
+      return kfs[i].value + smoothT * (kfs[i + 1].value - kfs[i].value);
     }
   }
   return kfs[kfs.length - 1].value;

@@ -39,6 +39,9 @@
         <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
           <button id="btn-pitch-reset" class="btn-pitch-tool" title="重置为MIDI自动曲线">↺ 重置</button>
           <span class="pitch-hint">点击添加锚点 · Shift+拖拽画笔 · 右键删除</span>
+          <span class="pitch-hint">平滑</span>
+          <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
+          <span class="pitch-hint" id="brush-smoothing-label">30</span>
         </div>
       </div>
       <div id="main-content">

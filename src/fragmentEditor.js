@@ -149,6 +149,7 @@ let pitchDragStartValue = 0;
 let pitchDragStartTime = 0;
 let isBrushDrawing = false;
 let currentBrushStroke = null;
+let brushSmoothing = 30;
 
 const history = new HistoryManager();
 let dragOperation = null;
@@ -350,6 +351,16 @@ function yToPitch(y) {
   return Math.round(maxPitch - (y + scrollY - pianoAreaTop) / NOTE_HEIGHT);
 }
 
+function yToPitchContinuous(y) {
+  const pianoAreaTop = HEADER_HEIGHT;
+  const showParamArea = currentParamMode === PARAM_MODES.VOL || currentParamMode === PARAM_MODES.PAN;
+  const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
+  if (y >= pianoAreaBottom) return 0;
+  if (y <= pianoAreaTop) return 127;
+  const maxPitch = 127;
+  return maxPitch - (y + scrollY - pianoAreaTop) / NOTE_HEIGHT;
+}
+
 function snapBeats(beats) {
   const grid = 1 / 4;
   return Math.round(beats / grid) * grid;
@@ -433,20 +444,6 @@ function isPitchCurveCustomized() {
 function getPitchAtTime(time) {
   if (!pitchCurve.enabled) return null;
 
-  for (const seg of pitchCurve.brushSegments) {
-    if (seg.points.length < 2) continue;
-    if (time >= seg.points[0].time && time <= seg.points[seg.points.length - 1].time) {
-      for (let i = 0; i < seg.points.length - 1; i++) {
-        if (time >= seg.points[i].time && time <= seg.points[i + 1].time) {
-          const t = (seg.points[i + 1].time - seg.points[i].time) > 0
-            ? (time - seg.points[i].time) / (seg.points[i + 1].time - seg.points[i].time)
-            : 0;
-          return seg.points[i].pitch + t * (seg.points[i + 1].pitch - seg.points[i].pitch);
-        }
-      }
-    }
-  }
-
   if (pitchCurve.anchorPoints.length > 0) {
     const sorted = [...pitchCurve.anchorPoints].sort((a, b) => a.time - b.time);
     if (time <= sorted[0].time) return sorted[0].pitch;
@@ -462,6 +459,20 @@ function getPitchAtTime(time) {
       }
     }
     return sorted[sorted.length - 1].pitch;
+  }
+
+  for (const seg of pitchCurve.brushSegments) {
+    if (seg.points.length < 2) continue;
+    if (time >= seg.points[0].time && time <= seg.points[seg.points.length - 1].time) {
+      for (let i = 0; i < seg.points.length - 1; i++) {
+        if (time >= seg.points[i].time && time <= seg.points[i + 1].time) {
+          const t = (seg.points[i + 1].time - seg.points[i].time) > 0
+            ? (time - seg.points[i].time) / (seg.points[i + 1].time - seg.points[i].time)
+            : 0;
+          return seg.points[i].pitch + t * (seg.points[i + 1].pitch - seg.points[i].pitch);
+        }
+      }
+    }
   }
 
   const autoPoints = generateAutoPitchPoints();
@@ -489,6 +500,91 @@ function findAnchorPointAt(x, y) {
     if (dist <= 8) return i;
   }
   return -1;
+}
+
+function smoothBrushPoints(points, smoothing) {
+  if (points.length < 3 || smoothing <= 0) return points;
+  const windowSize = Math.max(1, Math.round(smoothing / 8));
+  const sigma = Math.max(0.5, windowSize / 2);
+  const result = points.map(p => ({ ...p }));
+  for (let i = 0; i < result.length; i++) {
+    let sumPitch = 0;
+    let weightSum = 0;
+    for (let j = -windowSize; j <= windowSize; j++) {
+      const idx = i + j;
+      if (idx >= 0 && idx < points.length) {
+        const weight = Math.exp(-(j * j) / (2 * sigma * sigma));
+        sumPitch += points[idx].pitch * weight;
+        weightSum += weight;
+      }
+    }
+    result[i].pitch = sumPitch / weightSum;
+  }
+  return result;
+}
+
+function downsampleBrushPoints(points, interval) {
+  if (points.length < 2) return points;
+  const result = [points[0]];
+  let lastTime = points[0].time;
+  for (let i = 1; i < points.length; i++) {
+    if (points[i].time - lastTime >= interval) {
+      result.push(points[i]);
+      lastTime = points[i].time;
+    }
+  }
+  if (result[result.length - 1] !== points[points.length - 1]) {
+    result.push(points[points.length - 1]);
+  }
+  return result;
+}
+
+function convertBrushStrokeToAnchorPoints(stroke) {
+  if (!stroke || stroke.points.length < 2) return;
+
+  const smoothed = smoothBrushPoints(stroke.points, brushSmoothing);
+  const downsampled = downsampleBrushPoints(smoothed, 0.08);
+
+  const strokeStart = stroke.points[0].time;
+  const strokeEnd = stroke.points[stroke.points.length - 1].time;
+
+  pitchCurve.anchorPoints = pitchCurve.anchorPoints.filter(ap =>
+    ap.time < strokeStart - 0.01 || ap.time > strokeEnd + 0.01
+  );
+
+  pitchCurve.brushSegments = pitchCurve.brushSegments.filter(seg => {
+    if (seg.points.length < 2) return true;
+    const segStart = seg.points[0].time;
+    const segEnd = seg.points[seg.points.length - 1].time;
+    return segEnd < strokeStart - 0.01 || segStart > strokeEnd + 0.01;
+  });
+
+  for (const pt of downsampled) {
+    pitchCurve.anchorPoints.push({
+      time: pt.time,
+      pitch: pt.pitch,
+      smoothness: brushSmoothing,
+    });
+  }
+
+  pitchCurve.anchorPoints.sort((a, b) => a.time - b.time);
+}
+
+function convertExistingBrushSegmentsToAnchorPoints() {
+  for (const seg of pitchCurve.brushSegments) {
+    if (seg.points.length < 2) continue;
+    const smoothed = smoothBrushPoints(seg.points, brushSmoothing);
+    const downsampled = downsampleBrushPoints(smoothed, 0.08);
+    for (const pt of downsampled) {
+      pitchCurve.anchorPoints.push({
+        time: pt.time,
+        pitch: pt.pitch,
+        smoothness: brushSmoothing,
+      });
+    }
+  }
+  pitchCurve.brushSegments = [];
+  pitchCurve.anchorPoints.sort((a, b) => a.time - b.time);
 }
 
 function findNoteAtTime(time) {
@@ -600,7 +696,7 @@ function renderPitchCurve() {
   if (pitchCurve.anchorPoints.length > 0) {
     const sorted = [...pitchCurve.anchorPoints].sort((a, b) => a.time - b.time);
     const maxTime = Math.max(endBeat, sorted[sorted.length - 1].time) + 2;
-    const steps = Math.max(100, Math.floor((maxTime - startBeat) / PITCH_CURVE_SAMPLE_INTERVAL));
+    const steps = Math.max(200, Math.floor((maxTime - startBeat) / PITCH_CURVE_SAMPLE_INTERVAL));
 
     ctx.strokeStyle = '#2ecc71';
     ctx.lineWidth = 2;
@@ -608,14 +704,6 @@ function renderPitchCurve() {
     let first = true;
     for (let i = 0; i <= steps; i++) {
       const t = startBeat + (i / steps) * (maxTime - startBeat);
-      let inBrush = false;
-      for (const seg of pitchCurve.brushSegments) {
-        if (seg.points.length >= 2 && t >= seg.points[0].time && t <= seg.points[seg.points.length - 1].time) {
-          inBrush = true;
-          break;
-        }
-      }
-      if (inBrush) continue;
 
       const pitch = getPitchAtTime(t);
       if (pitch === null) continue;
@@ -649,21 +737,6 @@ function renderPitchCurve() {
         ctx.stroke();
       }
     }
-  }
-
-  for (const seg of pitchCurve.brushSegments) {
-    if (seg.points.length < 2) continue;
-    ctx.strokeStyle = '#e67e22';
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    let first = true;
-    for (const pt of seg.points) {
-      const px = timeToX(pt.time);
-      const py = pitchToY(pt.pitch);
-      if (first) { ctx.moveTo(px, py); first = false; }
-      else ctx.lineTo(px, py);
-    }
-    ctx.stroke();
   }
 
   if (currentBrushStroke && currentBrushStroke.points.length >= 2) {
@@ -783,8 +856,10 @@ function render() {
     const envKey = currentParamMode === PARAM_MODES.VOL ? 'volume' : 'pan';
     const envelope = envelopes[envKey];
     if (envelope && envelope.keyframes && envelope.keyframes.length > 0) {
-      const maxTime = Math.max(8, ...envelope.keyframes.map(k => k.time)) * 1.2;
-      const steps = 50;
+      const startBeat = xToTime(0);
+      const endBeat = xToTime(w);
+      const maxTime = Math.max(endBeat, ...envelope.keyframes.map(k => k.time)) + 2;
+      const steps = Math.max(300, Math.floor((maxTime - startBeat) / 0.02));
 
       const lineColors = { VOL: '#3498db', PAN: '#e74c3c' };
       ctx.strokeStyle = lineColors[currentParamMode] || '#3498db';
@@ -792,9 +867,9 @@ function render() {
       ctx.beginPath();
 
       for (let i = 0; i <= steps; i++) {
-        const t = (i / steps) * maxTime;
+        const t = startBeat + (i / steps) * (maxTime - startBeat);
         const value = _interpolateEnvelope(envelope, t);
-        const px = (t / maxTime) * w;
+        const px = timeToX(t);
         const py = _valueToParamY(value);
         if (i === 0) ctx.moveTo(px, py);
         else ctx.lineTo(px, py);
@@ -802,7 +877,7 @@ function render() {
       ctx.stroke();
 
       for (const kf of envelope.keyframes) {
-        const px = (kf.time / maxTime) * w;
+        const px = timeToX(kf.time);
         const py = _valueToParamY(kf.value);
         ctx.fillStyle = lineColors[currentParamMode] || '#3498db';
         ctx.beginPath();
@@ -929,6 +1004,17 @@ document.getElementById('btn-pitch-reset').addEventListener('click', () => {
   render();
   scheduleAutoSave();
 });
+
+const brushSmoothingSlider = document.getElementById('brush-smoothing');
+const brushSmoothingLabel = document.getElementById('brush-smoothing-label');
+if (brushSmoothingSlider) {
+  brushSmoothingSlider.addEventListener('input', () => {
+    brushSmoothing = parseInt(brushSmoothingSlider.value, 10);
+    if (brushSmoothingLabel) {
+      brushSmoothingLabel.textContent = brushSmoothing;
+    }
+  });
+}
 
 document.getElementById('btn-save').addEventListener('click', () => {
   if (autoSaveTimer) {
@@ -1188,32 +1274,36 @@ async function playFragmentShared() {
   if (volumeEnv && volumeEnv.keyframes && volumeEnv.keyframes.length > 0) {
     const now = context.currentTime;
     const sortedKfs = [...volumeEnv.keyframes].sort((a, b) => a.time - b.time);
-    for (const kf of sortedKfs) {
+    envGainNode.gain.setValueAtTime(sortedKfs[0].value, now);
+    for (let i = 0; i < sortedKfs.length; i++) {
+      const kf = sortedKfs[i];
       const timeSec = (kf.time / bpm) * 60;
       if (timeSec <= audioDuration) {
-        envGainNode.gain.setValueAtTime(kf.value, now + timeSec);
+        envGainNode.gain.linearRampToValueAtTime(kf.value, now + timeSec);
       }
     }
     const lastKf = sortedKfs[sortedKfs.length - 1];
     const lastTimeSec = (lastKf.time / bpm) * 60;
     if (lastTimeSec < audioDuration) {
-      envGainNode.gain.setValueAtTime(lastKf.value, now + audioDuration);
+      envGainNode.gain.linearRampToValueAtTime(lastKf.value, now + audioDuration);
     }
   }
 
   if (panEnv && panEnv.keyframes && panEnv.keyframes.length > 0) {
     const now = context.currentTime;
     const sortedKfs = [...panEnv.keyframes].sort((a, b) => a.time - b.time);
-    for (const kf of sortedKfs) {
+    panNode.pan.setValueAtTime(sortedKfs[0].value, now);
+    for (let i = 0; i < sortedKfs.length; i++) {
+      const kf = sortedKfs[i];
       const timeSec = (kf.time / bpm) * 60;
       if (timeSec <= audioDuration) {
-        panNode.pan.setValueAtTime(kf.value, now + timeSec);
+        panNode.pan.linearRampToValueAtTime(kf.value, now + timeSec);
       }
     }
     const lastKf = sortedKfs[sortedKfs.length - 1];
     const lastTimeSec = (lastKf.time / bpm) * 60;
     if (lastTimeSec < audioDuration) {
-      panNode.pan.setValueAtTime(lastKf.value, now + audioDuration);
+      panNode.pan.linearRampToValueAtTime(lastKf.value, now + audioDuration);
     }
   }
 
@@ -1420,7 +1510,7 @@ function handlePitchMouseDown(e, pos) {
   if (e.shiftKey) {
     isBrushDrawing = true;
     const time = xToTime(pos.x);
-    const pitch = yToPitch(pos.y);
+    const pitch = yToPitchContinuous(pos.y);
     currentBrushStroke = {
       points: [{ time: Math.max(0, time), pitch: Math.max(0, Math.min(127, pitch)) }],
     };
@@ -1438,12 +1528,12 @@ function handlePitchMouseDown(e, pos) {
       dragOperation = { type: 'pitchAnchorMove' };
     } else {
       const time = xToTime(pos.x);
-      const pitch = yToPitch(pos.y);
+      const pitch = yToPitchContinuous(pos.y);
       const clampedPitch = Math.max(0, Math.min(127, pitch));
       pitchCurve.anchorPoints.push({
         time: Math.max(0, time),
         pitch: clampedPitch,
-        smoothness: 30,
+        smoothness: brushSmoothing,
       });
       pitchDragAnchorIdx = pitchCurve.anchorPoints.length - 1;
       pitchDragStartTime = time;
@@ -1467,12 +1557,9 @@ function handleParamEnvelopeMouseDown(pos) {
 
   envelopeSnapshotBeforeDrag = cloneEnvelopeState(envKey);
 
-  const maxTime = Math.max(8, ...envelope.keyframes.map(k => k.time)) * 1.2;
-  const w = canvas.parentElement.clientWidth;
-
   for (let i = 0; i < envelope.keyframes.length; i++) {
     const kf = envelope.keyframes[i];
-    const px = (kf.time / maxTime) * w;
+    const px = timeToX(kf.time);
     const py = _valueToParamY(kf.value);
     const dist = Math.sqrt((pos.x - px) ** 2 + (pos.y - py) ** 2);
     if (dist <= 8) {
@@ -1483,11 +1570,11 @@ function handleParamEnvelopeMouseDown(pos) {
     }
   }
 
-  const time = (pos.x / w) * maxTime;
+  const time = xToTime(pos.x);
   const { min, max } = _getParamCurveYRange();
   const value = min + (1 - (pos.y - _getParamCurveAreaTop()) / PARAM_CURVE_HEIGHT) * (max - min);
   const clampedValue = Math.max(min, Math.min(max, value));
-  envelope.keyframes.push({ time: Math.max(0, time), value: clampedValue, smoothness: 0 });
+  envelope.keyframes.push({ time: Math.max(0, time), value: clampedValue, smoothness: 30 });
   envelope.keyframes.sort((a, b) => a.time - b.time);
   dragOperation = { type: 'envelopeKeyframeAdd', envKey };
   render();
@@ -1501,7 +1588,7 @@ canvas.addEventListener('mousemove', (e) => {
     const ap = pitchCurve.anchorPoints[pitchDragAnchorIdx];
     if (ap) {
       const dxBeats = (pos.x - dragStartX) / (BEAT_WIDTH * zoomX);
-      const dyPitch = Math.round((dragStartY - pos.y) / NOTE_HEIGHT);
+      const dyPitch = (dragStartY - pos.y) / NOTE_HEIGHT;
       ap.time = Math.max(0, pitchDragStartTime + dxBeats);
       ap.pitch = Math.max(0, Math.min(127, pitchDragStartValue + dyPitch));
     }
@@ -1511,10 +1598,10 @@ canvas.addEventListener('mousemove', (e) => {
 
   if (dragMode === 'pitch-brush' && isBrushDrawing && currentBrushStroke) {
     const time = xToTime(pos.x);
-    const pitch = yToPitch(pos.y);
+    const pitch = yToPitchContinuous(pos.y);
     const lastPt = currentBrushStroke.points[currentBrushStroke.points.length - 1];
     const dt = Math.abs(time - lastPt.time);
-    if (dt > PITCH_CURVE_SAMPLE_INTERVAL) {
+    if (dt > 0.005) {
       currentBrushStroke.points.push({
         time: Math.max(0, time),
         pitch: Math.max(0, Math.min(127, pitch)),
@@ -1528,9 +1615,7 @@ canvas.addEventListener('mousemove', (e) => {
     const { envKey, index, startX, startY, origTime, origValue } = paramEnvelopeDrag;
     const envelope = envelopes[envKey];
     if (!envelope || index >= envelope.keyframes.length) return;
-    const w = canvas.parentElement.clientWidth;
-    const maxTime = Math.max(8, ...envelope.keyframes.map(k => k.time)) * 1.2;
-    const dxTime = ((pos.x - startX) / w) * maxTime;
+    const dxTime = (pos.x - startX) / (BEAT_WIDTH * zoomX);
     const { min, max } = _getParamCurveYRange();
     const dyValue = -((pos.y - startY) / PARAM_CURVE_HEIGHT) * (max - min);
     envelope.keyframes[index].time = Math.max(0, origTime + dxTime);
@@ -1576,7 +1661,7 @@ canvas.addEventListener('mousemove', (e) => {
 canvas.addEventListener('mouseup', (e) => {
   if (dragMode === 'pitch-brush' && isBrushDrawing && currentBrushStroke) {
     if (currentBrushStroke.points.length >= 2) {
-      pitchCurve.brushSegments.push(currentBrushStroke);
+      convertBrushStrokeToAnchorPoints(currentBrushStroke);
     }
     currentBrushStroke = null;
     isBrushDrawing = false;
@@ -1607,7 +1692,7 @@ canvas.addEventListener('mouseup', (e) => {
 canvas.addEventListener('mouseleave', () => {
   if (dragMode === 'pitch-brush' && isBrushDrawing && currentBrushStroke) {
     if (currentBrushStroke.points.length >= 2) {
-      pitchCurve.brushSegments.push(currentBrushStroke);
+      convertBrushStrokeToAnchorPoints(currentBrushStroke);
     }
     currentBrushStroke = null;
     isBrushDrawing = false;
@@ -1894,6 +1979,9 @@ async function handleFragmentData(data) {
       anchorPoints: currentFragment.pitchCurve.anchorPoints || [],
       brushSegments: currentFragment.pitchCurve.brushSegments || [],
     };
+    if (pitchCurve.brushSegments.length > 0) {
+      convertExistingBrushSegmentsToAnchorPoints();
+    }
   } else {
     pitchCurve = {
       enabled: true,

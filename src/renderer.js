@@ -626,20 +626,6 @@ function computePitchCurveF0(singerFragments, allNotes, bpm) {
       const pc = frag.pitchCurve;
       const localBeat = frameBeat - frag.startTime;
 
-      for (const seg of pc.brushSegments) {
-        if (seg.points.length >= 2 && localBeat >= seg.points[0].time && localBeat <= seg.points[seg.points.length - 1].time) {
-          for (let j = 0; j < seg.points.length - 1; j++) {
-            if (localBeat >= seg.points[j].time && localBeat <= seg.points[j + 1].time) {
-              const t = (seg.points[j + 1].time - seg.points[j].time) > 0
-                ? (localBeat - seg.points[j].time) / (seg.points[j + 1].time - seg.points[j].time) : 0;
-              pitch = seg.points[j].pitch + t * (seg.points[j + 1].pitch - seg.points[j].pitch);
-              break;
-            }
-          }
-          break;
-        }
-      }
-
       if (pitch === null && pc.anchorPoints.length > 0) {
         const sorted = sortedAnchorsCache.get(frag.id);
         if (localBeat <= sorted[0].time) pitch = sorted[0].pitch;
@@ -654,6 +640,22 @@ function computePitchCurveF0(singerFragments, allNotes, bpm) {
               pitch = sorted[j].pitch + st * (sorted[j + 1].pitch - sorted[j].pitch);
               break;
             }
+          }
+        }
+      }
+
+      if (pitch === null) {
+        for (const seg of pc.brushSegments) {
+          if (seg.points.length >= 2 && localBeat >= seg.points[0].time && localBeat <= seg.points[seg.points.length - 1].time) {
+            for (let j = 0; j < seg.points.length - 1; j++) {
+              if (localBeat >= seg.points[j].time && localBeat <= seg.points[j + 1].time) {
+                const t = (seg.points[j + 1].time - seg.points[j].time) > 0
+                  ? (localBeat - seg.points[j].time) / (seg.points[j + 1].time - seg.points[j].time) : 0;
+                pitch = seg.points[j].pitch + t * (seg.points[j + 1].pitch - seg.points[j].pitch);
+                break;
+              }
+            }
+            break;
           }
         }
       }
