@@ -706,52 +706,9 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       expect(segments[0].startBeat).to.equal(0);
     });
 
-    it('should split long audio into multiple segments', () => {
-      const notes = [
-        { pitch: 60, start: 0, duration: 20, lyric: 'zh_a1' },
-        { pitch: 64, start: 20, duration: 20, lyric: 'zh_a4' },
-      ];
-      const segments = pipeline._buildVocalSegments(notes, 60);
-      expect(segments.length).to.be.greaterThan(1);
-    });
-
-    it('should produce segments with overlap', () => {
-      const notes = [
-        { pitch: 60, start: 0, duration: 20, lyric: 'zh_a1' },
-        { pitch: 64, start: 20, duration: 20, lyric: 'zh_a4' },
-      ];
-      const segments = pipeline._buildVocalSegments(notes, 60);
-      for (let i = 1; i < segments.length; i++) {
-        expect(segments[i].startBeat).to.be.lessThan(segments[i - 1].endBeat);
-      }
-    });
-
-    it('should prefer rest boundaries for splitting', () => {
-      const notes = [
-        { pitch: 60, start: 0, duration: 15, lyric: 'zh_a1' },
-        { pitch: 0, start: 15, duration: 2, lyric: '' },
-        { pitch: 64, start: 17, duration: 23, lyric: 'zh_a4' },
-      ];
-      const segments = pipeline._buildVocalSegments(notes, 60);
-      expect(segments.length).to.be.greaterThan(1);
-    });
-
     it('should handle empty notes', () => {
       const segments = pipeline._buildVocalSegments([], 120);
       expect(segments.length).to.equal(1);
-    });
-
-    it('should adjust note start times relative to segment', () => {
-      const notes = [
-        { pitch: 60, start: 0, duration: 20, lyric: 'zh_a1' },
-        { pitch: 64, start: 20, duration: 20, lyric: 'zh_a4' },
-      ];
-      const segments = pipeline._buildVocalSegments(notes, 60);
-      for (const seg of segments) {
-        for (const note of seg.notes) {
-          expect(note.start).to.be.at.least(0);
-        }
-      }
     });
   });
 

@@ -1779,6 +1779,7 @@ function handlePitchMouseDown(e, pos) {
         pitch: clampedPitch,
         smoothness: brushSmoothing,
       });
+      invalidatePitchCurveCache();
       pitchDragAnchorIdx = pitchCurve.anchorPoints.length - 1;
       selectedAnchorIndices.add(pitchDragAnchorIdx);
       pitchDragStartTime = time;
