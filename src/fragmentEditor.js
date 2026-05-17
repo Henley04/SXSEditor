@@ -778,6 +778,20 @@ function renderPitchCurve() {
       ctx.fill();
     }
 
+    if (currentBrushStroke && currentBrushStroke.points.length >= 2) {
+      ctx.strokeStyle = '#f39c12';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      let first = true;
+      for (const pt of currentBrushStroke.points) {
+        const px = timeToX(pt.time);
+        const py = pitchToY(pt.pitch);
+        if (first) { ctx.moveTo(px, py); first = false; }
+        else ctx.lineTo(px, py);
+      }
+      ctx.stroke();
+    }
+
     return;
   }
 
@@ -1951,6 +1965,7 @@ canvas.addEventListener('mouseup', (e) => {
     }
     currentBrushStroke = null;
     isBrushDrawing = false;
+    render();
   }
 
   if (dragMode === 'pitch-anchor') {
@@ -2023,6 +2038,7 @@ canvas.addEventListener('mouseleave', () => {
     }
     currentBrushStroke = null;
     isBrushDrawing = false;
+    render();
   }
   finalizeDragOperation();
   dragMode = null;
