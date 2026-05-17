@@ -16,7 +16,7 @@
 
 ### Windows
 
-Download the latest installer from the [download page](https://share.weiyun.com/2pgoQsmL) and run the setup executable.
+Download the latest installer from the [releases page](https://github.com/Henley04/SXSEditor/releases/download/EA/sxsinstaller_x64_no_models.exe) and run the setup executable.
 
 ### macOS / Linux
 

@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>关于 - SXSEditor</title>
-  <meta name="description" content="关于 SXSEditor 项目：技术栈、开源许可、致谢与贡献指南。">
+  <meta name="description" content="关于 SXSEditor：一个因为想自己写歌而诞生的开源项目。">
   <meta property="og:title" content="关于 - SXSEditor">
   <meta property="og:description" content="关于 SXSEditor 开源项目">
   <meta property="og:image" content="images/icon.png">
@@ -12,8 +12,6 @@
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <div class="noise-overlay"></div>
-
   <nav>
     <div class="nav-inner">
       <a href="index.html" class="nav-logo">
@@ -27,34 +25,36 @@
       </button>
       <ul class="nav-links">
         <li><a href="index.html">首页</a></li>
-        <li><a href="features.html">功能特性</a></li>
+        <li><a href="features.html">功能</a></li>
         <li><a href="download.html">下载</a></li>
         <li><a href="about.html">关于</a></li>
-        <li><a href="download.html" class="nav-cta">立即下载</a></li>
+        <li><a href="download.html" class="nav-cta">下载</a></li>
       </ul>
     </div>
   </nav>
 
   <main>
     <section class="page-header">
-      <h1>关于项目</h1>
-      <p>SXSEditor 的故事与技术</p>
+      <h1>关于这个项目</h1>
+      <p>为什么做 SXSEditor</p>
     </section>
 
     <section class="about-section">
       <div class="about-content">
-        <h2>项目概述</h2>
+        <h2>缘起</h2>
         <p>
-          SXSEditor 是一款开源的桌面歌声合成（Singing Voice Synthesis, SVS）与编辑应用。
-          它将可视化的钢琴卷帘编辑器与基于 SoulX-Singer 声学模型的神经网络 SVS 流水线相结合，
-          让你能够在一个集成化的桌面工作台中完成从作曲到合成的完整创作流程。
+          做这个项目其实挺简单的——就是想写歌，但不会唱歌，也不想花钱请歌手。
+          市面上已有的歌声合成软件要么太贵，要么太复杂，要么不开源。
+          所以干脆自己做一个。
         </p>
         <p>
-          项目完全通过 ONNX Runtime 进行推理，支持 DirectML 加速，可在
-          NVIDIA、AMD 和 Intel 独立显卡上高效运行，同时兼容 CPU 回退方案。
+          SXSEditor 把钢琴卷帘编辑器和神经网络歌声合成打包成一个桌面应用。
+          你不需要懂深度学习，不需要配环境，下载解压就能用。
+          所有的推理都在本地完成，你的歌、你的数据，完全属于你自己。
         </p>
 
         <h2>技术栈</h2>
+        <p>这个项目用到了不少开源工具，感谢这些社区：</p>
         <div class="tech-stack-tags">
           <span class="tech-tag">Vanilla JavaScript</span>
           <span class="tech-tag">HTML5 Canvas</span>
@@ -71,18 +71,19 @@
         </div>
 
         <h2>项目结构</h2>
-        <p>SXSEditor 采用清晰的分层架构设计：</p>
+        <p>代码组织得还算清晰，主要分这几块：</p>
         <ul>
-          <li><strong>src/main.js</strong> — Electron 主进程入口，窗口管理与 IPC 通信</li>
-          <li><strong>src/renderer.js</strong> — 渲染进程逻辑，UI 交互与主进程 API 调用</li>
-          <li><strong>src/editor/</strong> — 轨道管理器、钢琴卷帘、包络编辑等核心编辑器组件</li>
-          <li><strong>src/inference/</strong> — ONNX 推理流水线（SVS、RMVPE 音高检测、Basic Pitch）</li>
-          <li><strong>src/audio/</strong> — WAV 编码器与音频工具函数</li>
-          <li><strong>onnx_models/</strong> — SoulX-Singer ONNX 模型文件</li>
-          <li><strong>test/</strong> — 完整的自动化测试套件（160+ 测试用例）</li>
+          <li><strong>src/main.js</strong> — Electron 主进程，管窗口和进程通信</li>
+          <li><strong>src/renderer.js</strong> — 渲染进程，UI 交互和调用主进程 API</li>
+          <li><strong>src/editor/</strong> — 编辑器核心：轨道、钢琴卷帘、包络</li>
+          <li><strong>src/inference/</strong> — ONNX 推理：SVS、音高检测、MIDI 解析</li>
+          <li><strong>src/audio/</strong> — WAV 编码和音频工具</li>
+          <li><strong>onnx_models/</strong> — SoulX-Singer 的 ONNX 模型文件</li>
+          <li><strong>test/</strong> — 自动化测试，160 多个用例</li>
         </ul>
 
         <h2>音频规格</h2>
+        <p>目前模型支持的参数：</p>
         <ul>
           <li>采样率：24000 Hz</li>
           <li>Hop Size：480（20 ms）</li>
@@ -94,30 +95,26 @@
 
         <h2>开源许可</h2>
         <p>
-          本项目基于 <strong>MIT License</strong> 开源发布。
-          你可以自由使用、修改和分发本软件，只需保留原始的版权声明。
+          基于 <strong>MIT License</strong> 开源。
+          你可以随便用、随便改、随便分发，只要保留原始版权声明就行。
+          如果这个项目帮到了你， star 一个就是最大的支持。
         </p>
 
         <h2>致谢</h2>
-        <p>感谢以下开源项目和社区的支持：</p>
+        <p>感谢这些项目和社区：</p>
         <ul>
-          <li><strong>SoulX-Singer</strong> — 底层的声学模型与 SVS/SVC 流水线</li>
-          <li><strong>ONNX Runtime</strong> — 高性能跨平台推理引擎</li>
-          <li><strong>Electron Forge</strong> — 应用打包与构建工具链</li>
-          <li><strong>Wavesurfer.js</strong> — 音频波形可视化库</li>
-          <li>所有贡献者和测试人员</li>
+          <li><strong>SoulX-Singer</strong> — 底层的声学模型和 SVS/SVC 流水线</li>
+          <li><strong>ONNX Runtime</strong> — 让模型能在本地高效运行</li>
+          <li><strong>Electron Forge</strong> — 打包和构建工具</li>
+          <li><strong>Wavesurfer.js</strong> — 音频波形显示</li>
+          <li>所有提交过 issue 和 PR 的朋友</li>
         </ul>
 
-        <h2>贡献指南</h2>
+        <h2>想参与？</h2>
         <p>
-          欢迎任何形式的贡献！无论是提交 bug 报告、功能请求，还是直接提交 Pull Request。
-          在提交 PR 前请确保测试通过：
+          欢迎任何形式的贡献。发现 bug、想要新功能、或者想改代码，都可以去 GitHub 上提。
+          提交 PR 之前先跑一下 <code>npm test</code> 确保测试通过就行。
         </p>
-        <ul>
-          <li>运行 <code>npm test</code> 确保所有测试用例通过</li>
-          <li>重大变更请先提交 Issue 进行讨论</li>
-          <li>遵循项目的代码风格和提交规范</li>
-        </ul>
       </div>
     </section>
   </main>
@@ -126,7 +123,7 @@
     <div class="footer-inner">
       <div class="footer-links">
         <a href="index.html">首页</a>
-        <a href="features.html">功能特性</a>
+        <a href="features.html">功能</a>
         <a href="download.html">下载</a>
         <a href="about.html">关于</a>
         <a href="https://github.com/Henley04/SXSEditor" target="_blank">GitHub</a>

@@ -3,17 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>功能特性 - SXSEditor</title>
-  <meta name="description" content="了解 SXSEditor 的完整功能特性：多轨编辑、钢琴卷帘、神经网络歌声合成、歌手管理、音频预处理等。">
-  <meta property="og:title" content="功能特性 - SXSEditor">
-  <meta property="og:description" content="了解 SXSEditor 的完整功能特性">
+  <title>功能 - SXSEditor</title>
+  <meta name="description" content="了解 SXSEditor 能做什么：写歌、合成歌声、管理歌手、导出音频。">
+  <meta property="og:title" content="功能 - SXSEditor">
+  <meta property="og:description" content="了解 SXSEditor 能做什么">
   <meta property="og:image" content="images/icon.png">
   <link rel="icon" type="image/png" href="images/icon.png">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <div class="noise-overlay"></div>
-
   <nav>
     <div class="nav-inner">
       <a href="index.html" class="nav-logo">
@@ -27,91 +25,96 @@
       </button>
       <ul class="nav-links">
         <li><a href="index.html">首页</a></li>
-        <li><a href="features.html">功能特性</a></li>
+        <li><a href="features.html">功能</a></li>
         <li><a href="download.html">下载</a></li>
         <li><a href="about.html">关于</a></li>
-        <li><a href="download.html" class="nav-cta">立即下载</a></li>
+        <li><a href="download.html" class="nav-cta">下载</a></li>
       </ul>
     </div>
   </nav>
 
   <main>
     <section class="page-header">
-      <h1>功能特性</h1>
-      <p>探索 SXSEditor 的强大功能</p>
+      <h1>能做什么</h1>
+      <p>从写第一个音符到导出完整的歌</p>
     </section>
+
+    <p class="features-intro">
+      SXSEditor 的核心流程很简单：写音符 → 填歌词 → 合成歌声 → 导出音频。
+      下面是每一步的具体能力。
+    </p>
 
     <section class="features-grid">
       <div class="feature-card">
         <div class="feature-icon">🎹</div>
-        <h3>多轨时间线编辑</h3>
-        <p>在可视化多轨时间线上自由排列歌曲片段，支持拖拽调整位置和大小，像专业 DAW 一样管理你的项目。</p>
+        <h3>像写 MIDI 一样写歌</h3>
+        <p>在钢琴卷帘上点击放置音符，拖拽调整音高和时长。支持多轨编排，你可以同时写主旋律、和声，甚至给不同声部分配不同的歌手。</p>
       </div>
 
       <div class="feature-card">
-        <div class="feature-icon">🎼</div>
-        <h3>钢琴卷帘编辑器</h3>
-        <p>在钢琴卷帘视图中精确编辑音符、歌词和音高曲线。支持添加、删除、移动和调整音符长度。</p>
-      </div>
-
-      <div class="feature-card">
-        <div class="feature-icon">🧠</div>
-        <h3>神经网络歌声合成</h3>
-        <p>使用 SoulX-Singer 声学模型，基于 ONNX Runtime 高效推理，将音符和歌词转化为自然真实的歌声。</p>
+        <div class="feature-icon">📝</div>
+        <h3>每个音符都能填词</h3>
+        <p>双击音符输入拼音或歌词，合成引擎会根据上下文自动处理发音。支持中文歌词，后续会扩展更多语言。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">🎤</div>
-        <h3>歌手管理</h3>
-        <p>创建和管理多个歌手，为每个歌手配置参考音频、头像、颜色标识和预处理 F0 数据。支持导出为 .sxssinger 文件。</p>
+        <h3>让虚拟歌手唱出来</h3>
+        <p>基于 SoulX-Singer 声学模型，通过 ONNX Runtime 在本地运行。不需要联网，也不需要订阅——你的数据完全留在自己电脑上。</p>
+      </div>
+
+      <div class="feature-card">
+        <div class="feature-icon">👤</div>
+        <h3>创建自己的歌手</h3>
+        <p>上传一段参考音频，程序会自动提取音高特征，创建一个专属的 .sxssinger 歌手文件。你可以为每个项目使用不同的声线。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">📊</div>
-        <h3>音频预处理</h3>
-        <p>内置 RMVPE 和 Basic Pitch 音高检测器，自动从参考音频中提取 F0 与音符数据，为歌手创建提供完整支持。</p>
+        <h3>自动提取音高</h3>
+        <p>内置 RMVPE 和 Basic Pitch，可以从任何音频中提取 F0 曲线和 MIDI 音符。想翻唱一首歌？先把原唱的音高抓下来作为参考。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">▶️</div>
-        <h3>实时播放与试听</h3>
-        <p>直接在编辑器中合成并播放整个项目，支持暂停、停止和实时控制，即时感受创作效果。</p>
+        <h3>边写边听</h3>
+        <p>写完一段就能立刻合成试听，不满意再改。不用等整个项目做完，创作过程更流畅。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">📦</div>
-        <h3>WAV 导出</h3>
-        <p>将完成的混音项目导出为标准 WAV 文件，采样率 24000 Hz，可直接用于后续音频制作。</p>
+        <h3>导出 WAV</h3>
+        <p>合成完成后导出为标准 WAV 文件（24kHz），可以直接导入到其他 DAW 里做后期混音，或者就这样直接发布。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">⚡</div>
-        <h3>GPU 加速</h3>
-        <p>通过 DirectML 支持 NVIDIA / AMD / Intel 独立显卡自动加速，大幅提升推理性能。同时支持 CPU 回退。</p>
+        <h3>显卡加速</h3>
+        <p>有 NVIDIA、AMD 或 Intel 独显的话，合成速度会快很多。没有独显也能跑，就是慢一点，完全不影响使用。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">🖥️</div>
-        <h3>跨平台桌面应用</h3>
-        <p>基于 Electron 构建，原生级桌面体验。支持 Windows、macOS 和 Linux 三大平台打包分发。</p>
+        <h3>桌面应用</h3>
+        <p>基于 Electron 构建，原生桌面体验。目前在 Windows 上测试最充分，macOS 和 Linux 理论上也能编译运行。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">📐</div>
-        <h3>包络编辑器</h3>
-        <p>精细编辑音高曲线、音量包络等参数，为每一个音符注入丰富的情感表达。</p>
+        <h3>微调音高和音量</h3>
+        <p>包络编辑器让你可以画出音高曲线和音量变化，给歌声加上颤音、滑音，或者让某些词唱得更轻或更重。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">🔧</div>
-        <h3>灵活的推理配置</h3>
-        <p>在设置界面选择推理设备（自动选择或指定 GPU），灵活平衡性能与功耗。</p>
+        <h3>选择运行设备</h3>
+        <p>在设置里可以指定用哪张显卡跑合成，或者让程序自动选择。笔记本用户也可以手动切换到 CPU 模式省电。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">🧪</div>
-        <h3>完整的测试覆盖</h3>
-        <p>160 余个自动化测试用例覆盖 WAV 编码、轨道管理、SVS 流水线、音高检测等核心功能模块。</p>
+        <h3>有测试保障</h3>
+        <p>160 多个自动化测试覆盖核心功能，每次修改代码都会跑一遍。虽然是个小项目，但质量上不想马虎。</p>
       </div>
     </section>
   </main>
@@ -120,7 +123,7 @@
     <div class="footer-inner">
       <div class="footer-links">
         <a href="index.html">首页</a>
-        <a href="features.html">功能特性</a>
+        <a href="features.html">功能</a>
         <a href="download.html">下载</a>
         <a href="about.html">关于</a>
         <a href="https://github.com/Henley04/SXSEditor" target="_blank">GitHub</a>

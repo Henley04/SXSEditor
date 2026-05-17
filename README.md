@@ -35,7 +35,7 @@ SXSEditor is an open-source desktop singing voice synthesis (SVS) workstation. I
 
 Download the latest pre-built installer for **Windows**:
 
-[⬇ Download SXSEditor v1.0.0 for Windows](https://share.weiyun.com/2pgoQsmL)
+[⬇ Download SXSEditor v1.0.0 for Windows](https://github.com/Henley04/SXSEditor/releases/download/EA/sxsinstaller_x64_no_models.exe)
 
 > For **macOS** and **Linux**, see the [Developer Guide](#for-developers) to build from source.
 
@@ -284,7 +284,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 #### 下载
 
-[⬇ 下载 SXSEditor v1.0.0 for Windows](https://share.weiyun.com/2pgoQsmL)
+[⬇ 下载 SXSEditor v1.0.0 for Windows](https://github.com/Henley04/SXSEditor/releases/download/EA/sxsinstaller_x64_no_models.exe)
 
 > macOS 和 Linux 用户请参考[开发者指南](#开发者指南)从源码构建。
 
@@ -420,7 +420,7 @@ npm run test:watch       # 监视模式
 
 #### ダウンロード
 
-[⬇ SXSEditor v1.0.0 for Windows をダウンロード](https://share.weiyun.com/2pgoQsmL)
+[⬇ SXSEditor v1.0.0 for Windows をダウンロード](https://github.com/Henley04/SXSEditor/releases/download/EA/sxsinstaller_x64_no_models.exe)
 
 > macOS および Linux ユーザーは、[開発者向けガイド](#開発者向け)を参照してソースからビルドしてください。
 

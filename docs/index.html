@@ -3,17 +3,15 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SXSEditor - AI 歌声合成工作台</title>
-  <meta name="description" content="SXSEditor 是一款开源的 AI 歌声合成与编辑桌面应用，基于 ONNX Runtime 和 Electron，支持多轨编辑、钢琴卷帘和神经网络歌声合成。">
-  <meta property="og:title" content="SXSEditor - AI 歌声合成工作台">
-  <meta property="og:description" content="一款开源的 AI 歌声合成与编辑桌面应用">
+  <title>SXSEditor - 歌声合成编辑器</title>
+  <meta name="description" content="SXSEditor 是一款开源的桌面歌声合成与编辑应用。基于 ONNX Runtime，支持多轨编辑、钢琴卷帘和神经网络歌声合成。">
+  <meta property="og:title" content="SXSEditor - 歌声合成编辑器">
+  <meta property="og:description" content="一款开源的桌面歌声合成与编辑应用">
   <meta property="og:image" content="images/icon.png">
   <link rel="icon" type="image/png" href="images/icon.png">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <div class="noise-overlay"></div>
-
   <nav>
     <div class="nav-inner">
       <a href="index.html" class="nav-logo">
@@ -27,30 +25,28 @@
       </button>
       <ul class="nav-links">
         <li><a href="index.html">首页</a></li>
-        <li><a href="features.html">功能特性</a></li>
+        <li><a href="features.html">功能</a></li>
         <li><a href="download.html">下载</a></li>
         <li><a href="about.html">关于</a></li>
-        <li><a href="download.html" class="nav-cta">立即下载</a></li>
+        <li><a href="download.html" class="nav-cta">下载</a></li>
       </ul>
     </div>
   </nav>
 
   <main>
     <section class="hero">
-      <div class="hero-bg-grid"></div>
       <div class="hero-content">
         <div class="hero-badge">
-          <span class="hero-badge-dot"></span>
-          v1.0.0 · 开源 AI 歌声合成
+          v1.0.0 · 开源项目
         </div>
         <h1>
-          用 AI 创造<br>
-          <span class="gradient-text">属于你的歌声</span>
+          在电脑上写歌，<br>
+          <em>让虚拟歌手唱出来</em>
         </h1>
         <p>
-          SXSEditor 是一款开源的桌面歌声合成工作台。
-          结合钢琴卷帘编辑器和神经网络 SVS 流水线，
-          让你轻松创作、编辑和合成专业级歌声。
+          SXSEditor 是一个桌面端的歌声合成工具。你可以在钢琴卷帘上写音符、填歌词，
+          然后由神经网络模型把它变成真实的歌声。不需要昂贵的设备，也不需要懂乐理——
+          只要有一台电脑，就能开始创作。
         </p>
         <div class="hero-actions">
           <a href="download.html" class="btn btn-primary btn-lg">
@@ -58,31 +54,41 @@
             <span class="icon-arrow">→</span>
           </a>
           <a href="features.html" class="btn btn-secondary btn-lg">
-            了解功能
+            看看能做什么
           </a>
         </div>
         <div class="hero-visual">
-          <div class="waveform-visual">
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
-            <div class="waveform-bar"></div>
+          <div style="width:100%;max-width:640px;margin:0 auto;padding:32px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;text-align:left;">
+            <div style="display:flex;gap:8px;margin-bottom:20px;">
+              <span style="width:10px;height:10px;border-radius:50%;background:#e8e4de;display:inline-block;"></span>
+              <span style="width:10px;height:10px;border-radius:50%;background:#e8e4de;display:inline-block;"></span>
+              <span style="width:10px;height:10px;border-radius:50%;background:#e8e4de;display:inline-block;"></span>
+            </div>
+            <div style="display:flex;gap:16px;align-items:flex-end;height:80px;padding:0 8px;">
+              <div style="width:6px;height:24px;background:var(--accent);border-radius:3px;opacity:0.4;"></div>
+              <div style="width:6px;height:48px;background:var(--accent);border-radius:3px;opacity:0.6;"></div>
+              <div style="width:6px;height:64px;background:var(--accent);border-radius:3px;opacity:0.8;"></div>
+              <div style="width:6px;height:40px;background:var(--accent);border-radius:3px;opacity:0.5;"></div>
+              <div style="width:6px;height:72px;background:var(--accent);border-radius:3px;opacity:0.7;"></div>
+              <div style="width:6px;height:32px;background:var(--accent);border-radius:3px;opacity:0.45;"></div>
+              <div style="width:6px;height:56px;background:var(--accent);border-radius:3px;opacity:0.65;"></div>
+              <div style="width:6px;height:28px;background:var(--accent);border-radius:3px;opacity:0.35;"></div>
+              <div style="width:6px;height:68px;background:var(--accent);border-radius:3px;opacity:0.75;"></div>
+              <div style="width:6px;height:44px;background:var(--accent);border-radius:3px;opacity:0.55;"></div>
+              <div style="width:6px;height:52px;background:var(--accent);border-radius:3px;opacity:0.6;"></div>
+              <div style="width:6px;height:36px;background:var(--accent);border-radius:3px;opacity:0.4;"></div>
+              <div style="width:6px;height:60px;background:var(--accent);border-radius:3px;opacity:0.7;"></div>
+              <div style="width:6px;height:20px;background:var(--accent);border-radius:3px;opacity:0.3;"></div>
+              <div style="width:6px;height:50px;background:var(--accent);border-radius:3px;opacity:0.55;"></div>
+              <div style="width:6px;height:38px;background:var(--accent);border-radius:3px;opacity:0.45;"></div>
+              <div style="width:6px;height:66px;background:var(--accent);border-radius:3px;opacity:0.75;"></div>
+              <div style="width:6px;height:30px;background:var(--accent);border-radius:3px;opacity:0.4;"></div>
+              <div style="width:6px;height:54px;background:var(--accent);border-radius:3px;opacity:0.6;"></div>
+              <div style="width:6px;height:42px;background:var(--accent);border-radius:3px;opacity:0.5;"></div>
+            </div>
+            <div style="margin-top:16px;font-size:0.8rem;color:var(--text-muted);font-family:var(--font-sans);">
+              钢琴卷帘 · 多轨时间线 · 实时合成
+            </div>
           </div>
         </div>
       </div>
@@ -93,7 +99,7 @@
     <div class="footer-inner">
       <div class="footer-links">
         <a href="index.html">首页</a>
-        <a href="features.html">功能特性</a>
+        <a href="features.html">功能</a>
         <a href="download.html">下载</a>
         <a href="about.html">关于</a>
         <a href="https://github.com/Henley04/SXSEditor" target="_blank">GitHub</a>
