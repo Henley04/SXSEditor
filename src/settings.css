@@ -2,6 +2,23 @@
     box-sizing: border-box;
 }
 
+::-webkit-scrollbar {
+    width: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(69, 71, 90, 0.6);
+    border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(88, 91, 112, 0.8);
+}
+
 body {
     margin: 0;
     padding: 0;
@@ -9,25 +26,23 @@ body {
     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
     color: #e0e0e0;
     min-height: 100vh;
+    overflow-y: auto;
 }
 
 .settings-container {
     max-width: 600px;
-    margin: 24px auto;
-    padding: 28px;
-    background: rgba(30, 30, 46, 0.95);
-    border-radius: 12px;
-    border: 1px solid rgba(137, 180, 250, 0.15);
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    margin: 0 auto;
+    padding: 24px 28px;
+    min-height: 100vh;
 }
 
 h2 {
-    margin: 0 0 24px 0;
-    font-size: 22px;
+    margin: 0 0 20px 0;
+    font-size: 20px;
     font-weight: 600;
     color: #89b4fa;
     border-bottom: 2px solid rgba(137, 180, 250, 0.3);
-    padding-bottom: 14px;
+    padding-bottom: 12px;
     display: flex;
     align-items: center;
     gap: 10px;
@@ -36,14 +51,14 @@ h2 {
 h2::before {
     content: '';
     width: 4px;
-    height: 24px;
+    height: 22px;
     background: linear-gradient(180deg, #89b4fa, #74c7ec);
     border-radius: 2px;
 }
 
 .settings-section {
-    margin-bottom: 24px;
-    padding: 20px;
+    margin-bottom: 16px;
+    padding: 16px 18px;
     background: rgba(24, 24, 37, 0.8);
     border-radius: 10px;
     border: 1px solid rgba(69, 71, 90, 0.5);
@@ -56,10 +71,10 @@ h2::before {
 }
 
 .section-title {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 600;
     color: #89dceb;
-    margin: 0 0 18px 0;
+    margin: 0 0 14px 0;
     text-transform: uppercase;
     letter-spacing: 1px;
     display: flex;
@@ -76,8 +91,7 @@ h2::before {
 }
 
 .setting-group {
-    margin-bottom: 18px;
-    transition: transform 0.15s;
+    margin-bottom: 14px;
 }
 
 .setting-group:last-child {
@@ -90,7 +104,7 @@ h2::before {
     justify-content: space-between;
     font-size: 13px;
     font-weight: 500;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
     color: #bac2de;
     transition: color 0.2s;
 }
@@ -101,7 +115,7 @@ h2::before {
 
 .setting-group select {
     width: 100%;
-    padding: 10px 14px;
+    padding: 8px 36px 8px 12px;
     font-size: 13px;
     border: 1px solid #45475a;
     border-radius: 8px;
@@ -115,7 +129,6 @@ h2::before {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23cdd6f4' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 12px center;
-    padding-right: 36px;
 }
 
 .setting-group select:hover {
@@ -137,7 +150,7 @@ h2::before {
 .hint {
     font-size: 11px;
     color: #6c7086;
-    margin-top: 6px;
+    margin-top: 4px;
     line-height: 1.5;
     padding-left: 4px;
     border-left: 2px solid rgba(108, 112, 134, 0.3);
@@ -151,7 +164,7 @@ h2::before {
     background: linear-gradient(90deg, #45475a, #585b70);
     border-radius: 3px;
     outline: none;
-    margin-top: 8px;
+    margin-top: 6px;
     transition: background 0.2s;
 }
 
@@ -162,8 +175,8 @@ h2::before {
 .setting-group input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
     appearance: none;
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
     background: linear-gradient(135deg, #89b4fa, #74c7ec);
     cursor: pointer;
@@ -173,13 +186,13 @@ h2::before {
 }
 
 .setting-group input[type="range"]::-webkit-slider-thumb:hover {
-    transform: scale(1.1);
+    transform: scale(1.15);
     box-shadow: 0 4px 12px rgba(137, 180, 250, 0.6);
 }
 
 .setting-group input[type="range"]::-moz-range-thumb {
-    width: 18px;
-    height: 18px;
+    width: 16px;
+    height: 16px;
     border-radius: 50%;
     background: linear-gradient(135deg, #89b4fa, #74c7ec);
     cursor: pointer;
@@ -191,14 +204,13 @@ h2::before {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-width: 48px;
-    padding: 4px 10px;
+    min-width: 44px;
+    padding: 2px 8px;
     background: rgba(137, 180, 250, 0.15);
-    border-radius: 12px;
+    border-radius: 10px;
     font-size: 12px;
     font-weight: 600;
     color: #89b4fa;
-    transition: background-color 0.2s;
 }
 
 .info-box {
@@ -206,10 +218,10 @@ h2::before {
     border: 1px solid rgba(249, 226, 175, 0.3);
     border-left: 4px solid #f9e2af;
     border-radius: 8px;
-    padding: 16px;
+    padding: 14px;
     font-size: 12px;
     line-height: 1.6;
-    margin-top: 12px;
+    margin-top: 10px;
     transition: border-color 0.2s, box-shadow 0.2s;
 }
 
@@ -222,7 +234,7 @@ h2::before {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 10px;
+    margin-bottom: 8px;
     color: #f9e2af;
     font-size: 13px;
 }
@@ -234,19 +246,23 @@ h2::before {
 }
 
 .info-box li {
-    margin-bottom: 6px;
+    margin-bottom: 4px;
 }
 
 .info-box li:last-child {
     margin-bottom: 0;
 }
 
+.hardware-info {
+    margin-bottom: 10px;
+}
+
 .setting-actions {
     display: flex;
     gap: 12px;
     justify-content: flex-end;
-    margin-top: 28px;
-    padding-top: 20px;
+    margin-top: 20px;
+    padding-top: 16px;
     border-top: 1px solid rgba(69, 71, 90, 0.5);
     align-items: center;
 }
@@ -259,8 +275,8 @@ h2::before {
 }
 
 button {
-    padding: 10px 24px;
-    font-size: 14px;
+    padding: 8px 20px;
+    font-size: 13px;
     border: none;
     border-radius: 8px;
     cursor: pointer;
@@ -305,15 +321,17 @@ button {
     box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
+.hidden {
+    display: none !important;
+}
+
 @media (max-width: 640px) {
     .settings-container {
-        margin: 12px;
-        padding: 20px;
-        border-radius: 10px;
+        padding: 16px;
     }
 
     .settings-section {
-        padding: 16px;
+        padding: 14px;
     }
 
     h2 {

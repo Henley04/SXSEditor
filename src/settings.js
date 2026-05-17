@@ -1,3 +1,5 @@
+import './settings.css';
+
 const inferenceDeviceSelect = document.getElementById('inferenceDevice');
 const audioOutputModeSelect = document.getElementById('audioOutputMode');
 const audioOutputDeviceSelect = document.getElementById('audioOutputDevice');
