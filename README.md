@@ -59,7 +59,12 @@ Download the latest pre-built installer for **Windows**:
 | 🧠 Neural SVS | SoulX-Singer model via ONNX Runtime |
 | 🎤 Singer Management | Custom singers with reference audio & F0 |
 | 📊 Audio Preprocessing | RMVPE / Basic Pitch F0 extraction |
+| 🎵 MIDI Import | Import standard MIDI files with lyrics |
+| ⚙️ Advanced Settings | Diffusion steps, CFG rescale, device selection |
+| 🔄 Undo / Redo | Full edit history (up to 200 steps) |
+| 📥 Model Auto-Download | Download missing ONNX models from ModelScope |
 | ▶️ Real-time Playback | Synthesize & play directly in editor |
+| 🔊 WASAPI Exclusive Mode | Low-latency audio output via naudiodon |
 | 📦 WAV Export | Mix & export to standard WAV (24kHz) |
 | ⚡ GPU Acceleration | DirectML (NVIDIA / AMD / Intel) |
 
@@ -132,7 +137,7 @@ npm run make        # Create distributables (.exe, .zip, .deb)
 
 The application requires SoulX-Singer ONNX model files in `onnx_models/`.
 
-**Required SVS Models (`onnx_models/`)**
+**SVS Models (`onnx_models/`)**
 
 | Model | Purpose |
 |-------|---------|
@@ -146,6 +151,22 @@ The application requires SoulX-Singer ONNX model files in `onnx_models/`.
 | `vocoder.onnx` | Vocos vocoder (mel → waveform) |
 | `mel_transform.onnx` | Mel-spectrogram extraction |
 
+**Preprocessing Models (`onnx_models/preprocess/`)**
+
+| Model | Purpose |
+|-------|---------|
+| `rmvpe_model.onnx` | RMVPE pitch detection |
+| `rmvpe_mel.onnx` | Mel-spectrogram for RMVPE |
+| `rosvot_model.onnx` | ROSVOT voice onset detection |
+
+**Basic Pitch Model (`onnx_models/basic_pitch_model/`)**
+
+| Model | Purpose |
+|-------|---------|
+| `model.json` + `group1-shard1of1.bin` | Basic Pitch note detection (TensorFlow.js) |
+
+> Models can be automatically downloaded from ModelScope via the built-in model manager on first launch.
+
 See [onnx_models/README.md](onnx_models/README.md) for detailed specifications and usage.
 
 #### Tech Stack
@@ -158,6 +179,8 @@ See [onnx_models/README.md](onnx_models/README.md) for detailed specifications a
 | Inference Engine | ONNX Runtime Node |
 | Neural Models | SoulX-Singer (Diffusion-based SVS) |
 | Pitch Detection | RMVPE ONNX, Basic Pitch (TensorFlow.js) |
+| Audio Output | naudiodon (WASAPI shared/exclusive mode) |
+| Chinese Lyrics | pinyin-pro (character → pinyin conversion) |
 | Testing | Mocha + Chai + Sinon + NYC |
 
 #### Project Structure
@@ -167,21 +190,31 @@ SXSEditor/
 ├── assets/                  # Application icons and images
 ├── docs/                    # Documentation & website
 │   ├── index.html           # Official website
+│   ├── features.html        # Features page
+│   ├── download.html        # Download page
+│   ├── about.html           # About page
 │   ├── wiki/                # Wiki pages
 │   └── ...
 ├── example/                 # Example prompt/target data
 ├── onnx_models/             # ONNX model files
-│   ├── svc/                 # SVC-specific models
+│   ├── preprocess/          # RMVPE & ROSVOT models
+│   ├── basic_pitch_model/   # Basic Pitch model (TF.js)
 │   └── README.md
 ├── src/
-│   ├── audio/               # WAV encoder and audio utilities
-│   ├── editor/              # Track manager, piano roll, envelope editor
-│   ├── inference/           # ONNX inference pipelines
+│   ├── audio/               # WAV encoder, audio output manager, audio worker
+│   ├── editor/              # Track manager, piano roll, envelope editor, history manager
+│   ├── inference/           # ONNX inference pipelines, RMVPE, MIDI parser
 │   ├── main.js              # Electron main process
 │   ├── preload.js           # Preload script for secure IPC
 │   ├── renderer.js          # Main renderer process (UI logic)
-│   └── ...html              # Window layouts
-├── test/                    # Automated test suite (160+ tests)
+│   ├── modelManager.js      # Model download & verification (ModelScope)
+│   ├── modelDownload.js     # Model download progress window
+│   ├── settings.js          # Settings window (device, diffusion, audio)
+│   ├── singerCreator.js     # Singer creation window
+│   ├── audioPreprocess.js   # Audio preprocessing window (F0, MIDI)
+│   ├── fragmentEditor.js    # Fragment piano-roll editor
+│   └── ...html/.css         # Window layouts and styles
+├── test/                    # Automated test suite (225+ tests)
 ├── forge.config.js          # Electron Forge configuration
 ├── webpack.*.config.js      # Webpack configurations
 └── package.json
@@ -195,7 +228,7 @@ npm run test:coverage    # With code coverage
 npm run test:watch       # Watch mode
 ```
 
-The test suite includes **160+ test cases** covering WAV encoding, track management, SVS pipeline logic, pitch detection, and integration tests.
+The test suite includes **225+ test cases** covering WAV encoding, track management, SVS pipeline logic, pitch detection, MIDI parsing, and integration tests.
 
 #### Audio Configuration
 
@@ -275,7 +308,12 @@ This project is licensed under the [MIT License](LICENSE).
 | 🧠 神经歌声合成 | SoulX-Singer 模型 + ONNX Runtime |
 | 🎤 歌手管理 | 自定义歌手，支持参考音频 |
 | 📊 音频预处理 | RMVPE / Basic Pitch F0 提取 |
+| 🎵 MIDI 导入 | 导入标准 MIDI 文件及歌词 |
+| ⚙️ 高级设置 | 扩散步数、CFG 重缩放、设备选择 |
+| 🔄 撤销 / 重做 | 完整编辑历史（最多 200 步） |
+| 📥 模型自动下载 | 从 ModelScope 自动下载缺失模型 |
 | ▶️ 实时播放 | 直接合成播放 |
+| 🔊 WASAPI 独占模式 | 通过 naudiodon 实现低延迟音频输出 |
 | 📦 WAV 导出 | 混音导出为标准 WAV |
 | ⚡ GPU 加速 | DirectML（NVIDIA / AMD / Intel） |
 
@@ -337,7 +375,7 @@ npm run test:coverage    # 带覆盖率报告
 npm run test:watch       # 监视模式
 ```
 
-测试套件包含 **160+ 个测试用例**，覆盖 WAV 编码、轨道管理、SVS 流水线、音高检测等。
+测试套件包含 **225+ 个测试用例**，覆盖 WAV 编码、轨道管理、SVS 流水线、音高检测、MIDI 解析等。
 
 #### 技术栈
 
@@ -349,6 +387,8 @@ npm run test:watch       # 监视模式
 | 推理引擎 | ONNX Runtime Node |
 | 声学模型 | SoulX-Singer（扩散模型 SVS） |
 | 音高检测 | RMVPE ONNX, Basic Pitch (TensorFlow.js) |
+| 音频输出 | naudiodon（WASAPI 共享/独占模式） |
+| 中文歌词 | pinyin-pro（汉字转拼音） |
 | 测试 | Mocha + Chai + Sinon + NYC |
 
 ---
@@ -405,6 +445,24 @@ npm run test:watch       # 监视模式
 | 🇰🇷 韓国語 | 📋 計画中 | 評価中 |
 | その他 | 📋 計画中 | コミュニティの貢献を歓迎 |
 
+#### 機能一覧
+
+| 機能 | 説明 |
+|------|------|
+| 🎹 マルチトラックタイムライン | ドラッグ＆ドロップでフラグメントを配置 |
+| 🎼 ピアノロールエディター | 音符・歌詞・ピッチカーブの編集 |
+| 🧠 ニューラル SVS | SoulX-Singer モデル + ONNX Runtime |
+| 🎤 歌手管理 | カスタム歌手、参照音声対応 |
+| 📊 音声前処理 | RMVPE / Basic Pitch F0 抽出 |
+| 🎵 MIDI インポート | 標準 MIDI ファイルと歌詞のインポート |
+| ⚙️ 詳細設定 | 拡散ステップ数、CFG リスケール、デバイス選択 |
+| 🔄 アンドゥ / リドゥ | 編集履歴（最大 200 ステップ） |
+| 📥 モデル自動ダウンロード | ModelScope から不足モデルを自動取得 |
+| ▶️ リアルタイム再生 | エディター内で直接合成・再生 |
+| 🔊 WASAPI 排他モード | naudiodon による低レイテンシオーディオ出力 |
+| 📦 WAV エクスポート | 標準 WAV へのミックスダウン |
+| ⚡ GPU アクセラレーション | DirectML（NVIDIA / AMD / Intel） |
+
 ---
 
 ### 開発者向け
@@ -414,7 +472,7 @@ npm run test:watch       # 监视模式
 - Node.js >= 18
 - npm >= 9
 - Windows（主ターゲットプラットフォーム）
-- SoulX-Singer ONNX モデルを `onnx_models/` に配置
+- ONNX モデルは初回起動時に ModelScope から自動ダウンロード可能
 
 #### ソースからビルド
 
@@ -442,6 +500,22 @@ npm start
 npm test                 # 全テスト実行
 npm run test:coverage    # カバレッジ付き
 ```
+
+テストスイートには **225 以上のテストケース** が含まれています。
+
+#### 技術スタック
+
+| カテゴリ | 技術 |
+|----------|------|
+| フロントエンド | Vanilla JavaScript, HTML5 Canvas, Wavesurfer.js |
+| デスクトップフレームワーク | Electron + Electron Forge |
+| ビルドツール | Webpack |
+| 推論エンジン | ONNX Runtime Node |
+| 音響モデル | SoulX-Singer（拡散モデル SVS） |
+| ピッチ検出 | RMVPE ONNX, Basic Pitch (TensorFlow.js) |
+| オーディオ出力 | naudiodon（WASAPI 共有/排他モード） |
+| 中国語歌詞 | pinyin-pro（漢字→ピンイン変換） |
+| テスト | Mocha + Chai + Sinon + NYC |
 
 ---
 
