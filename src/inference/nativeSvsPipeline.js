@@ -1701,6 +1701,7 @@ class OnnxSVSPipeline {
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
         const totalSteps = options.nSteps || DEFAULT_DIFF_STEPS;
         const cfgStrength = options.cfg || CFG_STRENGTH;
+        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : CFG_RESCALE;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
 
