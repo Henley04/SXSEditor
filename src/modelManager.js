@@ -11,6 +11,7 @@ const REVISION = 'master';
 const TEMP_SUFFIX = '.download';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
+const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 const MODEL_FILE_MANIFEST = [
   { filePath: 'note_text_encoder.onnx', required: true },
@@ -96,7 +97,10 @@ function httpRequest(urlStr, options = {}) {
       port: urlObj.port || defaultPort,
       path: urlObj.pathname + urlObj.search,
       method: options.method || 'GET',
-      headers: { ...options.headers },
+      headers: {
+        'User-Agent': DEFAULT_USER_AGENT,
+        ...options.headers,
+      },
     };
 
     const request = lib.request(reqOptions, (response) => {
