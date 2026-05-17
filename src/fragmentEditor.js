@@ -134,19 +134,26 @@ function saveFragmentData() {
   }
 }
 
-let selectedNoteId = null;
+let selectedNoteIds = new Set();
+let selectedAnchorIndices = new Set();
 let dragMode = null;
 let dragStartX = 0;
 let dragStartY = 0;
 let dragNoteStart = { start: 0, pitch: 0, duration: 0 };
+let dragNoteStarts = new Map();
 let scrollY = 0;
 let scrollX = 0;
 let nextNoteId = 1;
 let zoomX = 1;
 
+let isBoxSelecting = false;
+let boxSelectStart = { x: 0, y: 0 };
+let boxSelectEnd = { x: 0, y: 0 };
+
 let pitchDragAnchorIdx = -1;
 let pitchDragStartValue = 0;
 let pitchDragStartTime = 0;
+let pitchDragAnchorStarts = new Map();
 let isBrushDrawing = false;
 let currentBrushStroke = null;
 let brushSmoothing = 30;
@@ -200,11 +207,65 @@ function finalizeDragOperation() {
           undo() {
             const idx = notes.findIndex(n => n.id === noteClone.id);
             if (idx !== -1) notes.splice(idx, 1);
-            if (selectedNoteId === noteClone.id) selectedNoteId = null;
+            selectedNoteIds.delete(noteClone.id);
           },
           redo() {
             notes.push({ ...noteClone });
-            selectedNoteId = noteClone.id;
+            selectedNoteIds.clear();
+            selectedNoteIds.add(noteClone.id);
+          }
+        });
+      }
+      break;
+    }
+    case 'notesDelete': {
+      if (dragOperation.deletedNotes && dragOperation.deletedNotes.length > 0) {
+        const deletedNotes = dragOperation.deletedNotes;
+        const deletedIndices = dragOperation.deletedIndices;
+        history.push({
+          undo() {
+            for (let i = 0; i < deletedNotes.length; i++) {
+              notes.splice(deletedIndices[i], 0, { ...deletedNotes[i] });
+            }
+            selectedNoteIds = new Set(deletedNotes.map(n => n.id));
+          },
+          redo() {
+            for (const dn of deletedNotes) {
+              const idx = notes.findIndex(n => n.id === dn.id);
+              if (idx !== -1) notes.splice(idx, 1);
+            }
+            selectedNoteIds.clear();
+          }
+        });
+      }
+      break;
+    }
+    case 'anchorsDelete': {
+      if (pitchCurveSnapshotBeforeDrag) {
+        const oldSnapshot = pitchCurveSnapshotBeforeDrag;
+        const newSnapshot = clonePitchCurveState();
+        history.push({
+          undo() { applyPitchCurveSnapshot(oldSnapshot); },
+          redo() { applyPitchCurveSnapshot(newSnapshot); }
+        });
+      }
+      break;
+    }
+    case 'notesMove': {
+      if (dragOperation.moveData && dragOperation.moveData.length > 0) {
+        const moveData = dragOperation.moveData;
+        history.push({
+          undo() {
+            for (const md of moveData) {
+              const n = notes.find(nn => nn.id === md.noteId);
+              if (n) { n.start = md.oldStart; n.pitch = md.oldPitch; }
+            }
+          },
+          redo() {
+            for (const md of moveData) {
+              const n = notes.find(nn => nn.id === md.noteId);
+              if (n) { n.start = md.newStart; n.pitch = md.newPitch; }
+            }
           }
         });
       }
@@ -251,6 +312,7 @@ function finalizeDragOperation() {
       break;
     }
     case 'pitchAnchorMove':
+    case 'pitchAnchorsMove':
     case 'pitchAnchorAdd': {
       if (pitchCurveSnapshotBeforeDrag) {
         const oldSnapshot = pitchCurveSnapshotBeforeDrag;
@@ -718,7 +780,7 @@ function renderPitchCurve() {
       const ap = pitchCurve.anchorPoints[i];
       const px = timeToX(ap.time);
       const py = pitchToY(ap.pitch);
-      const isSelected = i === pitchDragAnchorIdx;
+      const isSelected = selectedAnchorIndices.has(i) || i === pitchDragAnchorIdx;
 
       ctx.fillStyle = isSelected ? '#ffffff' : '#2ecc71';
       ctx.beginPath();
@@ -806,7 +868,7 @@ function render() {
     const nh = NOTE_HEIGHT;
     if (x + nw < 0 || x > w) continue;
 
-    const isSelected = note.id === selectedNoteId;
+    const isSelected = selectedNoteIds.has(note.id);
     const isPitchMode = currentParamMode === 'Pitch';
     ctx.fillStyle = '#3498db';
     ctx.globalAlpha = isSelected ? 1.0 : (isPitchMode ? 0.4 : 0.8);
@@ -830,6 +892,20 @@ function render() {
 
   if (currentParamMode === 'Pitch') {
     renderPitchCurve();
+  }
+
+  if (isBoxSelecting) {
+    const x1 = Math.min(boxSelectStart.x, boxSelectEnd.x);
+    const y1 = Math.min(boxSelectStart.y, boxSelectEnd.y);
+    const x2 = Math.max(boxSelectStart.x, boxSelectEnd.x);
+    const y2 = Math.max(boxSelectStart.y, boxSelectEnd.y);
+    ctx.fillStyle = 'rgba(52, 152, 219, 0.15)';
+    ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.strokeStyle = 'rgba(52, 152, 219, 0.6)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 4]);
+    ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+    ctx.setLineDash([]);
   }
 
   if (showParamArea) {
@@ -1038,6 +1114,26 @@ document.getElementById('btn-close').addEventListener('click', () => {
   window.close();
 });
 
+const shortcutsOverlay = document.getElementById('shortcuts-overlay');
+const btnShortcuts = document.getElementById('btn-shortcuts');
+const btnCloseShortcuts = document.getElementById('btn-close-shortcuts');
+
+function showShortcutsPanel() {
+  if (shortcutsOverlay) shortcutsOverlay.classList.add('visible');
+}
+
+function hideShortcutsPanel() {
+  if (shortcutsOverlay) shortcutsOverlay.classList.remove('visible');
+}
+
+if (btnShortcuts) btnShortcuts.addEventListener('click', showShortcutsPanel);
+if (btnCloseShortcuts) btnCloseShortcuts.addEventListener('click', hideShortcutsPanel);
+if (shortcutsOverlay) {
+  shortcutsOverlay.addEventListener('click', (e) => {
+    if (e.target === shortcutsOverlay) hideShortcutsPanel();
+  });
+}
+
 const btnPlayFragment = document.getElementById('btn-play-fragment');
 const btnExportFragment = document.getElementById('btn-export-fragment');
 
@@ -1081,7 +1177,7 @@ document.getElementById('btn-import-midi').addEventListener('click', async () =>
       return;
     }
     const oldNotes = notes.map(n => ({ ...n }));
-    const oldSelectedNoteId = selectedNoteId;
+    const oldSelectedNoteIds = new Set(selectedNoteIds);
     notes = result.notes.map((n, i) => ({
       id: genNoteId(),
       pitch: n.pitch,
@@ -1090,16 +1186,18 @@ document.getElementById('btn-import-midi').addEventListener('click', async () =>
       lyric: n.lyric || '',
       noteType: n.noteType,
     }));
-    selectedNoteId = null;
+    selectedNoteIds.clear();
+    selectedAnchorIndices.clear();
     const newNotes = notes.map(n => ({ ...n }));
     history.push({
       undo() {
         notes = oldNotes.map(n => ({ ...n }));
-        selectedNoteId = oldSelectedNoteId;
+        selectedNoteIds = new Set(oldSelectedNoteIds);
       },
       redo() {
         notes = newNotes.map(n => ({ ...n }));
-        selectedNoteId = null;
+        selectedNoteIds.clear();
+        selectedAnchorIndices.clear();
       }
     });
     render();
@@ -1456,6 +1554,19 @@ function getMousePos(e) {
 canvas.addEventListener('mousedown', (e) => {
   const pos = getMousePos(e);
 
+  if (e.button === 1) {
+    e.preventDefault();
+    isBoxSelecting = true;
+    boxSelectStart = { x: pos.x, y: pos.y };
+    boxSelectEnd = { x: pos.x, y: pos.y };
+    if (!e.shiftKey && !e.ctrlKey) {
+      selectedNoteIds.clear();
+      selectedAnchorIndices.clear();
+    }
+    render();
+    return;
+  }
+
   if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
     handlePitchMouseDown(e, pos);
     return;
@@ -1472,18 +1583,44 @@ canvas.addEventListener('mousedown', (e) => {
   const hit = findNoteAt(pos.x, pos.y);
 
   if (hit) {
-    selectedNoteId = hit.note.id;
+    if (e.ctrlKey || e.metaKey) {
+      if (selectedNoteIds.has(hit.note.id)) {
+        selectedNoteIds.delete(hit.note.id);
+      } else {
+        selectedNoteIds.add(hit.note.id);
+      }
+    } else if (e.shiftKey) {
+      selectedNoteIds.add(hit.note.id);
+    } else {
+      if (!selectedNoteIds.has(hit.note.id)) {
+        selectedNoteIds.clear();
+        selectedNoteIds.add(hit.note.id);
+      }
+    }
+
     if (pos.x >= hit.nx + hit.nw - 6) {
       dragMode = 'resize';
       dragOperation = { type: 'noteResize', noteId: hit.note.id, oldDuration: hit.note.duration };
     } else {
       dragMode = 'move';
+      dragNoteStarts.clear();
+      for (const id of selectedNoteIds) {
+        const n = notes.find(nn => nn.id === id);
+        if (n) dragNoteStarts.set(id, { start: n.start, pitch: n.pitch, duration: n.duration });
+      }
       dragNoteStart = { start: hit.note.start, pitch: hit.note.pitch, duration: hit.note.duration };
-      dragOperation = { type: 'noteMove', noteId: hit.note.id, oldStart: hit.note.start, oldPitch: hit.note.pitch };
+      if (selectedNoteIds.size <= 1) {
+        dragOperation = { type: 'noteMove', noteId: hit.note.id, oldStart: hit.note.start, oldPitch: hit.note.pitch };
+      } else {
+        dragOperation = { type: 'notesMove', moveData: [] };
+      }
     }
     dragStartX = pos.x;
     dragStartY = pos.y;
   } else {
+    if (!e.ctrlKey && !e.shiftKey) {
+      selectedNoteIds.clear();
+    }
     const beats = snapBeats(xToTime(pos.x));
     const pitch = yToPitch(pos.y);
     const clampedPitch = Math.max(0, Math.min(127, pitch));
@@ -1495,7 +1632,8 @@ canvas.addEventListener('mousedown', (e) => {
       lyric: 'la',
     };
     notes.push(newNote);
-    selectedNoteId = newNote.id;
+    selectedNoteIds.clear();
+    selectedNoteIds.add(newNote.id);
     dragMode = 'resize';
     dragStartX = pos.x;
     dragNoteStart = { start: newNote.start, pitch: newNote.pitch, duration: newNote.duration };
@@ -1503,6 +1641,40 @@ canvas.addEventListener('mousedown', (e) => {
     scheduleAutoSave();
   }
   render();
+});
+
+function finalizeBoxSelection() {
+  const x1 = Math.min(boxSelectStart.x, boxSelectEnd.x);
+  const y1 = Math.min(boxSelectStart.y, boxSelectEnd.y);
+  const x2 = Math.max(boxSelectStart.x, boxSelectEnd.x);
+  const y2 = Math.max(boxSelectStart.y, boxSelectEnd.y);
+
+  if (x2 - x1 < 3 && y2 - y1 < 3) return;
+
+  if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
+    for (let i = 0; i < pitchCurve.anchorPoints.length; i++) {
+      const ap = pitchCurve.anchorPoints[i];
+      const px = timeToX(ap.time);
+      const py = pitchToY(ap.pitch);
+      if (px >= x1 && px <= x2 && py >= y1 && py <= y2) {
+        selectedAnchorIndices.add(i);
+      }
+    }
+  }
+
+  for (const note of notes) {
+    const nx = timeToX(note.start);
+    const ny = pitchToY(note.pitch);
+    const nw = note.duration * BEAT_WIDTH * zoomX;
+    const nh = NOTE_HEIGHT;
+    if (nx < x2 && nx + nw > x1 && ny < y2 && ny + nh > y1) {
+      selectedNoteIds.add(note.id);
+    }
+  }
+}
+
+canvas.addEventListener('auxclick', (e) => {
+  if (e.button === 1) e.preventDefault();
 });
 
 function handlePitchMouseDown(e, pos) {
@@ -1516,17 +1688,45 @@ function handlePitchMouseDown(e, pos) {
     };
     dragMode = 'pitch-brush';
     dragOperation = { type: 'pitchBrush' };
+  } else if (e.button === 1) {
+    isBoxSelecting = true;
+    boxSelectStart = { x: pos.x, y: pos.y };
+    boxSelectEnd = { x: pos.x, y: pos.y };
+    if (!e.shiftKey && !e.ctrlKey) {
+      selectedNoteIds.clear();
+      selectedAnchorIndices.clear();
+    }
   } else {
     const anchorIdx = findAnchorPointAt(pos.x, pos.y);
     if (anchorIdx >= 0) {
+      if (e.ctrlKey || e.metaKey) {
+        if (selectedAnchorIndices.has(anchorIdx)) {
+          selectedAnchorIndices.delete(anchorIdx);
+        } else {
+          selectedAnchorIndices.add(anchorIdx);
+        }
+      } else if (e.shiftKey) {
+        selectedAnchorIndices.add(anchorIdx);
+      } else {
+        if (!selectedAnchorIndices.has(anchorIdx)) {
+          selectedAnchorIndices.clear();
+          selectedAnchorIndices.add(anchorIdx);
+        }
+      }
       pitchDragAnchorIdx = anchorIdx;
       pitchDragStartTime = pitchCurve.anchorPoints[anchorIdx].time;
       pitchDragStartValue = pitchCurve.anchorPoints[anchorIdx].pitch;
+      pitchDragAnchorStarts.clear();
+      for (const idx of selectedAnchorIndices) {
+        const ap = pitchCurve.anchorPoints[idx];
+        if (ap) pitchDragAnchorStarts.set(idx, { time: ap.time, pitch: ap.pitch });
+      }
       dragStartX = pos.x;
       dragStartY = pos.y;
       dragMode = 'pitch-anchor';
-      dragOperation = { type: 'pitchAnchorMove' };
+      dragOperation = { type: selectedAnchorIndices.size > 1 ? 'pitchAnchorsMove' : 'pitchAnchorMove' };
     } else {
+      selectedAnchorIndices.clear();
       const time = xToTime(pos.x);
       const pitch = yToPitchContinuous(pos.y);
       const clampedPitch = Math.max(0, Math.min(127, pitch));
@@ -1536,6 +1736,7 @@ function handlePitchMouseDown(e, pos) {
         smoothness: brushSmoothing,
       });
       pitchDragAnchorIdx = pitchCurve.anchorPoints.length - 1;
+      selectedAnchorIndices.add(pitchDragAnchorIdx);
       pitchDragStartTime = time;
       pitchDragStartValue = clampedPitch;
       dragStartX = pos.x;
@@ -1584,13 +1785,30 @@ function handleParamEnvelopeMouseDown(pos) {
 canvas.addEventListener('mousemove', (e) => {
   const pos = getMousePos(e);
 
+  if (isBoxSelecting) {
+    boxSelectEnd = { x: pos.x, y: pos.y };
+    render();
+    return;
+  }
+
   if (dragMode === 'pitch-anchor' && pitchDragAnchorIdx >= 0) {
-    const ap = pitchCurve.anchorPoints[pitchDragAnchorIdx];
-    if (ap) {
-      const dxBeats = (pos.x - dragStartX) / (BEAT_WIDTH * zoomX);
-      const dyPitch = (dragStartY - pos.y) / NOTE_HEIGHT;
-      ap.time = Math.max(0, pitchDragStartTime + dxBeats);
-      ap.pitch = Math.max(0, Math.min(127, pitchDragStartValue + dyPitch));
+    const dxBeats = (pos.x - dragStartX) / (BEAT_WIDTH * zoomX);
+    const dyPitch = (dragStartY - pos.y) / NOTE_HEIGHT;
+    if (selectedAnchorIndices.size > 1 && pitchDragAnchorStarts.size > 0) {
+      for (const idx of selectedAnchorIndices) {
+        const ap = pitchCurve.anchorPoints[idx];
+        const start = pitchDragAnchorStarts.get(idx);
+        if (ap && start) {
+          ap.time = Math.max(0, start.time + dxBeats);
+          ap.pitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
+        }
+      }
+    } else {
+      const ap = pitchCurve.anchorPoints[pitchDragAnchorIdx];
+      if (ap) {
+        ap.time = Math.max(0, pitchDragStartTime + dxBeats);
+        ap.pitch = Math.max(0, Math.min(127, pitchDragStartValue + dyPitch));
+      }
     }
     render();
     return;
@@ -1643,7 +1861,22 @@ canvas.addEventListener('mousemove', (e) => {
     return;
   }
 
-  const note = notes.find(n => n.id === selectedNoteId);
+  if (dragMode === 'move' && selectedNoteIds.size > 1) {
+    const dxBeats = (pos.x - dragStartX) / BEAT_WIDTH;
+    const dyPitch = Math.round((dragStartY - pos.y) / NOTE_HEIGHT);
+    for (const id of selectedNoteIds) {
+      const note = notes.find(n => n.id === id);
+      const start = dragNoteStarts.get(id);
+      if (note && start) {
+        note.start = Math.max(0, snapBeats(start.start + dxBeats));
+        note.pitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
+      }
+    }
+    render();
+    return;
+  }
+
+  const note = notes.find(n => n.id === [...selectedNoteIds][0]);
   if (!note) return;
 
   if (dragMode === 'move') {
@@ -1659,6 +1892,13 @@ canvas.addEventListener('mousemove', (e) => {
 });
 
 canvas.addEventListener('mouseup', (e) => {
+  if (isBoxSelecting) {
+    isBoxSelecting = false;
+    finalizeBoxSelection();
+    render();
+    return;
+  }
+
   if (dragMode === 'pitch-brush' && isBrushDrawing && currentBrushStroke) {
     if (currentBrushStroke.points.length >= 2) {
       convertBrushStrokeToAnchorPoints(currentBrushStroke);
@@ -1668,7 +1908,43 @@ canvas.addEventListener('mouseup', (e) => {
   }
 
   if (dragMode === 'pitch-anchor') {
+    if (dragOperation && dragOperation.type === 'pitchAnchorsMove' && pitchDragAnchorStarts.size > 0) {
+      const moveData = [];
+      for (const idx of selectedAnchorIndices) {
+        const ap = pitchCurve.anchorPoints[idx];
+        const start = pitchDragAnchorStarts.get(idx);
+        if (ap && start && (ap.time !== start.time || ap.pitch !== start.pitch)) {
+          moveData.push({ moved: true });
+        }
+      }
+      if (moveData.length === 0) {
+        dragOperation = null;
+        pitchCurveSnapshotBeforeDrag = null;
+      }
+    }
     pitchDragAnchorIdx = -1;
+    pitchDragAnchorStarts.clear();
+  }
+
+  if (dragMode === 'move' && selectedNoteIds.size > 1 && dragOperation && dragOperation.type === 'notesMove') {
+    const moveData = [];
+    for (const id of selectedNoteIds) {
+      const note = notes.find(n => n.id === id);
+      const start = dragNoteStarts.get(id);
+      if (note && start && (note.start !== start.start || note.pitch !== start.pitch)) {
+        moveData.push({
+          noteId: id,
+          oldStart: start.start,
+          oldPitch: start.pitch,
+          newStart: note.start,
+          newPitch: note.pitch,
+        });
+      }
+    }
+    dragOperation.moveData = moveData;
+    if (moveData.length === 0) {
+      dragOperation = null;
+    }
   }
 
   if (dragMode === 'param-envelope') {
@@ -1687,9 +1963,14 @@ canvas.addEventListener('mouseup', (e) => {
   }
 
   dragMode = null;
+  dragNoteStarts.clear();
 });
 
 canvas.addEventListener('mouseleave', () => {
+  if (isBoxSelecting) {
+    isBoxSelecting = false;
+    finalizeBoxSelection();
+  }
   if (dragMode === 'pitch-brush' && isBrushDrawing && currentBrushStroke) {
     if (currentBrushStroke.points.length >= 2) {
       convertBrushStrokeToAnchorPoints(currentBrushStroke);
@@ -1700,7 +1981,9 @@ canvas.addEventListener('mouseleave', () => {
   finalizeDragOperation();
   dragMode = null;
   pitchDragAnchorIdx = -1;
+  pitchDragAnchorStarts.clear();
   paramEnvelopeDrag = null;
+  dragNoteStarts.clear();
 });
 
 canvas.addEventListener('contextmenu', (e) => {
@@ -1710,8 +1993,16 @@ canvas.addEventListener('contextmenu', (e) => {
   const pos = getMousePos(e);
   const anchorIdx = findAnchorPointAt(pos.x, pos.y);
   if (anchorIdx >= 0) {
+    if (!selectedAnchorIndices.has(anchorIdx)) {
+      selectedAnchorIndices.clear();
+      selectedAnchorIndices.add(anchorIdx);
+    }
     const oldSnapshot = clonePitchCurveState();
-    pitchCurve.anchorPoints.splice(anchorIdx, 1);
+    const indicesToDelete = [...selectedAnchorIndices].sort((a, b) => b - a);
+    for (const idx of indicesToDelete) {
+      pitchCurve.anchorPoints.splice(idx, 1);
+    }
+    selectedAnchorIndices.clear();
     const newSnapshot = clonePitchCurveState();
     history.push({
       undo() { applyPitchCurveSnapshot(oldSnapshot); },
@@ -1881,6 +2172,8 @@ canvas.addEventListener('dblclick', (e) => {
   const pos = getMousePos(e);
   const hit = findNoteAt(pos.x, pos.y);
   if (hit) {
+    selectedNoteIds.clear();
+    selectedNoteIds.add(hit.note.id);
     startInlineEdit(hit.note, hit);
   }
 });
@@ -1908,33 +2201,257 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 
-  if (e.key === 'Delete' || e.key === 'Backspace') {
-    if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
-      return;
+  if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+    e.preventDefault();
+    if (autoSaveTimer) {
+      clearTimeout(autoSaveTimer);
+      autoSaveTimer = null;
     }
-    if (selectedNoteId !== null) {
-      const idx = notes.findIndex(n => n.id === selectedNoteId);
-      if (idx !== -1) {
-        const deletedNote = { ...notes[idx] };
-        const deletedIndex = idx;
-        const oldSelectedNoteId = selectedNoteId;
-        notes.splice(idx, 1);
-        selectedNoteId = null;
+    saveFragmentData();
+    const btnSave = document.getElementById('btn-save');
+    const origText = btnSave.textContent;
+    btnSave.textContent = '✅ 已保存';
+    setTimeout(() => { btnSave.textContent = origText; }, 1500);
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+    e.preventDefault();
+    if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
+      selectedAnchorIndices.clear();
+      for (let i = 0; i < pitchCurve.anchorPoints.length; i++) {
+        selectedAnchorIndices.add(i);
+      }
+    } else {
+      selectedNoteIds.clear();
+      for (const note of notes) {
+        selectedNoteIds.add(note.id);
+      }
+    }
+    render();
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+    e.preventDefault();
+    if (currentParamMode !== 'Pitch' && selectedNoteIds.size > 0) {
+      const newIds = new Set();
+      const oldNotes = [];
+      for (const id of selectedNoteIds) {
+        const note = notes.find(n => n.id === id);
+        if (note) {
+          oldNotes.push({ ...note });
+        }
+      }
+      for (const oldNote of oldNotes) {
+        const newNote = {
+          ...oldNote,
+          id: genNoteId(),
+          start: oldNote.start + oldNote.duration,
+        };
+        notes.push(newNote);
+        newIds.add(newNote.id);
+      }
+      if (newIds.size > 0) {
+        const addedNotes = [...newIds].map(id => notes.find(n => n.id === id)).map(n => ({ ...n }));
         history.push({
           undo() {
-            notes.splice(deletedIndex, 0, { ...deletedNote });
-            selectedNoteId = oldSelectedNoteId;
+            for (const n of addedNotes) {
+              const idx = notes.findIndex(nn => nn.id === n.id);
+              if (idx !== -1) notes.splice(idx, 1);
+            }
+            selectedNoteIds = new Set(oldNotes.map(n => n.id));
           },
           redo() {
-            const idx2 = notes.findIndex(n => n.id === deletedNote.id);
-            if (idx2 !== -1) notes.splice(idx2, 1);
-            if (selectedNoteId === deletedNote.id) selectedNoteId = null;
+            for (const n of addedNotes) {
+              notes.push({ ...n });
+            }
+            selectedNoteIds = new Set(newIds);
           }
         });
+        selectedNoteIds = newIds;
         render();
         scheduleAutoSave();
       }
     }
+    return;
+  }
+
+  if (e.key === 'Escape') {
+    if (shortcutsOverlay && shortcutsOverlay.classList.contains('visible')) {
+      hideShortcutsPanel();
+      return;
+    }
+    selectedNoteIds.clear();
+    selectedAnchorIndices.clear();
+    render();
+    return;
+  }
+
+  if (e.key === 'F1') {
+    e.preventDefault();
+    if (shortcutsOverlay && shortcutsOverlay.classList.contains('visible')) {
+      hideShortcutsPanel();
+    } else {
+      showShortcutsPanel();
+    }
+    return;
+  }
+
+  if (e.key === ' ') {
+    e.preventDefault();
+    btnPlayFragment.click();
+    return;
+  }
+
+  if (e.key === '1') {
+    currentParamMode = PARAM_MODES.MIDI;
+    updateParamModeButtons();
+    render();
+    return;
+  }
+  if (e.key === '2') {
+    currentParamMode = 'Pitch';
+    updateParamModeButtons();
+    render();
+    return;
+  }
+  if (e.key === '3') {
+    currentParamMode = PARAM_MODES.VOL;
+    updateParamModeButtons();
+    render();
+    return;
+  }
+  if (e.key === '4') {
+    currentParamMode = PARAM_MODES.PAN;
+    updateParamModeButtons();
+    render();
+    return;
+  }
+
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
+      if (selectedAnchorIndices.size > 0) {
+        const oldSnapshot = clonePitchCurveState();
+        const indicesToDelete = [...selectedAnchorIndices].sort((a, b) => b - a);
+        for (const idx of indicesToDelete) {
+          pitchCurve.anchorPoints.splice(idx, 1);
+        }
+        selectedAnchorIndices.clear();
+        const newSnapshot = clonePitchCurveState();
+        history.push({
+          undo() { applyPitchCurveSnapshot(oldSnapshot); },
+          redo() { applyPitchCurveSnapshot(newSnapshot); }
+        });
+        dragOperation = { type: 'anchorsDelete' };
+        pitchCurveSnapshotBeforeDrag = oldSnapshot;
+        finalizeDragOperation();
+        render();
+        scheduleAutoSave();
+      }
+      return;
+    }
+    if (selectedNoteIds.size > 0) {
+      const deletedNotes = [];
+      const deletedIndices = [];
+      for (const id of selectedNoteIds) {
+        const idx = notes.findIndex(n => n.id === id);
+        if (idx !== -1) {
+          deletedNotes.push({ ...notes[idx] });
+          deletedIndices.push(idx);
+        }
+      }
+      deletedIndices.sort((a, b) => b - a);
+      for (const idx of deletedIndices) {
+        notes.splice(idx, 1);
+      }
+      const oldSelectedIds = new Set(selectedNoteIds);
+      selectedNoteIds.clear();
+      history.push({
+        undo() {
+          for (let i = 0; i < deletedNotes.length; i++) {
+            notes.splice(deletedIndices[i], 0, { ...deletedNotes[i] });
+          }
+          selectedNoteIds = new Set(oldSelectedIds);
+        },
+        redo() {
+          for (const dn of deletedNotes) {
+            const idx = notes.findIndex(n => n.id === dn.id);
+            if (idx !== -1) notes.splice(idx, 1);
+          }
+          selectedNoteIds.clear();
+        }
+      });
+      render();
+      scheduleAutoSave();
+    }
+    return;
+  }
+
+  if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+    e.preventDefault();
+    const step = e.shiftKey ? 12 : 1;
+    const timeStep = e.shiftKey ? 1 : 1 / 4;
+
+    if (currentParamMode === 'Pitch' && pitchCurve.enabled && selectedAnchorIndices.size > 0) {
+      const oldSnapshot = clonePitchCurveState();
+      for (const idx of selectedAnchorIndices) {
+        const ap = pitchCurve.anchorPoints[idx];
+        if (ap) {
+          if (e.key === 'ArrowUp') ap.pitch = Math.min(127, ap.pitch + step);
+          else if (e.key === 'ArrowDown') ap.pitch = Math.max(0, ap.pitch - step);
+          else if (e.key === 'ArrowLeft') ap.time = Math.max(0, ap.time - timeStep);
+          else if (e.key === 'ArrowRight') ap.time = Math.max(0, ap.time + timeStep);
+        }
+      }
+      const newSnapshot = clonePitchCurveState();
+      history.push({
+        undo() { applyPitchCurveSnapshot(oldSnapshot); },
+        redo() { applyPitchCurveSnapshot(newSnapshot); }
+      });
+      render();
+      scheduleAutoSave();
+      return;
+    }
+
+    if (selectedNoteIds.size > 0) {
+      const moveData = [];
+      for (const id of selectedNoteIds) {
+        const note = notes.find(n => n.id === id);
+        if (note) {
+          const oldStart = note.start;
+          const oldPitch = note.pitch;
+          if (e.key === 'ArrowUp') note.pitch = Math.min(127, note.pitch + step);
+          else if (e.key === 'ArrowDown') note.pitch = Math.max(0, note.pitch - step);
+          else if (e.key === 'ArrowLeft') note.start = Math.max(0, snapBeats(note.start - timeStep));
+          else if (e.key === 'ArrowRight') note.start = Math.max(0, snapBeats(note.start + timeStep));
+          moveData.push({
+            noteId: id,
+            oldStart,
+            oldPitch,
+            newStart: note.start,
+            newPitch: note.pitch,
+          });
+        }
+      }
+      history.push({
+        undo() {
+          for (const md of moveData) {
+            const n = notes.find(nn => nn.id === md.noteId);
+            if (n) { n.start = md.oldStart; n.pitch = md.oldPitch; }
+          }
+        },
+        redo() {
+          for (const md of moveData) {
+            const n = notes.find(nn => nn.id === md.noteId);
+            if (n) { n.start = md.newStart; n.pitch = md.newPitch; }
+          }
+        }
+      });
+      render();
+      scheduleAutoSave();
+    }
+    return;
   }
 });
 
@@ -1949,6 +2466,9 @@ canvas.addEventListener('wheel', (e) => {
     const mouseBeats = xToTime(pos.x);
     scrollX = mouseBeats * BEAT_WIDTH * zoomX - pos.x;
 
+    scrollX = Math.max(0, scrollX);
+  } else if (e.shiftKey) {
+    scrollX += e.deltaY;
     scrollX = Math.max(0, scrollX);
   } else {
     scrollY += e.deltaY;
@@ -1995,7 +2515,8 @@ async function handleFragmentData(data) {
   dragMode = null;
   pitchCurveSnapshotBeforeDrag = null;
   envelopeSnapshotBeforeDrag = null;
-  selectedNoteId = null;
+  selectedNoteIds.clear();
+  selectedAnchorIndices.clear();
   lyricEditOldValue = null;
   lyricEditNoteId = null;
   nextNoteId = notes.reduce((max, n) => Math.max(max, (n.id || 0) + 1), 1);

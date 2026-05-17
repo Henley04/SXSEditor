@@ -14,8 +14,8 @@
       </div>
       <div id="toolbar">
         <div class="toolbar-group">
-          <button id="btn-save">💾 保存</button>
-          <button id="btn-close">✖ 关闭</button>
+          <button id="btn-save" title="Ctrl+S">💾 保存</button>
+          <button id="btn-close" title="关闭窗口">✖ 关闭</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
@@ -23,25 +23,29 @@
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <button id="btn-play-fragment">▶ 播放</button>
+          <button id="btn-play-fragment" title="Space">▶ 播放</button>
           <button id="btn-export-fragment">💿 导出</button>
           <button id="btn-import-midi">🎵 导入MIDI</button>
           <input type="checkbox" id="autoShiftCheck" checked><label for="autoShiftCheck">Auto Shift</label>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group param-group">
-          <button id="btn-param-MIDI" class="btn-param active">MIDI</button>
-          <button id="btn-param-Pitch" class="btn-param">Pitch</button>
-          <button id="btn-param-VOL" class="btn-param">VOL</button>
-          <button id="btn-param-PAN" class="btn-param">L/R</button>
+          <button id="btn-param-MIDI" class="btn-param active" title="1">MIDI</button>
+          <button id="btn-param-Pitch" class="btn-param" title="2">Pitch</button>
+          <button id="btn-param-VOL" class="btn-param" title="3">VOL</button>
+          <button id="btn-param-PAN" class="btn-param" title="4">L/R</button>
         </div>
         <div class="toolbar-divider" id="pitch-tools-divider" style="display:none"></div>
         <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
           <button id="btn-pitch-reset" class="btn-pitch-tool" title="重置为MIDI自动曲线">↺ 重置</button>
-          <span class="pitch-hint">点击添加锚点 · Shift+拖拽画笔 · 右键删除</span>
+          <span class="pitch-hint">点击添加 · Shift+拖拽画笔 · 右键删除 · 中键框选</span>
           <span class="pitch-hint">平滑</span>
           <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
           <span class="pitch-hint" id="brush-smoothing-label">30</span>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-group">
+          <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)">⌨</button>
         </div>
       </div>
       <div id="main-content">
@@ -53,6 +57,59 @@
         <div id="right-content">
           <div id="piano-roll-container">
             <canvas id="piano-roll"></canvas>
+          </div>
+        </div>
+      </div>
+      <div id="shortcuts-overlay" class="shortcuts-overlay">
+        <div class="shortcuts-panel">
+          <div class="shortcuts-header">
+            <span>快捷键</span>
+            <button id="btn-close-shortcuts" class="btn-close-shortcuts">✕</button>
+          </div>
+          <div class="shortcuts-body">
+            <div class="shortcut-section">
+              <div class="shortcut-section-title">通用</div>
+              <div class="shortcut-row"><kbd>Ctrl+Z</kbd><span>撤销</span></div>
+              <div class="shortcut-row"><kbd>Ctrl+Y</kbd><span>重做</span></div>
+              <div class="shortcut-row"><kbd>Ctrl+S</kbd><span>保存</span></div>
+              <div class="shortcut-row"><kbd>Space</kbd><span>播放/停止</span></div>
+              <div class="shortcut-row"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><span>切换 MIDI/Pitch/VOL/PAN</span></div>
+              <div class="shortcut-row"><kbd>F1</kbd><span>快捷键帮助</span></div>
+            </div>
+            <div class="shortcut-section">
+              <div class="shortcut-section-title">选择</div>
+              <div class="shortcut-row"><kbd>中键拖拽</kbd><span>框选音符/锚点</span></div>
+              <div class="shortcut-row"><kbd>Shift+中键</kbd><span>追加框选</span></div>
+              <div class="shortcut-row"><kbd>Ctrl+点击</kbd><span>切换选中</span></div>
+              <div class="shortcut-row"><kbd>Shift+点击</kbd><span>追加选中</span></div>
+              <div class="shortcut-row"><kbd>Ctrl+A</kbd><span>全选</span></div>
+              <div class="shortcut-row"><kbd>Escape</kbd><span>取消选择</span></div>
+            </div>
+            <div class="shortcut-section">
+              <div class="shortcut-section-title">MIDI 编辑</div>
+              <div class="shortcut-row"><kbd>↑↓</kbd><span>上下移动音符（半音）</span></div>
+              <div class="shortcut-row"><kbd>←→</kbd><span>左右移动音符</span></div>
+              <div class="shortcut-row"><kbd>Shift+↑↓</kbd><span>上下移动音符（八度）</span></div>
+              <div class="shortcut-row"><kbd>Shift+←→</kbd><span>左右移动音符（整拍）</span></div>
+              <div class="shortcut-row"><kbd>Delete</kbd><span>删除选中音符</span></div>
+              <div class="shortcut-row"><kbd>Ctrl+D</kbd><span>复制选中音符</span></div>
+              <div class="shortcut-row"><kbd>双击</kbd><span>编辑歌词</span></div>
+            </div>
+            <div class="shortcut-section">
+              <div class="shortcut-section-title">Pitch 编辑</div>
+              <div class="shortcut-row"><kbd>点击</kbd><span>添加锚点</span></div>
+              <div class="shortcut-row"><kbd>拖拽锚点</kbd><span>移动锚点</span></div>
+              <div class="shortcut-row"><kbd>Shift+拖拽</kbd><span>画笔模式</span></div>
+              <div class="shortcut-row"><kbd>右键</kbd><span>删除锚点</span></div>
+              <div class="shortcut-row"><kbd>Delete</kbd><span>删除选中锚点</span></div>
+              <div class="shortcut-row"><kbd>↑↓←→</kbd><span>移动选中锚点</span></div>
+            </div>
+            <div class="shortcut-section">
+              <div class="shortcut-section-title">视图</div>
+              <div class="shortcut-row"><kbd>Ctrl+滚轮</kbd><span>水平缩放</span></div>
+              <div class="shortcut-row"><kbd>Shift+滚轮</kbd><span>水平滚动</span></div>
+              <div class="shortcut-row"><kbd>滚轮</kbd><span>垂直滚动</span></div>
+            </div>
           </div>
         </div>
       </div>
