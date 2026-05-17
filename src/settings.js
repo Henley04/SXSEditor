@@ -18,7 +18,7 @@ audioVolumeSlider.addEventListener('input', () => {
 
 audioOutputModeSelect.addEventListener('change', () => {
     const isExclusive = audioOutputModeSelect.value === 'exclusive';
-    exclusiveInfoDiv.style.display = isExclusive ? 'block' : 'none';
+    exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
     audioBitDepthSelect.disabled = !isExclusive;
     updateAudioDeviceList();
 });
@@ -150,7 +150,7 @@ async function loadAudioSettings(currentSetting) {
         }
 
         const isExclusive = audioOutputModeSelect.value === 'exclusive';
-        exclusiveInfoDiv.style.display = isExclusive ? 'block' : 'none';
+        exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
         audioBitDepthSelect.disabled = !isExclusive || !isNaudiodonAvailable;
     } catch (err) {
         console.error('加载音频设置失败:', err);

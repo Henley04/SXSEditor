@@ -185,8 +185,8 @@ function openSettingsWindow() {
   }
 
   settingsWindow = new BrowserWindow({
-    width: 580,
-    height: 700,
+    width: 600,
+    height: 760,
     title: '设置',
     icon: path.join(__dirname, 'SXS.png'),
     resizable: true,

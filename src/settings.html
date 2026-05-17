@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html>
+<html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <title>设置</title>
@@ -10,9 +10,9 @@
 
         <div class="settings-section">
             <h3 class="section-title">推理</h3>
-            <div class="setting-group">
+            <div class="setting-group hardware-info">
                 <label>当前运行硬件</label>
-                <div id="currentHardwareInfo" class="info-box" style="margin-bottom: 12px;">
+                <div id="currentHardwareInfo" class="info-box">
                     <span id="currentHardwareText">未初始化</span>
                 </div>
             </div>
@@ -84,12 +84,12 @@
             </div>
 
             <div class="setting-group">
-                <label for="audioVolume">主音量 <span id="volumeValue">100%</span></label>
+                <label for="audioVolume">主音量 <span id="volumeValue" class="volume-display">100%</span></label>
                 <input type="range" id="audioVolume" min="0" max="100" value="100" step="1">
                 <p class="hint">主输出音量控制。独占模式下由软件控制音量，共享模式下由系统混音器控制。</p>
             </div>
 
-            <div class="setting-group" id="exclusiveInfo" style="display: none;">
+            <div class="setting-group hidden" id="exclusiveInfo">
                 <div class="info-box">
                     <strong>WASAPI 独占模式说明</strong>
                     <ul>

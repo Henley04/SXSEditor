@@ -18,6 +18,11 @@ const CFG_STRENGTH = 3.0;
 const CFG_RESCALE = 0.75;
 const DEFAULT_DIFF_STEPS = 32;
 const VOCODER_CHUNK_FRAMES = 128;
+const VOCODER_OVERLAP_FRAMES = 16;
+const LONG_AUDIO_THRESHOLD_SEC = 30;
+const SEGMENT_MIN_SEC = 15;
+const SEGMENT_MAX_SEC = 30;
+const SEGMENT_OVERLAP_SEC = 2;
 
 const ONNX_MODEL_FILES = [
     'note_text_encoder.onnx',
@@ -1343,34 +1348,66 @@ class OnnxSVSPipeline {
     }
 
     async _runVocoderChunked(melData, totalFrames) {
-        const allAudio = [];
         const chunkSize = VOCODER_CHUNK_FRAMES;
-        const numChunks = Math.ceil(totalFrames / chunkSize);
+        const overlapFrames = VOCODER_OVERLAP_FRAMES;
+        const stepFrames = chunkSize - overlapFrames;
+        const totalSamples = totalFrames * HOP_SIZE;
+        const output = new Float32Array(totalSamples);
+        const weightSum = new Float32Array(totalSamples);
 
-        for (let c = 0; c < numChunks; c++) {
-            const startFrame = c * chunkSize;
-            const endFrame = Math.min(startFrame + chunkSize, totalFrames);
-            const currentChunkFrames = endFrame - startFrame;
+        const fadeSamples = overlapFrames * HOP_SIZE;
+        const fadeWindow = new Float32Array(fadeSamples);
+        for (let i = 0; i < fadeSamples; i++) {
+            fadeWindow[i] = i / fadeSamples;
+        }
 
-            const chunkMel = new Float32Array(chunkSize * MEL_DIM);
+        let framePos = 0;
+        let chunkIdx = 0;
+
+        while (framePos < totalFrames) {
+            const chunkStart = Math.max(0, framePos - (chunkIdx > 0 ? overlapFrames : 0));
+            const chunkEnd = Math.min(chunkStart + chunkSize, totalFrames);
+            const currentChunkFrames = chunkEnd - chunkStart;
+
+            const chunkMel = new Float32Array(currentChunkFrames * MEL_DIM);
             for (let f = 0; f < currentChunkFrames; f++) {
                 for (let d = 0; d < MEL_DIM; d++) {
-                    chunkMel[f * MEL_DIM + d] = melData[(startFrame + f) * MEL_DIM + d];
+                    chunkMel[f * MEL_DIM + d] = melData[(chunkStart + f) * MEL_DIM + d];
                 }
             }
 
-            const melTensor = new ort.Tensor('float32', chunkMel, [1, chunkSize, MEL_DIM]);
+            const melTensor = new ort.Tensor('float32', chunkMel, [1, currentChunkFrames, MEL_DIM]);
             const results = await this.sessions.vocoder.run({ mel: melTensor });
             const waveform = new Float32Array(results['waveform'].data);
 
-            const validSamples = currentChunkFrames * HOP_SIZE;
-            const samplesToKeep = Math.min(waveform.length, validSamples);
-            for (let i = 0; i < samplesToKeep; i++) {
-                allAudio.push(waveform[i]);
+            const writeStart = chunkStart * HOP_SIZE;
+            const writeLen = Math.min(waveform.length, totalSamples - writeStart);
+
+            for (let i = 0; i < writeLen; i++) {
+                const outIdx = writeStart + i;
+                if (outIdx >= totalSamples) break;
+                let w = 1.0;
+                if (chunkIdx > 0 && i < fadeSamples) {
+                    w = fadeWindow[i];
+                }
+                if (chunkEnd < totalFrames && i >= writeLen - fadeSamples) {
+                    w = Math.min(w, 1.0 - fadeWindow[writeLen - 1 - i]);
+                }
+                output[outIdx] += waveform[i] * w;
+                weightSum[outIdx] += w;
+            }
+
+            framePos = chunkIdx === 0 ? chunkEnd : chunkEnd - overlapFrames;
+            chunkIdx++;
+        }
+
+        for (let i = 0; i < totalSamples; i++) {
+            if (weightSum[i] > 1e-8) {
+                output[i] /= weightSum[i];
             }
         }
 
-        return allAudio;
+        return Array.from(output);
     }
 
     _hashArray(arr) {
@@ -1451,6 +1488,208 @@ class OnnxSVSPipeline {
         return result;
     }
 
+    _buildVocalSegments(notes, bpm) {
+        if (!notes || notes.length === 0) return [{ notes, startBeat: 0, endBeat: 0 }];
+
+        const sorted = [...notes].sort((a, b) => a.start - b.start);
+        const totalBeats = sorted[sorted.length - 1].start + sorted[sorted.length - 1].duration;
+        const totalSec = (totalBeats / bpm) * 60;
+
+        if (totalSec <= LONG_AUDIO_THRESHOLD_SEC) {
+            return [{ notes, startBeat: 0, endBeat: totalBeats }];
+        }
+
+        console.log(`[OnnxSVSPipeline] 长音频检测: ${totalSec.toFixed(1)}s > ${LONG_AUDIO_THRESHOLD_SEC}s，启用分段推理`);
+
+        const overlapBeats = (SEGMENT_OVERLAP_SEC / 60) * bpm;
+        const minBeats = (SEGMENT_MIN_SEC / 60) * bpm;
+        const maxBeats = (SEGMENT_MAX_SEC / 60) * bpm;
+
+        const restBoundaries = [0];
+        for (let i = 0; i < sorted.length; i++) {
+            const note = sorted[i];
+            if (note.lyric && note.lyric.trim().length === 0) {
+                const midBeat = note.start + note.duration / 2;
+                restBoundaries.push(midBeat);
+            }
+            if (i > 0) {
+                const prevEnd = sorted[i - 1].start + sorted[i - 1].duration;
+                const gap = note.start - prevEnd;
+                if (gap > 0.05) {
+                    restBoundaries.push(prevEnd + gap / 2);
+                }
+            }
+        }
+        restBoundaries.push(totalBeats);
+        restBoundaries.sort((a, b) => a - b);
+
+        const segments = [];
+        let segStart = 0;
+
+        while (segStart < totalBeats - 0.01) {
+            let segEnd = segStart + maxBeats;
+
+            if (segEnd >= totalBeats - 0.01) {
+                segEnd = totalBeats;
+            } else {
+                let bestBoundary = segEnd;
+                let bestDist = Infinity;
+                for (const b of restBoundaries) {
+                    if (b <= segStart + minBeats) continue;
+                    if (b >= segStart + maxBeats + overlapBeats) break;
+                    const dist = Math.abs(b - (segStart + (maxBeats + minBeats) / 2));
+                    if (dist < bestDist) {
+                        bestDist = dist;
+                        bestBoundary = b;
+                    }
+                }
+                segEnd = bestBoundary;
+            }
+
+            const segNotes = sorted.filter(n => {
+                const noteEnd = n.start + n.duration;
+                return n.start < segEnd && noteEnd > segStart;
+            }).map(n => ({
+                ...n,
+                start: n.start - segStart,
+            }));
+
+            if (segNotes.length > 0) {
+                segments.push({
+                    notes: segNotes,
+                    startBeat: segStart,
+                    endBeat: segEnd,
+                });
+            }
+
+            segStart = segEnd - overlapBeats;
+            if (segStart >= totalBeats - 0.01) break;
+        }
+
+        console.log(`[OnnxSVSPipeline] 分段完成: ${segments.length} 段, 每段 ${segments.map(s => ((s.endBeat - s.startBeat) / bpm * 60).toFixed(1) + 's').join(', ')}`);
+        return segments;
+    }
+
+    async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, onProgress, progressStart, progressRange) {
+        const totalFramesWithPrompt = ptFrameCount + totalFrames;
+        const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
+        const targetMask = new Float32Array(totalFrames).fill(1);
+
+        const xtInputBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
+        const xtTargetBuf = new Float32Array(totalFrames * MEL_DIM);
+        const uncondCondBuf = new Float32Array(totalFrames * COND_DIM);
+        const cfgPredBuf = new Float32Array(totalFrames * MEL_DIM);
+
+        const dt = 1.0 / totalSteps;
+        const progressPerStep = progressRange / totalSteps;
+
+        for (let step = 0; step < totalSteps; step++) {
+            const tVal = (step + 0.5) / totalSteps;
+
+            for (let f = 0; f < ptFrameCount; f++) {
+                for (let d = 0; d < MEL_DIM; d++) {
+                    xtInputBuf[f * MEL_DIM + d] = ptMelData[f * MEL_DIM + d];
+                }
+            }
+            for (let f = 0; f < totalFrames; f++) {
+                for (let d = 0; d < MEL_DIM; d++) {
+                    xtInputBuf[(ptFrameCount + f) * MEL_DIM + d] = xt.data[f * MEL_DIM + d];
+                }
+            }
+
+            const predData = await this._runDiffStep(xtInputBuf, tVal, combinedCond, frameMask, totalFramesWithPrompt);
+
+            if (cfgStrength > 0) {
+                for (let i = 0; i < totalFrames * MEL_DIM; i++) {
+                    xtTargetBuf[i] = xt.data[i];
+                }
+
+                const uncondPred = await this._runDiffStep(xtTargetBuf, tVal, uncondCondBuf, targetMask, totalFrames);
+
+                const targetLen = totalFrames * MEL_DIM;
+                let posSum = 0;
+                for (let f = 0; f < totalFrames; f++) {
+                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        posSum += predData[tgtOffset + d];
+                    }
+                }
+                const posMean = posSum / targetLen;
+                let posVarSum = 0;
+                for (let f = 0; f < totalFrames; f++) {
+                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const diff = predData[tgtOffset + d] - posMean;
+                        posVarSum += diff * diff;
+                    }
+                }
+                const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
+
+                let cfgAdjSum = 0;
+                for (let f = 0; f < totalFrames; f++) {
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const condVal = predData[(ptFrameCount + f) * MEL_DIM + d];
+                        const uncondVal = uncondPred[f * MEL_DIM + d];
+                        const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
+                        cfgPredBuf[f * MEL_DIM + d] = cfgVal;
+                        cfgAdjSum += cfgVal;
+                    }
+                }
+                const cfgAdjMean = cfgAdjSum / targetLen;
+                let cfgAdjVarSum = 0;
+                for (let i = 0; i < targetLen; i++) {
+                    const diff = cfgPredBuf[i] - cfgAdjMean;
+                    cfgAdjVarSum += diff * diff;
+                }
+                const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
+                const rescale = posStd / (cfgAdjStd + 1e-8);
+
+                for (let f = 0; f < totalFrames; f++) {
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const cfgVal = cfgPredBuf[f * MEL_DIM + d];
+                        const rescaledVal = CFG_RESCALE * (cfgVal * rescale) + (1 - CFG_RESCALE) * cfgVal;
+                        xt.data[f * MEL_DIM + d] += rescaledVal * dt;
+                    }
+                }
+            } else {
+                for (let f = 0; f < totalFrames; f++) {
+                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        xt.data[f * MEL_DIM + d] += predData[tgtOffset + d] * dt;
+                    }
+                }
+            }
+
+            const currentProgress = progressStart + (step + 1) * progressPerStep;
+            onProgress(Math.min(Math.round(currentProgress), 90));
+            await new Promise(r => setTimeout(r, 0));
+        }
+    }
+
+    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, onProgress, progressStart, progressRange) {
+        const sequences = this.notesToSequences(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
+        const totalFrames = sequences.f0Ids.length;
+        const tokenCount = sequences.tokenCount;
+
+        if (totalFrames === 0) {
+            return { audio: [], frames: 0 };
+        }
+
+        console.log(`[OnnxSVSPipeline] 段落合成: frames=${totalFrames}, tokens=${tokenCount}, steps=${totalSteps}`);
+
+        const totalFramesWithPrompt = ptFrameCount + totalFrames;
+
+        const combinedCond = await this._runEncoder(sequences, tokenCount, totalFrames, ptFrameCount);
+
+        const xt = this.randomNoise(totalFrames, MEL_DIM);
+
+        await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, onProgress, progressStart, progressRange);
+
+        const audioData = await this._runVocoderChunked(xt.data, totalFrames);
+
+        return { audio: audioData, frames: totalFrames };
+    }
+
     async synthesize(notes, bpm, options = {}) {
         if (!this.initialized) {
             await this.init();
@@ -1526,16 +1765,6 @@ class OnnxSVSPipeline {
             f0Shift = pitchShift;
         }
 
-        const sequences = this.notesToSequences(filledNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
-        const totalFrames = sequences.f0Ids.length;
-        const tokenCount = sequences.tokenCount;
-
-        if (totalFrames === 0) {
-            return [];
-        }
-
-        console.log(`[OnnxSVSPipeline] 合成参数: frames=${totalFrames}, tokens=${tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
-
         let ptMelData = null;
         let ptFrameCount = 0;
 
@@ -1558,126 +1787,122 @@ class OnnxSVSPipeline {
             }
         }
 
+        const segments = this._buildVocalSegments(filledNotes, bpm);
+
+        if (segments.length === 1) {
+            const seg = segments[0];
+            const segNotes = seg.notes || filledNotes;
+            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
+            const totalFrames = sequences.f0Ids.length;
+
+            if (totalFrames === 0) {
+                return [];
+            }
+
+            if (!ptMelData || ptFrameCount === 0) {
+                ptFrameCount = Math.min(50, Math.max(10, Math.floor(totalFrames * 0.1)));
+                ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
+                console.log(`[OnnxSVSPipeline] 使用零prompt: ${ptFrameCount}帧`);
+            }
+
+            console.log(`[OnnxSVSPipeline] 合成参数: frames=${totalFrames}, tokens=${sequences.tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
+
+            currentProgress = 30;
+            onProgress(currentProgress);
+
+            const combinedCond = await this._runEncoder(sequences, sequences.tokenCount, totalFrames, ptFrameCount);
+            const xt = this.randomNoise(totalFrames, MEL_DIM);
+
+            await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, onProgress, 40, 50);
+
+            onProgress(90);
+            console.log(`[OnnxSVSPipeline] 扩散完成，开始声码器重建 (${totalFrames}帧)...`);
+            const audioData = await this._runVocoderChunked(xt.data, totalFrames);
+
+            this._synthCache = { key: cacheKey, audio: audioData };
+            console.log('[OnnxSVSPipeline] 音频已缓存');
+
+            onProgress(100);
+            return audioData;
+        }
+
         if (!ptMelData || ptFrameCount === 0) {
-            ptFrameCount = Math.min(50, Math.max(10, Math.floor(totalFrames * 0.1)));
+            ptFrameCount = Math.min(50, 10);
             ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
-            console.log(`[OnnxSVSPipeline] 使用零prompt: ${ptFrameCount}帧`);
+            console.log(`[OnnxSVSPipeline] 分段模式使用零prompt: ${ptFrameCount}帧`);
         }
 
-        const totalFramesWithPrompt = ptFrameCount + totalFrames;
+        const totalBeats = filledNotes.length > 0
+            ? Math.max(...filledNotes.map(n => n.start + n.duration))
+            : 0;
+        const totalSamples = Math.floor((totalBeats / bpm) * 60 * SAMPLE_RATE);
+        const finalAudio = new Float32Array(totalSamples);
+        const weightSum = new Float32Array(totalSamples);
 
-        console.log('[OnnxSVSPipeline] 运行编码器...');
-        const combinedCond = await this._runEncoder(sequences, tokenCount, totalFrames, ptFrameCount);
-        console.log(`[OnnxSVSPipeline] 编码器输出维度: [1, ${totalFramesWithPrompt}, ${COND_DIM}]`);
+        const overlapBeats = (SEGMENT_OVERLAP_SEC / 60) * bpm;
+        const overlapSamples = Math.floor(SEGMENT_OVERLAP_SEC * SAMPLE_RATE);
 
-        currentProgress = 30;
-        onProgress(currentProgress);
+        const fadeWindow = new Float32Array(overlapSamples);
+        for (let i = 0; i < overlapSamples; i++) {
+            fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * i / overlapSamples));
+        }
 
-        const xt = this.randomNoise(totalFrames, MEL_DIM);
-        const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
-        const targetMask = new Float32Array(totalFrames).fill(1);
+        const progressPerSegment = 80 / segments.length;
 
-        const diffStartProgress = 40;
-        const diffEndProgress = 90;
-        const diffRange = diffEndProgress - diffStartProgress;
-        const diffProgressPerStep = diffRange / totalSteps;
+        for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+            const seg = segments[segIdx];
+            const segProgressStart = 10 + segIdx * progressPerSegment;
+            const segProgressRange = progressPerSegment * 0.9;
+            const vocoderProgressStart = segProgressStart + segProgressRange;
+            const vocoderProgressRange = progressPerSegment * 0.1;
 
-        for (let step = 0; step < totalSteps; step++) {
-            const tVal = (step + 0.5) / totalSteps;
+            onProgress(Math.round(segProgressStart));
 
-            const xtInputData = new Float32Array(totalFramesWithPrompt * MEL_DIM);
-            for (let f = 0; f < ptFrameCount; f++) {
-                for (let d = 0; d < MEL_DIM; d++) {
-                    xtInputData[f * MEL_DIM + d] = ptMelData[f * MEL_DIM + d];
+            const segResult = await this._synthesizeSegment(
+                seg.notes, bpm, f0Envelope, pitchCurveF0, f0Shift,
+                ptMelData, ptFrameCount, totalSteps, cfgStrength,
+                onProgress, segProgressStart, segProgressRange
+            );
+
+            if (segResult.audio.length === 0) continue;
+
+            const segStartSample = Math.floor((seg.startBeat / bpm) * 60 * SAMPLE_RATE);
+            const segAudio = segResult.audio;
+            const segSamples = segAudio.length;
+
+            const hasOverlap = segIdx > 0 && seg.startBeat < segments[segIdx - 1].endBeat;
+
+            for (let i = 0; i < segSamples; i++) {
+                const outIdx = segStartSample + i;
+                if (outIdx >= totalSamples) break;
+
+                let w = 1.0;
+                if (hasOverlap && i < overlapSamples) {
+                    w = fadeWindow[i];
                 }
-            }
-            for (let f = 0; f < totalFrames; f++) {
-                for (let d = 0; d < MEL_DIM; d++) {
-                    xtInputData[(ptFrameCount + f) * MEL_DIM + d] = xt.data[f * MEL_DIM + d];
-                }
-            }
-
-            const predData = await this._runDiffStep(xtInputData, tVal, combinedCond, frameMask, totalFramesWithPrompt);
-            const dt = 1.0 / totalSteps;
-
-            if (cfgStrength > 0) {
-                const xtTargetOnly = new Float32Array(totalFrames * MEL_DIM);
-                for (let i = 0; i < totalFrames * MEL_DIM; i++) {
-                    xtTargetOnly[i] = xt.data[i];
-                }
-                const uncondCondTarget = new Float32Array(totalFrames * COND_DIM);
-                const uncondPred = await this._runDiffStep(xtTargetOnly, tVal, uncondCondTarget, targetMask, totalFrames);
-
-                const targetLen = totalFrames * MEL_DIM;
-                let posSum = 0;
-                for (let f = 0; f < totalFrames; f++) {
-                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        posSum += predData[tgtOffset + d];
+                if (segIdx < segments.length - 1 && seg.endBeat > segments[segIdx + 1].startBeat) {
+                    const remainingSamples = segSamples - i;
+                    if (remainingSamples <= overlapSamples) {
+                        w = Math.min(w, 1.0 - fadeWindow[overlapSamples - remainingSamples]);
                     }
                 }
-                const posMean = posSum / targetLen;
-                let posVarSum = 0;
-                for (let f = 0; f < totalFrames; f++) {
-                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        const diff = predData[tgtOffset + d] - posMean;
-                        posVarSum += diff * diff;
-                    }
-                }
-                const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
 
-                const cfgPred = new Float32Array(totalFrames * MEL_DIM);
-                let cfgAdjSum = 0;
-                for (let f = 0; f < totalFrames; f++) {
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        const condVal = predData[(ptFrameCount + f) * MEL_DIM + d];
-                        const uncondVal = uncondPred[f * MEL_DIM + d];
-                        const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
-                        cfgPred[f * MEL_DIM + d] = cfgVal;
-                        cfgAdjSum += cfgVal;
-                    }
-                }
-                const cfgAdjMean = cfgAdjSum / targetLen;
-                let cfgAdjVarSum = 0;
-                for (let i = 0; i < targetLen; i++) {
-                    const diff = cfgPred[i] - cfgAdjMean;
-                    cfgAdjVarSum += diff * diff;
-                }
-                const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
-                const rescale = posStd / (cfgAdjStd + 1e-8);
-
-                for (let f = 0; f < totalFrames; f++) {
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        const cfgVal = cfgPred[f * MEL_DIM + d];
-                        const rescaledVal = CFG_RESCALE * (cfgVal * rescale) + (1 - CFG_RESCALE) * cfgVal;
-                        xt.data[f * MEL_DIM + d] += rescaledVal * dt;
-                    }
-                }
-            } else {
-                for (let f = 0; f < totalFrames; f++) {
-                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        xt.data[f * MEL_DIM + d] += predData[tgtOffset + d] * dt;
-                    }
-                }
+                finalAudio[outIdx] += segAudio[i] * w;
+                weightSum[outIdx] += w;
             }
 
-            currentProgress = diffStartProgress + (step + 1) * diffProgressPerStep;
-            onProgress(Math.min(Math.round(currentProgress), 90));
-            if (step % 2 === 0) {
-                await new Promise(r => setTimeout(r, 0));
+            onProgress(Math.round(vocoderProgressStart + vocoderProgressRange));
+        }
+
+        for (let i = 0; i < totalSamples; i++) {
+            if (weightSum[i] > 1e-8) {
+                finalAudio[i] /= weightSum[i];
             }
         }
 
-        currentProgress = 90;
-        onProgress(currentProgress);
-
-        console.log(`[OnnxSVSPipeline] 扩散完成，开始声码器重建 (${totalFrames}帧)...`);
-        const audioData = await this._runVocoderChunked(xt.data, totalFrames);
-
+        const audioData = Array.from(finalAudio);
         this._synthCache = { key: cacheKey, audio: audioData };
-        console.log('[OnnxSVSPipeline] 音频已缓存');
+        console.log('[OnnxSVSPipeline] 分段合成完成，音频已缓存');
 
         onProgress(100);
         return audioData;
