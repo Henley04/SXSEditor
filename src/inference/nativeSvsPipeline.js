@@ -1426,6 +1426,7 @@ class OnnxSVSPipeline {
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
         const totalSteps = options.nSteps || DEFAULT_DIFF_STEPS;
         const cfgStrength = options.cfg || CFG_STRENGTH;
+        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : CFG_RESCALE;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
 
@@ -1456,7 +1457,7 @@ class OnnxSVSPipeline {
             }
         }
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${autoShift}_${pitchShift}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}`;
     }
 
     clearSynthCache() {
@@ -1647,7 +1648,7 @@ class OnnxSVSPipeline {
                 for (let f = 0; f < totalFrames; f++) {
                     for (let d = 0; d < MEL_DIM; d++) {
                         const cfgVal = cfgPredBuf[f * MEL_DIM + d];
-                        const rescaledVal = CFG_RESCALE * (cfgVal * rescale) + (1 - CFG_RESCALE) * cfgVal;
+                        const rescaledVal = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
                         xt.data[f * MEL_DIM + d] += rescaledVal * dt;
                     }
                 }

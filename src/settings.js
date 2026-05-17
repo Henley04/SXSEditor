@@ -1,6 +1,18 @@
 import './settings.css';
 
 const inferenceDeviceSelect = document.getElementById('inferenceDevice');
+const previewDiffStepsSlider = document.getElementById('previewDiffSteps');
+const previewDiffStepsValue = document.getElementById('previewDiffStepsValue');
+const previewCfgStrengthSlider = document.getElementById('previewCfgStrength');
+const previewCfgStrengthValue = document.getElementById('previewCfgStrengthValue');
+const previewCfgRescaleSlider = document.getElementById('previewCfgRescale');
+const previewCfgRescaleValue = document.getElementById('previewCfgRescaleValue');
+const exportDiffStepsSlider = document.getElementById('exportDiffSteps');
+const exportDiffStepsValue = document.getElementById('exportDiffStepsValue');
+const exportCfgStrengthSlider = document.getElementById('exportCfgStrength');
+const exportCfgStrengthValue = document.getElementById('exportCfgStrengthValue');
+const exportCfgRescaleSlider = document.getElementById('exportCfgRescale');
+const exportCfgRescaleValue = document.getElementById('exportCfgRescaleValue');
 const audioOutputModeSelect = document.getElementById('audioOutputMode');
 const audioOutputDeviceSelect = document.getElementById('audioOutputDevice');
 const audioSampleRateSelect = document.getElementById('audioSampleRate');
@@ -12,6 +24,24 @@ const exclusiveInfoDiv = document.getElementById('exclusiveInfo');
 const saveBtn = document.getElementById('saveBtn');
 const cancelBtn = document.getElementById('cancelBtn');
 
+previewDiffStepsSlider.addEventListener('input', () => {
+    previewDiffStepsValue.textContent = previewDiffStepsSlider.value;
+});
+previewCfgStrengthSlider.addEventListener('input', () => {
+    previewCfgStrengthValue.textContent = parseFloat(previewCfgStrengthSlider.value).toFixed(1);
+});
+previewCfgRescaleSlider.addEventListener('input', () => {
+    previewCfgRescaleValue.textContent = parseFloat(previewCfgRescaleSlider.value).toFixed(2);
+});
+exportDiffStepsSlider.addEventListener('input', () => {
+    exportDiffStepsValue.textContent = exportDiffStepsSlider.value;
+});
+exportCfgStrengthSlider.addEventListener('input', () => {
+    exportCfgStrengthValue.textContent = parseFloat(exportCfgStrengthSlider.value).toFixed(1);
+});
+exportCfgRescaleSlider.addEventListener('input', () => {
+    exportCfgRescaleValue.textContent = parseFloat(exportCfgRescaleSlider.value).toFixed(2);
+});
 audioVolumeSlider.addEventListener('input', () => {
     volumeValueSpan.textContent = audioVolumeSlider.value + '%';
 });
@@ -149,6 +179,28 @@ async function loadAudioSettings(currentSetting) {
             }
         }
 
+        if (currentSetting) {
+            const pSteps = currentSetting.previewDiffSteps ?? 16;
+            const pCfg = currentSetting.previewCfgStrength ?? 3.0;
+            const pRescale = currentSetting.previewCfgRescale ?? 0.75;
+            previewDiffStepsSlider.value = pSteps;
+            previewDiffStepsValue.textContent = pSteps;
+            previewCfgStrengthSlider.value = pCfg;
+            previewCfgStrengthValue.textContent = parseFloat(pCfg).toFixed(1);
+            previewCfgRescaleSlider.value = pRescale;
+            previewCfgRescaleValue.textContent = parseFloat(pRescale).toFixed(2);
+
+            const eSteps = currentSetting.exportDiffSteps ?? 32;
+            const eCfg = currentSetting.exportCfgStrength ?? 3.0;
+            const eRescale = currentSetting.exportCfgRescale ?? 0.75;
+            exportDiffStepsSlider.value = eSteps;
+            exportDiffStepsValue.textContent = eSteps;
+            exportCfgStrengthSlider.value = eCfg;
+            exportCfgStrengthValue.textContent = parseFloat(eCfg).toFixed(1);
+            exportCfgRescaleSlider.value = eRescale;
+            exportCfgRescaleValue.textContent = parseFloat(eRescale).toFixed(2);
+        }
+
         const isExclusive = audioOutputModeSelect.value === 'exclusive';
         exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
         audioBitDepthSelect.disabled = !isExclusive || !isNaudiodonAvailable;
@@ -190,6 +242,12 @@ saveBtn.addEventListener('click', async () => {
 
     const settings = {
         deviceId,
+        previewDiffSteps: parseInt(previewDiffStepsSlider.value),
+        previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
+        previewCfgRescale: parseFloat(previewCfgRescaleSlider.value),
+        exportDiffSteps: parseInt(exportDiffStepsSlider.value),
+        exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
+        exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
         audioOutputMode: audioOutputModeSelect.value,
         audioOutputDevice: parseInt(audioOutputDeviceSelect.value),
         audioSampleRate: parseInt(audioSampleRateSelect.value),

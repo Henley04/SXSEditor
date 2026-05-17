@@ -26,6 +26,52 @@
         </div>
 
         <div class="settings-section">
+            <h3 class="section-title">预览推理参数</h3>
+            <p class="section-desc">编辑器中播放预览时使用的推理参数，可适当降低质量以换取更快的响应速度。</p>
+
+            <div class="setting-group">
+                <label for="previewDiffSteps">扩散步数 <span id="previewDiffStepsValue" class="volume-display">16</span></label>
+                <input type="range" id="previewDiffSteps" min="4" max="64" value="16" step="4">
+                <p class="hint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
+            </div>
+
+            <div class="setting-group">
+                <label for="previewCfgStrength">CFG 引导强度 <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
+                <input type="range" id="previewCfgStrength" min="0" max="10" value="3.0" step="0.5">
+                <p class="hint">无分类器引导 (Classifier-Free Guidance) 强度。值越大，生成结果越贴合条件（音高/歌词），但可能过度强化导致伪影。设为 0 可跳过无条件预测，推理速度约提升一倍。推荐范围 1.0~5.0。</p>
+            </div>
+
+            <div class="setting-group">
+                <label for="previewCfgRescale">CFG Rescale 系数 <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
+                <input type="range" id="previewCfgRescale" min="0" max="1" value="0.75" step="0.05">
+                <p class="hint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。0 = 完全使用 CFG 增强结果，1 = 完全使用原始预测。推荐 0.5~0.9。</p>
+            </div>
+        </div>
+
+        <div class="settings-section">
+            <h3 class="section-title">导出推理参数</h3>
+            <p class="section-desc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。</p>
+
+            <div class="setting-group">
+                <label for="exportDiffSteps">扩散步数 <span id="exportDiffStepsValue" class="volume-display">32</span></label>
+                <input type="range" id="exportDiffSteps" min="4" max="64" value="32" step="4">
+                <p class="hint">导出时的扩散步数。更多步数 = 更高质量。推荐导出使用 32 步，如追求极致质量可尝试 48~64 步。</p>
+            </div>
+
+            <div class="setting-group">
+                <label for="exportCfgStrength">CFG 引导强度 <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
+                <input type="range" id="exportCfgStrength" min="0" max="10" value="3.0" step="0.5">
+                <p class="hint">导出时的 CFG 强度。与预览参数说明相同，导出时建议保持较高值以确保音质。</p>
+            </div>
+
+            <div class="setting-group">
+                <label for="exportCfgRescale">CFG Rescale 系数 <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
+                <input type="range" id="exportCfgRescale" min="0" max="1" value="0.75" step="0.05">
+                <p class="hint">导出时的 CFG Rescale 系数。与预览参数说明相同。</p>
+            </div>
+        </div>
+
+        <div class="settings-section">
             <h3 class="section-title">音频输出</h3>
 
             <div class="setting-group">

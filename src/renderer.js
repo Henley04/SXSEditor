@@ -624,13 +624,17 @@ function computePitchCurveF0(singerFragments, allNotes, bpm) {
 
     for (const frag of pitchCurveFrags) {
       const pc = frag.pitchCurve;
-      const localBeat = frameBeat - frag.startTime;
+      const fragStartBeat = frag.startTime || 0;
+      const fragEndBeat = fragStartBeat + (frag.duration || 0);
+      if (frameBeat < fragStartBeat || (frag.duration && frameBeat >= fragEndBeat)) continue;
+
+      const localBeat = frameBeat - fragStartBeat;
 
       if (pitch === null && pc.anchorPoints.length > 0) {
         const sorted = sortedAnchorsCache.get(frag.id);
-        if (localBeat <= sorted[0].time) pitch = sorted[0].pitch;
-        else if (localBeat >= sorted[sorted.length - 1].time) pitch = sorted[sorted.length - 1].pitch;
-        else {
+        if (localBeat < sorted[0].time || localBeat > sorted[sorted.length - 1].time) {
+          // outside anchor range, skip
+        } else {
           for (let j = 0; j < sorted.length - 1; j++) {
             if (localBeat >= sorted[j].time && localBeat <= sorted[j + 1].time) {
               const t = (sorted[j + 1].time - sorted[j].time) > 0
@@ -824,6 +828,8 @@ async function playAll() {
 
     await ensurePipelineInitialized();
 
+    const inferenceOpts = getPreviewInferenceOptions();
+
     const totalSeconds = ((globalLastEnd - globalFirstStart) / project.bpm) * 60;
     const totalSingers = singerDataMap.size;
     let completedSingers = 0;
@@ -838,6 +844,9 @@ async function playAll() {
           f0Envelope: null,
           pitchCurveF0: data.pitchCurveF0,
           refAudioWavBuffer: data.refAudioWavBuffer,
+          nSteps: inferenceOpts.nSteps,
+          cfg: inferenceOpts.cfg,
+          cfgRescale: inferenceOpts.cfgRescale,
         },
       });
 
@@ -910,6 +919,22 @@ async function loadAudioSettings() {
   } catch (e) {
     audioSettings = {};
   }
+}
+
+function getPreviewInferenceOptions() {
+  return {
+    nSteps: audioSettings?.previewDiffSteps ?? 16,
+    cfg: audioSettings?.previewCfgStrength ?? 3.0,
+    cfgRescale: audioSettings?.previewCfgRescale ?? 0.75,
+  };
+}
+
+function getExportInferenceOptions() {
+  return {
+    nSteps: audioSettings?.exportDiffSteps ?? 32,
+    cfg: audioSettings?.exportCfgStrength ?? 3.0,
+    cfgRescale: audioSettings?.exportCfgRescale ?? 0.75,
+  };
 }
 
 function applyAudioSettings() {
@@ -1399,6 +1424,8 @@ btnExport.addEventListener('click', async () => {
 
     await ensurePipelineInitialized();
 
+    const exportInferenceOpts = getExportInferenceOptions();
+
     let audioResults = [];
     let maxDuration = 0;
 
@@ -1423,7 +1450,13 @@ btnExport.addEventListener('click', async () => {
       const audioData = await window.electronAPI.synthesizeSVS({
         notes,
         bpm: project.bpm,
-        options: { refAudioWavBuffer, pitchCurveF0: finalPitchCurveF0 },
+        options: {
+          refAudioWavBuffer,
+          pitchCurveF0: finalPitchCurveF0,
+          nSteps: exportInferenceOpts.nSteps,
+          cfg: exportInferenceOpts.cfg,
+          cfgRescale: exportInferenceOpts.cfgRescale,
+        },
       });
 
       const firstNoteStart = notes[0].start;

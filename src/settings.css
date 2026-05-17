@@ -90,6 +90,15 @@ h2::before {
     border-radius: 2px;
 }
 
+.section-desc {
+    font-size: 11px;
+    color: #7f849c;
+    margin: -8px 0 14px 0;
+    line-height: 1.5;
+    padding-left: 11px;
+    border-left: 2px solid rgba(127, 132, 156, 0.3);
+}
+
 .setting-group {
     margin-bottom: 14px;
 }

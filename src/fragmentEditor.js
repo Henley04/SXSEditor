@@ -61,6 +61,22 @@ let fragmentUseExclusiveMode = false;
 let fragmentExclusiveRaf = null;
 let fragmentAudioSettings = null;
 
+function getFragmentPreviewInferenceOptions() {
+  return {
+    nSteps: fragmentAudioSettings?.previewDiffSteps ?? 16,
+    cfg: fragmentAudioSettings?.previewCfgStrength ?? 3.0,
+    cfgRescale: fragmentAudioSettings?.previewCfgRescale ?? 0.75,
+  };
+}
+
+function getFragmentExportInferenceOptions() {
+  return {
+    nSteps: fragmentAudioSettings?.exportDiffSteps ?? 32,
+    cfg: fragmentAudioSettings?.exportCfgStrength ?? 3.0,
+    cfgRescale: fragmentAudioSettings?.exportCfgRescale ?? 0.75,
+  };
+}
+
 let wavFileBuffer = null;
 
 function midiToNoteName(midi) {
@@ -157,6 +173,13 @@ let pitchDragAnchorStarts = new Map();
 let isBrushDrawing = false;
 let currentBrushStroke = null;
 let brushSmoothing = 30;
+let sortedAnchorPointsCache = null;
+let sortedAnchorPointsCacheVersion = -1;
+let pitchCurveVersion = 0;
+
+function invalidatePitchCurveCache() {
+  pitchCurveVersion++;
+}
 
 const history = new HistoryManager();
 let dragOperation = null;
@@ -185,6 +208,7 @@ function applyPitchCurveSnapshot(snapshot) {
   pitchCurve.enabled = snapshot.enabled;
   pitchCurve.anchorPoints = deepClone(snapshot.anchorPoints);
   pitchCurve.brushSegments = deepClone(snapshot.brushSegments);
+  invalidatePitchCurveCache();
 }
 
 function cloneEnvelopeState(envKey) {
@@ -492,9 +516,10 @@ function generateAutoPitchPoints() {
   if (notes.length === 0) return [];
   const sortedNotes = [...notes].sort((a, b) => a.start - b.start);
   const points = [];
-  for (const note of sortedNotes) {
+  for (let i = 0; i < sortedNotes.length; i++) {
+    const note = sortedNotes[i];
     points.push({ time: note.start, pitch: note.pitch });
-    points.push({ time: note.start + note.duration, pitch: note.pitch });
+    points.push({ time: note.start + note.duration, pitch: note.pitch, breakAfter: true });
   }
   return points;
 }
@@ -503,24 +528,34 @@ function isPitchCurveCustomized() {
   return pitchCurve.anchorPoints.length > 0 || pitchCurve.brushSegments.length > 0;
 }
 
+function getSortedAnchorPoints() {
+  if (sortedAnchorPointsCacheVersion !== pitchCurveVersion) {
+    sortedAnchorPointsCache = [...pitchCurve.anchorPoints].sort((a, b) => a.time - b.time);
+    sortedAnchorPointsCacheVersion = pitchCurveVersion;
+  }
+  return sortedAnchorPointsCache;
+}
+
 function getPitchAtTime(time) {
   if (!pitchCurve.enabled) return null;
 
   if (pitchCurve.anchorPoints.length > 0) {
-    const sorted = [...pitchCurve.anchorPoints].sort((a, b) => a.time - b.time);
-    if (time <= sorted[0].time) return sorted[0].pitch;
-    if (time >= sorted[sorted.length - 1].time) return sorted[sorted.length - 1].pitch;
-    for (let i = 0; i < sorted.length - 1; i++) {
-      if (time >= sorted[i].time && time <= sorted[i + 1].time) {
-        const t = (sorted[i + 1].time - sorted[i].time) > 0
-          ? (time - sorted[i].time) / (sorted[i + 1].time - sorted[i].time)
-          : 0;
-        const smoothness = (sorted[i].smoothness || 0) / 100;
-        const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
-        return sorted[i].pitch + smoothT * (sorted[i + 1].pitch - sorted[i].pitch);
+    const sorted = getSortedAnchorPoints();
+    if (time < sorted[0].time || time > sorted[sorted.length - 1].time) {
+      // outside anchor range, fall through to brush/auto
+    } else {
+      for (let i = 0; i < sorted.length - 1; i++) {
+        if (time >= sorted[i].time && time <= sorted[i + 1].time) {
+          const t = (sorted[i + 1].time - sorted[i].time) > 0
+            ? (time - sorted[i].time) / (sorted[i + 1].time - sorted[i].time)
+            : 0;
+          const smoothness = (sorted[i].smoothness || 0) / 100;
+          const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
+          return sorted[i].pitch + smoothT * (sorted[i + 1].pitch - sorted[i].pitch);
+        }
       }
+      return sorted[sorted.length - 1].pitch;
     }
-    return sorted[sorted.length - 1].pitch;
   }
 
   for (const seg of pitchCurve.brushSegments) {
@@ -539,17 +574,16 @@ function getPitchAtTime(time) {
 
   const autoPoints = generateAutoPitchPoints();
   if (autoPoints.length === 0) return null;
-  if (time <= autoPoints[0].time) return autoPoints[0].pitch;
-  if (time >= autoPoints[autoPoints.length - 1].time) return autoPoints[autoPoints.length - 1].pitch;
   for (let i = 0; i < autoPoints.length - 1; i++) {
     if (time >= autoPoints[i].time && time <= autoPoints[i + 1].time) {
+      if (autoPoints[i].breakAfter) continue;
       const t = (autoPoints[i + 1].time - autoPoints[i].time) > 0
         ? (time - autoPoints[i].time) / (autoPoints[i + 1].time - autoPoints[i].time)
         : 0;
       return autoPoints[i].pitch + t * (autoPoints[i + 1].pitch - autoPoints[i].pitch);
     }
   }
-  return autoPoints[autoPoints.length - 1].pitch;
+  return null;
 }
 
 function findAnchorPointAt(x, y) {
@@ -630,6 +664,7 @@ function convertBrushStrokeToAnchorPoints(stroke) {
   }
 
   pitchCurve.anchorPoints.sort((a, b) => a.time - b.time);
+  invalidatePitchCurveCache();
 }
 
 function convertExistingBrushSegmentsToAnchorPoints() {
@@ -647,6 +682,7 @@ function convertExistingBrushSegmentsToAnchorPoints() {
   }
   pitchCurve.brushSegments = [];
   pitchCurve.anchorPoints.sort((a, b) => a.time - b.time);
+  invalidatePitchCurveCache();
 }
 
 function findNoteAtTime(time) {
@@ -699,25 +735,33 @@ function renderPitchCurve() {
   const endBeat = xToTime(w);
 
   const hasCustom = isPitchCurveCustomized();
+  const autoPoints = generateAutoPitchPoints();
 
-  if (!hasCustom) {
-    const autoPoints = generateAutoPitchPoints();
+  function drawAutoPoints(style, lineW, dash) {
     if (autoPoints.length === 0) return;
-
-    ctx.strokeStyle = 'rgba(46, 204, 113, 0.6)';
-    ctx.lineWidth = 2;
-    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = style;
+    ctx.lineWidth = lineW;
+    ctx.setLineDash(dash);
     ctx.beginPath();
-    let first = true;
-    for (const pt of autoPoints) {
-      if (pt.time < startBeat - 1 || pt.time > endBeat + 1) continue;
+    let drawing = false;
+    for (let i = 0; i < autoPoints.length; i++) {
+      const pt = autoPoints[i];
+      if (pt.time < startBeat - 1 || pt.time > endBeat + 1) {
+        if (drawing && pt.breakAfter) drawing = false;
+        continue;
+      }
       const px = timeToX(pt.time);
       const py = pitchToY(pt.pitch);
-      if (first) { ctx.moveTo(px, py); first = false; }
+      if (!drawing) { ctx.moveTo(px, py); drawing = true; }
       else ctx.lineTo(px, py);
+      if (pt.breakAfter) drawing = false;
     }
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  if (!hasCustom) {
+    drawAutoPoints('rgba(46, 204, 113, 0.6)', 2, [6, 4]);
 
     for (const note of notes) {
       const startX = timeToX(note.start);
@@ -737,26 +781,10 @@ function renderPitchCurve() {
     return;
   }
 
-  const autoPoints = generateAutoPitchPoints();
-  if (autoPoints.length > 0) {
-    ctx.strokeStyle = 'rgba(46, 204, 113, 0.25)';
-    ctx.lineWidth = 1.5;
-    ctx.setLineDash([4, 3]);
-    ctx.beginPath();
-    let first = true;
-    for (const pt of autoPoints) {
-      if (pt.time < startBeat - 1 || pt.time > endBeat + 1) continue;
-      const px = timeToX(pt.time);
-      const py = pitchToY(pt.pitch);
-      if (first) { ctx.moveTo(px, py); first = false; }
-      else ctx.lineTo(px, py);
-    }
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
+  drawAutoPoints('rgba(46, 204, 113, 0.25)', 1.5, [4, 3]);
 
   if (pitchCurve.anchorPoints.length > 0) {
-    const sorted = [...pitchCurve.anchorPoints].sort((a, b) => a.time - b.time);
+    const sorted = getSortedAnchorPoints();
     const maxTime = Math.max(endBeat, sorted[sorted.length - 1].time) + 2;
     const steps = Math.max(200, Math.floor((maxTime - startBeat) / PITCH_CURVE_SAMPLE_INTERVAL));
 
@@ -1072,6 +1100,7 @@ document.getElementById('btn-pitch-reset').addEventListener('click', () => {
   const oldSnapshot = clonePitchCurveState();
   pitchCurve.anchorPoints = [];
   pitchCurve.brushSegments = [];
+  invalidatePitchCurveCache();
   const newSnapshot = clonePitchCurveState();
   history.push({
     undo() { applyPitchCurveSnapshot(oldSnapshot); },
@@ -1303,6 +1332,11 @@ function buildPitchCurveF0Data() {
   for (let i = 0; i < totalFrames; i++) {
     const frameTimeSec = (i * hopSize) / SAMPLE_RATE;
     const frameBeat = (frameTimeSec / 60) * bpm;
+    const inNote = notes.some(n => frameBeat >= n.start && frameBeat < n.start + n.duration);
+    if (!inNote) {
+      f0Array[i] = 0;
+      continue;
+    }
     const pitch = getPitchAtTime(frameBeat);
     if (pitch !== null && pitch > 0) {
       f0Array[i] = 440 * Math.pow(2, (pitch - 69) / 12);
@@ -1325,6 +1359,8 @@ async function playFragment() {
     const pitchCurveF0 = buildPitchCurveF0Data();
     const pitchCurveF0Serializable = pitchCurveF0 ? Array.from(pitchCurveF0) : null;
 
+    const previewOpts = getFragmentPreviewInferenceOptions();
+
     fragmentAudioData = await window.electronAPI.synthesizeFragmentSVS({
       notes: notes,
       bpm: currentProject ? currentProject.bpm : 120,
@@ -1333,6 +1369,9 @@ async function playFragment() {
         pitchCurveF0: pitchCurveF0Serializable,
         refAudioWavBuffer: wavFileBuffer || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
+        nSteps: previewOpts.nSteps,
+        cfg: previewOpts.cfg,
+        cfgRescale: previewOpts.cfgRescale,
       },
     });
 
@@ -1518,6 +1557,8 @@ async function exportFragment() {
     const pitchCurveF0 = buildPitchCurveF0Data();
     const pitchCurveF0Serializable = pitchCurveF0 ? Array.from(pitchCurveF0) : null;
 
+    const exportOpts = getFragmentExportInferenceOptions();
+
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes: notes,
       bpm: currentProject ? currentProject.bpm : 120,
@@ -1526,6 +1567,9 @@ async function exportFragment() {
         pitchCurveF0: pitchCurveF0Serializable,
         refAudioWavBuffer: wavFileBuffer || null,
         autoShift: document.getElementById('autoShiftCheck').checked,
+        nSteps: exportOpts.nSteps,
+        cfg: exportOpts.cfg,
+        cfgRescale: exportOpts.cfgRescale,
       },
     });
     const bpm = currentProject ? currentProject.bpm : 120;
