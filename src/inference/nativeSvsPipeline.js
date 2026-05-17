@@ -1571,7 +1571,7 @@ class OnnxSVSPipeline {
         return segments;
     }
 
-    async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, onProgress, progressStart, progressRange) {
+    async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
         const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
         const targetMask = new Float32Array(totalFrames).fill(1);
@@ -1684,7 +1684,7 @@ class OnnxSVSPipeline {
 
         const xt = this.randomNoise(totalFrames, MEL_DIM);
 
-        await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, onProgress, progressStart, progressRange);
+        await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange);
 
         const audioData = await this._runVocoderChunked(xt.data, totalFrames);
 
@@ -1814,7 +1814,7 @@ class OnnxSVSPipeline {
             const combinedCond = await this._runEncoder(sequences, sequences.tokenCount, totalFrames, ptFrameCount);
             const xt = this.randomNoise(totalFrames, MEL_DIM);
 
-            await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, onProgress, 40, 50);
+            await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50);
 
             onProgress(90);
             console.log(`[OnnxSVSPipeline] 扩散完成，开始声码器重建 (${totalFrames}帧)...`);
