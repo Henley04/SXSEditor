@@ -90,6 +90,14 @@ module.exports = {
                 js: './src/preload.js',
               },
             },
+            {
+              html: './src/modelDownload.html',
+              js: './src/modelDownload.js',
+              name: 'model_download_window',
+              preload: {
+                js: './src/preload.js',
+              },
+            },
           ],
         },
       },

@@ -16,6 +16,7 @@ const { RmvpePitchDetector, RMVPE_SAMPLE_RATE } = require('./inference/rmvpePitc
 const { BasicPitchDetector } = require('./inference/basicPitch');
 const { parseMidiFile } = require('./inference/midiParser');
 const { AudioOutputManager } = require('./audio/audioOutputManager');
+const { checkMissingFiles, downloadMissingFiles } = require('./modelManager');
 
 let svsPipeline = null;
 let rmvpeDetector = null;
@@ -208,6 +209,127 @@ function openSettingsWindow() {
   });
 }
 
+let modelDownloadWindow = null;
+let downloadAbortController = null;
+
+function createModelDownloadWindow(missingFiles) {
+  if (modelDownloadWindow) {
+    modelDownloadWindow.focus();
+    return;
+  }
+
+  modelDownloadWindow = new BrowserWindow({
+    width: 520,
+    height: 500,
+    title: '模型文件下载',
+    icon: path.join(__dirname, 'SXS.png'),
+    resizable: false,
+    minimizable: true,
+    maximizable: false,
+    closable: true,
+    webPreferences: {
+      preload: MODEL_DOWNLOAD_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+
+  modelDownloadWindow.loadURL(MODEL_DOWNLOAD_WINDOW_WEBPACK_ENTRY);
+  modelDownloadWindow.setMenu(null);
+
+  modelDownloadWindow.webContents.once('did-finish-load', () => {
+    modelDownloadWindow.webContents.send('model-download:missing-files', missingFiles);
+  });
+
+  modelDownloadWindow.on('closed', () => {
+    if (downloadAbortController) {
+      downloadAbortController.abort();
+      downloadAbortController = null;
+    }
+    modelDownloadWindow = null;
+  });
+}
+
+async function startModelDownload(modelDir, missingFiles) {
+  downloadAbortController = new AbortController();
+  const abortSignal = downloadAbortController.signal;
+
+  try {
+    await downloadMissingFiles(modelDir, missingFiles, {
+      abortSignal,
+      onProgress: (data) => {
+        if (modelDownloadWindow && !modelDownloadWindow.isDestroyed()) {
+          modelDownloadWindow.webContents.send('model-download:progress', data);
+        }
+      },
+      onFileStart: (filePath, fileIndex, totalFiles) => {
+        if (modelDownloadWindow && !modelDownloadWindow.isDestroyed()) {
+          modelDownloadWindow.webContents.send('model-download:file-start', { filePath, fileIndex, totalFiles });
+        }
+      },
+      onFileComplete: (filePath, fileIndex, totalFiles) => {
+        if (modelDownloadWindow && !modelDownloadWindow.isDestroyed()) {
+          modelDownloadWindow.webContents.send('model-download:file-complete', { filePath, fileIndex, totalFiles });
+        }
+      },
+    });
+
+    if (modelDownloadWindow && !modelDownloadWindow.isDestroyed()) {
+      modelDownloadWindow.webContents.send('model-download:complete');
+    }
+    console.log('[Main] 所有模型文件下载完成');
+  } catch (err) {
+    if (err.message === 'Download cancelled') {
+      console.log('[Main] 模型下载已取消');
+    } else {
+      console.error('[Main] 模型下载失败:', err);
+      if (modelDownloadWindow && !modelDownloadWindow.isDestroyed()) {
+        modelDownloadWindow.webContents.send('model-download:error', { message: err.message });
+      }
+    }
+  } finally {
+    downloadAbortController = null;
+  }
+}
+
+async function checkAndDownloadModels() {
+  const modelDir = getModelDir();
+  console.log('[Main] 检查模型文件，目录:', modelDir);
+  const { missing, existing } = checkMissingFiles(modelDir);
+
+  if (missing.length === 0) {
+    console.log('[Main] 所有模型文件已就绪');
+    return true;
+  }
+
+  console.log(`[Main] 缺少 ${missing.length} 个模型文件:`, missing.map(f => f.filePath));
+  createModelDownloadWindow(missing);
+  return false;
+}
+
+ipcMain.handle('model-download:start', async () => {
+  const modelDir = getModelDir();
+  const { missing } = checkMissingFiles(modelDir);
+  if (missing.length === 0) return { success: true };
+  await startModelDownload(modelDir, missing);
+  return { success: true };
+});
+
+ipcMain.handle('model-download:cancel', async () => {
+  if (downloadAbortController) {
+    downloadAbortController.abort();
+    downloadAbortController = null;
+  }
+  return { success: true };
+});
+
+ipcMain.handle('model-download:check', async () => {
+  const modelDir = getModelDir();
+  const { missing, existing } = checkMissingFiles(modelDir);
+  return { missing, existing };
+});
+
 app.on('second-instance', () => {
   if (mainWindow) {
     if (mainWindow.isMinimized()) {
@@ -217,8 +339,9 @@ app.on('second-instance', () => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createWindow();
+  await checkAndDownloadModels();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -320,11 +443,17 @@ ipcMain.handle('file:readFileBuffer', async (event, filePath) => {
 });
 
 function getModelDir() {
-  let appPath = app.getAppPath();
-  if (appPath.endsWith('.asar')) {
-    appPath = appPath + '.unpacked';
+  if (!app.isPackaged) {
+    let appPath = app.getAppPath();
+    if (appPath.endsWith('.asar')) {
+      appPath = appPath + '.unpacked';
+    }
+    return path.join(appPath, 'onnx_models') + path.sep;
   }
-  return path.join(appPath, 'onnx_models') + path.sep;
+  const userDataDir = app.getPath('userData');
+  const modelDir = path.join(userDataDir, 'onnx_models');
+  fs.mkdirSync(modelDir, { recursive: true });
+  return modelDir + path.sep;
 }
 
 ipcMain.handle('settings:getDMLDevices', async () => {

@@ -73,4 +73,37 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('audio:ended', handler);
     return () => ipcRenderer.removeListener('audio:ended', handler);
   },
+  onModelDownloadMissingFiles: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('model-download:missing-files', handler);
+    return () => ipcRenderer.removeListener('model-download:missing-files', handler);
+  },
+  onModelDownloadProgress: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('model-download:progress', handler);
+    return () => ipcRenderer.removeListener('model-download:progress', handler);
+  },
+  onModelDownloadFileStart: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('model-download:file-start', handler);
+    return () => ipcRenderer.removeListener('model-download:file-start', handler);
+  },
+  onModelDownloadFileComplete: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('model-download:file-complete', handler);
+    return () => ipcRenderer.removeListener('model-download:file-complete', handler);
+  },
+  onModelDownloadComplete: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('model-download:complete', handler);
+    return () => ipcRenderer.removeListener('model-download:complete', handler);
+  },
+  onModelDownloadError: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('model-download:error', handler);
+    return () => ipcRenderer.removeListener('model-download:error', handler);
+  },
+  modelDownloadStart: () => ipcRenderer.invoke('model-download:start'),
+  modelDownloadCancel: () => ipcRenderer.invoke('model-download:cancel'),
+  modelDownloadCheck: () => ipcRenderer.invoke('model-download:check'),
 });
