@@ -75,6 +75,13 @@ function initI18n() {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved && locales[saved]) {
         currentLocale = saved;
+        return;
+    }
+    const lang = navigator.language;
+    if (lang.startsWith('zh')) {
+        currentLocale = 'zh-CN';
+    } else {
+        currentLocale = 'en';
     }
 }
 

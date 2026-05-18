@@ -740,6 +740,10 @@ ipcMain.handle('settings:saveSettings', async (event, settings) => {
   return { success: true };
 });
 
+ipcMain.handle('get-locale', async () => {
+  return mainLocale;
+});
+
 ipcMain.handle('save-locale', async (event, locale) => {
   try {
     const configPath = path.join(app.getPath('userData'), 'sxseditor-locale.json');
