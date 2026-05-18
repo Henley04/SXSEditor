@@ -200,3 +200,6 @@ document.getElementById('changeDirBtn').addEventListener('click', async () => {
     document.getElementById('closeBtn').style.display = 'inline-block';
   }
 });
+
+initI18n();
+applyLocale();
