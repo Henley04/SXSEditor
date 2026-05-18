@@ -1,20 +1,23 @@
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
+const skipOnnxModels = process.env.SKIP_ONNX_MODELS === '1';
+
 module.exports = {
 
   packagerConfig: {
     asar: {
       unpack: '**/*.{node,dll}',
-      unpackDir: 'onnx_models'
+      ...(skipOnnxModels ? {} : { unpackDir: 'onnx_models' })
     },
     prune: true,
     ignore: (file) => {
       if (!file) return false;
-      // 保留 .webpack、node_modules、onnx_models 目录
-      const keep = file.startsWith('/.webpack') || 
-                   file.startsWith('/node_modules') ||
-                   file.startsWith('/onnx_models');
+      const keepList = ['/.webpack', '/node_modules'];
+      if (!skipOnnxModels) {
+        keepList.push('/onnx_models');
+      }
+      const keep = keepList.some(prefix => file.startsWith(prefix));
       return !keep;
     },
     icon: './assets/SXS',

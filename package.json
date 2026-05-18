@@ -8,6 +8,7 @@
   "scripts": {
     "start": "electron-forge start",
     "package": "electron-forge package",
+    "package:lite": "cross-env SKIP_ONNX_MODELS=1 electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "echo \"No linting configured\"",
@@ -15,7 +16,13 @@
     "test:coverage": "nyc --reporter=text --reporter=html npm test",
     "test:watch": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --watch"
   },
-  "keywords": ["electron", "svs", "ai", "music", "singing"],
+  "keywords": [
+    "electron",
+    "svs",
+    "ai",
+    "music",
+    "singing"
+  ],
   "author": {
     "name": "SXSEditor Dev",
     "email": "dev@sxseditor.local"
@@ -40,16 +47,17 @@
     "babel-loader": "^10.1.1",
     "chai": "^6.2.2",
     "copy-webpack-plugin": "^14.0.0",
+    "cross-env": "^10.1.0",
     "css-loader": "^6.11.0",
+    "electron": "^41.3.0",
     "electron-rebuild": "^3.2.9",
+    "electron-squirrel-startup": "^1.0.1",
     "jsdom": "^29.0.2",
     "mocha": "^11.7.5",
     "node-loader": "^2.1.0",
     "nyc": "^18.0.0",
     "sinon": "^21.1.2",
     "style-loader": "^3.3.4",
-    "electron": "^41.3.0",
-    "electron-squirrel-startup": "^1.0.1",
     "webpack-cli": "^7.0.2"
   },
   "dependencies": {
