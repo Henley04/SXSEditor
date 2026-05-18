@@ -65,7 +65,20 @@ export default {
     relocateSingerFile: '重新选定歌手文件',
     fragmentEditorNotImplemented: '分片编辑窗口功能待实现',
     singerCreatorNotImplemented: '歌手创建页面待实现',
-    synthesizingShort: '合成中'
+    synthesizingShort: '合成中',
+    audioToMidi: '🎵 音频转MIDI',
+    audioToMidiTitle: '音频转MIDI',
+    audioToMidiExtractPitch: '同步提取音高（RMVPE）',
+    audioToMidiExtractPitchDesc: '使用RMVPE同步提取F0基频曲线，自动转换为可编辑的音高曲线',
+    audioToMidiOnly: '仅提取MIDI',
+    audioToMidiOnlyDesc: '仅使用Basic Pitch提取MIDI音符，不提取音高曲线',
+    audioToMidiSelectFile: '选择音频文件',
+    audioToMidiExtracting: '正在提取MIDI音符（Basic Pitch）...',
+    audioToMidiExtractingF0: '正在提取音高曲线（RMVPE）...',
+    audioToMidiComplete: '音频转MIDI完成！已创建新轨道，请选择歌手文件',
+    audioToMidiFailed: '音频转MIDI失败',
+    audioToMidiNoFile: '未选择音频文件',
+    audioToMidiDecodeFailed: '音频文件解码失败'
   },
   fragment: {
     title: '分片编辑',
