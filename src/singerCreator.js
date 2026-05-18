@@ -1,6 +1,9 @@
 import './singerCreator.css';
 import { t, initI18n, applyLocale } from './i18n/index.js';
 
+initI18n();
+applyLocale();
+
 let wavFileBuffer = null;
 let wavFileName = '';
 let wavAudioBuffer = null;
@@ -18,6 +21,8 @@ let previewAudioContext = null;
 let previewPlayStartContextTime = 0;
 let previewPlayStartOffset = 0;
 let previewRaf = null;
+
+let preprocessDataSavedCleanup = null;
 
 const singerNameInput = document.getElementById('singer-name-input');
 const singerColorInput = document.getElementById('singer-color-input');
@@ -81,14 +86,20 @@ btnClearAvatar.addEventListener('click', () => {
   avatarImageName = '';
   avatarPreview.style.display = 'none';
   avatarFileInput.value = '';
+  if (avatarMode === 'image') {
+    singerColorInput.disabled = false;
+  }
   updatePreview();
 });
 
 document.querySelectorAll('input[name="avatar-type"]').forEach(radio => {
   radio.addEventListener('change', () => {
     avatarMode = radio.value;
-    const colorInput = singerColorInput;
-    colorInput.disabled = (avatarMode === 'image');
+    if (avatarMode === 'image' && avatarImageData) {
+      singerColorInput.disabled = true;
+    } else {
+      singerColorInput.disabled = false;
+    }
     updatePreview();
   });
 });
@@ -102,6 +113,7 @@ btnClearWav.addEventListener('click', () => {
   wavFileName = '';
   wavDuration = 0;
   isPreprocessed = false;
+  preprocessResult = null;
   wavInfo.style.display = 'none';
   preprocessActions.style.display = 'none';
   wavUploadArea.style.display = 'block';
@@ -123,7 +135,7 @@ btnStartPreprocess.addEventListener('click', () => {
     wavBuffer: wavFileBuffer,
     wavFileName: wavFileName,
     duration: wavDuration,
-    singerName: singerNameInput.value.trim() || '未命名歌手',
+    singerName: singerNameInput.value.trim() || t('singerCreator.unnamedSinger'),
     singerColor: singerColorInput.value,
     avatarImageData: avatarImageData,
     avatarImageName: avatarImageName,
@@ -152,21 +164,15 @@ waveformCanvas.addEventListener('click', (e) => {
   drawWaveform(clampedTime);
 
   if (isPlayingPreview) {
-    if (previewAudioSource) {
-      try {
-        previewAudioSource.onended = null;
-        previewAudioSource.stop();
-      } catch (e) {}
-      previewAudioSource = null;
-    }
-    isPlayingPreview = false;
-    stopPreviewRaf();
+    stopPreviewPlayback();
+    previewPlayStartOffset = clampedTime;
     playPreviewWav();
   }
 });
 
 btnCancel.addEventListener('click', () => {
   stopPreviewPlayback();
+  cleanupListeners();
   window.close();
 });
 
@@ -180,7 +186,7 @@ btnCreate.addEventListener('click', async () => {
     return;
   }
 
-  const singerName = singerNameInput.value.trim() || '未命名歌手';
+  const singerName = singerNameInput.value.trim() || t('singerCreator.unnamedSinger');
   const singerColor = singerColorInput.value;
 
   const useAvatarImage = (avatarMode === 'image' && avatarImageData);
@@ -202,12 +208,13 @@ btnCreate.addEventListener('click', async () => {
 
     if (result && result.success) {
       alert(t('singerCreator.createSuccess'));
+      cleanupListeners();
       window.close();
     } else {
       alert(t('singerCreator.createFailed') + ': ' + (result && result.error ? result.error : ''));
     }
   } catch (err) {
-    console.error('保存歌手文件失败:', err);
+    console.error(t('singerCreator.saveFailed'), err);
     alert(t('singerCreator.createFailed') + ': ' + (err && err.message ? err.message : ''));
   }
 });
@@ -225,6 +232,9 @@ function handleAvatarFile(file) {
     avatarImageData = e.target.result;
     avatarPreviewImg.src = avatarImageData;
     avatarPreview.style.display = 'flex';
+    if (avatarMode === 'image') {
+      singerColorInput.disabled = true;
+    }
     updatePreview();
   };
   reader.onerror = () => {
@@ -252,21 +262,30 @@ async function handleWavFile(file) {
 
     if (wavDuration > 30) {
       alert(t('singerCreator.wavTooLong'));
+      wavFileBuffer = null;
+      wavAudioBuffer = null;
+      wavFileName = '';
+      wavDuration = 0;
+      return;
     }
 
     wavInfo.style.display = 'block';
     preprocessActions.style.display = 'flex';
     wavUploadArea.style.display = 'none';
     wavFilename.textContent = wavFileName;
-    wavDurationEl.textContent = wavDuration.toFixed(2) + '秒';
+    wavDurationEl.textContent = wavDuration.toFixed(2) + t('singerCreator.seconds');
 
     requestAnimationFrame(() => {
       drawWaveform(0);
     });
     updatePreview();
   } catch (err) {
-    console.error('WAV解析失败:', err);
+    console.error(t('singerCreator.wavParseError'), err);
     alert(t('singerCreator.wavParseFailed') + ': ' + err.message);
+    wavFileBuffer = null;
+    wavAudioBuffer = null;
+    wavFileName = '';
+    wavDuration = 0;
   }
 }
 
@@ -377,7 +396,7 @@ async function playPreviewWav() {
     btnPlayPreview.textContent = t('singerCreator.pausePreview');
     startPreviewPlaybackLoop();
   } catch (err) {
-    console.error('预览播放失败:', err);
+    console.error(t('singerCreator.previewPlayFailed'), err);
   }
 }
 
@@ -439,19 +458,31 @@ function stopPreviewPlayback() {
   isPlayingPreview = false;
   previewPlayStartOffset = 0;
   btnPlayPreview.textContent = t('singerCreator.preview');
-  drawWaveform(0);
+  if (wavAudioBuffer) {
+    drawWaveform(0);
+  }
 }
 
 function updatePreview() {
-  const name = singerNameInput.value.trim() || '未命名歌手';
+  const name = singerNameInput.value.trim() || t('singerCreator.unnamedSinger');
   previewName.textContent = name;
 
   const useAvatarImage = (avatarMode === 'image' && avatarImageData);
   if (useAvatarImage) {
-    previewAvatar.innerHTML = `<img src="${avatarImageData}" alt="${name}">`;
+    const existingImg = previewAvatar.querySelector('img');
+    if (existingImg) {
+      existingImg.src = avatarImageData;
+      existingImg.alt = name;
+    } else {
+      previewAvatar.textContent = '';
+      const img = document.createElement('img');
+      img.src = avatarImageData;
+      img.alt = name;
+      previewAvatar.appendChild(img);
+    }
     previewAvatar.style.backgroundColor = 'transparent';
   } else {
-    previewAvatar.innerHTML = '';
+    previewAvatar.textContent = '';
     previewAvatar.style.backgroundColor = singerColorInput.value;
     const span = document.createElement('span');
     span.textContent = '🎤';
@@ -460,10 +491,10 @@ function updatePreview() {
 
   const hasWav = !!wavFileBuffer;
 
-  previewWavStatus.textContent = hasWav ? 'WAV ✓' : t('singerCreator.wavStatus');
+  previewWavStatus.textContent = hasWav ? t('singerCreator.wavReady') : t('singerCreator.wavStatus');
   previewWavStatus.className = 'status-badge' + (hasWav ? ' ready' : '');
 
-  previewPreprocessStatus.textContent = isPreprocessed ? '预处理 ✓' : t('singerCreator.preprocessStatus');
+  previewPreprocessStatus.textContent = isPreprocessed ? t('singerCreator.preprocessReady') : t('singerCreator.preprocessStatus');
   previewPreprocessStatus.className = 'status-badge' + (isPreprocessed ? ' ready' : '');
 
   if (hasWav) {
@@ -481,14 +512,18 @@ window.updatePreprocessStatus = (status) => {
 };
 
 if (window.electronAPI && window.electronAPI.onPreprocessDataSaved) {
-  window.electronAPI.onPreprocessDataSaved((result) => {
+  preprocessDataSavedCleanup = window.electronAPI.onPreprocessDataSaved((result) => {
     preprocessResult = result;
     isPreprocessed = true;
     updatePreview();
   });
 }
 
-console.log('歌手创建页面已启动');
+function cleanupListeners() {
+  if (preprocessDataSavedCleanup) {
+    preprocessDataSavedCleanup();
+    preprocessDataSavedCleanup = null;
+  }
+}
 
-initI18n();
-applyLocale();
+console.log(t('singerCreator.pageStarted'));

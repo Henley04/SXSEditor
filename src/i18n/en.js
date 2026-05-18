@@ -162,7 +162,16 @@ export default {
     pleaseSelectWavFormat: 'Please select a WAV format file',
     wavTooLong: 'WAV file duration exceeds 30 seconds, recommended to trim and re-upload',
     wavParseFailed: 'WAV file parse failed',
-    avatarPreview: 'Avatar preview'
+    avatarPreview: 'Avatar preview',
+    unnamedSinger: 'Unnamed Singer',
+    wavReady: 'WAV ✓',
+    preprocessReady: 'Preprocess ✓',
+    seconds: 's',
+    pageStarted: 'Singer creator page started',
+    saveFailed: 'Save singer file failed:',
+    wavParseError: 'WAV parse failed:',
+    previewPlayFailed: 'Preview playback failed',
+    previewPlaceholder: 'Preview will appear here after uploading a WAV file'
   },
   preprocess: {
     title: 'Audio Preprocessing',
