@@ -11,88 +11,88 @@
         <div class="settings-section">
             <h3 class="section-title" data-i18n="settings.inference">推理</h3>
             <div class="setting-group hardware-info">
-                <label>当前运行硬件</label>
+                <label data-i18n="settings.currentHardware">当前运行硬件</label>
                 <div id="currentHardwareInfo" class="info-box">
                     <span id="currentHardwareText">未初始化</span>
                 </div>
             </div>
             <div class="setting-group">
-                <label for="inferenceDevice">推理硬件</label>
+                <label for="inferenceDevice" data-i18n="settings.inferenceHardware">推理硬件</label>
                 <select id="inferenceDevice">
-                    <option value="auto">自动选择</option>
+                    <option value="auto" data-i18n="settings.autoSelect">自动选择</option>
                 </select>
-                <p class="hint">选择用于 DirectML 推理的 GPU 设备。自动模式优先选择独显，若无独显则选择显存最大的 GPU。</p>
+                <p class="hint" data-i18n="settings.inferenceHardwareHint">选择用于 DirectML 推理的 GPU 设备。自动模式优先选择独显，若无独显则选择显存最大的 GPU。</p>
             </div>
         </div>
 
         <div class="settings-section">
-            <h3 class="section-title">预览推理参数</h3>
-            <p class="section-desc">编辑器中播放预览时使用的推理参数，可适当降低质量以换取更快的响应速度。</p>
+            <h3 class="section-title" data-i18n="settings.previewInferenceParams">预览推理参数</h3>
+            <p class="section-desc" data-i18n="settings.previewInferenceParamsDesc">编辑器中播放预览时使用的推理参数，可适当降低质量以换取更快的响应速度。</p>
 
             <div class="setting-group">
-                <label for="previewDiffSteps">扩散步数 <span id="previewDiffStepsValue" class="volume-display">16</span></label>
+                <label for="previewDiffSteps" data-i18n="settings.diffSteps">扩散步数 <span id="previewDiffStepsValue" class="volume-display">16</span></label>
                 <input type="range" id="previewDiffSteps" min="4" max="64" value="16" step="4">
-                <p class="hint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
+                <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
             </div>
 
             <div class="setting-group">
-                <label for="previewCfgStrength">CFG 引导强度 <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
+                <label for="previewCfgStrength" data-i18n="settings.cfgStrength">CFG 引导强度 <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
                 <input type="range" id="previewCfgStrength" min="0" max="10" value="3.0" step="0.5">
-                <p class="hint">无分类器引导 (Classifier-Free Guidance) 强度。值越大，生成结果越贴合条件（音高/歌词），但可能过度强化导致伪影。设为 0 可跳过无条件预测，推理速度约提升一倍。推荐范围 1.0~5.0。</p>
+                <p class="hint" data-i18n="settings.cfgStrengthHint">无分类器引导 (Classifier-Free Guidance) 强度。值越大，生成结果越贴合条件（音高/歌词），但可能过度强化导致伪影。设为 0 可跳过无条件预测，推理速度约提升一倍。推荐范围 1.0~5.0。</p>
             </div>
 
             <div class="setting-group">
-                <label for="previewCfgRescale">CFG Rescale 系数 <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
+                <label for="previewCfgRescale" data-i18n="settings.cfgRescale">CFG Rescale 系数 <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
                 <input type="range" id="previewCfgRescale" min="0" max="1" value="0.75" step="0.05">
-                <p class="hint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。0 = 完全使用 CFG 增强结果，1 = 完全使用原始预测。推荐 0.5~0.9。</p>
+                <p class="hint" data-i18n="settings.cfgRescaleHint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。0 = 完全使用 CFG 增强结果，1 = 完全使用原始预测。推荐 0.5~0.9。</p>
             </div>
         </div>
 
         <div class="settings-section">
-            <h3 class="section-title">导出推理参数</h3>
-            <p class="section-desc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。</p>
+            <h3 class="section-title" data-i18n="settings.exportInferenceParams">导出推理参数</h3>
+            <p class="section-desc" data-i18n="settings.exportInferenceParamsDesc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。</p>
 
             <div class="setting-group">
-                <label for="exportDiffSteps">扩散步数 <span id="exportDiffStepsValue" class="volume-display">32</span></label>
+                <label for="exportDiffSteps" data-i18n="settings.diffSteps">扩散步数 <span id="exportDiffStepsValue" class="volume-display">32</span></label>
                 <input type="range" id="exportDiffSteps" min="4" max="64" value="32" step="4">
-                <p class="hint">导出时的扩散步数。更多步数 = 更高质量。推荐导出使用 32 步，如追求极致质量可尝试 48~64 步。</p>
+                <p class="hint" data-i18n="settings.exportDiffStepsHint">导出时的扩散步数。更多步数 = 更高质量。推荐导出使用 32 步，如追求极致质量可尝试 48~64 步。</p>
             </div>
 
             <div class="setting-group">
-                <label for="exportCfgStrength">CFG 引导强度 <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
+                <label for="exportCfgStrength" data-i18n="settings.cfgStrength">CFG 引导强度 <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
                 <input type="range" id="exportCfgStrength" min="0" max="10" value="3.0" step="0.5">
-                <p class="hint">导出时的 CFG 强度。与预览参数说明相同，导出时建议保持较高值以确保音质。</p>
+                <p class="hint" data-i18n="settings.exportCfgStrengthHint">导出时的 CFG 强度。与预览参数说明相同，导出时建议保持较高值以确保音质。</p>
             </div>
 
             <div class="setting-group">
-                <label for="exportCfgRescale">CFG Rescale 系数 <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
+                <label for="exportCfgRescale" data-i18n="settings.cfgRescale">CFG Rescale 系数 <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
                 <input type="range" id="exportCfgRescale" min="0" max="1" value="0.75" step="0.05">
-                <p class="hint">导出时的 CFG Rescale 系数。与预览参数说明相同。</p>
+                <p class="hint" data-i18n="settings.exportCfgRescaleHint">导出时的 CFG Rescale 系数。与预览参数说明相同。</p>
             </div>
         </div>
 
         <div class="settings-section">
-            <h3 class="section-title">音频输出</h3>
+            <h3 class="section-title" data-i18n="settings.audioOutput">音频输出</h3>
 
             <div class="setting-group">
-                <label for="audioOutputMode">输出模式</label>
+                <label for="audioOutputMode" data-i18n="settings.outputMode">输出模式</label>
                 <select id="audioOutputMode">
-                    <option value="shared">共享模式 (WASAPI Shared)</option>
-                    <option value="exclusive">独占模式 (WASAPI Exclusive)</option>
+                    <option value="shared" data-i18n="settings.sharedMode">共享模式 (WASAPI Shared)</option>
+                    <option value="exclusive" data-i18n="settings.exclusiveMode">独占模式 (WASAPI Exclusive)</option>
                 </select>
-                <p class="hint">独占模式绕过 Windows 音频混音器，可获得更低延迟和更高音质，但其他应用将无法同时使用音频设备。</p>
+                <p class="hint" data-i18n="settings.exclusiveModeHint">独占模式绕过 Windows 音频混音器，可获得更低延迟和更高音质，但其他应用将无法同时使用音频设备。</p>
             </div>
 
             <div class="setting-group">
-                <label for="audioOutputDevice">输出设备</label>
+                <label for="audioOutputDevice" data-i18n="settings.outputDevice">输出设备</label>
                 <select id="audioOutputDevice">
-                    <option value="default">系统默认</option>
+                    <option value="default" data-i18n="settings.systemDefault">系统默认</option>
                 </select>
-                <p class="hint">选择音频输出设备。独占模式下仅支持 WASAPI 设备。</p>
+                <p class="hint" data-i18n="settings.outputDeviceHint">选择音频输出设备。独占模式下仅支持 WASAPI 设备。</p>
             </div>
 
             <div class="setting-group">
-                <label for="audioSampleRate">采样率</label>
+                <label for="audioSampleRate" data-i18n="settings.sampleRate">采样率</label>
                 <select id="audioSampleRate">
                     <option value="22050">22050 Hz</option>
                     <option value="24000">24000 Hz (模型原生)</option>
@@ -101,22 +101,22 @@
                     <option value="96000">96000 Hz (高品质)</option>
                     <option value="192000">192000 Hz (录音棚)</option>
                 </select>
-                <p class="hint">输出采样率。独占模式下需设备支持所选采样率，否则将回退到共享模式。</p>
+                <p class="hint" data-i18n="settings.sampleRateHint">输出采样率。独占模式下需设备支持所选采样率，否则将回退到共享模式。</p>
             </div>
 
             <div class="setting-group">
-                <label for="audioBitDepth">位深度</label>
+                <label for="audioBitDepth" data-i18n="settings.bitDepth">位深度</label>
                 <select id="audioBitDepth">
                     <option value="float32">32-bit Float (推荐)</option>
                     <option value="int32">32-bit Integer</option>
                     <option value="int24">24-bit Integer</option>
                     <option value="int16">16-bit Integer (CD 品质)</option>
                 </select>
-                <p class="hint">独占模式下的输出位深度。32-bit Float 提供最高精度动态范围。</p>
+                <p class="hint" data-i18n="settings.bitDepthHint">独占模式下的输出位深度。32-bit Float 提供最高精度动态范围。</p>
             </div>
 
             <div class="setting-group">
-                <label for="audioBufferSize">缓冲区大小</label>
+                <label for="audioBufferSize" data-i18n="settings.bufferSize">缓冲区大小</label>
                 <select id="audioBufferSize">
                     <option value="64">64 采样 (超低延迟 ~1.3ms@48kHz)</option>
                     <option value="128">128 采样 (低延迟 ~2.7ms@48kHz)</option>
@@ -126,24 +126,24 @@
                     <option value="2048">2048 采样 (高稳定 ~42.7ms@48kHz)</option>
                     <option value="4096">4096 采样 (最高稳定 ~85.3ms@48kHz)</option>
                 </select>
-                <p class="hint">较小的缓冲区降低延迟但增加 CPU 负载和爆音风险。独占模式下建议 256 以下。</p>
+                <p class="hint" data-i18n="settings.bufferSizeHint">较小的缓冲区降低延迟但增加 CPU 负载和爆音风险。独占模式下建议 256 以下。</p>
             </div>
 
             <div class="setting-group">
-                <label for="audioVolume">主音量 <span id="volumeValue" class="volume-display">100%</span></label>
+                <label for="audioVolume" data-i18n="settings.masterVolume">主音量 <span id="volumeValue" class="volume-display">100%</span></label>
                 <input type="range" id="audioVolume" min="0" max="100" value="100" step="1">
-                <p class="hint">主输出音量控制。独占模式下由软件控制音量，共享模式下由系统混音器控制。</p>
+                <p class="hint" data-i18n="settings.volumeHint">主输出音量控制。独占模式下由软件控制音量，共享模式下由系统混音器控制。</p>
             </div>
 
             <div class="setting-group hidden" id="exclusiveInfo">
                 <div class="info-box">
-                    <strong>WASAPI 独占模式说明</strong>
+                    <strong data-i18n="settings.wasapiExclusiveInfo">WASAPI 独占模式说明</strong>
                     <ul>
-                        <li>独占模式直接访问音频硬件，绕过 Windows 音频混音器</li>
-                        <li>可实现位完美 (bit-perfect) 音频输出</li>
-                        <li>延迟可低至 1-3ms（取决于缓冲区大小）</li>
-                        <li>独占模式运行时，其他应用无法播放音频</li>
-                        <li>如果设备不支持所选采样率/位深度，将自动回退到共享模式</li>
+                        <li data-i18n="settings.wasapiInfo1">独占模式直接访问音频硬件，绕过 Windows 音频混音器</li>
+                        <li data-i18n="settings.wasapiInfo2">可实现位完美 (bit-perfect) 音频输出</li>
+                        <li data-i18n="settings.wasapiInfo3">延迟可低至 1-3ms（取决于缓冲区大小）</li>
+                        <li data-i18n="settings.wasapiInfo4">独占模式运行时，其他应用无法播放音频</li>
+                        <li data-i18n="settings.wasapiInfo5">如果设备不支持所选采样率/位深度，将自动回退到共享模式</li>
                     </ul>
                 </div>
             </div>
@@ -151,8 +151,8 @@
 
         <div class="setting-actions">
             <span id="settings-version" class="settings-version-text">v-</span>
-            <button id="saveBtn">保存</button>
-            <button id="cancelBtn">取消</button>
+            <button id="saveBtn" data-i18n="settings.saveBtn">保存</button>
+            <button id="cancelBtn" data-i18n="settings.cancelBtn">取消</button>
         </div>
     </div>
     <script src="settings.js"></script>

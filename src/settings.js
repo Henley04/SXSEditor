@@ -1,4 +1,5 @@
 import './settings.css';
+import { t, initI18n, applyLocale } from './i18n/index.js';
 
 const inferenceDeviceSelect = document.getElementById('inferenceDevice');
 const previewDiffStepsSlider = document.getElementById('previewDiffSteps');
@@ -63,8 +64,8 @@ async function loadDevices() {
 
         const discreteGPUs = devices.filter(d => d.isDiscrete);
         const autoLabel = discreteGPUs.length > 0
-            ? `自动选择 (优先独显: ${discreteGPUs[0].name})`
-            : '自动选择';
+            ? t('settings.autoSelectPreferDiscrete', { name: discreteGPUs[0].name })
+            : t('settings.autoSelect');
         const autoOption = document.createElement('option');
         autoOption.value = 'auto';
         autoOption.textContent = autoLabel;
@@ -74,7 +75,7 @@ async function loadDevices() {
             const option = document.createElement('option');
             option.value = String(d.dxgiAdapterNumber);
             const vramStr = d.vram ? ` (${d.vram})` : '';
-            const discreteStr = d.isDiscrete ? ' [独显]' : ' [核显]';
+            const discreteStr = d.isDiscrete ? ` ${t('settings.discreteGpu')}` : ` ${t('settings.integratedGpu')}`;
             option.textContent = `${d.name}${vramStr}${discreteStr}`;
             inferenceDeviceSelect.appendChild(option);
         }
