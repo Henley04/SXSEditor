@@ -2,89 +2,89 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>歌手创建</title>
+    <title data-i18n="singerCreator.title">歌手创建</title>
   </head>
   <body>
     <div id="app">
       <div id="toolbar">
         <div class="toolbar-group">
-          <button id="btn-create" class="btn-primary">✓ 创建并保存</button>
-          <button id="btn-cancel">✖ 取消</button>
+          <button id="btn-create" class="btn-primary" data-i18n="singerCreator.createAndSave">✓ 创建并保存</button>
+          <button id="btn-cancel" data-i18n="singerCreator.cancel">✖ 取消</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <span id="page-title">歌手创建</span>
+          <span id="page-title" data-i18n="singerCreator.title">歌手创建</span>
         </div>
       </div>
       <div id="main-content">
         <div id="left-panel">
           <div class="panel-section">
-            <div class="section-title">基本信息</div>
+            <div class="section-title" data-i18n="singerCreator.basicInfo">基本信息</div>
             <div class="form-group">
-              <label for="singer-name-input">歌手名称</label>
-              <input type="text" id="singer-name-input" placeholder="输入歌手名称" />
+              <label for="singer-name-input" data-i18n="singerCreator.singerName">歌手名称</label>
+              <input type="text" id="singer-name-input" placeholder="输入歌手名称" data-i18n-placeholder="singerCreator.singerNamePlaceholder" />
             </div>
             <div class="form-group">
-              <label>头像</label>
+              <label data-i18n="singerCreator.avatar">头像</label>
               <div id="avatar-options">
                 <div class="avatar-option">
                   <label class="radio-label">
                     <input type="radio" name="avatar-type" value="color" checked />
-                    <span>颜色</span>
+                    <span data-i18n="singerCreator.color">颜色</span>
                   </label>
                   <input type="color" id="singer-color-input" value="#3498db" />
                 </div>
                 <div class="avatar-option">
                   <label class="radio-label">
                     <input type="radio" name="avatar-type" value="image" />
-                    <span>图片</span>
+                    <span data-i18n="singerCreator.image">图片</span>
                   </label>
                   <input type="file" id="avatar-file-input" accept="image/*" hidden />
-                  <button id="btn-select-avatar" class="btn-small">选择图片</button>
+                  <button id="btn-select-avatar" class="btn-small" data-i18n="singerCreator.selectImage">选择图片</button>
                 </div>
               </div>
               <div id="avatar-preview" class="avatar-preview" style="display: none;">
-                <img id="avatar-preview-img" src="" alt="头像预览" />
-                <button id="btn-clear-avatar" class="btn-small btn-danger">清除</button>
+                <img id="avatar-preview-img" src="" alt="头像预览" data-i18n="singerCreator.avatarPreview" />
+                <button id="btn-clear-avatar" class="btn-small btn-danger" data-i18n="singerCreator.clear">清除</button>
               </div>
             </div>
           </div>
           <div class="panel-section">
-            <div class="section-title">参考音频 (WAV)</div>
+            <div class="section-title" data-i18n="singerCreator.refAudioWav">参考音频 (WAV)</div>
             <div class="upload-area" id="wav-upload-area">
               <div class="upload-icon">🎵</div>
-              <div class="upload-text">点击或拖拽上传WAV文件</div>
-              <div class="upload-hint">时长不超过30秒，采样率44100Hz</div>
+              <div class="upload-text" data-i18n="singerCreator.uploadWav">点击或拖拽上传WAV文件</div>
+              <div class="upload-hint" data-i18n="singerCreator.wavHint">时长不超过30秒，采样率44100Hz</div>
               <input type="file" id="wav-file-input" accept=".wav" hidden />
             </div>
             <div id="wav-info" class="info-box" style="display: none;">
               <div class="info-row">
-                <span class="info-label">文件:</span>
+                <span class="info-label" data-i18n="singerCreator.file">文件:</span>
                 <span id="wav-filename" class="info-value">-</span>
               </div>
               <div class="info-row">
-                <span class="info-label">时长:</span>
+                <span class="info-label" data-i18n="singerCreator.duration">时长:</span>
                 <span id="wav-duration" class="info-value">-</span>
               </div>
               <div id="waveform-container">
                 <canvas id="waveform-canvas"></canvas>
               </div>
               <div class="info-actions">
-                <button id="btn-play-preview" class="btn-small">▶ 预览</button>
-                <button id="btn-clear-wav" class="btn-small btn-danger">清除</button>
+                <button id="btn-play-preview" class="btn-small" data-i18n="singerCreator.preview">▶ 预览</button>
+                <button id="btn-clear-wav" class="btn-small btn-danger" data-i18n="singerCreator.clear">清除</button>
               </div>
             </div>
             <div class="info-actions" id="preprocess-actions" style="display: none; margin-top: 12px;">
-              <button id="btn-start-preprocess" class="btn-small btn-primary">🎛️ 开始音频预处理</button>
+              <button id="btn-start-preprocess" class="btn-small btn-primary" data-i18n="singerCreator.startPreprocess">🎛️ 开始音频预处理</button>
             </div>
           </div>
         </div>
         <div id="right-panel">
           <div id="preview-container">
-            <div class="preview-title">歌手预览</div>
+            <div class="preview-title" data-i18n="singerCreator.singerPreview">歌手预览</div>
             <div id="preview-placeholder" class="preview-placeholder">
               <div class="placeholder-icon">🎤</div>
-              <div class="placeholder-text">上传WAV和MIDI文件后预览将在此显示</div>
+              <div class="placeholder-text" data-i18n="singerCreator.previewPlaceholder">上传WAV和MIDI文件后预览将在此显示</div>
             </div>
             <div id="preview-content" style="display: none;">
               <div id="preview-singer-info">
@@ -92,8 +92,8 @@
                 <div id="preview-details">
                   <div id="preview-name">未命名歌手</div>
                   <div id="preview-status">
-                  <span id="preview-wav-status" class="status-badge">WAV</span>
-                  <span id="preview-preprocess-status" class="status-badge">预处理</span>
+                  <span id="preview-wav-status" class="status-badge" data-i18n="singerCreator.wavStatus">WAV</span>
+                  <span id="preview-preprocess-status" class="status-badge" data-i18n="singerCreator.preprocessStatus">预处理</span>
                 </div>
                 </div>
               </div>

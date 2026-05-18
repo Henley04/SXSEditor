@@ -8,9 +8,9 @@
     <div id="app">
       <div id="toolbar">
         <div class="toolbar-group">
-          <button id="btn-play">▶ 播放</button>
-          <button id="btn-pause">⏸ 暂停</button>
-          <button id="btn-stop">⏹ 停止</button>
+          <button id="btn-play" data-i18n="main.play">▶ 播放</button>
+          <button id="btn-pause" data-i18n="main.pause">⏸ 暂停</button>
+          <button id="btn-stop" data-i18n="main.stop">⏹ 停止</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
@@ -19,13 +19,13 @@
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
           <label>BPM <input id="bpm-input" type="number" value="120" min="1" max="999" /></label>
-          <label>拍号 <input id="time-sig-num" type="number" value="4" min="1" max="32" /> / <input id="time-sig-den" type="number" value="4" min="1" max="32" /></label>
+          <label data-i18n="main.timeSignature">拍号 <input id="time-sig-num" type="number" value="4" min="1" max="32" /> / <input id="time-sig-den" type="number" value="4" min="1" max="32" /></label>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <button id="btn-save">💾 保存</button>
-          <button id="btn-load">📂 加载</button>
-          <button id="btn-export">📤 导出</button>
+          <button id="btn-save" data-i18n="main.save">💾 保存</button>
+          <button id="btn-load" data-i18n="main.load">📂 加载</button>
+          <button id="btn-export" data-i18n="main.export">📤 导出</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
@@ -35,14 +35,14 @@
       <div id="main-content">
         <div id="singer-panel">
           <div id="singer-panel-header">
-            <span>歌手</span>
+            <span data-i18n="main.singer">歌手</span>
             <button id="btn-add-singer">+</button>
           </div>
           <div id="singer-list"></div>
         </div>
         <div id="fragment-timeline">
           <div id="fragment-header">
-            <span>分片时间轴</span>
+            <span data-i18n="main.fragmentTimeline">分片时间轴</span>
             <span id="fragment-tools">
               <button id="btn-fragment-zoom-in">+</button>
               <button id="btn-fragment-zoom-out">-</button>

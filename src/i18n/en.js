@@ -70,6 +70,7 @@ export default {
   fragment: {
     title: 'Fragment Editor',
     loadingModel: 'Loading inference model, please wait...',
+    save: '💾 Save',
     close: '✖ Close',
     fragment: 'Fragment',
     play: '▶ Play',

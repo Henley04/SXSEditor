@@ -2,6 +2,7 @@ import './fragmentEditor.css';
 import { PARAM_MODES } from './editor/pianoRoll.js';
 import { encodeWav, applyEnvelopesToAudio } from './audio/wavEncoder.js';
 import { HistoryManager } from './editor/historyManager.js';
+import { t, initI18n, applyLocale } from './i18n/index.js';
 
 const canvas = document.getElementById('piano-roll');
 const ctx = canvas.getContext('2d');
@@ -1143,7 +1144,7 @@ document.getElementById('btn-save').addEventListener('click', () => {
   saveFragmentData();
   const btnSave = document.getElementById('btn-save');
   const origText = btnSave.textContent;
-  btnSave.textContent = '✅ 已保存';
+  btnSave.textContent = t('fragment.saved');
   setTimeout(() => { btnSave.textContent = origText; }, 1500);
 });
 
@@ -1182,14 +1183,14 @@ const btnExportFragment = document.getElementById('btn-export-fragment');
 
 window.electronAPI.onFragmentSVSProgress((progress) => {
   if (fragmentIsSynthesizing) {
-    btnPlayFragment.textContent = `合成中 ${progress}%`;
-    btnExportFragment.textContent = `导出 ${progress}%`;
+    btnPlayFragment.textContent = t('fragment.synthesizingProgress', { progress });
+    btnExportFragment.textContent = t('fragment.exportingProgress', { progress });
   }
 });
 
 btnPlayFragment.addEventListener('click', async () => {
   if (notes.length === 0) {
-    alert('当前分片没有音符，无法播放');
+    alert(t('fragment.noNotesToPlay'));
     return;
   }
   if (fragmentIsSynthesizing) return;
@@ -1204,7 +1205,7 @@ btnPlayFragment.addEventListener('click', async () => {
 
 btnExportFragment.addEventListener('click', async () => {
   if (notes.length === 0) {
-    alert('当前分片没有音符，无法导出');
+    alert(t('fragment.noNotesToExport'));
     return;
   }
   await exportFragment();
@@ -1215,7 +1216,7 @@ document.getElementById('btn-import-midi').addEventListener('click', async () =>
     const result = await window.electronAPI.importMidi();
     if (!result.success) {
       if (!result.canceled) {
-        alert('MIDI导入失败: ' + (result.error || '未知错误'));
+        alert(t('fragment.midiImportFailed') + ': ' + (result.error || '未知错误'));
       }
       return;
     }
@@ -1246,7 +1247,7 @@ document.getElementById('btn-import-midi').addEventListener('click', async () =>
     render();
     scheduleAutoSave();
   } catch (err) {
-    alert('MIDI导入失败: ' + err.message);
+    alert(t('fragment.midiImportFailed') + ': ' + err.message);
   }
 });
 
@@ -1318,13 +1319,13 @@ function stopFragmentExclusivePlayback() {
 
 function updateFragmentPlayButton() {
   if (fragmentIsSynthesizing) {
-    btnPlayFragment.textContent = '合成中...';
+    btnPlayFragment.textContent = t('fragment.synthesizing');
     btnPlayFragment.disabled = true;
   } else if (fragmentIsPlaying) {
-    btnPlayFragment.textContent = '⏸ 停止';
+    btnPlayFragment.textContent = t('fragment.stop');
     btnPlayFragment.disabled = false;
   } else {
-    btnPlayFragment.textContent = '▶ 播放';
+    btnPlayFragment.textContent = t('fragment.play');
     btnPlayFragment.disabled = false;
   }
 }
@@ -1398,8 +1399,8 @@ async function playFragment() {
       await playFragmentShared();
     }
   } catch (error) {
-    console.error('分片合成失败:', error);
-    alert(`合成失败: ${error.message}`);
+    console.error(t('fragment.synthesisFailed') + ':', error);
+    alert(t('fragment.synthesisFailed') + ': ' + error.message);
   } finally {
     fragmentIsSynthesizing = false;
     updateFragmentPlayButton();
@@ -1562,7 +1563,7 @@ function updateFragmentExclusivePlayhead(removeEndedListener) {
 async function exportFragment() {
   const originalText = btnExportFragment.textContent;
   btnExportFragment.disabled = true;
-  btnExportFragment.textContent = '导出中...';
+  btnExportFragment.textContent = t('fragment.exporting');
   try {
     if (!pipelineInitialized) {
       await initPipeline();
@@ -1596,8 +1597,8 @@ async function exportFragment() {
       await window.electronAPI.saveFile(result.filePath, wavData);
     }
   } catch (error) {
-    console.error('分片导出失败:', error);
-    alert(`导出失败: ${error.message}`);
+    console.error(t('fragment.exportFailed') + ':', error);
+    alert(t('fragment.exportFailed') + ': ' + error.message);
   } finally {
     btnExportFragment.disabled = false;
     btnExportFragment.textContent = originalText;
@@ -2273,7 +2274,7 @@ document.addEventListener('keydown', (e) => {
     saveFragmentData();
     const btnSave = document.getElementById('btn-save');
     const origText = btnSave.textContent;
-    btnSave.textContent = '✅ 已保存';
+    btnSave.textContent = t('fragment.saved');
     setTimeout(() => { btnSave.textContent = origText; }, 1500);
     return;
   }
@@ -2551,7 +2552,7 @@ async function handleFragmentData(data) {
 
   currentFragment = data.fragment;
   currentProject = data.project;
-  document.getElementById('fragment-name').textContent = currentFragment.name || '分片';
+  document.getElementById('fragment-name').textContent = currentFragment.name || t('fragment.fragment');
   notes = currentFragment.notes || [];
   envelopes = currentFragment.envelopes || {
     volume: { keyframes: [{ time: 0, value: 1, smoothness: 0 }] },
@@ -2618,7 +2619,10 @@ if (window.electronAPI?.onLoadFragment) {
   }
 })();
 
-console.log('分片编辑窗口已启动');
+initI18n();
+applyLocale();
+
+console.log(t('fragment.consoleStarted'));
 
 window.addEventListener('beforeunload', () => {
   if (autoSaveTimer) {

@@ -66,7 +66,7 @@ function renderFileList() {
     } else if (state.status === 'complete') {
       statusText = `完成 (${formatBytes(state.total)})`;
     } else if (state.status === 'error') {
-      statusText = '失败';
+      statusText = t('modelDownload.failed');
     }
 
     item.innerHTML = `
@@ -148,7 +148,7 @@ window.electronAPI.onModelDownloadComplete(() => {
 });
 
 window.electronAPI.onModelDownloadError((data) => {
-  document.getElementById('statusText').textContent = '下载失败';
+  document.getElementById('statusText').textContent = t('modelDownload.downloadFailed');
   document.getElementById('speedInfo').textContent = '';
   document.getElementById('errorMessage').textContent = data.message || '未知错误';
   document.getElementById('errorMessage').style.display = 'block';
@@ -173,7 +173,7 @@ document.getElementById('startBtn').addEventListener('click', () => {
 
 document.getElementById('cancelBtn').addEventListener('click', () => {
   window.electronAPI.modelDownloadCancel();
-  document.getElementById('statusText').textContent = '下载已取消';
+  document.getElementById('statusText').textContent = t('modelDownload.downloadCancelled');
   document.getElementById('speedInfo').textContent = '';
   document.getElementById('cancelBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'inline-block';
@@ -192,7 +192,7 @@ document.getElementById('changeDirBtn').addEventListener('click', async () => {
   document.getElementById('dirPath').textContent = result.modelDir;
   updateMissingFiles(result.missing);
   if (result.missing.length === 0) {
-    document.getElementById('statusText').textContent = '所选目录中模型文件已就绪';
+    document.getElementById('statusText').textContent = t('modelDownload.modelsReady');
     document.getElementById('startBtn').style.display = 'none';
     document.getElementById('closeBtn').style.display = 'inline-block';
   } else {
