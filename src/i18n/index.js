@@ -18,6 +18,9 @@ function setLocale(locale) {
     if (locales[locale]) {
         currentLocale = locale;
         localStorage.setItem(STORAGE_KEY, locale);
+        if (window.electronAPI?.saveLocale) {
+            window.electronAPI.saveLocale(locale).catch(() => {});
+        }
         document.dispatchEvent(new CustomEvent('localeChanged', { detail: { locale } }));
     }
 }

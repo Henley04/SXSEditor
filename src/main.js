@@ -709,6 +709,14 @@ ipcMain.handle('settings:saveSettings', async (event, settings) => {
   const merged = { ...current, ...settings };
   await saveSettingsFile(merged);
 
+  if (settings.locale && mainLocales[settings.locale]) {
+    mainLocale = settings.locale;
+    try {
+      const configPath = path.join(app.getPath('userData'), 'sxseditor-locale.json');
+      await fs.promises.writeFile(configPath, JSON.stringify({ locale: settings.locale }), 'utf8');
+    } catch (_) {}
+  }
+
   if (svsPipeline) {
     console.log('[Main] 设置已更新，需要重新初始化 SVS Pipeline 才能生效');
     try { svsPipeline.dispose(); } catch (_) {}
