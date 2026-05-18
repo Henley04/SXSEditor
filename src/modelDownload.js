@@ -1,4 +1,4 @@
-import { t, initI18n, applyLocale } from './i18n/index.js';
+import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 
 const missingFiles = [];
 const fileStates = {};
@@ -205,3 +205,4 @@ document.getElementById('changeDirBtn').addEventListener('click', async () => {
 
 initI18n();
 applyLocale();
+document.documentElement.lang = getLocale();

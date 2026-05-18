@@ -191,26 +191,7 @@ async function saveSettingsFile(settings) {
 
 const isDev = !app.isPackaged;
 
-const createWindow = () => {
-  mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 800,
-    title: 'SXSEditor',
-    icon: path.join(__dirname, 'SXS.png'),
-    webPreferences: {
-      preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
-      nodeIntegration: false,
-      contextIsolation: true,
-      sandbox: true,
-    },
-  });
-
-  mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
-
-  if (isDev) {
-    mainWindow.webContents.openDevTools();
-  }
-
+function buildAppMenu() {
   const menuTemplate = [
     {
       label: 'SXSEditor',
@@ -262,6 +243,29 @@ const createWindow = () => {
 
   const menu = Menu.buildFromTemplate(menuTemplate);
   Menu.setApplicationMenu(menu);
+}
+
+const createWindow = () => {
+  mainWindow = new BrowserWindow({
+    width: 1280,
+    height: 800,
+    title: 'SXSEditor',
+    icon: path.join(__dirname, 'SXS.png'),
+    webPreferences: {
+      preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+
+  mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+
+  if (isDev) {
+    mainWindow.webContents.openDevTools();
+  }
+
+  buildAppMenu();
 };
 
 async function showAboutDialog() {
@@ -754,6 +758,14 @@ ipcMain.handle('save-locale', async (event, locale) => {
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('reload-main-window', async () => {
+  buildAppMenu();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('locale-changed');
+    mainWindow.reload();
   }
 });
 

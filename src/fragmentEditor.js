@@ -2,7 +2,7 @@ import './fragmentEditor.css';
 import { PARAM_MODES } from './editor/pianoRoll.js';
 import { encodeWav, applyEnvelopesToAudio } from './audio/wavEncoder.js';
 import { HistoryManager } from './editor/historyManager.js';
-import { t, initI18n, applyLocale } from './i18n/index.js';
+import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 
 const canvas = document.getElementById('piano-roll');
 const ctx = canvas.getContext('2d');
@@ -2621,6 +2621,7 @@ if (window.electronAPI?.onLoadFragment) {
 
 initI18n();
 applyLocale();
+document.documentElement.lang = getLocale();
 
 console.log(t('fragment.consoleStarted'));
 
