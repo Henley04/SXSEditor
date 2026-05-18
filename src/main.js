@@ -1032,6 +1032,8 @@ ipcMain.handle('saveSingerFile', async (event, singerData) => {
         singerName: singerData.singerName,
         color: singerData.color,
         avatarPath: avatarBase64,
+        wavPath: null,
+        midiPath: null,
         wavBuffer: singerData.wavBuffer,
         midiNotes: midiNotesToSave,
         f0Data: f0DataToSave,

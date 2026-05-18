@@ -162,7 +162,16 @@ export default {
     pleaseSelectWavFormat: '请选择WAV格式的文件',
     wavTooLong: 'WAV文件时长超过30秒，建议截断后重新上传',
     wavParseFailed: 'WAV文件解析失败',
-    avatarPreview: '头像预览'
+    avatarPreview: '头像预览',
+    unnamedSinger: '未命名歌手',
+    wavReady: 'WAV ✓',
+    preprocessReady: '预处理 ✓',
+    seconds: '秒',
+    pageStarted: '歌手创建页面已启动',
+    saveFailed: '保存歌手文件失败:',
+    wavParseError: 'WAV解析失败:',
+    previewPlayFailed: '预览播放失败',
+    previewPlaceholder: '上传WAV文件后预览将在此显示'
   },
   preprocess: {
     title: '音频预处理',
