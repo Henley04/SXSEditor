@@ -24,6 +24,7 @@ const volumeValueSpan = document.getElementById('volumeValue');
 const exclusiveInfoDiv = document.getElementById('exclusiveInfo');
 const saveBtn = document.getElementById('saveBtn');
 const cancelBtn = document.getElementById('cancelBtn');
+const languageSelect = document.getElementById('languageSelect');
 
 previewDiffStepsSlider.addEventListener('input', () => {
     previewDiffStepsValue.textContent = previewDiffStepsSlider.value;
@@ -89,6 +90,12 @@ async function loadDevices() {
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
 
         await loadAudioSettings(currentSetting);
+
+        if (currentSetting && currentSetting.locale) {
+            languageSelect.value = currentSetting.locale;
+        } else {
+            languageSelect.value = 'zh-CN';
+        }
     } catch (err) {
         console.error('加载设备列表失败:', err);
         inferenceDeviceSelect.innerHTML = `<option value="auto">${t('settings.autoSelect')}</option>`;
@@ -255,6 +262,7 @@ saveBtn.addEventListener('click', async () => {
         audioBitDepth: audioBitDepthSelect.value,
         audioBufferSize: parseInt(audioBufferSizeSelect.value),
         audioVolume: parseInt(audioVolumeSlider.value) / 100,
+        locale: languageSelect.value,
     };
 
     try {
