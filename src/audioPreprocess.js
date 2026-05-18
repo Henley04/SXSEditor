@@ -1,5 +1,5 @@
 import './audioPreprocess.css';
-import { t, initI18n, applyLocale } from './i18n/index.js';
+import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 
 function isCJK(char) {
   const code = char.codePointAt(0) || 0;
@@ -1699,3 +1699,4 @@ window.addEventListener('DOMContentLoaded', async () => {
 
 initI18n();
 applyLocale();
+document.documentElement.lang = getLocale();

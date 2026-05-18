@@ -2,7 +2,7 @@ import './index.css';
 import { TrackManager } from './editor/trackManager.js';
 import { encodeWav } from './audio/wavEncoder.js';
 import { HistoryManager } from './editor/historyManager.js';
-import { t, initI18n, applyLocale } from './i18n/index.js';
+import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 
 const trackManager = new TrackManager();
 const history = new HistoryManager();
@@ -2163,5 +2163,16 @@ document.addEventListener('keydown', (e) => {
 
 initI18n();
 applyLocale();
+document.documentElement.lang = getLocale();
+
+document.addEventListener('localeChanged', () => {
+  applyLocale();
+});
+
+if (window.electronAPI?.onLocaleChanged) {
+  window.electronAPI.onLocaleChanged(() => {
+    location.reload();
+  });
+}
 
 console.log('SXSEditor 渲染进程已启动');

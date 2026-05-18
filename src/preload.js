@@ -110,4 +110,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   modelDownloadGetDir: () => ipcRenderer.invoke('model-download:get-dir'),
   saveLocale: (locale) => ipcRenderer.invoke('save-locale', locale),
   getLocale: () => ipcRenderer.invoke('get-locale'),
+  reloadMainWindow: () => ipcRenderer.invoke('reload-main-window'),
+  onLocaleChanged: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('locale-changed', handler);
+    return () => ipcRenderer.removeListener('locale-changed', handler);
+  },
 });

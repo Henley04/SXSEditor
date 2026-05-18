@@ -1,5 +1,5 @@
 import './settings.css';
-import { t, initI18n, applyLocale } from './i18n/index.js';
+import { t, initI18n, applyLocale, setLocale, getLocale } from './i18n/index.js';
 
 const inferenceDeviceSelect = document.getElementById('inferenceDevice');
 const previewDiffStepsSlider = document.getElementById('previewDiffSteps');
@@ -91,11 +91,7 @@ async function loadDevices() {
 
         await loadAudioSettings(currentSetting);
 
-        if (currentSetting && currentSetting.locale) {
-            languageSelect.value = currentSetting.locale;
-        } else {
-            languageSelect.value = 'zh-CN';
-        }
+        languageSelect.value = getLocale();
     } catch (err) {
         console.error('加载设备列表失败:', err);
         inferenceDeviceSelect.innerHTML = `<option value="auto">${t('settings.autoSelect')}</option>`;
@@ -267,8 +263,9 @@ saveBtn.addEventListener('click', async () => {
 
     try {
         await window.electronAPI.saveSettings(settings);
-        if (languageSelect.value === 'zh-CN' || languageSelect.value === 'en') {
-            localStorage.setItem('sxseditor-locale', languageSelect.value);
+        setLocale(languageSelect.value);
+        if (window.electronAPI?.reloadMainWindow) {
+            window.electronAPI.reloadMainWindow().catch(() => {});
         }
         window.close();
     } catch (err) {
@@ -293,3 +290,4 @@ loadDevices();
 
 initI18n();
 applyLocale();
+document.documentElement.lang = getLocale();
