@@ -1257,7 +1257,7 @@ function showPromptDialog(title, defaultValue, onConfirm) {
         border-radius: 4px;
         color: #fff;
         cursor: pointer;
-      ">取消</button>
+      ">${t('common.cancel')}</button>
       <button id="prompt-ok" style="
         padding: 6px 16px;
         background: #3498db;
@@ -1265,7 +1265,7 @@ function showPromptDialog(title, defaultValue, onConfirm) {
         border-radius: 4px;
         color: #fff;
         cursor: pointer;
-      ">确定</button>
+      ">${t('common.confirm')}</button>
     </div>
   `;
 

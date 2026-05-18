@@ -148,7 +148,6 @@ export default {
     pausePreview: '⏸ 暂停',
     startPreprocess: '🎛️ 开始音频预处理',
     singerPreview: '歌手预览',
-    previewPlaceholder: '上传WAV和MIDI文件后预览将在此显示',
     wavStatus: 'WAV',
     preprocessStatus: '预处理',
     pleaseUploadWav: '请先上传WAV文件',
