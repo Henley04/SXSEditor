@@ -77,6 +77,7 @@ const timeSigDen = document.getElementById('time-sig-den');
 const btnSave = document.getElementById('btn-save');
 const btnLoad = document.getElementById('btn-load');
 const btnExport = document.getElementById('btn-export');
+const btnAudioToMidi = document.getElementById('btn-audio-to-midi');
 const btnAddSinger = document.getElementById('btn-add-singer');
 const singerListEl = document.getElementById('singer-list');
 
@@ -2174,5 +2175,342 @@ if (window.electronAPI?.onLocaleChanged) {
     location.reload();
   });
 }
+
+function showAudioToMidiDialog() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: #2d2d2d;
+      border: 1px solid #555;
+      border-radius: 8px;
+      padding: 20px;
+      min-width: 360px;
+      color: #fff;
+    `;
+
+    const titleEl = document.createElement('div');
+    titleEl.style.cssText = 'margin-bottom: 16px; font-weight: 600; font-size: 16px;';
+    titleEl.textContent = t('main.audioToMidiTitle');
+
+    const btnContainer = document.createElement('div');
+    btnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 10px;';
+
+    const extractPitchBtn = document.createElement('button');
+    extractPitchBtn.style.cssText = `
+      padding: 12px 16px;
+      background: #3498db;
+      border: none;
+      border-radius: 4px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 14px;
+      text-align: left;
+    `;
+    const extractPitchLabel = document.createElement('div');
+    extractPitchLabel.style.cssText = 'font-weight: 600; margin-bottom: 4px;';
+    extractPitchLabel.textContent = t('main.audioToMidiExtractPitch');
+    const extractPitchDesc = document.createElement('div');
+    extractPitchDesc.style.cssText = 'font-size: 12px; opacity: 0.8;';
+    extractPitchDesc.textContent = t('main.audioToMidiExtractPitchDesc');
+    extractPitchBtn.appendChild(extractPitchLabel);
+    extractPitchBtn.appendChild(extractPitchDesc);
+
+    const onlyMidiBtn = document.createElement('button');
+    onlyMidiBtn.style.cssText = `
+      padding: 12px 16px;
+      background: #2ecc71;
+      border: none;
+      border-radius: 4px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 14px;
+      text-align: left;
+    `;
+    const onlyMidiLabel = document.createElement('div');
+    onlyMidiLabel.style.cssText = 'font-weight: 600; margin-bottom: 4px;';
+    onlyMidiLabel.textContent = t('main.audioToMidiOnly');
+    const onlyMidiDesc = document.createElement('div');
+    onlyMidiDesc.style.cssText = 'font-size: 12px; opacity: 0.8;';
+    onlyMidiDesc.textContent = t('main.audioToMidiOnlyDesc');
+    onlyMidiBtn.appendChild(onlyMidiLabel);
+    onlyMidiBtn.appendChild(onlyMidiDesc);
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = t('common.cancel');
+    cancelBtn.style.cssText = `
+      padding: 10px 16px;
+      background: #3c3c3c;
+      border: 1px solid #555;
+      border-radius: 4px;
+      color: #fff;
+      cursor: pointer;
+      font-size: 14px;
+    `;
+
+    btnContainer.appendChild(titleEl);
+    btnContainer.appendChild(extractPitchBtn);
+    btnContainer.appendChild(onlyMidiBtn);
+    btnContainer.appendChild(cancelBtn);
+    dialog.appendChild(btnContainer);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    const close = (value) => {
+      document.body.removeChild(overlay);
+      resolve(value);
+    };
+
+    extractPitchBtn.addEventListener('click', () => close('withPitch'));
+    onlyMidiBtn.addEventListener('click', () => close('midiOnly'));
+    cancelBtn.addEventListener('click', () => close(null));
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close(null);
+    });
+  });
+}
+
+function showLoadingOverlay(message) {
+  const overlay = document.createElement('div');
+  overlay.id = 'audio-to-midi-loading';
+  overlay.style.cssText = `
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.7);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 10001;
+    color: #fff;
+  `;
+
+  const spinner = document.createElement('div');
+  spinner.style.cssText = `
+    width: 40px;
+    height: 40px;
+    border: 3px solid #555;
+    border-top-color: #3498db;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-bottom: 16px;
+  `;
+
+  const style = document.createElement('style');
+  style.textContent = `@keyframes spin { to { transform: rotate(360deg); } }`;
+
+  const msgEl = document.createElement('div');
+  msgEl.style.cssText = 'font-size: 14px;';
+  msgEl.textContent = message;
+
+  overlay.appendChild(style);
+  overlay.appendChild(spinner);
+  overlay.appendChild(msgEl);
+  document.body.appendChild(overlay);
+
+  return overlay;
+}
+
+function updateLoadingMessage(overlay, message) {
+  const msgEl = overlay.querySelector('div:last-child');
+  if (msgEl) msgEl.textContent = message;
+}
+
+function hideLoadingOverlay(overlay) {
+  if (overlay && overlay.parentNode) {
+    overlay.parentNode.removeChild(overlay);
+  }
+}
+
+function f0DataToPitchCurveAnchorPoints(f0Data, bpm) {
+  if (!f0Data || f0Data.length === 0) return [];
+
+  const beatDuration = 60 / bpm;
+  const anchorInterval = 0.08;
+  const anchorPoints = [];
+
+  let currentBeat = -1;
+  let pitchSum = 0;
+  let pitchCount = 0;
+
+  for (const frame of f0Data) {
+    if (!frame.f0 || frame.f0 <= 0) continue;
+
+    const pitch = 69 + 12 * Math.log2(frame.f0 / 440);
+    if (pitch < 24 || pitch > 108) continue;
+
+    const beat = frame.time / beatDuration;
+    const anchorBeat = Math.floor(beat / anchorInterval) * anchorInterval;
+
+    if (anchorBeat !== currentBeat) {
+      if (currentBeat >= 0 && pitchCount > 0) {
+        anchorPoints.push({
+          time: currentBeat,
+          pitch: pitchSum / pitchCount,
+          smoothness: 30,
+        });
+      }
+      currentBeat = anchorBeat;
+      pitchSum = pitch;
+      pitchCount = 1;
+    } else {
+      pitchSum += pitch;
+      pitchCount += 1;
+    }
+  }
+
+  if (currentBeat >= 0 && pitchCount > 0) {
+    anchorPoints.push({
+      time: currentBeat,
+      pitch: pitchSum / pitchCount,
+      smoothness: 30,
+    });
+  }
+
+  return anchorPoints;
+}
+
+async function handleAudioToMidi() {
+  const choice = await showAudioToMidiDialog();
+  if (!choice) return;
+
+  const extractPitch = choice === 'withPitch';
+
+  try {
+    const result = await window.electronAPI.showOpenDialog({
+      title: t('main.audioToMidiSelectFile'),
+      filters: [
+        { name: 'Audio Files', extensions: ['wav', 'mp3', 'flac', 'ogg', 'aac', 'm4a'] },
+        { name: 'WAV Files', extensions: ['wav'] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+      properties: ['openFile'],
+    });
+
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return;
+    }
+
+    const filePath = result.filePaths[0];
+    const buffer = await window.electronAPI.readFileBuffer(filePath);
+
+    let audioBuffer;
+    try {
+      const ac = new AudioContext();
+      audioBuffer = await ac.decodeAudioData(buffer.slice(0));
+      ac.close();
+    } catch (decodeErr) {
+      console.error('音频解码失败:', decodeErr);
+      alert(t('main.audioToMidiDecodeFailed') + ': ' + decodeErr.message);
+      return;
+    }
+
+    const channelData = audioBuffer.getChannelData(0);
+    const audioData = Array.from(channelData);
+    const sampleRate = audioBuffer.sampleRate;
+    const bpm = project.bpm || 120;
+
+    const loading = showLoadingOverlay(t('main.audioToMidiExtracting'));
+
+    let midiNotes = [];
+    let f0Data = null;
+
+    try {
+      const bpResult = await window.electronAPI.extractF0BasicPitch({
+        audioData,
+        sampleRate,
+        bpm,
+      });
+
+      if (!bpResult.success) {
+        throw new Error(bpResult.error || 'Basic Pitch failed');
+      }
+
+      midiNotes = (bpResult.notes || []).map((n, i) => ({
+        id: n.id ?? (Date.now() + i),
+        pitch: n.pitch ?? 60,
+        start: n.start ?? 0,
+        duration: n.duration ?? 0.25,
+        lyric: n.lyric || 'la',
+      }));
+
+      if (extractPitch) {
+        updateLoadingMessage(loading, t('main.audioToMidiExtractingF0'));
+
+        const rmvpeResult = await window.electronAPI.extractF0({
+          audioData,
+          sampleRate,
+          bpm,
+        });
+
+        if (!rmvpeResult.success) {
+          throw new Error(rmvpeResult.error || 'RMVPE failed');
+        }
+
+        f0Data = rmvpeResult.f0Array;
+      }
+    } catch (err) {
+      hideLoadingOverlay(loading);
+      console.error('音频转MIDI失败:', err);
+      alert(t('main.audioToMidiFailed') + ': ' + err.message);
+      return;
+    }
+
+    hideLoadingOverlay(loading);
+
+    if (midiNotes.length === 0) {
+      alert(t('main.audioToMidiFailed') + ': no notes extracted');
+      return;
+    }
+
+    const lastNote = midiNotes[midiNotes.length - 1];
+    const totalBeats = lastNote.start + lastNote.duration;
+    const duration = Math.max(4, Math.ceil(totalBeats));
+
+    const singer = trackManager.addSinger({
+      trackName: t('main.audioToMidiTitle'),
+      singerName: t('main.audioToMidiTitle'),
+      singerFileMissing: true,
+    });
+
+    const fragment = trackManager.addFragment({
+      singerId: singer.id,
+      startTime: 0,
+      duration,
+      notes: midiNotes,
+    });
+
+    if (f0Data && f0Data.length > 0) {
+      const anchorPoints = f0DataToPitchCurveAnchorPoints(f0Data, bpm);
+      if (anchorPoints.length > 0) {
+        fragment.pitchCurve = {
+          enabled: true,
+          anchorPoints,
+          brushSegments: [],
+        };
+      }
+    }
+
+    selectedSingerId = singer.id;
+    refreshAll();
+
+    alert(t('main.audioToMidiComplete'));
+  } catch (err) {
+    console.error('音频转MIDI流程错误:', err);
+    alert(t('main.audioToMidiFailed') + ': ' + err.message);
+  }
+}
+
+btnAudioToMidi.addEventListener('click', handleAudioToMidi);
 
 console.log('SXSEditor 渲染进程已启动');

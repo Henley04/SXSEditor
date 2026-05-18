@@ -65,7 +65,20 @@ export default {
     relocateSingerFile: 'Relocate Singer File',
     fragmentEditorNotImplemented: 'Fragment editor not implemented',
     singerCreatorNotImplemented: 'Singer creator not implemented',
-    synthesizingShort: 'Synthesizing'
+    synthesizingShort: 'Synthesizing',
+    audioToMidi: '🎵 Audio to MIDI',
+    audioToMidiTitle: 'Audio to MIDI',
+    audioToMidiExtractPitch: 'Extract Pitch (RMVPE)',
+    audioToMidiExtractPitchDesc: 'Use RMVPE to extract F0 curve and convert to editable pitch curve',
+    audioToMidiOnly: 'MIDI Only',
+    audioToMidiOnlyDesc: 'Only extract MIDI notes using Basic Pitch, without pitch curve',
+    audioToMidiSelectFile: 'Select Audio File',
+    audioToMidiExtracting: 'Extracting MIDI notes (Basic Pitch)...',
+    audioToMidiExtractingF0: 'Extracting pitch curve (RMVPE)...',
+    audioToMidiComplete: 'Audio to MIDI complete! New track created, please select a singer file',
+    audioToMidiFailed: 'Audio to MIDI failed',
+    audioToMidiNoFile: 'No audio file selected',
+    audioToMidiDecodeFailed: 'Audio file decode failed'
   },
   fragment: {
     title: 'Fragment Editor',

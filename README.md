@@ -59,6 +59,7 @@ Download the latest pre-built installer for **Windows**:
 | 🧠 Neural SVS | SoulX-Singer model via ONNX Runtime |
 | 🎤 Singer Management | Custom singers with reference audio & F0 |
 | 📊 Audio Preprocessing | RMVPE / Basic Pitch F0 extraction |
+| 🎵 Audio to MIDI | Convert audio files to MIDI + pitch curve |
 | 🎵 MIDI Import | Import standard MIDI files with lyrics |
 | ⚙️ Advanced Settings | Diffusion steps, CFG rescale, device selection |
 | 🔄 Undo / Redo | Full edit history (up to 200 steps) |
@@ -308,6 +309,7 @@ This project is licensed under the [MIT License](LICENSE).
 | 🧠 神经歌声合成 | SoulX-Singer 模型 + ONNX Runtime |
 | 🎤 歌手管理 | 自定义歌手，支持参考音频 |
 | 📊 音频预处理 | RMVPE / Basic Pitch F0 提取 |
+| 🎵 音频转MIDI | 从音频文件提取MIDI音符和音高曲线 |
 | 🎵 MIDI 导入 | 导入标准 MIDI 文件及歌词 |
 | ⚙️ 高级设置 | 扩散步数、CFG 重缩放、设备选择 |
 | 🔄 撤销 / 重做 | 完整编辑历史（最多 200 步） |
@@ -454,6 +456,7 @@ npm run test:watch       # 监视模式
 | 🧠 ニューラル SVS | SoulX-Singer モデル + ONNX Runtime |
 | 🎤 歌手管理 | カスタム歌手、参照音声対応 |
 | 📊 音声前処理 | RMVPE / Basic Pitch F0 抽出 |
+| 🎵 オーディオ→MIDI | オーディオファイルからMIDIノートとピッチカーブを抽出 |
 | 🎵 MIDI インポート | 標準 MIDI ファイルと歌詞のインポート |
 | ⚙️ 詳細設定 | 拡散ステップ数、CFG リスケール、デバイス選択 |
 | 🔄 アンドゥ / リドゥ | 編集履歴（最大 200 ステップ） |
