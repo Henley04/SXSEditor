@@ -267,6 +267,9 @@ saveBtn.addEventListener('click', async () => {
 
     try {
         await window.electronAPI.saveSettings(settings);
+        if (languageSelect.value === 'zh-CN' || languageSelect.value === 'en') {
+            localStorage.setItem('sxseditor-locale', languageSelect.value);
+        }
         window.close();
     } catch (err) {
         console.error('保存设置失败:', err);
