@@ -1,3 +1,5 @@
+import { t, initI18n, applyLocale } from './i18n/index.js';
+
 const missingFiles = [];
 const fileStates = {};
 let downloadStartTime = 0;
@@ -21,7 +23,7 @@ function updateMissingFiles(newMissingFiles) {
       fileStates[file.filePath] = { status: 'pending', progress: 0, downloaded: 0, total: 0 };
     }
   }
-  document.getElementById('statusText').textContent = `需要下载 ${newMissingFiles.length} 个模型文件`;
+  document.getElementById('statusText').textContent = t('modelDownload.needDownloadCount', { count: newMissingFiles.length });
   renderFileList();
 }
 
@@ -59,12 +61,12 @@ function renderFileList() {
 
     let statusText = '';
     if (state.status === 'pending') {
-      statusText = '等待中';
+      statusText = t('modelDownload.pending');
     } else if (state.status === 'downloading') {
       const pct = state.total > 0 ? Math.round(state.downloaded / state.total * 100) : 0;
       statusText = `${pct}% (${formatBytes(state.downloaded)}/${formatBytes(state.total)})`;
     } else if (state.status === 'complete') {
-      statusText = `完成 (${formatBytes(state.total)})`;
+      statusText = `${t('modelDownload.complete')} (${formatBytes(state.total)})`;
     } else if (state.status === 'error') {
       statusText = t('modelDownload.failed');
     }
@@ -100,7 +102,7 @@ window.electronAPI.onModelDownloadMissingFiles((files) => {
   for (const file of files) {
     fileStates[file.filePath] = { status: 'pending', progress: 0, downloaded: 0, total: 0 };
   }
-  document.getElementById('statusText').textContent = `需要下载 ${files.length} 个模型文件`;
+  document.getElementById('statusText').textContent = t('modelDownload.needDownloadCount', { count: files.length });
   document.getElementById('startBtn').style.display = 'inline-block';
   document.getElementById('closeBtn').style.display = 'inline-block';
   renderFileList();
@@ -120,7 +122,7 @@ window.electronAPI.onModelDownloadProgress((data) => {
 
 window.electronAPI.onModelDownloadFileStart((data) => {
   fileStates[data.filePath] = { status: 'downloading', progress: 0, downloaded: 0, total: 0 };
-  document.getElementById('statusText').innerHTML = `<span class="spinner"></span>正在下载: ${data.filePath}`;
+  document.getElementById('statusText').innerHTML = `<span class="spinner"></span>${t('modelDownload.downloading', { file: data.filePath })}`;
   renderFileList();
 });
 
@@ -133,7 +135,7 @@ window.electronAPI.onModelDownloadFileComplete((data) => {
 });
 
 window.electronAPI.onModelDownloadComplete(() => {
-  document.getElementById('statusText').textContent = '所有模型文件下载完成！';
+  document.getElementById('statusText').textContent = t('modelDownload.allComplete');
   document.getElementById('speedInfo').textContent = '';
   document.getElementById('cancelBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'inline-block';

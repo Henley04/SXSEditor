@@ -148,7 +148,6 @@ export default {
     pausePreview: '⏸ Pause',
     startPreprocess: '🎛️ Start Audio Preprocessing',
     singerPreview: 'Singer Preview',
-    previewPlaceholder: 'Preview will appear here after uploading WAV and MIDI files',
     wavStatus: 'WAV',
     preprocessStatus: 'Preprocess',
     pleaseUploadWav: 'Please upload a WAV file first',
