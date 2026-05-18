@@ -2,33 +2,33 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>音频预处理</title>
+    <title data-i18n="preprocess.audioPreprocess">音频预处理</title>
   </head>
   <body>
     <div id="app">
       <div id="toolbar">
         <div class="toolbar-group">
-          <button id="btn-play-pause" class="btn-toolbar">▶ 播放</button>
+          <button id="btn-play-pause" class="btn-toolbar" data-i18n="preprocess.play">▶ 播放</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <button id="btn-extract-f0" class="btn-toolbar btn-primary">🎛️ RMVPE提取F0</button>
-          <button id="btn-extract-f0-basic-pitch" class="btn-toolbar btn-success">🎵 Basic Pitch提取MIDI</button>
+          <button id="btn-extract-f0" class="btn-toolbar btn-primary" data-i18n="preprocess.rmvpeExtractF0">🎛️ RMVPE提取F0</button>
+          <button id="btn-extract-f0-basic-pitch" class="btn-toolbar btn-success" data-i18n="preprocess.basicPitchExtractMidi">🎵 Basic Pitch提取MIDI</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <span id="page-title">音频预处理</span>
+          <span id="page-title" data-i18n="preprocess.audioPreprocess">音频预处理</span>
         </div>
         <div style="flex:1"></div>
         <div class="toolbar-group">
-          <button id="btn-save" class="btn-toolbar btn-success">💾 保存</button>
-          <button id="btn-back" class="btn-toolbar">✖ 返回</button>
+          <button id="btn-save" class="btn-toolbar btn-success" data-i18n="preprocess.save">💾 保存</button>
+          <button id="btn-back" class="btn-toolbar" data-i18n="preprocess.back">✖ 返回</button>
         </div>
       </div>
       <div id="main-content">
         <div id="waveform-section">
           <div id="waveform-header">
-            <span class="section-title">WAV 波形</span>
+            <span class="section-title" data-i18n="preprocess.wavWaveform">WAV 波形</span>
             <span id="wav-file-name" class="file-info">-</span>
           </div>
           <div id="waveform-container">
@@ -38,8 +38,8 @@
         <div id="resize-handle"></div>
         <div id="midi-section">
           <div id="midi-header">
-            <span class="section-title">MIDI 编辑器</span>
-            <span id="midi-info" class="file-info">-</span>
+            <span class="section-title" data-i18n="preprocess.midiEditor">MIDI 编辑器</span>
+            <span id="midi-info" class="file-info" data-i18n="preprocess.waitingForExtraction">-</span>
           </div>
           <div id="midi-container">
             <canvas id="midi-canvas"></canvas>

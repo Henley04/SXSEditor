@@ -2,6 +2,7 @@ import './index.css';
 import { TrackManager } from './editor/trackManager.js';
 import { encodeWav } from './audio/wavEncoder.js';
 import { HistoryManager } from './editor/historyManager.js';
+import { t, initI18n, applyLocale } from './i18n/index.js';
 
 const trackManager = new TrackManager();
 const history = new HistoryManager();
@@ -148,7 +149,7 @@ function showPromptDialog(title, defaultValue, onConfirm) {
   btnContainer.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
 
   const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = '取消';
+  cancelBtn.textContent = t('common.cancel');
   cancelBtn.style.cssText = `
     padding: 6px 16px;
     background: #3c3c3c;
@@ -159,7 +160,7 @@ function showPromptDialog(title, defaultValue, onConfirm) {
   `;
 
   const okBtn = document.createElement('button');
-  okBtn.textContent = '确定';
+  okBtn.textContent = t('common.confirm');
   okBtn.style.cssText = `
     padding: 6px 16px;
     background: #3498db;
@@ -226,13 +227,13 @@ function showSingerSelectDialog(singerId) {
 
   const titleEl = document.createElement('div');
   titleEl.style.cssText = 'margin-bottom: 16px; font-weight: 600;';
-  titleEl.textContent = '选择歌手';
+  titleEl.textContent = t('main.selectSinger');
 
   const btnContainer = document.createElement('div');
   btnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 10px;';
 
   const createBtn = document.createElement('button');
-  createBtn.textContent = '打开歌手创建页面';
+  createBtn.textContent = t('main.openSingerCreator');
   createBtn.style.cssText = `
     padding: 10px 16px;
     background: #3498db;
@@ -244,7 +245,7 @@ function showSingerSelectDialog(singerId) {
   `;
 
   const openBtn = document.createElement('button');
-  openBtn.textContent = '打开已有歌手文件';
+  openBtn.textContent = t('main.openExistingSinger');
   openBtn.style.cssText = `
     padding: 10px 16px;
     background: #2ecc71;
@@ -256,7 +257,7 @@ function showSingerSelectDialog(singerId) {
   `;
 
   const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = '取消';
+  cancelBtn.textContent = t('common.cancel');
   cancelBtn.style.cssText = `
     padding: 10px 16px;
     background: #3c3c3c;
@@ -284,7 +285,7 @@ function showSingerSelectDialog(singerId) {
     if (window.electronAPI?.openSingerCreator) {
       window.electronAPI.openSingerCreator();
     } else {
-      alert('歌手创建页面待实现');
+      alert(t('main.singerCreatorNotImplemented'));
     }
   });
 
@@ -321,7 +322,7 @@ function validateSingerData(singerData) {
   const warnings = [];
 
   if (!singerData || typeof singerData !== 'object') {
-    errors.push('文件内容不是有效的JSON对象');
+    errors.push(t('main.invalidJsonObject'));
     return { valid: false, errors, warnings };
   }
 
@@ -329,49 +330,49 @@ function validateSingerData(singerData) {
     const parts = singerData.formatVersion.split('.').map(Number);
     const currentParts = SXSSINGER_CURRENT_VERSION.split('.').map(Number);
     if (parts[0] > currentParts[0]) {
-      errors.push(`歌手文件版本(${singerData.formatVersion})高于当前支持的版本(${SXSSINGER_CURRENT_VERSION})，请升级SXSEditor`);
+      errors.push(t('main.singerVersionTooHigh', { version: singerData.formatVersion, currentVersion: SXSSINGER_CURRENT_VERSION }));
     } else if (parts[0] < currentParts[0]) {
-      warnings.push(`歌手文件版本(${singerData.formatVersion})低于当前版本(${SXSSINGER_CURRENT_VERSION})，将尝试向前兼容加载`);
+      warnings.push(t('main.singerVersionTooLow', { version: singerData.formatVersion, currentVersion: SXSSINGER_CURRENT_VERSION }));
     } else if (parts[1] > currentParts[1]) {
-      warnings.push(`歌手文件次版本号(${singerData.formatVersion})高于当前版本(${SXSSINGER_CURRENT_VERSION})，部分功能可能不可用`);
+      warnings.push(t('main.singerMinorVersionTooHigh', { version: singerData.formatVersion, currentVersion: SXSSINGER_CURRENT_VERSION }));
     }
   } else {
-    warnings.push('歌手文件缺少版本信息(formatVersion)，将按旧格式加载');
+    warnings.push(t('main.singerMissingVersion'));
   }
 
   if (!singerData.singerName || typeof singerData.singerName !== 'string') {
-    errors.push('缺少歌手名称(singerName)或格式不正确');
+    errors.push(t('main.singerMissingName'));
   } else if (singerData.singerName.trim().length === 0) {
-    errors.push('歌手名称(singerName)不能为空');
+    errors.push(t('main.singerNameEmpty'));
   }
 
   if (singerData.color !== undefined && singerData.color !== null) {
     if (typeof singerData.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(singerData.color)) {
-      warnings.push('颜色(color)格式不正确，将使用默认颜色');
+      warnings.push(t('main.singerColorInvalid'));
     }
   }
 
   if (!singerData.wavBase64 || typeof singerData.wavBase64 !== 'string') {
-    errors.push('缺少参考音频数据(wavBase64)或格式不正确');
+    errors.push(t('main.singerMissingWav'));
   } else if (singerData.wavBase64.length === 0) {
-    errors.push('参考音频数据(wavBase64)为空');
+    errors.push(t('main.singerWavEmpty'));
   }
 
   if (singerData.midiNotes !== undefined && singerData.midiNotes !== null) {
     if (!Array.isArray(singerData.midiNotes)) {
-      warnings.push('MIDI音符数据(midiNotes)格式不正确，将被忽略');
+      warnings.push(t('main.singerMidiInvalid'));
     }
   }
 
   if (singerData.f0Data !== undefined && singerData.f0Data !== null) {
     if (!Array.isArray(singerData.f0Data)) {
-      warnings.push('F0数据(f0Data)格式不正确，将被忽略');
+      warnings.push(t('main.singerF0Invalid'));
     }
   }
 
   if (singerData.singerData !== undefined && singerData.singerData !== null) {
     if (typeof singerData.singerData !== 'object') {
-      warnings.push('歌手推理数据(singerData)格式不正确，将被忽略');
+      warnings.push(t('main.singerInferenceDataInvalid'));
     }
   }
 
@@ -405,7 +406,7 @@ function showSingerValidationReport(validation) {
 
   const titleEl = document.createElement('div');
   titleEl.style.cssText = 'margin-bottom: 12px; font-weight: 600; font-size: 14px;';
-  titleEl.textContent = validation.valid ? '歌手文件加载警告' : '歌手文件格式错误';
+  titleEl.textContent = validation.valid ? t('main.singerLoadWarnings') : t('main.singerFileFormatError');
   titleEl.style.color = validation.valid ? '#f39c12' : '#e74c3c';
 
   dialog.appendChild(titleEl);
@@ -415,7 +416,7 @@ function showSingerValidationReport(validation) {
     errSection.style.cssText = 'margin-bottom: 10px;';
     const errTitle = document.createElement('div');
     errTitle.style.cssText = 'color: #e74c3c; font-weight: 600; margin-bottom: 4px; font-size: 12px;';
-    errTitle.textContent = '错误:';
+    errTitle.textContent = t('common.errors');
     errSection.appendChild(errTitle);
     validation.errors.forEach(msg => {
       const item = document.createElement('div');
@@ -431,7 +432,7 @@ function showSingerValidationReport(validation) {
     warnSection.style.cssText = 'margin-bottom: 10px;';
     const warnTitle = document.createElement('div');
     warnTitle.style.cssText = 'color: #f39c12; font-weight: 600; margin-bottom: 4px; font-size: 12px;';
-    warnTitle.textContent = '警告:';
+    warnTitle.textContent = t('common.warnings');
     warnSection.appendChild(warnTitle);
     validation.warnings.forEach(msg => {
       const item = document.createElement('div');
@@ -446,7 +447,7 @@ function showSingerValidationReport(validation) {
   btnContainer.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;';
 
   const okBtn = document.createElement('button');
-  okBtn.textContent = '确定';
+  okBtn.textContent = t('common.confirm');
   okBtn.style.cssText = `
     padding: 6px 16px;
     background: ${validation.valid ? '#3498db' : '#e74c3c'};
@@ -496,7 +497,7 @@ async function loadSingerFile(singerId, buffer, filePath) {
   } catch (e) {
     await showSingerValidationReport({
       valid: false,
-      errors: ['歌手文件JSON解析失败，文件可能已损坏'],
+      errors: [t('main.singerJsonParseFailed')],
       warnings: [],
     });
     return;
@@ -534,7 +535,7 @@ async function addSingerFromFile(buffer, filePath) {
   } catch (e) {
     await showSingerValidationReport({
       valid: false,
-      errors: ['歌手文件JSON解析失败，文件可能已损坏'],
+      errors: [t('main.singerJsonParseFailed')],
       warnings: [],
     });
     return;
@@ -548,8 +549,8 @@ async function addSingerFromFile(buffer, filePath) {
 
   if (singerData) {
     const singer = trackManager.addSinger({
-      trackName: singerData.singerName || '未命名歌手',
-      singerName: singerData.singerName || '未命名歌手',
+      trackName: singerData.singerName || t('common.unnamedSinger'),
+      singerName: singerData.singerName || t('common.unnamedSinger'),
       avatarPath: singerData.avatarBase64 || null,
       color: singerData.color || null,
       singerFilePath: filePath || null,
@@ -576,7 +577,7 @@ timeSigDen.addEventListener('change', updateProjectSettings);
 btnPlay.addEventListener('click', async () => {
   const fragments = trackManager.getFragments();
   if (fragments.length === 0) {
-    alert('当前没有分片，无法播放');
+    alert(t('main.noFragmentsToPlay'));
     return;
   }
   if (isSynthesizing) {
@@ -748,7 +749,7 @@ async function ensurePipelineInitialized() {
 async function playAll() {
   isSynthesizing = true;
   btnPlay.disabled = true;
-  btnPlay.textContent = '合成中...';
+  btnPlay.textContent = t('main.synthesizing');
 
   try {
     const fragments = trackManager.getFragments();
@@ -766,7 +767,7 @@ async function playAll() {
 
     const singerIds = [...fragmentsBySinger.keys()];
     if (singerIds.length === 0) {
-      alert('当前没有分片，无法播放');
+      alert(t('main.noFragmentsToPlay'));
       return;
     }
 
@@ -822,7 +823,7 @@ async function playAll() {
     }
 
     if (singerDataMap.size === 0) {
-      alert('当前没有音符，无法播放');
+      alert(t('main.noNotesToPlay'));
       return;
     }
 
@@ -859,7 +860,7 @@ async function playAll() {
       completedSingers++;
       const overallProgress = (completedSingers / totalSingers) * 100;
       const currentSeconds = (overallProgress / 100) * totalSeconds;
-      timeDisplay.textContent = `合成中: ${formatTime(currentSeconds)} / ${formatTime(totalSeconds)}`;
+      timeDisplay.textContent = t('main.synthesizingShort') + ': ' + formatTime(currentSeconds) + ' / ' + formatTime(totalSeconds);
     }
 
     const maxEndBeat = globalLastEnd;
@@ -885,11 +886,11 @@ async function playAll() {
 
   } catch (error) {
     console.error('合成失败:', error);
-    alert(`合成失败: ${error.message}`);
+    alert(t('main.synthesisFailed') + ': ' + error.message);
     timeDisplay.textContent = formatTime(0);
   } finally {
     isSynthesizing = false;
-    btnPlay.textContent = '播放';
+    btnPlay.textContent = t('main.play');
     btnPlay.disabled = false;
   }
 }
@@ -1096,7 +1097,7 @@ function pausePlayback() {
     stopExclusivePlayback();
     isPlaying = false;
     stopPlayheadAnimation();
-    timeDisplay.textContent = `已暂停: ${formatTime(elapsed)}`;
+    timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
   } else {
     if (!currentAudioSource) return;
     const context = getAudioContext();
@@ -1105,7 +1106,7 @@ function pausePlayback() {
     stopAudioSource();
     isPlaying = false;
     stopPlayheadAnimation();
-    timeDisplay.textContent = `已暂停: ${formatTime(elapsed)}`;
+    timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
   }
 }
 
@@ -1191,7 +1192,7 @@ function showSaveProjectOptionsDialog() {
 
     const titleEl = document.createElement('div');
     titleEl.style.cssText = 'margin-bottom: 16px; font-weight: 600; font-size: 14px;';
-    titleEl.textContent = '保存项目选项';
+    titleEl.textContent = t('main.saveProjectOptions');
 
     const optionsContainer = document.createElement('div');
     optionsContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;';
@@ -1210,10 +1211,10 @@ function showSaveProjectOptionsDialog() {
     embedCheckbox.id = 'save-option-embed-singer';
     embedCheckbox.checked = false;
     const embedLabel = document.createElement('span');
-    embedLabel.textContent = '嵌入歌手文件到项目文件中';
+    embedLabel.textContent = t('main.embedSingerFiles');
     const embedDesc = document.createElement('div');
     embedDesc.style.cssText = 'font-size: 11px; color: #888888; margin-top: 2px; padding-left: 24px;';
-    embedDesc.textContent = '将歌手的参考音频和预处理数据嵌入项目文件，使项目文件可独立移动，但文件体积会增大';
+    embedDesc.textContent = t('main.embedSingerFilesDesc');
     embedOption.appendChild(embedCheckbox);
     embedOption.appendChild(embedLabel);
     optionsContainer.appendChild(embedOption);
@@ -1223,7 +1224,7 @@ function showSaveProjectOptionsDialog() {
     btnContainer.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
 
     const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = '取消';
+    cancelBtn.textContent = t('common.cancel');
     cancelBtn.style.cssText = `
       padding: 6px 16px;
       background: #3c3c3c;
@@ -1234,7 +1235,7 @@ function showSaveProjectOptionsDialog() {
     `;
 
     const saveBtn = document.createElement('button');
-    saveBtn.textContent = '保存';
+    saveBtn.textContent = t('common.save');
     saveBtn.style.cssText = `
       padding: 6px 16px;
       background: #3498db;
@@ -1303,7 +1304,7 @@ btnLoad.addEventListener('click', async () => {
           const projVersion = obj.version.split('.').map(Number);
           const currentVersion = [1, 1, 0];
           if (projVersion[0] > currentVersion[0]) {
-            alert(`项目文件版本(${obj.version})过高，请升级SXSEditor`);
+            alert(t('main.projectVersionTooHigh', { version: obj.version }));
             return;
           }
           if (projVersion[0] < currentVersion[0] || projVersion[1] < currentVersion[1]) {
@@ -1367,7 +1368,7 @@ btnLoad.addEventListener('click', async () => {
       }
     } catch (err) {
       console.error('加载失败', err);
-      alert('项目加载失败: ' + (err.message || '未知错误'));
+      alert(t('main.projectLoadFailed') + ': ' + (err.message || ''));
     }
   } else {
     console.log('加载功能待实现（需要 electronAPI）');
@@ -1377,14 +1378,14 @@ btnLoad.addEventListener('click', async () => {
 btnExport.addEventListener('click', async () => {
   const fragments = trackManager.getFragments();
   if (fragments.length === 0) {
-    alert('当前没有分片，无法导出');
+    alert(t('main.noFragmentsToExport'));
     return;
   }
 
   const originalText = btnExport.textContent;
   btnExport.disabled = true;
-  btnExport.textContent = '导出中...';
-  timeDisplay.textContent = '准备中...';
+  btnExport.textContent = t('main.exporting');
+  timeDisplay.textContent = t('main.preparing');
 
   try {
     const singers = trackManager.getSingers();
@@ -1418,7 +1419,7 @@ btnExport.addEventListener('click', async () => {
 
     const singerIds = Object.keys(allNotesBySinger);
     if (singerIds.length === 0) {
-      alert('当前分片没有音符，无法导出');
+      alert(t('main.noNotesToExport'));
       return;
     }
 
@@ -1470,7 +1471,7 @@ btnExport.addEventListener('click', async () => {
       });
     }
 
-    timeDisplay.textContent = '编码WAV...';
+    timeDisplay.textContent = t('main.encodingWav');
 
     const totalSamples = Math.ceil(maxDuration * SAMPLE_RATE);
     const mixedAudio = new Float32Array(totalSamples);
@@ -1489,7 +1490,7 @@ btnExport.addEventListener('click', async () => {
 
     const wavData = encodeWav(mixedAudio, SAMPLE_RATE);
 
-    timeDisplay.textContent = '保存文件...';
+    timeDisplay.textContent = t('main.savingFile');
 
     const result = await window.electronAPI.showSaveDialog({
       filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
@@ -1502,8 +1503,8 @@ btnExport.addEventListener('click', async () => {
 
   } catch (err) {
     console.error('导出失败', err);
-    alert(`导出失败: ${err.message || '未知错误'}`);
-    timeDisplay.textContent = '导出失败';
+    alert(t('main.exportFailed') + ': ' + (err.message || ''));
+    timeDisplay.textContent = t('main.exportFailed');
   } finally {
     btnExport.disabled = false;
     btnExport.textContent = originalText;
@@ -1584,7 +1585,7 @@ function renderSingerList() {
     infoDiv.className = 'singer-info-empty';
     const textDiv = document.createElement('div');
     textDiv.className = 'singer-empty-text';
-    textDiv.textContent = '点击添加歌手';
+    textDiv.textContent = t('main.clickToAddSinger');
     infoDiv.appendChild(textDiv);
     emptyItem.appendChild(avatarDiv);
     emptyItem.appendChild(infoDiv);
@@ -1640,7 +1641,7 @@ function renderSingerList() {
       if (singer.singerFileMissing) {
         const warningDiv = document.createElement('div');
         warningDiv.className = 'singer-file-missing-warning';
-        warningDiv.textContent = '⚠ 歌手文件未找到';
+        warningDiv.textContent = t('main.singerFileNotFound');
         infoDiv.appendChild(warningDiv);
       } else {
         const configDiv = document.createElement('div');
@@ -1685,17 +1686,17 @@ function renderSingerList() {
       if (singer.singerFileMissing) {
         const warningDiv = document.createElement('div');
         warningDiv.className = 'singer-file-missing-warning';
-        warningDiv.textContent = '⚠ 歌手文件未找到';
+        warningDiv.textContent = t('main.singerFileNotFound');
         infoDiv.appendChild(warningDiv);
 
         const relocateBtn = document.createElement('button');
         relocateBtn.className = 'btn-relocate-singer';
-        relocateBtn.textContent = '重新选定';
+        relocateBtn.textContent = t('main.relocate');
         relocateBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           try {
             const result = await window.electronAPI.showOpenDialog({
-              title: '重新选定歌手文件',
+              title: t('main.relocateSingerFile'),
               filters: [{ name: 'SXS Singer', extensions: ['sxssinger'] }],
               properties: ['openFile'],
             });
@@ -1728,7 +1729,7 @@ function renderSingerList() {
 
     const addBtn = document.createElement('button');
     addBtn.className = 'btn-fragment-add';
-    addBtn.title = '添加分片';
+    addBtn.title = t('main.addFragment');
     addBtn.dataset.singerId = singer.id;
     addBtn.textContent = '+';
     actionsDiv.appendChild(addBtn);
@@ -1736,7 +1737,7 @@ function renderSingerList() {
     if (singers.length > 1) {
       const delBtn = document.createElement('button');
       delBtn.className = 'btn-singer-delete';
-      delBtn.title = '删除歌手';
+      delBtn.title = t('main.deleteSinger');
       delBtn.dataset.singerId = singer.id;
       delBtn.textContent = '×';
       actionsDiv.appendChild(delBtn);
@@ -1873,7 +1874,7 @@ function renderFragmentTimeline() {
     if (i % 4 === 0) {
       ctx.fillStyle = '#666666';
       ctx.font = '10px sans-serif';
-      ctx.fillText(`第${i + 1}拍`, x + 2, HEADER_HEIGHT - 4);
+      ctx.fillText(t('main.beatN', { n: i + 1 }), x + 2, HEADER_HEIGHT - 4);
     }
   }
 
@@ -1904,11 +1905,11 @@ function renderFragmentTimeline() {
 
       ctx.fillStyle = '#ffffff';
       ctx.font = '11px sans-serif';
-      ctx.fillText(fragment.name || '新分片', fragX + 4, y + 20);
+      ctx.fillText(fragment.name || t('main.newFragment'), fragX + 4, y + 20);
 
       ctx.fillStyle = '#cccccc';
       ctx.font = '10px sans-serif';
-      ctx.fillText(`${fragment.startTime}-${fragment.startTime + fragment.duration}拍`, fragX + 4, y + 36);
+      ctx.fillText(t('main.beatRange', { start: fragment.startTime, end: fragment.startTime + fragment.duration }), fragX + 4, y + 36);
 
       ctx.save();
       ctx.strokeStyle = '#ffffff44';
@@ -1922,7 +1923,7 @@ function renderFragmentTimeline() {
     if (singerFragments.length === 0) {
       ctx.fillStyle = '#444444';
       ctx.font = '11px sans-serif';
-      ctx.fillText('点击 + 添加分片', 8, y + 30);
+      ctx.fillText(t('main.clickToAddFragment'), 8, y + 30);
     }
   });
 }
@@ -2082,7 +2083,7 @@ function openFragmentEditor(fragment) {
       wavBuffer,
     });
   } else {
-    alert('分片编辑窗口功能待实现');
+    alert(t('main.fragmentEditorNotImplemented'));
   }
 }
 
@@ -2159,5 +2160,8 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 });
+
+initI18n();
+applyLocale();
 
 console.log('SXSEditor 渲染进程已启动');

@@ -2,30 +2,30 @@
 <html>
   <head>
     <meta charset="UTF-8" />
-    <title>分片编辑</title>
+    <title data-i18n="fragment.title">分片编辑</title>
   </head>
   <body>
     <div id="app">
       <div id="model-loading-overlay">
         <div class="loading-content">
           <div class="loading-spinner"></div>
-          <div class="loading-text">正在加载推理模型，请稍候...</div>
+          <div class="loading-text" data-i18n="fragment.loadingModel">正在加载推理模型，请稍候...</div>
         </div>
       </div>
       <div id="toolbar">
         <div class="toolbar-group">
-          <button id="btn-save" title="Ctrl+S">💾 保存</button>
-          <button id="btn-close" title="关闭窗口">✖ 关闭</button>
+          <button id="btn-save" title="Ctrl+S" data-i18n="fragment.save">💾 保存</button>
+          <button id="btn-close" title="关闭窗口" data-i18n="fragment.close">✖ 关闭</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <span id="fragment-name">分片</span>
+          <span id="fragment-name" data-i18n="fragment.fragment">分片</span>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <button id="btn-play-fragment" title="Space">▶ 播放</button>
-          <button id="btn-export-fragment">💿 导出</button>
-          <button id="btn-import-midi">🎵 导入MIDI</button>
+          <button id="btn-play-fragment" title="Space" data-i18n="fragment.play">▶ 播放</button>
+          <button id="btn-export-fragment" data-i18n="fragment.export">💿 导出</button>
+          <button id="btn-import-midi" data-i18n="fragment.importMidi">🎵 导入MIDI</button>
           <input type="checkbox" id="autoShiftCheck" checked><label for="autoShiftCheck">Auto Shift</label>
         </div>
         <div class="toolbar-divider"></div>
@@ -37,9 +37,9 @@
         </div>
         <div class="toolbar-divider" id="pitch-tools-divider" style="display:none"></div>
         <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
-          <button id="btn-pitch-reset" class="btn-pitch-tool" title="重置为MIDI自动曲线">↺ 重置</button>
-          <span class="pitch-hint">点击添加 · Shift+拖拽画笔 · 右键删除 · 中键框选</span>
-          <span class="pitch-hint">平滑</span>
+          <button id="btn-pitch-reset" class="btn-pitch-tool" title="重置为MIDI自动曲线" data-i18n="fragment.reset" data-i18n-title="fragment.resetToAutoCurve">↺ 重置</button>
+          <span class="pitch-hint" data-i18n="fragment.pitchHint">点击添加 · Shift+拖拽画笔 · 右键删除 · 中键框选</span>
+          <span class="pitch-hint" data-i18n="fragment.smoothing">平滑</span>
           <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
           <span class="pitch-hint" id="brush-smoothing-label">30</span>
         </div>
@@ -63,52 +63,52 @@
       <div id="shortcuts-overlay" class="shortcuts-overlay">
         <div class="shortcuts-panel">
           <div class="shortcuts-header">
-            <span>快捷键</span>
+            <span data-i18n="fragment.shortcuts">快捷键</span>
             <button id="btn-close-shortcuts" class="btn-close-shortcuts">✕</button>
           </div>
           <div class="shortcuts-body">
             <div class="shortcut-section">
-              <div class="shortcut-section-title">通用</div>
-              <div class="shortcut-row"><kbd>Ctrl+Z</kbd><span>撤销</span></div>
-              <div class="shortcut-row"><kbd>Ctrl+Y</kbd><span>重做</span></div>
-              <div class="shortcut-row"><kbd>Ctrl+S</kbd><span>保存</span></div>
-              <div class="shortcut-row"><kbd>Space</kbd><span>播放/停止</span></div>
-              <div class="shortcut-row"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><span>切换 MIDI/Pitch/VOL/PAN</span></div>
-              <div class="shortcut-row"><kbd>F1</kbd><span>快捷键帮助</span></div>
+              <div class="shortcut-section-title" data-i18n="fragment.shortcutGeneral">通用</div>
+              <div class="shortcut-row"><kbd>Ctrl+Z</kbd><span data-i18n="fragment.shortcutUndo">撤销</span></div>
+              <div class="shortcut-row"><kbd>Ctrl+Y</kbd><span data-i18n="fragment.shortcutRedo">重做</span></div>
+              <div class="shortcut-row"><kbd>Ctrl+S</kbd><span data-i18n="fragment.shortcutSave">保存</span></div>
+              <div class="shortcut-row"><kbd>Space</kbd><span data-i18n="fragment.shortcutPlayStop">播放/停止</span></div>
+              <div class="shortcut-row"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><span data-i18n="fragment.shortcutSwitchMode">切换 MIDI/Pitch/VOL/PAN</span></div>
+              <div class="shortcut-row"><kbd>F1</kbd><span data-i18n="fragment.shortcutHelp">快捷键帮助</span></div>
             </div>
             <div class="shortcut-section">
-              <div class="shortcut-section-title">选择</div>
-              <div class="shortcut-row"><kbd>中键拖拽</kbd><span>框选音符/锚点</span></div>
-              <div class="shortcut-row"><kbd>Shift+中键</kbd><span>追加框选</span></div>
-              <div class="shortcut-row"><kbd>Ctrl+点击</kbd><span>切换选中</span></div>
-              <div class="shortcut-row"><kbd>Shift+点击</kbd><span>追加选中</span></div>
-              <div class="shortcut-row"><kbd>Ctrl+A</kbd><span>全选</span></div>
-              <div class="shortcut-row"><kbd>Escape</kbd><span>取消选择</span></div>
+              <div class="shortcut-section-title" data-i18n="fragment.shortcutSelection">选择</div>
+              <div class="shortcut-row"><kbd>中键拖拽</kbd><span data-i18n="fragment.shortcutBoxSelect">框选音符/锚点</span></div>
+              <div class="shortcut-row"><kbd>Shift+中键</kbd><span data-i18n="fragment.shortcutAppendBoxSelect">追加框选</span></div>
+              <div class="shortcut-row"><kbd>Ctrl+点击</kbd><span data-i18n="fragment.shortcutToggleSelect">切换选中</span></div>
+              <div class="shortcut-row"><kbd>Shift+点击</kbd><span data-i18n="fragment.shortcutAppendSelect">追加选中</span></div>
+              <div class="shortcut-row"><kbd>Ctrl+A</kbd><span data-i18n="fragment.shortcutSelectAll">全选</span></div>
+              <div class="shortcut-row"><kbd>Escape</kbd><span data-i18n="fragment.shortcutDeselect">取消选择</span></div>
             </div>
             <div class="shortcut-section">
-              <div class="shortcut-section-title">MIDI 编辑</div>
-              <div class="shortcut-row"><kbd>↑↓</kbd><span>上下移动音符（半音）</span></div>
-              <div class="shortcut-row"><kbd>←→</kbd><span>左右移动音符</span></div>
-              <div class="shortcut-row"><kbd>Shift+↑↓</kbd><span>上下移动音符（八度）</span></div>
-              <div class="shortcut-row"><kbd>Shift+←→</kbd><span>左右移动音符（整拍）</span></div>
-              <div class="shortcut-row"><kbd>Delete</kbd><span>删除选中音符</span></div>
-              <div class="shortcut-row"><kbd>Ctrl+D</kbd><span>复制选中音符</span></div>
-              <div class="shortcut-row"><kbd>双击</kbd><span>编辑歌词</span></div>
+              <div class="shortcut-section-title" data-i18n="fragment.shortcutMidiEdit">MIDI 编辑</div>
+              <div class="shortcut-row"><kbd>↑↓</kbd><span data-i18n="fragment.shortcutMoveNoteHalf">上下移动音符（半音）</span></div>
+              <div class="shortcut-row"><kbd>←→</kbd><span data-i18n="fragment.shortcutMoveNoteH">左右移动音符</span></div>
+              <div class="shortcut-row"><kbd>Shift+↑↓</kbd><span data-i18n="fragment.shortcutMoveNoteOctave">上下移动音符（八度）</span></div>
+              <div class="shortcut-row"><kbd>Shift+←→</kbd><span data-i18n="fragment.shortcutMoveNoteBeat">左右移动音符（整拍）</span></div>
+              <div class="shortcut-row"><kbd>Delete</kbd><span data-i18n="fragment.shortcutDeleteNote">删除选中音符</span></div>
+              <div class="shortcut-row"><kbd>Ctrl+D</kbd><span data-i18n="fragment.shortcutDuplicateNote">复制选中音符</span></div>
+              <div class="shortcut-row"><kbd>双击</kbd><span data-i18n="fragment.shortcutEditLyric">编辑歌词</span></div>
             </div>
             <div class="shortcut-section">
-              <div class="shortcut-section-title">Pitch 编辑</div>
-              <div class="shortcut-row"><kbd>点击</kbd><span>添加锚点</span></div>
-              <div class="shortcut-row"><kbd>拖拽锚点</kbd><span>移动锚点</span></div>
-              <div class="shortcut-row"><kbd>Shift+拖拽</kbd><span>画笔模式</span></div>
-              <div class="shortcut-row"><kbd>右键</kbd><span>删除锚点</span></div>
-              <div class="shortcut-row"><kbd>Delete</kbd><span>删除选中锚点</span></div>
-              <div class="shortcut-row"><kbd>↑↓←→</kbd><span>移动选中锚点</span></div>
+              <div class="shortcut-section-title" data-i18n="fragment.shortcutPitchEdit">Pitch 编辑</div>
+              <div class="shortcut-row"><kbd>点击</kbd><span data-i18n="fragment.shortcutAddAnchor">添加锚点</span></div>
+              <div class="shortcut-row"><kbd>拖拽锚点</kbd><span data-i18n="fragment.shortcutMoveAnchor">移动锚点</span></div>
+              <div class="shortcut-row"><kbd>Shift+拖拽</kbd><span data-i18n="fragment.shortcutBrushMode">画笔模式</span></div>
+              <div class="shortcut-row"><kbd>右键</kbd><span data-i18n="fragment.shortcutDeleteAnchor">删除锚点</span></div>
+              <div class="shortcut-row"><kbd>Delete</kbd><span data-i18n="fragment.shortcutDeleteSelectedAnchor">删除选中锚点</span></div>
+              <div class="shortcut-row"><kbd>↑↓←→</kbd><span data-i18n="fragment.shortcutMoveSelectedAnchor">移动选中锚点</span></div>
             </div>
             <div class="shortcut-section">
-              <div class="shortcut-section-title">视图</div>
-              <div class="shortcut-row"><kbd>Ctrl+滚轮</kbd><span>水平缩放</span></div>
-              <div class="shortcut-row"><kbd>Shift+滚轮</kbd><span>水平滚动</span></div>
-              <div class="shortcut-row"><kbd>滚轮</kbd><span>垂直滚动</span></div>
+              <div class="shortcut-section-title" data-i18n="fragment.shortcutView">视图</div>
+              <div class="shortcut-row"><kbd>Ctrl+滚轮</kbd><span data-i18n="fragment.shortcutHorizontalZoom">水平缩放</span></div>
+              <div class="shortcut-row"><kbd>Shift+滚轮</kbd><span data-i18n="fragment.shortcutHorizontalScroll">水平滚动</span></div>
+              <div class="shortcut-row"><kbd>滚轮</kbd><span data-i18n="fragment.shortcutVerticalScroll">垂直滚动</span></div>
             </div>
           </div>
         </div>

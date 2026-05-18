@@ -1,4 +1,5 @@
 import './audioPreprocess.css';
+import { t, initI18n, applyLocale } from './i18n/index.js';
 
 function isCJK(char) {
   const code = char.codePointAt(0) || 0;
@@ -221,7 +222,7 @@ async function startPlayback() {
       if (isPlaying) {
         isPlaying = false;
         playStartOffset = 0;
-        btnPlayPause.textContent = '▶ 播放';
+        btnPlayPause.textContent = t('preprocess.play');
         stopPlaybackRaf();
         drawWaveformWithPlayhead(0);
         if (pianoRoll) pianoRoll.stopPlayback();
@@ -231,7 +232,7 @@ async function startPlayback() {
     audioSource = source;
     isPlaying = true;
     playStartTime = performance.now();
-    btnPlayPause.textContent = '⏸ 暂停';
+    btnPlayPause.textContent = t('preprocess.pause');
 
     // 统一播放循环，确保waveform和pianoRoll使用同一个时间源
     if (pianoRoll) {
@@ -267,7 +268,7 @@ function pausePlayback() {
     playStartOffset = 0;
   }
 
-  btnPlayPause.textContent = '▶ 播放';
+  btnPlayPause.textContent = t('preprocess.play');
   stopPlaybackRaf();
 
   const currentTime = playStartOffset;
@@ -289,7 +290,7 @@ function stopPlayback() {
   }
   stopPlaybackRaf();
   playStartOffset = 0;
-  btnPlayPause.textContent = '▶ 播放';
+  btnPlayPause.textContent = t('preprocess.play');
   drawWaveformWithPlayhead(0);
   if (pianoRoll) pianoRoll.stopPlayback();
 }
@@ -804,7 +805,7 @@ async function initPianoRoll() {
       ctx.fillStyle = '#888888';
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'left';
-      ctx.fillText('F0 基频曲线 (只读)', PIANO_KEY_WIDTH + 6, f0AreaTop + 14);
+      ctx.fillText(t('preprocess.f0CurveReadOnly'), PIANO_KEY_WIDTH + 6, f0AreaTop + 14);
 
       ctx.strokeStyle = '#444444';
       ctx.lineWidth = 1;
@@ -1062,7 +1063,7 @@ async function initPianoRoll() {
 function updateMidiInfo() {
   if (pianoRoll) {
     const noteCount = pianoRoll.notes.length;
-    midiInfoEl.textContent = noteCount > 0 ? `${noteCount} 音符` : '等待提取...';
+    midiInfoEl.textContent = noteCount > 0 ? t('preprocess.noteCount', { count: noteCount }) : t('preprocess.waitingForExtraction');
   }
 }
 
@@ -1295,7 +1296,7 @@ function showPromptDialog(title, defaultValue, onConfirm) {
   });
 }
 
-function showLoading(text = '处理中...') {
+function showLoading(text = t('preprocess.processing')) {
   const existing = document.querySelector('.loading-overlay');
   if (existing) existing.remove();
 
@@ -1319,11 +1320,11 @@ function hideLoading(overlay) {
 
 async function extractF0AndPitch() {
   if (!wavAudioBuffer) {
-    alert('请先加载音频文件');
+    alert(t('preprocess.pleaseLoadAudio'));
     return;
   }
 
-  const loading = showLoading('正在使用RMVPE提取F0基频...');
+  const loading = showLoading(t('preprocess.extractingF0Rmvpe'));
 
   try {
     const channelData = wavAudioBuffer.getChannelData(0);
@@ -1363,10 +1364,10 @@ async function extractF0AndPitch() {
     };
 
     updateMidiInfo();
-    alert('F0基频提取完成（RMVPE模型）');
+    alert(t('preprocess.f0ExtractionComplete'));
   } catch (err) {
     console.error('提取失败:', err);
-    alert('提取失败: ' + err.message);
+    alert(t('preprocess.extractionFailed') + ': ' + err.message);
   } finally {
     hideLoading(loading);
   }
@@ -1374,11 +1375,11 @@ async function extractF0AndPitch() {
 
 async function extractF0BasicPitch() {
   if (!wavAudioBuffer) {
-    alert('请先加载音频文件');
+    alert(t('preprocess.pleaseLoadAudio'));
     return;
   }
 
-  const loading = showLoading('正在使用Basic Pitch提取MIDI音符...');
+  const loading = showLoading(t('preprocess.extractingMidiBasicPitch'));
 
   try {
     const channelData = wavAudioBuffer.getChannelData(0);
@@ -1430,10 +1431,10 @@ async function extractF0BasicPitch() {
     };
 
     updateMidiInfo();
-    alert('MIDI音符提取完成（Basic Pitch模型）');
+    alert(t('preprocess.midiExtractionComplete'));
   } catch (err) {
     console.error('提取失败:', err);
-    alert('提取失败: ' + err.message);
+    alert(t('preprocess.extractionFailed') + ': ' + err.message);
   } finally {
     hideLoading(loading);
   }
@@ -1502,7 +1503,7 @@ async function simulateF0AndPitchExtraction() {
 
 async function saveSingerData() {
   if (!wavAudioBuffer) {
-    alert('没有可保存的音频数据');
+    alert(t('preprocess.noAudioToSave'));
     return;
   }
 
@@ -1521,7 +1522,7 @@ async function saveSingerData() {
     };
   }
 
-  const loading = showLoading('正在保存预处理数据...');
+  const loading = showLoading(t('preprocess.savingPreprocessData'));
 
   try {
     const preprocessResult = {
@@ -1532,12 +1533,12 @@ async function saveSingerData() {
 
     await window.electronAPI.sendPreprocessData(preprocessResult);
 
-    alert('预处理数据保存成功！');
+    alert(t('preprocess.preprocessSaveSuccess'));
     stopPlayback();
     window.close();
   } catch (err) {
     console.error('保存失败:', err);
-    alert('保存失败: ' + err.message);
+    alert(t('preprocess.saveFailed') + ': ' + err.message);
   } finally {
     hideLoading(loading);
   }
@@ -1653,7 +1654,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 
     function initializeWithData(data) {
       if (!data || !data.wavBuffer) {
-        alert('未接收到音频数据');
+        alert(t('preprocess.noAudioReceived'));
         return;
       }
 
@@ -1665,7 +1666,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       avatarImageName = data.data?.avatarImageName;
 
       wavFileNameEl.textContent = wavFileName;
-      midiInfoEl.textContent = '等待提取...';
+      midiInfoEl.textContent = t('preprocess.waitingForExtraction');
 
       processWavBuffer(wavFileBuffer).then((buffer) => {
         wavAudioBuffer = buffer;
@@ -1674,11 +1675,11 @@ window.addEventListener('DOMContentLoaded', async () => {
         drawWaveformWithPlayhead(0);
 
         initPianoRoll().then(() => {
-          console.log('音频预处理页面已启动');
+          console.log(t('preprocess.consoleStarted'));
         });
       }).catch((err) => {
-        console.error('初始化失败:', err);
-        alert('初始化失败: ' + err.message);
+        console.error(t('preprocess.initFailed'), err);
+        alert(t('preprocess.initFailed') + ': ' + err.message);
       });
     }
 
@@ -1691,7 +1692,10 @@ window.addEventListener('DOMContentLoaded', async () => {
       initializeWithData(initialData);
     }
   } catch (err) {
-    console.error('初始化失败:', err);
-    alert('初始化失败: ' + err.message);
+    console.error(t('preprocess.initFailed'), err);
+    alert(t('preprocess.initFailed') + ': ' + err.message);
   }
 });
+
+initI18n();
+applyLocale();

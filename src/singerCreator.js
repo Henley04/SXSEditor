@@ -1,4 +1,5 @@
 import './singerCreator.css';
+import { t, initI18n, applyLocale } from './i18n/index.js';
 
 let wavFileBuffer = null;
 let wavFileName = '';
@@ -110,11 +111,11 @@ btnClearWav.addEventListener('click', () => {
 
 btnStartPreprocess.addEventListener('click', () => {
   if (!wavFileBuffer) {
-    alert('请先上传WAV文件');
+    alert(t('singerCreator.pleaseUploadWav'));
     return;
   }
   if (!window.electronAPI || !window.electronAPI.openAudioPreprocess) {
-    alert('音频预处理功能不可用');
+    alert(t('singerCreator.preprocessUnavailable'));
     return;
   }
   stopPreviewPlayback();
@@ -171,11 +172,11 @@ btnCancel.addEventListener('click', () => {
 
 btnCreate.addEventListener('click', async () => {
   if (!wavFileBuffer) {
-    alert('请选择WAV参考音频文件');
+    alert(t('singerCreator.pleaseSelectWav'));
     return;
   }
   if (!window.electronAPI || !window.electronAPI.saveSingerFile) {
-    alert('保存功能不可用');
+    alert(t('singerCreator.saveUnavailable'));
     return;
   }
 
@@ -200,20 +201,20 @@ btnCreate.addEventListener('click', async () => {
     });
 
     if (result && result.success) {
-      alert('歌手创建成功！');
+      alert(t('singerCreator.createSuccess'));
       window.close();
     } else {
-      alert('歌手创建失败: ' + (result && result.error ? result.error : '未知错误'));
+      alert(t('singerCreator.createFailed') + ': ' + (result && result.error ? result.error : ''));
     }
   } catch (err) {
     console.error('保存歌手文件失败:', err);
-    alert('歌手创建失败: ' + (err && err.message ? err.message : '未知错误'));
+    alert(t('singerCreator.createFailed') + ': ' + (err && err.message ? err.message : ''));
   }
 });
 
 function handleAvatarFile(file) {
   if (!file.type.startsWith('image/')) {
-    alert('请选择图片文件');
+    alert(t('singerCreator.pleaseSelectImage'));
     return;
   }
 
@@ -227,14 +228,14 @@ function handleAvatarFile(file) {
     updatePreview();
   };
   reader.onerror = () => {
-    alert('图片读取失败');
+    alert(t('singerCreator.imageReadFailed'));
   };
   reader.readAsDataURL(file);
 }
 
 async function handleWavFile(file) {
   if (!file.name.toLowerCase().endsWith('.wav')) {
-    alert('请选择WAV格式的文件');
+    alert(t('singerCreator.pleaseSelectWavFormat'));
     return;
   }
 
@@ -250,7 +251,7 @@ async function handleWavFile(file) {
     audioCtx.close();
 
     if (wavDuration > 30) {
-      alert('WAV文件时长超过30秒，建议截断后重新上传');
+      alert(t('singerCreator.wavTooLong'));
     }
 
     wavInfo.style.display = 'block';
@@ -265,7 +266,7 @@ async function handleWavFile(file) {
     updatePreview();
   } catch (err) {
     console.error('WAV解析失败:', err);
-    alert('WAV文件解析失败: ' + err.message);
+    alert(t('singerCreator.wavParseFailed') + ': ' + err.message);
   }
 }
 
@@ -364,7 +365,7 @@ async function playPreviewWav() {
       if (isPlayingPreview) {
         isPlayingPreview = false;
         previewPlayStartOffset = 0;
-        btnPlayPreview.textContent = '▶ 预览';
+        btnPlayPreview.textContent = t('singerCreator.preview');
         stopPreviewRaf();
         drawWaveform(0);
       }
@@ -373,7 +374,7 @@ async function playPreviewWav() {
     previewAudioSource = source;
     isPlayingPreview = true;
     previewPlayStartContextTime = previewAudioContext.currentTime;
-    btnPlayPreview.textContent = '⏸ 暂停';
+    btnPlayPreview.textContent = t('singerCreator.pausePreview');
     startPreviewPlaybackLoop();
   } catch (err) {
     console.error('预览播放失败:', err);
@@ -399,7 +400,7 @@ function pausePreviewPlayback() {
     previewPlayStartOffset = 0;
   }
 
-  btnPlayPreview.textContent = '▶ 预览';
+  btnPlayPreview.textContent = t('singerCreator.preview');
   stopPreviewRaf();
   drawWaveform(previewPlayStartOffset);
 }
@@ -437,7 +438,7 @@ function stopPreviewPlayback() {
   }
   isPlayingPreview = false;
   previewPlayStartOffset = 0;
-  btnPlayPreview.textContent = '▶ 预览';
+  btnPlayPreview.textContent = t('singerCreator.preview');
   drawWaveform(0);
 }
 
@@ -459,10 +460,10 @@ function updatePreview() {
 
   const hasWav = !!wavFileBuffer;
 
-  previewWavStatus.textContent = hasWav ? 'WAV ✓' : 'WAV';
+  previewWavStatus.textContent = hasWav ? 'WAV ✓' : t('singerCreator.wavStatus');
   previewWavStatus.className = 'status-badge' + (hasWav ? ' ready' : '');
 
-  previewPreprocessStatus.textContent = isPreprocessed ? '预处理 ✓' : '预处理';
+  previewPreprocessStatus.textContent = isPreprocessed ? '预处理 ✓' : t('singerCreator.preprocessStatus');
   previewPreprocessStatus.className = 'status-badge' + (isPreprocessed ? ' ready' : '');
 
   if (hasWav) {
@@ -488,3 +489,6 @@ if (window.electronAPI && window.electronAPI.onPreprocessDataSaved) {
 }
 
 console.log('歌手创建页面已启动');
+
+initI18n();
+applyLocale();
