@@ -91,7 +91,7 @@ async function loadDevices() {
         await loadAudioSettings(currentSetting);
     } catch (err) {
         console.error('加载设备列表失败:', err);
-        inferenceDeviceSelect.innerHTML = '<option value="auto">自动选择</option>';
+        inferenceDeviceSelect.innerHTML = `<option value="auto">${t('settings.autoSelect')}</option>`;
     }
 }
 
@@ -100,18 +100,18 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
     if (!textEl) return;
 
     if (hardwareInfo) {
-        const gpuName = hardwareInfo.gpuDeviceName || '无 GPU (仅 CPU)';
+        const gpuName = hardwareInfo.gpuDeviceName || t('settings.cpuOnly');
         const dmlCount = hardwareInfo.dmlModelCount || 0;
         const cpuCount = hardwareInfo.cpuModelCount || 0;
         const total = hardwareInfo.totalModels || 0;
 
         let epDetail = '';
         if (dmlCount > 0 && cpuCount > 0) {
-            epDetail = ` (DML: ${dmlCount}/${total} 模型, CPU: ${cpuCount}/${total} 模型)`;
+            epDetail = ` (${t('settings.dmlModels', { count: dmlCount, total })}, ${t('settings.cpuModels', { count: cpuCount, total })})`;
         } else if (dmlCount > 0) {
-            epDetail = ` (DML: ${dmlCount}/${total} 模型)`;
+            epDetail = ` (${t('settings.dmlModels', { count: dmlCount, total })})`;
         } else if (cpuCount > 0) {
-            epDetail = ` (CPU: ${cpuCount}/${total} 模型)`;
+            epDetail = ` (${t('settings.cpuModels', { count: cpuCount, total })})`;
         }
 
         let deviceIdStr = '';
@@ -124,7 +124,7 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
     }
 
     if (!devices || devices.length === 0) {
-        textEl.textContent = '未检测到 GPU 设备';
+        textEl.textContent = t('settings.noGpuDetected');
         return;
     }
 
@@ -136,8 +136,8 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
         const selected = devices.find(d => d.dxgiAdapterNumber === selectedDeviceId);
         if (selected) {
             const vramStr = selected.vram ? ` (${selected.vram})` : '';
-            const discreteStr = selected.isDiscrete ? ' [独显]' : ' [核显]';
-            textEl.textContent = `${selected.name}${vramStr}${discreteStr} [deviceId=${selectedDeviceId}] (待初始化)`;
+            const discreteStr = selected.isDiscrete ? ` ${t('settings.discreteGpu')}` : ` ${t('settings.integratedGpu')}`;
+            textEl.textContent = `${selected.name}${vramStr}${discreteStr} [deviceId=${selectedDeviceId}] ${t('settings.pendingInit')}`;
             return;
         }
     }
@@ -146,11 +146,11 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
     if (discrete.length > 0) {
         const best = discrete.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
         const vramStr = best.vram ? ` (${best.vram})` : '';
-        textEl.textContent = `自动选择: ${best.name}${vramStr} [独显] (待初始化)`;
+        textEl.textContent = `${t('settings.autoSelect')}: ${best.name}${vramStr} ${t('settings.discreteGpu')} ${t('settings.pendingInit')}`;
     } else {
         const best = devices.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
         const vramStr = best.vram ? ` (${best.vram})` : '';
-        textEl.textContent = `自动选择: ${best.name}${vramStr} [核显] (待初始化)`;
+        textEl.textContent = `${t('settings.autoSelect')}: ${best.name}${vramStr} ${t('settings.integratedGpu')} ${t('settings.pendingInit')}`;
     }
 }
 
@@ -161,7 +161,7 @@ async function loadAudioSettings(currentSetting) {
         const isNaudiodonAvailable = audioResult.isAvailable || false;
 
         if (!isNaudiodonAvailable) {
-            audioOutputModeSelect.innerHTML = '<option value="shared">共享模式 (WASAPI 不可用)</option>';
+            audioOutputModeSelect.innerHTML = `<option value="shared">${t('settings.sharedModeUnavailable')}</option>`;
             audioOutputModeSelect.disabled = true;
             audioBitDepthSelect.disabled = true;
         }
@@ -211,7 +211,7 @@ async function loadAudioSettings(currentSetting) {
 }
 
 function populateAudioDevices(audioDevices) {
-    audioOutputDeviceSelect.innerHTML = '<option value="-1">系统默认</option>';
+    audioOutputDeviceSelect.innerHTML = `<option value="-1">${t('settings.systemDefault')}</option>`;
 
     for (const d of audioDevices) {
         const option = document.createElement('option');
@@ -279,3 +279,6 @@ cancelBtn.addEventListener('click', () => {
 })();
 
 loadDevices();
+
+initI18n();
+applyLocale();
