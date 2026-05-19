@@ -68,6 +68,7 @@ Download the latest pre-built installer for **Windows**:
 | 🔊 WASAPI Exclusive Mode | Low-latency audio output via naudiodon |
 | 📦 WAV Export | Mix & export to standard WAV (24kHz) |
 | ⚡ GPU Acceleration | DirectML (NVIDIA / AMD / Intel) |
+| 🚀 Optimized IPC | Float32Array binary transfer for low-latency audio pipeline |
 
 #### SVS Language Support
 
@@ -318,6 +319,7 @@ This project is licensed under the [MIT License](LICENSE).
 | 🔊 WASAPI 独占模式 | 通过 naudiodon 实现低延迟音频输出 |
 | 📦 WAV 导出 | 混音导出为标准 WAV |
 | ⚡ GPU 加速 | DirectML（NVIDIA / AMD / Intel） |
+| 🚀 优化 IPC 传输 | Float32Array 二进制传输，低延迟音频管线 |
 
 #### SVS 语言支持
 
@@ -465,6 +467,7 @@ npm run test:watch       # 监视模式
 | 🔊 WASAPI 排他モード | naudiodon による低レイテンシオーディオ出力 |
 | 📦 WAV エクスポート | 標準 WAV へのミックスダウン |
 | ⚡ GPU アクセラレーション | DirectML（NVIDIA / AMD / Intel） |
+| 🚀 最適化 IPC 転送 | Float32Array バイナリ転送による低レイテンシオーディオパイプライン |
 
 ---
 
