@@ -1847,6 +1847,7 @@ function renderFragmentTimeline() {
   const ctx = fragmentCanvas.getContext('2d');
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
+  const dpr = window.devicePixelRatio || 1;
 
   const beatWidth = FRAGMENT_BASE_BEAT_WIDTH * fragmentZoomX;
   const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
@@ -1854,12 +1855,17 @@ function renderFragmentTimeline() {
   const canvasWidth = totalBeats * beatWidth;
   const canvasHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
 
-  fragmentCanvas.width = canvasWidth;
-  fragmentCanvas.height = canvasHeight;
+  fragmentCanvas.style.width = canvasWidth + 'px';
+  fragmentCanvas.style.height = canvasHeight + 'px';
+  fragmentCanvas.width = Math.floor(canvasWidth * dpr);
+  fragmentCanvas.height = Math.floor(canvasHeight * dpr);
+
   const newWidth = canvasWidth + 'px';
   const newHeight = canvasHeight + 'px';
   if (fragmentContainer.style.width !== newWidth) fragmentContainer.style.width = newWidth;
   if (fragmentContainer.style.height !== newHeight) fragmentContainer.style.height = newHeight;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   ctx.fillStyle = '#1e1e1e';
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
