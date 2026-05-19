@@ -122,7 +122,10 @@ window.electronAPI.onModelDownloadProgress((data) => {
 
 window.electronAPI.onModelDownloadFileStart((data) => {
   fileStates[data.filePath] = { status: 'downloading', progress: 0, downloaded: 0, total: 0 };
-  document.getElementById('statusText').innerHTML = `<span class="spinner"></span>${t('modelDownload.downloading', { file: data.filePath })}`;
+  // 统计当前正在下载的文件数
+  const downloadingCount = Object.values(fileStates).filter(s => s.status === 'downloading').length;
+  const completedCount = Object.values(fileStates).filter(s => s.status === 'complete').length;
+  document.getElementById('statusText').innerHTML = `<span class="spinner"></span>${t('modelDownload.downloadingMultiple', { active: downloadingCount, completed: completedCount, total: missingFiles.length })}`;
   renderFileList();
 });
 
