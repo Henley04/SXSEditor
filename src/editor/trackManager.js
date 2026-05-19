@@ -5,9 +5,9 @@
  */
 
 const TRACK_COLORS = [
-  '#e74c3c', '#e67e22', '#f1c40f', '#2ecc71',
-  '#1abc9c', '#3498db', '#9b59b6', '#e91e63',
-  '#00bcd4', '#8bc34a', '#ff9800', '#ff5722',
+  '#f87171', '#fb923c', '#fbbf24', '#4ade80',
+  '#2dd4bf', '#5b8def', '#a78bfa', '#f472b6',
+  '#22d3ee', '#86efac', '#fdba74', '#f97316',
 ];
 
 let nextSingerId = 1;

@@ -1798,7 +1798,7 @@ function renderSingerList() {
         },
         redo() {
           const singer = trackManager.getSinger(singerId);
-          const color = singer ? singer.color : '#3498db';
+          const color = singer ? singer.color : '#5b8def';
           const frag = trackManager.addFragment({ singerId, startTime, duration: 4, color });
           renderFragmentTimeline();
         }
@@ -1883,10 +1883,10 @@ function renderFragmentTimeline() {
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  ctx.fillStyle = '#1e1e1e';
+  ctx.fillStyle = '#14141f';
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-  ctx.strokeStyle = '#333333';
+  ctx.strokeStyle = '#2a2a3d';
   ctx.lineWidth = 1;
   for (let i = 0; i <= totalBeats; i++) {
     const x = i * beatWidth;
@@ -1896,7 +1896,7 @@ function renderFragmentTimeline() {
     ctx.stroke();
 
     if (i % 4 === 0) {
-      ctx.fillStyle = '#666666';
+      ctx.fillStyle = '#6a6a86';
       ctx.font = '10px sans-serif';
       ctx.fillText(t('main.beatN', { n: i + 1 }), x + 2, HEADER_HEIGHT - 4);
     }
@@ -1905,10 +1905,10 @@ function renderFragmentTimeline() {
   singers.forEach((singer, index) => {
     const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
 
-    ctx.fillStyle = '#2d2d2d';
+    ctx.fillStyle = '#1e1e2e';
     ctx.fillRect(0, y, canvasWidth, SINGER_ROW_HEIGHT - 2);
 
-    ctx.strokeStyle = '#1a1a1a';
+    ctx.strokeStyle = '#1a1a28';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, y + SINGER_ROW_HEIGHT - 2);
@@ -1927,11 +1927,11 @@ function renderFragmentTimeline() {
       ctx.lineWidth = 2;
       ctx.strokeRect(fragX, y + 4, fragWidth, FRAGMENT_HEIGHT);
 
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = '#e0e0f0';
       ctx.font = '11px sans-serif';
       ctx.fillText(fragment.name || t('main.newFragment'), fragX + 4, y + 20);
 
-      ctx.fillStyle = '#cccccc';
+      ctx.fillStyle = '#a8a8c0';
       ctx.font = '10px sans-serif';
       ctx.fillText(t('main.beatRange', { start: fragment.startTime, end: fragment.startTime + fragment.duration }), fragX + 4, y + 36);
 
@@ -1945,7 +1945,7 @@ function renderFragmentTimeline() {
     });
 
     if (singerFragments.length === 0) {
-      ctx.fillStyle = '#444444';
+      ctx.fillStyle = '#4a4a66';
       ctx.font = '11px sans-serif';
       ctx.fillText(t('main.clickToAddFragment'), 8, y + 30);
     }

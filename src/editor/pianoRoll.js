@@ -387,10 +387,10 @@ class PianoRoll {
       top: ${inputY}px;
       width: ${inputW}px;
       height: ${inputH}px;
-      background: #1e1e1e;
-      border: 1px solid #3498db;
+      background: #14141f;
+      border: 1px solid #5b8def;
       border-radius: 2px;
-      color: #ffffff;
+      color: #e0e0f0;
       font-size: 11px;
       font-family: sans-serif;
       padding: 0 2px;
@@ -560,7 +560,7 @@ class PianoRoll {
   }
 
   _drawBackground(ctx, w, h) {
-    ctx.fillStyle = '#1e1e1e';
+    ctx.fillStyle = '#14141f';
     ctx.fillRect(0, 0, w, h);
   }
 
@@ -581,7 +581,7 @@ class PianoRoll {
       if (x < PIANO_KEY_WIDTH) continue;
 
       const isMeasureLine = (b % beatsPerMeasure === 0);
-      ctx.strokeStyle = isMeasureLine ? '#666666' : '#444444';
+      ctx.strokeStyle = isMeasureLine ? '#4a4a66' : '#2a2a3d';
       ctx.beginPath();
       ctx.moveTo(x, HEADER_HEIGHT);
       ctx.lineTo(x, this._getParamCurveAreaTop());
@@ -589,7 +589,7 @@ class PianoRoll {
 
       // 小节编号
       if (isMeasureLine) {
-        ctx.fillStyle = '#999999';
+        ctx.fillStyle = '#8888a8';
         ctx.font = '11px sans-serif';
         ctx.textAlign = 'center';
         const measureNum = Math.floor(b / beatsPerMeasure) + 1;
@@ -603,7 +603,7 @@ class PianoRoll {
     for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
       const y = this._pitchToY(p);
       const isBlack = BLACK_KEYS.has(p % 12);
-      ctx.strokeStyle = isBlack ? '#333333' : '#2a2a2a';
+      ctx.strokeStyle = isBlack ? '#2a2a3d' : '#1e1e2e';
       ctx.beginPath();
       ctx.moveTo(PIANO_KEY_WIDTH, y);
       ctx.lineTo(w, y);
@@ -623,15 +623,15 @@ class PianoRoll {
       const keyH = NOTE_HEIGHT * this.zoomY;
       const isBlack = BLACK_KEYS.has(p % 12);
 
-      ctx.fillStyle = isBlack ? '#111111' : '#eeeeee';
+      ctx.fillStyle = isBlack ? '#0a0a14' : '#e0e0f0';
       ctx.fillRect(0, y, PIANO_KEY_WIDTH, keyH);
 
-      ctx.strokeStyle = '#555555';
+      ctx.strokeStyle = '#3a3a52';
       ctx.strokeRect(0, y, PIANO_KEY_WIDTH, keyH);
 
       // 白键显示音名
       if (!isBlack) {
-        ctx.fillStyle = '#333333';
+        ctx.fillStyle = '#2a2a3d';
         ctx.font = '10px sans-serif';
         ctx.textAlign = 'right';
         ctx.fillText(midiToNoteName(p), PIANO_KEY_WIDTH - 4, y + keyH / 2 + 4);
@@ -639,7 +639,7 @@ class PianoRoll {
     }
 
     // 钢琴键与网格分隔线
-    ctx.strokeStyle = '#555555';
+    ctx.strokeStyle = '#3a3a52';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(PIANO_KEY_WIDTH, HEADER_HEIGHT);
@@ -663,7 +663,7 @@ class PianoRoll {
       }
 
       const track = this.tracks.find((t) => t.id === note.trackId);
-      const baseColor = track?.color ?? '#3498db';
+      const baseColor = track?.color ?? '#5b8def';
 
       // 选中高亮
       const isSelected = note.id === this.selectedNoteId;
@@ -675,7 +675,7 @@ class PianoRoll {
       ctx.globalAlpha = 1.0;
 
       // 边框
-      ctx.strokeStyle = isSelected ? '#ffffff' : (isHover ? '#dddddd' : '#000000');
+      ctx.strokeStyle = isSelected ? '#ffffff' : (isHover ? '#d8d8ec' : '#0a0a14');
       ctx.lineWidth = isSelected ? 2 : 1;
       ctx.strokeRect(x, y, w, h);
 
@@ -742,10 +742,10 @@ class PianoRoll {
     const areaTop = this._getParamCurveAreaTop();
     const areaBottom = this._getParamCurveAreaBottom();
 
-    ctx.fillStyle = '#1e1e1e';
+    ctx.fillStyle = '#14141f';
     ctx.fillRect(0, areaTop, w, PARAM_CURVE_HEIGHT);
 
-    ctx.strokeStyle = '#444444';
+    ctx.strokeStyle = '#2a2a3d';
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, areaTop);
@@ -753,7 +753,7 @@ class PianoRoll {
     ctx.stroke();
 
     const { min, max } = this._getParamCurveYRange();
-    ctx.fillStyle = '#666666';
+    ctx.fillStyle = '#6a6a86';
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText(max.toFixed(0), 4, areaTop + 12);
@@ -769,11 +769,11 @@ class PianoRoll {
     const steps = Math.max(50, Math.floor(maxTime * 20));
 
     const lineColors = {
-      [PARAM_MODES.VOL]: '#3498db',
-      [PARAM_MODES.PAN]: '#e74c3c',
-      [PARAM_MODES.F0]: '#2ecc71',
+      [PARAM_MODES.VOL]: '#5b8def',
+      [PARAM_MODES.PAN]: '#f87171',
+      [PARAM_MODES.F0]: '#4ade80',
     };
-    ctx.strokeStyle = lineColors[this.paramMode] || '#3498db';
+    ctx.strokeStyle = lineColors[this.paramMode] || '#5b8def';
     ctx.lineWidth = 2;
     ctx.beginPath();
 
@@ -797,12 +797,12 @@ class PianoRoll {
       const isSelected = i === this.selectedEnvelopeIndex;
       const isHover = i === this.hoverEnvelopeIndex;
 
-      ctx.fillStyle = isSelected ? '#ffffff' : (isHover ? '#dddddd' : (lineColors[this.paramMode] || '#3498db'));
+      ctx.fillStyle = isSelected ? '#ffffff' : (isHover ? '#d8d8ec' : (lineColors[this.paramMode] || '#5b8def'));
       ctx.beginPath();
       ctx.arc(x, y, 5, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = isSelected ? '#ffffff' : '#222222';
+      ctx.strokeStyle = isSelected ? '#ffffff' : '#1a1a28';
       ctx.lineWidth = isSelected ? 2 : 1;
       ctx.stroke();
     }
@@ -865,7 +865,7 @@ class PianoRoll {
     const x = this._timeToX(beat);
     if (x < PIANO_KEY_WIDTH || x > this.width) return;
 
-    ctx.strokeStyle = '#ff4444';
+    ctx.strokeStyle = '#f87171';
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(x, HEADER_HEIGHT);
@@ -873,7 +873,7 @@ class PianoRoll {
     ctx.stroke();
 
     // 播放头三角标
-    ctx.fillStyle = '#ff4444';
+    ctx.fillStyle = '#f87171';
     ctx.beginPath();
     ctx.moveTo(x, HEADER_HEIGHT);
     ctx.lineTo(x - 6, HEADER_HEIGHT - 6);
