@@ -516,16 +516,18 @@ async function enumerateDMLDevicesInProcess(modelDir) {
     ort.env.logLevel = 'verbose';
 
     try {
-        const session = await ort.InferenceSession.create(probeModel, {
-            executionProviders: [{ name: 'dml', deviceId: 0 }, 'cpu']
-        });
-        session.release();
-    } catch (_) {}
+        try {
+            const session = await ort.InferenceSession.create(probeModel, {
+                executionProviders: [{ name: 'dml', deviceId: 0 }, 'cpu']
+            });
+            session.release();
+        } catch (_) {}
 
-    await new Promise(r => setTimeout(r, 500));
-
-    process.stderr.write = origWrite;
-    ort.env.logLevel = 'warning';
+        await new Promise(r => setTimeout(r, 500));
+    } finally {
+        process.stderr.write = origWrite;
+        ort.env.logLevel = 'warning';
+    }
 
     const devices = [];
     const lines = stderrBuf.split('\n');
