@@ -70,6 +70,7 @@ Download the latest pre-built installer for **Windows**:
 | 📦 WAV Export | Mix & export to standard WAV (24kHz) |
 | ⚡ GPU Acceleration | DirectML (NVIDIA / AMD / Intel) |
 | 🚀 Optimized IPC | Float32Array binary transfer for low-latency audio pipeline |
+| 🖥️ HiDPI Support | High-resolution canvas rendering for Retina/HiDPI displays |
 
 #### SVS Language Support
 
@@ -322,6 +323,7 @@ This project is licensed under the [MIT License](LICENSE).
 | 📦 WAV 导出 | 混音导出为标准 WAV |
 | ⚡ GPU 加速 | DirectML（NVIDIA / AMD / Intel） |
 | 🚀 优化 IPC 传输 | Float32Array 二进制传输，低延迟音频管线 |
+| 🖥️ HiDPI 支持 | 高分辨率 Canvas 渲染，适配 Retina/HiDPI 显示器 |
 
 #### SVS 语言支持
 
@@ -471,6 +473,7 @@ npm run test:watch       # 监视模式
 | 📦 WAV エクスポート | 標準 WAV へのミックスダウン |
 | ⚡ GPU アクセラレーション | DirectML（NVIDIA / AMD / Intel） |
 | 🚀 最適化 IPC 転送 | Float32Array バイナリ転送による低レイテンシオーディオパイプライン |
+| 🖥️ HiDPI サポート | 高解像度 Canvas レンダリング、Retina/HiDPI ディスプレイ対応 |
 
 ---
 
