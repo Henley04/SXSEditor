@@ -8,8 +8,9 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-      background: #1a1a2e;
-      color: #e0e0e0;
+      -webkit-font-smoothing: antialiased;
+      background: #14141f;
+      color: #d8d8ec;
       padding: 24px;
       overflow: hidden;
       user-select: none;
@@ -21,12 +22,12 @@
     .header h1 {
       font-size: 18px;
       font-weight: 600;
-      color: #ffffff;
+      color: #e0e0f0;
       margin-bottom: 6px;
     }
     .header p {
       font-size: 12px;
-      color: #888;
+      color: #6a6a86;
     }
     .overall-progress {
       margin-bottom: 16px;
@@ -36,18 +37,18 @@
       justify-content: space-between;
       font-size: 12px;
       margin-bottom: 6px;
-      color: #aaa;
+      color: #8888a8;
     }
     .progress-bar-bg {
       width: 100%;
       height: 8px;
-      background: #2a2a4a;
+      background: #2a2a3d;
       border-radius: 4px;
       overflow: hidden;
     }
     .progress-bar-fill {
       height: 100%;
-      background: linear-gradient(90deg, #6366f1, #818cf8);
+      background: linear-gradient(90deg, #5b8def, #6b9df5);
       border-radius: 4px;
       transition: width 0.3s ease;
       width: 0%;
@@ -56,7 +57,7 @@
       max-height: 260px;
       overflow-y: auto;
       margin-bottom: 16px;
-      border: 1px solid #2a2a4a;
+      border: 1px solid #2a2a3d;
       border-radius: 8px;
       padding: 8px;
     }
@@ -67,7 +68,7 @@
       background: transparent;
     }
     .file-list::-webkit-scrollbar-thumb {
-      background: #3a3a5a;
+      background: #3a3a52;
       border-radius: 3px;
     }
     .file-item {
@@ -79,7 +80,7 @@
       font-size: 12px;
     }
     .file-item.downloading {
-      background: rgba(99, 102, 241, 0.1);
+      background: rgba(91, 141, 239, 0.08);
     }
     .file-icon {
       width: 18px;
@@ -87,44 +88,45 @@
       margin-right: 8px;
       flex-shrink: 0;
     }
-    .file-icon.pending { color: #555; }
-    .file-icon.downloading { color: #6366f1; }
-    .file-icon.complete { color: #22c55e; }
-    .file-icon.error { color: #ef4444; }
+    .file-icon.pending { color: #4a4a66; }
+    .file-icon.downloading { color: #5b8def; }
+    .file-icon.complete { color: #4ade80; }
+    .file-icon.error { color: #f87171; }
     .file-name {
       flex: 1;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
-      color: #ccc;
+      color: #c8c8dc;
     }
     .file-status {
       margin-left: 8px;
       font-size: 11px;
-      color: #888;
+      color: #6a6a86;
       flex-shrink: 0;
       min-width: 80px;
       text-align: right;
     }
-    .file-status.complete { color: #22c55e; }
-    .file-status.error { color: #ef4444; }
-    .file-status.downloading { color: #818cf8; }
+    .file-status.complete { color: #4ade80; }
+    .file-status.error { color: #f87171; }
+    .file-status.downloading { color: #6b9df5; }
     .dir-info {
       display: flex;
       align-items: center;
       gap: 8px;
       margin-bottom: 12px;
       padding: 8px 12px;
-      background: #2a2a4a;
+      background: #1a1a2a;
       border-radius: 6px;
+      border: 1px solid #2a2a3d;
       font-size: 12px;
     }
     .dir-info .dir-label {
-      color: #888;
+      color: #6a6a86;
       flex-shrink: 0;
     }
     .dir-info .dir-path {
-      color: #ccc;
+      color: #c8c8dc;
       flex: 1;
       overflow: hidden;
       text-overflow: ellipsis;
@@ -132,27 +134,28 @@
     }
     .dir-info .btn-change-dir {
       padding: 4px 12px;
-      background: #3a3a5a;
-      color: #aaa;
-      border: 1px solid #4a4a6a;
+      background: linear-gradient(180deg, #3a3a4e, #323246);
+      color: #a8a8c0;
+      border: 1px solid #4a4a62;
       border-radius: 4px;
       font-size: 11px;
       cursor: pointer;
       flex-shrink: 0;
-      transition: all 0.2s;
+      transition: all 0.15s;
     }
     .dir-info .btn-change-dir:hover {
-      background: #4a4a6a;
-      color: #fff;
+      background: linear-gradient(180deg, #484860, #3e3e56);
+      color: #e0e0f0;
+      border-color: #5a5a72;
     }
     .dir-info .btn-change-dir:disabled {
-      opacity: 0.5;
+      opacity: 0.4;
       cursor: not-allowed;
     }
     .speed-info {
       text-align: center;
       font-size: 11px;
-      color: #666;
+      color: #4a4a66;
       margin-bottom: 12px;
     }
     .actions {
@@ -169,34 +172,38 @@
       transition: all 0.2s;
     }
     .btn-start {
-      background: #6366f1;
+      background: linear-gradient(135deg, #5b8def, #4a7de0);
       color: #fff;
+      box-shadow: 0 2px 8px rgba(91, 141, 239, 0.25);
     }
     .btn-start:hover {
-      background: #818cf8;
+      background: linear-gradient(135deg, #6b9df5, #5b8def);
+      box-shadow: 0 4px 12px rgba(91, 141, 239, 0.35);
     }
     .btn-cancel {
-      background: #2a2a4a;
-      color: #aaa;
-      border: 1px solid #3a3a5a;
+      background: #3a3a52;
+      color: #a8a8c0;
+      border: 1px solid #4a4a62;
     }
     .btn-cancel:hover {
-      background: #3a3a5a;
-      color: #fff;
+      background: #4a4a62;
+      color: #e0e0f0;
     }
     .btn-close {
-      background: #6366f1;
+      background: linear-gradient(135deg, #5b8def, #4a7de0);
       color: #fff;
+      box-shadow: 0 2px 8px rgba(91, 141, 239, 0.25);
     }
     .btn-close:hover {
-      background: #818cf8;
+      background: linear-gradient(135deg, #6b9df5, #5b8def);
+      box-shadow: 0 4px 12px rgba(91, 141, 239, 0.35);
     }
     .btn:disabled {
-      opacity: 0.5;
+      opacity: 0.4;
       cursor: not-allowed;
     }
     .error-message {
-      color: #ef4444;
+      color: #f87171;
       font-size: 12px;
       text-align: center;
       margin-bottom: 8px;
@@ -206,8 +213,8 @@
       display: inline-block;
       width: 14px;
       height: 14px;
-      border: 2px solid rgba(99, 102, 241, 0.3);
-      border-top-color: #6366f1;
+      border: 2px solid rgba(91, 141, 239, 0.2);
+      border-top-color: #5b8def;
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
       margin-right: 4px;

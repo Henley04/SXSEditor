@@ -9,8 +9,9 @@ html, body {
   height: 100%;
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  background-color: #1e1e1e;
-  color: #ffffff;
+  -webkit-font-smoothing: antialiased;
+  background-color: #14141f;
+  color: #e0e0f0;
 }
 
 #app {
@@ -20,87 +21,95 @@ html, body {
   height: 100%;
 }
 
+/* ==================== 工具栏 ==================== */
 #toolbar {
   display: flex;
   align-items: center;
   height: 40px;
   min-height: 40px;
   padding: 0 12px;
-  background-color: #2d2d2d;
-  color: #ffffff;
-  border-bottom: 1px solid #1a1a1a;
+  background: linear-gradient(180deg, #2f2f3d 0%, #282838 100%);
+  color: #e0e0f0;
+  border-bottom: 1px solid #1a1a28;
   gap: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .toolbar-divider {
   width: 1px;
-  height: 24px;
-  background-color: #444444;
-  margin: 0 8px;
+  height: 22px;
+  background: linear-gradient(180deg, transparent, #4a4a62, transparent);
+  margin: 0 6px;
   flex-shrink: 0;
 }
 
 .btn-toolbar {
-  background-color: #3c3c3c;
-  color: #cccccc;
-  border: 1px solid #4a4a4a;
+  background: linear-gradient(180deg, #3a3a4e 0%, #323246 100%);
+  color: #c8c8dc;
+  border: 1px solid #4a4a62;
   border-radius: 4px;
   padding: 4px 10px;
   cursor: pointer;
   font-size: 12px;
-  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+  transition: all 0.15s ease;
   white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 .btn-toolbar:hover {
-  background-color: #505050;
-  color: #ffffff;
-  border-color: #5a5a5a;
+  background: linear-gradient(180deg, #484860 0%, #3e3e56 100%);
+  color: #f0f0ff;
+  border-color: #5a5a72;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
 .btn-toolbar:active {
-  background-color: #2a2a2a;
+  background: linear-gradient(180deg, #2a2a3e 0%, #262638 100%);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .btn-toolbar:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .btn-toolbar.btn-primary {
-  background-color: #3498db;
-  border-color: #2980b9;
+  background: linear-gradient(180deg, #5b8def 0%, #4a7de0 100%);
+  border-color: #6b9df5;
   color: #ffffff;
 }
 
 .btn-toolbar.btn-primary:hover {
-  background-color: #2980b9;
-  border-color: #2471a3;
+  background: linear-gradient(180deg, #6b9df5 0%, #5b8def 100%);
+  box-shadow: 0 1px 4px rgba(91, 141, 239, 0.3);
 }
 
 .btn-toolbar.btn-success {
-  background-color: #2ecc71;
-  border-color: #27ae60;
-  color: #ffffff;
+  background: linear-gradient(180deg, #4ade80 0%, #3ac870 100%);
+  border-color: #5aee90;
+  color: #0a0a14;
+  font-weight: 600;
 }
 
 .btn-toolbar.btn-success:hover {
-  background-color: #27ae60;
-  border-color: #219a52;
+  background: linear-gradient(180deg, #5aee90 0%, #4ade80 100%);
+  box-shadow: 0 1px 4px rgba(74, 222, 128, 0.3);
 }
 
 #page-title {
   font-size: 13px;
   font-weight: 500;
-  color: #dddddd;
+  color: #d8d8ec;
 }
 
+/* ==================== 主内容区 ==================== */
 #main-content {
   flex: 1;
   display: flex;
@@ -108,31 +117,32 @@ html, body {
   overflow: hidden;
 }
 
+/* ==================== 波形区域 ==================== */
 #waveform-section {
   flex: 0 0 25%;
   min-height: 120px;
-  background-color: #252526;
+  background: #1a1a2a;
   display: flex;
   flex-direction: column;
 }
 
 #resize-handle {
   height: 4px;
-  background-color: #2d2d2d;
+  background: #2a2a3d;
   cursor: ns-resize;
   flex-shrink: 0;
   transition: background-color 0.15s;
-  border-top: 1px solid #1a1a1a;
-  border-bottom: 1px solid #1a1a1a;
+  border-top: 1px solid #1a1a28;
+  border-bottom: 1px solid #1a1a28;
 }
 
 #resize-handle:hover {
-  background-color: #3498db;
+  background: #5b8def;
 }
 
 #midi-section {
   flex: 1;
-  background-color: #1e1e1e;
+  background: #14141f;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -144,22 +154,22 @@ html, body {
   align-items: center;
   justify-content: space-between;
   padding: 6px 12px;
-  background-color: #2d2d2d;
-  border-bottom: 1px solid #1a1a1a;
+  background: linear-gradient(180deg, #2a2a3d 0%, #252538 100%);
+  border-bottom: 1px solid #1a1a28;
   min-height: 30px;
 }
 
 .section-title {
   font-size: 11px;
   font-weight: 600;
-  color: #777777;
+  color: #6a6a86;
   text-transform: uppercase;
   letter-spacing: 0.8px;
 }
 
 .file-info {
   font-size: 11px;
-  color: #999999;
+  color: #8888a8;
   font-weight: 500;
 }
 
@@ -185,13 +195,14 @@ html, body {
   display: block;
 }
 
+/* ==================== 加载遮罩 ==================== */
 .loading-overlay {
   position: fixed;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(0, 0, 0, 0.7);
+  background-color: rgba(10, 10, 20, 0.7);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -200,19 +211,19 @@ html, body {
 }
 
 .loading-content {
-  background-color: #2d2d2d;
-  border: 1px solid #444444;
+  background: linear-gradient(180deg, #2a2a3d 0%, #252538 100%);
+  border: 1px solid #3a3a52;
   border-radius: 12px;
   padding: 24px 36px;
   text-align: center;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
 }
 
 .loading-spinner {
   width: 36px;
   height: 36px;
-  border: 3px solid #3c3c3c;
-  border-top: 3px solid #3498db;
+  border: 3px solid rgba(91, 141, 239, 0.2);
+  border-top: 3px solid #5b8def;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin: 0 auto 14px;
@@ -225,6 +236,6 @@ html, body {
 
 .loading-text {
   font-size: 13px;
-  color: #dddddd;
+  color: #d8d8ec;
   font-weight: 500;
 }
