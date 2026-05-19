@@ -2161,14 +2161,36 @@ function startInlineEdit(note, hit) {
             note.lyric = newLyric;
           }
         }
+        // Save old lyrics for all notes that will be modified
+        const noteIdx = notes.findIndex(n => n.id === noteId);
+        const oldLyrics = [{ id: noteId, lyric: oldLyric }];
+        if (tokens.length > 1 && noteIdx !== -1) {
+          for (let t = 1; t < tokens.length; t++) {
+            const nextIdx = noteIdx + t;
+            if (nextIdx < notes.length) {
+              oldLyrics.push({ id: notes[nextIdx].id, lyric: notes[nextIdx].lyric });
+            }
+          }
+        }
+
         history.push({
           undo() {
-            const n = notes.find(nn => nn.id === noteId);
-            if (n) n.lyric = oldLyric;
+            for (const { id, lyric } of oldLyrics) {
+              const n = notes.find(nn => nn.id === id);
+              if (n) n.lyric = lyric;
+            }
           },
           redo() {
             const n = notes.find(nn => nn.id === noteId);
             if (n) n.lyric = newLyric;
+            if (tokens.length > 1 && noteIdx !== -1) {
+              for (let t = 1; t < tokens.length; t++) {
+                const nextIdx = noteIdx + t;
+                if (nextIdx < notes.length) {
+                  notes[nextIdx].lyric = tokens[t];
+                }
+              }
+            }
           }
         });
       }
