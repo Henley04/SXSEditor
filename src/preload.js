@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   authorizePath: (filePath) => ipcRenderer.invoke('file:authorizePath', filePath),
   openFragmentEditor: (data) => ipcRenderer.invoke('openFragmentEditor', data),
   saveFragmentData: (fragmentId, data) => ipcRenderer.invoke('saveFragmentData', fragmentId, data),
+  saveFragmentDataSync: (fragmentId, data) => ipcRenderer.sendSync('saveFragmentDataSync', fragmentId, data),
   getFragmentData: (fragmentId) => ipcRenderer.invoke('getFragmentData', fragmentId),
   onFragmentSaved: (callback) => {
     const handler = (event, data) => callback(data);

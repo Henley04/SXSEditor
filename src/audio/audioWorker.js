@@ -50,6 +50,10 @@ function handleStart(audioData, options) {
   if (!naudio) {
     return { success: false, error: 'naudiodon 不可用' };
   }
+  // Ensure audioData is Float32Array
+  if (!(audioData instanceof Float32Array)) {
+    audioData = new Float32Array(audioData);
+  }
 
   handleStop();
 

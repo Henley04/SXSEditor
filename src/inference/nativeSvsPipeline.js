@@ -1904,7 +1904,7 @@ class OnnxSVSPipeline {
             }
         }
 
-        const audioData = Array.from(finalAudio);
+        const audioData = finalAudio;
         this._synthCache = { key: cacheKey, audio: audioData };
         console.log('[OnnxSVSPipeline] 分段合成完成，音频已缓存');
 

@@ -3,6 +3,14 @@
  * 支持关键帧编辑，音量和声像控制
  */
 
+function debounce(fn, ms) {
+  let timer = null;
+  return function(...args) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { timer = null; fn.apply(this, args); }, ms);
+  };
+}
+
 class EnvelopeEditor {
   constructor(canvas, options = {}) {
     this.canvas = canvas;

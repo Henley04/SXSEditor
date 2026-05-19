@@ -816,6 +816,21 @@ ipcMain.handle('getFragmentData', async (event, fragmentId) => {
   return pendingFragmentData[fragmentId] || null;
 });
 
+ipcMain.on('saveFragmentDataSync', (event, fragmentId, data) => {
+  try {
+    if (fragmentWindows[fragmentId]) {
+      fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('fragmentDataSaved', { fragmentId, ...data });
+    }
+    event.returnValue = true;
+  } catch (err) {
+    console.error('[Main] 同步保存片段数据失败:', err);
+    event.returnValue = false;
+  }
+});
+
 ipcMain.handle('saveFragmentData', async (event, fragmentId, data) => {
   if (fragmentWindows[fragmentId]) {
     fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
@@ -1281,7 +1296,7 @@ ipcMain.handle('audio:getDevices', async () => {
 ipcMain.handle('audio:play', async (event, { audioData, options }) => {
   try {
     const manager = getAudioManager();
-    const float32Data = new Float32Array(audioData);
+    const float32Data = audioData instanceof Float32Array ? audioData : new Float32Array(audioData);
     const result = await manager.start(float32Data, options);
 
     manager.onEnded(() => {
