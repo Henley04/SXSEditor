@@ -9,6 +9,7 @@ html, body {
   height: 100%;
   overflow: hidden;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 #app {
@@ -19,13 +20,14 @@ html, body {
   position: relative;
 }
 
+/* ==================== 模型加载遮罩 ==================== */
 #model-loading-overlay {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(0, 0, 0, 0.65);
+  background-color: rgba(10, 10, 20, 0.7);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -33,6 +35,7 @@ html, body {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.3s ease;
+  backdrop-filter: blur(2px);
 }
 
 #model-loading-overlay.visible {
@@ -50,8 +53,8 @@ html, body {
 .loading-spinner {
   width: 40px;
   height: 40px;
-  border: 4px solid rgba(255, 255, 255, 0.2);
-  border-top-color: #3498db;
+  border: 3px solid rgba(91, 141, 239, 0.2);
+  border-top-color: #5b8def;
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
@@ -61,27 +64,31 @@ html, body {
 }
 
 .loading-text {
-  color: #ffffff;
+  color: #e0e0f0;
   font-size: 14px;
   font-weight: 500;
 }
 
+/* ==================== 工具栏 ==================== */
 #toolbar {
   display: flex;
   align-items: center;
   height: 40px;
   min-height: 40px;
   padding: 0 12px;
-  background-color: #2d2d2d;
-  color: #ffffff;
-  border-bottom: 1px solid #1a1a1a;
+  background: linear-gradient(180deg, #2f2f3d 0%, #282838 100%);
+  color: #e0e0f0;
+  border-bottom: 1px solid #1a1a28;
   gap: 2px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  position: relative;
+  z-index: 10;
 }
 
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .toolbar-spacer {
@@ -90,37 +97,41 @@ html, body {
 
 .toolbar-divider {
   width: 1px;
-  height: 24px;
-  background-color: #444444;
-  margin: 0 8px;
+  height: 22px;
+  background: linear-gradient(180deg, transparent, #4a4a62, transparent);
+  margin: 0 6px;
   flex-shrink: 0;
 }
 
 #toolbar button {
-  background-color: #3c3c3c;
-  color: #cccccc;
-  border: 1px solid #4a4a4a;
+  background: linear-gradient(180deg, #3a3a4e 0%, #323246 100%);
+  color: #c8c8dc;
+  border: 1px solid #4a4a62;
   border-radius: 4px;
   padding: 4px 10px;
   cursor: pointer;
   font-size: 12px;
-  transition: background-color 0.15s, color 0.15s, border-color 0.15s;
+  transition: all 0.15s ease;
   white-space: nowrap;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 #toolbar button:hover {
-  background-color: #505050;
-  color: #ffffff;
-  border-color: #5a5a5a;
+  background: linear-gradient(180deg, #484860 0%, #3e3e56 100%);
+  color: #f0f0ff;
+  border-color: #5a5a72;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
 #toolbar button:active {
-  background-color: #2a2a2a;
+  background: linear-gradient(180deg, #2a2a3e 0%, #262638 100%);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 #toolbar button:disabled {
-  opacity: 0.5;
+  opacity: 0.4;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .btn-param {
@@ -132,9 +143,10 @@ html, body {
 }
 
 .btn-param.active {
-  background-color: #3498db !important;
+  background: linear-gradient(180deg, #5b8def 0%, #4a7de0 100%) !important;
   color: #ffffff !important;
-  border-color: #5dade2 !important;
+  border-color: #6b9df5 !important;
+  box-shadow: 0 1px 4px rgba(91, 141, 239, 0.3);
 }
 
 .param-group {
@@ -148,15 +160,17 @@ html, body {
 }
 
 .btn-pitch-tool:hover {
-  background-color: #c0392b !important;
+  background: linear-gradient(180deg, #f87171 0%, #e85555 100%) !important;
   color: #ffffff !important;
-  border-color: #e74c3c !important;
+  border-color: #f87171 !important;
+  box-shadow: 0 1px 4px rgba(248, 113, 113, 0.3);
 }
 
 .btn-pitch-tool.disabled-mode {
-  background-color: #555555 !important;
-  color: #888888 !important;
-  border-color: #666666 !important;
+  background: linear-gradient(180deg, #3a3a4e 0%, #323246 100%) !important;
+  color: #5a5a72 !important;
+  border-color: #4a4a62 !important;
+  box-shadow: none;
 }
 
 .btn-shortcuts {
@@ -169,13 +183,13 @@ html, body {
 
 .pitch-hint {
   font-size: 10px;
-  color: #777777;
+  color: #6a6a86;
   white-space: nowrap;
   user-select: none;
   padding: 2px 6px;
-  background-color: rgba(255, 255, 255, 0.05);
+  background: rgba(91, 141, 239, 0.06);
   border-radius: 3px;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(91, 141, 239, 0.1);
 }
 
 .pitch-tools-group {
@@ -187,7 +201,7 @@ html, body {
   height: 4px;
   -webkit-appearance: none;
   appearance: none;
-  background: #444444;
+  background: #3a3a52;
   border-radius: 2px;
   outline: none;
   cursor: pointer;
@@ -200,25 +214,28 @@ html, body {
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #3498db;
+  background: #5b8def;
   cursor: pointer;
-  border: 1px solid #5dade2;
+  border: 1px solid #6b9df5;
+  box-shadow: 0 1px 3px rgba(91, 141, 239, 0.3);
 }
 
 .brush-smoothing-slider::-webkit-slider-thumb:hover {
-  background: #5dade2;
+  background: #6b9df5;
+  box-shadow: 0 1px 5px rgba(91, 141, 239, 0.5);
 }
 
 #fragment-name {
   font-size: 13px;
   font-weight: 500;
-  color: #dddddd;
+  color: #d8d8ec;
 }
 
+/* ==================== 主内容区 ==================== */
 #main-content {
   flex: 1;
   display: flex;
-  background-color: #1e1e1e;
+  background: #14141f;
   overflow: hidden;
 }
 
@@ -227,8 +244,8 @@ html, body {
   flex-direction: column;
   min-width: 80px;
   overflow: hidden;
-  background-color: #252526;
-  border-right: 1px solid #1a1a1a;
+  background: #1a1a2a;
+  border-right: 1px solid #1a1a28;
 }
 
 #piano-keys-container {
@@ -248,7 +265,7 @@ html, body {
 #piano-roll-container {
   flex: 1;
   display: flex;
-  background-color: #1e1e1e;
+  background: #14141f;
   overflow: hidden;
 }
 
@@ -262,13 +279,14 @@ html, body {
   display: block;
 }
 
+/* ==================== 快捷键面板 ==================== */
 .shortcuts-overlay {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(0, 0, 0, 0.6);
+  background-color: rgba(10, 10, 20, 0.65);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -276,6 +294,7 @@ html, body {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
+  backdrop-filter: blur(2px);
 }
 
 .shortcuts-overlay.visible {
@@ -284,43 +303,44 @@ html, body {
 }
 
 .shortcuts-panel {
-  background-color: #2d2d2d;
-  border: 1px solid #444444;
-  border-radius: 8px;
+  background: linear-gradient(180deg, #2a2a3d 0%, #252538 100%);
+  border: 1px solid #3a3a52;
+  border-radius: 10px;
   width: 520px;
   max-height: 80vh;
   overflow-y: auto;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
 }
 
 .shortcuts-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid #444444;
+  padding: 14px 18px;
+  border-bottom: 1px solid #3a3a52;
   font-size: 14px;
   font-weight: 600;
-  color: #ffffff;
+  color: #e0e0f0;
 }
 
 .btn-close-shortcuts {
   background: none;
   border: none;
-  color: #888888;
+  color: #6a6a86;
   font-size: 16px;
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 3px;
+  transition: all 0.15s;
 }
 
 .btn-close-shortcuts:hover {
-  color: #ffffff;
-  background-color: #444444;
+  color: #e0e0f0;
+  background: #3a3a52;
 }
 
 .shortcuts-body {
-  padding: 12px 16px;
+  padding: 14px 18px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -329,9 +349,9 @@ html, body {
 .shortcut-section-title {
   font-size: 11px;
   font-weight: 600;
-  color: #3498db;
+  color: #5b8def;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.8px;
   margin-bottom: 6px;
 }
 
@@ -344,10 +364,10 @@ html, body {
 
 .shortcut-row kbd {
   display: inline-block;
-  background-color: #3c3c3c;
-  color: #e0e0e0;
-  border: 1px solid #555555;
-  border-radius: 3px;
+  background: linear-gradient(180deg, #3a3a4e 0%, #323246 100%);
+  color: #d8d8ec;
+  border: 1px solid #4a4a62;
+  border-radius: 4px;
   padding: 1px 6px;
   font-size: 11px;
   font-family: 'Consolas', 'Monaco', monospace;
@@ -355,9 +375,10 @@ html, body {
   min-width: 20px;
   text-align: center;
   line-height: 1.5;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
 .shortcut-row span {
-  color: #aaaaaa;
+  color: #9898b0;
   font-size: 12px;
 }
