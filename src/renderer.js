@@ -111,7 +111,8 @@ function showPromptDialog(title, defaultValue, onConfirm) {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0,0,0,0.6);
+    background: rgba(10,10,20,0.65);
+    backdrop-filter: blur(2px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -120,12 +121,13 @@ function showPromptDialog(title, defaultValue, onConfirm) {
 
   const dialog = document.createElement('div');
   dialog.style.cssText = `
-    background: #2d2d2d;
-    border: 1px solid #555;
-    border-radius: 8px;
+    background: #252538;
+    border: 1px solid #3a3a52;
+    border-radius: 10px;
     padding: 20px;
     min-width: 280px;
-    color: #fff;
+    color: #e0e0f0;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
   `;
 
   const titleEl = document.createElement('div');
@@ -138,10 +140,10 @@ function showPromptDialog(title, defaultValue, onConfirm) {
   input.style.cssText = `
     width: 100%;
     padding: 8px;
-    background: #1e1e1e;
-    border: 1px solid #555;
+    background: #14141f;
+    border: 1px solid #3a3a52;
     border-radius: 4px;
-    color: #fff;
+    color: #e0e0f0;
     margin-bottom: 12px;
     box-sizing: border-box;
   `;
@@ -153,22 +155,24 @@ function showPromptDialog(title, defaultValue, onConfirm) {
   cancelBtn.textContent = t('common.cancel');
   cancelBtn.style.cssText = `
     padding: 6px 16px;
-    background: #3c3c3c;
-    border: 1px solid #555;
+    background: linear-gradient(180deg, #3a3a4e, #323246);
+    border: 1px solid #4a4a62;
     border-radius: 4px;
-    color: #fff;
+    color: #ffffff;
     cursor: pointer;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
   `;
 
   const okBtn = document.createElement('button');
   okBtn.textContent = t('common.confirm');
   okBtn.style.cssText = `
     padding: 6px 16px;
-    background: #3498db;
+    background: linear-gradient(180deg, #5b8def, #4a7de0);
     border: none;
     border-radius: 4px;
-    color: #fff;
+    color: #ffffff;
     cursor: pointer;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
   `;
 
   btnContainer.appendChild(cancelBtn);
@@ -209,7 +213,8 @@ function showSingerSelectDialog(singerId) {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0,0,0,0.6);
+    background: rgba(10,10,20,0.65);
+    backdrop-filter: blur(2px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -218,12 +223,13 @@ function showSingerSelectDialog(singerId) {
 
   const dialog = document.createElement('div');
   dialog.style.cssText = `
-    background: #2d2d2d;
-    border: 1px solid #555;
-    border-radius: 8px;
+    background: #252538;
+    border: 1px solid #3a3a52;
+    border-radius: 10px;
     padding: 20px;
     min-width: 320px;
-    color: #fff;
+    color: #e0e0f0;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
   `;
 
   const titleEl = document.createElement('div');
@@ -237,36 +243,39 @@ function showSingerSelectDialog(singerId) {
   createBtn.textContent = t('main.openSingerCreator');
   createBtn.style.cssText = `
     padding: 10px 16px;
-    background: #3498db;
+    background: linear-gradient(180deg, #5b8def, #4a7de0);
     border: none;
     border-radius: 4px;
-    color: #fff;
+    color: #ffffff;
     cursor: pointer;
     font-size: 14px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
   `;
 
   const openBtn = document.createElement('button');
   openBtn.textContent = t('main.openExistingSinger');
   openBtn.style.cssText = `
     padding: 10px 16px;
-    background: #2ecc71;
+    background: linear-gradient(180deg, #4ade80, #3ac870);
     border: none;
     border-radius: 4px;
-    color: #fff;
+    color: #ffffff;
     cursor: pointer;
     font-size: 14px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
   `;
 
   const cancelBtn = document.createElement('button');
   cancelBtn.textContent = t('common.cancel');
   cancelBtn.style.cssText = `
     padding: 10px 16px;
-    background: #3c3c3c;
-    border: 1px solid #555;
+    background: linear-gradient(180deg, #3a3a4e, #323246);
+    border: 1px solid #4a4a62;
     border-radius: 4px;
-    color: #fff;
+    color: #ffffff;
     cursor: pointer;
     font-size: 14px;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
   `;
 
   btnContainer.appendChild(titleEl);
@@ -385,7 +394,8 @@ function showSingerValidationReport(validation) {
   overlay.style.cssText = `
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.6);
+    background: rgba(10,10,20,0.65);
+    backdrop-filter: blur(2px);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -394,21 +404,22 @@ function showSingerValidationReport(validation) {
 
   const dialog = document.createElement('div');
   dialog.style.cssText = `
-    background: #2d2d2d;
-    border: 1px solid ${validation.valid ? '#f39c12' : '#e74c3c'};
-    border-radius: 8px;
+    background: #252538;
+    border: 1px solid ${validation.valid ? '#fbbf24' : '#f87171'};
+    border-radius: 10px;
     padding: 20px;
     min-width: 360px;
     max-width: 500px;
     max-height: 80vh;
     overflow-y: auto;
-    color: #fff;
+    color: #e0e0f0;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
   `;
 
   const titleEl = document.createElement('div');
   titleEl.style.cssText = 'margin-bottom: 12px; font-weight: 600; font-size: 14px;';
   titleEl.textContent = validation.valid ? t('main.singerLoadWarnings') : t('main.singerFileFormatError');
-  titleEl.style.color = validation.valid ? '#f39c12' : '#e74c3c';
+  titleEl.style.color = validation.valid ? '#fbbf24' : '#f87171';
 
   dialog.appendChild(titleEl);
 
@@ -416,12 +427,12 @@ function showSingerValidationReport(validation) {
     const errSection = document.createElement('div');
     errSection.style.cssText = 'margin-bottom: 10px;';
     const errTitle = document.createElement('div');
-    errTitle.style.cssText = 'color: #e74c3c; font-weight: 600; margin-bottom: 4px; font-size: 12px;';
+    errTitle.style.cssText = 'color: #f87171; font-weight: 600; margin-bottom: 4px; font-size: 12px;';
     errTitle.textContent = t('common.errors');
     errSection.appendChild(errTitle);
     validation.errors.forEach(msg => {
       const item = document.createElement('div');
-      item.style.cssText = 'color: #e74c3c; font-size: 11px; padding-left: 8px; margin-bottom: 2px;';
+      item.style.cssText = 'color: #f87171; font-size: 11px; padding-left: 8px; margin-bottom: 2px;';
       item.textContent = `• ${msg}`;
       errSection.appendChild(item);
     });
@@ -432,12 +443,12 @@ function showSingerValidationReport(validation) {
     const warnSection = document.createElement('div');
     warnSection.style.cssText = 'margin-bottom: 10px;';
     const warnTitle = document.createElement('div');
-    warnTitle.style.cssText = 'color: #f39c12; font-weight: 600; margin-bottom: 4px; font-size: 12px;';
+    warnTitle.style.cssText = 'color: #fbbf24; font-weight: 600; margin-bottom: 4px; font-size: 12px;';
     warnTitle.textContent = t('common.warnings');
     warnSection.appendChild(warnTitle);
     validation.warnings.forEach(msg => {
       const item = document.createElement('div');
-      item.style.cssText = 'color: #f39c12; font-size: 11px; padding-left: 8px; margin-bottom: 2px;';
+      item.style.cssText = 'color: #fbbf24; font-size: 11px; padding-left: 8px; margin-bottom: 2px;';
       item.textContent = `• ${msg}`;
       warnSection.appendChild(item);
     });
@@ -451,11 +462,12 @@ function showSingerValidationReport(validation) {
   okBtn.textContent = t('common.confirm');
   okBtn.style.cssText = `
     padding: 6px 16px;
-    background: ${validation.valid ? '#3498db' : '#e74c3c'};
+    background: ${validation.valid ? 'linear-gradient(180deg, #5b8def, #4a7de0)' : 'linear-gradient(180deg, #f87171, #e85555)'};
     border: none;
     border-radius: 4px;
-    color: #fff;
+    color: #ffffff;
     cursor: pointer;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
   `;
 
   btnContainer.appendChild(okBtn);
@@ -1176,7 +1188,8 @@ function showSaveProjectOptionsDialog() {
     overlay.style.cssText = `
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.6);
+      background: rgba(10,10,20,0.65);
+      backdrop-filter: blur(2px);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -1185,12 +1198,13 @@ function showSaveProjectOptionsDialog() {
 
     const dialog = document.createElement('div');
     dialog.style.cssText = `
-      background: #2d2d2d;
-      border: 1px solid #555;
-      border-radius: 8px;
+      background: #252538;
+      border: 1px solid #3a3a52;
+      border-radius: 10px;
       padding: 20px;
       min-width: 360px;
-      color: #fff;
+      color: #e0e0f0;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.4);
     `;
 
     const titleEl = document.createElement('div');
@@ -1207,7 +1221,7 @@ function showSaveProjectOptionsDialog() {
       gap: 8px;
       cursor: pointer;
       font-size: 13px;
-      color: #cccccc;
+      color: #c8c8dc;
     `;
     const embedCheckbox = document.createElement('input');
     embedCheckbox.type = 'checkbox';
@@ -1216,7 +1230,7 @@ function showSaveProjectOptionsDialog() {
     const embedLabel = document.createElement('span');
     embedLabel.textContent = t('main.embedSingerFiles');
     const embedDesc = document.createElement('div');
-    embedDesc.style.cssText = 'font-size: 11px; color: #888888; margin-top: 2px; padding-left: 24px;';
+    embedDesc.style.cssText = 'font-size: 11px; color: #6a6a86; margin-top: 2px; padding-left: 24px;';
     embedDesc.textContent = t('main.embedSingerFilesDesc');
     embedOption.appendChild(embedCheckbox);
     embedOption.appendChild(embedLabel);
@@ -1230,22 +1244,24 @@ function showSaveProjectOptionsDialog() {
     cancelBtn.textContent = t('common.cancel');
     cancelBtn.style.cssText = `
       padding: 6px 16px;
-      background: #3c3c3c;
-      border: 1px solid #555;
+      background: linear-gradient(180deg, #3a3a4e, #323246);
+      border: 1px solid #4a4a62;
       border-radius: 4px;
-      color: #fff;
+      color: #ffffff;
       cursor: pointer;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     `;
 
     const saveBtn = document.createElement('button');
     saveBtn.textContent = t('common.save');
     saveBtn.style.cssText = `
       padding: 6px 16px;
-      background: #3498db;
+      background: linear-gradient(180deg, #5b8def, #4a7de0);
       border: none;
       border-radius: 4px;
-      color: #fff;
+      color: #ffffff;
       cursor: pointer;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     `;
 
     btnContainer.appendChild(cancelBtn);
@@ -1624,9 +1640,9 @@ function renderSingerList() {
       input.className = 'singer-track-name-input';
       input.value = singer.trackName;
       input.style.cssText = `
-        background: #1e1e1e;
-        color: #ffffff;
-        border: 1px solid #3498db;
+        background: #14141f;
+        color: #e0e0f0;
+        border: 1px solid #5b8def;
         border-radius: 3px;
         padding: 2px 4px;
         font-size: 12px;
@@ -2218,7 +2234,8 @@ function showAudioToMidiDialog() {
     overlay.style.cssText = `
       position: fixed;
       top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(0,0,0,0.6);
+      background: rgba(10,10,20,0.65);
+      backdrop-filter: blur(2px);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -2227,12 +2244,13 @@ function showAudioToMidiDialog() {
 
     const dialog = document.createElement('div');
     dialog.style.cssText = `
-      background: #2d2d2d;
-      border: 1px solid #555;
-      border-radius: 8px;
+      background: #252538;
+      border: 1px solid #3a3a52;
+      border-radius: 10px;
       padding: 20px;
       min-width: 360px;
-      color: #fff;
+      color: #e0e0f0;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.4);
     `;
 
     const titleEl = document.createElement('div');
@@ -2245,13 +2263,14 @@ function showAudioToMidiDialog() {
     const extractPitchBtn = document.createElement('button');
     extractPitchBtn.style.cssText = `
       padding: 12px 16px;
-      background: #3498db;
+      background: linear-gradient(180deg, #5b8def, #4a7de0);
       border: none;
       border-radius: 4px;
-      color: #fff;
+      color: #ffffff;
       cursor: pointer;
       font-size: 14px;
       text-align: left;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     `;
     const extractPitchLabel = document.createElement('div');
     extractPitchLabel.style.cssText = 'font-weight: 600; margin-bottom: 4px;';
@@ -2265,13 +2284,14 @@ function showAudioToMidiDialog() {
     const onlyMidiBtn = document.createElement('button');
     onlyMidiBtn.style.cssText = `
       padding: 12px 16px;
-      background: #2ecc71;
+      background: linear-gradient(180deg, #4ade80, #3ac870);
       border: none;
       border-radius: 4px;
-      color: #fff;
+      color: #ffffff;
       cursor: pointer;
       font-size: 14px;
       text-align: left;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     `;
     const onlyMidiLabel = document.createElement('div');
     onlyMidiLabel.style.cssText = 'font-weight: 600; margin-bottom: 4px;';
@@ -2286,12 +2306,13 @@ function showAudioToMidiDialog() {
     cancelBtn.textContent = t('common.cancel');
     cancelBtn.style.cssText = `
       padding: 10px 16px;
-      background: #3c3c3c;
-      border: 1px solid #555;
+      background: linear-gradient(180deg, #3a3a4e, #323246);
+      border: 1px solid #4a4a62;
       border-radius: 4px;
-      color: #fff;
+      color: #ffffff;
       cursor: pointer;
       font-size: 14px;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     `;
 
     btnContainer.appendChild(titleEl);
@@ -2322,21 +2343,22 @@ function showLoadingOverlay(message) {
   overlay.style.cssText = `
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0,0,0,0.7);
+    background: rgba(10,10,20,0.75);
+    backdrop-filter: blur(2px);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     z-index: 10001;
-    color: #fff;
+    color: #e0e0f0;
   `;
 
   const spinner = document.createElement('div');
   spinner.style.cssText = `
     width: 40px;
     height: 40px;
-    border: 3px solid #555;
-    border-top-color: #3498db;
+    border: 3px solid #3a3a52;
+    border-top-color: #5b8def;
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin-bottom: 16px;
