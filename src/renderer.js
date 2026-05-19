@@ -1970,8 +1970,8 @@ fragmentCanvas.addEventListener('mousedown', (e) => {
           return;
         }
         if (x >= fragX && x <= fragX + fragWidth) {
-          dragState = { type: 'move', fragment, startX: x, originalStart: fragment.startTime };
-          fragmentDragSnapshot = { startTime: fragment.startTime, duration: fragment.duration };
+          dragState = { type: 'move', fragment, startX: x, startY: y, originalStart: fragment.startTime, originalSingerId: fragment.singerId };
+          fragmentDragSnapshot = { startTime: fragment.startTime, duration: fragment.duration, singerId: fragment.singerId };
           return;
         }
       }
@@ -1986,12 +1986,29 @@ fragmentCanvas.addEventListener('mousemove', (e) => {
 
   const rect = fragmentCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
   const beatWidth = FRAGMENT_BASE_BEAT_WIDTH * fragmentZoomX;
   const dx = (x - dragState.startX) / beatWidth;
 
   if (dragState.type === 'move') {
     const newStart = Math.max(0, dragState.originalStart + dx);
-    trackManager.updateFragment(dragState.fragment.id, { startTime: Math.round(newStart * 4) / 4 });
+    const updateData = { startTime: Math.round(newStart * 4) / 4 };
+
+    // 检测鼠标是否移到了其他歌手轨道行
+    const singers = trackManager.getSingers();
+    for (let i = 0; i < singers.length; i++) {
+      const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+      if (y >= singerY && y < singerY + SINGER_ROW_HEIGHT) {
+        const targetSingerId = singers[i].id;
+        if (targetSingerId !== dragState.fragment.singerId) {
+          updateData.singerId = targetSingerId;
+          updateData.color = singers[i].color;
+        }
+        break;
+      }
+    }
+
+    trackManager.updateFragment(dragState.fragment.id, updateData);
   } else if (dragState.type === 'resize-right') {
     const newDuration = Math.max(0.25, dragState.originalDuration + dx);
     trackManager.updateFragment(dragState.fragment.id, { duration: Math.round(newDuration * 4) / 4 });
@@ -2020,17 +2037,24 @@ function finishDrag() {
     const fragment = dragState.fragment;
     const oldStart = fragmentDragSnapshot.startTime;
     const oldDuration = fragmentDragSnapshot.duration;
+    const oldSingerId = fragmentDragSnapshot.singerId;
     const newStart = fragment.startTime;
     const newDuration = fragment.duration;
+    const newSingerId = fragment.singerId;
     const fragmentId = fragment.id;
 
-    if (oldStart !== newStart || oldDuration !== newDuration) {
+    if (oldStart !== newStart || oldDuration !== newDuration || oldSingerId !== newSingerId) {
       history.push({
         undo() {
           const f = trackManager.getFragment(fragmentId);
           if (f) {
             f.startTime = oldStart;
             f.duration = oldDuration;
+            if (oldSingerId !== newSingerId) {
+              const oldSinger = trackManager.getSinger(oldSingerId);
+              f.singerId = oldSingerId;
+              f.color = oldSinger ? oldSinger.color : f.color;
+            }
           }
           renderFragmentTimeline();
         },
@@ -2039,6 +2063,11 @@ function finishDrag() {
           if (f) {
             f.startTime = newStart;
             f.duration = newDuration;
+            if (oldSingerId !== newSingerId) {
+              const newSinger = trackManager.getSinger(newSingerId);
+              f.singerId = newSingerId;
+              f.color = newSinger ? newSinger.color : f.color;
+            }
           }
           renderFragmentTimeline();
         }
