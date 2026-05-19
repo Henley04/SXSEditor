@@ -2,6 +2,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const https = require('node:https');
 const http = require('node:http');
+const os = require('node:os');
 const { execFile } = require('node:child_process');
 const { URL } = require('node:url');
 
@@ -12,6 +13,13 @@ const TEMP_SUFFIX = '.download';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// 分片多线程下载相关常量
+const MAX_GLOBAL_CONCURRENCY = 16;
+const MIN_FILE_SIZE_FOR_CHUNKING = 16 * 1024 * 1024; // 16MB 以下不分片
+const DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024; // 每片 8MB
+const CHUNK_META_SUFFIX = '.download.meta';
+const CHUNK_PART_SUFFIX = '.download.part';
 
 const MODEL_FILE_MANIFEST = [
   { filePath: 'note_text_encoder.onnx', required: true },
@@ -76,6 +84,56 @@ function checkMissingFiles(modelDir) {
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * 根据硬件环境智能配置最佳并发数
+ * - CPU 核心数 * 2 作为基础并发
+ * - 内存不足时降低并发
+ * - 最大不超过 16
+ */
+function getOptimalConcurrency() {
+  const cpus = os.cpus().length;
+  const totalMemGB = os.totalmem() / (1024 * 1024 * 1024);
+
+  let concurrency = Math.max(4, Math.min(cpus * 2, MAX_GLOBAL_CONCURRENCY));
+
+  if (totalMemGB < 4) {
+    concurrency = Math.min(concurrency, 4);
+  } else if (totalMemGB < 8) {
+    concurrency = Math.min(concurrency, 8);
+  }
+
+  return concurrency;
+}
+
+/**
+ * 并发池 - 控制全局最大并发连接数
+ * 文件级和分片级共享同一个池，自然平衡并发
+ */
+class ConcurrencyPool {
+  constructor(max) {
+    this.max = max;
+    this.running = 0;
+    this.queue = [];
+  }
+
+  async acquire() {
+    if (this.running < this.max) {
+      this.running++;
+      return;
+    }
+    return new Promise(resolve => this.queue.push(resolve));
+  }
+
+  release() {
+    this.running--;
+    if (this.queue.length > 0) {
+      this.running++;
+      const next = this.queue.shift();
+      next();
+    }
+  }
 }
 
 function httpRequest(urlStr, options = {}) {
@@ -303,6 +361,285 @@ async function downloadFileWithRetry(url, destPath, options = {}) {
   throw lastError;
 }
 
+/**
+ * 下载单个分片
+ * 支持 Range 请求、重定向跟踪、断点续传（检查已完成的分片文件）
+ */
+async function downloadChunk(url, destPath, chunkIndex, start, end, options = {}) {
+  const { abortSignal, onProgress } = options;
+  const chunkPath = destPath + CHUNK_PART_SUFFIX + chunkIndex;
+  const expectedSize = end - start + 1;
+
+  // 检查分片是否已下载完成
+  try {
+    const stats = fs.statSync(chunkPath);
+    if (stats.size === expectedSize) {
+      if (onProgress) onProgress(chunkIndex, expectedSize, expectedSize);
+      return { chunkIndex, size: expectedSize, resumed: true };
+    }
+  } catch (_) {}
+
+  const headers = { 'Range': `bytes=${start}-${end}` };
+  let currentUrl = url;
+  let redirectCount = 0;
+
+  while (redirectCount < 5) {
+    if (abortSignal && abortSignal.aborted) {
+      throw new Error('Download cancelled');
+    }
+
+    const { redirectUrl, response } = await httpRequest(currentUrl, {
+      headers,
+      timeout: 60000,
+      abortSignal,
+    });
+
+    if (redirectUrl) {
+      currentUrl = redirectUrl;
+      redirectCount++;
+      continue;
+    }
+
+    // 服务器不支持 Range 请求，返回 200 而非 206
+    if (response.statusCode === 200) {
+      response.resume();
+      throw new Error('NO_RANGE_SUPPORT');
+    }
+
+    if (response.statusCode !== 206) {
+      response.resume();
+      throw new Error(`HTTP ${response.statusCode}`);
+    }
+
+    // 下载分片
+    return new Promise((resolve, reject) => {
+      const fileStream = fs.createWriteStream(chunkPath, { flags: 'w' });
+      let downloaded = 0;
+      let lastProgressTime = 0;
+
+      response.on('data', (data) => {
+        downloaded += data.length;
+        const now = Date.now();
+        if (onProgress && (now - lastProgressTime > 200 || downloaded >= expectedSize)) {
+          lastProgressTime = now;
+          onProgress(chunkIndex, downloaded, expectedSize);
+        }
+      });
+
+      response.pipe(fileStream);
+
+      fileStream.on('finish', () => {
+        fileStream.close(() => {
+          if (downloaded < expectedSize) {
+            reject(new Error(`Chunk ${chunkIndex} incomplete: ${downloaded}/${expectedSize}`));
+            return;
+          }
+          resolve({ chunkIndex, size: downloaded, resumed: false });
+        });
+      });
+
+      fileStream.on('error', (err) => {
+        try { fileStream.close(); } catch (_) {}
+        reject(err);
+      });
+
+      response.on('error', (err) => {
+        try { fileStream.close(); } catch (_) {}
+        reject(err);
+      });
+
+      if (abortSignal) {
+        if (abortSignal.aborted) {
+          response.destroy();
+          fileStream.close();
+          reject(new Error('Download cancelled'));
+          return;
+        }
+        abortSignal.addEventListener('abort', () => {
+          response.destroy();
+        }, { once: true });
+      }
+    });
+  }
+
+  throw new Error('Too many redirects');
+}
+
+/**
+ * 合并所有分片到目标文件（流式合并，内存友好）
+ */
+async function mergeChunks(destPath, numChunks) {
+  return new Promise((resolve, reject) => {
+    const finalStream = fs.createWriteStream(destPath, { flags: 'w' });
+    let i = 0;
+
+    function writeNext() {
+      if (i >= numChunks) {
+        finalStream.end(() => resolve());
+        return;
+      }
+
+      const chunkPath = destPath + CHUNK_PART_SUFFIX + i;
+      const chunkStream = fs.createReadStream(chunkPath);
+
+      chunkStream.on('end', () => {
+        try { fs.unlinkSync(chunkPath); } catch (_) {}
+        i++;
+        writeNext();
+      });
+
+      chunkStream.on('error', reject);
+      chunkStream.pipe(finalStream, { end: false });
+    }
+
+    finalStream.on('error', reject);
+    writeNext();
+  });
+}
+
+/**
+ * 分片多线程下载大文件
+ * - 将文件分成多个分片并行下载
+ * - 每个分片使用全局并发池中的槽位
+ * - 支持断点续传（通过 .download.meta 记录分片状态）
+ * - 如果服务器不支持 Range 请求，抛出 NO_RANGE_SUPPORT 错误
+ */
+async function downloadFileChunked(url, destPath, fileSize, options = {}) {
+  const { onProgress, abortSignal, pool } = options;
+  const metaPath = destPath + CHUNK_META_SUFFIX;
+  const dir = path.dirname(destPath);
+  fs.mkdirSync(dir, { recursive: true });
+
+  // 计算分片布局
+  const maxChunks = Math.min(
+    pool ? pool.max : MAX_GLOBAL_CONCURRENCY,
+    Math.ceil(fileSize / DEFAULT_CHUNK_SIZE)
+  );
+  const numChunks = Math.max(1, maxChunks);
+  const chunkSize = Math.ceil(fileSize / numChunks);
+
+  // 构建分片列表
+  const chunks = [];
+  for (let i = 0; i < numChunks; i++) {
+    const start = i * chunkSize;
+    const end = Math.min(start + chunkSize - 1, fileSize - 1);
+    chunks.push({ index: i, start, end, completed: false });
+  }
+
+  // 检查已有的元数据文件（断点续传）
+  try {
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    if (meta.fileSize === fileSize && meta.chunks && meta.chunks.length === numChunks) {
+      for (let i = 0; i < numChunks; i++) {
+        if (meta.chunks[i].completed) {
+          // 验证分片文件确实存在且大小正确
+          const chunkPath = destPath + CHUNK_PART_SUFFIX + i;
+          try {
+            const stats = fs.statSync(chunkPath);
+            if (stats.size === (chunks[i].end - chunks[i].start + 1)) {
+              chunks[i].completed = true;
+            }
+          } catch (_) {}
+        }
+      }
+    }
+  } catch (_) {}
+
+  // 保存元数据
+  const saveMeta = () => {
+    const meta = {
+      fileSize,
+      numChunks,
+      chunks: chunks.map(c => ({
+        index: c.index,
+        start: c.start,
+        end: c.end,
+        completed: c.completed,
+      })),
+    };
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+  };
+  saveMeta();
+
+  // 跟踪每个分片的下载进度
+  const chunkDownloaded = new Array(numChunks).fill(0);
+  for (const chunk of chunks) {
+    if (chunk.completed) {
+      chunkDownloaded[chunk.index] = chunk.end - chunk.start + 1;
+    }
+  }
+
+  let lastProgressTime = 0;
+  const reportProgress = () => {
+    if (!onProgress) return;
+    const now = Date.now();
+    if (now - lastProgressTime < 100) return;
+    lastProgressTime = now;
+    const totalDownloaded = chunkDownloaded.reduce((a, b) => a + b, 0);
+    onProgress(totalDownloaded, fileSize);
+  };
+
+  // 带重试的分片下载
+  const downloadChunkWithRetry = async (chunk) => {
+    if (chunk.completed) return;
+
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        if (pool) await pool.acquire();
+        try {
+          await downloadChunk(url, destPath, chunk.index, chunk.start, chunk.end, {
+            abortSignal,
+            onProgress: (chunkIdx, downloaded, total) => {
+              chunkDownloaded[chunkIdx] = downloaded;
+              reportProgress();
+            },
+          });
+          chunk.completed = true;
+          chunkDownloaded[chunk.index] = chunk.end - chunk.start + 1;
+          saveMeta();
+          reportProgress();
+          return;
+        } finally {
+          if (pool) pool.release();
+        }
+      } catch (err) {
+        if (err.message === 'Download cancelled') throw err;
+        if (err.message === 'NO_RANGE_SUPPORT') throw err;
+        if (attempt < MAX_RETRIES) {
+          console.warn(`[ModelManager] Chunk ${chunk.index} attempt ${attempt + 1} failed: ${err.message}, retrying...`);
+          await sleep(RETRY_DELAY_MS * (attempt + 1));
+        } else {
+          throw err;
+        }
+      }
+    }
+  };
+
+  try {
+    // 并行下载所有未完成的分片
+    await Promise.all(chunks.map(chunk => downloadChunkWithRetry(chunk)));
+  } catch (err) {
+    if (err.message === 'NO_RANGE_SUPPORT') {
+      // 服务器不支持 Range，清理分片文件，让调用方回退到单线程
+      for (let i = 0; i < numChunks; i++) {
+        try { fs.unlinkSync(destPath + CHUNK_PART_SUFFIX + i); } catch (_) {}
+      }
+      try { fs.unlinkSync(metaPath); } catch (_) {}
+      throw err;
+    }
+    throw err;
+  }
+
+  // 合并分片
+  await mergeChunks(destPath, numChunks);
+
+  // 清理临时文件
+  try { fs.unlinkSync(metaPath); } catch (_) {}
+  try { fs.unlinkSync(destPath + TEMP_SUFFIX); } catch (_) {}
+
+  return { size: fileSize };
+}
+
 async function checkModelScopeCLIAvailable() {
   return new Promise((resolve) => {
     const cmd = process.platform === 'win32' ? 'modelscope.exe' : 'modelscope';
@@ -359,6 +696,13 @@ async function getRemoteFileSize(filePath) {
   }
 }
 
+/**
+ * 下载缺失的模型文件
+ * - 多文件并发下载
+ * - 大文件（>=16MB）自动分片多线程下载
+ * - 全局并发池控制最大连接数（智能配置，最大16）
+ * - 支持断点续传
+ */
 async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   const { onProgress, onFileStart, onFileComplete, abortSignal } = options;
 
@@ -377,51 +721,127 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
     }
   }
 
-  console.log('[ModelManager] Using HTTP download');
-  let overallDownloaded = 0;
-  let overallTotal = 0;
+  const globalConcurrency = getOptimalConcurrency();
+  console.log(`[ModelManager] Using HTTP download with concurrent chunked support (concurrency: ${globalConcurrency})`);
+  const pool = new ConcurrencyPool(globalConcurrency);
 
+  // 获取所有文件的远程大小
+  const fileSizes = {};
+  let overallTotal = 0;
   for (const file of missingFiles) {
     const remoteSize = await getRemoteFileSize(file.filePath);
+    fileSizes[file.filePath] = remoteSize;
     overallTotal += remoteSize;
   }
 
-  for (let i = 0; i < missingFiles.length; i++) {
-    if (abortSignal && abortSignal.aborted) {
-      throw new Error('Download cancelled');
+  // 跟踪每个文件的下载进度
+  const fileDownloadedMap = new Map();
+  const fileIndexMap = new Map();
+  missingFiles.forEach((file, index) => {
+    fileDownloadedMap.set(file.filePath, 0);
+    fileIndexMap.set(file.filePath, index);
+  });
+
+  let lastProgressTime = 0;
+  const reportOverallProgress = (filePath) => {
+    if (!onProgress) return;
+    const now = Date.now();
+    if (now - lastProgressTime < 100) return;
+    lastProgressTime = now;
+
+    let totalDownloaded = 0;
+    for (const [, downloaded] of fileDownloadedMap) {
+      totalDownloaded += downloaded;
     }
 
-    const file = missingFiles[i];
-    const destPath = path.join(modelDir, file.filePath);
-    const url = getFileDownloadUrl(file.filePath);
-
-    if (onFileStart) {
-      onFileStart(file.filePath, i, missingFiles.length);
-    }
-
-    await downloadFileWithRetry(url, destPath, {
-      onProgress: (bytesDownloaded, bytesTotal) => {
-        if (onProgress) {
-          onProgress({
-            currentFile: file.filePath,
-            fileIndex: i,
-            totalFiles: missingFiles.length,
-            bytesDownloaded,
-            bytesTotal,
-            overallDownloaded: overallDownloaded + bytesDownloaded,
-            overallTotal,
-          });
-        }
-      },
-      abortSignal,
-      startByte: file.downloadedBytes || 0,
+    onProgress({
+      currentFile: filePath,
+      fileIndex: fileIndexMap.get(filePath),
+      totalFiles: missingFiles.length,
+      bytesDownloaded: fileDownloadedMap.get(filePath) || 0,
+      bytesTotal: fileSizes[filePath] || 0,
+      overallDownloaded: totalDownloaded,
+      overallTotal,
     });
+  };
 
-    overallDownloaded += (await fs.promises.stat(destPath)).size;
+  // 并发下载所有文件
+  const downloadPromises = missingFiles.map((file, index) => {
+    return (async () => {
+      if (abortSignal && abortSignal.aborted) {
+        throw new Error('Download cancelled');
+      }
 
-    if (onFileComplete) {
-      onFileComplete(file.filePath, i, missingFiles.length);
-    }
+      const destPath = path.join(modelDir, file.filePath);
+      const url = getFileDownloadUrl(file.filePath);
+      const fileSize = fileSizes[file.filePath];
+
+      if (onFileStart) {
+        onFileStart(file.filePath, index, missingFiles.length);
+      }
+
+      // 检查是否有旧的单线程临时文件（兼容旧版断点续传）
+      const tempPath = destPath + TEMP_SUFFIX;
+      const metaPath = destPath + CHUNK_META_SUFFIX;
+      let hasOldTempFile = false;
+      try {
+        const stats = fs.statSync(tempPath);
+        if (stats.size > 0) hasOldTempFile = true;
+      } catch (_) {}
+
+      // 决定是否使用分片下载
+      // 条件：文件 >= 16MB 且没有旧的单线程临时文件（有旧临时文件则继续单线程续传）
+      let useChunked = fileSize >= MIN_FILE_SIZE_FOR_CHUNKING && !hasOldTempFile && fileSize > 0;
+
+      if (useChunked) {
+        try {
+          await downloadFileChunked(url, destPath, fileSize, {
+            onProgress: (downloaded, total) => {
+              fileDownloadedMap.set(file.filePath, downloaded);
+              reportOverallProgress(file.filePath);
+            },
+            abortSignal,
+            pool,
+          });
+        } catch (err) {
+          if (err.message === 'NO_RANGE_SUPPORT') {
+            console.warn(`[ModelManager] Server doesn't support Range for ${file.filePath}, falling back to single-threaded`);
+            useChunked = false;
+          } else {
+            throw err;
+          }
+        }
+      }
+
+      if (!useChunked) {
+        await downloadFileWithRetry(url, destPath, {
+          onProgress: (downloaded, total) => {
+            fileDownloadedMap.set(file.filePath, downloaded);
+            reportOverallProgress(file.filePath);
+          },
+          abortSignal,
+          startByte: file.downloadedBytes || 0,
+        });
+      }
+
+      // 更新最终下载量
+      try {
+        const finalSize = (await fs.promises.stat(destPath)).size;
+        fileDownloadedMap.set(file.filePath, finalSize);
+      } catch (_) {}
+
+      if (onFileComplete) {
+        onFileComplete(file.filePath, index, missingFiles.length);
+      }
+    })();
+  });
+
+  const results = await Promise.allSettled(downloadPromises);
+
+  // 检查是否有失败的下载
+  const errors = results.filter(r => r.status === 'rejected').map(r => r.reason);
+  if (errors.length > 0) {
+    throw errors[0];
   }
 }
 
@@ -433,7 +853,9 @@ module.exports = {
   downloadMissingFiles,
   downloadFileWithResume,
   downloadFileWithRetry,
+  downloadFileChunked,
   checkModelScopeCLIAvailable,
   getFileDownloadUrl,
   getRemoteFileSize,
+  getOptimalConcurrency,
 };

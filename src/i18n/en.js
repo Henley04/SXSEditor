@@ -293,6 +293,7 @@ export default {
     cancelDownload: 'Cancel Download',
     close: 'Close',
     downloading: 'Downloading: {file}',
+    downloadingMultiple: 'Downloading {active} files ({completed}/{total} completed)',
     allComplete: 'All model files downloaded!',
     downloadFailed: 'Download failed',
     downloadCancelled: 'Download cancelled',

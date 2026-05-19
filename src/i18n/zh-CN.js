@@ -293,6 +293,7 @@ export default {
     cancelDownload: '取消下载',
     close: '关闭',
     downloading: '正在下载: {file}',
+    downloadingMultiple: '正在下载 {active} 个文件 ({completed}/{total} 已完成)',
     allComplete: '所有模型文件下载完成！',
     downloadFailed: '下载失败',
     downloadCancelled: '下载已取消',

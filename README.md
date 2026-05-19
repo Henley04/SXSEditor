@@ -64,6 +64,7 @@ Download the latest pre-built installer for **Windows**:
 | ⚙️ Advanced Settings | Diffusion steps, CFG rescale, device selection |
 | 🔄 Undo / Redo | Full edit history (up to 200 steps) |
 | 📥 Model Auto-Download | Download missing ONNX models from ModelScope |
+| 🔀 Chunked Multi-threaded Download | Parallel chunked download for large files (up to 16 concurrent connections) |
 | ▶️ Real-time Playback | Synthesize & play directly in editor |
 | 🔊 WASAPI Exclusive Mode | Low-latency audio output via naudiodon |
 | 📦 WAV Export | Mix & export to standard WAV (24kHz) |
@@ -315,6 +316,7 @@ This project is licensed under the [MIT License](LICENSE).
 | ⚙️ 高级设置 | 扩散步数、CFG 重缩放、设备选择 |
 | 🔄 撤销 / 重做 | 完整编辑历史（最多 200 步） |
 | 📥 模型自动下载 | 从 ModelScope 自动下载缺失模型 |
+| 🔀 分片多线程下载 | 大文件分片并行下载，智能并发配置（最大16连接） |
 | ▶️ 实时播放 | 直接合成播放 |
 | 🔊 WASAPI 独占模式 | 通过 naudiodon 实现低延迟音频输出 |
 | 📦 WAV 导出 | 混音导出为标准 WAV |
@@ -463,6 +465,7 @@ npm run test:watch       # 监视模式
 | ⚙️ 詳細設定 | 拡散ステップ数、CFG リスケール、デバイス選択 |
 | 🔄 アンドゥ / リドゥ | 編集履歴（最大 200 ステップ） |
 | 📥 モデル自動ダウンロード | ModelScope から不足モデルを自動取得 |
+| 🔀 チャンク分割マルチスレッドダウンロード | 大容量ファイルの並列チャンクダウンロード（最大16同時接続） |
 | ▶️ リアルタイム再生 | エディター内で直接合成・再生 |
 | 🔊 WASAPI 排他モード | naudiodon による低レイテンシオーディオ出力 |
 | 📦 WAV エクスポート | 標準 WAV へのミックスダウン |
