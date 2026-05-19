@@ -3,6 +3,14 @@
  * 负责网格、钢琴键、音符块绘制，鼠标交互，播放头显示
  */
 
+function debounce(fn, ms) {
+  let timer = null;
+  return function(...args) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { timer = null; fn.apply(this, args); }, ms);
+  };
+}
+
 // 常量配置
 const PIANO_KEY_WIDTH = 60;          // 钢琴键区域宽度（CSS像素）
 const NOTE_HEIGHT = 16;              // 每个半音的高度（CSS像素）

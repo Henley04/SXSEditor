@@ -1021,7 +1021,7 @@ async function startExclusivePlayback(offset) {
       offset: offset,
     };
 
-    const result = await window.electronAPI.audioPlay(Array.from(currentAudioData), options);
+    const result = await window.electronAPI.audioPlay(currentAudioData, options);
 
     if (!result.success) {
       console.warn('[Audio] WASAPI 独占模式失败，回退到共享模式:', result.error);
@@ -1361,7 +1361,6 @@ btnLoad.addEventListener('click', async () => {
           }
         }
         if (obj.fragments) {
-          trackManager.fragments.length = 0;
           for (const f of obj.fragments) trackManager.fragments.push(f);
         }
         currentProjectFilePath = result.filePaths[0];
@@ -1447,7 +1446,7 @@ btnExport.addEventListener('click', async () => {
         const totalSecondsExport = (exportTotalBeats / project.bpm) * 60;
         const converted = convertF0DataToPitchCurve(singer.f0Data, totalSecondsExport);
         if (converted) {
-          finalPitchCurveF0 = Array.from(converted);
+          finalPitchCurveF0 = converted;
         }
       }
 

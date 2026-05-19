@@ -1,6 +1,14 @@
 import './audioPreprocess.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 
+function debounce(fn, ms) {
+  let timer = null;
+  return function(...args) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { timer = null; fn.apply(this, args); }, ms);
+  };
+}
+
 function isCJK(char) {
   const code = char.codePointAt(0) || 0;
   return (
@@ -490,7 +498,7 @@ async function initPianoRoll() {
     dpr: window.devicePixelRatio || 1,
 
     _initEvents() {
-      window.addEventListener('resize', () => this._resize());
+      window.addEventListener('resize', debounce(() => this._resize(), 100));
       this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
       this.canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
       document.addEventListener('mouseup', () => this._onMouseUp());

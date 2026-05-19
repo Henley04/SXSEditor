@@ -39,6 +39,7 @@ function _ensureWorker() {
   _worker = fork(workerScript, [], {
     stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
     env: { ...process.env },
+    serialization: 'advanced',
   });
 
   _worker.on('message', (msg) => {
@@ -172,7 +173,7 @@ class AudioOutputManager {
     _lastPosition = offset;
     _duration = audioData.length / (options.sampleRate || 24000);
 
-    const audioArray = Array.from(audioData);
+    const audioArray = audioData instanceof Float32Array ? audioData : new Float32Array(audioData);
 
     const result = await _sendCommand('start', {
       audioData: audioArray,

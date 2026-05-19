@@ -1372,7 +1372,7 @@ async function playFragment() {
     }
 
     const pitchCurveF0 = buildPitchCurveF0Data();
-    const pitchCurveF0Serializable = pitchCurveF0 ? Array.from(pitchCurveF0) : null;
+    const pitchCurveF0Serializable = pitchCurveF0 || null;
 
     const previewOpts = getFragmentPreviewInferenceOptions();
 
@@ -1495,7 +1495,7 @@ async function playFragmentExclusive() {
       offset: 0,
     };
 
-    const result = await window.electronAPI.audioPlay(Array.from(fragmentAudioData), options);
+    const result = await window.electronAPI.audioPlay(fragmentAudioData, options);
 
     if (!result.success) {
       console.warn('[FragmentAudio] WASAPI 独占模式失败，回退到共享模式:', result.error);
@@ -1570,7 +1570,7 @@ async function exportFragment() {
     }
 
     const pitchCurveF0 = buildPitchCurveF0Data();
-    const pitchCurveF0Serializable = pitchCurveF0 ? Array.from(pitchCurveF0) : null;
+    const pitchCurveF0Serializable = pitchCurveF0 || null;
 
     const exportOpts = getFragmentExportInferenceOptions();
 
@@ -2630,5 +2630,15 @@ window.addEventListener('beforeunload', () => {
     clearTimeout(autoSaveTimer);
     autoSaveTimer = null;
   }
-  saveFragmentData();
+  // Use synchronous save to ensure data is persisted before unload
+  try {
+    if (currentFragment) {
+      currentFragment.notes = notes;
+      currentFragment.envelopes = envelopes;
+      currentFragment.pitchCurve = pitchCurve;
+      if (window.electronAPI?.saveFragmentDataSync) {
+        window.electronAPI.saveFragmentDataSync(currentFragment.id, { notes, envelopes, pitchCurve });
+      }
+    }
+  } catch (_) {}
 });

@@ -166,6 +166,15 @@ class TrackManager {
     return this.fragments;
   }
 
+  clearAll() {
+    this.singers.length = 0;
+    this.fragments.length = 0;
+    this.usedColorIndices.clear();
+    this.activeFragmentId = null;
+    nextSingerId = 1;
+    nextFragmentId = 1;
+  }
+
   getColors() {
     return TRACK_COLORS;
   }
