@@ -35,86 +35,86 @@
 
   <main>
     <section class="page-header">
-      <h1>能做什么</h1>
-      <p>从写第一个音符到导出完整的歌</p>
+      <h1>功能特性</h1>
+      <p>从音符编排到歌声导出的完整工作流</p>
     </section>
 
     <p class="features-intro">
-      SXSEditor 的核心流程很简单：写音符 → 填歌词 → 合成歌声 → 导出音频。
-      下面是每一步的具体能力。
+      SXSEditor 的核心工作流：音符编排 → 歌词输入 → 歌声合成 → 音频导出。
+      以下为各环节的具体能力。
     </p>
 
     <section class="features-grid">
       <div class="feature-card">
         <div class="feature-icon">🎹</div>
-        <h3>像写 MIDI 一样写歌</h3>
-        <p>在钢琴卷帘上点击放置音符，拖拽调整音高和时长。支持多轨编排，你可以同时写主旋律、和声，甚至给不同声部分配不同的歌手。</p>
+        <h3>钢琴卷帘编辑</h3>
+        <p>在钢琴卷帘界面点击放置音符，拖拽调整音高和时长。支持多轨编排，可同时编写主旋律与和声，并为不同声部分配不同歌手。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">📝</div>
-        <h3>每个音符都能填词</h3>
-        <p>双击音符输入拼音或歌词，合成引擎会根据上下文自动处理发音。支持中文歌词，后续会扩展更多语言。</p>
+        <h3>逐音符歌词输入</h3>
+        <p>双击音符输入拼音或歌词，合成引擎根据上下文自动处理发音。当前支持中文歌词，后续将扩展更多语言。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">🎤</div>
-        <h3>让虚拟歌手唱出来</h3>
-        <p>基于 SoulX-Singer 声学模型，通过 ONNX Runtime 在本地运行。不需要联网，也不需要订阅——你的数据完全留在自己电脑上。</p>
+        <h3>神经网络歌声合成</h3>
+        <p>基于 SoulX-Singer 声学模型，通过 ONNX Runtime 在本地运行推理。无需联网，无需订阅，所有数据完全保留在本地。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">👤</div>
-        <h3>创建自己的歌手</h3>
-        <p>上传一段参考音频，程序会自动提取音高特征，创建一个专属的 .sxssinger 歌手文件。你可以为每个项目使用不同的声线。</p>
+        <h3>自定义歌手</h3>
+        <p>上传参考音频，程序自动提取音高特征并生成专属 .sxssinger 歌手文件。可为不同项目使用不同声线。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">📊</div>
-        <h3>自动提取音高</h3>
-        <p>内置 RMVPE 和 Basic Pitch，可以从任何音频中提取 F0 曲线和 MIDI 音符。想翻唱一首歌？先把原唱的音高抓下来作为参考。</p>
+        <h3>自动音高提取</h3>
+        <p>内置 RMVPE 和 Basic Pitch，可从任意音频中提取 F0 曲线与 MIDI 音符。支持以现有音频的音高信息作为翻唱参考。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">▶️</div>
-        <h3>边写边听</h3>
-        <p>写完一段就能立刻合成试听，不满意再改。不用等整个项目做完，创作过程更流畅。</p>
+        <h3>实时试听</h3>
+        <p>编辑完成后可即时合成试听，便于快速迭代调整。无需等待整个项目完成，创作流程更加高效。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">📦</div>
-        <h3>导出 WAV</h3>
-        <p>合成完成后导出为标准 WAV 文件（24kHz），可以直接导入到其他 DAW 里做后期混音，或者就这样直接发布。</p>
+        <h3>WAV 导出</h3>
+        <p>合成完成后导出为标准 WAV 文件（24kHz），可直接导入其他 DAW 进行后期混音，亦可直接发布。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">⚡</div>
-        <h3>显卡加速</h3>
-        <p>有 NVIDIA、AMD 或 Intel 独显的话，合成速度会快很多。没有独显也能跑，就是慢一点，完全不影响使用。</p>
+        <h3>GPU 加速</h3>
+        <p>支持 NVIDIA、AMD 及 Intel 独立显卡加速推理。无独显环境下亦可使用 CPU 运行，功能不受影响。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">🖥️</div>
-        <h3>桌面应用</h3>
-        <p>基于 Electron 构建，原生桌面体验。目前在 Windows 上测试最充分，macOS 和 Linux 理论上也能编译运行。</p>
+        <h3>桌面原生应用</h3>
+        <p>基于 Electron 构建，提供原生桌面体验。当前在 Windows 平台经过充分测试，macOS 与 Linux 理论上可编译运行。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">📐</div>
-        <h3>微调音高和音量</h3>
-        <p>包络编辑器让你可以画出音高曲线和音量变化，给歌声加上颤音、滑音，或者让某些词唱得更轻或更重。</p>
+        <h3>音高与音量包络编辑</h3>
+        <p>包络编辑器支持绘制音高曲线与音量变化，可实现颤音、滑音等效果，或对特定音节进行力度调节。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">🔧</div>
-        <h3>选择运行设备</h3>
-        <p>在设置里可以指定用哪张显卡跑合成，或者让程序自动选择。笔记本用户也可以手动切换到 CPU 模式省电。</p>
+        <h3>推理设备选择</h3>
+        <p>在设置中可指定用于推理的显卡设备，亦可选择自动检测。笔记本电脑用户可手动切换至 CPU 模式以降低功耗。</p>
       </div>
 
       <div class="feature-card">
         <div class="feature-icon">🧪</div>
-        <h3>有测试保障</h3>
-        <p>160 多个自动化测试覆盖核心功能，每次修改代码都会跑一遍。虽然是个小项目，但质量上不想马虎。</p>
+        <h3>自动化测试保障</h3>
+        <p>160 余个自动化测试用例覆盖核心功能，每次代码变更均执行回归测试，确保功能稳定性与代码质量。</p>
       </div>
     </section>
   </main>
