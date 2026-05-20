@@ -342,5 +342,28 @@ export default {
     soulXSingerEditor: 'SoulX Singer Editor',
     aiSvsWorkbench: 'AI Singing Voice Synthesis Workbench based on ONNX Runtime / DirectML',
     version: 'Version'
+  },
+  resourceManager: {
+    title: 'Resource Manager',
+    gpuInfo: 'GPU Info',
+    modelManagement: 'Model Management',
+    modelManagementDesc: 'Manage loaded models. Unloading models frees VRAM; required models are auto-loaded during synthesis.',
+    summary: 'Summary',
+    refresh: 'Refresh',
+    loading: 'Loading...',
+    used: 'used',
+    total: 'total',
+    discrete: 'Discrete',
+    integrated: 'Integrated',
+    noGpuDetected: 'No GPU device detected',
+    noModels: 'No model data',
+    loadFailed: 'Load failed',
+    loadAll: 'Load All',
+    unloadAll: 'Unload All',
+    load: 'Load',
+    unload: 'Unload',
+    filesMissing: 'Files Missing',
+    loadedModelsCount: 'Loaded Models',
+    estimatedVramUsage: 'Estimated VRAM Usage'
   }
 }

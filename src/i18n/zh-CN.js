@@ -342,5 +342,28 @@ export default {
     soulXSingerEditor: 'SoulX Singer 编辑器',
     aiSvsWorkbench: '基于 ONNX Runtime / DirectML 的 AI 歌声合成工作台',
     version: '版本'
+  },
+  resourceManager: {
+    title: '资源管理器',
+    gpuInfo: 'GPU 信息',
+    modelManagement: '模型管理',
+    modelManagementDesc: '管理已加载的模型。卸载模型可释放显存，合成时会自动加载所需模型。',
+    summary: '汇总',
+    refresh: '刷新',
+    loading: '加载中...',
+    used: '已用',
+    total: '总计',
+    discrete: '独显',
+    integrated: '核显',
+    noGpuDetected: '未检测到 GPU 设备',
+    noModels: '无模型数据',
+    loadFailed: '加载失败',
+    loadAll: '全部加载',
+    unloadAll: '全部卸载',
+    load: '加载',
+    unload: '卸载',
+    filesMissing: '文件缺失',
+    loadedModelsCount: '已加载模型数',
+    estimatedVramUsage: '预估显存占用'
   }
 }
