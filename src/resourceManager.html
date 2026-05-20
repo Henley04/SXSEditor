@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title data-i18n="resourceManager.title">资源管理器</title>
+</head>
+<body>
+    <div class="rm-container">
+        <h2 data-i18n="resourceManager.title">资源管理器</h2>
+
+        <div class="rm-section gpu-section">
+            <h3 class="section-title" data-i18n="resourceManager.gpuInfo">GPU 信息</h3>
+            <div id="gpuInfoContent" class="gpu-info-content">
+                <div class="loading-hint" data-i18n="resourceManager.loading">加载中...</div>
+            </div>
+        </div>
+
+        <div class="rm-section models-section">
+            <h3 class="section-title" data-i18n="resourceManager.modelManagement">模型管理</h3>
+            <p class="section-desc" data-i18n="resourceManager.modelManagementDesc">管理已加载的模型。卸载模型可释放显存，合成时会自动加载所需模型。</p>
+            <div id="modelGroupsContent" class="model-groups-content">
+                <div class="loading-hint" data-i18n="resourceManager.loading">加载中...</div>
+            </div>
+        </div>
+
+        <div class="rm-section summary-section">
+            <h3 class="section-title" data-i18n="resourceManager.summary">汇总</h3>
+            <div id="summaryContent" class="summary-content"></div>
+        </div>
+
+        <div class="rm-actions">
+            <button id="refreshBtn" data-i18n="resourceManager.refresh">刷新</button>
+        </div>
+    </div>
+    <script src="resourceManager.js"></script>
+</body>
+</html>
