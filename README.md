@@ -71,8 +71,10 @@ Download the latest pre-built installer for **Windows**:
 | 🔊 WASAPI Exclusive Mode | Low-latency audio output via naudiodon |
 | 📦 WAV Export | Mix & export to standard WAV (24kHz) |
 | ⚡ GPU Acceleration | DirectML (NVIDIA / AMD / Intel) |
+| 📊 Resource Manager | Monitor GPU/VRAM usage, load/unload individual models |
 | 🚀 Optimized IPC | Float32Array binary transfer for low-latency audio pipeline |
 | 🖥️ HiDPI Support | High-resolution canvas rendering for Retina/HiDPI displays |
+| 🌐 Multilingual Website | Official website supports Chinese / English / Japanese with auto-detection |
 
 #### SVS Language Support
 
@@ -195,10 +197,11 @@ See [onnx_models/README.md](onnx_models/README.md) for detailed specifications a
 SXSEditor/
 ├── assets/                  # Application icons and images
 ├── docs/                    # Documentation & website
-│   ├── index.html           # Official website
+│   ├── index.html           # Official website (i18n: zh/en/jp)
 │   ├── features.html        # Features page
 │   ├── download.html        # Download page
 │   ├── about.html           # About page
+│   ├── js/i18n.js           # Internationalization system
 │   ├── wiki/                # Wiki pages
 │   └── ...
 ├── example/                 # Example prompt/target data
@@ -214,6 +217,7 @@ SXSEditor/
 │   ├── preload.js           # Preload script for secure IPC
 │   ├── renderer.js          # Main renderer process (UI logic)
 │   ├── modelManager.js      # Model download & verification (ModelScope)
+│   ├── modelRegistry.js     # Extensible model group definitions
 │   ├── modelDownload.js     # Model download progress window
 │   ├── settings.js          # Settings window (device, diffusion, audio)
 │   ├── singerCreator.js     # Singer creation window
@@ -326,8 +330,10 @@ This project is licensed under the [MIT License](LICENSE).
 | 🔊 WASAPI 独占模式 | 通过 naudiodon 实现低延迟音频输出 |
 | 📦 WAV 导出 | 混音导出为标准 WAV |
 | ⚡ GPU 加速 | DirectML（NVIDIA / AMD / Intel） |
+| 📊 资源管理器 | 监控 GPU/显存占用，单独加载/卸载模型 |
 | 🚀 优化 IPC 传输 | Float32Array 二进制传输，低延迟音频管线 |
 | 🖥️ HiDPI 支持 | 高分辨率 Canvas 渲染，适配 Retina/HiDPI 显示器 |
+| 🌐 官网多语言 | 官方网站支持中文/英文/日文，自动检测浏览器语言 |
 
 #### SVS 语言支持
 
@@ -478,8 +484,10 @@ npm run test:watch       # 监视模式
 | 🔊 WASAPI 排他モード | naudiodon による低レイテンシオーディオ出力 |
 | 📦 WAV エクスポート | 標準 WAV へのミックスダウン |
 | ⚡ GPU アクセラレーション | DirectML（NVIDIA / AMD / Intel） |
+| 📊 リソースマネージャー | GPU/VRAM使用量の監視、モデルの個別ロード/アンロード |
 | 🚀 最適化 IPC 転送 | Float32Array バイナリ転送による低レイテンシオーディオパイプライン |
 | 🖥️ HiDPI サポート | 高解像度 Canvas レンダリング、Retina/HiDPI ディスプレイ対応 |
+| 🌐 多言語ウェブサイト | 公式サイトが中国語/英語/日本語に対応、ブラウザ言語を自動検出 |
 
 ---
 
