@@ -24,11 +24,18 @@
         <span></span>
       </button>
       <ul class="nav-links">
-        <li><a href="index.html">首页</a></li>
-        <li><a href="features.html">功能</a></li>
-        <li><a href="download.html">下载</a></li>
-        <li><a href="about.html">关于</a></li>
-        <li><a href="download.html" class="nav-cta">下载</a></li>
+        <li><a href="index.html" data-i18n="nav.home">首页</a></li>
+        <li><a href="features.html" data-i18n="nav.features">功能</a></li>
+        <li><a href="download.html" data-i18n="nav.download">下载</a></li>
+        <li><a href="about.html" data-i18n="nav.about">关于</a></li>
+        <li class="lang-switch">
+          <span class="lang-option" data-lang="zh">中文</span>
+          <span class="lang-divider">/</span>
+          <span class="lang-option" data-lang="en">EN</span>
+          <span class="lang-divider">/</span>
+          <span class="lang-option" data-lang="jp">日本語</span>
+        </li>
+        <li><a href="download.html" class="nav-cta" data-i18n="nav.downloadCta">下载</a></li>
       </ul>
     </div>
   </nav>
@@ -36,29 +43,29 @@
   <main>
     <section class="hero">
       <div class="hero-content">
-        <div class="hero-badge">
+        <div class="hero-badge" data-i18n="index.badge">
           v1.0.0 · 开源项目
         </div>
-        <h1>
+        <h1 data-i18n="index.h1">
           桌面端歌声合成，<br>
           <em>开箱即用</em>
         </h1>
-        <p>
+        <p data-i18n="index.desc">
           SXSEditor 是一款开源桌面歌声合成编辑器。基于钢琴卷帘界面进行音符编排与歌词输入，
           通过神经网络声学模型实现高质量歌声合成。无需联网，无需订阅，本地运行，数据完全自主可控。
         </p>
         <div class="hero-actions">
           <a href="download.html" class="btn btn-primary btn-lg">
-            免费下载
+            <span data-i18n="index.download">免费下载</span>
             <span class="icon-arrow">→</span>
           </a>
-          <a href="features.html" class="btn btn-secondary btn-lg">
+          <a href="features.html" class="btn btn-secondary btn-lg" data-i18n="index.learnMore">
             了解功能
           </a>
         </div>
         <div class="hero-visual">
-          <img src="images/mainpage.png" alt="SXSEditor 主界面" style="width:100%;max-width:900px;border-radius:12px;border:1px solid var(--border);box-shadow:0 8px 32px rgba(0,0,0,0.15);">
-          <div style="margin-top:12px;font-size:0.8rem;color:var(--text-muted);font-family:var(--font-sans);">
+          <img src="images/mainpage.png" data-i18n-alt="index.screenshotAlt" alt="SXSEditor 主界面" style="width:100%;max-width:900px;border-radius:12px;border:1px solid var(--border);box-shadow:0 8px 32px rgba(0,0,0,0.15);">
+          <div data-i18n="index.screenshotCaption" style="margin-top:12px;font-size:0.8rem;color:var(--text-muted);font-family:var(--font-sans);">
             多轨时间线 · 歌手编排 · 实时合成
           </div>
         </div>
@@ -69,18 +76,19 @@
   <footer>
     <div class="footer-inner">
       <div class="footer-links">
-        <a href="index.html">首页</a>
-        <a href="features.html">功能</a>
-        <a href="download.html">下载</a>
-        <a href="about.html">关于</a>
+        <a href="index.html" data-i18n="nav.home">首页</a>
+        <a href="features.html" data-i18n="nav.features">功能</a>
+        <a href="download.html" data-i18n="nav.download">下载</a>
+        <a href="about.html" data-i18n="nav.about">关于</a>
         <a href="https://github.com/Henley04/SXSEditor" target="_blank">GitHub</a>
       </div>
-      <div class="footer-copy">
+      <div class="footer-copy" data-i18n="footer.copy">
         &copy; 2026 SXSEditor. MIT License.
       </div>
     </div>
   </footer>
 
+  <script src="js/i18n.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>
