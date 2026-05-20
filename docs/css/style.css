@@ -59,6 +59,38 @@ img { max-width: 100%; height: auto; }
   padding: 0 24px;
 }
 
+/* ─── Language Switch ─── */
+.lang-switch {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 0.8rem;
+  user-select: none;
+}
+
+.lang-option {
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: color 0.2s ease, background 0.2s ease;
+}
+
+.lang-option:hover {
+  color: var(--text-secondary);
+}
+
+.lang-option.active {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.lang-divider {
+  color: var(--border);
+  font-size: 0.7rem;
+  margin: 0 1px;
+}
+
 /* ─── Navigation ─── */
 nav {
   position: fixed;

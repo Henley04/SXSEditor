@@ -24,36 +24,43 @@
         <span></span>
       </button>
       <ul class="nav-links">
-        <li><a href="index.html">首页</a></li>
-        <li><a href="features.html">功能</a></li>
-        <li><a href="download.html">下载</a></li>
-        <li><a href="about.html">关于</a></li>
-        <li><a href="download.html" class="nav-cta">下载</a></li>
+        <li><a href="index.html" data-i18n="nav.home">首页</a></li>
+        <li><a href="features.html" data-i18n="nav.features">功能</a></li>
+        <li><a href="download.html" data-i18n="nav.download">下载</a></li>
+        <li><a href="about.html" data-i18n="nav.about">关于</a></li>
+        <li class="lang-switch">
+          <span class="lang-option" data-lang="zh">中文</span>
+          <span class="lang-divider">/</span>
+          <span class="lang-option" data-lang="en">EN</span>
+          <span class="lang-divider">/</span>
+          <span class="lang-option" data-lang="jp">日本語</span>
+        </li>
+        <li><a href="download.html" class="nav-cta" data-i18n="nav.downloadCta">下载</a></li>
       </ul>
     </div>
   </nav>
 
   <main>
     <section class="page-header">
-      <h1>关于项目</h1>
-      <p>SXSEditor 的起源与理念</p>
+      <h1 data-i18n="about.h1">关于项目</h1>
+      <p data-i18n="about.subtitle">SXSEditor 的起源与理念</p>
     </section>
 
     <section class="about-section">
       <div class="about-content">
-        <h2>项目背景</h2>
-        <p>
+        <h2 data-i18n="about.background.title">项目背景</h2>
+        <p data-i18n="about.background.p1">
           SXSEditor 诞生的初衷是降低歌声合成的使用门槛。现有歌声合成软件普遍存在价格高昂、操作复杂或不开源等问题。
           本项目旨在提供一个免费、开源、易于上手的桌面端解决方案。
         </p>
-        <p>
+        <p data-i18n="about.background.p2">
           SXSEditor 将钢琴卷帘编辑器与神经网络歌声合成集成于同一桌面应用中。
           用户无需具备深度学习背景，无需配置运行环境，下载解压即可使用。
           所有推理均在本地完成，用户数据完全自主可控。
         </p>
 
-        <h2>技术栈</h2>
-        <p>本项目基于以下开源技术构建：</p>
+        <h2 data-i18n="about.techStack.title">技术栈</h2>
+        <p data-i18n="about.techStack.intro">本项目基于以下开源技术构建：</p>
         <div class="tech-stack-tags">
           <span class="tech-tag">Vanilla JavaScript</span>
           <span class="tech-tag">HTML5 Canvas</span>
@@ -69,48 +76,48 @@
           <span class="tech-tag">Mocha + Chai</span>
         </div>
 
-        <h2>项目结构</h2>
-        <p>代码组织结构清晰，主要模块如下：</p>
+        <h2 data-i18n="about.structure.title">项目结构</h2>
+        <p data-i18n="about.structure.intro">代码组织结构清晰，主要模块如下：</p>
         <ul>
-          <li><strong>src/main.js</strong> — Electron 主进程，负责窗口管理与进程通信</li>
-          <li><strong>src/renderer.js</strong> — 渲染进程，处理 UI 交互与主进程 API 调用</li>
-          <li><strong>src/editor/</strong> — 编辑器核心：轨道管理、钢琴卷帘、包络编辑</li>
-          <li><strong>src/inference/</strong> — ONNX 推理：SVS 流水线、音高检测、MIDI 解析</li>
-          <li><strong>src/audio/</strong> — WAV 编码与音频处理工具</li>
-          <li><strong>onnx_models/</strong> — SoulX-Singer ONNX 模型文件</li>
-          <li><strong>test/</strong> — 自动化测试，160 余个用例</li>
+          <li><strong>src/main.js</strong> <span data-i18n="about.structure.main">— Electron 主进程，负责窗口管理与进程通信</span></li>
+          <li><strong>src/renderer.js</strong> <span data-i18n="about.structure.renderer">— 渲染进程，处理 UI 交互与主进程 API 调用</span></li>
+          <li><strong>src/editor/</strong> <span data-i18n="about.structure.editor">— 编辑器核心：轨道管理、钢琴卷帘、包络编辑</span></li>
+          <li><strong>src/inference/</strong> <span data-i18n="about.structure.inference">— ONNX 推理：SVS 流水线、音高检测、MIDI 解析</span></li>
+          <li><strong>src/audio/</strong> <span data-i18n="about.structure.audio">— WAV 编码与音频处理工具</span></li>
+          <li><strong>onnx_models/</strong> <span data-i18n="about.structure.models">— SoulX-Singer ONNX 模型文件</span></li>
+          <li><strong>test/</strong> <span data-i18n="about.structure.test">— 自动化测试，160 余个用例</span></li>
         </ul>
 
-        <h2>音频规格</h2>
-        <p>当前模型支持的音频参数：</p>
+        <h2 data-i18n="about.audioSpec.title">音频规格</h2>
+        <p data-i18n="about.audioSpec.intro">当前模型支持的音频参数：</p>
         <ul>
-          <li>采样率：24000 Hz</li>
-          <li>Hop Size：480（20 ms）</li>
-          <li>FFT Size：1920</li>
-          <li>Window Size：1920</li>
-          <li>Mel 频带数：128</li>
-          <li>F0 范围：C1 ~ B6（32.7 Hz ~ 1975.5 Hz）</li>
+          <li data-i18n="about.audioSpec.sampleRate">采样率：24000 Hz</li>
+          <li data-i18n="about.audioSpec.hopSize">Hop Size：480（20 ms）</li>
+          <li data-i18n="about.audioSpec.fftSize">FFT Size：1920</li>
+          <li data-i18n="about.audioSpec.windowSize">Window Size：1920</li>
+          <li data-i18n="about.audioSpec.melBands">Mel 频带数：128</li>
+          <li data-i18n="about.audioSpec.f0Range">F0 范围：C1 ~ B6（32.7 Hz ~ 1975.5 Hz）</li>
         </ul>
 
-        <h2>开源许可</h2>
-        <p>
+        <h2 data-i18n="about.license.title">开源许可</h2>
+        <p data-i18n="about.license.p1">
           本项目基于 <strong>MIT License</strong> 开源。
           允许自由使用、修改和分发，仅需保留原始版权声明。
           如本项目对您有所帮助，欢迎在 GitHub 上给予 Star 支持。
         </p>
 
-        <h2>致谢</h2>
-        <p>感谢以下项目与社区的支持：</p>
+        <h2 data-i18n="about.ack.title">致谢</h2>
+        <p data-i18n="about.ack.intro">感谢以下项目与社区的支持：</p>
         <ul>
-          <li><strong>SoulX-Singer</strong> — 底层声学模型与 SVS/SVC 流水线</li>
-          <li><strong>ONNX Runtime</strong> — 本地高效模型推理运行时</li>
-          <li><strong>Electron Forge</strong> — 应用打包与构建工具</li>
-          <li><strong>Wavesurfer.js</strong> — 音频波形可视化组件</li>
-          <li>所有提交过 Issue 与 Pull Request 的贡献者</li>
+          <li><strong>SoulX-Singer</strong> <span data-i18n="about.ack.soulx">— 底层声学模型与 SVS/SVC 流水线</span></li>
+          <li><strong>ONNX Runtime</strong> <span data-i18n="about.ack.onnx">— 本地高效模型推理运行时</span></li>
+          <li><strong>Electron Forge</strong> <span data-i18n="about.ack.forge">— 应用打包与构建工具</span></li>
+          <li><strong>Wavesurfer.js</strong> <span data-i18n="about.ack.wavesurfer">— 音频波形可视化组件</span></li>
+          <li data-i18n="about.ack.contributors">所有提交过 Issue 与 Pull Request 的贡献者</li>
         </ul>
 
-        <h2>参与贡献</h2>
-        <p>
+        <h2 data-i18n="about.contribute.title">参与贡献</h2>
+        <p data-i18n="about.contribute.p1">
           欢迎任何形式的贡献，包括但不限于 Bug 报告、功能建议与代码提交。请前往 GitHub 仓库提交 Issue 或 Pull Request。
           提交 PR 前请确保运行 <code>npm test</code> 且所有测试通过。
         </p>
@@ -121,18 +128,19 @@
   <footer>
     <div class="footer-inner">
       <div class="footer-links">
-        <a href="index.html">首页</a>
-        <a href="features.html">功能</a>
-        <a href="download.html">下载</a>
-        <a href="about.html">关于</a>
+        <a href="index.html" data-i18n="nav.home">首页</a>
+        <a href="features.html" data-i18n="nav.features">功能</a>
+        <a href="download.html" data-i18n="nav.download">下载</a>
+        <a href="about.html" data-i18n="nav.about">关于</a>
         <a href="https://github.com/Henley04/SXSEditor" target="_blank">GitHub</a>
       </div>
-      <div class="footer-copy">
+      <div class="footer-copy" data-i18n="footer.copy">
         &copy; 2026 SXSEditor. MIT License.
       </div>
     </div>
   </footer>
 
+  <script src="js/i18n.js"></script>
   <script src="js/main.js"></script>
 </body>
 </html>

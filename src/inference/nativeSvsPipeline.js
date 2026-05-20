@@ -1697,6 +1697,7 @@ class OnnxSVSPipeline {
         if (!this.initialized) {
             await this.init();
         }
+        await this.ensureAllModelsLoaded();
         const onProgress = options.onProgress || (() => {});
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
@@ -1982,6 +1983,132 @@ class OnnxSVSPipeline {
             totalModels,
             isUsingDML: dmlCount > 0,
         };
+    }
+
+    /**
+     * 检查指定模型是否已加载
+     */
+    isModelLoaded(sessionKey) {
+        return !!(this.sessions[sessionKey] && this.initialized);
+    }
+
+    /**
+     * 获取所有模型的状态信息
+     */
+    getModelsStatus() {
+        const sessionKeys = [
+            'noteTextEncoder',
+            'notePitchEncoder',
+            'noteTypeEncoder',
+            'f0Encoder',
+            'preflow',
+            'condEmb',
+            'diffStep',
+            'vocoder',
+            'melTransform',
+        ];
+        return sessionKeys.map(key => ({
+            sessionKey: key,
+            loaded: !!(this.sessions[key]),
+            ep: this.sessionEPs[key] || null,
+        }));
+    }
+
+    /**
+     * 卸载指定模型（释放其 ONNX 会话）
+     */
+    unloadModel(sessionKey) {
+        if (!this.sessions[sessionKey]) {
+            return { success: false, error: 'Model not loaded' };
+        }
+        try {
+            if (typeof this.sessions[sessionKey].release === 'function') {
+                this.sessions[sessionKey].release();
+            }
+            delete this.sessions[sessionKey];
+            delete this.sessionEPs[sessionKey];
+            console.log(`[OnnxSVSPipeline] 模型 ${sessionKey} 已卸载`);
+            return { success: true };
+        } catch (err) {
+            console.warn(`[OnnxSVSPipeline] 卸载模型 ${sessionKey} 失败:`, err.message);
+            return { success: false, error: err.message };
+        }
+    }
+
+    /**
+     * 加载指定模型
+     */
+    async loadModel(sessionKey) {
+        if (this.sessions[sessionKey]) {
+            return { success: true, alreadyLoaded: true };
+        }
+
+        const sessionKeyToModelFile = {
+            noteTextEncoder: 'note_text_encoder.onnx',
+            notePitchEncoder: 'note_pitch_encoder.onnx',
+            noteTypeEncoder: 'note_type_encoder.onnx',
+            f0Encoder: 'f0_encoder.onnx',
+            preflow: 'preflow.onnx',
+            condEmb: 'cond_emb.onnx',
+            diffStep: 'diff_step_dml.onnx',
+            vocoder: 'vocoder.onnx',
+            melTransform: 'mel_transform.onnx',
+        };
+
+        const modelFile = sessionKeyToModelFile[sessionKey];
+        if (!modelFile) {
+            return { success: false, error: `Unknown session key: ${sessionKey}` };
+        }
+
+        let resolvedFile = modelFile;
+        if (modelFile === 'diff_step_dml.onnx') {
+            const dmlPath = path.join(this.modelDir, 'diff_step_dml.onnx');
+            let dmlExists = false;
+            try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
+            if (!dmlExists) {
+                resolvedFile = 'diff_step.onnx';
+            }
+        }
+
+        const modelPath = path.join(this.modelDir, resolvedFile);
+        try {
+            await fs.promises.access(modelPath);
+        } catch (_) {
+            return { success: false, error: `Model file not found: ${resolvedFile}` };
+        }
+
+        try {
+            const { session, ep } = await createSessionWithValidation(
+                modelPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId
+            );
+            this.sessions[sessionKey] = session;
+            this.sessionEPs[sessionKey] = ep;
+            console.log(`[OnnxSVSPipeline] 模型 ${sessionKey} 已加载 [${ep}]`);
+            return { success: true, ep };
+        } catch (err) {
+            console.error(`[OnnxSVSPipeline] 加载模型 ${sessionKey} 失败:`, err.message);
+            return { success: false, error: err.message };
+        }
+    }
+
+    /**
+     * 确保所有必需模型已加载（合成前调用）
+     */
+    async ensureAllModelsLoaded() {
+        const requiredKeys = [
+            'noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder',
+            'f0Encoder', 'preflow', 'condEmb', 'diffStep', 'vocoder', 'melTransform',
+        ];
+        const missing = requiredKeys.filter(key => !this.sessions[key]);
+        if (missing.length === 0) return;
+
+        console.log(`[OnnxSVSPipeline] 需要加载 ${missing.length} 个缺失模型: ${missing.join(', ')}`);
+        for (const key of missing) {
+            const result = await this.loadModel(key);
+            if (!result.success) {
+                throw new Error(`Failed to load required model ${key}: ${result.error}`);
+            }
+        }
     }
 
     dispose() {

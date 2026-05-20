@@ -37,4 +37,9 @@ document.addEventListener('DOMContentLoaded', () => {
       navLinks.classList.remove('open');
     }
   });
+
+  // 初始化多语言
+  if (window.SXSI18n) {
+    window.SXSI18n.init();
+  }
 });

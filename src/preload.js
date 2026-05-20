@@ -124,4 +124,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('close-confirm', handler);
   },
   closeConfirmed: () => ipcRenderer.send('close-confirmed'),
+  // 资源管理器
+  resmgrOpen: () => ipcRenderer.invoke('resmgr:open'),
+  resmgrGetGPUInfo: () => ipcRenderer.invoke('resmgr:getGPUInfo'),
+  resmgrGetModelGroups: () => ipcRenderer.invoke('resmgr:getModelGroups'),
+  resmgrLoadModel: (groupId, modelId) => ipcRenderer.invoke('resmgr:loadModel', { groupId, modelId }),
+  resmgrUnloadModel: (groupId, modelId) => ipcRenderer.invoke('resmgr:unloadModel', { groupId, modelId }),
+  resmgrLoadGroup: (groupId) => ipcRenderer.invoke('resmgr:loadGroup', { groupId }),
+  resmgrUnloadGroup: (groupId) => ipcRenderer.invoke('resmgr:unloadGroup', { groupId }),
 });
