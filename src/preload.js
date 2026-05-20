@@ -117,4 +117,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('locale-changed', handler);
     return () => ipcRenderer.removeListener('locale-changed', handler);
   },
+  setDirty: (dirty) => ipcRenderer.send('set-dirty', dirty),
+  onCloseConfirm: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('close-confirm', handler);
+    return () => ipcRenderer.removeListener('close-confirm', handler);
+  },
+  closeConfirmed: () => ipcRenderer.send('close-confirmed'),
 });

@@ -63,6 +63,8 @@ Download the latest pre-built installer for **Windows**:
 | 🎵 MIDI Import | Import standard MIDI files with lyrics |
 | ⚙️ Advanced Settings | Diffusion steps, CFG rescale, device selection |
 | 🔄 Undo / Redo | Full edit history (up to 200 steps) |
+| 💾 Save on Exit | Prompt to save unsaved changes before closing |
+| ⌨️ Ctrl+S Shortcut | Quick save project with keyboard shortcut |
 | 📥 Model Auto-Download | Download missing ONNX models from ModelScope |
 | 🔀 Chunked Multi-threaded Download | Parallel chunked download for large files (up to 16 concurrent connections) |
 | ▶️ Real-time Playback | Synthesize & play directly in editor |
@@ -316,6 +318,8 @@ This project is licensed under the [MIT License](LICENSE).
 | 🎵 MIDI 导入 | 导入标准 MIDI 文件及歌词 |
 | ⚙️ 高级设置 | 扩散步数、CFG 重缩放、设备选择 |
 | 🔄 撤销 / 重做 | 完整编辑历史（最多 200 步） |
+| 💾 退出保存提示 | 关闭窗口时提示保存未保存的更改 |
+| ⌨️ Ctrl+S 快捷键 | 键盘快捷键快速保存项目 |
 | 📥 模型自动下载 | 从 ModelScope 自动下载缺失模型 |
 | 🔀 分片多线程下载 | 大文件分片并行下载，智能并发配置（最大16连接） |
 | ▶️ 实时播放 | 直接合成播放 |
@@ -466,6 +470,8 @@ npm run test:watch       # 监视模式
 | 🎵 MIDI インポート | 標準 MIDI ファイルと歌詞のインポート |
 | ⚙️ 詳細設定 | 拡散ステップ数、CFG リスケール、デバイス選択 |
 | 🔄 アンドゥ / リドゥ | 編集履歴（最大 200 ステップ） |
+| 💾 終了時保存確認 | ウィンドウを閉じる際に未保存の変更を保存するか確認 |
+| ⌨️ Ctrl+S ショートカット | キーボードショートカットでプロジェクトを素早く保存 |
 | 📥 モデル自動ダウンロード | ModelScope から不足モデルを自動取得 |
 | 🔀 チャンク分割マルチスレッドダウンロード | 大容量ファイルの並列チャンクダウンロード（最大16同時接続） |
 | ▶️ リアルタイム再生 | エディター内で直接合成・再生 |

@@ -78,7 +78,12 @@ export default {
     audioToMidiComplete: '音频转MIDI完成！已创建新轨道，请选择歌手文件',
     audioToMidiFailed: '音频转MIDI失败',
     audioToMidiNoFile: '未选择音频文件',
-    audioToMidiDecodeFailed: '音频文件解码失败'
+    audioToMidiDecodeFailed: '音频文件解码失败',
+    unsavedChanges: '未保存的更改',
+    unsavedChangesDesc: '项目有未保存的更改，是否在退出前保存？',
+    saveAndExit: '保存并退出',
+    discardChanges: '不保存',
+    discardCancel: '取消'
   },
   fragment: {
     title: '分片编辑',
