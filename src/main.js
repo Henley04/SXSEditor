@@ -128,6 +128,8 @@ let basicPitchDetector = null;
 let mainWindow = null;
 let settingsWindow = null;
 let cachedDMLDevices = null;
+let isDirty = false;
+let closePending = false;
 
 const ALLOWED_SAVE_DIRS = [
   () => app.getPath('userData'),
@@ -264,6 +266,14 @@ const createWindow = () => {
   if (isDev) {
     mainWindow.webContents.openDevTools();
   }
+
+  mainWindow.on('close', (e) => {
+    if (isDirty) {
+      e.preventDefault();
+      closePending = true;
+      mainWindow.webContents.send('close-confirm');
+    }
+  });
 
   buildAppMenu();
 };
@@ -706,6 +716,18 @@ ipcMain.handle('settings:getSettings', async () => {
 
 ipcMain.handle('app:getVersion', async () => {
   return app.getVersion();
+});
+
+ipcMain.on('set-dirty', (event, dirty) => {
+  isDirty = dirty;
+});
+
+ipcMain.on('close-confirmed', () => {
+  if (closePending && mainWindow && !mainWindow.isDestroyed()) {
+    closePending = false;
+    isDirty = false;
+    mainWindow.close();
+  }
 });
 
 ipcMain.handle('settings:saveSettings', async (event, settings) => {

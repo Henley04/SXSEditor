@@ -52,6 +52,21 @@ let project = {
 };
 
 let currentProjectFilePath = null;
+let isDirty = false;
+
+function markDirty() {
+  isDirty = true;
+  if (window.electronAPI?.setDirty) {
+    window.electronAPI.setDirty(true);
+  }
+}
+
+function markClean() {
+  isDirty = false;
+  if (window.electronAPI?.setDirty) {
+    window.electronAPI.setDirty(false);
+  }
+}
 
 let audioContext = null;
 let currentAudioSource = null;
@@ -581,6 +596,7 @@ function updateProjectSettings() {
   const den = parseInt(timeSigDen.value, 10) || 4;
   project.bpm = Math.max(1, Math.min(999, bpm));
   project.timeSignature = [num, den];
+  markDirty();
 }
 
 bpmInput.addEventListener('change', updateProjectSettings);
@@ -1298,6 +1314,7 @@ btnSave.addEventListener('click', async () => {
         const data = serializeProject(saveOptions.embedSingerFiles);
         await window.electronAPI.saveFile(result.filePath, data);
         currentProjectFilePath = result.filePath;
+        markClean();
         console.log('项目已保存到', result.filePath);
       }
     } catch (err) {
@@ -1381,6 +1398,7 @@ btnLoad.addEventListener('click', async () => {
         }
         currentProjectFilePath = result.filePaths[0];
         history.clear();
+        markClean();
         refreshAll();
         console.log('项目已加载', result.filePaths[0]);
       }
@@ -1558,6 +1576,7 @@ if (window.electronAPI?.onSingerCreated) {
       singer.singerData = singerData.singerData;
     }
     selectedSingerId = singer.id;
+    markDirty();
     refreshAll();
   });
 }
@@ -1579,6 +1598,7 @@ function commitTrackNameEdit(singer, newName) {
         refreshAll();
       }
     });
+    markDirty();
   }
 }
 
@@ -1803,6 +1823,7 @@ function renderSingerList() {
           renderFragmentTimeline();
         }
       });
+      markDirty();
       renderFragmentTimeline();
     });
 
@@ -1830,6 +1851,7 @@ function renderSingerList() {
                 refreshAll();
               }
             });
+            markDirty();
             refreshAll();
           }
         });
@@ -2088,6 +2110,7 @@ function finishDrag() {
           renderFragmentTimeline();
         }
       });
+      markDirty();
     }
   }
   dragState = null;
@@ -2174,6 +2197,7 @@ async function autoSaveProject() {
   try {
     const data = serializeProject(false);
     await window.electronAPI.saveFile(currentProjectFilePath, data);
+    markClean();
     console.log('项目已自动保存到', currentProjectFilePath);
   } catch (err) {
     console.error('自动保存失败', err);
@@ -2194,6 +2218,12 @@ refreshAll();
 
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+  if ((e.ctrlKey || e.metaKey) && e.key === 's' && !e.shiftKey) {
+    e.preventDefault();
+    btnSave.click();
+    return;
+  }
 
   if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
     e.preventDefault();
@@ -2225,6 +2255,105 @@ document.addEventListener('localeChanged', () => {
 if (window.electronAPI?.onLocaleChanged) {
   window.electronAPI.onLocaleChanged(() => {
     location.reload();
+  });
+}
+
+if (window.electronAPI?.onCloseConfirm) {
+  let closeAfterSave = false;
+
+  // 拦截保存按钮点击，在保存成功后关闭窗口
+  const originalSaveHandler = btnSave.onclick;
+  btnSave.addEventListener('click', function onSaveForClose() {
+    // 标记需要在保存完成后关闭
+    if (closeAfterSave) {
+      const checkSaved = setInterval(() => {
+        if (!isDirty) {
+          clearInterval(checkSaved);
+          closeAfterSave = false;
+          if (window.electronAPI?.closeConfirmed) {
+            window.electronAPI.closeConfirmed();
+          }
+        }
+      }, 100);
+      // 超时保护：30秒后如果保存仍未完成，允许关闭
+      setTimeout(() => {
+        clearInterval(checkSaved);
+        if (closeAfterSave) {
+          closeAfterSave = false;
+          if (window.electronAPI?.closeConfirmed) {
+            window.electronAPI.closeConfirmed();
+          }
+        }
+      }, 30000);
+    }
+  });
+
+  window.electronAPI.onCloseConfirm(async () => {
+    const result = await showSaveBeforeCloseDialog();
+    if (result === 'save') {
+      closeAfterSave = true;
+      btnSave.click();
+    } else if (result === 'discard') {
+      markClean();
+      if (window.electronAPI?.closeConfirmed) {
+        window.electronAPI.closeConfirmed();
+      }
+    }
+    // result === 'cancel' -> 不做任何事，窗口保持打开
+  });
+}
+
+async function showSaveBeforeCloseDialog() {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:10000;';
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:#2b2b2b;border-radius:8px;padding:24px;min-width:360px;box-shadow:0 4px 24px rgba(0,0,0,0.5);color:#e0e0e0;font-family:system-ui,sans-serif;';
+
+    const title = document.createElement('h3');
+    title.textContent = t('main.unsavedChanges');
+    title.style.cssText = 'margin:0 0 8px 0;font-size:16px;';
+
+    const message = document.createElement('p');
+    message.textContent = t('main.unsavedChangesDesc');
+    message.style.cssText = 'margin:0 0 20px 0;font-size:14px;color:#aaa;';
+
+    const btnContainer = document.createElement('div');
+    btnContainer.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = t('main.discardCancel');
+    cancelBtn.style.cssText = 'padding:8px 16px;border:1px solid #555;background:transparent;color:#ccc;border-radius:4px;cursor:pointer;font-size:13px;';
+    cancelBtn.addEventListener('click', () => {
+      overlay.remove();
+      resolve('cancel');
+    });
+
+    const discardBtn = document.createElement('button');
+    discardBtn.textContent = t('main.discardChanges');
+    discardBtn.style.cssText = 'padding:8px 16px;border:1px solid #555;background:#444;color:#e0e0e0;border-radius:4px;cursor:pointer;font-size:13px;';
+    discardBtn.addEventListener('click', () => {
+      overlay.remove();
+      resolve('discard');
+    });
+
+    const saveBtn = document.createElement('button');
+    saveBtn.textContent = t('main.saveAndExit');
+    saveBtn.style.cssText = 'padding:8px 16px;border:none;background:#5b8def;color:#fff;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold;';
+    saveBtn.addEventListener('click', () => {
+      overlay.remove();
+      resolve('save');
+    });
+
+    btnContainer.appendChild(cancelBtn);
+    btnContainer.appendChild(discardBtn);
+    btnContainer.appendChild(saveBtn);
+    dialog.appendChild(title);
+    dialog.appendChild(message);
+    dialog.appendChild(btnContainer);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
   });
 }
 

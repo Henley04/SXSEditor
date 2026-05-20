@@ -78,7 +78,12 @@ export default {
     audioToMidiComplete: 'Audio to MIDI complete! New track created, please select a singer file',
     audioToMidiFailed: 'Audio to MIDI failed',
     audioToMidiNoFile: 'No audio file selected',
-    audioToMidiDecodeFailed: 'Audio file decode failed'
+    audioToMidiDecodeFailed: 'Audio file decode failed',
+    unsavedChanges: 'Unsaved Changes',
+    unsavedChangesDesc: 'The project has unsaved changes. Do you want to save before exiting?',
+    saveAndExit: 'Save & Exit',
+    discardChanges: "Don't Save",
+    discardCancel: 'Cancel'
   },
   fragment: {
     title: 'Fragment Editor',
