@@ -660,11 +660,7 @@ function getUnpackedModelDir() {
 
 function getModelDir() {
   if (!app.isPackaged) {
-    // 开发模式下 app.getAppPath() 返回 .webpack/main/，而 onnx_models 在项目根目录
-    const projectRoot = path.resolve(app.getAppPath(), '..', '..');
-    const devModelDir = path.join(projectRoot, 'onnx_models') + path.sep;
-    console.log('[Main] 开发模式，模型目录:', devModelDir);
-    return devModelDir;
+    return getUnpackedModelDir();
   }
 
   if (customModelDir) {
