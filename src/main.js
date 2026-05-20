@@ -15,6 +15,7 @@ const mainLocales = {
       paste: '粘贴',
       selectAll: '全选',
       settings: '设置',
+      resourceManager: '资源管理器',
       view: '视图',
       reload: '重新加载',
       forceReload: '强制重新加载',
@@ -40,6 +41,9 @@ const mainLocales = {
       aiSvsWorkbench: '基于 ONNX Runtime / DirectML 的 AI 歌声合成工作台',
       version: '版本',
     },
+    resourceManager: {
+      title: '资源管理器',
+    },
   },
   'en': {
     menu: {
@@ -53,6 +57,7 @@ const mainLocales = {
       paste: 'Paste',
       selectAll: 'Select All',
       settings: 'Settings',
+      resourceManager: 'Resource Manager',
       view: 'View',
       reload: 'Reload',
       forceReload: 'Force Reload',
@@ -77,6 +82,9 @@ const mainLocales = {
       soulXSingerEditor: 'SoulX Singer Editor',
       aiSvsWorkbench: 'AI Singing Voice Synthesis Workbench based on ONNX Runtime / DirectML',
       version: 'Version',
+    },
+    resourceManager: {
+      title: 'Resource Manager',
     },
   },
 };
@@ -121,12 +129,14 @@ const { BasicPitchDetector } = require('./inference/basicPitch');
 const { parseMidiFile } = require('./inference/midiParser');
 const { AudioOutputManager } = require('./audio/audioOutputManager');
 const { checkMissingFiles, downloadMissingFiles } = require('./modelManager');
+const { getModelGroups } = require('./modelRegistry');
 
 let svsPipeline = null;
 let rmvpeDetector = null;
 let basicPitchDetector = null;
 let mainWindow = null;
 let settingsWindow = null;
+let resourceManagerWindow = null;
 let cachedDMLDevices = null;
 let isDirty = false;
 let closePending = false;
@@ -224,6 +234,10 @@ function buildAppMenu() {
         {
           label: t('menu.settings'),
           click: () => { openSettingsWindow(); },
+        },
+        {
+          label: t('menu.resourceManager'),
+          click: () => { openResourceManagerWindow(); },
         },
       ],
     },
@@ -324,6 +338,213 @@ function openSettingsWindow() {
 
   settingsWindow.on('closed', () => {
     settingsWindow = null;
+  });
+}
+
+function openResourceManagerWindow() {
+  if (resourceManagerWindow) {
+    resourceManagerWindow.focus();
+    return;
+  }
+
+  resourceManagerWindow = new BrowserWindow({
+    width: 700,
+    height: 750,
+    title: t('resourceManager.title'),
+    icon: path.join(__dirname, 'SXS.png'),
+    resizable: true,
+    minimizable: true,
+    maximizable: false,
+    parent: mainWindow,
+    webPreferences: {
+      preload: RESOURCE_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+    },
+  });
+
+  resourceManagerWindow.loadURL(RESOURCE_MANAGER_WINDOW_WEBPACK_ENTRY);
+  resourceManagerWindow.setMenu(null);
+
+  resourceManagerWindow.on('closed', () => {
+    resourceManagerWindow = null;
+  });
+}
+
+async function queryGPUVRAMUsage() {
+  const { execFile } = require('child_process');
+
+  const csharpCode = [
+    'using System;',
+    'using System.Runtime.InteropServices;',
+    'using System.Text;',
+    '',
+    'public class VRAMQuery',
+    '{',
+    '    [DllImport("dxgi.dll")]',
+    '    static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr ppFactory);',
+    '',
+    '    [UnmanagedFunctionPointer(CallingConvention.StdCall)]',
+    '    delegate int EnumAdapters1Del(IntPtr This, uint Adapter, out IntPtr ppAdapter);',
+    '',
+    '    [UnmanagedFunctionPointer(CallingConvention.StdCall)]',
+    '    delegate int GetDesc1Del(IntPtr This, IntPtr pDesc);',
+    '',
+    '    [UnmanagedFunctionPointer(CallingConvention.StdCall)]',
+    '    delegate uint ReleaseDel(IntPtr This);',
+    '',
+    '    [DllImport("dxgi.dll")]',
+    '    static extern int DXGIGetDebugInterface1(uint Flags, ref Guid riid, out IntPtr ppDebug);',
+    '',
+    '    public static string Query()',
+    '    {',
+    '        var factoryGuid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");',
+    '        IntPtr factoryPtr;',
+    '        int hr = CreateDXGIFactory1(ref factoryGuid, out factoryPtr);',
+    '        if (hr != 0) return "";',
+    '',
+    '        var sb = new StringBuilder();',
+    '        try',
+    '        {',
+    '            IntPtr vtbl = Marshal.ReadIntPtr(factoryPtr);',
+    '            IntPtr enumAdapters1Ptr = Marshal.ReadIntPtr(vtbl, IntPtr.Size * 12);',
+    '            var enumAdapters1 = (EnumAdapters1Del)Marshal.GetDelegateForFunctionPointer(enumAdapters1Ptr, typeof(EnumAdapters1Del));',
+    '',
+    '            for (uint i = 0; i < 16; i++)',
+    '            {',
+    '                IntPtr adapterPtr;',
+    '                hr = enumAdapters1(factoryPtr, i, out adapterPtr);',
+    '                if (hr != 0) break;',
+    '',
+    '                try',
+    '                {',
+    '                    IntPtr adapterVtbl = Marshal.ReadIntPtr(adapterPtr);',
+    '                    IntPtr getDesc1Ptr = Marshal.ReadIntPtr(adapterVtbl, IntPtr.Size * 10);',
+    '                    var getDesc1 = (GetDesc1Del)Marshal.GetDelegateForFunctionPointer(getDesc1Ptr, typeof(GetDesc1Del));',
+    '',
+    '                    IntPtr descPtr = Marshal.AllocHGlobal(320);',
+    '                    try',
+    '                    {',
+    '                        hr = getDesc1(adapterPtr, descPtr);',
+    '                        if (hr != 0) continue;',
+    '',
+    '                        uint flags = (uint)Marshal.ReadInt32(descPtr, 304);',
+    '                        if ((flags & 2) != 0) continue;',
+    '',
+    '                        string description = Marshal.PtrToStringUni(descPtr);',
+    '                        long dedicatedVideoMemory = Marshal.ReadInt64(descPtr, 272);',
+    '',
+    '                        // QueryVideoMemoryInfo via IDXGIAdapter3',
+    '                        long currentUsage = 0;',
+    '                        long budget = 0;',
+    '                        try',
+    '                        {',
+    '                            var adapter3Guid = new Guid("645967A4-1392-4310-A798-8053CE3E93FD");',
+    '                            IntPtr adapter3Ptr;',
+    '                            var qiResult = Marshal.QueryInterface(adapterPtr, ref adapter3Guid, out adapter3Ptr);',
+    '                            if (qiResult == 0 && adapter3Ptr != IntPtr.Zero)',
+    '                            {',
+    '                                // QueryVideoMemoryInfo is vtable slot 24',
+    '                                IntPtr a3vtbl = Marshal.ReadIntPtr(adapter3Ptr);',
+    '                                IntPtr qvmiPtr = Marshal.ReadIntPtr(a3vtbl, IntPtr.Size * 24);',
+    '                                var qvmi = (QueryVideoMemoryInfoDel)Marshal.GetDelegateForFunctionPointer(qvmiPtr, typeof(QueryVideoMemoryInfoDel));',
+    '',
+    '                                // DXGI_QUERY_VIDEO_MEMORY_INFO = 4 x uint64 = 32 bytes',
+    '                                IntPtr infoPtr = Marshal.AllocHGlobal(32);',
+    '                                try',
+    '                                {',
+    '                                    hr = qvmi(adapter3Ptr, 0, 0, infoPtr);',
+    '                                    if (hr == 0)',
+    '                                    {',
+    '                                        currentUsage = Marshal.ReadInt64(infoPtr, 0);',
+    '                                        budget = Marshal.ReadInt64(infoPtr, 8);',
+    '                                    }',
+    '                                }',
+    '                                finally',
+    '                                {',
+    '                                    Marshal.FreeHGlobal(infoPtr);',
+    '                                }',
+    '                                Marshal.Release(adapter3Ptr);',
+    '                            }',
+    '                        }',
+    '                        catch {}',
+    '',
+    '                        if (sb.Length > 0) sb.Append(";");',
+    '                        sb.Append(i);',
+    '                        sb.Append("|");',
+    '                        sb.Append((description ?? "").Replace("|", "_"));',
+    '                        sb.Append("|");',
+    '                        sb.Append(dedicatedVideoMemory);',
+    '                        sb.Append("|");',
+    '                        sb.Append(currentUsage);',
+    '                        sb.Append("|");',
+    '                        sb.Append(budget);',
+    '                    }',
+    '                    finally',
+    '                    {',
+    '                        Marshal.FreeHGlobal(descPtr);',
+    '                    }',
+    '                }',
+    '                finally',
+    '                {',
+    '                    IntPtr avtbl = Marshal.ReadIntPtr(adapterPtr);',
+    '                    IntPtr relPtr = Marshal.ReadIntPtr(avtbl, IntPtr.Size * 2);',
+    '                    var release = (ReleaseDel)Marshal.GetDelegateForFunctionPointer(relPtr, typeof(ReleaseDel));',
+    '                    release(adapterPtr);',
+    '                }',
+    '            }',
+    '        }',
+    '        finally',
+    '        {',
+    '            IntPtr fvtbl = Marshal.ReadIntPtr(factoryPtr);',
+    '            IntPtr relPtr = Marshal.ReadIntPtr(fvtbl, IntPtr.Size * 2);',
+    '            var release = (ReleaseDel)Marshal.GetDelegateForFunctionPointer(relPtr, typeof(ReleaseDel));',
+    '            release(factoryPtr);',
+    '        }',
+    '',
+    '        return sb.ToString();',
+    '    }',
+    '',
+    '    [UnmanagedFunctionPointer(CallingConvention.StdCall)]',
+    '    delegate int QueryVideoMemoryInfoDel(IntPtr This, uint NodeIndex, uint MemorySegmentGroup, IntPtr pVideoMemoryInfo);',
+    '}',
+  ].join('\n');
+
+  const psScript = `Add-Type -TypeDefinition @"\n${csharpCode}\n"@\n[VRAMQuery]::Query()`;
+  const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+
+  return new Promise((resolve) => {
+    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { timeout: 15000 }, (err, stdout) => {
+      if (err) {
+        resolve([]);
+        return;
+      }
+      try {
+        const output = stdout.trim();
+        if (!output) {
+          resolve([]);
+          return;
+        }
+        const entries = output.split(';').filter(l => l.trim());
+        const devices = entries.map(entry => {
+          const parts = entry.split('|');
+          const totalBytes = parseInt(parts[2]) || 0;
+          const usageBytes = parseInt(parts[3]) || 0;
+          const budgetBytes = parseInt(parts[4]) || 0;
+          return {
+            adapterIndex: parseInt(parts[0]),
+            name: parts[1],
+            totalBytes,
+            usageBytes,
+            budgetBytes,
+          };
+        });
+        resolve(devices);
+      } catch (e) {
+        resolve([]);
+      }
+    });
   });
 }
 
@@ -1361,4 +1582,227 @@ ipcMain.handle('audio:getPosition', async () => {
 
 ipcMain.handle('audio:isAvailable', async () => {
   return { available: AudioOutputManager.isAvailable() };
+});
+
+// ===== 资源管理器 IPC =====
+
+ipcMain.handle('resmgr:open', async () => {
+  openResourceManagerWindow();
+  return { success: true };
+});
+
+ipcMain.handle('resmgr:getGPUInfo', async () => {
+  try {
+    const vramData = await queryGPUVRAMUsage();
+    const devices = cachedDMLDevices || await enumerateDMLDevices(getModelDir());
+    if (!cachedDMLDevices) cachedDMLDevices = devices;
+
+    const gpuList = devices.map(d => {
+      const vramInfo = vramData.find(v => v.adapterIndex === d.dxgiAdapterNumber);
+      return {
+        name: d.name,
+        isDiscrete: d.isDiscrete,
+        vram: d.vram,
+        vramBytes: d.vramBytes,
+        vendor: d.vendor,
+        dxgiAdapterNumber: d.dxgiAdapterNumber,
+        currentUsageBytes: vramInfo ? vramInfo.usageBytes : 0,
+        budgetBytes: vramInfo ? vramInfo.budgetBytes : 0,
+      };
+    });
+
+    return { success: true, gpus: gpuList };
+  } catch (err) {
+    console.error('[Main] 获取GPU信息失败:', err);
+    return { success: false, gpus: [], error: err.message };
+  }
+});
+
+ipcMain.handle('resmgr:getModelGroups', async () => {
+  const groups = getModelGroups();
+  const modelDir = getModelDir();
+
+  const result = [];
+  for (const group of groups) {
+    const groupResult = {
+      id: group.id,
+      name: group.name,
+      nameEn: group.nameEn,
+      description: group.description,
+      descriptionEn: group.descriptionEn,
+      required: group.required,
+      pipelineRef: group.pipelineRef,
+      models: [],
+    };
+
+    for (const model of group.models) {
+      let totalFileSize = 0;
+      let filesExist = true;
+      for (const file of model.files) {
+        const fullPath = path.join(modelDir, file);
+        try {
+          const stats = await fs.promises.stat(fullPath);
+          totalFileSize += stats.size;
+        } catch (_) {
+          filesExist = false;
+        }
+      }
+
+      let loaded = false;
+      let ep = null;
+
+      if (group.id === 'svs' && svsPipeline && svsPipeline.initialized) {
+        loaded = svsPipeline.isModelLoaded(model.sessionKey);
+        ep = svsPipeline.sessionEPs[model.sessionKey] || null;
+      } else if (group.id === 'rmvpe') {
+        loaded = !!(rmvpeDetector && rmvpeDetector.initialized);
+        ep = rmvpeDetector ? 'cpu' : null;
+      } else if (group.id === 'basicPitch') {
+        loaded = !!(basicPitchDetector && basicPitchDetector.initialized);
+        ep = 'tfjs';
+      }
+
+      groupResult.models.push({
+        id: model.id,
+        name: model.name,
+        nameEn: model.nameEn,
+        description: model.description,
+        descriptionEn: model.descriptionEn,
+        sessionKey: model.sessionKey,
+        files: model.files,
+        fileSize: totalFileSize,
+        filesExist,
+        loaded,
+        ep,
+      });
+    }
+
+    result.push(groupResult);
+  }
+
+  return { success: true, groups: result };
+});
+
+ipcMain.handle('resmgr:loadModel', async (event, { groupId, modelId }) => {
+  try {
+    if (groupId === 'svs') {
+      if (!svsPipeline || !svsPipeline.initialized) {
+        await ensureSVSPipeline();
+      }
+      const modelDef = getModelGroups().find(g => g.id === 'svs')?.models.find(m => m.id === modelId);
+      if (!modelDef) return { success: false, error: 'Model not found in registry' };
+      const result = await svsPipeline.loadModel(modelDef.sessionKey);
+      return result;
+    } else if (groupId === 'rmvpe') {
+      if (!rmvpeDetector) {
+        const modelPath = getModelDir();
+        const settings = loadSettings();
+        const deviceId = settings.deviceId ?? undefined;
+        rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
+        await rmvpeDetector.init();
+      }
+      return { success: true };
+    } else if (groupId === 'basicPitch') {
+      if (!basicPitchDetector) {
+        const modelPath = getModelDir();
+        basicPitchDetector = new BasicPitchDetector(modelPath);
+        await basicPitchDetector.init();
+      }
+      return { success: true };
+    }
+    return { success: false, error: `Unknown group: ${groupId}` };
+  } catch (err) {
+    console.error(`[Main] 加载模型失败 (${groupId}/${modelId}):`, err.message);
+    if (groupId === 'rmvpe') { try { if (rmvpeDetector) { rmvpeDetector.dispose(); } } catch (_) {} rmvpeDetector = null; }
+    if (groupId === 'basicPitch') { try { if (basicPitchDetector) { basicPitchDetector.dispose(); } } catch (_) {} basicPitchDetector = null; }
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('resmgr:unloadModel', async (event, { groupId, modelId }) => {
+  try {
+    if (groupId === 'svs') {
+      if (!svsPipeline || !svsPipeline.initialized) {
+        return { success: false, error: 'SVS Pipeline not initialized' };
+      }
+      const modelDef = getModelGroups().find(g => g.id === 'svs')?.models.find(m => m.id === modelId);
+      if (!modelDef) return { success: false, error: 'Model not found in registry' };
+      return svsPipeline.unloadModel(modelDef.sessionKey);
+    } else if (groupId === 'rmvpe') {
+      if (rmvpeDetector) {
+        try { rmvpeDetector.dispose(); } catch (_) {}
+        rmvpeDetector = null;
+      }
+      return { success: true };
+    } else if (groupId === 'basicPitch') {
+      if (basicPitchDetector) {
+        try { basicPitchDetector.dispose(); } catch (_) {}
+        basicPitchDetector = null;
+      }
+      return { success: true };
+    }
+    return { success: false, error: `Unknown group: ${groupId}` };
+  } catch (err) {
+    console.error(`[Main] 卸载模型失败 (${groupId}/${modelId}):`, err.message);
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('resmgr:loadGroup', async (event, { groupId }) => {
+  try {
+    if (groupId === 'svs') {
+      await ensureSVSPipeline();
+      return { success: true };
+    } else if (groupId === 'rmvpe') {
+      if (!rmvpeDetector) {
+        const modelPath = getModelDir();
+        const settings = loadSettings();
+        const deviceId = settings.deviceId ?? undefined;
+        rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
+        await rmvpeDetector.init();
+      }
+      return { success: true };
+    } else if (groupId === 'basicPitch') {
+      if (!basicPitchDetector) {
+        const modelPath = getModelDir();
+        basicPitchDetector = new BasicPitchDetector(modelPath);
+        await basicPitchDetector.init();
+      }
+      return { success: true };
+    }
+    return { success: false, error: `Unknown group: ${groupId}` };
+  } catch (err) {
+    console.error(`[Main] 加载模型组失败 (${groupId}):`, err.message);
+    if (groupId === 'rmvpe') { try { if (rmvpeDetector) { rmvpeDetector.dispose(); } } catch (_) {} rmvpeDetector = null; }
+    if (groupId === 'basicPitch') { try { if (basicPitchDetector) { basicPitchDetector.dispose(); } } catch (_) {} basicPitchDetector = null; }
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('resmgr:unloadGroup', async (event, { groupId }) => {
+  try {
+    if (groupId === 'svs') {
+      if (svsPipeline) {
+        try { svsPipeline.dispose(); } catch (_) {}
+        svsPipeline = null;
+      }
+      return { success: true };
+    } else if (groupId === 'rmvpe') {
+      if (rmvpeDetector) {
+        try { rmvpeDetector.dispose(); } catch (_) {}
+        rmvpeDetector = null;
+      }
+      return { success: true };
+    } else if (groupId === 'basicPitch') {
+      if (basicPitchDetector) {
+        try { basicPitchDetector.dispose(); } catch (_) {}
+        basicPitchDetector = null;
+      }
+      return { success: true };
+    }
+    return { success: false, error: `Unknown group: ${groupId}` };
+  } catch (err) {
+    console.error(`[Main] 卸载模型组失败 (${groupId}):`, err.message);
+    return { success: false, error: err.message };
+  }
 });

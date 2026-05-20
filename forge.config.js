@@ -101,6 +101,14 @@ module.exports = {
                 js: './src/preload.js',
               },
             },
+            {
+              html: './src/resourceManager.html',
+              js: './src/resourceManager.js',
+              name: 'resource_manager_window',
+              preload: {
+                js: './src/preload.js',
+              },
+            },
           ],
         },
       },
