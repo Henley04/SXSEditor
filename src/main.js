@@ -445,9 +445,9 @@ async function queryGPUVRAMUsage() {
     '                            var qiResult = Marshal.QueryInterface(adapterPtr, ref adapter3Guid, out adapter3Ptr);',
     '                            if (qiResult == 0 && adapter3Ptr != IntPtr.Zero)',
     '                            {',
-    '                                // QueryVideoMemoryInfo is vtable slot 24',
+    '                                // QueryVideoMemoryInfo is vtable slot 12',
     '                                IntPtr a3vtbl = Marshal.ReadIntPtr(adapter3Ptr);',
-    '                                IntPtr qvmiPtr = Marshal.ReadIntPtr(a3vtbl, IntPtr.Size * 24);',
+    '                                IntPtr qvmiPtr = Marshal.ReadIntPtr(a3vtbl, IntPtr.Size * 12);',
     '                                var qvmi = (QueryVideoMemoryInfoDel)Marshal.GetDelegateForFunctionPointer(qvmiPtr, typeof(QueryVideoMemoryInfoDel));',
     '',
     '                                // DXGI_QUERY_VIDEO_MEMORY_INFO = 4 x uint64 = 32 bytes',
@@ -457,8 +457,8 @@ async function queryGPUVRAMUsage() {
     '                                    hr = qvmi(adapter3Ptr, 0, 0, infoPtr);',
     '                                    if (hr == 0)',
     '                                    {',
-    '                                        currentUsage = Marshal.ReadInt64(infoPtr, 0);',
-    '                                        budget = Marshal.ReadInt64(infoPtr, 8);',
+    '                                        budget = Marshal.ReadInt64(infoPtr, 0);',
+    '                                        currentUsage = Marshal.ReadInt64(infoPtr, 8);',
     '                                    }',
     '                                }',
     '                                finally',
@@ -1599,6 +1599,8 @@ ipcMain.handle('resmgr:getGPUInfo', async () => {
 
     const gpuList = devices.map(d => {
       const vramInfo = vramData.find(v => v.adapterIndex === d.dxgiAdapterNumber);
+      const usageBytes = vramInfo ? vramInfo.usageBytes : 0;
+      const budgetBytes = vramInfo ? vramInfo.budgetBytes : 0;
       return {
         name: d.name,
         isDiscrete: d.isDiscrete,
@@ -1606,8 +1608,8 @@ ipcMain.handle('resmgr:getGPUInfo', async () => {
         vramBytes: d.vramBytes,
         vendor: d.vendor,
         dxgiAdapterNumber: d.dxgiAdapterNumber,
-        currentUsageBytes: vramInfo ? vramInfo.usageBytes : 0,
-        budgetBytes: vramInfo ? vramInfo.budgetBytes : 0,
+        currentUsageBytes: usageBytes,
+        budgetBytes: budgetBytes > 0 ? budgetBytes : d.vramBytes,
       };
     });
 

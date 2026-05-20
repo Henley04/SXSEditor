@@ -223,6 +223,7 @@ SXSEditor/
 │   ├── singerCreator.js     # Singer creation window
 │   ├── audioPreprocess.js   # Audio preprocessing window (F0, MIDI)
 │   ├── fragmentEditor.js    # Fragment piano-roll editor
+│   ├── resourceManager.js   # Resource manager window (GPU/VRAM, model load/unload)
 │   └── ...html/.css         # Window layouts and styles
 ├── test/                    # Automated test suite (225+ tests)
 ├── forge.config.js          # Electron Forge configuration
