@@ -223,6 +223,7 @@ export default {
     midiExtractionComplete: 'MIDI音符提取完成（Basic Pitch模型）',
     extractionFailed: '提取失败',
     noAudioToSave: '没有可保存的音频数据',
+    noDataToSave: '请先提取F0或MIDI音符后再保存',
     savingPreprocessData: '正在保存预处理数据...',
     preprocessSaveSuccess: '预处理数据保存成功！',
     saveFailed: '保存失败',
