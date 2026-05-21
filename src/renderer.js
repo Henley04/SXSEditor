@@ -815,15 +815,31 @@ async function playAll() {
       const singerNotes = [];
       for (const fragment of singerFragments) {
         if (fragment.notes && fragment.notes.length > 0) {
-          const convertedNotes = fragment.notes.map(note => ({
-            lyric: note.lyric || '',
-            pitch: note.pitch,
-            start: note.start + fragment.startTime,
-            duration: note.duration,
-          }));
+          const fragEnd = fragment.startTime + fragment.duration;
+          const convertedNotes = [];
+          for (const note of fragment.notes) {
+            const noteStart = note.start + fragment.startTime;
+            const noteEnd = noteStart + note.duration;
+            if (noteStart >= fragEnd) continue;
+            if (noteEnd > fragEnd) {
+              convertedNotes.push({
+                lyric: note.lyric || '',
+                pitch: note.pitch,
+                start: noteStart,
+                duration: fragEnd - noteStart,
+              });
+            } else {
+              convertedNotes.push({
+                lyric: note.lyric || '',
+                pitch: note.pitch,
+                start: noteStart,
+                duration: note.duration,
+              });
+            }
+          }
           singerNotes.push(...convertedNotes);
 
-          const fragmentEnd = fragment.startTime + fragment.duration;
+          const fragmentEnd = fragEnd;
           if (fragment.startTime < globalFirstStart) globalFirstStart = fragment.startTime;
           if (fragmentEnd > globalLastEnd) globalLastEnd = fragmentEnd;
         }
@@ -1435,13 +1451,26 @@ btnExport.addEventListener('click', async () => {
       const notes = [];
       for (const fragment of singerFragments) {
         if (fragment.notes && fragment.notes.length > 0) {
+          const fragEnd = fragment.startTime + fragment.duration;
           for (const note of fragment.notes) {
-            notes.push({
-              start: note.start + fragment.startTime,
-              duration: note.duration,
-              pitch: note.pitch,
-              lyric: note.lyric,
-            });
+            const noteStart = note.start + fragment.startTime;
+            const noteEnd = noteStart + note.duration;
+            if (noteStart >= fragEnd) continue;
+            if (noteEnd > fragEnd) {
+              notes.push({
+                start: noteStart,
+                duration: fragEnd - noteStart,
+                pitch: note.pitch,
+                lyric: note.lyric,
+              });
+            } else {
+              notes.push({
+                start: noteStart,
+                duration: note.duration,
+                pitch: note.pitch,
+                lyric: note.lyric,
+              });
+            }
           }
         }
       }
@@ -1942,21 +1971,65 @@ function renderFragmentTimeline() {
     singerFragments.forEach(fragment => {
       const fragX = fragment.startTime * beatWidth;
       const fragWidth = fragment.duration * beatWidth;
+      const fragY = y + 4;
+      const radius = 6;
 
+      // 圆角矩形填充
       ctx.fillStyle = fragment.color + 'cc';
-      ctx.fillRect(fragX, y + 4, fragWidth, FRAGMENT_HEIGHT);
+      ctx.beginPath();
+      ctx.roundRect(fragX, fragY, fragWidth, FRAGMENT_HEIGHT, radius);
+      ctx.fill();
 
+      // 圆角矩形描边
       ctx.strokeStyle = fragment.color;
       ctx.lineWidth = 2;
-      ctx.strokeRect(fragX, y + 4, fragWidth, FRAGMENT_HEIGHT);
+      ctx.beginPath();
+      ctx.roundRect(fragX, fragY, fragWidth, FRAGMENT_HEIGHT, radius);
+      ctx.stroke();
+
+      // MIDI 音符可视化
+      if (fragment.notes && fragment.notes.length > 0) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.roundRect(fragX, fragY, fragWidth, FRAGMENT_HEIGHT, radius);
+        ctx.clip();
+
+        const midiAreaTop = fragY + 22;
+        const midiAreaHeight = FRAGMENT_HEIGHT - 26;
+        const fragDuration = fragment.duration;
+
+        // 计算音符的音高范围
+        let minPitch = 127, maxPitch = 0;
+        for (const note of fragment.notes) {
+          if (note.start >= fragDuration) continue;
+          if (note.pitch < minPitch) minPitch = note.pitch;
+          if (note.pitch > maxPitch) maxPitch = note.pitch;
+        }
+        if (minPitch > maxPitch) { minPitch = 60; maxPitch = 72; }
+        const pitchRange = Math.max(maxPitch - minPitch + 1, 6);
+
+        for (const note of fragment.notes) {
+          if (note.start >= fragDuration) continue;
+          const noteEnd = Math.min(note.start + note.duration, fragDuration);
+          const noteX = fragX + (note.start / fragDuration) * fragWidth;
+          const noteW = Math.max(1, ((noteEnd - note.start) / fragDuration) * fragWidth);
+          const pitchOffset = (maxPitch - note.pitch) / pitchRange;
+          const noteH = Math.max(2, midiAreaHeight / pitchRange);
+          const noteY = midiAreaTop + pitchOffset * midiAreaHeight;
+
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+          ctx.fillRect(noteX, noteY, noteW, noteH);
+        }
+        ctx.restore();
+      }
 
       ctx.fillStyle = '#e0e0f0';
       ctx.font = '11px sans-serif';
-      ctx.fillText(fragment.name || t('main.newFragment'), fragX + 4, y + 20);
+      ctx.fillText(fragment.name || t('main.newFragment'), fragX + 6, y + 16);
 
       ctx.fillStyle = '#a8a8c0';
       ctx.font = '10px sans-serif';
-      ctx.fillText(t('main.beatRange', { start: fragment.startTime, end: fragment.startTime + fragment.duration }), fragX + 4, y + 36);
+      ctx.fillText(t('main.beatRange', { start: fragment.startTime, end: fragment.startTime + fragment.duration }), fragX + 6, y + 36);
 
       ctx.save();
       ctx.strokeStyle = '#ffffff44';

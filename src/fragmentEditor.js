@@ -938,6 +938,30 @@ function render() {
     renderPitchCurve();
   }
 
+  // 绘制分片边界线
+  if (currentFragment && currentFragment.duration) {
+    const boundaryX = timeToX(currentFragment.duration);
+    if (boundaryX >= 0 && boundaryX <= w) {
+      ctx.save();
+      ctx.strokeStyle = '#ff4444';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(boundaryX, HEADER_HEIGHT);
+      ctx.lineTo(boundaryX, pianoAreaBottom);
+      ctx.stroke();
+      ctx.restore();
+
+      // 在边界线上方标注
+      ctx.save();
+      ctx.fillStyle = '#ff4444';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('END', boundaryX, HEADER_HEIGHT - 2);
+      ctx.restore();
+    }
+  }
+
   if (isBoxSelecting) {
     const x1 = Math.min(boxSelectStart.x, boxSelectEnd.x);
     const y1 = Math.min(boxSelectStart.y, boxSelectEnd.y);
@@ -1331,6 +1355,22 @@ function updateFragmentPlayButton() {
   }
 }
 
+function getClippedNotes() {
+  if (!currentFragment || !currentFragment.duration) return notes;
+  const fragDuration = currentFragment.duration;
+  const clipped = [];
+  for (const note of notes) {
+    if (note.start >= fragDuration) continue;
+    const noteEnd = note.start + note.duration;
+    if (noteEnd > fragDuration) {
+      clipped.push({ ...note, duration: fragDuration - note.start });
+    } else {
+      clipped.push(note);
+    }
+  }
+  return clipped;
+}
+
 function buildPitchCurveF0Data() {
   if (!pitchCurve.enabled || notes.length === 0) return null;
 
@@ -1338,8 +1378,11 @@ function buildPitchCurveF0Data() {
   if (!hasCustom) return null;
 
   const bpm = currentProject ? currentProject.bpm : 120;
-  const lastNote = notes[notes.length - 1];
-  const totalBeats = lastNote.start + lastNote.duration;
+  const fragDuration = currentFragment ? currentFragment.duration : Infinity;
+  const clippedNotes = getClippedNotes();
+  if (clippedNotes.length === 0) return null;
+  const lastNote = clippedNotes[clippedNotes.length - 1];
+  const totalBeats = Math.min(lastNote.start + lastNote.duration, fragDuration);
   const totalSeconds = (totalBeats / bpm) * 60;
   const hopSize = 480;
   const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / hopSize);
@@ -1378,7 +1421,7 @@ async function playFragment() {
     const previewOpts = getFragmentPreviewInferenceOptions();
 
     fragmentAudioData = await window.electronAPI.synthesizeFragmentSVS({
-      notes: notes,
+      notes: getClippedNotes(),
       bpm: currentProject ? currentProject.bpm : 120,
       options: {
         f0Envelope: null,
@@ -1576,7 +1619,7 @@ async function exportFragment() {
     const exportOpts = getFragmentExportInferenceOptions();
 
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
-      notes: notes,
+      notes: getClippedNotes(),
       bpm: currentProject ? currentProject.bpm : 120,
       options: {
         f0Envelope: null,
