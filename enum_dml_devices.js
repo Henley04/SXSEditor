@@ -9,7 +9,7 @@ async function enumerateDMLDevices() {
     let stderrBuf = '';
     process.stderr.write = function(chunk, encoding, callback) {
         if (typeof chunk === 'string') stderrBuf += chunk;
-        else stderrBuf += chunk.toString();
+        else stderrBuf += chunk.toString('utf-8');
         return origStderrWrite(chunk, encoding, callback);
     };
 

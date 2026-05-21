@@ -20,6 +20,9 @@ function isDiscreteGPUByName(name) {
 }
 
 async function enumerate() {
+    // 注意：此方法通过劫持 process.stderr.write 来捕获 ONNX Runtime 的 verbose 日志输出
+    // 这依赖 ONNX Runtime 的内部日志格式，版本更新后可能失效
+    // 如果 ONNX Runtime 提供了枚举设备的 API，应优先使用
     const origWrite = process.stderr.write.bind(process.stderr);
     let stderrBuf = '';
     process.stderr.write = function(chunk, encoding, callback) {
