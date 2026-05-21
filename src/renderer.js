@@ -99,6 +99,7 @@ const singerListEl = document.getElementById('singer-list');
 
 const fragmentCanvas = document.getElementById('fragment-canvas');
 const fragmentContainer = document.getElementById('fragment-canvas-container');
+const fragmentPlayheadCanvas = document.getElementById('fragment-playhead-canvas');
 const btnFragmentZoomIn = document.getElementById('btn-fragment-zoom-in');
 const btnFragmentZoomOut = document.getElementById('btn-fragment-zoom-out');
 const versionDisplay = document.getElementById('version-display');
@@ -1113,11 +1114,13 @@ function startExclusivePlayheadAnimation(removeEndedListener) {
       stopExclusivePlayback();
       stopPlayheadAnimation();
       timeDisplay.textContent = formatTime(0);
+      clearPlayheadLine();
       if (removeEndedListener) removeEndedListener();
       return;
     }
 
     timeDisplay.textContent = formatTime(elapsed);
+    drawPlayheadLine(elapsed);
     exclusivePlaybackRaf = requestAnimationFrame(updatePlayhead);
   }
 
@@ -1197,11 +1200,13 @@ function startPlayheadAnimation() {
       if (elapsed >= duration) {
         stopPlayback();
         timeDisplay.textContent = formatTime(0);
+        clearPlayheadLine();
         return;
       }
     }
 
     timeDisplay.textContent = formatTime(elapsed);
+    drawPlayheadLine(elapsed);
     playheadRaf = requestAnimationFrame(updatePlayhead);
   }
 
@@ -1213,6 +1218,49 @@ function stopPlayheadAnimation() {
     cancelAnimationFrame(playheadRaf);
     playheadRaf = null;
   }
+  clearPlayheadLine();
+}
+
+function drawPlayheadLine(elapsedSeconds) {
+  if (!fragmentPlayheadCanvas) return;
+  const ctx = fragmentPlayheadCanvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = fragmentPlayheadCanvas.width / dpr;
+  const h = fragmentPlayheadCanvas.height / dpr;
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+
+  const beatWidth = FRAGMENT_BASE_BEAT_WIDTH * fragmentZoomX;
+  const currentBeat = (elapsedSeconds / 60) * project.bpm;
+  const x = currentBeat * beatWidth;
+
+  if (x < 0 || x > w) return;
+
+  ctx.strokeStyle = '#ff4444';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, h);
+  ctx.stroke();
+
+  ctx.fillStyle = '#ff4444';
+  ctx.beginPath();
+  ctx.moveTo(x - 5, 0);
+  ctx.lineTo(x + 5, 0);
+  ctx.lineTo(x, 8);
+  ctx.closePath();
+  ctx.fill();
+}
+
+function clearPlayheadLine() {
+  if (!fragmentPlayheadCanvas) return;
+  const ctx = fragmentPlayheadCanvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const w = fragmentPlayheadCanvas.width / dpr;
+  const h = fragmentPlayheadCanvas.height / dpr;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, w, h);
 }
 
 function showSaveProjectOptionsDialog() {
@@ -1927,6 +1975,11 @@ function renderFragmentTimeline() {
   fragmentCanvas.style.height = canvasHeight + 'px';
   fragmentCanvas.width = Math.floor(canvasWidth * dpr);
   fragmentCanvas.height = Math.floor(canvasHeight * dpr);
+
+  fragmentPlayheadCanvas.style.width = canvasWidth + 'px';
+  fragmentPlayheadCanvas.style.height = canvasHeight + 'px';
+  fragmentPlayheadCanvas.width = Math.floor(canvasWidth * dpr);
+  fragmentPlayheadCanvas.height = Math.floor(canvasHeight * dpr);
 
   const newWidth = canvasWidth + 'px';
   const newHeight = canvasHeight + 'px';

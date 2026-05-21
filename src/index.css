@@ -456,6 +456,13 @@ html, body {
   display: block;
 }
 
+#fragment-playhead-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
 #piano-roll-container {
   flex: 1;
   display: flex;
