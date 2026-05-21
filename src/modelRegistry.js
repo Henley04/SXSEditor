@@ -82,7 +82,7 @@ const MODEL_GROUPS = [
         nameEn: 'Vocoder',
         description: '将梅尔频谱重建为音频波形',
         descriptionEn: 'Reconstruct audio waveform from mel spectrogram',
-        files: ['vocoder.onnx'],
+        files: ['vocoder_dml.onnx'],
         sessionKey: 'vocoder',
       },
       {

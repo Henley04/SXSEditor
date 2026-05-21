@@ -34,7 +34,7 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'cond_emb.onnx', required: true },
   { filePath: 'cond_emb.onnx.data', required: true },
   { filePath: 'diff_step_dml.onnx', required: true },
-  { filePath: 'vocoder.onnx', required: true },
+  { filePath: 'vocoder_dml.onnx', required: true },
   { filePath: 'mel_transform.onnx', required: true },
   { filePath: 'mel_transform.onnx.data', required: true },
   { filePath: 'preprocess/rmvpe_model.onnx', required: true },

@@ -54,8 +54,8 @@ Download the latest pre-built installer for **Windows**:
 
 | Feature | Description |
 |---------|-------------|
-| 🎹 Multi-track Timeline | Arrange fragments with drag-and-drop, cross-track movement |
-| 🎼 Piano Roll Editor | Edit notes, lyrics, pitch curves & envelopes |
+| 🎹 Multi-track Timeline | Arrange fragments with drag-and-drop, cross-track movement, rounded corners & MIDI visualization |
+| 🼼 Piano Roll Editor | Edit notes, lyrics, pitch curves & envelopes, fragment boundary indicator |
 | 🧠 Neural SVS | SoulX-Singer model via ONNX Runtime |
 | 🎤 Singer Management | Custom singers with reference audio & F0 |
 | 📊 Audio Preprocessing | RMVPE / Basic Pitch F0 extraction |
@@ -156,7 +156,7 @@ The application requires SoulX-Singer ONNX model files in `onnx_models/`.
 | `preflow.onnx` | ConvNeXtV2 pre-processing |
 | `cond_emb.onnx` | Condition embedding projection |
 | `diff_step_dml.onnx` | Single diffusion step (DiffLlama) |
-| `vocoder.onnx` | Vocos vocoder (mel → waveform) |
+| `vocoder_dml.onnx` | Vocos vocoder (mel → waveform, DML optimized) |
 | `mel_transform.onnx` | Mel-spectrogram extraction |
 
 **Preprocessing Models (`onnx_models/preprocess/`)**
@@ -314,8 +314,8 @@ This project is licensed under the [MIT License](LICENSE).
 
 | 功能 | 说明 |
 |------|------|
-| 🎹 多轨时间线 | 拖拽排列歌曲片段，支持跨轨道移动 |
-| 🎼 钢琴卷帘编辑器 | 编辑音符、歌词、音高曲线 |
+| 🎹 多轨时间线 | 拖拽排列歌曲片段，支持跨轨道移动，圆角UI与MIDI可视化 |
+| 🎼 钢琴卷帘编辑器 | 编辑音符、歌词、音高曲线，分片边界指示器 |
 | 🧠 神经歌声合成 | SoulX-Singer 模型 + ONNX Runtime |
 | 🎤 歌手管理 | 自定义歌手，支持参考音频 |
 | 📊 音频预处理 | RMVPE / Basic Pitch F0 提取 |
@@ -468,8 +468,8 @@ npm run test:watch       # 监视模式
 
 | 機能 | 説明 |
 |------|------|
-| 🎹 マルチトラックタイムライン | ドラッグ＆ドロップでフラグメントを配置、トラック間移動対応 |
-| 🎼 ピアノロールエディター | 音符・歌詞・ピッチカーブの編集 |
+| 🎹 マルチトラックタイムライン | ドラッグ＆ドロップでフラグメントを配置、トラック間移動対応、角丸UIとMIDI可視化 |
+| 🎼 ピアノロールエディター | 音符・歌詞・ピッチカーブの編集、フラグメント境界インジケーター |
 | 🧠 ニューラル SVS | SoulX-Singer モデル + ONNX Runtime |
 | 🎤 歌手管理 | カスタム歌手、参照音声対応 |
 | 📊 音声前処理 | RMVPE / Basic Pitch F0 抽出 |

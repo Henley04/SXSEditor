@@ -32,7 +32,7 @@ const ONNX_MODEL_FILES = [
     'preflow.onnx',
     'cond_emb.onnx',
     'diff_step_dml.onnx',
-    'vocoder.onnx',
+    'vocoder_dml.onnx',
     'mel_transform.onnx',
 ];
 
@@ -863,6 +863,16 @@ class OnnxSVSPipeline {
             if (!dmlExists) {
                 resolvedModelFiles[dmlIdx] = 'diff_step.onnx';
                 console.log('[OnnxSVSPipeline] diff_step_dml.onnx 不存在，使用 diff_step.onnx');
+            }
+        }
+        const vocDmlIdx = resolvedModelFiles.indexOf('vocoder_dml.onnx');
+        if (vocDmlIdx >= 0) {
+            const vocDmlPath = path.join(this.modelDir, 'vocoder_dml.onnx');
+            let vocDmlExists = false;
+            try { await fs.promises.access(vocDmlPath); vocDmlExists = true; } catch (_) {}
+            if (!vocDmlExists) {
+                resolvedModelFiles[vocDmlIdx] = 'vocoder.onnx';
+                console.log('[OnnxSVSPipeline] vocoder_dml.onnx 不存在，使用 vocoder.onnx');
             }
         }
 
