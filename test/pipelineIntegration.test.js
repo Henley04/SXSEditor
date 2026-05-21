@@ -3,6 +3,7 @@ const sinon = require('sinon');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { resampleAudio } = require('../src/utils/resampleAudio');
 
 describe('Audio Processing Pipeline - Integration Tests', () => {
   describe('End-to-end F0 Quantization', () => {
@@ -59,7 +60,7 @@ describe('Audio Processing Pipeline - Integration Tests', () => {
         input[i] = Math.sin(2 * Math.PI * 440 * i / 44100);
       }
 
-      const result = detector.resampleAudio(input, 44100, 16000);
+      const result = resampleAudio(input, 44100, 16000);
 
       expect(result.length).to.equal(1600);
       expect(result).to.be.an.instanceOf(Float32Array);
@@ -67,14 +68,13 @@ describe('Audio Processing Pipeline - Integration Tests', () => {
 
     it('should resample audio for Basic Pitch (44100 -> 22050)', () => {
       const { BasicPitchDetector } = require('../src/inference/basicPitch');
-      const detector = new BasicPitchDetector('/fake/');
 
       const input = new Float32Array(4410);
       for (let i = 0; i < input.length; i++) {
         input[i] = Math.sin(2 * Math.PI * 440 * i / 44100);
       }
 
-      const result = detector.resampleAudio(input, 44100, 22050);
+      const result = resampleAudio(input, 44100, 22050);
 
       expect(result.length).to.equal(2205);
       expect(result).to.be.an.instanceOf(Float32Array);
@@ -176,7 +176,7 @@ describe('Track and Fragment Pipeline - Integration Tests', () => {
     const manager = new TrackManager();
 
     const singer = manager.addSinger({ singerName: 'Test Singer' });
-    expect(singer.id).to.equal(1);
+    expect(singer.id).to.be.a('string');
 
     const fragment = manager.addFragment({
       singerId: singer.id,
