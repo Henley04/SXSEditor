@@ -1590,6 +1590,104 @@ ipcMain.handle('audio:isAvailable', async () => {
 
 // ===== 资源管理器 IPC =====
 
+// #9: 缓存文件检查结果
+let modelFilesCache = null;
+let modelFilesCacheDir = null;
+
+function invalidateModelFilesCache() {
+  modelFilesCache = null;
+  modelFilesCacheDir = null;
+}
+
+async function getModelFilesInfo() {
+  const modelDir = getModelDir();
+  if (modelFilesCache && modelFilesCacheDir === modelDir) {
+    return modelFilesCache;
+  }
+
+  const groups = getModelGroups();
+  const cache = {};
+
+  for (const group of groups) {
+    for (const model of group.models) {
+      let totalFileSize = 0;
+      let filesExist = true;
+      for (const file of model.files) {
+        const fullPath = path.join(modelDir, file);
+        try {
+          const stats = await fs.promises.stat(fullPath);
+          totalFileSize += stats.size;
+        } catch (_) {
+          filesExist = false;
+        }
+      }
+      cache[`${group.id}/${model.id}`] = { fileSize: totalFileSize, filesExist };
+    }
+  }
+
+  modelFilesCache = cache;
+  modelFilesCacheDir = modelDir;
+  return cache;
+}
+
+// #6: 抽取公共的模型加载/卸载辅助函数
+async function loadSingleModel(groupId, modelId) {
+  if (groupId === 'svs') {
+    if (!svsPipeline || !svsPipeline.initialized) {
+      await ensureSVSPipeline();
+    }
+    const modelDef = getModelGroups().find(g => g.id === 'svs')?.models.find(m => m.id === modelId);
+    if (!modelDef) return { success: false, error: 'Model not found in registry' };
+    return svsPipeline.loadModel(modelDef.sessionKey);
+  } else if (groupId === 'rmvpe') {
+    if (!rmvpeDetector) {
+      const modelPath = getModelDir();
+      const settings = loadSettings();
+      const deviceId = settings.deviceId ?? undefined;
+      rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
+      await rmvpeDetector.init();
+    }
+    return { success: true };
+  } else if (groupId === 'basicPitch') {
+    if (!basicPitchDetector) {
+      const modelPath = getModelDir();
+      basicPitchDetector = new BasicPitchDetector(modelPath);
+      await basicPitchDetector.init();
+    }
+    return { success: true };
+  }
+  return { success: false, error: `Unknown group: ${groupId}` };
+}
+
+async function unloadSingleModel(groupId, modelId) {
+  if (groupId === 'svs') {
+    if (!svsPipeline || !svsPipeline.initialized) {
+      return { success: false, error: 'SVS Pipeline not initialized' };
+    }
+    const modelDef = getModelGroups().find(g => g.id === 'svs')?.models.find(m => m.id === modelId);
+    if (!modelDef) return { success: false, error: 'Model not found in registry' };
+    return svsPipeline.unloadModel(modelDef.sessionKey);
+  } else if (groupId === 'rmvpe') {
+    if (rmvpeDetector) {
+      try { rmvpeDetector.dispose(); } catch (_) {}
+      rmvpeDetector = null;
+    }
+    return { success: true };
+  } else if (groupId === 'basicPitch') {
+    if (basicPitchDetector) {
+      try { basicPitchDetector.dispose(); } catch (_) {}
+      basicPitchDetector = null;
+    }
+    return { success: true };
+  }
+  return { success: false, error: `Unknown group: ${groupId}` };
+}
+
+function cleanupOnLoadFailure(groupId) {
+  if (groupId === 'rmvpe') { try { if (rmvpeDetector) { rmvpeDetector.dispose(); } } catch (_) {} rmvpeDetector = null; }
+  if (groupId === 'basicPitch') { try { if (basicPitchDetector) { basicPitchDetector.dispose(); } } catch (_) {} basicPitchDetector = null; }
+}
+
 ipcMain.handle('resmgr:open', async () => {
   openResourceManagerWindow();
   return { success: true };
@@ -1626,7 +1724,7 @@ ipcMain.handle('resmgr:getGPUInfo', async () => {
 
 ipcMain.handle('resmgr:getModelGroups', async () => {
   const groups = getModelGroups();
-  const modelDir = getModelDir();
+  const filesInfo = await getModelFilesInfo();
 
   const result = [];
   for (const group of groups) {
@@ -1642,17 +1740,8 @@ ipcMain.handle('resmgr:getModelGroups', async () => {
     };
 
     for (const model of group.models) {
-      let totalFileSize = 0;
-      let filesExist = true;
-      for (const file of model.files) {
-        const fullPath = path.join(modelDir, file);
-        try {
-          const stats = await fs.promises.stat(fullPath);
-          totalFileSize += stats.size;
-        } catch (_) {
-          filesExist = false;
-        }
-      }
+      const cacheKey = `${group.id}/${model.id}`;
+      const { fileSize, filesExist } = filesInfo[cacheKey] || { fileSize: 0, filesExist: false };
 
       let loaded = false;
       let ep = null;
@@ -1676,7 +1765,7 @@ ipcMain.handle('resmgr:getModelGroups', async () => {
         descriptionEn: model.descriptionEn,
         sessionKey: model.sessionKey,
         files: model.files,
-        fileSize: totalFileSize,
+        fileSize,
         filesExist,
         loaded,
         ep,
@@ -1691,63 +1780,17 @@ ipcMain.handle('resmgr:getModelGroups', async () => {
 
 ipcMain.handle('resmgr:loadModel', async (event, { groupId, modelId }) => {
   try {
-    if (groupId === 'svs') {
-      if (!svsPipeline || !svsPipeline.initialized) {
-        await ensureSVSPipeline();
-      }
-      const modelDef = getModelGroups().find(g => g.id === 'svs')?.models.find(m => m.id === modelId);
-      if (!modelDef) return { success: false, error: 'Model not found in registry' };
-      const result = await svsPipeline.loadModel(modelDef.sessionKey);
-      return result;
-    } else if (groupId === 'rmvpe') {
-      if (!rmvpeDetector) {
-        const modelPath = getModelDir();
-        const settings = loadSettings();
-        const deviceId = settings.deviceId ?? undefined;
-        rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
-        await rmvpeDetector.init();
-      }
-      return { success: true };
-    } else if (groupId === 'basicPitch') {
-      if (!basicPitchDetector) {
-        const modelPath = getModelDir();
-        basicPitchDetector = new BasicPitchDetector(modelPath);
-        await basicPitchDetector.init();
-      }
-      return { success: true };
-    }
-    return { success: false, error: `Unknown group: ${groupId}` };
+    return await loadSingleModel(groupId, modelId);
   } catch (err) {
     console.error(`[Main] 加载模型失败 (${groupId}/${modelId}):`, err.message);
-    if (groupId === 'rmvpe') { try { if (rmvpeDetector) { rmvpeDetector.dispose(); } } catch (_) {} rmvpeDetector = null; }
-    if (groupId === 'basicPitch') { try { if (basicPitchDetector) { basicPitchDetector.dispose(); } } catch (_) {} basicPitchDetector = null; }
+    cleanupOnLoadFailure(groupId);
     return { success: false, error: err.message };
   }
 });
 
 ipcMain.handle('resmgr:unloadModel', async (event, { groupId, modelId }) => {
   try {
-    if (groupId === 'svs') {
-      if (!svsPipeline || !svsPipeline.initialized) {
-        return { success: false, error: 'SVS Pipeline not initialized' };
-      }
-      const modelDef = getModelGroups().find(g => g.id === 'svs')?.models.find(m => m.id === modelId);
-      if (!modelDef) return { success: false, error: 'Model not found in registry' };
-      return svsPipeline.unloadModel(modelDef.sessionKey);
-    } else if (groupId === 'rmvpe') {
-      if (rmvpeDetector) {
-        try { rmvpeDetector.dispose(); } catch (_) {}
-        rmvpeDetector = null;
-      }
-      return { success: true };
-    } else if (groupId === 'basicPitch') {
-      if (basicPitchDetector) {
-        try { basicPitchDetector.dispose(); } catch (_) {}
-        basicPitchDetector = null;
-      }
-      return { success: true };
-    }
-    return { success: false, error: `Unknown group: ${groupId}` };
+    return await unloadSingleModel(groupId, modelId);
   } catch (err) {
     console.error(`[Main] 卸载模型失败 (${groupId}/${modelId}):`, err.message);
     return { success: false, error: err.message };
@@ -1757,30 +1800,23 @@ ipcMain.handle('resmgr:unloadModel', async (event, { groupId, modelId }) => {
 ipcMain.handle('resmgr:loadGroup', async (event, { groupId }) => {
   try {
     if (groupId === 'svs') {
-      await ensureSVSPipeline();
-      return { success: true };
-    } else if (groupId === 'rmvpe') {
-      if (!rmvpeDetector) {
-        const modelPath = getModelDir();
-        const settings = loadSettings();
-        const deviceId = settings.deviceId ?? undefined;
-        rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
-        await rmvpeDetector.init();
+      // #4: 加载全部SVS模型，而非仅初始化pipeline
+      if (!svsPipeline || !svsPipeline.initialized) {
+        await ensureSVSPipeline();
       }
-      return { success: true };
-    } else if (groupId === 'basicPitch') {
-      if (!basicPitchDetector) {
-        const modelPath = getModelDir();
-        basicPitchDetector = new BasicPitchDetector(modelPath);
-        await basicPitchDetector.init();
-      }
+      await svsPipeline.ensureAllModelsLoaded();
       return { success: true };
     }
-    return { success: false, error: `Unknown group: ${groupId}` };
+    // 单模型组直接加载
+    const group = getModelGroups().find(g => g.id === groupId);
+    if (!group) return { success: false, error: `Unknown group: ${groupId}` };
+    for (const model of group.models) {
+      await loadSingleModel(groupId, model.id);
+    }
+    return { success: true };
   } catch (err) {
     console.error(`[Main] 加载模型组失败 (${groupId}):`, err.message);
-    if (groupId === 'rmvpe') { try { if (rmvpeDetector) { rmvpeDetector.dispose(); } } catch (_) {} rmvpeDetector = null; }
-    if (groupId === 'basicPitch') { try { if (basicPitchDetector) { basicPitchDetector.dispose(); } } catch (_) {} basicPitchDetector = null; }
+    cleanupOnLoadFailure(groupId);
     return { success: false, error: err.message };
   }
 });
@@ -1788,25 +1824,24 @@ ipcMain.handle('resmgr:loadGroup', async (event, { groupId }) => {
 ipcMain.handle('resmgr:unloadGroup', async (event, { groupId }) => {
   try {
     if (groupId === 'svs') {
-      if (svsPipeline) {
-        try { svsPipeline.dispose(); } catch (_) {}
-        svsPipeline = null;
-      }
-      return { success: true };
-    } else if (groupId === 'rmvpe') {
-      if (rmvpeDetector) {
-        try { rmvpeDetector.dispose(); } catch (_) {}
-        rmvpeDetector = null;
-      }
-      return { success: true };
-    } else if (groupId === 'basicPitch') {
-      if (basicPitchDetector) {
-        try { basicPitchDetector.dispose(); } catch (_) {}
-        basicPitchDetector = null;
+      // #5: 逐个卸载SVS模型，而非dispose整个pipeline
+      if (svsPipeline && svsPipeline.initialized) {
+        const group = getModelGroups().find(g => g.id === 'svs');
+        if (group) {
+          for (const model of group.models) {
+            try { svsPipeline.unloadModel(model.sessionKey); } catch (_) {}
+          }
+        }
       }
       return { success: true };
     }
-    return { success: false, error: `Unknown group: ${groupId}` };
+    // 单模型组直接卸载
+    const group = getModelGroups().find(g => g.id === groupId);
+    if (!group) return { success: false, error: `Unknown group: ${groupId}` };
+    for (const model of group.models) {
+      await unloadSingleModel(groupId, model.id);
+    }
+    return { success: true };
   } catch (err) {
     console.error(`[Main] 卸载模型组失败 (${groupId}):`, err.message);
     return { success: false, error: err.message };
