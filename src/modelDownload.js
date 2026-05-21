@@ -1,3 +1,5 @@
+import './common.css';
+import './modelDownload.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 
 const missingFiles = [];
@@ -154,6 +156,7 @@ function updateOverallProgress(overallDownloaded, overallTotal) {
   const percent = overallTotal > 0 ? Math.round(overallDownloaded / overallTotal * 100) : 0;
   document.getElementById('overallPercent').textContent = `${percent}%`;
   document.getElementById('overallBar').style.width = `${percent}%`;
+  document.querySelector('.progress-bar-bg').setAttribute('aria-valuenow', percent);
 
   const now = Date.now();
   if (downloadStartTime > 0 && now - lastSpeedTime > 500) {
@@ -220,6 +223,7 @@ window.electronAPI.onModelDownloadComplete(() => {
   document.getElementById('changeDirBtn').disabled = true;
   document.getElementById('overallBar').style.width = '100%';
   document.getElementById('overallPercent').textContent = '100%';
+  document.querySelector('.progress-bar-bg').setAttribute('aria-valuenow', 100);
   for (const key in fileStates) {
     fileStates[key].status = 'complete';
   }
