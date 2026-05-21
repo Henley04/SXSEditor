@@ -3,45 +3,9 @@ import './audioPreprocess.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { showAlertDialog } from './alertDialog.js';
 import { mergePhoneme } from './utils/mergePhoneme.js';
-
-function debounce(fn, ms) {
-  let timer = null;
-  return function(...args) {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { timer = null; fn.apply(this, args); }, ms);
-  };
-}
-
-function isCJK(char) {
-  const code = char.codePointAt(0) || 0;
-  return (
-    (code >= 0x4E00 && code <= 0x9FFF) ||
-    (code >= 0x3400 && code <= 0x4DBF) ||
-    (code >= 0x20000 && code <= 0x2A6DF) ||
-    (code >= 0x3040 && code <= 0x309F) ||
-    (code >= 0x30A0 && code <= 0x30FF) ||
-    (code >= 0xAC00 && code <= 0xD7AF)
-  );
-}
-
-function tokenizeLyric(text) {
-  if (!text || text.trim().length === 0) return [];
-  const cleaned = text.trim();
-  const tokens = [];
-  let i = 0;
-  while (i < cleaned.length) {
-    const char = cleaned[i];
-    if (/\s/.test(char)) { i++; continue; }
-    if (isCJK(char)) { tokens.push(char); i++; continue; }
-    let word = '';
-    while (i < cleaned.length && !/\s/.test(cleaned[i]) && !isCJK(cleaned[i])) {
-      word += cleaned[i];
-      i++;
-    }
-    if (word) tokens.push(word);
-  }
-  return tokens;
-}
+import { debounce } from './utils/debounce.js';
+import { isCJK, tokenizeLyric } from './utils/cjkUtils.js';
+import { midiToNoteName } from './utils/midiUtils.js';
 
 function buildSingerFields(notes) {
   const mergedNotes = mergePhoneme(notes);
@@ -932,12 +896,6 @@ async function initPianoRoll() {
     },
 
     _drawNotes(ctx) {
-      const midiToNoteName = (midi) => {
-        const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-        const octave = Math.floor(midi / 12) - 1;
-        return names[midi % 12] + String(octave);
-      };
-
       for (const note of this.notes) {
         const x = this._timeToX(note.start);
         const y = this._pitchToY(note.pitch);

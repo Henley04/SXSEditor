@@ -3,6 +3,8 @@
  * 将 Float32Array 音频数据编码为 32-bit float PCM WAV 文件
  */
 
+import { smoothstep } from '../utils/smoothstep.js';
+
 /**
  * WAV 编码内部实现
  * @param {Float32Array} audioData 音频数据（单声道或交错立体声）
@@ -104,7 +106,7 @@ function _interpEnv(envelope, time) {
     if (time >= kfs[i].time && time <= kfs[i + 1].time) {
       const t = (time - kfs[i].time) / (kfs[i + 1].time - kfs[i].time);
       const smoothness = (kfs[i].smoothness || 0) / 100;
-      const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
+      const smoothT = smoothstep(t, smoothness);
       return kfs[i].value + smoothT * (kfs[i + 1].value - kfs[i].value);
     }
   }

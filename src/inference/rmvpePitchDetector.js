@@ -72,33 +72,13 @@ class RmvpePitchDetector {
     }
   }
 
-  resampleAudio(audioData, fromSampleRate, toSampleRate) {
-    const ratio = fromSampleRate / toSampleRate;
-    const newLength = Math.floor(audioData.length / ratio);
-    const resampled = new Float32Array(newLength);
-
-    for (let i = 0; i < newLength; i++) {
-      const srcIndex = i * ratio;
-      const srcIndexInt = Math.floor(srcIndex);
-      const frac = srcIndex - srcIndexInt;
-
-      if (srcIndexInt + 1 < audioData.length) {
-        resampled[i] = audioData[srcIndexInt] * (1 - frac) + audioData[srcIndexInt + 1] * frac;
-      } else {
-        resampled[i] = audioData[srcIndexInt] || 0;
-      }
-    }
-
-    return resampled;
-  }
-
   async extractF0(audioData, sampleRate = 44100) {
     if (!this.initialized) {
       await this.init();
     }
 
     const resampledAudio = sampleRate !== RMVPE_SAMPLE_RATE
-      ? this.resampleAudio(audioData, sampleRate, RMVPE_SAMPLE_RATE)
+      ? resampleAudio(audioData, sampleRate, RMVPE_SAMPLE_RATE)
       : audioData;
 
     const inputTensor = new ort.Tensor('float32', resampledAudio, [1, resampledAudio.length]);

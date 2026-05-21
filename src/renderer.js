@@ -5,6 +5,7 @@ import { encodeWav } from './audio/wavEncoder.js';
 import { HistoryManager } from './editor/historyManager.js';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { showAlertDialog } from './alertDialog.js';
+import { escapeHtml } from './utils/escapeHtml.js';
 
 const trackManager = new TrackManager();
 const history = new HistoryManager();
@@ -13,12 +14,6 @@ const SAMPLE_RATE = 24000;
 const SVS_HOP_SIZE = 480;
 let pipelineInitialized = false;
 let pipelineInitPromise = null;
-
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = String(str ?? '');
-  return div.innerHTML;
-}
 
 function convertF0DataToPitchCurve(f0Data, totalSeconds) {
   if (!f0Data || f0Data.length === 0) return null;
