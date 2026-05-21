@@ -90,6 +90,7 @@ const timeDisplay = document.getElementById('time-display');
 const bpmInput = document.getElementById('bpm-input');
 const timeSigNum = document.getElementById('time-sig-num');
 const timeSigDen = document.getElementById('time-sig-den');
+const autoShiftCheck = document.getElementById('auto-shift-check');
 const btnSave = document.getElementById('btn-save');
 const btnLoad = document.getElementById('btn-load');
 const btnExport = document.getElementById('btn-export');
@@ -894,6 +895,7 @@ async function playAll() {
           f0Envelope: null,
           pitchCurveF0: data.pitchCurveF0,
           refAudioWavBuffer: data.refAudioWavBuffer,
+          autoShift: autoShiftCheck.checked,
           nSteps: inferenceOpts.nSteps,
           cfg: inferenceOpts.cfg,
           cfgRescale: inferenceOpts.cfgRescale,
@@ -1568,6 +1570,7 @@ btnExport.addEventListener('click', async () => {
         options: {
           refAudioWavBuffer,
           pitchCurveF0: finalPitchCurveF0,
+          autoShift: autoShiftCheck.checked,
           nSteps: exportInferenceOpts.nSteps,
           cfg: exportInferenceOpts.cfg,
           cfgRescale: exportInferenceOpts.cfgRescale,
@@ -1991,19 +1994,24 @@ function renderFragmentTimeline() {
   ctx.fillStyle = '#14141f';
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
+  const beatsPerMeasure = project.timeSignature ? project.timeSignature[0] : 4;
+
   ctx.strokeStyle = '#2a2a3d';
   ctx.lineWidth = 1;
   for (let i = 0; i <= totalBeats; i++) {
     const x = i * beatWidth;
+    const isMeasureLine = (i % beatsPerMeasure === 0);
+    ctx.strokeStyle = isMeasureLine ? '#4a4a66' : '#2a2a3d';
     ctx.beginPath();
     ctx.moveTo(x, HEADER_HEIGHT);
     ctx.lineTo(x, canvasHeight);
     ctx.stroke();
 
-    if (i % 4 === 0) {
+    if (isMeasureLine) {
+      const measureNum = Math.floor(i / beatsPerMeasure) + 1;
       ctx.fillStyle = '#6a6a86';
       ctx.font = '10px sans-serif';
-      ctx.fillText(t('main.beatN', { n: i + 1 }), x + 2, HEADER_HEIGHT - 4);
+      ctx.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
     }
   }
 
