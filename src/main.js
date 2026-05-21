@@ -1448,8 +1448,20 @@ ipcMain.handle('file:exists', async (event, filePath) => {
   }
 });
 
-ipcMain.handle('file:authorizePath', async (event, filePath) => {
-  authorizePath(filePath);
+ipcMain.handle('file:authorizePath', async (event, dirPath) => {
+  const resolvedPath = path.resolve(dirPath);
+  // 禁止授权系统关键目录
+  const forbiddenPrefixes = [
+    path.resolve('C:\\Windows'),
+    path.resolve('C:\\Program Files'),
+    path.resolve('C:\\Program Files (x86)'),
+    path.resolve('C:\\ProgramData'),
+  ];
+  if (forbiddenPrefixes.some(prefix => resolvedPath.startsWith(prefix + path.sep) || resolvedPath === prefix)) {
+    return { success: false, error: 'Cannot authorize system directories' };
+  }
+  authorizePath(resolvedPath);
+  return { success: true };
 });
 
 ipcMain.handle('resolvePath', async (event, basePath, relativePath) => {

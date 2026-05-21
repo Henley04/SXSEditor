@@ -376,7 +376,13 @@ class BasicPitchDetector {
       };
 
       const server = http.createServer((req, res) => {
-        const filePath = path.join(modelPath, req.url.replace(/^\//, ''));
+        const filePath = path.resolve(modelPath, req.url.replace(/^\//, ''));
+        // 防止路径遍历攻击
+        if (!filePath.startsWith(path.resolve(modelPath) + path.sep) && filePath !== path.resolve(modelPath)) {
+          res.writeHead(403);
+          res.end('Forbidden');
+          return;
+        }
         if (!fs.existsSync(filePath)) {
           res.writeHead(404);
           res.end('Not found');
