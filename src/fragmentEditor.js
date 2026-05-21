@@ -2208,7 +2208,7 @@ function startInlineEdit(note, hit) {
 
   input.addEventListener('keydown', (e) => {
     e.stopPropagation();
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.isComposing) {
       e.preventDefault();
       finish(true);
     } else if (e.key === 'Escape') {
