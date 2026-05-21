@@ -1552,7 +1552,7 @@ btnExport.addEventListener('click', async () => {
 
       const refAudioWavBuffer = singer.wavBuffer || null;
 
-      const singerFragments2 = fragments.filter(f => f.singerId === parseInt(singerId));
+      const singerFragments2 = fragments.filter(f => f.singerId === singerId);
       const exportPitchCurveF0 = computePitchCurveF0(singerFragments2, notes, project.bpm);
 
       let finalPitchCurveF0 = exportPitchCurveF0;
