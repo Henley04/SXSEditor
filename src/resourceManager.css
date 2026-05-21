@@ -352,7 +352,7 @@ h2::before {
 }
 
 .model-group-body.expanded {
-    max-height: 2000px;
+    /* max-height 由 JS 动态设置 */
 }
 
 .model-list {
@@ -474,6 +474,12 @@ h2::before {
 .model-btn:disabled {
     opacity: 0.4;
     cursor: not-allowed;
+}
+
+.model-btn.loading,
+.group-action-btn.loading {
+    opacity: 0.7;
+    cursor: wait;
 }
 
 .model-missing {
