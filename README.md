@@ -66,7 +66,7 @@ Download the latest pre-built installer for **Windows**:
 | 💾 Save on Exit | Prompt to save unsaved changes before closing |
 | ⌨️ Ctrl+S Shortcut | Quick save project with keyboard shortcut |
 | 📥 Model Auto-Download | Download missing ONNX models from ModelScope |
-| 🔀 Chunked Multi-threaded Download | Parallel chunked download for large files (up to 16 concurrent connections) |
+| 🔀 Chunked Multi-threaded Download | Parallel chunked download for large files (up to 16 concurrent connections, dynamic chunk sizing based on file size) |
 | ▶️ Real-time Playback | Synthesize & play directly in editor |
 | 🔊 WASAPI Exclusive Mode | Low-latency audio output via naudiodon |
 | 📦 WAV Export | Mix & export to standard WAV (24kHz) |
@@ -326,7 +326,7 @@ This project is licensed under the [MIT License](LICENSE).
 | 💾 退出保存提示 | 关闭窗口时提示保存未保存的更改 |
 | ⌨️ Ctrl+S 快捷键 | 键盘快捷键快速保存项目 |
 | 📥 模型自动下载 | 从 ModelScope 自动下载缺失模型 |
-| 🔀 分片多线程下载 | 大文件分片并行下载，智能并发配置（最大16连接） |
+| 🔀 分片多线程下载 | 大文件分片并行下载，智能并发配置（最大16连接），根据文件大小动态调整分片 |
 | ▶️ 实时播放 | 直接合成播放 |
 | 🔊 WASAPI 独占模式 | 通过 naudiodon 实现低延迟音频输出 |
 | 📦 WAV 导出 | 混音导出为标准 WAV |
