@@ -1,4 +1,5 @@
 const { RmvpePitchDetector, RMVPE_SAMPLE_RATE } = require('../src/inference/rmvpePitchDetector');
+const { resampleAudio } = require('../src/utils/resampleAudio');
 const { expect } = require('chai');
 
 describe('RmvpePitchDetector - Pure Logic Tests', () => {
@@ -15,7 +16,7 @@ describe('RmvpePitchDetector - Pure Logic Tests', () => {
         input[i] = Math.sin(2 * Math.PI * 440 * i / 44100);
       }
 
-      const result = detector.resampleAudio(input, 44100, 16000);
+      const result = resampleAudio(input, 44100, 16000);
 
       expect(result).to.be.an.instanceOf(Float32Array);
       expect(result.length).to.equal(160);
@@ -25,7 +26,7 @@ describe('RmvpePitchDetector - Pure Logic Tests', () => {
       const input = new Float32Array(100);
       input.fill(0.5);
 
-      const result = detector.resampleAudio(input, 16000, 16000);
+      const result = resampleAudio(input, 16000, 16000);
 
       expect(result.length).to.equal(100);
     });
@@ -34,7 +35,7 @@ describe('RmvpePitchDetector - Pure Logic Tests', () => {
       const input = new Float32Array(160);
       input.fill(1.0);
 
-      const result = detector.resampleAudio(input, 16000, 32000);
+      const result = resampleAudio(input, 16000, 32000);
 
       expect(result.length).to.equal(320);
     });
@@ -45,7 +46,7 @@ describe('RmvpePitchDetector - Pure Logic Tests', () => {
         input[i] = Math.sin(2 * Math.PI * 440 * i / 44100);
       }
 
-      const result = detector.resampleAudio(input, 44100, 16000);
+      const result = resampleAudio(input, 44100, 16000);
 
       expect(result.length).to.be.greaterThan(0);
       expect(result.length).to.equal(Math.floor(4410 * 16000 / 44100));
@@ -53,7 +54,7 @@ describe('RmvpePitchDetector - Pure Logic Tests', () => {
 
     it('should handle small input arrays', () => {
       const input = new Float32Array([1, 2, 3, 4, 5]);
-      const result = detector.resampleAudio(input, 44100, 16000);
+      const result = resampleAudio(input, 44100, 16000);
 
       expect(result.length).to.be.greaterThan(0);
     });
@@ -62,7 +63,7 @@ describe('RmvpePitchDetector - Pure Logic Tests', () => {
       const input = new Float32Array(16000);
       input.fill(0);
 
-      const result = detector.resampleAudio(input, 44100, 16000);
+      const result = resampleAudio(input, 44100, 16000);
 
       expect(result.length).to.equal(Math.floor(16000 * 16000 / 44100));
     });

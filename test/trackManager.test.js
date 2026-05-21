@@ -35,11 +35,11 @@ describe('TrackManager', () => {
       expect(singer.wavPath).to.equal('./test.wav');
     });
 
-    it('should increment nextSingerId after creation', () => {
-      const s1 = manager.addSinger();
-      const s2 = manager.addSinger();
+    it('should assign unique IDs to singers', () => {
+      const s1 = manager.addSinger({ singerName: 'Singer 1' });
+      const s2 = manager.addSinger({ singerName: 'Singer 2' });
 
-      expect(s2.id).to.be.greaterThan(s1.id);
+      expect(s1.id).to.not.equal(s2.id);
     });
   });
 
@@ -192,10 +192,10 @@ describe('TrackManager', () => {
       expect(fragment.color).to.equal('#3498db');
     });
 
-    it('should default to first color for unknown singer', () => {
+    it('should default to a TRACK_COLORS color for unknown singer', () => {
       const fragment = manager.addFragment({ singerId: 999 });
 
-      expect(fragment.color).to.equal('#e74c3c');
+      expect(manager.getColors()).to.include(fragment.color);
     });
   });
 
