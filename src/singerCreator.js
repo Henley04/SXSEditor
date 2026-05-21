@@ -1,5 +1,6 @@
 import './singerCreator.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
+import { showAlertDialog } from './alertDialog.js';
 
 initI18n();
 applyLocale();
@@ -124,11 +125,11 @@ btnClearWav.addEventListener('click', () => {
 
 btnStartPreprocess.addEventListener('click', () => {
   if (!wavFileBuffer) {
-    alert(t('singerCreator.pleaseUploadWav'));
+    showAlertDialog(t('singerCreator.pleaseUploadWav'));
     return;
   }
   if (!window.electronAPI || !window.electronAPI.openAudioPreprocess) {
-    alert(t('singerCreator.preprocessUnavailable'));
+    showAlertDialog(t('singerCreator.preprocessUnavailable'));
     return;
   }
   stopPreviewPlayback();
@@ -179,11 +180,11 @@ btnCancel.addEventListener('click', () => {
 
 btnCreate.addEventListener('click', async () => {
   if (!wavFileBuffer) {
-    alert(t('singerCreator.pleaseSelectWav'));
+    showAlertDialog(t('singerCreator.pleaseSelectWav'));
     return;
   }
   if (!window.electronAPI || !window.electronAPI.saveSingerFile) {
-    alert(t('singerCreator.saveUnavailable'));
+    showAlertDialog(t('singerCreator.saveUnavailable'));
     return;
   }
 
@@ -208,21 +209,21 @@ btnCreate.addEventListener('click', async () => {
     });
 
     if (result && result.success) {
-      alert(t('singerCreator.createSuccess'));
+      showAlertDialog(t('singerCreator.createSuccess'));
       cleanupListeners();
       window.close();
     } else {
-      alert(t('singerCreator.createFailed') + ': ' + (result && result.error ? result.error : ''));
+      showAlertDialog(t('singerCreator.createFailed') + ': ' + (result && result.error ? result.error : ''));
     }
   } catch (err) {
     console.error(t('singerCreator.saveFailed'), err);
-    alert(t('singerCreator.createFailed') + ': ' + (err && err.message ? err.message : ''));
+    showAlertDialog(t('singerCreator.createFailed') + ': ' + (err && err.message ? err.message : ''));
   }
 });
 
 function handleAvatarFile(file) {
   if (!file.type.startsWith('image/')) {
-    alert(t('singerCreator.pleaseSelectImage'));
+    showAlertDialog(t('singerCreator.pleaseSelectImage'));
     return;
   }
 
@@ -239,14 +240,14 @@ function handleAvatarFile(file) {
     updatePreview();
   };
   reader.onerror = () => {
-    alert(t('singerCreator.imageReadFailed'));
+    showAlertDialog(t('singerCreator.imageReadFailed'));
   };
   reader.readAsDataURL(file);
 }
 
 async function handleWavFile(file) {
   if (!file.name.toLowerCase().endsWith('.wav')) {
-    alert(t('singerCreator.pleaseSelectWavFormat'));
+    showAlertDialog(t('singerCreator.pleaseSelectWavFormat'));
     return;
   }
 
@@ -262,7 +263,7 @@ async function handleWavFile(file) {
     audioCtx.close();
 
     if (wavDuration > 30) {
-      alert(t('singerCreator.wavTooLong'));
+      showAlertDialog(t('singerCreator.wavTooLong'));
       wavFileBuffer = null;
       wavAudioBuffer = null;
       wavFileName = '';
@@ -282,7 +283,7 @@ async function handleWavFile(file) {
     updatePreview();
   } catch (err) {
     console.error(t('singerCreator.wavParseError'), err);
-    alert(t('singerCreator.wavParseFailed') + ': ' + err.message);
+    showAlertDialog(t('singerCreator.wavParseFailed') + ': ' + err.message);
     wavFileBuffer = null;
     wavAudioBuffer = null;
     wavFileName = '';
