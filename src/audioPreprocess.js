@@ -45,7 +45,6 @@ function mergePhoneme(notes) {
   for (let i = 0; i < notes.length; i++) {
     const n = notes[i];
     const lyric = (n.lyric || '').replace('<AP>', '<SP>');
-    n.lyric = lyric;
     const isSP = !lyric.trim() || lyric === '<SP>';
     const hasLyric = lyric.trim().length > 0 && !isSP;
     const isSlur = n.isSlur || n.isContinuation;
@@ -1202,7 +1201,7 @@ function startInlineEdit(roll, note, hit) {
 
   input.addEventListener('keydown', (e) => {
     e.stopPropagation();
-    if (e.key === 'Enter') {
+    if (e.key === 'Enter' && !e.isComposing) {
       e.preventDefault();
       finish(true);
     } else if (e.key === 'Escape') {
