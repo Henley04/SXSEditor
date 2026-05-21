@@ -1,7 +1,12 @@
 /**
  * Test helpers for mocking Electron environment
  */
+const sinon = require('sinon');
 
+// 自增计数器，用于生成唯一 id
+let _nextNoteId = 1;
+
+// 以下 mock 函数当前未被测试使用，保留供未来测试扩展使用
 function mockElectronAPI() {
   return {
     extractF0: sinon.stub().resolves({ success: true, f0Array: [], notes: [] }),
@@ -37,7 +42,7 @@ function mockAudioBuffer(duration = 1.0, sampleRate = 44100) {
 
 function createTestNote(overrides = {}) {
   return {
-    id: overrides.id ?? Date.now() + Math.random(),
+    id: overrides.id ?? _nextNoteId++,
     pitch: overrides.pitch ?? 60,
     start: overrides.start ?? 0,
     duration: overrides.duration ?? 0.25,

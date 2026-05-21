@@ -1,3 +1,4 @@
+import './common.css';
 import './fragmentEditor.css';
 import { PARAM_MODES } from './editor/pianoRoll.js';
 import { encodeWav, applyEnvelopesToAudio } from './audio/wavEncoder.js';

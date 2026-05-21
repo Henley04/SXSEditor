@@ -288,8 +288,7 @@ class EnvelopeEditor {
     return this.options.defaultValue;
   }
 
-  _smoothstep(edge0, edge1, x) {
-    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+  _smoothstep(t, smoothness) {
     return t * t * (3 - 2 * t);
   }
 

@@ -1,81 +1,20 @@
-const { BasicPitchDetector } = require('../src/inference/basicPitch');
+const {
+  BasicPitchDetector,
+  midiToHz,
+  hzToMidi,
+  gaussian,
+  argMax,
+  argMaxAxis1,
+  whereGreaterThanAxis1,
+  meanStdDev,
+  globalMax,
+  BASIC_PITCH_SAMPLE_RATE,
+} = require('../src/inference/basicPitch');
 const { expect } = require('chai');
 
-const BASIC_PITCH_SAMPLE_RATE = 22050;
 const MIDI_OFFSET = 21;
 const CONTOUR_BINS_PER_SEMITONE = 1;
 const ANNOTATIONS_FPS = Math.floor(BASIC_PITCH_SAMPLE_RATE / 256);
-
-function midiToHz(midi) {
-  return 440.0 * 2.0 ** ((midi - 69.0) / 12.0);
-}
-
-function hzToMidi(hz) {
-  return 12 * (Math.log2(hz) - Math.log2(440.0)) + 69;
-}
-
-function gaussian(M, std) {
-  const result = [];
-  for (let n = 0; n < M; n++) {
-    result.push(Math.exp((-1 * (n - (M - 1) / 2) ** 2) / (2 * std ** 2)));
-  }
-  return result;
-}
-
-function argMax(arr) {
-  if (arr.length === 0) return null;
-  let maxIndex = -1;
-  for (let i = 0; i < arr.length; i++) {
-    if (maxIndex === -1 || arr[i] > arr[maxIndex]) {
-      maxIndex = i;
-    }
-  }
-  return maxIndex;
-}
-
-function argMaxAxis1(arr) {
-  return arr.map(row => argMax(row));
-}
-
-function whereGreaterThanAxis1(arr2d, threshold) {
-  const outputX = [];
-  const outputY = [];
-  for (let i = 0; i < arr2d.length; i++) {
-    for (let j = 0; j < arr2d[i].length; j++) {
-      if (arr2d[i][j] > threshold) {
-        outputX.push(i);
-        outputY.push(j);
-      }
-    }
-  }
-  return [outputX, outputY];
-}
-
-function globalMax(array) {
-  let max = 0;
-  for (const row of array) {
-    for (const v of row) {
-      if (v > max) max = v;
-    }
-  }
-  return max;
-}
-
-function meanStdDev(array) {
-  let sum = 0;
-  let sumSquared = 0;
-  let count = 0;
-  for (const row of array) {
-    for (const value of row) {
-      sum += value;
-      sumSquared += value * value;
-      count++;
-    }
-  }
-  const mean = sum / count;
-  const std = Math.sqrt((1 / (count - 1)) * (sumSquared - (sum * sum) / count));
-  return [mean, std];
-}
 
 describe('BasicPitch - Utility Functions', () => {
   describe('midiToHz', () => {

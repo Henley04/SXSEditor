@@ -10,9 +10,19 @@ const TRACK_COLORS = [
   '#22d3ee', '#86efac', '#fdba74', '#f97316',
 ];
 
-let nextSingerId = 1;
-let nextTrackId = 1;
-let nextFragmentId = 1;
+let _idCounter = 0;
+function generateId() {
+  return Date.now().toString(36) + (_idCounter++).toString(36) + Math.random().toString(36).substr(2, 5);
+}
+
+function _hashCode(str) {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
 
 function createEnvelope(defaultValue = 1) {
   return {
@@ -23,10 +33,7 @@ function createEnvelope(defaultValue = 1) {
 }
 
 function createSinger(data = {}) {
-  const id = data.id ?? nextSingerId++;
-  if (typeof data.id === 'number' && data.id >= nextSingerId) {
-    nextSingerId = data.id + 1;
-  }
+  const id = data.id ?? generateId();
   return {
     id,
     trackName: data.trackName ?? `轨道 ${id}`,
@@ -34,7 +41,7 @@ function createSinger(data = {}) {
     avatarPath: data.avatarPath ?? null,
     wavPath: data.wavPath ?? null,
     midiPath: data.midiPath ?? null,
-    color: data.color ?? TRACK_COLORS[(id - 1) % TRACK_COLORS.length],
+    color: data.color ?? TRACK_COLORS[_hashCode(String(id)) % TRACK_COLORS.length],
     singerFilePath: data.singerFilePath ?? null,
     singerFileMissing: data.singerFileMissing ?? false,
   };
@@ -49,17 +56,14 @@ function createPitchCurve() {
 }
 
 function createFragment(data = {}) {
-  const id = data.id ?? nextFragmentId++;
-  if (typeof data.id === 'number' && data.id >= nextFragmentId) {
-    nextFragmentId = data.id + 1;
-  }
+  const id = data.id ?? generateId();
   return {
     id,
-    singerId: data.singerId ?? 1,
+    singerId: data.singerId ?? null,
     startTime: data.startTime ?? 0,
     duration: data.duration ?? 4,
     name: data.name ?? `分片 ${id}`,
-    color: data.color ?? TRACK_COLORS[(data.singerId - 1) % TRACK_COLORS.length],
+    color: data.color ?? TRACK_COLORS[_hashCode(String(data.singerId ?? id)) % TRACK_COLORS.length],
     notes: data.notes ?? [],
     envelopes: {
       volume: data.volume ?? createEnvelope(1),
@@ -171,8 +175,6 @@ class TrackManager {
     this.fragments.length = 0;
     this.usedColorIndices.clear();
     this.activeFragmentId = null;
-    nextSingerId = 1;
-    nextFragmentId = 1;
   }
 
   getColors() {
