@@ -3,6 +3,7 @@ import { PARAM_MODES } from './editor/pianoRoll.js';
 import { encodeWav, applyEnvelopesToAudio } from './audio/wavEncoder.js';
 import { HistoryManager } from './editor/historyManager.js';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
+import { showAlertDialog } from './alertDialog.js';
 
 const canvas = document.getElementById('piano-roll');
 const ctx = canvas.getContext('2d');
@@ -1190,7 +1191,7 @@ window.electronAPI.onFragmentSVSProgress((progress) => {
 
 btnPlayFragment.addEventListener('click', async () => {
   if (notes.length === 0) {
-    alert(t('fragment.noNotesToPlay'));
+    showAlertDialog(t('fragment.noNotesToPlay'));
     return;
   }
   if (fragmentIsSynthesizing) return;
@@ -1205,7 +1206,7 @@ btnPlayFragment.addEventListener('click', async () => {
 
 btnExportFragment.addEventListener('click', async () => {
   if (notes.length === 0) {
-    alert(t('fragment.noNotesToExport'));
+    showAlertDialog(t('fragment.noNotesToExport'));
     return;
   }
   await exportFragment();
@@ -1216,7 +1217,7 @@ document.getElementById('btn-import-midi').addEventListener('click', async () =>
     const result = await window.electronAPI.importMidi();
     if (!result.success) {
       if (!result.canceled) {
-        alert(t('fragment.midiImportFailed') + ': ' + (result.error || '未知错误'));
+        showAlertDialog(t('fragment.midiImportFailed') + ': ' + (result.error || '未知错误'));
       }
       return;
     }
@@ -1247,7 +1248,7 @@ document.getElementById('btn-import-midi').addEventListener('click', async () =>
     render();
     scheduleAutoSave();
   } catch (err) {
-    alert(t('fragment.midiImportFailed') + ': ' + err.message);
+    showAlertDialog(t('fragment.midiImportFailed') + ': ' + err.message);
   }
 });
 
@@ -1400,7 +1401,7 @@ async function playFragment() {
     }
   } catch (error) {
     console.error(t('fragment.synthesisFailed') + ':', error);
-    alert(t('fragment.synthesisFailed') + ': ' + error.message);
+    showAlertDialog(t('fragment.synthesisFailed') + ': ' + error.message);
   } finally {
     fragmentIsSynthesizing = false;
     updateFragmentPlayButton();
@@ -1598,7 +1599,7 @@ async function exportFragment() {
     }
   } catch (error) {
     console.error(t('fragment.exportFailed') + ':', error);
-    alert(t('fragment.exportFailed') + ': ' + error.message);
+    showAlertDialog(t('fragment.exportFailed') + ': ' + error.message);
   } finally {
     btnExportFragment.disabled = false;
     btnExportFragment.textContent = originalText;

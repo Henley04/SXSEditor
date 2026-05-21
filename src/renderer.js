@@ -3,6 +3,7 @@ import { TrackManager } from './editor/trackManager.js';
 import { encodeWav } from './audio/wavEncoder.js';
 import { HistoryManager } from './editor/historyManager.js';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
+import { showAlertDialog } from './alertDialog.js';
 
 const trackManager = new TrackManager();
 const history = new HistoryManager();
@@ -310,7 +311,7 @@ function showSingerSelectDialog(singerId) {
     if (window.electronAPI?.openSingerCreator) {
       window.electronAPI.openSingerCreator();
     } else {
-      alert(t('main.singerCreatorNotImplemented'));
+      showAlertDialog(t('main.singerCreatorNotImplemented'));
     }
   });
 
@@ -606,7 +607,7 @@ timeSigDen.addEventListener('change', updateProjectSettings);
 btnPlay.addEventListener('click', async () => {
   const fragments = trackManager.getFragments();
   if (fragments.length === 0) {
-    alert(t('main.noFragmentsToPlay'));
+    showAlertDialog(t('main.noFragmentsToPlay'));
     return;
   }
   if (isSynthesizing) {
@@ -798,7 +799,7 @@ async function playAll() {
 
     const singerIds = [...fragmentsBySinger.keys()];
     if (singerIds.length === 0) {
-      alert(t('main.noFragmentsToPlay'));
+      showAlertDialog(t('main.noFragmentsToPlay'));
       return;
     }
 
@@ -854,7 +855,7 @@ async function playAll() {
     }
 
     if (singerDataMap.size === 0) {
-      alert(t('main.noNotesToPlay'));
+      showAlertDialog(t('main.noNotesToPlay'));
       return;
     }
 
@@ -917,7 +918,7 @@ async function playAll() {
 
   } catch (error) {
     console.error('合成失败:', error);
-    alert(t('main.synthesisFailed') + ': ' + error.message);
+    showAlertDialog(t('main.synthesisFailed') + ': ' + error.message);
     timeDisplay.textContent = formatTime(0);
   } finally {
     isSynthesizing = false;
@@ -1340,7 +1341,7 @@ btnLoad.addEventListener('click', async () => {
           const projVersion = obj.version.split('.').map(Number);
           const currentVersion = [1, 1, 0];
           if (projVersion[0] > currentVersion[0]) {
-            alert(t('main.projectVersionTooHigh', { version: obj.version }));
+            showAlertDialog(t('main.projectVersionTooHigh', { version: obj.version }));
             return;
           }
           if (projVersion[0] < currentVersion[0] || projVersion[1] < currentVersion[1]) {
@@ -1404,7 +1405,7 @@ btnLoad.addEventListener('click', async () => {
       }
     } catch (err) {
       console.error('加载失败', err);
-      alert(t('main.projectLoadFailed') + ': ' + (err.message || ''));
+      showAlertDialog(t('main.projectLoadFailed') + ': ' + (err.message || ''));
     }
   } else {
     console.log('加载功能待实现（需要 electronAPI）');
@@ -1414,7 +1415,7 @@ btnLoad.addEventListener('click', async () => {
 btnExport.addEventListener('click', async () => {
   const fragments = trackManager.getFragments();
   if (fragments.length === 0) {
-    alert(t('main.noFragmentsToExport'));
+    showAlertDialog(t('main.noFragmentsToExport'));
     return;
   }
 
@@ -1455,7 +1456,7 @@ btnExport.addEventListener('click', async () => {
 
     const singerIds = Object.keys(allNotesBySinger);
     if (singerIds.length === 0) {
-      alert(t('main.noNotesToExport'));
+      showAlertDialog(t('main.noNotesToExport'));
       return;
     }
 
@@ -1539,7 +1540,7 @@ btnExport.addEventListener('click', async () => {
 
   } catch (err) {
     console.error('导出失败', err);
-    alert(t('main.exportFailed') + ': ' + (err.message || ''));
+    showAlertDialog(t('main.exportFailed') + ': ' + (err.message || ''));
     timeDisplay.textContent = t('main.exportFailed');
   } finally {
     btnExport.disabled = false;
@@ -2159,7 +2160,7 @@ function openFragmentEditor(fragment) {
       wavBuffer,
     });
   } else {
-    alert(t('main.fragmentEditorNotImplemented'));
+    showAlertDialog(t('main.fragmentEditorNotImplemented'));
   }
 }
 
@@ -2598,7 +2599,7 @@ async function handleAudioToMidi() {
       ac.close();
     } catch (decodeErr) {
       console.error('音频解码失败:', decodeErr);
-      alert(t('main.audioToMidiDecodeFailed') + ': ' + decodeErr.message);
+      showAlertDialog(t('main.audioToMidiDecodeFailed') + ': ' + decodeErr.message);
       return;
     }
 
@@ -2649,14 +2650,14 @@ async function handleAudioToMidi() {
     } catch (err) {
       hideLoadingOverlay(loading);
       console.error('音频转MIDI失败:', err);
-      alert(t('main.audioToMidiFailed') + ': ' + err.message);
+      showAlertDialog(t('main.audioToMidiFailed') + ': ' + err.message);
       return;
     }
 
     hideLoadingOverlay(loading);
 
     if (midiNotes.length === 0) {
-      alert(t('main.audioToMidiFailed') + ': no notes extracted');
+      showAlertDialog(t('main.audioToMidiFailed') + ': no notes extracted');
       return;
     }
 
@@ -2691,10 +2692,10 @@ async function handleAudioToMidi() {
     selectedSingerId = singer.id;
     refreshAll();
 
-    alert(t('main.audioToMidiComplete'));
+    showAlertDialog(t('main.audioToMidiComplete'));
   } catch (err) {
     console.error('音频转MIDI流程错误:', err);
-    alert(t('main.audioToMidiFailed') + ': ' + err.message);
+    showAlertDialog(t('main.audioToMidiFailed') + ': ' + err.message);
   }
 }
 
