@@ -3,13 +3,8 @@
  * 支持关键帧编辑，音量和声像控制
  */
 
-function debounce(fn, ms) {
-  let timer = null;
-  return function(...args) {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => { timer = null; fn.apply(this, args); }, ms);
-  };
-}
+import { debounce } from '../utils/debounce.js';
+import { smoothstep } from '../utils/smoothstep.js';
 
 class EnvelopeEditor {
   constructor(canvas, options = {}) {

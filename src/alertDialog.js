@@ -8,10 +8,7 @@
  */
 
 import { t } from './i18n/index.js';
-
-function escapeHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+import { escapeHtml } from './utils/escapeHtml.js';
 
 /**
  * 显示非阻塞的 alert 对话框

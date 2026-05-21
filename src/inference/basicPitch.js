@@ -1,5 +1,6 @@
 const path = require('node:path');
 const tf = require('@tensorflow/tfjs');
+const { resampleAudio } = require('../utils/resampleAudio');
 
 const BASIC_PITCH_SAMPLE_RATE = 22050;
 const CONTOUR_BINS_PER_SEMITONE = 1;
@@ -474,7 +475,7 @@ class BasicPitchDetector {
     }
 
     const resampledAudio = sampleRate !== BASIC_PITCH_SAMPLE_RATE
-      ? this.resampleAudio(audioData, sampleRate, BASIC_PITCH_SAMPLE_RATE)
+      ? resampleAudio(audioData, sampleRate, BASIC_PITCH_SAMPLE_RATE)
       : audioData;
 
     const wavSamples = tf.concat1d([
