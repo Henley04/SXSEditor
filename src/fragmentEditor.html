@@ -1,12 +1,12 @@
 <!doctype html>
-<html>
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <title data-i18n="fragment.title">分片编辑</title>
   </head>
   <body>
     <div id="app">
-      <div id="model-loading-overlay">
+      <div id="model-loading-overlay" role="alert" aria-live="polite">
         <div class="loading-content">
           <div class="loading-spinner"></div>
           <div class="loading-text" data-i18n="fragment.loadingModel">正在加载推理模型，请稍候...</div>
@@ -45,26 +45,26 @@
         </div>
         <div class="toolbar-spacer"></div>
         <div class="toolbar-group">
-          <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)">⌨</button>
+          <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)" aria-label="快捷键帮助">⌨</button>
         </div>
       </div>
       <div id="main-content">
         <div id="left-sidebar">
           <div id="piano-keys-container">
-            <canvas id="piano-keys"></canvas>
+            <canvas id="piano-keys" role="img" aria-label="钢琴键盘"></canvas>
           </div>
         </div>
         <div id="right-content">
           <div id="piano-roll-container">
-            <canvas id="piano-roll"></canvas>
+            <canvas id="piano-roll" role="img" aria-label="钢琴卷帘编辑器"></canvas>
           </div>
         </div>
       </div>
-      <div id="shortcuts-overlay" class="shortcuts-overlay">
+      <div id="shortcuts-overlay" class="shortcuts-overlay" role="dialog" aria-modal="true">
         <div class="shortcuts-panel">
           <div class="shortcuts-header">
             <span data-i18n="fragment.shortcuts">快捷键</span>
-            <button id="btn-close-shortcuts" class="btn-close-shortcuts">✕</button>
+            <button id="btn-close-shortcuts" class="btn-close-shortcuts" aria-label="关闭">✕</button>
           </div>
           <div class="shortcuts-body">
             <div class="shortcut-section">

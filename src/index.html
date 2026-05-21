@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
     <title>SXSEditor</title>
@@ -41,21 +41,21 @@
         <div id="singer-panel">
           <div id="singer-panel-header">
             <span data-i18n="main.singer">歌手</span>
-            <button id="btn-add-singer">+</button>
+            <button id="btn-add-singer" aria-label="添加">+</button>
           </div>
-          <div id="singer-list"></div>
+          <div id="singer-list" role="list"></div>
         </div>
         <div id="fragment-timeline">
           <div id="fragment-header">
             <span data-i18n="main.fragmentTimeline">分片时间轴</span>
             <span id="fragment-tools">
-              <button id="btn-fragment-zoom-in">+</button>
-              <button id="btn-fragment-zoom-out">-</button>
+              <button id="btn-fragment-zoom-in" aria-label="放大">+</button>
+              <button id="btn-fragment-zoom-out" aria-label="缩小">-</button>
             </span>
           </div>
           <div id="fragment-canvas-container">
-            <canvas id="fragment-canvas"></canvas>
-            <canvas id="fragment-playhead-canvas"></canvas>
+            <canvas id="fragment-canvas" role="img" aria-label="分片时间轴"></canvas>
+            <canvas id="fragment-playhead-canvas" role="img" aria-label="播放指针"></canvas>
           </div>
         </div>
       </div>

@@ -1695,6 +1695,7 @@ function renderSingerList() {
   if (singers.length === 0) {
     const emptyItem = document.createElement('div');
     emptyItem.className = 'singer-item-empty';
+    emptyItem.setAttribute('role', 'listitem');
     const avatarDiv = document.createElement('div');
     avatarDiv.className = 'singer-avatar-empty';
     const placeholder = document.createElement('span');
@@ -1719,6 +1720,7 @@ function renderSingerList() {
   singers.forEach(singer => {
     const item = document.createElement('div');
     item.className = 'singer-item';
+    item.setAttribute('role', 'listitem');
     item.dataset.singerId = singer.id;
 
     const isEditingTrackName = editingTrackNameId === singer.id;
