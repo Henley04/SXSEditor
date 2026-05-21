@@ -605,6 +605,7 @@ async function initPianoRoll() {
         }
         this.dragStartX = x;
         this.dragStartY = y;
+        this._dragMoved = false;
       } else {
         const beats = this._snapBeats(this._xToTime(x));
         const pitch = this._yToPitch(y);
@@ -622,6 +623,7 @@ async function initPianoRoll() {
         this.dragStartX = x;
         this.dragStartY = y;
         this.dragNoteStart = { start: newNote.start, pitch: newNote.pitch, duration: newNote.duration };
+        this._dragMoved = false;
         updateMidiInfo();
       }
       this.render();
@@ -645,6 +647,12 @@ async function initPianoRoll() {
       const note = this.notes.find((n) => n.id === this.selectedNoteId);
       if (!note) return;
 
+      const dx = Math.abs(x - this.dragStartX);
+      const dy = Math.abs(y - this.dragStartY);
+      if (dx > 3 || dy > 3) {
+        this._dragMoved = true;
+      }
+
       if (this.dragMode === 'move') {
         const dxBeats = (x - this.dragStartX) / (BEAT_WIDTH * this.zoomX);
         const dyPitch = Math.round((this.dragStartY - y) / (NOTE_HEIGHT * this.zoomY));
@@ -664,12 +672,22 @@ async function initPianoRoll() {
     },
 
     _onMouseUp() {
-      if (this.dragMode) {
+      if (this.dragMode && this._dragMoved) {
         updateMidiInfo();
+      } else if (this.dragMode && !this._dragMoved) {
+        // 没有实际移动，恢复音符原始位置
+        const note = this.notes.find((n) => n.id === this.selectedNoteId);
+        if (note && this.dragNoteStart) {
+          note.start = this.dragNoteStart.start;
+          note.pitch = this.dragNoteStart.pitch;
+          note.duration = this.dragNoteStart.duration;
+          this.render();
+        }
       }
       this.dragMode = null;
       this.dragStartX = 0;
       this.dragStartY = 0;
+      this._dragMoved = false;
     },
 
     _onDoubleClick(e) {
@@ -996,6 +1014,13 @@ async function initPianoRoll() {
           ctx.textBaseline = 'middle';
           const displayText = note.lyric || midiToNoteName(note.pitch);
           ctx.fillText(displayText, x + 4, y + h / 2);
+        } else if (w > 8) {
+          ctx.fillStyle = '#ffffff';
+          ctx.font = '8px sans-serif';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          const displayText = note.lyric || midiToNoteName(note.pitch);
+          ctx.fillText(displayText, x + 2, y + h / 2);
         }
 
         ctx.fillStyle = 'rgba(255,255,255,0.5)';

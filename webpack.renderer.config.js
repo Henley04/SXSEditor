@@ -1,8 +1,12 @@
 const rules = require('./webpack.rules');
+const MiniCssExtractPlugin = require('mini-css-extract-plugin');
 
 rules.push({
   test: /\.css$/,
-  use: [{ loader: 'style-loader' }, { loader: 'css-loader' }],
+  use: [
+    MiniCssExtractPlugin.loader,
+    { loader: 'css-loader' },
+  ],
 });
 
 rules.push({
@@ -21,6 +25,11 @@ module.exports = {
   module: {
     rules,
   },
+  plugins: [
+    new MiniCssExtractPlugin({
+      filename: '[name]/style.css',
+    }),
+  ],
   resolve: {
     fallback: {
       fs: false,
