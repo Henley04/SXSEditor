@@ -17,7 +17,6 @@ const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKi
 // 分片多线程下载相关常量
 const MAX_GLOBAL_CONCURRENCY = 16;
 const MIN_FILE_SIZE_FOR_CHUNKING = 16 * 1024 * 1024; // 16MB 以下不分片
-const DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024; // 每片 8MB
 const CHUNK_META_SUFFIX = '.download.meta';
 const CHUNK_PART_SUFFIX = '.download.part';
 
@@ -105,6 +104,19 @@ function getOptimalConcurrency() {
   }
 
   return concurrency;
+}
+
+/**
+ * 根据文件大小动态计算最优分片大小
+ * 分片太小会导致 HTTP 连接开销大、性能差；分片太大会导致单片失败重传代价高
+ * 目标：分片数量控制在 4~16 之间，大文件使用更大的分片
+ */
+function getOptimalChunkSize(fileSize) {
+  const MB = 1024 * 1024;
+  if (fileSize < 64 * MB) return 16 * MB;       // 16~64MB: 16MB/片, 1~4片
+  if (fileSize < 256 * MB) return 32 * MB;      // 64~256MB: 32MB/片, 2~8片
+  if (fileSize < 1024 * MB) return 64 * MB;     // 256MB~1GB: 64MB/片, 4~16片
+  return 128 * MB;                               // >1GB: 128MB/片, 8+片
 }
 
 /**
@@ -510,19 +522,20 @@ async function downloadFileChunked(url, destPath, fileSize, options = {}) {
   const dir = path.dirname(destPath);
   fs.mkdirSync(dir, { recursive: true });
 
-  // 计算分片布局
+  // 根据文件大小动态计算分片布局
+  const chunkSize = getOptimalChunkSize(fileSize);
   const maxChunks = Math.min(
     pool ? pool.max : MAX_GLOBAL_CONCURRENCY,
-    Math.ceil(fileSize / DEFAULT_CHUNK_SIZE)
+    Math.ceil(fileSize / chunkSize)
   );
   const numChunks = Math.max(1, maxChunks);
-  const chunkSize = Math.ceil(fileSize / numChunks);
+  const actualChunkSize = Math.ceil(fileSize / numChunks);
 
   // 构建分片列表
   const chunks = [];
   for (let i = 0; i < numChunks; i++) {
-    const start = i * chunkSize;
-    const end = Math.min(start + chunkSize - 1, fileSize - 1);
+    const start = i * actualChunkSize;
+    const end = Math.min(start + actualChunkSize - 1, fileSize - 1);
     chunks.push({ index: i, start, end, completed: false });
   }
 
