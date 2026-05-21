@@ -1,3 +1,4 @@
+import './common.css';
 import './index.css';
 import { TrackManager } from './editor/trackManager.js';
 import { encodeWav } from './audio/wavEncoder.js';

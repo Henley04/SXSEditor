@@ -1,6 +1,8 @@
+import './common.css';
 import './audioPreprocess.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { showAlertDialog } from './alertDialog.js';
+import { mergePhoneme } from './utils/mergePhoneme.js';
 
 function debounce(fn, ms) {
   let timer = null;
@@ -39,58 +41,6 @@ function tokenizeLyric(text) {
     if (word) tokens.push(word);
   }
   return tokens;
-}
-
-function mergePhoneme(notes) {
-  const merged = [];
-  for (let i = 0; i < notes.length; i++) {
-    const n = notes[i];
-    const lyric = (n.lyric || '').replace('<AP>', '<SP>');
-    const isSP = !lyric.trim() || lyric === '<SP>';
-    const hasLyric = lyric.trim().length > 0 && !isSP;
-    const isSlur = n.isSlur || n.isContinuation;
-    let noteType;
-    if (!hasLyric && isSP) {
-      noteType = 1;
-    } else if (isSlur) {
-      noteType = 3;
-    } else {
-      noteType = 2;
-    }
-    if (
-      i > 0 &&
-      merged.length > 0 &&
-      isSP &&
-      !merged[merged.length - 1].hasLyric &&
-      merged[merged.length - 1].isSP &&
-      noteType === merged[merged.length - 1].noteType &&
-      n.pitch === merged[merged.length - 1].pitch
-    ) {
-      merged[merged.length - 1].duration += n.duration;
-    } else {
-      merged.push({
-        lyric: isSP ? '<SP>' : lyric,
-        pitch: n.pitch,
-        duration: n.duration,
-        start: n.start,
-        id: n.id,
-        isSlur: isSlur,
-        isContinuation: n.isContinuation,
-        hasLyric: hasLyric,
-        isSP: isSP,
-        noteType: noteType,
-      });
-    }
-  }
-  return merged.map(m => ({
-    lyric: m.isSP ? '' : m.lyric,
-    pitch: m.pitch,
-    duration: m.duration,
-    start: m.start,
-    id: m.id,
-    isSlur: m.isSlur,
-    isContinuation: m.isContinuation,
-  }));
 }
 
 function buildSingerFields(notes) {
@@ -1247,8 +1197,6 @@ function updateInlineInputPosition(roll) {
 }
 
 function showPromptDialog(title, defaultValue, onConfirm) {
-  const escapeHtml = (str) => str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position: fixed;
@@ -1273,44 +1221,60 @@ function showPromptDialog(title, defaultValue, onConfirm) {
     color: #fff;
   `;
 
-  dialog.innerHTML = `
-    <div style="margin-bottom: 12px; font-weight: 600;">${escapeHtml(title)}</div>
-    <input type="text" id="prompt-input" value="${escapeHtml(defaultValue || '')}" style="
-      width: 100%;
-      padding: 8px;
-      background: #1e1e1e;
-      border: 1px solid #555;
-      border-radius: 4px;
-      color: #fff;
-      margin-bottom: 12px;
-      box-sizing: border-box;
-    "/>
-    <div style="display: flex; gap: 8px; justify-content: flex-end;">
-      <button id="prompt-cancel" style="
-        padding: 6px 16px;
-        background: #3c3c3c;
-        border: 1px solid #555;
-        border-radius: 4px;
-        color: #fff;
-        cursor: pointer;
-      ">${t('common.cancel')}</button>
-      <button id="prompt-ok" style="
-        padding: 6px 16px;
-        background: #3498db;
-        border: none;
-        border-radius: 4px;
-        color: #fff;
-        cursor: pointer;
-      ">${t('common.confirm')}</button>
-    </div>
+  const titleDiv = document.createElement('div');
+  titleDiv.style.cssText = 'margin-bottom: 12px; font-weight: 600;';
+  titleDiv.textContent = title;
+  dialog.appendChild(titleDiv);
+
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.id = 'prompt-input';
+  input.value = defaultValue || '';
+  input.style.cssText = `
+    width: 100%;
+    padding: 8px;
+    background: #1e1e1e;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #fff;
+    margin-bottom: 12px;
+    box-sizing: border-box;
   `;
+  dialog.appendChild(input);
+
+  const btnRow = document.createElement('div');
+  btnRow.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
+
+  const cancelBtn = document.createElement('button');
+  cancelBtn.id = 'prompt-cancel';
+  cancelBtn.style.cssText = `
+    padding: 6px 16px;
+    background: #3c3c3c;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+  `;
+  cancelBtn.textContent = t('common.cancel');
+
+  const okBtn = document.createElement('button');
+  okBtn.id = 'prompt-ok';
+  okBtn.style.cssText = `
+    padding: 6px 16px;
+    background: #3498db;
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+  `;
+  okBtn.textContent = t('common.confirm');
+
+  btnRow.appendChild(cancelBtn);
+  btnRow.appendChild(okBtn);
+  dialog.appendChild(btnRow);
 
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
-
-  const input = dialog.querySelector('#prompt-input');
-  const cancelBtn = dialog.querySelector('#prompt-cancel');
-  const okBtn = dialog.querySelector('#prompt-ok');
 
   const close = (value) => {
     document.body.removeChild(overlay);
@@ -1338,12 +1302,20 @@ function showLoading(text = t('preprocess.processing')) {
 
   const overlay = document.createElement('div');
   overlay.className = 'loading-overlay';
-  overlay.innerHTML = `
-    <div class="loading-content">
-      <div class="loading-spinner"></div>
-      <div class="loading-text">${text}</div>
-    </div>
-  `;
+
+  const content = document.createElement('div');
+  content.className = 'loading-content';
+
+  const spinner = document.createElement('div');
+  spinner.className = 'loading-spinner';
+  content.appendChild(spinner);
+
+  const textEl = document.createElement('div');
+  textEl.className = 'loading-text';
+  textEl.textContent = text;
+  content.appendChild(textEl);
+
+  overlay.appendChild(content);
   document.body.appendChild(overlay);
   return overlay;
 }
@@ -1364,7 +1336,7 @@ async function extractF0AndPitch() {
 
   try {
     const channelData = wavAudioBuffer.getChannelData(0);
-    const audioData = Array.from(channelData);
+    const audioData = channelData.buffer;
 
     const result = await window.electronAPI.extractF0({
       audioData: audioData,
@@ -1419,7 +1391,7 @@ async function extractF0BasicPitch() {
 
   try {
     const channelData = wavAudioBuffer.getChannelData(0);
-    const audioData = Array.from(channelData);
+    const audioData = channelData.buffer;
 
     const result = await window.electronAPI.extractF0BasicPitch({
       audioData: audioData,
@@ -1474,67 +1446,6 @@ async function extractF0BasicPitch() {
   } finally {
     hideLoading(loading);
   }
-}
-
-async function simulateF0AndPitchExtraction() {
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-
-  const sampleCount = Math.floor(wavDuration * 100);
-  const f0Array = [];
-  for (let i = 0; i < sampleCount; i++) {
-    const time = i / 100;
-    if (time >= wavDuration) break;
-    const baseFreq = 220 + Math.sin(time * 2) * 100;
-    f0Array.push({ time: time, f0: time < 0.5 || time > wavDuration - 0.5 ? 0 : baseFreq });
-  }
-  f0Data = f0Array;
-
-  const notes = [];
-  const noteNames = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
-  const f0ToMidi = (f0) => {
-    if (f0 <= 0) return 0;
-    return Math.round(69 + 12 * Math.log2(f0 / 440));
-  };
-
-  let currentTime = 0;
-  const noteDuration = 0.5;
-  while (currentTime < wavDuration - noteDuration) {
-    const segment = f0Array.filter((f) => f.time >= currentTime && f.time < currentTime + noteDuration);
-    const activeF0 = segment.filter((f) => f.f0 > 0);
-
-    if (activeF0.length > segment.length * 0.5) {
-      const avgF0 = activeF0.reduce((sum, f) => sum + f.f0, 0) / activeF0.length;
-      const midiPitch = f0ToMidi(avgF0);
-      if (midiPitch >= 24 && midiPitch <= 108) {
-        notes.push({
-          id: Date.now() + Math.random(),
-          pitch: midiPitch,
-          start: currentTime / (60 / BPM),
-          duration: noteDuration / (60 / BPM),
-        });
-      }
-    }
-    currentTime += noteDuration;
-  }
-
-  if (pianoRoll) {
-    pianoRoll.notes = notes;
-    pianoRoll.render();
-    updateMidiInfo();
-  }
-
-  const fields = buildSingerFields(notes);
-  singerData = {
-    index: `vocal_${Math.floor(currentTime * 1000)}`,
-    language: 'Mandarin',
-    time: [0, Math.floor(wavDuration * 1000)],
-    duration: notes.map((n) => (n.duration * (60 / BPM)).toFixed(2)).join(' '),
-    text: fields.text,
-    phoneme: fields.phoneme,
-    note_pitch: notes.map((n) => n.pitch).join(' '),
-    note_type: fields.note_type,
-    f0: f0Array.map((f) => f.f0.toFixed(1)).join(' '),
-  };
 }
 
 async function saveSingerData() {

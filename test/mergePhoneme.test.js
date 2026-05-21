@@ -1,57 +1,5 @@
+const { mergePhoneme } = require('../src/utils/mergePhoneme');
 const { expect } = require('chai');
-
-function mergePhoneme(notes) {
-  const merged = [];
-  for (let i = 0; i < notes.length; i++) {
-    const n = notes[i];
-    const lyric = (n.lyric || '').replace('<AP>', '<SP>');
-    n.lyric = lyric;
-    const isSP = !lyric.trim() || lyric === '<SP>';
-    const hasLyric = lyric.trim().length > 0 && !isSP;
-    const isSlur = n.isSlur || n.isContinuation;
-    let noteType;
-    if (!hasLyric && isSP) {
-      noteType = 1;
-    } else if (isSlur) {
-      noteType = 3;
-    } else {
-      noteType = 2;
-    }
-    if (
-      i > 0 &&
-      merged.length > 0 &&
-      isSP &&
-      !merged[merged.length - 1].hasLyric &&
-      merged[merged.length - 1].isSP &&
-      noteType === merged[merged.length - 1].noteType &&
-      n.pitch === merged[merged.length - 1].pitch
-    ) {
-      merged[merged.length - 1].duration += n.duration;
-    } else {
-      merged.push({
-        lyric: isSP ? '<SP>' : lyric,
-        pitch: n.pitch,
-        duration: n.duration,
-        start: n.start,
-        id: n.id,
-        isSlur: isSlur,
-        isContinuation: n.isContinuation,
-        hasLyric: hasLyric,
-        isSP: isSP,
-        noteType: noteType,
-      });
-    }
-  }
-  return merged.map(m => ({
-    lyric: m.isSP ? '' : m.lyric,
-    pitch: m.pitch,
-    duration: m.duration,
-    start: m.start,
-    id: m.id,
-    isSlur: m.isSlur,
-    isContinuation: m.isContinuation,
-  }));
-}
 
 describe('mergePhoneme', () => {
   it('should merge two consecutive SP notes with same pitch', () => {
@@ -126,5 +74,56 @@ describe('mergePhoneme', () => {
   it('should handle empty input', () => {
     const result = mergePhoneme([]);
     expect(result.length).to.equal(0);
+  });
+
+  it('should set noteType=3 for slur notes', () => {
+    const notes = [
+      { pitch: 60, start: 0, duration: 0.5, lyric: 'a' },
+      { pitch: 62, start: 0.5, duration: 0.5, lyric: '', isSlur: true },
+    ];
+    const result = mergePhoneme(notes);
+    expect(result.length).to.equal(2);
+    expect(result[1].isSlur).to.be.true;
+  });
+
+  it('should set noteType=3 for continuation notes', () => {
+    const notes = [
+      { pitch: 60, start: 0, duration: 0.5, lyric: 'a' },
+      { pitch: 62, start: 0.5, duration: 0.5, lyric: '', isContinuation: true },
+    ];
+    const result = mergePhoneme(notes);
+    expect(result.length).to.equal(2);
+    expect(result[1].isContinuation).to.be.true;
+  });
+
+  it('should handle SP + lyric + slur mixed sequence', () => {
+    const notes = [
+      { pitch: 0, start: 0, duration: 0.25, lyric: '' },
+      { pitch: 0, start: 0.25, duration: 0.25, lyric: '' },
+      { pitch: 60, start: 0.5, duration: 0.5, lyric: 'a' },
+      { pitch: 62, start: 1.0, duration: 0.5, lyric: '', isSlur: true },
+    ];
+    const result = mergePhoneme(notes);
+    // 前两个 SP 音高相同应合并
+    expect(result.length).to.equal(3);
+    expect(result[0].duration).to.equal(0.5);
+    expect(result[0].lyric).to.equal('');
+    expect(result[1].lyric).to.equal('a');
+    expect(result[2].isSlur).to.be.true;
+  });
+
+  it('should preserve id and start properties after merging', () => {
+    const notes = [
+      { id: 101, pitch: 0, start: 0, duration: 0.5, lyric: '' },
+      { id: 102, pitch: 0, start: 0.5, duration: 0.5, lyric: '' },
+      { id: 103, pitch: 60, start: 1.0, duration: 0.5, lyric: 'a' },
+    ];
+    const result = mergePhoneme(notes);
+    // 合并后的 SP 保留第一个音符的 id 和 start
+    expect(result[0].id).to.equal(101);
+    expect(result[0].start).to.equal(0);
+    // 非 SP 音符保留原始 id 和 start
+    expect(result[1].id).to.equal(103);
+    expect(result[1].start).to.equal(1.0);
   });
 });

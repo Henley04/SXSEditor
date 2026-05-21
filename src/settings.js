@@ -1,3 +1,4 @@
+import './common.css';
 import './settings.css';
 import { t, initI18n, applyLocale, setLocale, getLocale } from './i18n/index.js';
 

@@ -1,29 +1,4 @@
-* {
-    box-sizing: border-box;
-}
-
-::-webkit-scrollbar {
-    width: 6px;
-}
-
-::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-::-webkit-scrollbar-thumb {
-    background: rgba(58, 58, 82, 0.6);
-    border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: rgba(74, 74, 98, 0.8);
-}
-
 body {
-    margin: 0;
-    padding: 0;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    -webkit-font-smoothing: antialiased;
     background: #14141f;
     color: #d8d8ec;
     min-height: 100vh;
@@ -35,26 +10,6 @@ body {
     margin: 0 auto;
     padding: 24px 28px;
     min-height: 100vh;
-}
-
-h2 {
-    margin: 0 0 20px 0;
-    font-size: 20px;
-    font-weight: 600;
-    color: #5b8def;
-    border-bottom: 2px solid rgba(91, 141, 239, 0.2);
-    padding-bottom: 12px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-h2::before {
-    content: '';
-    width: 4px;
-    height: 22px;
-    background: linear-gradient(180deg, #5b8def, #4a7de0);
-    border-radius: 2px;
 }
 
 /* ===== Sections ===== */
@@ -71,35 +26,6 @@ h2::before {
 .rm-section:hover {
     border-color: rgba(91, 141, 239, 0.25);
     box-shadow: 0 4px 16px rgba(91, 141, 239, 0.08);
-}
-
-.section-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: #6b9df5;
-    margin: 0 0 14px 0;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.section-title::before {
-    content: '';
-    width: 3px;
-    height: 14px;
-    background: linear-gradient(180deg, #6b9df5, #5b8def);
-    border-radius: 2px;
-}
-
-.section-desc {
-    font-size: 11px;
-    color: #5a5a72;
-    margin: -8px 0 14px 0;
-    line-height: 1.5;
-    padding-left: 11px;
-    border-left: 2px solid rgba(90, 90, 114, 0.3);
 }
 
 /* ===== Loading ===== */
@@ -537,19 +463,6 @@ h2::before {
     padding-top: 16px;
     border-top: 1px solid #2a2a3d;
     align-items: center;
-}
-
-button {
-    padding: 8px 20px;
-    font-size: 13px;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-    font-weight: 500;
-    transition: all 0.2s;
-    display: flex;
-    align-items: center;
-    gap: 6px;
 }
 
 #refreshBtn {

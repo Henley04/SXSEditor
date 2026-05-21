@@ -6,6 +6,116 @@ let downloadStartTime = 0;
 let lastOverallDownloaded = 0;
 let lastSpeedTime = 0;
 let isDownloading = false;
+let renderedFileIds = [];
+
+function createIconSvg(status) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'file-icon ' + status);
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('fill', 'none');
+  svg.setAttribute('stroke', 'currentColor');
+  svg.setAttribute('stroke-width', '2');
+  if (status === 'pending') {
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', '12'); circle.setAttribute('cy', '12'); circle.setAttribute('r', '10');
+    svg.appendChild(circle);
+  } else if (status === 'downloading') {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M21 12a9 9 0 11-6.219-8.56');
+    svg.appendChild(path);
+  } else if (status === 'complete') {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', 'M22 11.08V12a10 10 0 1 1-5.93-9.14');
+    svg.appendChild(path);
+    const polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    polyline.setAttribute('points', '22 4 12 14.01 9 11.01');
+    svg.appendChild(polyline);
+  } else if (status === 'error') {
+    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', '12'); circle.setAttribute('cy', '12'); circle.setAttribute('r', '10');
+    svg.appendChild(circle);
+    const line1 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line1.setAttribute('x1', '15'); line1.setAttribute('y1', '9'); line1.setAttribute('x2', '9'); line1.setAttribute('y2', '15');
+    svg.appendChild(line1);
+    const line2 = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line2.setAttribute('x1', '9'); line2.setAttribute('y1', '9'); line2.setAttribute('x2', '15'); line2.setAttribute('y2', '15');
+    svg.appendChild(line2);
+  }
+  return svg;
+}
+
+function getStatusText(state) {
+  if (state.status === 'pending') {
+    return t('modelDownload.pending');
+  } else if (state.status === 'downloading') {
+    const pct = state.total > 0 ? Math.round(state.downloaded / state.total * 100) : 0;
+    return `${pct}% (${formatBytes(state.downloaded)}/${formatBytes(state.total)})`;
+  } else if (state.status === 'complete') {
+    return `${t('modelDownload.complete')} (${formatBytes(state.total)})`;
+  } else if (state.status === 'error') {
+    return t('modelDownload.failed');
+  }
+  return '';
+}
+
+function buildFileItem(file, state) {
+  const item = document.createElement('div');
+  item.className = 'file-item' + (state.status === 'downloading' ? ' downloading' : '');
+  item.dataset.fileId = file.filePath;
+
+  item.appendChild(createIconSvg(state.status));
+
+  const nameSpan = document.createElement('span');
+  nameSpan.className = 'file-name';
+  nameSpan.title = file.filePath;
+  nameSpan.textContent = file.filePath;
+  item.appendChild(nameSpan);
+
+  const statusSpan = document.createElement('span');
+  statusSpan.className = 'file-status ' + state.status;
+  statusSpan.textContent = getStatusText(state);
+  item.appendChild(statusSpan);
+
+  return item;
+}
+
+function updateFileItem(item, state) {
+  item.className = 'file-item' + (state.status === 'downloading' ? ' downloading' : '');
+
+  const oldIcon = item.querySelector('.file-icon');
+  if (oldIcon) {
+    const newIcon = createIconSvg(state.status);
+    oldIcon.replaceWith(newIcon);
+  }
+
+  const statusSpan = item.querySelector('.file-status');
+  if (statusSpan) {
+    statusSpan.className = 'file-status ' + state.status;
+    statusSpan.textContent = getStatusText(state);
+  }
+}
+
+function renderFileList(forceRebuild) {
+  const container = document.getElementById('fileList');
+  const currentIds = missingFiles.map(f => f.filePath);
+
+  if (forceRebuild || currentIds.length !== renderedFileIds.length || !currentIds.every((id, i) => id === renderedFileIds[i])) {
+    container.textContent = '';
+    for (const file of missingFiles) {
+      const state = fileStates[file.filePath] || { status: 'pending', progress: 0, downloaded: 0, total: 0 };
+      container.appendChild(buildFileItem(file, state));
+    }
+    renderedFileIds = currentIds.slice();
+  } else {
+    for (const file of missingFiles) {
+      const state = fileStates[file.filePath] || { status: 'pending', progress: 0, downloaded: 0, total: 0 };
+      const item = container.querySelector(`[data-file-id="${CSS.escape(file.filePath)}"]`);
+      if (item) {
+        updateFileItem(item, state);
+      }
+    }
+  }
+}
 
 async function loadModelDir() {
   try {
@@ -24,7 +134,7 @@ function updateMissingFiles(newMissingFiles) {
     }
   }
   document.getElementById('statusText').textContent = t('modelDownload.needDownloadCount', { count: newMissingFiles.length });
-  renderFileList();
+  renderFileList(true);
 }
 
 function formatBytes(bytes) {
@@ -38,46 +148,6 @@ function formatBytes(bytes) {
 function formatSpeed(bytesPerSec) {
   if (bytesPerSec <= 0) return '';
   return formatBytes(bytesPerSec) + '/s';
-}
-
-function renderFileList() {
-  const container = document.getElementById('fileList');
-  container.innerHTML = '';
-  for (const file of missingFiles) {
-    const state = fileStates[file.filePath] || { status: 'pending', progress: 0, downloaded: 0, total: 0 };
-    const item = document.createElement('div');
-    item.className = 'file-item' + (state.status === 'downloading' ? ' downloading' : '');
-
-    let iconSvg = '';
-    if (state.status === 'pending') {
-      iconSvg = '<svg class="file-icon pending" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>';
-    } else if (state.status === 'downloading') {
-      iconSvg = '<svg class="file-icon downloading" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 11-6.219-8.56"/></svg>';
-    } else if (state.status === 'complete') {
-      iconSvg = '<svg class="file-icon complete" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
-    } else if (state.status === 'error') {
-      iconSvg = '<svg class="file-icon error" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>';
-    }
-
-    let statusText = '';
-    if (state.status === 'pending') {
-      statusText = t('modelDownload.pending');
-    } else if (state.status === 'downloading') {
-      const pct = state.total > 0 ? Math.round(state.downloaded / state.total * 100) : 0;
-      statusText = `${pct}% (${formatBytes(state.downloaded)}/${formatBytes(state.total)})`;
-    } else if (state.status === 'complete') {
-      statusText = `${t('modelDownload.complete')} (${formatBytes(state.total)})`;
-    } else if (state.status === 'error') {
-      statusText = t('modelDownload.failed');
-    }
-
-    item.innerHTML = `
-      ${iconSvg}
-      <span class="file-name" title="${file.filePath}">${file.filePath}</span>
-      <span class="file-status ${state.status}">${statusText}</span>
-    `;
-    container.appendChild(item);
-  }
 }
 
 function updateOverallProgress(overallDownloaded, overallTotal) {
@@ -105,7 +175,7 @@ window.electronAPI.onModelDownloadMissingFiles((files) => {
   document.getElementById('statusText').textContent = t('modelDownload.needDownloadCount', { count: files.length });
   document.getElementById('startBtn').style.display = 'inline-block';
   document.getElementById('closeBtn').style.display = 'inline-block';
-  renderFileList();
+  renderFileList(true);
   loadModelDir();
 });
 
@@ -125,7 +195,12 @@ window.electronAPI.onModelDownloadFileStart((data) => {
   // 统计当前正在下载的文件数
   const downloadingCount = Object.values(fileStates).filter(s => s.status === 'downloading').length;
   const completedCount = Object.values(fileStates).filter(s => s.status === 'complete').length;
-  document.getElementById('statusText').innerHTML = `<span class="spinner"></span>${t('modelDownload.downloadingMultiple', { active: downloadingCount, completed: completedCount, total: missingFiles.length })}`;
+  const statusText = document.getElementById('statusText');
+  statusText.textContent = '';
+  const spinner = document.createElement('span');
+  spinner.className = 'spinner';
+  statusText.appendChild(spinner);
+  statusText.appendChild(document.createTextNode(t('modelDownload.downloadingMultiple', { active: downloadingCount, completed: completedCount, total: missingFiles.length })));
   renderFileList();
 });
 

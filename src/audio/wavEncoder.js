@@ -4,6 +4,48 @@
  */
 
 /**
+ * WAV 编码内部实现
+ * @param {Float32Array} audioData 音频数据（单声道或交错立体声）
+ * @param {number} sampleRate 采样率
+ * @param {number} numChannels 声道数（1 或 2）
+ * @returns {Uint8Array} WAV 文件数据
+ */
+function _encodeWavBase(audioData, sampleRate, numChannels) {
+  const bitsPerSample = 32;
+  const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
+  const blockAlign = (numChannels * bitsPerSample) / 8;
+  const dataSize = audioData.length * 4;
+  const buffer = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buffer);
+
+  function writeString(offset, string) {
+    for (let i = 0; i < string.length; i++) {
+      view.setUint8(offset + i, string.charCodeAt(i));
+    }
+  }
+
+  writeString(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeString(8, 'WAVE');
+  writeString(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 3, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+  writeString(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  for (let i = 0; i < audioData.length; i++) {
+    view.setFloat32(44 + i * 4, audioData[i], true);
+  }
+
+  return new Uint8Array(buffer);
+}
+
+/**
  * 将 Float32Array 编码为 WAV 文件的 Uint8Array
  * @param {Float32Array} float32Array 单声道音频数据，范围 [-1, 1]
  * @param {number} sampleRate 采样率（如 24000）
@@ -11,76 +53,13 @@
  */
 function encodeWav(float32Array, sampleRate, numChannels = 1) {
   if (numChannels === 2 && float32Array instanceof Float32Array && float32Array.length % 2 === 0) {
-    return encodeWavStereo(float32Array, sampleRate);
+    return _encodeWavBase(float32Array, sampleRate, 2);
   }
-  const bitsPerSample = 32;
-  const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
-  const blockAlign = (numChannels * bitsPerSample) / 8;
-  const dataSize = float32Array.length * 4;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-
-  function writeString(offset, string) {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
-    }
-  }
-
-  writeString(0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 3, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitsPerSample, true);
-  writeString(36, 'data');
-  view.setUint32(40, dataSize, true);
-
-  for (let i = 0; i < float32Array.length; i++) {
-    view.setFloat32(44 + i * 4, float32Array[i], true);
-  }
-
-  return new Uint8Array(buffer);
+  return _encodeWavBase(float32Array, sampleRate, numChannels);
 }
 
 function encodeWavStereo(interleavedStereo, sampleRate) {
-  const numChannels = 2;
-  const bitsPerSample = 32;
-  const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
-  const blockAlign = (numChannels * bitsPerSample) / 8;
-  const dataSize = interleavedStereo.length * 4;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-
-  function writeString(offset, string) {
-    for (let i = 0; i < string.length; i++) {
-      view.setUint8(offset + i, string.charCodeAt(i));
-    }
-  }
-
-  writeString(0, 'RIFF');
-  view.setUint32(4, 36 + dataSize, true);
-  writeString(8, 'WAVE');
-  writeString(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 3, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitsPerSample, true);
-  writeString(36, 'data');
-  view.setUint32(40, dataSize, true);
-
-  for (let i = 0; i < interleavedStereo.length; i++) {
-    view.setFloat32(44 + i * 4, interleavedStereo[i], true);
-  }
-
-  return new Uint8Array(buffer);
+  return _encodeWavBase(interleavedStereo, sampleRate, 2);
 }
 
 function applyEnvelopesToAudio(monoAudio, sampleRate, bpm, volumeEnvelope, panEnvelope) {

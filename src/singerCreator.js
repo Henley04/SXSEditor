@@ -1,3 +1,4 @@
+import './common.css';
 import './singerCreator.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { showAlertDialog } from './alertDialog.js';
@@ -508,10 +509,9 @@ function updatePreview() {
   }
 }
 
-window.updatePreprocessStatus = (status) => {
-  isPreprocessed = status;
-  updatePreview();
-};
+// TODO: 如果未来需要从主进程通知预处理状态变化，应在 preload.js 中添加
+// onPreprocessStatus IPC 通道（类似 onPreprocessDataSaved），并在 main.js 中
+// 使用 webContents.send('preprocessStatus', status) 替代 executeJavaScript
 
 if (window.electronAPI && window.electronAPI.onPreprocessDataSaved) {
   preprocessDataSavedCleanup = window.electronAPI.onPreprocessDataSaved((result) => {

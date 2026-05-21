@@ -1,3 +1,4 @@
+import './common.css';
 import './resourceManager.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 
@@ -480,7 +481,7 @@ async function autoRefresh() {
 
 function startAutoRefresh() {
     stopAutoRefresh();
-    autoRefreshTimer = setInterval(autoRefresh, 5000);
+    autoRefreshTimer = setInterval(autoRefresh, 30000);
 }
 
 function stopAutoRefresh() {
