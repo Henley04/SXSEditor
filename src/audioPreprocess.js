@@ -903,10 +903,11 @@ async function initPianoRoll() {
         ctx.fillStyle = '#ff6b6b88';
         ctx.beginPath();
         let fillStarted = false;
+        let fillLastX = -1;
         for (const frame of this.f0Data) {
           if (frame.f0 <= 0) {
             if (fillStarted) {
-              ctx.lineTo(lastVisibleX, f0AreaBottom);
+              ctx.lineTo(fillLastX, f0AreaBottom);
               ctx.closePath();
               ctx.fill();
               ctx.beginPath();
@@ -927,10 +928,10 @@ async function initPianoRoll() {
           } else {
             ctx.lineTo(x, y);
           }
-          lastVisibleX = x;
+          fillLastX = x;
         }
         if (fillStarted) {
-          ctx.lineTo(lastVisibleX, f0AreaBottom);
+          ctx.lineTo(fillLastX, f0AreaBottom);
           ctx.closePath();
           ctx.fill();
         }
@@ -1246,6 +1247,8 @@ function updateInlineInputPosition(roll) {
 }
 
 function showPromptDialog(title, defaultValue, onConfirm) {
+  const escapeHtml = (str) => str.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position: fixed;
@@ -1271,8 +1274,8 @@ function showPromptDialog(title, defaultValue, onConfirm) {
   `;
 
   dialog.innerHTML = `
-    <div style="margin-bottom: 12px; font-weight: 600;">${title}</div>
-    <input type="text" id="prompt-input" value="${defaultValue || ''}" style="
+    <div style="margin-bottom: 12px; font-weight: 600;">${escapeHtml(title)}</div>
+    <input type="text" id="prompt-input" value="${escapeHtml(defaultValue || '')}" style="
       width: 100%;
       padding: 8px;
       background: #1e1e1e;
@@ -1540,20 +1543,28 @@ async function saveSingerData() {
     return;
   }
 
-  if (!singerData && pianoRoll && pianoRoll.notes.length > 0) {
-    const fields = buildSingerFields(pianoRoll.notes);
-    singerData = {
-      index: `vocal_${Math.floor(wavDuration * 1000)}`,
-      language: 'Mandarin',
-      time: [0, Math.floor(wavDuration * 1000)],
-      duration: pianoRoll.notes.map((n) => (n.duration * (60 / BPM)).toFixed(2)).join(' '),
-      text: fields.text,
-      phoneme: fields.phoneme,
-      note_pitch: pianoRoll.notes.map((n) => n.pitch).join(' '),
-      note_type: fields.note_type,
-      f0: f0Data ? f0Data.map((f) => f.f0.toFixed(1)).join(' ') : '',
-    };
+  const currentNotes = pianoRoll ? pianoRoll.notes : [];
+  const hasNotes = currentNotes.length > 0;
+  const hasF0 = f0Data && f0Data.length > 0;
+
+  if (!hasNotes && !hasF0) {
+    alert(t('preprocess.noDataToSave'));
+    return;
   }
+
+  // 始终根据当前pianoRoll音符和F0数据重新构建singerData，确保编辑后的变更被保存
+  const fields = buildSingerFields(currentNotes);
+  singerData = {
+    index: `vocal_${Math.floor(wavDuration * 1000)}`,
+    language: 'Mandarin',
+    time: [0, Math.floor(wavDuration * 1000)],
+    duration: currentNotes.map((n) => (n.duration * (60 / BPM)).toFixed(2)).join(' '),
+    text: fields.text,
+    phoneme: fields.phoneme,
+    note_pitch: currentNotes.map((n) => n.pitch).join(' '),
+    note_type: fields.note_type,
+    f0: hasF0 ? f0Data.map((f) => f.f0.toFixed(1)).join(' ') : '',
+  };
 
   const loading = showLoading(t('preprocess.savingPreprocessData'));
 
@@ -1604,7 +1615,12 @@ function trimLeadingSilence(audioBuffer, threshold = 0.01) {
 async function processWavBuffer(buffer) {
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 44100 });
 
-  const audioBuffer = await audioCtx.decodeAudioData(buffer.slice(0));
+  let audioBuffer;
+  try {
+    audioBuffer = await audioCtx.decodeAudioData(buffer.slice(0));
+  } finally {
+    audioCtx.close();
+  }
   const originalSampleRate = audioBuffer.sampleRate;
   const originalChannels = audioBuffer.numberOfChannels;
   const originalDuration = audioBuffer.duration;

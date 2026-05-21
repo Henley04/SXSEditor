@@ -514,6 +514,8 @@ window.updatePreprocessStatus = (status) => {
 
 if (window.electronAPI && window.electronAPI.onPreprocessDataSaved) {
   preprocessDataSavedCleanup = window.electronAPI.onPreprocessDataSaved((result) => {
+    // 只有当WAV文件存在时才接受预处理数据，防止清除WAV后预处理窗口仍回调覆盖状态
+    if (!wavFileBuffer) return;
     preprocessResult = result;
     isPreprocessed = true;
     updatePreview();

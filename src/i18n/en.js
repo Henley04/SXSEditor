@@ -223,6 +223,7 @@ export default {
     midiExtractionComplete: 'MIDI note extraction complete (Basic Pitch model)',
     extractionFailed: 'Extraction failed',
     noAudioToSave: 'No audio data to save',
+    noDataToSave: 'Please extract F0 or MIDI notes before saving',
     savingPreprocessData: 'Saving preprocessed data...',
     preprocessSaveSuccess: 'Preprocessed data saved successfully!',
     saveFailed: 'Save failed',
