@@ -633,4 +633,15 @@ class BasicPitchDetector {
   }
 }
 
-module.exports = { BasicPitchDetector, BASIC_PITCH_SAMPLE_RATE };
+module.exports = {
+  BasicPitchDetector,
+  BASIC_PITCH_SAMPLE_RATE,
+  midiToHz,
+  hzToMidi,
+  gaussian,
+  argMax,
+  argMaxAxis1,
+  whereGreaterThanAxis1,
+  meanStdDev,
+  globalMax,
+};
