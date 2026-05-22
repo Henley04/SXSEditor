@@ -1419,7 +1419,7 @@ class OnnxSVSPipeline {
             }
         }
 
-        return Array.from(output);
+        return output;
     }
 
     _hashArray(arr) {
@@ -1620,43 +1620,42 @@ class OnnxSVSPipeline {
                 const uncondPred = await this._runDiffStep(xtTargetBuf, tVal, uncondCondBuf, targetMask, totalFrames);
 
                 const targetLen = totalFrames * MEL_DIM;
+                // Single pass: compute conditional mean, CFG prediction, and CFG mean
                 let posSum = 0;
-                for (let f = 0; f < totalFrames; f++) {
-                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        posSum += predData[tgtOffset + d];
-                    }
-                }
-                const posMean = posSum / targetLen;
-                let posVarSum = 0;
-                for (let f = 0; f < totalFrames; f++) {
-                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        const diff = predData[tgtOffset + d] - posMean;
-                        posVarSum += diff * diff;
-                    }
-                }
-                const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
-
                 let cfgAdjSum = 0;
                 for (let f = 0; f < totalFrames; f++) {
+                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
                     for (let d = 0; d < MEL_DIM; d++) {
-                        const condVal = predData[(ptFrameCount + f) * MEL_DIM + d];
+                        const condVal = predData[tgtOffset + d];
                         const uncondVal = uncondPred[f * MEL_DIM + d];
+                        posSum += condVal;
                         const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
                         cfgPredBuf[f * MEL_DIM + d] = cfgVal;
                         cfgAdjSum += cfgVal;
                     }
                 }
+                const posMean = posSum / targetLen;
                 const cfgAdjMean = cfgAdjSum / targetLen;
+
+                // Second pass: compute variances
+                let posVarSum = 0;
                 let cfgAdjVarSum = 0;
-                for (let i = 0; i < targetLen; i++) {
-                    const diff = cfgPredBuf[i] - cfgAdjMean;
-                    cfgAdjVarSum += diff * diff;
+                for (let f = 0; f < totalFrames; f++) {
+                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const condVal = predData[tgtOffset + d];
+                        const diff1 = condVal - posMean;
+                        posVarSum += diff1 * diff1;
+                        const cfgVal = cfgPredBuf[f * MEL_DIM + d];
+                        const diff2 = cfgVal - cfgAdjMean;
+                        cfgAdjVarSum += diff2 * diff2;
+                    }
                 }
+                const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
                 const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
                 const rescale = posStd / (cfgAdjStd + 1e-8);
 
+                // Third pass: apply rescaled CFG
                 for (let f = 0; f < totalFrames; f++) {
                     for (let d = 0; d < MEL_DIM; d++) {
                         const cfgVal = cfgPredBuf[f * MEL_DIM + d];

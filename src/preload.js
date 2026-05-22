@@ -10,9 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   authorizePath: (filePath) => ipcRenderer.invoke('file:authorizePath', filePath),
   openFragmentEditor: (data) => ipcRenderer.invoke('openFragmentEditor', data),
   saveFragmentData: (fragmentId, data) => ipcRenderer.invoke('saveFragmentData', fragmentId, data),
-  // TODO: 将 saveFragmentDataSync 改为异步 ipcRenderer.invoke 以避免阻塞渲染进程
-  // 需要同步修改 main.js 中对应的 ipcMain.on 为 ipcMain.handle
-  saveFragmentDataSync: (fragmentId, data) => ipcRenderer.sendSync('saveFragmentDataSync', fragmentId, data),
+  saveFragmentDataSync: (fragmentId, data) => ipcRenderer.invoke('saveFragmentDataSync', fragmentId, data),
   getFragmentData: (fragmentId) => ipcRenderer.invoke('getFragmentData', fragmentId),
   onFragmentSaved: (callback) => {
     const handler = (event, data) => callback(data);

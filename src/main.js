@@ -774,6 +774,13 @@ app.on('second-instance', () => {
 app.whenReady().then(async () => {
   loadMainLocale();
   createWindow();
+  // 预加载GPU设备枚举，避免首次设置页面打开时阻塞
+  enumerateDMLDevices(getModelDir()).then(devices => {
+    cachedDMLDevices = devices;
+    console.log(`[Main] GPU设备预加载完成: ${devices.length} 个设备`);
+  }).catch(err => {
+    console.warn('[Main] GPU设备预加载失败:', err.message);
+  });
   await checkAndDownloadModels();
 
   app.on('activate', () => {
@@ -1064,7 +1071,7 @@ ipcMain.handle('getFragmentData', async (event, fragmentId) => {
   return pendingFragmentData[fragmentId] || null;
 });
 
-ipcMain.on('saveFragmentDataSync', (event, fragmentId, data) => {
+ipcMain.handle('saveFragmentDataSync', async (event, fragmentId, data) => {
   try {
     if (fragmentWindows[fragmentId]) {
       fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
@@ -1072,10 +1079,10 @@ ipcMain.on('saveFragmentDataSync', (event, fragmentId, data) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('fragmentDataSaved', { fragmentId, ...data });
     }
-    event.returnValue = true;
+    return true;
   } catch (err) {
-    console.error('[Main] 同步保存片段数据失败:', err);
-    event.returnValue = false;
+    console.error('[Main] 保存片段数据失败:', err);
+    return false;
   }
 });
 
