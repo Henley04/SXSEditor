@@ -797,6 +797,7 @@ app.on('before-quit', () => {
   if (rmvpeDetector) { try { rmvpeDetector.dispose(); } catch (_) {} rmvpeDetector = null; }
   if (basicPitchDetector) { try { basicPitchDetector.dispose(); } catch (_) {} basicPitchDetector = null; }
   if (_audioManager) { try { _audioManager.stop(); } catch (_) {} }
+  if (_fragmentAudioManager) { try { _fragmentAudioManager.stop(); } catch (_) {} }
   for (const id in fragmentWindows) {
     if (fragmentWindows[id] && !fragmentWindows[id].isDestroyed()) {
       fragmentWindows[id].destroy();
@@ -1534,6 +1535,7 @@ ipcMain.handle('midi:import', async () => {
 });
 
 let _audioManager = null;
+let _fragmentAudioManager = null;
 
 function getAudioManager() {
   if (!_audioManager) {
@@ -1542,10 +1544,33 @@ function getAudioManager() {
   return _audioManager;
 }
 
+function getFragmentAudioManager() {
+  if (!_fragmentAudioManager) {
+    _fragmentAudioManager = new AudioOutputManager();
+  }
+  return _fragmentAudioManager;
+}
+
+function _getAudioManagerForSender(event) {
+  // 片段编辑器窗口使用独立的 manager
+  const senderWin = BrowserWindow.fromWebContents(event.sender);
+  if (senderWin) {
+    for (const id in fragmentWindows) {
+      if (fragmentWindows[id] === senderWin) {
+        return getFragmentAudioManager();
+      }
+    }
+  }
+  return getAudioManager();
+}
+
 ipcMain.handle('audio:getDevices', async () => {
   try {
-    const devices = await AudioOutputManager.getDevices();
-    return { success: true, devices, isAvailable: AudioOutputManager.isAvailable() };
+    const [devices, isAvailable] = await Promise.all([
+      AudioOutputManager.getDevices(),
+      AudioOutputManager.isAvailable(),
+    ]);
+    return { success: true, devices, isAvailable };
   } catch (err) {
     console.error('[Main] 获取音频设备失败:', err);
     return { success: false, devices: [], isAvailable: false, error: err.message };
@@ -1554,9 +1579,8 @@ ipcMain.handle('audio:getDevices', async () => {
 
 ipcMain.handle('audio:play', async (event, { audioData, options }) => {
   try {
-    const manager = getAudioManager();
-    const float32Data = audioData instanceof Float32Array ? audioData : new Float32Array(audioData);
-    const result = await manager.start(float32Data, options);
+    const manager = _getAudioManagerForSender(event);
+    const result = await manager.start(audioData, options);
 
     manager.onEnded(() => {
       try {
@@ -1573,10 +1597,10 @@ ipcMain.handle('audio:play', async (event, { audioData, options }) => {
   }
 });
 
-ipcMain.handle('audio:stop', async () => {
+ipcMain.handle('audio:stop', async (event) => {
   try {
-    const manager = getAudioManager();
-    manager.stop();
+    const manager = _getAudioManagerForSender(event);
+    await manager.stop();
     return { success: true };
   } catch (err) {
     console.error('[Main] 音频停止失败:', err);
@@ -1584,9 +1608,9 @@ ipcMain.handle('audio:stop', async () => {
   }
 });
 
-ipcMain.handle('audio:getPosition', async () => {
+ipcMain.handle('audio:getPosition', async (event) => {
   try {
-    const manager = getAudioManager();
+    const manager = _getAudioManagerForSender(event);
     if (manager.isPlaying()) {
       return { success: true, position: manager.getPosition(), duration: manager.getDuration() };
     }
@@ -1597,7 +1621,8 @@ ipcMain.handle('audio:getPosition', async () => {
 });
 
 ipcMain.handle('audio:isAvailable', async () => {
-  return { available: AudioOutputManager.isAvailable() };
+  const available = await AudioOutputManager.isAvailable();
+  return { available };
 });
 
 // ===== 资源管理器 IPC =====

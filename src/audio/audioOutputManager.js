@@ -1,18 +1,6 @@
 const { fork } = require('child_process');
 const path = require('path');
-
-let _worker = null;
-let _workerReady = false;
-let _workerAvailable = false;
-let _pendingRequests = new Map();
-let _requestId = 0;
-let _onEndedCallback = null;
-let _isPlaying = false;
-let _duration = 0;
-let _lastPosition = 0;
-let _positionInterval = null;
-let _playbackStartTime = 0;
-let _playbackOffset = 0;
+const fs = require('fs');
 
 function _findWorkerScript() {
   const searchPaths = [
@@ -21,146 +9,185 @@ function _findWorkerScript() {
   ];
   for (const p of searchPaths) {
     try {
-      if (require('fs').existsSync(p)) return p;
+      if (fs.existsSync(p)) return p;
     } catch (_) {}
   }
   return null;
 }
 
-function _ensureWorker() {
-  if (_worker) return _worker;
-
-  const workerScript = _findWorkerScript();
-  if (!workerScript) {
-    console.warn('[AudioOutputManager] audioWorker.js 未找到，WASAPI 独占模式不可用');
-    return null;
-  }
-
-  _worker = fork(workerScript, [], {
-    stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-    env: { ...process.env },
-    serialization: 'advanced',
-  });
-
-  _worker.on('message', (msg) => {
-    if (msg.type === 'ready') {
-      _workerReady = true;
-      _workerAvailable = msg.isAvailable;
-      return;
-    }
-
-    if (msg.type === 'ended') {
-      _isPlaying = false;
-      _stopPositionTracking();
-      if (_onEndedCallback) {
-        try { _onEndedCallback(); } catch (_) {}
-      }
-      return;
-    }
-
-    if (msg.id !== undefined && _pendingRequests.has(msg.id)) {
-      const { resolve } = _pendingRequests.get(msg.id);
-      _pendingRequests.delete(msg.id);
-      resolve(msg.result);
-    }
-  });
-
-  _worker.on('error', (err) => {
-    console.error('[AudioOutputManager] 子进程错误:', err.message);
-    _workerReady = false;
-    _workerAvailable = false;
-    _rejectAllPending(err);
-  });
-
-  _worker.on('exit', (code) => {
-    _workerReady = false;
-    _workerAvailable = false;
-    _worker = null;
-    _rejectAllPending(new Error(`音频子进程退出 (code=${code})`));
-  });
-
-  return _worker;
-}
-
-function _rejectAllPending(err) {
-  for (const [id, { reject }] of _pendingRequests) {
-    reject(err);
-  }
-  _pendingRequests.clear();
-}
-
-function _sendCommand(type, data = {}) {
-  return new Promise((resolve, reject) => {
-    const worker = _ensureWorker();
-    if (!worker) {
-      resolve({ error: '音频子进程不可用' });
-      return;
-    }
-
-    const id = ++_requestId;
-    _pendingRequests.set(id, { resolve, reject });
-
-    const timeout = setTimeout(() => {
-      if (_pendingRequests.has(id)) {
-        _pendingRequests.delete(id);
-        resolve({ error: `命令超时: ${type}` });
-      }
-    }, 15000);
-
-    _pendingRequests.set(id, {
-      resolve: (result) => { clearTimeout(timeout); resolve(result); },
-      reject: (err) => { clearTimeout(timeout); reject(err); },
-    });
-
-    worker.send({ id, type, ...data });
-  });
-}
-
-function _startPositionTracking() {
-  _stopPositionTracking();
-  _positionInterval = setInterval(async () => {
-    if (!_isPlaying) return;
-    try {
-      const result = await _sendCommand('getPosition');
-      if (result.position !== undefined) {
-        _lastPosition = result.position;
-        _duration = result.duration || 0;
-      }
-    } catch (_) {}
-  }, 200);
-}
-
-function _stopPositionTracking() {
-  if (_positionInterval) {
-    clearInterval(_positionInterval);
-    _positionInterval = null;
-  }
-}
-
 class AudioOutputManager {
   constructor() {
     this._volume = 1.0;
+    this._worker = null;
+    this._workerReady = false;
+    this._workerAvailable = false;
+    this._pendingRequests = new Map();
+    this._requestId = 0;
+    this._onEndedCallback = null;
+    this._isPlaying = false;
+    this._duration = 0;
+    this._lastPosition = 0;
+    this._positionInterval = null;
+    this._playbackStartTime = 0;
+    this._playbackOffset = 0;
+    this._readyResolve = null;
+    this._readyPromise = null;
   }
 
-  static isAvailable() {
-    if (!_worker || !_workerReady) {
-      _ensureWorker();
+  _ensureWorker() {
+    if (this._worker) return this._worker;
+
+    const workerScript = _findWorkerScript();
+    if (!workerScript) {
+      console.warn('[AudioOutputManager] audioWorker.js 未找到，WASAPI 独占模式不可用');
+      return null;
     }
-    return _workerAvailable;
+
+    try {
+      this._worker = fork(workerScript, [], {
+        stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+        env: { ...process.env },
+        serialization: 'advanced',
+      });
+    } catch (e) {
+      console.error('[AudioOutputManager] fork 子进程失败:', e.message);
+      this._worker = null;
+      return null;
+    }
+
+    this._readyPromise = new Promise((resolve) => {
+      this._readyResolve = resolve;
+    });
+
+    this._worker.on('message', (msg) => {
+      if (msg.type === 'ready') {
+        this._workerReady = true;
+        this._workerAvailable = msg.isAvailable;
+        if (this._readyResolve) {
+          this._readyResolve(this._workerAvailable);
+          this._readyResolve = null;
+        }
+        return;
+      }
+
+      if (msg.type === 'ended') {
+        this._isPlaying = false;
+        this._stopPositionTracking();
+        if (this._onEndedCallback) {
+          try { this._onEndedCallback(); } catch (_) {}
+        }
+        return;
+      }
+
+      if (msg.id !== undefined && this._pendingRequests.has(msg.id)) {
+        const { resolve, reject } = this._pendingRequests.get(msg.id);
+        this._pendingRequests.delete(msg.id);
+        if (msg.result && msg.result.error) {
+          reject(new Error(msg.result.error));
+        } else {
+          resolve(msg.result);
+        }
+      }
+    });
+
+    this._worker.on('error', (err) => {
+      console.error('[AudioOutputManager] 子进程错误:', err.message);
+      this._workerReady = false;
+      this._workerAvailable = false;
+      if (this._readyResolve) {
+        this._readyResolve(false);
+        this._readyResolve = null;
+      }
+      this._rejectAllPending(err);
+    });
+
+    this._worker.on('exit', (code) => {
+      this._workerReady = false;
+      this._workerAvailable = false;
+      this._worker = null;
+      if (this._readyResolve) {
+        this._readyResolve(false);
+        this._readyResolve = null;
+      }
+      this._rejectAllPending(new Error(`音频子进程退出 (code=${code})`));
+    });
+
+    return this._worker;
   }
 
-  static getDevices() {
-    return _sendCommand('getDevices').then(result => {
+  _rejectAllPending(err) {
+    for (const [, { reject }] of this._pendingRequests) {
+      reject(err);
+    }
+    this._pendingRequests.clear();
+  }
+
+  _sendCommand(type, data = {}) {
+    return new Promise((resolve, reject) => {
+      const worker = this._ensureWorker();
+      if (!worker) {
+        reject(new Error('音频子进程不可用'));
+        return;
+      }
+
+      const id = ++this._requestId;
+      const timeout = setTimeout(() => {
+        if (this._pendingRequests.has(id)) {
+          this._pendingRequests.delete(id);
+          reject(new Error(`命令超时: ${type}`));
+        }
+      }, 15000);
+
+      this._pendingRequests.set(id, {
+        resolve: (result) => { clearTimeout(timeout); resolve(result); },
+        reject: (err) => { clearTimeout(timeout); reject(err); },
+      });
+
+      worker.send({ id, type, ...data });
+    });
+  }
+
+  _startPositionTracking() {
+    this._stopPositionTracking();
+    this._positionInterval = setInterval(async () => {
+      if (!this._isPlaying) return;
+      try {
+        const result = await this._sendCommand('getPosition');
+        if (result.position !== undefined) {
+          this._lastPosition = result.position;
+          this._duration = result.duration || 0;
+        }
+      } catch (_) {}
+    }, 200);
+  }
+
+  _stopPositionTracking() {
+    if (this._positionInterval) {
+      clearInterval(this._positionInterval);
+      this._positionInterval = null;
+    }
+  }
+
+  async isAvailable() {
+    this._ensureWorker();
+    if (this._workerReady) return this._workerAvailable;
+    if (this._readyPromise) {
+      await this._readyPromise;
+    }
+    return this._workerAvailable;
+  }
+
+  async getDevices() {
+    try {
+      const result = await this._sendCommand('getDevices');
       return result.devices || [];
-    }).catch(() => []);
-  }
-
-  static getHostAPIs() {
-    return [];
+    } catch (e) {
+      return [];
+    }
   }
 
   async start(audioData, options = {}) {
-    this.stop();
+    await this.stop();
 
     const {
       volume = 1.0,
@@ -168,54 +195,95 @@ class AudioOutputManager {
     } = options;
 
     this._volume = Math.max(0, Math.min(1, volume));
-    _playbackOffset = offset;
-    _isPlaying = false;
-    _lastPosition = offset;
-    _duration = audioData.length / (options.sampleRate || 24000);
+    this._playbackOffset = offset;
+    this._isPlaying = false;
+    this._lastPosition = offset;
+    this._duration = audioData.length / (options.sampleRate || 24000);
 
     const audioArray = audioData instanceof Float32Array ? audioData : new Float32Array(audioData);
 
-    const result = await _sendCommand('start', {
+    // 等待 worker 就绪
+    if (this._readyPromise) {
+      await this._readyPromise;
+    }
+
+    const result = await this._sendCommand('start', {
       audioData: audioArray,
       options: { ...options, volume: this._volume },
     });
 
     if (result.success) {
-      _isPlaying = true;
-      _playbackStartTime = Date.now();
-      _startPositionTracking();
+      this._isPlaying = true;
+      this._playbackStartTime = performance.now();
+      this._startPositionTracking();
     }
 
     return result;
   }
 
-  stop() {
-    if (_isPlaying) {
-      _isPlaying = false;
-      _stopPositionTracking();
-      _sendCommand('stop').catch(() => {});
+  async stop() {
+    if (this._isPlaying) {
+      this._isPlaying = false;
+      this._stopPositionTracking();
+      try {
+        await this._sendCommand('stop');
+      } catch (_) {}
     }
   }
 
   getPosition() {
-    if (!_isPlaying) {
-      return _lastPosition;
+    if (!this._isPlaying) {
+      return this._lastPosition;
     }
-    const elapsedMs = Date.now() - _playbackStartTime;
-    return _playbackOffset + elapsedMs / 1000;
+    const elapsedMs = performance.now() - this._playbackStartTime;
+    return this._playbackOffset + elapsedMs / 1000;
   }
 
   getDuration() {
-    return _duration;
+    return this._duration;
   }
 
   isPlaying() {
-    return _isPlaying;
+    return this._isPlaying;
   }
 
   onEnded(callback) {
-    _onEndedCallback = callback;
+    this._onEndedCallback = callback;
+  }
+
+  destroy() {
+    this._isPlaying = false;
+    this._stopPositionTracking();
+    if (this._worker) {
+      try { this._worker.kill(); } catch (_) {}
+      this._worker = null;
+    }
+    this._workerReady = false;
+    this._workerAvailable = false;
+    this._pendingRequests.clear();
   }
 }
+
+// 静态方法：共享默认实例用于设备查询和可用性检查
+let _defaultInstance = null;
+
+function _getDefaultInstance() {
+  if (!_defaultInstance) {
+    _defaultInstance = new AudioOutputManager();
+  }
+  return _defaultInstance;
+}
+
+AudioOutputManager.isAvailable = async function () {
+  return _getDefaultInstance().isAvailable();
+};
+
+AudioOutputManager.getDevices = async function () {
+  return _getDefaultInstance().getDevices();
+};
+
+AudioOutputManager.getHostAPIs = function () {
+  return [];
+};
 
 module.exports = { AudioOutputManager };
