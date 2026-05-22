@@ -5,7 +5,7 @@ let _playbackStartTime = 0;
 let _playbackOffset = 0;
 let _audioData = null;
 let _sampleRate = 24000;
-let _totalSamples = 0;
+let _duration = 0;
 let _positionInterval = null;
 
 const FORMAT_MAP = {
@@ -70,7 +70,7 @@ function handleStart(audioData, options) {
 
   _sampleRate = sampleRate;
   _audioData = _applyVolume(audioData, Math.max(0, Math.min(1, volume)));
-  _totalSamples = _audioData.length;
+  _duration = _audioData.length / _sampleRate;
   _playbackOffset = offset;
 
   const format = FORMAT_MAP[bitDepth] || FORMAT_MAP['float32'];
@@ -99,12 +99,19 @@ function handleStart(audioData, options) {
   }
 
   _isPlaying = true;
-  _playbackStartTime = Date.now();
+  _playbackStartTime = performance.now();
 
   const startSample = Math.floor(offset * sampleRate);
   const dataToWrite = outputData.slice(startSample);
 
-  _output.write(dataToWrite);
+  try {
+    _output.write(dataToWrite);
+  } catch (e) {
+    _isPlaying = false;
+    try { _output.end(); } catch (_) {}
+    _output = null;
+    return { success: false, error: `写入音频数据失败: ${e.message}` };
+  }
   _startPositionTracking();
 
   return {
@@ -126,21 +133,17 @@ function handleStop() {
   }
 
   _audioData = null;
+  _duration = 0;
   _playbackOffset = 0;
 }
 
 function handleGetPosition() {
   if (!_isPlaying) {
-    return { position: _playbackOffset, duration: _getDuration() };
+    return { position: _playbackOffset, duration: _duration };
   }
-  const elapsedMs = Date.now() - _playbackStartTime;
+  const elapsedMs = performance.now() - _playbackStartTime;
   const elapsedSeconds = elapsedMs / 1000;
-  return { position: _playbackOffset + elapsedSeconds, duration: _getDuration() };
-}
-
-function _getDuration() {
-  if (!_audioData) return 0;
-  return _audioData.length / _sampleRate;
+  return { position: _playbackOffset + elapsedSeconds, duration: _duration };
 }
 
 function _startPositionTracking() {
@@ -148,12 +151,11 @@ function _startPositionTracking() {
   _positionInterval = setInterval(() => {
     if (!_isPlaying) return;
 
-    const elapsedMs = Date.now() - _playbackStartTime;
+    const elapsedMs = performance.now() - _playbackStartTime;
     const elapsedSeconds = elapsedMs / 1000;
     const position = _playbackOffset + elapsedSeconds;
-    const duration = _getDuration();
 
-    if (position >= duration) {
+    if (position >= _duration) {
       _isPlaying = false;
       _stopPositionTracking();
       process.send({ type: 'ended' });
