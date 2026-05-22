@@ -646,17 +646,31 @@ function computePitchCurveF0(singerFragments, allNotes, bpm) {
     }
   }
 
+  // Pre-compute fragment frame ranges
+  const fragFrameRanges = [];
+  for (const frag of pitchCurveFrags) {
+    const fragStartBeat = frag.startTime || 0;
+    const fragEndBeat = fragStartBeat + (frag.duration || 0);
+    const fragStartSec = (fragStartBeat / bpm) * 60;
+    const fragEndSec = (fragEndBeat / bpm) * 60;
+    const startFrame = Math.floor(fragStartSec * SAMPLE_RATE / SVS_HOP_SIZE);
+    const endFrame = frag.duration ? Math.floor(fragEndSec * SAMPLE_RATE / SVS_HOP_SIZE) : totalFrames;
+    fragFrameRanges.push({ frag, startFrame, endFrame });
+  }
+
+  // Pre-sort notes by start beat for binary search
+  const sortedNotes = allNotes.slice().sort((a, b) => a.start - b.start);
+
   for (let i = 0; i < totalFrames; i++) {
     const frameTimeSec = (i * SVS_HOP_SIZE) / SAMPLE_RATE;
     const frameBeat = (frameTimeSec / 60) * bpm;
     let pitch = null;
 
-    for (const frag of pitchCurveFrags) {
+    for (const { frag, startFrame, endFrame } of fragFrameRanges) {
+      if (i < startFrame || i >= endFrame) continue;
+
       const pc = frag.pitchCurve;
       const fragStartBeat = frag.startTime || 0;
-      const fragEndBeat = fragStartBeat + (frag.duration || 0);
-      if (frameBeat < fragStartBeat || (frag.duration && frameBeat >= fragEndBeat)) continue;
-
       const localBeat = frameBeat - fragStartBeat;
 
       if (pitch === null && pc.anchorPoints.length > 0) {
@@ -664,15 +678,19 @@ function computePitchCurveF0(singerFragments, allNotes, bpm) {
         if (localBeat < sorted[0].time || localBeat > sorted[sorted.length - 1].time) {
           // outside anchor range, skip
         } else {
-          for (let j = 0; j < sorted.length - 1; j++) {
-            if (localBeat >= sorted[j].time && localBeat <= sorted[j + 1].time) {
-              const t = (sorted[j + 1].time - sorted[j].time) > 0
-                ? (localBeat - sorted[j].time) / (sorted[j + 1].time - sorted[j].time) : 0;
-              const sm = (sorted[j].smoothness || 0) / 100;
-              const st = sm > 0 ? t * t * (3 - 2 * t) : t;
-              pitch = sorted[j].pitch + st * (sorted[j + 1].pitch - sorted[j].pitch);
-              break;
-            }
+          // Binary search for anchor point segment
+          let lo = 0, hi = sorted.length - 1;
+          while (lo < hi - 1) {
+            const mid = (lo + hi) >> 1;
+            if (sorted[mid].time <= localBeat) lo = mid;
+            else hi = mid;
+          }
+          if (localBeat >= sorted[lo].time && localBeat <= sorted[hi].time) {
+            const t = (sorted[hi].time - sorted[lo].time) > 0
+              ? (localBeat - sorted[lo].time) / (sorted[hi].time - sorted[lo].time) : 0;
+            const sm = (sorted[lo].smoothness || 0) / 100;
+            const st = sm > 0 ? t * t * (3 - 2 * t) : t;
+            pitch = sorted[lo].pitch + st * (sorted[hi].pitch - sorted[lo].pitch);
           }
         }
       }
@@ -697,10 +715,21 @@ function computePitchCurveF0(singerFragments, allNotes, bpm) {
     }
 
     if (pitch === null) {
-      for (const note of allNotes) {
+      // Binary search in sorted notes
+      let lo = 0, hi = sortedNotes.length - 1;
+      let found = false;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const note = sortedNotes[mid];
         if (frameBeat >= note.start && frameBeat < note.start + note.duration) {
           pitch = note.pitch;
+          found = true;
           break;
+        }
+        if (note.start + note.duration <= frameBeat) {
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
         }
       }
     }
