@@ -6,7 +6,11 @@ const os = require('node:os');
 const { execFile } = require('node:child_process');
 const { URL } = require('node:url');
 
-const MODEL_ID = 'syxppp/SoulX-Singer-onnx-directml';
+const MODEL_IDS = {
+  fp16: 'syxppp/SoulX-Singer-onnx-directml-fp16',
+  int8: 'syxppp/SoulX-Singer-onnx-directml-int8',
+};
+const DEFAULT_PRECISION = 'fp16';
 const MODELSCOPE_ENDPOINT = 'https://modelscope.cn';
 const REVISION = 'master';
 const TEMP_SUFFIX = '.download';
@@ -44,9 +48,14 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'basic_pitch_model/group1-shard1of1.bin', required: true },
 ];
 
-function getFileDownloadUrl(filePath) {
+function getModelId(precision) {
+  return MODEL_IDS[precision] || MODEL_IDS[DEFAULT_PRECISION];
+}
+
+function getFileDownloadUrl(filePath, precision) {
+  const modelId = getModelId(precision);
   const encoded = encodeURIComponent(filePath);
-  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${MODEL_ID}/repo?Revision=${REVISION}&FilePath=${encoded}`;
+  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
 }
 
 function checkMissingFiles(modelDir) {
@@ -663,8 +672,9 @@ async function checkModelScopeCLIAvailable() {
 }
 
 async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
-  const { abortSignal } = options;
-  const args = ['download', '--model', MODEL_ID, '--local_dir', modelDir];
+  const { abortSignal, precision } = options;
+  const modelId = getModelId(precision);
+  const args = ['download', '--model', modelId, '--local_dir', modelDir];
 
   for (const file of missingFiles) {
     args.push('--include', file.filePath);
@@ -697,8 +707,8 @@ async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
   });
 }
 
-async function getRemoteFileSize(filePath) {
-  const url = getFileDownloadUrl(filePath);
+async function getRemoteFileSize(filePath, precision) {
+  const url = getFileDownloadUrl(filePath, precision);
   try {
     const { finalUrl, response } = await resolveRedirects(url);
     const contentLength = parseInt(response.headers['content-length'] || '0', 10);
@@ -717,7 +727,7 @@ async function getRemoteFileSize(filePath) {
  * - 支持断点续传
  */
 async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
-  const { onProgress, onFileStart, onFileComplete, abortSignal } = options;
+  const { onProgress, onFileStart, onFileComplete, abortSignal, precision = DEFAULT_PRECISION } = options;
 
   if (missingFiles.length === 0) return;
 
@@ -725,7 +735,7 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   if (cliAvailable) {
     console.log('[ModelManager] ModelScope CLI available, using CLI download');
     try {
-      await downloadWithModelScopeCLI(modelDir, missingFiles, { abortSignal });
+      await downloadWithModelScopeCLI(modelDir, missingFiles, { abortSignal, precision });
       console.log('[ModelManager] ModelScope CLI download complete');
       return;
     } catch (err) {
@@ -742,7 +752,7 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   const fileSizes = {};
   let overallTotal = 0;
   for (const file of missingFiles) {
-    const remoteSize = await getRemoteFileSize(file.filePath);
+    const remoteSize = await getRemoteFileSize(file.filePath, precision);
     fileSizes[file.filePath] = remoteSize;
     overallTotal += remoteSize;
   }
@@ -786,7 +796,7 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
       }
 
       const destPath = path.join(modelDir, file.filePath);
-      const url = getFileDownloadUrl(file.filePath);
+      const url = getFileDownloadUrl(file.filePath, precision);
       const fileSize = fileSizes[file.filePath];
 
       if (onFileStart) {
@@ -860,7 +870,8 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
 
 module.exports = {
   MODEL_FILE_MANIFEST,
-  MODEL_ID,
+  MODEL_IDS,
+  DEFAULT_PRECISION,
   MODELSCOPE_ENDPOINT,
   checkMissingFiles,
   downloadMissingFiles,
@@ -869,6 +880,7 @@ module.exports = {
   downloadFileChunked,
   checkModelScopeCLIAvailable,
   getFileDownloadUrl,
+  getModelId,
   getRemoteFileSize,
   getOptimalConcurrency,
 };

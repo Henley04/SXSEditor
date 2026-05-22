@@ -128,7 +128,7 @@ const { RmvpePitchDetector, RMVPE_SAMPLE_RATE } = require('./inference/rmvpePitc
 const { BasicPitchDetector } = require('./inference/basicPitch');
 const { parseMidiFile } = require('./inference/midiParser');
 const { AudioOutputManager } = require('./audio/audioOutputManager');
-const { checkMissingFiles, downloadMissingFiles } = require('./modelManager');
+const { checkMissingFiles, downloadMissingFiles, DEFAULT_PRECISION } = require('./modelManager');
 const { getModelGroups } = require('./modelRegistry');
 
 let svsPipeline = null;
@@ -318,7 +318,7 @@ function openSettingsWindow() {
 
   settingsWindow = new BrowserWindow({
     width: 600,
-    height: 760,
+    height: 860,
     title: t('menu.settings'),
     icon: path.join(__dirname, 'SXS.png'),
     resizable: true,
@@ -556,15 +556,17 @@ let modelDownloadWindow = null;
 let downloadAbortController = null;
 let customModelDir = null;
 
-function createModelDownloadWindow(missingFiles) {
+function createModelDownloadWindow(missingFiles, precision) {
   if (modelDownloadWindow) {
     modelDownloadWindow.focus();
     return;
   }
 
+  const currentPrecision = precision || DEFAULT_PRECISION;
+
   modelDownloadWindow = new BrowserWindow({
     width: 520,
-    height: 500,
+    height: 560,
     title: '模型文件下载',
     icon: path.join(__dirname, 'SXS.png'),
     resizable: false,
@@ -585,6 +587,7 @@ function createModelDownloadWindow(missingFiles) {
 
   modelDownloadWindow.webContents.once('did-finish-load', () => {
     modelDownloadWindow.webContents.send('model-download:missing-files', missingFiles);
+    modelDownloadWindow.webContents.send('model-download:precision', currentPrecision);
     modelDownloadWindow.focus();
   });
 
@@ -597,13 +600,15 @@ function createModelDownloadWindow(missingFiles) {
   });
 }
 
-async function startModelDownload(modelDir, missingFiles) {
+async function startModelDownload(modelDir, missingFiles, precision) {
   downloadAbortController = new AbortController();
   const abortSignal = downloadAbortController.signal;
+  const currentPrecision = precision || DEFAULT_PRECISION;
 
   try {
     await downloadMissingFiles(modelDir, missingFiles, {
       abortSignal,
+      precision: currentPrecision,
       onProgress: (data) => {
         if (modelDownloadWindow && !modelDownloadWindow.isDestroyed()) {
           modelDownloadWindow.webContents.send('model-download:progress', data);
@@ -653,7 +658,8 @@ async function checkAndDownloadModels() {
   }
 
   const modelDir = getModelDir();
-  console.log('[Main] 检查模型文件，目录:', modelDir);
+  const precision = loadSettings().modelPrecision || DEFAULT_PRECISION;
+  console.log('[Main] 检查模型文件，目录:', modelDir, '精度:', precision);
   const { missing, existing } = checkMissingFiles(modelDir);
 
   if (missing.length === 0) {
@@ -696,20 +702,21 @@ async function checkAndDownloadModels() {
     }
 
     console.log(`[Main] 缺少 ${recheck.missing.length} 个模型文件:`, recheck.missing.map(f => f.filePath));
-    createModelDownloadWindow(recheck.missing);
+    createModelDownloadWindow(recheck.missing, precision);
     return false;
   }
 
   console.log(`[Main] 缺少 ${missing.length} 个模型文件:`, missing.map(f => f.filePath));
-  createModelDownloadWindow(missing);
+  createModelDownloadWindow(missing, precision);
   return false;
 }
 
-ipcMain.handle('model-download:start', async () => {
+ipcMain.handle('model-download:start', async (event, precision) => {
   const modelDir = getModelDir();
+  const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
   const { missing } = checkMissingFiles(modelDir);
   if (missing.length === 0) return { success: true };
-  await startModelDownload(modelDir, missing);
+  await startModelDownload(modelDir, missing, currentPrecision);
   return { success: true };
 });
 
@@ -760,6 +767,14 @@ ipcMain.handle('model-download:change-dir', async () => {
 
 ipcMain.handle('model-download:get-dir', async () => {
   return getModelDir();
+});
+
+ipcMain.handle('model-download:open', async (event, precision) => {
+  const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+  const modelDir = getModelDir();
+  const { missing } = checkMissingFiles(modelDir);
+  createModelDownloadWindow(missing, currentPrecision);
+  return { success: true, missingCount: missing.length };
 });
 
 app.on('second-instance', () => {

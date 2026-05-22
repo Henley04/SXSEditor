@@ -9,6 +9,7 @@ let lastOverallDownloaded = 0;
 let lastSpeedTime = 0;
 let isDownloading = false;
 let renderedFileIds = [];
+let currentPrecision = 'fp16';
 
 function createIconSvg(status) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -170,8 +171,15 @@ window.electronAPI.onModelDownloadMissingFiles((files) => {
   document.getElementById('statusText').textContent = t('modelDownload.needDownloadCount', { count: files.length });
   document.getElementById('startBtn').style.display = 'inline-block';
   document.getElementById('closeBtn').style.display = 'inline-block';
+  document.getElementById('precisionSection').style.display = 'block';
   renderFileList(true);
   loadModelDir();
+});
+
+window.electronAPI.onModelDownloadPrecision((precision) => {
+  currentPrecision = precision || 'fp16';
+  const radio = document.querySelector(`input[name="modelPrecision"][value="${currentPrecision}"]`);
+  if (radio) radio.checked = true;
 });
 
 window.electronAPI.onModelDownloadProgress((data) => {
@@ -235,16 +243,20 @@ window.electronAPI.onModelDownloadError((data) => {
 });
 
 document.getElementById('startBtn').addEventListener('click', () => {
+  const selectedRadio = document.querySelector('input[name="modelPrecision"]:checked');
+  currentPrecision = selectedRadio ? selectedRadio.value : 'fp16';
+
   document.getElementById('startBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'none';
   document.getElementById('cancelBtn').style.display = 'inline-block';
   document.getElementById('changeDirBtn').disabled = true;
+  document.getElementById('precisionSection').style.display = 'none';
   document.getElementById('progressSection').style.display = 'block';
   downloadStartTime = Date.now();
   lastSpeedTime = downloadStartTime;
   lastOverallDownloaded = 0;
   isDownloading = true;
-  window.electronAPI.modelDownloadStart();
+  window.electronAPI.modelDownloadStart(currentPrecision);
 });
 
 document.getElementById('cancelBtn').addEventListener('click', () => {

@@ -26,6 +26,8 @@ const exclusiveInfoDiv = document.getElementById('exclusiveInfo');
 const saveBtn = document.getElementById('saveBtn');
 const cancelBtn = document.getElementById('cancelBtn');
 const languageSelect = document.getElementById('languageSelect');
+const modelPrecisionSelect = document.getElementById('modelPrecision');
+const openModelDownloadBtn = document.getElementById('openModelDownloadBtn');
 
 previewDiffStepsSlider.addEventListener('input', () => {
     previewDiffStepsValue.textContent = previewDiffStepsSlider.value;
@@ -93,6 +95,12 @@ async function loadDevices() {
         await loadAudioSettings(currentSetting);
 
         languageSelect.value = getLocale();
+
+        if (currentSetting && currentSetting.modelPrecision) {
+            modelPrecisionSelect.value = currentSetting.modelPrecision;
+        } else {
+            modelPrecisionSelect.value = 'fp16';
+        }
     } catch (err) {
         console.error('加载设备列表失败:', err);
         inferenceDeviceSelect.innerHTML = `<option value="auto">${t('settings.autoSelect')}</option>`;
@@ -260,6 +268,7 @@ saveBtn.addEventListener('click', async () => {
         audioBufferSize: parseInt(audioBufferSizeSelect.value),
         audioVolume: parseInt(audioVolumeSlider.value) / 100,
         locale: languageSelect.value,
+        modelPrecision: modelPrecisionSelect.value,
     };
 
     try {
@@ -271,6 +280,15 @@ saveBtn.addEventListener('click', async () => {
         window.close();
     } catch (err) {
         console.error('保存设置失败:', err);
+    }
+});
+
+openModelDownloadBtn.addEventListener('click', async () => {
+    const precision = modelPrecisionSelect.value;
+    try {
+        await window.electronAPI.modelDownloadOpen(precision);
+    } catch (err) {
+        console.error('打开模型下载失败:', err);
     }
 });
 

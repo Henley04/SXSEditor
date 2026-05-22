@@ -286,7 +286,18 @@ export default {
     cpuModels: 'CPU: {count}/{total} 模型',
     pendingInit: '(待初始化)',
     language: '语言',
-    languageHint: '界面显示语言，更改后需重启应用生效。'
+    languageHint: '界面显示语言，更改后需重启应用生效。',
+    modelManagement: '模型管理',
+    modelPrecision: '模型精度',
+    precisionFp16: 'FP16 (半精度)',
+    precisionInt8: 'INT8 (量化)',
+    modelPrecisionHint: '选择推理模型的精度。不同精度的模型需要分别下载，切换精度后需重新下载模型。',
+    precisionInfoTitle: '精度说明',
+    precisionInfoFp16: 'FP16 (半精度)：保留完整的模型精度，音质最佳，显存占用较大。推荐拥有独立显卡（4GB以上显存）的用户使用。',
+    precisionInfoInt8: 'INT8 (量化)：模型经过 INT8 量化压缩，音质略有损失，但显存占用减少约 40%~50%，推理速度也有所提升。推荐使用核显或低显存（2GB以下）的用户使用。',
+    precisionInfoRecommend: '如不确定，建议选择 FP16。两种精度的模型文件互不兼容，切换精度后需要重新下载。',
+    openModelDownload: '打开模型下载',
+    openModelDownloadHint: '打开模型下载页面，下载或更新推理所需的模型文件。'
   },
   modelDownload: {
     title: 'SXSEditor 模型文件下载',
@@ -306,7 +317,12 @@ export default {
     pending: '等待中',
     complete: '完成',
     failed: '失败',
-    modelsReady: '所选目录中模型文件已就绪'
+    modelsReady: '所选目录中模型文件已就绪',
+    precisionLabel: '选择模型精度',
+    precisionFp16: 'FP16 (半精度)',
+    precisionFp16Desc: '音质最佳，显存占用较大，推荐独显用户使用',
+    precisionInt8: 'INT8 (量化)',
+    precisionInt8Desc: '音质略有损失，显存占用更小，推荐核显或低显存用户使用'
   },
   menu: {
     aboutSXSEditor: '关于 SXSEditor',

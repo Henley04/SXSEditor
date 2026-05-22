@@ -286,7 +286,18 @@ export default {
     cpuModels: 'CPU: {count}/{total} models',
     pendingInit: '(Pending init)',
     language: 'Language',
-    languageHint: 'Interface display language. Requires app restart to take effect.'
+    languageHint: 'Interface display language. Requires app restart to take effect.',
+    modelManagement: 'Model Management',
+    modelPrecision: 'Model Precision',
+    precisionFp16: 'FP16 (Half Precision)',
+    precisionInt8: 'INT8 (Quantized)',
+    modelPrecisionHint: 'Select the precision of inference models. Models of different precisions need to be downloaded separately. Switching precision requires re-downloading models.',
+    precisionInfoTitle: 'Precision Info',
+    precisionInfoFp16: 'FP16 (Half Precision): Preserves full model precision with the best audio quality, but uses more VRAM. Recommended for users with a discrete GPU (4GB+ VRAM).',
+    precisionInfoInt8: 'INT8 (Quantized): Model is compressed with INT8 quantization. Slight quality loss, but VRAM usage is reduced by ~40-50% and inference speed is improved. Recommended for users with integrated GPUs or low VRAM (<2GB).',
+    precisionInfoRecommend: 'If unsure, choose FP16. Models of different precisions are not compatible with each other. Switching precision requires re-downloading models.',
+    openModelDownload: 'Open Model Download',
+    openModelDownloadHint: 'Open the model download page to download or update required inference model files.'
   },
   modelDownload: {
     title: 'SXSEditor Model Download',
@@ -306,7 +317,12 @@ export default {
     pending: 'Pending',
     complete: 'Complete',
     failed: 'Failed',
-    modelsReady: 'Model files are ready in the selected directory'
+    modelsReady: 'Model files are ready in the selected directory',
+    precisionLabel: 'Select Model Precision',
+    precisionFp16: 'FP16 (Half Precision)',
+    precisionFp16Desc: 'Best audio quality, higher VRAM usage. Recommended for discrete GPU users.',
+    precisionInt8: 'INT8 (Quantized)',
+    precisionInt8Desc: 'Slight quality loss, lower VRAM usage. Recommended for integrated GPU or low VRAM users.'
   },
   menu: {
     aboutSXSEditor: 'About SXSEditor',
