@@ -1,5 +1,6 @@
 const path = require('node:path');
 const tf = require('@tensorflow/tfjs');
+require('@tensorflow/tfjs-backend-wasm');
 const { resampleAudio } = require('../utils/resampleAudio');
 
 const BASIC_PITCH_SAMPLE_RATE = 22050;
@@ -408,6 +409,17 @@ class BasicPitchDetector {
 
   async init() {
     if (this.initialized) return true;
+
+    // 设置 WASM 后端以加速推理
+    try {
+      await tf.setBackend('wasm');
+      await tf.ready();
+      console.log('[BasicPitchDetector] TF.js 后端已设置为 WASM');
+    } catch (e) {
+      console.warn('[BasicPitchDetector] WASM 后端初始化失败，回退到 CPU 后端:', e.message);
+      await tf.setBackend('cpu');
+      await tf.ready();
+    }
 
     const modelPath = path.join(this.modelDir, 'basic_pitch_model');
     console.log('[BasicPitchDetector] 尝试加载模型:', modelPath);
