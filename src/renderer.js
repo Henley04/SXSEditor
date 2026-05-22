@@ -1920,7 +1920,7 @@ function renderSingerList() {
 
     addBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      const singerId = parseInt(addBtn.dataset.singerId);
+      const singerId = addBtn.dataset.singerId;
       const fragments = trackManager.getFragments();
       const lastFragment = fragments.filter(f => f.singerId === singerId).pop();
       const startTime = lastFragment ? lastFragment.startTime + lastFragment.duration : 0;
@@ -1947,7 +1947,7 @@ function renderSingerList() {
       if (delBtn) {
         delBtn.addEventListener('click', (e) => {
           e.stopPropagation();
-          const singerId = parseInt(delBtn.dataset.singerId);
+          const singerId = delBtn.dataset.singerId;
           if (confirm(`确定删除歌手"${singer.trackName}"？`)) {
             const singerClone = JSON.parse(JSON.stringify(singer));
             const singerFragments = trackManager.getFragments().filter(f => f.singerId === singerId);
