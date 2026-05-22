@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('loadFragment', handler);
     return () => ipcRenderer.removeListener('loadFragment', handler);
   },
+  updateFragmentBounds: (fragmentId, data) => ipcRenderer.invoke('updateFragmentBounds', fragmentId, data),
+  onFragmentBoundsChanged: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('fragmentBoundsChanged', handler);
+    return () => ipcRenderer.removeListener('fragmentBoundsChanged', handler);
+  },
   openSingerCreator: () => ipcRenderer.invoke('openSingerCreator'),
   saveSingerFile: (singerData) => ipcRenderer.invoke('saveSingerFile', singerData),
   onSingerCreated: (callback) => {

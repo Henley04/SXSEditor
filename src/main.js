@@ -1096,6 +1096,13 @@ ipcMain.handle('saveFragmentData', async (event, fragmentId, data) => {
   return { success: true };
 });
 
+ipcMain.handle('updateFragmentBounds', async (event, fragmentId, data) => {
+  if (fragmentWindows[fragmentId]) {
+    fragmentWindows[fragmentId].webContents.send('fragmentBoundsChanged', { fragmentId, ...data });
+  }
+  return { success: true };
+});
+
 let singerCreatorWindow = null;
 let audioPreprocessWindow = null;
 let pendingPreprocessData = null;

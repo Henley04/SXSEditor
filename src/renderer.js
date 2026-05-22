@@ -2264,6 +2264,9 @@ function finishDrag() {
             }
           }
           renderFragmentTimeline();
+          if (window.electronAPI?.updateFragmentBounds) {
+            window.electronAPI.updateFragmentBounds(fragmentId, { startTime: oldStart, duration: oldDuration });
+          }
         },
         redo() {
           const f = trackManager.getFragment(fragmentId);
@@ -2277,9 +2280,15 @@ function finishDrag() {
             }
           }
           renderFragmentTimeline();
+          if (window.electronAPI?.updateFragmentBounds) {
+            window.electronAPI.updateFragmentBounds(fragmentId, { startTime: newStart, duration: newDuration });
+          }
         }
       });
       markDirty();
+      if (window.electronAPI?.updateFragmentBounds) {
+        window.electronAPI.updateFragmentBounds(fragmentId, { startTime: newStart, duration: newDuration });
+      }
     }
   }
   dragState = null;
@@ -2334,12 +2343,14 @@ function openFragmentEditor(fragment) {
 
 if (window.electronAPI?.onFragmentSaved) {
   window.electronAPI.onFragmentSaved((data) => {
-    const { fragmentId, notes, envelopes, pitchCurve } = data;
+    const { fragmentId, notes, envelopes, pitchCurve, startTime, duration } = data;
     const fragment = trackManager.getFragments().find(f => f.id === fragmentId);
     if (fragment) {
       if (notes) fragment.notes = notes;
       if (envelopes) fragment.envelopes = envelopes;
       if (pitchCurve) fragment.pitchCurve = pitchCurve;
+      if (startTime !== undefined) fragment.startTime = startTime;
+      if (duration !== undefined) fragment.duration = duration;
     }
     refreshAll();
     autoSaveProject();
