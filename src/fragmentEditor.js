@@ -148,7 +148,13 @@ function saveFragmentData() {
     currentFragment.envelopes = envelopes;
     currentFragment.pitchCurve = pitchCurve;
     if (window.electronAPI?.saveFragmentData) {
-      window.electronAPI.saveFragmentData(currentFragment.id, { notes, envelopes, pitchCurve });
+      window.electronAPI.saveFragmentData(currentFragment.id, {
+        notes,
+        envelopes,
+        pitchCurve,
+        startTime: currentFragment.startTime,
+        duration: currentFragment.duration,
+      });
     }
   }
 }
@@ -2671,6 +2677,17 @@ if (window.electronAPI?.onLoadFragment) {
   });
 }
 
+if (window.electronAPI?.onFragmentBoundsChanged) {
+  window.electronAPI.onFragmentBoundsChanged((data) => {
+    const { fragmentId, startTime, duration } = data;
+    if (currentFragment && currentFragment.id === fragmentId) {
+      if (startTime !== undefined) currentFragment.startTime = startTime;
+      if (duration !== undefined) currentFragment.duration = duration;
+      render();
+    }
+  });
+}
+
 (async () => {
   await new Promise(resolve => setTimeout(resolve, 500));
   if (!fragmentDataReceived) {
@@ -2704,7 +2721,13 @@ window.addEventListener('beforeunload', () => {
       currentFragment.envelopes = envelopes;
       currentFragment.pitchCurve = pitchCurve;
       if (window.electronAPI?.saveFragmentDataSync) {
-        window.electronAPI.saveFragmentDataSync(currentFragment.id, { notes, envelopes, pitchCurve });
+        window.electronAPI.saveFragmentDataSync(currentFragment.id, {
+          notes,
+          envelopes,
+          pitchCurve,
+          startTime: currentFragment.startTime,
+          duration: currentFragment.duration,
+        });
       }
     }
   } catch (_) {}

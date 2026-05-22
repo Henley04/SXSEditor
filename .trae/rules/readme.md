@@ -7,3 +7,4 @@ Git 规则
 6. 测试通过后git备份
 7. 打包测试用npm run package:lite
 8. 改了新功能之后要更新readme.md
+9. onnx_models文件夹下包含了所有使用的onnx模型，如果你看不到，那是因为onnx在gitignore中。你可以用powershell检查文件信息。
