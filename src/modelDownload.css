@@ -25,6 +25,99 @@ body {
   color: #6a6a86;
 }
 
+.precision-section {
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  background: #1a1a2a;
+  border-radius: 8px;
+  border: 1px solid #2a2a3d;
+}
+
+.precision-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  color: #a8a8c0;
+  margin-bottom: 10px;
+}
+
+.precision-options {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.precision-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #1e1e2e;
+  border: 1px solid #3a3a52;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: border-color 0.2s, background-color 0.2s;
+}
+
+.precision-option:hover {
+  border-color: #4a4a62;
+  background: #222236;
+}
+
+.precision-option:has(input:checked) {
+  border-color: #5b8def;
+  background: rgba(91, 141, 239, 0.08);
+}
+
+.precision-option input[type="radio"] {
+  display: none;
+}
+
+.precision-radio {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid #4a4a62;
+  border-radius: 50%;
+  flex-shrink: 0;
+  margin-top: 2px;
+  position: relative;
+  transition: border-color 0.2s;
+}
+
+.precision-option:has(input:checked) .precision-radio {
+  border-color: #5b8def;
+}
+
+.precision-option:has(input:checked) .precision-radio::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 6px;
+  height: 6px;
+  background: #5b8def;
+  border-radius: 50%;
+}
+
+.precision-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.precision-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #d8d8ec;
+}
+
+.precision-desc {
+  font-size: 11px;
+  color: #6a6a86;
+  line-height: 1.4;
+}
+
 .overall-progress {
   margin-bottom: 16px;
 }

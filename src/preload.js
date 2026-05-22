@@ -110,11 +110,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('model-download:error', handler);
     return () => ipcRenderer.removeListener('model-download:error', handler);
   },
-  modelDownloadStart: () => ipcRenderer.invoke('model-download:start'),
+  onModelDownloadPrecision: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('model-download:precision', handler);
+    return () => ipcRenderer.removeListener('model-download:precision', handler);
+  },
+  modelDownloadStart: (precision) => ipcRenderer.invoke('model-download:start', precision),
   modelDownloadCancel: () => ipcRenderer.invoke('model-download:cancel'),
   modelDownloadCheck: () => ipcRenderer.invoke('model-download:check'),
   modelDownloadChangeDir: () => ipcRenderer.invoke('model-download:change-dir'),
   modelDownloadGetDir: () => ipcRenderer.invoke('model-download:get-dir'),
+  modelDownloadOpen: (precision) => ipcRenderer.invoke('model-download:open', precision),
   saveLocale: (locale) => ipcRenderer.invoke('save-locale', locale),
   getLocale: () => ipcRenderer.invoke('get-locale'),
   reloadMainWindow: () => ipcRenderer.invoke('reload-main-window'),

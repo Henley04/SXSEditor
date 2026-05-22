@@ -161,6 +161,30 @@
             </div>
         </div>
 
+        <div class="settings-section">
+            <h3 class="section-title" data-i18n="settings.modelManagement">模型管理</h3>
+            <div class="setting-group">
+                <label for="modelPrecision" data-i18n="settings.modelPrecision">模型精度</label>
+                <select id="modelPrecision">
+                    <option value="fp16" data-i18n="settings.precisionFp16">FP16 (半精度)</option>
+                    <option value="int8" data-i18n="settings.precisionInt8">INT8 (量化)</option>
+                </select>
+                <p class="hint" data-i18n="settings.modelPrecisionHint"></p>
+                <div class="precision-info-box" id="precisionInfoBox">
+                    <strong data-i18n="settings.precisionInfoTitle">精度说明</strong>
+                    <ul>
+                        <li data-i18n="settings.precisionInfoFp16"></li>
+                        <li data-i18n="settings.precisionInfoInt8"></li>
+                        <li data-i18n="settings.precisionInfoRecommend"></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="setting-group">
+                <button class="btn-open-model-download" id="openModelDownloadBtn" data-i18n="settings.openModelDownload">打开模型下载</button>
+                <p class="hint" data-i18n="settings.openModelDownloadHint">打开模型下载页面，下载或更新推理所需的模型文件。</p>
+            </div>
+        </div>
+
         <div class="setting-actions">
             <span id="settings-version" class="settings-version-text">v-</span>
             <button id="saveBtn" data-i18n="settings.saveBtn">保存</button>
