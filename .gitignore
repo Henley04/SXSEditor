@@ -95,6 +95,10 @@ out/
 *.onnx
 *.onnx.data
 
+# Quantized ONNX model directories
+onnx_models/int8/
+onnx_models/fp16/
+
 # ExecuTorch models
 *.pte
 *.pte.data
