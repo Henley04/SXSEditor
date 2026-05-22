@@ -80,6 +80,9 @@ class PianoRoll {
 
     this.dpr = window.devicePixelRatio || 1;
 
+    this._staticCache = null;
+    this._staticCacheDirty = true;
+
     this._initEvents();
     this._resize();
   }
@@ -120,6 +123,7 @@ class PianoRoll {
     this.height = height;
 
     this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+    this._staticCacheDirty = true;
     this.render();
   }
 
@@ -255,6 +259,7 @@ class PianoRoll {
       this.dragNoteStart = { start: newNote.start, pitch: newNote.pitch, duration: newNote.duration };
     }
 
+    this._staticCacheDirty = true;
     this.render();
   }
 
@@ -481,6 +486,7 @@ class PianoRoll {
     this.scrollY = Math.max(0, Math.min(totalHeight - this.height, this.scrollY));
     this.scrollX = Math.max(0, this.scrollX);
 
+    this._staticCacheDirty = true;
     this.render();
   }
 
@@ -501,6 +507,10 @@ class PianoRoll {
 
   // ===================== 绘制 =====================
 
+  _invalidateStaticCache() {
+    this._staticCacheDirty = true;
+  }
+
   render() {
     const ctx = this.ctx;
     const w = this.width;
@@ -508,11 +518,30 @@ class PianoRoll {
 
     ctx.clearRect(0, 0, w, h);
 
-    this._drawBackground(ctx, w, h);
-    this._drawGrid(ctx, w, h);
-    this._drawNotes(ctx);
-    this._drawPianoKeys(ctx, h);
-    this._drawParamCurve(ctx, w, h);
+    if (this.isPlaying && !this._staticCacheDirty && this._staticCache) {
+      // During playback, use cached static layer
+      ctx.drawImage(this._staticCache, 0, 0, w, h);
+    } else {
+      // Full redraw
+      this._drawBackground(ctx, w, h);
+      this._drawGrid(ctx, w, h);
+      this._drawNotes(ctx);
+      this._drawPianoKeys(ctx, h);
+      this._drawParamCurve(ctx, w, h);
+
+      // Update static cache
+      if (!this._staticCache || this._staticCache.width !== Math.floor(w * this.dpr) || this._staticCache.height !== Math.floor(h * this.dpr)) {
+        this._staticCache = document.createElement('canvas');
+        this._staticCache.width = Math.floor(w * this.dpr);
+        this._staticCache.height = Math.floor(h * this.dpr);
+      }
+      const cacheCtx = this._staticCache.getContext('2d');
+      cacheCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      cacheCtx.clearRect(0, 0, w, h);
+      cacheCtx.drawImage(this.canvas, 0, 0, w, h);
+      this._staticCacheDirty = false;
+    }
+
     this._drawPlayhead(ctx, h);
     this._updateInlineInputPosition();
   }
@@ -929,6 +958,7 @@ class PianoRoll {
    */
   setNotes(notes) {
     this.notes = notes || [];
+    this._staticCacheDirty = true;
     this.render();
   }
 
@@ -946,6 +976,7 @@ class PianoRoll {
       lyric: note.lyric ?? 'la',
     };
     this.notes.push(newNote);
+    this._staticCacheDirty = true;
     this.render();
     return newNote;
   }
@@ -959,6 +990,7 @@ class PianoRoll {
     if (idx !== -1) {
       this.notes.splice(idx, 1);
       if (this.selectedNoteId === noteId) this.selectedNoteId = null;
+      this._staticCacheDirty = true;
       this.render();
     }
   }
@@ -1005,6 +1037,7 @@ class PianoRoll {
         pan: envelopes.pan || { keyframes: [{ time: 0, value: 0, smoothness: 0 }] },
         f0: envelopes.f0 || { keyframes: [{ time: 0, value: 0, smoothness: 0 }] },
       };
+      this._staticCacheDirty = true;
       this.render();
     }
   }

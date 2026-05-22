@@ -50,7 +50,6 @@ function handleStart(audioData, options) {
   if (!naudio) {
     return { success: false, error: 'naudiodon 不可用' };
   }
-  // Ensure audioData is Float32Array
   if (!(audioData instanceof Float32Array)) {
     audioData = new Float32Array(audioData);
   }
@@ -69,16 +68,32 @@ function handleStart(audioData, options) {
   } = options;
 
   _sampleRate = sampleRate;
-  _audioData = _applyVolume(audioData, Math.max(0, Math.min(1, volume)));
-  _duration = _audioData.length / _sampleRate;
-  _playbackOffset = offset;
+  const clampedVolume = Math.max(0, Math.min(1, volume));
+
+  const startSample = Math.floor(offset * sampleRate);
 
   const format = FORMAT_MAP[bitDepth] || FORMAT_MAP['float32'];
 
-  let outputData = _audioData;
+  let outputData;
   if (bitDepth !== 'float32') {
-    outputData = _convertBitDepth(_audioData, bitDepth);
+    // Combine volume + bit depth conversion in one pass, then slice
+    outputData = _convertBitDepthWithVolume(audioData, bitDepth, clampedVolume, startSample);
+  } else {
+    // Float32 path: apply volume and slice in one step
+    if (clampedVolume === 1.0) {
+      outputData = audioData.subarray(startSample);
+    } else {
+      const sliced = audioData.subarray(startSample);
+      outputData = new Float32Array(sliced.length);
+      for (let i = 0; i < sliced.length; i++) {
+        outputData[i] = sliced[i] * clampedVolume;
+      }
+    }
   }
+
+  _audioData = audioData;
+  _duration = audioData.length / _sampleRate;
+  _playbackOffset = offset;
 
   const outputOptions = {
     deviceId: deviceId,
@@ -101,11 +116,8 @@ function handleStart(audioData, options) {
   _isPlaying = true;
   _playbackStartTime = performance.now();
 
-  const startSample = Math.floor(offset * sampleRate);
-  const dataToWrite = outputData.slice(startSample);
-
   try {
-    _output.write(dataToWrite);
+    _output.write(outputData);
   } catch (e) {
     _isPlaying = false;
     try { _output.end(); } catch (_) {}
@@ -170,29 +182,21 @@ function _stopPositionTracking() {
   }
 }
 
-function _applyVolume(audioData, volume) {
-  if (volume === 1.0) return audioData;
-  const result = new Float32Array(audioData.length);
-  for (let i = 0; i < audioData.length; i++) {
-    result[i] = audioData[i] * volume;
-  }
-  return result;
-}
-
-function _convertBitDepth(float32Data, targetFormat) {
+function _convertBitDepthWithVolume(float32Data, targetFormat, volume, startSample) {
+  const src = float32Data.subarray(startSample);
   switch (targetFormat) {
     case 'int16': {
-      const int16 = new Int16Array(float32Data.length);
-      for (let i = 0; i < float32Data.length; i++) {
-        const s = Math.max(-1, Math.min(1, float32Data[i]));
+      const int16 = new Int16Array(src.length);
+      for (let i = 0; i < src.length; i++) {
+        const s = Math.max(-1, Math.min(1, src[i] * volume));
         int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
       }
       return Buffer.from(int16.buffer);
     }
     case 'int24': {
-      const buf = Buffer.alloc(float32Data.length * 3);
-      for (let i = 0; i < float32Data.length; i++) {
-        const s = Math.max(-1, Math.min(1, float32Data[i]));
+      const buf = Buffer.alloc(src.length * 3);
+      for (let i = 0; i < src.length; i++) {
+        const s = Math.max(-1, Math.min(1, src[i] * volume));
         const val = s < 0 ? s * 0x800000 : s * 0x7FFFFF;
         const abs = Math.abs(val) | 0;
         const sign = val < 0 ? 1 : 0;
@@ -204,15 +208,15 @@ function _convertBitDepth(float32Data, targetFormat) {
       return buf;
     }
     case 'int32': {
-      const int32 = new Int32Array(float32Data.length);
-      for (let i = 0; i < float32Data.length; i++) {
-        const s = Math.max(-1, Math.min(1, float32Data[i]));
+      const int32 = new Int32Array(src.length);
+      for (let i = 0; i < src.length; i++) {
+        const s = Math.max(-1, Math.min(1, src[i] * volume));
         int32[i] = s < 0 ? s * 0x80000000 : s * 0x7FFFFFFF;
       }
       return Buffer.from(int32.buffer);
     }
     default:
-      return float32Data;
+      return src;
   }
 }
 

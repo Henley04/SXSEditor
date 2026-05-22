@@ -721,7 +721,7 @@ function serializeProject(embedSingerFiles = false) {
       let wavBase64 = null;
       try {
         const bytes = new Uint8Array(singer.wavBuffer);
-        const CHUNK_SIZE = 8192;
+        const CHUNK_SIZE = 32768;
         let binary = '';
         for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
           const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
@@ -1680,8 +1680,15 @@ function commitTrackNameEdit(singer, newName) {
 }
 
 function renderSingerList() {
-  singerListEl.innerHTML = '';
   const singers = trackManager.getSingers();
+  const currentIds = singers.map(s => s.id).join(',');
+  const currentNames = singers.map(s => s.trackName).join(',');
+  const currentMissing = singers.map(s => s.singerFileMissing ? '1' : '0').join(',');
+  const cacheKey = `${currentIds}|${currentNames}|${currentMissing}|${editingTrackNameId}`;
+  if (renderSingerList._cacheKey === cacheKey && singerListEl.childElementCount > 0) return;
+  renderSingerList._cacheKey = cacheKey;
+
+  singerListEl.innerHTML = '';
 
   const spacer = document.createElement('div');
   spacer.className = 'singer-row-spacer';
