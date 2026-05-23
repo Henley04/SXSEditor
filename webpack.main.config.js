@@ -9,6 +9,7 @@ module.exports = {
   externals: {
     'onnxruntime-node': 'commonjs onnxruntime-node',
     '@tensorflow/tfjs-backend-wasm': 'commonjs @tensorflow/tfjs-backend-wasm',
+    'koffi': 'commonjs koffi',
   },
   plugins: [
     new CopyPlugin({
