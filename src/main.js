@@ -552,6 +552,54 @@ async function queryGPUVRAMUsage() {
   });
 }
 
+async function queryGPUVRAMUsageFallback() {
+  const { execFile } = require('child_process');
+
+  const psScript = `
+$adapters = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue
+if ($adapters) {
+    foreach ($i in 0..($adapters.Count - 1)) {
+        $a = $adapters[$i]
+        $total = [long]$a.AdapterRAM
+        $name = ($a.Name -replace '\\|','_')
+        "${i}|${name}|${total}|0|0"
+    }
+}
+`;
+
+  const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+
+  return new Promise((resolve) => {
+    execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { timeout: 10000 }, (err, stdout) => {
+      if (err) {
+        resolve([]);
+        return;
+      }
+      try {
+        const output = stdout.trim();
+        if (!output) {
+          resolve([]);
+          return;
+        }
+        const entries = output.split('\n').filter(l => l.trim());
+        const devices = entries.map((entry, idx) => {
+          const parts = entry.split('|');
+          return {
+            adapterIndex: parseInt(parts[0]) || idx,
+            name: parts[1] || '',
+            totalBytes: parseInt(parts[2]) || 0,
+            usageBytes: 0,
+            budgetBytes: 0,
+          };
+        });
+        resolve(devices);
+      } catch (e) {
+        resolve([]);
+      }
+    });
+  });
+}
+
 let modelDownloadWindow = null;
 let downloadAbortController = null;
 let customModelDir = null;
@@ -1186,6 +1234,7 @@ ipcMain.handle('openAudioPreprocess', async (event, data) => {
 
   audioPreprocessWindow.webContents.once('did-finish-load', () => {
     audioPreprocessWindow.webContents.send('loadPreprocessData', { data: pendingPreprocessData, wavBuffer: preprocessWavBuffer });
+    preprocessWavBuffer = null;
   });
 
   audioPreprocessWindow.on('closed', () => {
@@ -1433,6 +1482,8 @@ ipcMain.handle('fragment-svs:synthesize', async (event, { notes, bpm, options })
 });
 
 ipcMain.handle('fragment-svs:dispose', async () => {
+  // fragment 编辑器共享 svsPipeline 全局实例，不应在此释放
+  // svsPipeline 的生命周期由 svs:dispose 和 before-quit 管理
   return { success: true };
 });
 
@@ -1761,7 +1812,10 @@ ipcMain.handle('resmgr:open', async () => {
 
 ipcMain.handle('resmgr:getGPUInfo', async () => {
   try {
-    const vramData = await queryGPUVRAMUsage();
+    let vramData = await queryGPUVRAMUsage();
+    if (!vramData || vramData.length === 0) {
+      vramData = await queryGPUVRAMUsageFallback();
+    }
     const devices = cachedDMLDevices || await enumerateDMLDevices(getModelDir());
     if (!cachedDMLDevices) cachedDMLDevices = devices;
 

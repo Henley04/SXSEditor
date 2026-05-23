@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const https = require('node:https');
 const http = require('node:http');
 const os = require('node:os');
+const { pipeline } = require('node:stream/promises');
 const { execFile } = require('node:child_process');
 const { URL } = require('node:url');
 
@@ -491,32 +492,20 @@ async function downloadChunk(url, destPath, chunkIndex, start, end, options = {}
  * 合并所有分片到目标文件（流式合并，内存友好）
  */
 async function mergeChunks(destPath, numChunks) {
-  return new Promise((resolve, reject) => {
-    const finalStream = fs.createWriteStream(destPath, { flags: 'w' });
-    let i = 0;
+  const finalStream = fs.createWriteStream(destPath, { flags: 'w' });
 
-    function writeNext() {
-      if (i >= numChunks) {
-        finalStream.end(() => resolve());
-        return;
-      }
-
+  try {
+    for (let i = 0; i < numChunks; i++) {
       const chunkPath = destPath + CHUNK_PART_SUFFIX + i;
       const chunkStream = fs.createReadStream(chunkPath);
-
-      chunkStream.on('end', () => {
-        try { fs.unlinkSync(chunkPath); } catch (_) {}
-        i++;
-        writeNext();
-      });
-
-      chunkStream.on('error', reject);
-      chunkStream.pipe(finalStream, { end: false });
+      await pipeline(chunkStream, finalStream, { end: false });
+      try { fs.unlinkSync(chunkPath); } catch (_) {}
     }
-
-    finalStream.on('error', reject);
-    writeNext();
-  });
+    finalStream.end();
+  } catch (err) {
+    finalStream.destroy();
+    throw err;
+  }
 }
 
 /**

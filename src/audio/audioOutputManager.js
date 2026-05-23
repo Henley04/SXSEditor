@@ -274,12 +274,23 @@ function _getDefaultInstance() {
   return _defaultInstance;
 }
 
+function _destroyDefaultInstance() {
+  if (_defaultInstance) {
+    _defaultInstance.destroy();
+    _defaultInstance = null;
+  }
+}
+
 AudioOutputManager.isAvailable = async function () {
-  return _getDefaultInstance().isAvailable();
+  const result = await _getDefaultInstance().isAvailable();
+  _destroyDefaultInstance();
+  return result;
 };
 
 AudioOutputManager.getDevices = async function () {
-  return _getDefaultInstance().getDevices();
+  const result = await _getDefaultInstance().getDevices();
+  _destroyDefaultInstance();
+  return result;
 };
 
 AudioOutputManager.getHostAPIs = function () {
