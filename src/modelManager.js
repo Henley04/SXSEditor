@@ -7,6 +7,7 @@ const { execFile } = require('node:child_process');
 const { URL } = require('node:url');
 
 const MODEL_IDS = {
+  fp32: 'syxppp/SoulX-Singer-onnx-directml',
   fp16: 'syxppp/SoulX-Singer-onnx-directml-fp16',
   int8: 'syxppp/SoulX-Singer-onnx-directml-int8',
 };

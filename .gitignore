@@ -127,3 +127,6 @@ executorch_c++/
 
 # SoulX-Singer submodule (external dependency, no git URL available)
 SoulX-Singer/
+
+# AtomCode local-scope configs (machine-specific)
+.atomcode/local/
