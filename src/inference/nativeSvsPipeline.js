@@ -2,6 +2,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const ort = require('onnxruntime-node');
 const { pinyin } = require('pinyin-pro');
+const dxgiEnumerator = require('./dxgiEnumerator');
 
 const SAMPLE_RATE = 24000;
 const HOP_SIZE = 480;
@@ -354,147 +355,12 @@ function getVendorName(vendorId) {
 }
 
 async function enumerateGPUsViaDXGI() {
-    const { execFile } = require('child_process');
-
-    const csharpCode = [
-        'using System;',
-        'using System.Runtime.InteropServices;',
-        'using System.Text;',
-        '',
-        'public class DXGIEnum',
-        '{',
-        '    [DllImport("dxgi.dll")]',
-        '    static extern int CreateDXGIFactory1(ref Guid riid, out IntPtr ppFactory);',
-        '',
-        '    [UnmanagedFunctionPointer(CallingConvention.StdCall)]',
-        '    delegate int EnumAdapters1Del(IntPtr This, uint Adapter, out IntPtr ppAdapter);',
-        '',
-        '    [UnmanagedFunctionPointer(CallingConvention.StdCall)]',
-        '    delegate int GetDesc1Del(IntPtr This, IntPtr pDesc);',
-        '',
-        '    [UnmanagedFunctionPointer(CallingConvention.StdCall)]',
-        '    delegate uint ReleaseDel(IntPtr This);',
-        '',
-        '    public static string GetAdapters()',
-        '    {',
-        '        var factoryGuid = new Guid("770aae78-f26f-4dba-a829-253c83d1b387");',
-        '        IntPtr factoryPtr;',
-        '        int hr = CreateDXGIFactory1(ref factoryGuid, out factoryPtr);',
-        '        if (hr != 0) return "";',
-        '',
-        '        var sb = new StringBuilder();',
-        '        try',
-        '        {',
-        '            IntPtr vtbl = Marshal.ReadIntPtr(factoryPtr);',
-        '            IntPtr enumAdapters1Ptr = Marshal.ReadIntPtr(vtbl, IntPtr.Size * 12);',
-        '            var enumAdapters1 = (EnumAdapters1Del)Marshal.GetDelegateForFunctionPointer(enumAdapters1Ptr, typeof(EnumAdapters1Del));',
-        '',
-        '            for (uint i = 0; i < 16; i++)',
-        '            {',
-        '                IntPtr adapterPtr;',
-        '                hr = enumAdapters1(factoryPtr, i, out adapterPtr);',
-        '                if (hr != 0) break;',
-        '',
-        '                try',
-        '                {',
-        '                    IntPtr adapterVtbl = Marshal.ReadIntPtr(adapterPtr);',
-        '                    IntPtr getDesc1Ptr = Marshal.ReadIntPtr(adapterVtbl, IntPtr.Size * 10);',
-        '                    var getDesc1 = (GetDesc1Del)Marshal.GetDelegateForFunctionPointer(getDesc1Ptr, typeof(GetDesc1Del));',
-        '',
-        '                    IntPtr descPtr = Marshal.AllocHGlobal(320);',
-        '                    try',
-        '                    {',
-        '                        hr = getDesc1(adapterPtr, descPtr);',
-        '                        if (hr != 0) continue;',
-        '',
-        '                        uint flags = (uint)Marshal.ReadInt32(descPtr, 304);',
-        '                        if ((flags & 2) != 0) continue;',
-        '',
-        '                        string description = Marshal.PtrToStringUni(descPtr);',
-        '                        uint vendorId = (uint)Marshal.ReadInt32(descPtr, 256);',
-        '                        uint deviceId = (uint)Marshal.ReadInt32(descPtr, 260);',
-        '                        long dedicatedVideoMemory = Marshal.ReadInt64(descPtr, 272);',
-        '',
-        '                        if (sb.Length > 0) sb.Append(";");',
-        '                        sb.Append(i);',
-        '                        sb.Append("|");',
-        '                        sb.Append((description ?? "").Replace("|", "_"));',
-        '                        sb.Append("|");',
-        '                        sb.Append(dedicatedVideoMemory);',
-        '                        sb.Append("|");',
-        '                        sb.Append(vendorId);',
-        '                        sb.Append("|");',
-        '                        sb.Append(deviceId);',
-        '                    }',
-        '                    finally',
-        '                    {',
-        '                        Marshal.FreeHGlobal(descPtr);',
-        '                    }',
-        '                }',
-        '                finally',
-        '                {',
-        '                    IntPtr avtbl = Marshal.ReadIntPtr(adapterPtr);',
-        '                    IntPtr relPtr = Marshal.ReadIntPtr(avtbl, IntPtr.Size * 2);',
-        '                    var release = (ReleaseDel)Marshal.GetDelegateForFunctionPointer(relPtr, typeof(ReleaseDel));',
-        '                    release(adapterPtr);',
-        '                }',
-        '            }',
-        '        }',
-        '        finally',
-        '        {',
-        '            IntPtr fvtbl = Marshal.ReadIntPtr(factoryPtr);',
-        '            IntPtr relPtr = Marshal.ReadIntPtr(fvtbl, IntPtr.Size * 2);',
-        '            var release = (ReleaseDel)Marshal.GetDelegateForFunctionPointer(relPtr, typeof(ReleaseDel));',
-        '            release(factoryPtr);',
-        '        }',
-        '',
-        '        return sb.ToString();',
-        '    }',
-        '}',
-    ].join('\n');
-
-    const psScript = `Add-Type -TypeDefinition @"\n${csharpCode}\n"@\n[DXGIEnum]::GetAdapters()`;
-    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
-
-    return new Promise((resolve) => {
-        execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { timeout: 15000 }, (err, stdout) => {
-            if (err) {
-                console.warn('[OnnxSVSPipeline] DXGI GPU 枚举失败:', err.message);
-                resolve([]);
-                return;
-            }
-            try {
-                const output = stdout.trim();
-                if (!output) {
-                    resolve([]);
-                    return;
-                }
-                const entries = output.split(';').filter(l => l.trim());
-                const devices = entries.map(entry => {
-                    const parts = entry.split('|');
-                    const vramBytes = parseInt(parts[2]) || 0;
-                    const gb = vramBytes / (1024 * 1024 * 1024);
-                    const vramStr = gb >= 1 ? `${Math.round(gb * 10) / 10} GB` : `${Math.round(vramBytes / (1024 * 1024))} MB`;
-                    const vendorId = parseInt(parts[3]) || 0;
-                    const isDiscrete = isDiscreteGPUByName(parts[1]);
-                    return {
-                        name: parts[1],
-                        type: 1,
-                        isDiscrete: isDiscrete !== undefined ? isDiscrete : (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024),
-                        dxgiAdapterNumber: parseInt(parts[0]),
-                        vram: vramStr,
-                        vramBytes: vramBytes,
-                        vendor: getVendorName(vendorId),
-                        source: 'dxgi',
-                    };
-                });
-                resolve(devices);
-            } catch (e) {
-                console.warn('[OnnxSVSPipeline] DXGI GPU 枚举结果解析失败:', e.message);
-                resolve([]);
-            }
-        });
-    });
+    try {
+        return dxgiEnumerator.enumerateGPUAdapters();
+    } catch (e) {
+        console.warn('[OnnxSVSPipeline] koffi DXGI 枚举失败:', e.message);
+        return [];
+    }
 }
 
 async function enumerateDMLDevicesInProcess(modelDir) {

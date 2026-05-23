@@ -2793,27 +2793,11 @@ async function handleAudioToMidi() {
     let f0Data = null;
 
     try {
-      const bpResult = await window.electronAPI.extractF0BasicPitch({
-        audioData,
-        sampleRate,
-        bpm,
-      });
+      const settings = await window.electronAPI.getSettings();
+      const midiTool = settings?.midiExtractTool || 'rosvot';
 
-      if (!bpResult.success) {
-        throw new Error(bpResult.error || 'Basic Pitch failed');
-      }
-
-      midiNotes = (bpResult.notes || []).map((n, i) => ({
-        id: n.id ?? (Date.now() + i),
-        pitch: n.pitch ?? 60,
-        start: n.start ?? 0,
-        duration: n.duration ?? 0.25,
-        lyric: n.lyric || 'la',
-      }));
-
-      if (extractPitch) {
-        updateLoadingMessage(loading, t('main.audioToMidiExtractingF0'));
-
+      if (midiTool === 'rosvot') {
+        // RosVot: 使用 RMVPE 提取 F0 + f0ToNotes 转 MIDI
         const rmvpeResult = await window.electronAPI.extractF0({
           audioData,
           sampleRate,
@@ -2821,10 +2805,55 @@ async function handleAudioToMidi() {
         });
 
         if (!rmvpeResult.success) {
-          throw new Error(rmvpeResult.error || 'RMVPE failed');
+          throw new Error(rmvpeResult.error || 'RosVot (RMVPE) failed');
         }
 
-        f0Data = rmvpeResult.f0Array;
+        midiNotes = (rmvpeResult.notes || []).map((n, i) => ({
+          id: n.id ?? (Date.now() + i),
+          pitch: n.pitch ?? 60,
+          start: n.start ?? 0,
+          duration: n.duration ?? 0.25,
+          lyric: n.lyric || 'la',
+        }));
+
+        if (extractPitch) {
+          f0Data = rmvpeResult.f0Array;
+        }
+      } else {
+        // Basic Pitch: 直接提取 MIDI + F0
+        const bpResult = await window.electronAPI.extractF0BasicPitch({
+          audioData,
+          sampleRate,
+          bpm,
+        });
+
+        if (!bpResult.success) {
+          throw new Error(bpResult.error || 'Basic Pitch failed');
+        }
+
+        midiNotes = (bpResult.notes || []).map((n, i) => ({
+          id: n.id ?? (Date.now() + i),
+          pitch: n.pitch ?? 60,
+          start: n.start ?? 0,
+          duration: n.duration ?? 0.25,
+          lyric: n.lyric || 'la',
+        }));
+
+        if (extractPitch) {
+          updateLoadingMessage(loading, t('main.audioToMidiExtractingF0'));
+
+          const rmvpeResult = await window.electronAPI.extractF0({
+            audioData,
+            sampleRate,
+            bpm,
+          });
+
+          if (!rmvpeResult.success) {
+            throw new Error(rmvpeResult.error || 'RMVPE failed');
+          }
+
+          f0Data = rmvpeResult.f0Array;
+        }
       }
     } catch (err) {
       hideLoadingOverlay(loading);

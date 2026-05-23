@@ -207,7 +207,7 @@ export default {
     play: '▶ Play',
     pause: '⏸ Pause',
     rmvpeExtractF0: '🎛️ RMVPE Extract F0',
-    basicPitchExtractMidi: '🎵 Basic Pitch Extract MIDI',
+    basicPitchExtractMidi: '🎵 Extract MIDI',
     save: '💾 Save',
     back: '✖ Back',
     wavWaveform: 'WAV Waveform',
@@ -218,6 +218,7 @@ export default {
     processing: 'Processing...',
     extractingF0Rmvpe: 'Extracting F0 using RMVPE...',
     extractingMidiBasicPitch: 'Extracting MIDI notes using Basic Pitch...',
+    extractingMidiRosvot: 'Extracting MIDI notes using RosVot (RMVPE)...',
     pleaseLoadAudio: 'Please load an audio file first',
     f0ExtractionComplete: 'F0 extraction complete (RMVPE model)',
     midiExtractionComplete: 'MIDI note extraction complete (Basic Pitch model)',
@@ -299,7 +300,11 @@ export default {
     precisionInfoInt8: 'INT8 (Quantized): Model is compressed with INT8 quantization. Slight quality loss, but VRAM usage is reduced by ~40-50% and inference speed is improved. Recommended for users with integrated GPUs or low VRAM (<2GB).',
     precisionInfoRecommend: 'If unsure, choose FP16. Models of different precisions are not compatible with each other. Switching precision requires re-downloading models.',
     openModelDownload: 'Open Model Download',
-    openModelDownloadHint: 'Open the model download page to download or update required inference model files.'
+    openModelDownloadHint: 'Open the model download page to download or update required inference model files.',
+    midiExtractTool: 'MIDI Extraction Tool',
+    midiExtractToolRosvot: 'RosVot (RMVPE)',
+    midiExtractToolBasicpitch: 'Basic Pitch',
+    midiExtractToolHint: 'Select the tool used for audio-to-MIDI extraction. RosVot is based on RMVPE pitch detection, suitable for vocal audio; Basic Pitch is based on neural networks, suitable for multi-instrument audio.'
   },
   modelDownload: {
     title: 'SXSEditor Model Download',

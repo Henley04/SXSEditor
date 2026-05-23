@@ -27,6 +27,7 @@ const saveBtn = document.getElementById('saveBtn');
 const cancelBtn = document.getElementById('cancelBtn');
 const languageSelect = document.getElementById('languageSelect');
 const modelPrecisionSelect = document.getElementById('modelPrecision');
+const midiExtractToolSelect = document.getElementById('midiExtractTool');
 const openModelDownloadBtn = document.getElementById('openModelDownloadBtn');
 
 previewDiffStepsSlider.addEventListener('input', () => {
@@ -100,6 +101,12 @@ async function loadDevices() {
             modelPrecisionSelect.value = currentSetting.modelPrecision;
         } else {
             modelPrecisionSelect.value = 'fp16';
+        }
+
+        if (currentSetting && currentSetting.midiExtractTool) {
+            midiExtractToolSelect.value = currentSetting.midiExtractTool;
+        } else {
+            midiExtractToolSelect.value = 'rosvot';
         }
     } catch (err) {
         console.error('加载设备列表失败:', err);
@@ -269,6 +276,7 @@ saveBtn.addEventListener('click', async () => {
         audioVolume: parseInt(audioVolumeSlider.value) / 100,
         locale: languageSelect.value,
         modelPrecision: modelPrecisionSelect.value,
+        midiExtractTool: midiExtractToolSelect.value,
     };
 
     try {

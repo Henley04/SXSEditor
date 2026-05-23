@@ -162,6 +162,18 @@
         </div>
 
         <div class="settings-section">
+            <h3 class="section-title" data-i18n="settings.midiExtractTool">MIDI 提取工具</h3>
+            <div class="setting-group">
+                <label for="midiExtractTool" data-i18n="settings.midiExtractTool">MIDI 提取工具</label>
+                <select id="midiExtractTool">
+                    <option value="rosvot" data-i18n="settings.midiExtractToolRosvot">RosVot (RMVPE)</option>
+                    <option value="basicpitch" data-i18n="settings.midiExtractToolBasicpitch">Basic Pitch</option>
+                </select>
+                <p class="hint" data-i18n="settings.midiExtractToolHint">选择音频转MIDI时使用的提取工具。RosVot 基于 RMVPE 音高检测，适合人声音频；Basic Pitch 基于神经网络，适合多乐器音频。</p>
+            </div>
+        </div>
+
+        <div class="settings-section">
             <h3 class="section-title" data-i18n="settings.modelManagement">模型管理</h3>
             <div class="setting-group">
                 <label for="modelPrecision" data-i18n="settings.modelPrecision">模型精度</label>
