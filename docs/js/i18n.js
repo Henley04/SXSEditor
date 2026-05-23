@@ -19,9 +19,9 @@
       'nav.downloadCta': '下载',
 
       // 首页
-      'index.badge': 'v1.0.0 · 开源项目',
+      'index.badge': '「为你而生的自由歌唱软件」',
       'index.h1': '桌面端歌声合成，<br><em>开箱即用</em>',
-      'index.desc': 'SXSEditor 是一款开源桌面歌声合成编辑器。基于钢琴卷帘界面进行音符编排与歌词输入，通过神经网络声学模型实现高质量歌声合成。无需联网，无需订阅，本地运行，数据完全自主可控。',
+      'index.desc': 'SXSEditor 是一款开源桌面歌声合成编辑器。基于MIDI进行音符编排与歌词输入，通过神经网络声学模型实现高质量歌声合成。',
       'index.download': '免费下载',
       'index.learnMore': '了解功能',
       'index.screenshotAlt': 'SXSEditor 主界面',
@@ -56,7 +56,7 @@
       'features.export.desc': '合成完成后导出为标准 WAV 文件（24kHz），可直接导入其他 DAW 进行后期混音，亦可直接发布。',
 
       'features.gpu.title': 'GPU 加速',
-      'features.gpu.desc': '支持 NVIDIA、AMD 及 Intel 独立显卡加速推理。无独显环境下亦可使用 CPU 运行，功能不受影响。',
+      'features.gpu.desc': '支持 NVIDIA、AMD 及 Intel 独立显卡加速推理。无独显环境下亦可使用 CPU 运行，功能不受影响。支持INT8与FP16量化',
 
       'features.desktop.title': '桌面原生应用',
       'features.desktop.desc': '基于 Electron 构建，提供原生桌面体验。当前在 Windows 平台经过充分测试，macOS 与 Linux 理论上可编译运行。',
@@ -65,22 +65,22 @@
       'features.envelope.desc': '包络编辑器支持绘制音高曲线与音量变化，可实现颤音、滑音等效果，或对特定音节进行力度调节。',
 
       'features.device.title': '推理设备选择',
-      'features.device.desc': '在设置中可指定用于推理的显卡设备，亦可选择自动检测。笔记本电脑用户可手动切换至 CPU 模式以降低功耗。',
+      'features.device.desc': '在设置中可指定用于推理的显卡设备，亦可选择自动检测。笔记本电脑用户可手动切换至 NPU 模式（仍在开发）以降低功耗。',
 
       'features.testing.title': '自动化测试保障',
       'features.testing.desc': '160 余个自动化测试用例覆盖核心功能，每次代码变更均执行回归测试，确保功能稳定性与代码质量。',
 
       // 下载页
       'download.h1': '下载',
-      'download.subtitle': '免费开源，开箱即用',
+      'download.subtitle': '一键免费安装',
       'download.versionBadge': 'v1.0.0 最新版',
       'download.cardTitle': 'SXSEditor for Windows',
-      'download.cardDesc': '包含应用程序及所需运行环境，下载后解压即可使用。无需安装，不写入注册表。',
+      'download.cardDesc': '包含应用程序及所需运行环境，不包含模型文件，下载后双击即可安装。模型文件需要手动下载。',
       'download.downloadBtn': '下载安装包',
       'download.version': '版本',
       'download.platform': '平台',
       'download.license': '许可',
-      'download.licenseValue': 'MIT 开源',
+      'download.licenseValue': 'MIT',
 
       'download.alternatives': '其他方式',
       'download.source.title': '从源码构建',
@@ -95,21 +95,21 @@
 
       'download.requirements': '系统要求',
       'download.req.os.title': '操作系统',
-      'download.req.os.desc': 'Windows 10 / 11（64 位）',
-      'download.req.runtime.title': '运行时',
+      'download.req.os.desc': 'Windows 10(19H2)/Windows 11(All)/n*尽管应用在不支持的系统上可能成功启动，但基于DirectX12的dml推理通常不会工作/n**在未来，我们准备加入基于webnn的NPU推理，NPU推理建议使用INT8版本，Windows11（23H2）',
+      'download.req.runtime.title': '开发者运行时',
       'download.req.runtime.desc': 'Node.js ≥ 18，npm ≥ 9',
-      'download.req.gpu.title': '显卡（可选）',
-      'download.req.gpu.desc': 'NVIDIA / AMD / Intel 独显（DirectML 加速）',
+      'download.req.gpu.title': '显卡（强烈建议）',
+      'download.req.gpu.desc': 'NVIDIA / AMD / Intel 独显（DirectML 加速）/n*理论上支持DirectX12的显卡都可以加速，但实际情况我们无法保证',
       'download.req.model.title': 'ONNX 模型',
-      'download.req.model.desc': '需下载 SoulX-Singer 模型文件',
+      'download.req.model.desc': '需下载 SoulX-Singer 模型文件，应用内有一键下载。/n也可以在modelscope找到我们发布的量化与优化后的onnx文件。',
 
       // 关于页
       'about.h1': '关于项目',
-      'about.subtitle': 'SXSEditor 的起源与理念',
+      'about.subtitle': 'SXSEditor',
 
       'about.background.title': '项目背景',
-      'about.background.p1': 'SXSEditor 诞生的初衷是降低歌声合成的使用门槛。现有歌声合成软件普遍存在价格高昂、操作复杂或不开源等问题。本项目旨在提供一个免费、开源、易于上手的桌面端解决方案。',
-      'about.background.p2': 'SXSEditor 将钢琴卷帘编辑器与神经网络歌声合成集成于同一桌面应用中。用户无需具备深度学习背景，无需配置运行环境，下载解压即可使用。所有推理均在本地完成，用户数据完全自主可控。',
+      'about.background.p1': 'SXSEditor 旨在为创作者带来更便捷，更高质量的歌声合成，并且可以在无需训练的情况下轻松创建你喜爱的歌姬：只需30s以内的音频。免费、无算力要求、无限数量。而不需要求助于专有软件，比如Synthesis V或Vocaloid。现有歌声合成软件普遍存在价格高昂、复杂、在元端运行的问题。本项目旨在提供一个免费、开源、本地的桌面端解决方案。',
+      'about.background.p2': 'SXSEditor 解决了传统vocaloid和diffsinger的问题：上手难度高、环境配置难、歌手创建难的问题。用户无需具备深度学习背景，无需配置运行环境，直接使用，并且可以0门槛创建歌手。所有推理均在本地完成，用户数据完全自主可控。',
 
       'about.techStack.title': '技术栈',
       'about.techStack.intro': '本项目基于以下开源技术构建：',
@@ -134,18 +134,18 @@
       'about.audioSpec.f0Range': 'F0 范围：C1 ~ B6（32.7 Hz ~ 1975.5 Hz）',
 
       'about.license.title': '开源许可',
-      'about.license.p1': '本项目基于 <strong>MIT License</strong> 开源。允许自由使用、修改和分发，仅需保留原始版权声明。如本项目对您有所帮助，欢迎在 GitHub 上给予 Star 支持。',
+      'about.license.p1': '本项目基于 <strong>MIT License</strong> 开源。允许自由使用、修改和分发，仅需保留原始版权声明。您可以在不注明由SXSEditor生成的情况下发布商业或个人歌曲，然而，我们欢迎您在歌曲中注明使用以提升我们的知名度。如本项目对您有所帮助，欢迎在 GitHub 上给予 Star 支持。',
 
       'about.ack.title': '致谢',
       'about.ack.intro': '感谢以下项目与社区的支持：',
-      'about.ack.soulx': '— 底层声学模型与 SVS/SVC 流水线',
+      'about.ack.soulx': '— 底层声学模型Soulx-Singer与 Soul AI LAB',
       'about.ack.onnx': '— 本地高效模型推理运行时',
       'about.ack.forge': '— 应用打包与构建工具',
       'about.ack.wavesurfer': '— 音频波形可视化组件',
-      'about.ack.contributors': '所有提交过 Issue 与 Pull Request 的贡献者',
+      'about.ack.contributors': '所有提交过 Issue 与建议的贡献者，以及正在看的你。',
 
       'about.contribute.title': '参与贡献',
-      'about.contribute.p1': '欢迎任何形式的贡献，包括但不限于 Bug 报告、功能建议与代码提交。请前往 GitHub 仓库提交 Issue 或 Pull Request。提交 PR 前请确保运行 <code>npm test</code> 且所有测试通过。',
+      'about.contribute.p1': '欢迎任何形式的贡献，包括但不限于 Bug 报告、功能建议。请前往 GitHub 仓库提交 Issue ，我们暂时不接受代码提交，感谢您的理解。',
 
       // 页脚
       'footer.copy': '© 2026 SXSEditor. MIT License.',
