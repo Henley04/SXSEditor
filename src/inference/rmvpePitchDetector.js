@@ -260,7 +260,11 @@ class RmvpePitchDetector {
 
   dispose() {
     if (this.session) {
-      this.session.release();
+      try {
+        this.session.release();
+      } catch (e) {
+        console.warn('[RmvpePitchDetector] 释放会话失败:', e.message);
+      }
       this.session = null;
       this.initialized = false;
     }

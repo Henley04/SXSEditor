@@ -750,11 +750,11 @@ function serializeProject(embedSingerFiles = false) {
       let wavBase64 = null;
       try {
         const bytes = new Uint8Array(singer.wavBuffer);
-        const CHUNK_SIZE = 32768;
+        const CHUNK_SIZE = 8192;
         let binary = '';
         for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
           const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
-          binary += String.fromCharCode.apply(null, chunk);
+          binary += String.fromCharCode(...chunk);
         }
         wavBase64 = btoa(binary);
       } catch (e) {

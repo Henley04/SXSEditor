@@ -584,6 +584,65 @@ async function enumerateDMLDevicesInProcess(modelDir) {
     return devices;
 }
 
+async function enumerateGPUsViaCimInstance() {
+    const { execFile } = require('child_process');
+
+    const psScript = `
+$adapters = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue
+if ($adapters) {
+    foreach ($i in 0..($adapters.Count - 1)) {
+        $a = $adapters[$i]
+        $total = [long]$a.AdapterRAM
+        $name = ($a.Name -replace '\\|','_')
+        $vid = [uint32]$a.AdapterCompatibility
+        $vidMap = @{ 'NVIDIA' = '0x10DE'; 'AMD' = '0x1002'; 'Intel' = '0x8086' }
+        $vendorHex = $vidMap[$a.AdapterCompatibility]
+        "${i}|${name}|${total}|$($vendorHex -replace '0x','')|0"
+    }
+}
+`;
+
+    const encoded = Buffer.from(psScript, 'utf16le').toString('base64');
+
+    return new Promise((resolve) => {
+        execFile('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { timeout: 10000 }, (err, stdout) => {
+            if (err) {
+                resolve([]);
+                return;
+            }
+            try {
+                const output = stdout.trim();
+                if (!output) {
+                    resolve([]);
+                    return;
+                }
+                const entries = output.split('\n').filter(l => l.trim());
+                const devices = entries.map((entry, idx) => {
+                    const parts = entry.split('|');
+                    const vramBytes = parseInt(parts[2]) || 0;
+                    const gb = vramBytes / (1024 * 1024 * 1024);
+                    const vramStr = gb >= 1 ? `${Math.round(gb * 10) / 10} GB` : `${Math.round(vramBytes / (1024 * 1024))} MB`;
+                    const vendorId = parseInt(parts[3], 16) || 0;
+                    const isDiscrete = isDiscreteGPUByName(parts[1]);
+                    return {
+                        name: parts[1],
+                        type: 1,
+                        isDiscrete: isDiscrete !== undefined ? isDiscrete : (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024),
+                        dxgiAdapterNumber: parseInt(parts[0]) || idx,
+                        vram: vramStr,
+                        vramBytes: vramBytes,
+                        vendor: getVendorName(vendorId) || parts[4] || '',
+                        source: 'cim',
+                    };
+                });
+                resolve(devices);
+            } catch (e) {
+                resolve([]);
+            }
+        });
+    });
+}
+
 async function enumerateDMLDevices(modelDir) {
     let devices = await enumerateGPUsViaDXGI();
 
@@ -592,7 +651,15 @@ async function enumerateDMLDevices(modelDir) {
         return devices;
     }
 
-    console.log('[OnnxSVSPipeline] DXGI 枚举未发现 GPU，尝试 ONNX Runtime verbose 日志枚举...');
+    // DXGI 枚举失败（可能缺少 CSC 编译器），尝试 WMI/CIM 回退
+    console.log('[OnnxSVSPipeline] DXGI 枚举未发现 GPU，尝试 WMI/CIM 回退...');
+    devices = await enumerateGPUsViaCimInstance();
+    if (devices.length > 0) {
+        console.log(`[OnnxSVSPipeline] CIM 枚举发现 ${devices.length} 个 GPU 设备`);
+        return devices;
+    }
+
+    console.log('[OnnxSVSPipeline] CIM 枚举也未发现 GPU，尝试 ONNX Runtime verbose 日志枚举...');
     if (modelDir) {
         devices = await enumerateDMLDevicesInProcess(modelDir);
     }
@@ -1974,7 +2041,23 @@ class OnnxSVSPipeline {
     }
 
     _extractRefNotePitches(wavBuffer) {
-        return null;
+        try {
+            const f0 = this._extractRefF0FromWav(wavBuffer);
+            if (!f0 || f0.length === 0) return null;
+            const notePitches = [];
+            for (let i = 0; i < f0.length; i++) {
+                if (f0[i] > 0) {
+                    const midi = 69 + 12 * Math.log2(f0[i] / 440);
+                    if (midi >= 24 && midi <= 108) {
+                        notePitches.push(midi);
+                    }
+                }
+            }
+            return notePitches.length > 0 ? notePitches : null;
+        } catch (e) {
+            console.warn('[OnnxSVSPipeline] 参考音频音符音高提取失败:', e.message);
+            return null;
+        }
     }
 
     getHardwareInfo() {
