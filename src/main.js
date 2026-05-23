@@ -374,6 +374,7 @@ function openResourceManagerWindow() {
 
 async function queryGPUVRAMUsage() {
   try {
+    const dxgiEnumerator = require('./inference/dxgiEnumerator');
     return dxgiEnumerator.queryVRAMUsage();
   } catch (e) {
     console.warn('[Main] koffi DXGI VRAM 查询失败:', e.message);
