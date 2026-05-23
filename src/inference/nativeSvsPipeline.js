@@ -454,9 +454,9 @@ async function enumerateGPUsViaCimInstance() {
     const { execFile } = require('child_process');
 
     const psScript = `
-$adapters = Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue
-if ($adapters) {
-    foreach ($i in 0..($adapters.Count - 1)) {
+$adapters = @(Get-CimInstance -ClassName Win32_VideoController -ErrorAction SilentlyContinue)
+if ($adapters.Count -gt 0) {
+    for ($i = 0; $i -lt $adapters.Count; $i++) {
         $a = $adapters[$i]
         $total = [long]$a.AdapterRAM
         $name = ($a.Name -replace '\\|','_')
