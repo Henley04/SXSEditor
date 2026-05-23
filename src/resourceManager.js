@@ -1,6 +1,7 @@
 import './common.css';
 import './resourceManager.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
+import { formatBytes } from './utils/formatBytes.js';
 
 const gpuInfoContent = document.getElementById('gpuInfoContent');
 const modelGroupsContent = document.getElementById('modelGroupsContent');
