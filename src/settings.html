@@ -167,12 +167,14 @@
                 <label for="modelPrecision" data-i18n="settings.modelPrecision">模型精度</label>
                 <select id="modelPrecision">
                     <option value="fp16" data-i18n="settings.precisionFp16">FP16 (半精度)</option>
+                    <option value="fp32" data-i18n="settings.precisionFp32">FP32 (全精度)</option>
                     <option value="int8" data-i18n="settings.precisionInt8">INT8 (量化)</option>
                 </select>
                 <p class="hint" data-i18n="settings.modelPrecisionHint"></p>
                 <div class="precision-info-box" id="precisionInfoBox">
                     <strong data-i18n="settings.precisionInfoTitle">精度说明</strong>
                     <ul>
+                        <li data-i18n="settings.precisionInfoFp32"></li>
                         <li data-i18n="settings.precisionInfoFp16"></li>
                         <li data-i18n="settings.precisionInfoInt8"></li>
                         <li data-i18n="settings.precisionInfoRecommend"></li>
