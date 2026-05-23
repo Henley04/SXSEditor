@@ -1,9 +1,8 @@
 /**
- * DXGI GPU 枚举模块 — 使用 koffi FFI 直接调用 dxgi.dll
- * 替代 C# + PowerShell 方案，无需 CSC 编译器
+ * DXGI GPU 枚举模块
+ * 优先使用 koffi FFI 直接调用 dxgi.dll（无需 CSC 编译器）
+ * koffi 不可用时返回空数组，由调用方回退到 CIM/ONNX Runtime 方案
  */
-
-const koffi = require('koffi');
 
 // IID 常量
 const IID_IDXGIFactory1 = '{770aae78-f26f-4dba-a829-253c83d1b387}';
@@ -16,24 +15,38 @@ const VT_ENUM_ADAPTERS1 = 12;
 const VT_GET_DESC1 = 10;
 const VT_QUERY_VIDEO_MEMORY_INFO = 14;
 
-// 预定义 COM 函数原型 (stdcall)，避免循环中重复定义
-const IUnknownReleaseProto = koffi.proto('uint __stdcall IUnknownRelease(void *This)');
-const IUnknownQueryInterfaceProto = koffi.proto('int32 __stdcall IUnknownQI(void *This, void *riid, _Out_ void **ppvObject)');
-const EnumAdapters1Proto = koffi.proto('int32 __stdcall EnumAdapters1(void *This, uint Adapter, _Out_ void **ppAdapter)');
-const GetDesc1Proto = koffi.proto('int32 __stdcall GetDesc1(void *This, _Out_ void *pDesc)');
-const QueryVideoMemoryInfoProto = koffi.proto('int32 __stdcall QueryVideoMemoryInfo(void *This, uint NodeIndex, uint MemorySegmentGroup, _Out_ void *pVideoMemoryInfo)');
-
+// 延迟初始化
+let koffiAvailable = null; // null=未检测, true=可用, false=不可用
+let koffi = null;
 let dxgiLib = null;
+let IUnknownReleaseProto = null;
+let IUnknownQueryInterfaceProto = null;
+let EnumAdapters1Proto = null;
+let GetDesc1Proto = null;
+let QueryVideoMemoryInfoProto = null;
 
-function _loadLibs() {
-  if (!dxgiLib) {
+function _initKoffi() {
+  if (koffiAvailable !== null) return koffiAvailable;
+
+  try {
+    koffi = require('koffi');
     dxgiLib = koffi.load('dxgi.dll');
+
+    IUnknownReleaseProto = koffi.proto('uint __stdcall IUnknownRelease(void *This)');
+    IUnknownQueryInterfaceProto = koffi.proto('int32 __stdcall IUnknownQI(void *This, void *riid, _Out_ void **ppvObject)');
+    EnumAdapters1Proto = koffi.proto('int32 __stdcall EnumAdapters1(void *This, uint Adapter, _Out_ void **ppAdapter)');
+    GetDesc1Proto = koffi.proto('int32 __stdcall GetDesc1(void *This, _Out_ void *pDesc)');
+    QueryVideoMemoryInfoProto = koffi.proto('int32 __stdcall QueryVideoMemoryInfo(void *This, uint NodeIndex, uint MemorySegmentGroup, _Out_ void *pVideoMemoryInfo)');
+
+    koffiAvailable = true;
+  } catch (e) {
+    console.warn('[DXGIEnumerator] koffi 不可用:', e.message);
+    koffiAvailable = false;
   }
+
+  return koffiAvailable;
 }
 
-/**
- * 将 GUID 字符串转为 16 字节 Buffer
- */
 function _guidToBuffer(guidStr) {
   const parts = guidStr.replace(/[{}]/g, '').split('-');
   const buf = Buffer.alloc(16);
@@ -44,18 +57,11 @@ function _guidToBuffer(guidStr) {
   return buf;
 }
 
-/**
- * 从 COM 对象指针读取 vtable 中指定 slot 的函数指针
- * koffi 3.x: 指针是 BigInt，用 koffi.decode(ptr, 'void *') 解引用
- */
 function _readVtableSlot(comPtr, slot) {
   const vtblPtr = koffi.decode(comPtr, 'void *');
   return koffi.decode(vtblPtr + BigInt(slot) * 8n, 'void *');
 }
 
-/**
- * 调用 IUnknown::Release
- */
 function _release(comPtr) {
   try {
     const funcPtr = _readVtableSlot(comPtr, VT_RELEASE);
@@ -64,11 +70,8 @@ function _release(comPtr) {
   } catch (_) {}
 }
 
-/**
- * 枚举所有 GPU 适配器 (通过 koffi FFI 直接调用 dxgi.dll)
- */
 function enumerateGPUs() {
-  _loadLibs();
+  if (!_initKoffi()) return [];
 
   const CreateDXGIFactory1 = dxgiLib.func('int32 __stdcall CreateDXGIFactory1(void *riid, _Out_ void **ppFactory)');
 
@@ -103,7 +106,6 @@ function enumerateGPUs() {
         const descHr = GetDesc1(adapterPtr, descBuf);
         if (descHr !== 0) continue;
 
-        // 解析 DXGI_ADAPTER_DESC1
         let description = '';
         for (let j = 0; j < 128; j++) {
           const ch = descBuf.readUInt16LE(j * 2);
@@ -115,13 +117,11 @@ function enumerateGPUs() {
         const dedicatedVideoMemory = descBuf.readBigUInt64LE(272);
         const flags = descBuf.readUInt32LE(304);
 
-        // 跳过软件适配器 (flags & 2)
         if ((flags & 2) !== 0) {
           _release(adapterPtr);
           continue;
         }
 
-        // 尝试 QueryInterface 获取 IDXGIAdapter3 以查询 VRAM 使用量
         let currentUsage = 0n;
         let budget = 0n;
 
@@ -171,9 +171,6 @@ function enumerateGPUs() {
   return devices;
 }
 
-/**
- * 枚举 GPU 适配器（设备枚举格式，供 nativeSvsPipeline 使用）
- */
 function enumerateGPUAdapters() {
   const adapters = enumerateGPUs();
   return adapters.map(a => {
@@ -205,9 +202,6 @@ function enumerateGPUAdapters() {
   });
 }
 
-/**
- * 查询 GPU VRAM 使用量（供 main.js 使用）
- */
 function queryVRAMUsage() {
   const adapters = enumerateGPUs();
   return adapters.map(a => ({

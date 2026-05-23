@@ -2,7 +2,6 @@ const path = require('node:path');
 const fs = require('node:fs');
 const ort = require('onnxruntime-node');
 const { pinyin } = require('pinyin-pro');
-const dxgiEnumerator = require('./dxgiEnumerator');
 
 const SAMPLE_RATE = 24000;
 const HOP_SIZE = 480;
@@ -356,6 +355,7 @@ function getVendorName(vendorId) {
 
 async function enumerateGPUsViaDXGI() {
     try {
+        const dxgiEnumerator = require('./dxgiEnumerator');
         return dxgiEnumerator.enumerateGPUAdapters();
     } catch (e) {
         console.warn('[OnnxSVSPipeline] koffi DXGI 枚举失败:', e.message);
