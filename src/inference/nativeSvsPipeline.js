@@ -124,6 +124,22 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     return out;
 }
 
+function bitReversePermute(real, imag) {
+    const n = real.length;
+    for (let i = 1, j = 0; i < n; i++) {
+        let bit = n >> 1;
+        while (j & bit) {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
+        if (i < j) {
+            const tmpR = real[i]; real[i] = real[j]; real[j] = tmpR;
+            const tmpI = imag[i]; imag[i] = imag[j]; imag[j] = tmpI;
+        }
+    }
+}
+
 function extractMelSpectrogram(audioFloat, sr) {
     const padLength = (N_FFT - HOP_SIZE) / 2;
     const padded = new Float32Array(audioFloat.length + 2 * padLength);
@@ -174,6 +190,8 @@ function extractMelSpectrogram(audioFloat, sr) {
                 }
             }
         }
+
+        bitReversePermute(real, imag);
 
         for (let i = 0; i <= N_FFT / 2; i++) {
             magnitude[i] = real[i] * real[i] + imag[i] * imag[i];
@@ -562,7 +580,12 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         if (dmlModelExists) {
             try {
                 const dmlModelSession = await ort.InferenceSession.create(dmlModelPath, { executionProviders: ['cpu'] });
-                await dmlModelSession.run(dummyInputs);
+                try {
+                    await dmlModelSession.run(dummyInputs);
+                } catch (runErr) {
+                    try { dmlModelSession.release(); } catch (_) {}
+                    throw runErr;
+                }
                 console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} 加载成功 [CPU] (DML优化模型，推理验证通过)`);
                 return { session: dmlModelSession, ep: 'cpu' };
             } catch (dmlModelErr) {
@@ -572,7 +595,12 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     }
 
     const cpuSession = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
-    await cpuSession.run(dummyInputs);
+    try {
+        await cpuSession.run(dummyInputs);
+    } catch (runErr) {
+        try { cpuSession.release(); } catch (_) {}
+        throw runErr;
+    }
     console.log(`[OnnxSVSPipeline] ${modelName} 加载成功 [CPU] (推理验证通过)`);
     return { session: cpuSession, ep: 'cpu' };
 }
@@ -1557,7 +1585,7 @@ class OnnxSVSPipeline {
         }
     }
 
-    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, onProgress, progressStart, progressRange) {
+    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
         const sequences = this.notesToSequences(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
         const totalFrames = sequences.f0Ids.length;
         const tokenCount = sequences.tokenCount;
@@ -1753,7 +1781,7 @@ class OnnxSVSPipeline {
 
             const segResult = await this._synthesizeSegment(
                 seg.notes, bpm, f0Envelope, pitchCurveF0, f0Shift,
-                ptMelData, ptFrameCount, totalSteps, cfgStrength,
+                ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
                 onProgress, segProgressStart, segProgressRange
             );
 
@@ -1955,7 +1983,7 @@ class OnnxSVSPipeline {
             preflow: 'preflow.onnx',
             condEmb: 'cond_emb.onnx',
             diffStep: 'diff_step_dml.onnx',
-            vocoder: 'vocoder.onnx',
+            vocoder: 'vocoder_dml.onnx',
             melTransform: 'mel_transform.onnx',
         };
 
@@ -1971,6 +1999,14 @@ class OnnxSVSPipeline {
             try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
             if (!dmlExists) {
                 resolvedFile = 'diff_step.onnx';
+            }
+        }
+        if (modelFile === 'vocoder_dml.onnx') {
+            const vocDmlPath = path.join(this.modelDir, 'vocoder_dml.onnx');
+            let vocDmlExists = false;
+            try { await fs.promises.access(vocDmlPath); vocDmlExists = true; } catch (_) {}
+            if (!vocDmlExists) {
+                resolvedFile = 'vocoder.onnx';
             }
         }
 
