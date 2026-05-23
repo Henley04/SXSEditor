@@ -1345,20 +1345,34 @@ async function extractF0BasicPitch() {
     return;
   }
 
-  const loading = showLoading(t('preprocess.extractingMidiBasicPitch'));
+  const settings = await window.electronAPI.getSettings();
+  const midiTool = settings?.midiExtractTool || 'rosvot';
+  const loadingMsg = midiTool === 'rosvot'
+    ? t('preprocess.extractingMidiRosvot')
+    : t('preprocess.extractingMidiBasicPitch');
+  const loading = showLoading(loadingMsg);
 
   try {
     const channelData = wavAudioBuffer.getChannelData(0);
     const audioData = channelData.buffer;
 
-    const result = await window.electronAPI.extractF0BasicPitch({
-      audioData: audioData,
-      sampleRate: wavAudioBuffer.sampleRate,
-      bpm: BPM,
-    });
+    let result;
+    if (midiTool === 'rosvot') {
+      result = await window.electronAPI.extractF0({
+        audioData: audioData,
+        sampleRate: wavAudioBuffer.sampleRate,
+        bpm: BPM,
+      });
+    } else {
+      result = await window.electronAPI.extractF0BasicPitch({
+        audioData: audioData,
+        sampleRate: wavAudioBuffer.sampleRate,
+        bpm: BPM,
+      });
+    }
 
     if (!result.success) {
-      throw new Error(result.error || 'Basic Pitch推理失败');
+      throw new Error(result.error || 'MIDI提取失败');
     }
 
     const notes = (result.notes || []).map((n, i) => ({

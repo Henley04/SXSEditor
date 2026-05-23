@@ -64,6 +64,7 @@
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "koffi": "^3.0.1",
     "naudiodon": "^2.3.6",
     "onnxruntime-node": "^1.24.3",
     "pinyin-pro": "^3.28.1"

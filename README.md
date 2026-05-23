@@ -59,9 +59,9 @@ Download the latest pre-built installer for **Windows**:
 | 🧠 Neural SVS | SoulX-Singer model via ONNX Runtime |
 | 🎤 Singer Management | Custom singers with reference audio & F0 |
 | 📊 Audio Preprocessing | RMVPE / Basic Pitch F0 extraction |
-| 🎵 Audio to MIDI | Convert audio files to MIDI + pitch curve |
+| 🎵 Audio to MIDI | Convert audio files to MIDI + pitch curve (RosVot / Basic Pitch selectable) |
 | 🎵 MIDI Import | Import standard MIDI files with lyrics |
-| ⚙️ Advanced Settings | Diffusion steps, CFG rescale, device selection |
+| ⚙️ Advanced Settings | Diffusion steps, CFG rescale, device selection, MIDI extraction tool |
 | 🔄 Undo / Redo | Full edit history (up to 200 steps) |
 | 💾 Save on Exit | Prompt to save unsaved changes before closing |
 | ⌨️ Ctrl+S Shortcut | Quick save project with keyboard shortcut |
@@ -319,9 +319,9 @@ This project is licensed under the [MIT License](LICENSE).
 | 🧠 神经歌声合成 | SoulX-Singer 模型 + ONNX Runtime |
 | 🎤 歌手管理 | 自定义歌手，支持参考音频 |
 | 📊 音频预处理 | RMVPE / Basic Pitch F0 提取 |
-| 🎵 音频转MIDI | 从音频文件提取MIDI音符和音高曲线 |
+| 🎵 音频转MIDI | 从音频文件提取MIDI音符和音高曲线（RosVot / Basic Pitch 可选） |
 | 🎵 MIDI 导入 | 导入标准 MIDI 文件及歌词 |
-| ⚙️ 高级设置 | 扩散步数、CFG 重缩放、设备选择 |
+| ⚙️ 高级设置 | 扩散步数、CFG 重缩放、设备选择、MIDI 提取工具 |
 | 🔄 撤销 / 重做 | 完整编辑历史（最多 200 步） |
 | 💾 退出保存提示 | 关闭窗口时提示保存未保存的更改 |
 | ⌨️ Ctrl+S 快捷键 | 键盘快捷键快速保存项目 |

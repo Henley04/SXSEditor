@@ -207,7 +207,7 @@ export default {
     play: '▶ 播放',
     pause: '⏸ 暂停',
     rmvpeExtractF0: '🎛️ RMVPE提取F0',
-    basicPitchExtractMidi: '🎵 Basic Pitch提取MIDI',
+    basicPitchExtractMidi: '🎵 提取MIDI',
     save: '💾 保存',
     back: '✖ 返回',
     wavWaveform: 'WAV 波形',
@@ -218,6 +218,7 @@ export default {
     processing: '处理中...',
     extractingF0Rmvpe: '正在使用RMVPE提取F0基频...',
     extractingMidiBasicPitch: '正在使用Basic Pitch提取MIDI音符...',
+    extractingMidiRosvot: '正在使用RosVot (RMVPE)提取MIDI音符...',
     pleaseLoadAudio: '请先加载音频文件',
     f0ExtractionComplete: 'F0基频提取完成（RMVPE模型）',
     midiExtractionComplete: 'MIDI音符提取完成（Basic Pitch模型）',
@@ -299,7 +300,11 @@ export default {
     precisionInfoInt8: 'INT8 (量化)：模型经过 INT8 量化压缩，音质略有损失，但显存占用减少约 40%~50%，推理速度也有所提升。推荐使用核显或低显存（2GB以下）的用户使用。',
     precisionInfoRecommend: '如不确定，建议选择 FP16。三种精度的模型文件互不兼容，切换精度后需要重新下载。',
     openModelDownload: '打开模型下载',
-    openModelDownloadHint: '打开模型下载页面，下载或更新推理所需的模型文件。'
+    openModelDownloadHint: '打开模型下载页面，下载或更新推理所需的模型文件。',
+    midiExtractTool: 'MIDI 提取工具',
+    midiExtractToolRosvot: 'RosVot (RMVPE)',
+    midiExtractToolBasicpitch: 'Basic Pitch',
+    midiExtractToolHint: '选择音频转MIDI时使用的提取工具。RosVot 基于 RMVPE 音高检测，适合人声音频；Basic Pitch 基于神经网络，适合多乐器音频。'
   },
   modelDownload: {
     title: 'SXSEditor 模型文件下载',
