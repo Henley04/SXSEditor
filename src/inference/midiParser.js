@@ -46,6 +46,39 @@ function ticksToSeconds(ticks, ticksPerBeat, tempo) {
   return (ticks / ticksPerBeat) * (tempo / 1000000);
 }
 
+function ticksToSecondsWithTempoMap(tick, ticksPerBeat, tempoMap) {
+    let seconds = 0;
+    let prevTick = 0;
+    let currentTempo = tempoMap[0].tempo;
+    for (const entry of tempoMap) {
+        if (entry.tick >= tick) break;
+        if (entry.tick > prevTick) {
+            seconds += (entry.tick - prevTick) * currentTempo / (ticksPerBeat * 1000000);
+        }
+        currentTempo = entry.tempo;
+        prevTick = entry.tick;
+    }
+    seconds += (tick - prevTick) * currentTempo / (ticksPerBeat * 1000000);
+    return seconds;
+}
+
+function secondsToTicksWithTempoMap(seconds, ticksPerBeat, tempoMap) {
+    let remaining = seconds;
+    let prevTick = 0;
+    let currentTempo = tempoMap[0].tempo;
+    for (let i = 1; i < tempoMap.length; i++) {
+        const nextTick = tempoMap[i].tick;
+        const segmentDuration = (nextTick - prevTick) * currentTempo / (ticksPerBeat * 1000000);
+        if (segmentDuration >= remaining) {
+            return prevTick + remaining * ticksPerBeat * 1000000 / currentTempo;
+        }
+        remaining -= segmentDuration;
+        prevTick = nextTick;
+        currentTempo = tempoMap[i].tempo;
+    }
+    return prevTick + remaining * ticksPerBeat * 1000000 / currentTempo;
+}
+
 function parseMidiFile(buffer) {
   const view = new DataView(buffer);
   let offset = 0;
@@ -72,7 +105,7 @@ function parseMidiFile(buffer) {
 
   offset = 8 + headerLength;
 
-  let tempo = 500000;
+  const tempoMap = [{tick: 0, tempo: 500000}];
   const rawNotes = [];
   const lyrics = [];
 
@@ -119,10 +152,11 @@ function parseMidiFile(buffer) {
 
         if (metaType === 0x51) {
           if (metaLen.value === 3) {
-            tempo =
+            const newTempo =
               (readUint8(view, offset) << 16) |
               (readUint8(view, offset + 1) << 8) |
               readUint8(view, offset + 2);
+            tempoMap.push({tick: absTicks, tempo: newTempo});
           }
         } else if (metaType === 0x05) {
           let text = '';
@@ -242,8 +276,8 @@ function parseMidiFile(buffer) {
 
   for (let idx = 0; idx < trimmed.length; idx++) {
     const n = trimmed[idx];
-    let startS = ticksToSeconds(n.startTicks, ticksPerBeat, tempo);
-    const endS = ticksToSeconds(n.endTicks, ticksPerBeat, tempo);
+    let startS = ticksToSecondsWithTempoMap(n.startTicks, ticksPerBeat, tempoMap);
+    const endS = ticksToSecondsWithTempoMap(n.endTicks, ticksPerBeat, tempoMap);
     if (prevEndS > startS) {
       startS = prevEndS;
     }
@@ -268,9 +302,11 @@ function parseMidiFile(buffer) {
     }
 
     if (startS - prevEndS > SILENCE_THRESHOLD_SEC) {
-      const spStartBeat = (prevEndS / (tempo / 1000000));
+      const spStartTick = secondsToTicksWithTempoMap(prevEndS, ticksPerBeat, tempoMap);
+      const spStartBeat = spStartTick / ticksPerBeat;
       const spDurS = startS - prevEndS;
-      const spDurBeats = spDurS / (tempo / 1000000);
+      const spEndTick = secondsToTicksWithTempoMap(startS, ticksPerBeat, tempoMap);
+      const spDurBeats = (spEndTick - spStartTick) / ticksPerBeat;
       result.push({
         pitch: 0,
         start: spStartBeat,
@@ -281,13 +317,12 @@ function parseMidiFile(buffer) {
     } else {
       if (result.length > 0) {
         const lastResult = result[result.length - 1];
-        const lastStartS = lastResult.start * (tempo / 1000000);
-        lastResult.duration = (startS - lastStartS) / (tempo / 1000000);
+        lastResult.duration = n.startTicks / ticksPerBeat - lastResult.start;
       }
     }
 
-    const startBeat = startS / (tempo / 1000000);
-    const durBeats = durS / (tempo / 1000000);
+    const startBeat = n.startTicks / ticksPerBeat;
+    const durBeats = n.durationTicks / ticksPerBeat;
     result.push({
       pitch: n.midi,
       start: startBeat,

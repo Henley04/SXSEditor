@@ -1,5 +1,6 @@
 const path = require('node:path');
 const ort = require('onnxruntime-node');
+const { resampleAudio } = require('../utils/resampleAudio');
 
 const RMVPE_SAMPLE_RATE = 16000;
 const HOP_LENGTH = 160;
