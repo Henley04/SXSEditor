@@ -69,6 +69,7 @@ function meanStdDev(array) {
     }
   }
   const mean = sum / count;
+  if (count <= 1) return [sum, 0];
   const std = Math.sqrt((1 / (count - 1)) * (sumSquared - (sum * sum) / count));
   return [mean, std];
 }

@@ -20,18 +20,20 @@ function tokenizeLyric(text) {
   if (!text || text.trim().length === 0) return [];
   const cleaned = text.trim();
   const tokens = [];
-  let i = 0;
-  while (i < cleaned.length) {
-    const char = cleaned[i];
-    if (/\s/.test(char)) { i++; continue; }
-    if (isCJK(char)) { tokens.push(char); i++; continue; }
-    let word = '';
-    while (i < cleaned.length && !/\s/.test(cleaned[i]) && !isCJK(cleaned[i])) {
-      word += cleaned[i];
-      i++;
+  let word = '';
+  for (const char of cleaned) {
+    if (/\s/.test(char)) {
+      if (word) { tokens.push(word); word = ''; }
+      continue;
     }
-    if (word) tokens.push(word);
+    if (isCJK(char)) {
+      if (word) { tokens.push(word); word = ''; }
+      tokens.push(char);
+      continue;
+    }
+    word += char;
   }
+  if (word) tokens.push(word);
   return tokens;
 }
 

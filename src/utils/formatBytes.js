@@ -1,4 +1,5 @@
 function formatBytes(bytes) {
+  if (bytes < 0) return '-' + formatBytes(-bytes);
   if (bytes === 0 || bytes == null) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
