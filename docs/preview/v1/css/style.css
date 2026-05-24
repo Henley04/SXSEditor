@@ -590,7 +590,6 @@ img {
   align-items: center;
   gap: 8px;
   text-decoration: none;
-  position: relative;
 }
 
 .download-btn-github {
@@ -615,36 +614,6 @@ img {
   background: rgba(78, 205, 196, 0.2);
   border-color: rgba(78, 205, 196, 0.4);
   transform: translateY(-1px);
-}
-
-/* GitCode badge - 中国大陆加速 */
-.download-badge-cn {
-  display: inline-block;
-  padding: 2px 8px;
-  background: rgba(78, 205, 196, 0.2);
-  border: 1px solid rgba(78, 205, 196, 0.35);
-  border-radius: 4px;
-  font-size: 0.68rem;
-  font-weight: 500;
-  color: var(--teal);
-  letter-spacing: 0.02em;
-  white-space: nowrap;
-  line-height: 1.4;
-  vertical-align: middle;
-}
-
-/* GitCode recommended indicator for Chinese */
-.download-btn-gitcode.recommended::before {
-  content: '';
-  position: absolute;
-  top: -6px;
-  right: -6px;
-  width: 12px;
-  height: 12px;
-  background: var(--accent);
-  border-radius: 50%;
-  border: 2px solid var(--bg-card);
-  z-index: 1;
 }
 
 .download-info-row {
