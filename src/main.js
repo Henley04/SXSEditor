@@ -1338,38 +1338,47 @@ ipcMain.handle('extractMidi:rosvot', async (event, { audioData, sampleRate, bpm 
 
     const f0Array = await rmvpeDetector.extractF0(new Float32Array(audioData), sampleRate || 44100);
 
-    // 使用 RosVot 模型提取 MIDI 音符
+    // 默认使用 f0ToNotes 从 F0 曲线提取 MIDI 音符
     let notes;
-    const modelPath = getModelDir();
-    const rosvotModelPath = path.join(modelPath, 'preprocess', 'rosvot_model.onnx');
+    const settings = loadSettings();
+    const useRosvot = settings?.useRosvot === true;
 
-    if (fs.existsSync(rosvotModelPath)) {
-      try {
-        if (!rosvotDetector) {
-          const settings = loadSettings();
-          const deviceId = settings.deviceId ?? undefined;
-          console.log(`[Main] 初始化 RosvotDetector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
-          rosvotDetector = new RosvotDetector(modelPath, { deviceId });
-          await rosvotDetector.init();
-        }
-        notes = await rosvotDetector.extractNotes(
-          new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120
-        );
-        console.log(`[Main] RosVot 提取到 ${notes.length} 个音符`);
+    if (useRosvot) {
+      // 尝试使用 RosVot 模型（实验性功能，当前 ONNX 导出可能有问题）
+      const modelPath = getModelDir();
+      const rosvotModelPath = path.join(modelPath, 'preprocess', 'rosvot_model.onnx');
 
-        // RosVot 提取结果为空时，回退到 f0ToNotes
-        if (notes.length === 0) {
-          console.log('[Main] RosVot 未提取到音符，回退到 f0ToNotes');
+      if (fs.existsSync(rosvotModelPath)) {
+        try {
+          if (!rosvotDetector) {
+            const deviceId = settings.deviceId ?? undefined;
+            console.log(`[Main] 初始化 RosvotDetector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+            rosvotDetector = new RosvotDetector(modelPath, { deviceId });
+            await rosvotDetector.init();
+          }
+          notes = await rosvotDetector.extractNotes(
+            new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120
+          );
+          console.log(`[Main] RosVot 提取到 ${notes.length} 个音符`);
+
+          // RosVot 提取结果无效时（空或音高全为0），回退到 f0ToNotes
+          const validNotes = notes.filter(n => n.pitch > 0);
+          if (validNotes.length === 0) {
+            console.log('[Main] RosVot 未提取到有效音符，回退到 f0ToNotes');
+            notes = rmvpeDetector.f0ToNotes(f0Array, bpm || 120);
+          }
+        } catch (rosvotErr) {
+          console.warn('[Main] RosVot 模型推理失败，回退到 f0ToNotes:', rosvotErr.message);
+          rosvotDetector = null;
           notes = rmvpeDetector.f0ToNotes(f0Array, bpm || 120);
         }
-      } catch (rosvotErr) {
-        console.warn('[Main] RosVot 模型推理失败，回退到 f0ToNotes:', rosvotErr.message);
-        rosvotDetector = null;
+      } else {
+        console.log('[Main] RosVot 模型不存在，使用 f0ToNotes 回退');
         notes = rmvpeDetector.f0ToNotes(f0Array, bpm || 120);
       }
     } else {
-      // RosVot 模型不存在，使用 f0ToNotes 回退
-      console.log('[Main] RosVot 模型不存在，使用 f0ToNotes 回退');
+      // 使用 f0ToNotes（默认方案）
+      console.log('[Main] 使用 f0ToNotes 从 F0 曲线提取 MIDI 音符');
       notes = rmvpeDetector.f0ToNotes(f0Array, bpm || 120);
     }
 

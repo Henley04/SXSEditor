@@ -218,7 +218,7 @@ export default {
     processing: '处理中...',
     extractingF0Rmvpe: '正在使用RMVPE提取F0基频...',
     extractingMidiBasicPitch: '正在使用Basic Pitch提取MIDI音符...',
-    extractingMidiRosvot: '正在使用RosVot (RMVPE)提取MIDI音符...',
+    extractingMidiRmvpe: '正在使用RMVPE提取MIDI音符...',
     pleaseLoadAudio: '请先加载音频文件',
     f0ExtractionComplete: 'F0基频提取完成（RMVPE模型）',
     midiExtractionComplete: 'MIDI音符提取完成（Basic Pitch模型）',
@@ -302,9 +302,9 @@ export default {
     openModelDownload: '打开模型下载',
     openModelDownloadHint: '打开模型下载页面，下载或更新推理所需的模型文件。',
     midiExtractTool: 'MIDI 提取工具',
-    midiExtractToolRosvot: 'RosVot (RMVPE)',
+    midiExtractToolRmvpe: 'RMVPE (F0转音符)',
     midiExtractToolBasicpitch: 'Basic Pitch',
-    midiExtractToolHint: '选择音频转MIDI时使用的提取工具。RosVot 基于 RMVPE 音高检测，适合人声音频；Basic Pitch 基于神经网络，适合多乐器音频。'
+    midiExtractToolHint: '选择音频转MIDI时使用的提取工具。RMVPE 基于音高检测将F0转为音符，适合人声音频；Basic Pitch 基于神经网络，适合多乐器音频。'
   },
   modelDownload: {
     title: 'SXSEditor 模型文件下载',
