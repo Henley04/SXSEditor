@@ -1333,7 +1333,6 @@ async function extractF0AndPitch() {
     const result = await window.electronAPI.extractF0({
       audioData: audioData,
       sampleRate: wavAudioBuffer.sampleRate,
-      bpm: BPM,
     });
 
     if (!result.success) {
@@ -1392,7 +1391,7 @@ async function extractF0BasicPitch() {
 
     let result;
     if (midiTool === 'rosvot') {
-      result = await window.electronAPI.extractF0({
+      result = await window.electronAPI.extractMidiRosvot({
         audioData: audioData,
         sampleRate: wavAudioBuffer.sampleRate,
         bpm: BPM,

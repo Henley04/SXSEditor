@@ -61,6 +61,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('fragment-svs:progress', handler);
   },
   extractF0: (data) => ipcRenderer.invoke('extractF0:onnx', data),
+  extractMidiRosvot: (data) => ipcRenderer.invoke('extractMidi:rosvot', data),
   extractF0BasicPitch: (data) => ipcRenderer.invoke('extractF0:basicPitch', data),
   importMidi: () => ipcRenderer.invoke('midi:import'),
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),
