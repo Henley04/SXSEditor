@@ -218,7 +218,7 @@ export default {
     processing: 'Processing...',
     extractingF0Rmvpe: 'Extracting F0 using RMVPE...',
     extractingMidiBasicPitch: 'Extracting MIDI notes using Basic Pitch...',
-    extractingMidiRosvot: 'Extracting MIDI notes using RosVot (RMVPE)...',
+    extractingMidiRmvpe: 'Extracting MIDI notes using RMVPE...',
     pleaseLoadAudio: 'Please load an audio file first',
     f0ExtractionComplete: 'F0 extraction complete (RMVPE model)',
     midiExtractionComplete: 'MIDI note extraction complete (Basic Pitch model)',
@@ -302,9 +302,9 @@ export default {
     openModelDownload: 'Open Model Download',
     openModelDownloadHint: 'Open the model download page to download or update required inference model files.',
     midiExtractTool: 'MIDI Extraction Tool',
-    midiExtractToolRosvot: 'RosVot (RMVPE)',
+    midiExtractToolRmvpe: 'RMVPE (F0 to Notes)',
     midiExtractToolBasicpitch: 'Basic Pitch',
-    midiExtractToolHint: 'Select the tool used for audio-to-MIDI extraction. RosVot is based on RMVPE pitch detection, suitable for vocal audio; Basic Pitch is based on neural networks, suitable for multi-instrument audio.'
+    midiExtractToolHint: 'Select the tool used for audio-to-MIDI extraction. RMVPE converts F0 pitch to notes, suitable for vocal audio; Basic Pitch is based on neural networks, suitable for multi-instrument audio.'
   },
   modelDownload: {
     title: 'SXSEditor Model Download',

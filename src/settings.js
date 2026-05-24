@@ -104,9 +104,11 @@ async function loadDevices() {
         }
 
         if (currentSetting && currentSetting.midiExtractTool) {
-            midiExtractToolSelect.value = currentSetting.midiExtractTool;
+            // 兼容旧设置：rosvot 映射为 rmvpe
+            const tool = currentSetting.midiExtractTool === 'rosvot' ? 'rmvpe' : currentSetting.midiExtractTool;
+            midiExtractToolSelect.value = tool;
         } else {
-            midiExtractToolSelect.value = 'rosvot';
+            midiExtractToolSelect.value = 'rmvpe';
         }
     } catch (err) {
         console.error('加载设备列表失败:', err);

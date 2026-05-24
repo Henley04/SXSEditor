@@ -1379,9 +1379,9 @@ async function extractF0BasicPitch() {
   }
 
   const settings = await window.electronAPI.getSettings();
-  const midiTool = settings?.midiExtractTool || 'rosvot';
-  const loadingMsg = midiTool === 'rosvot'
-    ? t('preprocess.extractingMidiRosvot')
+  const midiTool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'rmvpe';
+  const loadingMsg = midiTool === 'rmvpe'
+    ? t('preprocess.extractingMidiRmvpe')
     : t('preprocess.extractingMidiBasicPitch');
   const loading = showLoading(loadingMsg);
 
@@ -1390,7 +1390,7 @@ async function extractF0BasicPitch() {
     const audioData = channelData.buffer;
 
     let result;
-    if (midiTool === 'rosvot') {
+    if (midiTool === 'rmvpe') {
       result = await window.electronAPI.extractMidiRosvot({
         audioData: audioData,
         sampleRate: wavAudioBuffer.sampleRate,
