@@ -45,10 +45,9 @@ const translations = {
     'download.subtitle': '免费开源，开箱即用',
     'download.versionBadge': 'v1.0.0 最新版',
     'download.cardTitle': 'SXSEditor for Windows',
-    'download.cardDesc': '安装包包含应用程序及所需运行环境，下载后运行即可完成安装。首次启动时程序将引导下载 SoulX-Singer 模型文件。',
+    'download.cardDesc': '包含应用程序及所需运行环境，下载后解压即可使用。无需安装，不写入注册表。',
     'download.githubBtn': 'GitHub 下载',
-    'download.gitcodeBtn': 'GitCode 下载（推荐）',
-    'download.gitcodeBadge': '中国大陆加速',
+    'download.gitcodeBtn': 'GitCode 下载',
     'download.version': '版本',
     'download.platform': '平台',
     'download.license': '许可',
@@ -76,7 +75,7 @@ const translations = {
     'about.subtitle': 'SXSEditor 的起源与理念',
     'about.background.title': '项目背景',
     'about.background.p1': 'SXSEditor 诞生的初衷是降低歌声合成的使用门槛。现有歌声合成软件普遍存在价格高昂、操作复杂或不开源等问题。本项目旨在提供一个免费、开源、易于上手的桌面端解决方案。',
-    'about.background.p2': 'SXSEditor 将钢琴卷帘编辑器与神经网络歌声合成集成于同一桌面应用中。用户无需具备深度学习背景，无需配置运行环境，下载安装即可使用。所有推理均在本地完成，用户数据完全自主可控。',
+    'about.background.p2': 'SXSEditor 将钢琴卷帘编辑器与神经网络歌声合成集成于同一桌面应用中。用户无需具备深度学习背景，无需配置运行环境，下载解压即可使用。所有推理均在本地完成，用户数据完全自主可控。',
     'about.techStack.title': '技术栈',
     'about.techStack.intro': '本项目基于以下开源技术构建：',
     'about.structure.title': '项目结构',
@@ -155,10 +154,9 @@ const translations = {
     'download.subtitle': 'Free & Open Source, Ready to Use',
     'download.versionBadge': 'v1.0.0 Latest',
     'download.cardTitle': 'SXSEditor for Windows',
-    'download.cardDesc': 'The installer includes the application and all required runtimes. On first launch, the program will guide you to download the SoulX-Singer model files.',
+    'download.cardDesc': 'Includes the application and all required runtimes. Download, extract, and run — no installation, no registry changes.',
     'download.githubBtn': 'GitHub Download',
     'download.gitcodeBtn': 'GitCode Download',
-    'download.gitcodeBadge': 'Faster in Mainland China',
     'download.version': 'Version',
     'download.platform': 'Platform',
     'download.license': 'License',
@@ -186,7 +184,7 @@ const translations = {
     'about.subtitle': 'The origins and philosophy of SXSEditor',
     'about.background.title': 'Background',
     'about.background.p1': 'SXSEditor was created to lower the barrier to singing voice synthesis. Existing tools are often expensive, complex, or closed-source. This project aims to provide a free, open-source, and beginner-friendly desktop solution.',
-    'about.background.p2': 'SXSEditor integrates a piano roll editor with neural network singing synthesis in a single desktop application. No deep learning expertise needed, no environment setup — just download, install, and start. All inference runs locally, giving users full control over their data.',
+    'about.background.p2': 'SXSEditor integrates a piano roll editor with neural network singing synthesis in a single desktop application. No deep learning expertise needed, no environment setup — just download, extract, and start. All inference runs locally, giving users full control over their data.',
     'about.techStack.title': 'Tech Stack',
     'about.techStack.intro': 'Built with the following open-source technologies:',
     'about.structure.title': 'Project Structure',
@@ -265,10 +263,9 @@ const translations = {
     'download.subtitle': '無料オープンソース、すぐに使える',
     'download.versionBadge': 'v1.0.0 最新版',
     'download.cardTitle': 'SXSEditor for Windows',
-    'download.cardDesc': 'インストーラにはアプリケーションと必要なランタイムが含まれています。初回起動時に SoulX-Singer モデルファイルのダウンロードをガイドします。',
+    'download.cardDesc': 'アプリケーションと必要なランタイムを含み、ダウンロード後すぐに使用可能。インストール不要、レジストリに書き込みません。',
     'download.githubBtn': 'GitHub ダウンロード',
     'download.gitcodeBtn': 'GitCode ダウンロード',
-    'download.gitcodeBadge': '中国本土高速',
     'download.version': 'バージョン',
     'download.platform': 'プラットフォーム',
     'download.license': 'ライセンス',
@@ -296,7 +293,7 @@ const translations = {
     'about.subtitle': 'SXSEditor の起源と理念',
     'about.background.title': 'プロジェクト背景',
     'about.background.p1': 'SXSEditor は歌声合成の利用ハードルを下げるために生まれました。既存の歌声合成ソフトは高価だったり、操作が複雑だったり、オープンソースでなかったりする問題があります。本プロジェクトは無料・オープンソース・初心者向けのデスクトップソリューションを提供します。',
-    'about.background.p2': 'SXSEditor はピアノロールエディタとニューラルネットワーク歌声合成を単一のデスクトップアプリに統合。ディープラーニングの知識不要、環境構築不要、ダウンロードしてインストールするだけ。すべての推論はローカルで実行、データは完全にユーザー管理。',
+    'about.background.p2': 'SXSEditor はピアノロールエディタとニューラルネットワーク歌声合成を単一のデスクトップアプリに統合。ディープラーニングの知識不要、環境構築不要、ダウンロードして解凍するだけ。すべての推論はローカルで実行、データは完全にユーザー管理。',
     'about.techStack.title': '技術スタック',
     'about.techStack.intro': '以下のオープンソース技術で構築：',
     'about.structure.title': 'プロジェクト構成',
@@ -343,7 +340,6 @@ const i18n = {
       this.currentLang = lang;
       localStorage.setItem('sxseditor-lang', lang);
       this.applyTranslations();
-      this.updateGitCodeButton();
     }
   },
 
@@ -351,14 +347,8 @@ const i18n = {
     const saved = localStorage.getItem('sxseditor-lang');
     if (saved && translations[saved]) {
       this.currentLang = saved;
-    } else {
-      const browserLang = (navigator.language || navigator.userLanguage || 'zh').toLowerCase();
-      if (browserLang.startsWith('zh')) this.currentLang = 'zh';
-      else if (browserLang.startsWith('ja') || browserLang.startsWith('jp')) this.currentLang = 'jp';
-      else this.currentLang = 'en';
     }
     this.applyTranslations();
-    this.updateGitCodeButton();
   },
 
   t(key) {
@@ -388,17 +378,5 @@ const i18n = {
       }
     });
     document.documentElement.lang = this.currentLang === 'jp' ? 'ja' : this.currentLang;
-  },
-
-  // 中文版给 GitCode 按钮添加推荐标识
-  updateGitCodeButton() {
-    const gitcodeBtn = document.querySelector('.download-btn-gitcode');
-    if (gitcodeBtn) {
-      if (this.currentLang === 'zh') {
-        gitcodeBtn.classList.add('recommended');
-      } else {
-        gitcodeBtn.classList.remove('recommended');
-      }
-    }
   }
 };
