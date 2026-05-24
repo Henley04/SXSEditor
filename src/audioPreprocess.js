@@ -739,8 +739,42 @@ async function initPianoRoll() {
       const maxLogF0 = Math.log2(maxF0);
       const logRange = maxLogF0 - minLogF0;
 
+      // 计算音频结束位置的X坐标，将F0区域背景裁剪到音频实际长度
+      const audioEndBeat = (wavDuration / 60) * this.bpm;
+      const audioEndX = PIANO_KEY_WIDTH + audioEndBeat * BEAT_WIDTH * this.zoomX - this.scrollX;
+      const f0BgEndX = wavDuration > 0 ? Math.min(Math.floor(audioEndX), w) : w;
+
       ctx.fillStyle = '#161616';
-      ctx.fillRect(PIANO_KEY_WIDTH, f0AreaTop, w - PIANO_KEY_WIDTH, F0_CURVE_AREA_HEIGHT);
+      ctx.fillRect(PIANO_KEY_WIDTH, f0AreaTop, f0BgEndX - PIANO_KEY_WIDTH, F0_CURVE_AREA_HEIGHT);
+
+      // 在F0区域背景之上重绘节拍网格线
+      const beatsPerMeasure = this.projectSettings.timeSignature[0];
+      const startBeat = this._xToTime(PIANO_KEY_WIDTH);
+      const endBeat = this._xToTime(f0BgEndX);
+      ctx.lineWidth = 1;
+      for (let b = Math.floor(startBeat); b <= Math.ceil(endBeat); b++) {
+        const x = this._timeToX(b);
+        if (x < PIANO_KEY_WIDTH) continue;
+        if (x > f0BgEndX) break;
+        const isMeasureLine = (b % beatsPerMeasure === 0);
+        ctx.strokeStyle = isMeasureLine ? '#333333' : '#282828';
+        ctx.beginPath();
+        ctx.moveTo(x, f0AreaTop);
+        ctx.lineTo(x, f0AreaBottom);
+        ctx.stroke();
+      }
+
+      // 绘制音频结束标记线
+      if (wavDuration > 0 && audioEndX >= PIANO_KEY_WIDTH && audioEndX <= w) {
+        ctx.strokeStyle = '#555555';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(audioEndX, f0AreaTop);
+        ctx.lineTo(audioEndX, f0AreaBottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
 
       ctx.fillStyle = '#888888';
       ctx.font = '10px sans-serif';
@@ -757,7 +791,7 @@ async function initPianoRoll() {
         ctx.beginPath();
         ctx.setLineDash([2, 4]);
         ctx.moveTo(PIANO_KEY_WIDTH, y);
-        ctx.lineTo(w, y);
+        ctx.lineTo(f0BgEndX, y);
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.fillStyle = '#555555';
@@ -770,7 +804,7 @@ async function initPianoRoll() {
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(PIANO_KEY_WIDTH, f0AreaBottom);
-      ctx.lineTo(w, f0AreaBottom);
+      ctx.lineTo(f0BgEndX, f0AreaBottom);
       ctx.stroke();
 
       ctx.strokeStyle = '#ff6b6b';
@@ -795,7 +829,7 @@ async function initPianoRoll() {
         const y = f0AreaBottom - normalizedF0 * f0AreaHeight;
 
         if (x < PIANO_KEY_WIDTH - 10) continue;
-        if (x > w + 10) {
+        if (x > f0BgEndX + 10) {
           if (!isFirst) {
             ctx.stroke();
           }
@@ -834,7 +868,7 @@ async function initPianoRoll() {
           const normalizedF0 = Math.max(0, Math.min(1, (Math.log2(frame.f0) - minLogF0) / logRange));
           const y = f0AreaBottom - normalizedF0 * f0AreaHeight;
           if (x < PIANO_KEY_WIDTH - 10) continue;
-          if (x > w + 10) break;
+          if (x > f0BgEndX + 10) break;
           if (!fillStarted) {
             ctx.moveTo(x, f0AreaBottom);
             ctx.lineTo(x, y);
