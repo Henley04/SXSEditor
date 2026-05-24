@@ -2772,14 +2772,15 @@ async function handleAudioToMidi() {
     const buffer = await window.electronAPI.readFileBuffer(filePath);
 
     let audioBuffer;
+    const ac = new AudioContext();
     try {
-      const ac = new AudioContext();
       audioBuffer = await ac.decodeAudioData(buffer.slice(0));
-      ac.close();
     } catch (decodeErr) {
       console.error('音频解码失败:', decodeErr);
       showAlertDialog(t('main.audioToMidiDecodeFailed') + ': ' + decodeErr.message);
       return;
+    } finally {
+      ac.close();
     }
 
     const channelData = audioBuffer.getChannelData(0);

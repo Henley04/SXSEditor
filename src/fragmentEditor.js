@@ -1,4 +1,4 @@
-import './common.css';
+﻿import './common.css';
 import './fragmentEditor.css';
 import { PARAM_MODES } from './editor/pianoRoll.js';
 import { encodeWav, applyEnvelopesToAudio } from './audio/wavEncoder.js';
@@ -1398,7 +1398,7 @@ function buildPitchCurveF0Data() {
   for (let i = 0; i < totalFrames; i++) {
     const frameTimeSec = (i * hopSize) / SAMPLE_RATE;
     const frameBeat = (frameTimeSec / 60) * bpm;
-    const inNote = notes.some(n => frameBeat >= n.start && frameBeat < n.start + n.duration);
+    const inNote = clippedNotes.some(n => frameBeat >= n.start && frameBeat < n.start + n.duration);
     if (!inNote) {
       f0Array[i] = 0;
       continue;
@@ -2196,10 +2196,22 @@ function startInlineEdit(note, hit) {
         const oldLyric = lyricEditOldValue;
         const noteId = lyricEditNoteId;
         const tokens = tokenizeLyric(newLyric);
+
+        // Capture old lyrics BEFORE modifying any notes
+        const noteIdx = notes.findIndex(n => n.id === noteId);
+        const oldLyrics = [{ id: noteId, lyric: oldLyric }];
+        if (tokens.length > 1 && noteIdx !== -1) {
+          for (let t = 1; t < tokens.length; t++) {
+            const nextIdx = noteIdx + t;
+            if (nextIdx < notes.length) {
+              oldLyrics.push({ id: notes[nextIdx].id, lyric: notes[nextIdx].lyric });
+            }
+          }
+        }
+
         if (tokens.length <= 1) {
           note.lyric = newLyric;
         } else {
-          const noteIdx = notes.findIndex(n => n.id === note.id);
           if (noteIdx !== -1) {
             note.lyric = tokens[0];
             for (let t = 1; t < tokens.length; t++) {
@@ -2210,17 +2222,6 @@ function startInlineEdit(note, hit) {
             }
           } else {
             note.lyric = newLyric;
-          }
-        }
-        // Save old lyrics for all notes that will be modified
-        const noteIdx = notes.findIndex(n => n.id === noteId);
-        const oldLyrics = [{ id: noteId, lyric: oldLyric }];
-        if (tokens.length > 1 && noteIdx !== -1) {
-          for (let t = 1; t < tokens.length; t++) {
-            const nextIdx = noteIdx + t;
-            if (nextIdx < notes.length) {
-              oldLyrics.push({ id: notes[nextIdx].id, lyric: notes[nextIdx].lyric });
-            }
           }
         }
 
@@ -2499,16 +2500,19 @@ document.addEventListener('keydown', (e) => {
           deletedIndices.push(idx);
         }
       }
-      deletedIndices.sort((a, b) => b - a);
-      for (const idx of deletedIndices) {
+      const sortedForDelete = [...deletedIndices].sort((a, b) => b - a);
+      for (const idx of sortedForDelete) {
         notes.splice(idx, 1);
       }
       const oldSelectedIds = new Set(selectedNoteIds);
       selectedNoteIds.clear();
+      const undoOrder = deletedIndices
+          .map((idx, i) => ({ idx, note: deletedNotes[i] }))
+          .sort((a, b) => a.idx - b.idx);
       history.push({
         undo() {
-          for (let i = 0; i < deletedNotes.length; i++) {
-            notes.splice(deletedIndices[i], 0, { ...deletedNotes[i] });
+          for (const { idx, note } of undoOrder) {
+            notes.splice(idx, 0, { ...note });
           }
           selectedNoteIds = new Set(oldSelectedIds);
         },

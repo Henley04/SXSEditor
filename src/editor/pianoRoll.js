@@ -90,7 +90,7 @@ class PianoRoll {
   // ===================== 初始化与事件绑定 =====================
 
   _initEvents() {
-    window.addEventListener('resize', () => this._resize());
+    window.addEventListener('resize', this._boundResize = () => this._resize());
 
     // 鼠标事件
     this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
@@ -106,7 +106,7 @@ class PianoRoll {
     this.canvas.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
 
     // 键盘事件（Delete 删除选中音符）
-    document.addEventListener('keydown', (e) => this._onKeyDown(e));
+    document.addEventListener('keydown', this._boundKeyDown = (e) => this._onKeyDown(e));
   }
 
   _resize() {
@@ -172,8 +172,8 @@ class PianoRoll {
     const maxPitch = 127;
     const pianoAreaTop = HEADER_HEIGHT;
     const pianoAreaBottom = this.height - PARAM_CURVE_HEIGHT;
-    if (y >= pianoAreaBottom) return maxPitch;
-    if (y <= pianoAreaTop) return 0;
+    if (y >= pianoAreaBottom) return 0;
+    if (y <= pianoAreaTop) return maxPitch;
     return Math.round(maxPitch - (y + this.scrollY - pianoAreaTop) / (NOTE_HEIGHT * this.zoomY));
   }
 
@@ -387,11 +387,10 @@ class PianoRoll {
             const noteIdx = this.notes.findIndex(n => n.id === note.id);
             if (noteIdx !== -1) {
               note.lyric = tokens[0];
-              for (let t = 1; t < tokens.length; t++) {
-                const nextIdx = noteIdx + t;
-                if (nextIdx < this.notes.length) {
-                  this.notes[nextIdx].lyric = tokens[t];
-                }
+              const sameTrackNotes = this.notes.filter(n => n.trackId === note.trackId && n.start > note.start);
+              sameTrackNotes.sort((a, b) => a.start - b.start);
+              for (let t = 1; t < tokens.length && t - 1 < sameTrackNotes.length; t++) {
+                sameTrackNotes[t - 1].lyric = tokens[t];
               }
             } else {
               note.lyric = newLyric;
@@ -767,7 +766,7 @@ class PianoRoll {
     for (let i = 0; i <= steps; i++) {
       const t = (i / steps) * maxTime;
       const value = this._interpolateEnvelope(envelope, t);
-      const x = PIANO_KEY_WIDTH + (t / maxTime) * (w - PIANO_KEY_WIDTH) - (this.scrollX * (1 + (w - PIANO_KEY_WIDTH) / maxTime / BEAT_WIDTH / this.zoomX));
+      const x = this._timeToX(t);
       const y = this._valueToParamY(value);
       if (i === 0) {
         ctx.moveTo(x, y);
@@ -779,7 +778,7 @@ class PianoRoll {
 
     for (let i = 0; i < envelope.keyframes.length; i++) {
       const kf = envelope.keyframes[i];
-      const x = PIANO_KEY_WIDTH + (kf.time / maxTime) * (w - PIANO_KEY_WIDTH) - (this.scrollX * (1 + (w - PIANO_KEY_WIDTH) / maxTime / BEAT_WIDTH / this.zoomX));
+      const x = this._timeToX(kf.time);
       const y = this._valueToParamY(kf.value);
       const isSelected = i === this.selectedEnvelopeIndex;
       const isHover = i === this.hoverEnvelopeIndex;
@@ -833,7 +832,7 @@ class PianoRoll {
 
     for (let i = 0; i < envelope.keyframes.length; i++) {
       const kf = envelope.keyframes[i];
-      const kx = PIANO_KEY_WIDTH + (kf.time / maxTime) * (this.width - PIANO_KEY_WIDTH) - (this.scrollX * (1 + (this.width - PIANO_KEY_WIDTH) / maxTime / BEAT_WIDTH / this.zoomX));
+      const kx = this._timeToX(kf.time);
       const ky = this._valueToParamY(kf.value);
       const dist = Math.sqrt((x - kx) ** 2 + (y - ky) ** 2);
       if (dist <= 8) {
@@ -1067,6 +1066,11 @@ class PianoRoll {
         this.envelopes.f0 = envelope;
         break;
     }
+  }
+
+  destroy() {
+    window.removeEventListener('resize', this._boundResize);
+    document.removeEventListener('keydown', this._boundKeyDown);
   }
 }
 
