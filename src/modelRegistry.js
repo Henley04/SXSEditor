@@ -136,6 +136,26 @@ const MODEL_GROUPS = [
       },
     ],
   },
+  {
+    id: 'rosvot',
+    name: 'RosVot MIDI 识别',
+    nameEn: 'RosVot MIDI Recognition',
+    description: '基于 RosVot 的 MIDI 音符识别，配合 RMVPE 使用，用于精确音频转 MIDI',
+    descriptionEn: 'RosVot-based MIDI note recognition, used with RMVPE for accurate audio-to-MIDI',
+    required: false,
+    pipelineRef: 'rosvotDetector',
+    models: [
+      {
+        id: 'rosvotModel',
+        name: 'RosVot 模型',
+        nameEn: 'RosVot Model',
+        description: '从音频和 F0 基频中识别 MIDI 音符边界和音高',
+        descriptionEn: 'Recognize MIDI note boundaries and pitches from audio and F0',
+        files: ['preprocess/rosvot_model.onnx'],
+        sessionKey: 'rosvot',
+      },
+    ],
+  },
 ];
 
 /**
