@@ -1288,7 +1288,7 @@ ipcMain.handle('fragment-svs:dispose', async () => {
   return { success: true };
 });
 
-ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate, bpm }) => {
+ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate }) => {
   try {
     if (!rmvpeDetector) {
       const modelPath = getModelDir();
@@ -1306,7 +1306,39 @@ ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate, bpm }) =
 
     const f0Array = await rmvpeDetector.extractF0(new Float32Array(audioData), sampleRate || 44100);
 
-    // 尝试使用 RosVot 模型提取 MIDI 音符（更精确）
+    return {
+      success: true,
+      f0Array: f0Array,
+    };
+  } catch (err) {
+    console.error('[Main] F0提取失败:', err);
+    return {
+      success: false,
+      error: err.message,
+    };
+  }
+});
+
+ipcMain.handle('extractMidi:rosvot', async (event, { audioData, sampleRate, bpm }) => {
+  try {
+    // 先用 RMVPE 提取 F0
+    if (!rmvpeDetector) {
+      const modelPath = getModelDir();
+      const settings = loadSettings();
+      const deviceId = settings.deviceId ?? undefined;
+      console.log(`[Main] 初始化 RMVPE Pitch Detector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+      try {
+        rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
+        await rmvpeDetector.init();
+      } catch (err) {
+        rmvpeDetector = null;
+        throw err;
+      }
+    }
+
+    const f0Array = await rmvpeDetector.extractF0(new Float32Array(audioData), sampleRate || 44100);
+
+    // 使用 RosVot 模型提取 MIDI 音符
     let notes;
     const modelPath = getModelDir();
     const rosvotModelPath = path.join(modelPath, 'preprocess', 'rosvot_model.onnx');
@@ -1347,7 +1379,7 @@ ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate, bpm }) =
       notes: notes,
     };
   } catch (err) {
-    console.error('[Main] F0提取失败:', err);
+    console.error('[Main] MIDI提取失败:', err);
     return {
       success: false,
       error: err.message,

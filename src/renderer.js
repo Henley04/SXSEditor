@@ -2798,18 +2798,18 @@ async function handleAudioToMidi() {
       const midiTool = settings?.midiExtractTool || 'rosvot';
 
       if (midiTool === 'rosvot') {
-        // RosVot: 使用 RMVPE 提取 F0 + f0ToNotes 转 MIDI
-        const rmvpeResult = await window.electronAPI.extractF0({
+        // RosVot: 使用 RMVPE + RosVot 提取 MIDI 音符
+        const rosvotResult = await window.electronAPI.extractMidiRosvot({
           audioData,
           sampleRate,
           bpm,
         });
 
-        if (!rmvpeResult.success) {
-          throw new Error(rmvpeResult.error || 'RosVot (RMVPE) failed');
+        if (!rosvotResult.success) {
+          throw new Error(rosvotResult.error || 'RosVot (RMVPE) failed');
         }
 
-        midiNotes = (rmvpeResult.notes || []).map((n, i) => ({
+        midiNotes = (rosvotResult.notes || []).map((n, i) => ({
           id: n.id ?? (Date.now() + i),
           pitch: n.pitch ?? 60,
           start: n.start ?? 0,
@@ -2818,7 +2818,7 @@ async function handleAudioToMidi() {
         }));
 
         if (extractPitch) {
-          f0Data = rmvpeResult.f0Array;
+          f0Data = rosvotResult.f0Array;
         }
       } else {
         // Basic Pitch: 直接提取 MIDI + F0
@@ -2846,7 +2846,6 @@ async function handleAudioToMidi() {
           const rmvpeResult = await window.electronAPI.extractF0({
             audioData,
             sampleRate,
-            bpm,
           });
 
           if (!rmvpeResult.success) {
