@@ -53,7 +53,7 @@ class EnvelopeEditor {
     this.height = rect.height;
     this.canvas.width = this.width * this.dpr;
     this.canvas.height = this.height * this.dpr;
-    this.ctx.scale(this.dpr, this.dpr);
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
     this.render();
   }
 
@@ -142,6 +142,7 @@ class EnvelopeEditor {
       kf.time = Math.max(0, time);
       kf.value = Math.max(this.options.minValue, Math.min(this.options.maxValue, value));
       this._sortKeyframes();
+      this.draggingKeyframeIndex = this.envelope.keyframes.indexOf(kf);
       if (this.onChange) this.onChange(this.envelope);
     }
 
@@ -284,7 +285,9 @@ class EnvelopeEditor {
   }
 
   _smoothstep(t, smoothness) {
-    return t * t * (3 - 2 * t);
+    const s = Math.max(0, Math.min(1, smoothness));
+    const smooth = t * t * (3 - 2 * t);
+    return t + s * (smooth - t);
   }
 
   render() {

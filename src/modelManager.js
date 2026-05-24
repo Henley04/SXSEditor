@@ -501,7 +501,11 @@ async function mergeChunks(destPath, numChunks) {
       await pipeline(chunkStream, finalStream, { end: false });
       try { fs.unlinkSync(chunkPath); } catch (_) {}
     }
-    finalStream.end();
+    await new Promise((resolve, reject) => {
+      finalStream.on('finish', resolve);
+      finalStream.on('error', reject);
+      finalStream.end();
+    });
   } catch (err) {
     finalStream.destroy();
     throw err;

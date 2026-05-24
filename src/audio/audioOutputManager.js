@@ -260,7 +260,7 @@ class AudioOutputManager {
     }
     this._workerReady = false;
     this._workerAvailable = false;
-    this._pendingRequests.clear();
+    this._rejectAllPending(new Error('AudioOutputManager destroyed'));
   }
 }
 
