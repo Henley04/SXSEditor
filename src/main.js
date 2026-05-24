@@ -126,6 +126,7 @@ if (!gotTheLock) {
 const { OnnxSVSPipeline, SAMPLE_RATE, enumerateDMLDevices } = require('./inference/nativeSvsPipeline');
 const { RmvpePitchDetector, RMVPE_SAMPLE_RATE } = require('./inference/rmvpePitchDetector');
 const { BasicPitchDetector } = require('./inference/basicPitch');
+const { RosvotDetector } = require('./inference/rosvotDetector');
 const { parseMidiFile } = require('./inference/midiParser');
 const { AudioOutputManager } = require('./audio/audioOutputManager');
 const { checkMissingFiles, downloadMissingFiles, DEFAULT_PRECISION } = require('./modelManager');
@@ -134,6 +135,7 @@ const { getModelGroups } = require('./modelRegistry');
 let svsPipeline = null;
 let rmvpeDetector = null;
 let basicPitchDetector = null;
+let rosvotDetector = null;
 let mainWindow = null;
 let settingsWindow = null;
 let resourceManagerWindow = null;
@@ -658,6 +660,7 @@ app.on('before-quit', () => {
   if (svsPipeline) { try { svsPipeline.dispose(); } catch (_) {} svsPipeline = null; }
   if (rmvpeDetector) { try { rmvpeDetector.dispose(); } catch (_) {} rmvpeDetector = null; }
   if (basicPitchDetector) { try { basicPitchDetector.dispose(); } catch (_) {} basicPitchDetector = null; }
+  if (rosvotDetector) { try { rosvotDetector.dispose(); } catch (_) {} rosvotDetector = null; }
   if (_audioManager) { try { _audioManager.stop(); } catch (_) {} }
   if (_fragmentAudioManager) { try { _fragmentAudioManager.stop(); } catch (_) {} }
   for (const id in fragmentWindows) {
@@ -847,6 +850,12 @@ ipcMain.handle('settings:saveSettings', async (event, settings) => {
     console.log('[Main] 设置已更新，需要重新初始化 Basic Pitch Detector 才能生效');
     try { basicPitchDetector.dispose(); } catch (_) {}
     basicPitchDetector = null;
+  }
+
+  if (rosvotDetector) {
+    console.log('[Main] 设置已更新，需要重新初始化 RosvotDetector 才能生效');
+    try { rosvotDetector.dispose(); } catch (_) {}
+    rosvotDetector = null;
   }
 
   cachedDMLDevices = null;
@@ -1296,7 +1305,41 @@ ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate, bpm }) =
     }
 
     const f0Array = await rmvpeDetector.extractF0(new Float32Array(audioData), sampleRate || 44100);
-    const notes = rmvpeDetector.f0ToNotes(f0Array, bpm || 120);
+
+    // 尝试使用 RosVot 模型提取 MIDI 音符（更精确）
+    let notes;
+    const modelPath = getModelDir();
+    const rosvotModelPath = path.join(modelPath, 'preprocess', 'rosvot_model.onnx');
+
+    if (fs.existsSync(rosvotModelPath)) {
+      try {
+        if (!rosvotDetector) {
+          const settings = loadSettings();
+          const deviceId = settings.deviceId ?? undefined;
+          console.log(`[Main] 初始化 RosvotDetector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+          rosvotDetector = new RosvotDetector(modelPath, { deviceId });
+          await rosvotDetector.init();
+        }
+        notes = await rosvotDetector.extractNotes(
+          new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120
+        );
+        console.log(`[Main] RosVot 提取到 ${notes.length} 个音符`);
+
+        // RosVot 提取结果为空时，回退到 f0ToNotes
+        if (notes.length === 0) {
+          console.log('[Main] RosVot 未提取到音符，回退到 f0ToNotes');
+          notes = rmvpeDetector.f0ToNotes(f0Array, bpm || 120);
+        }
+      } catch (rosvotErr) {
+        console.warn('[Main] RosVot 模型推理失败，回退到 f0ToNotes:', rosvotErr.message);
+        rosvotDetector = null;
+        notes = rmvpeDetector.f0ToNotes(f0Array, bpm || 120);
+      }
+    } else {
+      // RosVot 模型不存在，使用 f0ToNotes 回退
+      console.log('[Main] RosVot 模型不存在，使用 f0ToNotes 回退');
+      notes = rmvpeDetector.f0ToNotes(f0Array, bpm || 120);
+    }
 
     return {
       success: true,
@@ -1576,6 +1619,20 @@ async function loadSingleModel(groupId, modelId) {
       }
     }
     return { success: true };
+  } else if (groupId === 'rosvot') {
+    if (!rosvotDetector) {
+      const modelPath = getModelDir();
+      const settings = loadSettings();
+      const deviceId = settings.deviceId ?? undefined;
+      try {
+        rosvotDetector = new RosvotDetector(modelPath, { deviceId });
+        await rosvotDetector.init();
+      } catch (err) {
+        rosvotDetector = null;
+        throw err;
+      }
+    }
+    return { success: true };
   }
   return { success: false, error: `Unknown group: ${groupId}` };
 }
@@ -1600,6 +1657,12 @@ async function unloadSingleModel(groupId, modelId) {
       basicPitchDetector = null;
     }
     return { success: true };
+  } else if (groupId === 'rosvot') {
+    if (rosvotDetector) {
+      try { rosvotDetector.dispose(); } catch (_) {}
+      rosvotDetector = null;
+    }
+    return { success: true };
   }
   return { success: false, error: `Unknown group: ${groupId}` };
 }
@@ -1607,6 +1670,7 @@ async function unloadSingleModel(groupId, modelId) {
 function cleanupOnLoadFailure(groupId) {
   if (groupId === 'rmvpe') { try { if (rmvpeDetector) { rmvpeDetector.dispose(); } } catch (_) {} rmvpeDetector = null; }
   if (groupId === 'basicPitch') { try { if (basicPitchDetector) { basicPitchDetector.dispose(); } } catch (_) {} basicPitchDetector = null; }
+  if (groupId === 'rosvot') { try { if (rosvotDetector) { rosvotDetector.dispose(); } } catch (_) {} rosvotDetector = null; }
 }
 
 ipcMain.handle('resmgr:open', async () => {
@@ -1676,6 +1740,9 @@ ipcMain.handle('resmgr:getModelGroups', async () => {
       } else if (group.id === 'basicPitch') {
         loaded = !!(basicPitchDetector && basicPitchDetector.initialized);
         ep = 'tfjs';
+      } else if (group.id === 'rosvot') {
+        loaded = !!(rosvotDetector && rosvotDetector.initialized);
+        ep = rosvotDetector ? 'cpu' : null;
       }
 
       groupResult.models.push({
