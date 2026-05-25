@@ -428,6 +428,102 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
     });
   });
 
+  describe('English multi-phoneme mel2token distribution', () => {
+    const bpm = 120;
+
+    it('should distribute frames evenly among English phonemes (not cycle)', () => {
+      const notes = [
+        { pitch: 60, start: 0, duration: 2, lyric: 'en_HH-AH1-L-OW1' },
+      ];
+      const result = pipeline.notesToSequences(notes, bpm, null);
+
+      // 每个音素应该占据一段连续的帧，不应出现循环
+      // token序列: PAD, BOW, en_HH, en_AH1, en_L, en_OW1, SEP, EOW
+      // phIdx=1(BOW), 2(en_HH), 3(en_AH1), 4(en_L), 5(en_OW1), 6(SEP), 7(EOW)
+      const bowToken = 1;
+      const eowToken = 7;
+
+      // 检查BOW在第一帧
+      expect(result.mel2token[0]).to.equal(bowToken);
+
+      // 检查EOW在最后一帧
+      expect(result.mel2token[result.mel2token.length - 1]).to.equal(eowToken);
+
+      // 检查音素token是连续分配的，不会循环
+      // 收集每个token出现的帧范围
+      const tokenRanges = {};
+      for (let f = 0; f < result.mel2token.length; f++) {
+        const t = result.mel2token[f];
+        if (t > 0 && t < eowToken) {
+          if (!tokenRanges[t]) {
+            tokenRanges[t] = { first: f, last: f };
+          } else {
+            tokenRanges[t].last = f;
+          }
+        }
+      }
+
+      // 每个音素token应该只出现在一段连续帧中（不循环）
+      for (const t of Object.keys(tokenRanges)) {
+        const range = tokenRanges[t];
+        // 连续性检查：token t占据的帧应该是连续的
+        // 允许BOW和EOW各占1帧，音素之间可能有1帧的边界
+        const span = range.last - range.first + 1;
+        // token不应该出现间隔（即不应该循环出现）
+        let count = 0;
+        for (let f = range.first; f <= range.last; f++) {
+          if (result.mel2token[f] === parseInt(t)) count++;
+        }
+        // 如果token是连续的，count应该等于span
+        expect(count).to.equal(span);
+      }
+    });
+
+    it('should not cycle phonemes for English word input', () => {
+      const notes = [
+        { pitch: 60, start: 0, duration: 2, lyric: 'hello' },
+      ];
+      const result = pipeline.notesToSequences(notes, bpm, null);
+
+      // hello -> HH AH0 L OW1 -> en_HH, en_AH0, en_L, en_OW1, SEP
+      // token序列: PAD, BOW, en_HH, en_AH0, en_L, en_OW1, SEP, EOW
+
+      // 检查mel2token中不会出现音素循环
+      // 即token 2(en_HH)不应该在token 3(en_AH0)之后再次出现
+      const phonemeTokens = [];
+      for (let f = 0; f < result.mel2token.length; f++) {
+        const t = result.mel2token[f];
+        if (t >= 2 && t <= 6) { // 音素token范围
+          phonemeTokens.push(t);
+        }
+      }
+
+      // 音素token应该是单调非递减的（每个音素占据连续帧后切换到下一个）
+      for (let i = 1; i < phonemeTokens.length; i++) {
+        expect(phonemeTokens[i]).to.be.at.least(phonemeTokens[i - 1]);
+      }
+    });
+
+    it('should handle single Chinese phoneme correctly (unchanged behavior)', () => {
+      const notes = [
+        { pitch: 60, start: 0, duration: 1, lyric: 'zh_a1' },
+      ];
+      const result = pipeline.notesToSequences(notes, bpm, null);
+
+      // 单音素：所有中间帧应该映射到同一个音素token
+      const bowToken = 1;
+      const phonemeToken = 2;
+      const eowToken = 3;
+
+      expect(result.mel2token[0]).to.equal(bowToken);
+      expect(result.mel2token[result.mel2token.length - 1]).to.equal(eowToken);
+
+      for (let f = 1; f < result.mel2token.length - 1; f++) {
+        expect(result.mel2token[f]).to.equal(phonemeToken);
+      }
+    });
+  });
+
   describe('CFG global std rescale', () => {
     it('should compute global std across all frames and dimensions', () => {
       const totalFrames = 10;
