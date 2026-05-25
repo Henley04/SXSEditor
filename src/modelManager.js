@@ -92,6 +92,28 @@ function checkMissingFiles(modelDir) {
   return { missing, existing };
 }
 
+function deleteModelFiles(modelDir) {
+  const deleted = [];
+  const errors = [];
+
+  for (const file of MODEL_FILE_MANIFEST) {
+    const fullPath = path.join(modelDir, file.filePath);
+    // 删除主文件
+    for (const suffix of ['', TEMP_SUFFIX, CHUNK_META_SUFFIX]) {
+      try {
+        fs.unlinkSync(fullPath + suffix);
+        if (!suffix) deleted.push(file.filePath);
+      } catch (_) {}
+    }
+    // 删除分片下载的 part 文件
+    for (let i = 0; i < MAX_GLOBAL_CONCURRENCY; i++) {
+      try { fs.unlinkSync(fullPath + CHUNK_PART_SUFFIX + i); } catch (_) {}
+    }
+  }
+
+  return { deleted, errors };
+}
+
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -868,6 +890,7 @@ module.exports = {
   DEFAULT_PRECISION,
   MODELSCOPE_ENDPOINT,
   checkMissingFiles,
+  deleteModelFiles,
   downloadMissingFiles,
   downloadFileWithResume,
   downloadFileWithRetry,

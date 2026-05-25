@@ -165,6 +165,10 @@ function updateOverallProgress(overallDownloaded, overallTotal) {
 window.electronAPI.onModelDownloadMissingFiles((files) => {
   missingFiles.length = 0;
   missingFiles.push(...files);
+  // 清除旧的文件状态
+  for (const key in fileStates) {
+    delete fileStates[key];
+  }
   for (const file of files) {
     fileStates[file.filePath] = { status: 'pending', progress: 0, downloaded: 0, total: 0 };
   }
@@ -172,6 +176,8 @@ window.electronAPI.onModelDownloadMissingFiles((files) => {
   document.getElementById('startBtn').style.display = 'inline-block';
   document.getElementById('closeBtn').style.display = 'inline-block';
   document.getElementById('precisionSection').style.display = 'block';
+  document.getElementById('progressSection').style.display = 'none';
+  document.getElementById('errorMessage').style.display = 'none';
   renderFileList(true);
   loadModelDir();
 });
@@ -257,6 +263,33 @@ document.getElementById('startBtn').addEventListener('click', () => {
   lastOverallDownloaded = 0;
   isDownloading = true;
   window.electronAPI.modelDownloadStart(currentPrecision);
+});
+
+// 精度切换时提示删除已有文件并重新下载
+document.querySelectorAll('input[name="modelPrecision"]').forEach(radio => {
+  radio.addEventListener('change', async (e) => {
+    if (isDownloading) return;
+    const newPrecision = e.target.value;
+    if (newPrecision === currentPrecision) return;
+
+    const confirmed = confirm(t('modelDownload.precisionChangeConfirm'));
+    if (!confirmed) {
+      // 恢复原来的选择
+      const prevRadio = document.querySelector(`input[name="modelPrecision"][value="${currentPrecision}"]`);
+      if (prevRadio) prevRadio.checked = true;
+      return;
+    }
+
+    currentPrecision = newPrecision;
+    // 删除已有模型文件并重新检查
+    document.getElementById('statusText').textContent = t('modelDownload.detecting');
+    document.getElementById('startBtn').style.display = 'none';
+    try {
+      await window.electronAPI.modelDownloadDeleteAndRecheck(currentPrecision);
+    } catch (err) {
+      console.error('删除模型文件失败:', err);
+    }
+  });
 });
 
 document.getElementById('cancelBtn').addEventListener('click', () => {
