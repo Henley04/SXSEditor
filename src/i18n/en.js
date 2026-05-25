@@ -302,9 +302,9 @@ export default {
     openModelDownload: 'Open Model Download',
     openModelDownloadHint: 'Open the model download page to download or update required inference model files.',
     midiExtractTool: 'MIDI Extraction Tool',
-    midiExtractToolRmvpe: 'RMVPE (F0 to Notes)',
-    midiExtractToolBasicpitch: 'Basic Pitch',
-    midiExtractToolHint: 'Select the tool used for audio-to-MIDI extraction. RMVPE converts F0 pitch to notes, suitable for vocal audio; Basic Pitch is based on neural networks, suitable for multi-instrument audio.'
+    midiExtractToolRmvpe: 'RMVPE (F0 to Notes, Experimental)',
+    midiExtractToolBasicpitch: 'Basic Pitch (Recommended)',
+    midiExtractToolHint: 'Select the tool used for audio-to-MIDI extraction. Basic Pitch is neural network-based with stable results, suitable for most scenarios; RMVPE converts F0 pitch to notes and is an experimental feature with potentially suboptimal results.'
   },
   modelDownload: {
     title: 'SXSEditor Model Download',

@@ -2795,7 +2795,7 @@ async function handleAudioToMidi() {
 
     try {
       const settings = await window.electronAPI.getSettings();
-      const midiTool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'rmvpe';
+      const midiTool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'basicpitch';
 
       if (midiTool === 'rmvpe') {
         // RMVPE: 使用 RMVPE 提取 F0 + f0ToNotes 转 MIDI

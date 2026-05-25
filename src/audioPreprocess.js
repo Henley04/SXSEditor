@@ -1379,7 +1379,7 @@ async function extractF0BasicPitch() {
   }
 
   const settings = await window.electronAPI.getSettings();
-  const midiTool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'rmvpe';
+  const midiTool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'basicpitch';
   const loadingMsg = midiTool === 'rmvpe'
     ? t('preprocess.extractingMidiRmvpe')
     : t('preprocess.extractingMidiBasicPitch');
