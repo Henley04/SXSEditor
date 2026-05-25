@@ -337,6 +337,7 @@ This project is licensed under the [MIT License](LICENSE).
 | ⚡ GPU 加速 | DirectML（NVIDIA / AMD / Intel） |
 | 📊 资源管理器 | 监控 GPU/显存占用，单独加载/卸载模型 |
 | 🚀 优化 IPC 传输 | Float32Array 二进制传输，低延迟音频管线 |
+| 🎵 Vocoder 长音频优化 | 短音频一次性推理，长音频大块分片（1024帧/块），减少ONNX调度开销 |
 | 🖥️ HiDPI 支持 | 高分辨率 Canvas 渲染，适配 Retina/HiDPI 显示器 |
 | 🌐 官网多语言 | 官方网站支持中文/英文/日文，自动检测浏览器语言 |
 

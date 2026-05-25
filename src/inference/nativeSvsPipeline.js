@@ -42,8 +42,8 @@ const F0_MIN = 32.7031956625;
 const CFG_STRENGTH = 3.0;
 const CFG_RESCALE = 0.75;
 const DEFAULT_DIFF_STEPS = 32;
-const VOCODER_CHUNK_FRAMES = 128;
-const VOCODER_OVERLAP_FRAMES = 16;
+const VOCODER_CHUNK_FRAMES = 1024;
+const VOCODER_OVERLAP_FRAMES = 4;
 const LONG_AUDIO_THRESHOLD_SEC = 30;
 const SEGMENT_MIN_SEC = 15;
 const SEGMENT_MAX_SEC = 30;
@@ -1359,9 +1359,24 @@ class OnnxSVSPipeline {
     async _runVocoderChunked(melData, totalFrames) {
         const chunkSize = VOCODER_CHUNK_FRAMES;
         const overlapFrames = VOCODER_OVERLAP_FRAMES;
-        const stepFrames = chunkSize - overlapFrames;
         const totalSamples = totalFrames * HOP_SIZE;
         const output = new Float32Array(totalSamples);
+        const t0 = performance.now();
+
+        // 短音频（≤chunkSize帧 ≈ 20.5秒）直接一次性推理，避免分块开销
+        if (totalFrames <= chunkSize) {
+            const melTensor = createFloatTensor(this.isFP16 ? 'float16' : 'float32', melData instanceof Float32Array ? melData : new Float32Array(melData), [1, totalFrames, MEL_DIM]);
+            const results = await this.sessions.vocoder.run({ mel: melTensor });
+            const waveform = outputToFloat32(results['waveform']);
+            const copyLen = Math.min(waveform.length, totalSamples);
+            output.set(waveform.subarray(0, copyLen));
+            const elapsed = performance.now() - t0;
+            console.log(`[OnnxSVSPipeline] Vocoder一次性推理: ${totalFrames}帧 → ${copyLen}样本, ${elapsed.toFixed(0)}ms`);
+            return output;
+        }
+
+        // 长音频分块推理
+        const stepFrames = chunkSize - overlapFrames;
         const weightSum = new Float32Array(totalSamples);
 
         const fadeSamples = overlapFrames * HOP_SIZE;
@@ -1416,6 +1431,8 @@ class OnnxSVSPipeline {
             }
         }
 
+        const elapsed = performance.now() - t0;
+        console.log(`[OnnxSVSPipeline] Vocoder分块推理: ${totalFrames}帧, ${chunkIdx}块, ${elapsed.toFixed(0)}ms`);
         return output;
     }
 
