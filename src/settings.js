@@ -108,7 +108,7 @@ async function loadDevices() {
             const tool = currentSetting.midiExtractTool === 'rosvot' ? 'rmvpe' : currentSetting.midiExtractTool;
             midiExtractToolSelect.value = tool;
         } else {
-            midiExtractToolSelect.value = 'rmvpe';
+            midiExtractToolSelect.value = 'basicpitch';
         }
     } catch (err) {
         console.error('加载设备列表失败:', err);

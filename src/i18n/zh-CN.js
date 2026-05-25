@@ -302,9 +302,9 @@ export default {
     openModelDownload: '打开模型下载',
     openModelDownloadHint: '打开模型下载页面，下载或更新推理所需的模型文件。',
     midiExtractTool: 'MIDI 提取工具',
-    midiExtractToolRmvpe: 'RMVPE (F0转音符)',
-    midiExtractToolBasicpitch: 'Basic Pitch',
-    midiExtractToolHint: '选择音频转MIDI时使用的提取工具。RMVPE 基于音高检测将F0转为音符，适合人声音频；Basic Pitch 基于神经网络，适合多乐器音频。'
+    midiExtractToolRmvpe: 'RMVPE (F0转音符, 实验性)',
+    midiExtractToolBasicpitch: 'Basic Pitch (推荐)',
+    midiExtractToolHint: '选择音频转MIDI时使用的提取工具。Basic Pitch 基于神经网络，提取效果稳定，适合大多数场景；RMVPE 基于音高检测将F0转为音符，为实验性功能，提取结果可能不理想。'
   },
   modelDownload: {
     title: 'SXSEditor 模型文件下载',
