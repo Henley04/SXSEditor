@@ -3,6 +3,31 @@ const fs = require('node:fs');
 const ort = require('onnxruntime-node');
 const { pinyin } = require('pinyin-pro');
 
+// 修复 onnxruntime-common 的 float16 类型映射
+// Node.js v24+ 原生支持 Float16Array，但 onnxruntime-node 的 native binding (C++)
+// 无法识别 Float16Array 的 buffer，导致 "not enough space" 错误。
+// 解决方案：强制 float16 使用 Uint16Array 存储数据。
+(function patchFloat16Mapping() {
+    if (typeof Float16Array === 'undefined') return; // 不需要 patch
+    try {
+        // 触发 checkTypedArray 初始化
+        try { new ort.Tensor('float16', new Uint16Array(1), [1]); } catch (_) {}
+
+        // 通过 require.cache 直接访问已加载的模块
+        for (const [key, mod] of Object.entries(require.cache)) {
+            if (key.includes('onnxruntime-common') && key.includes('tensor-impl-type-mapping')) {
+                if (mod.exports && mod.exports.NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP) {
+                    mod.exports.NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP.set('float16', Uint16Array);
+                    console.log('[OnnxSVSPipeline] float16 类型映射已修复 (Uint16Array)');
+                }
+                break;
+            }
+        }
+    } catch (_) {
+        // patch 失败不影响正常运行（非 FP16 模型不需要此 patch）
+    }
+})();
+
 const SAMPLE_RATE = 24000;
 const HOP_SIZE = 480;
 const MEL_DIM = 128;
@@ -332,7 +357,42 @@ function istftReconstruction(magPhaseData, numFrames, nFft, hopLength, winLength
     return output;
 }
 
-const DUMMY_TEST_INPUTS = {
+// Float32 <-> Float16 转换工具
+// 使用 Float16Array 进行转换（Node.js v24+ 原生支持）
+function float32ToF16Buffer(f32Data) {
+    const f16 = new Float16Array(f32Data.length);
+    for (let i = 0; i < f32Data.length; i++) {
+        f16[i] = f32Data[i];
+    }
+    return new Uint16Array(f16.buffer, f16.byteOffset, f16.length);
+}
+
+function f16BufferToFloat32(u16Data) {
+    const f16 = new Float16Array(u16Data.buffer, u16.byteOffset, u16Data.length);
+    const f32 = new Float32Array(f16.length);
+    for (let i = 0; i < f16.length; i++) {
+        f32[i] = f16[i];
+    }
+    return f32;
+}
+
+// 根据模型精度创建浮点张量
+function createFloatTensor(type, f32Data, dims) {
+    if (type === 'float16') {
+        return new ort.Tensor('float16', float32ToF16Buffer(f32Data), dims);
+    }
+    return new ort.Tensor('float32', f32Data, dims);
+}
+
+// 从模型输出中提取 Float32Array（自动处理 float16 输出）
+function outputToFloat32(tensor) {
+    if (tensor.type === 'float16') {
+        return f16BufferToFloat32(tensor.data);
+    }
+    return new Float32Array(tensor.data);
+}
+
+const DUMMY_TEST_INPUTS_FP32 = {
     noteTextEncoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([1n, 2n, 3n]), [1, 3]) },
     notePitchEncoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([60n, 62n, 64n]), [1, 3]) },
     noteTypeEncoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([0n, 0n, 0n]), [1, 3]) },
@@ -347,6 +407,23 @@ const DUMMY_TEST_INPUTS = {
     },
     vocoder: { mel: new ort.Tensor('float32', new Float32Array(3 * MEL_DIM), [1, 3, MEL_DIM]) },
     melTransform: { waveform: new ort.Tensor('float32', new Float32Array(HOP_SIZE * 3), [1, HOP_SIZE * 3]) },
+};
+
+const DUMMY_TEST_INPUTS_FP16 = {
+    noteTextEncoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([1n, 2n, 3n]), [1, 3]) },
+    notePitchEncoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([60n, 62n, 64n]), [1, 3]) },
+    noteTypeEncoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([0n, 0n, 0n]), [1, 3]) },
+    f0Encoder: { input_ids: new ort.Tensor('int64', BigInt64Array.from([100n, 100n, 100n]), [1, 3]) },
+    preflow: { features: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * EMBED_DIM)), [1, 3, EMBED_DIM]) },
+    condEmb: { cond_code: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * EMBED_DIM)), [1, 3, EMBED_DIM]) },
+    diffStep: {
+        xt_input: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * MEL_DIM)), [1, 3, MEL_DIM]),
+        t: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array([0.5])), [1]),
+        cond: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * COND_DIM)), [1, 3, COND_DIM]),
+        xt_mask: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array([1, 1, 1])), [1, 3]),
+    },
+    vocoder: { mel: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * MEL_DIM)), [1, 3, MEL_DIM]) },
+    melTransform: { waveform: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(HOP_SIZE * 3)), [1, HOP_SIZE * 3]) },
 };
 
 function isDiscreteGPUByName(name) {
@@ -538,9 +615,9 @@ async function detectBestGPU(modelDir) {
     };
 }
 
-async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId) {
+async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16) {
     const modelName = path.basename(modelPath);
-    const dummyInputs = DUMMY_TEST_INPUTS[sessionKey];
+    const dummyInputs = isFP16 ? DUMMY_TEST_INPUTS_FP16[sessionKey] : DUMMY_TEST_INPUTS_FP32[sessionKey];
     const gpuTag = gpuDeviceName ? ` [${gpuDeviceName}]` : '';
 
     if (!dummyInputs) {
@@ -610,6 +687,7 @@ class OnnxSVSPipeline {
         this.modelDir = path.resolve(modelDir);
         this.sessions = {};
         this.sessionEPs = {};
+        this.isFP16 = false; // 是否为 FP16 精度模型
         this.gpuDeviceName = '';
         this.dmlDeviceId = undefined;
         this.initialized = false;
@@ -806,11 +884,20 @@ class OnnxSVSPipeline {
             'melTransform',
         ];
 
+        // 检测模型精度：通过检查第一个浮点输入模型的输入类型
+        // 先临时加载 preflow 模型检测精度
+        const probeModelPath = path.join(this.modelDir, resolvedModelFiles[4]); // preflow
+        const probeSession = await ort.InferenceSession.create(probeModelPath, { executionProviders: ['cpu'] });
+        const probeInputType = probeSession.inputMetadata[0]?.type;
+        this.isFP16 = probeInputType === 'float16';
+        await probeSession.release();
+        console.log(`[OnnxSVSPipeline] 模型精度检测: ${this.isFP16 ? 'FP16 (半精度)' : 'FP32 (全精度)'}`);
+
         const loadedSessions = [];
         try {
             for (let i = 0; i < resolvedModelFiles.length; i++) {
                 const modelPath = path.join(this.modelDir, resolvedModelFiles[i]);
-                const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId);
+                const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16);
                 this.sessions[sessionKeys[i]] = session;
                 this.sessionEPs[sessionKeys[i]] = ep;
                 loadedSessions.push(sessionKeys[i]);
@@ -1163,10 +1250,11 @@ class OnnxSVSPipeline {
     async _extractRefMelOnnx(refAudioWavBuffer) {
         const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(refAudioWavBuffer);
         const resampled = resampleLinear(audioFloat, srcSr, SAMPLE_RATE);
-        const waveform = new ort.Tensor('float32', resampled, [1, resampled.length]);
+        const floatType = this.isFP16 ? 'float16' : 'float32';
+        const waveform = createFloatTensor(floatType, resampled, [1, resampled.length]);
         const results = await this.sessions.melTransform.run({ waveform });
         const melOutput = results['mel_spectrogram'];
-        const melData = new Float32Array(melOutput.data);
+        const melData = outputToFloat32(melOutput);
         const melDims = melOutput.dims;
         const frames = melDims[1];
         return { data: melData, frames, melBands: MEL_DIM };
@@ -1189,19 +1277,19 @@ class OnnxSVSPipeline {
 
         const textInput = new ort.Tensor('int64', phonemeIds, [1, tokenCount]);
         const textResults = await this.sessions.noteTextEncoder.run({ input_ids: textInput });
-        const textEmb = new Float32Array(textResults['embeddings'].data);
+        const textEmb = outputToFloat32(textResults['embeddings']);
 
         const pitchInput = new ort.Tensor('int64', pitchIds, [1, tokenCount]);
         const pitchResults = await this.sessions.notePitchEncoder.run({ input_ids: pitchInput });
-        const pitchEmb = new Float32Array(pitchResults['embeddings'].data);
+        const pitchEmb = outputToFloat32(pitchResults['embeddings']);
 
         const typeInput = new ort.Tensor('int64', typeIds, [1, tokenCount]);
         const typeResults = await this.sessions.noteTypeEncoder.run({ input_ids: typeInput });
-        const typeEmb = new Float32Array(typeResults['embeddings'].data);
+        const typeEmb = outputToFloat32(typeResults['embeddings']);
 
         const f0Input = new ort.Tensor('int64', f0IdsArr, [1, totalFrames]);
         const f0Results = await this.sessions.f0Encoder.run({ input_ids: f0Input });
-        const f0Emb = new Float32Array(f0Results['embeddings'].data);
+        const f0Emb = outputToFloat32(f0Results['embeddings']);
 
         const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
         for (let t = 0; t < tokenCount; t++) {
@@ -1213,9 +1301,10 @@ class OnnxSVSPipeline {
             }
         }
 
-        const featuresTensor = new ort.Tensor('float32', tokenEmb, [1, tokenCount, EMBED_DIM]);
+        const floatType = this.isFP16 ? 'float16' : 'float32';
+        const featuresTensor = createFloatTensor(floatType, tokenEmb, [1, tokenCount, EMBED_DIM]);
         const preflowResults = await this.sessions.preflow.run({ features: featuresTensor });
-        const processedTokenEmb = new Float32Array(preflowResults['processed_features'].data);
+        const processedTokenEmb = outputToFloat32(preflowResults['processed_features']);
 
         const mel2token = sequences.mel2token;
         const expandedEmb = new Float32Array(totalFrames * EMBED_DIM);
@@ -1243,18 +1332,19 @@ class OnnxSVSPipeline {
             }
         }
 
-        const condCodeTensor = new ort.Tensor('float32', condCodeData, [1, totalCondFrames, EMBED_DIM]);
+        const condCodeTensor = createFloatTensor(floatType, condCodeData, [1, totalCondFrames, EMBED_DIM]);
         const condEmbResults = await this.sessions.condEmb.run({ cond_code: condCodeTensor });
-        const cond = new Float32Array(condEmbResults['cond_embedding'].data);
+        const cond = outputToFloat32(condEmbResults['cond_embedding']);
 
         return cond;
     }
 
     async _runDiffStep(xtInputData, tVal, condData, maskData, totalFramesWithPrompt) {
-        const xtTensor = new ort.Tensor('float32', xtInputData, [1, totalFramesWithPrompt, MEL_DIM]);
-        const tTensor = new ort.Tensor('float32', new Float32Array([tVal]), [1]);
-        const condTensor = new ort.Tensor('float32', condData, [1, totalFramesWithPrompt, COND_DIM]);
-        const maskTensor = new ort.Tensor('float32', maskData, [1, totalFramesWithPrompt]);
+        const floatType = this.isFP16 ? 'float16' : 'float32';
+        const xtTensor = createFloatTensor(floatType, xtInputData, [1, totalFramesWithPrompt, MEL_DIM]);
+        const tTensor = createFloatTensor(floatType, new Float32Array([tVal]), [1]);
+        const condTensor = createFloatTensor(floatType, condData, [1, totalFramesWithPrompt, COND_DIM]);
+        const maskTensor = createFloatTensor(floatType, maskData, [1, totalFramesWithPrompt]);
 
         const results = await this.sessions.diffStep.run({
             xt_input: xtTensor,
@@ -1263,7 +1353,7 @@ class OnnxSVSPipeline {
             xt_mask: maskTensor,
         });
 
-        return new Float32Array(results['flow_pred'].data);
+        return outputToFloat32(results['flow_pred']);
     }
 
     async _runVocoderChunked(melData, totalFrames) {
@@ -1295,9 +1385,9 @@ class OnnxSVSPipeline {
                 }
             }
 
-            const melTensor = new ort.Tensor('float32', chunkMel, [1, currentChunkFrames, MEL_DIM]);
+            const melTensor = createFloatTensor(this.isFP16 ? 'float16' : 'float32', chunkMel, [1, currentChunkFrames, MEL_DIM]);
             const results = await this.sessions.vocoder.run({ mel: melTensor });
-            const waveform = new Float32Array(results['waveform'].data);
+            const waveform = outputToFloat32(results['waveform']);
 
             const writeStart = chunkStart * HOP_SIZE;
             const writeLen = Math.min(waveform.length, totalSamples - writeStart);
