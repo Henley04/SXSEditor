@@ -368,7 +368,7 @@ function float32ToF16Buffer(f32Data) {
 }
 
 function f16BufferToFloat32(u16Data) {
-    const f16 = new Float16Array(u16Data.buffer, u16.byteOffset, u16Data.length);
+    const f16 = new Float16Array(u16Data.buffer, u16Data.byteOffset, u16Data.length);
     const f32 = new Float32Array(f16.length);
     for (let i = 0; i < f16.length; i++) {
         f32[i] = f16[i];
