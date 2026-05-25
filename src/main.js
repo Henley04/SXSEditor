@@ -1754,6 +1754,9 @@ ipcMain.handle('resmgr:getModelGroups', async () => {
 
   const result = [];
   for (const group of groups) {
+    // 跳过已禁用的模型组
+    if (group.disabled) continue;
+
     const groupResult = {
       id: group.id,
       name: group.name,

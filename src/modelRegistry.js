@@ -143,6 +143,8 @@ const MODEL_GROUPS = [
     description: '基于 RosVot 的 MIDI 音符识别，配合 RMVPE 使用，用于精确音频转 MIDI',
     descriptionEn: 'RosVot-based MIDI note recognition, used with RMVPE for accurate audio-to-MIDI',
     required: false,
+    disabled: true,
+    disabledReason: 'ONNX 导出存在问题，当前只能提取 F0，MIDI 音符提取结果为空，待修复后启用',
     pipelineRef: 'rosvotDetector',
     models: [
       {
