@@ -408,12 +408,14 @@ function createModelDownloadWindow(missingFiles, precision) {
 
   modelDownloadWindow = new BrowserWindow({
     width: 520,
-    height: 560,
+    height: 700,
+    minWidth: 420,
+    minHeight: 500,
     title: '模型文件下载',
     icon: path.join(__dirname, 'SXS.png'),
-    resizable: false,
+    resizable: true,
     minimizable: true,
-    maximizable: false,
+    maximizable: true,
     closable: true,
     parent: mainWindow,
     webPreferences: {
