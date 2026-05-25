@@ -82,7 +82,7 @@ Download the latest pre-built installer for **Windows**:
 
 | Language | Status | Notes |
 |----------|--------|-------|
-| 🇬🇧 English | ✅ Supported | Full phoneme coverage |
+| 🇬🇧 English | ✅ Supported | Full phoneme coverage, mel2token frame alignment fixed |
 | 🇨🇳 Chinese (Mandarin) | ✅ Supported | Pinyin-based lyrics input |
 | 🇯🇵 Japanese | 🔄 In Development | Coming in future releases |
 | 🇰🇷 Korean | 📋 Planned | Under evaluation |
@@ -345,7 +345,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 | 语言 | 状态 | 说明 |
 |------|------|------|
-| 🇬🇧 英语 | ✅ 已支持 | 完整音素覆盖 |
+| 🇬🇧 英语 | ✅ 已支持 | 完整音素覆盖，已修复mel2token帧对齐问题 |
 | 🇨🇳 中文（普通话） | ✅ 已支持 | 支持拼音和汉字输入 |
 | 🇯🇵 日语 | 🔄 开发中 | 将在后续版本支持 |
 | 🇰🇷 韩语 | 📋 规划中 | 评估中 |

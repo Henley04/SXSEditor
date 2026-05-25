@@ -1192,7 +1192,7 @@ class OnnxSVSPipeline {
             let i = phLocations[idx][0];
             const j = phLocations[idx][1];
             const nextPhonemeStart = idx < phLocations.length - 1 ? phLocations[idx + 1][0] : totalFrames;
-            if (i >= totalFrames || i + j > totalFrames) {
+            if (i >= totalFrames) {
                 break;
             }
             if (i < totalFrames && mel2token[i] > 0) {
@@ -1201,14 +1201,20 @@ class OnnxSVSPipeline {
                 }
             }
             mel2token[i] = phIdx;
-            let k = i + 1;
-            while (k + j < nextPhonemeStart) {
-                for (let m = 0; m < j; m++) {
-                    mel2token[k + m] = phIdx + m + 1;
+
+            // 将帧均匀分配给 j 个音素，每个音素占据一段连续帧
+            const innerFrames = Math.max(0, nextPhonemeStart - i - 2);
+            for (let p = 0; p < j; p++) {
+                const pStart = i + 1 + Math.floor(p * innerFrames / j);
+                const pEnd = i + 1 + Math.floor((p + 1) * innerFrames / j);
+                for (let f = pStart; f < pEnd; f++) {
+                    mel2token[f] = phIdx + 1 + p;
                 }
-                k += j;
             }
-            mel2token[nextPhonemeStart - 1] = phIdx + j + 1;
+
+            if (nextPhonemeStart - 1 > i && nextPhonemeStart - 1 < totalFrames) {
+                mel2token[nextPhonemeStart - 1] = phIdx + j + 1;
+            }
             phIdx += j + 2;
         }
 
