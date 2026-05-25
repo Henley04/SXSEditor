@@ -331,7 +331,8 @@ export default {
     precisionFp32: 'FP32 (Full Precision)',
     precisionFp32Desc: 'Highest precision, best audio quality, highest VRAM usage. Recommended for high-performance discrete GPU users.',
     precisionInt8: 'INT8 (Quantized)',
-    precisionInt8Desc: 'Slight quality loss, lower VRAM usage. Recommended for integrated GPU or low VRAM users.'
+    precisionInt8Desc: 'Slight quality loss, lower VRAM usage. Recommended for integrated GPU or low VRAM users.',
+    precisionChangeConfirm: 'Changing precision requires deleting existing model files and re-downloading. Continue?'
   },
   menu: {
     aboutSXSEditor: 'About SXSEditor',

@@ -129,7 +129,7 @@ const { BasicPitchDetector } = require('./inference/basicPitch');
 const { RosvotDetector } = require('./inference/rosvotDetector');
 const { parseMidiFile } = require('./inference/midiParser');
 const { AudioOutputManager } = require('./audio/audioOutputManager');
-const { checkMissingFiles, downloadMissingFiles, DEFAULT_PRECISION } = require('./modelManager');
+const { checkMissingFiles, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION } = require('./modelManager');
 const { getModelGroups } = require('./modelRegistry');
 
 let svsPipeline = null;
@@ -616,6 +616,18 @@ ipcMain.handle('model-download:open', async (event, precision) => {
   const modelDir = getModelDir();
   const { missing } = checkMissingFiles(modelDir);
   createModelDownloadWindow(missing, currentPrecision);
+  return { success: true, missingCount: missing.length };
+});
+
+ipcMain.handle('model-download:delete-and-recheck', async (event, precision) => {
+  const modelDir = getModelDir();
+  deleteModelFiles(modelDir);
+  const { missing } = checkMissingFiles(modelDir);
+  // 更新下载窗口的缺失文件列表
+  if (modelDownloadWindow && !modelDownloadWindow.isDestroyed()) {
+    modelDownloadWindow.webContents.send('model-download:missing-files', missing);
+    modelDownloadWindow.webContents.send('model-download:precision', precision || DEFAULT_PRECISION);
+  }
   return { success: true, missingCount: missing.length };
 });
 

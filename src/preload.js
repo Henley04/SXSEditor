@@ -122,6 +122,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   modelDownloadChangeDir: () => ipcRenderer.invoke('model-download:change-dir'),
   modelDownloadGetDir: () => ipcRenderer.invoke('model-download:get-dir'),
   modelDownloadOpen: (precision) => ipcRenderer.invoke('model-download:open', precision),
+  modelDownloadDeleteAndRecheck: (precision) => ipcRenderer.invoke('model-download:delete-and-recheck', precision),
   saveLocale: (locale) => ipcRenderer.invoke('save-locale', locale),
   getLocale: () => ipcRenderer.invoke('get-locale'),
   reloadMainWindow: () => ipcRenderer.invoke('reload-main-window'),

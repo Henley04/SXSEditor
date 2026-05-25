@@ -331,7 +331,8 @@ export default {
     precisionFp32: 'FP32 (全精度)',
     precisionFp32Desc: '最高精度，音质最好，显存占用最大，推荐高性能独显用户使用',
     precisionInt8: 'INT8 (量化)',
-    precisionInt8Desc: '音质略有损失，显存占用更小，推荐核显或低显存用户使用'
+    precisionInt8Desc: '音质略有损失，显存占用更小，推荐核显或低显存用户使用',
+    precisionChangeConfirm: '切换精度后需要删除已有的模型文件并重新下载，是否继续？'
   },
   menu: {
     aboutSXSEditor: '关于 SXSEditor',
