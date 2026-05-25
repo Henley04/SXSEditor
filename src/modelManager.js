@@ -45,7 +45,7 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'mel_transform.onnx.data', required: true },
   { filePath: 'preprocess/rmvpe_model.onnx', required: true },
   { filePath: 'preprocess/rmvpe_mel.onnx', required: false },
-  { filePath: 'preprocess/rosvot_model.onnx', required: true },
+  { filePath: 'preprocess/rosvot_model.onnx', required: false },
   { filePath: 'basic_pitch_model/model.json', required: true },
   { filePath: 'basic_pitch_model/group1-shard1of1.bin', required: true },
 ];
