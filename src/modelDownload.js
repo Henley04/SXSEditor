@@ -1,6 +1,7 @@
 import './common.css';
 import './modelDownload.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
+import { formatBytes } from './utils/formatBytes.js';
 
 const missingFiles = [];
 const fileStates = {};
