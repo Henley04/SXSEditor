@@ -264,11 +264,7 @@ async function handleWavFile(file) {
     audioCtx.close();
 
     if (wavDuration > 30) {
-      showAlertDialog(t('singerCreator.wavTooLong'));
-      wavFileBuffer = null;
-      wavAudioBuffer = null;
-      wavFileName = '';
-      wavDuration = 0;
+      showWavTrimModal(wavAudioBuffer, wavFileBuffer, wavFileName, wavDuration);
       return;
     }
 
@@ -527,6 +523,472 @@ function cleanupListeners() {
   if (preprocessDataSavedCleanup) {
     preprocessDataSavedCleanup();
     preprocessDataSavedCleanup = null;
+  }
+}
+
+// ==================== WAV 截取模态框逻辑 ====================
+
+const MAX_TRIM_DURATION = 30;
+
+let trimAudioBuffer = null;
+let trimStart = 0;
+let trimLength = MAX_TRIM_DURATION;
+let trimTotalDuration = 0;
+let trimDragging = null; // 'selection' | 'left' | 'right'
+let trimDragStartX = 0;
+let trimDragStartValue = 0;
+let trimPreviewSource = null;
+let trimPreviewContext = null;
+let isTrimPreviewPlaying = false;
+
+const trimOverlay = document.getElementById('wav-trim-overlay');
+const trimCanvas = document.getElementById('wav-trim-canvas');
+const trimSelection = document.getElementById('wav-trim-selection');
+const trimLabelStart = document.getElementById('wav-trim-label-start');
+const trimLabelEnd = document.getElementById('wav-trim-label-end');
+const trimStartInput = document.getElementById('trim-start-input');
+const trimLengthInput = document.getElementById('trim-length-input');
+const btnTrimPreview = document.getElementById('btn-trim-preview');
+const btnTrimConfirm = document.getElementById('btn-trim-confirm');
+const btnTrimCancel = document.getElementById('btn-trim-cancel');
+
+function showWavTrimModal(audioBuffer, fileBuffer, fileName, duration) {
+  trimAudioBuffer = audioBuffer;
+  trimTotalDuration = duration;
+  trimStart = 0;
+  trimLength = Math.min(MAX_TRIM_DURATION, duration);
+  trimOverlay.style.display = 'flex';
+
+  trimStartInput.max = (duration - 0.1).toFixed(1);
+  trimStartInput.value = trimStart.toFixed(1);
+  trimLengthInput.value = trimLength.toFixed(1);
+
+  requestAnimationFrame(() => {
+    drawTrimWaveform();
+    updateTrimSelectionUI();
+    drawTrimTimeAxis();
+  });
+}
+
+function closeWavTrimModal() {
+  stopTrimPreview();
+  trimOverlay.style.display = 'none';
+  trimAudioBuffer = null;
+  trimTotalDuration = 0;
+}
+
+function drawTrimWaveform() {
+  if (!trimAudioBuffer) return;
+
+  const canvas = trimCanvas;
+  const wrapper = canvas.parentElement;
+  const dpr = window.devicePixelRatio || 1;
+  const width = wrapper.clientWidth;
+  const height = wrapper.clientHeight || 100;
+
+  if (width <= 0 || height <= 0) {
+    requestAnimationFrame(() => drawTrimWaveform());
+    return;
+  }
+
+  canvas.style.width = width + 'px';
+  canvas.style.height = height + 'px';
+  canvas.width = width * dpr;
+  canvas.height = height * dpr;
+
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.scale(dpr, dpr);
+
+  ctx.fillStyle = '#14141f';
+  ctx.fillRect(0, 0, width, height);
+
+  const data = trimAudioBuffer.getChannelData(0);
+  const samplesPerPixel = data.length / width;
+  const mid = height / 2;
+
+  ctx.fillStyle = '#3a3a52';
+  for (let i = 0; i < width; i++) {
+    const startSample = Math.floor(i * samplesPerPixel);
+    const endSample = Math.floor((i + 1) * samplesPerPixel);
+    let min = 1.0;
+    let max = -1.0;
+    for (let j = startSample; j < endSample; j++) {
+      const datum = data[j];
+      if (datum < min) min = datum;
+      if (datum > max) max = datum;
+    }
+    const barHeight = Math.max(1, ((max - min) / 2) * height);
+    ctx.fillRect(i, mid - barHeight / 2, 1, barHeight);
+  }
+
+  // 绘制选区高亮
+  const selLeft = (trimStart / trimTotalDuration) * width;
+  const selRight = ((trimStart + trimLength) / trimTotalDuration) * width;
+
+  // 选区外暗化
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+  ctx.fillRect(0, 0, selLeft, height);
+  ctx.fillRect(selRight, 0, width - selRight, height);
+
+  // 选区内高亮波形（重绘）
+  ctx.fillStyle = '#5b8def';
+  for (let i = Math.floor(selLeft); i < Math.ceil(selRight); i++) {
+    if (i < 0 || i >= width) continue;
+    const startSample = Math.floor(i * samplesPerPixel);
+    const endSample = Math.floor((i + 1) * samplesPerPixel);
+    let min = 1.0;
+    let max = -1.0;
+    for (let j = startSample; j < endSample; j++) {
+      const datum = data[j];
+      if (datum < min) min = datum;
+      if (datum > max) max = datum;
+    }
+    const barHeight = Math.max(1, ((max - min) / 2) * height);
+    ctx.fillRect(i, mid - barHeight / 2, 1, barHeight);
+  }
+}
+
+function drawTrimTimeAxis() {
+  const axisEl = document.getElementById('wav-trim-time-axis');
+  if (!axisEl || !trimTotalDuration) return;
+
+  const width = axisEl.clientWidth;
+  if (width <= 0) {
+    requestAnimationFrame(() => drawTrimTimeAxis());
+    return;
+  }
+
+  axisEl.innerHTML = '';
+
+  // 计算合适的刻度间隔
+  let interval = 5;
+  if (trimTotalDuration <= 60) interval = 5;
+  else if (trimTotalDuration <= 120) interval = 10;
+  else interval = 15;
+
+  for (let time = 0; time <= trimTotalDuration; time += interval) {
+    const x = (time / trimTotalDuration) * width;
+    const tick = document.createElement('div');
+    tick.style.cssText = `
+      position: absolute;
+      left: ${x}px;
+      bottom: 0;
+      font-size: 9px;
+      color: #5a5a72;
+      transform: translateX(-50%);
+    `;
+    tick.textContent = time + 's';
+    axisEl.appendChild(tick);
+  }
+}
+
+function updateTrimSelectionUI() {
+  if (!trimTotalDuration) return;
+
+  const wrapper = document.getElementById('wav-trim-waveform-wrapper');
+  const width = wrapper.clientWidth;
+  if (width <= 0) return;
+
+  const leftPx = (trimStart / trimTotalDuration) * width;
+  const rightPx = ((trimStart + trimLength) / trimTotalDuration) * width;
+
+  trimSelection.style.left = leftPx + 'px';
+  trimSelection.style.width = (rightPx - leftPx) + 'px';
+
+  trimLabelStart.textContent = trimStart.toFixed(1) + 's';
+  trimLabelEnd.textContent = (trimStart + trimLength).toFixed(1) + 's';
+
+  trimStartInput.value = trimStart.toFixed(1);
+  trimLengthInput.value = trimLength.toFixed(1);
+}
+
+function clampTrimValues() {
+  trimStart = Math.max(0, trimStart);
+  trimLength = Math.max(0.1, trimLength);
+  trimLength = Math.min(MAX_TRIM_DURATION, trimLength);
+  trimLength = Math.min(trimLength, trimTotalDuration - trimStart);
+  if (trimStart + trimLength > trimTotalDuration) {
+    trimStart = trimTotalDuration - trimLength;
+  }
+  trimStart = Math.max(0, trimStart);
+}
+
+// 选区拖拽交互
+document.getElementById('wav-trim-waveform-wrapper').addEventListener('mousedown', (e) => {
+  if (!trimAudioBuffer) return;
+
+  const wrapper = document.getElementById('wav-trim-waveform-wrapper');
+  const rect = wrapper.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const width = rect.width;
+
+  const selLeft = (trimStart / trimTotalDuration) * width;
+  const selRight = ((trimStart + trimLength) / trimTotalDuration) * width;
+
+  const handleZone = 8;
+
+  if (Math.abs(x - selLeft) < handleZone) {
+    trimDragging = 'left';
+  } else if (Math.abs(x - selRight) < handleZone) {
+    trimDragging = 'right';
+  } else if (x > selLeft && x < selRight) {
+    trimDragging = 'selection';
+    trimDragStartX = e.clientX;
+    trimDragStartValue = trimStart;
+  } else {
+    // 点击选区外：将选区移动到点击位置
+    const clickTime = (x / width) * trimTotalDuration;
+    trimStart = Math.max(0, Math.min(clickTime - trimLength / 2, trimTotalDuration - trimLength));
+    clampTrimValues();
+    drawTrimWaveform();
+    updateTrimSelectionUI();
+    trimDragging = 'selection';
+    trimDragStartX = e.clientX;
+    trimDragStartValue = trimStart;
+  }
+
+  e.preventDefault();
+});
+
+document.addEventListener('mousemove', (e) => {
+  if (!trimDragging || !trimAudioBuffer) return;
+
+  const wrapper = document.getElementById('wav-trim-waveform-wrapper');
+  const width = wrapper.clientWidth;
+
+  if (trimDragging === 'left') {
+    const rect = wrapper.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const fixedEnd = trimStart + trimLength;
+    trimStart = Math.max(0, (x / width) * trimTotalDuration);
+    trimLength = fixedEnd - trimStart;
+    if (trimLength > MAX_TRIM_DURATION) {
+      trimLength = MAX_TRIM_DURATION;
+      trimStart = fixedEnd - MAX_TRIM_DURATION;
+    }
+    if (trimLength < 0.1) {
+      trimLength = 0.1;
+      trimStart = fixedEnd - 0.1;
+    }
+    clampTrimValues();
+  } else if (trimDragging === 'right') {
+    const rect = wrapper.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const currentEnd = (x / width) * trimTotalDuration;
+    trimLength = Math.min(MAX_TRIM_DURATION, currentEnd - trimStart);
+    clampTrimValues();
+  } else if (trimDragging === 'selection') {
+    const dx = e.clientX - trimDragStartX;
+    const wrapper2 = document.getElementById('wav-trim-waveform-wrapper');
+    const width2 = wrapper2.clientWidth;
+    const dTime = (dx / width2) * trimTotalDuration;
+    trimStart = trimDragStartValue + dTime;
+    clampTrimValues();
+  }
+
+  drawTrimWaveform();
+  updateTrimSelectionUI();
+});
+
+document.addEventListener('mouseup', () => {
+  trimDragging = null;
+});
+
+// 数值输入
+trimStartInput.addEventListener('input', () => {
+  const val = parseFloat(trimStartInput.value);
+  if (isNaN(val)) return;
+  trimStart = val;
+  clampTrimValues();
+  drawTrimWaveform();
+  updateTrimSelectionUI();
+});
+
+trimLengthInput.addEventListener('input', () => {
+  const val = parseFloat(trimLengthInput.value);
+  if (isNaN(val)) return;
+  trimLength = val;
+  clampTrimValues();
+  drawTrimWaveform();
+  updateTrimSelectionUI();
+});
+
+// 预览播放
+btnTrimPreview.addEventListener('click', async () => {
+  if (isTrimPreviewPlaying) {
+    stopTrimPreview();
+    return;
+  }
+
+  if (!trimAudioBuffer) return;
+
+  try {
+    trimPreviewContext = new (window.AudioContext || window.webkitAudioContext)();
+    const sampleRate = trimAudioBuffer.sampleRate;
+    const startSample = Math.floor(trimStart * sampleRate);
+    const lengthSamples = Math.floor(trimLength * sampleRate);
+    const channels = trimAudioBuffer.numberOfChannels;
+
+    const previewBuffer = trimPreviewContext.createBuffer(channels, lengthSamples, sampleRate);
+    for (let ch = 0; ch < channels; ch++) {
+      const srcData = trimAudioBuffer.getChannelData(ch);
+      const dstData = previewBuffer.getChannelData(ch);
+      for (let i = 0; i < lengthSamples; i++) {
+        dstData[i] = srcData[startSample + i] || 0;
+      }
+    }
+
+    const source = trimPreviewContext.createBufferSource();
+    source.buffer = previewBuffer;
+    source.connect(trimPreviewContext.destination);
+    source.start();
+    source.onended = () => {
+      isTrimPreviewPlaying = false;
+      btnTrimPreview.textContent = t('singerCreator.wavTrimPreview');
+    };
+
+    trimPreviewSource = source;
+    isTrimPreviewPlaying = true;
+    btnTrimPreview.textContent = t('singerCreator.wavTrimStopPreview');
+  } catch (err) {
+    console.error('Trim preview failed:', err);
+  }
+});
+
+function stopTrimPreview() {
+  if (trimPreviewSource) {
+    try { trimPreviewSource.onended = null; trimPreviewSource.stop(); } catch (e) {}
+    trimPreviewSource = null;
+  }
+  if (trimPreviewContext && trimPreviewContext.state !== 'closed') {
+    trimPreviewContext.close().catch(() => {});
+    trimPreviewContext = null;
+  }
+  isTrimPreviewPlaying = false;
+  btnTrimPreview.textContent = t('singerCreator.wavTrimPreview');
+}
+
+// 确认截取
+btnTrimConfirm.addEventListener('click', () => {
+  if (!trimAudioBuffer) return;
+
+  stopTrimPreview();
+
+  try {
+    const sampleRate = trimAudioBuffer.sampleRate;
+    const startSample = Math.floor(trimStart * sampleRate);
+    const lengthSamples = Math.floor(trimLength * sampleRate);
+    const channels = trimAudioBuffer.numberOfChannels;
+
+    // 创建截取后的 AudioBuffer
+    const trimmedBuffer = new AudioBuffer({
+      length: lengthSamples,
+      sampleRate: sampleRate,
+      numberOfChannels: channels,
+    });
+    for (let ch = 0; ch < channels; ch++) {
+      const srcData = trimAudioBuffer.getChannelData(ch);
+      const dstData = trimmedBuffer.getChannelData(ch);
+      for (let i = 0; i < lengthSamples; i++) {
+        dstData[i] = srcData[startSample + i] || 0;
+      }
+    }
+
+    // 编码为 WAV ArrayBuffer
+    const wavArrayBuffer = encodeAudioBufferToWav(trimmedBuffer);
+
+    // 更新全局状态
+    wavFileBuffer = wavArrayBuffer;
+    wavAudioBuffer = trimmedBuffer;
+    wavDuration = trimLength;
+    // 文件名保持不变
+
+    closeWavTrimModal();
+
+    wavInfo.style.display = 'block';
+    preprocessActions.style.display = 'flex';
+    wavUploadArea.style.display = 'none';
+    wavFilename.textContent = wavFileName;
+    wavDurationEl.textContent = wavDuration.toFixed(2) + t('singerCreator.seconds');
+
+    requestAnimationFrame(() => {
+      drawWaveform(0);
+    });
+    updatePreview();
+  } catch (err) {
+    console.error('Trim encode failed:', err);
+    showAlertDialog(t('singerCreator.wavTrimEncodeFailed') + ': ' + err.message);
+  }
+});
+
+// 取消
+btnTrimCancel.addEventListener('click', () => {
+  closeWavTrimModal();
+  // 清空已加载的WAV数据
+  wavFileBuffer = null;
+  wavAudioBuffer = null;
+  wavFileName = '';
+  wavDuration = 0;
+});
+
+// WAV 编码函数
+function encodeAudioBufferToWav(audioBuffer) {
+  const numChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const length = audioBuffer.length;
+  const bitsPerSample = 16;
+  const byteRate = sampleRate * numChannels * (bitsPerSample / 8);
+  const blockAlign = numChannels * (bitsPerSample / 8);
+  const dataSize = length * numChannels * (bitsPerSample / 8);
+  const headerSize = 44;
+  const totalSize = headerSize + dataSize;
+
+  const buffer = new ArrayBuffer(totalSize);
+  const view = new DataView(buffer);
+
+  // RIFF header
+  writeString(view, 0, 'RIFF');
+  view.setUint32(4, totalSize - 8, true);
+  writeString(view, 8, 'WAVE');
+
+  // fmt chunk
+  writeString(view, 12, 'fmt ');
+  view.setUint32(16, 16, true); // chunk size
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, blockAlign, true);
+  view.setUint16(34, bitsPerSample, true);
+
+  // data chunk
+  writeString(view, 36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  // 交错写入采样数据
+  let offset = 44;
+  const channels = [];
+  for (let ch = 0; ch < numChannels; ch++) {
+    channels.push(audioBuffer.getChannelData(ch));
+  }
+
+  for (let i = 0; i < length; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      let sample = channels[ch][i];
+      sample = Math.max(-1, Math.min(1, sample));
+      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      view.setInt16(offset, intSample, true);
+      offset += 2;
+    }
+  }
+
+  return buffer;
+}
+
+function writeString(view, offset, str) {
+  for (let i = 0; i < str.length; i++) {
+    view.setUint8(offset + i, str.charCodeAt(i));
   }
 }
 

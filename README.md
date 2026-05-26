@@ -96,7 +96,7 @@ Lyrics input for Chinese supports both **Pinyin** (e.g. `ni hao`) and **Chinese 
 A: You need to place the SoulX-Singer ONNX models in the `onnx_models/` directory. See [ONNX Models](#onnx-models) section for details.
 
 **Q: Can I use my own voice?**  
-A: Yes! Use the Singer Creator to create a custom singer from a reference WAV audio file. The model will learn the vocal characteristics.
+A: Yes! Use the Singer Creator to create a custom singer from a reference WAV audio file. If the WAV exceeds 30 seconds, a trim dialog will appear allowing you to select a clip segment (max 30s). The model will learn the vocal characteristics.
 
 **Q: Does it work without a GPU?**  
 A: Yes. ONNX Runtime will fall back to CPU automatically if no compatible GPU is detected.
