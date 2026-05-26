@@ -74,6 +74,7 @@ wavFileInput.addEventListener('change', async (e) => {
   if (e.target.files.length > 0) {
     await handleWavFile(e.target.files[0]);
   }
+  wavFileInput.value = '';
 });
 
 btnSelectAvatar.addEventListener('click', () => avatarFileInput.click());
