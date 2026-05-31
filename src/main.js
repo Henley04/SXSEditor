@@ -1320,6 +1320,18 @@ ipcMain.handle('fragment-svs:dispose', async () => {
   return { success: true };
 });
 
+ipcMain.handle('fragment-svs:resolvePhonemes', async (event, { lyrics }) => {
+  try {
+    if (!svsPipeline || !svsPipeline.initialized) {
+      await ensureSVSPipeline();
+    }
+    return lyrics.map(lyric => svsPipeline.resolveLyricToPhonemes(lyric));
+  } catch (err) {
+    console.error('[Main] 音素解析失败:', err);
+    return lyrics.map(lyric => [{ name: lyric || '<SP>', display: lyric || 'SP' }]);
+  }
+});
+
 ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate }) => {
   try {
     if (!rmvpeDetector) {

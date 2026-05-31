@@ -430,7 +430,7 @@ function xToTime(x) {
 
 function pitchToY(pitch) {
   const pianoAreaTop = HEADER_HEIGHT;
-  const showParamArea = currentParamMode === PARAM_MODES.VOL || currentParamMode === PARAM_MODES.PAN;
+  const showParamArea = currentParamMode === PARAM_MODES.VOL || currentParamMode === PARAM_MODES.PAN || currentParamMode === 'Phoneme';
   const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   const maxPitch = 127;
   return pianoAreaTop + (maxPitch - pitch) * NOTE_HEIGHT - scrollY;
@@ -438,7 +438,7 @@ function pitchToY(pitch) {
 
 function yToPitch(y) {
   const pianoAreaTop = HEADER_HEIGHT;
-  const showParamArea = currentParamMode === PARAM_MODES.VOL || currentParamMode === PARAM_MODES.PAN;
+  const showParamArea = currentParamMode === PARAM_MODES.VOL || currentParamMode === PARAM_MODES.PAN || currentParamMode === 'Phoneme';
   const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   if (y >= pianoAreaBottom) return 0;
   if (y <= pianoAreaTop) return 127;
@@ -448,7 +448,7 @@ function yToPitch(y) {
 
 function yToPitchContinuous(y) {
   const pianoAreaTop = HEADER_HEIGHT;
-  const showParamArea = currentParamMode === PARAM_MODES.VOL || currentParamMode === PARAM_MODES.PAN;
+  const showParamArea = currentParamMode === PARAM_MODES.VOL || currentParamMode === PARAM_MODES.PAN || currentParamMode === 'Phoneme';
   const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   if (y >= pianoAreaBottom) return 0;
   if (y <= pianoAreaTop) return 127;
@@ -484,6 +484,7 @@ function _getParamCurveAreaBottom() {
 }
 
 function _getParamCurveYRange() {
+  if (currentParamMode === 'Phoneme') return { min: 0, max: 1 };
   switch (currentParamMode) {
     case PARAM_MODES.VOL: return { min: 0, max: 1 };
     case PARAM_MODES.PAN: return { min: -1, max: 1 };
@@ -499,6 +500,101 @@ function _valueToParamY(value) {
   const normalized = (value - min) / (max - min);
   return areaTop + (1 - normalized) * areaHeight;
 }
+
+// ===================== 音素编辑器 =====================
+
+const PHONEME_COLORS = [
+  '#5b8def', '#4ade80', '#f87171', '#facc15', '#a78bfa',
+  '#38bdf8', '#fb923c', '#e879f9', '#34d399', '#f472b6',
+];
+
+const phonemeCache = new Map();
+
+function resolvePhonemes(lyric) {
+  if (!lyric || lyric.trim().length === 0) return [{ name: '<SP>', display: 'SP' }];
+  const trimmed = lyric.trim();
+  if (trimmed === '<SP>' || trimmed === '<AP>') return [{ name: '<SP>', display: 'SP' }];
+  if (phonemeCache.has(trimmed)) return phonemeCache.get(trimmed);
+  return [{ name: trimmed, display: trimmed }];
+}
+
+async function resolvePhonemesFromPipeline() {
+  const uniqueLyrics = [...new Set(notes.map(n => (n.lyric || '').trim()).filter(l => l.length > 0))];
+  const toResolve = uniqueLyrics.filter(l => !phonemeCache.has(l));
+  if (toResolve.length === 0) return;
+  try {
+    if (window.electronAPI?.resolvePhonemes) {
+      const results = await window.electronAPI.resolvePhonemes(toResolve);
+      for (let i = 0; i < toResolve.length; i++) {
+        phonemeCache.set(toResolve[i], results[i]);
+      }
+      render();
+    }
+  } catch (err) {
+    console.warn('音素解析失败:', err);
+  }
+}
+
+function getPhonemeAdjustments(note) {
+  const phonemes = resolvePhonemes(note.lyric);
+  if (note.phonemeAdjustments && note.phonemeAdjustments.length > 0) {
+    const cached = note.phonemeAdjustments;
+    if (cached.length === phonemes.length && cached[0].name === phonemes[0].name) {
+      for (let i = 0; i < phonemes.length; i++) {
+        cached[i].display = phonemes[i].display;
+      }
+      return cached;
+    }
+  }
+  return phonemes.map((ph, i) => ({
+    id: i,
+    name: ph.name,
+    display: ph.display,
+    offsetRatio: 0,
+    durationRatio: 1 / phonemes.length,
+    volumePoints: [
+      { t: 0, v: 0.3 },
+      { t: 0.1, v: 1.0 },
+      { t: 0.85, v: 1.0 },
+      { t: 1.0, v: 0.3 },
+    ],
+    locked: i === 0,
+  }));
+}
+
+function getVolumeAtTime(volumePoints, t) {
+  if (!volumePoints || volumePoints.length === 0) return 1;
+  if (t <= volumePoints[0].t) return volumePoints[0].v;
+  if (t >= volumePoints[volumePoints.length - 1].t) return volumePoints[volumePoints.length - 1].v;
+  for (let i = 0; i < volumePoints.length - 1; i++) {
+    if (t >= volumePoints[i].t && t <= volumePoints[i + 1].t) {
+      const ratio = (t - volumePoints[i].t) / (volumePoints[i + 1].t - volumePoints[i].t);
+      return volumePoints[i].v + ratio * (volumePoints[i + 1].v - volumePoints[i].v);
+    }
+  }
+  return 1;
+}
+
+function getPhonemeStartX(adj, adjustments) {
+  let x = 0;
+  for (const a of adjustments) {
+    if (a === adj) return x;
+    x += a.durationRatio;
+  }
+  return 0;
+}
+
+function normalizePhonemeRatios(adjustments) {
+  const total = adjustments.reduce((s, a) => s + a.durationRatio, 0);
+  if (total > 0) {
+    for (const a of adjustments) {
+      a.durationRatio = a.durationRatio / total;
+    }
+  }
+  return adjustments;
+}
+
+let phonemeDragState = null; // { noteId, phonemeIndex, type: 'boundary'|'volume', startX, startY, origValue }
 
 function _interpolateEnvelope(envelope, time) {
   const kfs = envelope.keyframes;
@@ -519,6 +615,33 @@ function _interpolateEnvelope(envelope, time) {
 
 function genNoteId() {
   return nextNoteId++;
+}
+
+function hasNoteOverlap(excludeId, pitch, start, end) {
+  for (const n of notes) {
+    if (n.id === excludeId) continue;
+    if (n.pitch !== pitch) continue;
+    const nEnd = n.start + n.duration;
+    if (start < nEnd && end > n.start) return true;
+  }
+  return false;
+}
+
+function clampNotePosition(noteId, pitch, start, duration) {
+  const end = start + duration;
+  for (const n of notes) {
+    if (n.id === noteId) continue;
+    if (n.pitch !== pitch) continue;
+    const nEnd = n.start + n.duration;
+    if (start < nEnd && end > n.start) {
+      if (start >= n.start && start < nEnd) {
+        start = nEnd;
+      } else if (end > n.start && end <= nEnd) {
+        start = n.start - duration;
+      }
+    }
+  }
+  return Math.max(0, start);
 }
 
 function generateAutoPitchPoints() {
@@ -703,6 +826,334 @@ function findNoteAtTime(time) {
   return null;
 }
 
+let selectedPhonemeNoteId = null;
+let selectedPhonemeIndex = -1;
+
+function handlePhonemeMouseDown(e, pos) {
+  const areaTop = _getParamCurveAreaTop();
+  const areaBottom = _getParamCurveAreaBottom();
+  const barPadding = 6;
+  const labelH = 16;
+  const barTop = areaTop + labelH;
+  const barBottom = areaBottom - barPadding;
+  const barHeight = barBottom - barTop;
+
+  for (const note of notes) {
+    const noteStartX = timeToX(note.start);
+    const noteEndX = timeToX(note.start + note.duration);
+    const noteWidth = noteEndX - noteStartX;
+    if (noteWidth < 4) continue;
+    if (pos.x < noteStartX - 4 || pos.x > noteEndX + 4) continue;
+    if (pos.y < barTop || pos.y > barBottom) continue;
+
+    const adjustments = getPhonemeAdjustments(note);
+    if (!adjustments || adjustments.length === 0) continue;
+
+    let x = noteStartX;
+    for (let i = 0; i < adjustments.length; i++) {
+      const adj = adjustments[i];
+      const phWidth = noteWidth * adj.durationRatio;
+      const boundaryX = x + phWidth;
+
+      if (i > 0 && Math.abs(pos.x - boundaryX) < 8) {
+        selectedPhonemeNoteId = note.id;
+        selectedPhonemeIndex = i;
+        phonemeDragState = {
+          noteId: note.id,
+          phonemeIndex: i,
+          type: 'boundary',
+          startX: pos.x,
+          origRatioL: adjustments[i - 1].durationRatio,
+          origRatioR: adj.durationRatio,
+        };
+        selectedNoteIds.clear();
+        selectedNoteIds.add(note.id);
+        render();
+        return;
+      }
+
+      if (pos.x >= x && pos.x < boundaryX) {
+        selectedPhonemeNoteId = note.id;
+        selectedPhonemeIndex = i;
+        if (e.button === 2) {
+          adj.locked = !adj.locked;
+          if (!adjustments.some(a => a.locked)) adjustments[0].locked = true;
+          scheduleAutoSave();
+          render();
+          return;
+        }
+
+        const pts = adj.volumePoints || [];
+        let closestIdx = -1;
+        let closestDist = Infinity;
+        for (let p = 0; p < pts.length; p++) {
+          const px = x + pts[p].t * phWidth;
+          const py = barTop + (1 - pts[p].v) * barHeight;
+          const dist = Math.hypot(pos.x - px, pos.y - py);
+          if (dist < closestDist && dist < 12) {
+            closestDist = dist;
+            closestIdx = p;
+          }
+        }
+
+        if (closestIdx >= 0) {
+          phonemeDragState = {
+            noteId: note.id,
+            phonemeIndex: i,
+            type: 'volume-point',
+            pointIndex: closestIdx,
+            startX: pos.x,
+            startY: pos.y,
+            origT: pts[closestIdx].t,
+            origV: pts[closestIdx].v,
+          };
+        } else {
+          phonemeDragState = {
+            noteId: note.id,
+            phonemeIndex: i,
+            type: 'volume-curve',
+            startX: pos.x,
+            startY: pos.y,
+            origPoints: pts.map(p => ({ ...p })),
+          };
+        }
+        selectedNoteIds.clear();
+        selectedNoteIds.add(note.id);
+        render();
+        return;
+      }
+      x = boundaryX;
+    }
+  }
+  selectedPhonemeNoteId = null;
+  selectedPhonemeIndex = -1;
+}
+
+function handlePhonemeMouseMove(pos) {
+  if (!phonemeDragState) return;
+
+  const note = notes.find(n => n.id === phonemeDragState.noteId);
+  if (!note) { phonemeDragState = null; return; }
+
+  const adjustments = getPhonemeAdjustments(note);
+  const noteWidth = timeToX(note.start + note.duration) - timeToX(note.start);
+
+  if (phonemeDragState.type === 'boundary') {
+    const dx = pos.x - phonemeDragState.startX;
+    const dRatio = dx / noteWidth;
+    const i = phonemeDragState.phonemeIndex;
+    const newL = Math.max(0.05, phonemeDragState.origRatioL + dRatio);
+    const newR = Math.max(0.05, phonemeDragState.origRatioR - dRatio);
+    adjustments[i - 1].durationRatio = newL;
+    adjustments[i].durationRatio = newR;
+    render();
+  } else if (phonemeDragState.type === 'volume-point') {
+    const adj = adjustments[phonemeDragState.phonemeIndex];
+    const pts = adj.volumePoints;
+    const pi = phonemeDragState.pointIndex;
+    const areaTop = _getParamCurveAreaTop();
+    const labelH = 16;
+    const barPadding = 6;
+    const barTop = areaTop + labelH;
+    const barBottom = _getParamCurveAreaBottom() - barPadding;
+    const barHeight = barBottom - barTop;
+    const newV = Math.max(0, Math.min(1, 1 - (pos.y - barTop) / barHeight));
+    pts[pi].v = newV;
+    if (pi > 0 && pi < pts.length - 1) {
+      const phStartX = timeToX(note.start) + noteWidth * getPhonemeStartX(adj, adjustments, note.start, note.duration);
+      const phWidth = noteWidth * adj.durationRatio;
+      const newT = Math.max(pts[pi - 1].t + 0.01, Math.min(pts[pi + 1].t - 0.01, (pos.x - phStartX) / phWidth));
+      pts[pi].t = newT;
+    }
+    render();
+  } else if (phonemeDragState.type === 'volume-curve') {
+    const adj = adjustments[phonemeDragState.phonemeIndex];
+    const dy = phonemeDragState.startY - pos.y;
+    const areaTop = _getParamCurveAreaTop();
+    const labelH = 16;
+    const barPadding = 6;
+    const barTop = areaTop + labelH;
+    const barBottom = _getParamCurveAreaBottom() - barPadding;
+    const barHeight = barBottom - barTop;
+    const dVol = dy / barHeight;
+    for (let p = 0; p < adj.volumePoints.length; p++) {
+      adj.volumePoints[p].v = Math.max(0, Math.min(1, phonemeDragState.origPoints[p].v + dVol));
+    }
+    render();
+  }
+}
+
+function handlePhonemeMouseUp() {
+  if (phonemeDragState) {
+    const note = notes.find(n => n.id === phonemeDragState.noteId);
+    if (note) {
+      normalizePhonemeRatios(getPhonemeAdjustments(note));
+      note.phonemeAdjustments = getPhonemeAdjustments(note);
+      scheduleAutoSave();
+    }
+    phonemeDragState = null;
+    render();
+  }
+}
+
+function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom) {
+  const barPadding = 6;
+  const labelH = 16;
+  const barTop = areaTop + labelH;
+  const barBottom = areaBottom - barPadding;
+  const barHeight = barBottom - barTop;
+
+  ctx.fillStyle = '#1e1e1e';
+  ctx.fillRect(0, areaTop, w, areaBottom - areaTop);
+
+  ctx.strokeStyle = '#444444';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, areaTop);
+  ctx.lineTo(w, areaTop);
+  ctx.stroke();
+
+  ctx.fillStyle = '#555555';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText('Phoneme', w - 4, areaTop + 12);
+
+  for (let v = 0; v <= 1; v += 0.25) {
+    const y = barBottom - barHeight * v;
+    ctx.strokeStyle = v === 0.5 ? '#333333' : '#252525';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+  }
+
+  const visibleNotes = notes.filter(note => {
+    const nx = timeToX(note.start);
+    const nw = note.duration * BEAT_WIDTH * zoomX;
+    return nx + nw >= 0 && nx <= w;
+  });
+
+  for (const note of visibleNotes) {
+    const adjustments = getPhonemeAdjustments(note);
+    if (!adjustments || adjustments.length === 0) continue;
+
+    const noteStartX = timeToX(note.start);
+    const noteEndX = timeToX(note.start + note.duration);
+    const noteWidth = noteEndX - noteStartX;
+    if (noteWidth < 4) continue;
+
+    const isSelected = selectedNoteIds.has(note.id);
+
+    ctx.fillStyle = '#2a2a2a';
+    ctx.fillRect(noteStartX, barTop, noteWidth, barHeight);
+    ctx.strokeStyle = isSelected ? '#5b8def' : '#333333';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(noteStartX, barTop, noteWidth, barHeight);
+
+    let x = noteStartX;
+    for (let i = 0; i < adjustments.length; i++) {
+      const adj = adjustments[i];
+      const phWidth = noteWidth * adj.durationRatio;
+      const phEnd = x + phWidth;
+      const color = PHONEME_COLORS[i % PHONEME_COLORS.length];
+      const isPhSelected = selectedPhonemeNoteId === note.id && selectedPhonemeIndex === i;
+      const pts = adj.volumePoints || [{ t: 0, v: 1 }, { t: 1, v: 1 }];
+
+      ctx.fillStyle = color;
+      ctx.globalAlpha = isPhSelected ? 0.2 : 0.1;
+      ctx.fillRect(x + 1, barTop, phWidth - 2, barHeight);
+      ctx.globalAlpha = 1.0;
+
+      if (isPhSelected) {
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(x + 1, barTop, phWidth - 2, barHeight);
+      }
+
+      ctx.beginPath();
+      ctx.moveTo(x + 1, barBottom);
+      for (let s = 0; s <= 1; s += 0.02) {
+        const px = x + 1 + s * (phWidth - 2);
+        const v = getVolumeAtTime(pts, s);
+        const py = barBottom - barHeight * Math.max(0, Math.min(1, v));
+        ctx.lineTo(px, py);
+      }
+      ctx.lineTo(x + phWidth - 1, barBottom);
+      ctx.closePath();
+      ctx.fillStyle = color;
+      ctx.globalAlpha = isPhSelected ? 0.6 : 0.35;
+      ctx.fill();
+      ctx.globalAlpha = 1.0;
+
+      ctx.beginPath();
+      for (let s = 0; s <= 1; s += 0.02) {
+        const px = x + 1 + s * (phWidth - 2);
+        const v = getVolumeAtTime(pts, s);
+        const py = barBottom - barHeight * Math.max(0, Math.min(1, v));
+        if (s === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      if (isPhSelected) {
+        for (let p = 0; p < pts.length; p++) {
+          const pt = pts[p];
+          const px = x + 1 + pt.t * (phWidth - 2);
+          const py = barBottom - barHeight * Math.max(0, Math.min(1, pt.v));
+          ctx.fillStyle = '#ffffff';
+          ctx.beginPath();
+          ctx.arc(px, py, 4, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+        }
+      }
+
+      if (phWidth > 20) {
+        ctx.fillStyle = '#ffffff';
+        ctx.font = '9px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        const label = adj.display || adj.name || '';
+        ctx.fillText(label, x + phWidth / 2, barTop + 10);
+      }
+
+      if (adj.locked) {
+        ctx.fillStyle = '#facc15';
+        ctx.font = 'bold 9px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        ctx.fillText('L', x + 3, barTop + 2);
+      }
+
+      if (i > 0) {
+        ctx.strokeStyle = isPhSelected ? '#ffffff' : '#aaaaaa';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([4, 2]);
+        ctx.beginPath();
+        ctx.moveTo(x, barTop);
+        ctx.lineTo(x, barBottom);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        ctx.fillStyle = isPhSelected ? '#ffffff' : '#cccccc';
+        ctx.beginPath();
+        ctx.arc(x, barTop + barHeight / 2, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+      }
+
+      x = phEnd;
+    }
+  }
+}
+
 function renderPianoKeys() {
   const h = pianoKeysCanvas.parentElement.clientHeight;
   const w = PIANO_KEY_WIDTH;
@@ -879,7 +1330,7 @@ function render() {
   const startBeat = xToTime(0);
   const endBeat = xToTime(w);
 
-  const showParamArea = currentParamMode === PARAM_MODES.VOL || currentParamMode === PARAM_MODES.PAN;
+  const showParamArea = currentParamMode === PARAM_MODES.VOL || currentParamMode === PARAM_MODES.PAN || currentParamMode === 'Phoneme';
   const pianoAreaBottom = showParamArea ? _getParamCurveAreaTop() : h;
 
   ctx.lineWidth = 0.5;
@@ -995,45 +1446,49 @@ function render() {
     ctx.lineTo(w, areaTop);
     ctx.stroke();
 
-    const { min, max } = _getParamCurveYRange();
-    ctx.fillStyle = '#666666';
-    ctx.font = '10px sans-serif';
-    ctx.textAlign = 'left';
-    ctx.fillText(max.toFixed(0), 4, areaTop + 12);
-    ctx.fillText(min.toFixed(0), 4, areaBottom - 4);
-    ctx.textAlign = 'right';
-    ctx.fillText(currentParamMode, w - 4, areaTop + 12);
+    if (currentParamMode === 'Phoneme') {
+      renderPhonemeEditor(ctx, w, h, areaTop, areaBottom);
+    } else {
+      const { min, max } = _getParamCurveYRange();
+      ctx.fillStyle = '#666666';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.fillText(max.toFixed(0), 4, areaTop + 12);
+      ctx.fillText(min.toFixed(0), 4, areaBottom - 4);
+      ctx.textAlign = 'right';
+      ctx.fillText(currentParamMode, w - 4, areaTop + 12);
 
-    const envKey = currentParamMode === PARAM_MODES.VOL ? 'volume' : 'pan';
-    const envelope = envelopes[envKey];
-    if (envelope && envelope.keyframes && envelope.keyframes.length > 0) {
-      const startBeat = xToTime(0);
-      const endBeat = xToTime(w);
-      const maxTime = Math.max(endBeat, ...envelope.keyframes.map(k => k.time)) + 2;
-      const steps = Math.max(300, Math.floor((maxTime - startBeat) / 0.02));
+      const envKey = currentParamMode === PARAM_MODES.VOL ? 'volume' : 'pan';
+      const envelope = envelopes[envKey];
+      if (envelope && envelope.keyframes && envelope.keyframes.length > 0) {
+        const startBeat = xToTime(0);
+        const endBeat = xToTime(w);
+        const maxTime = Math.max(endBeat, ...envelope.keyframes.map(k => k.time)) + 2;
+        const steps = Math.max(300, Math.floor((maxTime - startBeat) / 0.02));
 
-      const lineColors = { VOL: '#3498db', PAN: '#e74c3c' };
-      ctx.strokeStyle = lineColors[currentParamMode] || '#3498db';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-
-      for (let i = 0; i <= steps; i++) {
-        const t = startBeat + (i / steps) * (maxTime - startBeat);
-        const value = _interpolateEnvelope(envelope, t);
-        const px = timeToX(t);
-        const py = _valueToParamY(value);
-        if (i === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
-      ctx.stroke();
-
-      for (const kf of envelope.keyframes) {
-        const px = timeToX(kf.time);
-        const py = _valueToParamY(kf.value);
-        ctx.fillStyle = lineColors[currentParamMode] || '#3498db';
+        const lineColors = { VOL: '#3498db', PAN: '#e74c3c' };
+        ctx.strokeStyle = lineColors[currentParamMode] || '#3498db';
+        ctx.lineWidth = 2;
         ctx.beginPath();
-        ctx.arc(px, py, 4, 0, Math.PI * 2);
-        ctx.fill();
+
+        for (let i = 0; i <= steps; i++) {
+          const t = startBeat + (i / steps) * (maxTime - startBeat);
+          const value = _interpolateEnvelope(envelope, t);
+          const px = timeToX(t);
+          const py = _valueToParamY(value);
+          if (i === 0) ctx.moveTo(px, py);
+          else ctx.lineTo(px, py);
+        }
+        ctx.stroke();
+
+        for (const kf of envelope.keyframes) {
+          const px = timeToX(kf.time);
+          const py = _valueToParamY(kf.value);
+          ctx.fillStyle = lineColors[currentParamMode] || '#3498db';
+          ctx.beginPath();
+          ctx.arc(px, py, 4, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
   }
@@ -1089,7 +1544,7 @@ function updateFragmentPlayhead() {
 }
 
 function updateParamModeButtons() {
-  const modes = ['MIDI', 'Pitch', 'VOL', 'PAN'];
+  const modes = ['MIDI', 'Pitch', 'VOL', 'PAN', 'Phoneme'];
   modes.forEach(mode => {
     const btn = document.getElementById(`btn-param-${mode}`);
     if (btn) {
@@ -1690,6 +2145,14 @@ canvas.addEventListener('mousedown', (e) => {
     }
   }
 
+  if (currentParamMode === 'Phoneme') {
+    const areaTop = _getParamCurveAreaTop();
+    if (pos.y >= areaTop) {
+      handlePhonemeMouseDown(e, pos);
+      return;
+    }
+  }
+
   const hit = findNoteAt(pos.x, pos.y);
 
   if (hit) {
@@ -1734,11 +2197,16 @@ canvas.addEventListener('mousedown', (e) => {
     const beats = snapBeats(xToTime(pos.x));
     const pitch = yToPitch(pos.y);
     const clampedPitch = Math.max(0, Math.min(127, pitch));
+    const newDuration = 1 / 4;
+    if (hasNoteOverlap(null, clampedPitch, beats, beats + newDuration)) {
+      render();
+      return;
+    }
     const newNote = {
       id: genNoteId(),
       pitch: clampedPitch,
       start: Math.max(0, beats),
-      duration: 1 / 4,
+      duration: newDuration,
       lyric: 'la',
     };
     notes.push(newNote);
@@ -1954,6 +2422,11 @@ canvas.addEventListener('mousemove', (e) => {
     return;
   }
 
+  if (phonemeDragState) {
+    handlePhonemeMouseMove(pos);
+    return;
+  }
+
   if (!dragMode) {
     if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
       if (e.shiftKey) {
@@ -1963,6 +2436,33 @@ canvas.addEventListener('mousemove', (e) => {
         canvas.style.cursor = anchorIdx >= 0 ? 'grab' : 'crosshair';
       }
       return;
+    }
+    if (currentParamMode === 'Phoneme') {
+      const areaTop = _getParamCurveAreaTop();
+      const areaBottom = _getParamCurveAreaBottom();
+      if (pos.y >= areaTop && pos.y <= areaBottom) {
+        for (const note of notes) {
+          const noteStartX = timeToX(note.start);
+          const noteEndX = timeToX(note.start + note.duration);
+          if (pos.x < noteStartX - 4 || pos.x > noteEndX + 4) continue;
+          const adjustments = getPhonemeAdjustments(note);
+          if (!adjustments || adjustments.length === 0) continue;
+          let x = noteStartX;
+          for (let i = 0; i < adjustments.length; i++) {
+            const phWidth = (noteEndX - noteStartX) * adjustments[i].durationRatio;
+            const boundaryX = x + phWidth;
+            if (i > 0 && Math.abs(pos.x - boundaryX) < 8) {
+              canvas.style.cursor = 'ew-resize';
+              return;
+            }
+            x = boundaryX;
+          }
+          canvas.style.cursor = 'crosshair';
+          return;
+        }
+        canvas.style.cursor = 'default';
+        return;
+      }
     }
     const hit = findNoteAt(pos.x, pos.y);
     if (hit) {
@@ -1976,12 +2476,25 @@ canvas.addEventListener('mousemove', (e) => {
   if (dragMode === 'move' && selectedNoteIds.size > 1) {
     const dxBeats = (pos.x - dragStartX) / BEAT_WIDTH;
     const dyPitch = Math.round((dragStartY - pos.y) / NOTE_HEIGHT);
+    let blocked = false;
+    const planned = [];
     for (const id of selectedNoteIds) {
       const note = notes.find(n => n.id === id);
       const start = dragNoteStarts.get(id);
       if (note && start) {
-        note.start = Math.max(0, snapBeats(start.start + dxBeats));
-        note.pitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
+        const newStart = Math.max(0, snapBeats(start.start + dxBeats));
+        const newPitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
+        if (hasNoteOverlap(id, newPitch, newStart, newStart + note.duration)) {
+          blocked = true;
+          break;
+        }
+        planned.push({ note, newStart, newPitch });
+      }
+    }
+    if (!blocked) {
+      for (const p of planned) {
+        p.note.start = p.newStart;
+        p.note.pitch = p.newPitch;
       }
     }
     render();
@@ -1994,11 +2507,19 @@ canvas.addEventListener('mousemove', (e) => {
   if (dragMode === 'move') {
     const dxBeats = (pos.x - dragStartX) / BEAT_WIDTH;
     const dyPitch = Math.round((dragStartY - pos.y) / NOTE_HEIGHT);
-    note.start = Math.max(0, snapBeats(dragNoteStart.start + dxBeats));
-    note.pitch = Math.max(0, Math.min(127, dragNoteStart.pitch + dyPitch));
+    let newStart = Math.max(0, snapBeats(dragNoteStart.start + dxBeats));
+    const newPitch = Math.max(0, Math.min(127, dragNoteStart.pitch + dyPitch));
+    newStart = clampNotePosition(note.id, newPitch, newStart, note.duration);
+    if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
+      note.start = newStart;
+      note.pitch = newPitch;
+    }
   } else if (dragMode === 'resize') {
     const dxBeats = (pos.x - dragStartX) / BEAT_WIDTH;
-    note.duration = Math.max(1 / 16, snapBeats(dragNoteStart.duration + dxBeats));
+    const newDuration = Math.max(1 / 16, snapBeats(dragNoteStart.duration + dxBeats));
+    if (!hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
+      note.duration = newDuration;
+    }
   }
   render();
 });
@@ -2008,6 +2529,11 @@ canvas.addEventListener('mouseup', (e) => {
     isBoxSelecting = false;
     finalizeBoxSelection();
     render();
+    return;
+  }
+
+  if (phonemeDragState) {
+    handlePhonemeMouseUp();
     return;
   }
 
@@ -2102,6 +2628,7 @@ canvas.addEventListener('mouseleave', () => {
 
 canvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
+  if (currentParamMode === 'Phoneme') return;
   if (currentParamMode !== 'Pitch' || !pitchCurve.enabled) return;
 
   const pos = getMousePos(e);
@@ -2211,17 +2738,21 @@ function startInlineEdit(note, hit) {
 
         if (tokens.length <= 1) {
           note.lyric = newLyric;
+          note.phonemeAdjustments = null;
         } else {
           if (noteIdx !== -1) {
             note.lyric = tokens[0];
+            note.phonemeAdjustments = null;
             for (let t = 1; t < tokens.length; t++) {
               const nextIdx = noteIdx + t;
               if (nextIdx < notes.length) {
                 notes[nextIdx].lyric = tokens[t];
+                notes[nextIdx].phonemeAdjustments = null;
               }
             }
           } else {
             note.lyric = newLyric;
+            note.phonemeAdjustments = null;
           }
         }
 
@@ -2229,17 +2760,18 @@ function startInlineEdit(note, hit) {
           undo() {
             for (const { id, lyric } of oldLyrics) {
               const n = notes.find(nn => nn.id === id);
-              if (n) n.lyric = lyric;
+              if (n) { n.lyric = lyric; n.phonemeAdjustments = null; }
             }
           },
           redo() {
             const n = notes.find(nn => nn.id === noteId);
-            if (n) n.lyric = newLyric;
+            if (n) { n.lyric = newLyric; n.phonemeAdjustments = null; }
             if (tokens.length > 1 && noteIdx !== -1) {
               for (let t = 1; t < tokens.length; t++) {
                 const nextIdx = noteIdx + t;
                 if (nextIdx < notes.length) {
                   notes[nextIdx].lyric = tokens[t];
+                  notes[nextIdx].phonemeAdjustments = null;
                 }
               }
             }
@@ -2251,7 +2783,7 @@ function startInlineEdit(note, hit) {
     activeInlineInput = null;
     activeInlineEditNote = null;
     render();
-    if (save) scheduleAutoSave();
+    if (save) { scheduleAutoSave(); resolvePhonemesFromPipeline(); }
   };
 
   input.addEventListener('mousedown', (e) => {
@@ -2466,6 +2998,12 @@ document.addEventListener('keydown', (e) => {
     render();
     return;
   }
+  if (e.key === '5') {
+    currentParamMode = 'Phoneme';
+    updateParamModeButtons();
+    render();
+    return;
+  }
 
   if (e.key === 'Delete' || e.key === 'Backspace') {
     if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
@@ -2559,22 +3097,29 @@ document.addEventListener('keydown', (e) => {
 
     if (selectedNoteIds.size > 0) {
       const moveData = [];
+      let blocked = false;
+      const planned = [];
       for (const id of selectedNoteIds) {
         const note = notes.find(n => n.id === id);
         if (note) {
-          const oldStart = note.start;
-          const oldPitch = note.pitch;
-          if (e.key === 'ArrowUp') note.pitch = Math.min(127, note.pitch + step);
-          else if (e.key === 'ArrowDown') note.pitch = Math.max(0, note.pitch - step);
-          else if (e.key === 'ArrowLeft') note.start = Math.max(0, snapBeats(note.start - timeStep));
-          else if (e.key === 'ArrowRight') note.start = Math.max(0, snapBeats(note.start + timeStep));
-          moveData.push({
-            noteId: id,
-            oldStart,
-            oldPitch,
-            newStart: note.start,
-            newPitch: note.pitch,
-          });
+          let newPitch = note.pitch;
+          let newStart = note.start;
+          if (e.key === 'ArrowUp') newPitch = Math.min(127, note.pitch + step);
+          else if (e.key === 'ArrowDown') newPitch = Math.max(0, note.pitch - step);
+          else if (e.key === 'ArrowLeft') newStart = Math.max(0, snapBeats(note.start - timeStep));
+          else if (e.key === 'ArrowRight') newStart = Math.max(0, snapBeats(note.start + timeStep));
+          if (hasNoteOverlap(id, newPitch, newStart, newStart + note.duration)) {
+            blocked = true;
+            break;
+          }
+          planned.push({ note, oldStart: note.start, oldPitch: note.pitch, newStart, newPitch });
+        }
+      }
+      if (!blocked) {
+        for (const p of planned) {
+          p.note.start = p.newStart;
+          p.note.pitch = p.newPitch;
+          moveData.push({ noteId: p.note.id, oldStart: p.oldStart, oldPitch: p.oldPitch, newStart: p.newStart, newPitch: p.newPitch });
         }
       }
       history.push({
@@ -2673,6 +3218,7 @@ async function handleFragmentData(data) {
   }
 
   resizeCanvases();
+  resolvePhonemesFromPipeline();
 }
 
 if (window.electronAPI?.onLoadFragment) {
