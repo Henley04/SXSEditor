@@ -849,28 +849,38 @@ function handlePhonemeMouseDown(e, pos) {
     const adjustments = getPhonemeAdjustments(note);
     if (!adjustments || adjustments.length === 0) continue;
 
-    let x = noteStartX;
+    const boundaries = [];
+    let bx = noteStartX;
     for (let i = 0; i < adjustments.length; i++) {
-      const adj = adjustments[i];
-      const phWidth = noteWidth * adj.durationRatio;
-      const boundaryX = x + phWidth;
+      bx += noteWidth * adjustments[i].durationRatio;
+      if (i > 0) boundaries.push({ x: bx, index: i });
+    }
 
-      if (i > 0 && Math.abs(pos.x - boundaryX) < 8) {
+    const BOUNDARY_ZONE = 10;
+    for (const bnd of boundaries) {
+      if (Math.abs(pos.x - bnd.x) < BOUNDARY_ZONE) {
         selectedPhonemeNoteId = note.id;
-        selectedPhonemeIndex = i;
+        selectedPhonemeIndex = bnd.index;
         phonemeDragState = {
           noteId: note.id,
-          phonemeIndex: i,
+          phonemeIndex: bnd.index,
           type: 'boundary',
           startX: pos.x,
-          origRatioL: adjustments[i - 1].durationRatio,
-          origRatioR: adj.durationRatio,
+          origRatioL: adjustments[bnd.index - 1].durationRatio,
+          origRatioR: adjustments[bnd.index].durationRatio,
         };
         selectedNoteIds.clear();
         selectedNoteIds.add(note.id);
         render();
         return;
       }
+    }
+
+    let x = noteStartX;
+    for (let i = 0; i < adjustments.length; i++) {
+      const adj = adjustments[i];
+      const phWidth = noteWidth * adj.durationRatio;
+      const boundaryX = x + phWidth;
 
       if (pos.x >= x && pos.x < boundaryX) {
         selectedPhonemeNoteId = note.id;
@@ -2441,21 +2451,20 @@ canvas.addEventListener('mousemove', (e) => {
       const areaTop = _getParamCurveAreaTop();
       const areaBottom = _getParamCurveAreaBottom();
       if (pos.y >= areaTop && pos.y <= areaBottom) {
+        const BOUNDARY_ZONE = 10;
         for (const note of notes) {
           const noteStartX = timeToX(note.start);
           const noteEndX = timeToX(note.start + note.duration);
-          if (pos.x < noteStartX - 4 || pos.x > noteEndX + 4) continue;
+          if (pos.x < noteStartX - BOUNDARY_ZONE || pos.x > noteEndX + BOUNDARY_ZONE) continue;
           const adjustments = getPhonemeAdjustments(note);
           if (!adjustments || adjustments.length === 0) continue;
-          let x = noteStartX;
+          let bx = noteStartX;
           for (let i = 0; i < adjustments.length; i++) {
-            const phWidth = (noteEndX - noteStartX) * adjustments[i].durationRatio;
-            const boundaryX = x + phWidth;
-            if (i > 0 && Math.abs(pos.x - boundaryX) < 8) {
+            bx += (noteEndX - noteStartX) * adjustments[i].durationRatio;
+            if (i > 0 && Math.abs(pos.x - bx) < BOUNDARY_ZONE) {
               canvas.style.cursor = 'ew-resize';
               return;
             }
-            x = boundaryX;
           }
           canvas.style.cursor = 'crosshair';
           return;
