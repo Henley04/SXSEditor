@@ -18,14 +18,14 @@ SXSEditor is an open-source desktop singing voice synthesis (SVS) workstation. I
 |----------|--------|
 | English | ✅ Supported |
 | Chinese (Mandarin) | ✅ Supported |
-| Japanese | 🔄 In Development |
-| Korean | 📋 Planned |
+| Japanese | 🔄 In Development(LoRA required) |
+| Korean,etc | 📋 Planned |
 
 ## Getting Started
 
 1. **Download** the latest release from the [GitHub Releases](https://github.com/Henley04/SXSEditor/releases) page
 2. **Install** and launch SXSEditor
-3. **Add a singer** and create your first project
+3. **Add a singer** and start your first project
 4. **Synthesize** and export your vocal track
 
 See the [User Guide](User-Guide) for detailed instructions.

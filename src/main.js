@@ -129,7 +129,7 @@ const { BasicPitchDetector } = require('./inference/basicPitch');
 const { RosvotDetector } = require('./inference/rosvotDetector');
 const { parseMidiFile } = require('./inference/midiParser');
 const { AudioOutputManager } = require('./audio/audioOutputManager');
-const { checkMissingFiles, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION } = require('./modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION } = require('./modelManager');
 const { getModelGroups } = require('./modelRegistry');
 
 let svsPipeline = null;
@@ -182,22 +182,28 @@ function getSettingsFilePath() {
   return path.join(app.getPath('userData'), 'settings.json');
 }
 
+let _settingsCache = null;
+
 function loadSettings() {
+  if (_settingsCache) return _settingsCache;
   try {
     const filePath = getSettingsFilePath();
     if (fs.existsSync(filePath)) {
-      return JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      _settingsCache = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      return _settingsCache;
     }
   } catch (err) {
     console.warn('[Main] 加载设置失败，将使用默认设置:', err.message);
   }
-  return {};
+  _settingsCache = {};
+  return _settingsCache;
 }
 
 async function saveSettingsFile(settings) {
   try {
     const filePath = getSettingsFilePath();
     await fs.promises.writeFile(filePath, JSON.stringify(settings, null, 2), 'utf-8');
+    _settingsCache = null;
   } catch (err) {
     console.error('[Main] 保存设置失败:', err);
   }
@@ -504,7 +510,7 @@ async function checkAndDownloadModels() {
   const modelDir = getModelDir();
   const precision = loadSettings().modelPrecision || DEFAULT_PRECISION;
   console.log('[Main] 检查模型文件，目录:', modelDir, '精度:', precision);
-  const { missing, existing } = checkMissingFiles(modelDir);
+  const { missing, existing } = await checkMissingFilesAsync(modelDir);
 
   if (missing.length === 0) {
     console.log('[Main] 所有模型文件已就绪');
@@ -539,7 +545,7 @@ async function checkAndDownloadModels() {
       fs.mkdirSync(downloadDir, { recursive: true });
     } catch (_) {}
 
-    const recheck = checkMissingFiles(downloadDir);
+    const recheck = await checkMissingFilesAsync(downloadDir);
     if (recheck.missing.length === 0) {
       console.log('[Main] 所选目录中模型文件已就绪');
       return true;
@@ -642,7 +648,7 @@ app.on('second-instance', () => {
   }
 });
 
-app.whenReady().then(async () => {
+app.whenReady().then(() => {
   loadMainLocale();
   createWindow();
   // 预加载GPU设备枚举，避免首次设置页面打开时阻塞
@@ -652,7 +658,10 @@ app.whenReady().then(async () => {
   }).catch(err => {
     console.warn('[Main] GPU设备预加载失败:', err.message);
   });
-  await checkAndDownloadModels();
+  // 模型检查延后执行，不阻塞窗口显示
+  checkAndDownloadModels().catch(err => {
+    console.warn('[Main] 模型检查失败:', err.message);
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -977,6 +986,15 @@ ipcMain.handle('saveFragmentData', async (event, fragmentId, data) => {
 ipcMain.handle('updateFragmentBounds', async (event, fragmentId, data) => {
   if (fragmentWindows[fragmentId]) {
     fragmentWindows[fragmentId].webContents.send('fragmentBoundsChanged', { fragmentId, ...data });
+  }
+  return { success: true };
+});
+
+ipcMain.handle('updateProjectSettings', async (event, projectData) => {
+  for (const id in fragmentWindows) {
+    if (fragmentWindows[id] && !fragmentWindows[id].isDestroyed()) {
+      fragmentWindows[id].webContents.send('projectSettingsChanged', projectData);
+    }
   }
   return { success: true };
 });

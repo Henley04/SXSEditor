@@ -474,8 +474,8 @@ async function initPianoRoll() {
       const maxPitch = 127;
       const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
       const pianoAreaBottom = this.height;
-      if (y >= pianoAreaBottom) return maxPitch;
-      if (y <= pianoAreaTop) return 0;
+      if (y >= pianoAreaBottom) return 0;
+      if (y <= pianoAreaTop) return maxPitch;
       return Math.round(maxPitch - (y + this.scrollY - pianoAreaTop) / (NOTE_HEIGHT * this.zoomY));
     },
 
@@ -487,12 +487,12 @@ async function initPianoRoll() {
     _findNoteAt(x, y) {
       for (let i = this.notes.length - 1; i >= 0; i--) {
         const note = this.notes[i];
-        const nx = this._timeToX(note.start);
-        const ny = this._pitchToY(note.pitch);
-        const nw = note.duration * BEAT_WIDTH * this.zoomX;
-        const nh = NOTE_HEIGHT * this.zoomY;
-        if (x >= nx && x <= nx + nw && y >= ny && y <= ny + nh) {
-          return { note, nx, ny, nw, nh };
+        const rx = Math.round(this._timeToX(note.start));
+        const ry = Math.round(this._pitchToY(note.pitch));
+        const rw = Math.round(note.duration * BEAT_WIDTH * this.zoomX);
+        const rh = Math.round(NOTE_HEIGHT * this.zoomY);
+        if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) {
+          return { note, nx: rx, ny: ry, nw: rw, nh: rh };
         }
       }
       return null;
@@ -1113,11 +1113,10 @@ function startInlineEdit(roll, note, hit) {
           const noteIdx = roll.notes.findIndex(n => n.id === note.id);
           if (noteIdx !== -1) {
             note.lyric = tokens[0];
-            for (let t = 1; t < tokens.length; t++) {
-              const nextIdx = noteIdx + t;
-              if (nextIdx < roll.notes.length) {
-                roll.notes[nextIdx].lyric = tokens[t];
-              }
+            const laterNotes = roll.notes.filter(n => n.start > note.start);
+            laterNotes.sort((a, b) => a.start - b.start);
+            for (let t = 1; t < tokens.length && t - 1 < laterNotes.length; t++) {
+              laterNotes[t - 1].lyric = tokens[t];
             }
             updateMidiInfo();
           } else {

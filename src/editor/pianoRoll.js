@@ -95,7 +95,7 @@ class PianoRoll {
     // 鼠标事件
     this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
     this.canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
-    this.canvas.addEventListener('mouseup', (e) => this._onMouseUp(e));
+    document.addEventListener('mouseup', (e) => this._onMouseUp(e));
     this.canvas.addEventListener('mouseleave', () => {
       this.hoverNoteId = null;
       this.canvas.style.cursor = 'default';
@@ -194,12 +194,12 @@ class PianoRoll {
     // 从后往前遍历，后绘制的在上层
     for (let i = this.notes.length - 1; i >= 0; i--) {
       const note = this.notes[i];
-      const nx = this._timeToX(note.start);
-      const ny = this._pitchToY(note.pitch);
-      const nw = note.duration * BEAT_WIDTH * this.zoomX;
-      const nh = NOTE_HEIGHT * this.zoomY;
-      if (x >= nx && x <= nx + nw && y >= ny && y <= ny + nh) {
-        return { note, nx, ny, nw, nh };
+      const rx = Math.round(this._timeToX(note.start));
+      const ry = Math.round(this._pitchToY(note.pitch));
+      const rw = Math.round(note.duration * BEAT_WIDTH * this.zoomX);
+      const rh = Math.round(NOTE_HEIGHT * this.zoomY);
+      if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) {
+        return { note, nx: rx, ny: ry, nw: rw, nh: rh };
       }
     }
     return null;
@@ -231,8 +231,8 @@ class PianoRoll {
         this.dragMode = 'resize';
       } else {
         this.dragMode = 'move';
-        this.dragNoteStart = { start: note.start, pitch: note.pitch, duration: note.duration };
       }
+      this.dragNoteStart = { start: note.start, pitch: note.pitch, duration: note.duration };
       this.dragStartX = x;
       this.dragStartY = y;
     } else {

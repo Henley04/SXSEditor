@@ -7,8 +7,10 @@ async function enumerateDMLDevices() {
     // Capture stderr for verbose device discovery logs
     const origStderrWrite = process.stderr.write.bind(process.stderr);
     let stderrBuf = '';
+    const iconv = require('iconv-lite');
     process.stderr.write = function(chunk, encoding, callback) {
         if (typeof chunk === 'string') stderrBuf += chunk;
+        else if (Buffer.isBuffer(chunk)) stderrBuf += iconv.decode(chunk, process.platform === 'win32' ? 'gbk' : 'utf-8');
         else stderrBuf += chunk.toString('utf-8');
         return origStderrWrite(chunk, encoding, callback);
     };

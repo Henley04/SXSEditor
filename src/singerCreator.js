@@ -578,6 +578,25 @@ function closeWavTrimModal() {
   trimTotalDuration = 0;
 }
 
+function drawWaveformBars(ctx, data, fromX, toX, samplesPerPixel, height, mid, color, canvasWidth) {
+  ctx.fillStyle = color;
+  const maxX = canvasWidth != null ? canvasWidth : toX;
+  for (let i = fromX; i < toX; i++) {
+    if (i < 0 || i >= maxX) continue;
+    const startSample = Math.floor(i * samplesPerPixel);
+    const endSample = Math.floor((i + 1) * samplesPerPixel);
+    let min = 1.0;
+    let max = -1.0;
+    for (let j = startSample; j < endSample; j++) {
+      const datum = data[j];
+      if (datum < min) min = datum;
+      if (datum > max) max = datum;
+    }
+    const barHeight = Math.max(1, ((max - min) / 2) * height);
+    ctx.fillRect(i, mid - barHeight / 2, 1, barHeight);
+  }
+}
+
 function drawTrimWaveform() {
   if (!trimAudioBuffer) return;
 
@@ -608,46 +627,19 @@ function drawTrimWaveform() {
   const samplesPerPixel = data.length / width;
   const mid = height / 2;
 
-  ctx.fillStyle = '#3a3a52';
-  for (let i = 0; i < width; i++) {
-    const startSample = Math.floor(i * samplesPerPixel);
-    const endSample = Math.floor((i + 1) * samplesPerPixel);
-    let min = 1.0;
-    let max = -1.0;
-    for (let j = startSample; j < endSample; j++) {
-      const datum = data[j];
-      if (datum < min) min = datum;
-      if (datum > max) max = datum;
-    }
-    const barHeight = Math.max(1, ((max - min) / 2) * height);
-    ctx.fillRect(i, mid - barHeight / 2, 1, barHeight);
-  }
-
-  // 绘制选区高亮
   const selLeft = (trimStart / trimTotalDuration) * width;
   const selRight = ((trimStart + trimLength) / trimTotalDuration) * width;
+
+  // 基础波形
+  drawWaveformBars(ctx, data, 0, width, samplesPerPixel, height, mid, '#3a3a52');
 
   // 选区外暗化
   ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
   ctx.fillRect(0, 0, selLeft, height);
   ctx.fillRect(selRight, 0, width - selRight, height);
 
-  // 选区内高亮波形（重绘）
-  ctx.fillStyle = '#5b8def';
-  for (let i = Math.floor(selLeft); i < Math.ceil(selRight); i++) {
-    if (i < 0 || i >= width) continue;
-    const startSample = Math.floor(i * samplesPerPixel);
-    const endSample = Math.floor((i + 1) * samplesPerPixel);
-    let min = 1.0;
-    let max = -1.0;
-    for (let j = startSample; j < endSample; j++) {
-      const datum = data[j];
-      if (datum < min) min = datum;
-      if (datum > max) max = datum;
-    }
-    const barHeight = Math.max(1, ((max - min) / 2) * height);
-    ctx.fillRect(i, mid - barHeight / 2, 1, barHeight);
-  }
+  // 选区内高亮波形
+  drawWaveformBars(ctx, data, Math.floor(selLeft), Math.ceil(selRight), samplesPerPixel, height, mid, '#5b8def', width);
 }
 
 function drawTrimTimeAxis() {
@@ -716,12 +708,12 @@ function clampTrimValues() {
 }
 
 // 选区拖拽交互
-document.getElementById('wav-trim-waveform-wrapper').addEventListener('mousedown', (e) => {
+function handleTrimPointerDown(clientX) {
   if (!trimAudioBuffer) return;
 
   const wrapper = document.getElementById('wav-trim-waveform-wrapper');
   const rect = wrapper.getBoundingClientRect();
-  const x = e.clientX - rect.left;
+  const x = clientX - rect.left;
   const width = rect.width;
 
   const selLeft = (trimStart / trimTotalDuration) * width;
@@ -735,24 +727,21 @@ document.getElementById('wav-trim-waveform-wrapper').addEventListener('mousedown
     trimDragging = 'right';
   } else if (x > selLeft && x < selRight) {
     trimDragging = 'selection';
-    trimDragStartX = e.clientX;
+    trimDragStartX = clientX;
     trimDragStartValue = trimStart;
   } else {
-    // 点击选区外：将选区移动到点击位置
     const clickTime = (x / width) * trimTotalDuration;
     trimStart = Math.max(0, Math.min(clickTime - trimLength / 2, trimTotalDuration - trimLength));
     clampTrimValues();
     drawTrimWaveform();
     updateTrimSelectionUI();
     trimDragging = 'selection';
-    trimDragStartX = e.clientX;
+    trimDragStartX = clientX;
     trimDragStartValue = trimStart;
   }
+}
 
-  e.preventDefault();
-});
-
-document.addEventListener('mousemove', (e) => {
+function handleTrimPointerMove(clientX) {
   if (!trimDragging || !trimAudioBuffer) return;
 
   const wrapper = document.getElementById('wav-trim-waveform-wrapper');
@@ -760,7 +749,7 @@ document.addEventListener('mousemove', (e) => {
 
   if (trimDragging === 'left') {
     const rect = wrapper.getBoundingClientRect();
-    const x = e.clientX - rect.left;
+    const x = clientX - rect.left;
     const fixedEnd = trimStart + trimLength;
     trimStart = Math.max(0, (x / width) * trimTotalDuration);
     trimLength = fixedEnd - trimStart;
@@ -775,12 +764,12 @@ document.addEventListener('mousemove', (e) => {
     clampTrimValues();
   } else if (trimDragging === 'right') {
     const rect = wrapper.getBoundingClientRect();
-    const x = e.clientX - rect.left;
+    const x = clientX - rect.left;
     const currentEnd = (x / width) * trimTotalDuration;
     trimLength = Math.min(MAX_TRIM_DURATION, currentEnd - trimStart);
     clampTrimValues();
   } else if (trimDragging === 'selection') {
-    const dx = e.clientX - trimDragStartX;
+    const dx = clientX - trimDragStartX;
     const wrapper2 = document.getElementById('wav-trim-waveform-wrapper');
     const width2 = wrapper2.clientWidth;
     const dTime = (dx / width2) * trimTotalDuration;
@@ -790,11 +779,35 @@ document.addEventListener('mousemove', (e) => {
 
   drawTrimWaveform();
   updateTrimSelectionUI();
-});
+}
 
-document.addEventListener('mouseup', () => {
+function handleTrimPointerUp() {
   trimDragging = null;
+}
+
+const trimWrapper = document.getElementById('wav-trim-waveform-wrapper');
+trimWrapper.addEventListener('mousedown', (e) => {
+  handleTrimPointerDown(e.clientX);
+  e.preventDefault();
 });
+trimWrapper.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 1) {
+    handleTrimPointerDown(e.touches[0].clientX);
+    e.preventDefault();
+  }
+}, { passive: false });
+
+document.addEventListener('mousemove', (e) => handleTrimPointerMove(e.clientX));
+document.addEventListener('touchmove', (e) => {
+  if (e.touches.length === 1) {
+    handleTrimPointerMove(e.touches[0].clientX);
+    e.preventDefault();
+  }
+}, { passive: false });
+
+document.addEventListener('mouseup', handleTrimPointerUp);
+document.addEventListener('touchend', handleTrimPointerUp);
+document.addEventListener('touchcancel', handleTrimPointerUp);
 
 // 数值输入
 trimStartInput.addEventListener('input', () => {

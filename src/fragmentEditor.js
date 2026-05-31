@@ -464,12 +464,12 @@ function snapBeats(beats) {
 function findNoteAt(x, y) {
   for (let i = notes.length - 1; i >= 0; i--) {
     const note = notes[i];
-    const nx = timeToX(note.start);
-    const ny = pitchToY(note.pitch);
-    const nw = note.duration * BEAT_WIDTH * zoomX;
-    const nh = NOTE_HEIGHT;
-    if (x >= nx && x <= nx + nw && y >= ny && y <= ny + nh) {
-      return { note, nx, ny, nw, nh };
+    const rx = Math.round(timeToX(note.start));
+    const ry = Math.round(pitchToY(note.pitch));
+    const rw = Math.round(note.duration * BEAT_WIDTH * zoomX);
+    const rh = Math.round(NOTE_HEIGHT);
+    if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) {
+      return { note, nx: rx, ny: ry, nw: rw, nh: rh };
     }
   }
   return null;
@@ -2688,6 +2688,15 @@ if (window.electronAPI?.onFragmentBoundsChanged) {
       if (startTime !== undefined) currentFragment.startTime = startTime;
       if (duration !== undefined) currentFragment.duration = duration;
       render();
+    }
+  });
+}
+
+if (window.electronAPI?.onProjectSettingsChanged) {
+  window.electronAPI.onProjectSettingsChanged((data) => {
+    if (currentProject) {
+      if (data.bpm !== undefined) currentProject.bpm = data.bpm;
+      if (data.timeSignature !== undefined) currentProject.timeSignature = data.timeSignature;
     }
   });
 }
