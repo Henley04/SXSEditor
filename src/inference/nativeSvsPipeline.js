@@ -1086,6 +1086,38 @@ class OnnxSVSPipeline {
         return seq;
     }
 
+    resolveLyricToPhonemes(lyric) {
+        if (!lyric || lyric.trim().length === 0) return [{ name: '<SP>', display: 'SP' }];
+        const trimmed = lyric.trim();
+        if (trimmed === '<SP>' || trimmed === '<AP>') return [{ name: '<SP>', display: 'SP' }];
+
+        if (trimmed.startsWith('en_') && trimmed.includes('-')) {
+            return trimmed.slice(3).split('-').map(s => {
+                const name = 'en_' + s.trim();
+                return { name, display: s.trim() };
+            });
+        }
+
+        if (/^[a-zA-Z]+$/.test(trimmed) && !trimmed.startsWith('en_') && !trimmed.startsWith('zh_') && !trimmed.startsWith('yue_')) {
+            const g2pResult = this._englishG2p(trimmed);
+            if (g2pResult) {
+                return g2pResult.split(' ').map(ph => {
+                    const name = 'en_' + ph.trim();
+                    return { name, display: ph.trim() };
+                });
+            }
+            return [{ name: trimmed, display: trimmed }];
+        }
+
+        const zhPhoneme = this._charToZhPhoneme(trimmed);
+        if (zhPhoneme) {
+            const display = trimmed.charAt(0) + (trimmed.length > 1 && /[1-5]/.test(trimmed.charAt(1)) ? trimmed.charAt(1) : '');
+            return [{ name: zhPhoneme, display }];
+        }
+
+        return [{ name: trimmed, display: trimmed }];
+    }
+
     notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift = 0) {
         const PAD_ID = this.phone2idx['<PAD>'] || 0;
         const BOW_ID = this.phone2idx['<BOW>'] || 4;
@@ -1140,6 +1172,10 @@ class OnnxSVSPipeline {
             notePitches.push(pitch);
             noteTypes.push(noteType);
 
+            const adj = note.phonemeAdjustments;
+            const hasAdj = Array.isArray(adj) && adj.length > 0;
+            const durationRatios = hasAdj ? adj.map(a => a.durationRatio) : null;
+
             if (lyric.startsWith('en_') && lyric.includes('-')) {
                 const subParts = lyric.slice(3).split('-');
                 const enPhIds = [];
@@ -1147,7 +1183,7 @@ class OnnxSVSPipeline {
                     enPhIds.push(this._lookupPhonemeId('en_' + subParts[s].trim()));
                 }
                 enPhIds.push(SEP_ID);
-                phLocations.push([dur, Math.max(1, enPhIds.length)]);
+                phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios]);
                 for (let e = 0; e < enPhIds.length; e++) {
                     newPhonemes.push(enPhIds[e]);
                     note2origin.push(phIdx);
@@ -1163,7 +1199,7 @@ class OnnxSVSPipeline {
                         enPhIds.push(this._lookupPhonemeId('en_' + phParts[s].trim()));
                     }
                     enPhIds.push(SEP_ID);
-                    phLocations.push([dur, Math.max(1, enPhIds.length)]);
+                    phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios]);
                     for (let e = 0; e < enPhIds.length; e++) {
                         newPhonemes.push(enPhIds[e]);
                         note2origin.push(phIdx);
@@ -1172,7 +1208,7 @@ class OnnxSVSPipeline {
                     }
                 } else {
                     const phId = this._lookupPhonemeId(lyric);
-                    phLocations.push([dur, 1]);
+                    phLocations.push([dur, 1, durationRatios]);
                     newPhonemes.push(phId);
                     note2origin.push(phIdx);
                     notePitches.push(pitch);
@@ -1180,7 +1216,7 @@ class OnnxSVSPipeline {
                 }
             } else {
                 const phId = this._lookupPhonemeId(lyric);
-                phLocations.push([dur, 1]);
+                phLocations.push([dur, 1, durationRatios]);
                 newPhonemes.push(phId);
                 note2origin.push(phIdx);
                 notePitches.push(pitch);
@@ -1280,6 +1316,7 @@ class OnnxSVSPipeline {
         for (let idx = 0; idx < phLocations.length; idx++) {
             let i = phLocations[idx][0];
             const j = phLocations[idx][1];
+            const ratios = phLocations[idx][2]; // optional durationRatios array
             const nextPhonemeStart = idx < phLocations.length - 1 ? phLocations[idx + 1][0] : totalFrames;
             if (i >= totalFrames) {
                 break;
@@ -1291,13 +1328,25 @@ class OnnxSVSPipeline {
             }
             mel2token[i] = phIdx;
 
-            // 将帧均匀分配给 j 个音素，每个音素占据一段连续帧
             const innerFrames = Math.max(0, nextPhonemeStart - i - 2);
-            for (let p = 0; p < j; p++) {
-                const pStart = i + 1 + Math.floor(p * innerFrames / j);
-                const pEnd = i + 1 + Math.floor((p + 1) * innerFrames / j);
-                for (let f = pStart; f < pEnd && f < totalFrames; f++) {
-                    mel2token[f] = phIdx + 1 + p;
+            if (ratios && ratios.length === j) {
+                let offset = 0;
+                for (let p = 0; p < j; p++) {
+                    const pFrames = Math.round(innerFrames * ratios[p]);
+                    const pStart = i + 1 + offset;
+                    const pEnd = Math.min(i + 1 + offset + pFrames, totalFrames);
+                    for (let f = pStart; f < pEnd && f < totalFrames; f++) {
+                        mel2token[f] = phIdx + 1 + p;
+                    }
+                    offset += pFrames;
+                }
+            } else {
+                for (let p = 0; p < j; p++) {
+                    const pStart = i + 1 + Math.floor(p * innerFrames / j);
+                    const pEnd = i + 1 + Math.floor((p + 1) * innerFrames / j);
+                    for (let f = pStart; f < pEnd && f < totalFrames; f++) {
+                        mel2token[f] = phIdx + 1 + p;
+                    }
                 }
             }
 

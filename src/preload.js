@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getFragmentSVSSampleRate: () => ipcRenderer.invoke('fragment-svs:getSampleRate'),
   initFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:init'),
   synthesizeFragmentSVS: (data) => ipcRenderer.invoke('fragment-svs:synthesize', data),
+  resolvePhonemes: (lyrics) => ipcRenderer.invoke('fragment-svs:resolvePhonemes', { lyrics }),
   disposeFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:dispose'),
   onFragmentSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);
