@@ -25,9 +25,10 @@ async function enumerate() {
     // 如果 ONNX Runtime 提供了枚举设备的 API，应优先使用
     const origWrite = process.stderr.write.bind(process.stderr);
     let stderrBuf = '';
+    const iconv = require('iconv-lite');
     process.stderr.write = function(chunk, encoding, callback) {
         if (typeof chunk === 'string') stderrBuf += chunk;
-        else if (Buffer.isBuffer(chunk)) stderrBuf += chunk.toString('utf-8');
+        else if (Buffer.isBuffer(chunk)) stderrBuf += iconv.decode(chunk, process.platform === 'win32' ? 'gbk' : 'utf-8');
         return origWrite(chunk, encoding, callback);
     };
 

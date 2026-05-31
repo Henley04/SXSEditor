@@ -42,8 +42,8 @@ const F0_MIN = 32.7031956625;
 const CFG_STRENGTH = 3.0;
 const CFG_RESCALE = 0.75;
 const DEFAULT_DIFF_STEPS = 32;
-const VOCODER_CHUNK_FRAMES = 1024;
-const VOCODER_OVERLAP_FRAMES = 4;
+const VOCODER_CHUNK_FRAMES = 1008;
+const VOCODER_OVERLAP_FRAMES = 8;
 const LONG_AUDIO_THRESHOLD_SEC = 30;
 const SEGMENT_MIN_SEC = 15;
 const SEGMENT_MAX_SEC = 30;
@@ -136,17 +136,54 @@ function parseWavBuffer(buffer) {
 
 function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     if (srcSampleRate === dstSampleRate) return audioFloat;
-    const ratio = dstSampleRate / srcSampleRate;
-    const newLength = Math.floor(audioFloat.length * ratio);
+    const ratio = srcSampleRate / dstSampleRate;
+    const newLength = Math.floor(audioFloat.length / ratio);
+    if (newLength <= 0) return new Float32Array(0);
+
+    // 窗口化 sinc 插值 (Kaiser 窗, β=5)
+    const kaiserBeta = 5.0;
+    const halfWidth = Math.ceil(12 * kaiserBeta / 5); // ~12 零交叉
+    const cutoff = (dstSampleRate < srcSampleRate ? 0.95 * dstSampleRate / srcSampleRate : 0.95) * 0.5;
+
     const out = new Float32Array(newLength);
     for (let i = 0; i < newLength; i++) {
-        const srcPos = i / ratio;
-        const idx0 = Math.floor(srcPos);
-        const idx1 = Math.min(idx0 + 1, audioFloat.length - 1);
-        const t = srcPos - idx0;
-        out[i] = audioFloat[idx0] * (1 - t) + audioFloat[idx1] * t;
+        const center = (i + 0.5) * ratio;
+        const left = Math.max(0, Math.floor(center - halfWidth));
+        const right = Math.min(audioFloat.length - 1, Math.ceil(center + halfWidth));
+
+        let sum = 0;
+        let weightSum = 0;
+        for (let j = left; j <= right; j++) {
+            const t = center - j;
+            if (Math.abs(t) < 1e-7) {
+                sum += audioFloat[j];
+                weightSum += 1;
+            } else {
+                const sincVal = Math.sin(2 * Math.PI * cutoff * t) / (Math.PI * t);
+                const kaiserArg = 1 - (2 * t / (2 * halfWidth + 1)) ** 2;
+                const windowVal = kaiserArg >= 0
+                    ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0(kaiserBeta)
+                    : 0;
+                const w = sincVal * windowVal;
+                sum += audioFloat[j] * w;
+                weightSum += w;
+            }
+        }
+        out[i] = weightSum > 1e-8 ? sum / weightSum : 0;
     }
     return out;
+}
+
+// Kaiser 窗的零阶修正贝塞尔函数 I₀(x) 近似
+function bessel0(x) {
+    let sum = 1;
+    let term = 1;
+    const halfX = x / 2;
+    for (let k = 1; k <= 20; k++) {
+        term *= (halfX / k);
+        sum += term * term;
+    }
+    return sum;
 }
 
 function bitReversePermute(real, imag) {
@@ -177,50 +214,22 @@ function extractMelSpectrogram(audioFloat, sr) {
     const numFrames = Math.floor((padded.length - N_FFT) / HOP_SIZE) + 1;
     const melBands = NUM_MELS;
 
-    const window = new Float32Array(N_FFT);
-    for (let i = 0; i < N_FFT; i++) {
-        window[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (N_FFT - 1)));
-    }
-
     const real = new Float32Array(N_FFT);
     const imag = new Float32Array(N_FFT);
-    const magnitude = new Float32Array(N_FFT / 2 + 1);
 
     const powerSpec = new Float32Array(numFrames * (N_FFT / 2 + 1));
 
     for (let f = 0; f < numFrames; f++) {
         const start = f * HOP_SIZE;
         for (let i = 0; i < N_FFT; i++) {
-            real[i] = padded[start + i] * window[i];
+            real[i] = padded[start + i] * HANN_WINDOW[i];
             imag[i] = 0;
         }
 
-        for (let len = N_FFT; len >= 2; len /= 2) {
-            const halfLen = len / 2;
-            const angle = -2 * Math.PI / len;
-            for (let i = 0; i < N_FFT; i += len) {
-                for (let j = 0; j < halfLen; j++) {
-                    const idx1 = i + j;
-                    const idx2 = i + j + halfLen;
-                    const cosVal = Math.cos(angle * j);
-                    const sinVal = Math.sin(angle * j);
-                    const tReal = real[idx1];
-                    const tImag = imag[idx1];
-                    const uReal = real[idx2];
-                    const uImag = imag[idx2];
-                    real[idx1] = tReal + uReal;
-                    imag[idx1] = tImag + uImag;
-                    real[idx2] = (tReal - uReal) * cosVal - (tImag - uImag) * sinVal;
-                    imag[idx2] = (tReal - uReal) * sinVal + (tImag - uImag) * cosVal;
-                }
-            }
-        }
-
-        bitReversePermute(real, imag);
+        fftRadix2(real, imag);
 
         for (let i = 0; i <= N_FFT / 2; i++) {
-            magnitude[i] = real[i] * real[i] + imag[i] * imag[i];
-            powerSpec[f * (N_FFT / 2 + 1) + i] = magnitude[i];
+            powerSpec[f * (N_FFT / 2 + 1) + i] = real[i] * real[i] + imag[i] * imag[i];
         }
     }
 
@@ -287,6 +296,77 @@ function createMelFilterbank(numBands, fftSize, sampleRate, fmin, fmax) {
     }
 
     return filterbank;
+}
+
+// 预计算旋转因子表 (twiddle factors)
+const TWIDDLE_REAL = new Float32Array(N_FFT / 2);
+const TWIDDLE_IMAG = new Float32Array(N_FFT / 2);
+for (let i = 0; i < N_FFT / 2; i++) {
+    TWIDDLE_REAL[i] = Math.cos(-2 * Math.PI * i / N_FFT);
+    TWIDDLE_IMAG[i] = Math.sin(-2 * Math.PI * i / N_FFT);
+}
+
+// 预计算 Hann 窗
+const HANN_WINDOW = new Float32Array(N_FFT);
+for (let i = 0; i < N_FFT; i++) {
+    HANN_WINDOW[i] = 0.5 * (1 - Math.cos(2 * Math.PI * i / (N_FFT - 1)));
+}
+
+// Radix-2 FFT (in-place, bit-reversed output)
+function fftRadix2(real, imag) {
+    const n = real.length;
+    bitReversePermute(real, imag);
+    for (let len = 2; len <= n; len *= 2) {
+        const halfLen = len / 2;
+        const step = n / len;
+        for (let i = 0; i < n; i += len) {
+            for (let j = 0; j < halfLen; j++) {
+                const idx1 = i + j;
+                const idx2 = i + j + halfLen;
+                const wr = TWIDDLE_REAL[j * step];
+                const wi = TWIDDLE_IMAG[j * step];
+                const tReal = real[idx1];
+                const tImag = imag[idx1];
+                const uReal = real[idx2];
+                const uImag = imag[idx2];
+                real[idx1] = tReal + uReal;
+                imag[idx1] = tImag + uImag;
+                real[idx2] = (tReal - uReal) * wr - (tImag - uImag) * wi;
+                imag[idx2] = (tReal - uReal) * wi + (tImag - uImag) * wr;
+            }
+        }
+    }
+}
+
+// Radix-2 IFFT (in-place, bit-reversed input → standard output)
+function ifftRadix2(real, imag) {
+    const n = real.length;
+    bitReversePermute(real, imag);
+    for (let len = 2; len <= n; len *= 2) {
+        const halfLen = len / 2;
+        const step = n / len;
+        for (let i = 0; i < n; i += len) {
+            for (let j = 0; j < halfLen; j++) {
+                const idx1 = i + j;
+                const idx2 = i + j + halfLen;
+                const wr = TWIDDLE_REAL[j * step];
+                const wi = -TWIDDLE_IMAG[j * step]; // 共轭: 正号
+                const tReal = real[idx1];
+                const tImag = imag[idx1];
+                const uReal = real[idx2];
+                const uImag = imag[idx2];
+                real[idx1] = tReal + uReal;
+                imag[idx1] = tImag + uImag;
+                real[idx2] = (tReal - uReal) * wr - (tImag - uImag) * wi;
+                imag[idx2] = (tReal - uReal) * wi + (tImag - uImag) * wr;
+            }
+        }
+    }
+    const invN = 1.0 / n;
+    for (let i = 0; i < n; i++) {
+        real[i] *= invN;
+        imag[i] *= invN;
+    }
 }
 
 function istftReconstruction(magPhaseData, numFrames, nFft, hopLength, winLength) {
@@ -479,11 +559,12 @@ async function enumerateDMLDevicesInProcess(modelDir) {
         return [];
     }
 
+    const iconv = require('iconv-lite');
     const origWrite = process.stderr.write.bind(process.stderr);
     let stderrBuf = '';
     process.stderr.write = function(chunk, encoding, callback) {
         if (typeof chunk === 'string') stderrBuf += chunk;
-        else if (Buffer.isBuffer(chunk)) stderrBuf += chunk.toString('utf-8');
+        else if (Buffer.isBuffer(chunk)) stderrBuf += iconv.decode(chunk, process.platform === 'win32' ? 'gbk' : 'utf-8');
         return origWrite(chunk, encoding, callback);
     };
 
@@ -791,17 +872,25 @@ class OnnxSVSPipeline {
         return this.phone2idx['<UNK>'] || 3;
     }
 
-    _charToZhPhoneme(char) {
+    _charToZhPhoneme(input) {
+        const match = input.match(/^([\u4e00-\u9fff])([1-5])$/);
+        const char = match ? match[1] : input;
+        const overrideTone = match ? match[2] : null;
+
         if (!/[\u4e00-\u9fff]/.test(char)) {
             return null;
         }
         try {
             const py = pinyin(char, { toneType: 'num', type: 'array' });
             if (py && py.length > 0 && py[0]) {
-                return 'zh_' + py[0];
+                let syllable = py[0];
+                if (overrideTone) {
+                    syllable = syllable.replace(/\d$/, overrideTone);
+                }
+                return 'zh_' + syllable;
             }
         } catch (e) {
-            console.warn(`[OnnxSVSPipeline] 拼音转换失败 ("${char}"):`, e.message);
+            console.warn(`[OnnxSVSPipeline] 拼音转换失败 ("${input}"):`, e.message);
         }
         return null;
     }
@@ -1207,7 +1296,7 @@ class OnnxSVSPipeline {
             for (let p = 0; p < j; p++) {
                 const pStart = i + 1 + Math.floor(p * innerFrames / j);
                 const pEnd = i + 1 + Math.floor((p + 1) * innerFrames / j);
-                for (let f = pStart; f < pEnd; f++) {
+                for (let f = pStart; f < pEnd && f < totalFrames; f++) {
                     mel2token[f] = phIdx + 1 + p;
                 }
             }
@@ -1388,7 +1477,7 @@ class OnnxSVSPipeline {
         const fadeSamples = overlapFrames * HOP_SIZE;
         const fadeWindow = new Float32Array(fadeSamples);
         for (let i = 0; i < fadeSamples; i++) {
-            fadeWindow[i] = i / fadeSamples;
+            fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * i / fadeSamples));
         }
 
         let framePos = 0;
@@ -1616,14 +1705,16 @@ class OnnxSVSPipeline {
         const dt = 1.0 / totalSteps;
         const progressPerStep = progressRange / totalSteps;
 
+        // prompt 帧在循环中不变，预先拷贝一次
+        for (let f = 0; f < ptFrameCount; f++) {
+            for (let d = 0; d < MEL_DIM; d++) {
+                xtInputBuf[f * MEL_DIM + d] = ptMelData[f * MEL_DIM + d];
+            }
+        }
+
         for (let step = 0; step < totalSteps; step++) {
             const tVal = (step + 0.5) / totalSteps;
 
-            for (let f = 0; f < ptFrameCount; f++) {
-                for (let d = 0; d < MEL_DIM; d++) {
-                    xtInputBuf[f * MEL_DIM + d] = ptMelData[f * MEL_DIM + d];
-                }
-            }
             for (let f = 0; f < totalFrames; f++) {
                 for (let d = 0; d < MEL_DIM; d++) {
                     xtInputBuf[(ptFrameCount + f) * MEL_DIM + d] = xt.data[f * MEL_DIM + d];

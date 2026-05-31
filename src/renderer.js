@@ -1,7 +1,6 @@
 import './common.css';
 import './index.css';
 import { TrackManager } from './editor/trackManager.js';
-import { encodeWav } from './audio/wavEncoder.js';
 import { HistoryManager } from './editor/historyManager.js';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { showAlertDialog } from './alertDialog.js';
@@ -596,6 +595,10 @@ function updateProjectSettings() {
   project.bpm = Math.max(1, Math.min(999, bpm));
   project.timeSignature = [num, den];
   markDirty();
+  refreshAll();
+  if (window.electronAPI?.updateProjectSettings) {
+    window.electronAPI.updateProjectSettings({ bpm: project.bpm, timeSignature: project.timeSignature });
+  }
 }
 
 bpmInput.addEventListener('change', updateProjectSettings);
@@ -1630,6 +1633,7 @@ btnExport.addEventListener('click', async () => {
       }
     }
 
+    const { encodeWav } = await import('./audio/wavEncoder.js');
     const wavData = encodeWav(mixedAudio, SAMPLE_RATE);
 
     timeDisplay.textContent = t('main.savingFile');

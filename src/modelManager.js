@@ -92,6 +92,36 @@ function checkMissingFiles(modelDir) {
   return { missing, existing };
 }
 
+async function checkMissingFilesAsync(modelDir) {
+  const requiredFiles = MODEL_FILE_MANIFEST.filter(f => f.required);
+  const results = await Promise.all(requiredFiles.map(async (file) => {
+    const fullPath = path.join(modelDir, file.filePath);
+    try {
+      const stats = await fs.promises.stat(fullPath);
+      if (stats.size > 0) {
+        return { type: 'existing', file, localSize: stats.size };
+      }
+    } catch (_) {}
+    let downloadedBytes = 0;
+    try {
+      const tempStats = await fs.promises.stat(fullPath + TEMP_SUFFIX);
+      downloadedBytes = tempStats.size;
+    } catch (_) {}
+    return { type: 'missing', file, downloadedBytes };
+  }));
+
+  const missing = [];
+  const existing = [];
+  for (const r of results) {
+    if (r.type === 'existing') {
+      existing.push({ ...r.file, localSize: r.localSize });
+    } else {
+      missing.push({ ...r.file, downloadedBytes: r.downloadedBytes });
+    }
+  }
+  return { missing, existing };
+}
+
 function deleteModelFiles(modelDir) {
   const deleted = [];
   const errors = [];
@@ -890,6 +920,7 @@ module.exports = {
   DEFAULT_PRECISION,
   MODELSCOPE_ENDPOINT,
   checkMissingFiles,
+  checkMissingFilesAsync,
   deleteModelFiles,
   downloadMissingFiles,
   downloadFileWithResume,
