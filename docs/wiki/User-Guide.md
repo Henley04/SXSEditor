@@ -114,7 +114,7 @@ Open **Settings** from the menu to configure:
 |---------|-------------|
 | Inference Device | Select a specific DirectML GPU or use automatic selection |
 
-Device settings take effect after restarting the pipeline.
-Languages of Ui for choose:Simplified Chinses/English.
-Parameter of inference: balance the generate speed and audio quality.
-Model precision: accelerate inference greatly through lower quality. INT8 is better for CPU/NPU(**still in development**). FP is better for GPU.
+-Device settings take effect after restarting the pipeline.
+-Languages of Ui for choose:Simplified Chinses/English.
+-Parameter of inference: balance the generate speed and audio quality.
+-Model precision: accelerate inference greatly through lower quality. INT8 is better for CPU/NPU(**still in development**). FP is better for GPU.
