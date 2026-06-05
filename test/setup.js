@@ -54,14 +54,15 @@ HTMLCanvasElement.prototype.getContext = function() {
 const sinon = require('sinon');
 
 // Mocha root hook 插件，提供 sinon sandbox 自动清理
+let _sinonSandbox;
 exports.mochaHooks = {
   beforeEach() {
-    this._sinonSandbox = sinon.createSandbox();
+    _sinonSandbox = sinon.createSandbox();
   },
   afterEach() {
-    if (this._sinonSandbox) {
-      this._sinonSandbox.restore();
-      this._sinonSandbox = null;
+    if (_sinonSandbox) {
+      _sinonSandbox.restore();
+      _sinonSandbox = null;
     }
   },
 };

@@ -2,6 +2,8 @@ const path = require('node:path');
 const ort = require('onnxruntime-node');
 const { resampleAudio } = require('../utils/resampleAudio');
 
+let _noteIdCounter = 0;
+
 const ROSVOT_SAMPLE_RATE = 24000;
 const ROSVOT_HOP_SIZE = 128;
 const ROSVOT_MAX_FRAMES = 4000;
@@ -245,7 +247,7 @@ class RosvotDetector {
       if (duration < 0.05) continue;
 
       notes.push({
-        id: Date.now() + i,
+        id: ++_noteIdCounter,
         pitch: midiPitch,
         start: startTime / beatDuration,
         duration: duration / beatDuration,

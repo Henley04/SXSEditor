@@ -2,6 +2,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const ort = require('onnxruntime-node');
 const { pinyin } = require('pinyin-pro');
+const { getGraphicsCached } = require('../utils/gpuCache');
 
 // 修复 onnxruntime-common 的 float16 类型映射
 // Node.js v24+ 原生支持 Float16Array，但 onnxruntime-node 的 native binding (C++)
@@ -86,6 +87,8 @@ function parseWavBuffer(buffer) {
         );
         const chunkSize = view.getUint32(offset + 4, true);
 
+        if (offset + 8 + chunkSize > buf.byteLength) break;
+
         if (chunkId === 'fmt ') {
             fmtOffset = offset + 8;
         } else if (chunkId === 'data') {
@@ -114,6 +117,7 @@ function parseWavBuffer(buffer) {
         for (let ch = 0; ch < numChannels; ch++) {
             const i = f * numChannels + ch;
             const byteOffset = dataOffset + i * bytesPerSample;
+            if (byteOffset + bytesPerSample > buf.byteLength) break;
             let sample = 0;
             if (audioFormat === 3 && bitsPerSample === 32) {
                 sample = view.getFloat32(byteOffset, true);
@@ -391,38 +395,30 @@ function istftReconstruction(magPhaseData, numFrames, nFft, hopLength, winLength
     const windowSum = new Float32Array(outputLength);
 
     for (let f = 0; f < numFrames; f++) {
-        const realPart = new Float32Array(nFft);
-        const imagPart = new Float32Array(nFft);
+        const ifftReal = new Float32Array(nFft);
+        const ifftImag = new Float32Array(nFft);
 
         for (let k = 0; k < numFreqBins; k++) {
             const mag = magData[f * numFreqBins + k];
             const phase = phaseData[f * numFreqBins + k];
-            realPart[k] = mag * Math.cos(phase);
-            imagPart[k] = mag * Math.sin(phase);
+            ifftReal[k] = mag * Math.cos(phase);
+            ifftImag[k] = mag * Math.sin(phase);
         }
         for (let k = numFreqBins; k < nFft; k++) {
             const mirrorK = nFft - k;
             if (mirrorK > 0 && mirrorK < numFreqBins) {
-                realPart[k] = realPart[mirrorK];
-                imagPart[k] = -imagPart[mirrorK];
+                ifftReal[k] = ifftReal[mirrorK];
+                ifftImag[k] = -ifftImag[mirrorK];
             }
         }
 
-        const ifftReal = new Float32Array(nFft);
-        const ifftImag = new Float32Array(nFft);
-        for (let k = 0; k < nFft; k++) {
-            for (let n = 0; n < nFft; n++) {
-                const angle = 2 * Math.PI * k * n / nFft;
-                ifftReal[n] += realPart[k] * Math.cos(angle) - imagPart[k] * Math.sin(angle);
-                ifftImag[n] += realPart[k] * Math.sin(angle) + imagPart[k] * Math.cos(angle);
-            }
-        }
+        ifftRadix2(ifftReal, ifftImag);
 
         const frameStart = f * hopLength;
         for (let n = 0; n < winLength; n++) {
             const outIdx = frameStart + n;
             if (outIdx < outputLength) {
-                output[outIdx] += ifftReal[n] * window[n] / nFft;
+                output[outIdx] += ifftReal[n] * window[n];
                 windowSum[outIdx] += window[n] * window[n];
             }
         }
@@ -518,35 +514,40 @@ function isDiscreteGPUByName(name) {
     return undefined;
 }
 
-async function enumerateGPUsViaNodeGpuInfo() {
-    try {
-        const gpu = require('@oxmc/node-gpuinfo');
-        const count = gpu.getGpuCount();
-        if (count <= 0) return [];
+function gpuCacheToDevices(controllers) {
+    const devices = [];
+    for (let i = 0; i < controllers.length; i++) {
+        const c = controllers[i];
+        const vramBytes = (c.memoryTotal || c.vram || 0) * 1024 * 1024;
+        const gb = vramBytes / (1024 * 1024 * 1024);
+        const vramStr = gb >= 1 ? `${Math.round(gb * 10) / 10} GB` : `${Math.round(vramBytes / (1024 * 1024))} MB`;
+        const vendorName = c.vendor || '';
+        const isDiscrete = isDiscreteGPUByName(c.model);
+        devices.push({
+            name: c.model || '',
+            type: 1,
+            isDiscrete: isDiscrete !== undefined ? isDiscrete : (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024),
+            dxgiAdapterNumber: i,
+            vram: vramStr,
+            vramBytes: vramBytes,
+            vendor: vendorName,
+            source: 'systeminformation',
+        });
+    }
+    return devices;
+}
 
-        const allInfo = gpu.getAllGpuInfo();
-        const devices = [];
-        for (let i = 0; i < allInfo.length; i++) {
-            const info = allInfo[i];
-            const vramBytes = (info.memoryTotal || 0) * 1024 * 1024; // MB → Bytes
-            const gb = vramBytes / (1024 * 1024 * 1024);
-            const vramStr = gb >= 1 ? `${Math.round(gb * 10) / 10} GB` : `${Math.round(vramBytes / (1024 * 1024))} MB`;
-            const vendorName = info.vendor || '';
-            const isDiscrete = isDiscreteGPUByName(info.name);
-            devices.push({
-                name: info.name || '',
-                type: 1,
-                isDiscrete: isDiscrete !== undefined ? isDiscrete : (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024),
-                dxgiAdapterNumber: i,
-                vram: vramStr,
-                vramBytes: vramBytes,
-                vendor: vendorName,
-                source: 'node-gpuinfo',
-            });
+async function enumerateGPUsViaNodeGpuInfo(cachedControllers) {
+    try {
+        if (cachedControllers && cachedControllers.length > 0) {
+            return gpuCacheToDevices(cachedControllers);
         }
-        return devices;
+        const graphics = await getGraphicsCached();
+        const controllers = graphics.controllers || [];
+        if (controllers.length === 0) return [];
+        return gpuCacheToDevices(controllers);
     } catch (e) {
-        console.warn('[OnnxSVSPipeline] node-gpuinfo 枚举失败:', e.message);
+        console.warn('[OnnxSVSPipeline] systeminformation GPU 枚举失败:', e.message);
         return [];
     }
 }
@@ -639,15 +640,15 @@ async function enumerateDMLDevicesInProcess(modelDir) {
     return devices;
 }
 
-async function enumerateDMLDevices(modelDir) {
-    let devices = await enumerateGPUsViaNodeGpuInfo();
+async function enumerateDMLDevices(modelDir, cachedControllers) {
+    let devices = await enumerateGPUsViaNodeGpuInfo(cachedControllers);
 
     if (devices.length > 0) {
-        console.log(`[OnnxSVSPipeline] node-gpuinfo 枚举发现 ${devices.length} 个 GPU 设备`);
+        console.log(`[OnnxSVSPipeline] systeminformation 枚举发现 ${devices.length} 个 GPU 设备`);
         return devices;
     }
 
-    console.log('[OnnxSVSPipeline] node-gpuinfo 未发现 GPU，尝试 ONNX Runtime verbose 日志枚举...');
+    console.log('[OnnxSVSPipeline] systeminformation 未发现 GPU，尝试 ONNX Runtime verbose 日志枚举...');
     if (modelDir) {
         devices = await enumerateDMLDevicesInProcess(modelDir);
     }
@@ -1993,8 +1994,14 @@ class OnnxSVSPipeline {
             console.log(`[OnnxSVSPipeline] 扩散完成，开始声码器重建 (${totalFrames}帧)...`);
             const audioData = await this._runVocoderChunked(xt.data, totalFrames);
 
-            this._synthCache = { key: cacheKey, audio: audioData };
-            console.log('[OnnxSVSPipeline] 音频已缓存');
+            const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120; // 2 分钟
+            if (audioData.length <= MAX_CACHE_SAMPLES) {
+                this._synthCache = { key: cacheKey, audio: audioData };
+                console.log('[OnnxSVSPipeline] 音频已缓存');
+            } else {
+                this._synthCache = null;
+                console.log('[OnnxSVSPipeline] 音频过长，跳过缓存');
+            }
 
             onProgress(100);
             return audioData;
@@ -2075,8 +2082,14 @@ class OnnxSVSPipeline {
         }
 
         const audioData = finalAudio;
-        this._synthCache = { key: cacheKey, audio: audioData };
-        console.log('[OnnxSVSPipeline] 分段合成完成，音频已缓存');
+        const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
+        if (audioData.length <= MAX_CACHE_SAMPLES) {
+            this._synthCache = { key: cacheKey, audio: audioData };
+            console.log('[OnnxSVSPipeline] 分段合成完成，音频已缓存');
+        } else {
+            this._synthCache = null;
+            console.log('[OnnxSVSPipeline] 分段合成完成，音频过长跳过缓存');
+        }
 
         onProgress(100);
         return audioData;

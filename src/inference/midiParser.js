@@ -1,14 +1,17 @@
 const SILENCE_THRESHOLD_SEC = 0.2;
 
 function readUint8(view, offset) {
+  if (offset < 0 || offset >= view.byteLength) throw new Error('MIDI: 读取越界');
   return view.getUint8(offset);
 }
 
 function readUint16(view, offset) {
+  if (offset + 1 >= view.byteLength) throw new Error('MIDI: 读取越界');
   return (view.getUint8(offset) << 8) | view.getUint8(offset + 1);
 }
 
 function readUint32(view, offset) {
+  if (offset + 3 >= view.byteLength) throw new Error('MIDI: 读取越界');
   return (
     (view.getUint8(offset) << 24) |
     (view.getUint8(offset + 1) << 16) |
@@ -27,7 +30,8 @@ function readVarLen(view, offset) {
   let byte;
   let bytesRead = 0;
   do {
-    byte = view.getUint8(offset + bytesRead);
+    if (bytesRead >= 4) throw new Error('MIDI: 变长数值过长');
+    byte = readUint8(view, offset + bytesRead);
     value = (value << 7) | (byte & 0x7f);
     bytesRead++;
   } while (byte & 0x80);
@@ -121,13 +125,13 @@ function parseMidiFile(buffer) {
 
     const trackLength = readUint32(view, offset);
     offset += 4;
-    const trackEnd = offset + trackLength;
+    const trackEnd = Math.min(offset + trackLength, buffer.byteLength);
 
     let absTicks = 0;
     let runningStatus = 0;
     const active = {};
 
-    while (offset < trackEnd) {
+    while (offset < trackEnd && offset < buffer.byteLength) {
       const varLen = readVarLen(view, offset);
       offset += varLen.length;
       absTicks += varLen.value;

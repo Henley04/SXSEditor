@@ -420,30 +420,42 @@ function showLoadFailed(container) {
     container.appendChild(noData);
 }
 
+let _loadDataPromise = null;
+
 async function loadData() {
-    try {
-        const [gpuResult, modelResult] = await Promise.all([
-            window.electronAPI.resmgrGetGPUInfo(),
-            window.electronAPI.resmgrGetModelGroups(),
-        ]);
+    if (_loadDataPromise) return _loadDataPromise;
+    setBtnLoading(refreshBtn, true, t('resourceManager.loading'));
 
-        if (gpuResult.success) {
-            renderGPUInfo(gpuResult.gpus);
-        } else {
+    _loadDataPromise = (async () => {
+        try {
+            const [gpuResult, modelResult] = await Promise.all([
+                window.electronAPI.resmgrGetGPUInfo(),
+                window.electronAPI.resmgrGetModelGroups(),
+            ]);
+
+            if (gpuResult.success) {
+                renderGPUInfo(gpuResult.gpus);
+            } else {
+                showLoadFailed(gpuInfoContent);
+            }
+
+            if (modelResult.success) {
+                renderModelGroups(modelResult.groups);
+                renderSummary(modelResult.groups, gpuResult.success ? gpuResult.gpus : []);
+            } else {
+                showLoadFailed(modelGroupsContent);
+            }
+        } catch (err) {
+            console.error('加载数据失败:', err);
             showLoadFailed(gpuInfoContent);
-        }
-
-        if (modelResult.success) {
-            renderModelGroups(modelResult.groups);
-            renderSummary(modelResult.groups, gpuResult.success ? gpuResult.gpus : []);
-        } else {
             showLoadFailed(modelGroupsContent);
+        } finally {
+            setBtnLoading(refreshBtn, false);
+            _loadDataPromise = null;
         }
-    } catch (err) {
-        console.error('加载数据失败:', err);
-        showLoadFailed(gpuInfoContent);
-        showLoadFailed(modelGroupsContent);
-    }
+    })();
+
+    return _loadDataPromise;
 }
 
 // #7: 自动刷新也刷新模型状态

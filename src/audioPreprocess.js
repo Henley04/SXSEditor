@@ -412,17 +412,9 @@ async function initPianoRoll() {
     dpr: window.devicePixelRatio || 1,
 
     _initEvents() {
-      window.addEventListener('resize', debounce(() => this._resize(), 100));
-      this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
-      this.canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
-      document.addEventListener('mouseup', () => this._onMouseUp());
-      this.canvas.addEventListener('mouseleave', () => {
-        this.hoverNoteId = null;
-        this.canvas.style.cursor = 'default';
-      });
-      this.canvas.addEventListener('dblclick', (e) => this._onDoubleClick(e));
-      this.canvas.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
-      document.addEventListener('keydown', (e) => {
+      this._boundResize = debounce(() => this._resize(), 100);
+      this._boundMouseUp = () => this._onMouseUp();
+      this._boundKeyDown = (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
         if (e.key === 'Delete' || e.key === 'Backspace') {
           if (this.selectedNoteId !== null) {
@@ -432,7 +424,24 @@ async function initPianoRoll() {
             updateMidiInfo();
           }
         }
+      };
+      window.addEventListener('resize', this._boundResize);
+      this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
+      this.canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
+      document.addEventListener('mouseup', this._boundMouseUp);
+      this.canvas.addEventListener('mouseleave', () => {
+        this.hoverNoteId = null;
+        this.canvas.style.cursor = 'default';
       });
+      this.canvas.addEventListener('dblclick', (e) => this._onDoubleClick(e));
+      this.canvas.addEventListener('wheel', (e) => this._onWheel(e), { passive: false });
+      document.addEventListener('keydown', this._boundKeyDown);
+    },
+
+    destroy() {
+      window.removeEventListener('resize', this._boundResize);
+      document.removeEventListener('mouseup', this._boundMouseUp);
+      document.removeEventListener('keydown', this._boundKeyDown);
     },
 
     _resize() {
@@ -1665,3 +1674,7 @@ window.addEventListener('DOMContentLoaded', async () => {
 initI18n();
 applyLocale();
 document.documentElement.lang = getLocale();
+
+window.addEventListener('beforeunload', () => {
+  if (pianoRoll && pianoRoll.destroy) pianoRoll.destroy();
+});

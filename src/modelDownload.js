@@ -2,6 +2,7 @@ import './common.css';
 import './modelDownload.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { formatBytes } from './utils/formatBytes.js';
+import { showConfirmDialog } from './alertDialog.js';
 
 const missingFiles = [];
 const fileStates = {};
@@ -273,7 +274,7 @@ document.querySelectorAll('input[name="modelPrecision"]').forEach(radio => {
     const newPrecision = e.target.value;
     if (newPrecision === currentPrecision) return;
 
-    const confirmed = confirm(t('modelDownload.precisionChangeConfirm'));
+    const confirmed = await showConfirmDialog(t('modelDownload.precisionChangeConfirm'));
     if (!confirmed) {
       // 恢复原来的选择
       const prevRadio = document.querySelector(`input[name="modelPrecision"][value="${currentPrecision}"]`);

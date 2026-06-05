@@ -25,6 +25,8 @@ try {
   }
 } catch (e) {
   naudio = null;
+  console.warn('[AudioWorker] naudiodon 加载失败:', e.message);
+  console.warn(`[AudioWorker] 环境: Node ${process.version}, 平台 ${process.platform}, 架构 ${process.arch}`);
 }
 
 function handleGetDevices() {

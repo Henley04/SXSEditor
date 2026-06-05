@@ -508,7 +508,17 @@ const PHONEME_COLORS = [
   '#38bdf8', '#fb923c', '#e879f9', '#34d399', '#f472b6',
 ];
 
+const PHONEME_CACHE_MAX = 500;
 const phonemeCache = new Map();
+
+function trimPhonemeCache() {
+  if (phonemeCache.size > PHONEME_CACHE_MAX) {
+    const keys = [...phonemeCache.keys()];
+    for (let i = 0; i < keys.length - PHONEME_CACHE_MAX + 200; i++) {
+      phonemeCache.delete(keys[i]);
+    }
+  }
+}
 
 function resolvePhonemes(lyric) {
   if (!lyric || lyric.trim().length === 0) return [{ name: '<SP>', display: 'SP' }];
@@ -525,10 +535,18 @@ async function resolvePhonemesFromPipeline() {
   try {
     if (window.electronAPI?.resolvePhonemes) {
       const results = await window.electronAPI.resolvePhonemes(toResolve);
+      let changed = false;
       for (let i = 0; i < toResolve.length; i++) {
-        phonemeCache.set(toResolve[i], results[i]);
+        const lyric = toResolve[i];
+        const phonemes = results[i];
+        const isFallback = phonemes.length === 1 && phonemes[0].name === lyric;
+        if (!isFallback) {
+          phonemeCache.set(lyric, phonemes);
+          changed = true;
+        }
       }
-      render();
+      trimPhonemeCache();
+      if (changed) render();
     }
   } catch (err) {
     console.warn('音素解析失败:', err);
@@ -851,9 +869,9 @@ function handlePhonemeMouseDown(e, pos) {
 
     const boundaries = [];
     let bx = noteStartX;
-    for (let i = 0; i < adjustments.length; i++) {
+    for (let i = 0; i < adjustments.length - 1; i++) {
       bx += noteWidth * adjustments[i].durationRatio;
-      if (i > 0) boundaries.push({ x: bx, index: i });
+      boundaries.push({ x: bx, index: i + 1 });
     }
 
     const BOUNDARY_ZONE = 10;
@@ -1604,6 +1622,7 @@ document.querySelectorAll('[id^="btn-param-"]').forEach(btn => {
       currentParamMode = PARAM_MODES[mode] || mode;
     }
     updateParamModeButtons();
+    if (currentParamMode === 'Phoneme') resolvePhonemesFromPipeline();
     render();
   });
 });
@@ -1678,12 +1697,14 @@ if (shortcutsOverlay) {
 const btnPlayFragment = document.getElementById('btn-play-fragment');
 const btnExportFragment = document.getElementById('btn-export-fragment');
 
-window.electronAPI.onFragmentSVSProgress((progress) => {
+const _ipcCleanups = [];
+const _cleanupProgress = window.electronAPI.onFragmentSVSProgress((progress) => {
   if (fragmentIsSynthesizing) {
     btnPlayFragment.textContent = t('fragment.synthesizingProgress', { progress });
     btnExportFragment.textContent = t('fragment.exportingProgress', { progress });
   }
 });
+if (_cleanupProgress) _ipcCleanups.push(_cleanupProgress);
 
 btnPlayFragment.addEventListener('click', async () => {
   if (notes.length === 0) {
@@ -2459,9 +2480,9 @@ canvas.addEventListener('mousemove', (e) => {
           const adjustments = getPhonemeAdjustments(note);
           if (!adjustments || adjustments.length === 0) continue;
           let bx = noteStartX;
-          for (let i = 0; i < adjustments.length; i++) {
+          for (let i = 0; i < adjustments.length - 1; i++) {
             bx += (noteEndX - noteStartX) * adjustments[i].durationRatio;
-            if (i > 0 && Math.abs(pos.x - bx) < BOUNDARY_ZONE) {
+            if (Math.abs(pos.x - bx) < BOUNDARY_ZONE) {
               canvas.style.cursor = 'ew-resize';
               return;
             }
@@ -2692,6 +2713,7 @@ function startInlineEdit(note, hit) {
 
   const input = document.createElement('input');
   input.type = 'text';
+  input.maxLength = 256;
   input.value = note.lyric || '';
   input.style.cssText = `
     position: absolute;
@@ -3010,6 +3032,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === '5') {
     currentParamMode = 'Phoneme';
     updateParamModeButtons();
+    resolvePhonemesFromPipeline();
     render();
     return;
   }
@@ -3226,18 +3249,20 @@ async function handleFragmentData(data) {
     wavFileBuffer = data.wavBuffer;
   }
 
+  phonemeCache.clear();
   resizeCanvases();
-  resolvePhonemesFromPipeline();
+  await resolvePhonemesFromPipeline();
 }
 
 if (window.electronAPI?.onLoadFragment) {
-  window.electronAPI.onLoadFragment(async (data) => {
+  const cleanup = window.electronAPI.onLoadFragment(async (data) => {
     await handleFragmentData(data);
   });
+  if (cleanup) _ipcCleanups.push(cleanup);
 }
 
 if (window.electronAPI?.onFragmentBoundsChanged) {
-  window.electronAPI.onFragmentBoundsChanged((data) => {
+  const cleanup = window.electronAPI.onFragmentBoundsChanged((data) => {
     const { fragmentId, startTime, duration } = data;
     if (currentFragment && currentFragment.id === fragmentId) {
       if (startTime !== undefined) currentFragment.startTime = startTime;
@@ -3245,15 +3270,17 @@ if (window.electronAPI?.onFragmentBoundsChanged) {
       render();
     }
   });
+  if (cleanup) _ipcCleanups.push(cleanup);
 }
 
 if (window.electronAPI?.onProjectSettingsChanged) {
-  window.electronAPI.onProjectSettingsChanged((data) => {
+  const cleanup = window.electronAPI.onProjectSettingsChanged((data) => {
     if (currentProject) {
       if (data.bpm !== undefined) currentProject.bpm = data.bpm;
       if (data.timeSignature !== undefined) currentProject.timeSignature = data.timeSignature;
     }
   });
+  if (cleanup) _ipcCleanups.push(cleanup);
 }
 
 (async () => {
@@ -3278,6 +3305,10 @@ document.documentElement.lang = getLocale();
 console.log(t('fragment.consoleStarted'));
 
 window.addEventListener('beforeunload', () => {
+  for (const cleanup of _ipcCleanups) {
+    try { cleanup(); } catch (_) {}
+  }
+  _ipcCleanups.length = 0;
   if (autoSaveTimer) {
     clearTimeout(autoSaveTimer);
     autoSaveTimer = null;

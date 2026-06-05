@@ -79,3 +79,81 @@ export function showAlertDialog(message, onClose) {
     okBtn.focus();
   });
 }
+
+/**
+ * 显示非阻塞的 confirm 对话框，替代原生 confirm()
+ * @param {string} message - 要显示的消息
+ * @returns {Promise<boolean>} 用户是否点击了确认
+ */
+export function showConfirmDialog(message) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = `
+      background: #2d2d2d;
+      border: 1px solid #555;
+      border-radius: 8px;
+      padding: 20px;
+      min-width: 280px;
+      max-width: 420px;
+      color: #fff;
+    `;
+
+    dialog.innerHTML = `
+      <div style="margin-bottom: 16px; line-height: 1.5; white-space: pre-wrap;">${escapeHtml(message)}</div>
+      <div style="display: flex; justify-content: flex-end; gap: 8px;">
+        <button class="confirm-cancel-btn" style="
+          padding: 6px 20px;
+          background: #555;
+          border: none;
+          border-radius: 4px;
+          color: #fff;
+          cursor: pointer;
+        ">${t('common.cancel') || 'Cancel'}</button>
+        <button class="confirm-ok-btn" style="
+          padding: 6px 20px;
+          background: #e74c3c;
+          border: none;
+          border-radius: 4px;
+          color: #fff;
+          cursor: pointer;
+        ">${t('common.confirm') || 'OK'}</button>
+      </div>
+    `;
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    const okBtn = dialog.querySelector('.confirm-ok-btn');
+    const cancelBtn = dialog.querySelector('.confirm-cancel-btn');
+
+    const close = (result) => {
+      if (overlay.parentElement) overlay.remove();
+      resolve(result);
+    };
+
+    okBtn.addEventListener('click', () => close(true));
+    cancelBtn.addEventListener('click', () => close(false));
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); close(true); }
+      if (e.key === 'Escape') { e.preventDefault(); close(false); }
+    });
+
+    requestAnimationFrame(() => {
+      cancelBtn.focus();
+    });
+  });
+}

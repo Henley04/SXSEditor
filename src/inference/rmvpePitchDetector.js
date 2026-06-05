@@ -2,25 +2,8 @@ const path = require('node:path');
 const ort = require('onnxruntime-node');
 const { resampleAudio } = require('../utils/resampleAudio');
 
-// 修复 onnxruntime-common 的 float16 类型映射
-// Node.js v24+ 原生支持 Float16Array，但 onnxruntime-node 的 native binding (C++)
-// 无法识别 Float16Array 的 buffer，导致 "not enough space" 错误。
-// 解决方案：强制 float16 使用 Uint16Array 存储数据。
-(function patchFloat16Mapping() {
-    if (typeof Float16Array === 'undefined') return;
-    try {
-        try { new ort.Tensor('float16', new Uint16Array(1), [1]); } catch (_) {}
-        for (const [key, mod] of Object.entries(require.cache)) {
-            if (key.includes('onnxruntime-common') && key.includes('tensor-impl-type-mapping')) {
-                if (mod.exports && mod.exports.NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP) {
-                    mod.exports.NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP.set('float16', Uint16Array);
-                    console.log('[RmvpePitchDetector] float16 类型映射已修复 (Uint16Array)');
-                }
-                break;
-            }
-        }
-    } catch (_) {}
-})();
+// float16 patch 由 nativeSvsPipeline.js 统一执行，此处不再重复
+let _noteIdCounter = 0;
 
 // Float32 <-> Float16 转换工具
 function float32ToF16Buffer(f32Data) {
@@ -70,6 +53,7 @@ class RmvpePitchDetector {
     this.session = null;
     this.initialized = false;
     this.isFP16 = false;
+    this.usingDML = false;
   }
 
   async init() {
@@ -107,11 +91,13 @@ class RmvpePitchDetector {
           enableCpuMemArena: true,
         };
         this.session = await ort.InferenceSession.create(modelPath, dmlOptions);
+        this.usingDML = true;
         const deviceTag = typeof this.deviceId === 'number' ? ` [DML deviceId=${this.deviceId}]` : ' [DML]';
         console.log(`[RmvpePitchDetector] 模型加载成功${deviceTag}`);
       } catch (dmlErr) {
         console.log('[RmvpePitchDetector] DirectML不可用，回退到CPU:', dmlErr.message);
         this.session = await ort.InferenceSession.create(modelPath, sessionOptions);
+        this.usingDML = false;
         console.log('[RmvpePitchDetector] 模型加载成功 [CPU]');
       }
       
@@ -312,7 +298,7 @@ class RmvpePitchDetector {
     const noteDurationBeats = duration / beatDuration;
 
     return {
-      id: Date.now() + Math.random(),
+      id: ++_noteIdCounter,
       pitch: midiPitch,
       start: startTime / beatDuration,
       duration: noteDurationBeats,

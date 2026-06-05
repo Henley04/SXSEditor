@@ -57,12 +57,13 @@ Other inference modules:
 
 - `trackManager.js` — Multi-track timeline with fragment arrangement
 - `pianoRoll.js` — Canvas-based piano roll (notes, lyrics, pitch curves, envelopes)
-- `envelopeEditor.js` — Volume/pan/F0 parameter curve editing
+- `envelopeEditor.js` — Volume/pan/F0 parameter curve editing (with destroy() cleanup)
 - `historyManager.js` — Undo/redo (up to 200 steps)
 
 ### Audio (`src/audio/`)
 
-- `audioOutputManager.js` — WASAPI audio output via naudiodon
+- `audioOutputManager.js` — WASAPI audio output via naudiodon (optional native module)
+- GPU info via `systeminformation` (replaced `@oxmc/node-gpuinfo`)
 - `wavEncoder.js` — WAV file encoding (24kHz)
 - `audioWorker.js` — Audio processing worker thread
 

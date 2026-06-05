@@ -244,4 +244,33 @@ describe('MIDI Parser', () => {
     });
     expect(() => parseMidiFile(buffer)).to.throw('No notes found');
   });
+
+  it('should handle truncated MIDI file gracefully', () => {
+    const buffer = buildMidiBuffer({
+      ticksPerBeat: 480,
+      notes: [{ midi: 60, startTicks: 0, durationTicks: 480, velocity: 100 }],
+    });
+    // Truncate the buffer
+    const truncated = buffer.slice(0, Math.floor(buffer.length / 2));
+    expect(() => parseMidiFile(truncated)).to.throw();
+  });
+
+  it('should handle empty buffer', () => {
+    const buffer = new ArrayBuffer(0);
+    expect(() => parseMidiFile(buffer)).to.throw();
+  });
+
+  it('should handle buffer with only header', () => {
+    const buffer = new ArrayBuffer(14);
+    const view = new DataView(buffer);
+    view.setUint8(0, 0x4d); // M
+    view.setUint8(1, 0x54); // T
+    view.setUint8(2, 0x68); // h
+    view.setUint8(3, 0x64); // d
+    view.setUint32(4, 6, false); // header length
+    view.setUint16(8, 0, false); // format
+    view.setUint16(10, 0, false); // num tracks
+    view.setUint16(12, 480, false); // ticks per beat
+    expect(() => parseMidiFile(buffer)).to.throw('No notes found');
+  });
 });

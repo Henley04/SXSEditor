@@ -3,6 +3,8 @@ const tf = require('@tensorflow/tfjs');
 require('@tensorflow/tfjs-backend-wasm');
 const { resampleAudio } = require('../utils/resampleAudio');
 
+let _noteIdCounter = 0;
+
 const BASIC_PITCH_SAMPLE_RATE = 22050;
 const CONTOUR_BINS_PER_SEMITONE = 1;
 const ANNOTATIONS_FPS = Math.floor(BASIC_PITCH_SAMPLE_RATE / 256);
@@ -436,14 +438,15 @@ class BasicPitchDetector {
       throw err;
     }
 
+    const baseUrl = await this._startLocalServer();
     try {
-      const baseUrl = await this._startLocalServer();
       this.model = await tf.loadGraphModel(`${baseUrl}/model.json`);
       this.initialized = true;
       console.log('[BasicPitchDetector] 模型加载成功');
       return true;
     } catch (err) {
       console.error('[BasicPitchDetector] 模型加载失败:', err.message);
+      if (this._server) { this._server.close(); this._server = null; this._serverPort = null; }
       err.modelPath = modelJsonPath;
       throw err;
     }
@@ -511,58 +514,60 @@ class BasicPitchDetector {
 
     const batchSize = reshapedInput.shape[0];
 
-    for (let i = 0; i < batchSize; ++i) {
-      console.log(`[BasicPitchDetector] 处理帧: ${i + 1}/${batchSize}`);
+    try {
+      for (let i = 0; i < batchSize; ++i) {
+        console.log(`[BasicPitchDetector] 处理帧: ${i + 1}/${batchSize}`);
 
-      const singleBatch = tf.slice(reshapedInput, [i, 0, 0], [1, -1, -1]);
-      const model = await this.model;
-      const results = model.execute(singleBatch, ['Identity_1', 'Identity_2', 'Identity']);
+        const singleBatch = tf.slice(reshapedInput, [i, 0, 0], [1, -1, -1]);
+        const model = await this.model;
+        const results = model.execute(singleBatch, ['Identity_1', 'Identity_2', 'Identity']);
 
-      let unwrappedResultingFrames = this.unwrapOutput(results[0]);
-      let unwrappedResultingOnsets = this.unwrapOutput(results[1]);
-      let unwrappedResultingContours = this.unwrapOutput(results[2]);
+        let unwrappedResultingFrames = this.unwrapOutput(results[0]);
+        let unwrappedResultingOnsets = this.unwrapOutput(results[1]);
+        let unwrappedResultingContours = this.unwrapOutput(results[2]);
 
-      const calculatedFramesTmp = unwrappedResultingFrames.shape[0];
+        const calculatedFramesTmp = unwrappedResultingFrames.shape[0];
 
-      if (calculatedFrames >= nOutputFramesOriginal) {
+        if (calculatedFrames >= nOutputFramesOriginal) {
+          singleBatch.dispose();
+          results.forEach(t => t.dispose());
+          unwrappedResultingFrames.dispose();
+          unwrappedResultingOnsets.dispose();
+          unwrappedResultingContours.dispose();
+          continue;
+        }
+
+        if (calculatedFramesTmp + calculatedFrames >= nOutputFramesOriginal) {
+          const framesToOutput = nOutputFramesOriginal - calculatedFrames;
+          const slicedFrames = unwrappedResultingFrames.slice([0, 0], [framesToOutput, -1]);
+          const slicedOnsets = unwrappedResultingOnsets.slice([0, 0], [framesToOutput, -1]);
+          const slicedContours = unwrappedResultingContours.slice([0, 0], [framesToOutput, -1]);
+
+          allFrames.push(slicedFrames.arraySync());
+          allOnsets.push(slicedOnsets.arraySync());
+          allContours.push(slicedContours.arraySync());
+
+          slicedFrames.dispose();
+          slicedOnsets.dispose();
+          slicedContours.dispose();
+        } else {
+          allFrames.push(unwrappedResultingFrames.arraySync());
+          allOnsets.push(unwrappedResultingOnsets.arraySync());
+          allContours.push(unwrappedResultingContours.arraySync());
+        }
+
+        calculatedFrames += calculatedFramesTmp;
+
         singleBatch.dispose();
         results.forEach(t => t.dispose());
         unwrappedResultingFrames.dispose();
         unwrappedResultingOnsets.dispose();
         unwrappedResultingContours.dispose();
-        continue;
       }
-
-      if (calculatedFramesTmp + calculatedFrames >= nOutputFramesOriginal) {
-        const framesToOutput = nOutputFramesOriginal - calculatedFrames;
-        const slicedFrames = unwrappedResultingFrames.slice([0, 0], [framesToOutput, -1]);
-        const slicedOnsets = unwrappedResultingOnsets.slice([0, 0], [framesToOutput, -1]);
-        const slicedContours = unwrappedResultingContours.slice([0, 0], [framesToOutput, -1]);
-
-        allFrames.push(slicedFrames.arraySync());
-        allOnsets.push(slicedOnsets.arraySync());
-        allContours.push(slicedContours.arraySync());
-
-        slicedFrames.dispose();
-        slicedOnsets.dispose();
-        slicedContours.dispose();
-      } else {
-        allFrames.push(unwrappedResultingFrames.arraySync());
-        allOnsets.push(unwrappedResultingOnsets.arraySync());
-        allContours.push(unwrappedResultingContours.arraySync());
-      }
-
-      calculatedFrames += calculatedFramesTmp;
-
-      singleBatch.dispose();
-      results.forEach(t => t.dispose());
-      unwrappedResultingFrames.dispose();
-      unwrappedResultingOnsets.dispose();
-      unwrappedResultingContours.dispose();
+    } finally {
+      reshapedInput.dispose();
+      wavSamples.dispose();
     }
-
-    reshapedInput.dispose();
-    wavSamples.dispose();
 
     const frames = allFrames.flat();
     const onsets = allOnsets.flat();
@@ -634,7 +639,7 @@ class BasicPitchDetector {
 
       if (pitch >= 24 && pitch <= 108) {
         midiNotes.push({
-          id: Date.now() + Math.random(),
+          id: ++_noteIdCounter,
           pitch,
           start,
           duration,

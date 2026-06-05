@@ -123,6 +123,7 @@ async function checkMissingFilesAsync(modelDir) {
 }
 
 function deleteModelFiles(modelDir) {
+  if (!modelDir || typeof modelDir !== 'string') return { deleted: [], errors: [] };
   const deleted = [];
   const errors = [];
 
@@ -268,12 +269,33 @@ function httpRequest(urlStr, options = {}) {
   });
 }
 
+const ALLOWED_DOWNLOAD_HOSTS = [
+  'modelscope.cn',
+  'www.modelscope.cn',
+  'cdn.modelscope.cn',
+  'github.com',
+  'raw.githubusercontent.com',
+  'objects.githubusercontent.com',
+];
+
+function isAllowedDownloadHost(urlStr) {
+  try {
+    const host = new URL(urlStr).hostname;
+    return ALLOWED_DOWNLOAD_HOSTS.some(allowed => host === allowed || host.endsWith('.' + allowed));
+  } catch (_) {
+    return false;
+  }
+}
+
 async function resolveRedirects(url, maxRedirects = 5) {
   let currentUrl = url;
   for (let i = 0; i < maxRedirects; i++) {
     const { redirectUrl, response } = await httpRequest(currentUrl, { method: 'GET', timeout: 10000 });
     if (!redirectUrl) {
       return { finalUrl: currentUrl, response };
+    }
+    if (!isAllowedDownloadHost(redirectUrl)) {
+      throw new Error(`重定向目标不允许: ${redirectUrl}`);
     }
     currentUrl = redirectUrl;
   }
