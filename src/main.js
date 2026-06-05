@@ -100,7 +100,7 @@ function loadMainLocale() {
         mainLocale = data.locale;
       }
     }
-  } catch (_) {}
+  } catch (err) { console.warn('[Main] 加载 locale 配置失败:', err.message); }
 }
 
 function t(key, params) {
@@ -136,6 +136,9 @@ let svsPipeline = null;
 let rmvpeDetector = null;
 let basicPitchDetector = null;
 let rosvotDetector = null;
+let _rmvpeInitPromise = null;
+let _basicPitchInitPromise = null;
+let _rosvotInitPromise = null;
 let mainWindow = null;
 let settingsWindow = null;
 let resourceManagerWindow = null;
@@ -158,6 +161,13 @@ function authorizePath(filePath) {
     dialogAuthorizedPaths.add(path.resolve(filePath));
     const dir = path.dirname(path.resolve(filePath));
     dialogAuthorizedPaths.add(dir);
+    if (dialogAuthorizedPaths.size > 1000) {
+      const entries = [...dialogAuthorizedPaths];
+      dialogAuthorizedPaths.clear();
+      for (let i = Math.floor(entries.length / 2); i < entries.length; i++) {
+        dialogAuthorizedPaths.add(entries[i]);
+      }
+    }
   }
 }
 
@@ -284,6 +294,8 @@ const createWindow = () => {
   });
 
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+  mainWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   if (isDev) {
     mainWindow.webContents.openDevTools();
@@ -343,6 +355,8 @@ function openSettingsWindow() {
   });
 
   settingsWindow.loadURL(SETTINGS_WINDOW_WEBPACK_ENTRY);
+  settingsWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  settingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   settingsWindow.on('closed', () => {
     settingsWindow = null;
@@ -374,30 +388,106 @@ function openResourceManagerWindow() {
 
   resourceManagerWindow.loadURL(RESOURCE_MANAGER_WINDOW_WEBPACK_ENTRY);
   resourceManagerWindow.setMenu(null);
+  resourceManagerWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  resourceManagerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   resourceManagerWindow.on('closed', () => {
     resourceManagerWindow = null;
   });
 }
 
-async function queryGPUVRAMUsage() {
-  try {
-    const gpu = require('@oxmc/node-gpuinfo');
-    const count = gpu.getGpuCount();
-    if (count <= 0) return [];
+const { Worker } = require('node:worker_threads');
 
-    const allInfo = gpu.getAllGpuInfo();
-    return allInfo.map((info, idx) => ({
+// GPU 信息后台缓存
+let _gpuInfoCache = null;
+let _gpuInfoPending = null;
+
+function startGPUPreload() {
+  _gpuInfoPending = new Promise((resolve) => {
+    try {
+      const worker = new Worker(path.join(__dirname, 'utils/gpuWorker.js'));
+      worker.once('message', (msg) => {
+        if (msg.success) {
+          _gpuInfoCache = msg.data;
+          console.log(`[Main] GPU 信息预加载完成: ${msg.data.length} 个设备`);
+        } else {
+          console.warn('[Main] GPU 信息预加载失败:', msg.error);
+        }
+        resolve();
+      });
+      worker.once('error', (err) => {
+        console.warn('[Main] GPU worker 错误:', err.message);
+        resolve();
+      });
+    } catch (e) {
+      console.warn('[Main] GPU worker 启动失败:', e.message);
+      resolve();
+    }
+  });
+}
+
+async function ensureGPUInfo() {
+  if (_gpuInfoCache) return _gpuInfoCache;
+  if (_gpuInfoPending) {
+    await _gpuInfoPending;
+    return _gpuInfoCache;
+  }
+  // 兜底：同步加载
+  try {
+    const si = require('systeminformation');
+    const graphics = await si.graphics();
+    const controllers = graphics.controllers || [];
+    _gpuInfoCache = controllers.map((c, idx) => ({
       adapterIndex: idx,
-      name: info.name || '',
-      totalBytes: (info.memoryTotal || 0) * 1024 * 1024, // MB → Bytes
-      usageBytes: (info.memoryUsed || 0) * 1024 * 1024,
-      budgetBytes: (info.memoryTotal || 0) * 1024 * 1024,
+      model: c.model || '',
+      vram: c.vram || 0,
+      memoryTotal: c.memoryTotal || c.vram || 0,
+      memoryUsed: c.memoryUsed || 0,
+      vendor: c.vendor || '',
+      isDiscrete: (c.memoryTotal || c.vram || 0) >= 512,
     }));
   } catch (e) {
-    console.warn('[Main] node-gpuinfo VRAM 查询失败:', e.message);
-    return [];
+    _gpuInfoCache = [];
   }
+  return _gpuInfoCache;
+}
+
+let _vramUsageCache = null;
+let _vramUsageCacheTime = 0;
+let _vramUsagePromise = null;
+const VRAM_USAGE_TTL = 3000;
+
+async function queryGPUVRAMUsage() {
+  const now = Date.now();
+  if (_vramUsageCache && now - _vramUsageCacheTime < VRAM_USAGE_TTL) {
+    return _vramUsageCache;
+  }
+  if (_vramUsagePromise) return _vramUsagePromise;
+
+  _vramUsagePromise = (async () => {
+    try {
+      const si = require('systeminformation');
+      const graphics = await si.graphics();
+      const controllers = graphics.controllers || [];
+      const result = controllers.map((c, idx) => ({
+        adapterIndex: idx,
+        name: c.model || '',
+        totalBytes: (c.memoryTotal || c.vram || 0) * 1024 * 1024,
+        usageBytes: (c.memoryUsed || 0) * 1024 * 1024,
+        budgetBytes: (c.memoryTotal || c.vram || 0) * 1024 * 1024,
+      }));
+      _vramUsageCache = result;
+      _vramUsageCacheTime = Date.now();
+      return result;
+    } catch (e) {
+      console.warn('[Main] GPU 信息获取失败:', e.message);
+      return [];
+    } finally {
+      _vramUsagePromise = null;
+    }
+  })();
+
+  return _vramUsagePromise;
 }
 
 let modelDownloadWindow = null;
@@ -434,6 +524,8 @@ function createModelDownloadWindow(missingFiles, precision) {
 
   modelDownloadWindow.loadURL(MODEL_DOWNLOAD_WINDOW_WEBPACK_ENTRY);
   modelDownloadWindow.setMenu(null);
+  modelDownloadWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  modelDownloadWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   modelDownloadWindow.webContents.once('did-finish-load', () => {
     modelDownloadWindow.webContents.send('model-download:missing-files', missingFiles);
@@ -497,7 +589,7 @@ async function startModelDownload(modelDir, missingFiles, precision) {
 async function checkAndDownloadModels() {
   if (app.isPackaged) {
     const settings = loadSettings();
-    if (settings.modelDir && typeof settings.modelDir === 'string') {
+    if (settings.modelDir && typeof settings.modelDir === 'string' && isPathAllowed(settings.modelDir)) {
       try {
         fs.mkdirSync(settings.modelDir, { recursive: true });
         customModelDir = settings.modelDir;
@@ -651,8 +743,12 @@ app.on('second-instance', () => {
 app.whenReady().then(() => {
   loadMainLocale();
   createWindow();
-  // 预加载GPU设备枚举，避免首次设置页面打开时阻塞
-  enumerateDMLDevices(getModelDir()).then(devices => {
+  // 后台线程预加载GPU信息，不阻塞主线程
+  startGPUPreload();
+  // 等待GPU信息加载完成后再枚举DML设备
+  ensureGPUInfo().then(controllers => {
+    return enumerateDMLDevices(getModelDir(), controllers);
+  }).then(devices => {
     cachedDMLDevices = devices;
     console.log(`[Main] GPU设备预加载完成: ${devices.length} 个设备`);
   }).catch(err => {
@@ -684,8 +780,8 @@ app.on('before-quit', () => {
   if (rmvpeDetector) { try { rmvpeDetector.dispose(); } catch (_) {} rmvpeDetector = null; }
   if (basicPitchDetector) { try { basicPitchDetector.dispose(); } catch (_) {} basicPitchDetector = null; }
   if (rosvotDetector) { try { rosvotDetector.dispose(); } catch (_) {} rosvotDetector = null; }
-  if (_audioManager) { try { _audioManager.stop(); } catch (_) {} }
-  if (_fragmentAudioManager) { try { _fragmentAudioManager.stop(); } catch (_) {} }
+  if (_audioManager) { try { _audioManager.destroy(); } catch (_) {} _audioManager = null; }
+  if (_fragmentAudioManager) { try { _fragmentAudioManager.destroy(); } catch (_) {} _fragmentAudioManager = null; }
   for (const id in fragmentWindows) {
     if (fragmentWindows[id] && !fragmentWindows[id].isDestroyed()) {
       fragmentWindows[id].destroy();
@@ -803,7 +899,8 @@ ipcMain.handle('settings:getDMLDevices', async () => {
     if (!cachedDMLDevices) {
       const modelDir = getModelDir();
       console.log('[Main] 枚举 DML 设备，模型目录:', modelDir);
-      cachedDMLDevices = await enumerateDMLDevices(modelDir);
+      const controllers = await ensureGPUInfo();
+      cachedDMLDevices = await enumerateDMLDevices(modelDir, controllers);
     }
     return cachedDMLDevices;
   } catch (err) {
@@ -844,9 +941,21 @@ ipcMain.on('close-confirmed', () => {
   }
 });
 
+const ALLOWED_SETTINGS_KEYS = [
+  'deviceId', 'modelDir', 'modelPrecision', 'midiExtractTool', 'useRosvot',
+  'previewDiffSteps', 'previewCfgStrength', 'previewCfgRescale',
+  'exportDiffSteps', 'exportCfgStrength', 'exportCfgRescale',
+  'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth',
+  'audioBufferSize', 'audioVolume', 'locale',
+];
+
 ipcMain.handle('settings:saveSettings', async (event, settings) => {
   const current = loadSettings();
-  const merged = { ...current, ...settings };
+  const filtered = {};
+  for (const key of ALLOWED_SETTINGS_KEYS) {
+    if (settings[key] !== undefined) filtered[key] = settings[key];
+  }
+  const merged = { ...current, ...filtered };
   await saveSettingsFile(merged);
 
   if (settings.locale && mainLocales[settings.locale]) {
@@ -892,11 +1001,12 @@ ipcMain.handle('get-locale', async () => {
 
 ipcMain.handle('save-locale', async (event, locale) => {
   try {
+    if (typeof locale !== 'string' || !mainLocales[locale]) {
+      return { success: false, error: 'Invalid locale' };
+    }
     const configPath = path.join(app.getPath('userData'), 'sxseditor-locale.json');
     await fs.promises.writeFile(configPath, JSON.stringify({ locale }), 'utf8');
-    if (mainLocales[locale]) {
-      mainLocale = locale;
-    }
+    mainLocale = locale;
     return { success: true };
   } catch (err) {
     return { success: false, error: err.message };
@@ -937,7 +1047,9 @@ ipcMain.handle('openFragmentEditor', async (event, { fragment, project, wavBuffe
     },
   });
 
-  fragmentWindow.loadURL(`${FRAGMENT_EDITOR_WINDOW_WEBPACK_ENTRY}#fragmentId=${fragment.id}`);
+  fragmentWindow.loadURL(`${FRAGMENT_EDITOR_WINDOW_WEBPACK_ENTRY}#fragmentId=${encodeURIComponent(fragment.id)}`);
+  fragmentWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  fragmentWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   if (isDev) {
     fragmentWindow.webContents.openDevTools();
   }
@@ -1026,6 +1138,8 @@ ipcMain.handle('openSingerCreator', async () => {
   });
 
   singerCreatorWindow.loadURL(SINGER_CREATOR_WINDOW_WEBPACK_ENTRY);
+  singerCreatorWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  singerCreatorWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   singerCreatorWindow.on('closed', () => {
     singerCreatorWindow = null;
@@ -1064,6 +1178,8 @@ ipcMain.handle('openAudioPreprocess', async (event, data) => {
   });
 
   audioPreprocessWindow.loadURL(AUDIO_PREPROCESS_WINDOW_WEBPACK_ENTRY);
+  audioPreprocessWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  audioPreprocessWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   audioPreprocessWindow.webContents.once('did-finish-load', () => {
     audioPreprocessWindow.webContents.send('loadPreprocessData', { data: pendingPreprocessData, wavBuffer: preprocessWavBuffer });
@@ -1335,16 +1451,25 @@ ipcMain.handle('fragment-svs:resolvePhonemes', async (event, { lyrics }) => {
 ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate }) => {
   try {
     if (!rmvpeDetector) {
-      const modelPath = getModelDir();
-      const settings = loadSettings();
-      const deviceId = settings.deviceId ?? undefined;
-      console.log(`[Main] 初始化 RMVPE Pitch Detector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
-      try {
-        rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
-        await rmvpeDetector.init();
-      } catch (err) {
-        rmvpeDetector = null;
-        throw err;
+      if (_rmvpeInitPromise) {
+        await _rmvpeInitPromise;
+      } else {
+        const modelPath = getModelDir();
+        const settings = loadSettings();
+        const deviceId = settings.deviceId ?? undefined;
+        console.log(`[Main] 初始化 RMVPE Pitch Detector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+        _rmvpeInitPromise = (async () => {
+          try {
+            rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
+            await rmvpeDetector.init();
+          } catch (err) {
+            rmvpeDetector = null;
+            throw err;
+          } finally {
+            _rmvpeInitPromise = null;
+          }
+        })();
+        await _rmvpeInitPromise;
       }
     }
 
@@ -1367,16 +1492,25 @@ ipcMain.handle('extractMidi:rosvot', async (event, { audioData, sampleRate, bpm 
   try {
     // 先用 RMVPE 提取 F0
     if (!rmvpeDetector) {
-      const modelPath = getModelDir();
-      const settings = loadSettings();
-      const deviceId = settings.deviceId ?? undefined;
-      console.log(`[Main] 初始化 RMVPE Pitch Detector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
-      try {
-        rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
-        await rmvpeDetector.init();
-      } catch (err) {
-        rmvpeDetector = null;
-        throw err;
+      if (_rmvpeInitPromise) {
+        await _rmvpeInitPromise;
+      } else {
+        const modelPath = getModelDir();
+        const settings = loadSettings();
+        const deviceId = settings.deviceId ?? undefined;
+        console.log(`[Main] 初始化 RMVPE Pitch Detector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+        _rmvpeInitPromise = (async () => {
+          try {
+            rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
+            await rmvpeDetector.init();
+          } catch (err) {
+            rmvpeDetector = null;
+            throw err;
+          } finally {
+            _rmvpeInitPromise = null;
+          }
+        })();
+        await _rmvpeInitPromise;
       }
     }
 
@@ -1395,10 +1529,24 @@ ipcMain.handle('extractMidi:rosvot', async (event, { audioData, sampleRate, bpm 
       if (fs.existsSync(rosvotModelPath)) {
         try {
           if (!rosvotDetector) {
-            const deviceId = settings.deviceId ?? undefined;
-            console.log(`[Main] 初始化 RosvotDetector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
-            rosvotDetector = new RosvotDetector(modelPath, { deviceId });
-            await rosvotDetector.init();
+            if (_rosvotInitPromise) {
+              await _rosvotInitPromise;
+            } else {
+              const deviceId = settings.deviceId ?? undefined;
+              console.log(`[Main] 初始化 RosvotDetector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+              _rosvotInitPromise = (async () => {
+                try {
+                  rosvotDetector = new RosvotDetector(modelPath, { deviceId });
+                  await rosvotDetector.init();
+                } catch (err) {
+                  rosvotDetector = null;
+                  throw err;
+                } finally {
+                  _rosvotInitPromise = null;
+                }
+              })();
+              await _rosvotInitPromise;
+            }
           }
           notes = await rosvotDetector.extractNotes(
             new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120
@@ -1441,6 +1589,7 @@ ipcMain.handle('extractMidi:rosvot', async (event, { audioData, sampleRate, bpm 
 });
 
 ipcMain.handle('file:exists', async (event, filePath) => {
+  if (!isPathAllowed(filePath)) return false;
   try {
     await fs.promises.access(filePath, fs.constants.R_OK);
     return true;
@@ -1452,12 +1601,17 @@ ipcMain.handle('file:exists', async (event, filePath) => {
 ipcMain.handle('file:authorizePath', async (event, dirPath) => {
   const resolvedPath = path.resolve(dirPath);
   // 禁止授权系统关键目录
-  const forbiddenPrefixes = [
-    path.resolve('C:\\Windows'),
-    path.resolve('C:\\Program Files'),
-    path.resolve('C:\\Program Files (x86)'),
-    path.resolve('C:\\ProgramData'),
-  ];
+  const forbiddenPrefixes = process.platform === 'win32'
+    ? [
+        path.resolve('C:\\Windows'),
+        path.resolve('C:\\Program Files'),
+        path.resolve('C:\\Program Files (x86)'),
+        path.resolve('C:\\ProgramData'),
+      ]
+    : [
+        '/etc', '/root', '/sys', '/proc', '/dev', '/boot',
+        '/System', '/Library',
+      ];
   if (forbiddenPrefixes.some(prefix => resolvedPath.startsWith(prefix + path.sep) || resolvedPath === prefix)) {
     return { success: false, error: 'Cannot authorize system directories' };
   }
@@ -1475,20 +1629,30 @@ ipcMain.handle('resolvePath', async (event, basePath, relativePath) => {
 });
 
 ipcMain.handle('getDirName', async (event, filePath) => {
+  if (!isPathAllowed(filePath)) throw new Error(t('error.pathNotAllowed'));
   return path.dirname(filePath);
 });
 
 ipcMain.handle('extractF0:basicPitch', async (event, { audioData, sampleRate, bpm }) => {
   try {
     if (!basicPitchDetector) {
-      const modelPath = getModelDir();
-      console.log(`[Main] 初始化 Basic Pitch Detector, 模型路径: ${modelPath}`);
-      try {
-        basicPitchDetector = new BasicPitchDetector(modelPath);
-        await basicPitchDetector.init();
-      } catch (err) {
-        basicPitchDetector = null;
-        throw err;
+      if (_basicPitchInitPromise) {
+        await _basicPitchInitPromise;
+      } else {
+        const modelPath = getModelDir();
+        console.log(`[Main] 初始化 Basic Pitch Detector, 模型路径: ${modelPath}`);
+        _basicPitchInitPromise = (async () => {
+          try {
+            basicPitchDetector = new BasicPitchDetector(modelPath);
+            await basicPitchDetector.init();
+          } catch (err) {
+            basicPitchDetector = null;
+            throw err;
+          } finally {
+            _basicPitchInitPromise = null;
+          }
+        })();
+        await _basicPitchInitPromise;
       }
     }
 
@@ -1680,41 +1844,68 @@ async function loadSingleModel(groupId, modelId) {
     return svsPipeline.loadModel(modelDef.sessionKey);
   } else if (groupId === 'rmvpe') {
     if (!rmvpeDetector) {
-      const modelPath = getModelDir();
-      const settings = loadSettings();
-      const deviceId = settings.deviceId ?? undefined;
-      try {
-        rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
-        await rmvpeDetector.init();
-      } catch (err) {
-        rmvpeDetector = null;
-        throw err;
+      if (_rmvpeInitPromise) {
+        await _rmvpeInitPromise;
+      } else {
+        const modelPath = getModelDir();
+        const settings = loadSettings();
+        const deviceId = settings.deviceId ?? undefined;
+        _rmvpeInitPromise = (async () => {
+          try {
+            rmvpeDetector = new RmvpePitchDetector(modelPath, { deviceId });
+            await rmvpeDetector.init();
+          } catch (err) {
+            rmvpeDetector = null;
+            throw err;
+          } finally {
+            _rmvpeInitPromise = null;
+          }
+        })();
+        await _rmvpeInitPromise;
       }
     }
     return { success: true };
   } else if (groupId === 'basicPitch') {
     if (!basicPitchDetector) {
-      const modelPath = getModelDir();
-      try {
-        basicPitchDetector = new BasicPitchDetector(modelPath);
-        await basicPitchDetector.init();
-      } catch (err) {
-        basicPitchDetector = null;
-        throw err;
+      if (_basicPitchInitPromise) {
+        await _basicPitchInitPromise;
+      } else {
+        const modelPath = getModelDir();
+        _basicPitchInitPromise = (async () => {
+          try {
+            basicPitchDetector = new BasicPitchDetector(modelPath);
+            await basicPitchDetector.init();
+          } catch (err) {
+            basicPitchDetector = null;
+            throw err;
+          } finally {
+            _basicPitchInitPromise = null;
+          }
+        })();
+        await _basicPitchInitPromise;
       }
     }
     return { success: true };
   } else if (groupId === 'rosvot') {
     if (!rosvotDetector) {
-      const modelPath = getModelDir();
-      const settings = loadSettings();
-      const deviceId = settings.deviceId ?? undefined;
-      try {
-        rosvotDetector = new RosvotDetector(modelPath, { deviceId });
-        await rosvotDetector.init();
-      } catch (err) {
-        rosvotDetector = null;
-        throw err;
+      if (_rosvotInitPromise) {
+        await _rosvotInitPromise;
+      } else {
+        const modelPath = getModelDir();
+        const settings = loadSettings();
+        const deviceId = settings.deviceId ?? undefined;
+        _rosvotInitPromise = (async () => {
+          try {
+            rosvotDetector = new RosvotDetector(modelPath, { deviceId });
+            await rosvotDetector.init();
+          } catch (err) {
+            rosvotDetector = null;
+            throw err;
+          } finally {
+            _rosvotInitPromise = null;
+          }
+        })();
+        await _rosvotInitPromise;
       }
     }
     return { success: true };
@@ -1766,7 +1957,8 @@ ipcMain.handle('resmgr:open', async () => {
 ipcMain.handle('resmgr:getGPUInfo', async () => {
   try {
     const vramData = await queryGPUVRAMUsage();
-    const devices = cachedDMLDevices || await enumerateDMLDevices(getModelDir());
+    const controllers = await ensureGPUInfo();
+    const devices = cachedDMLDevices || await enumerateDMLDevices(getModelDir(), controllers);
     if (!cachedDMLDevices) cachedDMLDevices = devices;
 
     const gpuList = devices.map(d => {
@@ -1824,13 +2016,13 @@ ipcMain.handle('resmgr:getModelGroups', async () => {
         ep = svsPipeline.sessionEPs[model.sessionKey] || null;
       } else if (group.id === 'rmvpe') {
         loaded = !!(rmvpeDetector && rmvpeDetector.initialized);
-        ep = rmvpeDetector ? 'cpu' : null;
+        ep = rmvpeDetector ? (rmvpeDetector.usingDML ? 'dml' : 'cpu') : null;
       } else if (group.id === 'basicPitch') {
         loaded = !!(basicPitchDetector && basicPitchDetector.initialized);
         ep = 'tfjs';
       } else if (group.id === 'rosvot') {
         loaded = !!(rosvotDetector && rosvotDetector.initialized);
-        ep = rosvotDetector ? 'cpu' : null;
+        ep = rosvotDetector ? (rosvotDetector.usingDML ? 'dml' : 'cpu') : null;
       }
 
       groupResult.models.push({

@@ -267,6 +267,12 @@ class AudioOutputManager {
 // 静态方法：共享默认实例用于设备查询和可用性检查
 let _defaultInstance = null;
 
+let _cachedDevices = null;
+let _cachedDevicesTime = 0;
+let _cachedIsAvailable = null;
+let _cachedIsAvailableTime = 0;
+const CACHE_TTL = 5000; // 5 秒
+
 function _getDefaultInstance() {
   if (!_defaultInstance) {
     _defaultInstance = new AudioOutputManager();
@@ -282,13 +288,25 @@ function _destroyDefaultInstance() {
 }
 
 AudioOutputManager.isAvailable = async function () {
+  const now = Date.now();
+  if (_cachedIsAvailable !== null && now - _cachedIsAvailableTime < CACHE_TTL) {
+    return _cachedIsAvailable;
+  }
   const result = await _getDefaultInstance().isAvailable();
+  _cachedIsAvailable = result;
+  _cachedIsAvailableTime = now;
   _destroyDefaultInstance();
   return result;
 };
 
 AudioOutputManager.getDevices = async function () {
+  const now = Date.now();
+  if (_cachedDevices !== null && now - _cachedDevicesTime < CACHE_TTL) {
+    return _cachedDevices;
+  }
   const result = await _getDefaultInstance().getDevices();
+  _cachedDevices = result;
+  _cachedDevicesTime = now;
   _destroyDefaultInstance();
   return result;
 };

@@ -3,7 +3,7 @@ import './index.css';
 import { TrackManager } from './editor/trackManager.js';
 import { HistoryManager } from './editor/historyManager.js';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
-import { showAlertDialog } from './alertDialog.js';
+import { showAlertDialog, showConfirmDialog } from './alertDialog.js';
 import { escapeHtml } from './utils/escapeHtml.js';
 
 const trackManager = new TrackManager();
@@ -96,8 +96,7 @@ const singerListEl = document.getElementById('singer-list');
 const fragmentCanvas = document.getElementById('fragment-canvas');
 const fragmentContainer = document.getElementById('fragment-canvas-container');
 const fragmentPlayheadCanvas = document.getElementById('fragment-playhead-canvas');
-const btnFragmentZoomIn = document.getElementById('btn-fragment-zoom-in');
-const btnFragmentZoomOut = document.getElementById('btn-fragment-zoom-out');
+const bpmDisplayBadge = document.getElementById('bpm-display-badge');
 const versionDisplay = document.getElementById('version-display');
 
 let fragmentZoomX = 1;
@@ -592,8 +591,18 @@ function updateProjectSettings() {
   const bpm = parseInt(bpmInput.value, 10) || 120;
   const num = parseInt(timeSigNum.value, 10) || 4;
   const den = parseInt(timeSigDen.value, 10) || 4;
+  const oldBpm = project.bpm;
   project.bpm = Math.max(1, Math.min(999, bpm));
   project.timeSignature = [num, den];
+  bpmInput.value = project.bpm;
+  if (bpmDisplayBadge) {
+    bpmDisplayBadge.textContent = `♩ ${project.bpm} BPM`;
+    if (oldBpm !== project.bpm) {
+      bpmDisplayBadge.classList.remove('bpm-flash');
+      void bpmDisplayBadge.offsetWidth;
+      bpmDisplayBadge.classList.add('bpm-flash');
+    }
+  }
   markDirty();
   refreshAll();
   if (window.electronAPI?.updateProjectSettings) {
@@ -803,8 +812,9 @@ async function ensurePipelineInitialized() {
   try {
     await pipelineInitPromise;
     pipelineInitialized = true;
-  } finally {
+  } catch (err) {
     pipelineInitPromise = null;
+    throw err;
   }
 }
 
@@ -1261,7 +1271,7 @@ function drawPlayheadLine(elapsedSeconds) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const beatWidth = FRAGMENT_BASE_BEAT_WIDTH * fragmentZoomX;
+  const beatWidth = getBeatWidth();
   const currentBeat = (elapsedSeconds / 60) * project.bpm;
   const x = currentBeat * beatWidth;
 
@@ -1448,6 +1458,7 @@ btnLoad.addEventListener('click', async () => {
           bpmInput.value = project.bpm;
           timeSigNum.value = project.timeSignature[0];
           timeSigDen.value = project.timeSignature[1];
+          if (bpmDisplayBadge) bpmDisplayBadge.textContent = `♩ ${project.bpm} BPM`;
         }
         if (obj.singers) {
           trackManager.singers.length = 0;
@@ -1489,6 +1500,7 @@ btnLoad.addEventListener('click', async () => {
           }
         }
         if (obj.fragments) {
+          trackManager.fragments.length = 0;
           for (const f of obj.fragments) trackManager.fragments.push(f);
         }
         currentProjectFilePath = result.filePaths[0];
@@ -1661,8 +1673,9 @@ btnAddSinger.addEventListener('click', () => {
   showSingerSelectDialog(null);
 });
 
+const _ipcCleanups = [];
 if (window.electronAPI?.onSingerCreated) {
-  window.electronAPI.onSingerCreated((singerData) => {
+  const cleanup = window.electronAPI.onSingerCreated((singerData) => {
     const singer = trackManager.addSinger({
       trackName: singerData.singerName,
       singerName: singerData.singerName,
@@ -1689,6 +1702,7 @@ if (window.electronAPI?.onSingerCreated) {
     markDirty();
     refreshAll();
   });
+  if (cleanup) _ipcCleanups.push(cleanup);
 }
 
 let editingTrackNameId = null;
@@ -1762,7 +1776,7 @@ function renderSingerList() {
 
     const avatarDiv = document.createElement('div');
     avatarDiv.className = 'singer-avatar';
-    if (singer.avatarPath) {
+    if (singer.avatarPath && (singer.avatarPath.startsWith('data:image/') || /^[a-zA-Z]:\\|^\//.test(singer.avatarPath))) {
       const img = document.createElement('img');
       img.src = singer.avatarPath;
       img.alt = singer.singerName || '';
@@ -1949,10 +1963,10 @@ function renderSingerList() {
     if (singers.length > 1) {
       const delBtn = item.querySelector('.btn-singer-delete');
       if (delBtn) {
-        delBtn.addEventListener('click', (e) => {
+        delBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
           const singerId = delBtn.dataset.singerId;
-          if (confirm(`确定删除歌手"${singer.trackName}"？`)) {
+          if (await showConfirmDialog(t('main.confirmDeleteSinger', { name: singer.trackName }))) {
             const singerClone = JSON.parse(JSON.stringify(singer));
             const singerFragments = trackManager.getFragments().filter(f => f.singerId === singerId);
             const fragmentsClone = singerFragments.map(f => JSON.parse(JSON.stringify(f)));
@@ -1985,19 +1999,61 @@ const FRAGMENT_HEIGHT = 60;
 const SINGER_ROW_HEIGHT = 80;
 const HEADER_HEIGHT = 24;
 const FRAGMENT_BASE_BEAT_WIDTH = 40;
+const REF_BPM = 120;
 
-let isSyncingScroll = false;
+function getBeatWidth() {
+  const bpmFactor = REF_BPM / (project.bpm || 120);
+  return FRAGMENT_BASE_BEAT_WIDTH * fragmentZoomX * bpmFactor;
+}
 
-fragmentContainer.addEventListener('scroll', () => {
-  if (isSyncingScroll) return;
-  isSyncingScroll = true;
-  singerListEl.scrollTop = fragmentContainer.scrollTop;
-  requestAnimationFrame(() => { isSyncingScroll = false; });
-});
+let fragmentScrollX = 0;
+let fragmentScrollY = 0;
+
+function syncFragmentScroll() {
+  const singers = trackManager.getSingers();
+  const fragments = trackManager.getFragments();
+  const beatWidth = getBeatWidth();
+  const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
+  const totalBeats = Math.max(64, Math.ceil((maxBeat + 16) / 16) * 16);
+  const canvasWidth = totalBeats * beatWidth;
+  const canvasHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+  const containerW = fragmentContainer.clientWidth;
+  const containerH = fragmentContainer.clientHeight;
+
+  fragmentScrollX = Math.max(0, Math.min(fragmentScrollX, canvasWidth - containerW));
+  fragmentScrollY = Math.max(0, Math.min(fragmentScrollY, canvasHeight - containerH));
+
+  fragmentCanvas.style.transform = `translate(${-fragmentScrollX}px, ${-fragmentScrollY}px)`;
+  fragmentPlayheadCanvas.style.transform = `translate(${-fragmentScrollX}px, ${-fragmentScrollY}px)`;
+  singerListEl.scrollTop = fragmentScrollY;
+}
+
+fragmentContainer.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (e.ctrlKey || e.metaKey) {
+    const containerRect = fragmentContainer.getBoundingClientRect();
+    const mouseXInContainer = e.clientX - containerRect.left;
+    const beatWidth = getBeatWidth();
+    const mouseBeats = (mouseXInContainer + fragmentScrollX) / beatWidth;
+
+    const delta = e.deltaY > 0 ? 0.85 : 1.18;
+    fragmentZoomX = Math.max(0.25, Math.min(4, fragmentZoomX * delta));
+
+    const newBeatWidth = getBeatWidth();
+    fragmentScrollX = mouseBeats * newBeatWidth - mouseXInContainer;
+    renderFragmentTimeline();
+  } else if (e.shiftKey) {
+    fragmentScrollY += e.deltaY;
+  } else {
+    fragmentScrollX += e.deltaY;
+  }
+  syncFragmentScroll();
+}, { passive: false });
 
 singerListEl.addEventListener('wheel', (e) => {
   e.preventDefault();
-  fragmentContainer.scrollTop += e.deltaY;
+  fragmentScrollY += e.deltaY;
+  syncFragmentScroll();
 }, { passive: false });
 
 function renderFragmentTimeline() {
@@ -2006,7 +2062,7 @@ function renderFragmentTimeline() {
   const fragments = trackManager.getFragments();
   const dpr = window.devicePixelRatio || 1;
 
-  const beatWidth = FRAGMENT_BASE_BEAT_WIDTH * fragmentZoomX;
+  const beatWidth = getBeatWidth();
   const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
   const totalBeats = Math.max(64, Math.ceil((maxBeat + 16) / 16) * 16);
   const canvasWidth = totalBeats * beatWidth;
@@ -2022,10 +2078,7 @@ function renderFragmentTimeline() {
   fragmentPlayheadCanvas.width = Math.floor(canvasWidth * dpr);
   fragmentPlayheadCanvas.height = Math.floor(canvasHeight * dpr);
 
-  const newWidth = canvasWidth + 'px';
-  const newHeight = canvasHeight + 'px';
-  if (fragmentContainer.style.width !== newWidth) fragmentContainer.style.width = newWidth;
-  if (fragmentContainer.style.height !== newHeight) fragmentContainer.style.height = newHeight;
+  syncFragmentScroll();
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
@@ -2157,7 +2210,7 @@ fragmentCanvas.addEventListener('mousedown', (e) => {
 
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
-  const beatWidth = FRAGMENT_BASE_BEAT_WIDTH * fragmentZoomX;
+  const beatWidth = getBeatWidth();
 
   for (let i = 0; i < singers.length; i++) {
     const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
@@ -2198,7 +2251,7 @@ fragmentCanvas.addEventListener('mousemove', (e) => {
   const rect = fragmentCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
-  const beatWidth = FRAGMENT_BASE_BEAT_WIDTH * fragmentZoomX;
+  const beatWidth = getBeatWidth();
   const dx = (x - dragState.startX) / beatWidth;
 
   if (dragState.type === 'move') {
@@ -2309,7 +2362,7 @@ fragmentCanvas.addEventListener('dblclick', (e) => {
 
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
-  const beatWidth = FRAGMENT_BASE_BEAT_WIDTH * fragmentZoomX;
+  const beatWidth = getBeatWidth();
 
   for (let i = 0; i < singers.length; i++) {
     const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
@@ -2346,7 +2399,7 @@ function openFragmentEditor(fragment) {
 }
 
 if (window.electronAPI?.onFragmentSaved) {
-  window.electronAPI.onFragmentSaved((data) => {
+  const cleanup = window.electronAPI.onFragmentSaved((data) => {
     const { fragmentId, notes, envelopes, pitchCurve, startTime, duration } = data;
     const fragment = trackManager.getFragments().find(f => f.id === fragmentId);
     if (fragment) {
@@ -2359,17 +2412,9 @@ if (window.electronAPI?.onFragmentSaved) {
     refreshAll();
     autoSaveProject();
   });
+  if (cleanup) _ipcCleanups.push(cleanup);
 }
 
-btnFragmentZoomIn.addEventListener('click', () => {
-  fragmentZoomX = Math.min(4, fragmentZoomX * 1.25);
-  renderFragmentTimeline();
-});
-
-btnFragmentZoomOut.addEventListener('click', () => {
-  fragmentZoomX = Math.max(0.25, fragmentZoomX / 1.25);
-  renderFragmentTimeline();
-});
 
 function refreshAll() {
   renderSingerList();
@@ -2437,54 +2482,58 @@ document.addEventListener('localeChanged', () => {
 });
 
 if (window.electronAPI?.onLocaleChanged) {
-  window.electronAPI.onLocaleChanged(() => {
+  const cleanup = window.electronAPI.onLocaleChanged(() => {
     location.reload();
   });
+  if (cleanup) _ipcCleanups.push(cleanup);
 }
 
 if (window.electronAPI?.onCloseConfirm) {
   let closeAfterSave = false;
+  let closeSavePollTimer = null;
+  let closeSaveTimeoutTimer = null;
+
+  function cleanupCloseTimers() {
+    if (closeSavePollTimer) { clearInterval(closeSavePollTimer); closeSavePollTimer = null; }
+    if (closeSaveTimeoutTimer) { clearTimeout(closeSaveTimeoutTimer); closeSaveTimeoutTimer = null; }
+    closeAfterSave = false;
+  }
+
+  function doCloseConfirmed() {
+    cleanupCloseTimers();
+    if (window.electronAPI?.closeConfirmed) {
+      window.electronAPI.closeConfirmed();
+    }
+  }
 
   // 拦截保存按钮点击，在保存成功后关闭窗口
-  const originalSaveHandler = btnSave.onclick;
   btnSave.addEventListener('click', function onSaveForClose() {
-    // 标记需要在保存完成后关闭
-    if (closeAfterSave) {
-      const checkSaved = setInterval(() => {
-        if (!isDirty) {
-          clearInterval(checkSaved);
-          closeAfterSave = false;
-          if (window.electronAPI?.closeConfirmed) {
-            window.electronAPI.closeConfirmed();
-          }
-        }
-      }, 100);
-      // 超时保护：30秒后如果保存仍未完成，允许关闭
-      setTimeout(() => {
-        clearInterval(checkSaved);
-        if (closeAfterSave) {
-          closeAfterSave = false;
-          if (window.electronAPI?.closeConfirmed) {
-            window.electronAPI.closeConfirmed();
-          }
-        }
-      }, 30000);
-    }
+    if (!closeAfterSave) return;
+    cleanupCloseTimers();
+    closeSavePollTimer = setInterval(() => {
+      if (!isDirty) doCloseConfirmed();
+    }, 100);
+    closeSaveTimeoutTimer = setTimeout(() => {
+      doCloseConfirmed();
+    }, 10000);
   });
 
-  window.electronAPI.onCloseConfirm(async () => {
-    const result = await showSaveBeforeCloseDialog();
-    if (result === 'save') {
-      closeAfterSave = true;
-      btnSave.click();
-    } else if (result === 'discard') {
-      markClean();
-      if (window.electronAPI?.closeConfirmed) {
-        window.electronAPI.closeConfirmed();
+  const cleanupClose = window.electronAPI.onCloseConfirm(async () => {
+    try {
+      const result = await showSaveBeforeCloseDialog();
+      if (result === 'save') {
+        closeAfterSave = true;
+        btnSave.click();
+      } else if (result === 'discard') {
+        doCloseConfirmed();
       }
+      // result === 'cancel' -> 不做任何事，窗口保持打开
+    } catch (err) {
+      console.error('关闭确认对话框错误:', err);
+      doCloseConfirmed();
     }
-    // result === 'cancel' -> 不做任何事，窗口保持打开
   });
+  if (cleanupClose) _ipcCleanups.push(cleanupClose);
 }
 
 async function showSaveBeforeCloseDialog() {
@@ -2912,5 +2961,12 @@ async function handleAudioToMidi() {
 }
 
 btnAudioToMidi.addEventListener('click', handleAudioToMidi);
+
+window.addEventListener('beforeunload', () => {
+  for (const cleanup of _ipcCleanups) {
+    try { cleanup(); } catch (_) {}
+  }
+  _ipcCleanups.length = 0;
+});
 
 console.log('SXSEditor 渲染进程已启动');

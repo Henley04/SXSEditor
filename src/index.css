@@ -84,6 +84,19 @@
   box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.2);
 }
 
+#bpm-input {
+  width: 58px;
+  font-weight: 600;
+  color: #a8c8ff;
+  border-color: rgba(91, 141, 239, 0.4);
+  background: rgba(91, 141, 239, 0.08);
+}
+
+#bpm-input:focus {
+  border-color: #5b8def;
+  box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.3);
+}
+
 #toolbar label {
   font-size: 12px;
   color: #9898b0;
@@ -412,42 +425,38 @@
   letter-spacing: 0.8px;
 }
 
-#fragment-tools {
-  display: flex;
-  gap: 4px;
-}
-
-#fragment-tools button {
-  width: 24px;
-  height: 24px;
-  background: linear-gradient(180deg, #3a3a4e 0%, #323246 100%);
-  color: #c8c8dc;
-  border: 1px solid #4a4a62;
+#bpm-display-badge {
+  font-size: 12px;
+  font-weight: 600;
+  color: #a8c8ff;
+  background: rgba(91, 141, 239, 0.15);
+  border: 1px solid rgba(91, 141, 239, 0.3);
   border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: all 0.15s ease;
+  padding: 2px 8px;
+  letter-spacing: 0.5px;
+  transition: background 0.3s, border-color 0.3s, color 0.3s;
 }
 
-#fragment-tools button:hover {
-  background: linear-gradient(180deg, #484860 0%, #3e3e56 100%);
-  color: #f0f0ff;
-  border-color: #5a5a72;
+#bpm-display-badge.bpm-flash {
+  animation: bpmFlash 0.6s ease;
+}
+
+@keyframes bpmFlash {
+  0% { background: rgba(91, 141, 239, 0.5); border-color: #5b8def; color: #ffffff; }
+  100% { background: rgba(91, 141, 239, 0.15); border-color: rgba(91, 141, 239, 0.3); color: #a8c8ff; }
 }
 
 #fragment-canvas-container {
   flex: 1;
-  overflow: auto;
+  overflow: hidden;
   position: relative;
 }
 
 #fragment-canvas {
   display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
 }
 
 #fragment-playhead-canvas {

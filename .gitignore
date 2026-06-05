@@ -130,3 +130,6 @@ SoulX-Singer/
 
 # AtomCode local-scope configs (machine-specific)
 .atomcode/local/
+
+# Claude Code local settings
+.claude/

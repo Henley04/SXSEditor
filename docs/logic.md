@@ -83,8 +83,8 @@ SXSEditor follows Electron's two-process architecture:
 
 The system uses a hierarchical GPU detection strategy:
 
-1. **Primary**: Via `@oxmc/node-gpuinfo` (NVML/ADLX-based) for comprehensive GPU enumeration (memory, name, vendor, discrete/integrated classification).
-2. **Fallback**: Via ONNX Runtime verbose log parsing (`enumerateDMLDevicesInProcess`) when node-gpuinfo is unavailable.
+1. **Primary**: Via `systeminformation` for GPU enumeration (model, VRAM, vendor, discrete/integrated classification).
+2. **Fallback**: Via ONNX Runtime verbose log parsing (`enumerateDMLDevicesInProcess`) when systeminformation is unavailable.
 3. **Best GPU Selection**: Prefers discrete GPUs (NVIDIA, AMD Radeon RX/Pro, Intel Arc A-series), sorted by VRAM descending. Falls back to integrated GPU if no discrete GPU is found, then to CPU-only if no GPU is available.
 4. **Per-Model Execution Provider**: Each model independently attempts DirectML (DML) first, falls back to CPU if DML validation fails. Models with unsupported ops (e.g., ConvTranspose with stride=480 in vocoder) automatically use CPU.
 
@@ -651,8 +651,8 @@ The project serialization uses `JSON.stringify` with full state capture from Tra
 | Internationalization | Custom i18n | — |
 | Project Packaging | Electron Forge | 7.11.1 |
 | Module Bundler | Webpack (electron-forge plugin) | 7.x |
-| Testing | Mocha + Chai + Sinon + Playwright | — |
-| GPU Info | @oxmc/node-gpuinfo | 1.0.2 |
+| Testing | Mocha + Chai + Sinon | — |
+| GPU Info | systeminformation | 5.x |
 | G2P (Chinese) | pinyin-pro | 3.28.1 |
 | G2P (English) | CMUdict-based custom | — |
 
@@ -665,7 +665,7 @@ The project serialization uses `JSON.stringify` with full state capture from Tra
 1. `app.whenReady()` triggers main window creation.
 2. Main locale is loaded from `sxseditor-locale.json`.
 3. Application menu is constructed (File, Edit, View, Help).
-4. GPU devices are pre-enumerated asynchronously (node-gpuinfo + ONNX Runtime verbose probe).
+4. GPU devices are pre-enumerated asynchronously (systeminformation + ONNX Runtime verbose probe).
 5. Model directory is checked for missing files via `checkMissingFiles()`.
 6. If models are missing, the Model Download window is shown.
 7. On completion, the main renderer initializes:

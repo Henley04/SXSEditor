@@ -38,7 +38,8 @@ class EnvelopeEditor {
   }
 
   _initEvents() {
-    window.addEventListener('resize', () => this._resize());
+    this._boundResize = () => this._resize();
+    window.addEventListener('resize', this._boundResize);
 
     this.canvas.addEventListener('mousedown', (e) => this._onMouseDown(e));
     this.canvas.addEventListener('mousemove', (e) => this._onMouseMove(e));
@@ -259,6 +260,10 @@ class EnvelopeEditor {
     this._sortKeyframes();
     this.selectedKeyframeIndex = this.envelope.keyframes.indexOf(kf);
     if (this.onChange) this.onChange(this.envelope);
+  }
+
+  destroy() {
+    window.removeEventListener('resize', this._boundResize);
   }
 
   _sortKeyframes() {

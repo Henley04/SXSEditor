@@ -9,6 +9,7 @@ module.exports = {
   externals: {
     'onnxruntime-node': 'commonjs onnxruntime-node',
     '@tensorflow/tfjs-backend-wasm': 'commonjs @tensorflow/tfjs-backend-wasm',
+    'systeminformation': 'commonjs systeminformation',
   },
   plugins: [
     new CopyPlugin({
@@ -28,6 +29,10 @@ module.exports = {
         {
           from: path.resolve(__dirname, 'src/audio/audioWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/audio/audioWorker.js'),
+        },
+        {
+          from: path.resolve(__dirname, 'src/utils/gpuWorker.js'),
+          to: path.resolve(__dirname, '.webpack/main/utils/gpuWorker.js'),
         },
         {
           from: path.resolve(__dirname, 'native/build/Release/executorch_runtime.node'),

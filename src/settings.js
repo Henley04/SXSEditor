@@ -112,7 +112,11 @@ async function loadDevices() {
         }
     } catch (err) {
         console.error('加载设备列表失败:', err);
-        inferenceDeviceSelect.innerHTML = `<option value="auto">${t('settings.autoSelect')}</option>`;
+        inferenceDeviceSelect.textContent = '';
+        const opt = document.createElement('option');
+        opt.value = 'auto';
+        opt.textContent = t('settings.autoSelect');
+        inferenceDeviceSelect.appendChild(opt);
     }
 }
 
@@ -182,7 +186,11 @@ async function loadAudioSettings(currentSetting) {
         const isNaudiodonAvailable = audioResult.isAvailable || false;
 
         if (!isNaudiodonAvailable) {
-            audioOutputModeSelect.innerHTML = `<option value="shared">${t('settings.sharedModeUnavailable')}</option>`;
+            audioOutputModeSelect.textContent = '';
+            const opt = document.createElement('option');
+            opt.value = 'shared';
+            opt.textContent = t('settings.sharedModeUnavailable');
+            audioOutputModeSelect.appendChild(opt);
             audioOutputModeSelect.disabled = true;
             audioBitDepthSelect.disabled = true;
         }

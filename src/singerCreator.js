@@ -156,22 +156,35 @@ btnPlayPreview.addEventListener('click', async () => {
   }
 });
 
-waveformCanvas.addEventListener('click', (e) => {
-  if (!wavAudioBuffer || !wavDuration) return;
+let _waveformDragging = false;
 
+function getWaveformTime(clientX) {
   const rect = waveformCanvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
+  const x = clientX - rect.left;
   const width = rect.width;
-  const clampedTime = Math.max(0, Math.min(wavDuration, (x / width) * wavDuration));
+  return Math.max(0, Math.min(wavDuration, (x / width) * wavDuration));
+}
 
-  previewPlayStartOffset = clampedTime;
-  drawWaveform(clampedTime);
+waveformCanvas.addEventListener('mousedown', (e) => {
+  if (!wavAudioBuffer || !wavDuration) return;
+  e.preventDefault();
+  _waveformDragging = true;
+  const time = getWaveformTime(e.clientX);
+  if (isPlayingPreview) stopPreviewPlayback();
+  previewPlayStartOffset = time;
+  drawWaveform(time);
+});
 
-  if (isPlayingPreview) {
-    stopPreviewPlayback();
-    previewPlayStartOffset = clampedTime;
-    playPreviewWav();
-  }
+document.addEventListener('mousemove', (e) => {
+  if (!_waveformDragging) return;
+  const time = getWaveformTime(e.clientX);
+  previewPlayStartOffset = time;
+  drawWaveform(time);
+});
+
+document.addEventListener('mouseup', () => {
+  if (!_waveformDragging) return;
+  _waveformDragging = false;
 });
 
 btnCancel.addEventListener('click', () => {
