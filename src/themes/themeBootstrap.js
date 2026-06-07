@@ -1,0 +1,163 @@
+/**
+ * themeBootstrap — runs before any renderer script.
+ *
+ * Provides an immediate dark-aurora fallback by injecting the same token
+ * defaults into :root via CSS variables, so the first paint matches the
+ * final dark-aurora look (no FOUC).
+ *
+ * When the main process finishes loading the user's settings, it will
+ * call themeAPI.applyTheme(), which overrides these defaults.
+ */
+(function () {
+    if (typeof document === 'undefined') return;
+    const style = document.createElement('style');
+    style.id = 'theme-bootstrap-fallback';
+    style.textContent = `
+:root {
+    --color-blue-50:  #dbe7ff;
+    --color-blue-100: #b7ceff;
+    --color-blue-200: #8fb1ff;
+    --color-blue-300: #6b9df5;
+    --color-blue-400: #5b8def;
+    --color-blue-500: #4a7de0;
+    --color-blue-600: #3a6ad0;
+    --color-blue-700: #2a55b5;
+    --color-blue-800: #1a3a85;
+    --color-blue-900: #0e2a66;
+    --color-gray-50:  #f0f0ff;
+    --color-gray-100: #e0e0f0;
+    --color-gray-200: #d8d8ec;
+    --color-gray-300: #c8c8dc;
+    --color-gray-400: #a8a8c0;
+    --color-gray-500: #8888a8;
+    --color-gray-600: #6a6a86;
+    --color-gray-700: #5a5a72;
+    --color-gray-800: #4a4a66;
+    --color-gray-900: #3a3a52;
+    --color-ink-50:  #3a3a4e;
+    --color-ink-100: #323246;
+    --color-ink-200: #2f2f3d;
+    --color-ink-300: #2a2a3d;
+    --color-ink-400: #282838;
+    --color-ink-500: #252538;
+    --color-ink-600: #1e1e2e;
+    --color-ink-700: #1a1a2a;
+    --color-ink-800: #1a1a28;
+    --color-ink-900: #14141f;
+    --color-red-300:  #ff8888;
+    --color-red-400:  #f87171;
+    --color-red-500:  #ef4444;
+    --color-red-600:  #e85555;
+    --color-green-300: #5aee90;
+    --color-green-400: #4ade80;
+    --color-green-500: #3ac870;
+    --color-green-600: #22c55e;
+    --color-amber-300: #fbbf24;
+    --color-amber-400: #f59e0b;
+    --color-amber-500: #f0a810;
+    --color-purple-400: #a855f7;
+    --color-white: #ffffff;
+    --color-black: #000000;
+    --space-0: 0;
+    --space-1: 2px;
+    --space-2: 4px;
+    --space-3: 6px;
+    --space-4: 8px;
+    --space-5: 12px;
+    --space-6: 16px;
+    --space-7: 20px;
+    --space-8: 24px;
+    --radius-sm: 2px;
+    --radius-md: 4px;
+    --radius-lg: 8px;
+    --radius-xl: 10px;
+    --radius-2xl: 12px;
+    --radius-full: 9999px;
+    --font-xs: 10px;
+    --font-sm: 11px;
+    --font-base: 12px;
+    --font-md: 13px;
+    --font-lg: 14px;
+    --font-xl: 18px;
+    --font-2xl: 20px;
+    --motion-fast: 0.15s;
+    --motion-base: 0.2s;
+    --motion-slow: 0.3s;
+    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
+    --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.25);
+    --shadow-lg: 0 4px 16px rgba(0, 0, 0, 0.3);
+    --shadow-xl: 0 8px 32px rgba(0, 0, 0, 0.5);
+    --bg-app: #14141f;
+    --bg-panel: #1a1a2a;
+    --bg-elevated: #1e1e2e;
+    --bg-input: #1a1a28;
+    --bg-overlay: rgba(10, 10, 20, 0.7);
+    --bg-toolbar-start: #2f2f3d;
+    --bg-toolbar-end: #282838;
+    --bg-header-start: #2a2a3d;
+    --bg-header-end: #252538;
+    --bg-button: linear-gradient(180deg, #3a3a4e 0%, #323246 100%);
+    --bg-button-hover: linear-gradient(180deg, #484860 0%, #3e3e56 100%);
+    --bg-button-active: linear-gradient(180deg, #2a2a3e 0%, #262638 100%);
+    --bg-button-primary: linear-gradient(180deg, #5b8def 0%, #4a7de0 100%);
+    --bg-button-primary-hover: linear-gradient(180deg, #6b9df5 0%, #5b8def 100%);
+    --bg-button-success: linear-gradient(180deg, #4ade80 0%, #3ac870 100%);
+    --bg-button-success-hover: linear-gradient(180deg, #5aee90 0%, #4ade80 100%);
+    --bg-button-danger: linear-gradient(180deg, #f87171 0%, #e85555 100%);
+    --bg-button-danger-hover: linear-gradient(180deg, #ff8888 0%, #f87171 100%);
+    --fg-primary: #e0e0f0;
+    --fg-secondary: #d8d8ec;
+    --fg-muted: #c8c8dc;
+    --fg-disabled: #5a5a72;
+    --fg-on-accent: #ffffff;
+    --fg-on-success: #0a0a14;
+    --fg-on-warning: #0a0a14;
+    --accent: #5b8def;
+    --accent-hover: #6b9df5;
+    --accent-pressed: #4a7de0;
+    --accent-soft: rgba(91, 141, 239, 0.15);
+    --accent-fg: #6b9df5;
+    --border-subtle: #1a1a28;
+    --border-default: #2a2a3d;
+    --border-strong: #3a3a52;
+    --border-accent: #5b8def;
+    --success: #4ade80;
+    --warning: #fbbf24;
+    --danger: #f87171;
+    --info: #5b8def;
+    --scrollbar-thumb: rgba(58, 58, 82, 0.6);
+    --scrollbar-thumb-hover: rgba(74, 74, 98, 0.8);
+    --scrollbar-track: transparent;
+    --selection-bg: rgba(91, 141, 239, 0.4);
+    --focus-ring: 0 0 0 2px rgba(91, 141, 239, 0.3);
+    --button-primary-bg: var(--bg-button-primary);
+    --button-primary-fg: var(--fg-on-accent);
+    --button-primary-hover: var(--bg-button-primary-hover);
+    --button-secondary-bg: var(--bg-button);
+    --button-secondary-fg: var(--fg-muted);
+    --button-secondary-border: #4a4a62;
+    --button-disabled-bg: var(--color-ink-300);
+    --button-danger-bg: var(--bg-button-danger);
+    --input-bg: var(--bg-input);
+    --input-border: var(--color-gray-900);
+    --input-fg: var(--fg-primary);
+    --input-focus-ring: var(--focus-ring);
+    --input-placeholder: var(--color-gray-800);
+    --panel-bg: var(--bg-panel);
+    --panel-border: var(--color-ink-300);
+    --panel-fg: var(--fg-muted);
+    --tooltip-bg: var(--color-ink-300);
+    --tooltip-fg: var(--fg-primary);
+    --selection-bg-token: var(--selection-bg);
+    --selection-fg: var(--fg-primary);
+}
+`;
+    // Insert as early as possible (before other stylesheets) to minimize FOUC
+    if (document.head) {
+        document.head.insertBefore(style, document.head.firstChild);
+    } else {
+        document.addEventListener('DOMContentLoaded', () => {
+            document.head.insertBefore(style, document.head.firstChild);
+        });
+    }
+})();

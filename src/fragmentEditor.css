@@ -13,14 +13,14 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background-color: rgba(10, 10, 20, 0.7);
+  background-color: var(--bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 9999;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.3s ease;
+  transition: opacity var(--motion-slow) ease;
   backdrop-filter: blur(2px);
 }
 
@@ -33,21 +33,21 @@
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 16px;
+  gap: var(--space-6);
 }
 
 .loading-spinner {
   width: 40px;
   height: 40px;
   border: 3px solid rgba(91, 141, 239, 0.2);
-  border-top-color: #5b8def;
+  border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
 
 .loading-text {
-  color: #e0e0f0;
-  font-size: 14px;
+  color: var(--fg-primary);
+  font-size: var(--font-lg);
   font-weight: 500;
 }
 
@@ -57,11 +57,11 @@
   align-items: center;
   height: 40px;
   min-height: 40px;
-  padding: 0 12px;
-  background: linear-gradient(180deg, #2f2f3d 0%, #282838 100%);
-  color: #e0e0f0;
-  border-bottom: 1px solid #1a1a28;
-  gap: 2px;
+  padding: 0 var(--space-5);
+  background: linear-gradient(180deg, var(--bg-toolbar-start) 0%, var(--bg-toolbar-end) 100%);
+  color: var(--fg-primary);
+  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--space-1);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
   position: relative;
   z-index: 10;
@@ -80,33 +80,33 @@
 .toolbar-divider {
   width: 1px;
   height: 22px;
-  background: linear-gradient(180deg, transparent, #4a4a62, transparent);
-  margin: 0 6px;
+  background: linear-gradient(180deg, transparent, var(--button-secondary-border), transparent);
+  margin: 0 var(--space-3);
   flex-shrink: 0;
 }
 
 #toolbar button {
-  background: linear-gradient(180deg, #3a3a4e 0%, #323246 100%);
-  color: #c8c8dc;
-  border: 1px solid #4a4a62;
-  border-radius: 4px;
-  padding: 4px 10px;
+  background: var(--bg-button);
+  color: var(--fg-muted);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) 10px;
   cursor: pointer;
-  font-size: 12px;
-  transition: all 0.15s ease;
+  font-size: var(--font-base);
+  transition: all var(--motion-fast) ease;
   white-space: nowrap;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 #toolbar button:hover {
-  background: linear-gradient(180deg, #484860 0%, #3e3e56 100%);
-  color: #f0f0ff;
-  border-color: #5a5a72;
+  background: var(--bg-button-hover);
+  color: var(--color-gray-50);
+  border-color: var(--color-gray-700);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
 #toolbar button:active {
-  background: linear-gradient(180deg, #2a2a3e 0%, #262638 100%);
+  background: var(--bg-button-active);
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
@@ -118,16 +118,16 @@
 
 #toolbar .btn-param {
   padding: 3px 10px;
-  font-size: 11px;
+  font-size: var(--font-sm);
   font-weight: 600;
   letter-spacing: 0.3px;
   border-radius: 3px;
 }
 
 #toolbar .btn-param.active {
-  background: linear-gradient(180deg, #5b8def 0%, #4a7de0 100%);
-  color: #ffffff;
-  border-color: #6b9df5;
+  background: var(--bg-button-primary);
+  color: var(--fg-on-accent);
+  border-color: var(--accent-hover);
   box-shadow: 0 1px 4px rgba(91, 141, 239, 0.3);
 }
 
@@ -137,35 +137,35 @@
 
 #toolbar .btn-pitch-tool {
   padding: 3px 8px;
-  font-size: 11px;
+  font-size: var(--font-sm);
   border-radius: 3px;
 }
 
 #toolbar .btn-pitch-tool:hover {
-  background: linear-gradient(180deg, #f87171 0%, #e85555 100%);
-  color: #ffffff;
-  border-color: #f87171;
+  background: var(--bg-button-danger);
+  color: var(--fg-on-accent);
+  border-color: var(--danger);
   box-shadow: 0 1px 4px rgba(248, 113, 113, 0.3);
 }
 
 #toolbar .btn-pitch-tool.disabled-mode {
-  background: linear-gradient(180deg, #3a3a4e 0%, #323246 100%);
-  color: #5a5a72;
-  border-color: #4a4a62;
+  background: var(--bg-button);
+  color: var(--color-gray-700);
+  border-color: var(--button-secondary-border);
   box-shadow: none;
 }
 
 #toolbar .btn-shortcuts {
   padding: 3px 8px;
-  font-size: 14px;
+  font-size: var(--font-lg);
   border-radius: 3px;
   min-width: 28px;
   text-align: center;
 }
 
 .pitch-hint {
-  font-size: 10px;
-  color: #6a6a86;
+  font-size: var(--font-xs);
+  color: var(--color-gray-600);
   white-space: nowrap;
   user-select: none;
   padding: 2px 6px;
@@ -175,7 +175,7 @@
 }
 
 #toolbar .pitch-tools-group {
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .brush-smoothing-slider {
@@ -183,8 +183,8 @@
   height: 4px;
   -webkit-appearance: none;
   appearance: none;
-  background: #3a3a52;
-  border-radius: 2px;
+  background: var(--color-gray-900);
+  border-radius: var(--radius-sm);
   outline: none;
   cursor: pointer;
   vertical-align: middle;
@@ -196,28 +196,28 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: #5b8def;
+  background: var(--accent);
   cursor: pointer;
-  border: 1px solid #6b9df5;
+  border: 1px solid var(--accent-hover);
   box-shadow: 0 1px 3px rgba(91, 141, 239, 0.3);
 }
 
 .brush-smoothing-slider::-webkit-slider-thumb:hover {
-  background: #6b9df5;
+  background: var(--accent-hover);
   box-shadow: 0 1px 5px rgba(91, 141, 239, 0.5);
 }
 
 #fragment-name {
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 500;
-  color: #d8d8ec;
+  color: var(--fg-secondary);
 }
 
 /* ==================== 主内容区 ==================== */
 #main-content {
   flex: 1;
   display: flex;
-  background: #14141f;
+  background: var(--bg-app);
   overflow: hidden;
 }
 
@@ -226,8 +226,8 @@
   flex-direction: column;
   min-width: 80px;
   overflow: hidden;
-  background: #1a1a2a;
-  border-right: 1px solid #1a1a28;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border-subtle);
 }
 
 #piano-keys-container {
@@ -247,7 +247,7 @@
 #piano-roll-container {
   flex: 1;
   display: flex;
-  background: #14141f;
+  background: var(--bg-app);
   overflow: hidden;
 }
 
@@ -275,7 +275,7 @@
   z-index: 10000;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.2s ease;
+  transition: opacity var(--motion-base) ease;
   backdrop-filter: blur(2px);
 }
 
@@ -285,9 +285,9 @@
 }
 
 .shortcuts-panel {
-  background: linear-gradient(180deg, #2a2a3d 0%, #252538 100%);
-  border: 1px solid #3a3a52;
-  border-radius: 10px;
+  background: linear-gradient(180deg, var(--bg-header-start) 0%, var(--bg-header-end) 100%);
+  border: 1px solid var(--color-gray-900);
+  border-radius: var(--radius-xl);
   width: 520px;
   max-height: 80vh;
   overflow-y: auto;
@@ -299,59 +299,59 @@
   align-items: center;
   justify-content: space-between;
   padding: 14px 18px;
-  border-bottom: 1px solid #3a3a52;
-  font-size: 14px;
+  border-bottom: 1px solid var(--color-gray-900);
+  font-size: var(--font-lg);
   font-weight: 600;
-  color: #e0e0f0;
+  color: var(--fg-primary);
 }
 
 .btn-close-shortcuts {
   background: none;
   border: none;
-  color: #6a6a86;
+  color: var(--color-gray-600);
   font-size: 16px;
   cursor: pointer;
-  padding: 2px 6px;
+  padding: 2px var(--space-3);
   border-radius: 3px;
-  transition: all 0.15s;
+  transition: all var(--motion-fast);
 }
 
 .btn-close-shortcuts:hover {
-  color: #e0e0f0;
-  background: #3a3a52;
+  color: var(--fg-primary);
+  background: var(--color-gray-900);
 }
 
 .shortcuts-body {
   padding: 14px 18px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-6);
 }
 
 .shortcut-section-title {
-  font-size: 11px;
+  font-size: var(--font-sm);
   font-weight: 600;
-  color: #5b8def;
+  color: var(--accent);
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  margin-bottom: 6px;
+  margin-bottom: var(--space-3);
 }
 
 .shortcut-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
   padding: 3px 0;
 }
 
 .shortcut-row kbd {
   display: inline-block;
-  background: linear-gradient(180deg, #3a3a4e 0%, #323246 100%);
-  color: #d8d8ec;
-  border: 1px solid #4a4a62;
-  border-radius: 4px;
-  padding: 1px 6px;
-  font-size: 11px;
+  background: var(--bg-button);
+  color: var(--fg-secondary);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-md);
+  padding: 1px var(--space-3);
+  font-size: var(--font-sm);
   font-family: 'Consolas', 'Monaco', monospace;
   white-space: nowrap;
   min-width: 20px;
@@ -362,5 +362,5 @@
 
 .shortcut-row span {
   color: #9898b0;
-  font-size: 12px;
+  font-size: var(--font-base);
 }

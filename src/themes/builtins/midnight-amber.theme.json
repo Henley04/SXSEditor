@@ -1,0 +1,40 @@
+{
+  "id": "midnight-amber",
+  "name": "Midnight 琥珀",
+  "version": "1.0.0",
+  "author": "SXSEditor",
+  "isDark": true,
+  "description": "深色琥珀强调，温暖复古",
+  "tags": ["builtin", "dark", "amber"],
+  "extends": "dark-aurora",
+  "tokens": {
+    "--color-blue-50":  "#fff7e6",
+    "--color-blue-100": "#ffe8b3",
+    "--color-blue-200": "#ffd980",
+    "--color-blue-300": "#fbc04d",
+    "--color-blue-400": "#f5a623",
+    "--color-blue-500": "#d98a1a",
+    "--color-blue-600": "#b87012",
+    "--color-blue-700": "#8f560c",
+    "--color-blue-800": "#5e3a08",
+    "--color-blue-900": "#3d2604",
+
+    "--accent":         "#f5a623",
+    "--accent-hover":   "#fbc04d",
+    "--accent-pressed": "#d98a1a",
+    "--accent-soft":    "rgba(245, 166, 35, 0.15)",
+    "--accent-fg":      "#f5a623",
+
+    "--border-accent":  "#f5a623",
+    "--info":           "#f5a623",
+
+    "--bg-button-primary":      "linear-gradient(180deg, #f5a623 0%, #d98a1a 100%)",
+    "--bg-button-primary-hover":"linear-gradient(180deg, #fbc04d 0%, #f5a623 100%)",
+
+    "--focus-ring":   "0 0 0 2px rgba(245, 166, 35, 0.3)",
+    "--selection-bg": "rgba(245, 166, 35, 0.4)",
+
+    "--button-primary-bg":    "var(--bg-button-primary)",
+    "--button-primary-hover": "var(--bg-button-primary-hover)"
+  }
+}

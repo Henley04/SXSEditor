@@ -153,4 +153,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resmgrUnloadModel: (groupId, modelId) => ipcRenderer.invoke('resmgr:unloadModel', { groupId, modelId }),
   resmgrLoadGroup: (groupId) => ipcRenderer.invoke('resmgr:loadGroup', { groupId }),
   resmgrUnloadGroup: (groupId) => ipcRenderer.invoke('resmgr:unloadGroup', { groupId }),
+
+  // ==================== Theme API ====================
+  themeAPI: {
+    bootstrap: () => ipcRenderer.invoke('theme:bootstrap'),
+    list: () => ipcRenderer.invoke('theme:list'),
+    get: (themeId) => ipcRenderer.invoke('theme:get', themeId),
+    current: (options) => ipcRenderer.invoke('theme:current', options || {}),
+    apply: (themeId, options) => ipcRenderer.invoke('theme:apply', themeId, options || {}),
+    save: (themeObj) => ipcRenderer.invoke('theme:save', themeObj),
+    delete: (themeId) => ipcRenderer.invoke('theme:delete', themeId),
+    import: () => ipcRenderer.invoke('theme:import'),
+    export: (themeId) => ipcRenderer.invoke('theme:export', themeId),
+    reset: () => ipcRenderer.invoke('theme:reset'),
+    onChanged: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('theme:changed', handler);
+      return () => ipcRenderer.removeListener('theme:changed', handler);
+    },
+    onListChanged: (callback) => {
+      const handler = () => callback();
+      ipcRenderer.on('theme:list-changed', handler);
+      return () => ipcRenderer.removeListener('theme:list-changed', handler);
+    },
+  },
 });
