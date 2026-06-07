@@ -104,6 +104,53 @@ A: Yes. ONNX Runtime will fall back to CPU automatically if no compatible GPU is
 **Q: How do I report a bug?**  
 A: Open an issue on [GitHub Issues](https://github.com/Henley04/SXSEditor/issues).
 
+#### Themes
+
+SXSEditor ships with a layered **Design Token** system and a JSON-based **Theme Pack** format. All UI surfaces (toolbar, singer panel, fragment timeline, fragment editor, settings, singer creator, audio preprocessing, model download, resource manager) are fully token-driven — switching themes is a hot, no-restart operation.
+
+**How to switch the theme**
+
+1. Open **Settings** from the toolbar.
+2. Locate the **Theme** dropdown (groups: `Built-in` and `User`).
+3. Pick a theme — the change applies immediately to every open window.
+
+**Built-in themes**
+
+| ID | Name | Description |
+|----|------|-------------|
+| `dark-aurora` | Aurora 暗色 | Default dark theme with blue-purple accents. Reproduces the classic SXSEditor look. |
+| `light-paper` | Paper 亮色 | Light theme with a white background, suitable for daytime use. |
+| `midnight-amber` | Midnight 琥珀 | Dark theme with amber accents. Warm and easy on the eyes during long sessions. |
+| `contrast-onyx` | Onyx 高对比 | High-contrast accessibility theme, meets WCAG AA text-contrast requirements (≥ 4.5:1). |
+
+**Import / Export / Edit a theme**
+
+- In the Settings page, click **Edit current theme** to open the visual theme editor. Tokens are listed by layer (`global` / `alias` / `component`); colors come with a HEX / RGB / HSL picker and an eyedropper (powered by `desktopCapturer`).
+- Click **Save as…** to store the current edits as a new user theme (id is validated for uniqueness).
+- Click **Import theme** to load a `.theme.json` file (file dialog filters to `.theme.json` / `.json`).
+- Click **Export theme** to write the active theme to disk. The default filename is `<theme-id>.theme.json`.
+- Click **Reset to default** to apply `dark-aurora` globally and clear all per-window overrides.
+
+The editor maintains a 20-step undo / redo stack; `Ctrl+Z` / `Ctrl+Y` work inside the editor without affecting the project edit history.
+
+**Per-window theme override**
+
+Each window (main, fragment editor, settings, singer creator, audio preprocess, model download, resource manager) can opt out of the global theme:
+
+1. In the Settings page, set the per-window dropdown in the **Window theme** section.
+2. The override is stored under `themePerWindow[<windowName>]` in `userData/settings.json`.
+3. Closing and reopening the window keeps the override.
+
+**File locations**
+
+| Type | Path |
+|------|------|
+| Built-in themes | `src/themes/builtins/` (read-only, bundled in `app.asar`) |
+| User themes | `userData/themes/<theme-id>.theme.json` |
+| Current selection | `userData/settings.json` → `theme` (global id) and `themePerWindow` (per-window map) |
+
+For details on authoring your own theme pack, see the [Developer Guide → Adding a New Theme](docs/wiki/Developer-Guide.md#adding-a-new-theme).
+
 ---
 
 ### For Developers
@@ -352,6 +399,53 @@ This project is licensed under the [MIT License](LICENSE).
 | 其他 | 📋 规划中 | 欢迎社区贡献 |
 
 中文歌词输入支持**拼音**（如 `ni hao`）和**汉字**（如 `你好`），系统自动转换为音素进行合成。
+
+#### 主题（Themes）
+
+SXSEditor 内置分层 **设计令牌（Design Token）** 系统与基于 JSON 的 **主题包（Theme Pack）** 格式。工具栏、歌手面板、分片时间轴、分片编辑器、设置、歌手创建、音频预处理、模型下载、资源管理 9 个界面均完全令牌化驱动——**切换主题无需重启**，实时热生效。
+
+**如何切换主题**
+
+1. 打开工具栏中的 **设置（Settings）** 窗口
+2. 找到 **主题（Theme）** 下拉框（分组显示：**内置** 与 **用户**）
+3. 选择主题后，所有已打开的窗口立即更新
+
+**4 套内置主题**
+
+| 主题 ID | 名称 | 说明 |
+|---------|------|------|
+| `dark-aurora` | Aurora 暗色 | **默认暗色主题**，蓝紫强调色，复刻经典 SXSEditor 风格 |
+| `light-paper` | Paper 亮色 | 亮色白底主题，适合日间使用 |
+| `midnight-amber` | Midnight 琥珀 | 暗色琥珀强调主题，长时间使用更护眼 |
+| `contrast-onyx` | Onyx 高对比 | 高对比度无障碍主题，文本对比度符合 WCAG AA（≥ 4.5:1） |
+
+**导入 / 导出 / 编辑主题**
+
+- 在设置页点击 **编辑当前主题（Edit current theme）** 打开可视化主题编辑器。令牌按 `global / alias / component` 三层分组列出；颜色令牌提供 HEX / RGB / HSL 拾取器与屏幕取色按钮（基于 `desktopCapturer`）。
+- 点击 **另存为（Save as…）** 把当前编辑保存为新的用户主题（自动校验 id 唯一性）。
+- 点击 **导入主题（Import theme）** 从文件对话框选择 `.theme.json`（过滤 `.theme.json` / `.json`）。
+- 点击 **导出主题（Export theme）** 把当前主题写入磁盘，默认文件名 `<theme-id>.theme.json`。
+- 点击 **重置为默认（Reset to default）** 立即应用 `dark-aurora` 并清空所有窗口级覆盖。
+
+主题编辑器内部维护 20 步撤销 / 重做栈，`Ctrl+Z` / `Ctrl+Y` 独立于项目编辑历史。
+
+**每窗口独立主题（Per-Window Override）**
+
+每个窗口（主窗口、分片编辑器、设置、歌手创建、音频预处理、模型下载、资源管理）都可以脱离全局主题单独指定：
+
+1. 在设置页 **窗口主题（Window theme）** 区域选择某个窗口的下拉项
+2. 覆盖值写入 `userData/settings.json` → `themePerWindow[<windowName>]`
+3. 窗口关闭再开仍保留该覆盖
+
+**文件位置**
+
+| 类型 | 路径 |
+|------|------|
+| 内置主题 | `src/themes/builtins/`（只读，打包到 `app.asar`） |
+| 用户主题 | `userData/themes/<theme-id>.theme.json` |
+| 当前选择 | `userData/settings.json` 的 `theme` 字段（全局 ID）与 `themePerWindow` 字段（每窗口覆盖） |
+
+如需自建主题，参见 [开发者指南 → 添加新主题](docs/wiki/Developer-Guide.md#添加新主题)。
 
 ---
 

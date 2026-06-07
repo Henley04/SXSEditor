@@ -9,7 +9,8 @@
 5. [ONNX Models](#onnx-models)
 6. [Testing](#testing)
 7. [Packaging & Distribution](#packaging--distribution)
-8. [Contributing](#contributing)
+8. [Adding a New Theme](#adding-a-new-theme) / [添加新主题](#添加新主题)
+9. [Contributing](#contributing)
 
 ---
 
