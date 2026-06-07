@@ -1,6 +1,6 @@
 body {
-    background: #14141f;
-    color: #d8d8ec;
+    background: var(--bg-app);
+    color: var(--fg-secondary);
     min-height: 100vh;
     overflow-y: auto;
 }
@@ -8,19 +8,19 @@ body {
 .rm-container {
     max-width: 680px;
     margin: 0 auto;
-    padding: 24px 28px;
+    padding: var(--space-8) 28px;
     min-height: 100vh;
 }
 
 /* ===== Sections ===== */
 
 .rm-section {
-    margin-bottom: 16px;
-    padding: 16px 18px;
-    background: #1a1a2a;
-    border-radius: 10px;
-    border: 1px solid #2a2a3d;
-    transition: border-color 0.2s, box-shadow 0.2s;
+    margin-bottom: var(--space-6);
+    padding: var(--space-6) 18px;
+    background: var(--bg-panel);
+    border-radius: var(--radius-xl);
+    border: 1px solid var(--border-default);
+    transition: border-color var(--motion-base), box-shadow var(--motion-base);
 }
 
 .rm-section:hover {
@@ -31,10 +31,10 @@ body {
 /* ===== Loading ===== */
 
 .loading-hint {
-    font-size: 12px;
-    color: #4a4a66;
+    font-size: var(--font-base);
+    color: var(--color-gray-800);
     text-align: center;
-    padding: 12px 0;
+    padding: var(--space-5) 0;
 }
 
 /* ===== GPU Info ===== */
@@ -42,15 +42,15 @@ body {
 .gpu-info-content {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: var(--space-5);
 }
 
 .gpu-card {
-    background: #1e1e2e;
-    border: 1px solid #2a2a3d;
-    border-radius: 8px;
-    padding: 14px 16px;
-    transition: border-color 0.2s;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    padding: 14px var(--space-6);
+    transition: border-color var(--motion-base);
 }
 
 .gpu-card:hover {
@@ -65,96 +65,96 @@ body {
 }
 
 .gpu-name {
-    font-size: 13px;
+    font-size: var(--font-md);
     font-weight: 600;
-    color: #d8d8ec;
+    color: var(--fg-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     flex: 1;
-    margin-right: 8px;
+    margin-right: var(--space-4);
 }
 
 .gpu-badges {
     display: flex;
-    gap: 6px;
+    gap: var(--space-3);
     flex-shrink: 0;
 }
 
 .gpu-badge {
-    font-size: 10px;
+    font-size: var(--font-xs);
     font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 10px;
+    padding: var(--space-1) var(--space-4);
+    border-radius: var(--radius-xl);
     letter-spacing: 0.3px;
 }
 
 .gpu-badge.discrete {
     background: rgba(91, 141, 239, 0.15);
-    color: #5b8def;
+    color: var(--accent);
 }
 
 .gpu-badge.integrated {
     background: rgba(251, 191, 36, 0.12);
-    color: #fbbf24;
+    color: var(--warning);
 }
 
 .gpu-badge.vendor {
     background: rgba(74, 222, 128, 0.12);
-    color: #4ade80;
+    color: var(--success);
 }
 
 .vram-bar-container {
-    margin-top: 4px;
+    margin-top: var(--space-2);
 }
 
 .vram-label {
     display: flex;
     justify-content: space-between;
-    font-size: 11px;
-    color: #8888a8;
-    margin-bottom: 6px;
+    font-size: var(--font-sm);
+    color: var(--color-gray-500);
+    margin-bottom: var(--space-3);
 }
 
 .vram-label .vram-used {
-    color: #4ade80;
+    color: var(--success);
     font-weight: 600;
 }
 
 .vram-label .vram-total {
-    color: #5a5a72;
+    color: var(--color-gray-700);
 }
 
 .vram-bar {
     width: 100%;
-    height: 8px;
-    background: #14141f;
-    border-radius: 4px;
+    height: var(--space-4);
+    background: var(--bg-app);
+    border-radius: var(--radius-md);
     overflow: hidden;
     position: relative;
 }
 
 .vram-bar-fill {
     height: 100%;
-    border-radius: 4px;
-    background: linear-gradient(90deg, #22c55e, #4ade80);
+    border-radius: var(--radius-md);
+    background: linear-gradient(90deg, var(--color-green-600), var(--success));
     transition: width 0.5s ease;
     min-width: 0;
 }
 
 .vram-bar-fill.warning {
-    background: linear-gradient(90deg, #f59e0b, #fbbf24);
+    background: linear-gradient(90deg, var(--color-amber-400), var(--warning));
 }
 
 .vram-bar-fill.critical {
-    background: linear-gradient(90deg, #ef4444, #f87171);
+    background: linear-gradient(90deg, var(--color-red-500), var(--danger));
 }
 
 .gpu-no-data {
-    font-size: 12px;
-    color: #4a4a66;
+    font-size: var(--font-base);
+    color: var(--color-gray-800);
     text-align: center;
-    padding: 8px 0;
+    padding: var(--space-4) 0;
 }
 
 /* ===== Model Groups ===== */
@@ -166,11 +166,11 @@ body {
 }
 
 .model-group {
-    background: #1e1e2e;
-    border: 1px solid #2a2a3d;
-    border-radius: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
     overflow: hidden;
-    transition: border-color 0.2s;
+    transition: border-color var(--motion-base);
 }
 
 .model-group:hover {
@@ -180,10 +180,10 @@ body {
 .model-group-header {
     display: flex;
     align-items: center;
-    padding: 12px 14px;
+    padding: var(--space-5) 14px;
     cursor: pointer;
     user-select: none;
-    transition: background 0.15s;
+    transition: background var(--motion-fast);
     gap: 10px;
 }
 
@@ -192,9 +192,9 @@ body {
 }
 
 .group-arrow {
-    font-size: 10px;
-    color: #6b9df5;
-    transition: transform 0.25s ease;
+    font-size: var(--font-xs);
+    color: var(--accent-hover);
+    transition: transform var(--motion-base) ease;
     flex-shrink: 0;
     width: 14px;
     text-align: center;
@@ -205,52 +205,52 @@ body {
 }
 
 .group-name {
-    font-size: 13px;
+    font-size: var(--font-md);
     font-weight: 600;
-    color: #d8d8ec;
+    color: var(--fg-secondary);
     flex: 1;
 }
 
 .group-loaded-badge {
-    font-size: 10px;
+    font-size: var(--font-xs);
     font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 10px;
+    padding: var(--space-1) var(--space-4);
+    border-radius: var(--radius-xl);
     background: rgba(91, 141, 239, 0.12);
-    color: #5b8def;
+    color: var(--accent);
     flex-shrink: 0;
 }
 
 .group-loaded-badge.all-loaded {
     background: rgba(74, 222, 128, 0.12);
-    color: #4ade80;
+    color: var(--success);
 }
 
 .group-loaded-badge.none-loaded {
     background: rgba(74, 74, 102, 0.2);
-    color: #4a4a66;
+    color: var(--color-gray-800);
 }
 
 .group-actions {
     display: flex;
-    gap: 6px;
+    gap: var(--space-3);
     flex-shrink: 0;
 }
 
 .group-action-btn {
-    font-size: 10px;
+    font-size: var(--font-xs);
     padding: 3px 10px;
     border: none;
     border-radius: 6px;
     cursor: pointer;
     font-weight: 500;
-    transition: all 0.15s;
-    color: #c8c8dc;
+    transition: all var(--motion-fast);
+    color: var(--fg-muted);
 }
 
 .group-action-btn.load-all {
     background: rgba(91, 141, 239, 0.15);
-    color: #5b8def;
+    color: var(--accent);
 }
 
 .group-action-btn.load-all:hover {
@@ -259,7 +259,7 @@ body {
 
 .group-action-btn.unload-all {
     background: rgba(239, 68, 68, 0.12);
-    color: #f87171;
+    color: var(--danger);
 }
 
 .group-action-btn.unload-all:hover {
@@ -274,7 +274,7 @@ body {
 .model-group-body {
     max-height: 0;
     overflow: hidden;
-    transition: max-height 0.3s ease;
+    transition: max-height var(--motion-slow) ease;
 }
 
 .model-group-body.expanded {
@@ -282,21 +282,21 @@ body {
 }
 
 .model-list {
-    padding: 0 14px 12px 14px;
+    padding: 0 14px var(--space-5) 14px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-4);
 }
 
 .model-item {
     display: flex;
     align-items: center;
-    padding: 10px 12px;
-    background: #14141f;
+    padding: 10px var(--space-5);
+    background: var(--bg-app);
     border-radius: 6px;
     border: 1px solid rgba(42, 42, 61, 0.5);
     gap: 10px;
-    transition: border-color 0.15s;
+    transition: border-color var(--motion-fast);
 }
 
 .model-item:hover {
@@ -309,18 +309,18 @@ body {
 }
 
 .model-name {
-    font-size: 12px;
+    font-size: var(--font-base);
     font-weight: 600;
-    color: #d8d8ec;
+    color: var(--fg-secondary);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
 .model-desc {
-    font-size: 10px;
-    color: #5a5a72;
-    margin-top: 2px;
+    font-size: var(--font-xs);
+    color: var(--color-gray-700);
+    margin-top: var(--space-1);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -329,59 +329,59 @@ body {
 .model-meta {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-4);
     flex-shrink: 0;
 }
 
 .model-size {
-    font-size: 10px;
-    color: #5a5a72;
+    font-size: var(--font-xs);
+    color: var(--color-gray-700);
     white-space: nowrap;
 }
 
 .ep-badge {
     font-size: 9px;
     font-weight: 700;
-    padding: 2px 7px;
-    border-radius: 4px;
+    padding: var(--space-1) 7px;
+    border-radius: var(--radius-md);
     letter-spacing: 0.5px;
     text-transform: uppercase;
 }
 
 .ep-badge.dml {
     background: rgba(74, 222, 128, 0.12);
-    color: #4ade80;
+    color: var(--success);
 }
 
 .ep-badge.cpu {
     background: rgba(251, 191, 36, 0.12);
-    color: #fbbf24;
+    color: var(--warning);
 }
 
 .ep-badge.tfjs {
     background: rgba(168, 85, 247, 0.12);
-    color: #a855f7;
+    color: var(--color-purple-400);
 }
 
 .ep-badge.none {
     background: rgba(74, 74, 102, 0.2);
-    color: #4a4a66;
+    color: var(--color-gray-800);
 }
 
 .model-btn {
-    font-size: 10px;
-    padding: 4px 12px;
+    font-size: var(--font-xs);
+    padding: var(--space-2) var(--space-5);
     border: none;
     border-radius: 6px;
     cursor: pointer;
     font-weight: 500;
-    transition: all 0.15s;
+    transition: all var(--motion-fast);
     white-space: nowrap;
 }
 
 .model-btn.load {
     background: rgba(91, 141, 239, 0.15);
-    color: #5b8def;
+    color: var(--accent);
 }
 
 .model-btn.load:hover {
@@ -390,7 +390,7 @@ body {
 
 .model-btn.unload {
     background: rgba(239, 68, 68, 0.12);
-    color: #f87171;
+    color: var(--danger);
 }
 
 .model-btn.unload:hover {
@@ -409,11 +409,11 @@ body {
 }
 
 .model-missing {
-    font-size: 10px;
-    color: #f87171;
-    padding: 2px 7px;
+    font-size: var(--font-xs);
+    color: var(--danger);
+    padding: var(--space-1) 7px;
     background: rgba(239, 68, 68, 0.08);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
 }
 
 /* ===== Summary ===== */
@@ -421,58 +421,58 @@ body {
 .summary-content {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: var(--space-4);
 }
 
 .summary-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 8px 12px;
-    background: #1e1e2e;
+    padding: var(--space-4) var(--space-5);
+    background: var(--bg-elevated);
     border-radius: 6px;
     border: 1px solid rgba(42, 42, 61, 0.5);
 }
 
 .summary-label {
-    font-size: 12px;
-    color: #8888a8;
+    font-size: var(--font-base);
+    color: var(--color-gray-500);
 }
 
 .summary-value {
-    font-size: 12px;
+    font-size: var(--font-base);
     font-weight: 600;
-    color: #d8d8ec;
+    color: var(--fg-secondary);
 }
 
 .summary-value.accent {
-    color: #5b8def;
+    color: var(--accent);
 }
 
 .summary-value.green {
-    color: #4ade80;
+    color: var(--success);
 }
 
 /* ===== Actions ===== */
 
 .rm-actions {
     display: flex;
-    gap: 12px;
+    gap: var(--space-5);
     justify-content: flex-end;
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid #2a2a3d;
+    margin-top: var(--space-7);
+    padding-top: var(--space-6);
+    border-top: 1px solid var(--border-default);
     align-items: center;
 }
 
 #refreshBtn {
-    background: linear-gradient(135deg, #5b8def, #4a7de0);
-    color: #ffffff;
+    background: var(--bg-button-primary);
+    color: var(--fg-on-accent);
     box-shadow: 0 4px 12px rgba(91, 141, 239, 0.25);
 }
 
 #refreshBtn:hover {
-    background: linear-gradient(135deg, #6b9df5, #5b8def);
+    background: var(--bg-button-primary-hover);
     box-shadow: 0 6px 16px rgba(91, 141, 239, 0.35);
     transform: translateY(-1px);
 }
@@ -486,7 +486,7 @@ body {
 
 @media (max-width: 640px) {
     .rm-container {
-        padding: 16px;
+        padding: var(--space-6);
     }
 
     .rm-section {
@@ -494,7 +494,7 @@ body {
     }
 
     h2 {
-        font-size: 18px;
+        font-size: var(--font-xl);
     }
 
     .model-item {
@@ -504,7 +504,7 @@ body {
     .model-meta {
         width: 100%;
         justify-content: flex-end;
-        margin-top: 4px;
+        margin-top: var(--space-2);
     }
 
     .rm-actions {

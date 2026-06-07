@@ -19,47 +19,53 @@ html, body {
 }
 
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(58, 58, 82, 0.6);
-  border-radius: 3px;
+  background: var(--scrollbar-thumb);
+  border-radius: var(--radius-sm);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(74, 74, 98, 0.8);
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* ==================== 选区颜色 ==================== */
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
 }
 
 /* ==================== section-title 样式 ==================== */
 .section-title {
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 600;
-  color: #6b9df5;
+  color: var(--accent-fg);
   margin: 0 0 14px 0;
   text-transform: uppercase;
   letter-spacing: 1px;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-4);
 }
 
 .section-title::before {
   content: '';
   width: 3px;
   height: 14px;
-  background: linear-gradient(180deg, #6b9df5, #5b8def);
-  border-radius: 2px;
+  background: linear-gradient(180deg, var(--color-blue-300), var(--accent));
+  border-radius: var(--radius-sm);
 }
 
 /* ==================== h2 标题样式 ==================== */
 h2 {
-  margin: 0 0 20px 0;
-  font-size: 20px;
+  margin: 0 0 var(--space-7) 0;
+  font-size: var(--font-2xl);
   font-weight: 600;
-  color: #5b8def;
-  border-bottom: 2px solid rgba(91, 141, 239, 0.2);
-  padding-bottom: 12px;
+  color: var(--accent);
+  border-bottom: 2px solid var(--accent-soft);
+  padding-bottom: var(--space-5);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -69,8 +75,8 @@ h2::before {
   content: '';
   width: 4px;
   height: 22px;
-  background: linear-gradient(180deg, #5b8def, #4a7de0);
-  border-radius: 2px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-pressed));
+  border-radius: var(--radius-sm);
 }
 
 /* ==================== @keyframes spin ==================== */
@@ -81,22 +87,22 @@ h2::before {
 
 /* ==================== 按钮全局样式 ==================== */
 button {
-  padding: 8px 20px;
-  font-size: 13px;
+  padding: var(--space-4) var(--space-7);
+  font-size: var(--font-md);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   font-weight: 500;
-  transition: all 0.2s;
+  transition: all var(--motion-base);
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-3);
 }
 
 /* ==================== .section-desc 样式 ==================== */
 .section-desc {
-  font-size: 11px;
-  color: #5a5a72;
+  font-size: var(--font-sm);
+  color: var(--color-gray-700);
   margin: -8px 0 14px 0;
   line-height: 1.5;
   padding-left: 11px;

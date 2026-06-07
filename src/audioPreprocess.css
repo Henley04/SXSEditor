@@ -1,6 +1,6 @@
 html, body {
-  background-color: #14141f;
-  color: #e0e0f0;
+  background-color: var(--bg-app);
+  color: var(--fg-primary);
 }
 
 #app {
@@ -16,11 +16,11 @@ html, body {
   align-items: center;
   height: 40px;
   min-height: 40px;
-  padding: 0 12px;
-  background: linear-gradient(180deg, #2f2f3d 0%, #282838 100%);
-  color: #e0e0f0;
-  border-bottom: 1px solid #1a1a28;
-  gap: 2px;
+  padding: 0 var(--space-5);
+  background: linear-gradient(180deg, var(--bg-toolbar-start) 0%, var(--bg-toolbar-end) 100%);
+  color: var(--fg-primary);
+  border-bottom: 1px solid var(--border-subtle);
+  gap: var(--space-1);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
@@ -33,33 +33,33 @@ html, body {
 .toolbar-divider {
   width: 1px;
   height: 22px;
-  background: linear-gradient(180deg, transparent, #4a4a62, transparent);
-  margin: 0 6px;
+  background: linear-gradient(180deg, transparent, var(--button-secondary-border), transparent);
+  margin: 0 var(--space-3);
   flex-shrink: 0;
 }
 
 .btn-toolbar {
-  background: linear-gradient(180deg, #3a3a4e 0%, #323246 100%);
-  color: #c8c8dc;
-  border: 1px solid #4a4a62;
-  border-radius: 4px;
-  padding: 4px 10px;
+  background: var(--bg-button);
+  color: var(--fg-muted);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) 10px;
   cursor: pointer;
-  font-size: 12px;
-  transition: all 0.15s ease;
+  font-size: var(--font-base);
+  transition: all var(--motion-fast) ease;
   white-space: nowrap;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
 }
 
 .btn-toolbar:hover {
-  background: linear-gradient(180deg, #484860 0%, #3e3e56 100%);
-  color: #f0f0ff;
-  border-color: #5a5a72;
+  background: var(--bg-button-hover);
+  color: var(--color-gray-50);
+  border-color: var(--color-gray-700);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
 }
 
 .btn-toolbar:active {
-  background: linear-gradient(180deg, #2a2a3e 0%, #262638 100%);
+  background: var(--bg-button-active);
   box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
@@ -70,32 +70,32 @@ html, body {
 }
 
 .btn-toolbar.btn-primary {
-  background: linear-gradient(180deg, #5b8def 0%, #4a7de0 100%);
-  border-color: #6b9df5;
-  color: #ffffff;
+  background: var(--bg-button-primary);
+  border-color: var(--accent-hover);
+  color: var(--fg-on-accent);
 }
 
 .btn-toolbar.btn-primary:hover {
-  background: linear-gradient(180deg, #6b9df5 0%, #5b8def 100%);
+  background: var(--bg-button-primary-hover);
   box-shadow: 0 1px 4px rgba(91, 141, 239, 0.3);
 }
 
 .btn-toolbar.btn-success {
-  background: linear-gradient(180deg, #4ade80 0%, #3ac870 100%);
-  border-color: #5aee90;
-  color: #0a0a14;
+  background: var(--bg-button-success);
+  border-color: var(--color-green-300);
+  color: var(--fg-on-success);
   font-weight: 600;
 }
 
 .btn-toolbar.btn-success:hover {
-  background: linear-gradient(180deg, #5aee90 0%, #4ade80 100%);
+  background: var(--bg-button-success-hover);
   box-shadow: 0 1px 4px rgba(74, 222, 128, 0.3);
 }
 
 #page-title {
-  font-size: 13px;
+  font-size: var(--font-md);
   font-weight: 500;
-  color: #d8d8ec;
+  color: var(--fg-secondary);
 }
 
 /* ==================== 主内容区 ==================== */
@@ -110,28 +110,28 @@ html, body {
 #waveform-section {
   flex: 0 0 25%;
   min-height: 120px;
-  background: #1a1a2a;
+  background: var(--bg-panel);
   display: flex;
   flex-direction: column;
 }
 
 #resize-handle {
   height: 4px;
-  background: #2a2a3d;
+  background: var(--bg-header-start);
   cursor: ns-resize;
   flex-shrink: 0;
-  transition: background-color 0.15s;
-  border-top: 1px solid #1a1a28;
-  border-bottom: 1px solid #1a1a28;
+  transition: background-color var(--motion-fast);
+  border-top: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 #resize-handle:hover {
-  background: #5b8def;
+  background: var(--accent);
 }
 
 #midi-section {
   flex: 1;
-  background: #14141f;
+  background: var(--bg-app);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -142,23 +142,23 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
-  background: linear-gradient(180deg, #2a2a3d 0%, #252538 100%);
-  border-bottom: 1px solid #1a1a28;
+  padding: var(--space-3) var(--space-5);
+  background: linear-gradient(180deg, var(--bg-header-start) 0%, var(--bg-header-end) 100%);
+  border-bottom: 1px solid var(--border-subtle);
   min-height: 30px;
 }
 
 .section-title {
-  font-size: 11px;
+  font-size: var(--font-sm);
   font-weight: 600;
-  color: #6a6a86;
+  color: var(--color-gray-600);
   text-transform: uppercase;
   letter-spacing: 0.8px;
 }
 
 .file-info {
-  font-size: 11px;
-  color: #8888a8;
+  font-size: var(--font-sm);
+  color: var(--color-gray-500);
   font-weight: 500;
 }
 
@@ -191,7 +191,7 @@ html, body {
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(10, 10, 20, 0.7);
+  background-color: var(--bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -200,10 +200,10 @@ html, body {
 }
 
 .loading-content {
-  background: linear-gradient(180deg, #2a2a3d 0%, #252538 100%);
-  border: 1px solid #3a3a52;
-  border-radius: 12px;
-  padding: 24px 36px;
+  background: linear-gradient(180deg, var(--bg-header-start) 0%, var(--bg-header-end) 100%);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-2xl);
+  padding: var(--space-8) 36px;
   text-align: center;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
 }
@@ -212,14 +212,14 @@ html, body {
   width: 36px;
   height: 36px;
   border: 3px solid rgba(91, 141, 239, 0.2);
-  border-top: 3px solid #5b8def;
+  border-top: 3px solid var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;
   margin: 0 auto 14px;
 }
 
 .loading-text {
-  font-size: 13px;
-  color: #d8d8ec;
+  font-size: var(--font-md);
+  color: var(--fg-secondary);
   font-weight: 500;
 }
