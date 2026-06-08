@@ -174,19 +174,16 @@ async function loadDevices() {
 
         for (const d of devices) {
             const option = document.createElement('option');
-            option.value = String(d.dxgiAdapterNumber);
+            // NPU devices use 'npu' as value, others use dxgiAdapterNumber
+            option.value = d.deviceType === 'npu' ? 'npu' : String(d.dxgiAdapterNumber);
             option.textContent = getDeviceOptionText(d);
             option.dataset.deviceType = d.deviceType || (d.isDiscrete ? 'discrete-gpu' : 'integrated-gpu');
             inferenceDeviceSelect.appendChild(option);
         }
 
-        // Add NPU device option if available
-        if (webnnInfo.npuAvailable) {
-            const npuOption = document.createElement('option');
-            npuOption.value = 'npu';
-            npuOption.textContent = `${t('settings.npuDevice')} [NPU(WebNN)]`;
-            npuOption.dataset.deviceType = 'npu';
-            inferenceDeviceSelect.appendChild(npuOption);
+        // Update cachedWebnnInfo from device list (NPU may now come from getDMLDevices)
+        if (!cachedWebnnInfo.npuAvailable && devices.some(d => d.deviceType === 'npu')) {
+            cachedWebnnInfo = { ...cachedWebnnInfo, npuAvailable: true };
         }
 
         // Restore device mode and selection from settings
@@ -329,17 +326,10 @@ function buildModelDeviceMapping() {
         // Populate with available devices
         for (const d of cachedDevices) {
             const opt = document.createElement('option');
-            opt.value = String(d.dxgiAdapterNumber);
+            // NPU devices use 'npu' as value, others use dxgiAdapterNumber
+            opt.value = d.deviceType === 'npu' ? 'npu' : String(d.dxgiAdapterNumber);
             opt.textContent = getDeviceOptionText(d);
             select.appendChild(opt);
-        }
-
-        // Add NPU option if available
-        if (cachedWebnnInfo && cachedWebnnInfo.npuAvailable) {
-            const npuOpt = document.createElement('option');
-            npuOpt.value = 'npu';
-            npuOpt.textContent = `${t('settings.npuDevice')} [NPU(WebNN)]`;
-            select.appendChild(npuOpt);
         }
 
         // Restore saved mapping

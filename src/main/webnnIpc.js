@@ -112,6 +112,43 @@ function registerWebnnIpc() {
   });
 }
 
+/**
+ * Detect NPU availability via WebNN API (renderer process).
+ * Reuses the existing webnn:detectNPU:request channel.
+ * Returns { npuAvailable: boolean, details: string }
+ */
+async function detectNPUAvailability() {
+  try {
+    const result = await new Promise((resolve) => {
+      const wc = getMainWindowWebContents();
+      if (!wc) {
+        resolve({ npuAvailable: false, details: 'No renderer window' });
+        return;
+      }
+
+      const requestId = `webnn-detect-npu-avail-${Date.now()}`;
+      const timeout = setTimeout(() => {
+        resolve({ npuAvailable: false, details: 'Detection timeout' });
+      }, 15000);
+
+      ipcMain.handleOnce(`webnn:detectNPU:response:${requestId}`, async (_, result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      });
+
+      wc.send('webnn:detectNPU:request', { requestId });
+    });
+
+    if (result.npuAvailable) {
+      _npuDetectionCache = result;
+    }
+    return { npuAvailable: !!result.npuAvailable, details: result.details || '' };
+  } catch (err) {
+    return { npuAvailable: false, details: err.message };
+  }
+}
+
 module.exports = {
   registerWebnnIpc,
+  detectNPUAvailability,
 };

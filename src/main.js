@@ -40,7 +40,7 @@ const { registerAudioIpc, resetAudioManagers } = require('./main/audioIpc');
 const { registerDialogIpc } = require('./main/dialogIpc');
 const { registerSettingsIpc, setCachedDMLDevices, invalidateDMLDevices } = require('./main/settingsIpc');
 const { registerResourceManagerIpc } = require('./main/resourceManagerIpc');
-const { registerWebnnIpc } = require('./main/webnnIpc');
+const { registerWebnnIpc, detectNPUAvailability } = require('./main/webnnIpc');
 
 let cachedDMLDevices = null;
 
@@ -107,7 +107,26 @@ app.whenReady().then(() => {
           }
         }
 
-        const npuAvailable = allDevices.some(d => d.deviceType === 'npu');
+        // Detect NPU via WebNN if not already in device list
+        let npuAvailable = allDevices.some(d => d.deviceType === 'npu');
+        if (!npuAvailable) {
+          try {
+            const npuResult = await detectNPUAvailability();
+            npuAvailable = npuResult.npuAvailable;
+            if (npuAvailable) {
+              allDevices.push({
+                name: 'NPU (WebNN)',
+                deviceType: 'npu',
+                isDiscrete: false,
+                vramBytes: 0,
+                vram: '0 MB',
+                vendor: '',
+                dxgiAdapterNumber: undefined,
+                source: 'webnn',
+              });
+            }
+          } catch (_) {}
+        }
 
         if (deviceMode === 'manual') {
           const preferredId = settings.preferredDeviceId ?? settings.deviceId;

@@ -6,6 +6,7 @@ const { enumerateDMLDevices } = require('../inference/nativeSvsPipeline');
 const { getSvsPipeline, resetSvsPipeline } = require('./svsIpc');
 const { resetRmvpe, resetBasicPitch, resetRosvot } = require('./pitchMidiIpc');
 const { t } = require('./locale');
+const { detectNPUAvailability } = require('./webnnIpc');
 
 let cachedDMLDevices = null;
 
@@ -30,7 +31,27 @@ function registerSettingsIpc() {
         const controllers = await ensureGPUInfo();
         cachedDMLDevices = await enumerateDMLDevices(modelDir, controllers);
       }
-      return cachedDMLDevices;
+      // Add NPU device if available via WebNN
+      const devices = [...cachedDMLDevices];
+      const hasNpu = devices.some(d => d.deviceType === 'npu');
+      if (!hasNpu) {
+        try {
+          const npuResult = await detectNPUAvailability();
+          if (npuResult.npuAvailable) {
+            devices.push({
+              name: 'NPU (WebNN)',
+              deviceType: 'npu',
+              isDiscrete: false,
+              vramBytes: 0,
+              vram: '0 MB',
+              vendor: '',
+              dxgiAdapterNumber: undefined,
+              source: 'webnn',
+            });
+          }
+        } catch (_) {}
+      }
+      return devices;
     } catch (err) {
       console.error('[Main] 枚举 DML 设备失败:', err);
       return [];
@@ -79,9 +100,12 @@ function registerSettingsIpc() {
 
     let npuAvailable = false;
     try {
-      await ipcMain.handleOnce('__internal:webnnDetectNPU') || {};
+      const npuResult = await detectNPUAvailability();
+      npuAvailable = npuResult.npuAvailable;
     } catch (_) {}
-    npuAvailable = allDevices.some(d => d.deviceType === 'npu');
+    if (!npuAvailable) {
+      npuAvailable = allDevices.some(d => d.deviceType === 'npu');
+    }
 
     if (deviceMode === 'manual') {
       const preferredId = settings.preferredDeviceId;

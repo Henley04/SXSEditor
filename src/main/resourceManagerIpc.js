@@ -9,6 +9,7 @@ const { getSvsPipeline } = require('./svsIpc');
 const { getRmvpeDetector, getBasicPitchDetector, getRosvotDetector, rmvpeLazy, basicPitchLazy, rosvotLazy } = require('./pitchMidiIpc');
 const { openResourceManagerWindow } = require('./windowManager');
 const { getCachedDMLDevices, setCachedDMLDevices } = require('./settingsIpc');
+const { detectNPUAvailability } = require('./webnnIpc');
 
 // #9: 缓存文件检查结果
 let modelFilesCache = null;
@@ -125,12 +126,33 @@ function registerResourceManagerIpc() {
         setCachedDMLDevices(devices);
       }
 
+      // Add NPU device if available via WebNN
+      const hasNpu = devices.some(d => d.deviceType === 'npu');
+      if (!hasNpu) {
+        try {
+          const npuResult = await detectNPUAvailability();
+          if (npuResult.npuAvailable) {
+            devices = [...devices, {
+              name: 'NPU (WebNN)',
+              deviceType: 'npu',
+              isDiscrete: false,
+              vramBytes: 0,
+              vram: '0 MB',
+              vendor: '',
+              dxgiAdapterNumber: undefined,
+              source: 'webnn',
+            }];
+          }
+        } catch (_) {}
+      }
+
       const gpuList = devices.map(d => {
         const vramInfo = vramData.find(v => v.adapterIndex === d.dxgiAdapterNumber);
         const usageBytes = vramInfo ? vramInfo.usageBytes : 0;
         const budgetBytes = vramInfo ? vramInfo.budgetBytes : 0;
         return {
           name: d.name,
+          deviceType: d.deviceType || (d.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'),
           isDiscrete: d.isDiscrete,
           vram: d.vram,
           vramBytes: d.vramBytes,
