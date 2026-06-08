@@ -23,7 +23,7 @@
 
 ## English
 
-SXSEditor is an open-source desktop singing voice synthesis (SVS) workstation. It combines a visual piano-roll editor with a neural SVS pipeline based on the SoulX-Singer acoustic model, running entirely through ONNX Runtime for efficient inference on GPU (DirectML) and CPU.
+SXSEditor is an open-source desktop singing voice synthesis (SVS) workstation. It combines a visual piano-roll editor with a neural SVS pipeline based on the SoulX-Singer acoustic model, running through ONNX Runtime for efficient inference on GPU (DirectML), NPU (WebNN), and CPU.
 
 > **SVS Language Support**: Currently supports **English** and **Chinese (Mandarin)** singing voice synthesis. Japanese and other languages are under development.
 
@@ -72,7 +72,7 @@ Download the latest pre-built installer for **Windows**:
 | ▶️ Real-time Playback | Synthesize & play directly in editor |
 | 🔊 WASAPI Exclusive Mode | Low-latency audio output via naudiodon |
 | 📦 WAV Export | Mix & export to standard WAV (24kHz) |
-| ⚡ GPU Acceleration | DirectML (NVIDIA / AMD / Intel) |
+| ⚡ GPU Acceleration | DirectML (NVIDIA / AMD / Intel), NPU (WebNN) |
 | 📊 Resource Manager | Monitor GPU/VRAM usage, load/unload individual models |
 | 🚀 Optimized IPC | Float32Array binary transfer for low-latency audio pipeline |
 | 🖥️ HiDPI Support | High-resolution canvas rendering for Retina/HiDPI displays |
@@ -98,8 +98,8 @@ A: You need to place the SoulX-Singer ONNX models in the `onnx_models/` director
 **Q: Can I use my own voice?**  
 A: Yes! Use the Singer Creator to create a custom singer from a reference WAV audio file. If the WAV exceeds 30 seconds, a trim dialog will appear allowing you to select a clip segment (max 30s). The model will learn the vocal characteristics.
 
-**Q: Does it work without a GPU?**  
-A: Yes. ONNX Runtime will fall back to CPU automatically if no compatible GPU is detected.
+**Q: Does it work without a GPU?**
+A: Yes. ONNX Runtime will fall back to CPU automatically if no compatible GPU is detected. NPU (via WebNN) is also supported on compatible hardware for energy-efficient inference.
 
 **Q: How do I report a bug?**  
 A: Open an issue on [GitHub Issues](https://github.com/Henley04/SXSEditor/issues).
@@ -233,7 +233,7 @@ See [onnx_models/README.md](onnx_models/README.md) for detailed specifications a
 | Frontend | Vanilla JavaScript, HTML5 Canvas, Wavesurfer.js |
 | Desktop Framework | Electron + Electron Forge |
 | Build Tool | Webpack |
-| Inference Engine | ONNX Runtime Node |
+| Inference Engine | ONNX Runtime Node (GPU/CPU) + ONNX Runtime Web (NPU/WebNN) |
 | Neural Models | SoulX-Singer (Diffusion-based SVS) |
 | Pitch Detection | RMVPE ONNX, Basic Pitch (TensorFlow.js) |
 | Audio Output | naudiodon (WASAPI shared/exclusive mode) |
@@ -334,7 +334,7 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## 中文
 
-**SXSEditor** — 一款开源的 AI 歌声合成（SVS）桌面工作台。基于 **ONNX Runtime** 和 **Electron** 构建，采用 **SoulX-Singer** 声学模型进行神经网络歌声合成，支持 GPU（DirectML）和 CPU 推理。
+**SXSEditor** — 一款开源的 AI 歌声合成（SVS）桌面工作台。基于 **ONNX Runtime** 和 **Electron** 构建，采用 **SoulX-Singer** 声学模型进行神经网络歌声合成，支持 GPU（DirectML）、NPU（WebNN）和 CPU 推理。
 
 > **SVS 语言支持**：目前支持 **中文（普通话）** 和 **英语** 歌声合成。日语等其他语言正在开发中。
 
@@ -381,7 +381,7 @@ This project is licensed under the [MIT License](LICENSE).
 | ▶️ 实时播放 | 直接合成播放 |
 | 🔊 WASAPI 独占模式 | 通过 naudiodon 实现低延迟音频输出 |
 | 📦 WAV 导出 | 混音导出为标准 WAV |
-| ⚡ GPU 加速 | DirectML（NVIDIA / AMD / Intel） |
+| ⚡ GPU 加速 | DirectML（NVIDIA / AMD / Intel）、NPU（WebNN） |
 | 📊 资源管理器 | 监控 GPU/显存占用，单独加载/卸载模型 |
 | 🚀 优化 IPC 传输 | Float32Array 二进制传输，低延迟音频管线 |
 | 🎵 Vocoder 长音频优化 | 短音频一次性推理，长音频大块分片（1024帧/块），减少ONNX调度开销 |
@@ -528,7 +528,7 @@ npm run test:watch       # 监视模式
 
 ## 日本語
 
-**SXSEditor** — オープンソースのデスクトップ歌声合成（SVS）ワークステーションです。**ONNX Runtime** と **Electron** をベースに、**SoulX-Singer** 音響モデルを使用したニューラル歌声合成を実現し、GPU（DirectML）と CPU の両方で効率的な推論をサポートします。
+**SXSEditor** — オープンソースのデスクトップ歌声合成（SVS）ワークステーションです。**ONNX Runtime** と **Electron** をベースに、**SoulX-Singer** 音響モデルを使用したニューラル歌声合成を実現し、GPU（DirectML）、NPU（WebNN）、CPU で効率的な推論をサポートします。
 
 > **SVS 言語サポート**：現在は **中国語（普通話）** と **英語** の歌声合成をサポートしています。日本語などの他の言語は現在開発中です。
 
@@ -585,7 +585,7 @@ npm run test:watch       # 监视模式
 | ▶️ リアルタイム再生 | エディター内で直接合成・再生 |
 | 🔊 WASAPI 排他モード | naudiodon による低レイテンシオーディオ出力 |
 | 📦 WAV エクスポート | 標準 WAV へのミックスダウン |
-| ⚡ GPU アクセラレーション | DirectML（NVIDIA / AMD / Intel） |
+| ⚡ GPU アクセラレーション | DirectML（NVIDIA / AMD / Intel）、NPU（WebNN） |
 | 📊 リソースマネージャー | GPU/VRAM使用量の監視、モデルの個別ロード/アンロード |
 | 🚀 最適化 IPC 転送 | Float32Array バイナリ転送による低レイテンシオーディオパイプライン |
 | 🖥️ HiDPI サポート | 高解像度 Canvas レンダリング、Retina/HiDPI ディスプレイ対応 |
