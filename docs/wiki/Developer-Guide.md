@@ -167,6 +167,107 @@ The packaging uses Electron Forge with makers configured for:
 
 ---
 
+## Adding a New Theme / 添加新主题
+
+SXSEditor's UI is fully driven by a three-layer **Design Token** system (`global → alias → component`) and a JSON-based **Theme Pack** format. Adding a new theme is as simple as writing a single `.theme.json` file.
+
+### Theme Pack JSON Format
+
+```json
+{
+  "id":          "my-cool-theme",   // required, kebab-case, unique
+  "name":        "My Cool Theme",   // required, human-readable label
+  "version":     "1.0.0",           // required, semver
+  "author":      "Your Name",       // optional
+  "isDark":      true,              // required, true for dark themes
+  "description": "...",             // optional
+  "tags":        ["dark", "blue"],  // optional, free-form
+  "extends":     "dark-aurora",     // optional, parent theme id
+  "tokens": {                       // required, key = full token name
+    "--color-blue-500": "#5b8def",
+    "--bg-app":          "#14141f",
+    "--button-primary-bg": "var(--color-blue-500)"
+  }
+}
+```
+
+| Field | Required | Notes |
+|-------|----------|-------|
+| `id` | ✓ | kebab-case, must not start or end with `-`, must be unique |
+| `name` | ✓ | Display name in the dropdown |
+| `version` | ✓ | semver; missing → defaults to `1.0.0` |
+| `isDark` | ✓ | Used for icons / auto dark-mode hints |
+| `tokens` | ✓ | Object: token name → CSS value |
+| `extends` | – | Parent theme id. Inheritance depth is capped at **3 levels** and cyclic `extends` is rejected by `themeValidator`. |
+| `author`, `description`, `tags` | – | Free-form metadata |
+
+### Token Naming Convention
+
+Tokens follow `--{layer}-{group}-{key}` (e.g. `--color-blue-500`, `--bg-app`, `--button-primary-bg`).
+
+- **Layer prefix**: `--color-*` (palette) / `--bg-*` `--fg-*` `--border-*` (alias) / `--button-*` `--input-*` `--panel-*` `--tooltip-*` `--selection-*` (component)
+- **Group**: `blue` / `gray` / `ink` / `red` / `green` / `amber` / `purple` for colors; `space-0` … `space-8`, `radius-sm` … `radius-full`, `font-xs` … `font-2xl`, `motion-fast` … `motion-slow`
+- **Key**: ordinal (`50` … `900`), state (`hover` / `pressed` / `focus`), or semantic (`app` / `panel` / `elevated` / `input`)
+
+The full token list is documented in `src/themes/tokenCatalog.js`. Alias tokens reference global tokens via `var(--color-...)`; component tokens reference alias tokens.
+
+### Supported Value Formats
+
+| Token type | Accepted formats |
+|------------|-----------------|
+| **Color** | `#rgb`, `#rrggbb`, `#rrggbbaa`, `rgba(r, g, b, a)`, `hsla(h, s%, l%, a)`, `transparent`, `currentColor` |
+| **Size** (spacing, radius, font) | `<number><unit>` where unit ∈ `px` / `rem` / `em` / `%` / `vh` / `vw`. Bare numbers (e.g. `0`) are also accepted for unitless values. |
+| **Motion** (duration) | `<number><unit>` where unit ∈ `s` / `ms` |
+| **Shadow** | Any valid CSS `box-shadow` value as a string |
+| **String** (e.g. font-family) | Plain string |
+
+### Minimal Example
+
+```json
+{
+  "id": "midnight-rose",
+  "name": "Midnight Rose",
+  "version": "1.0.0",
+  "isDark": true,
+  "extends": "dark-aurora",
+  "tokens": {
+    "--accent":           "#f43f5e",
+    "--accent-hover":     "#fb7185",
+    "--button-primary-bg":"var(--color-red-500)"
+  }
+}
+```
+
+This theme inherits every token from `dark-aurora` and only overrides the accent palette.
+
+### Testing the Theme
+
+1. Drop the file into `<userData>/themes/<theme-id>.theme.json`. The `<userData>` path is:
+   - **Windows**: `%APPDATA%\sxseditor\`
+   - **macOS**: `~/Library/Application Support/sxseditor/`
+   - **Linux**: `~/.config/sxseditor/`
+2. Restart the application — the new theme appears under the **User** group in the Settings dropdown.
+3. Select it to apply. Hot-swap back to `dark-aurora` to compare.
+
+For rapid iteration, copy the file into the user themes folder and use the in-app **Edit current theme** dialog (changes are saved per window without restart).
+
+### Registering a Built-in Theme
+
+To ship a theme as a built-in (read-only, bundled in `app.asar`):
+
+1. Create the JSON file under `src/themes/builtins/<id>.theme.json` (mirroring the four existing files).
+2. Register it in `src/themes/builtins/index.js`:
+   ```js
+   import midnightRose from './midnight-rose.theme.json';
+   export const BUILTIN_THEMES = [darkAurora, lightPaper, midnightAmber, contrastOnyx, midnightRose];
+   ```
+3. Run `npm test` — the new theme is automatically exercised by `test/themeTokens.test.js` (which asserts that every built-in covers the required token set).
+4. Run `npm run package:lite` to confirm the file is included in the package.
+
+> Built-in themes are read-only and cannot be deleted from the Settings UI. The `deleteTheme` IPC method explicitly refuses to remove them.
+
+---
+
 ## Contributing
 
 Contributions are welcome! Here's how to get started:

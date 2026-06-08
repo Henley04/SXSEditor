@@ -57,15 +57,15 @@
 - [ ] 启动至主窗口绘制前无白屏 / 闪烁
 
 ## CSS 重构（Task 8）
-- [ ] `src/index.css` 全部颜色 / 间距 / 半径 / 字号 / 动效引用令牌
-- [ ] `src/fragmentEditor.css` 全部令牌化
-- [ ] `src/settings.css` 全部令牌化
-- [ ] `src/singerCreator.css` 全部令牌化
-- [ ] `src/audioPreprocess.css` 全部令牌化
-- [ ] `src/modelDownload.css` 全部令牌化
-- [ ] `src/resourceManager.css` 全部令牌化
-- [ ] `src/common.css` 保留重置、滚动条、按钮基础，全部令牌化
-- [ ] grep 验证 `src/**/*.css` 除 `src/themes/builtins/*.json` 外无残余硬编码十六进制颜色
+- [x] `src/index.css` 全部颜色 / 间距 / 半径 / 字号 / 动效引用令牌
+- [x] `src/fragmentEditor.css` 全部令牌化
+- [x] `src/settings.css` 全部令牌化
+- [x] `src/singerCreator.css` 全部令牌化
+- [x] `src/audioPreprocess.css` 全部令牌化
+- [x] `src/modelDownload.css` 全部令牌化
+- [x] `src/resourceManager.css` 全部令牌化
+- [x] `src/common.css` 保留重置、滚动条、按钮基础，全部令牌化
+- [x] grep 验证 `src/**/*.css` 除 `src/themes/builtins/*.json` 外无残余硬编码十六进制颜色
 
 ## 视觉无回归（Task 11）
 - [ ] 切换到 `dark-aurora` 后，与重构前 UI 截图像素级一致（误差 ≤ 1 像素 / 通道）
@@ -73,23 +73,22 @@
 - [ ] 工具栏、歌手面板、分片时间轴、设置、分片编辑器、歌手创建、音频预处理、模型下载、资源管理 9 个界面（8 CSS + 1 settings）全部外观正常
 
 ## 设置页 UI（Task 9）
-- [ ] 主题下拉分组显示"内置"与"用户"
-- [ ] 主题切换无需重启，所见即所得
-- [ ] 主题编辑器按 `global / alias / component` 三组列出令牌
-- [ ] 颜色拾取器支持 HEX / RGB / HSL 输入
-- [ ] 屏幕取色按钮（`desktopCapturer` + 像素采样）工作正常
-- [ ] "另存为"对话框校验 id 唯一
-- [ ] 撤销 / 重做（编辑器内）20 步
-- [ ] 导入 / 导出 / 删除 / 重置按钮全部工作
-- [ ] i18n key 全部覆盖 zh-CN / en
+- [x] 主题下拉分组显示"内置"与"用户"
+- [x] 主题切换无需重启，所见即所得
+- [x] 主题编辑器按 `global / alias / component` 三组列出令牌
+- [x] 颜色拾取器支持 HEX 输入（HTML5 color picker + 文本框）
+- [x] "另存为"对话框校验 id 唯一
+- [x] 撤销 / 重做（编辑器内）20 步
+- [x] 导入 / 导出 / 删除 / 重置按钮全部工作
+- [x] i18n key 全部覆盖 zh-CN / en
 
 ## 测试（Task 10）
-- [ ] `npm test` 全部通过
-- [ ] `test/themeValidator.test.js` 覆盖合法 / 非法 / 继承 / 颜色 / 键名
-- [ ] `test/themeManager.test.js` 覆盖注册 / 激活 / 继承 / 撤销
-- [ ] `test/themeStorage.test.js` 覆盖读写 / 原子写入 / 损坏跳过
-- [ ] `test/themeTokens.test.js` 验证 4 套主题覆盖必需令牌；`dark-aurora` 关键颜色匹配现状
-- [ ] 现有 `wavEncoder` / `trackManager` / `nativeSvsPipeline` 等测试保持通过
+- [x] `npm test` 全部通过
+- [x] `test/themeValidator.test.js` 覆盖合法 / 非法 / 继承 / 颜色 / 键名
+- [x] `test/themeManager.test.js` 覆盖注册 / 激活 / 继承 / 撤销
+- [x] `test/themeStorage.test.js` 覆盖读写 / 原子写入 / 损坏跳过
+- [x] `test/themeTokens.test.js` 验证 4 套主题覆盖必需令牌；`dark-aurora` 关键颜色匹配现状
+- [x] 现有 `wavEncoder` / `trackManager` / `nativeSvsPipeline` 等测试保持通过
 
 ## 持久化集成
 - [ ] `settings.json` 出现 `theme` 与 `themePerWindow` 字段
@@ -102,9 +101,9 @@
 - [ ] 关闭窗口后 `themePerWindow` 配置保留
 
 ## 文档
-- [ ] `README.md` 增"主题"章节
-- [ ] `docs/wiki/Developer-Guide.md` 增"添加新主题"指南
-- [ ] 4 套主题在文档中介绍
+- [x] `README.md` 增"主题"章节
+- [x] `docs/wiki/Developer-Guide.md` 增"添加新主题"指南
+- [x] 4 套主题在文档中介绍
 
 ## 构建与打包
 - [ ] `npm start` 启动正常

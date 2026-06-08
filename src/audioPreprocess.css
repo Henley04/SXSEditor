@@ -21,7 +21,7 @@ html, body {
   color: var(--fg-primary);
   border-bottom: 1px solid var(--border-subtle);
   gap: var(--space-1);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px var(--shadow-color-mid);
 }
 
 .toolbar-group {
@@ -48,19 +48,19 @@ html, body {
   font-size: var(--font-base);
   transition: all var(--motion-fast) ease;
   white-space: nowrap;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  text-shadow: 0 1px 2px var(--shadow-color-mid);
 }
 
 .btn-toolbar:hover {
   background: var(--bg-button-hover);
   color: var(--color-gray-50);
   border-color: var(--color-gray-700);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 4px var(--shadow-color);
 }
 
 .btn-toolbar:active {
   background: var(--bg-button-active);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: inset 0 1px 3px var(--shadow-color-mid);
 }
 
 .btn-toolbar:disabled {
@@ -77,7 +77,7 @@ html, body {
 
 .btn-toolbar.btn-primary:hover {
   background: var(--bg-button-primary-hover);
-  box-shadow: 0 1px 4px rgba(91, 141, 239, 0.3);
+  box-shadow: 0 1px 4px var(--accent-glow);
 }
 
 .btn-toolbar.btn-success {
@@ -89,7 +89,7 @@ html, body {
 
 .btn-toolbar.btn-success:hover {
   background: var(--bg-button-success-hover);
-  box-shadow: 0 1px 4px rgba(74, 222, 128, 0.3);
+  box-shadow: 0 1px 4px var(--success-glow);
 }
 
 #page-title {
@@ -205,13 +205,13 @@ html, body {
   border-radius: var(--radius-2xl);
   padding: var(--space-8) 36px;
   text-align: center;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 12px 40px var(--shadow-color-strong);
 }
 
 .loading-spinner {
   width: 36px;
   height: 36px;
-  border: 3px solid rgba(91, 141, 239, 0.2);
+  border: 3px solid var(--accent-line);
   border-top: 3px solid var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;

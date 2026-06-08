@@ -1,5 +1,17 @@
 const rules = require('./webpack.rules');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
+const CopyPlugin = require('copy-webpack-plugin');
+const path = require('node:path');
+
+const WINDOW_NAMES = [
+  'main_window',
+  'fragment_editor_window',
+  'singer_creator_window',
+  'audio_preprocess_window',
+  'settings_window',
+  'model_download_window',
+  'resource_manager_window',
+];
 
 rules.push({
   test: /\.css$/,
@@ -28,6 +40,14 @@ module.exports = {
   plugins: [
     new MiniCssExtractPlugin({
       filename: '[name]/style.css',
+    }),
+    new CopyPlugin({
+      patterns: WINDOW_NAMES.flatMap((name) => [
+        {
+          from: path.resolve(__dirname, 'src/themes/themeBootstrap.js'),
+          to: path.resolve(__dirname, `.webpack/renderer/${name}/themes/themeBootstrap.js`),
+        },
+      ]),
     }),
   ],
   resolve: {

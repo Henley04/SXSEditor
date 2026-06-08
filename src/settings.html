@@ -175,6 +175,25 @@
         </div>
 
         <div class="settings-section">
+            <h3 class="section-title" data-i18n="settings.theme.title">主题</h3>
+            <p class="section-desc" data-i18n="settings.theme.selectLabel">当前主题</p>
+
+            <div class="setting-group">
+                <label for="themeSelect" data-i18n="settings.theme.selectLabel">当前主题</label>
+                <select id="themeSelect"></select>
+                <p class="hint" data-i18n="settings.theme.selectLabel">切换主题会立即生效，无需重启应用。</p>
+            </div>
+
+            <div class="theme-actions">
+                <button class="btn-theme-action" id="themeEditBtn" data-i18n="settings.theme.edit">✎ 编辑当前主题</button>
+                <button class="btn-theme-action" id="themeImportBtn" data-i18n="settings.theme.import">📥 导入主题</button>
+                <button class="btn-theme-action" id="themeExportBtn" data-i18n="settings.theme.export">📤 导出主题</button>
+                <button class="btn-theme-action btn-theme-danger" id="themeDeleteBtn" data-i18n="settings.theme.delete">🗑 删除用户主题</button>
+                <button class="btn-theme-action btn-theme-secondary" id="themeResetBtn" data-i18n="settings.theme.reset">↺ 重置为默认</button>
+            </div>
+        </div>
+
+        <div class="settings-section">
             <h3 class="section-title" data-i18n="settings.modelManagement">模型管理</h3>
             <div class="setting-group">
                 <label for="modelPrecision" data-i18n="settings.modelPrecision">模型精度</label>
@@ -206,6 +225,50 @@
             <button id="cancelBtn" data-i18n="settings.cancelBtn">取消</button>
         </div>
     </div>
+
+    <!-- ==================== Theme Editor Modal ==================== -->
+    <div class="theme-editor-modal" id="themeEditorModal" hidden>
+        <div class="theme-editor-overlay" data-theme-editor-close></div>
+        <div class="theme-editor-panel" role="dialog" aria-modal="true" aria-labelledby="themeEditorTitle">
+            <div class="theme-editor-header">
+                <h3 id="themeEditorTitle" data-i18n="settings.theme.editor.title">主题编辑器</h3>
+                <div class="theme-editor-toolbar">
+                    <button class="btn-theme-editor" id="themeEditorUndoBtn" data-i18n="settings.theme.editor.undo">↶ 撤销</button>
+                    <button class="btn-theme-editor" id="themeEditorRedoBtn" data-i18n="settings.theme.editor.redo">↷ 重做</button>
+                    <button class="btn-theme-editor" id="themeEditorResetAllBtn" data-i18n="settings.theme.editor.resetAll">↺ 重置全部</button>
+                    <button class="btn-theme-editor btn-theme-editor-primary" id="themeEditorSaveAsBtn" data-i18n="settings.theme.saveAs">💾 另存为新主题</button>
+                    <button class="btn-theme-editor btn-theme-editor-close" id="themeEditorCloseBtn" data-i18n="settings.theme.editor.close">关闭</button>
+                </div>
+            </div>
+            <div class="theme-editor-body" id="themeEditorBody">
+                <!-- Filled dynamically: layered groups of token editors -->
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== Save As Theme Modal ==================== -->
+    <div class="theme-saveas-modal" id="themeSaveAsModal" hidden>
+        <div class="theme-saveas-overlay" data-theme-saveas-close></div>
+        <div class="theme-saveas-panel" role="dialog" aria-modal="true" aria-labelledby="themeSaveAsTitle">
+            <h3 id="themeSaveAsTitle" data-i18n="settings.theme.saveAsTitle">另存为新主题</h3>
+            <div class="setting-group">
+                <label for="themeSaveAsId" data-i18n="settings.theme.saveAsIdLabel">主题 ID（kebab-case）</label>
+                <input type="text" id="themeSaveAsId" data-i18n-placeholder="settings.theme.saveAsIdPlaceholder" placeholder="my-custom-theme" />
+                <p class="hint" id="themeSaveAsIdError" hidden></p>
+            </div>
+            <div class="setting-group">
+                <label for="themeSaveAsName" data-i18n="settings.theme.saveAsNameLabel">主题名称</label>
+                <input type="text" id="themeSaveAsName" data-i18n-placeholder="settings.theme.saveAsNamePlaceholder" placeholder="我的自定义主题" />
+            </div>
+            <div class="theme-saveas-actions">
+                <button class="btn-theme-editor" id="themeSaveAsCancelBtn" data-i18n="settings.theme.saveAsCancel">取消</button>
+                <button class="btn-theme-editor btn-theme-editor-primary" id="themeSaveAsConfirmBtn" data-i18n="settings.theme.saveAsConfirm">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ==================== Toast ==================== -->
+    <div class="theme-toast" id="themeToast" hidden></div>
 
 </body>
 </html>

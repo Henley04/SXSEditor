@@ -45,19 +45,19 @@
   font-size: var(--font-base);
   transition: all var(--motion-fast) ease;
   white-space: nowrap;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  text-shadow: 0 1px 2px var(--shadow-color);
 }
 
 #toolbar button:hover {
   background: var(--bg-button-hover);
-  color: #f0f0ff;
+  color: var(--fg-toolbar-hover);
   border-color: var(--color-gray-700);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 4px var(--shadow-color);
 }
 
 #toolbar button:active {
   background: var(--bg-button-active);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: inset 0 1px 3px var(--shadow-color-mid);
 }
 
 #toolbar button:disabled {
@@ -87,14 +87,14 @@
 #bpm-input {
   width: 58px;
   font-weight: 600;
-  color: #a8c8ff;
+  color: var(--fg-bpm);
   border-color: var(--accent-soft);
-  background: rgba(91, 141, 239, 0.08);
+  background: var(--accent-softer);
 }
 
 #bpm-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.3);
+  box-shadow: 0 0 0 2px var(--accent-line-strong);
 }
 
 #toolbar label {
@@ -109,7 +109,7 @@
   font-variant-numeric: tabular-nums;
   font-size: var(--font-lg);
   font-weight: 500;
-  color: #e8e8f8;
+  color: var(--fg-time);
   background: var(--bg-input);
   padding: var(--space-2) 10px;
   border-radius: var(--radius-md);
@@ -117,7 +117,7 @@
   min-width: 100px;
   text-align: center;
   letter-spacing: 0.5px;
-  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.2);
+  box-shadow: inset 0 1px 2px var(--shadow-color);
 }
 
 /* ==================== 主内容区 ==================== */
@@ -252,7 +252,7 @@
 }
 
 .singer-item.active {
-  background: #2a2a42;
+  background: var(--bg-singer-active);
   border-left: 3px solid var(--accent);
   padding-left: 7px;
 }
@@ -274,7 +274,7 @@
   color: var(--color-gray-600);
   flex-shrink: 0;
   overflow: hidden;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 3px var(--shadow-color);
 }
 
 .singer-avatar img {
@@ -341,7 +341,7 @@
 
 .btn-relocate-singer:hover {
   background: var(--bg-button-danger-hover);
-  box-shadow: 0 1px 4px rgba(248, 113, 113, 0.3);
+  box-shadow: 0 1px 4px var(--danger-glow);
 }
 
 .singer-item-actions {
@@ -393,7 +393,7 @@
   background: var(--bg-button-danger);
   color: var(--fg-on-accent);
   border-color: var(--danger);
-  box-shadow: 0 1px 4px rgba(248, 113, 113, 0.3);
+  box-shadow: 0 1px 4px var(--danger-glow);
 }
 
 /* ==================== 分片时间轴 ==================== */
@@ -424,9 +424,9 @@
 #bpm-display-badge {
   font-size: var(--font-base);
   font-weight: 600;
-  color: #a8c8ff;
+  color: var(--fg-bpm);
   background: var(--accent-soft);
-  border: 1px solid rgba(91, 141, 239, 0.3);
+  border: 1px solid var(--accent-line-strong);
   border-radius: var(--radius-md);
   padding: var(--space-1) var(--space-4);
   letter-spacing: 0.5px;
@@ -438,8 +438,8 @@
 }
 
 @keyframes bpmFlash {
-  0% { background: rgba(91, 141, 239, 0.5); border-color: var(--accent); color: var(--fg-on-accent); }
-  100% { background: var(--accent-soft); border-color: rgba(91, 141, 239, 0.3); color: #a8c8ff; }
+  0% { background: var(--accent-glow-strong); border-color: var(--accent); color: var(--fg-on-accent); }
+  100% { background: var(--accent-soft); border-color: var(--accent-line-strong); color: var(--fg-bpm); }
 }
 
 #fragment-canvas-container {
