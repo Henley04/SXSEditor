@@ -106,5 +106,5 @@ button {
   margin: -8px 0 14px 0;
   line-height: 1.5;
   padding-left: 11px;
-  border-left: 2px solid rgba(90, 90, 114, 0.3);
+  border-left: 2px solid var(--ink-soft);
 }

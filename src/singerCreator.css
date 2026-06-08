@@ -21,7 +21,7 @@ html, body {
   color: var(--fg-primary);
   border-bottom: 1px solid var(--border-subtle);
   gap: var(--space-1);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 1px 3px var(--shadow-color-mid);
 }
 
 .toolbar-group {
@@ -48,19 +48,19 @@ html, body {
   font-size: var(--font-base);
   transition: all var(--motion-fast) ease;
   white-space: nowrap;
-  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  text-shadow: 0 1px 2px var(--shadow-color-mid);
 }
 
 #toolbar button:hover {
   background: var(--bg-button-hover);
   color: var(--color-gray-50);
   border-color: var(--color-gray-700);
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 4px var(--shadow-color);
 }
 
 #toolbar button:active {
   background: var(--bg-button-active);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+  box-shadow: inset 0 1px 3px var(--shadow-color-mid);
 }
 
 #toolbar button.btn-primary {
@@ -72,7 +72,7 @@ html, body {
 
 #toolbar button.btn-primary:hover {
   background: var(--bg-button-success-hover);
-  box-shadow: 0 1px 4px rgba(74, 222, 128, 0.3);
+  box-shadow: 0 1px 4px var(--success-glow);
 }
 
 #page-title {
@@ -175,7 +175,7 @@ html, body {
 .form-group input[type="text"]:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.2);
+  box-shadow: 0 0 0 2px var(--accent-line);
 }
 
 .form-group input[type="text"]::placeholder {
@@ -244,7 +244,7 @@ html, body {
   justify-content: center;
   font-size: 32px;
   overflow: hidden;
-  box-shadow: 0 4px 12px rgba(91, 141, 239, 0.25);
+  box-shadow: 0 4px 12px var(--accent-glow);
 }
 
 .preview-avatar img {
@@ -264,13 +264,13 @@ html, body {
 
 .upload-area:hover {
   border-color: var(--accent);
-  background-color: rgba(91, 141, 239, 0.06);
+  background-color: var(--accent-softer);
 }
 
 .upload-area.drag-over {
   border-color: var(--success);
-  background-color: rgba(74, 222, 128, 0.06);
-  box-shadow: 0 0 0 3px rgba(74, 222, 128, 0.12);
+  background-color: var(--success-soft);
+  box-shadow: 0 0 0 3px var(--success-soft);
 }
 
 .upload-icon {
@@ -359,7 +359,7 @@ html, body {
 
 .btn-small.btn-danger:hover {
   background: var(--bg-button-danger-hover);
-  box-shadow: 0 1px 4px rgba(248, 113, 113, 0.3);
+  box-shadow: 0 1px 4px var(--danger-glow);
 }
 
 .btn-small.btn-primary {
@@ -373,7 +373,7 @@ html, body {
 
 .btn-small.btn-primary:hover {
   background: var(--bg-button-primary-hover);
-  box-shadow: 0 1px 4px rgba(91, 141, 239, 0.3);
+  box-shadow: 0 1px 4px var(--accent-glow);
 }
 
 /* ==================== 预览容器 ==================== */
@@ -384,7 +384,7 @@ html, body {
   width: 100%;
   max-width: 400px;
   border: 1px solid var(--border-default);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 4px 16px var(--shadow-color);
 }
 
 .preview-title {
@@ -479,7 +479,7 @@ html, body {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--overlay-scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -495,7 +495,7 @@ html, body {
   max-width: 90vw;
   max-height: 90vh;
   overflow-y: auto;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 8px 32px var(--shadow-color-strong);
 }
 
 .modal-title {
@@ -532,7 +532,7 @@ html, body {
   position: absolute;
   top: 0;
   height: 100%;
-  background: rgba(91, 141, 239, 0.2);
+  background: var(--accent-line);
   border-left: 2px solid var(--accent);
   border-right: 2px solid var(--accent);
   cursor: grab;
@@ -568,7 +568,7 @@ html, body {
   font-weight: 600;
   pointer-events: none;
   white-space: nowrap;
-  background: rgba(20, 20, 31, 0.85);
+  background: var(--bg-app);
   padding: 1px var(--space-2);
   border-radius: 3px;
 }
@@ -620,7 +620,7 @@ html, body {
 .trim-control-group input[type="number"]:focus {
   outline: none;
   border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.2);
+  box-shadow: 0 0 0 2px var(--accent-line);
 }
 
 .trim-unit {

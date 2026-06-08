@@ -68,12 +68,12 @@ body {
 
 .precision-option:hover {
   border-color: var(--button-secondary-border);
-  background: #222236;
+  background: var(--bg-elevated);
 }
 
 .precision-option:has(input:checked) {
   border-color: var(--accent);
-  background: rgba(91, 141, 239, 0.08);
+  background: var(--accent-softer);
 }
 
 .precision-option input[type="radio"] {
@@ -187,7 +187,7 @@ body {
 }
 
 .file-item.downloading {
-  background: rgba(91, 141, 239, 0.08);
+  background: var(--accent-softer);
 }
 
 .file-icon {
@@ -299,12 +299,12 @@ body {
 .btn-start {
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
-  box-shadow: 0 2px 8px rgba(91, 141, 239, 0.25);
+  box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 .btn-start:hover {
   background: var(--bg-button-primary-hover);
-  box-shadow: 0 4px 12px rgba(91, 141, 239, 0.35);
+  box-shadow: 0 4px 12px var(--accent-glow-strong);
 }
 
 .btn-cancel {
@@ -321,12 +321,12 @@ body {
 .btn-close {
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
-  box-shadow: 0 2px 8px rgba(91, 141, 239, 0.25);
+  box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 .btn-close:hover {
   background: var(--bg-button-primary-hover);
-  box-shadow: 0 4px 12px rgba(91, 141, 239, 0.35);
+  box-shadow: 0 4px 12px var(--accent-glow-strong);
 }
 
 .btn:disabled {
@@ -347,7 +347,7 @@ body {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(91, 141, 239, 0.2);
+  border: 2px solid var(--accent-line);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.8s linear infinite;

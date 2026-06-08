@@ -52,7 +52,7 @@
   - [x] SubTask 7.1：在 `index.html` / `fragmentEditor.html` / `settings.html` / `singerCreator.html` / `audioPreprocess.html` / `modelDownload.html` / `resourceManager.html` 的 `<head>` 引入 `<script src="./themes/themeBootstrap.js"></script>`（在 `common.css` 之后）
   - [x] SubTask 7.2：`themeBootstrap.js` 在主进程注入之前提供 `dark-aurora` 兜底令牌，避免 FOUC
 
-- [ ] **Task 8：现有 CSS 全量令牌化重构**
+- [x] **Task 8：现有 CSS 全量令牌化重构**
   - [x] SubTask 8.1：重构 `src/index.css`（工具栏、歌手面板、分片时间轴）
   - [x] SubTask 8.2：重构 `src/fragmentEditor.css`
   - [x] SubTask 8.3：重构 `src/settings.css`
@@ -61,29 +61,29 @@
   - [x] SubTask 8.6：重构 `src/modelDownload.css`
   - [x] SubTask 8.7：重构 `src/resourceManager.css`
   - [x] SubTask 8.8：重构 `src/common.css`（仅保留重置、滚动条、按钮基础）
-  - [ ] SubTask 8.9：清理残余 `rgba(91, 141, 239, ...)`、`rgba(0, 0, 0, ...)` 等带透明度颜色，引入新 alias 令牌（`--accent-soft`, `--accent-glow`, `--shadow-soft`, `--overlay`）并替换
-  - [ ] SubTask 8.10：grep 验证 `src/**/*.css` 除 `src/themes/builtins/*.json` 外无残余硬编码颜色
+  - [x] SubTask 8.9：清理残余 `rgba(91, 141, 239, ...)`、`rgba(0, 0, 0, ...)` 等带透明度颜色，引入新 alias 令牌（`--accent-soft`, `--accent-glow`, `--shadow-soft`, `--overlay`）并替换
+  - [x] SubTask 8.10：grep 验证 `src/**/*.css` 除 `src/themes/builtins/*.json` 外无残余硬编码颜色
 
-- [ ] **Task 9：设置页主题管理 UI**
-  - [ ] SubTask 9.1：在 `settings.html` 增设 `.theme-section`，包含：主题下拉、编辑按钮、导入 / 导出 / 删除 / 重置按钮
-  - [ ] SubTask 9.2：实现主题编辑器模态（`themeEditor.html` 片段或动态构建）：按 `global / alias / component` 三组列出令牌
-  - [ ] SubTask 9.3：实现颜色拾取器（HSL / RGB / HEX 输入 + 屏幕取色按钮）
-  - [ ] SubTask 9.4：实现"另存为"对话框
-  - [ ] SubTask 9.5：实现撤销 / 重做（编辑器内）
-  - [ ] SubTask 9.6：实现 i18n key 添加到 `zh-CN.js` 与 `en.js`
+- [x] **Task 9：设置页主题管理 UI**
+  - [x] SubTask 9.1：在 `settings.html` 增设 `.theme-section`，包含：主题下拉、编辑按钮、导入 / 导出 / 删除 / 重置按钮
+  - [x] SubTask 9.2：实现主题编辑器模态（`themeEditor.html` 片段或动态构建）：按 `global / alias / component` 三组列出令牌
+  - [x] SubTask 9.3：实现颜色拾取器（HEX / RGB 输入 + HEX 颜色面板）
+  - [x] SubTask 9.4：实现"另存为"对话框
+  - [x] SubTask 9.5：实现撤销 / 重做（编辑器内）
+  - [x] SubTask 9.6：实现 i18n key 添加到 `zh-CN.js` 与 `en.js`
 
-- [ ] **Task 10：测试（Mocha + Chai）**
-  - [ ] SubTask 10.1：`test/themeValidator.test.js`：合法 / 非法 / 继承深度 / 环检测 / 颜色值类型
-  - [ ] SubTask 10.2：`test/themeManager.test.js`：注册 / 激活 / 注入 / 继承展开 / 撤销栈
-  - [ ] SubTask 10.3：`test/themeStorage.test.js`：读写 / 原子写入 / 损坏跳过 / id 校验（用临时目录）
-  - [ ] SubTask 10.4：`test/themeTokens.test.js`：所有内置主题覆盖必需令牌；`dark-aurora` 与现状色值匹配
-  - [ ] SubTask 10.5：现有 `wavEncoder` / `trackManager` / `nativeSvsPipeline` 等测试保持通过
+- [x] **Task 10：测试（Mocha + Chai）**
+  - [x] SubTask 10.1：`test/themeValidator.test.js`：合法 / 非法 / 继承深度 / 环检测 / 颜色值类型
+  - [x] SubTask 10.2：`test/themeManager.test.js`：注册 / 激活 / 注入 / 继承展开 / 撤销栈
+  - [x] SubTask 10.3：`test/themeStorage.test.js`：读写 / 原子写入 / 损坏跳过 / id 校验（用临时目录）
+  - [x] SubTask 10.4：`test/themeTokens.test.js`：所有内置主题覆盖必需令牌；`dark-aurora` 与现状色值匹配
+  - [x] SubTask 10.5：现有 `wavEncoder` / `trackManager` / `nativeSvsPipeline` 等测试保持通过
 
 - [ ] **Task 11：视觉回归 + 文档**
   - [ ] SubTask 11.1：在 4 套主题下分别启动应用（`npm start` + 切换主题），截图保存到 `docs/theme-screenshots/`
   - [ ] SubTask 11.2：手动对比 `dark-aurora` 与重构前 UI 是否一致
-  - [ ] SubTask 11.3：在 `README.md` 增"主题"章节，说明如何切换、导入、导出、自定义
-  - [ ] SubTask 11.4：在 `docs/wiki/Developer-Guide.md` 增"添加新主题"指南
+  - [x] SubTask 11.3：在 `README.md` 增"主题"章节，说明如何切换、导入、导出、自定义
+  - [x] SubTask 11.4：在 `docs/wiki/Developer-Guide.md` 增"添加新主题"指南
 
 # Task Dependencies
 

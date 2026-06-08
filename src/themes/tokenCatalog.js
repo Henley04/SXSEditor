@@ -141,13 +141,40 @@ export const TOKEN_CATALOG = {
     '--fg-on-accent': { layer: 'alias', group: 'fg', type: 'color', default: 'var(--color-white)', label: '强调色文字' },
     '--fg-on-success': { layer: 'alias', group: 'fg', type: 'color', default: 'var(--color-ink-900)', label: '成功色文字' },
     '--fg-on-warning': { layer: 'alias', group: 'fg', type: 'color', default: 'var(--color-ink-900)', label: '警告色文字' },
+    '--fg-toolbar-hover': { layer: 'alias', group: 'fg', type: 'color', default: '#f0f0ff', label: '工具栏悬停文字' },
+    '--fg-bpm':            { layer: 'alias', group: 'fg', type: 'color', default: '#a8c8ff', label: 'BPM 显示文字' },
+    '--fg-time':           { layer: 'alias', group: 'fg', type: 'color', default: '#e8e8f8', label: '时间显示文字' },
+    '--bg-singer-active':  { layer: 'alias', group: 'bg', type: 'color', default: '#2a2a42', label: '歌手激活背景' },
 
     // ==================== Alias: accent ====================
     '--accent':         { layer: 'alias', group: 'accent', type: 'color', default: 'var(--color-blue-500)', label: '强调色' },
     '--accent-hover':   { layer: 'alias', group: 'accent', type: 'color', default: 'var(--color-blue-400)', label: '强调色悬停' },
     '--accent-pressed': { layer: 'alias', group: 'accent', type: 'color', default: 'var(--color-blue-600)', label: '强调色按下' },
-    '--accent-soft':    { layer: 'alias', group: 'accent', type: 'color', default: 'rgba(91, 141, 239, 0.15)', label: '强调色弱化' },
+    '--accent-soft':    { layer: 'alias', group: 'accent', type: 'color', default: 'rgba(91, 141, 239, 0.12)', label: '强调色弱化背景' },
+    '--accent-softer':  { layer: 'alias', group: 'accent', type: 'color', default: 'rgba(91, 141, 239, 0.06)', label: '强调色极弱背景' },
+    '--accent-glow':    { layer: 'alias', group: 'accent', type: 'color', default: 'rgba(91, 141, 239, 0.25)', label: '强调色发光' },
+    '--accent-glow-strong': { layer: 'alias', group: 'accent', type: 'color', default: 'rgba(91, 141, 239, 0.35)', label: '强调色强发光' },
+    '--accent-line':    { layer: 'alias', group: 'accent', type: 'color', default: 'rgba(91, 141, 239, 0.2)', label: '强调色描边' },
+    '--accent-line-strong': { layer: 'alias', group: 'accent', type: 'color', default: 'rgba(91, 141, 239, 0.3)', label: '强调色强描边' },
     '--accent-fg':      { layer: 'alias', group: 'accent', type: 'color', default: 'var(--color-blue-400)', label: '强调色文字' },
+
+    // ==================== Alias: status soft variants ====================
+    '--success-soft':   { layer: 'alias', group: 'status', type: 'color', default: 'rgba(74, 222, 128, 0.12)', label: '成功弱化' },
+    '--success-glow':   { layer: 'alias', group: 'status', type: 'color', default: 'rgba(74, 222, 128, 0.3)', label: '成功发光' },
+    '--warning-soft':   { layer: 'alias', group: 'status', type: 'color', default: 'rgba(251, 191, 36, 0.12)', label: '警告弱化' },
+    '--warning-line':   { layer: 'alias', group: 'status', type: 'color', default: 'rgba(251, 191, 36, 0.2)', label: '警告描边' },
+    '--warning-glow':   { layer: 'alias', group: 'status', type: 'color', default: 'rgba(251, 191, 36, 0.06)', label: '警告发光弱' },
+    '--danger-soft':    { layer: 'alias', group: 'status', type: 'color', default: 'rgba(239, 68, 68, 0.12)', label: '危险弱化' },
+    '--danger-glow':    { layer: 'alias', group: 'status', type: 'color', default: 'rgba(248, 113, 113, 0.3)', label: '危险发光' },
+    '--purple-soft':    { layer: 'alias', group: 'status', type: 'color', default: 'rgba(168, 85, 247, 0.12)', label: '紫色弱化' },
+
+    // ==================== Alias: shadow / overlay ====================
+    '--shadow-color':        { layer: 'alias', group: 'shadow', type: 'color', default: 'rgba(0, 0, 0, 0.2)', label: '阴影颜色弱' },
+    '--shadow-color-mid':    { layer: 'alias', group: 'shadow', type: 'color', default: 'rgba(0, 0, 0, 0.3)', label: '阴影颜色中' },
+    '--shadow-color-strong': { layer: 'alias', group: 'shadow', type: 'color', default: 'rgba(0, 0, 0, 0.5)', label: '阴影颜色强' },
+    '--overlay-scrim':       { layer: 'alias', group: 'overlay', type: 'color', default: 'rgba(10, 10, 20, 0.7)', label: '遮罩背景' },
+    '--panel-line':          { layer: 'alias', group: 'border', type: 'color', default: 'rgba(42, 42, 61, 0.5)', label: '面板描边' },
+    '--ink-soft':            { layer: 'alias', group: 'fg', type: 'color', default: 'rgba(90, 90, 114, 0.3)', label: '弱墨色描边' },
 
     // ==================== Alias: borders ====================
     '--border-subtle': { layer: 'alias', group: 'border', type: 'color', default: 'var(--color-ink-800)', label: '浅边框' },
@@ -210,7 +237,13 @@ export const REQUIRED_TOKENS_FOR_BUILTIN = [
     // Aliases
     '--bg-app', '--bg-panel', '--bg-elevated', '--bg-input',
     '--fg-primary', '--fg-secondary', '--fg-muted',
-    '--accent', '--accent-hover', '--accent-pressed', '--accent-soft', '--accent-fg',
+    '--accent', '--accent-hover', '--accent-pressed', '--accent-soft', '--accent-softer',
+    '--accent-glow', '--accent-glow-strong', '--accent-line', '--accent-line-strong', '--accent-fg',
+    '--success-soft', '--success-glow',
+    '--warning-soft', '--warning-line', '--warning-glow',
+    '--danger-soft', '--danger-glow', '--purple-soft',
+    '--shadow-color', '--shadow-color-mid', '--shadow-color-strong',
+    '--overlay-scrim', '--panel-line', '--ink-soft',
     '--border-subtle', '--border-default', '--border-strong', '--border-accent',
     '--success', '--warning', '--danger', '--info',
     '--scrollbar-thumb', '--scrollbar-thumb-hover', '--scrollbar-track',
