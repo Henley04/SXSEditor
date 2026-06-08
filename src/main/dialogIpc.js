@@ -1,0 +1,114 @@
+const { ipcMain, dialog, BrowserWindow } = require('electron');
+const { authorizePath, isPathAllowed } = require('./security');
+const { t } = require('./locale');
+const fs = require('node:fs');
+const path = require('node:path');
+
+function registerDialogIpc() {
+  ipcMain.handle('dialog:showSaveDialog', async (event, options) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const safeOptions = {
+      title: typeof options.title === 'string' ? options.title : undefined,
+      defaultPath: typeof options.defaultPath === 'string' ? options.defaultPath : undefined,
+      filters: Array.isArray(options.filters) ? options.filters : undefined,
+    };
+    const result = await dialog.showSaveDialog(win, safeOptions);
+    if (!result.canceled && result.filePath) {
+      authorizePath(result.filePath);
+    }
+    return result;
+  });
+
+  ipcMain.handle('dialog:showOpenDialog', async (event, options) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const safeOptions = {
+      title: typeof options.title === 'string' ? options.title : undefined,
+      defaultPath: typeof options.defaultPath === 'string' ? options.defaultPath : undefined,
+      filters: Array.isArray(options.filters) ? options.filters : undefined,
+      properties: Array.isArray(options.properties) ? options.properties.filter(p =>
+        ['openFile', 'openDirectory', 'multiSelections'].includes(p)
+      ) : ['openFile'],
+    };
+    const result = await dialog.showOpenDialog(win, safeOptions);
+    if (!result.canceled && result.filePaths) {
+      result.filePaths.forEach(fp => authorizePath(fp));
+    }
+    return result;
+  });
+
+  ipcMain.handle('file:saveFile', async (event, filePath, data) => {
+    if (!isPathAllowed(filePath)) {
+      return { success: false, error: t('error.pathNotAllowed') };
+    }
+    try {
+      await fs.promises.writeFile(filePath, data);
+      return { success: true };
+    } catch (err) {
+      console.error('[Main] 文件保存失败:', err.message);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('file:readFile', async (event, filePath) => {
+    if (!isPathAllowed(filePath)) {
+      throw new Error(t('error.pathNotAllowed'));
+    }
+    try {
+      const data = await fs.promises.readFile(filePath, 'utf-8');
+      return data;
+    } catch (err) {
+      console.error('[Main] 文件读取失败:', err.message);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('file:readFileBuffer', async (event, filePath) => {
+    if (!isPathAllowed(filePath)) {
+      throw new Error(t('error.pathNotAllowed'));
+    }
+    try {
+      const buffer = await fs.promises.readFile(filePath);
+      return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+    } catch (err) {
+      console.error('[Main] 文件读取(Buffer)失败:', err.message);
+      throw err;
+    }
+  });
+
+  ipcMain.handle('file:exists', async (event, filePath) => {
+    if (!isPathAllowed(filePath)) return false;
+    try {
+      await fs.promises.access(filePath, fs.constants.R_OK);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  });
+
+  ipcMain.handle('file:authorizePath', async (event, dirPath) => {
+    const { isSystemPath } = require('./security');
+    if (isSystemPath(dirPath)) {
+      return { success: false, error: 'Cannot authorize system directories' };
+    }
+    authorizePath(path.resolve(dirPath));
+    return { success: true };
+  });
+
+  ipcMain.handle('resolvePath', async (event, basePath, relativePath) => {
+    const resolved = path.resolve(basePath, relativePath);
+    const normalizedBase = path.resolve(basePath);
+    if (!resolved.startsWith(normalizedBase + path.sep) && resolved !== normalizedBase) {
+      throw new Error('路径遍历被阻止');
+    }
+    return resolved;
+  });
+
+  ipcMain.handle('getDirName', async (event, filePath) => {
+    if (!isPathAllowed(filePath)) throw new Error(t('error.pathNotAllowed'));
+    return path.dirname(filePath);
+  });
+}
+
+module.exports = {
+  registerDialogIpc,
+};
