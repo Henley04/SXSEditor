@@ -154,6 +154,42 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resmgrLoadGroup: (groupId) => ipcRenderer.invoke('resmgr:loadGroup', { groupId }),
   resmgrUnloadGroup: (groupId) => ipcRenderer.invoke('resmgr:unloadGroup', { groupId }),
 
+  // ==================== WebNN / NPU API ====================
+  webnnDetectNPU: () => ipcRenderer.invoke('webnn:detectNPU'),
+  webnnLoadModel: (modelId, modelPath, options) => ipcRenderer.invoke('webnn:loadModel', modelId, modelPath, options),
+  webnnUnloadModel: (modelId) => ipcRenderer.invoke('webnn:unloadModel', modelId),
+  webnnRunInference: (modelId, inputs) => ipcRenderer.invoke('webnn:runInference', modelId, inputs),
+  webnnGetStatus: () => ipcRenderer.invoke('webnn:getStatus'),
+  validateDevices: () => ipcRenderer.invoke('settings:validateDevices'),
+
+  // WebNN 渲染进程监听器注册（主进程 → 渲染进程请求）
+  onWebnnDetectNPURequest: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('webnn:detectNPU:request', handler);
+    return () => ipcRenderer.removeListener('webnn:detectNPU:request', handler);
+  },
+  onWebnnLoadModelRequest: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('webnn:loadModel:request', handler);
+    return () => ipcRenderer.removeListener('webnn:loadModel:request', handler);
+  },
+  onWebnnUnloadModelRequest: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('webnn:unloadModel:request', handler);
+    return () => ipcRenderer.removeListener('webnn:unloadModel:request', handler);
+  },
+  onWebnnRunInferenceRequest: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('webnn:runInference:request', handler);
+    return () => ipcRenderer.removeListener('webnn:runInference:request', handler);
+  },
+  onWebnnGetStatusRequest: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('webnn:getStatus:request', handler);
+    return () => ipcRenderer.removeListener('webnn:getStatus:request', handler);
+  },
+  webnnRespond: (responseChannel, result) => ipcRenderer.invoke(responseChannel, result),
+
   // ==================== Theme API ====================
   themeAPI: {
     bootstrap: () => ipcRenderer.invoke('theme:bootstrap'),

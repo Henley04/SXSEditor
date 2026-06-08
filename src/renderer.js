@@ -115,14 +115,37 @@ function formatTime(seconds) {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}:${String(ms).padStart(3, '0')}`;
 }
 
-function showPromptDialog(title, defaultValue, onConfirm) {
+/**
+ * 统一的对话框工厂函数
+ * @param {Object} options - 对话框配置选项
+ * @param {string} options.title - 对话框标题
+ * @param {string} [options.content] - 对话框内容文本
+ * @param {HTMLElement} [options.contentElement] - 自定义内容元素
+ * @param {Array} options.buttons - 按钮配置数组
+ * @param {string} options.buttons[].text - 按钮文本
+ * @param {string} [options.buttons[].type='default'] - 按钮类型：'primary' | 'default' | 'danger' | 'success'
+ * @param {Function} options.buttons[].onClick - 按钮点击回调
+ * @param {Object} [options.styles] - 自定义样式覆盖
+ * @param {number} [options.minWidth=280] - 对话框最小宽度
+ * @param {boolean} [options.closeOnClickOutside=true] - 点击遮罩层是否关闭
+ * @returns {Object} 包含 close 方法的对话框控制对象
+ */
+function createDialog(options) {
+  const {
+    title,
+    content,
+    contentElement,
+    buttons = [],
+    styles = {},
+    minWidth = 280,
+    closeOnClickOutside = true,
+  } = options;
+
+  // 创建遮罩层
   const overlay = document.createElement('div');
   overlay.style.cssText = `
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    top: 0; left: 0; right: 0; bottom: 0;
     background: rgba(10,10,20,0.65);
     backdrop-filter: blur(2px);
     display: flex;
@@ -131,21 +154,138 @@ function showPromptDialog(title, defaultValue, onConfirm) {
     z-index: 10000;
   `;
 
+  // 创建对话框容器
   const dialog = document.createElement('div');
   dialog.style.cssText = `
-    background: #252538;
-    border: 1px solid #3a3a52;
+    background: ${styles.dialogBackground || '#252538'};
+    border: 1px solid ${styles.dialogBorder || '#3a3a52'};
     border-radius: 10px;
     padding: 20px;
-    min-width: 280px;
+    min-width: ${minWidth}px;
+    max-width: ${styles.maxWidth || '500px'};
+    max-height: ${styles.maxHeight || '80vh'};
+    overflow-y: ${styles.overflowY || 'auto'};
     color: #e0e0f0;
     box-shadow: 0 12px 40px rgba(0,0,0,0.4);
   `;
 
+  // 创建标题
   const titleEl = document.createElement('div');
-  titleEl.style.cssText = 'margin-bottom: 12px; font-weight: 600;';
+  titleEl.style.cssText = `
+    margin-bottom: 16px;
+    font-weight: 600;
+    font-size: ${styles.titleFontSize || '14px'};
+    color: ${styles.titleColor || '#e0e0f0'};
+  `;
   titleEl.textContent = title;
+  dialog.appendChild(titleEl);
 
+  // 创建内容区域
+  if (content) {
+    const contentEl = document.createElement('div');
+    contentEl.style.cssText = `
+      margin-bottom: 16px;
+      font-size: ${styles.contentFontSize || '13px'};
+      color: ${styles.contentColor || '#c8c8dc'};
+      line-height: 1.5;
+    `;
+    contentEl.textContent = content;
+    dialog.appendChild(contentEl);
+  }
+
+  if (contentElement) {
+    dialog.appendChild(contentElement);
+  }
+
+  // 创建按钮容器
+  const btnContainer = document.createElement('div');
+  btnContainer.style.cssText = `
+    display: flex;
+    gap: 8px;
+    justify-content: ${styles.buttonAlign || 'flex-end'};
+    flex-direction: ${styles.buttonDirection || 'row'};
+    margin-top: ${styles.buttonMarginTop || '12px'};
+  `;
+
+  // 按钮样式映射
+  const buttonStyles = {
+    primary: `
+      padding: 6px 16px;
+      background: linear-gradient(180deg, #5b8def, #4a7de0);
+      border: none;
+      border-radius: 4px;
+      color: #ffffff;
+      cursor: pointer;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    `,
+    default: `
+      padding: 6px 16px;
+      background: linear-gradient(180deg, #3a3a4e, #323246);
+      border: 1px solid #4a4a62;
+      border-radius: 4px;
+      color: #ffffff;
+      cursor: pointer;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    `,
+    danger: `
+      padding: 6px 16px;
+      background: linear-gradient(180deg, #f87171, #e85555);
+      border: none;
+      border-radius: 4px;
+      color: #ffffff;
+      cursor: pointer;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    `,
+    success: `
+      padding: 6px 16px;
+      background: linear-gradient(180deg, #4ade80, #3ac870);
+      border: none;
+      border-radius: 4px;
+      color: #ffffff;
+      cursor: pointer;
+      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+    `,
+  };
+
+  // 创建按钮
+  buttons.forEach((btnConfig) => {
+    const btn = document.createElement('button');
+    btn.textContent = btnConfig.text;
+    btn.style.cssText = buttonStyles[btnConfig.type] || buttonStyles.default;
+
+    btn.addEventListener('click', () => {
+      if (btnConfig.onClick) {
+        btnConfig.onClick();
+      }
+    });
+
+    btnContainer.appendChild(btn);
+  });
+
+  dialog.appendChild(btnContainer);
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  // 关闭对话框的方法
+  const close = () => {
+    if (document.body.contains(overlay)) {
+      document.body.removeChild(overlay);
+    }
+  };
+
+  // 点击遮罩层关闭
+  if (closeOnClickOutside) {
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) {
+        close();
+      }
+    });
+  }
+
+  return { close, overlay, dialog };
+}
+
+function showPromptDialog(title, defaultValue, onConfirm) {
   const input = document.createElement('input');
   input.type = 'text';
   input.value = defaultValue || '';
@@ -160,56 +300,41 @@ function showPromptDialog(title, defaultValue, onConfirm) {
     box-sizing: border-box;
   `;
 
-  const btnContainer = document.createElement('div');
-  btnContainer.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
+  const contentWrapper = document.createElement('div');
+  contentWrapper.appendChild(input);
 
-  const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = t('common.cancel');
-  cancelBtn.style.cssText = `
-    padding: 6px 16px;
-    background: linear-gradient(180deg, #3a3a4e, #323246);
-    border: 1px solid #4a4a62;
-    border-radius: 4px;
-    color: #ffffff;
-    cursor: pointer;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-  `;
+  const dialog = createDialog({
+    title,
+    contentElement: contentWrapper,
+    buttons: [
+      {
+        text: t('common.cancel'),
+        type: 'default',
+        onClick: () => {
+          if (onConfirm) onConfirm(null);
+        },
+      },
+      {
+        text: t('common.confirm'),
+        type: 'primary',
+        onClick: () => {
+          if (onConfirm) onConfirm(input.value);
+        },
+      },
+    ],
+  });
 
-  const okBtn = document.createElement('button');
-  okBtn.textContent = t('common.confirm');
-  okBtn.style.cssText = `
-    padding: 6px 16px;
-    background: linear-gradient(180deg, #5b8def, #4a7de0);
-    border: none;
-    border-radius: 4px;
-    color: #ffffff;
-    cursor: pointer;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-  `;
-
-  btnContainer.appendChild(cancelBtn);
-  btnContainer.appendChild(okBtn);
-  dialog.appendChild(titleEl);
-  dialog.appendChild(input);
-  dialog.appendChild(btnContainer);
-  overlay.appendChild(dialog);
-  document.body.appendChild(overlay);
-
-  const controller = new AbortController();
-  const close = (value) => {
-    controller.abort();
-    document.body.removeChild(overlay);
-    if (value !== null) {
-      onConfirm(value);
-    }
-  };
-
-  cancelBtn.addEventListener('click', () => close(null), { signal: controller.signal });
-  okBtn.addEventListener('click', () => close(input.value), { signal: controller.signal });
+  // 添加键盘事件
   input.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') close(input.value);
-    if (e.key === 'Escape') close(null);
-  }, { signal: controller.signal });
+    if (e.key === 'Enter') {
+      if (onConfirm) onConfirm(input.value);
+      dialog.close();
+    }
+    if (e.key === 'Escape') {
+      if (onConfirm) onConfirm(null);
+      dialog.close();
+    }
+  });
 
   requestAnimationFrame(() => {
     input.focus();
@@ -218,123 +343,57 @@ function showPromptDialog(title, defaultValue, onConfirm) {
 }
 
 function showSingerSelectDialog(singerId) {
-  const overlay = document.createElement('div');
-  overlay.style.cssText = `
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: rgba(10,10,20,0.65);
-    backdrop-filter: blur(2px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10000;
-  `;
-
-  const dialog = document.createElement('div');
-  dialog.style.cssText = `
-    background: #252538;
-    border: 1px solid #3a3a52;
-    border-radius: 10px;
-    padding: 20px;
-    min-width: 320px;
-    color: #e0e0f0;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
-  `;
-
-  const titleEl = document.createElement('div');
-  titleEl.style.cssText = 'margin-bottom: 16px; font-weight: 600;';
-  titleEl.textContent = t('main.selectSinger');
-
-  const btnContainer = document.createElement('div');
-  btnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 10px;';
-
-  const createBtn = document.createElement('button');
-  createBtn.textContent = t('main.openSingerCreator');
-  createBtn.style.cssText = `
-    padding: 10px 16px;
-    background: linear-gradient(180deg, #5b8def, #4a7de0);
-    border: none;
-    border-radius: 4px;
-    color: #ffffff;
-    cursor: pointer;
-    font-size: 14px;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-  `;
-
-  const openBtn = document.createElement('button');
-  openBtn.textContent = t('main.openExistingSinger');
-  openBtn.style.cssText = `
-    padding: 10px 16px;
-    background: linear-gradient(180deg, #4ade80, #3ac870);
-    border: none;
-    border-radius: 4px;
-    color: #ffffff;
-    cursor: pointer;
-    font-size: 14px;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-  `;
-
-  const cancelBtn = document.createElement('button');
-  cancelBtn.textContent = t('common.cancel');
-  cancelBtn.style.cssText = `
-    padding: 10px 16px;
-    background: linear-gradient(180deg, #3a3a4e, #323246);
-    border: 1px solid #4a4a62;
-    border-radius: 4px;
-    color: #ffffff;
-    cursor: pointer;
-    font-size: 14px;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-  `;
-
-  btnContainer.appendChild(titleEl);
-  btnContainer.appendChild(createBtn);
-  btnContainer.appendChild(openBtn);
-  btnContainer.appendChild(cancelBtn);
-  dialog.appendChild(btnContainer);
-  overlay.appendChild(dialog);
-  document.body.appendChild(overlay);
-
-  const close = () => {
-    document.body.removeChild(overlay);
-  };
-
-  createBtn.addEventListener('click', () => {
-    close();
-    if (window.electronAPI?.openSingerCreator) {
-      window.electronAPI.openSingerCreator();
-    } else {
-      showAlertDialog(t('main.singerCreatorNotImplemented'));
-    }
-  });
-
-  openBtn.addEventListener('click', async () => {
-    close();
-    if (window.electronAPI?.showOpenDialog) {
-      try {
-        const result = await window.electronAPI.showOpenDialog({
-          filters: [{ name: 'SXS Singer', extensions: ['sxssinger'] }],
-          properties: ['openFile'],
-        });
-        if (!result.canceled && result.filePaths.length > 0) {
-          const filePath = result.filePaths[0];
-          const buffer = await window.electronAPI.readFileBuffer(filePath);
-          if (singerId !== null) {
-            loadSingerFile(singerId, buffer, filePath);
+  createDialog({
+    title: t('main.selectSinger'),
+    minWidth: 320,
+    buttons: [
+      {
+        text: t('main.openSingerCreator'),
+        type: 'primary',
+        onClick: () => {
+          if (window.electronAPI?.openSingerCreator) {
+            window.electronAPI.openSingerCreator();
           } else {
-            addSingerFromFile(buffer, filePath);
+            showAlertDialog(t('main.singerCreatorNotImplemented'));
           }
-        }
-      } catch (err) {
-        console.error('加载歌手文件失败', err);
-      }
-    }
+        },
+      },
+      {
+        text: t('main.openExistingSinger'),
+        type: 'success',
+        onClick: async () => {
+          if (window.electronAPI?.showOpenDialog) {
+            try {
+              const result = await window.electronAPI.showOpenDialog({
+                filters: [{ name: 'SXS Singer', extensions: ['sxssinger'] }],
+                properties: ['openFile'],
+              });
+              if (!result.canceled && result.filePaths.length > 0) {
+                const filePath = result.filePaths[0];
+                const buffer = await window.electronAPI.readFileBuffer(filePath);
+                if (singerId !== null) {
+                  loadSingerFile(singerId, buffer, filePath);
+                } else {
+                  addSingerFromFile(buffer, filePath);
+                }
+              }
+            } catch (err) {
+              console.error('加载歌手文件失败', err);
+            }
+          }
+        },
+      },
+      {
+        text: t('common.cancel'),
+        type: 'default',
+        onClick: () => {},
+      },
+    ],
+    styles: {
+      buttonDirection: 'column',
+      buttonAlign: 'stretch',
+    },
   });
-
-  cancelBtn.addEventListener('click', close);
 }
 
 const SXSSINGER_CURRENT_VERSION = '1.0.0';
@@ -402,38 +461,7 @@ function validateSingerData(singerData) {
 }
 
 function showSingerValidationReport(validation) {
-  const overlay = document.createElement('div');
-  overlay.style.cssText = `
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(10,10,20,0.65);
-    backdrop-filter: blur(2px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10000;
-  `;
-
-  const dialog = document.createElement('div');
-  dialog.style.cssText = `
-    background: #252538;
-    border: 1px solid ${validation.valid ? '#fbbf24' : '#f87171'};
-    border-radius: 10px;
-    padding: 20px;
-    min-width: 360px;
-    max-width: 500px;
-    max-height: 80vh;
-    overflow-y: auto;
-    color: #e0e0f0;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
-  `;
-
-  const titleEl = document.createElement('div');
-  titleEl.style.cssText = 'margin-bottom: 12px; font-weight: 600; font-size: 14px;';
-  titleEl.textContent = validation.valid ? t('main.singerLoadWarnings') : t('main.singerFileFormatError');
-  titleEl.style.color = validation.valid ? '#fbbf24' : '#f87171';
-
-  dialog.appendChild(titleEl);
+  const contentWrapper = document.createElement('div');
 
   if (validation.errors.length > 0) {
     const errSection = document.createElement('div');
@@ -442,13 +470,13 @@ function showSingerValidationReport(validation) {
     errTitle.style.cssText = 'color: #f87171; font-weight: 600; margin-bottom: 4px; font-size: 12px;';
     errTitle.textContent = t('common.errors');
     errSection.appendChild(errTitle);
-    validation.errors.forEach(msg => {
+    validation.errors.forEach((msg) => {
       const item = document.createElement('div');
       item.style.cssText = 'color: #f87171; font-size: 11px; padding-left: 8px; margin-bottom: 2px;';
       item.textContent = `• ${msg}`;
       errSection.appendChild(item);
     });
-    dialog.appendChild(errSection);
+    contentWrapper.appendChild(errSection);
   }
 
   if (validation.warnings.length > 0) {
@@ -458,41 +486,31 @@ function showSingerValidationReport(validation) {
     warnTitle.style.cssText = 'color: #fbbf24; font-weight: 600; margin-bottom: 4px; font-size: 12px;';
     warnTitle.textContent = t('common.warnings');
     warnSection.appendChild(warnTitle);
-    validation.warnings.forEach(msg => {
+    validation.warnings.forEach((msg) => {
       const item = document.createElement('div');
       item.style.cssText = 'color: #fbbf24; font-size: 11px; padding-left: 8px; margin-bottom: 2px;';
       item.textContent = `• ${msg}`;
       warnSection.appendChild(item);
     });
-    dialog.appendChild(warnSection);
+    contentWrapper.appendChild(warnSection);
   }
 
-  const btnContainer = document.createElement('div');
-  btnContainer.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px;';
-
-  const okBtn = document.createElement('button');
-  okBtn.textContent = t('common.confirm');
-  okBtn.style.cssText = `
-    padding: 6px 16px;
-    background: ${validation.valid ? 'linear-gradient(180deg, #5b8def, #4a7de0)' : 'linear-gradient(180deg, #f87171, #e85555)'};
-    border: none;
-    border-radius: 4px;
-    color: #ffffff;
-    cursor: pointer;
-    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-  `;
-
-  btnContainer.appendChild(okBtn);
-  dialog.appendChild(btnContainer);
-  overlay.appendChild(dialog);
-  document.body.appendChild(overlay);
-
   return new Promise((resolve) => {
-    const close = () => {
-      document.body.removeChild(overlay);
-      resolve();
-    };
-    okBtn.addEventListener('click', close);
+    createDialog({
+      title: validation.valid ? t('main.singerLoadWarnings') : t('main.singerFileFormatError'),
+      contentElement: contentWrapper,
+      buttons: [
+        {
+          text: t('common.confirm'),
+          type: validation.valid ? 'primary' : 'danger',
+          onClick: () => resolve(),
+        },
+      ],
+      styles: {
+        titleColor: validation.valid ? '#fbbf24' : '#f87171',
+        dialogBorder: validation.valid ? '#fbbf24' : '#f87171',
+      },
+    });
   });
 }
 
@@ -1305,35 +1323,8 @@ function clearPlayheadLine() {
 
 function showSaveProjectOptionsDialog() {
   return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(10,10,20,0.65);
-      backdrop-filter: blur(2px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 10000;
-    `;
-
-    const dialog = document.createElement('div');
-    dialog.style.cssText = `
-      background: #252538;
-      border: 1px solid #3a3a52;
-      border-radius: 10px;
-      padding: 20px;
-      min-width: 360px;
-      color: #e0e0f0;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.4);
-    `;
-
-    const titleEl = document.createElement('div');
-    titleEl.style.cssText = 'margin-bottom: 16px; font-weight: 600; font-size: 14px;';
-    titleEl.textContent = t('main.saveProjectOptions');
-
     const optionsContainer = document.createElement('div');
-    optionsContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px;';
+    optionsContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
 
     const embedOption = document.createElement('label');
     embedOption.style.cssText = `
@@ -1346,62 +1337,40 @@ function showSaveProjectOptionsDialog() {
     `;
     const embedCheckbox = document.createElement('input');
     embedCheckbox.type = 'checkbox';
-    embedCheckbox.id = 'save-option-embed-singer';
     embedCheckbox.checked = false;
     const embedLabel = document.createElement('span');
     embedLabel.textContent = t('main.embedSingerFiles');
-    const embedDesc = document.createElement('div');
-    embedDesc.style.cssText = 'font-size: 11px; color: #6a6a86; margin-top: 2px; padding-left: 24px;';
-    embedDesc.textContent = t('main.embedSingerFilesDesc');
     embedOption.appendChild(embedCheckbox);
     embedOption.appendChild(embedLabel);
     optionsContainer.appendChild(embedOption);
+
+    const embedDesc = document.createElement('div');
+    embedDesc.style.cssText = 'font-size: 11px; color: #6a6a86; margin-top: -8px; padding-left: 24px;';
+    embedDesc.textContent = t('main.embedSingerFilesDesc');
     optionsContainer.appendChild(embedDesc);
 
-    const btnContainer = document.createElement('div');
-    btnContainer.style.cssText = 'display: flex; gap: 8px; justify-content: flex-end;';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = t('common.cancel');
-    cancelBtn.style.cssText = `
-      padding: 6px 16px;
-      background: linear-gradient(180deg, #3a3a4e, #323246);
-      border: 1px solid #4a4a62;
-      border-radius: 4px;
-      color: #ffffff;
-      cursor: pointer;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-    `;
-
-    const saveBtn = document.createElement('button');
-    saveBtn.textContent = t('common.save');
-    saveBtn.style.cssText = `
-      padding: 6px 16px;
-      background: linear-gradient(180deg, #5b8def, #4a7de0);
-      border: none;
-      border-radius: 4px;
-      color: #ffffff;
-      cursor: pointer;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-    `;
-
-    btnContainer.appendChild(cancelBtn);
-    btnContainer.appendChild(saveBtn);
-    dialog.appendChild(titleEl);
-    dialog.appendChild(optionsContainer);
-    dialog.appendChild(btnContainer);
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
-
-    const close = (result) => {
-      document.body.removeChild(overlay);
-      resolve(result);
-    };
-
-    cancelBtn.addEventListener('click', () => close(null));
-    saveBtn.addEventListener('click', () => close({
-      embedSingerFiles: embedCheckbox.checked,
-    }));
+    createDialog({
+      title: t('main.saveProjectOptions'),
+      contentElement: optionsContainer,
+      buttons: [
+        {
+          text: t('common.cancel'),
+          type: 'default',
+          onClick: () => resolve(null),
+        },
+        {
+          text: t('common.save'),
+          type: 'primary',
+          onClick: () =>
+            resolve({
+              embedSingerFiles: embedCheckbox.checked,
+            }),
+        },
+      ],
+      styles: {
+        buttonMarginTop: '0',
+      },
+    });
   });
 }
 
@@ -2538,87 +2507,37 @@ if (window.electronAPI?.onCloseConfirm) {
 
 async function showSaveBeforeCloseDialog() {
   return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:flex;align-items:center;justify-content:center;z-index:10000;';
-
-    const dialog = document.createElement('div');
-    dialog.style.cssText = 'background:#2b2b2b;border-radius:8px;padding:24px;min-width:360px;box-shadow:0 4px 24px rgba(0,0,0,0.5);color:#e0e0e0;font-family:system-ui,sans-serif;';
-
-    const title = document.createElement('h3');
-    title.textContent = t('main.unsavedChanges');
-    title.style.cssText = 'margin:0 0 8px 0;font-size:16px;';
-
-    const message = document.createElement('p');
-    message.textContent = t('main.unsavedChangesDesc');
-    message.style.cssText = 'margin:0 0 20px 0;font-size:14px;color:#aaa;';
-
-    const btnContainer = document.createElement('div');
-    btnContainer.style.cssText = 'display:flex;gap:8px;justify-content:flex-end;';
-
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = t('main.discardCancel');
-    cancelBtn.style.cssText = 'padding:8px 16px;border:1px solid #555;background:transparent;color:#ccc;border-radius:4px;cursor:pointer;font-size:13px;';
-    cancelBtn.addEventListener('click', () => {
-      overlay.remove();
-      resolve('cancel');
+    createDialog({
+      title: t('main.unsavedChanges'),
+      content: t('main.unsavedChangesDesc'),
+      buttons: [
+        {
+          text: t('main.discardCancel'),
+          type: 'default',
+          onClick: () => resolve('cancel'),
+        },
+        {
+          text: t('main.discardChanges'),
+          type: 'default',
+          onClick: () => resolve('discard'),
+        },
+        {
+          text: t('main.saveAndExit'),
+          type: 'primary',
+          onClick: () => resolve('save'),
+        },
+      ],
+      styles: {
+        titleFontSize: '16px',
+        contentFontSize: '14px',
+        contentColor: '#aaa',
+      },
     });
-
-    const discardBtn = document.createElement('button');
-    discardBtn.textContent = t('main.discardChanges');
-    discardBtn.style.cssText = 'padding:8px 16px;border:1px solid #555;background:#444;color:#e0e0e0;border-radius:4px;cursor:pointer;font-size:13px;';
-    discardBtn.addEventListener('click', () => {
-      overlay.remove();
-      resolve('discard');
-    });
-
-    const saveBtn = document.createElement('button');
-    saveBtn.textContent = t('main.saveAndExit');
-    saveBtn.style.cssText = 'padding:8px 16px;border:none;background:#5b8def;color:#fff;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold;';
-    saveBtn.addEventListener('click', () => {
-      overlay.remove();
-      resolve('save');
-    });
-
-    btnContainer.appendChild(cancelBtn);
-    btnContainer.appendChild(discardBtn);
-    btnContainer.appendChild(saveBtn);
-    dialog.appendChild(title);
-    dialog.appendChild(message);
-    dialog.appendChild(btnContainer);
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
   });
 }
 
 function showAudioToMidiDialog() {
   return new Promise((resolve) => {
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-      position: fixed;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background: rgba(10,10,20,0.65);
-      backdrop-filter: blur(2px);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      z-index: 10000;
-    `;
-
-    const dialog = document.createElement('div');
-    dialog.style.cssText = `
-      background: #252538;
-      border: 1px solid #3a3a52;
-      border-radius: 10px;
-      padding: 20px;
-      min-width: 360px;
-      color: #e0e0f0;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.4);
-    `;
-
-    const titleEl = document.createElement('div');
-    titleEl.style.cssText = 'margin-bottom: 16px; font-weight: 600; font-size: 16px;';
-    titleEl.textContent = t('main.audioToMidiTitle');
-
     const btnContainer = document.createElement('div');
     btnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 10px;';
 
@@ -2664,37 +2583,32 @@ function showAudioToMidiDialog() {
     onlyMidiBtn.appendChild(onlyMidiLabel);
     onlyMidiBtn.appendChild(onlyMidiDesc);
 
-    const cancelBtn = document.createElement('button');
-    cancelBtn.textContent = t('common.cancel');
-    cancelBtn.style.cssText = `
-      padding: 10px 16px;
-      background: linear-gradient(180deg, #3a3a4e, #323246);
-      border: 1px solid #4a4a62;
-      border-radius: 4px;
-      color: #ffffff;
-      cursor: pointer;
-      font-size: 14px;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
-    `;
-
-    btnContainer.appendChild(titleEl);
     btnContainer.appendChild(extractPitchBtn);
     btnContainer.appendChild(onlyMidiBtn);
-    btnContainer.appendChild(cancelBtn);
-    dialog.appendChild(btnContainer);
-    overlay.appendChild(dialog);
-    document.body.appendChild(overlay);
 
-    const close = (value) => {
-      document.body.removeChild(overlay);
-      resolve(value);
-    };
+    const dialog = createDialog({
+      title: t('main.audioToMidiTitle'),
+      contentElement: btnContainer,
+      buttons: [
+        {
+          text: t('common.cancel'),
+          type: 'default',
+          onClick: () => resolve(null),
+        },
+      ],
+      styles: {
+        titleFontSize: '16px',
+        buttonMarginTop: '0',
+      },
+    });
 
-    extractPitchBtn.addEventListener('click', () => close('withPitch'));
-    onlyMidiBtn.addEventListener('click', () => close('midiOnly'));
-    cancelBtn.addEventListener('click', () => close(null));
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close(null);
+    extractPitchBtn.addEventListener('click', () => {
+      dialog.close();
+      resolve('withPitch');
+    });
+    onlyMidiBtn.addEventListener('click', () => {
+      dialog.close();
+      resolve('midiOnly');
     });
   });
 }
@@ -2970,3 +2884,101 @@ window.addEventListener('beforeunload', () => {
 });
 
 console.log('SXSEditor 渲染进程已启动');
+
+// ==================== WebNN 渲染进程监听器 ====================
+// 处理来自主进程的 WebNN 请求（NPU 检测、模型加载/卸载/推理）
+(async () => {
+  let webnnPipeline = null;
+
+  async function getWebnnPipeline() {
+    if (webnnPipeline) return webnnPipeline;
+    try {
+      const mod = await import('./inference/webnnPipeline.js');
+      webnnPipeline = mod;
+      return webnnPipeline;
+    } catch (e) {
+      console.error('[Renderer] Failed to load webnnPipeline:', e);
+      return null;
+    }
+  }
+
+  const api = window.electronAPI;
+  if (!api) return;
+
+  // 监听 NPU 检测请求
+  api.onWebnnDetectNPURequest(async ({ requestId }) => {
+    const pipeline = await getWebnnPipeline();
+    let result;
+    if (pipeline) {
+      try {
+        result = await pipeline.detectNPU();
+      } catch (e) {
+        result = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: e.message };
+      }
+    } else {
+      result = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: 'webnnPipeline module not available' };
+    }
+    api.webnnRespond(`webnn:detectNPU:response:${requestId}`, result);
+  });
+
+  // 监听模型加载请求
+  api.onWebnnLoadModelRequest(async ({ requestId, modelId, modelPath, options }) => {
+    const pipeline = await getWebnnPipeline();
+    let result;
+    if (pipeline) {
+      try {
+        result = await pipeline.loadModel(modelId, modelPath, options);
+      } catch (e) {
+        result = { success: false, error: e.message };
+      }
+    } else {
+      result = { success: false, error: 'webnnPipeline module not available' };
+    }
+    api.webnnRespond(`webnn:loadModel:response:${requestId}`, result);
+  });
+
+  // 监听模型卸载请求
+  api.onWebnnUnloadModelRequest(async ({ requestId, modelId }) => {
+    const pipeline = await getWebnnPipeline();
+    let result;
+    if (pipeline) {
+      try {
+        await pipeline.unloadModel(modelId);
+        result = { success: true };
+      } catch (e) {
+        result = { success: false, error: e.message };
+      }
+    } else {
+      result = { success: false, error: 'webnnPipeline module not available' };
+    }
+    api.webnnRespond(`webnn:unloadModel:response:${requestId}`, result);
+  });
+
+  // 监听推理请求
+  api.onWebnnRunInferenceRequest(async ({ requestId, modelId, inputs }) => {
+    const pipeline = await getWebnnPipeline();
+    let result;
+    if (pipeline) {
+      try {
+        result = await pipeline.runInference(modelId, inputs);
+      } catch (e) {
+        result = { error: e.message };
+      }
+    } else {
+      result = { error: 'webnnPipeline module not available' };
+    }
+    api.webnnRespond(`webnn:runInference:response:${requestId}`, result);
+  });
+
+  // 监听状态查询请求
+  api.onWebnnGetStatusRequest(async ({ requestId }) => {
+    const pipeline = await getWebnnPipeline();
+    let result;
+    if (pipeline) {
+      result = pipeline.getStatus();
+    } else {
+      result = {};
+    }
+    api.webnnRespond(`webnn:getStatus:response:${requestId}`, result);
+  });
+})();

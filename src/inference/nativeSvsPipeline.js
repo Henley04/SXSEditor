@@ -502,15 +502,69 @@ const DUMMY_TEST_INPUTS_FP16 = {
     melTransform: { waveform: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(HOP_SIZE * 3)), [1, HOP_SIZE * 3]) },
 };
 
+/**
+ * 统一设备分类函数 — 所有硬件检测入口应使用此函数
+ * @param {string} name - 设备名称
+ * @param {number} vramBytes - 显存大小（字节），0 表示未知
+ * @param {boolean|undefined} dmlDiscreteFlag - DirectML 报告的 Discrete 标志
+ * @returns {'discrete-gpu'|'integrated-gpu'|'npu'|'cpu'}
+ */
+function classifyDevice(name, vramBytes = 0, dmlDiscreteFlag = undefined) {
+    const n = (name || '').toLowerCase();
+
+    // 1. NPU 名称匹配（最高优先级）
+    const npuKeywords = [
+        'npu', 'neural processing', 'neural compute',
+        'intel ai boost', 'intel neural', 'intel npu',
+        'amd xdna', 'amd ryzen ai', 'amd ai engine',
+        'qualcomm hexagon', 'qcom npu', 'hexagon npu',
+        'snapdragon neural', 'mediatek apu', 'rockchip npu',
+    ];
+    for (const kw of npuKeywords) {
+        if (n.includes(kw)) return 'npu';
+    }
+
+    // 2. GPU 独显名称匹配
+    const discreteGpuKeywords = [
+        { includes: ['nvidia'] }, { includes: ['geforce'] },
+        { includes: ['rtx'] }, { includes: ['gtx'] }, { includes: ['quadro'] },
+        { includes: ['radeon', 'rx'] }, { includes: ['radeon', 'pro'] },
+        { includes: ['radeon', 'instinct'] },
+        { includes: ['amd', 'rx '] }, { includes: ['amd', 'pro w'] }, { includes: ['amd', 'pro v'] },
+    ];
+    for (const rule of discreteGpuKeywords) {
+        if (rule.includes.every(kw => n.includes(kw))) return 'discrete-gpu';
+    }
+    // Intel Arc 独显
+    if (n.includes('intel') && n.includes('arc') && /\barc\s*a\d/i.test(n)) return 'discrete-gpu';
+
+    // 3. GPU 核显名称匹配
+    const integratedGpuKeywords = [
+        { includes: ['intel', 'uhd'] }, { includes: ['intel', 'iris'] },
+        { includes: ['intel', 'xe'] }, { includes: ['intel', 'hd graphics'] },
+    ];
+    for (const rule of integratedGpuKeywords) {
+        if (rule.includes.every(kw => n.includes(kw))) return 'integrated-gpu';
+    }
+    if (n.includes('radeon') && !n.includes('rx') && !n.includes('pro') && !n.includes('instinct')) return 'integrated-gpu';
+    if (n.includes('microsoft') && n.includes('basic')) return 'integrated-gpu';
+
+    // 4. DML Discrete 标志
+    if (dmlDiscreteFlag === true) return 'discrete-gpu';
+    if (dmlDiscreteFlag === false) return 'integrated-gpu';
+
+    // 5. 显存阈值兜底（>= 512MB 视为独显）
+    if (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024) return 'discrete-gpu';
+    if (vramBytes > 0) return 'integrated-gpu';
+
+    return 'cpu';
+}
+
+/** @deprecated 使用 classifyDevice 替代 */
 function isDiscreteGPUByName(name) {
-    const n = name.toLowerCase();
-    if (n.includes('nvidia') || n.includes('geforce') || n.includes('rtx') || n.includes('gtx') || n.includes('quadro')) return true;
-    if (n.includes('radeon rx') || n.includes('radeon pro') || n.includes('radeon instinct')) return true;
-    if (n.includes('amd') && (n.includes('rx ') || n.includes('pro w') || n.includes('pro v'))) return true;
-    if (n.includes('intel') && n.includes('arc') && /\barc\s*a\d/i.test(n)) return true;
-    if (n.includes('intel')) return false;
-    if (n.includes('radeon') && !n.includes('rx') && !n.includes('pro') && !n.includes('instinct')) return false;
-    if (n.includes('microsoft') && n.includes('basic')) return false;
+    const dt = classifyDevice(name, 0, undefined);
+    if (dt === 'discrete-gpu') return true;
+    if (dt === 'integrated-gpu' || dt === 'npu') return false;
     return undefined;
 }
 
@@ -522,11 +576,12 @@ function gpuCacheToDevices(controllers) {
         const gb = vramBytes / (1024 * 1024 * 1024);
         const vramStr = gb >= 1 ? `${Math.round(gb * 10) / 10} GB` : `${Math.round(vramBytes / (1024 * 1024))} MB`;
         const vendorName = c.vendor || '';
-        const isDiscrete = isDiscreteGPUByName(c.model);
+        const deviceType = classifyDevice(c.model, vramBytes, undefined);
         devices.push({
             name: c.model || '',
             type: 1,
-            isDiscrete: isDiscrete !== undefined ? isDiscrete : (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024),
+            deviceType,
+            isDiscrete: deviceType === 'discrete-gpu',
             dxgiAdapterNumber: i,
             vram: vramStr,
             vramBytes: vramBytes,
@@ -603,16 +658,6 @@ async function enumerateDMLDevicesInProcess(modelDir) {
         const typeVal = parseInt(typeMatch[1]);
 
         const isDiscreteFromFlag = discreteMatch ? discreteMatch[1] === '1' : undefined;
-        const isDiscreteFromName = isDiscreteGPUByName(gpuName);
-        let isDiscrete;
-        if (isDiscreteFromName !== undefined) {
-            isDiscrete = isDiscreteFromName || (isDiscreteFromFlag === true);
-        } else if (isDiscreteFromFlag !== undefined) {
-            isDiscrete = isDiscreteFromFlag;
-        } else {
-            isDiscrete = false;
-        }
-
         let vramStr = undefined;
         let vramBytes = 0;
         if (vramMatch) {
@@ -623,12 +668,13 @@ async function enumerateDMLDevicesInProcess(modelDir) {
             else if (vramUnit === 'MB') vramBytes = vramVal * 1024 * 1024;
         }
 
-        if (typeVal !== 1) continue;
+        const deviceType = classifyDevice(gpuName, vramBytes, isDiscreteFromFlag);
 
         devices.push({
             name: gpuName,
             type: typeVal,
-            isDiscrete: isDiscrete,
+            deviceType,
+            isDiscrete: deviceType === 'discrete-gpu',
             dxgiAdapterNumber: adapterMatch ? parseInt(adapterMatch[1]) : undefined,
             vram: vramStr,
             vramBytes: vramBytes,
@@ -664,16 +710,16 @@ async function detectBestGPU(modelDir) {
         return { deviceId: undefined, name: '', devices: [] };
     }
 
-    console.log(`[OnnxSVSPipeline] 发现 ${devices.length} 个 GPU 设备:`);
+    console.log(`[OnnxSVSPipeline] 发现 ${devices.length} 个设备:`);
     for (const d of devices) {
         const vramStr = d.vram ? ` (${d.vram})` : '';
-        const discreteStr = d.isDiscrete ? ' [独显]' : ' [核显]';
+        const typeLabel = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[d.deviceType] || (d.isDiscrete ? '[独显]' : '[核显]');
         const adapterStr = d.dxgiAdapterNumber !== undefined ? ` deviceId=${d.dxgiAdapterNumber}` : '';
         const sourceStr = d.source ? ` (${d.source})` : '';
-        console.log(`  - ${d.name}${vramStr}${discreteStr}${adapterStr}${sourceStr}`);
+        console.log(`  - ${d.name}${vramStr} ${typeLabel}${adapterStr}${sourceStr}`);
     }
 
-    const gpus = devices.filter(d => d.dxgiAdapterNumber !== undefined);
+    const gpus = devices.filter(d => d.dxgiAdapterNumber !== undefined && d.deviceType !== 'npu');
     if (gpus.length === 0) {
         return { deviceId: undefined, name: '', devices };
     }
@@ -686,14 +732,193 @@ async function detectBestGPU(modelDir) {
         best = gpus.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
     }
     const vramStr = best.vram ? ` (${best.vram})` : '';
-    const discreteStr = best.isDiscrete ? ' [独显]' : ' [核显]';
+    const typeLabel = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[best.deviceType] || (best.isDiscrete ? '[独显]' : '[核显]');
 
-    console.log(`[OnnxSVSPipeline] 自动选择: ${best.name}${vramStr}${discreteStr} (deviceId=${best.dxgiAdapterNumber})`);
+    console.log(`[OnnxSVSPipeline] 自动选择: ${best.name}${vramStr} ${typeLabel} (deviceId=${best.dxgiAdapterNumber})`);
 
     return {
         deviceId: best.dxgiAdapterNumber,
         name: `${best.name}${vramStr}`,
         devices,
+    };
+}
+
+/**
+ * 智能设备选择 — 按优先级 GPU(独显) > NPU > GPU(核显) > CPU 选择主设备
+ * @param {Array} devices - 设备列表
+ * @param {boolean} npuAvailable - NPU 是否可用（WebNN 检测结果）
+ * @returns {{ deviceId: number|undefined, deviceType: string, name: string, devices: Array }}
+ */
+function selectBestDevice(devices, npuAvailable = false) {
+    if (devices.length === 0) {
+        return { deviceId: undefined, deviceType: 'cpu', name: 'CPU', devices: [] };
+    }
+
+    // 按优先级排序
+    const priority = { 'discrete-gpu': 0, 'npu': 1, 'integrated-gpu': 2, 'cpu': 3 };
+    const availableDevices = devices.filter(d => {
+        // NPU 设备需要 WebNN 可用
+        if (d.deviceType === 'npu' && !npuAvailable) return false;
+        // GPU 设备需要有 dxgiAdapterNumber
+        if ((d.deviceType === 'discrete-gpu' || d.deviceType === 'integrated-gpu') && d.dxgiAdapterNumber === undefined) return false;
+        return true;
+    });
+
+    if (availableDevices.length === 0) {
+        return { deviceId: undefined, deviceType: 'cpu', name: 'CPU', devices };
+    }
+
+    // 按优先级和显存排序
+    availableDevices.sort((a, b) => {
+        const pa = priority[a.deviceType] ?? 4;
+        const pb = priority[b.deviceType] ?? 4;
+        if (pa !== pb) return pa - pb;
+        return (b.vramBytes || 0) - (a.vramBytes || 0);
+    });
+
+    const best = availableDevices[0];
+    return {
+        deviceId: best.dxgiAdapterNumber,
+        deviceType: best.deviceType,
+        name: best.name,
+        devices,
+    };
+}
+
+// 模型大小定义（字节，FP16 版本）
+const MODEL_SIZES = {
+    diff_step: 846.27 * 1024 * 1024,
+    vocoder: 495.42 * 1024 * 1024,
+    note_text_encoder: 2.93 * 1024 * 1024,
+    note_pitch_encoder: 0.13 * 1024 * 1024,
+    note_type_encoder: 0.13 * 1024 * 1024,
+    f0_encoder: 0.13 * 1024 * 1024,
+    preflow: 8.2 * 1024 * 1024,
+    cond_emb: 0.51 * 1024 * 1024,
+    mel_transform: 0.25 * 1024 * 1024,
+    rmvpe: 349.21 * 1024 * 1024,
+    rosvot: 54.58 * 1024 * 1024,
+};
+
+// 模型组定义
+const MODEL_GROUPS = {
+    svs_diffusion: {
+        models: ['diff_step', 'vocoder'],
+        label: 'SVS 扩散模型',
+    },
+    svs_encoder: {
+        models: ['note_text_encoder', 'note_pitch_encoder', 'note_type_encoder', 'f0_encoder', 'preflow', 'cond_emb'],
+        label: 'SVS 编码器模型',
+    },
+    svs_auxiliary: {
+        models: ['mel_transform'],
+        label: 'SVS 辅助模型',
+    },
+    rmvpe: {
+        models: ['rmvpe'],
+        label: 'RMVPE 音高检测',
+    },
+    rosvot: {
+        models: ['rosvot'],
+        label: 'RosVot 语音检测',
+    },
+};
+
+/**
+ * 智能模型-设备分配
+ * @param {Array} devices - 设备列表
+ * @param {boolean} npuAvailable - NPU 是否可用
+ * @returns {Object} modelDeviceMapping — { modelGroup: { deviceType, deviceId, process } }
+ */
+function buildModelDeviceMapping(devices, npuAvailable = false) {
+    const best = selectBestDevice(devices, npuAvailable);
+    const hasDiscreteGPU = devices.some(d => d.deviceType === 'discrete-gpu' && d.dxgiAdapterNumber !== undefined);
+    const discreteGPU = devices.find(d => d.deviceType === 'discrete-gpu' && d.dxgiAdapterNumber !== undefined);
+    const integratedGPU = devices.find(d => d.deviceType === 'integrated-gpu' && d.dxgiAdapterNumber !== undefined);
+
+    const mapping = {};
+
+    for (const [groupId, group] of Object.entries(MODEL_GROUPS)) {
+        // 计算模型组总大小
+        const totalSize = group.models.reduce((sum, m) => sum + (MODEL_SIZES[m] || 0), 0);
+
+        if (totalSize > 100 * 1024 * 1024) {
+            // 大模型组（>100MB）→ GPU（主进程 DirectML）
+            if (hasDiscreteGPU) {
+                mapping[groupId] = { deviceType: 'discrete-gpu', deviceId: discreteGPU.dxgiAdapterNumber, process: 'main' };
+            } else if (integratedGPU) {
+                mapping[groupId] = { deviceType: 'integrated-gpu', deviceId: integratedGPU.dxgiAdapterNumber, process: 'main' };
+            } else {
+                mapping[groupId] = { deviceType: 'cpu', deviceId: undefined, process: 'main' };
+            }
+        } else if (totalSize > 10 * 1024 * 1024) {
+            // 中等模型组（10-100MB）→ GPU 优先
+            if (hasDiscreteGPU) {
+                mapping[groupId] = { deviceType: 'discrete-gpu', deviceId: discreteGPU.dxgiAdapterNumber, process: 'main' };
+            } else if (integratedGPU) {
+                mapping[groupId] = { deviceType: 'integrated-gpu', deviceId: integratedGPU.dxgiAdapterNumber, process: 'main' };
+            } else if (npuAvailable) {
+                mapping[groupId] = { deviceType: 'npu', deviceId: 'npu-webnn', process: 'renderer' };
+            } else {
+                mapping[groupId] = { deviceType: 'cpu', deviceId: undefined, process: 'main' };
+            }
+        } else {
+            // 小模型组（<10MB）→ NPU 优先（释放 GPU 显存），否则 CPU
+            if (npuAvailable) {
+                mapping[groupId] = { deviceType: 'npu', deviceId: 'npu-webnn', process: 'renderer' };
+            } else {
+                mapping[groupId] = { deviceType: 'cpu', deviceId: undefined, process: 'main' };
+            }
+        }
+    }
+
+    return mapping;
+}
+
+/**
+ * 替代 detectBestGPU 的新函数，返回包含 deviceType 和 modelDeviceMapping 的结果
+ * @param {string} modelDir - 模型目录
+ * @param {boolean} npuAvailable - NPU 是否可用
+ * @returns {{ deviceId: number|undefined, deviceType: string, name: string, devices: Array, modelDeviceMapping: Object }}
+ */
+async function detectBestDevice(modelDir, npuAvailable = false) {
+    let devices = await enumerateDMLDevices(modelDir);
+
+    if (devices.length === 0) {
+        console.log('[OnnxSVSPipeline] 未发现任何设备，将使用 CPU');
+        return { deviceId: undefined, deviceType: 'cpu', name: 'CPU', devices: [], modelDeviceMapping: {} };
+    }
+
+    console.log(`[OnnxSVSPipeline] 发现 ${devices.length} 个设备:`);
+    for (const d of devices) {
+        const vramStr = d.vram ? ` (${d.vram})` : '';
+        const typeLabel = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[d.deviceType] || (d.isDiscrete ? '[独显]' : '[核显]');
+        const adapterStr = d.dxgiAdapterNumber !== undefined ? ` deviceId=${d.dxgiAdapterNumber}` : '';
+        const sourceStr = d.source ? ` (${d.source})` : '';
+        console.log(`  - ${d.name}${vramStr} ${typeLabel}${adapterStr}${sourceStr}`);
+    }
+
+    const best = selectBestDevice(devices, npuAvailable);
+    const modelDeviceMapping = buildModelDeviceMapping(devices, npuAvailable);
+
+    const vramStr = best.deviceType !== 'cpu' ? '' : '';
+    const typeLabel = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[best.deviceType] || '';
+    console.log(`[OnnxSVSPipeline] 智能选择: ${best.name} ${typeLabel} (deviceId=${best.deviceId})`);
+
+    // 打印模型分配
+    for (const [groupId, alloc] of Object.entries(modelDeviceMapping)) {
+        const groupLabel = MODEL_GROUPS[groupId]?.label || groupId;
+        const allocType = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[alloc.deviceType] || alloc.deviceType;
+        const processLabel = alloc.process === 'renderer' ? '(WebNN)' : '(DirectML)';
+        console.log(`  - ${groupLabel} → ${allocType} ${processLabel}`);
+    }
+
+    return {
+        deviceId: best.deviceId,
+        deviceType: best.deviceType,
+        name: best.name,
+        devices,
+        modelDeviceMapping,
     };
 }
 

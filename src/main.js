@@ -1,6 +1,9 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+
+// 启用 WebNN API，使渲染进程可通过 onnxruntime-web WebNN EP 使用 NPU 推理
+app.commandLine.appendSwitch('enable-features', 'WebMachineLearningNeuralNetwork');
 
 const mainLocales = {
   'zh-CN': {
@@ -219,6 +222,25 @@ function loadSettings() {
   if (typeof _settingsCache.themePerWindow !== 'object' || _settingsCache.themePerWindow === null || Array.isArray(_settingsCache.themePerWindow)) {
     _settingsCache.themePerWindow = { ...DEFAULT_THEME_PER_WINDOW };
   }
+
+  // Migration: old deviceId (number) → deviceMode + preferredDeviceId + preferredDeviceType
+  if (_settingsCache.deviceMode === undefined) {
+    if (typeof _settingsCache.deviceId === 'number') {
+      _settingsCache.deviceMode = 'manual';
+      _settingsCache.preferredDeviceId = _settingsCache.deviceId;
+      // Try to look up deviceType from cachedDMLDevices
+      if (cachedDMLDevices) {
+        const matched = cachedDMLDevices.find(d => d.dxgiAdapterNumber === _settingsCache.deviceId);
+        if (matched && matched.deviceType) {
+          _settingsCache.preferredDeviceType = matched.deviceType;
+        }
+      }
+    } else {
+      // deviceId is null/undefined and no deviceMode set
+      _settingsCache.deviceMode = 'smart';
+    }
+  }
+
   return _settingsCache;
 }
 
@@ -309,6 +331,72 @@ const createWindow = () => {
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
   mainWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  // 设备丢失检测：主窗口加载完成后校验用户指定的设备
+  mainWindow.webContents.once('did-finish-load', async () => {
+    try {
+      const settings = loadSettings();
+      const deviceMode = settings.deviceMode || (settings.deviceId !== undefined && settings.deviceId !== null ? 'manual' : 'smart');
+
+      if (deviceMode === 'manual' || deviceMode === 'advanced') {
+        const gpuInfo = await ensureGPUInfo();
+        const dmlDevices = cachedDMLDevices || [];
+        const allDevices = [...dmlDevices];
+        for (const c of gpuInfo) {
+          if (!allDevices.find(d => d.name === c.model)) {
+            const vramBytes = (c.memoryTotal || c.vram || 0) * 1024 * 1024;
+            const deviceType = classifyDeviceFromName(c.model, vramBytes);
+            allDevices.push({ name: c.model, deviceType, isDiscrete: deviceType === 'discrete-gpu', vramBytes, source: 'systeminformation' });
+          }
+        }
+
+        const npuAvailable = allDevices.some(d => d.deviceType === 'npu');
+
+        if (deviceMode === 'manual') {
+          const preferredId = settings.preferredDeviceId ?? settings.deviceId;
+          const preferredType = settings.preferredDeviceType;
+          const found = preferredId !== undefined && preferredId !== null
+            ? allDevices.find(d => d.dxgiAdapterNumber === preferredId)
+            : null;
+
+          if (!found || (preferredType === 'npu' && !npuAvailable)) {
+            const deviceName = found ? found.name : `deviceId=${preferredId}`;
+            dialog.showMessageBoxSync(mainWindow, {
+              type: 'warning',
+              title: 'Device Not Found',
+              message: `Previously selected device "${deviceName}" was not found. Switched to smart mode.`,
+              buttons: ['OK'],
+            });
+            // 切换到智能模式
+            const newSettings = { ...settings, deviceMode: 'smart' };
+            delete newSettings.preferredDeviceId;
+            delete newSettings.preferredDeviceType;
+            await saveSettingsFile(newSettings);
+          }
+        } else if (deviceMode === 'advanced' && settings.modelDeviceMapping) {
+          const newMapping = { ...settings.modelDeviceMapping };
+          let changed = false;
+          for (const [groupId, mapping] of Object.entries(newMapping)) {
+            if (typeof mapping === 'object' && mapping.deviceType === 'npu' && !npuAvailable) {
+              newMapping[groupId] = 'auto';
+              changed = true;
+            }
+          }
+          if (changed) {
+            dialog.showMessageBoxSync(mainWindow, {
+              type: 'warning',
+              title: 'NPU Not Available',
+              message: 'NPU device not found. Model groups assigned to NPU have been switched to auto.',
+              buttons: ['OK'],
+            });
+            await saveSettingsFile({ ...settings, modelDeviceMapping: newMapping });
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('[Main] Device validation failed:', err.message);
+    }
+  });
 
   if (isDev) {
     mainWindow.webContents.openDevTools();
@@ -415,6 +503,63 @@ const { Worker } = require('node:worker_threads');
 let _gpuInfoCache = null;
 let _gpuInfoPending = null;
 
+/**
+ * 统一设备分类函数 — 与 nativeSvsPipeline.js 中的 classifyDevice 保持同步
+ * @param {string} name - 设备名称
+ * @param {number} vramBytes - 显存大小（字节），0 表示未知
+ * @param {boolean|undefined} dmlDiscreteFlag - DirectML 报告的 Discrete 标志
+ * @returns {'discrete-gpu'|'integrated-gpu'|'npu'|'cpu'}
+ */
+function classifyDeviceFromName(name, vramBytes = 0, dmlDiscreteFlag = undefined) {
+  const n = (name || '').toLowerCase();
+
+  // 1. NPU 名称匹配（最高优先级）
+  const npuKeywords = [
+    'npu', 'neural processing', 'neural compute',
+    'intel ai boost', 'intel neural', 'intel npu',
+    'amd xdna', 'amd ryzen ai', 'amd ai engine',
+    'qualcomm hexagon', 'qcom npu', 'hexagon npu',
+    'snapdragon neural', 'mediatek apu', 'rockchip npu',
+  ];
+  for (const kw of npuKeywords) {
+    if (n.includes(kw)) return 'npu';
+  }
+
+  // 2. GPU 独显名称匹配
+  const discreteGpuKeywords = [
+    { includes: ['nvidia'] }, { includes: ['geforce'] },
+    { includes: ['rtx'] }, { includes: ['gtx'] }, { includes: ['quadro'] },
+    { includes: ['radeon', 'rx'] }, { includes: ['radeon', 'pro'] },
+    { includes: ['radeon', 'instinct'] },
+    { includes: ['amd', 'rx '] }, { includes: ['amd', 'pro w'] }, { includes: ['amd', 'pro v'] },
+  ];
+  for (const rule of discreteGpuKeywords) {
+    if (rule.includes.every(kw => n.includes(kw))) return 'discrete-gpu';
+  }
+  if (n.includes('intel') && n.includes('arc') && /\barc\s*a\d/i.test(n)) return 'discrete-gpu';
+
+  // 3. GPU 核显名称匹配
+  const integratedGpuKeywords = [
+    { includes: ['intel', 'uhd'] }, { includes: ['intel', 'iris'] },
+    { includes: ['intel', 'xe'] }, { includes: ['intel', 'hd graphics'] },
+  ];
+  for (const rule of integratedGpuKeywords) {
+    if (rule.includes.every(kw => n.includes(kw))) return 'integrated-gpu';
+  }
+  if (n.includes('radeon') && !n.includes('rx') && !n.includes('pro') && !n.includes('instinct')) return 'integrated-gpu';
+  if (n.includes('microsoft') && n.includes('basic')) return 'integrated-gpu';
+
+  // 4. DML Discrete 标志
+  if (dmlDiscreteFlag === true) return 'discrete-gpu';
+  if (dmlDiscreteFlag === false) return 'integrated-gpu';
+
+  // 5. 显存阈值兜底（>= 512MB 视为独显）
+  if (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024) return 'discrete-gpu';
+  if (vramBytes > 0) return 'integrated-gpu';
+
+  return 'cpu';
+}
+
 function startGPUPreload() {
   _gpuInfoPending = new Promise((resolve) => {
     try {
@@ -450,15 +595,20 @@ async function ensureGPUInfo() {
     const si = require('systeminformation');
     const graphics = await si.graphics();
     const controllers = graphics.controllers || [];
-    _gpuInfoCache = controllers.map((c, idx) => ({
-      adapterIndex: idx,
-      model: c.model || '',
-      vram: c.vram || 0,
-      memoryTotal: c.memoryTotal || c.vram || 0,
-      memoryUsed: c.memoryUsed || 0,
-      vendor: c.vendor || '',
-      isDiscrete: (c.memoryTotal || c.vram || 0) >= 512,
-    }));
+    _gpuInfoCache = controllers.map((c, idx) => {
+      const vramBytes = (c.memoryTotal || c.vram || 0) * 1024 * 1024;
+      const deviceType = classifyDeviceFromName(c.model, vramBytes);
+      return {
+        adapterIndex: idx,
+        model: c.model || '',
+        vram: c.vram || 0,
+        memoryTotal: c.memoryTotal || c.vram || 0,
+        memoryUsed: c.memoryUsed || 0,
+        vendor: c.vendor || '',
+        deviceType,
+        isDiscrete: deviceType === 'discrete-gpu',
+      };
+    });
   } catch (e) {
     _gpuInfoCache = [];
   }
@@ -753,7 +903,40 @@ app.on('second-instance', () => {
   }
 });
 
+// 注册自定义 protocol scheme，必须在 app.whenReady() 之前调用
+const { protocol } = require('electron');
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'onnx',
+    privileges: {
+      bypassCSP: true,
+      stream: true,
+      supportFetchAPI: true,
+    },
+  },
+]);
+
 app.whenReady().then(() => {
+  // 注册 onnx:// protocol handler，允许渲染进程安全访问模型文件
+  protocol.handle('onnx', (request) => {
+    const url = new URL(request.url);
+    // URL 格式: onnx://model-path/xxx.onnx
+    const modelPath = decodeURIComponent(url.pathname);
+    // 安全性验证：只允许访问 onnx_models 目录下的 .onnx 文件
+    const modelDir = getModelDir();
+    const resolvedPath = path.resolve(modelDir, modelPath.replace(/^\/+/, ''));
+    if (!resolvedPath.startsWith(path.resolve(modelDir))) {
+      return new Response('Forbidden', { status: 403 });
+    }
+    if (!resolvedPath.endsWith('.onnx')) {
+      return new Response('Forbidden', { status: 403 });
+    }
+    if (!fs.existsSync(resolvedPath)) {
+      return new Response('Not Found', { status: 404 });
+    }
+    return net.fetch(`file:///${resolvedPath.replace(/\\/g, '/')}`);
+  });
+
   loadMainLocale();
   createWindow();
   // 后台线程预加载GPU信息，不阻塞主线程
@@ -938,6 +1121,80 @@ ipcMain.handle('settings:getSettings', async () => {
   return loadSettings();
 });
 
+ipcMain.handle('settings:validateDevices', async () => {
+  const settings = loadSettings();
+  const deviceMode = settings.deviceMode || 'smart';
+  const issues = [];
+
+  // 获取当前可用设备
+  const gpuInfo = await ensureGPUInfo();
+  const dmlDevices = cachedDMLDevices || [];
+  const allDevices = [...dmlDevices];
+
+  // 添加 systeminformation 检测到的设备
+  for (const c of gpuInfo) {
+    if (!allDevices.find(d => d.name === c.model)) {
+      const vramBytes = (c.memoryTotal || c.vram || 0) * 1024 * 1024;
+      const deviceType = classifyDeviceFromName(c.model, vramBytes);
+      allDevices.push({
+        name: c.model,
+        deviceType,
+        isDiscrete: deviceType === 'discrete-gpu',
+        vramBytes,
+        source: 'systeminformation',
+      });
+    }
+  }
+
+  // 检查 NPU 可用性
+  let npuAvailable = false;
+  try {
+    const npuResult = await ipcMain.handleOnce('__internal:webnnDetectNPU') || {};
+    // 通过 WebNN IPC 检测（异步，可能超时）
+  } catch (_) {}
+  // 简单检查：DML 枚举中是否有 NPU
+  npuAvailable = allDevices.some(d => d.deviceType === 'npu');
+
+  if (deviceMode === 'manual') {
+    const preferredId = settings.preferredDeviceId;
+    const preferredType = settings.preferredDeviceType;
+    if (preferredId !== undefined && preferredId !== null) {
+      const found = allDevices.find(d => d.dxgiAdapterNumber === preferredId);
+      if (!found) {
+        issues.push({
+          type: 'device-not-found',
+          mode: 'manual',
+          message: `Previously selected device (deviceId=${preferredId}) not found`,
+          fix: { deviceMode: 'smart' },
+        });
+      }
+    }
+    if (preferredType === 'npu' && !npuAvailable) {
+      issues.push({
+        type: 'npu-not-available',
+        mode: 'manual',
+        message: 'NPU device not available',
+        fix: { deviceMode: 'smart' },
+      });
+    }
+  } else if (deviceMode === 'advanced' && settings.modelDeviceMapping) {
+    for (const [groupId, mapping] of Object.entries(settings.modelDeviceMapping)) {
+      if (mapping === 'auto' || mapping === 'npu-webnn') continue;
+      if (typeof mapping === 'object' && mapping.deviceType === 'npu' && !npuAvailable) {
+        issues.push({
+          type: 'model-group-npu-not-available',
+          mode: 'advanced',
+          groupId,
+          message: `Model group ${groupId} assigned to NPU but NPU not available`,
+          fix: { groupId, newMapping: 'auto' },
+        });
+      }
+    }
+  }
+
+  return { issues, deviceMode, npuAvailable, devices: allDevices };
+});
+
 ipcMain.handle('app:getVersion', async () => {
   return app.getVersion();
 });
@@ -961,6 +1218,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth',
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
+  'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
 ];
 
 ipcMain.handle('settings:saveSettings', async (event, settings) => {
@@ -1606,12 +1864,20 @@ async function ensureSVSPipeline() {
 
   const modelPath = getModelDir();
   const settings = loadSettings();
-  const deviceId = settings.deviceId ?? undefined;
-  console.log(`[Main] 初始化SVS Pipeline (ONNX Runtime), 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+  const deviceMode = settings.deviceMode || 'smart';
+  const deviceId = settings.preferredDeviceId ?? settings.deviceId ?? undefined;
+  const preferredDeviceType = settings.preferredDeviceType || undefined;
+  const modelDeviceMapping = settings.modelDeviceMapping || undefined;
+  console.log(`[Main] 初始化SVS Pipeline (ONNX Runtime), 模型路径: ${modelPath}, deviceMode: ${deviceMode}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
 
   _svsPipelineInitPromise = (async () => {
     try {
-      svsPipeline = new OnnxSVSPipeline(modelPath, { deviceId });
+      svsPipeline = new OnnxSVSPipeline(modelPath, {
+        deviceId,
+        deviceMode,
+        preferredDeviceType,
+        modelDeviceMapping,
+      });
       await svsPipeline.init();
       return svsPipeline;
     } catch (err) {
@@ -2354,4 +2620,122 @@ ipcMain.handle('resmgr:unloadGroup', async (event, { groupId }) => {
     console.error(`[Main] 卸载模型组失败 (${groupId}):`, err.message);
     return { success: false, error: err.message };
   }
+});
+
+// ==================== WebNN / NPU IPC ====================
+// WebNN 推理在渲染进程中执行，主进程作为 IPC 中转
+
+/**
+ * 获取主窗口的 WebContents（用于向渲染进程发送消息）
+ */
+function getMainWindowWebContents() {
+  const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
+  return win ? win.webContents : null;
+}
+
+// NPU 可用性检测结果缓存
+let _npuDetectionCache = null;
+
+ipcMain.handle('webnn:detectNPU', async () => {
+  if (_npuDetectionCache) return _npuDetectionCache;
+
+  const wc = getMainWindowWebContents();
+  if (!wc) {
+    return { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: 'No renderer window' };
+  }
+
+  // 向渲染进程请求 NPU 检测
+  return new Promise((resolve) => {
+    const requestId = `webnn-detect-${Date.now()}`;
+    const timeout = setTimeout(() => {
+      _npuDetectionCache = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: 'Detection timeout' };
+      resolve(_npuDetectionCache);
+    }, 15000);
+
+    ipcMain.handleOnce(`webnn:detectNPU:response:${requestId}`, async (_, result) => {
+      clearTimeout(timeout);
+      _npuDetectionCache = result;
+      resolve(result);
+    });
+
+    wc.send('webnn:detectNPU:request', { requestId });
+  });
+});
+
+ipcMain.handle('webnn:loadModel', async (_, modelId, modelPath, options) => {
+  const wc = getMainWindowWebContents();
+  if (!wc) return { success: false, error: 'No renderer window' };
+
+  return new Promise((resolve) => {
+    const requestId = `webnn-load-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const timeout = setTimeout(() => {
+      resolve({ success: false, error: 'Load model timeout' });
+    }, 120000);
+
+    ipcMain.handleOnce(`webnn:loadModel:response:${requestId}`, async (_, result) => {
+      clearTimeout(timeout);
+      resolve(result);
+    });
+
+    wc.send('webnn:loadModel:request', { requestId, modelId, modelPath, options });
+  });
+});
+
+ipcMain.handle('webnn:unloadModel', async (_, modelId) => {
+  const wc = getMainWindowWebContents();
+  if (!wc) return { success: false, error: 'No renderer window' };
+
+  return new Promise((resolve) => {
+    const requestId = `webnn-unload-${Date.now()}`;
+    const timeout = setTimeout(() => {
+      resolve({ success: false, error: 'Unload model timeout' });
+    }, 10000);
+
+    ipcMain.handleOnce(`webnn:unloadModel:response:${requestId}`, async (_, result) => {
+      clearTimeout(timeout);
+      resolve(result);
+    });
+
+    wc.send('webnn:unloadModel:request', { requestId, modelId });
+  });
+});
+
+ipcMain.handle('webnn:runInference', async (_, modelId, inputs) => {
+  const wc = getMainWindowWebContents();
+  if (!wc) throw new Error('No renderer window');
+
+  return new Promise((resolve, reject) => {
+    const requestId = `webnn-infer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const timeout = setTimeout(() => {
+      reject(new Error('Inference timeout'));
+    }, 120000);
+
+    ipcMain.handleOnce(`webnn:runInference:response:${requestId}`, async (_, result) => {
+      clearTimeout(timeout);
+      if (result.error) {
+        reject(new Error(result.error));
+      } else {
+        resolve(result);
+      }
+    });
+
+    wc.send('webnn:runInference:request', { requestId, modelId, inputs });
+  });
+});
+
+ipcMain.handle('webnn:getStatus', async () => {
+  const wc = getMainWindowWebContents();
+  if (!wc) return {};
+
+  return new Promise((resolve) => {
+    const requestId = `webnn-status-${Date.now()}`;
+    const timeout = setTimeout(() => resolve({}), 5000);
+
+    ipcMain.handleOnce(`webnn:getStatus:response:${requestId}`, async (_, result) => {
+      clearTimeout(timeout);
+      resolve(result);
+    });
+
+    wc.send('webnn:getStatus:request', { requestId });
+  });
 });

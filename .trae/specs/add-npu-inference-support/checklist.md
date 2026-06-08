@@ -5,38 +5,22 @@
 - [ ] `gpuWorker.js` 返回 `deviceType` 字段替代旧的 `isDiscrete` 纯显存阈值判断
 - [ ] `main.js` 中 `ensureGPUInfo` 兜底逻辑使用 `classifyDevice`
 - [ ] `enumDmlDevicesWorker.js` 同步 NPU 检测和 classifyDevice 逻辑
-- [ ] `main.js` 在 `app.whenReady()` 之前调用 `app.commandLine.appendSwitch('enable-features', 'WebMachineLearningNeuralNetwork')` 启用 WebNN API
-- [ ] `package.json` 新增 `onnxruntime-web` 依赖
-- [ ] `forge.config.js` webpack 配置适配 onnxruntime-web 的 WASM 文件和 Worker 打包
-- [ ] 主进程注册自定义 protocol `onnx://`，渲染进程可通过该 protocol 安全访问模型文件，主进程验证路径安全性
-- [ ] 新建 `src/inference/webnnPipeline.js`，封装 onnxruntime-web + WebNN EP 的推理逻辑
-- [ ] 渲染进程通过 `navigator.ml` API 检测 WebNN/NPU 可用性，尝试创建 `{ deviceType: 'npu' }` 的 MLContext 验证，结果通过 IPC 报告主进程
-- [ ] WebNN 推理会话创建：`ort.InferenceSession.create(modelUrl, { executionProviders: [{ name: 'webnn', deviceType: 'npu' }] })`，失败时回退到 WASM
-- [ ] WebNN EP 创建失败时尝试回退链：WebNN NPU → WebNN GPU → WASM（CPU），记录日志并通知用户
-- [ ] 渲染进程推理执行：接收输入张量数据，执行推理，返回输出张量数据
-- [ ] 渲染进程会话管理：加载、卸载、查询模型状态
-- [ ] `preload.js` 新增 WebNN 相关 IPC 接口：`webnnDetectNPU`、`webnnLoadModel`、`webnnUnloadModel`、`webnnRunInference`、`webnnGetStatus`
-- [ ] `main.js` 实现 IPC handler，转发 WebNN 请求到指定窗口的渲染进程
-- [ ] 主进程到渲染进程推理请求路由：当某模型分配到 NPU 时，主进程将推理请求转发到渲染进程
-- [ ] 渲染进程推理结果通过 IPC 回传主进程，跨进程二进制数据传输（Float32Array）高效
 - [ ] 智能设备选择：`selectBestDevice` 按 GPU(独显) > NPU > GPU(核显) > CPU 优先级选择
-- [ ] 智能模型-设备分配：`buildModelDeviceMapping` 按模型大小分配设备（大模型→GPU/DirectML，小模型→NPU/WebNN 或 CPU）
+- [ ] 智能模型-设备分配：`buildModelDeviceMapping` 按模型大小分配设备（大模型→GPU/NPU，小模型→CPU/NPU）
 - [ ] `detectBestDevice` 替代 `detectBestGPU`，返回结果包含 `deviceType` 和 `modelDeviceMapping`
-- [ ] Pipeline `_doInit` 根据 `deviceMode`（smart/manual/advanced）和 `modelDeviceMapping` 为不同模型选择不同设备/进程
-- [ ] `createSessionWithValidation` 接受可选 `overrideDeviceId` 参数；分配到 NPU 的模型跳过主进程会话创建
-- [ ] 合成流程中某步骤的模型在 NPU 时，通过 IPC 调用渲染进程 WebNN 执行推理
+- [ ] Pipeline `_doInit` 根据 `deviceMode`（smart/manual/advanced）和 `modelDeviceMapping` 为不同模型选择不同 deviceId
+- [ ] `createSessionWithValidation` 接受可选 `overrideDeviceId` 参数
 - [ ] 设置存储新增 `deviceMode`、`preferredDeviceId`、`preferredDeviceType`、`modelDeviceMapping` 字段
 - [ ] 旧 `deviceId` 设置自动迁移到新字段格式
 - [ ] 启动时校验用户手动指定的设备是否可用，不可用时弹窗提示并切换到智能模式
 - [ ] 高级模式下某模型组的指定设备不可用时弹窗提示并将该组映射改为 `auto`
-- [ ] NPU 上次可用但本次不可用时弹窗提示，NPU 分配的模型回退到 CPU
 - [ ] 设置页面新增设备模式选择（智能模式/手动指定/高级设置）
-- [ ] 设备下拉列表显示 NPU 设备及类型标签（[独显]/[NPU](WebNN)/[核显]）
+- [ ] 设备下拉列表显示 NPU 设备及类型标签（[独显]/[NPU]/[核显]）
 - [ ] 智能模式下设备下拉列表禁用，手动模式下启用
 - [ ] 当前运行硬件显示区域包含设备类型标签和模型分配概览
-- [ ] 高级推理硬件设置区域：列出模型组（SVS扩散/编码器/辅助、RMVPE、RosVot），每组可独立选择设备（GPU/DirectML、NPU/WebNN、CPU、智能分配）
-- [ ] i18n 中英文翻译完整覆盖所有新增 UI 文案（智能模式、手动指定、高级设置、NPU、WebNN、设备未找到提示、模型组名称等）
+- [ ] 高级推理硬件设置区域：列出模型组（SVS扩散/编码器/辅助、RMVPE、RosVot），每组可独立选择设备
+- [ ] i18n 中英文翻译完整覆盖所有新增 UI 文案
 - [ ] `preload.js` 暴露 `validateDevices` API
-- [ ] RMVPE/BasicPitch/Rosvot 推理器初始化支持按 modelDeviceMapping 分配设备（NPU 时通过渲染进程 WebNN 执行）
+- [ ] RMVPE/BasicPitch/Rosvot 推理器初始化支持按 modelDeviceMapping 分配设备
+- [ ] NPU 设备上创建 ONNX Runtime 会话成功，不支持的算子回退到 CPU
 - [ ] `resourceManager.js` 设备类型标签支持 NPU 显示
-- [ ] WebNN 不可用（旧版 Electron/Chromium）时 `navigator.ml` 为 undefined，NPU 检测返回不可用，系统回退到 GPU/CPU 推理

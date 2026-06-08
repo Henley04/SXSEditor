@@ -193,6 +193,154 @@ body {
     margin-bottom: 10px;
 }
 
+/* ==================== Device Mode Selection ==================== */
+
+.device-mode-radios {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.device-mode-radio {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--bg-elevated);
+    cursor: pointer;
+    transition: border-color var(--motion-base), background var(--motion-base), box-shadow var(--motion-base);
+}
+
+.device-mode-radio:hover {
+    border-color: var(--accent-glow);
+    background: var(--accent-softer);
+}
+
+.device-mode-radio:has(input:checked) {
+    border-color: var(--accent);
+    background: var(--accent-softer);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.device-mode-radio input[type="radio"] {
+    margin-top: 3px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.device-mode-radio .radio-label {
+    font-size: var(--font-md);
+    font-weight: 600;
+    color: var(--fg-primary);
+    display: block;
+}
+
+.device-mode-radio .radio-desc {
+    font-size: var(--font-sm);
+    color: var(--fg-muted);
+    display: block;
+    margin-top: var(--space-1);
+}
+
+/* ==================== WebNN/NPU Status Bar ==================== */
+
+.webnn-status-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    font-size: var(--font-sm);
+}
+
+.webnn-status-label {
+    color: var(--fg-muted);
+    font-weight: 500;
+}
+
+.webnn-status-separator {
+    color: var(--border-strong);
+    margin: 0 var(--space-1);
+}
+
+.webnn-status-value {
+    font-weight: 600;
+    transition: color var(--motion-base);
+}
+
+.webnn-status-value.status-available {
+    color: var(--success);
+}
+
+.webnn-status-value.status-unavailable {
+    color: var(--fg-muted);
+}
+
+/* ==================== Advanced Model Device Mapping ==================== */
+
+.model-device-mapping {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-top: var(--space-3);
+}
+
+.model-mapping-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    transition: border-color var(--motion-base);
+}
+
+.model-mapping-row:hover {
+    border-color: var(--accent-glow);
+}
+
+.model-mapping-label {
+    flex: 0 0 160px;
+    font-size: var(--font-sm);
+    font-weight: 500;
+    color: var(--fg-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.model-mapping-select {
+    flex: 1;
+    padding: var(--space-2) 28px var(--space-2) var(--space-3);
+    font-size: var(--font-sm);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    background: var(--bg-input);
+    color: var(--fg-secondary);
+    outline: none;
+    cursor: pointer;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23d8d8ec' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    transition: border-color var(--motion-base), box-shadow var(--motion-base);
+}
+
+.model-mapping-select:hover {
+    border-color: var(--button-secondary-border);
+}
+
+.model-mapping-select:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
 .setting-actions {
     display: flex;
     gap: var(--space-5);

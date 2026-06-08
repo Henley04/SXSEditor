@@ -18,11 +18,47 @@
                 </div>
             </div>
             <div class="setting-group">
+                <label data-i18n="settings.deviceMode">设备模式</label>
+                <div class="device-mode-radios">
+                    <label class="device-mode-radio">
+                        <input type="radio" name="deviceMode" value="smart" checked>
+                        <span class="radio-label" data-i18n="settings.smartMode">智能模式</span>
+                        <span class="radio-desc" data-i18n="settings.smartModeDesc">自动选择最佳设备并智能分配模型</span>
+                    </label>
+                    <label class="device-mode-radio">
+                        <input type="radio" name="deviceMode" value="manual">
+                        <span class="radio-label" data-i18n="settings.manualMode">手动指定</span>
+                        <span class="radio-desc" data-i18n="settings.manualModeDesc">手动指定所有模型运行的设备</span>
+                    </label>
+                    <label class="device-mode-radio">
+                        <input type="radio" name="deviceMode" value="advanced">
+                        <span class="radio-label" data-i18n="settings.advancedMode">高级设置</span>
+                        <span class="radio-desc" data-i18n="settings.advancedModeDesc">为每个模型组单独指定运行设备</span>
+                    </label>
+                </div>
+            </div>
+            <div class="setting-group" id="deviceSelectGroup">
                 <label for="inferenceDevice" data-i18n="settings.inferenceHardware">推理硬件</label>
-                <select id="inferenceDevice">
+                <select id="inferenceDevice" disabled>
                     <option value="auto" data-i18n="settings.autoSelect">自动选择</option>
                 </select>
                 <p class="hint" data-i18n="settings.inferenceHardwareHint">选择用于 DirectML 推理的 GPU 设备。自动模式优先选择独显，若无独显则选择显存最大的 GPU。</p>
+            </div>
+            <div class="setting-group" id="webnnStatusGroup">
+                <div class="webnn-status-bar">
+                    <span class="webnn-status-label">WebNN:</span>
+                    <span class="webnn-status-value" id="webnnStatusValue" data-i18n="settings.webnnNotAvailable">WebNN 不可用</span>
+                    <span class="webnn-status-separator">|</span>
+                    <span class="webnn-status-label">NPU:</span>
+                    <span class="webnn-status-value" id="npuStatusValue" data-i18n="settings.npuNotAvailable">NPU 不可用</span>
+                </div>
+            </div>
+            <div class="setting-group hidden" id="advancedSettingsGroup">
+                <label data-i18n="settings.advancedHardwareSettings">高级推理硬件设置</label>
+                <p class="hint" data-i18n="settings.selectDeviceForModelGroup">为模型组选择运行设备</p>
+                <div id="modelDeviceMapping" class="model-device-mapping">
+                    <!-- Dynamically populated -->
+                </div>
             </div>
         </div>
 
