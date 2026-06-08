@@ -11,6 +11,13 @@ import {
 } from './themes/index.js';
 
 const inferenceDeviceSelect = document.getElementById('inferenceDevice');
+const deviceSelectGroup = document.getElementById('deviceSelectGroup');
+const webnnStatusGroup = document.getElementById('webnnStatusGroup');
+const webnnStatusValue = document.getElementById('webnnStatusValue');
+const npuStatusValue = document.getElementById('npuStatusValue');
+const advancedSettingsGroup = document.getElementById('advancedSettingsGroup');
+const modelDeviceMappingDiv = document.getElementById('modelDeviceMapping');
+const deviceModeRadios = document.querySelectorAll('input[name="deviceMode"]');
 const previewDiffStepsSlider = document.getElementById('previewDiffSteps');
 const previewDiffStepsValue = document.getElementById('previewDiffStepsValue');
 const previewCfgStrengthSlider = document.getElementById('previewCfgStrength');
@@ -60,6 +67,53 @@ audioVolumeSlider.addEventListener('input', () => {
     volumeValueSpan.textContent = audioVolumeSlider.value + '%';
 });
 
+// Device mode radio button handlers
+const MODEL_GROUPS = [
+    { id: 'svsDiffusion', labelKey: 'settings.modelGroupSvsDiffusion' },
+    { id: 'svsEncoder', labelKey: 'settings.modelGroupSvsEncoder' },
+    { id: 'svsAuxiliary', labelKey: 'settings.modelGroupSvsAuxiliary' },
+    { id: 'rmvpe', labelKey: 'settings.modelGroupRmvpe' },
+    { id: 'rosvot', labelKey: 'settings.modelGroupRosvot' },
+];
+
+let cachedDevices = [];
+let cachedWebnnInfo = null;
+
+function getDeviceTypeLabel(deviceType) {
+    switch (deviceType) {
+        case 'discrete-gpu': return t('settings.discreteGpu');
+        case 'integrated-gpu': return t('settings.integratedGpu');
+        case 'npu': return t('settings.npuLabel');
+        case 'cpu': return t('settings.cpuLabel');
+        default: return deviceType || '';
+    }
+}
+
+function getDeviceOptionText(d) {
+    const vramStr = d.vram ? ` (${d.vram})` : '';
+    const typeStr = getDeviceTypeLabel(d.deviceType);
+    const npuTag = d.deviceType === 'npu' ? ' [NPU(WebNN)]' : '';
+    return `${d.name}${vramStr} ${typeStr}${npuTag}`;
+}
+
+function updateDeviceModeUI(mode) {
+    const isManual = mode === 'manual';
+    const isAdvanced = mode === 'advanced';
+
+    inferenceDeviceSelect.disabled = !isManual;
+    advancedSettingsGroup.classList.toggle('hidden', !isAdvanced);
+
+    if (isAdvanced) {
+        buildModelDeviceMapping();
+    }
+}
+
+deviceModeRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+        updateDeviceModeUI(radio.value);
+    });
+});
+
 audioOutputModeSelect.addEventListener('change', () => {
     const isExclusive = audioOutputModeSelect.value === 'exclusive';
     exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
@@ -73,9 +127,43 @@ async function loadDevices() {
         const currentSetting = await window.electronAPI.getSettings();
         const hardwareInfo = await window.electronAPI.getCurrentHardware();
 
+        cachedDevices = devices;
+
+        // Store currentSetting for buildModelDeviceMapping
+        window._currentSetting = currentSetting;
+
+        // Detect WebNN/NPU availability
+        let webnnInfo = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: '' };
+        try {
+            webnnInfo = await window.electronAPI.webnnDetectNPU();
+        } catch (e) {
+            console.warn('WebNN NPU detection failed:', e);
+        }
+        cachedWebnnInfo = webnnInfo;
+
+        // Update WebNN/NPU status indicators
+        if (webnnInfo.webnnAvailable) {
+            webnnStatusValue.textContent = t('settings.webnnAvailable');
+            webnnStatusValue.classList.add('status-available');
+            webnnStatusValue.classList.remove('status-unavailable');
+        } else {
+            webnnStatusValue.textContent = t('settings.webnnNotAvailable');
+            webnnStatusValue.classList.add('status-unavailable');
+            webnnStatusValue.classList.remove('status-available');
+        }
+        if (webnnInfo.npuAvailable) {
+            npuStatusValue.textContent = t('settings.npuAvailable');
+            npuStatusValue.classList.add('status-available');
+            npuStatusValue.classList.remove('status-unavailable');
+        } else {
+            npuStatusValue.textContent = t('settings.npuNotAvailable');
+            npuStatusValue.classList.add('status-unavailable');
+            npuStatusValue.classList.remove('status-available');
+        }
+
         inferenceDeviceSelect.innerHTML = '';
 
-        const discreteGPUs = devices.filter(d => d.isDiscrete);
+        const discreteGPUs = devices.filter(d => d.deviceType === 'discrete-gpu' || d.isDiscrete);
         const autoLabel = discreteGPUs.length > 0
             ? t('settings.autoSelectPreferDiscrete', { name: discreteGPUs[0].name })
             : t('settings.autoSelect');
@@ -87,18 +175,35 @@ async function loadDevices() {
         for (const d of devices) {
             const option = document.createElement('option');
             option.value = String(d.dxgiAdapterNumber);
-            const vramStr = d.vram ? ` (${d.vram})` : '';
-            const discreteStr = d.isDiscrete ? ` ${t('settings.discreteGpu')}` : ` ${t('settings.integratedGpu')}`;
-            option.textContent = `${d.name}${vramStr}${discreteStr}`;
+            option.textContent = getDeviceOptionText(d);
+            option.dataset.deviceType = d.deviceType || (d.isDiscrete ? 'discrete-gpu' : 'integrated-gpu');
             inferenceDeviceSelect.appendChild(option);
         }
 
-        if (currentSetting && currentSetting.deviceId !== undefined && currentSetting.deviceId !== null) {
+        // Add NPU device option if available
+        if (webnnInfo.npuAvailable) {
+            const npuOption = document.createElement('option');
+            npuOption.value = 'npu';
+            npuOption.textContent = `${t('settings.npuDevice')} [NPU(WebNN)]`;
+            npuOption.dataset.deviceType = 'npu';
+            inferenceDeviceSelect.appendChild(npuOption);
+        }
+
+        // Restore device mode and selection from settings
+        const deviceMode = currentSetting?.deviceMode || 'smart';
+        const radioToCheck = document.querySelector(`input[name="deviceMode"][value="${deviceMode}"]`);
+        if (radioToCheck) radioToCheck.checked = true;
+
+        if (currentSetting && currentSetting.preferredDeviceId !== undefined && currentSetting.preferredDeviceId !== null) {
+            inferenceDeviceSelect.value = String(currentSetting.preferredDeviceId);
+        } else if (currentSetting && currentSetting.deviceId !== undefined && currentSetting.deviceId !== null) {
+            // Backward compatibility with old deviceId setting
             inferenceDeviceSelect.value = String(currentSetting.deviceId);
         } else {
             inferenceDeviceSelect.value = 'auto';
         }
 
+        updateDeviceModeUI(deviceMode);
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
 
         await loadAudioSettings(currentSetting);
@@ -138,6 +243,15 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
         const cpuCount = hardwareInfo.cpuModelCount || 0;
         const total = hardwareInfo.totalModels || 0;
 
+        // Determine device type label
+        let deviceTypeLabel = '';
+        if (hardwareInfo.dmlDeviceId !== undefined && hardwareInfo.dmlDeviceId !== null) {
+            const matchedDevice = devices.find(d => d.dxgiAdapterNumber === hardwareInfo.dmlDeviceId);
+            if (matchedDevice) {
+                deviceTypeLabel = ` ${getDeviceTypeLabel(matchedDevice.deviceType || (matchedDevice.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'))}`;
+            }
+        }
+
         let epDetail = '';
         if (dmlCount > 0 && cpuCount > 0) {
             epDetail = ` (${t('settings.dmlModels', { count: dmlCount, total })}, ${t('settings.cpuModels', { count: cpuCount, total })})`;
@@ -152,7 +266,7 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
             deviceIdStr = ` [deviceId=${hardwareInfo.dmlDeviceId}]`;
         }
 
-        textEl.textContent = `${gpuName}${deviceIdStr}${epDetail}`;
+        textEl.textContent = `${gpuName}${deviceTypeLabel}${deviceIdStr}${epDetail}`;
         return;
     }
 
@@ -161,21 +275,21 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
         return;
     }
 
-    const selectedDeviceId = currentSetting && currentSetting.deviceId !== undefined && currentSetting.deviceId !== null
-        ? currentSetting.deviceId
-        : null;
+    const selectedDeviceId = currentSetting && (currentSetting.preferredDeviceId !== undefined && currentSetting.preferredDeviceId !== null)
+        ? currentSetting.preferredDeviceId
+        : (currentSetting && currentSetting.deviceId !== undefined && currentSetting.deviceId !== null ? currentSetting.deviceId : null);
 
     if (selectedDeviceId !== null) {
         const selected = devices.find(d => d.dxgiAdapterNumber === selectedDeviceId);
         if (selected) {
             const vramStr = selected.vram ? ` (${selected.vram})` : '';
-            const discreteStr = selected.isDiscrete ? ` ${t('settings.discreteGpu')}` : ` ${t('settings.integratedGpu')}`;
-            textEl.textContent = `${selected.name}${vramStr}${discreteStr} [deviceId=${selectedDeviceId}] ${t('settings.pendingInit')}`;
+            const typeLabel = getDeviceTypeLabel(selected.deviceType || (selected.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'));
+            textEl.textContent = `${selected.name}${vramStr} ${typeLabel} [deviceId=${selectedDeviceId}] ${t('settings.pendingInit')}`;
             return;
         }
     }
 
-    const discrete = devices.filter(d => d.isDiscrete);
+    const discrete = devices.filter(d => d.deviceType === 'discrete-gpu' || d.isDiscrete);
     if (discrete.length > 0) {
         const best = discrete.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
         const vramStr = best.vram ? ` (${best.vram})` : '';
@@ -184,6 +298,59 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
         const best = devices.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
         const vramStr = best.vram ? ` (${best.vram})` : '';
         textEl.textContent = `${t('settings.autoSelect')}: ${best.name}${vramStr} ${t('settings.integratedGpu')} ${t('settings.pendingInit')}`;
+    }
+}
+
+function buildModelDeviceMapping() {
+    if (!modelDeviceMappingDiv) return;
+    modelDeviceMappingDiv.innerHTML = '';
+
+    const currentSetting = window._currentSetting || {};
+    const existingMapping = currentSetting.modelDeviceMapping || {};
+
+    for (const group of MODEL_GROUPS) {
+        const row = document.createElement('div');
+        row.className = 'model-mapping-row';
+
+        const label = document.createElement('span');
+        label.className = 'model-mapping-label';
+        label.textContent = t(group.labelKey);
+
+        const select = document.createElement('select');
+        select.className = 'model-mapping-select';
+        select.dataset.groupId = group.id;
+
+        // Auto option
+        const autoOpt = document.createElement('option');
+        autoOpt.value = 'auto';
+        autoOpt.textContent = t('settings.autoAssign');
+        select.appendChild(autoOpt);
+
+        // Populate with available devices
+        for (const d of cachedDevices) {
+            const opt = document.createElement('option');
+            opt.value = String(d.dxgiAdapterNumber);
+            opt.textContent = getDeviceOptionText(d);
+            select.appendChild(opt);
+        }
+
+        // Add NPU option if available
+        if (cachedWebnnInfo && cachedWebnnInfo.npuAvailable) {
+            const npuOpt = document.createElement('option');
+            npuOpt.value = 'npu';
+            npuOpt.textContent = `${t('settings.npuDevice')} [NPU(WebNN)]`;
+            select.appendChild(npuOpt);
+        }
+
+        // Restore saved mapping
+        const savedValue = existingMapping[group.id];
+        if (savedValue !== undefined) {
+            select.value = String(savedValue);
+        }
+
+        row.appendChild(label);
+        row.appendChild(select);
+        modelDeviceMappingDiv.appendChild(row);
     }
 }
 
@@ -276,10 +443,41 @@ async function updateAudioDeviceList() {
 
 saveBtn.addEventListener('click', async () => {
     const inferenceValue = inferenceDeviceSelect.value;
-    const deviceId = inferenceValue === 'auto' ? null : parseInt(inferenceValue);
+    const preferredDeviceId = inferenceValue === 'auto' ? null : (inferenceValue === 'npu' ? 'npu' : parseInt(inferenceValue));
+
+    // Determine preferredDeviceType
+    let preferredDeviceType = null;
+    if (preferredDeviceId !== null) {
+        if (preferredDeviceId === 'npu') {
+            preferredDeviceType = 'npu';
+        } else {
+            const selectedOption = inferenceDeviceSelect.options[inferenceDeviceSelect.selectedIndex];
+            preferredDeviceType = selectedOption?.dataset?.deviceType || null;
+        }
+    }
+
+    // Get current device mode
+    const deviceModeRadio = document.querySelector('input[name="deviceMode"]:checked');
+    const deviceMode = deviceModeRadio ? deviceModeRadio.value : 'smart';
+
+    // Build modelDeviceMapping for advanced mode
+    let modelDeviceMapping = {};
+    if (deviceMode === 'advanced') {
+        const mappingSelects = modelDeviceMappingDiv.querySelectorAll('.model-mapping-select');
+        mappingSelects.forEach(sel => {
+            const groupId = sel.dataset.groupId;
+            const val = sel.value;
+            modelDeviceMapping[groupId] = val === 'auto' ? 'auto' : (val === 'npu' ? 'npu' : parseInt(val));
+        });
+    }
 
     const settings = {
-        deviceId,
+        deviceMode,
+        preferredDeviceId,
+        preferredDeviceType,
+        modelDeviceMapping,
+        // Backward compat: also set deviceId for old code
+        deviceId: preferredDeviceId,
         previewDiffSteps: parseInt(previewDiffStepsSlider.value),
         previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
         previewCfgRescale: parseFloat(previewCfgRescaleSlider.value),

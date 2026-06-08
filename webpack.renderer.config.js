@@ -32,6 +32,20 @@ rules.push({
   },
 });
 
+// onnxruntime-web WASM 文件复制模式
+const onnxruntimeWasmPatterns = WINDOW_NAMES.flatMap((name) => [
+  {
+    from: path.resolve(__dirname, 'node_modules/onnxruntime-web/dist/*.wasm'),
+    to: path.resolve(__dirname, `.webpack/renderer/${name}/[name][ext]`),
+    noErrorOnMissing: true,
+  },
+  {
+    from: path.resolve(__dirname, 'node_modules/onnxruntime-web/dist/ort-wasm*.js'),
+    to: path.resolve(__dirname, `.webpack/renderer/${name}/[name][ext]`),
+    noErrorOnMissing: true,
+  },
+]);
+
 module.exports = {
   // Put your normal webpack config below here
   module: {
@@ -47,7 +61,7 @@ module.exports = {
           from: path.resolve(__dirname, 'src/themes/themeBootstrap.js'),
           to: path.resolve(__dirname, `.webpack/renderer/${name}/themes/themeBootstrap.js`),
         },
-      ]),
+      ]).concat(onnxruntimeWasmPatterns),
     }),
   ],
   resolve: {

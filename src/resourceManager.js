@@ -95,8 +95,19 @@ function renderGPUInfo(gpus) {
         badgesDiv.className = 'gpu-badges';
 
         const typeBadge = document.createElement('span');
-        typeBadge.className = 'gpu-badge ' + (gpu.isDiscrete ? 'discrete' : 'integrated');
-        typeBadge.textContent = gpu.isDiscrete ? t('resourceManager.discrete') : t('resourceManager.integrated');
+        if (gpu.deviceType === 'npu') {
+            typeBadge.className = 'gpu-badge npu';
+            typeBadge.textContent = 'NPU';
+        } else if (gpu.deviceType === 'discrete-gpu' || gpu.isDiscrete === true) {
+            typeBadge.className = 'gpu-badge discrete';
+            typeBadge.textContent = t('resourceManager.discrete');
+        } else if (gpu.deviceType === 'integrated-gpu' || gpu.isDiscrete === false) {
+            typeBadge.className = 'gpu-badge integrated';
+            typeBadge.textContent = t('resourceManager.integrated');
+        } else {
+            typeBadge.className = 'gpu-badge';
+            typeBadge.textContent = 'CPU';
+        }
         badgesDiv.appendChild(typeBadge);
 
         if (gpu.vendor) {
