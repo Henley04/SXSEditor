@@ -208,13 +208,20 @@ async function detectNPUCached() {
 }
 
 /**
- * 使 GPU 信息缓存失效
+ * 使 GPU 信息缓存失效（不影响 NPU 缓存）
  */
 function invalidateGPUCache() {
   _gpuInfoCache = null;
   _gpuInfoFast = null;
   _gpuPhase = 'none';
+}
+
+/**
+ * 使 NPU 检测缓存失效
+ */
+function invalidateNPUCache() {
   _npuCache = null;
+  _npuPending = null;
 }
 
 async function queryGPUVRAMUsage() {
@@ -258,5 +265,6 @@ module.exports = {
   detectAllHardware,
   detectNPUCached,
   invalidateGPUCache,
+  invalidateNPUCache,
   queryGPUVRAMUsage,
 };

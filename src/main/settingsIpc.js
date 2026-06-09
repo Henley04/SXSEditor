@@ -1,6 +1,6 @@
 const { ipcMain, dialog } = require('electron');
 const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, invalidateSettingsCache } = require('./settings');
-const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateGPUCache } = require('./gpuInfo');
+const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateGPUCache, invalidateNPUCache } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
 const { enumerateDMLDevices } = require('../inference/pipeline');
 const { getSvsPipeline, resetSvsPipeline } = require('./svsIpc');
@@ -165,6 +165,18 @@ function registerSettingsIpc() {
 
   ipcMain.handle('get-locale', async () => {
     return require('./locale').getLocale();
+  });
+
+  ipcMain.handle('settings:check-models', async () => {
+    const { checkMissingFiles } = require('../modelManager');
+    const modelDir = getModelDir();
+    const precisions = ['fp32', 'fp16', 'int8', 'int8-npu'];
+    const result = {};
+    for (const p of precisions) {
+      const { missing, existing } = checkMissingFiles(modelDir, p);
+      result[p] = { ready: missing.length === 0, missing: missing.length, total: missing.length + existing.length };
+    }
+    return result;
   });
 
   ipcMain.handle('save-locale', async (event, locale) => {

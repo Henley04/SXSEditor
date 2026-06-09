@@ -35,9 +35,10 @@ setupUiControls();
 loadFragmentFromHash();
 
 // Initialize i18n
-initI18n();
-applyLocale();
-document.documentElement.lang = getLocale();
+initI18n().then(() => {
+  applyLocale();
+  document.documentElement.lang = getLocale();
+});
 
 console.log(t('fragment.consoleStarted'));
 

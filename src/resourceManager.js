@@ -515,9 +515,10 @@ window.addEventListener('beforeunload', () => {
 
 // ===== Init =====
 
-initI18n();
-applyLocale();
-document.documentElement.lang = getLocale();
+initI18n().then(() => {
+  applyLocale();
+  document.documentElement.lang = getLocale();
+});
 
 loadData();
 startAutoRefresh();

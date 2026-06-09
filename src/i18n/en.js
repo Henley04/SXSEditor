@@ -320,14 +320,16 @@ export default {
     precisionFp32: 'FP32 (Full Precision)',
     precisionInt8: 'INT8 (Quantized)',
     precisionInt8Npu: 'INT8-NPU (NPU Optimized Dynamic)',
-    modelPrecisionHint: 'Select the precision of inference models. Models of different precisions need to be downloaded separately. Switching precision requires re-downloading models.',
+    modelPrecisionHint: 'Select the precision of inference models. Different precisions are stored independently and can coexist. Switch anytime without re-downloading.',
     precisionInfoTitle: 'Precision Info',
     precisionInfoFp32: 'FP32 (Full Precision): Original model precision with the best audio quality, but uses the most VRAM. Recommended for users with a high-performance discrete GPU (8GB+ VRAM).',
     precisionInfoFp16: 'FP16 (Half Precision): Preserves full model precision with the best audio quality, but uses more VRAM. Recommended for users with a discrete GPU (4GB+ VRAM).',
     precisionInfoInt8: 'INT8 (Quantized): Model is compressed with INT8 quantization. Slight quality loss, but VRAM usage is reduced by ~40-50% and inference speed is improved. Recommended for users with integrated GPUs or low VRAM (<2GB).',
     precisionInfoInt8Npu: 'INT8-NPU (NPU Optimized): Uses dynamic-dimension INT8 quantized models, optimized for NPU inference. Supports custom batch size to improve NPU utilization. Recommended for users with NPU.',
-    precisionInfoRecommend: 'If unsure, choose FP16. Models of different precisions are not compatible with each other. Switching precision requires re-downloading models.',
+    precisionInfoRecommend: 'If unsure, choose FP16. Different precisions are stored independently and can coexist. Switching precision does not require re-downloading.',
     batchSizeDisabledHint: 'Custom batch size is only available with INT8-NPU precision. Current precision forces batch size to 1.',
+    modelReady: 'Ready',
+    modelMissing: '{count} files missing',
     openModelDownload: 'Open Model Download',
     openModelDownloadHint: 'Open the model download page to download or update required inference model files.',
     midiExtractTool: 'MIDI Extraction Tool',
@@ -445,7 +447,7 @@ export default {
     precisionInt8Desc: 'Slight quality loss, lower VRAM usage. Recommended for integrated GPU or low VRAM users.',
     precisionInt8Npu: 'INT8-NPU (NPU Optimized Dynamic)',
     precisionInt8NpuDesc: 'Dynamic-dimension models with custom batch size support for NPU. Recommended for NPU users.',
-    precisionChangeConfirm: 'Changing precision requires deleting existing model files and re-downloading. Continue?'
+    precisionChangeConfirm: 'Switching precision will check the corresponding model files. Existing files will not be deleted. Continue?'
   },
   menu: {
     aboutSXSEditor: 'About SXSEditor',

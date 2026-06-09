@@ -54,9 +54,10 @@ if (window.electronAPI?.onFragmentSaved) {
 }
 
 // i18n initialization
-initI18n();
-applyLocale();
-document.documentElement.lang = getLocale();
+initI18n().then(() => {
+  applyLocale();
+  document.documentElement.lang = getLocale();
+});
 
 document.addEventListener('localeChanged', () => {
   applyLocale();

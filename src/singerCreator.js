@@ -3,9 +3,10 @@ import './singerCreator.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { showAlertDialog } from './alertDialog.js';
 
-initI18n();
-applyLocale();
-document.documentElement.lang = getLocale();
+initI18n().then(() => {
+  applyLocale();
+  document.documentElement.lang = getLocale();
+});
 
 let wavFileBuffer = null;
 let wavFileName = '';

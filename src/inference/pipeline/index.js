@@ -40,8 +40,14 @@ class OnnxSVSPipeline {
 
     _resolveModelDir(baseDir, modelPrecision) {
         const resolved = path.resolve(baseDir);
-        if (modelPrecision === 'int8' || modelPrecision === 'fp16' || modelPrecision === 'int8-npu') {
-            const subDir = path.join(resolved, modelPrecision);
+        const subdirMap = {
+            'int8': 'int8',
+            'fp16': 'fp16',
+            'int8-npu': path.join('int8', 'optimized_npu'),
+        };
+        const subdir = subdirMap[modelPrecision];
+        if (subdir) {
+            const subDir = path.join(resolved, subdir);
             if (fs.existsSync(subDir)) {
                 console.log(`[OnnxSVSPipeline] Using ${modelPrecision} Model directory: ${subDir}`);
                 return subDir;
@@ -275,13 +281,14 @@ class OnnxSVSPipeline {
                 const remainingIndices = [];
                 for (let i = 1; i < webnnModelFiles.length; i++) remainingIndices.push(i);
 
-                const loadPromises = remainingIndices.map(i => {
+                // Load models sequentially to reduce peak WASM memory pressure
+                const loadResults = [];
+                for (const i of remainingIndices) {
                     const modelFile = webnnModelFiles[i];
                     const modelId = sessionKeys[i];
-                    return loadOneWebnnModel(modelFile, modelId).then(result => ({ i, modelFile, modelId, result }));
-                });
-
-                const loadResults = await Promise.all(loadPromises);
+                    const result = await loadOneWebnnModel(modelFile, modelId);
+                    loadResults.push({ i, modelFile, modelId, result });
+                }
 
                 for (const { i, modelFile, modelId, result } of loadResults) {
                     if (result.success) {

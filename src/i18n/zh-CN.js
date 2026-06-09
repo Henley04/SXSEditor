@@ -320,14 +320,16 @@ export default {
     precisionFp32: 'FP32 (全精度)',
     precisionInt8: 'INT8 (量化)',
     precisionInt8Npu: 'INT8-NPU (NPU 优化动态维度)',
-    modelPrecisionHint: '选择推理模型的精度。不同精度的模型需要分别下载，切换精度后需重新下载模型。',
+    modelPrecisionHint: '选择推理模型的精度。不同精度的模型独立存储、互不影响，可同时下载多种精度，随时切换。',
     precisionInfoTitle: '精度说明',
     precisionInfoFp32: 'FP32 (全精度)：模型的原始精度，音质最好，显存占用最大。推荐拥有高性能独立显卡（8GB以上显存）的用户使用。',
     precisionInfoFp16: 'FP16 (半精度)：保留完整的模型精度，音质最佳，显存占用较大。推荐拥有独立显卡（4GB以上显存）的用户使用。',
     precisionInfoInt8: 'INT8 (量化)：模型经过 INT8 量化压缩，音质略有损失，但显存占用减少约 40%~50%，推理速度也有所提升。推荐使用核显或低显存（2GB以下）的用户使用。',
     precisionInfoInt8Npu: 'INT8-NPU (NPU 优化)：使用动态维度的 INT8 量化模型，专为 NPU 推理优化。支持自定义 batch size 以提升 NPU 利用率。推荐有 NPU 的用户使用。',
-    precisionInfoRecommend: '如不确定，建议选择 FP16。不同精度的模型文件互不兼容，切换精度后需要重新下载。',
+    precisionInfoRecommend: '如不确定，建议选择 FP16。不同精度的模型独立存储，可共存，切换精度无需重新下载。',
     batchSizeDisabledHint: '自定义 batch size 仅在 INT8-NPU 精度下可用。当前精度已强制 batch size 为 1。',
+    modelReady: '已就绪',
+    modelMissing: '缺少 {count} 个文件',
     openModelDownload: '打开模型下载',
     openModelDownloadHint: '打开模型下载页面，下载或更新推理所需的模型文件。',
     midiExtractTool: 'MIDI 提取工具',
@@ -445,7 +447,7 @@ export default {
     precisionInt8Desc: '音质略有损失，显存占用更小，推荐核显或低显存用户使用',
     precisionInt8Npu: 'INT8-NPU (NPU 优化动态维度)',
     precisionInt8NpuDesc: '动态维度模型，支持 NPU 自定义 batch size，推荐 NPU 用户使用',
-    precisionChangeConfirm: '切换精度后需要删除已有的模型文件并重新下载，是否继续？'
+    precisionChangeConfirm: '切换精度将检查对应模型文件，已有文件不会被删除。是否继续？'
   },
   menu: {
     aboutSXSEditor: '关于 SXSEditor',

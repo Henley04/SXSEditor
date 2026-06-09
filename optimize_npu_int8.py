@@ -34,6 +34,7 @@ OUTPUT_DIR = INPUT_DIR  # 原地替换（先备份）
 # WebNN NPU 不支持的算子（需要替换）
 UNSUPPORTED_OPS = {
     'DynamicQuantizeLinear', 'MatMulInteger', 'ConvInteger',
+    'STFT',
 }
 
 # WebNN NPU 不支持的其他算子（需要分解）
@@ -508,6 +509,215 @@ def replace_range(model):
     return model, replaced
 
 
+def replace_stft(model):
+    """
+    替换 STFT 算子为 Conv1d（cos/sin 核）+ 幅度计算。
+
+    STFT(signal, frame_step, window, frame_length, onesided=1) 输出复数张量
+    [batch, num_frames, fft_size/2+1, 2]（实部+虚部）。
+
+    替换策略：
+      DFT 可以表示为矩阵乘法，等价于 Conv1d（stride=hop_size）：
+        real[k,t] = Conv1d(signal, cos_kernel, stride=hop_size)
+        imag[k,t] = Conv1d(signal, sin_kernel, stride=hop_size)
+      其中 cos_kernel[k,0,n] = window[n] * cos(2π*k*n/N)
+            sin_kernel[k,0,n] = window[n] * (-sin(2π*k*n/N))
+
+    同时替换后续的幅度计算链（Transpose + Pow + ReduceSum + Sqrt），
+    直接用 Mul + Mul + Add + Sqrt 计算幅度谱。
+    """
+    graph = model.graph
+    nodes_to_remove = set()
+    new_nodes = []
+    new_initializers = []
+    replaced = 0
+
+    for node in list(graph.node):
+        if node.op_type != 'STFT':
+            continue
+
+        stft_node = node
+        # STFT inputs: [signal, frame_step, window, frame_length]
+        signal_name = stft_node.input[0]
+        frame_step_name = stft_node.input[1]
+        window_name = stft_node.input[2]
+        frame_length_name = stft_node.input[3] if len(stft_node.input) > 3 else None
+
+        # 获取参数
+        frame_step_init = find_initializer(graph, frame_step_name)
+        window_init = find_initializer(graph, window_name)
+        frame_length_init = find_initializer(graph, frame_length_name) if frame_length_name else None
+
+        if frame_step_init is None or window_init is None:
+            print(f"    警告: STFT {stft_node.name} 缺少常量参数，跳过")
+            continue
+
+        hop_size = int(numpy_helper.to_array(frame_step_init).item())
+        window = numpy_helper.to_array(window_init).astype(np.float32)
+        n_fft = len(window)
+        if frame_length_init is not None:
+            n_fft = int(numpy_helper.to_array(frame_length_init).item())
+
+        # 检查 onesided 属性
+        onesided = False
+        for attr in stft_node.attribute:
+            if attr.name == 'onesided':
+                onesided = attr.i == 1
+
+        num_freq = n_fft // 2 + 1 if onesided else n_fft
+
+        # 计算 Conv1d 核：cos_kernel 和 sin_kernel
+        # DFT: X[k] = sum_n(x[n] * window[n] * exp(-2πi*k*n/N))
+        # real: sum_n(x[n] * window[n] * cos(2π*k*n/N))
+        # imag: sum_n(x[n] * window[n] * (-sin(2π*k*n/N)))
+        n = np.arange(n_fft, dtype=np.float32)
+        k = np.arange(num_freq, dtype=np.float32).reshape(-1, 1)
+        angles = 2 * np.pi * k * n / n_fft
+
+        cos_kernel = (window * np.cos(angles)).astype(np.float32)  # [num_freq, n_fft]
+        sin_kernel = (window * (-np.sin(angles))).astype(np.float32)  # [num_freq, n_fft]
+
+        # Conv1d 核形状: [out_channels, in_channels, kernel_size]
+        cos_kernel = cos_kernel.reshape(num_freq, 1, n_fft)
+        sin_kernel = sin_kernel.reshape(num_freq, 1, n_fft)
+
+        cos_kernel_name = f"{stft_node.name}_cos_kernel"
+        sin_kernel_name = f"{stft_node.name}_sin_kernel"
+        new_initializers.append(numpy_helper.from_array(cos_kernel, name=cos_kernel_name))
+        new_initializers.append(numpy_helper.from_array(sin_kernel, name=sin_kernel_name))
+
+        # 查找 STFT 之前的 Squeeze 节点（如果信号是 3D 的，需要跳过 Squeeze）
+        # STFT 的输入是 Squeeze 的输出，但 Conv1d 需要 3D 输入
+        # 所以 Conv1d 应该使用 Squeeze 之前的 Pad 输出
+        squeeze_node = None
+        pad_output_name = None
+        for n2 in graph.node:
+            if n2.op_type == 'Squeeze' and signal_name in n2.output:
+                squeeze_node = n2
+                pad_output_name = n2.input[0]  # Pad 的输出
+                break
+
+        conv_input = pad_output_name if pad_output_name else signal_name
+
+        # 创建 Conv1d 节点
+        real_name = f"{stft_node.name}_real"
+        imag_name = f"{stft_node.name}_imag"
+
+        real_conv = helper.make_node(
+            'Conv',
+            inputs=[conv_input, cos_kernel_name],
+            outputs=[real_name],
+            name=f"{stft_node.name}_conv_cos",
+            strides=[hop_size],
+        )
+        imag_conv = helper.make_node(
+            'Conv',
+            inputs=[conv_input, sin_kernel_name],
+            outputs=[imag_name],
+            name=f"{stft_node.name}_conv_sin",
+            strides=[hop_size],
+        )
+        new_nodes.extend([real_conv, imag_conv])
+
+        # 计算幅度：sqrt(real^2 + imag^2)
+        real_sq_name = f"{stft_node.name}_real_sq"
+        imag_sq_name = f"{stft_node.name}_imag_sq"
+        mag_sq_name = f"{stft_node.name}_mag_sq"
+        mag_name = f"{stft_node.name}_mag"
+
+        mul_real = helper.make_node('Mul', [real_name, real_name], [real_sq_name],
+                                    name=f"{stft_node.name}_mul_real")
+        mul_imag = helper.make_node('Mul', [imag_name, imag_name], [imag_sq_name],
+                                    name=f"{stft_node.name}_mul_imag")
+        add_mag = helper.make_node('Add', [real_sq_name, imag_sq_name], [mag_sq_name],
+                                   name=f"{stft_node.name}_add_mag")
+        sqrt_mag = helper.make_node('Sqrt', [mag_sq_name], [mag_name],
+                                    name=f"{stft_node.name}_sqrt_mag")
+        new_nodes.extend([mul_real, mul_imag, add_mag, sqrt_mag])
+
+        # 查找 STFT 后的幅度计算链：Transpose → Pow → ReduceSum → Sqrt
+        # 并将最终 Sqrt 的输出替换为我们的 mag_name
+        stft_output = stft_node.output[0]
+
+        # 查找消费 STFT 输出的 Transpose 节点
+        trans_node = None
+        for n2 in graph.node:
+            if n2.op_type == 'Transpose' and stft_output in n2.input:
+                trans_node = n2
+                break
+
+        if trans_node is None:
+            print(f"    警告: 找不到 STFT 后的 Transpose 节点，跳过")
+            continue
+
+        trans_output = trans_node.output[0]
+
+        # 查找 Pow 节点
+        pow_node = None
+        for n2 in graph.node:
+            if n2.op_type == 'Pow' and trans_output in n2.input:
+                pow_node = n2
+                break
+
+        if pow_node is None:
+            print(f"    警告: 找不到 Pow 节点，跳过")
+            continue
+
+        pow_output = pow_node.output[0]
+
+        # 查找 ReduceSum 节点
+        reduce_node = None
+        for n2 in graph.node:
+            if n2.op_type == 'ReduceSum' and pow_output in n2.input:
+                reduce_node = n2
+                break
+
+        if reduce_node is None:
+            print(f"    警告: 找不到 ReduceSum 节点，跳过")
+            continue
+
+        reduce_output = reduce_node.output[0]
+
+        # 查找 Sqrt 节点（幅度）
+        sqrt_node = None
+        for n2 in graph.node:
+            if n2.op_type == 'Sqrt' and reduce_output in n2.input:
+                sqrt_node = n2
+                break
+
+        if sqrt_node is None:
+            print(f"    警告: 找不到 Sqrt 节点，跳过")
+            continue
+
+        # 将 Sqrt 的输出名称赋给我们的 mag 输出
+        final_output = sqrt_node.output[0]
+        sqrt_mag.output[0] = final_output
+
+        # 标记需要删除的节点
+        nodes_to_remove.add(stft_node.name)
+        nodes_to_remove.add(trans_node.name)
+        nodes_to_remove.add(pow_node.name)
+        nodes_to_remove.add(reduce_node.name)
+        nodes_to_remove.add(sqrt_node.name)
+
+        # 如果有 Squeeze 节点，也删除
+        if squeeze_node:
+            nodes_to_remove.add(squeeze_node.name)
+
+        replaced += 1
+        print(f"    替换 STFT → Conv1d(cos/sin) + 幅度计算: {stft_node.name}")
+
+    if nodes_to_remove:
+        remaining_nodes = [n for n in graph.node if n.name not in nodes_to_remove]
+        del graph.node[:]
+        graph.node.extend(remaining_nodes)
+        graph.node.extend(new_nodes)
+        graph.initializer.extend(new_initializers)
+
+    print(f"  替换了 {replaced} 个 STFT")
+    return model, replaced
+
+
 def clean_unused_initializers(model):
     """清理不再被任何节点引用的初始化器"""
     graph = model.graph
@@ -569,7 +779,10 @@ def optimize_model(model_path, output_path):
     # 步骤3: 替换 Range
     model, n3 = replace_range(model)
 
-    # 步骤4: 清理未引用的初始化器
+    # 步骤4: 替换 STFT
+    model, n4 = replace_stft(model)
+
+    # 步骤5: 清理未引用的初始化器
     model = clean_unused_initializers(model)
 
     # 检查兼容性

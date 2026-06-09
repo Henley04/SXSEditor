@@ -15,9 +15,10 @@ setupEventHandlers();
 setupIpcHandlers();
 
 // Initialize i18n
-initI18n();
-applyLocale();
-document.documentElement.lang = getLocale();
+initI18n().then(() => {
+  applyLocale();
+  document.documentElement.lang = getLocale();
+});
 
 // Cleanup on unload
 window.addEventListener('beforeunload', () => {

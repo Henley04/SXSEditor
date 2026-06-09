@@ -119,10 +119,10 @@
                 <div class="setting-group" id="webnnStatusGroup">
                     <div class="webnn-status-bar">
                         <span class="webnn-status-label">WebNN:</span>
-                        <span class="webnn-status-value" id="webnnStatusValue" data-i18n="settings.webnnNotAvailable">WebNN 不可用</span>
+                        <span class="webnn-status-value status-checking" id="webnnStatusValue" data-i18n="settings.webnnChecking">检测中...</span>
                         <span class="webnn-status-separator">|</span>
                         <span class="webnn-status-label">NPU:</span>
-                        <span class="webnn-status-value" id="npuStatusValue" data-i18n="settings.npuNotAvailable">NPU 不可用</span>
+                        <span class="webnn-status-value status-checking" id="npuStatusValue" data-i18n="settings.webnnChecking">检测中...</span>
                     </div>
                 </div>
                 <div class="setting-group hidden" id="advancedSettingsGroup">
@@ -294,6 +294,7 @@
                         <option value="int8-npu" data-i18n="settings.precisionInt8Npu">INT8-NPU (NPU 优化动态维度)</option>
                     </select>
                     <p class="hint" data-i18n="settings.modelPrecisionHint"></p>
+                    <div class="model-status-list" id="modelStatusList"></div>
                     <div class="precision-info-box" id="precisionInfoBox">
                         <strong data-i18n="settings.precisionInfoTitle">精度说明</strong>
                         <ul>
