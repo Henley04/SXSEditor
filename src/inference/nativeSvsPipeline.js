@@ -1057,15 +1057,18 @@ class WebNNSessionProxy {
                     reject(new Error(result.error));
                 } else {
                     // 反序列化输出张量
+                    // data 现在是 TypedArray（Float32Array/Uint16Array）或 string[]（int64）
                     const outputTensors = {};
                     for (const [name, out] of Object.entries(result)) {
                         let typedData;
                         if (out.type === 'float16') {
-                            typedData = new Uint16Array(out.data);
+                            typedData = out.data instanceof Uint16Array ? out.data : new Uint16Array(out.data);
                         } else if (out.type === 'int64') {
-                            typedData = BigInt64Array.from(out.data.map(v => BigInt(v)));
+                            typedData = Array.isArray(out.data)
+                                ? BigInt64Array.from(out.data.map(v => BigInt(v)))
+                                : out.data;
                         } else {
-                            typedData = new Float32Array(out.data);
+                            typedData = out.data instanceof Float32Array ? out.data : new Float32Array(out.data);
                         }
                         outputTensors[name] = new ort.Tensor(out.type || 'float32', typedData, out.dims);
                     }
@@ -1416,18 +1419,24 @@ class OnnxSVSPipeline {
                     return await this._doInitFallback(gpuInfo, resolvedModelFiles, sessionKeys);
                 }
 
-                // NPU confirmed working — load remaining models
+                // NPU confirmed working — load remaining models in parallel
                 this.sessions[probeKey] = new WebNNSessionProxy(probeKey);
                 this.sessionEPs[probeKey] = probeEp;
                 loadedSessions.push(probeKey);
                 console.log(`[OnnxSVSPipeline] ${probeFile} loaded via WebNN-NPU [${probeEp}]`);
 
-                for (let i = 1; i < webnnModelFiles.length; i++) {
+                const remainingIndices = [];
+                for (let i = 1; i < webnnModelFiles.length; i++) remainingIndices.push(i);
+
+                const loadPromises = remainingIndices.map(i => {
                     const modelFile = webnnModelFiles[i];
                     const modelId = sessionKeys[i];
+                    return loadOneWebnnModel(modelFile, modelId).then(result => ({ i, modelFile, modelId, result }));
+                });
 
-                    const result = await loadOneWebnnModel(modelFile, modelId);
+                const loadResults = await Promise.all(loadPromises);
 
+                for (const { i, modelFile, modelId, result } of loadResults) {
                     if (result.success) {
                         this.sessions[modelId] = new WebNNSessionProxy(modelId);
                         this.sessionEPs[modelId] = result.ep || 'webnn-npu';
@@ -2505,8 +2514,8 @@ class OnnxSVSPipeline {
         const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : CFG_RESCALE;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
-        const npuDiffBatchSize = options.npuDiffBatchSize || 2;
-        const npuVocoderBatchSize = options.npuVocoderBatchSize || 1;
+        const npuDiffBatchSize = options.npuDiffBatchSize || 4;
+        const npuVocoderBatchSize = options.npuVocoderBatchSize || 2;
 
         const filledNotes = this._fillNoteGaps(notes);
 
