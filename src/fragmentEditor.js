@@ -35,7 +35,7 @@ function initPipeline() {
       SAMPLE_RATE = await window.electronAPI.getFragmentSVSSampleRate();
       await window.electronAPI.initFragmentSVSPipeline();
       pipelineInitialized = true;
-      console.log('[FragmentEditor] SVS Pipeline 已初始化 (DirectML)');
+      console.log('[FragmentEditor] SVS Pipeline initialized');
     } catch (err) {
       console.error('[FragmentEditor] SVS Pipeline 初始化失败:', err);
       pipelineInitPromise = null;
@@ -69,6 +69,8 @@ function getFragmentPreviewInferenceOptions() {
     nSteps: fragmentAudioSettings?.previewDiffSteps ?? 16,
     cfg: fragmentAudioSettings?.previewCfgStrength ?? 3.0,
     cfgRescale: fragmentAudioSettings?.previewCfgRescale ?? 0.75,
+    npuDiffBatchSize: fragmentAudioSettings?.npuDiffBatchSize ?? 4,
+    npuVocoderBatchSize: fragmentAudioSettings?.npuVocoderBatchSize ?? 4,
   };
 }
 
@@ -77,6 +79,8 @@ function getFragmentExportInferenceOptions() {
     nSteps: fragmentAudioSettings?.exportDiffSteps ?? 32,
     cfg: fragmentAudioSettings?.exportCfgStrength ?? 3.0,
     cfgRescale: fragmentAudioSettings?.exportCfgRescale ?? 0.75,
+    npuDiffBatchSize: fragmentAudioSettings?.npuDiffBatchSize ?? 4,
+    npuVocoderBatchSize: fragmentAudioSettings?.npuVocoderBatchSize ?? 4,
   };
 }
 

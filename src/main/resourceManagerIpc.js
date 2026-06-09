@@ -3,13 +3,12 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { getModelGroups } = require('../modelRegistry');
 const { getModelDir } = require('./modelDir');
-const { ensureGPUInfo, queryGPUVRAMUsage } = require('./gpuInfo');
+const { ensureGPUInfo, queryGPUVRAMUsage, detectNPUCached, getGPUPhase } = require('./gpuInfo');
 const { enumerateDMLDevices } = require('../inference/nativeSvsPipeline');
 const { getSvsPipeline } = require('./svsIpc');
 const { getRmvpeDetector, getBasicPitchDetector, getRosvotDetector, rmvpeLazy, basicPitchLazy, rosvotLazy } = require('./pitchMidiIpc');
 const { openResourceManagerWindow } = require('./windowManager');
 const { getCachedDMLDevices, setCachedDMLDevices } = require('./settingsIpc');
-const { detectNPUAvailability } = require('./webnnIpc');
 
 // #9: 缓存文件检查结果
 let modelFilesCache = null;
@@ -118,8 +117,13 @@ function registerResourceManagerIpc() {
 
   ipcMain.handle('resmgr:getGPUInfo', async () => {
     try {
-      const vramData = await queryGPUVRAMUsage();
-      const controllers = await ensureGPUInfo();
+      // 并行获取 VRAM、GPU 控制器和 NPU 状态
+      const [vramData, controllers, npuResult] = await Promise.all([
+        queryGPUVRAMUsage(),
+        ensureGPUInfo(),
+        detectNPUCached(),
+      ]);
+
       let devices = getCachedDMLDevices();
       if (!devices) {
         devices = await enumerateDMLDevices(getModelDir(), controllers);
@@ -127,23 +131,17 @@ function registerResourceManagerIpc() {
       }
 
       // Add NPU device if available via WebNN
-      const hasNpu = devices.some(d => d.deviceType === 'npu');
-      if (!hasNpu) {
-        try {
-          const npuResult = await detectNPUAvailability();
-          if (npuResult.npuAvailable) {
-            devices = [...devices, {
-              name: 'NPU (WebNN)',
-              deviceType: 'npu',
-              isDiscrete: false,
-              vramBytes: 0,
-              vram: '0 MB',
-              vendor: '',
-              dxgiAdapterNumber: undefined,
-              source: 'webnn',
-            }];
-          }
-        } catch (_) {}
+      if (npuResult.npuAvailable && !devices.some(d => d.deviceType === 'npu')) {
+        devices = [...devices, {
+          name: 'NPU (WebNN)',
+          deviceType: 'npu',
+          isDiscrete: false,
+          vramBytes: 0,
+          vram: '0 MB',
+          vendor: '',
+          dxgiAdapterNumber: undefined,
+          source: 'webnn',
+        }];
       }
 
       const gpuList = devices.map(d => {

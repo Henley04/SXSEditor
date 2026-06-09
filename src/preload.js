@@ -74,6 +74,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),
   getDirName: (filePath) => ipcRenderer.invoke('getDirName', filePath),
   getDMLDevices: () => ipcRenderer.invoke('settings:getDMLDevices'),
+  getHardwareStatus: () => ipcRenderer.invoke('settings:getHardwareStatus'),
   getCurrentHardware: () => ipcRenderer.invoke('settings:getCurrentHardware'),
   getSettings: () => ipcRenderer.invoke('settings:getSettings'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:saveSettings', settings),
@@ -160,6 +161,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   webnnUnloadModel: (modelId) => ipcRenderer.invoke('webnn:unloadModel', modelId),
   webnnRunInference: (modelId, inputs) => ipcRenderer.invoke('webnn:runInference', modelId, inputs),
   webnnGetStatus: () => ipcRenderer.invoke('webnn:getStatus'),
+  webnnReadModelFile: (filePath) => ipcRenderer.invoke('webnn:readModelFile', filePath),
   validateDevices: () => ipcRenderer.invoke('settings:validateDevices'),
 
   // WebNN 渲染进程监听器注册（主进程 → 渲染进程请求）
@@ -187,6 +189,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('webnn:getStatus:request', handler);
     return () => ipcRenderer.removeListener('webnn:getStatus:request', handler);
+  },
+  onWebnnRunSynthesisRequest: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('webnn:runSynthesis:request', handler);
+    return () => ipcRenderer.removeListener('webnn:runSynthesis:request', handler);
   },
   webnnRespond: (responseChannel, result) => ipcRenderer.invoke(responseChannel, result),
 

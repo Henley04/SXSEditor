@@ -2,15 +2,10 @@ const { parentPort } = require('node:worker_threads');
 
 /**
  * 统一设备分类函数 — 与 nativeSvsPipeline.js 中的 classifyDevice 保持同步
- * @param {string} name - 设备名称
- * @param {number} vramBytes - 显存大小（字节），0 表示未知
- * @param {boolean|undefined} dmlDiscreteFlag - DirectML 报告的 Discrete 标志
- * @returns {'discrete-gpu'|'integrated-gpu'|'npu'|'cpu'}
  */
 function classifyDevice(name, vramBytes = 0, dmlDiscreteFlag = undefined) {
     const n = (name || '').toLowerCase();
 
-    // 1. NPU 名称匹配（最高优先级）
     const npuKeywords = [
         'npu', 'neural processing', 'neural compute',
         'intel ai boost', 'intel neural', 'intel npu',
@@ -22,7 +17,6 @@ function classifyDevice(name, vramBytes = 0, dmlDiscreteFlag = undefined) {
         if (n.includes(kw)) return 'npu';
     }
 
-    // 2. GPU 独显名称匹配
     const discreteGpuKeywords = [
         { includes: ['nvidia'] }, { includes: ['geforce'] },
         { includes: ['rtx'] }, { includes: ['gtx'] }, { includes: ['quadro'] },
@@ -35,7 +29,6 @@ function classifyDevice(name, vramBytes = 0, dmlDiscreteFlag = undefined) {
     }
     if (n.includes('intel') && n.includes('arc') && /\barc\s*a\d/i.test(n)) return 'discrete-gpu';
 
-    // 3. GPU 核显名称匹配
     const integratedGpuKeywords = [
         { includes: ['intel', 'uhd'] }, { includes: ['intel', 'iris'] },
         { includes: ['intel', 'xe'] }, { includes: ['intel', 'hd graphics'] },
@@ -46,39 +39,86 @@ function classifyDevice(name, vramBytes = 0, dmlDiscreteFlag = undefined) {
     if (n.includes('radeon') && !n.includes('rx') && !n.includes('pro') && !n.includes('instinct')) return 'integrated-gpu';
     if (n.includes('microsoft') && n.includes('basic')) return 'integrated-gpu';
 
-    // 4. DML Discrete 标志
     if (dmlDiscreteFlag === true) return 'discrete-gpu';
     if (dmlDiscreteFlag === false) return 'integrated-gpu';
 
-    // 5. 显存阈值兜底（>= 512MB 视为独显）
     if (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024) return 'discrete-gpu';
     if (vramBytes > 0) return 'integrated-gpu';
 
     return 'cpu';
 }
 
-async function queryGPU() {
-  const si = require('systeminformation');
-  const graphics = await si.graphics();
-  const controllers = graphics.controllers || [];
-  return controllers.map((c, idx) => {
-    const vramBytes = (c.memoryTotal || c.vram || 0) * 1024 * 1024;
-    const deviceType = classifyDevice(c.model, vramBytes, undefined);
-    return {
-      adapterIndex: idx,
-      model: c.model || '',
-      vram: c.vram || 0,
-      memoryTotal: c.memoryTotal || c.vram || 0,
-      memoryUsed: c.memoryUsed || 0,
-      vendor: c.vendor || '',
-      deviceType,
-      isDiscrete: deviceType === 'discrete-gpu',
-    };
-  });
+/**
+ * Phase 1: WMI 快速查询 (~400ms) — 获取 GPU 名称和驱动版本
+ * AdapterRAM 上限 4GB，仅用于分类参考，不作为准确显存值
+ */
+async function queryGPUFast() {
+    const { execFile } = require('node:child_process');
+    return new Promise((resolve) => {
+        execFile('powershell', [
+            '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+            'Get-CimInstance Win32_VideoController | Select-Object Name, AdapterRAM, DriverVersion | ConvertTo-Json -Compress'
+        ], { timeout: 5000 }, (err, stdout) => {
+            if (err || !stdout) { resolve([]); return; }
+            try {
+                let data = JSON.parse(stdout.trim());
+                if (!Array.isArray(data)) data = [data];
+                const controllers = data.map((c, idx) => {
+                    const vramBytes = c.AdapterRAM || 0;
+                    const deviceType = classifyDevice(c.Name, vramBytes);
+                    return {
+                        adapterIndex: idx,
+                        model: c.Name || '',
+                        vram: 0,
+                        memoryTotal: Math.round(vramBytes / (1024 * 1024)),
+                        memoryUsed: 0,
+                        vendor: '',
+                        driverVersion: c.DriverVersion || '',
+                        deviceType,
+                        isDiscrete: deviceType === 'discrete-gpu',
+                        _source: 'wmi',
+                    };
+                });
+                resolve(controllers);
+            } catch (_) { resolve([]); }
+        });
+    });
 }
 
-queryGPU().then(result => {
-  parentPort.postMessage({ success: true, data: result });
-}).catch(err => {
-  parentPort.postMessage({ success: false, error: err.message });
-});
+/**
+ * Phase 2: systeminformation 完整查询 (~9s) — 获取准确显存和使用情况
+ */
+async function queryGPUFull() {
+    const si = require('systeminformation');
+    const graphics = await si.graphics();
+    const controllers = graphics.controllers || [];
+    return controllers.map((c, idx) => {
+        const vramBytes = (c.memoryTotal || c.vram || 0) * 1024 * 1024;
+        const deviceType = classifyDevice(c.model, vramBytes);
+        return {
+            adapterIndex: idx,
+            model: c.model || '',
+            vram: c.vram || 0,
+            memoryTotal: c.memoryTotal || c.vram || 0,
+            memoryUsed: c.memoryUsed || 0,
+            vendor: c.vendor || '',
+            deviceType,
+            isDiscrete: deviceType === 'discrete-gpu',
+            _source: 'si',
+        };
+    });
+}
+
+(async () => {
+    try {
+        // 先用 WMI 快速获取基本信息
+        const fast = await queryGPUFast();
+        parentPort.postMessage({ phase: 'fast', success: true, data: fast });
+
+        // 再用 systeminformation 获取完整信息（包含准确显存）
+        const full = await queryGPUFull();
+        parentPort.postMessage({ phase: 'full', success: true, data: full });
+    } catch (err) {
+        parentPort.postMessage({ phase: 'error', success: false, error: err.message });
+    }
+})();

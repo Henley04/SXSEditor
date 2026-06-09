@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>✦ 星咏歌姬 · Hoshine Utau ✦ 虚拟歌姬宿主 · 明亮主题</title>
+  <style>
+    :root {
+      /* 明亮背景体系 */
+      --bg-body: #f0f4fc;
+      --bg-primary: #ffffff;
+      --bg-secondary: #f8faff;
+      --bg-tertiary: #eef2f9;
+      --bg-panel: #ffffff;
+      --bg-piano-roll: #f7f9fe;
+      --bg-card: #ffffff;
+      --text-primary: #1e293b;
+      --text-secondary: #475569;
+      --text-muted: #8295b0;
+      /* 参考蔚蓝档案的亮蓝、粉红，明日方舟的橙黄 */
+      --accent-blue: #3b82f6;
+      --accent-blue-light: #60a5fa;
+      --accent-pink: #f472b6;
+      --accent-pink-light: #f9a8d4;
+      --accent-orange: #fb923c;
+      --accent-cyan: #22d3ee;
+      --accent-purple: #a78bfa;
+      --accent-gold: #fbbf24;
+      --border-subtle: #e2e8f0;
+      --border-medium: #cbd5e1;
+      --border-strong: #94a3b8;
+      --shadow-sm: 0 1px 2px rgba(0,0,0,0.03), 0 1px 3px rgba(0,0,0,0.05);
+      --shadow-md: 0 4px 12px rgba(0,0,0,0.04), 0 2px 4px rgba(0,0,0,0.03);
+      --shadow-lg: 0 8px 24px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.04);
+      --shadow-glow-blue: 0 0 18px rgba(59,130,246,0.25);
+      --shadow-glow-pink: 0 0 18px rgba(244,114,182,0.3);
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 18px;
+      --radius-xl: 24px;
+      --font-main: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', system-ui, sans-serif;
+      --font-mono: 'Cascadia Code', 'Fira Code', 'JetBrains Mono', 'Consolas', monospace;
+      --font-display: 'PingFang SC', 'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+      --transition-fast: 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+      --transition-smooth: 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: var(--font-main);
+      background: var(--bg-body);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      user-select: none;
+      -webkit-user-select: none;
+      background-image:
+        radial-gradient(ellipse at 20% 20%, rgba(59,130,246,0.04) 0%, transparent 55%),
+        radial-gradient(ellipse at 80% 60%, rgba(244,114,182,0.04) 0%, transparent 55%),
+        radial-gradient(ellipse at 50% 90%, rgba(251,191,36,0.03) 0%, transparent 50%);
+    }
+
+    /* 主容器 */
+    .daw-container {
+      width: 1300px;
+      height: 820px;
+      background: var(--bg-primary);
+      border-radius: var(--radius-xl);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      box-shadow:
+        0 20px 50px rgba(0,0,0,0.08),
+        0 0 0 1px var(--border-subtle),
+        0 0 40px rgba(59,130,246,0.05);
+      position: relative;
+    }
+
+    /* 装饰性粒子背景 (柔和明亮) */
+    .particles-bg {
+      position: absolute; pointer-events: none; inset: 0; z-index: 0; opacity: 0.2;
+    }
+    .particle {
+      position: absolute; border-radius: 50%; animation: floatUp linear infinite;
+    }
+    @keyframes floatUp {
+      0% { transform: translateY(0) translateX(0) scale(1); opacity: 0; }
+      10% { opacity: 0.6; }
+      90% { opacity: 0.1; }
+      100% { transform: translateY(-820px) translateX(40px) scale(0.3); opacity: 0; }
+    }
+
+    /* 顶部标题栏 */
+    .title-bar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 8px 18px; background: var(--bg-secondary); border-bottom: 1px solid var(--border-subtle);
+      z-index: 5; flex-shrink: 0; gap: 14px;
+    }
+    .logo-area { display: flex; align-items: center; gap: 10px; }
+    .logo-icon {
+      width: 38px; height: 38px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px; color: #fff;
+      box-shadow: 0 0 14px rgba(59,130,246,0.4);
+      animation: logoPulse 3s ease-in-out infinite;
+    }
+    @keyframes logoPulse {
+      0%,100% { box-shadow: 0 0 14px rgba(59,130,246,0.4); }
+      50% { box-shadow: 0 0 26px rgba(34,211,238,0.6); }
+    }
+    .logo-text {
+      font-family: var(--font-display); font-size: 15px; font-weight: 700; letter-spacing: 1px;
+      background: linear-gradient(135deg, #1e40af, #3b82f6);
+      -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+    }
+    .menu-tabs { display: flex; gap: 4px; }
+    .menu-tab {
+      padding: 7px 16px; border-radius: 20px; font-size: 12.5px; font-weight: 500;
+      cursor: pointer; color: var(--text-secondary); transition: var(--transition-fast);
+      letter-spacing: 0.5px; border: 1px solid transparent; background: transparent; font-family: inherit;
+    }
+    .menu-tab:hover { background: rgba(59,130,246,0.04); color: var(--accent-blue); border-color: var(--accent-blue-light); }
+    .menu-tab.active {
+      background: rgba(59,130,246,0.08); color: var(--accent-blue);
+      border-color: rgba(59,130,246,0.3); box-shadow: 0 0 10px rgba(59,130,246,0.1);
+    }
+    .window-controls { display: flex; gap: 8px; }
+    .win-dot {
+      width: 12px; height: 12px; border-radius: 50%; cursor: pointer; transition: var(--transition-fast); opacity: 0.8;
+    }
+    .win-dot:hover { opacity: 1; transform: scale(1.2); }
+    .win-dot.red { background: #f06b7d; }
+    .win-dot.yellow { background: #f0c06b; }
+    .win-dot.green { background: #34d399; }
+
+    /* 主内容区 */
+    .main-content { display: flex; flex: 1; overflow: hidden; z-index: 2; position: relative; }
+
+    /* 左侧面板 */
+    .left-panel {
+      width: 240px; background: var(--bg-panel); border-right: 1px solid var(--border-subtle);
+      display: flex; flex-direction: column; flex-shrink: 0; z-index: 3;
+    }
+    .character-card {
+      padding: 16px; text-align: center; border-bottom: 1px solid var(--border-subtle);
+      background: linear-gradient(180deg, rgba(59,130,246,0.02) 0%, rgba(255,255,255,0) 100%);
+    }
+    .character-avatar-wrapper { position: relative; display: inline-block; margin-bottom: 8px; }
+    .character-avatar {
+      width: 84px; height: 84px; border-radius: 50%;
+      background: linear-gradient(145deg, #e0f2fe, #dbeafe);
+      border: 3px solid var(--accent-blue);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 44px; box-shadow: var(--shadow-glow-blue); position: relative; transition: var(--transition-smooth);
+    }
+    .character-avatar:hover { box-shadow: 0 0 30px rgba(59,130,246,0.5); border-color: var(--accent-cyan); }
+    .avatar-sparkle {
+      position: absolute; font-size: 16px; animation: sparkleFloat 2s ease-in-out infinite;
+    }
+    .s1 { top: -6px; right: 6px; }
+    .s2 { bottom: 4px; left: -4px; animation-delay: 0.7s; }
+    .s3 { top: 12px; left: -12px; animation-delay: 1.4s; font-size: 12px; }
+    @keyframes sparkleFloat {
+      0%,100% { transform: translateY(0) scale(1); opacity: 0.7; }
+      50% { transform: translateY(-6px) scale(1.3); opacity: 1; }
+    }
+    .character-name { font-weight: 700; font-size: 14px; color: #1e3a8a; letter-spacing: 1px; }
+    .character-subtitle { font-size: 10px; color: var(--text-muted); letter-spacing: 0.5px; }
+    .voice-bank-info {
+      display: inline-flex; align-items: center; gap: 6px; margin-top: 6px;
+      font-size: 10px; color: var(--accent-blue); background: rgba(59,130,246,0.06);
+      border-radius: 12px; padding: 4px 10px; cursor: pointer; transition: var(--transition-fast);
+      border: 1px solid transparent;
+    }
+    .voice-bank-info:hover { border-color: rgba(59,130,246,0.3); background: rgba(59,130,246,0.1); }
+    .voice-dot {
+      width: 7px; height: 7px; border-radius: 50%; background: var(--accent-cyan);
+      animation: voiceDotPulse 1.8s ease-in-out infinite;
+    }
+    @keyframes voiceDotPulse {
+      0%,100% { box-shadow: 0 0 4px var(--accent-cyan); }
+      50% { box-shadow: 0 0 12px var(--accent-cyan), 0 0 20px rgba(34,211,238,0.4); }
+    }
+
+    .track-list-section { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    .track-list-header {
+      padding: 10px 14px; font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px;
+      color: var(--text-muted); border-bottom: 1px solid var(--border-subtle);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .add-track-btn {
+      width: 22px; height: 22px; border-radius: 50%; background: rgba(59,130,246,0.1);
+      border: 1px solid rgba(59,130,246,0.2); color: var(--accent-blue);
+      cursor: pointer; font-size: 14px; display: flex; align-items: center; justify-content: center;
+      transition: var(--transition-fast);
+    }
+    .add-track-btn:hover { background: rgba(59,130,246,0.2); box-shadow: 0 0 8px rgba(59,130,246,0.2); }
+    .track-list { flex: 1; overflow-y: auto; padding: 4px 0; }
+    .track-item {
+      display: flex; align-items: center; padding: 9px 14px; gap: 10px; cursor: pointer;
+      transition: var(--transition-fast); border-left: 3px solid transparent; margin: 1px 0;
+    }
+    .track-item:hover { background: rgba(59,130,246,0.03); }
+    .track-item.active { background: rgba(59,130,246,0.06); border-left-color: var(--accent-blue); }
+    .track-color-dot { width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }
+    .c1 { background: var(--accent-blue); }
+    .c2 { background: var(--accent-pink); }
+    .c3 { background: var(--accent-orange); }
+    .track-item .track-name { flex: 1; font-size: 12px; color: var(--text-primary); font-weight: 500; }
+    .track-item .track-singer { font-size: 10px; color: var(--text-muted); }
+    .track-mute, .track-solo {
+      width: 20px; height: 20px; border-radius: 4px; font-size: 9px; cursor: pointer;
+      border: 1px solid var(--border-medium); background: transparent; color: var(--text-muted);
+      transition: var(--transition-fast); font-weight: 700; letter-spacing: 0.5px; font-family: inherit;
+    }
+    .track-mute:hover, .track-solo:hover { border-color: var(--accent-blue); color: var(--accent-blue); }
+    .track-mute.muted { background: #fee2e2; border-color: #f87171; color: #ef4444; }
+    .track-solo.soloed { background: #fef3c7; border-color: #f59e0b; color: #d97706; }
+
+    /* 中央编辑区 */
+    .editor-area { flex: 1; display: flex; flex-direction: column; background: var(--bg-piano-roll); overflow: hidden; }
+    .editor-toolbar {
+      display: flex; align-items: center; padding: 8px 14px; gap: 8px;
+      border-bottom: 1px solid var(--border-subtle); background: var(--bg-tertiary); flex-shrink: 0;
+    }
+    .tool-btn {
+      padding: 6px 12px; border-radius: 16px; border: 1px solid var(--border-medium);
+      background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 11px;
+      transition: var(--transition-fast); font-family: inherit; letter-spacing: 0.5px;
+      display: flex; align-items: center; gap: 5px;
+    }
+    .tool-btn:hover { background: rgba(59,130,246,0.04); border-color: var(--accent-blue); color: var(--accent-blue); }
+    .tool-btn.active-tool {
+      background: rgba(59,130,246,0.1); border-color: var(--accent-blue);
+      color: var(--accent-blue); box-shadow: 0 0 8px rgba(59,130,246,0.1);
+    }
+    .tool-separator { width: 1px; height: 18px; background: var(--border-medium); margin: 0 4px; }
+    .quantize-select {
+      padding: 5px 10px; border-radius: 14px; border: 1px solid var(--border-medium);
+      background: var(--bg-tertiary); color: var(--text-secondary); font-size: 11px;
+      cursor: pointer; font-family: inherit; transition: var(--transition-fast);
+    }
+    .quantize-select:hover { border-color: var(--accent-blue); }
+
+    /* 钢琴卷帘 */
+    .piano-roll-container { flex: 1; display: flex; overflow: hidden; position: relative; }
+    .piano-keys {
+      width: 60px; flex-shrink: 0; background: #f1f5f9; border-right: 1px solid var(--border-subtle);
+      overflow-y: hidden; position: relative; z-index: 2;
+    }
+    .piano-key {
+      height: 22px; display: flex; align-items: center; justify-content: flex-end;
+      padding-right: 8px; font-size: 9px; color: var(--text-muted);
+      border-bottom: 1px solid rgba(0,0,0,0.03); cursor: pointer; transition: var(--transition-fast);
+      font-family: var(--font-mono); letter-spacing: 0.5px;
+    }
+    .piano-key:hover { background: rgba(59,130,246,0.08); color: var(--accent-blue); }
+    .piano-key.black-key { background: #e2e8f0; color: #64748b; font-size: 8px; }
+    .piano-key.black-key:hover { background: #cbd5e1; }
+    .piano-key.highlight-key { background: rgba(59,130,246,0.15); color: var(--accent-blue); }
+    .roll-canvas-wrapper { flex: 1; overflow: auto; position: relative; background: #fafcff; }
+    .roll-canvas-inner { position: relative; width: 2400px; height: 1056px; }
+    .roll-grid { position: absolute; inset: 0; pointer-events: none; }
+    .grid-row {
+      position: absolute; left: 0; right: 0; height: 22px;
+      border-bottom: 1px solid rgba(0,0,0,0.03);
+    }
+    .grid-row.beat-line { border-bottom: 1px solid rgba(0,0,0,0.06); }
+    .grid-row.bar-line { border-bottom: 1px solid rgba(59,130,246,0.15); }
+    .grid-col {
+      position: absolute; top: 0; bottom: 0; width: 1px; background: rgba(0,0,0,0.02);
+    }
+    .grid-col.beat-col { background: rgba(0,0,0,0.05); }
+    .grid-col.bar-col { background: rgba(59,130,246,0.2); width: 2px; }
+
+    /* 音符 */
+    .note-block {
+      position: absolute; height: 20px; border-radius: 5px; cursor: pointer;
+      transition: filter 0.1s, box-shadow 0.1s; z-index: 3; min-width: 8px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1); border: 1px solid rgba(0,0,0,0.05);
+    }
+    .note-block:hover { filter: brightness(1.1); box-shadow: 0 4px 12px rgba(59,130,246,0.3); z-index: 10; }
+    .note-block.selected-note {
+      border: 2px solid var(--accent-blue) !important; box-shadow: 0 0 16px rgba(59,130,246,0.5) !important; z-index: 11;
+    }
+    .note-block .note-lyric {
+      position: absolute; top: 1px; left: 4px; font-size: 8px; color: rgba(0,0,0,0.7);
+      pointer-events: none; font-weight: 600; letter-spacing: 0.5px;
+    }
+    .playhead {
+      position: absolute; top: 0; bottom: 0; width: 2px; background: var(--accent-pink);
+      z-index: 8; pointer-events: none; box-shadow: 0 0 10px rgba(244,114,182,0.7), 0 0 20px rgba(251,146,60,0.4);
+      transition: left 0.05s linear;
+    }
+    .time-ruler {
+      height: 24px; background: var(--bg-tertiary); border-bottom: 1px solid var(--border-subtle);
+      position: sticky; top: 0; z-index: 5; display: flex; align-items: center;
+      padding-left: 60px; font-size: 9px; color: var(--text-muted); letter-spacing: 0.5px;
+      flex-shrink: 0; overflow: hidden;
+    }
+    .time-ruler span { position: absolute; font-family: var(--font-mono); }
+
+    /* 右侧面板 */
+    .right-panel {
+      width: 220px; background: var(--bg-panel); border-left: 1px solid var(--border-subtle);
+      display: flex; flex-direction: column; flex-shrink: 0; z-index: 3; overflow-y: auto;
+    }
+    .param-section { padding: 12px 14px; border-bottom: 1px solid var(--border-subtle); }
+    .param-section-title {
+      font-size: 10px; text-transform: uppercase; letter-spacing: 1.5px; color: var(--text-muted);
+      margin-bottom: 10px; display: flex; align-items: center; gap: 6px;
+    }
+    .param-icon { font-size: 13px; }
+    .param-group { margin-bottom: 10px; }
+    .param-label { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-secondary); margin-bottom: 4px; }
+    .param-value { color: var(--accent-blue); font-weight: 600; font-family: var(--font-mono); font-size: 10px; }
+    .param-slider {
+      -webkit-appearance: none; width: 100%; height: 5px; border-radius: 3px;
+      background: linear-gradient(90deg, #e0e7ff, #bfdbfe); outline: none; cursor: pointer;
+    }
+    .param-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
+      background: #fff; border: 2px solid var(--accent-blue); cursor: pointer;
+      box-shadow: 0 0 8px rgba(59,130,246,0.3); transition: var(--transition-fast);
+    }
+    .param-slider::-webkit-slider-thumb:hover { box-shadow: 0 0 16px rgba(59,130,246,0.5); transform: scale(1.1); }
+    .preset-btn {
+      width: 100%; padding: 8px; border-radius: var(--radius-md); border: 1px solid var(--border-medium);
+      background: rgba(59,130,246,0.02); color: var(--text-secondary); cursor: pointer;
+      font-size: 11px; transition: var(--transition-fast); font-family: inherit; letter-spacing: 0.5px; margin-top: 4px;
+    }
+    .preset-btn:hover { background: rgba(59,130,246,0.06); border-color: var(--accent-blue); color: var(--accent-blue); }
+    .preset-btn.active-preset {
+      background: rgba(59,130,246,0.1); border-color: var(--accent-blue); color: var(--accent-blue);
+      box-shadow: 0 0 8px rgba(59,130,246,0.1);
+    }
+
+    /* 底部控制栏 */
+    .bottom-bar {
+      display: flex; align-items: center; padding: 10px 16px;
+      background: var(--bg-secondary); border-top: 1px solid var(--border-subtle); gap: 10px; flex-shrink: 0; z-index: 5;
+    }
+    .transport-controls { display: flex; align-items: center; gap: 6px; }
+    .transport-btn {
+      width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border-medium);
+      background: var(--bg-tertiary); color: var(--text-secondary); cursor: pointer; font-size: 15px;
+      transition: var(--transition-fast); display: flex; align-items: center; justify-content: center;
+    }
+    .transport-btn:hover { background: rgba(59,130,246,0.06); border-color: var(--accent-blue); color: var(--accent-blue); }
+    .transport-btn.play-btn {
+      width: 42px; height: 42px; background: linear-gradient(135deg, var(--accent-blue), var(--accent-cyan));
+      border: none; color: #fff; font-size: 18px; box-shadow: var(--shadow-glow-blue);
+    }
+    .transport-btn.play-btn:hover { box-shadow: 0 0 24px rgba(59,130,246,0.5); transform: scale(1.04); }
+    .transport-btn.play-btn.playing { background: linear-gradient(135deg, #f59e0b, #f97316); }
+    .time-display {
+      font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); letter-spacing: 1px;
+      font-weight: 600; min-width: 90px; text-align: center;
+      background: var(--bg-tertiary); padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border-subtle);
+    }
+    .bpm-display { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-secondary); font-family: var(--font-mono); }
+    .bpm-display input {
+      width: 50px; background: var(--bg-tertiary); border: 1px solid var(--border-medium);
+      border-radius: 6px; padding: 5px 8px; color: var(--text-primary); font-size: 12px;
+      text-align: center; font-family: var(--font-mono); transition: var(--transition-fast);
+    }
+    .bpm-display input:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 8px rgba(59,130,246,0.15); }
+    .lyric-input-area { flex: 1; display: flex; align-items: center; gap: 8px; margin-left: 8px; }
+    .lyric-input {
+      flex: 1; background: var(--bg-tertiary); border: 1px solid var(--border-medium);
+      border-radius: 20px; padding: 7px 16px; color: var(--text-primary); font-size: 13px;
+      font-family: inherit; transition: var(--transition-fast); letter-spacing: 1px;
+    }
+    .lyric-input:focus { outline: none; border-color: var(--accent-blue); box-shadow: 0 0 10px rgba(59,130,246,0.1); }
+    .lyric-input::placeholder { color: var(--text-muted); }
+    .insert-lyric-btn {
+      padding: 7px 16px; border-radius: 20px; border: 1px solid var(--accent-blue);
+      background: rgba(59,130,246,0.06); color: var(--accent-blue); cursor: pointer;
+      font-size: 12px; font-weight: 600; letter-spacing: 1px; transition: var(--transition-fast); font-family: inherit;
+    }
+    .insert-lyric-btn:hover { background: rgba(59,130,246,0.15); box-shadow: 0 0 8px rgba(59,130,246,0.2); }
+
+    /* 滚动条 */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+    .toast {
+      position: absolute; bottom: 80px; left: 50%; transform: translateX(-50%);
+      background: #ffffff; color: var(--text-primary); padding: 10px 22px; border-radius: 20px;
+      font-size: 12px; z-index: 20; pointer-events: none; opacity: 0; transition: opacity 0.3s;
+      border: 1px solid var(--border-medium); letter-spacing: 0.5px;
+      box-shadow: var(--shadow-md);
+    }
+    .toast.show { opacity: 1; }
+
+    @media (max-width: 1350px) {
+      .daw-container { width: 98vw; height: 95vh; border-radius: 12px; }
+      .left-panel { width: 200px; }
+      .right-panel { width: 180px; }
+    }
+  </style>
+</head>
+<body>
+<div class="daw-container" id="dawContainer">
+  <div class="particles-bg" id="particlesBg"></div>
+
+  <!-- 顶部标题栏 -->
+  <div class="title-bar">
+    <div class="logo-area">
+      <div class="logo-icon">🎤</div>
+      <span class="logo-text">星咏歌姬 · Hoshine Utau</span>
+    </div>
+    <div class="menu-tabs">
+      <button class="menu-tab active">🎼 编辑器</button>
+      <button class="menu-tab">🎛️ 混音器</button>
+      <button class="menu-tab">📋 音轨列表</button>
+      <button class="menu-tab">⚙️ 设置</button>
+    </div>
+    <div class="window-controls">
+      <div class="win-dot green" title="最小化"></div>
+      <div class="win-dot yellow" title="最大化"></div>
+      <div class="win-dot red" title="关闭"></div>
+    </div>
+  </div>
+
+  <div class="main-content">
+    <div class="left-panel">
+      <div class="character-card">
+        <div class="character-avatar-wrapper">
+          <div class="character-avatar">🌸</div>
+          <span class="avatar-sparkle s1">✨</span>
+          <span class="avatar-sparkle s2">💫</span>
+          <span class="avatar-sparkle s3">⭐</span>
+        </div>
+        <div class="character-name">星咏 樱</div>
+        <div class="character-subtitle">Hoshine Sakura · CV. 未公开</div>
+        <div class="voice-bank-info"><span class="voice-dot"></span> Voice Bank v3.2 · 已加载</div>
+      </div>
+      <div class="track-list-section">
+        <div class="track-list-header">音轨列表 <button class="add-track-btn" title="添加音轨">+</button></div>
+        <div class="track-list" id="trackList">
+          <div class="track-item active" data-track="1">
+            <div class="track-color-dot c1"></div><span class="track-name">主旋律</span><span class="track-singer">🌸樱</span>
+            <button class="track-mute">M</button><button class="track-solo">S</button>
+          </div>
+          <div class="track-item" data-track="2">
+            <div class="track-color-dot c2"></div><span class="track-name">和声轨道</span><span class="track-singer">🌸樱</span>
+            <button class="track-mute">M</button><button class="track-solo">S</button>
+          </div>
+          <div class="track-item" data-track="3">
+            <div class="track-color-dot c3"></div><span class="track-name">低音轨道</span><span class="track-singer">🌙月</span>
+            <button class="track-mute">M</button><button class="track-solo">S</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="editor-area">
+      <div class="editor-toolbar">
+        <button class="tool-btn active-tool" data-tool="pencil">✏️ 铅笔</button>
+        <button class="tool-btn" data-tool="select">🖱️ 选择</button>
+        <button class="tool-btn" data-tool="eraser">🧹 擦除</button>
+        <span class="tool-separator"></span>
+        <button class="tool-btn" id="quantizeBtn">🎯 量化</button>
+        <select class="quantize-select" id="quantizeSelect">
+          <option value="16">1/16 音符</option><option value="8" selected>1/8 音符</option>
+          <option value="4">1/4 音符</option><option value="2">1/2 音符</option>
+        </select>
+        <span class="tool-separator"></span>
+        <button class="tool-btn" id="clearNotesBtn">🗑️ 清除音符</button>
+        <span style="flex:1;"></span>
+        <span style="font-size:10px;color:var(--text-muted);">🎵 点击钢琴卷帘放置音符 | 右键删除 | 拖拽移动</span>
+      </div>
+      <div class="time-ruler" id="timeRuler"></div>
+      <div class="piano-roll-container">
+        <div class="piano-keys" id="pianoKeys"></div>
+        <div class="roll-canvas-wrapper" id="rollCanvasWrapper">
+          <div class="roll-canvas-inner" id="rollCanvasInner">
+            <div class="roll-grid" id="rollGrid"></div>
+            <div class="playhead" id="playhead" style="left:80px;"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-panel" id="rightPanel">
+      <div class="param-section">
+        <div class="param-section-title"><span class="param-icon">🎚️</span> 歌声参数</div>
+        <div class="param-group"><div class="param-label"><span>呼吸感 Breath</span><span class="param-value" id="breathVal">45</span></div><input type="range" class="param-slider" min="0" max="100" value="45" id="breathSlider"></div>
+        <div class="param-group"><div class="param-label"><span>力度 Velocity</span><span class="param-value" id="velocityVal">72</span></div><input type="range" class="param-slider" min="0" max="127" value="72" id="velocitySlider"></div>
+        <div class="param-group"><div class="param-label"><span>颤音 Vibrato</span><span class="param-value" id="vibratoVal">38</span></div><input type="range" class="param-slider" min="0" max="100" value="38" id="vibratoSlider"></div>
+        <div class="param-group"><div class="param-label"><span>清晰度 Clarity</span><span class="param-value" id="clarityVal">85</span></div><input type="range" class="param-slider" min="0" max="100" value="85" id="claritySlider"></div>
+        <div class="param-group"><div class="param-label"><span>张力 Tension</span><span class="param-value" id="tensionVal">55</span></div><input type="range" class="param-slider" min="0" max="100" value="55" id="tensionSlider"></div>
+      </div>
+      <div class="param-section">
+        <div class="param-section-title"><span class="param-icon">🎭</span> 表情预设</div>
+        <button class="preset-btn active-preset" data-preset="normal">🌸 通常</button>
+        <button class="preset-btn" data-preset="soft">🌙 轻柔</button>
+        <button class="preset-btn" data-preset="power">🔥 强力</button>
+        <button class="preset-btn" data-preset="cute">🍬 可爱</button>
+        <button class="preset-btn" data-preset="dark">🖤 低沉</button>
+      </div>
+      <div class="param-section">
+        <div class="param-section-title"><span class="param-icon">📝</span> 选中音符</div>
+        <div style="font-size:10px;color:var(--text-muted);" id="selectedNoteInfo">点击音符查看详情</div>
+        <div style="font-size:10px;color:var(--accent-blue);margin-top:4px;font-family:var(--font-mono);" id="selectedNoteDetail"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bottom-bar">
+    <div class="transport-controls">
+      <button class="transport-btn" title="跳到开始">⏮️</button>
+      <button class="transport-btn" title="后退">⏪</button>
+      <button class="transport-btn play-btn" id="playBtn" title="播放/暂停">▶️</button>
+      <button class="transport-btn" title="前进">⏩</button>
+      <button class="transport-btn" title="循环">🔁</button>
+    </div>
+    <div class="time-display" id="timeDisplay">00:00.00</div>
+    <div class="bpm-display"><span>🎵 BPM</span><input type="number" value="140" min="40" max="300" id="bpmInput"></div>
+    <div class="lyric-input-area">
+      <input type="text" class="lyric-input" placeholder="输入歌词... 例如: さくら さくら" id="lyricInput">
+      <button class="insert-lyric-btn" id="insertLyricBtn">📝 填入选中音符</button>
+    </div>
+  </div>
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+  (function() {
+    const rollCanvasInner = document.getElementById('rollCanvasInner');
+    const rollCanvasWrapper = document.getElementById('rollCanvasWrapper');
+    const rollGrid = document.getElementById('rollGrid');
+    const pianoKeys = document.getElementById('pianoKeys');
+    const timeRuler = document.getElementById('timeRuler');
+    const playhead = document.getElementById('playhead');
+    const playBtn = document.getElementById('playBtn');
+    const timeDisplay = document.getElementById('timeDisplay');
+    const bpmInput = document.getElementById('bpmInput');
+    const lyricInput = document.getElementById('lyricInput');
+    const insertLyricBtn = document.getElementById('insertLyricBtn');
+    const toast = document.getElementById('toast');
+    const selectedNoteInfo = document.getElementById('selectedNoteInfo');
+    const selectedNoteDetail = document.getElementById('selectedNoteDetail');
+    const clearNotesBtn = document.getElementById('clearNotesBtn');
+    const quantizeBtn = document.getElementById('quantizeBtn');
+    const quantizeSelect = document.getElementById('quantizeSelect');
+    const particlesBg = document.getElementById('particlesBg');
+
+    const ROW_HEIGHT = 22;
+    const TOTAL_SEMITONES = 48;
+    const PIXELS_PER_BEAT = 80;
+    const NOTE_MIN_WIDTH = 8;
+    const TOTAL_BEATS = 30;
+    const CANVAS_WIDTH = TOTAL_BEATS * PIXELS_PER_BEAT;
+    const CANVAS_HEIGHT = TOTAL_SEMITONES * ROW_HEIGHT;
+
+    let notes = [];
+    let selectedNoteId = null;
+    let currentTool = 'pencil';
+    let isPlaying = false;
+    let playheadPosition = 80;
+    let animationId = null;
+    let lastFrameTime = null;
+    let bpm = 140;
+    let isDragging = false;
+    let dragStartX = 0, dragStartY = 0, dragNoteId = null, dragNoteOrigX = 0, dragNoteOrigRow = 0;
+    let noteIdCounter = 0;
+
+    const noteColors = [
+      'linear-gradient(135deg, #3b82f6, #2563eb)',
+      'linear-gradient(135deg, #f472b6, #ec4899)',
+      'linear-gradient(135deg, #fb923c, #f97316)',
+      'linear-gradient(135deg, #a78bfa, #8b5cf6)',
+      'linear-gradient(135deg, #22d3ee, #06b6d4)',
+      'linear-gradient(135deg, #fbbf24, #f59e0b)',
+    ];
+    const noteNames = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+    function initPianoKeys() {
+      pianoKeys.innerHTML = '';
+      for (let i = TOTAL_SEMITONES-1; i >=0; i--) {
+        const midiNote = 60 + i;
+        const name = noteNames[midiNote%12];
+        const octave = Math.floor(midiNote/12)-1;
+        const isBlack = name.includes('#');
+        const key = document.createElement('div');
+        key.className = 'piano-key' + (isBlack ? ' black-key' : '');
+        key.textContent = name + octave;
+        key.style.height = ROW_HEIGHT+'px';
+        key.dataset.row = i;
+        key.addEventListener('click', ()=>{
+          document.querySelectorAll('.piano-key').forEach(k=>k.classList.remove('highlight-key'));
+          key.classList.add('highlight-key');
+          setTimeout(()=>key.classList.remove('highlight-key'),400);
+          showToast('🎹 音高: '+name+octave);
+        });
+        pianoKeys.appendChild(key);
+      }
+    }
+
+    function initTimeRuler() {
+      timeRuler.innerHTML = '';
+      for (let beat=0; beat<=TOTAL_BEATS; beat++) {
+        const x = beat*PIXELS_PER_BEAT + 60;
+        const marker = document.createElement('span');
+        marker.style.left = x+'px';
+        marker.textContent = beat+1;
+        marker.style.position='absolute';
+        marker.style.transform='translateX(-50%)';
+        marker.style.top='4px';
+        timeRuler.appendChild(marker);
+      }
+    }
+
+    function initGrid() {
+      rollGrid.innerHTML = '';
+      for (let i=0;i<=TOTAL_SEMITONES;i++) {
+        const row = document.createElement('div');
+        row.className = 'grid-row';
+        if(i%12===0) row.classList.add('bar-line');
+        else if(i%4===0) row.classList.add('beat-line');
+        row.style.top = (i*ROW_HEIGHT)+'px';
+        rollGrid.appendChild(row);
+      }
+      for (let beat=0;beat<=TOTAL_BEATS;beat++) {
+        const col = document.createElement('div');
+        col.className = 'grid-col';
+        if(beat%4===0) col.classList.add('bar-col');
+        else col.classList.add('beat-col');
+        col.style.left = (beat*PIXELS_PER_BEAT)+'px';
+        rollGrid.appendChild(col);
+      }
+    }
+
+    function renderNotes() {
+      rollCanvasInner.querySelectorAll('.note-block').forEach(n=>n.remove());
+      notes.forEach(note=>{
+        const el = document.createElement('div');
+        el.className = 'note-block';
+        if(note.id === selectedNoteId) el.classList.add('selected-note');
+        el.style.left = note.x+'px';
+        el.style.top = (note.row*ROW_HEIGHT+1)+'px';
+        el.style.width = Math.max(note.width, NOTE_MIN_WIDTH)+'px';
+        el.style.height = (ROW_HEIGHT-2)+'px';
+        el.style.background = note.color || noteColors[note.row%noteColors.length];
+        el.dataset.noteId = note.id;
+        if(note.lyric && note.lyric!=='♪') {
+          const span = document.createElement('span');
+          span.className = 'note-lyric';
+          span.textContent = note.lyric;
+          el.appendChild(span);
+        }
+        el.addEventListener('mousedown', (e)=>onNoteMouseDown(e,note));
+        el.addEventListener('contextmenu', (e)=>{ e.preventDefault(); deleteNote(note.id); });
+        rollCanvasInner.appendChild(el);
+      });
+      updatePlayhead();
+    }
+
+    function onNoteMouseDown(e, note) {
+      if(currentTool==='eraser') { deleteNote(note.id); return; }
+      e.stopPropagation();
+      selectNote(note.id);
+      isDragging = true; dragNoteId = note.id;
+      dragStartX = e.clientX; dragStartY = e.clientY;
+      dragNoteOrigX = note.x; dragNoteOrigRow = note.row;
+    }
+
+    function selectNote(id) {
+      selectedNoteId = id;
+      const note = notes.find(n=>n.id===id);
+      if(note) {
+        const midi = 60+note.row;
+        const name = noteNames[midi%12];
+        const octave = Math.floor(midi/12)-1;
+        selectedNoteInfo.textContent = '🎵 '+name+octave+' (行'+note.row+')';
+        selectedNoteDetail.textContent = '歌词: '+(note.lyric||'♪')+' | 长度: '+Math.round(note.width/PIXELS_PER_BEAT*16)+' ticks';
+      }
+      renderNotes();
+    }
+
+    function deleteNote(id) {
+      notes = notes.filter(n=>n.id!==id);
+      if(selectedNoteId===id) { selectedNoteId=null; selectedNoteInfo.textContent='点击音符查看详情'; selectedNoteDetail.textContent=''; }
+      renderNotes();
+      showToast('🗑️ 音符已删除');
+    }
+
+    rollCanvasWrapper.addEventListener('mousedown', (e)=>{
+      if(e.target===rollCanvasInner || e.target===rollGrid || e.target===rollCanvasWrapper) {
+        if(currentTool==='pencil') {
+          const rect = rollCanvasInner.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const y = e.clientY - rect.top;
+          const row = Math.max(0, Math.min(TOTAL_SEMITONES-1, Math.floor(y/ROW_HEIGHT)));
+          const snappedX = snapToGrid(x);
+          const newNote = {
+            id: ++noteIdCounter, x: snappedX, row: row,
+            width: PIXELS_PER_BEAT/2, lyric: '♪', color: noteColors[row%noteColors.length]
+          };
+          notes.push(newNote);
+          selectNote(newNote.id);
+          renderNotes();
+          showToast('🎵 音符已放置 · 行'+row);
+        } else if(currentTool==='select') {
+          selectedNoteId=null; selectedNoteInfo.textContent='点击音符查看详情'; selectedNoteDetail.textContent=''; renderNotes();
+        }
+      }
+    });
+
+    document.addEventListener('mousemove', (e)=>{
+      if(isDragging && dragNoteId!==null) {
+        const note = notes.find(n=>n.id===dragNoteId); if(!note) return;
+        const dx = e.clientX-dragStartX, dy = e.clientY-dragStartY;
+        note.x = Math.max(0, dragNoteOrigX+dx);
+        note.row = Math.max(0, Math.min(TOTAL_SEMITONES-1, dragNoteOrigRow+Math.round(dy/ROW_HEIGHT)));
+        note.color = noteColors[note.row%noteColors.length];
+        renderNotes();
+      }
+    });
+    document.addEventListener('mouseup', ()=>{
+      if(isDragging && dragNoteId!==null) {
+        const note = notes.find(n=>n.id===dragNoteId);
+        if(note) note.x = snapToGrid(note.x);
+        renderNotes();
+      }
+      isDragging=false; dragNoteId=null;
+    });
+
+    function snapToGrid(x) {
+      const val = parseInt(quantizeSelect.value);
+      const grid = PIXELS_PER_BEAT/(val/4);
+      return Math.round(x/grid)*grid;
+    }
+    quantizeBtn.addEventListener('click', ()=>{
+      notes.forEach(n=> n.x = snapToGrid(n.x));
+      renderNotes(); showToast('🎯 音符已量化');
+    });
+    clearNotesBtn.addEventListener('click', ()=>{
+      if(!notes.length) return showToast('📋 没有音符');
+      if(confirm('确定清除所有音符？')) { notes=[]; selectedNoteId=null; renderNotes(); showToast('🗑️ 已清除'); }
+    });
+    document.querySelectorAll('.tool-btn[data-tool]').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        document.querySelectorAll('.tool-btn[data-tool]').forEach(b=>b.classList.remove('active-tool'));
+        btn.classList.add('active-tool');
+        currentTool = btn.dataset.tool;
+      });
+    });
+
+    function updatePlayhead() {
+      playhead.style.left = playheadPosition+'px';
+      const beats = playheadPosition/PIXELS_PER_BEAT;
+      const min = Math.floor(beats/bpm);
+      const sec = Math.floor((beats/bpm*60)%60);
+      const cs = Math.floor((beats/bpm*6000)%100);
+      timeDisplay.textContent = String(min).padStart(2,'0')+':'+String(sec).padStart(2,'0')+'.'+String(cs).padStart(2,'0');
+    }
+    function animatePlayhead(ts) {
+      if(!isPlaying) return;
+      if(!lastFrameTime) lastFrameTime=ts;
+      const dt = (ts-lastFrameTime)/1000;
+      lastFrameTime=ts;
+      playheadPosition += (bpm/60)*PIXELS_PER_BEAT*dt;
+      if(playheadPosition>CANVAS_WIDTH+120) playheadPosition=80;
+      updatePlayhead();
+      rollCanvasWrapper.scrollLeft = playheadPosition - rollCanvasWrapper.clientWidth/3;
+      animationId = requestAnimationFrame(animatePlayhead);
+    }
+    playBtn.addEventListener('click', ()=>{
+      isPlaying=!isPlaying;
+      if(isPlaying) {
+        playBtn.classList.add('playing'); playBtn.textContent='⏸️';
+        lastFrameTime=null; animationId=requestAnimationFrame(animatePlayhead);
+        showToast('▶️ 播放中 BPM:'+bpm);
+      } else {
+        playBtn.classList.remove('playing'); playBtn.textContent='▶️';
+        if(animationId) cancelAnimationFrame(animationId);
+        animationId=null; lastFrameTime=null; updatePlayhead();
+      }
+    });
+    bpmInput.addEventListener('change', ()=>{
+      bpm = Math.max(40,Math.min(300,parseInt(bpmInput.value)||140));
+      bpmInput.value=bpm; showToast('🎵 BPM: '+bpm);
+    });
+    insertLyricBtn.addEventListener('click', ()=>{
+      const lyric = lyricInput.value.trim();
+      if(!lyric) return showToast('📝 输入歌词');
+      if(selectedNoteId===null) return showToast('📝 请先选中音符');
+      const note = notes.find(n=>n.id===selectedNoteId);
+      if(note) { note.lyric=lyric; renderNotes(); selectNote(selectedNoteId); showToast('📝 歌词已填入'); lyricInput.value=''; }
+    });
+    lyricInput.addEventListener('keydown', (e)=>{ if(e.key==='Enter') insertLyricBtn.click(); });
+
+    function bindSlider(slider, displayId) {
+      const display = document.getElementById(displayId);
+      slider.addEventListener('input', ()=> display.textContent = slider.value);
+    }
+    bindSlider(document.getElementById('breathSlider'),'breathVal');
+    bindSlider(document.getElementById('velocitySlider'),'velocityVal');
+    bindSlider(document.getElementById('vibratoSlider'),'vibratoVal');
+    bindSlider(document.getElementById('claritySlider'),'clarityVal');
+    bindSlider(document.getElementById('tensionSlider'),'tensionVal');
+
+    document.querySelectorAll('.preset-btn').forEach(btn=>{
+      btn.addEventListener('click', ()=>{
+        document.querySelectorAll('.preset-btn').forEach(b=>b.classList.remove('active-preset'));
+        btn.classList.add('active-preset');
+        const presets = {
+          normal:{breath:45,velocity:72,vibrato:38,clarity:85,tension:55},
+          soft:{breath:70,velocity:40,vibrato:55,clarity:75,tension:25},
+          power:{breath:20,velocity:110,vibrato:25,clarity:90,tension:85},
+          cute:{breath:55,velocity:65,vibrato:60,clarity:88,tension:35},
+          dark:{breath:35,velocity:55,vibrato:20,clarity:60,tension:70}
+        };
+        const vals = presets[btn.dataset.preset] || presets.normal;
+        document.getElementById('breathSlider').value=vals.breath; document.getElementById('breathVal').textContent=vals.breath;
+        document.getElementById('velocitySlider').value=vals.velocity; document.getElementById('velocityVal').textContent=vals.velocity;
+        document.getElementById('vibratoSlider').value=vals.vibrato; document.getElementById('vibratoVal').textContent=vals.vibrato;
+        document.getElementById('claritySlider').value=vals.clarity; document.getElementById('clarityVal').textContent=vals.clarity;
+        document.getElementById('tensionSlider').value=vals.tension; document.getElementById('tensionVal').textContent=vals.tension;
+        showToast('🎭 预设已应用');
+      });
+    });
+
+    document.querySelectorAll('.track-item').forEach(item=>{
+      item.addEventListener('click',(e)=>{
+        if(e.target.classList.contains('track-mute')||e.target.classList.contains('track-solo')) return;
+        document.querySelectorAll('.track-item').forEach(i=>i.classList.remove('active'));
+        item.classList.add('active');
+      });
+      item.querySelector('.track-mute').addEventListener('click',(e)=>{ e.stopPropagation(); e.currentTarget.classList.toggle('muted'); });
+      item.querySelector('.track-solo').addEventListener('click',(e)=>{ e.stopPropagation(); e.currentTarget.classList.toggle('soloed'); });
+    });
+
+    let toastTimeout;
+    function showToast(msg) {
+      toast.textContent=msg; toast.classList.add('show');
+      clearTimeout(toastTimeout);
+      toastTimeout=setTimeout(()=>toast.classList.remove('show'),1800);
+    }
+
+    function createParticles() {
+      particlesBg.innerHTML='';
+      const colors=['#3b82f6','#f472b6','#fb923c','#a78bfa','#22d3ee','#fbbf24'];
+      for(let i=0;i<28;i++) {
+        const p=document.createElement('div');
+        p.className='particle';
+        p.style.left=Math.random()*100+'%';
+        p.style.top=(60+Math.random()*40)+'%';
+        const size=2+Math.random()*5;
+        p.style.width=size+'px'; p.style.height=size+'px';
+        p.style.background=colors[Math.floor(Math.random()*colors.length)];
+        p.style.animationDuration=(8+Math.random()*18)+'s';
+        p.style.animationDelay=Math.random()*15+'s';
+        particlesBg.appendChild(p);
+      }
+    }
+
+    document.addEventListener('keydown',(e)=>{
+      if(e.target.tagName==='INPUT'||e.target.tagName==='SELECT') return;
+      switch(e.key.toLowerCase()) {
+        case ' ': e.preventDefault(); playBtn.click(); break;
+        case 'p': currentTool='pencil'; document.querySelector('.tool-btn[data-tool="pencil"]')?.click(); break;
+        case 's': currentTool='select'; document.querySelector('.tool-btn[data-tool="select"]')?.click(); break;
+        case 'e': currentTool='eraser'; document.querySelector('.tool-btn[data-tool="eraser"]')?.click(); break;
+        case 'delete': case 'backspace': if(selectedNoteId!==null) { deleteNote(selectedNoteId); e.preventDefault(); } break;
+        case 'q': quantizeBtn.click(); break;
+      }
+    });
+
+    function createDemoNotes() {
+      const melody = [
+        {row:24,lyric:'さ',width:40},{row:26,lyric:'く',width:40},{row:28,lyric:'ら',width:40},
+        {row:29,lyric:'✨',width:60},{row:28,lyric:'ふ',width:40},{row:26,lyric:'わ',width:40},
+        {row:24,lyric:'り',width:60},{row:22,lyric:'💫',width:40},{row:24,lyric:'ゆ',width:40},
+        {row:26,lyric:'め',width:40},{row:28,lyric:'み',width:40},{row:31,lyric:'る',width:80}
+      ];
+      let x=80;
+      melody.forEach(m=>{
+        notes.push({id:++noteIdCounter,x:x,row:m.row,width:m.width,lyric:m.lyric,color:noteColors[m.row%noteColors.length]});
+        x+=m.width+16;
+      });
+    }
+
+    function init() {
+      rollCanvasInner.style.width=CANVAS_WIDTH+'px';
+      rollCanvasInner.style.height=CANVAS_HEIGHT+'px';
+      initPianoKeys(); initTimeRuler(); initGrid();
+      createParticles(); createDemoNotes(); renderNotes(); updatePlayhead();
+      rollCanvasWrapper.scrollTop=ROW_HEIGHT*10;
+      showToast('🌸 欢迎使用星咏歌姬 · 空格播放 | 点击放置音符');
+    }
+    init();
+  })();
+</script>
+</body>
+</html>

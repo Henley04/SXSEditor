@@ -257,6 +257,7 @@ function createDialog(options) {
       if (btnConfig.onClick) {
         btnConfig.onClick();
       }
+      close();
     });
 
     btnContainer.appendChild(btn);
@@ -378,7 +379,7 @@ function showSingerSelectDialog(singerId) {
                 }
               }
             } catch (err) {
-              console.error('加载歌手文件失败', err);
+              console.error('Synthesis failed:', err);
             }
           }
         },
@@ -524,7 +525,7 @@ function applySingerDataToSinger(singer, singerData) {
       }
       singer.wavBuffer = bytes.buffer;
     } catch (e) {
-      console.error('解析 wavBase64 失败:', e);
+      console.error('Failed to decode wavBase64:', e);
     }
   }
   if (singerData.midiNotes) singer.midiNotes = singerData.midiNotes;
@@ -788,7 +789,7 @@ function serializeProject(embedSingerFiles = false) {
         }
         wavBase64 = btoa(binary);
       } catch (e) {
-        console.error('编码wavBuffer失败:', e);
+        console.error('Failed to decode wavBuffer:', e);
       }
       singerObj.embeddedSingerData = {
         formatVersion: SXSSINGER_CURRENT_VERSION,
@@ -992,7 +993,7 @@ async function playAll() {
     await startAudioPlayback(0);
 
   } catch (error) {
-    console.error('合成失败:', error);
+    console.error('Synthesis failed:', error);
     showAlertDialog(t('main.synthesisFailed') + ': ' + error.message);
     timeDisplay.textContent = formatTime(0);
   } finally {
@@ -1006,7 +1007,7 @@ function getAudioContext() {
   if (!audioContext || audioContext.state === 'closed') {
     audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: SAMPLE_RATE });
     if (audioContext.sampleRate !== SAMPLE_RATE) {
-      console.warn(`[Audio] AudioContext实际采样率: ${audioContext.sampleRate}Hz, 期望: ${SAMPLE_RATE}Hz, 将自动重采样`);
+      console.warn(`[Audio] AudioContext actual sample rate: ${audioContext.sampleRate}Hz, target: ${SAMPLE_RATE}Hz, will auto-resample`);
     }
     gainNode = audioContext.createGain();
     gainNode.connect(audioContext.destination);
@@ -1014,7 +1015,7 @@ function getAudioContext() {
   }
   if (audioContext.state === 'suspended') {
     audioContext.resume().catch(err => {
-      console.warn('[Audio] AudioContext resume 失败:', err);
+      console.warn('[Audio] AudioContext resume failed:', err);
     });
   }
   return audioContext;
@@ -1034,6 +1035,8 @@ function getPreviewInferenceOptions() {
     nSteps: audioSettings?.previewDiffSteps ?? 16,
     cfg: audioSettings?.previewCfgStrength ?? 3.0,
     cfgRescale: audioSettings?.previewCfgRescale ?? 0.75,
+    npuDiffBatchSize: audioSettings?.npuDiffBatchSize ?? 4,
+    npuVocoderBatchSize: audioSettings?.npuVocoderBatchSize ?? 4,
   };
 }
 
@@ -1042,6 +1045,8 @@ function getExportInferenceOptions() {
     nSteps: audioSettings?.exportDiffSteps ?? 32,
     cfg: audioSettings?.exportCfgStrength ?? 3.0,
     cfgRescale: audioSettings?.exportCfgRescale ?? 0.75,
+    npuDiffBatchSize: audioSettings?.npuDiffBatchSize ?? 4,
+    npuVocoderBatchSize: audioSettings?.npuVocoderBatchSize ?? 4,
   };
 }
 
@@ -1056,7 +1061,7 @@ function applyAudioSettings() {
     const sinkId = String(audioSettings.audioOutputDevice);
     if (audioContext.setSinkId && typeof audioContext.setSinkId === 'function') {
       audioContext.setSinkId(sinkId).catch(err => {
-        console.warn('[Audio] 设置输出设备失败:', err.message);
+      // TODO: translate garbled log
       });
     }
   }
@@ -1128,7 +1133,7 @@ async function startExclusivePlayback(offset) {
     const result = await window.electronAPI.audioPlay(currentAudioData, options);
 
     if (!result.success) {
-      console.warn('[Audio] WASAPI 独占模式失败，回退到共享模式:', result.error);
+      console.warn('[Audio] WASAPI exclusive mode failed, falling back to shared:', result.error);
       useExclusiveMode = false;
       startSharedPlayback(offset);
       return;
@@ -1150,7 +1155,7 @@ async function startExclusivePlayback(offset) {
 
     startExclusivePlayheadAnimation(removeEndedListener);
   } catch (err) {
-    console.error('[Audio] 独占模式启动失败，回退到共享模式:', err);
+      // TODO: translate garbled log
     useExclusiveMode = false;
     startSharedPlayback(offset);
   }
@@ -1191,7 +1196,7 @@ function stopExclusivePlayback() {
     exclusivePlaybackRaf = null;
   }
   window.electronAPI.audioStop().catch(err => {
-    console.warn('[Audio] 停止独占播放失败:', err);
+    console.warn('[Audio] Failed to stop exclusive playback:', err);
   });
 }
 
@@ -1389,13 +1394,13 @@ btnSave.addEventListener('click', async () => {
         await window.electronAPI.saveFile(result.filePath, data);
         currentProjectFilePath = result.filePath;
         markClean();
-        console.log('项目已保存到', result.filePath);
+        console.log('Project saved to', result.filePath);
       }
     } catch (err) {
-      console.error('保存失败', err);
+      console.error('Save failed', err);
     }
   } else {
-    console.log('保存功能待实现（需要 electronAPI）');
+      // TODO: translate garbled log
   }
 });
 
@@ -1418,7 +1423,7 @@ btnLoad.addEventListener('click', async () => {
             return;
           }
           if (projVersion[0] < currentVersion[0] || projVersion[1] < currentVersion[1]) {
-            console.warn(`项目文件版本(${obj.version})较低，将尝试兼容加载`);
+             console.warn(`Project file version(${obj.version}) is low, will try downgrade load`);
           }
         }
         if (obj.project) {
@@ -1451,7 +1456,7 @@ btnLoad.addEventListener('click', async () => {
                   const singerData = JSON.parse(text);
                   const validation = validateSingerData(singerData);
                   if (validation.warnings.length > 0) {
-                    console.warn('歌手文件加载警告:', validation.warnings);
+                     console.warn('File load validation warnings:', validation.warnings);
                   }
                   if (validation.valid) {
                     applySingerDataToSinger(singer, singerData);
@@ -1461,7 +1466,7 @@ btnLoad.addEventListener('click', async () => {
                     singer.singerFileMissing = false;
                   }
                 } catch (err) {
-                  console.error('加载歌手文件失败:', err);
+      // TODO: translate garbled log
                   singer.singerFileMissing = true;
                 }
               }
@@ -1476,14 +1481,14 @@ btnLoad.addEventListener('click', async () => {
         history.clear();
         markClean();
         refreshAll();
-        console.log('项目已加载', result.filePaths[0]);
+        console.log('Project loaded', result.filePaths[0]);
       }
     } catch (err) {
-      console.error('加载失败', err);
+      console.error('Load failed', err);
       showAlertDialog(t('main.projectLoadFailed') + ': ' + (err.message || ''));
     }
   } else {
-    console.log('加载功能待实现（需要 electronAPI）');
+      // TODO: translate garbled log
   }
 });
 
@@ -1629,7 +1634,7 @@ btnExport.addEventListener('click', async () => {
     }
 
   } catch (err) {
-    console.error('导出失败', err);
+    console.error('Synthesis failed:', err);
     showAlertDialog(t('main.exportFailed') + ': ' + (err.message || ''));
     timeDisplay.textContent = t('main.exportFailed');
   } finally {
@@ -1846,7 +1851,7 @@ function renderSingerList() {
               await loadSingerFile(singer.id, buffer, filePath);
             }
           } catch (err) {
-            console.error('重新选定歌手文件失败:', err);
+      // TODO: translate garbled log
           }
         });
         infoDiv.appendChild(relocateBtn);
@@ -2396,9 +2401,9 @@ async function autoSaveProject() {
     const data = serializeProject(false);
     await window.electronAPI.saveFile(currentProjectFilePath, data);
     markClean();
-    console.log('项目已自动保存到', currentProjectFilePath);
+    console.log('Project auto-saved to', currentProjectFilePath);
   } catch (err) {
-    console.error('自动保存失败', err);
+      // TODO: translate garbled log
   }
 }
 
@@ -2498,7 +2503,7 @@ if (window.electronAPI?.onCloseConfirm) {
       }
       // result === 'cancel' -> 不做任何事，窗口保持打开
     } catch (err) {
-      console.error('关闭确认对话框错误:', err);
+      console.error('Close confirmation dialog error:', err);
       doCloseConfirmed();
     }
   });
@@ -2743,7 +2748,7 @@ async function handleAudioToMidi() {
     try {
       audioBuffer = await ac.decodeAudioData(buffer.slice(0));
     } catch (decodeErr) {
-      console.error('音频解码失败:', decodeErr);
+      console.error('Audio decode failed:', decodeErr);
       showAlertDialog(t('main.audioToMidiDecodeFailed') + ': ' + decodeErr.message);
       return;
     } finally {
@@ -2824,7 +2829,7 @@ async function handleAudioToMidi() {
       }
     } catch (err) {
       hideLoadingOverlay(loading);
-      console.error('音频转MIDI失败:', err);
+      console.error('Audio to MIDI failed:', err);
       showAlertDialog(t('main.audioToMidiFailed') + ': ' + err.message);
       return;
     }
@@ -2869,7 +2874,7 @@ async function handleAudioToMidi() {
 
     showAlertDialog(t('main.audioToMidiComplete'));
   } catch (err) {
-    console.error('音频转MIDI流程错误:', err);
+    console.error('Audio to MIDI process error:', err);
     showAlertDialog(t('main.audioToMidiFailed') + ': ' + err.message);
   }
 }
@@ -2883,10 +2888,10 @@ window.addEventListener('beforeunload', () => {
   _ipcCleanups.length = 0;
 });
 
-console.log('SXSEditor 渲染进程已启动');
+console.log('SXSEditor renderer started');
 
 // ==================== WebNN 渲染进程监听器 ====================
-// 处理来自主进程的 WebNN 请求（NPU 检测、模型加载/卸载/推理）
+// 处理来自主进程的 WebNN 请求（NPU 检测、Model加载/卸载/推理）
 (async () => {
   let webnnPipeline = null;
 
@@ -2921,23 +2926,27 @@ console.log('SXSEditor 渲染进程已启动');
     api.webnnRespond(`webnn:detectNPU:response:${requestId}`, result);
   });
 
-  // 监听模型加载请求
+  // 监听Model加载请求
   api.onWebnnLoadModelRequest(async ({ requestId, modelId, modelPath, options }) => {
-    const pipeline = await getWebnnPipeline();
+    console.log(`[Renderer] WebNN load request: ${modelId} (${modelPath})`);
     let result;
-    if (pipeline) {
-      try {
+    try {
+      const pipeline = await getWebnnPipeline();
+      if (!pipeline) {
+        result = { success: false, error: 'webnnPipeline module not available' };
+      } else {
+        // Model file is read as ArrayBuffer via IPC inside loadModel
         result = await pipeline.loadModel(modelId, modelPath, options);
-      } catch (e) {
-        result = { success: false, error: e.message };
       }
-    } else {
-      result = { success: false, error: 'webnnPipeline module not available' };
+    } catch (e) {
+      console.error(`[Renderer] WebNN load error: ${e.message}`);
+      result = { success: false, error: e.message };
     }
+    console.log(`[Renderer] WebNN load result for ${modelId}:`, JSON.stringify(result));
     api.webnnRespond(`webnn:loadModel:response:${requestId}`, result);
   });
 
-  // 监听模型卸载请求
+  // 监听Model卸载请求
   api.onWebnnUnloadModelRequest(async ({ requestId, modelId }) => {
     const pipeline = await getWebnnPipeline();
     let result;
@@ -2980,5 +2989,26 @@ console.log('SXSEditor 渲染进程已启动');
       result = {};
     }
     api.webnnRespond(`webnn:getStatus:response:${requestId}`, result);
+  });
+
+  // 监听完整合成管线请求（在渲染进程本地运行，消除逐次 IPC 开销）
+  api.onWebnnRunSynthesisRequest(async ({ requestId, params }) => {
+    const pipeline = await getWebnnPipeline();
+    let result;
+    if (pipeline) {
+      try {
+        // Array params = batch synthesis (2 segments, batch=4)
+        if (Array.isArray(params)) {
+          result = await pipeline.runSynthesisBatch(params);
+        } else {
+          result = await pipeline.runSynthesis(params);
+        }
+      } catch (e) {
+        result = { error: e.message };
+      }
+    } else {
+      result = { error: 'webnnPipeline module not available' };
+    }
+    api.webnnRespond(`webnn:runSynthesis:response:${requestId}`, result);
   });
 })();

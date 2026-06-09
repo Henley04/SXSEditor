@@ -109,6 +109,31 @@
         </div>
 
         <div class="settings-section">
+            <h3 class="section-title" data-i18n="settings.npuInference">NPU 推理设置</h3>
+            <p class="section-desc" data-i18n="settings.npuInferenceDesc">NPU (WebNN) 推理的批处理设置。增大 batch size 可提高 NPU 利用率，但会增加显存占用。</p>
+
+            <div class="setting-group">
+                <label for="npuDiffBatchSize" data-i18n="settings.npuDiffBatchSize">扩散批次大小</label>
+                <select id="npuDiffBatchSize">
+                    <option value="1">1 (单片段)</option>
+                    <option value="2">2 (CFG 标准)</option>
+                    <option value="4" selected>4 (双片段拼批, 推荐)</option>
+                </select>
+                <p class="hint" data-i18n="settings.npuDiffBatchSizeHint">NPU 扩散模型的推理批次大小。batch=2 为标准 CFG（条件+无条件预测）；batch=4 同时处理 2 个片段的 CFG（2 片段 × 2 CFG = 4），可显著提升长音频合成速度。设为 1 则禁用 CFG 批处理。</p>
+            </div>
+
+            <div class="setting-group">
+                <label for="npuVocoderBatchSize" data-i18n="settings.npuVocoderBatchSize">声码器批次大小</label>
+                <select id="npuVocoderBatchSize">
+                    <option value="1">1 (逐块处理)</option>
+                    <option value="2">2 (双块并行)</option>
+                    <option value="4" selected>4 (四块并行, 推荐)</option>
+                </select>
+                <p class="hint" data-i18n="settings.npuVocoderBatchSizeHint">NPU 声码器的推理批次大小。声码器将梅尔频谱分块重建为波形，batch=4 同时处理 4 个音频块，可加速波形重建阶段。增大 batch 会略微增加显存占用。</p>
+            </div>
+        </div>
+
+        <div class="settings-section">
             <h3 class="section-title" data-i18n="settings.audioOutput">音频输出</h3>
 
             <div class="setting-group">
@@ -257,8 +282,6 @@
 
         <div class="setting-actions">
             <span id="settings-version" class="settings-version-text">v-</span>
-            <button id="saveBtn" data-i18n="settings.saveBtn">保存</button>
-            <button id="cancelBtn" data-i18n="settings.cancelBtn">取消</button>
         </div>
     </div>
 
