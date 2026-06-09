@@ -862,7 +862,7 @@ body {
 
 /* ==================== Responsive ==================== */
 
-@media (max-width: 640px) {
+@media (max-width: 900px) {
     .settings-layout {
         flex-direction: column;
     }
