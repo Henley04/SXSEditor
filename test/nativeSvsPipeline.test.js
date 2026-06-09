@@ -1,4 +1,4 @@
-const { NativeSVSPipeline, SAMPLE_RATE } = require('../src/inference/nativeSvsPipeline');
+const { NativeSVSPipeline, SAMPLE_RATE } = require('../src/inference/pipeline');
 const { expect } = require('chai');
 const path = require('path');
 const os = require('os');
