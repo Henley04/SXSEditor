@@ -153,8 +153,10 @@ function openSettingsWindow() {
   }
 
   settingsWindow = new BrowserWindow({
-    width: 600,
+    width: 960,
     height: 860,
+    minWidth: 960,
+    minHeight: 720,
     title: t('menu.settings'),
     icon: path.join(__dirname, '..', 'SXS.png'),
     resizable: true,
