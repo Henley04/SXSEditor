@@ -6,283 +6,312 @@
     <script src="./themes/themeBootstrap.js"></script>
   </head>
 <body>
-    <div class="settings-container">
-        <h2 data-i18n="settings.title">设置</h2>
+    <div class="settings-layout">
+        <!-- ==================== Sidebar ==================== -->
+        <nav class="settings-sidebar">
+            <div class="sidebar-nav">
+                <div class="sidebar-category" data-i18n="settings.catGeneral">通用</div>
+                <div class="sidebar-item active" data-target="section-language">
+                    <span data-i18n="settings.language">语言</span>
+                </div>
+                <div class="sidebar-item" data-target="section-theme">
+                    <span data-i18n="settings.theme.title">主题</span>
+                </div>
 
-        <div class="settings-section">
-            <h3 class="section-title" data-i18n="settings.inference">推理</h3>
-            <div class="setting-group hardware-info">
-                <label data-i18n="settings.currentHardware">当前运行硬件</label>
-                <div id="currentHardwareInfo" class="info-box">
-                    <span id="currentHardwareText" data-i18n="settings.notInitialized">未初始化</span>
+                <div class="sidebar-category" data-i18n="settings.catInference">推理</div>
+                <div class="sidebar-item" data-target="section-inference">
+                    <span data-i18n="settings.inferenceHardware">硬件设备</span>
+                </div>
+                <div class="sidebar-item" data-target="section-preview-params">
+                    <span data-i18n="settings.previewInferenceParams">预览推理参数</span>
+                </div>
+                <div class="sidebar-item" data-target="section-export-params">
+                    <span data-i18n="settings.exportInferenceParams">导出推理参数</span>
+                </div>
+                <div class="sidebar-item" data-target="section-npu">
+                    <span data-i18n="settings.npuInference">NPU 推理设置</span>
+                </div>
+
+                <div class="sidebar-category" data-i18n="settings.catAudio">音频</div>
+                <div class="sidebar-item" data-target="section-audio">
+                    <span data-i18n="settings.audioOutput">输出设置</span>
+                </div>
+                <div class="sidebar-item" data-target="section-midi">
+                    <span data-i18n="settings.midiExtractTool">MIDI 工具</span>
+                </div>
+
+                <div class="sidebar-category" data-i18n="settings.catModel">模型</div>
+                <div class="sidebar-item" data-target="section-model">
+                    <span data-i18n="settings.modelManagement">模型管理</span>
                 </div>
             </div>
-            <div class="setting-group">
-                <label data-i18n="settings.deviceMode">设备模式</label>
-                <div class="device-mode-radios">
-                    <label class="device-mode-radio">
-                        <input type="radio" name="deviceMode" value="smart" checked>
-                        <span class="radio-label" data-i18n="settings.smartMode">智能模式</span>
-                        <span class="radio-desc" data-i18n="settings.smartModeDesc">自动选择最佳设备并智能分配模型</span>
-                    </label>
-                    <label class="device-mode-radio">
-                        <input type="radio" name="deviceMode" value="manual">
-                        <span class="radio-label" data-i18n="settings.manualMode">手动指定</span>
-                        <span class="radio-desc" data-i18n="settings.manualModeDesc">手动指定所有模型运行的设备</span>
-                    </label>
-                    <label class="device-mode-radio">
-                        <input type="radio" name="deviceMode" value="advanced">
-                        <span class="radio-label" data-i18n="settings.advancedMode">高级设置</span>
-                        <span class="radio-desc" data-i18n="settings.advancedModeDesc">为每个模型组单独指定运行设备</span>
-                    </label>
+            <div class="sidebar-footer">
+                <span id="settings-version" class="sidebar-version">v-</span>
+            </div>
+        </nav>
+
+        <!-- ==================== Content ==================== -->
+        <main class="settings-content">
+
+            <!-- Language -->
+            <div class="settings-section" id="section-language">
+                <div class="setting-group">
+                    <label for="languageSelect" data-i18n="settings.language">语言</label>
+                    <select id="languageSelect">
+                        <option value="zh-CN">中文 (简体)</option>
+                        <option value="en">English</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.languageHint">界面显示语言，更改后需重启应用生效。</p>
                 </div>
             </div>
-            <div class="setting-group" id="deviceSelectGroup">
-                <label for="inferenceDevice" data-i18n="settings.inferenceHardware">推理硬件</label>
-                <select id="inferenceDevice" disabled>
-                    <option value="auto" data-i18n="settings.autoSelect">自动选择</option>
-                </select>
-                <p class="hint" data-i18n="settings.inferenceHardwareHint">选择用于 DirectML 推理的 GPU 设备。自动模式优先选择独显，若无独显则选择显存最大的 GPU。</p>
-            </div>
-            <div class="setting-group" id="webnnStatusGroup">
-                <div class="webnn-status-bar">
-                    <span class="webnn-status-label">WebNN:</span>
-                    <span class="webnn-status-value" id="webnnStatusValue" data-i18n="settings.webnnNotAvailable">WebNN 不可用</span>
-                    <span class="webnn-status-separator">|</span>
-                    <span class="webnn-status-label">NPU:</span>
-                    <span class="webnn-status-value" id="npuStatusValue" data-i18n="settings.npuNotAvailable">NPU 不可用</span>
+
+            <!-- Theme -->
+            <div class="settings-section hidden" id="section-theme">
+                <div class="setting-group">
+                    <label for="themeSelect" data-i18n="settings.theme.selectLabel">当前主题</label>
+                    <select id="themeSelect"></select>
+                    <p class="hint" data-i18n="settings.theme.selectLabel">切换主题会立即生效，无需重启应用。</p>
+                </div>
+                <div class="theme-actions">
+                    <button class="btn-theme-action" id="themeEditBtn" data-i18n="settings.theme.edit">编辑当前主题</button>
+                    <button class="btn-theme-action" id="themeImportBtn" data-i18n="settings.theme.import">导入主题</button>
+                    <button class="btn-theme-action" id="themeExportBtn" data-i18n="settings.theme.export">导出主题</button>
+                    <button class="btn-theme-action btn-theme-danger" id="themeDeleteBtn" data-i18n="settings.theme.delete">删除用户主题</button>
+                    <button class="btn-theme-action btn-theme-secondary" id="themeResetBtn" data-i18n="settings.theme.reset">重置为默认</button>
                 </div>
             </div>
-            <div class="setting-group hidden" id="advancedSettingsGroup">
-                <label data-i18n="settings.advancedHardwareSettings">高级推理硬件设置</label>
-                <p class="hint" data-i18n="settings.selectDeviceForModelGroup">为模型组选择运行设备</p>
-                <div id="modelDeviceMapping" class="model-device-mapping">
-                    <!-- Dynamically populated -->
+
+            <!-- Inference Hardware -->
+            <div class="settings-section hidden" id="section-inference">
+                <div class="setting-group hardware-info">
+                    <label data-i18n="settings.currentHardware">当前运行硬件</label>
+                    <div id="currentHardwareInfo" class="info-box">
+                        <span id="currentHardwareText" data-i18n="settings.notInitialized">未初始化</span>
+                    </div>
+                </div>
+                <div class="setting-group">
+                    <label data-i18n="settings.deviceMode">设备模式</label>
+                    <div class="device-mode-radios">
+                        <label class="device-mode-radio">
+                            <input type="radio" name="deviceMode" value="smart" checked>
+                            <span class="radio-label" data-i18n="settings.smartMode">智能模式</span>
+                            <span class="radio-desc" data-i18n="settings.smartModeDesc">自动选择最佳设备并智能分配模型</span>
+                        </label>
+                        <label class="device-mode-radio">
+                            <input type="radio" name="deviceMode" value="manual">
+                            <span class="radio-label" data-i18n="settings.manualMode">手动指定</span>
+                            <span class="radio-desc" data-i18n="settings.manualModeDesc">手动指定所有模型运行的设备</span>
+                        </label>
+                        <label class="device-mode-radio">
+                            <input type="radio" name="deviceMode" value="advanced">
+                            <span class="radio-label" data-i18n="settings.advancedMode">高级设置</span>
+                            <span class="radio-desc" data-i18n="settings.advancedModeDesc">为每个模型组单独指定运行设备</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="setting-group" id="deviceSelectGroup">
+                    <label for="inferenceDevice" data-i18n="settings.inferenceHardware">推理硬件</label>
+                    <select id="inferenceDevice" disabled>
+                        <option value="auto" data-i18n="settings.autoSelect">自动选择</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.inferenceHardwareHint">选择用于 DirectML 推理的 GPU 设备。自动模式优先选择独显，若无独显则选择显存最大的 GPU。</p>
+                </div>
+                <div class="setting-group" id="webnnStatusGroup">
+                    <div class="webnn-status-bar">
+                        <span class="webnn-status-label">WebNN:</span>
+                        <span class="webnn-status-value" id="webnnStatusValue" data-i18n="settings.webnnNotAvailable">WebNN 不可用</span>
+                        <span class="webnn-status-separator">|</span>
+                        <span class="webnn-status-label">NPU:</span>
+                        <span class="webnn-status-value" id="npuStatusValue" data-i18n="settings.npuNotAvailable">NPU 不可用</span>
+                    </div>
+                </div>
+                <div class="setting-group hidden" id="advancedSettingsGroup">
+                    <label data-i18n="settings.advancedHardwareSettings">高级推理硬件设置</label>
+                    <p class="hint" data-i18n="settings.selectDeviceForModelGroup">为模型组选择运行设备</p>
+                    <div id="modelDeviceMapping" class="model-device-mapping"></div>
                 </div>
             </div>
-        </div>
 
-        <div class="settings-section">
-            <h3 class="section-title" data-i18n="settings.previewInferenceParams">预览推理参数</h3>
-            <p class="section-desc" data-i18n="settings.previewInferenceParamsDesc">编辑器中播放预览时使用的推理参数，可适当降低质量以换取更快的响应速度。</p>
-
-            <div class="setting-group">
-                <label for="previewDiffSteps" data-i18n="settings.diffSteps">扩散步数 <span id="previewDiffStepsValue" class="volume-display">16</span></label>
-                <input type="range" id="previewDiffSteps" min="4" max="64" value="16" step="4">
-                <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
-            </div>
-
-            <div class="setting-group">
-                <label for="previewCfgStrength" data-i18n="settings.cfgStrength">CFG 引导强度 <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
-                <input type="range" id="previewCfgStrength" min="0" max="10" value="3.0" step="0.5">
-                <p class="hint" data-i18n="settings.cfgStrengthHint">无分类器引导 (Classifier-Free Guidance) 强度。值越大，生成结果越贴合条件（音高/歌词），但可能过度强化导致伪影。设为 0 可跳过无条件预测，推理速度约提升一倍。推荐范围 1.0~5.0。</p>
-            </div>
-
-            <div class="setting-group">
-                <label for="previewCfgRescale" data-i18n="settings.cfgRescale">CFG Rescale 系数 <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
-                <input type="range" id="previewCfgRescale" min="0" max="1" value="0.75" step="0.05">
-                <p class="hint" data-i18n="settings.cfgRescaleHint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。0 = 完全使用 CFG 增强结果，1 = 完全使用原始预测。推荐 0.5~0.9。</p>
-            </div>
-        </div>
-
-        <div class="settings-section">
-            <h3 class="section-title" data-i18n="settings.exportInferenceParams">导出推理参数</h3>
-            <p class="section-desc" data-i18n="settings.exportInferenceParamsDesc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。</p>
-
-            <div class="setting-group">
-                <label for="exportDiffSteps" data-i18n="settings.diffSteps">扩散步数 <span id="exportDiffStepsValue" class="volume-display">32</span></label>
-                <input type="range" id="exportDiffSteps" min="4" max="64" value="32" step="4">
-                <p class="hint" data-i18n="settings.exportDiffStepsHint">导出时的扩散步数。更多步数 = 更高质量。推荐导出使用 32 步，如追求极致质量可尝试 48~64 步。</p>
-            </div>
-
-            <div class="setting-group">
-                <label for="exportCfgStrength" data-i18n="settings.cfgStrength">CFG 引导强度 <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
-                <input type="range" id="exportCfgStrength" min="0" max="10" value="3.0" step="0.5">
-                <p class="hint" data-i18n="settings.exportCfgStrengthHint">导出时的 CFG 强度。与预览参数说明相同，导出时建议保持较高值以确保音质。</p>
-            </div>
-
-            <div class="setting-group">
-                <label for="exportCfgRescale" data-i18n="settings.cfgRescale">CFG Rescale 系数 <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
-                <input type="range" id="exportCfgRescale" min="0" max="1" value="0.75" step="0.05">
-                <p class="hint" data-i18n="settings.exportCfgRescaleHint">导出时的 CFG Rescale 系数。与预览参数说明相同。</p>
-            </div>
-        </div>
-
-        <div class="settings-section">
-            <h3 class="section-title" data-i18n="settings.npuInference">NPU 推理设置</h3>
-            <p class="section-desc" data-i18n="settings.npuInferenceDesc">NPU (WebNN) 推理的批处理设置。增大 batch size 可提高 NPU 利用率，但会增加显存占用。</p>
-
-            <div class="setting-group">
-                <label for="npuDiffBatchSize" data-i18n="settings.npuDiffBatchSize">扩散批次大小</label>
-                <select id="npuDiffBatchSize">
-                    <option value="1">1 (单片段)</option>
-                    <option value="2">2 (CFG 标准)</option>
-                    <option value="4" selected>4 (双片段拼批, 推荐)</option>
-                </select>
-                <p class="hint" data-i18n="settings.npuDiffBatchSizeHint">NPU 扩散模型的推理批次大小。batch=2 为标准 CFG（条件+无条件预测）；batch=4 同时处理 2 个片段的 CFG（2 片段 × 2 CFG = 4），可显著提升长音频合成速度。设为 1 则禁用 CFG 批处理。</p>
-            </div>
-
-            <div class="setting-group">
-                <label for="npuVocoderBatchSize" data-i18n="settings.npuVocoderBatchSize">声码器批次大小</label>
-                <select id="npuVocoderBatchSize">
-                    <option value="1">1 (逐块处理)</option>
-                    <option value="2">2 (双块并行)</option>
-                    <option value="4" selected>4 (四块并行, 推荐)</option>
-                </select>
-                <p class="hint" data-i18n="settings.npuVocoderBatchSizeHint">NPU 声码器的推理批次大小。声码器将梅尔频谱分块重建为波形，batch=4 同时处理 4 个音频块，可加速波形重建阶段。增大 batch 会略微增加显存占用。</p>
-            </div>
-        </div>
-
-        <div class="settings-section">
-            <h3 class="section-title" data-i18n="settings.audioOutput">音频输出</h3>
-
-            <div class="setting-group">
-                <label for="audioOutputMode" data-i18n="settings.outputMode">输出模式</label>
-                <select id="audioOutputMode">
-                    <option value="shared" data-i18n="settings.sharedMode">共享模式 (WASAPI Shared)</option>
-                    <option value="exclusive" data-i18n="settings.exclusiveMode">独占模式 (WASAPI Exclusive)</option>
-                </select>
-                <p class="hint" data-i18n="settings.exclusiveModeHint">独占模式绕过 Windows 音频混音器，可获得更低延迟和更高音质，但其他应用将无法同时使用音频设备。</p>
-            </div>
-
-            <div class="setting-group">
-                <label for="audioOutputDevice" data-i18n="settings.outputDevice">输出设备</label>
-                <select id="audioOutputDevice">
-                    <option value="default" data-i18n="settings.systemDefault">系统默认</option>
-                </select>
-                <p class="hint" data-i18n="settings.outputDeviceHint">选择音频输出设备。独占模式下仅支持 WASAPI 设备。</p>
-            </div>
-
-            <div class="setting-group">
-                <label for="audioSampleRate" data-i18n="settings.sampleRate">采样率</label>
-                <select id="audioSampleRate">
-                    <option value="22050">22050 Hz</option>
-                    <option value="24000">24000 Hz (模型原生)</option>
-                    <option value="44100">44100 Hz (CD 品质)</option>
-                    <option value="48000">48000 Hz (标准)</option>
-                    <option value="96000">96000 Hz (高品质)</option>
-                    <option value="192000">192000 Hz (录音棚)</option>
-                </select>
-                <p class="hint" data-i18n="settings.sampleRateHint">输出采样率。独占模式下需设备支持所选采样率，否则将回退到共享模式。</p>
-            </div>
-
-            <div class="setting-group">
-                <label for="audioBitDepth" data-i18n="settings.bitDepth">位深度</label>
-                <select id="audioBitDepth">
-                    <option value="float32">32-bit Float (推荐)</option>
-                    <option value="int32">32-bit Integer</option>
-                    <option value="int24">24-bit Integer</option>
-                    <option value="int16">16-bit Integer (CD 品质)</option>
-                </select>
-                <p class="hint" data-i18n="settings.bitDepthHint">独占模式下的输出位深度。32-bit Float 提供最高精度动态范围。</p>
-            </div>
-
-            <div class="setting-group">
-                <label for="audioBufferSize" data-i18n="settings.bufferSize">缓冲区大小</label>
-                <select id="audioBufferSize">
-                    <option value="64">64 采样 (超低延迟 ~1.3ms@48kHz)</option>
-                    <option value="128">128 采样 (低延迟 ~2.7ms@48kHz)</option>
-                    <option value="256">256 采样 (中等 ~5.3ms@48kHz)</option>
-                    <option value="512">512 采样 (标准 ~10.7ms@48kHz)</option>
-                    <option value="1024" selected>1024 采样 (稳定 ~21.3ms@48kHz)</option>
-                    <option value="2048">2048 采样 (高稳定 ~42.7ms@48kHz)</option>
-                    <option value="4096">4096 采样 (最高稳定 ~85.3ms@48kHz)</option>
-                </select>
-                <p class="hint" data-i18n="settings.bufferSizeHint">较小的缓冲区降低延迟但增加 CPU 负载和爆音风险。独占模式下建议 256 以下。</p>
-            </div>
-
-            <div class="setting-group">
-                <label for="audioVolume" data-i18n="settings.masterVolume">主音量 <span id="volumeValue" class="volume-display">100%</span></label>
-                <input type="range" id="audioVolume" min="0" max="100" value="100" step="1">
-                <p class="hint" data-i18n="settings.volumeHint">主输出音量控制。独占模式下由软件控制音量，共享模式下由系统混音器控制。</p>
-            </div>
-
-            <div class="setting-group hidden" id="exclusiveInfo">
-                <div class="info-box">
-                    <strong data-i18n="settings.wasapiExclusiveInfo">WASAPI 独占模式说明</strong>
-                    <ul>
-                        <li data-i18n="settings.wasapiInfo1">独占模式直接访问音频硬件，绕过 Windows 音频混音器</li>
-                        <li data-i18n="settings.wasapiInfo2">可实现位完美 (bit-perfect) 音频输出</li>
-                        <li data-i18n="settings.wasapiInfo3">延迟可低至 1-3ms（取决于缓冲区大小）</li>
-                        <li data-i18n="settings.wasapiInfo4">独占模式运行时，其他应用无法播放音频</li>
-                        <li data-i18n="settings.wasapiInfo5">如果设备不支持所选采样率/位深度，将自动回退到共享模式</li>
-                    </ul>
+            <!-- Preview Inference Params -->
+            <div class="settings-section hidden" id="section-preview-params">
+                <p class="section-desc" data-i18n="settings.previewInferenceParamsDesc">编辑器中播放预览时使用的推理参数，可适当降低质量以换取更快的响应速度。</p>
+                <div class="setting-group">
+                    <label for="previewDiffSteps" data-i18n="settings.diffSteps">扩散步数 <span id="previewDiffStepsValue" class="volume-display">16</span></label>
+                    <input type="range" id="previewDiffSteps" min="4" max="64" value="16" step="4">
+                    <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="previewCfgStrength" data-i18n="settings.cfgStrength">CFG 引导强度 <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
+                    <input type="range" id="previewCfgStrength" min="0" max="10" value="3.0" step="0.5">
+                    <p class="hint" data-i18n="settings.cfgStrengthHint">无分类器引导强度。值越大贴合条件，但可能过度强化。设为 0 可跳过无条件预测。推荐 1.0~5.0。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="previewCfgRescale" data-i18n="settings.cfgRescale">CFG Rescale 系数 <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
+                    <input type="range" id="previewCfgRescale" min="0" max="1" value="0.75" step="0.05">
+                    <p class="hint" data-i18n="settings.cfgRescaleHint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。推荐 0.5~0.9。</p>
                 </div>
             </div>
-        </div>
 
-        <div class="settings-section">
-            <h3 class="section-title" data-i18n="settings.language">语言</h3>
-            <div class="setting-group">
-                <label for="languageSelect" data-i18n="settings.language">语言</label>
-                <select id="languageSelect">
-                    <option value="zh-CN">中文 (简体)</option>
-                    <option value="en">English</option>
-                </select>
-                <p class="hint" data-i18n="settings.languageHint">界面显示语言，更改后需重启应用生效。</p>
-            </div>
-        </div>
-
-        <div class="settings-section">
-            <h3 class="section-title" data-i18n="settings.midiExtractTool">MIDI 提取工具</h3>
-            <div class="setting-group">
-                <label for="midiExtractTool" data-i18n="settings.midiExtractTool">MIDI 提取工具</label>
-                <select id="midiExtractTool">
-                    <option value="basicpitch" data-i18n="settings.midiExtractToolBasicpitch">Basic Pitch</option>
-                    <option value="rmvpe" data-i18n="settings.midiExtractToolRmvpe">RMVPE (F0转音符, 实验性)</option>
-                </select>
-                <p class="hint" data-i18n="settings.midiExtractToolHint">选择音频转MIDI时使用的提取工具。RMVPE 基于音高检测将F0转为音符，适合人声音频；Basic Pitch 基于神经网络，适合多乐器音频。</p>
-            </div>
-        </div>
-
-        <div class="settings-section">
-            <h3 class="section-title" data-i18n="settings.theme.title">主题</h3>
-            <p class="section-desc" data-i18n="settings.theme.selectLabel">当前主题</p>
-
-            <div class="setting-group">
-                <label for="themeSelect" data-i18n="settings.theme.selectLabel">当前主题</label>
-                <select id="themeSelect"></select>
-                <p class="hint" data-i18n="settings.theme.selectLabel">切换主题会立即生效，无需重启应用。</p>
-            </div>
-
-            <div class="theme-actions">
-                <button class="btn-theme-action" id="themeEditBtn" data-i18n="settings.theme.edit">✎ 编辑当前主题</button>
-                <button class="btn-theme-action" id="themeImportBtn" data-i18n="settings.theme.import">📥 导入主题</button>
-                <button class="btn-theme-action" id="themeExportBtn" data-i18n="settings.theme.export">📤 导出主题</button>
-                <button class="btn-theme-action btn-theme-danger" id="themeDeleteBtn" data-i18n="settings.theme.delete">🗑 删除用户主题</button>
-                <button class="btn-theme-action btn-theme-secondary" id="themeResetBtn" data-i18n="settings.theme.reset">↺ 重置为默认</button>
-            </div>
-        </div>
-
-        <div class="settings-section">
-            <h3 class="section-title" data-i18n="settings.modelManagement">模型管理</h3>
-            <div class="setting-group">
-                <label for="modelPrecision" data-i18n="settings.modelPrecision">模型精度</label>
-                <select id="modelPrecision">
-                    <option value="fp16" data-i18n="settings.precisionFp16">FP16 (半精度)</option>
-                    <option value="fp32" data-i18n="settings.precisionFp32">FP32 (全精度)</option>
-                    <option value="int8" data-i18n="settings.precisionInt8">INT8 (量化)</option>
-                </select>
-                <p class="hint" data-i18n="settings.modelPrecisionHint"></p>
-                <div class="precision-info-box" id="precisionInfoBox">
-                    <strong data-i18n="settings.precisionInfoTitle">精度说明</strong>
-                    <ul>
-                        <li data-i18n="settings.precisionInfoFp32"></li>
-                        <li data-i18n="settings.precisionInfoFp16"></li>
-                        <li data-i18n="settings.precisionInfoInt8"></li>
-                        <li data-i18n="settings.precisionInfoRecommend"></li>
-                    </ul>
+            <!-- Export Inference Params -->
+            <div class="settings-section hidden" id="section-export-params">
+                <p class="section-desc" data-i18n="settings.exportInferenceParamsDesc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。</p>
+                <div class="setting-group">
+                    <label for="exportDiffSteps" data-i18n="settings.diffSteps">扩散步数 <span id="exportDiffStepsValue" class="volume-display">32</span></label>
+                    <input type="range" id="exportDiffSteps" min="4" max="64" value="32" step="4">
+                    <p class="hint" data-i18n="settings.exportDiffStepsHint">导出时的扩散步数。更多步数 = 更高质量。推荐导出使用 32 步。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="exportCfgStrength" data-i18n="settings.cfgStrength">CFG 引导强度 <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
+                    <input type="range" id="exportCfgStrength" min="0" max="10" value="3.0" step="0.5">
+                    <p class="hint" data-i18n="settings.exportCfgStrengthHint">导出时的 CFG 强度。导出时建议保持较高值以确保音质。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="exportCfgRescale" data-i18n="settings.cfgRescale">CFG Rescale 系数 <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
+                    <input type="range" id="exportCfgRescale" min="0" max="1" value="0.75" step="0.05">
+                    <p class="hint" data-i18n="settings.exportCfgRescaleHint">导出时的 CFG Rescale 系数。</p>
                 </div>
             </div>
-            <div class="setting-group">
-                <button class="btn-open-model-download" id="openModelDownloadBtn" data-i18n="settings.openModelDownload">打开模型下载</button>
-                <p class="hint" data-i18n="settings.openModelDownloadHint">打开模型下载页面，下载或更新推理所需的模型文件。</p>
-            </div>
-        </div>
 
-        <div class="setting-actions">
-            <span id="settings-version" class="settings-version-text">v-</span>
-        </div>
+            <!-- NPU Settings -->
+            <div class="settings-section hidden" id="section-npu">
+                <p class="section-desc" data-i18n="settings.npuInferenceDesc">NPU (WebNN) 推理的批处理设置。增大 batch size 可提高 NPU 利用率，但会增加显存占用。</p>
+                <div class="setting-group">
+                    <label for="npuDiffBatchSize" data-i18n="settings.npuDiffBatchSize">扩散批次大小</label>
+                    <select id="npuDiffBatchSize">
+                        <option value="1">1 (单片段)</option>
+                        <option value="2">2 (CFG 标准)</option>
+                        <option value="4" selected>4 (双片段拼批, 推荐)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.npuDiffBatchSizeHint">NPU 扩散模型的推理批次大小。batch=4 同时处理 2 个片段的 CFG，可显著提升长音频合成速度。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="npuVocoderBatchSize" data-i18n="settings.npuVocoderBatchSize">声码器批次大小</label>
+                    <select id="npuVocoderBatchSize">
+                        <option value="1">1 (逐块处理)</option>
+                        <option value="2">2 (双块并行)</option>
+                        <option value="4" selected>4 (四块并行, 推荐)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.npuVocoderBatchSizeHint">NPU 声码器的推理批次大小。batch=4 同时处理 4 个音频块，可加速波形重建阶段。</p>
+                </div>
+                <div class="setting-group hidden" id="batchSizeDisabledHint">
+                    <div class="info-box">
+                        <span data-i18n="settings.batchSizeDisabledHint"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audio Output -->
+            <div class="settings-section hidden" id="section-audio">
+                <div class="setting-group">
+                    <label for="audioOutputMode" data-i18n="settings.outputMode">输出模式</label>
+                    <select id="audioOutputMode">
+                        <option value="shared" data-i18n="settings.sharedMode">共享模式 (WASAPI Shared)</option>
+                        <option value="exclusive" data-i18n="settings.exclusiveMode">独占模式 (WASAPI Exclusive)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.exclusiveModeHint">独占模式绕过 Windows 音频混音器，可获得更低延迟和更高音质。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="audioOutputDevice" data-i18n="settings.outputDevice">输出设备</label>
+                    <select id="audioOutputDevice">
+                        <option value="default" data-i18n="settings.systemDefault">系统默认</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.outputDeviceHint">选择音频输出设备。独占模式下仅支持 WASAPI 设备。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="audioSampleRate" data-i18n="settings.sampleRate">采样率</label>
+                    <select id="audioSampleRate">
+                        <option value="22050">22050 Hz</option>
+                        <option value="24000">24000 Hz (模型原生)</option>
+                        <option value="44100">44100 Hz (CD 品质)</option>
+                        <option value="48000">48000 Hz (标准)</option>
+                        <option value="96000">96000 Hz (高品质)</option>
+                        <option value="192000">192000 Hz (录音棚)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.sampleRateHint">输出采样率。独占模式下需设备支持所选采样率。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="audioBitDepth" data-i18n="settings.bitDepth">位深度</label>
+                    <select id="audioBitDepth">
+                        <option value="float32">32-bit Float (推荐)</option>
+                        <option value="int32">32-bit Integer</option>
+                        <option value="int24">24-bit Integer</option>
+                        <option value="int16">16-bit Integer (CD 品质)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.bitDepthHint">独占模式下的输出位深度。32-bit Float 提供最高精度动态范围。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="audioBufferSize" data-i18n="settings.bufferSize">缓冲区大小</label>
+                    <select id="audioBufferSize">
+                        <option value="64">64 采样 (~1.3ms)</option>
+                        <option value="128">128 采样 (~2.7ms)</option>
+                        <option value="256">256 采样 (~5.3ms)</option>
+                        <option value="512">512 采样 (~10.7ms)</option>
+                        <option value="1024" selected>1024 采样 (~21.3ms)</option>
+                        <option value="2048">2048 采样 (~42.7ms)</option>
+                        <option value="4096">4096 采样 (~85.3ms)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.bufferSizeHint">较小的缓冲区降低延迟但增加 CPU 负载和爆音风险。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="audioVolume" data-i18n="settings.masterVolume">主音量 <span id="volumeValue" class="volume-display">100%</span></label>
+                    <input type="range" id="audioVolume" min="0" max="100" value="100" step="1">
+                    <p class="hint" data-i18n="settings.volumeHint">主输出音量控制。</p>
+                </div>
+                <div class="setting-group hidden" id="exclusiveInfo">
+                    <div class="info-box">
+                        <strong data-i18n="settings.wasapiExclusiveInfo">WASAPI 独占模式说明</strong>
+                        <ul>
+                            <li data-i18n="settings.wasapiInfo1">独占模式直接访问音频硬件，绕过 Windows 音频混音器</li>
+                            <li data-i18n="settings.wasapiInfo2">可实现位完美 (bit-perfect) 音频输出</li>
+                            <li data-i18n="settings.wasapiInfo3">延迟可低至 1-3ms</li>
+                            <li data-i18n="settings.wasapiInfo4">独占模式运行时，其他应用无法播放音频</li>
+                            <li data-i18n="settings.wasapiInfo5">如设备不支持所选采样率/位深度，将自动回退到共享模式</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <!-- MIDI Extract Tool -->
+            <div class="settings-section hidden" id="section-midi">
+                <div class="setting-group">
+                    <label for="midiExtractTool" data-i18n="settings.midiExtractTool">MIDI 提取工具</label>
+                    <select id="midiExtractTool">
+                        <option value="basicpitch" data-i18n="settings.midiExtractToolBasicpitch">Basic Pitch</option>
+                        <option value="rmvpe" data-i18n="settings.midiExtractToolRmvpe">RMVPE (F0转音符, 实验性)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.midiExtractToolHint">选择音频转MIDI时使用的提取工具。</p>
+                </div>
+            </div>
+
+            <!-- Model Management -->
+            <div class="settings-section hidden" id="section-model">
+                <div class="setting-group">
+                    <label for="modelPrecision" data-i18n="settings.modelPrecision">模型精度</label>
+                    <select id="modelPrecision">
+                        <option value="fp16" data-i18n="settings.precisionFp16">FP16 (半精度)</option>
+                        <option value="fp32" data-i18n="settings.precisionFp32">FP32 (全精度)</option>
+                        <option value="int8" data-i18n="settings.precisionInt8">INT8 (量化)</option>
+                        <option value="int8-npu" data-i18n="settings.precisionInt8Npu">INT8-NPU (NPU 优化动态维度)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.modelPrecisionHint"></p>
+                    <div class="precision-info-box" id="precisionInfoBox">
+                        <strong data-i18n="settings.precisionInfoTitle">精度说明</strong>
+                        <ul>
+                            <li data-i18n="settings.precisionInfoFp32"></li>
+                            <li data-i18n="settings.precisionInfoFp16"></li>
+                            <li data-i18n="settings.precisionInfoInt8"></li>
+                            <li data-i18n="settings.precisionInfoInt8Npu"></li>
+                            <li data-i18n="settings.precisionInfoRecommend"></li>
+                        </ul>
+                    </div>
+                </div>
+                <div class="setting-group">
+                    <button class="btn-open-model-download" id="openModelDownloadBtn" data-i18n="settings.openModelDownload">打开模型下载</button>
+                    <p class="hint" data-i18n="settings.openModelDownloadHint">打开模型下载页面，下载或更新推理所需的模型文件。</p>
+                </div>
+            </div>
+
+        </main>
     </div>
 
     <!-- ==================== Theme Editor Modal ==================== -->
@@ -292,16 +321,14 @@
             <div class="theme-editor-header">
                 <h3 id="themeEditorTitle" data-i18n="settings.theme.editor.title">主题编辑器</h3>
                 <div class="theme-editor-toolbar">
-                    <button class="btn-theme-editor" id="themeEditorUndoBtn" data-i18n="settings.theme.editor.undo">↶ 撤销</button>
-                    <button class="btn-theme-editor" id="themeEditorRedoBtn" data-i18n="settings.theme.editor.redo">↷ 重做</button>
-                    <button class="btn-theme-editor" id="themeEditorResetAllBtn" data-i18n="settings.theme.editor.resetAll">↺ 重置全部</button>
-                    <button class="btn-theme-editor btn-theme-editor-primary" id="themeEditorSaveAsBtn" data-i18n="settings.theme.saveAs">💾 另存为新主题</button>
+                    <button class="btn-theme-editor" id="themeEditorUndoBtn" data-i18n="settings.theme.editor.undo">撤销</button>
+                    <button class="btn-theme-editor" id="themeEditorRedoBtn" data-i18n="settings.theme.editor.redo">重做</button>
+                    <button class="btn-theme-editor" id="themeEditorResetAllBtn" data-i18n="settings.theme.editor.resetAll">重置全部</button>
+                    <button class="btn-theme-editor btn-theme-editor-primary" id="themeEditorSaveAsBtn" data-i18n="settings.theme.saveAs">另存为新主题</button>
                     <button class="btn-theme-editor btn-theme-editor-close" id="themeEditorCloseBtn" data-i18n="settings.theme.editor.close">关闭</button>
                 </div>
             </div>
-            <div class="theme-editor-body" id="themeEditorBody">
-                <!-- Filled dynamically: layered groups of token editors -->
-            </div>
+            <div class="theme-editor-body" id="themeEditorBody"></div>
         </div>
     </div>
 

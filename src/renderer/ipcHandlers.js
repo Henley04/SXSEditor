@@ -127,7 +127,7 @@ if (window.electronAPI?.onCloseConfirm) {
   async function getWebnnPipeline() {
     if (webnnPipeline) return webnnPipeline;
     try {
-      const mod = await import(/* webpackIgnore: true */ '../../inference/webnnPipeline.js');
+      const mod = await import('../inference/webnn/index.js');
       webnnPipeline = mod;
       return webnnPipeline;
     } catch (e) {
