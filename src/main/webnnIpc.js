@@ -1,8 +1,10 @@
-const { ipcMain, BrowserWindow } = require('electron');
+const { ipcMain } = require('electron');
+const { getMainWindow } = require('./windowManager');
+const fs = require('node:fs');
 
 function getMainWindowWebContents() {
-  const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
-  return win ? win.webContents : null;
+  const win = getMainWindow();
+  return win && !win.isDestroyed() ? win.webContents : null;
 }
 
 let _npuDetectionCache = null;
@@ -19,9 +21,10 @@ function registerWebnnIpc() {
     return new Promise((resolve) => {
       const requestId = `webnn-detect-${Date.now()}`;
       const timeout = setTimeout(() => {
-        _npuDetectionCache = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: 'Detection timeout' };
-        resolve(_npuDetectionCache);
-      }, 15000);
+        const result = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: 'Detection timeout' };
+        _npuDetectionCache = result;
+        resolve(result);
+      }, 10000);
 
       ipcMain.handleOnce(`webnn:detectNPU:response:${requestId}`, async (_, result) => {
         clearTimeout(timeout);
@@ -110,6 +113,36 @@ function registerWebnnIpc() {
       wc.send('webnn:getStatus:request', { requestId });
     });
   });
+
+  // 完整合成管线 — 在渲染进程本地运行所有推理，消除逐次 IPC 开销
+  ipcMain.handle('webnn:runSynthesis', async (_, params) => {
+    const wc = getMainWindowWebContents();
+    if (!wc) return { error: 'No renderer window' };
+
+    return new Promise((resolve) => {
+      const requestId = `webnn-synth-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const timeout = setTimeout(() => resolve({ error: 'Synthesis timeout' }), 600000);
+
+      ipcMain.handleOnce(`webnn:runSynthesis:response:${requestId}`, async (_, result) => {
+        clearTimeout(timeout);
+        resolve(result);
+      });
+
+      wc.send('webnn:runSynthesis:request', { requestId, params });
+    });
+  });
+
+  // 读取模型文件并返回 ArrayBuffer（沙盒渲染进程无法直接读取文件）
+  ipcMain.handle('webnn:readModelFile', async (_, filePath) => {
+    try {
+      const data = await fs.promises.readFile(filePath);
+      // Slice to get a clean ArrayBuffer (Buffer.buffer may be a larger pooled ArrayBuffer)
+      const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      return { success: true, data: ab };
+    } catch (e) {
+      return { success: false, error: e.message };
+    }
+  });
 }
 
 /**
@@ -118,6 +151,10 @@ function registerWebnnIpc() {
  * Returns { npuAvailable: boolean, details: string }
  */
 async function detectNPUAvailability() {
+  if (_npuDetectionCache) {
+    return { npuAvailable: !!_npuDetectionCache.npuAvailable, details: _npuDetectionCache.details || '' };
+  }
+
   try {
     const result = await new Promise((resolve) => {
       const wc = getMainWindowWebContents();
@@ -129,7 +166,7 @@ async function detectNPUAvailability() {
       const requestId = `webnn-detect-npu-avail-${Date.now()}`;
       const timeout = setTimeout(() => {
         resolve({ npuAvailable: false, details: 'Detection timeout' });
-      }, 15000);
+      }, 10000);
 
       ipcMain.handleOnce(`webnn:detectNPU:response:${requestId}`, async (_, result) => {
         clearTimeout(timeout);
@@ -139,16 +176,31 @@ async function detectNPUAvailability() {
       wc.send('webnn:detectNPU:request', { requestId });
     });
 
-    if (result.npuAvailable) {
-      _npuDetectionCache = result;
-    }
+    // Cache all results (including failures) to avoid repeated slow detection
+    _npuDetectionCache = result;
     return { npuAvailable: !!result.npuAvailable, details: result.details || '' };
   } catch (err) {
-    return { npuAvailable: false, details: err.message };
+    const failResult = { npuAvailable: false, details: err.message };
+    _npuDetectionCache = failResult;
+    return failResult;
   }
+}
+
+/**
+ * Mark NPU as unavailable (e.g. after a failed probe).
+ * Updates the cache so subsequent calls skip detection.
+ */
+function markNPUUnavailable(reason) {
+  _npuDetectionCache = {
+    webnnAvailable: false,
+    npuAvailable: false,
+    gpuAvailable: false,
+    details: reason || 'NPU probe failed',
+  };
 }
 
 module.exports = {
   registerWebnnIpc,
   detectNPUAvailability,
+  markNPUUnavailable,
 };
