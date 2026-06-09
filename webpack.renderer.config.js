@@ -32,17 +32,24 @@ rules.push({
   },
 });
 
-// onnxruntime-web WASM 文件复制模式
+// onnxruntime-web 文件复制模式
+// 使用 globOptions 以正确处理 glob 模式
+const ortDistDir = path.resolve(__dirname, 'node_modules/onnxruntime-web/dist');
 const onnxruntimeWasmPatterns = WINDOW_NAMES.flatMap((name) => [
   {
-    from: path.resolve(__dirname, 'node_modules/onnxruntime-web/dist/*.wasm'),
+    from: '*.wasm',
     to: path.resolve(__dirname, `.webpack/renderer/${name}/[name][ext]`),
-    noErrorOnMissing: true,
+    context: ortDistDir,
   },
   {
-    from: path.resolve(__dirname, 'node_modules/onnxruntime-web/dist/ort-wasm*.js'),
+    from: 'ort-wasm*.{js,mjs}',
     to: path.resolve(__dirname, `.webpack/renderer/${name}/[name][ext]`),
-    noErrorOnMissing: true,
+    context: ortDistDir,
+  },
+  // 复制包含 WebNN 的 onnxruntime-web UMD 包（通过 script 标签加载，绕过 webpack）
+  {
+    from: path.resolve(__dirname, 'node_modules/onnxruntime-web/dist/ort.all.min.js'),
+    to: path.resolve(__dirname, `.webpack/renderer/${name}/ort.all.min.js`),
   },
 ]);
 

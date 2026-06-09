@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>星律 Studio - 虚拟歌姬宿主</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --bg-primary: #0f0f1a;
+            --bg-secondary: #1a1a2e;
+            --bg-tertiary: #16213e;
+            --bg-panel: rgba(26, 26, 46, 0.85);
+            --accent-cyan: #00f5ff;
+            --accent-pink: #ff6b9d;
+            --accent-purple: #c084fc;
+            --accent-blue: #60a5fa;
+            --text-primary: #e2e8f0;
+            --text-secondary: #94a3b8;
+            --border-color: rgba(255, 255, 255, 0.08);
+            --grid-line: rgba(255, 255, 255, 0.03);
+            --danger: #ef4444;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            overflow: hidden;
+            height: 100vh;
+            font-size: 13px;
+        }
+
+        /* 顶部工具栏 */
+        .top-bar {
+            height: 48px;
+            background: linear-gradient(180deg, var(--bg-secondary) 0%, var(--bg-primary) 100%);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 16px;
+            gap: 12px;
+            position: relative;
+            z-index: 100;
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-weight: 700;
+            font-size: 15px;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-pink));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-right: 16px;
+            cursor: pointer;
+        }
+
+        .logo-icon {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-pink));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            -webkit-text-fill-color: white;
+            box-shadow: 0 0 12px rgba(0, 245, 255, 0.3);
+        }
+
+        .tool-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 0 8px;
+            border-right: 1px solid var(--border-color);
+            height: 32px;
+        }
+
+        .tool-btn {
+            width: 32px;
+            height: 32px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            border-radius: 6px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+            font-size: 15px;
+            position: relative;
+        }
+
+        .tool-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+            transform: translateY(-1px);
+        }
+
+        .tool-btn.active {
+            background: rgba(0, 245, 255, 0.15);
+            color: var(--accent-cyan);
+            box-shadow: 0 0 8px rgba(0, 245, 255, 0.2);
+        }
+
+        .tool-btn[data-tooltip]:hover::after {
+            content: attr(data-tooltip);
+            position: absolute;
+            top: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-tertiary);
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 11px;
+            white-space: nowrap;
+            border: 1px solid var(--border-color);
+            z-index: 200;
+            pointer-events: none;
+            color: var(--text-primary);
+        }
+
+        .transport-controls {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-left: auto;
+        }
+
+        .transport-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            transition: all 0.2s;
+        }
+
+        .transport-btn.play {
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+            color: #000;
+            font-size: 16px;
+            box-shadow: 0 0 16px rgba(0, 245, 255, 0.4);
+        }
+
+        .transport-btn.play:hover {
+            transform: scale(1.1);
+            box-shadow: 0 0 24px rgba(0, 245, 255, 0.6);
+        }
+
+        .transport-btn.stop {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+
+        .transport-btn.stop:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        .bpm-display {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 4px 12px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            font-variant-numeric: tabular-nums;
+            font-size: 13px;
+        }
+
+        .bpm-value {
+            color: var(--accent-cyan);
+            font-weight: 600;
+            min-width: 32px;
+            text-align: center;
+        }
+
+        /* 主体布局 */
+        .main-container {
+            display: flex;
+            height: calc(100vh - 48px);
+            overflow: hidden;
+        }
+
+        /* 左侧面板 */
+        .left-panel {
+            width: 260px;
+            background: var(--bg-panel);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            backdrop-filter: blur(10px);
+        }
+
+        .panel-header {
+            height: 36px;
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(0, 0, 0, 0.2);
+        }
+
+        .singer-card {
+            padding: 16px;
+            border-bottom: 1px solid var(--border-color);
+            background: linear-gradient(180deg, rgba(192, 132, 252, 0.08) 0%, transparent 100%);
+        }
+
+        .singer-avatar {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-purple), var(--accent-pink));
+            margin: 0 auto 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 28px;
+            position: relative;
+            box-shadow: 0 0 20px rgba(192, 132, 252, 0.3);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .singer-avatar::after {
+            content: '♪';
+            position: absolute;
+            bottom: -4px;
+            right: -4px;
+            width: 22px;
+            height: 22px;
+            background: var(--accent-cyan);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: #000;
+            border: 2px solid var(--bg-secondary);
+        }
+
+        .singer-name {
+            text-align: center;
+            font-size: 15px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .singer-voicebank {
+            text-align: center;
+            font-size: 12px;
+            color: var(--accent-purple);
+            margin-bottom: 12px;
+        }
+
+        .singer-params {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .param-item {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 8px;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .param-label {
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+            text-transform: uppercase;
+        }
+
+        .param-value {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--accent-cyan);
+        }
+
+        .track-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .track-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: 1px solid transparent;
+        }
+
+        .track-item:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .track-item.active {
+            background: rgba(0, 245, 255, 0.08);
+            border-color: rgba(0, 245, 255, 0.2);
+        }
+
+        .track-color {
+            width: 4px;
+            height: 36px;
+            border-radius: 2px;
+            background: var(--accent-cyan);
+        }
+
+        .track-info {
+            flex: 1;
+        }
+
+        .track-name {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 2px;
+        }
+
+        .track-type {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .track-controls {
+            display: flex;
+            gap: 4px;
+        }
+
+        .track-btn {
+            width: 24px;
+            height: 24px;
+            border: none;
+            background: transparent;
+            color: var(--text-secondary);
+            border-radius: 4px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .track-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+        }
+
+        .track-btn.mute {
+            color: var(--accent-pink);
+        }
+
+        .track-btn.solo {
+            color: var(--accent-cyan);
+        }
+
+        /* 中央编辑器 */
+        .center-area {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .timeline-header {
+            height: 36px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding-left: 60px;
+            position: relative;
+        }
+
+        .time-ruler {
+            flex: 1;
+            display: flex;
+            height: 100%;
+            position: relative;
+        }
+
+        .time-mark {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            border-left: 1px solid var(--border-color);
+            padding-left: 4px;
+            font-size: 10px;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+        }
+
+        .piano-roll-container {
+            flex: 1;
+            display: flex;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .piano-keys {
+            width: 60px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+
+        .piano-key {
+            height: 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding-right: 8px;
+            font-size: 10px;
+            color: var(--text-secondary);
+            position: relative;
+        }
+
+        .piano-key.black {
+            background: #0a0a14;
+            height: 16px;
+            margin-left: 0;
+            z-index: 2;
+        }
+
+        .piano-key.white {
+            background: var(--bg-secondary);
+        }
+
+        .piano-key.highlight {
+            background: rgba(0, 245, 255, 0.1);
+            color: var(--accent-cyan);
+        }
+
+        .note-editor {
+            flex: 1;
+            position: relative;
+            overflow: auto;
+            background-image: 
+                linear-gradient(var(--grid-line) 1px, transparent 1px),
+                linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+            background-size: 100% 20px, 80px 100%;
+        }
+
+        .note {
+            position: absolute;
+            height: 18px;
+            border-radius: 4px;
+            background: linear-gradient(180deg, rgba(0, 245, 255, 0.8), rgba(0, 245, 255, 0.4));
+            border: 1px solid rgba(0, 245, 255, 0.6);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            padding: 0 6px;
+            font-size: 10px;
+            color: rgba(0, 0, 0, 0.8);
+            font-weight: 600;
+            box-shadow: 0 2px 8px rgba(0, 245, 255, 0.2);
+            transition: all 0.1s;
+            user-select: none;
+        }
+
+        .note:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 245, 255, 0.4);
+            z-index: 10;
+        }
+
+        .note.selected {
+            border-color: #fff;
+            box-shadow: 0 0 0 2px rgba(0, 245, 255, 0.5), 0 4px 12px rgba(0, 245, 255, 0.3);
+        }
+
+        .playhead {
+            position: absolute;
+            top: 0;
+            width: 2px;
+            height: 100%;
+            background: var(--accent-pink);
+            pointer-events: none;
+            z-index: 50;
+            box-shadow: 0 0 8px var(--accent-pink);
+        }
+
+        .playhead::before {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            width: 10px;
+            height: 10px;
+            background: var(--accent-pink);
+            border-radius: 50%;
+            box-shadow: 0 0 12px var(--accent-pink);
+        }
+
+        /* 底部参数轨道 */
+        .param-lanes {
+            height: 140px;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .param-tabs {
+            display: flex;
+            height: 28px;
+            background: rgba(0, 0, 0, 0.2);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .param-tab {
+            padding: 0 16px;
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+            font-size: 11px;
+            color: var(--text-secondary);
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+            position: relative;
+        }
+
+        .param-tab:hover {
+            color: var(--text-primary);
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .param-tab.active {
+            color: var(--accent-cyan);
+            border-bottom-color: var(--accent-cyan);
+            background: rgba(0, 245, 255, 0.05);
+        }
+
+        .param-tab .shortcut {
+            margin-left: 6px;
+            font-size: 10px;
+            opacity: 0.5;
+            background: rgba(255,255,255,0.1);
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
+
+        .param-canvas-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #paramCanvas {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* 右侧面板 */
+        .right-panel {
+            width: 280px;
+            background: var(--bg-panel);
+            border-left: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            backdrop-filter: blur(10px);
+        }
+
+        .inspector-section {
+            border-bottom: 1px solid var(--border-color);
+            padding: 12px;
+        }
+
+        .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .section-title::before {
+            content: '';
+            width: 3px;
+            height: 12px;
+            background: linear-gradient(180deg, var(--accent-cyan), var(--accent-purple));
+            border-radius: 2px;
+        }
+
+        .property-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            gap: 8px;
+        }
+
+        .property-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+            min-width: 60px;
+        }
+
+        .property-input {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 5px 10px;
+            border-radius: 6px;
+            font-size: 12px;
+            outline: none;
+            transition: all 0.2s;
+        }
+
+        .property-input:focus {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 0 3px rgba(0, 245, 255, 0.1);
+        }
+
+        .property-value {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .slider {
+            flex: 1;
+            height: 4px;
+            -webkit-appearance: none;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 2px;
+            outline: none;
+        }
+
+        .slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+            cursor: pointer;
+            box-shadow: 0 0 8px rgba(0, 245, 255, 0.4);
+            border: 2px solid #fff;
+        }
+
+        .slider-value {
+            min-width: 36px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            font-size: 12px;
+            color: var(--accent-cyan);
+            font-weight: 500;
+        }
+
+        .lyrics-box {
+            width: 100%;
+            min-height: 80px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 10px;
+            color: var(--text-primary);
+            font-size: 13px;
+            resize: vertical;
+            outline: none;
+            font-family: inherit;
+        }
+
+        .lyrics-box:focus {
+            border-color: var(--accent-purple);
+            box-shadow: 0 0 0 3px rgba(192, 132, 252, 0.1);
+        }
+
+        .phoneme-display {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            padding: 8px;
+            font-size: 12px;
+            color: var(--accent-purple);
+            font-family: "Courier New", monospace;
+            letter-spacing: 1px;
+            margin-top: 8px;
+        }
+
+        /* 装饰性元素 */
+        .decoration-star {
+            position: fixed;
+            color: var(--accent-cyan);
+            opacity: 0.15;
+            pointer-events: none;
+            animation: twinkle 3s ease-in-out infinite;
+            z-index: 0;
+        }
+
+        @keyframes twinkle {
+            0%, 100% { opacity: 0.1; transform: scale(1); }
+            50% { opacity: 0.25; transform: scale(1.2); }
+        }
+
+        /* 滚动条 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.2);
+        }
+
+        /* 底部状态栏 */
+        .status-bar {
+            height: 26px;
+            background: rgba(0, 0, 0, 0.4);
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            gap: 16px;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .status-indicator {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            box-shadow: 0 0 6px var(--accent-cyan);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .quant-selector {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            background: rgba(0,0,0,0.3);
+            padding: 2px 8px;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+        }
+
+        /* 响应式 */
+        @media (max-width: 1200px) {
+            .left-panel { width: 220px; }
+            .right-panel { width: 240px; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- 装饰星星 -->
+    <div class="decoration-star" style="top: 80px; right: 40px; font-size: 20px;">✦</div>
+    <div class="decoration-star" style="top: 200px; left: 300px; font-size: 14px; animation-delay: 1s;">✦</div>
+    <div class="decoration-star" style="bottom: 200px; right: 320px; font-size: 18px; animation-delay: 0.5s;">✦</div>
+
+    <!-- 顶部工具栏 -->
+    <div class="top-bar">
+        <div class="logo">
+            <div class="logo-icon">♪</div>
+            <span>星律 Studio</span>
+        </div>
+
+        <div class="tool-group">
+            <button class="tool-btn active" data-tooltip="选择工具 (V)">↖</button>
+            <button class="tool-btn" data-tooltip="铅笔工具 (P)">✎</button>
+            <button class="tool-btn" data-tooltip="画笔工具 (B)">▬</button>
+            <button class="tool-btn" data-tooltip="橡皮擦 (E)">⌫</button>
+            <button class="tool-btn" data-tooltip="分割工具 (C)">✂</button>
+        </div>
+
+        <div class="tool-group">
+            <button class="tool-btn" data-tooltip="量化 (Q)">网格</button>
+            <div class="quant-selector">
+                <span style="font-size:11px;">1/16</span>
+            </div>
+        </div>
+
+        <div class="tool-group">
+            <button class="tool-btn" data-tooltip="撤销 (Ctrl+Z)">↶</button>
+            <button class="tool-btn" data-tooltip="重做 (Ctrl+Y)">↷</button>
+        </div>
+
+        <div class="transport-controls">
+            <div class="bpm-display">
+                <span style="font-size:11px;">BPM</span>
+                <span class="bpm-value">128.00</span>
+            </div>
+            <div class="bpm-display">
+                <span style="font-size:11px;">调号</span>
+                <span style="color:var(--accent-pink);font-weight:600;">C#m</span>
+            </div>
+            <button class="transport-btn stop" id="stopBtn">■</button>
+            <button class="transport-btn play" id="playBtn">▶</button>
+        </div>
+    </div>
+
+    <!-- 主体区域 -->
+    <div class="main-container">
+        <!-- 左侧面板 -->
+        <div class="left-panel">
+            <div class="panel-header">🎤 声库与轨道</div>
+            
+            <div class="singer-card">
+                <div class="singer-avatar">🌟</div>
+                <div class="singer-name">星音 ミライ</div>
+                <div class="singer-voicebank">SVS AI / 日语_Normal</div>
+                <div class="singer-params">
+                    <div class="param-item">
+                        <div class="param-label">张力</div>
+                        <div class="param-value">0.45</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="param-label">气声</div>
+                        <div class="param-value">0.20</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="param-label">明亮度</div>
+                        <div class="param-value">0.65</div>
+                    </div>
+                    <div class="param-item">
+                        <div class="param-label">清晰度</div>
+                        <div class="param-value">0.80</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="track-list">
+                <div class="track-item active">
+                    <div class="track-color" style="background: var(--accent-cyan);"></div>
+                    <div class="track-info">
+                        <div class="track-name">メインボーカル</div>
+                        <div class="track-type">星音ミライ ·  lead</div>
+                    </div>
+                    <div class="track-controls">
+                        <button class="track-btn mute">M</button>
+                        <button class="track-btn solo">S</button>
+                    </div>
+                </div>
+                <div class="track-item">
+                    <div class="track-color" style="background: var(--accent-pink);"></div>
+                    <div class="track-info">
+                        <div class="track-name">ハモリ</div>
+                        <div class="track-type">星音ミライ ·  double</div>
+                    </div>
+                    <div class="track-controls">
+                        <button class="track-btn mute">M</button>
+                        <button class="track-btn solo">S</button>
+                    </div>
+                </div>
+                <div class="track-item">
+                    <div class="track-color" style="background: var(--accent-purple);"></div>
+                    <div class="track-info">
+                        <div class="track-name">アドリブ</div>
+                        <div class="track-type">星音ミライ ·  adlib</div>
+                    </div>
+                    <div class="track-controls">
+                        <button class="track-btn mute">M</button>
+                        <button class="track-btn solo">S</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 中央编辑器 -->
+        <div class="center-area">
+            <div class="timeline-header">
+                <div class="time-ruler" id="timeRuler">
+                    <!-- 时间标尺由JS生成 -->
+                </div>
+            </div>
+
+            <div class="piano-roll-container">
+                <div class="piano-keys" id="pianoKeys">
+                    <!-- 钢琴键由JS生成 -->
+                </div>
+                <div class="note-editor" id="noteEditor">
+                    <div class="playhead" id="playhead" style="left: 120px;"></div>
+                    <!-- 音符由JS生成 -->
+                </div>
+            </div>
+
+            <div class="param-lanes">
+                <div class="param-tabs">
+                    <div class="param-tab active">PIT 音高<span class="shortcut">F1</span></div>
+                    <div class="param-tab">DYN 力度<span class="shortcut">F2</span></div>
+                    <div class="param-tab">BRI 明亮<span class="shortcut">F3</span></div>
+                    <div class="param-tab">GEN 性别<span class="shortcut">F4</span></div>
+                    <div class="param-tab">VOL 音量<span class="shortcut">F5</span></div>
+                </div>
+                <div class="param-canvas-container">
+                    <canvas id="paramCanvas"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <!-- 右侧面板 -->
+        <div class="right-panel">
+            <div class="panel-header">🔧 属性检查器</div>
+            
+            <div class="inspector-section">
+                <div class="section-title">音符属性</div>
+                <div class="property-row">
+                    <span class="property-label">歌词</span>
+                    <input type="text" class="property-input" value="星" id="noteLyric">
+                </div>
+                <div class="property-row">
+                    <span class="property-label">音高</span>
+                    <input type="text" class="property-input" value="C#4" style="flex:0.6;">
+                    <input type="text" class="property-input" value="60" style="flex:0.4;">
+                </div>
+                <div class="property-row">
+                    <span class="property-label">起止</span>
+                    <input type="text" class="property-input" value="1.1.1" style="flex:0.5;">
+                    <input type="text" class="property-input" value="1.1.3" style="flex:0.5;">
+                </div>
+                <div class="property-row">
+                    <span class="property-label">音素</span>
+                    <div class="phoneme-display">s t a r</div>
+                </div>
+            </div>
+
+            <div class="inspector-section">
+                <div class="section-title">参数调整</div>
+                <div class="property-row">
+                    <span class="property-label">音高偏差</span>
+                    <div class="property-value">
+                        <input type="range" class="slider" min="-100" max="100" value="0" id="pitSlider">
+                        <span class="slider-value" id="pitValue">0</span>
+                    </div>
+                </div>
+                <div class="property-row">
+                    <span class="property-label">颤音深度</span>
+                    <div class="property-value">
+                        <input type="range" class="slider" min="0" max="100" value="35" id="vibSlider">
+                        <span class="slider-value" id="vibValue">35</span>
+                    </div>
+                </div>
+                <div class="property-row">
+                    <span class="property-label">颤音速率</span>
+                    <div class="property-value">
+                        <input type="range" class="slider" min="0" max="100" value="50" id="rateSlider">
+                        <span class="slider-value" id="rateValue">50</span>
+                    </div>
+                </div>
+                <div class="property-row">
+                    <span class="property-label">呼吸量</span>
+                    <div class="property-value">
+                        <input type="range" class="slider" min="0" max="100" value="20" id="breathSlider">
+                        <span class="slider-value" id="breathValue">20</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="inspector-section">
+                <div class="section-title">歌词编辑</div>
+                <textarea class="lyrics-box" placeholder="在此输入歌词，按 Enter 分割音符...">星の光　導く先に
+夢の続き　見つけに行こう</textarea>
+            </div>
+        </div>
+    </div>
+
+    <!-- 底部状态栏 -->
+    <div class="status-bar">
+        <div class="status-item">
+            <div class="status-indicator"></div>
+            <span>引擎就绪</span>
+        </div>
+        <div class="status-item">采样率: 48kHz</div>
+        <div class="status-item">缓冲区: 512 spl</div>
+        <div class="status-item">CPU: 3.2%</div>
+        <div class="status-item" style="margin-left:auto;">当前位置: 1:1:1 | 00:00:00</div>
+    </div>
+
+    <script>
+        // 生成钢琴键
+        const pianoKeys = document.getElementById('pianoKeys');
+        const notes = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+        for (let octave = 5; octave >= 3; octave--) {
+            for (let i = notes.length - 1; i >= 0; i--) {
+                const key = document.createElement('div');
+                const isBlack = notes[i].includes('#');
+                key.className = `piano-key ${isBlack ? 'black' : 'white'}`;
+                key.textContent = isBlack ? '' : `${notes[i]}${octave}`;
+                if (notes[i] === 'C' && octave === 4) key.classList.add('highlight');
+                pianoKeys.appendChild(key);
+            }
+        }
+
+        // 生成时间标尺
+        const timeRuler = document.getElementById('timeRuler');
+        for (let i = 0; i < 16; i++) {
+            const mark = document.createElement('div');
+            mark.className = 'time-mark';
+            mark.style.left = `${i * 80}px`;
+            mark.textContent = `${i + 1}`;
+            timeRuler.appendChild(mark);
+        }
+
+        // 生成示例音符
+        const noteEditor = document.getElementById('noteEditor');
+        const demoNotes = [
+            { text: '星', left: 80, top: 180, width: 60, color: 'var(--accent-cyan)' },
+            { text: 'の', left: 160, top: 160, width: 40, color: 'var(--accent-cyan)' },
+            { text: '光', left: 240, top: 140, width: 60, color: 'var(--accent-cyan)' },
+            { text: '導', left: 320, top: 120, width: 60, color: 'var(--accent-cyan)' },
+            { text: 'く', left: 400, top: 140, width: 40, color: 'var(--accent-cyan)' },
+            { text: '先', left: 480, top: 160, width: 60, color: 'var(--accent-cyan)' },
+            { text: 'に', left: 560, top: 180, width: 40, color: 'var(--accent-cyan)' },
+            { text: '夢', left: 80, top: 220, width: 60, color: 'var(--accent-pink)' },
+            { text: 'の', left: 160, top: 200, width: 40, color: 'var(--accent-pink)' },
+            { text: '続', left: 240, top: 180, width: 60, color: 'var(--accent-pink)' },
+            { text: 'き', left: 320, top: 200, width: 40, color: 'var(--accent-pink)' },
+        ];
+
+        demoNotes.forEach((n, idx) => {
+            const note = document.createElement('div');
+            note.className = 'note' + (idx === 0 ? ' selected' : '');
+            note.style.left = n.left + 'px';
+            note.style.top = n.top + 'px';
+            note.style.width = n.width + 'px';
+            note.style.background = `linear-gradient(180deg, ${n.color}cc, ${n.color}66)`;
+            note.style.borderColor = n.color;
+            note.style.boxShadow = `0 2px 8px ${n.color}33`;
+            note.textContent = n.text;
+            noteEditor.appendChild(note);
+        });
+
+        // 参数画布绘制
+        const canvas = document.getElementById('paramCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        function resizeCanvas() {
+            canvas.width = canvas.parentElement.clientWidth;
+            canvas.height = canvas.parentElement.clientHeight;
+            drawParamCurve();
+        }
+
+        function drawParamCurve() {
+            const w = canvas.width;
+            const h = canvas.height;
+            ctx.clearRect(0, 0, w, h);
+            
+            // 网格
+            ctx.strokeStyle = 'rgba(255,255,255,0.03)';
+            ctx.lineWidth = 1;
+            for (let i = 0; i < w; i += 40) {
+                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, h); ctx.stroke();
+            }
+            for (let i = 0; i < h; i += 20) {
+                ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(w, i); ctx.stroke();
+            }
+            
+            // 中线
+            ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+            ctx.beginPath(); ctx.moveTo(0, h/2); ctx.lineTo(w, h/2); ctx.stroke();
+            
+            // 曲线
+            ctx.strokeStyle = '#00f5ff';
+            ctx.lineWidth = 2;
+            ctx.shadowColor = '#00f5ff';
+            ctx.shadowBlur = 8;
+            ctx.beginPath();
+            ctx.moveTo(0, h/2);
+            for (let x = 0; x < w; x += 2) {
+                const y = h/2 + Math.sin(x * 0.02) * 30 + Math.sin(x * 0.05) * 15;
+                ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            
+            // 控制点
+            const points = [80, 200, 350, 500];
+            points.forEach(px => {
+                const py = h/2 + Math.sin(px * 0.02) * 30 + Math.sin(px * 0.05) * 15;
+                ctx.fillStyle = '#0f0f1a';
+                ctx.strokeStyle = '#00f5ff';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(px, py, 5, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+            });
+        }
+
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        // 播放控制
+        let isPlaying = false;
+        let playheadPos = 120;
+        let animationId;
+        
+        document.getElementById('playBtn').addEventListener('click', function() {
+            isPlaying = !isPlaying;
+            this.innerHTML = isPlaying ? '⏸' : '▶';
+            if (isPlaying) {
+                animate();
+            } else {
+                cancelAnimationFrame(animationId);
+            }
+        });
+
+        document.getElementById('stopBtn').addEventListener('click', function() {
+            isPlaying = false;
+            document.getElementById('playBtn').innerHTML = '▶';
+            cancelAnimationFrame(animationId);
+            playheadPos = 120;
+            document.getElementById('playhead').style.left = playheadPos + 'px';
+        });
+
+        function animate() {
+            playheadPos += 1.5;
+            if (playheadPos > 800) playheadPos = 0;
+            document.getElementById('playhead').style.left = playheadPos + 'px';
+            animationId = requestAnimationFrame(animate);
+        }
+
+        // 滑块联动
+        ['pit', 'vib', 'rate', 'breath'].forEach(id => {
+            const slider = document.getElementById(id + 'Slider');
+            const value = document.getElementById(id + 'Value');
+            slider.addEventListener('input', () => {
+                value.textContent = slider.value;
+            });
+        });
+
+        // 工具按钮切换
+        document.querySelectorAll('.tool-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                if (this.parentElement.classList.contains('tool-group')) {
+                    this.parentElement.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                }
+            });
+        });
+
+        // 轨道选择
+        document.querySelectorAll('.track-item').forEach(track => {
+            track.addEventListener('click', function() {
+                document.querySelectorAll('.track-item').forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+            });
+        });
+
+        // 参数标签切换
+        document.querySelectorAll('.param-tab').forEach(tab => {
+            tab.addEventListener('click', function() {
+                document.querySelectorAll('.param-tab').forEach(t => t.classList.remove('active'));
+                this.classList.add('active');
+                // 重绘不同颜色的曲线
+                const colors = ['#00f5ff', '#ff6b9d', '#c084fc', '#60a5fa', '#fbbf24'];
+                const idx = Array.from(this.parentElement.children).indexOf(this);
+                ctx.strokeStyle = colors[idx];
+                ctx.shadowColor = colors[idx];
+                drawParamCurve();
+            });
+        });
+
+        // 音符点击选择
+        document.querySelectorAll('.note').forEach(note => {
+            note.addEventListener('click', function(e) {
+                e.stopPropagation();
+                document.querySelectorAll('.note').forEach(n => n.classList.remove('selected'));
+                this.classList.add('selected');
+                document.getElementById('noteLyric').value = this.textContent;
+            });
+        });
+    </script>
+</body>
+</html>

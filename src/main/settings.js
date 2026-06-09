@@ -81,6 +81,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
+  'npuDiffBatchSize', 'npuVocoderBatchSize',
 ];
 
 async function updateLocaleSetting(locale) {

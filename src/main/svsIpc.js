@@ -12,13 +12,15 @@ const svsPipelineLazy = createLazyInitializer(async () => {
   const deviceId = settings.preferredDeviceId ?? settings.deviceId ?? undefined;
   const preferredDeviceType = settings.preferredDeviceType || undefined;
   const modelDeviceMapping = settings.modelDeviceMapping || undefined;
-  console.log(`[Main] 初始化SVS Pipeline (ONNX Runtime), 模型路径: ${modelPath}, deviceMode: ${deviceMode}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+  const modelPrecision = settings.modelPrecision || 'fp16';
+  console.log(`[Main] Initializing SVS Pipeline (ONNX Runtime), model path: ${modelPath}, deviceMode: ${deviceMode}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}, precision: ${modelPrecision}`);
 
   const pipeline = new OnnxSVSPipeline(modelPath, {
     deviceId,
     deviceMode,
     preferredDeviceType,
     modelDeviceMapping,
+    modelPrecision,
   });
   await pipeline.init();
   return pipeline;
@@ -94,7 +96,7 @@ function registerSvsIpc() {
       const p = svsPipelineLazy.getInstance();
       return lyrics.map(lyric => p.resolveLyricToPhonemes(lyric));
     } catch (err) {
-      console.error('[Main] 音素解析失败:', err);
+      console.error('[Main] Phoneme resolution failed:', err);
       return lyrics.map(lyric => [{ name: lyric || '<SP>', display: lyric || 'SP' }]);
     }
   });

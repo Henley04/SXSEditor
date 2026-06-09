@@ -1,12 +1,11 @@
 const { ipcMain, dialog } = require('electron');
 const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, invalidateSettingsCache } = require('./settings');
-const { classifyDeviceFromName, ensureGPUInfo } = require('./gpuInfo');
+const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateGPUCache } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
 const { enumerateDMLDevices } = require('../inference/nativeSvsPipeline');
 const { getSvsPipeline, resetSvsPipeline } = require('./svsIpc');
 const { resetRmvpe, resetBasicPitch, resetRosvot } = require('./pitchMidiIpc');
 const { t } = require('./locale');
-const { detectNPUAvailability } = require('./webnnIpc');
 
 let cachedDMLDevices = null;
 
@@ -23,37 +22,43 @@ function invalidateDMLDevices() {
 }
 
 function registerSettingsIpc() {
+  // 硬件检测状态（供 UI 显示加载进度）
+  ipcMain.handle('settings:getHardwareStatus', async () => {
+    return {
+      gpuPhase: getGPUPhase(), // 'none' | 'fast' | 'full'
+      hasCachedDevices: !!(cachedDMLDevices && cachedDMLDevices.length > 0),
+    };
+  });
+
   ipcMain.handle('settings:getDMLDevices', async () => {
     try {
-      if (!cachedDMLDevices) {
+      // 并行获取 GPU 信息和 NPU 检测
+      const [controllers, npuResult] = await Promise.all([
+        ensureGPUInfo(),
+        detectNPUCached(),
+      ]);
+
+      if (!cachedDMLDevices || cachedDMLDevices.length === 0) {
         const modelDir = getModelDir();
-        console.log('[Main] 枚举 DML 设备，模型目录:', modelDir);
-        const controllers = await ensureGPUInfo();
         cachedDMLDevices = await enumerateDMLDevices(modelDir, controllers);
       }
-      // Add NPU device if available via WebNN
+
       const devices = [...cachedDMLDevices];
-      const hasNpu = devices.some(d => d.deviceType === 'npu');
-      if (!hasNpu) {
-        try {
-          const npuResult = await detectNPUAvailability();
-          if (npuResult.npuAvailable) {
-            devices.push({
-              name: 'NPU (WebNN)',
-              deviceType: 'npu',
-              isDiscrete: false,
-              vramBytes: 0,
-              vram: '0 MB',
-              vendor: '',
-              dxgiAdapterNumber: undefined,
-              source: 'webnn',
-            });
-          }
-        } catch (_) {}
+      if (npuResult.npuAvailable && !devices.some(d => d.deviceType === 'npu')) {
+        devices.push({
+          name: 'NPU (WebNN)',
+          deviceType: 'npu',
+          isDiscrete: false,
+          vramBytes: 0,
+          vram: '0 MB',
+          vendor: '',
+          dxgiAdapterNumber: undefined,
+          source: 'webnn',
+        });
       }
       return devices;
     } catch (err) {
-      console.error('[Main] 枚举 DML 设备失败:', err);
+      console.error('[Main] DML device enumeration failed:', err);
       return [];
     }
   });
@@ -66,7 +71,7 @@ function registerSettingsIpc() {
       }
       return null;
     } catch (err) {
-      console.error('[Main] 获取当前硬件信息失败:', err);
+      console.error('[Main] Failed to get current hardware info:', err);
       return null;
     }
   });
@@ -80,7 +85,10 @@ function registerSettingsIpc() {
     const deviceMode = settings.deviceMode || 'smart';
     const issues = [];
 
-    const gpuInfo = await ensureGPUInfo();
+    const [gpuInfo, npuResult] = await Promise.all([
+      ensureGPUInfo(),
+      detectNPUCached(),
+    ]);
     const dmlDevices = cachedDMLDevices || [];
     const allDevices = [...dmlDevices];
 
@@ -98,11 +106,7 @@ function registerSettingsIpc() {
       }
     }
 
-    let npuAvailable = false;
-    try {
-      const npuResult = await detectNPUAvailability();
-      npuAvailable = npuResult.npuAvailable;
-    } catch (_) {}
+    let npuAvailable = npuResult.npuAvailable;
     if (!npuAvailable) {
       npuAvailable = allDevices.some(d => d.deviceType === 'npu');
     }
@@ -110,7 +114,8 @@ function registerSettingsIpc() {
     if (deviceMode === 'manual') {
       const preferredId = settings.preferredDeviceId;
       const preferredType = settings.preferredDeviceType;
-      if (preferredId !== undefined && preferredId !== null) {
+      // NPU is validated at pipeline init via probe — don't flag as issue
+      if (preferredType !== 'npu' && preferredId !== undefined && preferredId !== null) {
         const found = allDevices.find(d => d.dxgiAdapterNumber === preferredId);
         if (!found) {
           issues.push({
@@ -121,27 +126,8 @@ function registerSettingsIpc() {
           });
         }
       }
-      if (preferredType === 'npu' && !npuAvailable) {
-        issues.push({
-          type: 'npu-not-available',
-          mode: 'manual',
-          message: 'NPU device not available',
-          fix: { deviceMode: 'smart' },
-        });
-      }
     } else if (deviceMode === 'advanced' && settings.modelDeviceMapping) {
-      for (const [groupId, mapping] of Object.entries(settings.modelDeviceMapping)) {
-        if (mapping === 'auto' || mapping === 'npu-webnn') continue;
-        if (typeof mapping === 'object' && mapping.deviceType === 'npu' && !npuAvailable) {
-          issues.push({
-            type: 'model-group-npu-not-available',
-            mode: 'advanced',
-            groupId,
-            message: `Model group ${groupId} assigned to NPU but NPU not available`,
-            fix: { groupId, newMapping: 'auto' },
-          });
-        }
-      }
+      // NPU mappings are validated at pipeline init — don't flag as issue
     }
 
     return { issues, deviceMode, npuAvailable, devices: allDevices };
@@ -172,6 +158,7 @@ function registerSettingsIpc() {
     }
 
     invalidateDMLDevices();
+    invalidateGPUCache();
 
     return { success: true };
   });

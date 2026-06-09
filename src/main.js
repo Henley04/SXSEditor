@@ -2,7 +2,30 @@ const { app, BrowserWindow, ipcMain, dialog, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
-// 启用 WebNN API，使渲染进程可通过 onnxruntime-web WebNN EP 使用 NPU 推理
+// Suppress EPIPE errors when stdout/stderr pipe breaks (e.g. terminal closed)
+// console.log throws synchronously via Socket.write — must wrap the write method
+for (const stream of [process.stdout, process.stderr]) {
+  if (stream && typeof stream.write === 'function') {
+    const originalWrite = stream.write.bind(stream);
+    stream.write = function (chunk, encoding, cb) {
+      try { return originalWrite(chunk, encoding, cb); }
+      catch (e) { if (e?.code === 'EPIPE') return false; throw e; }
+    };
+  }
+  if (stream && typeof stream.on === 'function') {
+    stream.on('error', () => {}); // swallow async EPIPE events
+  }
+}
+
+// Catch unhandled errors to prevent silent crashes
+process.on('uncaughtException', (err) => {
+  try { process.stderr.write(`[FATAL] ${err.stack || err}\n`); } catch (_) {}
+});
+process.on('unhandledRejection', (reason) => {
+  try { process.stderr.write(`[UNHANDLED REJECTION] ${reason}\n`); } catch (_) {}
+});
+
+// 启用 WebNN API，使渲染进程可通过 onnxruntime-web WebNN EP Using NPU 推理
 app.commandLine.appendSwitch('enable-features', 'WebMachineLearningNeuralNetwork');
 
 if (require('electron-squirrel-startup')) {
@@ -30,6 +53,7 @@ const {
   classifyDeviceFromName,
   startGPUPreload,
   ensureGPUInfo,
+  detectAllHardware,
 } = require('./main/gpuInfo');
 const { checkAndDownloadModels, registerModelDownloadIpc } = require('./main/modelDownload');
 const { registerThemeIpc } = require('./main/themeIpc');
@@ -38,11 +62,9 @@ const { registerPitchMidiIpc, resetRmvpe, resetBasicPitch, resetRosvot } = requi
 const { registerSingerIpc } = require('./main/singerIpc');
 const { registerAudioIpc, resetAudioManagers } = require('./main/audioIpc');
 const { registerDialogIpc } = require('./main/dialogIpc');
-const { registerSettingsIpc, setCachedDMLDevices, invalidateDMLDevices } = require('./main/settingsIpc');
+const { registerSettingsIpc, setCachedDMLDevices, getCachedDMLDevices, invalidateDMLDevices } = require('./main/settingsIpc');
 const { registerResourceManagerIpc } = require('./main/resourceManagerIpc');
-const { registerWebnnIpc, detectNPUAvailability } = require('./main/webnnIpc');
-
-let cachedDMLDevices = null;
+const { registerWebnnIpc } = require('./main/webnnIpc');
 
 app.on('second-instance', () => {
   const mainWindow = getMainWindow();
@@ -68,7 +90,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.whenReady().then(() => {
-  // 注册 onnx:// protocol handler，允许渲染进程安全访问模型文件
+  // 注册 onnx:// protocol handler，允许渲染进程安全访问Model files
   protocol.handle('onnx', (request) => {
     const url = new URL(request.url);
     const modelPath = decodeURIComponent(url.pathname);
@@ -77,7 +99,7 @@ app.whenReady().then(() => {
     if (!resolvedPath.startsWith(path.resolve(modelDir))) {
       return new Response('Forbidden', { status: 403 });
     }
-    if (!resolvedPath.endsWith('.onnx')) {
+    if (!resolvedPath.endsWith('.onnx') && !resolvedPath.endsWith('.onnx.data')) {
       return new Response('Forbidden', { status: 403 });
     }
     if (!fs.existsSync(resolvedPath)) {
@@ -89,15 +111,19 @@ app.whenReady().then(() => {
   loadMainLocale();
   const mainWindow = createWindow();
 
-  // 设备丢失检测：主窗口加载完成后校验用户指定的设备
+  // 主窗口渲染进程就绪后：先完成 NPU 检测，再校验设备设置
   mainWindow.webContents.once('did-finish-load', async () => {
     try {
+      // 等待 NPU 检测完成（需要渲染进程处理 WebNN IPC）
+      const { npuAvailable } = await detectAllHardware();
+      console.log(`[Main] Hardware detection complete: NPU ${npuAvailable ? 'available' : 'not available'}`);
+
       const settings = loadSettings();
       const deviceMode = settings.deviceMode || (settings.deviceId !== undefined && settings.deviceId !== null ? 'manual' : 'smart');
 
       if (deviceMode === 'manual' || deviceMode === 'advanced') {
         const gpuInfo = await ensureGPUInfo();
-        const dmlDevices = cachedDMLDevices || [];
+        const dmlDevices = getCachedDMLDevices() || [];
         const allDevices = [...dmlDevices];
         for (const c of gpuInfo) {
           if (!allDevices.find(d => d.name === c.model)) {
@@ -107,65 +133,48 @@ app.whenReady().then(() => {
           }
         }
 
-        // Detect NPU via WebNN if not already in device list
-        let npuAvailable = allDevices.some(d => d.deviceType === 'npu');
-        if (!npuAvailable) {
-          try {
-            const npuResult = await detectNPUAvailability();
-            npuAvailable = npuResult.npuAvailable;
-            if (npuAvailable) {
-              allDevices.push({
-                name: 'NPU (WebNN)',
-                deviceType: 'npu',
-                isDiscrete: false,
-                vramBytes: 0,
-                vram: '0 MB',
-                vendor: '',
-                dxgiAdapterNumber: undefined,
-                source: 'webnn',
-              });
-            }
-          } catch (_) {}
+        if (npuAvailable && !allDevices.some(d => d.deviceType === 'npu')) {
+          allDevices.push({
+            name: 'NPU (WebNN)',
+            deviceType: 'npu',
+            isDiscrete: false,
+            vramBytes: 0,
+            vram: '0 MB',
+            vendor: '',
+            dxgiAdapterNumber: undefined,
+            source: 'webnn',
+          });
         }
 
         if (deviceMode === 'manual') {
           const preferredId = settings.preferredDeviceId ?? settings.deviceId;
           const preferredType = settings.preferredDeviceType;
-          const found = preferredId !== undefined && preferredId !== null
-            ? allDevices.find(d => d.dxgiAdapterNumber === preferredId)
-            : null;
 
-          if (!found || (preferredType === 'npu' && !npuAvailable)) {
-            const deviceName = found ? found.name : `deviceId=${preferredId}`;
-            dialog.showMessageBoxSync(mainWindow, {
-              type: 'warning',
-              title: 'Device Not Found',
-              message: `Previously selected device "${deviceName}" was not found. Switched to smart mode.`,
-              buttons: ['OK'],
-            });
-            const newSettings = { ...settings, deviceMode: 'smart' };
-            delete newSettings.preferredDeviceId;
-            delete newSettings.preferredDeviceType;
-            await saveSettingsFile(newSettings);
-          }
-        } else if (deviceMode === 'advanced' && settings.modelDeviceMapping) {
-          const newMapping = { ...settings.modelDeviceMapping };
-          let changed = false;
-          for (const [groupId, mapping] of Object.entries(newMapping)) {
-            if (typeof mapping === 'object' && mapping.deviceType === 'npu' && !npuAvailable) {
-              newMapping[groupId] = 'auto';
-              changed = true;
+          // NPU devices are validated at pipeline init via probe — don't switch at startup
+          if (preferredType === 'npu') {
+            console.log('[Main] NPU device selected, skipping startup validation (will verify via probe at inference time)');
+          } else {
+            const found = preferredId !== undefined && preferredId !== null
+              ? allDevices.find(d => d.dxgiAdapterNumber === preferredId)
+              : null;
+
+            if (!found) {
+              const deviceName = `deviceId=${preferredId}`;
+              dialog.showMessageBoxSync(mainWindow, {
+                type: 'warning',
+                title: 'Device Not Found',
+                message: `Previously selected device "${deviceName}" was not found. Switched to smart mode.`,
+                buttons: ['OK'],
+              });
+              const newSettings = { ...settings, deviceMode: 'smart' };
+              delete newSettings.preferredDeviceId;
+              delete newSettings.preferredDeviceType;
+              await saveSettingsFile(newSettings);
             }
           }
-          if (changed) {
-            dialog.showMessageBoxSync(mainWindow, {
-              type: 'warning',
-              title: 'NPU Not Available',
-              message: 'NPU device not found. Model groups assigned to NPU have been switched to auto.',
-              buttons: ['OK'],
-            });
-            await saveSettingsFile({ ...settings, modelDeviceMapping: newMapping });
-          }
+        } else if (deviceMode === 'advanced' && settings.modelDeviceMapping) {
+          // NPU mappings are validated at pipeline init — don't switch at startup
+          console.log('[Main] Advanced mode, skipping NPU mapping startup validation (will verify via probe at inference time)');
         }
       }
     } catch (err) {
@@ -173,22 +182,20 @@ app.whenReady().then(() => {
     }
   });
 
-  // 后台线程预加载GPU信息，不阻塞主线程
+  // GPU 预加载（WMI 快速路径，不需要渲染进程）
   startGPUPreload();
-  // 等待GPU信息加载完成后再枚举DML设备
   ensureGPUInfo().then(controllers => {
     return enumerateDMLDevices(getModelDir(), controllers);
   }).then(devices => {
-    cachedDMLDevices = devices;
     setCachedDMLDevices(devices);
     setSettingsCachedDMLDevices(devices);
-    console.log(`[Main] GPU设备预加载完成: ${devices.length} 个设备`);
+    console.log(`[Main] GPU device preload complete: ${devices.length}  device(s)`);
   }).catch(err => {
-    console.warn('[Main] GPU设备预加载失败:', err.message);
+    console.warn('[Main] GPU device preload failed:', err.message);
   });
-  // 模型检查延后执行，不阻塞窗口显示
+  // Model检查延后执行，不阻塞窗口显示
   checkAndDownloadModels().catch(err => {
-    console.warn('[Main] 模型检查失败:', err.message);
+    console.warn('[Main] Model check failed:', err.message);
   });
 
   app.on('activate', () => {
@@ -197,7 +204,7 @@ app.whenReady().then(() => {
     }
   });
 }).catch(err => {
-  console.error('[Main] 应用初始化失败:', err);
+  console.error('[Main] Application init failed:', err);
   app.quit();
 });
 

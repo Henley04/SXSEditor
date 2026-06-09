@@ -38,34 +38,12 @@ const audioBufferSizeSelect = document.getElementById('audioBufferSize');
 const audioVolumeSlider = document.getElementById('audioVolume');
 const volumeValueSpan = document.getElementById('volumeValue');
 const exclusiveInfoDiv = document.getElementById('exclusiveInfo');
-const saveBtn = document.getElementById('saveBtn');
-const cancelBtn = document.getElementById('cancelBtn');
 const languageSelect = document.getElementById('languageSelect');
 const modelPrecisionSelect = document.getElementById('modelPrecision');
 const midiExtractToolSelect = document.getElementById('midiExtractTool');
 const openModelDownloadBtn = document.getElementById('openModelDownloadBtn');
-
-previewDiffStepsSlider.addEventListener('input', () => {
-    previewDiffStepsValue.textContent = previewDiffStepsSlider.value;
-});
-previewCfgStrengthSlider.addEventListener('input', () => {
-    previewCfgStrengthValue.textContent = parseFloat(previewCfgStrengthSlider.value).toFixed(1);
-});
-previewCfgRescaleSlider.addEventListener('input', () => {
-    previewCfgRescaleValue.textContent = parseFloat(previewCfgRescaleSlider.value).toFixed(2);
-});
-exportDiffStepsSlider.addEventListener('input', () => {
-    exportDiffStepsValue.textContent = exportDiffStepsSlider.value;
-});
-exportCfgStrengthSlider.addEventListener('input', () => {
-    exportCfgStrengthValue.textContent = parseFloat(exportCfgStrengthSlider.value).toFixed(1);
-});
-exportCfgRescaleSlider.addEventListener('input', () => {
-    exportCfgRescaleValue.textContent = parseFloat(exportCfgRescaleSlider.value).toFixed(2);
-});
-audioVolumeSlider.addEventListener('input', () => {
-    volumeValueSpan.textContent = audioVolumeSlider.value + '%';
-});
+const npuDiffBatchSizeSelect = document.getElementById('npuDiffBatchSize');
+const npuVocoderBatchSizeSelect = document.getElementById('npuVocoderBatchSize');
 
 // Device mode radio button handlers
 const MODEL_GROUPS = [
@@ -108,57 +86,51 @@ function updateDeviceModeUI(mode) {
     }
 }
 
-deviceModeRadios.forEach(radio => {
-    radio.addEventListener('change', () => {
-        updateDeviceModeUI(radio.value);
-    });
-});
-
-audioOutputModeSelect.addEventListener('change', () => {
-    const isExclusive = audioOutputModeSelect.value === 'exclusive';
-    exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
-    audioBitDepthSelect.disabled = !isExclusive;
-    updateAudioDeviceList();
-});
-
 async function loadDevices() {
     try {
-        const devices = await window.electronAPI.getDMLDevices();
-        const currentSetting = await window.electronAPI.getSettings();
-        const hardwareInfo = await window.electronAPI.getCurrentHardware();
+        // 立即显示加载状态
+        webnnStatusValue.textContent = t('settings.webnnChecking');
+        webnnStatusValue.classList.remove('status-available', 'status-unavailable');
+        webnnStatusValue.classList.add('status-checking');
+        npuStatusValue.textContent = t('settings.webnnChecking');
+        npuStatusValue.classList.remove('status-available', 'status-unavailable');
+        npuStatusValue.classList.add('status-checking');
+
+        // 并行获取设备列表和设置
+        const [devices, currentSetting] = await Promise.all([
+            window.electronAPI.getDMLDevices(),
+            window.electronAPI.getSettings(),
+        ]);
 
         cachedDevices = devices;
-
-        // Store currentSetting for buildModelDeviceMapping
         window._currentSetting = currentSetting;
 
-        // Detect WebNN/NPU availability
-        let webnnInfo = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: '' };
-        try {
-            webnnInfo = await window.electronAPI.webnnDetectNPU();
-        } catch (e) {
-            console.warn('WebNN NPU detection failed:', e);
-        }
+        // NPU 结果已经包含在 getDMLDevices 中（并行检测）
+        const hasNpu = devices.some(d => d.deviceType === 'npu');
+        const webnnInfo = { webnnAvailable: hasNpu, npuAvailable: hasNpu };
         cachedWebnnInfo = webnnInfo;
 
-        // Update WebNN/NPU status indicators
+        // 获取当前硬件信息（可能为 null 如果管道未初始化）
+        const hardwareInfo = await window.electronAPI.getCurrentHardware();
+
+        // 更新 WebNN/NPU 状态指示器
         if (webnnInfo.webnnAvailable) {
             webnnStatusValue.textContent = t('settings.webnnAvailable');
             webnnStatusValue.classList.add('status-available');
-            webnnStatusValue.classList.remove('status-unavailable');
+            webnnStatusValue.classList.remove('status-unavailable', 'status-checking');
         } else {
             webnnStatusValue.textContent = t('settings.webnnNotAvailable');
             webnnStatusValue.classList.add('status-unavailable');
-            webnnStatusValue.classList.remove('status-available');
+            webnnStatusValue.classList.remove('status-available', 'status-checking');
         }
         if (webnnInfo.npuAvailable) {
             npuStatusValue.textContent = t('settings.npuAvailable');
             npuStatusValue.classList.add('status-available');
-            npuStatusValue.classList.remove('status-unavailable');
+            npuStatusValue.classList.remove('status-unavailable', 'status-checking');
         } else {
             npuStatusValue.textContent = t('settings.npuNotAvailable');
             npuStatusValue.classList.add('status-unavailable');
-            npuStatusValue.classList.remove('status-available');
+            npuStatusValue.classList.remove('status-available', 'status-checking');
         }
 
         inferenceDeviceSelect.innerHTML = '';
@@ -238,28 +210,28 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
         const gpuName = hardwareInfo.gpuDeviceName || t('settings.cpuOnly');
         const dmlCount = hardwareInfo.dmlModelCount || 0;
         const cpuCount = hardwareInfo.cpuModelCount || 0;
+        const webnnCount = hardwareInfo.webnnModelCount || 0;
         const total = hardwareInfo.totalModels || 0;
 
         // Determine device type label
         let deviceTypeLabel = '';
-        if (hardwareInfo.dmlDeviceId !== undefined && hardwareInfo.dmlDeviceId !== null) {
+        if (hardwareInfo.isUsingWebNN) {
+            deviceTypeLabel = ` ${t('settings.npuLabel')}`;
+        } else if (hardwareInfo.dmlDeviceId !== undefined && hardwareInfo.dmlDeviceId !== null) {
             const matchedDevice = devices.find(d => d.dxgiAdapterNumber === hardwareInfo.dmlDeviceId);
             if (matchedDevice) {
                 deviceTypeLabel = ` ${getDeviceTypeLabel(matchedDevice.deviceType || (matchedDevice.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'))}`;
             }
         }
 
-        let epDetail = '';
-        if (dmlCount > 0 && cpuCount > 0) {
-            epDetail = ` (${t('settings.dmlModels', { count: dmlCount, total })}, ${t('settings.cpuModels', { count: cpuCount, total })})`;
-        } else if (dmlCount > 0) {
-            epDetail = ` (${t('settings.dmlModels', { count: dmlCount, total })})`;
-        } else if (cpuCount > 0) {
-            epDetail = ` (${t('settings.cpuModels', { count: cpuCount, total })})`;
-        }
+        const epParts = [];
+        if (webnnCount > 0) epParts.push(t('settings.webnnModels', { count: webnnCount, total }));
+        if (dmlCount > 0) epParts.push(t('settings.dmlModels', { count: dmlCount, total }));
+        if (cpuCount > 0) epParts.push(t('settings.cpuModels', { count: cpuCount, total }));
+        const epDetail = epParts.length > 0 ? ` (${epParts.join(', ')})` : '';
 
         let deviceIdStr = '';
-        if (hardwareInfo.dmlDeviceId !== undefined && hardwareInfo.dmlDeviceId !== null) {
+        if (!hardwareInfo.isUsingWebNN && hardwareInfo.dmlDeviceId !== undefined && hardwareInfo.dmlDeviceId !== null) {
             deviceIdStr = ` [deviceId=${hardwareInfo.dmlDeviceId}]`;
         }
 
@@ -394,6 +366,9 @@ async function loadAudioSettings(currentSetting) {
             exportCfgStrengthValue.textContent = parseFloat(eCfg).toFixed(1);
             exportCfgRescaleSlider.value = eRescale;
             exportCfgRescaleValue.textContent = parseFloat(eRescale).toFixed(2);
+
+            npuDiffBatchSizeSelect.value = String(currentSetting.npuDiffBatchSize ?? 4);
+            npuVocoderBatchSizeSelect.value = String(currentSetting.npuVocoderBatchSize ?? 4);
         }
 
         const isExclusive = audioOutputModeSelect.value === 'exclusive';
@@ -431,11 +406,14 @@ async function updateAudioDeviceList() {
     }
 }
 
-saveBtn.addEventListener('click', async () => {
+// ==================== Auto-apply settings ====================
+
+let _saveDebounce = null;
+
+function collectSettings() {
     const inferenceValue = inferenceDeviceSelect.value;
     const preferredDeviceId = inferenceValue === 'auto' ? null : (inferenceValue === 'npu' ? 'npu' : parseInt(inferenceValue));
 
-    // Determine preferredDeviceType
     let preferredDeviceType = null;
     if (preferredDeviceId !== null) {
         if (preferredDeviceId === 'npu') {
@@ -446,11 +424,9 @@ saveBtn.addEventListener('click', async () => {
         }
     }
 
-    // Get current device mode
     const deviceModeRadio = document.querySelector('input[name="deviceMode"]:checked');
     const deviceMode = deviceModeRadio ? deviceModeRadio.value : 'smart';
 
-    // Build modelDeviceMapping for advanced mode
     let modelDeviceMapping = {};
     if (deviceMode === 'advanced') {
         const mappingSelects = modelDeviceMappingDiv.querySelectorAll('.model-mapping-select');
@@ -461,12 +437,11 @@ saveBtn.addEventListener('click', async () => {
         });
     }
 
-    const settings = {
+    return {
         deviceMode,
         preferredDeviceId,
         preferredDeviceType,
         modelDeviceMapping,
-        // Backward compat: also set deviceId for old code
         deviceId: preferredDeviceId,
         previewDiffSteps: parseInt(previewDiffStepsSlider.value),
         previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
@@ -483,19 +458,101 @@ saveBtn.addEventListener('click', async () => {
         locale: languageSelect.value,
         modelPrecision: modelPrecisionSelect.value,
         midiExtractTool: midiExtractToolSelect.value,
+        npuDiffBatchSize: parseInt(npuDiffBatchSizeSelect.value),
+        npuVocoderBatchSize: parseInt(npuVocoderBatchSizeSelect.value),
     };
+}
 
+async function applySettings(options = {}) {
+    const settings = collectSettings();
     try {
         await window.electronAPI.saveSettings(settings);
-        setLocale(languageSelect.value);
-        if (window.electronAPI?.reloadMainWindow) {
-            window.electronAPI.reloadMainWindow().catch(() => {});
+        if (options.reloadLocale) {
+            setLocale(settings.locale);
+            // Locale change needs main window reload to apply UI language
+            if (window.electronAPI?.reloadMainWindow) {
+                window.electronAPI.reloadMainWindow().catch(() => {});
+            }
         }
-        window.close();
+        // Other settings (device, audio, diffusion) are saved and take effect on next synthesis / app restart
+        // No main window reload needed — avoids losing user's work
     } catch (err) {
-        console.error('保存设置失败:', err);
+        console.error('应用设置失败:', err);
     }
+}
+
+function applySettingsDebounced() {
+    if (_saveDebounce) clearTimeout(_saveDebounce);
+    _saveDebounce = setTimeout(() => applySettings(), 300);
+}
+
+// Device mode radio buttons
+deviceModeRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+        updateDeviceModeUI(radio.value);
+        applySettings();
+    });
 });
+
+// Device select
+inferenceDeviceSelect.addEventListener('change', () => applySettings());
+
+// Model mapping selects (advanced mode)
+if (modelDeviceMappingDiv) {
+    modelDeviceMappingDiv.addEventListener('change', (e) => {
+        if (e.target.classList.contains('model-mapping-select')) {
+            applySettings();
+        }
+    });
+}
+
+// Audio controls
+audioOutputModeSelect.addEventListener('change', () => {
+    const isExclusive = audioOutputModeSelect.value === 'exclusive';
+    exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
+    audioBitDepthSelect.disabled = !isExclusive;
+    updateAudioDeviceList();
+    applySettings();
+});
+audioOutputDeviceSelect.addEventListener('change', () => applySettings());
+audioSampleRateSelect.addEventListener('change', () => applySettings());
+audioBitDepthSelect.addEventListener('change', () => applySettings());
+audioBufferSizeSelect.addEventListener('change', () => applySettings());
+audioVolumeSlider.addEventListener('input', () => {
+    volumeValueSpan.textContent = audioVolumeSlider.value + '%';
+    applySettingsDebounced();
+});
+
+// Diffusion sliders
+previewDiffStepsSlider.addEventListener('input', () => {
+    previewDiffStepsValue.textContent = previewDiffStepsSlider.value;
+    applySettingsDebounced();
+});
+previewCfgStrengthSlider.addEventListener('input', () => {
+    previewCfgStrengthValue.textContent = parseFloat(previewCfgStrengthSlider.value).toFixed(1);
+    applySettingsDebounced();
+});
+previewCfgRescaleSlider.addEventListener('input', () => {
+    previewCfgRescaleValue.textContent = parseFloat(previewCfgRescaleSlider.value).toFixed(2);
+    applySettingsDebounced();
+});
+exportDiffStepsSlider.addEventListener('input', () => {
+    exportDiffStepsValue.textContent = exportDiffStepsSlider.value;
+    applySettingsDebounced();
+});
+exportCfgStrengthSlider.addEventListener('input', () => {
+    exportCfgStrengthValue.textContent = parseFloat(exportCfgStrengthSlider.value).toFixed(1);
+    applySettingsDebounced();
+});
+exportCfgRescaleSlider.addEventListener('input', () => {
+    exportCfgRescaleValue.textContent = parseFloat(exportCfgRescaleSlider.value).toFixed(2);
+    applySettingsDebounced();
+});
+
+// Language, precision, MIDI tool
+languageSelect.addEventListener('change', () => applySettings({ reloadLocale: true }));
+modelPrecisionSelect.addEventListener('change', () => applySettings());
+midiExtractToolSelect.addEventListener('change', () => applySettings());
 
 openModelDownloadBtn.addEventListener('click', async () => {
     const precision = modelPrecisionSelect.value;
@@ -504,10 +561,6 @@ openModelDownloadBtn.addEventListener('click', async () => {
     } catch (err) {
         console.error('打开模型下载失败:', err);
     }
-});
-
-cancelBtn.addEventListener('click', () => {
-    window.close();
 });
 
 (async () => {
