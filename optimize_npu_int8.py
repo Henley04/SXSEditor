@@ -153,6 +153,10 @@ def replace_dynamic_quant_matmul_chain(model):
 
     替换为：
       FP32_input + dequantized_weight → MatMul → FP32_result
+
+    注意：一个 DQL 的 scale 输出可能被多个 scale_mul 节点消费，
+    因此必须从 MatMulInteger/ConvInteger 输出向前追踪，
+    而不是从 DQL scale 向后查找 scale_mul_node。
     """
     graph = model.graph
     nodes_to_remove = set()
@@ -166,176 +170,113 @@ def replace_dynamic_quant_matmul_chain(model):
         for out in node.output:
             output_to_node[out] = node
 
-    # 遍历所有 DynamicQuantizeLinear 节点
-    for dql_node in list(graph.node):
-        if dql_node.op_type != 'DynamicQuantizeLinear':
+    # 遍历所有 MatMulInteger 和 ConvInteger 节点（从消费者向前追踪）
+    for quant_node in list(graph.node):
+        if quant_node.op_type not in ('MatMulInteger', 'ConvInteger'):
+            continue
+
+        is_matmul = quant_node.op_type == 'MatMulInteger'
+        weight_name = quant_node.input[1]
+        weight_zp_name = quant_node.input[3] if len(quant_node.input) > 3 else None
+
+        # 步骤1: 找 Cast 节点（quant_node 输出的消费者）
+        quant_output = quant_node.output[0]
+        cast_node = None
+        for node in graph.node:
+            if node.op_type == 'Cast' and quant_output in node.input:
+                cast_node = node
+                break
+
+        if cast_node is None:
+            print(f"    警告: 找不到 Cast 节点 for {quant_node.name}")
+            continue
+
+        cast_output = cast_node.output[0]
+
+        # 步骤2: 找 output_mul_node（Cast 输出 * combined_scale）
+        output_mul_node = None
+        for node in graph.node:
+            if node.op_type == 'Mul' and cast_output in node.input:
+                output_mul_node = node
+                break
+
+        if output_mul_node is None:
+            print(f"    警告: 找不到 output Mul 节点 for {cast_node.name}")
+            continue
+
+        # combined_scale 是 output_mul_node 的另一个输入
+        combined_scale_name = None
+        for inp in output_mul_node.input:
+            if inp != cast_output:
+                combined_scale_name = inp
+                break
+
+        if combined_scale_name is None:
+            print(f"    警告: 找不到 combined_scale for {output_mul_node.name}")
+            continue
+
+        # 步骤3: 找 scale_mul_node（产生 combined_scale 的节点）
+        scale_mul_node = output_to_node.get(combined_scale_name)
+        if scale_mul_node is None or scale_mul_node.op_type != 'Mul':
+            # combined_scale 可能是直接初始化器（不经过 Mul）
+            # 在这种情况下，不需要 scale_mul_node
+            scale_mul_node = None
+            # combined_scale_name 本身就是 weight_scale
+            weight_scale_name = combined_scale_name
+            dql_scale_name = None
+        else:
+            # scale_mul_node 有两个输入：DQL scale 和 weight_scale
+            dql_scale_name = None
+            weight_scale_name = None
+            for inp in scale_mul_node.input:
+                # 查找哪个输入是 DQL 的 scale 输出
+                producer = output_to_node.get(inp)
+                if producer and producer.op_type == 'DynamicQuantizeLinear':
+                    dql_scale_name = inp
+                else:
+                    weight_scale_name = inp
+
+            if weight_scale_name is None:
+                print(f"    警告: 找不到 weight_scale for {quant_node.name}")
+                continue
+
+        # 步骤4: 找 DQL 节点（产生 quant_node 的第一个输入）
+        int8_input = quant_node.input[0]
+        dql_node = output_to_node.get(int8_input)
+        if dql_node is None or dql_node.op_type != 'DynamicQuantizeLinear':
+            print(f"    警告: 找不到 DQL 节点 for {quant_node.name}")
             continue
 
         fp32_input = dql_node.input[0]
-        int8_output = dql_node.output[0]  # quantized data
-        scale_output = dql_node.output[1]  # input scale
-        zp_output = dql_node.output[2]  # input zero_point
 
-        # 查找消费 int8_output 的 MatMulInteger 或 ConvInteger
-        matmul_consumers = find_nodes_consuming(graph, int8_output)
-        matmul_nodes = [(i, n) for i, n in matmul_consumers if n.op_type == 'MatMulInteger']
-        conv_nodes = [(i, n) for i, n in matmul_consumers if n.op_type == 'ConvInteger']
+        # 步骤5: 反量化权重
+        try:
+            float_weight = dequantize_weight(graph, weight_name, weight_scale_name, weight_zp_name)
+        except ValueError as e:
+            print(f"    警告: 反量化失败 {quant_node.name}: {e}")
+            continue
 
-        # 处理 MatMulInteger
-        for _, matmul_node in matmul_nodes:
-            # weight_quantized = matmul_node.input[1]
-            weight_name = matmul_node.input[1]
-            # 找到 weight 的 scale 和 zero_point
-            # MatMulInteger inputs: [A, B, a_zp, b_zp]
-            weight_zp_name = matmul_node.input[3] if len(matmul_node.input) > 3 else None
+        # 添加反量化后的权重初始化器
+        float_weight_name = f"{weight_name}_dequant"
+        new_initializers.append(numpy_helper.from_array(
+            float_weight.astype(np.float32), name=float_weight_name
+        ))
 
-            # 找到 weight_scale：通过 DQL scale output 的 Mul 节点
-            scale_mul_node = None
-            for node in graph.node:
-                if node.op_type == 'Mul' and scale_output in node.input:
-                    scale_mul_node = node
-                    break
+        # 最终输出
+        final_output = output_mul_node.output[0]
 
-            if scale_mul_node is None:
-                print(f"    警告: 找不到 scale Mul 节点 for {matmul_node.name}")
-                continue
-
-            # weight_scale 是 Mul 的另一个输入
-            weight_scale_name = None
-            for inp in scale_mul_node.input:
-                if inp != scale_output:
-                    weight_scale_name = inp
-                    break
-
-            if weight_scale_name is None:
-                print(f"    警告: 找不到 weight_scale for {matmul_node.name}")
-                continue
-
-            # 反量化权重
-            try:
-                float_weight = dequantize_weight(graph, weight_name, weight_scale_name, weight_zp_name)
-            except ValueError as e:
-                print(f"    警告: 反量化失败 {matmul_node.name}: {e}")
-                continue
-
-            # 添加反量化后的权重初始化器
-            float_weight_name = f"{weight_name}_dequant"
-            new_initializers.append(numpy_helper.from_array(
-                float_weight.astype(np.float32), name=float_weight_name
-            ))
-
-            # 查找 Cast 节点（MatMulInteger 输出的消费者）
-            matmul_output = matmul_node.output[0]
-            cast_node = None
-            for node in graph.node:
-                if node.op_type == 'Cast' and matmul_output in node.input:
-                    cast_node = node
-                    break
-
-            if cast_node is None:
-                print(f"    警告: 找不到 Cast 节点 for {matmul_node.name}")
-                continue
-
-            cast_output = cast_node.output[0]
-
-            # 查找 output_scale_mul 节点（Cast 输出 * combined_scale）
-            output_mul_node = None
-            for node in graph.node:
-                if node.op_type == 'Mul' and cast_output in node.input:
-                    output_mul_node = node
-                    break
-
-            if output_mul_node is None:
-                print(f"    警告: 找不到 output Mul 节点 for {cast_node.name}")
-                continue
-
-            # 最终输出
-            final_output = output_mul_node.output[0]
-
+        if is_matmul:
             # 创建新的 MatMul 节点
-            new_matmul = helper.make_node(
+            new_node = helper.make_node(
                 'MatMul',
                 inputs=[fp32_input, float_weight_name],
                 outputs=[final_output],
-                name=f"{matmul_node.name}_dequant_replaced",
+                name=f"{quant_node.name}_dequant_replaced",
             )
-            new_nodes.append(new_matmul)
-
-            # 标记需要删除的节点（使用名称追踪，避免 id() 内存复用问题）
-            nodes_to_remove.add(dql_node.name)
-            nodes_to_remove.add(matmul_node.name)
-            nodes_to_remove.add(cast_node.name)
-            nodes_to_remove.add(scale_mul_node.name)
-            nodes_to_remove.add(output_mul_node.name)
-
-            replaced_count += 1
-            print(f"    替换 DQL+MatMulInt → MatMul: {dql_node.name} → {new_matmul.name}")
-
-        # 处理 ConvInteger
-        for _, conv_node in conv_nodes:
-            weight_name = conv_node.input[1]
-            weight_zp_name = conv_node.input[3] if len(conv_node.input) > 3 else None
-
-            # 找到 weight_scale
-            scale_mul_node = None
-            for node in graph.node:
-                if node.op_type == 'Mul' and scale_output in node.input:
-                    scale_mul_node = node
-                    break
-
-            if scale_mul_node is None:
-                print(f"    警告: 找不到 scale Mul 节点 for {conv_node.name}")
-                continue
-
-            weight_scale_name = None
-            for inp in scale_mul_node.input:
-                if inp != scale_output:
-                    weight_scale_name = inp
-                    break
-
-            if weight_scale_name is None:
-                continue
-
-            # 反量化权重
-            try:
-                float_weight = dequantize_weight(graph, weight_name, weight_scale_name, weight_zp_name)
-            except ValueError as e:
-                print(f"    警告: 反量化失败 {conv_node.name}: {e}")
-                continue
-
-            float_weight_name = f"{weight_name}_dequant"
-            new_initializers.append(numpy_helper.from_array(
-                float_weight.astype(np.float32), name=float_weight_name
-            ))
-
-            # 查找 Cast 节点
-            conv_output = conv_node.output[0]
-            cast_node = None
-            for node in graph.node:
-                if node.op_type == 'Cast' and conv_output in node.input:
-                    cast_node = node
-                    break
-
-            if cast_node is None:
-                continue
-
-            cast_output = cast_node.output[0]
-
-            # 查找 output_scale_mul
-            output_mul_node = None
-            for node in graph.node:
-                if node.op_type == 'Mul' and cast_output in node.input:
-                    output_mul_node = node
-                    break
-
-            if output_mul_node is None:
-                continue
-
-            final_output = output_mul_node.output[0]
-
+        else:
             # 复制 ConvInteger 的属性到新 Conv 节点
             conv_attrs = {}
-            for attr in conv_node.attribute:
+            for attr in quant_node.attribute:
                 if attr.name == 'auto_pad':
                     conv_attrs['auto_pad'] = attr.s.decode('utf-8') if attr.s else 'NOTSET'
                 elif attr.name == 'group':
@@ -347,24 +288,43 @@ def replace_dynamic_quant_matmul_chain(model):
                 elif attr.name == 'strides':
                     conv_attrs['strides'] = list(attr.ints)
 
-            # 创建新的 Conv 节点
-            new_conv = helper.make_node(
+            new_node = helper.make_node(
                 'Conv',
                 inputs=[fp32_input, float_weight_name],
                 outputs=[final_output],
-                name=f"{conv_node.name}_dequant_replaced",
+                name=f"{quant_node.name}_dequant_replaced",
                 **conv_attrs,
             )
-            new_nodes.append(new_conv)
 
-            nodes_to_remove.add(dql_node.name)
-            nodes_to_remove.add(conv_node.name)
-            nodes_to_remove.add(cast_node.name)
+        new_nodes.append(new_node)
+
+        # 标记需要删除的节点
+        nodes_to_remove.add(quant_node.name)
+        nodes_to_remove.add(cast_node.name)
+        nodes_to_remove.add(output_mul_node.name)
+        if scale_mul_node is not None:
             nodes_to_remove.add(scale_mul_node.name)
-            nodes_to_remove.add(output_mul_node.name)
 
-            replaced_count += 1
-            print(f"    替换 DQL+ConvInt → Conv: {dql_node.name} → {new_conv.name}")
+        # 检查 DQL 节点是否可以安全删除
+        # 只有当 DQL 的所有输出都不再被其他未删除节点消费时，才删除 DQL
+        dql_outputs = set(dql_node.output)
+        dql_still_needed = False
+        for node in graph.node:
+            if node.name in nodes_to_remove:
+                continue
+            for inp in node.input:
+                if inp in dql_outputs:
+                    dql_still_needed = True
+                    break
+            if dql_still_needed:
+                break
+
+        if not dql_still_needed:
+            nodes_to_remove.add(dql_node.name)
+
+        replaced_count += 1
+        op_type = 'MatMul' if is_matmul else 'Conv'
+        print(f"    替换 DQL+{quant_node.op_type} → {op_type}: {dql_node.name} → {new_node.name}")
 
     # 删除旧节点，添加新节点
     if nodes_to_remove:
@@ -798,10 +758,23 @@ def optimize_model(model_path, output_path):
     for op, cnt in sorted(ops.items(), key=lambda x: -x[1])[:8]:
         print(f"    {op}: {cnt}")
 
-    # 保存
-    onnx.save(model, output_path)
+    # 保存（大模型使用外部数据格式）
+    try:
+        onnx.save(model, output_path)
+    except ValueError:
+        # protobuf 2GB 限制，使用外部数据格式
+        print(f"  模型超过 2GB，使用外部数据格式保存...")
+        onnx.save_model(model, output_path, save_as_external_data=True,
+                        all_tensors_to_one_file=True,
+                        location=os.path.basename(output_path) + '.data',
+                        size_threshold=1024)
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    print(f"  保存: {output_path} ({size_mb:.1f} MB)")
+    data_path = output_path + '.data'
+    if os.path.exists(data_path):
+        data_mb = os.path.getsize(data_path) / (1024 * 1024)
+        print(f"  保存: {output_path} ({size_mb:.1f} MB + {data_mb:.1f} MB data)")
+    else:
+        print(f"  保存: {output_path} ({size_mb:.1f} MB)")
 
     return model, unsupported
 
