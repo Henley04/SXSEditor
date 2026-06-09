@@ -76,7 +76,7 @@ async function checkAndDownloadModels() {
   const modelDir = getModelDir();
   const precision = loadSettings().modelPrecision || DEFAULT_PRECISION;
   console.log('[Main] 检查模型文件，目录:', modelDir, '精度:', precision);
-  const { missing, existing } = await checkMissingFilesAsync(modelDir);
+  const { missing, existing } = await checkMissingFilesAsync(modelDir, precision);
 
   if (missing.length === 0) {
     console.log('[Main] 所有模型文件已就绪');
@@ -111,7 +111,7 @@ async function checkAndDownloadModels() {
       fs.mkdirSync(downloadDir, { recursive: true });
     } catch (_) {}
 
-    const recheck = await checkMissingFilesAsync(downloadDir);
+    const recheck = await checkMissingFilesAsync(downloadDir, precision);
     if (recheck.missing.length === 0) {
       console.log('[Main] 所选目录中模型文件已就绪');
       return true;
@@ -136,7 +136,7 @@ function registerModelDownloadIpc() {
   ipcMain.handle('model-download:start', async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    const { missing } = checkMissingFiles(modelDir);
+    const { missing } = checkMissingFiles(modelDir, currentPrecision);
     if (missing.length === 0) return { success: true };
     await startModelDownload(modelDir, missing, currentPrecision);
     return { success: true };
@@ -150,9 +150,10 @@ function registerModelDownloadIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('model-download:check', async () => {
+  ipcMain.handle('model-download:check', async (event, precision) => {
     const modelDir = getModelDir();
-    const { missing, existing } = checkMissingFiles(modelDir);
+    const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    const { missing, existing } = checkMissingFiles(modelDir, currentPrecision);
     return { missing, existing };
   });
 
@@ -183,7 +184,7 @@ function registerModelDownloadIpc() {
       fs.mkdirSync(downloadDir, { recursive: true });
     } catch (_) {}
 
-    const { missing, existing } = checkMissingFiles(downloadDir);
+    const { missing, existing } = checkMissingFiles(downloadDir, loadSettings().modelPrecision || DEFAULT_PRECISION);
     return { canceled: false, modelDir: downloadDir, missing, existing };
   });
 
@@ -194,19 +195,20 @@ function registerModelDownloadIpc() {
   ipcMain.handle('model-download:open', async (event, precision) => {
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     const modelDir = getModelDir();
-    const { missing } = checkMissingFiles(modelDir);
+    const { missing } = checkMissingFiles(modelDir, currentPrecision);
     createModelDownloadWindow(missing, currentPrecision, DEFAULT_PRECISION);
     return { success: true, missingCount: missing.length };
   });
 
   ipcMain.handle('model-download:delete-and-recheck', async (event, precision) => {
+    const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     const modelDir = getModelDir();
-    deleteModelFiles(modelDir);
-    const { missing } = checkMissingFiles(modelDir);
+    deleteModelFiles(modelDir, currentPrecision);
+    const { missing } = checkMissingFiles(modelDir, currentPrecision);
     const win = getModelDownloadWindow();
     if (win && !win.isDestroyed()) {
       win.webContents.send('model-download:missing-files', missing);
-      win.webContents.send('model-download:precision', precision || DEFAULT_PRECISION);
+      win.webContents.send('model-download:precision', currentPrecision);
     }
     return { success: true, missingCount: missing.length };
   });

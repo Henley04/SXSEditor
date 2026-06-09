@@ -11,6 +11,7 @@ const MODEL_IDS = {
   fp32: 'syxppp/SoulX-Singer-onnx-directml',
   fp16: 'syxppp/SoulX-Singer-onnx-directml-fp16',
   int8: 'syxppp/SoulX-Singer-onnx-directml-int8',
+  'int8-npu': 'syxppp/SoulX-Singer-onnx-directml-int8-dynamic',
 };
 const DEFAULT_PRECISION = 'fp16';
 const MODELSCOPE_ENDPOINT = 'https://modelscope.cn';
@@ -54,19 +55,32 @@ function getModelId(precision) {
   return MODEL_IDS[precision] || MODEL_IDS[DEFAULT_PRECISION];
 }
 
+const PRECISION_SUBDIR_PRECESIONS = new Set(['int8', 'fp16', 'int8-npu']);
+
+function isSvsModelFile(filePath) {
+  return !filePath.startsWith('preprocess/') && !filePath.startsWith('basic_pitch_model/');
+}
+
+function getLocalFilePath(baseDir, filePath, precision) {
+  if (precision && PRECISION_SUBDIR_PRECESIONS.has(precision) && isSvsModelFile(filePath)) {
+    return path.join(baseDir, precision, filePath);
+  }
+  return path.join(baseDir, filePath);
+}
+
 function getFileDownloadUrl(filePath, precision) {
   const modelId = getModelId(precision);
   const encoded = encodeURIComponent(filePath);
   return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
 }
 
-function checkMissingFiles(modelDir) {
+function checkMissingFiles(modelDir, precision) {
   const missing = [];
   const existing = [];
 
   for (const file of MODEL_FILE_MANIFEST) {
     if (!file.required) continue;
-    const fullPath = path.join(modelDir, file.filePath);
+    const fullPath = getLocalFilePath(modelDir, file.filePath, precision);
     let exists = false;
     let localSize = 0;
     try {
@@ -92,10 +106,10 @@ function checkMissingFiles(modelDir) {
   return { missing, existing };
 }
 
-async function checkMissingFilesAsync(modelDir) {
+async function checkMissingFilesAsync(modelDir, precision) {
   const requiredFiles = MODEL_FILE_MANIFEST.filter(f => f.required);
   const results = await Promise.all(requiredFiles.map(async (file) => {
-    const fullPath = path.join(modelDir, file.filePath);
+    const fullPath = getLocalFilePath(modelDir, file.filePath, precision);
     try {
       const stats = await fs.promises.stat(fullPath);
       if (stats.size > 0) {
@@ -122,13 +136,13 @@ async function checkMissingFilesAsync(modelDir) {
   return { missing, existing };
 }
 
-function deleteModelFiles(modelDir) {
+function deleteModelFiles(modelDir, precision) {
   if (!modelDir || typeof modelDir !== 'string') return { deleted: [], errors: [] };
   const deleted = [];
   const errors = [];
 
   for (const file of MODEL_FILE_MANIFEST) {
-    const fullPath = path.join(modelDir, file.filePath);
+    const fullPath = getLocalFilePath(modelDir, file.filePath, precision);
     // 删除主文件
     for (const suffix of ['', TEMP_SUFFIX, CHUNK_META_SUFFIX]) {
       try {
@@ -799,7 +813,8 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
 
   if (missingFiles.length === 0) return;
 
-  const cliAvailable = await checkModelScopeCLIAvailable();
+  const usePrecisionSubdir = precision && PRECISION_SUBDIR_PRECESIONS.has(precision);
+  const cliAvailable = !usePrecisionSubdir && await checkModelScopeCLIAvailable();
   if (cliAvailable) {
     console.log('[ModelManager] ModelScope CLI available, using CLI download');
     try {
@@ -863,7 +878,7 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
         throw new Error('Download cancelled');
       }
 
-      const destPath = path.join(modelDir, file.filePath);
+      const destPath = getLocalFilePath(modelDir, file.filePath, precision);
       const url = getFileDownloadUrl(file.filePath, precision);
       const fileSize = fileSizes[file.filePath];
 

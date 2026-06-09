@@ -39,6 +39,14 @@
           <span class="precision-desc" data-i18n="modelDownload.precisionInt8Desc">音质略有损失，显存占用更小，推荐核显或低显存用户使用</span>
         </span>
       </label>
+      <label class="precision-option">
+        <input type="radio" name="modelPrecision" value="int8-npu">
+        <span class="precision-radio"></span>
+        <span class="precision-text">
+          <span class="precision-name" data-i18n="modelDownload.precisionInt8Npu">INT8-NPU (NPU 优化动态维度)</span>
+          <span class="precision-desc" data-i18n="modelDownload.precisionInt8NpuDesc">动态维度模型，支持 NPU 自定义 batch size，推荐 NPU 用户使用</span>
+        </span>
+      </label>
     </div>
   </div>
 

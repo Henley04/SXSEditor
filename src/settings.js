@@ -44,6 +44,7 @@ const midiExtractToolSelect = document.getElementById('midiExtractTool');
 const openModelDownloadBtn = document.getElementById('openModelDownloadBtn');
 const npuDiffBatchSizeSelect = document.getElementById('npuDiffBatchSize');
 const npuVocoderBatchSizeSelect = document.getElementById('npuVocoderBatchSize');
+const batchSizeDisabledHint = document.getElementById('batchSizeDisabledHint');
 
 // Device mode radio button handlers
 const MODEL_GROUPS = [
@@ -83,6 +84,25 @@ function updateDeviceModeUI(mode) {
 
     if (isAdvanced) {
         buildModelDeviceMapping();
+    }
+}
+
+let _savedDiffBatch = null;
+let _savedVocoderBatch = null;
+
+function updateBatchSizeState(precision) {
+    const isOptimized = precision === 'int8-npu';
+    npuDiffBatchSizeSelect.disabled = !isOptimized;
+    npuVocoderBatchSizeSelect.disabled = !isOptimized;
+    if (batchSizeDisabledHint) {
+        batchSizeDisabledHint.classList.toggle('hidden', isOptimized);
+    }
+    if (isOptimized) {
+        if (_savedDiffBatch !== null) npuDiffBatchSizeSelect.value = _savedDiffBatch;
+        if (_savedVocoderBatch !== null) npuVocoderBatchSizeSelect.value = _savedVocoderBatch;
+    } else {
+        npuDiffBatchSizeSelect.value = '1';
+        npuVocoderBatchSizeSelect.value = '1';
     }
 }
 
@@ -184,6 +204,7 @@ async function loadDevices() {
         } else {
             modelPrecisionSelect.value = 'fp16';
         }
+        updateBatchSizeState(modelPrecisionSelect.value);
 
         if (currentSetting && currentSetting.midiExtractTool) {
             // 兼容旧设置：rosvot 映射为 rmvpe
@@ -369,6 +390,8 @@ async function loadAudioSettings(currentSetting) {
 
             npuDiffBatchSizeSelect.value = String(currentSetting.npuDiffBatchSize ?? 4);
             npuVocoderBatchSizeSelect.value = String(currentSetting.npuVocoderBatchSize ?? 4);
+            _savedDiffBatch = npuDiffBatchSizeSelect.value;
+            _savedVocoderBatch = npuVocoderBatchSizeSelect.value;
         }
 
         const isExclusive = audioOutputModeSelect.value === 'exclusive';
@@ -551,7 +574,18 @@ exportCfgRescaleSlider.addEventListener('input', () => {
 
 // Language, precision, MIDI tool
 languageSelect.addEventListener('change', () => applySettings({ reloadLocale: true }));
-modelPrecisionSelect.addEventListener('change', () => applySettings());
+modelPrecisionSelect.addEventListener('change', () => {
+    updateBatchSizeState(modelPrecisionSelect.value);
+    applySettings();
+});
+npuDiffBatchSizeSelect.addEventListener('change', () => {
+    _savedDiffBatch = npuDiffBatchSizeSelect.value;
+    applySettings();
+});
+npuVocoderBatchSizeSelect.addEventListener('change', () => {
+    _savedVocoderBatch = npuVocoderBatchSizeSelect.value;
+    applySettings();
+});
 midiExtractToolSelect.addEventListener('change', () => applySettings());
 
 openModelDownloadBtn.addEventListener('click', async () => {
@@ -1139,3 +1173,21 @@ if (window.electronAPI?.themeAPI?.onListChanged) {
         await refreshThemeList();
     });
 }
+
+// ==================== Sidebar Navigation ====================
+
+document.querySelectorAll('.sidebar-item').forEach(item => {
+    item.addEventListener('click', () => {
+        const target = item.dataset.target;
+        if (!target) return;
+
+        // Update active sidebar item
+        document.querySelectorAll('.sidebar-item').forEach(i => i.classList.remove('active'));
+        item.classList.add('active');
+
+        // Show target section, hide others
+        document.querySelectorAll('.settings-section').forEach(s => s.classList.add('hidden'));
+        const section = document.getElementById(target);
+        if (section) section.classList.remove('hidden');
+    });
+});

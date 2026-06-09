@@ -40,7 +40,7 @@ class OnnxSVSPipeline {
 
     _resolveModelDir(baseDir, modelPrecision) {
         const resolved = path.resolve(baseDir);
-        if (modelPrecision === 'int8' || modelPrecision === 'fp16') {
+        if (modelPrecision === 'int8' || modelPrecision === 'fp16' || modelPrecision === 'int8-npu') {
             const subDir = path.join(resolved, modelPrecision);
             if (fs.existsSync(subDir)) {
                 console.log(`[OnnxSVSPipeline] Using ${modelPrecision} Model directory: ${subDir}`);
