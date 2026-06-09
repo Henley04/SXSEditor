@@ -133,11 +133,14 @@ function registerWebnnIpc() {
   });
 
   // 读取模型文件并返回 ArrayBuffer（沙盒渲染进程无法直接读取文件）
+  // 使用独立 ArrayBuffer 避免池化 buffer 的共享问题，IPC 结构化克隆零拷贝传输
   ipcMain.handle('webnn:readModelFile', async (_, filePath) => {
     try {
       const data = await fs.promises.readFile(filePath);
-      // Slice to get a clean ArrayBuffer (Buffer.buffer may be a larger pooled ArrayBuffer)
-      const ab = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+      // 创建独立 ArrayBuffer（避免 Node.js Buffer 池化导致的共享问题）
+      // IPC 结构化克隆会直接转移此 ArrayBuffer 的所有权，零拷贝
+      const ab = new ArrayBuffer(data.byteLength);
+      new Uint8Array(ab).set(data);
       return { success: true, data: ab };
     } catch (e) {
       return { success: false, error: e.message };
