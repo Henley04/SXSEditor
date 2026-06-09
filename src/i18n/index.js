@@ -8,7 +8,7 @@ const locales = {
     'en': en,
 };
 
-let currentLocale = 'zh-CN';
+let currentLocale = 'en';
 
 function getLocale() {
     return currentLocale;
@@ -32,7 +32,7 @@ function resolve(obj, key) {
 function t(key, params) {
     let value = resolve(locales[currentLocale], key);
     if (value === undefined) {
-        value = resolve(locales['zh-CN'], key);
+        value = resolve(locales['en'], key);
     }
     if (value === undefined) {
         return key;
@@ -71,13 +71,26 @@ function applyLocale() {
     });
 }
 
-function initI18n() {
+async function initI18n() {
+    // 1. Check localStorage (fast, renderer-local)
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved && locales[saved]) {
         currentLocale = saved;
         return;
     }
-    const lang = navigator.language;
+    // 2. Read from main process config file (authoritative source)
+    try {
+        if (window.electronAPI?.getLocale) {
+            const mainLocale = await window.electronAPI.getLocale();
+            if (mainLocale && locales[mainLocale]) {
+                currentLocale = mainLocale;
+                localStorage.setItem(STORAGE_KEY, mainLocale);
+                return;
+            }
+        }
+    } catch (_) {}
+    // 3. Detect system language, default to English
+    const lang = navigator.language || '';
     if (lang.startsWith('zh')) {
         currentLocale = 'zh-CN';
     } else {

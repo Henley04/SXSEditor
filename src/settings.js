@@ -58,6 +58,76 @@ const MODEL_GROUPS = [
 let cachedDevices = [];
 let cachedWebnnInfo = null;
 
+/**
+ * 立即应用已保存的设置到 UI（在硬件检测完成前显示正确的值）
+ */
+function applySavedSettingsToUI(currentSetting) {
+    if (!currentSetting) return;
+
+    // Device mode
+    const deviceMode = currentSetting.deviceMode || 'smart';
+    const radioToCheck = document.querySelector(`input[name="deviceMode"][value="${deviceMode}"]`);
+    if (radioToCheck) radioToCheck.checked = true;
+    updateDeviceModeUI(deviceMode);
+
+    // Diffusion sliders
+    const pSteps = currentSetting.previewDiffSteps ?? 16;
+    const pCfg = currentSetting.previewCfgStrength ?? 3.0;
+    const pRescale = currentSetting.previewCfgRescale ?? 0.75;
+    previewDiffStepsSlider.value = pSteps;
+    previewDiffStepsValue.textContent = pSteps;
+    previewCfgStrengthSlider.value = pCfg;
+    previewCfgStrengthValue.textContent = parseFloat(pCfg).toFixed(1);
+    previewCfgRescaleSlider.value = pRescale;
+    previewCfgRescaleValue.textContent = parseFloat(pRescale).toFixed(2);
+
+    const eSteps = currentSetting.exportDiffSteps ?? 32;
+    const eCfg = currentSetting.exportCfgStrength ?? 3.0;
+    const eRescale = currentSetting.exportCfgRescale ?? 0.75;
+    exportDiffStepsSlider.value = eSteps;
+    exportDiffStepsValue.textContent = eSteps;
+    exportCfgStrengthSlider.value = eCfg;
+    exportCfgStrengthValue.textContent = parseFloat(eCfg).toFixed(1);
+    exportCfgRescaleSlider.value = eRescale;
+    exportCfgRescaleValue.textContent = parseFloat(eRescale).toFixed(2);
+
+    // Audio settings
+    if (currentSetting.audioOutputMode) audioOutputModeSelect.value = currentSetting.audioOutputMode;
+    if (currentSetting.audioSampleRate) audioSampleRateSelect.value = String(currentSetting.audioSampleRate);
+    if (currentSetting.audioBitDepth) audioBitDepthSelect.value = currentSetting.audioBitDepth;
+    if (currentSetting.audioBufferSize) audioBufferSizeSelect.value = String(currentSetting.audioBufferSize);
+    if (currentSetting.audioVolume !== undefined) {
+        audioVolumeSlider.value = Math.round(currentSetting.audioVolume * 100);
+        volumeValueSpan.textContent = Math.round(currentSetting.audioVolume * 100) + '%';
+    }
+
+    // Language & precision
+    languageSelect.value = getLocale();
+    if (currentSetting.modelPrecision) {
+        modelPrecisionSelect.value = currentSetting.modelPrecision;
+    } else {
+        modelPrecisionSelect.value = 'fp16';
+    }
+
+    // MIDI tool
+    if (currentSetting.midiExtractTool) {
+        const tool = currentSetting.midiExtractTool === 'rosvot' ? 'rmvpe' : currentSetting.midiExtractTool;
+        midiExtractToolSelect.value = tool;
+    } else {
+        midiExtractToolSelect.value = 'basicpitch';
+    }
+
+    // NPU batch sizes (set saved values before updateBatchSizeState which may override)
+    _savedDiffBatch = String(currentSetting.npuDiffBatchSize ?? 4);
+    _savedVocoderBatch = String(currentSetting.npuVocoderBatchSize ?? 4);
+    updateBatchSizeState(modelPrecisionSelect.value);
+
+    // Audio exclusive mode
+    const isExclusive = audioOutputModeSelect.value === 'exclusive';
+    exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
+    audioBitDepthSelect.disabled = !isExclusive;
+}
+
 function getDeviceTypeLabel(deviceType) {
     switch (deviceType) {
         case 'discrete-gpu': return t('settings.discreteGpu');
@@ -106,6 +176,35 @@ function updateBatchSizeState(precision) {
     }
 }
 
+const PRECISION_LABELS = {
+    'fp32': 'FP32',
+    'fp16': 'FP16',
+    'int8': 'INT8',
+    'int8-npu': 'INT8-NPU',
+};
+
+function updateModelStatusDisplay(modelStatus) {
+    const el = document.getElementById('modelStatusList');
+    if (!el || !modelStatus) return;
+    el.innerHTML = '';
+    for (const [prec, status] of Object.entries(modelStatus)) {
+        const item = document.createElement('div');
+        item.className = 'model-status-item';
+        const dot = document.createElement('span');
+        dot.className = 'model-status-dot ' + (status.ready ? 'ready' : 'missing');
+        const label = document.createElement('span');
+        label.className = 'model-status-label';
+        label.textContent = PRECISION_LABELS[prec] || prec;
+        const info = document.createElement('span');
+        info.className = 'model-status-info';
+        info.textContent = status.ready ? t('settings.modelReady') : t('settings.modelMissing', { count: status.missing });
+        item.appendChild(dot);
+        item.appendChild(label);
+        item.appendChild(info);
+        el.appendChild(item);
+    }
+}
+
 async function loadDevices() {
     try {
         // 立即显示加载状态
@@ -116,14 +215,15 @@ async function loadDevices() {
         npuStatusValue.classList.remove('status-available', 'status-unavailable');
         npuStatusValue.classList.add('status-checking');
 
-        // 并行获取设备列表和设置
-        const [devices, currentSetting] = await Promise.all([
-            window.electronAPI.getDMLDevices(),
-            window.electronAPI.getSettings(),
-        ]);
+        // 先加载已保存的设置，立即应用到 UI（避免显示 HTML 默认值）
+        const currentSetting = await window.electronAPI.getSettings();
+        window._currentSetting = currentSetting;
+        applySavedSettingsToUI(currentSetting);
+
+        // 再获取设备列表（硬件检测可能较慢）
+        const devices = await window.electronAPI.getDMLDevices();
 
         cachedDevices = devices;
-        window._currentSetting = currentSetting;
 
         // NPU 结果已经包含在 getDMLDevices 中（并行检测）
         const hasNpu = devices.some(d => d.deviceType === 'npu');
@@ -178,41 +278,19 @@ async function loadDevices() {
             cachedWebnnInfo = { ...cachedWebnnInfo, npuAvailable: true };
         }
 
-        // Restore device mode and selection from settings
-        const deviceMode = currentSetting?.deviceMode || 'smart';
-        const radioToCheck = document.querySelector(`input[name="deviceMode"][value="${deviceMode}"]`);
-        if (radioToCheck) radioToCheck.checked = true;
-
+        // Restore device selection from settings (dropdown needs device list first)
         if (currentSetting && currentSetting.preferredDeviceId !== undefined && currentSetting.preferredDeviceId !== null) {
             inferenceDeviceSelect.value = String(currentSetting.preferredDeviceId);
         } else if (currentSetting && currentSetting.deviceId !== undefined && currentSetting.deviceId !== null) {
-            // Backward compatibility with old deviceId setting
             inferenceDeviceSelect.value = String(currentSetting.deviceId);
         } else {
             inferenceDeviceSelect.value = 'auto';
         }
 
-        updateDeviceModeUI(deviceMode);
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
 
-        await loadAudioSettings(currentSetting);
-
-        languageSelect.value = getLocale();
-
-        if (currentSetting && currentSetting.modelPrecision) {
-            modelPrecisionSelect.value = currentSetting.modelPrecision;
-        } else {
-            modelPrecisionSelect.value = 'fp16';
-        }
-        updateBatchSizeState(modelPrecisionSelect.value);
-
-        if (currentSetting && currentSetting.midiExtractTool) {
-            // 兼容旧设置：rosvot 映射为 rmvpe
-            const tool = currentSetting.midiExtractTool === 'rosvot' ? 'rmvpe' : currentSetting.midiExtractTool;
-            midiExtractToolSelect.value = tool;
-        } else {
-            midiExtractToolSelect.value = 'basicpitch';
-        }
+        // Load audio device list (needs hardware detection for device enumeration)
+        await loadAudioDevices();
     } catch (err) {
         console.error('加载设备列表失败:', err);
         inferenceDeviceSelect.textContent = '';
@@ -337,7 +415,11 @@ function buildModelDeviceMapping() {
     }
 }
 
-async function loadAudioSettings(currentSetting) {
+/**
+ * 加载音频设备列表（需要 IPC 获取设备信息）
+ * 注意：音频设置值已在 applySavedSettingsToUI 中提前应用
+ */
+async function loadAudioDevices() {
     try {
         const audioResult = await window.electronAPI.getAudioDevices();
         const audioDevices = audioResult.devices || [];
@@ -355,50 +437,16 @@ async function loadAudioSettings(currentSetting) {
 
         populateAudioDevices(audioDevices);
 
-        if (currentSetting) {
-            if (currentSetting.audioOutputMode) audioOutputModeSelect.value = currentSetting.audioOutputMode;
-            if (currentSetting.audioOutputDevice !== undefined) audioOutputDeviceSelect.value = String(currentSetting.audioOutputDevice);
-            if (currentSetting.audioSampleRate) audioSampleRateSelect.value = String(currentSetting.audioSampleRate);
-            if (currentSetting.audioBitDepth) audioBitDepthSelect.value = currentSetting.audioBitDepth;
-            if (currentSetting.audioBufferSize) audioBufferSizeSelect.value = String(currentSetting.audioBufferSize);
-            if (currentSetting.audioVolume !== undefined) {
-                audioVolumeSlider.value = Math.round(currentSetting.audioVolume * 100);
-                volumeValueSpan.textContent = Math.round(currentSetting.audioVolume * 100) + '%';
-            }
-        }
-
-        if (currentSetting) {
-            const pSteps = currentSetting.previewDiffSteps ?? 16;
-            const pCfg = currentSetting.previewCfgStrength ?? 3.0;
-            const pRescale = currentSetting.previewCfgRescale ?? 0.75;
-            previewDiffStepsSlider.value = pSteps;
-            previewDiffStepsValue.textContent = pSteps;
-            previewCfgStrengthSlider.value = pCfg;
-            previewCfgStrengthValue.textContent = parseFloat(pCfg).toFixed(1);
-            previewCfgRescaleSlider.value = pRescale;
-            previewCfgRescaleValue.textContent = parseFloat(pRescale).toFixed(2);
-
-            const eSteps = currentSetting.exportDiffSteps ?? 32;
-            const eCfg = currentSetting.exportCfgStrength ?? 3.0;
-            const eRescale = currentSetting.exportCfgRescale ?? 0.75;
-            exportDiffStepsSlider.value = eSteps;
-            exportDiffStepsValue.textContent = eSteps;
-            exportCfgStrengthSlider.value = eCfg;
-            exportCfgStrengthValue.textContent = parseFloat(eCfg).toFixed(1);
-            exportCfgRescaleSlider.value = eRescale;
-            exportCfgRescaleValue.textContent = parseFloat(eRescale).toFixed(2);
-
-            npuDiffBatchSizeSelect.value = String(currentSetting.npuDiffBatchSize ?? 4);
-            npuVocoderBatchSizeSelect.value = String(currentSetting.npuVocoderBatchSize ?? 4);
-            _savedDiffBatch = npuDiffBatchSizeSelect.value;
-            _savedVocoderBatch = npuVocoderBatchSizeSelect.value;
+        // Restore audio output device selection (needs populated dropdown)
+        const currentSetting = window._currentSetting;
+        if (currentSetting && currentSetting.audioOutputDevice !== undefined) {
+            audioOutputDeviceSelect.value = String(currentSetting.audioOutputDevice);
         }
 
         const isExclusive = audioOutputModeSelect.value === 'exclusive';
-        exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
         audioBitDepthSelect.disabled = !isExclusive || !isNaudiodonAvailable;
     } catch (err) {
-        console.error('加载音频设置失败:', err);
+        console.error('加载音频设备列表失败:', err);
     }
 }
 
@@ -574,9 +622,19 @@ exportCfgRescaleSlider.addEventListener('input', () => {
 
 // Language, precision, MIDI tool
 languageSelect.addEventListener('change', () => applySettings({ reloadLocale: true }));
-modelPrecisionSelect.addEventListener('change', () => {
+modelPrecisionSelect.addEventListener('change', async () => {
     updateBatchSizeState(modelPrecisionSelect.value);
     applySettings();
+    // Check if models exist for the new precision, auto-open download if not
+    try {
+        const modelStatus = await window.electronAPI.checkModels();
+        const prec = modelPrecisionSelect.value;
+        const status = modelStatus[prec];
+        updateModelStatusDisplay(modelStatus);
+        if (status && !status.ready) {
+            await window.electronAPI.modelDownloadOpen(prec);
+        }
+    } catch (_) {}
 });
 npuDiffBatchSizeSelect.addEventListener('change', () => {
     _savedDiffBatch = npuDiffBatchSizeSelect.value;
@@ -608,9 +666,17 @@ openModelDownloadBtn.addEventListener('click', async () => {
 
 loadDevices();
 
-initI18n();
-applyLocale();
-document.documentElement.lang = getLocale();
+// Check model availability on load
+if (window.electronAPI?.checkModels) {
+    window.electronAPI.checkModels().then(modelStatus => {
+        updateModelStatusDisplay(modelStatus);
+    }).catch(() => {});
+}
+
+initI18n().then(() => {
+  applyLocale();
+  document.documentElement.lang = getLocale();
+});
 
 // ============================================================================
 // Theme management

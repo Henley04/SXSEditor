@@ -89,7 +89,7 @@ const mainLocales = {
   },
 };
 
-let mainLocale = 'zh-CN';
+let mainLocale = 'en';
 
 function loadMainLocale() {
   try {
@@ -98,15 +98,23 @@ function loadMainLocale() {
       const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       if (data.locale && mainLocales[data.locale]) {
         mainLocale = data.locale;
+        return;
       }
     }
   } catch (err) { console.warn('[Main] 加载 locale 配置失败:', err.message); }
+  // No config file — detect system language
+  const sysLang = app.getLocale(); // e.g. 'zh-CN', 'en-US', 'ja'
+  if (sysLang.startsWith('zh')) {
+    mainLocale = 'zh-CN';
+  } else {
+    mainLocale = 'en';
+  }
 }
 
 function t(key, params) {
   const resolve = (obj, k) => k.split('.').reduce((o, p) => (o && o[p] !== undefined ? o[p] : undefined), obj);
   let value = resolve(mainLocales[mainLocale], key);
-  if (value === undefined) value = resolve(mainLocales['zh-CN'], key);
+  if (value === undefined) value = resolve(mainLocales['en'], key);
   if (value === undefined) return key;
   if (params) {
     return value.replace(/\{(\w+)\}/g, (_, name) => params[name] !== undefined ? params[name] : `{${name}}`);

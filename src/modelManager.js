@@ -57,13 +57,20 @@ function getModelId(precision) {
 
 const PRECISION_SUBDIR_PRECESIONS = new Set(['int8', 'fp16', 'int8-npu']);
 
+const PRECISION_SUBDIR_MAP = {
+  'int8': 'int8',
+  'fp16': 'fp16',
+  'int8-npu': path.join('int8', 'optimized_npu'),
+};
+
 function isSvsModelFile(filePath) {
   return !filePath.startsWith('preprocess/') && !filePath.startsWith('basic_pitch_model/');
 }
 
 function getLocalFilePath(baseDir, filePath, precision) {
   if (precision && PRECISION_SUBDIR_PRECESIONS.has(precision) && isSvsModelFile(filePath)) {
-    return path.join(baseDir, precision, filePath);
+    const subdir = PRECISION_SUBDIR_MAP[precision] || precision;
+    return path.join(baseDir, subdir, filePath);
   }
   return path.join(baseDir, filePath);
 }

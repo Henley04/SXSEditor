@@ -212,6 +212,18 @@ function registerModelDownloadIpc() {
     }
     return { success: true, missingCount: missing.length };
   });
+
+  ipcMain.handle('model-download:recheck', async (event, precision) => {
+    const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    const modelDir = getModelDir();
+    const { missing } = checkMissingFiles(modelDir, currentPrecision);
+    const win = getModelDownloadWindow();
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('model-download:missing-files', missing);
+      win.webContents.send('model-download:precision', currentPrecision);
+    }
+    return { success: true, missingCount: missing.length };
+  });
 }
 
 module.exports = {

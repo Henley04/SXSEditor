@@ -303,6 +303,52 @@ body {
     margin-bottom: 0;
 }
 
+/* ==================== Model Status ==================== */
+
+.model-status-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin: 10px 0;
+}
+
+.model-status-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    font-size: var(--font-sm);
+}
+
+.model-status-dot {
+    flex-shrink: 0;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+}
+
+.model-status-dot.ready {
+    background: var(--success);
+    box-shadow: 0 0 4px var(--success);
+}
+
+.model-status-dot.missing {
+    background: var(--fg-muted);
+}
+
+.model-status-label {
+    font-weight: 600;
+    color: var(--fg-primary);
+    min-width: 60px;
+}
+
+.model-status-info {
+    color: var(--fg-muted);
+}
+
 /* ==================== Hardware Info ==================== */
 
 .hardware-info {

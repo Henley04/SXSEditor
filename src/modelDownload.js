@@ -267,29 +267,20 @@ document.getElementById('startBtn').addEventListener('click', () => {
   window.electronAPI.modelDownloadStart(currentPrecision);
 });
 
-// 精度切换时提示删除已有文件并重新下载
+// 精度切换时检查对应模型文件（不删除已有文件，不同精度可共存）
 document.querySelectorAll('input[name="modelPrecision"]').forEach(radio => {
   radio.addEventListener('change', async (e) => {
     if (isDownloading) return;
     const newPrecision = e.target.value;
     if (newPrecision === currentPrecision) return;
 
-    const confirmed = await showConfirmDialog(t('modelDownload.precisionChangeConfirm'));
-    if (!confirmed) {
-      // 恢复原来的选择
-      const prevRadio = document.querySelector(`input[name="modelPrecision"][value="${currentPrecision}"]`);
-      if (prevRadio) prevRadio.checked = true;
-      return;
-    }
-
     currentPrecision = newPrecision;
-    // 删除已有模型文件并重新检查
     document.getElementById('statusText').textContent = t('modelDownload.detecting');
     document.getElementById('startBtn').style.display = 'none';
     try {
-      await window.electronAPI.modelDownloadDeleteAndRecheck(currentPrecision);
+      await window.electronAPI.modelDownloadRecheck(currentPrecision);
     } catch (err) {
-      console.error('删除模型文件失败:', err);
+      console.error('重新检查模型文件失败:', err);
     }
   });
 });
@@ -324,6 +315,7 @@ document.getElementById('changeDirBtn').addEventListener('click', async () => {
   }
 });
 
-initI18n();
-applyLocale();
-document.documentElement.lang = getLocale();
+initI18n().then(() => {
+  applyLocale();
+  document.documentElement.lang = getLocale();
+});
