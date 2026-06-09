@@ -1,5 +1,5 @@
 const { ipcMain } = require('electron');
-const { OnnxSVSPipeline, SAMPLE_RATE } = require('../inference/nativeSvsPipeline');
+const { OnnxSVSPipeline, SAMPLE_RATE } = require('../inference/pipeline');
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
 const { t } = require('./locale');

@@ -55,7 +55,7 @@ module.exports = {
           entryPoints: [
             {
               html: './src/index.html',
-              js: './src/renderer.js',
+              js: './src/renderer/index.js',
               name: 'main_window',
               preload: {
                 js: './src/preload.js',
@@ -63,7 +63,7 @@ module.exports = {
             },
             {
               html: './src/fragmentEditor.html',
-              js: './src/fragmentEditor.js',
+              js: './src/fragmentEditor/index.js',
               name: 'fragment_editor_window',
               preload: {
                 js: './src/preload.js',
@@ -79,7 +79,7 @@ module.exports = {
             },
             {
               html: './src/audioPreprocess.html',
-              js: './src/audioPreprocess.js',
+              js: './src/audioPreprocess/index.js',
               name: 'audio_preprocess_window',
               preload: {
                 js: './src/preload.js',

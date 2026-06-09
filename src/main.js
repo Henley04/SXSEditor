@@ -37,7 +37,7 @@ if (!gotTheLock) {
   app.quit();
 }
 
-const { enumerateDMLDevices } = require('./inference/nativeSvsPipeline');
+const { enumerateDMLDevices } = require('./inference/pipeline');
 
 const {
   createWindow,

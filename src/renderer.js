@@ -2898,7 +2898,7 @@ console.log('SXSEditor renderer started');
   async function getWebnnPipeline() {
     if (webnnPipeline) return webnnPipeline;
     try {
-      const mod = await import('./inference/webnnPipeline.js');
+      const mod = await import('./inference/webnn/index.js');
       webnnPipeline = mod;
       return webnnPipeline;
     } catch (e) {

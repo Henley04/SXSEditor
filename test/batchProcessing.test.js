@@ -1,5 +1,5 @@
 const { expect } = require('chai');
-const { NativeSVSPipeline } = require('../src/inference/nativeSvsPipeline');
+const { NativeSVSPipeline } = require('../src/inference/pipeline');
 
 describe('NPU Batch Processing - Logic Tests', () => {
   let pipeline;

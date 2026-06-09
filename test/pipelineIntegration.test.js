@@ -8,7 +8,7 @@ const { resampleAudio } = require('../src/utils/resampleAudio');
 describe('Audio Processing Pipeline - Integration Tests', () => {
   describe('End-to-end F0 Quantization', () => {
     it('should build F0, quantize, and produce valid sequences', () => {
-      const { NativeSVSPipeline } = require('../src/inference/nativeSvsPipeline');
+      const { NativeSVSPipeline } = require('../src/inference/pipeline');
       const pipeline = new NativeSVSPipeline('/fake/');
 
       const notes = [
@@ -37,7 +37,7 @@ describe('Audio Processing Pipeline - Integration Tests', () => {
     });
 
     it('should handle F0 envelope pitch shifts', () => {
-      const { NativeSVSPipeline } = require('../src/inference/nativeSvsPipeline');
+      const { NativeSVSPipeline } = require('../src/inference/pipeline');
       const pipeline = new NativeSVSPipeline('/fake/');
 
       const notes = [{ pitch: 60, start: 0, duration: 2, lyric: 'zh_a1' }];
@@ -138,7 +138,7 @@ describe('Audio Processing Pipeline - Integration Tests', () => {
 
   describe('Token State Expansion to Frames', () => {
     it('should correctly expand token-level embeddings to frame-level via mel2token', () => {
-      const { NativeSVSPipeline } = require('../src/inference/nativeSvsPipeline');
+      const { NativeSVSPipeline } = require('../src/inference/pipeline');
       const pipeline = new NativeSVSPipeline('/fake/');
 
       const embedDim = 3;
@@ -224,7 +224,7 @@ describe('Track and Fragment Pipeline - Integration Tests', () => {
 
 describe('Constants Consistency', () => {
   it('should have correct sample rates across modules', () => {
-    const { SAMPLE_RATE } = require('../src/inference/nativeSvsPipeline');
+    const { SAMPLE_RATE } = require('../src/inference/pipeline');
     const { RMVPE_SAMPLE_RATE } = require('../src/inference/rmvpePitchDetector');
 
     expect(SAMPLE_RATE).to.equal(24000);
