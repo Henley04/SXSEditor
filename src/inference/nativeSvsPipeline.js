@@ -4,28 +4,53 @@ const ort = require('onnxruntime-node');
 const { pinyin } = require('pinyin-pro');
 const { getGraphicsCached } = require('../utils/gpuCache');
 
+/**
+ * 获取主窗口的 webContents（WebNN IPC 必须发送到主窗口，因为只有主窗口注册了 WebNN 处理器）
+ * 通过 windowManager 模块获取主窗口引用（避免直接 require 导致的循环依赖）
+ */
+let _getMainWindowRef = null;
+function getMainWindowWebContents() {
+    const { BrowserWindow } = require('electron');
+    // 尝试通过 windowManager 获取主窗口
+    if (!_getMainWindowRef) {
+        try {
+            _getMainWindowRef = require('../main/windowManager').getMainWindow;
+        } catch (_) { _getMainWindowRef = null; }
+    }
+    if (_getMainWindowRef) {
+        const mainWin = _getMainWindowRef();
+        if (mainWin && !mainWin.isDestroyed()) return mainWin.webContents;
+    }
+    // Fallback: 遍历所有窗口，跳过分片编辑器等子窗口
+    const wins = BrowserWindow.getAllWindows();
+    for (const w of wins) {
+        if (!w.isDestroyed() && w.webContents) return w.webContents;
+    }
+    return null;
+}
+
 // 修复 onnxruntime-common 的 float16 类型映射
 // Node.js v24+ 原生支持 Float16Array，但 onnxruntime-node 的 native binding (C++)
 // 无法识别 Float16Array 的 buffer，导致 "not enough space" 错误。
-// 解决方案：强制 float16 使用 Uint16Array 存储数据。
+// 解决方案：强制 float16 Using Uint16Array 存储数据。
 (function patchFloat16Mapping() {
     if (typeof Float16Array === 'undefined') return; // 不需要 patch
     try {
         // 触发 checkTypedArray 初始化
         try { new ort.Tensor('float16', new Uint16Array(1), [1]); } catch (_) {}
 
-        // 通过 require.cache 直接访问已加载的模块
+        // 通过 require.cache 直接访问loaded的模chunks
         for (const [key, mod] of Object.entries(require.cache)) {
             if (key.includes('onnxruntime-common') && key.includes('tensor-impl-type-mapping')) {
                 if (mod.exports && mod.exports.NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP) {
                     mod.exports.NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP.set('float16', Uint16Array);
-                    console.log('[OnnxSVSPipeline] float16 类型映射已修复 (Uint16Array)');
+                    console.log('[OnnxSVSPipeline] float16 type mapping patched (Uint16Array)');
                 }
                 break;
             }
         }
     } catch (_) {
-        // patch 失败不影响正常运行（非 FP16 模型不需要此 patch）
+        // patch 失败不影响正常运行（非 FP16 Model不需要此 patch）
     }
 })();
 
@@ -434,7 +459,7 @@ function istftReconstruction(magPhaseData, numFrames, nFft, hopLength, winLength
 }
 
 // Float32 <-> Float16 转换工具
-// 使用 Float16Array 进行转换（Node.js v24+ 原生支持）
+// Using Float16Array 进行转换（Node.js v24+ 原生支持）
 function float32ToF16Buffer(f32Data) {
     const f16 = new Float16Array(f32Data.length);
     for (let i = 0; i < f32Data.length; i++) {
@@ -452,7 +477,7 @@ function f16BufferToFloat32(u16Data) {
     return f32;
 }
 
-// 根据模型精度创建浮点张量
+// 根据Model精度创建浮点张量
 function createFloatTensor(type, f32Data, dims) {
     if (type === 'float16') {
         return new ort.Tensor('float16', float32ToF16Buffer(f32Data), dims);
@@ -460,7 +485,7 @@ function createFloatTensor(type, f32Data, dims) {
     return new ort.Tensor('float32', f32Data, dims);
 }
 
-// 从模型输出中提取 Float32Array（自动处理 float16 输出）
+// 从Model输出中提取 Float32Array（自动处理 float16 输出）
 function outputToFloat32(tensor) {
     if (tensor.type === 'float16') {
         return f16BufferToFloat32(tensor.data);
@@ -503,7 +528,7 @@ const DUMMY_TEST_INPUTS_FP16 = {
 };
 
 /**
- * 统一设备分类函数 — 所有硬件检测入口应使用此函数
+ * 统一设备分类函数 — 所有硬件检测入口应Using此函数
  * @param {string} name - 设备名称
  * @param {number} vramBytes - 显存大小（字节），0 表示未知
  * @param {boolean|undefined} dmlDiscreteFlag - DirectML 报告的 Discrete 标志
@@ -560,7 +585,7 @@ function classifyDevice(name, vramBytes = 0, dmlDiscreteFlag = undefined) {
     return 'cpu';
 }
 
-/** @deprecated 使用 classifyDevice 替代 */
+/** @deprecated Using classifyDevice 替代 */
 function isDiscreteGPUByName(name) {
     const dt = classifyDevice(name, 0, undefined);
     if (dt === 'discrete-gpu') return true;
@@ -602,7 +627,7 @@ async function enumerateGPUsViaNodeGpuInfo(cachedControllers) {
         if (controllers.length === 0) return [];
         return gpuCacheToDevices(controllers);
     } catch (e) {
-        console.warn('[OnnxSVSPipeline] systeminformation GPU 枚举失败:', e.message);
+        console.warn('[OnnxSVSPipeline] systeminformation GPU enumeration failed:', e.message);
         return [];
     }
 }
@@ -690,11 +715,11 @@ async function enumerateDMLDevices(modelDir, cachedControllers) {
     let devices = await enumerateGPUsViaNodeGpuInfo(cachedControllers);
 
     if (devices.length > 0) {
-        console.log(`[OnnxSVSPipeline] systeminformation 枚举发现 ${devices.length} 个 GPU 设备`);
+        console.log(`[OnnxSVSPipeline] systeminformation enumeration found ${devices.length}  GPU device(s)`);
         return devices;
     }
 
-    console.log('[OnnxSVSPipeline] systeminformation 未发现 GPU，尝试 ONNX Runtime verbose 日志枚举...');
+    console.log('[OnnxSVSPipeline] systeminformation found no GPU, trying ONNX Runtime verbose log enumeration...');
     if (modelDir) {
         devices = await enumerateDMLDevicesInProcess(modelDir);
     }
@@ -703,14 +728,23 @@ async function enumerateDMLDevices(modelDir, cachedControllers) {
 }
 
 async function detectBestGPU(modelDir) {
-    let devices = await enumerateDMLDevices(modelDir);
+    let devices;
+    try {
+        // Pass cached GPU controllers so enumerateGPUsViaNodeGpuInfo can use them
+        // instead of falling through to enumerateDMLDevicesInProcess (which can native-crash)
+        const controllers = await ensureGPUInfo();
+        devices = await enumerateDMLDevices(modelDir, controllers);
+    } catch (e) {
+        console.warn('[OnnxSVSPipeline] enumerateDMLDevices failed:', e.message);
+        devices = [];
+    }
 
     if (devices.length === 0) {
-        console.log('[OnnxSVSPipeline] 未发现任何 GPU 设备，将使用 CPU');
+        console.log('[OnnxSVSPipeline] No GPU devices found, will use CPU');
         return { deviceId: undefined, name: '', devices: [] };
     }
 
-    console.log(`[OnnxSVSPipeline] 发现 ${devices.length} 个设备:`);
+    console.log(`[OnnxSVSPipeline] Found ${devices.length} device(s):`);
     for (const d of devices) {
         const vramStr = d.vram ? ` (${d.vram})` : '';
         const typeLabel = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[d.deviceType] || (d.isDiscrete ? '[独显]' : '[核显]');
@@ -734,7 +768,7 @@ async function detectBestGPU(modelDir) {
     const vramStr = best.vram ? ` (${best.vram})` : '';
     const typeLabel = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[best.deviceType] || (best.isDiscrete ? '[独显]' : '[核显]');
 
-    console.log(`[OnnxSVSPipeline] 自动选择: ${best.name}${vramStr} ${typeLabel} (deviceId=${best.dxgiAdapterNumber})`);
+    console.log(`[OnnxSVSPipeline] Auto-selected: ${best.name}${vramStr} ${typeLabel} (deviceId=${best.dxgiAdapterNumber})`);
 
     return {
         deviceId: best.dxgiAdapterNumber,
@@ -746,7 +780,7 @@ async function detectBestGPU(modelDir) {
 /**
  * 智能设备选择 — 按优先级 GPU(独显) > NPU > GPU(核显) > CPU 选择主设备
  * @param {Array} devices - 设备列表
- * @param {boolean} npuAvailable - NPU 是否可用（WebNN 检测结果）
+ * @param {boolean} npuAvailable - NPU 是否available（WebNN 检测结果）
  * @returns {{ deviceId: number|undefined, deviceType: string, name: string, devices: Array }}
  */
 function selectBestDevice(devices, npuAvailable = false) {
@@ -757,7 +791,7 @@ function selectBestDevice(devices, npuAvailable = false) {
     // 按优先级排序
     const priority = { 'discrete-gpu': 0, 'npu': 1, 'integrated-gpu': 2, 'cpu': 3 };
     const availableDevices = devices.filter(d => {
-        // NPU 设备需要 WebNN 可用
+        // NPU 设备需要 WebNN available
         if (d.deviceType === 'npu' && !npuAvailable) return false;
         // GPU 设备需要有 dxgiAdapterNumber
         if ((d.deviceType === 'discrete-gpu' || d.deviceType === 'integrated-gpu') && d.dxgiAdapterNumber === undefined) return false;
@@ -785,7 +819,7 @@ function selectBestDevice(devices, npuAvailable = false) {
     };
 }
 
-// 模型大小定义（字节，FP16 版本）
+// Model大小定义（字节，FP16 版本）
 const MODEL_SIZES = {
     diff_step: 846.27 * 1024 * 1024,
     vocoder: 495.42 * 1024 * 1024,
@@ -800,19 +834,19 @@ const MODEL_SIZES = {
     rosvot: 54.58 * 1024 * 1024,
 };
 
-// 模型组定义
+// Model组定义
 const MODEL_GROUPS = {
     svs_diffusion: {
         models: ['diff_step', 'vocoder'],
-        label: 'SVS 扩散模型',
+        label: 'SVS 扩散Model',
     },
     svs_encoder: {
         models: ['note_text_encoder', 'note_pitch_encoder', 'note_type_encoder', 'f0_encoder', 'preflow', 'cond_emb'],
-        label: 'SVS 编码器模型',
+        label: 'SVS 编码器Model',
     },
     svs_auxiliary: {
         models: ['mel_transform'],
-        label: 'SVS 辅助模型',
+        label: 'SVS 辅助Model',
     },
     rmvpe: {
         models: ['rmvpe'],
@@ -825,9 +859,9 @@ const MODEL_GROUPS = {
 };
 
 /**
- * 智能模型-设备分配
+ * 智能Model-设备分配
  * @param {Array} devices - 设备列表
- * @param {boolean} npuAvailable - NPU 是否可用
+ * @param {boolean} npuAvailable - NPU 是否available
  * @returns {Object} modelDeviceMapping — { modelGroup: { deviceType, deviceId, process } }
  */
 function buildModelDeviceMapping(devices, npuAvailable = false) {
@@ -839,11 +873,11 @@ function buildModelDeviceMapping(devices, npuAvailable = false) {
     const mapping = {};
 
     for (const [groupId, group] of Object.entries(MODEL_GROUPS)) {
-        // 计算模型组总大小
+        // 计算Model组总大小
         const totalSize = group.models.reduce((sum, m) => sum + (MODEL_SIZES[m] || 0), 0);
 
         if (totalSize > 100 * 1024 * 1024) {
-            // 大模型组（>100MB）→ GPU（主进程 DirectML）
+            // 大Model组（>100MB）→ GPU（主进程 DirectML）
             if (hasDiscreteGPU) {
                 mapping[groupId] = { deviceType: 'discrete-gpu', deviceId: discreteGPU.dxgiAdapterNumber, process: 'main' };
             } else if (integratedGPU) {
@@ -852,7 +886,7 @@ function buildModelDeviceMapping(devices, npuAvailable = false) {
                 mapping[groupId] = { deviceType: 'cpu', deviceId: undefined, process: 'main' };
             }
         } else if (totalSize > 10 * 1024 * 1024) {
-            // 中等模型组（10-100MB）→ GPU 优先
+            // 中等Model组（10-100MB）→ GPU 优先
             if (hasDiscreteGPU) {
                 mapping[groupId] = { deviceType: 'discrete-gpu', deviceId: discreteGPU.dxgiAdapterNumber, process: 'main' };
             } else if (integratedGPU) {
@@ -863,7 +897,7 @@ function buildModelDeviceMapping(devices, npuAvailable = false) {
                 mapping[groupId] = { deviceType: 'cpu', deviceId: undefined, process: 'main' };
             }
         } else {
-            // 小模型组（<10MB）→ NPU 优先（释放 GPU 显存），否则 CPU
+            // 小Model组（<10MB）→ NPU 优先（释放 GPU 显存），否则 CPU
             if (npuAvailable) {
                 mapping[groupId] = { deviceType: 'npu', deviceId: 'npu-webnn', process: 'renderer' };
             } else {
@@ -877,19 +911,19 @@ function buildModelDeviceMapping(devices, npuAvailable = false) {
 
 /**
  * 替代 detectBestGPU 的新函数，返回包含 deviceType 和 modelDeviceMapping 的结果
- * @param {string} modelDir - 模型目录
- * @param {boolean} npuAvailable - NPU 是否可用
+ * @param {string} modelDir - Model目录
+ * @param {boolean} npuAvailable - NPU 是否available
  * @returns {{ deviceId: number|undefined, deviceType: string, name: string, devices: Array, modelDeviceMapping: Object }}
  */
 async function detectBestDevice(modelDir, npuAvailable = false) {
     let devices = await enumerateDMLDevices(modelDir);
 
     if (devices.length === 0) {
-        console.log('[OnnxSVSPipeline] 未发现任何设备，将使用 CPU');
+        console.log('[OnnxSVSPipeline] No devices found, will use CPU');
         return { deviceId: undefined, deviceType: 'cpu', name: 'CPU', devices: [], modelDeviceMapping: {} };
     }
 
-    console.log(`[OnnxSVSPipeline] 发现 ${devices.length} 个设备:`);
+    console.log(`[OnnxSVSPipeline] Found ${devices.length} device(s):`);
     for (const d of devices) {
         const vramStr = d.vram ? ` (${d.vram})` : '';
         const typeLabel = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[d.deviceType] || (d.isDiscrete ? '[独显]' : '[核显]');
@@ -903,14 +937,14 @@ async function detectBestDevice(modelDir, npuAvailable = false) {
 
     const vramStr = best.deviceType !== 'cpu' ? '' : '';
     const typeLabel = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[best.deviceType] || '';
-    console.log(`[OnnxSVSPipeline] 智能选择: ${best.name} ${typeLabel} (deviceId=${best.deviceId})`);
+        // TODO: translate -     console.log(`[OnnxSVSPipeline] 智能选择: ${best.name} ${typeLabel} (deviceId=${best.deviceId})`);
 
-    // 打印模型分配
+    // 打印Model分配
     for (const [groupId, alloc] of Object.entries(modelDeviceMapping)) {
         const groupLabel = MODEL_GROUPS[groupId]?.label || groupId;
         const allocType = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[alloc.deviceType] || alloc.deviceType;
         const processLabel = alloc.process === 'renderer' ? '(WebNN)' : '(DirectML)';
-        console.log(`  - ${groupLabel} → ${allocType} ${processLabel}`);
+        // TODO: translate -         console.log(`  - ${groupLabel} → ${allocType} ${processLabel}`);
     }
 
     return {
@@ -929,7 +963,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
 
     if (!dummyInputs) {
         const session = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
-        console.log(`[OnnxSVSPipeline] ${modelName} 加载成功 [CPU] (无验证输入)`);
+        // TODO: translate -         console.log(`[OnnxSVSPipeline] ${modelName} 加载成功 [CPU] (无验证输入)`);
         return { session, ep: 'cpu' };
     }
 
@@ -940,12 +974,12 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             : 'dml';
         dmlSession = await ort.InferenceSession.create(modelPath, { executionProviders: [dmlOpts, 'cpu'] });
         await dmlSession.run(dummyInputs);
-        console.log(`[OnnxSVSPipeline] ${modelName} 加载成功 [DML]${gpuTag} (推理验证通过)`);
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
         return { session: dmlSession, ep: 'dml' };
     } catch (dmlErr) {
         if (dmlSession) {
             try { dmlSession.release(); } catch (e) {
-                console.warn(`[OnnxSVSPipeline] 释放 DML 会话失败 (${modelName}):`, e.message);
+                console.warn(`[OnnxSVSPipeline] Failed to release DML session (${modelName}):`, e.message);
             }
         }
         const reason = dmlErr.message.includes('Reshape')
@@ -953,10 +987,10 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             : dmlErr.message.includes('ConvTranspose')
             ? 'DML 不支持大 stride ConvTranspose (stride=480)'
             : `DML 推理验证失败 (${dmlErr.message.substring(0, 60).split('\n')[0]})`;
-        console.log(`[OnnxSVSPipeline] ${modelName} DML 不可用: ${reason}`);
+        console.log(`[OnnxSVSPipeline] ${modelName} DML load failed, reason:: ${reason}`);
     }
 
-    // DML不可用，尝试使用DML优化版本模型（在CPU上运行）
+    // DML不available，尝试UsingDML优化版本Model（在CPU上运行）
     const dmlModelPath = modelPath.replace('.onnx', '_dml.onnx');
     if (dmlModelPath !== modelPath) {
         let dmlModelExists = false;
@@ -970,10 +1004,10 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                     try { dmlModelSession.release(); } catch (_) {}
                     throw runErr;
                 }
-                console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} 加载成功 [CPU] (DML优化模型，推理验证通过)`);
+        // TODO: translate -                 console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} 加载成功 [CPU] (DML-optimized，inference verified)`);
                 return { session: dmlModelSession, ep: 'cpu' };
             } catch (dmlModelErr) {
-                console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} DML优化模型加载失败: ${dmlModelErr.message.substring(0, 60).split('\n')[0]}`);
+                console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} DML-optimized model load failed: ${dmlModelErr.message.substring(0, 60).split('\n')[0]}`);
             }
         }
     }
@@ -985,26 +1019,100 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         try { cpuSession.release(); } catch (_) {}
         throw runErr;
     }
-    console.log(`[OnnxSVSPipeline] ${modelName} 加载成功 [CPU] (推理验证通过)`);
+    console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (inference verified)`);
     return { session: cpuSession, ep: 'cpu' };
+}
+
+/**
+ * WebNN 会话代理 — 将 session.run() 调用通过 IPC 转发到渲染进程的 WebNN 推理引擎
+ */
+class WebNNSessionProxy {
+    constructor(modelId) {
+        this.modelId = modelId;
+    }
+
+    async run(feeds) {
+        const { ipcMain } = require('electron');
+
+        const wc = getMainWindowWebContents();
+        if (!wc) throw new Error('No renderer window for WebNN inference');
+
+        // 序列化输入张量
+        const serializedInputs = {};
+        for (const [name, tensor] of Object.entries(feeds)) {
+            serializedInputs[name] = {
+                data: tensor.data,
+                dims: tensor.dims,
+                type: tensor.type,
+            };
+        }
+
+        return new Promise((resolve, reject) => {
+            const requestId = `svs-webnn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            const timeout = setTimeout(() => reject(new Error(`WebNN inference timeout (${this.modelId})`)), 120000);
+
+            ipcMain.handleOnce(`webnn:runInference:response:${requestId}`, (_, result) => {
+                clearTimeout(timeout);
+                if (result.error) {
+                    reject(new Error(result.error));
+                } else {
+                    // 反序列化输出张量
+                    const outputTensors = {};
+                    for (const [name, out] of Object.entries(result)) {
+                        let typedData;
+                        if (out.type === 'float16') {
+                            typedData = new Uint16Array(out.data);
+                        } else if (out.type === 'int64') {
+                            typedData = BigInt64Array.from(out.data.map(v => BigInt(v)));
+                        } else {
+                            typedData = new Float32Array(out.data);
+                        }
+                        outputTensors[name] = new ort.Tensor(out.type || 'float32', typedData, out.dims);
+                    }
+                    resolve(outputTensors);
+                }
+            });
+
+            wc.send('webnn:runInference:request', { requestId, modelId: this.modelId, inputs: serializedInputs });
+        });
+    }
+
+    release() {
+        // WebNN Model卸载由 pipeline dispose 统一处理
+    }
 }
 
 class OnnxSVSPipeline {
     constructor(modelDir, options = {}) {
-        this.modelDir = path.resolve(modelDir);
+        this.modelDir = this._resolveModelDir(modelDir, options.modelPrecision);
         this.sessions = {};
         this.sessionEPs = {};
-        this.isFP16 = false; // 是否为 FP16 精度模型
+        this.isFP16 = false; // 是否为 FP16 精度Model
         this.gpuDeviceName = '';
         this.dmlDeviceId = undefined;
         this.initialized = false;
         this.phone2idx = {};
         this.enG2pDict = {};
         this.userDeviceId = options.deviceId;
+        this.preferredDeviceType = options.preferredDeviceType || null;
+        this.useWebNN = false;
         this._synthCache = null;
         this._initPromise = null;
         this._loadPhoneSet();
         this._loadEnG2pDict();
+    }
+
+    _resolveModelDir(baseDir, modelPrecision) {
+        const resolved = path.resolve(baseDir);
+        if (modelPrecision === 'int8' || modelPrecision === 'fp16') {
+            const subDir = path.join(resolved, modelPrecision);
+            if (fs.existsSync(subDir)) {
+                console.log(`[OnnxSVSPipeline] Using ${modelPrecision} Model directory: ${subDir}`);
+                return subDir;
+            }
+            console.warn(`[OnnxSVSPipeline] ${modelPrecision} directory not found: ${subDir}, falling back to default directory`);
+        }
+        return resolved;
     }
 
     _loadPhoneSet() {
@@ -1020,14 +1128,14 @@ class OnnxSVSPipeline {
                     for (let i = 0; i < phoneList.length; i++) {
                         this.phone2idx[phoneList[i]] = i;
                     }
-                    console.log(`[OnnxSVSPipeline] 音素词汇表已加载: ${phoneList.length} 个音素 (路径: ${phoneSetPath})`);
+                    console.log(`[OnnxSVSPipeline] Phoneme vocabulary loaded: ${phoneList.length} phonemes (path: ${phoneSetPath})`);
                     return;
                 }
             } catch (e) {
-                console.warn(`[OnnxSVSPipeline] 加载音素词汇表失败 (${phoneSetPath}):`, e.message);
+                console.warn(`[OnnxSVSPipeline] Failed to load phoneme vocabulary (${phoneSetPath}):`, e.message);
             }
         }
-        console.error('[OnnxSVSPipeline] 加载音素词汇表失败: 所有搜索路径均未找到 phone_set.json');
+        console.error('[OnnxSVSPipeline] Failed to load phoneme vocabulary: phone_set.json not found in any search path');
     }
 
     _loadEnG2pDict() {
@@ -1040,14 +1148,14 @@ class OnnxSVSPipeline {
             try {
                 if (fs.existsSync(dictPath)) {
                     this.enG2pDict = JSON.parse(fs.readFileSync(dictPath, 'utf-8'));
-                    console.log(`[OnnxSVSPipeline] 英文G2P词典已加载(CMUdict): ${Object.keys(this.enG2pDict).length} 个词 (路径: ${dictPath})`);
+                    console.log(`[OnnxSVSPipeline] English G2P dictionary loaded (CMUdict): ${Object.keys(this.enG2pDict).length} words (path: ${dictPath})`);
                     return;
                 }
             } catch (e) {
-                console.warn(`[OnnxSVSPipeline] 加载英文G2P词典失败 (${dictPath}):`, e.message);
+                console.warn(`[OnnxSVSPipeline] Failed to load English G2P dictionary (${dictPath}):`, e.message);
             }
         }
-        console.warn('[OnnxSVSPipeline] 英文G2P词典未找到，英文歌词将使用字母级回退');
+        // TODO: translate -         console.warn('[OnnxSVSPipeline] 英文G2P词典未找到，英文歌词将Using字母级回退');
     }
 
     _englishG2p(word) {
@@ -1055,7 +1163,7 @@ class OnnxSVSPipeline {
         if (this.enG2pDict[lower]) {
             return this.enG2pDict[lower];
         }
-        console.warn(`[OnnxSVSPipeline] 英文单词 "${word}" 不在CMUdict中，使用字母级回退`);
+        console.warn(`[OnnxSVSPipeline] English word "${word}" not in CMUdict, using letter-level fallback`);
         const letterMap = {
             a: 'EY1', b: 'B IY1', c: 'S IY1', d: 'D IY1', e: 'IY1',
             f: 'EH1 F', g: 'JH IY1', h: 'EY1 CH', i: 'AY1', j: 'JH EY1',
@@ -1094,7 +1202,7 @@ class OnnxSVSPipeline {
         if (zhPhoneme && this.phone2idx[zhPhoneme] !== undefined) {
             return this.phone2idx[zhPhoneme];
         }
-        console.warn(`[OnnxSVSPipeline] 未知音素: "${trimmed}"${zhPhoneme ? ` (转换后: ${zhPhoneme})` : ''}, 使用 <UNK>`);
+        console.warn(`[OnnxSVSPipeline] Unknown phoneme: "${trimmed}"${zhPhoneme ? ` (converted: ${zhPhoneme})` : ''}, Using <UNK>`);
         return this.phone2idx['<UNK>'] || 3;
     }
 
@@ -1116,7 +1224,7 @@ class OnnxSVSPipeline {
                 return 'zh_' + syllable;
             }
         } catch (e) {
-            console.warn(`[OnnxSVSPipeline] 拼音转换失败 ("${input}"):`, e.message);
+            console.warn(`[OnnxSVSPipeline] Pinyin conversion failed ("${input}"):`, e.message);
         }
         return null;
     }
@@ -1137,21 +1245,49 @@ class OnnxSVSPipeline {
     }
 
     async _doInit() {
-        console.log('[OnnxSVSPipeline] 开始初始化 (ONNX Runtime + DirectML)...');
-        console.log('[OnnxSVSPipeline] 模型目录:', this.modelDir);
+        console.log('[OnnxSVSPipeline] Initializing (ONNX Runtime + DirectML)...');
+        console.log('[OnnxSVSPipeline] Model directory:', this.modelDir);
 
-        const gpuInfo = await detectBestGPU(this.modelDir);
+        let gpuInfo;
+        try {
+            console.log('[OnnxSVSPipeline] Detecting GPU...');
+            gpuInfo = await detectBestGPU(this.modelDir);
+            console.log('[OnnxSVSPipeline] GPU detection done');
+        } catch (e) {
+            console.error('[OnnxSVSPipeline] GPU detection failed:', e.message);
+            gpuInfo = { deviceId: undefined, name: '', devices: [] };
+        }
         this.allDevices = gpuInfo.devices || [];
 
-        if (this.userDeviceId !== undefined && this.userDeviceId !== null) {
-            this.dmlDeviceId = this.userDeviceId;
-            const selectedDevice = this.allDevices.find(d => d.dxgiAdapterNumber === this.userDeviceId);
-            this.gpuDeviceName = selectedDevice ? `${selectedDevice.name}${selectedDevice.vram ? ` (${selectedDevice.vram})` : ''}` : `deviceId=${this.userDeviceId}`;
-            console.log(`[OnnxSVSPipeline] 使用用户指定设备: ${this.gpuDeviceName} (deviceId=${this.dmlDeviceId})`);
-        } else {
-            this.dmlDeviceId = gpuInfo.deviceId;
-            this.gpuDeviceName = gpuInfo.name || '无 GPU (仅 CPU)';
-            console.log(`[OnnxSVSPipeline] GPU 设备 (自动): ${this.gpuDeviceName}${this.dmlDeviceId !== undefined ? ` (deviceId=${this.dmlDeviceId})` : ''}`);
+        // 检查是否选择 NPU (WebNN)
+        const isNpuRequested = this.preferredDeviceType === 'npu' || this.userDeviceId === 'npu';
+        if (isNpuRequested) {
+            try {
+                const { detectNPUAvailability } = require('../main/webnnIpc');
+                const npuResult = await detectNPUAvailability();
+                if (npuResult.npuAvailable) {
+                    this.useWebNN = true;
+                    this.gpuDeviceName = 'NPU (WebNN)';
+                    console.log('[OnnxSVSPipeline] NPU available, using WebNN inference engine');
+                } else {
+                    console.warn(`[OnnxSVSPipeline] NPU not available (${npuResult.details}), falling back to DML/CPU`);
+                }
+            } catch (e) {
+                console.warn('[OnnxSVSPipeline] NPU detection failed, falling back to DML/CPU:', e.message);
+            }
+        }
+
+        if (!this.useWebNN) {
+            if (this.userDeviceId !== undefined && this.userDeviceId !== null) {
+                this.dmlDeviceId = this.userDeviceId;
+                const selectedDevice = this.allDevices.find(d => d.dxgiAdapterNumber === this.userDeviceId);
+                this.gpuDeviceName = selectedDevice ? `${selectedDevice.name}${selectedDevice.vram ? ` (${selectedDevice.vram})` : ''}` : `deviceId=${this.userDeviceId}`;
+                console.log(`[OnnxSVSPipeline] Using user-specified device: ${this.gpuDeviceName} (deviceId=${this.dmlDeviceId})`);
+            } else {
+                this.dmlDeviceId = gpuInfo.deviceId;
+                this.gpuDeviceName = gpuInfo.name || '无 GPU (仅 CPU)';
+                console.log(`[OnnxSVSPipeline] GPU device (auto): ${this.gpuDeviceName}${this.dmlDeviceId !== undefined ? ` (deviceId=${this.dmlDeviceId})` : ''}`);
+            }
         }
 
         const resolvedModelFiles = [...ONNX_MODEL_FILES];
@@ -1162,7 +1298,7 @@ class OnnxSVSPipeline {
             try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
             if (!dmlExists) {
                 resolvedModelFiles[dmlIdx] = 'diff_step.onnx';
-                console.log('[OnnxSVSPipeline] diff_step_dml.onnx 不存在，使用 diff_step.onnx');
+                console.log('[OnnxSVSPipeline] diff_step_dml.onnx not found, using diff_step.onnx');
             }
         }
         const vocDmlIdx = resolvedModelFiles.indexOf('vocoder_dml.onnx');
@@ -1172,7 +1308,7 @@ class OnnxSVSPipeline {
             try { await fs.promises.access(vocDmlPath); vocDmlExists = true; } catch (_) {}
             if (!vocDmlExists) {
                 resolvedModelFiles[vocDmlIdx] = 'vocoder.onnx';
-                console.log('[OnnxSVSPipeline] vocoder_dml.onnx 不存在，使用 vocoder.onnx');
+                console.log('[OnnxSVSPipeline] vocoder_dml.onnx not found, using vocoder.onnx');
             }
         }
 
@@ -1182,7 +1318,7 @@ class OnnxSVSPipeline {
             try {
                 stats = await fs.promises.stat(filePath);
             } catch (_) {
-                throw new Error(`模型文件不存在: ${filePath}`);
+                throw new Error(`Model文件不存在: ${filePath}`);
             }
             console.log(`[OnnxSVSPipeline] ${modelFile}: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
         }
@@ -1199,14 +1335,170 @@ class OnnxSVSPipeline {
             'melTransform',
         ];
 
-        // 检测模型精度：通过检查第一个浮点输入模型的输入类型
-        // 先临时加载 preflow 模型检测精度
-        const probeModelPath = path.join(this.modelDir, resolvedModelFiles[4]); // preflow
-        const probeSession = await ort.InferenceSession.create(probeModelPath, { executionProviders: ['cpu'] });
-        const probeInputType = probeSession.inputMetadata[0]?.type;
-        this.isFP16 = probeInputType === 'float16';
-        await probeSession.release();
-        console.log(`[OnnxSVSPipeline] 模型精度检测: ${this.isFP16 ? 'FP16 (半精度)' : 'FP32 (全精度)'}`);
+        // 检测Model精度：通过检查第一个浮点输入Model的输入类型
+        try {
+            const probeModelPath = path.join(this.modelDir, resolvedModelFiles[4]); // preflow
+            const probeSession = await ort.InferenceSession.create(probeModelPath, { executionProviders: ['cpu'] });
+            const probeInputType = probeSession.inputMetadata[0]?.type;
+            this.isFP16 = probeInputType === 'float16';
+            await probeSession.release();
+            console.log(`[OnnxSVSPipeline] Model precision: ${this.isFP16 ? 'FP16 (half precision)' : 'FP32 (full precision)'}`);
+        } catch (e) {
+            console.warn('[OnnxSVSPipeline] Precision detection failed, defaulting to FP32:', e.message);
+            this.isFP16 = false;
+        }
+
+        if (this.useWebNN) {
+            // WebNN Model加载：Using非 DML Model文件，通过 IPC 加载到渲染进程
+            const { ipcMain } = require('electron');
+
+            // Use the same resolved model files as DML — the _dml suffix is a naming convention,
+            // the ONNX format is identical and works with any execution provider (DML, WebNN, CPU).
+            const webnnModelFiles = [...resolvedModelFiles];
+            const loadedSessions = [];
+
+            // Helper: load a single model via WebNN IPC
+            const loadOneWebnnModel = (modelFile, modelId) => new Promise((resolve, reject) => {
+                const wc = getMainWindowWebContents();
+                if (!wc) { resolve({ success: false, error: 'No renderer window' }); return; }
+
+                const requestId = `svs-webnn-load-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+                const timeout = setTimeout(() => resolve({ success: false, error: 'Load timeout' }), 180000);
+
+                ipcMain.handleOnce(`webnn:loadModel:response:${requestId}`, (_, res) => {
+                    clearTimeout(timeout);
+                    resolve(res);
+                });
+
+                wc.send('webnn:loadModel:request', {
+                    requestId,
+                    modelId,
+                    modelPath: path.join(this.modelDir, modelFile),
+                    options: { deviceType: 'npu' },
+                });
+            });
+
+            // Helper: unload a WebNN model
+            const unloadWebnnModel = (modelId) => {
+                try {
+                    const wc = getMainWindowWebContents();
+                    if (wc) {
+                        const reqId = `svs-webnn-unload-${Date.now()}`;
+                        ipcMain.handleOnce(`webnn:unloadModel:response:${reqId}`, () => {});
+                        wc.send('webnn:unloadModel:request', { requestId: reqId, modelId });
+                    }
+                } catch (_) {}
+            };
+
+            try {
+                // Probe: load the first model to verify NPU actually works
+                const probeFile = webnnModelFiles[0];
+                const probeKey = sessionKeys[0];
+                console.log(`[OnnxSVSPipeline] WebNN probe: loading ${probeFile}...`);
+                const probeResult = await loadOneWebnnModel(probeFile, probeKey);
+
+                if (!probeResult.success) {
+                    throw new Error(`WebNN 探测失败: ${probeResult.error}`);
+                }
+
+                // Check if NPU was actually used (not silently fallen back to GPU/WASM)
+                const probeEp = probeResult.ep || '';
+                if (!probeEp.includes('npu')) {
+                    // Model loaded but not on NPU — clean up and fall back to DML
+                    unloadWebnnModel(probeKey);
+                    console.warn(`[OnnxSVSPipeline] WebNN probe: NPU not usable, actually using ${probeEp}, falling back to DML/CPU`);
+                    // Cache the failure so next init skips NPU detection entirely
+                    try {
+                        const { markNPUUnavailable } = require('../main/webnnIpc');
+                        markNPUUnavailable(`WebNN probe: NPU not usable, fell back to ${probeEp}`);
+                    } catch (_) {}
+                    this.useWebNN = false;
+                    return await this._doInitFallback(gpuInfo, resolvedModelFiles, sessionKeys);
+                }
+
+                // NPU confirmed working — load remaining models
+                this.sessions[probeKey] = new WebNNSessionProxy(probeKey);
+                this.sessionEPs[probeKey] = probeEp;
+                loadedSessions.push(probeKey);
+                console.log(`[OnnxSVSPipeline] ${probeFile} loaded via WebNN-NPU [${probeEp}]`);
+
+                for (let i = 1; i < webnnModelFiles.length; i++) {
+                    const modelFile = webnnModelFiles[i];
+                    const modelId = sessionKeys[i];
+
+                    const result = await loadOneWebnnModel(modelFile, modelId);
+
+                    if (result.success) {
+                        this.sessions[modelId] = new WebNNSessionProxy(modelId);
+                        this.sessionEPs[modelId] = result.ep || 'webnn-npu';
+                        loadedSessions.push(modelId);
+                        console.log(`[OnnxSVSPipeline] ${modelFile} loaded via WebNN [${result.ep}]`);
+                    } else {
+                        throw new Error(`WebNN 加载 ${modelFile} 失败: ${result.error}`);
+                    }
+                }
+
+                const webnnCount = Object.values(this.sessionEPs).filter(e => String(e).startsWith('webnn')).length;
+                console.log(`[OnnxSVSPipeline] WebNN init complete: ${webnnCount}  model(s) using WebNN`);
+            } catch (err) {
+                console.error('[OnnxSVSPipeline] WebNN init failed:', err.message);
+                // 卸载loaded的 WebNN Model
+                for (const key of loadedSessions) {
+                    unloadWebnnModel(key);
+                    delete this.sessions[key];
+                    delete this.sessionEPs[key];
+                }
+                this.useWebNN = false;
+        // TODO: translate -                 console.log('[OnnxSVSPipeline] WebNN 失败, falling back to DML/CPU 初始化...');
+                // falling back to DML/CPU
+                return await this._doInitFallback(gpuInfo, resolvedModelFiles, sessionKeys);
+            }
+        } else {
+            // DML/CPU Model加载
+            const loadedSessions = [];
+            try {
+                for (let i = 0; i < resolvedModelFiles.length; i++) {
+                    const modelPath = path.join(this.modelDir, resolvedModelFiles[i]);
+                    const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16);
+                    this.sessions[sessionKeys[i]] = session;
+                    this.sessionEPs[sessionKeys[i]] = ep;
+                    loadedSessions.push(sessionKeys[i]);
+                }
+
+                const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
+                const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
+                console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
+            } catch (err) {
+                console.error('[OnnxSVSPipeline] ONNX Runtime init failed:', err.message);
+                for (const key of loadedSessions) {
+                    if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
+                        try { this.sessions[key].release(); } catch (_) {}
+                    }
+                    delete this.sessions[key];
+                    delete this.sessionEPs[key];
+                }
+                throw err;
+            }
+        }
+
+        this.initialized = true;
+        // TODO: translate -         console.log('[OnnxSVSPipeline] Init complete: ONNX Runtime 已就绪');
+        return true;
+    }
+
+    /**
+     * DML/CPU 回退初始化（当 WebNN 失败时调用）
+     */
+    async _doInitFallback(gpuInfo, resolvedModelFiles, sessionKeys) {
+        if (this.userDeviceId !== undefined && this.userDeviceId !== null && this.userDeviceId !== 'npu') {
+            this.dmlDeviceId = this.userDeviceId;
+            const selectedDevice = this.allDevices.find(d => d.dxgiAdapterNumber === this.userDeviceId);
+            this.gpuDeviceName = selectedDevice ? `${selectedDevice.name}${selectedDevice.vram ? ` (${selectedDevice.vram})` : ''}` : `deviceId=${this.userDeviceId}`;
+        } else {
+            this.dmlDeviceId = gpuInfo.deviceId;
+            this.gpuDeviceName = gpuInfo.name || '无 GPU (仅 CPU)';
+        }
+        console.log(`[OnnxSVSPipeline] Fallback to device: ${this.gpuDeviceName}${this.dmlDeviceId !== undefined ? ` (deviceId=${this.dmlDeviceId})` : ''}`);
 
         const loadedSessions = [];
         try {
@@ -1217,12 +1509,10 @@ class OnnxSVSPipeline {
                 this.sessionEPs[sessionKeys[i]] = ep;
                 loadedSessions.push(sessionKeys[i]);
             }
-
             const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
             const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
-            console.log(`[OnnxSVSPipeline] 初始化完成: ${dmlCount} 个模型使用 DML, ${cpuCount} 个模型使用 CPU`);
+            console.log(`[OnnxSVSPipeline] Fallback init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
         } catch (err) {
-            console.error('[OnnxSVSPipeline] ONNX Runtime 初始化失败:', err.message);
             for (const key of loadedSessions) {
                 if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
                     try { this.sessions[key].release(); } catch (_) {}
@@ -1232,10 +1522,6 @@ class OnnxSVSPipeline {
             }
             throw err;
         }
-
-        this.initialized = true;
-        console.log('[OnnxSVSPipeline] 初始化完成: ONNX Runtime 已就绪');
-        return true;
     }
 
     midiToFreq(pitch) {
@@ -1733,7 +2019,7 @@ class OnnxSVSPipeline {
         const output = new Float32Array(totalSamples);
         const t0 = performance.now();
 
-        // 短音频（≤chunkSize帧 ≈ 20.5秒）直接一次性推理，避免分块开销
+        // 短音频（≤chunkSizeframes ≈ 20.5秒）直接一次性推理，避免分chunks开销
         if (totalFrames <= chunkSize) {
             const melTensor = createFloatTensor(this.isFP16 ? 'float16' : 'float32', melData instanceof Float32Array ? melData : new Float32Array(melData), [1, totalFrames, MEL_DIM]);
             const results = await this.sessions.vocoder.run({ mel: melTensor });
@@ -1741,11 +2027,11 @@ class OnnxSVSPipeline {
             const copyLen = Math.min(waveform.length, totalSamples);
             output.set(waveform.subarray(0, copyLen));
             const elapsed = performance.now() - t0;
-            console.log(`[OnnxSVSPipeline] Vocoder一次性推理: ${totalFrames}帧 → ${copyLen}样本, ${elapsed.toFixed(0)}ms`);
+        // TODO: translate -             console.log(`[OnnxSVSPipeline] Vocoder一次性推理: ${totalFrames}frames → ${copyLen}samples, ${elapsed.toFixed(0)}ms`);
             return output;
         }
 
-        // 长音频分块推理
+        // 长音频分chunks推理
         const stepFrames = chunkSize - overlapFrames;
         const weightSum = new Float32Array(totalSamples);
 
@@ -1802,7 +2088,7 @@ class OnnxSVSPipeline {
         }
 
         const elapsed = performance.now() - t0;
-        console.log(`[OnnxSVSPipeline] Vocoder分块推理: ${totalFrames}帧, ${chunkIdx}块, ${elapsed.toFixed(0)}ms`);
+        console.log(`[OnnxSVSPipeline] Vocoder chunked: ${totalFrames} frames, ${chunkIdx} chunks, ${elapsed.toFixed(0)}ms`);
         return output;
     }
 
@@ -1896,7 +2182,7 @@ class OnnxSVSPipeline {
             return [{ notes, startBeat: 0, endBeat: totalBeats }];
         }
 
-        console.log(`[OnnxSVSPipeline] 长音频检测: ${totalSec.toFixed(1)}s > ${LONG_AUDIO_THRESHOLD_SEC}s，启用分段推理`);
+        console.log(`[OnnxSVSPipeline] Long audio detected: ${totalSec.toFixed(1)}s > ${LONG_AUDIO_THRESHOLD_SEC}s, using segmented synthesis`);
 
         const overlapBeats = (SEGMENT_OVERLAP_SEC / 60) * bpm;
         const minBeats = (SEGMENT_MIN_SEC / 60) * bpm;
@@ -1963,7 +2249,7 @@ class OnnxSVSPipeline {
             if (segStart >= totalBeats - 0.01) break;
         }
 
-        console.log(`[OnnxSVSPipeline] 分段完成: ${segments.length} 段, 每段 ${segments.map(s => ((s.endBeat - s.startBeat) / bpm * 60).toFixed(1) + 's').join(', ')}`);
+        // TODO: translate -         console.log(`[OnnxSVSPipeline] 分segment(s)完成: ${segments.length} segment(s), 每segment(s) ${segments.map(s => ((s.endBeat - s.startBeat) / bpm * 60).toFixed(1) + 's').join(', ')}`);
         return segments;
     }
 
@@ -1980,7 +2266,7 @@ class OnnxSVSPipeline {
         const dt = 1.0 / totalSteps;
         const progressPerStep = progressRange / totalSteps;
 
-        // prompt 帧在循环中不变，预先拷贝一次
+        // prompt frames在循环中不变，预先拷贝一次
         for (let f = 0; f < ptFrameCount; f++) {
             for (let d = 0; d < MEL_DIM; d++) {
                 xtInputBuf[f * MEL_DIM + d] = ptMelData[f * MEL_DIM + d];
@@ -2064,7 +2350,7 @@ class OnnxSVSPipeline {
         }
     }
 
-    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
+    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange) {
         const sequences = this.notesToSequences(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
         const totalFrames = sequences.f0Ids.length;
         const tokenCount = sequences.tokenCount;
@@ -2073,7 +2359,23 @@ class OnnxSVSPipeline {
             return { audio: [], frames: 0 };
         }
 
-        console.log(`[OnnxSVSPipeline] 段落合成: frames=${totalFrames}, tokens=${tokenCount}, steps=${totalSteps}`);
+        console.log(`[OnnxSVSPipeline] Segmented synthesis: frames=${totalFrames}, tokens=${tokenCount}, steps=${totalSteps}`);
+
+        // WebNN: run entire pipeline in renderer to eliminate per-inference IPC overhead
+        if (this.useWebNN) {
+            onProgress(Math.round(progressStart));
+            const t0 = performance.now();
+            const result = await this._runWebNNSynthesis({
+                sequences, tokenCount, totalFrames,
+                ptMelData, ptFrameCount,
+                totalSteps, cfgStrength, cfgRescale,
+                npuDiffBatchSize, npuVocoderBatchSize,
+            });
+            const ms = performance.now() - t0;
+            console.log(`[OnnxSVSPipeline] WebNN synthesis: ${totalFrames}frames, ${totalSteps}steps, ${ms.toFixed(0)}ms`);
+            onProgress(Math.round(progressStart + progressRange));
+            return { audio: result.audioData, frames: totalFrames };
+        }
 
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
 
@@ -2086,6 +2388,107 @@ class OnnxSVSPipeline {
         const audioData = await this._runVocoderChunked(xt.data, totalFrames);
 
         return { audio: audioData, frames: totalFrames };
+    }
+
+    /**
+     * 在渲染进程中运行完整合成管线（WebNN 优化路径）
+     * 单次 IPC 调用，消除逐模型 IPC 开销
+     */
+    async _runWebNNSynthesis(params) {
+        const { ipcMain } = require('electron');
+        const wc = getMainWindowWebContents();
+        if (!wc) throw new Error('No renderer window for WebNN synthesis');
+
+        return new Promise((resolve, reject) => {
+            const requestId = `svs-webnn-synth-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            const timeout = setTimeout(() => reject(new Error('WebNN synthesis timeout')), 600000);
+
+            ipcMain.handleOnce(`webnn:runSynthesis:response:${requestId}`, (_, result) => {
+                clearTimeout(timeout);
+                if (result.error) {
+                    reject(new Error(result.error));
+                } else {
+                    resolve(result);
+                }
+            });
+
+            wc.send('webnn:runSynthesis:request', {
+                requestId,
+                params: {
+                    ...params,
+                    isFP16: this.isFP16,
+                },
+            });
+        });
+    }
+
+    /**
+     * 批量合成两个片段（WebNN batch=4: 2 片段 × 2 CFG）
+     */
+    async _synthesizeSegmentPair(segANotes, segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange) {
+        const seqA = this.notesToSequences(segANotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
+        const seqB = this.notesToSequences(segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
+
+        const framesA = seqA.f0Ids.length;
+        const framesB = seqB.f0Ids.length;
+
+        if (framesA === 0 && framesB === 0) return [{ audio: [], frames: 0 }, { audio: [], frames: 0 }];
+        if (framesA === 0) return [{ audio: [], frames: 0 }, await this._synthesizeSegment(segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange)];
+        if (framesB === 0) return [await this._synthesizeSegment(segANotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange), { audio: [], frames: 0 }];
+
+        console.log(`[OnnxSVSPipeline] Batch synthesis: segA=${framesA}frames, segB=${framesB}frames`);
+
+        onProgress(Math.round(progressStart));
+
+        const t0 = performance.now();
+        const results = await this._runWebNNSynthesisBatch([
+            {
+                sequences: seqA, tokenCount: seqA.tokenCount, totalFrames: framesA,
+                ptMelData, ptFrameCount,
+                totalSteps, cfgStrength, cfgRescale,
+                npuDiffBatchSize, npuVocoderBatchSize,
+            },
+            {
+                sequences: seqB, tokenCount: seqB.tokenCount, totalFrames: framesB,
+                ptMelData, ptFrameCount,
+                totalSteps, cfgStrength, cfgRescale,
+                npuDiffBatchSize, npuVocoderBatchSize,
+            },
+        ]);
+        const ms = performance.now() - t0;
+        console.log(`[OnnxSVSPipeline] WebNN batch synthesis: ${framesA}+${framesB}frames, ${totalSteps}steps, ${ms.toFixed(0)}ms`);
+
+        onProgress(Math.round(progressStart + progressRange));
+
+        return results.map(r => ({ audio: r.audioData, frames: r.totalFrames }));
+    }
+
+    /**
+     * 批量 WebNN 合成 IPC 调用
+     */
+    async _runWebNNSynthesisBatch(paramsArray) {
+        const { ipcMain } = require('electron');
+        const wc = getMainWindowWebContents();
+        if (!wc) throw new Error('No renderer window for WebNN batch synthesis');
+
+        return new Promise((resolve, reject) => {
+            const requestId = `svs-webnn-batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+            const timeout = setTimeout(() => reject(new Error('WebNN batch synthesis timeout')), 600000);
+
+            ipcMain.handleOnce(`webnn:runSynthesis:response:${requestId}`, (_, result) => {
+                clearTimeout(timeout);
+                if (result.error) {
+                    reject(new Error(result.error));
+                } else {
+                    resolve(result);
+                }
+            });
+
+            wc.send('webnn:runSynthesis:request', {
+                requestId,
+                params: paramsArray.map(p => ({ ...p, isFP16: this.isFP16 })),
+            });
+        });
     }
 
     async synthesize(notes, bpm, options = {}) {
@@ -2102,12 +2505,14 @@ class OnnxSVSPipeline {
         const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : CFG_RESCALE;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
+        const npuDiffBatchSize = options.npuDiffBatchSize || 2;
+        const npuVocoderBatchSize = options.npuVocoderBatchSize || 1;
 
         const filledNotes = this._fillNoteGaps(notes);
 
         const cacheKey = this._computeSynthCacheKey(notes, bpm, options);
         if (this._synthCache && this._synthCache.key === cacheKey) {
-            console.log('[OnnxSVSPipeline] 缓存命中，复用上次生成的音频');
+        // TODO: translate -             console.log('[OnnxSVSPipeline] 缓存命中，复用上次生成的音频');
             onProgress(100);
             return this._synthCache.audio;
         }
@@ -2132,7 +2537,7 @@ class OnnxSVSPipeline {
                 try {
                     refF0 = this._extractRefF0FromWav(refAudioWavBuffer);
                 } catch (e) {
-                    console.warn('[OnnxSVSPipeline] 参考音频F0提取失败:', e.message);
+                    console.warn('[OnnxSVSPipeline] Reference audio F0 extraction failed:', e.message);
                 }
             }
 
@@ -2173,16 +2578,16 @@ class OnnxSVSPipeline {
                 const melResult = await this._extractRefMelOnnx(refAudioWavBuffer);
                 ptMelData = melResult.data;
                 ptFrameCount = melResult.frames;
-                console.log(`[OnnxSVSPipeline] 参考音频mel: ${ptFrameCount}帧`);
+                console.log(`[OnnxSVSPipeline] Reference audio mel: ${ptFrameCount}frames`);
             } catch (err) {
-                console.warn('[OnnxSVSPipeline] 参考音频mel提取失败，尝试JS回退:', err.message);
+        // TODO: translate -                 console.warn('[OnnxSVSPipeline] 参考音频mel提取失败，尝试JS回退:', err.message);
                 try {
                     const melResult = this._extractRefMel(refAudioWavBuffer);
                     ptMelData = melResult.data;
                     ptFrameCount = melResult.frames;
-                    console.log(`[OnnxSVSPipeline] 参考音频mel(JS回退): ${ptFrameCount}帧`);
+        // TODO: translate -                     console.log(`[OnnxSVSPipeline] 参考音频mel(JS回退): ${ptFrameCount}frames`);
                 } catch (err2) {
-                    console.warn('[OnnxSVSPipeline] JS回退也失败，使用零prompt:', err2.message);
+        // TODO: translate -                     console.warn('[OnnxSVSPipeline] JS回退也失败，Using零prompt:', err2.message);
                 }
             }
         }
@@ -2202,10 +2607,10 @@ class OnnxSVSPipeline {
             if (!ptMelData || ptFrameCount === 0) {
                 ptFrameCount = Math.min(50, Math.max(10, Math.floor(totalFrames * 0.1)));
                 ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
-                console.log(`[OnnxSVSPipeline] 使用零prompt: ${ptFrameCount}帧`);
+        // TODO: translate -                 console.log(`[OnnxSVSPipeline] Using零prompt: ${ptFrameCount}frames`);
             }
 
-            console.log(`[OnnxSVSPipeline] 合成参数: frames=${totalFrames}, tokens=${sequences.tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
+            console.log(`[OnnxSVSPipeline] Synthesis params: frames=${totalFrames}, tokens=${sequences.tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
 
             currentProgress = 30;
             onProgress(currentProgress);
@@ -2216,16 +2621,16 @@ class OnnxSVSPipeline {
             await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50);
 
             onProgress(90);
-            console.log(`[OnnxSVSPipeline] 扩散完成，开始声码器重建 (${totalFrames}帧)...`);
+        // TODO: translate -             console.log(`[OnnxSVSPipeline] 扩散完成，开始声码器重建 (${totalFrames} frames)...`);
             const audioData = await this._runVocoderChunked(xt.data, totalFrames);
 
             const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120; // 2 分钟
             if (audioData.length <= MAX_CACHE_SAMPLES) {
                 this._synthCache = { key: cacheKey, audio: audioData };
-                console.log('[OnnxSVSPipeline] 音频已缓存');
+                console.log('[OnnxSVSPipeline] Audio cached');
             } else {
                 this._synthCache = null;
-                console.log('[OnnxSVSPipeline] 音频过长，跳过缓存');
+        // TODO: translate -                 console.log('[OnnxSVSPipeline] 音频过长，跳过缓存');
             }
 
             onProgress(100);
@@ -2235,7 +2640,7 @@ class OnnxSVSPipeline {
         if (!ptMelData || ptFrameCount === 0) {
             ptFrameCount = Math.min(50, 10);
             ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
-            console.log(`[OnnxSVSPipeline] 分段模式使用零prompt: ${ptFrameCount}帧`);
+        // TODO: translate -             console.log(`[OnnxSVSPipeline] 分segment(s)模式Using零prompt: ${ptFrameCount}frames`);
         }
 
         const totalBeats = filledNotes.length > 0
@@ -2255,7 +2660,59 @@ class OnnxSVSPipeline {
 
         const progressPerSegment = 80 / segments.length;
 
-        for (let segIdx = 0; segIdx < segments.length; segIdx++) {
+        // WebNN batch=4: pair segments for simultaneous processing
+        const useBatch = this.useWebNN && npuDiffBatchSize >= 4 && segments.length > 1;
+        let segIdx = 0;
+
+        while (segIdx < segments.length) {
+            if (useBatch && segIdx + 1 < segments.length) {
+                // Pair two segments for batch=4 diffusion
+                const segA = segments[segIdx];
+                const segB = segments[segIdx + 1];
+                const pairProgressStart = 10 + segIdx * progressPerSegment;
+                const pairProgressRange = progressPerSegment * 2 * 0.9;
+
+                onProgress(Math.round(pairProgressStart));
+
+                const pairResult = await this._synthesizeSegmentPair(
+                    segA.notes, segB.notes, bpm, f0Envelope, pitchCurveF0, f0Shift,
+                    ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
+                    npuDiffBatchSize, npuVocoderBatchSize,
+                    onProgress, pairProgressStart, pairProgressRange
+                );
+
+                // Write both segments' audio to finalAudio
+                for (let si = 0; si < 2; si++) {
+                    const seg = segments[segIdx + si];
+                    const segResult = pairResult[si];
+                    if (segResult.audio.length === 0) continue;
+
+                    const segStartSample = Math.floor((seg.startBeat / bpm) * 60 * SAMPLE_RATE);
+                    const segAudio = segResult.audio;
+                    const segSamples = segAudio.length;
+                    const hasOverlap = (segIdx + si) > 0 && seg.startBeat < segments[segIdx + si - 1].endBeat;
+
+                    for (let i = 0; i < segSamples; i++) {
+                        const outIdx = segStartSample + i;
+                        if (outIdx >= totalSamples) break;
+                        let w = 1.0;
+                        if (hasOverlap && i < overlapSamples) w = fadeWindow[i];
+                        if (segIdx + si < segments.length - 1 && seg.endBeat > segments[segIdx + si + 1].startBeat) {
+                            const remainingSamples = segSamples - i;
+                            if (remainingSamples <= overlapSamples) {
+                                w = Math.min(w, 1.0 - fadeWindow[overlapSamples - remainingSamples]);
+                            }
+                        }
+                        finalAudio[outIdx] += segAudio[i] * w;
+                        weightSum[outIdx] += w;
+                    }
+                }
+
+                segIdx += 2;
+                continue;
+            }
+
+            // Single segment (or last odd segment)
             const seg = segments[segIdx];
             const segProgressStart = 10 + segIdx * progressPerSegment;
             const segProgressRange = progressPerSegment * 0.9;
@@ -2267,6 +2724,7 @@ class OnnxSVSPipeline {
             const segResult = await this._synthesizeSegment(
                 seg.notes, bpm, f0Envelope, pitchCurveF0, f0Shift,
                 ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
+                npuDiffBatchSize, npuVocoderBatchSize,
                 onProgress, segProgressStart, segProgressRange
             );
 
@@ -2298,6 +2756,7 @@ class OnnxSVSPipeline {
             }
 
             onProgress(Math.round(vocoderProgressStart + vocoderProgressRange));
+            segIdx++;
         }
 
         for (let i = 0; i < totalSamples; i++) {
@@ -2310,10 +2769,10 @@ class OnnxSVSPipeline {
         const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
         if (audioData.length <= MAX_CACHE_SAMPLES) {
             this._synthCache = { key: cacheKey, audio: audioData };
-            console.log('[OnnxSVSPipeline] 分段合成完成，音频已缓存');
+                console.log('[OnnxSVSPipeline] Audio cached');
         } else {
             this._synthCache = null;
-            console.log('[OnnxSVSPipeline] 分段合成完成，音频过长跳过缓存');
+        // TODO: translate -             console.log('[OnnxSVSPipeline] 分segment(s)合成完成，音频过长跳过缓存');
         }
 
         onProgress(100);
@@ -2386,7 +2845,7 @@ class OnnxSVSPipeline {
             }
             return notePitches.length > 0 ? notePitches : null;
         } catch (e) {
-            console.warn('[OnnxSVSPipeline] 参考音频音符音高提取失败:', e.message);
+        // TODO: translate -             console.warn('[OnnxSVSPipeline] 参考音频音符音高提取失败:', e.message);
             return null;
         }
     }
@@ -2397,26 +2856,29 @@ class OnnxSVSPipeline {
         }
         const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
         const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
+        const webnnCount = Object.values(this.sessionEPs).filter(e => String(e).startsWith('webnn')).length;
         const totalModels = Object.keys(this.sessionEPs).length;
         return {
             gpuDeviceName: this.gpuDeviceName || '无 GPU (仅 CPU)',
             dmlDeviceId: this.dmlDeviceId,
             dmlModelCount: dmlCount,
             cpuModelCount: cpuCount,
+            webnnModelCount: webnnCount,
             totalModels,
             isUsingDML: dmlCount > 0,
+            isUsingWebNN: webnnCount > 0,
         };
     }
 
     /**
-     * 检查指定模型是否已加载
+     * 检查指定Model是否loaded
      */
     isModelLoaded(sessionKey) {
         return !!(this.sessions[sessionKey] && this.initialized);
     }
 
     /**
-     * 获取所有模型的状态信息
+     * 获取所有Model的状态信息
      */
     getModelsStatus() {
         const sessionKeys = [
@@ -2438,7 +2900,7 @@ class OnnxSVSPipeline {
     }
 
     /**
-     * 卸载指定模型（释放其 ONNX 会话）
+     * 卸载指定Model（释放其 ONNX 会话）
      */
     unloadModel(sessionKey) {
         if (!this.sessions[sessionKey]) {
@@ -2450,16 +2912,16 @@ class OnnxSVSPipeline {
             }
             delete this.sessions[sessionKey];
             delete this.sessionEPs[sessionKey];
-            console.log(`[OnnxSVSPipeline] 模型 ${sessionKey} 已卸载`);
+            console.log(`[OnnxSVSPipeline] Model ${sessionKey} unloaded`);
             return { success: true };
         } catch (err) {
-            console.warn(`[OnnxSVSPipeline] 卸载模型 ${sessionKey} 失败:`, err.message);
+        // TODO: translate -             console.warn(`[OnnxSVSPipeline] 卸载Model ${sessionKey} 失败:`, err.message);
             return { success: false, error: err.message };
         }
     }
 
     /**
-     * 加载指定模型
+     * 加载指定Model
      */
     async loadModel(sessionKey) {
         if (this.sessions[sessionKey]) {
@@ -2514,16 +2976,16 @@ class OnnxSVSPipeline {
             );
             this.sessions[sessionKey] = session;
             this.sessionEPs[sessionKey] = ep;
-            console.log(`[OnnxSVSPipeline] 模型 ${sessionKey} 已加载 [${ep}]`);
+            console.log(`[OnnxSVSPipeline] Model ${sessionKey} loaded [${ep}]`);
             return { success: true, ep };
         } catch (err) {
-            console.error(`[OnnxSVSPipeline] 加载模型 ${sessionKey} 失败:`, err.message);
+        // TODO: translate -             console.error(`[OnnxSVSPipeline] 加载Model ${sessionKey} 失败:`, err.message);
             return { success: false, error: err.message };
         }
     }
 
     /**
-     * 确保所有必需模型已加载（合成前调用）
+     * 确保所有必需Modelloaded（合成前调用）
      */
     async ensureAllModelsLoaded() {
         const requiredKeys = [
@@ -2533,7 +2995,7 @@ class OnnxSVSPipeline {
         const missing = requiredKeys.filter(key => !this.sessions[key]);
         if (missing.length === 0) return;
 
-        console.log(`[OnnxSVSPipeline] 需要加载 ${missing.length} 个缺失模型: ${missing.join(', ')}`);
+        console.log(`[OnnxSVSPipeline] Need to load ${missing.length} missing model(s): ${missing.join(', ')}`);
         for (const key of missing) {
             const result = await this.loadModel(key);
             if (!result.success) {
@@ -2543,19 +3005,34 @@ class OnnxSVSPipeline {
     }
 
     dispose() {
+        if (this.useWebNN) {
+            // 通过 IPC 卸载渲染进程中的 WebNN Model
+            try {
+                const { ipcMain } = require('electron');
+                const wc = getMainWindowWebContents();
+                if (wc) {
+                    for (const key of Object.keys(this.sessions)) {
+                        const reqId = `svs-dispose-webnn-${Date.now()}-${key}`;
+                        ipcMain.handleOnce(`webnn:unloadModel:response:${reqId}`, () => {});
+                        wc.send('webnn:unloadModel:request', { requestId: reqId, modelId: key });
+                    }
+                }
+            } catch (_) {}
+        }
         for (const key of Object.keys(this.sessions)) {
             if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
                 try { this.sessions[key].release(); } catch (e) {
-                    console.warn(`[OnnxSVSPipeline] 释放会话失败 (${key}):`, e.message);
+                    console.warn(`[OnnxSVSPipeline] Failed to release session (${key}):`, e.message);
                 }
             }
         }
         this.sessions = {};
         this.sessionEPs = {};
         this.initialized = false;
+        this.useWebNN = false;
         this._initPromise = null;
         this._synthCache = null;
-        console.log('[OnnxSVSPipeline] ONNX Runtime 会话已释放');
+        console.log('[OnnxSVSPipeline] ONNX Runtime sessions released');
     }
 }
 
