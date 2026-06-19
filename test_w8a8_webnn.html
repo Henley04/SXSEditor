@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html><body><pre id="log"></pre><script>
+const log = (msg) => { document.getElementById('log').textContent += msg + '\n'; console.log(msg); };
+
+async function test() {
+    log(`Electron: ${navigator.userAgent.match(/Electron\/([\d.]+)/)?.[1] || 'N/A'}`);
+    log(`Chrome: ${navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] || 'N/A'}`);
+
+    if (!('ml' in navigator)) {
+        log('FAIL: WebNN not available');
+        return;
+    }
+
+    // Test: build a simple graph with QuantizeLinear + DequantizeLinear + MatMul
+    // This simulates the W8A8 pattern
+    try {
+        const context = await navigator.ml.createContext();
+        const builder = new MLGraphBuilder(context);
+
+        // Input: float32 [1, 4, 8]
+        const input = builder.input('x', {dataType: 'float32', shape: [1, 4, 8]});
+
+        // QuantizeLinear (activation quantization) - scale must match input rank
+        const a_scale = builder.constant({dataType: 'float32', shape: [1, 1, 1]}, new Float32Array([0.1]));
+        const a_zp = builder.constant({dataType: 'int8', shape: [1, 1, 1]}, new Int8Array([0]));
+        const quantized = builder.quantizeLinear(input, a_scale, a_zp);
+
+        // DequantizeLinear (back to float for MatMul)
+        const dequantized = builder.dequantizeLinear(quantized, a_scale, a_zp);
+
+        // Weight: constant float32 [1, 8, 4]
+        const w_data = new Float32Array(32);
+        for (let i = 0; i < 32; i++) w_data[i] = Math.random() * 0.1;
+        const weight = builder.constant({dataType: 'float32', shape: [1, 8, 4]}, w_data);
+
+        // MatMul
+        const out = builder.matmul(dequantized, weight);
+
+        const graph = await builder.build({ out });
+        log('PASS: QuantizeLinear + DequantizeLinear + MatMul (W8A8 pattern)');
+
+        // Try dispatching - Chrome 148 requires MLTensor inputs
+        const input_data = new Float32Array(32);
+        for (let i = 0; i < 32; i++) input_data[i] = Math.random();
+        const input_tensor = await context.createTensor({dataType: 'float32', shape: [1, 4, 8], writable: true});
+        const output_tensor = await context.createTensor({dataType: 'float32', shape: [1, 4, 4], readable: true});
+        await context.writeTensor(input_tensor, input_data);
+        await context.dispatch(graph, {x: input_tensor}, {out: output_tensor});
+        const result_data = await context.readTensor(output_tensor);
+        log(`PASS: dispatch OK, output size: ${result_data.byteLength} bytes`);
+        input_tensor.destroy();
+        output_tensor.destroy();
+        graph.destroy?.();
+    } catch (e) {
+        log(`FAIL: ${e.message}`);
+    }
+}
+test();
+</script></body></html>

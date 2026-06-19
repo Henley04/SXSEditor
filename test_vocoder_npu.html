@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Vocoder NPU Test</title>
+    <script src="./node_modules/onnxruntime-web/dist/ort.all.min.js"></script>
+    <style>
+        body { font-family: monospace; background: #1e1e1e; color: #d4d4d4; padding: 20px; }
+        #log { white-space: pre-wrap; line-height: 1.6; }
+        .pass { color: #4ec9b0; } .fail { color: #f44747; } .info { color: #569cd6; }
+    </style>
+</head>
+<body>
+    <h2>Vocoder NPU Verification</h2>
+    <div id="log"></div>
+    <script type="module">
+    const log = (msg, cls = '') => {
+        const el = document.getElementById('log');
+        const span = document.createElement('span');
+        span.className = cls;
+        span.textContent = msg + '\n';
+        el.appendChild(span);
+    };
+
+    const NPU_VOCODER_SEQ_LEN = 500;
+    const MEL_DIM = 128;
+    const HOP_SIZE = 480;
+
+    async function run() {
+        log('=== Vocoder NPU WebNN Verification ===', 'info');
+        log('');
+
+        // Configure WASM
+        if (ort.env?.wasm) {
+            ort.env.wasm.wasmPaths = './';
+            ort.env.wasm.numThreads = 1;
+        }
+
+        // Find model path via IPC
+        let modelPath;
+        try {
+            const modelDir = await window.electronAPI?.getModelDir?.();
+            if (modelDir) {
+                modelPath = modelDir + '/int8/optimized_npu/vocoder_dml.onnx';
+            }
+        } catch (_) {}
+
+        if (!modelPath) {
+            // Fallback: try known path
+            modelPath = 'onnx_models/int8/optimized_npu/vocoder_dml.onnx';
+        }
+        log(`[INFO] Model path: ${modelPath}`, 'info');
+
+        // Read model file via IPC
+        log('[TEST] Reading model file via IPC...', 'info');
+        const t0 = Date.now();
+        let modelBuffer;
+        try {
+            const result = await window.electronAPI.webnnReadModelFile(modelPath);
+            if (!result.success) throw new Error(result.error);
+            modelBuffer = result.data;
+        } catch (e) {
+            log(`[FAIL] Failed to read model: ${e.message}`, 'fail');
+            return;
+        }
+        log(`[OK] Model read: ${(modelBuffer.byteLength / 1024 / 1024).toFixed(1)} MB in ${Date.now() - t0}ms`);
+
+        // Try loading on NPU
+        const epChain = [
+            { name: 'webnn', deviceType: 'npu', label: 'webnn-npu' },
+            { name: 'webnn', deviceType: 'gpu', label: 'webnn-gpu' },
+            'wasm',
+        ];
+
+        for (const ep of epChain) {
+            const epLabel = typeof ep === 'string' ? ep : ep.label;
+            log(`\n[TEST] Loading with ${epLabel} (timeout=300s)...`, 'info');
+            const tLoad = Date.now();
+
+            try {
+                const session = await Promise.race([
+                    ort.InferenceSession.create(modelBuffer, {
+                        executionProviders: [ep],
+                        graphOptimizationLevel: 'basic',
+                    }),
+                    new Promise((_, reject) =>
+                        setTimeout(() => reject(new Error('Timeout after 300s')), 300000)
+                    ),
+                ]);
+                const loadMs = Date.now() - tLoad;
+                log(`[OK] Loaded with ${epLabel} in ${loadMs}ms`, 'pass');
+
+                // Run inference
+                const seqLen = NPU_VOCODER_SEQ_LEN;
+                const melData = new Float32Array(seqLen * MEL_DIM);
+                for (let i = 0; i < melData.length; i++) melData[i] = (Math.random() - 0.5) * 0.1;
+                const melTensor = new ort.Tensor('float32', melData, [1, seqLen, MEL_DIM]);
+
+                log(`[TEST] Running inference: mel [1, ${seqLen}, ${MEL_DIM}]...`, 'info');
+                const tInfer = Date.now();
+                const results = await session.run({ mel: melTensor });
+                const inferMs = Date.now() - tInfer;
+                log(`[OK] Inference: ${inferMs}ms`, 'pass');
+
+                const waveform = results['waveform'];
+                if (waveform) {
+                    const data = waveform.data instanceof Float32Array ? waveform.data : new Float32Array(waveform.data);
+                    let nan = 0, inf = 0, maxAbs = 0;
+                    for (let i = 0; i < data.length; i++) {
+                        if (isNaN(data[i])) nan++;
+                        if (!isFinite(data[i])) inf++;
+                        if (Math.abs(data[i]) > maxAbs) maxAbs = Math.abs(data[i]);
+                    }
+                    log(`[INFO] Output: [${waveform.dims}], ${data.length} samples, max|v|=${maxAbs.toFixed(6)}, NaN=${nan}, Inf=${inf}`, 'info');
+
+                    if (nan === 0 && inf === 0 && maxAbs > 1e-6) {
+                        log(`[PASS] Vocoder inference on ${epLabel} PASSED`, 'pass');
+                    } else {
+                        log(`[FAIL] Output quality issue on ${epLabel}`, 'fail');
+                    }
+                } else {
+                    log(`[FAIL] No waveform output. Keys: ${Object.keys(results)}`, 'fail');
+                }
+
+                session.release();
+                log(`\n=== Verification complete (${epLabel}) ===`, 'info');
+                return; // Success on first working EP
+            } catch (e) {
+                const loadMs = Date.now() - tLoad;
+                log(`[FAIL] ${epLabel} failed after ${loadMs}ms: ${e.message}`, 'fail');
+            }
+        }
+
+        log('\n[FAIL] All execution providers failed', 'fail');
+    }
+
+    run().catch(e => log(`[ERROR] ${e.message}`, 'fail'));
+    </script>
+</body>
+</html>

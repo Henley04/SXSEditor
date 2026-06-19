@@ -2,10 +2,10 @@
  * WebNN 推理模块 — 扩散采样循环
  */
 
-import { MEL_DIM, COND_DIM } from './constants.js';
+import { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } from './constants.js';
 import { getOrt } from './ortSetup.js';
 import { runSession } from './sessionManager.js';
-import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom } from './utils.js';
+import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom, padToLength, trimOutputToLength } from './utils.js';
 
 /**
  * 单片段扩散采样循环
@@ -23,6 +23,7 @@ export async function runDiffusionLoop({
     cfgRescale,
     floatType,
     npuDiffBatchSize = 4,
+    useStaticShapes = false,
 }) {
     const ort = getOrt();
 
@@ -49,18 +50,21 @@ export async function runDiffusionLoop({
     }
 
     // Pre-create CONSTANT tensors once (these don't change between diffusion steps)
-    const condTensorConst = createFloatTensor(floatType, combinedCond, [1, totalFramesWithPrompt, COND_DIM]);
-    const frameMaskTensorConst = createFloatTensor(floatType, frameMask, [1, totalFramesWithPrompt]);
+    const diffSeqLen = useStaticShapes ? Math.max(totalFramesWithPrompt, NPU_STATIC_SEQ_LEN) : totalFramesWithPrompt;
+    const paddedCondForConst = useStaticShapes ? padToLength(combinedCond, diffSeqLen * COND_DIM) : combinedCond;
+    const paddedMaskForConst = useStaticShapes ? padToLength(frameMask, diffSeqLen) : frameMask;
+    const condTensorConst = createFloatTensor(floatType, paddedCondForConst, [1, diffSeqLen, COND_DIM]);
+    const frameMaskTensorConst = createFloatTensor(floatType, paddedMaskForConst, [1, diffSeqLen]);
 
     // CFG batch: merge conditional + unconditional into one inference call
     // When diffBatch > 2, duplicate rows to fill batch for better NPU utilization
-    const cfgBatchBuf = new Float32Array(diffBatch * totalFramesWithPrompt * MEL_DIM);
-    const cfgCondBuf = new Float32Array(diffBatch * totalFramesWithPrompt * COND_DIM);
-    const cfgMaskBuf = new Float32Array(diffBatch * totalFramesWithPrompt);
+    const cfgBatchBuf = new Float32Array(diffBatch * diffSeqLen * MEL_DIM);
+    const cfgCondBuf = new Float32Array(diffBatch * diffSeqLen * COND_DIM);
+    const cfgMaskBuf = new Float32Array(diffBatch * diffSeqLen);
     // Rows 0,2,4,... mask = all ones (conditional)
     // Rows 1,3,5,... mask = zeros for prompt, ones for target (unconditional)
     for (let r = 0; r < diffBatch; r++) {
-        const rowOff = r * totalFramesWithPrompt;
+        const rowOff = r * diffSeqLen;
         if (r % 2 === 0) {
             // conditional: all ones
             cfgMaskBuf.fill(1, rowOff, rowOff + totalFramesWithPrompt);
@@ -71,33 +75,34 @@ export async function runDiffusionLoop({
     }
     // Cond rows: even rows = combinedCond, odd rows = zeros (unconditional)
     for (let r = 0; r < diffBatch; r += 2) {
-        cfgCondBuf.set(combinedCond, r * totalFramesWithPrompt * COND_DIM);
+        cfgCondBuf.set(combinedCond, r * diffSeqLen * COND_DIM);
     }
 
     let cfgXtTensor, cfgTTensor, cfgCondTensor, cfgMaskTensor;
     let cfgTBuf;
     if (floatType === 'float16') {
-        cfgXtTensor = new ort.Tensor('float16', new Uint16Array(diffBatch * totalFramesWithPrompt * MEL_DIM), [diffBatch, totalFramesWithPrompt, MEL_DIM]);
+        cfgXtTensor = new ort.Tensor('float16', new Uint16Array(diffBatch * diffSeqLen * MEL_DIM), [diffBatch, diffSeqLen, MEL_DIM]);
         cfgTBuf = new Uint16Array(diffBatch);
         cfgTTensor = new ort.Tensor('float16', cfgTBuf, [diffBatch]);
-        cfgCondTensor = createFloatTensor(floatType, cfgCondBuf, [diffBatch, totalFramesWithPrompt, COND_DIM]);
-        cfgMaskTensor = createFloatTensor(floatType, cfgMaskBuf, [diffBatch, totalFramesWithPrompt]);
+        cfgCondTensor = createFloatTensor(floatType, cfgCondBuf, [diffBatch, diffSeqLen, COND_DIM]);
+        cfgMaskTensor = createFloatTensor(floatType, cfgMaskBuf, [diffBatch, diffSeqLen]);
     } else {
-        cfgXtTensor = new ort.Tensor('float32', cfgBatchBuf, [diffBatch, totalFramesWithPrompt, MEL_DIM]);
+        cfgXtTensor = new ort.Tensor('float32', cfgBatchBuf, [diffBatch, diffSeqLen, MEL_DIM]);
         cfgTBuf = new Float32Array(diffBatch);
         cfgTTensor = new ort.Tensor('float32', cfgTBuf, [diffBatch]);
-        cfgCondTensor = createFloatTensor(floatType, cfgCondBuf, [diffBatch, totalFramesWithPrompt, COND_DIM]);
-        cfgMaskTensor = createFloatTensor(floatType, cfgMaskBuf, [diffBatch, totalFramesWithPrompt]);
+        cfgCondTensor = createFloatTensor(floatType, cfgCondBuf, [diffBatch, diffSeqLen, COND_DIM]);
+        cfgMaskTensor = createFloatTensor(floatType, cfgMaskBuf, [diffBatch, diffSeqLen]);
     }
 
     // Pre-allocate for no-CFG path
+    const noCfgSeqLen = useStaticShapes ? Math.max(totalFramesWithPrompt, NPU_STATIC_SEQ_LEN) : totalFramesWithPrompt;
     let xtInputTensor, tTensorBuf, tTensor;
     if (floatType === 'float16') {
-        xtInputTensor = new ort.Tensor('float16', new Uint16Array(totalFramesWithPrompt * MEL_DIM), [1, totalFramesWithPrompt, MEL_DIM]);
+        xtInputTensor = new ort.Tensor('float16', new Uint16Array(noCfgSeqLen * MEL_DIM), [1, noCfgSeqLen, MEL_DIM]);
         tTensorBuf = new Uint16Array(1);
         tTensor = new ort.Tensor('float16', tTensorBuf, [1]);
     } else {
-        xtInputTensor = new ort.Tensor('float32', xtInputBuf, [1, totalFramesWithPrompt, MEL_DIM]);
+        xtInputTensor = new ort.Tensor('float32', new Float32Array(noCfgSeqLen * MEL_DIM), [1, noCfgSeqLen, MEL_DIM]);
         tTensorBuf = new Float32Array(1);
         tTensor = new ort.Tensor('float32', tTensorBuf, [1]);
     }
@@ -127,7 +132,7 @@ export async function runDiffusionLoop({
             const tPrep = performance.now();
             cfgBatchBuf.fill(0);
             for (let r = 0; r < diffBatch; r++) {
-                const rowOff = r * totalFramesWithPrompt * MEL_DIM;
+                const rowOff = r * diffSeqLen * MEL_DIM;
                 if (r % 2 === 0) {
                     cfgBatchBuf.set(xtInputBuf, rowOff);
                 } else {
@@ -162,7 +167,7 @@ export async function runDiffusionLoop({
             let posSum = 0, cfgAdjSum = 0;
             for (let f = 0; f < totalFrames; f++) {
                 const condSrc = (ptFrameCount + f) * MEL_DIM;
-                const uncondSrc = (totalFramesWithPrompt + ptFrameCount + f) * MEL_DIM;
+                const uncondSrc = (diffSeqLen + ptFrameCount + f) * MEL_DIM;
                 const flatBase = f * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
                     const condVal = batchPred[condSrc + d];
@@ -211,6 +216,9 @@ export async function runDiffusionLoop({
                 batchFloat32ToFloat16(xtInputBuf, xtInputTensor.data, xtInputBuf.length);
                 tTensorBuf[0] = float32ToFloat16(tVal);
             } else {
+                const noCfgData = xtInputTensor.data;
+                noCfgData.fill(0);
+                noCfgData.set(xtInputBuf);
                 tTensorBuf[0] = tVal;
             }
             const prepMs = performance.now() - tPrep;
@@ -270,12 +278,14 @@ export async function runBatchDiffusionLoop({
     segData,
     totalSteps,
     floatType,
+    useStaticShapes = false,
 }) {
     const ort = getOrt();
     const diffBatch = 4; // 2 segments × 2 CFG
 
     const maxTotalFramesWithPrompt = Math.max(...segData.map(s => s.totalFramesWithPrompt));
     const maxTotalFrames = Math.max(...segData.map(s => s.totalFrames));
+    const batchDiffSeqLen = useStaticShapes ? Math.max(maxTotalFramesWithPrompt, NPU_STATIC_SEQ_LEN) : maxTotalFramesWithPrompt;
 
     // Initialize xt for both segments
     const xts = segData.map(s => {
@@ -284,10 +294,10 @@ export async function runBatchDiffusionLoop({
         return xt;
     });
 
-    // Build batch=4 tensors padded to maxTotalFramesWithPrompt
-    const cfgBatchBuf = new Float32Array(diffBatch * maxTotalFramesWithPrompt * MEL_DIM);
-    const cfgCondBuf = new Float32Array(diffBatch * maxTotalFramesWithPrompt * COND_DIM);
-    const cfgMaskBuf = new Float32Array(diffBatch * maxTotalFramesWithPrompt);
+    // Build batch=4 tensors padded to batchDiffSeqLen
+    const cfgBatchBuf = new Float32Array(diffBatch * batchDiffSeqLen * MEL_DIM);
+    const cfgCondBuf = new Float32Array(diffBatch * batchDiffSeqLen * COND_DIM);
+    const cfgMaskBuf = new Float32Array(diffBatch * batchDiffSeqLen);
     const xtInputBufs = segData.map(s => new Float32Array(s.totalFramesWithPrompt * MEL_DIM));
     const cfgPredBufs = segData.map(s => new Float32Array(s.totalFrames * MEL_DIM));
 
@@ -298,9 +308,9 @@ export async function runBatchDiffusionLoop({
         const s = segData[si];
         const condRow = si * 2;
         const uncondRow = si * 2 + 1;
-        const condOff = condRow * maxTotalFramesWithPrompt * COND_DIM;
-        const maskCondOff = condRow * maxTotalFramesWithPrompt;
-        const maskUncondOff = uncondRow * maxTotalFramesWithPrompt;
+        const condOff = condRow * batchDiffSeqLen * COND_DIM;
+        const maskCondOff = condRow * batchDiffSeqLen;
+        const maskUncondOff = uncondRow * batchDiffSeqLen;
 
         cfgCondBuf.set(s.combinedCond, condOff);
         cfgMaskBuf.fill(1, maskCondOff, maskCondOff + s.totalFramesWithPrompt);
@@ -318,17 +328,17 @@ export async function runBatchDiffusionLoop({
     let cfgXtTensor, cfgTTensor, cfgCondTensor, cfgMaskTensor;
     let cfgTBuf;
     if (floatType === 'float16') {
-        cfgXtTensor = new ort.Tensor('float16', new Uint16Array(diffBatch * maxTotalFramesWithPrompt * MEL_DIM), [diffBatch, maxTotalFramesWithPrompt, MEL_DIM]);
+        cfgXtTensor = new ort.Tensor('float16', new Uint16Array(diffBatch * batchDiffSeqLen * MEL_DIM), [diffBatch, batchDiffSeqLen, MEL_DIM]);
         cfgTBuf = new Uint16Array(diffBatch);
         cfgTTensor = new ort.Tensor('float16', cfgTBuf, [diffBatch]);
-        cfgCondTensor = createFloatTensor(floatType, cfgCondBuf, [diffBatch, maxTotalFramesWithPrompt, COND_DIM]);
-        cfgMaskTensor = createFloatTensor(floatType, cfgMaskBuf, [diffBatch, maxTotalFramesWithPrompt]);
+        cfgCondTensor = createFloatTensor(floatType, cfgCondBuf, [diffBatch, batchDiffSeqLen, COND_DIM]);
+        cfgMaskTensor = createFloatTensor(floatType, cfgMaskBuf, [diffBatch, batchDiffSeqLen]);
     } else {
-        cfgXtTensor = new ort.Tensor('float32', cfgBatchBuf, [diffBatch, maxTotalFramesWithPrompt, MEL_DIM]);
+        cfgXtTensor = new ort.Tensor('float32', cfgBatchBuf, [diffBatch, batchDiffSeqLen, MEL_DIM]);
         cfgTBuf = new Float32Array(diffBatch);
         cfgTTensor = new ort.Tensor('float32', cfgTBuf, [diffBatch]);
-        cfgCondTensor = createFloatTensor(floatType, cfgCondBuf, [diffBatch, maxTotalFramesWithPrompt, COND_DIM]);
-        cfgMaskTensor = createFloatTensor(floatType, cfgMaskBuf, [diffBatch, maxTotalFramesWithPrompt]);
+        cfgCondTensor = createFloatTensor(floatType, cfgCondBuf, [diffBatch, batchDiffSeqLen, COND_DIM]);
+        cfgMaskTensor = createFloatTensor(floatType, cfgMaskBuf, [diffBatch, batchDiffSeqLen]);
     }
 
     const dt = 1.0 / totalSteps;
@@ -352,8 +362,8 @@ export async function runBatchDiffusionLoop({
             const xtInputBuf = xtInputBufs[si];
             const condRow = si * 2;
             const uncondRow = si * 2 + 1;
-            const condRowOff = condRow * maxTotalFramesWithPrompt * MEL_DIM;
-            const uncondRowOff = uncondRow * maxTotalFramesWithPrompt * MEL_DIM;
+            const condRowOff = condRow * batchDiffSeqLen * MEL_DIM;
+            const uncondRowOff = uncondRow * batchDiffSeqLen * MEL_DIM;
 
             for (let f = 0; f < s.totalFrames; f++) {
                 for (let d = 0; d < MEL_DIM; d++) {
@@ -392,8 +402,8 @@ export async function runBatchDiffusionLoop({
             const cfgPredBuf = cfgPredBufs[si];
             const condRow = si * 2;
             const uncondRow = si * 2 + 1;
-            const condRowOff = condRow * maxTotalFramesWithPrompt * MEL_DIM;
-            const uncondRowOff = uncondRow * maxTotalFramesWithPrompt * MEL_DIM;
+            const condRowOff = condRow * batchDiffSeqLen * MEL_DIM;
+            const uncondRowOff = uncondRow * batchDiffSeqLen * MEL_DIM;
             const targetLen = s.totalFrames * MEL_DIM;
 
             let posSum = 0, cfgAdjSum = 0;

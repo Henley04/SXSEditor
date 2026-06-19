@@ -2,6 +2,8 @@ const ort = require('onnxruntime-node');
 const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, F0_BIN, F0_MIN } = require('./constants');
 const { createFloatTensor, outputToFloat32 } = require('./utils');
 
+const NPU_STATIC_SEQ_LEN = 2048;
+
 /**
  * Pre-processing: note encoding, pitch encoding, F0 encoding, condition embedding
  */
@@ -338,7 +340,7 @@ class Preprocessing {
     /**
      * Run all encoders and produce the combined condition embedding
      */
-    async runEncoder(sessions, sequences, tokenCount, totalFrames, isFP16, ptFrameCount = 0) {
+    async runEncoder(sessions, sequences, tokenCount, totalFrames, isFP16, ptFrameCount = 0, useStaticShapes = false) {
         const phonemeIds = new BigInt64Array(tokenCount);
         const pitchIds = new BigInt64Array(tokenCount);
         const typeIds = new BigInt64Array(tokenCount);
@@ -353,21 +355,36 @@ class Preprocessing {
             f0IdsArr[i] = BigInt(sequences.f0Ids[i]);
         }
 
-        const textInput = new ort.Tensor('int64', phonemeIds, [1, tokenCount]);
+        const encSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
+        const encF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+
+        const padInt64 = (src, len) => {
+            if (src.length >= len) return src;
+            const padded = new BigInt64Array(len);
+            padded.set(src);
+            return padded;
+        };
+
+        const encText = useStaticShapes ? padInt64(phonemeIds, encSeqLen) : phonemeIds;
+        const encPitch = useStaticShapes ? padInt64(pitchIds, encSeqLen) : pitchIds;
+        const encType = useStaticShapes ? padInt64(typeIds, encSeqLen) : typeIds;
+        const encF0 = useStaticShapes ? padInt64(f0IdsArr, encF0Len) : f0IdsArr;
+
+        const textInput = new ort.Tensor('int64', encText, [1, encSeqLen]);
         const textResults = await sessions.noteTextEncoder.run({ input_ids: textInput });
-        const textEmb = outputToFloat32(textResults['embeddings']);
+        const textEmb = useStaticShapes ? outputToFloat32(textResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(textResults['embeddings']);
 
-        const pitchInput = new ort.Tensor('int64', pitchIds, [1, tokenCount]);
+        const pitchInput = new ort.Tensor('int64', encPitch, [1, encSeqLen]);
         const pitchResults = await sessions.notePitchEncoder.run({ input_ids: pitchInput });
-        const pitchEmb = outputToFloat32(pitchResults['embeddings']);
+        const pitchEmb = useStaticShapes ? outputToFloat32(pitchResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(pitchResults['embeddings']);
 
-        const typeInput = new ort.Tensor('int64', typeIds, [1, tokenCount]);
+        const typeInput = new ort.Tensor('int64', encType, [1, encSeqLen]);
         const typeResults = await sessions.noteTypeEncoder.run({ input_ids: typeInput });
-        const typeEmb = outputToFloat32(typeResults['embeddings']);
+        const typeEmb = useStaticShapes ? outputToFloat32(typeResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(typeResults['embeddings']);
 
-        const f0Input = new ort.Tensor('int64', f0IdsArr, [1, totalFrames]);
+        const f0Input = new ort.Tensor('int64', encF0, [1, encF0Len]);
         const f0Results = await sessions.f0Encoder.run({ input_ids: f0Input });
-        const f0Emb = outputToFloat32(f0Results['embeddings']);
+        const f0Emb = useStaticShapes ? outputToFloat32(f0Results['embeddings']).subarray(0, totalFrames * EMBED_DIM) : outputToFloat32(f0Results['embeddings']);
 
         const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
         for (let t = 0; t < tokenCount; t++) {
@@ -380,9 +397,11 @@ class Preprocessing {
         }
 
         const floatType = isFP16 ? 'float16' : 'float32';
-        const featuresTensor = createFloatTensor(floatType, tokenEmb, [1, tokenCount, EMBED_DIM]);
+        const preflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
+        const preflowTokenEmb = useStaticShapes ? (() => { const p = new Float32Array(preflowSeqLen * EMBED_DIM); p.set(tokenEmb); return p; })() : tokenEmb;
+        const featuresTensor = createFloatTensor(floatType, preflowTokenEmb, [1, preflowSeqLen, EMBED_DIM]);
         const preflowResults = await sessions.preflow.run({ features: featuresTensor });
-        const processedTokenEmb = outputToFloat32(preflowResults['processed_features']);
+        const processedTokenEmb = useStaticShapes ? outputToFloat32(preflowResults['processed_features']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(preflowResults['processed_features']);
 
         const mel2token = sequences.mel2token;
         const expandedEmb = new Float32Array(totalFrames * EMBED_DIM);
@@ -410,9 +429,11 @@ class Preprocessing {
             }
         }
 
-        const condCodeTensor = createFloatTensor(floatType, condCodeData, [1, totalCondFrames, EMBED_DIM]);
+        const condSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalCondFrames;
+        const paddedCondCode = useStaticShapes ? (() => { const p = new Float32Array(condSeqLen * EMBED_DIM); p.set(condCodeData); return p; })() : condCodeData;
+        const condCodeTensor = createFloatTensor(floatType, paddedCondCode, [1, condSeqLen, EMBED_DIM]);
         const condEmbResults = await sessions.condEmb.run({ cond_code: condCodeTensor });
-        const cond = outputToFloat32(condEmbResults['cond_embedding']);
+        const cond = useStaticShapes ? outputToFloat32(condEmbResults['cond_embedding']).subarray(0, totalCondFrames * COND_DIM) : outputToFloat32(condEmbResults['cond_embedding']);
 
         return cond;
     }

@@ -23,7 +23,7 @@ export async function ensureOrt() {
             ort.env.wasm.wasmPaths = './';
             ort.env.wasm.numThreads = 1; // Disable SharedArrayBuffer threading (not available in Electron sandbox)
             ort.env.wasm.memoryLimit = 16384; // 16GB WASM memory limit for large models
-            console.log('[WebNN] WASM paths configured: ./, numThreads: 1, memoryLimit: 16GB');
+            console.log(`[WebNN] WASM paths configured: ${ort.env.wasm.wasmPaths}, numThreads: ${ort.env.wasm.numThreads}, memoryLimit: ${ort.env.wasm.memoryLimit}MB`);
         }
     } else {
         throw new Error('onnxruntime-web not loaded. Ensure ort.all.min.js is included via <script> tag.');

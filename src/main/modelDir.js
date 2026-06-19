@@ -1,7 +1,6 @@
 const { app } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const { checkMissingFiles } = require('../modelManager');
 
 let customModelDir = null;
 
@@ -26,13 +25,14 @@ function getModelDir() {
   }
 
   const unpackedDir = getUnpackedModelDir();
-  const { missing } = checkMissingFiles(unpackedDir);
-  if (missing.length === 0) {
+  // 只检查核心 .onnx 文件是否存在，不检查 .onnx.data（int8-npu 模型已将数据自包含）
+  const coreModelFile = path.join(unpackedDir, 'note_text_encoder.onnx');
+  if (fs.existsSync(coreModelFile)) {
     console.log('[Main] 在 app.asar.unpacked 中找到完整模型文件');
     return unpackedDir;
   }
 
-  console.log('[Main] app.asar.unpacked 中模型文件不完整，缺少', missing.length, '个文件');
+  console.log('[Main] app.asar.unpacked 中模型文件不完整');
   const userDataDir = app.getPath('userData');
   const modelDir = path.join(userDataDir, 'onnx_models');
   fs.mkdirSync(modelDir, { recursive: true });

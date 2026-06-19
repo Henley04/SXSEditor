@@ -48,7 +48,7 @@
     "copy-webpack-plugin": "^14.0.0",
     "cross-env": "^10.1.0",
     "css-loader": "^6.11.0",
-    "electron": "^41.3.0",
+    "electron": "^42.4.1",
     "electron-squirrel-startup": "^1.0.1",
     "jsdom": "^29.0.2",
     "mini-css-extract-plugin": "^2.10.2",
@@ -67,5 +67,11 @@
     "onnxruntime-web": "^1.26.0",
     "pinyin-pro": "^3.28.1",
     "systeminformation": "^5.25.11"
+  },
+  "optionalDependencies": {
+    "nan": "^2.27.0"
+  },
+  "overrides": {
+    "segfault-handler": "npm:empty-npm-package@1.0.0"
   }
 }

@@ -19,11 +19,18 @@ function invalidateModelFilesCache() {
   modelFilesCacheDir = null;
 }
 
+// int8-npu 模型已将外部数据自包含到 .onnx 文件中，无需检查 .onnx.data 文件
+const PRECISION_NO_EXTERNAL_DATA = new Set(['int8-npu']);
+
 async function getModelFilesInfo() {
   const modelDir = getModelDir();
   if (modelFilesCache && modelFilesCacheDir === modelDir) {
     return modelFilesCache;
   }
+
+  const { loadSettings } = require('./settings');
+  const currentPrecision = loadSettings().modelPrecision || 'fp16';
+  const skipExternalData = PRECISION_NO_EXTERNAL_DATA.has(currentPrecision);
 
   const groups = getModelGroups();
   const cache = {};
@@ -33,6 +40,8 @@ async function getModelFilesInfo() {
       let totalFileSize = 0;
       let filesExist = true;
       for (const file of model.files) {
+        // int8-npu 模型跳过 .onnx.data 文件检查
+        if (skipExternalData && file.endsWith('.onnx.data')) continue;
         const fullPath = path.join(modelDir, file);
         try {
           const stats = await fs.promises.stat(fullPath);

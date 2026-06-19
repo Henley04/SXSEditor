@@ -18,6 +18,7 @@ const LONG_AUDIO_THRESHOLD_SEC = 30;
 const SEGMENT_MIN_SEC = 15;
 const SEGMENT_MAX_SEC = 30;
 const SEGMENT_OVERLAP_SEC = 2;
+const MAX_SAFE_FRAMES = 40000;
 
 const ONNX_MODEL_FILES = [
     'note_text_encoder.onnx',
@@ -105,6 +106,7 @@ module.exports = {
     SEGMENT_MIN_SEC,
     SEGMENT_MAX_SEC,
     SEGMENT_OVERLAP_SEC,
+    MAX_SAFE_FRAMES,
     ONNX_MODEL_FILES,
     MODEL_SIZES,
     MODEL_GROUPS,

@@ -241,3 +241,44 @@ if (window.electronAPI?.onCloseConfirm) {
     api.webnnRespond(`webnn:runSynthesis:response:${requestId}`, result);
   });
 })();
+
+// ==================== Theme initialization ====================
+// Apply saved theme on startup and listen for theme changes
+(async () => {
+  const api = window.electronAPI;
+  if (!api?.themeAPI) return;
+
+  function injectTokens(tokens) {
+    if (!tokens || typeof document === 'undefined') return;
+    const root = document.documentElement;
+    for (const [k, v] of Object.entries(tokens)) {
+      try { root.style.setProperty(k, v); } catch (_) {}
+    }
+  }
+
+  async function applyTheme(themeId) {
+    if (!themeId) return;
+    try {
+      const themeObj = await api.themeAPI.get(themeId);
+      if (themeObj && themeObj.tokens) {
+        injectTokens(themeObj.tokens);
+      }
+    } catch (_) {}
+  }
+
+  try {
+    const bootstrap = await api.themeAPI.bootstrap();
+    if (bootstrap && bootstrap.themeId) {
+      await applyTheme(bootstrap.themeId);
+    }
+  } catch (_) {}
+
+  if (api.themeAPI.onChanged) {
+    const cleanup = api.themeAPI.onChanged(async (data) => {
+      if (data && data.themeId) {
+        await applyTheme(data.themeId);
+      }
+    });
+    if (cleanup) state._ipcCleanups.push(cleanup);
+  }
+})();

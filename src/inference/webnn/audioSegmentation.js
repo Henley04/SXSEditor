@@ -2,9 +2,9 @@
  * WebNN 推理模块 — 长音频分段拼接
  */
 
-import { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES } from './constants.js';
+import { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, NPU_VOCODER_SEQ_LEN } from './constants.js';
 import { runSession } from './sessionManager.js';
-import { createFloatTensor, outputToFloat32 } from './utils.js';
+import { createFloatTensor, outputToFloat32, padToLength } from './utils.js';
 
 /**
  * 分段 vocoder 推理 + 交叉淡入淡出拼接
@@ -15,9 +15,9 @@ import { createFloatTensor, outputToFloat32 } from './utils.js';
  * @param {number} params.npuVocoderBatchSize - vocoder 批量大小
  * @returns {{ audioData: Float32Array, vocChunkCount: number, vocPrepTotal: number, vocInferTotal: number, vocPostTotal: number }}
  */
-export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize }) {
+export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes = false }) {
     const totalSamples = totalFrames * HOP_SIZE;
-    const chunkSize = VOCODER_CHUNK_FRAMES;
+    const chunkSize = useStaticShapes ? Math.min(VOCODER_CHUNK_FRAMES, NPU_VOCODER_SEQ_LEN) : VOCODER_CHUNK_FRAMES;
     const overlapFrames = VOCODER_OVERLAP_FRAMES;
     const vocBatch = Math.max(1, npuVocoderBatchSize);
     const output = new Float32Array(totalSamples);
@@ -28,6 +28,8 @@ export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuV
     for (let i = 0; i < fadeSamples; i++) {
         fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * i / fadeSamples));
     }
+
+    const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : 0;
 
     let vocChunkCount = 0, vocInferTotal = 0, vocPrepTotal = 0, vocPostTotal = 0;
 
@@ -60,7 +62,9 @@ export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuV
         if (batchSize === 1) {
             // Single chunk, run directly
             const info = batchInfos[0];
-            const melTensor = createFloatTensor(floatType, batchMels[0], [1, info.chunkFrames, MEL_DIM]);
+            const singleVocLen = useStaticShapes ? Math.max(info.chunkFrames, vocSeqLen) : info.chunkFrames;
+            const paddedMel = useStaticShapes ? padToLength(batchMels[0], singleVocLen * MEL_DIM) : batchMels[0];
+            const melTensor = createFloatTensor(floatType, paddedMel, [1, singleVocLen, MEL_DIM]);
             const prepMs = performance.now() - tVocBatchPrep;
 
             const tVocBatchInfer = performance.now();
@@ -89,18 +93,19 @@ export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuV
             console.log(`[WebNN]   vocoder chunk [${info.offset}-${info.end}/${totalFrames}]: prep=${prepMs.toFixed(1)} infer=${inferMs.toFixed(1)} post=${postMs.toFixed(1)}`);
         } else {
             // Batch inference: pad all chunks to maxChunkFrames
-            const batchData = new Float32Array(batchSize * maxChunkFrames * MEL_DIM);
+            const batchVocLen = useStaticShapes ? Math.max(maxChunkFrames, vocSeqLen) : maxChunkFrames;
+            const batchData = new Float32Array(batchSize * batchVocLen * MEL_DIM);
             for (let b = 0; b < batchSize; b++) {
                 const mel = batchMels[b];
                 const frames = batchInfos[b].chunkFrames;
                 for (let f = 0; f < frames; f++) {
                     for (let d = 0; d < MEL_DIM; d++) {
-                        batchData[(b * maxChunkFrames + f) * MEL_DIM + d] = mel[f * MEL_DIM + d];
+                        batchData[(b * batchVocLen + f) * MEL_DIM + d] = mel[f * MEL_DIM + d];
                     }
                 }
             }
 
-            const melTensor = createFloatTensor(floatType, batchData, [batchSize, maxChunkFrames, MEL_DIM]);
+            const melTensor = createFloatTensor(floatType, batchData, [batchSize, batchVocLen, MEL_DIM]);
             const prepMs = performance.now() - tVocBatchPrep;
 
             const tVocBatchInfer = performance.now();
@@ -109,7 +114,7 @@ export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuV
 
             const tVocBatchPost = performance.now();
             const batchWaveform = outputToFloat32(vocoderResults['waveform']);
-            const samplesPerChunk = maxChunkFrames * HOP_SIZE;
+            const samplesPerChunk = batchVocLen * HOP_SIZE;
 
             for (let b = 0; b < batchSize; b++) {
                 const info = batchInfos[b];
