@@ -121,7 +121,6 @@ SXSEditor ships with a layered **Design Token** system and a JSON-based **Theme 
 | `dark-aurora` | Aurora 暗色 | Default dark theme with blue-purple accents. Reproduces the classic SXSEditor look. |
 | `light-paper` | Paper 亮色 | Light theme with a white background, suitable for daytime use. |
 | `midnight-amber` | Midnight 琥珀 | Dark theme with amber accents. Warm and easy on the eyes during long sessions. |
-| `contrast-onyx` | Onyx 高对比 | High-contrast accessibility theme, meets WCAG AA text-contrast requirements (≥ 4.5:1). |
 
 **Import / Export / Edit a theme**
 
@@ -274,7 +273,7 @@ SXSEditor/
 │   ├── fragmentEditor.js    # Fragment piano-roll editor
 │   ├── resourceManager.js   # Resource manager window (GPU/VRAM, model load/unload)
 │   └── ...html/.css         # Window layouts and styles
-├── test/                    # Automated test suite (225+ tests)
+├── test/                    # Automated test suite (470+ tests)
 ├── forge.config.js          # Electron Forge configuration
 ├── webpack.*.config.js      # Webpack configurations
 └── package.json
@@ -288,7 +287,7 @@ npm run test:coverage    # With code coverage
 npm run test:watch       # Watch mode
 ```
 
-The test suite includes **225+ test cases** covering WAV encoding, track management, SVS pipeline logic, pitch detection, MIDI parsing, and integration tests.
+The test suite includes **470+ test cases** covering WAV encoding, track management, SVS pipeline logic, pitch detection, MIDI parsing, model path consistency, theme system, and integration tests.
 
 #### Audio Configuration
 
@@ -410,14 +409,13 @@ SXSEditor 内置分层 **设计令牌（Design Token）** 系统与基于 JSON �
 2. 找到 **主题（Theme）** 下拉框（分组显示：**内置** 与 **用户**）
 3. 选择主题后，所有已打开的窗口立即更新
 
-**4 套内置主题**
+**3 套内置主题**
 
 | 主题 ID | 名称 | 说明 |
 |---------|------|------|
 | `dark-aurora` | Aurora 暗色 | **默认暗色主题**，蓝紫强调色，复刻经典 SXSEditor 风格 |
 | `light-paper` | Paper 亮色 | 亮色白底主题，适合日间使用 |
 | `midnight-amber` | Midnight 琥珀 | 暗色琥珀强调主题，长时间使用更护眼 |
-| `contrast-onyx` | Onyx 高对比 | 高对比度无障碍主题，文本对比度符合 WCAG AA（≥ 4.5:1） |
 
 **导入 / 导出 / 编辑主题**
 
@@ -493,7 +491,7 @@ npm run test:coverage    # 带覆盖率报告
 npm run test:watch       # 监视模式
 ```
 
-测试套件包含 **225+ 个测试用例**，覆盖 WAV 编码、轨道管理、SVS 流水线、音高检测、MIDI 解析等。
+测试套件包含 **470+ 个测试用例**，覆盖 WAV 编码、轨道管理、SVS 流水线、音高检测、MIDI 解析、模型路径一致性、主题系统等。
 
 #### 技术栈
 
@@ -502,7 +500,7 @@ npm run test:watch       # 监视模式
 | 前端 | Vanilla JavaScript, HTML5 Canvas, Wavesurfer.js |
 | 桌面框架 | Electron + Electron Forge |
 | 构建工具 | Webpack |
-| 推理引擎 | ONNX Runtime Node |
+| 推理引擎 | ONNX Runtime Node (GPU/CPU) + ONNX Runtime Web (NPU/WebNN) |
 | 声学模型 | SoulX-Singer（扩散模型 SVS） |
 | 音高检测 | RMVPE ONNX, Basic Pitch (TensorFlow.js) |
 | 音频输出 | naudiodon（WASAPI 共享/独占模式） |
@@ -629,7 +627,7 @@ npm test                 # 全テスト実行
 npm run test:coverage    # カバレッジ付き
 ```
 
-テストスイートには **225 以上のテストケース** が含まれています。
+テストスイートには **470 以上のテストケース** が含まれています。
 
 #### 技術スタック
 
@@ -638,7 +636,7 @@ npm run test:coverage    # カバレッジ付き
 | フロントエンド | Vanilla JavaScript, HTML5 Canvas, Wavesurfer.js |
 | デスクトップフレームワーク | Electron + Electron Forge |
 | ビルドツール | Webpack |
-| 推論エンジン | ONNX Runtime Node |
+| 推論エンジン | ONNX Runtime Node (GPU/CPU) + ONNX Runtime Web (NPU/WebNN) |
 | 音響モデル | SoulX-Singer（拡散モデル SVS） |
 | ピッチ検出 | RMVPE ONNX, Basic Pitch (TensorFlow.js) |
 | オーディオ出力 | naudiodon（WASAPI 共有/排他モード） |

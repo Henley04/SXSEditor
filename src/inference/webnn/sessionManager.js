@@ -95,11 +95,12 @@ export async function loadModel(modelId, modelPath, options = { deviceType: 'npu
         enableCpuMemArena: true,          // Enable CPU memory arena for better allocation
     };
 
-    // 大模型（>100MB）使用基础优化以加速加载（已离线优化，无需运行时深度优化）
+    // 大模型（>100MB）禁用运行时图优化以加速加载
+    // 这些模型已经过离线优化，运行时优化是冗余的且 NPU 编译很慢
     const modelSizeMB = modelBuffer.byteLength / (1024 * 1024);
     if (modelSizeMB > 100) {
-        sessionOptions.graphOptimizationLevel = 'basic';
-        console.log(`[WebNN] Large model (${modelSizeMB.toFixed(0)}MB), using basic graph optimization`);
+        sessionOptions.graphOptimizationLevel = 'disabled';
+        console.log(`[WebNN] Large model (${modelSizeMB.toFixed(0)}MB), runtime graph optimization disabled (already offline-optimized)`);
     }
 
     if (externalDataBuffers.length > 0) {

@@ -1,6 +1,7 @@
 import './common.css';
 import './settings.css';
 import { t, initI18n, applyLocale, setLocale, getLocale } from './i18n/index.js';
+import { initWindowTheme } from './themes/themeInit.js';
 import {
     themeManager,
     TOKEN_CATALOG,
@@ -305,6 +306,8 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
     const textEl = document.getElementById('currentHardwareText');
     if (!textEl) return;
 
+    const deviceMode = currentSetting?.deviceMode || 'smart';
+
     if (hardwareInfo) {
         const gpuName = hardwareInfo.gpuDeviceName || t('settings.cpuOnly');
         const dmlCount = hardwareInfo.dmlModelCount || 0;
@@ -348,24 +351,28 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
         : (currentSetting && currentSetting.deviceId !== undefined && currentSetting.deviceId !== null ? currentSetting.deviceId : null);
 
     if (selectedDeviceId !== null) {
-        const selected = devices.find(d => d.dxgiAdapterNumber === selectedDeviceId);
+        // NPU devices use 'npu' as value, match by deviceType
+        const selected = selectedDeviceId === 'npu'
+            ? devices.find(d => d.deviceType === 'npu')
+            : devices.find(d => d.dxgiAdapterNumber === selectedDeviceId);
         if (selected) {
             const vramStr = selected.vram ? ` (${selected.vram})` : '';
             const typeLabel = getDeviceTypeLabel(selected.deviceType || (selected.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'));
-            textEl.textContent = `${selected.name}${vramStr} ${typeLabel} [deviceId=${selectedDeviceId}] ${t('settings.pendingInit')}`;
+            const npuTag = selected.deviceType === 'npu' ? ' [NPU(WebNN)]' : '';
+            textEl.textContent = `${selected.name}${vramStr} ${typeLabel}${npuTag} [deviceId=${selectedDeviceId}] ${t('settings.pendingInit')}`;
             return;
         }
     }
 
+    // Auto mode — show "自动选择" with best device hint, matching the dropdown display
     const discrete = devices.filter(d => d.deviceType === 'discrete-gpu' || d.isDiscrete);
     if (discrete.length > 0) {
         const best = discrete.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
-        const vramStr = best.vram ? ` (${best.vram})` : '';
-        textEl.textContent = `${t('settings.autoSelect')}: ${best.name}${vramStr} ${t('settings.discreteGpu')} ${t('settings.pendingInit')}`;
+        textEl.textContent = t('settings.autoSelectPreferDiscrete', { name: best.name }) + ` ${t('settings.pendingInit')}`;
     } else {
         const best = devices.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
         const vramStr = best.vram ? ` (${best.vram})` : '';
-        textEl.textContent = `${t('settings.autoSelect')}: ${best.name}${vramStr} ${t('settings.integratedGpu')} ${t('settings.pendingInit')}`;
+        textEl.textContent = `${t('settings.autoSelect')}: ${best.name}${vramStr} ${getDeviceTypeLabel(best.deviceType || (best.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'))} ${t('settings.pendingInit')}`;
     }
 }
 
@@ -562,11 +569,15 @@ deviceModeRadios.forEach(radio => {
     radio.addEventListener('change', () => {
         updateDeviceModeUI(radio.value);
         applySettings();
+        updateCurrentHardwareDisplay(null, cachedDevices, collectSettings());
     });
 });
 
 // Device select
-inferenceDeviceSelect.addEventListener('change', () => applySettings());
+inferenceDeviceSelect.addEventListener('change', () => {
+    applySettings();
+    updateCurrentHardwareDisplay(null, cachedDevices, collectSettings());
+});
 
 // Model mapping selects (advanced mode)
 if (modelDeviceMappingDiv) {
@@ -677,6 +688,9 @@ initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
 });
+
+// Apply saved theme
+initWindowTheme();
 
 // ============================================================================
 // Theme management

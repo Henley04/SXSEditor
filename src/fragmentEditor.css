@@ -46,7 +46,7 @@
 }
 
 .loading-text {
-  color: var(--fg-primary);
+  color: #ffffff;
   font-size: var(--font-lg);
   font-weight: 500;
 }

@@ -11,11 +11,14 @@ import './ipcHandlers.js';
 // Import and run initialization
 import { updateProjectSettings } from './projectManager.js';
 import { refreshAll } from './timelineRenderer.js';
-import { dom } from './state.js';
+import { state, dom } from './state.js';
+import { initWindowTheme } from '../themes/themeInit.js';
 
-// Initialize project settings and render UI
-updateProjectSettings();
-refreshAll();
+// Initialize theme before first render so canvas reads correct tokens
+initWindowTheme(state._ipcCleanups).then(() => {
+  updateProjectSettings();
+  refreshAll();
+});
 
 // Display app version
 (async () => {

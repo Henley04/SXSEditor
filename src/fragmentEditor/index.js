@@ -1,6 +1,7 @@
 import '../common.css';
 import '../fragmentEditor.css';
 import { initI18n, applyLocale, getLocale, t } from '../i18n/index.js';
+import { initWindowTheme } from '../themes/themeInit.js';
 import { initPipeline } from './pipeline.js';
 import { resizeCanvases, render } from './canvasRenderer.js';
 import { setupEventListeners } from './eventHandlers.js';
@@ -18,6 +19,9 @@ import { saveFragmentData } from './projectIO.js';
 
 // Initialize pipeline
 initPipeline();
+
+// Apply saved theme
+initWindowTheme(getIpcCleanups());
 
 // Setup window resize
 window.addEventListener('resize', resizeCanvases);

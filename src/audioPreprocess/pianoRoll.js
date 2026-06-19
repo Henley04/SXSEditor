@@ -3,11 +3,12 @@ import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, F0_CURVE_AREA_
 import { t } from '../i18n/index.js';
 import { debounce } from '../utils/debounce.js';
 import { midiToNoteName } from '../utils/midiUtils.js';
+import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 import { drawWaveformWithPlayhead } from './canvasRenderer.js';
 import { updateMidiInfo, startInlineEdit, updateInlineInputPosition } from './uiControls.js';
 
 export function initPianoRoll() {
-  if (state.pianoRoll) return;
+  if (state.pianoRoll) return Promise.resolve();
 
   const notes = [];
   state.pianoRoll = {
@@ -342,22 +343,23 @@ export function initPianoRoll() {
       const h = this.height;
       if (!ctx) return;
 
+      const c = getCanvasColors();
       ctx.clearRect(0, 0, w, h);
-      this._drawBackground(ctx, w, h);
-      this._drawGrid(ctx, w, h);
-      this._drawF0Curve(ctx, w, h);
-      this._drawNotes(ctx);
-      this._drawPianoKeys(ctx, h);
-      this._drawPlayhead(ctx, h);
+      this._drawBackground(ctx, w, h, c);
+      this._drawGrid(ctx, w, h, c);
+      this._drawF0Curve(ctx, w, h, c);
+      this._drawNotes(ctx, c);
+      this._drawPianoKeys(ctx, h, c);
+      this._drawPlayhead(ctx, h, c);
       updateInlineInputPosition(this);
     },
 
-    _drawBackground(ctx, w, h) {
-      ctx.fillStyle = '#1e1e1e';
+    _drawBackground(ctx, w, h, c) {
+      ctx.fillStyle = c.bgElevated;
       ctx.fillRect(0, 0, w, h);
     },
 
-    _drawF0Curve(ctx, w, h) {
+    _drawF0Curve(ctx, w, h, c) {
       if (!this.f0Data || this.f0Data.length === 0) return;
 
       const f0AreaTop = HEADER_HEIGHT;
@@ -374,7 +376,7 @@ export function initPianoRoll() {
       const audioEndX = PIANO_KEY_WIDTH + audioEndBeat * BEAT_WIDTH * this.zoomX - this.scrollX;
       const f0BgEndX = state.wavDuration > 0 ? Math.min(Math.floor(audioEndX), w) : w;
 
-      ctx.fillStyle = '#161616';
+      ctx.fillStyle = c.bgInput;
       ctx.fillRect(PIANO_KEY_WIDTH, f0AreaTop, f0BgEndX - PIANO_KEY_WIDTH, F0_CURVE_AREA_HEIGHT);
 
       // 在F0区域背景之上重绘节拍网格线
@@ -387,7 +389,7 @@ export function initPianoRoll() {
         if (x < PIANO_KEY_WIDTH) continue;
         if (x > f0BgEndX) break;
         const isMeasureLine = (b % beatsPerMeasure === 0);
-        ctx.strokeStyle = isMeasureLine ? '#333333' : '#282828';
+        ctx.strokeStyle = isMeasureLine ? c.gridLineMajor : c.gridLineMinor;
         ctx.beginPath();
         ctx.moveTo(x, f0AreaTop);
         ctx.lineTo(x, f0AreaBottom);
@@ -396,7 +398,7 @@ export function initPianoRoll() {
 
       // 绘制音频结束标记线
       if (state.wavDuration > 0 && audioEndX >= PIANO_KEY_WIDTH && audioEndX <= w) {
-        ctx.strokeStyle = '#555555';
+        ctx.strokeStyle = c.fgDisabled;
         ctx.lineWidth = 1;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
@@ -406,12 +408,12 @@ export function initPianoRoll() {
         ctx.setLineDash([]);
       }
 
-      ctx.fillStyle = '#888888';
+      ctx.fillStyle = c.timeText;
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'left';
       ctx.fillText(t('preprocess.f0CurveReadOnly'), PIANO_KEY_WIDTH + 6, f0AreaTop + 14);
 
-      ctx.strokeStyle = '#444444';
+      ctx.strokeStyle = c.borderStrong;
       ctx.lineWidth = 1;
       const refFreqs = [100, 200, 300, 400, 500, 600, 700, 800, 1000, 1200];
       for (const freq of refFreqs) {
@@ -424,20 +426,20 @@ export function initPianoRoll() {
         ctx.lineTo(f0BgEndX, y);
         ctx.stroke();
         ctx.setLineDash([]);
-        ctx.fillStyle = '#555555';
+        ctx.fillStyle = c.fgDisabled;
         ctx.font = '9px sans-serif';
         ctx.textAlign = 'right';
         ctx.fillText(freq + 'Hz', PIANO_KEY_WIDTH - 4, y + 3);
       }
 
-      ctx.strokeStyle = '#666666';
+      ctx.strokeStyle = c.fgDisabled;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(PIANO_KEY_WIDTH, f0AreaBottom);
       ctx.lineTo(f0BgEndX, f0AreaBottom);
       ctx.stroke();
 
-      ctx.strokeStyle = '#ff6b6b';
+      ctx.strokeStyle = c.danger;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
 
@@ -478,7 +480,7 @@ export function initPianoRoll() {
       ctx.stroke();
 
       if (this.f0Data.length > 0) {
-        ctx.fillStyle = '#ff6b6b88';
+        ctx.fillStyle = c.dangerGlow;
         ctx.beginPath();
         let fillStarted = false;
         let fillLastX = -1;
@@ -516,7 +518,7 @@ export function initPianoRoll() {
       }
     },
 
-    _drawGrid(ctx, w, h) {
+    _drawGrid(ctx, w, h, c) {
       const beatsPerMeasure = this.projectSettings.timeSignature[0];
       const startBeat = this._xToTime(PIANO_KEY_WIDTH);
       const endBeat = this._xToTime(w);
@@ -526,18 +528,18 @@ export function initPianoRoll() {
         const x = this._timeToX(b);
         if (x < PIANO_KEY_WIDTH) continue;
         const isMeasureLine = (b % beatsPerMeasure === 0);
-        ctx.strokeStyle = isMeasureLine ? '#444444' : '#333333';
+        ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
         ctx.beginPath();
         ctx.moveTo(x, HEADER_HEIGHT);
         ctx.lineTo(x, HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT);
         ctx.stroke();
-        ctx.strokeStyle = isMeasureLine ? '#666666' : '#444444';
+        ctx.strokeStyle = isMeasureLine ? c.fgDisabled : c.borderStrong;
         ctx.beginPath();
         ctx.moveTo(x, HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT);
         ctx.lineTo(x, h);
         ctx.stroke();
         if (isMeasureLine) {
-          ctx.fillStyle = '#999999';
+          ctx.fillStyle = c.timeText;
           ctx.font = '11px sans-serif';
           ctx.textAlign = 'center';
           const measureNum = Math.floor(b / beatsPerMeasure) + 1;
@@ -551,7 +553,7 @@ export function initPianoRoll() {
       for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
         const y = this._pitchToY(p);
         const isBlack = blackKeys.has(p % 12);
-        ctx.strokeStyle = isBlack ? '#333333' : '#2a2a2a';
+        ctx.strokeStyle = isBlack ? c.gridLineMajor : c.gridLineMinor;
         ctx.beginPath();
         ctx.moveTo(PIANO_KEY_WIDTH, y);
         ctx.lineTo(w, y);
@@ -559,7 +561,7 @@ export function initPianoRoll() {
       }
     },
 
-    _drawNotes(ctx) {
+    _drawNotes(ctx, c) {
       for (const note of this.notes) {
         const x = this._timeToX(note.start);
         const y = this._pitchToY(note.pitch);
@@ -571,24 +573,24 @@ export function initPianoRoll() {
         const isSelected = note.id === this.selectedNoteId;
         const isHover = note.id === this.hoverNoteId;
 
-        ctx.fillStyle = state.singerColor || '#3498db';
+        ctx.fillStyle = state.singerColor || c.accent;
         ctx.globalAlpha = isSelected ? 1.0 : 0.85;
         ctx.fillRect(x, y, w, h);
         ctx.globalAlpha = 1.0;
 
-        ctx.strokeStyle = isSelected ? '#ffffff' : (isHover ? '#dddddd' : '#000000');
+        ctx.strokeStyle = isSelected ? c.noteSelectedBg : (isHover ? c.fgSecondary : c.noteBorder);
         ctx.lineWidth = isSelected ? 2 : 1;
         ctx.strokeRect(x, y, w, h);
 
         if (w > 20) {
-          ctx.fillStyle = '#ffffff';
+          ctx.fillStyle = c.noteText;
           ctx.font = '10px sans-serif';
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
           const displayText = note.lyric || midiToNoteName(note.pitch);
           ctx.fillText(displayText, x + 4, y + h / 2);
         } else if (w > 8) {
-          ctx.fillStyle = '#ffffff';
+          ctx.fillStyle = c.noteText;
           ctx.font = '8px sans-serif';
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
@@ -596,12 +598,12 @@ export function initPianoRoll() {
           ctx.fillText(displayText, x + 2, y + h / 2);
         }
 
-        ctx.fillStyle = 'rgba(255,255,255,0.5)';
+        ctx.fillStyle = c.selectionBg;
         ctx.fillRect(x + w - 4, y + 2, 2, h - 4);
       }
     },
 
-    _drawPianoKeys(ctx, h) {
+    _drawPianoKeys(ctx, h, c) {
       const midiToNoteNameLocal = (midi) => {
         const names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
         const octave = Math.floor(midi / 12) - 1;
@@ -617,21 +619,19 @@ export function initPianoRoll() {
         const keyH = NOTE_HEIGHT * this.zoomY;
         const isBlack = blackKeys.has(p % 12);
 
-        ctx.fillStyle = isBlack ? '#111111' : '#eeeeee';
+        ctx.fillStyle = isBlack ? c.pianoBlackKey : c.pianoWhiteKey;
         ctx.fillRect(0, y, PIANO_KEY_WIDTH, keyH);
 
-        ctx.strokeStyle = '#555555';
+        ctx.strokeStyle = c.pianoKeyBorder;
         ctx.strokeRect(0, y, PIANO_KEY_WIDTH, keyH);
 
-        if (!isBlack) {
-          ctx.fillStyle = '#333333';
-          ctx.font = '10px sans-serif';
-          ctx.textAlign = 'right';
-          ctx.fillText(midiToNoteNameLocal(p), PIANO_KEY_WIDTH - 4, y + keyH / 2 + 4);
-        }
+        ctx.fillStyle = isBlack ? '#cccccc' : '#2a2a3d';
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(midiToNoteNameLocal(p), PIANO_KEY_WIDTH - 4, y + keyH / 2 + 4);
       }
 
-      ctx.strokeStyle = '#555555';
+      ctx.strokeStyle = c.pianoKeyBorder;
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(PIANO_KEY_WIDTH, HEADER_HEIGHT);
@@ -639,20 +639,20 @@ export function initPianoRoll() {
       ctx.stroke();
     },
 
-    _drawPlayhead(ctx, h) {
+    _drawPlayhead(ctx, h, c) {
       const currentTime = this.getCurrentTime();
       const beat = this._secondsToBeats(currentTime);
       const x = this._timeToX(beat);
       if (x < PIANO_KEY_WIDTH || x > this.width) return;
 
-      ctx.strokeStyle = '#ff4444';
+      ctx.strokeStyle = c.playhead;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(x, HEADER_HEIGHT);
       ctx.lineTo(x, h);
       ctx.stroke();
 
-      ctx.fillStyle = '#ff4444';
+      ctx.fillStyle = c.playhead;
       ctx.beginPath();
       ctx.moveTo(x, HEADER_HEIGHT);
       ctx.lineTo(x - 6, HEADER_HEIGHT - 6);
@@ -664,4 +664,5 @@ export function initPianoRoll() {
 
   state.pianoRoll._initEvents();
   state.pianoRoll._resize();
+  return Promise.resolve();
 }

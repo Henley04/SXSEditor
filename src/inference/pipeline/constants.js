@@ -14,6 +14,9 @@ const CFG_RESCALE = 0.75;
 const DEFAULT_DIFF_STEPS = 32;
 const VOCODER_CHUNK_FRAMES = 1008;
 const VOCODER_OVERLAP_FRAMES = 8;
+// Vocoder NPU 静态形状（独立于 encoder/diffusion 的 seq_len=2048）
+// Vocoder ISTFT Conv 的 Pad 中间张量在 seq_len=2048 时超出 WebNN 2GB 限制
+const NPU_VOCODER_SEQ_LEN = 500;
 const LONG_AUDIO_THRESHOLD_SEC = 30;
 const SEGMENT_MIN_SEC = 15;
 const SEGMENT_MAX_SEC = 30;
@@ -102,6 +105,7 @@ module.exports = {
     DEFAULT_DIFF_STEPS,
     VOCODER_CHUNK_FRAMES,
     VOCODER_OVERLAP_FRAMES,
+    NPU_VOCODER_SEQ_LEN,
     LONG_AUDIO_THRESHOLD_SEC,
     SEGMENT_MIN_SEC,
     SEGMENT_MAX_SEC,

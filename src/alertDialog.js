@@ -10,6 +10,11 @@
 import { t } from './i18n/index.js';
 import { escapeHtml } from './utils/escapeHtml.js';
 
+function getThemeVar(name, fallback) {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
 /**
  * 显示非阻塞的 alert 对话框
  * @param {string} message - 要显示的消息
@@ -24,7 +29,7 @@ export function showAlertDialog(message, onClose) {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0,0,0,0.6);
+    background: var(--overlay-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -33,13 +38,13 @@ export function showAlertDialog(message, onClose) {
 
   const dialog = document.createElement('div');
   dialog.style.cssText = `
-    background: #2d2d2d;
-    border: 1px solid #555;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
     border-radius: 8px;
     padding: 20px;
     min-width: 280px;
     max-width: 420px;
-    color: #fff;
+    color: var(--fg-primary);
   `;
 
   dialog.innerHTML = `
@@ -47,10 +52,10 @@ export function showAlertDialog(message, onClose) {
     <div style="display: flex; justify-content: flex-end;">
       <button class="alert-ok-btn" style="
         padding: 6px 20px;
-        background: #3498db;
+        background: var(--bg-button-primary);
         border: none;
         border-radius: 4px;
-        color: #fff;
+        color: var(--fg-on-accent);
         cursor: pointer;
       ">${t('common.confirm') || 'OK'}</button>
     </div>
@@ -94,7 +99,7 @@ export function showConfirmDialog(message) {
       left: 0;
       right: 0;
       bottom: 0;
-      background: rgba(0,0,0,0.6);
+      background: var(--overlay-scrim);
       display: flex;
       align-items: center;
       justify-content: center;
@@ -103,13 +108,13 @@ export function showConfirmDialog(message) {
 
     const dialog = document.createElement('div');
     dialog.style.cssText = `
-      background: #2d2d2d;
-      border: 1px solid #555;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
       border-radius: 8px;
       padding: 20px;
       min-width: 280px;
       max-width: 420px;
-      color: #fff;
+      color: var(--fg-primary);
     `;
 
     dialog.innerHTML = `
@@ -117,18 +122,18 @@ export function showConfirmDialog(message) {
       <div style="display: flex; justify-content: flex-end; gap: 8px;">
         <button class="confirm-cancel-btn" style="
           padding: 6px 20px;
-          background: #555;
-          border: none;
+          background: var(--bg-button);
+          border: 1px solid var(--border-strong);
           border-radius: 4px;
-          color: #fff;
+          color: var(--fg-muted);
           cursor: pointer;
         ">${t('common.cancel') || 'Cancel'}</button>
         <button class="confirm-ok-btn" style="
           padding: 6px 20px;
-          background: #e74c3c;
+          background: var(--bg-button-danger);
           border: none;
           border-radius: 4px;
-          color: #fff;
+          color: var(--fg-on-accent);
           cursor: pointer;
         ">${t('common.confirm') || 'OK'}</button>
       </div>

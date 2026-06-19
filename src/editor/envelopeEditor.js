@@ -5,6 +5,7 @@
 
 import { debounce } from '../utils/debounce.js';
 import { smoothstep } from '../utils/smoothstep.js';
+import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 
 class EnvelopeEditor {
   constructor(canvas, options = {}) {
@@ -182,8 +183,8 @@ class EnvelopeEditor {
       position: fixed;
       left: ${x}px;
       top: ${y}px;
-      background: #2d2d2d;
-      border: 1px solid #555555;
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
       border-radius: 4px;
       padding: 4px 0;
       z-index: 1000;
@@ -196,10 +197,10 @@ class EnvelopeEditor {
       item.style.cssText = `
         padding: 6px 12px;
         cursor: pointer;
-        color: #ffffff;
+        color: var(--fg-primary);
         font-size: 12px;
       `;
-      item.addEventListener('mouseenter', () => item.style.background = '#3c3c3c');
+      item.addEventListener('mouseenter', () => item.style.background = 'var(--accent-softer)');
       item.addEventListener('mouseleave', () => item.style.background = 'transparent');
       item.addEventListener('click', () => {
         action();
@@ -299,17 +300,18 @@ class EnvelopeEditor {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.width, this.height);
 
-    this._drawGrid();
-    this._drawEnvelopeLine();
-    this._drawKeyframes();
-    this._drawLabels();
+    const c = getCanvasColors();
+    this._drawGrid(c);
+    this._drawEnvelopeLine(c);
+    this._drawKeyframes(c);
+    this._drawLabels(c);
   }
 
-  _drawGrid() {
+  _drawGrid(c) {
     const ctx = this.ctx;
     const plotHeight = this.height - this.padding.top - this.padding.bottom;
 
-    ctx.strokeStyle = '#333333';
+    ctx.strokeStyle = c.gridLineMajor;
     ctx.lineWidth = 1;
 
     for (let i = 0; i <= 4; i++) {
@@ -321,12 +323,12 @@ class EnvelopeEditor {
     }
   }
 
-  _drawEnvelopeLine() {
+  _drawEnvelopeLine(c) {
     const ctx = this.ctx;
     const maxTime = this._getMaxTime();
     const steps = Math.max(50, Math.floor(maxTime * 20));
 
-    ctx.strokeStyle = this.options.showPan ? '#e74c3c' : '#3498db';
+    ctx.strokeStyle = this.options.showPan ? c.paramPan : c.paramVol;
     ctx.lineWidth = 2;
     ctx.beginPath();
 
@@ -345,7 +347,7 @@ class EnvelopeEditor {
     ctx.stroke();
   }
 
-  _drawKeyframes() {
+  _drawKeyframes(c) {
     const ctx = this.ctx;
 
     for (let i = 0; i < this.envelope.keyframes.length; i++) {
@@ -355,20 +357,20 @@ class EnvelopeEditor {
       const isSelected = i === this.selectedKeyframeIndex;
       const isHover = i === this.hoverKeyframeIndex;
 
-      ctx.fillStyle = isSelected ? '#ffffff' : (isHover ? '#dddddd' : '#3498db');
+      ctx.fillStyle = isSelected ? c.fgPrimary : (isHover ? c.fgSecondary : c.paramVol);
       ctx.beginPath();
       ctx.arc(x, y, this.keyframeRadius, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = isSelected ? '#ffffff' : '#222222';
+      ctx.strokeStyle = isSelected ? c.fgPrimary : c.noteBorder;
       ctx.lineWidth = isSelected ? 2 : 1;
       ctx.stroke();
     }
   }
 
-  _drawLabels() {
+  _drawLabels(c) {
     const ctx = this.ctx;
-    ctx.fillStyle = '#888888';
+    ctx.fillStyle = c.timeText;
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'left';
 
@@ -393,3 +395,10 @@ class EnvelopeEditor {
 }
 
 export { EnvelopeEditor };
+
+// Re-render all envelope editors when theme changes
+if (typeof window !== 'undefined') {
+  window.addEventListener('theme:changed', () => {
+    invalidateCanvasThemeCache();
+  });
+}

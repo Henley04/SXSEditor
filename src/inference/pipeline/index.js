@@ -246,15 +246,15 @@ class OnnxSVSPipeline {
             const webnnModelFiles = [...resolvedModelFiles];
             const loadedSessions = [];
 
+            // Vocoder 在 NPU 模式下使用 DML 加载（NPU 不适合 vocoder 的大卷积核）
+            const vocoderIdx = sessionKeys.indexOf('vocoder');
+
             // Helper: load a single model via WebNN IPC
             const loadOneWebnnModel = (modelFile, modelId, overridePath) => new Promise((resolve, reject) => {
                 const wc = getMainWindowWebContents();
                 if (!wc) { resolve({ success: false, error: 'No renderer window' }); return; }
 
-                // Vocoder NPU compilation needs more time (484MB model, ISTFT Conv kernel_size=1922)
-                const isVocoder = modelId === 'vocoder';
-                const ipcTimeout = isVocoder ? 360000 : 180000;
-                const modelTimeout = isVocoder ? 300000 : undefined; // passed to renderer EP timeout
+                const ipcTimeout = 180000;
 
                 const requestId = `svs-webnn-load-${Date.now()}-${Math.random().toString(36).slice(2)}`;
                 const timeout = setTimeout(() => resolve({ success: false, error: 'Load timeout' }), ipcTimeout);
@@ -268,7 +268,7 @@ class OnnxSVSPipeline {
                     requestId,
                     modelId,
                     modelPath: overridePath || path.join(this.modelDir, modelFile),
-                    options: { deviceType: 'npu', ...(modelTimeout ? { timeout: modelTimeout } : {}) },
+                    options: { deviceType: 'npu' },
                 });
             });
 
@@ -320,12 +320,36 @@ class OnnxSVSPipeline {
                 for (let i = 1; i < webnnModelFiles.length; i++) remainingIndices.push(i);
 
                 // Load models sequentially to reduce peak WASM memory pressure
+                // Skip vocoder — it will be loaded via DML after WebNN models
+                // Pre-read next model file during NPU compilation to overlap I/O with compute
                 const loadResults = [];
-                for (const i of remainingIndices) {
+                for (let ri = 0; ri < remainingIndices.length; ri++) {
+                    const i = remainingIndices[ri];
+                    if (i === vocoderIdx) continue;
                     const modelFile = webnnModelFiles[i];
                     const modelId = sessionKeys[i];
+
+                    // Start pre-reading the next model's file while current one compiles
+                    let prefetchPromise = null;
+                    for (let ni = ri + 1; ni < remainingIndices.length; ni++) {
+                        const nextIdx = remainingIndices[ni];
+                        if (nextIdx === vocoderIdx) continue;
+                        const nextFile = webnnModelFiles[nextIdx];
+                        const nextPath = path.join(this.modelDir, nextFile);
+                        const wc = getMainWindowWebContents();
+                        if (wc) {
+                            prefetchPromise = wc.send('webnn:prefetch:request', { modelPath: nextPath });
+                        }
+                        break;
+                    }
+
                     const result = await loadOneWebnnModel(modelFile, modelId);
                     loadResults.push({ i, modelFile, modelId, result });
+
+                    // Wait for prefetch to complete (non-blocking, just ensures I/O finishes)
+                    if (prefetchPromise) {
+                        try { await prefetchPromise; } catch (_) {}
+                    }
                 }
 
                 for (const { i, modelFile, modelId, result } of loadResults) {
@@ -349,6 +373,44 @@ class OnnxSVSPipeline {
                             }
                         }
                         throw new Error(`WebNN 加载 ${modelFile} 失败: ${result.error}`);
+                    }
+                }
+
+                // Vocoder 使用 DML 加载（NPU 不适合 vocoder 的大卷积核）
+                // 跳过 DML 验证推理，避免 GPU 显存压力导致已加载的 WebNN 会话失效
+                {
+                    const vocoderModelFile = webnnModelFiles[vocoderIdx];
+                    const vocoderPath = path.join(this.modelDir, vocoderModelFile);
+                    console.log(`[OnnxSVSPipeline] Loading vocoder via DML (skip validation): ${vocoderModelFile}`);
+                    try {
+                        const ort = require('onnxruntime-node');
+                        const dmlOpts = typeof this.dmlDeviceId === 'number'
+                            ? { name: 'dml', deviceId: this.dmlDeviceId }
+                            : 'dml';
+                        const session = await ort.InferenceSession.create(vocoderPath, {
+                            executionProviders: [dmlOpts, 'cpu'],
+                        });
+                        this.sessions['vocoder'] = session;
+                        this.sessionEPs['vocoder'] = 'dml';
+                        this._detectVocoderPrecision(session);
+                        loadedSessions.push('vocoder');
+                        console.log(`[OnnxSVSPipeline] ${vocoderModelFile} loaded via DML (no validation)`);
+                    } catch (vocErr) {
+                        // DML 加载失败，回退到 CPU
+                        console.warn(`[OnnxSVSPipeline] Vocoder DML load failed, falling back to CPU: ${vocErr.message}`);
+                        try {
+                            const ort = require('onnxruntime-node');
+                            const session = await ort.InferenceSession.create(vocoderPath, {
+                                executionProviders: ['cpu'],
+                            });
+                            this.sessions['vocoder'] = session;
+                            this.sessionEPs['vocoder'] = 'cpu';
+                            this._detectVocoderPrecision(session);
+                            loadedSessions.push('vocoder');
+                            console.log(`[OnnxSVSPipeline] ${vocoderModelFile} loaded via CPU (fallback)`);
+                        } catch (cpuErr) {
+                            throw new Error(`Vocoder 加载失败: ${cpuErr.message}`);
+                        }
                     }
                 }
 
@@ -394,6 +456,7 @@ class OnnxSVSPipeline {
                 const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
                 const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
                 console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
+                if (this.sessions['vocoder']) this._detectVocoderPrecision(this.sessions['vocoder']);
             } catch (err) {
                 console.error('[OnnxSVSPipeline] ONNX Runtime init failed:', err.message);
                 for (const key of loadedSessions) {
@@ -450,6 +513,7 @@ class OnnxSVSPipeline {
             const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
             const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
             console.log(`[OnnxSVSPipeline] Fallback init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
+            if (this.sessions['vocoder']) this._detectVocoderPrecision(this.sessions['vocoder']);
         } catch (err) {
             for (const key of loadedSessions) {
                 if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
@@ -459,6 +523,21 @@ class OnnxSVSPipeline {
                 delete this.sessionEPs[key];
             }
             throw err;
+        }
+    }
+
+    _detectVocoderPrecision(session) {
+        try {
+            const meta = session.inputMetadata || {};
+            const melMeta = meta['mel'];
+            if (melMeta && melMeta.type) {
+                this.vocoderIsFP16 = melMeta.type === 'float16';
+                console.log(`[OnnxSVSPipeline] Vocoder input type: ${melMeta.type}`);
+            } else {
+                this.vocoderIsFP16 = this.isFP16;
+            }
+        } catch (_) {
+            this.vocoderIsFP16 = this.isFP16;
         }
     }
 
@@ -475,7 +554,7 @@ class OnnxSVSPipeline {
     }
 
     async _runVocoderChunked(melData, totalFrames) {
-        return this._postprocessing.runVocoderChunked(this.sessions, melData, totalFrames, this.isFP16, this.useStaticShapes);
+        return this._postprocessing.runVocoderChunked(this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, this.useStaticShapes);
     }
 
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
@@ -516,12 +595,16 @@ class OnnxSVSPipeline {
         if (this.useWebNN) {
             onProgress(Math.round(progressStart));
             const t0 = performance.now();
+            // Map WebNN progress (0-100) to segment progress range
+            const webnnOnProgress = (p) => {
+                onProgress(Math.round(progressStart + (p / 100) * progressRange));
+            };
             const result = await this._runWebNNSynthesis({
                 sequences, tokenCount, totalFrames,
                 ptMelData, ptFrameCount,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
-            });
+            }, webnnOnProgress);
             const ms = performance.now() - t0;
             console.log(`[OnnxSVSPipeline] WebNN synthesis: ${totalFrames}frames, ${totalSteps}steps, ${ms.toFixed(0)}ms`);
             onProgress(Math.round(progressStart + progressRange));
@@ -545,7 +628,7 @@ class OnnxSVSPipeline {
      * 在渲染进程中运行完整合成管线（WebNN 优化路径）
      * 单次 IPC 调用，消除逐模型 IPC 开销
      */
-    async _runWebNNSynthesis(params) {
+    async _runWebNNSynthesis(params, onProgress) {
         const { ipcMain } = require('electron');
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN synthesis');
@@ -554,8 +637,17 @@ class OnnxSVSPipeline {
             const requestId = `svs-webnn-synth-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const timeout = setTimeout(() => reject(new Error('WebNN synthesis timeout')), 600000);
 
+            // Listen for progress updates from renderer
+            const progressHandler = (event, data) => {
+                if (onProgress && data && typeof data.progress === 'number') {
+                    onProgress(data.progress);
+                }
+            };
+            ipcMain.on(`webnn:progress:${requestId}`, progressHandler);
+
             ipcMain.handleOnce(`webnn:runSynthesis:response:${requestId}`, (_, result) => {
                 clearTimeout(timeout);
+                ipcMain.removeListener(`webnn:progress:${requestId}`, progressHandler);
                 if (result.error) {
                     reject(new Error(result.error));
                 } else {
@@ -568,6 +660,7 @@ class OnnxSVSPipeline {
                 params: {
                     ...params,
                     isFP16: this.isFP16,
+                    vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
                     useStaticShapes: this.useStaticShapes,
                 },
             });
@@ -593,6 +686,10 @@ class OnnxSVSPipeline {
         onProgress(Math.round(progressStart));
 
         const t0 = performance.now();
+        // Map WebNN progress (0-100) to pair progress range
+        const webnnOnProgress = (p) => {
+            onProgress(Math.round(progressStart + (p / 100) * progressRange));
+        };
         const results = await this._runWebNNSynthesisBatch([
             {
                 sequences: seqA, tokenCount: seqA.tokenCount, totalFrames: framesA,
@@ -606,7 +703,7 @@ class OnnxSVSPipeline {
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
             },
-        ]);
+        ], webnnOnProgress);
         const ms = performance.now() - t0;
         console.log(`[OnnxSVSPipeline] WebNN batch synthesis: ${framesA}+${framesB}frames, ${totalSteps}steps, ${ms.toFixed(0)}ms`);
 
@@ -618,7 +715,7 @@ class OnnxSVSPipeline {
     /**
      * 批量 WebNN 合成 IPC 调用
      */
-    async _runWebNNSynthesisBatch(paramsArray) {
+    async _runWebNNSynthesisBatch(paramsArray, onProgress) {
         const { ipcMain } = require('electron');
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN batch synthesis');
@@ -627,8 +724,17 @@ class OnnxSVSPipeline {
             const requestId = `svs-webnn-batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
             const timeout = setTimeout(() => reject(new Error('WebNN batch synthesis timeout')), 600000);
 
+            // Listen for progress updates from renderer
+            const progressHandler = (event, data) => {
+                if (onProgress && data && typeof data.progress === 'number') {
+                    onProgress(data.progress);
+                }
+            };
+            ipcMain.on(`webnn:progress:${requestId}`, progressHandler);
+
             ipcMain.handleOnce(`webnn:runSynthesis:response:${requestId}`, (_, result) => {
                 clearTimeout(timeout);
+                ipcMain.removeListener(`webnn:progress:${requestId}`, progressHandler);
                 if (result.error) {
                     reject(new Error(result.error));
                 } else {
@@ -638,7 +744,7 @@ class OnnxSVSPipeline {
 
             wc.send('webnn:runSynthesis:request', {
                 requestId,
-                params: paramsArray.map(p => ({ ...p, isFP16: this.isFP16, useStaticShapes: this.useStaticShapes })),
+                params: paramsArray.map(p => ({ ...p, isFP16: this.isFP16, vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16, useStaticShapes: this.useStaticShapes })),
             });
         });
     }

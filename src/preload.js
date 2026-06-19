@@ -59,7 +59,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   disposeSVSPipeline: () => ipcRenderer.invoke('svs:dispose'),
   getFragmentSVSSampleRate: () => ipcRenderer.invoke('fragment-svs:getSampleRate'),
   initFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:init'),
-  synthesizeFragmentSVS: (data) => ipcRenderer.invoke('fragment-svs:synthesize', data),
+  synthesizeFragmentSVS: (data) => {
+    return new Promise((resolve, reject) => {
+      const requestId = `frag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const responseChannel = `fragment-svs:result:${requestId}`;
+      const handler = (event, result) => {
+        ipcRenderer.removeListener(responseChannel, handler);
+        if (result.error) {
+          reject(new Error(result.error));
+        } else {
+          resolve(result.data);
+        }
+      };
+      ipcRenderer.on(responseChannel, handler);
+      ipcRenderer.send('fragment-svs:synthesize', { requestId, ...data });
+    });
+  },
   resolvePhonemes: (lyrics) => ipcRenderer.invoke('fragment-svs:resolvePhonemes', { lyrics }),
   disposeFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:dispose'),
   onFragmentSVSProgress: (callback) => {
@@ -197,7 +212,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('webnn:runSynthesis:request', handler);
     return () => ipcRenderer.removeListener('webnn:runSynthesis:request', handler);
   },
+  onWebnnPrefetchRequest: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('webnn:prefetch:request', handler);
+    return () => ipcRenderer.removeListener('webnn:prefetch:request', handler);
+  },
   webnnRespond: (responseChannel, result) => ipcRenderer.invoke(responseChannel, result),
+  webnnProgress: (progressChannel, data) => ipcRenderer.send(progressChannel, data),
 
   // ==================== Theme API ====================
   themeAPI: {
