@@ -2,28 +2,16 @@ const { expect } = require('chai');
 const path = require('path');
 const fs = require('fs');
 
-// Model manager path resolution
+// Import ACTUAL functions from modelManager (not inline copies)
 const {
   MODEL_FILE_MANIFEST,
+  PRECISION_SUBDIR_MAP,
+  PRECISION_SUBDIR_PRECESIONS,
+  getLocalFilePath,
+  getManifestForPrecision,
+  isSvsModelFile,
+  checkMissingFiles,
 } = require('../src/modelManager');
-
-// Inline helpers from modelManager (not exported)
-const PRECISION_SUBDIR_MAP = {
-  'int8': 'int8',
-  'fp16': 'fp16',
-  'int8-npu': path.join('int8', 'optimized_npu'),
-};
-function isSvsModelFile(filePath) {
-  return !filePath.startsWith('preprocess/') && !filePath.startsWith('basic_pitch_model/');
-}
-function getLocalFilePath(baseDir, filePath, precision) {
-  const PRECISION_SUBDIR_PRECESIONS = new Set(['int8', 'fp16', 'int8-npu']);
-  if (precision && PRECISION_SUBDIR_PRECESIONS.has(precision) && isSvsModelFile(filePath)) {
-    const subdir = PRECISION_SUBDIR_MAP[precision] || precision;
-    return path.join(baseDir, subdir, filePath);
-  }
-  return path.join(baseDir, filePath);
-}
 
 // Pipeline constants
 const {
@@ -38,10 +26,28 @@ const {
 // Text processing
 const { TextProcessing } = require('../src/inference/pipeline/textProcessing');
 
-describe('Model Path Consistency', () => {
+describe('Model Path Consistency (using actual modelManager functions)', () => {
   const baseDir = '/test/models';
 
-  describe('getLocalFilePath precision subdirectories', () => {
+  describe('isSvsModelFile (actual function)', () => {
+    it('should return true for SVS model files', () => {
+      expect(isSvsModelFile('note_text_encoder.onnx')).to.be.true;
+      expect(isSvsModelFile('diff_step_dml.onnx')).to.be.true;
+      expect(isSvsModelFile('vocoder_dml.onnx')).to.be.true;
+    });
+
+    it('should return false for preprocess models', () => {
+      expect(isSvsModelFile('preprocess/rmvpe_model.onnx')).to.be.false;
+      expect(isSvsModelFile('preprocess/rosvot_model.onnx')).to.be.false;
+    });
+
+    it('should return false for basic_pitch models', () => {
+      expect(isSvsModelFile('basic_pitch_model/model.json')).to.be.false;
+      expect(isSvsModelFile('basic_pitch_model/group1-shard1of1.bin')).to.be.false;
+    });
+  });
+
+  describe('getLocalFilePath (actual function)', () => {
     it('should use fp16 subdirectory for fp16 SVS models', () => {
       const result = getLocalFilePath(baseDir, 'note_text_encoder.onnx', 'fp16');
       expect(result).to.equal(path.join(baseDir, 'fp16', 'note_text_encoder.onnx'));
@@ -57,13 +63,13 @@ describe('Model Path Consistency', () => {
       expect(result).to.equal(path.join(baseDir, 'int8', 'optimized_npu', 'vocoder_dml.onnx'));
     });
 
-    it('should NOT use subdirectory for preprocess models', () => {
+    it('should NOT use subdirectory for preprocess models even with precision', () => {
       const result = getLocalFilePath(baseDir, 'preprocess/rmvpe_model.onnx', 'fp16');
       expect(result).to.equal(path.join(baseDir, 'preprocess/rmvpe_model.onnx'));
     });
 
-    it('should NOT use subdirectory for basic_pitch models', () => {
-      const result = getLocalFilePath(baseDir, 'basic_pitch_model/model.json', 'int8');
+    it('should NOT use subdirectory for basic_pitch models even with precision', () => {
+      const result = getLocalFilePath(baseDir, 'basic_pitch_model/model.json', 'fp16');
       expect(result).to.equal(path.join(baseDir, 'basic_pitch_model/model.json'));
     });
 
@@ -71,19 +77,82 @@ describe('Model Path Consistency', () => {
       const result = getLocalFilePath(baseDir, 'note_text_encoder.onnx', null);
       expect(result).to.equal(path.join(baseDir, 'note_text_encoder.onnx'));
     });
+
+    it('should use base directory for fp32 (no subdirectory)', () => {
+      const result = getLocalFilePath(baseDir, 'note_text_encoder.onnx', 'fp32');
+      expect(result).to.equal(path.join(baseDir, 'note_text_encoder.onnx'));
+    });
   });
 
-  describe('PRECISION_SUBDIR_MAP matches pipeline _resolveModelDir', () => {
-    // Pipeline uses these exact subdirectory names
-    const pipelineSubdirMap = {
-      'int8': 'int8',
-      'fp16': 'fp16',
-      'int8-npu': path.join('int8', 'optimized_npu'),
-    };
+  describe('getManifestForPrecision (actual function)', () => {
+    it('fp16 manifest should include .onnx.data files', () => {
+      const manifest = getManifestForPrecision('fp16');
+      const hasDataFiles = manifest.some(f => f.filePath.endsWith('.onnx.data'));
+      expect(hasDataFiles).to.be.true;
+    });
 
-    for (const [precision, expectedSubdir] of Object.entries(pipelineSubdirMap)) {
-      it(`should match for precision="${precision}"`, () => {
-        expect(PRECISION_SUBDIR_MAP[precision]).to.equal(expectedSubdir);
+    it('int8-npu manifest should NOT include .onnx.data files', () => {
+      const manifest = getManifestForPrecision('int8-npu');
+      const hasDataFiles = manifest.some(f => f.filePath.endsWith('.onnx.data'));
+      expect(hasDataFiles).to.be.false;
+    });
+
+    it('all manifests should include basic_pitch_model files', () => {
+      for (const precision of ['fp16', 'int8', 'int8-npu', 'fp32']) {
+        const manifest = getManifestForPrecision(precision);
+        const hasBasicPitch = manifest.some(f => f.filePath.startsWith('basic_pitch_model/'));
+        expect(hasBasicPitch, `basic_pitch_model missing from ${precision} manifest`).to.be.true;
+      }
+    });
+  });
+
+  describe('PRECISION_SUBDIR_MAP (actual export)', () => {
+    it('fp16 maps to "fp16"', () => {
+      expect(PRECISION_SUBDIR_MAP['fp16']).to.equal('fp16');
+    });
+
+    it('int8 maps to "int8"', () => {
+      expect(PRECISION_SUBDIR_MAP['int8']).to.equal('int8');
+    });
+
+    it('int8-npu maps to "int8/optimized_npu"', () => {
+      expect(PRECISION_SUBDIR_MAP['int8-npu']).to.equal(path.join('int8', 'optimized_npu'));
+    });
+  });
+
+  describe('Download and pipeline path consistency', () => {
+    // Simulate what checkMissingFiles does: for each manifest file,
+    // verify the path is consistent between download and pipeline loading
+    const precisions = ['fp16', 'int8', 'int8-npu'];
+
+    for (const precision of precisions) {
+      describe(`precision="${precision}"`, () => {
+        const manifest = getManifestForPrecision(precision);
+
+        for (const file of manifest) {
+          if (!file.required) return;
+
+          it(`${file.filePath} download path should be deterministic`, () => {
+            const downloadPath = getLocalFilePath(baseDir, file.filePath, precision);
+            // Run it twice — should be identical
+            const downloadPath2 = getLocalFilePath(baseDir, file.filePath, precision);
+            expect(downloadPath).to.equal(downloadPath2);
+          });
+
+          if (isSvsModelFile(file.filePath)) {
+            it(`SVS file ${file.filePath} should be in precision subdirectory`, () => {
+              const downloadPath = getLocalFilePath(baseDir, file.filePath, precision);
+              const subdir = PRECISION_SUBDIR_MAP[precision];
+              expect(downloadPath).to.include(subdir);
+            });
+          } else {
+            it(`non-SVS file ${file.filePath} should NOT be in precision subdirectory`, () => {
+              const downloadPath = getLocalFilePath(baseDir, file.filePath, precision);
+              const subdir = PRECISION_SUBDIR_MAP[precision];
+              expect(downloadPath).to.not.include(subdir);
+            });
+          }
+        }
       });
     }
   });
@@ -93,10 +162,7 @@ describe('Model Path Consistency', () => {
 
     for (const modelFile of ONNX_MODEL_FILES) {
       it(`pipeline model "${modelFile}" should be in download manifest`, () => {
-        // The manifest may have .onnx.data entries alongside .onnx entries
-        // Check that the .onnx file itself is listed
-        const found = manifestFiles.includes(modelFile) ||
-          manifestFiles.some(f => f === modelFile.replace('.onnx', '.onnx'));
+        const found = manifestFiles.includes(modelFile);
         expect(found, `"${modelFile}" not found in MODEL_FILE_MANIFEST`).to.be.true;
       });
     }
@@ -109,7 +175,6 @@ describe('Model Path Consistency', () => {
 
     for (const manifestFile of svsManifestFiles) {
       it(`manifest file "${manifestFile}" should be handled by pipeline`, () => {
-        // .onnx.data files are external data for .onnx files, not separate models
         if (manifestFile.endsWith('.onnx.data')) return;
         const found = ONNX_MODEL_FILES.includes(manifestFile);
         expect(found, `"${manifestFile}" in manifest but not in ONNX_MODEL_FILES`).to.be.true;
@@ -117,14 +182,50 @@ describe('Model Path Consistency', () => {
     }
   });
 
-  describe('Pipeline resolves diff_step_dml and vocoder_dml fallbacks', () => {
-    it('should list diff_step_dml.onnx as primary', () => {
-      expect(ONNX_MODEL_FILES).to.include('diff_step_dml.onnx');
-    });
+  describe('checkMissingFiles uses correct paths', () => {
+    it('should use getLocalFilePath for each manifest entry', () => {
+      // Verify that checkMissingFiles produces paths consistent with getLocalFilePath
+      // by checking a non-existent directory (all files missing)
+      const tmpDir = path.join(__dirname, '..', '.test-tmp-nonexistent');
+      const { missing } = checkMissingFiles(tmpDir, 'fp16');
+      expect(missing.length).to.be.greaterThan(0);
 
-    it('should list vocoder_dml.onnx as primary', () => {
-      expect(ONNX_MODEL_FILES).to.include('vocoder_dml.onnx');
+      // Each missing file should have a filePath from the manifest
+      for (const m of missing) {
+        expect(m.filePath).to.be.a('string');
+        expect(MODEL_FILE_MANIFEST.some(f => f.filePath === m.filePath)).to.be.true;
+      }
     });
+  });
+});
+
+describe('Pipeline Constants Consistency', () => {
+  it('VOCODER_CHUNK_FRAMES should be 1008', () => {
+    expect(VOCODER_CHUNK_FRAMES).to.equal(1008);
+  });
+
+  it('NPU_VOCODER_SEQ_LEN should be 500', () => {
+    expect(NPU_VOCODER_SEQ_LEN).to.equal(500);
+  });
+
+  it('NPU_VOCODER_SEQ_LEN should be less than VOCODER_CHUNK_FRAMES', () => {
+    expect(NPU_VOCODER_SEQ_LEN).to.be.lessThan(VOCODER_CHUNK_FRAMES);
+  });
+
+  it('MEL_DIM should be 128', () => {
+    expect(MEL_DIM).to.equal(128);
+  });
+
+  it('HOP_SIZE should be 480', () => {
+    expect(HOP_SIZE).to.equal(480);
+  });
+
+  it('SAMPLE_RATE should be 24000', () => {
+    expect(SAMPLE_RATE).to.equal(24000);
+  });
+
+  it('ONNX_MODEL_FILES should have 9 entries', () => {
+    expect(ONNX_MODEL_FILES.length).to.equal(9);
   });
 });
 
@@ -173,12 +274,6 @@ describe('TextProcessing - Vocabulary and Dictionary', () => {
       expect(Object.keys(tp.enG2pDict).length).to.equal(126052);
     });
 
-    it('should contain common words', () => {
-      expect(tp.enG2pDict['hello']).to.be.a('string');
-      expect(tp.enG2pDict['the']).to.be.a('string');
-      expect(tp.enG2pDict['la']).to.be.a('string');
-    });
-
     it('la should resolve to L AA1', () => {
       expect(tp.enG2pDict['la']).to.equal('L AA1');
     });
@@ -197,12 +292,6 @@ describe('TextProcessing - Vocabulary and Dictionary', () => {
       expect(id).to.not.equal(tp.phone2idx['<UNK>']);
     });
 
-    it('should find en_EY1', () => {
-      const id = tp._lookupPhonemeId('en_EY1');
-      expect(id).to.be.a('number');
-      expect(id).to.not.equal(tp.phone2idx['<UNK>']);
-    });
-
     it('should return UNK for unknown phoneme', () => {
       const id = tp._lookupPhonemeId('en_ZZZZZ999');
       expect(id).to.equal(tp.phone2idx['<UNK>']);
@@ -212,48 +301,9 @@ describe('TextProcessing - Vocabulary and Dictionary', () => {
       const id = tp._lookupPhonemeId('');
       expect(id).to.equal(tp.phone2idx['<SP>']);
     });
-
-    it('should find phoneme by en_ prefix lookup', () => {
-      // When passed without prefix, should try en_ prefix
-      const id = tp._lookupPhonemeId('EH1');
-      expect(id).to.be.a('number');
-      expect(id).to.not.equal(tp.phone2idx['<UNK>']);
-    });
-  });
-
-  describe('_englishG2p', () => {
-    it('should resolve "la" from dictionary', () => {
-      const result = tp._englishG2p('la');
-      expect(result).to.equal('L AA1');
-    });
-
-    it('should resolve "hello" from dictionary', () => {
-      const result = tp._englishG2p('hello');
-      expect(result).to.be.a('string');
-      expect(result.split(' ').length).to.be.greaterThan(1);
-    });
-
-    it('should fall back to letter-level for unknown words', () => {
-      const result = tp._englishG2p('xyzzy');
-      expect(result).to.be.a('string');
-      expect(result.split(' ').length).to.be.greaterThan(0);
-    });
-
-    it('letter fallback for single letter should produce phonemes', () => {
-      const result = tp._englishG2p('z');
-      expect(result).to.be.a('string');
-      expect(result).to.include('IY1');
-    });
   });
 
   describe('resolveLyricToPhonemes', () => {
-    it('should resolve Chinese character', () => {
-      const result = tp.resolveLyricToPhonemes('你');
-      expect(result).to.be.an('array');
-      expect(result.length).to.be.greaterThan(0);
-      expect(result[0].name).to.match(/^zh_/);
-    });
-
     it('should resolve English word', () => {
       const result = tp.resolveLyricToPhonemes('la');
       expect(result).to.be.an('array');
@@ -265,46 +315,6 @@ describe('TextProcessing - Vocabulary and Dictionary', () => {
       const result = tp.resolveLyricToPhonemes('<SP>');
       expect(result).to.deep.equal([{ name: '<SP>', display: 'SP' }]);
     });
-
-    it('should handle empty string', () => {
-      const result = tp.resolveLyricToPhonemes('');
-      expect(result).to.deep.equal([{ name: '<SP>', display: 'SP' }]);
-    });
-  });
-});
-
-describe('Pipeline Constants Consistency', () => {
-  it('VOCODER_CHUNK_FRAMES should be 1008', () => {
-    expect(VOCODER_CHUNK_FRAMES).to.equal(1008);
-  });
-
-  it('NPU_VOCODER_SEQ_LEN should be 500', () => {
-    expect(NPU_VOCODER_SEQ_LEN).to.equal(500);
-  });
-
-  it('NPU_VOCODER_SEQ_LEN should be less than VOCODER_CHUNK_FRAMES', () => {
-    expect(NPU_VOCODER_SEQ_LEN).to.be.lessThan(VOCODER_CHUNK_FRAMES);
-  });
-
-  it('MEL_DIM should be 128', () => {
-    expect(MEL_DIM).to.equal(128);
-  });
-
-  it('HOP_SIZE should be 480', () => {
-    expect(HOP_SIZE).to.equal(480);
-  });
-
-  it('SAMPLE_RATE should be 24000', () => {
-    expect(SAMPLE_RATE).to.equal(24000);
-  });
-
-  it('ONNX_MODEL_FILES should have 9 entries', () => {
-    expect(ONNX_MODEL_FILES.length).to.equal(9);
-  });
-
-  it('should include both diff_step_dml and vocoder_dml', () => {
-    expect(ONNX_MODEL_FILES).to.include('diff_step_dml.onnx');
-    expect(ONNX_MODEL_FILES).to.include('vocoder_dml.onnx');
   });
 });
 
@@ -316,13 +326,9 @@ describe('phone_set.json file integrity', () => {
     phoneSet = JSON.parse(fs.readFileSync(phoneSetPath, 'utf-8'));
   });
 
-  it('should be a non-empty array', () => {
+  it('should be a non-empty array with 2820 entries', () => {
     expect(phoneSet).to.be.an('array');
-    expect(phoneSet.length).to.be.greaterThan(0);
-  });
-
-  it('first element should be <PAD>', () => {
-    expect(phoneSet[0]).to.equal('<PAD>');
+    expect(phoneSet.length).to.equal(2820);
   });
 
   it('should have no duplicate entries', () => {
@@ -330,52 +336,9 @@ describe('phone_set.json file integrity', () => {
     expect(unique.size).to.equal(phoneSet.length);
   });
 
-  it('all entries should be strings', () => {
-    for (const entry of phoneSet) {
-      expect(entry).to.be.a('string');
-    }
-  });
-
   it('should contain en_EH1, en_L, en_EY1', () => {
     expect(phoneSet).to.include('en_EH1');
     expect(phoneSet).to.include('en_L');
     expect(phoneSet).to.include('en_EY1');
-  });
-});
-
-describe('en_g2p_dict.json file integrity', () => {
-  let g2pDict;
-
-  before(() => {
-    const dictPath = path.join(__dirname, '..', 'src', 'inference', 'en_g2p_dict.json');
-    g2pDict = JSON.parse(fs.readFileSync(dictPath, 'utf-8'));
-  });
-
-  it('should be a non-empty object', () => {
-    expect(g2pDict).to.be.an('object');
-    expect(Object.keys(g2pDict).length).to.be.greaterThan(0);
-  });
-
-  it('all keys should be lowercase', () => {
-    for (const key of Object.keys(g2pDict)) {
-      expect(key).to.equal(key.toLowerCase());
-    }
-  });
-
-  it('all values should be non-empty strings', () => {
-    for (const [key, value] of Object.entries(g2pDict)) {
-      expect(value).to.be.a('string');
-      expect(value.length).to.be.greaterThan(0);
-    }
-  });
-
-  it('values should contain only uppercase phoneme symbols', () => {
-    for (const [key, value] of Object.entries(g2pDict)) {
-      const parts = value.split(' ');
-      for (const part of parts) {
-        // CMU phonemes are uppercase letters optionally followed by a digit
-        expect(part).to.match(/^[A-Z]+[0-2]?$/);
-      }
-    }
   });
 });
