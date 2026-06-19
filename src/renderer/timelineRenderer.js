@@ -162,7 +162,9 @@ export function renderFragmentTimeline() {
 
       ctx.fillStyle = c.fgMuted;
       ctx.font = '10px sans-serif';
-      ctx.fillText(t('main.beatRange', { start: fragment.startTime, end: fragment.startTime + fragment.duration }), fragX + 6, y + 36);
+      const beatStart = Math.round(fragment.startTime * 100) / 100;
+      const beatEnd = Math.round((fragment.startTime + fragment.duration) * 100) / 100;
+      ctx.fillText(t('main.beatRange', { start: beatStart, end: beatEnd }), fragX + 6, y + 36);
 
       ctx.save();
       ctx.strokeStyle = c.scrollbarThumb;
