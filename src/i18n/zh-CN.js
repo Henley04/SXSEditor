@@ -44,6 +44,7 @@ export default {
     clickToAddFragment: '点击 + 添加分片',
     beatN: '第{n}拍',
     beatRange: '{start}-{end}拍',
+    measureRange: '{start}-{end}小节',
     singerLoadWarnings: '歌手文件加载警告',
     singerFileFormatError: '歌手文件格式错误',
     singerJsonParseFailed: '歌手文件JSON解析失败，文件可能已损坏',

@@ -44,6 +44,7 @@ export default {
     clickToAddFragment: 'Click + to add fragment',
     beatN: 'Beat {n}',
     beatRange: '{start}-{end} beats',
+    measureRange: 'M{start}-{end}',
     singerLoadWarnings: 'Singer File Load Warnings',
     singerFileFormatError: 'Singer File Format Error',
     singerJsonParseFailed: 'Singer file JSON parse failed, file may be corrupted',

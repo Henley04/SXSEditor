@@ -160,9 +160,10 @@ export function renderFragmentTimeline() {
 
       ctx.fillStyle = c.fgMuted;
       ctx.font = '10px sans-serif';
-      const beatStart = Math.round(fragment.startTime * 100) / 100;
-      const beatEnd = Math.round((fragment.startTime + fragment.duration) * 100) / 100;
-      ctx.fillText(t('main.beatRange', { start: beatStart, end: beatEnd }), fragX + 6, y + 36);
+      const bps = state.project.timeSignature ? state.project.timeSignature[0] : 4;
+      const measStart = Math.floor(fragment.startTime / bps) + 1;
+      const measEnd = Math.floor((fragment.startTime + fragment.duration - 0.001) / bps) + 1;
+      ctx.fillText(t('main.measureRange', { start: measStart, end: measEnd }), fragX + 6, y + 36);
 
       ctx.save();
       ctx.strokeStyle = c.scrollbarThumb;
