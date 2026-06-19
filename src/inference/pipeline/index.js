@@ -529,14 +529,45 @@ class OnnxSVSPipeline {
     _detectVocoderPrecision(session) {
         try {
             const meta = session.inputMetadata || {};
-            const melMeta = meta['mel'];
-            if (melMeta && melMeta.type) {
-                this.vocoderIsFP16 = melMeta.type === 'float16';
-                console.log(`[OnnxSVSPipeline] Vocoder input type: ${melMeta.type}`);
-            } else {
-                this.vocoderIsFP16 = this.isFP16;
+            const inputNames = session.inputNames || Object.keys(meta);
+            console.log(`[OnnxSVSPipeline] Vocoder inputs: [${inputNames.join(', ')}]`);
+
+            // Try to find 'mel' input metadata
+            let melType = null;
+            if (meta['mel'] && meta['mel'].type) {
+                melType = meta['mel'].type;
+            } else if (inputNames.length > 0 && meta[inputNames[0]] && meta[inputNames[0]].type) {
+                // Fallback: use first input's type
+                melType = meta[inputNames[0]].type;
             }
-        } catch (_) {
+
+            if (melType) {
+                this.vocoderIsFP16 = melType === 'float16';
+                console.log(`[OnnxSVSPipeline] Vocoder input type: ${melType} (vocoderIsFP16=${this.vocoderIsFP16})`);
+            } else {
+                // Could not detect — probe with a tiny inference
+                console.warn('[OnnxSVSPipeline] Vocoder inputMetadata unavailable, probing with test tensor');
+                try {
+                    const ort = require('onnxruntime-node');
+                    const testMel = new Float32Array(500 * 128); // minimal test
+                    const testFp16 = new Uint16Array(500 * 128);
+                    // Try float16 first
+                    try {
+                        const t16 = new ort.Tensor('float16', testFp16, [1, 500, 128]);
+                        session.run({ mel: t16 }).then(() => {
+                            this.vocoderIsFP16 = true;
+                            console.log('[OnnxSVSPipeline] Vocoder accepts float16 input');
+                        }).catch(() => {});
+                    } catch (_) {}
+                    // Default to matching global precision
+                    this.vocoderIsFP16 = this.isFP16;
+                    console.log(`[OnnxSVSPipeline] Vocoder precision defaulted to: ${this.isFP16 ? 'float16' : 'float32'}`);
+                } catch (_) {
+                    this.vocoderIsFP16 = this.isFP16;
+                }
+            }
+        } catch (e) {
+            console.warn('[OnnxSVSPipeline] Vocoder precision detection failed:', e.message);
             this.vocoderIsFP16 = this.isFP16;
         }
     }
