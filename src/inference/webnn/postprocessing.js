@@ -2,9 +2,9 @@
  * WebNN 推理模块 — Vocoder、mel-to-audio 转换
  */
 
-import { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES } from './constants.js';
+import { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, NPU_VOCODER_SEQ_LEN, VOCODER_OUTPUT_TRIM_SAMPLES } from './constants.js';
 import { runSession } from './sessionManager.js';
-import { createFloatTensor, outputToFloat32 } from './utils.js';
+import { createFloatTensor, outputToFloat32, padToLength } from './utils.js';
 import { runSegmentedVocoder } from './audioSegmentation.js';
 
 /**
@@ -16,15 +16,19 @@ import { runSegmentedVocoder } from './audioSegmentation.js';
  * @param {number} params.npuVocoderBatchSize - vocoder 批量大小
  * @returns {{ audioData: Float32Array, vocTotalMs: number }}
  */
-export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize }) {
+export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes = false }) {
     const totalSamples = totalFrames * HOP_SIZE;
     const tVoc0 = performance.now();
     let audioData;
     let vocChunkCount = 0, vocInferTotal = 0, vocPrepTotal = 0, vocPostTotal = 0;
 
-    if (totalFrames <= VOCODER_CHUNK_FRAMES) {
+    const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : totalFrames;
+    const maxSingleChunk = useStaticShapes ? NPU_VOCODER_SEQ_LEN : VOCODER_CHUNK_FRAMES;
+
+    if (totalFrames <= maxSingleChunk) {
         const tVocPrep = performance.now();
-        const melTensor = createFloatTensor(floatType, xtData, [1, totalFrames, MEL_DIM]);
+        const paddedMel = useStaticShapes ? padToLength(xtData, vocSeqLen * MEL_DIM) : xtData;
+        const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
         const vocPrepMs = performance.now() - tVocPrep;
 
         const tVocInfer = performance.now();
@@ -33,6 +37,8 @@ export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBat
 
         const tVocPost = performance.now();
         const waveform = outputToFloat32(vocoderResults['waveform']);
+        // Vocoder ISTFT Conv + Slice 产生略少于 seq_len*HOP_SIZE 的样本
+        // 实际输出 = seq_len*HOP_SIZE - VOCODER_OUTPUT_TRIM_SAMPLES
         const trimmed = waveform.subarray(0, Math.min(waveform.length, totalSamples));
         audioData = trimmed.slice(); // TypedArray.slice() 比 Array.from() 快得多
         const vocPostMs = performance.now() - tVocPost;
@@ -41,10 +47,10 @@ export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBat
         vocPrepTotal = vocPrepMs;
         vocInferTotal = vocInferMs;
         vocPostTotal = vocPostMs;
-        console.log(`[WebNN] vocoder (single): prep=${vocPrepMs.toFixed(1)} infer=${vocInferMs.toFixed(1)} post=${vocPostMs.toFixed(1)} [${totalFrames}frames → ${totalSamples}samples]`);
+        console.log(`[WebNN] vocoder (single): prep=${vocPrepMs.toFixed(1)} infer=${vocInferMs.toFixed(1)} post=${vocPostMs.toFixed(1)} [${totalFrames}frames → ${totalSamples}samples${useStaticShapes ? ', NPU static' : ''}]`);
     } else {
         // Chunked vocoder with batch processing
-        const result = await runSegmentedVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize });
+        const result = await runSegmentedVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes });
         audioData = result.audioData;
         vocChunkCount = result.vocChunkCount;
         vocPrepTotal = result.vocPrepTotal;

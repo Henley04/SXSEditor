@@ -96,10 +96,15 @@ class AudioSegmentation {
             const segNotes = sorted.filter(n => {
                 const noteEnd = n.start + n.duration;
                 return n.start < segEnd && noteEnd > segStart;
-            }).map(n => ({
-                ...n,
-                start: n.start - segStart,
-            }));
+            }).map(n => {
+                const clippedStart = Math.max(n.start, segStart);
+                const clippedEnd = Math.min(n.start + n.duration, segEnd);
+                return {
+                    ...n,
+                    start: clippedStart - segStart,
+                    duration: Math.max(0.01, clippedEnd - clippedStart),
+                };
+            });
 
             if (segNotes.length > 0) {
                 segments.push({

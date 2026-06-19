@@ -11,9 +11,9 @@ import { loadModel, unloadModel, runInference, getStatus, runSession } from './s
 import { runEncoderStage } from './preprocessing.js';
 import { runDiffusionLoop, runBatchDiffusionLoop } from './diffusion.js';
 import { runVocoder } from './postprocessing.js';
-import { HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, VOCODER_CHUNK_FRAMES } from './constants.js';
+import { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, VOCODER_CHUNK_FRAMES, NPU_STATIC_SEQ_LEN, NPU_VOCODER_SEQ_LEN } from './constants.js';
 import { ensureOrt, getOrt } from './ortSetup.js';
-import { outputToFloat32, createFloatTensor } from './utils.js';
+import { outputToFloat32, createFloatTensor, padInt64ToLength, padToLength, trimOutputToLength } from './utils.js';
 import { runSegmentedVocoder } from './audioSegmentation.js';
 
 /**
@@ -35,21 +35,36 @@ import { runSegmentedVocoder } from './audioSegmentation.js';
 async function runSynthesis(params) {
     await ensureOrt();
 
-    const {
+    let {
         sequences, tokenCount, totalFrames,
         ptMelData, ptFrameCount,
         totalSteps, cfgStrength, cfgRescale,
         isFP16,
         npuDiffBatchSize = 4,
         npuVocoderBatchSize = 2,
+        useStaticShapes = false,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
 
+    // NPU 静态形状模型限制：totalFramesWithPrompt 不能超过 2048
+    if (useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
+        const maxFrames = NPU_STATIC_SEQ_LEN - Math.min(ptFrameCount, 50);
+        if (totalFrames > maxFrames) {
+            console.warn(`[WebNN] NPU frame limit: ${totalFrames} > ${maxFrames}, truncating`);
+            sequences = {
+                ...sequences,
+                f0Ids: sequences.f0Ids.subarray(0, maxFrames),
+                mel2token: sequences.mel2token.subarray(0, maxFrames),
+            };
+            totalFrames = maxFrames;
+        }
+    }
+
     // ===== Stage 1: Encoder =====
     const tEnc0 = performance.now();
     const { combinedCond, totalCondFrames, totalFramesWithPrompt } = await runEncoderStage({
-        sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType,
+        sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes,
     });
 
     // ===== Stage 2: Diffusion Loop =====
@@ -64,6 +79,7 @@ async function runSynthesis(params) {
         cfgRescale,
         floatType,
         npuDiffBatchSize,
+        useStaticShapes,
     });
 
     // ===== Stage 3: Vocoder =====
@@ -72,6 +88,7 @@ async function runSynthesis(params) {
         totalFrames,
         floatType,
         npuVocoderBatchSize,
+        useStaticShapes,
     });
 
     const synthTotalMs = performance.now() - tEnc0;
@@ -83,7 +100,7 @@ async function runSynthesis(params) {
     console.log(`[WebNN]   Diffusion:  ${diffMs.toFixed(0)}ms (${(diffMs / synthTotalMs * 100).toFixed(1)}%) — infer avg ${(diffResult.diffInferTotal / totalSteps).toFixed(0)}ms/step`);
     console.log(`[WebNN]   Vocoder:    ${vocMs.toFixed(0)}ms (${(vocMs / synthTotalMs * 100).toFixed(1)}%)`);
     console.log(`[WebNN]   Total:      ${synthTotalMs.toFixed(0)}ms`);
-    console.log(`[WebNN]   Output: ${totalFrames} frames, ${(totalFrames * HOP_SIZE / 24000).toFixed(1)}s audio`);
+    console.log(`[WebNN]   Output: ${totalFrames} frames, ${(totalFrames * HOP_SIZE / SAMPLE_RATE).toFixed(1)}s audio`);
     console.log(`[WebNN] ================================`);
 
     return { audioData, totalFrames };
@@ -103,6 +120,7 @@ async function runSynthesisBatch(paramsArray) {
     const ort = getOrt();
     const isFP16 = paramsArray[0].isFP16;
     const floatType = isFP16 ? 'float16' : 'float32';
+    const useStaticShapes = paramsArray[0].useStaticShapes || false;
 
     // ===== Stage 1: Encode both segments in parallel =====
     const tEnc0 = performance.now();
@@ -116,17 +134,24 @@ async function runSynthesisBatch(paramsArray) {
         const typeIds = new BigInt64Array(sequences.noteTypeSeq.map(v => BigInt(v)));
         const f0IdsArr = new BigInt64Array(sequences.f0Ids.map(v => BigInt(v)));
 
+        const bEncSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
+        const bEncF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+        const bEncText = useStaticShapes ? padInt64ToLength(phonemeIds, bEncSeqLen) : phonemeIds;
+        const bEncPitch = useStaticShapes ? padInt64ToLength(pitchIds, bEncSeqLen) : pitchIds;
+        const bEncType = useStaticShapes ? padInt64ToLength(typeIds, bEncSeqLen) : typeIds;
+        const bEncF0 = useStaticShapes ? padInt64ToLength(f0IdsArr, bEncF0Len) : f0IdsArr;
+
         const [textResults, pitchResults, typeResults, f0Results] = await Promise.all([
-            runSession('noteTextEncoder', { input_ids: new ort.Tensor('int64', phonemeIds, [1, tokenCount]) }),
-            runSession('notePitchEncoder', { input_ids: new ort.Tensor('int64', pitchIds, [1, tokenCount]) }),
-            runSession('noteTypeEncoder', { input_ids: new ort.Tensor('int64', typeIds, [1, tokenCount]) }),
-            runSession('f0Encoder', { input_ids: new ort.Tensor('int64', f0IdsArr, [1, totalFrames]) }),
+            runSession('noteTextEncoder', { input_ids: new ort.Tensor('int64', bEncText, [1, bEncSeqLen]) }),
+            runSession('notePitchEncoder', { input_ids: new ort.Tensor('int64', bEncPitch, [1, bEncSeqLen]) }),
+            runSession('noteTypeEncoder', { input_ids: new ort.Tensor('int64', bEncType, [1, bEncSeqLen]) }),
+            runSession('f0Encoder', { input_ids: new ort.Tensor('int64', bEncF0, [1, bEncF0Len]) }),
         ]);
 
-        const textEmb = outputToFloat32(textResults['embeddings']);
-        const pitchEmb = outputToFloat32(pitchResults['embeddings']);
-        const typeEmb = outputToFloat32(typeResults['embeddings']);
-        const f0Emb = outputToFloat32(f0Results['embeddings']);
+        const textEmb = useStaticShapes ? trimOutputToLength(textResults['embeddings'], tokenCount) : outputToFloat32(textResults['embeddings']);
+        const pitchEmb = useStaticShapes ? trimOutputToLength(pitchResults['embeddings'], tokenCount) : outputToFloat32(pitchResults['embeddings']);
+        const typeEmb = useStaticShapes ? trimOutputToLength(typeResults['embeddings'], tokenCount) : outputToFloat32(typeResults['embeddings']);
+        const f0Emb = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], totalFrames) : outputToFloat32(f0Results['embeddings']);
 
         const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
         for (let t = 0; t < tokenCount; t++) {
@@ -138,9 +163,11 @@ async function runSynthesisBatch(paramsArray) {
             }
         }
 
-        const featuresTensor = createFloatTensor(floatType, tokenEmb, [1, tokenCount, EMBED_DIM]);
+        const bPreflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
+        const bPreflowTokenEmb = useStaticShapes ? padToLength(tokenEmb, bPreflowSeqLen * EMBED_DIM) : tokenEmb;
+        const featuresTensor = createFloatTensor(floatType, bPreflowTokenEmb, [1, bPreflowSeqLen, EMBED_DIM]);
         const preflowResults = await runSession('preflow', { features: featuresTensor });
-        const processedTokenEmb = outputToFloat32(preflowResults['processed_features']);
+        const processedTokenEmb = useStaticShapes ? trimOutputToLength(preflowResults['processed_features'], tokenCount) : outputToFloat32(preflowResults['processed_features']);
 
         const mel2token = sequences.mel2token;
         const totalCondFrames = ptFrameCount > 0 ? ptFrameCount + totalFrames : totalFrames;
@@ -153,9 +180,11 @@ async function runSynthesisBatch(paramsArray) {
             }
         }
 
-        const condCodeTensor = createFloatTensor(floatType, condCodeData, [1, totalCondFrames, EMBED_DIM]);
+        const bCondSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalCondFrames;
+        const bPaddedCondCode = useStaticShapes ? padToLength(condCodeData, bCondSeqLen * EMBED_DIM) : condCodeData;
+        const condCodeTensor = createFloatTensor(floatType, bPaddedCondCode, [1, bCondSeqLen, EMBED_DIM]);
         const condEmbResults = await runSession('condEmb', { cond_code: condCodeTensor });
-        const combinedCond = outputToFloat32(condEmbResults['cond_embedding']);
+        const combinedCond = useStaticShapes ? trimOutputToLength(condEmbResults['cond_embedding'], totalCondFrames) : outputToFloat32(condEmbResults['cond_embedding']);
 
         segData.push({
             totalFrames, tokenCount, ptMelData, ptFrameCount, combinedCond,
@@ -172,7 +201,7 @@ async function runSynthesisBatch(paramsArray) {
 
     // ===== Stage 2: Batched Diffusion Loop (batch=4) =====
     const totalSteps = segData[0].totalSteps;
-    const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType });
+    const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType, useStaticShapes });
 
     // ===== Stage 3: Vocoder per segment =====
     const results = [];
@@ -182,8 +211,11 @@ async function runSynthesisBatch(paramsArray) {
         const totalSamples = s.totalFrames * HOP_SIZE;
         let audioData;
 
-        if (s.totalFrames <= VOCODER_CHUNK_FRAMES) {
-            const melTensor = createFloatTensor(floatType, xt, [1, s.totalFrames, MEL_DIM]);
+        const maxVocChunk = useStaticShapes ? NPU_VOCODER_SEQ_LEN : VOCODER_CHUNK_FRAMES;
+        if (s.totalFrames <= maxVocChunk) {
+            const bVocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : s.totalFrames;
+            const paddedMel = useStaticShapes ? padToLength(xt, bVocSeqLen * MEL_DIM) : xt;
+            const melTensor = createFloatTensor(floatType, paddedMel, [1, bVocSeqLen, MEL_DIM]);
             const vocoderResults = await runSession('vocoder', { mel: melTensor });
             const waveform = outputToFloat32(vocoderResults['waveform']);
             audioData = Array.from(waveform.subarray(0, Math.min(waveform.length, totalSamples)));
@@ -193,6 +225,7 @@ async function runSynthesisBatch(paramsArray) {
                 totalFrames: s.totalFrames,
                 floatType,
                 npuVocoderBatchSize: s.npuVocoderBatchSize,
+                useStaticShapes,
             });
             audioData = result.audioData;
         }

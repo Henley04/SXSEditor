@@ -1,6 +1,8 @@
 const { MEL_DIM, COND_DIM } = require('./constants');
 const { createFloatTensor, outputToFloat32 } = require('./utils');
 
+const NPU_STATIC_SEQ_LEN = 2048;
+
 /**
  * Diffusion sampling loop (the core synthesis algorithm)
  */
@@ -8,12 +10,25 @@ class Diffusion {
     /**
      * Run a single diffusion step
      */
-    async runDiffStep(sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, isFP16) {
+    async runDiffStep(sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, isFP16, useStaticShapes = false) {
         const floatType = isFP16 ? 'float16' : 'float32';
-        const xtTensor = createFloatTensor(floatType, xtInputData, [1, totalFramesWithPrompt, MEL_DIM]);
+        const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
+
+        const padFloat = (src, len) => {
+            if (src.length >= len) return src;
+            const padded = new Float32Array(len);
+            padded.set(src);
+            return padded;
+        };
+
+        const xtPadded = useStaticShapes ? padFloat(xtInputData, seqLen * MEL_DIM) : xtInputData;
+        const condPadded = useStaticShapes ? padFloat(condData, seqLen * COND_DIM) : condData;
+        const maskPadded = useStaticShapes ? padFloat(maskData, seqLen) : maskData;
+
+        const xtTensor = createFloatTensor(floatType, xtPadded, [1, seqLen, MEL_DIM]);
         const tTensor = createFloatTensor(floatType, new Float32Array([tVal]), [1]);
-        const condTensor = createFloatTensor(floatType, condData, [1, totalFramesWithPrompt, COND_DIM]);
-        const maskTensor = createFloatTensor(floatType, maskData, [1, totalFramesWithPrompt]);
+        const condTensor = createFloatTensor(floatType, condPadded, [1, seqLen, COND_DIM]);
+        const maskTensor = createFloatTensor(floatType, maskPadded, [1, seqLen]);
 
         const results = await sessions.diffStep.run({
             xt_input: xtTensor,
@@ -22,13 +37,17 @@ class Diffusion {
             xt_mask: maskTensor,
         });
 
-        return outputToFloat32(results['flow_pred']);
+        const pred = outputToFloat32(results['flow_pred']);
+        if (useStaticShapes) {
+            return pred.subarray(0, totalFramesWithPrompt * MEL_DIM);
+        }
+        return pred;
     }
 
     /**
      * Run the full diffusion sampling loop
      */
-    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange) {
+    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false) {
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
         const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
         const targetMask = new Float32Array(totalFrames).fill(1);
@@ -57,14 +76,14 @@ class Diffusion {
                 }
             }
 
-            const predData = await this.runDiffStep(sessions, xtInputBuf, tVal, combinedCond, frameMask, totalFramesWithPrompt, isFP16);
+            const predData = await this.runDiffStep(sessions, xtInputBuf, tVal, combinedCond, frameMask, totalFramesWithPrompt, isFP16, useStaticShapes);
 
             if (cfgStrength > 0) {
                 for (let i = 0; i < totalFrames * MEL_DIM; i++) {
                     xtTargetBuf[i] = xt.data[i];
                 }
 
-                const uncondPred = await this.runDiffStep(sessions, xtTargetBuf, tVal, uncondCondBuf, targetMask, totalFrames, isFP16);
+                const uncondPred = await this.runDiffStep(sessions, xtTargetBuf, tVal, uncondCondBuf, targetMask, totalFrames, isFP16, useStaticShapes);
 
                 const targetLen = totalFrames * MEL_DIM;
                 // Single pass: compute conditional mean, CFG prediction, and CFG mean

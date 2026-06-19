@@ -1,0 +1,38 @@
+{
+  "--before": {
+    "tag": "--before",
+    "timestamp": "2026-06-15T14:28:27.183Z",
+    "models": [
+      {
+        "name": "vocoder",
+        "sizeMB": 461.8,
+        "loadMs": 548,
+        "inferMs": 13399
+      },
+      {
+        "name": "diff_step",
+        "sizeMB": 423.4,
+        "loadMs": 389,
+        "inferMs": 3710
+      }
+    ]
+  },
+  "--after": {
+    "tag": "--after",
+    "timestamp": "2026-06-15T14:36:07.767Z",
+    "models": [
+      {
+        "name": "vocoder",
+        "sizeMB": 989.8,
+        "loadMs": 967,
+        "inferMs": 14758
+      },
+      {
+        "name": "diff_step",
+        "sizeMB": 1689.4,
+        "loadMs": 1844,
+        "inferMs": 3159
+      }
+    ]
+  }
+}

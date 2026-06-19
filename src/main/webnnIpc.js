@@ -40,11 +40,14 @@ function registerWebnnIpc() {
     const wc = getMainWindowWebContents();
     if (!wc) return { success: false, error: 'No renderer window' };
 
+    // Allow per-model timeout override (vocoder NPU compilation needs more time)
+    const loadTimeout = (options && options.timeout) || 120000;
+
     return new Promise((resolve) => {
       const requestId = `webnn-load-${Date.now()}-${Math.random().toString(36).slice(2)}`;
       const timeout = setTimeout(() => {
         resolve({ success: false, error: 'Load model timeout' });
-      }, 120000);
+      }, loadTimeout);
 
       ipcMain.handleOnce(`webnn:loadModel:response:${requestId}`, async (_, result) => {
         clearTimeout(timeout);

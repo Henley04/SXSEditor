@@ -382,10 +382,25 @@ class Postprocessing {
     /**
      * Extract reference mel spectrogram using ONNX mel_transform model
      */
-    async extractRefMelOnnx(sessions, refAudioWavBuffer, isFP16) {
+    async extractRefMelOnnx(sessions, refAudioWavBuffer, isFP16, useStaticShapes = false) {
         const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(refAudioWavBuffer);
         const resampled = resampleLinear(audioFloat, srcSr, SAMPLE_RATE);
         const floatType = isFP16 ? 'float16' : 'float32';
+        const NPU_STATIC_NUM_SAMPLES = 240000;
+        if (useStaticShapes && resampled.length < NPU_STATIC_NUM_SAMPLES) {
+            const padded = new Float32Array(NPU_STATIC_NUM_SAMPLES);
+            padded.set(resampled);
+            const waveform = createFloatTensor(floatType, padded, [1, NPU_STATIC_NUM_SAMPLES]);
+            const results = await sessions.melTransform.run({ waveform });
+            const melOutput = results['mel_spectrogram'];
+            const melData = outputToFloat32(melOutput);
+            const actualFrames = Math.ceil(resampled.length / HOP_SIZE);
+            const melDims = melOutput.dims;
+            const maxFrames = melDims[1];
+            const frames = Math.min(actualFrames, maxFrames);
+            const trimmed = melData.subarray(0, frames * MEL_DIM);
+            return { data: trimmed.slice(), frames, melBands: MEL_DIM };
+        }
         const waveform = createFloatTensor(floatType, resampled, [1, resampled.length]);
         const results = await sessions.melTransform.run({ waveform });
         const melOutput = results['mel_spectrogram'];
@@ -398,16 +413,28 @@ class Postprocessing {
     /**
      * Run vocoder in chunked mode for long audio
      */
-    async runVocoderChunked(sessions, melData, totalFrames, isFP16) {
+    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false) {
         const chunkSize = VOCODER_CHUNK_FRAMES;
         const overlapFrames = VOCODER_OVERLAP_FRAMES;
         const totalSamples = totalFrames * HOP_SIZE;
         const output = new Float32Array(totalSamples);
         const t0 = performance.now();
+        const NPU_STATIC_SEQ_LEN = 2048;
+        const floatType = isFP16 ? 'float16' : 'float32';
+
+        const padFloat = (src, len) => {
+            if (src.length >= len) return src;
+            const padded = new Float32Array(len);
+            padded.set(src);
+            return padded;
+        };
 
         // 短音频（≤chunkSizeframes ≈ 20.5秒）直接一次性推理，避免分chunks开销
         if (totalFrames <= chunkSize) {
-            const melTensor = createFloatTensor(isFP16 ? 'float16' : 'float32', melData instanceof Float32Array ? melData : new Float32Array(melData), [1, totalFrames, MEL_DIM]);
+            const vocSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+            const melArr = melData instanceof Float32Array ? melData : new Float32Array(melData);
+            const paddedMel = useStaticShapes ? padFloat(melArr, vocSeqLen * MEL_DIM) : melArr;
+            const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
             const results = await sessions.vocoder.run({ mel: melTensor });
             const waveform = outputToFloat32(results['waveform']);
             const copyLen = Math.min(waveform.length, totalSamples);
@@ -440,7 +467,9 @@ class Postprocessing {
                 }
             }
 
-            const melTensor = createFloatTensor(isFP16 ? 'float16' : 'float32', chunkMel, [1, currentChunkFrames, MEL_DIM]);
+            const vocSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : currentChunkFrames;
+            const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
+            const melTensor = createFloatTensor(floatType, paddedChunk, [1, vocSeqLen, MEL_DIM]);
             const results = await sessions.vocoder.run({ mel: melTensor });
             const waveform = outputToFloat32(results['waveform']);
 

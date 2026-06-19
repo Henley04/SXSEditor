@@ -2,10 +2,10 @@
  * WebNN 推理模块 — 预处理：文本/音素编码、音高编码、F0 编码
  */
 
-import { MEL_DIM, EMBED_DIM, COND_DIM } from './constants.js';
+import { MEL_DIM, EMBED_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } from './constants.js';
 import { ensureOrt, getOrt } from './ortSetup.js';
 import { runSession } from './sessionManager.js';
-import { createFloatTensor, outputToFloat32 } from './utils.js';
+import { createFloatTensor, outputToFloat32, padInt64ToLength, padToLength, trimOutputToLength } from './utils.js';
 
 /**
  * 运行编码器阶段（4 个编码器 + preflow + condEmb）
@@ -18,7 +18,7 @@ import { createFloatTensor, outputToFloat32 } from './utils.js';
  * @param {string} params.floatType - 'float32' 或 'float16'
  * @returns {{ combinedCond: Float32Array, totalCondFrames: number, totalFramesWithPrompt: number }}
  */
-export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType }) {
+export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes = false }) {
     await ensureOrt();
     const ort = getOrt();
 
@@ -30,23 +30,31 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     const f0IdsArr = new BigInt64Array(sequences.f0Ids.map(v => BigInt(v)));
     const tEncPrep = performance.now();
 
+    const encSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
+    const encF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+
+    const encPaddedText = useStaticShapes ? padInt64ToLength(phonemeIds, encSeqLen) : phonemeIds;
+    const encPaddedPitch = useStaticShapes ? padInt64ToLength(pitchIds, encSeqLen) : pitchIds;
+    const encPaddedType = useStaticShapes ? padInt64ToLength(typeIds, encSeqLen) : typeIds;
+    const encPaddedF0 = useStaticShapes ? padInt64ToLength(f0IdsArr, encF0Len) : f0IdsArr;
+
     // Run 4 encoders in parallel (they are independent)
     const t4 = performance.now();
     const [textResults, pitchResults, typeResults, f0Results] = await Promise.all([
-        runSession('noteTextEncoder', { input_ids: new ort.Tensor('int64', phonemeIds, [1, tokenCount]) }),
-        runSession('notePitchEncoder', { input_ids: new ort.Tensor('int64', pitchIds, [1, tokenCount]) }),
-        runSession('noteTypeEncoder', { input_ids: new ort.Tensor('int64', typeIds, [1, tokenCount]) }),
-        runSession('f0Encoder', { input_ids: new ort.Tensor('int64', f0IdsArr, [1, totalFrames]) }),
+        runSession('noteTextEncoder', { input_ids: new ort.Tensor('int64', encPaddedText, [1, encSeqLen]) }),
+        runSession('notePitchEncoder', { input_ids: new ort.Tensor('int64', encPaddedPitch, [1, encSeqLen]) }),
+        runSession('noteTypeEncoder', { input_ids: new ort.Tensor('int64', encPaddedType, [1, encSeqLen]) }),
+        runSession('f0Encoder', { input_ids: new ort.Tensor('int64', encPaddedF0, [1, encF0Len]) }),
     ]);
     const encInferMs = performance.now() - t4;
-    console.log(`[WebNN] 4 encoders (parallel): ${encInferMs.toFixed(0)}ms [tokens=${tokenCount}, f0Frames=${totalFrames}]`);
+    console.log(`[WebNN] 4 encoders (parallel): ${encInferMs.toFixed(0)}ms [tokens=${tokenCount}, f0Frames=${totalFrames}${useStaticShapes ? ', NPU static' : ''}]`);
     console.log(`[WebNN]   enc prep: ${(t4 - tEncPrep).toFixed(1)}ms, infer: ${encInferMs.toFixed(1)}ms`);
 
     const tEncPost = performance.now();
-    const textEmb = outputToFloat32(textResults['embeddings']);
-    const pitchEmb = outputToFloat32(pitchResults['embeddings']);
-    const typeEmb = outputToFloat32(typeResults['embeddings']);
-    const f0Emb = outputToFloat32(f0Results['embeddings']);
+    const textEmb = useStaticShapes ? trimOutputToLength(textResults['embeddings'], tokenCount) : outputToFloat32(textResults['embeddings']);
+    const pitchEmb = useStaticShapes ? trimOutputToLength(pitchResults['embeddings'], tokenCount) : outputToFloat32(pitchResults['embeddings']);
+    const typeEmb = useStaticShapes ? trimOutputToLength(typeResults['embeddings'], tokenCount) : outputToFloat32(typeResults['embeddings']);
+    const f0Emb = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], totalFrames) : outputToFloat32(f0Results['embeddings']);
 
     // Combine token embeddings
     const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
@@ -62,10 +70,12 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
 
     // Preflow
     const tpf = performance.now();
-    const featuresTensor = createFloatTensor(floatType, tokenEmb, [1, tokenCount, EMBED_DIM]);
+    const preflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
+    const preflowTokenEmb = useStaticShapes ? padToLength(tokenEmb, preflowSeqLen * EMBED_DIM) : tokenEmb;
+    const featuresTensor = createFloatTensor(floatType, preflowTokenEmb, [1, preflowSeqLen, EMBED_DIM]);
     const preflowResults = await runSession('preflow', { features: featuresTensor });
-    const processedTokenEmb = outputToFloat32(preflowResults['processed_features']);
-    console.log(`[WebNN] preflow: ${(performance.now() - tpf).toFixed(0)}ms [${tokenCount}tokens × ${EMBED_DIM}]`);
+    const processedTokenEmb = useStaticShapes ? trimOutputToLength(preflowResults['processed_features'], tokenCount) : outputToFloat32(preflowResults['processed_features']);
+    console.log(`[WebNN] preflow: ${(performance.now() - tpf).toFixed(0)}ms [${tokenCount}tokens × ${EMBED_DIM}${useStaticShapes ? ', NPU static' : ''}]`);
 
     // Expand and combine with f0
     const tExpand = performance.now();
@@ -83,10 +93,12 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
 
     // Cond embedding
     const tce = performance.now();
-    const condCodeTensor = createFloatTensor(floatType, condCodeData, [1, totalCondFrames, EMBED_DIM]);
+    const condSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalCondFrames;
+    const paddedCondCode = useStaticShapes ? padToLength(condCodeData, condSeqLen * EMBED_DIM) : condCodeData;
+    const condCodeTensor = createFloatTensor(floatType, paddedCondCode, [1, condSeqLen, EMBED_DIM]);
     const condEmbResults = await runSession('condEmb', { cond_code: condCodeTensor });
-    const combinedCond = outputToFloat32(condEmbResults['cond_embedding']);
-    console.log(`[WebNN] condEmb: ${(performance.now() - tce).toFixed(0)}ms [${totalCondFrames}frames × ${COND_DIM}]`);
+    const combinedCond = useStaticShapes ? trimOutputToLength(condEmbResults['cond_embedding'], totalCondFrames) : outputToFloat32(condEmbResults['cond_embedding']);
+    console.log(`[WebNN] condEmb: ${(performance.now() - tce).toFixed(0)}ms [${totalCondFrames}frames × ${COND_DIM}${useStaticShapes ? ', NPU static' : ''}]`);
 
     console.log(`[WebNN] Encoder total: ${(performance.now() - tEnc0).toFixed(0)}ms`);
 

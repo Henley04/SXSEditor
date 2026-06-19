@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html><body><pre id="log"></pre><script>
+const log = (msg) => { document.getElementById('log').textContent += msg + '\n'; console.log(msg); };
+
+async function test() {
+    log(`Electron: ${navigator.userAgent.match(/Electron\/([\d.]+)/)?.[1] || 'N/A'}`);
+    log(`Chrome: ${navigator.userAgent.match(/Chrome\/([\d.]+)/)?.[1] || 'N/A'}`);
+
+    if (!('ml' in navigator)) {
+        log('FAIL: WebNN not available');
+        return;
+    }
+
+    const context = await navigator.ml.createContext();
+    const builder = new MLGraphBuilder(context);
+
+    const f32 = (v, s) => builder.constant({dataType:'float32',shape:s||[]}, v instanceof Float32Array ? v : new Float32Array([v]));
+    const i8 = (v, s) => builder.constant({dataType:'int8',shape:s||[]}, v instanceof Int8Array ? v : new Int8Array([v]));
+    const inp = (name, dt, shape) => builder.input(name, {dataType:dt, shape});
+
+    // Test 1: per-tensor DQL (scalar scale) - should work
+    try {
+        const input = inp('t1', 'int8', [2, 4]);
+        const scale = f32(0.1);
+        const zp = i8(0);
+        const out = builder.dequantizeLinear(input, scale, zp);
+        const graph = await builder.build({ out });
+        log('PASS: per-tensor DQL (scalar scale, input rank=2)');
+        graph.destroy?.();
+    } catch (e) {
+        log(`FAIL: per-tensor DQL: ${e.message}`);
+    }
+
+    // Test 2: per-channel DQL (1D scale, axis=0) - the buggy case
+    try {
+        const input = inp('t2', 'int8', [3, 4]);
+        const scale = f32(new Float32Array([0.1, 0.2, 0.3]), [3]);
+        const zp = i8(new Int8Array([0, 0, 0]), [3]);
+        const out = builder.dequantizeLinear(input, scale, zp, { axis: 0 });
+        const graph = await builder.build({ out });
+        log('PASS: per-channel DQL (1D scale rank=1, input rank=2, axis=0)');
+        graph.destroy?.();
+    } catch (e) {
+        log(`FAIL: per-channel DQL: ${e.message}`);
+    }
+
+    // Test 3: 4D weight with per-channel scale
+    try {
+        const input = inp('t3', 'int8', [8, 4, 3, 3]);
+        const scale = f32(new Float32Array(8).fill(0.1), [8]);
+        const zp = i8(new Int8Array(8), [8]);
+        const out = builder.dequantizeLinear(input, scale, zp, { axis: 0 });
+        const graph = await builder.build({ out });
+        log('PASS: 4D weight + per-channel scale (axis=0)');
+        graph.destroy?.();
+    } catch (e) {
+        log(`FAIL: 4D weight + per-channel scale: ${e.message}`);
+    }
+}
+test();
+</script></body></html>

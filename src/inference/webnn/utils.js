@@ -125,6 +125,64 @@ export function outputToFloat32(tensor) {
 }
 
 /**
+ * 将 BigInt64Array 零填充到目标长度（右侧填充 0n）
+ * @param {BigInt64Array} src - 源数据
+ * @param {number} targetLen - 目标长度
+ * @returns {BigInt64Array} 填充后的数组（新分配）
+ */
+export function padInt64ToLength(src, targetLen) {
+    if (src.length >= targetLen) return src;
+    const padded = new BigInt64Array(targetLen);
+    padded.set(src);
+    return padded;
+}
+
+/**
+ * 将 Float32Array 零填充到目标长度（右侧填充 0）
+ * @param {Float32Array} src - 源数据
+ * @param {number} targetLen - 目标长度
+ * @returns {Float32Array} 填充后的数组（新分配）
+ */
+export function padFloat32ToLength(src, targetLen) {
+    if (src.length >= targetLen) return src;
+    const padded = new Float32Array(targetLen);
+    padded.set(src);
+    return padded;
+}
+
+/**
+ * 将数据零填充到目标长度，返回新的 TypedArray
+ * @param {TypedArray} src - 源数据
+ * @param {number} targetLen - 目标长度
+ * @returns {TypedArray} 填充后的数组
+ */
+export function padToLength(src, targetLen) {
+    if (src.length >= targetLen) return src;
+    const padded = new src.constructor(targetLen);
+    padded.set(src);
+    return padded;
+}
+
+/**
+ * 从张量输出中提取并裁剪到实际帧数
+ * @param {Object} tensorOutput - ORT 张量输出
+ * @param {number} actualLen - 实际有效长度（沿第 1 维）
+ * @returns {Float32Array} 裁剪后的 Float32 数据
+ */
+export function trimOutputToLength(tensorOutput, actualLen) {
+    const full = outputToFloat32(tensorOutput);
+    if (tensorOutput.dims.length === 3) {
+        const dim2 = tensorOutput.dims[2];
+        return full.subarray(0, actualLen * dim2);
+    }
+    if (tensorOutput.dims.length === 2) {
+        const dim1 = tensorOutput.dims[1];
+        return full.subarray(0, actualLen * dim1);
+    }
+    return full.subarray(0, actualLen);
+}
+
+/**
  * 高斯随机数生成（Box-Muller 变换）
  */
 export function gaussianRandom() {

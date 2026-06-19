@@ -4,7 +4,7 @@ const fs = require('node:fs');
 // Side effect: apply float16 patch on module load
 require('./float16Patch');
 
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC } = require('./constants');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, isDiscreteGPUByName, enumerateDMLDevices, detectBestGPU, detectBestDevice, selectBestDevice, buildModelDeviceMapping, createSessionWithValidation, WebNNSessionProxy } = require('./modelLoader');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
@@ -25,6 +25,7 @@ class OnnxSVSPipeline {
         this.userDeviceId = options.deviceId;
         this.preferredDeviceType = options.preferredDeviceType || null;
         this.useWebNN = false;
+        this.useStaticShapes = options.modelPrecision === 'int8-npu';
         this._synthCache = null;
         this._initPromise = null;
 
@@ -55,6 +56,16 @@ class OnnxSVSPipeline {
             console.warn(`[OnnxSVSPipeline] ${modelPrecision} directory not found: ${subDir}, falling back to default directory`);
         }
         return resolved;
+    }
+
+    _getNpuFallbackPath(modelFile) {
+        if (!this.useStaticShapes) return null;
+        const fallbackDir = path.resolve(this.modelDir, '..');
+        const fallbackPath = path.join(fallbackDir, modelFile);
+        try {
+            if (fs.existsSync(fallbackPath)) return fallbackPath;
+        } catch (_) {}
+        return null;
     }
 
     // Delegate text processing methods
@@ -193,14 +204,36 @@ class OnnxSVSPipeline {
             'melTransform',
         ];
 
-        // 检测Model精度：通过检查第一个浮点输入Model的输入类型
+        // 检测Model精度：通过检查Model文件的 I/O 类型和权重量化格式
         try {
             const probeModelPath = path.join(this.modelDir, resolvedModelFiles[4]); // preflow
             const probeSession = await require('onnxruntime-node').InferenceSession.create(probeModelPath, { executionProviders: ['cpu'] });
             const probeInputType = probeSession.inputMetadata[0]?.type;
             this.isFP16 = probeInputType === 'float16';
             await probeSession.release();
-            console.log(`[OnnxSVSPipeline] Model precision: ${this.isFP16 ? 'FP16 (half precision)' : 'FP32 (full precision)'}`);
+
+            // 检查Model文件是否包含 INT8 量化算子（DequantizeLinear / MatMulInteger）
+            let quantizedCount = 0;
+            let checkedCount = 0;
+            for (const modelFile of resolvedModelFiles) {
+                try {
+                    const modelBuf = await fs.promises.readFile(path.join(this.modelDir, modelFile));
+                    checkedCount++;
+                    if (modelBuf.includes('DequantizeLinear') || modelBuf.includes('MatMulInteger')) {
+                        quantizedCount++;
+                    }
+                } catch (_) {}
+            }
+
+            const ioLabel = this.isFP16 ? 'float16' : 'float32';
+            let precisionLabel;
+            if (quantizedCount > 0) {
+                const weightLabel = quantizedCount === checkedCount ? 'all' : `${quantizedCount}/${checkedCount}`;
+                precisionLabel = `INT8 (${ioLabel} I/O, INT8 weights — ${weightLabel} models quantized)`;
+            } else {
+                precisionLabel = this.isFP16 ? 'FP16 (half precision)' : 'FP32 (full precision)';
+            }
+            console.log(`[OnnxSVSPipeline] Model precision: ${precisionLabel}`);
         } catch (e) {
             console.warn('[OnnxSVSPipeline] Precision detection failed, defaulting to FP32:', e.message);
             this.isFP16 = false;
@@ -214,12 +247,17 @@ class OnnxSVSPipeline {
             const loadedSessions = [];
 
             // Helper: load a single model via WebNN IPC
-            const loadOneWebnnModel = (modelFile, modelId) => new Promise((resolve, reject) => {
+            const loadOneWebnnModel = (modelFile, modelId, overridePath) => new Promise((resolve, reject) => {
                 const wc = getMainWindowWebContents();
                 if (!wc) { resolve({ success: false, error: 'No renderer window' }); return; }
 
+                // Vocoder NPU compilation needs more time (484MB model, ISTFT Conv kernel_size=1922)
+                const isVocoder = modelId === 'vocoder';
+                const ipcTimeout = isVocoder ? 360000 : 180000;
+                const modelTimeout = isVocoder ? 300000 : undefined; // passed to renderer EP timeout
+
                 const requestId = `svs-webnn-load-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                const timeout = setTimeout(() => resolve({ success: false, error: 'Load timeout' }), 180000);
+                const timeout = setTimeout(() => resolve({ success: false, error: 'Load timeout' }), ipcTimeout);
 
                 ipcMain.handleOnce(`webnn:loadModel:response:${requestId}`, (_, res) => {
                     clearTimeout(timeout);
@@ -229,8 +267,8 @@ class OnnxSVSPipeline {
                 wc.send('webnn:loadModel:request', {
                     requestId,
                     modelId,
-                    modelPath: path.join(this.modelDir, modelFile),
-                    options: { deviceType: 'npu' },
+                    modelPath: overridePath || path.join(this.modelDir, modelFile),
+                    options: { deviceType: 'npu', ...(modelTimeout ? { timeout: modelTimeout } : {}) },
                 });
             });
 
@@ -297,6 +335,19 @@ class OnnxSVSPipeline {
                         loadedSessions.push(modelId);
                         console.log(`[OnnxSVSPipeline] ${modelFile} loaded via WebNN [${result.ep}]`);
                     } else {
+                        // NPU 模型加载失败，尝试从父目录加载回退模型
+                        const fallbackPath = this._getNpuFallbackPath(modelFile);
+                        if (fallbackPath) {
+                            console.warn(`[OnnxSVSPipeline] ${modelFile} WebNN load failed, trying fallback: ${result.error.substring(0, 80)}`);
+                            const fallbackResult = await loadOneWebnnModel(modelFile, modelId, fallbackPath);
+                            if (fallbackResult.success) {
+                                this.sessions[modelId] = new WebNNSessionProxy(modelId);
+                                this.sessionEPs[modelId] = fallbackResult.ep || 'webnn-fallback';
+                                loadedSessions.push(modelId);
+                                console.log(`[OnnxSVSPipeline] ${modelFile} loaded from fallback via WebNN [${fallbackResult.ep}]`);
+                                continue;
+                            }
+                        }
                         throw new Error(`WebNN 加载 ${modelFile} 失败: ${result.error}`);
                     }
                 }
@@ -321,9 +372,22 @@ class OnnxSVSPipeline {
             try {
                 for (let i = 0; i < resolvedModelFiles.length; i++) {
                     const modelPath = path.join(this.modelDir, resolvedModelFiles[i]);
-                    const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16);
-                    this.sessions[sessionKeys[i]] = session;
-                    this.sessionEPs[sessionKeys[i]] = ep;
+                    try {
+                        const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes);
+                        this.sessions[sessionKeys[i]] = session;
+                        this.sessionEPs[sessionKeys[i]] = ep;
+                    } catch (loadErr) {
+                        const fallbackPath = this._getNpuFallbackPath(resolvedModelFiles[i]);
+                        if (fallbackPath) {
+                            console.warn(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} NPU load failed, trying fallback: ${loadErr.message.substring(0, 80)}`);
+                            const { session, ep } = await createSessionWithValidation(fallbackPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false);
+                            this.sessions[sessionKeys[i]] = session;
+                            this.sessionEPs[sessionKeys[i]] = ep;
+                            console.log(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} loaded from fallback [${ep}]`);
+                        } else {
+                            throw loadErr;
+                        }
+                    }
                     loadedSessions.push(sessionKeys[i]);
                 }
 
@@ -365,9 +429,22 @@ class OnnxSVSPipeline {
         try {
             for (let i = 0; i < resolvedModelFiles.length; i++) {
                 const modelPath = path.join(this.modelDir, resolvedModelFiles[i]);
-                const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16);
-                this.sessions[sessionKeys[i]] = session;
-                this.sessionEPs[sessionKeys[i]] = ep;
+                try {
+                    const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes);
+                    this.sessions[sessionKeys[i]] = session;
+                    this.sessionEPs[sessionKeys[i]] = ep;
+                } catch (loadErr) {
+                    const fallbackPath = this._getNpuFallbackPath(resolvedModelFiles[i]);
+                    if (fallbackPath) {
+                        console.warn(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} NPU load failed, trying fallback: ${loadErr.message.substring(0, 80)}`);
+                        const { session, ep } = await createSessionWithValidation(fallbackPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false);
+                        this.sessions[sessionKeys[i]] = session;
+                        this.sessionEPs[sessionKeys[i]] = ep;
+                        console.log(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} loaded from fallback [${ep}]`);
+                    } else {
+                        throw loadErr;
+                    }
+                }
                 loadedSessions.push(sessionKeys[i]);
             }
             const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
@@ -386,35 +463,54 @@ class OnnxSVSPipeline {
     }
 
     async _extractRefMelOnnx(refAudioWavBuffer) {
-        return this._postprocessing.extractRefMelOnnx(this.sessions, refAudioWavBuffer, this.isFP16);
+        return this._postprocessing.extractRefMelOnnx(this.sessions, refAudioWavBuffer, this.isFP16, this.useStaticShapes);
     }
 
     async _runEncoder(sequences, tokenCount, totalFrames, ptFrameCount = 0) {
-        return this._preprocessing.runEncoder(this.sessions, sequences, tokenCount, totalFrames, this.isFP16, ptFrameCount);
+        return this._preprocessing.runEncoder(this.sessions, sequences, tokenCount, totalFrames, this.isFP16, ptFrameCount, this.useStaticShapes);
     }
 
     async _runDiffStep(xtInputData, tVal, condData, maskData, totalFramesWithPrompt) {
-        return this._diffusion.runDiffStep(this.sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, this.isFP16);
+        return this._diffusion.runDiffStep(this.sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, this.isFP16, this.useStaticShapes);
     }
 
     async _runVocoderChunked(melData, totalFrames) {
-        return this._postprocessing.runVocoderChunked(this.sessions, melData, totalFrames, this.isFP16);
+        return this._postprocessing.runVocoderChunked(this.sessions, melData, totalFrames, this.isFP16, this.useStaticShapes);
     }
 
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
-        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.isFP16, onProgress, progressStart, progressRange);
+        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.isFP16, onProgress, progressStart, progressRange, this.useStaticShapes);
     }
 
     async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange) {
         const sequences = this.notesToSequences(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
-        const totalFrames = sequences.f0Ids.length;
+        let totalFrames = sequences.f0Ids.length;
         const tokenCount = sequences.tokenCount;
 
         if (totalFrames === 0) {
             return { audio: [], frames: 0 };
         }
 
+        if (totalFrames > MAX_SAFE_FRAMES) {
+            console.warn(`[OnnxSVSPipeline] Segment frame count ${totalFrames} exceeds safe limit ${MAX_SAFE_FRAMES}, truncating`);
+            sequences.f0Ids = sequences.f0Ids.subarray(0, MAX_SAFE_FRAMES);
+            sequences.mel2token = sequences.mel2token.subarray(0, MAX_SAFE_FRAMES);
+            totalFrames = MAX_SAFE_FRAMES;
+        }
+
         console.log(`[OnnxSVSPipeline] Segmented synthesis: frames=${totalFrames}, tokens=${tokenCount}, steps=${totalSteps}`);
+
+        // NPU 静态形状模型限制：totalFramesWithPrompt 不能超过 2048
+        const NPU_STATIC_SEQ_LEN = 2048;
+        if (this.useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
+            const maxFrames = NPU_STATIC_SEQ_LEN - Math.min(ptFrameCount, 50);
+            if (totalFrames > maxFrames) {
+                console.warn(`[OnnxSVSPipeline] NPU frame limit: ${totalFrames} > ${maxFrames}, truncating`);
+                sequences.f0Ids = sequences.f0Ids.subarray(0, maxFrames);
+                sequences.mel2token = sequences.mel2token.subarray(0, maxFrames);
+                totalFrames = maxFrames;
+            }
+        }
 
         // WebNN: run entire pipeline in renderer to eliminate per-inference IPC overhead
         if (this.useWebNN) {
@@ -472,6 +568,7 @@ class OnnxSVSPipeline {
                 params: {
                     ...params,
                     isFP16: this.isFP16,
+                    useStaticShapes: this.useStaticShapes,
                 },
             });
         });
@@ -541,7 +638,7 @@ class OnnxSVSPipeline {
 
             wc.send('webnn:runSynthesis:request', {
                 requestId,
-                params: paramsArray.map(p => ({ ...p, isFP16: this.isFP16 })),
+                params: paramsArray.map(p => ({ ...p, isFP16: this.isFP16, useStaticShapes: this.useStaticShapes })),
             });
         });
     }
@@ -650,15 +747,34 @@ class OnnxSVSPipeline {
             const seg = segments[0];
             const segNotes = seg.notes || filledNotes;
             const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
-            const totalFrames = sequences.f0Ids.length;
+            let totalFrames = sequences.f0Ids.length;
 
             if (totalFrames === 0) {
                 return [];
             }
 
+            if (totalFrames > MAX_SAFE_FRAMES) {
+                console.warn(`[OnnxSVSPipeline] Frame count ${totalFrames} exceeds safe limit ${MAX_SAFE_FRAMES}, truncating`);
+                sequences.f0Ids = sequences.f0Ids.subarray(0, MAX_SAFE_FRAMES);
+                sequences.mel2token = sequences.mel2token.subarray(0, MAX_SAFE_FRAMES);
+                totalFrames = MAX_SAFE_FRAMES;
+            }
+
             if (!ptMelData || ptFrameCount === 0) {
                 ptFrameCount = Math.min(50, Math.max(10, Math.floor(totalFrames * 0.1)));
                 ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
+            }
+
+            // NPU 静态形状模型限制
+            const NPU_STATIC_SEQ_LEN = 2048;
+            if (this.useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
+                const maxFrames = NPU_STATIC_SEQ_LEN - Math.min(ptFrameCount, 50);
+                if (totalFrames > maxFrames) {
+                    console.warn(`[OnnxSVSPipeline] NPU frame limit: ${totalFrames} > ${maxFrames}, truncating`);
+                    sequences.f0Ids = sequences.f0Ids.subarray(0, maxFrames);
+                    sequences.mel2token = sequences.mel2token.subarray(0, maxFrames);
+                    totalFrames = maxFrames;
+                }
             }
 
             console.log(`[OnnxSVSPipeline] Synthesis params: frames=${totalFrames}, tokens=${sequences.tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
@@ -947,13 +1063,28 @@ class OnnxSVSPipeline {
 
         try {
             const { session, ep } = await createSessionWithValidation(
-                modelPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId
+                modelPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes
             );
             this.sessions[sessionKey] = session;
             this.sessionEPs[sessionKey] = ep;
             console.log(`[OnnxSVSPipeline] Model ${sessionKey} loaded [${ep}]`);
             return { success: true, ep };
         } catch (err) {
+            const fallbackPath = this._getNpuFallbackPath(resolvedFile);
+            if (fallbackPath) {
+                console.warn(`[OnnxSVSPipeline] ${resolvedFile} NPU load failed, trying fallback: ${err.message.substring(0, 80)}`);
+                try {
+                    const { session, ep } = await createSessionWithValidation(
+                        fallbackPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false
+                    );
+                    this.sessions[sessionKey] = session;
+                    this.sessionEPs[sessionKey] = ep;
+                    console.log(`[OnnxSVSPipeline] Model ${sessionKey} loaded from fallback [${ep}]`);
+                    return { success: true, ep };
+                } catch (fbErr) {
+                    return { success: false, error: fbErr.message };
+                }
+            }
             return { success: false, error: err.message };
         }
     }

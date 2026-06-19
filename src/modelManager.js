@@ -63,6 +63,16 @@ const PRECISION_SUBDIR_MAP = {
   'int8-npu': path.join('int8', 'optimized_npu'),
 };
 
+// int8-npu 模型已将外部数据自包含到 .onnx 文件中，无需下载 .onnx.data 文件
+const PRECISION_NO_EXTERNAL_DATA = new Set(['int8-npu']);
+
+function getManifestForPrecision(precision) {
+  if (PRECISION_NO_EXTERNAL_DATA.has(precision)) {
+    return MODEL_FILE_MANIFEST.filter(f => !f.filePath.endsWith('.onnx.data'));
+  }
+  return MODEL_FILE_MANIFEST;
+}
+
 function isSvsModelFile(filePath) {
   return !filePath.startsWith('preprocess/') && !filePath.startsWith('basic_pitch_model/');
 }
@@ -84,8 +94,9 @@ function getFileDownloadUrl(filePath, precision) {
 function checkMissingFiles(modelDir, precision) {
   const missing = [];
   const existing = [];
+  const manifest = getManifestForPrecision(precision);
 
-  for (const file of MODEL_FILE_MANIFEST) {
+  for (const file of manifest) {
     if (!file.required) continue;
     const fullPath = getLocalFilePath(modelDir, file.filePath, precision);
     let exists = false;
@@ -114,7 +125,8 @@ function checkMissingFiles(modelDir, precision) {
 }
 
 async function checkMissingFilesAsync(modelDir, precision) {
-  const requiredFiles = MODEL_FILE_MANIFEST.filter(f => f.required);
+  const manifest = getManifestForPrecision(precision);
+  const requiredFiles = manifest.filter(f => f.required);
   const results = await Promise.all(requiredFiles.map(async (file) => {
     const fullPath = getLocalFilePath(modelDir, file.filePath, precision);
     try {
@@ -147,8 +159,9 @@ function deleteModelFiles(modelDir, precision) {
   if (!modelDir || typeof modelDir !== 'string') return { deleted: [], errors: [] };
   const deleted = [];
   const errors = [];
+  const manifest = getManifestForPrecision(precision);
 
-  for (const file of MODEL_FILE_MANIFEST) {
+  for (const file of manifest) {
     const fullPath = getLocalFilePath(modelDir, file.filePath, precision);
     // 删除主文件
     for (const suffix of ['', TEMP_SUFFIX, CHUNK_META_SUFFIX]) {

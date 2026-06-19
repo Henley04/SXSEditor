@@ -3,7 +3,7 @@
  */
 
 import { ensureOrt, getOrt } from './ortSetup.js';
-import { WEBNN_EP_TIMEOUT } from './constants.js';
+import { WEBNN_EP_TIMEOUT, WEBNN_VOCODER_TIMEOUT } from './constants.js';
 import { extractRelativePath, float32ToFloat16 } from './utils.js';
 
 // 会话管理
@@ -29,8 +29,10 @@ async function readModelFiles(modelPath) {
     // Try to read the external data file (.onnx.data) if it exists
     const externalDataBuffers = [];
     const dataPath = modelPath + '.data';
-    const relativePath = extractRelativePath(modelPath);
-    const dataRelativeName = relativePath + '.data';
+    // External data location in the model uses the base filename (e.g. "vocoder_dml.onnx.data")
+    // not the full relative path. Use basename to match.
+    const modelBasename = modelPath.replace(/\\/g, '/').split('/').pop();
+    const dataRelativeName = modelBasename + '.data';
     try {
         const dataResult = await window.electronAPI.webnnReadModelFile(dataPath);
         if (dataResult.success && dataResult.data) {
@@ -38,7 +40,7 @@ async function readModelFiles(modelPath) {
                 path: dataRelativeName,
                 data: dataResult.data,
             });
-            console.log(`[WebNN] External data read: ${dataRelativeName} (${(dataResult.data.byteLength / 1024).toFixed(1)} KB)`);
+            console.log(`[WebNN] External data read: ${dataRelativeName} (${(dataResult.data.byteLength / 1024 / 1024).toFixed(1)} MB)`);
         }
     } catch (_) {
         // No external data file — that's fine
@@ -73,6 +75,8 @@ export async function loadModel(modelId, modelPath, options = { deviceType: 'npu
 
     console.log(`[WebNN] Loading ${modelId} (${(modelBuffer.byteLength / 1024 / 1024).toFixed(2)} MB, extData: ${externalDataBuffers.length})`);
     const { deviceType } = options;
+    // Allow per-model timeout override (vocoder needs longer NPU compilation time)
+    const epTimeout = options.timeout || (modelId === 'vocoder' ? WEBNN_VOCODER_TIMEOUT : WEBNN_EP_TIMEOUT);
 
     // 回退链：WebNN NPU → WebNN GPU → WASM
     const epChain = [];
@@ -90,6 +94,14 @@ export async function loadModel(modelId, modelPath, options = { deviceType: 'npu
         executionMode: 'sequential',      // Sequential execution (lower latency for single inference)
         enableCpuMemArena: true,          // Enable CPU memory arena for better allocation
     };
+
+    // 大模型（>100MB）使用基础优化以加速加载（已离线优化，无需运行时深度优化）
+    const modelSizeMB = modelBuffer.byteLength / (1024 * 1024);
+    if (modelSizeMB > 100) {
+        sessionOptions.graphOptimizationLevel = 'basic';
+        console.log(`[WebNN] Large model (${modelSizeMB.toFixed(0)}MB), using basic graph optimization`);
+    }
+
     if (externalDataBuffers.length > 0) {
         sessionOptions.externalData = externalDataBuffers;
     }
@@ -108,7 +120,7 @@ export async function loadModel(modelId, modelPath, options = { deviceType: 'npu
                     executionProviders: [ep],
                 }),
                 new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error(`EP ${epLabel} timed out after ${WEBNN_EP_TIMEOUT / 1000}s`)), WEBNN_EP_TIMEOUT)
+                    setTimeout(() => reject(new Error(`EP ${epLabel} timed out after ${epTimeout / 1000}s`)), epTimeout)
                 ),
             ]);
             const ms = Date.now() - t0;

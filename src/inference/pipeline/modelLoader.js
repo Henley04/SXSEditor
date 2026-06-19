@@ -6,6 +6,8 @@ const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES } = require('./constants');
 const { float32ToF16Buffer } = require('./utils');
 
+const NPU_STATIC_SEQ_LEN = 2048;
+
 /**
  * 获取主窗口的 webContents（WebNN IPC 必须发送到主窗口，因为只有主窗口注册了 WebNN 处理器）
  * 通过 windowManager 模块获取主窗口引用（避免直接 require 导致的循环依赖）
@@ -63,6 +65,24 @@ const DUMMY_TEST_INPUTS_FP16 = {
     },
     vocoder: { mel: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * MEL_DIM)), [1, 3, MEL_DIM]) },
     melTransform: { waveform: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(HOP_SIZE * 3)), [1, HOP_SIZE * 3]) },
+};
+
+// NPU 静态形状模型的验证输入（维度固定为 NPU_STATIC_SEQ_LEN=2048）
+const DUMMY_TEST_INPUTS_NPU = {
+    noteTextEncoder: { input_ids: new ort.Tensor('int64', new BigInt64Array(NPU_STATIC_SEQ_LEN), [1, NPU_STATIC_SEQ_LEN]) },
+    notePitchEncoder: { input_ids: new ort.Tensor('int64', new BigInt64Array(NPU_STATIC_SEQ_LEN), [1, NPU_STATIC_SEQ_LEN]) },
+    noteTypeEncoder: { input_ids: new ort.Tensor('int64', new BigInt64Array(NPU_STATIC_SEQ_LEN), [1, NPU_STATIC_SEQ_LEN]) },
+    f0Encoder: { input_ids: new ort.Tensor('int64', new BigInt64Array(NPU_STATIC_SEQ_LEN), [1, NPU_STATIC_SEQ_LEN]) },
+    preflow: { features: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN * EMBED_DIM), [1, NPU_STATIC_SEQ_LEN, EMBED_DIM]) },
+    condEmb: { cond_code: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN * EMBED_DIM), [1, NPU_STATIC_SEQ_LEN, EMBED_DIM]) },
+    diffStep: {
+        xt_input: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN * MEL_DIM), [1, NPU_STATIC_SEQ_LEN, MEL_DIM]),
+        t: new ort.Tensor('float32', new Float32Array([0.5]), [1]),
+        cond: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN * COND_DIM), [1, NPU_STATIC_SEQ_LEN, COND_DIM]),
+        xt_mask: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN), [1, NPU_STATIC_SEQ_LEN]),
+    },
+    vocoder: { mel: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN * MEL_DIM), [1, NPU_STATIC_SEQ_LEN, MEL_DIM]) },
+    melTransform: { waveform: new ort.Tensor('float32', new Float32Array(240000), [1, 240000]) },
 };
 
 /**
@@ -453,13 +473,27 @@ async function detectBestDevice(modelDir, npuAvailable = false) {
     };
 }
 
-async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16) {
+async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false) {
     const modelName = path.basename(modelPath);
-    const dummyInputs = isFP16 ? DUMMY_TEST_INPUTS_FP16[sessionKey] : DUMMY_TEST_INPUTS_FP32[sessionKey];
+    const dummyInputs = useStaticShapes
+        ? DUMMY_TEST_INPUTS_NPU[sessionKey]
+        : (isFP16 ? DUMMY_TEST_INPUTS_FP16[sessionKey] : DUMMY_TEST_INPUTS_FP32[sessionKey]);
     const gpuTag = gpuDeviceName ? ` [${gpuDeviceName}]` : '';
 
     if (!dummyInputs) {
         const session = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
+        return { session, ep: 'cpu' };
+    }
+
+    // NPU 静态形状模型直接创建 CPU 会话（跳过 DML 验证，NPU 模型不适合 DML）
+    if (useStaticShapes) {
+        // NPU 模型已离线优化（onnxsim），跳过运行时图优化以加速加载
+        const session = await ort.InferenceSession.create(modelPath, {
+            executionProviders: ['cpu'],
+            graphOptimizationLevel: 'basic',
+        });
+        // 跳过推理验证 — NPU 模型已通过离线验证，且大模型（如 diff_step 423MB）的验证耗时过长
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (NPU static shapes, opt=basic)`);
         return { session, ep: 'cpu' };
     }
 
@@ -483,7 +517,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             : dmlErr.message.includes('ConvTranspose')
             ? 'DML 不支持大 stride ConvTranspose (stride=480)'
             : `DML 推理验证失败 (${dmlErr.message.substring(0, 60).split('\n')[0]})`;
-        console.log(`[OnnxSVSPipeline] ${modelName} DML load failed, reason:: ${reason}`);
+        console.log(`[OnnxSVSPipeline] ${modelName} DML load failed, reason: ${reason}`);
     }
 
     // DML不available，尝试UsingDML优化版本Model（在CPU上运行）
