@@ -1,7 +1,7 @@
 /**
  * themeTokens 测试
  *
- * 验证 4 套内置主题的：
+ * 验证 3 套内置主题的：
  *  - 必备字段（id / name / isDark / tokens）
  *  - 必需令牌覆盖
  *  - 关键 token 名称与值格式
@@ -30,7 +30,6 @@ const BUILTIN_FILES = [
     'dark-aurora.theme.json',
     'light-paper.theme.json',
     'midnight-amber.theme.json',
-    'contrast-onyx.theme.json',
 ];
 
 // 关键必需令牌（不能缺失）；不带 extends 的内置主题都应包含
@@ -177,30 +176,7 @@ describe('themeTokens - 内置主题完整性', () => {
         });
     });
 
-    describe('contrast-onyx', () => {
-        let theme;
 
-        before(() => { theme = loadTheme('contrast-onyx.theme.json'); });
-
-        it('id 应为 "contrast-onyx"', () => {
-            expect(theme.id).to.equal('contrast-onyx');
-        });
-
-        it('isDark 应为 true', () => {
-            expect(theme.isDark).to.be.true;
-        });
-
-        it('--bg-app 应是深色（亮度低）', () => {
-            const v = theme.tokens['--bg-app'];
-            const m = v.match(/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i);
-            expect(m, `--bg-app "${v}" 应为 6 位 hex`).to.not.be.null;
-            const r = parseInt(m[1], 16);
-            const g = parseInt(m[2], 16);
-            const b = parseInt(m[3], 16);
-            // 黑色或近黑色
-            expect(r + g + b).to.be.lessThan(3 * 0x40);
-        });
-    });
 });
 
 describe('themeTokens - REQUIRED_TOKENS_FOR_BUILTIN 完整性', () => {
@@ -210,29 +186,12 @@ describe('themeTokens - REQUIRED_TOKENS_FOR_BUILTIN 完整性', () => {
 
     it('dark-aurora / light-paper 应覆盖 catalog.REQUIRED_TOKENS_FOR_BUILTIN', () => {
         // midnight-amber 通过 extends 继承，豁免；
-        // contrast-onyx 暂未补全 spacing/radius/font/motion scale（已记录为已知差异），豁免；
         // 这里只对 dark-aurora / light-paper 做强校验
         ['dark-aurora.theme.json', 'light-paper.theme.json'].forEach(f => {
             const t = loadTheme(f);
             const missing = catalog.REQUIRED_TOKENS_FOR_BUILTIN.filter(rt => !(rt in t.tokens));
             expect(missing, `${f} 缺少必需 token：${missing.join(', ')}`).to.have.length(0);
         });
-    });
-
-    it('contrast-onyx 至少应包含核心颜色与 alias 令牌', () => {
-        // 已知差异：contrast-onyx 未补全 spacing/radius/font/motion scale，
-        // 这里只验证核心 alias/border 令牌存在。
-        const t = loadTheme('contrast-onyx.theme.json');
-        const CORE = [
-            '--bg-app', '--bg-panel', '--bg-elevated', '--bg-input',
-            '--fg-primary', '--fg-secondary', '--fg-muted',
-            '--accent', '--accent-hover', '--accent-pressed', '--accent-fg',
-            '--border-subtle', '--border-default', '--border-strong', '--border-accent',
-            '--button-primary-bg', '--button-secondary-bg',
-            '--panel-bg', '--input-bg',
-        ];
-        const missing = CORE.filter(rt => !(rt in t.tokens));
-        expect(missing, `contrast-onyx 缺少核心 token：${missing.join(', ')}`).to.have.length(0);
     });
 
     it('midnight-amber 通过 extends 继承时无需覆盖全部必需 token', () => {

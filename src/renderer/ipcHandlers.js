@@ -175,6 +175,13 @@ if (window.electronAPI?.onCloseConfirm) {
     api.webnnRespond(`webnn:loadModel:response:${requestId}`, result);
   });
 
+  // Model file prefetch — pre-read file into OS cache to overlap I/O with NPU compilation
+  api.onWebnnPrefetchRequest(async ({ modelPath }) => {
+    try {
+      await api.webnnReadModelFile(modelPath);
+    } catch (_) {}
+  });
+
   // Model unload request
   api.onWebnnUnloadModelRequest(async ({ requestId, modelId }) => {
     const pipeline = await getWebnnPipeline();
@@ -226,11 +233,15 @@ if (window.electronAPI?.onCloseConfirm) {
     let result;
     if (pipeline) {
       try {
+        // Progress callback: forward to main process via IPC
+        const onProgress = (progress) => {
+          try { api.webnnProgress(`webnn:progress:${requestId}`, { progress }); } catch (_) {}
+        };
         // Array params = batch synthesis (2 segments, batch=4)
         if (Array.isArray(params)) {
-          result = await pipeline.runSynthesisBatch(params);
+          result = await pipeline.runSynthesisBatch(params.map(p => ({ ...p, onProgress })));
         } else {
-          result = await pipeline.runSynthesis(params);
+          result = await pipeline.runSynthesis({ ...params, onProgress });
         }
       } catch (e) {
         result = { error: e.message };
@@ -251,6 +262,13 @@ if (window.electronAPI?.onCloseConfirm) {
   function injectTokens(tokens) {
     if (!tokens || typeof document === 'undefined') return;
     const root = document.documentElement;
+    // Clear previous theme inline styles to avoid stale tokens from prior themes
+    const toRemove = [];
+    for (let i = 0; i < root.style.length; i++) {
+      if (root.style[i].startsWith('--')) toRemove.push(root.style[i]);
+    }
+    for (const prop of toRemove) root.style.removeProperty(prop);
+    // Apply new theme tokens
     for (const [k, v] of Object.entries(tokens)) {
       try { root.style.setProperty(k, v); } catch (_) {}
     }

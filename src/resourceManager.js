@@ -1,6 +1,7 @@
 import './common.css';
 import './resourceManager.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
+import { initWindowTheme } from './themes/themeInit.js';
 import { formatBytes } from './utils/formatBytes.js';
 
 const gpuInfoContent = document.getElementById('gpuInfoContent');
@@ -519,6 +520,9 @@ initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
 });
+
+// Apply saved theme
+initWindowTheme();
 
 loadData();
 startAutoRefresh();

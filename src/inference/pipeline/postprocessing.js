@@ -1,4 +1,4 @@
-const { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, SAMPLE_RATE, N_FFT, NUM_MELS, MEL_MEAN, MEL_VAR } = require('./constants');
+const { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, NPU_VOCODER_SEQ_LEN, SAMPLE_RATE, N_FFT, NUM_MELS, MEL_MEAN, MEL_VAR } = require('./constants');
 const { TWIDDLE_REAL, TWIDDLE_IMAG, HANN_WINDOW } = require('./constants');
 const { createFloatTensor, outputToFloat32 } = require('./utils');
 
@@ -419,8 +419,10 @@ class Postprocessing {
         const totalSamples = totalFrames * HOP_SIZE;
         const output = new Float32Array(totalSamples);
         const t0 = performance.now();
-        const NPU_STATIC_SEQ_LEN = 2048;
         const floatType = isFP16 ? 'float16' : 'float32';
+
+        // Yield to event loop to keep window responsive during long DML inference
+        const yieldToEventLoop = () => new Promise(resolve => setTimeout(resolve, 0));
 
         const padFloat = (src, len) => {
             if (src.length >= len) return src;
@@ -431,11 +433,12 @@ class Postprocessing {
 
         // 短音频（≤chunkSizeframes ≈ 20.5秒）直接一次性推理，避免分chunks开销
         if (totalFrames <= chunkSize) {
-            const vocSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+            const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : totalFrames;
             const melArr = melData instanceof Float32Array ? melData : new Float32Array(melData);
             const paddedMel = useStaticShapes ? padFloat(melArr, vocSeqLen * MEL_DIM) : melArr;
             const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
             const results = await sessions.vocoder.run({ mel: melTensor });
+            await yieldToEventLoop(); // Prevent UI freeze during DML inference
             const waveform = outputToFloat32(results['waveform']);
             const copyLen = Math.min(waveform.length, totalSamples);
             output.set(waveform.subarray(0, copyLen));
@@ -467,10 +470,11 @@ class Postprocessing {
                 }
             }
 
-            const vocSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : currentChunkFrames;
+            const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : currentChunkFrames;
             const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
             const melTensor = createFloatTensor(floatType, paddedChunk, [1, vocSeqLen, MEL_DIM]);
             const results = await sessions.vocoder.run({ mel: melTensor });
+            await yieldToEventLoop(); // Prevent UI freeze between vocoder chunks
             const waveform = outputToFloat32(results['waveform']);
 
             const writeStart = chunkStart * HOP_SIZE;

@@ -12,6 +12,7 @@ class TextProcessing {
 
     _loadPhoneSet() {
         const searchPaths = [
+            path.join(__dirname, 'phone_set.json'),
             path.join(__dirname, '..', 'phone_set.json'),
             path.join(__dirname, '..', '..', 'inference', 'phone_set.json'),
             path.join(__dirname, '..', '..', '..', 'src', 'inference', 'phone_set.json'),
@@ -35,6 +36,7 @@ class TextProcessing {
 
     _loadEnG2pDict() {
         const searchPaths = [
+            path.join(__dirname, 'en_g2p_dict.json'),
             path.join(__dirname, '..', 'en_g2p_dict.json'),
             path.join(__dirname, '..', '..', 'inference', 'en_g2p_dict.json'),
             path.join(__dirname, '..', '..', '..', 'src', 'inference', 'en_g2p_dict.json'),
@@ -50,6 +52,7 @@ class TextProcessing {
                 console.warn(`[OnnxSVSPipeline] Failed to load English G2P dictionary (${dictPath}):`, e.message);
             }
         }
+        console.error('[OnnxSVSPipeline] Failed to load English G2P dictionary: en_g2p_dict.json not found in any search path');
     }
 
     _englishG2p(word) {
@@ -57,7 +60,12 @@ class TextProcessing {
         if (this.enG2pDict[lower]) {
             return this.enG2pDict[lower];
         }
-        console.warn(`[OnnxSVSPipeline] English word "${word}" not in CMUdict, using letter-level fallback`);
+        const dictSize = Object.keys(this.enG2pDict).length;
+        if (dictSize === 0) {
+            console.warn(`[OnnxSVSPipeline] English G2P dictionary is empty! Word "${word}" cannot be resolved.`);
+        } else {
+            console.warn(`[OnnxSVSPipeline] English word "${word}" not in CMUdict (${dictSize} entries), using letter-level fallback`);
+        }
         const letterMap = {
             a: 'EY1', b: 'B IY1', c: 'S IY1', d: 'D IY1', e: 'IY1',
             f: 'EH1 F', g: 'JH IY1', h: 'EY1 CH', i: 'AY1', j: 'JH EY1',
@@ -80,6 +88,13 @@ class TextProcessing {
             return this.phone2idx['<SP>'] || 1;
         }
         const trimmed = lyric.trim();
+
+        // Ensure vocabulary is loaded (lazy reload if empty)
+        if (Object.keys(this.phone2idx).length === 0) {
+            console.warn('[OnnxSVSPipeline] Phoneme vocabulary is empty, attempting reload...');
+            this._loadPhoneSet();
+        }
+
         if (this.phone2idx[trimmed] !== undefined) {
             return this.phone2idx[trimmed];
         }
@@ -96,7 +111,8 @@ class TextProcessing {
         if (zhPhoneme && this.phone2idx[zhPhoneme] !== undefined) {
             return this.phone2idx[zhPhoneme];
         }
-        console.warn(`[OnnxSVSPipeline] Unknown phoneme: "${trimmed}"${zhPhoneme ? ` (converted: ${zhPhoneme})` : ''}, Using <UNK>`);
+        const vocabSize = Object.keys(this.phone2idx).length;
+        console.warn(`[OnnxSVSPipeline] Unknown phoneme: "${trimmed}"${zhPhoneme ? ` (converted: ${zhPhoneme})` : ''} [vocab=${vocabSize}], Using <UNK>`);
         return this.phone2idx['<UNK>'] || 3;
     }
 

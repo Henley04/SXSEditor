@@ -1,12 +1,16 @@
 import './common.css';
 import './singerCreator.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
+import { initWindowTheme } from './themes/themeInit.js';
 import { showAlertDialog } from './alertDialog.js';
 
 initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
 });
+
+// Apply saved theme
+initWindowTheme();
 
 let wavFileBuffer = null;
 let wavFileName = '';

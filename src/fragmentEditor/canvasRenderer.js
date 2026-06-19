@@ -1,4 +1,5 @@
 import { PARAM_MODES } from '../editor/pianoRoll.js';
+import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 import {
   PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, PARAM_CURVE_HEIGHT,
   BLACK_KEYS, PITCH_CURVE_SAMPLE_INTERVAL,
@@ -632,31 +633,31 @@ export function resizeCanvases() {
   render();
 }
 
-function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom) {
+function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
   const barPadding = 6;
   const labelH = 16;
   const barTop = areaTop + labelH;
   const barBottom = areaBottom - barPadding;
   const barHeight = barBottom - barTop;
 
-  ctx.fillStyle = '#1e1e1e';
+  ctx.fillStyle = c.bgElevated;
   ctx.fillRect(0, areaTop, w, areaBottom - areaTop);
 
-  ctx.strokeStyle = '#444444';
+  ctx.strokeStyle = c.borderStrong;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, areaTop);
   ctx.lineTo(w, areaTop);
   ctx.stroke();
 
-  ctx.fillStyle = '#555555';
+  ctx.fillStyle = c.fgDisabled;
   ctx.font = '10px sans-serif';
   ctx.textAlign = 'right';
   ctx.fillText('Phoneme', w - 4, areaTop + 12);
 
   for (let v = 0; v <= 1; v += 0.25) {
     const y = barBottom - barHeight * v;
-    ctx.strokeStyle = v === 0.5 ? '#333333' : '#252525';
+    ctx.strokeStyle = v === 0.5 ? c.gridLineMajor : c.gridLineMinor;
     ctx.lineWidth = 0.5;
     ctx.beginPath();
     ctx.moveTo(0, y);
@@ -686,9 +687,9 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom) {
 
     const isSelected = selectedNoteIds.has(note.id);
 
-    ctx.fillStyle = '#2a2a2a';
+    ctx.fillStyle = c.bgPanel;
     ctx.fillRect(noteStartX, barTop, noteWidth, barHeight);
-    ctx.strokeStyle = isSelected ? '#5b8def' : '#333333';
+    ctx.strokeStyle = isSelected ? c.accent : c.gridLineMajor;
     ctx.lineWidth = 1;
     ctx.strokeRect(noteStartX, barTop, noteWidth, barHeight);
 
@@ -707,7 +708,7 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom) {
       ctx.globalAlpha = 1.0;
 
       if (isPhSelected) {
-        ctx.strokeStyle = '#ffffff';
+        ctx.strokeStyle = c.fgPrimary;
         ctx.lineWidth = 2;
         ctx.strokeRect(x + 1, barTop, phWidth - 2, barHeight);
       }
@@ -744,7 +745,7 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom) {
           const pt = pts[p];
           const px = x + 1 + pt.t * (phWidth - 2);
           const py = barBottom - barHeight * Math.max(0, Math.min(1, pt.v));
-          ctx.fillStyle = '#ffffff';
+          ctx.fillStyle = c.fgPrimary;
           ctx.beginPath();
           ctx.arc(px, py, 4, 0, Math.PI * 2);
           ctx.fill();
@@ -755,7 +756,7 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom) {
       }
 
       if (phWidth > 20) {
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = c.fgPrimary;
         ctx.font = '9px sans-serif';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
@@ -764,7 +765,7 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom) {
       }
 
       if (adj.locked) {
-        ctx.fillStyle = '#facc15';
+        ctx.fillStyle = c.warning;
         ctx.font = 'bold 9px sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'top';
@@ -772,7 +773,7 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom) {
       }
 
       if (i > 0) {
-        ctx.strokeStyle = isPhSelected ? '#ffffff' : '#aaaaaa';
+        ctx.strokeStyle = isPhSelected ? c.fgPrimary : c.fgMuted;
         ctx.lineWidth = 2;
         ctx.setLineDash([4, 2]);
         ctx.beginPath();
@@ -781,7 +782,7 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom) {
         ctx.stroke();
         ctx.setLineDash([]);
 
-        ctx.fillStyle = isPhSelected ? '#ffffff' : '#cccccc';
+        ctx.fillStyle = isPhSelected ? c.fgPrimary : c.fgSecondary;
         ctx.beginPath();
         ctx.arc(x, barTop + barHeight / 2, 4, 0, Math.PI * 2);
         ctx.fill();
@@ -795,11 +796,11 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom) {
   }
 }
 
-function renderPianoKeys() {
+function renderPianoKeys(c) {
   const h = pianoKeysCanvas.parentElement.clientHeight;
   const w = PIANO_KEY_WIDTH;
   pianoKeysCtx.clearRect(0, 0, w, h);
-  pianoKeysCtx.fillStyle = '#2a2a2a';
+  pianoKeysCtx.fillStyle = c.bgPanel;
   pianoKeysCtx.fillRect(0, 0, w, h);
 
   const startPitch = yToPitch(h);
@@ -810,15 +811,15 @@ function renderPianoKeys() {
     const keyH = NOTE_HEIGHT;
     const isBlack = BLACK_KEYS.has(p % 12);
 
-    pianoKeysCtx.fillStyle = isBlack ? '#1a1a1a' : '#e8e8e8';
+    pianoKeysCtx.fillStyle = isBlack ? c.pianoBlackKey : c.pianoWhiteKey;
     pianoKeysCtx.fillRect(0, y, w, keyH);
 
-    pianoKeysCtx.strokeStyle = '#555555';
+    pianoKeysCtx.strokeStyle = c.pianoKeyBorder;
     pianoKeysCtx.lineWidth = 0.5;
     pianoKeysCtx.strokeRect(0, y, w, keyH);
 
-    if (!isBlack && keyH >= 10) {
-      pianoKeysCtx.fillStyle = '#333333';
+    if (keyH >= 10) {
+      pianoKeysCtx.fillStyle = isBlack ? '#cccccc' : '#2a2a3d';
       pianoKeysCtx.font = '10px sans-serif';
       pianoKeysCtx.textAlign = 'right';
       pianoKeysCtx.textBaseline = 'middle';
@@ -827,7 +828,7 @@ function renderPianoKeys() {
   }
 }
 
-function renderPitchCurve() {
+function renderPitchCurve(c) {
   const pitchCurve = getPitchCurve();
   if (!pitchCurve.enabled) return;
 
@@ -866,7 +867,7 @@ function renderPitchCurve() {
   }
 
   if (!hasCustom) {
-    drawAutoPoints('rgba(46, 204, 113, 0.6)', 2, [6, 4]);
+    drawAutoPoints(c.pitchAutoPoint, 2, [6, 4]);
 
     for (const note of notes) {
       const startX = timeToX(note.start);
@@ -874,7 +875,7 @@ function renderPitchCurve() {
       const y = pitchToY(note.pitch);
       if (endX < 0 || startX > w) continue;
 
-      ctx.fillStyle = 'rgba(46, 204, 113, 0.4)';
+      ctx.fillStyle = c.successSoft;
       ctx.beginPath();
       ctx.arc(startX, y, 3, 0, Math.PI * 2);
       ctx.fill();
@@ -884,7 +885,7 @@ function renderPitchCurve() {
     }
 
     if (currentBrushStroke && currentBrushStroke.points.length >= 2) {
-      ctx.strokeStyle = '#f39c12';
+      ctx.strokeStyle = c.warning;
       ctx.lineWidth = 2.5;
       ctx.beginPath();
       let first = true;
@@ -900,14 +901,14 @@ function renderPitchCurve() {
     return;
   }
 
-  drawAutoPoints('rgba(46, 204, 113, 0.25)', 1.5, [4, 3]);
+  drawAutoPoints(c.pitchAutoLine, 1.5, [4, 3]);
 
   if (pitchCurve.anchorPoints.length > 0) {
     const sorted = getSortedAnchorPoints();
     const maxTime = Math.max(endBeat, sorted[sorted.length - 1].time) + 2;
     const steps = Math.max(200, Math.floor((maxTime - startBeat) / PITCH_CURVE_SAMPLE_INTERVAL));
 
-    ctx.strokeStyle = '#2ecc71';
+    ctx.strokeStyle = c.pitchLine;
     ctx.lineWidth = 2;
     ctx.beginPath();
     let first = true;
@@ -929,17 +930,17 @@ function renderPitchCurve() {
       const py = pitchToY(ap.pitch);
       const isSelected = selectedAnchorIndices.has(i) || i === pitchDragAnchorIdx;
 
-      ctx.fillStyle = isSelected ? '#ffffff' : '#2ecc71';
+      ctx.fillStyle = isSelected ? c.fgPrimary : c.pitchPoint;
       ctx.beginPath();
       ctx.arc(px, py, isSelected ? 7 : 6, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = isSelected ? '#3498db' : 'rgba(0, 0, 0, 0.5)';
+      ctx.strokeStyle = isSelected ? c.accent : c.shadowColor;
       ctx.lineWidth = isSelected ? 2.5 : 1.5;
       ctx.stroke();
 
       if (isSelected) {
-        ctx.strokeStyle = 'rgba(52, 152, 219, 0.4)';
+        ctx.strokeStyle = c.accentLine;
         ctx.lineWidth = 1;
         ctx.beginPath();
         ctx.arc(px, py, 12, 0, Math.PI * 2);
@@ -949,7 +950,7 @@ function renderPitchCurve() {
   }
 
   if (currentBrushStroke && currentBrushStroke.points.length >= 2) {
-    ctx.strokeStyle = '#f39c12';
+    ctx.strokeStyle = c.warning;
     ctx.lineWidth = 2.5;
     ctx.beginPath();
     let first = true;
@@ -966,9 +967,10 @@ function renderPitchCurve() {
 export function render() {
   const w = canvas.parentElement.clientWidth;
   const h = canvas.parentElement.clientHeight;
+  const c = getCanvasColors();
   ctx.clearRect(0, 0, w, h);
 
-  ctx.fillStyle = '#1e1e1e';
+  ctx.fillStyle = c.bgElevated;
   ctx.fillRect(0, 0, w, h);
 
   const currentProject = getCurrentProject();
@@ -985,13 +987,13 @@ export function render() {
     const x = timeToX(b);
     if (x < 0) continue;
     const isMeasure = (b % beatsPerMeasure === 0);
-    ctx.strokeStyle = isMeasure ? '#555555' : '#333333';
+    ctx.strokeStyle = isMeasure ? c.gridLineMeasure : c.gridLineMajor;
     ctx.beginPath();
     ctx.moveTo(x, HEADER_HEIGHT);
     ctx.lineTo(x, pianoAreaBottom);
     ctx.stroke();
     if (isMeasure) {
-      ctx.fillStyle = '#888888';
+      ctx.fillStyle = c.timeText;
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText(String(Math.floor(b / beatsPerMeasure) + 1), x, HEADER_HEIGHT - 6);
@@ -1003,7 +1005,7 @@ export function render() {
   for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
     const y = pitchToY(p);
     const isBlack = BLACK_KEYS.has(p % 12);
-    ctx.strokeStyle = isBlack ? '#2a2a2a' : '#252525';
+    ctx.strokeStyle = isBlack ? c.gridLineMajor : c.gridLineMinor;
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(w, y);
@@ -1023,28 +1025,28 @@ export function render() {
 
     const isSelected = selectedNoteIds.has(note.id);
     const isPitchMode = currentParamMode === 'Pitch';
-    ctx.fillStyle = '#3498db';
+    ctx.fillStyle = c.accent;
     ctx.globalAlpha = isSelected ? 1.0 : (isPitchMode ? 0.4 : 0.8);
     ctx.fillRect(x, y, nw, nh);
     ctx.globalAlpha = 1.0;
-    ctx.strokeStyle = isSelected ? '#ffffff' : '#000000';
+    ctx.strokeStyle = isSelected ? c.noteSelectedBg : c.noteBorder;
     ctx.lineWidth = isSelected ? 2 : 1;
     ctx.strokeRect(x, y, nw, nh);
 
     if (nw > 16) {
-      ctx.fillStyle = '#ffffff';
+      ctx.fillStyle = c.noteText;
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.fillText(note.lyric || '', x + 3, y + nh / 2);
     }
 
-    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.fillStyle = c.selectionBg;
     ctx.fillRect(x + nw - 3, y + 2, 2, nh - 4);
   }
 
   if (currentParamMode === 'Pitch') {
-    renderPitchCurve();
+    renderPitchCurve(c);
   }
 
   // 绘制分片边界线
@@ -1052,7 +1054,7 @@ export function render() {
     const boundaryX = timeToX(currentFragment.duration);
     if (boundaryX >= 0 && boundaryX <= w) {
       ctx.save();
-      ctx.strokeStyle = '#ff4444';
+      ctx.strokeStyle = c.playhead;
       ctx.lineWidth = 2;
       ctx.setLineDash([6, 4]);
       ctx.beginPath();
@@ -1063,7 +1065,7 @@ export function render() {
 
       // 在边界线上方标注
       ctx.save();
-      ctx.fillStyle = '#ff4444';
+      ctx.fillStyle = c.playhead;
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('END', boundaryX, HEADER_HEIGHT - 2);
@@ -1078,9 +1080,9 @@ export function render() {
     const y1 = Math.min(boxSelectStart.y, boxSelectEnd.y);
     const x2 = Math.max(boxSelectStart.x, boxSelectEnd.x);
     const y2 = Math.max(boxSelectStart.y, boxSelectEnd.y);
-    ctx.fillStyle = 'rgba(52, 152, 219, 0.15)';
+    ctx.fillStyle = c.accentSoft;
     ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
-    ctx.strokeStyle = 'rgba(52, 152, 219, 0.6)';
+    ctx.strokeStyle = c.accentLine;
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 4]);
     ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
@@ -1090,20 +1092,20 @@ export function render() {
   if (showParamArea) {
     const areaTop = _getParamCurveAreaTop();
     const areaBottom = _getParamCurveAreaBottom();
-    ctx.fillStyle = '#1a1a1a';
+    ctx.fillStyle = c.bgInput;
     ctx.fillRect(0, areaTop, w, PARAM_CURVE_HEIGHT);
 
-    ctx.strokeStyle = '#444444';
+    ctx.strokeStyle = c.borderStrong;
     ctx.beginPath();
     ctx.moveTo(0, areaTop);
     ctx.lineTo(w, areaTop);
     ctx.stroke();
 
     if (currentParamMode === 'Phoneme') {
-      renderPhonemeEditor(ctx, w, h, areaTop, areaBottom);
+      renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c);
     } else {
       const { min, max } = _getParamCurveYRange();
-      ctx.fillStyle = '#666666';
+      ctx.fillStyle = c.fgDisabled;
       ctx.font = '10px sans-serif';
       ctx.textAlign = 'left';
       ctx.fillText(max.toFixed(0), 4, areaTop + 12);
@@ -1120,8 +1122,8 @@ export function render() {
         const maxTime = Math.max(endBeat, ...envelope.keyframes.map(k => k.time)) + 2;
         const steps = Math.max(300, Math.floor((maxTime - startBeat) / 0.02));
 
-        const lineColors = { VOL: '#3498db', PAN: '#e74c3c' };
-        ctx.strokeStyle = lineColors[currentParamMode] || '#3498db';
+        const lineColors = { VOL: c.paramVol, PAN: c.paramPan };
+        ctx.strokeStyle = lineColors[currentParamMode] || c.paramVol;
         ctx.lineWidth = 2;
         ctx.beginPath();
 
@@ -1138,7 +1140,7 @@ export function render() {
         for (const kf of envelope.keyframes) {
           const px = timeToX(kf.time);
           const py = _valueToParamY(kf.value);
-          ctx.fillStyle = lineColors[currentParamMode] || '#3498db';
+          ctx.fillStyle = lineColors[currentParamMode] || c.paramVol;
           ctx.beginPath();
           ctx.arc(px, py, 4, 0, Math.PI * 2);
           ctx.fill();
@@ -1147,12 +1149,12 @@ export function render() {
     }
   }
 
-  renderPianoKeys();
-  drawPlayhead(ctx, w, h);
+  renderPianoKeys(c);
+  drawPlayhead(ctx, w, h, c);
   updateInlineInputPosition();
 }
 
-function drawPlayhead(ctxToUse, w, h) {
+function drawPlayhead(ctxToUse, w, h, c) {
   if (!getFragmentIsPlaying() && getFragmentCurrentTime() <= 0) return;
 
   const currentProject = getCurrentProject();
@@ -1162,14 +1164,14 @@ function drawPlayhead(ctxToUse, w, h) {
 
   if (x < 0 || x > w) return;
 
-  ctxToUse.strokeStyle = '#ff4444';
+  ctxToUse.strokeStyle = c.playhead;
   ctxToUse.lineWidth = 2;
   ctxToUse.beginPath();
   ctxToUse.moveTo(x, HEADER_HEIGHT);
   ctxToUse.lineTo(x, h);
   ctxToUse.stroke();
 
-  ctxToUse.fillStyle = '#ff4444';
+  ctxToUse.fillStyle = c.playhead;
   ctxToUse.beginPath();
   ctxToUse.moveTo(x, HEADER_HEIGHT);
   ctxToUse.lineTo(x - 6, HEADER_HEIGHT - 6);
@@ -1208,4 +1210,12 @@ function updateInlineInputPosition() {
   } else {
     activeInlineInput.style.display = 'none';
   }
+}
+
+// Re-render when theme changes
+if (typeof window !== 'undefined') {
+  window.addEventListener('theme:changed', () => {
+    invalidateCanvasThemeCache();
+    render();
+  });
 }

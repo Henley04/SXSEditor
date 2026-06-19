@@ -38,6 +38,11 @@ function loadSettings() {
     _settingsCache.themePerWindow = { ...DEFAULT_THEME_PER_WINDOW };
   }
 
+  // Migration: removed contrast-onyx theme -> fall back to default
+  if (_settingsCache.theme === 'contrast-onyx') {
+    _settingsCache.theme = DEFAULT_THEME;
+  }
+
   // Migration: old deviceId (number) -> deviceMode + preferredDeviceId + preferredDeviceType
   if (_settingsCache.deviceMode === undefined) {
     if (typeof _settingsCache.deviceId === 'number') {

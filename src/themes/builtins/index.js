@@ -8,13 +8,11 @@
 import darkAurora from './dark-aurora.theme.json';
 import lightPaper from './light-paper.theme.json';
 import midnightAmber from './midnight-amber.theme.json';
-import contrastOnyx from './contrast-onyx.theme.json';
 
 export const BUILTIN_THEMES = [
     darkAurora,
     lightPaper,
     midnightAmber,
-    contrastOnyx,
 ];
 
 export const BUILTIN_THEME_IDS = BUILTIN_THEMES.map(t => t.id);

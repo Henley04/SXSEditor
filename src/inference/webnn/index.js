@@ -40,12 +40,15 @@ async function runSynthesis(params) {
         ptMelData, ptFrameCount,
         totalSteps, cfgStrength, cfgRescale,
         isFP16,
+        vocoderIsFP16,
         npuDiffBatchSize = 4,
         npuVocoderBatchSize = 2,
         useStaticShapes = false,
+        onProgress,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
+    const vocoderFloatType = (vocoderIsFP16 ?? isFP16) ? 'float16' : 'float32';
 
     // NPU 静态形状模型限制：totalFramesWithPrompt 不能超过 2048
     if (useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
@@ -62,12 +65,14 @@ async function runSynthesis(params) {
     }
 
     // ===== Stage 1: Encoder =====
+    if (onProgress) onProgress(10);
     const tEnc0 = performance.now();
     const { combinedCond, totalCondFrames, totalFramesWithPrompt } = await runEncoderStage({
         sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes,
     });
 
     // ===== Stage 2: Diffusion Loop =====
+    if (onProgress) onProgress(30);
     const diffResult = await runDiffusionLoop({
         combinedCond,
         totalFrames,
@@ -83,10 +88,11 @@ async function runSynthesis(params) {
     });
 
     // ===== Stage 3: Vocoder =====
+    if (onProgress) onProgress(80);
     const { audioData, vocTotalMs } = await runVocoder({
         xtData: diffResult.xtData,
         totalFrames,
-        floatType,
+        floatType: vocoderFloatType,
         npuVocoderBatchSize,
         useStaticShapes,
     });
@@ -115,14 +121,19 @@ async function runSynthesisBatch(paramsArray) {
     if (!paramsArray || paramsArray.length === 0) return [];
     if (paramsArray.length === 1) return [await runSynthesis(paramsArray[0])];
 
+    const onProgress = paramsArray[0].onProgress;
+
     await ensureOrt();
 
     const ort = getOrt();
     const isFP16 = paramsArray[0].isFP16;
+    const vocoderIsFP16 = paramsArray[0].vocoderIsFP16 ?? isFP16;
     const floatType = isFP16 ? 'float16' : 'float32';
+    const vocoderFloatType = vocoderIsFP16 ? 'float16' : 'float32';
     const useStaticShapes = paramsArray[0].useStaticShapes || false;
 
     // ===== Stage 1: Encode both segments in parallel =====
+    if (onProgress) onProgress(10);
     const tEnc0 = performance.now();
     const segData = [];
 
@@ -200,10 +211,12 @@ async function runSynthesisBatch(paramsArray) {
     console.log(`[WebNN] Batch encoder (2 segments): ${batchEncMs.toFixed(0)}ms [seg0: ${segData[0].tokenCount}tok/${segData[0].totalFrames}frm, seg1: ${segData[1].tokenCount}tok/${segData[1].totalFrames}frm]`);
 
     // ===== Stage 2: Batched Diffusion Loop (batch=4) =====
+    if (onProgress) onProgress(30);
     const totalSteps = segData[0].totalSteps;
     const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType, useStaticShapes });
 
     // ===== Stage 3: Vocoder per segment =====
+    if (onProgress) onProgress(80);
     const results = [];
     for (let si = 0; si < 2; si++) {
         const s = segData[si];
@@ -215,7 +228,7 @@ async function runSynthesisBatch(paramsArray) {
         if (s.totalFrames <= maxVocChunk) {
             const bVocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : s.totalFrames;
             const paddedMel = useStaticShapes ? padToLength(xt, bVocSeqLen * MEL_DIM) : xt;
-            const melTensor = createFloatTensor(floatType, paddedMel, [1, bVocSeqLen, MEL_DIM]);
+            const melTensor = createFloatTensor(vocoderFloatType, paddedMel, [1, bVocSeqLen, MEL_DIM]);
             const vocoderResults = await runSession('vocoder', { mel: melTensor });
             const waveform = outputToFloat32(vocoderResults['waveform']);
             audioData = Array.from(waveform.subarray(0, Math.min(waveform.length, totalSamples)));
@@ -223,7 +236,7 @@ async function runSynthesisBatch(paramsArray) {
             const result = await runSegmentedVocoder({
                 xtData: xt,
                 totalFrames: s.totalFrames,
-                floatType,
+                floatType: vocoderFloatType,
                 npuVocoderBatchSize: s.npuVocoderBatchSize,
                 useStaticShapes,
             });

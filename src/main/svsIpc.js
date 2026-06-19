@@ -66,10 +66,11 @@ function registerSvsIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('fragment-svs:synthesize', async (event, { notes, bpm, options }) => {
+  ipcMain.on('fragment-svs:synthesize', async (event, { requestId, notes, bpm, options }) => {
     const pipeline = svsPipelineLazy.getInstance();
     if (!pipeline) {
-      throw new Error(t('error.fragmentSvsNotInitialized'));
+      try { event.sender.send(`fragment-svs:result:${requestId}`, { error: t('error.fragmentSvsNotInitialized') }); } catch (_) {}
+      return;
     }
     const win = event.sender;
     const opts = options || {};
@@ -80,7 +81,12 @@ function registerSvsIpc() {
         }
       } catch (_) {}
     };
-    return await pipeline.synthesize(notes, bpm, opts);
+    try {
+      const data = await pipeline.synthesize(notes, bpm, opts);
+      try { win.send(`fragment-svs:result:${requestId}`, { data }); } catch (_) {}
+    } catch (err) {
+      try { win.send(`fragment-svs:result:${requestId}`, { error: err.message }); } catch (_) {}
+    }
   });
 
   ipcMain.handle('fragment-svs:dispose', async () => {

@@ -1,6 +1,7 @@
 import { state, dom } from './state.js';
 import { PIANO_KEY_WIDTH, BEAT_WIDTH, BPM, HEADER_HEIGHT, F0_CURVE_AREA_HEIGHT } from './constants.js';
 import { t } from '../i18n/index.js';
+import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 
 export function drawWaveformWithPlayhead(currentTime) {
   if (!state.wavAudioBuffer) return;
@@ -19,16 +20,17 @@ export function drawWaveformWithPlayhead(currentTime) {
   const ctx = canvas.getContext('2d');
   ctx.scale(dpr, dpr);
 
-  ctx.fillStyle = '#2a2a2a';
+  const c = getCanvasColors();
+  ctx.fillStyle = c.bgPanel;
   ctx.fillRect(0, 0, width, height);
 
   const zoomX = state.pianoRoll ? state.pianoRoll.zoomX : state.waveformZoomX;
   const scrollX = state.pianoRoll ? state.pianoRoll.scrollX : state.waveformScrollX;
 
-  ctx.fillStyle = '#1e1e1e';
+  ctx.fillStyle = c.bgElevated;
   ctx.fillRect(0, 0, PIANO_KEY_WIDTH, height);
 
-  ctx.strokeStyle = '#555555';
+  ctx.strokeStyle = c.fgDisabled;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(PIANO_KEY_WIDTH, 0);
@@ -49,7 +51,7 @@ export function drawWaveformWithPlayhead(currentTime) {
   const drawStartX = PIANO_KEY_WIDTH;
 
   if (drawEndX > drawStartX) {
-    ctx.fillStyle = '#3498db';
+    ctx.fillStyle = c.accent;
     for (let i = drawStartX; i < drawEndX; i++) {
       const beat = (i + scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * zoomX);
       const nextBeat = (i + 1 + scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * zoomX);
@@ -76,14 +78,14 @@ export function drawWaveformWithPlayhead(currentTime) {
     const playheadX = PIANO_KEY_WIDTH + currentBeat * BEAT_WIDTH * zoomX - scrollX;
 
     if (playheadX >= PIANO_KEY_WIDTH && playheadX <= width) {
-      ctx.strokeStyle = '#ff4444';
+      ctx.strokeStyle = c.playhead;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(playheadX, 0);
       ctx.lineTo(playheadX, height);
       ctx.stroke();
 
-      ctx.fillStyle = '#ff4444';
+      ctx.fillStyle = c.playhead;
       ctx.beginPath();
       ctx.moveTo(playheadX, 0);
       ctx.lineTo(playheadX - 6, -2);

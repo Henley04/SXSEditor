@@ -10,7 +10,7 @@
 
 ## Overview
 
-SXSEditor is an open-source desktop singing voice synthesis (SVS) workstation. It combines a visual piano-roll editor with a neural SVS pipeline based on the SoulX-Singer acoustic model, running entirely through ONNX Runtime for efficient inference on GPU (DirectML) and CPU.
+SXSEditor is an open-source desktop singing voice synthesis (SVS) workstation. It combines a visual piano-roll editor with a neural SVS pipeline based on the SoulX-Singer acoustic model, running through ONNX Runtime for efficient inference on GPU (DirectML), NPU (WebNN), and CPU.
 
 ### SVS Language Support
 
@@ -18,7 +18,7 @@ SXSEditor is an open-source desktop singing voice synthesis (SVS) workstation. I
 |----------|--------|
 | English | ✅ Supported |
 | Chinese (Mandarin) | ✅ Supported |
-| Japanese | 🔄 In Development(LoRA required) |
+| Japanese | 🔄 In Development |
 | Korean,etc | 📋 Planned |
 
 ## Getting Started

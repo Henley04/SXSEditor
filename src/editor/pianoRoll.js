@@ -7,6 +7,7 @@ import { debounce } from '../utils/debounce.js';
 import { isCJK, tokenizeLyric } from '../utils/cjkUtils.js';
 import { midiToNoteName } from '../utils/midiUtils.js';
 import { smoothstep } from '../utils/smoothstep.js';
+import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 
 // 常量配置
 const PIANO_KEY_WIDTH = 60;          // 钢琴键区域宽度（CSS像素）
@@ -350,10 +351,10 @@ class PianoRoll {
       top: ${inputY}px;
       width: ${inputW}px;
       height: ${inputH}px;
-      background: #14141f;
-      border: 1px solid #5b8def;
+      background: var(--bg-input);
+      border: 1px solid var(--accent);
       border-radius: 2px;
-      color: #e0e0f0;
+      color: var(--fg-primary);
       font-size: 11px;
       font-family: sans-serif;
       padding: 0 2px;
@@ -514,6 +515,7 @@ class PianoRoll {
     const ctx = this.ctx;
     const w = this.width;
     const h = this.height;
+    const c = getCanvasColors();
 
     ctx.clearRect(0, 0, w, h);
 
@@ -522,11 +524,11 @@ class PianoRoll {
       ctx.drawImage(this._staticCache, 0, 0, w, h);
     } else {
       // Full redraw
-      this._drawBackground(ctx, w, h);
-      this._drawGrid(ctx, w, h);
-      this._drawNotes(ctx);
-      this._drawPianoKeys(ctx, h);
-      this._drawParamCurve(ctx, w, h);
+      this._drawBackground(ctx, w, h, c);
+      this._drawGrid(ctx, w, h, c);
+      this._drawNotes(ctx, c);
+      this._drawPianoKeys(ctx, h, c);
+      this._drawParamCurve(ctx, w, h, c);
 
       // Update static cache
       if (!this._staticCache || this._staticCache.width !== Math.floor(w * this.dpr) || this._staticCache.height !== Math.floor(h * this.dpr)) {
@@ -541,19 +543,19 @@ class PianoRoll {
       this._staticCacheDirty = false;
     }
 
-    this._drawPlayhead(ctx, h);
+    this._drawPlayhead(ctx, h, c);
     this._updateInlineInputPosition();
   }
 
-  _drawBackground(ctx, w, h) {
-    ctx.fillStyle = '#14141f';
+  _drawBackground(ctx, w, h, c) {
+    ctx.fillStyle = c.bgApp;
     ctx.fillRect(0, 0, w, h);
   }
 
   /**
    * 绘制网格线（小节线、拍线）
    */
-  _drawGrid(ctx, w, h) {
+  _drawGrid(ctx, w, h, c) {
     const beatsPerMeasure = this.projectSettings.timeSignature[0];
 
     // 计算可见时间范围
@@ -567,7 +569,7 @@ class PianoRoll {
       if (x < PIANO_KEY_WIDTH) continue;
 
       const isMeasureLine = (b % beatsPerMeasure === 0);
-      ctx.strokeStyle = isMeasureLine ? '#4a4a66' : '#2a2a3d';
+      ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
       ctx.beginPath();
       ctx.moveTo(x, HEADER_HEIGHT);
       ctx.lineTo(x, this._getParamCurveAreaTop());
@@ -575,7 +577,7 @@ class PianoRoll {
 
       // 小节编号
       if (isMeasureLine) {
-        ctx.fillStyle = '#8888a8';
+        ctx.fillStyle = c.timeText;
         ctx.font = '11px sans-serif';
         ctx.textAlign = 'center';
         const measureNum = Math.floor(b / beatsPerMeasure) + 1;
@@ -589,7 +591,7 @@ class PianoRoll {
     for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
       const y = this._pitchToY(p);
       const isBlack = BLACK_KEYS.has(p % 12);
-      ctx.strokeStyle = isBlack ? '#2a2a3d' : '#1e1e2e';
+      ctx.strokeStyle = isBlack ? c.gridLineMajor : c.gridLineMinor;
       ctx.beginPath();
       ctx.moveTo(PIANO_KEY_WIDTH, y);
       ctx.lineTo(w, y);
@@ -600,7 +602,7 @@ class PianoRoll {
   /**
    * 绘制钢琴键（左侧固定区域）
    */
-  _drawPianoKeys(ctx, h) {
+  _drawPianoKeys(ctx, h, c) {
     const startPitch = this._yToPitch(h);
     const endPitch = this._yToPitch(HEADER_HEIGHT);
 
@@ -609,23 +611,21 @@ class PianoRoll {
       const keyH = NOTE_HEIGHT * this.zoomY;
       const isBlack = BLACK_KEYS.has(p % 12);
 
-      ctx.fillStyle = isBlack ? '#0a0a14' : '#e0e0f0';
+      ctx.fillStyle = isBlack ? c.pianoBlackKey : c.pianoWhiteKey;
       ctx.fillRect(0, y, PIANO_KEY_WIDTH, keyH);
 
-      ctx.strokeStyle = '#3a3a52';
+      ctx.strokeStyle = c.pianoKeyBorder;
       ctx.strokeRect(0, y, PIANO_KEY_WIDTH, keyH);
 
       // 白键显示音名
-      if (!isBlack) {
-        ctx.fillStyle = '#2a2a3d';
-        ctx.font = '10px sans-serif';
-        ctx.textAlign = 'right';
-        ctx.fillText(midiToNoteName(p), PIANO_KEY_WIDTH - 4, y + keyH / 2 + 4);
-      }
+      ctx.fillStyle = isBlack ? '#cccccc' : '#2a2a3d';
+      ctx.font = '10px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.fillText(midiToNoteName(p), PIANO_KEY_WIDTH - 4, y + keyH / 2 + 4);
     }
 
     // 钢琴键与网格分隔线
-    ctx.strokeStyle = '#3a3a52';
+    ctx.strokeStyle = c.pianoKeyBorder;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(PIANO_KEY_WIDTH, HEADER_HEIGHT);
@@ -636,7 +636,7 @@ class PianoRoll {
   /**
    * 绘制音符块
    */
-  _drawNotes(ctx) {
+  _drawNotes(ctx, c) {
     for (const note of this.notes) {
       const x = this._timeToX(note.start);
       const y = this._pitchToY(note.pitch);
@@ -649,7 +649,7 @@ class PianoRoll {
       }
 
       const track = this.tracks.find((t) => t.id === note.trackId);
-      const baseColor = track?.color ?? '#5b8def';
+      const baseColor = track?.color ?? c.accent;
 
       // 选中高亮
       const isSelected = note.id === this.selectedNoteId;
@@ -661,13 +661,13 @@ class PianoRoll {
       ctx.globalAlpha = 1.0;
 
       // 边框
-      ctx.strokeStyle = isSelected ? '#ffffff' : (isHover ? '#d8d8ec' : '#0a0a14');
+      ctx.strokeStyle = isSelected ? c.noteSelectedBg : (isHover ? c.fgSecondary : c.noteBorder);
       ctx.lineWidth = isSelected ? 2 : 1;
       ctx.strokeRect(x, y, w, h);
 
       // 歌词文本
       if (w > 20) {
-        ctx.fillStyle = '#ffffff';
+        ctx.fillStyle = c.noteText;
         ctx.font = '11px sans-serif';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
@@ -678,7 +678,7 @@ class PianoRoll {
       }
 
       // 右边缘 resize 指示条
-      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.fillStyle = c.selectionBg;
       ctx.fillRect(x + w - 4, y + 2, 2, h - 4);
     }
   }
@@ -722,16 +722,16 @@ class PianoRoll {
     return min + normalized * (max - min);
   }
 
-  _drawParamCurve(ctx, w, h) {
+  _drawParamCurve(ctx, w, h, c) {
     if (this.paramMode === PARAM_MODES.MIDI) return;
 
     const areaTop = this._getParamCurveAreaTop();
     const areaBottom = this._getParamCurveAreaBottom();
 
-    ctx.fillStyle = '#14141f';
+    ctx.fillStyle = c.bgApp;
     ctx.fillRect(0, areaTop, w, PARAM_CURVE_HEIGHT);
 
-    ctx.strokeStyle = '#2a2a3d';
+    ctx.strokeStyle = c.gridLineMajor;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, areaTop);
@@ -739,7 +739,7 @@ class PianoRoll {
     ctx.stroke();
 
     const { min, max } = this._getParamCurveYRange();
-    ctx.fillStyle = '#6a6a86';
+    ctx.fillStyle = c.fgDisabled;
     ctx.font = '10px sans-serif';
     ctx.textAlign = 'left';
     ctx.fillText(max.toFixed(0), 4, areaTop + 12);
@@ -755,11 +755,11 @@ class PianoRoll {
     const steps = Math.max(50, Math.floor(maxTime * 20));
 
     const lineColors = {
-      [PARAM_MODES.VOL]: '#5b8def',
-      [PARAM_MODES.PAN]: '#f87171',
-      [PARAM_MODES.F0]: '#4ade80',
+      [PARAM_MODES.VOL]: c.paramVol,
+      [PARAM_MODES.PAN]: c.paramPan,
+      [PARAM_MODES.F0]: c.paramF0,
     };
-    ctx.strokeStyle = lineColors[this.paramMode] || '#5b8def';
+    ctx.strokeStyle = lineColors[this.paramMode] || c.paramVol;
     ctx.lineWidth = 2;
     ctx.beginPath();
 
@@ -783,12 +783,12 @@ class PianoRoll {
       const isSelected = i === this.selectedEnvelopeIndex;
       const isHover = i === this.hoverEnvelopeIndex;
 
-      ctx.fillStyle = isSelected ? '#ffffff' : (isHover ? '#d8d8ec' : (lineColors[this.paramMode] || '#5b8def'));
+      ctx.fillStyle = isSelected ? c.fgPrimary : (isHover ? c.fgSecondary : (lineColors[this.paramMode] || c.paramVol));
       ctx.beginPath();
       ctx.arc(x, y, 5, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = isSelected ? '#ffffff' : '#1a1a28';
+      ctx.strokeStyle = isSelected ? c.fgPrimary : c.borderSubtle;
       ctx.lineWidth = isSelected ? 2 : 1;
       ctx.stroke();
     }
@@ -845,12 +845,12 @@ class PianoRoll {
   /**
    * 绘制播放头
    */
-  _drawPlayhead(ctx, h) {
+  _drawPlayhead(ctx, h, c) {
     const beat = this._secondsToBeats(this.currentTime);
     const x = this._timeToX(beat);
     if (x < PIANO_KEY_WIDTH || x > this.width) return;
 
-    ctx.strokeStyle = '#f87171';
+    ctx.strokeStyle = c.playhead;
     ctx.lineWidth = 2;
     ctx.beginPath();
     ctx.moveTo(x, HEADER_HEIGHT);
@@ -858,7 +858,7 @@ class PianoRoll {
     ctx.stroke();
 
     // 播放头三角标
-    ctx.fillStyle = '#f87171';
+    ctx.fillStyle = c.playhead;
     ctx.beginPath();
     ctx.moveTo(x, HEADER_HEIGHT);
     ctx.lineTo(x - 6, HEADER_HEIGHT - 6);
@@ -1075,3 +1075,10 @@ class PianoRoll {
 }
 
 export { PianoRoll, PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, PARAM_MODES, PARAM_CURVE_HEIGHT };
+
+// Re-render all piano rolls when theme changes
+if (typeof window !== 'undefined') {
+  window.addEventListener('theme:changed', () => {
+    invalidateCanvasThemeCache();
+  });
+}

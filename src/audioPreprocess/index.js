@@ -1,6 +1,7 @@
 import '../common.css';
 import '../audioPreprocess.css';
 import { initI18n, applyLocale, getLocale } from '../i18n/index.js';
+import { initWindowTheme } from '../themes/themeInit.js';
 import { initDomRefs, state } from './state.js';
 import { setupEventHandlers } from './eventHandlers.js';
 import { setupIpcHandlers } from './ipcHandlers.js';
@@ -19,6 +20,9 @@ initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
 });
+
+// Apply saved theme
+initWindowTheme();
 
 // Cleanup on unload
 window.addEventListener('beforeunload', () => {

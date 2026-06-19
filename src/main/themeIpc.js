@@ -4,6 +4,26 @@ const BUILTIN_THEMES = require('../themes/builtins/index.js');
 const { loadSettings, saveSettingsFile, DEFAULT_THEME } = require('./settings');
 const { getAllWebContents } = require('./windowManager');
 
+/**
+ * Resolve extends chain into a flat token map (same logic as renderer flattenTheme).
+ */
+function flattenTheme(themeObj) {
+  const out = {};
+  const chain = [];
+  let cur = themeObj;
+  while (cur) {
+    chain.unshift(cur);
+    if (!cur.extends) break;
+    const parent = BUILTIN_THEMES.BUILTIN_THEMES.find(t => t.id === cur.extends);
+    if (!parent) break;
+    cur = parent;
+  }
+  for (const t of chain) {
+    Object.assign(out, t.tokens || {});
+  }
+  return out;
+}
+
 function listAllThemes() {
   const settings = loadSettings();
   const userDir = app.getPath('userData');
@@ -52,13 +72,17 @@ function registerThemeIpc() {
     const all = listAllThemes();
     const meta = all.find(t => t.id === themeId);
     if (!meta) return null;
+    let themeObj = null;
     if (meta.source === 'builtin') {
-      const t = BUILTIN_THEMES.BUILTIN_THEMES.find(b => b.id === themeId);
-      return t || null;
+      themeObj = BUILTIN_THEMES.BUILTIN_THEMES.find(b => b.id === themeId) || null;
+    } else {
+      const userDir = app.getPath('userData');
+      const { themes } = themeStorage.loadUserThemes(userDir);
+      themeObj = themes.find(t => t.id === themeId) || null;
     }
-    const userDir = app.getPath('userData');
-    const { themes } = themeStorage.loadUserThemes(userDir);
-    return themes.find(t => t.id === themeId) || null;
+    if (!themeObj) return null;
+    // Return fully resolved tokens (resolves extends chain)
+    return { ...themeObj, tokens: flattenTheme(themeObj) };
   });
 
   ipcMain.handle('theme:current', async (event, options) => {

@@ -7,6 +7,7 @@ import {
   REF_BPM,
 } from './constants.js';
 import { t } from '../i18n/index.js';
+import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { loadSingerFile, showSingerSelectDialog, markDirty } from './projectManager.js';
 
@@ -44,7 +45,9 @@ export function renderFragmentTimeline() {
   const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
   const totalBeats = Math.max(64, Math.ceil((maxBeat + 16) / 16) * 16);
   const canvasWidth = totalBeats * beatWidth;
-  const canvasHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+  const contentHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+  const containerHeight = dom.fragmentContainer.clientHeight || contentHeight;
+  const canvasHeight = Math.max(contentHeight, containerHeight);
 
   dom.fragmentCanvas.style.width = canvasWidth + 'px';
   dom.fragmentCanvas.style.height = canvasHeight + 'px';
@@ -60,17 +63,17 @@ export function renderFragmentTimeline() {
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-  ctx.fillStyle = '#14141f';
+  const c = getCanvasColors();
+  ctx.fillStyle = c.bgApp;
   ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
   const beatsPerMeasure = state.project.timeSignature ? state.project.timeSignature[0] : 4;
 
-  ctx.strokeStyle = '#2a2a3d';
   ctx.lineWidth = 1;
   for (let i = 0; i <= totalBeats; i++) {
     const x = i * beatWidth;
     const isMeasureLine = (i % beatsPerMeasure === 0);
-    ctx.strokeStyle = isMeasureLine ? '#4a4a66' : '#2a2a3d';
+    ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
     ctx.beginPath();
     ctx.moveTo(x, HEADER_HEIGHT);
     ctx.lineTo(x, canvasHeight);
@@ -78,7 +81,7 @@ export function renderFragmentTimeline() {
 
     if (isMeasureLine) {
       const measureNum = Math.floor(i / beatsPerMeasure) + 1;
-      ctx.fillStyle = '#6a6a86';
+      ctx.fillStyle = c.timeText;
       ctx.font = '10px sans-serif';
       ctx.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
     }
@@ -87,10 +90,10 @@ export function renderFragmentTimeline() {
   singers.forEach((singer, index) => {
     const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
 
-    ctx.fillStyle = '#1e1e2e';
+    ctx.fillStyle = c.bgElevated;
     ctx.fillRect(0, y, canvasWidth, SINGER_ROW_HEIGHT - 2);
 
-    ctx.strokeStyle = '#1a1a28';
+    ctx.strokeStyle = c.borderSubtle;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(0, y + SINGER_ROW_HEIGHT - 2);
@@ -147,22 +150,22 @@ export function renderFragmentTimeline() {
           const noteH = Math.max(2, midiAreaHeight / pitchRange);
           const noteY = midiAreaTop + pitchOffset * midiAreaHeight;
 
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+          ctx.fillStyle = c.selectionBg;
           ctx.fillRect(noteX, noteY, noteW, noteH);
         }
         ctx.restore();
       }
 
-      ctx.fillStyle = '#e0e0f0';
+      ctx.fillStyle = c.fragmentText;
       ctx.font = '11px sans-serif';
       ctx.fillText(fragment.name || t('main.newFragment'), fragX + 6, y + 16);
 
-      ctx.fillStyle = '#a8a8c0';
+      ctx.fillStyle = c.fgMuted;
       ctx.font = '10px sans-serif';
       ctx.fillText(t('main.beatRange', { start: fragment.startTime, end: fragment.startTime + fragment.duration }), fragX + 6, y + 36);
 
       ctx.save();
-      ctx.strokeStyle = '#ffffff44';
+      ctx.strokeStyle = c.scrollbarThumb;
       ctx.lineWidth = 2;
       ctx.setLineDash([4, 4]);
       ctx.strokeRect(fragX - 2, y + 4, 4, FRAGMENT_HEIGHT);
@@ -171,7 +174,7 @@ export function renderFragmentTimeline() {
     });
 
     if (singerFragments.length === 0) {
-      ctx.fillStyle = '#4a4a66';
+      ctx.fillStyle = c.fgDisabled;
       ctx.font = '11px sans-serif';
       ctx.fillText(t('main.clickToAddFragment'), 8, y + 30);
     }
@@ -194,14 +197,15 @@ export function drawPlayheadLine(elapsedSeconds) {
 
   if (x < 0 || x > w) return;
 
-  ctx.strokeStyle = '#ff4444';
+  const c = getCanvasColors();
+  ctx.strokeStyle = c.playhead;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(x, 0);
   ctx.lineTo(x, h);
   ctx.stroke();
 
-  ctx.fillStyle = '#ff4444';
+  ctx.fillStyle = c.playhead;
   ctx.beginPath();
   ctx.moveTo(x - 5, 0);
   ctx.lineTo(x + 5, 0);
@@ -465,7 +469,7 @@ export function renderSingerList() {
         },
         redo() {
           const singer = trackManager.getSinger(singerId);
-          const color = singer ? singer.color : '#5b8def';
+          const color = singer ? singer.color : getCanvasColors().accent;
           const frag = trackManager.addFragment({ singerId, startTime, duration: 4, color });
           renderFragmentTimeline();
         }
@@ -512,4 +516,12 @@ export function renderSingerList() {
 export function refreshAll() {
   renderSingerList();
   renderFragmentTimeline();
+}
+
+// Re-render when theme changes
+if (typeof window !== 'undefined') {
+  window.addEventListener('theme:changed', () => {
+    invalidateCanvasThemeCache();
+    refreshAll();
+  });
 }

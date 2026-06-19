@@ -169,6 +169,10 @@
     --tooltip-fg: var(--fg-primary);
     --selection-bg-token: var(--selection-bg);
     --selection-fg: var(--fg-primary);
+    --fg-toolbar-hover: #f0f0ff;
+    --fg-bpm: #a8c8ff;
+    --fg-time: #e8e8f8;
+    --bg-singer-active: #2a2a42;
 }
 `;
     // Insert as early as possible (before other stylesheets) to minimize FOUC

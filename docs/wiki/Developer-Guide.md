@@ -60,17 +60,20 @@ SXSEditor/
 │   └── wiki/                # Wiki content
 ├── example/                 # Example prompt/target data
 ├── onnx_models/             # ONNX model files
-│   ├── svc/                 # SVC-specific models
+│   ├── preprocess/          # RMVPE & ROSVOT models
+│   ├── basic_pitch_model/   # Basic Pitch model (TF.js)
 │   └── README.md
 ├── src/
 │   ├── audio/               # WAV encoder and audio utilities
 │   ├── editor/              # Track manager, piano roll, envelope editor
 │   ├── inference/           # ONNX inference pipelines
-│   │   ├── nativeSvsPipeline.js    # Main SVS pipeline
+│   │   ├── pipeline/        # Main SVS pipeline (index.js, preprocessing.js, diffusion.js, postprocessing.js, textProcessing.js)
+│   │   ├── webnn/           # WebNN NPU inference pipeline
 │   │   ├── rmvpePitchDetector.js   # RMVPE-based F0 detection
 │   │   ├── basicPitch.js           # Basic Pitch F0 detection
 │   │   ├── midiParser.js           # MIDI parsing utilities
-│   │   └── en_g2p_dict.json        # English grapheme-to-phoneme dictionary
+│   │   ├── phone_set.json          # Phoneme vocabulary (2820 entries)
+│   │   └── en_g2p_dict.json        # English grapheme-to-phoneme dictionary (126k words)
 │   ├── main.js              # Electron main process
 │   ├── preload.js           # Preload script for secure IPC
 │   ├── renderer.js          # Main renderer process (UI logic)
@@ -79,7 +82,7 @@ SXSEditor/
 │   ├── singerCreator.*      # Singer creation window
 │   ├── audioPreprocess.*    # Audio preprocessing window
 │   └── settings.*           # Settings window
-├── test/                    # Automated test suite (160+ tests)
+├── test/                    # Automated test suite (470+ tests)
 ├── forge.config.js          # Electron Forge configuration
 ├── webpack.*.config.js      # Webpack configurations
 └── package.json
@@ -94,7 +97,7 @@ SXSEditor/
 | Frontend | Vanilla JavaScript, HTML5 Canvas, Wavesurfer.js |
 | Desktop Framework | Electron + Electron Forge |
 | Build Tool | Webpack (@electron-forge/plugin-webpack) |
-| Inference Engine | ONNX Runtime Node (`onnxruntime-node`) |
+| Inference Engine | ONNX Runtime Node (GPU/CPU) + ONNX Runtime Web (NPU/WebNN) |
 | Neural Models | SoulX-Singer (Diffusion-based SVS) |
 | Pitch Detection | RMVPE ONNX, Basic Pitch (TensorFlow.js) |
 | Testing | Mocha + Chai + Sinon + NYC |
@@ -114,7 +117,7 @@ SXSEditor/
 | `preflow.onnx` | ConvNeXtV2 pre-processing |
 | `cond_emb.onnx` | Condition embedding projection |
 | `diff_step_dml.onnx` | Single diffusion step (DiffLlama) |
-| `vocoder.onnx` | Vocos vocoder (mel → waveform) |
+| `vocoder_dml.onnx` | Vocos vocoder (mel → waveform, DML optimized) |
 | `mel_transform.onnx` | Mel-spectrogram extraction |
 
 ### SVC Models (`onnx_models/svc/`)
@@ -142,13 +145,15 @@ npm run test:coverage    # With code coverage report
 npm run test:watch       # Watch mode
 ```
 
-The test suite includes **160+ test cases** covering:
+The test suite includes **470+ test cases** covering:
 
 - WAV encoding/decoding
 - Track management
 - SVS pipeline logic
 - Pitch detection (RMVPE)
 - MIDI parsing
+- Model path consistency
+- Theme system
 - Integration tests
 
 ---
@@ -259,7 +264,7 @@ To ship a theme as a built-in (read-only, bundled in `app.asar`):
 2. Register it in `src/themes/builtins/index.js`:
    ```js
    import midnightRose from './midnight-rose.theme.json';
-   export const BUILTIN_THEMES = [darkAurora, lightPaper, midnightAmber, contrastOnyx, midnightRose];
+   export const BUILTIN_THEMES = [darkAurora, lightPaper, midnightAmber, midnightRose];
    ```
 3. Run `npm test` — the new theme is automatically exercised by `test/themeTokens.test.js` (which asserts that every built-in covers the required token set).
 4. Run `npm run package:lite` to confirm the file is included in the package.
