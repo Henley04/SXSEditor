@@ -9,8 +9,30 @@ const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
 const { createLazyInitializer } = require('./lazyInitializer');
 
+/**
+ * Get the base model directory (without precision subdirectory).
+ * Shared models (basic_pitch, rmvpe, rosvot) live at the base level,
+ * not inside precision-specific subdirectories like int8/optimized_npu/.
+ */
+function getBaseModelDir() {
+  const dir = getModelDir();
+  // Strip precision subdirectories if present
+  const precisionSuffixes = [
+    path.sep + 'int8' + path.sep + 'optimized_npu' + path.sep,
+    path.sep + 'int8' + path.sep,
+    path.sep + 'fp16' + path.sep,
+  ];
+  for (const suffix of precisionSuffixes) {
+    if (dir.endsWith(suffix) || dir.endsWith(suffix.slice(0, -1))) {
+      const base = dir.slice(0, dir.lastIndexOf(suffix) + 1);
+      return base;
+    }
+  }
+  return dir;
+}
+
 const rmvpeLazy = createLazyInitializer(async () => {
-  const modelPath = getModelDir();
+  const modelPath = getBaseModelDir();
   const settings = loadSettings();
   const deviceId = settings.deviceId ?? undefined;
   console.log(`[Main] 初始化 RMVPE Pitch Detector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
@@ -20,7 +42,7 @@ const rmvpeLazy = createLazyInitializer(async () => {
 });
 
 const basicPitchLazy = createLazyInitializer(async () => {
-  const modelPath = getModelDir();
+  const modelPath = getBaseModelDir();
   console.log(`[Main] 初始化 Basic Pitch Detector, 模型路径: ${modelPath}`);
   const detector = new BasicPitchDetector(modelPath);
   await detector.init();
@@ -28,7 +50,7 @@ const basicPitchLazy = createLazyInitializer(async () => {
 });
 
 const rosvotLazy = createLazyInitializer(async () => {
-  const modelPath = getModelDir();
+  const modelPath = getBaseModelDir();
   const settings = loadSettings();
   const deviceId = settings.deviceId ?? undefined;
   console.log(`[Main] 初始化 RosvotDetector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
@@ -79,7 +101,7 @@ function registerPitchMidiIpc() {
       const useRosvot = settings?.useRosvot === true;
 
       if (useRosvot) {
-        const modelPath = getModelDir();
+        const modelPath = getBaseModelDir();
         const rosvotModelPath = path.join(modelPath, 'preprocess', 'rosvot_model.onnx');
 
         if (fs.existsSync(rosvotModelPath)) {
