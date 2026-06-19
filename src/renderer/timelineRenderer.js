@@ -4,7 +4,6 @@ import {
   SINGER_ROW_HEIGHT,
   HEADER_HEIGHT,
   FRAGMENT_BASE_BEAT_WIDTH,
-  REF_BPM,
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
@@ -12,8 +11,7 @@ import { showConfirmDialog } from '../alertDialog.js';
 import { loadSingerFile, showSingerSelectDialog, markDirty } from './projectManager.js';
 
 export function getBeatWidth() {
-  const bpmFactor = REF_BPM / (state.project.bpm || 120);
-  return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX * bpmFactor;
+  return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX;
 }
 
 export function syncFragmentScroll() {
