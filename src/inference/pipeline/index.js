@@ -392,7 +392,7 @@ class OnnxSVSPipeline {
                         });
                         this.sessions['vocoder'] = session;
                         this.sessionEPs['vocoder'] = 'dml';
-                        this._detectVocoderPrecision(session);
+                        await this._detectVocoderPrecision(session);
                         loadedSessions.push('vocoder');
                         console.log(`[OnnxSVSPipeline] ${vocoderModelFile} loaded via DML (no validation)`);
                     } catch (vocErr) {
@@ -405,7 +405,7 @@ class OnnxSVSPipeline {
                             });
                             this.sessions['vocoder'] = session;
                             this.sessionEPs['vocoder'] = 'cpu';
-                            this._detectVocoderPrecision(session);
+                            await this._detectVocoderPrecision(session);
                             loadedSessions.push('vocoder');
                             console.log(`[OnnxSVSPipeline] ${vocoderModelFile} loaded via CPU (fallback)`);
                         } catch (cpuErr) {
@@ -456,7 +456,7 @@ class OnnxSVSPipeline {
                 const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
                 const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
                 console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
-                if (this.sessions['vocoder']) this._detectVocoderPrecision(this.sessions['vocoder']);
+                if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder']);
             } catch (err) {
                 console.error('[OnnxSVSPipeline] ONNX Runtime init failed:', err.message);
                 for (const key of loadedSessions) {
@@ -513,7 +513,7 @@ class OnnxSVSPipeline {
             const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
             const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
             console.log(`[OnnxSVSPipeline] Fallback init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
-            if (this.sessions['vocoder']) this._detectVocoderPrecision(this.sessions['vocoder']);
+            if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder']);
         } catch (err) {
             for (const key of loadedSessions) {
                 if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
@@ -526,7 +526,7 @@ class OnnxSVSPipeline {
         }
     }
 
-    _detectVocoderPrecision(session) {
+    async _detectVocoderPrecision(session) {
         try {
             const meta = session.inputMetadata || {};
             const inputNames = session.inputNames || Object.keys(meta);
@@ -537,35 +537,38 @@ class OnnxSVSPipeline {
             if (meta['mel'] && meta['mel'].type) {
                 melType = meta['mel'].type;
             } else if (inputNames.length > 0 && meta[inputNames[0]] && meta[inputNames[0]].type) {
-                // Fallback: use first input's type
                 melType = meta[inputNames[0]].type;
             }
 
             if (melType) {
                 this.vocoderIsFP16 = melType === 'float16';
                 console.log(`[OnnxSVSPipeline] Vocoder input type: ${melType} (vocoderIsFP16=${this.vocoderIsFP16})`);
-            } else {
-                // Could not detect — probe with a tiny inference
-                console.warn('[OnnxSVSPipeline] Vocoder inputMetadata unavailable, probing with test tensor');
-                try {
-                    const ort = require('onnxruntime-node');
-                    const testMel = new Float32Array(500 * 128); // minimal test
-                    const testFp16 = new Uint16Array(500 * 128);
-                    // Try float16 first
-                    try {
-                        const t16 = new ort.Tensor('float16', testFp16, [1, 500, 128]);
-                        session.run({ mel: t16 }).then(() => {
-                            this.vocoderIsFP16 = true;
-                            console.log('[OnnxSVSPipeline] Vocoder accepts float16 input');
-                        }).catch(() => {});
-                    } catch (_) {}
-                    // Default to matching global precision
-                    this.vocoderIsFP16 = this.isFP16;
-                    console.log(`[OnnxSVSPipeline] Vocoder precision defaulted to: ${this.isFP16 ? 'float16' : 'float32'}`);
-                } catch (_) {
-                    this.vocoderIsFP16 = this.isFP16;
-                }
+                return;
             }
+
+            // inputMetadata unavailable (DML) — probe with actual inference
+            console.warn('[OnnxSVSPipeline] Vocoder inputMetadata unavailable, probing with test tensor...');
+            const ort = require('onnxruntime-node');
+            const testFp16 = new Uint16Array(1); // minimal
+            try {
+                const t16 = new ort.Tensor('float16', testFp16, [1, 1, 128]);
+                await session.run({ mel: t16 });
+                this.vocoderIsFP16 = true;
+                console.log('[OnnxSVSPipeline] Vocoder accepts float16 → vocoderIsFP16=true');
+                return;
+            } catch (_) {}
+
+            const testFp32 = new Float32Array(1);
+            try {
+                const t32 = new ort.Tensor('float32', testFp32, [1, 1, 128]);
+                await session.run({ mel: t32 });
+                this.vocoderIsFP16 = false;
+                console.log('[OnnxSVSPipeline] Vocoder accepts float32 → vocoderIsFP16=false');
+                return;
+            } catch (_) {}
+
+            console.warn('[OnnxSVSPipeline] Vocoder probe failed, defaulting to global precision');
+            this.vocoderIsFP16 = this.isFP16;
         } catch (e) {
             console.warn('[OnnxSVSPipeline] Vocoder precision detection failed:', e.message);
             this.vocoderIsFP16 = this.isFP16;
