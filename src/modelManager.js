@@ -976,6 +976,8 @@ module.exports = {
   MODEL_IDS,
   DEFAULT_PRECISION,
   MODELSCOPE_ENDPOINT,
+  PRECISION_SUBDIR_MAP,
+  PRECISION_SUBDIR_PRECESIONS,
   checkMissingFiles,
   checkMissingFilesAsync,
   deleteModelFiles,
@@ -988,4 +990,7 @@ module.exports = {
   getModelId,
   getRemoteFileSize,
   getOptimalConcurrency,
+  getLocalFilePath,
+  getManifestForPrecision,
+  isSvsModelFile,
 };
