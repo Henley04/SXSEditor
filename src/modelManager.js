@@ -86,7 +86,10 @@ function getLocalFilePath(baseDir, filePath, precision) {
 }
 
 function getFileDownloadUrl(filePath, precision) {
-  const modelId = getModelId(precision);
+  // Preprocess and basic_pitch models use int8 repo (dynamic shapes),
+  // not int8-npu repo (static shapes with fixed input dimensions)
+  const effectivePrecision = (!isSvsModelFile(filePath) && precision === 'int8-npu') ? 'int8' : precision;
+  const modelId = getModelId(effectivePrecision);
   const encoded = encodeURIComponent(filePath);
   return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
 }
