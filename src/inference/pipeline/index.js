@@ -15,6 +15,7 @@ const { createFloatTensor, outputToFloat32 } = require('./utils');
 
 class OnnxSVSPipeline {
     constructor(modelDir, options = {}) {
+        this.baseModelDir = modelDir; // Base dir before precision subdir (for shared models)
         this.modelDir = this._resolveModelDir(modelDir, options.modelPrecision);
         this.sessions = {};
         this.sessionEPs = {};
