@@ -600,7 +600,8 @@ class OnnxSVSPipeline {
     }
 
     async _runVocoderChunked(melData, totalFrames) {
-        return this._postprocessing.runVocoderChunked(this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, this.useStaticShapes);
+        // Vocoder is loaded via DML (dynamic shapes), never use static shape padding
+        return this._postprocessing.runVocoderChunked(this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false);
     }
 
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
