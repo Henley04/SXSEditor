@@ -61,20 +61,12 @@ class Diffusion {
         const progressPerStep = progressRange / totalSteps;
 
         // prompt frames在循环中不变，预先拷贝一次
-        for (let f = 0; f < ptFrameCount; f++) {
-            for (let d = 0; d < MEL_DIM; d++) {
-                xtInputBuf[f * MEL_DIM + d] = ptMelData[f * MEL_DIM + d];
-            }
-        }
+        xtInputBuf.set(ptMelData instanceof Float32Array ? ptMelData : new Float32Array(ptMelData), 0);
 
         for (let step = 0; step < totalSteps; step++) {
             const tVal = (step + 0.5) / totalSteps;
 
-            for (let f = 0; f < totalFrames; f++) {
-                for (let d = 0; d < MEL_DIM; d++) {
-                    xtInputBuf[(ptFrameCount + f) * MEL_DIM + d] = xt.data[f * MEL_DIM + d];
-                }
-            }
+            xtInputBuf.set(xt.data instanceof Float32Array ? xt.data : new Float32Array(xt.data), ptFrameCount * MEL_DIM);
 
             const predData = await this.runDiffStep(sessions, xtInputBuf, tVal, combinedCond, frameMask, totalFramesWithPrompt, isFP16, useStaticShapes);
 

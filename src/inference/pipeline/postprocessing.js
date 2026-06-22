@@ -96,6 +96,12 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     const halfWidth = Math.ceil(12 * kaiserBeta / 5); // ~12 零交叉
     const cutoff = (dstSampleRate < srcSampleRate ? 0.95 * dstSampleRate / srcSampleRate : 0.95) * 0.5;
 
+    // Precompute constants outside the inner loop
+    const twoPiCutoff = 2 * Math.PI * cutoff;
+    const invPi = 1 / Math.PI;
+    const invWidth = 1 / (2 * halfWidth + 1);
+    const bessel0Beta = bessel0(kaiserBeta); // Normalization factor, computed once
+
     const out = new Float32Array(newLength);
     for (let i = 0; i < newLength; i++) {
         const center = (i + 0.5) * ratio;
@@ -110,10 +116,10 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
                 sum += audioFloat[j];
                 weightSum += 1;
             } else {
-                const sincVal = Math.sin(2 * Math.PI * cutoff * t) / (Math.PI * t);
-                const kaiserArg = 1 - (2 * t / (2 * halfWidth + 1)) ** 2;
+                const sincVal = Math.sin(twoPiCutoff * t) * invPi / t;
+                const kaiserArg = 1 - (t * invWidth) * (t * invWidth);
                 const windowVal = kaiserArg >= 0
-                    ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0(kaiserBeta)
+                    ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0Beta
                     : 0;
                 const w = sincVal * windowVal;
                 sum += audioFloat[j] * w;
@@ -126,15 +132,21 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
 }
 
 // Kaiser 窗的零阶修正贝塞尔函数 I₀(x) 近似
+// Optimized: uses rational approximation for x < 8, asymptotic for x >= 8
 function bessel0(x) {
-    let sum = 1;
-    let term = 1;
-    const halfX = x / 2;
-    for (let k = 1; k <= 20; k++) {
-        term *= (halfX / k);
-        sum += term * term;
+    if (x < 0) x = -x;
+    if (x < 3.75) {
+        const t = x / 3.75;
+        const t2 = t * t;
+        return 1 + t2 * (3.5156229 + t2 * (3.0899424 + t2 * (1.2067492
+            + t2 * (0.2659732 + t2 * (0.0360768 + t2 * 0.0045813)))));
     }
-    return sum;
+    const ax = Math.abs(x);
+    const y = 3.75 / ax;
+    return (Math.exp(ax) / Math.sqrt(ax)) * (0.39894228 + y * (0.01328592
+        + y * (0.00225319 + y * (-0.00157565 + y * (0.00916281
+        + y * (-0.02057706 + y * (0.02635537 + y * (-0.01647633
+        + y * 0.00392377))))))));
 }
 
 function bitReversePermute(real, imag) {
@@ -313,6 +325,10 @@ function createMelFilterbank(numBands, fftSize, sampleRate, fmin, fmax) {
     return filterbank;
 }
 
+// Cached mel filterbank (only depends on sr, which is fixed at 24kHz)
+let _cachedMelFilterbank = null;
+let _cachedMelFilterbankSr = 0;
+
 function extractMelSpectrogram(audioFloat, sr) {
     const padLength = (N_FFT - HOP_SIZE) / 2;
     const padded = new Float32Array(audioFloat.length + 2 * padLength);
@@ -324,14 +340,16 @@ function extractMelSpectrogram(audioFloat, sr) {
 
     const numFrames = Math.floor((padded.length - N_FFT) / HOP_SIZE) + 1;
     const melBands = NUM_MELS;
+    const numFreqBins = N_FFT / 2 + 1;
 
+    // Reuse FFT buffers across frames (pool allocation)
     const real = new Float32Array(N_FFT);
     const imag = new Float32Array(N_FFT);
-
-    const powerSpec = new Float32Array(numFrames * (N_FFT / 2 + 1));
+    const powerSpec = new Float32Array(numFrames * numFreqBins);
 
     for (let f = 0; f < numFrames; f++) {
         const start = f * HOP_SIZE;
+        const specOffset = f * numFreqBins;
         for (let i = 0; i < N_FFT; i++) {
             real[i] = padded[start + i] * HANN_WINDOW[i];
             imag[i] = 0;
@@ -339,28 +357,36 @@ function extractMelSpectrogram(audioFloat, sr) {
 
         fftRadix2(real, imag);
 
-        for (let i = 0; i <= N_FFT / 2; i++) {
-            powerSpec[f * (N_FFT / 2 + 1) + i] = real[i] * real[i] + imag[i] * imag[i];
+        for (let i = 0; i < numFreqBins; i++) {
+            powerSpec[specOffset + i] = real[i] * real[i] + imag[i] * imag[i];
         }
     }
 
-    const fmax = sr / 2;
-    const melFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
+    // Use cached mel filterbank (recompute only if sample rate changed)
+    if (!_cachedMelFilterbank || _cachedMelFilterbankSr !== sr) {
+        const fmax = sr / 2;
+        _cachedMelFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
+        _cachedMelFilterbankSr = sr;
+    }
+    const melFilterbank = _cachedMelFilterbank;
 
     const melSpec = new Float32Array(numFrames * melBands);
     for (let f = 0; f < numFrames; f++) {
+        const specOffset = f * numFreqBins;
         for (let m = 0; m < melBands; m++) {
             let sum = 0;
-            for (let k = 0; k <= N_FFT / 2; k++) {
-                sum += powerSpec[f * (N_FFT / 2 + 1) + k] * melFilterbank[m * (N_FFT / 2 + 1) + k];
+            const fbOffset = m * numFreqBins;
+            for (let k = 0; k < numFreqBins; k++) {
+                sum += powerSpec[specOffset + k] * melFilterbank[fbOffset + k];
             }
             melSpec[f * melBands + m] = Math.log(Math.max(sum, 1e-10));
         }
     }
 
     const melStd = Math.sqrt(MEL_VAR);
+    const invMelStd = 1 / melStd;
     for (let i = 0; i < melSpec.length; i++) {
-        melSpec[i] = (melSpec[i] - MEL_MEAN) / melStd;
+        melSpec[i] = (melSpec[i] - MEL_MEAN) * invMelStd;
     }
 
     return { data: melSpec, frames: numFrames, melBands };
@@ -442,6 +468,16 @@ class Postprocessing {
             const waveform = outputToFloat32(results['waveform']);
             const copyLen = Math.min(waveform.length, totalSamples);
             output.set(waveform.subarray(0, copyLen));
+            // Normalize to peak 0.95 to prevent clipping
+            let peak = 0;
+            for (let i = 0; i < output.length; i++) {
+                const abs = Math.abs(output[i]);
+                if (abs > peak) peak = abs;
+            }
+            if (peak > 0.95) {
+                const scale = 0.95 / peak;
+                for (let i = 0; i < output.length; i++) output[i] *= scale;
+            }
             return output;
         }
 
@@ -464,11 +500,9 @@ class Postprocessing {
             const currentChunkFrames = chunkEnd - chunkStart;
 
             const chunkMel = new Float32Array(currentChunkFrames * MEL_DIM);
-            for (let f = 0; f < currentChunkFrames; f++) {
-                for (let d = 0; d < MEL_DIM; d++) {
-                    chunkMel[f * MEL_DIM + d] = melData[(chunkStart + f) * MEL_DIM + d];
-                }
-            }
+            chunkMel.set(melData instanceof Float32Array
+                ? melData.subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM)
+                : new Float32Array(melData).subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM));
 
             const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : currentChunkFrames;
             const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
@@ -502,6 +536,17 @@ class Postprocessing {
             if (weightSum[i] > 1e-8) {
                 output[i] /= weightSum[i];
             }
+        }
+
+        // Normalize to peak 0.95 to prevent clipping
+        let peak = 0;
+        for (let i = 0; i < totalSamples; i++) {
+            const abs = Math.abs(output[i]);
+            if (abs > peak) peak = abs;
+        }
+        if (peak > 0.95) {
+            const scale = 0.95 / peak;
+            for (let i = 0; i < totalSamples; i++) output[i] *= scale;
         }
 
         const elapsed = performance.now() - t0;
