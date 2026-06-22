@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://modelscope.cn; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:;" />
   <title data-i18n="modelDownload.title">模型文件下载</title>
   <script src="./themes/themeBootstrap.js"></script>
 </head>
@@ -29,6 +30,14 @@
         <span class="precision-text">
           <span class="precision-name" data-i18n="modelDownload.precisionFp32">FP32 (全精度)</span>
           <span class="precision-desc" data-i18n="modelDownload.precisionFp32Desc">最高精度，音质最好，显存占用最大，推荐高性能独显用户使用</span>
+        </span>
+      </label>
+      <label class="precision-option">
+        <input type="radio" name="modelPrecision" value="fp8">
+        <span class="precision-radio"></span>
+        <span class="precision-text">
+          <span class="precision-name" data-i18n="modelDownload.precisionFp8">FP8 (8 位浮点)</span>
+          <span class="precision-desc" data-i18n="modelDownload.precisionFp8Desc">接近 FP16 音质，模型体积更小，支持 FP8 的显卡可获得更好性能</span>
         </span>
       </label>
       <label class="precision-option">

@@ -59,21 +59,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   disposeSVSPipeline: () => ipcRenderer.invoke('svs:dispose'),
   getFragmentSVSSampleRate: () => ipcRenderer.invoke('fragment-svs:getSampleRate'),
   initFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:init'),
-  synthesizeFragmentSVS: (data) => {
-    return new Promise((resolve, reject) => {
-      const requestId = `frag-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const responseChannel = `fragment-svs:result:${requestId}`;
-      const handler = (event, result) => {
-        ipcRenderer.removeListener(responseChannel, handler);
-        if (result.error) {
-          reject(new Error(result.error));
-        } else {
-          resolve(result.data);
-        }
-      };
-      ipcRenderer.on(responseChannel, handler);
-      ipcRenderer.send('fragment-svs:synthesize', { requestId, ...data });
-    });
+  synthesizeFragmentSVS: async (data) => {
+    const result = await ipcRenderer.invoke('fragment-svs:synthesize', data);
+    if (result.error) {
+      throw new Error(result.error);
+    }
+    return result.data;
   },
   resolvePhonemes: (lyrics) => ipcRenderer.invoke('fragment-svs:resolvePhonemes', { lyrics }),
   disposeFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:dispose'),
@@ -148,6 +139,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   modelDownloadOpen: (precision) => ipcRenderer.invoke('model-download:open', precision),
   modelDownloadDeleteAndRecheck: (precision) => ipcRenderer.invoke('model-download:delete-and-recheck', precision),
   modelDownloadRecheck: (precision) => ipcRenderer.invoke('model-download:recheck', precision),
+  // JP model download
+  modelDownloadCheckJp: (precision) => ipcRenderer.invoke('model-download:check-jp', precision),
+  modelDownloadStartJp: (precision) => ipcRenderer.invoke('model-download:start-jp', precision),
+  modelDownloadCheckJpExists: () => ipcRenderer.invoke('model-download:check-jp-exists'),
+  // SVS JP model check
+  svsCheckJpModels: () => ipcRenderer.invoke('svs:checkJpModels'),
   saveLocale: (locale) => ipcRenderer.invoke('save-locale', locale),
   getLocale: () => ipcRenderer.invoke('get-locale'),
   reloadMainWindow: () => ipcRenderer.invoke('reload-main-window'),
@@ -156,13 +153,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('locale-changed', handler);
     return () => ipcRenderer.removeListener('locale-changed', handler);
   },
-  setDirty: (dirty) => ipcRenderer.send('set-dirty', dirty),
+  setDirty: (dirty) => ipcRenderer.invoke('set-dirty', dirty),
   onCloseConfirm: (callback) => {
     const handler = () => callback();
     ipcRenderer.on('close-confirm', handler);
     return () => ipcRenderer.removeListener('close-confirm', handler);
   },
-  closeConfirmed: () => ipcRenderer.send('close-confirmed'),
+  closeConfirmed: () => ipcRenderer.invoke('close-confirmed'),
   // 资源管理器
   resmgrOpen: () => ipcRenderer.invoke('resmgr:open'),
   resmgrGetGPUInfo: () => ipcRenderer.invoke('resmgr:getGPUInfo'),
@@ -217,8 +214,30 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('webnn:prefetch:request', handler);
     return () => ipcRenderer.removeListener('webnn:prefetch:request', handler);
   },
-  webnnRespond: (responseChannel, result) => ipcRenderer.invoke(responseChannel, result),
-  webnnProgress: (progressChannel, data) => ipcRenderer.send(progressChannel, data),
+  // Security: whitelist allowed WebNN response channels to prevent arbitrary IPC invocation
+  webnnRespond: (responseChannel, result) => {
+    const allowedPrefixes = [
+      'webnn:detectNPU:response:',
+      'webnn:loadModel:response:',
+      'webnn:unloadModel:response:',
+      'webnn:runInference:response:',
+      'webnn:getStatus:response:',
+      'webnn:runSynthesis:response:',
+    ];
+    if (!allowedPrefixes.some(prefix => responseChannel.startsWith(prefix))) {
+      console.error('[Preload] Blocked unauthorized webnnRespond channel:', responseChannel);
+      return;
+    }
+    ipcRenderer.invoke(responseChannel, result);
+  },
+  // Security: whitelist allowed WebNN progress channels
+  webnnProgress: (progressChannel, data) => {
+    if (!progressChannel.startsWith('webnn:progress:')) {
+      console.error('[Preload] Blocked unauthorized webnnProgress channel:', progressChannel);
+      return;
+    }
+    ipcRenderer.send(progressChannel, data);
+  },
 
   // ==================== Theme API ====================
   themeAPI: {

@@ -2,6 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://modelscope.cn; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:;" />
     <title data-i18n="settings.title">设置</title>
     <script src="./themes/themeBootstrap.js"></script>
   </head>
@@ -136,17 +137,17 @@
             <div class="settings-section hidden" id="section-preview-params">
                 <p class="section-desc" data-i18n="settings.previewInferenceParamsDesc">编辑器中播放预览时使用的推理参数，可适当降低质量以换取更快的响应速度。</p>
                 <div class="setting-group">
-                    <label for="previewDiffSteps" data-i18n="settings.diffSteps">扩散步数 <span id="previewDiffStepsValue" class="volume-display">16</span></label>
+                    <label for="previewDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="previewDiffStepsValue" class="volume-display">16</span></label>
                     <input type="range" id="previewDiffSteps" min="4" max="64" value="16" step="4">
                     <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
                 </div>
                 <div class="setting-group">
-                    <label for="previewCfgStrength" data-i18n="settings.cfgStrength">CFG 引导强度 <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
+                    <label for="previewCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
                     <input type="range" id="previewCfgStrength" min="0" max="10" value="3.0" step="0.5">
                     <p class="hint" data-i18n="settings.cfgStrengthHint">无分类器引导强度。值越大贴合条件，但可能过度强化。设为 0 可跳过无条件预测。推荐 1.0~5.0。</p>
                 </div>
                 <div class="setting-group">
-                    <label for="previewCfgRescale" data-i18n="settings.cfgRescale">CFG Rescale 系数 <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
+                    <label for="previewCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
                     <input type="range" id="previewCfgRescale" min="0" max="1" value="0.75" step="0.05">
                     <p class="hint" data-i18n="settings.cfgRescaleHint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。推荐 0.5~0.9。</p>
                 </div>
@@ -156,17 +157,17 @@
             <div class="settings-section hidden" id="section-export-params">
                 <p class="section-desc" data-i18n="settings.exportInferenceParamsDesc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。</p>
                 <div class="setting-group">
-                    <label for="exportDiffSteps" data-i18n="settings.diffSteps">扩散步数 <span id="exportDiffStepsValue" class="volume-display">32</span></label>
+                    <label for="exportDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="exportDiffStepsValue" class="volume-display">32</span></label>
                     <input type="range" id="exportDiffSteps" min="4" max="64" value="32" step="4">
                     <p class="hint" data-i18n="settings.exportDiffStepsHint">导出时的扩散步数。更多步数 = 更高质量。推荐导出使用 32 步。</p>
                 </div>
                 <div class="setting-group">
-                    <label for="exportCfgStrength" data-i18n="settings.cfgStrength">CFG 引导强度 <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
+                    <label for="exportCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
                     <input type="range" id="exportCfgStrength" min="0" max="10" value="3.0" step="0.5">
                     <p class="hint" data-i18n="settings.exportCfgStrengthHint">导出时的 CFG 强度。导出时建议保持较高值以确保音质。</p>
                 </div>
                 <div class="setting-group">
-                    <label for="exportCfgRescale" data-i18n="settings.cfgRescale">CFG Rescale 系数 <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
+                    <label for="exportCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
                     <input type="range" id="exportCfgRescale" min="0" max="1" value="0.75" step="0.05">
                     <p class="hint" data-i18n="settings.exportCfgRescaleHint">导出时的 CFG Rescale 系数。</p>
                 </div>
@@ -253,7 +254,7 @@
                     <p class="hint" data-i18n="settings.bufferSizeHint">较小的缓冲区降低延迟但增加 CPU 负载和爆音风险。</p>
                 </div>
                 <div class="setting-group">
-                    <label for="audioVolume" data-i18n="settings.masterVolume">主音量 <span id="volumeValue" class="volume-display">100%</span></label>
+                    <label for="audioVolume"><span data-i18n="settings.masterVolume">主音量</span> <span id="volumeValue" class="volume-display">100%</span></label>
                     <input type="range" id="audioVolume" min="0" max="100" value="100" step="1">
                     <p class="hint" data-i18n="settings.volumeHint">主输出音量控制。</p>
                 </div>
@@ -290,6 +291,7 @@
                     <select id="modelPrecision">
                         <option value="fp16" data-i18n="settings.precisionFp16">FP16 (半精度)</option>
                         <option value="fp32" data-i18n="settings.precisionFp32">FP32 (全精度)</option>
+                        <option value="fp8" data-i18n="settings.precisionFp8">FP8 (8 位浮点)</option>
                         <option value="int8" data-i18n="settings.precisionInt8">INT8 (量化)</option>
                         <option value="int8-npu" data-i18n="settings.precisionInt8Npu">INT8-NPU (NPU 优化动态维度)</option>
                     </select>
@@ -300,6 +302,7 @@
                         <ul>
                             <li data-i18n="settings.precisionInfoFp32"></li>
                             <li data-i18n="settings.precisionInfoFp16"></li>
+                            <li data-i18n="settings.precisionInfoFp8"></li>
                             <li data-i18n="settings.precisionInfoInt8"></li>
                             <li data-i18n="settings.precisionInfoInt8Npu"></li>
                             <li data-i18n="settings.precisionInfoRecommend"></li>

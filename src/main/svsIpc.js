@@ -2,10 +2,24 @@ const { ipcMain } = require('electron');
 const { OnnxSVSPipeline, SAMPLE_RATE } = require('../inference/pipeline');
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
+const { checkJpModelsExist } = require('../modelManager');
 const { t } = require('./locale');
 const { createLazyInitializer } = require('./lazyInitializer');
 
-const svsPipelineLazy = createLazyInitializer(async () => {
+let currentLanguage = null; // Track current pipeline language
+
+function _detectJapaneseNotes(notes) {
+  if (!notes || !Array.isArray(notes)) return false;
+  for (const note of notes) {
+    const lyric = note.lyric || '';
+    if (!lyric) continue;
+    if (lyric.startsWith('jp_') || lyric.includes('jp_')) return true;
+    if (/[ぁ-ゟァ-ヿ]/.test(lyric)) return true;
+  }
+  return false;
+}
+
+function _createPipeline(languageOverride) {
   const modelPath = getModelDir();
   const settings = loadSettings();
   const deviceMode = settings.deviceMode || 'smart';
@@ -13,7 +27,9 @@ const svsPipelineLazy = createLazyInitializer(async () => {
   const preferredDeviceType = settings.preferredDeviceType || undefined;
   const modelDeviceMapping = settings.modelDeviceMapping || undefined;
   const modelPrecision = settings.modelPrecision || 'fp16';
-  console.log(`[Main] Initializing SVS Pipeline (ONNX Runtime), model path: ${modelPath}, deviceMode: ${deviceMode}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}, precision: ${modelPrecision}`);
+
+  const langTag = languageOverride ? `, language=${languageOverride}` : '';
+  console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}`);
 
   const pipeline = new OnnxSVSPipeline(modelPath, {
     deviceId,
@@ -21,7 +37,13 @@ const svsPipelineLazy = createLazyInitializer(async () => {
     preferredDeviceType,
     modelDeviceMapping,
     modelPrecision,
+    languageOverride,
   });
+  return pipeline;
+}
+
+const svsPipelineLazy = createLazyInitializer(async () => {
+  const pipeline = _createPipeline(currentLanguage);
   await pipeline.init();
   return pipeline;
 });
@@ -36,6 +58,37 @@ function resetSvsPipeline() {
     try { inst.dispose(); } catch (_) {}
   }
   svsPipelineLazy.reset();
+  currentLanguage = null;
+}
+
+/**
+ * Ensure the pipeline is initialized with the correct language.
+ * Uses incremental model swap when possible (only reloads note_text_encoder + preflow).
+ */
+async function ensurePipelineLanguage(language) {
+  const pipeline = svsPipelineLazy.getInstance();
+
+  if (pipeline && pipeline.initialized && language !== currentLanguage) {
+    // Language changed — swap only the 2 language-specific models
+    console.log(`[Main] Language ${currentLanguage || 'base'} → ${language || 'base'}, swapping models`);
+    try {
+      await pipeline.swapLanguageModels(language);
+      currentLanguage = language;
+      return pipeline;
+    } catch (err) {
+      if (err.message === 'JP_MODELS_MISSING') throw err;
+      console.warn('[Main] Incremental swap failed, falling back to full re-init:', err.message);
+      resetSvsPipeline();
+    }
+  }
+
+  if (!pipeline || !pipeline.initialized) {
+    currentLanguage = language;
+    await svsPipelineLazy.get();
+    return svsPipelineLazy.getInstance();
+  }
+
+  return pipeline;
 }
 
 function registerSvsIpc() {
@@ -45,11 +98,29 @@ function registerSvsIpc() {
   });
 
   ipcMain.handle('svs:synthesize', async (event, { notes, bpm, options }) => {
-    const pipeline = svsPipelineLazy.getInstance();
-    if (!pipeline) {
-      throw new Error(t('error.svsNotInitialized'));
+    // Detect language
+    const isJapanese = _detectJapaneseNotes(notes);
+    const language = isJapanese ? 'ja' : null;
+
+    // Check if JP models are needed but missing
+    if (isJapanese) {
+      const settings = loadSettings();
+      const precision = settings.modelPrecision || 'fp16';
+      const modelDir = getModelDir();
+      if (!checkJpModelsExist(modelDir, precision)) {
+        return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
+      }
     }
-    return await pipeline.synthesize(notes, bpm, options);
+
+    try {
+      const pipeline = await ensurePipelineLanguage(language);
+      if (!pipeline) {
+        throw new Error(t('error.svsNotInitialized'));
+      }
+      return await pipeline.synthesize(notes, bpm, options);
+    } catch (err) {
+      throw err;
+    }
   });
 
   ipcMain.handle('svs:dispose', async () => {
@@ -66,12 +137,32 @@ function registerSvsIpc() {
     return { success: true };
   });
 
-  ipcMain.on('fragment-svs:synthesize', async (event, { requestId, notes, bpm, options }) => {
-    const pipeline = svsPipelineLazy.getInstance();
-    if (!pipeline) {
-      try { event.sender.send(`fragment-svs:result:${requestId}`, { error: t('error.fragmentSvsNotInitialized') }); } catch (_) {}
-      return;
+  ipcMain.handle('fragment-svs:synthesize', async (event, { notes, bpm, options }) => {
+    // Detect language
+    const isJapanese = _detectJapaneseNotes(notes);
+    const language = isJapanese ? 'ja' : null;
+
+    // Check if JP models are needed but missing
+    if (isJapanese) {
+      const settings = loadSettings();
+      const precision = settings.modelPrecision || 'fp16';
+      const modelDir = getModelDir();
+      if (!checkJpModelsExist(modelDir, precision)) {
+        return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
+      }
     }
+
+    let pipeline;
+    try {
+      pipeline = await ensurePipelineLanguage(language);
+    } catch (err) {
+      return { error: err.message };
+    }
+
+    if (!pipeline) {
+      return { error: t('error.fragmentSvsNotInitialized') };
+    }
+
     const win = event.sender;
     const opts = options || {};
     opts.onProgress = (progress) => {
@@ -83,9 +174,9 @@ function registerSvsIpc() {
     };
     try {
       const data = await pipeline.synthesize(notes, bpm, opts);
-      try { win.send(`fragment-svs:result:${requestId}`, { data }); } catch (_) {}
+      return { data };
     } catch (err) {
-      try { win.send(`fragment-svs:result:${requestId}`, { error: err.message }); } catch (_) {}
+      return { error: err.message };
     }
   });
 
@@ -105,6 +196,13 @@ function registerSvsIpc() {
       console.error('[Main] Phoneme resolution failed:', err);
       return lyrics.map(lyric => [{ name: lyric || '<SP>', display: lyric || 'SP' }]);
     }
+  });
+
+  ipcMain.handle('svs:checkJpModels', async () => {
+    const settings = loadSettings();
+    const precision = settings.modelPrecision || 'fp16';
+    const modelDir = getModelDir();
+    return checkJpModelsExist(modelDir, precision);
   });
 }
 
