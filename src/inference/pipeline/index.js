@@ -11,7 +11,20 @@ const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
 const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram } = require('./postprocessing');
 const { AudioSegmentation } = require('./audioSegmentation');
-const { createFloatTensor, outputToFloat32 } = require('./utils');
+const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils');
+
+// Module-level constants
+const JP_MODEL_FILES = new Set(['note_text_encoder.onnx', 'preflow.onnx']);
+const SMALL_MODEL_THRESHOLD = 50 * 1024 * 1024;
+const PRECISION_SUBDIR_MAP = {
+    'int8': 'int8',
+    'fp16': 'fp16',
+    'int8-npu': path.join('int8', 'optimized_npu'),
+};
+const SESSION_KEYS = [
+    'noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder',
+    'f0Encoder', 'preflow', 'condEmb', 'diffStep', 'vocoder', 'melTransform',
+];
 
 class OnnxSVSPipeline {
     constructor(modelDir, options = {}) {
@@ -19,6 +32,9 @@ class OnnxSVSPipeline {
         this.modelDir = this._resolveModelDir(modelDir, options.modelPrecision);
         this.languageOverride = options.languageOverride || null; // 'ja' for Japanese
         this.jpModelDir = this._resolveJpModelDir(modelDir, options.modelPrecision);
+        this._hasJpPitchEncoderCached = this.jpModelDir
+            ? fs.existsSync(path.join(this.jpModelDir, 'note_pitch_encoder.onnx'))
+            : false;
         this.sessions = {};
         this.sessionEPs = {};
         this.isFP16 = false; // 是否为 FP16 精度Model
@@ -88,12 +104,7 @@ class OnnxSVSPipeline {
 
     _resolveModelDir(baseDir, modelPrecision) {
         const resolved = path.resolve(baseDir);
-        const subdirMap = {
-            'int8': 'int8',
-            'fp16': 'fp16',
-            'int8-npu': path.join('int8', 'optimized_npu'),
-        };
-        const subdir = subdirMap[modelPrecision];
+        const subdir = PRECISION_SUBDIR_MAP[modelPrecision];
         if (subdir) {
             const subDir = path.join(resolved, subdir);
             if (fs.existsSync(subDir)) {
@@ -105,24 +116,10 @@ class OnnxSVSPipeline {
         return resolved;
     }
 
-    /**
-     * Resolve JP model directory: <precision_subdir>/JP/
-     * Returns null if the JP directory doesn't exist.
-     */
     _resolveJpModelDir(baseDir, modelPrecision) {
         const resolved = path.resolve(baseDir);
-        const subdirMap = {
-            'int8': 'int8',
-            'fp16': 'fp16',
-            'int8-npu': path.join('int8', 'optimized_npu'),
-        };
-        const subdir = subdirMap[modelPrecision];
-        let jpDir;
-        if (subdir) {
-            jpDir = path.join(resolved, subdir, 'JP');
-        } else {
-            jpDir = path.join(resolved, 'JP');
-        }
+        const subdir = PRECISION_SUBDIR_MAP[modelPrecision];
+        const jpDir = subdir ? path.join(resolved, subdir, 'JP') : path.join(resolved, 'JP');
         if (fs.existsSync(jpDir)) {
             console.log(`[OnnxSVSPipeline] JP model directory found: ${jpDir}`);
             return jpDir;
@@ -136,12 +133,11 @@ class OnnxSVSPipeline {
      * All other models come from the base modelDir.
      */
     _getModelPath(modelFile) {
-        const jpModelFiles = new Set(['note_text_encoder.onnx', 'preflow.onnx']);
-        if (this.languageOverride === 'ja' && this.jpModelDir && jpModelFiles.has(modelFile)) {
+        if (this.languageOverride === 'ja' && this.jpModelDir && JP_MODEL_FILES.has(modelFile)) {
             return path.join(this.jpModelDir, modelFile);
         }
         // Optional: JP pitch encoder (only if fine-tuned version exists)
-        if (this.languageOverride === 'ja' && modelFile === 'note_pitch_encoder.onnx' && this.hasJpPitchEncoder()) {
+        if (this.languageOverride === 'ja' && modelFile === 'note_pitch_encoder.onnx' && this._hasJpPitchEncoderCached) {
             return path.join(this.jpModelDir, modelFile);
         }
         return path.join(this.modelDir, modelFile);
@@ -341,20 +337,9 @@ class OnnxSVSPipeline {
             console.log(`[OnnxSVSPipeline] ${modelFile}: ${(size / 1024 / 1024).toFixed(2)} MB`);
         }
 
-        const sessionKeys = [
-            'noteTextEncoder',
-            'notePitchEncoder',
-            'noteTypeEncoder',
-            'f0Encoder',
-            'preflow',
-            'condEmb',
-            'diffStep',
-            'vocoder',
-            'melTransform',
-        ];
+        const sessionKeys = SESSION_KEYS;
 
         // 检测Model精度：通过 probe session 的 I/O 类型 + 单文件量化算子扫描
-        // 旧实现读取全部 9 个 Model 文件（含 846MB diff_step），现仅读取 preflow probe 已缓存的小文件
         try {
             const probeModelPath = path.join(this.modelDir, resolvedModelFiles[4]); // preflow (~8MB)
             const probeSession = await require('onnxruntime-node').InferenceSession.create(probeModelPath, { executionProviders: ['cpu'] });
@@ -571,53 +556,9 @@ class OnnxSVSPipeline {
             }
         } else {
             // DML/CPU Model加载：小Model并行，大Model串行
-            const loadedSessions = [];
+            let loadedSessions = [];
             try {
-                // 将Model分为小（<50MB）和大（>=50MB）两组，并行加载小组
-                const SMALL_MODEL_THRESHOLD = 50 * 1024 * 1024;
-                const smallIndices = [];
-                const largeIndices = [];
-                for (let i = 0; i < resolvedModelFiles.length; i++) {
-                    const filePath = this._getModelPath(resolvedModelFiles[i]);
-                    let size = 0;
-                    try { size = (await fs.promises.stat(filePath)).size; } catch (_) {}
-                    if (size < SMALL_MODEL_THRESHOLD) smallIndices.push(i);
-                    else largeIndices.push(i);
-                }
-
-                const loadOne = async (i) => {
-                    const modelPath = this._getModelPath(resolvedModelFiles[i]);
-                    try {
-                        const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes);
-                        this.sessions[sessionKeys[i]] = session;
-                        this.sessionEPs[sessionKeys[i]] = ep;
-                    } catch (loadErr) {
-                        const fallbackPath = this._getNpuFallbackPath(resolvedModelFiles[i]);
-                        if (fallbackPath) {
-                            console.warn(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} NPU load failed, trying fallback: ${loadErr.message.substring(0, 80)}`);
-                            const { session, ep } = await createSessionWithValidation(fallbackPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false);
-                            this.sessions[sessionKeys[i]] = session;
-                            this.sessionEPs[sessionKeys[i]] = ep;
-                            console.log(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} loaded from fallback [${ep}]`);
-                        } else {
-                            throw loadErr;
-                        }
-                    }
-                    loadedSessions.push(sessionKeys[i]);
-                };
-
-                // 并行加载所有小Model
-                if (smallIndices.length > 0) {
-                    const t0 = performance.now();
-                    await Promise.all(smallIndices.map(i => loadOne(i)));
-                    console.log(`[OnnxSVSPipeline] ${smallIndices.length}  small model(s) loaded in parallel (${(performance.now() - t0).toFixed(0)}ms)`);
-                }
-
-                // 串行加载大Model（避免 GPU 显存峰值）
-                for (const i of largeIndices) {
-                    await loadOne(i);
-                }
-
+                loadedSessions = await this._loadModelsPartitioned(resolvedModelFiles, sessionKeys);
                 const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
                 const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
                 console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
@@ -653,49 +594,9 @@ class OnnxSVSPipeline {
         }
         console.log(`[OnnxSVSPipeline] Fallback to device: ${this.gpuDeviceName}${this.dmlDeviceId !== undefined ? ` (deviceId=${this.dmlDeviceId})` : ''}`);
 
-        const loadedSessions = [];
+        let loadedSessions = [];
         try {
-            const SMALL_MODEL_THRESHOLD = 50 * 1024 * 1024;
-            const smallIndices = [];
-            const largeIndices = [];
-            for (let i = 0; i < resolvedModelFiles.length; i++) {
-                const filePath = this._getModelPath(resolvedModelFiles[i]);
-                let size = 0;
-                try { size = (await fs.promises.stat(filePath)).size; } catch (_) {}
-                if (size < SMALL_MODEL_THRESHOLD) smallIndices.push(i);
-                else largeIndices.push(i);
-            }
-
-            const loadOne = async (i) => {
-                const modelPath = this._getModelPath(resolvedModelFiles[i]);
-                try {
-                    const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes);
-                    this.sessions[sessionKeys[i]] = session;
-                    this.sessionEPs[sessionKeys[i]] = ep;
-                } catch (loadErr) {
-                    const fallbackPath = this._getNpuFallbackPath(resolvedModelFiles[i]);
-                    if (fallbackPath) {
-                        console.warn(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} NPU load failed, trying fallback: ${loadErr.message.substring(0, 80)}`);
-                        const { session, ep } = await createSessionWithValidation(fallbackPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false);
-                        this.sessions[sessionKeys[i]] = session;
-                        this.sessionEPs[sessionKeys[i]] = ep;
-                        console.log(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} loaded from fallback [${ep}]`);
-                    } else {
-                        throw loadErr;
-                    }
-                }
-                loadedSessions.push(sessionKeys[i]);
-            };
-
-            if (smallIndices.length > 0) {
-                const t0 = performance.now();
-                await Promise.all(smallIndices.map(i => loadOne(i)));
-                console.log(`[OnnxSVSPipeline] Fallback: ${smallIndices.length}  small model(s) loaded in parallel (${(performance.now() - t0).toFixed(0)}ms)`);
-            }
-            for (const i of largeIndices) {
-                await loadOne(i);
-            }
-
+            loadedSessions = await this._loadModelsPartitioned(resolvedModelFiles, sessionKeys);
             const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
             const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
             console.log(`[OnnxSVSPipeline] Fallback init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
@@ -710,6 +611,54 @@ class OnnxSVSPipeline {
             }
             throw err;
         }
+    }
+
+    /**
+     * Shared model loading: partition by size, load small in parallel, large sequentially.
+     * @returns {string[]} loaded session keys
+     */
+    async _loadModelsPartitioned(resolvedModelFiles, sessionKeys) {
+        const loadedSessions = [];
+        const smallIndices = [];
+        const largeIndices = [];
+        for (let i = 0; i < resolvedModelFiles.length; i++) {
+            const filePath = this._getModelPath(resolvedModelFiles[i]);
+            let size = 0;
+            try { size = (await fs.promises.stat(filePath)).size; } catch (_) {}
+            if (size < SMALL_MODEL_THRESHOLD) smallIndices.push(i);
+            else largeIndices.push(i);
+        }
+
+        const loadOne = async (i) => {
+            const modelPath = this._getModelPath(resolvedModelFiles[i]);
+            try {
+                const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes);
+                this.sessions[sessionKeys[i]] = session;
+                this.sessionEPs[sessionKeys[i]] = ep;
+            } catch (loadErr) {
+                const fallbackPath = this._getNpuFallbackPath(resolvedModelFiles[i]);
+                if (fallbackPath) {
+                    console.warn(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} NPU load failed, trying fallback: ${loadErr.message.substring(0, 80)}`);
+                    const { session, ep } = await createSessionWithValidation(fallbackPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false);
+                    this.sessions[sessionKeys[i]] = session;
+                    this.sessionEPs[sessionKeys[i]] = ep;
+                    console.log(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} loaded from fallback [${ep}]`);
+                } else {
+                    throw loadErr;
+                }
+            }
+            loadedSessions.push(sessionKeys[i]);
+        };
+
+        if (smallIndices.length > 0) {
+            const t0 = performance.now();
+            await Promise.all(smallIndices.map(i => loadOne(i)));
+            console.log(`[OnnxSVSPipeline] ${smallIndices.length}  small model(s) loaded in parallel (${(performance.now() - t0).toFixed(0)}ms)`);
+        }
+        for (const i of largeIndices) {
+            await loadOne(i);
+        }
+        return loadedSessions;
     }
 
     async _detectVocoderPrecision(session, modelPath) {
@@ -1268,16 +1217,7 @@ class OnnxSVSPipeline {
             }
         }
 
-        // Normalize to peak 0.95 to prevent clipping
-        let peak = 0;
-        for (let i = 0; i < totalSamples; i++) {
-            const abs = Math.abs(finalAudio[i]);
-            if (abs > peak) peak = abs;
-        }
-        if (peak > 0.95) {
-            const scale = 0.95 / peak;
-            for (let i = 0; i < totalSamples; i++) finalAudio[i] *= scale;
-        }
+        normalizePeakTo(finalAudio, totalSamples);
 
         const audioData = finalAudio;
         const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
@@ -1323,17 +1263,7 @@ class OnnxSVSPipeline {
      * 获取所有Model的状态信息
      */
     getModelsStatus() {
-        const sessionKeys = [
-            'noteTextEncoder',
-            'notePitchEncoder',
-            'noteTypeEncoder',
-            'f0Encoder',
-            'preflow',
-            'condEmb',
-            'diffStep',
-            'vocoder',
-            'melTransform',
-        ];
+        const sessionKeys = SESSION_KEYS;
         return sessionKeys.map(key => ({
             sessionKey: key,
             loaded: !!(this.sessions[key]),
@@ -1443,11 +1373,7 @@ class OnnxSVSPipeline {
      * 确保所有必需Modelloaded（合成前调用）
      */
     async ensureAllModelsLoaded() {
-        const requiredKeys = [
-            'noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder',
-            'f0Encoder', 'preflow', 'condEmb', 'diffStep', 'vocoder', 'melTransform',
-        ];
-        const missing = requiredKeys.filter(key => !this.sessions[key]);
+        const missing = SESSION_KEYS.filter(key => !this.sessions[key]);
         if (missing.length === 0) return;
 
         console.log(`[OnnxSVSPipeline] Need to load ${missing.length} missing model(s): ${missing.join(', ')}`);

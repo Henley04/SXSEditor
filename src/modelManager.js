@@ -910,7 +910,17 @@ async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
 async function getRemoteFileSize(filePath, precision) {
   const url = getFileDownloadUrl(filePath, precision);
   try {
-    const { finalUrl, response } = await resolveRedirects(url, 5, 'HEAD');
+    const { response } = await resolveRedirects(url, 5, 'HEAD');
+    const contentLength = parseInt(response.headers['content-length'] || '0', 10);
+    response.resume();
+    if (contentLength > 0) return contentLength;
+    // HEAD returned 0 content-length — fall through to GET
+  } catch (_) {
+    // HEAD failed — fall through to GET
+  }
+  // Fallback: GET to retrieve content-length
+  try {
+    const { response } = await resolveRedirects(url, 5, 'GET');
     const contentLength = parseInt(response.headers['content-length'] || '0', 10);
     response.resume();
     return contentLength;
