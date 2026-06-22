@@ -39,9 +39,29 @@ function outputToFloat32(tensor) {
     return new Float32Array(tensor.data);
 }
 
+/**
+ * Normalize audio array peak to a threshold (default 0.95).
+ * @param {Float32Array} arr
+ * @param {number} [len] - number of samples to process (defaults to arr.length)
+ * @param {number} [threshold=0.95]
+ */
+function normalizePeakTo(arr, len, threshold = 0.95) {
+    const n = len !== undefined ? len : arr.length;
+    let peak = 0;
+    for (let i = 0; i < n; i++) {
+        const abs = Math.abs(arr[i]);
+        if (abs > peak) peak = abs;
+    }
+    if (peak > threshold) {
+        const scale = threshold / peak;
+        for (let i = 0; i < n; i++) arr[i] *= scale;
+    }
+}
+
 module.exports = {
     float32ToF16Buffer,
     f16BufferToFloat32,
     createFloatTensor,
     outputToFloat32,
+    normalizePeakTo,
 };

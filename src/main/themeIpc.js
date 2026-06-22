@@ -50,6 +50,27 @@ function listAllThemes() {
   ];
 }
 
+/**
+ * Resolve a theme ID to its full object with flattened tokens.
+ * Returns null if the theme is not found.
+ */
+function resolveTheme(themeId) {
+  if (!themeId) return null;
+  const all = listAllThemes();
+  const meta = all.find(t => t.id === themeId);
+  if (!meta) return null;
+  let themeObj = null;
+  if (meta.source === 'builtin') {
+    themeObj = BUILTIN_THEMES.BUILTIN_THEMES.find(b => b.id === themeId) || null;
+  } else {
+    const userDir = app.getPath('userData');
+    const { themes } = themeStorage.loadUserThemes(userDir);
+    themeObj = themes.find(t => t.id === themeId) || null;
+  }
+  if (!themeObj) return null;
+  return { ...themeObj, tokens: flattenTheme(themeObj) };
+}
+
 function broadcastThemeChanged(themeId, scope) {
   for (const wc of getAllWebContents()) {
     try { wc.send('theme:changed', { themeId, scope }); } catch (_) {}
@@ -68,21 +89,7 @@ function registerThemeIpc() {
   });
 
   ipcMain.handle('theme:get', async (event, themeId) => {
-    if (!themeId) return null;
-    const all = listAllThemes();
-    const meta = all.find(t => t.id === themeId);
-    if (!meta) return null;
-    let themeObj = null;
-    if (meta.source === 'builtin') {
-      themeObj = BUILTIN_THEMES.BUILTIN_THEMES.find(b => b.id === themeId) || null;
-    } else {
-      const userDir = app.getPath('userData');
-      const { themes } = themeStorage.loadUserThemes(userDir);
-      themeObj = themes.find(t => t.id === themeId) || null;
-    }
-    if (!themeObj) return null;
-    // Return fully resolved tokens (resolves extends chain)
-    return { ...themeObj, tokens: flattenTheme(themeObj) };
+    return resolveTheme(themeId);
   });
 
   ipcMain.handle('theme:current', async (event, options) => {
@@ -222,29 +229,12 @@ function registerThemeIpc() {
   ipcMain.handle('theme:bootstrap', async (event) => {
     const settings = loadSettings();
     const all = listAllThemes();
-    const themeId = settings.theme;
-    // Include current theme object to avoid a second IPC call
-    let currentTheme = null;
-    const meta = all.find(t => t.id === themeId);
-    if (meta) {
-      let themeObj = null;
-      if (meta.source === 'builtin') {
-        themeObj = BUILTIN_THEMES.BUILTIN_THEMES.find(b => b.id === themeId) || null;
-      } else {
-        const userDir = app.getPath('userData');
-        const { themes } = themeStorage.loadUserThemes(userDir);
-        themeObj = themes.find(t => t.id === themeId) || null;
-      }
-      if (themeObj) {
-        currentTheme = { ...themeObj, tokens: flattenTheme(themeObj) };
-      }
-    }
     return {
-      themeId,
+      themeId: settings.theme,
       globalId: settings.theme,
       themePerWindow: settings.themePerWindow,
       available: all,
-      currentTheme,
+      currentTheme: resolveTheme(settings.theme),
     };
   });
 }

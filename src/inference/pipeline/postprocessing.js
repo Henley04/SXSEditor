@@ -1,6 +1,6 @@
 const { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, NPU_VOCODER_SEQ_LEN, SAMPLE_RATE, N_FFT, NUM_MELS, MEL_MEAN, MEL_VAR } = require('./constants');
 const { TWIDDLE_REAL, TWIDDLE_IMAG, HANN_WINDOW } = require('./constants');
-const { createFloatTensor, outputToFloat32 } = require('./utils');
+const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils');
 
 /**
  * Post-processing: mel transform, vocoder, audio generation
@@ -468,16 +468,7 @@ class Postprocessing {
             const waveform = outputToFloat32(results['waveform']);
             const copyLen = Math.min(waveform.length, totalSamples);
             output.set(waveform.subarray(0, copyLen));
-            // Normalize to peak 0.95 to prevent clipping
-            let peak = 0;
-            for (let i = 0; i < output.length; i++) {
-                const abs = Math.abs(output[i]);
-                if (abs > peak) peak = abs;
-            }
-            if (peak > 0.95) {
-                const scale = 0.95 / peak;
-                for (let i = 0; i < output.length; i++) output[i] *= scale;
-            }
+            normalizePeakTo(output);
             return output;
         }
 
@@ -500,9 +491,7 @@ class Postprocessing {
             const currentChunkFrames = chunkEnd - chunkStart;
 
             const chunkMel = new Float32Array(currentChunkFrames * MEL_DIM);
-            chunkMel.set(melData instanceof Float32Array
-                ? melData.subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM)
-                : new Float32Array(melData).subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM));
+            chunkMel.set(melData.subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM));
 
             const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : currentChunkFrames;
             const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
@@ -538,16 +527,7 @@ class Postprocessing {
             }
         }
 
-        // Normalize to peak 0.95 to prevent clipping
-        let peak = 0;
-        for (let i = 0; i < totalSamples; i++) {
-            const abs = Math.abs(output[i]);
-            if (abs > peak) peak = abs;
-        }
-        if (peak > 0.95) {
-            const scale = 0.95 / peak;
-            for (let i = 0; i < totalSamples; i++) output[i] *= scale;
-        }
+        normalizePeakTo(output, totalSamples);
 
         const elapsed = performance.now() - t0;
         console.log(`[OnnxSVSPipeline] Vocoder chunked: ${totalFrames} frames, ${chunkIdx} chunks, ${elapsed.toFixed(0)}ms`);
