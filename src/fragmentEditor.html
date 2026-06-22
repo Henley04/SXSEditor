@@ -2,21 +2,25 @@
 <html lang="zh-CN">
   <head>
     <meta charset="UTF-8" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://modelscope.cn; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:;" />
     <title data-i18n="fragmentEditor.title">分片编辑器</title>
     <script src="./themes/themeBootstrap.js"></script>
   </head>
   <body>
     <div id="app">
+      <!-- Loading overlay -->
       <div id="model-loading-overlay" role="alert" aria-live="polite">
         <div class="loading-content">
           <div class="loading-spinner"></div>
           <div class="loading-text" data-i18n="fragment.loadingModel">正在加载推理模型，请稍候...</div>
         </div>
       </div>
+
+      <!-- Toolbar -->
       <div id="toolbar">
         <div class="toolbar-group">
-          <button id="btn-save" title="Ctrl+S" data-i18n="fragment.save">💾 保存</button>
-          <button id="btn-close" title="关闭窗口" data-i18n="fragment.close">✖ 关闭</button>
+          <button id="btn-play-fragment" title="Space" data-i18n="fragment.play">▶ 播放</button>
+          <button id="btn-export-fragment" data-i18n="fragment.export">⬇ 导出</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
@@ -24,8 +28,6 @@
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <button id="btn-play-fragment" title="Space" data-i18n="fragment.play">▶ 播放</button>
-          <button id="btn-export-fragment" data-i18n="fragment.export">💿 导出</button>
           <button id="btn-import-midi" data-i18n="fragment.importMidi">🎵 导入MIDI</button>
           <input type="checkbox" id="autoShiftCheck" checked><label for="autoShiftCheck">Auto Shift</label>
         </div>
@@ -33,9 +35,6 @@
         <div class="toolbar-group param-group">
           <button id="btn-param-MIDI" class="btn-param active" title="1">MIDI</button>
           <button id="btn-param-Pitch" class="btn-param" title="2">Pitch</button>
-          <button id="btn-param-VOL" class="btn-param" title="3">VOL</button>
-          <button id="btn-param-PAN" class="btn-param" title="4">L/R</button>
-          <button id="btn-param-Phoneme" class="btn-param" title="5">Phoneme</button>
         </div>
         <div class="toolbar-divider" id="pitch-tools-divider" style="display:none"></div>
         <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
@@ -48,8 +47,12 @@
         <div class="toolbar-spacer"></div>
         <div class="toolbar-group">
           <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)" aria-label="快捷键帮助">⌨</button>
+          <button id="btn-save" title="Ctrl+S" data-i18n="fragment.save">💾 保存</button>
+          <button id="btn-close" title="关闭窗口" data-i18n="fragment.close">✖ 关闭</button>
         </div>
       </div>
+
+      <!-- Main area: piano keys | editor | resize handle | inspector -->
       <div id="main-content">
         <div id="left-sidebar">
           <div id="piano-keys-container">
@@ -61,7 +64,86 @@
             <canvas id="piano-roll" role="img" aria-label="钢琴卷帘编辑器"></canvas>
           </div>
         </div>
+        <div id="inspector-resize" class="inspector-resize"></div>
+        <div id="inspector" class="inspector-panel">
+          <!-- Singer info -->
+          <div class="insp-section">
+            <div class="insp-head"><span data-i18n="fragment.inspSinger">歌手</span> <span class="tag" id="singer-tag">--</span></div>
+            <div class="insp-body">
+              <div class="singer-card">
+                <div class="singer-avatar">🎤</div>
+                <div class="singer-meta">
+                  <div class="singer-name" id="singer-name">--</div>
+                  <div class="singer-desc" id="singer-desc">--</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Note properties -->
+          <div class="insp-section" id="note-props-section">
+            <div class="insp-head"><span data-i18n="fragment.inspNote">音符属性</span> <span class="tag" id="note-select-tag">未选中</span></div>
+            <div class="insp-body">
+              <div class="field-row"><div class="lbl">音高</div><div class="ctrl"><input type="text" id="note-pitch" value="--" style="flex:0 0 50px;text-align:center" readonly><div class="chip" id="note-freq"><span class="d"></span>-- Hz</div></div></div>
+              <div class="field-row"><div class="lbl">起始</div><div class="ctrl"><input type="text" id="note-start" value="--" readonly></div></div>
+              <div class="field-row"><div class="lbl">时长</div><div class="ctrl"><input type="text" id="note-duration" value="--" readonly></div></div>
+              <div class="field-row"><div class="lbl">歌词</div><div class="ctrl"><input type="text" id="note-lyric" value="--"></div></div>
+            </div>
+          </div>
+          <!-- Phoneme info -->
+          <div class="insp-section" id="phoneme-section">
+            <div class="insp-head"><span data-i18n="fragment.inspPhoneme">音素</span> <span class="tag" id="phoneme-tag">自动</span></div>
+            <div class="insp-body">
+              <div class="phoneme-preview" id="phoneme-preview">--</div>
+              <div class="phoneme-grid" id="phoneme-grid"></div>
+            </div>
+          </div>
+          <!-- Expression / Timbre -->
+          <div class="insp-section" id="timbre-section">
+            <div class="insp-head">Expression <span class="tag">AUTO</span></div>
+            <div class="insp-body">
+              <div class="field-row"><div class="lbl">Breath</div><div class="ctrl"><div class="insp-slider"><div class="track"></div><div class="fill" style="width:35%"></div><div class="thumb" style="left:35%"></div><div class="val">35</div></div></div></div>
+              <div class="field-row"><div class="lbl">Tension</div><div class="ctrl"><div class="insp-slider"><div class="track"></div><div class="fill" style="width:58%"></div><div class="thumb" style="left:58%"></div><div class="val">58</div></div></div></div>
+              <div class="field-row"><div class="lbl">Gender</div><div class="ctrl"><div class="insp-slider"><div class="track"></div><div class="fill" style="width:46%"></div><div class="thumb" style="left:46%"></div><div class="val">+4</div></div></div></div>
+              <div class="field-row"><div class="lbl">Vibrato</div><div class="ctrl"><div class="insp-slider"><div class="track"></div><div class="fill" style="width:70%"></div><div class="thumb" style="left:70%"></div><div class="val">70</div></div></div></div>
+              <div class="field-row"><div class="lbl">Tone</div><div class="ctrl"><div class="insp-slider"><div class="track"></div><div class="fill" style="width:52%"></div><div class="thumb" style="left:52%"></div><div class="val">52</div></div></div></div>
+            </div>
+          </div>
+        </div>
       </div>
+
+      <!-- Bottom panel: parameter lanes -->
+      <div id="param-panel">
+        <div id="param-panel-header" class="param-panel-header">
+          <button id="btn-param-toggle" class="btn-param-toggle" title="收起/展开参数面板" aria-label="收起/展开参数面板">&#x25B4;</button>
+          <!-- Hidden select kept for JS compatibility (uiControls.js reads/writes it) -->
+          <select id="param-mode-select" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0">
+            <option value="VOL">VOL</option>
+            <option value="PAN">PAN</option>
+            <option value="Phoneme">Phoneme</option>
+            <option value="Timbre" disabled>音色 (开发中)</option>
+          </select>
+          <div class="param-lane-tabs" id="param-lane-tabs">
+            <button class="param-lane-tab active" data-lane="VOL">VOL</button>
+            <button class="param-lane-tab" data-lane="PAN">PAN</button>
+            <button class="param-lane-tab" data-lane="Phoneme">Phoneme</button>
+            <button class="param-lane-tab disabled" data-lane="Timbre">音色</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status bar -->
+      <div id="statusbar" class="statusbar">
+        <div class="s-item"><span class="led"></span><span data-i18n="fragment.statusReady">Ready</span></div>
+        <div class="s-div"></div>
+        <div class="s-item"><span class="led led-accent"></span>SVS Pipeline</div>
+        <div class="s-div"></div>
+        <div class="s-item"><span data-i18n="fragment.statusSampleRate">采样率</span> <b>24kHz</b></div>
+        <div class="s-right">
+          <div class="s-item">Hop <b>480</b></div>
+        </div>
+      </div>
+
+      <!-- Shortcuts overlay -->
       <div id="shortcuts-overlay" class="shortcuts-overlay" role="dialog" aria-modal="true">
         <div class="shortcuts-panel">
           <div class="shortcuts-header">
@@ -75,7 +157,8 @@
               <div class="shortcut-row"><kbd>Ctrl+Y</kbd><span data-i18n="fragment.shortcutRedo">重做</span></div>
               <div class="shortcut-row"><kbd>Ctrl+S</kbd><span data-i18n="fragment.shortcutSave">保存</span></div>
               <div class="shortcut-row"><kbd>Space</kbd><span data-i18n="fragment.shortcutPlayStop">播放/停止</span></div>
-              <div class="shortcut-row"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd><kbd>4</kbd><span data-i18n="fragment.shortcutSwitchMode">切换 MIDI/Pitch/VOL/PAN</span></div>
+              <div class="shortcut-row"><kbd>1</kbd><kbd>2</kbd><span>切换 MIDI/Pitch</span></div>
+              <div class="shortcut-row"><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><span>切换 VOL/PAN/音素 (展开参数面板)</span></div>
               <div class="shortcut-row"><kbd>F1</kbd><span data-i18n="fragment.shortcutHelp">快捷键帮助</span></div>
             </div>
             <div class="shortcut-section">

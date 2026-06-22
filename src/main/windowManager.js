@@ -224,10 +224,10 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
   const currentPrecision = precision || DEFAULT_PRECISION;
 
   modelDownloadWindow = new BrowserWindow({
-    width: 520,
-    height: 700,
-    minWidth: 420,
-    minHeight: 500,
+    width: 600,
+    height: 720,
+    minWidth: 480,
+    minHeight: 560,
     title: '模型文件下载',
     icon: path.join(__dirname, '..', 'SXS.png'),
     resizable: true,
@@ -265,7 +265,7 @@ function setModelDownloadWindow(win) {
 
 function openFragmentEditor(fragment, project, wavBuffer) {
   const sendData = { fragment, project, wavBuffer };
-  if (fragmentWindows[fragment.id]) {
+  if (fragmentWindows[fragment.id] && !fragmentWindows[fragment.id].isDestroyed()) {
     fragmentWindows[fragment.id].focus();
     fragmentWindows[fragment.id].webContents.send('loadFragment', sendData);
     return;
@@ -397,7 +397,7 @@ function registerWindowIpc() {
 
   ipcMain.handle('saveFragmentDataSync', async (event, fragmentId, data) => {
     try {
-      if (fragmentWindows[fragmentId]) {
+      if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
         fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
       }
       if (mainWindow && !mainWindow.isDestroyed()) {
@@ -411,7 +411,7 @@ function registerWindowIpc() {
   });
 
   ipcMain.handle('saveFragmentData', async (event, fragmentId, data) => {
-    if (fragmentWindows[fragmentId]) {
+    if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
       fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
     }
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -421,7 +421,7 @@ function registerWindowIpc() {
   });
 
   ipcMain.handle('updateFragmentBounds', async (event, fragmentId, data) => {
-    if (fragmentWindows[fragmentId]) {
+    if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
       fragmentWindows[fragmentId].webContents.send('fragmentBoundsChanged', { fragmentId, ...data });
     }
     return { success: true };
@@ -451,16 +451,19 @@ function registerWindowIpc() {
     return { success: true };
   });
 
-  ipcMain.on('set-dirty', (event, dirty) => {
+
+  ipcMain.handle('set-dirty', async (event, dirty) => {
     isDirty = dirty;
+    return { success: true };
   });
 
-  ipcMain.on('close-confirmed', () => {
+  ipcMain.handle('close-confirmed', async () => {
     if (closePending && mainWindow && !mainWindow.isDestroyed()) {
       closePending = false;
       isDirty = false;
       mainWindow.close();
     }
+    return { success: true };
   });
 
   ipcMain.handle('reload-main-window', async () => {

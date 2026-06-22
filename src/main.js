@@ -2,6 +2,11 @@ const { app, BrowserWindow, ipcMain, dialog, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
+// Fix Windows console encoding for Chinese log output
+if (process.platform === 'win32') {
+  try { require('child_process').execSync('chcp 65001', { stdio: ['ignore', 'ignore', 'pipe'] }); } catch (_) {}
+}
+
 // Suppress EPIPE errors when stdout/stderr pipe breaks (e.g. terminal closed)
 // console.log throws synchronously via Socket.write — must wrap the write method
 for (const stream of [process.stdout, process.stderr]) {
@@ -90,6 +95,19 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.whenReady().then(() => {
+  // Content Security Policy: restrict resource loading to self-origin
+  const { session } = require('electron');
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://modelscope.cn; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:;"
+        ],
+      },
+    });
+  });
+
   // 注册 onnx:// protocol handler，允许渲染进程安全访问Model files
   protocol.handle('onnx', (request) => {
     const url = new URL(request.url);
