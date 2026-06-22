@@ -1,4 +1,3 @@
-import { PARAM_MODES } from '../editor/pianoRoll.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 import {
   PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, PARAM_CURVE_HEIGHT,
@@ -34,6 +33,8 @@ import {
   getBrushSmoothing,
   getPhonemeCache,
   getSampleRate,
+  getParamPanelCollapsed,
+  getParamPanelMode,
 } from './state.js';
 
 const canvas = document.getElementById('piano-roll');
@@ -42,6 +43,12 @@ const pianoKeysCanvas = document.getElementById('piano-keys');
 const pianoKeysCtx = pianoKeysCanvas.getContext('2d');
 
 export { canvas, ctx, pianoKeysCanvas, pianoKeysCtx };
+
+function isParamAreaVisible() {
+  if (getParamPanelCollapsed()) return false;
+  const mode = getParamPanelMode();
+  return mode === 'VOL' || mode === 'PAN' || mode === 'Phoneme';
+}
 
 export function dpr() {
   return window.devicePixelRatio || 1;
@@ -57,7 +64,7 @@ export function xToTime(x) {
 
 export function pitchToY(pitch) {
   const pianoAreaTop = HEADER_HEIGHT;
-  const showParamArea = getCurrentParamMode() === PARAM_MODES.VOL || getCurrentParamMode() === PARAM_MODES.PAN || getCurrentParamMode() === 'Phoneme';
+  const showParamArea = isParamAreaVisible();
   const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   const maxPitch = 127;
   return pianoAreaTop + (maxPitch - pitch) * NOTE_HEIGHT - getScrollY();
@@ -65,7 +72,7 @@ export function pitchToY(pitch) {
 
 export function yToPitch(y) {
   const pianoAreaTop = HEADER_HEIGHT;
-  const showParamArea = getCurrentParamMode() === PARAM_MODES.VOL || getCurrentParamMode() === PARAM_MODES.PAN || getCurrentParamMode() === 'Phoneme';
+  const showParamArea = isParamAreaVisible();
   const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   if (y >= pianoAreaBottom) return 0;
   if (y <= pianoAreaTop) return 127;
@@ -75,7 +82,7 @@ export function yToPitch(y) {
 
 export function yToPitchContinuous(y) {
   const pianoAreaTop = HEADER_HEIGHT;
-  const showParamArea = getCurrentParamMode() === PARAM_MODES.VOL || getCurrentParamMode() === PARAM_MODES.PAN || getCurrentParamMode() === 'Phoneme';
+  const showParamArea = isParamAreaVisible();
   const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   if (y >= pianoAreaBottom) return 0;
   if (y <= pianoAreaTop) return 127;
@@ -112,10 +119,11 @@ export function _getParamCurveAreaBottom() {
 }
 
 export function _getParamCurveYRange() {
-  if (getCurrentParamMode() === 'Phoneme') return { min: 0, max: 1 };
-  switch (getCurrentParamMode()) {
-    case PARAM_MODES.VOL: return { min: 0, max: 1 };
-    case PARAM_MODES.PAN: return { min: -1, max: 1 };
+  const mode = getParamPanelMode();
+  if (mode === 'Phoneme') return { min: 0, max: 1 };
+  switch (mode) {
+    case 'VOL': return { min: 0, max: 1 };
+    case 'PAN': return { min: -1, max: 1 };
     default: return { min: 0, max: 1 };
   }
 }
@@ -131,19 +139,22 @@ export function _valueToParamY(value) {
 
 export function _interpolateEnvelope(envelope, time) {
   const kfs = envelope.keyframes;
-  if (kfs.length === 0) return 0.5;
-  if (kfs.length === 1) return kfs[0].value;
+  const len = kfs.length;
+  if (len === 0) return 0.5;
+  if (len === 1) return kfs[0].value;
   if (time <= kfs[0].time) return kfs[0].value;
-  if (time >= kfs[kfs.length - 1].time) return kfs[kfs.length - 1].value;
-  for (let i = 0; i < kfs.length - 1; i++) {
-    if (time >= kfs[i].time && time <= kfs[i + 1].time) {
-      const t = (time - kfs[i].time) / (kfs[i + 1].time - kfs[i].time);
-      const smoothness = kfs[i].smoothness / 100;
-      const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
-      return kfs[i].value + (kfs[i + 1].value - kfs[i].value) * smoothT;
-    }
+  if (time >= kfs[len - 1].time) return kfs[len - 1].value;
+  // Binary search for the segment
+  let lo = 0, hi = len - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >>> 1;
+    if (kfs[mid].time <= time) lo = mid;
+    else hi = mid;
   }
-  return 0.5;
+  const t = (time - kfs[lo].time) / (kfs[lo + 1].time - kfs[lo].time);
+  const smoothness = kfs[lo].smoothness / 100;
+  const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
+  return kfs[lo].value + (kfs[lo + 1].value - kfs[lo].value) * smoothT;
 }
 
 export function getClippedNotes() {
@@ -507,6 +518,8 @@ export function resolvePhonemes(lyric) {
   return [{ name: trimmed, display: trimmed }];
 }
 
+const PHONEME_CACHE_MAX = 2000;
+
 export function trimPhonemeCache() {
   const phonemeCache = getPhonemeCache();
   if (phonemeCache.size > PHONEME_CACHE_MAX) {
@@ -555,7 +568,7 @@ export function getPhonemeAdjustments(note) {
       return cached;
     }
   }
-  return phonemes.map((ph, i) => ({
+  const adjustments = phonemes.map((ph, i) => ({
     id: i,
     name: ph.name,
     display: ph.display,
@@ -569,6 +582,8 @@ export function getPhonemeAdjustments(note) {
     ],
     locked: i === 0,
   }));
+  note.phonemeAdjustments = adjustments;
+  return adjustments;
 }
 
 export function getVolumeAtTime(volumePoints, t) {
@@ -631,6 +646,24 @@ export function resizeCanvases() {
   ctx.setTransform(dpr(), 0, 0, dpr(), 0, 0);
 
   render();
+}
+
+export function computeInitialScrollY() {
+  const notes = getNotes();
+  const showParamArea = isParamAreaVisible();
+  const pianoAreaHeight = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0) - HEADER_HEIGHT;
+  const centerY = HEADER_HEIGHT + pianoAreaHeight / 2;
+
+  let targetPitch;
+  if (notes.length > 0) {
+    const minPitch = Math.min(...notes.map(n => n.pitch));
+    const maxPitch = Math.max(...notes.map(n => n.pitch));
+    targetPitch = (minPitch + maxPitch) / 2;
+  } else {
+    targetPitch = 127 / 2;
+  }
+
+  return HEADER_HEIGHT + (127 - targetPitch) * NOTE_HEIGHT - centerY;
 }
 
 function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
@@ -964,7 +997,12 @@ function renderPitchCurve(c) {
   }
 }
 
+let _renderRaf = 0;
 export function render() {
+  if (_renderRaf) return;
+  _renderRaf = requestAnimationFrame(() => { _renderRaf = 0; _doRender(); });
+}
+function _doRender() {
   const w = canvas.parentElement.clientWidth;
   const h = canvas.parentElement.clientHeight;
   const c = getCanvasColors();
@@ -979,7 +1017,7 @@ export function render() {
   const endBeat = xToTime(w);
 
   const currentParamMode = getCurrentParamMode();
-  const showParamArea = currentParamMode === PARAM_MODES.VOL || currentParamMode === PARAM_MODES.PAN || currentParamMode === 'Phoneme';
+  const showParamArea = isParamAreaVisible();
   const pianoAreaBottom = showParamArea ? _getParamCurveAreaTop() : h;
 
   ctx.lineWidth = 0.5;
@@ -1101,7 +1139,8 @@ export function render() {
     ctx.lineTo(w, areaTop);
     ctx.stroke();
 
-    if (currentParamMode === 'Phoneme') {
+    const panelMode = getParamPanelMode();
+    if (panelMode === 'Phoneme') {
       renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c);
     } else {
       const { min, max } = _getParamCurveYRange();
@@ -1111,10 +1150,10 @@ export function render() {
       ctx.fillText(max.toFixed(0), 4, areaTop + 12);
       ctx.fillText(min.toFixed(0), 4, areaBottom - 4);
       ctx.textAlign = 'right';
-      ctx.fillText(currentParamMode, w - 4, areaTop + 12);
+      ctx.fillText(panelMode, w - 4, areaTop + 12);
 
       const envelopes = getEnvelopes();
-      const envKey = currentParamMode === PARAM_MODES.VOL ? 'volume' : 'pan';
+      const envKey = panelMode === 'VOL' ? 'volume' : 'pan';
       const envelope = envelopes[envKey];
       if (envelope && envelope.keyframes && envelope.keyframes.length > 0) {
         const startBeat = xToTime(0);
@@ -1123,7 +1162,7 @@ export function render() {
         const steps = Math.max(300, Math.floor((maxTime - startBeat) / 0.02));
 
         const lineColors = { VOL: c.paramVol, PAN: c.paramPan };
-        ctx.strokeStyle = lineColors[currentParamMode] || c.paramVol;
+        ctx.strokeStyle = lineColors[panelMode] || c.paramVol;
         ctx.lineWidth = 2;
         ctx.beginPath();
 
@@ -1140,7 +1179,7 @@ export function render() {
         for (const kf of envelope.keyframes) {
           const px = timeToX(kf.time);
           const py = _valueToParamY(kf.value);
-          ctx.fillStyle = lineColors[currentParamMode] || c.paramVol;
+          ctx.fillStyle = lineColors[panelMode] || c.paramVol;
           ctx.beginPath();
           ctx.arc(px, py, 4, 0, Math.PI * 2);
           ctx.fill();
