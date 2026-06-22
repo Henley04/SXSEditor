@@ -13,6 +13,12 @@ const MODEL_IDS = {
   int8: 'syxppp/SoulX-Singer-onnx-directml-int8',
   'int8-npu': 'syxppp/SoulX-Singer-onnx-directml-int8-dynamic',
 };
+
+// JP (Japanese) language-specific model repos
+// These contain only the modified models (note_text_encoder, preflow)
+const JP_MODEL_IDS = {
+  fp16: 'syxppp/SoulX-Singer-onnx-fp16-lora-jp',
+};
 const DEFAULT_PRECISION = 'fp16';
 const MODELSCOPE_ENDPOINT = 'https://modelscope.cn';
 const REVISION = 'master';
@@ -51,8 +57,19 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'basic_pitch_model/group1-shard1of1.bin', required: true },
 ];
 
+// JP language models: modified files (note_text_encoder + preflow + optional pitch_encoder)
+const JP_MODEL_FILE_MANIFEST = [
+  { filePath: 'note_text_encoder.onnx', required: true },
+  { filePath: 'preflow.onnx', required: true },
+  { filePath: 'note_pitch_encoder.onnx', required: false },
+];
+
 function getModelId(precision) {
   return MODEL_IDS[precision] || MODEL_IDS[DEFAULT_PRECISION];
+}
+
+function getJpModelId(precision) {
+  return JP_MODEL_IDS[precision] || JP_MODEL_IDS[DEFAULT_PRECISION] || null;
 }
 
 const PRECISION_SUBDIR_PRECESIONS = new Set(['int8', 'fp16', 'int8-npu']);
@@ -85,11 +102,51 @@ function getLocalFilePath(baseDir, filePath, precision) {
   return path.join(baseDir, filePath);
 }
 
+/**
+ * Get the local file path for a JP language model.
+ * JP models are stored in a JP subdirectory under the precision directory.
+ * e.g., onnx_models/fp16/JP/note_text_encoder.onnx
+ */
+function getJpLocalFilePath(baseDir, filePath, precision) {
+  if (precision && PRECISION_SUBDIR_PRECESIONS.has(precision) && isSvsModelFile(filePath)) {
+    const subdir = PRECISION_SUBDIR_MAP[precision] || precision;
+    return path.join(baseDir, subdir, 'JP', filePath);
+  }
+  return path.join(baseDir, 'JP', filePath);
+}
+
+/**
+ * Check if JP models are available for the given precision.
+ */
+function checkJpModelsExist(baseDir, precision) {
+  const manifest = JP_MODEL_FILE_MANIFEST;
+  for (const file of manifest) {
+    const fullPath = getJpLocalFilePath(baseDir, file.filePath, precision);
+    try {
+      const stats = fs.statSync(fullPath);
+      if (stats.size <= 0) return false;
+    } catch (_) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function getFileDownloadUrl(filePath, precision) {
   // Preprocess and basic_pitch models use int8 repo (dynamic shapes),
   // not int8-npu repo (static shapes with fixed input dimensions)
   const effectivePrecision = (!isSvsModelFile(filePath) && precision === 'int8-npu') ? 'int8' : precision;
   const modelId = getModelId(effectivePrecision);
+  const encoded = encodeURIComponent(filePath);
+  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
+}
+
+/**
+ * Get the download URL for a JP language model file.
+ */
+function getJpFileDownloadUrl(filePath, precision) {
+  const modelId = getJpModelId(precision);
+  if (!modelId) return null;
   const encoded = encodeURIComponent(filePath);
   return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
 }
@@ -102,6 +159,42 @@ function checkMissingFiles(modelDir, precision) {
   for (const file of manifest) {
     if (!file.required) continue;
     const fullPath = getLocalFilePath(modelDir, file.filePath, precision);
+    let exists = false;
+    let localSize = 0;
+    try {
+      const stats = fs.statSync(fullPath);
+      if (stats.size > 0) {
+        exists = true;
+        localSize = stats.size;
+      }
+    } catch (_) {}
+
+    if (exists) {
+      existing.push({ ...file, localSize });
+    } else {
+      let downloadedBytes = 0;
+      try {
+        const tempStats = fs.statSync(fullPath + TEMP_SUFFIX);
+        downloadedBytes = tempStats.size;
+      } catch (_) {}
+      missing.push({ ...file, downloadedBytes });
+    }
+  }
+
+  return { missing, existing };
+}
+
+/**
+ * Check for missing JP language model files.
+ */
+function checkMissingJpFiles(modelDir, precision) {
+  const missing = [];
+  const existing = [];
+  const manifest = JP_MODEL_FILE_MANIFEST;
+
+  for (const file of manifest) {
+    if (!file.required) continue;
+    const fullPath = getJpLocalFilePath(modelDir, file.filePath, precision);
     let exists = false;
     let localSize = 0;
     try {
@@ -324,16 +417,18 @@ function isAllowedDownloadHost(urlStr) {
   }
 }
 
-async function resolveRedirects(url, maxRedirects = 5) {
+async function resolveRedirects(url, maxRedirects = 5, method = 'GET') {
   let currentUrl = url;
   for (let i = 0; i < maxRedirects; i++) {
-    const { redirectUrl, response } = await httpRequest(currentUrl, { method: 'GET', timeout: 10000 });
+    const { redirectUrl, response } = await httpRequest(currentUrl, { method, timeout: 10000 });
     if (!redirectUrl) {
       return { finalUrl: currentUrl, response };
     }
     if (!isAllowedDownloadHost(redirectUrl)) {
       throw new Error(`重定向目标不允许: ${redirectUrl}`);
     }
+    // Drain response body before following redirect
+    response.resume();
     currentUrl = redirectUrl;
   }
   throw new Error('Too many redirects');
@@ -815,7 +910,7 @@ async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
 async function getRemoteFileSize(filePath, precision) {
   const url = getFileDownloadUrl(filePath, precision);
   try {
-    const { finalUrl, response } = await resolveRedirects(url);
+    const { finalUrl, response } = await resolveRedirects(url, 5, 'HEAD');
     const contentLength = parseInt(response.headers['content-length'] || '0', 10);
     response.resume();
     return contentLength;
@@ -854,13 +949,15 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   console.log(`[ModelManager] Using HTTP download with concurrent chunked support (concurrency: ${globalConcurrency})`);
   const pool = new ConcurrencyPool(globalConcurrency);
 
-  // 获取所有文件的远程大小
+  // 获取所有文件的远程大小（并行 HEAD 请求）
   const fileSizes = {};
   let overallTotal = 0;
-  for (const file of missingFiles) {
-    const remoteSize = await getRemoteFileSize(file.filePath, precision);
-    fileSizes[file.filePath] = remoteSize;
-    overallTotal += remoteSize;
+  const sizeResults = await Promise.all(
+    missingFiles.map(file => getRemoteFileSize(file.filePath, precision))
+  );
+  for (let i = 0; i < missingFiles.length; i++) {
+    fileSizes[missingFiles[i].filePath] = sizeResults[i];
+    overallTotal += sizeResults[i];
   }
 
   // 跟踪每个文件的下载进度
@@ -977,12 +1074,16 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
 module.exports = {
   MODEL_FILE_MANIFEST,
   MODEL_IDS,
+  JP_MODEL_IDS,
+  JP_MODEL_FILE_MANIFEST,
   DEFAULT_PRECISION,
   MODELSCOPE_ENDPOINT,
   PRECISION_SUBDIR_MAP,
   PRECISION_SUBDIR_PRECESIONS,
   checkMissingFiles,
   checkMissingFilesAsync,
+  checkMissingJpFiles,
+  checkJpModelsExist,
   deleteModelFiles,
   downloadMissingFiles,
   downloadFileWithResume,
@@ -990,10 +1091,13 @@ module.exports = {
   downloadFileChunked,
   checkModelScopeCLIAvailable,
   getFileDownloadUrl,
+  getJpFileDownloadUrl,
   getModelId,
+  getJpModelId,
   getRemoteFileSize,
   getOptimalConcurrency,
   getLocalFilePath,
+  getJpLocalFilePath,
   getManifestForPrecision,
   isSvsModelFile,
 };

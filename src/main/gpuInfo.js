@@ -71,7 +71,7 @@ function classifyDeviceFromName(name, vramBytes = 0, dmlDiscreteFlag = undefined
 function startGPUPreload() {
   _gpuInfoPending = new Promise((resolve) => {
     try {
-      const worker = new Worker(path.join(__dirname, '..', 'utils', 'gpuWorker.js'));
+      const worker = new Worker(path.join(__dirname, 'utils', 'gpuWorker.js'));
       let settled = false;
 
       worker.on('message', (msg) => {
@@ -83,7 +83,7 @@ function startGPUPreload() {
         } else if (msg.phase === 'full' && msg.success) {
           _gpuInfoCache = msg.data;
           _gpuPhase = 'full';
-          console.log(`[Main] GPU fast detection complete (systeminformation): ${msg.data.length}  device(s)`);
+          console.log(`[Main] GPU full detection complete (systeminformation): ${msg.data.length}  device(s)`);
           if (!settled) { settled = true; resolve(); }
         } else if (msg.phase === 'error') {
           console.warn('[Main] GPU detection failed:', msg.error);
