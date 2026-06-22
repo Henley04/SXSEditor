@@ -32,6 +32,10 @@ class OnnxSVSPipeline {
         this.modelDir = this._resolveModelDir(modelDir, options.modelPrecision);
         this.languageOverride = options.languageOverride || null; // 'ja' for Japanese
         this.jpModelDir = this._resolveJpModelDir(modelDir, options.modelPrecision);
+        this._hasJpModelsCached = this.jpModelDir
+            ? fs.existsSync(path.join(this.jpModelDir, 'note_text_encoder.onnx')) &&
+              fs.existsSync(path.join(this.jpModelDir, 'preflow.onnx'))
+            : false;
         this._hasJpPitchEncoderCached = this.jpModelDir
             ? fs.existsSync(path.join(this.jpModelDir, 'note_pitch_encoder.onnx'))
             : false;
@@ -75,31 +79,12 @@ class OnnxSVSPipeline {
         return false;
     }
 
-    /**
-     * Check if JP models are available for the current precision.
-     */
     hasJpModels() {
-        if (!this.jpModelDir) return false;
-        try {
-            const fs = require('node:fs');
-            const textEncoderPath = path.join(this.jpModelDir, 'note_text_encoder.onnx');
-            const preflowPath = path.join(this.jpModelDir, 'preflow.onnx');
-            return fs.existsSync(textEncoderPath) && fs.existsSync(preflowPath);
-        } catch (_) {
-            return false;
-        }
+        return this._hasJpModelsCached;
     }
 
-    /**
-     * Check if JP pitch encoder is available (optional, for pitch-adaptive fine-tuning).
-     */
     hasJpPitchEncoder() {
-        if (!this.jpModelDir) return false;
-        try {
-            return fs.existsSync(path.join(this.jpModelDir, 'note_pitch_encoder.onnx'));
-        } catch (_) {
-            return false;
-        }
+        return this._hasJpPitchEncoderCached;
     }
 
     _resolveModelDir(baseDir, modelPrecision) {
@@ -558,7 +543,8 @@ class OnnxSVSPipeline {
             // DML/CPU Model加载：小Model并行，大Model串行
             let loadedSessions = [];
             try {
-                loadedSessions = await this._loadModelsPartitioned(resolvedModelFiles, sessionKeys);
+                const modelSizes = new Map(modelStats.map((s, i) => [i, s.size]));
+                loadedSessions = await this._loadModelsPartitioned(resolvedModelFiles, sessionKeys, modelSizes);
                 const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
                 const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
                 console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
@@ -615,16 +601,20 @@ class OnnxSVSPipeline {
 
     /**
      * Shared model loading: partition by size, load small in parallel, large sequentially.
+     * @param {Array} resolvedModelFiles
+     * @param {Array} sessionKeys
+     * @param {Map<number,number>} [modelSizes] - optional pre-computed sizes from prior stat, keyed by index
      * @returns {string[]} loaded session keys
      */
-    async _loadModelsPartitioned(resolvedModelFiles, sessionKeys) {
+    async _loadModelsPartitioned(resolvedModelFiles, sessionKeys, modelSizes) {
         const loadedSessions = [];
         const smallIndices = [];
         const largeIndices = [];
         for (let i = 0; i < resolvedModelFiles.length; i++) {
-            const filePath = this._getModelPath(resolvedModelFiles[i]);
-            let size = 0;
-            try { size = (await fs.promises.stat(filePath)).size; } catch (_) {}
+            let size = modelSizes ? (modelSizes.get(i) || 0) : 0;
+            if (!size) {
+                try { size = (await fs.promises.stat(this._getModelPath(resolvedModelFiles[i]))).size; } catch (_) {}
+            }
             if (size < SMALL_MODEL_THRESHOLD) smallIndices.push(i);
             else largeIndices.push(i);
         }

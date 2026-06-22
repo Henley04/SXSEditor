@@ -914,11 +914,9 @@ async function getRemoteFileSize(filePath, precision) {
     const contentLength = parseInt(response.headers['content-length'] || '0', 10);
     response.resume();
     if (contentLength > 0) return contentLength;
-    // HEAD returned 0 content-length — fall through to GET
-  } catch (_) {
-    // HEAD failed — fall through to GET
-  }
-  // Fallback: GET to retrieve content-length
+  } catch (_) {}
+  // HEAD unsupported or returned 0 — fall back to GET
+  console.warn(`[ModelManager] HEAD failed for ${filePath}, falling back to GET`);
   try {
     const { response } = await resolveRedirects(url, 5, 'GET');
     const contentLength = parseInt(response.headers['content-length'] || '0', 10);

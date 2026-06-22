@@ -656,8 +656,11 @@ export function computeInitialScrollY() {
 
   let targetPitch;
   if (notes.length > 0) {
-    const minPitch = Math.min(...notes.map(n => n.pitch));
-    const maxPitch = Math.max(...notes.map(n => n.pitch));
+    let minPitch = 127, maxPitch = 0;
+    for (const n of notes) {
+      if (n.pitch < minPitch) minPitch = n.pitch;
+      if (n.pitch > maxPitch) maxPitch = n.pitch;
+    }
     targetPitch = (minPitch + maxPitch) / 2;
   } else {
     targetPitch = 127 / 2;
