@@ -1,120 +1,872 @@
 # User Guide
 
+Complete documentation of all SXSEditor features.
+
 ## Table of Contents
 
-1. [Installation](#installation)
-2. [Creating a Project](#creating-a-project)
-3. [Managing Singers](#managing-singers)
-4. [Editing Fragments](#editing-fragments)
-5. [Synthesis & Playback](#synthesis--playback)
-6. [Exporting](#exporting)
-7. [Settings](#settings)
+1. [Main Window](#main-window)
+2. [Singer Management](#singer-management)
+3. [Singer Creator](#singer-creator)
+4. [Audio Preprocessing](#audio-preprocessing)
+5. [Fragment Timeline](#fragment-timeline)
+6. [Fragment Editor (Piano Roll)](#fragment-editor-piano-roll)
+7. [MIDI Editing](#midi-editing)
+8. [Lyrics and Phonemes](#lyrics-and-phonemes)
+9. [Pitch Curves](#pitch-curves)
+10. [Volume and Pan Envelopes](#volume-and-pan-envelopes)
+11. [Synthesis and Playback](#synthesis-and-playback)
+12. [Export](#export)
+13. [Audio to MIDI](#audio-to-midi)
+14. [MIDI Import](#midi-import)
+15. [Settings](#settings)
+16. [Model Download](#model-download)
+17. [Resource Manager](#resource-manager)
+18. [Themes](#themes)
+19. [Project Files](#project-files)
+20. [Keyboard Shortcuts](#keyboard-shortcuts)
 
 ---
 
-## Installation
+## Main Window
 
-### Windows
+The main window is the central hub. It contains:
 
-Download the latest installer from the [releases page](https://github.com/Henley04/SXSEditor/releases/download/EA/sxsinstaller_x64_no_models.exe) and run the setup executable.
+### Toolbar (Top)
 
-### macOS / Linux
+| Control | Description |
+|---------|-------------|
+| ▶ Play / ⏸ Pause / ⏹ Stop | Playback controls for the entire project |
+| Time Display | Shows current playback position (mm:ss:ms) |
+| BPM | Beats per minute (1–999). Default: 120 |
+| Time Signature | Numerator / Denominator (e.g., 4/4) |
+| Auto Shift | When enabled, notes in newly created fragments auto-align to beat boundaries |
+| 💾 Save | Save the project as `.sxsproj` |
+| 📂 Load | Open an existing `.sxsproj` or `.sxs` project file |
+| 📤 Export | Synthesize and export the entire project as WAV |
+| 🎵 Audio to MIDI | Convert an audio file to MIDI notes (see [Audio to MIDI](#audio-to-midi)) |
+| Version Display | Shows the current app version |
 
-SXSEditor does not supports macOS and Linux currently. However, it's possible to build for macOS and Linux. Please build from source — see the [Developer Guide](Developer-Guide).
+### Singer Panel (Left)
 
----
+Lists all singers in the project. Each singer row shows:
+- Singer name and color/avatar
+- A **+** button to add fragments to this singer
+- A context menu (right-click) for singer operations
 
-## Creating a Project
+### Fragment Timeline (Right)
 
-1. Launch SXSEditor.
-2. Set your project **BPM** and **time signature** in the toolbar(optional).
-3. Add a singer by clicking the **+** button in the singer panel.
-4. Choose to **create a new singer** or **open an existing** `.sxssinger` file.
+A canvas-based timeline showing all fragments arranged by time. Each fragment is a colored rectangle representing a segment of music.
 
----
-
-## Managing Singers
-
-### Creating a Singer
-
-1. Open the **Singer Creator** window.
-2. Enter a singer name and choose a color.
-3. Load a reference audio file (WAV)(vocal only) — this is the voice the model will mimic.
-4. Optionally add an avatar image.
-5. Run **Audio Preprocessing** to extract F0 and note data from the reference audio.
-6. Edit the midi notes' lyrics to your wav, and check if midi matches the wav.
-7. Save the singer as a `.sxssinger` file.
-
-### Singer File Format (`.sxssinger`)
-
-Singer files contain:
-- Singer metadata (name, color, avatar)
-- Reference audio features (F0, mel-spectrogram)
-- Preprocessing configuration
+- **Double-click** a fragment to open the Fragment Editor.
+- **Drag** a fragment to move it in time or across singers.
+- **Drag edges** to resize a fragment.
+- The playhead shows the current playback position.
 
 ---
 
-## Editing Fragments
+## Singer Management
 
-### Adding a Fragment
+### Adding a Singer
 
-1. Click the **+** button on a singer row to add a new fragment.
-2. Double-click a fragment to open the **Fragment Editor**.
+Click the **+** button in the singer panel header. A dialog offers:
 
-### Piano Roll Editor
+- **Open Singer Creator**: Create a new singer from scratch.
+- **Open Existing Singer File**: Load a `.sxssinger` file from disk.
 
-In the fragment editor you can:
+### Singer Status Indicators
 
-- **Add notes**: Click on the piano roll grid to create notes. Drag to control the length.
-- **Edit note properties**: Adjust pitch, duration, and timing
-- **Input lyrics**: Double click to enter lyrics for each note
-  - **Chinese**: Supports Chinese characters  only(e.g., `你好`), pinyin is not supported. All Alphabet will be recognized as EN.
-  - **English**: Standard English lyrics to phonemeon via cmudict.
-- **Draw pitch curves**: Use the pitch envelope editor for expressive control(experimental)
-- **Adjust envelopes**: Fine-tune volume and other parameters
-- **Adjust phonemeon**: keyboard input '5' or click phonemeon button to open phonemeon editor on bottom.
+- Normal: Singer loaded and ready.
+- ⚠ Singer file not found: The `.sxssinger` file was moved or deleted. Use **Relocate** to point to the new location.
 
-### Saving
+### Deleting a Singer
 
-Save the fragment to return to the main timeline.
+Right-click a singer and select **Delete Singer**. This removes the singer and all its fragments from the project.
 
----
+### Singer File Validation
 
-## Synthesis & Playback
+When loading a `.sxssinger` file, SXSEditor validates:
+- File format and version compatibility
+- Required fields (name, reference audio)
+- Data integrity (MIDI notes, F0 data)
 
-1. Press the **▶ Play** button to synthesize and play the entire project.
-2. The editor will automatically initialize the SVS pipeline and generate audio.
-3. Use **⏸ Pause** and **⏹ Stop** to control playback.
-
-### Tips
-
-- First-time synthesis may take a moment as the model loads
-- Subsequent playbacks will be faster
-- GPU acceleration will be used automatically if available(a good enough GPU is strongly recommended)
+Validation errors are shown in a report dialog. Warnings indicate non-critical issues (e.g., missing optional fields, version mismatch).
 
 ---
 
-## Exporting
+## Singer Creator
 
-1. Click the **📤 Export** button.
-2. The project will be synthesized and mixed.
-3. Choose a location to save the final **WAV** file.
+The Singer Creator is a dedicated window for creating new singers. It has three sections:
 
-**Audio Specifications**:
-- Sample Rate: 24000 Hz
-- Format: WAV (16-bit PCM)
+### Basic Info
+
+- **Singer Name**: Required. Used for display and file naming.
+- **Avatar**: Choose between:
+  - **Color**: A solid color used as the singer's identifier on the timeline.
+  - **Image**: Upload a picture file (any common image format).
+
+### Reference Audio (WAV)
+
+Upload a WAV file that serves as the voice reference for the SVS model.
+
+**Requirements**:
+- **Format**: `.wav` only
+- **Duration**: Maximum 30 seconds. If exceeded, a trim dialog opens.
+- **Content**: **Pure vocals only.** This is the most important requirement.
+  - No background music
+  - No instrumental accompaniment
+  - No reverb, echo, or other audio effects
+  - No multiple voices
+  - Clean, dry vocal recording only
+- **Sample Rate**: 44100 Hz recommended (other rates are accepted)
+- **Quality**: Minimal background noise, clear articulation
+
+**Why pure vocals matter**: The model learns voice characteristics from this audio. Any non-vocal content (music, noise, effects) will be learned as part of the voice and will appear as artifacts in synthesized output.
+
+After uploading:
+- A waveform visualization appears.
+- **Preview** button plays the audio.
+- **Clear** button removes the audio and lets you upload a different file.
+
+### WAV Trim Dialog
+
+If the WAV file exceeds 30 seconds:
+- A waveform with a selection overlay appears.
+- **Drag** the selection to choose which 30-second segment to use.
+- **Drag edges** of the selection to adjust start/end.
+- Enter exact values in the **Start Position** and **Clip Length** fields.
+- **Preview Clip** plays the selected segment.
+- **Confirm Trim** applies the trim.
+- **Cancel** discards the file entirely.
+
+### Singer Preview
+
+The right panel shows a live preview of how the singer will appear:
+- Avatar (color or image)
+- Singer name
+- WAV status badge (✓ when audio is loaded)
+- Preprocess status badge (✓ when preprocessing is complete)
+
+### Audio Preprocessing
+
+Click **Start Audio Preprocessing** to open the preprocessing window. This step extracts musical data from the reference audio. See [Audio Preprocessing](#audio-preprocessing).
+
+### Creating and Saving
+
+Click **Create & Save** (✓):
+- Requires a WAV file to be loaded.
+- If preprocessing was completed, the preprocessed data is included.
+- Saves as a `.sxssinger` file (JSON format with base64-encoded audio).
+
+---
+
+## Audio Preprocessing
+
+The Audio Preprocessing window extracts MIDI notes and F0 (fundamental frequency) data from the reference audio. This data is used by the SVS model to understand the singer's vocal characteristics.
+
+### Window Layout
+
+- **Top**: WAV waveform display with playback controls.
+- **Middle**: MIDI editor canvas showing extracted notes.
+- **Bottom**: F0 fundamental frequency curve (read-only).
+
+### Step 1: Extract F0
+
+Click **RMVPE Extract F0**:
+- Uses the RMVPE neural model to detect pitch from the audio.
+- The F0 curve appears in the bottom panel.
+- This is a read-only visualization of the detected pitch contour.
+
+### Step 2: Extract MIDI Notes
+
+Click **Extract MIDI**:
+- Uses Basic Pitch (recommended) to detect note boundaries and pitches.
+- Extracted notes appear on the MIDI canvas.
+- Note count is displayed.
+
+### Step 3: Edit MIDI Notes
+
+**This step is mandatory.** Auto-extracted MIDI is approximate. You must verify and correct it:
+
+1. **Check each note's pitch**: Does the detected MIDI pitch match the actual sung note?
+2. **Check note boundaries**: Do note starts and ends align with the actual singing?
+3. **Check note count**: Are all sung notes detected? Are there false detections?
+
+Edit operations:
+- **Move notes**: Drag up/down (pitch) or left/right (timing).
+- **Resize notes**: Drag the right edge.
+- **Add notes**: Click on empty space.
+- **Delete notes**: Select and press `Delete`.
+- **Edit lyrics**: Double-click a note. **You must type the lyrics yourself** — they are not auto-detected.
+
+### Step 4: Fill in Lyrics
+
+**Every note must have a lyric.** The preprocessing does not detect lyrics from audio. You must manually type them:
+
+- For **Chinese singing**: Enter Chinese characters (e.g., `我`, `你`, `好`). Pinyin is also accepted.
+- For **English singing**: Enter the English word being sung (e.g., `hello`, `love`).
+- For notes with no sung content (rests, breaths): Leave the lyric empty or use a space.
+
+### Step 5: Save
+
+Click **Save** (💾):
+- Requires at least F0 or MIDI data to be extracted.
+- Saves all preprocessed data back to the Singer Creator window.
+- The Singer Creator preview updates to show "Preprocess ✓".
+
+### Important Notes
+
+- The F0 curve is **read-only** — you cannot edit it directly.
+- MIDI note editing affects only the note data, not the F0 curve.
+- If you are unhappy with the extraction results, you can re-extract (this overwrites previous results).
+- The preprocessing window communicates with the Singer Creator via IPC — data is sent back when you save.
+
+---
+
+## Fragment Timeline
+
+The fragment timeline in the main window shows all fragments arranged across singers and time.
+
+### Creating Fragments
+
+Click the **+** button on a singer row to add a new fragment. The fragment is created at the current scroll position.
+
+### Moving Fragments
+
+- **Drag** a fragment to move it horizontally (time) or vertically (to a different singer).
+- When Auto Shift is enabled, fragments snap to beat boundaries.
+
+### Resizing Fragments
+
+- Drag the **left or right edge** of a fragment to change its start time or duration.
+- Fragment boundaries are shown as beat positions.
+
+### Opening the Fragment Editor
+
+**Double-click** a fragment to open it in the Fragment Editor.
+
+### Fragment Properties
+
+Each fragment stores:
+- Start time (in beats)
+- Duration (in beats)
+- Assigned singer ID
+- MIDI notes with lyrics
+- Pitch curve (optional)
+- Volume and pan envelopes
+
+---
+
+## Fragment Editor (Piano Roll)
+
+The Fragment Editor is a dedicated window with a full-featured piano-roll editor. It opens when you double-click a fragment.
+
+### Window Layout
+
+- **Toolbar** (top): Play, Export, Import MIDI, mode switching, save, close.
+- **Piano keys** (left): Vertical pitch reference.
+- **Piano roll** (center): The main editing canvas.
+- **Inspector** (right): Shows properties of the selected note or singer info.
+- **Parameter panel** (bottom): VOL, PAN, Phoneme, and (future) Timbre lanes.
+- **Status bar** (bottom): Shows pipeline status, sample rate, and hop size.
+
+### Toolbar Controls
+
+| Control | Description |
+|---------|-------------|
+| ▶ Play | Synthesize and play this fragment |
+| ⏸ Stop | Stop playback |
+| 💿 Export | Export this fragment as WAV |
+| 🎵 Import MIDI | Import a standard MIDI file |
+| Auto Shift | Auto-align notes to beat grid |
+| MIDI button (1) | Switch to MIDI editing mode |
+| Pitch button (2) | Switch to pitch curve editing mode |
+| ⌨ (F1) | Show keyboard shortcuts overlay |
+| 💾 Save (Ctrl+S) | Save fragment data |
+| ✖ Close | Close the fragment editor |
+
+### Inspector Panel
+
+The right-side inspector shows:
+
+- **Singer info**: Name, avatar, and description of the assigned singer.
+- **Note properties** (when a note is selected):
+  - Pitch (MIDI note name and frequency)
+  - Start position (in beats)
+  - Duration (in beats)
+  - Lyric (editable text field)
+- **Phoneme info**: Auto-generated phoneme breakdown for the selected note.
+
+### Parameter Panel
+
+The bottom panel has tabs for different parameter lanes:
+
+- **VOL**: Volume envelope curve.
+- **PAN**: Stereo pan envelope curve.
+- **Phoneme**: Phoneme-level editing (duration ratios, per-phoneme volume, lock).
+- **Timbre**: (Coming soon) Timbre expression controls.
+
+---
+
+## MIDI Editing
+
+### Adding Notes
+
+- **Click** on empty space in the piano roll to create a note.
+- **Drag** while clicking to set the initial note length.
+- Notes snap to the beat grid based on the current zoom level.
+
+### Selecting Notes
+
+- **Click** a note to select it (deselects others).
+- **Ctrl+click** to toggle a note's selection state.
+- **Shift+click** to add a note to the current selection.
+- **Middle-click drag** to box-select notes within a rectangle.
+- **Shift+middle-click drag** to append a box selection.
+- **Ctrl+A** to select all notes.
+- **Escape** to deselect all.
+
+### Moving Notes
+
+- **Drag** a selected note to move it.
+- **Arrow keys** (↑↓): Move selected notes by one semitone.
+- **Arrow keys** (←→): Move selected notes by one time unit.
+- **Shift+↑↓**: Move by one octave (12 semitones).
+- **Shift+←→**: Move by one beat.
+
+### Resizing Notes
+
+- Drag the **right edge** of a note to change its duration.
+
+### Deleting Notes
+
+- Select notes and press **Delete**.
+
+### Duplicating Notes
+
+- Select notes and press **Ctrl+D**. Duplicates are placed after the originals.
+
+### Editing Lyrics
+
+- **Double-click** a note to edit its lyric inline.
+- Type the lyric and press **Enter** to confirm, or **Escape** to cancel.
+- You can also edit lyrics in the Inspector panel's lyric field.
+
+---
+
+## Lyrics and Phonemes
+
+### Lyric Input Rules
+
+- **Chinese**: Enter Chinese characters (e.g., `你好世界`). The system uses `pinyin-pro` to convert characters to Pinyin, then to phonemes. You can also enter Pinyin directly (e.g., `ni hao`).
+- **English**: Enter standard English words (e.g., `hello`, `love`). The system uses a built-in CMU pronunciation dictionary (126,000 words) to convert to phonemes. Unknown words fall back to letter-by-letter phoneme estimation.
+- **Special tokens**: Empty lyrics are treated as `<SP>` (short pause/silence).
+
+### Phoneme Editing
+
+Switch to Phoneme mode (press `5` or click the Phoneme tab):
+
+- **View phonemes**: Each note is automatically split into its constituent phonemes.
+- **Adjust boundaries**: Drag the boundary between two phonemes to change their relative duration. The total note duration stays the same.
+- **Adjust volume**: Click a phoneme and drag up/down to change its relative volume.
+- **Lock phonemes**: Right-click a phoneme to toggle lock (marked with "L"). Locked phonemes are not affected by auto-adjustment when you edit lyrics.
+
+### Slur Notes
+
+A **slur** (continuation) note is a note that continues the previous note's sound without re-attacking. To create a slur:
+- Add a note with an empty lyric (or a dash `-`). It will be treated as a continuation of the previous note.
+
+---
+
+## Pitch Curves
+
+Pitch curves add vibrato, pitch slides, and other expressive effects on top of the base MIDI pitch.
+
+### Switching to Pitch Mode
+
+Press `2` or click the **Pitch** button in the toolbar. The pitch curve editing tools appear.
+
+### Anchor Points
+
+- **Click** to add an anchor point on the pitch curve.
+- **Drag** an anchor to move it (changes both time and pitch offset).
+- **Right-click** an anchor to delete it.
+- **Select** anchors with box-select (middle-click drag).
+- **Delete** selected anchors with the Delete key.
+- **Arrow keys** move selected anchors.
+
+### Brush Mode
+
+- **Shift+drag** to draw freehand pitch curves.
+- The **Smoothing** slider (0–100) controls how much brush strokes are smoothed. Higher = smoother curves.
+
+### Reset
+
+Click **↺ Reset** to clear all pitch curve modifications and return to the auto-generated curve based on MIDI notes.
+
+### Pitch Curve Data
+
+The pitch curve consists of:
+- **Anchor points**: Fixed points with time and pitch offset values.
+- **Brush segments**: Freehand-drawn segments (stored as sequences of points).
+
+The final pitch is: MIDI note pitch + pitch curve offset.
+
+---
+
+## Volume and Pan Envelopes
+
+### Volume (VOL)
+
+Press `3` or click the **VOL** tab:
+- The volume envelope controls loudness over time.
+- Default: constant volume of 1.0 (100%).
+- Click to add control points. Drag to adjust.
+- Range: 0.0 (silent) to 1.0 (full volume).
+
+### Pan (PAN)
+
+Press `4` or click the **PAN** tab:
+- The pan envelope controls stereo position.
+- Default: centered (0.0).
+- Range: -1.0 (full left) to 1.0 (full right).
+
+### Envelope Editing
+
+- **Click** on the envelope area to add a control point.
+- **Drag** a point to move it.
+- **Right-click** a point to delete it.
+- Points are connected by smooth curves.
+
+---
+
+## Synthesis and Playback
+
+### How Synthesis Works
+
+When you press Play, SXSEditor:
+
+1. **Prepares input**: Collects MIDI notes, lyrics, pitch curve, and singer data.
+2. **Processes text**: Converts lyrics to phoneme sequences using language-specific processing.
+3. **Encodes**: Runs 5 encoder models (text, pitch, note type, F0, condition embedding).
+4. **Runs diffusion**: Iteratively denoises a mel spectrogram using the diffusion model.
+5. **Vocalizes**: Converts the mel spectrogram to a waveform using the vocoder.
+6. **Plays audio**: Outputs the waveform through the audio system.
+
+### Preview vs Export Quality
+
+| Parameter | Preview | Export |
+|-----------|---------|--------|
+| Diffusion Steps | 16 (default) | 32 (default) |
+| CFG Strength | 3.0 | 3.0 |
+| CFG Rescale | 0.75 | 0.75 |
+
+Preview uses fewer steps for faster response. Export uses more steps for higher quality. Both are configurable in Settings.
+
+### Playback Controls
+
+- **▶ Play**: Start synthesis and playback. On first play, the SVS pipeline initializes (loads models into GPU).
+- **⏸ Pause**: Pause playback. Resume from the paused position.
+- **⏹ Stop**: Stop playback and reset to the beginning.
+
+### Fragment-Level Playback
+
+In the Fragment Editor, **▶ Play** synthesizes and plays only the current fragment. This is useful for quick previews while editing.
+
+---
+
+## Export
+
+### Exporting a Fragment
+
+In the Fragment Editor, click **💿 Export**:
+1. The fragment is synthesized using export-quality parameters.
+2. A file save dialog appears.
+3. Choose a location and filename.
+4. The WAV file is saved (24kHz, 16-bit PCM).
+
+### Exporting the Entire Project
+
+In the main window, click **📤 Export**:
+1. All fragments are synthesized sequentially.
+2. Fragments are mixed together according to their timeline positions.
+3. A file save dialog appears.
+4. The mixed WAV file is saved.
+
+### Export Progress
+
+During export, a progress indicator shows:
+- Current fragment being processed.
+- Overall progress percentage.
+- Status messages (preparing, synthesizing, encoding WAV, saving).
+
+---
+
+## Audio to MIDI
+
+Convert an existing audio file into MIDI notes on a new track.
+
+### Starting Audio to MIDI
+
+Click **🎵 Audio to MIDI** in the main toolbar. A dialog offers:
+
+- **Extract Pitch (RMVPE)**: Extracts MIDI notes AND an F0 pitch curve. The pitch curve is applied to the fragment.
+- **MIDI Only**: Extracts only MIDI notes without a pitch curve.
+
+### Supported Audio Formats
+
+WAV, MP3, FLAC, OGG, AAC, M4A.
+
+### Extraction Process
+
+1. Select an audio file.
+2. The system decodes the audio.
+3. Based on your Settings, either **Basic Pitch** or **RMVPE** is used for extraction:
+   - **Basic Pitch** (recommended): Neural network-based, stable results.
+   - **RMVPE**: Converts F0 pitch curve to notes. Experimental, results may vary.
+4. A new singer track and fragment are created with the extracted notes.
+5. If you chose "Extract Pitch", the F0 curve is also applied as a pitch curve.
+
+### After Extraction
+
+- The new track has no singer file assigned. You must select a `.sxssinger` file for it before synthesis.
+- Review and edit the extracted notes — auto-extraction is approximate.
+
+---
+
+## MIDI Import
+
+Import a standard MIDI file into the Fragment Editor.
+
+### Importing
+
+1. Open a fragment in the Fragment Editor.
+2. Click **🎵 Import MIDI** in the toolbar.
+3. Select a `.mid` or `.midi` file.
+4. The MIDI file's notes are loaded into the fragment, replacing existing notes.
+
+### MIDI File Handling
+
+- Multi-track MIDI files: The first track with notes is used.
+- Lyrics from MIDI are preserved if present.
+- Note timing is converted to the project's BPM.
 
 ---
 
 ## Settings
 
-Open **Settings** from the menu to configure:
+Open Settings from the menu bar: **SXSEditor > Settings**.
 
-| Setting | Description |
-|---------|-------------|
-| Inference Device | Select a specific DirectML GPU or use automatic selection |
+### General
 
--Device settings take effect after restarting the pipeline.
--Languages of Ui for choose:Simplified Chinses/English.
--Parameter of inference: balance the generate speed and audio quality.
--Model precision: accelerate inference greatly through lower quality. INT8 is better for CPU/NPU(**still in development**). FP is better for GPU.
+#### Language
+- **Chinese (简体)** / **English**
+- Requires app restart to take effect.
+
+#### Theme
+- Select from built-in and user themes.
+- Changes apply immediately to all windows (hot-swap, no restart needed).
+- See [Themes](#themes) for details.
+
+### Inference
+
+#### Inference Hardware
+
+Configure which hardware devices are used for neural network inference.
+
+**Device Modes**:
+- **Smart Mode** (recommended): Automatically selects the best device and assigns models optimally. Prefers discrete GPU; falls back to integrated GPU or CPU.
+- **Manual Mode**: Specify a single device for all models.
+- **Advanced Mode**: Assign different devices to different model groups (SVS Diffusion, SVS Encoder, SVS Auxiliary, RMVPE).
+
+**Available devices**:
+- Discrete GPU (NVIDIA, AMD, Intel) via DirectML
+- Integrated GPU via DirectML
+- NPU via WebNN
+- CPU (fallback)
+
+**WebNN/NPU Status**: The settings page shows whether WebNN and NPU are available on your system.
+
+#### Preview Inference Parameters
+
+Used when playing back in the editor (fast preview):
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| Diffusion Steps | 16 | 4–64 | Fewer steps = faster, lower quality |
+| CFG Strength | 3.0 | 0–10 | Higher = more aligned with conditions. 0 = skip unconditional prediction (2x speed) |
+| CFG Rescale | 0.75 | 0–1 | Mitigates over-guidance artifacts |
+
+#### Export Inference Parameters
+
+Used when exporting WAV files (high quality):
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| Diffusion Steps | 32 | 4–64 | More steps = higher quality |
+| CFG Strength | 3.0 | 0–10 | Same as preview |
+| CFG Rescale | 0.75 | 0–1 | Same as preview |
+
+#### NPU Inference Settings
+
+Only relevant when using NPU (WebNN) for inference:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| Diffusion Batch Size | 4 | Batch size for diffusion model. batch=4 processes 2 segments simultaneously. |
+| Vocoder Batch Size | 4 | Batch size for vocoder. batch=4 processes 4 audio chunks simultaneously. |
+
+These settings only affect the NPU path. DirectML and CPU paths are unaffected.
+
+### Audio
+
+#### Output Mode
+- **Shared Mode** (WASAPI Shared): Standard Windows audio. Other apps can play audio simultaneously.
+- **Exclusive Mode** (WASAPI Exclusive): Direct hardware access. Lower latency (1–3ms), bit-perfect output, but blocks other apps from using the audio device.
+
+#### Output Device
+- **System Default** or a specific audio device.
+- Exclusive mode only supports WASAPI devices.
+
+#### Sample Rate
+Options: 22050, 24000 (native), 44100, 48000, 96000, 192000 Hz.
+- In exclusive mode, the device must support the selected rate or it falls back to shared mode.
+
+#### Bit Depth
+Options: 32-bit Float (recommended), 32-bit Integer, 24-bit Integer, 16-bit Integer.
+- Only applies in exclusive mode.
+
+#### Buffer Size
+Options: 64 to 4096 samples.
+- Smaller = lower latency but higher CPU load and risk of audio glitches.
+- Recommended: 256 or below in exclusive mode.
+
+#### Master Volume
+Slider from 0% to 100%.
+
+### Audio: MIDI Extraction Tool
+
+- **Basic Pitch** (recommended): Neural network-based MIDI extraction.
+- **RMVPE (experimental)**: F0-to-notes conversion. May produce suboptimal results.
+
+### Model
+
+#### Model Precision
+
+Select which precision of ONNX models to use:
+- FP16, FP32, FP8, INT8, INT8-NPU
+- Different precisions are stored independently and coexist.
+- Switching does not require re-downloading — each precision has its own subdirectory.
+- See the precision info box in Settings for detailed descriptions.
+
+#### Model Status
+
+A list shows the status of each model group:
+- ✅ Ready: All files present.
+- ❌ N files missing: Some model files are not downloaded.
+
+#### Open Model Download
+
+Opens the model download window to download or update model files for the selected precision.
+
+---
+
+## Model Download
+
+The Model Download window handles downloading ONNX model files from ModelScope.
+
+### When It Appears
+
+- Automatically on first launch if models are missing.
+- Manually from Settings > Model > **Open Model Download**.
+- When switching to a precision whose models haven't been downloaded yet.
+
+> **Note**: The model download directory defaults to a location that does not require admin privileges. You can change it using the **Change** button.
+
+### Features
+
+- **Precision selection**: Choose which precision to download.
+- **Download directory**: Default is the app's model directory. Click **Change** to select a different location.
+- **Parallel download**: Up to 16 concurrent chunked connections per file.
+- **Progress tracking**: Per-file and overall progress bars.
+- **Speed display**: Current download speed.
+- **Resume support**: Re-running the download skips completed files.
+
+### Model Groups
+
+| Group | Required | Description |
+|-------|----------|-------------|
+| SVS Synthesis Pipeline | Yes | Core models for singing synthesis (9 models) |
+| RMVPE Pitch Detection | No | F0 extraction for audio preprocessing |
+| Basic Pitch MIDI Extraction | No | MIDI note extraction from audio |
+| RosVot MIDI Recognition | No | (Currently disabled) Advanced MIDI extraction |
+| SVS Japanese Models | No | Japanese-specific encoder and preflow models |
+
+---
+
+## Resource Manager
+
+Open from the menu bar: **Settings > Resource Manager**.
+
+### GPU Info
+
+Shows detected GPU devices:
+- Device name and type (Discrete/Integrated)
+- VRAM usage (used/total)
+
+### Model Management
+
+Lists all loaded models with options to:
+- **Load All**: Load all model groups into GPU memory.
+- **Unload All**: Unload all models, freeing VRAM.
+- **Load/Unload** individual model groups.
+
+Models are automatically loaded when needed for synthesis. Unloading frees VRAM for other applications.
+
+### Summary
+
+Shows:
+- Number of loaded models.
+- Estimated VRAM usage.
+
+---
+
+## Themes
+
+SXSEditor has a layered design token system with hot-swappable themes.
+
+### Built-in Themes
+
+| ID | Name | Description |
+|----|------|-------------|
+| `dark-aurora` | Aurora Dark | Default dark theme with blue-purple accents |
+| `light-paper` | Paper Light | Light theme with white background |
+| `midnight-amber` | Midnight Amber | Dark theme with warm amber accents |
+| `acg` | ACG | Anime/game-inspired color scheme |
+
+### Switching Themes
+
+1. Open **Settings**.
+2. Go to the **Theme** section.
+3. Select a theme from the dropdown.
+4. The change applies immediately to all open windows.
+
+### Editing Themes
+
+Click **Edit Current Theme** to open the visual theme editor:
+- Tokens are organized in layers: Global, Alias, Component, Custom.
+- Color tokens have HEX/RGB/HSL pickers.
+- The editor has its own 20-step undo/redo stack (Ctrl+Z/Ctrl+Y).
+
+### Importing/Exporting Themes
+
+- **Import Theme**: Load a `.theme.json` file.
+- **Export Theme**: Save the current theme to a `.theme.json` file.
+- **Save As**: Create a new user theme from the current edits.
+
+### User Theme Storage
+
+User themes are stored in:
+- Windows: `%APPDATA%\sxseditor\themes\<theme-id>.theme.json`
+
+---
+
+## Project Files
+
+### Saving Projects
+
+Click **💾 Save** or press `Ctrl+S`:
+
+1. A dialog asks whether to embed singer files.
+   - **Embed**: Singer reference audio and preprocessed data are included in the project file. Makes the project self-contained but larger.
+   - **Don't embed**: The project references external `.sxssinger` files by path. Smaller file, but requires singer files to be accessible.
+2. Choose a save location. Files are saved as `.sxsproj`.
+
+### Loading Projects
+
+Click **📂 Load** or press `Ctrl+O`:
+- Opens `.sxsproj` or `.sxs` files.
+- If singer files are embedded, they are loaded directly.
+- If not embedded, SXSEditor attempts to load singer files from their stored paths. If files are missing, a warning appears with a **Relocate** option.
+
+### Auto-Save
+
+If you have saved the project at least once, SXSEditor auto-saves to the same file when you make changes.
+
+### Unsaved Changes
+
+When closing with unsaved changes, a dialog offers:
+- **Save & Exit**: Save and close.
+- **Don't Save**: Discard changes and close.
+- **Cancel**: Stay in the app.
+
+---
+
+## Keyboard Shortcuts
+
+Press **F1** in the Fragment Editor to see the full shortcuts overlay.
+
+### General
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` | Redo |
+| `Ctrl+S` | Save |
+| `Space` | Play / Stop |
+| `1` | Switch to MIDI mode |
+| `2` | Switch to Pitch mode |
+| `3` | Switch to VOL mode (expands parameter panel) |
+| `4` | Switch to PAN mode (expands parameter panel) |
+| `5` | Switch to Phoneme mode (expands parameter panel) |
+| `F1` | Show shortcuts help |
+
+### Selection
+
+| Shortcut | Action |
+|----------|--------|
+| Middle-click drag | Box select notes/anchors |
+| Shift+Middle-click | Append box select |
+| Ctrl+Click | Toggle selection |
+| Shift+Click | Append to selection |
+| `Ctrl+A` | Select all |
+| `Escape` | Deselect all |
+
+### MIDI Editing
+
+| Shortcut | Action |
+|----------|--------|
+| `↑` `↓` | Move selected notes (semitone) |
+| `←` `→` | Move selected notes (time unit) |
+| `Shift+↑` `Shift+↓` | Move selected notes (octave) |
+| `Shift+←` `Shift+→` | Move selected notes (beat) |
+| `Delete` | Delete selected notes |
+| `Ctrl+D` | Duplicate selected notes |
+| Double-click | Edit note lyric |
+
+### Pitch Editing
+
+| Shortcut | Action |
+|----------|--------|
+| Click | Add anchor point |
+| Drag anchor | Move anchor point |
+| Shift+Drag | Brush mode (freehand draw) |
+| Right-click | Delete anchor point |
+| `Delete` | Delete selected anchors |
+| `↑` `↓` `←` `→` | Move selected anchors |
+
+### Phoneme Editing
+
+| Shortcut | Action |
+|----------|--------|
+| Click phoneme + drag | Adjust phoneme volume (up/down) |
+| Drag boundary | Adjust adjacent phoneme duration ratio |
+| Right-click phoneme | Toggle lock (L marker) |
+| `5` | Switch to phoneme mode |
+
+### View
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Scroll` | Horizontal zoom |
+| `Shift+Scroll` | Horizontal scroll |
+| `Scroll` | Vertical scroll |
