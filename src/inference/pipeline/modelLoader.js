@@ -454,16 +454,6 @@ async function detectBestDevice(modelDir, npuAvailable = false) {
     const best = selectBestDevice(devices, npuAvailable);
     const modelDeviceMapping = buildModelDeviceMapping(devices, npuAvailable);
 
-    const vramStr = best.deviceType !== 'cpu' ? '' : '';
-    const typeLabel = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[best.deviceType] || '';
-
-    // 打印Model分配
-    for (const [groupId, alloc] of Object.entries(modelDeviceMapping)) {
-        const groupLabel = MODEL_GROUPS[groupId]?.label || groupId;
-        const allocType = { 'discrete-gpu': '[独显]', 'integrated-gpu': '[核显]', 'npu': '[NPU]', 'cpu': '[CPU]' }[alloc.deviceType] || alloc.deviceType;
-        const processLabel = alloc.process === 'renderer' ? '(WebNN)' : '(DirectML)';
-    }
-
     return {
         deviceId: best.deviceId,
         deviceType: best.deviceType,

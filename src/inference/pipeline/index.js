@@ -17,6 +17,8 @@ class OnnxSVSPipeline {
     constructor(modelDir, options = {}) {
         this.baseModelDir = modelDir; // Base dir before precision subdir (for shared models)
         this.modelDir = this._resolveModelDir(modelDir, options.modelPrecision);
+        this.languageOverride = options.languageOverride || null; // 'ja' for Japanese
+        this.jpModelDir = this._resolveJpModelDir(modelDir, options.modelPrecision);
         this.sessions = {};
         this.sessionEPs = {};
         this.isFP16 = false; // 是否为 FP16 精度Model
@@ -40,6 +42,50 @@ class OnnxSVSPipeline {
         this._audioSegmentation = new AudioSegmentation();
     }
 
+    /**
+     * Detect if notes contain Japanese content.
+     * Returns true if any lyric contains Japanese characters or jp_* phonemes.
+     */
+    static detectJapanese(notes) {
+        if (!notes || !Array.isArray(notes)) return false;
+        for (const note of notes) {
+            const lyric = note.lyric || '';
+            if (!lyric) continue;
+            // Check for jp_* phonemes
+            if (lyric.startsWith('jp_') || lyric.includes('jp_')) return true;
+            // Check for hiragana/katakana
+            if (/[ぁ-ゟァ-ヿ]/.test(lyric)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Check if JP models are available for the current precision.
+     */
+    hasJpModels() {
+        if (!this.jpModelDir) return false;
+        try {
+            const fs = require('node:fs');
+            const textEncoderPath = path.join(this.jpModelDir, 'note_text_encoder.onnx');
+            const preflowPath = path.join(this.jpModelDir, 'preflow.onnx');
+            return fs.existsSync(textEncoderPath) && fs.existsSync(preflowPath);
+        } catch (_) {
+            return false;
+        }
+    }
+
+    /**
+     * Check if JP pitch encoder is available (optional, for pitch-adaptive fine-tuning).
+     */
+    hasJpPitchEncoder() {
+        if (!this.jpModelDir) return false;
+        try {
+            return fs.existsSync(path.join(this.jpModelDir, 'note_pitch_encoder.onnx'));
+        } catch (_) {
+            return false;
+        }
+    }
+
     _resolveModelDir(baseDir, modelPrecision) {
         const resolved = path.resolve(baseDir);
         const subdirMap = {
@@ -57,6 +103,103 @@ class OnnxSVSPipeline {
             console.warn(`[OnnxSVSPipeline] ${modelPrecision} directory not found: ${subDir}, falling back to default directory`);
         }
         return resolved;
+    }
+
+    /**
+     * Resolve JP model directory: <precision_subdir>/JP/
+     * Returns null if the JP directory doesn't exist.
+     */
+    _resolveJpModelDir(baseDir, modelPrecision) {
+        const resolved = path.resolve(baseDir);
+        const subdirMap = {
+            'int8': 'int8',
+            'fp16': 'fp16',
+            'int8-npu': path.join('int8', 'optimized_npu'),
+        };
+        const subdir = subdirMap[modelPrecision];
+        let jpDir;
+        if (subdir) {
+            jpDir = path.join(resolved, subdir, 'JP');
+        } else {
+            jpDir = path.join(resolved, 'JP');
+        }
+        if (fs.existsSync(jpDir)) {
+            console.log(`[OnnxSVSPipeline] JP model directory found: ${jpDir}`);
+            return jpDir;
+        }
+        return null;
+    }
+
+    /**
+     * Get the model path for a specific model file, considering language override.
+     * JP models (note_text_encoder, preflow) come from jpModelDir when language is 'ja'.
+     * All other models come from the base modelDir.
+     */
+    _getModelPath(modelFile) {
+        const jpModelFiles = new Set(['note_text_encoder.onnx', 'preflow.onnx']);
+        if (this.languageOverride === 'ja' && this.jpModelDir && jpModelFiles.has(modelFile)) {
+            return path.join(this.jpModelDir, modelFile);
+        }
+        // Optional: JP pitch encoder (only if fine-tuned version exists)
+        if (this.languageOverride === 'ja' && modelFile === 'note_pitch_encoder.onnx' && this.hasJpPitchEncoder()) {
+            return path.join(this.jpModelDir, modelFile);
+        }
+        return path.join(this.modelDir, modelFile);
+    }
+
+    /**
+     * Incrementally swap only the language-specific models (note_text_encoder, preflow).
+     * Other models (diff_step, vocoder, etc.) stay loaded.
+     * Returns true if swap was performed, false if already using the requested language.
+     */
+    async swapLanguageModels(newLanguage) {
+        if (newLanguage === this.languageOverride) return false;
+        if (!this.initialized) return false;
+
+        const langModels = [
+            { key: 'noteTextEncoder', file: 'note_text_encoder.onnx' },
+            { key: 'preflow', file: 'preflow.onnx' },
+        ];
+
+        // Also swap pitch encoder if JP fine-tuned version exists
+        if (this.hasJpPitchEncoder()) {
+            langModels.push({ key: 'notePitchEncoder', file: 'note_pitch_encoder.onnx' });
+        }
+
+        const oldLang = this.languageOverride;
+        this.languageOverride = newLanguage;
+
+        // Check if JP models exist for new language
+        if (newLanguage === 'ja' && !this.hasJpModels()) {
+            console.warn('[OnnxSVSPipeline] JP models not found, reverting to base');
+            this.languageOverride = oldLang;
+            throw new Error('JP_MODELS_MISSING');
+        }
+
+        console.log(`[OnnxSVSPipeline] Swapping language models: ${oldLang || 'base'} → ${newLanguage || 'base'}`);
+
+        for (const { key, file } of langModels) {
+            // Release old session
+            if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
+                try { this.sessions[key].release(); } catch (_) {}
+            }
+
+            // Load new model from the updated path
+            const modelPath = this._getModelPath(file);
+            try {
+                const { session, ep } = await createSessionWithValidation(
+                    modelPath, key, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false
+                );
+                this.sessions[key] = session;
+                this.sessionEPs[key] = ep;
+                console.log(`[OnnxSVSPipeline] ${file} swapped [${ep}] → ${modelPath}`);
+            } catch (err) {
+                console.error(`[OnnxSVSPipeline] Failed to swap ${file}:`, err.message);
+                throw err;
+            }
+        }
+
+        return true;
     }
 
     _getNpuFallbackPath(modelFile) {
@@ -117,6 +260,13 @@ class OnnxSVSPipeline {
     async _doInit() {
         console.log('[OnnxSVSPipeline] Initializing (ONNX Runtime + DirectML)...');
         console.log('[OnnxSVSPipeline] Model directory:', this.modelDir);
+        if (this.languageOverride === 'ja') {
+            if (this.jpModelDir) {
+                console.log('[OnnxSVSPipeline] Japanese mode: using JP models from', this.jpModelDir);
+            } else {
+                console.warn('[OnnxSVSPipeline] Japanese requested but JP model directory not found, using base models');
+            }
+        }
 
         let gpuInfo;
         try {
@@ -161,36 +311,34 @@ class OnnxSVSPipeline {
         }
 
         const resolvedModelFiles = [...ONNX_MODEL_FILES];
+        // 并行检查 DML 变体 Model是否存在
         const dmlIdx = resolvedModelFiles.indexOf('diff_step_dml.onnx');
-        if (dmlIdx >= 0) {
-            const dmlPath = path.join(this.modelDir, 'diff_step_dml.onnx');
-            let dmlExists = false;
-            try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
-            if (!dmlExists) {
-                resolvedModelFiles[dmlIdx] = 'diff_step.onnx';
-                console.log('[OnnxSVSPipeline] diff_step_dml.onnx not found, using diff_step.onnx');
-            }
-        }
         const vocDmlIdx = resolvedModelFiles.indexOf('vocoder_dml.onnx');
-        if (vocDmlIdx >= 0) {
-            const vocDmlPath = path.join(this.modelDir, 'vocoder_dml.onnx');
-            let vocDmlExists = false;
-            try { await fs.promises.access(vocDmlPath); vocDmlExists = true; } catch (_) {}
-            if (!vocDmlExists) {
-                resolvedModelFiles[vocDmlIdx] = 'vocoder.onnx';
-                console.log('[OnnxSVSPipeline] vocoder_dml.onnx not found, using vocoder.onnx');
-            }
+        const [dmlExists, vocDmlExists] = await Promise.all([
+            dmlIdx >= 0 ? fs.promises.access(path.join(this.modelDir, 'diff_step_dml.onnx')).then(() => true, () => false) : Promise.resolve(true),
+            vocDmlIdx >= 0 ? fs.promises.access(path.join(this.modelDir, 'vocoder_dml.onnx')).then(() => true, () => false) : Promise.resolve(true),
+        ]);
+        if (dmlIdx >= 0 && !dmlExists) {
+            resolvedModelFiles[dmlIdx] = 'diff_step.onnx';
+            console.log('[OnnxSVSPipeline] diff_step_dml.onnx not found, using diff_step.onnx');
+        }
+        if (vocDmlIdx >= 0 && !vocDmlExists) {
+            resolvedModelFiles[vocDmlIdx] = 'vocoder.onnx';
+            console.log('[OnnxSVSPipeline] vocoder_dml.onnx not found, using vocoder.onnx');
         }
 
-        for (const modelFile of resolvedModelFiles) {
-            const filePath = path.join(this.modelDir, modelFile);
-            let stats;
+        // 并行检查所有Model文件是否存在并获取大小
+        const modelStats = await Promise.all(resolvedModelFiles.map(async (modelFile) => {
+            const filePath = this._getModelPath(modelFile);
             try {
-                stats = await fs.promises.stat(filePath);
+                const stats = await fs.promises.stat(filePath);
+                return { modelFile, size: stats.size };
             } catch (_) {
                 throw new Error(`Model文件不存在: ${filePath}`);
             }
-            console.log(`[OnnxSVSPipeline] ${modelFile}: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+        }));
+        for (const { modelFile, size } of modelStats) {
+            console.log(`[OnnxSVSPipeline] ${modelFile}: ${(size / 1024 / 1024).toFixed(2)} MB`);
         }
 
         const sessionKeys = [
@@ -205,35 +353,27 @@ class OnnxSVSPipeline {
             'melTransform',
         ];
 
-        // 检测Model精度：通过检查Model文件的 I/O 类型和权重量化格式
+        // 检测Model精度：通过 probe session 的 I/O 类型 + 单文件量化算子扫描
+        // 旧实现读取全部 9 个 Model 文件（含 846MB diff_step），现仅读取 preflow probe 已缓存的小文件
         try {
-            const probeModelPath = path.join(this.modelDir, resolvedModelFiles[4]); // preflow
+            const probeModelPath = path.join(this.modelDir, resolvedModelFiles[4]); // preflow (~8MB)
             const probeSession = await require('onnxruntime-node').InferenceSession.create(probeModelPath, { executionProviders: ['cpu'] });
             const probeInputType = probeSession.inputMetadata[0]?.type;
             this.isFP16 = probeInputType === 'float16';
             await probeSession.release();
 
-            // 检查Model文件是否包含 INT8 量化算子（DequantizeLinear / MatMulInteger）
-            let quantizedCount = 0;
-            let checkedCount = 0;
-            for (const modelFile of resolvedModelFiles) {
-                try {
-                    const modelBuf = await fs.promises.readFile(path.join(this.modelDir, modelFile));
-                    checkedCount++;
-                    if (modelBuf.includes('DequantizeLinear') || modelBuf.includes('MatMulInteger')) {
-                        quantizedCount++;
-                    }
-                } catch (_) {}
-            }
+            // INT8 检测：仅扫描已读取的 preflow 文件（~8MB），无需读取所有 Model
+            // 同一精度变体的所有 Model 统一量化，单文件即可代表整体
+            let isINT8 = false;
+            try {
+                const probeBuf = await fs.promises.readFile(probeModelPath);
+                isINT8 = probeBuf.includes('DequantizeLinear') || probeBuf.includes('MatMulInteger');
+            } catch (_) {}
 
             const ioLabel = this.isFP16 ? 'float16' : 'float32';
-            let precisionLabel;
-            if (quantizedCount > 0) {
-                const weightLabel = quantizedCount === checkedCount ? 'all' : `${quantizedCount}/${checkedCount}`;
-                precisionLabel = `INT8 (${ioLabel} I/O, INT8 weights — ${weightLabel} models quantized)`;
-            } else {
-                precisionLabel = this.isFP16 ? 'FP16 (half precision)' : 'FP32 (full precision)';
-            }
+            const precisionLabel = isINT8
+                ? `INT8 (${ioLabel} I/O, INT8 weights)`
+                : this.isFP16 ? 'FP16 (half precision)' : 'FP32 (full precision)';
             console.log(`[OnnxSVSPipeline] Model precision: ${precisionLabel}`);
         } catch (e) {
             console.warn('[OnnxSVSPipeline] Precision detection failed, defaulting to FP32:', e.message);
@@ -268,7 +408,7 @@ class OnnxSVSPipeline {
                 wc.send('webnn:loadModel:request', {
                     requestId,
                     modelId,
-                    modelPath: overridePath || path.join(this.modelDir, modelFile),
+                    modelPath: overridePath || this._getModelPath(modelFile),
                     options: { deviceType: 'npu' },
                 });
             });
@@ -336,7 +476,7 @@ class OnnxSVSPipeline {
                         const nextIdx = remainingIndices[ni];
                         if (nextIdx === vocoderIdx) continue;
                         const nextFile = webnnModelFiles[nextIdx];
-                        const nextPath = path.join(this.modelDir, nextFile);
+                        const nextPath = this._getModelPath(nextFile);
                         const wc = getMainWindowWebContents();
                         if (wc) {
                             prefetchPromise = wc.send('webnn:prefetch:request', { modelPath: nextPath });
@@ -430,11 +570,23 @@ class OnnxSVSPipeline {
                 return await this._doInitFallback(gpuInfo, resolvedModelFiles, sessionKeys);
             }
         } else {
-            // DML/CPU Model加载
+            // DML/CPU Model加载：小Model并行，大Model串行
             const loadedSessions = [];
             try {
+                // 将Model分为小（<50MB）和大（>=50MB）两组，并行加载小组
+                const SMALL_MODEL_THRESHOLD = 50 * 1024 * 1024;
+                const smallIndices = [];
+                const largeIndices = [];
                 for (let i = 0; i < resolvedModelFiles.length; i++) {
-                    const modelPath = path.join(this.modelDir, resolvedModelFiles[i]);
+                    const filePath = this._getModelPath(resolvedModelFiles[i]);
+                    let size = 0;
+                    try { size = (await fs.promises.stat(filePath)).size; } catch (_) {}
+                    if (size < SMALL_MODEL_THRESHOLD) smallIndices.push(i);
+                    else largeIndices.push(i);
+                }
+
+                const loadOne = async (i) => {
+                    const modelPath = this._getModelPath(resolvedModelFiles[i]);
                     try {
                         const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes);
                         this.sessions[sessionKeys[i]] = session;
@@ -452,6 +604,18 @@ class OnnxSVSPipeline {
                         }
                     }
                     loadedSessions.push(sessionKeys[i]);
+                };
+
+                // 并行加载所有小Model
+                if (smallIndices.length > 0) {
+                    const t0 = performance.now();
+                    await Promise.all(smallIndices.map(i => loadOne(i)));
+                    console.log(`[OnnxSVSPipeline] ${smallIndices.length}  small model(s) loaded in parallel (${(performance.now() - t0).toFixed(0)}ms)`);
+                }
+
+                // 串行加载大Model（避免 GPU 显存峰值）
+                for (const i of largeIndices) {
+                    await loadOne(i);
                 }
 
                 const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
@@ -491,8 +655,19 @@ class OnnxSVSPipeline {
 
         const loadedSessions = [];
         try {
+            const SMALL_MODEL_THRESHOLD = 50 * 1024 * 1024;
+            const smallIndices = [];
+            const largeIndices = [];
             for (let i = 0; i < resolvedModelFiles.length; i++) {
-                const modelPath = path.join(this.modelDir, resolvedModelFiles[i]);
+                const filePath = this._getModelPath(resolvedModelFiles[i]);
+                let size = 0;
+                try { size = (await fs.promises.stat(filePath)).size; } catch (_) {}
+                if (size < SMALL_MODEL_THRESHOLD) smallIndices.push(i);
+                else largeIndices.push(i);
+            }
+
+            const loadOne = async (i) => {
+                const modelPath = this._getModelPath(resolvedModelFiles[i]);
                 try {
                     const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes);
                     this.sessions[sessionKeys[i]] = session;
@@ -510,7 +685,17 @@ class OnnxSVSPipeline {
                     }
                 }
                 loadedSessions.push(sessionKeys[i]);
+            };
+
+            if (smallIndices.length > 0) {
+                const t0 = performance.now();
+                await Promise.all(smallIndices.map(i => loadOne(i)));
+                console.log(`[OnnxSVSPipeline] Fallback: ${smallIndices.length}  small model(s) loaded in parallel (${(performance.now() - t0).toFixed(0)}ms)`);
             }
+            for (const i of largeIndices) {
+                await loadOne(i);
+            }
+
             const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
             const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
             console.log(`[OnnxSVSPipeline] Fallback init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
@@ -1083,6 +1268,17 @@ class OnnxSVSPipeline {
             }
         }
 
+        // Normalize to peak 0.95 to prevent clipping
+        let peak = 0;
+        for (let i = 0; i < totalSamples; i++) {
+            const abs = Math.abs(finalAudio[i]);
+            if (abs > peak) peak = abs;
+        }
+        if (peak > 0.95) {
+            const scale = 0.95 / peak;
+            for (let i = 0; i < totalSamples; i++) finalAudio[i] *= scale;
+        }
+
         const audioData = finalAudio;
         const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
         if (audioData.length <= MAX_CACHE_SAMPLES) {
@@ -1208,7 +1404,7 @@ class OnnxSVSPipeline {
             }
         }
 
-        const modelPath = path.join(this.modelDir, resolvedFile);
+        const modelPath = this._getModelPath(resolvedFile);
         try {
             await fs.promises.access(modelPath);
         } catch (_) {
