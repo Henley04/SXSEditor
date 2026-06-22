@@ -221,11 +221,30 @@ function registerThemeIpc() {
 
   ipcMain.handle('theme:bootstrap', async (event) => {
     const settings = loadSettings();
+    const all = listAllThemes();
+    const themeId = settings.theme;
+    // Include current theme object to avoid a second IPC call
+    let currentTheme = null;
+    const meta = all.find(t => t.id === themeId);
+    if (meta) {
+      let themeObj = null;
+      if (meta.source === 'builtin') {
+        themeObj = BUILTIN_THEMES.BUILTIN_THEMES.find(b => b.id === themeId) || null;
+      } else {
+        const userDir = app.getPath('userData');
+        const { themes } = themeStorage.loadUserThemes(userDir);
+        themeObj = themes.find(t => t.id === themeId) || null;
+      }
+      if (themeObj) {
+        currentTheme = { ...themeObj, tokens: flattenTheme(themeObj) };
+      }
+    }
     return {
-      themeId: settings.theme,
+      themeId,
       globalId: settings.theme,
       themePerWindow: settings.themePerWindow,
-      available: listAllThemes(),
+      available: all,
+      currentTheme,
     };
   });
 }

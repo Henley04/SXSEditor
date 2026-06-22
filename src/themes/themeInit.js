@@ -19,12 +19,14 @@ function injectTokens(tokens) {
     for (const [k, v] of Object.entries(tokens)) {
         try { root.style.setProperty(k, v); } catch (_) {}
     }
+    // Notify canvas renderers to invalidate cached colors and re-render
+    try { window.dispatchEvent(new CustomEvent('theme:changed')); } catch (_) {}
 }
 
 /**
  * Initialize theme for the current renderer window.
  *
- * 1. Fetches the current theme via themeAPI.bootstrap()
+ * 1. Fetches the current theme via themeAPI.bootstrap() (includes tokens)
  * 2. Applies its tokens to :root
  * 3. Listens for theme:changed IPC and re-applies
  *
@@ -46,8 +48,13 @@ export async function initWindowTheme(ipcCleanups) {
 
     try {
         const bootstrap = await api.themeAPI.bootstrap();
-        if (bootstrap && bootstrap.themeId) {
-            await applyTheme(bootstrap.themeId);
+        if (bootstrap) {
+            // Use theme from bootstrap response (avoids second IPC call)
+            if (bootstrap.currentTheme && bootstrap.currentTheme.tokens) {
+                injectTokens(bootstrap.currentTheme.tokens);
+            } else if (bootstrap.themeId) {
+                await applyTheme(bootstrap.themeId);
+            }
         }
     } catch (_) {}
 
