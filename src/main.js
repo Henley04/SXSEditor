@@ -104,6 +104,10 @@ app.whenReady().then(() => {
         'Content-Security-Policy': [
           "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://modelscope.cn; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:;"
         ],
+        // Enable cross-origin isolation so renderers get crossOriginIsolated=true,
+        // which unlocks SharedArrayBuffer for multi-threaded WASM (ort.env.wasm.numThreads > 1).
+        'Cross-Origin-Opener-Policy': ['same-origin'],
+        'Cross-Origin-Embedder-Policy': ['require-corp'],
       },
     });
   });

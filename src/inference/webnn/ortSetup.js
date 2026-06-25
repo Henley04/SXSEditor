@@ -21,9 +21,12 @@ export async function ensureOrt() {
         // and the WASM files are copied to the same directory by webpack CopyPlugin
         if (ort.env?.wasm) {
             ort.env.wasm.wasmPaths = './';
-            ort.env.wasm.numThreads = 1; // Disable SharedArrayBuffer threading (not available in Electron sandbox)
+            // Enable multi-threaded WASM execution. Requires crossOriginIsolated (COOP/COEP),
+            // which is set in main.js onHeadersReceived. Sandbox is disabled on all windows.
+            const cpuCores = navigator.hardwareConcurrency || 4;
+            ort.env.wasm.numThreads = Math.max(1, Math.min(cpuCores, 8));
             ort.env.wasm.memoryLimit = 16384; // 16GB WASM memory limit for large models
-            console.log(`[WebNN] WASM paths configured: ${ort.env.wasm.wasmPaths}, numThreads: ${ort.env.wasm.numThreads}, memoryLimit: ${ort.env.wasm.memoryLimit}MB`);
+            console.log(`[WebNN] WASM paths configured: ${ort.env.wasm.wasmPaths}, numThreads: ${ort.env.wasm.numThreads} (cpu cores: ${cpuCores}), memoryLimit: ${ort.env.wasm.memoryLimit}MB, crossOriginIsolated: ${self.crossOriginIsolated}`);
         }
     } else {
         throw new Error('onnxruntime-web not loaded. Ensure ort.all.min.js is included via <script> tag.');
