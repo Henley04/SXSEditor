@@ -17,7 +17,7 @@ SXSEditor addresses these challenges by providing a complete production-grade SV
 - A **conditional diffusion-based SVS pipeline** deployed via ONNX Runtime with DirectML GPU acceleration.
 - **Multi-track MIDI editing** with piano roll, pitch curve, and envelope manipulation.
 - **Singer profile creation** from reference audio with automatic F0 extraction and MIDI transcription.
-- **Real-time audio playback** via WASAPI exclusive/shared mode.
+- **Real-time audio playback** via WASAPI shared mode (decibri).
 - **Internationalization** (Chinese and English) and **hardware resource management**.
 
 ### 1.2 Related Work
@@ -75,9 +75,9 @@ SXSEditor follows Electron's two-process architecture:
 
 ### 2.2 Process Separation Rationale
 
-- **Main Process**: Handles all ONNX model inference (GPU/CPU), audio output (WASAPI via naudiodon), file system access, and window management. This separation ensures the renderer remains responsive during heavy computation.
+- **Main Process**: Handles all ONNX model inference (GPU/CPU), audio output (WASAPI via decibri), file system access, and window management. This separation ensures the renderer remains responsive during heavy computation.
 - **Renderer Process**: Handles all UI logic, canvas rendering, and user interaction. Uses `contextBridge` (preload.js) for secure IPC communication.
-- **Audio Worker (forked child process)**: A separate Node.js process dedicated to WASAPI audio playback via the `naudiodon` library, ensuring audio playback is not blocked by IPC or inference.
+- **Audio Worker (forked child process)**: A separate Node.js process dedicated to WASAPI audio playback via the `decibri` library, ensuring audio playback is not blocked by IPC or inference.
 
 ### 2.3 Hardware Acceleration Strategy
 
@@ -476,17 +476,17 @@ The `parseMidiFile` function in [midiParser.js](file:///d:/Document/electron/SXS
 
 ### 6.1 WASAPI Audio Output
 
-The audio playback subsystem uses `naudiodon` (PortAudio bindings with WASAPI support) via a forked child process:
+The audio playback subsystem uses `decibri` (Rust/cpal core with WASAPI support) via a forked child process:
 
 **AudioWorker** ([audioWorker.js](file:///d:/Document/electron/SXSEditor/src/audio/audioWorker.js)):
 - Independently managed child process for glitch-free playback.
-- Supports exclusive mode (`wasapiExclusiveMode: true`) for low-latency playback.
-- Bit depth conversion: float32, int16, int24, int32.
+- Shared-mode WASAPI playback (decibri does not support exclusive mode; the legacy `exclusiveMode` option is accepted but ignored).
+- Bit depth: `float32` and `int16` are native; `int24`/`int32` requests are transparently downgraded to `float32`.
 - Sample-accurate position tracking via `performance.now()`.
 
 **Playback Modes**:
-1. **Exclusive Mode** (WASAPI): Direct hardware access, lowest latency. Falls back to shared mode on failure.
-2. **Web Audio API** (browser `AudioContext`): No WASAPI support fallback.
+1. **WASAPI Shared Mode** (decibri): System-mixed audio output. The legacy exclusive-mode setting falls back to this.
+2. **Web Audio API** (browser `AudioContext`): Used when WASAPI output is unavailable.
 
 ### 6.2 AudioOutputManager
 
@@ -643,7 +643,7 @@ The project serialization uses `JSON.stringify` with full state capture from Tra
 | Desktop Framework | Electron | 41.3.0 |
 | ML Inference | ONNX Runtime Node.js | 1.24.3 |
 | GPU Acceleration | DirectML (via ONNX Runtime) | — |
-| Audio Output | naudiodon (WASAPI/PortAudio) | 2.3.6 |
+| Audio Output | decibri (WASAPI) | 4.4.2 |
 | Audio Processing | Web Audio API, node:fs | — |
 | MIDI Editor | HTML5 Canvas (custom) | — |
 | Pitch Detection (ML) | RMVPE (ONNX), BasicPitch (TF.js) | — |

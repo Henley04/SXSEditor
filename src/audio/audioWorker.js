@@ -1,4 +1,32 @@
-let naudio = null;
+// 音频输出子进程：使用 decibri (Speaker) 进行 WASAPI/系统音频播放。
+//
+// 该文件由 audioOutputManager.js 通过 child_process.fork 启动，并通过 IPC
+// (process.send / process.on('message')) 通信。它不直接被 webpack 打包，
+// 而是由 CopyPlugin 复制到 .webpack/main/audio/ 下运行，因此其 require
+// 的相对模块（./audioFormatUtils）也必须由 CopyPlugin 一并复制。
+//
+// decibri 的 Speaker 是一个 Writable stream，仅支持 'int16' 与 'float32'
+// 两种 dtype，不支持 int24 / int32 / 独占模式 / 自定义 bufferSize。
+// 上层传入的这些选项会在 audioFormatUtils 中适配：
+// int24/int32 降级为 float32，独占模式与缓冲区大小被忽略（始终共享模式）。
+
+const { Speaker } = (() => {
+  try {
+    return require('decibri');
+  } catch (e) {
+    console.warn('[AudioWorker] decibri 加载失败:', e.message);
+    console.warn(`[AudioWorker] 环境: Node ${process.version}, 平台 ${process.platform}, 架构 ${process.arch}`);
+    return {};
+  }
+})();
+
+const {
+  mapDevicesToLegacy,
+  buildSpeakerOptions,
+  buildPcmBuffer,
+  resolveDtype,
+} = require('./audioFormatUtils');
+
 let _output = null;
 let _isPlaying = false;
 let _playbackStartTime = 0;
@@ -8,49 +36,19 @@ let _sampleRate = 24000;
 let _duration = 0;
 let _positionInterval = null;
 
-const FORMAT_MAP = {
-  'float32': 0x01,
-  'int16': 0x02,
-  'int24': 0x04,
-  'int32': 0x08,
-};
-
-try {
-  naudio = require('naudiodon');
-  if (naudio) {
-    FORMAT_MAP['float32'] = naudio.SampleFormatFloat32;
-    FORMAT_MAP['int16'] = naudio.SampleFormatInt16;
-    FORMAT_MAP['int24'] = naudio.SampleFormatInt24;
-    FORMAT_MAP['int32'] = naudio.SampleFormatInt32;
-  }
-} catch (e) {
-  naudio = null;
-  console.warn('[AudioWorker] naudiodon 加载失败:', e.message);
-  console.warn(`[AudioWorker] 环境: Node ${process.version}, 平台 ${process.platform}, 架构 ${process.arch}`);
-}
-
 function handleGetDevices() {
-  if (!naudio) return { devices: [], isAvailable: false };
+  if (!Speaker) return { devices: [], isAvailable: false };
   try {
-    const devices = naudio.getDevices();
-    const filtered = devices
-      .filter(d => d.maxOutputChannels > 0)
-      .map(d => ({
-        id: d.id,
-        name: d.name,
-        maxOutputChannels: d.maxOutputChannels,
-        defaultSampleRate: d.defaultSampleRate,
-        hostAPI: d.hostAPIName || 'Unknown',
-      }));
-    return { devices: filtered, isAvailable: true };
+    const devices = Speaker.devices();
+    return { devices: mapDevicesToLegacy(devices), isAvailable: true };
   } catch (e) {
     return { devices: [], isAvailable: false, error: e.message };
   }
 }
 
 function handleStart(audioData, options) {
-  if (!naudio) {
-    return { success: false, error: 'naudiodon 不可用' };
+  if (!Speaker) {
+    return { success: false, error: 'decibri 不可用' };
   }
   if (!(audioData instanceof Float32Array)) {
     audioData = new Float32Array(audioData);
@@ -59,58 +57,31 @@ function handleStart(audioData, options) {
   handleStop();
 
   const {
-    deviceId = -1,
     sampleRate = 24000,
     channels = 1,
     bitDepth = 'float32',
-    bufferSize = 2048,
-    exclusiveMode = false,
     volume = 1.0,
     offset = 0,
-  } = options;
+  } = options || {};
+  // 注意：decibri 忽略 bufferSize 与 exclusiveMode（始终共享模式）。
 
   _sampleRate = sampleRate;
-  const clampedVolume = Math.max(0, Math.min(1, volume));
-
+  const dtype = resolveDtype(bitDepth); // int24/int32/未知 → float32
   const startSample = Math.floor(offset * sampleRate);
-
-  const format = FORMAT_MAP[bitDepth] || FORMAT_MAP['float32'];
-
-  let outputData;
-  if (bitDepth !== 'float32') {
-    // Combine volume + bit depth conversion in one pass, then slice
-    outputData = _convertBitDepthWithVolume(audioData, bitDepth, clampedVolume, startSample);
-  } else {
-    // Float32 path: apply volume and slice in one step
-    if (clampedVolume === 1.0) {
-      outputData = audioData.subarray(startSample);
-    } else {
-      const sliced = audioData.subarray(startSample);
-      outputData = new Float32Array(sliced.length);
-      for (let i = 0; i < sliced.length; i++) {
-        outputData[i] = sliced[i] * clampedVolume;
-      }
-    }
-  }
 
   _audioData = audioData;
   _duration = audioData.length / _sampleRate;
   _playbackOffset = offset;
 
-  const outputOptions = {
-    deviceId: deviceId,
-    sampleRate: sampleRate,
-    channels: channels,
-    sampleFormat: format,
-    bufferSize: bufferSize,
-  };
-
-  if (exclusiveMode && process.platform === 'win32') {
-    outputOptions.wasapiExclusiveMode = true;
-  }
+  const speakerOptions = buildSpeakerOptions({
+    deviceId: options.deviceId,
+    sampleRate,
+    channels,
+    bitDepth,
+  });
 
   try {
-    _output = new naudio.AudioOutput(outputOptions);
+    _output = new Speaker(speakerOptions);
   } catch (e) {
     return { success: false, error: `创建音频输出失败: ${e.message}` };
   }
@@ -119,10 +90,13 @@ function handleStart(audioData, options) {
   _playbackStartTime = performance.now();
 
   try {
-    _output.write(outputData);
+    const pcmBuffer = buildPcmBuffer(audioData, dtype, volume, startSample);
+    _output.write(pcmBuffer);
+    // 数据已全部写入，end() 让 Speaker 在内部缓冲播放完毕后自然 finish。
+    _output.end();
   } catch (e) {
     _isPlaying = false;
-    try { _output.end(); } catch (_) {}
+    try { _output.stop(); } catch (_) {}
     _output = null;
     return { success: false, error: `写入音频数据失败: ${e.message}` };
   }
@@ -130,10 +104,11 @@ function handleStart(audioData, options) {
 
   return {
     success: true,
-    sampleRate: sampleRate,
-    channels: channels,
-    bufferSize: bufferSize,
-    exclusiveMode: exclusiveMode,
+    sampleRate,
+    channels,
+    dtype,
+    // decibri 始终共享模式；保留字段以兼容上层契约
+    exclusiveMode: false,
   };
 }
 
@@ -142,7 +117,8 @@ function handleStop() {
   _stopPositionTracking();
 
   if (_output) {
-    try { _output.end(); } catch (_) {}
+    // stop() 立即停止并丢弃剩余音频（区别于 end() 的 drain 行为）
+    try { _output.stop(); } catch (_) {}
     _output = null;
   }
 
@@ -184,44 +160,6 @@ function _stopPositionTracking() {
   }
 }
 
-function _convertBitDepthWithVolume(float32Data, targetFormat, volume, startSample) {
-  const src = float32Data.subarray(startSample);
-  switch (targetFormat) {
-    case 'int16': {
-      const int16 = new Int16Array(src.length);
-      for (let i = 0; i < src.length; i++) {
-        const s = Math.max(-1, Math.min(1, src[i] * volume));
-        int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-      }
-      return Buffer.from(int16.buffer);
-    }
-    case 'int24': {
-      const buf = Buffer.alloc(src.length * 3);
-      for (let i = 0; i < src.length; i++) {
-        const s = Math.max(-1, Math.min(1, src[i] * volume));
-        const val = s < 0 ? s * 0x800000 : s * 0x7FFFFF;
-        const abs = Math.abs(val) | 0;
-        const sign = val < 0 ? 1 : 0;
-        const v = sign ? (0x1000000 - abs) : abs;
-        buf[i * 3] = v & 0xFF;
-        buf[i * 3 + 1] = (v >> 8) & 0xFF;
-        buf[i * 3 + 2] = (v >> 16) & 0xFF;
-      }
-      return buf;
-    }
-    case 'int32': {
-      const int32 = new Int32Array(src.length);
-      for (let i = 0; i < src.length; i++) {
-        const s = Math.max(-1, Math.min(1, src[i] * volume));
-        int32[i] = s < 0 ? s * 0x80000000 : s * 0x7FFFFFFF;
-      }
-      return Buffer.from(int32.buffer);
-    }
-    default:
-      return src;
-  }
-}
-
 process.on('message', (msg) => {
   const { id, type } = msg;
 
@@ -229,7 +167,7 @@ process.on('message', (msg) => {
     let result;
     switch (type) {
       case 'isAvailable':
-        result = { isAvailable: !!naudio };
+        result = { isAvailable: !!Speaker };
         break;
       case 'getDevices':
         result = handleGetDevices();
@@ -253,4 +191,4 @@ process.on('message', (msg) => {
   }
 });
 
-process.send({ type: 'ready', isAvailable: !!naudio });
+process.send({ type: 'ready', isAvailable: !!Speaker });

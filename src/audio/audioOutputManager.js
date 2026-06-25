@@ -1,4 +1,4 @@
-const { fork } = require('child_process');
+const child_process = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -44,7 +44,7 @@ class AudioOutputManager {
     }
 
     try {
-      this._worker = fork(workerScript, [], {
+      this._worker = child_process.fork(workerScript, [], {
         stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
         env: { ...process.env },
         serialization: 'advanced',

@@ -144,7 +144,7 @@ SXSEditor/
 │   │   ├── phone_set.json     # Phoneme vocabulary (2820 entries)
 │   │   └── en_g2p_dict.json   # English G2P dictionary (126k words)
 │   ├── audio/                 # Audio subsystem
-│   │   ├── audioOutputManager.js  # WASAPI output via naudiodon
+│   │   ├── audioOutputManager.js  # WASAPI output via decibri
 │   │   ├── wavEncoder.js      # WAV file encoding
 │   │   └── audioWorker.js     # Audio processing worker
 │   ├── themes/                # Theme system
@@ -239,7 +239,7 @@ Key constants: `SAMPLE_RATE=24000`, `HOP_SIZE=480`, `EMBED_DIM=512`, `COND_DIM=1
 | Inference Engine | ONNX Runtime Node (GPU/CPU via DirectML) + ONNX Runtime Web (NPU via WebNN) |
 | Neural Models | SoulX-Singer (Diffusion-based SVS) |
 | Pitch Detection | RMVPE ONNX, Basic Pitch (TensorFlow.js) |
-| Audio Output | naudiodon (WASAPI shared/exclusive) |
+| Audio Output | decibri (WASAPI shared) |
 | Chinese Lyrics | pinyin-pro (character → pinyin conversion) |
 | Testing | Mocha + Chai + Sinon + JSDOM + NYC |
 | GPU Detection | systeminformation |

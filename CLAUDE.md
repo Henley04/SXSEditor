@@ -62,7 +62,7 @@ Other inference modules:
 
 ### Audio (`src/audio/`)
 
-- `audioOutputManager.js` — WASAPI audio output via naudiodon (optional native module)
+- `audioOutputManager.js` — WASAPI audio output via decibri (optional native module)
 - GPU info via `systeminformation` (replaced `@oxmc/node-gpuinfo`)
 - `wavEncoder.js` — WAV file encoding (24kHz)
 - `audioWorker.js` — Audio processing worker thread
