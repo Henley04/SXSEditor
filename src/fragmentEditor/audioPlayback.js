@@ -20,6 +20,7 @@ import {
   getPipelineInitialized,
   getWavFileBuffer,
   getCurrentProject,
+  getCurrentFragment,
   getEnvelopes,
   getNotes,
   getSelectedNoteIds,
@@ -300,6 +301,17 @@ function updateFragmentExclusivePlayhead(removeEndedListener) {
   setFragmentExclusiveRaf(requestAnimationFrame(update));
 }
 
+function padAudioToFragmentDuration(audioData) {
+  const fragment = getCurrentFragment();
+  if (!fragment || !fragment.duration || !audioData || audioData.length === 0) return audioData;
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  const expectedSamples = Math.ceil((fragment.duration / bpm) * 60 * getSampleRate());
+  if (audioData.length >= expectedSamples) return audioData;
+  const padded = new Float32Array(expectedSamples);
+  padded.set(audioData);
+  return padded;
+}
+
 export async function playFragment() {
   setFragmentIsSynthesizing(true);
   updateFragmentPlayButton();
@@ -307,6 +319,8 @@ export async function playFragment() {
     if (!getPipelineInitialized()) {
       await initPipeline();
     }
+
+    await loadFragmentAudioSettings();
 
     const pitchCurveF0 = buildPitchCurveF0Data();
     const pitchCurveF0Serializable = pitchCurveF0 || null;
@@ -326,9 +340,8 @@ export async function playFragment() {
         cfgRescale: previewOpts.cfgRescale,
       },
     });
-    setFragmentAudioData(audioData);
+    setFragmentAudioData(padAudioToFragmentDuration(audioData));
 
-    await loadFragmentAudioSettings();
     setFragmentUseExclusiveMode(getFragmentAudioSettings()?.audioOutputMode === 'exclusive');
 
     if (getFragmentUseExclusiveMode()) {
@@ -355,6 +368,8 @@ export async function exportFragment() {
       await initPipeline();
     }
 
+    await loadFragmentAudioSettings();
+
     const pitchCurveF0 = buildPitchCurveF0Data();
     const pitchCurveF0Serializable = pitchCurveF0 || null;
 
@@ -373,9 +388,10 @@ export async function exportFragment() {
         cfgRescale: exportOpts.cfgRescale,
       },
     });
+    const paddedAudio = padAudioToFragmentDuration(audioData);
     const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
     const envelopes = getEnvelopes();
-    const stereoData = applyEnvelopesToAudio(audioData, getSampleRate(), bpm, envelopes.volume, envelopes.pan);
+    const stereoData = applyEnvelopesToAudio(paddedAudio, getSampleRate(), bpm, envelopes.volume, envelopes.pan);
     const wavData = encodeWav(stereoData, getSampleRate(), 2);
     const result = await window.electronAPI.showSaveDialog({
       filters: [{ name: 'WAV Audio', extensions: ['wav'] }],

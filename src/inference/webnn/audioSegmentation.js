@@ -144,6 +144,16 @@ export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuV
     for (let i = 0; i < totalSamples; i++) {
         if (weightSum[i] > 0) output[i] /= weightSum[i];
     }
+    // Normalize to peak 0.95 to prevent clipping
+    let peak = 0;
+    for (let i = 0; i < totalSamples; i++) {
+        const abs = Math.abs(output[i]);
+        if (abs > peak) peak = abs;
+    }
+    if (peak > 0.95) {
+        const scale = 0.95 / peak;
+        for (let i = 0; i < totalSamples; i++) output[i] *= scale;
+    }
     const audioData = output.slice(); // TypedArray.slice() 替代 Array.from()
 
     return { audioData, vocChunkCount, vocPrepTotal, vocInferTotal, vocPostTotal };

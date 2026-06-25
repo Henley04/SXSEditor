@@ -22,6 +22,16 @@
   z-index: 10;
 }
 
+#toolbar::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--toolbar-accent-line, 0);
+  background: var(--accent);
+}
+
 .toolbar-group {
   display: flex;
   align-items: center;

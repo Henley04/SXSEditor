@@ -41,6 +41,8 @@ let selectedAnchorIndices = new Set();
 let dragMode = null;
 let dragStartX = 0;
 let dragStartY = 0;
+let dragStartMouseTime = 0;
+let dragStartMousePitch = 0;
 let dragNoteStart = { start: 0, pitch: 0, duration: 0 };
 let dragNoteStarts = new Map();
 let scrollY = 0;
@@ -78,6 +80,9 @@ let paramEnvelopeDrag = null;
 
 let activeInlineInput = null;
 let activeInlineEditNote = null;
+
+let paramPanelCollapsed = false;
+let paramPanelMode = 'VOL'; // 'VOL' | 'PAN' | 'Phoneme' | 'Timbre'
 
 let fragmentDataReceived = false;
 
@@ -174,6 +179,12 @@ export function setDragStartX(v) { dragStartX = v; }
 export function getDragStartY() { return dragStartY; }
 export function setDragStartY(v) { dragStartY = v; }
 
+export function getDragStartMouseTime() { return dragStartMouseTime; }
+export function setDragStartMouseTime(v) { dragStartMouseTime = v; }
+
+export function getDragStartMousePitch() { return dragStartMousePitch; }
+export function setDragStartMousePitch(v) { dragStartMousePitch = v; }
+
 export function getDragNoteStart() { return dragNoteStart; }
 export function setDragNoteStart(v) { dragNoteStart = v; }
 
@@ -263,6 +274,12 @@ export function setActiveInlineInput(v) { activeInlineInput = v; }
 
 export function getActiveInlineEditNote() { return activeInlineEditNote; }
 export function setActiveInlineEditNote(v) { activeInlineEditNote = v; }
+
+export function getParamPanelCollapsed() { return paramPanelCollapsed; }
+export function setParamPanelCollapsed(v) { paramPanelCollapsed = v; }
+
+export function getParamPanelMode() { return paramPanelMode; }
+export function setParamPanelMode(v) { paramPanelMode = v; }
 
 export function getFragmentDataReceived() { return fragmentDataReceived; }
 export function setFragmentDataReceived(v) { fragmentDataReceived = v; }

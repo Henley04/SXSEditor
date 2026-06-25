@@ -222,6 +222,16 @@ export const TOKEN_CATALOG = {
 
     '--selection-bg-token': { layer: 'component', group: 'selection', type: 'color', default: 'var(--selection-bg)', label: '选区背景' },
     '--selection-fg':       { layer: 'component', group: 'selection', type: 'color', default: 'var(--fg-primary)', label: '选区文字' },
+
+    // ==================== Structural: clip-paths ====================
+    '--clip-button':  { layer: 'component', group: 'clip', type: 'string', default: 'none', label: '按钮切角' },
+    '--clip-panel':   { layer: 'component', group: 'clip', type: 'string', default: 'none', label: '面板切角' },
+    '--clip-badge':   { layer: 'component', group: 'clip', type: 'string', default: 'none', label: '标签切角' },
+
+    // ==================== Structural: decorative ====================
+    '--deco-accent-bar':     { layer: 'component', group: 'deco', type: 'string', default: '0', label: '装饰强调线宽' },
+    '--deco-stripe':         { layer: 'component', group: 'deco', type: 'string', default: 'none', label: '装饰条纹背景' },
+    '--toolbar-accent-line': { layer: 'component', group: 'deco', type: 'string', default: '0', label: '工具栏强调线' },
 };
 
 export const TOKEN_NAMES = Object.keys(TOKEN_CATALOG);
@@ -256,6 +266,9 @@ export const REQUIRED_TOKENS_FOR_BUILTIN = [
     '--panel-bg', '--panel-border', '--panel-fg',
     '--tooltip-bg', '--tooltip-fg',
     '--selection-bg-token', '--selection-fg',
+    // Structural
+    '--clip-button', '--clip-panel', '--clip-badge',
+    '--deco-accent-bar', '--deco-stripe', '--toolbar-accent-line',
 ];
 
 /**

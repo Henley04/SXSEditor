@@ -95,15 +95,15 @@ export function getCanvasColors() {
         pianoBlackKey:  '#1a1a1a',
         pianoKeyBorder: v('--border-strong')   || '#3a3a52',
 
-        // Grid lines — brighter than UI borders for canvas visibility
-        gridLineMajor:  v('--color-ink-50')    || '#3a3a4e',
-        gridLineMinor:  v('--color-ink-100')   || '#323246',
-        gridLineMeasure:v('--color-gray-800')  || '#4a4a66',
+        // Grid lines — use border tokens for theme-appropriate contrast
+        gridLineMajor:  v('--border-default')  || '#3a3a4e',
+        gridLineMinor:  v('--border-subtle')   || '#323246',
+        gridLineMeasure:v('--border-strong')   || '#4a4a66',
 
         // Note rendering
         noteBg:         v('--accent')          || '#5b8def',
         noteSelectedBg: v('--fg-primary')      || '#ffffff',
-        noteBorder:     v('--color-black')     || '#000000',
+        noteBorder:     v('--border-strong')   || '#3a3a52',
         noteText:       v('--fg-on-accent')    || '#ffffff',
 
         // Pitch curve

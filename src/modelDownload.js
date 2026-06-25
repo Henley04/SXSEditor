@@ -251,7 +251,7 @@ window.electronAPI.onModelDownloadError((data) => {
   isDownloading = false;
 });
 
-document.getElementById('startBtn').addEventListener('click', () => {
+document.getElementById('startBtn').addEventListener('click', async () => {
   const selectedRadio = document.querySelector('input[name="modelPrecision"]:checked');
   currentPrecision = selectedRadio ? selectedRadio.value : 'fp16';
 
@@ -265,7 +265,20 @@ document.getElementById('startBtn').addEventListener('click', () => {
   lastSpeedTime = downloadStartTime;
   lastOverallDownloaded = 0;
   isDownloading = true;
-  window.electronAPI.modelDownloadStart(currentPrecision);
+
+  const result = await window.electronAPI.modelDownloadStart(currentPrecision);
+  if (result && !result.success && result.error) {
+    document.getElementById('statusText').textContent = t('modelDownload.downloadNotAvailable');
+    document.getElementById('speedInfo').textContent = '';
+    document.getElementById('errorMessage').textContent = result.error;
+    document.getElementById('errorMessage').style.display = 'block';
+    document.getElementById('cancelBtn').style.display = 'none';
+    document.getElementById('closeBtn').style.display = 'inline-block';
+    document.getElementById('changeDirBtn').disabled = false;
+    document.getElementById('precisionSection').style.display = 'block';
+    document.getElementById('progressSection').style.display = 'none';
+    isDownloading = false;
+  }
 });
 
 // 精度切换时检查对应模型文件（不删除已有文件，不同精度可共存）

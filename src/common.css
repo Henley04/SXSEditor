@@ -93,6 +93,7 @@ button {
   font-size: var(--font-md);
   border: none;
   border-radius: var(--radius-lg);
+  clip-path: var(--clip-button, none);
   cursor: pointer;
   font-weight: 500;
   transition: all var(--motion-base);

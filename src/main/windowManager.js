@@ -123,7 +123,7 @@ function createWindow() {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
     },
   });
 
@@ -169,7 +169,7 @@ function openSettingsWindow() {
       preload: SETTINGS_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
     },
   });
 
@@ -201,7 +201,7 @@ function openResourceManagerWindow() {
       preload: RESOURCE_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
     },
   });
 
@@ -239,7 +239,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
       preload: MODEL_DOWNLOAD_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
     },
   });
 
@@ -282,7 +282,7 @@ function openFragmentEditor(fragment, project, wavBuffer) {
       preload: FRAGMENT_EDITOR_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
     },
   });
 
@@ -322,7 +322,7 @@ function openSingerCreator() {
       preload: SINGER_CREATOR_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
     },
   });
 
@@ -362,7 +362,7 @@ function openAudioPreprocess(data) {
       preload: AUDIO_PREPROCESS_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
     },
   });
 

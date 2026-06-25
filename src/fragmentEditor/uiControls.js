@@ -1,5 +1,4 @@
 import { t } from '../i18n/index.js';
-import { PARAM_MODES } from '../editor/pianoRoll.js';
 import { HistoryManager } from '../editor/historyManager.js';
 import { showAlertDialog } from '../alertDialog.js';
 import {
@@ -14,20 +13,22 @@ import {
   setFragmentCurrentTime,
   setBrushSmoothing,
   invalidatePitchCurveCache,
+  getParamPanelCollapsed, setParamPanelCollapsed,
+  getParamPanelMode, setParamPanelMode,
 } from './state.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
-import { render, resolvePhonemesFromPipeline, clonePitchCurveState, applyPitchCurveSnapshot, genNoteId } from './canvasRenderer.js';
+import { render, resizeCanvases, resolvePhonemesFromPipeline, clonePitchCurveState, applyPitchCurveSnapshot, genNoteId } from './canvasRenderer.js';
 import { playFragment, stopFragmentPlayback, exportFragment } from './audioPlayback.js';
 
 const history = new HistoryManager();
 
 export function updateParamModeButtons() {
-  const modes = ['MIDI', 'Pitch', 'VOL', 'PAN', 'Phoneme'];
+  const modes = ['MIDI', 'Pitch'];
   const currentParamMode = getCurrentParamMode();
   modes.forEach(mode => {
     const btn = document.getElementById(`btn-param-${mode}`);
     if (btn) {
-      const isActive = currentParamMode === mode || (mode === 'Pitch' && currentParamMode === 'Pitch');
+      const isActive = currentParamMode === mode;
       if (isActive) {
         btn.classList.add('active');
       } else {
@@ -52,6 +53,26 @@ export function updateParamModeButtons() {
   }
 
   updatePitchToolButtons();
+}
+
+export function updateParamPanelState() {
+  const toggle = document.getElementById('btn-param-toggle');
+  const select = document.getElementById('param-mode-select');
+  if (toggle) {
+    toggle.classList.toggle('collapsed', getParamPanelCollapsed());
+  }
+  if (select) {
+    select.value = getParamPanelMode();
+  }
+  // Sync horizontal tab active state
+  const tabs = document.querySelectorAll('.param-lane-tab');
+  tabs.forEach(tab => {
+    if (tab.classList.contains('disabled')) {
+      tab.classList.remove('active');
+    } else {
+      tab.classList.toggle('active', tab.dataset.lane === select?.value);
+    }
+  });
 }
 
 function updatePitchToolButtons() {
@@ -91,19 +112,47 @@ export function hideShortcutsPanel() {
 }
 
 export function setupUiControls() {
-  document.querySelectorAll('[id^="btn-param-"]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const mode = btn.id.replace('btn-param-', '');
-      if (mode === 'Pitch') {
-        setCurrentParamMode('Pitch');
-      } else {
-        setCurrentParamMode(PARAM_MODES[mode] || mode);
-      }
-      updateParamModeButtons();
-      if (getCurrentParamMode() === 'Phoneme') resolvePhonemesFromPipeline();
-      render();
-    });
+  // Toolbar param buttons: MIDI, Pitch
+  ['MIDI', 'Pitch'].forEach(mode => {
+    const btn = document.getElementById(`btn-param-${mode}`);
+    if (btn) {
+      btn.addEventListener('click', () => {
+        setCurrentParamMode(mode);
+        setParamPanelCollapsed(true);
+        updateParamModeButtons();
+        updateParamPanelState();
+        resizeCanvases();
+      });
+    }
   });
+
+  // Param panel toggle button
+  const btnToggle = document.getElementById('btn-param-toggle');
+  if (btnToggle) {
+    btnToggle.addEventListener('click', () => {
+      setParamPanelCollapsed(!getParamPanelCollapsed());
+      updateParamPanelState();
+      resizeCanvases();
+    });
+  }
+
+  // Param mode dropdown
+  const paramModeSelect = document.getElementById('param-mode-select');
+  if (paramModeSelect) {
+    paramModeSelect.addEventListener('change', () => {
+      const mode = paramModeSelect.value;
+      setCurrentParamMode(mode);
+      setParamPanelMode(mode);
+      // Auto-expand panel if collapsed
+      if (getParamPanelCollapsed()) {
+        setParamPanelCollapsed(false);
+      }
+      if (mode === 'Phoneme') resolvePhonemesFromPipeline();
+      updateParamModeButtons();
+      updateParamPanelState();
+      resizeCanvases();
+    });
+  }
 
   document.getElementById('btn-pitch-reset').addEventListener('click', () => {
     const oldSnapshot = clonePitchCurveState();
@@ -227,6 +276,7 @@ export function setupUiControls() {
       });
       render();
       scheduleAutoSave();
+      resolvePhonemesFromPipeline();
     } catch (err) {
       showAlertDialog(t('fragment.midiImportFailed') + ': ' + err.message);
     }

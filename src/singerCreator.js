@@ -62,14 +62,14 @@ wavUploadArea.addEventListener('click', () => wavFileInput.click());
 
 wavUploadArea.addEventListener('dragover', (e) => {
   e.preventDefault();
-  wavUploadArea.style.borderColor = '#3498db';
+  wavUploadArea.style.borderColor = 'var(--accent)';
 });
 wavUploadArea.addEventListener('dragleave', () => {
-  wavUploadArea.style.borderColor = '#555555';
+  wavUploadArea.style.borderColor = 'var(--border-default)';
 });
 wavUploadArea.addEventListener('drop', async (e) => {
   e.preventDefault();
-  wavUploadArea.style.borderColor = '#555555';
+  wavUploadArea.style.borderColor = 'var(--border-default)';
   if (e.dataTransfer.files.length > 0) {
     await handleWavFile(e.dataTransfer.files[0]);
   }
@@ -686,7 +686,7 @@ function drawTrimTimeAxis() {
       left: ${x}px;
       bottom: 0;
       font-size: 9px;
-      color: #5a5a72;
+      color: var(--fg-muted);
       transform: translateX(-50%);
     `;
     tick.textContent = time + 's';

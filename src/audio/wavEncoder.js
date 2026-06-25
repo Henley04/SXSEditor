@@ -71,10 +71,11 @@ function applyEnvelopesToAudio(monoAudio, sampleRate, bpm, volumeEnvelope, panEn
   const hasVolume = volumeEnvelope && volumeEnvelope.keyframes && volumeEnvelope.keyframes.length > 0;
   const hasPan = panEnvelope && panEnvelope.keyframes && panEnvelope.keyframes.length > 0;
 
-  for (let i = 0; i < numSamples; i++) {
-    const timeSec = i / sampleRate;
-    const beatTime = (timeSec / 60) * bpm;
+  // Precompute beat time increment to avoid per-sample division
+  const beatTimeInc = bpm / (60 * sampleRate);
+  let beatTime = 0;
 
+  for (let i = 0; i < numSamples; i++) {
     let volume = 1;
     if (hasVolume) {
       volume = _interpEnv(volumeEnvelope, beatTime);
@@ -86,11 +87,12 @@ function applyEnvelopesToAudio(monoAudio, sampleRate, bpm, volumeEnvelope, panEn
     }
 
     const sample = monoAudio[i] * volume;
-    const leftGain = Math.cos((pan + 1) * Math.PI / 4);
-    const rightGain = Math.sin((pan + 1) * Math.PI / 4);
+    const leftGain = Math.cos((pan + 1) * 0.7853981633974483); // PI/4 precomputed
+    const rightGain = Math.sin((pan + 1) * 0.7853981633974483);
 
     stereoData[i * 2] = sample * leftGain;
     stereoData[i * 2 + 1] = sample * rightGain;
+    beatTime += beatTimeInc;
   }
 
   return stereoData;
@@ -98,19 +100,23 @@ function applyEnvelopesToAudio(monoAudio, sampleRate, bpm, volumeEnvelope, panEn
 
 function _interpEnv(envelope, time) {
   const kfs = envelope.keyframes;
-  if (!kfs || kfs.length === 0) return 0;
-  if (kfs.length === 1) return kfs[0].value;
+  const len = kfs.length;
+  if (len === 0) return 0;
+  if (len === 1) return kfs[0].value;
   if (time <= kfs[0].time) return kfs[0].value;
-  if (time >= kfs[kfs.length - 1].time) return kfs[kfs.length - 1].value;
-  for (let i = 0; i < kfs.length - 1; i++) {
-    if (time >= kfs[i].time && time <= kfs[i + 1].time) {
-      const t = (time - kfs[i].time) / (kfs[i + 1].time - kfs[i].time);
-      const smoothness = (kfs[i].smoothness || 0) / 100;
-      const smoothT = smoothstep(t, smoothness);
-      return kfs[i].value + smoothT * (kfs[i + 1].value - kfs[i].value);
-    }
+  if (time >= kfs[len - 1].time) return kfs[len - 1].value;
+
+  // Binary search for the segment containing `time`
+  let lo = 0, hi = len - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >>> 1;
+    if (kfs[mid].time <= time) lo = mid;
+    else hi = mid;
   }
-  return kfs[kfs.length - 1].value;
+  const t = (time - kfs[lo].time) / (kfs[lo + 1].time - kfs[lo].time);
+  const smoothness = (kfs[lo].smoothness || 0) / 100;
+  const smoothT = smoothstep(t, smoothness);
+  return kfs[lo].value + smoothT * (kfs[lo + 1].value - kfs[lo].value);
 }
 
 export { encodeWav, applyEnvelopesToAudio };

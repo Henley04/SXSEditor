@@ -28,6 +28,8 @@ export async function playAll() {
   dom.btnPlay.textContent = t('main.synthesizing');
 
   try {
+    await loadAudioSettings();
+
     const fragments = trackManager.getFragments();
     const singers = trackManager.getSingers();
     const singerMap = new Map();
@@ -145,8 +147,15 @@ export async function playAll() {
       });
 
       const firstNoteStart = data.notes[0].start;
+      const lastNote = data.notes[data.notes.length - 1];
+      const expectedSamples = Math.ceil(((lastNote.start + lastNote.duration) / state.project.bpm) * 60 * SAMPLE_RATE);
+      let paddedAudio = audioData;
+      if (audioData.length < expectedSamples) {
+        paddedAudio = new Float32Array(expectedSamples);
+        paddedAudio.set(audioData);
+      }
       audioResults.push({
-        audioData,
+        audioData: paddedAudio,
         startTimeBeat: firstNoteStart,
       });
 
@@ -531,6 +540,7 @@ export async function exportAll() {
     }
 
     await ensurePipelineInitialized();
+    await loadAudioSettings();
 
     const exportInferenceOpts = getExportInferenceOptions();
 
@@ -573,8 +583,15 @@ export async function exportAll() {
       const endBeat = lastNote.start + lastNote.duration;
       maxDuration = Math.max(maxDuration, (endBeat / state.project.bpm) * 60);
 
+      const expectedSamples = Math.ceil((endBeat / state.project.bpm) * 60 * SAMPLE_RATE);
+      let paddedAudio = audioData;
+      if (audioData.length < expectedSamples) {
+        paddedAudio = new Float32Array(expectedSamples);
+        paddedAudio.set(audioData);
+      }
+
       audioResults.push({
-        audioData,
+        audioData: paddedAudio,
         startTimeBeat: firstNoteStart,
       });
     }

@@ -20,6 +20,7 @@ function getBaseModelDir() {
   const precisionSuffixes = [
     path.sep + 'int8' + path.sep + 'optimized_npu' + path.sep,
     path.sep + 'int8' + path.sep,
+    path.sep + 'fp8' + path.sep,
     path.sep + 'fp16' + path.sep,
   ];
   for (const suffix of precisionSuffixes) {

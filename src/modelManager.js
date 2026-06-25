@@ -10,6 +10,7 @@ const { URL } = require('node:url');
 const MODEL_IDS = {
   fp32: 'syxppp/SoulX-Singer-onnx-directml',
   fp16: 'syxppp/SoulX-Singer-onnx-directml-fp16',
+  fp8: '',  // placeholder — download link TBD
   int8: 'syxppp/SoulX-Singer-onnx-directml-int8',
   'int8-npu': 'syxppp/SoulX-Singer-onnx-directml-int8-dynamic',
 };
@@ -65,18 +66,25 @@ const JP_MODEL_FILE_MANIFEST = [
 ];
 
 function getModelId(precision) {
-  return MODEL_IDS[precision] || MODEL_IDS[DEFAULT_PRECISION];
+  if (precision && precision in MODEL_IDS) return MODEL_IDS[precision];
+  return MODEL_IDS[DEFAULT_PRECISION];
+}
+
+function isPrecisionDownloadable(precision) {
+  const id = MODEL_IDS[precision];
+  return id && id.length > 0;
 }
 
 function getJpModelId(precision) {
   return JP_MODEL_IDS[precision] || JP_MODEL_IDS[DEFAULT_PRECISION] || null;
 }
 
-const PRECISION_SUBDIR_PRECESIONS = new Set(['int8', 'fp16', 'int8-npu']);
+const PRECISION_SUBDIR_PRECESIONS = new Set(['int8', 'fp16', 'fp8', 'int8-npu']);
 
 const PRECISION_SUBDIR_MAP = {
   'int8': 'int8',
   'fp16': 'fp16',
+  'fp8': 'fp8',
   'int8-npu': path.join('int8', 'optimized_npu'),
 };
 
@@ -137,6 +145,7 @@ function getFileDownloadUrl(filePath, precision) {
   // not int8-npu repo (static shapes with fixed input dimensions)
   const effectivePrecision = (!isSvsModelFile(filePath) && precision === 'int8-npu') ? 'int8' : precision;
   const modelId = getModelId(effectivePrecision);
+  if (!modelId) return null;  // precision not yet available for download
   const encoded = encodeURIComponent(filePath);
   return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
 }
@@ -1108,4 +1117,5 @@ module.exports = {
   getJpLocalFilePath,
   getManifestForPrecision,
   isSvsModelFile,
+  isPrecisionDownloadable,
 };

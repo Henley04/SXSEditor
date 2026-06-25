@@ -12,3 +12,4 @@ export const PHONEME_COLORS = [
 ];
 
 export const PHONEME_CACHE_MAX = 500;
+export const PARAM_PANEL_HEADER_HEIGHT = 28;

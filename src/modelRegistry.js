@@ -158,6 +158,36 @@ const MODEL_GROUPS = [
       },
     ],
   },
+  {
+    id: 'svs-jp',
+    name: 'SVS 日语模型',
+    nameEn: 'SVS Japanese Models',
+    description: '日语歌声合成专用模型（音素文本编码器 + 预流变换），需配合基础 SVS 管线使用',
+    descriptionEn: 'Japanese singing synthesis models (text encoder + preflow), used with base SVS pipeline',
+    required: false,
+    language: 'ja',
+    pipelineRef: 'svsPipeline',
+    models: [
+      {
+        id: 'noteTextEncoderJp',
+        name: '日语音素文本编码器',
+        nameEn: 'JP Phoneme Text Encoder',
+        description: '扩展的日语音素嵌入编码器（3034 音素）',
+        descriptionEn: 'Extended Japanese phoneme embedding encoder (3034 phonemes)',
+        files: ['note_text_encoder.onnx', 'note_text_encoder.onnx.data'],
+        sessionKey: 'noteTextEncoder',
+      },
+      {
+        id: 'preflowJp',
+        name: '日语预流变换',
+        nameEn: 'JP Pre-flow Transform',
+        description: '日语微调的预流变换模型',
+        descriptionEn: 'Japanese fine-tuned pre-flow transform model',
+        files: ['preflow.onnx', 'preflow.onnx.data'],
+        sessionKey: 'preflow',
+      },
+    ],
+  },
 ];
 
 /**

@@ -113,8 +113,8 @@
     "--bg-button-danger-hover": "linear-gradient(180deg, #ff8888 0%, #f87171 100%)",
 
     "--fg-primary":   "#e0e0f0",
-    "--fg-secondary": "#d8d8ec",
-    "--fg-muted":     "#c8c8dc",
+    "--fg-secondary": "#d0d0e4",
+    "--fg-muted":     "#8888a8",
     "--fg-disabled":  "#5a5a72",
     "--fg-on-accent": "#ffffff",
     "--fg-on-success":"#0a0a14",
@@ -151,7 +151,7 @@
     "--panel-line":          "rgba(42, 42, 61, 0.5)",
     "--ink-soft":            "rgba(90, 90, 114, 0.3)",
 
-    "--border-subtle":  "#1a1a28",
+    "--border-subtle":  "#24243a",
     "--border-default": "#2a2a3d",
     "--border-strong":  "#3a3a52",
     "--border-accent":  "#5b8def",
@@ -191,6 +191,13 @@
     "--tooltip-fg": "var(--fg-primary)",
 
     "--selection-bg-token": "var(--selection-bg)",
-    "--selection-fg":       "var(--fg-primary)"
+    "--selection-fg":       "var(--fg-primary)",
+
+    "--clip-button":    "none",
+    "--clip-panel":     "none",
+    "--clip-badge":     "none",
+    "--deco-accent-bar": "0",
+    "--deco-stripe":    "none",
+    "--toolbar-accent-line": "0"
   }
 }

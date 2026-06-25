@@ -10,6 +10,10 @@ const locales = {
 
 let currentLocale = 'en';
 
+// Translation cache: maps `${locale}:${key}` → resolved string (only for parameterless calls)
+const _tCache = new Map();
+const _tCacheMax = 2000;
+
 function getLocale() {
     return currentLocale;
 }
@@ -17,6 +21,7 @@ function getLocale() {
 function setLocale(locale) {
     if (locales[locale]) {
         currentLocale = locale;
+        _tCache.clear(); // Invalidate cache on locale change
         localStorage.setItem(STORAGE_KEY, locale);
         if (window.electronAPI?.saveLocale) {
             window.electronAPI.saveLocale(locale).catch(() => {});
@@ -30,6 +35,30 @@ function resolve(obj, key) {
 }
 
 function t(key, params) {
+    // Fast path: cache parameterless lookups
+    if (!params) {
+        const cacheKey = `${currentLocale}:${key}`;
+        const cached = _tCache.get(cacheKey);
+        if (cached !== undefined) return cached;
+
+        let value = resolve(locales[currentLocale], key);
+        if (value === undefined) {
+            value = resolve(locales['en'], key);
+        }
+        if (value === undefined) {
+            _tCache.set(cacheKey, key);
+            return key;
+        }
+        _tCache.set(cacheKey, value);
+        // Evict oldest entries if cache grows too large
+        if (_tCache.size > _tCacheMax) {
+            const firstKey = _tCache.keys().next().value;
+            _tCache.delete(firstKey);
+        }
+        return value;
+    }
+
+    // Parameterized lookups are not cached (params vary)
     let value = resolve(locales[currentLocale], key);
     if (value === undefined) {
         value = resolve(locales['en'], key);
@@ -37,12 +66,9 @@ function t(key, params) {
     if (value === undefined) {
         return key;
     }
-    if (params) {
-        return value.replace(/\{(\w+)\}/g, (_, name) => {
-            return params[name] !== undefined ? params[name] : `{${name}}`;
-        });
-    }
-    return value;
+    return value.replace(/\{(\w+)\}/g, (_, name) => {
+        return params[name] !== undefined ? params[name] : `{${name}}`;
+    });
 }
 
 function applyLocale() {

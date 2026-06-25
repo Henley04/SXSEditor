@@ -17,6 +17,7 @@ import {
   getCurrentFragment,
   getCurrentProject,
   getEnvelopes,
+  getScrollY, setScrollY,
   getWavFileBuffer, setWavFileBuffer,
   getPitchCurveSnapshotBeforeDrag, setPitchCurveSnapshotBeforeDrag,
   getEnvelopeSnapshotBeforeDrag, setEnvelopeSnapshotBeforeDrag,
@@ -40,7 +41,7 @@ import {
 import { PARAM_MODES } from '../editor/pianoRoll.js';
 import { initPipeline } from './pipeline.js';
 import { stopFragmentPlayback, loadFragmentAudioSettings } from './audioPlayback.js';
-import { render, resizeCanvases, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline } from './canvasRenderer.js';
+import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline } from './canvasRenderer.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { updateParamModeButtons } from './uiControls.js';
 import { HistoryManager } from '../editor/historyManager.js';
@@ -140,6 +141,11 @@ async function handleFragmentData(data) {
 
   getPhonemeCache().clear();
   resizeCanvases();
+
+  // Center the vertical view on existing notes, or the middle pitch if empty
+  setScrollY(computeInitialScrollY());
+  render();
+
   await resolvePhonemesFromPipeline();
 }
 

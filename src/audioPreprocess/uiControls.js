@@ -75,10 +75,10 @@ export function startInlineEdit(roll, note, hit) {
     top: ${inputY}px;
     width: ${inputW}px;
     height: ${inputH}px;
-    background: #1e1e1e;
-    border: 1px solid #3498db;
+    background: var(--bg-input);
+    border: 1px solid var(--accent);
     border-radius: 2px;
-    color: #ffffff;
+    color: var(--fg-primary);
     font-size: 11px;
     font-family: sans-serif;
     padding: 0 2px;
@@ -194,7 +194,7 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0,0,0,0.6);
+    background: var(--overlay-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -203,12 +203,12 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
 
   const dialog = document.createElement('div');
   dialog.style.cssText = `
-    background: #2d2d2d;
-    border: 1px solid #555;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
     border-radius: 8px;
     padding: 20px;
     min-width: 280px;
-    color: #fff;
+    color: var(--fg-primary);
   `;
 
   const titleDiv = document.createElement('div');
@@ -223,10 +223,10 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
   input.style.cssText = `
     width: 100%;
     padding: 8px;
-    background: #1e1e1e;
-    border: 1px solid #555;
+    background: var(--bg-input);
+    border: 1px solid var(--border-default);
     border-radius: 4px;
-    color: #fff;
+    color: var(--fg-primary);
     margin-bottom: 12px;
     box-sizing: border-box;
   `;
@@ -239,10 +239,10 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
   cancelBtn.id = 'prompt-cancel';
   cancelBtn.style.cssText = `
     padding: 6px 16px;
-    background: #3c3c3c;
-    border: 1px solid #555;
+    background: var(--bg-button);
+    border: 1px solid var(--button-secondary-border);
     border-radius: 4px;
-    color: #fff;
+    color: var(--fg-primary);
     cursor: pointer;
   `;
   cancelBtn.textContent = t('common.cancel');
@@ -251,10 +251,10 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
   okBtn.id = 'prompt-ok';
   okBtn.style.cssText = `
     padding: 6px 16px;
-    background: #3498db;
+    background: var(--bg-button-primary);
     border: none;
     border-radius: 4px;
-    color: #fff;
+    color: var(--fg-on-accent);
     cursor: pointer;
   `;
   okBtn.textContent = t('common.confirm');

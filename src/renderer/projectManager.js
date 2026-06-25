@@ -334,7 +334,7 @@ export function showSaveProjectOptionsDialog() {
     optionsContainer.appendChild(embedOption);
 
     const embedDesc = document.createElement('div');
-    embedDesc.style.cssText = 'font-size: 11px; color: #6a6a86; margin-top: -8px; padding-left: 24px;';
+    embedDesc.style.cssText = 'font-size: 11px; color: var(--fg-muted); margin-top: -8px; padding-left: 24px;';
     embedDesc.textContent = t('main.embedSingerFilesDesc');
     optionsContainer.appendChild(embedDesc);
 
