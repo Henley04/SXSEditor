@@ -95,15 +95,21 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.whenReady().then(() => {
+  const isDev = !app.isPackaged;
+
+  const cspScriptSrc = isDev ? "'self' 'unsafe-eval'" : "'self'";
+  const cspConnectSrc = isDev
+    ? "'self' https://modelscope.cn ws://0.0.0.0:3000 ws://localhost:3000"
+    : "'self' https://modelscope.cn";
+  const contentSecurityPolicy = `default-src 'self'; script-src ${cspScriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src ${cspConnectSrc}; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:;`;
+
   // Content Security Policy: restrict resource loading to self-origin
   const { session } = require('electron');
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
         ...details.responseHeaders,
-        'Content-Security-Policy': [
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://modelscope.cn; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:;"
-        ],
+        'Content-Security-Policy': [contentSecurityPolicy],
         // Enable cross-origin isolation so renderers get crossOriginIsolated=true,
         // which unlocks SharedArrayBuffer for multi-threaded WASM (ort.env.wasm.numThreads > 1).
         'Cross-Origin-Opener-Policy': ['same-origin'],
