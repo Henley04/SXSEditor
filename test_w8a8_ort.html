@@ -11,7 +11,7 @@ async function test() {
     document.head.appendChild(script);
     await new Promise(r => script.onload = r);
 
-    ort.env.wasm.numThreads = 1;
+    ort.env.wasm.numThreads = Math.max(1, Math.min(navigator.hardwareConcurrency || 4, 8));
 
     const modelPath = '../onnx_models/int8/optimized_npu/w8a8_test/preflow_w8a8.onnx';
 

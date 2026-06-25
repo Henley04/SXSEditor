@@ -1,5 +1,8 @@
-const rules = require('./webpack.rules');
+const baseRules = require('./webpack.rules');
 const MiniCssExtractPlugin = require('mini-css-extract-plugin');
+
+// Exclude native module asset relocator from renderer (renderer uses preload bridge, no direct native module imports)
+const rules = baseRules.filter(r => !r.use || r.use.loader !== '@vercel/webpack-asset-relocator-loader');
 const CopyPlugin = require('copy-webpack-plugin');
 const path = require('node:path');
 
@@ -57,6 +60,10 @@ module.exports = {
   // Put your normal webpack config below here
   module: {
     rules,
+  },
+  node: {
+    __dirname: false,
+    __filename: false,
   },
   plugins: [
     new MiniCssExtractPlugin({
