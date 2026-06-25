@@ -31,6 +31,10 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/audio/audioWorker.js'),
         },
         {
+          from: path.resolve(__dirname, 'src/audio/audioFormatUtils.js'),
+          to: path.resolve(__dirname, '.webpack/main/audio/audioFormatUtils.js'),
+        },
+        {
           from: path.resolve(__dirname, 'src/utils/gpuWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/utils/gpuWorker.js'),
         },

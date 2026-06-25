@@ -431,9 +431,9 @@ async function loadAudioDevices() {
     try {
         const audioResult = await window.electronAPI.getAudioDevices();
         const audioDevices = audioResult.devices || [];
-        const isNaudiodonAvailable = audioResult.isAvailable || false;
+        const isAudioAvailable = audioResult.isAvailable || false;
 
-        if (!isNaudiodonAvailable) {
+        if (!isAudioAvailable) {
             audioOutputModeSelect.textContent = '';
             const opt = document.createElement('option');
             opt.value = 'shared';
@@ -452,7 +452,7 @@ async function loadAudioDevices() {
         }
 
         const isExclusive = audioOutputModeSelect.value === 'exclusive';
-        audioBitDepthSelect.disabled = !isExclusive || !isNaudiodonAvailable;
+        audioBitDepthSelect.disabled = !isExclusive || !isAudioAvailable;
     } catch (err) {
         console.error('加载音频设备列表失败:', err);
     }
@@ -724,6 +724,13 @@ let themeList = [];
 let editorActive = false;
 let toastTimer = null;
 
+function getThemeDisplayName(meta) {
+    if (!meta) return '';
+    const key = `settings.theme.names.${meta.id}`;
+    const localized = t(key);
+    return localized !== key ? localized : (meta.name || meta.id);
+}
+
 function showToast(message, kind = 'info') {
     if (!themeToast) return;
     themeToast.textContent = message;
@@ -762,7 +769,7 @@ function populateThemeSelect() {
     for (const meta of themeList) {
         const opt = document.createElement('option');
         opt.value = meta.id;
-        opt.textContent = meta.name || meta.id;
+        opt.textContent = getThemeDisplayName(meta);
         if (meta.source === 'builtin') {
             builtinGroup.appendChild(opt);
             hasBuiltin = true;
@@ -821,13 +828,15 @@ if (themeSelect) {
         const id = e.target.value;
         if (!id) return;
         await applyThemeViaAPI(id);
-        showToast(t('settings.theme.selectLabel') + ': ' + id, 'info');
+        const meta = themeList.find(m => m.id === id);
+        showToast(t('settings.theme.selectLabel') + ': ' + getThemeDisplayName(meta), 'info');
     });
 }
 
 if (themeResetBtn) {
     themeResetBtn.addEventListener('click', async () => {
-        if (!confirm(t('settings.theme.confirmReset'))) return;
+        const defaultMeta = themeList.find(m => m.id === 'dark-aurora') || { id: 'dark-aurora', name: 'Aurora Dark' };
+        if (!confirm(t('settings.theme.confirmReset', { defaultTheme: getThemeDisplayName(defaultMeta) }))) return;
         if (window.electronAPI?.themeAPI?.reset) {
             try {
                 await window.electronAPI.themeAPI.reset();
@@ -856,7 +865,7 @@ if (themeImportBtn) {
                 showToast(t('settings.theme.importFailed', { error: (result && result.error) || 'unknown' }), 'error');
                 return;
             }
-            showToast(t('settings.theme.importSuccess', { name: result.theme?.name || result.theme?.id || '' }), 'success');
+            showToast(t('settings.theme.importSuccess', { name: getThemeDisplayName(result.theme) || result.theme?.id || '' }), 'success');
             await refreshThemeList();
         } catch (e) {
             showToast(t('settings.theme.importFailed', { error: e.message || String(e) }), 'error');
@@ -898,7 +907,7 @@ if (themeDeleteBtn) {
             showToast(t('settings.theme.cannotDeleteBuiltin'), 'error');
             return;
         }
-        if (!confirm(t('settings.theme.confirmDelete', { name: meta.name || id }))) return;
+        if (!confirm(t('settings.theme.confirmDelete', { name: getThemeDisplayName(meta) }))) return;
         if (window.electronAPI?.themeAPI?.delete) {
             try {
                 await window.electronAPI.themeAPI.delete(id);
@@ -1138,7 +1147,8 @@ function openSaveAsModal() {
     if (!themeSaveAsModal) return;
     themeSaveAsModal.hidden = false;
     themeSaveAsIdInput.value = '';
-    themeSaveAsNameInput.value = themeSelect.options[themeSelect.selectedIndex]?.textContent || '';
+    const selectedMeta = themeList.find(m => m.id === themeSelect.value);
+    themeSaveAsNameInput.value = selectedMeta ? getThemeDisplayName(selectedMeta) : '';
     themeSaveAsIdError.hidden = true;
     themeSaveAsIdInput.focus();
 }

@@ -381,7 +381,7 @@ export default {
       export: '📤 导出主题',
       reset: '↺ 重置为默认',
       delete: '🗑 删除用户主题',
-      confirmReset: '确认重置为默认主题 (Aurora 暗色)？当前用户主题覆盖将被丢弃。',
+      confirmReset: '确认重置为默认主题（{defaultTheme}）？当前用户主题覆盖将被丢弃。',
       confirmDelete: '确认删除用户主题 "{name}"？此操作不可撤销。',
       cannotDeleteBuiltin: '内置主题不可删除。',
       importSuccess: '主题导入成功：{name}',
@@ -397,6 +397,12 @@ export default {
       saveAsCancel: '取消',
       saveAsInvalidId: 'ID 只能包含小写字母、数字、短横线，且不能以短横线开头或结尾',
       saveAsIdExists: 'ID "{id}" 已存在，请使用其他 ID',
+      names: {
+        'dark-aurora': '极光暗色',
+        'light-paper': '纸张亮色',
+        'midnight-amber': '午夜琥珀',
+        'acg': 'ACG 亮色',
+      },
       editor: {
         title: '主题编辑器',
         layerGlobal: '全局令牌',

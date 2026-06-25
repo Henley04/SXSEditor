@@ -63,7 +63,7 @@
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
-    "naudiodon": "^2.3.6",
+    "decibri": "^5.0.0",
     "onnxruntime-node": "^1.27.0",
     "onnxruntime-web": "^1.27.0",
     "pinyin-pro": "^3.28.1"

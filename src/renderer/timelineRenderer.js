@@ -22,6 +22,37 @@ export function invalidateGridCache() {
   _gridCacheKey = '';
 }
 
+/**
+ * Draw text clipped to a rounded rectangle with horizontal ellipsis.
+ * If the text is wider than maxWidth, it is truncated and ends with "…".
+ * `x`, `y` is the text baseline; the clipping rect is (cx, cy, cw, ch).
+ */
+function drawClippedText(ctx, text, x, y, maxWidth, clipRect) {
+  const { x: cx, y: cy, w: cw, h: ch } = clipRect;
+  ctx.save();
+  if (clipRect) {
+    ctx.beginPath();
+    ctx.rect(cx, cy, cw, ch);
+    ctx.clip();
+  }
+  let display = text == null ? '' : String(text);
+  if (ctx.measureText(display).width > maxWidth) {
+    const ellipsis = '…';
+    let lo = 0, hi = display.length;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (ctx.measureText(display.slice(0, mid) + ellipsis).width <= maxWidth) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    display = display.slice(0, lo) + ellipsis;
+  }
+  ctx.fillText(display, x, y);
+  ctx.restore();
+}
+
 export function syncFragmentScroll() {
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
@@ -76,8 +107,11 @@ export function renderFragmentTimeline() {
   const gridCacheKey = `${totalBeats}|${beatWidth}|${canvasHeight}|${singers.length}|${beatsPerMeasure}|${c.bgApp}|${c.gridLineMeasure}|${c.gridLineMajor}|${c.borderSubtle}|${c.bgElevated}|${c.timeText}`;
 
   if (_gridCache && _gridCacheKey === gridCacheKey) {
-    // Use cached grid layer
-    ctx.drawImage(_gridCache, 0, 0);
+    // Use cached grid layer.
+    // 必须显式指定 dw/dh=canvasWidth/canvasHeight：_gridCache 的 intrinsic 尺寸是
+    // canvasWidth*dpr × canvasHeight*dpr（设备像素），而 ctx 已应用 dpr 变换，
+    // 若省略 dw/dh 会按 intrinsic 尺寸绘制，导致整个网格被放大 dpr 倍。
+    ctx.drawImage(_gridCache, 0, 0, canvasWidth, canvasHeight);
   } else {
     // Draw static grid background
     ctx.fillStyle = c.bgApp;
@@ -189,16 +223,35 @@ export function renderFragmentTimeline() {
         ctx.restore();
       }
 
+      // Fragment labels — clipped to the rounded rect with ellipsis
+      const labelInsetX = 6;
+      const labelClipRect = { x: fragX, y: fragY, w: fragWidth, h: FRAGMENT_HEIGHT };
+      const labelMaxWidth = Math.max(0, fragWidth - labelInsetX * 2);
+
       ctx.fillStyle = c.fragmentText;
       ctx.font = '11px sans-serif';
-      ctx.fillText(fragment.name || t('main.newFragment'), fragX + 6, y + 16);
+      drawClippedText(
+        ctx,
+        fragment.name || t('main.newFragment'),
+        fragX + labelInsetX,
+        y + 16,
+        labelMaxWidth,
+        labelClipRect,
+      );
 
       ctx.fillStyle = c.fgMuted;
       ctx.font = '10px sans-serif';
       const bps = state.project.timeSignature ? state.project.timeSignature[0] : 4;
       const measStart = Math.floor(fragment.startTime / bps) + 1;
       const measEnd = Math.floor((fragment.startTime + fragment.duration - 0.001) / bps) + 1;
-      ctx.fillText(t('main.measureRange', { start: measStart, end: measEnd }), fragX + 6, y + 36);
+      drawClippedText(
+        ctx,
+        t('main.measureRange', { start: measStart, end: measEnd }),
+        fragX + labelInsetX,
+        y + 36,
+        labelMaxWidth,
+        labelClipRect,
+      );
 
       ctx.save();
       ctx.strokeStyle = c.scrollbarThumb;

@@ -381,7 +381,7 @@ export default {
       export: '📤 Export Theme',
       reset: '↺ Reset to Default',
       delete: '🗑 Delete User Theme',
-      confirmReset: 'Reset to default theme (Aurora Dark)? Current user overrides will be discarded.',
+      confirmReset: 'Reset to default theme ({defaultTheme})? Current user overrides will be discarded.',
       confirmDelete: 'Delete user theme "{name}"? This cannot be undone.',
       cannotDeleteBuiltin: 'Built-in themes cannot be deleted.',
       importSuccess: 'Theme imported: {name}',
@@ -397,6 +397,12 @@ export default {
       saveAsCancel: 'Cancel',
       saveAsInvalidId: 'ID must contain only lowercase letters, digits, and hyphens; cannot start or end with hyphen',
       saveAsIdExists: 'ID "{id}" already exists, please use a different ID',
+      names: {
+        'dark-aurora': 'Aurora Dark',
+        'light-paper': 'Paper Light',
+        'midnight-amber': 'Midnight Amber',
+        'acg': 'ACG Light',
+      },
       editor: {
         title: 'Theme Editor',
         layerGlobal: 'Global Tokens',
