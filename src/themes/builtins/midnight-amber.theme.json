@@ -6,6 +6,7 @@
   "isDark": true,
   "description": "深色琥珀强调，温暖复古",
   "tags": ["builtin", "dark", "amber"],
+  "_note": "--color-blue-* tokens intentionally hold amber values as the primary accent scale",
   "extends": "dark-aurora",
   "tokens": {
     "--color-blue-50":  "#fff7e6",
@@ -56,6 +57,13 @@
     "--selection-bg": "rgba(245, 166, 35, 0.4)",
 
     "--button-primary-bg":    "var(--bg-button-primary)",
-    "--button-primary-hover": "var(--bg-button-primary-hover)"
+    "--button-primary-hover": "var(--bg-button-primary-hover)",
+
+    "--clip-button":    "none",
+    "--clip-panel":     "none",
+    "--clip-badge":     "none",
+    "--deco-accent-bar": "0",
+    "--deco-stripe":    "none",
+    "--toolbar-accent-line": "0"
   }
 }

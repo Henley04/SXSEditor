@@ -5,7 +5,7 @@ const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION } = require('../modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 let downloadAbortController = null;
@@ -136,6 +136,9 @@ function registerModelDownloadIpc() {
   ipcMain.handle('model-download:start', async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    if (!isPrecisionDownloadable(currentPrecision)) {
+      return { success: false, error: `Download not available for precision: ${currentPrecision}` };
+    }
     const { missing } = checkMissingFiles(modelDir, currentPrecision);
     if (missing.length === 0) return { success: true };
     await startModelDownload(modelDir, missing, currentPrecision);
@@ -223,6 +226,84 @@ function registerModelDownloadIpc() {
       win.webContents.send('model-download:precision', currentPrecision);
     }
     return { success: true, missingCount: missing.length };
+  });
+
+  // JP model download handlers
+  ipcMain.handle('model-download:check-jp', async (event, precision) => {
+    const modelDir = getModelDir();
+    const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    const { checkMissingJpFiles } = require('../modelManager');
+    const { missing, existing } = checkMissingJpFiles(modelDir, currentPrecision);
+    return { missing, existing };
+  });
+
+  ipcMain.handle('model-download:start-jp', async (event, precision) => {
+    const { checkMissingJpFiles, getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS } = require('../modelManager');
+    const modelDir = getModelDir();
+    const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    const { missing } = checkMissingJpFiles(modelDir, currentPrecision);
+    if (missing.length === 0) return { success: true };
+
+    // Check if JP model repo exists for this precision
+    const jpModelId = JP_MODEL_IDS[currentPrecision] || JP_MODEL_IDS['fp16'];
+    if (!jpModelId) {
+      return { success: false, error: `JP models not available for precision: ${currentPrecision}` };
+    }
+
+    downloadAbortController = new AbortController();
+    const abortSignal = downloadAbortController.signal;
+    const modelDownloadWindow = getModelDownloadWindow();
+
+    try {
+      const { downloadMissingFiles } = require('../modelManager');
+      // Download JP files to the JP subdirectory
+      const jpMissingFiles = missing.map(f => ({
+        ...f,
+        _jpFilePath: getJpLocalFilePath(modelDir, f.filePath, currentPrecision),
+      }));
+
+      // Use custom download for JP files
+      for (const file of missing) {
+        const destPath = getJpLocalFilePath(modelDir, file.filePath, currentPrecision);
+        const url = getJpFileDownloadUrl(file.filePath, currentPrecision);
+        if (!url) continue;
+
+        const { downloadFileWithRetry } = require('../modelManager');
+        await downloadFileWithRetry(url, destPath, { abortSignal });
+
+        const win = getModelDownloadWindow();
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('model-download:file-complete', { filePath: file.filePath });
+        }
+      }
+
+      const win = getModelDownloadWindow();
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('model-download:complete');
+      }
+      console.log('[Main] JP model download complete');
+    } catch (err) {
+      if (err.message === 'Download cancelled') {
+        console.log('[Main] JP model download cancelled');
+      } else {
+        console.error('[Main] JP model download failed:', err);
+        const win = getModelDownloadWindow();
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('model-download:error', { message: err.message });
+        }
+      }
+    } finally {
+      downloadAbortController = null;
+    }
+
+    return { success: true };
+  });
+
+  ipcMain.handle('model-download:check-jp-exists', async () => {
+    const { checkJpModelsExist } = require('../modelManager');
+    const modelDir = getModelDir();
+    const precision = loadSettings().modelPrecision || DEFAULT_PRECISION;
+    return checkJpModelsExist(modelDir, precision);
   });
 }
 

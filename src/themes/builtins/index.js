@@ -8,11 +8,13 @@
 import darkAurora from './dark-aurora.theme.json';
 import lightPaper from './light-paper.theme.json';
 import midnightAmber from './midnight-amber.theme.json';
+import acg from './acg.theme.json';
 
 export const BUILTIN_THEMES = [
     darkAurora,
     lightPaper,
     midnightAmber,
+    acg,
 ];
 
 export const BUILTIN_THEME_IDS = BUILTIN_THEMES.map(t => t.id);

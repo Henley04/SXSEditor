@@ -173,6 +173,12 @@
     --fg-bpm: #a8c8ff;
     --fg-time: #e8e8f8;
     --bg-singer-active: #2a2a42;
+    --clip-button: none;
+    --clip-panel: none;
+    --clip-badge: none;
+    --deco-accent-bar: 0;
+    --deco-stripe: none;
+    --toolbar-accent-line: 0;
 }
 `;
     // Insert as early as possible (before other stylesheets) to minimize FOUC

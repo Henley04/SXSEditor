@@ -19,6 +19,7 @@ const SMALL_MODEL_THRESHOLD = 50 * 1024 * 1024;
 const PRECISION_SUBDIR_MAP = {
     'int8': 'int8',
     'fp16': 'fp16',
+    'fp8': 'fp8',
     'int8-npu': path.join('int8', 'optimized_npu'),
 };
 const SESSION_KEYS = [

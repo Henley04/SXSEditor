@@ -13,6 +13,8 @@ import {
   getDragMode, setDragMode,
   getDragStartX, setDragStartX,
   getDragStartY, setDragStartY,
+  getDragStartMouseTime, setDragStartMouseTime,
+  getDragStartMousePitch, setDragStartMousePitch,
   getDragNoteStart, setDragNoteStart,
   getDragNoteStarts, setDragNoteStarts,
   getScrollX, setScrollX,
@@ -39,7 +41,7 @@ import {
   getActiveInlineEditNote, setActiveInlineEditNote,
   getLyricEditOldValue, setLyricEditOldValue,
   getLyricEditNoteId, setLyricEditNoteId,
-  getCurrentParamMode,
+  getCurrentParamMode, setCurrentParamMode,
   getPitchCurve,
   getCurrentProject,
   getFragmentIsPlaying,
@@ -47,6 +49,8 @@ import {
   invalidatePitchCurveCache,
   getAutoSaveTimer, setAutoSaveTimer,
   getEnvelopes,
+  getParamPanelCollapsed, setParamPanelCollapsed,
+  getParamPanelMode, setParamPanelMode,
 } from './state.js';
 import {
   canvas, ctx,
@@ -61,11 +65,11 @@ import {
   convertBrushStrokeToAnchorPoints,
   getPhonemeAdjustments, getPhonemeStartX, normalizePhonemeRatios,
   tokenizeLyric, resolvePhonemesFromPipeline,
-  render,
+  render, resizeCanvases,
 } from './canvasRenderer.js';
 import { stopFragmentPlayback, playFragment, exportFragment } from './audioPlayback.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
-import { updateFragmentPlayButton, updateParamModeButtons, showShortcutsPanel, hideShortcutsPanel } from './uiControls.js';
+import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel } from './uiControls.js';
 
 const history = new HistoryManager();
 
@@ -74,6 +78,93 @@ export { history };
 function getMousePos(e) {
   const rect = canvas.getBoundingClientRect();
   return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+}
+
+function applyNoteDrag(pos) {
+  const dragMode = getDragMode();
+  if (dragMode !== 'move' && dragMode !== 'resize') return false;
+
+  const selectedNoteIds = getSelectedNoteIds();
+  const notes = getNotes();
+
+  if (dragMode === 'move' && selectedNoteIds.size > 1) {
+    const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
+    const dyPitch = Math.round(yToPitchContinuous(pos.y) - getDragStartMousePitch());
+    let blocked = false;
+    const planned = [];
+    for (const id of selectedNoteIds) {
+      const note = notes.find(n => n.id === id);
+      const start = getDragNoteStarts().get(id);
+      if (note && start) {
+        const newStart = Math.max(0, snapBeats(start.start + dxBeats));
+        const newPitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
+        if (hasNoteOverlap(id, newPitch, newStart, newStart + note.duration)) {
+          blocked = true;
+          break;
+        }
+        planned.push({ note, newStart, newPitch });
+      }
+    }
+    if (!blocked) {
+      for (const p of planned) {
+        p.note.start = p.newStart;
+        p.note.pitch = p.newPitch;
+      }
+    }
+    render();
+    return true;
+  }
+
+  const note = notes.find(n => n.id === [...selectedNoteIds][0]);
+  if (!note) return true;
+
+  if (dragMode === 'move') {
+    const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
+    const dyPitch = Math.round(yToPitchContinuous(pos.y) - getDragStartMousePitch());
+    let newStart = Math.max(0, snapBeats(getDragNoteStart().start + dxBeats));
+    const newPitch = Math.max(0, Math.min(127, getDragNoteStart().pitch + dyPitch));
+    newStart = clampNotePosition(note.id, newPitch, newStart, note.duration);
+    if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
+      note.start = newStart;
+      note.pitch = newPitch;
+    }
+  } else if (dragMode === 'resize') {
+    const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
+    const newDuration = Math.max(1 / 16, snapBeats(getDragNoteStart().duration + dxBeats));
+    if (!hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
+      note.duration = newDuration;
+    }
+  }
+  render();
+  return true;
+}
+
+function applyPitchAnchorDrag(pos) {
+  if (getDragMode() !== 'pitch-anchor' || getPitchDragAnchorIdx() < 0) return false;
+
+  const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
+  const dyPitch = yToPitchContinuous(pos.y) - getDragStartMousePitch();
+  const selectedAnchorIndices = getSelectedAnchorIndices();
+  const pitchCurve = getPitchCurve();
+  if (selectedAnchorIndices.size > 1 && getPitchDragAnchorStarts().size > 0) {
+    for (const idx of selectedAnchorIndices) {
+      const ap = pitchCurve.anchorPoints[idx];
+      const start = getPitchDragAnchorStarts().get(idx);
+      if (ap && start) {
+        ap.time = Math.max(0, start.time + dxBeats);
+        ap.pitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
+      }
+    }
+  } else {
+    const ap = pitchCurve.anchorPoints[getPitchDragAnchorIdx()];
+    if (ap) {
+      ap.time = Math.max(0, getPitchDragStartTime() + dxBeats);
+      ap.pitch = Math.max(0, Math.min(127, getPitchDragStartValue() + dyPitch));
+    }
+  }
+  invalidatePitchCurveCache();
+  render();
+  return true;
 }
 
 function finalizeDragOperation() {
@@ -332,6 +423,8 @@ function handlePitchMouseDown(e, pos) {
       }
       setDragStartX(pos.x);
       setDragStartY(pos.y);
+      setDragStartMouseTime(xToTime(pos.x));
+      setDragStartMousePitch(yToPitchContinuous(pos.y));
       setDragMode('pitch-anchor');
       setDragOperation({ type: selectedAnchorIndices.size > 1 ? 'pitchAnchorsMove' : 'pitchAnchorMove' });
     } else {
@@ -351,6 +444,8 @@ function handlePitchMouseDown(e, pos) {
       setPitchDragStartValue(clampedPitch);
       setDragStartX(pos.x);
       setDragStartY(pos.y);
+      setDragStartMouseTime(xToTime(pos.x));
+      setDragStartMousePitch(yToPitchContinuous(pos.y));
       setDragMode('pitch-anchor');
       setDragOperation({ type: 'pitchAnchorAdd' });
       scheduleAutoSave();
@@ -542,8 +637,8 @@ function handlePhonemeMouseUp() {
 }
 
 function handleParamEnvelopeMouseDown(pos) {
-  const currentParamMode = getCurrentParamMode();
-  const envKey = currentParamMode === PARAM_MODES.VOL ? 'volume' : 'pan';
+  const panelMode = getParamPanelMode();
+  const envKey = panelMode === 'VOL' ? 'volume' : 'pan';
   const envelopes = getEnvelopes();
   const envelope = envelopes[envKey];
   if (!envelope) return;
@@ -608,10 +703,10 @@ function startInlineEdit(note, hit) {
     top: ${inputY}px;
     width: ${inputW}px;
     height: ${inputH}px;
-    background: #1e1e1e;
-    border: 1px solid #3498db;
+    background: var(--bg-input);
+    border: 1px solid var(--accent);
     border-radius: 2px;
-    color: #ffffff;
+    color: var(--fg-primary);
     font-size: 11px;
     font-family: sans-serif;
     padding: 0 2px;
@@ -750,19 +845,22 @@ export function setupEventListeners() {
       return;
     }
 
-    if (currentParamMode === 'VOL' || currentParamMode === 'PAN') {
-      const areaTop = _getParamCurveAreaTop();
-      if (pos.y >= areaTop) {
-        handleParamEnvelopeMouseDown(pos);
-        return;
+    if (!getParamPanelCollapsed()) {
+      const panelMode = getParamPanelMode();
+      if (panelMode === 'VOL' || panelMode === 'PAN') {
+        const areaTop = _getParamCurveAreaTop();
+        if (pos.y >= areaTop) {
+          handleParamEnvelopeMouseDown(pos);
+          return;
+        }
       }
-    }
 
-    if (currentParamMode === 'Phoneme') {
-      const areaTop = _getParamCurveAreaTop();
-      if (pos.y >= areaTop) {
-        handlePhonemeMouseDown(e, pos);
-        return;
+      if (panelMode === 'Phoneme') {
+        const areaTop = _getParamCurveAreaTop();
+        if (pos.y >= areaTop) {
+          handlePhonemeMouseDown(e, pos);
+          return;
+        }
       }
     }
 
@@ -804,6 +902,8 @@ export function setupEventListeners() {
       }
       setDragStartX(pos.x);
       setDragStartY(pos.y);
+      setDragStartMouseTime(xToTime(pos.x));
+      setDragStartMousePitch(yToPitchContinuous(pos.y));
     } else {
       if (!e.ctrlKey && !e.shiftKey) {
         selectedNoteIds.clear();
@@ -828,9 +928,12 @@ export function setupEventListeners() {
       selectedNoteIds.add(newNote.id);
       setDragMode('resize');
       setDragStartX(pos.x);
+      setDragStartMouseTime(xToTime(pos.x));
+      setDragStartMousePitch(yToPitchContinuous(pos.y));
       setDragNoteStart({ start: newNote.start, pitch: newNote.pitch, duration: newNote.duration });
       setDragOperation({ type: 'noteAdd', noteId: newNote.id });
       scheduleAutoSave();
+      resolvePhonemesFromPipeline();
     }
     render();
   });
@@ -851,28 +954,7 @@ export function setupEventListeners() {
     const dragMode = getDragMode();
 
     if (dragMode === 'pitch-anchor' && getPitchDragAnchorIdx() >= 0) {
-      const dxBeats = (pos.x - getDragStartX()) / (BEAT_WIDTH * getZoomX());
-      const dyPitch = (getDragStartY() - pos.y) / NOTE_HEIGHT;
-      const selectedAnchorIndices = getSelectedAnchorIndices();
-      const pitchCurve = getPitchCurve();
-      if (selectedAnchorIndices.size > 1 && getPitchDragAnchorStarts().size > 0) {
-        for (const idx of selectedAnchorIndices) {
-          const ap = pitchCurve.anchorPoints[idx];
-          const start = getPitchDragAnchorStarts().get(idx);
-          if (ap && start) {
-            ap.time = Math.max(0, start.time + dxBeats);
-            ap.pitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
-          }
-        }
-      } else {
-        const ap = pitchCurve.anchorPoints[getPitchDragAnchorIdx()];
-        if (ap) {
-          ap.time = Math.max(0, getPitchDragStartTime() + dxBeats);
-          ap.pitch = Math.max(0, Math.min(127, getPitchDragStartValue() + dyPitch));
-        }
-      }
-      invalidatePitchCurveCache();
-      render();
+      applyPitchAnchorDrag(pos);
       return;
     }
 
@@ -924,7 +1006,7 @@ export function setupEventListeners() {
         }
         return;
       }
-      if (currentParamMode === 'Phoneme') {
+      if (!getParamPanelCollapsed() && getParamPanelMode() === 'Phoneme') {
         const areaTop = _getParamCurveAreaTop();
         const areaBottom = _getParamCurveAreaBottom();
         if (pos.y >= areaTop && pos.y <= areaBottom) {
@@ -960,57 +1042,11 @@ export function setupEventListeners() {
       return;
     }
 
-    const selectedNoteIds = getSelectedNoteIds();
-    const notes = getNotes();
-
-    if (dragMode === 'move' && selectedNoteIds.size > 1) {
-      const dxBeats = (pos.x - getDragStartX()) / BEAT_WIDTH;
-      const dyPitch = Math.round((getDragStartY() - pos.y) / NOTE_HEIGHT);
-      let blocked = false;
-      const planned = [];
-      for (const id of selectedNoteIds) {
-        const note = notes.find(n => n.id === id);
-        const start = getDragNoteStarts().get(id);
-        if (note && start) {
-          const newStart = Math.max(0, snapBeats(start.start + dxBeats));
-          const newPitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
-          if (hasNoteOverlap(id, newPitch, newStart, newStart + note.duration)) {
-            blocked = true;
-            break;
-          }
-          planned.push({ note, newStart, newPitch });
-        }
-      }
-      if (!blocked) {
-        for (const p of planned) {
-          p.note.start = p.newStart;
-          p.note.pitch = p.newPitch;
-        }
-      }
-      render();
+    if (dragMode === 'move' || dragMode === 'resize') {
+      applyNoteDrag(pos);
       return;
     }
 
-    const note = notes.find(n => n.id === [...selectedNoteIds][0]);
-    if (!note) return;
-
-    if (dragMode === 'move') {
-      const dxBeats = (pos.x - getDragStartX()) / BEAT_WIDTH;
-      const dyPitch = Math.round((getDragStartY() - pos.y) / NOTE_HEIGHT);
-      let newStart = Math.max(0, snapBeats(getDragNoteStart().start + dxBeats));
-      const newPitch = Math.max(0, Math.min(127, getDragNoteStart().pitch + dyPitch));
-      newStart = clampNotePosition(note.id, newPitch, newStart, note.duration);
-      if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
-        note.start = newStart;
-        note.pitch = newPitch;
-      }
-    } else if (dragMode === 'resize') {
-      const dxBeats = (pos.x - getDragStartX()) / BEAT_WIDTH;
-      const newDuration = Math.max(1 / 16, snapBeats(getDragNoteStart().duration + dxBeats));
-      if (!hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
-        note.duration = newDuration;
-      }
-    }
     render();
   });
 
@@ -1078,8 +1114,8 @@ export function setupEventListeners() {
     }
 
     if (getDragMode() === 'param-envelope') {
-      const currentParamMode = getCurrentParamMode();
-      const envKey = currentParamMode === PARAM_MODES.VOL ? 'volume' : 'pan';
+      const panelMode = getParamPanelMode();
+      const envKey = panelMode === 'VOL' ? 'volume' : 'pan';
       const envelopes = getEnvelopes();
       const envelope = envelopes[envKey];
       if (envelope) {
@@ -1299,33 +1335,46 @@ export function setupEventListeners() {
 
     if (e.key === '1') {
       setCurrentParamMode(PARAM_MODES.MIDI);
+      setParamPanelCollapsed(true);
       updateParamModeButtons();
-      render();
+      updateParamPanelState();
+      resizeCanvases();
       return;
     }
     if (e.key === '2') {
       setCurrentParamMode('Pitch');
+      setParamPanelCollapsed(true);
       updateParamModeButtons();
-      render();
+      updateParamPanelState();
+      resizeCanvases();
       return;
     }
     if (e.key === '3') {
-      setCurrentParamMode(PARAM_MODES.VOL);
+      setCurrentParamMode('VOL');
+      setParamPanelMode('VOL');
+      setParamPanelCollapsed(false);
       updateParamModeButtons();
-      render();
+      updateParamPanelState();
+      resizeCanvases();
       return;
     }
     if (e.key === '4') {
-      setCurrentParamMode(PARAM_MODES.PAN);
+      setCurrentParamMode('PAN');
+      setParamPanelMode('PAN');
+      setParamPanelCollapsed(false);
       updateParamModeButtons();
-      render();
+      updateParamPanelState();
+      resizeCanvases();
       return;
     }
     if (e.key === '5') {
       setCurrentParamMode('Phoneme');
+      setParamPanelMode('Phoneme');
+      setParamPanelCollapsed(false);
       updateParamModeButtons();
+      updateParamPanelState();
       resolvePhonemesFromPipeline();
-      render();
+      resizeCanvases();
       return;
     }
 
@@ -1480,7 +1529,9 @@ export function setupEventListeners() {
 
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey) {
+    const isZoom = e.ctrlKey || e.metaKey;
+
+    if (isZoom) {
       const oldZoomX = getZoomX();
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
       setZoomX(Math.max(0.25, Math.min(4, oldZoomX * delta)));
@@ -1488,8 +1539,35 @@ export function setupEventListeners() {
       const pos = getMousePos(e);
       const mouseBeats = xToTime(pos.x);
       setScrollX(mouseBeats * BEAT_WIDTH * getZoomX() - pos.x);
-
       setScrollX(Math.max(0, getScrollX()));
+
+      // When zooming during a drag, move the note to the beat now under the cursor
+      // so it stays visually anchored
+      const dragMode = getDragMode();
+      if (dragMode === 'move' || dragMode === 'resize' || dragMode === 'pitch-anchor') {
+        const newMouseTime = xToTime(pos.x);
+        const timeDelta = newMouseTime - getDragStartMouseTime();
+        if (Math.abs(timeDelta) > 1e-9) {
+          const notes = getNotes();
+          if (dragMode === 'move') {
+            for (const id of getSelectedNoteIds()) {
+              const note = notes.find(n => n.id === id);
+              if (note) note.start = Math.max(0, note.start + timeDelta);
+            }
+            // Update drag note starts so subsequent delta calculations are correct
+            for (const [id, start] of getDragNoteStarts()) {
+              start.start += timeDelta;
+            }
+            const singleNote = getDragNoteStart();
+            if (singleNote) singleNote.start += timeDelta;
+          } else if (dragMode === 'resize') {
+            const singleNote = getDragNoteStart();
+            if (singleNote) singleNote.start += timeDelta;
+          }
+          setDragStartMouseTime(newMouseTime);
+          setDragStartMousePitch(yToPitchContinuous(pos.y));
+        }
+      }
     } else if (e.shiftKey) {
       setScrollX(getScrollX() + e.deltaY);
       setScrollX(Math.max(0, getScrollX()));
@@ -1498,6 +1576,7 @@ export function setupEventListeners() {
       const maxScrollY = Math.max(0, 128 * NOTE_HEIGHT + HEADER_HEIGHT + PARAM_CURVE_HEIGHT - canvas.parentElement.clientHeight);
       setScrollY(Math.max(0, Math.min(maxScrollY, getScrollY())));
     }
+
     render();
   }, { passive: false });
 }

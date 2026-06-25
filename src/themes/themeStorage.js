@@ -13,7 +13,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
-const BUILTIN_IDS = new Set(['dark-aurora', 'light-paper', 'midnight-amber']);
+const BUILTIN_IDS = new Set(['dark-aurora', 'light-paper', 'midnight-amber', 'acg']);
 
 class ThemeStorageError extends Error {
     constructor(message, code) {

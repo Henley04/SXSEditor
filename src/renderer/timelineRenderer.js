@@ -14,6 +14,14 @@ export function getBeatWidth() {
   return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX;
 }
 
+// Offscreen canvas cache for static grid/background
+let _gridCache = null;
+let _gridCacheKey = '';
+
+export function invalidateGridCache() {
+  _gridCacheKey = '';
+}
+
 export function syncFragmentScroll() {
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
@@ -62,41 +70,68 @@ export function renderFragmentTimeline() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
   const c = getCanvasColors();
-  ctx.fillStyle = c.bgApp;
-  ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-
   const beatsPerMeasure = state.project.timeSignature ? state.project.timeSignature[0] : 4;
 
-  ctx.lineWidth = 1;
-  for (let i = 0; i <= totalBeats; i++) {
-    const x = i * beatWidth;
-    const isMeasureLine = (i % beatsPerMeasure === 0);
-    ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
-    ctx.beginPath();
-    ctx.moveTo(x, HEADER_HEIGHT);
-    ctx.lineTo(x, canvasHeight);
-    ctx.stroke();
+  // Build grid cache key from structural inputs
+  const gridCacheKey = `${totalBeats}|${beatWidth}|${canvasHeight}|${singers.length}|${beatsPerMeasure}|${c.bgApp}|${c.gridLineMeasure}|${c.gridLineMajor}|${c.borderSubtle}|${c.bgElevated}|${c.timeText}`;
 
-    if (isMeasureLine) {
-      const measureNum = Math.floor(i / beatsPerMeasure) + 1;
-      ctx.fillStyle = c.timeText;
-      ctx.font = '10px sans-serif';
-      ctx.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
+  if (_gridCache && _gridCacheKey === gridCacheKey) {
+    // Use cached grid layer
+    ctx.drawImage(_gridCache, 0, 0);
+  } else {
+    // Draw static grid background
+    ctx.fillStyle = c.bgApp;
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= totalBeats; i++) {
+      const x = i * beatWidth;
+      const isMeasureLine = (i % beatsPerMeasure === 0);
+      ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
+      ctx.beginPath();
+      ctx.moveTo(x, HEADER_HEIGHT);
+      ctx.lineTo(x, canvasHeight);
+      ctx.stroke();
+
+      if (isMeasureLine) {
+        const measureNum = Math.floor(i / beatsPerMeasure) + 1;
+        ctx.fillStyle = c.timeText;
+        ctx.font = '10px sans-serif';
+        ctx.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
+      }
     }
+
+    singers.forEach((singer, index) => {
+      const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+
+      ctx.fillStyle = c.bgElevated;
+      ctx.fillRect(0, y, canvasWidth, SINGER_ROW_HEIGHT - 2);
+
+      ctx.strokeStyle = c.borderSubtle;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(0, y + SINGER_ROW_HEIGHT - 2);
+      ctx.lineTo(canvasWidth, y + SINGER_ROW_HEIGHT - 2);
+      ctx.stroke();
+    });
+
+    // Cache the grid layer to offscreen canvas
+    const pixelW = Math.floor(canvasWidth * dpr);
+    const pixelH = Math.floor(canvasHeight * dpr);
+    if (!_gridCache || _gridCache.width !== pixelW || _gridCache.height !== pixelH) {
+      _gridCache = document.createElement('canvas');
+      _gridCache.width = pixelW;
+      _gridCache.height = pixelH;
+    }
+    const gridCtx = _gridCache.getContext('2d');
+    gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    gridCtx.drawImage(dom.fragmentCanvas, 0, 0, canvasWidth, canvasHeight);
+    _gridCacheKey = gridCacheKey;
   }
 
+  // Draw dynamic content (fragments) on top of cached grid
   singers.forEach((singer, index) => {
     const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
-
-    ctx.fillStyle = c.bgElevated;
-    ctx.fillRect(0, y, canvasWidth, SINGER_ROW_HEIGHT - 2);
-
-    ctx.strokeStyle = c.borderSubtle;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(0, y + SINGER_ROW_HEIGHT - 2);
-    ctx.lineTo(canvasWidth, y + SINGER_ROW_HEIGHT - 2);
-    ctx.stroke();
 
     const singerFragments = fragments.filter(f => f.singerId === singer.id);
     singerFragments.forEach(fragment => {
@@ -523,6 +558,7 @@ export function refreshAll() {
 if (typeof window !== 'undefined') {
   window.addEventListener('theme:changed', () => {
     invalidateCanvasThemeCache();
+    invalidateGridCache();
     refreshAll();
   });
 }

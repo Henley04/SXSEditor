@@ -37,16 +37,16 @@ export function createDialog(options) {
   // Create dialog container
   const dialog = document.createElement('div');
   dialog.style.cssText = `
-    background: ${styles.dialogBackground || '#252538'};
-    border: 1px solid ${styles.dialogBorder || '#3a3a52'};
+    background: ${styles.dialogBackground || 'var(--bg-elevated)'};
+    border: 1px solid ${styles.dialogBorder || 'var(--border-strong)'};
     border-radius: 10px;
     padding: 20px;
     min-width: ${minWidth}px;
     max-width: ${styles.maxWidth || '500px'};
     max-height: ${styles.maxHeight || '80vh'};
     overflow-y: ${styles.overflowY || 'auto'};
-    color: #e0e0f0;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+    color: var(--fg-primary);
+    box-shadow: 0 12px 40px var(--shadow-color-strong);
   `;
 
   // Create title
@@ -55,7 +55,7 @@ export function createDialog(options) {
     margin-bottom: 16px;
     font-weight: 600;
     font-size: ${styles.titleFontSize || '14px'};
-    color: ${styles.titleColor || '#e0e0f0'};
+    color: ${styles.titleColor || 'var(--fg-primary)'};
   `;
   titleEl.textContent = title;
   dialog.appendChild(titleEl);
@@ -66,7 +66,7 @@ export function createDialog(options) {
     contentEl.style.cssText = `
       margin-bottom: 16px;
       font-size: ${styles.contentFontSize || '13px'};
-      color: ${styles.contentColor || '#c8c8dc'};
+      color: ${styles.contentColor || 'var(--fg-muted)'};
       line-height: 1.5;
     `;
     contentEl.textContent = content;
@@ -91,39 +91,35 @@ export function createDialog(options) {
   const buttonStyles = {
     primary: `
       padding: 6px 16px;
-      background: linear-gradient(180deg, #5b8def, #4a7de0);
+      background: var(--bg-button-primary);
       border: none;
       border-radius: 4px;
-      color: #ffffff;
+      color: var(--fg-on-accent);
       cursor: pointer;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     `,
     default: `
       padding: 6px 16px;
-      background: linear-gradient(180deg, #3a3a4e, #323246);
-      border: 1px solid #4a4a62;
+      background: var(--bg-button);
+      border: 1px solid var(--button-secondary-border);
       border-radius: 4px;
-      color: #ffffff;
+      color: var(--fg-primary);
       cursor: pointer;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     `,
     danger: `
       padding: 6px 16px;
-      background: linear-gradient(180deg, #f87171, #e85555);
+      background: var(--bg-button-danger);
       border: none;
       border-radius: 4px;
-      color: #ffffff;
+      color: var(--fg-on-accent);
       cursor: pointer;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     `,
     success: `
       padding: 6px 16px;
-      background: linear-gradient(180deg, #4ade80, #3ac870);
+      background: var(--bg-button-success);
       border: none;
       border-radius: 4px;
-      color: #ffffff;
+      color: var(--fg-on-accent);
       cursor: pointer;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
     `,
   };
 
@@ -230,12 +226,12 @@ export function showSingerValidationReport(validation) {
     const errSection = document.createElement('div');
     errSection.style.cssText = 'margin-bottom: 10px;';
     const errTitle = document.createElement('div');
-    errTitle.style.cssText = 'color: #f87171; font-weight: 600; margin-bottom: 4px; font-size: 12px;';
+    errTitle.style.cssText = 'color: var(--danger); font-weight: 600; margin-bottom: 4px; font-size: 12px;';
     errTitle.textContent = t('common.errors');
     errSection.appendChild(errTitle);
     validation.errors.forEach((msg) => {
       const item = document.createElement('div');
-      item.style.cssText = 'color: #f87171; font-size: 11px; padding-left: 8px; margin-bottom: 2px;';
+      item.style.cssText = 'color: var(--danger); font-size: 11px; padding-left: 8px; margin-bottom: 2px;';
       item.textContent = `• ${msg}`;
       errSection.appendChild(item);
     });
@@ -246,12 +242,12 @@ export function showSingerValidationReport(validation) {
     const warnSection = document.createElement('div');
     warnSection.style.cssText = 'margin-bottom: 10px;';
     const warnTitle = document.createElement('div');
-    warnTitle.style.cssText = 'color: #fbbf24; font-weight: 600; margin-bottom: 4px; font-size: 12px;';
+    warnTitle.style.cssText = 'color: var(--warning); font-weight: 600; margin-bottom: 4px; font-size: 12px;';
     warnTitle.textContent = t('common.warnings');
     warnSection.appendChild(warnTitle);
     validation.warnings.forEach((msg) => {
       const item = document.createElement('div');
-      item.style.cssText = 'color: #fbbf24; font-size: 11px; padding-left: 8px; margin-bottom: 2px;';
+      item.style.cssText = 'color: var(--warning); font-size: 11px; padding-left: 8px; margin-bottom: 2px;';
       item.textContent = `• ${msg}`;
       warnSection.appendChild(item);
     });

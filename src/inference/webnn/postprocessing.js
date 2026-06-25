@@ -65,5 +65,16 @@ export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBat
     console.log(`[WebNN]   post  — total=${vocPostTotal.toFixed(0)}ms`);
     console.log(`[WebNN]   overhead: ${(vocTotalMs - vocPrepTotal - vocInferTotal - vocPostTotal).toFixed(0)}ms`);
 
+    // Normalize to peak 0.95 to prevent clipping
+    let peak = 0;
+    for (let i = 0; i < audioData.length; i++) {
+        const abs = Math.abs(audioData[i]);
+        if (abs > peak) peak = abs;
+    }
+    if (peak > 0.95) {
+        const scale = 0.95 / peak;
+        for (let i = 0; i < audioData.length; i++) audioData[i] *= scale;
+    }
+
     return { audioData, vocTotalMs };
 }

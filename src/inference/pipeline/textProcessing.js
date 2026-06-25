@@ -2,6 +2,65 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pinyin } = require('pinyin-pro');
 
+// Japanese hiragana/katakana → phoneme mapping
+const JP_HIRAGANA_MAP = {
+    'あ': 'a', 'い': 'i', 'う': 'u', 'え': 'e', 'お': 'o',
+    'か': 'k a', 'き': 'k i', 'く': 'k u', 'け': 'k e', 'こ': 'k o',
+    'さ': 's a', 'し': 'sh i', 'す': 's u', 'せ': 's e', 'そ': 's o',
+    'た': 't a', 'ち': 'ch i', 'つ': 'ts u', 'て': 't e', 'と': 't o',
+    'な': 'n a', 'に': 'ny i', 'ぬ': 'n u', 'ね': 'n e', 'の': 'n o',
+    'は': 'h a', 'ひ': 'hy i', 'ふ': 'f u', 'へ': 'h e', 'ほ': 'h o',
+    'ま': 'm a', 'み': 'my i', 'む': 'm u', 'め': 'm e', 'も': 'm o',
+    'や': 'y a', 'ゆ': 'y u', 'よ': 'y o',
+    'ら': 'r a', 'り': 'ry i', 'る': 'r u', 'れ': 'r e', 'ろ': 'r o',
+    'わ': 'w a', 'を': 'o', 'ん': 'n',
+    'が': 'g a', 'ぎ': 'gy i', 'ぐ': 'g u', 'げ': 'g e', 'ご': 'g o',
+    'ざ': 'z a', 'じ': 'j i', 'ず': 'z u', 'ぜ': 'z e', 'ぞ': 'z o',
+    'だ': 'd a', 'ぢ': 'j i', 'づ': 'z u', 'で': 'd e', 'ど': 'd o',
+    'ば': 'b a', 'び': 'by i', 'ぶ': 'b u', 'べ': 'b e', 'ぼ': 'b o',
+    'ぱ': 'p a', 'ぴ': 'py i', 'ぷ': 'p u', 'ぺ': 'p e', 'ぽ': 'p o',
+    'きゃ': 'ky a', 'きゅ': 'ky u', 'きょ': 'ky o',
+    'しゃ': 'sh a', 'しゅ': 'sh u', 'しょ': 'sh o',
+    'ちゃ': 'ch a', 'ちゅ': 'ch u', 'ちょ': 'ch o',
+    'にゃ': 'ny a', 'にゅ': 'ny u', 'にょ': 'ny o',
+    'ひゃ': 'hy a', 'ひゅ': 'hy u', 'ひょ': 'hy o',
+    'みゃ': 'my a', 'みゅ': 'my u', 'みょ': 'my o',
+    'りゃ': 'ry a', 'りゅ': 'ry u', 'りょ': 'ry o',
+    'ぎゃ': 'gy a', 'ぎゅ': 'gy u', 'ぎょ': 'gy o',
+    'じゃ': 'j a', 'じゅ': 'j u', 'じょ': 'j o',
+    'びゃ': 'by a', 'びゅ': 'by u', 'びょ': 'by o',
+    'ぴゃ': 'py a', 'ぴゅ': 'py u', 'ぴょ': 'py o',
+    'てゃ': 't a', 'てゅ': 't u', 'てょ': 't o',
+    'でゃ': 'd a', 'でゅ': 'd u', 'でょ': 'd o',
+    'っ': 'cl',
+};
+
+const JP_KATAKANA_MAP = {};
+for (const [hira, ph] of Object.entries(JP_HIRAGANA_MAP)) {
+    const kata = String.fromCharCode(hira.charCodeAt(0) + 0x60);
+    JP_KATAKANA_MAP[kata] = ph;
+}
+
+const JP_KANJI_DICT = {
+    '愛': 'a i', '雨': 'a m e', '空': 's o r a', '花': 'h a n a',
+    '風': 'k a z e', '月': 'ts u k i', '星': 'h o sh i', '雪': 'y u k i',
+    '海': 'u m i', '山': 'y a m a', '川': 'k a w a', '森': 'm o r i',
+    '光': 'h i k a r i', '音': 'o t o', '声': 'k o e', '梦': 'y u m e',
+    '心': 'k o k o r o', '恋': 'k o i', '涙': 'n a m i d a',
+    '歌': 'u t a', '飛': 't o b u', '歩': 'a r u k u',
+    '走': 'h a sh i r u', '泳': 'o y o g u', '読': 'y o m u',
+    '食': 't a b e r u', '飲': 'n o m u', '見': 'm i r u', '聞': 'k i k u',
+    '帰': 'k a e r u', '行': 'i k u', '来': 'k u r u', '立': 't a ts u',
+    '入': 'h a i r u', '出': 'd e r u', '上': 'u e', '下': 's h i t a',
+    '大': 'o o', '小': 'ch i i s a', '長': 'n a g a i', '強': 'ts u y o i',
+    '春': 'h a r u', '夏': 'n a ts u', '秋': 'a k i', '冬': 'f u y u',
+    '朝': 'a s a', '昼': 'h i r u', '夜': 'y o r u',
+    '今': 'i m a', '私': 'w a t a sh i', '君': 'k i m i',
+    '一': 'i ch i', '二': 'n i', '三': 's a n', '四': 'y o n',
+    '五': 'g o', '六': 'r o k u', '七': 'n a n a', '八': 'h a ch i',
+    '九': 'ky u', '十': 'j u',
+};
+
 class TextProcessing {
     constructor() {
         this.phone2idx = {};
@@ -107,6 +166,9 @@ class TextProcessing {
         if (this.phone2idx['yue_' + trimmed] !== undefined) {
             return this.phone2idx['yue_' + trimmed];
         }
+        if (this.phone2idx['jp_' + trimmed] !== undefined) {
+            return this.phone2idx['jp_' + trimmed];
+        }
         const zhPhoneme = this._charToZhPhoneme(trimmed);
         if (zhPhoneme && this.phone2idx[zhPhoneme] !== undefined) {
             return this.phone2idx[zhPhoneme];
@@ -141,8 +203,29 @@ class TextProcessing {
 
     resolveLyricToPhonemes(lyric) {
         if (!lyric || lyric.trim().length === 0) return [{ name: '<SP>', display: 'SP' }];
-        const trimmed = lyric.trim();
+        let trimmed = lyric.trim();
         if (trimmed === '<SP>' || trimmed === '<AP>') return [{ name: '<SP>', display: 'SP' }];
+
+        // Handle <jp> prefix: force Japanese G2P for kanji etc.
+        let forceJp = false;
+        if (trimmed.startsWith('<jp>')) {
+            forceJp = true;
+            trimmed = trimmed.slice(4).trim();
+        }
+
+        if (trimmed.startsWith('jp_')) {
+            return [{ name: trimmed, display: trimmed.slice(3) }];
+        }
+
+        if (forceJp || this._isJapanese(trimmed)) {
+            const phonemes = this._japaneseG2p(trimmed);
+            if (phonemes) {
+                return phonemes.split(' ').filter(s => s).map(ph => {
+                    const name = 'jp_' + ph;
+                    return { name, display: ph };
+                });
+            }
+        }
 
         if (trimmed.startsWith('en_') && trimmed.includes('-')) {
             return trimmed.slice(3).split('-').map(s => {
@@ -151,7 +234,7 @@ class TextProcessing {
             });
         }
 
-        if (/^[a-zA-Z]+$/.test(trimmed) && !trimmed.startsWith('en_') && !trimmed.startsWith('zh_') && !trimmed.startsWith('yue_')) {
+        if (/^[a-zA-Z]+$/.test(trimmed) && !trimmed.startsWith('en_') && !trimmed.startsWith('zh_') && !trimmed.startsWith('yue_') && !trimmed.startsWith('jp_')) {
             const g2pResult = this._englishG2p(trimmed);
             if (g2pResult) {
                 return g2pResult.split(' ').map(ph => {
@@ -169,6 +252,57 @@ class TextProcessing {
         }
 
         return [{ name: trimmed, display: trimmed }];
+    }
+
+    _isJapanese(text) {
+        // Only detect hiragana/katakana as Japanese, NOT CJK kanji (shared with Chinese)
+        return /[ぁ-ゟァ-ヿ]/.test(text);
+    }
+
+    _japaneseG2p(text) {
+        const result = [];
+        let i = 0;
+        while (i < text.length) {
+            const ch = text[i];
+            if (ch === 'ー' || ch === '〜') { i++; continue; }
+
+            if (i + 1 < text.length) {
+                const combo = ch + text[i + 1];
+                if (JP_HIRAGANA_MAP[combo] || JP_KATAKANA_MAP[combo]) {
+                    const ph = JP_HIRAGANA_MAP[combo] || JP_KATAKANA_MAP[combo];
+                    result.push(...ph.split(' '));
+                    i += 2;
+                    continue;
+                }
+            }
+
+            const ph = JP_HIRAGANA_MAP[ch] || JP_KATAKANA_MAP[ch];
+            if (ph) { result.push(...ph.split(' ')); i++; continue; }
+
+            if (/[一-鿿]/.test(ch)) {
+                let found = false;
+                for (let len = Math.min(4, text.length - i); len >= 2; len--) {
+                    const compound = text.substring(i, i + len);
+                    if (JP_KANJI_DICT[compound]) {
+                        result.push(...JP_KANJI_DICT[compound].split(' '));
+                        i += len;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    const kanjiPh = JP_KANJI_DICT[ch];
+                    if (kanjiPh) { result.push(...kanjiPh.split(' ')); }
+                    else { result.push('pau'); }
+                    i++;
+                }
+                continue;
+            }
+
+            if (/[a-zA-Z]/.test(ch)) { result.push(ch.toLowerCase()); i++; continue; }
+            i++;
+        }
+        return result.join(' ');
     }
 }
 

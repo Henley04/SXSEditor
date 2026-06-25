@@ -18,17 +18,21 @@ class Preprocessing {
 
     interpolateEnvelope(envelope, beatTime) {
         const kfs = envelope.keyframes;
-        if (kfs.length === 0) return 0;
-        if (kfs.length === 1) return kfs[0].value;
+        const len = kfs.length;
+        if (len === 0) return 0;
+        if (len === 1) return kfs[0].value;
         if (beatTime <= kfs[0].time) return kfs[0].value;
-        if (beatTime >= kfs[kfs.length - 1].time) return kfs[kfs.length - 1].value;
-        for (let i = 0; i < kfs.length - 1; i++) {
-            if (beatTime >= kfs[i].time && beatTime < kfs[i + 1].time) {
-                const t = (beatTime - kfs[i].time) / (kfs[i + 1].time - kfs[i].time);
-                return kfs[i].value + t * (kfs[i + 1].value - kfs[i].value);
-            }
+        if (beatTime >= kfs[len - 1].time) return kfs[len - 1].value;
+
+        // Binary search for the segment
+        let lo = 0, hi = len - 1;
+        while (lo < hi - 1) {
+            const mid = (lo + hi) >>> 1;
+            if (kfs[mid].time <= beatTime) lo = mid;
+            else hi = mid;
         }
-        return kfs[kfs.length - 1].value;
+        const t = (beatTime - kfs[lo].time) / (kfs[lo + 1].time - kfs[lo].time);
+        return kfs[lo].value + t * (kfs[lo + 1].value - kfs[lo].value);
     }
 
     buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0) {
@@ -41,14 +45,14 @@ class Preprocessing {
         if (pitchCurveF0 && pitchCurveF0.length > 0) {
             const srcData = pitchCurveF0 instanceof Float32Array ? pitchCurveF0 : new Float32Array(pitchCurveF0);
             const f0 = new Float32Array(totalFrames);
-            for (let i = 0; i < totalFrames; i++) {
-                f0[i] = i < srcData.length ? srcData[i] : 0;
-            }
+            const copyLen = Math.min(srcData.length, totalFrames);
+            f0.set(copyLen === srcData.length ? srcData : srcData.subarray(0, copyLen));
             return f0;
         }
 
-        const f0 = new Float32Array(totalFrames);
-        f0.fill(0);
+        // Precompute beat-to-frame conversion factor
+        const framesPerBeat = (60 / bpm) * (SAMPLE_RATE / HOP_SIZE);
+        const f0 = new Float32Array(totalFrames); // auto-zeroed
         for (const note of notes) {
             let effectivePitch = note.pitch;
             if (f0Envelope && f0Envelope.keyframes && f0Envelope.keyframes.length > 0) {
@@ -57,10 +61,8 @@ class Preprocessing {
                 effectivePitch = note.pitch + semitoneShift;
             }
             const freq = this.midiToFreq(effectivePitch);
-            const startSec = (note.start / bpm) * 60;
-            const endSec = ((note.start + note.duration) / bpm) * 60;
-            const startFrame = Math.floor(startSec * SAMPLE_RATE / HOP_SIZE);
-            const endFrame = Math.min(totalFrames, Math.floor(endSec * SAMPLE_RATE / HOP_SIZE));
+            const startFrame = Math.floor(note.start * framesPerBeat);
+            const endFrame = Math.min(totalFrames, Math.floor((note.start + note.duration) * framesPerBeat));
             for (let i = startFrame; i < endFrame; i++) {
                 f0[i] = freq;
             }
@@ -158,7 +160,31 @@ class Preprocessing {
                     notePitches.push(pitch);
                     noteTypes.push(noteType);
                 }
-            } else if (/^[a-zA-Z]+$/.test(lyric) && !lyric.startsWith('en_') && !lyric.startsWith('zh_') && !lyric.startsWith('yue_')) {
+            } else if (this.textProcessing._isJapanese && this.textProcessing._isJapanese(lyric)) {
+                const phonemeStr = this.textProcessing._japaneseG2p(lyric);
+                if (phonemeStr) {
+                    const phParts = phonemeStr.split(' ').filter(s => s);
+                    const jpPhIds = [];
+                    for (let s = 0; s < phParts.length; s++) {
+                        jpPhIds.push(this.textProcessing._lookupPhonemeId('jp_' + phParts[s].trim()));
+                    }
+                    // Don't add SEP_ID for Japanese — training doesn't use it
+                    phLocations.push([dur, Math.max(1, jpPhIds.length), durationRatios]);
+                    for (let e = 0; e < jpPhIds.length; e++) {
+                        newPhonemes.push(jpPhIds[e]);
+                        note2origin.push(phIdx);
+                        notePitches.push(pitch);
+                        noteTypes.push(noteType);
+                    }
+                } else {
+                    const phId = this.textProcessing._lookupPhonemeId(lyric);
+                    phLocations.push([dur, 1, durationRatios]);
+                    newPhonemes.push(phId);
+                    note2origin.push(phIdx);
+                    notePitches.push(pitch);
+                    noteTypes.push(noteType);
+                }
+            } else if (/^[a-zA-Z]+$/.test(lyric) && !lyric.startsWith('en_') && !lyric.startsWith('zh_') && !lyric.startsWith('yue_') && !lyric.startsWith('jp_')) {
                 const g2pResult = this.textProcessing._englishG2p(lyric);
                 if (g2pResult) {
                     const phParts = g2pResult.split(' ');
@@ -294,6 +320,7 @@ class Preprocessing {
                     i += 1;
                 }
             }
+            if (i >= totalFrames) break;
             mel2token[i] = phIdx;
 
             const innerFrames = Math.max(0, nextPhonemeStart - i - 2);

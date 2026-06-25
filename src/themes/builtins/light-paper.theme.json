@@ -128,7 +128,7 @@
     "--accent-hover":   "#5b8def",
     "--accent-pressed": "#2a55b5",
     "--accent-soft":    "rgba(91, 141, 239, 0.12)",
-    "--accent-softer":  "rgba(91, 141, 239, 0.10)",
+    "--accent-softer":  "rgba(91, 141, 239, 0.04)",
     "--accent-glow":    "rgba(91, 141, 239, 0.2)",
     "--accent-glow-strong": "rgba(91, 141, 239, 0.3)",
     "--accent-line":    "rgba(91, 141, 239, 0.25)",
@@ -191,6 +191,13 @@
     "--tooltip-fg": "#ffffff",
 
     "--selection-bg-token": "var(--selection-bg)",
-    "--selection-fg":       "var(--fg-primary)"
+    "--selection-fg":       "var(--fg-primary)",
+
+    "--clip-button":    "none",
+    "--clip-panel":     "none",
+    "--clip-badge":     "none",
+    "--deco-accent-bar": "0",
+    "--deco-stripe":    "none",
+    "--toolbar-accent-line": "0"
   }
 }
