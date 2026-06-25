@@ -1,3 +1,6 @@
+/* ==================== 共享组件样式 ==================== */
+@import './components.css';
+
 /* ==================== CSS 重置和基础样式 ==================== */
 * {
   box-sizing: border-box;
@@ -56,7 +59,7 @@ html, body {
   content: '';
   width: 3px;
   height: 14px;
-  background: linear-gradient(180deg, var(--color-blue-300), var(--accent));
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
   border-radius: var(--radius-sm);
 }
 
@@ -105,7 +108,7 @@ button {
 /* ==================== .section-desc 样式 ==================== */
 .section-desc {
   font-size: var(--font-sm);
-  color: var(--color-gray-700);
+  color: var(--fg-muted);
   margin: -8px 0 14px 0;
   line-height: 1.5;
   padding-left: 11px;
