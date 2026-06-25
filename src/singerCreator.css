@@ -53,8 +53,8 @@ html, body {
 
 #toolbar button:hover {
   background: var(--bg-button-hover);
-  color: var(--color-gray-50);
-  border-color: var(--color-gray-700);
+  color: var(--fg-primary);
+  border-color: var(--accent-glow);
   box-shadow: 0 1px 4px var(--shadow-color);
 }
 
@@ -139,7 +139,7 @@ html, body {
 .section-title {
   font-size: var(--font-sm);
   font-weight: 600;
-  color: var(--color-gray-600);
+  color: var(--fg-muted);
   margin-bottom: var(--space-5);
   text-transform: uppercase;
   letter-spacing: 0.8px;
@@ -156,7 +156,7 @@ html, body {
 .form-group label {
   display: block;
   font-size: var(--font-sm);
-  color: var(--color-gray-500);
+  color: var(--fg-muted);
   margin-bottom: var(--space-3);
   font-weight: 500;
 }
@@ -179,7 +179,7 @@ html, body {
 }
 
 .form-group input[type="text"]::placeholder {
-  color: var(--color-gray-800);
+  color: var(--fg-disabled);
 }
 
 .form-group input[type="color"] {
@@ -209,7 +209,7 @@ html, body {
   align-items: center;
   gap: var(--space-2);
   font-size: var(--font-base);
-  color: var(--color-gray-400);
+  color: var(--fg-secondary);
   cursor: pointer;
   user-select: none;
 }
@@ -280,13 +280,13 @@ html, body {
 
 .upload-text {
   font-size: var(--font-base);
-  color: var(--color-gray-400);
+  color: var(--fg-secondary);
   font-weight: 500;
 }
 
 .upload-hint {
   font-size: var(--font-xs);
-  color: var(--color-gray-700);
+  color: var(--fg-disabled);
   margin-top: var(--space-3);
 }
 
@@ -305,7 +305,7 @@ html, body {
 }
 
 .info-label {
-  color: var(--color-gray-600);
+  color: var(--fg-muted);
 }
 
 .info-value {
@@ -347,8 +347,8 @@ html, body {
 
 .btn-small:hover {
   background: var(--bg-button-hover);
-  color: var(--color-gray-50);
-  border-color: var(--color-gray-700);
+  color: var(--fg-primary);
+  border-color: var(--accent-glow);
 }
 
 .btn-small.btn-danger {
@@ -390,7 +390,7 @@ html, body {
 .preview-title {
   font-size: var(--font-sm);
   font-weight: 600;
-  color: var(--color-gray-600);
+  color: var(--fg-muted);
   margin-bottom: var(--space-7);
   text-align: center;
   text-transform: uppercase;
@@ -410,7 +410,7 @@ html, body {
 
 .placeholder-text {
   font-size: var(--font-base);
-  color: var(--color-gray-700);
+  color: var(--fg-disabled);
   line-height: 1.5;
 }
 
@@ -443,7 +443,7 @@ html, body {
   font-size: var(--font-xs);
   font-weight: 600;
   background: var(--bg-header-start);
-  color: var(--color-gray-600);
+  color: var(--fg-muted);
   letter-spacing: 0.3px;
 }
 
@@ -507,7 +507,7 @@ html, body {
 
 .modal-hint {
   font-size: var(--font-base);
-  color: var(--color-gray-500);
+  color: var(--fg-muted);
   margin-bottom: var(--space-6);
   line-height: 1.5;
 }
@@ -602,7 +602,7 @@ html, body {
 
 .trim-control-group label {
   font-size: var(--font-sm);
-  color: var(--color-gray-500);
+  color: var(--fg-muted);
   white-space: nowrap;
 }
 
@@ -625,7 +625,7 @@ html, body {
 
 .trim-unit {
   font-size: var(--font-sm);
-  color: var(--color-gray-600);
+  color: var(--fg-muted);
 }
 
 #wav-trim-actions {

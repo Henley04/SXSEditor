@@ -32,7 +32,7 @@ body {
 
 .loading-hint {
     font-size: var(--font-base);
-    color: var(--color-gray-800);
+    color: var(--fg-disabled);
     text-align: center;
     padding: var(--space-5) 0;
 }
@@ -112,7 +112,7 @@ body {
     display: flex;
     justify-content: space-between;
     font-size: var(--font-sm);
-    color: var(--color-gray-500);
+    color: var(--fg-muted);
     margin-bottom: var(--space-3);
 }
 
@@ -122,7 +122,7 @@ body {
 }
 
 .vram-label .vram-total {
-    color: var(--color-gray-700);
+    color: var(--fg-disabled);
 }
 
 .vram-bar {
@@ -152,7 +152,7 @@ body {
 
 .gpu-no-data {
     font-size: var(--font-base);
-    color: var(--color-gray-800);
+    color: var(--fg-disabled);
     text-align: center;
     padding: var(--space-4) 0;
 }
@@ -228,7 +228,7 @@ body {
 
 .group-loaded-badge.none-loaded {
     background: var(--ink-soft);
-    color: var(--color-gray-800);
+    color: var(--fg-disabled);
 }
 
 .group-actions {
@@ -319,7 +319,7 @@ body {
 
 .model-desc {
     font-size: var(--font-xs);
-    color: var(--color-gray-700);
+    color: var(--fg-disabled);
     margin-top: var(--space-1);
     white-space: nowrap;
     overflow: hidden;
@@ -335,7 +335,7 @@ body {
 
 .model-size {
     font-size: var(--font-xs);
-    color: var(--color-gray-700);
+    color: var(--fg-disabled);
     white-space: nowrap;
 }
 
@@ -365,7 +365,7 @@ body {
 
 .ep-badge.none {
     background: var(--ink-soft);
-    color: var(--color-gray-800);
+    color: var(--fg-disabled);
 }
 
 .model-btn {
@@ -436,7 +436,7 @@ body {
 
 .summary-label {
     font-size: var(--font-base);
-    color: var(--color-gray-500);
+    color: var(--fg-muted);
 }
 
 .summary-value {

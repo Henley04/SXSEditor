@@ -113,7 +113,7 @@ body {
     font-size: var(--font-md);
     font-weight: 500;
     margin-bottom: var(--space-3);
-    color: var(--color-gray-400);
+    color: var(--fg-secondary);
     transition: color var(--motion-base);
 }
 
@@ -140,7 +140,7 @@ body {
 }
 
 .setting-group select:hover {
-    background-color: var(--color-ink-500);
+    background-color: var(--bg-elevated);
     border-color: var(--button-secondary-border);
 }
 
@@ -157,7 +157,7 @@ body {
 
 .hint {
     font-size: var(--font-sm);
-    color: var(--color-gray-800);
+    color: var(--fg-disabled);
     margin-top: var(--space-2);
     line-height: 1.5;
     padding-left: var(--space-2);
@@ -252,7 +252,7 @@ body {
 .info-box ul {
     margin: 0;
     padding-left: var(--space-7);
-    color: var(--color-gray-500);
+    color: var(--fg-muted);
 }
 
 .info-box li {
@@ -292,7 +292,7 @@ body {
 .precision-info-box ul {
     margin: 0;
     padding-left: var(--space-7);
-    color: var(--color-gray-500);
+    color: var(--fg-muted);
 }
 
 .precision-info-box li {

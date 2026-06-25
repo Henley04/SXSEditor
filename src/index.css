@@ -41,7 +41,7 @@
 .toolbar-divider {
   width: 1px;
   height: 22px;
-  background: linear-gradient(180deg, transparent, var(--color-gray-900), transparent);
+  background: linear-gradient(180deg, transparent, var(--border-default), transparent);
   margin: 0 var(--space-3);
   flex-shrink: 0;
 }
@@ -49,7 +49,7 @@
 #toolbar button {
   background: var(--bg-button);
   color: var(--fg-muted);
-  border: 1px solid var(--color-gray-900);
+  border: 1px solid var(--button-secondary-border);
   border-radius: var(--radius-md);
   padding: var(--space-2) var(--space-5);
   cursor: pointer;
@@ -62,7 +62,7 @@
 #toolbar button:hover {
   background: var(--bg-button-hover);
   color: var(--fg-toolbar-hover);
-  border-color: var(--color-gray-700);
+  border-color: var(--accent-glow);
   box-shadow: 0 1px 4px var(--shadow-color);
 }
 
@@ -81,7 +81,7 @@
   width: 50px;
   background: var(--bg-input);
   color: var(--fg-primary);
-  border: 1px solid var(--color-gray-900);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   padding: var(--space-1) var(--space-3);
   text-align: center;
@@ -110,7 +110,7 @@
 
 #toolbar label {
   font-size: var(--font-base);
-  color: var(--color-gray-600);
+  color: var(--fg-muted);
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -124,7 +124,7 @@
   background: var(--bg-input);
   padding: var(--space-2) 10px;
   border-radius: var(--radius-md);
-  border: 1px solid var(--color-gray-900);
+  border: 1px solid var(--border-subtle);
   min-width: 100px;
   text-align: center;
   letter-spacing: 0.5px;
@@ -160,7 +160,7 @@
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--font-sm);
   font-weight: 600;
-  color: var(--color-gray-600);
+  color: var(--fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.8px;
 }
@@ -170,7 +170,7 @@
   height: 24px;
   background: var(--bg-button);
   color: var(--fg-muted);
-  border: 1px solid var(--color-gray-900);
+  border: 1px solid var(--button-secondary-border);
   border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 16px;
@@ -185,7 +185,7 @@
 #btn-add-singer:hover {
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
-  border-color: var(--color-blue-300);
+  border-color: var(--accent-hover);
   box-shadow: 0 1px 4px var(--accent-soft);
 }
 
@@ -205,20 +205,20 @@
   gap: var(--space-5);
   padding: var(--space-8) 10px;
   cursor: pointer;
-  color: var(--color-gray-800);
+  color: var(--fg-disabled);
   transition: background-color var(--motion-fast), color var(--motion-fast);
 }
 
 .singer-item-empty:hover {
   background: var(--bg-header-end);
-  color: var(--color-gray-500);
+  color: var(--fg-muted);
 }
 
 .singer-avatar-empty {
   width: 44px;
   height: 44px;
   border-radius: var(--radius-sm);
-  border: 2px dashed var(--color-gray-900);
+  border: 2px dashed var(--border-strong);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -232,7 +232,7 @@
 
 .singer-avatar-placeholder {
   font-size: 20px;
-  color: var(--color-gray-900);
+  color: var(--fg-disabled);
 }
 
 .singer-info-empty {
@@ -282,7 +282,7 @@
   align-items: center;
   justify-content: center;
   font-size: 18px;
-  color: var(--color-gray-600);
+  color: var(--fg-muted);
   flex-shrink: 0;
   overflow: hidden;
   box-shadow: 0 1px 3px var(--shadow-color);
@@ -313,7 +313,7 @@
 
 .singer-singer-name {
   font-size: var(--font-sm);
-  color: var(--color-gray-600);
+  color: var(--fg-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -321,7 +321,7 @@
 
 .singer-config {
   font-size: 9px;
-  color: var(--color-gray-800);
+  color: var(--fg-disabled);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -365,8 +365,8 @@
   width: 22px;
   height: 22px;
   background: var(--bg-button);
-  color: var(--color-gray-600);
-  border: 1px solid var(--color-gray-900);
+  color: var(--fg-muted);
+  border: 1px solid var(--button-secondary-border);
   border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 14px;
@@ -380,7 +380,7 @@
 .btn-fragment-add:hover {
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
-  border-color: var(--color-blue-300);
+  border-color: var(--accent-hover);
   box-shadow: 0 1px 4px var(--accent-soft);
 }
 
@@ -388,8 +388,8 @@
   width: 22px;
   height: 22px;
   background: var(--bg-button);
-  color: var(--color-gray-600);
-  border: 1px solid var(--color-gray-900);
+  color: var(--fg-muted);
+  border: 1px solid var(--button-secondary-border);
   border-radius: var(--radius-md);
   cursor: pointer;
   font-size: 14px;
@@ -427,7 +427,7 @@
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--font-sm);
   font-weight: 600;
-  color: var(--color-gray-600);
+  color: var(--fg-muted);
   text-transform: uppercase;
   letter-spacing: 0.8px;
 }
@@ -489,12 +489,12 @@
 
 .version-badge {
   font-size: var(--font-sm);
-  font-weight: 500;
-  color: var(--color-gray-600);
+  font-weight: 600;
+  color: var(--fg-muted);
   background: var(--bg-elevated);
   padding: var(--space-1) var(--space-4);
   border-radius: var(--radius-full);
-  border: 1px solid var(--color-gray-900);
+  border: 1px solid var(--border-subtle);
   letter-spacing: 0.3px;
   user-select: none;
   cursor: default;
