@@ -341,8 +341,7 @@ def build_conv_transpose_replacement(graph, ct_node, uniq_id):
 
         slice_starts = numpy_helper.from_array(
             np.array([0, 0, 0], dtype=np.int64), name=f"{base}_slice_starts")
-        graph.initializer.append(slice_start is None or slice_starts)  # placeholder, replaced below
-        graph.initializer[-1] = slice_starts
+        graph.initializer.append(slice_starts)
 
         const_max = numpy_helper.from_array(
             np.array([np.iinfo(np.int64).max], dtype=np.int64), name=f"{base}_max")
