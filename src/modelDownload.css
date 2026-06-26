@@ -355,3 +355,226 @@ body {
   margin-right: var(--space-2);
   vertical-align: middle;
 }
+
+/* ===== Optional models section (SiFiGAN card) ===== */
+.optional-models-section {
+  flex-shrink: 0;
+  margin-bottom: var(--space-5);
+}
+
+.optional-models-section .section-heading {
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--fg-secondary);
+  margin: 0 0 var(--space-3) 0;
+}
+
+.model-card {
+  padding: var(--space-4) var(--space-5);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  transition: border-color var(--motion-base);
+}
+
+.model-card:hover {
+  border-color: var(--border-strong);
+}
+
+.model-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-2);
+}
+
+.model-card-title {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.model-card-name {
+  font-size: var(--font-md);
+  font-weight: 500;
+  color: var(--fg-primary);
+}
+
+.model-card-badge {
+  font-size: calc(var(--font-sm) * 0.85);
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  color: var(--fg-muted);
+  background: var(--bg-elevated);
+}
+
+.model-card-badge.optional {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.model-card-actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+.btn-card {
+  padding: var(--space-2) var(--space-5);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+  cursor: pointer;
+  border: 1px solid var(--button-secondary-border);
+  background: var(--bg-button);
+  color: var(--fg-secondary);
+  transition: all var(--motion-fast);
+}
+
+.btn-card:hover:not(:disabled) {
+  background: var(--bg-button-hover);
+  color: var(--fg-primary);
+  border-color: var(--accent-glow);
+}
+
+.btn-card:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-card.btn-download {
+  background: var(--bg-button-primary);
+  color: var(--fg-on-accent);
+  border-color: var(--accent);
+}
+
+.btn-card.btn-download:hover:not(:disabled) {
+  background: var(--bg-button-primary-hover);
+}
+
+.btn-card.btn-unload {
+  background: var(--bg-button);
+  color: var(--fg-muted);
+}
+
+.btn-card.btn-unload:hover:not(:disabled) {
+  background: var(--bg-button-hover);
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.model-card-desc {
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  margin: 0 0 var(--space-3) 0;
+  line-height: 1.4;
+}
+
+.model-card-files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+}
+
+.model-card-file {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: var(--font-sm);
+  gap: var(--space-4);
+}
+
+.model-card-file-name {
+  color: var(--fg-muted);
+  font-family: 'Consolas', 'Monaco', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-card-file-size {
+  color: var(--fg-disabled);
+  flex-shrink: 0;
+  font-size: calc(var(--font-sm) * 0.9);
+}
+
+.model-card-status {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-sm);
+  min-height: 18px;
+}
+
+.status-indicator {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--fg-disabled);
+}
+
+.status-indicator.installed {
+  background: var(--success);
+}
+
+.status-indicator.not_downloaded {
+  background: var(--fg-disabled);
+}
+
+.status-indicator.warning {
+  background: var(--warning, #f0ad4e);
+}
+
+.status-indicator.checking {
+  background: var(--accent);
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.status-indicator.downloading {
+  background: var(--accent);
+  animation: pulse 0.8s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+.model-card-status .status-text {
+  color: var(--fg-muted);
+}
+
+.model-card-tooltip {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated);
+  border: 1px solid var(--warning, #f0ad4e);
+  border-radius: var(--radius-md);
+  color: var(--warning, #f0ad4e);
+  font-size: var(--font-sm);
+  line-height: 1.4;
+}
+
+.model-card-progress {
+  margin-top: var(--space-3);
+}
+
+.model-card-progress .progress-bar-bg {
+  height: var(--space-3);
+}
+
+.model-card-progress .progress-text {
+  display: block;
+  margin-top: var(--space-2);
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  text-align: right;
+}

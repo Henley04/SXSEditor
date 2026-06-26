@@ -4,7 +4,7 @@ const fs = require('node:fs');
 // Side effect: apply float16 patch on module load
 require('./float16Patch');
 
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES } = require('./constants');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, isDiscreteGPUByName, enumerateDMLDevices, detectBestGPU, detectBestDevice, selectBestDevice, buildModelDeviceMapping, createSessionWithValidation, WebNNSessionProxy } = require('./modelLoader');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
@@ -50,6 +50,10 @@ class OnnxSVSPipeline {
         this.preferredDeviceType = options.preferredDeviceType || null;
         this.useWebNN = false;
         this.useStaticShapes = options.modelPrecision === 'int8-npu';
+        this.vocoderType = 'default';            // 'default' | 'sifigan'，_doInit 中从 settings 读取覆盖
+        this.sifiganStatsMissing = false;        // SiFiGAN stats 文件缺失标志（运行时兜底归一化用）
+        this.sifiganStatsPath = null;            // sifigan_stats.joblib 路径（与 onnx 同目录）
+        this._resolvedVocoderFile = null;       // 解析后的 vocoder 文件名（供 _detectVocoderPrecision / loadModel 复用）
         this._synthCache = null;
         this._initPromise = null;
 
@@ -296,6 +300,24 @@ class OnnxSVSPipeline {
         // 并行检查 DML 变体 Model是否存在
         const dmlIdx = resolvedModelFiles.indexOf('diff_step_dml.onnx');
         const vocDmlIdx = resolvedModelFiles.indexOf('vocoder_dml.onnx');
+
+        // 读取 vocoderType 设置（SiFiGAN 三级回退依据），复用 main/settings.loadSettings
+        let vocoderType = 'default';
+        try {
+            const { loadSettings } = require('../../main/settings');
+            const settings = loadSettings();
+            if (settings.vocoderType === 'sifigan') vocoderType = 'sifigan';
+        } catch (e) {
+            console.warn('[OnnxSVSPipeline] 读取 vocoderType 设置失败，默认使用 default:', e.message);
+        }
+        this.vocoderType = vocoderType;
+
+        // SiFiGAN stats 路径与缺失标志初始化
+        this.sifiganStatsMissing = false;
+        this.sifiganStatsPath = null;
+        this._resolvedVocoderFile = 'vocoder_dml.onnx';
+
+        // 并行检查 diff_step_dml 与默认 vocoder_dml 是否存在
         const [dmlExists, vocDmlExists] = await Promise.all([
             dmlIdx >= 0 ? fs.promises.access(path.join(this.modelDir, 'diff_step_dml.onnx')).then(() => true, () => false) : Promise.resolve(true),
             vocDmlIdx >= 0 ? fs.promises.access(path.join(this.modelDir, 'vocoder_dml.onnx')).then(() => true, () => false) : Promise.resolve(true),
@@ -304,9 +326,51 @@ class OnnxSVSPipeline {
             resolvedModelFiles[dmlIdx] = 'diff_step.onnx';
             console.log('[OnnxSVSPipeline] diff_step_dml.onnx not found, using diff_step.onnx');
         }
-        if (vocDmlIdx >= 0 && !vocDmlExists) {
-            resolvedModelFiles[vocDmlIdx] = 'vocoder.onnx';
-            console.log('[OnnxSVSPipeline] vocoder_dml.onnx not found, using vocoder.onnx');
+
+        // Vocoder 路径三级回退：sifigan_vocoder_dml → sifigan_vocoder → 默认 vocoder_dml → vocoder
+        let sifiganOnnxResolved = false;
+        if (vocoderType === 'sifigan') {
+            const sifiganDmlPath = path.join(this.modelDir, 'sifigan_vocoder_dml.onnx');
+            const sifiganPlainPath = path.join(this.modelDir, 'sifigan_vocoder.onnx');
+            const sifiganStatsPath = path.join(this.modelDir, SIFIGAN_STATS_FILE);
+            const [sifiganDmlExists, sifiganPlainExists, sifiganStatsExists] = await Promise.all([
+                fs.promises.access(sifiganDmlPath).then(() => true, () => false),
+                fs.promises.access(sifiganPlainPath).then(() => true, () => false),
+                fs.promises.access(sifiganStatsPath).then(() => true, () => false),
+            ]);
+            if (sifiganDmlExists) {
+                resolvedModelFiles[vocDmlIdx] = 'sifigan_vocoder_dml.onnx';
+                this._resolvedVocoderFile = 'sifigan_vocoder_dml.onnx';
+                sifiganOnnxResolved = true;
+                console.log('[OnnxSVSPipeline] Using SiFiGAN vocoder: sifigan_vocoder_dml.onnx');
+            } else if (sifiganPlainExists) {
+                resolvedModelFiles[vocDmlIdx] = 'sifigan_vocoder.onnx';
+                this._resolvedVocoderFile = 'sifigan_vocoder.onnx';
+                sifiganOnnxResolved = true;
+                console.log('[OnnxSVSPipeline] sifigan_vocoder_dml.onnx not found, using sifigan_vocoder.onnx');
+            } else {
+                console.warn('[OnnxSVSPipeline] sifigan 模型缺失，回退默认 vocoder');
+                // 落入默认 vocoder 回退逻辑
+            }
+            // stats 文件路径与缺失标志（仅 onnx 存在时才有意义）
+            this.sifiganStatsPath = sifiganStatsPath;
+            if (sifiganOnnxResolved && !sifiganStatsExists) {
+                this.sifiganStatsMissing = true;
+                console.warn('[OnnxSVSPipeline] 统计文件缺失，SiFiGAN 输入归一化可能不可用');
+            } else if (sifiganOnnxResolved) {
+                console.log('[OnnxSVSPipeline] SiFiGAN stats file found:', SIFIGAN_STATS_FILE);
+            }
+        }
+
+        // 默认 vocoder 回退（vocoderType=default 或 sifigan 模型均缺失时）
+        if (!sifiganOnnxResolved) {
+            if (vocDmlIdx >= 0 && !vocDmlExists) {
+                resolvedModelFiles[vocDmlIdx] = 'vocoder.onnx';
+                this._resolvedVocoderFile = 'vocoder.onnx';
+                console.log('[OnnxSVSPipeline] vocoder_dml.onnx not found, using vocoder.onnx');
+            } else if (vocDmlIdx >= 0) {
+                this._resolvedVocoderFile = 'vocoder_dml.onnx';
+            }
         }
 
         // 并行检查所有Model文件是否存在并获取大小
@@ -549,7 +613,7 @@ class OnnxSVSPipeline {
                 const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
                 const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
                 console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
-                if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], path.join(this.modelDir, 'vocoder_dml.onnx'));
+                if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], path.join(this.modelDir, this._resolvedVocoderFile || 'vocoder_dml.onnx'));
             } catch (err) {
                 console.error('[OnnxSVSPipeline] ONNX Runtime init failed:', err.message);
                 for (const key of loadedSessions) {
@@ -587,7 +651,7 @@ class OnnxSVSPipeline {
             const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
             const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
             console.log(`[OnnxSVSPipeline] Fallback init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
-            if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], path.join(this.modelDir, 'vocoder_dml.onnx'));
+            if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], path.join(this.modelDir, this._resolvedVocoderFile || 'vocoder_dml.onnx'));
         } catch (err) {
             for (const key of loadedSessions) {
                 if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
@@ -1298,7 +1362,7 @@ class OnnxSVSPipeline {
             preflow: 'preflow.onnx',
             condEmb: 'cond_emb.onnx',
             diffStep: 'diff_step_dml.onnx',
-            vocoder: 'vocoder_dml.onnx',
+            vocoder: this._resolvedVocoderFile || 'vocoder_dml.onnx',
             melTransform: 'mel_transform.onnx',
         };
 
@@ -1322,6 +1386,27 @@ class OnnxSVSPipeline {
             try { await fs.promises.access(vocDmlPath); vocDmlExists = true; } catch (_) {}
             if (!vocDmlExists) {
                 resolvedFile = 'vocoder.onnx';
+            }
+        } else if (modelFile === 'sifigan_vocoder_dml.onnx' || modelFile === 'sifigan_vocoder.onnx') {
+            // SiFiGAN 三级回退（与 _doInit 阶段保持一致）
+            const sifiganDmlPath = path.join(this.modelDir, 'sifigan_vocoder_dml.onnx');
+            const sifiganPlainPath = path.join(this.modelDir, 'sifigan_vocoder.onnx');
+            let sifiganDmlExists = false, sifiganPlainExists = false;
+            try { await fs.promises.access(sifiganDmlPath); sifiganDmlExists = true; } catch (_) {}
+            try { await fs.promises.access(sifiganPlainPath); sifiganPlainExists = true; } catch (_) {}
+            if (sifiganDmlExists) {
+                resolvedFile = 'sifigan_vocoder_dml.onnx';
+            } else if (sifiganPlainExists) {
+                resolvedFile = 'sifigan_vocoder.onnx';
+            } else {
+                console.warn('[OnnxSVSPipeline] sifigan 模型缺失，回退默认 vocoder');
+                resolvedFile = 'vocoder_dml.onnx';
+                const vocDmlPath = path.join(this.modelDir, 'vocoder_dml.onnx');
+                let vocDmlExists = false;
+                try { await fs.promises.access(vocDmlPath); vocDmlExists = true; } catch (_) {}
+                if (!vocDmlExists) {
+                    resolvedFile = 'vocoder.onnx';
+                }
             }
         }
 
