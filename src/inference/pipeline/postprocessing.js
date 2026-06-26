@@ -392,9 +392,6 @@ function extractMelSpectrogram(audioFloat, sr) {
     return { data: melSpec, frames: numFrames, melBands };
 }
 
-// SiFiGAN 统计文件缺失警告仅记录一次（避免日志刷屏）
-let _sifiganStatsWarned = false;
-
 /**
  * 线性插值将 F0 序列重采样到目标长度（mel 帧率对齐）。
  * mel 帧率 = SAMPLE_RATE / HOP_SIZE = 24000 / 480 = 50Hz；buildF0FrameSequence 已产出该帧率，
@@ -476,7 +473,8 @@ class Postprocessing {
         const floatType = isFP16 ? 'float16' : 'float32';
 
         // Yield to event loop to keep window responsive during long DML inference
-        const yieldToEventLoop = () => new Promise(resolve => setTimeout(resolve, 0));
+        // setImmediate 比 setTimeout(0) 快约 4 倍（Windows ~1ms vs ~4ms）
+        const yieldToEventLoop = () => new Promise(resolve => setImmediate(resolve));
 
         const padFloat = (src, len) => {
             if (src.length >= len) return src;
@@ -502,13 +500,8 @@ class Postprocessing {
             }
         }
 
-        // 统计文件缺失兜底：实际归一化发生在 SiFiGAN ONNX 模型内部（导出时已嵌入 stats 常量），
-        // stats 缺失意味着 ONNX 模型本身未正确导出归一化常量。此处无法在运行时补偿（兜底为零均值单位方差，
-        // 即假设输入已是归一化状态），仅记录警告（首次），质量会下降。
-        if (useSifiganF0 && sifiganStatsMissing && !_sifiganStatsWarned) {
-            console.warn('[OnnxSVSPipeline] SiFiGAN 统计文件缺失，输入归一化可能不可用（兜底为零均值单位方差，质量会下降）');
-            _sifiganStatsWarned = true;
-        }
+        // 统计文件缺失已在 _doInit 阶段强制回退默认 vocoder，此处 sifiganStatsMissing 永远为 false。
+        // 保留参数仅为接口兼容，运行时不再触发兜底逻辑。
 
         // 构造 vocoder 输入字典：default → { mel }；sifigan → { mel, f0 }（f0 与 mel 同帧率、同 seq_len）
         const buildVocoderInputs = (melTensor, vocSeqLen, frameOffset, frameCount) => {
@@ -556,9 +549,10 @@ class Postprocessing {
             fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * i / fadeSamples));
         }
 
+        // 第一阶段：预先计算所有 chunk 的输入张量（不并行 IO，避免内存峰值）
+        const chunkSpecs = [];
         let framePos = 0;
         let chunkIdx = 0;
-
         while (framePos < totalFrames) {
             const isFirst = chunkIdx === 0;
             const chunkStart = isFirst ? 0 : Math.max(0, framePos - overlapFrames);
@@ -573,37 +567,45 @@ class Postprocessing {
             const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
             const melTensor = createFloatTensor(floatType, paddedChunk, [1, vocSeqLen, MEL_DIM]);
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, chunkStart, currentChunkFrames);
-            const results = await sessions.vocoder.run(vocoderInputs);
-            await yieldToEventLoop(); // Prevent UI freeze between vocoder chunks
-            const waveform = outputToFloat32(results['waveform']);
 
-            const writeStart = chunkStart * HOP_SIZE;
-            const writeLen = Math.min(waveform.length, totalSamples - writeStart);
+            chunkSpecs.push({ chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast, vocoderInputs });
 
-            for (let i = 0; i < writeLen; i++) {
-                const outIdx = writeStart + i;
-                if (outIdx >= totalSamples) break;
-                let w = 1.0;
-                // 头部 fade：非首 chunk 的前 overlapFrames 帧（与前一个 chunk 交叉淡化）
-                if (!isFirst && i < fadeSamples) {
-                    w = fadeWindow[i];
-                }
-                // 尾部 fade：非末 chunk 的后 overlapFrames 帧（与后一个 chunk 交叉淡化）
-                if (!isLast && i >= writeLen - fadeSamples) {
-                    w = Math.min(w, 1.0 - fadeWindow[writeLen - 1 - i]);
-                }
-                output[outIdx] += waveform[i] * w;
-                weightSum[outIdx] += w;
-            }
-
-            // 末尾 chunk：写入后立即终止，避免 framePos 回退导致死循环
-            if (isLast) {
-                chunkIdx++;
-                break;
-            }
-            // 推进 framePos 到本 chunk 的新数据末尾（= chunkEnd，因为 chunkEnd 未被截断）
+            if (isLast) break;
             framePos = chunkEnd;
             chunkIdx++;
+        }
+
+        // 第二阶段：每 2 个 chunk 一组并行 DML 推理（CPU 路径下显存压力低时可重叠调度）
+        // GPU 路径下 DML 驱动会自动串行化，无负面影响；CPU 路径下可利用多核并行。
+        const VOC_PARALLEL = 2;
+        const totalChunkCount = chunkSpecs.length;
+        for (let i = 0; i < totalChunkCount; i += VOC_PARALLEL) {
+            const group = chunkSpecs.slice(i, Math.min(i + VOC_PARALLEL, totalChunkCount));
+            const results = await Promise.all(group.map(spec => sessions.vocoder.run(spec.vocoderInputs)));
+            await yieldToEventLoop(); // Prevent UI freeze between vocoder chunk groups
+
+            for (let g = 0; g < group.length; g++) {
+                const spec = group[g];
+                const waveform = outputToFloat32(results[g]['waveform']);
+                const writeStart = spec.chunkStart * HOP_SIZE;
+                const writeLen = Math.min(waveform.length, totalSamples - writeStart);
+
+                for (let j = 0; j < writeLen; j++) {
+                    const outIdx = writeStart + j;
+                    if (outIdx >= totalSamples) break;
+                    let w = 1.0;
+                    // 头部 fade：非首 chunk 的前 overlapFrames 帧
+                    if (!spec.isFirst && j < fadeSamples) {
+                        w = fadeWindow[j];
+                    }
+                    // 尾部 fade：非末 chunk 的后 overlapFrames 帧
+                    if (!spec.isLast && j >= writeLen - fadeSamples) {
+                        w = Math.min(w, 1.0 - fadeWindow[writeLen - 1 - j]);
+                    }
+                    output[outIdx] += waveform[j] * w;
+                    weightSum[outIdx] += w;
+                }
+            }
         }
 
         for (let i = 0; i < totalSamples; i++) {
@@ -615,7 +617,7 @@ class Postprocessing {
         normalizePeakTo(output, totalSamples);
 
         const elapsed = performance.now() - t0;
-        console.log(`[OnnxSVSPipeline] Vocoder chunked: ${totalFrames} frames, ${chunkIdx} chunks, ${elapsed.toFixed(0)}ms`);
+        console.log(`[OnnxSVSPipeline] Vocoder chunked: ${totalFrames} frames, ${totalChunkCount} chunks (parallel=${VOC_PARALLEL}), ${elapsed.toFixed(0)}ms`);
         return output;
     }
 

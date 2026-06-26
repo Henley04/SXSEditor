@@ -59,7 +59,12 @@ class OnnxSVSPipeline {
         this.sifiganStatsPath = null;            // sifigan_stats.joblib 路径（与 onnx 同目录）
         this._resolvedVocoderFile = null;       // 解析后的 vocoder 文件名（供 _detectVocoderPrecision / loadModel 复用）
         this._currentF0Hz = null;                // 当前推理的 F0 序列（Hz，mel 帧率=50Hz），供 SiFiGAN vocoder 使用；null 表示缺失
-        this._synthCache = null;
+        // LRU 缓存：保留最近 N 次合成结果，支持 A/B 比较场景，避免微调单音符时全量重算
+        this._synthCache = null;                 // 单条目快速访问指针（指向 _synthCacheMap 中最新条目，兼容旧代码）
+        this._synthCacheMap = null;              // Map<key, {audio, size}>，按插入顺序天然 LRU
+        this._synthCacheMaxEntries = 4;          // 最大缓存条目数
+        this._synthCacheMaxBytes = 200 * 1024 * 1024; // 最大缓存字节数（200MB ≈ 4 分钟音频 × 4 条）
+        this._synthCacheBytes = 0;               // 当前缓存占用字节数
         this._initPromise = null;
 
         // Initialize sub-modules
@@ -276,7 +281,101 @@ class OnnxSVSPipeline {
     _hashArray(arr) { return this._audioSegmentation.hashArray(arr); }
     _computeSynthCacheKey(notes, bpm, options) { return this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this)); }
     _median(arr) { return this._audioSegmentation.median(arr); }
-    clearSynthCache() { this._synthCache = null; }
+    clearSynthCache() {
+        // LRU 缓存：清空所有条目
+        this._synthCache = null;
+        this._synthCacheMap = null;
+        this._synthCacheBytes = 0;
+    }
+
+    /**
+     * LRU 写入：若 key 已存在则更新并移到最新；超出容量时淘汰最旧条目。
+     * @param {string} key
+     * @param {Float32Array} audio
+     */
+    _synthCachePut(key, audio) {
+        const MAX_SAMPLES = SAMPLE_RATE * 120; // 单条上限 2 分钟
+        if (audio.length > MAX_SAMPLES) return; // 超长音频不缓存
+
+        if (!this._synthCacheMap) this._synthCacheMap = new Map();
+        const map = this._synthCacheMap;
+
+        // 若已存在，先移除旧条目（稍后重新插入到最新位置）
+        if (map.has(key)) {
+            const old = map.get(key);
+            this._synthCacheBytes -= old.size;
+            map.delete(key);
+        }
+
+        const size = audio.byteLength;
+        map.set(key, { audio, size });
+        this._synthCacheBytes += size;
+
+        // 淘汰最旧条目（Map 迭代顺序 = 插入顺序，第一个即最旧）
+        while ((map.size > this._synthCacheMaxEntries) ||
+               (this._synthCacheBytes > this._synthCacheMaxBytes && map.size > 1)) {
+            const oldestKey = map.keys().next().value;
+            const oldest = map.get(oldestKey);
+            this._synthCacheBytes -= oldest.size;
+            map.delete(oldestKey);
+        }
+
+        // 更新单条目快速访问指针（指向最新条目）
+        this._synthCache = { key, audio };
+    }
+
+    /**
+     * LRU 读取：命中时把条目移到最新位置，返回 audio；未命中返回 null。
+     * @param {string} key
+     * @returns {Float32Array|null}
+     */
+    _synthCacheGet(key) {
+        // 单条目快速路径（命中率最高的最近一次合成）
+        if (this._synthCache && this._synthCache.key === key) {
+            return this._synthCache.audio;
+        }
+        if (!this._synthCacheMap || !this._synthCacheMap.has(key)) return null;
+
+        // LRU 提升：删除并重新插入到最新位置
+        const entry = this._synthCacheMap.get(key);
+        this._synthCacheMap.delete(key);
+        this._synthCacheMap.set(key, entry);
+        this._synthCache = { key, audio: entry.audio };
+        return entry.audio;
+    }
+
+    /**
+     * 使用外部传入的 F0 提取器（如 RMVPE）从参考音频提取 F0 序列。
+     * 优先使用外部提取器（精度更高），失败或未提供时回退到内置自相关方法。
+     * @param {Buffer|ArrayBuffer} wavBuffer - 参考音频 WAV 数据
+     * @param {Function} extractor - async (audioFloat, sampleRate) => Float32Array
+     * @returns {Promise<Float32Array|null>}
+     */
+    async _extractRefF0WithFallback(wavBuffer, extractor) {
+        if (extractor) {
+            try {
+                const { parseWavBuffer, resampleLinear } = require('./postprocessing');
+                const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(wavBuffer);
+                // RMVPE 内部会重采样到 16kHz，这里直接传原始采样率
+                const f0Array = await extractor(audioFloat, srcSr);
+                if (f0Array && f0Array.length > 0) {
+                    // 返回值可能是 {time, f0, confidence}[] 或 Float32Array
+                    if (f0Array instanceof Float32Array) return f0Array;
+                    if (Array.isArray(f0Array) && f0Array.length > 0) {
+                        const f0 = new Float32Array(f0Array.length);
+                        for (let i = 0; i < f0Array.length; i++) {
+                            f0[i] = f0Array[i].f0 || 0;
+                        }
+                        return f0;
+                    }
+                }
+            } catch (e) {
+                console.warn('[OnnxSVSPipeline] 外部 F0 提取失败，回退自相关:', e.message);
+            }
+        }
+        // 回退到内置自相关
+        return this._extractRefF0FromWav(wavBuffer);
+    }
 
     async init() {
         if (this.initialized) return true;
@@ -389,25 +488,34 @@ class OnnxSVSPipeline {
                 fs.promises.access(sifiganStatsPath).then(() => true, () => false),
             ]);
             if (sifiganDmlExists) {
-                resolvedModelFiles[vocDmlIdx] = 'sifigan_vocoder_dml.onnx';
-                this._resolvedVocoderFile = 'sifigan_vocoder_dml.onnx';
-                sifiganOnnxResolved = true;
-                console.log('[OnnxSVSPipeline] Using SiFiGAN vocoder: sifigan_vocoder_dml.onnx');
+                if (!sifiganStatsExists) {
+                    // stats 缺失时强制回退默认 vocoder，避免用户听到失真音频
+                    // （SiFiGAN ONNX 内部归一化常量依赖 stats，缺失会导致输入分布严重失配）
+                    console.warn('[OnnxSVSPipeline] SiFiGAN onnx 存在但 stats 文件缺失，强制回退默认 vocoder 防止失真');
+                } else {
+                    resolvedModelFiles[vocDmlIdx] = 'sifigan_vocoder_dml.onnx';
+                    this._resolvedVocoderFile = 'sifigan_vocoder_dml.onnx';
+                    sifiganOnnxResolved = true;
+                    console.log('[OnnxSVSPipeline] Using SiFiGAN vocoder: sifigan_vocoder_dml.onnx');
+                }
             } else if (sifiganPlainExists) {
-                resolvedModelFiles[vocDmlIdx] = 'sifigan_vocoder.onnx';
-                this._resolvedVocoderFile = 'sifigan_vocoder.onnx';
-                sifiganOnnxResolved = true;
-                console.log('[OnnxSVSPipeline] sifigan_vocoder_dml.onnx not found, using sifigan_vocoder.onnx');
+                if (!sifiganStatsExists) {
+                    console.warn('[OnnxSVSPipeline] SiFiGAN onnx 存在但 stats 文件缺失，强制回退默认 vocoder 防止失真');
+                } else {
+                    resolvedModelFiles[vocDmlIdx] = 'sifigan_vocoder.onnx';
+                    this._resolvedVocoderFile = 'sifigan_vocoder.onnx';
+                    sifiganOnnxResolved = true;
+                    console.log('[OnnxSVSPipeline] sifigan_vocoder_dml.onnx not found, using sifigan_vocoder.onnx');
+                }
             } else {
                 console.warn('[OnnxSVSPipeline] sifigan 模型缺失，回退默认 vocoder');
                 // 落入默认 vocoder 回退逻辑
             }
-            // stats 文件路径与缺失标志（仅 onnx 存在时才有意义）
+            // stats 文件路径与缺失标志（仅 onnx+stats 均存在时 sifiganOnnxResolved=true）
             this.sifiganStatsPath = sifiganStatsPath;
-            if (sifiganOnnxResolved && !sifiganStatsExists) {
-                this.sifiganStatsMissing = true;
-                console.warn('[OnnxSVSPipeline] 统计文件缺失，SiFiGAN 输入归一化可能不可用');
-            } else if (sifiganOnnxResolved) {
+            if (sifiganOnnxResolved) {
+                // 走到此分支说明 onnx+stats 均存在，sifiganStatsMissing 始终为 false
+                this.sifiganStatsMissing = false;
                 console.log('[OnnxSVSPipeline] SiFiGAN stats file found:', SIFIGAN_STATS_FILE);
             }
         }
@@ -1115,9 +1223,10 @@ class OnnxSVSPipeline {
         const filledNotes = this._fillNoteGaps(notes);
 
         const cacheKey = this._computeSynthCacheKey(notes, bpm, options);
-        if (this._synthCache && this._synthCache.key === cacheKey) {
+        const cachedAudio = this._synthCacheGet(cacheKey);
+        if (cachedAudio) {
             onProgress(100);
-            return this._synthCache.audio;
+            return cachedAudio;
         }
 
         let currentProgress = 0;
@@ -1138,7 +1247,8 @@ class OnnxSVSPipeline {
             let refF0 = null;
             if (refAudioWavBuffer) {
                 try {
-                    refF0 = this._extractRefF0FromWav(refAudioWavBuffer);
+                    // 优先使用外部 RMVPE 提取器（精度更高），失败回退自相关
+                    refF0 = await this._extractRefF0WithFallback(refAudioWavBuffer, options.refF0Extractor || null);
                 } catch (e) {
                     console.warn('[OnnxSVSPipeline] Reference audio F0 extraction failed:', e.message);
                 }
@@ -1246,10 +1356,9 @@ class OnnxSVSPipeline {
 
             const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120; // 2 分钟
             if (audioData.length <= MAX_CACHE_SAMPLES) {
-                this._synthCache = { key: cacheKey, audio: audioData };
-                console.log('[OnnxSVSPipeline] Audio cached');
-            } else {
-                this._synthCache = null;
+                this._synthCachePut(cacheKey, audioData);
+                console.log('[OnnxSVSPipeline] Audio cached (LRU entries=' +
+                    (this._synthCacheMap ? this._synthCacheMap.size : 0) + ')');
             }
 
             onProgress(100);
@@ -1388,10 +1497,9 @@ class OnnxSVSPipeline {
         const audioData = finalAudio;
         const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
         if (audioData.length <= MAX_CACHE_SAMPLES) {
-            this._synthCache = { key: cacheKey, audio: audioData };
-                console.log('[OnnxSVSPipeline] Audio cached');
-        } else {
-            this._synthCache = null;
+            this._synthCachePut(cacheKey, audioData);
+            console.log('[OnnxSVSPipeline] Audio cached (LRU entries=' +
+                (this._synthCacheMap ? this._synthCacheMap.size : 0) + ')');
         }
 
         onProgress(100);
@@ -1613,6 +1721,8 @@ class OnnxSVSPipeline {
         this.useWebNN = false;
         this._initPromise = null;
         this._synthCache = null;
+        this._synthCacheMap = null;
+        this._synthCacheBytes = 0;
         this._currentF0Hz = null;
         console.log('[OnnxSVSPipeline] ONNX Runtime sessions released');
     }

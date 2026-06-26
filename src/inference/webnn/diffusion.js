@@ -181,6 +181,10 @@ export async function runDiffusionLoop({
             const posMean = posSum / targetLen;
             const cfgAdjMean = cfgAdjSum / targetLen;
             // Pass 2: compute variance + apply rescale + update xt (merged)
+            // Rescale 公式与 DML 路径 (pipeline/diffusion.js) 保持一致：
+            //   rescaledVal = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal
+            // 其中 rescale = posStd / cfgAdjStd。原 WebNN 单段路径漏掉 (1-cfgRescale)*cfgVal 项，
+            // 导致默认 cfgRescale=0.75 时流量预测被错误缩放 25%。
             let posVarSum = 0, cfgAdjVarSum = 0;
             for (let i = 0; i < targetLen; i++) {
                 const pv = batchPred[ptFrameCount * MEL_DIM + i] - posMean;
@@ -188,9 +192,11 @@ export async function runDiffusionLoop({
                 const cd = cfgPredBuf[i] - cfgAdjMean;
                 cfgAdjVarSum += cd * cd;
             }
-            const rescale = cfgRescale * (Math.sqrt(posVarSum / targetLen) + 1e-6) / (Math.sqrt(cfgAdjVarSum / targetLen) + 1e-6);
+            const rescale = (Math.sqrt(posVarSum / targetLen) + 1e-8) / (Math.sqrt(cfgAdjVarSum / targetLen) + 1e-8);
             for (let i = 0; i < targetLen; i++) {
-                xt.data[i] += dt * (cfgPredBuf[i] * rescale);
+                const cfgVal = cfgPredBuf[i];
+                const rescaledVal = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
+                xt.data[i] += dt * rescaledVal;
             }
             const cfgMs = performance.now() - tCfg;
 
