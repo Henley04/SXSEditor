@@ -543,7 +543,11 @@ class Postprocessing {
         }
 
         // 长音频分chunks推理
-        const stepFrames = chunkSize - overlapFrames;
+        // framePos 语义：下一个 chunk 的"新数据起始位置"（不含与前一个 chunk 的重叠区）。
+        //   chunk 0:   chunkStart=0,                 chunkEnd=chunkSize,      framePos→chunkEnd
+        //   chunk N:   chunkStart=framePos-overlap,  chunkEnd=chunkStart+chunkSize, framePos→chunkEnd
+        //   末尾 chunk（chunkEnd 被 totalFrames 截断）：写入后显式 break，
+        //     避免旧逻辑 framePos = chunkEnd - overlapFrames 反复回退导致死循环
         const weightSum = new Float32Array(totalSamples);
 
         const fadeSamples = overlapFrames * HOP_SIZE;
@@ -556,9 +560,11 @@ class Postprocessing {
         let chunkIdx = 0;
 
         while (framePos < totalFrames) {
-            const chunkStart = Math.max(0, framePos - (chunkIdx > 0 ? overlapFrames : 0));
+            const isFirst = chunkIdx === 0;
+            const chunkStart = isFirst ? 0 : Math.max(0, framePos - overlapFrames);
             const chunkEnd = Math.min(chunkStart + chunkSize, totalFrames);
             const currentChunkFrames = chunkEnd - chunkStart;
+            const isLast = chunkEnd >= totalFrames;
 
             const chunkMel = new Float32Array(currentChunkFrames * MEL_DIM);
             chunkMel.set(melData.subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM));
@@ -578,17 +584,25 @@ class Postprocessing {
                 const outIdx = writeStart + i;
                 if (outIdx >= totalSamples) break;
                 let w = 1.0;
-                if (chunkIdx > 0 && i < fadeSamples) {
+                // 头部 fade：非首 chunk 的前 overlapFrames 帧（与前一个 chunk 交叉淡化）
+                if (!isFirst && i < fadeSamples) {
                     w = fadeWindow[i];
                 }
-                if (chunkEnd < totalFrames && i >= writeLen - fadeSamples) {
+                // 尾部 fade：非末 chunk 的后 overlapFrames 帧（与后一个 chunk 交叉淡化）
+                if (!isLast && i >= writeLen - fadeSamples) {
                     w = Math.min(w, 1.0 - fadeWindow[writeLen - 1 - i]);
                 }
                 output[outIdx] += waveform[i] * w;
                 weightSum[outIdx] += w;
             }
 
-            framePos = chunkIdx === 0 ? chunkEnd : chunkEnd - overlapFrames;
+            // 末尾 chunk：写入后立即终止，避免 framePos 回退导致死循环
+            if (isLast) {
+                chunkIdx++;
+                break;
+            }
+            // 推进 framePos 到本 chunk 的新数据末尾（= chunkEnd，因为 chunkEnd 未被截断）
+            framePos = chunkEnd;
             chunkIdx++;
         }
 
