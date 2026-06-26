@@ -96,16 +96,13 @@
   background: var(--bg-button-hover);
   color: var(--fg-primary);
   border-color: var(--accent);
-  box-shadow: 0 1px 4px var(--shadow-color);
 }
 #toolbar button:active {
   background: var(--bg-button-active);
-  box-shadow: inset 0 1px 3px var(--shadow-color-mid);
 }
 #toolbar button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-  box-shadow: none;
 }
 
 #toolbar .btn-param {
@@ -118,7 +115,6 @@
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
   border-color: var(--accent-pressed);
-  box-shadow: 0 1px 4px var(--accent-glow);
 }
 #toolbar .param-group { gap: 3px; }
 
@@ -130,13 +126,11 @@
   background: var(--bg-button-danger);
   color: var(--fg-on-accent);
   border-color: var(--danger);
-  box-shadow: 0 1px 4px var(--danger-glow);
 }
 #toolbar .btn-pitch-tool.disabled-mode {
   background: var(--bg-button);
   color: var(--fg-disabled);
   border-color: var(--button-secondary-border);
-  box-shadow: none;
 }
 
 #toolbar .btn-shortcuts {
@@ -579,7 +573,6 @@
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
   border-color: var(--accent-pressed);
-  box-shadow: 0 1px 4px var(--accent-glow);
 }
 .param-lane-tab.disabled {
   opacity: 0.4;

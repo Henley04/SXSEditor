@@ -525,18 +525,16 @@ body {
     background: var(--accent-softer);
     color: var(--accent);
     cursor: pointer;
-    transition: background var(--motion-base), box-shadow var(--motion-base), transform var(--motion-fast);
+    transition: background var(--motion-base), border-color var(--motion-base);
 }
 
 .btn-open-model-download:hover {
     background: var(--accent-soft);
-    box-shadow: 0 4px 12px var(--accent-glow);
-    transform: translateY(-1px);
+    border-color: var(--accent-pressed);
 }
 
 .btn-open-model-download:active {
-    transform: translateY(0);
-    box-shadow: 0 2px 6px var(--accent-glow);
+    background: var(--accent-soft);
 }
 
 /* ==================== Theme Actions ==================== */
@@ -559,19 +557,17 @@ body {
     background: var(--bg-elevated);
     color: var(--fg-secondary);
     cursor: pointer;
-    transition: background var(--motion-base), border-color var(--motion-base), box-shadow var(--motion-base), transform var(--motion-fast);
+    transition: background var(--motion-base), border-color var(--motion-base), color var(--motion-base);
 }
 
 .btn-theme-action:hover {
     border-color: var(--accent-glow-strong);
     background: var(--accent-softer);
     color: var(--accent-fg);
-    box-shadow: 0 2px 8px var(--accent-glow);
-    transform: translateY(-1px);
 }
 
 .btn-theme-action:active {
-    transform: translateY(0);
+    background: var(--accent-softer);
 }
 
 .btn-theme-action.btn-theme-secondary {
@@ -584,7 +580,6 @@ body {
     background: var(--bg-elevated);
     border-color: var(--ink-soft);
     color: var(--fg-secondary);
-    box-shadow: 0 2px 8px var(--shadow-color);
 }
 
 .btn-theme-action.btn-theme-danger {
@@ -596,7 +591,6 @@ body {
     background: var(--danger-soft);
     border-color: var(--danger-glow);
     color: var(--danger);
-    box-shadow: 0 2px 8px var(--danger-glow);
 }
 
 /* ==================== Utility ==================== */
@@ -682,7 +676,7 @@ body {
     background: var(--bg-elevated);
     color: var(--fg-secondary);
     cursor: pointer;
-    transition: background var(--motion-base), border-color var(--motion-base), box-shadow var(--motion-base);
+    transition: background var(--motion-base), border-color var(--motion-base), color var(--motion-base);
 }
 
 .btn-theme-editor:hover {
@@ -695,12 +689,10 @@ body {
     background: var(--bg-button-primary);
     color: var(--fg-on-accent);
     border-color: var(--accent);
-    box-shadow: 0 2px 6px var(--accent-glow);
 }
 
 .btn-theme-editor.btn-theme-editor-primary:hover {
     background: var(--bg-button-primary-hover);
-    box-shadow: 0 4px 12px var(--accent-glow-strong);
 }
 
 .btn-theme-editor.btn-theme-editor-close {

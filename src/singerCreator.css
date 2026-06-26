@@ -48,19 +48,16 @@ html, body {
   font-size: var(--font-base);
   transition: all var(--motion-fast) ease;
   white-space: nowrap;
-  text-shadow: 0 1px 2px var(--shadow-color-mid);
 }
 
 #toolbar button:hover {
   background: var(--bg-button-hover);
   color: var(--fg-primary);
   border-color: var(--accent-glow);
-  box-shadow: 0 1px 4px var(--shadow-color);
 }
 
 #toolbar button:active {
   background: var(--bg-button-active);
-  box-shadow: inset 0 1px 3px var(--shadow-color-mid);
 }
 
 #toolbar button.btn-primary {
@@ -72,7 +69,6 @@ html, body {
 
 #toolbar button.btn-primary:hover {
   background: var(--bg-button-success-hover);
-  box-shadow: 0 1px 4px var(--success-glow);
 }
 
 #page-title {
@@ -359,7 +355,6 @@ html, body {
 
 .btn-small.btn-danger:hover {
   background: var(--bg-button-danger-hover);
-  box-shadow: 0 1px 4px var(--danger-glow);
 }
 
 .btn-small.btn-primary {
@@ -373,7 +368,6 @@ html, body {
 
 .btn-small.btn-primary:hover {
   background: var(--bg-button-primary-hover);
-  box-shadow: 0 1px 4px var(--accent-glow);
 }
 
 /* ==================== 预览容器 ==================== */
