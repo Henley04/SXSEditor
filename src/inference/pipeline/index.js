@@ -54,6 +54,7 @@ class OnnxSVSPipeline {
         this.sifiganStatsMissing = false;        // SiFiGAN stats 文件缺失标志（运行时兜底归一化用）
         this.sifiganStatsPath = null;            // sifigan_stats.joblib 路径（与 onnx 同目录）
         this._resolvedVocoderFile = null;       // 解析后的 vocoder 文件名（供 _detectVocoderPrecision / loadModel 复用）
+        this._currentF0Hz = null;                // 当前推理的 F0 序列（Hz，mel 帧率=50Hz），供 SiFiGAN vocoder 使用；null 表示缺失
         this._synthCache = null;
         this._initPromise = null;
 
@@ -896,7 +897,11 @@ class OnnxSVSPipeline {
 
     async _runVocoderChunked(melData, totalFrames) {
         // Vocoder is loaded via DML (dynamic shapes), never use static shape padding
-        return this._postprocessing.runVocoderChunked(this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false);
+        // SiFiGAN 双输入：传入 vocoderType、F0 序列、stats 缺失标志；default vocoder 仅用 mel
+        return this._postprocessing.runVocoderChunked(
+            this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
+            this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing
+        );
     }
 
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
@@ -960,6 +965,9 @@ class OnnxSVSPipeline {
         const xt = this.randomNoise(totalFrames, MEL_DIM);
 
         await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange);
+
+        // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder; truncated to totalFrames to match mel after NPU/MAX_SAFE truncation. null when unavailable.
+        this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
 
         const audioData = await this._runVocoderChunked(xt.data, totalFrames);
 
@@ -1096,6 +1104,8 @@ class OnnxSVSPipeline {
             await this.init();
         }
         await this.ensureAllModelsLoaded();
+        // Reset per-call F0 cache so a stale F0 from a previous synthesis cannot leak into SiFiGAN vocoder input
+        this._currentF0Hz = null;
         const onProgress = options.onProgress || (() => {});
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
@@ -1236,6 +1246,8 @@ class OnnxSVSPipeline {
             await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50);
 
             onProgress(90);
+            // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder; truncated to totalFrames to match mel. null when unavailable.
+            this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
             const audioData = await this._runVocoderChunked(xt.data, totalFrames);
 
             const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120; // 2 分钟
@@ -1607,6 +1619,7 @@ class OnnxSVSPipeline {
         this.useWebNN = false;
         this._initPromise = null;
         this._synthCache = null;
+        this._currentF0Hz = null;
         console.log('[OnnxSVSPipeline] ONNX Runtime sessions released');
     }
 }
