@@ -163,8 +163,9 @@ describe('themeTokens - 内置主题完整性', () => {
             expect(theme.isDark).to.be.true;
         });
 
-        it('应当 extends dark-aurora', () => {
-            expect(theme.extends).to.equal('dark-aurora');
+        it('应当是自包含主题（无 extends）', () => {
+            // midnight-amber 在 115c1a3 重构中改为完全独立的暗色主题
+            expect(theme.extends).to.be.undefined;
         });
 
         it('应至少显式定义差异 token（如琥珀强调色）', () => {
@@ -184,20 +185,20 @@ describe('themeTokens - REQUIRED_TOKENS_FOR_BUILTIN 完整性', () => {
         expect(catalog.REQUIRED_TOKENS_FOR_BUILTIN).to.be.an('array').with.length.greaterThan(20);
     });
 
-    it('dark-aurora / light-paper 应覆盖 catalog.REQUIRED_TOKENS_FOR_BUILTIN', () => {
-        // midnight-amber 通过 extends 继承，豁免；
-        // 这里只对 dark-aurora / light-paper 做强校验
-        ['dark-aurora.theme.json', 'light-paper.theme.json'].forEach(f => {
+    it('dark-aurora / light-paper / midnight-amber 应覆盖 catalog.REQUIRED_TOKENS_FOR_BUILTIN', () => {
+        // midnight-amber 在 115c1a3 重构后改为自包含主题，不再通过 extends 继承，
+        // 因此同样需要强校验必需 token 覆盖
+        ['dark-aurora.theme.json', 'light-paper.theme.json', 'midnight-amber.theme.json'].forEach(f => {
             const t = loadTheme(f);
             const missing = catalog.REQUIRED_TOKENS_FOR_BUILTIN.filter(rt => !(rt in t.tokens));
             expect(missing, `${f} 缺少必需 token：${missing.join(', ')}`).to.have.length(0);
         });
     });
 
-    it('midnight-amber 通过 extends 继承时无需覆盖全部必需 token', () => {
+    it('midnight-amber 作为自包含主题应显式定义 --accent', () => {
         const t = loadTheme('midnight-amber.theme.json');
-        expect(t.extends).to.equal('dark-aurora');
-        // 只要求它显式定义的部分 token
+        expect(t.extends).to.be.undefined;
+        // 自包含主题必须显式定义 accent 等差异 token
         expect(t.tokens).to.have.property('--accent');
     });
 });

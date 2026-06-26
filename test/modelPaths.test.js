@@ -250,8 +250,8 @@ describe('TextProcessing - Vocabulary and Dictionary', () => {
       expect(Object.keys(tp.phone2idx).length).to.be.greaterThan(0);
     });
 
-    it('should have 3034 phonemes (including 34 JP)', () => {
-      expect(Object.keys(tp.phone2idx).length).to.equal(3034);
+    it('should have 3033 phonemes (including 33 JP)', () => {
+      expect(Object.keys(tp.phone2idx).length).to.equal(3033);
     });
 
     it('should contain special tokens', () => {
@@ -335,9 +335,9 @@ describe('phone_set.json file integrity', () => {
     phoneSet = JSON.parse(fs.readFileSync(phoneSetPath, 'utf-8'));
   });
 
-  it('should be a non-empty array with 3034 entries (including 34 JP)', () => {
+  it('should be a non-empty array with 3033 entries (including 33 JP)', () => {
     expect(phoneSet).to.be.an('array');
-    expect(phoneSet.length).to.equal(3034);
+    expect(phoneSet.length).to.equal(3033);
   });
 
   it('should have no duplicate entries', () => {

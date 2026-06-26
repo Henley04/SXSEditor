@@ -282,7 +282,7 @@ Models are stored in precision-specific subdirectories under `onnx_models/`:
 ### Japanese Models
 
 Located in `onnx_models/ja/<precision>/`:
-- `note_text_encoder.onnx` — Extended Japanese phoneme encoder (3034 phonemes)
+- `note_text_encoder.onnx` — Extended Japanese phoneme encoder (3033 phonemes)
 - `preflow.onnx` — Japanese fine-tuned preflow
 
 ---
