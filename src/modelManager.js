@@ -62,11 +62,15 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'basic_pitch_model/group1-shard1of1.bin', required: true },
 ];
 
-// JP language models: modified files (note_text_encoder + preflow + optional pitch_encoder)
+// JP language models: fine-tuned files (note_text_encoder + preflow + cond_emb).
+// All three are required for correct JP inference: cond_emb must match the
+// JP fine-tuned preflow+embedding, otherwise phoneme corruption occurs.
 const JP_MODEL_FILE_MANIFEST = [
   { filePath: 'note_text_encoder.onnx', required: true },
   { filePath: 'preflow.onnx', required: true },
-  { filePath: 'note_pitch_encoder.onnx', required: false },
+  { filePath: 'cond_emb.onnx', required: true },
+  // note_pitch_encoder is intentionally NOT in this manifest: JP LoRA shares
+  // the base model's pitch encoder (MIDI pitch is language-agnostic).
 ];
 
 function getModelId(precision) {
