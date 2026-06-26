@@ -812,6 +812,10 @@ class OnnxSVSPipeline {
             const inputNames = session.inputNames || Object.keys(meta);
             console.log(`[OnnxSVSPipeline] Vocoder inputs: [${inputNames.join(', ')}]`);
 
+            // SiFiGAN has two inputs 'mel' and 'f0'; default vocoder only has 'mel'.
+            // For precision detection we only inspect 'mel' type (works for both).
+            const isSifigan = modelPath && this._isSifiganVocoder(path.basename(modelPath));
+
             // Try to find 'mel' input metadata
             let melType = null;
             if (meta['mel'] && meta['mel'].type) {
@@ -827,25 +831,36 @@ class OnnxSVSPipeline {
             }
 
             // inputMetadata unavailable (DML) — detect from model file size
-            // FP16 vocoder ≈ 495 MB, FP32 vocoder ≈ 1004 MB
+            // Default vocoder: FP16 ≈ 495 MB, FP32 ≈ 1004 MB → threshold 700 MB
+            // SiFiGAN:         FP16 ≈ 300 MB, FP32 ≈ 611 MB → threshold 500 MB
+            const sizeThresholdMB = isSifigan ? 500 : 700;
             if (modelPath) {
                 try {
                     const fs = require('node:fs');
                     const stats = fs.statSync(modelPath);
                     const sizeMB = stats.size / (1024 * 1024);
-                    this.vocoderIsFP16 = sizeMB < 700; // FP16 < 700 MB, FP32 > 700 MB
-                    console.log(`[OnnxSVSPipeline] Vocoder file size: ${sizeMB.toFixed(1)} MB → vocoderIsFP16=${this.vocoderIsFP16}`);
+                    this.vocoderIsFP16 = sizeMB < sizeThresholdMB;
+                    console.log(`[OnnxSVSPipeline] Vocoder file size: ${sizeMB.toFixed(1)} MB (threshold=${sizeThresholdMB} MB, sifigan=${isSifigan}) → vocoderIsFP16=${this.vocoderIsFP16}`);
                     return;
                 } catch (_) {}
             }
 
             // Last resort: probe with valid tensor shape [1, 500, 128]
+            // For SiFiGAN, also feed 'f0' input (shape [1, seq, 1]) so session.run() does not fail on missing input.
             console.warn('[OnnxSVSPipeline] Probing vocoder with test inference...');
             const ort = require('onnxruntime-node');
             const PROBE_FRAMES = 500;
+            const buildFeed = (melTensor) => {
+                if (isSifigan) {
+                    const f0Ctor = melTensor.type === 'float16' ? Uint16Array : Float32Array;
+                    const f0Tensor = new ort.Tensor(melTensor.type, new f0Ctor(PROBE_FRAMES), [1, PROBE_FRAMES, 1]);
+                    return { mel: melTensor, f0: f0Tensor };
+                }
+                return { mel: melTensor };
+            };
             try {
                 const t16 = new ort.Tensor('float16', new Uint16Array(PROBE_FRAMES * 128), [1, PROBE_FRAMES, 128]);
-                await session.run({ mel: t16 });
+                await session.run(buildFeed(t16));
                 this.vocoderIsFP16 = true;
                 console.log('[OnnxSVSPipeline] Vocoder accepts float16 → vocoderIsFP16=true');
                 return;
@@ -853,7 +868,7 @@ class OnnxSVSPipeline {
 
             try {
                 const t32 = new ort.Tensor('float32', new Float32Array(PROBE_FRAMES * 128), [1, PROBE_FRAMES, 128]);
-                await session.run({ mel: t32 });
+                await session.run(buildFeed(t32));
                 this.vocoderIsFP16 = false;
                 console.log('[OnnxSVSPipeline] Vocoder accepts float32 → vocoderIsFP16=false');
                 return;
