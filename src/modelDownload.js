@@ -329,9 +329,176 @@ document.getElementById('changeDirBtn').addEventListener('click', async () => {
   }
 });
 
+// ===== SiFiGAN card rendering & state management =====
+// The SiFiGAN card is an independent optional model group. Its download
+// short-circuits on the main process when MODEL_IDS.sifigan is empty, so
+// the UI must gracefully handle the 'download_url_not_configured' status
+// by disabling the download button and showing a tooltip explaining the
+// situation (user should wait for the author to upload to ModelScope, or
+// manually place the model files in onnx_models/).
+
+const sifiganState = {
+  status: 'checking', // 'installed' | 'not_downloaded' | 'download_url_not_configured' | 'checking' | 'downloading'
+  files: null,
+  isDownloading: false,
+};
+
+function setSifiganStatusText(text) {
+  const el = document.getElementById('sifiganStatusText');
+  if (el) el.textContent = text;
+}
+
+function setSifiganStatusIndicator(state) {
+  // state: 'installed' | 'not_downloaded' | 'warning' | 'checking' | 'downloading'
+  const el = document.getElementById('sifiganStatusIndicator');
+  if (!el) return;
+  el.className = 'status-indicator ' + state;
+}
+
+function showSifiganTooltip(message) {
+  const el = document.getElementById('sifiganTooltip');
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.style.display = 'block';
+    el.classList.add('visible');
+  } else {
+    el.style.display = 'none';
+    el.classList.remove('visible');
+  }
+}
+
+function renderSifiganCard() {
+  const downloadBtn = document.getElementById('sifiganDownloadBtn');
+  const unloadBtn = document.getElementById('sifiganUnloadBtn');
+  const progress = document.getElementById('sifiganProgress');
+  if (!downloadBtn || !unloadBtn) return;
+
+  // Reset visibility
+  progress.style.display = 'none';
+
+  switch (sifiganState.status) {
+    case 'installed': {
+      downloadBtn.style.display = 'none';
+      unloadBtn.style.display = 'inline-block';
+      unloadBtn.disabled = false;
+      downloadBtn.disabled = false;
+      setSifiganStatusIndicator('installed');
+      setSifiganStatusText(t('modelDownload.sifiganInstalled'));
+      showSifiganTooltip('');
+      break;
+    }
+    case 'not_downloaded': {
+      downloadBtn.style.display = 'inline-block';
+      unloadBtn.style.display = 'none';
+      downloadBtn.disabled = false;
+      setSifiganStatusIndicator('not_downloaded');
+      setSifiganStatusText(t('modelDownload.sifiganNotDownloaded'));
+      showSifiganTooltip('');
+      break;
+    }
+    case 'download_url_not_configured': {
+      // Disable download button and show explanatory tooltip
+      downloadBtn.style.display = 'inline-block';
+      unloadBtn.style.display = 'none';
+      downloadBtn.disabled = true;
+      setSifiganStatusIndicator('warning');
+      setSifiganStatusText(t('modelDownload.sifiganUrlNotConfigured'));
+      showSifiganTooltip(t('modelDownload.sifiganUrlNotConfiguredTooltip'));
+      break;
+    }
+    case 'downloading': {
+      downloadBtn.style.display = 'inline-block';
+      downloadBtn.disabled = true;
+      unloadBtn.style.display = 'none';
+      progress.style.display = 'block';
+      setSifiganStatusIndicator('downloading');
+      break;
+    }
+    case 'checking':
+    default: {
+      downloadBtn.style.display = 'inline-block';
+      downloadBtn.disabled = true;
+      unloadBtn.style.display = 'none';
+      setSifiganStatusIndicator('checking');
+      setSifiganStatusText(t('modelDownload.checking'));
+      showSifiganTooltip('');
+      break;
+    }
+  }
+}
+
+async function refreshSifiganCard() {
+  sifiganState.status = 'checking';
+  renderSifiganCard();
+  try {
+    const result = await window.electronAPI.modelDownloadCheckSifigan();
+    sifiganState.status = result.status;
+    sifiganState.files = result.files;
+  } catch (err) {
+    console.error('[SiFiGAN] 检查状态失败:', err);
+    // On error, fall back to download_url_not_configured so the UI stays
+    // in a safe, non-actionable state instead of offering a download that
+    // would fail.
+    sifiganState.status = 'download_url_not_configured';
+  }
+  renderSifiganCard();
+}
+
+document.getElementById('sifiganDownloadBtn').addEventListener('click', async () => {
+  if (sifiganState.isDownloading) return;
+  sifiganState.isDownloading = true;
+  sifiganState.status = 'downloading';
+  renderSifiganCard();
+  try {
+    const result = await window.electronAPI.modelDownloadStartSifigan();
+    if (result.status === 'download_url_not_configured') {
+      // Main process short-circuited because MODEL_IDS.sifigan is empty.
+      // Disable the download button and show the tooltip explaining how
+      // to obtain the model.
+      sifiganState.status = 'download_url_not_configured';
+      sifiganState.files = result.files;
+    } else if (result.status === 'installed') {
+      sifiganState.status = 'installed';
+      sifiganState.files = result.files;
+    } else {
+      sifiganState.status = 'not_downloaded';
+      sifiganState.files = result.files;
+    }
+  } catch (err) {
+    console.error('[SiFiGAN] 下载失败:', err);
+    sifiganState.status = 'download_url_not_configured';
+  } finally {
+    sifiganState.isDownloading = false;
+    renderSifiganCard();
+  }
+});
+
+document.getElementById('sifiganUnloadBtn').addEventListener('click', async () => {
+  if (sifiganState.isDownloading) return;
+  // Confirm before deleting model files
+  const confirmed = await showConfirmDialog(t('modelDownload.sifiganUnloadConfirmMessage'));
+  if (!confirmed) return;
+
+  sifiganState.isDownloading = true;
+  try {
+    const result = await window.electronAPI.modelDownloadUnloadSifigan();
+    sifiganState.status = result.status || 'download_url_not_configured';
+    sifiganState.files = result.files;
+  } catch (err) {
+    console.error('[SiFiGAN] 卸载失败:', err);
+    // Re-check on failure to get the actual state
+  } finally {
+    sifiganState.isDownloading = false;
+    renderSifiganCard();
+  }
+});
+
 initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
+  // Refresh SiFiGAN card once i18n is ready so status text is translated
+  refreshSifiganCard();
 });
 
 // Apply saved theme

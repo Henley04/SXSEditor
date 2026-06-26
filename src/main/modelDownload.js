@@ -5,10 +5,59 @@ const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable } = require('../modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 let downloadAbortController = null;
+
+// ===== SiFiGAN helpers =====
+// SiFiGAN is an optional model group stored at the root of onnx_models/
+// (not in precision subdirs). These helpers inspect/delete the two
+// expected files: sifigan_vocoder_dml.onnx and sifigan_stats.joblib.
+const SIFIGAN_FILES = ['sifigan_vocoder_dml.onnx', 'sifigan_stats.joblib'];
+
+function checkSifiganFilesExist(modelDir) {
+  const result = {};
+  let allExist = true;
+  for (const fileName of SIFIGAN_FILES) {
+    const fullPath = path.join(modelDir, fileName);
+    let exists = false;
+    let size = 0;
+    try {
+      const stats = fs.statSync(fullPath);
+      if (stats.size > 0) {
+        exists = true;
+        size = stats.size;
+      }
+    } catch (_) {}
+    result[fileName] = { exists, size, fullPath };
+    if (!exists) allExist = false;
+  }
+  // Also account for external data file (.onnx.data) attached to the main onnx
+  const dataPath = path.join(modelDir, 'sifigan_vocoder_dml.onnx.data');
+  try {
+    const stats = fs.statSync(dataPath);
+    result['sifigan_vocoder_dml.onnx.data'] = { exists: stats.size > 0, size: stats.size, fullPath: dataPath };
+  } catch (_) {
+    result['sifigan_vocoder_dml.onnx.data'] = { exists: false, size: 0, fullPath: dataPath };
+  }
+  return { allExist, files: result };
+}
+
+function deleteSifiganFiles(modelDir) {
+  const deleted = [];
+  const errors = [];
+  for (const fileName of [...SIFIGAN_FILES, 'sifigan_vocoder_dml.onnx.data']) {
+    const fullPath = path.join(modelDir, fileName);
+    try {
+      fs.unlinkSync(fullPath);
+      deleted.push(fileName);
+    } catch (err) {
+      if (err.code !== 'ENOENT') errors.push({ fileName, message: err.message });
+    }
+  }
+  return { deleted, errors };
+}
 
 async function startModelDownload(modelDir, missingFiles, precision) {
   downloadAbortController = new AbortController();
@@ -304,6 +353,119 @@ function registerModelDownloadIpc() {
     const modelDir = getModelDir();
     const precision = loadSettings().modelPrecision || DEFAULT_PRECISION;
     return checkJpModelsExist(modelDir, precision);
+  });
+
+  // ===== SiFiGAN (optional vocoder) IPC handlers =====
+  // The SiFiGAN group is optional and uses a placeholder ModelScope repo ID
+  // (MODEL_IDS.sifigan = ''). Until the author uploads the model and fills
+  // in the repo ID, the UI must gracefully show "download URL not configured"
+  // instead of crashing or attempting a real download.
+
+  // Returns: { status: 'installed' | 'not_downloaded' | 'download_url_not_configured',
+  //            files: { ... }, allExist: boolean }
+  ipcMain.handle('model-download:check-sifigan', async () => {
+    const modelDir = getModelDir();
+    const { allExist, files } = checkSifiganFilesExist(modelDir);
+    const sifiganId = MODEL_IDS.sifigan || '';
+    let status;
+    if (allExist) {
+      status = 'installed';
+    } else if (!sifiganId) {
+      status = 'download_url_not_configured';
+    } else {
+      status = 'not_downloaded';
+    }
+    return {
+      status,
+      allExist,
+      files,
+      modelId: sifiganId,
+      message: status === 'download_url_not_configured'
+        ? t('modelDownload.sifiganUrlNotConfigured')
+        : '',
+    };
+  });
+
+  // Start SiFiGAN download. Short-circuits when MODEL_IDS.sifigan is empty
+  // so we never enter the actual download flow until the user fills in the
+  // ModelScope repository ID.
+  ipcMain.handle('model-download:start-sifigan', async () => {
+    const sifiganId = MODEL_IDS.sifigan || '';
+    // TODO: 等用户填写 ModelScope 仓库 ID
+    if (!sifiganId) {
+      const modelDir = getModelDir();
+      const { allExist, files } = checkSifiganFilesExist(modelDir);
+      return {
+        status: 'download_url_not_configured',
+        message: t('modelDownload.sifiganUrlNotConfigured'),
+        allExist,
+        files,
+      };
+    }
+
+    // Future: when MODEL_IDS.sifigan is populated, download the two files
+    // from ModelScope using the same chunked download logic as the SVS
+    // pipeline. For now this branch is unreachable because the ID is empty.
+    const modelDir = getModelDir();
+    const { allExist, files } = checkSifiganFilesExist(modelDir);
+    if (allExist) {
+      return { status: 'installed', allExist, files };
+    }
+    // Placeholder for future download implementation:
+    // downloadAbortController = new AbortController();
+    // await downloadMissingFiles(modelDir, sifiganManifest, { ... });
+    return {
+      status: 'not_downloaded',
+      message: 'Download flow not yet implemented for SiFiGAN',
+      allExist,
+      files,
+    };
+  });
+
+  // Unload SiFiGAN: delete the model files, reset vocoderType to 'default'
+  // in settings.json, and release the InferenceSession if the SVS pipeline
+  // has it loaded. Reuses the existing pipeline.unloadModel(sessionKey)
+  // API to dispose the session without tearing down the whole pipeline.
+  ipcMain.handle('model-download:unload-sifigan', async () => {
+    const modelDir = getModelDir();
+    const result = deleteSifiganFiles(modelDir);
+
+    // Reset vocoderType to default so next inference uses the default vocoder
+    try {
+      const settings = loadSettings();
+      if (settings.vocoderType && settings.vocoderType !== 'default') {
+        settings.vocoderType = 'default';
+        await saveSettingsFile(settings);
+      }
+    } catch (err) {
+      console.warn('[Main] 重置 vocoderType 失败:', err.message);
+    }
+
+    // Release the loaded SiFiGAN InferenceSession via the SVS pipeline.
+    // The sessionKey for SiFiGAN is 'sifigan' (see modelRegistry.js).
+    // We do NOT tear down the whole pipeline — only unload this one session.
+    // On next inference the pipeline will see vocoderType='default' and load
+    // the standard vocoder_dml.onnx instead.
+    try {
+      const { getSvsPipeline } = require('./svsIpc');
+      const pipeline = getSvsPipeline();
+      if (pipeline && pipeline.initialized && typeof pipeline.unloadModel === 'function') {
+        pipeline.unloadModel('sifigan');
+      }
+    } catch (err) {
+      console.warn('[Main] 释放 SiFiGAN InferenceSession 失败:', err.message);
+    }
+
+    // Re-check files after deletion to return fresh state
+    const { allExist, files } = checkSifiganFilesExist(modelDir);
+    return {
+      success: true,
+      deleted: result.deleted,
+      errors: result.errors,
+      status: allExist ? 'installed' : 'download_url_not_configured',
+      allExist,
+      files,
+    };
   });
 }
 

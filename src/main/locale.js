@@ -44,6 +44,9 @@ const mainLocales = {
     resourceManager: {
       title: '资源管理器',
     },
+    modelDownload: {
+      sifiganUrlNotConfigured: '下载链接待配置，请等待作者上传至 ModelScope 或手动放置模型文件',
+    },
   },
   'en': {
     menu: {
@@ -85,6 +88,9 @@ const mainLocales = {
     },
     resourceManager: {
       title: 'Resource Manager',
+    },
+    modelDownload: {
+      sifiganUrlNotConfigured: 'Download URL not configured. Please wait for the author to upload to ModelScope or manually place the model files.',
     },
   },
 };
