@@ -1,0 +1,146 @@
+/* ==================== SVG icon system ====================
+   Icons are inline <svg class="icon"> elements built by iconHelper.js.
+   They use currentColor so they inherit the surrounding text color and
+   automatically adapt to every theme (light/dark). No per-theme variants
+   are needed for the standard icon set.
+
+   Status-tinted icons use modifier classes that pull semantic colors:
+     .icon--success  -> --success
+     .icon--warning  -> --warning
+     .icon--danger   -> --danger
+     .icon--accent   -> --accent
+   These modifiers only change the stroke/fill; they inherit size from .icon.
+   ==================================================== */
+
+.icon {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    vertical-align: middle;
+    display: inline-block;
+    pointer-events: none;
+    /* currentColor is set via stroke/fill attributes; inherit from parent. */
+    color: inherit;
+    /* Align with button text baseline. */
+    position: relative;
+    top: -0.05em;
+}
+
+/* Size variants */
+.icon--sm { width: 14px; height: 14px; }
+.icon--md { width: 16px; height: 16px; }
+.icon--lg { width: 18px; height: 18px; }
+.icon--xl { width: 22px; height: 22px; }
+
+/* Buttons with icons: ensure icon + label align nicely. */
+button > .icon,
+.btn-small > .icon,
+#toolbar button > .icon {
+    margin-right: 6px;
+    margin-left: -2px;
+}
+
+/* Icon-only buttons (no text node) — drop the side margin so the icon centers.
+   The `icon-only` class can live on the SVG (via data-icon-class) or on the
+   button itself. Both selectors are covered here. */
+.icon.icon-only,
+button.icon-only > .icon,
+.btn-small.icon-only > .icon,
+#toolbar button.icon-only > .icon {
+    margin: 0;
+}
+
+/* Optional spacing class for non-button contexts. */
+.icon + span,
+.icon + .label {
+    margin-left: 6px;
+}
+
+/* ===== Status tints =====
+   For solid-fill icons (play/pause/stop), currentColor already tints the
+   fill. For outline icons that need a semantic color, override currentColor
+   via the modifier class so both fill="currentColor" and stroke="currentColor"
+   follow along. */
+.icon--success { color: var(--success); }
+.icon--warning { color: var(--warning); }
+.icon--danger  { color: var(--danger); }
+.icon--accent  { color: var(--accent); }
+
+/* ===== Context: avatar / placeholder icons =====
+   Larger, dimmer icons used as placeholders (singer avatar, upload zone). */
+.icon--placeholder {
+    width: 48px;
+    height: 48px;
+    opacity: 0.55;
+    top: 0;
+}
+
+/* Singer avatar: a compact round badge holding a microphone icon. */
+.singer-avatar .icon,
+.preview-avatar .icon,
+.placeholder-icon .icon,
+.upload-icon .icon {
+    width: 22px;
+    height: 22px;
+    opacity: 0.7;
+    top: 0;
+    margin: 0;
+}
+
+/* Larger upload-zone icon (🎵 in singer creator). */
+.upload-icon .icon {
+    width: 32px;
+    height: 32px;
+    opacity: 0.6;
+}
+
+/* Singer preview placeholder (🎤 in singer creator right panel). */
+.placeholder-icon .icon {
+    width: 40px;
+    height: 40px;
+    opacity: 0.5;
+}
+
+/* ===== BPM badge icon =====
+   Replaces the ♩ glyph in the fragment timeline header. */
+#bpm-display-badge .icon {
+    width: 13px;
+    height: 13px;
+    color: var(--fg-bpm);
+    margin-right: 4px;
+    top: 0;
+}
+
+/* ===== Group arrow in resource manager =====
+   Replaces ▶ in the model group header. Rotates on expand. */
+.group-arrow .icon {
+    width: 12px;
+    height: 12px;
+    margin: 0;
+    top: 0;
+    transition: transform var(--motion-fast) ease;
+    transform: rotate(0deg);
+}
+.group-arrow.is-expanded .icon,
+.group-arrow.expanded .icon,
+.model-group-header.is-expanded .group-arrow .icon,
+.model-group-header.expanded .group-arrow .icon {
+    transform: rotate(90deg);
+}
+
+/* ===== Theme editor token reset button ===== */
+.theme-token-reset .icon {
+    width: 14px;
+    height: 14px;
+    margin: 0;
+    top: 0;
+}
+
+/* ===== Shortcut kbd hints =====
+   These remain text glyphs (↑↓←→) inside <kbd> elements; no SVG needed.
+   Kept here for reference — kbd styling lives in fragmentEditor.css. */
+
+/* ===== Reduced motion ===== */
+@media (prefers-reduced-motion: reduce) {
+    .group-arrow .icon { transition: none; }
+}

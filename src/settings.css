@@ -698,6 +698,10 @@ body {
 .btn-theme-editor.btn-theme-editor-close {
     border-color: var(--border-strong);
     color: var(--fg-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--space-2) var(--space-3);
 }
 
 .theme-editor-body {
@@ -816,6 +820,9 @@ body {
     cursor: pointer;
     font-size: var(--font-md);
     line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     transition: background var(--motion-base), color var(--motion-base);
 }
 

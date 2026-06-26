@@ -2,6 +2,7 @@ import '../common.css';
 import '../fragmentEditor.css';
 import { initI18n, applyLocale, getLocale, t } from '../i18n/index.js';
 import { initWindowTheme } from '../themes/themeInit.js';
+import { hydrateIcons } from '../icons/iconHelper.js';
 import { initPipeline } from './pipeline.js';
 import { resizeCanvases, render } from './canvasRenderer.js';
 import { setupEventListeners } from './eventHandlers.js';
@@ -118,6 +119,7 @@ loadFragmentFromHash();
 initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
+  hydrateIcons(document);
 });
 
 console.log(t('fragment.consoleStarted'));

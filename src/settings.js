@@ -2,6 +2,7 @@ import './common.css';
 import './settings.css';
 import { t, initI18n, applyLocale, setLocale, getLocale } from './i18n/index.js';
 import { initWindowTheme } from './themes/themeInit.js';
+import { createIcon, hydrateIcons } from './icons/iconHelper.js';
 import {
     themeManager,
     TOKEN_CATALOG,
@@ -688,6 +689,7 @@ if (window.electronAPI?.checkModels) {
 initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
+  hydrateIcons(document);
 });
 
 // Apply saved theme
@@ -1011,8 +1013,10 @@ function buildEditorInput(tokenName, meta) {
     const resetBtn = document.createElement('button');
     resetBtn.className = 'theme-token-reset';
     resetBtn.type = 'button';
-    resetBtn.textContent = '↺';
     resetBtn.title = t('settings.theme.editor.resetToken');
+    resetBtn.setAttribute('aria-label', t('settings.theme.editor.resetToken'));
+    const resetIcon = createIcon('refresh', { size: 14 });
+    if (resetIcon) resetBtn.appendChild(resetIcon);
     resetBtn.addEventListener('click', () => {
         const def = TOKEN_CATALOG[tokenName]?.default || '';
         applyTokenChange(tokenName, def);

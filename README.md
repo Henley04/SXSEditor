@@ -44,7 +44,7 @@ macOS / Linux: build from source (see below).
 6. Click **Create & Save** to save the `.sxssinger` file.
 7. Click **+** on the singer row to add a fragment. Double-click to open the editor.
 8. Add notes, type lyrics, optionally draw pitch curves. Save.
-9. Press **▶ Play** to synthesize and listen. Use **📤 Export** to save as WAV.
+9. Press **Play** to synthesize and listen. Use **Export** to save as WAV.
 
 See the [Wiki](docs/wiki/Home.md) for full documentation.
 
@@ -64,6 +64,7 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | Model Auto-Download | Chunked parallel download from ModelScope |
 | Model Precision | FP32, FP16, FP8, INT8, INT8-NPU |
 | Themes | Hot-swappable design token system |
+| SVG Icons | Flat, theme-aware inline SVG icon system (currentColor) |
 | Undo/Redo | 200-step edit history |
 | WAV Export | 24kHz output |
 
@@ -125,7 +126,7 @@ macOS / Linux 用户请从源码构建。
 6. 点击**创建并保存**，生成 `.sxssinger` 文件。
 7. 在歌手行点击 **+** 添加分片，双击打开编辑器。
 8. 添加音符、输入歌词、可选绘制音高曲线。保存。
-9. 按 **▶ 播放**合成试听。用 **📤 导出**保存为 WAV。
+9. 按 **播放**合成试听。用 **导出**保存为 WAV。
 
 完整文档见 [Wiki](docs/wiki/Home.md)。
 
@@ -145,6 +146,7 @@ macOS / Linux 用户请从源码构建。
 | 模型自动下载 | 从 ModelScope 分片并行下载 |
 | 模型精度 | FP32、FP16、FP8、INT8、INT8-NPU |
 | 主题系统 | 热切换设计令牌系统 |
+| SVG 图标 | 扁平化、主题感知的内联 SVG 图标系统 (currentColor) |
 | 撤销/重做 | 200 步编辑历史 |
 | WAV 导出 | 24kHz 输出 |
 
@@ -202,7 +204,7 @@ macOS / Linux：ソースからビルドしてください。
 6. **作成して保存**で `.sxssinger` ファイルを生成。
 7. 歌手行の **+** でフラグメントを追加、ダブルクリックでエディターを開く。
 8. 音符を追加、歌詞を入力、必要に応じてピッチカーブを描画。保存。
-9. **▶ 再生**で合成・試聴。**📤 エクスポート**で WAV 保存。
+9. **再生**で合成・試聴。**エクスポート**で WAV 保存。
 
 詳細は [Wiki](docs/wiki/Home.md) を参照。
 
@@ -222,6 +224,7 @@ macOS / Linux：ソースからビルドしてください。
 | モデル自動ダウンロード | ModelScope からチャンク並列ダウンロード |
 | モデル精度 | FP32、FP16、FP8、INT8、INT8-NPU |
 | テーマ | ホットスワップ対応デザイントークンシステム |
+| SVG アイコン | フラット設計、テーマ連動インライン SVG アイコンシステム (currentColor) |
 | アンドゥ/リドゥ | 200 ステップの編集履歴 |
 | WAV エクスポート | 24kHz 出力 |
 

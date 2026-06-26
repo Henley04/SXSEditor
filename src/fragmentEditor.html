@@ -18,8 +18,8 @@
       <!-- Toolbar -->
       <div id="toolbar">
         <div class="toolbar-group">
-          <button id="btn-play-fragment" title="Space" data-i18n="fragment.play">▶ 播放</button>
-          <button id="btn-export-fragment" data-i18n="fragment.export">⬇ 导出</button>
+          <button id="btn-play-fragment" title="Space" data-i18n="fragment.play" data-icon="play">播放</button>
+          <button id="btn-export-fragment" data-i18n="fragment.export" data-icon="download">导出</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
@@ -27,7 +27,7 @@
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <button id="btn-import-midi" data-i18n="fragment.importMidi">🎵 导入MIDI</button>
+          <button id="btn-import-midi" data-i18n="fragment.importMidi" data-icon="music">导入MIDI</button>
           <input type="checkbox" id="autoShiftCheck" checked><label for="autoShiftCheck">Auto Shift</label>
         </div>
         <div class="toolbar-divider"></div>
@@ -37,7 +37,7 @@
         </div>
         <div class="toolbar-divider" id="pitch-tools-divider" style="display:none"></div>
         <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
-          <button id="btn-pitch-reset" class="btn-pitch-tool" title="重置为MIDI自动曲线" data-i18n="fragment.reset" data-i18n-title="fragment.resetToAutoCurve">↺ 重置</button>
+          <button id="btn-pitch-reset" class="btn-pitch-tool" title="重置为MIDI自动曲线" data-i18n="fragment.reset" data-i18n-title="fragment.resetToAutoCurve" data-icon="refresh">重置</button>
           <span class="pitch-hint" data-i18n="fragment.pitchHint">点击添加 · Shift+拖拽画笔 · 右键删除 · 中键框选</span>
           <span class="pitch-hint" data-i18n="fragment.smoothing">平滑</span>
           <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
@@ -45,9 +45,9 @@
         </div>
         <div class="toolbar-spacer"></div>
         <div class="toolbar-group">
-          <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)" aria-label="快捷键帮助">⌨</button>
-          <button id="btn-save" title="Ctrl+S" data-i18n="fragment.save">💾 保存</button>
-          <button id="btn-close" title="关闭窗口" data-i18n="fragment.close">✖ 关闭</button>
+          <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)" aria-label="快捷键帮助" data-icon="keyboard" data-icon-class="icon-only"></button>
+          <button id="btn-save" title="Ctrl+S" data-i18n="fragment.save" data-icon="save">保存</button>
+          <button id="btn-close" title="关闭窗口" data-i18n="fragment.close" data-icon="close">关闭</button>
         </div>
       </div>
 
@@ -70,7 +70,7 @@
             <div class="insp-head"><span data-i18n="fragment.inspSinger">歌手</span> <span class="tag" id="singer-tag">--</span></div>
             <div class="insp-body">
               <div class="singer-card">
-                <div class="singer-avatar">🎤</div>
+                <div class="singer-avatar" data-icon="microphone"></div>
                 <div class="singer-meta">
                   <div class="singer-name" id="singer-name">--</div>
                   <div class="singer-desc" id="singer-desc">--</div>
@@ -113,7 +113,7 @@
       <!-- Bottom panel: parameter lanes -->
       <div id="param-panel">
         <div id="param-panel-header" class="param-panel-header">
-          <button id="btn-param-toggle" class="btn-param-toggle" title="收起/展开参数面板" aria-label="收起/展开参数面板">&#x25B4;</button>
+          <button id="btn-param-toggle" class="btn-param-toggle" title="收起/展开参数面板" aria-label="收起/展开参数面板" data-icon="chevron-up" data-icon-class="icon-only"></button>
           <!-- Hidden select kept for JS compatibility (uiControls.js reads/writes it) -->
           <select id="param-mode-select" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0">
             <option value="VOL">VOL</option>
@@ -147,7 +147,7 @@
         <div class="shortcuts-panel">
           <div class="shortcuts-header">
             <span data-i18n="fragment.shortcuts">快捷键</span>
-            <button id="btn-close-shortcuts" class="btn-close-shortcuts" aria-label="关闭">✕</button>
+            <button id="btn-close-shortcuts" class="btn-close-shortcuts" aria-label="关闭" data-icon="close" data-icon-class="icon-only"></button>
           </div>
           <div class="shortcuts-body">
             <div class="shortcut-section">
