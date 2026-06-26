@@ -150,7 +150,13 @@ function registerSettingsIpc() {
       await updateLocaleSetting(settings.locale);
     }
 
-    if (settings.deviceMode !== undefined || settings.preferredDeviceId !== undefined || settings.modelDeviceMapping !== undefined) {
+    // 精度 / vocoder 类型 / 设备设置变化时必须重置 pipeline，
+    // 否则切换 INT8-NPU 等精度后仍使用旧 pipeline（模型仍加载在旧设备上）
+    if (settings.deviceMode !== undefined ||
+        settings.preferredDeviceId !== undefined ||
+        settings.modelDeviceMapping !== undefined ||
+        settings.modelPrecision !== undefined ||
+        settings.vocoderType !== undefined) {
       resetSvsPipeline();
       resetRmvpe();
       resetBasicPitch();
