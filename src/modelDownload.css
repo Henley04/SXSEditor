@@ -362,6 +362,76 @@ body {
   margin-bottom: var(--space-5);
 }
 
+.optional-models-details {
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel);
+}
+
+.optional-models-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.optional-models-summary::-webkit-details-marker {
+  display: none;
+}
+
+.optional-models-summary .summary-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.optional-models-summary .summary-badge {
+  font-size: var(--font-xs);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--fg-tertiary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.optional-models-summary .summary-status {
+  font-size: var(--font-xs);
+  color: var(--fg-tertiary);
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.optional-models-summary .summary-chevron {
+  font-size: var(--font-sm);
+  color: var(--fg-tertiary);
+  transition: transform var(--motion-base);
+}
+
+.optional-models-details[open] .summary-chevron {
+  transform: rotate(180deg);
+}
+
+.optional-models-details[open] > .optional-models-summary {
+  border-bottom: 1px solid var(--border-default);
+}
+
+/* 折叠时隐藏卡片内容（默认行为，details 自带）；展开时显示 */
+.optional-models-details > .model-card {
+  border-top: none;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  border-radius: 0;
+}
+
 .optional-models-section .section-heading {
   font-size: var(--font-md);
   font-weight: 600;

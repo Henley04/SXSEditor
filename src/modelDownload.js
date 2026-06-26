@@ -346,6 +346,9 @@ const sifiganState = {
 function setSifiganStatusText(text) {
   const el = document.getElementById('sifiganStatusText');
   if (el) el.textContent = text;
+  // 同步更新折叠摘要的状态文字，便于用户在折叠时查看
+  const summaryEl = document.getElementById('optionalSummaryStatus');
+  if (summaryEl) summaryEl.textContent = text;
 }
 
 function setSifiganStatusIndicator(state) {
