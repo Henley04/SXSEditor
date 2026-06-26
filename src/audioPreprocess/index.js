@@ -2,6 +2,7 @@ import '../common.css';
 import '../audioPreprocess.css';
 import { initI18n, applyLocale, getLocale } from '../i18n/index.js';
 import { initWindowTheme } from '../themes/themeInit.js';
+import { hydrateIcons } from '../icons/iconHelper.js';
 import { initDomRefs, state } from './state.js';
 import { setupEventHandlers } from './eventHandlers.js';
 import { setupIpcHandlers } from './ipcHandlers.js';
@@ -19,6 +20,7 @@ setupIpcHandlers();
 initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
+  hydrateIcons(document);
 });
 
 // Apply saved theme

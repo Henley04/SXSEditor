@@ -138,6 +138,9 @@
   font-size: var(--font-lg);
   min-width: 28px;
   text-align: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .pitch-hint {
@@ -663,6 +666,9 @@
   font-size: 16px;
   cursor: pointer;
   padding: 2px var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   transition: all var(--motion-fast);
 }
 .btn-close-shortcuts:hover {

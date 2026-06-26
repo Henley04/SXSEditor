@@ -3,6 +3,7 @@ import './resourceManager.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { initWindowTheme } from './themes/themeInit.js';
 import { formatBytes } from './utils/formatBytes.js';
+import { createIcon, hydrateIcons } from './icons/iconHelper.js';
 
 const gpuInfoContent = document.getElementById('gpuInfoContent');
 const modelGroupsContent = document.getElementById('modelGroupsContent');
@@ -184,7 +185,8 @@ function renderModelGroups(groups) {
 
         const arrow = document.createElement('span');
         arrow.className = 'group-arrow';
-        arrow.textContent = '▶';
+        const arrowIcon = createIcon('chevron-right', { size: 12 });
+        if (arrowIcon) arrow.appendChild(arrowIcon);
 
         const nameSpan = document.createElement('span');
         nameSpan.className = 'group-name';
@@ -519,6 +521,7 @@ window.addEventListener('beforeunload', () => {
 initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
+  hydrateIcons(document);
 });
 
 // Apply saved theme

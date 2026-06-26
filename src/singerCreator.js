@@ -3,10 +3,12 @@ import './singerCreator.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { initWindowTheme } from './themes/themeInit.js';
 import { showAlertDialog } from './alertDialog.js';
+import { createIcon, hydrateIcons } from './icons/iconHelper.js';
 
 initI18n().then(() => {
   applyLocale();
   document.documentElement.lang = getLocale();
+  hydrateIcons(document);
 });
 
 // Apply saved theme
@@ -502,9 +504,8 @@ function updatePreview() {
   } else {
     previewAvatar.textContent = '';
     previewAvatar.style.backgroundColor = singerColorInput.value;
-    const span = document.createElement('span');
-    span.textContent = '🎤';
-    previewAvatar.appendChild(span);
+    const micIcon = createIcon('microphone', { size: 22 });
+    if (micIcon) previewAvatar.appendChild(micIcon);
   }
 
   const hasWav = !!wavFileBuffer;

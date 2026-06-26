@@ -13,6 +13,10 @@ import { updateProjectSettings } from './projectManager.js';
 import { refreshAll } from './timelineRenderer.js';
 import { state, dom } from './state.js';
 import { initWindowTheme } from '../themes/themeInit.js';
+import { hydrateIcons } from '../icons/iconHelper.js';
+
+// Hydrate [data-icon] elements as soon as the DOM is parsed (script is deferred).
+hydrateIcons(document);
 
 // Initialize theme before first render so canvas reads correct tokens
 initWindowTheme(state._ipcCleanups).then(() => {

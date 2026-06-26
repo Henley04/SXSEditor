@@ -9,6 +9,7 @@ import { t } from '../i18n/index.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { loadSingerFile, showSingerSelectDialog, markDirty } from './projectManager.js';
+import { createIcon } from '../icons/iconHelper.js';
 
 export function getBeatWidth() {
   return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX;
@@ -388,7 +389,8 @@ export function renderSingerList() {
       img.alt = singer.singerName || '';
       avatarDiv.appendChild(img);
     } else {
-      avatarDiv.textContent = '🎤';
+      const micIcon = createIcon('microphone', { size: 22 });
+      if (micIcon) avatarDiv.appendChild(micIcon);
     }
 
     const infoDiv = document.createElement('div');

@@ -9,8 +9,8 @@
     <div id="app">
       <div id="toolbar">
         <div class="toolbar-group">
-          <button id="btn-create" class="btn-primary" data-i18n="singerCreator.createAndSave">✓ 创建并保存</button>
-          <button id="btn-cancel" data-i18n="singerCreator.cancel">✖ 取消</button>
+          <button id="btn-create" class="btn-primary" data-i18n="singerCreator.createAndSave" data-icon="check">创建并保存</button>
+          <button id="btn-cancel" data-i18n="singerCreator.cancel" data-icon="close">取消</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
@@ -53,7 +53,7 @@
           <div class="panel-section">
             <div class="section-title" data-i18n="singerCreator.refAudioWav">参考音频 (WAV)</div>
             <div class="upload-area" id="wav-upload-area">
-              <div class="upload-icon">🎵</div>
+              <div class="upload-icon" data-icon="music"></div>
               <div class="upload-text" data-i18n="singerCreator.uploadWav">点击或拖拽上传WAV文件</div>
               <div class="upload-hint" data-i18n="singerCreator.wavHint">时长不超过30秒，采样率44100Hz</div>
               <input type="file" id="wav-file-input" accept=".wav" hidden />
@@ -71,12 +71,12 @@
                 <canvas id="waveform-canvas" role="img" aria-label="波形预览"></canvas>
               </div>
               <div class="info-actions">
-                <button id="btn-play-preview" class="btn-small" data-i18n="singerCreator.preview">▶ 预览</button>
+                <button id="btn-play-preview" class="btn-small" data-i18n="singerCreator.preview" data-icon="play">预览</button>
                 <button id="btn-clear-wav" class="btn-small btn-danger" data-i18n="singerCreator.clear">清除</button>
               </div>
             </div>
             <div class="info-actions" id="preprocess-actions" style="display: none; margin-top: 12px;">
-              <button id="btn-start-preprocess" class="btn-small btn-primary" data-i18n="singerCreator.startPreprocess">🎛️ 开始音频预处理</button>
+              <button id="btn-start-preprocess" class="btn-small btn-primary" data-i18n="singerCreator.startPreprocess" data-icon="sliders">开始音频预处理</button>
             </div>
           </div>
         </div>
@@ -84,12 +84,12 @@
           <div id="preview-container">
             <div class="preview-title" data-i18n="singerCreator.singerPreview">歌手预览</div>
             <div id="preview-placeholder" class="preview-placeholder">
-              <div class="placeholder-icon">🎤</div>
+              <div class="placeholder-icon" data-icon="microphone"></div>
               <div class="placeholder-text" data-i18n="singerCreator.previewPlaceholder">上传WAV文件后预览将在此显示</div>
             </div>
             <div id="preview-content" style="display: none;">
               <div id="preview-singer-info">
-                <div id="preview-avatar" class="preview-avatar">🎤</div>
+                <div id="preview-avatar" class="preview-avatar" data-icon="microphone"></div>
                 <div id="preview-details">
                   <div id="preview-name">未命名歌手</div>
                   <div id="preview-status">
@@ -131,7 +131,7 @@
           </div>
         </div>
         <div id="wav-trim-actions">
-          <button id="btn-trim-preview" class="btn-small btn-primary" data-i18n="singerCreator.wavTrimPreview">▶ 预览片段</button>
+          <button id="btn-trim-preview" class="btn-small btn-primary" data-i18n="singerCreator.wavTrimPreview" data-icon="play">预览片段</button>
           <button id="btn-trim-confirm" class="btn-small btn-primary" data-i18n="singerCreator.wavTrimConfirm">确认截取</button>
           <button id="btn-trim-cancel" class="btn-small btn-danger" data-i18n="singerCreator.wavTrimCancel">取消</button>
         </div>

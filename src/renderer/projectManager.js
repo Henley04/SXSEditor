@@ -284,7 +284,9 @@ export function updateProjectSettings() {
   state.project.timeSignature = [num, den];
   dom.bpmInput.value = state.project.bpm;
   if (dom.bpmDisplayBadge) {
-    dom.bpmDisplayBadge.textContent = `♩ ${state.project.bpm} BPM`;
+    const bpmText = dom.bpmDisplayBadge.querySelector('#bpm-display-text') ||
+      document.getElementById('bpm-display-text');
+    if (bpmText) bpmText.textContent = `${state.project.bpm} BPM`;
     if (oldBpm !== state.project.bpm) {
       dom.bpmDisplayBadge.classList.remove('bpm-flash');
       void dom.bpmDisplayBadge.offsetWidth;
@@ -447,7 +449,11 @@ export async function loadProject() {
           dom.bpmInput.value = state.project.bpm;
           dom.timeSigNum.value = state.project.timeSignature[0];
           dom.timeSigDen.value = state.project.timeSignature[1];
-          if (dom.bpmDisplayBadge) dom.bpmDisplayBadge.textContent = `♩ ${state.project.bpm} BPM`;
+          if (dom.bpmDisplayBadge) {
+            const bpmText = dom.bpmDisplayBadge.querySelector('#bpm-display-text') ||
+              document.getElementById('bpm-display-text');
+            if (bpmText) bpmText.textContent = `${state.project.bpm} BPM`;
+          }
         }
         if (obj.singers) {
           trackManager.singers.length = 0;

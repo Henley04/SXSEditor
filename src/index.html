@@ -9,9 +9,9 @@
     <div id="app">
       <div id="toolbar">
         <div class="toolbar-group">
-          <button id="btn-play" data-i18n="main.play">▶ 播放</button>
-          <button id="btn-pause" data-i18n="main.pause">⏸ 暂停</button>
-          <button id="btn-stop" data-i18n="main.stop">⏹ 停止</button>
+          <button id="btn-play" data-i18n="main.play" data-icon="play">播放</button>
+          <button id="btn-pause" data-i18n="main.pause" data-icon="pause">暂停</button>
+          <button id="btn-stop" data-i18n="main.stop" data-icon="stop">停止</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
@@ -25,13 +25,13 @@
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <button id="btn-save" data-i18n="main.save">💾 保存</button>
-          <button id="btn-load" data-i18n="main.load">📂 加载</button>
-          <button id="btn-export" data-i18n="main.export">📤 导出</button>
+          <button id="btn-save" data-i18n="main.save" data-icon="save">保存</button>
+          <button id="btn-load" data-i18n="main.load" data-icon="folder-open">加载</button>
+          <button id="btn-export" data-i18n="main.export" data-icon="upload">导出</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
-          <button id="btn-audio-to-midi" data-i18n="main.audioToMidi">🎵 音频转MIDI</button>
+          <button id="btn-audio-to-midi" data-i18n="main.audioToMidi" data-icon="music">音频转MIDI</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
@@ -49,7 +49,7 @@
         <div id="fragment-timeline">
           <div id="fragment-header">
             <span data-i18n="main.fragmentTimeline">分片时间轴</span>
-            <span id="bpm-display-badge">♩ 120 BPM</span>
+            <span id="bpm-display-badge"><span data-icon="music-note" data-icon-class="icon--md"></span><span id="bpm-display-text">120 BPM</span></span>
           </div>
           <div id="fragment-canvas-container">
             <canvas id="fragment-canvas" role="img" aria-label="分片时间轴"></canvas>
