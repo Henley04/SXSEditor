@@ -105,6 +105,7 @@ class Preprocessing {
         if (totalFrames === 0) {
             return {
                 f0Ids: new Int32Array(0),
+                f0Hz: new Float32Array(0),
                 noteTextSeq: new Int32Array([PAD_ID]),
                 notePitchSeq: new Int32Array([0]),
                 noteTypeSeq: new Int32Array([1]),
@@ -292,6 +293,7 @@ class Preprocessing {
 
         return {
             f0Ids,
+            f0Hz,
             noteTextSeq,
             notePitchSeq,
             noteTypeSeq,

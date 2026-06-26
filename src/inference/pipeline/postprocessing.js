@@ -392,6 +392,34 @@ function extractMelSpectrogram(audioFloat, sr) {
     return { data: melSpec, frames: numFrames, melBands };
 }
 
+// SiFiGAN 统计文件缺失警告仅记录一次（避免日志刷屏）
+let _sifiganStatsWarned = false;
+
+/**
+ * 线性插值将 F0 序列重采样到目标长度（mel 帧率对齐）。
+ * mel 帧率 = SAMPLE_RATE / HOP_SIZE = 24000 / 480 = 50Hz；buildF0FrameSequence 已产出该帧率，
+ * 此函数仅在 F0 长度与 mel 帧数不一致时做长度对齐（防御性）。
+ * @param {Float32Array|Array} src - 源 F0 序列（Hz）
+ * @param {number} targetLen - 目标长度（mel 帧数）
+ * @returns {Float32Array} 重采样后的 F0 序列
+ */
+function resizeF0Linear(src, targetLen) {
+    const srcArr = src instanceof Float32Array ? src : new Float32Array(src);
+    if (targetLen <= 0) return new Float32Array(0);
+    if (srcArr.length === 0) return new Float32Array(targetLen);
+    if (srcArr.length === targetLen) return srcArr;
+    const out = new Float32Array(targetLen);
+    const ratio = (srcArr.length - 1) / Math.max(1, targetLen - 1);
+    for (let i = 0; i < targetLen; i++) {
+        const srcIdx = i * ratio;
+        const lo = Math.floor(srcIdx);
+        const hi = Math.min(srcArr.length - 1, lo + 1);
+        const frac = srcIdx - lo;
+        out[i] = srcArr[lo] * (1 - frac) + srcArr[hi] * frac;
+    }
+    return out;
+}
+
 // ---- Post-processing class ----
 
 class Postprocessing {
@@ -439,7 +467,7 @@ class Postprocessing {
     /**
      * Run vocoder in chunked mode for long audio
      */
-    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false) {
+    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false) {
         const chunkSize = VOCODER_CHUNK_FRAMES;
         const overlapFrames = VOCODER_OVERLAP_FRAMES;
         const totalSamples = totalFrames * HOP_SIZE;
@@ -457,13 +485,55 @@ class Postprocessing {
             return padded;
         };
 
+        // ---- SiFiGAN 双输入（mel + f0）准备 ----
+        // mel 帧率 = SAMPLE_RATE / HOP_SIZE = 24000 / 480 = 50Hz；buildF0FrameSequence 已产出该帧率的 F0，
+        // 此处仅需将 F0 长度对齐到 totalFrames（防御性线性插值）。
+        const useSifiganF0 = vocoderType === 'sifigan';
+        let effectiveF0 = null;
+        if (useSifiganF0) {
+            if (f0Data && f0Data.length > 0) {
+                const srcArr = f0Data instanceof Float32Array ? f0Data : new Float32Array(f0Data);
+                effectiveF0 = (srcArr.length === totalFrames) ? srcArr : resizeF0Linear(srcArr, totalFrames);
+            } else {
+                // F0 缺失处理（简化策略）：SiFiGAN 的 f0 是 ONNX 必需输入，无法跳过；
+                // 立即报错并提示用户检查 F0 配置，不修改 vocoderType 设置（仅本次推理失败）。
+                console.error('[OnnxSVSPipeline] vocoderType=sifigan 但 F0 缺失，回退默认 vocoder 完成本次推理');
+                throw new Error('SiFiGAN vocoder 需要 F0 输入但 F0 数据缺失，请检查 F0 配置（pitchCurveF0 / f0Envelope / notes）或切换为默认 vocoder');
+            }
+        }
+
+        // 统计文件缺失兜底：实际归一化发生在 SiFiGAN ONNX 模型内部（导出时已嵌入 stats 常量），
+        // stats 缺失意味着 ONNX 模型本身未正确导出归一化常量。此处无法在运行时补偿（兜底为零均值单位方差，
+        // 即假设输入已是归一化状态），仅记录警告（首次），质量会下降。
+        if (useSifiganF0 && sifiganStatsMissing && !_sifiganStatsWarned) {
+            console.warn('[OnnxSVSPipeline] SiFiGAN 统计文件缺失，输入归一化可能不可用（兜底为零均值单位方差，质量会下降）');
+            _sifiganStatsWarned = true;
+        }
+
+        // 构造 vocoder 输入字典：default → { mel }；sifigan → { mel, f0 }（f0 与 mel 同帧率、同 seq_len）
+        const buildVocoderInputs = (melTensor, vocSeqLen, frameOffset, frameCount) => {
+            if (!useSifiganF0 || !effectiveF0) {
+                return { mel: melTensor };
+            }
+            // F0 分块：取当前 chunk 对应帧区间，静态形状时 pad 到 vocSeqLen（与 mel 一致）
+            let chunkF0;
+            if (frameCount >= vocSeqLen) {
+                chunkF0 = effectiveF0.subarray(frameOffset, frameOffset + vocSeqLen);
+            } else {
+                chunkF0 = padFloat(effectiveF0.subarray(frameOffset, frameOffset + frameCount), vocSeqLen);
+            }
+            const f0Tensor = createFloatTensor(floatType, chunkF0, [1, vocSeqLen, 1]);
+            return { mel: melTensor, f0: f0Tensor };
+        };
+
         // 短音频（≤chunkSizeframes ≈ 20.5秒）直接一次性推理，避免分chunks开销
         if (totalFrames <= chunkSize) {
             const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : totalFrames;
             const melArr = melData instanceof Float32Array ? melData : new Float32Array(melData);
             const paddedMel = useStaticShapes ? padFloat(melArr, vocSeqLen * MEL_DIM) : melArr;
             const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
-            const results = await sessions.vocoder.run({ mel: melTensor });
+            const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, totalFrames);
+            const results = await sessions.vocoder.run(vocoderInputs);
             await yieldToEventLoop(); // Prevent UI freeze during DML inference
             const waveform = outputToFloat32(results['waveform']);
             const copyLen = Math.min(waveform.length, totalSamples);
@@ -496,7 +566,8 @@ class Postprocessing {
             const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : currentChunkFrames;
             const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
             const melTensor = createFloatTensor(floatType, paddedChunk, [1, vocSeqLen, MEL_DIM]);
-            const results = await sessions.vocoder.run({ mel: melTensor });
+            const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, chunkStart, currentChunkFrames);
+            const results = await sessions.vocoder.run(vocoderInputs);
             await yieldToEventLoop(); // Prevent UI freeze between vocoder chunks
             const waveform = outputToFloat32(results['waveform']);
 
