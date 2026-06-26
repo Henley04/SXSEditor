@@ -14,7 +14,13 @@ const { AudioSegmentation } = require('./audioSegmentation');
 const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils');
 
 // Module-level constants
-const JP_MODEL_FILES = new Set(['note_text_encoder.onnx', 'preflow.onnx']);
+// JP-specific models that must be swapped from the JP directory when
+// language is 'ja'. cond_emb MUST be included because JP fine-tuning adapts
+// it to the JP feature distribution — using the base cond_emb with JP
+// preflow+embedding causes severe phoneme corruption.
+// note_pitch_encoder is intentionally NOT included: pitch is a MIDI index
+// with no language-specific semantic, so JP shares the base pitch encoder.
+const JP_MODEL_FILES = new Set(['note_text_encoder.onnx', 'preflow.onnx', 'cond_emb.onnx']);
 const SMALL_MODEL_THRESHOLD = 50 * 1024 * 1024;
 const PRECISION_SUBDIR_MAP = {
     'int8': 'int8',
@@ -35,10 +41,8 @@ class OnnxSVSPipeline {
         this.jpModelDir = this._resolveJpModelDir(modelDir, options.modelPrecision);
         this._hasJpModelsCached = this.jpModelDir
             ? fs.existsSync(path.join(this.jpModelDir, 'note_text_encoder.onnx')) &&
-              fs.existsSync(path.join(this.jpModelDir, 'preflow.onnx'))
-            : false;
-        this._hasJpPitchEncoderCached = this.jpModelDir
-            ? fs.existsSync(path.join(this.jpModelDir, 'note_pitch_encoder.onnx'))
+              fs.existsSync(path.join(this.jpModelDir, 'preflow.onnx')) &&
+              fs.existsSync(path.join(this.jpModelDir, 'cond_emb.onnx'))
             : false;
         this.sessions = {};
         this.sessionEPs = {};
@@ -89,10 +93,6 @@ class OnnxSVSPipeline {
         return this._hasJpModelsCached;
     }
 
-    hasJpPitchEncoder() {
-        return this._hasJpPitchEncoderCached;
-    }
-
     _resolveModelDir(baseDir, modelPrecision) {
         const resolved = path.resolve(baseDir);
         const subdir = PRECISION_SUBDIR_MAP[modelPrecision];
@@ -120,23 +120,21 @@ class OnnxSVSPipeline {
 
     /**
      * Get the model path for a specific model file, considering language override.
-     * JP models (note_text_encoder, preflow) come from jpModelDir when language is 'ja'.
-     * All other models come from the base modelDir.
+     * JP models (note_text_encoder, preflow, cond_emb) come from jpModelDir
+     * when language is 'ja'. All other models (including note_pitch_encoder)
+     * come from the base modelDir.
      */
     _getModelPath(modelFile) {
         if (this.languageOverride === 'ja' && this.jpModelDir && JP_MODEL_FILES.has(modelFile)) {
-            return path.join(this.jpModelDir, modelFile);
-        }
-        // Optional: JP pitch encoder (only if fine-tuned version exists)
-        if (this.languageOverride === 'ja' && modelFile === 'note_pitch_encoder.onnx' && this._hasJpPitchEncoderCached) {
             return path.join(this.jpModelDir, modelFile);
         }
         return path.join(this.modelDir, modelFile);
     }
 
     /**
-     * Incrementally swap only the language-specific models (note_text_encoder, preflow).
-     * Other models (diff_step, vocoder, etc.) stay loaded.
+     * Incrementally swap only the language-specific models
+     * (note_text_encoder, preflow, cond_emb).
+     * Other models (diff_step, vocoder, note_pitch_encoder, etc.) stay loaded.
      * Returns true if swap was performed, false if already using the requested language.
      */
     async swapLanguageModels(newLanguage) {
@@ -146,12 +144,8 @@ class OnnxSVSPipeline {
         const langModels = [
             { key: 'noteTextEncoder', file: 'note_text_encoder.onnx' },
             { key: 'preflow', file: 'preflow.onnx' },
+            { key: 'condEmb', file: 'cond_emb.onnx' },
         ];
-
-        // Also swap pitch encoder if JP fine-tuned version exists
-        if (this.hasJpPitchEncoder()) {
-            langModels.push({ key: 'notePitchEncoder', file: 'note_pitch_encoder.onnx' });
-        }
 
         const oldLang = this.languageOverride;
         this.languageOverride = newLanguage;
