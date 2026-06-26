@@ -304,12 +304,10 @@ body {
 .btn-start {
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
-  box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 .btn-start:hover {
   background: var(--bg-button-primary-hover);
-  box-shadow: 0 4px 12px var(--accent-glow-strong);
 }
 
 .btn-cancel {
@@ -326,12 +324,10 @@ body {
 .btn-close {
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
-  box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 .btn-close:hover {
   background: var(--bg-button-primary-hover);
-  box-shadow: 0 4px 12px var(--accent-glow-strong);
 }
 
 .btn:disabled {

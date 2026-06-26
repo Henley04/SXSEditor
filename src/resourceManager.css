@@ -468,18 +468,14 @@ body {
 #refreshBtn {
     background: var(--bg-button-primary);
     color: var(--fg-on-accent);
-    box-shadow: 0 4px 12px var(--accent-glow);
 }
 
 #refreshBtn:hover {
     background: var(--bg-button-primary-hover);
-    box-shadow: 0 6px 16px var(--accent-glow-strong);
-    transform: translateY(-1px);
 }
 
 #refreshBtn:active {
-    transform: translateY(0);
-    box-shadow: 0 2px 8px var(--accent-glow);
+    background: var(--bg-button-primary-hover);
 }
 
 /* ===== Responsive ===== */
