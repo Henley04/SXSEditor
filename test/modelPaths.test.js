@@ -16,6 +16,7 @@ const {
 // Pipeline constants
 const {
   ONNX_MODEL_FILES,
+  SIFIGAN_MODEL_FILES,
   VOCODER_CHUNK_FRAMES,
   NPU_VOCODER_SEQ_LEN,
   MEL_DIM,
@@ -175,9 +176,17 @@ describe('Model Path Consistency (using actual modelManager functions)', () => {
 
     for (const manifestFile of svsManifestFiles) {
       it(`manifest file "${manifestFile}" should be handled by pipeline`, () => {
+        // Skip external data files (loaded alongside their .onnx sibling)
         if (manifestFile.endsWith('.onnx.data')) return;
-        const found = ONNX_MODEL_FILES.includes(manifestFile);
-        expect(found, `"${manifestFile}" in manifest but not in ONNX_MODEL_FILES`).to.be.true;
+        // Skip non-ONNX auxiliary files (e.g., sifigan_stats.joblib is a
+        // normalization stats file, not an ONNX model the pipeline loads)
+        if (!manifestFile.endsWith('.onnx')) return;
+        // Optional SVS ONNX files (e.g., sifigan_vocoder_dml.onnx) are
+        // conditionally swapped into the pipeline at runtime via index
+        // replacement, not always loaded. They live in SIFIGAN_MODEL_FILES.
+        const found = ONNX_MODEL_FILES.includes(manifestFile)
+          || SIFIGAN_MODEL_FILES.includes(manifestFile);
+        expect(found, `"${manifestFile}" in manifest but not in ONNX_MODEL_FILES or SIFIGAN_MODEL_FILES`).to.be.true;
       });
     }
   });
