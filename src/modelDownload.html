@@ -81,46 +81,53 @@
   <div class="error-message" id="errorMessage"></div>
 
   <div class="optional-models-section" id="optionalModelsSection">
-    <h2 class="section-heading" data-i18n="modelDownload.optionalModels">可选模型</h2>
+    <details class="optional-models-details" id="optionalModelsDetails">
+      <summary class="optional-models-summary">
+        <span class="summary-text" data-i18n="modelDownload.optionalModels">可选模型</span>
+        <span class="summary-badge" id="optionalSummaryBadge" data-i18n="modelDownload.optionalBadge">可选</span>
+        <span class="summary-status" id="optionalSummaryStatus"></span>
+        <span class="summary-chevron" aria-hidden="true">▾</span>
+      </summary>
 
-    <div class="model-card sifigan-card" id="sifiganCard" data-group-id="sifigan-vocoder">
-      <div class="model-card-header">
-        <div class="model-card-title">
-          <span class="model-card-name" data-i18n="modelDownload.sifiganTitle">SiFiGAN Vocoder（可选）</span>
-          <span class="model-card-badge optional" data-i18n="modelDownload.optionalBadge">可选</span>
+      <div class="model-card sifigan-card" id="sifiganCard" data-group-id="sifigan-vocoder">
+        <div class="model-card-header">
+          <div class="model-card-title">
+            <span class="model-card-name" data-i18n="modelDownload.sifiganTitle">SiFiGAN Vocoder（可选）</span>
+            <span class="model-card-badge optional" data-i18n="modelDownload.optionalBadge">可选</span>
+          </div>
+          <div class="model-card-actions">
+            <button class="btn-card btn-download" id="sifiganDownloadBtn" data-i18n="modelDownload.download">下载</button>
+            <button class="btn-card btn-unload" id="sifiganUnloadBtn" style="display:none;" data-i18n="modelDownload.unload">卸载</button>
+          </div>
         </div>
-        <div class="model-card-actions">
-          <button class="btn-card btn-download" id="sifiganDownloadBtn" data-i18n="modelDownload.download">下载</button>
-          <button class="btn-card btn-unload" id="sifiganUnloadBtn" style="display:none;" data-i18n="modelDownload.unload">卸载</button>
+        <p class="model-card-desc" data-i18n="modelDownload.sifiganDesc">可选替代声码器，基于 Source-Filter HiFi-GAN，需手动下载</p>
+
+        <div class="model-card-files">
+          <div class="model-card-file">
+            <span class="model-card-file-name">sifigan_vocoder_dml.onnx</span>
+            <span class="model-card-file-size">~611 MB</span>
+          </div>
+          <div class="model-card-file">
+            <span class="model-card-file-name">sifigan_stats.joblib</span>
+            <span class="model-card-file-size">~2.5 KB</span>
+          </div>
+        </div>
+
+        <div class="model-card-status" id="sifiganStatus">
+          <span class="status-indicator" id="sifiganStatusIndicator"></span>
+          <span class="status-text" id="sifiganStatusText" data-i18n="modelDownload.checking">检测中...</span>
+        </div>
+
+        <div class="model-card-tooltip" id="sifiganTooltip" style="display:none;" role="tooltip"></div>
+
+        <div class="model-card-progress" id="sifiganProgress" style="display:none;">
+          <div class="progress-bar-bg" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-bar-fill" id="sifiganProgressBar"></div>
+          </div>
+          <span class="progress-text" id="sifiganProgressText"></span>
         </div>
       </div>
-      <p class="model-card-desc" data-i18n="modelDownload.sifiganDesc">可选替代声码器，基于 Source-Filter HiFi-GAN，需手动下载</p>
-
-      <div class="model-card-files">
-        <div class="model-card-file">
-          <span class="model-card-file-name">sifigan_vocoder_dml.onnx</span>
-          <span class="model-card-file-size">~611 MB</span>
-        </div>
-        <div class="model-card-file">
-          <span class="model-card-file-name">sifigan_stats.joblib</span>
-          <span class="model-card-file-size">~2.5 KB</span>
-        </div>
-      </div>
-
-      <div class="model-card-status" id="sifiganStatus">
-        <span class="status-indicator" id="sifiganStatusIndicator"></span>
-        <span class="status-text" id="sifiganStatusText" data-i18n="modelDownload.checking">检测中...</span>
-      </div>
-
-      <div class="model-card-tooltip" id="sifiganTooltip" style="display:none;" role="tooltip"></div>
-
-      <div class="model-card-progress" id="sifiganProgress" style="display:none;">
-        <div class="progress-bar-bg" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
-          <div class="progress-bar-fill" id="sifiganProgressBar"></div>
-        </div>
-        <span class="progress-text" id="sifiganProgressText"></span>
-      </div>
-    </div>
+    </details>
   </div>
 
   <div class="actions">
