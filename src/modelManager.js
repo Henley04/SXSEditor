@@ -13,6 +13,8 @@ const MODEL_IDS = {
   fp8: '',  // placeholder — download link TBD
   int8: 'syxppp/SoulX-Singer-onnx-directml-int8',
   'int8-npu': 'syxppp/SoulX-Singer-onnx-directml-int8-dynamic',
+  // TODO: 等用户填写 ModelScope 仓库 ID（SiFiGAN ONNX 模型上传后填入）
+  sifigan: '',
 };
 
 // JP (Japanese) language-specific model repos
@@ -49,6 +51,8 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'cond_emb.onnx.data', required: true },
   { filePath: 'diff_step_dml.onnx', required: true },
   { filePath: 'vocoder_dml.onnx', required: true },
+  { filePath: 'sifigan_vocoder_dml.onnx', required: false, size: 611 * 1024 * 1024, group: 'sifigan-vocoder' },
+  { filePath: 'sifigan_stats.joblib', required: false, size: 2.5 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'mel_transform.onnx', required: true },
   { filePath: 'mel_transform.onnx.data', required: true },
   { filePath: 'preprocess/rmvpe_model.onnx', required: true },

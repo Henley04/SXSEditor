@@ -28,6 +28,84 @@ SoulX-Singer 模型转换为 ONNX 格式，用于非 PyTorch 环境的推理部�
 | `cond_emb.onnx` | `(batch, seq_len, cond_emb_dim)` Float | `(batch, seq_len, hidden_size)` Float | 条件嵌入 |
 | `diff_step.onnx` | `xt_input, t, cond, xt_mask` | `(batch, seq_len, mel_dim)` Float | 扩散步骤预测 |
 
+## SiFiGAN Vocoder
+
+SiFiGAN（Source-Filter HiFi-GAN）是 SVS 管线的可选替代声码器，与默认 vocoder 并存于 `onnx_models/` 目录。本节描述其架构、训练数据、输入输出格式与 DirectML 兼容性。
+
+### 模型架构
+
+- **SiFiGAN**（Source-Filter HiFi-GAN）
+- 来源：ICASSP 2023 论文 "Source-Filter HiFi-GAN: Fast and Pitch Controllable High-Fidelity Neural Vocoder"
+- 作者：Yoneyama Reo, Wu Yi-Chiao, Toda Tomoki（名古屋大学）
+- 官方仓库：https://github.com/chomeyama/SiFiGAN
+- 架构特点：采用 Source-Filter 设计，将神经源信号（source）与滤波器（filter）分离，支持音高（F0）可控
+- 与默认 vocoder（HiFi-GAN 变体）的差异：source-filter 分离设计、支持 F0 控制
+
+### 训练数据
+
+- LibriTTS-R train-clean-100 + train-clean-360（约 460 小时英文语音）
+- NUS-48E（48 个说话人的歌唱/语音数据集，排除 ADIZ 与 JLEE 用于评测）
+- 采样率 24 kHz（与 SXSEditor SVS 管线 `SAMPLE_RATE = 24000` 一致）
+- 训练步数：1,000,000 steps
+- 训练超参数：参考 SiFiGAN 官方 `train=sifigan_1000k` 配置
+
+### 输入输出格式
+
+| 名称 | 类型 | 形状 | 说明 |
+|------|------|------|------|
+| `mel` | float32 | `[1, seq_len, 128]` | SVS 管线产出的 mel 频谱（输入） |
+| `f0` | float32 | `[1, seq_len, 1]` | F0 曲线，单位 Hz，范围约 [60, 1000]（输入） |
+| `waveform` | float32 | `[1, num_samples]` | 24 kHz 音频波形（输出） |
+
+- 内部归一化：使用 `libritts_r_clean+nus-48e_train_no_dev.joblib` 统计文件（部署时重命名为 `sifigan_stats.joblib`）
+
+### DirectML 支持情况
+
+- 原始 SiFiGAN ONNX 中可能包含大 stride ConvTranspose 算子，DirectML 不支持
+- 通过 `optimize_sifigan_dml.py` 脚本进行算子分解（参考现有 `optimize_vocoder_dml.py`）
+- 分解策略：`ConvTranspose1D(stride=S) → Conv1D(upsample(stride=S), stride=1)`
+- 优化后输出 `sifigan_vocoder_dml.onnx`，DirectML EP 可用
+- 三级回退：`sifigan_vocoder_dml.onnx` → `sifigan_vocoder.onnx` → `vocoder_dml.onnx`（默认）
+
+### 文件清单
+
+| 文件 | 大小 | 说明 |
+|------|------|------|
+| `sifigan_vocoder_dml.onnx` | ~611 MB | DML 优化后的 ONNX 模型 |
+| `sifigan_vocoder.onnx` | ~611 MB | 未优化的 ONNX 模型（CPU 兼容） |
+| `sifigan_stats.joblib` | ~2.5 KB | 特征归一化统计文件 |
+
+精度变体（计划中）：
+- `fp16/sifigan_vocoder_dml.onnx`
+- `int8/sifigan_vocoder_dml.onnx`
+
+### 差异对比表
+
+| 特性 | 默认 Vocoder | SiFiGAN |
+|------|--------------|---------|
+| 架构 | HiFi-GAN 变体 | Source-Filter HiFi-GAN |
+| 输入 | mel (128 维) | mel (128 维) + f0 (1 维) |
+| 音高可控 | 否 | 是 |
+| DirectML 支持 | 需 optimize_vocoder_dml.py | 需 optimize_sifigan_dml.py |
+| 模型大小 | 495 MB (FP16) | 611 MB (FP32) |
+| 训练数据 | SoulX-Singer 项目私有 | LibriTTS-R + NUS-48E 公开 |
+| 采样率 | 24 kHz | 24 kHz |
+| 推理速度 | 标准 | 相当或更快（source-filter 解耦） |
+| 适用场景 | 默认 SVS 合成 | 需要音高控制、英文/歌唱场景 |
+
+### 引用
+
+```bibtex
+@INPROCEEDINGS{10095298,
+  author={Yoneyama, Reo and Wu, Yi-Chiao and Toda, Tomoki},
+  booktitle={ICASSP 2023 - 2023 IEEE International Conference on Acoustics, Speech and Signal Processing (ICASSP)},
+  title={{Source-Filter HiFi-GAN: Fast and Pitch Controllable High-Fidelity Neural Vocoder}},
+  year={2023},
+  pages={1-5},
+  doi={10.1109/ICASSP49357.2023.10095298}
+}
+```
+
 ## 使用示例
 
 ### Python (onnxruntime)

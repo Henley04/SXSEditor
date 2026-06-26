@@ -47,6 +47,8 @@ const openModelDownloadBtn = document.getElementById('openModelDownloadBtn');
 const npuDiffBatchSizeSelect = document.getElementById('npuDiffBatchSize');
 const npuVocoderBatchSizeSelect = document.getElementById('npuVocoderBatchSize');
 const batchSizeDisabledHint = document.getElementById('batchSizeDisabledHint');
+const vocoderTypeSelect = document.getElementById('vocoderType');
+const vocoderTypeHint = document.getElementById('vocoderTypeHint');
 
 // Device mode radio button handlers
 const MODEL_GROUPS = [
@@ -124,6 +126,9 @@ function applySavedSettingsToUI(currentSetting) {
     _savedVocoderBatch = String(currentSetting.npuVocoderBatchSize ?? 4);
     updateBatchSizeState(modelPrecisionSelect.value);
 
+    // Vocoder type (main process may have overridden 'sifigan' -> 'default' at startup)
+    vocoderTypeSelect.value = currentSetting.vocoderType === 'sifigan' ? 'sifigan' : 'default';
+
     // Audio exclusive mode
     const isExclusive = audioOutputModeSelect.value === 'exclusive';
     exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
@@ -175,6 +180,62 @@ function updateBatchSizeState(precision) {
     } else {
         npuDiffBatchSizeSelect.value = '1';
         npuVocoderBatchSizeSelect.value = '1';
+    }
+}
+
+// ==================== Vocoder type (SiFiGAN) ====================
+
+/**
+ * 通过现有 IPC 检测 SiFiGAN 模型文件是否存在。
+ * 复用 getModelDir + authorizePath + fileExists，不新增 IPC。
+ */
+async function checkSifiganVocoderFiles() {
+    try {
+        const modelDir = await window.electronAPI.getModelDir();
+        if (!modelDir) return { onnxExists: false, statsExists: false };
+        // 授权模型目录，使 file:exists 可访问其内部文件
+        await window.electronAPI.authorizePath(modelDir);
+        const base = modelDir.replace(/[\\/]+$/, '');
+        const [onnxExists, statsExists] = await Promise.all([
+            window.electronAPI.fileExists(base + '/sifigan_vocoder_dml.onnx'),
+            window.electronAPI.fileExists(base + '/sifigan_stats.joblib'),
+        ]);
+        return { onnxExists, statsExists };
+    } catch (err) {
+        console.error('[Settings] 检测 SiFiGAN 模型文件失败:', err);
+        return { onnxExists: false, statsExists: false };
+    }
+}
+
+/**
+ * 根据文件检测结果更新 sifigan 选项的禁用状态与提示文字。
+ * 若当前选中 sifigan 但模型文件不存在，自动回退到 default（仅 UI，不主动持久化）。
+ */
+function updateVocoderTypeUI(fileStatus) {
+    const sifiganOption = vocoderTypeSelect.querySelector('option[value="sifigan"]');
+    if (!sifiganOption) return;
+    const { onnxExists, statsExists } = fileStatus;
+    if (onnxExists) {
+        sifiganOption.disabled = false;
+        sifiganOption.textContent = 'SiFiGAN';
+        if (vocoderTypeHint) {
+            vocoderTypeHint.textContent = statsExists
+                ? 'SiFiGAN 已安装'
+                : 'SiFiGAN 模型已就绪，但统计文件缺失，输入归一化可能不可用';
+        }
+    } else {
+        sifiganOption.disabled = true;
+        sifiganOption.textContent = 'SiFiGAN（未下载）';
+        if (vocoderTypeHint) {
+            vocoderTypeHint.textContent = 'SiFiGAN 未下载，可在模型下载页获取后手动放置';
+        }
+    }
+    // 若当前选中 sifigan 但文件不存在，显示警告并回退到 default
+    if (vocoderTypeSelect.value === 'sifigan' && !onnxExists) {
+        vocoderTypeSelect.value = 'default';
+        if (vocoderTypeHint) {
+            vocoderTypeHint.textContent = 'SiFiGAN 模型文件不存在，已自动回退到默认 Vocoder';
+        }
     }
 }
 
@@ -540,6 +601,7 @@ function collectSettings() {
         midiExtractTool: midiExtractToolSelect.value,
         npuDiffBatchSize: parseInt(npuDiffBatchSizeSelect.value),
         npuVocoderBatchSize: parseInt(npuVocoderBatchSizeSelect.value),
+        vocoderType: vocoderTypeSelect.value,
     };
 }
 
@@ -657,6 +719,20 @@ npuVocoderBatchSizeSelect.addEventListener('change', () => {
     _savedVocoderBatch = npuVocoderBatchSizeSelect.value;
     applySettings();
 });
+vocoderTypeSelect.addEventListener('change', () => {
+    if (vocoderTypeSelect.value === 'sifigan') {
+        const sifiganOption = vocoderTypeSelect.querySelector('option[value="sifigan"]');
+        if (sifiganOption && sifiganOption.disabled) {
+            // 选项被禁用时不应被选中（浏览器正常情况下无法选中），此处做保护性回退
+            vocoderTypeSelect.value = 'default';
+            if (vocoderTypeHint) {
+                vocoderTypeHint.textContent = 'SiFiGAN 不可用，已回退到默认 Vocoder';
+            }
+            return;
+        }
+    }
+    applySettings();
+});
 midiExtractToolSelect.addEventListener('change', () => applySettings());
 
 openModelDownloadBtn.addEventListener('click', async () => {
@@ -677,7 +753,10 @@ openModelDownloadBtn.addEventListener('click', async () => {
     }
 })();
 
-loadDevices();
+// Load devices; after settings are applied to UI, check SiFiGAN vocoder availability
+loadDevices().finally(() => {
+    checkSifiganVocoderFiles().then(updateVocoderTypeUI).catch(() => {});
+});
 
 // Check model availability on load
 if (window.electronAPI?.checkModels) {

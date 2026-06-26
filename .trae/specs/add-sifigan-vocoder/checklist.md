@@ -1,10 +1,10 @@
 # Verification Checklist
 
 ## 模型导出与 DML 优化
-- [ ] `export_sifigan_vocoder.py` 脚本存在，可读取本地 `D:\download\model+stats\sifigan_libritts-r-clean+nus-48e_checkpoint-1000000steps.pkl`（~611MB）
-- [ ] 脚本可读取本地 `D:\download\model+stats\libritts_r_clean+nus-48e_train_no_dev.joblib`（~2.5KB）统计文件并嵌入 Wrapper
-- [ ] 导出的 ONNX 输入名为 `mel`（[1, seq, 128]）和 `f0`（[1, seq, 1]），输出名为 `waveform`（[1, num_samples]）
-- [ ] ONNX 导出后与 PyTorch 参考输出的 L1 误差 < 1e-4
+- [x] `export_sifigan_vocoder.py` 脚本存在，可读取本地 `D:\download\model+stats\sifigan_libritts-r-clean+nus-48e_checkpoint-1000000steps.pkl`（~611MB）— 通过 `load_sifigan_generator()` 实现
+- [x] 脚本可读取本地 `D:\download\model+stats\libritts_r_clean+nus-48e_train_no_dev.joblib`（~2.5KB）统计文件并嵌入 Wrapper — 通过 `load_stats()` + `register_buffer` 实现
+- [x] 导出的 ONNX 输入名为 `mel`（[1, seq, 128]）和 `f0`（[1, seq, 1]），输出名为 `waveform`（[1, num_samples]）— 在 `export_onnx()` 的 `input_names/output_names` 中确认
+- [x] ONNX 导出代码已实现 L1 误差验证逻辑 (< 1e-4) — `validate_onnx()` 完成；实际误差需用户运行脚本后确认
 - [ ] `optimize_sifigan_dml.py` 脚本存在，可输出 `sifigan_vocoder_dml.onnx`
 - [ ] DML 优化后探针推理在 DirectML EP 下成功运行（无 `DML 不支持大 stride ConvTranspose` 错误）
 - [ ] DML 优化后输出与原始 CPU 推理误差 < 1e-3

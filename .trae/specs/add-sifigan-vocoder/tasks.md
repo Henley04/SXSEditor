@@ -2,14 +2,14 @@
 
 ## Phase 1: 模型导出与 DirectML 优化脚本
 
-- [ ] Task 1: 编写 SiFiGAN ONNX 导出脚本 `export_sifigan_vocoder.py`
-  - [ ] SubTask 1.1: 克隆 SiFiGAN 官方仓库到 `third_party/SiFiGAN/`（仅在开发机本地，不入 git）
-  - [ ] SubTask 1.2: 编写 `SiFiGANVocoderWrapper`（nn.Module），将 SiFiGAN 的多输入（mel-cepstrum、F0、特征统计）封装为接受 `mel`（[1, seq, 128]）与 `f0`（[1, seq, 1]）的 forward
-  - [ ] SubTask 1.3: 加载本地预训练权重 `D:\download\model+stats\sifigan_libritts-r-clean+nus-48e_checkpoint-1000000steps.pkl`（~611MB）
-  - [ ] SubTask 1.4: 加载本地统计文件 `D:\download\model+stats\libritts_r_clean+nus-48e_train_no_dev.joblib`（~2.5KB），嵌入到 Wrapper 内部作为归一化常量
-  - [ ] SubTask 1.5: 调用 `torch.onnx.export`（opset=18，dynamo=True，dynamic_axes 含 seq_len）输出 `sifigan_vocoder.onnx`
-  - [ ] SubTask 1.6: 实现 onnxruntime CPU 探针推理 + L1 误差验证（与 PyTorch 输出对比，< 1e-4）
-  - [ ] SubTask 1.7: 处理外部数据格式（>2GB 时启用 `.onnx.data`）
+- [x] Task 1: 编写 SiFiGAN ONNX 导出脚本 `export_sifigan_vocoder.py`（已完成，脚本未实际运行，等用户执行）
+  - [x] SubTask 1.1: 克隆 SiFiGAN 官方仓库到 `third_party/SiFiGAN/`（仅在开发机本地，不入 git）— 脚本仅检查并给出明确克隆提示，不自动克隆
+  - [x] SubTask 1.2: 编写 `SiFiGANVocoderWrapper`（nn.Module），将 SiFiGAN 的多输入（mel-cepstrum、F0、特征统计）封装为接受 `mel`（[1, seq, 128]）与 `f0`（[1, seq, 1]）的 forward
+  - [x] SubTask 1.3: 加载本地预训练权重 `D:\download\model+stats\sifigan_libritts-r-clean+nus-48e_checkpoint-1000000steps.pkl`（~611MB）
+  - [x] SubTask 1.4: 加载本地统计文件 `D:\download\model+stats\libritts_r_clean+nus-48e_train_no_dev.joblib`（~2.5KB），嵌入到 Wrapper 内部作为归一化常量
+  - [x] SubTask 1.5: 调用 `torch.onnx.export`（opset=18，dynamo=True，dynamic_axes 含 seq_len）输出 `sifigan_vocoder.onnx`
+  - [x] SubTask 1.6: 实现 onnxruntime CPU 探针推理 + L1 误差验证（与 PyTorch 输出对比，< 1e-4）
+  - [x] SubTask 1.7: 处理外部数据格式（>2GB 时启用 `.onnx.data`）
 - [ ] Task 2: 编写 SiFiGAN DirectML 兼容性优化脚本 `optimize_sifigan_dml.py`
   - [ ] SubTask 2.1: 复用 `optimize_vocoder_dml.py` 的 ConvTranspose 检测与分解逻辑
   - [ ] SubTask 2.2: 扫描 SiFiGAN ONNX 中所有 `ConvTranspose` 节点，识别 stride > 1 的实例
@@ -20,11 +20,11 @@
 
 ## Phase 2: 应用层模型清单与下载扩展
 
-- [ ] Task 3: 扩展模型清单与注册表
-  - [ ] SubTask 3.1: 在 `src/modelManager.js` 的 `MODEL_IDS` 新增 `sifigan: ''`（空字符串占位 + `// TODO: 等用户填写 ModelScope 仓库 ID` 注释）
-  - [ ] SubTask 3.2: 在 `MODEL_FILE_MANIFEST` 新增 `sifigan_vocoder_dml.onnx`（required: false）与 `sifigan_stats.joblib`（required: false）两条目
-  - [ ] SubTask 3.3: 在 `src/modelRegistry.js` 的 `MODEL_GROUPS` 新增 `sifigan-vocoder` 组（optional: true, sessionKey: 'sifigan', files 含 onnx 与 joblib）
-  - [ ] SubTask 3.4: 在 `src/inference/pipeline/constants.js` 新增 `SIFIGAN_MODEL_FILES`、`SIFIGAN_STATS_FILE`、`MODEL_SIZES.sifigan` 估算值（参考 pkl 611MB）
+- [x] Task 3: 扩展模型清单与注册表（已完成，字段名按现有代码约定适配 filePath/models[]/descriptionEn）
+  - [x] SubTask 3.1: 在 `src/modelManager.js` 的 `MODEL_IDS` 新增 `sifigan: ''`（空字符串占位 + `// TODO: 等用户填写 ModelScope 仓库 ID` 注释）
+  - [x] SubTask 3.2: 在 `MODEL_FILE_MANIFEST` 新增 `sifigan_vocoder_dml.onnx`（required: false）与 `sifigan_stats.joblib`（required: false）两条目
+  - [x] SubTask 3.3: 在 `src/modelRegistry.js` 的 `MODEL_GROUPS` 新增 `sifigan-vocoder` 组（optional: true, sessionKey: 'sifigan', files 含 onnx 与 joblib）
+  - [x] SubTask 3.4: 在 `src/inference/pipeline/constants.js` 新增 `SIFIGAN_MODEL_FILES`、`SIFIGAN_STATS_FILE`、`MODEL_SIZES.sifigan` 估算值（参考 pkl 611MB）
 - [ ] Task 4: 更新模型目录路径解析
   - [ ] SubTask 4.1: 在 `src/main/modelDir.js` 的 `getModelDir()` 中确保 SiFiGAN 文件名查询走与默认 vocoder 一致的四级解析路径
   - [ ] SubTask 4.2: 在 `src/inference/pipeline/index.js` 的 vocoder 路径回退逻辑中加入 `sifigan_vocoder_dml.onnx → sifigan_vocoder.onnx → vocoder_dml.onnx` 三级回退
@@ -32,12 +32,12 @@
 
 ## Phase 3: 设置页 UI 与持久化
 
-- [ ] Task 5: 新增 Vocoder 类型选择设置
-  - [ ] SubTask 5.1: 在 `src/settings.html` 推理分区增加 `<select id="vocoderType">` 控件
-  - [ ] SubTask 5.2: 选项 `default`（默认 Vocoder）与 `sifigan`（SiFiGAN），SiFiGAN 未下载时禁用并标注"未下载"（同时检查 `sifigan_vocoder_dml.onnx` 与 `sifigan_stats.joblib` 是否都存在）
-  - [ ] SubTask 5.3: 在 `src/settings.js` 渲染逻辑中绑定 change 事件，通过 IPC 持久化到 settings.json 的 `vocoderType` 字段
-  - [ ] SubTask 5.4: 在 `src/main/settings.js` 的 settings schema 新增 `vocoderType` 字段，默认 `'default'`，校验枚举值
-  - [ ] SubTask 5.5: 启动时检查 `vocoderType === 'sifigan'` 但 onnx 模型缺失的情况，记录警告并自动回退到 `default`
+- [x] Task 5: 新增 Vocoder 类型选择设置（已完成，schema 用 ALLOWED_SETTINGS_KEYS 数组适配现有约定）
+  - [x] SubTask 5.1: 在 `src/settings.html` 推理分区增加 `<select id="vocoderType">` 控件
+  - [x] SubTask 5.2: 选项 `default`（默认 Vocoder）与 `sifigan`（SiFiGAN），SiFiGAN 未下载时禁用并标注"未下载"（同时检查 `sifigan_vocoder_dml.onnx` 与 `sifigan_stats.joblib` 是否都存在）
+  - [x] SubTask 5.3: 在 `src/settings.js` 渲染逻辑中绑定 change 事件，通过 IPC 持久化到 settings.json 的 `vocoderType` 字段
+  - [x] SubTask 5.4: 在 `src/main/settings.js` 的 settings schema 新增 `vocoderType` 字段，默认 `'default'`，校验枚举值
+  - [x] SubTask 5.5: 启动时检查 `vocoderType === 'sifigan'` 但 onnx 模型缺失的情况，记录警告并自动回退到 `default`
 
 ## Phase 4: 下载管理器 UI 扩展
 
