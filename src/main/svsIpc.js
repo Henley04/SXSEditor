@@ -5,6 +5,7 @@ const { getModelDir } = require('./modelDir');
 const { checkJpModelsExist } = require('../modelManager');
 const { t } = require('./locale');
 const { createLazyInitializer } = require('./lazyInitializer');
+const { getRmvpeDetector } = require('./pitchMidiIpc');
 
 let currentLanguage = null; // Track current pipeline language
 
@@ -91,6 +92,25 @@ async function ensurePipelineLanguage(language) {
   return pipeline;
 }
 
+/**
+ * 构造一个 RMVPE 适配器，将 pipeline 期望的 (audioFloat, sampleRate) → Float32Array
+ * 接口桥接到 RmvpePitchDetector.extractF0。仅在 autoShift + refAudio 路径下使用。
+ * 失败时返回 null，让 pipeline 回退到自相关。
+ */
+function _makeRmvpeExtractor() {
+  return async (audioFloat, sampleRate) => {
+    try {
+      const detector = getRmvpeDetector();
+      if (!detector || !detector.initialized) return null;
+      const result = await detector.extractF0(audioFloat, sampleRate);
+      return result; // {time, f0, confidence}[] 或 Float32Array
+    } catch (e) {
+      console.warn('[Main] RMVPE F0 extraction failed in pipeline path:', e.message);
+      return null;
+    }
+  };
+}
+
 function registerSvsIpc() {
   ipcMain.handle('svs:init', async () => {
     await svsPipelineLazy.get();
@@ -117,7 +137,12 @@ function registerSvsIpc() {
       if (!pipeline) {
         throw new Error(t('error.svsNotInitialized'));
       }
-      return await pipeline.synthesize(notes, bpm, options);
+      // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）
+      const opts = options || {};
+      if (opts.autoShift && opts.refAudioWavBuffer) {
+        opts.refF0Extractor = _makeRmvpeExtractor();
+      }
+      return await pipeline.synthesize(notes, bpm, opts);
     } catch (err) {
       throw err;
     }
@@ -172,6 +197,10 @@ function registerSvsIpc() {
         }
       } catch (_) {}
     };
+    // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）
+    if (opts.autoShift && opts.refAudioWavBuffer) {
+      opts.refF0Extractor = _makeRmvpeExtractor();
+    }
     try {
       const data = await pipeline.synthesize(notes, bpm, opts);
       return { data };

@@ -122,16 +122,32 @@ class AudioSegmentation {
     }
 
     /**
-     * Compute hash for caching
+     * Compute hash for caching.
+     * 采用 FNV-1a 32-bit 变种，对短数组（≤2000 元素）全量哈希避免下采样盲区；
+     * 长数组仍按 2000 个采样点哈希以控制开销，但 FNV-1a 的雪崩效应优于原多项式哈希，
+     * 显著降低微调单点改动落在步长盲区内导致缓存误命中的概率。
      */
     hashArray(arr) {
         if (!arr) return 0;
-        let h = 0;
+        // FNV-1a 32-bit 参数
+        let h = 0x811c9dc5;
         const step = Math.max(1, Math.floor(arr.length / 2000));
         for (let i = 0; i < arr.length; i += step) {
-            h = ((h << 5) - h + (arr[i] | 0)) | 0;
+            // FNV-1a: 逐字节 XOR + 乘素数（用整数近似，避免精度损失）
+            const v = (arr[i] | 0) | 0;
+            h ^= v & 0xff;
+            h = Math.imul(h, 0x01000193);
+            h ^= (v >>> 8) & 0xff;
+            h = Math.imul(h, 0x01000193);
+            h ^= (v >>> 16) & 0xff;
+            h = Math.imul(h, 0x01000193);
+            h ^= (v >>> 24) & 0xff;
+            h = Math.imul(h, 0x01000193);
         }
-        return h;
+        // 加上长度以区分前缀相同的数组
+        h ^= arr.length;
+        h = Math.imul(h, 0x01000193);
+        return h | 0;
     }
 
     /**

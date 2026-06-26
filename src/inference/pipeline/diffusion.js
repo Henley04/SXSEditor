@@ -49,12 +49,21 @@ class Diffusion {
      */
     async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false) {
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
+        // 条件分支 mask：所有帧均有效（含 prompt）
         const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
-        const targetMask = new Float32Array(totalFrames).fill(1);
+        // 非条件分支 mask：prompt 段为 0，target 段为 1。
+        // 关键：uncond 推理 seq_len 必须与 cond 一致（=totalFramesWithPrompt），
+        // 否则基于 Transformer 的 diff_step 会对同一目标帧产生不同位置编码，
+        // 导致 DML 与 WebNN 路径输出系统性偏差。
+        const uncondMask = new Float32Array(totalFramesWithPrompt);
+        uncondMask.fill(0, 0, ptFrameCount);
+        uncondMask.fill(1, ptFrameCount, totalFramesWithPrompt);
 
         const xtInputBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
-        const xtTargetBuf = new Float32Array(totalFrames * MEL_DIM);
-        const uncondCondBuf = new Float32Array(totalFrames * COND_DIM);
+        // uncond 输入：prompt 段为 0，target 段为 xt（与 cond 共享 seq_len 与位置编码）
+        const xtUncondBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
+        // 非条件 cond：全零（与 WebNN 路径一致）
+        const uncondCondBuf = new Float32Array(totalFramesWithPrompt * COND_DIM);
         const cfgPredBuf = new Float32Array(totalFrames * MEL_DIM);
 
         const dt = 1.0 / totalSteps;
@@ -71,21 +80,20 @@ class Diffusion {
             const predData = await this.runDiffStep(sessions, xtInputBuf, tVal, combinedCond, frameMask, totalFramesWithPrompt, isFP16, useStaticShapes);
 
             if (cfgStrength > 0) {
-                for (let i = 0; i < totalFrames * MEL_DIM; i++) {
-                    xtTargetBuf[i] = xt.data[i];
-                }
+                // 构造 uncond 输入：prompt 段保持 0，target 段填入当前 xt
+                xtUncondBuf.set(xt.data, ptFrameCount * MEL_DIM);
 
-                const uncondPred = await this.runDiffStep(sessions, xtTargetBuf, tVal, uncondCondBuf, targetMask, totalFrames, isFP16, useStaticShapes);
+                const uncondPred = await this.runDiffStep(sessions, xtUncondBuf, tVal, uncondCondBuf, uncondMask, totalFramesWithPrompt, isFP16, useStaticShapes);
 
                 const targetLen = totalFrames * MEL_DIM;
-                // Single pass: compute conditional mean, CFG prediction, and CFG mean
+                // Pass 1: 计算 cond/uncond 均值 + CFG 预测 + 写 cfgPredBuf
                 let posSum = 0;
                 let cfgAdjSum = 0;
                 for (let f = 0; f < totalFrames; f++) {
                     const tgtOffset = (ptFrameCount + f) * MEL_DIM;
                     for (let d = 0; d < MEL_DIM; d++) {
                         const condVal = predData[tgtOffset + d];
-                        const uncondVal = uncondPred[f * MEL_DIM + d];
+                        const uncondVal = uncondPred[tgtOffset + d];
                         posSum += condVal;
                         const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
                         cfgPredBuf[f * MEL_DIM + d] = cfgVal;
@@ -95,7 +103,7 @@ class Diffusion {
                 const posMean = posSum / targetLen;
                 const cfgAdjMean = cfgAdjSum / targetLen;
 
-                // Second pass: compute variances
+                // Pass 2: 计算方差 + 应用 rescale + 更新 xt（与 WebNN 路径一致合并）
                 let posVarSum = 0;
                 let cfgAdjVarSum = 0;
                 for (let f = 0; f < totalFrames; f++) {
@@ -113,7 +121,6 @@ class Diffusion {
                 const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
                 const rescale = posStd / (cfgAdjStd + 1e-8);
 
-                // Third pass: apply rescaled CFG
                 for (let f = 0; f < totalFrames; f++) {
                     for (let d = 0; d < MEL_DIM; d++) {
                         const cfgVal = cfgPredBuf[f * MEL_DIM + d];
@@ -132,7 +139,11 @@ class Diffusion {
 
             const currentProgress = progressStart + (step + 1) * progressPerStep;
             onProgress(Math.min(Math.round(currentProgress), 90));
-            await new Promise(r => setTimeout(r, 0));
+            // 降低 yield 频率：每 4 步 yield 一次，减少 setTimeout 累计开销
+            // setImmediate 比 setTimeout(0) 快约 4 倍（Windows ~1ms vs ~4ms）
+            if (step % 4 === 3) {
+                await new Promise(r => setImmediate(r));
+            }
         }
     }
 

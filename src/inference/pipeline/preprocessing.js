@@ -399,29 +399,29 @@ class Preprocessing {
         const encType = useStaticShapes ? padInt64(typeIds, encSeqLen) : typeIds;
         const encF0 = useStaticShapes ? padInt64(f0IdsArr, encF0Len) : f0IdsArr;
 
+        // 4 个编码器并行执行（与 WebNN 路径一致），减少串行 JS 调度开销
         const textInput = new ort.Tensor('int64', encText, [1, encSeqLen]);
-        const textResults = await sessions.noteTextEncoder.run({ input_ids: textInput });
-        const textEmb = useStaticShapes ? outputToFloat32(textResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(textResults['embeddings']);
-
         const pitchInput = new ort.Tensor('int64', encPitch, [1, encSeqLen]);
-        const pitchResults = await sessions.notePitchEncoder.run({ input_ids: pitchInput });
-        const pitchEmb = useStaticShapes ? outputToFloat32(pitchResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(pitchResults['embeddings']);
-
         const typeInput = new ort.Tensor('int64', encType, [1, encSeqLen]);
-        const typeResults = await sessions.noteTypeEncoder.run({ input_ids: typeInput });
-        const typeEmb = useStaticShapes ? outputToFloat32(typeResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(typeResults['embeddings']);
-
         const f0Input = new ort.Tensor('int64', encF0, [1, encF0Len]);
-        const f0Results = await sessions.f0Encoder.run({ input_ids: f0Input });
+
+        const [textResults, pitchResults, typeResults, f0Results] = await Promise.all([
+            sessions.noteTextEncoder.run({ input_ids: textInput }),
+            sessions.notePitchEncoder.run({ input_ids: pitchInput }),
+            sessions.noteTypeEncoder.run({ input_ids: typeInput }),
+            sessions.f0Encoder.run({ input_ids: f0Input }),
+        ]);
+
+        const textEmb = useStaticShapes ? outputToFloat32(textResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(textResults['embeddings']);
+        const pitchEmb = useStaticShapes ? outputToFloat32(pitchResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(pitchResults['embeddings']);
+        const typeEmb = useStaticShapes ? outputToFloat32(typeResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(typeResults['embeddings']);
         const f0Emb = useStaticShapes ? outputToFloat32(f0Results['embeddings']).subarray(0, totalFrames * EMBED_DIM) : outputToFloat32(f0Results['embeddings']);
 
         const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
         for (let t = 0; t < tokenCount; t++) {
+            const tBase = t * EMBED_DIM;
             for (let d = 0; d < EMBED_DIM; d++) {
-                tokenEmb[t * EMBED_DIM + d] =
-                    textEmb[t * EMBED_DIM + d] +
-                    pitchEmb[t * EMBED_DIM + d] +
-                    typeEmb[t * EMBED_DIM + d];
+                tokenEmb[tBase + d] = textEmb[tBase + d] + pitchEmb[tBase + d] + typeEmb[tBase + d];
             }
         }
 
@@ -432,30 +432,32 @@ class Preprocessing {
         const preflowResults = await sessions.preflow.run({ features: featuresTensor });
         const processedTokenEmb = useStaticShapes ? outputToFloat32(preflowResults['processed_features']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(preflowResults['processed_features']);
 
+        // 用 subarray.set 替代元素级循环，走 native memcpy（每帧 EMBED_DIM=512 维拷贝）
         const mel2token = sequences.mel2token;
         const expandedEmb = new Float32Array(totalFrames * EMBED_DIM);
         for (let f = 0; f < totalFrames; f++) {
             const tokenIdx = mel2token[f];
-            for (let d = 0; d < EMBED_DIM; d++) {
-                expandedEmb[f * EMBED_DIM + d] = processedTokenEmb[tokenIdx * EMBED_DIM + d];
-            }
+            expandedEmb.set(
+                processedTokenEmb.subarray(tokenIdx * EMBED_DIM, (tokenIdx + 1) * EMBED_DIM),
+                f * EMBED_DIM
+            );
         }
 
         const combinedFeatures = new Float32Array(totalFrames * EMBED_DIM);
         for (let f = 0; f < totalFrames; f++) {
+            const fBase = f * EMBED_DIM;
             for (let d = 0; d < EMBED_DIM; d++) {
-                combinedFeatures[f * EMBED_DIM + d] =
-                    expandedEmb[f * EMBED_DIM + d] +
-                    f0Emb[f * EMBED_DIM + d];
+                combinedFeatures[fBase + d] = expandedEmb[fBase + d] + f0Emb[fBase + d];
             }
         }
 
         const totalCondFrames = ptFrameCount > 0 ? ptFrameCount + totalFrames : totalFrames;
         const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
-        for (let f = 0; f < totalFrames; f++) {
-            for (let d = 0; d < EMBED_DIM; d++) {
-                condCodeData[(ptFrameCount + f) * EMBED_DIM + d] = combinedFeatures[f * EMBED_DIM + d];
-            }
+        // 单次 set 完成整段拷贝（源/目的连续），替代元素级双重循环
+        if (ptFrameCount === 0) {
+            condCodeData.set(combinedFeatures);
+        } else {
+            condCodeData.set(combinedFeatures, ptFrameCount * EMBED_DIM);
         }
 
         const condSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalCondFrames;
