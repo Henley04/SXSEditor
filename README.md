@@ -56,6 +56,7 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | Neural SVS | SoulX-Singer diffusion model via ONNX Runtime |
 | Singer Creator | Custom voices from reference WAV audio |
 | Audio Preprocessing | RMVPE F0 extraction, Basic Pitch MIDI extraction |
+| SVS Pipeline | CFG rescale, DML/WebNN path parity, LRU synth cache, parallel encoders + chunked vocoder |
 | Audio to MIDI | Convert audio files to MIDI notes |
 | MIDI Import | Import standard MIDI files |
 | Multi-track Timeline | Drag-anddrop fragment arrangement |
@@ -138,6 +139,7 @@ macOS / Linux 用户请从源码构建。
 | 神经歌声合成 | SoulX-Singer 扩散模型 + ONNX Runtime |
 | 歌手创建器 | 从参考 WAV 音频创建自定义声音 |
 | 音频预处理 | RMVPE F0 提取、Basic Pitch MIDI 提取 |
+| SVS 推理管线 | CFG rescale、DML/WebNN 路径一致性、LRU 合成缓存、编码器并行 + Vocoder 分块批量化 |
 | 音频转 MIDI | 从音频文件提取 MIDI 音符 |
 | MIDI 导入 | 导入标准 MIDI 文件 |
 | 多轨时间线 | 拖拽排列分片 |
@@ -216,6 +218,7 @@ macOS / Linux：ソースからビルドしてください。
 | ニューラル SVS | SoulX-Singer 拡散モデル + ONNX Runtime |
 | 歌手作成 | 参照 WAV 音声からカスタムボイス作成 |
 | 音声前処理 | RMVPE F0 抽出、Basic Pitch MIDI 抽出 |
+| SVS 推論パイプライン | CFG rescale、DML/WebNN パリティ、LRU 合成キャッシュ、エンコーダ並列 + Vocoder チャンクバッチ |
 | オーディオ→MIDI | 音声ファイルから MIDI ノート抽出 |
 | MIDI インポート | 標準 MIDI ファイルのインポート |
 | マルチトラックタイムライン | ドラッグ＆ドロップでフラグメント配置 |
