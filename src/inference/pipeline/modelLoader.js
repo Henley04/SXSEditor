@@ -47,6 +47,11 @@ const DUMMY_TEST_INPUTS_FP32 = {
         xt_mask: new ort.Tensor('float32', new Float32Array([1, 1, 1]), [1, 3]),
     },
     vocoder: { mel: new ort.Tensor('float32', new Float32Array(3 * MEL_DIM), [1, 3, MEL_DIM]) },
+    // SiFiGAN 双输入验证：mel + f0（sessionKey 仍为 'vocoder'，通过 overrideDummyInputs 传入）
+    sifigan: {
+        mel: new ort.Tensor('float32', new Float32Array(3 * MEL_DIM), [1, 3, MEL_DIM]),
+        f0: new ort.Tensor('float32', new Float32Array(3), [1, 3, 1]),
+    },
     melTransform: { waveform: new ort.Tensor('float32', new Float32Array(HOP_SIZE * 3), [1, HOP_SIZE * 3]) },
 };
 
@@ -64,6 +69,11 @@ const DUMMY_TEST_INPUTS_FP16 = {
         xt_mask: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array([1, 1, 1])), [1, 3]),
     },
     vocoder: { mel: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * MEL_DIM)), [1, 3, MEL_DIM]) },
+    // SiFiGAN 双输入验证（FP16）
+    sifigan: {
+        mel: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * MEL_DIM)), [1, 3, MEL_DIM]),
+        f0: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3)), [1, 3, 1]),
+    },
     melTransform: { waveform: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(HOP_SIZE * 3)), [1, HOP_SIZE * 3]) },
 };
 
@@ -463,11 +473,12 @@ async function detectBestDevice(modelDir, npuAvailable = false) {
     };
 }
 
-async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false) {
+async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null) {
     const modelName = path.basename(modelPath);
-    const dummyInputs = useStaticShapes
+    // overrideDummyInputs: 调用方可传入自定义 dummy 输入（如 SiFiGAN 双输入 mel+f0），为 null 时走原有查找逻辑
+    const dummyInputs = overrideDummyInputs || (useStaticShapes
         ? DUMMY_TEST_INPUTS_NPU[sessionKey]
-        : (isFP16 ? DUMMY_TEST_INPUTS_FP16[sessionKey] : DUMMY_TEST_INPUTS_FP32[sessionKey]);
+        : (isFP16 ? DUMMY_TEST_INPUTS_FP16[sessionKey] : DUMMY_TEST_INPUTS_FP32[sessionKey]));
     const gpuTag = gpuDeviceName ? ` [${gpuDeviceName}]` : '';
 
     if (!dummyInputs) {

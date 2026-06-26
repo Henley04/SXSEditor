@@ -44,10 +44,10 @@
 - [ ] `src/main/modelDownload.js` IPC 处理支持 `sifigan-vocoder` 组的下载/卸载/状态查询
 
 ## SVS Pipeline 集成
-- [ ] `_loadModelsPartitioned` 根据 `vocoderType` 加载对应模型文件
-- [ ] 加载 SiFiGAN 时 sessionKey 为 `vocoder`，保持管线其余代码不变
-- [ ] 复用 `createSessionWithValidation`，EP 配置 `[dml, cpu]`
-- [ ] NPU 路径下 SiFiGAN 走 DML（不走 WebNN）
+- [x] `_loadModelsPartitioned` 根据 `vocoderType` 加载对应模型文件
+- [x] 加载 SiFiGAN 时 sessionKey 为 `vocoder`，保持管线其余代码不变
+- [x] 复用 `createSessionWithValidation`，EP 配置 `[dml, cpu]`
+- [x] NPU 路径下 SiFiGAN 走 DML（不走 WebNN）
 - [ ] `postprocessing.js` 根据 `vocoderType` 构造输入张量字典（`{mel}` 或 `{mel, f0}`）
 - [ ] F0 序列从 `f0_encoder` 输出取并重采样到 mel 帧率
 - [ ] F0 缺失时记录错误并回退到默认 vocoder
