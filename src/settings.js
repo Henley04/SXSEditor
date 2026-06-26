@@ -699,7 +699,9 @@ exportCfgRescaleSlider.addEventListener('input', () => {
 languageSelect.addEventListener('change', () => applySettings({ reloadLocale: true }));
 modelPrecisionSelect.addEventListener('change', async () => {
     updateBatchSizeState(modelPrecisionSelect.value);
-    applySettings();
+    await applySettings(); // 等待保存 + pipeline 重置完成再刷新硬件显示
+    // pipeline 已被重置，刷新"当前运行硬件"显示让用户确认精度切换生效
+    updateCurrentHardwareDisplay(null, cachedDevices, collectSettings());
     // Check if models exist for the new precision, auto-open download if not
     try {
         const modelStatus = await window.electronAPI.checkModels();
