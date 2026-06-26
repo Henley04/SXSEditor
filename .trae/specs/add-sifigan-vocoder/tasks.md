@@ -51,11 +51,11 @@
 
 ## Phase 5: SVS Pipeline 双 Vocoder 路径集成
 
-- [ ] Task 7: Pipeline 模型加载分支
-  - [ ] SubTask 7.1: 在 `src/inference/pipeline/index.js` 的 `_loadModelsPartitioned` 中读取 settings 的 `vocoderType`
-  - [ ] SubTask 7.2: 若为 `sifigan`，加载 `sifigan_vocoder_dml.onnx`，sessionKey 仍为 `vocoder`（保持管线其余代码不变）
-  - [ ] SubTask 7.3: 复用 `createSessionWithValidation`，传入 SiFiGAN 的 dummy 输入（mel + f0）
-  - [ ] SubTask 7.4: NPU 路径下 SiFiGAN 也走 DML（跳过 WebNN，与默认 vocoder 行为一致）
+- [x] Task 7: Pipeline 模型加载分支（已完成：双 vocoder 加载分支 + SiFiGAN dummy 输入 + 三处失败回退默认 vocoder）
+  - [x] SubTask 7.1: 在 `src/inference/pipeline/index.js` 的 `_loadModelsPartitioned` 中读取 settings 的 `vocoderType`
+  - [x] SubTask 7.2: 若为 `sifigan`，加载 `sifigan_vocoder_dml.onnx`，sessionKey 仍为 `vocoder`（保持管线其余代码不变）
+  - [x] SubTask 7.3: 复用 `createSessionWithValidation`，传入 SiFiGAN 的 dummy 输入（mel + f0）
+  - [x] SubTask 7.4: NPU 路径下 SiFiGAN 也走 DML（跳过 WebNN，与默认 vocoder 行为一致）
 - [ ] Task 8: Pipeline 推理输入对齐
   - [ ] SubTask 8.1: 在 `src/inference/pipeline/postprocessing.js` 的 vocoder 调用处，根据 `vocoderType` 构造输入张量字典（`{mel}` 或 `{mel, f0}`）
   - [ ] SubTask 8.2: 从 `f0_encoder` 输出取 F0 序列，重采样到 mel 帧率（HOP_SIZE=480, SAMPLE_RATE=24000, 帧率=50Hz）

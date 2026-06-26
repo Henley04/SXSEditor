@@ -5,7 +5,7 @@ const fs = require('node:fs');
 require('./float16Patch');
 
 const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES } = require('./constants');
-const { getMainWindowWebContents, classifyDevice, isDiscreteGPUByName, enumerateDMLDevices, detectBestGPU, detectBestDevice, selectBestDevice, buildModelDeviceMapping, createSessionWithValidation, WebNNSessionProxy } = require('./modelLoader');
+const { getMainWindowWebContents, classifyDevice, isDiscreteGPUByName, enumerateDMLDevices, detectBestGPU, detectBestDevice, selectBestDevice, buildModelDeviceMapping, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
@@ -196,6 +196,61 @@ class OnnxSVSPipeline {
             if (fs.existsSync(fallbackPath)) return fallbackPath;
         } catch (_) {}
         return null;
+    }
+
+    /**
+     * 解析默认 vocoder 文件名（vocoder_dml.onnx 优先，缺失时回退 vocoder.onnx）。
+     * SiFiGAN 加载失败时用于回退到默认 vocoder。
+     * @returns {Promise<string>} 默认 vocoder 文件名
+     */
+    async _resolveDefaultVocoderFile() {
+        try {
+            await fs.promises.access(path.join(this.modelDir, 'vocoder_dml.onnx'));
+            return 'vocoder_dml.onnx';
+        } catch (_) {
+            return 'vocoder.onnx';
+        }
+    }
+
+    /**
+     * 判断当前解析的 vocoder 文件是否为 SiFiGAN 变体（用于决定是否传双输入 dummy）。
+     * @param {string} vocFile - vocoder 文件名
+     * @returns {boolean}
+     */
+    _isSifiganVocoder(vocFile) {
+        return typeof vocFile === 'string' && vocFile.startsWith('sifigan_');
+    }
+
+    /**
+     * 获取 SiFiGAN 的验证用 dummy 输入（mel + f0 双输入）。
+     * sessionKey 在管线中仍为 'vocoder'，故需通过 overrideDummyInputs 传入。
+     * @returns {object} SiFiGAN dummy inputs（FP16 或 FP32）
+     */
+    _getSifiganDummyInputs() {
+        return this.isFP16 ? DUMMY_TEST_INPUTS_FP16.sifigan : DUMMY_TEST_INPUTS_FP32.sifigan;
+    }
+
+    /**
+     * SiFiGAN 加载失败时回退到默认 vocoder（供 loadModel 复用）。
+     * 解析默认 vocoder 文件 → 更新 _resolvedVocoderFile → 通过 createSessionWithValidation 加载。
+     * @param {string} sessionKey - 会话键（应为 'vocoder'）
+     * @returns {Promise<{success: boolean, ep?: string, error?: string}>}
+     */
+    async _loadDefaultVocoderAsFallback(sessionKey) {
+        const defVocFile = await this._resolveDefaultVocoderFile();
+        this._resolvedVocoderFile = defVocFile;
+        const defVocPath = this._getModelPath(defVocFile);
+        try {
+            const { session, ep } = await createSessionWithValidation(
+                defVocPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes
+            );
+            this.sessions[sessionKey] = session;
+            this.sessionEPs[sessionKey] = ep;
+            console.log(`[OnnxSVSPipeline] Default vocoder loaded as SiFiGAN fallback [${ep}]`);
+            return { success: true, ep };
+        } catch (defErr) {
+            return { success: false, error: `SiFiGAN fallback 也失败: ${defErr.message}` };
+        }
     }
 
     // Delegate text processing methods
@@ -556,36 +611,54 @@ class OnnxSVSPipeline {
                 // 跳过 DML 验证推理，避免 GPU 显存压力导致已加载的 WebNN 会话失效
                 {
                     const vocoderModelFile = webnnModelFiles[vocoderIdx];
-                    const vocoderPath = path.join(this.modelDir, vocoderModelFile);
+                    const isSifiganVoc = this._isSifiganVocoder(vocoderModelFile);
                     console.log(`[OnnxSVSPipeline] Loading vocoder via DML (skip validation): ${vocoderModelFile}`);
-                    try {
+
+                    // 局部辅助：DML 优先、失败回退 CPU 加载 vocoder（跳过验证推理）
+                    const loadVocDmlOrCpu = async (vocFile) => {
                         const ort = require('onnxruntime-node');
+                        const vocPath = path.join(this.modelDir, vocFile);
                         const dmlOpts = typeof this.dmlDeviceId === 'number'
                             ? { name: 'dml', deviceId: this.dmlDeviceId }
                             : 'dml';
-                        const session = await ort.InferenceSession.create(vocoderPath, {
-                            executionProviders: [dmlOpts, 'cpu'],
-                        });
-                        this.sessions['vocoder'] = session;
-                        this.sessionEPs['vocoder'] = 'dml';
-                        await this._detectVocoderPrecision(session, vocoderPath);
-                        loadedSessions.push('vocoder');
-                        console.log(`[OnnxSVSPipeline] ${vocoderModelFile} loaded via DML (no validation)`);
-                    } catch (vocErr) {
-                        // DML 加载失败，回退到 CPU
-                        console.warn(`[OnnxSVSPipeline] Vocoder DML load failed, falling back to CPU: ${vocErr.message}`);
                         try {
-                            const ort = require('onnxruntime-node');
-                            const session = await ort.InferenceSession.create(vocoderPath, {
+                            const session = await ort.InferenceSession.create(vocPath, {
+                                executionProviders: [dmlOpts, 'cpu'],
+                            });
+                            return { session, ep: 'dml', vocFile };
+                        } catch (vocErr) {
+                            console.warn(`[OnnxSVSPipeline] Vocoder DML load failed (${vocFile}), falling back to CPU: ${vocErr.message}`);
+                            const session = await ort.InferenceSession.create(vocPath, {
                                 executionProviders: ['cpu'],
                             });
+                            return { session, ep: 'cpu', vocFile };
+                        }
+                    };
+
+                    try {
+                        const { session, ep, vocFile } = await loadVocDmlOrCpu(vocoderModelFile);
+                        this.sessions['vocoder'] = session;
+                        this.sessionEPs['vocoder'] = ep;
+                        await this._detectVocoderPrecision(session, path.join(this.modelDir, vocFile));
+                        loadedSessions.push('vocoder');
+                        console.log(`[OnnxSVSPipeline] ${vocFile} loaded via ${ep.toUpperCase()} (no validation)`);
+                    } catch (vocErr) {
+                        // SiFiGAN 加载失败（DML+CPU） → 回退默认 vocoder
+                        if (!isSifiganVoc) {
+                            throw new Error(`Vocoder 加载失败: ${vocErr.message}`);
+                        }
+                        console.warn(`[OnnxSVSPipeline] SiFiGAN vocoder load failed on DML/CPU, falling back to default vocoder: ${vocErr.message.substring(0, 80)}`);
+                        const defVocFile = await this._resolveDefaultVocoderFile();
+                        this._resolvedVocoderFile = defVocFile;
+                        try {
+                            const { session, ep, vocFile } = await loadVocDmlOrCpu(defVocFile);
                             this.sessions['vocoder'] = session;
-                            this.sessionEPs['vocoder'] = 'cpu';
-                            await this._detectVocoderPrecision(session, vocoderPath);
+                            this.sessionEPs['vocoder'] = ep;
+                            await this._detectVocoderPrecision(session, path.join(this.modelDir, vocFile));
                             loadedSessions.push('vocoder');
-                            console.log(`[OnnxSVSPipeline] ${vocoderModelFile} loaded via CPU (fallback)`);
-                        } catch (cpuErr) {
-                            throw new Error(`Vocoder 加载失败: ${cpuErr.message}`);
+                            console.log(`[OnnxSVSPipeline] ${vocFile} loaded via ${ep.toUpperCase()} (SiFiGAN fallback, no validation)`);
+                        } catch (defErr) {
+                            throw new Error(`Vocoder 加载失败 (SiFiGAN fallback 也失败): ${defErr.message}`);
                         }
                     }
                 }
@@ -685,19 +758,36 @@ class OnnxSVSPipeline {
         }
 
         const loadOne = async (i) => {
-            const modelPath = this._getModelPath(resolvedModelFiles[i]);
+            const modelFile = resolvedModelFiles[i];
+            const modelPath = this._getModelPath(modelFile);
+            // SiFiGAN 双输入 dummy（sessionKey 仍为 'vocoder'，通过 overrideDummyInputs 传入 mel+f0）
+            const isSifigan = this._isSifiganVocoder(modelFile);
+            const sifiganDummy = isSifigan ? this._getSifiganDummyInputs() : null;
             try {
-                const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes);
+                const { session, ep } = await createSessionWithValidation(modelPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes, sifiganDummy);
                 this.sessions[sessionKeys[i]] = session;
                 this.sessionEPs[sessionKeys[i]] = ep;
             } catch (loadErr) {
-                const fallbackPath = this._getNpuFallbackPath(resolvedModelFiles[i]);
-                if (fallbackPath) {
-                    console.warn(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} NPU load failed, trying fallback: ${loadErr.message.substring(0, 80)}`);
-                    const { session, ep } = await createSessionWithValidation(fallbackPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false);
+                // SiFiGAN 加载失败 → 回退默认 vocoder（vocoder_dml.onnx → vocoder.onnx）
+                if (isSifigan) {
+                    console.warn(`[OnnxSVSPipeline] SiFiGAN vocoder load failed, falling back to default vocoder: ${loadErr.message.substring(0, 80)}`);
+                    const defVocFile = await this._resolveDefaultVocoderFile();
+                    this._resolvedVocoderFile = defVocFile;
+                    const defVocPath = this._getModelPath(defVocFile);
+                    const { session, ep } = await createSessionWithValidation(defVocPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes);
                     this.sessions[sessionKeys[i]] = session;
                     this.sessionEPs[sessionKeys[i]] = ep;
-                    console.log(`[OnnxSVSPipeline] ${resolvedModelFiles[i]} loaded from fallback [${ep}]`);
+                    console.log(`[OnnxSVSPipeline] Default vocoder loaded as SiFiGAN fallback [${ep}]`);
+                    loadedSessions.push(sessionKeys[i]);
+                    return;
+                }
+                const fallbackPath = this._getNpuFallbackPath(modelFile);
+                if (fallbackPath) {
+                    console.warn(`[OnnxSVSPipeline] ${modelFile} NPU load failed, trying fallback: ${loadErr.message.substring(0, 80)}`);
+                    const { session, ep } = await createSessionWithValidation(fallbackPath, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false, sifiganDummy);
+                    this.sessions[sessionKeys[i]] = session;
+                    this.sessionEPs[sessionKeys[i]] = ep;
+                    console.log(`[OnnxSVSPipeline] ${modelFile} loaded from fallback [${ep}]`);
                 } else {
                     throw loadErr;
                 }
@@ -1417,9 +1507,12 @@ class OnnxSVSPipeline {
             return { success: false, error: `Model file not found: ${resolvedFile}` };
         }
 
+        // SiFiGAN 双输入 dummy（sessionKey 仍为 'vocoder'，通过 overrideDummyInputs 传入 mel+f0）
+        const isSifigan = this._isSifiganVocoder(resolvedFile);
+        const sifiganDummy = isSifigan ? this._getSifiganDummyInputs() : null;
         try {
             const { session, ep } = await createSessionWithValidation(
-                modelPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes
+                modelPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes, sifiganDummy
             );
             this.sessions[sessionKey] = session;
             this.sessionEPs[sessionKey] = ep;
@@ -1431,15 +1524,25 @@ class OnnxSVSPipeline {
                 console.warn(`[OnnxSVSPipeline] ${resolvedFile} NPU load failed, trying fallback: ${err.message.substring(0, 80)}`);
                 try {
                     const { session, ep } = await createSessionWithValidation(
-                        fallbackPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false
+                        fallbackPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false, sifiganDummy
                     );
                     this.sessions[sessionKey] = session;
                     this.sessionEPs[sessionKey] = ep;
                     console.log(`[OnnxSVSPipeline] Model ${sessionKey} loaded from fallback [${ep}]`);
                     return { success: true, ep };
                 } catch (fbErr) {
+                    // NPU fallback 也失败 — SiFiGAN 回退默认 vocoder
+                    if (isSifigan) {
+                        console.warn(`[OnnxSVSPipeline] SiFiGAN vocoder load failed (NPU fallback too), falling back to default vocoder: ${fbErr.message.substring(0, 80)}`);
+                        return await this._loadDefaultVocoderAsFallback(sessionKey);
+                    }
                     return { success: false, error: fbErr.message };
                 }
+            }
+            // 无 NPU fallback — SiFiGAN 回退默认 vocoder
+            if (isSifigan) {
+                console.warn(`[OnnxSVSPipeline] SiFiGAN vocoder load failed, falling back to default vocoder: ${err.message.substring(0, 80)}`);
+                return await this._loadDefaultVocoderAsFallback(sessionKey);
             }
             return { success: false, error: err.message };
         }
