@@ -35,10 +35,19 @@ const ONNX_MODEL_FILES = [
     'mel_transform.onnx',
 ];
 
+// SiFiGAN 可选替代声码器模型文件
+const SIFIGAN_MODEL_FILES = [
+    'sifigan_vocoder_dml.onnx',
+];
+
+// SiFiGAN 输入特征归一化统计文件
+const SIFIGAN_STATS_FILE = 'sifigan_stats.joblib';
+
 // Model大小定义（字节，FP16 版本）
 const MODEL_SIZES = {
     diff_step: 846.27 * 1024 * 1024,
     vocoder: 495.42 * 1024 * 1024,
+    sifigan: 611.42 * 1024 * 1024,
     note_text_encoder: 2.93 * 1024 * 1024,
     note_pitch_encoder: 0.13 * 1024 * 1024,
     note_type_encoder: 0.13 * 1024 * 1024,
@@ -112,6 +121,8 @@ module.exports = {
     SEGMENT_OVERLAP_SEC,
     MAX_SAFE_FRAMES,
     ONNX_MODEL_FILES,
+    SIFIGAN_MODEL_FILES,
+    SIFIGAN_STATS_FILE,
     MODEL_SIZES,
     MODEL_GROUPS,
     TWIDDLE_REAL,

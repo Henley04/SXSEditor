@@ -97,6 +97,27 @@ const MODEL_GROUPS = [
     ],
   },
   {
+    id: 'sifigan-vocoder',
+    name: 'SiFiGAN Vocoder',
+    nameEn: 'SiFiGAN Vocoder',
+    description: '可选替代声码器，基于 Source-Filter HiFi-GAN，支持音高可控',
+    descriptionEn: 'Optional alternative vocoder based on Source-Filter HiFi-GAN with pitch controllability',
+    required: false,
+    optional: true,
+    pipelineRef: 'svsPipeline',
+    models: [
+      {
+        id: 'sifiganVocoder',
+        name: 'SiFiGAN 声码器',
+        nameEn: 'SiFiGAN Vocoder',
+        description: '可选替代声码器，基于 Source-Filter HiFi-GAN，支持音高可控',
+        descriptionEn: 'Optional alternative vocoder based on Source-Filter HiFi-GAN with pitch controllability',
+        files: ['sifigan_vocoder_dml.onnx', 'sifigan_stats.joblib'],
+        sessionKey: 'sifigan',
+      },
+    ],
+  },
+  {
     id: 'rmvpe',
     name: 'RMVPE 音高检测',
     nameEn: 'RMVPE Pitch Detection',

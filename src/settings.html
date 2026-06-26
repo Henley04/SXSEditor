@@ -176,6 +176,14 @@
             <div class="settings-section hidden" id="section-npu">
                 <p class="section-desc" data-i18n="settings.npuInferenceDesc">NPU (WebNN) 推理的批处理设置。增大 batch size 可提高 NPU 利用率，但会增加显存占用。</p>
                 <div class="setting-group">
+                    <label for="vocoderType">Vocoder 类型</label>
+                    <select id="vocoderType">
+                        <option value="default">默认 Vocoder（vocoder_dml.onnx）</option>
+                        <option value="sifigan" disabled>SiFiGAN（未下载）</option>
+                    </select>
+                    <p class="hint" id="vocoderTypeHint"></p>
+                </div>
+                <div class="setting-group">
                     <label for="npuDiffBatchSize" data-i18n="settings.npuDiffBatchSize">扩散批次大小</label>
                     <select id="npuDiffBatchSize">
                         <option value="1">1 (单片段)</option>

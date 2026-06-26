@@ -61,6 +61,27 @@ function loadSettings() {
     }
   }
 
+  // Vocoder type default + startup fallback:
+  // If stored value is 'sifigan' but the model file is missing, temporarily fall
+  // back to 'default' for this run (settings.json is NOT modified).
+  if (typeof _settingsCache.vocoderType !== 'string') {
+    _settingsCache.vocoderType = 'default';
+  } else if (_settingsCache.vocoderType === 'sifigan') {
+    try {
+      const { getModelDir } = require('./modelDir');
+      const modelDir = getModelDir();
+      const sifiganOnnx = path.join(modelDir, 'sifigan_vocoder_dml.onnx');
+      const sifiganFallback = path.join(modelDir, 'sifigan_vocoder.onnx');
+      if (!fs.existsSync(sifiganOnnx) && !fs.existsSync(sifiganFallback)) {
+        console.warn('[Main] vocoderType=sifigan 但未找到 sifigan_vocoder_dml.onnx / sifigan_vocoder.onnx，本次运行回退到 default');
+        _settingsCache.vocoderType = 'default';
+      }
+    } catch (err) {
+      console.warn('[Main] 检测 SiFiGAN 模型文件失败，回退到 default:', err.message);
+      _settingsCache.vocoderType = 'default';
+    }
+  }
+
   return _settingsCache;
 }
 
@@ -87,6 +108,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
   'npuDiffBatchSize', 'npuVocoderBatchSize',
+  'vocoderType',
 ];
 
 async function updateLocaleSetting(locale) {
