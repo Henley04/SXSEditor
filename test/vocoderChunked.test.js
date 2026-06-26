@@ -62,13 +62,29 @@ describe('Postprocessing.runVocoderChunked - 分块循环终止回归测试', ()
     expect(out.length).to.equal(totalFrames * HOP_SIZE);
   });
 
-  it('totalFrames = 2 * chunkSize（整除情形，2 个 chunk）', async () => {
+  it('totalFrames = 2 * chunkSize（步长 1000 不整除 2016，3 个 chunk）', async () => {
     const totalFrames = VOCODER_CHUNK_FRAMES * 2; // 2016
     const melData = new Float32Array(totalFrames * MEL_DIM);
     const out = await pp.runVocoderChunked(
       makeSessions(), melData, totalFrames, false, false, 'default', null, false
     );
-    // chunk 0: [0, 1008) framePos→1008；chunk 1: [1000, 2008) isLast→break
+    // chunk 推进步长 = chunkSize - overlap = 1000（非 1008），2016 不能被 1000 整除：
+    // chunk 0: [0, 1008)    framePos→1008
+    // chunk 1: [1000, 2008) framePos→2008（2008 < 2016，非末尾）
+    // chunk 2: [2000, 2016) isLast→break
+    expect(runCalls).to.have.lengthOf(3);
+    expect(out.length).to.equal(totalFrames * HOP_SIZE);
+  });
+
+  it('totalFrames = chunkSize + step（步长整除情形，2 个 chunk）', async () => {
+    // T = 1008 + 1000 = 2008，使 (T - 1008) 正好被 step=1000 整除
+    const totalFrames = VOCODER_CHUNK_FRAMES + (VOCODER_CHUNK_FRAMES - VOCODER_OVERLAP_FRAMES); // 2008
+    const melData = new Float32Array(totalFrames * MEL_DIM);
+    const out = await pp.runVocoderChunked(
+      makeSessions(), melData, totalFrames, false, false, 'default', null, false
+    );
+    // chunk 0: [0, 1008)    framePos→1008
+    // chunk 1: [1000, 2008) chunkEnd=2008>=2008 isLast→break
     expect(runCalls).to.have.lengthOf(2);
     expect(out.length).to.equal(totalFrames * HOP_SIZE);
   });
