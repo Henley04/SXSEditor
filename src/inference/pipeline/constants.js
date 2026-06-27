@@ -1,8 +1,17 @@
-const SAMPLE_RATE = 24000;
-const HOP_SIZE = 480;
-const MEL_DIM = 128;
-const EMBED_DIM = 512;
-const COND_DIM = 1024;
+// 共享维度/NPU 形状常量从 shared/constants.js 引入，避免与 webnn 模块重复定义
+const {
+    SAMPLE_RATE,
+    HOP_SIZE,
+    MEL_DIM,
+    EMBED_DIM,
+    COND_DIM,
+    VOCODER_CHUNK_FRAMES,
+    VOCODER_OVERLAP_FRAMES,
+    NPU_STATIC_SEQ_LEN,
+    NPU_VOCODER_SEQ_LEN,
+} = require('../shared/constants.js');
+
+// pipeline 专属常量
 const N_FFT = 1920;
 const NUM_MELS = 128;
 const MEL_MEAN = -4.92;
@@ -12,14 +21,6 @@ const F0_MIN = 32.7031956625;
 const CFG_STRENGTH = 3.0;
 const CFG_RESCALE = 0.75;
 const DEFAULT_DIFF_STEPS = 32;
-const VOCODER_CHUNK_FRAMES = 1008;
-const VOCODER_OVERLAP_FRAMES = 8;
-// Vocoder NPU 静态形状（独立于 encoder/diffusion 的 seq_len=2048）
-// Vocoder ISTFT Conv 的 Pad 中间张量在 seq_len=2048 时超出 WebNN 2GB 限制
-const NPU_VOCODER_SEQ_LEN = 500;
-// NPU 静态形状模型固定序列长度（encoder/diffusion 输入维度）
-// 用于 optimized_npu 模型，totalFramesWithPrompt 不能超过此值
-const NPU_STATIC_SEQ_LEN = 2048;
 const LONG_AUDIO_THRESHOLD_SEC = 30;
 const SEGMENT_MIN_SEC = 15;
 const SEGMENT_MAX_SEC = 30;

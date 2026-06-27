@@ -5,6 +5,7 @@ const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
 const { float32ToF16Buffer } = require('./utils');
+const { requestInference } = require('./webnnIpc');
 
 /**
  * 获取主窗口的 webContents（WebNN IPC 必须发送到主窗口，因为只有主窗口注册了 WebNN 处理器）
@@ -576,14 +577,12 @@ class WebNNSessionProxy {
         }
 
         return new Promise((resolve, reject) => {
-            const requestId = `svs-webnn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            const timeout = setTimeout(() => reject(new Error(`WebNN inference timeout (${this.modelId})`)), IPC_TIMEOUT_INFERENCE);
-
-            ipcMain.handleOnce(`webnn:runInference:response:${requestId}`, (_, result) => {
-                clearTimeout(timeout);
-                if (result.error) {
-                    reject(new Error(result.error));
-                } else {
+            requestInference(wc, this.modelId, serializedInputs, `WebNN inference timeout (${this.modelId})`)
+                .then((result) => {
+                    if (result && result.error) {
+                        reject(new Error(result.error));
+                        return;
+                    }
                     // 反序列化输出张量
                     // data 现在是 TypedArray（Float32Array/Uint16Array）或 string[]（int64）
                     const outputTensors = {};
@@ -601,10 +600,8 @@ class WebNNSessionProxy {
                         outputTensors[name] = new ort.Tensor(out.type || 'float32', typedData, out.dims);
                     }
                     resolve(outputTensors);
-                }
-            });
-
-            wc.send('webnn:runInference:request', { requestId, modelId: this.modelId, inputs: serializedInputs });
+                })
+                .catch(reject);
         });
     }
 

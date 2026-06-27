@@ -121,11 +121,11 @@ async function checkAndDownloadModels() {
 
   const modelDir = getModelDir();
   const precision = loadSettings().modelPrecision || DEFAULT_PRECISION;
-  console.log('[Main] 检查模型文件，目录:', modelDir, '精度:', precision);
+  console.log('[Main] Check model files, dir:', modelDir, 'precision:', precision);
   const { missing, existing } = await checkMissingFilesAsync(modelDir, precision);
 
   if (missing.length === 0) {
-    console.log('[Main] 所有模型文件已就绪');
+    console.log('[Main] All model files ready');
     return true;
   }
 

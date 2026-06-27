@@ -4,7 +4,7 @@ const fs = require('node:fs');
 // Side effect: apply float16 patch on module load
 require('./float16Patch');
 
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_MODEL_LOAD, IPC_TIMEOUT_SYNTHESIS } = require('./constants');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
@@ -12,6 +12,7 @@ const { Diffusion } = require('./diffusion');
 const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram } = require('./postprocessing');
 const { AudioSegmentation } = require('./audioSegmentation');
 const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils');
+const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
 
 // Module-level constants
 // JP-specific models that must be swapped from the JP directory when
@@ -427,6 +428,27 @@ class OnnxSVSPipeline {
             }
         }
 
+        const gpuInfo = await this._detectHardware();
+        const { resolvedModelFiles, modelStats } = await this._resolveModelFiles();
+        const sessionKeys = SESSION_KEYS;
+        await this._detectModelPrecision(resolvedModelFiles);
+
+        if (this.useWebNN) {
+            await this._loadWebNNModels(gpuInfo, resolvedModelFiles, sessionKeys, modelStats);
+        } else {
+            await this._loadDMLModels(resolvedModelFiles, sessionKeys, modelStats);
+        }
+
+        this.initialized = true;
+        return true;
+    }
+
+    /**
+     * 硬件检测：GPU 探测 + NPU 可用性 + 设备选择
+     * 设置 this.allDevices / this.useWebNN / this.dmlDeviceId / this.gpuDeviceName
+     * @returns {Promise<Object>} gpuInfo
+     */
+    async _detectHardware() {
         let gpuInfo;
         try {
             console.log('[OnnxSVSPipeline] Detecting GPU...');
@@ -468,9 +490,16 @@ class OnnxSVSPipeline {
                 console.log(`[OnnxSVSPipeline] GPU device (auto): ${this.gpuDeviceName}${this.dmlDeviceId !== undefined ? ` (deviceId=${this.dmlDeviceId})` : ''}`);
             }
         }
+        return gpuInfo;
+    }
 
+    /**
+     * 解析模型文件路径：DML 变体检查 + SiFiGAN 三级回退 + 文件存在性校验
+     * 设置 this.vocoderType / this.sifiganStatsPath / this._resolvedVocoderFile
+     * @returns {Promise<{resolvedModelFiles: string[], modelStats: Array}>}
+     */
+    async _resolveModelFiles() {
         const resolvedModelFiles = [...ONNX_MODEL_FILES];
-        // 并行检查 DML 变体 Model是否存在
         const dmlIdx = resolvedModelFiles.indexOf('diff_step_dml.onnx');
         const vocDmlIdx = resolvedModelFiles.indexOf('vocoder_dml.onnx');
 
@@ -569,9 +598,14 @@ class OnnxSVSPipeline {
             console.log(`[OnnxSVSPipeline] ${modelFile}: ${(size / 1024 / 1024).toFixed(2)} MB`);
         }
 
-        const sessionKeys = SESSION_KEYS;
+        return { resolvedModelFiles, modelStats };
+    }
 
-        // 检测Model精度：通过 probe session 的 I/O 类型 + 单文件量化算子扫描
+    /**
+     * 检测模型精度（FP16/FP32/INT8）：通过 preflow probe session 的 I/O 类型 + 量化算子扫描
+     * 设置 this.isFP16
+     */
+    async _detectModelPrecision(resolvedModelFiles) {
         try {
             const probeModelPath = path.join(this.modelDir, resolvedModelFiles[4]); // preflow (~8MB)
             const probeSession = await require('onnxruntime-node').InferenceSession.create(probeModelPath, { executionProviders: ['cpu'] });
@@ -596,239 +630,242 @@ class OnnxSVSPipeline {
             console.warn('[OnnxSVSPipeline] Precision detection failed, defaulting to FP32:', e.message);
             this.isFP16 = false;
         }
+    }
 
-        if (this.useWebNN) {
-            // WebNN Model加载：Using非 DML Model文件，通过 IPC 加载到渲染进程
-            const { ipcMain } = require('electron');
+    /**
+     * WebNN 模型加载：NPU 探测 → 并行加载 → Vocoder DML 加载
+     * 失败时自动回退到 _doInitFallback
+     */
+    async _loadWebNNModels(gpuInfo, resolvedModelFiles, sessionKeys, modelStats) {
+        const { ipcMain } = require('electron');
 
-            const webnnModelFiles = [...resolvedModelFiles];
-            const loadedSessions = [];
+        const webnnModelFiles = [...resolvedModelFiles];
+        const loadedSessions = [];
 
-            // Vocoder 在 NPU 模式下使用 DML 加载（NPU 不适合 vocoder 的大卷积核）
-            const vocoderIdx = sessionKeys.indexOf('vocoder');
+        // Vocoder 在 NPU 模式下使用 DML 加载（NPU 不适合 vocoder 的大卷积核）
+        const vocoderIdx = sessionKeys.indexOf('vocoder');
 
-            // Helper: load a single model via WebNN IPC
-            const loadOneWebnnModel = (modelFile, modelId, overridePath) => new Promise((resolve, reject) => {
-                const wc = getMainWindowWebContents();
-                if (!wc) { resolve({ success: false, error: 'No renderer window' }); return; }
-
-                const ipcTimeout = IPC_TIMEOUT_MODEL_LOAD;
-
-                const requestId = `svs-webnn-load-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-                const timeout = setTimeout(() => resolve({ success: false, error: 'Load timeout' }), ipcTimeout);
-
-                ipcMain.handleOnce(`webnn:loadModel:response:${requestId}`, (_, res) => {
-                    clearTimeout(timeout);
-                    resolve(res);
-                });
-
-                wc.send('webnn:loadModel:request', {
-                    requestId,
-                    modelId,
-                    modelPath: overridePath || this._getModelPath(modelFile),
-                    options: { deviceType: 'npu' },
-                });
-            });
-
-            // Helper: unload a WebNN model
-            const unloadWebnnModel = (modelId) => {
-                try {
-                    const wc = getMainWindowWebContents();
-                    if (wc) {
-                        const reqId = `svs-webnn-unload-${Date.now()}`;
-                        ipcMain.handleOnce(`webnn:unloadModel:response:${reqId}`, () => {});
-                        wc.send('webnn:unloadModel:request', { requestId: reqId, modelId });
-                    }
-                } catch (_) {}
-            };
-
+        // Helper: load a single model via WebNN IPC
+        const loadOneWebnnModel = async (modelFile, modelId, overridePath) => {
+            const wc = getMainWindowWebContents();
+            if (!wc) return { success: false, error: 'No renderer window' };
             try {
-                // Probe: load the first model to verify NPU actually works
-                const probeFile = webnnModelFiles[0];
-                const probeKey = sessionKeys[0];
-                console.log(`[OnnxSVSPipeline] WebNN probe: loading ${probeFile}...`);
-                const probeResult = await loadOneWebnnModel(probeFile, probeKey);
-
-                if (!probeResult.success) {
-                    throw new Error(`WebNN 探测失败: ${probeResult.error}`);
-                }
-
-                // Check if NPU was actually used (not silently fallen back to GPU/WASM)
-                const probeEp = probeResult.ep || '';
-                if (!probeEp.includes('npu')) {
-                    // Model loaded but not on NPU — clean up and fall back to DML
-                    unloadWebnnModel(probeKey);
-                    console.warn(`[OnnxSVSPipeline] WebNN probe: NPU not usable, actually using ${probeEp}, falling back to DML/CPU`);
-                    // Cache the failure so next init skips NPU detection entirely
-                    try {
-                        const { markNPUUnavailable } = require('../../main/webnnIpc');
-                        markNPUUnavailable(`WebNN probe: NPU not usable, fell back to ${probeEp}`);
-                    } catch (_) {}
-                    this.useWebNN = false;
-                    return await this._doInitFallback(gpuInfo, resolvedModelFiles, sessionKeys);
-                }
-
-                // NPU confirmed working — load remaining models in parallel
-                this.sessions[probeKey] = new WebNNSessionProxy(probeKey);
-                this.sessionEPs[probeKey] = probeEp;
-                loadedSessions.push(probeKey);
-                console.log(`[OnnxSVSPipeline] ${probeFile} loaded via WebNN-NPU [${probeEp}]`);
-
-                const remainingIndices = [];
-                for (let i = 1; i < webnnModelFiles.length; i++) remainingIndices.push(i);
-
-                // Load models sequentially to reduce peak WASM memory pressure
-                // Skip vocoder — it will be loaded via DML after WebNN models
-                // Pre-read next model file during NPU compilation to overlap I/O with compute
-                const loadResults = [];
-                for (let ri = 0; ri < remainingIndices.length; ri++) {
-                    const i = remainingIndices[ri];
-                    if (i === vocoderIdx) continue;
-                    const modelFile = webnnModelFiles[i];
-                    const modelId = sessionKeys[i];
-
-                    // Start pre-reading the next model's file while current one compiles
-                    let prefetchPromise = null;
-                    for (let ni = ri + 1; ni < remainingIndices.length; ni++) {
-                        const nextIdx = remainingIndices[ni];
-                        if (nextIdx === vocoderIdx) continue;
-                        const nextFile = webnnModelFiles[nextIdx];
-                        const nextPath = this._getModelPath(nextFile);
-                        const wc = getMainWindowWebContents();
-                        if (wc) {
-                            prefetchPromise = wc.send('webnn:prefetch:request', { modelPath: nextPath });
-                        }
-                        break;
-                    }
-
-                    const result = await loadOneWebnnModel(modelFile, modelId);
-                    loadResults.push({ i, modelFile, modelId, result });
-
-                    // Wait for prefetch to complete (non-blocking, just ensures I/O finishes)
-                    if (prefetchPromise) {
-                        try { await prefetchPromise; } catch (_) {}
-                    }
-                }
-
-                for (const { i, modelFile, modelId, result } of loadResults) {
-                    if (result.success) {
-                        this.sessions[modelId] = new WebNNSessionProxy(modelId);
-                        this.sessionEPs[modelId] = result.ep || 'webnn-npu';
-                        loadedSessions.push(modelId);
-                        console.log(`[OnnxSVSPipeline] ${modelFile} loaded via WebNN [${result.ep}]`);
-                    } else {
-                        // NPU 模型加载失败，尝试从父目录加载回退模型
-                        const fallbackPath = this._getNpuFallbackPath(modelFile);
-                        if (fallbackPath) {
-                            console.warn(`[OnnxSVSPipeline] ${modelFile} WebNN load failed, trying fallback: ${result.error.substring(0, 80)}`);
-                            const fallbackResult = await loadOneWebnnModel(modelFile, modelId, fallbackPath);
-                            if (fallbackResult.success) {
-                                this.sessions[modelId] = new WebNNSessionProxy(modelId);
-                                this.sessionEPs[modelId] = fallbackResult.ep || 'webnn-fallback';
-                                loadedSessions.push(modelId);
-                                console.log(`[OnnxSVSPipeline] ${modelFile} loaded from fallback via WebNN [${fallbackResult.ep}]`);
-                                continue;
-                            }
-                        }
-                        throw new Error(`WebNN 加载 ${modelFile} 失败: ${result.error}`);
-                    }
-                }
-
-                // Vocoder 使用 DML 加载（NPU 不适合 vocoder 的大卷积核）
-                // 跳过 DML 验证推理，避免 GPU 显存压力导致已加载的 WebNN 会话失效
-                {
-                    const vocoderModelFile = webnnModelFiles[vocoderIdx];
-                    const isSifiganVoc = this._isSifiganVocoder(vocoderModelFile);
-                    console.log(`[OnnxSVSPipeline] Loading vocoder via DML (skip validation): ${vocoderModelFile}`);
-
-                    // 局部辅助：DML 优先、失败回退 CPU 加载 vocoder（跳过验证推理）
-                    const loadVocDmlOrCpu = async (vocFile) => {
-                        const ort = require('onnxruntime-node');
-                        const vocPath = path.join(this.modelDir, vocFile);
-                        const dmlOpts = typeof this.dmlDeviceId === 'number'
-                            ? { name: 'dml', deviceId: this.dmlDeviceId }
-                            : 'dml';
-                        try {
-                            const session = await ort.InferenceSession.create(vocPath, {
-                                executionProviders: [dmlOpts, 'cpu'],
-                            });
-                            return { session, ep: 'dml', vocFile };
-                        } catch (vocErr) {
-                            console.warn(`[OnnxSVSPipeline] Vocoder DML load failed (${vocFile}), falling back to CPU: ${vocErr.message}`);
-                            const session = await ort.InferenceSession.create(vocPath, {
-                                executionProviders: ['cpu'],
-                            });
-                            return { session, ep: 'cpu', vocFile };
-                        }
-                    };
-
-                    try {
-                        const { session, ep, vocFile } = await loadVocDmlOrCpu(vocoderModelFile);
-                        this.sessions['vocoder'] = session;
-                        this.sessionEPs['vocoder'] = ep;
-                        await this._detectVocoderPrecision(session, path.join(this.modelDir, vocFile));
-                        loadedSessions.push('vocoder');
-                        console.log(`[OnnxSVSPipeline] ${vocFile} loaded via ${ep.toUpperCase()} (no validation)`);
-                    } catch (vocErr) {
-                        // SiFiGAN 加载失败（DML+CPU） → 回退默认 vocoder
-                        if (!isSifiganVoc) {
-                            throw new Error(`Vocoder 加载失败: ${vocErr.message}`);
-                        }
-                        console.warn(`[OnnxSVSPipeline] SiFiGAN vocoder load failed on DML/CPU, falling back to default vocoder: ${vocErr.message.substring(0, 80)}`);
-                        const defVocFile = await this._resolveDefaultVocoderFile();
-                        this._resolvedVocoderFile = defVocFile;
-                        try {
-                            const { session, ep, vocFile } = await loadVocDmlOrCpu(defVocFile);
-                            this.sessions['vocoder'] = session;
-                            this.sessionEPs['vocoder'] = ep;
-                            await this._detectVocoderPrecision(session, path.join(this.modelDir, vocFile));
-                            loadedSessions.push('vocoder');
-                            console.log(`[OnnxSVSPipeline] ${vocFile} loaded via ${ep.toUpperCase()} (SiFiGAN fallback, no validation)`);
-                        } catch (defErr) {
-                            throw new Error(`Vocoder 加载失败 (SiFiGAN fallback 也失败): ${defErr.message}`);
-                        }
-                    }
-                }
-
-                const webnnCount = Object.values(this.sessionEPs).filter(e => String(e).startsWith('webnn')).length;
-                console.log(`[OnnxSVSPipeline] WebNN init complete: ${webnnCount}  model(s) using WebNN`);
+                const res = await requestModelLoad(
+                    wc,
+                    modelId,
+                    overridePath || this._getModelPath(modelFile),
+                    { deviceType: 'npu' },
+                );
+                return res || { success: false, error: 'Empty response' };
             } catch (err) {
-                console.error('[OnnxSVSPipeline] WebNN init failed:', err.message);
-                // 卸载loaded的 WebNN Model
-                for (const key of loadedSessions) {
-                    unloadWebnnModel(key);
-                    delete this.sessions[key];
-                    delete this.sessionEPs[key];
+                return { success: false, error: err.message };
+            }
+        };
+
+        // Helper: unload a WebNN model
+        const unloadWebnnModel = (modelId) => {
+            try {
+                const wc = getMainWindowWebContents();
+                if (wc) {
+                    const reqId = `svs-webnn-unload-${Date.now()}`;
+                    ipcMain.handleOnce(`webnn:unloadModel:response:${reqId}`, () => {});
+                    wc.send('webnn:unloadModel:request', { requestId: reqId, modelId });
                 }
+            } catch (_) {}
+        };
+
+        try {
+            // Probe: load the first model to verify NPU actually works
+            const probeFile = webnnModelFiles[0];
+            const probeKey = sessionKeys[0];
+            console.log(`[OnnxSVSPipeline] WebNN probe: loading ${probeFile}...`);
+            const probeResult = await loadOneWebnnModel(probeFile, probeKey);
+
+            if (!probeResult.success) {
+                throw new Error(`WebNN 探测失败: ${probeResult.error}`);
+            }
+
+            // Check if NPU was actually used (not silently fallen back to GPU/WASM)
+            const probeEp = probeResult.ep || '';
+            if (!probeEp.includes('npu')) {
+                // Model loaded but not on NPU — clean up and fall back to DML
+                unloadWebnnModel(probeKey);
+                console.warn(`[OnnxSVSPipeline] WebNN probe: NPU not usable, actually using ${probeEp}, falling back to DML/CPU`);
+                // Cache the failure so next init skips NPU detection entirely
+                try {
+                    const { markNPUUnavailable } = require('../../main/webnnIpc');
+                    markNPUUnavailable(`WebNN probe: NPU not usable, fell back to ${probeEp}`);
+                } catch (_) {}
                 this.useWebNN = false;
-                // falling back to DML/CPU
                 return await this._doInitFallback(gpuInfo, resolvedModelFiles, sessionKeys);
             }
-        } else {
-            // DML/CPU Model加载：小Model并行，大Model串行
-            let loadedSessions = [];
-            try {
-                const modelSizes = new Map(modelStats.map((s, i) => [i, s.size]));
-                loadedSessions = await this._loadModelsPartitioned(resolvedModelFiles, sessionKeys, modelSizes);
-                const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
-                const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
-                console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
-                if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], path.join(this.modelDir, this._resolvedVocoderFile || 'vocoder_dml.onnx'));
-            } catch (err) {
-                console.error('[OnnxSVSPipeline] ONNX Runtime init failed:', err.message);
-                for (const key of loadedSessions) {
-                    if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
-                        try { this.sessions[key].release(); } catch (_) {}
+
+            // NPU confirmed working — load remaining models in parallel
+            this.sessions[probeKey] = new WebNNSessionProxy(probeKey);
+            this.sessionEPs[probeKey] = probeEp;
+            loadedSessions.push(probeKey);
+            console.log(`[OnnxSVSPipeline] ${probeFile} loaded via WebNN-NPU [${probeEp}]`);
+
+            const remainingIndices = [];
+            for (let i = 1; i < webnnModelFiles.length; i++) remainingIndices.push(i);
+
+            // Load models sequentially to reduce peak WASM memory pressure
+            // Skip vocoder — it will be loaded via DML after WebNN models
+            // Pre-read next model file during NPU compilation to overlap I/O with compute
+            const loadResults = [];
+            for (let ri = 0; ri < remainingIndices.length; ri++) {
+                const i = remainingIndices[ri];
+                if (i === vocoderIdx) continue;
+                const modelFile = webnnModelFiles[i];
+                const modelId = sessionKeys[i];
+
+                // Start pre-reading the next model's file while current one compiles
+                let prefetchPromise = null;
+                for (let ni = ri + 1; ni < remainingIndices.length; ni++) {
+                    const nextIdx = remainingIndices[ni];
+                    if (nextIdx === vocoderIdx) continue;
+                    const nextFile = webnnModelFiles[nextIdx];
+                    const nextPath = this._getModelPath(nextFile);
+                    const wc = getMainWindowWebContents();
+                    if (wc) {
+                        prefetchPromise = wc.send('webnn:prefetch:request', { modelPath: nextPath });
                     }
-                    delete this.sessions[key];
-                    delete this.sessionEPs[key];
+                    break;
                 }
-                throw err;
+
+                const result = await loadOneWebnnModel(modelFile, modelId);
+                loadResults.push({ i, modelFile, modelId, result });
+
+                // Wait for prefetch to complete (non-blocking, just ensures I/O finishes)
+                if (prefetchPromise) {
+                    try { await prefetchPromise; } catch (_) {}
+                }
+            }
+
+            for (const { i, modelFile, modelId, result } of loadResults) {
+                if (result.success) {
+                    this.sessions[modelId] = new WebNNSessionProxy(modelId);
+                    this.sessionEPs[modelId] = result.ep || 'webnn-npu';
+                    loadedSessions.push(modelId);
+                    console.log(`[OnnxSVSPipeline] ${modelFile} loaded via WebNN [${result.ep}]`);
+                } else {
+                    // NPU 模型加载失败，尝试从父目录加载回退模型
+                    const fallbackPath = this._getNpuFallbackPath(modelFile);
+                    if (fallbackPath) {
+                        console.warn(`[OnnxSVSPipeline] ${modelFile} WebNN load failed, trying fallback: ${result.error.substring(0, 80)}`);
+                        const fallbackResult = await loadOneWebnnModel(modelFile, modelId, fallbackPath);
+                        if (fallbackResult.success) {
+                            this.sessions[modelId] = new WebNNSessionProxy(modelId);
+                            this.sessionEPs[modelId] = fallbackResult.ep || 'webnn-fallback';
+                            loadedSessions.push(modelId);
+                            console.log(`[OnnxSVSPipeline] ${modelFile} loaded from fallback via WebNN [${fallbackResult.ep}]`);
+                            continue;
+                        }
+                    }
+                    throw new Error(`WebNN 加载 ${modelFile} 失败: ${result.error}`);
+                }
+            }
+
+            // Vocoder 使用 DML 加载（NPU 不适合 vocoder 的大卷积核）
+            // 跳过 DML 验证推理，避免 GPU 显存压力导致已加载的 WebNN 会话失效
+            await this._loadVocoderViaDML(webnnModelFiles, vocoderIdx, loadedSessions);
+
+            const webnnCount = Object.values(this.sessionEPs).filter(e => String(e).startsWith('webnn')).length;
+            console.log(`[OnnxSVSPipeline] WebNN init complete: ${webnnCount}  model(s) using WebNN`);
+        } catch (err) {
+            console.error('[OnnxSVSPipeline] WebNN init failed:', err.message);
+            // 卸载loaded的 WebNN Model
+            for (const key of loadedSessions) {
+                unloadWebnnModel(key);
+                delete this.sessions[key];
+                delete this.sessionEPs[key];
+            }
+            this.useWebNN = false;
+            // falling back to DML/CPU
+            return await this._doInitFallback(gpuInfo, resolvedModelFiles, sessionKeys);
+        }
+    }
+
+    /**
+     * Vocoder DML 加载（WebNN 路径专用）：跳过验证推理，SiFiGAN 失败时回退默认 vocoder
+     */
+    async _loadVocoderViaDML(webnnModelFiles, vocoderIdx, loadedSessions) {
+        const vocoderModelFile = webnnModelFiles[vocoderIdx];
+        const isSifiganVoc = this._isSifiganVocoder(vocoderModelFile);
+        console.log(`[OnnxSVSPipeline] Loading vocoder via DML (skip validation): ${vocoderModelFile}`);
+
+        // 局部辅助：DML 优先、失败回退 CPU 加载 vocoder（跳过验证推理）
+        const loadVocDmlOrCpu = async (vocFile) => {
+            const ort = require('onnxruntime-node');
+            const vocPath = path.join(this.modelDir, vocFile);
+            const dmlOpts = typeof this.dmlDeviceId === 'number'
+                ? { name: 'dml', deviceId: this.dmlDeviceId }
+                : 'dml';
+            try {
+                const session = await ort.InferenceSession.create(vocPath, {
+                    executionProviders: [dmlOpts, 'cpu'],
+                });
+                return { session, ep: 'dml', vocFile };
+            } catch (vocErr) {
+                console.warn(`[OnnxSVSPipeline] Vocoder DML load failed (${vocFile}), falling back to CPU: ${vocErr.message}`);
+                const session = await ort.InferenceSession.create(vocPath, {
+                    executionProviders: ['cpu'],
+                });
+                return { session, ep: 'cpu', vocFile };
+            }
+        };
+
+        try {
+            const { session, ep, vocFile } = await loadVocDmlOrCpu(vocoderModelFile);
+            this.sessions['vocoder'] = session;
+            this.sessionEPs['vocoder'] = ep;
+            await this._detectVocoderPrecision(session, path.join(this.modelDir, vocFile));
+            loadedSessions.push('vocoder');
+            console.log(`[OnnxSVSPipeline] ${vocFile} loaded via ${ep.toUpperCase()} (no validation)`);
+        } catch (vocErr) {
+            // SiFiGAN 加载失败（DML+CPU） → 回退默认 vocoder
+            if (!isSifiganVoc) {
+                throw new Error(`Vocoder 加载失败: ${vocErr.message}`);
+            }
+            console.warn(`[OnnxSVSPipeline] SiFiGAN vocoder load failed on DML/CPU, falling back to default vocoder: ${vocErr.message.substring(0, 80)}`);
+            const defVocFile = await this._resolveDefaultVocoderFile();
+            this._resolvedVocoderFile = defVocFile;
+            try {
+                const { session, ep, vocFile } = await loadVocDmlOrCpu(defVocFile);
+                this.sessions['vocoder'] = session;
+                this.sessionEPs['vocoder'] = ep;
+                await this._detectVocoderPrecision(session, path.join(this.modelDir, vocFile));
+                loadedSessions.push('vocoder');
+                console.log(`[OnnxSVSPipeline] ${vocFile} loaded via ${ep.toUpperCase()} (SiFiGAN fallback, no validation)`);
+            } catch (defErr) {
+                throw new Error(`Vocoder 加载失败 (SiFiGAN fallback 也失败): ${defErr.message}`);
             }
         }
+    }
 
-        this.initialized = true;
-        return true;
+    /**
+     * DML/CPU 模型加载：小 Model 并行，大 Model 串行（分区加载）
+     */
+    async _loadDMLModels(resolvedModelFiles, sessionKeys, modelStats) {
+        let loadedSessions = [];
+        try {
+            const modelSizes = new Map(modelStats.map((s, i) => [i, s.size]));
+            loadedSessions = await this._loadModelsPartitioned(resolvedModelFiles, sessionKeys, modelSizes);
+            const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
+            const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
+            console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
+            if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], path.join(this.modelDir, this._resolvedVocoderFile || 'vocoder_dml.onnx'));
+        } catch (err) {
+            console.error('[OnnxSVSPipeline] ONNX Runtime init failed:', err.message);
+            for (const key of loadedSessions) {
+                if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
+                    try { this.sessions[key].release(); } catch (_) {}
+                }
+                delete this.sessions[key];
+                delete this.sessionEPs[key];
+            }
+            throw err;
+        }
     }
 
     /**
@@ -1104,42 +1141,16 @@ class OnnxSVSPipeline {
      * 单次 IPC 调用，消除逐模型 IPC 开销
      */
     async _runWebNNSynthesis(params, onProgress) {
-        const { ipcMain } = require('electron');
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN synthesis');
 
-        return new Promise((resolve, reject) => {
-            const requestId = `svs-webnn-synth-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            const timeout = setTimeout(() => reject(new Error('WebNN synthesis timeout')), IPC_TIMEOUT_SYNTHESIS);
-
-            // Listen for progress updates from renderer
-            const progressHandler = (event, data) => {
-                if (onProgress && data && typeof data.progress === 'number') {
-                    onProgress(data.progress);
-                }
-            };
-            ipcMain.on(`webnn:progress:${requestId}`, progressHandler);
-
-            ipcMain.handleOnce(`webnn:runSynthesis:response:${requestId}`, (_, result) => {
-                clearTimeout(timeout);
-                ipcMain.removeListener(`webnn:progress:${requestId}`, progressHandler);
-                if (result.error) {
-                    reject(new Error(result.error));
-                } else {
-                    resolve(result);
-                }
-            });
-
-            wc.send('webnn:runSynthesis:request', {
-                requestId,
-                params: {
-                    ...params,
-                    isFP16: this.isFP16,
-                    vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
-                    useStaticShapes: this.useStaticShapes,
-                },
-            });
-        });
+        const fullParams = {
+            ...params,
+            isFP16: this.isFP16,
+            vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
+            useStaticShapes: this.useStaticShapes,
+        };
+        return requestSynthesis(wc, fullParams, onProgress);
     }
 
     /**
@@ -1191,36 +1202,17 @@ class OnnxSVSPipeline {
      * 批量 WebNN 合成 IPC 调用
      */
     async _runWebNNSynthesisBatch(paramsArray, onProgress) {
-        const { ipcMain } = require('electron');
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN batch synthesis');
 
-        return new Promise((resolve, reject) => {
-            const requestId = `svs-webnn-batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            const timeout = setTimeout(() => reject(new Error('WebNN batch synthesis timeout')), IPC_TIMEOUT_SYNTHESIS);
-
-            // Listen for progress updates from renderer
-            const progressHandler = (event, data) => {
-                if (onProgress && data && typeof data.progress === 'number') {
-                    onProgress(data.progress);
-                }
-            };
-            ipcMain.on(`webnn:progress:${requestId}`, progressHandler);
-
-            ipcMain.handleOnce(`webnn:runSynthesis:response:${requestId}`, (_, result) => {
-                clearTimeout(timeout);
-                ipcMain.removeListener(`webnn:progress:${requestId}`, progressHandler);
-                if (result.error) {
-                    reject(new Error(result.error));
-                } else {
-                    resolve(result);
-                }
-            });
-
-            wc.send('webnn:runSynthesis:request', {
-                requestId,
-                params: paramsArray.map(p => ({ ...p, isFP16: this.isFP16, vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16, useStaticShapes: this.useStaticShapes })),
-            });
+        const fullParams = paramsArray.map(p => ({
+            ...p,
+            isFP16: this.isFP16,
+            vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
+            useStaticShapes: this.useStaticShapes,
+        }));
+        return requestSynthesis(wc, fullParams, onProgress, {
+            timeoutMessage: 'WebNN batch synthesis timeout',
         });
     }
 

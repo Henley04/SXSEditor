@@ -212,22 +212,31 @@
 .singer-avatar-empty {
   width: 44px;
   height: 44px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   border: 2px dashed var(--border-strong);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: border-color var(--motion-fast);
+  transition: border-color var(--motion-fast), background-color var(--motion-fast), transform var(--motion-fast);
 }
 
 .singer-item-empty:hover .singer-avatar-empty {
   border-color: var(--accent);
+  background: var(--accent-soft);
+  transform: scale(1.04);
 }
 
 .singer-avatar-placeholder {
-  font-size: 20px;
+  font-size: 22px;
+  font-weight: 300;
+  line-height: 1;
   color: var(--fg-disabled);
+  transition: color var(--motion-fast);
+}
+
+.singer-item-empty:hover .singer-avatar-placeholder {
+  color: var(--accent);
 }
 
 .singer-info-empty {
@@ -271,7 +280,7 @@
 .singer-avatar {
   width: 40px;
   height: 40px;
-  border-radius: var(--radius-sm);
+  border-radius: var(--radius-lg);
   background: var(--bg-header-start);
   display: flex;
   align-items: center;
