@@ -128,6 +128,9 @@ executorch_c++/
 # SoulX-Singer submodule (external dependency, no git URL available)
 SoulX-Singer/
 
+# SiFiGAN source repo (external dependency, cloned from github.com/chomeyama/SiFiGAN)
+third_party/
+
 # AtomCode local-scope configs (machine-specific)
 .atomcode/local/
 
