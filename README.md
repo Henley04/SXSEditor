@@ -80,7 +80,8 @@ npm start
 ```
 
 ```bash
-npm test                  # Run tests (630+)
+npm test                  # Run tests (660+)
+npm run lint              # Run ESLint (Flat Config)
 npm run package           # Package
 npm run make              # Create distributables
 ```
@@ -164,7 +165,8 @@ npm start
 ```
 
 ```bash
-npm test                  # 运行测试（630+）
+npm test                  # 运行测试（660+）
+npm run lint              # 运行 ESLint（Flat Config）
 npm run package           # 打包
 npm run make              # 生成安装包
 ```
@@ -244,7 +246,8 @@ npm start
 ```
 
 ```bash
-npm test                  # テスト実行（630+）
+npm test                  # テスト実行（660+）
+npm run lint              # ESLint 実行（Flat Config）
 npm run package           # パッケージング
 npm run make              # 配布物作成
 ```
