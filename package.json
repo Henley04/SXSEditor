@@ -7,7 +7,9 @@
   "private": true,
   "scripts": {
     "start": "electron-forge start",
+    "prepackage": "node scripts/generate-build-info.js",
     "package": "electron-forge package",
+    "prepackage:lite": "node scripts/generate-build-info.js",
     "package:lite": "cross-env SKIP_ONNX_MODELS=1 electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",

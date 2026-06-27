@@ -70,6 +70,12 @@ const { registerDialogIpc } = require('./main/dialogIpc');
 const { registerSettingsIpc, setCachedDMLDevices, getCachedDMLDevices, invalidateDMLDevices } = require('./main/settingsIpc');
 const { registerResourceManagerIpc } = require('./main/resourceManagerIpc');
 const { registerWebnnIpc } = require('./main/webnnIpc');
+const {
+  createSplashWindow,
+  closeSplashWindow,
+  getSplashReadyAt,
+  registerSplashIpc,
+} = require('./main/splashManager');
 
 app.on('second-instance', () => {
   const mainWindow = getMainWindow();
@@ -137,7 +143,35 @@ app.whenReady().then(() => {
   });
 
   loadMainLocale();
-  const mainWindow = createWindow();
+
+  // Splash screen is shown only in packaged builds. In dev mode the
+  // main window is shown immediately — devs don't need the splash and
+  // forcing it would slow down iteration. (isDev was declared above,
+  // next to the CSP setup.)
+  const showSplash = !isDev;
+  // Minimum visible duration of the splash, measured from when the
+  // splash's SVG actually painted. Kept short so it doesn't slow down
+  // perceived startup, but long enough to not flash by unnoticed.
+  const MIN_SPLASH_MS = 1000;
+
+  if (showSplash) {
+    createSplashWindow();
+  }
+
+  const mainWindow = createWindow({ show: false });
+
+  // Helper: reveal the main window (and close the splash if any). In
+  // dev mode this runs immediately after did-finish-load; in packaged
+  // mode it waits for the splash's minimum visible duration.
+  const revealMainWindow = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+    if (showSplash) {
+      closeSplashWindow();
+    }
+  };
 
   // 主窗口渲染进程就绪后：先完成 NPU 检测，再校验设备设置
   mainWindow.webContents.once('did-finish-load', async () => {
@@ -207,6 +241,26 @@ app.whenReady().then(() => {
       }
     } catch (err) {
       console.warn('[Main] Device validation failed:', err.message);
+    } finally {
+      // In dev mode: reveal the main window immediately.
+      // In packaged mode: enforce the splash's minimum visible duration,
+      // measured from when the splash's SVG actually painted. If the
+      // splash hasn't finished painting yet (very fast main-window
+      // load), splashReadyAt is 0 and we wait the full MIN_SPLASH_MS
+      // from now to give the splash time to be seen.
+      if (!showSplash) {
+        revealMainWindow();
+        return;
+      }
+      const readyAt = getSplashReadyAt();
+      const referenceTime = readyAt || Date.now();
+      const elapsed = Date.now() - referenceTime;
+      const wait = Math.max(0, MIN_SPLASH_MS - elapsed);
+      if (wait > 0) {
+        setTimeout(revealMainWindow, wait);
+      } else {
+        revealMainWindow();
+      }
     }
   });
 
@@ -269,3 +323,4 @@ registerAudioIpc();
 registerModelDownloadIpc();
 registerResourceManagerIpc();
 registerWebnnIpc();
+registerSplashIpc();

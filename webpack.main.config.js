@@ -47,6 +47,11 @@ module.exports = {
           from: path.resolve(__dirname, 'assets/SXS.png'),
           to: path.resolve(__dirname, '.webpack/main/SXS.png'),
         },
+        {
+          from: path.resolve(__dirname, 'src/build-info.json'),
+          to: path.resolve(__dirname, '.webpack/main/build-info.json'),
+          noErrorOnMissing: true,
+        },
       ],
     }),
   ],

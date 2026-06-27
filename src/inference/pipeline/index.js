@@ -18,9 +18,17 @@ const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils
 // language is 'ja'. cond_emb MUST be included because JP fine-tuning adapts
 // it to the JP feature distribution — using the base cond_emb with JP
 // preflow+embedding causes severe phoneme corruption.
+// diff_step_dml MUST be included (v3+): JP fine-tuning injects LoRA into
+// 22 DiffLlama attention layers; merged weights must swap for proper JP
+// acoustic modeling. v1/v2 did not include this (DiffLlama was frozen).
 // note_pitch_encoder is intentionally NOT included: pitch is a MIDI index
 // with no language-specific semantic, so JP shares the base pitch encoder.
-const JP_MODEL_FILES = new Set(['note_text_encoder.onnx', 'preflow.onnx', 'cond_emb.onnx']);
+const JP_MODEL_FILES = new Set([
+  'note_text_encoder.onnx',
+  'preflow.onnx',
+  'cond_emb.onnx',
+  'diff_step_dml.onnx',
+]);
 const SMALL_MODEL_THRESHOLD = 50 * 1024 * 1024;
 const PRECISION_SUBDIR_MAP = {
     'int8': 'int8',
@@ -42,7 +50,8 @@ class OnnxSVSPipeline {
         this._hasJpModelsCached = this.jpModelDir
             ? fs.existsSync(path.join(this.jpModelDir, 'note_text_encoder.onnx')) &&
               fs.existsSync(path.join(this.jpModelDir, 'preflow.onnx')) &&
-              fs.existsSync(path.join(this.jpModelDir, 'cond_emb.onnx'))
+              fs.existsSync(path.join(this.jpModelDir, 'cond_emb.onnx')) &&
+              fs.existsSync(path.join(this.jpModelDir, 'diff_step_dml.onnx'))
             : false;
         this.sessions = {};
         this.sessionEPs = {};
@@ -125,9 +134,9 @@ class OnnxSVSPipeline {
 
     /**
      * Get the model path for a specific model file, considering language override.
-     * JP models (note_text_encoder, preflow, cond_emb) come from jpModelDir
-     * when language is 'ja'. All other models (including note_pitch_encoder)
-     * come from the base modelDir.
+     * JP models (note_text_encoder, preflow, cond_emb, diff_step_dml) come from
+     * jpModelDir when language is 'ja'. All other models (including
+     * note_pitch_encoder) come from the base modelDir.
      */
     _getModelPath(modelFile) {
         if (this.languageOverride === 'ja' && this.jpModelDir && JP_MODEL_FILES.has(modelFile)) {
@@ -138,8 +147,8 @@ class OnnxSVSPipeline {
 
     /**
      * Incrementally swap only the language-specific models
-     * (note_text_encoder, preflow, cond_emb).
-     * Other models (diff_step, vocoder, note_pitch_encoder, etc.) stay loaded.
+     * (note_text_encoder, preflow, cond_emb, diff_step_dml).
+     * Other models (vocoder, note_pitch_encoder, etc.) stay loaded.
      * Returns true if swap was performed, false if already using the requested language.
      */
     async swapLanguageModels(newLanguage) {
@@ -150,6 +159,7 @@ class OnnxSVSPipeline {
             { key: 'noteTextEncoder', file: 'note_text_encoder.onnx' },
             { key: 'preflow', file: 'preflow.onnx' },
             { key: 'condEmb', file: 'cond_emb.onnx' },
+            { key: 'diffStep', file: 'diff_step_dml.onnx' },
         ];
 
         const oldLang = this.languageOverride;
@@ -170,17 +180,31 @@ class OnnxSVSPipeline {
                 try { this.sessions[key].release(); } catch (_) {}
             }
 
+            // Resolve actual file to load (handle diff_step_dml → diff_step fallback)
+            let resolvedFile = file;
+            if (file === 'diff_step_dml.onnx') {
+                const dmlPath = this._getModelPath('diff_step_dml.onnx');
+                let dmlExists = false;
+                try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
+                if (!dmlExists) {
+                    // JP 目录缺少 diff_step_dml.onnx，回退到 base 目录的 diff_step.onnx
+                    // （适用于 v1/v2 未导出 diff_step 的旧 JP 模型包）
+                    resolvedFile = 'diff_step.onnx';
+                    console.warn('[OnnxSVSPipeline] JP diff_step_dml.onnx not found, falling back to base diff_step.onnx');
+                }
+            }
+
             // Load new model from the updated path
-            const modelPath = this._getModelPath(file);
+            const modelPath = this._getModelPath(resolvedFile);
             try {
                 const { session, ep } = await createSessionWithValidation(
                     modelPath, key, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false
                 );
                 this.sessions[key] = session;
                 this.sessionEPs[key] = ep;
-                console.log(`[OnnxSVSPipeline] ${file} swapped [${ep}] → ${modelPath}`);
+                console.log(`[OnnxSVSPipeline] ${resolvedFile} swapped [${ep}] → ${modelPath}`);
             } catch (err) {
-                console.error(`[OnnxSVSPipeline] Failed to swap ${file}:`, err.message);
+                console.error(`[OnnxSVSPipeline] Failed to swap ${resolvedFile}:`, err.message);
                 throw err;
             }
         }
@@ -1592,7 +1616,8 @@ class OnnxSVSPipeline {
 
         let resolvedFile = modelFile;
         if (modelFile === 'diff_step_dml.onnx') {
-            const dmlPath = path.join(this.modelDir, 'diff_step_dml.onnx');
+            // 在 JP 模式下检查 jpModelDir，否则检查 modelDir
+            const dmlPath = this._getModelPath('diff_step_dml.onnx');
             let dmlExists = false;
             try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
             if (!dmlExists) {

@@ -112,13 +112,15 @@ async function showAboutDialog() {
   });
 }
 
-function createWindow() {
+function createWindow(opts = {}) {
+  const { show = true } = opts;
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
     title: 'SXSEditor',
     icon: path.join(__dirname, '..', 'SXS.png'),
     backgroundColor: '#14141f',
+    show,
     webPreferences: {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
