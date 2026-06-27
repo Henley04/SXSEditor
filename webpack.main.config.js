@@ -23,10 +23,6 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/en_g2p_dict.json'),
         },
         {
-          from: path.resolve(__dirname, 'src/inference/enumDmlDevicesWorker.js'),
-          to: path.resolve(__dirname, '.webpack/main/enumDmlDevicesWorker.js'),
-        },
-        {
           from: path.resolve(__dirname, 'src/audio/audioWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/audio/audioWorker.js'),
         },
