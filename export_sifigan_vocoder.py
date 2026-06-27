@@ -28,6 +28,10 @@ import argparse
 import time
 import types
 
+# torch 在模块顶部导入，因 SiFiGANVocoderWrapper 类定义时即需继承 torch.nn.Module
+import torch
+import numpy as np
+
 # ============================================================
 # 1. 检查 SiFiGAN 源码仓库
 # ============================================================
@@ -126,7 +130,6 @@ _acc = 1
 for _us in UPSAMPLE_SCALES:
     _acc *= _us
     _CUMPROD.append(_acc)
-CUMPROD_SCALES = tuple(_acc)  # noqa: F841
 CUMPROD_SCALES = tuple(_CUMPROD)
 
 
@@ -343,6 +346,10 @@ class SiFiGANVocoderWrapper(torch.nn.Module):
 def export_onnx(wrapper, output_path, seq_len=50):
     """导出 ONNX 模型。
 
+    SiFiGAN 的 pd_indexing 使用动态张量索引 (x[idxP])，与 dynamo=True 路径不兼容
+    ( aten.remainder.Scalar 在 dynamo 下尝试把标量参数转为 SymbolicTensor)。
+    因此优先尝试 dynamo=False (TorchScript 路径)，失败时再回退 dynamo=True。
+
     Args:
         wrapper: SiFiGANVocoderWrapper 实例
         output_path: 输出 ONNX 文件路径
@@ -352,7 +359,7 @@ def export_onnx(wrapper, output_path, seq_len=50):
     import onnx
 
     print(f"\n{'='*60}")
-    print(f"ONNX 导出 (dynamo=True, opset=18)")
+    print(f"ONNX 导出 (opset=18, dynamo=False)")
     print(f"{'='*60}")
 
     # 构造探针输入
@@ -366,6 +373,7 @@ def export_onnx(wrapper, output_path, seq_len=50):
     temp_path = output_path + ".tmp"
 
     with torch.no_grad():
+        # dynamo=False: TorchScript-based legacy export, 对动态索引更宽容
         torch.onnx.export(
             wrapper,
             (mel, f0),
@@ -378,7 +386,7 @@ def export_onnx(wrapper, output_path, seq_len=50):
                 "waveform": {1: "num_samples"},
             },
             opset_version=18,
-            dynamo=True,
+            dynamo=False,
         )
 
     # 加载并重新保存为 external_data 格式 (处理 >2GB 模型)
@@ -548,9 +556,8 @@ def main():
     sys.path.insert(0, args.sifigan_dir)
 
     # 延迟导入 torch (避免在检查阶段就需要)
-    global torch
-    import torch
-    import numpy as np
+    # torch 与 numpy 已在模块顶部导入
+    pass
 
     # 复用项目的 clear_memory
     sys.path.insert(0, SCRIPT_DIR)

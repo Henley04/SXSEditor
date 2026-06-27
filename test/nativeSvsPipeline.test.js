@@ -522,6 +522,48 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
         expect(result.mel2token[f]).to.equal(phonemeToken);
       }
     });
+
+    it('should not starve first phoneme of short English multi-phoneme note (apples bug)', () => {
+      // "apples" -> AE1 P AH0 L Z + SEP = 6 tokens (j=6)
+      // bpm=120, duration=0.25 beats = 0.125s ≈ 6 frames; innerFrames = 6-2 = 4 < 6
+      const notes = [
+        { pitch: 60, start: 0, duration: 0.25, lyric: 'apples' },
+      ];
+      const result = pipeline.notesToSequences(notes, 120, null);
+
+      // token sequence: PAD(0), BOW(1), en_AE1(2), en_P(3), en_AH0(4), en_L(5), en_Z(6), SEP(7), EOW(8)
+      // Before fix: AE1 (token 2) got 0 frames due to floor interpolation when innerFrames < j
+      // After fix: AE1 gets at least 1 frame (first extraFrame recipient)
+      const ae1Token = 2;
+      let ae1FrameCount = 0;
+      for (let f = 0; f < result.mel2token.length; f++) {
+        if (result.mel2token[f] === ae1Token) ae1FrameCount++;
+      }
+      expect(ae1FrameCount).to.be.at.least(1, 'AE1 (first phoneme of "apples") must get at least 1 frame');
+
+      // Verify BOW still anchors first frame, EOW anchors last frame
+      expect(result.mel2token[0]).to.equal(1);
+      expect(result.mel2token[result.mel2token.length - 1]).to.equal(8);
+    });
+
+    it('should not starve consonant of short Japanese syllable note', () => {
+      // "か" -> k a = 2 tokens (j=2, no SEP for Japanese)
+      // bpm=120, duration=0.125 beats = 0.0625s ≈ 3 frames; innerFrames = 3-2 = 1 < 2
+      const notes = [
+        { pitch: 60, start: 0, duration: 0.125, lyric: 'か' },
+      ];
+      const result = pipeline.notesToSequences(notes, 120, null);
+
+      // token sequence: PAD(0), BOW(1), jp_k(2), jp_a(3), EOW(4)
+      // Before fix: jp_k (token 2) got 0 frames (floor(0*1/2)=floor(1*1/2)=0)
+      // After fix: jp_k gets 1 frame (first extraFrame recipient)
+      const kToken = 2;
+      let kFrameCount = 0;
+      for (let f = 0; f < result.mel2token.length; f++) {
+        if (result.mel2token[f] === kToken) kFrameCount++;
+      }
+      expect(kFrameCount).to.be.at.least(1, 'jp_k (consonant of か) must get at least 1 frame');
+    });
   });
 
   describe('CFG global std rescale', () => {

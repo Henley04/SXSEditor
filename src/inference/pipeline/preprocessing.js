@@ -338,12 +338,22 @@ class Preprocessing {
                     offset += pFrames;
                 }
             } else {
+                // 基数 + 余数分配：每个音素至少获得 baseFrames 帧，
+                // 前 (innerFrames % j) 个音素多获得 1 帧。
+                // 这防止了 innerFrames < j（短音符多音素，如 "apples" 6 token）
+                // 时首个音素被 floor 插值吞掉（0 帧）的问题，与 Python
+                // DataProcessor.preprocess() 的重复填充算法一致。
+                const baseFrames = Math.floor(innerFrames / j);
+                const extraFrames = innerFrames % j;
+                let offset = 0;
                 for (let p = 0; p < j; p++) {
-                    const pStart = i + 1 + Math.floor(p * innerFrames / j);
-                    const pEnd = i + 1 + Math.floor((p + 1) * innerFrames / j);
-                    for (let f = pStart; f < pEnd && f < totalFrames; f++) {
+                    const pFrames = baseFrames + (p < extraFrames ? 1 : 0);
+                    const pStart = i + 1 + offset;
+                    const pEnd = Math.min(pStart + pFrames, totalFrames);
+                    for (let f = pStart; f < pEnd; f++) {
                         mel2token[f] = phIdx + 1 + p;
                     }
+                    offset += pFrames;
                 }
             }
 

@@ -559,12 +559,22 @@ export async function resolvePhonemesFromPipeline() {
 
 export function getPhonemeAdjustments(note) {
   const phonemes = resolvePhonemes(note.lyric);
+  // resolvePhonemes 缓存未命中时返回 fallback [{name: lyric, display: lyric}]（单一音素）。
+  // 日语等"一字符多音素"歌词（如"か"→jp_k,jp_a）在异步解析完成前会拿到 fallback，
+  // 此时若覆盖已保存的 adjustments 会丢失用户调好的边界比例。检测到 fallback 时
+  // 保留已有 adjustments，等 resolvePhonemesFromPipeline 完成后重新 render 对齐。
+  const trimmedLyric = (note.lyric || '').trim();
+  const isFallback = phonemes.length === 1 && phonemes[0].name === trimmedLyric;
   if (note.phonemeAdjustments && note.phonemeAdjustments.length > 0) {
     const cached = note.phonemeAdjustments;
     if (cached.length === phonemes.length && cached[0].name === phonemes[0].name) {
       for (let i = 0; i < phonemes.length; i++) {
         cached[i].display = phonemes[i].display;
       }
+      return cached;
+    }
+    // fallback 期间不要覆盖已保存的 adjustments
+    if (isFallback) {
       return cached;
     }
   }

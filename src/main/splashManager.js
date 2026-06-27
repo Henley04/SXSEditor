@@ -20,6 +20,7 @@ const fs = require('node:fs');
 
 let splashWindow = null;
 let splashReadyAt = 0; // ms timestamp when splash content first painted
+let splashReadyResolvers = []; // resolved when splash content first paints
 
 // Cached values (loaded once per process)
 let cachedBuildInfo = null;
@@ -81,6 +82,7 @@ function createSplashWindow() {
   }
 
   splashReadyAt = 0;
+  splashReadyResolvers = [];
 
   splashWindow = new BrowserWindow({
     width: 440,
@@ -119,6 +121,11 @@ function createSplashWindow() {
   // Record when the splash content actually finishes painting.
   splashWindow.webContents.once('did-finish-load', () => {
     splashReadyAt = Date.now();
+    // Resolve any waiters so the main process can proceed with
+    // revealing the main window only after the splash has painted.
+    const waiters = splashReadyResolvers;
+    splashReadyResolvers = [];
+    for (const resolve of waiters) resolve();
   });
 
   splashWindow.on('closed', () => {
@@ -136,6 +143,19 @@ function getSplashReadyAt() {
   return splashReadyAt;
 }
 
+// Returns a promise that resolves once the splash's content has
+// painted (did-finish-load fired). Used to guarantee the splash is
+// actually visible before the main window is revealed, even when the
+// minimum visible duration is 0. Resolves immediately if the splash
+// has already painted, was never created, or has been destroyed.
+function waitForSplashReady() {
+  if (splashReadyAt > 0) return Promise.resolve();
+  if (!splashWindow || splashWindow.isDestroyed()) return Promise.resolve();
+  return new Promise((resolve) => {
+    splashReadyResolvers.push(resolve);
+  });
+}
+
 function closeSplashWindow() {
   if (splashWindow && !splashWindow.isDestroyed()) {
     splashWindow.close();
@@ -148,6 +168,7 @@ module.exports = {
   closeSplashWindow,
   getSplashWindow,
   getSplashReadyAt,
+  waitForSplashReady,
   registerSplashIpc,
   readBuildInfo,
   readIconDataUrl,
