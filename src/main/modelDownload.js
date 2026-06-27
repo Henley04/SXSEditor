@@ -5,16 +5,21 @@ const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS } = require('../modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 let downloadAbortController = null;
 
 // ===== SiFiGAN helpers =====
 // SiFiGAN is an optional model group stored at the root of onnx_models/
-// (not in precision subdirs). These helpers inspect/delete the two
-// expected files: sifigan_vocoder_dml.onnx and sifigan_stats.joblib.
-const SIFIGAN_FILES = ['sifigan_vocoder_dml.onnx', 'sifigan_stats.joblib'];
+// (not in precision subdirs). These helpers inspect/delete the expected
+// files: sifigan_vocoder_dml.onnx, sifigan_vocoder_dml.onnx.data (external
+// weights), and sifigan_stats.joblib.
+const SIFIGAN_FILES = [
+  'sifigan_vocoder_dml.onnx',
+  'sifigan_vocoder_dml.onnx.data',
+  'sifigan_stats.joblib',
+];
 
 function checkSifiganFilesExist(modelDir) {
   const result = {};
@@ -33,21 +38,13 @@ function checkSifiganFilesExist(modelDir) {
     result[fileName] = { exists, size, fullPath };
     if (!exists) allExist = false;
   }
-  // Also account for external data file (.onnx.data) attached to the main onnx
-  const dataPath = path.join(modelDir, 'sifigan_vocoder_dml.onnx.data');
-  try {
-    const stats = fs.statSync(dataPath);
-    result['sifigan_vocoder_dml.onnx.data'] = { exists: stats.size > 0, size: stats.size, fullPath: dataPath };
-  } catch (_) {
-    result['sifigan_vocoder_dml.onnx.data'] = { exists: false, size: 0, fullPath: dataPath };
-  }
   return { allExist, files: result };
 }
 
 function deleteSifiganFiles(modelDir) {
   const deleted = [];
   const errors = [];
-  for (const fileName of [...SIFIGAN_FILES, 'sifigan_vocoder_dml.onnx.data']) {
+  for (const fileName of SIFIGAN_FILES) {
     const fullPath = path.join(modelDir, fileName);
     try {
       fs.unlinkSync(fullPath);
@@ -386,12 +383,11 @@ function registerModelDownloadIpc() {
     };
   });
 
-  // Start SiFiGAN download. Short-circuits when MODEL_IDS.sifigan is empty
-  // so we never enter the actual download flow until the user fills in the
-  // ModelScope repository ID.
+  // Start SiFiGAN download. Downloads the 3 expected files from the
+  // ModelScope repo (MODEL_IDS.sifigan) to the root of onnx_models/.
+  // Uses chunked download for files >= 16MB, single-threaded for smaller.
   ipcMain.handle('model-download:start-sifigan', async () => {
     const sifiganId = MODEL_IDS.sifigan || '';
-    // TODO: 等用户填写 ModelScope 仓库 ID
     if (!sifiganId) {
       const modelDir = getModelDir();
       const { allExist, files } = checkSifiganFilesExist(modelDir);
@@ -403,23 +399,165 @@ function registerModelDownloadIpc() {
       };
     }
 
-    // Future: when MODEL_IDS.sifigan is populated, download the two files
-    // from ModelScope using the same chunked download logic as the SVS
-    // pipeline. For now this branch is unreachable because the ID is empty.
     const modelDir = getModelDir();
-    const { allExist, files } = checkSifiganFilesExist(modelDir);
+    const { allExist, files: existingFiles } = checkSifiganFilesExist(modelDir);
     if (allExist) {
-      return { status: 'installed', allExist, files };
+      return { status: 'installed', allExist, files: existingFiles };
     }
-    // Placeholder for future download implementation:
-    // downloadAbortController = new AbortController();
-    // await downloadMissingFiles(modelDir, sifiganManifest, { ... });
-    return {
-      status: 'not_downloaded',
-      message: 'Download flow not yet implemented for SiFiGAN',
-      allExist,
-      files,
-    };
+
+    // Build the list of missing files to download
+    const missingFiles = SIFIGAN_FILES.filter(name => !existingFiles[name] || !existingFiles[name].exists);
+    if (missingFiles.length === 0) {
+      return { status: 'installed', allExist: true, files: existingFiles };
+    }
+
+    downloadAbortController = new AbortController();
+    const abortSignal = downloadAbortController.signal;
+    const win = getModelDownloadWindow();
+
+    try {
+      for (const fileName of missingFiles) {
+        if (abortSignal.aborted) throw new Error('Download cancelled');
+
+        const destPath = path.join(modelDir, fileName);
+        const url = getSifiganFileDownloadUrl(fileName);
+        if (!url) {
+          throw new Error(`Failed to build download URL for ${fileName}`);
+        }
+
+        // Ensure parent directory exists
+        fs.mkdirSync(path.dirname(destPath), { recursive: true });
+
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('model-download:file-start', {
+            filePath: fileName,
+            fileIndex: missingFiles.indexOf(fileName),
+            totalFiles: missingFiles.length,
+          });
+        }
+
+        // Get remote file size via HEAD request to decide chunked vs single-threaded.
+        // ModelScope redirects to CDN, so follow one redirect hop.
+        let remoteSize = 0;
+        try {
+          const https = require('node:https');
+          const http = require('node:http');
+          const { URL } = require('node:url');
+          const urlObj = new URL(url);
+          const lib = urlObj.protocol === 'https:' ? https : http;
+          remoteSize = await new Promise((resolve) => {
+            const req = lib.request({
+              hostname: urlObj.hostname,
+              port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+              path: urlObj.pathname + urlObj.search,
+              method: 'HEAD',
+              headers: { 'User-Agent': 'Mozilla/5.0' },
+            }, (response) => {
+              if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+                // Follow redirect — simplified single-hop
+                const redirectUrl = new URL(response.headers.location, url).href;
+                const redirectObj = new URL(redirectUrl);
+                const redirectLib = redirectObj.protocol === 'https:' ? https : http;
+                const redirectReq = redirectLib.request({
+                  hostname: redirectObj.hostname,
+                  port: redirectObj.port || (redirectObj.protocol === 'https:' ? 443 : 80),
+                  path: redirectObj.pathname + redirectObj.search,
+                  method: 'HEAD',
+                  headers: { 'User-Agent': 'Mozilla/5.0' },
+                }, (redirectResponse) => {
+                  const cl = parseInt(redirectResponse.headers['content-length'] || '0', 10);
+                  redirectResponse.resume();
+                  resolve(cl);
+                });
+                redirectReq.on('error', () => resolve(0));
+                redirectReq.end();
+              } else {
+                const cl = parseInt(response.headers['content-length'] || '0', 10);
+                response.resume();
+                resolve(cl);
+              }
+            });
+            req.on('error', () => resolve(0));
+            req.setTimeout(10000, () => { req.destroy(); resolve(0); });
+            req.end();
+          });
+        } catch (_) {}
+
+        // Use chunked download for large files, single-threaded for small
+        if (remoteSize >= MIN_FILE_SIZE_FOR_CHUNKING) {
+          await downloadFileChunked(url, destPath, remoteSize, {
+            abortSignal,
+            onProgress: (downloaded, total) => {
+              if (win && !win.isDestroyed()) {
+                win.webContents.send('model-download:progress', {
+                  currentFile: fileName,
+                  fileIndex: missingFiles.indexOf(fileName),
+                  totalFiles: missingFiles.length,
+                  bytesDownloaded: downloaded,
+                  bytesTotal: total,
+                  overallDownloaded: downloaded,
+                  overallTotal: total,
+                });
+              }
+            },
+          });
+        } else {
+          await downloadFileWithRetry(url, destPath, {
+            abortSignal,
+            onProgress: (downloaded, total) => {
+              if (win && !win.isDestroyed()) {
+                win.webContents.send('model-download:progress', {
+                  currentFile: fileName,
+                  fileIndex: missingFiles.indexOf(fileName),
+                  totalFiles: missingFiles.length,
+                  bytesDownloaded: downloaded,
+                  bytesTotal: total,
+                  overallDownloaded: downloaded,
+                  overallTotal: total,
+                });
+              }
+            },
+          });
+        }
+
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('model-download:file-complete', {
+            filePath: fileName,
+            fileIndex: missingFiles.indexOf(fileName),
+            totalFiles: missingFiles.length,
+          });
+        }
+      }
+
+      // All downloads complete — re-check files
+      const { allExist: nowExists, files: finalFiles } = checkSifiganFilesExist(modelDir);
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('model-download:complete');
+      }
+      console.log('[Main] SiFiGAN 模型下载完成');
+      return {
+        status: nowExists ? 'installed' : 'not_downloaded',
+        allExist: nowExists,
+        files: finalFiles,
+      };
+    } catch (err) {
+      if (err.message === 'Download cancelled') {
+        console.log('[Main] SiFiGAN 模型下载已取消');
+      } else {
+        console.error('[Main] SiFiGAN 模型下载失败:', err);
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('model-download:error', { message: err.message });
+        }
+      }
+      const { allExist: errExists, files: errFiles } = checkSifiganFilesExist(modelDir);
+      return {
+        status: errExists ? 'installed' : 'not_downloaded',
+        allExist: errExists,
+        files: errFiles,
+      };
+    } finally {
+      downloadAbortController = null;
+    }
   });
 
   // Unload SiFiGAN: delete the model files, reset vocoderType to 'default'
