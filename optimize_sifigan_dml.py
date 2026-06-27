@@ -181,11 +181,7 @@ def validate_conv_transpose(ct_node, graph):
             f"ConvTranspose '{ct_node.name}' group={groups}, "
             f"分组/深度卷积 ConvTranspose 分解逻辑尚未实现"
         )
-    if output_padding is not None and any(p != 0 for p in output_padding):
-        raise ValueError(
-            f"ConvTranspose '{ct_node.name}' output_padding={output_padding}, "
-            f"非零 output_padding 分解逻辑尚未实现"
-        )
+    # output_padding 已在 build_conv_transpose_replacement 中通过末尾 Pad 节点支持
 
 
 def build_conv_transpose_replacement(graph, ct_node, uniq_id):
@@ -199,6 +195,9 @@ def build_conv_transpose_replacement(graph, ct_node, uniq_id):
     当 K-S-Pl-Pr >= 0: pads=[K-1, K-S-Pl-Pr], 输出长度 = (T-1)*S + K - Pl - Pr, 无需 Slice
     当 K-S-Pl-Pr  < 0: pads=[K-1, 0], 需要 Slice 裁剪末尾 (S-K+Pl+Pr) 个元素
 
+    带 output_padding 时, ConvTranspose 输出长度多出 output_padding 个元素 (固定为 0),
+    通过末尾追加 Pad 节点 (mode='constant', value=0) 实现。
+
     Args:
         graph: ONNX 图 (用于追加 initializer)
         ct_node: 待替换的 ConvTranspose 节点
@@ -210,11 +209,14 @@ def build_conv_transpose_replacement(graph, ct_node, uniq_id):
     # 读取属性
     stride = 1
     ct_pads = [0, 0]
+    output_padding = 0
     for attr in ct_node.attribute:
         if attr.name == 'strides':
             stride = attr.ints[0]
         elif attr.name == 'pads':
             ct_pads = list(attr.ints)
+        elif attr.name == 'output_padding':
+            output_padding = int(attr.ints[0]) if len(attr.ints) > 0 else 0
     ct_pad_left, ct_pad_right = ct_pads[0], ct_pads[1]
 
     # 读取权重
@@ -228,17 +230,43 @@ def build_conv_transpose_replacement(graph, ct_node, uniq_id):
 
     print(f"    [{uniq_id}] ConvTranspose '{ct_node.name}': "
           f"weight [{c_in}, {c_out}, {K}], stride={stride}, "
-          f"pads=[{ct_pad_left}, {ct_pad_right}], bias={has_bias}")
+          f"pads=[{ct_pad_left}, {ct_pad_right}], output_padding={output_padding}, bias={has_bias}")
 
-    # 计算 Conv1D padding (通用公式, 含 ConvTranspose pads)
-    p_left = K - 1
-    p_right = K - stride - ct_pad_left - ct_pad_right
-    need_slice = p_right < 0
-    p_right_eff = max(p_right, 0)
-    slice_amount = -p_right if need_slice else 0  # = stride - K + ct_pad_left + ct_pad_right
+    # 计算 Conv1D padding (与 ConvTranspose 位置对齐)
+    # Conv1D(upsampled, flip(w), stride=1, pads=[K-1-Pl, K-1-Pr]) 中,
+    # 输出位置 i 对应 ConvTranspose 输出位置 j = i (位置对齐, 推导见函数注释)
+    # 输出长度 = T*S + (K-1-Pl) + (K-1-Pr) - K + 1 = T*S + K - 1 - Pl - Pr
+    #
+    # 由于上采样是"在每个元素后插入 S-1 个零"(长度 T*S, 而非"元素间插入"的 (T-1)*S+1),
+    # Conv1D 输出比 ConvTranspose (无 OP) 多 (S-1) 个元素.
+    #
+    # output_padding: ONNX ConvTranspose 的 output_padding 在末尾扩展输出,
+    # 扩展位置的值由转置卷积公式计算 (不是补零). 因此等价于少 Slice (OP) 个元素.
+    #   - Conv1D 输出长度 (T*S + K - 1 - Pl - Pr) - slice_amount
+    #     = T*S + K - 1 - Pl - Pr - (S-1-OP) = (T-1)*S + K - Pl - Pr + OP ✓
+    #     与 ConvTranspose (含 OP) 输出长度一致.
+    #
+    # 假设 OP < S (SiFiGAN 中 OP<=1, S>=2, 满足). 否则需扩展 Conv1D 右 pad,
+    # 该情况未实现.
+    if output_padding >= stride:
+        raise NotImplementedError(
+            f"output_padding={output_padding} >= stride={stride}, "
+            f"扩展 Conv1D 右 pad 的逻辑尚未实现"
+        )
+    p_left = K - 1 - ct_pad_left
+    p_right = K - 1 - ct_pad_right
+    # 上采样副产物: Conv1D 输出比 ConvTranspose 多 (S-1) 个元素, 需 Slice 末尾
+    # output_padding 减少了需 Slice 的数量 (扩展位置的值由 Conv1D 计算)
+    upsample_excess = stride - 1  # = S - 1
+    slice_amount = upsample_excess - output_padding  # >= 0 (因 OP < S)
+    need_slice = slice_amount > 0
 
-    print(f"        Conv1D 替换: pads=[{p_left}, {p_right_eff}], "
-          f"need_slice={need_slice}" + (f", slice_amount={slice_amount}" if need_slice else ""))
+    # output_padding 已通过减少 slice_amount 处理, 无需 Pad 节点
+    need_output_pad = False
+
+    print(f"        Conv1D 替换: pads=[{p_left}, {p_right}], "
+          f"slice_amount={slice_amount} (上采样副产物 {upsample_excess} - OP {output_padding})"
+          + (f", output_padding={output_padding} (已合并到 slice_amount)" if output_padding > 0 else ""))
 
     inp = ct_node.input[0]
     out = ct_node.output[0]
@@ -320,23 +348,35 @@ def build_conv_transpose_replacement(graph, ct_node, uniq_id):
                                  [f"{base}_flat"], name=f"{base}_reshape_flat"))
 
     # Step 5: Conv1D with flip(w.T), stride=1
+    # 输出名统一用 conv_out_name，后续根据 need_slice/need_output_pad 决定最终连接到 out
     conv_inputs = [f"{base}_flat", w_conv_name]
     if has_bias:
         conv_inputs.append(bias_name)
     conv_out_name = f"{base}_conv_out"
 
-    if need_slice:
-        # K-S-Pl-Pr < 0: pads=[K-1, 0], 然后 Slice 裁剪末尾 slice_amount 个元素
-        conv_node = helper.make_node('Conv', conv_inputs, [conv_out_name],
-                                     name=f"{base}_conv",
-                                     kernel_shape=[K], strides=[1], pads=[p_left, 0])
-        nodes.append(conv_node)
+    # Step 5a: Conv1D (始终输出到 conv_out_name, pads=[K-1-Pl, K-1-Pr])
+    conv_node = helper.make_node('Conv', conv_inputs, [conv_out_name],
+                                 name=f"{base}_conv",
+                                 kernel_shape=[K], strides=[1], pads=[p_left, p_right])
+    nodes.append(conv_node)
 
-        # out_len = T*S - slice_amount
+    # Step 5b: Slice 末尾 (S-1) 个元素 (上采样副产物, stride >= 2 时恒需)
+    sliced_out_name = conv_out_name  # 默认不 Slice
+    if need_slice:
         const_slice_amount = numpy_helper.from_array(
             np.array([slice_amount], dtype=np.int64), name=f"{base}_slice_amt")
         graph.initializer.append(const_slice_amount)
-        nodes.append(helper.make_node('Sub', [f"{base}_TS", f"{base}_slice_amt"],
+        # 使用 Conv1D 实际输出长度 L (= T*S + K - 1 - Pl - Pr), 而非 T*S
+        # 当 K-1-Pl-Pr != 0 时两者差 (K-1-Pl-Pr), 用 T*S 会切掉过多元素
+        # Slice 后长度 = (T*S + K - 1 - Pl - Pr) - (S-1) = (T-1)*S + K - Pl - Pr
+        #              = ConvTranspose 无 OP 的输出长度 ✓
+        nodes.append(helper.make_node('Shape', [conv_out_name],
+                                     [f"{base}_conv_shape"], name=f"{base}_conv_shape"))
+        nodes.append(helper.make_node('Gather', [f"{base}_conv_shape", f"{base}_c2"],
+                                     [f"{base}_conv_L_scalar"], name=f"{base}_gL", axis=0))
+        nodes.append(helper.make_node('Unsqueeze', [f"{base}_conv_L_scalar", f"{base}_c0"],
+                                     [f"{base}_conv_L"], name=f"{base}_uL"))
+        nodes.append(helper.make_node('Sub', [f"{base}_conv_L", f"{base}_slice_amt"],
                                      [f"{base}_out_len"], name=f"{base}_sub_outlen"))
 
         slice_starts = numpy_helper.from_array(
@@ -353,16 +393,30 @@ def build_conv_transpose_replacement(graph, ct_node, uniq_id):
         slice_axes = numpy_helper.from_array(
             np.array([0, 1, 2], dtype=np.int64), name=f"{base}_slice_axes")
         graph.initializer.append(slice_axes)
+        sliced_out_name = f"{base}_sliced"
         nodes.append(helper.make_node('Slice',
                                      [conv_out_name, f"{base}_slice_starts",
                                       f"{base}_slice_ends", f"{base}_slice_axes"],
-                                     [out], name=f"{base}_slice"))
+                                     [sliced_out_name], name=f"{base}_slice"))
+
+    # Step 5c: 若 need_output_pad, 末尾追加 output_padding 个零 (Pad, mode='constant', value=0)
+    if need_output_pad:
+        # Pad 格式 [begin_0, begin_1, begin_2, end_0, end_1, end_2] (3D 输入 [B, C, L])
+        outpad_pads = numpy_helper.from_array(
+            np.array([0, 0, 0, 0, 0, output_padding], dtype=np.int64),
+            name=f"{base}_outpad_pads",
+        )
+        outpad_val = numpy_helper.from_array(
+            np.array(0.0, dtype=np.float32), name=f"{base}_outpad_val")
+        graph.initializer.append(outpad_pads)
+        graph.initializer.append(outpad_val)
+        nodes.append(helper.make_node('Pad',
+                                     [sliced_out_name, f"{base}_outpad_pads", f"{base}_outpad_val"],
+                                     [out], name=f"{base}_outpad", mode='constant'))
     else:
-        # K-S-Pl-Pr >= 0: pads=[K-1, K-S-Pl-Pr], 输出长度直接正确, 无需 Slice
-        conv_node = helper.make_node('Conv', conv_inputs, [out],
-                                     name=f"{base}_conv",
-                                     kernel_shape=[K], strides=[1], pads=[p_left, p_right_eff])
-        nodes.append(conv_node)
+        # 无 output_padding: 用 Identity 直接连接 (保持输出名为 out)
+        nodes.append(helper.make_node('Identity', [sliced_out_name], [out],
+                                     name=f"{base}_identity_out"))
 
     return nodes
 
