@@ -162,6 +162,7 @@ class AudioSegmentation {
         const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.75;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
+        const language = options.language || null;
 
         let notesHash = 0;
         for (let i = 0; i < notes.length; i++) {
@@ -203,7 +204,7 @@ class AudioSegmentation {
             }
         }
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}`;
     }
 
     /**
