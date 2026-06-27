@@ -14,7 +14,13 @@ const WINDOW_NAMES = [
   'settings_window',
   'model_download_window',
   'resource_manager_window',
+  'splash_window',
 ];
+
+// Windows that need onnxruntime-web wasm/JS files copied alongside.
+// The splash window does not run inference, so it is excluded to keep
+// its bundle small.
+const ONNX_WINDOW_NAMES = WINDOW_NAMES.filter((n) => n !== 'splash_window');
 
 rules.push({
   test: /\.css$/,
@@ -38,7 +44,7 @@ rules.push({
 // onnxruntime-web 文件复制模式
 // 使用 globOptions 以正确处理 glob 模式
 const ortDistDir = path.resolve(__dirname, 'node_modules/onnxruntime-web/dist');
-const onnxruntimeWasmPatterns = WINDOW_NAMES.flatMap((name) => [
+const onnxruntimeWasmPatterns = ONNX_WINDOW_NAMES.flatMap((name) => [
   {
     from: '*.wasm',
     to: path.resolve(__dirname, `.webpack/renderer/${name}/[name][ext]`),

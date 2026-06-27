@@ -109,6 +109,14 @@ module.exports = {
                 js: './src/preload.js',
               },
             },
+            {
+              html: './src/splash.html',
+              js: './src/splash.js',
+              name: 'splash_window',
+              preload: {
+                js: './src/splashPreload.js',
+              },
+            },
           ],
         },
       },

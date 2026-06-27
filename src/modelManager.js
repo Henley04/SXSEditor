@@ -62,13 +62,18 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'basic_pitch_model/group1-shard1of1.bin', required: true },
 ];
 
-// JP language models: fine-tuned files (note_text_encoder + preflow + cond_emb).
-// All three are required for correct JP inference: cond_emb must match the
-// JP fine-tuned preflow+embedding, otherwise phoneme corruption occurs.
+// JP language models: fine-tuned files (note_text_encoder + preflow + cond_emb + diff_step_dml).
+// All four are required for correct JP inference (v3+): cond_emb must match the
+// JP fine-tuned preflow+embedding, and diff_step_dml must contain the merged
+// DiffLlama LoRA weights for proper JP acoustic modeling.
 const JP_MODEL_FILE_MANIFEST = [
   { filePath: 'note_text_encoder.onnx', required: true },
   { filePath: 'preflow.onnx', required: true },
   { filePath: 'cond_emb.onnx', required: true },
+  // diff_step_dml.onnx: v3+ 日语微调对 22 层 DiffLlama attention 注入了 LoRA，
+  // 合并后的 cfm_decoder 权重必须随 JP 模式切换才能让 DiffLlama LoRA 生效。
+  // v1/v2 仅微调 preflow+cond_emb，此文件可选；v3+ 必需。
+  { filePath: 'diff_step_dml.onnx', required: true },
   // note_pitch_encoder is intentionally NOT in this manifest: JP LoRA shares
   // the base model's pitch encoder (MIDI pitch is language-agnostic).
 ];
