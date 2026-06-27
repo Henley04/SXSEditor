@@ -755,10 +755,13 @@ openModelDownloadBtn.addEventListener('click', async () => {
     }
 })();
 
-// Load devices; after settings are applied to UI, check SiFiGAN vocoder availability
-loadDevices().finally(() => {
-    checkSifiganVocoderFiles().then(updateVocoderTypeUI).catch(() => {});
-});
+// Load devices and check SiFiGAN vocoder availability in parallel.
+// Previously checkSifiganVocoderFiles was gated behind loadDevices() via
+// .finally(), which meant the SiFiGAN dropdown stayed at "未下载" until the
+// (slow) hardware/device enumeration finished. Running them independently
+// makes the SiFiGAN detection appear instantly.
+loadDevices().catch(() => {});
+checkSifiganVocoderFiles().then(updateVocoderTypeUI).catch(() => {});
 
 // Check model availability on load
 if (window.electronAPI?.checkModels) {

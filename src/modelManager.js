@@ -13,8 +13,8 @@ const MODEL_IDS = {
   fp8: '',  // placeholder — download link TBD
   int8: 'syxppp/SoulX-Singer-onnx-directml-int8',
   'int8-npu': 'syxppp/SoulX-Singer-onnx-directml-int8-dynamic',
-  // TODO: 等用户填写 ModelScope 仓库 ID（SiFiGAN ONNX 模型上传后填入）
-  sifigan: '',
+  // SiFiGAN ONNX 模型仓库 (FP32 DML 兼容版 + stats)
+  sifigan: 'syxppp/sifigan-onnx',
 };
 
 // JP (Japanese) language-specific model repos
@@ -51,7 +51,8 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'cond_emb.onnx.data', required: true },
   { filePath: 'diff_step_dml.onnx', required: true },
   { filePath: 'vocoder_dml.onnx', required: true },
-  { filePath: 'sifigan_vocoder_dml.onnx', required: false, size: 611 * 1024 * 1024, group: 'sifigan-vocoder' },
+  { filePath: 'sifigan_vocoder_dml.onnx', required: false, size: 340 * 1024, group: 'sifigan-vocoder' },
+  { filePath: 'sifigan_vocoder_dml.onnx.data', required: false, size: 47 * 1024 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'sifigan_stats.joblib', required: false, size: 2.5 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'mel_transform.onnx', required: true },
   { filePath: 'mel_transform.onnx.data', required: true },
@@ -168,6 +169,18 @@ function getFileDownloadUrl(filePath, precision) {
  */
 function getJpFileDownloadUrl(filePath, precision) {
   const modelId = getJpModelId(precision);
+  if (!modelId) return null;
+  const encoded = encodeURIComponent(filePath);
+  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
+}
+
+/**
+ * Get the download URL for a SiFiGAN model file.
+ * SiFiGAN files live in their own ModelScope repo (MODEL_IDS.sifigan)
+ * and are stored at the root of onnx_models/ (not in precision subdirs).
+ */
+function getSifiganFileDownloadUrl(filePath) {
+  const modelId = MODEL_IDS.sifigan;
   if (!modelId) return null;
   const encoded = encodeURIComponent(filePath);
   return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
@@ -1110,6 +1123,7 @@ module.exports = {
   MODELSCOPE_ENDPOINT,
   PRECISION_SUBDIR_MAP,
   PRECISION_SUBDIR_PRECESIONS,
+  MIN_FILE_SIZE_FOR_CHUNKING,
   checkMissingFiles,
   checkMissingFilesAsync,
   checkMissingJpFiles,
@@ -1122,6 +1136,7 @@ module.exports = {
   checkModelScopeCLIAvailable,
   getFileDownloadUrl,
   getJpFileDownloadUrl,
+  getSifiganFileDownloadUrl,
   getModelId,
   getJpModelId,
   getRemoteFileSize,
