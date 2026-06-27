@@ -10,6 +10,36 @@ const NPU_STATIC_SEQ_LEN = 2048;
 class Preprocessing {
     constructor(textProcessing) {
         this.textProcessing = textProcessing;
+        this._buildIdx2Phone();
+        // ARPAbet 元音基名（不含重音后缀 0/1/2）
+        this._enVowelBases = new Set(['AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'EH', 'ER', 'EY', 'IH', 'IY', 'OW', 'OY', 'UH', 'UW']);
+        this._jpVowels = new Set(['a', 'i', 'u', 'e', 'o']);
+    }
+
+    _buildIdx2Phone() {
+        const phone2idx = this.textProcessing.phone2idx || {};
+        const maxIdx = Object.values(phone2idx).reduce((m, v) => Math.max(m, v), 0);
+        this._idx2phone = new Array(maxIdx + 1).fill(null);
+        for (const [phone, idx] of Object.entries(phone2idx)) {
+            this._idx2phone[idx] = phone;
+        }
+    }
+
+    /**
+     * 判断 phonemeId 是否对应元音。
+     * 用于短音符下帧分配时元音优先（元音是发音核心）。
+     */
+    _isVowelByIdx(phonemeIdx) {
+        const name = this._idx2phone[phonemeIdx];
+        if (!name) return false;
+        if (name.startsWith('en_')) {
+            const base = name.slice(3).replace(/[012]$/, '');
+            return this._enVowelBases.has(base);
+        }
+        if (name.startsWith('jp_')) {
+            return this._jpVowels.has(name.slice(3));
+        }
+        return false;
     }
 
     midiToFreq(pitch) {
@@ -154,7 +184,7 @@ class Preprocessing {
                     enPhIds.push(this.textProcessing._lookupPhonemeId('en_' + subParts[s].trim()));
                 }
                 enPhIds.push(SEP_ID);
-                phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios]);
+                phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios, enPhIds]);
                 for (let e = 0; e < enPhIds.length; e++) {
                     newPhonemes.push(enPhIds[e]);
                     note2origin.push(phIdx);
@@ -170,7 +200,7 @@ class Preprocessing {
                         jpPhIds.push(this.textProcessing._lookupPhonemeId('jp_' + phParts[s].trim()));
                     }
                     // Don't add SEP_ID for Japanese — training doesn't use it
-                    phLocations.push([dur, Math.max(1, jpPhIds.length), durationRatios]);
+                    phLocations.push([dur, Math.max(1, jpPhIds.length), durationRatios, jpPhIds]);
                     for (let e = 0; e < jpPhIds.length; e++) {
                         newPhonemes.push(jpPhIds[e]);
                         note2origin.push(phIdx);
@@ -179,7 +209,7 @@ class Preprocessing {
                     }
                 } else {
                     const phId = this.textProcessing._lookupPhonemeId(lyric);
-                    phLocations.push([dur, 1, durationRatios]);
+                    phLocations.push([dur, 1, durationRatios, [phId]]);
                     newPhonemes.push(phId);
                     note2origin.push(phIdx);
                     notePitches.push(pitch);
@@ -194,7 +224,7 @@ class Preprocessing {
                         enPhIds.push(this.textProcessing._lookupPhonemeId('en_' + phParts[s].trim()));
                     }
                     enPhIds.push(SEP_ID);
-                    phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios]);
+                    phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios, enPhIds]);
                     for (let e = 0; e < enPhIds.length; e++) {
                         newPhonemes.push(enPhIds[e]);
                         note2origin.push(phIdx);
@@ -203,7 +233,7 @@ class Preprocessing {
                     }
                 } else {
                     const phId = this.textProcessing._lookupPhonemeId(lyric);
-                    phLocations.push([dur, 1, durationRatios]);
+                    phLocations.push([dur, 1, durationRatios, [phId]]);
                     newPhonemes.push(phId);
                     note2origin.push(phIdx);
                     notePitches.push(pitch);
@@ -211,7 +241,7 @@ class Preprocessing {
                 }
             } else {
                 const phId = this.textProcessing._lookupPhonemeId(lyric);
-                phLocations.push([dur, 1, durationRatios]);
+                phLocations.push([dur, 1, durationRatios, [phId]]);
                 newPhonemes.push(phId);
                 note2origin.push(phIdx);
                 notePitches.push(pitch);
@@ -338,16 +368,101 @@ class Preprocessing {
                     offset += pFrames;
                 }
             } else {
-                // 基数 + 余数分配：每个音素至少获得 baseFrames 帧，
-                // 前 (innerFrames % j) 个音素多获得 1 帧。
-                // 这防止了 innerFrames < j（短音符多音素，如 "apples" 6 token）
-                // 时首个音素被 floor 插值吞掉（0 帧）的问题，与 Python
-                // DataProcessor.preprocess() 的重复填充算法一致。
-                const baseFrames = Math.floor(innerFrames / j);
-                const extraFrames = innerFrames % j;
+                // 帧分配策略：
+                // - innerFrames >= j：基数+余数分配，每个音素至少 baseFrames 帧
+                // - innerFrames < j：帧数不足，元音优先获得帧（元音是发音核心）
+                //   先给元音各 1 帧，再按位置给辅音 1 帧，剩余帧给元音
+                //   这样短音符下 AE1（元音）优先于 Z/SEP（辅音/分隔符）获得帧
+                const phonemeIds = phLocations[idx][3] || [];
+                let allocation;
+                if (innerFrames >= j) {
+                    // 帧数充足：基数 + 余数分配
+                    const baseFrames = Math.floor(innerFrames / j);
+                    const extraFrames = innerFrames % j;
+                    allocation = new Array(j);
+                    for (let p = 0; p < j; p++) {
+                        allocation[p] = baseFrames + (p < extraFrames ? 1 : 0);
+                    }
+                } else if (phonemeIds.length === j) {
+                    // 帧数不足：元音优先分配
+                    // 优先级：元音（发音核心）> 辅音 > SEP
+                    // 策略：元音先各 1 帧 → 剩余帧优先给元音（达到 2 帧）
+                    //       → 辅音各 1 帧 → 剩余帧均分
+                    allocation = new Array(j).fill(0);
+                    const SEP_LOCAL_ID = this.textProcessing.phone2idx['<SEP>'] || 9;
+                    const vowelPositions = [];
+                    const consonantPositions = [];  // 非 SEP 辅音
+                    const sepPositions = [];
+                    for (let p = 0; p < j; p++) {
+                        if (this._isVowelByIdx(phonemeIds[p])) {
+                            vowelPositions.push(p);
+                        } else if (phonemeIds[p] === SEP_LOCAL_ID) {
+                            sepPositions.push(p);
+                        } else {
+                            consonantPositions.push(p);
+                        }
+                    }
+                    let used = 0;
+                    // 1. 元音各 1 帧
+                    for (const p of vowelPositions) {
+                        if (used < innerFrames) { allocation[p] = 1; used++; }
+                    }
+                    // 2. 剩余帧优先给元音（让元音达到 2 帧，确保发音时长）
+                    let remaining = innerFrames - used;
+                    while (remaining > 0 && vowelPositions.length > 0) {
+                        let gaveAny = false;
+                        for (const p of vowelPositions) {
+                            if (remaining <= 0) break;
+                            if (allocation[p] < 2) {
+                                allocation[p]++;
+                                remaining--;
+                                used++;
+                                gaveAny = true;
+                            }
+                        }
+                        if (!gaveAny) break;
+                    }
+                    // 3. 辅音各 1 帧（非 SEP 优先）
+                    for (const p of consonantPositions) {
+                        if (used < innerFrames) { allocation[p] = 1; used++; }
+                    }
+                    // 4. SEP 各 1 帧（最低优先级）
+                    for (const p of sepPositions) {
+                        if (used < innerFrames) { allocation[p] = 1; used++; }
+                    }
+                    // 5. 剩余帧均分（元音优先）
+                    remaining = innerFrames - used;
+                    while (remaining > 0) {
+                        let gaveAny = false;
+                        for (const p of vowelPositions) {
+                            if (remaining <= 0) break;
+                            allocation[p]++;
+                            remaining--;
+                            gaveAny = true;
+                        }
+                        if (!gaveAny) {
+                            for (let p = 0; p < j; p++) {
+                                if (remaining <= 0) break;
+                                allocation[p]++;
+                                remaining--;
+                                gaveAny = true;
+                            }
+                        }
+                        if (!gaveAny) break;
+                    }
+                } else {
+                    // 无音素信息：回退到基数+余数（兼容旧 phLocations 结构）
+                    const baseFrames = Math.floor(innerFrames / j);
+                    const extraFrames = innerFrames % j;
+                    allocation = new Array(j);
+                    for (let p = 0; p < j; p++) {
+                        allocation[p] = baseFrames + (p < extraFrames ? 1 : 0);
+                    }
+                }
+                // 按位置顺序写入 mel2token
                 let offset = 0;
                 for (let p = 0; p < j; p++) {
-                    const pFrames = baseFrames + (p < extraFrames ? 1 : 0);
+                    const pFrames = allocation[p];
                     const pStart = i + 1 + offset;
                     const pEnd = Math.min(pStart + pFrames, totalFrames);
                     for (let f = pStart; f < pEnd; f++) {

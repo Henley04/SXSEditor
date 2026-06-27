@@ -125,13 +125,16 @@ class TextProcessing {
         } else {
             console.warn(`[OnnxSVSPipeline] English word "${word}" not in CMUdict (${dictSize} entries), using letter-level fallback`);
         }
+        // 字母→音素映射：基于字母在单词中的常见发音（自然发音规则），
+        // 而非字母本身的读音。适用于未登录词（如 hahaha、拟声词）。
+        // 元音带主重音 1（SVS 中每个音节通常都有重音）。
         const letterMap = {
-            a: 'EY1', b: 'B IY1', c: 'S IY1', d: 'D IY1', e: 'IY1',
-            f: 'EH1 F', g: 'JH IY1', h: 'EY1 CH', i: 'AY1', j: 'JH EY1',
-            k: 'K EY1', l: 'EH1 L', m: 'EH1 M', n: 'EH1 N', o: 'OW1',
-            p: 'P IY1', q: 'K Y UW1', r: 'AA1 R', s: 'EH1 S', t: 'T IY1',
-            u: 'Y UW1', v: 'V IY1', w: 'D AH1 B AH0 L Y UW0', x: 'EH1 K S',
-            y: 'W AY1', z: 'Z IY1',
+            a: 'AE1', b: 'B', c: 'K', d: 'D', e: 'EH1',
+            f: 'F', g: 'G', h: 'HH', i: 'IH1', j: 'JH',
+            k: 'K', l: 'L', m: 'M', n: 'N', o: 'AA1',
+            p: 'P', q: 'K', r: 'R', s: 'S', t: 'T',
+            u: 'AH1', v: 'V', w: 'W', x: 'K S', y: 'Y',
+            z: 'Z',
         };
         const phonemes = [];
         for (const ch of lower) {
