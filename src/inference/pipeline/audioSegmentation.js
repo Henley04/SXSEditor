@@ -166,7 +166,20 @@ class AudioSegmentation {
         let notesHash = 0;
         for (let i = 0; i < notes.length; i++) {
             const n = notes[i];
-            const s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}`;
+            // phonemeAdjustments 影响合成结果（durationRatios 决定 mel2token 帧分配，
+            // volumePoints 决定音量包络），必须纳入缓存键，否则编辑音素边界/音量后
+            // 会命中旧缓存返回过期音频。
+            let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}`;
+            if (n.phonemeAdjustments) {
+                for (const adj of n.phonemeAdjustments) {
+                    s += `|dr:${adj.durationRatio}|or:${adj.offsetRatio || 0}`;
+                    if (adj.volumePoints) {
+                        for (const vp of adj.volumePoints) {
+                            s += `:${vp.t}:${vp.v}`;
+                        }
+                    }
+                }
+            }
             for (let j = 0; j < s.length; j++) {
                 notesHash = ((notesHash << 5) - notesHash + s.charCodeAt(j)) | 0;
             }

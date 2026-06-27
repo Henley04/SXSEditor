@@ -74,6 +74,7 @@ const {
   createSplashWindow,
   closeSplashWindow,
   getSplashReadyAt,
+  waitForSplashReady,
   registerSplashIpc,
 } = require('./main/splashManager');
 
@@ -150,9 +151,10 @@ app.whenReady().then(() => {
   // next to the CSP setup.)
   const showSplash = !isDev;
   // Minimum visible duration of the splash, measured from when the
-  // splash's SVG actually painted. Kept short so it doesn't slow down
-  // perceived startup, but long enough to not flash by unnoticed.
-  const MIN_SPLASH_MS = 1000;
+  // splash's SVG actually painted. Set to 0 so the splash never
+  // artificially delays startup — the main window is revealed as soon
+  // as the splash has painted (see waitForSplashReady below).
+  const MIN_SPLASH_MS = 0;
 
   if (showSplash) {
     createSplashWindow();
@@ -243,15 +245,16 @@ app.whenReady().then(() => {
       console.warn('[Main] Device validation failed:', err.message);
     } finally {
       // In dev mode: reveal the main window immediately.
-      // In packaged mode: enforce the splash's minimum visible duration,
-      // measured from when the splash's SVG actually painted. If the
-      // splash hasn't finished painting yet (very fast main-window
-      // load), splashReadyAt is 0 and we wait the full MIN_SPLASH_MS
-      // from now to give the splash time to be seen.
+      // In packaged mode: first guarantee the splash has actually
+      // painted (so it is visible before the main window appears),
+      // then enforce the splash's minimum visible duration measured
+      // from when the splash's SVG painted. With MIN_SPLASH_MS = 0
+      // the main window is revealed the moment the splash is visible.
       if (!showSplash) {
         revealMainWindow();
         return;
       }
+      await waitForSplashReady();
       const readyAt = getSplashReadyAt();
       const referenceTime = readyAt || Date.now();
       const elapsed = Date.now() - referenceTime;
