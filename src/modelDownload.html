@@ -51,8 +51,8 @@
         <input type="radio" name="modelPrecision" value="int8-npu">
         <span class="precision-radio"></span>
         <span class="precision-text">
-          <span class="precision-name" data-i18n="modelDownload.precisionInt8Npu">INT8-NPU (NPU 优化动态维度)</span>
-          <span class="precision-desc" data-i18n="modelDownload.precisionInt8NpuDesc">动态维度模型，支持 NPU 自定义 batch size，推荐 NPU 用户使用</span>
+          <span class="precision-name" data-i18n="modelDownload.precisionInt8Npu">INT8-NPU (NPU 优化固定维度)</span>
+          <span class="precision-desc" data-i18n="modelDownload.precisionInt8NpuDesc">固定维度模型，替换 NPU 不支持的算子并固化静态 shape，支持自定义 batch size，推荐 NPU 用户使用</span>
         </span>
       </label>
     </div>
