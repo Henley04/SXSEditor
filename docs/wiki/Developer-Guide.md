@@ -223,6 +223,31 @@ Binary audio data uses `Float32Array` transfer for low latency.
 
 Key constants: `SAMPLE_RATE=24000`, `HOP_SIZE=480`, `EMBED_DIM=512`, `COND_DIM=1024`.
 
+### Phoneme Duration Statistics (Data-Driven)
+
+`build_en_phoneme_duration_stats.py` (project root) generates a data-driven ARPAbet phoneme duration table from MFA-aligned LJSpeech, replacing the previous vowel-priority heuristic in `preprocessing.js`.
+
+**Pipeline**: MFA TextGrid (phoneme-level alignment) + librispeech-lexicon.txt (CMU dict with stress 0/1/2) + LJSpeech metadata.csv → JSON statistics with unigram / bigram / trigram / by_stress / by_position / trigram_full buckets.
+
+**Data sources** (run script without args to see download URLs):
+- LJSpeech TextGrid alignment: `preprocessed_data/LJSpeech/TextGrid/` (from ming024/FastSpeech2)
+- LJSpeech metadata: `raw_data/LJSpeech/metadata.csv`
+- Lexicon: `lexicon/librispeech-lexicon.txt`
+- Optional: `pip install praatio` for more robust TextGrid parsing (falls back to built-in regex)
+
+**Output**: `src/inference/en_phoneme_durations.json`
+
+**Usage**:
+```bash
+python build_en_phoneme_duration_stats.py
+python build_en_phoneme_duration_stats.py --min-samples 10  # filter low-frequency keys
+```
+
+**Application policy** (planned, not yet integrated in `preprocessing.js`):
+1. User `phonemeAdjustments` (manual) wins always
+2. Default: trigram_full lookup → fall back to trigram → bigram → unigram
+3. Extremely short notes (`innerFrames < phonemeCount`): keep vowel-priority to prevent phoneme swallowing
+
 ### Float16 Patch
 
 `float16Patch.js` patches onnxruntime-common's type mapping to use `Uint16Array` for float16 tensors (Node.js v24+ compatibility).
