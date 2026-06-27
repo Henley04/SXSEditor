@@ -1,7 +1,5 @@
-const { MEL_DIM, COND_DIM } = require('./constants');
+const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32 } = require('./utils');
-
-const NPU_STATIC_SEQ_LEN = 2048;
 
 /**
  * Diffusion sampling loop (the core synthesis algorithm)

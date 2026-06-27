@@ -3,10 +3,8 @@ const fs = require('node:fs');
 const ort = require('onnxruntime-node');
 const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
-const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES } = require('./constants');
+const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
 const { float32ToF16Buffer } = require('./utils');
-
-const NPU_STATIC_SEQ_LEN = 2048;
 
 /**
  * 获取主窗口的 webContents（WebNN IPC 必须发送到主窗口，因为只有主窗口注册了 WebNN 处理器）
@@ -579,7 +577,7 @@ class WebNNSessionProxy {
 
         return new Promise((resolve, reject) => {
             const requestId = `svs-webnn-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            const timeout = setTimeout(() => reject(new Error(`WebNN inference timeout (${this.modelId})`)), 120000);
+            const timeout = setTimeout(() => reject(new Error(`WebNN inference timeout (${this.modelId})`)), IPC_TIMEOUT_INFERENCE);
 
             ipcMain.handleOnce(`webnn:runInference:response:${requestId}`, (_, result) => {
                 clearTimeout(timeout);

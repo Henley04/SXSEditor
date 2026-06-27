@@ -17,11 +17,22 @@ const VOCODER_OVERLAP_FRAMES = 8;
 // Vocoder NPU 静态形状（独立于 encoder/diffusion 的 seq_len=2048）
 // Vocoder ISTFT Conv 的 Pad 中间张量在 seq_len=2048 时超出 WebNN 2GB 限制
 const NPU_VOCODER_SEQ_LEN = 500;
+// NPU 静态形状模型固定序列长度（encoder/diffusion 输入维度）
+// 用于 optimized_npu 模型，totalFramesWithPrompt 不能超过此值
+const NPU_STATIC_SEQ_LEN = 2048;
 const LONG_AUDIO_THRESHOLD_SEC = 30;
 const SEGMENT_MIN_SEC = 15;
 const SEGMENT_MAX_SEC = 30;
 const SEGMENT_OVERLAP_SEC = 2;
 const MAX_SAFE_FRAMES = 40000;
+
+// WebNN IPC 超时常量（毫秒）
+// 单次模型推理：NPU 编译 + 推理的合理上限
+const IPC_TIMEOUT_INFERENCE = 120000;
+// 模型加载：含 EP 初始化与权重上传，比单次推理更慢
+const IPC_TIMEOUT_MODEL_LOAD = 180000;
+// 合成主流程：含多步 diffusion 循环 + vocoder，耗时最长
+const IPC_TIMEOUT_SYNTHESIS = 600000;
 
 const ONNX_MODEL_FILES = [
     'note_text_encoder.onnx',
@@ -115,11 +126,15 @@ module.exports = {
     VOCODER_CHUNK_FRAMES,
     VOCODER_OVERLAP_FRAMES,
     NPU_VOCODER_SEQ_LEN,
+    NPU_STATIC_SEQ_LEN,
     LONG_AUDIO_THRESHOLD_SEC,
     SEGMENT_MIN_SEC,
     SEGMENT_MAX_SEC,
     SEGMENT_OVERLAP_SEC,
     MAX_SAFE_FRAMES,
+    IPC_TIMEOUT_INFERENCE,
+    IPC_TIMEOUT_MODEL_LOAD,
+    IPC_TIMEOUT_SYNTHESIS,
     ONNX_MODEL_FILES,
     SIFIGAN_MODEL_FILES,
     SIFIGAN_STATS_FILE,

@@ -4,8 +4,8 @@ const fs = require('node:fs');
 // Side effect: apply float16 patch on module load
 require('./float16Patch');
 
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES } = require('./constants');
-const { getMainWindowWebContents, classifyDevice, isDiscreteGPUByName, enumerateDMLDevices, detectBestGPU, detectBestDevice, selectBestDevice, buildModelDeviceMapping, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_MODEL_LOAD, IPC_TIMEOUT_SYNTHESIS } = require('./constants');
+const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
@@ -612,7 +612,7 @@ class OnnxSVSPipeline {
                 const wc = getMainWindowWebContents();
                 if (!wc) { resolve({ success: false, error: 'No renderer window' }); return; }
 
-                const ipcTimeout = 180000;
+                const ipcTimeout = IPC_TIMEOUT_MODEL_LOAD;
 
                 const requestId = `svs-webnn-load-${Date.now()}-${Math.random().toString(36).slice(2)}`;
                 const timeout = setTimeout(() => resolve({ success: false, error: 'Load timeout' }), ipcTimeout);
@@ -1052,8 +1052,7 @@ class OnnxSVSPipeline {
 
         console.log(`[OnnxSVSPipeline] Segmented synthesis: frames=${totalFrames}, tokens=${tokenCount}, steps=${totalSteps}`);
 
-        // NPU 静态形状模型限制：totalFramesWithPrompt 不能超过 2048
-        const NPU_STATIC_SEQ_LEN = 2048;
+        // NPU 静态形状模型限制：totalFramesWithPrompt 不能超过 NPU_STATIC_SEQ_LEN
         if (this.useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
             const maxFrames = NPU_STATIC_SEQ_LEN - Math.min(ptFrameCount, 50);
             if (totalFrames > maxFrames) {
@@ -1111,7 +1110,7 @@ class OnnxSVSPipeline {
 
         return new Promise((resolve, reject) => {
             const requestId = `svs-webnn-synth-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            const timeout = setTimeout(() => reject(new Error('WebNN synthesis timeout')), 600000);
+            const timeout = setTimeout(() => reject(new Error('WebNN synthesis timeout')), IPC_TIMEOUT_SYNTHESIS);
 
             // Listen for progress updates from renderer
             const progressHandler = (event, data) => {
@@ -1198,7 +1197,7 @@ class OnnxSVSPipeline {
 
         return new Promise((resolve, reject) => {
             const requestId = `svs-webnn-batch-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-            const timeout = setTimeout(() => reject(new Error('WebNN batch synthesis timeout')), 600000);
+            const timeout = setTimeout(() => reject(new Error('WebNN batch synthesis timeout')), IPC_TIMEOUT_SYNTHESIS);
 
             // Listen for progress updates from renderer
             const progressHandler = (event, data) => {
@@ -1352,7 +1351,6 @@ class OnnxSVSPipeline {
             }
 
             // NPU 静态形状模型限制
-            const NPU_STATIC_SEQ_LEN = 2048;
             if (this.useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
                 const maxFrames = NPU_STATIC_SEQ_LEN - Math.min(ptFrameCount, 50);
                 if (totalFrames > maxFrames) {
