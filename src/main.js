@@ -175,96 +175,110 @@ app.whenReady().then(() => {
     }
   };
 
-  // 主窗口渲染进程就绪后：先完成 NPU 检测，再校验设备设置
-  mainWindow.webContents.once('did-finish-load', async () => {
-    try {
-      // 等待 NPU 检测完成（需要渲染进程处理 WebNN IPC）
-      const { npuAvailable } = await detectAllHardware();
-      console.log(`[Main] Hardware detection complete: NPU ${npuAvailable ? 'available' : 'not available'}`);
-
-      const settings = loadSettings();
-      const deviceMode = settings.deviceMode || (settings.deviceId !== undefined && settings.deviceId !== null ? 'manual' : 'smart');
-
-      if (deviceMode === 'manual' || deviceMode === 'advanced') {
-        const gpuInfo = await ensureGPUInfo();
-        const dmlDevices = getCachedDMLDevices() || [];
-        const allDevices = [...dmlDevices];
-        for (const c of gpuInfo) {
-          if (!allDevices.find(d => d.name === c.model)) {
-            const vramBytes = (c.memoryTotal || c.vram || 0) * 1024 * 1024;
-            const deviceType = classifyDeviceFromName(c.model, vramBytes);
-            allDevices.push({ name: c.model, deviceType, isDiscrete: deviceType === 'discrete-gpu', vramBytes, source: 'systeminformation' });
-          }
-        }
-
-        if (npuAvailable && !allDevices.some(d => d.deviceType === 'npu')) {
-          allDevices.push({
-            name: 'NPU (WebNN)',
-            deviceType: 'npu',
-            isDiscrete: false,
-            vramBytes: 0,
-            vram: '0 MB',
-            vendor: '',
-            dxgiAdapterNumber: undefined,
-            source: 'webnn',
-          });
-        }
-
-        if (deviceMode === 'manual') {
-          const preferredId = settings.preferredDeviceId ?? settings.deviceId;
-          const preferredType = settings.preferredDeviceType;
-
-          // NPU devices are validated at pipeline init via probe — don't switch at startup
-          if (preferredType === 'npu') {
-            console.log('[Main] NPU device selected, skipping startup validation (will verify via probe at inference time)');
+  // 主窗口渲染进程就绪后：先显示窗口，再后台完成硬件检测和设备校验
+  // （此前此处 await detectAllHardware() 会阻塞主窗口显示，因为完整
+  //  systeminformation GPU 检测可能耗时数秒甚至 ~9s。现将窗口显示与
+  //  硬件检测解耦，让用户立即看到应用界面。）
+  mainWindow.webContents.once('did-finish-load', () => {
+    // 1. 立即显示主窗口（不等待 GPU/NPU 检测）
+    // In dev mode: reveal the main window immediately.
+    // In packaged mode: first guarantee the splash has actually
+    // painted (so it is visible before the main window appears),
+    // then enforce the splash's minimum visible duration measured
+    // from when the splash's SVG painted. With MIN_SPLASH_MS = 0
+    // the main window is revealed the moment the splash is visible.
+    if (!showSplash) {
+      revealMainWindow();
+    } else {
+      (async () => {
+        try {
+          await waitForSplashReady();
+          const readyAt = getSplashReadyAt();
+          const referenceTime = readyAt || Date.now();
+          const elapsed = Date.now() - referenceTime;
+          const wait = Math.max(0, MIN_SPLASH_MS - elapsed);
+          if (wait > 0) {
+            setTimeout(revealMainWindow, wait);
           } else {
-            const found = preferredId !== undefined && preferredId !== null
-              ? allDevices.find(d => d.dxgiAdapterNumber === preferredId)
-              : null;
+            revealMainWindow();
+          }
+        } catch (err) {
+          console.warn('[Main] Splash reveal failed:', err.message);
+          revealMainWindow();
+        }
+      })();
+    }
 
-            if (!found) {
-              const deviceName = `deviceId=${preferredId}`;
-              dialog.showMessageBoxSync(mainWindow, {
-                type: 'warning',
-                title: 'Device Not Found',
-                message: `Previously selected device "${deviceName}" was not found. Switched to smart mode.`,
-                buttons: ['OK'],
-              });
-              const newSettings = { ...settings, deviceMode: 'smart' };
-              delete newSettings.preferredDeviceId;
-              delete newSettings.preferredDeviceType;
-              await saveSettingsFile(newSettings);
+    // 2. 后台执行硬件检测和设备校验（不阻塞窗口显示）
+    (async () => {
+      try {
+        // 等待 NPU 检测完成（需要渲染进程处理 WebNN IPC）
+        const { npuAvailable } = await detectAllHardware();
+        console.log(`[Main] Hardware detection complete: NPU ${npuAvailable ? 'available' : 'not available'}`);
+
+        const settings = loadSettings();
+        const deviceMode = settings.deviceMode || (settings.deviceId !== undefined && settings.deviceId !== null ? 'manual' : 'smart');
+
+        if (deviceMode === 'manual' || deviceMode === 'advanced') {
+          const gpuInfo = await ensureGPUInfo();
+          const dmlDevices = getCachedDMLDevices() || [];
+          const allDevices = [...dmlDevices];
+          for (const c of gpuInfo) {
+            if (!allDevices.find(d => d.name === c.model)) {
+              const vramBytes = (c.memoryTotal || c.vram || 0) * 1024 * 1024;
+              const deviceType = classifyDeviceFromName(c.model, vramBytes);
+              allDevices.push({ name: c.model, deviceType, isDiscrete: deviceType === 'discrete-gpu', vramBytes, source: 'systeminformation' });
             }
           }
-        } else if (deviceMode === 'advanced' && settings.modelDeviceMapping) {
-          // NPU mappings are validated at pipeline init — don't switch at startup
-          console.log('[Main] Advanced mode, skipping NPU mapping startup validation (will verify via probe at inference time)');
+
+          if (npuAvailable && !allDevices.some(d => d.deviceType === 'npu')) {
+            allDevices.push({
+              name: 'NPU (WebNN)',
+              deviceType: 'npu',
+              isDiscrete: false,
+              vramBytes: 0,
+              vram: '0 MB',
+              vendor: '',
+              dxgiAdapterNumber: undefined,
+              source: 'webnn',
+            });
+          }
+
+          if (deviceMode === 'manual') {
+            const preferredId = settings.preferredDeviceId ?? settings.deviceId;
+            const preferredType = settings.preferredDeviceType;
+
+            // NPU devices are validated at pipeline init via probe — don't switch at startup
+            if (preferredType === 'npu') {
+              console.log('[Main] NPU device selected, skipping startup validation (will verify via probe at inference time)');
+            } else {
+              const found = preferredId !== undefined && preferredId !== null
+                ? allDevices.find(d => d.dxgiAdapterNumber === preferredId)
+                : null;
+
+              if (!found && !mainWindow.isDestroyed()) {
+                const deviceName = `deviceId=${preferredId}`;
+                dialog.showMessageBoxSync(mainWindow, {
+                  type: 'warning',
+                  title: 'Device Not Found',
+                  message: `Previously selected device "${deviceName}" was not found. Switched to smart mode.`,
+                  buttons: ['OK'],
+                });
+                const newSettings = { ...settings, deviceMode: 'smart' };
+                delete newSettings.preferredDeviceId;
+                delete newSettings.preferredDeviceType;
+                await saveSettingsFile(newSettings);
+              }
+            }
+          } else if (deviceMode === 'advanced' && settings.modelDeviceMapping) {
+            // NPU mappings are validated at pipeline init — don't switch at startup
+            console.log('[Main] Advanced mode, skipping NPU mapping startup validation (will verify via probe at inference time)');
+          }
         }
+      } catch (err) {
+        console.warn('[Main] Device validation failed:', err.message);
       }
-    } catch (err) {
-      console.warn('[Main] Device validation failed:', err.message);
-    } finally {
-      // In dev mode: reveal the main window immediately.
-      // In packaged mode: first guarantee the splash has actually
-      // painted (so it is visible before the main window appears),
-      // then enforce the splash's minimum visible duration measured
-      // from when the splash's SVG painted. With MIN_SPLASH_MS = 0
-      // the main window is revealed the moment the splash is visible.
-      if (!showSplash) {
-        revealMainWindow();
-        return;
-      }
-      await waitForSplashReady();
-      const readyAt = getSplashReadyAt();
-      const referenceTime = readyAt || Date.now();
-      const elapsed = Date.now() - referenceTime;
-      const wait = Math.max(0, MIN_SPLASH_MS - elapsed);
-      if (wait > 0) {
-        setTimeout(revealMainWindow, wait);
-      } else {
-        revealMainWindow();
-      }
-    }
+    })();
   });
 
   // GPU 预加载（WMI 快速路径，不需要渲染进程）
