@@ -178,6 +178,7 @@ function registerSvsIpc() {
       }
       return await pipeline.synthesize(notes, bpm, opts);
     } catch (err) {
+      console.error('[Main] svs:synthesize failed:', err.message);
       throw err;
     }
   });
