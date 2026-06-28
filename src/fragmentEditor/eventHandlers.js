@@ -487,6 +487,9 @@ function handlePhonemeMouseDown(e, pos) {
       if (Math.abs(pos.x - bnd.x) < BOUNDARY_ZONE) {
         setSelectedPhonemeNoteId(note.id);
         setSelectedPhonemeIndex(bnd.index);
+        // 用户开始拖拽音素边界，显式提交 adjustments 到 note，
+        // 标记为"已自定义"，使后续 MouseMove/渲染读到同一份数据。
+        note.phonemeAdjustments = adjustments;
         setPhonemeDragState({
           noteId: note.id,
           phonemeIndex: bnd.index,
@@ -511,6 +514,9 @@ function handlePhonemeMouseDown(e, pos) {
       if (pos.x >= x && pos.x < boundaryX) {
         setSelectedPhonemeNoteId(note.id);
         setSelectedPhonemeIndex(i);
+        // 用户即将与该音素交互（锁定/音量拖拽），显式提交 adjustments，
+        // 确保后续修改持久化到 note 上，渲染与 MouseMove 读到同一份数据。
+        note.phonemeAdjustments = adjustments;
         if (e.button === 2) {
           adj.locked = !adj.locked;
           if (!adjustments.some(a => a.locked)) adjustments[0].locked = true;
@@ -1534,40 +1540,22 @@ export function setupEventListeners() {
     if (isZoom) {
       const oldZoomX = getZoomX();
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      setZoomX(Math.max(0.25, Math.min(4, oldZoomX * delta)));
+      const newZoomX = Math.max(0.25, Math.min(4, oldZoomX * delta));
+      setZoomX(newZoomX);
 
       const pos = getMousePos(e);
-      const mouseBeats = xToTime(pos.x);
-      setScrollX(mouseBeats * BEAT_WIDTH * getZoomX() - pos.x);
-      setScrollX(Math.max(0, getScrollX()));
+      // Compute mouseBeats using OLD zoom/scroll (the actual beat under cursor before zoom),
+      // then set scroll so the same beat stays under the cursor after zoom.
+      // NOTE: Must use oldZoomX here — xToTime() would use the already-updated newZoomX,
+      // giving a wrong beat and causing the note to "disconnect" from the mouse.
+      const oldScrollX = getScrollX();
+      const mouseBeats = (pos.x + oldScrollX) / (BEAT_WIDTH * oldZoomX);
+      const newScrollX = mouseBeats * BEAT_WIDTH * newZoomX - pos.x;
+      setScrollX(Math.max(0, newScrollX));
 
-      // When zooming during a drag, move the note to the beat now under the cursor
-      // so it stays visually anchored
-      const dragMode = getDragMode();
-      if (dragMode === 'move' || dragMode === 'resize' || dragMode === 'pitch-anchor') {
-        const newMouseTime = xToTime(pos.x);
-        const timeDelta = newMouseTime - getDragStartMouseTime();
-        if (Math.abs(timeDelta) > 1e-9) {
-          const notes = getNotes();
-          if (dragMode === 'move') {
-            for (const id of getSelectedNoteIds()) {
-              const note = notes.find(n => n.id === id);
-              if (note) note.start = Math.max(0, note.start + timeDelta);
-            }
-            // Update drag note starts so subsequent delta calculations are correct
-            for (const [id, start] of getDragNoteStarts()) {
-              start.start += timeDelta;
-            }
-            const singleNote = getDragNoteStart();
-            if (singleNote) singleNote.start += timeDelta;
-          } else if (dragMode === 'resize') {
-            const singleNote = getDragNoteStart();
-            if (singleNote) singleNote.start += timeDelta;
-          }
-          setDragStartMouseTime(newMouseTime);
-          setDragStartMousePitch(yToPitchContinuous(pos.y));
-        }
-      }
+      // No special drag handling needed: since mouseBeats is preserved across the zoom,
+      // dxBeats (xToTime(pos) - dragStartMouseTime) stays the same, and the note
+      // naturally remains anchored to the mouse on the next mousemove.
     } else if (e.shiftKey) {
       setScrollX(getScrollX() + e.deltaY);
       setScrollX(Math.max(0, getScrollX()));
