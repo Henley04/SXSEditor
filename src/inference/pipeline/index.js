@@ -45,15 +45,10 @@ const SESSION_KEYS = [
 class OnnxSVSPipeline {
     constructor(modelDir, options = {}) {
         this.baseModelDir = modelDir; // Base dir before precision subdir (for shared models)
+        this._modelPrecision = options.modelPrecision || null;
         this.modelDir = this._resolveModelDir(modelDir, options.modelPrecision);
         this.languageOverride = options.languageOverride || null; // 'ja' for Japanese
         this.jpModelDir = this._resolveJpModelDir(modelDir, options.modelPrecision);
-        this._hasJpModelsCached = this.jpModelDir
-            ? fs.existsSync(path.join(this.jpModelDir, 'note_text_encoder.onnx')) &&
-              fs.existsSync(path.join(this.jpModelDir, 'preflow.onnx')) &&
-              fs.existsSync(path.join(this.jpModelDir, 'cond_emb.onnx')) &&
-              fs.existsSync(path.join(this.jpModelDir, 'diff_step_dml.onnx'))
-            : false;
         this.sessions = {};
         this.sessionEPs = {};
         this.isFP16 = false; // 是否为 FP16 精度Model
@@ -105,7 +100,17 @@ class OnnxSVSPipeline {
     }
 
     hasJpModels() {
-        return this._hasJpModelsCached;
+        // 实时检查文件存在性：用户可能在 pipeline 创建后才下载 JP 模型，
+        // 此时构造时缓存的 _hasJpModelsCached 已过期。同时重新解析 jpModelDir，
+        // 因为用户可能在 pipeline 创建后才创建 JP 文件夹。
+        if (!this.jpModelDir) {
+            this.jpModelDir = this._resolveJpModelDir(this.baseModelDir, this._modelPrecision);
+            if (!this.jpModelDir) return false;
+        }
+        return fs.existsSync(path.join(this.jpModelDir, 'note_text_encoder.onnx')) &&
+               fs.existsSync(path.join(this.jpModelDir, 'preflow.onnx')) &&
+               fs.existsSync(path.join(this.jpModelDir, 'cond_emb.onnx')) &&
+               fs.existsSync(path.join(this.jpModelDir, 'diff_step_dml.onnx'));
     }
 
     _resolveModelDir(baseDir, modelPrecision) {

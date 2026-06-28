@@ -578,6 +578,11 @@ export function getPhonemeAdjustments(note) {
       return cached;
     }
   }
+  // 纯读取：仅计算默认 adjustments 供显示用，不写回 note.phonemeAdjustments。
+  // 写回默认值会让合成缓存键（audioSegmentation.computeSynthCacheKey 把
+  // phonemeAdjustments 纳入哈希）从 K1(无 adjustments) 变为 K2(默认值)，
+  // 导致打开音素菜单后再次播放触发不必要的二次推理。用户实际拖拽/锁定音素时，
+  // 由 handlePhonemeMouseDown 显式提交保存，自定义音素排列仍可正常生效。
   const adjustments = phonemes.map((ph, i) => ({
     id: i,
     name: ph.name,
@@ -592,7 +597,6 @@ export function getPhonemeAdjustments(note) {
     ],
     locked: i === 0,
   }));
-  note.phonemeAdjustments = adjustments;
   return adjustments;
 }
 

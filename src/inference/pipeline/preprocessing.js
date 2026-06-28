@@ -354,120 +354,125 @@ class Preprocessing {
             mel2token[i] = phIdx;
 
             const innerFrames = Math.max(0, nextPhonemeStart - i - 2);
-            if (ratios && ratios.length === j) {
-                let offset = 0;
-                for (let p = 0; p < j; p++) {
-                    const pFrames = Math.round(innerFrames * ratios[p]);
-                    const pStart = i + 1 + offset;
-                    const pEnd = Math.min(i + 1 + offset + pFrames, totalFrames);
-                    for (let f = pStart; f < pEnd && f < totalFrames; f++) {
-                        mel2token[f] = phIdx + 1 + p;
-                    }
-                    offset += pFrames;
-                }
-            } else {
-                // 帧分配策略：
-                // - innerFrames >= j：基数+余数分配，每个音素至少 baseFrames 帧
-                // - innerFrames < j：帧数不足，元音优先获得帧（元音是发音核心）
-                //   先给元音各 1 帧，再按位置给辅音 1 帧，剩余帧给元音
-                //   这样短音符下 AE1（元音）优先于 Z/SEP（辅音/分隔符）获得帧
-                const phonemeIds = phLocations[idx][3] || [];
-                let allocation;
-                if (innerFrames >= j) {
-                    // 帧数充足：基数 + 余数分配
-                    const baseFrames = Math.floor(innerFrames / j);
-                    const extraFrames = innerFrames % j;
+            const phonemeIds = phLocations[idx][3] || [];
+            let allocation;
+
+            if (innerFrames >= j) {
+                // 帧数充足
+                if (ratios && ratios.length === j) {
+                    // 用户自定义音素边界：按 ratios 比例分配，保证每项 >= 1 且总和 == innerFrames
                     allocation = new Array(j);
                     for (let p = 0; p < j; p++) {
-                        allocation[p] = baseFrames + (p < extraFrames ? 1 : 0);
+                        allocation[p] = Math.round(innerFrames * ratios[p]);
                     }
-                } else if (phonemeIds.length === j) {
-                    // 帧数不足：元音优先分配
-                    // 优先级：元音（发音核心）> 辅音 > SEP
-                    // 策略：元音先各 1 帧 → 剩余帧优先给元音（达到 2 帧）
-                    //       → 辅音各 1 帧 → 剩余帧均分
-                    allocation = new Array(j).fill(0);
-                    const SEP_LOCAL_ID = this.textProcessing.phone2idx['<SEP>'] || 9;
-                    const vowelPositions = [];
-                    const consonantPositions = [];  // 非 SEP 辅音
-                    const sepPositions = [];
                     for (let p = 0; p < j; p++) {
-                        if (this._isVowelByIdx(phonemeIds[p])) {
-                            vowelPositions.push(p);
-                        } else if (phonemeIds[p] === SEP_LOCAL_ID) {
-                            sepPositions.push(p);
-                        } else {
-                            consonantPositions.push(p);
-                        }
+                        if (allocation[p] === 0) allocation[p] = 1;
                     }
-                    let used = 0;
-                    // 1. 元音各 1 帧
-                    for (const p of vowelPositions) {
-                        if (used < innerFrames) { allocation[p] = 1; used++; }
-                    }
-                    // 2. 剩余帧优先给元音（让元音达到 2 帧，确保发音时长）
-                    let remaining = innerFrames - used;
-                    while (remaining > 0 && vowelPositions.length > 0) {
-                        let gaveAny = false;
-                        for (const p of vowelPositions) {
-                            if (remaining <= 0) break;
-                            if (allocation[p] < 2) {
-                                allocation[p]++;
-                                remaining--;
-                                used++;
-                                gaveAny = true;
+                    let used = allocation.reduce((s, v) => s + v, 0);
+                    let diff = innerFrames - used;
+                    if (diff > 0) {
+                        const order = [...Array(j).keys()].sort((a, b) => ratios[b] - ratios[a]);
+                        for (let k = 0; k < diff; k++) allocation[order[k % j]]++;
+                    } else if (diff < 0) {
+                        const order = [...Array(j).keys()].sort((a, b) => ratios[a] - ratios[b]);
+                        let toRemove = -diff;
+                        for (let k = 0; k < j && toRemove > 0; k++) {
+                            const idx2 = order[k];
+                            while (allocation[idx2] > 1 && toRemove > 0) {
+                                allocation[idx2]--;
+                                toRemove--;
                             }
                         }
-                        if (!gaveAny) break;
                     }
-                    // 3. 辅音各 1 帧（非 SEP 优先）
-                    for (const p of consonantPositions) {
-                        if (used < innerFrames) { allocation[p] = 1; used++; }
+                } else {
+                    // 默认：线性插值（与训练 data_processor.py 一致）
+                    allocation = new Array(j);
+                    for (let p = 0; p < j; p++) {
+                        const pStart = Math.floor(p * innerFrames / j);
+                        const pEnd = Math.floor((p + 1) * innerFrames / j);
+                        allocation[p] = pEnd - pStart;
                     }
-                    // 4. SEP 各 1 帧（最低优先级）
-                    for (const p of sepPositions) {
-                        if (used < innerFrames) { allocation[p] = 1; used++; }
+                }
+            } else if (phonemeIds.length === j) {
+                // 帧数不足：元音优先（无论是否有 ratios，帧数不足时 ratios 无意义）
+                // 优先级：元音（发音核心）> 辅音 > SEP
+                allocation = new Array(j).fill(0);
+                const SEP_LOCAL_ID = this.textProcessing.phone2idx['<SEP>'] || 9;
+                const vowelPositions = [];
+                const consonantPositions = [];
+                const sepPositions = [];
+                for (let p = 0; p < j; p++) {
+                    if (this._isVowelByIdx(phonemeIds[p])) {
+                        vowelPositions.push(p);
+                    } else if (phonemeIds[p] === SEP_LOCAL_ID) {
+                        sepPositions.push(p);
+                    } else {
+                        consonantPositions.push(p);
                     }
-                    // 5. 剩余帧均分（元音优先）
-                    remaining = innerFrames - used;
-                    while (remaining > 0) {
-                        let gaveAny = false;
-                        for (const p of vowelPositions) {
+                }
+                let used = 0;
+                for (const p of vowelPositions) {
+                    if (used < innerFrames) { allocation[p] = 1; used++; }
+                }
+                let remaining = innerFrames - used;
+                while (remaining > 0 && vowelPositions.length > 0) {
+                    let gaveAny = false;
+                    for (const p of vowelPositions) {
+                        if (remaining <= 0) break;
+                        if (allocation[p] < 2) {
+                            allocation[p]++;
+                            remaining--;
+                            used++;
+                            gaveAny = true;
+                        }
+                    }
+                    if (!gaveAny) break;
+                }
+                for (const p of consonantPositions) {
+                    if (used < innerFrames) { allocation[p] = 1; used++; }
+                }
+                for (const p of sepPositions) {
+                    if (used < innerFrames) { allocation[p] = 1; used++; }
+                }
+                remaining = innerFrames - used;
+                while (remaining > 0) {
+                    let gaveAny = false;
+                    for (const p of vowelPositions) {
+                        if (remaining <= 0) break;
+                        allocation[p]++;
+                        remaining--;
+                        gaveAny = true;
+                    }
+                    if (!gaveAny) {
+                        for (let p = 0; p < j; p++) {
                             if (remaining <= 0) break;
                             allocation[p]++;
                             remaining--;
                             gaveAny = true;
                         }
-                        if (!gaveAny) {
-                            for (let p = 0; p < j; p++) {
-                                if (remaining <= 0) break;
-                                allocation[p]++;
-                                remaining--;
-                                gaveAny = true;
-                            }
-                        }
-                        if (!gaveAny) break;
                     }
-                } else {
-                    // 无音素信息：回退到基数+余数（兼容旧 phLocations 结构）
-                    const baseFrames = Math.floor(innerFrames / j);
-                    const extraFrames = innerFrames % j;
-                    allocation = new Array(j);
-                    for (let p = 0; p < j; p++) {
-                        allocation[p] = baseFrames + (p < extraFrames ? 1 : 0);
-                    }
+                    if (!gaveAny) break;
                 }
-                // 按位置顺序写入 mel2token
-                let offset = 0;
+            } else {
+                // 无音素信息：回退到基数+余数（兼容旧 phLocations 结构）
+                const baseFrames = Math.floor(innerFrames / j);
+                const extraFrames = innerFrames % j;
+                allocation = new Array(j);
                 for (let p = 0; p < j; p++) {
-                    const pFrames = allocation[p];
-                    const pStart = i + 1 + offset;
-                    const pEnd = Math.min(pStart + pFrames, totalFrames);
-                    for (let f = pStart; f < pEnd; f++) {
-                        mel2token[f] = phIdx + 1 + p;
-                    }
-                    offset += pFrames;
+                    allocation[p] = baseFrames + (p < extraFrames ? 1 : 0);
                 }
+            }
+
+            // 按位置顺序写入 mel2token
+            let offset = 0;
+            for (let p = 0; p < j; p++) {
+                const pFrames = allocation[p];
+                const pStart = i + 1 + offset;
+                const pEnd = Math.min(pStart + pFrames, totalFrames);
+                for (let f = pStart; f < pEnd; f++) {
+                    mel2token[f] = phIdx + 1 + p;
+                }
+                offset += pFrames;
             }
 
             if (nextPhonemeStart - 1 > i && nextPhonemeStart - 1 < totalFrames) {
