@@ -23,6 +23,10 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/en_g2p_dict.json'),
         },
         {
+          from: path.resolve(__dirname, 'src/inference/en_phoneme_durations.json'),
+          to: path.resolve(__dirname, '.webpack/main/en_phoneme_durations.json'),
+        },
+        {
           from: path.resolve(__dirname, 'src/audio/audioWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/audio/audioWorker.js'),
         },

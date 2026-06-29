@@ -14,29 +14,77 @@
  */
 
 const path = require('path');
+const fs = require('fs');
+
+// ANSI 颜色码（用于终端日志区分级别）
+const COLOR = {
+    yellow: msg => `\x1b[33m${msg}\x1b[0m`,
+    red:    msg => `\x1b[31m${msg}\x1b[0m`,
+    green:  msg => `\x1b[32m${msg}\x1b[0m`,
+};
 
 let _cache = null;        // 已解析的 JSON 对象
 let _loading = null;      // 正在进行的加载 Promise
 
 /**
+ * 查找 en_phoneme_durations.json 的实际路径。
+ * 兼容开发环境（src/inference/）和打包环境（.webpack/main/）。
+ * @returns {string|null} 找到的路径，或 null
+ */
+function _findStatsPath() {
+    // 候选路径（与 textProcessing.js 的 phone_set.json 加载策略一致）：
+    // 1. __dirname/en_phoneme_durations.json
+    //    - 开发: src/inference/pipeline/en_phoneme_durations.json (不存在)
+    //    - 打包: .webpack/main/en_phoneme_durations.json          (命中，CopyPlugin 复制到此)
+    // 2. __dirname/../en_phoneme_durations.json
+    //    - 开发: src/inference/en_phoneme_durations.json           (命中)
+    //    - 打包: .webpack/en_phoneme_durations.json               (不存在)
+    // 3. __dirname/../../inference/en_phoneme_durations.json
+    //    - 开发: src/inference/en_phoneme_durations.json           (重复，兜底)
+    // 4. __dirname/../../../src/inference/en_phoneme_durations.json
+    //    - 开发: ../../src/inference/en_phoneme_durations.json     (兜底)
+    const searchPaths = [
+        path.join(__dirname, 'en_phoneme_durations.json'),
+        path.join(__dirname, '..', 'en_phoneme_durations.json'),
+        path.join(__dirname, '..', '..', 'inference', 'en_phoneme_durations.json'),
+        path.join(__dirname, '..', '..', '..', 'src', 'inference', 'en_phoneme_durations.json'),
+    ];
+    for (const p of searchPaths) {
+        try {
+            if (fs.existsSync(p)) return p;
+        } catch (_) { /* ignore */ }
+    }
+    return null;
+}
+
+/**
  * 懒加载时长统计 JSON。首次调用时读取文件，后续返回缓存。
+ * 开发环境和打包环境都能正常工作（自动搜索候选路径）。
  * @returns {Promise<Object>} 统计表对象
  */
 function loadDurationStats() {
     if (_cache) return Promise.resolve(_cache);
     if (_loading) return _loading;
 
-    const jsonPath = path.join(__dirname, '..', 'en_phoneme_durations.json');
-    _loading = require('fs').promises.readFile(jsonPath, 'utf-8')
+    const jsonPath = _findStatsPath();
+    if (!jsonPath) {
+        console.warn(COLOR.yellow('[durationStats] Warning: en_phoneme_durations.json not found in any search path; falling back to linear allocation'));
+        _cache = { unigram: {}, bigram: {}, trigram: {}, trigram_full: {}, by_stress: {}, by_position: {} };
+        return Promise.resolve(_cache);
+    }
+
+    _loading = fs.promises.readFile(jsonPath, 'utf-8')
         .then(text => {
             _cache = JSON.parse(text);
             _loading = null;
+            const n = Object.keys(_cache.unigram || {}).length;
+            console.log(COLOR.green(`[durationStats] Loaded phoneme duration stats: ${n} phonemes (path: ${jsonPath})`));
             return _cache;
         })
         .catch(err => {
             _loading = null;
             // 加载失败不应阻塞推理，返回空表让调用方走 unigram fallback
-            console.warn('[durationStats] Failed to load en_phoneme_durations.json:', err.message);
+            console.warn(COLOR.yellow(`[durationStats] Warning: Failed to load en_phoneme_durations.json (${jsonPath}): ${err.message}; falling back to linear allocation`));
             _cache = { unigram: {}, bigram: {}, trigram: {}, trigram_full: {}, by_stress: {}, by_position: {} };
             return _cache;
         });
