@@ -353,7 +353,10 @@ export function clampNotePosition(noteId, pitch, start, duration) {
 export function generateAutoPitchPoints() {
   const notes = getNotes();
   if (notes.length === 0) return [];
-  const sortedNotes = [...notes].sort((a, b) => a.start - b.start);
+  // 未激活的重叠 note 不作为音高曲线锚点
+  const inactiveIds = getInactiveNoteIds(notes);
+  const activeNotes = inactiveIds.size > 0 ? notes.filter(n => !inactiveIds.has(n.id)) : notes;
+  const sortedNotes = [...activeNotes].sort((a, b) => a.start - b.start);
   const points = [];
   for (let i = 0; i < sortedNotes.length; i++) {
     const note = sortedNotes[i];
@@ -752,8 +755,11 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
   const selectedNoteIds = getSelectedNoteIds();
   const selectedPhonemeNoteId = getSelectedPhonemeNoteId();
   const selectedPhonemeIndex = getSelectedPhonemeIndex();
+  const inactiveNoteIds = getInactiveNoteIds(notes);
 
   const visibleNotes = notes.filter(note => {
+    // 未激活的重叠 note 不显示音素
+    if (inactiveNoteIds.has(note.id)) return false;
     const nx = timeToX(note.start);
     const nw = note.duration * BEAT_WIDTH * getZoomX();
     return nx + nw >= 0 && nx <= w;
@@ -918,7 +924,10 @@ function renderPitchCurve(c) {
   const w = canvas.parentElement.clientWidth;
   const startBeat = xToTime(0);
   const endBeat = xToTime(w);
-  const notes = getNotes();
+  const allNotes = getNotes();
+  // 未激活的重叠 note 不在音高曲线中绘制锚点
+  const inactiveNoteIds = getInactiveNoteIds(allNotes);
+  const notes = inactiveNoteIds.size > 0 ? allNotes.filter(n => !inactiveNoteIds.has(n.id)) : allNotes;
   const selectedAnchorIndices = getSelectedAnchorIndices();
   const pitchDragAnchorIdx = getPitchDragAnchorIdx();
   const currentBrushStroke = getCurrentBrushStroke();
@@ -1009,6 +1018,17 @@ function renderPitchCurve(c) {
 
     for (let i = 0; i < pitchCurve.anchorPoints.length; i++) {
       const ap = pitchCurve.anchorPoints[i];
+      // 落在未激活 note 时段内的锚点不显示
+      if (inactiveNoteIds.size > 0) {
+        let inInactive = false;
+        for (const n of allNotes) {
+          if (inactiveNoteIds.has(n.id) && ap.time >= n.start && ap.time < n.start + n.duration) {
+            inInactive = true;
+            break;
+          }
+        }
+        if (inInactive) continue;
+      }
       const px = timeToX(ap.time);
       const py = pitchToY(ap.pitch);
       const isSelected = selectedAnchorIndices.has(i) || i === pitchDragAnchorIdx;
