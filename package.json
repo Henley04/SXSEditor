@@ -1,7 +1,7 @@
 {
   "name": "sxseditor",
   "productName": "SXSEditor",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "SoulX Singer Editor - AI歌声合成工作台",
   "main": ".webpack/main",
   "private": true,
