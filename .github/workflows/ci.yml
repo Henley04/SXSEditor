@@ -2,9 +2,19 @@ name: CI
 
 on:
   push:
-    branches: [master]
+    branches: [master, release]
   pull_request:
-    branches: [master]
+    branches: [master, release]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  INSTALLER_NAME: sxsinstaller_x64_no_models.exe
 
 jobs:
   test:
@@ -22,39 +32,139 @@ jobs:
 
       - run: npm test
 
-  build:
-    name: Build (${{ matrix.os }})
+  build-and-release:
+    name: Build and Release (${{ github.ref_name }})
     needs: test
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest]
-        include:
-          - os: windows-latest
-            artifact: dist/make/squirrel.windows/x64/*.exe
-
+    runs-on: windows-latest
+    if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
 
-      - run: npm ci
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine version and tag
+        id: version
+        shell: bash
+        run: |
+          BRANCH="${GITHUB_REF##*/}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          DATE=$(date -u +%Y%m%d)
+          if [ "$BRANCH" = "release" ]; then
+            CURRENT=$(node -p "require('./package.json').version")
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
+            NEW_PATCH=$((PATCH + 1))
+            NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+            TAG="EA"
+            PRERELEASE="false"
+            IS_RELEASE="true"
+          else
+            NEW_VERSION="nightly_${DATE}_${SHORT_SHA}"
+            TAG="nightly"
+            PRERELEASE="true"
+            IS_RELEASE="false"
+          fi
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
+          echo "[ci] branch=$BRANCH version=$NEW_VERSION tag=$TAG prerelease=$PRERELEASE"
+
+      - name: Bump version in package.json (release branch only)
+        if: steps.version.outputs.is_release == 'true'
+        shell: bash
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.version }}"
+          npm version "$NEW_VERSION" --no-git-tag-version --commit-hooks=false
+          git add package.json package-lock.json
+          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
+          git push origin "HEAD:release"
+
+      - name: Set package.json version for nightly build (master branch only)
+        if: steps.version.outputs.is_release != 'true'
+        shell: bash
+        run: |
+          NEW_VERSION="${{ steps.version.outputs.version }}"
+          # Local-only bump; not committed. Lets build-info.json pick up the nightly tag.
+          npm version "$NEW_VERSION" --no-git-tag-version --commit-hooks=false
+
+      - name: Install dependencies
+        run: npm ci
 
       - name: Build lite package
         run: npm run package:lite
-
-      - name: Create distributable
-        run: npm run make
         env:
           SKIP_ONNX_MODELS: 1
 
-      - name: Upload artifact
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          $existing = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          if (Test-Path $existing) {
+            Write-Host "Inno Setup 6 already installed"
+            return
+          }
+          choco install innosetup -y --no-progress --force
+
+      - name: Compile installer with Inno Setup
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          $iscc = Get-Command iscc -ErrorAction SilentlyContinue
+          if (-not $iscc) {
+            $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          } else {
+            $isccPath = $iscc.Source
+          }
+          Write-Host "Using ISCC: $isccPath"
+          & $isccPath "/DMyAppVersion=$version" "inno/no_onnx.iss"
+          $installer = "inno\$env:INSTALLER_NAME"
+          if (-not (Test-Path $installer)) {
+            Write-Error "Installer not found at $installer"
+            exit 1
+          }
+          Write-Host "Installer built: $installer"
+
+      - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
-          name: sxseditor-${{ matrix.os }}
-          path: ${{ matrix.artifact }}
+          name: sxsinstaller-${{ github.ref_name }}
+          path: inno/${{ env.INSTALLER_NAME }}
           retention-days: 30
+
+      - name: Create/Update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.version }}
+          body: |
+            ## SXSEditor ${{ steps.version.outputs.version }}
+
+            - **Branch**: ${{ steps.version.outputs.branch }}
+            - **Commit**: ${{ github.sha }}
+            - **Tag**: ${{ steps.version.outputs.tag }}
+            - **Prerelease**: ${{ steps.version.outputs.prerelease == 'true' && 'Yes' || 'No' }}
+
+            ### Install
+
+            Download `sxsinstaller_x64_no_models.exe` below and run it.
+            ONNX models are auto-downloaded on first launch.
+
+            ### Direct download (always points to latest)
+
+            - GitHub: https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe
+            - GitCode mirror: https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe
+          prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          files: inno/${{ env.INSTALLER_NAME }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

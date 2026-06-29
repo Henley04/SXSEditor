@@ -6,7 +6,7 @@ This guide walks you through the complete workflow: from installing SXSEditor to
 
 ## Step 1: Install and Launch
 
-1. Download the Windows installer from [GitHub Releases](https://github.com/Henley04/SXSEditor/releases).
+1. Download the Windows installer from [GitHub Release (latest)](https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe) or [GitCode Mirror (China)](https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe).
 2. Run the installer. Administrator privileges are required for installation.
 3. Launch SXSEditor from the Start Menu or desktop shortcut.
 

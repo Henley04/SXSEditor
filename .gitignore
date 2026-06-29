@@ -112,8 +112,7 @@ executorch_models/
 # SVC models
 svc/
 
-# Installer build output
-inno/
+# Installer build output (iss files are tracked; *.exe/*.bin handle binaries)
 *.exe
 *.bin
 *.zip
