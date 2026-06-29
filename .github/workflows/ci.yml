@@ -93,33 +93,82 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify environment before build
+        shell: pwsh
+        run: |
+          Write-Host "=== Node/npm versions ==="
+          node --version
+          npm --version
+          Write-Host "=== Electron binary check ==="
+          $electronExe = "node_modules\electron\dist\electron.exe"
+          if (Test-Path $electronExe) {
+            $size = (Get-Item $electronExe).Length
+            Write-Host "Found: $electronExe ($size bytes)"
+          } else {
+            Write-Host "electron.exe NOT found at $electronExe"
+            Write-Host "=== Contents of node_modules/electron/ ==="
+            if (Test-Path "node_modules\electron") {
+              Get-ChildItem "node_modules\electron" | Select-Object Name | Format-Table -AutoSize
+              if (Test-Path "node_modules\electron\dist") {
+                Get-ChildItem "node_modules\electron\dist" | Select-Object Name, Length | Format-Table -AutoSize
+              } else {
+                Write-Host "node_modules/electron/dist does not exist - Electron postinstall failed!"
+              }
+            }
+          }
+          Write-Host "=== Forge config check ==="
+          node -e "try { require('./forge.config.js'); console.log('forge.config.js OK'); } catch(e) { console.error('forge.config.js ERROR:', e.message); }"
+          Write-Host "=== Pre-generate build-info.json ==="
+          node scripts/generate-build-info.js
+
       - name: Build lite package
-        run: npm run package:lite
-        env:
-          SKIP_ONNX_MODELS: 1
-          DEBUG: electron-forge:*
+        shell: pwsh
+        run: |
+          $env:SKIP_ONNX_MODELS = "1"
+          $env:DEBUG = "electron-forge:*"
+          Write-Host "=== Running electron-forge package ==="
+          & npm run package:lite 2>&1 | Tee-Object -FilePath build-output.log
+          $exitCode = $LASTEXITCODE
+          Write-Host "Build exit code: $exitCode"
+          Write-Host "=== .webpack/ directory check ==="
+          if (Test-Path ".webpack") {
+            Get-ChildItem -Recurse ".webpack" -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize
+          } else {
+            Write-Host ".webpack/ does not exist - webpack compilation failed!"
+          }
+          Write-Host "=== out/ directory check ==="
+          if (Test-Path "out") {
+            Get-ChildItem -Recurse "out" -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize
+          } else {
+            Write-Host "out/ does not exist - electron-packager failed!"
+          }
+          if ($exitCode -ne 0) {
+            Write-Error "Build failed with exit code $exitCode"
+            exit $exitCode
+          }
 
       - name: Verify build output
         shell: pwsh
         run: |
-          Write-Host "=== out/ directory tree (depth 1) ==="
-          if (Test-Path out) {
-            Get-ChildItem -Recurse out -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize
-          } else {
-            Write-Error "out/ directory does not exist!"
-            exit 1
-          }
           $exe = "out\SXSEditor-win32-x64\SXSEditor.exe"
           if (-not (Test-Path $exe)) {
             Write-Error "SXSEditor.exe not found at $exe"
-            Write-Host "=== Contents of out/SXSEditor-win32-x64/ ==="
             if (Test-Path "out\SXSEditor-win32-x64") {
+              Write-Host "=== Contents of out/SXSEditor-win32-x64/ ==="
               Get-ChildItem "out\SXSEditor-win32-x64" | Select-Object Name, Length | Format-Table -AutoSize
             }
             exit 1
           }
           $size = (Get-Item $exe).Length
           Write-Host "Build output verified: $exe ($size bytes)"
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ github.ref_name }}
+          path: build-output.log
+          retention-days: 7
 
       - name: Install Inno Setup
         shell: pwsh
