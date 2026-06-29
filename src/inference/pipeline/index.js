@@ -4,7 +4,7 @@ const fs = require('node:fs');
 // Side effect: apply float16 patch on module load
 require('./float16Patch');
 
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, MIN_SYNTH_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
@@ -1327,7 +1327,27 @@ class OnnxSVSPipeline {
 
         if (segments.length === 1) {
             const seg = segments[0];
-            const segNotes = seg.notes || filledNotes;
+            let segNotes = seg.notes || filledNotes;
+
+            // 单 note 上下文 padding：单 note 时 fillNoteGaps 不补 rest，导致 token 序列极短
+            // （仅 [PAD,BOW,ph,EOW]）、noteTypeSeq 单一、mel2token 无 PAD 静音参考帧。
+            // 这对 diffusion/preflow 是 OOD 输入，合成质量差（"意义不明的声音"）。
+            // 修复：单 note 时在前后各加 1 拍 rest note，提供 token 多样性与静音参考帧，
+            // 合成后截取有效音频。
+            let contextPadding = null;
+            if (segNotes.length === 1) {
+                const REST_BEATS = 1;
+                const originalNote = segNotes[0];
+                const restNote = { lyric: '', pitch: 0, start: 0, duration: REST_BEATS };
+                const shiftedNote = { ...originalNote, start: REST_BEATS };
+                const tailRest = { lyric: '', pitch: 0, start: REST_BEATS + originalNote.duration, duration: REST_BEATS };
+                segNotes = [restNote, shiftedNote, tailRest];
+                const restFrames = Math.floor((REST_BEATS / bpm) * 60 * SAMPLE_RATE / HOP_SIZE);
+                const validFrames = Math.floor((originalNote.duration / bpm) * 60 * SAMPLE_RATE / HOP_SIZE);
+                contextPadding = { offsetFrames: restFrames, validFrames };
+                console.log(`[OnnxSVSPipeline] Single-note context padding: +${restFrames} rest frames before/after`);
+            }
+
             const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
             let totalFrames = sequences.f0Ids.length;
 
@@ -1340,24 +1360,6 @@ class OnnxSVSPipeline {
                 sequences.f0Ids = sequences.f0Ids.subarray(0, MAX_SAFE_FRAMES);
                 sequences.mel2token = sequences.mel2token.subarray(0, MAX_SAFE_FRAMES);
                 totalFrames = MAX_SAFE_FRAMES;
-            }
-
-            // 最小帧数保护：单 note 短分片时 totalFrames 可能只有几帧，diffusion 对极短 mel
-            // 无法生成有意义结果（表现为"意义不明的声音"）。Pad 到 MIN_SYNTH_FRAMES（尾部补 0 = SP 静音），
-            // 合成后截取有效音频。多 note 分片 totalFrames 为累加值通常足够，不会触发此分支。
-            const originalTotalFrames = totalFrames;
-            if (totalFrames < MIN_SYNTH_FRAMES) {
-                const paddedF0Ids = new Int32Array(MIN_SYNTH_FRAMES);
-                paddedF0Ids.set(sequences.f0Ids);
-                sequences.f0Ids = paddedF0Ids;
-                const paddedF0Hz = new Float32Array(MIN_SYNTH_FRAMES);
-                if (sequences.f0Hz) paddedF0Hz.set(sequences.f0Hz);
-                sequences.f0Hz = paddedF0Hz;
-                const paddedMel2token = new Int32Array(MIN_SYNTH_FRAMES);
-                paddedMel2token.set(sequences.mel2token);
-                sequences.mel2token = paddedMel2token;
-                totalFrames = MIN_SYNTH_FRAMES;
-                console.log(`[OnnxSVSPipeline] Short fragment padded: ${originalTotalFrames} → ${MIN_SYNTH_FRAMES} frames`);
             }
 
             if (!ptMelData || ptFrameCount === 0) {
@@ -1387,14 +1389,15 @@ class OnnxSVSPipeline {
             await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50);
 
             onProgress(90);
-            // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder; truncated to totalFrames to match mel. null when unavailable.
             this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
             let audioData = await this._runVocoderChunked(xt.data, totalFrames);
 
-            // 如果之前 pad 了短分片，截取有效部分的音频（丢弃尾部静音 padding）
-            if (originalTotalFrames < MIN_SYNTH_FRAMES) {
-                const validSamples = originalTotalFrames * HOP_SIZE;
-                audioData = audioData.subarray(0, Math.min(validSamples, audioData.length));
+            // 单 note 上下文 padding：截取有效音频（丢弃前后 rest padding）
+            if (contextPadding) {
+                const startSample = contextPadding.offsetFrames * HOP_SIZE;
+                const validSamples = contextPadding.validFrames * HOP_SIZE;
+                const endSample = Math.min(startSample + validSamples, audioData.length);
+                audioData = audioData.subarray(startSample, endSample);
             }
 
             const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120; // 2 分钟
