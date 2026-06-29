@@ -39,65 +39,56 @@ jobs:
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
 
-      - name: Configure git
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
       - name: Determine version and tag
         id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="${GITHUB_REF##*/}"
           SHORT_SHA="${GITHUB_SHA::7}"
           DATE=$(date -u +%Y%m%d)
           if [ "$BRANCH" = "release" ]; then
-            CURRENT=$(node -p "require('./package.json').version")
-            IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-            NEW_PATCH=$((PATCH + 1))
-            NEW_VERSION="${MAJOR}.${MINOR}.${NEW_PATCH}"
+            # Query latest EA release for last version number (not committed; no conflicts on PR)
+            LAST_VERSION=""
+            if curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/EA" > /tmp/ea_release.json 2>/dev/null; then
+              LAST_VERSION=$(node -e "const fs=require('fs');try{const r=JSON.parse(fs.readFileSync('/tmp/ea_release.json','utf8'));console.log(r.name||'')}catch{console.log('')}")
+            fi
+            if [ -z "$LAST_VERSION" ]; then
+              LAST_VERSION=$(node -p "require('./package.json').version")
+              echo "[ci] No previous EA release found, using package.json version: $LAST_VERSION"
+            else
+              echo "[ci] Last EA release version: $LAST_VERSION"
+            fi
+            IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_VERSION"
+            NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
             TAG="EA"
             PRERELEASE="false"
             IS_RELEASE="true"
+            MAKE_LATEST="true"
           else
             NEW_VERSION="nightly_${DATE}_${SHORT_SHA}"
             TAG="nightly"
             PRERELEASE="true"
             IS_RELEASE="false"
+            MAKE_LATEST="false"
           fi
+          # Write version to package.json (NOT committed; only for this build)
+          node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$NEW_VERSION"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
-          echo "[ci] branch=$BRANCH version=$NEW_VERSION tag=$TAG prerelease=$PRERELEASE"
-
-      - name: Bump version in package.json (release branch only)
-        if: steps.version.outputs.is_release == 'true'
-        shell: bash
-        run: |
-          NEW_VERSION="${{ steps.version.outputs.version }}"
-          npm version "$NEW_VERSION" --no-git-tag-version
-          git add package.json package-lock.json
-          git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
-          git push origin "HEAD:release"
-
-      - name: Set package.json version for nightly build (master branch only)
-        if: steps.version.outputs.is_release != 'true'
-        shell: bash
-        run: |
-          NEW_VERSION="${{ steps.version.outputs.version }}"
-          # Direct JSON edit: nightly_<date>_<sha> is not valid semver, so npm version rejects it.
-          # This only affects build-info.json; not committed to master.
-          node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$NEW_VERSION"
+          echo "make_latest=$MAKE_LATEST" >> $GITHUB_OUTPUT
+          echo "[ci] branch=$BRANCH version=$NEW_VERSION tag=$TAG prerelease=$PRERELEASE make_latest=$MAKE_LATEST"
 
       - name: Install dependencies
         run: npm ci
@@ -106,6 +97,29 @@ jobs:
         run: npm run package:lite
         env:
           SKIP_ONNX_MODELS: 1
+          DEBUG: electron-forge:*
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          Write-Host "=== out/ directory tree (depth 1) ==="
+          if (Test-Path out) {
+            Get-ChildItem -Recurse out -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize
+          } else {
+            Write-Error "out/ directory does not exist!"
+            exit 1
+          }
+          $exe = "out\SXSEditor-win32-x64\SXSEditor.exe"
+          if (-not (Test-Path $exe)) {
+            Write-Error "SXSEditor.exe not found at $exe"
+            Write-Host "=== Contents of out/SXSEditor-win32-x64/ ==="
+            if (Test-Path "out\SXSEditor-win32-x64") {
+              Get-ChildItem "out\SXSEditor-win32-x64" | Select-Object Name, Length | Format-Table -AutoSize
+            }
+            exit 1
+          }
+          $size = (Get-Item $exe).Length
+          Write-Host "Build output verified: $exe ($size bytes)"
 
       - name: Install Inno Setup
         shell: pwsh
@@ -166,6 +180,7 @@ jobs:
             - GitHub: https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe
             - GitCode mirror: https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
+          make_latest: ${{ steps.version.outputs.make_latest }}
           files: inno/${{ env.INSTALLER_NAME }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
