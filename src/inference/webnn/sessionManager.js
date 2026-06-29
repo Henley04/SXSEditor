@@ -154,25 +154,35 @@ export async function unloadModel(modelId) {
     console.log(`[WebNN] Model ${modelId} unloaded`);
 }
 
-// 全局 FIFO 互斥锁：同一时刻只允许一个 session.run() 执行。
+// 全局 FIFO 互斥锁：同一时刻只允许一次完整合成或单次推理执行。
 //
 // 根因（onnxruntime Issue #19443）：ORT Web 的 WASM 后端用共享的 stackAlloc/stackRestore
 // 管理线性内存栈，多个 session.run() 并发——无论是单次 runSynthesis 内部的 Promise.all
 // 跨 encoder、还是跨 runSynthesis 调用、或是 IPC 触发的 runInference——都会破坏栈指针，
 // 触发 "memory access out of bounds" 和 "Session already started"。
-// 该约束作用于同一 ORT 上下文的所有 session，与 modelId 无关；DML 路径不受影响。
+// 该约束作用于同一 ORT 上下文的所有 session，与 modelId 无异；DML 路径不受影响。
 //
-// 因此 runSession（渲染进程内部，含 Promise.all 并发的 encoder）和 runInference
-// （IPC 触发）必须共用此锁。加锁后调用方无需自行串行化。
+// 经验证：单次 session.run() 粒度的锁不足以防止 ORT WASM 内部残留异步操作导致的竞态，
+// 必须提升到合成函数级（runSynthesis / runSynthesisBatch / runInference 整体持锁）。
+//
+// 注意：此锁不可重入。runSession 不再加锁，调用方（runSynthesis 等）必须用 withRunLock
+// 包裹整体，确保内部多个 runSession 调用都在同一持锁期间顺序执行。
 let _runLock = Promise.resolve();
 
-async function _withRunLock(session, feeds) {
+/**
+ * 在全局互斥锁保护下执行任意异步任务（粗粒度，用于合成函数级串行）。
+ * 不可重入：task 内部禁止再次调用 withRunLock，否则死锁。
+ * @param {() => Promise<T>} task
+ * @returns {Promise<T>}
+ * @template T
+ */
+export async function withRunLock(task) {
     const prev = _runLock;
     let release;
     _runLock = new Promise((r) => { release = r; });
     await prev;
     try {
-        return await session.run(feeds);
+        return await task();
     } finally {
         release();
     }
@@ -180,9 +190,13 @@ async function _withRunLock(session, feeds) {
 
 /**
  * 执行推理（IPC 触发路径，主进程→渲染进程）。
- * 与 runSession 共用同一把全局互斥锁，防止跨路径并发 session.run() 破坏 WASM 栈。
+ * 整体持锁，防止与 runSynthesis / 其他 runInference 并发破坏 WASM 栈。
  */
 export async function runInference(modelId, inputs) {
+    return withRunLock(() => _runInferenceUnlocked(modelId, inputs));
+}
+
+async function _runInferenceUnlocked(modelId, inputs) {
     const ort = getOrt();
     const entry = sessions.get(modelId);
     if (!entry || entry.status !== 'loaded' || !entry.session) {
@@ -230,7 +244,7 @@ export async function runInference(modelId, inputs) {
         feeds[name] = new ort.Tensor(tensorType, tensorDataArray, dims);
     }
 
-    const results = await _withRunLock(session, feeds);
+    const results = await session.run(feeds);
 
     // 将结果转换为可序列化格式（IPC 传输）
     // 使用 TypedArray.slice() 替代 Array.from()，避免展开为普通数组的巨大开销
@@ -286,12 +300,13 @@ export function getSession(modelId) {
 
 /**
  * 运行指定模型的推理（供内部模块使用，直接返回 ort 结果）。
- * 内置全局互斥锁，并发调用自动 FIFO 排队，调用方无需自行串行化。
+ * 不加锁：调用方（runSynthesis / runSynthesisBatch）必须用 withRunLock 包裹整体，
+ * 确保内部多个 runSession 调用顺序执行。锁不可重入，此处再加锁会死锁。
  */
 export async function runSession(modelId, feeds) {
     const entry = sessions.get(modelId);
     if (!entry || entry.status !== 'loaded' || !entry.session) {
         throw new Error(`Model ${modelId} is not loaded`);
     }
-    return await _withRunLock(entry.session, feeds);
+    return await entry.session.run(feeds);
 }

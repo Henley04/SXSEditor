@@ -7,7 +7,7 @@
  */
 
 import { detectNPU } from './npuDetection.js';
-import { loadModel, unloadModel, runInference, getStatus, runSession } from './sessionManager.js';
+import { loadModel, unloadModel, runInference, getStatus, runSession, withRunLock } from './sessionManager.js';
 import { runEncoderStage } from './preprocessing.js';
 import { runDiffusionLoop, runBatchDiffusionLoop } from './diffusion.js';
 import { runVocoder } from './postprocessing.js';
@@ -33,6 +33,12 @@ import { runSegmentedVocoder } from './audioSegmentation.js';
  * @returns {{ audioData: number[], totalFrames: number }}
  */
 async function runSynthesis(params) {
+    // 整体持锁：防止与另一个 runSynthesis / runInference 并发执行，
+    // 触发 ORT WASM 共享栈损坏（"Session already started" / "memory access out of bounds"）。
+    return withRunLock(() => _runSynthesisUnlocked(params));
+}
+
+async function _runSynthesisUnlocked(params) {
     await ensureOrt();
 
     let {
@@ -123,6 +129,11 @@ async function runSynthesisBatch(paramsArray) {
     if (!paramsArray || paramsArray.length === 0) return [];
     if (paramsArray.length === 1) return [await runSynthesis(paramsArray[0])];
 
+    // 整体持锁：原因同 runSynthesis（见 withRunLock 注释）。
+    return withRunLock(() => _runSynthesisBatchUnlocked(paramsArray));
+}
+
+async function _runSynthesisBatchUnlocked(paramsArray) {
     const onProgress = paramsArray[0].onProgress;
 
     await ensureOrt();
