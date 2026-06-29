@@ -85,7 +85,7 @@ jobs:
         shell: bash
         run: |
           NEW_VERSION="${{ steps.version.outputs.version }}"
-          npm version "$NEW_VERSION" --no-git-tag-version --commit-hooks=false
+          npm version "$NEW_VERSION" --no-git-tag-version
           git add package.json package-lock.json
           git commit -m "chore: bump version to $NEW_VERSION [skip ci]"
           git push origin "HEAD:release"
@@ -95,8 +95,9 @@ jobs:
         shell: bash
         run: |
           NEW_VERSION="${{ steps.version.outputs.version }}"
-          # Local-only bump; not committed. Lets build-info.json pick up the nightly tag.
-          npm version "$NEW_VERSION" --no-git-tag-version --commit-hooks=false
+          # Direct JSON edit: nightly_<date>_<sha> is not valid semver, so npm version rejects it.
+          # This only affects build-info.json; not committed to master.
+          node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$NEW_VERSION"
 
       - name: Install dependencies
         run: npm ci
