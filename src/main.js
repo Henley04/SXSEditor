@@ -251,10 +251,17 @@ app.whenReady().then(() => {
             // NPU devices are validated at pipeline init via probe — don't switch at startup
             if (preferredType === 'npu') {
               console.log('[Main] NPU device selected, skipping startup validation (will verify via probe at inference time)');
+            } else if (preferredId === undefined || preferredId === null) {
+              // manual 模式但未选具体设备（preferredDeviceId 为 null/undefined）—
+              // 这是不一致状态（通常由旧版本 smart/advanced 模式下保存的 null 覆盖导致），
+              // silently 切换到 smart 模式，不弹 "deviceId=null not found" 误导性对话框。
+              console.warn('[Main] Manual mode but preferredDeviceId is null/undefined, silently switching to smart mode');
+              const newSettings = { ...settings, deviceMode: 'smart' };
+              delete newSettings.preferredDeviceId;
+              delete newSettings.preferredDeviceType;
+              await saveSettingsFile(newSettings);
             } else {
-              const found = preferredId !== undefined && preferredId !== null
-                ? allDevices.find(d => d.dxgiAdapterNumber === preferredId)
-                : null;
+              const found = allDevices.find(d => d.dxgiAdapterNumber === preferredId);
 
               if (!found && !mainWindow.isDestroyed()) {
                 const deviceName = `deviceId=${preferredId}`;

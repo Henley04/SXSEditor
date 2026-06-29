@@ -152,11 +152,23 @@ function registerSettingsIpc() {
 
     // 精度 / vocoder 类型 / 设备设置变化时必须重置 pipeline，
     // 否则切换 INT8-NPU 等精度后仍使用旧 pipeline（模型仍加载在旧设备上）
-    if (settings.deviceMode !== undefined ||
-        settings.preferredDeviceId !== undefined ||
-        settings.modelDeviceMapping !== undefined ||
-        settings.modelPrecision !== undefined ||
-        settings.vocoderType !== undefined) {
+    //
+    // 注意：必须比较新旧值是否真正变化，而不能用 `!== undefined` 判断。
+    // 因为 settings.js 的 collectSettings() 总是返回包含全部字段的完整对象
+    // （deviceMode/modelPrecision 等始终有值，永不为 undefined），
+    // 若仅判断 `!== undefined`，则修改 previewDiffSteps/exportDiffSteps/audioVolume
+    // 等无关参数时也会误触发 resetSvsPipeline()，导致 NPU 上 WebNN session 被销毁重建，
+    // 重建时若 NPU 资源未完全释放（dispose 异步卸载未 await），probe 会静默回退到 WASM/CPU，
+    // 然后 markNPUUnavailable() 永久污染 NPU 检测缓存，造成"修改 diffstep 后 NPU 静默回退 CPU"。
+    const RESET_TRIGGER_KEYS = ['deviceMode', 'preferredDeviceId', 'modelDeviceMapping', 'modelPrecision', 'vocoderType'];
+    const needsPipelineReset = RESET_TRIGGER_KEYS.some(key => {
+      // modelDeviceMapping 是对象，需深比较；其他字段为标量，直接比较
+      if (key === 'modelDeviceMapping') {
+        return JSON.stringify(current[key] || {}) !== JSON.stringify(merged[key] || {});
+      }
+      return current[key] !== merged[key];
+    });
+    if (needsPipelineReset) {
       resetSvsPipeline();
       resetRmvpe();
       resetBasicPitch();
