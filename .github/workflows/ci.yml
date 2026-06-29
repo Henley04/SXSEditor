@@ -96,16 +96,18 @@ jobs:
           # Ensure Electron binary downloads even if postinstall was silently skipped
           ELECTRON_SKIP_BINARY_DOWNLOAD: '0'
 
-      - name: Ensure Electron binary downloaded
+      - name: Ensure Electron binary and zip cache
         shell: pwsh
         run: |
           $electronExe = "node_modules\electron\dist\electron.exe"
-          if (Test-Path $electronExe) {
-            $size = (Get-Item $electronExe).Length
-            Write-Host "Electron binary OK: $electronExe ($size bytes)"
-          } else {
-            Write-Host "Electron binary missing, re-running install script..."
-            # Try with default GitHub source first
+          $electronVersion = "42.4.1"
+          $cacheDir = "$env:LOCALAPPDATA\electron\Cache"
+          $zipName = "electron-v$electronVersion-win32-x64.zip"
+          $zipPath = Join-Path $cacheDir $zipName
+
+          Write-Host "=== Checking Electron binary ==="
+          if (-not (Test-Path $electronExe)) {
+            Write-Host "Electron binary missing, running install script..."
             node node_modules/electron/install.js
             if (-not (Test-Path $electronExe)) {
               Write-Host "Default source failed, trying npmmirror..."
@@ -113,11 +115,30 @@ jobs:
               node node_modules/electron/install.js
             }
             if (-not (Test-Path $electronExe)) {
-              Write-Error "Failed to download Electron binary even with mirror!"
+              Write-Error "Failed to download Electron binary!"
               exit 1
             }
-            $size = (Get-Item $electronExe).Length
-            Write-Host "Electron binary downloaded: $electronExe ($size bytes)"
+          }
+          $size = (Get-Item $electronExe).Length
+          Write-Host "Electron binary OK: $electronExe ($size bytes)"
+
+          Write-Host "=== Checking Electron zip cache (needed by electron-packager) ==="
+          Write-Host "Cache dir: $cacheDir"
+          if (Test-Path $cacheDir) {
+            Get-ChildItem $cacheDir -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
+          } else {
+            Write-Host "Cache dir does not exist"
+          }
+
+          if (-not (Test-Path $zipPath)) {
+            Write-Host "Electron zip not in cache, downloading via @electron/get..."
+            node -e "const get = require('@electron/get'); get.downloadArtifact({ version: '42.4.1', platform: 'win32', arch: 'x64', artifactName: 'electron' }).then(p => console.log('cached at:', p)).catch(e => { console.error(e); process.exit(1); })"
+            if (Test-Path $cacheDir) {
+              Write-Host "=== Cache contents after download ==="
+              Get-ChildItem $cacheDir -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
+            }
+          } else {
+            Write-Host "Electron zip already cached: $zipPath"
           }
 
       - name: Verify environment before build
@@ -150,15 +171,18 @@ jobs:
           if (Test-Path "out") {
             Get-ChildItem -Recurse "out" -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize
           } else {
-            Write-Host "out/ does not exist after forge - trying direct electron-packager..."
-            # Fallback: run electron-packager directly to see actual error
+            Write-Host "out/ does not exist after forge - trying @electron/packager API directly..."
             $env:ELECTRON_CACHE = "$env:LOCALAPPDATA\electron\Cache"
             Write-Host "ELECTRON_CACHE: $env:ELECTRON_CACHE"
-            & npx electron-packager . SXSEditor --platform=win32 --arch=x64 --out=out --overwrite --prune --icon=assets/SXS.ico --asar.unpack="**/*.{node,dll}" --electron-version=42.4.1 2>&1 | Tee-Object -FilePath build-output.log -Append
+            & node scripts/run-packager.js 2>&1 | Tee-Object -FilePath build-output.log -Append
             $packagerExit = $LASTEXITCODE
-            Write-Host "Direct electron-packager exit code: $packagerExit"
+            Write-Host "Direct packager exit code: $packagerExit"
             if (Test-Path "out") {
               Get-ChildItem -Recurse "out" -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize
+            } else {
+              Write-Host "out/ STILL does not exist!"
+              Write-Host "=== Searching for SXSEditor.exe in workspace ==="
+              Get-ChildItem -Path "." -Filter "SXSEditor.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length | Format-Table -AutoSize
             }
           }
 
