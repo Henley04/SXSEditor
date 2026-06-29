@@ -45,8 +45,8 @@ You write notes on a piano roll, type lyrics, and SXSEditor generates a singing 
 
 **Windows installer** (models downloaded automatically on first launch):
 
-- [GitHub Releases](https://github.com/Henley04/SXSEditor/releases)
-- [GitCode Mirror (China)](https://gitcode.com/qq_50331623/SXSEditor/releases)
+- [GitHub Release (latest installer)](https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
+- [GitCode Mirror (China, latest installer)](https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
 
 macOS and Linux: build from source — see the [Developer Guide](Developer-Guide).
 

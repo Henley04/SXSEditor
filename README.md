@@ -29,8 +29,8 @@ Supported singing languages: **English** and **Chinese (Mandarin)**. Japanese is
 
 **Windows** (models auto-downloaded on first launch):
 
-- [GitHub Releases](https://github.com/Henley04/SXSEditor/releases)
-- [GitCode Mirror (China)](https://gitcode.com/qq_50331623/SXSEditor/releases)
+- [GitHub Release (latest installer)](https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
+- [GitCode Mirror (China, latest installer)](https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
 
 macOS / Linux: build from source (see below).
 
@@ -114,7 +114,7 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 
 **Windows**（首次启动自动下载模型）：
 
-- [GitHub Releases](https://github.com/Henley04/SXSEditor/releases)
+- [GitHub Release (latest installer)](https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
 - [GitCode 镜像（中国大陆加速）](https://gitcode.com/qq_50331623/SXSEditor/releases)
 
 macOS / Linux 用户请从源码构建。
@@ -195,8 +195,8 @@ SXSEditor は歌声合成のためのオープンソースデスクトップア�
 
 **Windows**（初回起動時にモデルを自動ダウンロード）：
 
-- [GitHub Releases](https://github.com/Henley04/SXSEditor/releases)
-- [GitCode ミラー（中国）](https://gitcode.com/qq_50331623/SXSEditor/releases)
+- [GitHub Release (latest installer)](https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
+- [GitCode ミラー（中国、最新インストーラー）](https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
 
 macOS / Linux：ソースからビルドしてください。
 
