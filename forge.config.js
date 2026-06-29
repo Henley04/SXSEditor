@@ -13,11 +13,17 @@ module.exports = {
     prune: true,
     ignore: (file) => {
       if (!file) return false;
-      const keepList = ['/.webpack', '/node_modules'];
+      // Normalize: strip leading slash/backslash, convert backslashes to forward slashes.
+      // electron-packager passes paths without leading slashes (e.g. '.webpack/main/index.js'),
+      // but be defensive and handle both formats.
+      const normalized = file.replace(/^[\\/]+/, '').replace(/\\/g, '/');
+      const keepList = ['.webpack', 'node_modules'];
       if (!skipOnnxModels) {
-        keepList.push('/onnx_models');
+        keepList.push('onnx_models');
       }
-      const keep = keepList.some(prefix => file.startsWith(prefix));
+      const keep = keepList.some(prefix => 
+        normalized === prefix || normalized.startsWith(prefix + '/')
+      );
       return !keep;
     },
     icon: './assets/SXS',
