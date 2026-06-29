@@ -154,11 +154,33 @@ export async function unloadModel(modelId) {
     console.log(`[WebNN] Model ${modelId} unloaded`);
 }
 
+// 全局 FIFO 互斥锁：同一时刻只允许一个 session.run() 执行。
+//
+// 根因（onnxruntime Issue #19443）：ORT Web 的 WASM 后端用共享的 stackAlloc/stackRestore
+// 管理线性内存栈，多个 session.run() 并发——无论是单次 runSynthesis 内部的 Promise.all
+// 跨 encoder、还是跨 runSynthesis 调用、或是 IPC 触发的 runInference——都会破坏栈指针，
+// 触发 "memory access out of bounds" 和 "Session already started"。
+// 该约束作用于同一 ORT 上下文的所有 session，与 modelId 无关；DML 路径不受影响。
+//
+// 因此 runSession（渲染进程内部，含 Promise.all 并发的 encoder）和 runInference
+// （IPC 触发）必须共用此锁。加锁后调用方无需自行串行化。
+let _runLock = Promise.resolve();
+
+async function _withRunLock(session, feeds) {
+    const prev = _runLock;
+    let release;
+    _runLock = new Promise((r) => { release = r; });
+    await prev;
+    try {
+        return await session.run(feeds);
+    } finally {
+        release();
+    }
+}
+
 /**
- * 执行推理
- * @param {string} modelId - 模型标识符
- * @param {Object} inputs - 输入张量数据 { inputName: { data: Float32Array|Uint16Array, dims: number[] } }
- * @returns {Object} 输出张量数据 { outputName: { data: Array, dims: number[] } }
+ * 执行推理（IPC 触发路径，主进程→渲染进程）。
+ * 与 runSession 共用同一把全局互斥锁，防止跨路径并发 session.run() 破坏 WASM 栈。
  */
 export async function runInference(modelId, inputs) {
     const ort = getOrt();
@@ -208,7 +230,7 @@ export async function runInference(modelId, inputs) {
         feeds[name] = new ort.Tensor(tensorType, tensorDataArray, dims);
     }
 
-    const results = await session.run(feeds);
+    const results = await _withRunLock(session, feeds);
 
     // 将结果转换为可序列化格式（IPC 传输）
     // 使用 TypedArray.slice() 替代 Array.from()，避免展开为普通数组的巨大开销
@@ -263,15 +285,13 @@ export function getSession(modelId) {
 }
 
 /**
- * 运行指定模型的推理（供内部模块使用，直接返回 ort 结果）
- * @param {string} modelId
- * @param {Object} feeds
- * @returns {Object} ort 推理结果
+ * 运行指定模型的推理（供内部模块使用，直接返回 ort 结果）。
+ * 内置全局互斥锁，并发调用自动 FIFO 排队，调用方无需自行串行化。
  */
 export async function runSession(modelId, feeds) {
     const entry = sessions.get(modelId);
     if (!entry || entry.status !== 'loaded' || !entry.session) {
         throw new Error(`Model ${modelId} is not loaded`);
     }
-    return await entry.session.run(feeds);
+    return await _withRunLock(entry.session, feeds);
 }
