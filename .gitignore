@@ -99,6 +99,11 @@ out/
 onnx_models/int8/
 onnx_models/fp16/
 
+# External speech datasets (only used for stats building, not runtime)
+raw_data/
+preprocessed_data/
+lexicon/
+
 # ExecuTorch models
 *.pte
 *.pte.data
