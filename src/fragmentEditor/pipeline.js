@@ -19,7 +19,7 @@ export function initPipeline() {
       setPipelineInitialized(true);
       console.log('[FragmentEditor] SVS Pipeline initialized');
     } catch (err) {
-      console.error('[FragmentEditor] SVS Pipeline 初始化失败:', err);
+      console.error('[FragmentEditor] SVS Pipeline init failed:', err);
       setPipelineInitPromise(null);
       throw err;
     } finally {

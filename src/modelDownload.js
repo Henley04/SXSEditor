@@ -294,7 +294,7 @@ document.querySelectorAll('input[name="modelPrecision"]').forEach(radio => {
     try {
       await window.electronAPI.modelDownloadRecheck(currentPrecision);
     } catch (err) {
-      console.error('重新检查模型文件失败:', err);
+      console.error('Failed to recheck model files:', err);
     }
   });
 });
@@ -439,7 +439,7 @@ async function refreshSifiganCard() {
     sifiganState.status = result.status;
     sifiganState.files = result.files;
   } catch (err) {
-    console.error('[SiFiGAN] 检查状态失败:', err);
+    console.error('[SiFiGAN] status check failed:', err);
     // On error, fall back to download_url_not_configured so the UI stays
     // in a safe, non-actionable state instead of offering a download that
     // would fail.
@@ -469,7 +469,7 @@ document.getElementById('sifiganDownloadBtn').addEventListener('click', async ()
       sifiganState.files = result.files;
     }
   } catch (err) {
-    console.error('[SiFiGAN] 下载失败:', err);
+    console.error('[SiFiGAN] download failed:', err);
     sifiganState.status = 'download_url_not_configured';
   } finally {
     sifiganState.isDownloading = false;
@@ -489,7 +489,7 @@ document.getElementById('sifiganUnloadBtn').addEventListener('click', async () =
     sifiganState.status = result.status || 'download_url_not_configured';
     sifiganState.files = result.files;
   } catch (err) {
-    console.error('[SiFiGAN] 卸载失败:', err);
+    console.error('[SiFiGAN] unload failed:', err);
     // Re-check on failure to get the actual state
   } finally {
     sifiganState.isDownloading = false;

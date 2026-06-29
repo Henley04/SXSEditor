@@ -37,7 +37,7 @@ const STORAGE_KEY_OVERRIDES = 'sxseditor-theme-overrides';
 
 class ThemeNotFoundError extends Error {
     constructor(id) {
-        super(`主题 "${id}" 未注册`);
+        super(`Theme "${id}" not registered`);
         this.name = 'ThemeNotFoundError';
         this.id = id;
     }
@@ -87,7 +87,7 @@ function flattenTheme(theme) {
         if (!cur.extends) break;
         const parent = registry.get(cur.extends);
         if (!parent) {
-            throw new Error(`主题 "${cur.id}" 的父主题 "${cur.extends}" 不存在`);
+            throw new Error(`Parent theme "${cur.extends}" of theme "${cur.id}" does not exist`);
         }
         cur = parent.theme;
     }
@@ -175,7 +175,7 @@ function restoreSnapshot(s) {
 
 function register(theme) {
     if (!theme || !theme.id) {
-        throw new ThemeValidationError([{ field: 'id', message: '主题缺少 id' }]);
+        throw new ThemeValidationError([{ field: 'id', message: 'Theme missing id' }]);
     }
     const result = validate(theme, { getThemeById: (id) => registry.get(id)?.theme });
     if (!result.ok) {

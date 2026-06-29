@@ -103,14 +103,14 @@ function registerThemeIpc() {
 
   ipcMain.handle('theme:apply', async (event, themeId, options) => {
     if (!themeId || typeof themeId !== 'string') {
-      return { success: false, error: 'themeId 必须为字符串' };
+      return { success: false, error: 'themeId must be a string' };
     }
     if (!themeStorage.isValidId(themeId)) {
-      return { success: false, error: '非法 id' };
+      return { success: false, error: 'invalid id' };
     }
     const all = listAllThemes();
     if (!all.find(t => t.id === themeId)) {
-      return { success: false, error: `主题 "${themeId}" 不存在` };
+      return { success: false, error: `Theme "${themeId}" does not exist` };
     }
     const settings = loadSettings();
     const scope = (options && options.scope) || 'global';
@@ -128,7 +128,7 @@ function registerThemeIpc() {
   ipcMain.handle('theme:save', async (event, themeObj) => {
     try {
       if (!themeObj || !themeStorage.isValidId(themeObj.id)) {
-        return { success: false, error: '非法 id' };
+        return { success: false, error: 'invalid id' };
       }
       const userDir = app.getPath('userData');
       const result = themeStorage.saveTheme(userDir, themeObj);
@@ -142,10 +142,10 @@ function registerThemeIpc() {
   ipcMain.handle('theme:delete', async (event, themeId) => {
     try {
       if (!themeId || !themeStorage.isValidId(themeId)) {
-        return { success: false, error: '非法 id' };
+        return { success: false, error: 'invalid id' };
       }
       if (themeStorage.BUILTIN_IDS.has(themeId)) {
-        return { success: false, error: '不能删除内置主题' };
+        return { success: false, error: 'Cannot delete built-in theme' };
       }
       const userDir = app.getPath('userData');
       const result = themeStorage.deleteTheme(userDir, themeId);
@@ -167,10 +167,10 @@ function registerThemeIpc() {
   ipcMain.handle('theme:import', async (event) => {
     try {
       const result = await dialog.showOpenDialog({
-        title: '导入主题',
+        title: 'Import Theme',
         filters: [
-          { name: '主题文件', extensions: ['json'] },
-          { name: '所有文件', extensions: ['*'] },
+          { name: 'Theme Files', extensions: ['json'] },
+          { name: 'All Files', extensions: ['*'] },
         ],
         properties: ['openFile'],
       });
@@ -190,7 +190,7 @@ function registerThemeIpc() {
   ipcMain.handle('theme:export', async (event, themeId) => {
     try {
       if (!themeId || !themeStorage.isValidId(themeId)) {
-        return { success: false, error: '非法 id' };
+        return { success: false, error: 'invalid id' };
       }
       let themeObj = null;
       if (themeStorage.BUILTIN_IDS.has(themeId)) {
@@ -200,12 +200,12 @@ function registerThemeIpc() {
         const { themes } = themeStorage.loadUserThemes(userDir);
         themeObj = themes.find(t => t.id === themeId);
       }
-      if (!themeObj) return { success: false, error: '主题不存在' };
+      if (!themeObj) return { success: false, error: 'Theme does not exist' };
       const defaultName = `${themeId}.theme.json`;
       const result = await dialog.showSaveDialog({
-        title: '导出主题',
+        title: 'Export Theme',
         defaultPath: defaultName,
-        filters: [{ name: '主题文件', extensions: ['json'] }],
+        filters: [{ name: 'Theme Files', extensions: ['json'] }],
       });
       if (result.canceled || !result.filePath) {
         return { success: false, canceled: true };

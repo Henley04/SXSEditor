@@ -417,20 +417,20 @@ class BasicPitchDetector {
     try {
       await tf.setBackend('wasm');
       await tf.ready();
-      console.log('[BasicPitchDetector] TF.js 后端已设置为 WASM');
+      console.log('[BasicPitchDetector] TF.js backend set to WASM');
     } catch (e) {
-      console.warn('[BasicPitchDetector] WASM 后端初始化失败，回退到 CPU 后端:', e.message);
+      console.warn('[BasicPitchDetector] WASM backend init failed, falling back to CPU backend:', e.message);
       await tf.setBackend('cpu');
       await tf.ready();
     }
 
     const modelPath = path.join(this.modelDir, 'basic_pitch_model');
-    console.log('[BasicPitchDetector] 尝试加载模型:', modelPath);
+    console.log('[BasicPitchDetector] attempting to load model:', modelPath);
 
     const fs = require('fs');
     const modelJsonPath = path.join(modelPath, 'model.json');
     if (!fs.existsSync(modelJsonPath)) {
-      const errMsg = `[BasicPitchDetector] 模型文件不存在: ${modelJsonPath}`;
+      const errMsg = `[BasicPitchDetector] model file does not exist: ${modelJsonPath}`;
       console.error(errMsg);
       const err = new Error(errMsg);
       err.code = 'MODEL_NOT_FOUND';
@@ -442,10 +442,10 @@ class BasicPitchDetector {
     try {
       this.model = await tf.loadGraphModel(`${baseUrl}/model.json`);
       this.initialized = true;
-      console.log('[BasicPitchDetector] 模型加载成功');
+      console.log('[BasicPitchDetector] model loaded successfully');
       return true;
     } catch (err) {
-      console.error('[BasicPitchDetector] 模型加载失败:', err.message);
+      console.error('[BasicPitchDetector] model load failed:', err.message);
       if (this._server) { this._server.close(); this._server = null; this._serverPort = null; }
       err.modelPath = modelJsonPath;
       throw err;
@@ -516,7 +516,7 @@ class BasicPitchDetector {
 
     try {
       for (let i = 0; i < batchSize; ++i) {
-        console.log(`[BasicPitchDetector] 处理帧: ${i + 1}/${batchSize}`);
+        console.log(`[BasicPitchDetector] processing frame: ${i + 1}/${batchSize}`);
 
         const singleBatch = tf.slice(reshapedInput, [i, 0, 0], [1, -1, -1]);
         const model = await this.model;

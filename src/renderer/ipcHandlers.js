@@ -237,11 +237,20 @@ if (window.electronAPI?.onCloseConfirm) {
         const onProgress = (progress) => {
           try { api.webnnProgress(`webnn:progress:${requestId}`, { progress }); } catch (_) {}
         };
-        // Array params = batch synthesis (2 segments, batch=4)
+        // Chunk audio callback: 流式推送 vocoder chunk 到主进程（主进程再转发到 fragment 窗口）
+        const onChunkComplete = (chunkInfo) => {
+          try {
+            // Float32Array 通过 structured clone 传输；主进程监听 chunkChannel
+            api.webnnChunk(`webnn:runSynthesis:response:chunk:${requestId}`, chunkInfo);
+          } catch (e) {
+            console.warn('[WebNN] Failed to forward chunk audio:', e.message);
+          }
+        };
+        // Array params = batch synthesis (2 segments, batch=4) — batch 路径暂不支持流式
         if (Array.isArray(params)) {
           result = await pipeline.runSynthesisBatch(params.map(p => ({ ...p, onProgress })));
         } else {
-          result = await pipeline.runSynthesis({ ...params, onProgress });
+          result = await pipeline.runSynthesis({ ...params, onProgress, onChunkComplete });
         }
       } catch (e) {
         result = { error: e.message };

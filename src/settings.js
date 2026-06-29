@@ -202,7 +202,7 @@ async function checkSifiganVocoderFiles() {
         ]);
         return { onnxExists, statsExists };
     } catch (err) {
-        console.error('[Settings] 检测 SiFiGAN 模型文件失败:', err);
+        console.error('[Settings] Failed to detect SiFiGAN model files:', err);
         return { onnxExists: false, statsExists: false };
     }
 }
@@ -356,7 +356,7 @@ async function loadDevices() {
         // Load audio device list (needs hardware detection for device enumeration)
         await loadAudioDevices();
     } catch (err) {
-        console.error('加载设备列表失败:', err);
+        console.error('Failed to load device list:', err);
         inferenceDeviceSelect.textContent = '';
         const opt = document.createElement('option');
         opt.value = 'auto';
@@ -516,7 +516,7 @@ async function loadAudioDevices() {
         const isExclusive = audioOutputModeSelect.value === 'exclusive';
         audioBitDepthSelect.disabled = !isExclusive || !isAudioAvailable;
     } catch (err) {
-        console.error('加载音频设备列表失败:', err);
+        console.error('Failed to load audio device list:', err);
     }
 }
 
@@ -543,7 +543,7 @@ async function updateAudioDeviceList() {
             audioOutputDeviceSelect.value = currentValue;
         }
     } catch (err) {
-        console.error('更新音频设备列表失败:', err);
+        console.error('Failed to update audio device list:', err);
     }
 }
 
@@ -626,7 +626,7 @@ async function applySettings(options = {}) {
         // Other settings (device, audio, diffusion) are saved and take effect on next synthesis / app restart
         // No main window reload needed — avoids losing user's work
     } catch (err) {
-        console.error('应用设置失败:', err);
+        console.error('Failed to apply settings:', err);
     }
 }
 
@@ -749,7 +749,7 @@ openModelDownloadBtn.addEventListener('click', async () => {
     try {
         await window.electronAPI.modelDownloadOpen(precision);
     } catch (err) {
-        console.error('打开模型下载失败:', err);
+        console.error('Failed to open model download:', err);
     }
 });
 
@@ -891,13 +891,13 @@ async function applyThemeViaAPI(themeId) {
         try {
             await window.electronAPI.themeAPI.apply(themeId, { scope: 'global' });
         } catch (e) {
-            console.error('应用主题失败:', e);
+            console.error('Failed to apply theme:', e);
         }
     } else if (themeId && themeManager.get(themeId)) {
         try {
             themeManager.activate(themeId);
         } catch (e) {
-            console.error('应用主题失败:', e);
+            console.error('Failed to apply theme:', e);
         }
     }
 }
@@ -907,7 +907,7 @@ async function refreshThemeList() {
         try {
             themeList = await window.electronAPI.themeAPI.list();
         } catch (e) {
-            console.error('列出主题失败:', e);
+            console.error('Failed to list themes:', e);
             themeList = BUILTIN_THEMES.map(t => ({ ...t, source: 'builtin' }));
         }
     } else {
@@ -934,7 +934,7 @@ if (themeResetBtn) {
             try {
                 await window.electronAPI.themeAPI.reset();
             } catch (e) {
-                console.error('重置主题失败:', e);
+                console.error('Failed to reset theme:', e);
             }
         } else {
             try {
@@ -1005,7 +1005,7 @@ if (themeDeleteBtn) {
             try {
                 await window.electronAPI.themeAPI.delete(id);
             } catch (e) {
-                console.error('删除主题失败:', e);
+                console.error('Failed to delete theme:', e);
                 return;
             }
         }
@@ -1144,7 +1144,7 @@ function applyTokenChange(tokenName, value) {
         try {
             themeManager.setOverrideValue(tokenName, value);
         } catch (e) {
-            console.error('设置令牌失败:', e);
+            console.error('Failed to set token:', e);
         }
     }, 80);
 }
@@ -1349,7 +1349,7 @@ if (themeSaveAsConfirmBtn) {
             populateThemeSelect();
         }
     } catch (e) {
-        console.error('初始化主题列表失败:', e);
+        console.error('Failed to initialize theme list:', e);
     }
 })();
 

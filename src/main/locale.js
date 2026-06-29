@@ -107,7 +107,7 @@ function loadMainLocale() {
         return;
       }
     }
-  } catch (err) { console.warn('[Main] 加载 locale 配置失败:', err.message); }
+  } catch (err) { console.warn('[Main] Failed to load locale config:', err.message); }
   // No config file — detect system language
   const sysLang = app.getLocale(); // e.g. 'zh-CN', 'en-US', 'ja'
   if (sysLang.startsWith('zh')) {

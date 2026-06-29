@@ -188,6 +188,14 @@ function registerSvsIpc() {
         }
       } catch (_) {}
     };
+    // 流式 chunk 音频推送：vocoder 每完成一个 chunk 即推送到 fragment 窗口，实现边合成边播放
+    opts.onChunkAudio = (chunkInfo) => {
+      try {
+        if (!win.isDestroyed()) {
+          win.send('fragment-svs:chunk-audio', chunkInfo);
+        }
+      } catch (_) {}
+    };
     // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）
     if (opts.autoShift && opts.refAudioWavBuffer) {
       opts.refF0Extractor = _makeRmvpeExtractor();

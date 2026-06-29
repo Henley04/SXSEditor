@@ -460,7 +460,7 @@ async function resolveRedirects(url, maxRedirects = 5, method = 'GET') {
       return { finalUrl: currentUrl, response };
     }
     if (!isAllowedDownloadHost(redirectUrl)) {
-      throw new Error(`重定向目标不允许: ${redirectUrl}`);
+      throw new Error(`Redirect target not allowed: ${redirectUrl}`);
     }
     // Drain response body before following redirect
     response.resume();

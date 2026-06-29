@@ -407,7 +407,7 @@ function registerWindowIpc() {
       }
       return true;
     } catch (err) {
-      console.error('[Main] 保存片段数据失败:', err);
+      console.error('[Main] Failed to save fragment data:', err);
       return false;
     }
   });

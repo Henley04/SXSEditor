@@ -41,6 +41,26 @@ import {
 import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
 import { updateFragmentPlayButton, updateParamModeButtons } from './uiControls.js';
 
+// 流式播放状态（vocoder chunk 边合成边播放）
+// streamingSources: 已调度的 AudioBufferSourceNode 列表（按顺序）
+// streamingCleanup: chunk 监听器 cleanup 函数
+let streamingSources = [];
+let streamingCleanup = null;
+let streamingNextStart = 0;
+let streamingFinished = false;
+
+function stopStreamingPlayback() {
+  for (const src of streamingSources) {
+    try { src.onended = null; src.stop(); } catch (_) {}
+  }
+  streamingSources = [];
+  if (streamingCleanup) {
+    try { streamingCleanup(); } catch (_) {}
+    streamingCleanup = null;
+  }
+  streamingFinished = false;
+}
+
 export async function getFragmentAudioContextInternal() {
   let ctx = getFragmentAudioContext();
   if (!ctx || ctx.state === 'closed') {
@@ -90,6 +110,8 @@ async function applyFragmentAudioSettings() {
 }
 
 export function stopFragmentPlayback() {
+  // 清理流式播放（边合成边播的 chunk sources）
+  stopStreamingPlayback();
   const source = getFragmentAudioSource();
   if (source) {
     try {
@@ -315,6 +337,57 @@ function padAudioToFragmentDuration(audioData) {
 export async function playFragment() {
   setFragmentIsSynthesizing(true);
   updateFragmentPlayButton();
+  // 清理上一次流式播放状态
+  stopStreamingPlayback();
+  streamingFinished = false;
+  streamingSources = [];
+  streamingNextStart = 0;
+
+  // 注册 chunk 监听：vocoder 每完成一个 chunk 即开始播放（边合成边播）
+  // chunk 顺序由 IPC 保证（按发送顺序触发），无需额外排序
+  streamingCleanup = window.electronAPI.onFragmentSVSChunkAudio(async (chunkInfo) => {
+    try {
+      if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
+      if (streamingFinished) return;
+      const ctx = await getFragmentAudioContextInternal();
+      const audioBuffer = ctx.createBuffer(1, chunkInfo.audio.length, getSampleRate());
+      audioBuffer.getChannelData(0).set(chunkInfo.audio);
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      const gainNode = getFragmentGainNode();
+      if (gainNode) source.connect(gainNode);
+      else source.connect(ctx.destination);
+
+      // 第一个 chunk 立即播放，后续 chunk 接续前一个结束时间
+      if (streamingSources.length === 0) {
+        streamingNextStart = ctx.currentTime + 0.05; // 50ms 延迟避免调度抖动
+        setFragmentIsPlaying(true);
+        setFragmentPlaybackStartTime(ctx.currentTime + 0.05);
+        setFragmentPlaybackOffset(0);
+        setFragmentCurrentTime(0);
+        updateFragmentPlayButton();
+      }
+      source.start(streamingNextStart);
+      streamingNextStart += chunkInfo.audio.length / getSampleRate();
+
+      // 最后一个 chunk：标记流式结束，更新 UI
+      source.onended = () => {
+        if (chunkInfo.isLast && !streamingFinished) {
+          streamingFinished = true;
+          setFragmentIsPlaying(false);
+          const raf = getFragmentPlayheadRaf();
+          if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+          setFragmentCurrentTime(0);
+          updateFragmentPlayButton();
+          render();
+        }
+      };
+      streamingSources.push(source);
+    } catch (e) {
+      console.warn('[FragmentAudio] Streaming chunk playback failed:', e.message);
+    }
+  });
+
   try {
     if (!getPipelineInitialized()) {
       await initPipeline();
@@ -342,16 +415,27 @@ export async function playFragment() {
     });
     setFragmentAudioData(padAudioToFragmentDuration(audioData));
 
-    setFragmentUseExclusiveMode(getFragmentAudioSettings()?.audioOutputMode === 'exclusive');
+    // 合成完成：缓存完整 audioData 用于后续播放/导出
+    // 流式播放不中断，让它播完已调度的 chunk
+    // 移除 chunk 监听（避免内存泄漏），但保留已调度的 source 继续播放
+    if (streamingCleanup) {
+      try { streamingCleanup(); } catch (_) {}
+      streamingCleanup = null;
+    }
 
-    if (getFragmentUseExclusiveMode()) {
-      await playFragmentExclusive();
-    } else {
-      await playFragmentShared();
+    // 如果流式播放未启动（如缓存命中或单 chunk 未触发回调），回退到整段播放
+    if (streamingSources.length === 0) {
+      setFragmentUseExclusiveMode(getFragmentAudioSettings()?.audioOutputMode === 'exclusive');
+      if (getFragmentUseExclusiveMode()) {
+        await playFragmentExclusive();
+      } else {
+        await playFragmentShared();
+      }
     }
   } catch (error) {
     console.error(t('fragment.synthesisFailed') + ':', error);
     showAlertDialog(t('fragment.synthesisFailed') + ': ' + error.message);
+    stopStreamingPlayback();
   } finally {
     setFragmentIsSynthesizing(false);
     updateFragmentPlayButton();

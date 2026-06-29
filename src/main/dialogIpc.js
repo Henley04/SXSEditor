@@ -44,7 +44,7 @@ function registerDialogIpc() {
       await fs.promises.writeFile(filePath, data);
       return { success: true };
     } catch (err) {
-      console.error('[Main] 文件保存失败:', err.message);
+      console.error('[Main] File save failed:', err.message);
       return { success: false, error: err.message };
     }
   });
@@ -57,7 +57,7 @@ function registerDialogIpc() {
       const data = await fs.promises.readFile(filePath, 'utf-8');
       return data;
     } catch (err) {
-      console.error('[Main] 文件读取失败:', err.message);
+      console.error('[Main] File read failed:', err.message);
       throw err;
     }
   });
@@ -70,7 +70,7 @@ function registerDialogIpc() {
       const buffer = await fs.promises.readFile(filePath);
       return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
     } catch (err) {
-      console.error('[Main] 文件读取(Buffer)失败:', err.message);
+      console.error('[Main] File read (Buffer) failed:', err.message);
       throw err;
     }
   });
@@ -98,7 +98,7 @@ function registerDialogIpc() {
     const resolved = path.resolve(basePath, relativePath);
     const normalizedBase = path.resolve(basePath);
     if (!resolved.startsWith(normalizedBase + path.sep) && resolved !== normalizedBase) {
-      throw new Error('路径遍历被阻止');
+      throw new Error('Path traversal blocked');
     }
     return resolved;
   });

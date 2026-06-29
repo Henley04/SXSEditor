@@ -43,8 +43,8 @@ def check_sifigan_repo(sifigan_dir):
     """检查 SiFiGAN 源码是否存在，不存在则给出提示并退出。"""
     init_path = os.path.join(sifigan_dir, "sifigan", "__init__.py")
     if not os.path.isfile(init_path):
-        print(f"[ERROR] 未找到 SiFiGAN 源码: {sifigan_dir}")
-        print(f"请先克隆仓库:")
+        print(f"[ERROR] SiFiGAN source not found: {sifigan_dir}")
+        print(f"Please clone the repository first:")
         print(f"  git clone https://github.com/chomeyama/SiFiGAN {sifigan_dir}")
         sys.exit(1)
 
@@ -181,7 +181,7 @@ def _patch_pd_indexing():
     sifigan_utils.pd_indexing = pd_indexing_positive
     # residual_block.py 已 `from sifigan.utils import pd_indexing`，
     # 必须在 import 之前完成 patch，否则原引用仍指向旧函数
-    print("[PATCH] sifigan.utils.pd_indexing -> 正向索引版本 (ONNX 兼容)")
+    print("[PATCH] sifigan.utils.pd_indexing -> positive-index version (ONNX compatible)")
 
 
 def load_sifigan_generator(sifigan_dir, checkpoint_path):
@@ -232,7 +232,7 @@ def load_stats(stats_path):
     scales = []
     for feat in AUX_FEATS:
         if feat not in scaler:
-            raise KeyError(f"统计文件中缺少特征 '{feat}'，可用: {list(scaler.keys())}")
+            raise KeyError(f"Feature '{feat}' missing from stats file, available: {list(scaler.keys())}")
         s = scaler[feat]
         means.append(np.asarray(s.mean_, dtype=np.float32))
         scales.append(np.asarray(s.scale_, dtype=np.float32))
@@ -242,9 +242,9 @@ def load_stats(stats_path):
 
     expected_dim = SIFIGAN_GENERATOR_CONFIG["in_channels"]
     if mean.shape[0] != expected_dim:
-        print(f"[WARN] 特征维度 {mean.shape[0]} != in_channels {expected_dim}")
-        print(f"       特征组成: {AUX_FEATS}")
-        print(f"       各维度: {[np.asarray(scaler[f].mean_).shape[0] for f in AUX_FEATS]}")
+        print(f"[WARN] Feature dim {mean.shape[0]} != in_channels {expected_dim}")
+        print(f"       Feature composition: {AUX_FEATS}")
+        print(f"       Per-feature dims: {[np.asarray(scaler[f].mean_).shape[0] for f in AUX_FEATS]}")
 
     return mean, scale
 
@@ -415,15 +415,15 @@ def export_onnx(wrapper, output_path, seq_len=50):
     import onnx
 
     print(f"\n{'='*60}")
-    print(f"ONNX 导出 (opset=18, dynamo=False)")
+    print(f"ONNX export (opset=18, dynamo=False)")
     print(f"{'='*60}")
 
     # 构造探针输入
     mel = torch.randn(1, seq_len, MEL_DIM, dtype=torch.float32) * 0.1
     f0 = torch.rand(1, seq_len, 1, dtype=torch.float32) * 200 + 100  # 100-300 Hz
 
-    print(f"  输入: mel={tuple(mel.shape)}, f0={tuple(f0.shape)}")
-    print(f"  参数量: {sum(p.numel() for p in wrapper.parameters()) / 1e6:.1f}M")
+    print(f"  Inputs: mel={tuple(mel.shape)}, f0={tuple(f0.shape)}")
+    print(f"  Parameters: {sum(p.numel() for p in wrapper.parameters()) / 1e6:.1f}M")
 
     # 先导出到临时文件
     temp_path = output_path + ".tmp"
@@ -446,7 +446,7 @@ def export_onnx(wrapper, output_path, seq_len=50):
         )
 
     # 加载并重新保存为 external_data 格式 (处理 >2GB 模型)
-    print(f"  重新打包为 external_data 格式...")
+    print(f"  Repacking as external_data format...")
     model = onnx.load(temp_path)
     old_data = output_path + ".data"
     if os.path.exists(old_data):
@@ -469,14 +469,14 @@ def export_onnx(wrapper, output_path, seq_len=50):
     size_mb = os.path.getsize(output_path) / 1024 / 1024
     data_path = output_path + ".data"
     data_mb = os.path.getsize(data_path) / 1024 / 1024 if os.path.exists(data_path) else 0
-    print(f"  保存: {output_path}")
-    print(f"  大小: {size_mb:.1f}MB (graph) + {data_mb:.1f}MB (data)")
+    print(f"  Saved: {output_path}")
+    print(f"  Size: {size_mb:.1f}MB (graph) + {data_mb:.1f}MB (data)")
 
     # 打印算子统计
     ops = {}
     for node in model.graph.node:
         ops[node.op_type] = ops.get(node.op_type, 0) + 1
-    print(f"  节点总数: {sum(ops.values())}")
+    print(f"  Total nodes: {sum(ops.values())}")
     for op, cnt in sorted(ops.items(), key=lambda x: -x[1])[:10]:
         print(f"    {op}: {cnt}")
 
@@ -507,7 +507,7 @@ def validate_onnx(wrapper, onnx_path, seq_len=50, tolerance=1e-2):
     import onnxruntime as ort
 
     print(f"\n{'='*60}")
-    print(f"精度验证 (PyTorch vs ONNX Runtime CPU)")
+    print(f"Accuracy validation (PyTorch vs ONNX Runtime CPU)")
     print(f"{'='*60}")
 
     # 固定随机种子以保证可重复
@@ -518,14 +518,14 @@ def validate_onnx(wrapper, onnx_path, seq_len=50, tolerance=1e-2):
     mel = torch.randn(1, seq_len, MEL_DIM, dtype=torch.float32) * 0.1
     f0 = torch.rand(1, seq_len, 1, dtype=torch.float32) * 200 + 100  # 100-300 Hz
 
-    print(f"  输入: mel={tuple(mel.shape)}, f0={tuple(f0.shape)}")
+    print(f"  Inputs: mel={tuple(mel.shape)}, f0={tuple(f0.shape)}")
 
     # PyTorch 参考输出
     wrapper.eval()
     with torch.no_grad():
         pt_out = wrapper(mel, f0)
     pt_out = pt_out.cpu().numpy()
-    print(f"  PyTorch 输出: shape={pt_out.shape}, range=[{pt_out.min():.6f}, {pt_out.max():.6f}]")
+    print(f"  PyTorch output: shape={pt_out.shape}, range=[{pt_out.min():.6f}, {pt_out.max():.6f}]")
 
     # ONNX Runtime 输出
     sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
@@ -533,30 +533,30 @@ def validate_onnx(wrapper, onnx_path, seq_len=50, tolerance=1e-2):
         None,
         {"mel": mel.numpy(), "f0": f0.numpy()},
     )[0]
-    print(f"  ONNX 输出:   shape={ort_out.shape}, range=[{ort_out.min():.6f}, {ort_out.max():.6f}]")
+    print(f"  ONNX output:   shape={ort_out.shape}, range=[{ort_out.min():.6f}, {ort_out.max():.6f}]")
 
     # 误差对比
     if pt_out.shape != ort_out.shape:
-        print(f"  [FAIL] 输出形状不匹配: {pt_out.shape} vs {ort_out.shape}")
+        print(f"  [FAIL] Output shape mismatch: {pt_out.shape} vs {ort_out.shape}")
         return False
 
     abs_diff = np.abs(pt_out - ort_out)
     max_diff = abs_diff.max()
     mean_diff = abs_diff.mean()
 
-    print(f"  L1 最大误差:   {max_diff:.8f}")
-    print(f"  L1 平均误差:   {mean_diff:.8f}")
-    print(f"  容忍阈值:      {tolerance:.8f}")
+    print(f"  L1 max error:   {max_diff:.8f}")
+    print(f"  L1 mean error:  {mean_diff:.8f}")
+    print(f"  Tolerance:      {tolerance:.8f}")
 
     if max_diff < tolerance:
-        print(f"  [PASS] 精度验证通过 (误差 < {tolerance})")
+        print(f"  [PASS] Accuracy verification passed (error < {tolerance})")
         return True
     else:
-        print(f"  [FAIL] 精度验证失败 (误差 >= {tolerance})")
+        print(f"  [FAIL] Accuracy verification failed (error >= {tolerance})")
         # 打印差异最大的位置
         flat_diff = abs_diff.flatten()
         top_indices = np.argsort(flat_diff)[-5:][::-1]
-        print(f"  差异最大的 5 个位置:")
+        print(f"  Top 5 positions with largest differences:")
         for idx in top_indices:
             pt_val = pt_out.flatten()[idx]
             ort_val = ort_out.flatten()[idx]
@@ -631,46 +631,46 @@ def main():
             gc.collect()
 
     print("=" * 60)
-    print("SiFiGAN Vocoder ONNX 导出")
+    print("SiFiGAN Vocoder ONNX export")
     print("=" * 60)
-    print(f"  检查点: {args.checkpoint}")
-    print(f"  统计文件: {args.stats}")
-    print(f"  SiFiGAN 源码: {args.sifigan_dir}")
-    print(f"  输出: {args.out}")
+    print(f"  Checkpoint: {args.checkpoint}")
+    print(f"  Stats file: {args.stats}")
+    print(f"  SiFiGAN source: {args.sifigan_dir}")
+    print(f"  Output: {args.out}")
 
     t0 = time.time()
 
     # 4. 加载统计文件
-    print("\n[1/4] 加载统计文件...")
+    print("\n[1/4] Loading stats file...")
     feat_mean, feat_scale = load_stats(args.stats)
-    print(f"  特征维度: {feat_mean.shape[0]} (mcep + bap)")
-    print(f"  均值范围: [{feat_mean.min():.4f}, {feat_mean.max():.4f}]")
-    print(f"  尺度范围: [{feat_scale.min():.4f}, {feat_scale.max():.4f}]")
+    print(f"  Feature dim: {feat_mean.shape[0]} (mcep + bap)")
+    print(f"  Mean range: [{feat_mean.min():.4f}, {feat_mean.max():.4f}]")
+    print(f"  Scale range: [{feat_scale.min():.4f}, {feat_scale.max():.4f}]")
 
     # 5. 加载 SiFiGAN Generator
-    print("\n[2/4] 加载 SiFiGAN Generator...")
+    print("\n[2/4] Loading SiFiGAN Generator...")
     generator = load_sifigan_generator(args.sifigan_dir, args.checkpoint)
     param_count = sum(p.numel() for p in generator.parameters()) / 1e6
-    print(f"  Generator 参数量: {param_count:.1f}M")
+    print(f"  Generator parameters: {param_count:.1f}M")
 
     # 6. 构建 Wrapper
-    print("\n[3/4] 构建 SiFiGANVocoderWrapper...")
+    print("\n[3/4] Building SiFiGANVocoderWrapper...")
     wrapper = SiFiGANVocoderWrapper(generator, feat_mean, feat_scale).eval()
     total_params = sum(p.numel() for p in wrapper.parameters()) / 1e6
-    print(f"  Wrapper 总参数量: {total_params:.1f}M")
+    print(f"  Wrapper total parameters: {total_params:.1f}M")
 
     # 7. ONNX 导出
-    print("\n[4/4] ONNX 导出...")
+    print("\n[4/4] ONNX export...")
     output_path = export_onnx(wrapper, args.out, seq_len=args.seq_len)
 
     # 8. 精度验证（复用导出时的 wrapper 实例，避免 mel_proj 重新随机初始化）
     if not args.skip_validation:
         passed = validate_onnx(wrapper, output_path, seq_len=args.seq_len)
         if not passed:
-            print("\n[ERROR] 精度验证未通过，请检查导出过程")
+            print("\n[ERROR] Accuracy verification failed, please check the export process")
             sys.exit(1)
     else:
-        print("\n[跳过] 精度验证已跳过")
+        print("\n[SKIP] Accuracy verification skipped")
 
     # 9. 释放 PyTorch 模型内存
     del wrapper, generator
@@ -678,9 +678,9 @@ def main():
 
     elapsed = time.time() - t0
     print(f"\n{'='*60}")
-    print(f"导出完成! 耗时 {elapsed:.1f}s")
-    print(f"  ONNX 模型: {output_path}")
-    print(f"  外部数据: {output_path}.data")
+    print(f"Export complete! Elapsed {elapsed:.1f}s")
+    print(f"  ONNX model: {output_path}")
+    print(f"  External data: {output_path}.data")
     print(f"{'='*60}")
 
 

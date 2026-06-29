@@ -22,7 +22,7 @@ export async function extractF0AndPitch() {
     });
 
     if (!result.success) {
-      throw new Error(result.error || 'RMVPE推理失败');
+      throw new Error(result.error || 'RMVPE inference failed');
     }
 
     state.f0Data = result.f0Array;
@@ -51,7 +51,7 @@ export async function extractF0AndPitch() {
     updateMidiInfo();
     showAlertDialog(t('preprocess.f0ExtractionComplete'));
   } catch (err) {
-    console.error('提取失败:', err);
+    console.error('Extraction failed:', err);
     showAlertDialog(t('preprocess.extractionFailed') + ': ' + err.message);
   } finally {
     hideLoading(loading);

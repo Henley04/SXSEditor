@@ -14,8 +14,8 @@ const { Speaker } = (() => {
   try {
     return require('decibri');
   } catch (e) {
-    console.warn('[AudioWorker] decibri 加载失败:', e.message);
-    console.warn(`[AudioWorker] 环境: Node ${process.version}, 平台 ${process.platform}, 架构 ${process.arch}`);
+    console.warn('[AudioWorker] decibri load failed:', e.message);
+    console.warn(`[AudioWorker] Env: Node ${process.version}, platform ${process.platform}, arch ${process.arch}`);
     return {};
   }
 })();
@@ -48,7 +48,7 @@ function handleGetDevices() {
 
 function handleStart(audioData, options) {
   if (!Speaker) {
-    return { success: false, error: 'decibri 不可用' };
+    return { success: false, error: 'decibri unavailable' };
   }
   if (!(audioData instanceof Float32Array)) {
     audioData = new Float32Array(audioData);
@@ -83,7 +83,7 @@ function handleStart(audioData, options) {
   try {
     _output = new Speaker(speakerOptions);
   } catch (e) {
-    return { success: false, error: `创建音频输出失败: ${e.message}` };
+    return { success: false, error: `Failed to create audio output: ${e.message}` };
   }
 
   _isPlaying = true;
@@ -98,7 +98,7 @@ function handleStart(audioData, options) {
     _isPlaying = false;
     try { _output.stop(); } catch (_) {}
     _output = null;
-    return { success: false, error: `写入音频数据失败: ${e.message}` };
+    return { success: false, error: `Failed to write audio data: ${e.message}` };
   }
   _startPositionTracking();
 
