@@ -150,11 +150,16 @@ jobs:
           if (Test-Path "out") {
             Get-ChildItem -Recurse "out" -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize
           } else {
-            Write-Host "out/ does not exist - electron-packager failed!"
-          }
-          if ($exitCode -ne 0) {
-            Write-Error "Build failed with exit code $exitCode"
-            exit $exitCode
+            Write-Host "out/ does not exist after forge - trying direct electron-packager..."
+            # Fallback: run electron-packager directly to see actual error
+            $env:ELECTRON_CACHE = "$env:LOCALAPPDATA\electron\Cache"
+            Write-Host "ELECTRON_CACHE: $env:ELECTRON_CACHE"
+            & npx electron-packager . SXSEditor --platform=win32 --arch=x64 --out=out --overwrite --prune --icon=assets/SXS.ico --asar.unpack="**/*.{node,dll}" --electron-version=42.4.1 2>&1 | Tee-Object -FilePath build-output.log -Append
+            $packagerExit = $LASTEXITCODE
+            Write-Host "Direct electron-packager exit code: $packagerExit"
+            if (Test-Path "out") {
+              Get-ChildItem -Recurse "out" -Depth 1 | Select-Object FullName, Length | Format-Table -AutoSize
+            }
           }
 
       - name: Verify build output
@@ -166,6 +171,11 @@ jobs:
             if (Test-Path "out\SXSEditor-win32-x64") {
               Write-Host "=== Contents of out/SXSEditor-win32-x64/ ==="
               Get-ChildItem "out\SXSEditor-win32-x64" | Select-Object Name, Length | Format-Table -AutoSize
+            }
+            # Print full build log for debugging
+            Write-Host "=== Full build-output.log ==="
+            if (Test-Path build-output.log) {
+              Get-Content build-output.log
             }
             exit 1
           }

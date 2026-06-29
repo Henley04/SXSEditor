@@ -11,6 +11,7 @@ module.exports = {
       ...(skipOnnxModels ? {} : { unpackDir: 'onnx_models' })
     },
     prune: true,
+    quiet: false,
     ignore: (file) => {
       if (!file) return false;
       // Normalize: strip leading slash/backslash, convert backslashes to forward slashes.
