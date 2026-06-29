@@ -243,10 +243,19 @@ python build_en_phoneme_duration_stats.py
 python build_en_phoneme_duration_stats.py --min-samples 10  # filter low-frequency keys
 ```
 
-**Application policy** (planned, not yet integrated in `preprocessing.js`):
+**Application policy** (integrated in `preprocessing.js` via `durationStats.js`):
 1. User `phonemeAdjustments` (manual) wins always
-2. Default: trigram_full lookup → fall back to trigram → bigram → unigram
+2. Default for English long notes: `trigram_full` lookup → fall back to `trigram` → `bigram` → `unigram`
 3. Extremely short notes (`innerFrames < phonemeCount`): keep vowel-priority to prevent phoneme swallowing
+4. Non-English or stats-table-not-loaded: linear interpolation (unchanged behavior)
+
+**Integration files**:
+- `src/inference/pipeline/durationStats.js` — lazy loader + lookup fallback chain
+- `src/inference/pipeline/preprocessing.js` — `_allocateByStats()` replaces default linear allocation for English
+
+**Lazy loading**: stats JSON (4.1MB) is loaded async in `Preprocessing` constructor, does not block startup. If load fails, silently falls back to linear allocation.
+
+**Cross-note context**: prev/next phonemes span adjacent notes via `_getBoundaryPhone()`, giving trigram context across word boundaries.
 
 ### Float16 Patch
 

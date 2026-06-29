@@ -1,6 +1,7 @@
 const ort = require('onnxruntime-node');
 const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, F0_BIN, F0_MIN, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32 } = require('./utils');
+const durationStats = require('./durationStats');
 
 /**
  * Pre-processing: note encoding, pitch encoding, F0 encoding, condition embedding
@@ -12,6 +13,9 @@ class Preprocessing {
         // ARPAbet 元音基名（不含重音后缀 0/1/2）
         this._enVowelBases = new Set(['AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'EH', 'ER', 'EY', 'IH', 'IY', 'OW', 'OY', 'UH', 'UW']);
         this._jpVowels = new Set(['a', 'i', 'u', 'e', 'o']);
+        // 懒加载英文音素时长统计表（异步，不阻塞构造）
+        this._durationStats = null;
+        durationStats.preload().then(s => { this._durationStats = s; }).catch(() => {});
     }
 
     _buildIdx2Phone() {
@@ -385,13 +389,8 @@ class Preprocessing {
                         }
                     }
                 } else {
-                    // 默认：线性插值（与训练 data_processor.py 一致）
-                    allocation = new Array(j);
-                    for (let p = 0; p < j; p++) {
-                        const pStart = Math.floor(p * innerFrames / j);
-                        const pEnd = Math.floor((p + 1) * innerFrames / j);
-                        allocation[p] = pEnd - pStart;
-                    }
+                    // 默认：数据驱动统计表查表（英文）或线性插值（其他语言/表未加载）
+                    allocation = this._allocateByStats(idx, phLocations, phonemeIds, j, innerFrames);
                 }
             } else if (phonemeIds.length === j) {
                 // 帧数不足：元音优先（无论是否有 ratios，帧数不足时 ratios 无意义）
@@ -492,6 +491,140 @@ class Preprocessing {
         }
 
         return mel2token;
+    }
+
+    /**
+     * 数据驱动音素帧分配（英文）。
+     * 用 trigram+position+stress 统计表查每个音素的相对时长权重，
+     * 归一化后按比例分配 innerFrames。统计表未加载或非英文时退回线性插值。
+     *
+     * 上下文：跨 note 边界取相邻 note 的首/尾音素作为 prev/next。
+     *
+     * @param {number} noteIdx 当前 note 在 phLocations 中的索引
+     * @param {Array} phLocations phLocations 数组
+     * @param {Int32Array|number[]} phonemeIds 当前 note 的音素 ID 数组
+     * @param {number} j 音素个数
+     * @param {number} innerFrames 可分配帧数
+     * @returns {number[]} 每个音素的帧数分配，长度 == j，总和 == innerFrames
+     */
+    _allocateByStats(noteIdx, phLocations, phonemeIds, j, innerFrames) {
+        const stats = this._durationStats;
+
+        // 统计表未加载：退回线性插值
+        if (!stats || !stats.unigram) {
+            return this._linearAllocate(j, innerFrames);
+        }
+
+        // 检查是否为英文音素（至少有一个 en_ 前缀）
+        let hasEnglish = false;
+        const phoneNames = new Array(j);
+        for (let p = 0; p < j; p++) {
+            const name = this._idx2phone[phonemeIds[p]] || '';
+            phoneNames[p] = name;
+            if (name.startsWith('en_')) hasEnglish = true;
+        }
+        if (!hasEnglish) {
+            return this._linearAllocate(j, innerFrames);
+        }
+
+        // 跨 note 上下文：取前一 note 的最后一个真实音素，后一 note 的第一个真实音素
+        const prevNoteLastPhone = this._getBoundaryPhone(noteIdx - 1, phLocations, 'last');
+        const nextNoteFirstPhone = this._getBoundaryPhone(noteIdx + 1, phLocations, 'first');
+
+        // 词内位置：单音素 note 标 medial；多音素 note 首音素 initial，末音素 final
+        const positionFor = (p) => {
+            if (j <= 1) return 'medial';
+            if (p === 0) return 'initial';
+            if (p === j - 1) return 'final';
+            return 'medial';
+        };
+
+        // 查表计算每个音素的时长权重
+        const SPECIAL_TOKENS = new Set(['<SEP>', '<BOW>', '<EOW>', '<PAD>']);
+        const weights = new Array(j);
+        for (let p = 0; p < j; p++) {
+            const name = phoneNames[p];
+            if (SPECIAL_TOKENS.has(name)) {
+                weights[p] = 0.1; // 特殊 token 最小权重
+                continue;
+            }
+            const curr = durationStats.barePhone(name);
+            const prev = (p > 0) ? durationStats.barePhone(phoneNames[p - 1]) : (prevNoteLastPhone || '<S>');
+            const next = (p < j - 1) ? durationStats.barePhone(phoneNames[p + 1]) : (nextNoteFirstPhone || '<E>');
+            weights[p] = durationStats.lookupWeight(stats, curr, prev, next, positionFor(p));
+        }
+
+        // 按权重比例分配帧（保证每个音素 >= 1 帧）
+        const sum = weights.reduce((s, v) => s + v, 0);
+        if (sum <= 0) {
+            return this._linearAllocate(j, innerFrames);
+        }
+
+        const allocation = new Array(j);
+        for (let p = 0; p < j; p++) {
+            allocation[p] = Math.max(1, Math.round(innerFrames * weights[p] / sum));
+        }
+
+        // 修正总和误差
+        let used = allocation.reduce((s, v) => s + v, 0);
+        let diff = innerFrames - used;
+        if (diff > 0) {
+            // 帧不够：按权重降序补给
+            const order = [...Array(j).keys()].sort((a, b) => weights[b] - weights[a]);
+            for (let k = 0; k < diff; k++) allocation[order[k % j]]++;
+        } else if (diff < 0) {
+            // 帧过多：按权重升序削减（不低于 1）
+            const order = [...Array(j).keys()].sort((a, b) => weights[a] - weights[b]);
+            let toRemove = -diff;
+            for (let k = 0; k < j && toRemove > 0; k++) {
+                const idx2 = order[k];
+                while (allocation[idx2] > 1 && toRemove > 0) {
+                    allocation[idx2]--;
+                    toRemove--;
+                }
+            }
+        }
+
+        return allocation;
+    }
+
+    /**
+     * 获取相邻 note 的边界音素名（用于跨 note 上下文）。
+     * @param {number} noteIdx 相邻 note 索引
+     * @param {Array} phLocations
+     * @param {'first'|'last'} which 取第一个还是最后一个真实音素
+     * @returns {string|null} 裸音素名（如 'AE1'），无相邻或无真实音素返回 null
+     */
+    _getBoundaryPhone(noteIdx, phLocations, which) {
+        if (noteIdx < 0 || noteIdx >= phLocations.length) return null;
+        const ids = phLocations[noteIdx][3];
+        if (!ids || ids.length === 0) return null;
+        const SPECIAL = new Set(['<SEP>', '<BOW>', '<EOW>', '<PAD>']);
+        if (which === 'first') {
+            for (let i = 0; i < ids.length; i++) {
+                const name = this._idx2phone[ids[i]] || '';
+                if (!SPECIAL.has(name)) return durationStats.barePhone(name);
+            }
+        } else {
+            for (let i = ids.length - 1; i >= 0; i--) {
+                const name = this._idx2phone[ids[i]] || '';
+                if (!SPECIAL.has(name)) return durationStats.barePhone(name);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * 线性插值分配（与训练 data_processor.py 一致），作为统计表未加载时的回退。
+     */
+    _linearAllocate(j, innerFrames) {
+        const allocation = new Array(j);
+        for (let p = 0; p < j; p++) {
+            const pStart = Math.floor(p * innerFrames / j);
+            const pEnd = Math.floor((p + 1) * innerFrames / j);
+            allocation[p] = pEnd - pStart;
+        }
+        return allocation;
     }
 
     /**

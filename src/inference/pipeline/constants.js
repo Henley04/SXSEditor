@@ -26,6 +26,10 @@ const SEGMENT_MIN_SEC = 15;
 const SEGMENT_MAX_SEC = 30;
 const SEGMENT_OVERLAP_SEC = 2;
 const MAX_SAFE_FRAMES = 40000;
+// 最小合成帧数：单 note 短分片时 totalFrames 可能只有几帧，diffusion 对极短 mel
+// 无法生成有意义结果。Pad 到此帧数（SP 静音帧），合成后截取有效部分音频。
+// 30 帧 = 0.6s（50Hz 帧率），兼顾模型感受野与计算开销。
+const MIN_SYNTH_FRAMES = 30;
 
 // WebNN IPC 超时常量（毫秒）
 // 单次模型推理：NPU 编译 + 推理的合理上限
@@ -133,6 +137,7 @@ module.exports = {
     SEGMENT_MAX_SEC,
     SEGMENT_OVERLAP_SEC,
     MAX_SAFE_FRAMES,
+    MIN_SYNTH_FRAMES,
     IPC_TIMEOUT_INFERENCE,
     IPC_TIMEOUT_MODEL_LOAD,
     IPC_TIMEOUT_SYNTHESIS,

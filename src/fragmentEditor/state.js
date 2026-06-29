@@ -76,6 +76,8 @@ let phonemeDragState = null;
 let selectedPhonemeNoteId = null;
 let selectedPhonemeIndex = -1;
 
+let hoveredNoteId = null;
+
 let paramEnvelopeDrag = null;
 
 let activeInlineInput = null;
@@ -265,6 +267,9 @@ export function setSelectedPhonemeNoteId(v) { selectedPhonemeNoteId = v; }
 
 export function getSelectedPhonemeIndex() { return selectedPhonemeIndex; }
 export function setSelectedPhonemeIndex(v) { selectedPhonemeIndex = v; }
+
+export function getHoveredNoteId() { return hoveredNoteId; }
+export function setHoveredNoteId(v) { hoveredNoteId = v; }
 
 export function getParamEnvelopeDrag() { return paramEnvelopeDrag; }
 export function setParamEnvelopeDrag(v) { paramEnvelopeDrag = v; }
