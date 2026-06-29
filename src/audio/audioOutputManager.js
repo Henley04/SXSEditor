@@ -39,7 +39,7 @@ class AudioOutputManager {
 
     const workerScript = _findWorkerScript();
     if (!workerScript) {
-      console.warn('[AudioOutputManager] audioWorker.js 未找到，WASAPI 独占模式不可用');
+      console.warn('[AudioOutputManager] audioWorker.js not found, WASAPI exclusive mode unavailable');
       return null;
     }
 
@@ -50,7 +50,7 @@ class AudioOutputManager {
         serialization: 'advanced',
       });
     } catch (e) {
-      console.error('[AudioOutputManager] fork 子进程失败:', e.message);
+      console.error('[AudioOutputManager] fork child process failed:', e.message);
       this._worker = null;
       return null;
     }
@@ -91,7 +91,7 @@ class AudioOutputManager {
     });
 
     this._worker.on('error', (err) => {
-      console.error('[AudioOutputManager] 子进程错误:', err.message);
+      console.error('[AudioOutputManager] child process error:', err.message);
       this._workerReady = false;
       this._workerAvailable = false;
       if (this._readyResolve) {
@@ -109,7 +109,7 @@ class AudioOutputManager {
         this._readyResolve(false);
         this._readyResolve = null;
       }
-      this._rejectAllPending(new Error(`音频子进程退出 (code=${code})`));
+      this._rejectAllPending(new Error(`Audio child process exited (code=${code})`));
     });
 
     return this._worker;
@@ -126,7 +126,7 @@ class AudioOutputManager {
     return new Promise((resolve, reject) => {
       const worker = this._ensureWorker();
       if (!worker) {
-        reject(new Error('音频子进程不可用'));
+        reject(new Error('Audio child process unavailable'));
         return;
       }
 
@@ -134,7 +134,7 @@ class AudioOutputManager {
       const timeout = setTimeout(() => {
         if (this._pendingRequests.has(id)) {
           this._pendingRequests.delete(id);
-          reject(new Error(`命令超时: ${type}`));
+          reject(new Error(`Command timeout: ${type}`));
         }
       }, 15000);
 

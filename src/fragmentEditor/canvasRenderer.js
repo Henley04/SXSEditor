@@ -589,7 +589,7 @@ export async function resolvePhonemesFromPipeline() {
       if (changed) render();
     }
   } catch (err) {
-    console.warn('音素解析失败:', err);
+    console.warn('Phoneme parse failed:', err);
   }
 }
 

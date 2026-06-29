@@ -90,12 +90,12 @@ async function startModelDownload(modelDir, missingFiles, precision) {
     if (win && !win.isDestroyed()) {
       win.webContents.send('model-download:complete');
     }
-    console.log('[Main] 所有模型文件下载完成');
+    console.log('[Main] All model files downloaded');
   } catch (err) {
     if (err.message === 'Download cancelled') {
-      console.log('[Main] 模型下载已取消');
+      console.log('[Main] Model download cancelled');
     } else {
-      console.error('[Main] 模型下载失败:', err);
+      console.error('[Main] Model download failed:', err);
       const win = getModelDownloadWindow();
       if (win && !win.isDestroyed()) {
         win.webContents.send('model-download:error', { message: err.message });
@@ -139,7 +139,7 @@ async function checkAndDownloadModels() {
     });
 
     if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
-      console.log('[Main] 用户取消了模型下载位置选择');
+      console.log('[Main] User cancelled model download location selection');
       return false;
     }
 
@@ -159,16 +159,16 @@ async function checkAndDownloadModels() {
 
     const recheck = await checkMissingFilesAsync(downloadDir, precision);
     if (recheck.missing.length === 0) {
-      console.log('[Main] 所选目录中模型文件已就绪');
+      console.log('[Main] Model files ready in selected directory');
       return true;
     }
 
-    console.log(`[Main] 缺少 ${recheck.missing.length} 个模型文件:`, recheck.missing.map(f => f.filePath));
+    console.log(`[Main] Missing ${recheck.missing.length} model files:`, recheck.missing.map(f => f.filePath));
     createModelDownloadWindow(recheck.missing, precision, DEFAULT_PRECISION);
     return false;
   }
 
-  console.log(`[Main] 缺少 ${missing.length} 个模型文件:`, missing.map(f => f.filePath));
+  console.log(`[Main] Missing ${missing.length} model files:`, missing.map(f => f.filePath));
   createModelDownloadWindow(missing, precision, DEFAULT_PRECISION);
   return false;
 }
@@ -534,7 +534,7 @@ function registerModelDownloadIpc() {
       if (win && !win.isDestroyed()) {
         win.webContents.send('model-download:complete');
       }
-      console.log('[Main] SiFiGAN 模型下载完成');
+      console.log('[Main] SiFiGAN model download complete');
       return {
         status: nowExists ? 'installed' : 'not_downloaded',
         allExist: nowExists,
@@ -542,9 +542,9 @@ function registerModelDownloadIpc() {
       };
     } catch (err) {
       if (err.message === 'Download cancelled') {
-        console.log('[Main] SiFiGAN 模型下载已取消');
+        console.log('[Main] SiFiGAN model download cancelled');
       } else {
-        console.error('[Main] SiFiGAN 模型下载失败:', err);
+        console.error('[Main] SiFiGAN model download failed:', err);
         if (win && !win.isDestroyed()) {
           win.webContents.send('model-download:error', { message: err.message });
         }
@@ -576,7 +576,7 @@ function registerModelDownloadIpc() {
         await saveSettingsFile(settings);
       }
     } catch (err) {
-      console.warn('[Main] 重置 vocoderType 失败:', err.message);
+      console.warn('[Main] Failed to reset vocoderType:', err.message);
     }
 
     // Release the loaded SiFiGAN InferenceSession via the SVS pipeline.
@@ -591,7 +591,7 @@ function registerModelDownloadIpc() {
         pipeline.unloadModel('sifigan');
       }
     } catch (err) {
-      console.warn('[Main] 释放 SiFiGAN InferenceSession 失败:', err.message);
+      console.warn('[Main] Failed to release SiFiGAN InferenceSession:', err.message);
     }
 
     // Re-check files after deletion to return fresh state

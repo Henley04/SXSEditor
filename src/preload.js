@@ -73,6 +73,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('fragment-svs:progress', handler);
     return () => ipcRenderer.removeListener('fragment-svs:progress', handler);
   },
+  onFragmentSVSChunkAudio: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('fragment-svs:chunk-audio', handler);
+    return () => ipcRenderer.removeListener('fragment-svs:chunk-audio', handler);
+  },
   extractF0: (data) => ipcRenderer.invoke('extractF0:onnx', data),
   extractMidiRosvot: (data) => ipcRenderer.invoke('extractMidi:rosvot', data),
   extractF0BasicPitch: (data) => ipcRenderer.invoke('extractF0:basicPitch', data),
@@ -241,6 +246,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return;
     }
     ipcRenderer.send(progressChannel, data);
+  },
+  // Security: whitelist allowed WebNN chunk-audio channels (流式 vocoder chunk 推送)
+  webnnChunk: (chunkChannel, data) => {
+    if (!chunkChannel.startsWith('webnn:runSynthesis:response:chunk:')) {
+      console.error('[Preload] Blocked unauthorized webnnChunk channel:', chunkChannel);
+      return;
+    }
+    ipcRenderer.send(chunkChannel, data);
   },
 
   // ==================== Theme API ====================

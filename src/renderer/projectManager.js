@@ -431,7 +431,7 @@ export async function loadProject() {
       if (!result.canceled && result.filePaths.length > 0) {
         const data = await window.electronAPI.readFile(result.filePaths[0]);
         const obj = JSON.parse(data);
-        if (!obj || typeof obj !== 'object') throw new Error('无效的项目文件');
+        if (!obj || typeof obj !== 'object') throw new Error('Invalid project file');
         if (obj.version) {
           const projVersion = obj.version.split('.').map(Number);
           const currentVersion = [1, 1, 0];

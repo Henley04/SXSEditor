@@ -1,17 +1,17 @@
 const SILENCE_THRESHOLD_SEC = 0.2;
 
 function readUint8(view, offset) {
-  if (offset < 0 || offset >= view.byteLength) throw new Error('MIDI: 读取越界');
+  if (offset < 0 || offset >= view.byteLength) throw new Error('MIDI: read out of bounds');
   return view.getUint8(offset);
 }
 
 function readUint16(view, offset) {
-  if (offset + 1 >= view.byteLength) throw new Error('MIDI: 读取越界');
+  if (offset + 1 >= view.byteLength) throw new Error('MIDI: read out of bounds');
   return (view.getUint8(offset) << 8) | view.getUint8(offset + 1);
 }
 
 function readUint32(view, offset) {
-  if (offset + 3 >= view.byteLength) throw new Error('MIDI: 读取越界');
+  if (offset + 3 >= view.byteLength) throw new Error('MIDI: read out of bounds');
   return (
     (view.getUint8(offset) << 24) |
     (view.getUint8(offset + 1) << 16) |
@@ -30,7 +30,7 @@ function readVarLen(view, offset) {
   let byte;
   let bytesRead = 0;
   do {
-    if (bytesRead >= 4) throw new Error('MIDI: 变长数值过长');
+    if (bytesRead >= 4) throw new Error('MIDI: variable-length number too long');
     byte = readUint8(view, offset + bytesRead);
     value = (value << 7) | (byte & 0x7f);
     bytesRead++;

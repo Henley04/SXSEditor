@@ -27,7 +27,7 @@ function loadSettings() {
       _settingsCache = {};
     }
   } catch (err) {
-    console.warn('[Main] 加载设置失败，将使用默认设置:', err.message);
+    console.warn('[Main] Failed to load settings, using defaults:', err.message);
     _settingsCache = {};
   }
   // Merge defaults for theme fields
@@ -73,11 +73,11 @@ function loadSettings() {
       const sifiganOnnx = path.join(modelDir, 'sifigan_vocoder_dml.onnx');
       const sifiganFallback = path.join(modelDir, 'sifigan_vocoder.onnx');
       if (!fs.existsSync(sifiganOnnx) && !fs.existsSync(sifiganFallback)) {
-        console.warn('[Main] vocoderType=sifigan 但未找到 sifigan_vocoder_dml.onnx / sifigan_vocoder.onnx，本次运行回退到 default');
+        console.warn('[Main] vocoderType=sifigan but sifigan_vocoder_dml.onnx / sifigan_vocoder.onnx not found, falling back to default for this run');
         _settingsCache.vocoderType = 'default';
       }
     } catch (err) {
-      console.warn('[Main] 检测 SiFiGAN 模型文件失败，回退到 default:', err.message);
+      console.warn('[Main] Failed to detect SiFiGAN model files, falling back to default:', err.message);
       _settingsCache.vocoderType = 'default';
     }
   }
@@ -91,7 +91,7 @@ async function saveSettingsFile(settings) {
     await fs.promises.writeFile(filePath, JSON.stringify(settings, null, 2), 'utf-8');
     _settingsCache = null;
   } catch (err) {
-    console.error('[Main] 保存设置失败:', err);
+    console.error('[Main] Failed to save settings:', err);
   }
 }
 

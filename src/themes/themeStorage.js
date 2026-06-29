@@ -63,7 +63,7 @@ function loadUserThemes(userDataDir) {
             if (!isValidId(obj.id)) throw new Error(`invalid id "${obj.id}"`);
             themes.push({ ...obj, source: 'user', filePath: fp });
         } catch (e) {
-            console.warn(`[themeStorage] 跳过损坏主题文件 ${fp}: ${e.message}`);
+            console.warn(`[themeStorage] skipped corrupted theme file ${fp}: ${e.message}`);
             errors.push({ filePath: fp, message: e.message });
         }
     }
@@ -72,10 +72,10 @@ function loadUserThemes(userDataDir) {
 
 function saveTheme(userDataDir, themeObj) {
     if (!themeObj || typeof themeObj !== 'object') {
-        throw new ThemeStorageError('主题必须为对象', 'THEME_INVALID');
+        throw new ThemeStorageError('Theme must be an object', 'THEME_INVALID');
     }
     if (!isValidId(themeObj.id)) {
-        throw new ThemeStorageError(`非法 id "${themeObj.id}"`, 'THEME_INVALID_ID');
+        throw new ThemeStorageError(`invalid id "${themeObj.id}"`, 'THEME_INVALID_ID');
     }
     const dir = getUserThemesDir(userDataDir);
     ensureDir(dir);
@@ -98,17 +98,17 @@ function saveTheme(userDataDir, themeObj) {
         if (hadExisting && backup) {
             try { fs.writeFileSync(target, backup); } catch (_) {}
         }
-        throw new ThemeStorageError(`写入失败：${e.message}`, 'THEME_WRITE_FAIL');
+        throw new ThemeStorageError(`write failed: ${e.message}`, 'THEME_WRITE_FAIL');
     }
     return { filePath: target, id: themeObj.id };
 }
 
 function deleteTheme(userDataDir, themeId) {
     if (!isValidId(themeId)) {
-        throw new ThemeStorageError(`非法 id "${themeId}"`, 'THEME_INVALID_ID');
+        throw new ThemeStorageError(`invalid id "${themeId}"`, 'THEME_INVALID_ID');
     }
     if (BUILTIN_IDS.has(themeId)) {
-        throw new ThemeStorageError('不能删除内置主题', 'THEME_BUILTIN_PROTECTED');
+        throw new ThemeStorageError('Cannot delete built-in theme', 'THEME_BUILTIN_PROTECTED');
     }
     const target = path.join(getUserThemesDir(userDataDir), `${themeId}.theme.json`);
     if (!fs.existsSync(target)) {
@@ -128,7 +128,7 @@ function importThemeFromFile(filePath) {
     const raw = fs.readFileSync(filePath, 'utf8');
     const obj = JSON.parse(raw);
     if (!isValidId(obj.id)) {
-        throw new ThemeStorageError(`非法 id "${obj.id}"`, 'THEME_INVALID_ID');
+        throw new ThemeStorageError(`invalid id "${obj.id}"`, 'THEME_INVALID_ID');
     }
     return obj;
 }

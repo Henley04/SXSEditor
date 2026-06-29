@@ -35,7 +35,7 @@ try:
     HAS_ONNXSIM = True
 except ImportError:
     HAS_ONNXSIM = False
-    print("警告: onnxsim 未安装，将跳过图简化步骤")
+    print("Warning: onnxsim not installed, will skip graph simplification step")
 
 BASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'onnx_models')
 SRC_DIR = os.path.join(BASE_DIR, 'int8')
@@ -103,7 +103,7 @@ def ensure_opset_version(model, min_version=13):
     for opset in model.opset_import:
         if opset.domain in ('', 'ai.onnx'):
             if opset.version < min_version:
-                print(f"  升级 opset: {opset.version} → {min_version}")
+                print(f"  Upgrading opset: {opset.version} -> {min_version}")
                 opset.version = min_version
             return
     model.opset_import.append(helper.make_opsetid('', min_version))
@@ -132,7 +132,7 @@ def clean_unused_initializers(model):
     for name in to_remove:
         remove_initializer(graph, name)
     if to_remove:
-        print(f"  清理了 {len(to_remove)} 个未引用的初始化器")
+        print(f"  Cleaned {len(to_remove)} unused initializers")
     return model
 
 
@@ -256,7 +256,7 @@ def pre_dequantize_dql(model):
     for init in to_remove_final:
         graph.initializer.remove(init)
 
-    print(f"  预反量化: 替换了 {replaced} 个 DequantizeLinear 节点")
+    print(f"  Pre-dequantization: replaced {replaced} DequantizeLinear nodes")
     return model, replaced
 
 
@@ -376,7 +376,7 @@ def fix_w8a8_scale_rank(model):
     # 更新 UNSUPPORTED_OPS 以允许 DequantizeLinear
     UNSUPPORTED_OPS.discard('DequantizeLinear')
 
-    print(f"  W8A8 scale rank 修正: {fixed} 个 DequantizeLinear 节点")
+    print(f"  W8A8 scale rank fix: {fixed} DequantizeLinear nodes")
     return model, fixed
 
 
@@ -416,7 +416,7 @@ def strip_metadata(model):
             removed += 1
 
     if removed > 0:
-        print(f"  清理了 {removed} 项元数据")
+        print(f"  Cleaned {removed} metadata entries")
     return model
 
 
@@ -477,13 +477,13 @@ def validate_vocoder_shapes(model, seq_len):
     pad_bytes = estimate_istft_intermediate_bytes(seq_len, n_fft, hop_size)
     pad_gb = pad_bytes / (1024 ** 3)
 
-    print(f"  ISTFT 中间张量估算: [1,{n_fft},{seq_len},{hop_size}] = {pad_gb:.2f} GB")
+    print(f"  ISTFT intermediate tensor estimate: [1,{n_fft},{seq_len},{hop_size}] = {pad_gb:.2f} GB")
     if pad_bytes > WEBNN_MAX_TENSOR_BYTES:
         max_safe = find_max_vocoder_seq_len(n_fft, hop_size)
-        print(f"  [WARN] 超出 WebNN 2GB 限制! 建议 seq_len <= {max_safe}")
+        print(f"  [WARN] Exceeds WebNN 2GB limit! Recommend seq_len <= {max_safe}")
         return False, max_safe
     else:
-        print(f"  [OK] 在 WebNN 限制内 ({pad_gb:.2f} GB < 2.00 GB)")
+        print(f"  [OK] Within WebNN limit ({pad_gb:.2f} GB < 2.00 GB)")
         return True, seq_len
 
 
@@ -528,7 +528,7 @@ def topological_sort_nodes(graph):
                 queue.append(dep_name)
 
     if len(sorted_names) != len(nodes):
-        print(f"    警告: 拓扑排序不完整 ({len(sorted_names)}/{len(nodes)})")
+        print(f"    Warning: topological sort incomplete ({len(sorted_names)}/{len(nodes)})")
         return
 
     del graph.node[:]
@@ -583,7 +583,7 @@ def replace_dql_matmul_chain(model):
                 cast_node = node
                 break
         if cast_node is None:
-            print(f"    警告: 找不到 Cast for {quant_node.name}")
+            print(f"    Warning: Cast not found for {quant_node.name}")
             continue
 
         cast_output = cast_node.output[0]
@@ -595,7 +595,7 @@ def replace_dql_matmul_chain(model):
                 output_mul_node = node
                 break
         if output_mul_node is None:
-            print(f"    警告: 找不到 output Mul for {cast_node.name}")
+            print(f"    Warning: output Mul not found for {cast_node.name}")
             continue
 
         # combined_scale
@@ -620,14 +620,14 @@ def replace_dql_matmul_chain(model):
                 else:
                     weight_scale_name = inp
             if weight_scale_name is None:
-                print(f"    警告: 找不到 weight_scale for {quant_node.name}")
+                print(f"    Warning: weight_scale not found for {quant_node.name}")
                 continue
 
         # 找 DQL 节点
         int8_input = quant_node.input[0]
         dql_node = output_to_node.get(int8_input)
         if dql_node is None or dql_node.op_type != 'DynamicQuantizeLinear':
-            print(f"    警告: 找不到 DQL for {quant_node.name}")
+            print(f"    Warning: DQL not found for {quant_node.name}")
             continue
 
         fp32_input = dql_node.input[0]
@@ -734,7 +734,7 @@ def replace_dql_matmul_chain(model):
         graph.node.extend(new_nodes)
     graph.initializer.extend(new_initializers)
 
-    print(f"  替换了 {replaced} 个 DQL+MatMulInt/ConvInt 链")
+    print(f"  Replaced {replaced} DQL+MatMulInt/ConvInt chains")
     return model, replaced
 
 
@@ -791,7 +791,7 @@ def replace_stft(model):
         frame_length_val = get_constant_value(graph, frame_length_name) if frame_length_name else None
 
         if frame_step_val is None or window_val is None:
-            print(f"    警告: STFT {stft_node.name} 缺少常量参数，跳过")
+            print(f"    Warning: STFT {stft_node.name} missing constant parameters, skipping")
             continue
 
         hop_size = int(frame_step_val.item())
@@ -884,7 +884,7 @@ def replace_stft(model):
                 break
 
         if trans_node is None:
-            print(f"    警告: 找不到 STFT 后的 Transpose，跳过")
+            print(f"    Warning: Transpose after STFT not found, skipping")
             continue
 
         trans_output = trans_node.output[0]
@@ -896,7 +896,7 @@ def replace_stft(model):
                 pow_node = n2
                 break
         if pow_node is None:
-            print(f"    警告: 找不到 Pow，跳过")
+            print(f"    Warning: Pow not found, skipping")
             continue
 
         # 找 ReduceSum
@@ -906,7 +906,7 @@ def replace_stft(model):
                 reduce_node = n2
                 break
         if reduce_node is None:
-            print(f"    警告: 找不到 ReduceSum，跳过")
+            print(f"    Warning: ReduceSum not found, skipping")
             continue
 
         # 找最终 Sqrt（可能经过 Add）
@@ -924,7 +924,7 @@ def replace_stft(model):
                 break
 
         if sqrt_node is None:
-            print(f"    警告: 找不到 Sqrt，跳过")
+            print(f"    Warning: Sqrt not found, skipping")
             continue
 
         # 最终输出名称（原 Sqrt 的输出）
@@ -958,7 +958,7 @@ def replace_stft(model):
             nodes_to_remove.add(squeeze_node.name)
 
         replaced += 1
-        print(f"    替换 STFT → Conv1d + 幅度: {stft_node.name}")
+        print(f"    Replaced STFT -> Conv1d + magnitude: {stft_node.name}")
 
     if nodes_to_remove:
         remaining = [n for n in graph.node if n.name not in nodes_to_remove]
@@ -967,7 +967,7 @@ def replace_stft(model):
         graph.node.extend(new_nodes)
     graph.initializer.extend(new_initializers)
 
-    print(f"  替换了 {replaced} 个 STFT")
+    print(f"  Replaced {replaced} STFT nodes")
     return model, replaced
 
 
@@ -1004,7 +1004,7 @@ def replace_reduce_l2(model):
                 axes = numpy_helper.to_array(axes_init).tolist()
 
         if axes is None:
-            print(f"    警告: ReduceL2 {node.name} 没有 axes，跳过")
+            print(f"    Warning: ReduceL2 {node.name} has no axes, skipping")
             continue
 
         sq_name = f"{base}_sq"
@@ -1038,7 +1038,7 @@ def replace_reduce_l2(model):
         graph.node.extend(new_nodes)
         graph.initializer.extend(new_initializers)
 
-    print(f"  替换了 {replaced} 个 ReduceL2")
+    print(f"  Replaced {replaced} ReduceL2 nodes")
     return model, replaced
 
 
@@ -1066,7 +1066,7 @@ def replace_range(model):
             values.append(numpy_helper.to_array(init).item())
 
         if not inputs_ok:
-            print(f"    警告: Range {node.name} 有非常量输入，跳过")
+            print(f"    Warning: Range {node.name} has non-constant input, skipping")
             continue
 
         start, limit, delta = values
@@ -1074,7 +1074,7 @@ def replace_range(model):
         new_initializers.append(numpy_helper.from_array(result, name=node.output[0]))
         nodes_to_remove.add(node.name)
         replaced += 1
-        print(f"    替换 Range → 常量 ({len(result)} 元素): {node.name}")
+        print(f"    Replaced Range -> constant ({len(result)} elements): {node.name}")
 
     if nodes_to_remove:
         remaining = [n for n in graph.node if n.name not in nodes_to_remove]
@@ -1082,7 +1082,7 @@ def replace_range(model):
         graph.node.extend(remaining)
         graph.initializer.extend(new_initializers)
 
-    print(f"  替换了 {replaced} 个 Range")
+    print(f"  Replaced {replaced} Range nodes")
     return model, replaced
 
 
@@ -1120,12 +1120,12 @@ def fix_dynamic_shapes(model, static_shapes):
             d.dim_value = val
 
     if changed:
-        print(f"  固定了 {changed} 个动态维度: {static_shapes}")
+        print(f"  Fixed {changed} dynamic dimensions: {static_shapes}")
         try:
             model = shape_inference.infer_shapes(model, check_type=False, strict_mode=False)
-            print(f"  形状推断完成")
+            print(f"  Shape inference completed")
         except Exception as e:
-            print(f"  形状推断部分失败（不影响运行）: {e}")
+            print(f"  Shape inference partially failed (does not affect execution): {e}")
     return model
 
 
@@ -1241,7 +1241,7 @@ def compute_mel_output_shapes(model, static_shapes):
                 d.dim_value = val
             tensor_type.shape.CopyFrom(shape_proto)
             changed += 1
-            print(f"  手动设置输出形状: {out.name} = [1, {n_mels}, {num_frames}]")
+            print(f"  Manually set output shape: {out.name} = [1, {n_mels}, {num_frames}]")
 
     return model
 
@@ -1317,7 +1317,7 @@ def set_output_shapes_static(model):
                 changed += 1
 
     if changed:
-        print(f"  修正了 {changed} 个输出维度")
+        print(f"  Fixed {changed} output dimensions")
     return model
 
 
@@ -1355,13 +1355,13 @@ def simplify_model(model):
         if ok:
             orig_nodes = len(model.graph.node)
             new_nodes = len(simplified.graph.node)
-            print(f"  onnxsim 简化: {orig_nodes} → {new_nodes} 节点")
+            print(f"  onnxsim simplification: {orig_nodes} -> {new_nodes} nodes")
             return simplified
         else:
-            print(f"  onnxsim 简化失败，使用原始模型")
+            print(f"  onnxsim simplification failed, using original model")
             return model
     except Exception as e:
-        print(f"  onnxsim 错误: {e}")
+        print(f"  onnxsim error: {e}")
         return model
 
 
@@ -1372,7 +1372,7 @@ def simplify_model(model):
 def optimize_model(model_path, output_path, static_shapes, mode='w8a8'):
     """优化单个模型。mode: 'w8a8'（保留 INT8 权重）或 'fp32'（预反量化为 FP32）"""
     print(f"\n{'='*60}")
-    print(f"优化: {os.path.basename(model_path)}")
+    print(f"Optimizing: {os.path.basename(model_path)}")
     print(f"{'='*60}")
 
     model = onnx.load(model_path)
@@ -1381,7 +1381,7 @@ def optimize_model(model_path, output_path, static_shapes, mode='w8a8'):
 
     ops = list_ops(model)
     total = sum(ops.values())
-    print(f"  原始节点: {total}")
+    print(f"  Original nodes: {total}")
     for op, cnt in sorted(ops.items(), key=lambda x: -x[1])[:10]:
         flag = ' ***' if op in UNSUPPORTED_OPS else (' *' if op in DECOMPOSABLE_OPS else '')
         print(f"    {op}: {cnt}{flag}")
@@ -1392,7 +1392,7 @@ def optimize_model(model_path, output_path, static_shapes, mode='w8a8'):
         seq_len = static_shapes.get('seq_len', 500)
         ok, safe_len = validate_vocoder_shapes(model, seq_len)
         if not ok:
-            print(f"  自动调整 vocoder seq_len: {seq_len} → {safe_len}")
+            print(f"  Auto-adjusted vocoder seq_len: {seq_len} -> {safe_len}")
             static_shapes['seq_len'] = safe_len
 
     # 步骤 1: 替换 DQL + MatMulInteger/ConvInteger
@@ -1463,13 +1463,13 @@ def optimize_model(model_path, output_path, static_shapes, mode='w8a8'):
     # 检查兼容性
     unsupported = check_npu_compatibility(model)
     if unsupported:
-        print(f"  仍有不兼容算子: {unsupported}")
+        print(f"  Still has incompatible operators: {unsupported}")
     else:
-        print(f"  [OK] 全部 NPU 兼容")
+        print(f"  [OK] All NPU compatible")
 
     ops = list_ops(model)
     total = sum(ops.values())
-    print(f"  优化后节点: {total}")
+    print(f"  Optimized nodes: {total}")
 
     # 保存（外部数据格式：图结构和权重分开存储，加速 protobuf 解析）
     # 删除旧的 .data 文件（如果存在）
@@ -1486,9 +1486,9 @@ def optimize_model(model_path, output_path, static_shapes, mode='w8a8'):
     data_path = output_path + '.data'
     if os.path.exists(data_path):
         data_mb = os.path.getsize(data_path) / (1024 * 1024)
-        print(f"  保存: {os.path.basename(output_path)} ({size_mb:.1f} MB + {data_mb:.1f} MB data)")
+        print(f"  Saved: {os.path.basename(output_path)} ({size_mb:.1f} MB + {data_mb:.1f} MB data)")
     else:
-        print(f"  保存: {os.path.basename(output_path)} ({size_mb:.1f} MB)")
+        print(f"  Saved: {os.path.basename(output_path)} ({size_mb:.1f} MB)")
 
     return model, unsupported
 
@@ -1524,10 +1524,10 @@ def verify_model_dml(model_path):
 
         outputs = sess.run(None, feeds)
         provider = sess.get_providers()[0]
-        print(f"  [OK] GPU 验证通过 ({provider}), 输出: {[o.shape for o in outputs]}")
+        print(f"  [OK] GPU verification passed ({provider}), outputs: {[o.shape for o in outputs]}")
         return True
     except Exception as e:
-        print(f"  [FAIL] GPU 验证失败: {e}")
+        print(f"  [FAIL] GPU verification failed: {e}")
         return False
 
 
@@ -1543,7 +1543,7 @@ def main():
     mode = 'fp32' if args.fp32 else 'w8a8'
 
     print("=" * 60)
-    print(f"INT8 NPU 模型优化（模式: {mode.upper()}）")
+    print(f"INT8 NPU model optimization (mode: {mode.upper()})")
     print("=" * 60)
 
     # 保存 docs_readme.txt（如果存在）
@@ -1555,7 +1555,7 @@ def main():
 
     # 清理输出目录中的旧文件（不删除目录本身，避免 CWD 冲突）
     if os.path.exists(OUT_DIR):
-        print(f"\n清理输出目录: {OUT_DIR}")
+        print(f"\nCleaning output directory: {OUT_DIR}")
         for f in os.listdir(OUT_DIR):
             fp = os.path.join(OUT_DIR, f)
             if os.path.isfile(fp) and f != 'docs_readme.txt':
@@ -1581,7 +1581,7 @@ def main():
             if f.endswith('.onnx'):
                 models.append((f, os.path.join('preprocess', f)))
 
-    print(f"\n找到 {len(models)} 个模型文件")
+    print(f"\nFound {len(models)} model files")
 
     results = []
     for model_name, rel_path in models:
@@ -1624,7 +1624,7 @@ def main():
             results.append(result)
 
         except Exception as e:
-            print(f"\n  失败: {rel_path} - {e}")
+            print(f"\n  Failed: {rel_path} - {e}")
             import traceback
             traceback.print_exc()
             results.append({'name': rel_path, 'ok': False, 'error': str(e)})
@@ -1633,7 +1633,7 @@ def main():
 
     # 输出结果
     print(f"\n{'='*60}")
-    print("优化结果汇总")
+    print("Optimization results summary")
     print(f"{'='*60}")
     for r in results:
         if r['ok']:
@@ -1647,7 +1647,7 @@ def main():
             print(f"  [FAIL] {r['name']:<40} {r.get('error', '')[:60]}")
 
     all_ok = all(r['ok'] and not r.get('unsup') for r in results)
-    print(f"\n{'全部 NPU 兼容!' if all_ok else '部分模型仍有不兼容算子'}")
+    print(f"\n{'All NPU compatible!' if all_ok else 'Some models still have incompatible operators'}")
     return 0 if all_ok else 1
 
 

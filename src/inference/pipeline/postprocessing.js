@@ -462,9 +462,13 @@ class Postprocessing {
     }
 
     /**
-     * Run vocoder in chunked mode for long audio
+     * Run vocoder in chunked mode for long audio（强制串行，支持流式回调）
+     *
+     * @param {function} [onChunkComplete=null] - chunk 完成回调（流式播放用）
+     *        chunkInfo = { chunkIndex, sampleOffset, sampleEnd, audio: Float32Array, totalSamples, isLast }
+     *        audio 为该 chunk 贡献的"已确定"音频段（weightSum=1，可直接播放），按顺序拼接即得完整音频。
      */
-    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false) {
+    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null) {
         const chunkSize = VOCODER_CHUNK_FRAMES;
         const overlapFrames = VOCODER_OVERLAP_FRAMES;
         const totalSamples = totalFrames * HOP_SIZE;
@@ -532,6 +536,21 @@ class Postprocessing {
             const copyLen = Math.min(waveform.length, totalSamples);
             output.set(waveform.subarray(0, copyLen));
             normalizePeakTo(output);
+            // 单 chunk 路径：一次性推送全部音频（流式播放用）
+            if (onChunkComplete) {
+                try {
+                    onChunkComplete({
+                        chunkIndex: 0,
+                        sampleOffset: 0,
+                        sampleEnd: copyLen,
+                        audio: output.slice(0, copyLen),
+                        totalSamples: copyLen,
+                        isLast: true,
+                    });
+                } catch (e) {
+                    console.warn('[OnnxSVSPipeline] onChunkComplete callback error:', e.message);
+                }
+            }
             return output;
         }
 
@@ -575,35 +594,59 @@ class Postprocessing {
             chunkIdx++;
         }
 
-        // 第二阶段：每 2 个 chunk 一组并行 DML 推理（CPU 路径下显存压力低时可重叠调度）
-        // GPU 路径下 DML 驱动会自动串行化，无负面影响；CPU 路径下可利用多核并行。
-        const VOC_PARALLEL = 2;
+        // 第二阶段：强制串行执行 vocoder chunk 推理。
+        // 注意：DML 后端下，同一个 InferenceSession 并发 run() 会向命令队列交叉提交命令流，
+        // 触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) — GPU 设备因无效命令被驱动移除。
+        // 旧版本 VOC_PARALLEL=2 的 Promise.all 并行已移除，所有 chunk 严格按顺序逐个推理。
+        // 流式播放：每完成一个 chunk，通过 onChunkComplete 推送"已确定"的音频段（weightSum=1）。
         const totalChunkCount = chunkSpecs.length;
-        for (let i = 0; i < totalChunkCount; i += VOC_PARALLEL) {
-            const group = chunkSpecs.slice(i, Math.min(i + VOC_PARALLEL, totalChunkCount));
-            const results = await Promise.all(group.map(spec => sessions.vocoder.run(spec.vocoderInputs)));
-            await yieldToEventLoop(); // Prevent UI freeze between vocoder chunk groups
+        let committedSamples = 0;
+        for (let i = 0; i < totalChunkCount; i++) {
+            const spec = chunkSpecs[i];
+            const results = await sessions.vocoder.run(spec.vocoderInputs);
+            await yieldToEventLoop(); // Prevent UI freeze between vocoder chunks
 
-            for (let g = 0; g < group.length; g++) {
-                const spec = group[g];
-                const waveform = outputToFloat32(results[g]['waveform']);
-                const writeStart = spec.chunkStart * HOP_SIZE;
-                const writeLen = Math.min(waveform.length, totalSamples - writeStart);
+            const waveform = outputToFloat32(results['waveform']);
+            const writeStart = spec.chunkStart * HOP_SIZE;
+            const writeLen = Math.min(waveform.length, totalSamples - writeStart);
 
-                for (let j = 0; j < writeLen; j++) {
-                    const outIdx = writeStart + j;
-                    if (outIdx >= totalSamples) break;
-                    let w = 1.0;
-                    // 头部 fade：非首 chunk 的前 overlapFrames 帧
-                    if (!spec.isFirst && j < fadeSamples) {
-                        w = fadeWindow[j];
+            for (let j = 0; j < writeLen; j++) {
+                const outIdx = writeStart + j;
+                if (outIdx >= totalSamples) break;
+                let w = 1.0;
+                // 头部 fade：非首 chunk 的前 overlapFrames 帧
+                if (!spec.isFirst && j < fadeSamples) {
+                    w = fadeWindow[j];
+                }
+                // 尾部 fade：非末 chunk 的后 overlapFrames 帧
+                if (!spec.isLast && j >= writeLen - fadeSamples) {
+                    w = Math.min(w, 1.0 - fadeWindow[writeLen - 1 - j]);
+                }
+                output[outIdx] += waveform[j] * w;
+                weightSum[outIdx] += w;
+            }
+
+            // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，已归一化）
+            // - 首 chunk：stableEnd = (isLast ? chunkEnd : chunkEnd - overlapFrames) * HOP_SIZE
+            // - 中间 chunk：包含头部 overlap 的 crossfade 结果 + 稳定段（weightSum=1）
+            // - 末 chunk：stableEnd = chunkEnd * HOP_SIZE（尾部无 fade）
+            if (onChunkComplete) {
+                const stableEndFrames = spec.isLast ? spec.chunkEnd : (spec.chunkEnd - overlapFrames);
+                const stableEnd = Math.min(stableEndFrames * HOP_SIZE, totalSamples);
+                if (stableEnd > committedSamples) {
+                    try {
+                        onChunkComplete({
+                            chunkIndex: i,
+                            sampleOffset: committedSamples,
+                            sampleEnd: stableEnd,
+                            audio: output.slice(committedSamples, stableEnd),
+                            totalSamples,
+                            isLast: spec.isLast,
+                        });
+                    } catch (e) {
+                        console.warn('[OnnxSVSPipeline] onChunkComplete callback error:', e.message);
                     }
-                    // 尾部 fade：非末 chunk 的后 overlapFrames 帧
-                    if (!spec.isLast && j >= writeLen - fadeSamples) {
-                        w = Math.min(w, 1.0 - fadeWindow[writeLen - 1 - j]);
-                    }
-                    output[outIdx] += waveform[j] * w;
-                    weightSum[outIdx] += w;
+                    committedSamples = stableEnd;
                 }
             }
         }
@@ -617,7 +660,7 @@ class Postprocessing {
         normalizePeakTo(output, totalSamples);
 
         const elapsed = performance.now() - t0;
-        console.log(`[OnnxSVSPipeline] Vocoder chunked: ${totalFrames} frames, ${totalChunkCount} chunks (parallel=${VOC_PARALLEL}), ${elapsed.toFixed(0)}ms`);
+        console.log(`[OnnxSVSPipeline] Vocoder chunked: ${totalFrames} frames, ${totalChunkCount} chunks (serial), ${elapsed.toFixed(0)}ms`);
         return output;
     }
 

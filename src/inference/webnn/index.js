@@ -45,6 +45,7 @@ async function runSynthesis(params) {
         npuVocoderBatchSize = 2,
         useStaticShapes = false,
         onProgress,
+        onChunkComplete = null,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
@@ -95,6 +96,7 @@ async function runSynthesis(params) {
         floatType: vocoderFloatType,
         npuVocoderBatchSize,
         useStaticShapes,
+        onChunkComplete,
     });
 
     const synthTotalMs = performance.now() - tEnc0;

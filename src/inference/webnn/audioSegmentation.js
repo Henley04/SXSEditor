@@ -1,5 +1,10 @@
 /**
  * WebNN 推理模块 — 长音频分段拼接
+ *
+ * 注意：vocoder 强制串行执行（vocBatch=1）。
+ * DML 后端下，单次 session.run() 提交 [batch>1, ...] 张量会显著增加 GPU 单次 kernel 工作量，
+ * 触发 TDR 超时 / DXGI_ERROR_DEVICE_REMOVED (0x887A0006)。
+ * 旧版本的 batch 并行分支已移除，所有 chunk 按顺序逐个推理。
  */
 
 import { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, NPU_VOCODER_SEQ_LEN } from './constants.js';
@@ -7,19 +12,25 @@ import { runSession } from './sessionManager.js';
 import { createFloatTensor, outputToFloat32, padToLength } from './utils.js';
 
 /**
- * 分段 vocoder 推理 + 交叉淡入淡出拼接
+ * 分段 vocoder 推理 + 交叉淡入淡出拼接（强制串行）
  * @param {Object} params
  * @param {Float32Array} params.xtData - mel 数据
  * @param {number} params.totalFrames - 总帧数
  * @param {string} params.floatType - 'float32' 或 'float16'
- * @param {number} params.npuVocoderBatchSize - vocoder 批量大小
+ * @param {number} params.npuVocoderBatchSize - vocoder 批量大小（已忽略，强制为 1，保留参数向后兼容）
+ * @param {boolean} params.useStaticShapes - 是否使用 NPU 静态形状
+ * @param {function} [params.onChunkComplete] - 每个 chunk 完成后的回调，签名 (chunkInfo) => void
+ *        chunkInfo = { chunkIndex, sampleOffset, audio: Float32Array, totalSamples, isLast }
+ *        audio 为该 chunk 贡献的"已确定"音频段（weightSum=1，可直接播放），按顺序拼接即得完整音频。
  * @returns {{ audioData: Float32Array, vocChunkCount: number, vocPrepTotal: number, vocInferTotal: number, vocPostTotal: number }}
  */
-export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes = false }) {
+export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes = false, onChunkComplete = null }) {
     const totalSamples = totalFrames * HOP_SIZE;
     const chunkSize = useStaticShapes ? Math.min(VOCODER_CHUNK_FRAMES, NPU_VOCODER_SEQ_LEN) : VOCODER_CHUNK_FRAMES;
     const overlapFrames = VOCODER_OVERLAP_FRAMES;
-    const vocBatch = Math.max(1, npuVocoderBatchSize);
+    // 强制串行：忽略 npuVocoderBatchSize，永远 1 个 chunk 一次推理。
+    // DML batch 并行会触发 GPU 设备移除（0x887A0006），见文件头注释。
+    void npuVocoderBatchSize;
     const output = new Float32Array(totalSamples);
     const weightSum = new Float32Array(totalSamples);
     const stepFrames = chunkSize - overlapFrames;
@@ -33,128 +44,97 @@ export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuV
 
     let vocChunkCount = 0, vocInferTotal = 0, vocPrepTotal = 0, vocPostTotal = 0;
 
+    // 流式播放：committedSamples 标记已通过 onChunkComplete 推送的样本位置。
+    // 每完成一个 chunk，推送 [committedSamples, stableEnd] 区间（weightSum=1，已归一化）。
+    // - 首 chunk：stableEnd = (isLast ? chunkEnd : chunkEnd - overlapFrames) * HOP_SIZE
+    // - 中间 chunk：stableEnd = (isLast ? chunkEnd : chunkEnd - overlapFrames) * HOP_SIZE
+    //   该 chunk 推送时包含头部 overlap 的 crossfade 结果（前 chunk 已写入 fade-out，本 chunk 写入 fade-in，weightSum=1）
+    //   和稳定段（weightSum=1）。
+    // - 末 chunk：stableEnd = chunkEnd * HOP_SIZE（尾部无 fade）
+    let committedSamples = 0;
+    let chunkIndex = 0;
+
     let offset = 0;
     while (offset < totalFrames) {
-        // Collect up to vocBatch chunks
-        const batchMels = [];
-        const batchInfos = [];
-        let maxChunkFrames = 0;
+        const end = Math.min(offset + chunkSize, totalFrames);
+        const chunkFrames = end - offset;
+        const isLast = end >= totalFrames;
+        const isFirst = chunkIndex === 0;
 
-        for (let b = 0; b < vocBatch && offset < totalFrames; b++) {
-            const end = Math.min(offset + chunkSize, totalFrames);
-            const chunkFrames = end - offset;
-            const chunkMel = new Float32Array(chunkFrames * MEL_DIM);
-            for (let f = 0; f < chunkFrames; f++) {
-                for (let d = 0; d < MEL_DIM; d++) {
-                    chunkMel[f * MEL_DIM + d] = xtData[(offset + f) * MEL_DIM + d];
-                }
+        // 单 chunk 推理（强制串行，无 batch）
+        const chunkMel = new Float32Array(chunkFrames * MEL_DIM);
+        for (let f = 0; f < chunkFrames; f++) {
+            for (let d = 0; d < MEL_DIM; d++) {
+                chunkMel[f * MEL_DIM + d] = xtData[(offset + f) * MEL_DIM + d];
             }
-            batchMels.push(chunkMel);
-            batchInfos.push({ offset, chunkFrames, end });
-            maxChunkFrames = Math.max(maxChunkFrames, chunkFrames);
-            offset += stepFrames;
         }
 
-        const batchSize = batchMels.length;
-        vocChunkCount += batchSize;
-        const tVocBatchPrep = performance.now();
+        const tVocPrep = performance.now();
+        const singleVocLen = useStaticShapes ? Math.max(chunkFrames, vocSeqLen) : chunkFrames;
+        const paddedMel = useStaticShapes ? padToLength(chunkMel, singleVocLen * MEL_DIM) : chunkMel;
+        const melTensor = createFloatTensor(floatType, paddedMel, [1, singleVocLen, MEL_DIM]);
+        const prepMs = performance.now() - tVocPrep;
 
-        if (batchSize === 1) {
-            // Single chunk, run directly
-            const info = batchInfos[0];
-            const singleVocLen = useStaticShapes ? Math.max(info.chunkFrames, vocSeqLen) : info.chunkFrames;
-            const paddedMel = useStaticShapes ? padToLength(batchMels[0], singleVocLen * MEL_DIM) : batchMels[0];
-            const melTensor = createFloatTensor(floatType, paddedMel, [1, singleVocLen, MEL_DIM]);
-            const prepMs = performance.now() - tVocBatchPrep;
+        const tVocInfer = performance.now();
+        const vocoderResults = await runSession('vocoder', { mel: melTensor });
+        const inferMs = performance.now() - tVocInfer;
 
-            const tVocBatchInfer = performance.now();
-            const vocoderResults = await runSession('vocoder', { mel: melTensor });
-            const inferMs = performance.now() - tVocBatchInfer;
+        const tVocPost = performance.now();
+        const waveform = outputToFloat32(vocoderResults['waveform']);
+        const chunkSamples = chunkFrames * HOP_SIZE;
+        const startSample = offset * HOP_SIZE;
 
-            const tVocBatchPost = performance.now();
-            const waveform = outputToFloat32(vocoderResults['waveform']);
-            const chunkSamples = info.chunkFrames * HOP_SIZE;
-            const startSample = info.offset * HOP_SIZE;
-
-            for (let i = 0; i < chunkSamples; i++) {
-                const idx = startSample + i;
-                if (idx < totalSamples) {
-                    let w = 1.0;
-                    if (info.offset > 0 && i < fadeSamples) w = fadeWindow[i];
-                    if (info.end < totalFrames && i >= chunkSamples - fadeSamples) w = fadeWindow[chunkSamples - 1 - i];
-                    output[idx] += waveform[i] * w;
-                    weightSum[idx] += w;
-                }
+        for (let i = 0; i < chunkSamples; i++) {
+            const idx = startSample + i;
+            if (idx < totalSamples) {
+                let w = 1.0;
+                if (!isFirst && i < fadeSamples) w = fadeWindow[i];
+                if (!isLast && i >= chunkSamples - fadeSamples) w = fadeWindow[chunkSamples - 1 - i];
+                output[idx] += waveform[i] * w;
+                weightSum[idx] += w;
             }
-            const postMs = performance.now() - tVocBatchPost;
-            vocPrepTotal += prepMs;
-            vocInferTotal += inferMs;
-            vocPostTotal += postMs;
-            console.log(`[WebNN]   vocoder chunk [${info.offset}-${info.end}/${totalFrames}]: prep=${prepMs.toFixed(1)} infer=${inferMs.toFixed(1)} post=${postMs.toFixed(1)}`);
-        } else {
-            // Batch inference: pad all chunks to maxChunkFrames
-            const batchVocLen = useStaticShapes ? Math.max(maxChunkFrames, vocSeqLen) : maxChunkFrames;
-            const batchData = new Float32Array(batchSize * batchVocLen * MEL_DIM);
-            for (let b = 0; b < batchSize; b++) {
-                const mel = batchMels[b];
-                const frames = batchInfos[b].chunkFrames;
-                for (let f = 0; f < frames; f++) {
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        batchData[(b * batchVocLen + f) * MEL_DIM + d] = mel[f * MEL_DIM + d];
-                    }
+        }
+        const postMs = performance.now() - tVocPost;
+        vocPrepTotal += prepMs;
+        vocInferTotal += inferMs;
+        vocPostTotal += postMs;
+        vocChunkCount++;
+        console.log(`[WebNN]   vocoder chunk #${chunkIndex} [${offset}-${end}/${totalFrames}]: prep=${prepMs.toFixed(1)} infer=${inferMs.toFixed(1)} post=${postMs.toFixed(1)}${isLast ? ' (last)' : ''}`);
+
+        // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，已归一化）
+        if (onChunkComplete) {
+            const stableEndFrames = isLast ? end : (end - overlapFrames);
+            const stableEnd = Math.min(stableEndFrames * HOP_SIZE, totalSamples);
+            if (stableEnd > committedSamples) {
+                const segAudio = output.slice(committedSamples, stableEnd);
+                try {
+                    onChunkComplete({
+                        chunkIndex,
+                        sampleOffset: committedSamples,
+                        sampleEnd: stableEnd,
+                        audio: segAudio,
+                        totalSamples,
+                        isLast,
+                    });
+                } catch (e) {
+                    console.warn('[WebNN] onChunkComplete callback error:', e.message);
                 }
+                committedSamples = stableEnd;
             }
+        }
 
-            const melTensor = createFloatTensor(floatType, batchData, [batchSize, batchVocLen, MEL_DIM]);
-            const prepMs = performance.now() - tVocBatchPrep;
+        chunkIndex++;
+        offset += stepFrames;
+    }
 
-            const tVocBatchInfer = performance.now();
-            const vocoderResults = await runSession('vocoder', { mel: melTensor });
-            const inferMs = performance.now() - tVocBatchInfer;
-
-            const tVocBatchPost = performance.now();
-            const batchWaveform = outputToFloat32(vocoderResults['waveform']);
-            const samplesPerChunk = batchVocLen * HOP_SIZE;
-
-            for (let b = 0; b < batchSize; b++) {
-                const info = batchInfos[b];
-                const chunkSamples = info.chunkFrames * HOP_SIZE;
-                const startSample = info.offset * HOP_SIZE;
-                const waveOff = b * samplesPerChunk;
-
-                for (let i = 0; i < chunkSamples; i++) {
-                    const idx = startSample + i;
-                    if (idx < totalSamples) {
-                        let w = 1.0;
-                        if (info.offset > 0 && i < fadeSamples) w = fadeWindow[i];
-                        if (info.end < totalFrames && i >= chunkSamples - fadeSamples) w = fadeWindow[chunkSamples - 1 - i];
-                        output[idx] += batchWaveform[waveOff + i] * w;
-                        weightSum[idx] += w;
-                    }
-                }
-            }
-            const postMs = performance.now() - tVocBatchPost;
-            vocPrepTotal += prepMs;
-            vocInferTotal += inferMs;
-            vocPostTotal += postMs;
-            const chunkRange = batchInfos.map(i => `${i.offset}-${i.end}`).join(', ');
-            console.log(`[WebNN]   vocoder batch=${batchSize} [${chunkRange}]: prep=${prepMs.toFixed(1)} infer=${inferMs.toFixed(1)} post=${postMs.toFixed(1)}`);
+    // 归一化 overlap 区间（weightSum>0 的样本除以权重）。流式已推送的稳定段 weightSum=1，不受影响。
+    for (let i = 0; i < totalSamples; i++) {
+        if (weightSum[i] > 0 && weightSum[i] !== 1) {
+            output[i] /= weightSum[i];
         }
     }
-    for (let i = 0; i < totalSamples; i++) {
-        if (weightSum[i] > 0) output[i] /= weightSum[i];
-    }
-    // Normalize to peak 0.95 to prevent clipping
-    let peak = 0;
-    for (let i = 0; i < totalSamples; i++) {
-        const abs = Math.abs(output[i]);
-        if (abs > peak) peak = abs;
-    }
-    if (peak > 0.95) {
-        const scale = 0.95 / peak;
-        for (let i = 0; i < totalSamples; i++) output[i] *= scale;
-    }
-    const audioData = output.slice(); // TypedArray.slice() 替代 Array.from()
+
+    const audioData = output.slice();
 
     return { audioData, vocChunkCount, vocPrepTotal, vocInferTotal, vocPostTotal };
 }

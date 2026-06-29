@@ -1063,12 +1063,12 @@ class OnnxSVSPipeline {
         return this._diffusion.runDiffStep(this.sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, this.isFP16, this.useStaticShapes);
     }
 
-    async _runVocoderChunked(melData, totalFrames) {
+    async _runVocoderChunked(melData, totalFrames, onChunkComplete = null) {
         // Vocoder is loaded via DML (dynamic shapes), never use static shape padding
         // SiFiGAN 双输入：传入 vocoderType、F0 序列、stats 缺失标志；default vocoder 仅用 mel
         return this._postprocessing.runVocoderChunked(
             this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
-            this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing
+            this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete
         );
     }
 
@@ -1076,7 +1076,7 @@ class OnnxSVSPipeline {
         return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.isFP16, onProgress, progressStart, progressRange, this.useStaticShapes);
     }
 
-    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange) {
+    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null) {
         const sequences = this.notesToSequences(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
         let totalFrames = sequences.f0Ids.length;
         const tokenCount = sequences.tokenCount;
@@ -1118,7 +1118,7 @@ class OnnxSVSPipeline {
                 ptMelData, ptFrameCount,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
-            }, webnnOnProgress);
+            }, webnnOnProgress, onChunkAudio);
             const ms = performance.now() - t0;
             console.log(`[OnnxSVSPipeline] WebNN synthesis: ${totalFrames}frames, ${totalSteps}steps, ${ms.toFixed(0)}ms`);
             onProgress(Math.round(progressStart + progressRange));
@@ -1145,7 +1145,7 @@ class OnnxSVSPipeline {
      * 在渲染进程中运行完整合成管线（WebNN 优化路径）
      * 单次 IPC 调用，消除逐模型 IPC 开销
      */
-    async _runWebNNSynthesis(params, onProgress) {
+    async _runWebNNSynthesis(params, onProgress, onChunkAudio) {
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN synthesis');
 
@@ -1155,7 +1155,7 @@ class OnnxSVSPipeline {
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
         };
-        return requestSynthesis(wc, fullParams, onProgress);
+        return requestSynthesis(wc, fullParams, onProgress, { onChunkAudio });
     }
 
     /**
@@ -1239,6 +1239,7 @@ class OnnxSVSPipeline {
         const pitchShift = options.pitchShift || 0;
         const npuDiffBatchSize = options.npuDiffBatchSize || 4;
         const npuVocoderBatchSize = options.npuVocoderBatchSize || 2;
+        const onChunkAudio = options.onChunkAudio || null;
 
         const filledNotes = this._fillNoteGaps(notes);
 
@@ -1390,7 +1391,9 @@ class OnnxSVSPipeline {
 
             onProgress(90);
             this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
-            let audioData = await this._runVocoderChunked(xt.data, totalFrames);
+            // 单 segment 路径流式推送：仅在没有 contextPadding 截取时启用，避免 totalSamples 不一致
+            const singleSegOnChunk = onChunkAudio && !contextPadding ? onChunkAudio : null;
+            let audioData = await this._runVocoderChunked(xt.data, totalFrames, singleSegOnChunk);
 
             // 单 note 上下文 padding：截取有效音频（丢弃前后 rest padding）
             if (contextPadding) {

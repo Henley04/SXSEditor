@@ -36,7 +36,7 @@ const rmvpeLazy = createLazyInitializer(async () => {
   const modelPath = getBaseModelDir();
   const settings = loadSettings();
   const deviceId = settings.deviceId ?? undefined;
-  console.log(`[Main] 初始化 RMVPE Pitch Detector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+  console.log(`[Main] Initialize RMVPE Pitch Detector, model path: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}`);
   const detector = new RmvpePitchDetector(modelPath, { deviceId });
   await detector.init();
   return detector;
@@ -44,7 +44,7 @@ const rmvpeLazy = createLazyInitializer(async () => {
 
 const basicPitchLazy = createLazyInitializer(async () => {
   const modelPath = getBaseModelDir();
-  console.log(`[Main] 初始化 Basic Pitch Detector, 模型路径: ${modelPath}`);
+  console.log(`[Main] Initialize Basic Pitch Detector, model path: ${modelPath}`);
   const detector = new BasicPitchDetector(modelPath);
   await detector.init();
   return detector;
@@ -54,7 +54,7 @@ const rosvotLazy = createLazyInitializer(async () => {
   const modelPath = getBaseModelDir();
   const settings = loadSettings();
   const deviceId = settings.deviceId ?? undefined;
-  console.log(`[Main] 初始化 RosvotDetector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+  console.log(`[Main] Initialize RosvotDetector, model path: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}`);
   const detector = new RosvotDetector(modelPath, { deviceId });
   await detector.init();
   return detector;
@@ -87,7 +87,7 @@ function registerPitchMidiIpc() {
       const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
       return { success: true, f0Array };
     } catch (err) {
-      console.error('[Main] F0提取失败:', err);
+      console.error('[Main] F0 extraction failed:', err);
       return { success: false, error: err.message };
     }
   });
@@ -111,30 +111,30 @@ function registerPitchMidiIpc() {
             notes = await rosvot.extractNotes(
               new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120
             );
-            console.log(`[Main] RosVot 提取到 ${notes.length} 个音符`);
+            console.log(`[Main] RosVot extracted ${notes.length} notes`);
 
             const validNotes = notes.filter(n => n.pitch > 0);
             if (validNotes.length === 0) {
-              console.log('[Main] RosVot 未提取到有效音符，回退到 f0ToNotes');
+              console.log('[Main] RosVot extracted no valid notes, falling back to f0ToNotes');
               notes = detector.f0ToNotes(f0Array, bpm || 120);
             }
           } catch (rosvotErr) {
-            console.warn('[Main] RosVot 模型推理失败，回退到 f0ToNotes:', rosvotErr.message);
+            console.warn('[Main] RosVot model inference failed, falling back to f0ToNotes:', rosvotErr.message);
             resetRosvot();
             notes = detector.f0ToNotes(f0Array, bpm || 120);
           }
         } else {
-          console.log('[Main] RosVot 模型不存在，使用 f0ToNotes 回退');
+          console.log('[Main] RosVot model does not exist, using f0ToNotes fallback');
           notes = detector.f0ToNotes(f0Array, bpm || 120);
         }
       } else {
-        console.log('[Main] 使用 f0ToNotes 从 F0 曲线提取 MIDI 音符');
+        console.log('[Main] Using f0ToNotes to extract MIDI notes from F0 curve');
         notes = detector.f0ToNotes(f0Array, bpm || 120);
       }
 
       return { success: true, f0Array, notes };
     } catch (err) {
-      console.error('[Main] MIDI提取失败:', err);
+      console.error('[Main] MIDI extraction failed:', err);
       return { success: false, error: err.message };
     }
   });
@@ -145,7 +145,7 @@ function registerPitchMidiIpc() {
       const result = await detector.extractF0AndNotes(new Float32Array(audioData), sampleRate || 44100, bpm || 120);
       return { success: true, f0Array: result.f0Array, notes: result.notes };
     } catch (err) {
-      console.error('[Main] Basic Pitch 提取失败:', err);
+      console.error('[Main] Basic Pitch extraction failed:', err);
       return { success: false, error: err.message };
     }
   });
@@ -171,7 +171,7 @@ function registerPitchMidiIpc() {
 
       return { success: true, notes };
     } catch (err) {
-      console.error('[Main] MIDI导入失败:', err);
+      console.error('[Main] MIDI import failed:', err);
       return { success: false, error: err.message };
     }
   });

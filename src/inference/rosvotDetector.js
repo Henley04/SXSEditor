@@ -24,11 +24,11 @@ class RosvotDetector {
     if (this.initialized) return true;
 
     const modelPath = path.join(this.modelDir, 'preprocess', 'rosvot_model.onnx');
-    console.log('[RosvotDetector] 尝试加载模型:', modelPath);
+    console.log('[RosvotDetector] attempting to load model:', modelPath);
 
     const fs = require('fs');
     if (!fs.existsSync(modelPath)) {
-      const errMsg = `[RosvotDetector] 模型文件不存在: ${modelPath}`;
+      const errMsg = `[RosvotDetector] model file does not exist: ${modelPath}`;
       console.error(errMsg);
       const err = new Error(errMsg);
       err.code = 'MODEL_NOT_FOUND';
@@ -37,7 +37,7 @@ class RosvotDetector {
     }
 
     const stats = fs.statSync(modelPath);
-    console.log(`[RosvotDetector] 模型文件大小: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`[RosvotDetector] model file size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 
     try {
       // RosVot 模型包含 ConvTranspose 等不兼容 DML 的算子，直接使用 CPU
@@ -46,14 +46,14 @@ class RosvotDetector {
       };
       this.session = await ort.InferenceSession.create(modelPath, sessionOptions);
       this.usingDML = false;
-      console.log('[RosvotDetector] 模型加载成功 [CPU] (ConvTranspose 不兼容 DML)');
+      console.log('[RosvotDetector] model loaded successfully [CPU] (ConvTranspose incompatible with DML)');
 
       this.initialized = true;
-      console.log('[RosvotDetector] 输入名称:', [...this.session.inputNames]);
-      console.log('[RosvotDetector] 输出名称:', [...this.session.outputNames]);
+      console.log('[RosvotDetector] input names:', [...this.session.inputNames]);
+      console.log('[RosvotDetector] output names:', [...this.session.outputNames]);
       return true;
     } catch (err) {
-      console.error('[RosvotDetector] 模型加载失败:', err.message);
+      console.error('[RosvotDetector] model load failed:', err.message);
       err.modelPath = modelPath;
       throw err;
     }
@@ -174,7 +174,7 @@ class RosvotDetector {
     } catch (runErr) {
       // DML 可能在 ConvTranspose 等节点上失败，回退到 CPU
       if (this.usingDML) {
-        console.warn('[RosvotDetector] DML 推理失败，回退到 CPU:', runErr.message);
+        console.warn('[RosvotDetector] DML inference failed, falling back to CPU:', runErr.message);
         try {
           this.session.release();
         } catch (_) {}
@@ -185,7 +185,7 @@ class RosvotDetector {
         this.session = await ort.InferenceSession.create(modelPath, {
           executionProviders: ['cpu'],
         });
-        console.log('[RosvotDetector] 已回退到 CPU 推理');
+        console.log('[RosvotDetector] fell back to CPU inference');
         results = await this.session.run(feeds);
       } else {
         throw runErr;
@@ -263,7 +263,7 @@ class RosvotDetector {
       try {
         this.session.release();
       } catch (e) {
-        console.warn('[RosvotDetector] 释放会话失败:', e.message);
+        console.warn('[RosvotDetector] session release failed:', e.message);
       }
       this.session = null;
       this.initialized = false;
