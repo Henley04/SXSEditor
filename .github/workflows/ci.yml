@@ -92,6 +92,33 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        env:
+          # Ensure Electron binary downloads even if postinstall was silently skipped
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '0'
+
+      - name: Ensure Electron binary downloaded
+        shell: pwsh
+        run: |
+          $electronExe = "node_modules\electron\dist\electron.exe"
+          if (Test-Path $electronExe) {
+            $size = (Get-Item $electronExe).Length
+            Write-Host "Electron binary OK: $electronExe ($size bytes)"
+          } else {
+            Write-Host "Electron binary missing, re-running install script..."
+            # Try with default GitHub source first
+            node node_modules/electron/install.js
+            if (-not (Test-Path $electronExe)) {
+              Write-Host "Default source failed, trying npmmirror..."
+              $env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"
+              node node_modules/electron/install.js
+            }
+            if (-not (Test-Path $electronExe)) {
+              Write-Error "Failed to download Electron binary even with mirror!"
+              exit 1
+            }
+            $size = (Get-Item $electronExe).Length
+            Write-Host "Electron binary downloaded: $electronExe ($size bytes)"
+          }
 
       - name: Verify environment before build
         shell: pwsh
@@ -99,23 +126,6 @@ jobs:
           Write-Host "=== Node/npm versions ==="
           node --version
           npm --version
-          Write-Host "=== Electron binary check ==="
-          $electronExe = "node_modules\electron\dist\electron.exe"
-          if (Test-Path $electronExe) {
-            $size = (Get-Item $electronExe).Length
-            Write-Host "Found: $electronExe ($size bytes)"
-          } else {
-            Write-Host "electron.exe NOT found at $electronExe"
-            Write-Host "=== Contents of node_modules/electron/ ==="
-            if (Test-Path "node_modules\electron") {
-              Get-ChildItem "node_modules\electron" | Select-Object Name | Format-Table -AutoSize
-              if (Test-Path "node_modules\electron\dist") {
-                Get-ChildItem "node_modules\electron\dist" | Select-Object Name, Length | Format-Table -AutoSize
-              } else {
-                Write-Host "node_modules/electron/dist does not exist - Electron postinstall failed!"
-              }
-            }
-          }
           Write-Host "=== Forge config check ==="
           node -e "try { require('./forge.config.js'); console.log('forge.config.js OK'); } catch(e) { console.error('forge.config.js ERROR:', e.message); }"
           Write-Host "=== Pre-generate build-info.json ==="
