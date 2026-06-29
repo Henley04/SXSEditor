@@ -88,6 +88,9 @@ let paramPanelMode = 'VOL'; // 'VOL' | 'PAN' | 'Phoneme' | 'Timbre'
 
 let fragmentDataReceived = false;
 
+// 缓存在 currentFragment 就绪前到达的 fragmentBoundsChanged，待 handleFragmentData 完成后回放
+let pendingBoundsUpdate = null;
+
 const phonemeCache = new Map();
 
 const _ipcCleanups = [];
@@ -288,6 +291,9 @@ export function setParamPanelMode(v) { paramPanelMode = v; }
 
 export function getFragmentDataReceived() { return fragmentDataReceived; }
 export function setFragmentDataReceived(v) { fragmentDataReceived = v; }
+
+export function getPendingBoundsUpdate() { return pendingBoundsUpdate; }
+export function setPendingBoundsUpdate(v) { pendingBoundsUpdate = v; }
 
 export function getPhonemeCache() { return phonemeCache; }
 

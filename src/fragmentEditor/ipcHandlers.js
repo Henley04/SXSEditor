@@ -14,6 +14,7 @@ import {
   getSelectedAnchorIndices,
   getIpcCleanups,
   getFragmentDataReceived,
+  getPendingBoundsUpdate, setPendingBoundsUpdate,
   getCurrentFragment,
   getCurrentProject,
   getEnvelopes,
@@ -74,6 +75,10 @@ export function setupIpcHandlers() {
         if (startTime !== undefined) currentFragment.startTime = startTime;
         if (duration !== undefined) currentFragment.duration = duration;
         render();
+      } else {
+        // currentFragment 尚未就绪（分片编辑器刚打开、handleFragmentData 还没跑完），
+        // 缓存最新的边界更新，待 handleFragmentData 完成后回放，避免静默丢弃。
+        setPendingBoundsUpdate({ fragmentId, startTime, duration });
       }
     });
     if (cleanup) _ipcCleanups.push(cleanup);
@@ -145,6 +150,19 @@ async function handleFragmentData(data) {
   // Center the vertical view on existing notes, or the middle pitch if empty
   setScrollY(computeInitialScrollY());
   render();
+
+  // 回放在 currentFragment 就绪前到达的 fragmentBoundsChanged，确保主页面对分片
+  // 长度/结尾的修改不会因为时序竞态被丢失。
+  const pendingBounds = getPendingBoundsUpdate();
+  if (pendingBounds) {
+    setPendingBoundsUpdate(null);
+    const cf = getCurrentFragment();
+    if (cf && cf.id === pendingBounds.fragmentId) {
+      if (pendingBounds.startTime !== undefined) cf.startTime = pendingBounds.startTime;
+      if (pendingBounds.duration !== undefined) cf.duration = pendingBounds.duration;
+      render();
+    }
+  }
 
   await resolvePhonemesFromPipeline();
 }

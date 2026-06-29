@@ -423,6 +423,14 @@ function registerWindowIpc() {
   });
 
   ipcMain.handle('updateFragmentBounds', async (event, fragmentId, data) => {
+    // 同步刷新 pendingFragmentData 快照里的边界，避免分片编辑器在 currentFragment
+    // 就绪前收到 fragmentBoundsChanged 被守卫丢弃后，又用旧快照覆盖 currentFragment，
+    // 导致主页面对分片长度/结尾的修改偶现不同步。
+    const pending = pendingFragmentData[fragmentId];
+    if (pending && pending.fragment) {
+      if (data.startTime !== undefined) pending.fragment.startTime = data.startTime;
+      if (data.duration !== undefined) pending.fragment.duration = data.duration;
+    }
     if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
       fragmentWindows[fragmentId].webContents.send('fragmentBoundsChanged', { fragmentId, ...data });
     }
