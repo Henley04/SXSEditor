@@ -552,21 +552,28 @@ async function updateAudioDeviceList() {
 let _saveDebounce = null;
 
 function collectSettings() {
-    const inferenceValue = inferenceDeviceSelect.value;
-    const preferredDeviceId = inferenceValue === 'auto' ? null : (inferenceValue === 'npu' ? 'npu' : parseInt(inferenceValue));
-
-    let preferredDeviceType = null;
-    if (preferredDeviceId !== null) {
-        if (preferredDeviceId === 'npu') {
-            preferredDeviceType = 'npu';
-        } else {
-            const selectedOption = inferenceDeviceSelect.options[inferenceDeviceSelect.selectedIndex];
-            preferredDeviceType = selectedOption?.dataset?.deviceType || null;
-        }
-    }
-
     const deviceModeRadio = document.querySelector('input[name="deviceMode"]:checked');
     const deviceMode = deviceModeRadio ? deviceModeRadio.value : 'smart';
+
+    // 仅在 manual 模式下从 inferenceDeviceSelect 提取 preferredDeviceId/preferredDeviceType/deviceId。
+    // smart/advanced 模式下这些字段保持 undefined，让 settingsIpc.saveSettings 跳过它们，
+    // 避免用 null 覆盖之前 manual 模式保存的具体设备 ID（否则切回 manual 时自定义设备会丢失，
+    // 且 main.js 启动验证会误弹 "deviceId=null not found" 对话框）。
+    let preferredDeviceId;
+    let preferredDeviceType;
+    if (deviceMode === 'manual') {
+        const inferenceValue = inferenceDeviceSelect.value;
+        preferredDeviceId = inferenceValue === 'auto' ? null : (inferenceValue === 'npu' ? 'npu' : parseInt(inferenceValue));
+        preferredDeviceType = null;
+        if (preferredDeviceId !== null) {
+            if (preferredDeviceId === 'npu') {
+                preferredDeviceType = 'npu';
+            } else {
+                const selectedOption = inferenceDeviceSelect.options[inferenceDeviceSelect.selectedIndex];
+                preferredDeviceType = selectedOption?.dataset?.deviceType || null;
+            }
+        }
+    }
 
     let modelDeviceMapping = {};
     if (deviceMode === 'advanced') {
