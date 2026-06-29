@@ -4,7 +4,7 @@ const fs = require('node:fs');
 // Side effect: apply float16 patch on module load
 require('./float16Patch');
 
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, MIN_SYNTH_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
@@ -1342,6 +1342,24 @@ class OnnxSVSPipeline {
                 totalFrames = MAX_SAFE_FRAMES;
             }
 
+            // 最小帧数保护：单 note 短分片时 totalFrames 可能只有几帧，diffusion 对极短 mel
+            // 无法生成有意义结果（表现为"意义不明的声音"）。Pad 到 MIN_SYNTH_FRAMES（尾部补 0 = SP 静音），
+            // 合成后截取有效音频。多 note 分片 totalFrames 为累加值通常足够，不会触发此分支。
+            const originalTotalFrames = totalFrames;
+            if (totalFrames < MIN_SYNTH_FRAMES) {
+                const paddedF0Ids = new Int32Array(MIN_SYNTH_FRAMES);
+                paddedF0Ids.set(sequences.f0Ids);
+                sequences.f0Ids = paddedF0Ids;
+                const paddedF0Hz = new Float32Array(MIN_SYNTH_FRAMES);
+                if (sequences.f0Hz) paddedF0Hz.set(sequences.f0Hz);
+                sequences.f0Hz = paddedF0Hz;
+                const paddedMel2token = new Int32Array(MIN_SYNTH_FRAMES);
+                paddedMel2token.set(sequences.mel2token);
+                sequences.mel2token = paddedMel2token;
+                totalFrames = MIN_SYNTH_FRAMES;
+                console.log(`[OnnxSVSPipeline] Short fragment padded: ${originalTotalFrames} → ${MIN_SYNTH_FRAMES} frames`);
+            }
+
             if (!ptMelData || ptFrameCount === 0) {
                 ptFrameCount = Math.min(50, Math.max(10, Math.floor(totalFrames * 0.1)));
                 ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
@@ -1371,7 +1389,13 @@ class OnnxSVSPipeline {
             onProgress(90);
             // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder; truncated to totalFrames to match mel. null when unavailable.
             this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
-            const audioData = await this._runVocoderChunked(xt.data, totalFrames);
+            let audioData = await this._runVocoderChunked(xt.data, totalFrames);
+
+            // 如果之前 pad 了短分片，截取有效部分的音频（丢弃尾部静音 padding）
+            if (originalTotalFrames < MIN_SYNTH_FRAMES) {
+                const validSamples = originalTotalFrames * HOP_SIZE;
+                audioData = audioData.subarray(0, Math.min(validSamples, audioData.length));
+            }
 
             const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120; // 2 分钟
             if (audioData.length <= MAX_CACHE_SAMPLES) {

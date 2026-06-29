@@ -582,6 +582,61 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       }
       expect(aFrameCount).to.be.at.least(2, 'jp_a (vowel of か) should get at least 2 frames in 8th note');
     });
+
+    it('should give vowels more frames than consonants in long English note (data-driven stats)', async () => {
+      // "apples" -> AE1 P AH0 L Z + SEP = 6 phonemes
+      // bpm=120, duration=8 beats = 4s ≈ 200 frames; innerFrames >> 6
+      // 数据驱动统计表查表：元音 AE1/AH0 应比辅音 P/L/Z 获得更多帧
+      const pipeline2 = new NativeSVSPipeline('/fake/model/dir/');
+      // 等待统计表异步加载完成
+      await new Promise(r => setTimeout(r, 200));
+      const notes = [
+        { pitch: 60, start: 0, duration: 8, lyric: 'apples' },
+      ];
+      const result = pipeline2.notesToSequences(notes, 120, null);
+
+      // token sequence: PAD(0), BOW(1), en_AE1(2), en_P(3), en_AH0(4), en_L(5), en_Z(6), SEP(7), EOW(8)
+      const tokenFrames = {};
+      for (let f = 0; f < result.mel2token.length; f++) {
+        const t = result.mel2token[f];
+        if (t >= 2 && t <= 7) {
+          tokenFrames[t] = (tokenFrames[t] || 0) + 1;
+        }
+      }
+      // AE1(token 2) 和 AH0(token 4) 是元音；P(3), L(5), Z(6) 是辅音；SEP(7) 是特殊 token
+      const ae1Frames = tokenFrames[2] || 0;
+      const pFrames = tokenFrames[3] || 0;
+      const ah0Frames = tokenFrames[4] || 0;
+
+      // 元音应比相邻辅音获得更多帧（统计规律：元音 100ms+ > 辅音 ~70-90ms）
+      expect(ae1Frames).to.be.greaterThan(pFrames, 'AE1 (vowel) should get more frames than P (consonant)');
+      expect(ah0Frames).to.be.greaterThan(0, 'AH0 (second vowel) must get some frames');
+    });
+
+    it('should fall back to linear allocation when stats table not loaded', () => {
+      // 构造一个无统计表的 pipeline，验证回退到线性插值
+      const pipeline2 = new NativeSVSPipeline('/fake/model/dir/');
+      pipeline2._preprocessing._durationStats = null; // 强制未加载
+      const notes = [
+        { pitch: 60, start: 0, duration: 4, lyric: 'apples' },
+      ];
+      const result = pipeline2.notesToSequences(notes, 120, null);
+
+      // 线性插值下所有音素帧数应相近（差异 <= 1）
+      const tokenFrames = {};
+      for (let f = 0; f < result.mel2token.length; f++) {
+        const t = result.mel2token[f];
+        if (t >= 2 && t <= 6) { // en_AE1..en_Z (排除 SEP)
+          tokenFrames[t] = (tokenFrames[t] || 0) + 1;
+        }
+      }
+      const frames = Object.values(tokenFrames);
+      if (frames.length > 1) {
+        const maxF = Math.max(...frames);
+        const minF = Math.min(...frames);
+        expect(maxF - minF).to.be.at.most(1, 'linear allocation should produce near-equal frames');
+      }
+    });
   });
 
   describe('CFG global std rescale', () => {

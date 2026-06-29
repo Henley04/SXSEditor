@@ -36,6 +36,7 @@ import {
   getPhonemeDragState, setPhonemeDragState,
   getSelectedPhonemeNoteId, setSelectedPhonemeNoteId,
   getSelectedPhonemeIndex, setSelectedPhonemeIndex,
+  getHoveredNoteId, setHoveredNoteId,
   getParamEnvelopeDrag, setParamEnvelopeDrag,
   getActiveInlineInput, setActiveInlineInput,
   getActiveInlineEditNote, setActiveInlineEditNote,
@@ -1045,6 +1046,12 @@ export function setupEventListeners() {
       } else {
         canvas.style.cursor = 'default';
       }
+      // 更新 hoveredNoteId，变化时触发重绘以显示/隐藏 tooltip
+      const newHoveredId = hit ? hit.note.id : null;
+      if (newHoveredId !== getHoveredNoteId()) {
+        setHoveredNoteId(newHoveredId);
+        render();
+      }
       return;
     }
 
@@ -1159,6 +1166,10 @@ export function setupEventListeners() {
     getPitchDragAnchorStarts().clear();
     setParamEnvelopeDrag(null);
     getDragNoteStarts().clear();
+    if (getHoveredNoteId() !== null) {
+      setHoveredNoteId(null);
+      render();
+    }
   });
 
   canvas.addEventListener('contextmenu', (e) => {

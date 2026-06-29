@@ -21,6 +21,7 @@ import {
   getSelectedPhonemeNoteId,
   getSelectedPhonemeIndex,
   getPhonemeDragState,
+  getHoveredNoteId,
   getActiveInlineInput,
   getActiveInlineEditNote,
   getPitchCurveVersion,
@@ -160,10 +161,13 @@ export function _interpolateEnvelope(envelope, time) {
 export function getClippedNotes() {
   const currentFragment = getCurrentFragment();
   const notes = getNotes();
-  if (!currentFragment || !currentFragment.duration) return notes;
+  // 过滤掉未激活的重叠 note：同一时间点只有第一个 note 参与合成
+  const inactiveIds = getInactiveNoteIds(notes);
+  const activeNotes = inactiveIds.size > 0 ? notes.filter(n => !inactiveIds.has(n.id)) : notes;
+  if (!currentFragment || !currentFragment.duration) return activeNotes;
   const fragDuration = currentFragment.duration;
   const clipped = [];
-  for (const note of notes) {
+  for (const note of activeNotes) {
     if (note.start >= fragDuration) continue;
     const noteEnd = note.start + note.duration;
     if (noteEnd > fragDuration) {
@@ -297,6 +301,35 @@ export function hasNoteOverlap(excludeId, pitch, start, end) {
     if (start < nEnd && end > n.start) return true;
   }
   return false;
+}
+
+/**
+ * 计算未激活（被遮挡）的 note id 集合。
+ * 规则：同一时间点只能有一个 note 被激活，按数组顺序（先后顺序）决定激活的 note。
+ * 后面的 note 如果与前面任意已激活 note 时间重叠（跨 pitch），则标记为未激活。
+ * @param {Array} notes
+ * @returns {Set<number>} 未激活的 note id 集合
+ */
+export function getInactiveNoteIds(notes) {
+  const inactive = new Set();
+  const activeRanges = []; // 已激活 note 的时间区间 [{start, end}]
+  for (const n of notes) {
+    const nEnd = n.start + n.duration;
+    // 检查是否与任意已激活 note 时间重叠
+    let overlapped = false;
+    for (const r of activeRanges) {
+      if (n.start < r.end && nEnd > r.start) {
+        overlapped = true;
+        break;
+      }
+    }
+    if (overlapped) {
+      inactive.add(n.id);
+    } else {
+      activeRanges.push({ start: n.start, end: nEnd });
+    }
+  }
+  return inactive;
 }
 
 export function clampNotePosition(noteId, pitch, start, duration) {
@@ -1070,6 +1103,7 @@ function _doRender() {
   const notes = getNotes();
   const selectedNoteIds = getSelectedNoteIds();
   const currentFragment = getCurrentFragment();
+  const inactiveNoteIds = getInactiveNoteIds(notes);
 
   for (const note of notes) {
     const x = timeToX(note.start);
@@ -1080,7 +1114,9 @@ function _doRender() {
 
     const isSelected = selectedNoteIds.has(note.id);
     const isPitchMode = currentParamMode === 'Pitch';
-    ctx.fillStyle = c.accent;
+    const isInactive = inactiveNoteIds.has(note.id);
+    // 未激活的重叠 note 用灰色，否则用主题色
+    ctx.fillStyle = isInactive ? c.fgDisabled : c.accent;
     ctx.globalAlpha = isSelected ? 1.0 : (isPitchMode ? 0.4 : 0.8);
     ctx.fillRect(x, y, nw, nh);
     ctx.globalAlpha = 1.0;
@@ -1098,6 +1134,44 @@ function _doRender() {
 
     ctx.fillStyle = c.selectionBg;
     ctx.fillRect(x + nw - 3, y + 2, 2, nh - 4);
+
+    // 未激活 note 右上角标注感叹号
+    if (isInactive) {
+      ctx.fillStyle = c.warning;
+      ctx.font = 'bold 12px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      ctx.fillText('!', x + nw - 4, y + 1);
+    }
+  }
+
+  // 鼠标悬停在未激活 note 上时显示提示
+  const hoveredId = getHoveredNoteId();
+  if (hoveredId !== null && inactiveNoteIds.has(hoveredId)) {
+    const hoveredNote = notes.find(n => n.id === hoveredId);
+    if (hoveredNote) {
+      const hx = timeToX(hoveredNote.start);
+      const hy = pitchToY(hoveredNote.pitch);
+      const hw = hoveredNote.duration * BEAT_WIDTH * getZoomX();
+      const tipText = '此 MIDI 与另一同时刻 MIDI 重叠，未被激活';
+      ctx.font = '11px sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      const tipW = ctx.measureText(tipText).width + 10;
+      const tipH = 20;
+      let tipX = hx;
+      let tipY = hy + NOTE_HEIGHT + 4;
+      // 边界保护：超出画布右侧时左移
+      if (tipX + tipW > w) tipX = w - tipW;
+      if (tipY + tipH > canvas.height) tipY = hy - tipH - 4;
+      ctx.fillStyle = c.bgOverlay;
+      ctx.fillRect(tipX, tipY, tipW, tipH);
+      ctx.strokeStyle = c.borderDefault;
+      ctx.lineWidth = 1;
+      ctx.strokeRect(tipX, tipY, tipW, tipH);
+      ctx.fillStyle = c.warning;
+      ctx.fillText(tipText, tipX + 5, tipY + 4);
+    }
   }
 
   if (currentParamMode === 'Pitch') {
