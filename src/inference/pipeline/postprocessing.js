@@ -1,4 +1,4 @@
-const { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, NPU_VOCODER_SEQ_LEN, SAMPLE_RATE, N_FFT, NUM_MELS, MEL_MEAN, MEL_VAR } = require('./constants');
+const { MEL_DIM, HOP_SIZE, SIFIGAN_HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, NPU_VOCODER_SEQ_LEN, SAMPLE_RATE, N_FFT, NUM_MELS, MEL_MEAN, MEL_VAR } = require('./constants');
 const { TWIDDLE_REAL, TWIDDLE_IMAG, HANN_WINDOW } = require('./constants');
 const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils');
 
@@ -471,7 +471,8 @@ class Postprocessing {
     async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0) {
         const chunkSize = (chunkFrames && chunkFrames > 0) ? chunkFrames : VOCODER_CHUNK_FRAMES;
         const overlapFrames = VOCODER_OVERLAP_FRAMES;
-        const totalSamples = totalFrames * HOP_SIZE;
+        const vocoderHopSize = vocoderType === 'sifigan' ? SIFIGAN_HOP_SIZE : HOP_SIZE;
+        const totalSamples = totalFrames * vocoderHopSize;
         const output = new Float32Array(totalSamples);
         const t0 = performance.now();
         const floatType = isFP16 ? 'float16' : 'float32';
@@ -562,7 +563,7 @@ class Postprocessing {
         //     避免旧逻辑 framePos = chunkEnd - overlapFrames 反复回退导致死循环
         const weightSum = new Float32Array(totalSamples);
 
-        const fadeSamples = overlapFrames * HOP_SIZE;
+        const fadeSamples = overlapFrames * vocoderHopSize;
         const fadeWindow = new Float32Array(fadeSamples);
         for (let i = 0; i < fadeSamples; i++) {
             fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * i / fadeSamples));
@@ -607,7 +608,7 @@ class Postprocessing {
             await yieldToEventLoop(); // Prevent UI freeze between vocoder chunks
 
             const waveform = outputToFloat32(results['waveform']);
-            const writeStart = spec.chunkStart * HOP_SIZE;
+            const writeStart = spec.chunkStart * vocoderHopSize;
             const writeLen = Math.min(waveform.length, totalSamples - writeStart);
 
             for (let j = 0; j < writeLen; j++) {
@@ -627,12 +628,12 @@ class Postprocessing {
             }
 
             // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，已归一化）
-            // - 首 chunk：stableEnd = (isLast ? chunkEnd : chunkEnd - overlapFrames) * HOP_SIZE
+            // - 首 chunk：stableEnd = (isLast ? chunkEnd : chunkEnd - overlapFrames) * vocoderHopSize
             // - 中间 chunk：包含头部 overlap 的 crossfade 结果 + 稳定段（weightSum=1）
-            // - 末 chunk：stableEnd = chunkEnd * HOP_SIZE（尾部无 fade）
+            // - 末 chunk：stableEnd = chunkEnd * vocoderHopSize（尾部无 fade）
             if (onChunkComplete) {
                 const stableEndFrames = spec.isLast ? spec.chunkEnd : (spec.chunkEnd - overlapFrames);
-                const stableEnd = Math.min(stableEndFrames * HOP_SIZE, totalSamples);
+                const stableEnd = Math.min(stableEndFrames * vocoderHopSize, totalSamples);
                 if (stableEnd > committedSamples) {
                     try {
                         onChunkComplete({

@@ -1,46 +1,28 @@
 # -*- coding: utf-8 -*-
 """SiFiGAN Vocoder FP16 量化脚本。
 
-将 FP32 SiFiGAN ONNX 模型量化为 FP16，将所有权重 initializer 与模型 I/O 类型
-从 float32 转换为 float16，并将结果保存为 external_data 格式。
+策略：
+- 手动实现 FP16 量化，避免 onnxconverter_common 的类型不兼容问题
+- 支持混合精度：通过 --keep-fp32-blocks 控制最后几个残差块保留 FP32
+- 正确处理大常量（24000/48000等），不截断
+- 模型 I/O 保持 FP32（与应用层兼容）
 
 输入:
-  - sifigan_vocoder_dml.onnx (DML 优化版, 推荐)
-  - sifigan_vocoder.onnx     (未优化版, 兜底)
+  - sifigan_vocoder_dml.onnx
 
 输出:
-  - sifigan_vocoder_dml_fp16.onnx + sifigan_vocoder_dml_fp16.onnx.data
-
-量化策略 (手动实现, 比 onnxconverter_common 快得多):
-  - 权重 initializer: float32 -> float16 (numpy astype)
-  - 模型输入/输出类型: float32 -> float16
-  - 中间张量: 通过 onnx.shape_inference 推断后同步类型
-  - Cast 节点处理 (关键):
-    * to=FLOAT 的 Cast: 将 'to' 属性改为 FLOAT16, 输出 value_info 同步转 FP16
-      (保持 Cast 节点与 FP16 主路径一致, 避免类型断链)
-    * to=INT64/INT32/BOOL 等非浮点 Cast: 跳过, 不改 'to' 也不改输出 value_info
-      (这些 Cast 输出的是索引/形状张量, 与 FP16 主路径无关)
-
-精度验证:
-  - 构造 mel+f0 探针输入
-  - 同时跑 FP32 与 FP16 模型 (CPU EP)
-  - 计算 cosine 相似度, 阈值 >= 0.95 视为通过
-
-用法:
-  python quantize_sifigan_fp16.py
-  python quantize_sifigan_fp16.py --in sifigan_vocoder_dml.onnx --out sifigan_vocoder_dml_fp16.onnx
-  python quantize_sifigan_fp16.py --skip-validation
+  - sifigan_vocoder_dml_fp16.onnx + .data
 """
 
 import os
 import sys
+import re
 import argparse
 
 import numpy as np
 import onnx
-from onnx import numpy_helper, TensorProto, shape_inference
+from onnx import numpy_helper, TensorProto, helper
 
-# SiFiGAN 探针输入参数 (与 export_sifigan_vocoder.py / optimize_sifigan_dml.py 对齐)
 MEL_DIM = 128
 F0_MIN_HZ = 80.0
 F0_MAX_HZ = 400.0
@@ -50,9 +32,11 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_INPUT = os.path.join(SCRIPT_DIR, 'onnx_models', 'sifigan_vocoder_dml.onnx')
 DEFAULT_OUTPUT = os.path.join(SCRIPT_DIR, 'onnx_models', 'sifigan_vocoder_dml_fp16.onnx')
 
+KEEP_FP32_BLOCKS = 0
+KEEP_OUTPUT_FP32 = False
+
 
 def clear_memory():
-    """按需释放内存, 防止内存溢出 (项目规则)。"""
     import gc
     gc.collect()
     try:
@@ -64,144 +48,30 @@ def clear_memory():
     gc.collect()
 
 
-def convert_initializers_to_fp16(model):
-    """将所有 float32 initializer 转换为 float16。
+def should_keep_fp32(node_name):
+    """判断该计算节点是否应该保留为 FP32。"""
+    if KEEP_FP32_BLOCKS <= 0:
+        return False
 
-    跳过 int/bool 等非浮点 initializer (如形状常量)。
-    返回转换数量。
-    """
-    count = 0
-    for init in model.graph.initializer:
-        if init.data_type == TensorProto.FLOAT:
-            arr = numpy_helper.to_array(init).astype(np.float16)
-            new_init = numpy_helper.from_array(arr, name=init.name)
-            init.CopyFrom(new_init)
-            count += 1
-    return count
+    name = node_name
 
+    if '/output_conv/' in name:
+        return True
 
-def convert_constant_nodes_to_fp16(model):
-    """将所有节点中持有 float32 TensorProto 值的属性转换为 float16。
+    m = re.search(r'/blocks\.(\d+)/', name)
+    if m:
+        block_id = int(m.group(1))
+        total_blocks = 12
+        if block_id >= (total_blocks - KEEP_FP32_BLOCKS):
+            return True
 
-    涵盖:
-      - Constant 节点的 'value' 属性
-      - ConstantOfShape 节点的 'value' 属性 (决定输出张量类型)
-      - 其他可能携带 TensorProto 属性的节点 (防御性扫描)
-
-    若不转换, 这些常量会保持 FP32, 导致下游算子出现类型不匹配
-    (例如 ConstantOfShape 输出 FP32 但 value_info 被改为 FP16, 触发
-    "Type (tensor(float16)) of output arg ... of node ..." 错误)。
-    跳过非浮点 (INT64/INT32 等) 的 TensorProto 值。
-    """
-    count = 0
-    for node in model.graph.node:
-        for attr in node.attribute:
-            # 单张量属性 (type == TENSOR)
-            if attr.type == onnx.AttributeProto.TENSOR:
-                t = attr.t
-                if t.data_type == TensorProto.FLOAT:
-                    arr = numpy_helper.to_array(t).astype(np.float16)
-                    new_t = numpy_helper.from_array(arr, name=t.name)
-                    attr.t.CopyFrom(new_t)
-                    count += 1
-            # 张量列表属性 (type == TENSORS)
-            elif attr.type == onnx.AttributeProto.TENSORS:
-                for i, t in enumerate(attr.tensors):
-                    if t.data_type == TensorProto.FLOAT:
-                        arr = numpy_helper.to_array(t).astype(np.float16)
-                        new_t = numpy_helper.from_array(arr, name=t.name)
-                        attr.tensors[i].CopyFrom(new_t)
-                        count += 1
-    return count
-
-
-def convert_io_types_to_fp16(model):
-    """将 graph.input / graph.output 中的 float32 类型修改为 float16。"""
-    count = 0
-    for inp in model.graph.input:
-        if inp.type.tensor_type.elem_type == TensorProto.FLOAT:
-            inp.type.tensor_type.elem_type = TensorProto.FLOAT16
-            count += 1
-    for out in model.graph.output:
-        if out.type.tensor_type.elem_type == TensorProto.FLOAT:
-            out.type.tensor_type.elem_type = TensorProto.FLOAT16
-            count += 1
-    return count
-
-
-def collect_cast_output_names(model):
-    """收集所有 Cast 节点输出的名称, 按输出类型分类。
-
-    返回 (float_cast_outputs, nonfloat_cast_outputs):
-      - float_cast_outputs: Cast(to=FLOAT) 输出名, 这些会在后续被改为 FLOAT16
-        (既要改 'to' 属性, 也要改 value_info 类型)
-      - nonfloat_cast_outputs: Cast(to=INT64/INT32/BOOL/...) 输出名, 这些跳过
-        (不改 'to' 也不改 value_info, 因为输出的是索引/形状张量)
-    """
-    float_cast_outputs = set()
-    nonfloat_cast_outputs = set()
-    for node in model.graph.node:
-        if node.op_type == 'Cast':
-            to_type = None
-            for attr in node.attribute:
-                if attr.name == 'to':
-                    to_type = attr.i
-                    break
-            for out_name in node.output:
-                if not out_name:
-                    continue
-                if to_type == TensorProto.FLOAT:
-                    float_cast_outputs.add(out_name)
-                else:
-                    nonfloat_cast_outputs.add(out_name)
-    return float_cast_outputs, nonfloat_cast_outputs
-
-
-def rewrite_float_casts_to_fp16(model, float_cast_outputs):
-    """将 Cast(to=FLOAT) 节点的 'to' 属性改为 FLOAT16。
-
-    这样 Cast 节点输出 FP16, 与 FP16 主路径一致, 避免类型断链。
-    """
-    count = 0
-    for node in model.graph.node:
-        if node.op_type == 'Cast':
-            out_names = set(node.output)
-            if not (out_names & float_cast_outputs):
-                continue
-            for attr in node.attribute:
-                if attr.name == 'to' and attr.i == TensorProto.FLOAT:
-                    attr.i = TensorProto.FLOAT16
-                    count += 1
-                    break
-    return count
-
-
-def convert_value_info_to_fp16(model, skip_names):
-    """将 graph.value_info 中已推断为 float32 的中间张量改为 float16。
-
-    跳过 skip_names 集合中的张量 (非浮点 Cast 节点的输出, 类型由 'to' 属性决定)。
-    """
-    count = 0
-    skipped = 0
-    for vi in model.graph.value_info:
-        if vi.name in skip_names:
-            skipped += 1
-            continue
-        if vi.type.tensor_type.elem_type == TensorProto.FLOAT:
-            vi.type.tensor_type.elem_type = TensorProto.FLOAT16
-            count += 1
-    return count, skipped
+    return False
 
 
 def save_model_external(model, path):
-    """保存模型为 external_data 格式 (处理大初始值)。
-
-    与 optimize_sifigan_dml.py / export_sifigan_vocoder.py 保持一致。
-    """
     data_path = path + ".data"
     if os.path.exists(data_path):
         os.remove(data_path)
-
     onnx.save_model(
         model, path,
         save_as_external_data=True,
@@ -216,12 +86,6 @@ def save_model_external(model, path):
 
 
 def make_probe_inputs(seq_len):
-    """构造 SiFiGAN 探针输入 (FP32)。
-
-    与 optimize_sifigan_dml.py / export_sifigan_vocoder.py 对齐:
-      mel: [1, seq_len, 128] float32
-      f0:  [1, seq_len, 1]   float32, 范围 [80, 400] Hz
-    """
     np.random.seed(42)
     mel = np.random.randn(1, seq_len, MEL_DIM).astype(np.float32) * 0.1
     f0 = (np.random.rand(1, seq_len, 1).astype(np.float32)
@@ -229,15 +93,7 @@ def make_probe_inputs(seq_len):
     return {'mel': mel, 'f0': f0}
 
 
-def make_fp16_inputs(fp32_inputs):
-    """将 FP32 探针输入转换为 FP16 (与 FP16 模型 I/O 类型匹配)。"""
-    return {
-        name: arr.astype(np.float16) for name, arr in fp32_inputs.items()
-    }
-
-
 def verify_accuracy(fp32_path, fp16_path, seq_len=DEFAULT_SEQ_LEN, threshold=0.95):
-    """验证 FP16 模型与 FP32 模型的输出相似度 (cosine similarity)。"""
     import onnxruntime as ort
 
     print(f"\n{'='*60}")
@@ -245,9 +101,8 @@ def verify_accuracy(fp32_path, fp16_path, seq_len=DEFAULT_SEQ_LEN, threshold=0.9
     print(f"{'='*60}")
 
     fp32_inputs = make_probe_inputs(seq_len)
-    fp16_inputs = make_fp16_inputs(fp32_inputs)
+    fp16_inputs = fp32_inputs
 
-    # FP32 模型推理
     sess_fp32 = None
     sess_fp16 = None
     try:
@@ -263,7 +118,6 @@ def verify_accuracy(fp32_path, fp16_path, seq_len=DEFAULT_SEQ_LEN, threshold=0.9
         sess_fp32 = None
         clear_memory()
 
-    # FP16 模型推理
     try:
         sess_fp16 = ort.InferenceSession(fp16_path, providers=['CPUExecutionProvider'])
         out_fp16 = sess_fp16.run(None, fp16_inputs)[0].astype(np.float32).flatten()
@@ -271,18 +125,18 @@ def verify_accuracy(fp32_path, fp16_path, seq_len=DEFAULT_SEQ_LEN, threshold=0.9
               f"range=[{out_fp16.min():.6f}, {out_fp16.max():.6f}]")
     except Exception as e:
         print(f"  [FAIL] FP16 inference failed: {str(e)[:200]}")
+        import traceback
+        traceback.print_exc()
         return False
     finally:
         del sess_fp16
         sess_fp16 = None
         clear_memory()
 
-    # 长度对齐 (防御性, 实际应一致)
     n = min(len(out_fp32), len(out_fp16))
     a = out_fp32[:n]
     b = out_fp16[:n]
 
-    # cosine similarity
     na = np.linalg.norm(a)
     nb = np.linalg.norm(b)
     if na < 1e-10 or nb < 1e-10:
@@ -290,7 +144,6 @@ def verify_accuracy(fp32_path, fp16_path, seq_len=DEFAULT_SEQ_LEN, threshold=0.9
     else:
         cos = float(np.dot(a, b) / (na * nb))
 
-    # L1 误差
     abs_diff = np.abs(a - b)
     max_diff = float(abs_diff.max())
     mean_diff = float(abs_diff.mean())
@@ -309,7 +162,6 @@ def verify_accuracy(fp32_path, fp16_path, seq_len=DEFAULT_SEQ_LEN, threshold=0.9
 
 
 def inspect_model_io(model_path):
-    """打印模型输入/输出的名称与类型, 便于诊断。"""
     model = onnx.load(model_path, load_external_data=False)
     print(f"  Inputs:")
     for inp in model.graph.input:
@@ -325,16 +177,376 @@ def inspect_model_io(model_path):
         print(f"    {out.name}: {dt_name} {dims}")
 
 
+def check_large_constants(model_path):
+    model = onnx.load(model_path, load_external_data=True)
+    print(f"  Large constant check:")
+    found_fp32 = 0
+    found_fp16 = 0
+    for node in model.graph.node:
+        if node.op_type == 'Constant':
+            for attr in node.attribute:
+                if attr.type == onnx.AttributeProto.TENSOR:
+                    arr = numpy_helper.to_array(attr.t)
+                    max_val = float(np.abs(arr).max()) if arr.size > 0 else 0
+                    if max_val > 1000:
+                        dt_name = TensorProto.DataType.Name(attr.t.data_type)
+                        if attr.t.data_type == TensorProto.FLOAT:
+                            found_fp32 += 1
+                        elif attr.t.data_type == TensorProto.FLOAT16:
+                            found_fp16 += 1
+                        print(f"    {node.name}: {max_val:.2f} ({dt_name}, shape={arr.shape})")
+    for init in model.graph.initializer:
+        if init.data_type in (TensorProto.FLOAT, TensorProto.FLOAT16):
+            arr = numpy_helper.to_array(init)
+            max_val = float(np.abs(arr).max()) if arr.size > 0 else 0
+            if max_val > 1000 and arr.size <= 10:
+                dt_name = TensorProto.DataType.Name(init.data_type)
+                if init.data_type == TensorProto.FLOAT:
+                    found_fp32 += 1
+                else:
+                    found_fp16 += 1
+                print(f"    init:{init.name}: {max_val:.2f} ({dt_name}, shape={arr.shape})")
+    print(f"  Total: {found_fp32} FP32, {found_fp16} FP16 large constants")
+
+
+def get_keep_fp32_init_names(model):
+    """获取需要保留 FP32 的 initializer 名称。"""
+    keep_inits = set()
+
+    if KEEP_OUTPUT_FP32:
+        init_names = set(init.name for init in model.graph.initializer)
+        for node in model.graph.node:
+            if '/output_conv/' in node.name and node.op_type in ('Conv', 'ConvTranspose'):
+                for inp in node.input:
+                    if inp in init_names:
+                        keep_inits.add(inp)
+
+    if KEEP_FP32_BLOCKS <= 0:
+        return keep_inits
+
+    init_names = set(init.name for init in model.graph.initializer)
+
+    for node in model.graph.node:
+        if node.op_type in ('Conv', 'ConvTranspose') and should_keep_fp32(node.name):
+            for inp in node.input:
+                if inp in init_names:
+                    keep_inits.add(inp)
+
+    return keep_inits
+
+
+def convert_initializers_to_fp16(model, keep_fp32_inits=None):
+    """将 initializer 转换为 FP16。"""
+    if keep_fp32_inits is None:
+        keep_fp32_inits = set()
+    count = 0
+    skipped = 0
+    for init in model.graph.initializer:
+        if init.data_type == TensorProto.FLOAT:
+            if init.name in keep_fp32_inits:
+                skipped += 1
+                continue
+            arr = numpy_helper.to_array(init)
+            arr_fp16 = arr.astype(np.float16)
+            new_init = numpy_helper.from_array(arr_fp16, name=init.name)
+            init.CopyFrom(new_init)
+            count += 1
+    print(f"  Converted {count} initializers to FP16 (skipped {skipped})")
+    return count
+
+
+def convert_constant_nodes_to_fp16(model):
+    """将 Constant 节点的值转换为 FP16。"""
+    count = 0
+    for node in model.graph.node:
+        if node.op_type == 'Constant':
+            for attr in node.attribute:
+                if attr.type == onnx.AttributeProto.TENSOR:
+                    if attr.t.data_type == TensorProto.FLOAT:
+                        arr = numpy_helper.to_array(attr.t)
+                        arr_fp16 = arr.astype(np.float16)
+                        new_tensor = numpy_helper.from_array(arr_fp16)
+                        attr.t.CopyFrom(new_tensor)
+                        count += 1
+        elif node.op_type == 'ConstantOfShape':
+            for attr in node.attribute:
+                if attr.name == 'value' and attr.type == onnx.AttributeProto.TENSOR:
+                    if attr.t.data_type == TensorProto.FLOAT:
+                        arr = numpy_helper.to_array(attr.t)
+                        arr_fp16 = arr.astype(np.float16)
+                        new_tensor = numpy_helper.from_array(arr_fp16)
+                        attr.t.CopyFrom(new_tensor)
+                        count += 1
+    print(f"  Converted {count} Constant/ConstantOfShape nodes to FP16")
+    return count
+
+
+def convert_cast_nodes_to_fp16(model):
+    """将原始 Cast 节点的 to=FLOAT 改为 to=FLOAT16。
+    
+    原始模型中有些冗余的 FLOAT->FLOAT Cast 节点。
+    量化后输入变成了 FP16，所以 to 也应该改成 FLOAT16。
+    """
+    count = 0
+    for node in model.graph.node:
+        if node.op_type == 'Cast':
+            for attr in node.attribute:
+                if attr.name == 'to' and attr.i == TensorProto.FLOAT:
+                    attr.i = TensorProto.FLOAT16
+                    count += 1
+                    break
+    print(f"  Converted {count} Cast nodes (to FLOAT -> FLOAT16)")
+    return count
+
+
+def make_cast_node(name, input_name, output_name, to_type):
+    """创建一个 Cast 节点。"""
+    return helper.make_node(
+        'Cast',
+        inputs=[input_name],
+        outputs=[output_name],
+        name=name,
+        to=to_type,
+    )
+
+
+def add_io_cast_nodes(model):
+    """在模型输入输出处添加 Cast 节点，保持 I/O 为 FP32。"""
+    new_nodes = []
+
+    for inp in model.graph.input:
+        if inp.type.tensor_type.elem_type == TensorProto.FLOAT:
+            cast_output = f"{inp.name}_fp16"
+            cast_node = make_cast_node(
+                f"{inp.name}_input_cast",
+                inp.name,
+                cast_output,
+                TensorProto.FLOAT16,
+            )
+            new_nodes.append(cast_node)
+            for node in model.graph.node:
+                for i in range(len(node.input)):
+                    if node.input[i] == inp.name:
+                        node.input[i] = cast_output
+
+    output_names = [out.name for out in model.graph.output]
+    for out in model.graph.output:
+        if out.type.tensor_type.elem_type == TensorProto.FLOAT:
+            cast_input = f"{out.name}_fp16"
+            cast_node = make_cast_node(
+                f"{out.name}_output_cast",
+                cast_input,
+                out.name,
+                TensorProto.FLOAT,
+            )
+            new_nodes.append(cast_node)
+            for node in model.graph.node:
+                for i in range(len(node.output)):
+                    if node.output[i] == out.name:
+                        node.output[i] = cast_input
+
+    model.graph.node.extend(new_nodes)
+    print(f"  Added {len(new_nodes)} I/O Cast nodes")
+
+
+def find_producer(node_by_output, tensor_name):
+    """找到生产某个张量的节点。"""
+    return node_by_output.get(tensor_name)
+
+
+def find_consumers(model, tensor_name):
+    """找到消费某个张量的所有节点。"""
+    consumers = []
+    for node in model.graph.node:
+        for inp in node.input:
+            if inp == tensor_name:
+                consumers.append(node)
+                break
+    return consumers
+
+
+def add_mixed_precision_casts(model):
+    """为混合精度添加边界 Cast 节点。
+    
+    对于保留 FP32 的层：
+    - 在其输入前插入 FP16 -> FP32 Cast
+    - 在其输出后插入 FP32 -> FP16 Cast
+    - 把相关的 initializer 恢复为 FP32
+    """
+    if KEEP_FP32_BLOCKS <= 0:
+        return
+
+    keep_init_names = get_keep_fp32_init_names(model)
+    print(f"  Keeping {len(keep_init_names)} initializers as FP32")
+
+    for init in model.graph.initializer:
+        if init.name in keep_init_names and init.data_type == TensorProto.FLOAT16:
+            arr = numpy_helper.to_array(init)
+            arr_fp32 = arr.astype(np.float32)
+            new_init = numpy_helper.from_array(arr_fp32, name=init.name)
+            init.CopyFrom(new_init)
+
+    node_by_output = {}
+    for node in model.graph.node:
+        for out in node.output:
+            node_by_output[out] = node
+
+    keep_nodes = []
+    for node in model.graph.node:
+        if node.op_type in ('Conv', 'ConvTranspose') and should_keep_fp32(node.name):
+            keep_nodes.append(node)
+
+    boundary_inputs = set()
+    boundary_outputs = set()
+    init_names = set(init.name for init in model.graph.initializer)
+
+    for node in keep_nodes:
+        for inp in node.input:
+            if inp in init_names:
+                continue
+            producer = find_producer(node_by_output, inp)
+            if producer is None or producer.op_type in ('Conv', 'ConvTranspose') and not should_keep_fp32(producer.name):
+                boundary_inputs.add(inp)
+            elif producer is not None and producer.op_type not in ('Conv', 'ConvTranspose'):
+                boundary_inputs.add(inp)
+
+        for out in node.output:
+            consumers = find_consumers(model, out)
+            all_keep = True
+            for c in consumers:
+                if c.op_type in ('Conv', 'ConvTranspose') and not should_keep_fp32(c.name):
+                    all_keep = False
+                    break
+                if c.op_type not in ('Conv', 'ConvTranspose'):
+                    all_keep = False
+                    break
+            if not all_keep:
+                boundary_outputs.add(out)
+
+    print(f"  Boundary inputs (FP16->FP32): {len(boundary_inputs)}")
+    print(f"  Boundary outputs (FP32->FP16): {len(boundary_outputs)}")
+
+    new_nodes = []
+
+    for inp_name in sorted(boundary_inputs):
+        cast_output = f"{inp_name}_fp32"
+        cast_node = make_cast_node(
+            f"cast_{inp_name.replace('/', '_').replace('.', '_')}_to_fp32",
+            inp_name,
+            cast_output,
+            TensorProto.FLOAT,
+        )
+        new_nodes.append(cast_node)
+        for node in keep_nodes:
+            for i in range(len(node.input)):
+                if node.input[i] == inp_name:
+                    node.input[i] = cast_output
+
+    for out_name in sorted(boundary_outputs):
+        cast_input = f"{out_name}_fp32out"
+        cast_node = make_cast_node(
+            f"cast_{out_name.replace('/', '_').replace('.', '_')}_to_fp16",
+            cast_input,
+            out_name,
+            TensorProto.FLOAT16,
+        )
+        new_nodes.append(cast_node)
+        for node in keep_nodes:
+            for i in range(len(node.output)):
+                if node.output[i] == out_name:
+                    node.output[i] = cast_input
+
+    model.graph.node.extend(new_nodes)
+    print(f"  Added {len(new_nodes)} boundary Cast nodes")
+
+
+def keep_output_layer_fp32(model):
+    """保留输出层为 FP32 精度。
+    
+    输出层对最终波形质量影响最大，保留为 FP32 可以显著提升精度，
+    但只增加很小的模型大小（约 0.1MB）。
+    """
+    if not KEEP_OUTPUT_FP32:
+        return
+
+    output_init_names = set()
+    output_node_names = set()
+    for node in model.graph.node:
+        if '/output_conv/' in node.name:
+            output_node_names.add(node.name)
+            for inp in node.input:
+                for init in model.graph.initializer:
+                    if init.name == inp:
+                        output_init_names.add(inp)
+                        break
+
+    print(f"  Output layer nodes: {len(output_node_names)}")
+    print(f"  Output layer initializers: {len(output_init_names)}")
+
+    for init in model.graph.initializer:
+        if init.name in output_init_names and init.data_type == TensorProto.FLOAT16:
+            arr = numpy_helper.to_array(init)
+            arr_fp32 = arr.astype(np.float32)
+            new_init = numpy_helper.from_array(arr_fp32, name=init.name)
+            init.CopyFrom(new_init)
+
+    first_output_node = None
+    for node in model.graph.node:
+        if '/output_conv/' in node.name:
+            first_output_node = node
+            break
+
+    if first_output_node is None:
+        print("  [WARN] No output conv node found")
+        return
+
+    node_by_output = {}
+    for node in model.graph.node:
+        for out in node.output:
+            node_by_output[out] = node
+
+    init_names = set(init.name for init in model.graph.initializer)
+
+    boundary_inputs = set()
+    for inp in first_output_node.input:
+        if inp in init_names:
+            continue
+        producer = node_by_output.get(inp)
+        if producer is not None and '/output_conv/' not in producer.name:
+            boundary_inputs.add(inp)
+
+    print(f"  Output layer boundary inputs: {len(boundary_inputs)}")
+
+    new_nodes = []
+    for inp_name in sorted(boundary_inputs):
+        cast_output = f"{inp_name}_fp32"
+        cast_node = make_cast_node(
+            f"cast_output_input_to_fp32",
+            inp_name,
+            cast_output,
+            TensorProto.FLOAT,
+        )
+        new_nodes.append(cast_node)
+        for node in model.graph.node:
+            if '/output_conv/' in node.name:
+                for i in range(len(node.input)):
+                    if node.input[i] == inp_name:
+                        node.input[i] = cast_output
+
+    model.graph.node.extend(new_nodes)
+    print(f"  Added {len(new_nodes)} Cast nodes for output layer FP32")
+
+
 def quantize_sifigan_fp16(input_path, output_path, skip_validation=False, seq_len=DEFAULT_SEQ_LEN):
-    """主量化流程: 加载 FP32 -> 转换为 FP16 -> 保存 -> 验证。"""
     print("=" * 60)
     print("SiFiGAN Vocoder FP16 Quantization")
     print("=" * 60)
     print(f"  Input:  {input_path}")
     print(f"  Output: {output_path}")
+    print(f"  Keep FP32 blocks: {KEEP_FP32_BLOCKS}")
+    print(f"  Keep output FP32: {KEEP_OUTPUT_FP32}")
 
     if not os.path.exists(input_path):
-        # 兜底: 自动尝试未优化版本
         fallback = os.path.join(os.path.dirname(input_path), 'sifigan_vocoder.onnx')
         if os.path.exists(fallback):
             print(f"  [WARN] Input not found, using fallback: {fallback}")
@@ -343,85 +555,45 @@ def quantize_sifigan_fp16(input_path, output_path, skip_validation=False, seq_le
             print(f"\n[ERROR] Input model not found: {input_path}")
             sys.exit(1)
 
-    # 检查输入模型 I/O 类型
     print(f"\n  Input model I/O types:")
     inspect_model_io(input_path)
 
-    # 加载完整模型 (含外部权重)
     print(f"\n  Loading full model (with external data)...")
     model = onnx.load(input_path, load_external_data=True)
 
-    # 检查是否已为 FP16
-    fp_inits = [init for init in model.graph.initializer
-                if init.data_type in (TensorProto.FLOAT, TensorProto.FLOAT16)]
-    is_already_fp16 = bool(fp_inits) and all(
-        init.data_type == TensorProto.FLOAT16 for init in fp_inits
-    )
-    if is_already_fp16:
-        print(f"  [WARN] Model is already FP16, saving as-is")
-        save_model_external(model, output_path)
-        return
-
-    # 统计转换前的 initializer 类型分布
-    type_counts_before = {}
-    for init in model.graph.initializer:
-        dt = init.data_type
-        type_counts_before[dt] = type_counts_before.get(dt, 0) + 1
-    type_names_before = {TensorProto.DataType.Name(k): v for k, v in type_counts_before.items()}
-    print(f"  Initializer type distribution (before): {type_names_before}")
-
-    # Step 1: 转换 initializer + Constant 节点
     print(f"\n{'='*60}")
-    print("Step 1: Convert initializers and Constant nodes to FP16")
+    print("Step 1: Convert initializers and constants to FP16")
     print(f"{'='*60}")
-    init_count = convert_initializers_to_fp16(model)
-    print(f"  Converted {init_count} float32 initializers to float16")
-    const_count = convert_constant_nodes_to_fp16(model)
-    print(f"  Converted {const_count} Constant node values to float16")
-    type_counts_after = {}
-    for init in model.graph.initializer:
-        dt = init.data_type
-        type_counts_after[dt] = type_counts_after.get(dt, 0) + 1
-    type_names_after = {TensorProto.DataType.Name(k): v for k, v in type_counts_after.items()}
-    print(f"  Initializer type distribution (after): {type_names_after}")
 
-    # Step 2: 转换 I/O 类型
+    keep_fp32_inits = get_keep_fp32_init_names(model)
+    convert_initializers_to_fp16(model, keep_fp32_inits)
+    convert_constant_nodes_to_fp16(model)
+    convert_cast_nodes_to_fp16(model)
+
     print(f"\n{'='*60}")
-    print("Step 2: Convert input/output types to FP16")
+    print("Step 2: Add I/O Cast nodes (keep I/O as FP32)")
     print(f"{'='*60}")
-    io_count = convert_io_types_to_fp16(model)
-    print(f"  Converted {io_count} input/output types to float16")
+    add_io_cast_nodes(model)
 
-    # Step 3: 转换 value_info 中间张量 (处理 Cast 节点)
-    print(f"\n{'='*60}")
-    print("Step 3: Convert value_info to FP16 (handle Cast nodes)")
-    print(f"{'='*60}")
-    # 先收集 Cast 输出名 (在 shape inference 之前, 节点结构稳定)
-    float_cast_outputs, nonfloat_cast_outputs = collect_cast_output_names(model)
-    print(f"  Found {len(float_cast_outputs)} Cast(to=FLOAT) outputs (will rewrite to FP16)")
-    print(f"  Found {len(nonfloat_cast_outputs)} Cast(to=non-float) outputs (will skip)")
-    # 将 Cast(to=FLOAT) 的 'to' 属性改为 FLOAT16
-    rewritten = rewrite_float_casts_to_fp16(model, float_cast_outputs)
-    print(f"  Rewrote {rewritten} Cast nodes: to=FLOAT -> to=FLOAT16")
-    # 运行形状推断, 让中间张量获得类型信息
-    try:
-        print(f"  Running shape inference...")
-        model = shape_inference.infer_shapes(model)
-        print(f"  Shape inference complete")
-    except Exception as e:
-        print(f"  Shape inference failed (continuing): {e}")
+    if KEEP_FP32_BLOCKS > 0:
+        print(f"\n{'='*60}")
+        print("Step 3: Mixed precision - add boundary Cast nodes")
+        print(f"{'='*60}")
+        add_mixed_precision_casts(model)
 
-    # 跳过非浮点 Cast 输出 (它们的类型由 'to' 属性决定, 不能改)
-    vi_count, vi_skipped = convert_value_info_to_fp16(model, nonfloat_cast_outputs)
-    print(f"  Converted {vi_count} value_info types to float16 (skipped {vi_skipped} non-float Cast outputs)")
+    if KEEP_OUTPUT_FP32:
+        step_num = 4 if KEEP_FP32_BLOCKS > 0 else 3
+        print(f"\n{'='*60}")
+        print(f"Step {step_num}: Keep output layer in FP32")
+        print(f"{'='*60}")
+        keep_output_layer_fp32(model)
 
-    # Step 4: 保存 FP16 模型
     print(f"\n{'='*60}")
     print("Step 4: Save FP16 model")
     print(f"{'='*60}")
+    del model.graph.value_info[:]
     fp16_size = save_model_external(model, output_path)
 
-    # 源模型大小 (含 .data)
     src_size = os.path.getsize(input_path) / 1024 / 1024
     src_data = input_path + ".data"
     if os.path.exists(src_data):
@@ -429,15 +601,13 @@ def quantize_sifigan_fp16(input_path, output_path, skip_validation=False, seq_le
     ratio = src_size / fp16_size if fp16_size > 0 else 0
     print(f"  Size: src={src_size:.1f}MB, fp16={fp16_size:.1f}MB, ratio={ratio:.2f}x")
 
-    # 检查输出模型 I/O 类型
     print(f"\n  Output model I/O types:")
     inspect_model_io(output_path)
+    check_large_constants(output_path)
 
-    # 释放 model 内存
     del model
     clear_memory()
 
-    # Step 5: 精度验证
     if skip_validation:
         print(f"\n[SKIP] Accuracy verification skipped")
         return
@@ -456,17 +626,20 @@ def quantize_sifigan_fp16(input_path, output_path, skip_validation=False, seq_le
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="SiFiGAN Vocoder FP16 量化脚本")
-    parser.add_argument('--in', dest='input', default=DEFAULT_INPUT,
-                        help=f'输入 SiFiGAN ONNX 模型路径 (默认 {DEFAULT_INPUT})')
-    parser.add_argument('--out', dest='output', default=DEFAULT_OUTPUT,
-                        help=f'输出 FP16 ONNX 模型路径 (默认 {DEFAULT_OUTPUT})')
-    parser.add_argument('--seq-len', type=int, default=DEFAULT_SEQ_LEN,
-                        help=f'探针输入帧数 (默认 {DEFAULT_SEQ_LEN})')
-    parser.add_argument('--skip-validation', action='store_true',
-                        help='跳过精度验证')
+    global KEEP_FP32_BLOCKS, KEEP_OUTPUT_FP32
+    parser = argparse.ArgumentParser(description="SiFiGAN Vocoder FP16 量化脚本")
+    parser.add_argument('--in', dest='input', default=DEFAULT_INPUT)
+    parser.add_argument('--out', dest='output', default=DEFAULT_OUTPUT)
+    parser.add_argument('--seq-len', type=int, default=DEFAULT_SEQ_LEN)
+    parser.add_argument('--skip-validation', action='store_true')
+    parser.add_argument('--keep-fp32-blocks', type=int, default=0,
+                        help='Number of last residual blocks to keep in FP32 (0=full FP16)')
+    parser.add_argument('--keep-output-fp32', action='store_true',
+                        help='Keep output layer in FP32 for better accuracy')
     args = parser.parse_args()
+
+    KEEP_FP32_BLOCKS = args.keep_fp32_blocks
+    KEEP_OUTPUT_FP32 = args.keep_output_fp32
 
     quantize_sifigan_fp16(
         input_path=args.input,

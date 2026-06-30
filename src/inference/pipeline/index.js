@@ -4,7 +4,7 @@ const fs = require('node:fs');
 // Side effect: apply float16 patch on module load
 require('./float16Patch');
 
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
+const { SAMPLE_RATE, HOP_SIZE, SIFIGAN_HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
@@ -1427,8 +1427,9 @@ class OnnxSVSPipeline {
 
             // 单 note 上下文 padding：截取有效音频（丢弃前后 rest padding）
             if (contextPadding) {
-                const startSample = contextPadding.offsetFrames * HOP_SIZE;
-                const validSamples = contextPadding.validFrames * HOP_SIZE;
+                const vocoderHopSize = this.vocoderType === 'sifigan' ? SIFIGAN_HOP_SIZE : HOP_SIZE;
+                const startSample = contextPadding.offsetFrames * vocoderHopSize;
+                const validSamples = contextPadding.validFrames * vocoderHopSize;
                 const endSample = Math.min(startSample + validSamples, audioData.length);
                 audioData = audioData.subarray(startSample, endSample);
             }
