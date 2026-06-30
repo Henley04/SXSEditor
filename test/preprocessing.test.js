@@ -223,7 +223,7 @@ describe('inference/pipeline/preprocessing', () => {
     it('should set noteType=1 for rest (empty lyric)', () => {
       const notes = [{ start: 0, duration: 1, pitch: 0, lyric: '' }];
       const seq = prep.notesToSequences(notes, 120, null, null);
-      expect(seq.noteTypeSeq).to.include(1);
+      expect(Array.from(seq.noteTypeSeq)).to.include(1);
     });
 
     it('should set noteType=3 for slur notes', () => {
@@ -232,7 +232,7 @@ describe('inference/pipeline/preprocessing', () => {
         { start: 1, duration: 1, pitch: 62, lyric: '', isSlur: true },
       ];
       const seq = prep.notesToSequences(notes, 120, null, null);
-      expect(seq.noteTypeSeq).to.include(3);
+      expect(Array.from(seq.noteTypeSeq)).to.include(3);
     });
 
     it('should handle multiple notes with gaps', () => {

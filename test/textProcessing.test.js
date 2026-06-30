@@ -215,9 +215,12 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       expect(result.startsWith('zh_')).to.be.true;
     });
     it('should respect override tone', () => {
-      const r1 = tp._charToZhPhoneme('你');
-      const r3 = tp._charToZhPhoneme('你3');
-      expect(r1).to.not.equal(r3);
+      // 好 default tone is 3 (hǎo); override to 1 should yield a different phoneme.
+      const r1 = tp._charToZhPhoneme('好');
+      const rOverride = tp._charToZhPhoneme('好1');
+      expect(r1).to.not.equal(rOverride);
+      expect(rOverride).to.match(/1$/);
+      expect(r1).to.match(/3$/);
     });
   });
 
