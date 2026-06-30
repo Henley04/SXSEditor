@@ -65,19 +65,36 @@ SiFiGAN（Source-Filter HiFi-GAN）是 SVS 管线的可选替代声码器，与�
 - 通过 `optimize_sifigan_dml.py` 脚本进行算子分解（参考现有 `optimize_vocoder_dml.py`）
 - 分解策略：`ConvTranspose1D(stride=S) → Conv1D(upsample(stride=S), stride=1)`
 - 优化后输出 `sifigan_vocoder_dml.onnx`，DirectML EP 可用
-- 三级回退：`sifigan_vocoder_dml.onnx` → `sifigan_vocoder.onnx` → `vocoder_dml.onnx`（默认）
+- 四级回退：`sifigan_vocoder_dml_fp16.onnx` → `sifigan_vocoder_dml.onnx` → `sifigan_vocoder.onnx` → `vocoder_dml.onnx`（默认）
 
 ### 文件清单
 
 | 文件 | 大小 | 说明 |
 |------|------|------|
-| `sifigan_vocoder_dml.onnx` | ~611 MB | DML 优化后的 ONNX 模型 |
-| `sifigan_vocoder.onnx` | ~611 MB | 未优化的 ONNX 模型（CPU 兼容） |
+| `sifigan_vocoder_dml_fp16.onnx` | ~23 MB | FP16 量化版 ONNX 模型（含 `.data`，推荐） |
+| `sifigan_vocoder_dml.onnx` | ~48 MB | FP32 DML 优化版 ONNX 模型（含 `.data`） |
+| `sifigan_vocoder.onnx` | ~35 MB | FP32 未优化版 ONNX 模型（含 `.data`，CPU 兼容） |
 | `sifigan_stats.joblib` | ~2.5 KB | 特征归一化统计文件 |
 
-精度变体（计划中）：
-- `fp16/sifigan_vocoder_dml.onnx`
-- `int8/sifigan_vocoder_dml.onnx`
+### FP16 量化
+
+通过 `quantize_sifigan_fp16.py` 脚本从 FP32 DML 优化版生成本地 FP16 变体：
+
+```bash
+python quantize_sifigan_fp16.py
+```
+
+- 压缩比：45.8 MB → 23.1 MB（~1.99x）
+- 精度验证：cosine similarity ≥ 0.95（CPU EP 对比 FP32 输出）
+- 量化策略：
+  - 权重 initializer: float32 → float16
+  - 模型 I/O 类型: float32 → float16（与应用层 `createFloatTensor('float16', ...)` 路径匹配）
+  - 中间张量: 通过 `onnx.shape_inference` 推断后同步类型
+  - Cast 节点处理:
+    - `Cast(to=FLOAT)`: `to` 属性改为 `FLOAT16`，输出 value_info 同步转 FP16
+    - `Cast(to=INT64/INT32/BOOL)`: 跳过（输出的是索引/形状张量）
+  - Constant / ConstantOfShape 节点: 持有的 float32 TensorProto 值转为 float16
+- FP16 变体不通过 ModelScope 下载，需在本地运行量化脚本生成
 
 ### 差异对比表
 

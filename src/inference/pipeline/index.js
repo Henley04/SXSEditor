@@ -534,36 +534,43 @@ class OnnxSVSPipeline {
             console.log('[OnnxSVSPipeline] diff_step_dml.onnx not found, using diff_step.onnx');
         }
 
-        // Vocoder 路径三级回退：sifigan_vocoder_dml → sifigan_vocoder → 默认 vocoder_dml → vocoder
+        // Vocoder 路径四级回退：sifigan_vocoder_dml_fp16 → sifigan_vocoder_dml → sifigan_vocoder → 默认 vocoder_dml → vocoder
         let sifiganOnnxResolved = false;
         if (vocoderType === 'sifigan') {
+            const sifiganFp16Path = path.join(this.modelDir, 'sifigan_vocoder_dml_fp16.onnx');
             const sifiganDmlPath = path.join(this.modelDir, 'sifigan_vocoder_dml.onnx');
             const sifiganPlainPath = path.join(this.modelDir, 'sifigan_vocoder.onnx');
             const sifiganStatsPath = path.join(this.modelDir, SIFIGAN_STATS_FILE);
-            const [sifiganDmlExists, sifiganPlainExists, sifiganStatsExists] = await Promise.all([
+            const [sifiganFp16Exists, sifiganDmlExists, sifiganPlainExists, sifiganStatsExists] = await Promise.all([
+                fs.promises.access(sifiganFp16Path).then(() => true, () => false),
                 fs.promises.access(sifiganDmlPath).then(() => true, () => false),
                 fs.promises.access(sifiganPlainPath).then(() => true, () => false),
                 fs.promises.access(sifiganStatsPath).then(() => true, () => false),
             ]);
-            if (sifiganDmlExists) {
+            // 辅助函数: 选中某个 sifigan onnx 变体 (stats 必须存在)
+            const pickSifigan = (fileName) => {
                 if (!sifiganStatsExists) {
                     // stats 缺失时强制回退默认 vocoder，避免用户听到失真音频
                     // （SiFiGAN ONNX 内部归一化常量依赖 stats，缺失会导致输入分布严重失配）
                     console.warn('[OnnxSVSPipeline] SiFiGAN onnx 存在但 stats 文件缺失，强制回退默认 vocoder 防止失真');
-                } else {
-                    resolvedModelFiles[vocDmlIdx] = 'sifigan_vocoder_dml.onnx';
-                    this._resolvedVocoderFile = 'sifigan_vocoder_dml.onnx';
-                    sifiganOnnxResolved = true;
-                    console.log('[OnnxSVSPipeline] Using SiFiGAN vocoder: sifigan_vocoder_dml.onnx');
+                    return false;
+                }
+                resolvedModelFiles[vocDmlIdx] = fileName;
+                this._resolvedVocoderFile = fileName;
+                sifiganOnnxResolved = true;
+                return true;
+            };
+            if (sifiganFp16Exists) {
+                if (pickSifigan('sifigan_vocoder_dml_fp16.onnx')) {
+                    console.log('[OnnxSVSPipeline] Using SiFiGAN vocoder: sifigan_vocoder_dml_fp16.onnx (FP16)');
+                }
+            } else if (sifiganDmlExists) {
+                if (pickSifigan('sifigan_vocoder_dml.onnx')) {
+                    console.log('[OnnxSVSPipeline] sifigan_vocoder_dml_fp16.onnx not found, using sifigan_vocoder_dml.onnx (FP32)');
                 }
             } else if (sifiganPlainExists) {
-                if (!sifiganStatsExists) {
-                    console.warn('[OnnxSVSPipeline] SiFiGAN onnx 存在但 stats 文件缺失，强制回退默认 vocoder 防止失真');
-                } else {
-                    resolvedModelFiles[vocDmlIdx] = 'sifigan_vocoder.onnx';
-                    this._resolvedVocoderFile = 'sifigan_vocoder.onnx';
-                    sifiganOnnxResolved = true;
-                    console.log('[OnnxSVSPipeline] sifigan_vocoder_dml.onnx not found, using sifigan_vocoder.onnx');
+                if (pickSifigan('sifigan_vocoder.onnx')) {
+                    console.log('[OnnxSVSPipeline] sifigan_vocoder_dml*.onnx not found, using sifigan_vocoder.onnx (FP32)');
                 }
             } else {
                 console.warn('[OnnxSVSPipeline] sifigan 模型缺失，回退默认 vocoder');
@@ -999,17 +1006,20 @@ class OnnxSVSPipeline {
                 return;
             }
 
-            // inputMetadata unavailable (DML) — detect from model file size
+            // inputMetadata unavailable (DML) — detect from model file size (incl. external .data)
             // Default vocoder: FP16 ≈ 495 MB, FP32 ≈ 1004 MB → threshold 700 MB
-            // SiFiGAN:         FP16 ≈ 300 MB, FP32 ≈ 611 MB → threshold 500 MB
-            const sizeThresholdMB = isSifigan ? 500 : 700;
+            // SiFiGAN: FP16 ≈ 23 MB (0.3 graph + 22.7 data), FP32 ≈ 48 MB (0.3 graph + 47.7 data) → threshold 35 MB
+            const sizeThresholdMB = isSifigan ? 35 : 700;
             if (modelPath) {
                 try {
                     const fs = require('node:fs');
                     const stats = fs.statSync(modelPath);
-                    const sizeMB = stats.size / (1024 * 1024);
-                    this.vocoderIsFP16 = sizeMB < sizeThresholdMB;
-                    console.log(`[OnnxSVSPipeline] Vocoder file size: ${sizeMB.toFixed(1)} MB (threshold=${sizeThresholdMB} MB, sifigan=${isSifigan}) → vocoderIsFP16=${this.vocoderIsFP16}`);
+                    let totalBytes = stats.size;
+                    // 累加 external_data 文件大小 (SiFiGAN 使用 external_data 格式)
+                    try { totalBytes += fs.statSync(modelPath + '.data').size; } catch (_) {}
+                    const totalSizeMB = totalBytes / (1024 * 1024);
+                    this.vocoderIsFP16 = totalSizeMB < sizeThresholdMB;
+                    console.log(`[OnnxSVSPipeline] Vocoder file size: ${totalSizeMB.toFixed(1)} MB (threshold=${sizeThresholdMB} MB, sifigan=${isSifigan}) → vocoderIsFP16=${this.vocoderIsFP16}`);
                     return;
                 } catch (_) {}
             }
@@ -1656,14 +1666,19 @@ class OnnxSVSPipeline {
             if (!vocDmlExists) {
                 resolvedFile = 'vocoder.onnx';
             }
-        } else if (modelFile === 'sifigan_vocoder_dml.onnx' || modelFile === 'sifigan_vocoder.onnx') {
-            // SiFiGAN 三级回退（与 _doInit 阶段保持一致）
+        } else if (modelFile === 'sifigan_vocoder_dml_fp16.onnx' || modelFile === 'sifigan_vocoder_dml.onnx' || modelFile === 'sifigan_vocoder.onnx') {
+            // SiFiGAN 四级回退（与 _doInit 阶段保持一致）:
+            // sifigan_vocoder_dml_fp16 → sifigan_vocoder_dml → sifigan_vocoder → 默认 vocoder
+            const sifiganFp16Path = path.join(this.modelDir, 'sifigan_vocoder_dml_fp16.onnx');
             const sifiganDmlPath = path.join(this.modelDir, 'sifigan_vocoder_dml.onnx');
             const sifiganPlainPath = path.join(this.modelDir, 'sifigan_vocoder.onnx');
-            let sifiganDmlExists = false, sifiganPlainExists = false;
+            let sifiganFp16Exists = false, sifiganDmlExists = false, sifiganPlainExists = false;
+            try { await fs.promises.access(sifiganFp16Path); sifiganFp16Exists = true; } catch (_) {}
             try { await fs.promises.access(sifiganDmlPath); sifiganDmlExists = true; } catch (_) {}
             try { await fs.promises.access(sifiganPlainPath); sifiganPlainExists = true; } catch (_) {}
-            if (sifiganDmlExists) {
+            if (sifiganFp16Exists) {
+                resolvedFile = 'sifigan_vocoder_dml_fp16.onnx';
+            } else if (sifiganDmlExists) {
                 resolvedFile = 'sifigan_vocoder_dml.onnx';
             } else if (sifiganPlainExists) {
                 resolvedFile = 'sifigan_vocoder.onnx';

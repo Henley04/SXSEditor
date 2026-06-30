@@ -62,18 +62,26 @@ function loadSettings() {
   }
 
   // Vocoder type default + startup fallback:
-  // If stored value is 'sifigan' but the model file is missing, temporarily fall
-  // back to 'default' for this run (settings.json is NOT modified).
+  // If stored value is 'sifigan' but none of the SiFiGAN model files exist,
+  // temporarily fall back to 'default' for this run (settings.json is NOT modified).
+  // Recognized SiFiGAN files (in priority order):
+  //   sifigan_vocoder_dml_fp16.onnx (FP16, preferred)
+  //   sifigan_vocoder_dml.onnx      (FP32 DML optimized)
+  //   sifigan_vocoder.onnx          (FP32 plain)
   if (typeof _settingsCache.vocoderType !== 'string') {
     _settingsCache.vocoderType = 'default';
   } else if (_settingsCache.vocoderType === 'sifigan') {
     try {
       const { getModelDir } = require('./modelDir');
       const modelDir = getModelDir();
+      const sifiganFp16Onnx = path.join(modelDir, 'sifigan_vocoder_dml_fp16.onnx');
       const sifiganOnnx = path.join(modelDir, 'sifigan_vocoder_dml.onnx');
       const sifiganFallback = path.join(modelDir, 'sifigan_vocoder.onnx');
-      if (!fs.existsSync(sifiganOnnx) && !fs.existsSync(sifiganFallback)) {
-        console.warn('[Main] vocoderType=sifigan but sifigan_vocoder_dml.onnx / sifigan_vocoder.onnx not found, falling back to default for this run');
+      const hasAny = fs.existsSync(sifiganFp16Onnx)
+                  || fs.existsSync(sifiganOnnx)
+                  || fs.existsSync(sifiganFallback);
+      if (!hasAny) {
+        console.warn('[Main] vocoderType=sifigan but no SiFiGAN onnx file found, falling back to default for this run');
         _settingsCache.vocoderType = 'default';
       }
     } catch (err) {
