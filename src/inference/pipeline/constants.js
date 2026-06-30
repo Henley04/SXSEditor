@@ -48,7 +48,9 @@ const ONNX_MODEL_FILES = [
 ];
 
 // SiFiGAN 可选替代声码器模型文件
+// FP16 变体优先 (sifigan_vocoder_dml_fp16.onnx), FP32 DML 优化版作为回退
 const SIFIGAN_MODEL_FILES = [
+    'sifigan_vocoder_dml_fp16.onnx',
     'sifigan_vocoder_dml.onnx',
 ];
 
@@ -59,7 +61,8 @@ const SIFIGAN_STATS_FILE = 'sifigan_stats.joblib';
 const MODEL_SIZES = {
     diff_step: 846.27 * 1024 * 1024,
     vocoder: 495.42 * 1024 * 1024,
-    sifigan: 611.42 * 1024 * 1024,
+    sifigan: 611.42 * 1024 * 1024,        // FP32 DML 优化版 (含 .data)
+    sifigan_fp16: 23.1 * 1024 * 1024,     // FP16 量化版 (含 .data, ~1.99x 压缩)
     note_text_encoder: 2.93 * 1024 * 1024,
     note_pitch_encoder: 0.13 * 1024 * 1024,
     note_type_encoder: 0.13 * 1024 * 1024,

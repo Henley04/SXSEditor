@@ -196,10 +196,14 @@ async function checkSifiganVocoderFiles() {
         // 授权模型目录，使 file:exists 可访问其内部文件
         await window.electronAPI.authorizePath(modelDir);
         const base = modelDir.replace(/[\\/]+$/, '');
-        const [onnxExists, statsExists] = await Promise.all([
+        // SiFiGAN onnx 变体: FP16 优先, FP32 DML 优化版回退, FP32 plain 兜底
+        const [fp16Exists, fp32DmlExists, fp32PlainExists, statsExists] = await Promise.all([
+            window.electronAPI.fileExists(base + '/sifigan_vocoder_dml_fp16.onnx'),
             window.electronAPI.fileExists(base + '/sifigan_vocoder_dml.onnx'),
+            window.electronAPI.fileExists(base + '/sifigan_vocoder.onnx'),
             window.electronAPI.fileExists(base + '/sifigan_stats.joblib'),
         ]);
+        const onnxExists = !!(fp16Exists || fp32DmlExists || fp32PlainExists);
         return { onnxExists, statsExists };
     } catch (err) {
         console.error('[Settings] Failed to detect SiFiGAN model files:', err);

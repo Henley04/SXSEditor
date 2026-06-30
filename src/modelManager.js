@@ -51,6 +51,8 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'cond_emb.onnx.data', required: true },
   { filePath: 'diff_step_dml.onnx', required: true },
   { filePath: 'vocoder_dml.onnx', required: true },
+  { filePath: 'sifigan_vocoder_dml_fp16.onnx', required: false, size: 0.3 * 1024 * 1024, group: 'sifigan-vocoder' },
+  { filePath: 'sifigan_vocoder_dml_fp16.onnx.data', required: false, size: 22.7 * 1024 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'sifigan_vocoder_dml.onnx', required: false, size: 340 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'sifigan_vocoder_dml.onnx.data', required: false, size: 47 * 1024 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'sifigan_stats.joblib', required: false, size: 2.5 * 1024, group: 'sifigan-vocoder' },
