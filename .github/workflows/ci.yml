@@ -69,26 +69,33 @@ jobs:
             fi
             IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_VERSION"
             NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            BUILD_VERSION="$NEW_VERSION"
             TAG="EA"
             PRERELEASE="false"
             IS_RELEASE="true"
             MAKE_LATEST="true"
           else
+            # Display version stays descriptive for the release name/body;
+            # BUILD_VERSION must be numeric (X.Y.Z.W) because Windows resedit
+            # (@electron/packager) requires integer version components.
             NEW_VERSION="nightly_${DATE}_${SHORT_SHA}"
+            BUILD_VERSION="1.0.0.${{ github.run_number }}"
             TAG="nightly"
             PRERELEASE="true"
             IS_RELEASE="false"
             MAKE_LATEST="false"
           fi
-          # Write version to package.json (NOT committed; only for this build)
-          node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$NEW_VERSION"
+          # Write BUILD_VERSION to package.json (NOT committed; only for this build).
+          # resedit rejects non-integer components like "nightly_20260630_abc1234".
+          node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$BUILD_VERSION"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "build_version=$BUILD_VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
           echo "make_latest=$MAKE_LATEST" >> $GITHUB_OUTPUT
-          echo "[ci] branch=$BRANCH version=$NEW_VERSION tag=$TAG prerelease=$PRERELEASE make_latest=$MAKE_LATEST"
+          echo "[ci] branch=$BRANCH version=$NEW_VERSION build_version=$BUILD_VERSION tag=$TAG prerelease=$PRERELEASE make_latest=$MAKE_LATEST"
 
       - name: Install dependencies
         run: npm ci
@@ -230,7 +237,8 @@ jobs:
       - name: Compile installer with Inno Setup
         shell: pwsh
         run: |
-          $version = "${{ steps.version.outputs.version }}"
+          # Inno Setup / Windows expects a numeric X.Y.Z[.W] version.
+          $version = "${{ steps.version.outputs.build_version }}"
           $iscc = Get-Command iscc -ErrorAction SilentlyContinue
           if (-not $iscc) {
             $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
