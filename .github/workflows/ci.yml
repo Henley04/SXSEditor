@@ -25,7 +25,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
           cache: npm
 
       - run: npm ci
@@ -42,7 +42,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
           cache: npm
 
       - name: Determine version and tag
@@ -103,7 +103,6 @@ jobs:
           $electronVersion = "42.4.1"
           $cacheDir = "$env:LOCALAPPDATA\electron\Cache"
           $zipName = "electron-v$electronVersion-win32-x64.zip"
-          $zipPath = Join-Path $cacheDir $zipName
 
           Write-Host "=== Checking Electron binary ==="
           if (-not (Test-Path $electronExe)) {
@@ -124,21 +123,25 @@ jobs:
 
           Write-Host "=== Checking Electron zip cache (needed by electron-packager) ==="
           Write-Host "Cache dir: $cacheDir"
+          # @electron/get stores zips under Cache/<hash>/<zipName>, so search recursively.
+          $existingZip = $null
           if (Test-Path $cacheDir) {
+            $existingZip = Get-ChildItem $cacheDir -Recurse -Filter $zipName -File -ErrorAction SilentlyContinue | Select-Object -First 1
             Get-ChildItem $cacheDir -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
           } else {
             Write-Host "Cache dir does not exist"
           }
 
-          if (-not (Test-Path $zipPath)) {
+          if (-not $existingZip) {
             Write-Host "Electron zip not in cache, downloading via @electron/get..."
-            node -e "const get = require('@electron/get'); get.downloadArtifact({ version: '42.4.1', platform: 'win32', arch: 'x64', artifactName: 'electron' }).then(p => console.log('cached at:', p)).catch(e => { console.error(e); process.exit(1); })"
+            $downloadResult = node -e "const get = require('@electron/get'); get.downloadArtifact({ version: '$electronVersion', platform: 'win32', arch: 'x64', artifactName: 'electron' }).then(p => console.log(p)).catch(e => { console.error(e); process.exit(1); })"
+            Write-Host "cached at: $downloadResult"
             if (Test-Path $cacheDir) {
               Write-Host "=== Cache contents after download ==="
               Get-ChildItem $cacheDir -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
             }
           } else {
-            Write-Host "Electron zip already cached: $zipPath"
+            Write-Host "Electron zip already cached: $($existingZip.FullName) ($($existingZip.Length) bytes)"
           }
 
       - name: Verify environment before build
