@@ -80,7 +80,9 @@ function registerSettingsIpc() {
   // GPU 检测完成后基于最大显存计算，启动前返回默认值。
   ipcMain.handle('settings:getVocoderChunkFramesInfo', async () => {
     try {
-      return getVocoderChunkFramesInfo();
+      // 传入当前模型精度，让设置页显示按精度扣除常驻权重后的 smartFrames
+      const settings = loadSettings();
+      return getVocoderChunkFramesInfo(settings.modelPrecision);
     } catch (err) {
       console.error('[Main] Failed to get vocoder chunk frames info:', err);
       return { gpuPhase: 'none', smartFrames: 1008, bestVramBytes: 0, bestGpuName: null };

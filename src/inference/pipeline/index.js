@@ -1093,7 +1093,8 @@ class OnnxSVSPipeline {
         try {
             const { loadSettings } = require('../../main/settings');
             const settings = loadSettings();
-            return getEffectiveVocoderChunkFrames(settings.vocoderChunkMode, settings.vocoderChunkFrames);
+            // 传入当前模型精度，让 smart 分片按精度扣除常驻权重（FP32≈2.9GB / FP16≈1.4GB / INT8≈0.96GB）
+            return getEffectiveVocoderChunkFrames(settings.vocoderChunkMode, settings.vocoderChunkFrames, this._modelPrecision);
         } catch (e) {
             return 0; // 0 → 回退到 VOCODER_CHUNK_FRAMES 默认值
         }
