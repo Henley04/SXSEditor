@@ -88,6 +88,24 @@ npm run make              # Create distributables
 
 Requires Node.js >= 18, npm >= 9.
 
+### CLI Debug Mode
+
+A lightweight CLI for agent debugging — verify functionality and print logs without launching the GUI.
+
+```bash
+npm run cli -- help              # Show all commands
+npm run cli -- version           # Print build info
+npm run cli -- info              # Print app/runtime/path info
+npm run cli -- gpu               # Detect GPU / DirectML devices
+npm run cli -- models            # List ONNX models, mark missing required
+npm run cli -- settings          # Dump current settings.json
+npm run cli -- init-pipeline     # Initialize SVS pipeline (verifies models load)
+npm run cli -- synth             # Run a minimal synthesis, print audio stats
+npm run cli -- synth --steps 4 --out out.wav   # Synthesize and write WAV
+```
+
+Exit codes: 0 = success, 1 = runtime error, 2 = bad args.
+
 ### Tech Stack
 
 Electron + Webpack, ONNX Runtime Node (DirectML) + ONNX Runtime Web (WebNN), Vanilla JS + HTML5 Canvas, Mocha + Chai + Sinon.
@@ -173,6 +191,24 @@ npm run make              # 生成安装包
 
 需要 Node.js >= 18，npm >= 9。
 
+### CLI 调试模式
+
+为 agent 调试提供的轻量 CLI —— 不启动 GUI，仅验证功能并输出日志。
+
+```bash
+npm run cli -- help              # 显示所有命令
+npm run cli -- version           # 输出构建信息
+npm run cli -- info              # 输出应用/运行时/路径信息
+npm run cli -- gpu               # 检测 GPU / DirectML 设备
+npm run cli -- models            # 列出 ONNX 模型，标记缺失的必需模型
+npm run cli -- settings          # 输出当前 settings.json
+npm run cli -- init-pipeline     # 初始化 SVS 管线（验证全部模型可加载）
+npm run cli -- synth             # 运行最小合成，输出音频统计
+npm run cli -- synth --steps 4 --out out.wav   # 合成并写入 WAV
+```
+
+退出码：0 = 成功，1 = 运行时错误，2 = 参数错误。
+
 ### 技术栈
 
 Electron + Webpack，ONNX Runtime Node（DirectML）+ ONNX Runtime Web（WebNN），Vanilla JS + HTML5 Canvas，Mocha + Chai + Sinon。
@@ -253,6 +289,24 @@ npm run make              # 配布物作成
 ```
 
 Node.js >= 18、npm >= 9 が必要です。
+
+### CLI デバッグモード
+
+agent デバッグ用の軽量 CLI —— GUI を起動せずに機能検証とログ出力を行います。
+
+```bash
+npm run cli -- help              # 全コマンド表示
+npm run cli -- version           # ビルド情報出力
+npm run cli -- info              # アプリ/ランタイム/パス情報
+npm run cli -- gpu               # GPU / DirectML デバイス検出
+npm run cli -- models            # ONNX モデル一覧、必須モデルの欠落確認
+npm run cli -- settings          # settings.json ダンプ
+npm run cli -- init-pipeline     # SVS パイプライン初期化（モデル読込検証）
+npm run cli -- synth             # 最小合成を実行し音声統計を出力
+npm run cli -- synth --steps 4 --out out.wav   # 合成して WAV 書き出し
+```
+
+終了コード：0 = 成功、1 = ランタイムエラー、2 = 引数エラー。
 
 ### 技術スタック
 

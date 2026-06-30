@@ -37,6 +37,31 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
+// ---- CLI 调试模式 ----
+// 检测 --cli 标志，进入命令行调试模式（跳过 GUI/窗口/IPC 注册）。
+// agent 可通过 `electron . --cli <command>` 验证功能并查看日志。
+if (process.argv.includes('--cli')) {
+  // CLI 模式不获取单实例锁（agent 可能并行触发多个命令）
+  const { runCli } = require('./main/cli');
+  app.whenReady().then(async () => {
+    let exitCode = 0;
+    try {
+      exitCode = await runCli(process.argv.slice(2));
+    } catch (e) {
+      process.stderr.write(`[CLI FATAL] ${e.stack || e.message}\n`);
+      exitCode = 1;
+    }
+    // app.exit() 立即退出，不触发 before-quit 清理（CLI 命令自行 dispose 管线）
+    try { app.exit(exitCode); } catch (_) { process.exit(exitCode); }
+  }).catch((err) => {
+    process.stderr.write(`[CLI FATAL] app.whenReady failed: ${err.stack || err.message}\n`);
+    app.exit(1);
+  });
+  // 阻止后续 GUI 启动代码执行（CLI 模式只走 whenReady 分支）
+  module.exports = {};
+  return;
+}
+
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
