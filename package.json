@@ -16,7 +16,9 @@
     "lint": "eslint src test scripts *.config.js --ext .js",
     "test": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --reporter spec",
     "test:coverage": "nyc --reporter=text --reporter=html npm test",
-    "test:watch": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --watch"
+    "test:watch": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --watch",
+    "cli": "electron-forge start -- --cli",
+    "cli:help": "electron-forge start -- --cli help"
   },
   "keywords": [
     "electron",
