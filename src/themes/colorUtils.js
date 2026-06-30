@@ -4,6 +4,10 @@
 
 function parseHex(hex) {
     let h = hex.replace('#', '').trim();
+    // Reject non-hex characters early so invalid input like '#zzzzzz' returns
+    // null (and callers fall back to the default 0.5 luminance) instead of
+    // producing NaN channels.
+    if (!/^[0-9a-fA-F]*$/.test(h)) return null;
     if (h.length === 3) h = h.split('').map(c => c + c).join('');
     if (h.length === 4) h = h.split('').map(c => c + c).join('');
     if (h.length === 6) h += 'ff';
