@@ -31,6 +31,9 @@
                 <div class="sidebar-item" data-target="section-npu">
                     <span data-i18n="settings.npuInference">NPU 推理设置</span>
                 </div>
+                <div class="sidebar-item" data-target="section-vocoder-chunk">
+                    <span data-i18n="settings.vocoderChunkTitle">Vocoder 分片设置</span>
+                </div>
 
                 <div class="sidebar-category" data-i18n="settings.catAudio">音频</div>
                 <div class="sidebar-item" data-target="section-audio">
@@ -196,6 +199,36 @@
                 <div class="setting-group hidden" id="batchSizeDisabledHint">
                     <div class="info-box">
                         <span data-i18n="settings.batchSizeDisabledHint"></span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Vocoder Chunk Settings -->
+            <div class="settings-section hidden" id="section-vocoder-chunk">
+                <p class="section-desc" data-i18n="settings.vocoderChunkDesc">长音频合成时，vocoder 按分片逐段推理再交叉淡入淡出拼接。分片越大显存占用越高、单次推理越慢；分片越小越省显存但拼接开销增加。</p>
+                <div class="setting-group">
+                    <label data-i18n="settings.vocoderChunkMode">分片长度模式</label>
+                    <div class="device-mode-radios">
+                        <label class="device-mode-radio">
+                            <input type="radio" name="vocoderChunkMode" value="smart" checked>
+                            <span class="radio-label" data-i18n="settings.vocoderChunkSmart">智能分配</span>
+                            <span class="radio-desc" data-i18n="settings.vocoderChunkSmartDesc">依据显存大小自动选择最合适的分片长度（&lt;2GB→512, &lt;4GB→768, &lt;8GB→1008, ≥8GB→1536）</span>
+                        </label>
+                        <label class="device-mode-radio">
+                            <input type="radio" name="vocoderChunkMode" value="manual">
+                            <span class="radio-label" data-i18n="settings.vocoderChunkManual">手动设置</span>
+                            <span class="radio-desc" data-i18n="settings.vocoderChunkManualDesc">手动指定分片长度（帧），需要 8 的倍数，范围 256~2048</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="setting-group hidden" id="vocoderChunkManualGroup">
+                    <label for="vocoderChunkFrames"><span data-i18n="settings.vocoderChunkFrames">分片长度（帧）</span> <span id="vocoderChunkFramesValue" class="volume-display">1008</span></label>
+                    <input type="range" id="vocoderChunkFrames" min="256" max="2048" value="1008" step="8">
+                    <p class="hint" data-i18n="settings.vocoderChunkFramesHint">分片长度必须是 8 的倍数。值越大显存占用越高但拼接次数越少；值越小越省显存但拼接开销增加。默认 1008 帧（约 20 秒音频）。</p>
+                </div>
+                <div class="setting-group" id="vocoderChunkSmartInfo">
+                    <div class="info-box">
+                        <span id="vocoderChunkSmartText" data-i18n="settings.vocoderChunkSmartInfo">等待 GPU 检测完成后显示智能分配结果</span>
                     </div>
                 </div>
             </div>

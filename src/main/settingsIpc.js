@@ -1,6 +1,6 @@
 const { ipcMain, dialog } = require('electron');
 const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, invalidateSettingsCache } = require('./settings');
-const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateGPUCache, invalidateNPUCache } = require('./gpuInfo');
+const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateNPUCache, getVocoderChunkFramesInfo } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
 const { enumerateDMLDevices } = require('../inference/pipeline');
 const { getSvsPipeline, resetSvsPipeline } = require('./svsIpc');
@@ -73,6 +73,17 @@ function registerSettingsIpc() {
     } catch (err) {
       console.error('[Main] Failed to get current hardware info:', err);
       return null;
+    }
+  });
+
+  // 智能分配的 vocoder 分片帧数（设置页 UI 显示用）
+  // GPU 检测完成后基于最大显存计算，启动前返回默认值。
+  ipcMain.handle('settings:getVocoderChunkFramesInfo', async () => {
+    try {
+      return getVocoderChunkFramesInfo();
+    } catch (err) {
+      console.error('[Main] Failed to get vocoder chunk frames info:', err);
+      return { gpuPhase: 'none', smartFrames: 1008, bestVramBytes: 0, bestGpuName: null };
     }
   });
 
@@ -175,8 +186,9 @@ function registerSettingsIpc() {
       resetRosvot();
     }
 
-    invalidateDMLDevices();
-    invalidateGPUCache();
+    // 硬件探测仅在应用启动后执行一次并缓存复用，
+    // 保存设置时不再失效 GPU/DML 缓存（避免运行时重复触发 GPU 检测与 DML 探针推理，
+    // 同时规避检测与推理并发提交命令流导致 DXGI_ERROR_DEVICE_REMOVED 的风险）。
 
     return { success: true };
   });

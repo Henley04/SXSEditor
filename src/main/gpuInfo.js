@@ -1,5 +1,6 @@
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
+const { VOCODER_CHUNK_FRAMES } = require('../inference/shared/constants.js');
 
 // GPU 信息缓存（两阶segment(s)）
 let _gpuInfoCache = null;      // 当前使用的完整数据
@@ -16,6 +17,86 @@ const VRAM_USAGE_TTL = 3000;
 // NPU 检测缓存
 let _npuCache = null;
 let _npuPending = null;
+
+// ===== Vocoder 分片长度（依据显存智能分配） =====
+// 启动后依据检测结果计算一次，运行时不再重新探测硬件，直接复用此缓存。
+let _vocoderChunkFramesCache = null;
+const MIN_VOCODER_CHUNK_FRAMES = 256;
+const MAX_VOCODER_CHUNK_FRAMES = 2048;
+
+/**
+ * 依据显存大小（字节）计算推荐的 vocoder 分片帧数。
+ * 显存越大单次推理可处理的 mel 帧数越多，减少长音频的分片次数与 crossfade 开销；
+ * 显存较小则缩小分片以避免 OOM。所有返回值对齐到 8 的倍数（与 VOCODER_OVERLAP_FRAMES 兼容）。
+ */
+function computeVocoderChunkFramesFromVRAM(vramBytes) {
+  if (!vramBytes || vramBytes <= 0) return VOCODER_CHUNK_FRAMES; // 未知显存 → 默认值
+  const gb = vramBytes / (1024 * 1024 * 1024);
+  let frames;
+  if (gb < 2) frames = 512;        // 核显/低显存：~10.2s
+  else if (gb < 4) frames = 768;  // 入门独显：~15.4s
+  else if (gb < 8) frames = 1008; // 主流独显：~20.2s（与原默认一致）
+  else frames = 1536;             // 大显存：~30.7s，减少分片数
+  frames = Math.round(frames / 8) * 8;
+  return Math.max(MIN_VOCODER_CHUNK_FRAMES, Math.min(MAX_VOCODER_CHUNK_FRAMES, frames));
+}
+
+/**
+ * 从已缓存的 GPU 控制器中选取最大显存并计算 vocoder 分片帧数。
+ * 懒计算：首次调用时若缓存为空且 _gpuInfoCache 可用则填充，之后直接复用。
+ */
+function getCachedVocoderChunkFrames() {
+  if (_vocoderChunkFramesCache) return _vocoderChunkFramesCache;
+  if (!_gpuInfoCache) return VOCODER_CHUNK_FRAMES;
+  let bestVramBytes = 0;
+  for (const c of _gpuInfoCache) {
+    const vramBytes = ((c && (c.memoryTotal || c.vram)) || 0) * 1024 * 1024;
+    if (vramBytes > bestVramBytes) bestVramBytes = vramBytes;
+  }
+  _vocoderChunkFramesCache = computeVocoderChunkFramesFromVRAM(bestVramBytes);
+  console.log(`[Main] Vocoder chunk frames from VRAM: ${_vocoderChunkFramesCache} (bestVram=${(bestVramBytes / (1024 * 1024 * 1024)).toFixed(2)}GB)`);
+  return _vocoderChunkFramesCache;
+}
+
+/**
+ * 获取生效的 vocoder 分片帧数。
+ * @param {'smart'|'manual'} mode - 分片分配模式
+ * @param {number} manualFrames - manual 模式下用户指定的帧数
+ */
+function getEffectiveVocoderChunkFrames(mode, manualFrames) {
+  if (mode === 'manual') {
+    const v = parseInt(manualFrames);
+    if (Number.isFinite(v) && v > 0) {
+      return Math.max(MIN_VOCODER_CHUNK_FRAMES, Math.min(MAX_VOCODER_CHUNK_FRAMES, v));
+    }
+  }
+  return getCachedVocoderChunkFrames();
+}
+
+/**
+ * 返回 vocoder 分片信息（供设置页 UI 显示智能分配结果）。
+ * GPU 检测完成前 smartFrames 为默认值，gpuPhase='none'；完成后返回实际计算值。
+ * @returns {{ gpuPhase: string, smartFrames: number, bestVramBytes: number, bestGpuName: string|null }}
+ */
+function getVocoderChunkFramesInfo() {
+  let bestVramBytes = 0;
+  let bestGpuName = null;
+  if (_gpuInfoCache && _gpuInfoCache.length > 0) {
+    for (const c of _gpuInfoCache) {
+      const vramBytes = ((c && (c.memoryTotal || c.vram)) || 0) * 1024 * 1024;
+      if (vramBytes > bestVramBytes) {
+        bestVramBytes = vramBytes;
+        bestGpuName = c?.model || null;
+      }
+    }
+  }
+  return {
+    gpuPhase: _gpuPhase,
+    smartFrames: getCachedVocoderChunkFrames(),
+    bestVramBytes,
+    bestGpuName,
+  };
+}
 
 /**
  * 统一设备分类函数 — 与 nativeSvsPipeline.js 中的 classifyDevice 保持同步
@@ -84,6 +165,8 @@ function startGPUPreload() {
           _gpuInfoCache = msg.data;
           _gpuPhase = 'full';
           console.log(`[Main] GPU full detection complete (systeminformation): ${msg.data.length}  device(s)`);
+          // 依据显存预计算 vocoder 分片帧数（一次性，运行时复用）
+          try { getCachedVocoderChunkFrames(); } catch (_) {}
           if (!settled) { settled = true; resolve(); }
         } else if (msg.phase === 'error') {
           console.warn('[Main] GPU detection failed:', msg.error);
@@ -154,6 +237,8 @@ async function ensureGPUInfo(waitComplete = false) {
       };
     });
     _gpuPhase = 'full';
+    // 依据显存预计算 vocoder 分片帧数（一次性，运行时复用）
+    try { getCachedVocoderChunkFrames(); } catch (_) {}
   } catch (e) {
     _gpuInfoCache = [];
   }
@@ -214,6 +299,7 @@ function invalidateGPUCache() {
   _gpuInfoCache = null;
   _gpuInfoFast = null;
   _gpuPhase = 'none';
+  _vocoderChunkFramesCache = null;
 }
 
 /**
@@ -267,4 +353,8 @@ module.exports = {
   invalidateGPUCache,
   invalidateNPUCache,
   queryGPUVRAMUsage,
+  computeVocoderChunkFramesFromVRAM,
+  getCachedVocoderChunkFrames,
+  getEffectiveVocoderChunkFrames,
+  getVocoderChunkFramesInfo,
 };

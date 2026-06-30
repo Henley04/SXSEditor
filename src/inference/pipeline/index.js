@@ -13,6 +13,7 @@ const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram } 
 const { AudioSegmentation } = require('./audioSegmentation');
 const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils');
 const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
+const { getEffectiveVocoderChunkFrames } = require('../../main/gpuInfo');
 
 // Module-level constants
 // JP-specific models that must be swapped from the JP directory when
@@ -1076,10 +1077,26 @@ class OnnxSVSPipeline {
     async _runVocoderChunked(melData, totalFrames, onChunkComplete = null) {
         // Vocoder is loaded via DML (dynamic shapes), never use static shape padding
         // SiFiGAN 双输入：传入 vocoderType、F0 序列、stats 缺失标志；default vocoder 仅用 mel
+        const chunkFrames = this._resolveVocoderChunkFrames();
         return this._postprocessing.runVocoderChunked(
             this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
-            this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete
+            this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames
         );
+    }
+
+    /**
+     * 依据当前设置（vocoderChunkMode: smart/manual）解析生效的 vocoder 分片帧数。
+     * - smart: 复用启动时基于显存计算并缓存的值（不触发新的 GPU 探测）
+     * - manual: 使用用户手动指定的帧数（clamp 到 [256, 2048]）
+     */
+    _resolveVocoderChunkFrames() {
+        try {
+            const { loadSettings } = require('../../main/settings');
+            const settings = loadSettings();
+            return getEffectiveVocoderChunkFrames(settings.vocoderChunkMode, settings.vocoderChunkFrames);
+        } catch (e) {
+            return 0; // 0 → 回退到 VOCODER_CHUNK_FRAMES 默认值
+        }
     }
 
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
@@ -1164,6 +1181,7 @@ class OnnxSVSPipeline {
             isFP16: this.isFP16,
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
+            vocoderChunkFrames: this._resolveVocoderChunkFrames(),
         };
         return requestSynthesis(wc, fullParams, onProgress, { onChunkAudio });
     }
@@ -1225,6 +1243,7 @@ class OnnxSVSPipeline {
             isFP16: this.isFP16,
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
+            vocoderChunkFrames: this._resolveVocoderChunkFrames(),
         }));
         return requestSynthesis(wc, fullParams, onProgress, {
             timeoutMessage: 'WebNN batch synthesis timeout',

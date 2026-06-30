@@ -63,6 +63,8 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | Multi-track Timeline | Drag-anddrop fragment arrangement |
 | WASAPI Audio | Shared and exclusive mode output |
 | GPU Acceleration | DirectML (NVIDIA/AMD/Intel), NPU (WebNN) |
+| One-shot Hardware Detection | GPU/NPU/DML enumeration runs once after app startup; results cached and reused at runtime (no re-probing during synthesis) |
+| Smart Vocoder Chunk Sizing | Vocoder chunk size auto-allocated from VRAM (<2GB→512, <4GB→768, <8GB→1008, ≥8GB→1536); manual override available in settings |
 | Model Auto-Download | Chunked parallel download from ModelScope |
 | Model Precision | FP32, FP16, FP8, INT8, INT8-NPU |
 | Themes | Hot-swappable design token system |
@@ -166,6 +168,8 @@ macOS / Linux 用户请从源码构建。
 | 多轨时间线 | 拖拽排列分片 |
 | WASAPI 音频 | 共享和独占模式输出 |
 | GPU 加速 | DirectML（NVIDIA/AMD/Intel）、NPU（WebNN） |
+| 一次性硬件探测 | 应用启动后仅执行一次 GPU/NPU/DML 设备枚举，结果缓存复用，运行时不再重复探测（避免与推理并发提交命令流） |
+| Vocoder 分片智能分配 | 依据显存大小自动选择 Vocoder 分片长度（&lt;2GB→512, &lt;4GB→768, &lt;8GB→1008, ≥8GB→1536）；可在设置中切换为手动设置 |
 | 模型自动下载 | 从 ModelScope 分片并行下载 |
 | 模型精度 | FP32、FP16、FP8、INT8、INT8-NPU |
 | 主题系统 | 热切换设计令牌系统 |
@@ -265,6 +269,8 @@ macOS / Linux：ソースからビルドしてください。
 | マルチトラックタイムライン | ドラッグ＆ドロップでフラグメント配置 |
 | WASAPI オーディオ | 共有/排他モード出力 |
 | GPU アクセラレーション | DirectML（NVIDIA/AMD/Intel）、NPU（WebNN） |
+| 1 回限りのハードウェア検出 | アプリ起動後に GPU/NPU/DML デバイス列挙を 1 回だけ実行し、結果をキャッシュして実行時に再利用（合成中の再検出を回避） |
+| Vocoder チャンクサイズ自動割当 | VRAM サイズに基づき Vocoder チャンクサイズを自動選択（&lt;2GB→512, &lt;4GB→768, &lt;8GB→1008, ≥8GB→1536）；設定で手動指定にも切替可能 |
 | モデル自動ダウンロード | ModelScope からチャンク並列ダウンロード |
 | モデル精度 | FP32、FP16、FP8、INT8、INT8-NPU |
 | テーマ | ホットスワップ対応デザイントークンシステム |

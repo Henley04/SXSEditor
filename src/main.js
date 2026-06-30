@@ -234,12 +234,26 @@ app.whenReady().then(() => {
       })();
     }
 
-    // 2. 后台执行硬件检测和设备校验（不阻塞窗口显示）
+    // 2. 后台执行一次性硬件检测和设备校验（不阻塞窗口显示）
+    //    GPU 探测仅在应用完全启动后开始一次，完成后结果缓存复用，运行时不再重复检查。
     (async () => {
       try {
+        // 启动一次性 GPU 信息加载（worker 两阶段：WMI 快速 → systeminformation 完整）
+        startGPUPreload();
         // 等待 NPU 检测完成（需要渲染进程处理 WebNN IPC）
         const { npuAvailable } = await detectAllHardware();
         console.log(`[Main] Hardware detection complete: NPU ${npuAvailable ? 'available' : 'not available'}`);
+
+        // DML 设备枚举（一次性，结果缓存复用，运行时不再重复探测）
+        const controllers = await ensureGPUInfo();
+        try {
+          const devices = await enumerateDMLDevices(getModelDir(), controllers);
+          setCachedDMLDevices(devices);
+          setSettingsCachedDMLDevices(devices);
+          console.log(`[Main] GPU device detection complete: ${devices.length}  device(s)`);
+        } catch (err) {
+          console.warn('[Main] GPU device preload failed:', err.message);
+        }
 
         const settings = loadSettings();
         const deviceMode = settings.deviceMode || (settings.deviceId !== undefined && settings.deviceId !== null ? 'manual' : 'smart');
@@ -313,17 +327,7 @@ app.whenReady().then(() => {
     })();
   });
 
-  // GPU 预加载（WMI 快速路径，不需要渲染进程）
-  startGPUPreload();
-  ensureGPUInfo().then(controllers => {
-    return enumerateDMLDevices(getModelDir(), controllers);
-  }).then(devices => {
-    setCachedDMLDevices(devices);
-    setSettingsCachedDMLDevices(devices);
-    console.log(`[Main] GPU device preload complete: ${devices.length}  device(s)`);
-  }).catch(err => {
-    console.warn('[Main] GPU device preload failed:', err.message);
-  });
+  // GPU 硬件探测已合并到上方 did-finish-load 处理器中（应用完全启动后一次性执行并缓存复用）。
   // Model检查延后执行，不阻塞窗口显示
   checkAndDownloadModels().catch(err => {
     console.warn('[Main] Model check failed:', err.message);
