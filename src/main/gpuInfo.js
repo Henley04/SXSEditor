@@ -20,23 +20,51 @@ let _npuPending = null;
 
 // ===== Vocoder 分片长度（依据显存智能分配） =====
 // 启动后依据检测结果计算一次，运行时不再重新探测硬件，直接复用此缓存。
-let _vocoderChunkFramesCache = null;
+// 缓存按精度独立存储：不同精度的常驻权重差异巨大（FP32≈2.9GB vs INT8≈0.96GB），
+// 同一显卡在不同精度下可用显存余量不同，必须分别计算。
+const _vocoderChunkFramesCacheByPrecision = {};
 const MIN_VOCODER_CHUNK_FRAMES = 256;
 const MAX_VOCODER_CHUNK_FRAMES = 2048;
 
+// 各精度下常驻 GPU 显存的模型权重估算（MB）。
+// 包含 diff_step + vocoder + 6 个 encoder/辅助模型，数据来自 onnx_models/{precision}/README.md。
+// 注意：diff_step 在 vocoder 推理阶段不释放（_synthesizeSegment 连续执行 diffusion → vocoder），
+// 因此 vocoder 单片峰值显存 = 常驻权重 + vocoder 激活工作区，必须从 VRAM 中扣除常驻部分。
+const RESIDENT_WEIGHT_MB = {
+  'fp32':     2906,  // 1772 + 1054 + ~80
+  'fp16':     1446,  // 887  + 519  + ~40
+  'fp8':      1446,  // 保守取 fp16（fp8 EP 开销相似）
+  'int8':      960,  // 445  + 485  + ~30
+  'int8-npu':  960,  // 同 int8
+};
+const DEFAULT_RESIDENT_PRECISION = 'fp16'; // 启动时精度未知，用 fp16 保守估算
+
 /**
- * 依据显存大小（字节）计算推荐的 vocoder 分片帧数。
- * 显存越大单次推理可处理的 mel 帧数越多，减少长音频的分片次数与 crossfade 开销；
- * 显存较小则缩小分片以避免 OOM。所有返回值对齐到 8 的倍数（与 VOCODER_OVERLAP_FRAMES 兼容）。
+ * 依据显存大小（字节）与模型精度计算推荐的 vocoder 分片帧数。
+ *
+ * 与旧版仅按 VRAM 总量分档不同，本函数先扣除常驻权重得到"可用显存"，
+ * 再按可用显存分档。这样在 FP32 + 中低显存显卡上会自动缩小分片，
+ * 避免 vocoder 激活工作区峰值突破显存上限触发 887A0006。
+ *
+ * 大显存档位由 1536 保守化为 1280（仍比默认 1008 大，减少分片数但降低峰值风险）。
+ *
+ * 所有返回值对齐到 8 的倍数（与 VOCODER_OVERLAP_FRAMES 兼容）。
  */
-function computeVocoderChunkFramesFromVRAM(vramBytes) {
+function computeVocoderChunkFramesFromVRAM(vramBytes, precision = DEFAULT_RESIDENT_PRECISION) {
   if (!vramBytes || vramBytes <= 0) return VOCODER_CHUNK_FRAMES; // 未知显存 → 默认值
-  const gb = vramBytes / (1024 * 1024 * 1024);
+  const residentMb = RESIDENT_WEIGHT_MB[precision] || RESIDENT_WEIGHT_MB[DEFAULT_RESIDENT_PRECISION];
+  const residentBytes = residentMb * 1024 * 1024;
+  const availableBytes = vramBytes - residentBytes;
+  // 常驻权重已超 VRAM：仅给最小片，避免加载阶段就 OOM
+  if (availableBytes <= 0) return MIN_VOCODER_CHUNK_FRAMES;
+  const availGb = availableBytes / (1024 * 1024 * 1024);
   let frames;
-  if (gb < 2) frames = 512;        // 核显/低显存：~10.2s
-  else if (gb < 4) frames = 768;  // 入门独显：~15.4s
-  else if (gb < 8) frames = 1008; // 主流独显：~20.2s（与原默认一致）
-  else frames = 1536;             // 大显存：~30.7s，减少分片数
+  // 分档基于"可用显存"（VRAM - 常驻权重），阈值考虑 vocoder 激活工作区峰值随 seq_len 近似线性增长
+  if (availGb < 0.5) frames = 256;       // 极紧张：常驻几乎吃满，仅最小片
+  else if (availGb < 1.5) frames = 512;   // 紧张：~10.2s
+  else if (availGb < 3.0) frames = 768;    // 一般：~15.4s
+  else if (availGb < 5.0) frames = 1008;  // 宽裕：~20.2s（与默认值一致）
+  else frames = 1280;                      // 很宽裕：~25.6s（原 1536 保守化）
   frames = Math.round(frames / 8) * 8;
   return Math.max(MIN_VOCODER_CHUNK_FRAMES, Math.min(MAX_VOCODER_CHUNK_FRAMES, frames));
 }
@@ -44,41 +72,49 @@ function computeVocoderChunkFramesFromVRAM(vramBytes) {
 /**
  * 从已缓存的 GPU 控制器中选取最大显存并计算 vocoder 分片帧数。
  * 懒计算：首次调用时若缓存为空且 _gpuInfoCache 可用则填充，之后直接复用。
+ * 缓存按精度独立存储（_vocoderChunkFramesCacheByPrecision[precision]），
+ * 同一显卡在不同精度下会得到不同的分片帧数。
+ * @param {string} [precision] - 模型精度（fp32/fp16/int8/int8-npu/fp8），缺省时按 fp16 保守估算
  */
-function getCachedVocoderChunkFrames() {
-  if (_vocoderChunkFramesCache) return _vocoderChunkFramesCache;
+function getCachedVocoderChunkFrames(precision = DEFAULT_RESIDENT_PRECISION) {
+  if (_vocoderChunkFramesCacheByPrecision[precision] != null) {
+    return _vocoderChunkFramesCacheByPrecision[precision];
+  }
   if (!_gpuInfoCache) return VOCODER_CHUNK_FRAMES;
   let bestVramBytes = 0;
   for (const c of _gpuInfoCache) {
     const vramBytes = ((c && (c.memoryTotal || c.vram)) || 0) * 1024 * 1024;
     if (vramBytes > bestVramBytes) bestVramBytes = vramBytes;
   }
-  _vocoderChunkFramesCache = computeVocoderChunkFramesFromVRAM(bestVramBytes);
-  console.log(`[Main] Vocoder chunk frames from VRAM: ${_vocoderChunkFramesCache} (bestVram=${(bestVramBytes / (1024 * 1024 * 1024)).toFixed(2)}GB)`);
-  return _vocoderChunkFramesCache;
+  const frames = computeVocoderChunkFramesFromVRAM(bestVramBytes, precision);
+  _vocoderChunkFramesCacheByPrecision[precision] = frames;
+  console.log(`[Main] Vocoder chunk frames from VRAM: ${frames} (precision=${precision}, bestVram=${(bestVramBytes / (1024 * 1024 * 1024)).toFixed(2)}GB, resident=${RESIDENT_WEIGHT_MB[precision] || RESIDENT_WEIGHT_MB[DEFAULT_RESIDENT_PRECISION]}MB)`);
+  return frames;
 }
 
 /**
  * 获取生效的 vocoder 分片帧数。
  * @param {'smart'|'manual'} mode - 分片分配模式
  * @param {number} manualFrames - manual 模式下用户指定的帧数
+ * @param {string} [precision] - 模型精度（仅 smart 模式生效，用于按精度扣除常驻权重）
  */
-function getEffectiveVocoderChunkFrames(mode, manualFrames) {
+function getEffectiveVocoderChunkFrames(mode, manualFrames, precision) {
   if (mode === 'manual') {
     const v = parseInt(manualFrames);
     if (Number.isFinite(v) && v > 0) {
       return Math.max(MIN_VOCODER_CHUNK_FRAMES, Math.min(MAX_VOCODER_CHUNK_FRAMES, v));
     }
   }
-  return getCachedVocoderChunkFrames();
+  return getCachedVocoderChunkFrames(precision);
 }
 
 /**
  * 返回 vocoder 分片信息（供设置页 UI 显示智能分配结果）。
  * GPU 检测完成前 smartFrames 为默认值，gpuPhase='none'；完成后返回实际计算值。
+ * @param {string} [precision] - 模型精度，用于按精度计算 smartFrames
  * @returns {{ gpuPhase: string, smartFrames: number, bestVramBytes: number, bestGpuName: string|null }}
  */
-function getVocoderChunkFramesInfo() {
+function getVocoderChunkFramesInfo(precision) {
   let bestVramBytes = 0;
   let bestGpuName = null;
   if (_gpuInfoCache && _gpuInfoCache.length > 0) {
@@ -92,7 +128,7 @@ function getVocoderChunkFramesInfo() {
   }
   return {
     gpuPhase: _gpuPhase,
-    smartFrames: getCachedVocoderChunkFrames(),
+    smartFrames: getCachedVocoderChunkFrames(precision),
     bestVramBytes,
     bestGpuName,
   };
@@ -299,7 +335,10 @@ function invalidateGPUCache() {
   _gpuInfoCache = null;
   _gpuInfoFast = null;
   _gpuPhase = 'none';
-  _vocoderChunkFramesCache = null;
+  // 清空所有精度的分片缓存（按精度独立存储）
+  for (const k of Object.keys(_vocoderChunkFramesCacheByPrecision)) {
+    delete _vocoderChunkFramesCacheByPrecision[k];
+  }
 }
 
 /**
