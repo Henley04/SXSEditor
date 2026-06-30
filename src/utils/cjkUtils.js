@@ -1,7 +1,9 @@
 /**
  * 判断字符是否为 CJK（中日韩）字符
+ * 非字符串/空输入返回 false，避免在调用方传入 null/undefined 时抛错。
  */
 function isCJK(char) {
+  if (typeof char !== 'string' || char.length === 0) return false;
   const code = char.codePointAt(0) || 0;
   return (
     (code >= 0x4E00 && code <= 0x9FFF) ||
