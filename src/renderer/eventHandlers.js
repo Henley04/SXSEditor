@@ -144,12 +144,14 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
     const newDuration = Math.max(0.25, state.dragState.originalDuration + dx);
     trackManager.updateFragment(state.dragState.fragment.id, { duration: Math.round(newDuration * 4) / 4 });
   } else if (state.dragState.type === 'resize-left') {
+    const originalEnd = state.dragState.originalStart + state.dragState.originalDuration;
     const newStart = state.dragState.originalStart + dx;
-    const newDuration = state.dragState.originalDuration - dx;
-    if (newStart >= 0 && newDuration >= 0.25) {
+    const alignedStart = Math.max(0, Math.round(newStart * 4) / 4);
+    const newDuration = originalEnd - alignedStart;
+    if (alignedStart >= 0 && newDuration >= 0.25) {
       trackManager.updateFragment(state.dragState.fragment.id, {
-        startTime: Math.round(newStart * 4) / 4,
-        duration: Math.round(newDuration * 4) / 4,
+        startTime: alignedStart,
+        duration: newDuration,
       });
     }
   }
@@ -158,6 +160,13 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
     state.renderPending = true;
     requestAnimationFrame(() => {
       renderFragmentTimeline();
+      if (window.electronAPI?.updateFragmentBounds && state.dragState) {
+        const frag = state.dragState.fragment;
+        window.electronAPI.updateFragmentBounds(frag.id, {
+          startTime: frag.startTime,
+          duration: frag.duration,
+        });
+      }
       state.renderPending = false;
     });
   }
