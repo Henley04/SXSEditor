@@ -279,10 +279,9 @@ jobs:
             Download `sxsinstaller_x64_no_models.exe` below and run it.
             ONNX models are auto-downloaded on first launch.
 
-            ### Direct download (always points to latest)
+            ### Direct download
 
-            - GitHub: https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe
-            - GitCode mirror: https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe
+            - GitHub: ${{ steps.version.outputs.is_release == 'true' && 'https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe' || format('https://github.com/Henley04/SXSEditor/releases/download/{0}/sxsinstaller_x64_no_models.exe', steps.version.outputs.tag) }}
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.version.outputs.make_latest }}
           files: inno/${{ env.INSTALLER_NAME }}
