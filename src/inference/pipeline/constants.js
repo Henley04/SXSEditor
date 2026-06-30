@@ -2,6 +2,7 @@
 const {
     SAMPLE_RATE,
     HOP_SIZE,
+    SIFIGAN_HOP_SIZE,
     MEL_DIM,
     EMBED_DIM,
     COND_DIM,
@@ -115,6 +116,7 @@ for (let i = 0; i < N_FFT; i++) {
 module.exports = {
     SAMPLE_RATE,
     HOP_SIZE,
+    SIFIGAN_HOP_SIZE,
     MEL_DIM,
     EMBED_DIM,
     COND_DIM,
