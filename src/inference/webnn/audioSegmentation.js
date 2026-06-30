@@ -19,14 +19,17 @@ import { createFloatTensor, outputToFloat32, padToLength } from './utils.js';
  * @param {string} params.floatType - 'float32' 或 'float16'
  * @param {number} params.npuVocoderBatchSize - vocoder 批量大小（已忽略，强制为 1，保留参数向后兼容）
  * @param {boolean} params.useStaticShapes - 是否使用 NPU 静态形状
+ * @param {number} [params.vocoderChunkFrames=0] - 每段 vocoder 的帧数（仅 useStaticShapes=false 时生效；<=0 回退 VOCODER_CHUNK_FRAMES）
+ *        由设置项「智能分配/手动设置」决定，pipeline 在调用前解析后透传。
  * @param {function} [params.onChunkComplete] - 每个 chunk 完成后的回调，签名 (chunkInfo) => void
  *        chunkInfo = { chunkIndex, sampleOffset, audio: Float32Array, totalSamples, isLast }
  *        audio 为该 chunk 贡献的"已确定"音频段（weightSum=1，可直接播放），按顺序拼接即得完整音频。
  * @returns {{ audioData: Float32Array, vocChunkCount: number, vocPrepTotal: number, vocInferTotal: number, vocPostTotal: number }}
  */
-export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes = false, onChunkComplete = null }) {
+export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes = false, vocoderChunkFrames = 0, onChunkComplete = null }) {
     const totalSamples = totalFrames * HOP_SIZE;
-    const chunkSize = useStaticShapes ? Math.min(VOCODER_CHUNK_FRAMES, NPU_VOCODER_SEQ_LEN) : VOCODER_CHUNK_FRAMES;
+    const effectiveVocChunk = (vocoderChunkFrames && vocoderChunkFrames > 0) ? vocoderChunkFrames : VOCODER_CHUNK_FRAMES;
+    const chunkSize = useStaticShapes ? Math.min(VOCODER_CHUNK_FRAMES, NPU_VOCODER_SEQ_LEN) : effectiveVocChunk;
     const overlapFrames = VOCODER_OVERLAP_FRAMES;
     // 强制串行：忽略 npuVocoderBatchSize，永远 1 个 chunk 一次推理。
     // DML batch 并行会触发 GPU 设备移除（0x887A0006），见文件头注释。

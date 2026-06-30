@@ -18,14 +18,15 @@ import { runSegmentedVocoder } from './audioSegmentation.js';
  * @param {function} [params.onChunkComplete] - chunk 完成回调（流式播放用）
  * @returns {{ audioData: Float32Array, vocTotalMs: number }}
  */
-export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes = false, onChunkComplete = null }) {
+export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes = false, vocoderChunkFrames = 0, onChunkComplete = null }) {
     const totalSamples = totalFrames * HOP_SIZE;
     const tVoc0 = performance.now();
     let audioData;
     let vocChunkCount = 0, vocInferTotal = 0, vocPrepTotal = 0, vocPostTotal = 0;
 
+    const effectiveVocChunk = (vocoderChunkFrames && vocoderChunkFrames > 0) ? vocoderChunkFrames : VOCODER_CHUNK_FRAMES;
     const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : totalFrames;
-    const maxSingleChunk = useStaticShapes ? NPU_VOCODER_SEQ_LEN : VOCODER_CHUNK_FRAMES;
+    const maxSingleChunk = useStaticShapes ? NPU_VOCODER_SEQ_LEN : effectiveVocChunk;
 
     if (totalFrames <= maxSingleChunk) {
         const tVocPrep = performance.now();
@@ -68,7 +69,7 @@ export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBat
         }
     } else {
         // Chunked vocoder（强制串行，runSegmentedVocoder 内部已禁用 batch）
-        const result = await runSegmentedVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes, onChunkComplete });
+        const result = await runSegmentedVocoder({ xtData, totalFrames, floatType, npuVocoderBatchSize, useStaticShapes, vocoderChunkFrames: effectiveVocChunk, onChunkComplete });
         audioData = result.audioData;
         vocChunkCount = result.vocChunkCount;
         vocPrepTotal = result.vocPrepTotal;

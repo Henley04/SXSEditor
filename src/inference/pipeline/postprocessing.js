@@ -468,8 +468,8 @@ class Postprocessing {
      *        chunkInfo = { chunkIndex, sampleOffset, sampleEnd, audio: Float32Array, totalSamples, isLast }
      *        audio 为该 chunk 贡献的"已确定"音频段（weightSum=1，可直接播放），按顺序拼接即得完整音频。
      */
-    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null) {
-        const chunkSize = VOCODER_CHUNK_FRAMES;
+    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0) {
+        const chunkSize = (chunkFrames && chunkFrames > 0) ? chunkFrames : VOCODER_CHUNK_FRAMES;
         const overlapFrames = VOCODER_OVERLAP_FRAMES;
         const totalSamples = totalFrames * HOP_SIZE;
         const output = new Float32Array(totalSamples);

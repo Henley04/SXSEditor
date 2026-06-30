@@ -49,6 +49,12 @@ const npuVocoderBatchSizeSelect = document.getElementById('npuVocoderBatchSize')
 const batchSizeDisabledHint = document.getElementById('batchSizeDisabledHint');
 const vocoderTypeSelect = document.getElementById('vocoderType');
 const vocoderTypeHint = document.getElementById('vocoderTypeHint');
+const vocoderChunkModeRadios = document.querySelectorAll('input[name="vocoderChunkMode"]');
+const vocoderChunkManualGroup = document.getElementById('vocoderChunkManualGroup');
+const vocoderChunkFramesSlider = document.getElementById('vocoderChunkFrames');
+const vocoderChunkFramesValue = document.getElementById('vocoderChunkFramesValue');
+const vocoderChunkSmartInfo = document.getElementById('vocoderChunkSmartInfo');
+const vocoderChunkSmartText = document.getElementById('vocoderChunkSmartText');
 
 // Device mode radio button handlers
 const MODEL_GROUPS = [
@@ -129,6 +135,17 @@ function applySavedSettingsToUI(currentSetting) {
     // Vocoder type (main process may have overridden 'sifigan' -> 'default' at startup)
     vocoderTypeSelect.value = currentSetting.vocoderType === 'sifigan' ? 'sifigan' : 'default';
 
+    // Vocoder chunk mode (smart/manual)
+    const vocoderChunkMode = currentSetting.vocoderChunkMode === 'manual' ? 'manual' : 'smart';
+    const vcRadioToCheck = document.querySelector(`input[name="vocoderChunkMode"][value="${vocoderChunkMode}"]`);
+    if (vcRadioToCheck) vcRadioToCheck.checked = true;
+    updateVocoderChunkModeUI(vocoderChunkMode);
+
+    // Vocoder chunk frames (manual mode)
+    const vcFrames = Number.isFinite(currentSetting.vocoderChunkFrames) ? currentSetting.vocoderChunkFrames : 1008;
+    vocoderChunkFramesSlider.value = vcFrames;
+    vocoderChunkFramesValue.textContent = vcFrames;
+
     // Audio exclusive mode
     const isExclusive = audioOutputModeSelect.value === 'exclusive';
     exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
@@ -180,6 +197,41 @@ function updateBatchSizeState(precision) {
     } else {
         npuDiffBatchSizeSelect.value = '1';
         npuVocoderBatchSizeSelect.value = '1';
+    }
+}
+
+// ==================== Vocoder chunk frames (smart/manual) ====================
+
+function updateVocoderChunkModeUI(mode) {
+    const isManual = mode === 'manual';
+    vocoderChunkManualGroup.classList.toggle('hidden', !isManual);
+    // 智能模式下显示自动分配结果信息框；手动模式下隐藏（用户已自行指定）
+    if (vocoderChunkSmartInfo) {
+        vocoderChunkSmartInfo.classList.toggle('hidden', isManual);
+    }
+}
+
+let _vocoderChunkInfoLoaded = false;
+async function loadVocoderChunkFramesInfo() {
+    if (!window.electronAPI?.getVocoderChunkFramesInfo) return;
+    try {
+        const info = await window.electronAPI.getVocoderChunkFramesInfo();
+        // 检测未完成时不覆盖（保持默认提示文字，等启动后再次刷新）
+        if (info.gpuPhase !== 'full') return;
+        _vocoderChunkInfoLoaded = true;
+        const gb = info.bestVramBytes / (1024 * 1024 * 1024);
+        const gpuName = info.bestGpuName || '';
+        const vramStr = gb > 0 ? `${gb.toFixed(1)}GB` : '未知';
+        const text = t('settings.vocoderChunkSmartResult', {
+            frames: info.smartFrames,
+            vram: vramStr,
+            gpu: gpuName || t('settings.unknownGpu'),
+        });
+        if (vocoderChunkSmartText) {
+            vocoderChunkSmartText.textContent = text;
+        }
+    } catch (err) {
+        console.error('[Settings] Failed to load vocoder chunk frames info:', err);
     }
 }
 
@@ -613,6 +665,11 @@ function collectSettings() {
         npuDiffBatchSize: parseInt(npuDiffBatchSizeSelect.value),
         npuVocoderBatchSize: parseInt(npuVocoderBatchSizeSelect.value),
         vocoderType: vocoderTypeSelect.value,
+        vocoderChunkMode: (() => {
+            const r = document.querySelector('input[name="vocoderChunkMode"]:checked');
+            return r ? r.value : 'smart';
+        })(),
+        vocoderChunkFrames: parseInt(vocoderChunkFramesSlider.value),
     };
 }
 
@@ -746,6 +803,26 @@ vocoderTypeSelect.addEventListener('change', () => {
     }
     applySettings();
 });
+
+// Vocoder chunk mode (smart/manual) and manual frames slider
+vocoderChunkModeRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+        updateVocoderChunkModeUI(radio.value);
+        applySettings();
+    });
+});
+vocoderChunkFramesSlider.addEventListener('input', () => {
+    // 强制对齐到 8 的倍数（与 VOCODER_OVERLAP_FRAMES 兼容）
+    let v = parseInt(vocoderChunkFramesSlider.value);
+    if (!Number.isFinite(v)) v = 1008;
+    v = Math.round(v / 8) * 8;
+    if (v != vocoderChunkFramesSlider.value) {
+        vocoderChunkFramesSlider.value = v;
+    }
+    vocoderChunkFramesValue.textContent = v;
+    applySettingsDebounced();
+});
+
 midiExtractToolSelect.addEventListener('change', () => applySettings());
 
 openModelDownloadBtn.addEventListener('click', async () => {
@@ -773,6 +850,18 @@ openModelDownloadBtn.addEventListener('click', async () => {
 // makes the SiFiGAN detection appear instantly.
 loadDevices().catch(() => {});
 checkSifiganVocoderFiles().then(updateVocoderTypeUI).catch(() => {});
+
+// Load vocoder chunk frames info (smart allocation result).
+// GPU detection runs asynchronously after did-finish-load, so retry
+// until gpuPhase === 'full' (max 30s).
+(async () => {
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+        await loadVocoderChunkFramesInfo();
+        if (_vocoderChunkInfoLoaded) break;
+        await new Promise(r => setTimeout(r, 2000));
+    }
+})();
 
 // Check model availability on load
 if (window.electronAPI?.checkModels) {

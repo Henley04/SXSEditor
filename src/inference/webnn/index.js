@@ -50,6 +50,7 @@ async function _runSynthesisUnlocked(params) {
         npuDiffBatchSize = 4,
         npuVocoderBatchSize = 2,
         useStaticShapes = false,
+        vocoderChunkFrames = 0,
         onProgress,
         onChunkComplete = null,
     } = params;
@@ -102,6 +103,7 @@ async function _runSynthesisUnlocked(params) {
         floatType: vocoderFloatType,
         npuVocoderBatchSize,
         useStaticShapes,
+        vocoderChunkFrames,
         onChunkComplete,
     });
 
@@ -144,6 +146,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
     const floatType = isFP16 ? 'float16' : 'float32';
     const vocoderFloatType = vocoderIsFP16 ? 'float16' : 'float32';
     const useStaticShapes = paramsArray[0].useStaticShapes || false;
+    const vocoderChunkFrames = paramsArray[0].vocoderChunkFrames || 0;
 
     // ===== Stage 1: Encode both segments in parallel =====
     if (onProgress) onProgress(10);
@@ -237,7 +240,8 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
         const totalSamples = s.totalFrames * HOP_SIZE;
         let audioData;
 
-        const maxVocChunk = useStaticShapes ? NPU_VOCODER_SEQ_LEN : VOCODER_CHUNK_FRAMES;
+        const effectiveVocChunk = (vocoderChunkFrames && vocoderChunkFrames > 0) ? vocoderChunkFrames : VOCODER_CHUNK_FRAMES;
+        const maxVocChunk = useStaticShapes ? NPU_VOCODER_SEQ_LEN : effectiveVocChunk;
         if (s.totalFrames <= maxVocChunk) {
             const bVocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : s.totalFrames;
             const paddedMel = useStaticShapes ? padToLength(xt, bVocSeqLen * MEL_DIM) : xt;
@@ -252,6 +256,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
                 floatType: vocoderFloatType,
                 npuVocoderBatchSize: s.npuVocoderBatchSize,
                 useStaticShapes,
+                vocoderChunkFrames: effectiveVocChunk,
             });
             audioData = result.audioData;
         }

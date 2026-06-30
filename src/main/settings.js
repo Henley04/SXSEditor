@@ -61,6 +61,14 @@ function loadSettings() {
     }
   }
 
+  // Vocoder 分片长度模式：'smart' 依据显存智能分配，'manual' 用户手动指定帧数
+  if (_settingsCache.vocoderChunkMode !== 'manual') {
+    _settingsCache.vocoderChunkMode = 'smart';
+  }
+  if (typeof _settingsCache.vocoderChunkFrames !== 'number' || !Number.isFinite(_settingsCache.vocoderChunkFrames) || _settingsCache.vocoderChunkFrames <= 0) {
+    _settingsCache.vocoderChunkFrames = 1008;
+  }
+
   // Vocoder type default + startup fallback:
   // If stored value is 'sifigan' but none of the SiFiGAN model files exist,
   // temporarily fall back to 'default' for this run (settings.json is NOT modified).
@@ -117,6 +125,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
   'npuDiffBatchSize', 'npuVocoderBatchSize',
   'vocoderType',
+  'vocoderChunkMode', 'vocoderChunkFrames',
 ];
 
 async function updateLocaleSetting(locale) {
