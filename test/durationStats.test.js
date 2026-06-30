@@ -55,20 +55,22 @@ describe('inference/pipeline/durationStats', () => {
     });
 
     it('should walk fallback chain: trigram_full → trigram → bigram → unigram → 1.0', () => {
+      // 键格式: trigram_full='prev|curr|next|pos|stress', trigram='prev|curr|next',
+      // bigram='prev|curr', unigram='curr'。每级用不同的 prev/next 才能独立命中。
       const stats = {
         trigram_full: { 'S|T|E|initial|X': { mean_ms: 99 } },
-        trigram: { 'S|T|E': { mean_ms: 50 } },
-        bigram: { 'S|T': { mean_ms: 30 } },
+        trigram: { 'X|T|E': { mean_ms: 50 } },
+        bigram: { 'Y|T': { mean_ms: 30 } },
         unigram: { 'T': { mean_ms: 10 } },
       };
-      // exact trigram_full match
+      // exact trigram_full match (prev=S, next=E, pos=initial)
       expect(lookupWeight(stats, 'T', 'S', 'E', 'initial')).to.equal(99);
-      // no trigram_full match → trigram
+      // no trigram_full match → trigram (prev=X, next=E)
       expect(lookupWeight(stats, 'T', 'X', 'E', 'initial')).to.equal(50);
-      // no trigram match → bigram
-      expect(lookupWeight(stats, 'T', 'X', 'Y', 'initial')).to.equal(30);
-      // no bigram match → unigram
-      expect(lookupWeight(stats, 'T', 'X', 'Y', 'medial')).to.equal(10);
+      // no trigram match → bigram (prev=Y, next=Z not in trigram)
+      expect(lookupWeight(stats, 'T', 'Y', 'Z', 'initial')).to.equal(30);
+      // no bigram match → unigram (prev=W)
+      expect(lookupWeight(stats, 'T', 'W', 'V', 'medial')).to.equal(10);
     });
 
     it('should skip entries with mean_ms <= 0', () => {

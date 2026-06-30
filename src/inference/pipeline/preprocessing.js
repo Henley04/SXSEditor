@@ -159,10 +159,13 @@ class Preprocessing {
             const lyric = note.lyric || '';
             const pitch = note.pitch;
             let noteType;
-            if (lyric.trim().length === 0) {
-                noteType = 1;
-            } else if (note.isSlur || note.isContinuation) {
+            // 注意: slur/continuation 检查必须优先于空歌词检查。slur 音符通常
+            // 歌词为空（延续前一个音节的发音），若先判空歌词会把 slur 误分类
+            // 为休止符（type 1），导致模型把连音当成静音处理。
+            if (note.isSlur || note.isContinuation) {
                 noteType = 3;
+            } else if (lyric.trim().length === 0) {
+                noteType = 1;
             } else {
                 noteType = 2;
             }

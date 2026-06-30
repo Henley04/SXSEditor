@@ -10,7 +10,6 @@ const {
   melToHz,
   createMelFilterbank,
 } = require('../src/inference/pipeline/postprocessing');
-const { wavEncoder } = require('../src/audio/wavEncoder');
 
 describe('inference/pipeline/postprocessing - DSP', () => {
   describe('parseWavBuffer', () => {
@@ -50,8 +49,27 @@ describe('inference/pipeline/postprocessing - DSP', () => {
 
     it('should parse 32-bit float mono WAV', () => {
       const samples = new Float32Array([0.0, 0.5, -0.5, 1.0]);
-      const wav = wavEncoder.encodeWav(samples, 24000);
-      const parsed = parseWavBuffer(wav);
+      const numChannels = 1;
+      const bytesPerSample = 4;
+      const dataSize = samples.length * bytesPerSample * numChannels;
+      const buf = Buffer.alloc(44 + dataSize);
+      buf.write('RIFF', 0);
+      buf.writeUInt32LE(36 + dataSize, 4);
+      buf.write('WAVE', 8);
+      buf.write('fmt ', 12);
+      buf.writeUInt32LE(16, 16);
+      buf.writeUInt16LE(3, 20);  // IEEE float
+      buf.writeUInt16LE(numChannels, 22);
+      buf.writeUInt32LE(24000, 24);
+      buf.writeUInt32LE(24000 * numChannels * bytesPerSample, 28);
+      buf.writeUInt16LE(numChannels * bytesPerSample, 32);
+      buf.writeUInt16LE(32, 34);
+      buf.write('data', 36);
+      buf.writeUInt32LE(dataSize, 40);
+      for (let i = 0; i < samples.length; i++) {
+        buf.writeFloatLE(samples[i], 44 + i * bytesPerSample);
+      }
+      const parsed = parseWavBuffer(buf);
       expect(parsed.sampleRate).to.equal(24000);
       expect(parsed.data.length).to.equal(samples.length);
       for (let i = 0; i < samples.length; i++) {
@@ -87,8 +105,6 @@ describe('inference/pipeline/postprocessing - DSP', () => {
     });
 
     it('should downmix stereo to mono by averaging', () => {
-      const samples = new Float32Array([0.2, 0.4, -0.6, 0.8]);
-      const wav = wavEncoder.encodeWav(samples, 24000); // mono
       // build stereo manually
       const bytesPerSample = 4;
       const numFrames = 2;

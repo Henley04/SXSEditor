@@ -166,8 +166,15 @@ function bitReversePermute(real, imag) {
 }
 
 // Radix-2 FFT (in-place, bit-reversed output)
+// 注意：预计算的 TWIDDLE_REAL/IMAG 仅对 n == N_FFT 有效。当传入其他尺寸时
+// 必须动态计算旋转因子，否则会静默返回错误的频谱（生产路径始终用 N_FFT，
+// 但单元测试和未来复用可能传入任意 2 的幂）。
+// 蝶形运算为标准 DIT 形式：X[idx1] = t + w*u, X[idx2] = t - w*u
+// （位反转在前 → DIT）。先前版本误用 DIF 蝶形 (t-u)*w 搭配 DIT 位反转，
+// 对非 DC 信号产生错误频谱。
 function fftRadix2(real, imag) {
     const n = real.length;
+    const useTable = (n === TWIDDLE_REAL.length * 2);
     bitReversePermute(real, imag);
     for (let len = 2; len <= n; len *= 2) {
         const halfLen = len / 2;
@@ -176,16 +183,26 @@ function fftRadix2(real, imag) {
             for (let j = 0; j < halfLen; j++) {
                 const idx1 = i + j;
                 const idx2 = i + j + halfLen;
-                const wr = TWIDDLE_REAL[j * step];
-                const wi = TWIDDLE_IMAG[j * step];
+                let wr, wi;
+                if (useTable) {
+                    wr = TWIDDLE_REAL[j * step];
+                    wi = TWIDDLE_IMAG[j * step];
+                } else {
+                    const theta = -2 * Math.PI * j / len;
+                    wr = Math.cos(theta);
+                    wi = Math.sin(theta);
+                }
                 const tReal = real[idx1];
                 const tImag = imag[idx1];
                 const uReal = real[idx2];
                 const uImag = imag[idx2];
-                real[idx1] = tReal + uReal;
-                imag[idx1] = tImag + uImag;
-                real[idx2] = (tReal - uReal) * wr - (tImag - uImag) * wi;
-                imag[idx2] = (tReal - uReal) * wi + (tImag - uImag) * wr;
+                // w * u
+                const wuReal = wr * uReal - wi * uImag;
+                const wuImag = wr * uImag + wi * uReal;
+                real[idx1] = tReal + wuReal;
+                imag[idx1] = tImag + wuImag;
+                real[idx2] = tReal - wuReal;
+                imag[idx2] = tImag - wuImag;
             }
         }
     }
@@ -194,6 +211,7 @@ function fftRadix2(real, imag) {
 // Radix-2 IFFT (in-place, bit-reversed input → standard output)
 function ifftRadix2(real, imag) {
     const n = real.length;
+    const useTable = (n === TWIDDLE_REAL.length * 2);
     bitReversePermute(real, imag);
     for (let len = 2; len <= n; len *= 2) {
         const halfLen = len / 2;
@@ -202,16 +220,26 @@ function ifftRadix2(real, imag) {
             for (let j = 0; j < halfLen; j++) {
                 const idx1 = i + j;
                 const idx2 = i + j + halfLen;
-                const wr = TWIDDLE_REAL[j * step];
-                const wi = -TWIDDLE_IMAG[j * step]; // 共轭: 正号
+                let wr, wi;
+                if (useTable) {
+                    wr = TWIDDLE_REAL[j * step];
+                    wi = -TWIDDLE_IMAG[j * step]; // 共轭: 正号
+                } else {
+                    const theta = 2 * Math.PI * j / len;
+                    wr = Math.cos(theta);
+                    wi = Math.sin(theta);
+                }
                 const tReal = real[idx1];
                 const tImag = imag[idx1];
                 const uReal = real[idx2];
                 const uImag = imag[idx2];
-                real[idx1] = tReal + uReal;
-                imag[idx1] = tImag + uImag;
-                real[idx2] = (tReal - uReal) * wr - (tImag - uImag) * wi;
-                imag[idx2] = (tReal - uReal) * wi + (tImag - uImag) * wr;
+                // w_conj * u
+                const wuReal = wr * uReal - wi * uImag;
+                const wuImag = wr * uImag + wi * uReal;
+                real[idx1] = tReal + wuReal;
+                imag[idx1] = tImag + wuImag;
+                real[idx2] = tReal - wuReal;
+                imag[idx2] = tImag - wuImag;
             }
         }
     }
