@@ -2003,7 +2003,15 @@ class OnnxSVSPipeline {
      * （diffStep、vocoder），让 DML 回收这些内存池，避免第二次推理 OOM。
      */
     async _recreateHeavySessionsAfterSynthesis() {
-        if (this.useWebNN) return; // WebNN 在渲染进程管理，不归主进程 DML 管
+        // 仅 DML 后端且用户显式开启时才执行；CPU/WebNN 不执行，默认关闭
+        if (this.useWebNN) return;
+        try {
+            const { loadSettings } = require('../../main/settings');
+            const settings = loadSettings();
+            if (settings.releaseDmlVramAfterSynthesis !== true) return;
+        } catch (_) {
+            return;
+        }
 
         const heavyKeys = ['diffStep', 'vocoder'];
         let recreated = 0;

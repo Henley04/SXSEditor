@@ -57,6 +57,7 @@ const vocoderChunkFramesSlider = document.getElementById('vocoderChunkFrames');
 const vocoderChunkFramesValue = document.getElementById('vocoderChunkFramesValue');
 const vocoderChunkSmartInfo = document.getElementById('vocoderChunkSmartInfo');
 const vocoderChunkSmartText = document.getElementById('vocoderChunkSmartText');
+const releaseDmlVramAfterSynthesisCheckbox = document.getElementById('releaseDmlVramAfterSynthesis');
 
 // Device mode radio button handlers
 const MODEL_GROUPS = [
@@ -156,6 +157,11 @@ function applySavedSettingsToUI(currentSetting) {
     const isExclusive = audioOutputModeSelect.value === 'exclusive';
     exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
     audioBitDepthSelect.disabled = !isExclusive;
+
+    // DML 显存回收选项（默认关闭，仅 DML 后端有效）
+    if (releaseDmlVramAfterSynthesisCheckbox) {
+        releaseDmlVramAfterSynthesisCheckbox.checked = currentSetting.releaseDmlVramAfterSynthesis === true;
+    }
 }
 
 function getDeviceTypeLabel(deviceType) {
@@ -687,6 +693,7 @@ function collectSettings() {
             return r ? r.value : 'smart';
         })(),
         vocoderChunkFrames: parseInt(vocoderChunkFramesSlider.value),
+        releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
     };
 }
 
@@ -842,6 +849,10 @@ vocoderChunkFramesSlider.addEventListener('input', () => {
     vocoderChunkFramesValue.textContent = v;
     applySettingsDebounced();
 });
+
+if (releaseDmlVramAfterSynthesisCheckbox) {
+    releaseDmlVramAfterSynthesisCheckbox.addEventListener('change', () => applySettings());
+}
 
 midiExtractToolSelect.addEventListener('change', () => applySettings());
 

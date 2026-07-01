@@ -69,6 +69,11 @@ function loadSettings() {
     _settingsCache.vocoderChunkFrames = 1008;
   }
 
+  // 合成完成后是否释放并重建重型 DML session，强制回收 DirectML 内存池（默认关闭，仅 DML 后端有效）
+  if (typeof _settingsCache.releaseDmlVramAfterSynthesis !== 'boolean') {
+    _settingsCache.releaseDmlVramAfterSynthesis = false;
+  }
+
   // SiFiGAN 精度: 'fp32' (默认, 全精度) | 'fp16' (低质量, cos≈0.95)
   // 仅在 vocoderType === 'sifigan' 时生效，控制加载 sifigan_vocoder_dml_fp16.onnx 还是 sifigan_vocoder_dml.onnx
   if (_settingsCache.sifiganPrecision !== 'fp16' && _settingsCache.sifiganPrecision !== 'fp32') {
@@ -132,6 +137,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'npuDiffBatchSize', 'npuVocoderBatchSize',
   'vocoderType', 'sifiganPrecision',
   'vocoderChunkMode', 'vocoderChunkFrames',
+  'releaseDmlVramAfterSynthesis',
 ];
 
 async function updateLocaleSetting(locale) {
