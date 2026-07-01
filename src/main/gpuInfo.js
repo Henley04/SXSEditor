@@ -29,31 +29,47 @@ const MAX_VOCODER_CHUNK_FRAMES = 2048;
 // 各精度下常驻 GPU 显存的模型权重估算（MB）。
 // 包含 diff_step + vocoder + 6 个 encoder/辅助模型，数据来自 onnx_models/{precision}/README.md。
 // 注意：diff_step 在 vocoder 推理阶段不释放（_synthesizeSegment 连续执行 diffusion → vocoder），
-// 因此 vocoder 单片峰值显存 = 常驻权重 + vocoder 激活工作区，必须从 VRAM 中扣除常驻部分。
+// 因此 vocoder 单片峰值显存 = 常驻权重 + diff_step 激活 + vocoder 激活工作区 + OS 占用，
+// 必须从 VRAM 中扣除前三项后再分配 vocoder 分片。
 const RESIDENT_WEIGHT_MB = {
   'fp32':     2906,  // 1772 + 1054 + ~80
   'fp16':     1446,  // 887  + 519  + ~40
   'int8':      960,  // 445  + 485  + ~30
   'int8-npu':  960,  // 同 int8
 };
+
+// diff_step 推理阶段驻留的激活工作区估算（MB），与精度无关。
+// _synthesizeSegment 中 diffusion（默认 32 步）→ vocoder 串行执行，
+// diff_step session 在 vocoder 推理阶段未释放，其激活张量仍占显存。
+// 经验值 ~2GB（基于 32 步 diffusion + 中等长度 segment 的实测峰值）。
+// 旧版仅以 0.8 安全余量笼统覆盖，长音频合成 OOM 的根因之一就是
+// 该 2GB 未显式扣除，导致 chunk 偏大触发 887A0006 / 全零输出。
+const DIFFSTEP_ACTIVATION_MB = 2048;
+
+// GPU 正常使用显存占用（MB）：Windows 桌面合成器 (DWM) / 浏览器 / OS / 其他应用 / DML 命令队列缓冲区。
+// 旧版仅在 0.8 安全余量中隐含覆盖，对低端独显（4-6GB）不够保守，
+// 现显式扣除 1GB 以避免与桌面渲染争用显存导致 887A0006。
+const GPU_OS_RESERVE_MB = 1024;
+
+// 安全系数：在已扣除常驻权重 + diff_step 激活 + OS 占用之后，
+// 再预留 30% 给显存碎片化、多 segment 串行合成、DML 运行时缓冲等未计入开销。
+// 旧版 0.8（20%）偏低，调整为 0.7（30%）以进一步降低 vocoder 激活峰值。
+const VRAM_SAFETY_FACTOR = 0.7;
+
 const DEFAULT_RESIDENT_PRECISION = 'fp16'; // 启动时精度未知，用 fp16 保守估算
 
 /**
  * 依据显存大小（字节）与模型精度计算推荐的 vocoder 分片帧数。
  *
- * 与旧版仅按 VRAM 总量分档不同，本函数先扣除常驻权重得到"可用显存"，
- * 再按可用显存分档。这样在 FP32 + 中低显存显卡上会自动缩小分片，
- * 避免 vocoder 激活工作区峰值突破显存上限触发 887A0006。
+ * 预算公式：available = (VRAM - 常驻权重 - diff_step 激活 - OS 占用) × 安全系数
+ *   - 常驻权重 RESIDENT_WEIGHT_MB：按精度查表（FP32≈2.9GB / FP16≈1.4GB / INT8≈0.96GB）
+ *   - diff_step 激活 DIFFSTEP_ACTIVATION_MB：~2GB，与精度无关（diffusion 32 步激活工作区）
+ *   - OS 占用 GPU_OS_RESERVE_MB：~1GB，DWM/浏览器/OS/DML 命令队列
+ *   - 安全系数 VRAM_SAFETY_FACTOR=0.7：再预留 30% 给碎片化/多 segment 串行等
  *
- * 大显存档位由 1536 保守化为 1280（仍比默认 1008 大，减少分片数但降低峰值风险）。
- *
- * 安全余量：availableBytes 再乘 0.8，预留 20% 给以下未计入的开销：
- *   - diff_step 推理阶段驻留的激活张量（_synthesizeSegment 中 diffusion → vocoder 串行，
- *     diff_step session 未释放，其激活仍占显存）
- *   - 多 segment 串行合成时的显存碎片化
- *   - 其他进程（浏览器/OS/桌面合成器）的显存占用
- *   - DML 命令队列缓冲区
- * 长音频合成 OOM 的根因之一就是常驻权重估算未含 diff_step 激活，导致 chunk 偏大。
+ * 旧版仅扣除常驻权重并以 0.8 安全余量笼统覆盖 diff_step 激活 + OS 占用，
+ * 在 4-6GB 低显存独显上经常触发 vocoder chunk 0 全零输出（887A0006 / VRAM exhaustion）。
+ * 显式扣除这两项后，分档阈值相应下调以保证 vocoder 激活工作区峰值在预算内。
  *
  * 所有返回值对齐到 8 的倍数（与 VOCODER_OVERLAP_FRAMES 兼容）。
  */
@@ -61,18 +77,22 @@ function computeVocoderChunkFramesFromVRAM(vramBytes, precision = DEFAULT_RESIDE
   if (!vramBytes || vramBytes <= 0) return VOCODER_CHUNK_FRAMES; // 未知显存 → 默认值
   const residentMb = RESIDENT_WEIGHT_MB[precision] || RESIDENT_WEIGHT_MB[DEFAULT_RESIDENT_PRECISION];
   const residentBytes = residentMb * 1024 * 1024;
-  // 安全余量 0.8：预留 20% 给 diff_step 激活、显存碎片、其他进程占用
-  const availableBytes = (vramBytes - residentBytes) * 0.8;
-  // 常驻权重已超 VRAM：仅给最小片，避免加载阶段就 OOM
+  const diffstepBytes = DIFFSTEP_ACTIVATION_MB * 1024 * 1024;
+  const osReserveBytes = GPU_OS_RESERVE_MB * 1024 * 1024;
+  // 预算 = (VRAM - 常驻权重 - diff_step 激活 - OS 占用) × 安全系数
+  const availableBytes = (vramBytes - residentBytes - diffstepBytes - osReserveBytes) * VRAM_SAFETY_FACTOR;
+  // 常驻 + diff_step + OS 已超 VRAM：仅给最小片，避免加载阶段就 OOM
   if (availableBytes <= 0) return MIN_VOCODER_CHUNK_FRAMES;
   const availGb = availableBytes / (1024 * 1024 * 1024);
   let frames;
-  // 分档基于"可用显存"（VRAM - 常驻权重 - 安全余量），阈值考虑 vocoder 激活工作区峰值随 seq_len 近似线性增长
-  if (availGb < 0.5) frames = 256;       // 极紧张：常驻几乎吃满，仅最小片
-  else if (availGb < 1.5) frames = 512;   // 紧张：~10.2s
-  else if (availGb < 3.0) frames = 768;    // 一般：~15.4s
-  else if (availGb < 5.0) frames = 1008;  // 宽裕：~20.2s（与默认值一致）
-  else frames = 1280;                      // 很宽裕：~25.6s（原 1536 保守化）
+  // 分档基于"可用预算"（已扣除常驻权重 + diff_step 激活 + OS 占用 + 安全系数），
+  // 阈值考虑 vocoder 激活工作区峰值随 seq_len 近似线性增长。
+  // 较旧版整体下调一档（旧版 512→1008→1280 现 384→768→1008），更保守以避免 OOM。
+  if (availGb < 0.5) frames = 256;       // 极紧张：常驻+diff_step+OS 几乎吃满，仅最小片
+  else if (availGb < 1.0) frames = 384;   // 紧张：~7.7s
+  else if (availGb < 2.0) frames = 512;   // 一般：~10.2s
+  else if (availGb < 4.0) frames = 768;   // 宽裕：~15.4s
+  else frames = 1008;                      // 很宽裕：~20.2s（与默认值一致，不再上调到 1280）
   frames = Math.round(frames / 8) * 8;
   return Math.max(MIN_VOCODER_CHUNK_FRAMES, Math.min(MAX_VOCODER_CHUNK_FRAMES, frames));
 }
@@ -96,7 +116,9 @@ function getCachedVocoderChunkFrames(precision = DEFAULT_RESIDENT_PRECISION) {
   }
   const frames = computeVocoderChunkFramesFromVRAM(bestVramBytes, precision);
   _vocoderChunkFramesCacheByPrecision[precision] = frames;
-  console.log(`[Main] Vocoder chunk frames from VRAM: ${frames} (precision=${precision}, bestVram=${(bestVramBytes / (1024 * 1024 * 1024)).toFixed(2)}GB, resident=${RESIDENT_WEIGHT_MB[precision] || RESIDENT_WEIGHT_MB[DEFAULT_RESIDENT_PRECISION]}MB)`);
+  const residentMb = RESIDENT_WEIGHT_MB[precision] || RESIDENT_WEIGHT_MB[DEFAULT_RESIDENT_PRECISION];
+  const budgetMb = Math.max(0, (bestVramBytes / (1024 * 1024)) - residentMb - DIFFSTEP_ACTIVATION_MB - GPU_OS_RESERVE_MB) * VRAM_SAFETY_FACTOR;
+  console.log(`[Main] Vocoder chunk frames from VRAM: ${frames} (precision=${precision}, bestVram=${(bestVramBytes / (1024 * 1024 * 1024)).toFixed(2)}GB, resident=${residentMb}MB, diffstep=${DIFFSTEP_ACTIVATION_MB}MB, osReserve=${GPU_OS_RESERVE_MB}MB, safetyFactor=${VRAM_SAFETY_FACTOR}, budget=${budgetMb.toFixed(0)}MB)`);
   return frames;
 }
 

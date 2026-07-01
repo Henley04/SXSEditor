@@ -10,6 +10,22 @@ const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils
 // ---- Audio utility functions ----
 
 /**
+ * 释放 ONNX Runtime Tensor 的 native 资源。
+ * onnxruntime-node 的 Tensor 提供 dispose() 方法，可立即释放底层 GPU/CPU 缓冲区，
+ * 不必等待 V8 GC finalizer。在 vocoder 分块推理中，chunk 间累积的未释放张量
+ * 会耗尽 GPU 显存导致后续 chunk 触发 887A0006 (device removed)。
+ * @param {import('onnxruntime-node').Tensor|null|undefined} tensor
+ */
+function _disposeTensor(tensor) {
+    if (!tensor) return;
+    try {
+        if (typeof tensor.dispose === 'function') {
+            tensor.dispose();
+        }
+    } catch (_) { /* 忽略重复 dispose 或已释放 */ }
+}
+
+/**
  * 校验 vocoder 输出波形是否有效。
  * DML 在显存耗尽边界可能不抛错而是返回全零/NaN 波形（silent failure），
  * 若不拦截会导致应用误以为合成完毕、播放空声音。
@@ -648,7 +664,7 @@ class Postprocessing {
             return output;
         }
 
-        // 长音频分chunks推理
+        // 长音频分chunks推理（流式：每 chunk 创建/推理/释放，避免 GPU 张量累积导致 OOM）
         // framePos 语义：下一个 chunk 的"新数据起始位置"（不含与前一个 chunk 的重叠区）。
         //   chunk 0:   chunkStart=0,                 chunkEnd=chunkSize,      framePos→chunkEnd
         //   chunk N:   chunkStart=framePos-overlap,  chunkEnd=chunkStart+chunkSize, framePos→chunkEnd
@@ -662,7 +678,11 @@ class Postprocessing {
             fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * i / fadeSamples));
         }
 
-        // 第一阶段：预先计算所有 chunk 的输入张量（不并行 IO，避免内存峰值）
+        // 第一阶段：仅计算所有 chunk 的边界元数据（不创建张量）。
+        // 旧版本在此阶段预创建所有 chunk 的 melTensor/f0Tensor 并存入 chunkSpecs，
+        // 导致所有 chunk 的 GPU 输入张量同时驻留显存；加上第二阶段每个 chunk 的
+        // 输出张量（results['waveform']）未显式释放，chunk 间累积触发 887A0006
+        // (GPU device removed)。现改为：第一阶段只存元数据，第二阶段流式创建+释放。
         const chunkSpecs = [];
         let framePos = 0;
         let chunkIdx = 0;
@@ -672,26 +692,20 @@ class Postprocessing {
             const chunkEnd = Math.min(chunkStart + chunkSize, totalFrames);
             const currentChunkFrames = chunkEnd - chunkStart;
             const isLast = chunkEnd >= totalFrames;
-
-            const chunkMel = new Float32Array(currentChunkFrames * MEL_DIM);
-            chunkMel.set(melData.subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM));
-
-            const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : currentChunkFrames;
-            const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
-            const melTensor = createFloatTensor(floatType, paddedChunk, [1, vocSeqLen, MEL_DIM]);
-            const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, chunkStart, currentChunkFrames);
-
-            chunkSpecs.push({ chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast, vocoderInputs });
-
+            chunkSpecs.push({ chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast });
             if (isLast) break;
             framePos = chunkEnd;
             chunkIdx++;
         }
 
-        // 第二阶段：强制串行执行 vocoder chunk 推理。
+        // 第二阶段：强制串行执行 vocoder chunk 推理（流式创建/释放张量）。
         // 注意：DML 后端下，同一个 InferenceSession 并发 run() 会向命令队列交叉提交命令流，
         // 触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) — GPU 设备因无效命令被驱动移除。
         // 旧版本 VOC_PARALLEL=2 的 Promise.all 并行已移除，所有 chunk 严格按顺序逐个推理。
+        //
+        // 张量生命周期：每个 chunk 在循环内创建 melTensor/f0Tensor → 推理 → 提取波形 →
+        // 立即解除输入/输出张量的 JS 引用（data 置空 + 变量置 null），并额外 yield 一次
+        // 给 V8 GC 回收 native 资源。否则 chunk 间累积的 GPU 张量会耗尽显存导致后续 chunk OOM。
         // 流式播放：每完成一个 chunk，通过 onChunkComplete 推送"已确定"的音频段（weightSum=1）。
         //
         // 错误处理：每个 chunk 的 vocoder.run() 都包 try/catch。
@@ -703,10 +717,21 @@ class Postprocessing {
         let committedSamples = 0;
         for (let i = 0; i < totalChunkCount; i++) {
             const spec = chunkSpecs[i];
+            // 流式创建当前 chunk 的输入张量（不预存到 chunkSpecs）
+            const chunkMel = new Float32Array(spec.currentChunkFrames * MEL_DIM);
+            chunkMel.set(melData.subarray(spec.chunkStart * MEL_DIM, spec.chunkEnd * MEL_DIM));
+            const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : spec.currentChunkFrames;
+            const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
+            const melTensor = createFloatTensor(floatType, paddedChunk, [1, vocSeqLen, MEL_DIM]);
+            const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, spec.chunkStart, spec.currentChunkFrames);
+
             let results;
             try {
-                results = await sessions.vocoder.run(spec.vocoderInputs);
+                results = await sessions.vocoder.run(vocoderInputs);
             } catch (runErr) {
+                // 推理失败也要释放当前 chunk 输入张量，避免后续重试时累积
+                _disposeTensor(melTensor);
+                if (vocoderInputs.f0) _disposeTensor(vocoderInputs.f0);
                 if (isVramOOMError(runErr)) {
                     throw new Error(`Vocoder OOM at chunk ${i}/${totalChunkCount} (frames=${spec.currentChunkFrames}, offset=${spec.chunkStart}): ${runErr.message}. Try reducing vocoder chunk frames in settings.`);
                 }
@@ -715,6 +740,16 @@ class Postprocessing {
             await yieldToEventLoop(); // Prevent UI freeze between vocoder chunks
 
             const waveform = outputToFloat32(results['waveform']);
+            // 立即释放 ONNX 输出张量与输入张量：解除 JS 引用，让 V8 GC 回收 native 资源。
+            // DML 后端 GPU 张量依赖 finalizer 异步释放，多个 chunk 累积会导致后续 chunk OOM。
+            const outTensor = results['waveform'];
+            _disposeTensor(outTensor);
+            _disposeTensor(melTensor);
+            if (vocoderInputs.f0) _disposeTensor(vocoderInputs.f0);
+            results = null;
+            // 再 yield 一次给 GC 机会回收 native tensor finalizer
+            await yieldToEventLoop();
+
             // 校验输出：拦截 DML silent failure（全零/NaN）
             validateVocoderOutput(waveform, i);
             const writeStart = spec.chunkStart * vocoderHopSize;
@@ -770,7 +805,7 @@ class Postprocessing {
         normalizePeakTo(output, totalSamples);
 
         const elapsed = performance.now() - t0;
-        console.log(`[OnnxSVSPipeline] Vocoder chunked: ${totalFrames} frames, ${totalChunkCount} chunks (serial), ${elapsed.toFixed(0)}ms`);
+        console.log(`[OnnxSVSPipeline] Vocoder chunked: ${totalFrames} frames, ${totalChunkCount} chunks (serial, streaming), ${elapsed.toFixed(0)}ms`);
         return output;
     }
 

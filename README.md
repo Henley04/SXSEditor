@@ -66,7 +66,7 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | WASAPI Audio | Shared and exclusive mode output |
 | GPU Acceleration | DirectML (NVIDIA/AMD/Intel), NPU (WebNN) |
 | One-shot Hardware Detection | GPU/NPU/DML enumeration runs once after app startup; results cached and reused at runtime (no re-probing during synthesis) |
-| Smart Vocoder Chunk Sizing | Vocoder chunk size auto-allocated from available VRAM (after subtracting resident model weights by precision: FP32≈2.9GB, FP16≈1.4GB, INT8≈0.96GB, plus 20% safety margin for diff_step activations and VRAM fragmentation); tiers: <0.5GB→256, <1.5GB→512, <3GB→768, <5GB→1008, ≥5GB→1280; manual override available in settings |
+| Smart Vocoder Chunk Sizing | Vocoder chunk size auto-allocated from VRAM budget = (VRAM − resident weights − diff_step activations ~2GB − OS reserve ~1GB) × 0.7 safety factor. Resident weights by precision: FP32≈2.9GB, FP16≈1.4GB, INT8≈0.96GB. Tiers (by budget): <0.5GB→256, <1GB→384, <2GB→512, <4GB→768, ≥4GB→1008; manual override available in settings |
 | Vocoder Output Validation | Detects DML silent failures (all-zero/NaN waveform from VRAM exhaustion) and throws a clear OOM error instead of playing empty audio |
 | Model Auto-Download | Chunked parallel download from ModelScope |
 | Model Precision | FP32, FP16, INT8, INT8-NPU |
@@ -174,7 +174,7 @@ macOS / Linux 用户请从源码构建。
 | WASAPI 音频 | 共享和独占模式输出 |
 | GPU 加速 | DirectML（NVIDIA/AMD/Intel）、NPU（WebNN） |
 | 一次性硬件探测 | 应用启动后仅执行一次 GPU/NPU/DML 设备枚举，结果缓存复用，运行时不再重复探测（避免与推理并发提交命令流） |
-| Vocoder 分片智能分配 | 依据可用显存（VRAM 减去按精度估算的常驻权重：FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB，并预留 20% 安全余量给 diff_step 激活与显存碎片）自动分档（&lt;0.5GB→256, &lt;1.5GB→512, &lt;3GB→768, &lt;5GB→1008, ≥5GB→1280）；可在设置中切换为手动设置 |
+| Vocoder 分片智能分配 | 显存预算 = (VRAM − 按精度估算的常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB) × 0.7 安全系数；常驻权重按精度 FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB 扣除；分档（按预算）&lt;0.5GB→256, &lt;1GB→384, &lt;2GB→512, &lt;4GB→768, ≥4GB→1008；可在设置中切换为手动设置 |
 | Vocoder 输出校验 | 检测 DML 静默失败（显存耗尽导致的全零/NaN 波形）并抛出明确的 OOM 错误，避免误播空声音 |
 | 模型自动下载 | 从 ModelScope 分片并行下载 |
 | 模型精度 | FP32、FP16、INT8、INT8-NPU |
@@ -278,7 +278,7 @@ macOS / Linux：ソースからビルドしてください。
 | WASAPI オーディオ | 共有/排他モード出力 |
 | GPU アクセラレーション | DirectML（NVIDIA/AMD/Intel）、NPU（WebNN） |
 | 1 回限りのハードウェア検出 | アプリ起動後に GPU/NPU/DML デバイス列挙を 1 回だけ実行し、結果をキャッシュして実行時に再利用（合成中の再検出を回避） |
-| Vocoder チャンクサイズ自動割当 | VRAM から精度別の常駐重み（FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB）および 20% 安全余量（diff_step 活性化・VRAM 断片化用）を差し引いた利用可能显存に基づき Vocoder チャンクサイズを自動選択（&lt;0.5GB→256, &lt;1.5GB→512, &lt;3GB→768, &lt;5GB→1008, ≥5GB→1280）；設定で手動指定にも切替可能 |
+| Vocoder チャンクサイズ自動割当 | VRAM 予算 = (VRAM − 精度別常駐重み − diff_step 活性化 ~2GB − OS 占用 ~1GB) × 0.7 安全係数；常駐重みは精度別 FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB；予算別階層 &lt;0.5GB→256, &lt;1GB→384, &lt;2GB→512, &lt;4GB→768, ≥4GB→1008；設定で手動指定にも切替可能 |
 | Vocoder 出力検証 | DML サイレント失敗（VRAM 枯渇による全ゼロ/NaN 波形）を検出し、空音声の誤再生を防ぐ OOM エラーをスロー |
 | モデル自動ダウンロード | ModelScope からチャンク並列ダウンロード |
 | モデル精度 | FP32、FP16、INT8、INT8-NPU |
