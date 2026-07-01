@@ -12,6 +12,8 @@ import {
     normalize,
 } from './themes/index.js';
 
+const inferenceProviderSelect = document.getElementById('inferenceProvider');
+const inferenceProviderHint = document.getElementById('inferenceProviderHint');
 const inferenceDeviceSelect = document.getElementById('inferenceDevice');
 const deviceSelectGroup = document.getElementById('deviceSelectGroup');
 const webnnStatusGroup = document.getElementById('webnnStatusGroup');
@@ -44,9 +46,6 @@ const languageSelect = document.getElementById('languageSelect');
 const modelPrecisionSelect = document.getElementById('modelPrecision');
 const midiExtractToolSelect = document.getElementById('midiExtractTool');
 const openModelDownloadBtn = document.getElementById('openModelDownloadBtn');
-const npuDiffBatchSizeSelect = document.getElementById('npuDiffBatchSize');
-const npuVocoderBatchSizeSelect = document.getElementById('npuVocoderBatchSize');
-const batchSizeDisabledHint = document.getElementById('batchSizeDisabledHint');
 const vocoderTypeSelect = document.getElementById('vocoderType');
 const vocoderTypeHint = document.getElementById('vocoderTypeHint');
 const sifiganPrecisionSelect = document.getElementById('sifiganPrecision');
@@ -76,6 +75,13 @@ let cachedWebnnInfo = null;
  */
 function applySavedSettingsToUI(currentSetting) {
     if (!currentSetting) return;
+
+    // Inference provider
+    const inferenceProvider = currentSetting.inferenceProvider === 'ortweb' ? 'ortweb' : 'ortnode';
+    if (inferenceProviderSelect) {
+        inferenceProviderSelect.value = inferenceProvider;
+        updateInferenceProviderHint(inferenceProvider);
+    }
 
     // Device mode
     const deviceMode = currentSetting.deviceMode || 'smart';
@@ -130,11 +136,6 @@ function applySavedSettingsToUI(currentSetting) {
         midiExtractToolSelect.value = 'basicpitch';
     }
 
-    // NPU batch sizes (set saved values before updateBatchSizeState which may override)
-    _savedDiffBatch = String(currentSetting.npuDiffBatchSize ?? 4);
-    _savedVocoderBatch = String(currentSetting.npuVocoderBatchSize ?? 4);
-    updateBatchSizeState(modelPrecisionSelect.value);
-
     // Vocoder type (main process may have overridden 'sifigan' -> 'default' at startup)
     vocoderTypeSelect.value = currentSetting.vocoderType === 'sifigan' ? 'sifigan' : 'default';
 
@@ -181,6 +182,15 @@ function getDeviceOptionText(d) {
     return `${d.name}${vramStr} ${typeStr}${npuTag}`;
 }
 
+function updateInferenceProviderHint(provider) {
+    if (!inferenceProviderHint) return;
+    if (provider === 'ortweb') {
+        inferenceProviderHint.textContent = t('settings.inferenceProviderHintOrtweb');
+    } else {
+        inferenceProviderHint.textContent = t('settings.inferenceProviderHintOrtnode');
+    }
+}
+
 function updateDeviceModeUI(mode) {
     const isManual = mode === 'manual';
     const isAdvanced = mode === 'advanced';
@@ -190,25 +200,6 @@ function updateDeviceModeUI(mode) {
 
     if (isAdvanced) {
         buildModelDeviceMapping();
-    }
-}
-
-let _savedDiffBatch = null;
-let _savedVocoderBatch = null;
-
-function updateBatchSizeState(precision) {
-    const isOptimized = precision === 'int8-npu';
-    npuDiffBatchSizeSelect.disabled = !isOptimized;
-    npuVocoderBatchSizeSelect.disabled = !isOptimized;
-    if (batchSizeDisabledHint) {
-        batchSizeDisabledHint.classList.toggle('hidden', isOptimized);
-    }
-    if (isOptimized) {
-        if (_savedDiffBatch !== null) npuDiffBatchSizeSelect.value = _savedDiffBatch;
-        if (_savedVocoderBatch !== null) npuVocoderBatchSizeSelect.value = _savedVocoderBatch;
-    } else {
-        npuDiffBatchSizeSelect.value = '1';
-        npuVocoderBatchSizeSelect.value = '1';
     }
 }
 
@@ -632,6 +623,7 @@ let _saveDebounce = null;
 function collectSettings() {
     const deviceModeRadio = document.querySelector('input[name="deviceMode"]:checked');
     const deviceMode = deviceModeRadio ? deviceModeRadio.value : 'smart';
+    const inferenceProvider = inferenceProviderSelect ? inferenceProviderSelect.value : 'ortnode';
 
     // 仅在 manual 模式下从 inferenceDeviceSelect 提取 preferredDeviceId/preferredDeviceType/deviceId。
     // smart/advanced 模式下这些字段保持 undefined，让 settingsIpc.saveSettings 跳过它们，
@@ -665,6 +657,7 @@ function collectSettings() {
 
     return {
         deviceMode,
+        inferenceProvider,
         preferredDeviceId,
         preferredDeviceType,
         modelDeviceMapping,
@@ -684,8 +677,6 @@ function collectSettings() {
         locale: languageSelect.value,
         modelPrecision: modelPrecisionSelect.value,
         midiExtractTool: midiExtractToolSelect.value,
-        npuDiffBatchSize: parseInt(npuDiffBatchSizeSelect.value),
-        npuVocoderBatchSize: parseInt(npuVocoderBatchSizeSelect.value),
         vocoderType: vocoderTypeSelect.value,
         sifiganPrecision: sifiganPrecisionSelect.value === 'fp16' ? 'fp16' : 'fp32',
         vocoderChunkMode: (() => {
@@ -718,6 +709,15 @@ async function applySettings(options = {}) {
 function applySettingsDebounced() {
     if (_saveDebounce) clearTimeout(_saveDebounce);
     _saveDebounce = setTimeout(() => applySettings(), 300);
+}
+
+// Inference provider select
+if (inferenceProviderSelect) {
+    inferenceProviderSelect.addEventListener('change', () => {
+        updateInferenceProviderHint(inferenceProviderSelect.value);
+        applySettings();
+        updateCurrentHardwareDisplay(null, cachedDevices, collectSettings());
+    });
 }
 
 // Device mode radio buttons
@@ -790,7 +790,6 @@ exportCfgRescaleSlider.addEventListener('input', () => {
 // Language, precision, MIDI tool
 languageSelect.addEventListener('change', () => applySettings({ reloadLocale: true }));
 modelPrecisionSelect.addEventListener('change', async () => {
-    updateBatchSizeState(modelPrecisionSelect.value);
     await applySettings(); // 等待保存 + pipeline 重置完成再刷新硬件显示
     // pipeline 已被重置，刷新"当前运行硬件"显示让用户确认精度切换生效
     updateCurrentHardwareDisplay(null, cachedDevices, collectSettings());
@@ -804,14 +803,6 @@ modelPrecisionSelect.addEventListener('change', async () => {
             await window.electronAPI.modelDownloadOpen(prec);
         }
     } catch (_) {}
-});
-npuDiffBatchSizeSelect.addEventListener('change', () => {
-    _savedDiffBatch = npuDiffBatchSizeSelect.value;
-    applySettings();
-});
-npuVocoderBatchSizeSelect.addEventListener('change', () => {
-    _savedVocoderBatch = npuVocoderBatchSizeSelect.value;
-    applySettings();
 });
 vocoderTypeSelect.addEventListener('change', () => {
     if (vocoderTypeSelect.value === 'sifigan') {

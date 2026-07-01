@@ -28,9 +28,6 @@
                 <div class="sidebar-item" data-target="section-export-params">
                     <span data-i18n="settings.exportInferenceParams">导出推理参数</span>
                 </div>
-                <div class="sidebar-item" data-target="section-npu">
-                    <span data-i18n="settings.npuInference">NPU 推理设置</span>
-                </div>
                 <div class="sidebar-item" data-target="section-vocoder-chunk">
                     <span data-i18n="settings.vocoderChunkTitle">Vocoder 分片设置</span>
                 </div>
@@ -86,6 +83,14 @@
 
             <!-- Inference Hardware -->
             <div class="settings-section hidden" id="section-inference">
+                <div class="setting-group">
+                    <label for="inferenceProvider" data-i18n="settings.inferenceProvider">推理提供者</label>
+                    <select id="inferenceProvider">
+                        <option value="ortnode" data-i18n="settings.inferenceProviderOrtnode">ORTNODE (DirectML/CPU)</option>
+                        <option value="ortweb" data-i18n="settings.inferenceProviderOrtweb">ORTWEB (WebNN)</option>
+                    </select>
+                    <p class="hint" id="inferenceProviderHint" data-i18n="settings.inferenceProviderHintOrtnode">使用 onnxruntime-node 在主进程运行 DirectML/CPU 推理。</p>
+                </div>
                 <div class="setting-group hardware-info">
                     <label data-i18n="settings.currentHardware">当前运行硬件</label>
                     <div id="currentHardwareInfo" class="info-box">
@@ -172,34 +177,6 @@
                     <label for="exportCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
                     <input type="range" id="exportCfgRescale" min="0" max="1" value="0.75" step="0.05">
                     <p class="hint" data-i18n="settings.exportCfgRescaleHint">导出时的 CFG Rescale 系数。</p>
-                </div>
-            </div>
-
-            <!-- NPU Settings -->
-            <div class="settings-section hidden" id="section-npu">
-                <p class="section-desc" data-i18n="settings.npuInferenceDesc">NPU (WebNN) 推理的批处理设置。增大 batch size 可提高 NPU 利用率，但会增加显存占用。</p>
-                <div class="setting-group">
-                    <label for="npuDiffBatchSize" data-i18n="settings.npuDiffBatchSize">扩散批次大小</label>
-                    <select id="npuDiffBatchSize">
-                        <option value="1">1 (单片段)</option>
-                        <option value="2">2 (CFG 标准)</option>
-                        <option value="4" selected>4 (双片段拼批, 推荐)</option>
-                    </select>
-                    <p class="hint" data-i18n="settings.npuDiffBatchSizeHint">NPU 扩散模型的推理批次大小。batch=4 同时处理 2 个片段的 CFG，可显著提升长音频合成速度。</p>
-                </div>
-                <div class="setting-group">
-                    <label for="npuVocoderBatchSize" data-i18n="settings.npuVocoderBatchSize">声码器批次大小</label>
-                    <select id="npuVocoderBatchSize">
-                        <option value="1">1 (逐块处理)</option>
-                        <option value="2">2 (双块并行)</option>
-                        <option value="4" selected>4 (四块并行, 推荐)</option>
-                    </select>
-                    <p class="hint" data-i18n="settings.npuVocoderBatchSizeHint">NPU 声码器的推理批次大小。batch=4 同时处理 4 个音频块，可加速波形重建阶段。</p>
-                </div>
-                <div class="setting-group hidden" id="batchSizeDisabledHint">
-                    <div class="info-box">
-                        <span data-i18n="settings.batchSizeDisabledHint"></span>
-                    </div>
                 </div>
             </div>
 
