@@ -47,6 +47,13 @@ const mainLocales = {
     modelDownload: {
       sifiganUrlNotConfigured: '下载链接待配置，请等待作者上传至 ModelScope 或手动放置模型文件',
     },
+    singerCreator: {
+      title: '歌手创建',
+      fileMenu: '文件',
+      save: '保存',
+      saveAs: '另存为...',
+      close: '关闭',
+    },
   },
   'en': {
     menu: {
@@ -91,6 +98,13 @@ const mainLocales = {
     },
     modelDownload: {
       sifiganUrlNotConfigured: 'Download URL not configured. Please wait for the author to upload to ModelScope or manually place the model files.',
+    },
+    singerCreator: {
+      title: 'Singer Creator',
+      fileMenu: 'File',
+      save: 'Save',
+      saveAs: 'Save As...',
+      close: 'Close',
     },
   },
 };
