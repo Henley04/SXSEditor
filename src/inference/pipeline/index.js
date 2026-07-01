@@ -58,6 +58,8 @@ class OnnxSVSPipeline {
         this.initialized = false;
         this.userDeviceId = options.deviceId;
         this.preferredDeviceType = options.preferredDeviceType || null;
+        this.inferenceProvider = options.inferenceProvider || 'ortnode';
+        this.webnnDeviceType = null; // 'npu' | 'gpu'，仅当 useWebNN 时有效
         this.useWebNN = false;
         this.useStaticShapes = options.modelPrecision === 'int8-npu';
         this.vocoderType = 'default';            // 'default' | 'sifigan'，_doInit 中从 settings 读取覆盖
@@ -605,21 +607,39 @@ class OnnxSVSPipeline {
         }
         this.allDevices = gpuInfo.devices || [];
 
-        // 检查是否选择 NPU (WebNN)
-        const isNpuRequested = this.preferredDeviceType === 'npu' || this.userDeviceId === 'npu';
-        if (isNpuRequested) {
+        // 检查是否使用 WebNN (ORTWEB)
+        const useOrtWeb = this.inferenceProvider === 'ortweb';
+        if (useOrtWeb) {
             try {
                 const { detectNPUAvailability } = require('../../main/webnnIpc');
-                const npuResult = await detectNPUAvailability();
-                if (npuResult.npuAvailable) {
-                    this.useWebNN = true;
-                    this.gpuDeviceName = 'NPU (WebNN)';
-                    console.log('[OnnxSVSPipeline] NPU available, using WebNN inference engine');
+                const webnnResult = await detectNPUAvailability();
+                const npuAvailable = !!webnnResult.npuAvailable;
+                const gpuAvailable = !!webnnResult.gpuAvailable;
+                if (npuAvailable || gpuAvailable) {
+                    let deviceType = null;
+                    const requestedNpu = this.preferredDeviceType === 'npu' || this.userDeviceId === 'npu';
+                    const requestedGpu = this.preferredDeviceType === 'webnn-gpu' || this.userDeviceId === 'webnn-gpu';
+                    if (requestedNpu && npuAvailable) {
+                        deviceType = 'npu';
+                    } else if (requestedGpu && gpuAvailable) {
+                        deviceType = 'gpu';
+                    } else if (npuAvailable) {
+                        // auto 或未指定时优先 NPU
+                        deviceType = 'npu';
+                    } else if (gpuAvailable) {
+                        deviceType = 'gpu';
+                    }
+                    if (deviceType) {
+                        this.useWebNN = true;
+                        this.webnnDeviceType = deviceType;
+                        this.gpuDeviceName = deviceType === 'npu' ? 'NPU (WebNN)' : 'GPU (WebNN)';
+                        console.log(`[OnnxSVSPipeline] WebNN ${deviceType.toUpperCase()} available, using ORTWEB inference engine`);
+                    }
                 } else {
-                    console.warn(`[OnnxSVSPipeline] NPU not available (${npuResult.details}), falling back to DML/CPU`);
+                    console.warn(`[OnnxSVSPipeline] WebNN not available (${webnnResult.details}), falling back to DML/CPU`);
                 }
             } catch (e) {
-                console.warn('[OnnxSVSPipeline] NPU detection failed, falling back to DML/CPU:', e.message);
+                console.warn('[OnnxSVSPipeline] WebNN detection failed, falling back to DML/CPU:', e.message);
             }
         }
 
@@ -837,7 +857,7 @@ class OnnxSVSPipeline {
                     wc,
                     modelId,
                     overridePath || this._getModelPath(modelFile),
-                    { deviceType: 'npu' },
+                    { deviceType: this.webnnDeviceType || 'npu' },
                 );
                 return res || { success: false, error: 'Empty response' };
             } catch (err) {
@@ -868,26 +888,27 @@ class OnnxSVSPipeline {
                 throw new Error(`WebNN 探测失败: ${probeResult.error}`);
             }
 
-            // Check if NPU was actually used (not silently fallen back to GPU/WASM)
+            // Check if requested WebNN device was actually used (not silently fallen back to another device/WASM)
             const probeEp = probeResult.ep || '';
-            if (!probeEp.includes('npu')) {
-                // Model loaded but not on NPU — clean up and fall back to DML
+            const expectedDevice = this.webnnDeviceType || 'npu';
+            if (!probeEp.includes(expectedDevice)) {
+                // Model loaded but not on expected device — clean up and fall back to DML
                 unloadWebnnModel(probeKey);
-                console.warn(`[OnnxSVSPipeline] WebNN probe: NPU not usable, actually using ${probeEp}, falling back to DML/CPU`);
-                // Cache the failure so next init skips NPU detection entirely
+                console.warn(`[OnnxSVSPipeline] WebNN probe: ${expectedDevice.toUpperCase()} not usable, actually using ${probeEp}, falling back to DML/CPU`);
+                // Cache the failure so next init skips WebNN detection entirely
                 try {
                     const { markNPUUnavailable } = require('../../main/webnnIpc');
-                    markNPUUnavailable(`WebNN probe: NPU not usable, fell back to ${probeEp}`);
+                    markNPUUnavailable(`WebNN probe: ${expectedDevice.toUpperCase()} not usable, fell back to ${probeEp}`);
                 } catch (_) {}
                 this.useWebNN = false;
                 return await this._doInitFallback(gpuInfo, resolvedModelFiles, sessionKeys);
             }
 
-            // NPU confirmed working — load remaining models in parallel
+            // WebNN device confirmed working — load remaining models in parallel
             this.sessions[probeKey] = new WebNNSessionProxy(probeKey);
             this.sessionEPs[probeKey] = probeEp;
             loadedSessions.push(probeKey);
-            console.log(`[OnnxSVSPipeline] ${probeFile} loaded via WebNN-NPU [${probeEp}]`);
+            console.log(`[OnnxSVSPipeline] ${probeFile} loaded via WebNN-${(this.webnnDeviceType || 'npu').toUpperCase()} [${probeEp}]`);
 
             const remainingIndices = [];
             for (let i = 1; i < webnnModelFiles.length; i++) remainingIndices.push(i);

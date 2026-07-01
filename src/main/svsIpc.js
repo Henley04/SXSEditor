@@ -29,6 +29,7 @@ function _createPipeline(languageOverride) {
   const preferredDeviceType = settings.preferredDeviceType || undefined;
   const modelDeviceMapping = settings.modelDeviceMapping || undefined;
   const modelPrecision = settings.modelPrecision || 'fp16';
+  const inferenceProvider = settings.inferenceProvider || 'ortnode';
 
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
   console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}`);
@@ -40,6 +41,7 @@ function _createPipeline(languageOverride) {
     modelDeviceMapping,
     modelPrecision,
     languageOverride,
+    inferenceProvider,
   });
   return pipeline;
 }

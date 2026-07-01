@@ -19,6 +19,7 @@ const deviceSelectGroup = document.getElementById('deviceSelectGroup');
 const webnnStatusGroup = document.getElementById('webnnStatusGroup');
 const webnnStatusValue = document.getElementById('webnnStatusValue');
 const npuStatusValue = document.getElementById('npuStatusValue');
+const gpuStatusValue = document.getElementById('gpuStatusValue');
 const advancedSettingsGroup = document.getElementById('advancedSettingsGroup');
 const modelDeviceMappingDiv = document.getElementById('modelDeviceMapping');
 const deviceModeRadios = document.querySelectorAll('input[name="deviceMode"]');
@@ -170,6 +171,7 @@ function getDeviceTypeLabel(deviceType) {
         case 'discrete-gpu': return t('settings.discreteGpu');
         case 'integrated-gpu': return t('settings.integratedGpu');
         case 'npu': return t('settings.npuLabel');
+        case 'webnn-gpu': return t('settings.webnnGpuDevice');
         case 'cpu': return t('settings.cpuLabel');
         default: return deviceType || '';
     }
@@ -179,7 +181,8 @@ function getDeviceOptionText(d) {
     const vramStr = d.vram ? ` (${d.vram})` : '';
     const typeStr = getDeviceTypeLabel(d.deviceType);
     const npuTag = d.deviceType === 'npu' ? ' [NPU(WebNN)]' : '';
-    return `${d.name}${vramStr} ${typeStr}${npuTag}`;
+    const webnnGpuTag = d.deviceType === 'webnn-gpu' ? ' [WebNN GPU]' : '';
+    return `${d.name}${vramStr} ${typeStr}${npuTag}${webnnGpuTag}`;
 }
 
 function updateInferenceProviderHint(provider) {
@@ -341,33 +344,40 @@ function updateModelStatusDisplay(modelStatus) {
 async function loadDevices() {
     try {
         // 立即显示加载状态
-        webnnStatusValue.textContent = t('settings.webnnChecking');
-        webnnStatusValue.classList.remove('status-available', 'status-unavailable');
-        webnnStatusValue.classList.add('status-checking');
-        npuStatusValue.textContent = t('settings.webnnChecking');
-        npuStatusValue.classList.remove('status-available', 'status-unavailable');
-        npuStatusValue.classList.add('status-checking');
+        for (const el of [webnnStatusValue, npuStatusValue, gpuStatusValue]) {
+            if (!el) continue;
+            el.textContent = t('settings.webnnChecking');
+            el.classList.remove('status-available', 'status-unavailable');
+            el.classList.add('status-checking');
+        }
 
         // 先加载已保存的设置，立即应用到 UI（避免显示 HTML 默认值）
         const currentSetting = await window.electronAPI.getSettings();
         window._currentSetting = currentSetting;
         applySavedSettingsToUI(currentSetting);
+        const provider = currentSetting?.inferenceProvider || 'ortnode';
 
         // 再获取设备列表（硬件检测可能较慢）
-        const devices = await window.electronAPI.getDMLDevices();
+        const allDevices = await window.electronAPI.getDMLDevices();
+        const hasNpu = allDevices.some(d => d.deviceType === 'npu');
+        const hasWebnnGpu = allDevices.some(d => d.deviceType === 'webnn-gpu');
+        cachedWebnnInfo = {
+            webnnAvailable: hasNpu || hasWebnnGpu,
+            npuAvailable: hasNpu,
+            gpuAvailable: hasWebnnGpu,
+        };
 
+        // 根据推理提供者过滤可选项：ORTNODE 仅显示本地 GPU/CPU；ORTWEB 仅显示 WebNN NPU/GPU
+        const devices = provider === 'ortweb'
+            ? allDevices.filter(d => d.deviceType === 'npu' || d.deviceType === 'webnn-gpu')
+            : allDevices.filter(d => d.deviceType !== 'npu' && d.deviceType !== 'webnn-gpu');
         cachedDevices = devices;
-
-        // NPU 结果已经包含在 getDMLDevices 中（并行检测）
-        const hasNpu = devices.some(d => d.deviceType === 'npu');
-        const webnnInfo = { webnnAvailable: hasNpu, npuAvailable: hasNpu };
-        cachedWebnnInfo = webnnInfo;
 
         // 获取当前硬件信息（可能为 null 如果管道未初始化）
         const hardwareInfo = await window.electronAPI.getCurrentHardware();
 
-        // 更新 WebNN/NPU 状态指示器
-        if (webnnInfo.webnnAvailable) {
+        // 更新 WebNN/NPU/GPU 状态指示器
+        if (cachedWebnnInfo.webnnAvailable) {
             webnnStatusValue.textContent = t('settings.webnnAvailable');
             webnnStatusValue.classList.add('status-available');
             webnnStatusValue.classList.remove('status-unavailable', 'status-checking');
@@ -376,7 +386,7 @@ async function loadDevices() {
             webnnStatusValue.classList.add('status-unavailable');
             webnnStatusValue.classList.remove('status-available', 'status-checking');
         }
-        if (webnnInfo.npuAvailable) {
+        if (cachedWebnnInfo.npuAvailable) {
             npuStatusValue.textContent = t('settings.npuAvailable');
             npuStatusValue.classList.add('status-available');
             npuStatusValue.classList.remove('status-unavailable', 'status-checking');
@@ -385,11 +395,20 @@ async function loadDevices() {
             npuStatusValue.classList.add('status-unavailable');
             npuStatusValue.classList.remove('status-available', 'status-checking');
         }
+        if (cachedWebnnInfo.gpuAvailable) {
+            gpuStatusValue.textContent = t('settings.webnnGpuAvailable');
+            gpuStatusValue.classList.add('status-available');
+            gpuStatusValue.classList.remove('status-unavailable', 'status-checking');
+        } else {
+            gpuStatusValue.textContent = t('settings.webnnGpuNotAvailable');
+            gpuStatusValue.classList.add('status-unavailable');
+            gpuStatusValue.classList.remove('status-available', 'status-checking');
+        }
 
         inferenceDeviceSelect.innerHTML = '';
 
         const discreteGPUs = devices.filter(d => d.deviceType === 'discrete-gpu' || d.isDiscrete);
-        const autoLabel = discreteGPUs.length > 0
+        const autoLabel = provider === 'ortnode' && discreteGPUs.length > 0
             ? t('settings.autoSelectPreferDiscrete', { name: discreteGPUs[0].name })
             : t('settings.autoSelect');
         const autoOption = document.createElement('option');
@@ -399,26 +418,23 @@ async function loadDevices() {
 
         for (const d of devices) {
             const option = document.createElement('option');
-            // NPU devices use 'npu' as value, others use dxgiAdapterNumber
-            option.value = d.deviceType === 'npu' ? 'npu' : String(d.dxgiAdapterNumber);
+            if (d.deviceType === 'npu') {
+                option.value = 'npu';
+            } else if (d.deviceType === 'webnn-gpu') {
+                option.value = 'webnn-gpu';
+            } else {
+                option.value = String(d.dxgiAdapterNumber);
+            }
             option.textContent = getDeviceOptionText(d);
             option.dataset.deviceType = d.deviceType || (d.isDiscrete ? 'discrete-gpu' : 'integrated-gpu');
             inferenceDeviceSelect.appendChild(option);
         }
 
-        // Update cachedWebnnInfo from device list (NPU may now come from getDMLDevices)
-        if (!cachedWebnnInfo.npuAvailable && devices.some(d => d.deviceType === 'npu')) {
-            cachedWebnnInfo = { ...cachedWebnnInfo, npuAvailable: true };
-        }
-
-        // Restore device selection from settings (dropdown needs device list first)
-        if (currentSetting && currentSetting.preferredDeviceId !== undefined && currentSetting.preferredDeviceId !== null) {
-            inferenceDeviceSelect.value = String(currentSetting.preferredDeviceId);
-        } else if (currentSetting && currentSetting.deviceId !== undefined && currentSetting.deviceId !== null) {
-            inferenceDeviceSelect.value = String(currentSetting.deviceId);
-        } else {
-            inferenceDeviceSelect.value = 'auto';
-        }
+        // Restore device selection from settings（若当前 provider 下不可用则回退 auto）
+        const preferredId = currentSetting?.preferredDeviceId ?? currentSetting?.deviceId ?? null;
+        const desiredValue = preferredId !== null ? String(preferredId) : 'auto';
+        const validValues = new Set(Array.from(inferenceDeviceSelect.options).map(o => o.value));
+        inferenceDeviceSelect.value = validValues.has(desiredValue) ? desiredValue : 'auto';
 
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
 
@@ -469,7 +485,9 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
             deviceIdStr = ` [deviceId=${hardwareInfo.dmlDeviceId}]`;
         }
 
-        textEl.textContent = `${gpuName}${deviceTypeLabel}${deviceIdStr}${epDetail}`;
+        const provider = currentSetting?.inferenceProvider || 'ortnode';
+        const providerLabel = provider === 'ortweb' ? 'ORTWEB / ' : 'ORTNODE / ';
+        textEl.textContent = `${providerLabel}${gpuName}${deviceTypeLabel}${deviceIdStr}${epDetail}`;
         return;
     }
 
@@ -478,33 +496,52 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
         return;
     }
 
+    const provider = currentSetting?.inferenceProvider || 'ortnode';
+    const providerLabel = provider === 'ortweb' ? 'ORTWEB / ' : 'ORTNODE / ';
+
     const selectedDeviceId = currentSetting && (currentSetting.preferredDeviceId !== undefined && currentSetting.preferredDeviceId !== null)
         ? currentSetting.preferredDeviceId
         : (currentSetting && currentSetting.deviceId !== undefined && currentSetting.deviceId !== null ? currentSetting.deviceId : null);
 
     if (selectedDeviceId !== null) {
-        // NPU devices use 'npu' as value, match by deviceType
-        const selected = selectedDeviceId === 'npu'
-            ? devices.find(d => d.deviceType === 'npu')
-            : devices.find(d => d.dxgiAdapterNumber === selectedDeviceId);
+        // WebNN/NPU devices match by deviceType, local GPU by dxgiAdapterNumber
+        let selected;
+        if (selectedDeviceId === 'npu') {
+            selected = devices.find(d => d.deviceType === 'npu');
+        } else if (selectedDeviceId === 'webnn-gpu') {
+            selected = devices.find(d => d.deviceType === 'webnn-gpu');
+        } else {
+            selected = devices.find(d => d.dxgiAdapterNumber === selectedDeviceId);
+        }
         if (selected) {
             const vramStr = selected.vram ? ` (${selected.vram})` : '';
             const typeLabel = getDeviceTypeLabel(selected.deviceType || (selected.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'));
-            const npuTag = selected.deviceType === 'npu' ? ' [NPU(WebNN)]' : '';
-            textEl.textContent = `${selected.name}${vramStr} ${typeLabel}${npuTag} [deviceId=${selectedDeviceId}] ${t('settings.pendingInit')}`;
+            const webnnTag = selected.deviceType === 'npu' ? ' [NPU(WebNN)]' : (selected.deviceType === 'webnn-gpu' ? ' [WebNN GPU]' : '');
+            textEl.textContent = `${providerLabel}${selected.name}${vramStr} ${typeLabel}${webnnTag} [deviceId=${selectedDeviceId}] ${t('settings.pendingInit')}`;
             return;
         }
     }
 
     // Auto mode — show "自动选择" with best device hint, matching the dropdown display
+    if (provider === 'ortweb') {
+        const best = devices.find(d => d.deviceType === 'npu') || devices.find(d => d.deviceType === 'webnn-gpu');
+        if (best) {
+            const typeLabel = getDeviceTypeLabel(best.deviceType);
+            textEl.textContent = `${providerLabel}${t('settings.autoSelect')}: ${best.name} ${typeLabel} ${t('settings.pendingInit')}`;
+            return;
+        }
+    }
+
     const discrete = devices.filter(d => d.deviceType === 'discrete-gpu' || d.isDiscrete);
     if (discrete.length > 0) {
         const best = discrete.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
-        textEl.textContent = t('settings.autoSelectPreferDiscrete', { name: best.name }) + ` ${t('settings.pendingInit')}`;
+        textEl.textContent = `${providerLabel}${t('settings.autoSelectPreferDiscrete', { name: best.name })} ${t('settings.pendingInit')}`;
     } else {
         const best = devices.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
-        const vramStr = best.vram ? ` (${best.vram})` : '';
-        textEl.textContent = `${t('settings.autoSelect')}: ${best.name}${vramStr} ${getDeviceTypeLabel(best.deviceType || (best.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'))} ${t('settings.pendingInit')}`;
+        const vramStr = best?.vram ? ` (${best.vram})` : '';
+        textEl.textContent = best
+            ? `${providerLabel}${t('settings.autoSelect')}: ${best.name}${vramStr} ${getDeviceTypeLabel(best.deviceType || (best.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'))} ${t('settings.pendingInit')}`
+            : `${providerLabel}${t('settings.noGpuDetected')}`;
     }
 }
 
@@ -536,8 +573,13 @@ function buildModelDeviceMapping() {
         // Populate with available devices
         for (const d of cachedDevices) {
             const opt = document.createElement('option');
-            // NPU devices use 'npu' as value, others use dxgiAdapterNumber
-            opt.value = d.deviceType === 'npu' ? 'npu' : String(d.dxgiAdapterNumber);
+            if (d.deviceType === 'npu') {
+                opt.value = 'npu';
+            } else if (d.deviceType === 'webnn-gpu') {
+                opt.value = 'webnn-gpu';
+            } else {
+                opt.value = String(d.dxgiAdapterNumber);
+            }
             opt.textContent = getDeviceOptionText(d);
             select.appendChild(opt);
         }
@@ -633,11 +675,13 @@ function collectSettings() {
     let preferredDeviceType;
     if (deviceMode === 'manual') {
         const inferenceValue = inferenceDeviceSelect.value;
-        preferredDeviceId = inferenceValue === 'auto' ? null : (inferenceValue === 'npu' ? 'npu' : parseInt(inferenceValue));
+        preferredDeviceId = inferenceValue === 'auto'
+            ? null
+            : (inferenceValue === 'npu' || inferenceValue === 'webnn-gpu' ? inferenceValue : parseInt(inferenceValue));
         preferredDeviceType = null;
         if (preferredDeviceId !== null) {
-            if (preferredDeviceId === 'npu') {
-                preferredDeviceType = 'npu';
+            if (preferredDeviceId === 'npu' || preferredDeviceId === 'webnn-gpu') {
+                preferredDeviceType = preferredDeviceId;
             } else {
                 const selectedOption = inferenceDeviceSelect.options[inferenceDeviceSelect.selectedIndex];
                 preferredDeviceType = selectedOption?.dataset?.deviceType || null;
@@ -651,7 +695,9 @@ function collectSettings() {
         mappingSelects.forEach(sel => {
             const groupId = sel.dataset.groupId;
             const val = sel.value;
-            modelDeviceMapping[groupId] = val === 'auto' ? 'auto' : (val === 'npu' ? 'npu' : parseInt(val));
+            modelDeviceMapping[groupId] = val === 'auto'
+                ? 'auto'
+                : (val === 'npu' || val === 'webnn-gpu' ? val : parseInt(val));
         });
     }
 
@@ -713,10 +759,10 @@ function applySettingsDebounced() {
 
 // Inference provider select
 if (inferenceProviderSelect) {
-    inferenceProviderSelect.addEventListener('change', () => {
+    inferenceProviderSelect.addEventListener('change', async () => {
         updateInferenceProviderHint(inferenceProviderSelect.value);
-        applySettings();
-        updateCurrentHardwareDisplay(null, cachedDevices, collectSettings());
+        await applySettings();
+        await loadDevices();
     });
 }
 

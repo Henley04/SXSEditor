@@ -21,7 +21,7 @@
 
 ## English
 
-SXSEditor is an open-source desktop application for singing voice synthesis. It uses the SoulX-Singer neural model running on ONNX Runtime with DirectML GPU, WebNN NPU, and CPU support.
+SXSEditor is an open-source desktop application for singing voice synthesis. It uses the SoulX-Singer neural model running on ONNX Runtime with DirectML GPU, WebNN NPU/GPU, and CPU support.
 
 Supported singing languages: **English** and **Chinese (Mandarin)**. Japanese is in development.
 
@@ -64,8 +64,9 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | MIDI Import | Import standard MIDI files |
 | Multi-track Timeline | Drag-anddrop fragment arrangement |
 | WASAPI Audio | Shared and exclusive mode output |
-| GPU Acceleration | DirectML (NVIDIA/AMD/Intel), NPU (WebNN) |
-| One-shot Hardware Detection | GPU/NPU/DML enumeration runs once after app startup; results cached and reused at runtime (no re-probing during synthesis) |
+| GPU Acceleration | DirectML (NVIDIA/AMD/Intel), NPU/GPU (WebNN) |
+| Inference Provider | Choose ORTNODE (DirectML/CPU) or ORTWEB (WebNN NPU/GPU) in settings |
+| One-shot Hardware Detection | GPU/NPU/DML/WebNN enumeration runs once after app startup; results cached and reused at runtime (no re-probing during synthesis) |
 | Smart Vocoder Chunk Sizing | Vocoder chunk size auto-allocated from VRAM budget = (VRAM − resident weights − diff_step activations ~2GB − OS reserve ~1GB) × 0.7 safety factor. Resident weights by precision: FP32≈2.9GB, FP16≈1.4GB, INT8≈0.96GB. Tiers (by budget): <0.5GB→256, <1GB→384, <2GB→512, <4GB→768, ≥4GB→1008; manual override available in settings |
 | Vocoder Output Validation | Detects DML silent failures (all-zero/NaN waveform from VRAM exhaustion) and throws a clear OOM error instead of playing empty audio |
 | Model Auto-Download | Chunked parallel download from ModelScope |
@@ -129,7 +130,7 @@ Electron + Webpack, ONNX Runtime Node (DirectML) + ONNX Runtime Web (WebNN), Van
 
 ## 中文
 
-SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神经网络模型，通过 ONNX Runtime 运行，支持 DirectML GPU、WebNN NPU 和 CPU 推理。
+SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神经网络模型，通过 ONNX Runtime 运行，支持 DirectML GPU、WebNN NPU/GPU 和 CPU 推理。
 
 支持的合成语言：**中文（普通话）** 和 **英语**。日语正在开发中。
 
@@ -172,8 +173,9 @@ macOS / Linux 用户请从源码构建。
 | MIDI 导入 | 导入标准 MIDI 文件 |
 | 多轨时间线 | 拖拽排列分片 |
 | WASAPI 音频 | 共享和独占模式输出 |
-| GPU 加速 | DirectML（NVIDIA/AMD/Intel）、NPU（WebNN） |
-| 一次性硬件探测 | 应用启动后仅执行一次 GPU/NPU/DML 设备枚举，结果缓存复用，运行时不再重复探测（避免与推理并发提交命令流） |
+| GPU 加速 | DirectML（NVIDIA/AMD/Intel）、NPU/GPU（WebNN） |
+| 推理提供者 | 在设置中选择 ORTNODE（DirectML/CPU）或 ORTWEB（WebNN NPU/GPU） |
+| 一次性硬件探测 | 应用启动后仅执行一次 GPU/NPU/DML/WebNN 设备枚举，结果缓存复用，运行时不再重复探测（避免与推理并发提交命令流） |
 | Vocoder 分片智能分配 | 显存预算 = (VRAM − 按精度估算的常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB) × 0.7 安全系数；常驻权重按精度 FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB 扣除；分档（按预算）&lt;0.5GB→256, &lt;1GB→384, &lt;2GB→512, &lt;4GB→768, ≥4GB→1008；可在设置中切换为手动设置 |
 | Vocoder 输出校验 | 检测 DML 静默失败（显存耗尽导致的全零/NaN 波形）并抛出明确的 OOM 错误，避免误播空声音 |
 | 模型自动下载 | 从 ModelScope 分片并行下载 |
@@ -233,7 +235,7 @@ Electron + Webpack，ONNX Runtime Node（DirectML）+ ONNX Runtime Web（WebNN�
 
 ## 日本語
 
-SXSEditor は歌声合成のためのオープンソースデスクトップアプリケーションです。SoulX-Singer ニューラルモデルを ONNX Runtime 上で動作させ、DirectML GPU、WebNN NPU、CPU をサポートします。
+SXSEditor は歌声合成のためのオープンソースデスクトップアプリケーションです。SoulX-Singer ニューラルモデルを ONNX Runtime 上で動作させ、DirectML GPU、WebNN NPU/GPU、CPU をサポートします。
 
 対応言語：**中国語（普通話）** と **英語**。日本語は開発中です。
 
@@ -276,8 +278,9 @@ macOS / Linux：ソースからビルドしてください。
 | MIDI インポート | 標準 MIDI ファイルのインポート |
 | マルチトラックタイムライン | ドラッグ＆ドロップでフラグメント配置 |
 | WASAPI オーディオ | 共有/排他モード出力 |
-| GPU アクセラレーション | DirectML（NVIDIA/AMD/Intel）、NPU（WebNN） |
-| 1 回限りのハードウェア検出 | アプリ起動後に GPU/NPU/DML デバイス列挙を 1 回だけ実行し、結果をキャッシュして実行時に再利用（合成中の再検出を回避） |
+| GPU アクセラレーション | DirectML（NVIDIA/AMD/Intel）、NPU/GPU（WebNN） |
+| 推論プロバイダ | 設定で ORTNODE（DirectML/CPU）または ORTWEB（WebNN NPU/GPU）を選択 |
+| 1 回限りのハードウェア検出 | アプリ起動後に GPU/NPU/DML/WebNN デバイス列挙を 1 回だけ実行し、結果をキャッシュして実行時に再利用（合成中の再検出を回避） |
 | Vocoder チャンクサイズ自動割当 | VRAM 予算 = (VRAM − 精度別常駐重み − diff_step 活性化 ~2GB − OS 占用 ~1GB) × 0.7 安全係数；常駐重みは精度別 FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB；予算別階層 &lt;0.5GB→256, &lt;1GB→384, &lt;2GB→512, &lt;4GB→768, ≥4GB→1008；設定で手動指定にも切替可能 |
 | Vocoder 出力検証 | DML サイレント失敗（VRAM 枯渇による全ゼロ/NaN 波形）を検出し、空音声の誤再生を防ぐ OOM エラーをスロー |
 | モデル自動ダウンロード | ModelScope からチャンク並列ダウンロード |

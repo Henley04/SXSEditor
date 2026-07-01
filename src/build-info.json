@@ -1,9 +1,9 @@
 {
   "productName": "SXSEditor",
   "version": "1.0.0",
-  "buildDate": "2026-06-30 13:01:39 +08:00",
-  "buildDateISO": "2026-06-30T05:01:39.041Z",
-  "buildTimestamp": 1782795699041,
+  "buildDate": "2026-07-01 15:33:45 +08:00",
+  "buildDateISO": "2026-07-01T07:33:45.156Z",
+  "buildTimestamp": 1782891225156,
   "nodeVersion": "v24.15.0",
   "platform": "win32",
   "arch": "x64"
