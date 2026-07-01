@@ -69,6 +69,12 @@ function loadSettings() {
     _settingsCache.vocoderChunkFrames = 1008;
   }
 
+  // SiFiGAN 精度: 'fp32' (默认, 全精度) | 'fp16' (低质量, cos≈0.95)
+  // 仅在 vocoderType === 'sifigan' 时生效，控制加载 sifigan_vocoder_dml_fp16.onnx 还是 sifigan_vocoder_dml.onnx
+  if (_settingsCache.sifiganPrecision !== 'fp16' && _settingsCache.sifiganPrecision !== 'fp32') {
+    _settingsCache.sifiganPrecision = 'fp32';
+  }
+
   // Vocoder type default + startup fallback:
   // If stored value is 'sifigan' but none of the SiFiGAN model files exist,
   // temporarily fall back to 'default' for this run (settings.json is NOT modified).
@@ -124,7 +130,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
   'npuDiffBatchSize', 'npuVocoderBatchSize',
-  'vocoderType',
+  'vocoderType', 'sifiganPrecision',
   'vocoderChunkMode', 'vocoderChunkFrames',
 ];
 
