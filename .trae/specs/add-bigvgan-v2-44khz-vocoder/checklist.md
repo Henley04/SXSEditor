@@ -50,8 +50,8 @@
 ## 设置页 UI
 - [ ] `src/settings.html` 推理分区 `<select id="vocoderType">` 含第三 option `bigvgan44k`
 - [ ] BigVGAN 选项标签含"两阶段"说明，未下载时 disabled + "未下载"
-- [ ] 选择 BigVGAN 时显示质量权衡 tooltip
-- [ ] `src/main/settings.js` 的 `vocoderType` 枚举校验接受 `bigvgan44k`
+- [ ] 选择 `bigvgan44k` 时显示两阶段质量权衡 tooltip
+- [ ] `src/main/settings.js` 的 `vocoderType` 枚举校验接受 `bigvgan44k`（Phase 7 后扩展接受 `bigvgan44k_ft`）
 - [ ] 启动时 `vocoderType === 'bigvgan44k'` 但模型缺失时自动回退 `default` + 警告
 
 ## 下载管理器
@@ -61,11 +61,29 @@
 - [ ] 手动放置 `bigvgan_vocoder_dml.onnx` 后自动刷新为"已安装"
 - [ ] 卸载时删除 onnx 与 .data 文件，重置 `vocoderType=default`
 
-## 文档与回归测试
-- [ ] `onnx_models/README.md` 包含 BigVGAN v2 章节（架构/数据/I/O/两阶段/质量权衡/差异对比表）
+## 文档与回归测试（Path A）
+- [ ] `onnx_models/README.md` 包含 BigVGAN v2 章节（架构/数据/I/O/双路径/质量权衡/差异对比表）
 - [ ] 默认 vocoder 路径回归测试通过
 - [ ] SiFiGAN 路径回归测试通过
-- [ ] BigVGAN 两阶段端到端合成测试通过（DirectML 可用）
+- [ ] BigVGAN 两阶段端到端合成测试通过（vocoderType=bigvgan44k，DirectML 可用）
 - [ ] BigVGAN 模型未下载时回退测试通过
 - [ ] 44100Hz WAV 文件头与播放验证通过
 - [ ] `npm run package:lite` 打包测试通过
+
+## Path B 微调训练与单阶段集成（可选）
+- [ ] `reextract_mel_44k.py` 脚本存在，可用 BigVGAN 44kHz STFT 配置从训练音频重提取 mel 目标
+- [ ] 重提取 mel 与 BigVGAN `meldataset.get_mel_spectrogram` 输出一致性验证（cosine similarity ≥ 0.98）
+- [ ] `finetune_diff_step_44k.py` 脚本存在，可从当前 diff_step checkpoint 恢复并微调
+- [ ] 编码器权重冻结验证（`requires_grad=False`）
+- [ ] 微调后导出 `diff_step_44k_dml.onnx`（+ 可选 `preflow_44k.onnx` / `cond_emb_44k.onnx`）
+- [ ] 微调后 ONNX 与 PyTorch 输出 L1 误差 < 1e-4
+- [ ] `src/modelRegistry.js` 含 `bigvgan-44k-ft` 模型组（files 含 diff_step_44k_dml.onnx 等）
+- [ ] `src/inference/pipeline/index.js` 支持 `vocoderType=bigvgan44k_ft` 加载分支（加载微调版 diff_step/preflow/cond_emb + BigVGAN）
+- [ ] Path B 单阶段调度：diff_step_44k → mel → BigVGAN，无需两阶段、无需 mel 重提取
+- [ ] `src/settings.html` 含第四 option `bigvgan44k_ft`（标签 `BigVGAN v2 44kHz（微调版，单阶段）`）
+- [ ] `src/main/settings.js` 枚举校验接受 `bigvgan44k_ft`
+- [ ] 启动时 `vocoderType === 'bigvgan44k_ft'` 但 `diff_step_44k_dml.onnx` 或 `bigvgan_vocoder_dml.onnx` 缺失时自动回退（优先 Path A 两阶段，再回退 default）+ 警告
+- [ ] Path B 单阶段端到端合成测试通过（vocoderType=bigvgan44k_ft）
+- [ ] Path B 与 Path A 音质对比（主观评测 + 客观指标）
+- [ ] Path B 模型缺失时三级回退测试（bigvgan44k_ft → bigvgan44k → default）通过
+- [ ] `npm run package:lite` 打包测试含 Path B 代码
