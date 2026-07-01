@@ -1313,8 +1313,11 @@ class OnnxSVSPipeline {
         return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.isFP16, onProgress, progressStart, progressRange, this.useStaticShapes);
     }
 
-    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null) {
-        const sequences = this.notesToSequences(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
+    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0) {
+        // 多 segment 路径：segmentNotes.start 是相对 segStart，需要传 segStartBeat
+        // 让 notesToSequences 正确索引绝对时间的 pitchCurveF0，否则 f0 错位 → 电流声。
+        const pitchCurveOffsetSec = (segStartBeat / bpm) * 60;
+        const sequences = this.notesToSequences(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, pitchCurveOffsetSec);
         let totalFrames = sequences.f0Ids.length;
         const tokenCount = sequences.tokenCount;
 
@@ -1407,16 +1410,19 @@ class OnnxSVSPipeline {
     /**
      * 批量合成两个片段（WebNN batch=4: 2 片段 × 2 CFG）
      */
-    async _synthesizeSegmentPair(segANotes, segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange) {
-        const seqA = this.notesToSequences(segANotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
-        const seqB = this.notesToSequences(segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
+    async _synthesizeSegmentPair(segANotes, segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, segAStartBeat = 0, segBStartBeat = 0) {
+        // 多 segment 路径：传 segStartBeat 让 notesToSequences 正确索引绝对 pitchCurveF0
+        const offsetA = (segAStartBeat / bpm) * 60;
+        const offsetB = (segBStartBeat / bpm) * 60;
+        const seqA = this.notesToSequences(segANotes, bpm, f0Envelope, pitchCurveF0, f0Shift, offsetA);
+        const seqB = this.notesToSequences(segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, offsetB);
 
         const framesA = seqA.f0Ids.length;
         const framesB = seqB.f0Ids.length;
 
         if (framesA === 0 && framesB === 0) return [{ audio: [], frames: 0 }, { audio: [], frames: 0 }];
-        if (framesA === 0) return [{ audio: [], frames: 0 }, await this._synthesizeSegment(segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange)];
-        if (framesB === 0) return [await this._synthesizeSegment(segANotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange), { audio: [], frames: 0 }];
+        if (framesA === 0) return [{ audio: [], frames: 0 }, await this._synthesizeSegment(segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segBStartBeat)];
+        if (framesB === 0) return [await this._synthesizeSegment(segANotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segAStartBeat), { audio: [], frames: 0 }];
 
         console.log(`[OnnxSVSPipeline] Batch synthesis: segA=${framesA}frames, segB=${framesB}frames`);
 
@@ -1742,7 +1748,8 @@ class OnnxSVSPipeline {
                     segA.notes, segB.notes, bpm, f0Envelope, pitchCurveF0, f0Shift,
                     ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
                     npuDiffBatchSize, npuVocoderBatchSize,
-                    onProgress, pairProgressStart, pairProgressRange
+                    onProgress, pairProgressStart, pairProgressRange,
+                    segA.startBeat, segB.startBeat
                 );
 
                 // Write both segments' audio to finalAudio
@@ -1791,7 +1798,8 @@ class OnnxSVSPipeline {
                 seg.notes, bpm, f0Envelope, pitchCurveF0, f0Shift,
                 ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
-                onProgress, segProgressStart, segProgressRange
+                onProgress, segProgressStart, segProgressRange,
+                null, seg.startBeat
             );
 
             if (segResult.audio.length === 0) continue;
