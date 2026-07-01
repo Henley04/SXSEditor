@@ -9,6 +9,7 @@ import {
   getFragmentAudioData, setFragmentAudioData,
   getFragmentIsPlaying, setFragmentIsPlaying,
   getFragmentIsSynthesizing, setFragmentIsSynthesizing,
+  getFragmentIsExporting, setFragmentIsExporting,
   getFragmentPlaybackStartTime, setFragmentPlaybackStartTime,
   getFragmentPlaybackOffset, setFragmentPlaybackOffset,
   getFragmentPlayheadRaf, setFragmentPlayheadRaf,
@@ -335,6 +336,9 @@ function padAudioToFragmentDuration(audioData) {
 }
 
 export async function playFragment() {
+  // 重入保护：防止连续调用导致前一次 finally 提前把 fragmentIsSynthesizing
+  // 置 false，使后续进度回调失效（进度百分比偶发不显示的根因之一）。
+  if (getFragmentIsSynthesizing() || getFragmentIsExporting()) return;
   setFragmentIsSynthesizing(true);
   updateFragmentPlayButton();
   // 清理上一次流式播放状态
@@ -443,10 +447,13 @@ export async function playFragment() {
 }
 
 export async function exportFragment() {
+  // 重入保护：与 playFragment 互斥，避免合成/导出并发导致状态错乱
+  if (getFragmentIsSynthesizing() || getFragmentIsExporting()) return;
   const btnExportFragment = document.getElementById('btn-export-fragment');
   const originalText = btnExportFragment.textContent;
   btnExportFragment.disabled = true;
   btnExportFragment.textContent = t('fragment.exporting');
+  setFragmentIsExporting(true);
   try {
     if (!getPipelineInitialized()) {
       await initPipeline();
@@ -487,6 +494,7 @@ export async function exportFragment() {
     console.error(t('fragment.exportFailed') + ':', error);
     showAlertDialog(t('fragment.exportFailed') + ': ' + error.message);
   } finally {
+    setFragmentIsExporting(false);
     btnExportFragment.disabled = false;
     btnExportFragment.textContent = originalText;
   }

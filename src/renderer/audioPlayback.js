@@ -23,9 +23,22 @@ export async function ensurePipelineInitialized() {
 }
 
 export async function playAll() {
+  // 重入保护：防止连续调用导致前一次 finally 提前把 isSynthesizing 置 false，
+  // 使后续进度回调失效（进度百分比偶发不显示的根因之一）。
+  if (state.isSynthesizing) return;
   state.isSynthesizing = true;
   dom.btnPlay.disabled = true;
   dom.btnPlay.textContent = t('main.synthesizing');
+
+  // 注册推理进度监听：更新按钮文本显示百分比（与分片编辑器对齐）
+  let playProgressCleanup = null;
+  try {
+    playProgressCleanup = window.electronAPI.onSVSProgress((progress) => {
+      if (state.isSynthesizing) {
+        dom.btnPlay.textContent = t('main.synthesizingProgress', { progress });
+      }
+    });
+  } catch (_) {}
 
   try {
     await loadAudioSettings();
@@ -194,6 +207,7 @@ export async function playAll() {
     state.isSynthesizing = false;
     dom.btnPlay.textContent = t('main.play');
     dom.btnPlay.disabled = false;
+    if (playProgressCleanup) { try { playProgressCleanup(); } catch (_) {} playProgressCleanup = null; }
   }
 }
 
@@ -490,6 +504,14 @@ export async function exportAll() {
   dom.btnExport.textContent = t('main.exporting');
   dom.timeDisplay.textContent = t('main.preparing');
 
+  // 注册推理进度监听：更新导出按钮文本显示百分比
+  let exportProgressCleanup = null;
+  try {
+    exportProgressCleanup = window.electronAPI.onSVSProgress((progress) => {
+      dom.btnExport.textContent = t('main.exportingProgress', { progress });
+    });
+  } catch (_) {}
+
   try {
     const singers = trackManager.getSingers();
     const allNotesBySinger = {};
@@ -634,5 +656,6 @@ export async function exportAll() {
   } finally {
     dom.btnExport.disabled = false;
     dom.btnExport.textContent = originalText;
+    if (exportProgressCleanup) { try { exportProgressCleanup(); } catch (_) {} exportProgressCleanup = null; }
   }
 }

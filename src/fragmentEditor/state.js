@@ -9,6 +9,7 @@ let fragmentAudioSource = null;
 let fragmentAudioData = null;
 let fragmentIsPlaying = false;
 let fragmentIsSynthesizing = false;
+let fragmentIsExporting = false;
 let fragmentPlaybackStartTime = 0;
 let fragmentPlaybackOffset = 0;
 let fragmentPlayheadRaf = null;
@@ -120,6 +121,9 @@ export function setFragmentIsPlaying(v) { fragmentIsPlaying = v; }
 
 export function getFragmentIsSynthesizing() { return fragmentIsSynthesizing; }
 export function setFragmentIsSynthesizing(v) { fragmentIsSynthesizing = v; }
+
+export function getFragmentIsExporting() { return fragmentIsExporting; }
+export function setFragmentIsExporting(v) { fragmentIsExporting = v; }
 
 export function getFragmentPlaybackStartTime() { return fragmentPlaybackStartTime; }
 export function setFragmentPlaybackStartTime(v) { fragmentPlaybackStartTime = v; }
