@@ -56,6 +56,18 @@ function registerSettingsIpc() {
           source: 'webnn',
         });
       }
+      if (npuResult.gpuAvailable && !devices.some(d => d.deviceType === 'webnn-gpu')) {
+        devices.push({
+          name: t('settings.webnnGpuDevice'),
+          deviceType: 'webnn-gpu',
+          isDiscrete: false,
+          vramBytes: 0,
+          vram: '0 MB',
+          vendor: '',
+          dxgiAdapterNumber: undefined,
+          source: 'webnn',
+        });
+      }
       return devices;
     } catch (err) {
       console.error('[Main] DML device enumeration failed:', err);
@@ -177,7 +189,7 @@ function registerSettingsIpc() {
     // vocoderType 不在此列：仅切换 vocoder 时走增量 swapVocoder 路径，只重载 vocoder session，
     // 避免主模型（encoders/preflow/condEmb/diffStep/melTransform）被重新加载。
     // 但若其他 RESET_TRIGGER_KEYS 同时变化，仍走完整 reset（重建时自动读取最新 vocoderType）。
-    const RESET_TRIGGER_KEYS = ['deviceMode', 'preferredDeviceId', 'modelDeviceMapping', 'modelPrecision'];
+    const RESET_TRIGGER_KEYS = ['deviceMode', 'preferredDeviceId', 'modelDeviceMapping', 'modelPrecision', 'inferenceProvider'];
     const needsPipelineReset = RESET_TRIGGER_KEYS.some(key => {
       // modelDeviceMapping 是对象，需深比较；其他字段为标量，直接比较
       if (key === 'modelDeviceMapping') {

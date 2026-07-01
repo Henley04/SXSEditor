@@ -74,6 +74,11 @@ function loadSettings() {
     _settingsCache.releaseDmlVramAfterSynthesis = false;
   }
 
+  // 推理提供者: 'ortnode' (默认, onnxruntime-node DirectML/CPU) | 'ortweb' (onnxruntime-web WebNN)
+  if (_settingsCache.inferenceProvider !== 'ortweb' && _settingsCache.inferenceProvider !== 'ortnode') {
+    _settingsCache.inferenceProvider = 'ortnode';
+  }
+
   // SiFiGAN 精度: 'fp32' (默认, 全精度) | 'fp16' (低质量, cos≈0.95)
   // 仅在 vocoderType === 'sifigan' 时生效，控制加载 sifigan_vocoder_dml_fp16.onnx 还是 sifigan_vocoder_dml.onnx
   if (_settingsCache.sifiganPrecision !== 'fp16' && _settingsCache.sifiganPrecision !== 'fp32') {
@@ -137,6 +142,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'vocoderType', 'sifiganPrecision',
   'vocoderChunkMode', 'vocoderChunkFrames',
   'releaseDmlVramAfterSynthesis',
+  'inferenceProvider',
 ];
 
 async function updateLocaleSetting(locale) {

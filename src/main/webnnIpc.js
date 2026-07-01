@@ -152,26 +152,31 @@ function registerWebnnIpc() {
 }
 
 /**
- * Detect NPU availability via WebNN API (renderer process).
+ * Detect WebNN/NPU/GPU availability via WebNN API (renderer process).
  * Reuses the existing webnn:detectNPU:request channel.
- * Returns { npuAvailable: boolean, details: string }
+ * Returns { webnnAvailable: boolean, npuAvailable: boolean, gpuAvailable: boolean, details: string }
  */
 async function detectNPUAvailability() {
   if (_npuDetectionCache) {
-    return { npuAvailable: !!_npuDetectionCache.npuAvailable, details: _npuDetectionCache.details || '' };
+    return {
+      webnnAvailable: !!_npuDetectionCache.webnnAvailable,
+      npuAvailable: !!_npuDetectionCache.npuAvailable,
+      gpuAvailable: !!_npuDetectionCache.gpuAvailable,
+      details: _npuDetectionCache.details || '',
+    };
   }
 
   try {
     const result = await new Promise((resolve) => {
       const wc = getMainWindowWebContents();
       if (!wc) {
-        resolve({ npuAvailable: false, details: 'No renderer window' });
+        resolve({ webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: 'No renderer window' });
         return;
       }
 
       const requestId = `webnn-detect-npu-avail-${Date.now()}`;
       const timeout = setTimeout(() => {
-        resolve({ npuAvailable: false, details: 'Detection timeout' });
+        resolve({ webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: 'Detection timeout' });
       }, 10000);
 
       ipcMain.handleOnce(`webnn:detectNPU:response:${requestId}`, async (_, result) => {
@@ -184,9 +189,14 @@ async function detectNPUAvailability() {
 
     // Cache all results (including failures) to avoid repeated slow detection
     _npuDetectionCache = result;
-    return { npuAvailable: !!result.npuAvailable, details: result.details || '' };
+    return {
+      webnnAvailable: !!(result.webnnAvailable || result.npuAvailable || result.gpuAvailable),
+      npuAvailable: !!result.npuAvailable,
+      gpuAvailable: !!result.gpuAvailable,
+      details: result.details || '',
+    };
   } catch (err) {
-    const failResult = { npuAvailable: false, details: err.message };
+    const failResult = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: err.message };
     _npuDetectionCache = failResult;
     return failResult;
   }
