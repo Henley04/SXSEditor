@@ -407,7 +407,7 @@ class OnnxSVSPipeline {
             console.log(`[OnnxSVSPipeline] Default vocoder loaded as SiFiGAN fallback [${ep}]`);
             return { success: true, ep };
         } catch (defErr) {
-            return { success: false, error: `SiFiGAN fallback 也失败: ${defErr.message}` };
+            return { success: false, error: `SiFiGAN fallback also failed: ${defErr.message}` };
         }
     }
 
@@ -557,7 +557,7 @@ class OnnxSVSPipeline {
                     }
                 }
             } catch (e) {
-                console.warn('[OnnxSVSPipeline] 外部 F0 提取失败，回退自相关:', e.message);
+                console.warn('[OnnxSVSPipeline] external F0 extraction failed, falling back to autocorrelation:', e.message);
             }
         }
         // 回退到内置自相关（异步版，避免长音频同步阻塞主线程）
@@ -666,7 +666,7 @@ class OnnxSVSPipeline {
                 console.log(`[OnnxSVSPipeline] Using user-specified device: ${this.gpuDeviceName} (deviceId=${this.dmlDeviceId})`);
             } else {
                 this.dmlDeviceId = gpuInfo.deviceId;
-                this.gpuDeviceName = gpuInfo.name || '无 GPU (仅 CPU)';
+                this.gpuDeviceName = gpuInfo.name || 'No GPU (CPU only)';
                 console.log(`[OnnxSVSPipeline] GPU device (auto): ${this.gpuDeviceName}${this.dmlDeviceId !== undefined ? ` (deviceId=${this.dmlDeviceId})` : ''}`);
             }
         }
@@ -719,7 +719,7 @@ class OnnxSVSPipeline {
                 const stats = await fs.promises.stat(filePath);
                 return { modelFile, size: stats.size };
             } catch (_) {
-                throw new Error(`Model文件不存在: ${filePath}`);
+                throw new Error(`Model file does not exist: ${filePath}`);
             }
         }));
         for (const { modelFile, size } of modelStats) {
@@ -900,7 +900,7 @@ class OnnxSVSPipeline {
             const probeResult = await loadOneWebnnModel(probeFile, probeKey);
 
             if (!probeResult.success) {
-                throw new Error(`WebNN 探测失败: ${probeResult.error}`);
+                throw new Error(`WebNN probe failed: ${probeResult.error}`);
             }
 
             // Check if requested WebNN device was actually used (not silently fallen back to another device/WASM)
@@ -981,7 +981,7 @@ class OnnxSVSPipeline {
                             continue;
                         }
                     }
-                    throw new Error(`WebNN 加载 ${modelFile} 失败: ${result.error}`);
+                    throw new Error(`WebNN load ${modelFile} failed: ${result.error}`);
                 }
             }
 
@@ -1047,7 +1047,7 @@ class OnnxSVSPipeline {
         } catch (vocErr) {
             // SiFiGAN 加载失败（DML+CPU） → 回退默认 vocoder
             if (!isSifiganVoc) {
-                throw new Error(`Vocoder 加载失败: ${vocErr.message}`);
+                throw new Error(`Vocoder load failed: ${vocErr.message}`);
             }
             console.warn(`[OnnxSVSPipeline] SiFiGAN vocoder load failed on DML/CPU, falling back to default vocoder: ${vocErr.message.substring(0, 80)}`);
             const defVocFile = await this._resolveDefaultVocoderFile();
@@ -1060,7 +1060,7 @@ class OnnxSVSPipeline {
                 loadedSessions.push('vocoder');
                 console.log(`[OnnxSVSPipeline] ${vocFile} loaded via ${ep.toUpperCase()} (SiFiGAN fallback, no validation)`);
             } catch (defErr) {
-                throw new Error(`Vocoder 加载失败 (SiFiGAN fallback 也失败): ${defErr.message}`);
+                throw new Error(`Vocoder load failed (SiFiGAN fallback also failed): ${defErr.message}`);
             }
         }
     }
@@ -1100,7 +1100,7 @@ class OnnxSVSPipeline {
             this.gpuDeviceName = selectedDevice ? `${selectedDevice.name}${selectedDevice.vram ? ` (${selectedDevice.vram})` : ''}` : `deviceId=${this.userDeviceId}`;
         } else {
             this.dmlDeviceId = gpuInfo.deviceId;
-            this.gpuDeviceName = gpuInfo.name || '无 GPU (仅 CPU)';
+            this.gpuDeviceName = gpuInfo.name || 'No GPU (CPU only)';
         }
         console.log(`[OnnxSVSPipeline] Fallback to device: ${this.gpuDeviceName}${this.dmlDeviceId !== undefined ? ` (deviceId=${this.dmlDeviceId})` : ''}`);
 
@@ -1858,7 +1858,7 @@ class OnnxSVSPipeline {
         const webnnCount = Object.values(this.sessionEPs).filter(e => String(e).startsWith('webnn')).length;
         const totalModels = Object.keys(this.sessionEPs).length;
         return {
-            gpuDeviceName: this.gpuDeviceName || '无 GPU (仅 CPU)',
+            gpuDeviceName: this.gpuDeviceName || 'No GPU (CPU only)',
             dmlDeviceId: this.dmlDeviceId,
             dmlModelCount: dmlCount,
             cpuModelCount: cpuCount,
@@ -1972,7 +1972,7 @@ class OnnxSVSPipeline {
             } else if (sifiganPlainExists) {
                 resolvedFile = 'sifigan_vocoder.onnx';
             } else {
-                console.warn('[OnnxSVSPipeline] sifigan 模型缺失，回退默认 vocoder');
+                console.warn('[OnnxSVSPipeline] sifigan model missing, falling back to default vocoder');
                 resolvedFile = 'vocoder_dml.onnx';
                 const vocDmlPath = path.join(this.modelDir, 'vocoder_dml.onnx');
                 let vocDmlExists = false;

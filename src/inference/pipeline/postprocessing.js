@@ -731,8 +731,8 @@ class Postprocessing {
             } else {
                 // F0 缺失处理（简化策略）：SiFiGAN 的 f0 是 ONNX 必需输入，无法跳过；
                 // 立即报错并提示用户检查 F0 配置，不修改 vocoderType 设置（仅本次推理失败）。
-                console.error('[OnnxSVSPipeline] vocoderType=sifigan 但 F0 缺失，回退默认 vocoder 完成本次推理');
-                throw new Error('SiFiGAN vocoder 需要 F0 输入但 F0 数据缺失，请检查 F0 配置（pitchCurveF0 / f0Envelope / notes）或切换为默认 vocoder');
+                console.error('[OnnxSVSPipeline] vocoderType=sifigan but F0 missing, falling back to default vocoder for this inference');
+                throw new Error('SiFiGAN vocoder requires F0 input but F0 data is missing, please check F0 config (pitchCurveF0 / f0Envelope / notes) or switch to default vocoder');
             }
         }
 
