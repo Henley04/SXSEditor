@@ -811,6 +811,48 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
     });
   });
 
+  describe('_clampAutoShift', () => {
+    it('should return 0 unchanged', () => {
+      expect(pipeline._clampAutoShift(0, [60])).to.equal(0);
+    });
+
+    it('should return unchanged when within effective range', () => {
+      // pitch 60 (C4) + shift 5 → 65, within [28, 88]
+      expect(pipeline._clampAutoShift(5, [60])).to.equal(5);
+      expect(pipeline._clampAutoShift(-5, [60])).to.equal(-5);
+    });
+
+    it('should clamp positive shift when max pitch would exceed upper bound', () => {
+      // pitch 80 + shift 12 → 92 > 88, max allowed up = 88 - 80 = 8
+      expect(pipeline._clampAutoShift(12, [80])).to.equal(8);
+    });
+
+    it('should clamp negative shift when min pitch would fall below lower bound', () => {
+      // pitch 30 + shift -5 → 25 < 28, max allowed down = 28 - 30 = -2
+      expect(pipeline._clampAutoShift(-5, [30])).to.equal(-2);
+    });
+
+    it('should cap absolute shift to 12 semitones even when range allows more', () => {
+      // pitch 50, range allows ±38, but abs cap is 12
+      expect(pipeline._clampAutoShift(20, [50])).to.equal(12);
+      expect(pipeline._clampAutoShift(-20, [50])).to.equal(-12);
+    });
+
+    it('should handle wide pitch range within a fragment (root cause of garbled pronunciation)', () => {
+      // 分片内音高相差大：C3(48) 到 C6(84)
+      // max pitch 84, max allowed up = 88 - 84 = 4
+      // 即使 autoShift 想偏移 +12，也只能 +4
+      expect(pipeline._clampAutoShift(12, [48, 60, 72, 84])).to.equal(4);
+      // min pitch 48, max allowed down = 28 - 48 = -20, but abs cap is -12
+      expect(pipeline._clampAutoShift(-20, [48, 60, 72, 84])).to.equal(-12);
+    });
+
+    it('should return unchanged for empty or null pitch array', () => {
+      expect(pipeline._clampAutoShift(5, [])).to.equal(5);
+      expect(pipeline._clampAutoShift(5, null)).to.equal(5);
+    });
+  });
+
   describe('quantizeF0 with f0Shift', () => {
     it('should produce same results with f0Shift=0 as default', () => {
       const f0 = new Float32Array([0, 100, 440, 1000]);

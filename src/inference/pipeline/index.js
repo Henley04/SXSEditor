@@ -430,6 +430,32 @@ class OnnxSVSPipeline {
     _hashArray(arr) { return this._audioSegmentation.hashArray(arr); }
     _computeSynthCacheKey(notes, bpm, options) { return this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this)); }
     _median(arr) { return this._audioSegmentation.median(arr); }
+
+    /**
+     * 限制 autoShift 的 f0Shift 范围，防止偏移后音高超出模型/vocoder 训练分布。
+     * 策略：基于 target pitch 范围动态限制，确保偏移后所有音符落在有效范围内；
+     *       同时绝对值兜底不超过 12 半音（±1 octave）。
+     * @param {number} f0Shift - 原始计算的半音偏移
+     * @param {number[]} targetNotePitches - target 音符的 MIDI pitch 数组
+     * @returns {number} 限制后的 f0Shift
+     */
+    _clampAutoShift(f0Shift, targetNotePitches) {
+        if (f0Shift === 0 || !targetNotePitches || targetNotePitches.length === 0) {
+            return f0Shift;
+        }
+        const MIN_EFFECTIVE_PITCH = 28; // ~E1, vocoder f0 下限附近
+        const MAX_EFFECTIVE_PITCH = 88; // ~E6, vocoder f0 上限附近
+        let minPitch = targetNotePitches[0];
+        let maxPitch = targetNotePitches[0];
+        for (const p of targetNotePitches) {
+            if (p < minPitch) minPitch = p;
+            if (p > maxPitch) maxPitch = p;
+        }
+        const maxAllowedUp = MAX_EFFECTIVE_PITCH - maxPitch;
+        const maxAllowedDown = MIN_EFFECTIVE_PITCH - minPitch; // 负值
+        const clampedShift = Math.max(maxAllowedDown, Math.min(maxAllowedUp, f0Shift));
+        return Math.max(-12, Math.min(12, clampedShift));
+    }
     clearSynthCache() {
         // LRU 缓存：清空所有条目
         this._synthCache = null;
@@ -1486,6 +1512,16 @@ class OnnxSVSPipeline {
                     const targetMedianPitch = this._median(targetNotePitches);
                     f0Shift = Math.round(refMedianPitch - targetMedianPitch);
                 }
+            }
+
+            // 限制 f0Shift 范围，防止偏移后音高超出模型/vocoder 训练分布导致 OOD。
+            // 根因：autoShift 基于全局中位数计算单一 f0Shift，当分片内音高跨度大时，
+            //   极端音符偏移后会超出 vocoder f0 有效范围（SiFiGAN 对 f0 敏感，过高
+            //   导致激励畸变→口齿不清）或 encoder pitch embedding 训练范围。
+            const clampedShift = this._clampAutoShift(f0Shift, targetNotePitches);
+            if (clampedShift !== f0Shift) {
+                console.log(`[OnnxSVSPipeline] autoShift clamped: ${f0Shift} → ${clampedShift}`);
+                f0Shift = clampedShift;
             }
         } else {
             f0Shift = pitchShift;
