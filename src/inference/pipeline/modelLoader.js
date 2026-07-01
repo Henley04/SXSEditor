@@ -502,7 +502,12 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         const dmlOpts = typeof dmlDeviceId === 'number'
             ? { name: 'dml', deviceId: dmlDeviceId }
             : 'dml';
-        dmlSession = await ort.InferenceSession.create(modelPath, { executionProviders: [dmlOpts, 'cpu'] });
+        dmlSession = await ort.InferenceSession.create(modelPath, {
+            executionProviders: [dmlOpts, 'cpu'],
+            // DirectML EP 要求 disable memory pattern + sequential execution；否则 DML 可能过度预分配 GPU 内存池。
+            enableMemPattern: false,
+            executionMode: 'sequential',
+        });
         await dmlSession.run(dummyInputs);
         console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
         return { session: dmlSession, ep: 'dml' };
