@@ -987,12 +987,15 @@ class OnnxSVSPipeline {
             try {
                 const session = await ort.InferenceSession.create(vocPath, {
                     executionProviders: [dmlOpts, 'cpu'],
+                    enableMemPattern: false,
+                    executionMode: 'sequential',
                 });
                 return { session, ep: 'dml', vocFile };
             } catch (vocErr) {
                 console.warn(`[OnnxSVSPipeline] Vocoder DML load failed (${vocFile}), falling back to CPU: ${vocErr.message}`);
                 const session = await ort.InferenceSession.create(vocPath, {
                     executionProviders: ['cpu'],
+                    executionMode: 'sequential',
                 });
                 return { session, ep: 'cpu', vocFile };
             }
@@ -1635,6 +1638,8 @@ class OnnxSVSPipeline {
             }
 
             onProgress(100);
+            // 合成完成后重建重型 DML session，释放内存池，防止连续推理 OOM
+            await this._recreateHeavySessionsAfterSynthesis();
             return audioData;
         }
 
@@ -1788,6 +1793,8 @@ class OnnxSVSPipeline {
         }
 
         onProgress(100);
+        // 合成完成后重建重型 DML session，释放内存池，防止连续推理 OOM
+        await this._recreateHeavySessionsAfterSynthesis();
         return audioData;
     }
 
@@ -1986,6 +1993,48 @@ class OnnxSVSPipeline {
             if (!result.success) {
                 throw new Error(`Failed to load required model ${key}: ${result.error}`);
             }
+        }
+    }
+
+    /**
+     * 合成完成后重建重型 DML session，强制释放 DirectML 内存池。
+     * DML 后端没有显式的内存池 shrink API，同一个 session 连续推理时
+     * 中间张量缓存会累积在 GPU 中。通过 release + reload 最大的两个模型
+     * （diffStep、vocoder），让 DML 回收这些内存池，避免第二次推理 OOM。
+     */
+    async _recreateHeavySessionsAfterSynthesis() {
+        if (this.useWebNN) return; // WebNN 在渲染进程管理，不归主进程 DML 管
+
+        const heavyKeys = ['diffStep', 'vocoder'];
+        let recreated = 0;
+        for (const key of heavyKeys) {
+            if (!this.sessions[key] || this.sessionEPs[key] !== 'dml') continue;
+
+            console.log(`[OnnxSVSPipeline] Recreating ${key} session to release DML memory pool...`);
+            try {
+                if (typeof this.sessions[key].release === 'function') {
+                    this.sessions[key].release();
+                }
+            } catch (e) {
+                console.warn(`[OnnxSVSPipeline] Failed to release ${key} before recreate:`, e.message);
+            }
+            delete this.sessions[key];
+            delete this.sessionEPs[key];
+
+            try {
+                const result = await this.loadModel(key);
+                if (result.success) {
+                    recreated++;
+                    console.log(`[OnnxSVSPipeline] ${key} recreated [${result.ep || 'unknown'}]`);
+                } else {
+                    console.error(`[OnnxSVSPipeline] Failed to recreate ${key}:`, result.error);
+                }
+            } catch (e) {
+                console.error(`[OnnxSVSPipeline] Exception recreating ${key}:`, e.message);
+            }
+        }
+        if (recreated > 0) {
+            console.log(`[OnnxSVSPipeline] Recreated ${recreated} heavy DML session(s) to release VRAM`);
         }
     }
 
