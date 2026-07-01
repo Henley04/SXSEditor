@@ -305,7 +305,23 @@ class Preprocessing {
             }
         }
 
-        const f0Ids = this.quantizeF0(f0Hz, f0Shift);
+        // 对 f0Hz 应用 f0Shift（半音偏移）。
+        // f0Hz 同时用于：
+        //   1. quantizeF0 → f0Ids（diffusion 条件，已在 quantizeF0 内部偏移 bin）
+        //   2. SiFiGAN vocoder 的 f0 输入（_currentF0Hz → effectiveF0）
+        // 之前 f0Hz 未偏移导致 vocoder f0 与 diffusion mel（基于偏移后的音高）不匹配，
+        // autoShift 较大时产生口齿不清。现在统一在源头偏移 f0Hz，
+        // quantizeF0 的 bin 偏移改为基于已偏移的 f0Hz，避免双重偏移。
+        if (f0Shift !== 0) {
+            const shiftFactor = Math.pow(2, f0Shift / 12);
+            for (let i = 0; i < f0Hz.length; i++) {
+                if (f0Hz[i] > 0) {
+                    f0Hz[i] = f0Hz[i] * shiftFactor;
+                }
+            }
+        }
+
+        const f0Ids = this.quantizeF0(f0Hz, 0); // f0Hz 已偏移，不再传 f0Shift
 
         const tokenCount = newPhonemes.length;
         const noteTextSeq = new Int32Array(tokenCount);

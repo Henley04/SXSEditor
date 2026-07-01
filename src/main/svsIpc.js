@@ -10,6 +10,17 @@ const { detectJapaneseNotes: _detectJapaneseNotes, detectEnglishNotes: _detectEn
 
 let currentLanguage = null; // Track current pipeline language
 
+// 合成级互斥锁：DML 后端下同一个 GPU 设备上的多个 InferenceSession 不支持并发 session.run()，
+// 否则命令流交叉提交会导致 887A0005 (GPU device hung)。
+// 此锁确保同一时刻只有一个合成请求在执行，防止 playAll/exportAll/fragment 合成并发。
+let _synthMutex = Promise.resolve();
+function _withSynthMutex(fn) {
+  const prev = _synthMutex;
+  let release;
+  _synthMutex = new Promise((r) => { release = r; });
+  return prev.then(fn).finally(release);
+}
+
 function _createPipeline(languageOverride) {
   const modelPath = getModelDir();
   const settings = loadSettings();
@@ -132,7 +143,7 @@ function registerSvsIpc() {
       if (opts.autoShift && opts.refAudioWavBuffer) {
         opts.refF0Extractor = _makeRmvpeExtractor();
       }
-      return await pipeline.synthesize(notes, bpm, opts);
+      return await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts));
     } catch (err) {
       console.error('[Main] svs:synthesize failed:', err.message);
       throw err;
@@ -201,7 +212,7 @@ function registerSvsIpc() {
       opts.refF0Extractor = _makeRmvpeExtractor();
     }
     try {
-      const data = await pipeline.synthesize(notes, bpm, opts);
+      const data = await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts));
       return { data };
     } catch (err) {
       return { error: err.message };

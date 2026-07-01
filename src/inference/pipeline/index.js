@@ -37,6 +37,15 @@ const PRECISION_SUBDIR_MAP = {
     'fp16': 'fp16',
     'int8-npu': path.join('int8', 'optimized_npu'),
 };
+
+// GPU 排空等待：DML 后端的 GPU 资源由 ONNX Runtime 内部管理，JS 层的 Tensor.dispose() 无法立即释放。
+// 在 encoder→diffusion→vocoder 等阶段切换处插入 50ms 等待，让 DML 内部资源池有机会回收上阶段
+// 的 GPU 缓冲区，防止累积导致 887A0005 (GPU device hung)。
+// 50ms 是经验值：太短（<10ms）DML 来不及回收，太长（>100ms）影响合成速度。
+const GPU_DRAIN_MS = 50;
+function gpuDrain() {
+    return new Promise(resolve => setTimeout(resolve, GPU_DRAIN_MS));
+}
 const SESSION_KEYS = [
     'noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder',
     'f0Encoder', 'preflow', 'condEmb', 'diffStep', 'vocoder', 'melTransform',
@@ -1297,9 +1306,17 @@ class OnnxSVSPipeline {
 
         const combinedCond = await this._runEncoder(sequences, tokenCount, totalFrames, ptFrameCount);
 
+        // GPU 排空点 1：encoder（6 次推理）→ diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
+        await gpuDrain();
+
         const xt = this.randomNoise(totalFrames, MEL_DIM);
 
         await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange);
+
+        // GPU 排空点 2：diffusion（64 次推理）→ vocoder 切换前等待 DML 回收 diffusion 的 GPU 资源。
+        // 这是最关键的排空点：32 步 × 2 次 cond/uncond = 64 次连续 diff_step 推理后，
+        // DML 内部资源池累积了大量 transformer 注意力中间张量，不排空直接进 vocoder 会 OOM。
+        await gpuDrain();
 
         // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder; truncated to totalFrames to match mel after NPU/MAX_SAFE truncation. null when unavailable.
         this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
@@ -1555,9 +1572,14 @@ class OnnxSVSPipeline {
             onProgress(currentProgress);
 
             const combinedCond = await this._runEncoder(sequences, sequences.tokenCount, totalFrames, ptFrameCount);
+            // GPU 排空点：encoder→diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
+            await gpuDrain();
             const xt = this.randomNoise(totalFrames, MEL_DIM);
 
             await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50);
+
+            // GPU 排空点：diffusion（64 次推理）→ vocoder 切换前等待 DML 回收 GPU 资源
+            await gpuDrain();
 
             onProgress(90);
             this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
@@ -1612,11 +1634,12 @@ class OnnxSVSPipeline {
         let segIdx = 0;
 
         while (segIdx < segments.length) {
-            // 段间 yield：让事件循环处理 GC，回收上一段的中间张量（mel/f0/waveform），
-            // 降低长音频多段合成时 VRAM 碎片累积导致的 OOM 风险。
+            // 段间 GPU 排空：让事件循环处理 GC 并给 DML 50ms 时间回收上一段的
+            // 中间张量（mel/f0/waveform/transformer 注意力），降低长音频多段合成时
+            // VRAM 碎片累积导致的 OOM 风险。旧版 setImmediate(~1ms) 不够 DML 回收。
             // 首次迭代前 yield 无副作用（仅多一次事件循环调度）。
             if (segIdx > 0) {
-                await new Promise(r => setImmediate(r));
+                await gpuDrain();
             }
 
             if (useBatch && segIdx + 1 < segments.length) {
@@ -1662,6 +1685,8 @@ class OnnxSVSPipeline {
                     }
                 }
 
+                // GPU 排空点 3：多 segment 之间等待 DML 回收上段 vocoder 的 GPU 资源
+                if (segIdx < segments.length - 1) await gpuDrain();
                 segIdx += 2;
                 continue;
             }
@@ -1710,6 +1735,8 @@ class OnnxSVSPipeline {
             }
 
             onProgress(Math.round(vocoderProgressStart + vocoderProgressRange));
+            // GPU 排空点 3：多 segment 之间等待 DML 回收上段 vocoder 的 GPU 资源
+            if (segIdx < segments.length - 1) await gpuDrain();
             segIdx++;
         }
 

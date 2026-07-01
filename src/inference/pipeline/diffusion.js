@@ -158,9 +158,13 @@ class Diffusion {
 
             const currentProgress = progressStart + (step + 1) * progressPerStep;
             onProgress(Math.min(Math.round(currentProgress), 90));
-            // 降低 yield 频率：每 4 步 yield 一次，减少 setTimeout 累计开销
-            // setImmediate 比 setTimeout(0) 快约 4 倍（Windows ~1ms vs ~4ms）
-            if (step % 4 === 3) {
+            // GPU 排空：每 8 步用 setTimeout(20) 代替 setImmediate，给 DML 后端 20ms 时间
+            // 回收内部 GPU 资源池中的 transformer 注意力中间张量。
+            // 旧版 setImmediate(~1ms) 太短，DML 来不及回收，64 次连续推理后累积导致 887A0005。
+            // 每 8 步一次（共 4 次/32 步）增加总合成时间约 80ms，可接受。
+            if (step % 8 === 7) {
+                await new Promise(r => setTimeout(r, 20));
+            } else if (step % 4 === 3) {
                 await new Promise(r => setImmediate(r));
             }
         }

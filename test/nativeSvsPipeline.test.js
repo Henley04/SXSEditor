@@ -786,6 +786,29 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       }
       expect(foundDiff).to.be.true;
     });
+
+    it('should apply f0Shift to f0Hz for vocoder f0 consistency', () => {
+      // f0Hz 是 SiFiGAN vocoder 的 f0 输入，必须与 diffusion mel（基于偏移后音高）匹配。
+      // 之前 f0Hz 未偏移导致 autoShift 较大时口齿不清。
+      const bpm = 120;
+      const notes = [
+        { pitch: 60, start: 0, duration: 1, lyric: 'zh_a1' },
+      ];
+      const resultNoShift = pipeline.notesToSequences(notes, bpm, null, null, 0);
+      const resultShift2 = pipeline.notesToSequences(notes, bpm, null, null, 2);
+      let foundShifted = false;
+      const expectedFactor = Math.pow(2, 2 / 12); // +2 semitones
+      for (let i = 0; i < resultNoShift.f0Hz.length; i++) {
+        const base = resultNoShift.f0Hz[i];
+        const shifted = resultShift2.f0Hz[i];
+        if (base > 0 && shifted > 0) {
+          // 允许浮点误差
+          expect(shifted).to.be.closeTo(base * expectedFactor, 0.01);
+          foundShifted = true;
+        }
+      }
+      expect(foundShifted).to.be.true;
+    });
   });
 
   describe('quantizeF0 with f0Shift', () => {
