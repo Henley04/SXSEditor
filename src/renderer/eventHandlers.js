@@ -4,7 +4,7 @@ import {
   HEADER_HEIGHT,
 } from './constants.js';
 import { t } from '../i18n/index.js';
-import { updateProjectSettings, saveProject, loadProject, showSingerSelectDialog } from './projectManager.js';
+import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog } from './projectManager.js';
 import { playAll, pausePlayback, stopPlayback, exportAll } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll } from './timelineRenderer.js';
@@ -50,10 +50,7 @@ dom.btnStop.addEventListener('click', () => {
 });
 
 // Project save/load/export
-dom.btnSave.addEventListener('click', async () => {
-  await saveProject();
-});
-
+// Save is triggered via menu (File → Save, Ctrl+S) or the menu-request IPC.
 dom.btnLoad.addEventListener('click', async () => {
   await loadProject();
   refreshAll();
@@ -236,12 +233,6 @@ dom.singerListEl.addEventListener('wheel', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-  if ((e.ctrlKey || e.metaKey) && e.key === 's' && !e.shiftKey) {
-    e.preventDefault();
-    dom.btnSave.click();
-    return;
-  }
-
   if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
     e.preventDefault();
     if (history.canUndo()) {
@@ -268,3 +259,14 @@ window.addEventListener('beforeunload', () => {
   }
   state._ipcCleanups.length = 0;
 });
+
+// Menu-driven save / save-as requests (sent from the main process File menu).
+// The menu registers the Ctrl+S / Ctrl+Shift+S accelerators.
+if (window.electronAPI?.onMainMenuSaveRequest) {
+  const off1 = window.electronAPI.onMainMenuSaveRequest(() => { saveProject(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(off1);
+}
+if (window.electronAPI?.onMainMenuSaveAsRequest) {
+  const off2 = window.electronAPI.onMainMenuSaveAsRequest(() => { saveProjectAs(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(off2);
+}

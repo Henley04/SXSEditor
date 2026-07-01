@@ -38,8 +38,27 @@ function buildAppMenu() {
   const { Menu } = require('electron');
   const menuTemplate = [
     {
-      label: 'SXSEditor',
+      label: t('menu.file'),
       submenu: [
+        {
+          label: t('menu.save'),
+          accelerator: 'CommandOrControl+S',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('main-menu:save-request');
+            }
+          },
+        },
+        {
+          label: t('menu.saveAs'),
+          accelerator: 'CommandOrControl+Shift+S',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('main-menu:save-as-request');
+            }
+          },
+        },
+        { type: 'separator' },
         {
           label: t('menu.aboutSXSEditor'),
           click: () => { showAboutDialog(); },

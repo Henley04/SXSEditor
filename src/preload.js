@@ -180,6 +180,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('close-confirm', handler);
   },
   closeConfirmed: () => ipcRenderer.invoke('close-confirmed'),
+  onMainMenuSaveRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('main-menu:save-request', handler);
+    return () => ipcRenderer.removeListener('main-menu:save-request', handler);
+  },
+  onMainMenuSaveAsRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('main-menu:save-as-request', handler);
+    return () => ipcRenderer.removeListener('main-menu:save-as-request', handler);
+  },
   // 资源管理器
   resmgrOpen: () => ipcRenderer.invoke('resmgr:open'),
   resmgrGetGPUInfo: () => ipcRenderer.invoke('resmgr:getGPUInfo'),
