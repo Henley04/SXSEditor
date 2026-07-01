@@ -134,7 +134,6 @@ const ALLOWED_SETTINGS_KEYS = [
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
-  'npuDiffBatchSize', 'npuVocoderBatchSize',
   'vocoderType', 'sifiganPrecision',
   'vocoderChunkMode', 'vocoderChunkFrames',
   'releaseDmlVramAfterSynthesis',
