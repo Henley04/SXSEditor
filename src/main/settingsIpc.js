@@ -235,7 +235,7 @@ function registerSettingsIpc() {
   ipcMain.handle('settings:check-models', async () => {
     const { checkMissingFiles } = require('../modelManager');
     const modelDir = getModelDir();
-    const precisions = ['fp32', 'fp16', 'fp8', 'int8', 'int8-npu'];
+    const precisions = ['fp32', 'fp16', 'int8', 'int8-npu'];
     const result = {};
     for (const p of precisions) {
       const { missing, existing } = checkMissingFiles(modelDir, p);

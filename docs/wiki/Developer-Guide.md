@@ -287,7 +287,6 @@ python build_en_phoneme_duration_stats.py --min-samples 10  # filter low-frequen
 Models are stored in precision-specific subdirectories under `onnx_models/`:
 - `onnx_models/fp16/` — Half precision
 - `onnx_models/fp32/` — Full precision
-- `onnx_models/fp8/` — 8-bit float
 - `onnx_models/int8/` — INT8 quantized
 - `onnx_models/int8/optimized_npu/` — INT8 NPU-optimized with fixed static dimensions
 

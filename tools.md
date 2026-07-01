@@ -4,31 +4,7 @@ All commands are PowerShell one-liners, run from the project root `d:\Document\e
 
 ---
 
-## 1. FP8 Quantization (Weight-only, float8_e4m3fn)
-
-**Script:** `quantize_fp8.py`
-Converts FP16 ONNX models to FP8 (weight-only) via QDQ node insertion on MatMul/Gemm weights.
-No calibration data needed — pure weight quantization.
-
-**Output:** `onnx_models/fp8/`
-
-```powershell
-# Quantize all models
-python quantize_fp8.py
-
-# Quantize specific models
-python quantize_fp8.py --models vocoder_dml,diff_step_dml
-
-# Quantize and verify accuracy (cosine similarity vs FP16)
-python quantize_fp8.py --verify
-
-# Skip preprocess models
-python quantize_fp8.py --skip-preprocess
-```
-
----
-
-## 2. W8A8 INT8 Quantization v2 (Recommended)
+## 1. W8A8 INT8 Quantization v2 (Recommended)
 
 **Script:** `quantize_w8a8_v2.py`
 Full pipeline with pre-processing + pipeline-based real calibration.
@@ -53,7 +29,7 @@ python quantize_w8a8_v2.py --models diff_step,vocoder,preflow
 
 ---
 
-## 3. W8A8 NPU Export Pipeline
+## 2. W8A8 NPU Export Pipeline
 
 **Script:** `export_w8a8_npu.py`
 W8A8 PTQ pipeline: load PyTorch → export FP32 ONNX → calibrate → quantize → NPU optimize.
@@ -64,7 +40,7 @@ python export_w8a8_npu.py
 
 ---
 
-## 4. W8A8 Accuracy Verification
+## 3. W8A8 Accuracy Verification
 
 **Script:** `verify_w8a8_accuracy.py`
 Verify W8A8 INT8 vs FP32 ONNX model accuracy (MSE, cosine similarity, max diff).
@@ -75,7 +51,7 @@ python verify_w8a8_accuracy.py
 
 ---
 
-## 5. Compare FP32 vs W8A8 Accuracy
+## 4. Compare FP32 vs W8A8 Accuracy
 
 **Script:** `compare_w8a8_fp32.py`
 Compares FP32 models from `onnx_models/` with W8A8 models from `onnx_models/int8/optimized_npu/`.
@@ -86,7 +62,7 @@ python compare_w8a8_fp32.py
 
 ---
 
-## 6. Full INT8 Export Pipeline (4 Isolated Processes)
+## 5. Full INT8 Export Pipeline (4 Isolated Processes)
 
 **Script:** `export_int8_pipeline.py`
 Runs each step in a separate process for complete memory isolation.
@@ -125,7 +101,7 @@ python export_step4_quantize.py --output-dir "D:\Document\electron\SXSEditor\onn
 
 ---
 
-## 7. INT8 ONNX Export (Single Script)
+## 6. INT8 ONNX Export (Single Script)
 
 **Script:** `export_int8_onnx.py`
 Export diff_step and vocoder sub-models to ONNX, then quantize to INT8 (single process).
@@ -136,7 +112,7 @@ python export_int8_onnx.py --model-path "D:\Document\electron\SXSEditor\SoulX-Si
 
 ---
 
-## 8. NPU INT8 Optimization
+## 7. NPU INT8 Optimization
 
 **Script:** `optimize_npu_int8.py`
 Optimize INT8 models for WebNN NPU deployment.
@@ -148,7 +124,7 @@ python optimize_npu_int8.py
 
 ---
 
-## 9. NPU FP16 Optimization
+## 8. NPU FP16 Optimization
 
 **Script:** `optimize_npu.py`
 Convert FP32 ONNX models to FP16 for WebNN NPU inference.
@@ -162,7 +138,7 @@ python optimize_npu.py
 
 ---
 
-## 10. ONNX Optimization (Olive-based)
+## 9. ONNX Optimization (Olive-based)
 
 **Script:** `optimize_onnx.py`
 Uses Olive + onnxruntime to optimize all ONNX models.
@@ -178,7 +154,7 @@ python optimize_onnx.py
 
 ---
 
-## 11. Vocoder DML Optimization
+## 10. Vocoder DML Optimization
 
 **Script:** `optimize_vocoder_dml.py`
 Optimizes vocoder model for DirectML compatibility.
@@ -192,7 +168,7 @@ python optimize_vocoder_dml.py
 
 ---
 
-## 12. Shared Utilities (Library — Not Run Directly)
+## 11. Shared Utilities (Library — Not Run Directly)
 
 **Script:** `export_shared.py`
 Shared utilities for export/quantization pipelines: model loading, wrappers, post-processing, quantization helpers.
@@ -200,7 +176,7 @@ Not meant to be run directly.
 
 ---
 
-## 13. Japanese (JP) Singer Voice Fine-tuning (LoRA)
+## 12. Japanese (JP) Singer Voice Fine-tuning (LoRA)
 
 Located in `SoulX-Singer/train/lora_jp/`. Run from `SoulX-Singer/` directory.
 Fine-tunes preflow + embedding layer to add Japanese phoneme support for singing voice synthesis.
@@ -307,7 +283,6 @@ cd D:\Document\electron\SXSEditor\SoulX-Singer ; python train/lora_jp/infer_lora
 | `d:\Document\electron\SXSEditor\onnx_models\` | Base ONNX models directory |
 | `d:\Document\electron\SXSEditor\onnx_models\fp16\` | FP16 models |
 | `d:\Document\electron\SXSEditor\onnx_models\fp16\JP\` | Japanese fine-tuned FP16 models |
-| `d:\Document\electron\SXSEditor\onnx_models\fp8\` | FP8 models (output of quantize_fp8.py) |
 | `d:\Document\electron\SXSEditor\onnx_models\int8\` | INT8 models (ORT CPU compatible) |
 | `d:\Document\electron\SXSEditor\onnx_models\int8\optimized_npu\` | NPU-optimized INT8 models |
 | `d:\Document\electron\SXSEditor\SoulX-Singer\` | SoulX-Singer sub-project root |

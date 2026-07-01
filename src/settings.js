@@ -315,7 +315,6 @@ function updateSifiganPrecisionVisibility(vocoderType) {
 const PRECISION_LABELS = {
     'fp32': 'FP32',
     'fp16': 'FP16',
-    'fp8': 'FP8',
     'int8': 'INT8',
     'int8-npu': 'INT8-NPU',
 };

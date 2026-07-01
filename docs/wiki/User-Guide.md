@@ -653,7 +653,7 @@ Slider from 0% to 100%.
 #### Model Precision
 
 Select which precision of ONNX models to use:
-- FP16, FP32, FP8, INT8, INT8-NPU
+- FP16, FP32, INT8, INT8-NPU
 - Different precisions are stored independently and coexist.
 - Switching does not require re-downloading — each precision has its own subdirectory.
 - See the precision info box in Settings for detailed descriptions.
