@@ -97,14 +97,21 @@ function validateSingerFileData(data) {
 function registerSingerIpc() {
   ipcMain.handle('saveSingerFile', async (event, singerData) => {
     try {
-      const result = await dialog.showSaveDialog({
-        title: t('dialog.saveSingerFile'),
-        defaultPath: `${(singerData.singerName || 'Unnamed Singer').replace(/[\\/:*?"<>|]/g, '_')}.sxssinger`,
-        filters: [{ name: 'SXS Singer', extensions: ['sxssinger'] }],
-      });
+      // If filePath is provided, save directly to it (save-in-place).
+      // Otherwise show a Save As dialog to pick a path.
+      let filePath = singerData.filePath || null;
 
-      if (result.canceled || !result.filePath) {
-        return { success: false, error: 'User cancelled save' };
+      if (!filePath) {
+        const result = await dialog.showSaveDialog({
+          title: t('dialog.saveSingerFile'),
+          defaultPath: `${(singerData.singerName || 'Unnamed Singer').replace(/[\\/:*?"<>|]/g, '_')}.sxssinger`,
+          filters: [{ name: 'SXS Singer', extensions: ['sxssinger'] }],
+        });
+
+        if (result.canceled || !result.filePath) {
+          return { success: false, error: 'User cancelled save', canceled: true };
+        }
+        filePath = result.filePath;
       }
 
       const hasPreprocessResult = singerData.preprocessResult && singerData.preprocessResult.singerData;
@@ -134,25 +141,31 @@ function registerSingerIpc() {
         singerData: singerDataToSave,
       }, null, 2);
 
-      await fs.promises.writeFile(result.filePath, singerFileContent);
+      await fs.promises.writeFile(filePath, singerFileContent);
 
-      const mainWindow = getMainWindow();
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('singerCreated', {
-          filePath: result.filePath,
-          singerName: singerData.singerName,
-          color: singerData.color,
-          avatarPath: avatarBase64,
-          wavPath: null,
-          midiPath: null,
-          wavBuffer: singerData.wavBuffer,
-          midiNotes: midiNotesToSave,
-          f0Data: f0DataToSave,
-          singerData: singerDataToSave,
-        });
+      // Only notify the main window when explicitly requested (first save that
+      // actually creates the singer in the project). Subsequent saves / save-as
+      // must not add duplicate singer entries.
+      const shouldNotify = singerData.notifyMainWindow === true;
+      if (shouldNotify) {
+        const mainWindow = getMainWindow();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('singerCreated', {
+            filePath: filePath,
+            singerName: singerData.singerName,
+            color: singerData.color,
+            avatarPath: avatarBase64,
+            wavPath: null,
+            midiPath: null,
+            wavBuffer: singerData.wavBuffer,
+            midiNotes: midiNotesToSave,
+            f0Data: f0DataToSave,
+            singerData: singerDataToSave,
+          });
+        }
       }
 
-      return { success: true };
+      return { success: true, filePath, canceled: false };
     } catch (err) {
       console.error('Failed to save singer file:', err);
       return { success: false, error: err.message };

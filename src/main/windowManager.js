@@ -307,6 +307,69 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   });
 }
 
+function buildSingerCreatorMenu(win) {
+  const { Menu } = require('electron');
+  const menuTemplate = [
+    {
+      label: t('singerCreator.fileMenu'),
+      submenu: [
+        {
+          label: t('singerCreator.save'),
+          accelerator: 'CommandOrControl+S',
+          click: () => {
+            if (win && !win.isDestroyed()) {
+              win.webContents.send('singer-creator:save-request');
+            }
+          },
+        },
+        {
+          label: t('singerCreator.saveAs'),
+          accelerator: 'CommandOrControl+Shift+S',
+          click: () => {
+            if (win && !win.isDestroyed()) {
+              win.webContents.send('singer-creator:save-as-request');
+            }
+          },
+        },
+        { type: 'separator' },
+        {
+          label: t('singerCreator.close'),
+          role: 'close',
+        },
+      ],
+    },
+    {
+      label: t('menu.edit'),
+      submenu: [
+        { role: 'undo', label: t('menu.undo') },
+        { role: 'redo', label: t('menu.redo') },
+        { type: 'separator' },
+        { role: 'cut', label: t('menu.cut') },
+        { role: 'copy', label: t('menu.copy') },
+        { role: 'paste', label: t('menu.paste') },
+        { role: 'selectAll', label: t('menu.selectAll') },
+      ],
+    },
+    {
+      label: t('menu.view'),
+      submenu: [
+        { role: 'reload', label: t('menu.reload') },
+        { role: 'forceReload', label: t('menu.forceReload') },
+        { role: 'toggleDevTools', label: t('menu.devTools') },
+        { type: 'separator' },
+        { role: 'resetZoom', label: t('menu.resetZoom') },
+        { role: 'zoomIn', label: t('menu.zoomIn') },
+        { role: 'zoomOut', label: t('menu.zoomOut') },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: t('menu.fullscreen') },
+      ],
+    },
+  ];
+
+  const menu = Menu.buildFromTemplate(menuTemplate);
+  win.setMenu(menu);
+}
+
 function openSingerCreator() {
   if (singerCreatorWindow) {
     singerCreatorWindow.focus();
@@ -316,7 +379,7 @@ function openSingerCreator() {
   singerCreatorWindow = new BrowserWindow({
     width: 900,
     height: 600,
-    title: '歌手创建',
+    title: t('singerCreator.title'),
     icon: path.join(__dirname, '..', 'SXS.png'),
     minWidth: 700,
     minHeight: 500,
@@ -331,6 +394,8 @@ function openSingerCreator() {
   singerCreatorWindow.loadURL(SINGER_CREATOR_WINDOW_WEBPACK_ENTRY);
   singerCreatorWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   singerCreatorWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  buildSingerCreatorMenu(singerCreatorWindow);
 
   singerCreatorWindow.on('closed', () => {
     singerCreatorWindow = null;

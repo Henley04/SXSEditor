@@ -166,7 +166,11 @@ export default {
   },
   singerCreator: {
     title: 'Singer Creator',
-    createAndSave: 'Create & Save',
+    fileMenu: 'File',
+    save: 'Save',
+    saveAs: 'Save As...',
+    close: 'Close',
+    saved: 'Saved',
     cancel: 'Cancel',
     basicInfo: 'Basic Info',
     singerName: 'Singer Name',
