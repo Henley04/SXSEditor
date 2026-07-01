@@ -1612,6 +1612,13 @@ class OnnxSVSPipeline {
         let segIdx = 0;
 
         while (segIdx < segments.length) {
+            // 段间 yield：让事件循环处理 GC，回收上一段的中间张量（mel/f0/waveform），
+            // 降低长音频多段合成时 VRAM 碎片累积导致的 OOM 风险。
+            // 首次迭代前 yield 无副作用（仅多一次事件循环调度）。
+            if (segIdx > 0) {
+                await new Promise(r => setImmediate(r));
+            }
+
             if (useBatch && segIdx + 1 < segments.length) {
                 // Pair two segments for batch=4 diffusion
                 const segA = segments[segIdx];
