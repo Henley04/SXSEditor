@@ -88,6 +88,29 @@ describe('inference/pipeline/utils - float16 conversion', () => {
       // float16 has ~3 decimal digits of precision; relative error should be < 1e-3
       expect(maxRelErr).to.be.lessThan(1e-3);
     });
+
+    it('should carry mantissa overflow into exponent (round-half-to-even at 2^n)', () => {
+      // Values just below a power of two where the f16 mantissa is all 1s.
+      // Rounding up must carry into the exponent (max mantissa 0x3FF -> 0x400
+      // must become exp+1, mantissa 0 — NOT silently absorbed by bitwise OR).
+      const boundaryCases = [
+        // [input, expected f16 output]
+        [511.96, 512],    // 2^9 boundary
+        [-511.96, -512],
+        [1023.96, 1024],  // 2^10 boundary
+        [-1023.96, -1024],
+        [31.997, 32],     // 2^5 boundary
+        [-31.997, -32],
+        [1.9996, 2],      // 2^1 boundary (above midpoint 1.99951171875)
+        [-1.9996, -2],
+      ];
+      const vals = new Float32Array(boundaryCases.map(c => c[0]));
+      const u16 = float32ToF16Buffer(vals);
+      const back = f16BufferToFloat32(u16);
+      for (let i = 0; i < boundaryCases.length; i++) {
+        expect(back[i]).to.equal(boundaryCases[i][1]);
+      }
+    });
   });
 });
 
