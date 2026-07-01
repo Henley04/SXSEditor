@@ -142,6 +142,16 @@ function registerSvsIpc() {
       // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）
       const opts = options || {};
       opts.language = language; // 用于缓存 key 区分（避免命中错误模型的结果）
+      // 进度回调：推送 'svs:progress' 到主窗口，与 fragment-svs:progress 对齐。
+      // 之前主页面合成无进度推送，导致推理预览百分比不显示。
+      const win = event.sender;
+      opts.onProgress = (progress) => {
+        try {
+          if (win && !win.isDestroyed()) {
+            win.send('svs:progress', { progress });
+          }
+        } catch (_) {}
+      };
       if (opts.autoShift && opts.refAudioWavBuffer) {
         opts.refF0Extractor = _makeRmvpeExtractor();
       }

@@ -1,6 +1,7 @@
 import { t } from '../i18n/index.js';
 import {
   getFragmentIsSynthesizing,
+  getFragmentIsExporting,
   getFragmentIsPlaying,
   getFragmentAudioSettings,
   getFragmentAudioData,
@@ -51,11 +52,15 @@ export function setupIpcHandlers() {
   const _ipcCleanups = getIpcCleanups();
 
   const cleanupProgress = window.electronAPI.onFragmentSVSProgress((progress) => {
-    const btnPlayFragment = document.getElementById('btn-play-fragment');
-    const btnExportFragment = document.getElementById('btn-export-fragment');
+    // 区分播放预览和导出：各自只更新对应的按钮，避免互相覆盖。
+    // 之前回调同时更新两个按钮，播放时导出按钮也被改成"导出 X%"，
+    // 而导出时因 fragmentIsSynthesizing=false 两个按钮都不更新。
     if (getFragmentIsSynthesizing()) {
-      btnPlayFragment.textContent = t('fragment.synthesizingProgress', { progress });
-      btnExportFragment.textContent = t('fragment.exportingProgress', { progress });
+      const btnPlayFragment = document.getElementById('btn-play-fragment');
+      if (btnPlayFragment) btnPlayFragment.textContent = t('fragment.synthesizingProgress', { progress });
+    } else if (getFragmentIsExporting()) {
+      const btnExportFragment = document.getElementById('btn-export-fragment');
+      if (btnExportFragment) btnExportFragment.textContent = t('fragment.exportingProgress', { progress });
     }
   });
   if (cleanupProgress) _ipcCleanups.push(cleanupProgress);

@@ -26,6 +26,8 @@ export default {
     addFragment: 'Add Fragment',
     deleteSinger: 'Delete Singer',
     synthesizing: 'Synthesizing...',
+    synthesizingProgress: 'Synthesizing {progress}%',
+    exportingProgress: 'Exporting {progress}%',
     noFragmentsToPlay: 'No fragments to play',
     noNotesToPlay: 'No notes to play',
     noFragmentsToExport: 'No fragments to export',
