@@ -164,7 +164,7 @@ macOS / Linux 用户请从源码构建。
 | 神经歌声合成 | SoulX-Singer 扩散模型 + ONNX Runtime |
 | 歌手创建器 | 从参考 WAV 音频创建自定义声音 |
 | 音频预处理 | RMVPE F0 提取、Basic Pitch MIDI 提取 |
-| SVS 推理管线 | CFG rescale、DML/WebNN 路径一致性、LRU 合成缓存、编码器并行 + Vocoder 分块批量化 |
+| SVS 推理管线 | CFG rescale、DML/WebNN 路径一致性、LRU 合成缓存、编码器并行 + Vocoder 分块批量化、CPU 密集路径事件循环让步以保持 UI 响应 |
 | 可选 SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) 作为可选 DirectML Vocoder，自动回退到默认 Vocoder |
 | Vocoder 最小化切换 | 切换 Vocoder（默认 ↔ SiFiGAN）仅重载 vocoder session，主模型保持已加载状态 |
 | SiFiGAN 精度切换 | SiFiGAN 精度（FP32/FP16）可在设置中单独选择；FP16 标注为低质量（cos≈0.95），默认 FP32；所选变体缺失时自动回退到另一变体 |
@@ -268,7 +268,7 @@ macOS / Linux：ソースからビルドしてください。
 | ニューラル SVS | SoulX-Singer 拡散モデル + ONNX Runtime |
 | 歌手作成 | 参照 WAV 音声からカスタムボイス作成 |
 | 音声前処理 | RMVPE F0 抽出、Basic Pitch MIDI 抽出 |
-| SVS 推論パイプライン | CFG rescale、DML/WebNN パリティ、LRU 合成キャッシュ、エンコーダ並列 + Vocoder チャンクバッチ |
+| SVS 推論パイプライン | CFG rescale、DML/WebNN パリティ、LRU 合成キャッシュ、エンコーダ並列 + Vocoder チャンクバッチ、CPU 密集パスのイベントループ譲渡で UI 応答性を維持 |
 | オプション SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) をオプション DirectML Vocoder として提供、デフォルト Vocoder へ自動フォールバック |
 | Vocoder 最小切替 | Vocoder 切替（デフォルト ↔ SiFiGAN）は vocoder session のみ再読み込み、メインモデルはロード済みのまま維持 |
 | SiFiGAN 精度切替 | SiFiGAN 精度（FP32/FP16）を設定で個別選択可能；FP16 は低品質（cos≈0.95）と明記、デフォルト FP32；選択変体が欠落時はもう一方へ自動フォールバック |
