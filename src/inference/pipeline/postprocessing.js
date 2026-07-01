@@ -188,6 +188,60 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     return out;
 }
 
+/**
+ * 异步分块版 resampleLinear：每 RESAMPLE_YIELD_EVERY 个样本 setImmediate yield 一次，
+ * 避免长音频（分钟级）同步阻塞主线程导致 UI 无响应。
+ * 内部计算逻辑与 resampleLinear 完全一致，仅在外层循环插入 yield 点。
+ */
+const RESAMPLE_YIELD_EVERY = 8192;
+async function resampleLinearAsync(audioFloat, srcSampleRate, dstSampleRate) {
+    if (srcSampleRate === dstSampleRate) return audioFloat;
+    const ratio = srcSampleRate / dstSampleRate;
+    const newLength = Math.floor(audioFloat.length / ratio);
+    if (newLength <= 0) return new Float32Array(0);
+
+    const kaiserBeta = 5.0;
+    const halfWidth = Math.ceil(12 * kaiserBeta / 5);
+    const cutoff = (dstSampleRate < srcSampleRate ? 0.95 * dstSampleRate / srcSampleRate : 0.95) * 0.5;
+    const twoPiCutoff = 2 * Math.PI * cutoff;
+    const invPi = 1 / Math.PI;
+    const invWidth = 1 / (2 * halfWidth + 1);
+    const bessel0Beta = bessel0(kaiserBeta);
+
+    const out = new Float32Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+        const center = (i + 0.5) * ratio;
+        const left = Math.max(0, Math.floor(center - halfWidth));
+        const right = Math.min(audioFloat.length - 1, Math.ceil(center + halfWidth));
+
+        let sum = 0;
+        let weightSum = 0;
+        for (let j = left; j <= right; j++) {
+            const t = center - j;
+            if (Math.abs(t) < 1e-7) {
+                sum += audioFloat[j];
+                weightSum += 1;
+            } else {
+                const sincVal = Math.sin(twoPiCutoff * t) * invPi / t;
+                const kaiserArg = 1 - (t * invWidth) * (t * invWidth);
+                const windowVal = kaiserArg >= 0
+                    ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0Beta
+                    : 0;
+                const w = sincVal * windowVal;
+                sum += audioFloat[j] * w;
+                weightSum += w;
+            }
+        }
+        out[i] = weightSum > 1e-8 ? sum / weightSum : 0;
+
+        // 每 N 个样本 yield 一次，让事件循环处理 UI 响应
+        if ((i & (RESAMPLE_YIELD_EVERY - 1)) === 0 && i > 0) {
+            await new Promise(r => setImmediate(r));
+        }
+    }
+    return out;
+}
+
 // Kaiser 窗的零阶修正贝塞尔函数 I₀(x) 近似
 // Optimized: uses rational approximation for x < 8, asymptotic for x >= 8
 function bessel0(x) {
@@ -478,6 +532,81 @@ function extractMelSpectrogram(audioFloat, sr) {
 }
 
 /**
+ * 异步分块版 extractMelSpectrogram：FFT 帧循环与 mel filterbank 应用循环
+ * 每 EXTRACT_MEL_YIELD_EVERY 帧插入 setImmediate yield，避免长音频 JS FFT
+ * 同步阻塞主线程导致 UI 无响应。
+ * 计算逻辑与 extractMelSpectrogram 完全一致，仅插入 yield 点。
+ */
+const EXTRACT_MEL_YIELD_EVERY = 32;
+async function extractMelSpectrogramAsync(audioFloat, sr) {
+    const padLength = (N_FFT - HOP_SIZE) / 2;
+    const padded = new Float32Array(audioFloat.length + 2 * padLength);
+    for (let i = 0; i < padLength; i++) {
+        padded[i] = audioFloat[padLength - i];
+        padded[padded.length - 1 - i] = audioFloat[audioFloat.length - 1 - (padLength - i)];
+    }
+    padded.set(audioFloat, padLength);
+
+    const numFrames = Math.floor((padded.length - N_FFT) / HOP_SIZE) + 1;
+    const melBands = NUM_MELS;
+    const numFreqBins = N_FFT / 2 + 1;
+
+    const real = new Float32Array(N_FFT);
+    const imag = new Float32Array(N_FFT);
+    const powerSpec = new Float32Array(numFrames * numFreqBins);
+
+    for (let f = 0; f < numFrames; f++) {
+        const start = f * HOP_SIZE;
+        const specOffset = f * numFreqBins;
+        for (let i = 0; i < N_FFT; i++) {
+            real[i] = padded[start + i] * HANN_WINDOW[i];
+            imag[i] = 0;
+        }
+
+        fftRadix2(real, imag);
+
+        for (let i = 0; i < numFreqBins; i++) {
+            powerSpec[specOffset + i] = real[i] * real[i] + imag[i] * imag[i];
+        }
+
+        if ((f % EXTRACT_MEL_YIELD_EVERY) === 0 && f > 0) {
+            await new Promise(r => setImmediate(r));
+        }
+    }
+
+    if (!_cachedMelFilterbank || _cachedMelFilterbankSr !== sr) {
+        const fmax = sr / 2;
+        _cachedMelFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
+        _cachedMelFilterbankSr = sr;
+    }
+    const melFilterbank = _cachedMelFilterbank;
+
+    const melSpec = new Float32Array(numFrames * melBands);
+    for (let f = 0; f < numFrames; f++) {
+        const specOffset = f * numFreqBins;
+        for (let m = 0; m < melBands; m++) {
+            let sum = 0;
+            const fbOffset = m * numFreqBins;
+            for (let k = 0; k < numFreqBins; k++) {
+                sum += powerSpec[specOffset + k] * melFilterbank[fbOffset + k];
+            }
+            melSpec[f * melBands + m] = Math.log(Math.max(sum, 1e-10));
+        }
+        if ((f % EXTRACT_MEL_YIELD_EVERY) === 0 && f > 0) {
+            await new Promise(r => setImmediate(r));
+        }
+    }
+
+    const melStd = Math.sqrt(MEL_VAR);
+    const invMelStd = 1 / melStd;
+    for (let i = 0; i < melSpec.length; i++) {
+        melSpec[i] = (melSpec[i] - MEL_MEAN) * invMelStd;
+    }
+
+    return { data: melSpec, frames: numFrames, melBands };
+}
+
+/**
  * 线性插值将 F0 序列重采样到目标长度（mel 帧率对齐）。
  * mel 帧率 = SAMPLE_RATE / HOP_SIZE = 24000 / 480 = 50Hz；buildF0FrameSequence 已产出该帧率，
  * 此函数仅在 F0 长度与 mel 帧数不一致时做长度对齐（防御性）。
@@ -516,11 +645,22 @@ class Postprocessing {
     }
 
     /**
+     * 异步版 extractRefMel：使用 resampleLinearAsync + extractMelSpectrogramAsync，
+     * 避免长音频 JS FFT 同步阻塞主线程。计算结果与 extractRefMel 一致。
+     */
+    async extractRefMelAsync(refAudioWavBuffer) {
+        const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(refAudioWavBuffer);
+        const resampled = await resampleLinearAsync(audioFloat, srcSr, SAMPLE_RATE);
+        const melResult = await extractMelSpectrogramAsync(resampled, SAMPLE_RATE);
+        return melResult;
+    }
+
+    /**
      * Extract reference mel spectrogram using ONNX mel_transform model
      */
     async extractRefMelOnnx(sessions, refAudioWavBuffer, isFP16, useStaticShapes = false) {
         const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(refAudioWavBuffer);
-        const resampled = resampleLinear(audioFloat, srcSr, SAMPLE_RATE);
+        const resampled = await resampleLinearAsync(audioFloat, srcSr, SAMPLE_RATE);
         const floatType = isFP16 ? 'float16' : 'float32';
         const NPU_STATIC_NUM_SAMPLES = 240000;
         if (useStaticShapes && resampled.length < NPU_STATIC_NUM_SAMPLES) {
@@ -863,11 +1003,89 @@ class Postprocessing {
     }
 
     /**
+     * 异步版 extractRefF0FromWav：使用 resampleLinearAsync + 帧循环 yield，
+     * 避免长音频自相关计算同步阻塞主线程。计算逻辑与 extractRefF0FromWav 一致。
+     */
+    async extractRefF0FromWavAsync(wavBuffer) {
+        const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(wavBuffer);
+        const resampled = await resampleLinearAsync(audioFloat, srcSr, SAMPLE_RATE);
+        const f0 = new Float32Array(Math.floor(resampled.length / HOP_SIZE));
+        const minRms = 0.01;
+        const frameSize = HOP_SIZE;
+        const EXTRACT_F0_YIELD_EVERY = 32;
+        for (let i = 0; i < f0.length; i++) {
+            const start = i * frameSize;
+            const end = Math.min(start + frameSize, resampled.length);
+            let rms = 0;
+            for (let j = start; j < end; j++) {
+                rms += resampled[j] * resampled[j];
+            }
+            rms = Math.sqrt(rms / (end - start));
+            if (rms < minRms) {
+                f0[i] = 0;
+                if ((i % EXTRACT_F0_YIELD_EVERY) === 0 && i > 0) {
+                    await new Promise(r => setImmediate(r));
+                }
+                continue;
+            }
+            let bestLag = 0;
+            let bestCorr = 0;
+            const minLag = Math.floor(SAMPLE_RATE / 1000);
+            const maxLag = Math.floor(SAMPLE_RATE / 50);
+            for (let lag = minLag; lag <= maxLag; lag++) {
+                let corr = 0;
+                let energy = 0;
+                for (let j = 0; j < Math.min(frameSize, resampled.length - start - lag); j++) {
+                    corr += resampled[start + j] * resampled[start + j + lag];
+                    energy += resampled[start + j] * resampled[start + j];
+                }
+                if (energy > 0) corr /= energy;
+                if (corr > bestCorr) {
+                    bestCorr = corr;
+                    bestLag = lag;
+                }
+            }
+            if (bestCorr > 0.3 && bestLag > 0) {
+                f0[i] = SAMPLE_RATE / bestLag;
+            } else {
+                f0[i] = 0;
+            }
+            if ((i % EXTRACT_F0_YIELD_EVERY) === 0 && i > 0) {
+                await new Promise(r => setImmediate(r));
+            }
+        }
+        return f0;
+    }
+
+    /**
      * Extract reference note pitches from WAV buffer
      */
     extractRefNotePitches(wavBuffer) {
         try {
             const f0 = this.extractRefF0FromWav(wavBuffer);
+            if (!f0 || f0.length === 0) return null;
+            const notePitches = [];
+            for (let i = 0; i < f0.length; i++) {
+                if (f0[i] > 0) {
+                    const midi = 69 + 12 * Math.log2(f0[i] / 440);
+                    if (midi >= 24 && midi <= 108) {
+                        notePitches.push(midi);
+                    }
+                }
+            }
+            return notePitches.length > 0 ? notePitches : null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * 异步版 extractRefNotePitches：使用 extractRefF0FromWavAsync，
+     * 避免长音频自相关同步阻塞主线程。
+     */
+    async extractRefNotePitchesAsync(wavBuffer) {
+        try {
+            const f0 = await this.extractRefF0FromWavAsync(wavBuffer);
             if (!f0 || f0.length === 0) return null;
             const notePitches = [];
             for (let i = 0; i < f0.length; i++) {
@@ -889,6 +1107,7 @@ module.exports = {
     Postprocessing,
     parseWavBuffer,
     resampleLinear,
+    resampleLinearAsync,
     bessel0,
     bitReversePermute,
     fftRadix2,
@@ -898,6 +1117,7 @@ module.exports = {
     melToHz,
     createMelFilterbank,
     extractMelSpectrogram,
+    extractMelSpectrogramAsync,
     validateVocoderOutput,
     isVramOOMError,
 };

@@ -724,6 +724,11 @@ class Preprocessing {
         disposeTensor(featuresTensor);
         disposeTensor(preflowResults['processed_features']);
 
+        // 长片段时在 preflow → expandedEmb 之间 yield 一次，避免连续 CPU 循环阻塞主线程
+        if (totalFrames > 256) {
+            await new Promise(r => setImmediate(r));
+        }
+
         // 用 subarray.set 替代元素级循环，走 native memcpy（每帧 EMBED_DIM=512 维拷贝）
         const mel2token = sequences.mel2token;
         const expandedEmb = new Float32Array(totalFrames * EMBED_DIM);
@@ -733,6 +738,11 @@ class Preprocessing {
                 processedTokenEmb.subarray(tokenIdx * EMBED_DIM, (tokenIdx + 1) * EMBED_DIM),
                 f * EMBED_DIM
             );
+        }
+
+        // expandedEmb → combinedFeatures 之间 yield
+        if (totalFrames > 256) {
+            await new Promise(r => setImmediate(r));
         }
 
         const combinedFeatures = new Float32Array(totalFrames * EMBED_DIM);

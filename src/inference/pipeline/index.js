@@ -413,8 +413,11 @@ class OnnxSVSPipeline {
 
     // Delegate postprocessing methods
     _extractRefMel(refAudioWavBuffer) { return this._postprocessing.extractRefMel(refAudioWavBuffer); }
+    _extractRefMelAsync(refAudioWavBuffer) { return this._postprocessing.extractRefMelAsync(refAudioWavBuffer); }
     _extractRefF0FromWav(wavBuffer) { return this._postprocessing.extractRefF0FromWav(wavBuffer); }
+    _extractRefF0FromWavAsync(wavBuffer) { return this._postprocessing.extractRefF0FromWavAsync(wavBuffer); }
     _extractRefNotePitches(wavBuffer) { return this._postprocessing.extractRefNotePitches(wavBuffer); }
+    _extractRefNotePitchesAsync(wavBuffer) { return this._postprocessing.extractRefNotePitchesAsync(wavBuffer); }
 
     // Delegate audio segmentation methods
     _fillNoteGaps(notes) { return this._audioSegmentation.fillNoteGaps(notes); }
@@ -521,7 +524,7 @@ class OnnxSVSPipeline {
     async _extractRefF0WithFallback(wavBuffer, extractor) {
         if (extractor) {
             try {
-                const { parseWavBuffer, resampleLinear } = require('./postprocessing');
+                const { parseWavBuffer } = require('./postprocessing');
                 const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(wavBuffer);
                 // RMVPE 内部会重采样到 16kHz，这里直接传原始采样率
                 const f0Array = await extractor(audioFloat, srcSr);
@@ -540,8 +543,8 @@ class OnnxSVSPipeline {
                 console.warn('[OnnxSVSPipeline] 外部 F0 提取失败，回退自相关:', e.message);
             }
         }
-        // 回退到内置自相关
-        return this._extractRefF0FromWav(wavBuffer);
+        // 回退到内置自相关（异步版，避免长音频同步阻塞主线程）
+        return this._extractRefF0FromWavAsync(wavBuffer);
     }
 
     async init() {
@@ -1490,7 +1493,7 @@ class OnnxSVSPipeline {
                     const targetMedian = this._median(targetNonZero);
                     f0Shift = Math.round(Math.log2(refMedian / targetMedian) * 1200 / 100);
                 } else if (targetNotePitches.length > 0) {
-                    const refNotePitches = this._extractRefNotePitches(refAudioWavBuffer);
+                    const refNotePitches = await this._extractRefNotePitchesAsync(refAudioWavBuffer);
                     if (refNotePitches && refNotePitches.length > 0) {
                         const refMedianPitch = this._median(refNotePitches);
                         const targetMedianPitch = this._median(targetNotePitches);
@@ -1530,7 +1533,7 @@ class OnnxSVSPipeline {
                 console.log(`[OnnxSVSPipeline] Reference audio mel: ${ptFrameCount}frames`);
             } catch (err) {
                 try {
-                    const melResult = this._extractRefMel(refAudioWavBuffer);
+                    const melResult = await this._extractRefMelAsync(refAudioWavBuffer);
                     ptMelData = melResult.data;
                     ptFrameCount = melResult.frames;
                 } catch (err2) {
