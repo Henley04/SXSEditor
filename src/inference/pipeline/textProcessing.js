@@ -1,6 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const { pinyin } = require('pinyin-pro');
+const durationStats = require('./durationStats');
 
 // Japanese hiragana/katakana → phoneme mapping
 const JP_HIRAGANA_MAP = {
@@ -231,19 +232,21 @@ class TextProcessing {
         }
 
         if (trimmed.startsWith('en_') && trimmed.includes('-')) {
-            return trimmed.slice(3).split('-').map(s => {
+            const phonemes = trimmed.slice(3).split('-').map(s => {
                 const name = 'en_' + s.trim();
                 return { name, display: s.trim() };
             });
+            return this._attachEnglishWeights(phonemes);
         }
 
         if (/^[a-zA-Z]+$/.test(trimmed) && !trimmed.startsWith('en_') && !trimmed.startsWith('zh_') && !trimmed.startsWith('yue_') && !trimmed.startsWith('jp_')) {
             const g2pResult = this._englishG2p(trimmed);
             if (g2pResult) {
-                return g2pResult.split(' ').map(ph => {
+                const phonemes = g2pResult.split(' ').map(ph => {
                     const name = 'en_' + ph.trim();
                     return { name, display: ph.trim() };
                 });
+                return this._attachEnglishWeights(phonemes);
             }
             return [{ name: trimmed, display: trimmed }];
         }
@@ -255,6 +258,34 @@ class TextProcessing {
         }
 
         return [{ name: trimmed, display: trimmed }];
+    }
+
+    /**
+     * 给英文音素对象数组附带 duration weight（用于 UI 默认音素时长分配）。
+     * weight 是该音素相对时长的无量纲权重，UI 端按 weight 比例分配 durationRatio。
+     * 注意：此处是逐 lyric 独立解析，无跨 note 上下文，position 一律按 medial。
+     * 这与推理时的 _allocateByStats（使用跨 note trigram 上下文）有精度差异，
+     * 但足以让 UI 默认分布呈现"元音长、辅音短"的趋势，避免完全平均分布。
+     * @param {Array<{name:string, display:string}>} phonemes
+     * @returns {Array} 同一数组，每个对象附带 weight 字段
+     */
+    _attachEnglishWeights(phonemes) {
+        if (!phonemes || phonemes.length === 0) return phonemes;
+        const stats = durationStats.loadDurationStatsSync();
+        if (!stats || !stats.unigram) return phonemes;
+        const SPECIAL = new Set(['<SEP>', '<BOW>', '<EOW>', '<PAD>', '<SP>']);
+        for (let i = 0; i < phonemes.length; i++) {
+            const name = phonemes[i].name || '';
+            if (!name.startsWith('en_') || SPECIAL.has(name)) {
+                phonemes[i].weight = 1.0;
+                continue;
+            }
+            const curr = durationStats.barePhone(name);
+            const prev = i > 0 ? durationStats.barePhone(phonemes[i - 1].name || '') : '<S>';
+            const next = i < phonemes.length - 1 ? durationStats.barePhone(phonemes[i + 1].name || '') : '<E>';
+            phonemes[i].weight = durationStats.lookupWeight(stats, curr, prev, next, 'medial');
+        }
+        return phonemes;
     }
 
     _isJapanese(text) {
