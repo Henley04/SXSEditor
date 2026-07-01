@@ -120,7 +120,7 @@ class Preprocessing {
         return seq;
     }
 
-    notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift = 0) {
+    notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift = 0, pitchCurveOffsetSec = 0) {
         const PAD_ID = this.textProcessing.phone2idx['<PAD>'] || 0;
         const BOW_ID = this.textProcessing.phone2idx['<BOW>'] || 4;
         const EOW_ID = this.textProcessing.phone2idx['<EOW>'] || 5;
@@ -275,7 +275,11 @@ class Preprocessing {
                 const noteStartSec = (note.start / bpm) * 60;
                 const noteFreq = lyric.trim().length === 0 ? 0 : this.midiToFreq(note.pitch);
                 for (let f = 0; f < noteFrames && frameOffset + f < totalFrames; f++) {
-                    const absTimeSec = noteStartSec + f * HOP_SIZE / SAMPLE_RATE;
+                    // 多 segment 路径：segmentNotes.start 是相对 segStart，需要加
+                    // pitchCurveOffsetSec (= segStartBeat 对应秒数) 才能正确索引
+                    // 绝对时间的 pitchCurveF0。否则 f0 严重错位 → vocoder mel/f0
+                    // 不匹配 → 电流声。单 segment 路径 offset=0，行为不变。
+                    const absTimeSec = noteStartSec + pitchCurveOffsetSec + f * HOP_SIZE / SAMPLE_RATE;
                     const srcFrame = Math.floor(absTimeSec * SAMPLE_RATE / HOP_SIZE);
                     if (srcFrame >= 0 && srcFrame < srcData.length && srcData[srcFrame] > 0) {
                         f0Hz[frameOffset + f] = srcData[srcFrame];
