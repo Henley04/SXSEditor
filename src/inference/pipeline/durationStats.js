@@ -100,6 +100,39 @@ function getDurationStatsSync() {
 }
 
 /**
+ * 同步加载统计表。首次调用时阻塞读取文件并缓存，后续直接返回缓存。
+ * 用于 IPC 等不方便 await 的场景（如 resolveLyricToPhonemes 给英文音素附带权重）。
+ * 失败时返回空表对象（与异步 loadDurationStats 一致），让调用方走 unigram fallback。
+ * @returns {Object} 统计表对象
+ */
+function loadDurationStatsSync() {
+    if (_cache) return _cache;
+    if (_loading) {
+        // 异步加载正在进行中：等不及同步返回，给空表让调用方走 fallback
+        // （实际不会发生：durationStats.preload 只在 Preprocessing 构造时调用一次，
+        //  而 resolveLyricToPhonemes 由 IPC 触发时 Preprocessing 早已实例化）
+        return { unigram: {}, bigram: {}, trigram: {}, trigram_full: {}, by_stress: {}, by_position: {} };
+    }
+    const jsonPath = _findStatsPath();
+    if (!jsonPath) {
+        console.warn(COLOR.yellow('[durationStats] Warning (sync): en_phoneme_durations.json not found; falling back to linear allocation'));
+        _cache = { unigram: {}, bigram: {}, trigram: {}, trigram_full: {}, by_stress: {}, by_position: {} };
+        return _cache;
+    }
+    try {
+        const text = fs.readFileSync(jsonPath, 'utf-8');
+        _cache = JSON.parse(text);
+        const n = Object.keys(_cache.unigram || {}).length;
+        console.log(COLOR.green(`[durationStats] Loaded phoneme duration stats (sync): ${n} phonemes (path: ${jsonPath})`));
+        return _cache;
+    } catch (err) {
+        console.warn(COLOR.yellow(`[durationStats] Warning (sync): Failed to load en_phoneme_durations.json (${jsonPath}): ${err.message}; falling back to linear allocation`));
+        _cache = { unigram: {}, bigram: {}, trigram: {}, trigram_full: {}, by_stress: {}, by_position: {} };
+        return _cache;
+    }
+}
+
+/**
  * 预加载（可选）：在 SVS pipeline 初始化时调用，避免首次推理时阻塞。
  */
 function preload() {
@@ -224,6 +257,7 @@ function computeNormalizedRatios(stats, phoneNames, position) {
 
 module.exports = {
     loadDurationStats,
+    loadDurationStatsSync,
     getDurationStatsSync,
     preload,
     extractStress,

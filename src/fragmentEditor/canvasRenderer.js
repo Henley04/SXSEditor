@@ -619,12 +619,20 @@ export function getPhonemeAdjustments(note) {
   // phonemeAdjustments 纳入哈希）从 K1(无 adjustments) 变为 K2(默认值)，
   // 导致打开音素菜单后再次播放触发不必要的二次推理。用户实际拖拽/锁定音素时，
   // 由 handlePhonemeMouseDown 显式提交保存，自定义音素排列仍可正常生效。
+  //
+  // 默认 durationRatio 按 phoneme.weight 比例分配（英文音素由 main 进程
+  // resolveLyricToPhonemes 用 en_phoneme_durations.json 统计表附带），
+  // 使 UI 默认分布呈现"元音长、辅音短"，与推理时的 _allocateByStats 趋势一致。
+  // weight 缺失或全为 0 时（如日语/中文/未解析 fallback），回退到平均分布。
+  const weights = phonemes.map(ph => (typeof ph.weight === 'number' && ph.weight > 0) ? ph.weight : 0);
+  const weightSum = weights.reduce((s, v) => s + v, 0);
+  const hasWeights = weightSum > 0;
   const adjustments = phonemes.map((ph, i) => ({
     id: i,
     name: ph.name,
     display: ph.display,
     offsetRatio: 0,
-    durationRatio: 1 / phonemes.length,
+    durationRatio: hasWeights ? weights[i] / weightSum : 1 / phonemes.length,
     volumePoints: [
       { t: 0, v: 0.3 },
       { t: 0.1, v: 1.0 },
