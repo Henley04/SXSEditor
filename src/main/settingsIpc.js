@@ -163,7 +163,7 @@ function registerSettingsIpc() {
       await updateLocaleSetting(settings.locale);
     }
 
-    // 精度 / vocoder 类型 / 设备设置变化时必须重置 pipeline，
+    // 精度 / 设备设置变化时必须重置 pipeline，
     // 否则切换 INT8-NPU 等精度后仍使用旧 pipeline（模型仍加载在旧设备上）
     //
     // 注意：必须比较新旧值是否真正变化，而不能用 `!== undefined` 判断。
@@ -173,7 +173,11 @@ function registerSettingsIpc() {
     // 等无关参数时也会误触发 resetSvsPipeline()，导致 NPU 上 WebNN session 被销毁重建，
     // 重建时若 NPU 资源未完全释放（dispose 异步卸载未 await），probe 会静默回退到 WASM/CPU，
     // 然后 markNPUUnavailable() 永久污染 NPU 检测缓存，造成"修改 diffstep 后 NPU 静默回退 CPU"。
-    const RESET_TRIGGER_KEYS = ['deviceMode', 'preferredDeviceId', 'modelDeviceMapping', 'modelPrecision', 'vocoderType'];
+    //
+    // vocoderType 不在此列：仅切换 vocoder 时走增量 swapVocoder 路径，只重载 vocoder session，
+    // 避免主模型（encoders/preflow/condEmb/diffStep/melTransform）被重新加载。
+    // 但若其他 RESET_TRIGGER_KEYS 同时变化，仍走完整 reset（重建时自动读取最新 vocoderType）。
+    const RESET_TRIGGER_KEYS = ['deviceMode', 'preferredDeviceId', 'modelDeviceMapping', 'modelPrecision'];
     const needsPipelineReset = RESET_TRIGGER_KEYS.some(key => {
       // modelDeviceMapping 是对象，需深比较；其他字段为标量，直接比较
       if (key === 'modelDeviceMapping') {
@@ -181,11 +185,26 @@ function registerSettingsIpc() {
       }
       return current[key] !== merged[key];
     });
+    const vocoderTypeChanged = current.vocoderType !== merged.vocoderType;
     if (needsPipelineReset) {
       resetSvsPipeline();
       resetRmvpe();
       resetBasicPitch();
       resetRosvot();
+    } else if (vocoderTypeChanged) {
+      // 增量切换 vocoder：仅重载 vocoder session，主模型保持不变
+      const newVocoderType = merged.vocoderType === 'sifigan' ? 'sifigan' : 'default';
+      const pipeline = getSvsPipeline();
+      if (pipeline && pipeline.initialized && typeof pipeline.swapVocoder === 'function') {
+        try {
+          await pipeline.swapVocoder(newVocoderType);
+        } catch (err) {
+          console.error('[Main] Vocoder swap failed:', err.message);
+        }
+      } else {
+        // Pipeline 未初始化：下次 init 时会读取最新 vocoderType，无需立即处理
+        console.log('[Main] Pipeline not initialized, vocoderType will apply on next init');
+      }
     }
 
     // 硬件探测仅在应用启动后执行一次并缓存复用，
