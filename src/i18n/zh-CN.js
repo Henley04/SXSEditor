@@ -166,7 +166,11 @@ export default {
   },
   singerCreator: {
     title: '歌手创建',
-    createAndSave: '创建并保存',
+    fileMenu: '文件',
+    save: '保存',
+    saveAs: '另存为...',
+    close: '关闭',
+    saved: '已保存',
     cancel: '取消',
     basicInfo: '基本信息',
     singerName: '歌手名称',

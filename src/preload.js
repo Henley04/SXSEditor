@@ -36,6 +36,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   openSingerCreator: () => ipcRenderer.invoke('openSingerCreator'),
   saveSingerFile: (singerData) => ipcRenderer.invoke('saveSingerFile', singerData),
+  onSingerCreatorSaveRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('singer-creator:save-request', handler);
+    return () => ipcRenderer.removeListener('singer-creator:save-request', handler);
+  },
+  onSingerCreatorSaveAsRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('singer-creator:save-as-request', handler);
+    return () => ipcRenderer.removeListener('singer-creator:save-as-request', handler);
+  },
   onSingerCreated: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('singerCreated', handler);
