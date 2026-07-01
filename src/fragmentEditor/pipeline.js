@@ -37,8 +37,8 @@ export function getFragmentPreviewInferenceOptions() {
     nSteps: settings?.previewDiffSteps ?? 16,
     cfg: settings?.previewCfgStrength ?? 3.0,
     cfgRescale: settings?.previewCfgRescale ?? 0.75,
-    npuDiffBatchSize: settings?.npuDiffBatchSize ?? 4,
-    npuVocoderBatchSize: settings?.npuVocoderBatchSize ?? 4,
+    npuDiffBatchSize: 1,
+    npuVocoderBatchSize: 1,
   };
 }
 
@@ -48,7 +48,7 @@ export function getFragmentExportInferenceOptions() {
     nSteps: settings?.exportDiffSteps ?? 32,
     cfg: settings?.exportCfgStrength ?? 3.0,
     cfgRescale: settings?.exportCfgRescale ?? 0.75,
-    npuDiffBatchSize: settings?.npuDiffBatchSize ?? 4,
-    npuVocoderBatchSize: settings?.npuVocoderBatchSize ?? 4,
+    npuDiffBatchSize: 1,
+    npuVocoderBatchSize: 1,
   };
 }
