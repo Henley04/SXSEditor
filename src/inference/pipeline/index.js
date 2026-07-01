@@ -75,6 +75,12 @@ class OnnxSVSPipeline {
         this._synthCacheMaxBytes = 200 * 1024 * 1024; // 最大缓存字节数（200MB ≈ 4 分钟音频 × 4 条）
         this._synthCacheBytes = 0;               // 当前缓存占用字节数
         this._initPromise = null;
+        // 合成串行化锁：防止连续两次 synthesize() 调用并发。
+        // 场景：合成 A 完成 → _recreateHeavySessionsAfterSynthesis() 释放 diffStep/vocoder
+        // 并开始 reload；合成 B 启动 → ensureAllModelsLoaded() 发现 diffStep 缺失也尝试 reload。
+        // 两个 reload 并发加载同一大模型（diffStep 846MB）→ 显存翻倍 → OOM。
+        // _synthPromise 将 synthesize 串行化，B 等 A 完全结束（含 session 重建）才启动。
+        this._synthPromise = null;
 
         // Initialize sub-modules
         this._textProcessing = new TextProcessing();
@@ -184,11 +190,20 @@ class OnnxSVSPipeline {
 
         console.log(`[OnnxSVSPipeline] Swapping language models: ${oldLang || 'base'} -> ${newLanguage || 'base'}`);
 
+        // 切换语言模型后旧缓存不再适用（不同语言的 phoneme embedding/preflow/cond_emb/diff_step
+        // 会产生不同音频），必须清空，否则会命中缓存返回错误语言的音频。
+        this.clearSynthCache();
+
         for (const { key, file } of langModels) {
-            // Release old session
+            // Release old session and delete references BEFORE loading new one.
+            // 旧版仅 release 但保留 this.sessions[key] 引用，若后续 createSessionWithValidation
+            // 抛错，this.sessions[key] 仍指向已释放的 session，ensureAllModelsLoaded() 检查
+            // !this.sessions[key] 为 false 跳过重载，导致下一次合成使用已释放的 session 崩溃。
             if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
                 try { this.sessions[key].release(); } catch (_) {}
             }
+            delete this.sessions[key];
+            delete this.sessionEPs[key];
 
             // Resolve actual file to load (handle diff_step_dml → diff_step fallback)
             let resolvedFile = file;
@@ -1454,6 +1469,21 @@ class OnnxSVSPipeline {
     }
 
     async synthesize(notes, bpm, options = {}) {
+        // 串行化：防止并发 synthesize() 调用导致的 session 重建竞态（见 _synthPromise 注释）。
+        // 复用 _initPromise 模式：await 上一条合成（含 _recreateHeavySessionsAfterSynthesis）
+        // 完全结束后再启动本条。
+        if (this._synthPromise) {
+            try { await this._synthPromise; } catch (_) {}
+        }
+        this._synthPromise = this._synthesizeImpl(notes, bpm, options);
+        try {
+            return await this._synthPromise;
+        } finally {
+            this._synthPromise = null;
+        }
+    }
+
+    async _synthesizeImpl(notes, bpm, options = {}) {
         if (!this.initialized) {
             await this.init();
         }
@@ -2094,6 +2124,7 @@ class OnnxSVSPipeline {
         this.initialized = false;
         this.useWebNN = false;
         this._initPromise = null;
+        this._synthPromise = null;
         this._synthCache = null;
         this._synthCacheMap = null;
         this._synthCacheBytes = 0;
