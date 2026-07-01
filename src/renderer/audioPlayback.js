@@ -229,8 +229,8 @@ export function getPreviewInferenceOptions() {
     nSteps: state.audioSettings?.previewDiffSteps ?? 16,
     cfg: state.audioSettings?.previewCfgStrength ?? 3.0,
     cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.75,
-    npuDiffBatchSize: state.audioSettings?.npuDiffBatchSize ?? 4,
-    npuVocoderBatchSize: state.audioSettings?.npuVocoderBatchSize ?? 4,
+    npuDiffBatchSize: 1,
+    npuVocoderBatchSize: 1,
   };
 }
 
@@ -239,8 +239,8 @@ export function getExportInferenceOptions() {
     nSteps: state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.exportCfgStrength ?? 3.0,
     cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.75,
-    npuDiffBatchSize: state.audioSettings?.npuDiffBatchSize ?? 4,
-    npuVocoderBatchSize: state.audioSettings?.npuVocoderBatchSize ?? 4,
+    npuDiffBatchSize: 1,
+    npuVocoderBatchSize: 1,
   };
 }
 
