@@ -69,7 +69,11 @@ if (typeof Float16Array !== 'undefined') {
         if (dropped > halfWay || (dropped === halfWay && (rounded & 1))) {
             rounded++; // round-half-to-even
         }
-        return sign | (exp << 10) | rounded;
+        // Use + instead of | so that mantissa overflow (0x3FF + 1 = 0x400)
+        // correctly carries into the exponent. With |, bit 10 of rounded would
+        // be silently absorbed by exp's LSB, producing e.g. 511.96 -> -256
+        // instead of -512. + is equivalent to | when rounded <= 0x3FF.
+        return sign + (exp << 10) + rounded;
     };
 
     const f16BitsToF32 = (u16) => {
