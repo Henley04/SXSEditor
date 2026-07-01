@@ -186,6 +186,7 @@ function registerSettingsIpc() {
       return current[key] !== merged[key];
     });
     const vocoderTypeChanged = current.vocoderType !== merged.vocoderType;
+    const sifiganPrecisionChanged = current.sifiganPrecision !== merged.sifiganPrecision;
     if (needsPipelineReset) {
       resetSvsPipeline();
       resetRmvpe();
@@ -204,6 +205,19 @@ function registerSettingsIpc() {
       } else {
         // Pipeline 未初始化：下次 init 时会读取最新 vocoderType，无需立即处理
         console.log('[Main] Pipeline not initialized, vocoderType will apply on next init');
+      }
+    } else if (sifiganPrecisionChanged && merged.vocoderType === 'sifigan') {
+      // 增量切换 SiFiGAN 精度（仅 vocoderType === 'sifigan' 时）：仅重载 vocoder session
+      const newPrecision = merged.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32';
+      const pipeline = getSvsPipeline();
+      if (pipeline && typeof pipeline.swapSifiganPrecision === 'function') {
+        try {
+          await pipeline.swapSifiganPrecision(newPrecision);
+        } catch (err) {
+          console.error('[Main] SiFiGAN precision swap failed:', err.message);
+        }
+      } else {
+        console.log('[Main] Pipeline not initialized or swapSifiganPrecision unavailable, sifiganPrecision will apply on next init');
       }
     }
 

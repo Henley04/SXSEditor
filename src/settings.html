@@ -349,6 +349,14 @@
                     </select>
                     <p class="hint" id="vocoderTypeHint" data-i18n="settings.vocoderTypeHint">选择声码器模型。SiFiGAN 需先在模型下载页下载。</p>
                 </div>
+                <div class="setting-group hidden" id="sifiganPrecisionGroup">
+                    <label for="sifiganPrecision" data-i18n="settings.sifiganPrecision">SiFiGAN 精度</label>
+                    <select id="sifiganPrecision">
+                        <option value="fp32" data-i18n="settings.sifiganPrecisionFp32">FP32 (全精度, 推荐)</option>
+                        <option value="fp16" data-i18n="settings.sifiganPrecisionFp16">FP16 (低质量, cos≈0.95)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.sifiganPrecisionHint">SiFiGAN 单独选择精度。FP16 体积小、推理快，但音质下降明显 (余弦相似度约 0.95)；FP32 为全精度，音质最佳。默认 FP32。若所选精度的模型文件不存在，将自动回退到另一精度变体。</p>
+                </div>
                 <div class="setting-group">
                     <button class="btn-open-model-download" id="openModelDownloadBtn" data-i18n="settings.openModelDownload">打开模型下载</button>
                     <p class="hint" data-i18n="settings.openModelDownloadHint">打开模型下载页面，下载或更新推理所需的模型文件。</p>

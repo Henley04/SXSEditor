@@ -49,6 +49,8 @@ const npuVocoderBatchSizeSelect = document.getElementById('npuVocoderBatchSize')
 const batchSizeDisabledHint = document.getElementById('batchSizeDisabledHint');
 const vocoderTypeSelect = document.getElementById('vocoderType');
 const vocoderTypeHint = document.getElementById('vocoderTypeHint');
+const sifiganPrecisionSelect = document.getElementById('sifiganPrecision');
+const sifiganPrecisionGroup = document.getElementById('sifiganPrecisionGroup');
 const vocoderChunkModeRadios = document.querySelectorAll('input[name="vocoderChunkMode"]');
 const vocoderChunkManualGroup = document.getElementById('vocoderChunkManualGroup');
 const vocoderChunkFramesSlider = document.getElementById('vocoderChunkFrames');
@@ -134,6 +136,10 @@ function applySavedSettingsToUI(currentSetting) {
 
     // Vocoder type (main process may have overridden 'sifigan' -> 'default' at startup)
     vocoderTypeSelect.value = currentSetting.vocoderType === 'sifigan' ? 'sifigan' : 'default';
+
+    // SiFiGAN precision (only meaningful when vocoderType === 'sifigan')
+    sifiganPrecisionSelect.value = currentSetting.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32';
+    updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
 
     // Vocoder chunk mode (smart/manual)
     const vocoderChunkMode = currentSetting.vocoderChunkMode === 'manual' ? 'manual' : 'smart';
@@ -293,6 +299,17 @@ function updateVocoderTypeUI(fileStatus) {
             vocoderTypeHint.textContent = 'SiFiGAN 模型文件不存在，已自动回退到默认 Vocoder';
         }
     }
+    // SiFiGAN 精度下拉框仅在选择 SiFiGAN 时可见
+    updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
+}
+
+/**
+ * SiFiGAN 精度选择下拉框的显隐控制：仅当 vocoderType === 'sifigan' 时显示。
+ * @param {string} vocoderType - 'default' | 'sifigan'
+ */
+function updateSifiganPrecisionVisibility(vocoderType) {
+    if (!sifiganPrecisionGroup) return;
+    sifiganPrecisionGroup.classList.toggle('hidden', vocoderType !== 'sifigan');
 }
 
 const PRECISION_LABELS = {
@@ -665,6 +682,7 @@ function collectSettings() {
         npuDiffBatchSize: parseInt(npuDiffBatchSizeSelect.value),
         npuVocoderBatchSize: parseInt(npuVocoderBatchSizeSelect.value),
         vocoderType: vocoderTypeSelect.value,
+        sifiganPrecision: sifiganPrecisionSelect.value === 'fp16' ? 'fp16' : 'fp32',
         vocoderChunkMode: (() => {
             const r = document.querySelector('input[name="vocoderChunkMode"]:checked');
             return r ? r.value : 'smart';
@@ -798,11 +816,14 @@ vocoderTypeSelect.addEventListener('change', () => {
             if (vocoderTypeHint) {
                 vocoderTypeHint.textContent = 'SiFiGAN 不可用，已回退到默认 Vocoder';
             }
+            updateSifiganPrecisionVisibility('default');
             return;
         }
     }
+    updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
     applySettings();
 });
+sifiganPrecisionSelect.addEventListener('change', () => applySettings());
 
 // Vocoder chunk mode (smart/manual) and manual frames slider
 vocoderChunkModeRadios.forEach(radio => {

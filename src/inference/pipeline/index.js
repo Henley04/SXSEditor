@@ -61,6 +61,7 @@ class OnnxSVSPipeline {
         this.useWebNN = false;
         this.useStaticShapes = options.modelPrecision === 'int8-npu';
         this.vocoderType = 'default';            // 'default' | 'sifigan'，_doInit 中从 settings 读取覆盖
+        this.sifiganPrecision = 'fp32';          // 'fp32' | 'fp16'，仅 vocoderType='sifigan' 时生效，控制加载哪个 onnx 变体
         this.sifiganStatsMissing = false;        // SiFiGAN stats 文件缺失标志（运行时兜底归一化用）
         this.sifiganStatsPath = null;            // sifigan_stats.joblib 路径（与 onnx 同目录）
         this._resolvedVocoderFile = null;       // 解析后的 vocoder 文件名（供 _detectVocoderPrecision / loadModel 复用）
@@ -247,6 +248,14 @@ class OnnxSVSPipeline {
 
         // 更新 vocoderType 并重新解析文件路径（四级回退）
         this.vocoderType = newVocoderType;
+        // 切换 vocoder 类型时同步刷新 sifiganPrecision（避免使用旧缓存值，与 settings.json 保持一致）
+        if (newVocoderType === 'sifigan') {
+            try {
+                const { loadSettings } = require('../../main/settings');
+                const settings = loadSettings();
+                this.sifiganPrecision = settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32';
+            } catch (_) { /* 保持默认 fp32 */ }
+        }
         await this._resolveVocoderFile();
 
         // 加载新 vocoder（loadModel 内部处理 sifigan 失败回退默认 vocoder 的逻辑）
@@ -268,6 +277,55 @@ class OnnxSVSPipeline {
         this.clearSynthCache();
 
         console.log(`[OnnxSVSPipeline] Vocoder swapped [${result.ep || 'unknown'}] → ${this._resolvedVocoderFile}`);
+        return true;
+    }
+
+    /**
+     * 增量切换 SiFiGAN 精度（FP16 ↔ FP32），仅重载 vocoder session。
+     * 用于 settings.sifiganPrecision 变化且 vocoderType === 'sifigan' 时最小化重载。
+     * 若当前 vocoderType !== 'sifigan'，则只更新字段值，不重载（下次 swapVocoder 到 sifigan 时生效）。
+     *
+     * @param {'fp16'|'fp32'} newPrecision
+     * @returns {Promise<boolean>} true 表示已重载 vocoder；false 表示仅更新字段未重载
+     */
+    async swapSifiganPrecision(newPrecision) {
+        if (newPrecision !== 'fp16' && newPrecision !== 'fp32') return false;
+        const oldPrecision = this.sifiganPrecision;
+        if (newPrecision === oldPrecision) return false;
+
+        this.sifiganPrecision = newPrecision;
+        console.log(`[OnnxSVSPipeline] SiFiGAN precision change: ${oldPrecision} → ${newPrecision}`);
+
+        // 若 pipeline 未初始化或当前非 sifigan，仅更新字段，等下次 init/swapVocoder 时生效
+        if (!this.initialized || this.vocoderType !== 'sifigan') {
+            console.log('[OnnxSVSPipeline] Pipeline not initialized or vocoderType !== sifigan, precision will apply on next sifigan load');
+            return false;
+        }
+
+        // 释放当前 vocoder session
+        if (this.sessions['vocoder'] && typeof this.sessions['vocoder'].release === 'function') {
+            try { this.sessions['vocoder'].release(); } catch (_) {}
+        }
+        delete this.sessions['vocoder'];
+        delete this.sessionEPs['vocoder'];
+
+        await this._resolveVocoderFile();
+        const result = await this.loadModel('vocoder');
+        if (!result.success) {
+            // 加载失败：回退到旧精度
+            console.error(`[OnnxSVSPipeline] SiFiGAN precision swap to ${newPrecision} failed: ${result.error}, reverting to ${oldPrecision}`);
+            this.sifiganPrecision = oldPrecision;
+            await this._resolveVocoderFile();
+            const revertResult = await this.loadModel('vocoder');
+            if (!revertResult.success) {
+                throw new Error(`SiFiGAN precision swap failed and revert also failed: ${revertResult.error}`);
+            }
+            console.warn(`[OnnxSVSPipeline] Reverted to SiFiGAN precision ${oldPrecision} after failed swap`);
+            return false;
+        }
+
+        this.clearSynthCache();
+        console.log(`[OnnxSVSPipeline] SiFiGAN precision swapped [${result.ep || 'unknown'}] → ${this._resolvedVocoderFile}`);
         return true;
     }
 
@@ -561,16 +619,19 @@ class OnnxSVSPipeline {
         const dmlIdx = resolvedModelFiles.indexOf('diff_step_dml.onnx');
         const vocDmlIdx = resolvedModelFiles.indexOf('vocoder_dml.onnx');
 
-        // 读取 vocoderType 设置（SiFiGAN 三级回退依据），复用 main/settings.loadSettings
+        // 读取 vocoderType / sifiganPrecision 设置（SiFiGAN 文件选择依据），复用 main/settings.loadSettings
         let vocoderType = 'default';
+        let sifiganPrecision = 'fp32';
         try {
             const { loadSettings } = require('../../main/settings');
             const settings = loadSettings();
             if (settings.vocoderType === 'sifigan') vocoderType = 'sifigan';
+            if (settings.sifiganPrecision === 'fp16') sifiganPrecision = 'fp16';
         } catch (e) {
-            console.warn('[OnnxSVSPipeline] 读取 vocoderType 设置失败，默认使用 default:', e.message);
+            console.warn('[OnnxSVSPipeline] 读取 vocoderType/sifiganPrecision 设置失败，默认使用 default/fp32:', e.message);
         }
         this.vocoderType = vocoderType;
+        this.sifiganPrecision = sifiganPrecision;
 
         // 检查 diff_step_dml 是否存在（仅 init 阶段需要，vocoder swap 不会触及）
         const dmlExists = await (dmlIdx >= 0
@@ -624,7 +685,9 @@ class OnnxSVSPipeline {
         let vocDmlExists = false;
         try { await fs.promises.access(vocDmlPath); vocDmlExists = true; } catch (_) {}
 
-        // SiFiGAN 四级回退（仅当 vocoderType === 'sifigan' 时尝试）
+        // SiFiGAN 回退（仅当 vocoderType === 'sifigan' 时尝试）
+        // 文件优先级：用户选择的精度变体 → 另一精度变体 → sifigan_vocoder.onnx (FP32 plain) → 默认 vocoder
+        // stats 文件缺失时强制回退默认 vocoder，避免输入分布失配导致失真
         let sifiganOnnxResolved = false;
         if (this.vocoderType === 'sifigan') {
             const sifiganFp16Path = path.join(this.modelDir, 'sifigan_vocoder_dml_fp16.onnx');
@@ -638,7 +701,7 @@ class OnnxSVSPipeline {
                 fs.promises.access(sifiganStatsPath).then(() => true, () => false),
             ]);
             // 辅助函数: 选中某个 sifigan onnx 变体 (stats 必须存在)
-            const pickSifigan = (fileName) => {
+            const pickSifigan = (fileName, label) => {
                 if (!sifiganStatsExists) {
                     // stats 缺失时强制回退默认 vocoder，避免用户听到失真音频
                     // （SiFiGAN ONNX 内部归一化常量依赖 stats，缺失会导致输入分布严重失配）
@@ -647,20 +710,25 @@ class OnnxSVSPipeline {
                 }
                 this._resolvedVocoderFile = fileName;
                 sifiganOnnxResolved = true;
+                console.log(`[OnnxSVSPipeline] Using SiFiGAN vocoder: ${fileName} (${label})`);
                 return true;
             };
-            if (sifiganFp16Exists) {
-                if (pickSifigan('sifigan_vocoder_dml_fp16.onnx')) {
-                    console.log('[OnnxSVSPipeline] Using SiFiGAN vocoder: sifigan_vocoder_dml_fp16.onnx (FP16)');
-                }
-            } else if (sifiganDmlExists) {
-                if (pickSifigan('sifigan_vocoder_dml.onnx')) {
-                    console.log('[OnnxSVSPipeline] sifigan_vocoder_dml_fp16.onnx not found, using sifigan_vocoder_dml.onnx (FP32)');
-                }
+
+            // 按用户选择的精度优先尝试，缺失时回退到另一精度变体
+            const preferFp16 = this.sifiganPrecision === 'fp16';
+            const primaryVariant = preferFp16
+                ? { exists: sifiganFp16Exists, file: 'sifigan_vocoder_dml_fp16.onnx', label: 'FP16' }
+                : { exists: sifiganDmlExists, file: 'sifigan_vocoder_dml.onnx', label: 'FP32' };
+            const secondaryVariant = preferFp16
+                ? { exists: sifiganDmlExists, file: 'sifigan_vocoder_dml.onnx', label: 'FP32 (fallback, user pref=fp16)' }
+                : { exists: sifiganFp16Exists, file: 'sifigan_vocoder_dml_fp16.onnx', label: 'FP16 (fallback, user pref=fp32)' };
+
+            if (primaryVariant.exists) {
+                pickSifigan(primaryVariant.file, primaryVariant.label);
+            } else if (secondaryVariant.exists) {
+                pickSifigan(secondaryVariant.file, secondaryVariant.label);
             } else if (sifiganPlainExists) {
-                if (pickSifigan('sifigan_vocoder.onnx')) {
-                    console.log('[OnnxSVSPipeline] sifigan_vocoder_dml*.onnx not found, using sifigan_vocoder.onnx (FP32)');
-                }
+                pickSifigan('sifigan_vocoder.onnx', 'FP32 plain');
             } else {
                 console.warn('[OnnxSVSPipeline] sifigan 模型缺失，回退默认 vocoder');
                 // 落入默认 vocoder 回退逻辑
@@ -1761,8 +1829,8 @@ class OnnxSVSPipeline {
                 resolvedFile = 'vocoder.onnx';
             }
         } else if (modelFile === 'sifigan_vocoder_dml_fp16.onnx' || modelFile === 'sifigan_vocoder_dml.onnx' || modelFile === 'sifigan_vocoder.onnx') {
-            // SiFiGAN 四级回退（与 _doInit 阶段保持一致）:
-            // sifigan_vocoder_dml_fp16 → sifigan_vocoder_dml → sifigan_vocoder → 默认 vocoder
+            // SiFiGAN 回退（与 _resolveVocoderFile 保持一致）:
+            // 优先用户选择的精度变体 → 另一精度变体 → sifigan_vocoder.onnx → 默认 vocoder
             const sifiganFp16Path = path.join(this.modelDir, 'sifigan_vocoder_dml_fp16.onnx');
             const sifiganDmlPath = path.join(this.modelDir, 'sifigan_vocoder_dml.onnx');
             const sifiganPlainPath = path.join(this.modelDir, 'sifigan_vocoder.onnx');
@@ -1770,7 +1838,12 @@ class OnnxSVSPipeline {
             try { await fs.promises.access(sifiganFp16Path); sifiganFp16Exists = true; } catch (_) {}
             try { await fs.promises.access(sifiganDmlPath); sifiganDmlExists = true; } catch (_) {}
             try { await fs.promises.access(sifiganPlainPath); sifiganPlainExists = true; } catch (_) {}
-            if (sifiganFp16Exists) {
+            const preferFp16 = this.sifiganPrecision === 'fp16';
+            if (preferFp16 && sifiganFp16Exists) {
+                resolvedFile = 'sifigan_vocoder_dml_fp16.onnx';
+            } else if (!preferFp16 && sifiganDmlExists) {
+                resolvedFile = 'sifigan_vocoder_dml.onnx';
+            } else if (sifiganFp16Exists) {
                 resolvedFile = 'sifigan_vocoder_dml_fp16.onnx';
             } else if (sifiganDmlExists) {
                 resolvedFile = 'sifigan_vocoder_dml.onnx';

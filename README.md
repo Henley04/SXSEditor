@@ -59,6 +59,7 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | SVS Pipeline | CFG rescale, DML/WebNN path parity, LRU synth cache, parallel encoders + chunked vocoder |
 | Optional SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) as an alternative DirectML vocoder with auto-fallback to default |
 | Minimal Vocoder Swap | Switching vocoder (default ↔ SiFiGAN) reloads only the vocoder session; main models stay loaded |
+| SiFiGAN Precision Switch | SiFiGAN precision (FP32/FP16) selectable independently in settings; FP16 marked as low quality (cos≈0.95), defaults to FP32; missing variant auto-falls-back to the other |
 | Audio to MIDI | Convert audio files to MIDI notes |
 | MIDI Import | Import standard MIDI files |
 | Multi-track Timeline | Drag-anddrop fragment arrangement |
@@ -165,6 +166,7 @@ macOS / Linux 用户请从源码构建。
 | SVS 推理管线 | CFG rescale、DML/WebNN 路径一致性、LRU 合成缓存、编码器并行 + Vocoder 分块批量化 |
 | 可选 SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) 作为可选 DirectML Vocoder，自动回退到默认 Vocoder |
 | Vocoder 最小化切换 | 切换 Vocoder（默认 ↔ SiFiGAN）仅重载 vocoder session，主模型保持已加载状态 |
+| SiFiGAN 精度切换 | SiFiGAN 精度（FP32/FP16）可在设置中单独选择；FP16 标注为低质量（cos≈0.95），默认 FP32；所选变体缺失时自动回退到另一变体 |
 | 音频转 MIDI | 从音频文件提取 MIDI 音符 |
 | MIDI 导入 | 导入标准 MIDI 文件 |
 | 多轨时间线 | 拖拽排列分片 |
@@ -267,6 +269,7 @@ macOS / Linux：ソースからビルドしてください。
 | SVS 推論パイプライン | CFG rescale、DML/WebNN パリティ、LRU 合成キャッシュ、エンコーダ並列 + Vocoder チャンクバッチ |
 | オプション SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) をオプション DirectML Vocoder として提供、デフォルト Vocoder へ自動フォールバック |
 | Vocoder 最小切替 | Vocoder 切替（デフォルト ↔ SiFiGAN）は vocoder session のみ再読み込み、メインモデルはロード済みのまま維持 |
+| SiFiGAN 精度切替 | SiFiGAN 精度（FP32/FP16）を設定で個別選択可能；FP16 は低品質（cos≈0.95）と明記、デフォルト FP32；選択変体が欠落時はもう一方へ自動フォールバック |
 | オーディオ→MIDI | 音声ファイルから MIDI ノート抽出 |
 | MIDI インポート | 標準 MIDI ファイルのインポート |
 | マルチトラックタイムライン | ドラッグ＆ドロップでフラグメント配置 |
