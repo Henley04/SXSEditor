@@ -24,9 +24,10 @@ describe('Postprocessing.runVocoderChunked - 分块循环终止回归测试', ()
     runCalls = [];
   });
 
-  // 构造 mock sessions：记录每次 vocoder.run 的输入帧数，返回对应长度的零波形。
+  // 构造 mock sessions：记录每次 vocoder.run 的输入帧数，返回对应长度的波形。
+  // 默认填充 0.5（非零），因为 validateVocoderOutput 会拦截全零输出（DML silent failure）。
   // createFloatTensor 会创建真实 ort.Tensor（仅构造，不触发推理），mock run 通过 inputs.mel.dims 取帧数。
-  function makeSessions(fillValue = 0.0) {
+  function makeSessions(fillValue = 0.5) {
     return {
       vocoder: {
         async run(inputs) {
@@ -34,7 +35,7 @@ describe('Postprocessing.runVocoderChunked - 分块循环终止回归测试', ()
           runCalls.push({ vocSeqLen });
           const waveLen = vocSeqLen * HOP_SIZE;
           const data = new Float32Array(waveLen);
-          if (fillValue !== 0.0) data.fill(fillValue);
+          data.fill(fillValue);
           return { waveform: { type: 'float32', data } };
         },
       },
@@ -144,5 +145,37 @@ describe('Postprocessing.runVocoderChunked - 分块循环终止回归测试', ()
     expect(runCalls.length).to.be.lessThan(200);
     expect(runCalls.length).to.be.greaterThan(90);
     expect(out.length).to.equal(totalFrames * HOP_SIZE);
+  });
+
+  it('全零输出应抛错（DML silent failure 边界保护）', async () => {
+    const totalFrames = VOCODER_CHUNK_FRAMES;
+    const melData = new Float32Array(totalFrames * MEL_DIM);
+    // fillValue=0.0 模拟 DML 显存耗尽后的 silent failure（返回全零波形不抛错）
+    let thrownErr = null;
+    try {
+      await pp.runVocoderChunked(
+        makeSessions(0.0), melData, totalFrames, false, false, 'default', null, false
+      );
+    } catch (e) {
+      thrownErr = e;
+    }
+    expect(thrownErr).to.not.be.null;
+    expect(thrownErr.message).to.match(/all-zero|empty waveform/i);
+  });
+
+  it('NaN 输出应抛错（GPU device removed 边界保护）', async () => {
+    const totalFrames = VOCODER_CHUNK_FRAMES;
+    const melData = new Float32Array(totalFrames * MEL_DIM);
+    // fillValue=NaN 模拟 GPU device removed 后的 NaN 输出
+    let thrownErr = null;
+    try {
+      await pp.runVocoderChunked(
+        makeSessions(NaN), melData, totalFrames, false, false, 'default', null, false
+      );
+    } catch (e) {
+      thrownErr = e;
+    }
+    expect(thrownErr).to.not.be.null;
+    expect(thrownErr.message).to.match(/nan/i);
   });
 });

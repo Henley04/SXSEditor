@@ -47,18 +47,27 @@ const DEFAULT_RESIDENT_PRECISION = 'fp16'; // 启动时精度未知，用 fp16 �
  *
  * 大显存档位由 1536 保守化为 1280（仍比默认 1008 大，减少分片数但降低峰值风险）。
  *
+ * 安全余量：availableBytes 再乘 0.8，预留 20% 给以下未计入的开销：
+ *   - diff_step 推理阶段驻留的激活张量（_synthesizeSegment 中 diffusion → vocoder 串行，
+ *     diff_step session 未释放，其激活仍占显存）
+ *   - 多 segment 串行合成时的显存碎片化
+ *   - 其他进程（浏览器/OS/桌面合成器）的显存占用
+ *   - DML 命令队列缓冲区
+ * 长音频合成 OOM 的根因之一就是常驻权重估算未含 diff_step 激活，导致 chunk 偏大。
+ *
  * 所有返回值对齐到 8 的倍数（与 VOCODER_OVERLAP_FRAMES 兼容）。
  */
 function computeVocoderChunkFramesFromVRAM(vramBytes, precision = DEFAULT_RESIDENT_PRECISION) {
   if (!vramBytes || vramBytes <= 0) return VOCODER_CHUNK_FRAMES; // 未知显存 → 默认值
   const residentMb = RESIDENT_WEIGHT_MB[precision] || RESIDENT_WEIGHT_MB[DEFAULT_RESIDENT_PRECISION];
   const residentBytes = residentMb * 1024 * 1024;
-  const availableBytes = vramBytes - residentBytes;
+  // 安全余量 0.8：预留 20% 给 diff_step 激活、显存碎片、其他进程占用
+  const availableBytes = (vramBytes - residentBytes) * 0.8;
   // 常驻权重已超 VRAM：仅给最小片，避免加载阶段就 OOM
   if (availableBytes <= 0) return MIN_VOCODER_CHUNK_FRAMES;
   const availGb = availableBytes / (1024 * 1024 * 1024);
   let frames;
-  // 分档基于"可用显存"（VRAM - 常驻权重），阈值考虑 vocoder 激活工作区峰值随 seq_len 近似线性增长
+  // 分档基于"可用显存"（VRAM - 常驻权重 - 安全余量），阈值考虑 vocoder 激活工作区峰值随 seq_len 近似线性增长
   if (availGb < 0.5) frames = 256;       // 极紧张：常驻几乎吃满，仅最小片
   else if (availGb < 1.5) frames = 512;   // 紧张：~10.2s
   else if (availGb < 3.0) frames = 768;    // 一般：~15.4s

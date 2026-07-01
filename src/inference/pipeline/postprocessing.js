@@ -9,6 +9,59 @@ const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils
 
 // ---- Audio utility functions ----
 
+/**
+ * 校验 vocoder 输出波形是否有效。
+ * DML 在显存耗尽边界可能不抛错而是返回全零/NaN 波形（silent failure），
+ * 若不拦截会导致应用误以为合成完毕、播放空声音。
+ *
+ * 抽样检查：对大 chunk 全量扫描开销高，按 1024 点抽样足够检测 silent failure。
+ * NaN 检测优先（任一抽样点为 NaN 即判定无效），全零检测需要所有抽样点均为零。
+ *
+ * @param {Float32Array} waveform - vocoder 输出波形
+ * @param {number} chunkIndex - chunk 索引（用于错误信息）
+ * @throws {Error} 当波形为空、包含 NaN 或全零时
+ */
+function validateVocoderOutput(waveform, chunkIndex) {
+    if (!waveform || waveform.length === 0) {
+        throw new Error(`Vocoder chunk ${chunkIndex} returned empty waveform (length=0, likely GPU VRAM exhaustion)`);
+    }
+    const sampleStep = Math.max(1, Math.floor(waveform.length / 1024));
+    let nonZeroCount = 0;
+    let sampledCount = 0;
+    for (let i = 0; i < waveform.length; i += sampleStep) {
+        const v = waveform[i];
+        if (Number.isNaN(v)) {
+            throw new Error(`Vocoder chunk ${chunkIndex} produced NaN output (GPU VRAM exhaustion or device removed)`);
+        }
+        if (Math.abs(v) > 1e-7) nonZeroCount++;
+        sampledCount++;
+    }
+    if (sampledCount > 0 && nonZeroCount === 0) {
+        throw new Error(`Vocoder chunk ${chunkIndex} produced all-zero output (GPU VRAM exhaustion or device removed)`);
+    }
+}
+
+/**
+ * 判断错误是否为 GPU 显存耗尽相关（OOM / device removed）。
+ * 用于在 catch 中区分可重试的显存错误与其他致命错误。
+ * @param {Error} err
+ * @returns {boolean}
+ */
+function isVramOOMError(err) {
+    const msg = (err && err.message) ? err.message.toLowerCase() : '';
+    if (!msg) return false;
+    // ONNX Runtime / DirectML 常见显存错误关键词
+    return msg.includes('out of memory') ||
+           msg.includes('cuda') && msg.includes('memory') ||
+           msg.includes('dxgi_error_device_removed') ||
+           msg.includes('dxgi_error_device_hung') ||
+           msg.includes('0x887a0006') ||
+           msg.includes('0x887a0005') ||
+           msg.includes('gpu device') && msg.includes('removed') ||
+           msg.includes('failed to allocate') ||
+           msg.includes('memalloc');
+}
+
 function parseWavBuffer(buffer) {
     const buf = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer);
     const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
@@ -559,9 +612,21 @@ class Postprocessing {
             const paddedMel = useStaticShapes ? padFloat(melArr, vocSeqLen * MEL_DIM) : melArr;
             const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, totalFrames);
-            const results = await sessions.vocoder.run(vocoderInputs);
+            let results;
+            try {
+                results = await sessions.vocoder.run(vocoderInputs);
+            } catch (runErr) {
+                // OOM / device removed：DML 显存耗尽，抛出带上下文的明确错误，
+                // 防止上层误以为合成完毕而播放空声音
+                if (isVramOOMError(runErr)) {
+                    throw new Error(`Vocoder OOM on single-chunk inference (frames=${totalFrames}): ${runErr.message}. Try reducing vocoder chunk frames in settings.`);
+                }
+                throw runErr;
+            }
             await yieldToEventLoop(); // Prevent UI freeze during DML inference
             const waveform = outputToFloat32(results['waveform']);
+            // 校验输出：DML 在显存边界可能返回全零/NaN 而不抛错（silent failure）
+            validateVocoderOutput(waveform, 0);
             const copyLen = Math.min(waveform.length, totalSamples);
             output.set(waveform.subarray(0, copyLen));
             normalizePeakTo(output);
@@ -628,14 +693,30 @@ class Postprocessing {
         // 触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) — GPU 设备因无效命令被驱动移除。
         // 旧版本 VOC_PARALLEL=2 的 Promise.all 并行已移除，所有 chunk 严格按顺序逐个推理。
         // 流式播放：每完成一个 chunk，通过 onChunkComplete 推送"已确定"的音频段（weightSum=1）。
+        //
+        // 错误处理：每个 chunk 的 vocoder.run() 都包 try/catch。
+        // - OOM / device removed：立即抛出明确错误，阻止后续 chunk 继续浪费 GPU 时间，
+        //   同时防止 onChunkComplete 推送部分音频后中段失败导致应用误判合成完毕。
+        // - 输出校验：DML 在显存边界可能不抛错而是返回全零/NaN 波形（silent failure），
+        //   validateVocoderOutput 拦截此类无效输出。
         const totalChunkCount = chunkSpecs.length;
         let committedSamples = 0;
         for (let i = 0; i < totalChunkCount; i++) {
             const spec = chunkSpecs[i];
-            const results = await sessions.vocoder.run(spec.vocoderInputs);
+            let results;
+            try {
+                results = await sessions.vocoder.run(spec.vocoderInputs);
+            } catch (runErr) {
+                if (isVramOOMError(runErr)) {
+                    throw new Error(`Vocoder OOM at chunk ${i}/${totalChunkCount} (frames=${spec.currentChunkFrames}, offset=${spec.chunkStart}): ${runErr.message}. Try reducing vocoder chunk frames in settings.`);
+                }
+                throw new Error(`Vocoder inference failed at chunk ${i}/${totalChunkCount}: ${runErr.message}`);
+            }
             await yieldToEventLoop(); // Prevent UI freeze between vocoder chunks
 
             const waveform = outputToFloat32(results['waveform']);
+            // 校验输出：拦截 DML silent failure（全零/NaN）
+            validateVocoderOutput(waveform, i);
             const writeStart = spec.chunkStart * vocoderHopSize;
             const writeLen = Math.min(waveform.length, totalSamples - writeStart);
 
@@ -776,4 +857,6 @@ module.exports = {
     melToHz,
     createMelFilterbank,
     extractMelSpectrogram,
+    validateVocoderOutput,
+    isVramOOMError,
 };
