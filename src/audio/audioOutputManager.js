@@ -4,7 +4,12 @@ const fs = require('fs');
 
 function _findWorkerScript() {
   const searchPaths = [
+    // Dev mode: audioOutputManager.js lives in src/audio/, audioWorker.js next to it.
     path.join(__dirname, 'audioWorker.js'),
+    // Webpack-bundled main process: __dirname is .webpack/main/, audioWorker.js
+    // is copied to .webpack/main/audio/audioWorker.js via CopyPlugin.
+    path.join(__dirname, 'audio', 'audioWorker.js'),
+    // Fallback: sibling audio directory (kept for legacy layouts).
     path.join(__dirname, '..', 'audio', 'audioWorker.js'),
   ];
   for (const p of searchPaths) {

@@ -61,7 +61,7 @@ async function ensurePipelineLanguage(language) {
 
   if (pipeline && pipeline.initialized && language !== currentLanguage) {
     // Language changed — swap only the 2 language-specific models
-    console.log(`[Main] Language ${currentLanguage || 'base'} → ${language || 'base'}, swapping models`);
+    console.log(`[Main] Language ${currentLanguage || 'base'} -> ${language || 'base'}, swapping models`);
     try {
       await pipeline.swapLanguageModels(language);
       currentLanguage = language;

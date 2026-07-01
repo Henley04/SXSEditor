@@ -50,7 +50,7 @@ export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBat
         vocPrepTotal = vocPrepMs;
         vocInferTotal = vocInferMs;
         vocPostTotal = vocPostMs;
-        console.log(`[WebNN] vocoder (single): prep=${vocPrepMs.toFixed(1)} infer=${vocInferMs.toFixed(1)} post=${vocPostMs.toFixed(1)} [${totalFrames}frames → ${totalSamples}samples${useStaticShapes ? ', NPU static' : ''}]`);
+        console.log(`[WebNN] vocoder (single): prep=${vocPrepMs.toFixed(1)} infer=${vocInferMs.toFixed(1)} post=${vocPostMs.toFixed(1)} [${totalFrames}frames -> ${totalSamples}samples${useStaticShapes ? ', NPU static' : ''}]`);
 
         // 单 chunk 路径：一次性推送全部音频（流式播放用）
         if (onChunkComplete) {

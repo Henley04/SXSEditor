@@ -133,8 +133,14 @@ function createWindow(opts = {}) {
   mainWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
+  // Defer openDevTools until did-finish-load. Opening it earlier causes
+  // Chromium to reject internal blink.mojom.WidgetHost IPC messages during
+  // the initial renderer bootstrap (visible as "Message N rejected by
+  // interface blink.mojom.WidgetHost" errors on the console).
   if (isDev) {
-    mainWindow.webContents.openDevTools();
+    mainWindow.webContents.once('did-finish-load', () => {
+      mainWindow.webContents.openDevTools();
+    });
   }
 
   mainWindow.on('close', (e) => {
@@ -291,8 +297,11 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   fragmentWindow.loadURL(`${FRAGMENT_EDITOR_WINDOW_WEBPACK_ENTRY}#fragmentId=${encodeURIComponent(fragment.id)}`);
   fragmentWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   fragmentWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // Defer openDevTools until did-finish-load (see createWindow for rationale).
   if (isDev) {
-    fragmentWindow.webContents.openDevTools();
+    fragmentWindow.webContents.once('did-finish-load', () => {
+      fragmentWindow.webContents.openDevTools();
+    });
   }
 
   fragmentWindows[fragment.id] = fragmentWindow;

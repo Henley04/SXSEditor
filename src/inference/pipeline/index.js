@@ -179,7 +179,7 @@ class OnnxSVSPipeline {
             throw new Error('JP_MODELS_MISSING');
         }
 
-        console.log(`[OnnxSVSPipeline] Swapping language models: ${oldLang || 'base'} → ${newLanguage || 'base'}`);
+        console.log(`[OnnxSVSPipeline] Swapping language models: ${oldLang || 'base'} -> ${newLanguage || 'base'}`);
 
         for (const { key, file } of langModels) {
             // Release old session
@@ -209,7 +209,7 @@ class OnnxSVSPipeline {
                 );
                 this.sessions[key] = session;
                 this.sessionEPs[key] = ep;
-                console.log(`[OnnxSVSPipeline] ${resolvedFile} swapped [${ep}] → ${modelPath}`);
+                console.log(`[OnnxSVSPipeline] ${resolvedFile} swapped [${ep}] -> ${modelPath}`);
             } catch (err) {
                 console.error(`[OnnxSVSPipeline] Failed to swap ${resolvedFile}:`, err.message);
                 throw err;
@@ -236,7 +236,7 @@ class OnnxSVSPipeline {
         if (newVocoderType === this.vocoderType) return false;
 
         const oldVocoderType = this.vocoderType;
-        console.log(`[OnnxSVSPipeline] Swapping vocoder: ${oldVocoderType} → ${newVocoderType}`);
+        console.log(`[OnnxSVSPipeline] Swapping vocoder: ${oldVocoderType} -> ${newVocoderType}`);
 
         // 释放当前 vocoder session
         if (this.sessions['vocoder'] && typeof this.sessions['vocoder'].release === 'function') {
@@ -275,7 +275,7 @@ class OnnxSVSPipeline {
         // 清空合成缓存（不同 vocoder 会产生不同音频，旧缓存不再适用）
         this.clearSynthCache();
 
-        console.log(`[OnnxSVSPipeline] Vocoder swapped [${result.ep || 'unknown'}] → ${this._resolvedVocoderFile}`);
+        console.log(`[OnnxSVSPipeline] Vocoder swapped [${result.ep || 'unknown'}] -> ${this._resolvedVocoderFile}`);
         return true;
     }
 
@@ -293,7 +293,7 @@ class OnnxSVSPipeline {
         if (newPrecision === oldPrecision) return false;
 
         this.sifiganPrecision = newPrecision;
-        console.log(`[OnnxSVSPipeline] SiFiGAN precision change: ${oldPrecision} → ${newPrecision}`);
+        console.log(`[OnnxSVSPipeline] SiFiGAN precision change: ${oldPrecision} -> ${newPrecision}`);
 
         // 若 pipeline 未初始化或当前非 sifigan，仅更新字段，等下次 init/swapVocoder 时生效
         if (!this.initialized || this.vocoderType !== 'sifigan') {
@@ -324,7 +324,7 @@ class OnnxSVSPipeline {
         }
 
         this.clearSynthCache();
-        console.log(`[OnnxSVSPipeline] SiFiGAN precision swapped [${result.ep || 'unknown'}] → ${this._resolvedVocoderFile}`);
+        console.log(`[OnnxSVSPipeline] SiFiGAN precision swapped [${result.ep || 'unknown'}] -> ${this._resolvedVocoderFile}`);
         return true;
     }
 
@@ -1160,7 +1160,7 @@ class OnnxSVSPipeline {
                     try { totalBytes += fs.statSync(modelPath + '.data').size; } catch (_) {}
                     const totalSizeMB = totalBytes / (1024 * 1024);
                     this.vocoderIsFP16 = totalSizeMB < sizeThresholdMB;
-                    console.log(`[OnnxSVSPipeline] Vocoder file size: ${totalSizeMB.toFixed(1)} MB (threshold=${sizeThresholdMB} MB, sifigan=${isSifigan}) → vocoderIsFP16=${this.vocoderIsFP16}`);
+                    console.log(`[OnnxSVSPipeline] Vocoder file size: ${totalSizeMB.toFixed(1)} MB (threshold=${sizeThresholdMB} MB, sifigan=${isSifigan}) -> vocoderIsFP16=${this.vocoderIsFP16}`);
                     return;
                 } catch (_) {}
             }
@@ -1182,7 +1182,7 @@ class OnnxSVSPipeline {
                 const t16 = new ort.Tensor('float16', new Uint16Array(PROBE_FRAMES * 128), [1, PROBE_FRAMES, 128]);
                 await session.run(buildFeed(t16));
                 this.vocoderIsFP16 = true;
-                console.log('[OnnxSVSPipeline] Vocoder accepts float16 → vocoderIsFP16=true');
+                console.log('[OnnxSVSPipeline] Vocoder accepts float16 -> vocoderIsFP16=true');
                 return;
             } catch (_) {}
 
@@ -1190,7 +1190,7 @@ class OnnxSVSPipeline {
                 const t32 = new ort.Tensor('float32', new Float32Array(PROBE_FRAMES * 128), [1, PROBE_FRAMES, 128]);
                 await session.run(buildFeed(t32));
                 this.vocoderIsFP16 = false;
-                console.log('[OnnxSVSPipeline] Vocoder accepts float32 → vocoderIsFP16=false');
+                console.log('[OnnxSVSPipeline] Vocoder accepts float32 -> vocoderIsFP16=false');
                 return;
             } catch (_) {}
 
