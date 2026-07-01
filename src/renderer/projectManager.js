@@ -397,10 +397,29 @@ export function showSaveBeforeCloseDialog() {
 }
 
 export async function saveProject() {
+  // Save in-place: if we already have a file path, write to it silently
+  // without showing a dialog or the save-options popup.
+  if (state.currentProjectFilePath) {
+    try {
+      const data = serializeProject(false);
+      await window.electronAPI.saveFile(state.currentProjectFilePath, data);
+      markClean();
+      console.log('Project saved to', state.currentProjectFilePath);
+      return { saved: true, canceled: false };
+    } catch (err) {
+      console.error('Save failed', err);
+      return { saved: false, canceled: false, error: err.message };
+    }
+  }
+  // No file path yet — fall back to Save As (prompts for location & options).
+  return saveProjectAs();
+}
+
+export async function saveProjectAs() {
   if (window.electronAPI?.showSaveDialog) {
     try {
       const saveOptions = await showSaveProjectOptionsDialog();
-      if (!saveOptions) return;
+      if (!saveOptions) return { saved: false, canceled: true };
 
       const result = await window.electronAPI.showSaveDialog({
         filters: [{ name: 'SXSEditor Project', extensions: ['sxsproj'] }],
@@ -412,13 +431,15 @@ export async function saveProject() {
         state.currentProjectFilePath = result.filePath;
         markClean();
         console.log('Project saved to', result.filePath);
+        return { saved: true, canceled: false };
       }
+      return { saved: false, canceled: true };
     } catch (err) {
       console.error('Save failed', err);
+      return { saved: false, canceled: false, error: err.message };
     }
-  } else {
-      // TODO: translate garbled log
   }
+  return { saved: false, canceled: true };
 }
 
 export async function loadProject() {

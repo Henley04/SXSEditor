@@ -7,6 +7,9 @@ const mainLocales = {
     menu: {
       aboutSXSEditor: '关于 SXSEditor',
       quit: '退出',
+      file: '文件',
+      save: '保存',
+      saveAs: '另存为...',
       edit: '编辑',
       undo: '撤销',
       redo: '重做',
@@ -59,6 +62,9 @@ const mainLocales = {
     menu: {
       aboutSXSEditor: 'About SXSEditor',
       quit: 'Quit',
+      file: 'File',
+      save: 'Save',
+      saveAs: 'Save As...',
       edit: 'Edit',
       undo: 'Undo',
       redo: 'Redo',

@@ -496,6 +496,9 @@ export default {
   menu: {
     aboutSXSEditor: '关于 SXSEditor',
     quit: '退出',
+    file: '文件',
+    save: '保存',
+    saveAs: '另存为...',
     edit: '编辑',
     undo: '撤销',
     redo: '重做',

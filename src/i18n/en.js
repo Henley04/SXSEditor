@@ -496,6 +496,9 @@ export default {
   menu: {
     aboutSXSEditor: 'About SXSEditor',
     quit: 'Quit',
+    file: 'File',
+    save: 'Save',
+    saveAs: 'Save As...',
     edit: 'Edit',
     undo: 'Undo',
     redo: 'Redo',

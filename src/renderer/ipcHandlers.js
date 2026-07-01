@@ -1,6 +1,6 @@
-import { state, dom, trackManager } from './state.js';
+import { state, trackManager } from './state.js';
 import { initI18n, applyLocale, getLocale } from '../i18n/index.js';
-import { markDirty, markClean, autoSaveProject, showSaveBeforeCloseDialog } from './projectManager.js';
+import { markDirty, autoSaveProject, saveProject, showSaveBeforeCloseDialog } from './projectManager.js';
 import { refreshAll } from './timelineRenderer.js';
 
 // Singer created IPC handler
@@ -73,41 +73,21 @@ if (window.electronAPI?.onLocaleChanged) {
 
 // Close confirm IPC handler
 if (window.electronAPI?.onCloseConfirm) {
-  let closeAfterSave = false;
-  let closeSavePollTimer = null;
-  let closeSaveTimeoutTimer = null;
-
-  function cleanupCloseTimers() {
-    if (closeSavePollTimer) { clearInterval(closeSavePollTimer); closeSavePollTimer = null; }
-    if (closeSaveTimeoutTimer) { clearTimeout(closeSaveTimeoutTimer); closeSaveTimeoutTimer = null; }
-    closeAfterSave = false;
-  }
-
   function doCloseConfirmed() {
-    cleanupCloseTimers();
     if (window.electronAPI?.closeConfirmed) {
       window.electronAPI.closeConfirmed();
     }
   }
 
-  // Intercept save button click to close window after save
-  dom.btnSave.addEventListener('click', function onSaveForClose() {
-    if (!closeAfterSave) return;
-    cleanupCloseTimers();
-    closeSavePollTimer = setInterval(() => {
-      if (!state.isDirty) doCloseConfirmed();
-    }, 100);
-    closeSaveTimeoutTimer = setTimeout(() => {
-      doCloseConfirmed();
-    }, 10000);
-  });
-
   const cleanupClose = window.electronAPI.onCloseConfirm(async () => {
     try {
       const result = await showSaveBeforeCloseDialog();
       if (result === 'save') {
-        closeAfterSave = true;
-        dom.btnSave.click();
+        const res = await saveProject();
+        if (res && res.saved && !state.isDirty) {
+          doCloseConfirmed();
+        }
+        // If save was canceled or failed, leave the window open.
       } else if (result === 'discard') {
         doCloseConfirmed();
       }
