@@ -68,7 +68,7 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | One-shot Hardware Detection | GPU/NPU/DML enumeration runs once after app startup; results cached and reused at runtime (no re-probing during synthesis) |
 | Smart Vocoder Chunk Sizing | Vocoder chunk size auto-allocated from available VRAM (after subtracting resident model weights by precision: FP32≈2.9GB, FP16≈1.4GB, INT8≈0.96GB); tiers: <0.5GB→256, <1.5GB→512, <3GB→768, <5GB→1008, ≥5GB→1280; manual override available in settings |
 | Model Auto-Download | Chunked parallel download from ModelScope |
-| Model Precision | FP32, FP16, FP8, INT8, INT8-NPU |
+| Model Precision | FP32, FP16, INT8, INT8-NPU |
 | Themes | Hot-swappable design token system |
 | SVG Icons | Flat, theme-aware inline SVG icon system (currentColor) |
 | Undo/Redo | 200-step edit history |
@@ -175,7 +175,7 @@ macOS / Linux 用户请从源码构建。
 | 一次性硬件探测 | 应用启动后仅执行一次 GPU/NPU/DML 设备枚举，结果缓存复用，运行时不再重复探测（避免与推理并发提交命令流） |
 | Vocoder 分片智能分配 | 依据可用显存（VRAM 减去按精度估算的常驻权重：FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB）自动分档（&lt;0.5GB→256, &lt;1.5GB→512, &lt;3GB→768, &lt;5GB→1008, ≥5GB→1280）；可在设置中切换为手动设置 |
 | 模型自动下载 | 从 ModelScope 分片并行下载 |
-| 模型精度 | FP32、FP16、FP8、INT8、INT8-NPU |
+| 模型精度 | FP32、FP16、INT8、INT8-NPU |
 | 主题系统 | 热切换设计令牌系统 |
 | SVG 图标 | 扁平化、主题感知的内联 SVG 图标系统 (currentColor) |
 | 撤销/重做 | 200 步编辑历史 |
@@ -278,7 +278,7 @@ macOS / Linux：ソースからビルドしてください。
 | 1 回限りのハードウェア検出 | アプリ起動後に GPU/NPU/DML デバイス列挙を 1 回だけ実行し、結果をキャッシュして実行時に再利用（合成中の再検出を回避） |
 | Vocoder チャンクサイズ自動割当 | VRAM から精度別の常駐重み（FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB）を差し引いた利用可能显存に基づき Vocoder チャンクサイズを自動選択（&lt;0.5GB→256, &lt;1.5GB→512, &lt;3GB→768, &lt;5GB→1008, ≥5GB→1280）；設定で手動指定にも切替可能 |
 | モデル自動ダウンロード | ModelScope からチャンク並列ダウンロード |
-| モデル精度 | FP32、FP16、FP8、INT8、INT8-NPU |
+| モデル精度 | FP32、FP16、INT8、INT8-NPU |
 | テーマ | ホットスワップ対応デザイントークンシステム |
 | SVG アイコン | フラット設計、テーマ連動インライン SVG アイコンシステム (currentColor) |
 | アンドゥ/リドゥ | 200 ステップの編集履歴 |

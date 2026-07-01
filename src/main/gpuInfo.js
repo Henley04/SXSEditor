@@ -33,7 +33,6 @@ const MAX_VOCODER_CHUNK_FRAMES = 2048;
 const RESIDENT_WEIGHT_MB = {
   'fp32':     2906,  // 1772 + 1054 + ~80
   'fp16':     1446,  // 887  + 519  + ~40
-  'fp8':      1446,  // 保守取 fp16（fp8 EP 开销相似）
   'int8':      960,  // 445  + 485  + ~30
   'int8-npu':  960,  // 同 int8
 };
@@ -74,7 +73,7 @@ function computeVocoderChunkFramesFromVRAM(vramBytes, precision = DEFAULT_RESIDE
  * 懒计算：首次调用时若缓存为空且 _gpuInfoCache 可用则填充，之后直接复用。
  * 缓存按精度独立存储（_vocoderChunkFramesCacheByPrecision[precision]），
  * 同一显卡在不同精度下会得到不同的分片帧数。
- * @param {string} [precision] - 模型精度（fp32/fp16/int8/int8-npu/fp8），缺省时按 fp16 保守估算
+ * @param {string} [precision] - 模型精度（fp32/fp16/int8/int8-npu），缺省时按 fp16 保守估算
  */
 function getCachedVocoderChunkFrames(precision = DEFAULT_RESIDENT_PRECISION) {
   if (_vocoderChunkFramesCacheByPrecision[precision] != null) {

@@ -10,7 +10,6 @@ const { URL } = require('node:url');
 const MODEL_IDS = {
   fp32: 'syxppp/SoulX-Singer-onnx-directml',
   fp16: 'syxppp/SoulX-Singer-onnx-directml-fp16',
-  fp8: '',  // placeholder — download link TBD
   int8: 'syxppp/SoulX-Singer-onnx-directml-int8',
   'int8-npu': 'syxppp/SoulX-Singer-onnx-directml-int8-dynamic',
   // SiFiGAN ONNX 模型仓库 (FP32 DML 兼容版 + stats)
@@ -95,12 +94,11 @@ function getJpModelId(precision) {
   return JP_MODEL_IDS[precision] || JP_MODEL_IDS[DEFAULT_PRECISION] || null;
 }
 
-const PRECISION_SUBDIR_PRECESIONS = new Set(['int8', 'fp16', 'fp8', 'int8-npu']);
+const PRECISION_SUBDIR_PRECESIONS = new Set(['int8', 'fp16', 'int8-npu']);
 
 const PRECISION_SUBDIR_MAP = {
   'int8': 'int8',
   'fp16': 'fp16',
-  'fp8': 'fp8',
   'int8-npu': path.join('int8', 'optimized_npu'),
 };
 
