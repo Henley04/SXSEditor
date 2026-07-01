@@ -363,6 +363,9 @@ function registerModelDownloadIpc() {
       if (win && !win.isDestroyed()) {
         win.webContents.send('model-download:complete');
       }
+      // 失效 JP 模型存在性缓存，让下次合成重新检查文件
+      const { invalidateJpModelsCache } = require('../modelManager');
+      invalidateJpModelsCache(modelDir, currentPrecision);
       console.log('[Main] JP model download complete');
     } catch (err) {
       if (err.message === 'Download cancelled') {

@@ -122,6 +122,12 @@ class Diffusion {
                 const posMean = posSum / targetLen;
                 const cfgAdjMean = cfgAdjSum / targetLen;
 
+                // 长片段时 pass 之间 yield 一次，避免单步内 3 次 totalFrames*MEL_DIM
+                // 循环累积阻塞主线程（2000 frames × 128 = 256k 迭代/pass）
+                if (totalFrames > 256) {
+                    await new Promise(r => setImmediate(r));
+                }
+
                 // Pass 2: 计算方差 + 应用 rescale + 更新 xt（与 WebNN 路径一致合并）
                 let posVarSum = 0;
                 let cfgAdjVarSum = 0;
@@ -139,6 +145,11 @@ class Diffusion {
                 const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
                 const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
                 const rescale = posStd / (cfgAdjStd + 1e-8);
+
+                // Pass 2 → Pass 3 之间 yield
+                if (totalFrames > 256) {
+                    await new Promise(r => setImmediate(r));
+                }
 
                 for (let f = 0; f < totalFrames; f++) {
                     for (let d = 0; d < MEL_DIM; d++) {
