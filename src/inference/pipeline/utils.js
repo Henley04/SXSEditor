@@ -135,6 +135,22 @@ function outputToFloat32(tensor) {
 }
 
 /**
+ * 释放 ONNX Runtime Tensor 的 native 资源。
+ * onnxruntime-node 的 Tensor 提供 dispose() 方法，可立即释放底层 GPU/CPU 缓冲区，
+ * 不必等待 V8 GC finalizer。在推理管线中，每步创建的输入/输出张量若不显式释放，
+ * 会累积在 GPU 显存导致后续推理 OOM (887A0005/887A0006)。
+ * @param {import('onnxruntime-node').Tensor|null|undefined} tensor
+ */
+function disposeTensor(tensor) {
+    if (!tensor) return;
+    try {
+        if (typeof tensor.dispose === 'function') {
+            tensor.dispose();
+        }
+    } catch (_) { /* 忽略重复 dispose 或已释放 */ }
+}
+
+/**
  * Normalize audio array peak to a threshold (default 0.95).
  * @param {Float32Array} arr
  * @param {number} [len] - number of samples to process (defaults to arr.length)
@@ -158,5 +174,6 @@ module.exports = {
     f16BufferToFloat32,
     createFloatTensor,
     outputToFloat32,
+    disposeTensor,
     normalizePeakTo,
 };

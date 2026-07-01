@@ -1,6 +1,6 @@
 const { MEL_DIM, HOP_SIZE, SIFIGAN_HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, NPU_VOCODER_SEQ_LEN, SAMPLE_RATE, N_FFT, NUM_MELS, MEL_MEAN, MEL_VAR } = require('./constants');
 const { TWIDDLE_REAL, TWIDDLE_IMAG, HANN_WINDOW } = require('./constants');
-const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils');
+const { createFloatTensor, outputToFloat32, disposeTensor, normalizePeakTo } = require('./utils');
 
 /**
  * Post-processing: mel transform, vocoder, audio generation
@@ -8,22 +8,7 @@ const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils
  */
 
 // ---- Audio utility functions ----
-
-/**
- * 释放 ONNX Runtime Tensor 的 native 资源。
- * onnxruntime-node 的 Tensor 提供 dispose() 方法，可立即释放底层 GPU/CPU 缓冲区，
- * 不必等待 V8 GC finalizer。在 vocoder 分块推理中，chunk 间累积的未释放张量
- * 会耗尽 GPU 显存导致后续 chunk 触发 887A0006 (device removed)。
- * @param {import('onnxruntime-node').Tensor|null|undefined} tensor
- */
-function _disposeTensor(tensor) {
-    if (!tensor) return;
-    try {
-        if (typeof tensor.dispose === 'function') {
-            tensor.dispose();
-        }
-    } catch (_) { /* 忽略重复 dispose 或已释放 */ }
-}
+// disposeTensor 从 utils.js 导入，全管线共用
 
 /**
  * 校验 vocoder 输出波形是否有效。
@@ -542,10 +527,13 @@ class Postprocessing {
             const results = await sessions.melTransform.run({ waveform });
             const melOutput = results['mel_spectrogram'];
             const melData = outputToFloat32(melOutput);
+            const melDims = melOutput.dims; // 先取 dims 再 dispose，避免 use-after-free
             const actualFrames = Math.ceil(resampled.length / HOP_SIZE);
-            const melDims = melOutput.dims;
             const maxFrames = melDims[1];
             const frames = Math.min(actualFrames, maxFrames);
+            // 释放输入和输出张量（数据已拷贝到 melData）
+            disposeTensor(waveform);
+            disposeTensor(melOutput);
             const trimmed = melData.subarray(0, frames * MEL_DIM);
             return { data: trimmed.slice(), frames, melBands: MEL_DIM };
         }
@@ -553,8 +541,11 @@ class Postprocessing {
         const results = await sessions.melTransform.run({ waveform });
         const melOutput = results['mel_spectrogram'];
         const melData = outputToFloat32(melOutput);
-        const melDims = melOutput.dims;
+        const melDims = melOutput.dims; // 先取 dims 再 dispose
         const frames = melDims[1];
+        // 释放输入和输出张量（数据已拷贝到 melData）
+        disposeTensor(waveform);
+        disposeTensor(melOutput);
         return { data: melData, frames, melBands: MEL_DIM };
     }
 
@@ -632,6 +623,8 @@ class Postprocessing {
             try {
                 results = await sessions.vocoder.run(vocoderInputs);
             } catch (runErr) {
+                disposeTensor(melTensor);
+                if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
                 // OOM / device removed：DML 显存耗尽，抛出带上下文的明确错误，
                 // 防止上层误以为合成完毕而播放空声音
                 if (isVramOOMError(runErr)) {
@@ -641,6 +634,10 @@ class Postprocessing {
             }
             await yieldToEventLoop(); // Prevent UI freeze during DML inference
             const waveform = outputToFloat32(results['waveform']);
+            // 释放单 chunk 的输入和输出张量
+            disposeTensor(results['waveform']);
+            disposeTensor(melTensor);
+            if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
             // 校验输出：DML 在显存边界可能返回全零/NaN 而不抛错（silent failure）
             validateVocoderOutput(waveform, 0);
             const copyLen = Math.min(waveform.length, totalSamples);
@@ -730,8 +727,8 @@ class Postprocessing {
                 results = await sessions.vocoder.run(vocoderInputs);
             } catch (runErr) {
                 // 推理失败也要释放当前 chunk 输入张量，避免后续重试时累积
-                _disposeTensor(melTensor);
-                if (vocoderInputs.f0) _disposeTensor(vocoderInputs.f0);
+                disposeTensor(melTensor);
+                if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
                 if (isVramOOMError(runErr)) {
                     throw new Error(`Vocoder OOM at chunk ${i}/${totalChunkCount} (frames=${spec.currentChunkFrames}, offset=${spec.chunkStart}): ${runErr.message}. Try reducing vocoder chunk frames in settings.`);
                 }
@@ -743,9 +740,9 @@ class Postprocessing {
             // 立即释放 ONNX 输出张量与输入张量：解除 JS 引用，让 V8 GC 回收 native 资源。
             // DML 后端 GPU 张量依赖 finalizer 异步释放，多个 chunk 累积会导致后续 chunk OOM。
             const outTensor = results['waveform'];
-            _disposeTensor(outTensor);
-            _disposeTensor(melTensor);
-            if (vocoderInputs.f0) _disposeTensor(vocoderInputs.f0);
+            disposeTensor(outTensor);
+            disposeTensor(melTensor);
+            if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
             results = null;
             // 再 yield 一次给 GC 机会回收 native tensor finalizer
             await yieldToEventLoop();
