@@ -143,6 +143,8 @@ const ALLOWED_SETTINGS_KEYS = [
   'vocoderChunkMode', 'vocoderChunkFrames',
   'releaseDmlVramAfterSynthesis',
   'inferenceProvider',
+  'npuDiffBatchSize',
+  'npuVocoderBatchSize',
 ];
 
 async function updateLocaleSetting(locale) {
