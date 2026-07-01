@@ -1,6 +1,6 @@
 const ort = require('onnxruntime-node');
 const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, F0_BIN, F0_MIN, NPU_STATIC_SEQ_LEN } = require('./constants');
-const { createFloatTensor, outputToFloat32 } = require('./utils');
+const { createFloatTensor, outputToFloat32, disposeTensor } = require('./utils');
 const durationStats = require('./durationStats');
 
 /**
@@ -680,6 +680,15 @@ class Preprocessing {
         const pitchEmb = useStaticShapes ? outputToFloat32(pitchResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(pitchResults['embeddings']);
         const typeEmb = useStaticShapes ? outputToFloat32(typeResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(typeResults['embeddings']);
         const f0Emb = useStaticShapes ? outputToFloat32(f0Results['embeddings']).subarray(0, totalFrames * EMBED_DIM) : outputToFloat32(f0Results['embeddings']);
+        // 释放 4 个 encoder 的输入和输出张量（outputToFloat32 已拷贝数据）
+        disposeTensor(textInput);
+        disposeTensor(pitchInput);
+        disposeTensor(typeInput);
+        disposeTensor(f0Input);
+        disposeTensor(textResults['embeddings']);
+        disposeTensor(pitchResults['embeddings']);
+        disposeTensor(typeResults['embeddings']);
+        disposeTensor(f0Results['embeddings']);
 
         const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
         for (let t = 0; t < tokenCount; t++) {
@@ -695,6 +704,9 @@ class Preprocessing {
         const featuresTensor = createFloatTensor(floatType, preflowTokenEmb, [1, preflowSeqLen, EMBED_DIM]);
         const preflowResults = await sessions.preflow.run({ features: featuresTensor });
         const processedTokenEmb = useStaticShapes ? outputToFloat32(preflowResults['processed_features']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(preflowResults['processed_features']);
+        // 释放 preflow 输入和输出张量
+        disposeTensor(featuresTensor);
+        disposeTensor(preflowResults['processed_features']);
 
         // 用 subarray.set 替代元素级循环，走 native memcpy（每帧 EMBED_DIM=512 维拷贝）
         const mel2token = sequences.mel2token;
@@ -729,6 +741,9 @@ class Preprocessing {
         const condCodeTensor = createFloatTensor(floatType, paddedCondCode, [1, condSeqLen, EMBED_DIM]);
         const condEmbResults = await sessions.condEmb.run({ cond_code: condCodeTensor });
         const cond = useStaticShapes ? outputToFloat32(condEmbResults['cond_embedding']).subarray(0, totalCondFrames * COND_DIM) : outputToFloat32(condEmbResults['cond_embedding']);
+        // 释放 condEmb 输入和输出张量
+        disposeTensor(condCodeTensor);
+        disposeTensor(condEmbResults['cond_embedding']);
 
         return cond;
     }

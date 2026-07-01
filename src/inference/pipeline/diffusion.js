@@ -1,5 +1,5 @@
 const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
-const { createFloatTensor, outputToFloat32 } = require('./utils');
+const { createFloatTensor, outputToFloat32, disposeTensor } = require('./utils');
 
 /**
  * Diffusion sampling loop (the core synthesis algorithm)
@@ -7,6 +7,10 @@ const { createFloatTensor, outputToFloat32 } = require('./utils');
 class Diffusion {
     /**
      * Run a single diffusion step
+     *
+     * 张量生命周期：本函数在 diffusion loop 中被调用 2×totalSteps 次（cond + uncond），
+     * 是显存累积的最大头（32 步 × 2 × 5 张量 = 320 个/合成）。
+     * 推理后立即释放所有输入和输出张量，防止 GPU 显存耗尽触发 887A0005/887A0006。
      */
     async runDiffStep(sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, isFP16, useStaticShapes = false) {
         const floatType = isFP16 ? 'float16' : 'float32';
@@ -28,14 +32,31 @@ class Diffusion {
         const condTensor = createFloatTensor(floatType, condPadded, [1, seqLen, COND_DIM]);
         const maskTensor = createFloatTensor(floatType, maskPadded, [1, seqLen]);
 
-        const results = await sessions.diffStep.run({
-            xt_input: xtTensor,
-            t: tTensor,
-            cond: condTensor,
-            xt_mask: maskTensor,
-        });
+        let results;
+        try {
+            results = await sessions.diffStep.run({
+                xt_input: xtTensor,
+                t: tTensor,
+                cond: condTensor,
+                xt_mask: maskTensor,
+            });
+        } catch (err) {
+            // 推理失败也要释放输入张量
+            disposeTensor(xtTensor);
+            disposeTensor(tTensor);
+            disposeTensor(condTensor);
+            disposeTensor(maskTensor);
+            throw err;
+        }
 
         const pred = outputToFloat32(results['flow_pred']);
+        // 立即释放输出张量和所有输入张量：outputToFloat32 已拷贝数据到独立 Float32Array
+        disposeTensor(results['flow_pred']);
+        disposeTensor(xtTensor);
+        disposeTensor(tTensor);
+        disposeTensor(condTensor);
+        disposeTensor(maskTensor);
+
         if (useStaticShapes) {
             return pred.subarray(0, totalFramesWithPrompt * MEL_DIM);
         }
