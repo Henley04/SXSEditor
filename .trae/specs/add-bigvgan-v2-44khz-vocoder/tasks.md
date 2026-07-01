@@ -59,11 +59,11 @@
 
 ## Phase 4: 设置页 UI 与持久化
 
-- [ ] Task 8: 扩展 Vocoder 类型选择 UI
+- [ ] Task 8: 扩展 Vocoder 类型选择 UI（Path A 三选项；Path B 第四选项在 Phase 7 Task 14 添加）
   - [ ] SubTask 8.1: `src/settings.html` 推理分区的 `<select id="vocoderType">` 新增第三 option `bigvgan44k`
-  - [ ] SubTask 8.2: BigVGAN 选项标签 `BigVGAN v2 44kHz（高保真，两阶段）`，未下载时 disabled + "未下载"
-  - [ ] SubTask 8.3: 选择 BigVGAN 时显示质量权衡 tooltip（两阶段处理说明）
-  - [ ] SubTask 8.4: `src/main/settings.js` 的 `vocoderType` 枚举校验扩展接受 `bigvgan44k`，启动时检测模型缺失自动回退 `default`
+  - [ ] SubTask 8.2: BigVGAN 选项标签 `BigVGAN v2 44kHz（两阶段）`，未下载时 disabled + "未下载"
+  - [ ] SubTask 8.3: 选择 `bigvgan44k` 时显示两阶段质量权衡 tooltip
+  - [ ] SubTask 8.4: `src/main/settings.js` 的 `vocoderType` 枚举校验扩展接受 `bigvgan44k`，启动时检测 `bigvgan_vocoder_dml.onnx` 缺失自动回退 `default`
 
 ## Phase 5: 下载管理器 UI 扩展
 
@@ -74,22 +74,47 @@
   - [ ] SubTask 9.4: 检测 `onnx_models/bigvgan_vocoder_dml.onnx` 手动存在时自动刷新为"已安装"
   - [ ] SubTask 9.5: 卸载时删除 `bigvgan_vocoder_dml.onnx` 与 `.data`，重置 `vocoderType=default`
 
-## Phase 6: 文档、测试与发布
+## Phase 6: 文档、测试与发布（Path A 验证）
 
 - [ ] Task 10: 更新 `onnx_models/README.md`，新增 BigVGAN v2 章节
   - [ ] SubTask 10.1: 模型架构说明（BigVGAN v2, NVIDIA, 44kHz/128band/512x）
   - [ ] SubTask 10.2: 训练数据来源（Large-scale Compilation, 5M steps）
   - [ ] SubTask 10.3: 输入输出格式（mel [1, seq, 128] → waveform [1, num_samples], 44100Hz）
-  - [ ] SubTask 10.4: 两阶段集成路径与 mel 格式不兼容说明
-  - [ ] SubTask 10.5: 质量权衡文档（两阶段固有伪影、完整收益需扩散模型重训）
+  - [ ] SubTask 10.4: 双路径集成说明（Path A 两阶段 vs Path B 微调）
+  - [ ] SubTask 10.5: 质量权衡文档（Path A 固有伪影、Path B 完整收益但需训练）
   - [ ] SubTask 10.6: 与默认 vocoder / SiFiGAN 的差异对比表
-- [ ] Task 11: 端到端测试与验证
+- [ ] Task 11: 端到端测试与验证（Path A）
   - [ ] SubTask 11.1: 默认 vocoder 路径回归测试（未破坏现有功能）
   - [ ] SubTask 11.2: SiFiGAN 路径回归测试（vocoderType=sifigan 仍正常）
-  - [ ] SubTask 11.3: BigVGAN 两阶段端到端合成测试（DirectML 可用）
+  - [ ] SubTask 11.3: BigVGAN 两阶段端到端合成测试（vocoderType=bigvgan44k，DirectML 可用）
   - [ ] SubTask 11.4: BigVGAN 模型未下载时回退测试
   - [ ] SubTask 11.5: 44100Hz WAV 文件头与播放验证
   - [ ] SubTask 11.6: `npm run package:lite` 打包测试
+
+## Phase 7: Path B 微调训练（可选，Path A 验证有正向收益后启动）
+
+- [ ] Task 12: 编写训练集 mel 重提取脚本 `reextract_mel_44k.py`
+  - [ ] SubTask 12.1: 读取训练音频目录，用 BigVGAN 44kHz STFT 配置（n_fft=2048, hop=512, fmax=22050, 128 bins）提取 mel
+  - [ ] SubTask 12.2: 保留与原训练集对齐的音素/MIDI/F0 标注（仅 mel 目标更换）
+  - [ ] SubTask 12.3: 输出 mel shape `[1, seq_44k, 128]`，验证与 BigVGAN `meldataset.get_mel_spectrogram` 一致
+- [ ] Task 13: 编写 diff_step 微调脚本 `finetune_diff_step_44k.py`
+  - [ ] SubTask 13.1: 从当前 diff_step checkpoint 恢复权重
+  - [ ] SubTask 13.2: 冻结编码器（note_text/pitch/type/f0_encoder）权重 `requires_grad=False`
+  - [ ] SubTask 13.3: 仅微调 diff_step（+ 可选 preflow / cond_emb），LR ~1e-5
+  - [ ] SubTask 13.4: 训练 ~100k-500k steps（按需释放内存，遵循内存规范）
+  - [ ] SubTask 13.5: 训练完成后导出 `diff_step_44k_dml.onnx`（+ 可选 `preflow_44k.onnx` / `cond_emb_44k.onnx`）
+  - [ ] SubTask 13.6: ONNX 与 PyTorch 输出 L1 误差验证 < 1e-4
+- [ ] Task 14: 应用层 Path B 单阶段集成
+  - [ ] SubTask 14.1: `src/modelRegistry.js` 新增 `bigvgan-44k-ft` 模型组（files 含 diff_step_44k_dml.onnx / preflow_44k.onnx / cond_emb_44k.onnx / bigvgan_vocoder_dml.onnx）
+  - [ ] SubTask 14.2: `src/inference/pipeline/index.js` 新增 `vocoderType=bigvgan44k_ft` 加载分支（加载微调版 diff_step/preflow/cond_emb + BigVGAN）
+  - [ ] SubTask 14.3: `src/inference/pipeline/index.js` Path B 单阶段调度（diff_step_44k → mel → BigVGAN，无需两阶段）
+  - [ ] SubTask 14.4: `src/settings.html` 新增第四 option `bigvgan44k_ft`（标签 `BigVGAN v2 44kHz（微调版，单阶段）`）
+  - [ ] SubTask 14.5: `src/main/settings.js` 枚举校验扩展接受 `bigvgan44k_ft`，启动时检测模型缺失回退 `default`
+- [ ] Task 15: Path B 端到端测试与验证
+  - [ ] SubTask 15.1: Path B 单阶段端到端合成测试（vocoderType=bigvgan44k_ft）
+  - [ ] SubTask 15.2: Path B 与 Path A 音质对比（主观评测 + 客观指标 PESQ/MSTFT 若可用）
+  - [ ] SubTask 15.3: Path B 模型缺失时回退测试（diff_step_44k 缺失 → 回退 Path A 两阶段 → 回退 default）
+  - [ ] SubTask 15.4: `npm run package:lite` 打包测试含 Path B
 
 # Task Dependencies
 - Task 1 依赖 Task 0（需克隆仓库与下载权重）
@@ -100,8 +125,13 @@
 - Task 7 依赖 Task 6（采样率解耦在两阶段路径之后）
 - Task 9 依赖 Task 3（下载 UI 依赖清单）
 - Task 11 依赖 Task 1–Task 10 全部完成
+- Task 12 依赖 Task 2（Path B mel 重提取需 BigVGAN STFT 配置确认）
+- Task 13 依赖 Task 12（微调需重提取的 mel 目标）
+- Task 14 依赖 Task 13（应用层加载需微调后 ONNX）
+- Task 15 依赖 Task 14（Path B 测试需集成完成）
 
 # 可并行任务
 - Task 1（Python 导出脚本）与 Task 3、Task 8（应用层清单/UI）可并行
 - Task 9（下载 UI）与 Task 5（mel 提取器）可并行
 - Task 10（文档）可在 Task 1 完成后并行进行
+- Task 12（mel 重提取）与 Task 6/7（Path A 应用层集成）可并行（Phase 7 整体与 Phase 3-5 独立）
