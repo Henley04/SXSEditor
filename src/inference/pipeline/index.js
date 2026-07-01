@@ -219,6 +219,58 @@ class OnnxSVSPipeline {
         return true;
     }
 
+    /**
+     * 增量切换 vocoder（仅重载 vocoder session，保留其他 session 不动）
+     * 参考 swapLanguageModels 的模式：只释放并重载目标 session，避免整体 pipeline 重建。
+     * 用于 settings.vocoderType 变化时最小化重载，避免主模型（encoders/preflow/condEmb/diffStep/melTransform）被重新加载。
+     *
+     * loadModel 内部已处理 SiFiGAN 加载失败回退默认 vocoder 的逻辑，
+     * 因此此处仅依赖 loadModel 的结果；若加载失败则尝试回退到旧 vocoderType 防止 vocoder 空缺。
+     *
+     * @param {'default'|'sifigan'} newVocoderType
+     * @returns {Promise<boolean>} true 表示切换成功；false 表示未切换（类型相同/未初始化）
+     */
+    async swapVocoder(newVocoderType) {
+        if (newVocoderType !== 'default' && newVocoderType !== 'sifigan') return false;
+        if (!this.initialized) return false;
+        if (newVocoderType === this.vocoderType) return false;
+
+        const oldVocoderType = this.vocoderType;
+        console.log(`[OnnxSVSPipeline] Swapping vocoder: ${oldVocoderType} → ${newVocoderType}`);
+
+        // 释放当前 vocoder session
+        if (this.sessions['vocoder'] && typeof this.sessions['vocoder'].release === 'function') {
+            try { this.sessions['vocoder'].release(); } catch (_) {}
+        }
+        delete this.sessions['vocoder'];
+        delete this.sessionEPs['vocoder'];
+
+        // 更新 vocoderType 并重新解析文件路径（四级回退）
+        this.vocoderType = newVocoderType;
+        await this._resolveVocoderFile();
+
+        // 加载新 vocoder（loadModel 内部处理 sifigan 失败回退默认 vocoder 的逻辑）
+        const result = await this.loadModel('vocoder');
+        if (!result.success) {
+            // 加载失败：回退到旧 vocoderType，避免留下空 vocoder session
+            console.error(`[OnnxSVSPipeline] Vocoder swap to ${newVocoderType} failed: ${result.error}, reverting to ${oldVocoderType}`);
+            this.vocoderType = oldVocoderType;
+            await this._resolveVocoderFile();
+            const revertResult = await this.loadModel('vocoder');
+            if (!revertResult.success) {
+                throw new Error(`Vocoder swap failed and revert also failed: ${revertResult.error}`);
+            }
+            console.warn(`[OnnxSVSPipeline] Reverted to ${oldVocoderType} vocoder after failed swap`);
+            return false;
+        }
+
+        // 清空合成缓存（不同 vocoder 会产生不同音频，旧缓存不再适用）
+        this.clearSynthCache();
+
+        console.log(`[OnnxSVSPipeline] Vocoder swapped [${result.ep || 'unknown'}] → ${this._resolvedVocoderFile}`);
+        return true;
+    }
+
     _getNpuFallbackPath(modelFile) {
         if (!this.useStaticShapes) return null;
         const fallbackDir = path.resolve(this.modelDir, '..');
@@ -520,24 +572,61 @@ class OnnxSVSPipeline {
         }
         this.vocoderType = vocoderType;
 
-        // SiFiGAN stats 路径与缺失标志初始化
-        this.sifiganStatsMissing = false;
-        this.sifiganStatsPath = null;
-        this._resolvedVocoderFile = 'vocoder_dml.onnx';
-
-        // 并行检查 diff_step_dml 与默认 vocoder_dml 是否存在
-        const [dmlExists, vocDmlExists] = await Promise.all([
-            dmlIdx >= 0 ? fs.promises.access(path.join(this.modelDir, 'diff_step_dml.onnx')).then(() => true, () => false) : Promise.resolve(true),
-            vocDmlIdx >= 0 ? fs.promises.access(path.join(this.modelDir, 'vocoder_dml.onnx')).then(() => true, () => false) : Promise.resolve(true),
-        ]);
+        // 检查 diff_step_dml 是否存在（仅 init 阶段需要，vocoder swap 不会触及）
+        const dmlExists = await (dmlIdx >= 0
+            ? fs.promises.access(path.join(this.modelDir, 'diff_step_dml.onnx')).then(() => true, () => false)
+            : Promise.resolve(true));
         if (dmlIdx >= 0 && !dmlExists) {
             resolvedModelFiles[dmlIdx] = 'diff_step.onnx';
             console.log('[OnnxSVSPipeline] diff_step_dml.onnx not found, using diff_step.onnx');
         }
 
-        // Vocoder 路径四级回退：sifigan_vocoder_dml_fp16 → sifigan_vocoder_dml → sifigan_vocoder → 默认 vocoder_dml → vocoder
+        // 解析 vocoder 文件（四级回退逻辑由 _resolveVocoderFile 集中处理）
+        const vocoderFile = await this._resolveVocoderFile();
+        if (vocDmlIdx >= 0) {
+            resolvedModelFiles[vocDmlIdx] = vocoderFile;
+        }
+
+        // 并行检查所有Model文件是否存在并获取大小
+        const modelStats = await Promise.all(resolvedModelFiles.map(async (modelFile) => {
+            const filePath = this._getModelPath(modelFile);
+            try {
+                const stats = await fs.promises.stat(filePath);
+                return { modelFile, size: stats.size };
+            } catch (_) {
+                throw new Error(`Model文件不存在: ${filePath}`);
+            }
+        }));
+        for (const { modelFile, size } of modelStats) {
+            console.log(`[OnnxSVSPipeline] ${modelFile}: ${(size / 1024 / 1024).toFixed(2)} MB`);
+        }
+
+        return { resolvedModelFiles, modelStats };
+    }
+
+    /**
+     * 解析 vocoder 文件名：根据 this.vocoderType 与文件存在性执行四级回退
+     * sifigan_vocoder_dml_fp16 → sifigan_vocoder_dml → sifigan_vocoder → 默认 vocoder_dml → vocoder
+     * 设置 this._resolvedVocoderFile / this.sifiganStatsPath / this.sifiganStatsMissing
+     *
+     * 调用方必须先设置 this.vocoderType（_resolveModelFiles 在 init 时读取 settings，
+     * swapVocoder 在切换时直接传入新值）。
+     * @returns {Promise<string>} 解析后的 vocoder 文件名
+     */
+    async _resolveVocoderFile() {
+        // 重置状态
+        this.sifiganStatsMissing = false;
+        this.sifiganStatsPath = null;
+        this._resolvedVocoderFile = 'vocoder_dml.onnx';
+
+        // 检查默认 vocoder_dml.onnx 是否存在
+        const vocDmlPath = path.join(this.modelDir, 'vocoder_dml.onnx');
+        let vocDmlExists = false;
+        try { await fs.promises.access(vocDmlPath); vocDmlExists = true; } catch (_) {}
+
+        // SiFiGAN 四级回退（仅当 vocoderType === 'sifigan' 时尝试）
         let sifiganOnnxResolved = false;
-        if (vocoderType === 'sifigan') {
+        if (this.vocoderType === 'sifigan') {
             const sifiganFp16Path = path.join(this.modelDir, 'sifigan_vocoder_dml_fp16.onnx');
             const sifiganDmlPath = path.join(this.modelDir, 'sifigan_vocoder_dml.onnx');
             const sifiganPlainPath = path.join(this.modelDir, 'sifigan_vocoder.onnx');
@@ -556,7 +645,6 @@ class OnnxSVSPipeline {
                     console.warn('[OnnxSVSPipeline] SiFiGAN onnx 存在但 stats 文件缺失，强制回退默认 vocoder 防止失真');
                     return false;
                 }
-                resolvedModelFiles[vocDmlIdx] = fileName;
                 this._resolvedVocoderFile = fileName;
                 sifiganOnnxResolved = true;
                 return true;
@@ -588,30 +676,15 @@ class OnnxSVSPipeline {
 
         // 默认 vocoder 回退（vocoderType=default 或 sifigan 模型均缺失时）
         if (!sifiganOnnxResolved) {
-            if (vocDmlIdx >= 0 && !vocDmlExists) {
-                resolvedModelFiles[vocDmlIdx] = 'vocoder.onnx';
+            if (!vocDmlExists) {
                 this._resolvedVocoderFile = 'vocoder.onnx';
                 console.log('[OnnxSVSPipeline] vocoder_dml.onnx not found, using vocoder.onnx');
-            } else if (vocDmlIdx >= 0) {
+            } else {
                 this._resolvedVocoderFile = 'vocoder_dml.onnx';
             }
         }
 
-        // 并行检查所有Model文件是否存在并获取大小
-        const modelStats = await Promise.all(resolvedModelFiles.map(async (modelFile) => {
-            const filePath = this._getModelPath(modelFile);
-            try {
-                const stats = await fs.promises.stat(filePath);
-                return { modelFile, size: stats.size };
-            } catch (_) {
-                throw new Error(`Model文件不存在: ${filePath}`);
-            }
-        }));
-        for (const { modelFile, size } of modelStats) {
-            console.log(`[OnnxSVSPipeline] ${modelFile}: ${(size / 1024 / 1024).toFixed(2)} MB`);
-        }
-
-        return { resolvedModelFiles, modelStats };
+        return this._resolvedVocoderFile;
     }
 
     /**
