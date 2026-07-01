@@ -150,6 +150,15 @@ function disposeTensor(tensor) {
     } catch (_) { /* 忽略重复 dispose 或已释放 */ }
 }
 
+// GPU 排空等待：DML 后端的 GPU 资源由 ONNX Runtime 内部管理，JS 层的 Tensor.dispose() 无法立即释放。
+// 在阶段切换或连续推理间插入 50ms 等待，让 DML 内部资源池有机会回收上阶段的 GPU 缓冲区，
+// 防止累积导致 887A0005/887A0006 (GPU device hung/removed)。
+// 50ms 是经验值：太短（<10ms）DML 来不及回收，太长（>100ms）影响合成速度。
+const GPU_DRAIN_MS = 50;
+function gpuDrain() {
+    return new Promise(resolve => setTimeout(resolve, GPU_DRAIN_MS));
+}
+
 /**
  * Normalize audio array peak to a threshold (default 0.95).
  * @param {Float32Array} arr
@@ -176,4 +185,5 @@ module.exports = {
     outputToFloat32,
     disposeTensor,
     normalizePeakTo,
+    gpuDrain,
 };

@@ -11,7 +11,7 @@ const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
 const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram } = require('./postprocessing');
 const { AudioSegmentation } = require('./audioSegmentation');
-const { createFloatTensor, outputToFloat32, normalizePeakTo } = require('./utils');
+const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain } = require('./utils');
 const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
 const { getEffectiveVocoderChunkFrames } = require('../../main/gpuInfo');
 
@@ -38,14 +38,6 @@ const PRECISION_SUBDIR_MAP = {
     'int8-npu': path.join('int8', 'optimized_npu'),
 };
 
-// GPU 排空等待：DML 后端的 GPU 资源由 ONNX Runtime 内部管理，JS 层的 Tensor.dispose() 无法立即释放。
-// 在 encoder→diffusion→vocoder 等阶段切换处插入 50ms 等待，让 DML 内部资源池有机会回收上阶段
-// 的 GPU 缓冲区，防止累积导致 887A0005 (GPU device hung)。
-// 50ms 是经验值：太短（<10ms）DML 来不及回收，太长（>100ms）影响合成速度。
-const GPU_DRAIN_MS = 50;
-function gpuDrain() {
-    return new Promise(resolve => setTimeout(resolve, GPU_DRAIN_MS));
-}
 const SESSION_KEYS = [
     'noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder',
     'f0Encoder', 'preflow', 'condEmb', 'diffStep', 'vocoder', 'melTransform',

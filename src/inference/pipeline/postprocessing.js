@@ -1,6 +1,6 @@
 const { MEL_DIM, HOP_SIZE, SIFIGAN_HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, NPU_VOCODER_SEQ_LEN, SAMPLE_RATE, N_FFT, NUM_MELS, MEL_MEAN, MEL_VAR } = require('./constants');
 const { TWIDDLE_REAL, TWIDDLE_IMAG, HANN_WINDOW } = require('./constants');
-const { createFloatTensor, outputToFloat32, disposeTensor, normalizePeakTo } = require('./utils');
+const { createFloatTensor, outputToFloat32, disposeTensor, normalizePeakTo, gpuDrain } = require('./utils');
 
 /**
  * Post-processing: mel transform, vocoder, audio generation
@@ -58,6 +58,9 @@ function isVramOOMError(err) {
            msg.includes('dxgi_error_device_hung') ||
            msg.includes('0x887a0006') ||
            msg.includes('0x887a0005') ||
+           // DmlCommandRecorder 抛出的错误码不含 "0x" 前缀（如 "Exception(1) tid(ac88) 887a0006"）
+           msg.includes('887a0006') ||
+           msg.includes('887a0005') ||
            msg.includes('gpu device') && msg.includes('removed') ||
            msg.includes('failed to allocate') ||
            msg.includes('memalloc');
@@ -744,8 +747,14 @@ class Postprocessing {
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
             results = null;
-            // 再 yield 一次给 GC 机会回收 native tensor finalizer
-            await yieldToEventLoop();
+            // chunk 间 GPU 排空：非末尾 chunk 时等待 50ms 让 DML 回收上 chunk 的 GPU 资源。
+            // 旧版 yieldToEventLoop (setImmediate ~1ms) 不够 DML 回收，连续 chunk 推理时
+            // GPU 资源累积导致 887A0006 (GPU device removed) — 尤其长音频 2+ chunks 时复现。
+            if (i < totalChunkCount - 1) {
+                await gpuDrain();
+            } else {
+                await yieldToEventLoop();
+            }
 
             // 校验输出：拦截 DML silent failure（全零/NaN）
             validateVocoderOutput(waveform, i);
