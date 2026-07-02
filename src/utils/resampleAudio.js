@@ -21,6 +21,10 @@ function resampleAudio(audioData, fromSampleRate, toSampleRate) {
   const halfWidth = Math.ceil(12 * kaiserBeta / 5);
   const cutoff = (toSampleRate < fromSampleRate ? 0.95 * toSampleRate / fromSampleRate : 0.95) * 0.5;
 
+  // bessel0(kaiserBeta) 循环不变，提升到循环外（性能审查 §4 中优先级）
+  const besselBetaNorm = bessel0(kaiserBeta);
+  const twoHalfWidthPlus1 = 2 * halfWidth + 1;
+
   const resampled = new Float32Array(newLength);
   for (let i = 0; i < newLength; i++) {
     const center = (i + 0.5) * ratio;
@@ -36,9 +40,9 @@ function resampleAudio(audioData, fromSampleRate, toSampleRate) {
         weightSum += 1;
       } else {
         const sincVal = Math.sin(2 * Math.PI * cutoff * t) / (Math.PI * t);
-        const kaiserArg = 1 - (2 * t / (2 * halfWidth + 1)) ** 2;
+        const kaiserArg = 1 - (2 * t / twoHalfWidthPlus1) ** 2;
         const windowVal = kaiserArg >= 0
-          ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0(kaiserBeta)
+          ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / besselBetaNorm
           : 0;
         const w = sincVal * windowVal;
         sum += audioData[j] * w;

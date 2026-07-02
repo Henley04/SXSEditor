@@ -66,6 +66,8 @@ class TextProcessing {
     constructor() {
         this.phone2idx = {};
         this.enG2pDict = {};
+        this._vocabSize = 0;
+        this._dictSize = 0;
         this._loadPhoneSet();
         this._loadEnG2pDict();
     }
@@ -84,6 +86,7 @@ class TextProcessing {
                     for (let i = 0; i < phoneList.length; i++) {
                         this.phone2idx[phoneList[i]] = i;
                     }
+                    this._vocabSize = phoneList.length;
                     console.log(`[OnnxSVSPipeline] Phoneme vocabulary loaded: ${phoneList.length} phonemes (path: ${phoneSetPath})`);
                     return;
                 }
@@ -105,7 +108,8 @@ class TextProcessing {
             try {
                 if (fs.existsSync(dictPath)) {
                     this.enG2pDict = JSON.parse(fs.readFileSync(dictPath, 'utf-8'));
-                    console.log(`[OnnxSVSPipeline] English G2P dictionary loaded (CMUdict): ${Object.keys(this.enG2pDict).length} words (path: ${dictPath})`);
+                    this._dictSize = Object.keys(this.enG2pDict).length;
+                    console.log(`[OnnxSVSPipeline] English G2P dictionary loaded (CMUdict): ${this._dictSize} words (path: ${dictPath})`);
                     return;
                 }
             } catch (e) {
@@ -120,7 +124,7 @@ class TextProcessing {
         if (this.enG2pDict[lower]) {
             return this.enG2pDict[lower];
         }
-        const dictSize = Object.keys(this.enG2pDict).length;
+        const dictSize = this._dictSize;
         if (dictSize === 0) {
             console.warn(`[OnnxSVSPipeline] English G2P dictionary is empty! Word "${word}" cannot be resolved.`);
         } else {
@@ -153,7 +157,7 @@ class TextProcessing {
         const trimmed = lyric.trim();
 
         // Ensure vocabulary is loaded (lazy reload if empty)
-        if (Object.keys(this.phone2idx).length === 0) {
+        if (this._vocabSize === 0) {
             console.warn('[OnnxSVSPipeline] Phoneme vocabulary is empty, attempting reload...');
             this._loadPhoneSet();
         }
@@ -177,7 +181,7 @@ class TextProcessing {
         if (zhPhoneme && this.phone2idx[zhPhoneme] !== undefined) {
             return this.phone2idx[zhPhoneme];
         }
-        const vocabSize = Object.keys(this.phone2idx).length;
+        const vocabSize = this._vocabSize;
         console.warn(`[OnnxSVSPipeline] Unknown phoneme: "${trimmed}"${zhPhoneme ? ` (converted: ${zhPhoneme})` : ''} [vocab=${vocabSize}], Using <UNK>`);
         return this.phone2idx['<UNK>'] || 3;
     }
