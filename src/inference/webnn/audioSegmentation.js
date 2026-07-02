@@ -66,11 +66,7 @@ export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuV
 
         // 单 chunk 推理（强制串行，无 batch）
         const chunkMel = new Float32Array(chunkFrames * MEL_DIM);
-        for (let f = 0; f < chunkFrames; f++) {
-            for (let d = 0; d < MEL_DIM; d++) {
-                chunkMel[f * MEL_DIM + d] = xtData[(offset + f) * MEL_DIM + d];
-            }
-        }
+        chunkMel.set(xtData.subarray(offset * MEL_DIM, (offset + chunkFrames) * MEL_DIM));
 
         const tVocPrep = performance.now();
         const singleVocLen = useStaticShapes ? Math.max(chunkFrames, vocSeqLen) : chunkFrames;

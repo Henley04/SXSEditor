@@ -114,7 +114,7 @@ export async function handleAudioToMidi() {
     }
 
     const channelData = audioBuffer.getChannelData(0);
-    const audioData = Array.from(channelData);
+    const audioData = channelData;
     const sampleRate = audioBuffer.sampleRate;
     const bpm = state.project.bpm || 120;
 

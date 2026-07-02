@@ -80,15 +80,11 @@ export function validateSingerData(singerData) {
   return { valid: errors.length === 0, errors, warnings };
 }
 
-export function applySingerDataToSinger(singer, singerData) {
+export async function applySingerDataToSinger(singer, singerData) {
   if (singerData.wavBase64) {
     try {
-      const binaryString = atob(singerData.wavBase64);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      singer.wavBuffer = bytes.buffer;
+      const response = await fetch('data:application/octet-stream;base64,' + singerData.wavBase64);
+      singer.wavBuffer = await response.arrayBuffer();
     } catch (e) {
       console.error('Failed to decode wavBase64:', e);
     }
@@ -130,7 +126,7 @@ export async function loadSingerFile(singerId, buffer, filePath) {
         singerFileMissing: false,
       };
       trackManager.updateSinger(singerId, updates);
-      applySingerDataToSinger(singer, singerData);
+      await applySingerDataToSinger(singer, singerData);
     }
     // refreshAll will be called by the caller
   }
@@ -165,7 +161,7 @@ export async function addSingerFromFile(buffer, filePath) {
       singerFilePath: filePath || null,
       singerFileMissing: false,
     });
-    applySingerDataToSinger(singer, singerData);
+    await applySingerDataToSinger(singer, singerData);
     state.selectedSingerId = singer.id;
     // refreshAll will be called by the caller
   }
@@ -228,22 +224,26 @@ export function showSingerSelectDialog(singerId) {
   });
 }
 
-export function serializeProject(embedSingerFiles = false) {
-  const singers = trackManager.getSingers().map(singer => {
+export async function serializeProject(embedSingerFiles = false) {
+  const singers = await Promise.all(trackManager.getSingers().map(async (singer) => {
     const singerObj = { ...singer };
     if (embedSingerFiles && singer.wavBuffer) {
       let wavBase64 = null;
       try {
         const bytes = new Uint8Array(singer.wavBuffer);
-        const CHUNK_SIZE = 8192;
-        let binary = '';
-        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-          const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
-          binary += String.fromCharCode(...chunk);
-        }
-        wavBase64 = btoa(binary);
+        const blob = new Blob([bytes]);
+        wavBase64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result;
+            const base64 = result.substring(result.indexOf(',') + 1);
+            resolve(base64);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
       } catch (e) {
-        console.error('Failed to decode wavBuffer:', e);
+        console.error('Failed to encode wavBuffer:', e);
       }
       singerObj.embeddedSingerData = {
         formatVersion: SXSSINGER_CURRENT_VERSION,
@@ -262,7 +262,7 @@ export function serializeProject(embedSingerFiles = false) {
       singerObj.embeddedSingerData = null;
     }
     return singerObj;
-  });
+  }));
 
   return JSON.stringify({
     version: '1.1.0',
@@ -303,7 +303,7 @@ export function updateProjectSettings() {
 export async function autoSaveProject() {
   if (!state.currentProjectFilePath) return;
   try {
-    const data = serializeProject(false);
+    const data = await serializeProject(false);
     await window.electronAPI.saveFile(state.currentProjectFilePath, data);
     markClean();
     console.log('Project auto-saved to', state.currentProjectFilePath);
@@ -401,7 +401,7 @@ export async function saveProject() {
   // without showing a dialog or the save-options popup.
   if (state.currentProjectFilePath) {
     try {
-      const data = serializeProject(false);
+      const data = await serializeProject(false);
       await window.electronAPI.saveFile(state.currentProjectFilePath, data);
       markClean();
       console.log('Project saved to', state.currentProjectFilePath);
@@ -426,7 +426,7 @@ export async function saveProjectAs() {
         defaultPath: state.currentProjectFilePath || undefined,
       });
       if (!result.canceled && result.filePath) {
-        const data = serializeProject(saveOptions.embedSingerFiles);
+        const data = await serializeProject(saveOptions.embedSingerFiles);
         await window.electronAPI.saveFile(result.filePath, data);
         state.currentProjectFilePath = result.filePath;
         markClean();
@@ -481,7 +481,7 @@ export async function loadProject() {
           for (const s of obj.singers) {
             const singer = trackManager.addSinger(s);
             if (s.embeddedSingerData) {
-              applySingerDataToSinger(singer, s.embeddedSingerData);
+              await applySingerDataToSinger(singer, s.embeddedSingerData);
               if (s.embeddedSingerData.wavDuration) {
                 singer.wavDuration = s.embeddedSingerData.wavDuration;
               }
@@ -501,7 +501,7 @@ export async function loadProject() {
                      console.warn('File load validation warnings:', validation.warnings);
                   }
                   if (validation.valid) {
-                    applySingerDataToSinger(singer, singerData);
+                    await applySingerDataToSinger(singer, singerData);
                     if (singerData.wavDuration) {
                       singer.wavDuration = singerData.wavDuration;
                     }

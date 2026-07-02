@@ -6,6 +6,36 @@ import { convertF0DataToPitchCurve, computePitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, clearPlayheadLine } from './timelineRenderer.js';
 
+// visibilitychange handler: pause rAF-driven UI updates when tab hidden
+// (audio playback continues via WebAudio/WASAPI in background).
+// Registered once per module; update fns stored for resume.
+let _visibilityHandlerRegistered = false;
+let _exclusiveUpdateFn = null;
+let _sharedUpdateFn = null;
+
+function _ensureVisibilityHandler() {
+  if (_visibilityHandlerRegistered) return;
+  _visibilityHandlerRegistered = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      if (state.exclusivePlaybackRaf) {
+        cancelAnimationFrame(state.exclusivePlaybackRaf);
+        state.exclusivePlaybackRaf = null;
+      }
+      if (state.playheadRaf) {
+        cancelAnimationFrame(state.playheadRaf);
+        state.playheadRaf = null;
+      }
+    } else {
+      if (state.isPlaying && state.useExclusiveMode && _exclusiveUpdateFn && !state.exclusivePlaybackRaf) {
+        state.exclusivePlaybackRaf = requestAnimationFrame(_exclusiveUpdateFn);
+      } else if (state.isPlaying && !state.useExclusiveMode && _sharedUpdateFn && !state.playheadRaf) {
+        state.playheadRaf = requestAnimationFrame(_sharedUpdateFn);
+      }
+    }
+  });
+}
+
 export async function ensurePipelineInitialized() {
   if (state.pipelineInitialized) return;
   if (state.pipelineInitPromise) {
@@ -370,7 +400,9 @@ export async function startExclusivePlayback(offset) {
 }
 
 export function startExclusivePlayheadAnimation(removeEndedListener) {
+  _ensureVisibilityHandler();
   function updatePlayhead() {
+    _exclusiveUpdateFn = updatePlayhead;
     if (!state.isPlaying) {
       if (removeEndedListener) removeEndedListener();
       return;
@@ -395,6 +427,7 @@ export function startExclusivePlayheadAnimation(removeEndedListener) {
     state.exclusivePlaybackRaf = requestAnimationFrame(updatePlayhead);
   }
 
+  _exclusiveUpdateFn = updatePlayhead;
   state.exclusivePlaybackRaf = requestAnimationFrame(updatePlayhead);
 }
 
@@ -460,7 +493,9 @@ export function stopAudioSource() {
 }
 
 export function startPlayheadAnimation() {
+  _ensureVisibilityHandler();
   function updatePlayhead() {
+    _sharedUpdateFn = updatePlayhead;
     if (!state.isPlaying) return;
 
     const context = getAudioContext();
@@ -481,6 +516,7 @@ export function startPlayheadAnimation() {
     state.playheadRaf = requestAnimationFrame(updatePlayhead);
   }
 
+  _sharedUpdateFn = updatePlayhead;
   state.playheadRaf = requestAnimationFrame(updatePlayhead);
 }
 

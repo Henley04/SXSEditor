@@ -64,6 +64,7 @@ module.exports = [
             'src/inference/midiParser.js',
             'src/inference/rmvpePitchDetector.js',
             'src/inference/rosvotDetector.js',
+            'src/inference/pitchWorker.js',
             'src/audio/**/*.js',
             'src/utils/**/*.js',
             'src/shared/ipcChannels.js',

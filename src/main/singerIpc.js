@@ -1,5 +1,6 @@
 const { ipcMain, dialog } = require('electron');
 const fs = require('node:fs');
+const { Worker } = require('node:worker_threads');
 const { t } = require('./locale');
 const { getMainWindow } = require('./windowManager');
 
@@ -94,6 +95,57 @@ function validateSingerFileData(data) {
   return { valid: errors.length === 0, errors, warnings };
 }
 
+/**
+ * Offload WAV base64 encoding + JSON.stringify to a worker_thread so the
+ * main thread is not blocked for hundreds of ms on large WAV files.
+ * The worker is created inline (eval) and terminated after a single use.
+ * Returns the serialized singer file content string.
+ */
+function encodeSingerFileContentAsync(singerData, fields) {
+  const singerObj = {
+    formatVersion: SXSSINGER_FORMAT_VERSION,
+    singerName: singerData.singerName,
+    color: singerData.color,
+    avatarBase64: fields.avatarBase64,
+    wavFileName: singerData.wavFileName,
+    wavDuration: singerData.duration,
+    isPreprocessed: singerData.isPreprocessed,
+    midiNotes: fields.midiNotes,
+    f0Data: fields.f0Data,
+    singerData: fields.singerData,
+  };
+
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(`
+      const { parentPort } = require('worker_threads');
+      parentPort.on('message', (msg) => {
+        try {
+          const wavBase64 = Buffer.from(msg.wavBuffer).toString('base64');
+          const content = JSON.stringify({ ...msg.singerObj, wavBase64 }, null, 2);
+          parentPort.postMessage(content);
+        } catch (err) {
+          parentPort.postMessage({ error: err.message });
+        }
+      });
+    `, { eval: true });
+
+    worker.on('message', (msg) => {
+      worker.terminate();
+      if (typeof msg === 'string') {
+        resolve(msg);
+      } else {
+        reject(new Error(msg.error || 'encodeSingerFileContentAsync failed'));
+      }
+    });
+    worker.on('error', (err) => {
+      worker.terminate();
+      reject(err);
+    });
+
+    worker.postMessage({ wavBuffer: singerData.wavBuffer, singerObj });
+  });
+}
+
 function registerSingerIpc() {
   ipcMain.handle('saveSingerFile', async (event, singerData) => {
     try {
@@ -119,27 +171,18 @@ function registerSingerIpc() {
       const f0DataToSave = hasPreprocessResult ? singerData.preprocessResult.f0Data : null;
       const singerDataToSave = hasPreprocessResult ? singerData.preprocessResult.singerData : null;
 
-      const wavBase64 = Buffer.from(singerData.wavBuffer).toString('base64');
-
       let avatarBase64 = null;
       if (singerData.avatarImageData && singerData.avatarImageName) {
         const avatarDataUrl = singerData.avatarImageData;
         avatarBase64 = avatarDataUrl.split(',')[1];
       }
 
-      const singerFileContent = JSON.stringify({
-        formatVersion: SXSSINGER_FORMAT_VERSION,
-        singerName: singerData.singerName,
-        color: singerData.color,
-        avatarBase64,
-        wavBase64,
-        wavFileName: singerData.wavFileName,
-        wavDuration: singerData.duration,
-        isPreprocessed: singerData.isPreprocessed,
+      const singerFileContent = await encodeSingerFileContentAsync(singerData, {
         midiNotes: midiNotesToSave,
         f0Data: f0DataToSave,
         singerData: singerDataToSave,
-      }, null, 2);
+        avatarBase64,
+      });
 
       await fs.promises.writeFile(filePath, singerFileContent);
 

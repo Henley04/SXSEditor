@@ -1,5 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+let _webnnReadModelFileReqId = 0;
+
 contextBridge.exposeInMainWorld('electronAPI', {
   showSaveDialog: (options) => ipcRenderer.invoke('dialog:showSaveDialog', options),
   showOpenDialog: (options) => ipcRenderer.invoke('dialog:showOpenDialog', options),
@@ -210,7 +212,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   webnnUnloadModel: (modelId) => ipcRenderer.invoke('webnn:unloadModel', modelId),
   webnnRunInference: (modelId, inputs) => ipcRenderer.invoke('webnn:runInference', modelId, inputs),
   webnnGetStatus: () => ipcRenderer.invoke('webnn:getStatus'),
-  webnnReadModelFile: (filePath) => ipcRenderer.invoke('webnn:readModelFile', filePath),
+  webnnReadModelFile: (filePath) => {
+    return new Promise((resolve, reject) => {
+      const reqId = ++_webnnReadModelFileReqId;
+      const replyChannel = `webnn:readModelFile:reply:${reqId}`;
+      ipcRenderer.once(replyChannel, (_event, result) => {
+        if (result && result.success) {
+          resolve(result);
+        } else {
+          reject(new Error(result && result.error ? result.error : 'webnn:readModelFile failed'));
+        }
+      });
+      ipcRenderer.send('webnn:readModelFile', { filePath, reqId });
+    });
+  },
   validateDevices: () => ipcRenderer.invoke('settings:validateDevices'),
 
   // WebNN 渲染进程监听器注册（主进程 → 渲染进程请求）

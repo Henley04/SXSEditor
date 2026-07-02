@@ -58,12 +58,14 @@ async function _runSynthesisUnlocked(params) {
 
     const floatType = isFP16 ? 'float16' : 'float32';
     const vocoderFloatType = (vocoderIsFP16 ?? isFP16) ? 'float16' : 'float32';
+    const warnings = [];
 
     // NPU 静态形状模型限制：totalFramesWithPrompt 不能超过 2048
     if (useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
         const maxFrames = NPU_STATIC_SEQ_LEN - Math.min(ptFrameCount, 50);
         if (totalFrames > maxFrames) {
             console.warn(`[WebNN] NPU frame limit: ${totalFrames} > ${maxFrames}, truncating`);
+            warnings.push(`NPU_STATIC_SHAPE_TRUNCATION: audio truncated from ${totalFrames} to ${maxFrames} frames`);
             sequences = {
                 ...sequences,
                 f0Ids: sequences.f0Ids.subarray(0, maxFrames),
@@ -104,7 +106,7 @@ async function _runSynthesisUnlocked(params) {
         const synthTotalMs = performance.now() - tEnc0;
         const diffMs = diffResult.diffTotalMs;
         console.log(`[WebNN] Synthesis (skipVocoder): ${tokenCount}tok, ${totalFrames}frm, ${totalSteps}steps, ${synthTotalMs.toFixed(0)}ms (diff ${diffMs.toFixed(0)}ms)`);
-        return { xtData: diffResult.xtData, totalFrames };
+        return { xtData: diffResult.xtData, totalFrames, warnings };
     }
 
     if (onProgress) onProgress(80);
@@ -130,7 +132,7 @@ async function _runSynthesisUnlocked(params) {
     console.log(`[WebNN]   Output: ${totalFrames} frames, ${(totalFrames * HOP_SIZE / SAMPLE_RATE).toFixed(1)}s audio`);
     console.log(`[WebNN] ================================`);
 
-    return { audioData, totalFrames };
+    return { audioData, totalFrames, warnings };
 }
 
 /**

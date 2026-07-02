@@ -39,6 +39,22 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/utils/gpuWorker.js'),
         },
         {
+          from: path.resolve(__dirname, 'src/inference/pitchWorker.js'),
+          to: path.resolve(__dirname, '.webpack/main/inference/pitchWorker.js'),
+        },
+        {
+          from: path.resolve(__dirname, 'src/inference/rmvpePitchDetector.js'),
+          to: path.resolve(__dirname, '.webpack/main/inference/rmvpePitchDetector.js'),
+        },
+        {
+          from: path.resolve(__dirname, 'src/utils/resampleAudio.js'),
+          to: path.resolve(__dirname, '.webpack/main/utils/resampleAudio.js'),
+        },
+        {
+          from: path.resolve(__dirname, 'src/inference/pipeline/float16Patch.js'),
+          to: path.resolve(__dirname, '.webpack/main/inference/pipeline/float16Patch.js'),
+        },
+        {
           from: path.resolve(__dirname, 'native/build/Release/executorch_runtime.node'),
           to: path.resolve(__dirname, '.webpack/main/native/executorch_runtime.node'),
           noErrorOnMissing: true,

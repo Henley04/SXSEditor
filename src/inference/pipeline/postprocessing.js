@@ -116,27 +116,64 @@ function parseWavBuffer(buffer) {
     const numFrames = Math.floor(totalSamples / numChannels);
     const audioFloat = new Float32Array(numFrames);
 
-    for (let f = 0; f < numFrames; f++) {
-        let sum = 0;
-        for (let ch = 0; ch < numChannels; ch++) {
-            const i = f * numChannels + ch;
-            const byteOffset = dataOffset + i * bytesPerSample;
-            if (byteOffset + bytesPerSample > buf.byteLength) break;
-            let sample = 0;
-            if (audioFormat === 3 && bitsPerSample === 32) {
-                sample = view.getFloat32(byteOffset, true);
-            } else if (audioFormat === 1 && bitsPerSample === 16) {
-                sample = view.getInt16(byteOffset, true) / 32768;
-            } else if (audioFormat === 1 && bitsPerSample === 24) {
-                const low = view.getUint16(byteOffset, true);
-                const high = view.getInt8(byteOffset + 2);
-                sample = ((high << 16) | low) / 8388608;
-            } else if (audioFormat === 1 && bitsPerSample === 32) {
-                sample = view.getInt32(byteOffset, true) / 2147483648;
+    // Fast path: typed-array views for common formats (32-bit float, 16-bit PCM).
+    // dataOffset is relative to the DataView start (= buf.byteOffset); convert to
+    // absolute offset in the underlying ArrayBuffer for typed-array construction.
+    const absDataOffset = buf.byteOffset + dataOffset;
+    const availBytes = buf.byteOffset + buf.byteLength - absDataOffset;
+    const availSamples = Math.max(0, Math.floor(availBytes / bytesPerSample));
+    const usableSamples = Math.min(totalSamples, availSamples);
+    const usableFrames = Math.floor(usableSamples / numChannels);
+    // TypedArray constructors require byteOffset to be a multiple of element size
+    const aligned = (absDataOffset % bytesPerSample) === 0;
+
+    if (aligned && audioFormat === 3 && bitsPerSample === 32 && usableSamples > 0) {
+        // 32-bit IEEE float: direct Float32Array view over the buffer
+        const src = new Float32Array(buf.buffer, absDataOffset, usableSamples);
+        if (numChannels === 1) {
+            audioFloat.set(src.subarray(0, usableFrames));
+        } else {
+            for (let f = 0; f < usableFrames; f++) {
+                let sum = 0;
+                const base = f * numChannels;
+                for (let ch = 0; ch < numChannels; ch++) sum += src[base + ch];
+                audioFloat[f] = sum / numChannels;
             }
-            sum += sample;
         }
-        audioFloat[f] = sum / numChannels;
+    } else if (aligned && audioFormat === 1 && bitsPerSample === 16 && usableSamples > 0) {
+        // 16-bit PCM: direct Int16Array view, convert + channel-average
+        const src = new Int16Array(buf.buffer, absDataOffset, usableSamples);
+        const inv32768 = 1 / 32768;
+        for (let f = 0; f < usableFrames; f++) {
+            let sum = 0;
+            const base = f * numChannels;
+            for (let ch = 0; ch < numChannels; ch++) sum += src[base + ch];
+            audioFloat[f] = (sum * inv32768) / numChannels;
+        }
+    } else {
+        // Fallback: per-sample DataView for unusual formats (24-bit, 8-bit, 32-bit int, or unaligned)
+        for (let f = 0; f < numFrames; f++) {
+            let sum = 0;
+            for (let ch = 0; ch < numChannels; ch++) {
+                const i = f * numChannels + ch;
+                const byteOffset = dataOffset + i * bytesPerSample;
+                if (byteOffset + bytesPerSample > buf.byteLength) break;
+                let sample = 0;
+                if (audioFormat === 3 && bitsPerSample === 32) {
+                    sample = view.getFloat32(byteOffset, true);
+                } else if (audioFormat === 1 && bitsPerSample === 16) {
+                    sample = view.getInt16(byteOffset, true) / 32768;
+                } else if (audioFormat === 1 && bitsPerSample === 24) {
+                    const low = view.getUint16(byteOffset, true);
+                    const high = view.getInt8(byteOffset + 2);
+                    sample = ((high << 16) | low) / 8388608;
+                } else if (audioFormat === 1 && bitsPerSample === 32) {
+                    sample = view.getInt32(byteOffset, true) / 2147483648;
+                }
+                sum += sample;
+            }
+            audioFloat[f] = sum / numChannels;
+        }
     }
 
     return { data: audioFloat, sampleRate };
@@ -382,31 +419,34 @@ function istftReconstruction(magPhaseData, numFrames, nFft, hopLength, winLength
     const output = new Float32Array(outputLength);
     const windowSum = new Float32Array(outputLength);
 
+    const _ifftReal = new Float32Array(nFft);
+    const _ifftImag = new Float32Array(nFft);
+
     for (let f = 0; f < numFrames; f++) {
-        const ifftReal = new Float32Array(nFft);
-        const ifftImag = new Float32Array(nFft);
+        _ifftReal.fill(0);
+        _ifftImag.fill(0);
 
         for (let k = 0; k < numFreqBins; k++) {
             const mag = magData[f * numFreqBins + k];
             const phase = phaseData[f * numFreqBins + k];
-            ifftReal[k] = mag * Math.cos(phase);
-            ifftImag[k] = mag * Math.sin(phase);
+            _ifftReal[k] = mag * Math.cos(phase);
+            _ifftImag[k] = mag * Math.sin(phase);
         }
         for (let k = numFreqBins; k < nFft; k++) {
             const mirrorK = nFft - k;
             if (mirrorK > 0 && mirrorK < numFreqBins) {
-                ifftReal[k] = ifftReal[mirrorK];
-                ifftImag[k] = -ifftImag[mirrorK];
+                _ifftReal[k] = _ifftReal[mirrorK];
+                _ifftImag[k] = -_ifftImag[mirrorK];
             }
         }
 
-        ifftRadix2(ifftReal, ifftImag);
+        ifftRadix2(_ifftReal, _ifftImag);
 
         const frameStart = f * hopLength;
         for (let n = 0; n < winLength; n++) {
             const outIdx = frameStart + n;
             if (outIdx < outputLength) {
-                output[outIdx] += ifftReal[n] * window[n];
+                output[outIdx] += _ifftReal[n] * window[n];
                 windowSum[outIdx] += window[n] * window[n];
             }
         }
@@ -467,6 +507,47 @@ function createMelFilterbank(numBands, fftSize, sampleRate, fmin, fmax) {
 // Cached mel filterbank (only depends on sr, which is fixed at 24kHz)
 let _cachedMelFilterbank = null;
 let _cachedMelFilterbankSr = 0;
+// CSR representation of the cached mel filterbank (only non-zero entries per band).
+// Reduces the inner mel loop from O(numFreqBins) to O(~triangle_width) per band.
+let _cachedMelFilterbankCsr = null; // { values: Float32Array, colIdx: Int32Array, rowPtr: Int32Array }
+
+/**
+ * Build a CSR (Compressed Sparse Row) representation of a dense mel filterbank.
+ * Each mel triangle has many zero bins; CSR stores only non-zero weights and their bin indices.
+ * @param {Float32Array} filterbank - dense filterbank [numBands * numFftBins]
+ * @param {number} numBands
+ * @param {number} numFftBins
+ * @returns {{values: Float32Array, colIdx: Int32Array, rowPtr: Int32Array}}
+ */
+function buildMelFilterbankCsr(filterbank, numBands, numFftBins) {
+    // First pass: count non-zeros per row
+    const rowPtr = new Int32Array(numBands + 1);
+    for (let m = 0; m < numBands; m++) {
+        const fbOffset = m * numFftBins;
+        let count = 0;
+        for (let k = 0; k < numFftBins; k++) {
+            if (filterbank[fbOffset + k] !== 0) count++;
+        }
+        rowPtr[m + 1] = rowPtr[m] + count;
+    }
+    const nnz = rowPtr[numBands];
+    const values = new Float32Array(nnz);
+    const colIdx = new Int32Array(nnz);
+    // Second pass: fill values and colIdx
+    for (let m = 0; m < numBands; m++) {
+        const fbOffset = m * numFftBins;
+        let idx = rowPtr[m];
+        for (let k = 0; k < numFftBins; k++) {
+            const v = filterbank[fbOffset + k];
+            if (v !== 0) {
+                values[idx] = v;
+                colIdx[idx] = k;
+                idx++;
+            }
+        }
+    }
+    return { values, colIdx, rowPtr };
+}
 
 function extractMelSpectrogram(audioFloat, sr) {
     const padLength = (N_FFT - HOP_SIZE) / 2;
@@ -501,22 +582,24 @@ function extractMelSpectrogram(audioFloat, sr) {
         }
     }
 
-    // Use cached mel filterbank (recompute only if sample rate changed)
+    // Use cached mel filterbank + CSR (recompute only if sample rate changed)
     if (!_cachedMelFilterbank || _cachedMelFilterbankSr !== sr) {
         const fmax = sr / 2;
         _cachedMelFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
+        _cachedMelFilterbankCsr = buildMelFilterbankCsr(_cachedMelFilterbank, melBands, numFreqBins);
         _cachedMelFilterbankSr = sr;
     }
-    const melFilterbank = _cachedMelFilterbank;
+    const melCsr = _cachedMelFilterbankCsr;
 
     const melSpec = new Float32Array(numFrames * melBands);
     for (let f = 0; f < numFrames; f++) {
         const specOffset = f * numFreqBins;
         for (let m = 0; m < melBands; m++) {
             let sum = 0;
-            const fbOffset = m * numFreqBins;
-            for (let k = 0; k < numFreqBins; k++) {
-                sum += powerSpec[specOffset + k] * melFilterbank[fbOffset + k];
+            const rowStart = melCsr.rowPtr[m];
+            const rowEnd = melCsr.rowPtr[m + 1];
+            for (let idx = rowStart; idx < rowEnd; idx++) {
+                sum += powerSpec[specOffset + melCsr.colIdx[idx]] * melCsr.values[idx];
             }
             melSpec[f * melBands + m] = Math.log(Math.max(sum, 1e-10));
         }
@@ -577,18 +660,20 @@ async function extractMelSpectrogramAsync(audioFloat, sr) {
     if (!_cachedMelFilterbank || _cachedMelFilterbankSr !== sr) {
         const fmax = sr / 2;
         _cachedMelFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
+        _cachedMelFilterbankCsr = buildMelFilterbankCsr(_cachedMelFilterbank, melBands, numFreqBins);
         _cachedMelFilterbankSr = sr;
     }
-    const melFilterbank = _cachedMelFilterbank;
+    const melCsr = _cachedMelFilterbankCsr;
 
     const melSpec = new Float32Array(numFrames * melBands);
     for (let f = 0; f < numFrames; f++) {
         const specOffset = f * numFreqBins;
         for (let m = 0; m < melBands; m++) {
             let sum = 0;
-            const fbOffset = m * numFreqBins;
-            for (let k = 0; k < numFreqBins; k++) {
-                sum += powerSpec[specOffset + k] * melFilterbank[fbOffset + k];
+            const rowStart = melCsr.rowPtr[m];
+            const rowEnd = melCsr.rowPtr[m + 1];
+            for (let idx = rowStart; idx < rowEnd; idx++) {
+                sum += powerSpec[specOffset + melCsr.colIdx[idx]] * melCsr.values[idx];
             }
             melSpec[f * melBands + m] = Math.log(Math.max(sum, 1e-10));
         }

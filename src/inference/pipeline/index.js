@@ -1390,6 +1390,10 @@ class OnnxSVSPipeline {
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
             }, webnnOnProgress);
+            // Forward WebNN warnings (e.g. NPU static shape truncation)
+            if (result.warnings && result.warnings.length > 0) {
+                for (const w of result.warnings) console.warn(`[OnnxSVSPipeline] ${w}`);
+            }
             // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder
             this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
             // Vocoder 在主进程 DML 执行（支持 default + SiFiGAN）
@@ -1492,6 +1496,12 @@ class OnnxSVSPipeline {
         onProgress(Math.round(progressStart + progressRange));
 
         // Vocoder 在主进程 DML 执行（支持 default + SiFiGAN）：各 segment 独立设置 f0Hz
+        // Forward WebNN warnings (e.g. NPU static shape truncation) from batch results
+        for (const r of results) {
+            if (r.warnings && r.warnings.length > 0) {
+                for (const w of r.warnings) console.warn(`[OnnxSVSPipeline] ${w}`);
+            }
+        }
         const audioResults = [];
         for (let si = 0; si < results.length; si++) {
             const r = results[si];
