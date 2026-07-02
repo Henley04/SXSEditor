@@ -133,9 +133,22 @@ class RmvpePitchDetector {
 
     const outputs = await this.session.run({ audio: inputTensor });
 
+    // 释放输入张量（性能审查 #3 中优先级：RMVPE 输入泄漏）
+    try { if (typeof inputTensor.dispose === 'function') inputTensor.dispose(); } catch (_) {}
+
     const pitchOutput = Object.values(outputs)[0];
     const pitchData = outputToFloat32(pitchOutput);
     const timeFrames = pitchOutput.dims[1];
+    // 释放输出张量（pitchData 已是独立拷贝）
+    try { if (typeof pitchOutput.dispose === 'function') pitchOutput.dispose(); } catch (_) {}
+
+    // indexToF0 LUT：避免每帧调用 Math.pow（性能审查 #4 中优先级）
+    if (!this._f0Lut) {
+      this._f0Lut = new Float32Array(N_CLASS);
+      for (let i = 0; i < N_CLASS; i++) {
+        this._f0Lut[i] = F0_MIN * Math.pow(F0_MAX / F0_MIN, i / (N_CLASS - 1));
+      }
+    }
 
     const rawF0 = new Float32Array(timeFrames);
 
@@ -151,7 +164,7 @@ class RmvpePitchDetector {
         }
       }
 
-      rawF0[t] = this.indexToF0(maxIndex);
+      rawF0[t] = this._f0Lut[maxIndex];
     }
 
     const interpolatedF0 = RmvpePitchDetector.interpolateF0(
