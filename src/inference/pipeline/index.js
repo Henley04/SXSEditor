@@ -1375,7 +1375,8 @@ class OnnxSVSPipeline {
             }
         }
 
-        // WebNN: run entire pipeline in renderer to eliminate per-inference IPC overhead
+        // WebNN: encoder+diffusion in renderer, vocoder in main process (DML)
+        // 渲染进程运行 encoder+diffusion 返回 mel；主进程 DML 运行 vocoder（支持 SiFiGAN 双输入）
         if (this.useWebNN) {
             onProgress(Math.round(progressStart));
             const t0 = performance.now();
@@ -1388,11 +1389,15 @@ class OnnxSVSPipeline {
                 ptMelData, ptFrameCount,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
-            }, webnnOnProgress, onChunkAudio);
+            }, webnnOnProgress);
+            // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder
+            this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
+            // Vocoder 在主进程 DML 执行（支持 default + SiFiGAN）
+            const audioData = await this._runVocoderChunked(result.xtData, totalFrames, onChunkAudio);
             const ms = performance.now() - t0;
             console.log(`[OnnxSVSPipeline] WebNN synthesis: ${totalFrames}frames, ${totalSteps}steps, ${ms.toFixed(0)}ms`);
             onProgress(Math.round(progressStart + progressRange));
-            return { audio: result.audioData, frames: totalFrames };
+            return { audio: audioData, frames: totalFrames };
         }
 
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
@@ -1420,28 +1425,23 @@ class OnnxSVSPipeline {
     }
 
     /**
-     * 在渲染进程中运行完整合成管线（WebNN 优化路径）
-     * 单次 IPC 调用，消除逐模型 IPC 开销
+     * 在渲染进程中运行 encoder+diffusion（WebNN 优化路径）
+     * Vocoder 由主进程 DML 执行（支持 SiFiGAN 双输入），渲染进程仅返回 mel
      */
-    async _runWebNNSynthesis(params, onProgress, onChunkAudio) {
+    async _runWebNNSynthesis(params, onProgress) {
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN synthesis');
 
-        // SiFiGAN 双输入 vocoder 需要 mel+f0，且 hop_size=120（vs default 480）。
-        // WebNN 路径仅传 mel 并按 HOP_SIZE=480 计算输出长度，SiFiGAN 会因缺 f0 抛错
-        // 或产生 4× 时间轴错位。此处守卫拦截，避免沉默失败。
-        if (this.vocoderType === 'sifigan') {
-            throw new Error('SiFiGAN vocoder is not supported on the WebNN/NPU path. Please switch to the default vocoder or disable NPU inference in settings before synthesizing.');
-        }
-
+        // Vocoder 由主进程 DML 执行（支持 SiFiGAN 双输入），渲染进程仅运行 encoder+diffusion
         const fullParams = {
             ...params,
             isFP16: this.isFP16,
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
             vocoderChunkFrames: this._resolveVocoderChunkFrames(),
+            skipVocoder: true,
         };
-        return requestSynthesis(wc, fullParams, onProgress, { onChunkAudio });
+        return requestSynthesis(wc, fullParams, onProgress);
     }
 
     /**
@@ -1491,27 +1491,33 @@ class OnnxSVSPipeline {
 
         onProgress(Math.round(progressStart + progressRange));
 
-        return results.map(r => ({ audio: r.audioData, frames: r.totalFrames }));
+        // Vocoder 在主进程 DML 执行（支持 default + SiFiGAN）：各 segment 独立设置 f0Hz
+        const audioResults = [];
+        for (let si = 0; si < results.length; si++) {
+            const r = results[si];
+            const seq = si === 0 ? seqA : seqB;
+            this._currentF0Hz = seq.f0Hz ? seq.f0Hz.subarray(0, r.totalFrames) : null;
+            const audioData = await this._runVocoderChunked(r.xtData, r.totalFrames, null);
+            audioResults.push({ audio: audioData, frames: r.totalFrames });
+        }
+        return audioResults;
     }
 
     /**
-     * 批量 WebNN 合成 IPC 调用
+     * 批量 WebNN 合成 IPC 调用（encoder+diffusion），vocoder 由主进程 DML 执行
      */
     async _runWebNNSynthesisBatch(paramsArray, onProgress) {
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN batch synthesis');
 
-        // SiFiGAN 守卫：原因同 _runWebNNSynthesis（WebNN 不支持 mel+f0 双输入与 hop=120）。
-        if (this.vocoderType === 'sifigan') {
-            throw new Error('SiFiGAN vocoder is not supported on the WebNN/NPU path. Please switch to the default vocoder or disable NPU inference in settings before synthesizing.');
-        }
-
+        // Vocoder 由主进程 DML 执行（支持 SiFiGAN 双输入），渲染进程仅运行 encoder+diffusion
         const fullParams = paramsArray.map(p => ({
             ...p,
             isFP16: this.isFP16,
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
             vocoderChunkFrames: this._resolveVocoderChunkFrames(),
+            skipVocoder: true,
         }));
         return requestSynthesis(wc, fullParams, onProgress, {
             timeoutMessage: 'WebNN batch synthesis timeout',

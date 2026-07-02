@@ -53,6 +53,7 @@ async function _runSynthesisUnlocked(params) {
         vocoderChunkFrames = 0,
         onProgress,
         onChunkComplete = null,
+        skipVocoder = false,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
@@ -96,6 +97,16 @@ async function _runSynthesisUnlocked(params) {
     });
 
     // ===== Stage 3: Vocoder =====
+    // skipVocoder 模式：WebNN 路径下 vocoder 由主进程 DML 执行（支持 SiFiGAN 双输入），
+    // 渲染进程仅运行 encoder+diffusion，返回 mel (xtData) 给主进程。
+    if (skipVocoder) {
+        if (onProgress) onProgress(100);
+        const synthTotalMs = performance.now() - tEnc0;
+        const diffMs = diffResult.diffTotalMs;
+        console.log(`[WebNN] Synthesis (skipVocoder): ${tokenCount}tok, ${totalFrames}frm, ${totalSteps}steps, ${synthTotalMs.toFixed(0)}ms (diff ${diffMs.toFixed(0)}ms)`);
+        return { xtData: diffResult.xtData, totalFrames };
+    }
+
     if (onProgress) onProgress(80);
     const { audioData, vocTotalMs } = await runVocoder({
         xtData: diffResult.xtData,
@@ -147,6 +158,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
     const vocoderFloatType = vocoderIsFP16 ? 'float16' : 'float32';
     const useStaticShapes = paramsArray[0].useStaticShapes || false;
     const vocoderChunkFrames = paramsArray[0].vocoderChunkFrames || 0;
+    const skipVocoder = paramsArray[0].skipVocoder || false;
 
     // ===== Stage 1: Encode both segments in parallel =====
     if (onProgress) onProgress(10);
@@ -245,6 +257,14 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
     const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType, useStaticShapes });
 
     // ===== Stage 3: Vocoder per segment =====
+    // skipVocoder 模式：返回 mel 给主进程，vocoder 由主进程 DML 执行（支持 SiFiGAN 双输入）
+    if (skipVocoder) {
+        if (onProgress) onProgress(100);
+        const batchSynthMs = performance.now() - tEnc0;
+        console.log(`[WebNN] Batch synthesis (skipVocoder): 2 segs (${segData[0].totalFrames}+${segData[1].totalFrames}frm), ${batchSynthMs.toFixed(0)}ms`);
+        return segData.map((s, si) => ({ xtData: xts[si], totalFrames: s.totalFrames }));
+    }
+
     if (onProgress) onProgress(80);
     const results = [];
     for (let si = 0; si < 2; si++) {
