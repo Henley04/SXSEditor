@@ -192,7 +192,11 @@ export async function runDiffusionLoop({
                 const cd = cfgPredBuf[i] - cfgAdjMean;
                 cfgAdjVarSum += cd * cd;
             }
-            const rescale = (Math.sqrt(posVarSum / targetLen) + 1e-8) / (Math.sqrt(cfgAdjVarSum / targetLen) + 1e-8);
+            // CFG rescale epsilon 公式与 DML 路径 (pipeline/diffusion.js:145-147) 及
+            // WebNN 批量路径 (本文件 :440-442) 保持一致：方差内加 epsilon 再开方，外层除以 (std+epsilon)。
+            const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
+            const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
+            const rescale = posStd / (cfgAdjStd + 1e-8);
             for (let i = 0; i < targetLen; i++) {
                 const cfgVal = cfgPredBuf[i];
                 const rescaledVal = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
