@@ -57,7 +57,7 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | Singer Creator | Custom voices from reference WAV audio |
 | Audio Preprocessing | RMVPE F0 extraction, Basic Pitch MIDI extraction |
 | SVS Pipeline | CFG rescale, DML/WebNN path parity (peak normalize + CFG epsilon), LRU synth cache, parallel encoders + chunked vocoder, real-time inference progress display (main page + fragment editor), multi-segment F0 absolute-time alignment, per-segment autoShift f0Shift for wide-range songs, multi-segment prompt-mel frame count consistent with single-segment path |
-| Optional SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) as an alternative DirectML vocoder with auto-fallback to default; WebNN/NPU path guarded (SiFiGAN dual-input not supported on WebNN); autoShift clamp tightened for SiFiGAN f0 sensitivity |
+| Optional SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) as an alternative DirectML vocoder with auto-fallback to default; WebNN/NPU path supported (vocoder runs on DML in main process, encoder+diffusion on NPU); autoShift clamp tightened for SiFiGAN f0 sensitivity |
 | Minimal Vocoder Swap | Switching vocoder (default ↔ SiFiGAN) reloads only the vocoder session; main models stay loaded |
 | SiFiGAN Precision Switch | SiFiGAN precision (FP32/FP16) selectable independently in settings; FP16 marked as low quality (cos≈0.95), defaults to FP32; missing variant auto-falls-back to the other |
 | Audio to MIDI | Convert audio files to MIDI notes |
@@ -166,7 +166,7 @@ macOS / Linux 用户请从源码构建。
 | 歌手创建器 | 从参考 WAV 音频创建自定义声音 |
 | 音频预处理 | RMVPE F0 提取、Basic Pitch MIDI 提取 |
 | SVS 推理管线 | CFG rescale、DML/WebNN 路径一致性（peak 归一化 + CFG epsilon）、LRU 合成缓存、编码器并行 + Vocoder 分块批量化、实时推理进度显示（主页面+分片编辑器）、多 segment F0 绝对时间对齐、per-segment autoShift f0Shift 适配宽音域片段、多 segment prompt mel 帧数与单 segment 路径一致、CPU 密集路径事件循环让步以保持 UI 响应 |
-| 可选 SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) 作为可选 DirectML Vocoder，自动回退到默认 Vocoder；WebNN/NPU 路径守卫拦截（WebNN 不支持 SiFiGAN 双输入）；autoShift clamp 针对 SiFiGAN f0 敏感性收紧上限 |
+| 可选 SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) 作为可选 DirectML Vocoder，自动回退到默认 Vocoder；WebNN/NPU 路径支持（vocoder 在主进程 DML 执行，encoder+diffusion 在 NPU 上运行）；autoShift clamp 针对 SiFiGAN f0 敏感性收紧上限 |
 | Vocoder 最小化切换 | 切换 Vocoder（默认 ↔ SiFiGAN）仅重载 vocoder session，主模型保持已加载状态 |
 | SiFiGAN 精度切换 | SiFiGAN 精度（FP32/FP16）可在设置中单独选择；FP16 标注为低质量（cos≈0.95），默认 FP32；所选变体缺失时自动回退到另一变体 |
 | 音频转 MIDI | 从音频文件提取 MIDI 音符 |
@@ -271,7 +271,7 @@ macOS / Linux：ソースからビルドしてください。
 | 歌手作成 | 参照 WAV 音声からカスタムボイス作成 |
 | 音声前処理 | RMVPE F0 抽出、Basic Pitch MIDI 抽出 |
 | SVS 推論パイプライン | CFG rescale、DML/WebNN パリティ（peak 正規化 + CFG epsilon）、LRU 合成キャッシュ、エンコーダ並列 + Vocoder チャンクバッチ、リアルタイム推論進行表示（メインページ+フラグメントエディタ）、マルチセグメント F0 絶対時間アライメント、広音域フラグメント向け per-segment autoShift f0Shift、マルチセグメント prompt mel フレーム数が単一セグメントパスと一致、CPU 密集パスのイベントループ譲渡で UI 応答性を維持 |
-| オプション SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) をオプション DirectML Vocoder として提供、デフォルト Vocoder へ自動フォールバック；WebNN/NPU パスはガード拒否（WebNN は SiFiGAN デュアル入力非対応）；autoShift clamp は SiFiGAN の f0 感度に合わせて上限を引き下げ |
+| オプション SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) をオプション DirectML Vocoder として提供、デフォルト Vocoder へ自動フォールバック；WebNN/NPU パス対応（vocoder はメインプロセスの DML で実行、encoder+diffusion は NPU で実行）；autoShift clamp は SiFiGAN の f0 感度に合わせて上限を引き下げ |
 | Vocoder 最小切替 | Vocoder 切替（デフォルト ↔ SiFiGAN）は vocoder session のみ再読み込み、メインモデルはロード済みのまま維持 |
 | SiFiGAN 精度切替 | SiFiGAN 精度（FP32/FP16）を設定で個別選択可能；FP16 は低品質（cos≈0.95）と明記、デフォルト FP32；選択変体が欠落時はもう一方へ自動フォールバック |
 | オーディオ→MIDI | 音声ファイルから MIDI ノート抽出 |
