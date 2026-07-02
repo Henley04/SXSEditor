@@ -13,7 +13,7 @@ import { runDiffusionLoop, runBatchDiffusionLoop } from './diffusion.js';
 import { runVocoder, normalizePeakTo } from './postprocessing.js';
 import { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, VOCODER_CHUNK_FRAMES, NPU_STATIC_SEQ_LEN, NPU_VOCODER_SEQ_LEN } from './constants.js';
 import { ensureOrt, getOrt } from './ortSetup.js';
-import { outputToFloat32, createFloatTensor, padInt64ToLength, padToLength, trimOutputToLength } from './utils.js';
+import { outputToFloat32, createFloatTensor, padInt64ToLength, padToLength, trimOutputToLength, disposeTensor } from './utils.js';
 import { runSegmentedVocoder } from './audioSegmentation.js';
 
 /**
@@ -178,7 +178,9 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
         const textEmb = useStaticShapes ? trimOutputToLength(textResults['embeddings'], tokenCount) : outputToFloat32(textResults['embeddings']);
         const pitchEmb = useStaticShapes ? trimOutputToLength(pitchResults['embeddings'], tokenCount) : outputToFloat32(pitchResults['embeddings']);
         const typeEmb = useStaticShapes ? trimOutputToLength(typeResults['embeddings'], tokenCount) : outputToFloat32(typeResults['embeddings']);
-        const f0Emb = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], totalFrames) : outputToFloat32(f0Results['embeddings']);
+        // f0Emb 需在后续 condCodeData 构建中使用，且 dispose f0 张量前需独立拷贝
+        const f0EmbRaw = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], totalFrames) : outputToFloat32(f0Results['embeddings']);
+        const f0Emb = f0EmbRaw.slice();
 
         const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
         for (let t = 0; t < tokenCount; t++) {
@@ -189,12 +191,18 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
                     typeEmb[t * EMBED_DIM + d];
             }
         }
+        // 释放 4 个编码器输出张量
+        disposeTensor(textResults['embeddings']);
+        disposeTensor(pitchResults['embeddings']);
+        disposeTensor(typeResults['embeddings']);
+        disposeTensor(f0Results['embeddings']);
 
         const bPreflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
         const bPreflowTokenEmb = useStaticShapes ? padToLength(tokenEmb, bPreflowSeqLen * EMBED_DIM) : tokenEmb;
         const featuresTensor = createFloatTensor(floatType, bPreflowTokenEmb, [1, bPreflowSeqLen, EMBED_DIM]);
         const preflowResults = await runSession('preflow', { features: featuresTensor });
         const processedTokenEmb = useStaticShapes ? trimOutputToLength(preflowResults['processed_features'], tokenCount) : outputToFloat32(preflowResults['processed_features']);
+        disposeTensor(featuresTensor);
 
         const mel2token = sequences.mel2token;
         const totalCondFrames = ptFrameCount > 0 ? ptFrameCount + totalFrames : totalFrames;
@@ -206,12 +214,17 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
                     processedTokenEmb[tokenIdx * EMBED_DIM + d] + f0Emb[f * EMBED_DIM + d];
             }
         }
+        disposeTensor(preflowResults['processed_features']);
 
         const bCondSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalCondFrames;
         const bPaddedCondCode = useStaticShapes ? padToLength(condCodeData, bCondSeqLen * EMBED_DIM) : condCodeData;
         const condCodeTensor = createFloatTensor(floatType, bPaddedCondCode, [1, bCondSeqLen, EMBED_DIM]);
         const condEmbResults = await runSession('condEmb', { cond_code: condCodeTensor });
-        const combinedCond = useStaticShapes ? trimOutputToLength(condEmbResults['cond_embedding'], totalCondFrames) : outputToFloat32(condEmbResults['cond_embedding']);
+        // combinedCond 需存入 segData 供后续 diffusion 使用，取独立拷贝
+        const combinedCondRaw = useStaticShapes ? trimOutputToLength(condEmbResults['cond_embedding'], totalCondFrames) : outputToFloat32(condEmbResults['cond_embedding']);
+        const combinedCond = combinedCondRaw.slice();
+        disposeTensor(condCodeTensor);
+        disposeTensor(condEmbResults['cond_embedding']);
 
         segData.push({
             totalFrames, tokenCount, ptMelData, ptFrameCount, combinedCond,
@@ -247,8 +260,12 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
             const paddedMel = useStaticShapes ? padToLength(xt, bVocSeqLen * MEL_DIM) : xt;
             const melTensor = createFloatTensor(vocoderFloatType, paddedMel, [1, bVocSeqLen, MEL_DIM]);
             const vocoderResults = await runSession('vocoder', { mel: melTensor });
-            const waveform = outputToFloat32(vocoderResults['waveform']);
+            const waveformRaw = vocoderResults['waveform'];
+            const waveform = outputToFloat32(waveformRaw);
             audioData = Array.from(waveform.subarray(0, Math.min(waveform.length, totalSamples)));
+            // 释放 vocoder 输入和输出张量
+            disposeTensor(melTensor);
+            disposeTensor(waveformRaw);
             // Peak 归一化（与 runVocoder 单 chunk 路径一致，确保 batch 段间响度匹配 DML）
             normalizePeakTo(audioData);
         } else {

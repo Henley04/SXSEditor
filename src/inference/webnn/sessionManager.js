@@ -4,7 +4,7 @@
 
 import { ensureOrt, getOrt } from './ortSetup.js';
 import { WEBNN_EP_TIMEOUT, WEBNN_VOCODER_TIMEOUT } from './constants.js';
-import { extractRelativePath, float32ToFloat16 } from './utils.js';
+import { extractRelativePath, float32ToFloat16, disposeTensor } from './utils.js';
 
 // 会话管理
 const sessions = new Map(); // modelId -> { session, status, ep }
@@ -205,6 +205,7 @@ async function _runInferenceUnlocked(modelId, inputs) {
 
     const { session } = entry;
     const feeds = {};
+    const feedTensors = []; // 跟踪输入张量以便推理后释放
 
     for (const [name, tensorData] of Object.entries(inputs)) {
         const { data, dims, type } = tensorData;
@@ -241,10 +242,15 @@ async function _runInferenceUnlocked(modelId, inputs) {
             }
         }
 
-        feeds[name] = new ort.Tensor(tensorType, tensorDataArray, dims);
+        const tensor = new ort.Tensor(tensorType, tensorDataArray, dims);
+        feeds[name] = tensor;
+        feedTensors.push(tensor);
     }
 
     const results = await session.run(feeds);
+
+    // 推理完成：释放所有输入张量（IPC 路径下输入张量每次调用新建，不复用）
+    for (const t of feedTensors) disposeTensor(t);
 
     // 将结果转换为可序列化格式（IPC 传输）
     // 使用 TypedArray.slice() 替代 Array.from()，避免展开为普通数组的巨大开销
@@ -268,6 +274,8 @@ async function _runInferenceUnlocked(modelId, inputs) {
                 type: outType,
             };
         }
+        // 释放输出张量（数据已拷贝到独立 TypedArray）
+        disposeTensor(tensor);
     }
 
     return outputs;

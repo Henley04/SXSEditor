@@ -9,7 +9,7 @@
 
 import { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, NPU_VOCODER_SEQ_LEN } from './constants.js';
 import { runSession } from './sessionManager.js';
-import { createFloatTensor, outputToFloat32, padToLength } from './utils.js';
+import { createFloatTensor, outputToFloat32, padToLength, disposeTensor } from './utils.js';
 
 /**
  * 分段 vocoder 推理 + 交叉淡入淡出拼接（强制串行）
@@ -83,7 +83,8 @@ export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuV
         const inferMs = performance.now() - tVocInfer;
 
         const tVocPost = performance.now();
-        const waveform = outputToFloat32(vocoderResults['waveform']);
+        const waveformRaw = vocoderResults['waveform'];
+        const waveform = outputToFloat32(waveformRaw);
         const chunkSamples = chunkFrames * HOP_SIZE;
         const startSample = offset * HOP_SIZE;
 
@@ -97,6 +98,9 @@ export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuV
                 weightSum[idx] += w;
             }
         }
+        // 释放该 chunk 的输入和输出张量（waveform 已在 crossfade 中被读取完毕）
+        disposeTensor(melTensor);
+        disposeTensor(waveformRaw);
         const postMs = performance.now() - tVocPost;
         vocPrepTotal += prepMs;
         vocInferTotal += inferMs;

@@ -5,7 +5,7 @@
 import { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } from './constants.js';
 import { getOrt } from './ortSetup.js';
 import { runSession } from './sessionManager.js';
-import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom, padToLength, trimOutputToLength } from './utils.js';
+import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom, padToLength, trimOutputToLength, disposeTensor } from './utils.js';
 
 /**
  * 单片段扩散采样循环
@@ -157,7 +157,13 @@ export async function runDiffusionLoop({
             const batchResults = await runSession('diffStep', {
                 xt_input: cfgXtTensor, t: cfgTTensor, cond: cfgCondTensor, xt_mask: cfgMaskTensor,
             });
-            const batchPred = outputToFloat32(batchResults['flow_pred']);
+            const batchPredRaw = batchResults['flow_pred'];
+            // outputToFloat32 对 float16 输出会新建独立 Float32Array；对 float32 输出返回底层视图。
+            // 为安全释放张量，float32 路径下用 .slice() 取独立副本，确保 dispose 后 batchPred 仍可用。
+            const batchPred = outputToFloat32(batchPredRaw);
+            const batchPredSafe = batchPredRaw.type === 'float32' ? batchPred.slice() : batchPred;
+            // 立即释放输出张量，防止 64 步累积导致 NPU 显存耗尽
+            disposeTensor(batchPredRaw);
             const inferMs = performance.now() - tInfer;
 
             // CFG post-processing: merged into 2 passes instead of 3
@@ -170,8 +176,8 @@ export async function runDiffusionLoop({
                 const uncondSrc = (diffSeqLen + ptFrameCount + f) * MEL_DIM;
                 const flatBase = f * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
-                    const condVal = batchPred[condSrc + d];
-                    const uncondVal = batchPred[uncondSrc + d];
+                    const condVal = batchPredSafe[condSrc + d];
+                    const uncondVal = batchPredSafe[uncondSrc + d];
                     posSum += condVal;
                     const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
                     cfgPredBuf[flatBase + d] = cfgVal;
@@ -187,7 +193,7 @@ export async function runDiffusionLoop({
             // 导致默认 cfgRescale=0.75 时流量预测被错误缩放 25%。
             let posVarSum = 0, cfgAdjVarSum = 0;
             for (let i = 0; i < targetLen; i++) {
-                const pv = batchPred[ptFrameCount * MEL_DIM + i] - posMean;
+                const pv = batchPredSafe[ptFrameCount * MEL_DIM + i] - posMean;
                 posVarSum += pv * pv;
                 const cd = cfgPredBuf[i] - cfgAdjMean;
                 cfgAdjVarSum += cd * cd;
@@ -237,7 +243,11 @@ export async function runDiffusionLoop({
             const predResults = await runSession('diffStep', {
                 xt_input: xtInputTensor, t: tTensor, cond: condTensorConst, xt_mask: frameMaskTensorConst,
             });
-            const predData = outputToFloat32(predResults['flow_pred']);
+            const predRaw = predResults['flow_pred'];
+            // 同 CFG 路径：float32 输出取独立副本后再释放张量
+            const predData = outputToFloat32(predRaw);
+            const predDataSafe = predRaw.type === 'float32' ? predData.slice() : predData;
+            disposeTensor(predRaw);
             const inferMs = performance.now() - tInfer;
 
             const prepTotalMs = prepMs + (tPrep - tPrep0);
@@ -255,11 +265,21 @@ export async function runDiffusionLoop({
             for (let f = 0; f < totalFrames; f++) {
                 const tgtOffset = (ptFrameCount + f) * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
-                    xt.data[f * MEL_DIM + d] += dt * predData[tgtOffset + d];
+                    xt.data[f * MEL_DIM + d] += dt * predDataSafe[tgtOffset + d];
                 }
             }
         }
     }
+
+    // 循环结束：释放所有在循环外预分配的常量/复用张量，防止跨合成累积
+    disposeTensor(condTensorConst);
+    disposeTensor(frameMaskTensorConst);
+    disposeTensor(cfgCondTensor);
+    disposeTensor(cfgMaskTensor);
+    disposeTensor(cfgXtTensor);
+    disposeTensor(cfgTTensor);
+    disposeTensor(xtInputTensor);
+    disposeTensor(tTensor);
 
     const diffTotalMs = performance.now() - tDiff0;
     console.log(`[WebNN] Diffusion total: ${diffTotalMs.toFixed(0)}ms (${totalSteps} steps, batch=${diffBatch})`);
@@ -401,7 +421,11 @@ export async function runBatchDiffusionLoop({
         const batchResults = await runSession('diffStep', {
             xt_input: cfgXtTensor, t: cfgTTensor, cond: cfgCondTensor, xt_mask: cfgMaskTensor,
         });
-        const batchPred = outputToFloat32(batchResults['flow_pred']);
+        const batchPredRaw = batchResults['flow_pred'];
+        // 同单段路径：取独立副本后立即释放张量，防止 32 步 × batch=4 累积
+        const batchPred = outputToFloat32(batchPredRaw);
+        const batchPredSafe = batchPredRaw.type === 'float32' ? batchPred.slice() : batchPred;
+        disposeTensor(batchPredRaw);
         const inferMs = performance.now() - tStepInfer;
 
         const tStepCfg = performance.now();
@@ -421,8 +445,8 @@ export async function runBatchDiffusionLoop({
                 const condSrc = condRowOff + (s.ptFrameCount + f) * MEL_DIM;
                 const uncondSrc = uncondRowOff + (s.ptFrameCount + f) * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
-                    const condVal = batchPred[condSrc + d];
-                    const uncondVal = batchPred[uncondSrc + d];
+                    const condVal = batchPredSafe[condSrc + d];
+                    const uncondVal = batchPredSafe[uncondSrc + d];
                     posSum += condVal;
                     const cfgVal = condVal + cfgStrength0 * (condVal - uncondVal);
                     cfgPredBuf[f * MEL_DIM + d] = cfgVal;
@@ -435,7 +459,7 @@ export async function runBatchDiffusionLoop({
             for (let f = 0; f < s.totalFrames; f++) {
                 const condSrc = condRowOff + (s.ptFrameCount + f) * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
-                    const pv = batchPred[condSrc + d] - posMean;
+                    const pv = batchPredSafe[condSrc + d] - posMean;
                     posVarSum += pv * pv;
                     const cd = cfgPredBuf[f * MEL_DIM + d] - cfgAdjMean;
                     cfgAdjVarSum += cd * cd;
@@ -465,6 +489,13 @@ export async function runBatchDiffusionLoop({
             console.log(`[WebNN]   batch diffStep [${step}/${totalSteps}]: prep=${prepMs.toFixed(1)} infer=${inferMs.toFixed(1)} cfg=${cfgMs.toFixed(1)}`);
         }
     }
+
+    // 循环结束：释放所有预分配的复用张量
+    disposeTensor(cfgXtTensor);
+    disposeTensor(cfgTTensor);
+    disposeTensor(cfgCondTensor);
+    disposeTensor(cfgMaskTensor);
+
     const batchDiffMs = performance.now() - tDiff0;
     console.log(`[WebNN] Batch diffusion (2 segs, batch=4): ${batchDiffMs.toFixed(0)}ms (${totalSteps} steps)`);
     console.log(`[WebNN]   prep  — total=${bDiffPrepTotal.toFixed(0)}ms avg=${(bDiffPrepTotal / totalSteps).toFixed(1)}ms`);

@@ -55,6 +55,19 @@ export function dpr() {
   return window.devicePixelRatio || 1;
 }
 
+/**
+ * 缓存的 parent clientHeight，在 _doRender 顶部读取一次，供 pitchToY/yToPitch 等
+ * helper 在同一帧内复用，避免每个音符绘制时重复触发 layout（性能审查 #1 高优先级）。
+ * _renderInFlight > 0 时使用缓存值，否则回退到实时 DOM 读取（用于渲染外的 hit-test 等）。
+ */
+let _cachedParentHeight = 0;
+let _renderInFlight = 0;
+
+function _getParentHeight() {
+  if (_renderInFlight > 0 && _cachedParentHeight > 0) return _cachedParentHeight;
+  return canvas.parentElement.clientHeight;
+}
+
 export function timeToX(beats) {
   return beats * BEAT_WIDTH * getZoomX() - getScrollX();
 }
@@ -66,7 +79,7 @@ export function xToTime(x) {
 export function pitchToY(pitch) {
   const pianoAreaTop = HEADER_HEIGHT;
   const showParamArea = isParamAreaVisible();
-  const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
+  const pianoAreaBottom = _getParentHeight() - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   const maxPitch = 127;
   return pianoAreaTop + (maxPitch - pitch) * NOTE_HEIGHT - getScrollY();
 }
@@ -74,7 +87,7 @@ export function pitchToY(pitch) {
 export function yToPitch(y) {
   const pianoAreaTop = HEADER_HEIGHT;
   const showParamArea = isParamAreaVisible();
-  const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
+  const pianoAreaBottom = _getParentHeight() - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   if (y >= pianoAreaBottom) return 0;
   if (y <= pianoAreaTop) return 127;
   const maxPitch = 127;
@@ -84,7 +97,7 @@ export function yToPitch(y) {
 export function yToPitchContinuous(y) {
   const pianoAreaTop = HEADER_HEIGHT;
   const showParamArea = isParamAreaVisible();
-  const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
+  const pianoAreaBottom = _getParentHeight() - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   if (y >= pianoAreaBottom) return 0;
   if (y <= pianoAreaTop) return 127;
   const maxPitch = 127;
@@ -112,11 +125,11 @@ export function findNoteAt(x, y) {
 }
 
 export function _getParamCurveAreaTop() {
-  return canvas.parentElement.clientHeight - PARAM_CURVE_HEIGHT;
+  return _getParentHeight() - PARAM_CURVE_HEIGHT;
 }
 
 export function _getParamCurveAreaBottom() {
-  return canvas.parentElement.clientHeight;
+  return _getParentHeight();
 }
 
 export function _getParamCurveYRange() {
@@ -1083,6 +1096,16 @@ export function render() {
 function _doRender() {
   const w = canvas.parentElement.clientWidth;
   const h = canvas.parentElement.clientHeight;
+  // 缓存 clientHeight 供本帧所有 helper 复用，避免 O(N) 次 layout 读取（性能审查 #1）
+  _cachedParentHeight = h;
+  _renderInFlight++;
+  try {
+    _doRenderImpl(w, h);
+  } finally {
+    _renderInFlight--;
+  }
+}
+function _doRenderImpl(w, h) {
   const c = getCanvasColors();
   ctx.clearRect(0, 0, w, h);
 

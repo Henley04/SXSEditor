@@ -4,7 +4,7 @@
 
 import { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, NPU_VOCODER_SEQ_LEN, VOCODER_OUTPUT_TRIM_SAMPLES } from './constants.js';
 import { runSession } from './sessionManager.js';
-import { createFloatTensor, outputToFloat32, padToLength } from './utils.js';
+import { createFloatTensor, outputToFloat32, padToLength, disposeTensor } from './utils.js';
 import { runSegmentedVocoder } from './audioSegmentation.js';
 
 /**
@@ -57,11 +57,16 @@ export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBat
         const vocInferMs = performance.now() - tVocInfer;
 
         const tVocPost = performance.now();
-        const waveform = outputToFloat32(vocoderResults['waveform']);
+        const waveformRaw = vocoderResults['waveform'];
+        const waveform = outputToFloat32(waveformRaw);
         // Vocoder ISTFT Conv + Slice 产生略少于 seq_len*HOP_SIZE 的样本
         // 实际输出 = seq_len*HOP_SIZE - VOCODER_OUTPUT_TRIM_SAMPLES
         const trimmed = waveform.subarray(0, Math.min(waveform.length, totalSamples));
+        // float32 输出下 waveform 是张量数据视图，slice() 取独立副本后即可释放张量
         audioData = trimmed.slice(); // TypedArray.slice() 比 Array.from() 快得多
+        // 释放 vocoder 输入和输出张量
+        disposeTensor(melTensor);
+        disposeTensor(waveformRaw);
         const vocPostMs = performance.now() - tVocPost;
 
         vocChunkCount = 1;

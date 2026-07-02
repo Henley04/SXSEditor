@@ -4,6 +4,19 @@ const { resampleAudio } = require('../utils/resampleAudio');
 
 let _noteIdCounter = 0;
 
+/**
+ * 释放 feeds 对象中的所有输入张量。
+ * 用于 RosVot 推理后释放 wav/pitch/uv/word_bd 张量，防止内存累积。
+ * @param {Object} feeds - session.run() 的输入对象
+ */
+function _disposeFeeds(feeds) {
+    if (!feeds) return;
+    for (const key of Object.keys(feeds)) {
+        const t = feeds[key];
+        try { if (t && typeof t.dispose === 'function') t.dispose(); } catch (_) {}
+    }
+}
+
 const ROSVOT_SAMPLE_RATE = 24000;
 const ROSVOT_HOP_SIZE = 128;
 const ROSVOT_MAX_FRAMES = 4000;
@@ -188,9 +201,14 @@ class RosvotDetector {
         console.log('[RosvotDetector] fell back to CPU inference');
         results = await this.session.run(feeds);
       } else {
+        // 释放输入张量后重新抛出
+        _disposeFeeds(feeds);
         throw runErr;
       }
     }
+
+    // 释放输入张量（性能审查 #3 中优先级：RosVot 输入泄漏）
+    _disposeFeeds(feeds);
 
     const noteBdPred = results.note_bd_pred;
     const notePred = results.note_pred;
@@ -213,7 +231,7 @@ class RosvotDetector {
       noteBoundaryFrames, notePitches, numNotes, actualFrames, bpm
     );
 
-    // 释放张量
+    // 释放输出张量
     noteBdPred.dispose();
     notePred.dispose();
     noteLengths.dispose();
