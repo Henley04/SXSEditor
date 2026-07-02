@@ -40,9 +40,8 @@ function _encodeWavBase(audioData, sampleRate, numChannels) {
   writeString(36, 'data');
   view.setUint32(40, dataSize, true);
 
-  for (let i = 0; i < audioData.length; i++) {
-    view.setFloat32(44 + i * 4, audioData[i], true);
-  }
+  // 一次性 memcpy 替代逐样本 setFloat32（性能审查 §4 中优先级）
+  new Float32Array(buffer, 44, audioData.length).set(audioData);
 
   return new Uint8Array(buffer);
 }
