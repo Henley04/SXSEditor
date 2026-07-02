@@ -851,6 +851,67 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       expect(pipeline._clampAutoShift(5, [])).to.equal(5);
       expect(pipeline._clampAutoShift(5, null)).to.equal(5);
     });
+
+    it('should use tighter upper bound (84) when vocoderType is sifigan', () => {
+      // B1: SiFiGAN 对 f0 敏感，上限收紧到 84（~C6）防止激励畸变
+      pipeline.vocoderType = 'sifigan';
+      // pitch 80 + shift 12 → 92 > 84, max allowed up = 84 - 80 = 4
+      expect(pipeline._clampAutoShift(12, [80])).to.equal(4);
+      // pitch 84 + shift 1 → 85 > 84, max allowed up = 0
+      expect(pipeline._clampAutoShift(1, [84])).to.equal(0);
+      // 恢复 default 后上限回到 88
+      pipeline.vocoderType = 'default';
+      expect(pipeline._clampAutoShift(12, [80])).to.equal(8);
+    });
+  });
+
+  describe('_computeSegF0Shift (B2 per-segment f0Shift)', () => {
+    it('should return global f0Shift when globalTargetMedian is null (autoShift off)', () => {
+      expect(pipeline._computeSegF0Shift(7, null, [{ pitch: 60, start: 0, duration: 1 }])).to.equal(7);
+    });
+
+    it('should return global f0Shift when segment has no pitched notes', () => {
+      expect(pipeline._computeSegF0Shift(5, 60, [{ pitch: 0, start: 0, duration: 1 }])).to.equal(5);
+    });
+
+    it('should return global f0Shift when segment median equals global median', () => {
+      // seg median 60 == global median 60, adjustment = 0
+      expect(pipeline._computeSegF0Shift(5, 60, [{ pitch: 60, start: 0, duration: 1 }])).to.equal(5);
+    });
+
+    it('should shift up for low segment (segment median below global)', () => {
+      // global median 60 (C4), seg median 48 (C3), adj = 60-48 = 12, capped to +5
+      // global f0Shift 3 + 5 = 8, clamped by _clampAutoShift (pitch 48 → 53, within range)
+      const segNotes = [{ pitch: 48, start: 0, duration: 1 }];
+      expect(pipeline._computeSegF0Shift(3, 60, segNotes)).to.equal(8);
+    });
+
+    it('should shift down for high segment (segment median above global)', () => {
+      // global median 60, seg median 72 (C5), adj = 60-72 = -12, capped to -5
+      // global f0Shift -2 + (-5) = -7, clamped by _clampAutoShift (pitch 72 → 65, within range)
+      const segNotes = [{ pitch: 72, start: 0, duration: 1 }];
+      expect(pipeline._computeSegF0Shift(-2, 60, segNotes)).to.equal(-7);
+    });
+
+    it('should cap adjustment to ±5 semitones', () => {
+      // global median 60, seg median 24 (very low), adj = 36, capped to +5
+      const segNotes = [{ pitch: 24, start: 0, duration: 1 }];
+      expect(pipeline._computeSegF0Shift(0, 60, segNotes)).to.equal(5);
+      // global median 60, seg median 84 (high but in range), adj = -24, capped to -5
+      // _clampAutoShift(-5, [84]): maxAllowedUp=4, maxAllowedDown=-56 → -5 (within range)
+      const highNotes = [{ pitch: 84, start: 0, duration: 1 }];
+      expect(pipeline._computeSegF0Shift(0, 60, highNotes)).to.equal(-5);
+    });
+
+    it('should respect _clampAutoShift bounds after per-segment adjustment', () => {
+      // SiFiGAN: upper bound 84. seg pitch 80, global f0Shift 0, global median 88
+      // seg median 80, adj = 88-80 = 8, capped to +5 → raw shift 5
+      // _clampAutoShift: pitch 80 + 5 = 85 > 84, max allowed up = 84-80 = 4 → clamped to 4
+      pipeline.vocoderType = 'sifigan';
+      const segNotes = [{ pitch: 80, start: 0, duration: 1 }];
+      expect(pipeline._computeSegF0Shift(0, 88, segNotes)).to.equal(4);
+      pipeline.vocoderType = 'default';
+    });
   });
 
   describe('quantizeF0 with f0Shift', () => {
