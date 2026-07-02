@@ -456,7 +456,10 @@ class OnnxSVSPipeline {
             return f0Shift;
         }
         const MIN_EFFECTIVE_PITCH = 28; // ~E1, vocoder f0 下限附近
-        const MAX_EFFECTIVE_PITCH = 88; // ~E6, vocoder f0 上限附近
+        // SiFiGAN 对 f0 敏感（过高导致激励畸变→口齿不清，见 index.js:1574 注释），
+        // 上限收紧到 84（~C6），避免 autoShift 将高音推入 SiFiGAN 失真区。
+        // 默认 vocoder 上限 88（~E6）。
+        const MAX_EFFECTIVE_PITCH = this.vocoderType === 'sifigan' ? 84 : 88;
         let minPitch = targetNotePitches[0];
         let maxPitch = targetNotePitches[0];
         for (const p of targetNotePitches) {
@@ -467,6 +470,33 @@ class OnnxSVSPipeline {
         const maxAllowedDown = MIN_EFFECTIVE_PITCH - minPitch; // 负值
         const clampedShift = Math.max(maxAllowedDown, Math.min(maxAllowedUp, f0Shift));
         return Math.max(-12, Math.min(12, clampedShift));
+    }
+
+    /**
+     * 计算多 segment 路径中单个 segment 的 f0Shift (B2)。
+     * 基于全局 f0Shift，按 segment 中位数相对全局中位数的偏差做调整（上限 ±5 半音），
+     * 再用 _clampAutoShift 限制到 vocoder/encoder 有效范围。autoShift 未启用时返回原 f0Shift。
+     * @param {number} globalF0Shift - 全局 clamped f0Shift
+     * @param {number|null} globalTargetMedian - 全局音符中位数（autoShift 未启用时为 null）
+     * @param {Array} segNotes - 该 segment 的音符数组
+     * @returns {number} 该 segment 的 f0Shift
+     */
+    _computeSegF0Shift(globalF0Shift, globalTargetMedian, segNotes) {
+        if (globalTargetMedian === null) return globalF0Shift;
+        const segPitches = [];
+        for (const n of segNotes) {
+            if (n.pitch >= 1) segPitches.push(n.pitch);
+        }
+        if (segPitches.length === 0) return globalF0Shift;
+        const segMedian = this._median(segPitches);
+        const PER_SEG_CAP = 5; // ±5 半音，相邻段最大差 10，由 crossfade 平滑
+        const adj = Math.max(-PER_SEG_CAP, Math.min(PER_SEG_CAP, globalTargetMedian - segMedian));
+        if (adj === 0) return globalF0Shift;
+        const segShift = this._clampAutoShift(globalF0Shift + adj, segPitches);
+        if (segShift !== globalF0Shift) {
+            console.log(`[OnnxSVSPipeline] per-seg f0Shift: global=${globalF0Shift} segMedian=${segMedian} adj=${adj} → ${segShift}`);
+        }
+        return segShift;
     }
     clearSynthCache() {
         // LRU 缓存：清空所有条目
@@ -1397,6 +1427,13 @@ class OnnxSVSPipeline {
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN synthesis');
 
+        // SiFiGAN 双输入 vocoder 需要 mel+f0，且 hop_size=120（vs default 480）。
+        // WebNN 路径仅传 mel 并按 HOP_SIZE=480 计算输出长度，SiFiGAN 会因缺 f0 抛错
+        // 或产生 4× 时间轴错位。此处守卫拦截，避免沉默失败。
+        if (this.vocoderType === 'sifigan') {
+            throw new Error('SiFiGAN vocoder is not supported on the WebNN/NPU path. Please switch to the default vocoder or disable NPU inference in settings before synthesizing.');
+        }
+
         const fullParams = {
             ...params,
             isFP16: this.isFP16,
@@ -1409,20 +1446,22 @@ class OnnxSVSPipeline {
 
     /**
      * 批量合成两个片段（WebNN batch=4: 2 片段 × 2 CFG）
+     * @param {number} f0ShiftA - segment A 的 f0Shift（per-segment，B2）
+     * @param {number} f0ShiftB - segment B 的 f0Shift（per-segment，B2）
      */
-    async _synthesizeSegmentPair(segANotes, segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, segAStartBeat = 0, segBStartBeat = 0) {
+    async _synthesizeSegmentPair(segANotes, segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, segAStartBeat = 0, segBStartBeat = 0) {
         // 多 segment 路径：传 segStartBeat 让 notesToSequences 正确索引绝对 pitchCurveF0
         const offsetA = (segAStartBeat / bpm) * 60;
         const offsetB = (segBStartBeat / bpm) * 60;
-        const seqA = this.notesToSequences(segANotes, bpm, f0Envelope, pitchCurveF0, f0Shift, offsetA);
-        const seqB = this.notesToSequences(segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, offsetB);
+        const seqA = this.notesToSequences(segANotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, offsetA);
+        const seqB = this.notesToSequences(segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftB, offsetB);
 
         const framesA = seqA.f0Ids.length;
         const framesB = seqB.f0Ids.length;
 
         if (framesA === 0 && framesB === 0) return [{ audio: [], frames: 0 }, { audio: [], frames: 0 }];
-        if (framesA === 0) return [{ audio: [], frames: 0 }, await this._synthesizeSegment(segBNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segBStartBeat)];
-        if (framesB === 0) return [await this._synthesizeSegment(segANotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segAStartBeat), { audio: [], frames: 0 }];
+        if (framesA === 0) return [{ audio: [], frames: 0 }, await this._synthesizeSegment(segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segBStartBeat)];
+        if (framesB === 0) return [await this._synthesizeSegment(segANotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segAStartBeat), { audio: [], frames: 0 }];
 
         console.log(`[OnnxSVSPipeline] Batch synthesis: segA=${framesA}frames, segB=${framesB}frames`);
 
@@ -1461,6 +1500,11 @@ class OnnxSVSPipeline {
     async _runWebNNSynthesisBatch(paramsArray, onProgress) {
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN batch synthesis');
+
+        // SiFiGAN 守卫：原因同 _runWebNNSynthesis（WebNN 不支持 mel+f0 双输入与 hop=120）。
+        if (this.vocoderType === 'sifigan') {
+            throw new Error('SiFiGAN vocoder is not supported on the WebNN/NPU path. Please switch to the default vocoder or disable NPU inference in settings before synthesizing.');
+        }
 
         const fullParams = paramsArray.map(p => ({
             ...p,
@@ -1700,17 +1744,21 @@ class OnnxSVSPipeline {
             return audioData;
         }
 
-        if (!ptMelData || ptFrameCount === 0) {
-            ptFrameCount = Math.min(50, 10);
-            ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
-        }
-
         const totalBeats = filledNotes.length > 0
             ? Math.max(...filledNotes.map(n => n.start + n.duration))
             : 0;
         const totalSamples = Math.floor((totalBeats / bpm) * 60 * SAMPLE_RATE);
         const finalAudio = new Float32Array(totalSamples);
         const weightSum = new Float32Array(totalSamples);
+
+        // Prompt mel 帧数：与单 segment 路径 (index.js:1645) 保持一致，按总帧数 10% 计算，
+        // 上限 50 帧、下限 10 帧。旧版多 segment 路径恒为 10 帧，导致长音频（无 ref audio）
+        // 扩散 conditioning 信号弱，音色稳定性与发音清晰度下降。
+        if (!ptMelData || ptFrameCount === 0) {
+            const totalFramesEst = Math.floor(totalSamples / HOP_SIZE);
+            ptFrameCount = Math.min(50, Math.max(10, Math.floor(totalFramesEst * 0.1)));
+            ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
+        }
 
         const overlapBeats = (SEGMENT_OVERLAP_SEC / 60) * bpm;
         const overlapSamples = Math.floor(SEGMENT_OVERLAP_SEC * SAMPLE_RATE);
@@ -1725,6 +1773,18 @@ class OnnxSVSPipeline {
         // WebNN batch=4: pair segments for simultaneous processing
         const useBatch = this.useWebNN && npuDiffBatchSize >= 4 && segments.length > 1;
         let segIdx = 0;
+
+        // Per-segment f0Shift (B2): autoShift 基于全局中位数计算单一 f0Shift，对"主歌低音+
+        // 副歌高音"的宽音域片段，单一偏移使主歌偏低/副歌偏高，参考音色匹配度差。
+        // 多 segment 路径按各 segment 音符中位数相对全局中位数的偏差调整 f0Shift，使每段
+        // 中位数都向参考中位数靠拢。调整量上限 ±5 半音，避免段边界处 f0Shift 跳变过大
+        // （相邻段最大差 10 半音，由 SEGMENT_OVERLAP_SEC crossfade 平滑过渡）。
+        // 仅在 autoShift 启用且多 segment 时生效；pitchShift 模式（用户指定固定偏移）不改。
+        const perSegAutoShift = autoShift && pitchShift === 0 && segments.length > 1;
+        const globalNotePitches = perSegAutoShift
+            ? filledNotes.filter(n => n.pitch >= 1).map(n => n.pitch)
+            : [];
+        const globalTargetMedian = globalNotePitches.length > 0 ? this._median(globalNotePitches) : null;
 
         while (segIdx < segments.length) {
             // 段间 GPU 排空：让事件循环处理 GC 并给 DML 50ms 时间回收上一段的
@@ -1744,8 +1804,12 @@ class OnnxSVSPipeline {
 
                 onProgress(Math.round(pairProgressStart));
 
+                // Per-segment f0Shift (B2): 各 segment 独立计算偏移
+                const f0ShiftA = this._computeSegF0Shift(f0Shift, globalTargetMedian, segA.notes);
+                const f0ShiftB = this._computeSegF0Shift(f0Shift, globalTargetMedian, segB.notes);
+
                 const pairResult = await this._synthesizeSegmentPair(
-                    segA.notes, segB.notes, bpm, f0Envelope, pitchCurveF0, f0Shift,
+                    segA.notes, segB.notes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, f0ShiftB,
                     ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
                     npuDiffBatchSize, npuVocoderBatchSize,
                     onProgress, pairProgressStart, pairProgressRange,
@@ -1794,8 +1858,11 @@ class OnnxSVSPipeline {
 
             onProgress(Math.round(segProgressStart));
 
+            // Per-segment f0Shift (B2): 该 segment 独立计算偏移
+            const segF0Shift = this._computeSegF0Shift(f0Shift, globalTargetMedian, seg.notes);
+
             const segResult = await this._synthesizeSegment(
-                seg.notes, bpm, f0Envelope, pitchCurveF0, f0Shift,
+                seg.notes, bpm, f0Envelope, pitchCurveF0, segF0Shift,
                 ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
                 onProgress, segProgressStart, segProgressRange,

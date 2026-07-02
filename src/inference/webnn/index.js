@@ -10,7 +10,7 @@ import { detectNPU } from './npuDetection.js';
 import { loadModel, unloadModel, runInference, getStatus, runSession, withRunLock } from './sessionManager.js';
 import { runEncoderStage } from './preprocessing.js';
 import { runDiffusionLoop, runBatchDiffusionLoop } from './diffusion.js';
-import { runVocoder } from './postprocessing.js';
+import { runVocoder, normalizePeakTo } from './postprocessing.js';
 import { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, VOCODER_CHUNK_FRAMES, NPU_STATIC_SEQ_LEN, NPU_VOCODER_SEQ_LEN } from './constants.js';
 import { ensureOrt, getOrt } from './ortSetup.js';
 import { outputToFloat32, createFloatTensor, padInt64ToLength, padToLength, trimOutputToLength } from './utils.js';
@@ -249,6 +249,8 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
             const vocoderResults = await runSession('vocoder', { mel: melTensor });
             const waveform = outputToFloat32(vocoderResults['waveform']);
             audioData = Array.from(waveform.subarray(0, Math.min(waveform.length, totalSamples)));
+            // Peak 归一化（与 runVocoder 单 chunk 路径一致，确保 batch 段间响度匹配 DML）
+            normalizePeakTo(audioData);
         } else {
             const result = await runSegmentedVocoder({
                 xtData: xt,
@@ -259,6 +261,8 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
                 vocoderChunkFrames: effectiveVocChunk,
             });
             audioData = result.audioData;
+            // Peak 归一化（runSegmentedVocoder 不做归一化，此处补齐，与单 chunk 路径一致）
+            normalizePeakTo(audioData);
         }
 
         results.push({ audioData, totalFrames: s.totalFrames });

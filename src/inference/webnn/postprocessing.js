@@ -8,6 +8,24 @@ import { createFloatTensor, outputToFloat32, padToLength } from './utils.js';
 import { runSegmentedVocoder } from './audioSegmentation.js';
 
 /**
+ * 将音频峰值归一化到 threshold（默认 0.95），与 DML pipeline/utils.js 保持一致。
+ * 用于 WebNN 路径，确保 DML↔WebNN 后端切换时段间响度匹配。
+ * @param {Float32Array|number[]} arr - 原地修改
+ * @param {number} [threshold=0.95]
+ */
+export function normalizePeakTo(arr, threshold = 0.95) {
+    let peak = 0;
+    for (let i = 0; i < arr.length; i++) {
+        const abs = Math.abs(arr[i]);
+        if (abs > peak) peak = abs;
+    }
+    if (peak > threshold) {
+        const scale = threshold / peak;
+        for (let i = 0; i < arr.length; i++) arr[i] *= scale;
+    }
+}
+
+/**
  * 运行 vocoder 将 mel 转换为音频（强制串行，支持流式回调）
  * @param {Object} params
  * @param {Float32Array} params.xtData - mel 数据
@@ -52,6 +70,10 @@ export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBat
         vocPostTotal = vocPostMs;
         console.log(`[WebNN] vocoder (single): prep=${vocPrepMs.toFixed(1)} infer=${vocInferMs.toFixed(1)} post=${vocPostMs.toFixed(1)} [${totalFrames}frames -> ${totalSamples}samples${useStaticShapes ? ', NPU static' : ''}]`);
 
+        // Peak 归一化（与 DML postprocessing.js:788 单 chunk 路径一致）。
+        // 在 onChunkComplete 流式推送之前归一化，确保流式音频与最终返回音频响度一致。
+        normalizePeakTo(audioData);
+
         // 单 chunk 路径：一次性推送全部音频（流式播放用）
         if (onChunkComplete) {
             try {
@@ -84,11 +106,10 @@ export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBat
     console.log(`[WebNN]   post  — total=${vocPostTotal.toFixed(0)}ms`);
     console.log(`[WebNN]   overhead: ${(vocTotalMs - vocPrepTotal - vocInferTotal - vocPostTotal).toFixed(0)}ms`);
 
-    // Clip to [-1, 1] 防止爆音（流式播放与最终返回使用同一份音频，不做 peak 归一化以保持段间音量一致）
-    for (let i = 0; i < audioData.length; i++) {
-        if (audioData[i] > 1.0) audioData[i] = 1.0;
-        else if (audioData[i] < -1.0) audioData[i] = -1.0;
-    }
+    // Peak 归一化到 0.95（与 DML postprocessing.js:951 chunked 路径一致）。
+    // 单 chunk 路径已在上方归一化，此处为 no-op；chunked 路径在此完成首次归一化。
+    // 替代旧版 clip-to-[-1,1]：归一化后峰值 ≤0.95 <1.0，自然防爆音，且段间响度匹配 DML。
+    normalizePeakTo(audioData);
 
     return { audioData, vocTotalMs };
 }
