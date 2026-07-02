@@ -8,10 +8,30 @@ function getMainWindowWebContents() {
 }
 
 let _npuDetectionCache = null;
+let _npuFailureTime = 0;
+const NPU_FAILURE_TTL_MS = 5 * 60 * 1000; // 5 分钟后允许重新检测
+
+/**
+ * 判断缓存的失败结果是否已过期（超过 TTL 则允许重新检测）
+ */
+function _isFailureCacheExpired() {
+  if (!_npuDetectionCache) return true;
+  // 仅对失败结果（npuAvailable === false 且非成功探测）应用 TTL
+  const isFailure = !_npuDetectionCache.npuAvailable && !_npuDetectionCache.gpuAvailable;
+  if (!isFailure) return false;
+  if (!_npuFailureTime) return false;
+  return Date.now() - _npuFailureTime > NPU_FAILURE_TTL_MS;
+}
 
 function registerWebnnIpc() {
   ipcMain.handle('webnn:detectNPU', async () => {
-    if (_npuDetectionCache) return _npuDetectionCache;
+    if (_npuDetectionCache && !_isFailureCacheExpired()) return _npuDetectionCache;
+
+    // 失败缓存已过期，清除后重新检测
+    if (_npuDetectionCache && _isFailureCacheExpired()) {
+      _npuDetectionCache = null;
+      _npuFailureTime = 0;
+    }
 
     const wc = getMainWindowWebContents();
     if (!wc) {
@@ -23,12 +43,18 @@ function registerWebnnIpc() {
       const timeout = setTimeout(() => {
         const result = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: 'Detection timeout' };
         _npuDetectionCache = result;
+        _npuFailureTime = Date.now();
         resolve(result);
       }, 10000);
 
       ipcMain.handleOnce(`webnn:detectNPU:response:${requestId}`, async (_, result) => {
         clearTimeout(timeout);
         _npuDetectionCache = result;
+        if (!result.npuAvailable && !result.gpuAvailable) {
+          _npuFailureTime = Date.now();
+        } else {
+          _npuFailureTime = 0;
+        }
         resolve(result);
       });
 
@@ -136,17 +162,25 @@ function registerWebnnIpc() {
   });
 
   // 读取模型文件并返回 ArrayBuffer（沙盒渲染进程无法直接读取文件）
-  // 使用独立 ArrayBuffer 避免池化 buffer 的共享问题，IPC 结构化克隆零拷贝传输
-  ipcMain.handle('webnn:readModelFile', async (_, filePath) => {
+  // 使用 ipcMain.on + event.sender.send 模式以支持 transferList 零拷贝传输，
+  // 避免 ipcMain.handle 的结构化克隆复制 846MB 模型文件。
+  // 每个请求携带唯一 reqId，回复使用 `webnn:readModelFile:reply:<reqId>` 频道，
+  // 避免并发请求时回复错位。
+  ipcMain.on('webnn:readModelFile', async (event, payload) => {
+    const filePath = typeof payload === 'string' ? payload : payload.filePath;
+    const reqId = typeof payload === 'string' ? null : payload.reqId;
+    const replyChannel = reqId != null
+      ? `webnn:readModelFile:reply:${reqId}`
+      : 'webnn:readModelFile:reply';
     try {
       const data = await fs.promises.readFile(filePath);
       // 创建独立 ArrayBuffer（避免 Node.js Buffer 池化导致的共享问题）
-      // IPC 结构化克隆会直接转移此 ArrayBuffer 的所有权，零拷贝
+      // 通过 transferList 转移所有权给渲染进程，零拷贝
       const ab = new ArrayBuffer(data.byteLength);
       new Uint8Array(ab).set(data);
-      return { success: true, data: ab };
+      event.sender.send(replyChannel, { success: true, data: ab }, [ab]);
     } catch (e) {
-      return { success: false, error: e.message };
+      event.sender.send(replyChannel, { success: false, error: e.message });
     }
   });
 }
@@ -157,6 +191,12 @@ function registerWebnnIpc() {
  * Returns { webnnAvailable: boolean, npuAvailable: boolean, gpuAvailable: boolean, details: string }
  */
 async function detectNPUAvailability() {
+  // 失败缓存超过 TTL 时清除并重新检测
+  if (_npuDetectionCache && _isFailureCacheExpired()) {
+    _npuDetectionCache = null;
+    _npuFailureTime = 0;
+  }
+
   if (_npuDetectionCache) {
     return {
       webnnAvailable: !!_npuDetectionCache.webnnAvailable,
@@ -189,6 +229,11 @@ async function detectNPUAvailability() {
 
     // Cache all results (including failures) to avoid repeated slow detection
     _npuDetectionCache = result;
+    if (!result.npuAvailable && !result.gpuAvailable) {
+      _npuFailureTime = Date.now();
+    } else {
+      _npuFailureTime = 0;
+    }
     return {
       webnnAvailable: !!(result.webnnAvailable || result.npuAvailable || result.gpuAvailable),
       npuAvailable: !!result.npuAvailable,
@@ -198,13 +243,14 @@ async function detectNPUAvailability() {
   } catch (err) {
     const failResult = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: err.message };
     _npuDetectionCache = failResult;
+    _npuFailureTime = Date.now();
     return failResult;
   }
 }
 
 /**
  * Mark NPU as unavailable (e.g. after a failed probe).
- * Updates the cache so subsequent calls skip detection.
+ * Updates the cache so subsequent calls skip detection (until TTL expires).
  */
 function markNPUUnavailable(reason) {
   _npuDetectionCache = {
@@ -213,10 +259,21 @@ function markNPUUnavailable(reason) {
     gpuAvailable: false,
     details: reason || 'NPU probe failed',
   };
+  _npuFailureTime = Date.now();
+}
+
+/**
+ * Clear the NPU failure cache so the next detectNPUAvailability() re-detects.
+ * Called when language models are swapped (new models may behave differently on NPU).
+ */
+function clearNPUFailureCache() {
+  _npuDetectionCache = null;
+  _npuFailureTime = 0;
 }
 
 module.exports = {
   registerWebnnIpc,
   detectNPUAvailability,
   markNPUUnavailable,
+  clearNPUFailureCache,
 };

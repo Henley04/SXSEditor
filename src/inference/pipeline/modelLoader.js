@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const ort = require('onnxruntime-node');
 const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
+const { classifyDevice } = require('../../utils/deviceClassifier');
 const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
@@ -93,64 +94,6 @@ const DUMMY_TEST_INPUTS_NPU = {
     vocoder: { mel: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN * MEL_DIM), [1, NPU_STATIC_SEQ_LEN, MEL_DIM]) },
     melTransform: { waveform: new ort.Tensor('float32', new Float32Array(240000), [1, 240000]) },
 };
-
-/**
- * 统一设备分类函数 — 所有硬件检测入口应Using此函数
- * @param {string} name - 设备名称
- * @param {number} vramBytes - 显存大小（字节），0 表示未知
- * @param {boolean|undefined} dmlDiscreteFlag - DirectML 报告的 Discrete 标志
- * @returns {'discrete-gpu'|'integrated-gpu'|'npu'|'cpu'}
- */
-function classifyDevice(name, vramBytes = 0, dmlDiscreteFlag = undefined) {
-    const n = (name || '').toLowerCase();
-
-    // 1. NPU 名称匹配（最高优先级）
-    const npuKeywords = [
-        'npu', 'neural processing', 'neural compute',
-        'intel ai boost', 'intel neural', 'intel npu',
-        'amd xdna', 'amd ryzen ai', 'amd ai engine',
-        'qualcomm hexagon', 'qcom npu', 'hexagon npu',
-        'snapdragon neural', 'mediatek apu', 'rockchip npu',
-    ];
-    for (const kw of npuKeywords) {
-        if (n.includes(kw)) return 'npu';
-    }
-
-    // 2. GPU 独显名称匹配
-    const discreteGpuKeywords = [
-        { includes: ['nvidia'] }, { includes: ['geforce'] },
-        { includes: ['rtx'] }, { includes: ['gtx'] }, { includes: ['quadro'] },
-        { includes: ['radeon', 'rx'] }, { includes: ['radeon', 'pro'] },
-        { includes: ['radeon', 'instinct'] },
-        { includes: ['amd', 'rx '] }, { includes: ['amd', 'pro w'] }, { includes: ['amd', 'pro v'] },
-    ];
-    for (const rule of discreteGpuKeywords) {
-        if (rule.includes.every(kw => n.includes(kw))) return 'discrete-gpu';
-    }
-    // Intel Arc 独显
-    if (n.includes('intel') && n.includes('arc') && /\barc\s*a\d/i.test(n)) return 'discrete-gpu';
-
-    // 3. GPU 核显名称匹配
-    const integratedGpuKeywords = [
-        { includes: ['intel', 'uhd'] }, { includes: ['intel', 'iris'] },
-        { includes: ['intel', 'xe'] }, { includes: ['intel', 'hd graphics'] },
-    ];
-    for (const rule of integratedGpuKeywords) {
-        if (rule.includes.every(kw => n.includes(kw))) return 'integrated-gpu';
-    }
-    if (n.includes('radeon') && !n.includes('rx') && !n.includes('pro') && !n.includes('instinct')) return 'integrated-gpu';
-    if (n.includes('microsoft') && n.includes('basic')) return 'integrated-gpu';
-
-    // 4. DML Discrete 标志
-    if (dmlDiscreteFlag === true) return 'discrete-gpu';
-    if (dmlDiscreteFlag === false) return 'integrated-gpu';
-
-    // 5. 显存阈值兜底（>= 512MB 视为独显）
-    if (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024) return 'discrete-gpu';
-    if (vramBytes > 0) return 'integrated-gpu';
-
-    return 'cpu';
-}
 
 /** @deprecated Using classifyDevice 替代 */
 function isDiscreteGPUByName(name) {
@@ -482,7 +425,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
 
     if (!dummyInputs) {
         const session = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
-        return { session, ep: 'cpu' };
+        return { session, ep: 'cpu', warmedUp: false };
     }
 
     // NPU 静态形状模型直接创建 CPU 会话（跳过 DML 验证，NPU 模型不适合 DML）
@@ -494,7 +437,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         });
         // 跳过推理验证 — NPU 模型已通过离线验证，且大模型（如 diff_step 423MB）的验证耗时过长
         console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (NPU static shapes, opt=basic)`);
-        return { session, ep: 'cpu' };
+        return { session, ep: 'cpu', warmedUp: false };
     }
 
     let dmlSession = null;
@@ -510,7 +453,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         });
         await dmlSession.run(dummyInputs);
         console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
-        return { session: dmlSession, ep: 'dml' };
+        return { session: dmlSession, ep: 'dml', warmedUp: true };
     } catch (dmlErr) {
         if (dmlSession) {
             try { dmlSession.release(); } catch (e) {
@@ -539,7 +482,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                     try { dmlModelSession.release(); } catch (_) {}
                     throw runErr;
                 }
-                return { session: dmlModelSession, ep: 'cpu' };
+                return { session: dmlModelSession, ep: 'cpu', warmedUp: true };
             } catch (dmlModelErr) {
                 console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} DML-optimized model load failed: ${dmlModelErr.message.substring(0, 60).split('\n')[0]}`);
             }
@@ -554,7 +497,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         throw runErr;
     }
     console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (inference verified)`);
-    return { session: cpuSession, ep: 'cpu' };
+    return { session: cpuSession, ep: 'cpu', warmedUp: true };
 }
 
 /**

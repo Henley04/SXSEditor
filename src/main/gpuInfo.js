@@ -1,6 +1,10 @@
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const { VOCODER_CHUNK_FRAMES } = require('../inference/shared/constants.js');
+const { classifyDevice } = require('../utils/deviceClassifier');
+
+// Backward-compatible alias: gpuInfo historically exposed classifyDeviceFromName
+const classifyDeviceFromName = classifyDevice;
 
 // GPU 信息缓存（两阶segment(s)）
 let _gpuInfoCache = null;      // 当前使用的完整数据
@@ -162,54 +166,6 @@ function getVocoderChunkFramesInfo(precision) {
     bestVramBytes,
     bestGpuName,
   };
-}
-
-/**
- * 统一设备分类函数 — 与 nativeSvsPipeline.js 中的 classifyDevice 保持同步
- */
-function classifyDeviceFromName(name, vramBytes = 0, dmlDiscreteFlag = undefined) {
-  const n = (name || '').toLowerCase();
-
-  const npuKeywords = [
-    'npu', 'neural processing', 'neural compute',
-    'intel ai boost', 'intel neural', 'intel npu',
-    'amd xdna', 'amd ryzen ai', 'amd ai engine',
-    'qualcomm hexagon', 'qcom npu', 'hexagon npu',
-    'snapdragon neural', 'mediatek apu', 'rockchip npu',
-  ];
-  for (const kw of npuKeywords) {
-    if (n.includes(kw)) return 'npu';
-  }
-
-  const discreteGpuKeywords = [
-    { includes: ['nvidia'] }, { includes: ['geforce'] },
-    { includes: ['rtx'] }, { includes: ['gtx'] }, { includes: ['quadro'] },
-    { includes: ['radeon', 'rx'] }, { includes: ['radeon', 'pro'] },
-    { includes: ['radeon', 'instinct'] },
-    { includes: ['amd', 'rx '] }, { includes: ['amd', 'pro w'] }, { includes: ['amd', 'pro v'] },
-  ];
-  for (const rule of discreteGpuKeywords) {
-    if (rule.includes.every(kw => n.includes(kw))) return 'discrete-gpu';
-  }
-  if (n.includes('intel') && n.includes('arc') && /\barc\s*a\d/i.test(n)) return 'discrete-gpu';
-
-  const integratedGpuKeywords = [
-    { includes: ['intel', 'uhd'] }, { includes: ['intel', 'iris'] },
-    { includes: ['intel', 'xe'] }, { includes: ['intel', 'hd graphics'] },
-  ];
-  for (const rule of integratedGpuKeywords) {
-    if (rule.includes.every(kw => n.includes(kw))) return 'integrated-gpu';
-  }
-  if (n.includes('radeon') && !n.includes('rx') && !n.includes('pro') && !n.includes('instinct')) return 'integrated-gpu';
-  if (n.includes('microsoft') && n.includes('basic')) return 'integrated-gpu';
-
-  if (dmlDiscreteFlag === true) return 'discrete-gpu';
-  if (dmlDiscreteFlag === false) return 'integrated-gpu';
-
-  if (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024) return 'discrete-gpu';
-  if (vramBytes > 0) return 'integrated-gpu';
-
-  return 'cpu';
 }
 
 /**

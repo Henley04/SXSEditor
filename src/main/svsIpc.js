@@ -78,6 +78,11 @@ async function ensurePipelineLanguage(language) {
     try {
       await pipeline.swapLanguageModels(language);
       currentLanguage = language;
+      // 清除 NPU 失败缓存：新语言模型在 NPU 上的表现可能不同，允许重新检测
+      try {
+        const { clearNPUFailureCache } = require('./webnnIpc');
+        clearNPUFailureCache();
+      } catch (_) {}
       return pipeline;
     } catch (err) {
       if (err.message === 'JP_MODELS_MISSING') throw err;

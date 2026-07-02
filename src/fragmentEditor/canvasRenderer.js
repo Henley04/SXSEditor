@@ -716,6 +716,7 @@ export function resizeCanvases() {
   pianoKeysCtx.setTransform(dpr(), 0, 0, dpr(), 0, 0);
   ctx.setTransform(dpr(), 0, 0, dpr(), 0, 0);
 
+  _staticCacheDirty = true;
   render();
 }
 
@@ -1093,6 +1094,16 @@ export function render() {
   if (_renderRaf) return;
   _renderRaf = requestAnimationFrame(() => { _renderRaf = 0; _doRender(); });
 }
+
+// Static layer cache (background + grid lines)
+let _staticCacheCanvas = null;
+let _staticCacheKey = '';
+let _staticCacheDirty = true;
+
+export function invalidateStaticCache() {
+  _staticCacheDirty = true;
+}
+
 function _doRender() {
   const w = canvas.parentElement.clientWidth;
   const h = canvas.parentElement.clientHeight;
@@ -1107,49 +1118,78 @@ function _doRender() {
 }
 function _doRenderImpl(w, h) {
   const c = getCanvasColors();
-  ctx.clearRect(0, 0, w, h);
-
-  ctx.fillStyle = c.bgElevated;
-  ctx.fillRect(0, 0, w, h);
+  const dprVal = dpr();
+  const pixelW = Math.floor(w * dprVal);
+  const pixelH = Math.floor(h * dprVal);
 
   const currentProject = getCurrentProject();
   const beatsPerMeasure = currentProject ? currentProject.timeSignature[0] : 4;
-  const startBeat = xToTime(0);
-  const endBeat = xToTime(w);
-
-  const currentParamMode = getCurrentParamMode();
   const showParamArea = isParamAreaVisible();
   const pianoAreaBottom = showParamArea ? _getParamCurveAreaTop() : h;
 
-  ctx.lineWidth = 0.5;
-  for (let b = Math.floor(startBeat); b <= Math.ceil(endBeat); b++) {
-    const x = timeToX(b);
-    if (x < 0) continue;
-    const isMeasure = (b % beatsPerMeasure === 0);
-    ctx.strokeStyle = isMeasure ? c.gridLineMeasure : c.gridLineMajor;
-    ctx.beginPath();
-    ctx.moveTo(x, HEADER_HEIGHT);
-    ctx.lineTo(x, pianoAreaBottom);
-    ctx.stroke();
-    if (isMeasure) {
-      ctx.fillStyle = c.timeText;
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(String(Math.floor(b / beatsPerMeasure) + 1), x, HEADER_HEIGHT - 6);
+  // Build cache key from state that affects the static layer
+  const staticCacheKey = `${w}|${h}|${dprVal}|${getScrollX()}|${getScrollY()}|${getZoomX()}|${beatsPerMeasure}|${showParamArea}|${pianoAreaBottom}|${c.bgElevated}|${c.gridLineMeasure}|${c.gridLineMajor}|${c.gridLineMinor}|${c.timeText}`;
+
+  if (_staticCacheDirty || _staticCacheKey !== staticCacheKey ||
+      !_staticCacheCanvas || _staticCacheCanvas.width !== pixelW || _staticCacheCanvas.height !== pixelH) {
+    // Rebuild static layer (background + grid lines)
+    if (!_staticCacheCanvas || _staticCacheCanvas.width !== pixelW || _staticCacheCanvas.height !== pixelH) {
+      _staticCacheCanvas = document.createElement('canvas');
+      _staticCacheCanvas.width = pixelW;
+      _staticCacheCanvas.height = pixelH;
     }
+    const cacheCtx = _staticCacheCanvas.getContext('2d');
+    cacheCtx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
+    cacheCtx.clearRect(0, 0, w, h);
+
+    // Background
+    cacheCtx.fillStyle = c.bgElevated;
+    cacheCtx.fillRect(0, 0, w, h);
+
+    // Vertical grid lines (beats)
+    const startBeat = xToTime(0);
+    const endBeat = xToTime(w);
+    cacheCtx.lineWidth = 0.5;
+    for (let b = Math.floor(startBeat); b <= Math.ceil(endBeat); b++) {
+      const x = timeToX(b);
+      if (x < 0) continue;
+      const isMeasure = (b % beatsPerMeasure === 0);
+      cacheCtx.strokeStyle = isMeasure ? c.gridLineMeasure : c.gridLineMajor;
+      cacheCtx.beginPath();
+      cacheCtx.moveTo(x, HEADER_HEIGHT);
+      cacheCtx.lineTo(x, pianoAreaBottom);
+      cacheCtx.stroke();
+      if (isMeasure) {
+        cacheCtx.fillStyle = c.timeText;
+        cacheCtx.font = '11px sans-serif';
+        cacheCtx.textAlign = 'center';
+        cacheCtx.fillText(String(Math.floor(b / beatsPerMeasure) + 1), x, HEADER_HEIGHT - 6);
+      }
+    }
+
+    // Horizontal grid lines (pitches)
+    const startPitch = yToPitch(h);
+    const endPitch = yToPitch(HEADER_HEIGHT);
+    for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
+      const y = pitchToY(p);
+      const isBlack = BLACK_KEYS.has(p % 12);
+      cacheCtx.strokeStyle = isBlack ? c.gridLineMajor : c.gridLineMinor;
+      cacheCtx.beginPath();
+      cacheCtx.moveTo(0, y);
+      cacheCtx.lineTo(w, y);
+      cacheCtx.stroke();
+    }
+
+    _staticCacheKey = staticCacheKey;
+    _staticCacheDirty = false;
   }
 
-  const startPitch = yToPitch(h);
-  const endPitch = yToPitch(HEADER_HEIGHT);
-  for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
-    const y = pitchToY(p);
-    const isBlack = BLACK_KEYS.has(p % 12);
-    ctx.strokeStyle = isBlack ? c.gridLineMajor : c.gridLineMinor;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-  }
+  // Draw cached static layer
+  ctx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(_staticCacheCanvas, 0, 0, w, h);
+
+  const currentParamMode = getCurrentParamMode();
 
   const notes = getNotes();
   const selectedNoteIds = getSelectedNoteIds();
@@ -1397,6 +1437,7 @@ function updateInlineInputPosition() {
 if (typeof window !== 'undefined') {
   window.addEventListener('theme:changed', () => {
     invalidateCanvasThemeCache();
+    _staticCacheDirty = true;
     render();
   });
 }

@@ -4,10 +4,11 @@
 
 import { ensureOrt, getOrt } from './ortSetup.js';
 import { WEBNN_EP_TIMEOUT, WEBNN_VOCODER_TIMEOUT } from './constants.js';
-import { extractRelativePath, float32ToFloat16, disposeTensor } from './utils.js';
+import { extractRelativePath, batchFloat32ToFloat16, disposeTensor } from './utils.js';
 
 // 会话管理
-const sessions = new Map(); // modelId -> { session, status, ep }
+const sessions = new Map(); // modelId -> { session, status, ep, lastAccess }
+const MAX_SESSIONS = 8; // LRU 上限：超过时淘汰最久未访问的会话
 
 /**
  * 读取模型文件（及可选的外部数据文件）为 ArrayBuffer
@@ -62,7 +63,26 @@ export async function loadModel(modelId, modelPath, options = { deviceType: 'npu
     const ort = getOrt();
 
     if (sessions.has(modelId)) {
-        return { success: true, ep: sessions.get(modelId).ep, warning: 'Model already loaded' };
+        const existing = sessions.get(modelId);
+        existing.lastAccess = Date.now();
+        return { success: true, ep: existing.ep, warning: 'Model already loaded' };
+    }
+
+    // LRU 淘汰：达到上限时释放最久未访问的会话，避免 sessions Map 无限增长
+    if (sessions.size >= MAX_SESSIONS) {
+        let oldestId = null;
+        let oldestAccess = Infinity;
+        for (const [id, entry] of sessions) {
+            const access = entry.lastAccess || 0;
+            if (access < oldestAccess) {
+                oldestAccess = access;
+                oldestId = id;
+            }
+        }
+        if (oldestId) {
+            console.log(`[WebNN] LRU evicting ${oldestId} (last access ${oldestAccess})`);
+            await unloadModel(oldestId);
+        }
     }
 
     // Read model file (+ optional .onnx.data) as ArrayBuffer via IPC
@@ -111,32 +131,82 @@ export async function loadModel(modelId, modelPath, options = { deviceType: 'npu
     for (const ep of epChain) {
         const epLabel = typeof ep === 'string' ? ep : `webnn-${ep.deviceType}`;
         const t0 = Date.now();
+        let timeoutId;
         try {
             console.log(`[WebNN] Trying ${modelId} with EP: ${epLabel}...`);
 
-            // Wrap InferenceSession.create with a per-EP timeout to avoid hanging forever
+            // Wrap InferenceSession.create with a per-EP timeout to avoid hanging forever.
+            // clearTimeout 在成功和失败路径上都调用，避免计时器泄漏导致 event loop 不退出。
             const session = await Promise.race([
                 ort.InferenceSession.create(modelBuffer, {
                     ...sessionOptions,
                     executionProviders: [ep],
                 }),
-                new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error(`EP ${epLabel} timed out after ${epTimeout / 1000}s`)), epTimeout)
-                ),
+                new Promise((_, reject) => {
+                    timeoutId = setTimeout(() => reject(new Error(`EP ${epLabel} timed out after ${epTimeout / 1000}s`)), epTimeout);
+                }),
             ]);
+            clearTimeout(timeoutId);
             const ms = Date.now() - t0;
-            sessions.set(modelId, { session, status: 'loaded', ep: epLabel });
+            sessions.set(modelId, { session, status: 'loaded', ep: epLabel, lastAccess: Date.now(), warmedUp: false });
             console.log(`[WebNN] Model ${modelId} loaded with EP: ${epLabel} (${ms}ms)`);
+            // Fire-and-forget warmup: runs a dummy inference to pre-compile kernels.
+            // Best-effort — failure does not prevent normal operation. Does not block loadModel return.
+            _warmupSession(modelId).catch(() => {});
             return { success: true, ep: epLabel };
         } catch (e) {
+            clearTimeout(timeoutId);
             const ms = Date.now() - t0;
             console.warn(`[WebNN] Failed ${modelId} with EP ${epLabel} after ${ms}ms: ${e.message}`);
             lastError = e;
         }
     }
 
-    sessions.set(modelId, { session: null, status: 'error', ep: null, error: lastError?.message || 'unknown' });
+    sessions.set(modelId, { session: null, status: 'error', ep: null, error: lastError?.message || 'unknown', lastAccess: Date.now() });
     return { success: false, ep: null, error: lastError?.message || 'All execution providers failed' };
+}
+
+/**
+ * 在模型加载后运行一次 dummy 推理进行预热（best-effort）。
+ * 尝试从 session.inputMetadata 构建最小化输入张量；若 metadata 不可用则跳过。
+ * 使用 withRunLock 串行化，防止与 runSynthesis/runInference 并发破坏 WASM 栈。
+ * @param {string} modelId
+ */
+async function _warmupSession(modelId) {
+    const entry = sessions.get(modelId);
+    if (!entry || entry.status !== 'loaded' || !entry.session) return;
+
+    const ort = getOrt();
+    const { session } = entry;
+
+    try {
+        const inputMetadata = session.inputMetadata;
+        if (!inputMetadata || inputMetadata.length === 0) return;
+
+        const feeds = {};
+        for (const meta of inputMetadata) {
+            if (!meta || !meta.name) continue;
+            const rawShape = meta.shape || [1];
+            // 将符号维度（字符串）和非正维度替换为 1，构建最小化输入
+            const dims = rawShape.map(d => (typeof d === 'number' && d > 0) ? d : 1);
+            const size = dims.reduce((a, b) => a * b, 1);
+            const type = meta.type || 'float32';
+            if (type === 'int64') {
+                feeds[meta.name] = new ort.Tensor('int64', new BigInt64Array(size), dims);
+            } else if (type === 'float16') {
+                feeds[meta.name] = new ort.Tensor('float16', new Uint16Array(size), dims);
+            } else {
+                feeds[meta.name] = new ort.Tensor('float32', new Float32Array(size), dims);
+            }
+        }
+
+        await withRunLock(() => session.run(feeds));
+        entry.warmedUp = true;
+        console.log(`[WebNN] Model ${modelId} warmed up`);
+    } catch (e) {
+        // Best-effort: warmup failure doesn't prevent normal operation
+        console.warn(`[WebNN] Warmup skipped for ${modelId}: ${e.message}`);
+    }
 }
 
 /**
@@ -202,6 +272,7 @@ async function _runInferenceUnlocked(modelId, inputs) {
     if (!entry || entry.status !== 'loaded' || !entry.session) {
         throw new Error(`Model ${modelId} is not loaded`);
     }
+    entry.lastAccess = Date.now();
 
     const { session } = entry;
     const feeds = {};
@@ -217,9 +288,7 @@ async function _runInferenceUnlocked(modelId, inputs) {
                 tensorDataArray = data;
             } else if (data instanceof Float32Array) {
                 tensorDataArray = new Uint16Array(data.length);
-                for (let i = 0; i < data.length; i++) {
-                    tensorDataArray[i] = float32ToFloat16(data[i]);
-                }
+                batchFloat32ToFloat16(data, tensorDataArray, data.length);
             } else {
                 tensorDataArray = new Uint16Array(data);
             }
@@ -258,8 +327,16 @@ async function _runInferenceUnlocked(modelId, inputs) {
     for (const [name, tensor] of Object.entries(results)) {
         const outType = tensor.type || 'float32';
         if (outType === 'int64') {
+            // 手动循环比 Array.from(..., mapper) 更快：避免 map 回调开销
+            const bigints = tensor.data instanceof BigInt64Array
+                ? tensor.data
+                : new BigInt64Array(tensor.data);
+            const strings = new Array(bigints.length);
+            for (let i = 0; i < bigints.length; i++) {
+                strings[i] = bigints[i].toString();
+            }
             outputs[name] = {
-                data: Array.from(tensor.data, v => v.toString()),
+                data: strings,
                 dims: tensor.dims,
                 type: outType,
             };
@@ -303,7 +380,11 @@ export function getStatus() {
  * @returns {{ session: object, status: string, ep: string } | undefined}
  */
 export function getSession(modelId) {
-    return sessions.get(modelId);
+    const entry = sessions.get(modelId);
+    if (entry) {
+        entry.lastAccess = Date.now();
+    }
+    return entry;
 }
 
 /**
@@ -316,5 +397,6 @@ export async function runSession(modelId, feeds) {
     if (!entry || entry.status !== 'loaded' || !entry.session) {
         throw new Error(`Model ${modelId} is not loaded`);
     }
+    entry.lastAccess = Date.now();
     return await entry.session.run(feeds);
 }

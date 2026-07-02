@@ -42,10 +42,11 @@ export async function runDiffusionLoop({
 
     // prompt frames don't change, copy once
     if (ptMelData) {
-        for (let f = 0; f < ptFrameCount; f++) {
-            for (let d = 0; d < MEL_DIM; d++) {
-                xtInputBuf[f * MEL_DIM + d] = ptMelData[f * MEL_DIM + d];
-            }
+        const copyLen = ptFrameCount * MEL_DIM;
+        if (ptMelData.length === copyLen) {
+            xtInputBuf.set(ptMelData);
+        } else {
+            xtInputBuf.set(ptMelData.subarray(0, copyLen));
         }
     }
 
@@ -347,10 +348,11 @@ export async function runBatchDiffusionLoop({
         cfgMaskBuf.fill(1, maskUncondOff + s.ptFrameCount, maskUncondOff + s.totalFramesWithPrompt);
 
         if (s.ptMelData) {
-            for (let f = 0; f < s.ptFrameCount; f++) {
-                for (let d = 0; d < MEL_DIM; d++) {
-                    xtInputBufs[si][f * MEL_DIM + d] = s.ptMelData[f * MEL_DIM + d];
-                }
+            const copyLen = s.ptFrameCount * MEL_DIM;
+            if (s.ptMelData.length === copyLen) {
+                xtInputBufs[si].set(s.ptMelData);
+            } else {
+                xtInputBufs[si].set(s.ptMelData.subarray(0, copyLen));
             }
         }
     }

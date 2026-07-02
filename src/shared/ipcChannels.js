@@ -120,6 +120,7 @@ const IPC_CHANNELS = {
   WEBNN_RUN_INFERENCE: 'webnn:runInference',
   WEBNN_GET_STATUS: 'webnn:getStatus',
   WEBNN_READ_MODEL_FILE: 'webnn:readModelFile',
+  WEBNN_READ_MODEL_FILE_REPLY: 'webnn:readModelFile:reply',
   WEBNN_RUN_SYNTHESIS: 'webnn:runSynthesis',
 
   // WebNN renderer request channels (main → renderer)

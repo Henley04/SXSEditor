@@ -26,8 +26,7 @@ export function createDialog(options) {
   overlay.style.cssText = `
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(10,10,20,0.65);
-    backdrop-filter: blur(2px);
+    background: rgba(10,10,20,0.8);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -356,8 +355,7 @@ export function showLoadingOverlay(message) {
   overlay.style.cssText = `
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(10,10,20,0.75);
-    backdrop-filter: blur(2px);
+    background: rgba(10,10,20,0.9);
     display: flex;
     flex-direction: column;
     align-items: center;

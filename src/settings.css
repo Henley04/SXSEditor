@@ -620,8 +620,7 @@ body {
 .theme-saveas-overlay {
     position: absolute;
     inset: 0;
-    background: var(--overlay-scrim);
-    backdrop-filter: blur(2px);
+    background: rgba(10, 10, 20, 0.85);
 }
 
 .theme-editor-panel,

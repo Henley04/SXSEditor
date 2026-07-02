@@ -11,7 +11,7 @@
 #model-loading-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: var(--bg-overlay);
+  background-color: rgba(10, 10, 20, 0.85);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -19,7 +19,6 @@
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--motion-slow) ease;
-  backdrop-filter: blur(2px);
 }
 #model-loading-overlay.visible { opacity: 1; pointer-events: auto; }
 
@@ -622,7 +621,7 @@
 .shortcuts-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: var(--overlay-scrim);
+  background-color: rgba(10, 10, 20, 0.85);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -630,7 +629,6 @@
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--motion-base) ease;
-  backdrop-filter: blur(2px);
 }
 .shortcuts-overlay.visible {
   opacity: 1;

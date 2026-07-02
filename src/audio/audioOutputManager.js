@@ -127,7 +127,7 @@ class AudioOutputManager {
     this._pendingRequests.clear();
   }
 
-  _sendCommand(type, data = {}) {
+  _sendCommand(type, data = {}, transferList = null) {
     return new Promise((resolve, reject) => {
       const worker = this._ensureWorker();
       if (!worker) {
@@ -148,7 +148,7 @@ class AudioOutputManager {
         reject: (err) => { clearTimeout(timeout); reject(err); },
       });
 
-      worker.send({ id, type, ...data });
+      worker.send({ id, type, ...data }, transferList || []);
     });
   }
 
@@ -215,7 +215,7 @@ class AudioOutputManager {
     const result = await this._sendCommand('start', {
       audioData: audioArray,
       options: { ...options, volume: this._volume },
-    });
+    }, [audioArray.buffer]);
 
     if (result.success) {
       this._isPlaying = true;

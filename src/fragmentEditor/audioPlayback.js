@@ -50,6 +50,38 @@ let streamingCleanup = null;
 let streamingNextStart = 0;
 let streamingFinished = false;
 
+// visibilitychange handler: pause rAF-driven UI updates when tab hidden
+// (audio playback continues via WebAudio/WASAPI in background).
+// Registered once per module; update fns stored for resume.
+let _visibilityHandlerRegistered = false;
+let _exclusiveUpdateFn = null;
+let _sharedUpdateFn = null;
+
+function _ensureVisibilityHandler() {
+  if (_visibilityHandlerRegistered) return;
+  _visibilityHandlerRegistered = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      const exclusiveRaf = getFragmentExclusiveRaf();
+      if (exclusiveRaf) {
+        cancelAnimationFrame(exclusiveRaf);
+        setFragmentExclusiveRaf(null);
+      }
+      const sharedRaf = getFragmentPlayheadRaf();
+      if (sharedRaf) {
+        cancelAnimationFrame(sharedRaf);
+        setFragmentPlayheadRaf(null);
+      }
+    } else {
+      if (getFragmentIsPlaying() && getFragmentUseExclusiveMode() && _exclusiveUpdateFn && !getFragmentExclusiveRaf()) {
+        setFragmentExclusiveRaf(requestAnimationFrame(_exclusiveUpdateFn));
+      } else if (getFragmentIsPlaying() && !getFragmentUseExclusiveMode() && _sharedUpdateFn && !getFragmentPlayheadRaf()) {
+        setFragmentPlayheadRaf(requestAnimationFrame(_sharedUpdateFn));
+      }
+    }
+  });
+}
+
 function stopStreamingPlayback() {
   for (const src of streamingSources) {
     try { src.onended = null; src.stop(); } catch (_) {}
@@ -141,6 +173,8 @@ function stopFragmentExclusivePlayback() {
 }
 
 export function updateFragmentPlayhead() {
+  _ensureVisibilityHandler();
+  _sharedUpdateFn = updateFragmentPlayhead;
   if (!getFragmentIsPlaying()) return;
   const ctx = getFragmentAudioContext();
   if (!ctx) return;
@@ -292,7 +326,9 @@ async function playFragmentExclusive() {
 }
 
 function updateFragmentExclusivePlayhead(removeEndedListener) {
+  _ensureVisibilityHandler();
   function update() {
+    _exclusiveUpdateFn = update;
     if (!getFragmentIsPlaying()) {
       if (removeEndedListener) removeEndedListener();
       return;
@@ -318,9 +354,11 @@ function updateFragmentExclusivePlayhead(removeEndedListener) {
     }
 
     setFragmentCurrentTime(elapsed);
+    render();
     setFragmentExclusiveRaf(requestAnimationFrame(update));
   }
 
+  _exclusiveUpdateFn = update;
   setFragmentExclusiveRaf(requestAnimationFrame(update));
 }
 

@@ -186,51 +186,41 @@ class Diffusion {
                     const uncondPred = await this._runDiffStepWithCachedTensors(sessions, xtUncondBuf, tVal, uncondCondTensorCached, uncondMaskTensorCached, totalFramesWithPrompt, isFP16, useStaticShapes);
 
                     const targetLen = totalFrames * MEL_DIM;
-                    // Pass 1: 计算 cond/uncond 均值 + CFG 预测 + 写 cfgPredBuf
+                    // Pass 1 (merged): compute CFG pred + write cfgPredBuf + accumulate
+                    // sums AND sum-of-squares for variance in a single pass.
+                    // Var(X) = E[X²] - E[X]²  →  sum((x-μ)²) = sumSq - sum²/n
                     let posSum = 0;
                     let cfgAdjSum = 0;
+                    let posSumSq = 0;
+                    let cfgAdjSumSq = 0;
                     for (let f = 0; f < totalFrames; f++) {
                         const tgtOffset = (ptFrameCount + f) * MEL_DIM;
                         for (let d = 0; d < MEL_DIM; d++) {
                             const condVal = predData[tgtOffset + d];
                             const uncondVal = uncondPred[tgtOffset + d];
                             posSum += condVal;
+                            posSumSq += condVal * condVal;
                             const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
                             cfgPredBuf[f * MEL_DIM + d] = cfgVal;
                             cfgAdjSum += cfgVal;
+                            cfgAdjSumSq += cfgVal * cfgVal;
                         }
                     }
                     const posMean = posSum / targetLen;
                     const cfgAdjMean = cfgAdjSum / targetLen;
+                    const posVarSum = posSumSq - posSum * posSum / targetLen;
+                    const cfgAdjVarSum = cfgAdjSumSq - cfgAdjSum * cfgAdjSum / targetLen;
 
-                    // 长片段时 pass 之间 yield 一次，避免单步内 3 次 totalFrames*MEL_DIM
+                    // 长片段时 pass 之间 yield 一次，避免单步内 2 次 totalFrames*MEL_DIM
                     // 循环累积阻塞主线程（2000 frames × 128 = 256k 迭代/pass）
                     if (totalFrames > 256) {
                         await new Promise(r => setImmediate(r));
                     }
 
-                    // Pass 2: 计算方差 + 应用 rescale + 更新 xt（与 WebNN 路径一致合并）
-                    let posVarSum = 0;
-                    let cfgAdjVarSum = 0;
-                    for (let f = 0; f < totalFrames; f++) {
-                        const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                        for (let d = 0; d < MEL_DIM; d++) {
-                            const condVal = predData[tgtOffset + d];
-                            const diff1 = condVal - posMean;
-                            posVarSum += diff1 * diff1;
-                            const cfgVal = cfgPredBuf[f * MEL_DIM + d];
-                            const diff2 = cfgVal - cfgAdjMean;
-                            cfgAdjVarSum += diff2 * diff2;
-                        }
-                    }
+                    // Pass 2: compute std/rescale + apply rescale + update xt
                     const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
                     const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
                     const rescale = posStd / (cfgAdjStd + 1e-8);
-
-                    // Pass 2 → Pass 3 之间 yield
-                    if (totalFrames > 256) {
-                        await new Promise(r => setImmediate(r));
-                    }
 
                     for (let f = 0; f < totalFrames; f++) {
                         for (let d = 0; d < MEL_DIM; d++) {

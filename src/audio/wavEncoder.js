@@ -5,6 +5,17 @@
 
 import { smoothstep } from '../utils/smoothstep.js';
 
+const _TRIG_LUT_SIZE = 1024;
+const _cosLut = new Float32Array(_TRIG_LUT_SIZE);
+const _sinLut = new Float32Array(_TRIG_LUT_SIZE);
+for (let i = 0; i < _TRIG_LUT_SIZE; i++) {
+    const a = (i / _TRIG_LUT_SIZE) * 2 * Math.PI;
+    _cosLut[i] = Math.cos(a);
+    _sinLut[i] = Math.sin(a);
+}
+const _trigLutScale = _TRIG_LUT_SIZE / (2 * Math.PI);
+const _PI4 = 0.7853981633974483;
+
 /**
  * WAV 编码内部实现
  * @param {Float32Array} audioData 音频数据（单声道或交错立体声）
@@ -86,8 +97,12 @@ function applyEnvelopesToAudio(monoAudio, sampleRate, bpm, volumeEnvelope, panEn
     }
 
     const sample = monoAudio[i] * volume;
-    const leftGain = Math.cos((pan + 1) * 0.7853981633974483); // PI/4 precomputed
-    const rightGain = Math.sin((pan + 1) * 0.7853981633974483);
+    // LUT lookup for equal-power panning gains.
+    // angle = (pan+1) * π/4 ∈ [0, π/2] for pan ∈ [-1, 1], within LUT coverage [0, 2π).
+    const angle = (pan + 1) * _PI4;
+    const lutIdx = ((angle * _trigLutScale) | 0) & (_TRIG_LUT_SIZE - 1);
+    const leftGain = _cosLut[lutIdx];
+    const rightGain = _sinLut[lutIdx];
 
     stereoData[i * 2] = sample * leftGain;
     stereoData[i * 2 + 1] = sample * rightGain;
