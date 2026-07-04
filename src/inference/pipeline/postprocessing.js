@@ -899,6 +899,34 @@ class Postprocessing {
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
             // 校验输出：DML 在显存边界可能返回全零/NaN 而不抛错（silent failure）
             validateVocoderOutput(waveform, 0);
+            // 诊断：vocoder 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
+            {
+                const hopSamples = vocoderHopSize; // 1 mel frame = hopSamples audio samples
+                const diagFrames = Math.min(10, Math.floor(waveform.length / hopSamples));
+                const parts = [];
+                let totalAbs = 0;
+                for (let f = 0; f < diagFrames; f++) {
+                    let s = 0;
+                    const s0 = f * hopSamples;
+                    const s1 = Math.min(s0 + hopSamples, waveform.length);
+                    for (let i = s0; i < s1; i++) s += waveform[i] * waveform[i];
+                    const rms = Math.sqrt(s / Math.max(1, s1 - s0));
+                    totalAbs += rms;
+                    parts.push(`f${f}=${rms.toFixed(5)}`);
+                }
+                // 同时统计 mel 开头能量（前 5 帧）
+                const melParts = [];
+                const melDiagFrames = Math.min(5, effectiveTotalFrames);
+                for (let f = 0; f < melDiagFrames; f++) {
+                    let s = 0;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const v = paddedMel[f * MEL_DIM + d];
+                        s += v * v;
+                    }
+                    melParts.push(`m${f}=${Math.sqrt(s / MEL_DIM).toFixed(5)}`);
+                }
+                console.log(`[VocoderDiag] single-chunk: frames=${effectiveTotalFrames}, vocoderType=${vocoderType}, melRMS=[${melParts.join(', ')}], wavRMS=[${parts.join(', ')}]`);
+            }
             const copyLen = Math.min(waveform.length, totalSamples);
             output.set(waveform.subarray(0, copyLen));
             normalizePeakTo(output);
@@ -1014,6 +1042,31 @@ class Postprocessing {
 
             // 校验输出：拦截 DML silent failure（全零/NaN）
             validateVocoderOutput(waveform, i);
+            // 诊断：首 chunk 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
+            if (spec.isFirst) {
+                const hopSamples = vocoderHopSize;
+                const diagFrames = Math.min(10, Math.floor(waveform.length / hopSamples));
+                const parts = [];
+                for (let f = 0; f < diagFrames; f++) {
+                    let s = 0;
+                    const s0 = f * hopSamples;
+                    const s1 = Math.min(s0 + hopSamples, waveform.length);
+                    for (let k = s0; k < s1; k++) s += waveform[k] * waveform[k];
+                    parts.push(`f${f}=${Math.sqrt(s / Math.max(1, s1 - s0)).toFixed(5)}`);
+                }
+                // mel 开头能量（前 5 帧）
+                const melParts = [];
+                const melDiagFrames = Math.min(5, spec.currentChunkFrames);
+                for (let f = 0; f < melDiagFrames; f++) {
+                    let s = 0;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const v = paddedChunk[f * MEL_DIM + d];
+                        s += v * v;
+                    }
+                    melParts.push(`m${f}=${Math.sqrt(s / MEL_DIM).toFixed(5)}`);
+                }
+                console.log(`[VocoderDiag] chunk0: chunkFrames=${spec.currentChunkFrames}, vocoderType=${vocoderType}, melRMS=[${melParts.join(', ')}], wavRMS=[${parts.join(', ')}]`);
+            }
             const writeStart = spec.chunkStart * vocoderHopSize;
             const writeLen = Math.min(waveform.length, totalSamples - writeStart);
 

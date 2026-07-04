@@ -80,11 +80,20 @@ export function validateSingerData(singerData) {
   return { valid: errors.length === 0, errors, warnings };
 }
 
+function base64ToArrayBuffer(base64) {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
 export async function applySingerDataToSinger(singer, singerData) {
   if (singerData.wavBase64) {
     try {
-      const response = await fetch('data:application/octet-stream;base64,' + singerData.wavBase64);
-      singer.wavBuffer = await response.arrayBuffer();
+      singer.wavBuffer = base64ToArrayBuffer(singerData.wavBase64);
     } catch (e) {
       console.error('Failed to decode wavBase64:', e);
     }
