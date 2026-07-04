@@ -395,7 +395,14 @@ class OnnxSVSPipeline {
      * @returns {object} SiFiGAN dummy inputs（FP16 或 FP32）
      */
     _getSifiganDummyInputs() {
-        return this.isFP16 ? DUMMY_TEST_INPUTS_FP16.sifigan : DUMMY_TEST_INPUTS_FP32.sifigan;
+        // SiFiGAN 的实际精度由 _resolvedVocoderFile 决定（与主模型 isFP16 解耦）：
+        // - sifigan_vocoder_dml_fp16.onnx → FP16 模型，期望 FP16 输入
+        // - sifigan_vocoder_dml.onnx / sifigan_vocoder.onnx → FP32 模型，期望 FP32 输入
+        // 主模型走 fp16 子目录时 this.isFP16=true，但 sifigan 文件未做精度转换（仍为 FP32），
+        // 若按 isFP16 选 FP16 dummy 会导致 DML 推理验证失败（Unexpected input data type）。
+        const file = this._resolvedVocoderFile || '';
+        const isSifiganFp16 = file === 'sifigan_vocoder_dml_fp16.onnx';
+        return isSifiganFp16 ? DUMMY_TEST_INPUTS_FP16.sifigan : DUMMY_TEST_INPUTS_FP32.sifigan;
     }
 
     /**
