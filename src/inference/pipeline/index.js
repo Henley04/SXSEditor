@@ -1674,6 +1674,7 @@ class OnnxSVSPipeline {
             // 修复：单 note 时在前后各加 1 拍 rest note，提供 token 多样性与静音参考帧，
             // 合成后截取有效音频。
             let contextPadding = null;
+            let pitchCurveOffsetSec = 0;
             if (segNotes.length === 1) {
                 const REST_BEATS = 1;
                 const originalNote = segNotes[0];
@@ -1684,10 +1685,13 @@ class OnnxSVSPipeline {
                 const restFrames = Math.floor((REST_BEATS / bpm) * 60 * SAMPLE_RATE / HOP_SIZE);
                 const validFrames = Math.floor((originalNote.duration / bpm) * 60 * SAMPLE_RATE / HOP_SIZE);
                 contextPadding = { offsetFrames: restFrames, validFrames };
+                // 修复：context padding 将 note 的 start 偏移到 REST_BEATS，需要补偿 pitchCurveOffsetSec
+                // 让 notesToSequences 正确索引绝对时间的 pitchCurveF0，否则 f0 错位 → 沙哑声音。
+                pitchCurveOffsetSec = ((originalNote.start - REST_BEATS) / bpm) * 60;
                 console.log(`[OnnxSVSPipeline] Single-note context padding: +${restFrames} rest frames before/after`);
             }
 
-            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift);
+            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, pitchCurveOffsetSec);
             let totalFrames = sequences.f0Ids.length;
 
             if (totalFrames === 0) {
