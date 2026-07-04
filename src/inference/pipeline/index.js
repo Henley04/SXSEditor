@@ -11,7 +11,7 @@ const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
 const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram } = require('./postprocessing');
 const { AudioSegmentation } = require('./audioSegmentation');
-const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain } = require('./utils');
+const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain, gpuDrainLong } = require('./utils');
 const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
 const { getEffectiveVocoderChunkFrames } = require('../../main/gpuInfo');
 
@@ -1361,10 +1361,91 @@ class OnnxSVSPipeline {
         // Vocoder is loaded via DML (dynamic shapes), never use static shape padding
         // SiFiGAN 双输入：传入 vocoderType、F0 序列、stats 缺失标志；default vocoder 仅用 mel
         const chunkFrames = this._resolveVocoderChunkFrames();
-        return this._postprocessing.runVocoderChunked(
-            this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
-            this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames
-        );
+
+        // 临时释放 diffStep session，让 vocoder 推理独占 GPU 显存。
+        // 触发条件：DML 后端 + 用户开启 releaseDiffStepBeforeVocoder + diffStep 当前已加载。
+        // 不释放 vocoder（马上要用），不释放 encoders（体积小）。
+        // WebNN 路径跳过（diffStep 在渲染进程，与主进程 vocoder 互不抢占显存）。
+        const releasedDiffStep = this._maybeUnloadDiffStepBeforeVocoder();
+        if (releasedDiffStep) {
+            // session.release() 是同步 API，但 DML 后端 GPU 资源回收是异步的，
+            // diffStep 权重 + 32 步 diffusion 激活工作区合计 ~3-4GB，普通 gpuDrain(50ms) 远不够。
+            // 必须用 gpuDrainLong(~800ms 分 4 轮 setTimeout) 让 DML 资源池完成回收 + V8 GC 跑完，
+            // 否则紧接着的 vocoder 推理会因显存未释放而 OOM / 触发 0x887A0006 (TDR 黑屏)。
+            console.log('[OnnxSVSPipeline] Waiting for DML to reclaim diffStep VRAM before vocoder...');
+            const t0 = performance.now();
+            await gpuDrainLong();
+            console.log(`[OnnxSVSPipeline] DML drain complete (${(performance.now() - t0).toFixed(0)}ms), starting vocoder inference`);
+        }
+
+        try {
+            return await this._postprocessing.runVocoderChunked(
+                this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
+                this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames
+            );
+        } finally {
+            // Vocoder 推理完成（或抛错）后立即重载 diffStep，保持 session 状态一致：
+            // - 多 segment 合成的下一段需要 diffStep
+            // - _recreateHeavySessionsAfterSynthesis 期望 diffStep 存在（否则会跳过 release）
+            // - 用户关闭 releaseDmlVramAfterSynthesis 时，下次合成依赖 ensureAllModelsLoaded 检测缺失才重载
+            //   会让用户感知到"下次合成变慢"，不如在这里主动重载
+            if (releasedDiffStep) {
+                await this._reloadDiffStepAfterVocoder();
+            }
+        }
+    }
+
+    /**
+     * 在 vocoder 推理前临时释放 diffStep session（仅 DML 后端 + 用户开启时）。
+     * 目的：腾出 diffStep 模型权重 + diffusion 32 步激活工作区（合计 ~3-4GB）的显存，
+     * 避免 vocoder 推理时显存叠加触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR。
+     *
+     * @returns {boolean} true 表示已释放（调用方需在 vocoder 完成后调用 _reloadDiffStepAfterVocoder）
+     */
+    _maybeUnloadDiffStepBeforeVocoder() {
+        if (this.useWebNN) return false; // WebNN: diffStep 在渲染进程，无需释放
+        if (!this.sessions.diffStep) return false; // 已释放或未加载，跳过
+        if (this.sessionEPs.diffStep !== 'dml') return false; // CPU 后端无需释放
+
+        try {
+            const { loadSettings } = require('../../main/settings');
+            const settings = loadSettings();
+            if (settings.releaseDiffStepBeforeVocoder !== true) return false;
+        } catch (_) {
+            return false;
+        }
+
+        console.log('[OnnxSVSPipeline] Temporarily releasing diffStep session before vocoder inference to free VRAM...');
+        try {
+            if (typeof this.sessions.diffStep.release === 'function') {
+                this.sessions.diffStep.release();
+            }
+        } catch (e) {
+            console.warn('[OnnxSVSPipeline] Failed to release diffStep before vocoder:', e.message);
+        }
+        delete this.sessions.diffStep;
+        delete this.sessionEPs.diffStep;
+        return true;
+    }
+
+    /**
+     * Vocoder 推理后重载 diffStep session。
+     * 失败时不抛错（避免覆盖 vocoder 的成功结果），仅记录错误；
+     * 下次合成时 ensureAllModelsLoaded 会检测缺失并尝试重载。
+     */
+    async _reloadDiffStepAfterVocoder() {
+        if (this.sessions.diffStep) return; // 已重载或并发已加载
+        console.log('[OnnxSVSPipeline] Reloading diffStep session after vocoder inference...');
+        try {
+            const result = await this.loadModel('diffStep');
+            if (result.success) {
+                console.log(`[OnnxSVSPipeline] diffStep reloaded [${result.ep || 'unknown'}]`);
+            } else {
+                console.error('[OnnxSVSPipeline] Failed to reload diffStep after vocoder:', result.error);
+            }
+        } catch (e) {
+            console.error('[OnnxSVSPipeline] Exception reloading diffStep after vocoder:', e.message);
+        }
     }
 
     /**

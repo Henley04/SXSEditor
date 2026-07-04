@@ -163,6 +163,21 @@ function gpuDrain() {
     return new Promise(resolve => setTimeout(resolve, GPU_DRAIN_MS));
 }
 
+// 大模型 session.release() 后的长排空：DML 后端 session.release() 是同步 API，
+// 但底层 GPU 资源（模型权重 + 激活工作区，diffStep 合计 ~3-4GB）回收是异步的。
+// 普通 gpuDrain(50ms) 远不够，需要更长等待 + 多次轮询让 DML 资源池完成回收。
+// 否则紧接着的 vocoder 推理会因显存未释放而 OOM / 触发 0x887A0006 (TDR 黑屏)。
+//
+// 策略：总等待时间分多次 setTimeout（让事件循环处理 GC + DML 内部回收回调），
+// 比单次长 sleep 更有效——每次 setTimeout 回调间 V8 GC 能跑一轮，DML 也能处理一批 pending 释放。
+const GPU_DRAIN_LONG_MS = 200;       // 单次轮询间隔
+const GPU_DRAIN_LONG_ROUNDS = 4;     // 轮询次数（总等待 ~800ms）
+async function gpuDrainLong() {
+    for (let i = 0; i < GPU_DRAIN_LONG_ROUNDS; i++) {
+        await new Promise(resolve => setTimeout(resolve, GPU_DRAIN_LONG_MS));
+    }
+}
+
 /**
  * Normalize audio array peak to a threshold (default 0.95).
  * @param {Float32Array} arr
@@ -190,4 +205,5 @@ module.exports = {
     disposeTensor,
     normalizePeakTo,
     gpuDrain,
+    gpuDrainLong,
 };
