@@ -1625,16 +1625,20 @@ class OnnxSVSPipeline {
         let currentProgress = 0;
         onProgress(currentProgress);
 
+        // targetNotePitches 在 autoShift 与手动 pitchShift 两种模式下都需要：
+        // JP pitch 范围保护（_clampJpPitchRange）无论 autoShift 是否启用都生效，
+        // 因此提前在外层作用域计算，避免 "targetNotePitches is not defined"。
+        const targetNotePitches = [];
+        for (const note of filledNotes) {
+            if (note.pitch >= 1) targetNotePitches.push(note.pitch);
+        }
+
         let f0Shift = 0;
         if (autoShift && pitchShift === 0) {
             const targetF0 = this.buildF0FrameSequence(filledNotes, bpm, f0Envelope, pitchCurveF0);
             const targetNonZero = [];
             for (let i = 0; i < targetF0.length; i++) {
                 if (targetF0[i] > 0) targetNonZero.push(targetF0[i]);
-            }
-            const targetNotePitches = [];
-            for (const note of filledNotes) {
-                if (note.pitch >= 1) targetNotePitches.push(note.pitch);
             }
 
             let refF0 = null;
