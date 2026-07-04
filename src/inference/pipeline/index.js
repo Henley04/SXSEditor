@@ -4,7 +4,7 @@ const fs = require('node:fs');
 // Side effect: apply float16 patch on module load
 require('./float16Patch');
 
-const { SAMPLE_RATE, HOP_SIZE, SIFIGAN_HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
@@ -1739,10 +1739,12 @@ class OnnxSVSPipeline {
             let audioData = await this._runVocoderChunked(xt.data, totalFrames, singleSegOnChunk);
 
             // 单 note 上下文 padding：截取有效音频（丢弃前后 rest padding）
+            // 注意：外部 totalFrames 始终是 50Hz 帧数（SVS mel 帧率），
+            // 即使 SiFiGAN 内部已 4× 上采样，postprocessing 也已统一回 HOP_SIZE 输出长度，
+            // 因此这里固定用 HOP_SIZE（480 samples/帧）计算采样位置。
             if (contextPadding) {
-                const vocoderHopSize = this.vocoderType === 'sifigan' ? SIFIGAN_HOP_SIZE : HOP_SIZE;
-                const startSample = contextPadding.offsetFrames * vocoderHopSize;
-                const validSamples = contextPadding.validFrames * vocoderHopSize;
+                const startSample = contextPadding.offsetFrames * HOP_SIZE;
+                const validSamples = contextPadding.validFrames * HOP_SIZE;
                 const endSample = Math.min(startSample + validSamples, audioData.length);
                 audioData = audioData.subarray(startSample, endSample);
             }
