@@ -397,6 +397,14 @@ class OnnxSVSPipeline {
     async _loadDefaultVocoderAsFallback(sessionKey) {
         const defVocFile = await this._resolveDefaultVocoderFile();
         this._resolvedVocoderFile = defVocFile;
+        // 关键修复：回退 default vocoder 时必须同步更新 vocoderType，否则后续合成会按 sifigan
+        // 模式处理（mel 4× 上采样 + 传 f0 + chunkFrames 除以 4），但实际 session 是 default
+        // vocoder，导致 mel 形状/输入签名不匹配 + 加载的是 1005MB default 而非 34MB sifigan，
+        // 显存压力暴增触发 0x887A0006 OOM。
+        if (this.vocoderType === 'sifigan') {
+            console.warn('[OnnxSVSPipeline] SiFiGAN fallback to default vocoder: syncing vocoderType sifigan -> default to prevent mode mismatch');
+            this.vocoderType = 'default';
+        }
         const defVocPath = this._getModelPath(defVocFile);
         try {
             const { session, ep } = await createSessionWithValidation(
@@ -882,6 +890,13 @@ class OnnxSVSPipeline {
 
         // 默认 vocoder 回退（vocoderType=default 或 sifigan 模型均缺失时）
         if (!sifiganOnnxResolved) {
+            // 关键修复：sifigan 模式但 onnx/stats 缺失回退 default 时，必须同步 vocoderType，
+            // 否则后续合成按 sifigan 模式处理但实际加载 default vocoder，导致 mel 4× 上采样
+            // 错误 + 1005MB default 权重替代 34MB sifigan，显存压力暴增触发 0x887A0006 OOM。
+            if (this.vocoderType === 'sifigan') {
+                console.warn('[OnnxSVSPipeline] vocoderType=sifigan but SiFiGAN onnx/stats missing, syncing vocoderType -> default to prevent mode mismatch');
+                this.vocoderType = 'default';
+            }
             if (!vocDmlExists) {
                 this._resolvedVocoderFile = 'vocoder.onnx';
                 console.log('[OnnxSVSPipeline] vocoder_dml.onnx not found, using vocoder.onnx');
@@ -1231,6 +1246,12 @@ class OnnxSVSPipeline {
                 // SiFiGAN 加载失败 → 回退默认 vocoder（vocoder_dml.onnx → vocoder.onnx）
                 if (isSifigan) {
                     console.warn(`[OnnxSVSPipeline] SiFiGAN vocoder load failed, falling back to default vocoder: ${loadErr.message.substring(0, 80)}`);
+                    // 关键修复：同步 vocoderType -> default，防止后续合成按 sifigan 模式处理
+                    // 但实际 session 是 default vocoder（参见 _loadDefaultVocoderAsFallback 注释）
+                    if (this.vocoderType === 'sifigan') {
+                        console.warn('[OnnxSVSPipeline] Syncing vocoderType sifigan -> default after SiFiGAN load failure');
+                        this.vocoderType = 'default';
+                    }
                     const defVocFile = await this._resolveDefaultVocoderFile();
                     this._resolvedVocoderFile = defVocFile;
                     const defVocPath = this._getModelPath(defVocFile);
@@ -1361,6 +1382,15 @@ class OnnxSVSPipeline {
         // Vocoder is loaded via DML (dynamic shapes), never use static shape padding
         // SiFiGAN 双输入：传入 vocoderType、F0 序列、stats 缺失标志；default vocoder 仅用 mel
         const chunkFrames = this._resolveVocoderChunkFrames();
+
+        // 一致性检测：vocoderType 与实际加载的 vocoder 文件必须匹配，否则 mel 处理模式
+        // （sifigan 4× 上采样 + f0 输入 vs default 仅 mel）与 session 输入签名不匹配，
+        // 会导致音质劣化 + 显存压力错误（sifigan chunkFrames 除以 4 但 default 不除）。
+        const expectedSifigan = this.vocoderType === 'sifigan';
+        const actualIsSifigan = this._resolvedVocoderFile ? this._isSifiganVocoder(this._resolvedVocoderFile) : false;
+        if (expectedSifigan !== actualIsSifigan) {
+            console.warn(`[OnnxSVSPipeline] WARNING: vocoderType=${this.vocoderType} but loaded vocoder=${this._resolvedVocoderFile} (isSifigan=${actualIsSifigan}). This indicates a fallback occurred. Mel processing may be incorrect.`);
+        }
 
         // 临时释放 diffStep session，让 vocoder 推理独占 GPU 显存。
         // 触发条件：DML 后端 + 用户开启 releaseDiffStepBeforeVocoder + diffStep 当前已加载。
