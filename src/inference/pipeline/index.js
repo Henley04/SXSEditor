@@ -1403,15 +1403,28 @@ class OnnxSVSPipeline {
      * @returns {boolean} true 表示已释放（调用方需在 vocoder 完成后调用 _reloadDiffStepAfterVocoder）
      */
     _maybeUnloadDiffStepBeforeVocoder() {
-        if (this.useWebNN) return false; // WebNN: diffStep 在渲染进程，无需释放
-        if (!this.sessions.diffStep) return false; // 已释放或未加载，跳过
-        if (this.sessionEPs.diffStep !== 'dml') return false; // CPU 后端无需释放
+        if (this.useWebNN) {
+            console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (useWebNN=true)');
+            return false; // WebNN: diffStep 在渲染进程，无需释放
+        }
+        if (!this.sessions.diffStep) {
+            console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (sessions.diffStep missing)');
+            return false; // 已释放或未加载，跳过
+        }
+        if (this.sessionEPs.diffStep !== 'dml') {
+            console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (EP=${this.sessionEPs.diffStep}, not 'dml')`);
+            return false; // CPU 后端无需释放
+        }
 
         try {
             const { loadSettings } = require('../../main/settings');
             const settings = loadSettings();
-            if (settings.releaseDiffStepBeforeVocoder !== true) return false;
-        } catch (_) {
+            if (settings.releaseDiffStepBeforeVocoder !== true) {
+                console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings.releaseDiffStepBeforeVocoder=${settings.releaseDiffStepBeforeVocoder})`);
+                return false;
+            }
+        } catch (e) {
+            console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings load failed: ${e.message})`);
             return false;
         }
 
