@@ -1370,14 +1370,19 @@ class OnnxSVSPipeline {
     /**
      * 依据当前设置（vocoderChunkMode: smart/manual）解析生效的 vocoder 分片帧数。
      * - smart: 复用启动时基于显存计算并缓存的值（不触发新的 GPU 探测）
-     * - manual: 使用用户手动指定的帧数（clamp 到 [256, 2048]）
+     * - manual: 使用用户手动指定的帧数（default clamp 到 [256, 2048]，sifigan clamp 到 [64, 512]）
+     *
+     * 注意：vocoderType='sifigan' 时返回的是 user-visible 帧数（已除以 SIFIGAN_UPSAMPLE_RATIO=4），
+     * postprocessing.runVocoderChunked 内部会乘回 4 得到实际 mel 帧数。这样可以让 SiFiGAN 的实际
+     * mel 张量大小与 default vocoder 一致，避免 4× 上采样导致激活工作区暴涨爆显存。
      */
     _resolveVocoderChunkFrames() {
         try {
             const { loadSettings } = require('../../main/settings');
             const settings = loadSettings();
             // 传入当前模型精度，让 smart 分片按精度扣除常驻权重（FP32≈2.9GB / FP16≈1.4GB / INT8≈0.96GB）
-            return getEffectiveVocoderChunkFrames(settings.vocoderChunkMode, settings.vocoderChunkFrames, this._modelPrecision);
+            // 同时传入 vocoderType，SiFiGAN 模式下返回值会除以 4（避免激活工作区 4× 暴涨）
+            return getEffectiveVocoderChunkFrames(settings.vocoderChunkMode, settings.vocoderChunkFrames, this._modelPrecision, this.vocoderType);
         } catch (e) {
             return 0; // 0 → 回退到 VOCODER_CHUNK_FRAMES 默认值
         }
