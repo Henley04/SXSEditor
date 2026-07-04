@@ -92,9 +92,11 @@ function registerSettingsIpc() {
   // GPU 检测完成后基于最大显存计算，启动前返回默认值。
   ipcMain.handle('settings:getVocoderChunkFramesInfo', async () => {
     try {
-      // 传入当前模型精度，让设置页显示按精度扣除常驻权重后的 smartFrames
+      // 传入当前模型精度 + vocoderType，让设置页显示按精度扣除常驻权重 + 按 vocoder 类型调整后的 smartFrames
+      // SiFiGAN 模式下返回值已除以 SIFIGAN_UPSAMPLE_RATIO(=4)，反映 user-visible 帧数
       const settings = loadSettings();
-      return getVocoderChunkFramesInfo(settings.modelPrecision);
+      const vocoderType = settings.vocoderType === 'sifigan' ? 'sifigan' : 'default';
+      return getVocoderChunkFramesInfo(settings.modelPrecision, vocoderType);
     } catch (err) {
       console.error('[Main] Failed to get vocoder chunk frames info:', err);
       return { gpuPhase: 'none', smartFrames: 1008, bestVramBytes: 0, bestGpuName: null };
