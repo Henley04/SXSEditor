@@ -344,6 +344,14 @@
                     <p class="hint" data-i18n="settings.releaseDmlVramAfterSynthesisHint">每次合成完成后重新加载 diffStep 和 vocoder，强制 DirectML 回收中间张量内存池，缓解连续合成 OOM。开启后会增加一点合成后的等待时间。</p>
                 </div>
                 <div class="setting-group">
+                    <label class="device-mode-radio">
+                        <input type="checkbox" id="releaseDiffStepBeforeVocoder" checked>
+                        <span class="radio-label" data-i18n="settings.releaseDiffStepBeforeVocoder">Vocoder 推理前释放 diffStep</span>
+                        <span class="radio-desc" data-i18n="settings.releaseDiffStepBeforeVocoderDesc">仅 DML 后端生效，默认开启</span>
+                    </label>
+                    <p class="hint" data-i18n="settings.releaseDiffStepBeforeVocoderHint">diffusion 完成后释放 diffStep session，让 vocoder 推理独占显存（腾出 ~3-4GB），避免 0x887A0006/TDR 黑屏。代价：每次 vocoder 后需重载 diffStep（~1-3秒），多段合成会变慢。SiFiGAN/低显存显卡强烈建议开启。</p>
+                </div>
+                <div class="setting-group">
                     <button class="btn-open-model-download" id="openModelDownloadBtn" data-i18n="settings.openModelDownload">打开模型下载</button>
                     <p class="hint" data-i18n="settings.openModelDownloadHint">打开模型下载页面，下载或更新推理所需的模型文件。</p>
                 </div>
