@@ -74,6 +74,16 @@ function loadSettings() {
     _settingsCache.releaseDmlVramAfterSynthesis = false;
   }
 
+  // Vocoder 推理前是否临时释放 diffStep session（默认开启，仅 DML 后端有效）
+  // diffStep 模型权重 + 32 步 diffusion 激活工作区（~2GB）在 vocoder 推理期间仍占用显存，
+  // 与 vocoder 激活叠加易触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR (屏幕全黑)。
+  // 开启后：diffusion 完成 → 释放 diffStep → vocoder 推理 → 重载 diffStep。
+  // 代价：每次 vocoder 推理后需重载 diffStep（~1-3秒），多 segment 合成会显著变慢。
+  // WebNN 路径无需此优化（diffStep 在渲染进程，vocoder 在主进程 DML，互不抢占显存）。
+  if (typeof _settingsCache.releaseDiffStepBeforeVocoder !== 'boolean') {
+    _settingsCache.releaseDiffStepBeforeVocoder = true;
+  }
+
   // 推理提供者: 'ortnode' (默认, onnxruntime-node DirectML/CPU) | 'ortweb' (onnxruntime-web WebNN)
   if (_settingsCache.inferenceProvider !== 'ortweb' && _settingsCache.inferenceProvider !== 'ortnode') {
     _settingsCache.inferenceProvider = 'ortnode';
@@ -142,6 +152,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'vocoderType', 'sifiganPrecision',
   'vocoderChunkMode', 'vocoderChunkFrames',
   'releaseDmlVramAfterSynthesis',
+  'releaseDiffStepBeforeVocoder',
   'inferenceProvider',
   'npuDiffBatchSize',
   'npuVocoderBatchSize',
