@@ -455,11 +455,16 @@ class OnnxSVSPipeline {
         if (f0Shift === 0 || !targetNotePitches || targetNotePitches.length === 0) {
             return f0Shift;
         }
-        const MIN_EFFECTIVE_PITCH = 28; // ~E1, vocoder f0 下限附近
+        // JP 模式收紧 pitch 范围：JSUT 训练数据全部 pitch=60，PJS/GTSinger 覆盖
+        // 约 C3-C5（48-84）。JP 专属的 cond_emb/diff_step/preflow 只在此范围微调，
+        // OOD pitch 会导致 cond_embedding 异常 → AdaptiveRMSNorm weight 异常 → 音素错乱。
+        // 基础模型覆盖更广（28-88），但 JP 必须收紧到训练分布内。
+        const isJp = this.languageOverride === 'ja';
+        const MIN_EFFECTIVE_PITCH = isJp ? 48 : 28; // JP: C3 / base: ~E1
         // SiFiGAN 对 f0 敏感（过高导致激励畸变→口齿不清，见 index.js:1574 注释），
         // 上限收紧到 84（~C6），避免 autoShift 将高音推入 SiFiGAN 失真区。
-        // 默认 vocoder 上限 88（~E6）。
-        const MAX_EFFECTIVE_PITCH = this.vocoderType === 'sifigan' ? 84 : 88;
+        // 默认 vocoder 上限 88（~E6）。JP 任何 vocoder 都用 84。
+        const MAX_EFFECTIVE_PITCH = (isJp || this.vocoderType === 'sifigan') ? 84 : 88;
         let minPitch = targetNotePitches[0];
         let maxPitch = targetNotePitches[0];
         for (const p of targetNotePitches) {
@@ -470,6 +475,39 @@ class OnnxSVSPipeline {
         const maxAllowedDown = MIN_EFFECTIVE_PITCH - minPitch; // 负值
         const clampedShift = Math.max(maxAllowedDown, Math.min(maxAllowedUp, f0Shift));
         return Math.max(-12, Math.min(12, clampedShift));
+    }
+
+    /**
+     * JP 专属 pitch 范围保护：无论 autoShift 还是手动 pitchShift 模式都生效。
+     * 根因：JSUT 数据全部 pitch=60，JP 下游模块对其他 pitch OOD。
+     * 当 effective pitch (note.pitch + f0Shift) 超出 [48, 84] 时，调整 f0Shift
+     * 使其回到训练分布内。返回调整后的 f0Shift。
+     */
+    _clampJpPitchRange(f0Shift, targetNotePitches) {
+        if (!targetNotePitches || targetNotePitches.length === 0) {
+            return f0Shift;
+        }
+        const JP_MIN_PITCH = 48; // C3，JP 训练数据下限
+        const JP_MAX_PITCH = 84; // C6，JP 训练数据上限
+        let minPitch = targetNotePitches[0];
+        let maxPitch = targetNotePitches[0];
+        for (const p of targetNotePitches) {
+            if (p < minPitch) minPitch = p;
+            if (p > maxPitch) maxPitch = p;
+        }
+        // upper bound: 最大可上移量（保证 maxPitch + shift <= JP_MAX）
+        // lower bound: 最大可下移量（保证 minPitch + shift >= JP_MIN）
+        const upperBound = JP_MAX_PITCH - maxPitch;
+        const lowerBound = JP_MIN_PITCH - minPitch;
+        if (lowerBound <= upperBound) {
+            // 正常情况：存在合法 shift 区间 [lowerBound, upperBound]
+            return Math.max(lowerBound, Math.min(upperBound, f0Shift));
+        }
+        // 旋律跨度超过 [JP_MIN, JP_MAX]（36 半音），无法用单一 shift 完全修复。
+        // 选 shift 使旋律中心对齐到训练范围中心，最小化最坏 OOD 距离。
+        const rangeCenter = (JP_MIN_PITCH + JP_MAX_PITCH) / 2;
+        const melodyCenter = (minPitch + maxPitch) / 2;
+        return Math.round(rangeCenter - melodyCenter);
     }
 
     /**
@@ -493,10 +531,16 @@ class OnnxSVSPipeline {
         const adj = Math.max(-PER_SEG_CAP, Math.min(PER_SEG_CAP, globalTargetMedian - segMedian));
         if (adj === 0) return globalF0Shift;
         const segShift = this._clampAutoShift(globalF0Shift + adj, segPitches);
-        if (segShift !== globalF0Shift) {
-            console.log(`[OnnxSVSPipeline] per-seg f0Shift: global=${globalF0Shift} segMedian=${segMedian} adj=${adj} → ${segShift}`);
+        // JP per-seg 也需要收紧到训练 pitch 范围 [48,84]，_clampAutoShift 已通过
+        // isJp 判断处理，但额外用 _clampJpPitchRange 兜底（防止 _clampAutoShift
+        // 的 ±12 上限放宽了边界 case）。
+        const finalShift = this.languageOverride === 'ja'
+            ? this._clampJpPitchRange(segShift, segPitches)
+            : segShift;
+        if (finalShift !== globalF0Shift) {
+            console.log(`[OnnxSVSPipeline] per-seg f0Shift: global=${globalF0Shift} segMedian=${segMedian} adj=${adj} → ${finalShift}`);
         }
-        return segShift;
+        return finalShift;
     }
     clearSynthCache() {
         // LRU 缓存：清空所有条目
@@ -1640,6 +1684,18 @@ class OnnxSVSPipeline {
             }
         } else {
             f0Shift = pitchShift;
+        }
+
+        // JP pitch 范围保护：无论 autoShift 还是手动 pitchShift 都生效。
+        // 根因：JSUT 训练数据全部 pitch=60，JP 专属模块（cond_emb/diff_step/preflow）
+        // 只在有限 pitch 范围微调，OOD pitch → cond_embedding 异常 → 音素错乱。
+        // 即使 f0Shift=0，如果音符本身超出 [48,84] 也需要 auto-transpose。
+        if (this.languageOverride === 'ja' && targetNotePitches && targetNotePitches.length > 0) {
+            const jpClamped = this._clampJpPitchRange(f0Shift, targetNotePitches);
+            if (jpClamped !== f0Shift) {
+                console.log(`[OnnxSVSPipeline] JP pitch range clamped: ${f0Shift} → ${jpClamped} (effective pitch kept in [48,84])`);
+                f0Shift = jpClamped;
+            }
         }
 
         let ptMelData = null;
