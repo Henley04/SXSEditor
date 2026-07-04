@@ -785,10 +785,31 @@ class Postprocessing {
      *        audio 为该 chunk 贡献的"已确定"音频段（weightSum=1，可直接播放），按顺序拼接即得完整音频。
      */
     async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0) {
-        const chunkSize = (chunkFrames && chunkFrames > 0) ? chunkFrames : VOCODER_CHUNK_FRAMES;
-        const overlapFrames = VOCODER_OVERLAP_FRAMES;
+        // SiFiGAN mel 帧率（200Hz, hop=120）与 SVS 管线 mel 帧率（50Hz, hop=480）不一致。
+        // SiFiGANWrapper 内部 T_audio = T_frames * 120，若直接喂 50Hz mel 会输出 1/4 期望时长。
+        // 修复：在 SiFiGAN 路径下将 mel 和 F0 在时间维度 4× 上采样（最近邻），让 SiFiGAN 看到正确帧率。
+        // effectiveTotalFrames * SIFIGAN_HOP_SIZE == totalFrames * HOP_SIZE，输出时长与 default vocoder 一致。
+        const SIFIGAN_UPSAMPLE_RATIO = vocoderType === 'sifigan' ? (HOP_SIZE / SIFIGAN_HOP_SIZE) : 1;
+        let effectiveTotalFrames = totalFrames;
+        let effectiveMelData = melData;
+        if (SIFIGAN_UPSAMPLE_RATIO > 1) {
+            effectiveTotalFrames = totalFrames * SIFIGAN_UPSAMPLE_RATIO;
+            // mel 最近邻上采样：每帧重复 SIFIGAN_UPSAMPLE_RATIO 次
+            const srcArr = melData instanceof Float32Array ? melData : new Float32Array(melData);
+            effectiveMelData = new Float32Array(effectiveTotalFrames * MEL_DIM);
+            for (let f = 0; f < totalFrames; f++) {
+                const srcOff = f * MEL_DIM;
+                for (let r = 0; r < SIFIGAN_UPSAMPLE_RATIO; r++) {
+                    const dstOff = (f * SIFIGAN_UPSAMPLE_RATIO + r) * MEL_DIM;
+                    effectiveMelData.set(srcArr.subarray(srcOff, srcOff + MEL_DIM), dstOff);
+                }
+            }
+        }
+
+        const chunkSize = ((chunkFrames && chunkFrames > 0) ? chunkFrames : VOCODER_CHUNK_FRAMES) * SIFIGAN_UPSAMPLE_RATIO;
+        const overlapFrames = VOCODER_OVERLAP_FRAMES * SIFIGAN_UPSAMPLE_RATIO;
         const vocoderHopSize = vocoderType === 'sifigan' ? SIFIGAN_HOP_SIZE : HOP_SIZE;
-        const totalSamples = totalFrames * vocoderHopSize;
+        const totalSamples = effectiveTotalFrames * vocoderHopSize;
         const output = new Float32Array(totalSamples);
         const t0 = performance.now();
         const floatType = isFP16 ? 'float16' : 'float32';
@@ -805,14 +826,24 @@ class Postprocessing {
         };
 
         // ---- SiFiGAN 双输入（mel + f0）准备 ----
-        // mel 帧率 = SAMPLE_RATE / HOP_SIZE = 24000 / 480 = 50Hz；buildF0FrameSequence 已产出该帧率的 F0，
-        // 此处仅需将 F0 长度对齐到 totalFrames（防御性线性插值）。
+        // SVS 管线产出 50Hz F0；上采样到 effectiveTotalFrames 与 mel 对齐（SiFiGAN 期望 f0/mel 同帧率）。
         const useSifiganF0 = vocoderType === 'sifigan';
         let effectiveF0 = null;
         if (useSifiganF0) {
             if (f0Data && f0Data.length > 0) {
                 const srcArr = f0Data instanceof Float32Array ? f0Data : new Float32Array(f0Data);
-                effectiveF0 = (srcArr.length === totalFrames) ? srcArr : resizeF0Linear(srcArr, totalFrames);
+                // 先对齐到原始 50Hz totalFrames（防御性线性插值），再 4× 上采样到 effectiveTotalFrames
+                const alignedF0 = (srcArr.length === totalFrames) ? srcArr : resizeF0Linear(srcArr, totalFrames);
+                if (SIFIGAN_UPSAMPLE_RATIO > 1) {
+                    effectiveF0 = new Float32Array(effectiveTotalFrames);
+                    for (let f = 0; f < totalFrames; f++) {
+                        for (let r = 0; r < SIFIGAN_UPSAMPLE_RATIO; r++) {
+                            effectiveF0[f * SIFIGAN_UPSAMPLE_RATIO + r] = alignedF0[f];
+                        }
+                    }
+                } else {
+                    effectiveF0 = alignedF0;
+                }
             } else {
                 // F0 缺失处理（简化策略）：SiFiGAN 的 f0 是 ONNX 必需输入，无法跳过；
                 // 立即报错并提示用户检查 F0 配置，不修改 vocoderType 设置（仅本次推理失败）。
@@ -841,12 +872,12 @@ class Postprocessing {
         };
 
         // 短音频（≤chunkSizeframes ≈ 20.5秒）直接一次性推理，避免分chunks开销
-        if (totalFrames <= chunkSize) {
-            const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : totalFrames;
-            const melArr = melData instanceof Float32Array ? melData : new Float32Array(melData);
+        if (effectiveTotalFrames <= chunkSize) {
+            const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : effectiveTotalFrames;
+            const melArr = effectiveMelData instanceof Float32Array ? effectiveMelData : new Float32Array(effectiveMelData);
             const paddedMel = useStaticShapes ? padFloat(melArr, vocSeqLen * MEL_DIM) : melArr;
             const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
-            const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, totalFrames);
+            const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, effectiveTotalFrames);
             let results;
             try {
                 results = await sessions.vocoder.run(vocoderInputs);
@@ -856,7 +887,7 @@ class Postprocessing {
                 // OOM / device removed：DML 显存耗尽，抛出带上下文的明确错误，
                 // 防止上层误以为合成完毕而播放空声音
                 if (isVramOOMError(runErr)) {
-                    throw new Error(`Vocoder OOM on single-chunk inference (frames=${totalFrames}): ${runErr.message}. Try reducing vocoder chunk frames in settings.`);
+                    throw new Error(`Vocoder OOM on single-chunk inference (frames=${effectiveTotalFrames}): ${runErr.message}. Try reducing vocoder chunk frames in settings.`);
                 }
                 throw runErr;
             }
@@ -893,7 +924,7 @@ class Postprocessing {
         // framePos 语义：下一个 chunk 的"新数据起始位置"（不含与前一个 chunk 的重叠区）。
         //   chunk 0:   chunkStart=0,                 chunkEnd=chunkSize,      framePos→chunkEnd
         //   chunk N:   chunkStart=framePos-overlap,  chunkEnd=chunkStart+chunkSize, framePos→chunkEnd
-        //   末尾 chunk（chunkEnd 被 totalFrames 截断）：写入后显式 break，
+        //   末尾 chunk（chunkEnd 被 effectiveTotalFrames 截断）：写入后显式 break，
         //     避免旧逻辑 framePos = chunkEnd - overlapFrames 反复回退导致死循环
         const weightSum = new Float32Array(totalSamples);
 
@@ -911,12 +942,12 @@ class Postprocessing {
         const chunkSpecs = [];
         let framePos = 0;
         let chunkIdx = 0;
-        while (framePos < totalFrames) {
+        while (framePos < effectiveTotalFrames) {
             const isFirst = chunkIdx === 0;
             const chunkStart = isFirst ? 0 : Math.max(0, framePos - overlapFrames);
-            const chunkEnd = Math.min(chunkStart + chunkSize, totalFrames);
+            const chunkEnd = Math.min(chunkStart + chunkSize, effectiveTotalFrames);
             const currentChunkFrames = chunkEnd - chunkStart;
-            const isLast = chunkEnd >= totalFrames;
+            const isLast = chunkEnd >= effectiveTotalFrames;
             chunkSpecs.push({ chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast });
             if (isLast) break;
             framePos = chunkEnd;
@@ -944,7 +975,7 @@ class Postprocessing {
             const spec = chunkSpecs[i];
             // 流式创建当前 chunk 的输入张量（不预存到 chunkSpecs）
             const chunkMel = new Float32Array(spec.currentChunkFrames * MEL_DIM);
-            chunkMel.set(melData.subarray(spec.chunkStart * MEL_DIM, spec.chunkEnd * MEL_DIM));
+            chunkMel.set(effectiveMelData.subarray(spec.chunkStart * MEL_DIM, spec.chunkEnd * MEL_DIM));
             const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : spec.currentChunkFrames;
             const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
             const melTensor = createFloatTensor(floatType, paddedChunk, [1, vocSeqLen, MEL_DIM]);
@@ -1036,7 +1067,8 @@ class Postprocessing {
         normalizePeakTo(output, totalSamples);
 
         const elapsed = performance.now() - t0;
-        console.log(`[OnnxSVSPipeline] Vocoder chunked: ${totalFrames} frames, ${totalChunkCount} chunks (serial, streaming), ${elapsed.toFixed(0)}ms`);
+        const logFrames = SIFIGAN_UPSAMPLE_RATIO > 1 ? `${effectiveTotalFrames} (${totalFrames}x${SIFIGAN_UPSAMPLE_RATIO})` : `${totalFrames}`;
+        console.log(`[OnnxSVSPipeline] Vocoder chunked: ${logFrames} frames, ${totalChunkCount} chunks (serial, streaming), ${elapsed.toFixed(0)}ms`);
         return output;
     }
 
