@@ -345,55 +345,65 @@ export function getInactiveNoteIds(notes) {
   return inactive;
 }
 
-// JP 模型训练音高范围（C3-C6，半音）。超出此范围的 MIDI 在 JP 合成时会被自动
-// 移调到此范围内，渲染时需要标注提示用户。与 index.js 的 _clampJpPitchRange 一致。
-export const JP_PITCH_MIN = 48; // C3
-export const JP_PITCH_MAX = 84; // C6
+// 各语言模型的训练音高范围（MIDI 半音）。与 index.js 的 _clampAutoShift /
+// _clampJpPitchRange 保持一致。
+// - 基础模型（多语言）: [28, 88]（E1-E6，vocoder f0 有效范围）
+//   注意: SiFiGAN vocoder 上限收紧到 84（C6），在合成时由 _clampAutoShift 处理，
+//         UI 使用更宽的 [28, 88] 作为基础模型范围（vocoder 限制是运行时设置，
+//         不属于语言训练范围）。
+// - 日语模型（JP LoRA）: [48, 84]（C3-C6，JSUT/PJS/GTSinger 训练分布）
+//   超出此范围时合成会无条件自动移调（_clampJpPitchRange 在 autoShift 和
+//   手动 pitchShift 两条路径都生效）。
+export const PITCH_RANGES = {
+  base: { min: 28, max: 88, label: '基础模型' },
+  ja:   { min: 48, max: 84, label: '日语模型' },
+};
 
 /**
- * 检测 notes 是否会走 JP 模型（纯日文歌词，无英文）。
- * 与 src/main/languageDetection.js 的 resolveLanguage 保持一致，但因 renderer
- * 使用 ES module 无法直接 require CommonJS，故在此重新实现简单判定。
+ * 检测 notes 会使用的模型语言。
+ * 与 src/main/languageDetection.js 的 resolveLanguage 保持一致：
+ * - 纯日文（无英文）→ 'ja'（JP LoRA 模型）
+ * - 含英文或无日文 → null（base 多语言模型）
+ * 因 renderer 使用 ES module 无法直接 require CommonJS，故在此重新实现。
  * @param {Array} notes
- * @returns {boolean}
+ * @returns {'ja' | null}
  */
-function _willUseJpModel(notes) {
-  if (!notes || !Array.isArray(notes)) return false;
+function _resolveModelLanguage(notes) {
+  if (!notes || !Array.isArray(notes)) return null;
   let hasJapanese = false;
   for (const note of notes) {
     const lyric = note.lyric || '';
     if (!lyric) continue;
-    // 检测日文
     if (lyric.startsWith('jp_') || lyric.includes('jp_') || /[ぁ-ゟァ-ヿ]/.test(lyric)) {
       hasJapanese = true;
       continue;
     }
-    // 检测英文（拉丁字母，jp_ 和假名不算）
     const norm = lyric.replace(/[<>]/g, '').toUpperCase();
     if (norm === 'SP' || norm === 'AP') continue;
-    if (/[a-zA-Z]/.test(lyric)) return false; // 含英文 → base 模型
+    if (/[a-zA-Z]/.test(lyric)) return null; // 含英文 → base 模型
   }
-  return hasJapanese;
+  return hasJapanese ? 'ja' : null;
 }
 
 /**
- * 计算 JP 模型音高范围外的 note id 集合。
- * 仅在 notes 会走 JP 模型时生效，超出 [JP_PITCH_MIN, JP_PITCH_MAX] 的 note 标记。
- * 注意：休止符（pitch <= 0）不标记。
+ * 计算超出当前模型训练音高范围的 note id 集合。
+ * 根据 notes 的语言自动选择 base ([28,88]) 或 JP ([48,84]) 范围。
+ * 休止符（pitch <= 0）不标记。
  * @param {Array} notes
- * @returns {Set<number>} 超出 JP 训练音高范围的 note id 集合
+ * @returns {{ outOfRangeIds: Set<number>, language: ('ja'|null), range: {min, max, label} }}
  */
-export function getJpOutOfPitchRangeNoteIds(notes) {
-  const outOfRange = new Set();
-  if (!_willUseJpModel(notes)) return outOfRange;
+export function getOutOfPitchRangeNotes(notes) {
+  const language = _resolveModelLanguage(notes);
+  const range = language === 'ja' ? PITCH_RANGES.ja : PITCH_RANGES.base;
+  const outOfRangeIds = new Set();
   for (const n of notes) {
     if (n.pitch == null) continue;
     if (n.pitch <= 0) continue; // 休止符不标记
-    if (n.pitch < JP_PITCH_MIN || n.pitch > JP_PITCH_MAX) {
-      outOfRange.add(n.id);
+    if (n.pitch < range.min || n.pitch > range.max) {
+      outOfRangeIds.add(n.id);
     }
   }
-  return outOfRange;
+  return { outOfRangeIds, language, range };
 }
 
 // 将 MIDI pitch 转为音名（用于提示文本）。
@@ -1253,7 +1263,8 @@ function _doRenderImpl(w, h) {
   const selectedNoteIds = getSelectedNoteIds();
   const currentFragment = getCurrentFragment();
   const inactiveNoteIds = getInactiveNoteIds(notes);
-  const jpOutOfRangeNoteIds = getJpOutOfPitchRangeNoteIds(notes);
+  // 按语言模型检测音高范围外 note（基础模型 [28,88] / 日语模型 [48,84]）
+  const { outOfRangeIds: oobNoteIds, range: pitchRange } = getOutOfPitchRangeNotes(notes);
 
   for (const note of notes) {
     const x = timeToX(note.start);
@@ -1265,10 +1276,10 @@ function _doRenderImpl(w, h) {
     const isSelected = selectedNoteIds.has(note.id);
     const isPitchMode = currentParamMode === 'Pitch';
     const isInactive = inactiveNoteIds.has(note.id);
-    // JP 模型音高范围外的 note 也用灰色（参考重叠 note 的视觉提示）。
-    // 注意：oob note 仍参与合成（合成时被自动移调），只是视觉上标注警告。
-    const isJpOob = jpOutOfRangeNoteIds.has(note.id);
-    const isWarned = isInactive || isJpOob;
+    // 音高范围外 note 用灰色（参考重叠 note 的视觉提示）。
+    // 注意：oob note 仍参与合成（JP 会自动移调，base 可能影响质量），只是视觉上标注警告。
+    const isOob = oobNoteIds.has(note.id);
+    const isWarned = isInactive || isOob;
     ctx.fillStyle = isWarned ? c.fgDisabled : c.accent;
     ctx.globalAlpha = isSelected ? 1.0 : (isPitchMode ? 0.4 : 0.8);
     ctx.fillRect(x, y, nw, nh);
@@ -1288,7 +1299,7 @@ function _doRenderImpl(w, h) {
     ctx.fillStyle = c.selectionBg;
     ctx.fillRect(x + nw - 3, y + 2, 2, nh - 4);
 
-    // 警告 note 右上角标注感叹号（重叠未激活 / JP 音高超范围）
+    // 警告 note 右上角标注感叹号（重叠未激活 / 音高超范围）
     if (isWarned) {
       ctx.fillStyle = c.warning;
       ctx.font = 'bold 12px sans-serif';
@@ -1298,9 +1309,9 @@ function _doRenderImpl(w, h) {
     }
   }
 
-  // 鼠标悬停在警告 note 上时显示提示（重叠未激活 / JP 音高超范围）
+  // 鼠标悬停在警告 note 上时显示提示（重叠未激活 / 音高超范围）
   const hoveredId = getHoveredNoteId();
-  if (hoveredId !== null && (inactiveNoteIds.has(hoveredId) || jpOutOfRangeNoteIds.has(hoveredId))) {
+  if (hoveredId !== null && (inactiveNoteIds.has(hoveredId) || oobNoteIds.has(hoveredId))) {
     const hoveredNote = notes.find(n => n.id === hoveredId);
     if (hoveredNote) {
       const hx = timeToX(hoveredNote.start);
@@ -1310,11 +1321,17 @@ function _doRenderImpl(w, h) {
       if (inactiveNoteIds.has(hoveredId)) {
         tipText = '此 MIDI 与另一同时刻 MIDI 重叠，未被激活';
       } else {
-        // JP 音高超范围：给出具体音名和训练范围
+        // 音高超范围：给出具体音名、模型语言和训练范围
         const pitchName = _pitchToName(hoveredNote.pitch);
-        const rangeLow = _pitchToName(JP_PITCH_MIN);
-        const rangeHigh = _pitchToName(JP_PITCH_MAX);
-        tipText = `此 MIDI (${pitchName}) 超出日语模型训练音高范围 [${rangeLow}, ${rangeHigh}]，合成时将自动移调`;
+        const rangeLow = _pitchToName(pitchRange.min);
+        const rangeHigh = _pitchToName(pitchRange.max);
+        // JP 模型会无条件自动移调（_clampJpPitchRange）；base 模型仅在 autoShift
+        // 路径下通过 _clampAutoShift 调整，手动 pitchShift 不保证，措辞需区分。
+        if (pitchRange === PITCH_RANGES.ja) {
+          tipText = `此 MIDI (${pitchName}) 超出${pitchRange.label}训练音高范围 [${rangeLow}, ${rangeHigh}]，合成时将自动移调`;
+        } else {
+          tipText = `此 MIDI (${pitchName}) 超出${pitchRange.label}有效音高范围 [${rangeLow}, ${rangeHigh}]，可能影响合成质量`;
+        }
       }
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'left';
