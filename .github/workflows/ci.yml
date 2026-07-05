@@ -55,22 +55,36 @@ jobs:
           SHORT_SHA="${GITHUB_SHA::7}"
           DATE=$(date -u +%Y%m%d)
           if [ "$BRANCH" = "release" ]; then
-            # Query latest EA release for last version number (not committed; no conflicts on PR)
+            # Tag is now the version number itself (semver X.Y.Z). Find the highest
+            # existing semver tag across all releases and bump the patch component.
+            # Falls back to package.json version on the very first release.
             LAST_VERSION=""
             if curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/tags/EA" > /tmp/ea_release.json 2>/dev/null; then
-              LAST_VERSION=$(node -e "const fs=require('fs');try{const r=JSON.parse(fs.readFileSync('/tmp/ea_release.json','utf8'));console.log(r.name||'')}catch{console.log('')}")
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" > /tmp/releases.json 2>/dev/null; then
+              LAST_VERSION=$(node -e "
+                const fs=require('fs');
+                try {
+                  const releases = JSON.parse(fs.readFileSync('/tmp/releases.json','utf8'));
+                  const semverRe = /^\d+\.\d+\.\d+$/;
+                  const versions = releases
+                    .map(r => r.tag_name || '')
+                    .filter(t => semverRe.test(t))
+                    .map(v => v.split('.').map(Number))
+                    .sort((a,b) => a[0]-b[0] || a[1]-b[1] || a[2]-b[2]);
+                  console.log(versions.length ? versions[versions.length-1].join('.') : '');
+                } catch { console.log(''); }
+              ")
             fi
             if [ -z "$LAST_VERSION" ]; then
               LAST_VERSION=$(node -p "require('./package.json').version")
-              echo "[ci] No previous EA release found, using package.json version: $LAST_VERSION"
+              echo "[ci] No previous semver release found, using package.json version: $LAST_VERSION"
             else
-              echo "[ci] Last EA release version: $LAST_VERSION"
+              echo "[ci] Last semver release tag: $LAST_VERSION"
             fi
             IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_VERSION"
             NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
             BUILD_VERSION="$NEW_VERSION"
-            TAG="EA"
+            TAG="$NEW_VERSION"
             PRERELEASE="false"
             IS_RELEASE="true"
             MAKE_LATEST="true"

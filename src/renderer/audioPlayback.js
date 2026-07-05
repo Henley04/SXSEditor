@@ -2,7 +2,7 @@ import { state, dom, trackManager } from './state.js';
 import { SAMPLE_RATE } from './constants.js';
 import { t } from '../i18n/index.js';
 import { showAlertDialog } from '../alertDialog.js';
-import { convertF0DataToPitchCurve, computePitchCurveF0 } from './f0Utils.js';
+import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, clearPlayheadLine } from './timelineRenderer.js';
 
@@ -78,88 +78,25 @@ export async function playAll() {
     const singerMap = new Map();
     singers.forEach(s => singerMap.set(s.id, s));
 
-    const fragmentsBySinger = new Map();
-    fragments.forEach(f => {
-      if (!fragmentsBySinger.has(f.singerId)) {
-        fragmentsBySinger.set(f.singerId, []);
-      }
-      fragmentsBySinger.get(f.singerId).push(f);
-    });
+    // 收集所有有 notes 的 fragments，按 startTime 排序后逐个合成。
+    // 复用分片编辑器的逻辑：每个 fragment 用相对 notes（clippedNotes）
+    // + 该 fragment 自己的 pitchCurve（buildFragmentPitchCurveF0），
+    // 确保与分片编辑器播放结果完全一致。
+    const allFragments = fragments
+      .filter(f => f.notes && f.notes.length > 0)
+      .sort((a, b) => a.startTime - b.startTime);
 
-    const singerIds = [...fragmentsBySinger.keys()];
-    if (singerIds.length === 0) {
+    if (allFragments.length === 0) {
       showAlertDialog(t('main.noFragmentsToPlay'));
       return;
     }
 
     let globalFirstStart = Infinity;
     let globalLastEnd = 0;
-    const singerDataMap = new Map();
-
-    for (const singerId of singerIds) {
-      const singer = singerMap.get(singerId);
-      const singerFragments = fragmentsBySinger.get(singerId)
-        .sort((a, b) => a.startTime - b.startTime);
-
-      const singerNotes = [];
-      for (const fragment of singerFragments) {
-        if (fragment.notes && fragment.notes.length > 0) {
-          const fragEnd = fragment.startTime + fragment.duration;
-          const convertedNotes = [];
-          for (const note of fragment.notes) {
-            const noteStart = note.start + fragment.startTime;
-            const noteEnd = noteStart + note.duration;
-            if (noteStart >= fragEnd) continue;
-            if (noteEnd > fragEnd) {
-              convertedNotes.push({
-                ...note,
-                start: noteStart,
-                duration: fragEnd - noteStart,
-              });
-            } else {
-              convertedNotes.push({
-                ...note,
-                start: noteStart,
-                duration: note.duration,
-              });
-            }
-          }
-          singerNotes.push(...convertedNotes);
-
-          const fragmentEnd = fragEnd;
-          if (fragment.startTime < globalFirstStart) globalFirstStart = fragment.startTime;
-          if (fragmentEnd > globalLastEnd) globalLastEnd = fragmentEnd;
-        }
-      }
-
-      if (singerNotes.length === 0) continue;
-
-      singerNotes.sort((a, b) => a.start - b.start);
-
-      const pitchCurveF0 = computePitchCurveF0(singerFragments, singerNotes, state.project.bpm);
-
-      let singerPitchCurveF0 = pitchCurveF0;
-      if (!singerPitchCurveF0 && singer?.f0Data && singer.f0Data.length > 0) {
-        const lastNote = singerNotes[singerNotes.length - 1];
-        const totalBeatsAll = lastNote.start + lastNote.duration;
-        const totalSecondsAll = (totalBeatsAll / state.project.bpm) * 60;
-        const converted = convertF0DataToPitchCurve(singer.f0Data, totalSecondsAll);
-        if (converted) {
-          singerPitchCurveF0 = Array.from(converted);
-        }
-      }
-
-      singerDataMap.set(singerId, {
-        notes: singerNotes,
-        singer,
-        pitchCurveF0: singerPitchCurveF0,
-        refAudioWavBuffer: singer?.wavBuffer || null,
-      });
-    }
-
-    if (singerDataMap.size === 0) {
-      showAlertDialog(t('main.noNotesToPlay'));
-      return;
+    for (const f of allFragments) {
+      if (f.startTime < globalFirstStart) globalFirstStart = f.startTime;
+      const fragEnd = f.startTime + f.duration;
+      if (fragEnd > globalLastEnd) globalLastEnd = fragEnd;
     }
 
     await ensurePipelineInitialized();
@@ -167,19 +104,39 @@ export async function playAll() {
     const inferenceOpts = getPreviewInferenceOptions();
 
     const totalSeconds = ((globalLastEnd - globalFirstStart) / state.project.bpm) * 60;
-    const totalSingers = singerDataMap.size;
-    let completedSingers = 0;
+    const totalFrags = allFragments.length;
+    let completedFrags = 0;
 
     const audioResults = [];
 
-    for (const [singerId, data] of singerDataMap) {
+    for (const fragment of allFragments) {
+      const singer = singerMap.get(fragment.singerId);
+      if (!singer) { completedFrags++; continue; }
+
+      // clippedNotes：相对 fragment 的 notes，截断到 fragment.duration（与分片编辑器 getClippedNotes 一致）
+      const fragDuration = fragment.duration;
+      const clippedNotes = [];
+      for (const note of fragment.notes) {
+        if (note.start >= fragDuration) continue;
+        const noteEnd = note.start + note.duration;
+        if (noteEnd > fragDuration) {
+          clippedNotes.push({ ...note, duration: fragDuration - note.start });
+        } else {
+          clippedNotes.push(note);
+        }
+      }
+      if (clippedNotes.length === 0) { completedFrags++; continue; }
+
+      // 该 fragment 的 pitchCurveF0（与分片编辑器 buildPitchCurveF0Data 等价）
+      const pitchCurveF0 = buildFragmentPitchCurveF0(fragment, clippedNotes, state.project.bpm);
+
       const audioData = await window.electronAPI.synthesizeSVS({
-        notes: data.notes,
+        notes: clippedNotes,
         bpm: state.project.bpm,
         options: {
           f0Envelope: null,
-          pitchCurveF0: data.pitchCurveF0,
-          refAudioWavBuffer: data.refAudioWavBuffer,
+          pitchCurveF0,
+          refAudioWavBuffer: singer?.wavBuffer || null,
           autoShift: dom.autoShiftCheck.checked,
           nSteps: inferenceOpts.nSteps,
           cfg: inferenceOpts.cfg,
@@ -187,9 +144,8 @@ export async function playAll() {
         },
       });
 
-      const firstNoteStart = data.notes[0].start;
-      const lastNote = data.notes[data.notes.length - 1];
-      const expectedSamples = Math.ceil(((lastNote.start + lastNote.duration) / state.project.bpm) * 60 * SAMPLE_RATE);
+      // padding 到 fragment 时长，确保混音时长对齐
+      const expectedSamples = Math.ceil((fragDuration / state.project.bpm) * 60 * SAMPLE_RATE);
       let paddedAudio = audioData;
       if (audioData.length < expectedSamples) {
         paddedAudio = new Float32Array(expectedSamples);
@@ -197,11 +153,11 @@ export async function playAll() {
       }
       audioResults.push({
         audioData: paddedAudio,
-        startTimeBeat: firstNoteStart,
+        startTimeBeat: fragment.startTime,
       });
 
-      completedSingers++;
-      const overallProgress = (completedSingers / totalSingers) * 100;
+      completedFrags++;
+      const overallProgress = (completedFrags / totalFrags) * 100;
       const currentSeconds = (overallProgress / 100) * totalSeconds;
       dom.timeDisplay.textContent = t('main.synthesizingShort') + ': ' + formatTime(currentSeconds) + ' / ' + formatTime(totalSeconds);
     }
@@ -548,47 +504,18 @@ export async function exportAll() {
 
   try {
     const singers = trackManager.getSingers();
-    const allNotesBySinger = {};
+    const singerMap = new Map();
+    singers.forEach(s => singerMap.set(s.id, s));
 
-    for (const singer of singers) {
-      const singerFragments = fragments.filter(f => f.singerId === singer.id);
-      if (singerFragments.length === 0) continue;
+    // 收集所有有 notes 的 fragments，按 startTime 排序后逐个合成。
+    // 与 playAll 一致：每个 fragment 用相对 notes（clippedNotes）
+    // + 该 fragment 自己的 pitchCurve（buildFragmentPitchCurveF0），
+    // 确保与分片编辑器播放/导出结果完全一致。
+    const allFragments = fragments
+      .filter(f => f.notes && f.notes.length > 0)
+      .sort((a, b) => a.startTime - b.startTime);
 
-      const notes = [];
-      for (const fragment of singerFragments) {
-        if (fragment.notes && fragment.notes.length > 0) {
-          const fragEnd = fragment.startTime + fragment.duration;
-          for (const note of fragment.notes) {
-            const noteStart = note.start + fragment.startTime;
-            const noteEnd = noteStart + note.duration;
-            if (noteStart >= fragEnd) continue;
-            if (noteEnd > fragEnd) {
-              notes.push({
-                ...note,
-                start: noteStart,
-                duration: fragEnd - noteStart,
-              });
-            } else {
-              notes.push({
-                ...note,
-                start: noteStart,
-                duration: note.duration,
-              });
-            }
-          }
-        }
-      }
-
-      if (notes.length > 0) {
-        allNotesBySinger[singer.id] = {
-          notes: notes.sort((a, b) => a.start - b.start),
-          singer,
-        };
-      }
-    }
-
-    const singerIds = Object.keys(allNotesBySinger);
-    if (singerIds.length === 0) {
+    if (allFragments.length === 0) {
       showAlertDialog(t('main.noNotesToExport'));
       return;
     }
@@ -601,30 +528,32 @@ export async function exportAll() {
     let audioResults = [];
     let maxDuration = 0;
 
-    for (const singerId of singerIds) {
-      const { notes, singer } = allNotesBySinger[singerId];
+    for (const fragment of allFragments) {
+      const singer = singerMap.get(fragment.singerId);
+      if (!singer) continue;
 
-      const refAudioWavBuffer = singer.wavBuffer || null;
-
-      const singerFragments2 = fragments.filter(f => f.singerId === singerId);
-      const exportPitchCurveF0 = computePitchCurveF0(singerFragments2, notes, state.project.bpm);
-
-      let finalPitchCurveF0 = exportPitchCurveF0;
-      if (!finalPitchCurveF0 && singer.f0Data && singer.f0Data.length > 0) {
-        const exportTotalBeats = notes.reduce((max, note) => Math.max(max, note.start + note.duration), 0);
-        const totalSecondsExport = (exportTotalBeats / state.project.bpm) * 60;
-        const converted = convertF0DataToPitchCurve(singer.f0Data, totalSecondsExport);
-        if (converted) {
-          finalPitchCurveF0 = converted;
+      // clippedNotes：相对 fragment 的 notes，截断到 fragment.duration（与分片编辑器 getClippedNotes 一致）
+      const fragDuration = fragment.duration;
+      const clippedNotes = [];
+      for (const note of fragment.notes) {
+        if (note.start >= fragDuration) continue;
+        const noteEnd = note.start + note.duration;
+        if (noteEnd > fragDuration) {
+          clippedNotes.push({ ...note, duration: fragDuration - note.start });
+        } else {
+          clippedNotes.push(note);
         }
       }
+      if (clippedNotes.length === 0) continue;
+
+      const pitchCurveF0 = buildFragmentPitchCurveF0(fragment, clippedNotes, state.project.bpm);
 
       const audioData = await window.electronAPI.synthesizeSVS({
-        notes,
+        notes: clippedNotes,
         bpm: state.project.bpm,
         options: {
-          refAudioWavBuffer,
-          pitchCurveF0: finalPitchCurveF0,
+          refAudioWavBuffer: singer?.wavBuffer || null,
+          pitchCurveF0,
           autoShift: dom.autoShiftCheck.checked,
           nSteps: exportInferenceOpts.nSteps,
           cfg: exportInferenceOpts.cfg,
@@ -632,22 +561,20 @@ export async function exportAll() {
         },
       });
 
-      const firstNoteStart = notes[0].start;
-      const lastNote = notes[notes.length - 1];
-      const endBeat = lastNote.start + lastNote.duration;
-      maxDuration = Math.max(maxDuration, (endBeat / state.project.bpm) * 60);
-
-      const expectedSamples = Math.ceil((endBeat / state.project.bpm) * 60 * SAMPLE_RATE);
+      // padding 到 fragment 时长，确保混音时长对齐
+      const expectedSamples = Math.ceil((fragDuration / state.project.bpm) * 60 * SAMPLE_RATE);
       let paddedAudio = audioData;
       if (audioData.length < expectedSamples) {
         paddedAudio = new Float32Array(expectedSamples);
         paddedAudio.set(audioData);
       }
-
       audioResults.push({
         audioData: paddedAudio,
-        startTimeBeat: firstNoteStart,
+        startTimeBeat: fragment.startTime,
       });
+
+      const fragEndSec = (fragDuration / state.project.bpm) * 60;
+      if (fragEndSec > maxDuration) maxDuration = fragEndSec;
     }
 
     dom.timeDisplay.textContent = t('main.encodingWav');
