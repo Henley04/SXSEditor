@@ -564,17 +564,15 @@ export async function exportAll() {
             if (noteStart >= fragEnd) continue;
             if (noteEnd > fragEnd) {
               notes.push({
+                ...note,
                 start: noteStart,
                 duration: fragEnd - noteStart,
-                pitch: note.pitch,
-                lyric: note.lyric,
               });
             } else {
               notes.push({
+                ...note,
                 start: noteStart,
                 duration: note.duration,
-                pitch: note.pitch,
-                lyric: note.lyric,
               });
             }
           }
