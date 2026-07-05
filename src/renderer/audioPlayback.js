@@ -112,15 +112,13 @@ export async function playAll() {
             if (noteStart >= fragEnd) continue;
             if (noteEnd > fragEnd) {
               convertedNotes.push({
-                lyric: note.lyric || '',
-                pitch: note.pitch,
+                ...note,
                 start: noteStart,
                 duration: fragEnd - noteStart,
               });
             } else {
               convertedNotes.push({
-                lyric: note.lyric || '',
-                pitch: note.pitch,
+                ...note,
                 start: noteStart,
                 duration: note.duration,
               });
