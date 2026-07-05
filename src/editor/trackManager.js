@@ -57,6 +57,10 @@ function createPitchCurve() {
 
 function createFragment(data = {}) {
   const id = data.id ?? generateId();
+  const envelopes = data.envelopes ?? {
+    volume: createEnvelope(1),
+    pan: createEnvelope(0),
+  };
   return {
     id,
     singerId: data.singerId ?? null,
@@ -65,10 +69,7 @@ function createFragment(data = {}) {
     name: data.name ?? `分片 ${id}`,
     color: data.color ?? TRACK_COLORS[_hashCode(String(data.singerId ?? id)) % TRACK_COLORS.length],
     notes: data.notes ?? [],
-    envelopes: {
-      volume: data.volume ?? createEnvelope(1),
-      pan: data.pan ?? createEnvelope(0),
-    },
+    envelopes,
     pitchCurve: data.pitchCurve ?? createPitchCurve(),
   };
 }
@@ -129,8 +130,9 @@ class TrackManager {
 
   addFragment(data = {}) {
     const singer = this.getSinger(data.singerId);
-    const color = singer ? singer.color : TRACK_COLORS[0];
-    const fragment = createFragment({ ...data, color });
+    const defaultColor = singer ? singer.color : TRACK_COLORS[0];
+    // 保留已存在的 color（如从 .sxsproj 加载时），否则使用歌手颜色
+    const fragment = createFragment({ ...data, color: data.color ?? defaultColor });
     this.fragments.push(fragment);
     return fragment;
   }

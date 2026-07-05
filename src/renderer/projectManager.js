@@ -459,6 +459,11 @@ export async function loadProject() {
         properties: ['openFile'],
       });
       if (!result.canceled && result.filePaths.length > 0) {
+        // 加载新工程前关闭所有分片编辑器窗口，避免旧窗口持有已失效的 fragment id
+        // 导致 onFragmentSaved 的 find(f => f.id === fragmentId) 失败、编辑静默丢失
+        if (window.electronAPI?.closeAllFragmentEditors) {
+          await window.electronAPI.closeAllFragmentEditors();
+        }
         const data = await window.electronAPI.readFile(result.filePaths[0]);
         const obj = JSON.parse(data);
         if (!obj || typeof obj !== 'object') throw new Error('Invalid project file');
@@ -526,7 +531,9 @@ export async function loadProject() {
         }
         if (obj.fragments) {
           trackManager.fragments.length = 0;
-          for (const f of obj.fragments) trackManager.fragments.push(f);
+          // 使用 addFragment 规范化每个分片（补齐 envelopes/pitchCurve 等字段），
+          // 避免 raw JSON push 导致后续访问 fragment.envelopes 等字段时为 undefined
+          for (const f of obj.fragments) trackManager.addFragment(f);
         }
         state.currentProjectFilePath = result.filePaths[0];
         history.clear();

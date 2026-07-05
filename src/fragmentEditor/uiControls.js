@@ -179,18 +179,9 @@ export function setupUiControls() {
     });
   }
 
-  document.getElementById('btn-save').addEventListener('click', () => {
-    const autoSaveTimer = getAutoSaveTimer();
-    if (autoSaveTimer) {
-      clearTimeout(autoSaveTimer);
-      setAutoSaveTimer(null);
-    }
-    saveFragmentData();
-    const btnSave = document.getElementById('btn-save');
-    const origText = btnSave.textContent;
-    btnSave.textContent = t('fragment.saved');
-    setTimeout(() => { btnSave.textContent = origText; }, 1500);
-  });
+  // 保存按钮已移除：分片编辑器现在采用 500ms 防抖自动保存（scheduleAutoSave），
+  // 编辑后自动同步到主页面并触发主页面 autoSaveProject()，无需手动保存。
+  // Ctrl+S 快捷键仍保留为"立即保存"（取消防抖立即推送），见 eventHandlers.js。
 
   document.getElementById('btn-close').addEventListener('click', () => {
     stopFragmentPlayback();
