@@ -113,6 +113,10 @@ export function createFloatTensor(type, data, dims) {
 /**
  * 从模型输出中提取 Float32Array
  * 使用批量转换替代逐元素转换
+ *
+ * 注意：本函数返回的 Float32Array 是独立拷贝（float16 路径）或对底层 buffer 的视图
+ * （float32 路径）。调用方在 disposeTensor(outputTensor) 之前应确保已拷贝所需数据。
+ * 对于 float32 输出，若需要在释放张量后继续使用数据，请调用 .slice() 获取独立副本。
  */
 export function outputToFloat32(tensor) {
     if (tensor.type === 'float16') {
@@ -122,6 +126,27 @@ export function outputToFloat32(tensor) {
         return f32;
     }
     return tensor.data instanceof Float32Array ? tensor.data : new Float32Array(tensor.data);
+}
+
+/**
+ * 释放 onnxruntime-web Tensor 的底层资源。
+ *
+ * WebNN/NPU 路径下，每次 session.run() 产生的输入/输出张量若不显式释放，
+ * 会累积在 NPU/GPU 显存导致后续推理 OOM 或 NPU 编译失败。
+ * 与 DML 路径 (pipeline/utils.js:disposeTensor) 对齐，使用 try/catch 包裹
+ * 防止重复 dispose 抛错。
+ *
+ * 注意：onnxruntime-web 的 Tensor 对 ORT 1.17+ 提供 dispose() 方法。
+ * 对于早期版本或 WASM 后端，dispose 可能是 no-op，但调用本身是安全的。
+ * @param {import('onnxruntime-web').Tensor|null|undefined} tensor
+ */
+export function disposeTensor(tensor) {
+    if (!tensor) return;
+    try {
+        if (typeof tensor.dispose === 'function') {
+            tensor.dispose();
+        }
+    } catch (_) { /* 忽略重复 dispose 或已释放 */ }
 }
 
 /**

@@ -31,6 +31,7 @@ function requestWebNNOnce({
     onResponse,
     timeoutMessage = 'WebNN IPC timeout',
     onProgress,
+    onChunkAudio,
 }) {
     return new Promise((resolve, reject) => {
         const requestId = payload.requestId ||
@@ -39,11 +40,13 @@ function requestWebNNOnce({
         let settled = false;
         const responseChannel = `${responsePrefix}:${requestId}`;
         const progressChannel = `${responsePrefix}:progress:${requestId}`;
+        const chunkChannel = `${responsePrefix}:chunk:${requestId}`;
 
         const cleanup = () => {
             clearTimeout(timeoutHandle);
             ipcMain.removeListener(responseChannel, responseHandler);
             if (onProgress) ipcMain.removeListener(progressChannel, progressHandler);
+            if (onChunkAudio) ipcMain.removeListener(chunkChannel, chunkHandler);
         };
 
         const responseHandler = (_event, result) => {
@@ -67,6 +70,15 @@ function requestWebNNOnce({
             } catch (_) { /* 进度回调失败不应影响主流程 */ }
         };
 
+        // chunk 流式音频回调：渲染进程 vocoder 每完成一个 chunk 即推送
+        const chunkHandler = (_event, data) => {
+            try {
+                if (onChunkAudio && data && data.audio) {
+                    onChunkAudio(data);
+                }
+            } catch (_) { /* chunk 回调失败不应影响主流程 */ }
+        };
+
         const timeoutHandle = setTimeout(() => {
             if (settled) return;
             settled = true;
@@ -77,6 +89,7 @@ function requestWebNNOnce({
         // handleOnce 只触发一次；超时后若响应到达，cleanup 已移除监听器，无副作用
         ipcMain.handleOnce(responseChannel, responseHandler);
         if (onProgress) ipcMain.on(progressChannel, progressHandler);
+        if (onChunkAudio) ipcMain.on(chunkChannel, chunkHandler);
 
         try {
             webContents.send(requestChannel, { ...payload, requestId });
@@ -113,7 +126,7 @@ function requestModelLoad(webContents, modelId, modelPath, options, timeoutMessa
     });
 }
 
-/** 便捷工厂：合成主流程请求（含进度） */
+/** 便捷工厂：合成主流程请求（含进度 + 流式 chunk 音频） */
 function requestSynthesis(webContents, params, onProgress, opts = {}) {
     return requestWebNNOnce({
         webContents,
@@ -123,6 +136,7 @@ function requestSynthesis(webContents, params, onProgress, opts = {}) {
         timeoutMs: opts.timeoutMs || IPC_TIMEOUT_SYNTHESIS,
         timeoutMessage: opts.timeoutMessage || 'WebNN synthesis timeout',
         onProgress,
+        onChunkAudio: opts.onChunkAudio,
         onResponse: (result) => result && result.error
             ? { ok: false, error: new Error(result.error) }
             : { ok: true, value: result },

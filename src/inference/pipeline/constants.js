@@ -2,6 +2,7 @@
 const {
     SAMPLE_RATE,
     HOP_SIZE,
+    SIFIGAN_HOP_SIZE,
     MEL_DIM,
     EMBED_DIM,
     COND_DIM,
@@ -26,10 +27,6 @@ const SEGMENT_MIN_SEC = 15;
 const SEGMENT_MAX_SEC = 30;
 const SEGMENT_OVERLAP_SEC = 2;
 const MAX_SAFE_FRAMES = 40000;
-// 最小合成帧数：单 note 短分片时 totalFrames 可能只有几帧，diffusion 对极短 mel
-// 无法生成有意义结果。Pad 到此帧数（SP 静音帧），合成后截取有效部分音频。
-// 30 帧 = 0.6s（50Hz 帧率），兼顾模型感受野与计算开销。
-const MIN_SYNTH_FRAMES = 30;
 
 // WebNN IPC 超时常量（毫秒）
 // 单次模型推理：NPU 编译 + 推理的合理上限
@@ -52,7 +49,9 @@ const ONNX_MODEL_FILES = [
 ];
 
 // SiFiGAN 可选替代声码器模型文件
+// FP16 变体优先 (sifigan_vocoder_dml_fp16.onnx), FP32 DML 优化版作为回退
 const SIFIGAN_MODEL_FILES = [
+    'sifigan_vocoder_dml_fp16.onnx',
     'sifigan_vocoder_dml.onnx',
 ];
 
@@ -63,7 +62,8 @@ const SIFIGAN_STATS_FILE = 'sifigan_stats.joblib';
 const MODEL_SIZES = {
     diff_step: 846.27 * 1024 * 1024,
     vocoder: 495.42 * 1024 * 1024,
-    sifigan: 611.42 * 1024 * 1024,
+    sifigan: 611.42 * 1024 * 1024,        // FP32 DML 优化版 (含 .data)
+    sifigan_fp16: 23.1 * 1024 * 1024,     // FP16 量化版 (含 .data, ~1.99x 压缩)
     note_text_encoder: 2.93 * 1024 * 1024,
     note_pitch_encoder: 0.13 * 1024 * 1024,
     note_type_encoder: 0.13 * 1024 * 1024,
@@ -116,6 +116,7 @@ for (let i = 0; i < N_FFT; i++) {
 module.exports = {
     SAMPLE_RATE,
     HOP_SIZE,
+    SIFIGAN_HOP_SIZE,
     MEL_DIM,
     EMBED_DIM,
     COND_DIM,
@@ -137,7 +138,6 @@ module.exports = {
     SEGMENT_MAX_SEC,
     SEGMENT_OVERLAP_SEC,
     MAX_SAFE_FRAMES,
-    MIN_SYNTH_FRAMES,
     IPC_TIMEOUT_INFERENCE,
     IPC_TIMEOUT_MODEL_LOAD,
     IPC_TIMEOUT_SYNTHESIS,

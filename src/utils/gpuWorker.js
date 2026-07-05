@@ -1,52 +1,5 @@
 const { parentPort } = require('node:worker_threads');
-
-/**
- * 统一设备分类函数 — 与 nativeSvsPipeline.js 中的 classifyDevice 保持同步
- */
-function classifyDevice(name, vramBytes = 0, dmlDiscreteFlag = undefined) {
-    const n = (name || '').toLowerCase();
-
-    const npuKeywords = [
-        'npu', 'neural processing', 'neural compute',
-        'intel ai boost', 'intel neural', 'intel npu',
-        'amd xdna', 'amd ryzen ai', 'amd ai engine',
-        'qualcomm hexagon', 'qcom npu', 'hexagon npu',
-        'snapdragon neural', 'mediatek apu', 'rockchip npu',
-    ];
-    for (const kw of npuKeywords) {
-        if (n.includes(kw)) return 'npu';
-    }
-
-    const discreteGpuKeywords = [
-        { includes: ['nvidia'] }, { includes: ['geforce'] },
-        { includes: ['rtx'] }, { includes: ['gtx'] }, { includes: ['quadro'] },
-        { includes: ['radeon', 'rx'] }, { includes: ['radeon', 'pro'] },
-        { includes: ['radeon', 'instinct'] },
-        { includes: ['amd', 'rx '] }, { includes: ['amd', 'pro w'] }, { includes: ['amd', 'pro v'] },
-    ];
-    for (const rule of discreteGpuKeywords) {
-        if (rule.includes.every(kw => n.includes(kw))) return 'discrete-gpu';
-    }
-    if (n.includes('intel') && n.includes('arc') && /\barc\s*a\d/i.test(n)) return 'discrete-gpu';
-
-    const integratedGpuKeywords = [
-        { includes: ['intel', 'uhd'] }, { includes: ['intel', 'iris'] },
-        { includes: ['intel', 'xe'] }, { includes: ['intel', 'hd graphics'] },
-    ];
-    for (const rule of integratedGpuKeywords) {
-        if (rule.includes.every(kw => n.includes(kw))) return 'integrated-gpu';
-    }
-    if (n.includes('radeon') && !n.includes('rx') && !n.includes('pro') && !n.includes('instinct')) return 'integrated-gpu';
-    if (n.includes('microsoft') && n.includes('basic')) return 'integrated-gpu';
-
-    if (dmlDiscreteFlag === true) return 'discrete-gpu';
-    if (dmlDiscreteFlag === false) return 'integrated-gpu';
-
-    if (vramBytes > 0 && vramBytes >= 512 * 1024 * 1024) return 'discrete-gpu';
-    if (vramBytes > 0) return 'integrated-gpu';
-
-    return 'cpu';
-}
+const { classifyDevice } = require('./deviceClassifier');
 
 /**
  * Phase 1: WMI 快速查询 (~400ms) — 获取 GPU 名称和驱动版本

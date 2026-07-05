@@ -237,49 +237,104 @@ function outputToNotesPoly(
       amplitude: amplitude,
     });
   }
-  if (melodiaTrick === true) {
-    while (globalMax(remainingEnergy) > inferredFrameThresh) {
+  if (melodiaTrick === true && nFrames > 0 && remainingEnergy[0].length > 0) {
+    // B5: Flatten remainingEnergy to 1D Float32Array + per-column max tracking.
+    // Reduces each iteration from O(R*C) [globalMax + inline double for-loop]
+    // to O(C + affectedCols*R) for max-finding. Note extraction logic
+    // (threshold check, region growing, amplitude) is unchanged.
+    //
+    // Tie-breaking: original scanned row-major with `>` (first max in row-major
+    // order). Per-column max scans column-major, so ties prefer smaller column
+    // index then smaller row. Exact ties are impossible with float NN outputs.
+    const numCols = remainingEnergy[0].length;
+    const flatEnergy = new Float32Array(nFrames * numCols);
+    const colMaxRow = new Int32Array(numCols);
+    const colMaxValue = new Float32Array(numCols);
+    for (let c = 0; c < numCols; c++) {
+      colMaxValue[c] = -1;
+      colMaxRow[c] = 0;
+    }
+    for (let r = 0; r < nFrames; r++) {
+      const rowOffset = r * numCols;
+      const row = remainingEnergy[r];
+      for (let c = 0; c < numCols; c++) {
+        const v = row[c];
+        flatEnergy[rowOffset + c] = v;
+        if (v > colMaxValue[c]) {
+          colMaxValue[c] = v;
+          colMaxRow[c] = r;
+        }
+      }
+    }
+
+    while (true) {
+      // Find global max via per-column max (O(C) instead of O(R*C))
       let maxVal = -1;
       let iMid = 0;
       let freqIdx = 0;
-      for (let r = 0; r < remainingEnergy.length; r++) {
-        for (let c = 0; c < remainingEnergy[r].length; c++) {
-          if (remainingEnergy[r][c] > maxVal) {
-            maxVal = remainingEnergy[r][c];
-            iMid = r;
-            freqIdx = c;
-          }
+      for (let c = 0; c < numCols; c++) {
+        if (colMaxValue[c] > maxVal) {
+          maxVal = colMaxValue[c];
+          iMid = colMaxRow[c];
+          freqIdx = c;
         }
       }
-      remainingEnergy[iMid][freqIdx] = 0;
+      if (maxVal <= inferredFrameThresh) break;
+
+      flatEnergy[iMid * numCols + freqIdx] = 0;
       let i = iMid + 1;
       let k = 0;
       while (i < nFrames - 1 && k < energyTolerance) {
-        if (remainingEnergy[i][freqIdx] < inferredFrameThresh) {
+        if (flatEnergy[i * numCols + freqIdx] < inferredFrameThresh) {
           k += 1;
         } else {
           k = 0;
         }
-        remainingEnergy[i][freqIdx] = 0;
-        if (freqIdx < MAX_FREQ_IDX) remainingEnergy[i][freqIdx + 1] = 0;
-        if (freqIdx > 0) remainingEnergy[i][freqIdx - 1] = 0;
+        flatEnergy[i * numCols + freqIdx] = 0;
+        if (freqIdx < MAX_FREQ_IDX) flatEnergy[i * numCols + freqIdx + 1] = 0;
+        if (freqIdx > 0) flatEnergy[i * numCols + freqIdx - 1] = 0;
         i += 1;
       }
       const iEnd = i - 1 - k;
+      const fwdZeroEnd = i - 1;
       i = iMid - 1;
       k = 0;
       while (i > 0 && k < energyTolerance) {
-        if (remainingEnergy[i][freqIdx] < inferredFrameThresh) {
+        if (flatEnergy[i * numCols + freqIdx] < inferredFrameThresh) {
           k += 1;
         } else {
           k = 0;
         }
-        remainingEnergy[i][freqIdx] = 0;
-        if (freqIdx < MAX_FREQ_IDX) remainingEnergy[i][freqIdx + 1] = 0;
-        if (freqIdx > 0) remainingEnergy[i][freqIdx - 1] = 0;
+        flatEnergy[i * numCols + freqIdx] = 0;
+        if (freqIdx < MAX_FREQ_IDX) flatEnergy[i * numCols + freqIdx + 1] = 0;
+        if (freqIdx > 0) flatEnergy[i * numCols + freqIdx - 1] = 0;
         i -= 1;
       }
       const iStart = i + 1 + k;
+      const bwdZeroStart = i + 1;
+
+      // Update colMax for affected columns (freqIdx-1, freqIdx, freqIdx+1).
+      // Only rescan if the previous max row was in the zeroed range.
+      const zeroStart = Math.min(iMid, bwdZeroStart);
+      const zeroEnd = Math.max(iMid, fwdZeroEnd);
+      for (let dc = -1; dc <= 1; dc++) {
+        const c = freqIdx + dc;
+        if (c < 0 || c >= numCols) continue;
+        if (colMaxRow[c] >= zeroStart && colMaxRow[c] <= zeroEnd) {
+          let newMax = -1;
+          let newRow = 0;
+          for (let r = 0; r < nFrames; r++) {
+            const v = flatEnergy[r * numCols + c];
+            if (v > newMax) {
+              newMax = v;
+              newRow = r;
+            }
+          }
+          colMaxValue[c] = newMax;
+          colMaxRow[c] = newRow;
+        }
+      }
+
       if (iStart < 0 || iEnd >= nFrames) continue;
       let frameSum = 0;
       for (let j = iStart; j < iEnd; j++) {
@@ -296,6 +351,27 @@ function outputToNotesPoly(
     }
   }
   return noteEvents;
+}
+
+/**
+ * Convert a 2D tensor to an array of Float32Array rows (subarray views into
+ * a single flat TypedArray returned by dataSync()).
+ *
+ * This replaces tensor.arraySync() which builds nested JS arrays (slow, many
+ * small allocations). dataSync() returns a flat Float32Array in a single
+ * bulk transfer; subarray views provide O(1) row access with zero copying.
+ *
+ * The returned rows are VIEWS into the underlying buffer — modifications to a
+ * row mutate the buffer. Callers that need a copy should use row.slice().
+ */
+function tensorTo2DRows(tensor, numCols) {
+  const flatData = tensor.dataSync();
+  const numRows = Math.floor(flatData.length / numCols);
+  const rows = new Array(numRows);
+  for (let r = 0; r < numRows; r++) {
+    rows[r] = flatData.subarray(r * numCols, (r + 1) * numCols);
+  }
+  return rows;
 }
 
 function midiToHz(midi) {
@@ -417,20 +493,20 @@ class BasicPitchDetector {
     try {
       await tf.setBackend('wasm');
       await tf.ready();
-      console.log('[BasicPitchDetector] TF.js 后端已设置为 WASM');
+      console.log('[BasicPitchDetector] TF.js backend set to WASM');
     } catch (e) {
-      console.warn('[BasicPitchDetector] WASM 后端初始化失败，回退到 CPU 后端:', e.message);
+      console.warn('[BasicPitchDetector] WASM backend init failed, falling back to CPU backend:', e.message);
       await tf.setBackend('cpu');
       await tf.ready();
     }
 
     const modelPath = path.join(this.modelDir, 'basic_pitch_model');
-    console.log('[BasicPitchDetector] 尝试加载模型:', modelPath);
+    console.log('[BasicPitchDetector] attempting to load model:', modelPath);
 
     const fs = require('fs');
     const modelJsonPath = path.join(modelPath, 'model.json');
     if (!fs.existsSync(modelJsonPath)) {
-      const errMsg = `[BasicPitchDetector] 模型文件不存在: ${modelJsonPath}`;
+      const errMsg = `[BasicPitchDetector] model file does not exist: ${modelJsonPath}`;
       console.error(errMsg);
       const err = new Error(errMsg);
       err.code = 'MODEL_NOT_FOUND';
@@ -442,10 +518,10 @@ class BasicPitchDetector {
     try {
       this.model = await tf.loadGraphModel(`${baseUrl}/model.json`);
       this.initialized = true;
-      console.log('[BasicPitchDetector] 模型加载成功');
+      console.log('[BasicPitchDetector] model loaded successfully');
       return true;
     } catch (err) {
-      console.error('[BasicPitchDetector] 模型加载失败:', err.message);
+      console.error('[BasicPitchDetector] model load failed:', err.message);
       if (this._server) { this._server.close(); this._server = null; this._serverPort = null; }
       err.modelPath = modelJsonPath;
       throw err;
@@ -516,7 +592,7 @@ class BasicPitchDetector {
 
     try {
       for (let i = 0; i < batchSize; ++i) {
-        console.log(`[BasicPitchDetector] 处理帧: ${i + 1}/${batchSize}`);
+        console.log(`[BasicPitchDetector] processing frame: ${i + 1}/${batchSize}`);
 
         const singleBatch = tf.slice(reshapedInput, [i, 0, 0], [1, -1, -1]);
         const model = await this.model;
@@ -543,17 +619,17 @@ class BasicPitchDetector {
           const slicedOnsets = unwrappedResultingOnsets.slice([0, 0], [framesToOutput, -1]);
           const slicedContours = unwrappedResultingContours.slice([0, 0], [framesToOutput, -1]);
 
-          allFrames.push(slicedFrames.arraySync());
-          allOnsets.push(slicedOnsets.arraySync());
-          allContours.push(slicedContours.arraySync());
+          allFrames.push(tensorTo2DRows(slicedFrames, N_FREQ_BINS_CONTOURS));
+          allOnsets.push(tensorTo2DRows(slicedOnsets, N_FREQ_BINS_CONTOURS));
+          allContours.push(tensorTo2DRows(slicedContours, N_FREQ_BINS_CONTOURS));
 
           slicedFrames.dispose();
           slicedOnsets.dispose();
           slicedContours.dispose();
         } else {
-          allFrames.push(unwrappedResultingFrames.arraySync());
-          allOnsets.push(unwrappedResultingOnsets.arraySync());
-          allContours.push(unwrappedResultingContours.arraySync());
+          allFrames.push(tensorTo2DRows(unwrappedResultingFrames, N_FREQ_BINS_CONTOURS));
+          allOnsets.push(tensorTo2DRows(unwrappedResultingOnsets, N_FREQ_BINS_CONTOURS));
+          allContours.push(tensorTo2DRows(unwrappedResultingContours, N_FREQ_BINS_CONTOURS));
         }
 
         calculatedFrames += calculatedFramesTmp;

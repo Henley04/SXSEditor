@@ -75,9 +75,11 @@ class AudioSegmentation {
 
         while (segStart < totalBeats - 0.01) {
             let segEnd = segStart + maxBeats;
+            let reachedEnd = false;
 
             if (segEnd >= totalBeats - 0.01) {
                 segEnd = totalBeats;
+                reachedEnd = true;
             } else {
                 let bestBoundary = segEnd;
                 let bestDist = Infinity;
@@ -113,6 +115,12 @@ class AudioSegmentation {
                     endBeat: segEnd,
                 });
             }
+
+            // 当末段被夹到 totalBeats 时必须立即终止循环，否则下一轮
+            // segStart = totalBeats - overlapBeats 仍 < totalBeats - 0.01，
+            // 会无限重复处理最后一段并把 segment 对象不断 push 进数组，
+            // 最终耗尽内存（OOM）。overlap 仅用于中间段的衔接，末段无后继。
+            if (reachedEnd) break;
 
             segStart = segEnd - overlapBeats;
             if (segStart >= totalBeats - 0.01) break;

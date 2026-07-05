@@ -46,7 +46,7 @@ function registerAudioIpc() {
       ]);
       return { success: true, devices, isAvailable };
     } catch (err) {
-      console.error('[Main] 获取音频设备失败:', err);
+      console.error('[Main] Failed to get audio devices:', err);
       return { success: false, devices: [], isAvailable: false, error: err.message };
     }
   });
@@ -67,7 +67,7 @@ function registerAudioIpc() {
 
       return { ...result };
     } catch (err) {
-      console.error('[Main] 音频播放失败:', err);
+      console.error('[Main] Audio playback failed:', err);
       return { success: false, error: err.message };
     }
   });
@@ -78,7 +78,7 @@ function registerAudioIpc() {
       await manager.stop();
       return { success: true };
     } catch (err) {
-      console.error('[Main] 音频停止失败:', err);
+      console.error('[Main] Audio stop failed:', err);
       return { success: false, error: err.message };
     }
   });

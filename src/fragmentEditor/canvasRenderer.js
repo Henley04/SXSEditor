@@ -36,6 +36,7 @@ import {
   getSampleRate,
   getParamPanelCollapsed,
   getParamPanelMode,
+  getDragMode,
 } from './state.js';
 
 const canvas = document.getElementById('piano-roll');
@@ -55,6 +56,19 @@ export function dpr() {
   return window.devicePixelRatio || 1;
 }
 
+/**
+ * 缓存的 parent clientHeight，在 _doRender 顶部读取一次，供 pitchToY/yToPitch 等
+ * helper 在同一帧内复用，避免每个音符绘制时重复触发 layout（性能审查 #1 高优先级）。
+ * _renderInFlight > 0 时使用缓存值，否则回退到实时 DOM 读取（用于渲染外的 hit-test 等）。
+ */
+let _cachedParentHeight = 0;
+let _renderInFlight = 0;
+
+function _getParentHeight() {
+  if (_renderInFlight > 0 && _cachedParentHeight > 0) return _cachedParentHeight;
+  return canvas.parentElement.clientHeight;
+}
+
 export function timeToX(beats) {
   return beats * BEAT_WIDTH * getZoomX() - getScrollX();
 }
@@ -66,7 +80,7 @@ export function xToTime(x) {
 export function pitchToY(pitch) {
   const pianoAreaTop = HEADER_HEIGHT;
   const showParamArea = isParamAreaVisible();
-  const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
+  const pianoAreaBottom = _getParentHeight() - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   const maxPitch = 127;
   return pianoAreaTop + (maxPitch - pitch) * NOTE_HEIGHT - getScrollY();
 }
@@ -74,7 +88,7 @@ export function pitchToY(pitch) {
 export function yToPitch(y) {
   const pianoAreaTop = HEADER_HEIGHT;
   const showParamArea = isParamAreaVisible();
-  const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
+  const pianoAreaBottom = _getParentHeight() - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   if (y >= pianoAreaBottom) return 0;
   if (y <= pianoAreaTop) return 127;
   const maxPitch = 127;
@@ -84,7 +98,7 @@ export function yToPitch(y) {
 export function yToPitchContinuous(y) {
   const pianoAreaTop = HEADER_HEIGHT;
   const showParamArea = isParamAreaVisible();
-  const pianoAreaBottom = canvas.parentElement.clientHeight - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
+  const pianoAreaBottom = _getParentHeight() - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   if (y >= pianoAreaBottom) return 0;
   if (y <= pianoAreaTop) return 127;
   const maxPitch = 127;
@@ -112,11 +126,11 @@ export function findNoteAt(x, y) {
 }
 
 export function _getParamCurveAreaTop() {
-  return canvas.parentElement.clientHeight - PARAM_CURVE_HEIGHT;
+  return _getParentHeight() - PARAM_CURVE_HEIGHT;
 }
 
 export function _getParamCurveAreaBottom() {
-  return canvas.parentElement.clientHeight;
+  return _getParentHeight();
 }
 
 export function _getParamCurveYRange() {
@@ -304,6 +318,29 @@ export function hasNoteOverlap(excludeId, pitch, start, end) {
 }
 
 /**
+ * 多选拖动专用重叠检测：排除所有选中的 notes。
+ * 在多选拖动场景中，选中 notes 会一起移动，相对位置保持不变，
+ * 因此检测新位置与未选中 notes 的重叠时需要排除所有选中 notes。
+ * 否则横向移动时当前 note 的新位置会与相邻选中 notes 的旧位置发生"假重叠"，
+ * 导致拖动被错误 blocked（"卡住"现象）。
+ * @param {Set<number>} excludeIds - 所有选中 notes 的 id 集合
+ * @param {number} pitch
+ * @param {number} start
+ * @param {number} end
+ * @returns {boolean}
+ */
+export function hasNoteOverlapMulti(excludeIds, pitch, start, end) {
+  const notes = getNotes();
+  for (const n of notes) {
+    if (excludeIds.has(n.id)) continue;
+    if (n.pitch !== pitch) continue;
+    const nEnd = n.start + n.duration;
+    if (start < nEnd && end > n.start) return true;
+  }
+  return false;
+}
+
+/**
  * 计算未激活（被遮挡）的 note id 集合。
  * 规则：同一时间点只能有一个 note 被激活，按数组顺序（先后顺序）决定激活的 note。
  * 后面的 note 如果与前面任意已激活 note 时间重叠（跨 pitch），则标记为未激活。
@@ -332,6 +369,74 @@ export function getInactiveNoteIds(notes) {
   return inactive;
 }
 
+// 各语言模型的训练音高范围（MIDI 半音）。与 index.js 的 _clampAutoShift /
+// _clampJpPitchRange 保持一致。
+// - 基础模型（多语言）: [28, 88]（E1-E6，vocoder f0 有效范围）
+//   注意: SiFiGAN vocoder 上限收紧到 84（C6），在合成时由 _clampAutoShift 处理，
+//         UI 使用更宽的 [28, 88] 作为基础模型范围（vocoder 限制是运行时设置，
+//         不属于语言训练范围）。
+// - 日语模型（JP LoRA）: [48, 84]（C3-C6，JSUT/PJS/GTSinger 训练分布）
+//   超出此范围时合成会无条件自动移调（_clampJpPitchRange 在 autoShift 和
+//   手动 pitchShift 两条路径都生效）。
+export const PITCH_RANGES = {
+  base: { min: 28, max: 88, label: '基础模型' },
+  ja:   { min: 48, max: 84, label: '日语模型' },
+};
+
+/**
+ * 检测 notes 会使用的模型语言。
+ * 与 src/main/languageDetection.js 的 resolveLanguage 保持一致：
+ * - 纯日文（无英文）→ 'ja'（JP LoRA 模型）
+ * - 含英文或无日文 → null（base 多语言模型）
+ * 因 renderer 使用 ES module 无法直接 require CommonJS，故在此重新实现。
+ * @param {Array} notes
+ * @returns {'ja' | null}
+ */
+function _resolveModelLanguage(notes) {
+  if (!notes || !Array.isArray(notes)) return null;
+  let hasJapanese = false;
+  for (const note of notes) {
+    const lyric = note.lyric || '';
+    if (!lyric) continue;
+    if (lyric.startsWith('jp_') || lyric.includes('jp_') || /[ぁ-ゟァ-ヿ]/.test(lyric)) {
+      hasJapanese = true;
+      continue;
+    }
+    const norm = lyric.replace(/[<>]/g, '').toUpperCase();
+    if (norm === 'SP' || norm === 'AP') continue;
+    if (/[a-zA-Z]/.test(lyric)) return null; // 含英文 → base 模型
+  }
+  return hasJapanese ? 'ja' : null;
+}
+
+/**
+ * 计算超出当前模型训练音高范围的 note id 集合。
+ * 根据 notes 的语言自动选择 base ([28,88]) 或 JP ([48,84]) 范围。
+ * 休止符（pitch <= 0）不标记。
+ * @param {Array} notes
+ * @returns {{ outOfRangeIds: Set<number>, language: ('ja'|null), range: {min, max, label} }}
+ */
+export function getOutOfPitchRangeNotes(notes) {
+  const language = _resolveModelLanguage(notes);
+  const range = language === 'ja' ? PITCH_RANGES.ja : PITCH_RANGES.base;
+  const outOfRangeIds = new Set();
+  for (const n of notes) {
+    if (n.pitch == null) continue;
+    if (n.pitch <= 0) continue; // 休止符不标记
+    if (n.pitch < range.min || n.pitch > range.max) {
+      outOfRangeIds.add(n.id);
+    }
+  }
+  return { outOfRangeIds, language, range };
+}
+
+// 将 MIDI pitch 转为音名（用于提示文本）。
+function _pitchToName(pitch) {
+  const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+  const octave = Math.floor(pitch / 12) - 1;
+  return NAMES[pitch % 12] + octave;
+}
+
 export function clampNotePosition(noteId, pitch, start, duration) {
   const notes = getNotes();
   const end = start + duration;
@@ -353,7 +458,10 @@ export function clampNotePosition(noteId, pitch, start, duration) {
 export function generateAutoPitchPoints() {
   const notes = getNotes();
   if (notes.length === 0) return [];
-  const sortedNotes = [...notes].sort((a, b) => a.start - b.start);
+  // 未激活的重叠 note 不作为音高曲线锚点
+  const inactiveIds = getInactiveNoteIds(notes);
+  const activeNotes = inactiveIds.size > 0 ? notes.filter(n => !inactiveIds.has(n.id)) : notes;
+  const sortedNotes = [...activeNotes].sort((a, b) => a.start - b.start);
   const points = [];
   for (let i = 0; i < sortedNotes.length; i++) {
     const note = sortedNotes[i];
@@ -586,7 +694,7 @@ export async function resolvePhonemesFromPipeline() {
       if (changed) render();
     }
   } catch (err) {
-    console.warn('音素解析失败:', err);
+    console.warn('Phoneme parse failed:', err);
   }
 }
 
@@ -616,12 +724,20 @@ export function getPhonemeAdjustments(note) {
   // phonemeAdjustments 纳入哈希）从 K1(无 adjustments) 变为 K2(默认值)，
   // 导致打开音素菜单后再次播放触发不必要的二次推理。用户实际拖拽/锁定音素时，
   // 由 handlePhonemeMouseDown 显式提交保存，自定义音素排列仍可正常生效。
+  //
+  // 默认 durationRatio 按 phoneme.weight 比例分配（英文音素由 main 进程
+  // resolveLyricToPhonemes 用 en_phoneme_durations.json 统计表附带），
+  // 使 UI 默认分布呈现"元音长、辅音短"，与推理时的 _allocateByStats 趋势一致。
+  // weight 缺失或全为 0 时（如日语/中文/未解析 fallback），回退到平均分布。
+  const weights = phonemes.map(ph => (typeof ph.weight === 'number' && ph.weight > 0) ? ph.weight : 0);
+  const weightSum = weights.reduce((s, v) => s + v, 0);
+  const hasWeights = weightSum > 0;
   const adjustments = phonemes.map((ph, i) => ({
     id: i,
     name: ph.name,
     display: ph.display,
     offsetRatio: 0,
-    durationRatio: 1 / phonemes.length,
+    durationRatio: hasWeights ? weights[i] / weightSum : 1 / phonemes.length,
     volumePoints: [
       { t: 0, v: 0.3 },
       { t: 0.1, v: 1.0 },
@@ -692,6 +808,7 @@ export function resizeCanvases() {
   pianoKeysCtx.setTransform(dpr(), 0, 0, dpr(), 0, 0);
   ctx.setTransform(dpr(), 0, 0, dpr(), 0, 0);
 
+  _staticCacheDirty = true;
   render();
 }
 
@@ -752,8 +869,11 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
   const selectedNoteIds = getSelectedNoteIds();
   const selectedPhonemeNoteId = getSelectedPhonemeNoteId();
   const selectedPhonemeIndex = getSelectedPhonemeIndex();
+  const inactiveNoteIds = getInactiveNoteIds(notes);
 
   const visibleNotes = notes.filter(note => {
+    // 未激活的重叠 note 不显示音素
+    if (inactiveNoteIds.has(note.id)) return false;
     const nx = timeToX(note.start);
     const nw = note.duration * BEAT_WIDTH * getZoomX();
     return nx + nw >= 0 && nx <= w;
@@ -918,7 +1038,10 @@ function renderPitchCurve(c) {
   const w = canvas.parentElement.clientWidth;
   const startBeat = xToTime(0);
   const endBeat = xToTime(w);
-  const notes = getNotes();
+  const allNotes = getNotes();
+  // 未激活的重叠 note 不在音高曲线中绘制锚点
+  const inactiveNoteIds = getInactiveNoteIds(allNotes);
+  const notes = inactiveNoteIds.size > 0 ? allNotes.filter(n => !inactiveNoteIds.has(n.id)) : allNotes;
   const selectedAnchorIndices = getSelectedAnchorIndices();
   const pitchDragAnchorIdx = getPitchDragAnchorIdx();
   const currentBrushStroke = getCurrentBrushStroke();
@@ -1009,6 +1132,17 @@ function renderPitchCurve(c) {
 
     for (let i = 0; i < pitchCurve.anchorPoints.length; i++) {
       const ap = pitchCurve.anchorPoints[i];
+      // 落在未激活 note 时段内的锚点不显示
+      if (inactiveNoteIds.size > 0) {
+        let inInactive = false;
+        for (const n of allNotes) {
+          if (inactiveNoteIds.has(n.id) && ap.time >= n.start && ap.time < n.start + n.duration) {
+            inInactive = true;
+            break;
+          }
+        }
+        if (inInactive) continue;
+      }
       const px = timeToX(ap.time);
       const py = pitchToY(ap.pitch);
       const isSelected = selectedAnchorIndices.has(i) || i === pitchDragAnchorIdx;
@@ -1052,71 +1186,133 @@ export function render() {
   if (_renderRaf) return;
   _renderRaf = requestAnimationFrame(() => { _renderRaf = 0; _doRender(); });
 }
+
+// Static layer cache (background + grid lines)
+let _staticCacheCanvas = null;
+let _staticCacheKey = '';
+let _staticCacheDirty = true;
+
+export function invalidateStaticCache() {
+  _staticCacheDirty = true;
+}
+
 function _doRender() {
   const w = canvas.parentElement.clientWidth;
   const h = canvas.parentElement.clientHeight;
+  // 缓存 clientHeight 供本帧所有 helper 复用，避免 O(N) 次 layout 读取（性能审查 #1）
+  _cachedParentHeight = h;
+  _renderInFlight++;
+  try {
+    _doRenderImpl(w, h);
+  } finally {
+    _renderInFlight--;
+  }
+}
+function _doRenderImpl(w, h) {
   const c = getCanvasColors();
-  ctx.clearRect(0, 0, w, h);
-
-  ctx.fillStyle = c.bgElevated;
-  ctx.fillRect(0, 0, w, h);
+  const dprVal = dpr();
+  const pixelW = Math.floor(w * dprVal);
+  const pixelH = Math.floor(h * dprVal);
 
   const currentProject = getCurrentProject();
   const beatsPerMeasure = currentProject ? currentProject.timeSignature[0] : 4;
-  const startBeat = xToTime(0);
-  const endBeat = xToTime(w);
-
-  const currentParamMode = getCurrentParamMode();
   const showParamArea = isParamAreaVisible();
   const pianoAreaBottom = showParamArea ? _getParamCurveAreaTop() : h;
 
-  ctx.lineWidth = 0.5;
-  for (let b = Math.floor(startBeat); b <= Math.ceil(endBeat); b++) {
-    const x = timeToX(b);
-    if (x < 0) continue;
-    const isMeasure = (b % beatsPerMeasure === 0);
-    ctx.strokeStyle = isMeasure ? c.gridLineMeasure : c.gridLineMajor;
-    ctx.beginPath();
-    ctx.moveTo(x, HEADER_HEIGHT);
-    ctx.lineTo(x, pianoAreaBottom);
-    ctx.stroke();
-    if (isMeasure) {
-      ctx.fillStyle = c.timeText;
-      ctx.font = '11px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.fillText(String(Math.floor(b / beatsPerMeasure) + 1), x, HEADER_HEIGHT - 6);
+  // Build cache key from state that affects the static layer
+  const staticCacheKey = `${w}|${h}|${dprVal}|${getScrollX()}|${getScrollY()}|${getZoomX()}|${beatsPerMeasure}|${showParamArea}|${pianoAreaBottom}|${c.bgElevated}|${c.gridLineMeasure}|${c.gridLineMajor}|${c.gridLineMinor}|${c.timeText}`;
+
+  if (_staticCacheDirty || _staticCacheKey !== staticCacheKey ||
+      !_staticCacheCanvas || _staticCacheCanvas.width !== pixelW || _staticCacheCanvas.height !== pixelH) {
+    // Rebuild static layer (background + grid lines)
+    if (!_staticCacheCanvas || _staticCacheCanvas.width !== pixelW || _staticCacheCanvas.height !== pixelH) {
+      _staticCacheCanvas = document.createElement('canvas');
+      _staticCacheCanvas.width = pixelW;
+      _staticCacheCanvas.height = pixelH;
     }
+    const cacheCtx = _staticCacheCanvas.getContext('2d');
+    cacheCtx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
+    cacheCtx.clearRect(0, 0, w, h);
+
+    // Background
+    cacheCtx.fillStyle = c.bgElevated;
+    cacheCtx.fillRect(0, 0, w, h);
+
+    // Vertical grid lines (beats)
+    const startBeat = xToTime(0);
+    const endBeat = xToTime(w);
+    cacheCtx.lineWidth = 0.5;
+    for (let b = Math.floor(startBeat); b <= Math.ceil(endBeat); b++) {
+      const x = timeToX(b);
+      if (x < 0) continue;
+      const isMeasure = (b % beatsPerMeasure === 0);
+      cacheCtx.strokeStyle = isMeasure ? c.gridLineMeasure : c.gridLineMajor;
+      cacheCtx.beginPath();
+      cacheCtx.moveTo(x, HEADER_HEIGHT);
+      cacheCtx.lineTo(x, pianoAreaBottom);
+      cacheCtx.stroke();
+      if (isMeasure) {
+        cacheCtx.fillStyle = c.timeText;
+        cacheCtx.font = '11px sans-serif';
+        cacheCtx.textAlign = 'center';
+        cacheCtx.fillText(String(Math.floor(b / beatsPerMeasure) + 1), x, HEADER_HEIGHT - 6);
+      }
+    }
+
+    // Horizontal grid lines (pitches)
+    const startPitch = yToPitch(h);
+    const endPitch = yToPitch(HEADER_HEIGHT);
+    for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
+      const y = pitchToY(p);
+      const isBlack = BLACK_KEYS.has(p % 12);
+      cacheCtx.strokeStyle = isBlack ? c.gridLineMajor : c.gridLineMinor;
+      cacheCtx.beginPath();
+      cacheCtx.moveTo(0, y);
+      cacheCtx.lineTo(w, y);
+      cacheCtx.stroke();
+    }
+
+    _staticCacheKey = staticCacheKey;
+    _staticCacheDirty = false;
   }
 
-  const startPitch = yToPitch(h);
-  const endPitch = yToPitch(HEADER_HEIGHT);
-  for (let p = Math.max(0, startPitch); p <= Math.min(127, endPitch); p++) {
-    const y = pitchToY(p);
-    const isBlack = BLACK_KEYS.has(p % 12);
-    ctx.strokeStyle = isBlack ? c.gridLineMajor : c.gridLineMinor;
-    ctx.beginPath();
-    ctx.moveTo(0, y);
-    ctx.lineTo(w, y);
-    ctx.stroke();
-  }
+  // Draw cached static layer
+  ctx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
+  ctx.clearRect(0, 0, w, h);
+  ctx.drawImage(_staticCacheCanvas, 0, 0, w, h);
+
+  const currentParamMode = getCurrentParamMode();
 
   const notes = getNotes();
   const selectedNoteIds = getSelectedNoteIds();
   const currentFragment = getCurrentFragment();
-  const inactiveNoteIds = getInactiveNoteIds(notes);
+  // 拖拽中跳过无效 note 检测（O(n²)），保持帧率不因碰撞检测而掉帧
+  const isDragging = getDragMode() !== null;
+  const inactiveNoteIds = isDragging ? new Set() : getInactiveNoteIds(notes);
+  // 按语言模型检测音高范围外 note（基础模型 [28,88] / 日语模型 [48,84]）
+  const { outOfRangeIds: oobNoteIds, range: pitchRange } = getOutOfPitchRangeNotes(notes);
+
+  // 预计算本帧常量，避免每 note 重复 getZoomX/getScrollX 函数调用
+  const zoomX = getZoomX();
+  const scrollX = getScrollX();
+  const scrollY = getScrollY();
+  const beatToPixel = BEAT_WIDTH * zoomX;
 
   for (const note of notes) {
-    const x = timeToX(note.start);
+    const x = note.start * beatToPixel - scrollX;
     const y = pitchToY(note.pitch);
-    const nw = note.duration * BEAT_WIDTH * getZoomX();
+    const nw = note.duration * beatToPixel;
     const nh = NOTE_HEIGHT;
     if (x + nw < 0 || x > w) continue;
 
     const isSelected = selectedNoteIds.has(note.id);
     const isPitchMode = currentParamMode === 'Pitch';
     const isInactive = inactiveNoteIds.has(note.id);
-    // 未激活的重叠 note 用灰色，否则用主题色
-    ctx.fillStyle = isInactive ? c.fgDisabled : c.accent;
+    // 音高范围外 note 用灰色（参考重叠 note 的视觉提示）。
+    // 注意：oob note 仍参与合成（JP 会自动移调，base 可能影响质量），只是视觉上标注警告。
+    const isOob = oobNoteIds.has(note.id);
+    const isWarned = isInactive || isOob;
+    ctx.fillStyle = isWarned ? c.fgDisabled : c.accent;
     ctx.globalAlpha = isSelected ? 1.0 : (isPitchMode ? 0.4 : 0.8);
     ctx.fillRect(x, y, nw, nh);
     ctx.globalAlpha = 1.0;
@@ -1135,8 +1331,8 @@ function _doRender() {
     ctx.fillStyle = c.selectionBg;
     ctx.fillRect(x + nw - 3, y + 2, 2, nh - 4);
 
-    // 未激活 note 右上角标注感叹号
-    if (isInactive) {
+    // 警告 note 右上角标注感叹号（重叠未激活 / 音高超范围）
+    if (isWarned) {
       ctx.fillStyle = c.warning;
       ctx.font = 'bold 12px sans-serif';
       ctx.textAlign = 'right';
@@ -1145,15 +1341,30 @@ function _doRender() {
     }
   }
 
-  // 鼠标悬停在未激活 note 上时显示提示
+  // 鼠标悬停在警告 note 上时显示提示（重叠未激活 / 音高超范围）
   const hoveredId = getHoveredNoteId();
-  if (hoveredId !== null && inactiveNoteIds.has(hoveredId)) {
+  if (hoveredId !== null && (inactiveNoteIds.has(hoveredId) || oobNoteIds.has(hoveredId))) {
     const hoveredNote = notes.find(n => n.id === hoveredId);
     if (hoveredNote) {
       const hx = timeToX(hoveredNote.start);
       const hy = pitchToY(hoveredNote.pitch);
       const hw = hoveredNote.duration * BEAT_WIDTH * getZoomX();
-      const tipText = '此 MIDI 与另一同时刻 MIDI 重叠，未被激活';
+      let tipText;
+      if (inactiveNoteIds.has(hoveredId)) {
+        tipText = '此 MIDI 与另一同时刻 MIDI 重叠，未被激活';
+      } else {
+        // 音高超范围：给出具体音名、模型语言和训练范围
+        const pitchName = _pitchToName(hoveredNote.pitch);
+        const rangeLow = _pitchToName(pitchRange.min);
+        const rangeHigh = _pitchToName(pitchRange.max);
+        // JP 模型会无条件自动移调（_clampJpPitchRange）；base 模型仅在 autoShift
+        // 路径下通过 _clampAutoShift 调整，手动 pitchShift 不保证，措辞需区分。
+        if (pitchRange === PITCH_RANGES.ja) {
+          tipText = `此 MIDI (${pitchName}) 超出${pitchRange.label}训练音高范围 [${rangeLow}, ${rangeHigh}]，合成时将自动移调`;
+        } else {
+          tipText = `此 MIDI (${pitchName}) 超出${pitchRange.label}有效音高范围 [${rangeLow}, ${rangeHigh}]，可能影响合成质量`;
+        }
+      }
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'top';
@@ -1346,6 +1557,7 @@ function updateInlineInputPosition() {
 if (typeof window !== 'undefined') {
   window.addEventListener('theme:changed', () => {
     invalidateCanvasThemeCache();
+    _staticCacheDirty = true;
     render();
   });
 }

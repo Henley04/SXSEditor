@@ -28,7 +28,7 @@ OUTPUT_PATH = os.path.join(MODEL_DIR, 'vocoder_dml.onnx')
 def inspect_model(model_path):
     """检查模型结构，找出所有 DML 不兼容的节点。"""
     print(f"\n{'='*60}")
-    print(f"检查模型: {model_path}")
+    print(f"Inspect model: {model_path}")
     print(f"{'='*60}")
 
     model = onnx.load(model_path)
@@ -51,16 +51,16 @@ def inspect_model(model_path):
                 'outputs': list(node.output),
             })
 
-    print(f"  节点总数: {len(graph.node)}")
-    print(f"  算子统计: {op_counts}")
+    print(f"  Total nodes: {len(graph.node)}")
+    print(f"  Op stats: {op_counts}")
     if problematic:
-        print(f"  DML 不兼容节点:")
+        print(f"  DML incompatible nodes:")
         for p in problematic:
             print(f"    - {p['name']}: {p['op']}(stride={p['stride']})")
-            print(f"      输入: {p['inputs']}")
-            print(f"      输出: {p['outputs']}")
+            print(f"      Inputs: {p['inputs']}")
+            print(f"      Outputs: {p['outputs']}")
     else:
-        print(f"  未发现 DML 不兼容节点")
+        print(f"  No DML incompatible nodes found")
 
     return model, problematic
 
@@ -94,7 +94,7 @@ def fix_conv_transpose(model, ct_info):
             break
 
     if ct_node is None:
-        print("  未找到 ConvTranspose 节点")
+        print("  ConvTranspose node not found")
         return False
 
     # 获取 ConvTranspose 属性
@@ -122,7 +122,7 @@ def fix_conv_transpose(model, ct_info):
     need_slice = K < stride
     p_right = max(K - stride, 0)
 
-    print(f"  Conv1D 替换: pads=[{p_left}, {p_right}], need_slice={need_slice}")
+    print(f"  Conv1D replacement: pads=[{p_left}, {p_right}], need_slice={need_slice}")
 
     inp = ct_node.input[0]
     out = ct_node.output[0]
@@ -246,7 +246,7 @@ def fix_conv_transpose(model, ct_info):
     for i, n in enumerate(nodes):
         graph.node.insert(ct_idx + i, n)
 
-    print(f"  替换 ConvTranspose 为 {len(nodes)} 个 DML 兼容节点")
+    print(f"  Replaced ConvTranspose with {len(nodes)} DML-compatible nodes")
     return True
 
 
@@ -255,15 +255,15 @@ def test_with_dml(model_path, input_frames=10):
     import onnxruntime as ort
 
     print(f"\n{'='*60}")
-    print(f"DML 推理测试: {os.path.basename(model_path)}")
+    print(f"DML inference test: {os.path.basename(model_path)}")
     print(f"{'='*60}")
 
     try:
         sess = ort.InferenceSession(model_path, providers=['DmlExecutionProvider', 'CPUExecutionProvider'])
         active_providers = sess.get_providers()
         dml_active = 'DmlExecutionProvider' in active_providers
-        print(f"  活跃 EP: {active_providers}")
-        print(f"  DML 状态: {'✅ 活跃' if dml_active else '❌ 未激活 (回退 CPU)'}")
+        print(f"  Active EP: {active_providers}")
+        print(f"  DML status: {'active' if dml_active else 'inactive (fallback to CPU)'}")
 
         # 构造测试输入
         mel_dim = None
@@ -283,13 +283,13 @@ def test_with_dml(model_path, input_frames=10):
         mel_data = np.random.randn(1, input_frames, mel_dim).astype(np.float32) * 0.01
         results = sess.run(None, {'mel': mel_data})
 
-        print(f"  推理成功! 输出形状: {[r.shape for r in results]}")
-        print(f"  输出范围: [{results[0].min():.6f}, {results[0].max():.6f}]")
+        print(f"  Inference succeeded! Output shapes: {[r.shape for r in results]}")
+        print(f"  Output range: [{results[0].min():.6f}, {results[0].max():.6f}]")
 
         return dml_active
 
     except Exception as e:
-        print(f"  ❌ DML 推理失败: {str(e)[:300]}")
+        print(f"  [FAIL] DML inference failed: {str(e)[:300]}")
         return False
 
 
@@ -297,7 +297,7 @@ def test_with_cpu(model_path, input_frames=10):
     """使用 CPU 测试模型推理，作为参考。"""
     import onnxruntime as ort
 
-    print(f"\n  CPU 参考推理...")
+    print(f"\n  CPU reference inference...")
 
     try:
         sess = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
@@ -318,11 +318,11 @@ def test_with_cpu(model_path, input_frames=10):
         mel_data = np.random.randn(1, input_frames, mel_dim).astype(np.float32) * 0.01
         results = sess.run(None, {'mel': mel_data})
 
-        print(f"  CPU 推理成功! 输出形状: {[r.shape for r in results]}")
+        print(f"  CPU inference succeeded! Output shapes: {[r.shape for r in results]}")
         return results[0]
 
     except Exception as e:
-        print(f"  ❌ CPU 推理失败: {str(e)[:200]}")
+        print(f"  [FAIL] CPU inference failed: {str(e)[:200]}")
         return None
 
 
@@ -331,7 +331,7 @@ def compare_outputs(original_path, fixed_path, input_frames=50):
     import onnxruntime as ort
 
     print(f"\n{'='*60}")
-    print(f"输出对比测试 (输入 {input_frames} 帧)")
+    print(f"Output comparison test (input {input_frames} frames)")
     print(f"{'='*60}")
 
     np.random.seed(42)
@@ -342,23 +342,23 @@ def compare_outputs(original_path, fixed_path, input_frames=50):
     try:
         sess_orig = ort.InferenceSession(original_path, providers=['CPUExecutionProvider'])
         result_orig = sess_orig.run(None, {'mel': mel_data})[0]
-        print(f"  原始模型输出: shape={result_orig.shape}, range=[{result_orig.min():.6f}, {result_orig.max():.6f}]")
+        print(f"  Original model output: shape={result_orig.shape}, range=[{result_orig.min():.6f}, {result_orig.max():.6f}]")
     except Exception as e:
-        print(f"  ❌ 原始模型推理失败: {str(e)[:200]}")
+        print(f"  [FAIL] Original model inference failed: {str(e)[:200]}")
         return False
 
     # 修复后模型 (CPU)
     try:
         sess_fixed = ort.InferenceSession(fixed_path, providers=['CPUExecutionProvider'])
         result_fixed = sess_fixed.run(None, {'mel': mel_data})[0]
-        print(f"  修复模型输出: shape={result_fixed.shape}, range=[{result_fixed.min():.6f}, {result_fixed.max():.6f}]")
+        print(f"  Fixed model output: shape={result_fixed.shape}, range=[{result_fixed.min():.6f}, {result_fixed.max():.6f}]")
     except Exception as e:
-        print(f"  ❌ 修复模型推理失败: {str(e)[:200]}")
+        print(f"  [FAIL] Fixed model inference failed: {str(e)[:200]}")
         return False
 
     # 比较输出
     if result_orig.shape != result_fixed.shape:
-        print(f"  ❌ 输出形状不匹配: {result_orig.shape} vs {result_fixed.shape}")
+        print(f"  [FAIL] Output shape mismatch: {result_orig.shape} vs {result_fixed.shape}")
         return False
 
     # 计算误差
@@ -368,25 +368,25 @@ def compare_outputs(original_path, fixed_path, input_frames=50):
     rel_diff = abs_diff / (np.abs(result_orig) + 1e-8)
     max_rel_diff = rel_diff.max()
 
-    print(f"  绝对误差: max={max_diff:.8f}, mean={mean_diff:.8f}")
-    print(f"  相对误差: max={max_rel_diff:.6f}")
+    print(f"  Absolute error: max={max_diff:.8f}, mean={mean_diff:.8f}")
+    print(f"  Relative error: max={max_rel_diff:.6f}")
 
     # ConvTranspose 分解引入的数值误差通常很小 (< 1e-5)
     if max_diff < 1e-3:
-        print(f"  ✅ 输出一致 (误差在可接受范围内)")
+        print(f"  [PASS] Outputs consistent (error within acceptable range)")
         return True
     elif max_diff < 1e-1:
-        print(f"  ⚠️ 输出存在较小差异，但可能可接受")
+        print(f"  [WARN] Outputs have minor differences, but may be acceptable")
         return True
     else:
-        print(f"  ❌ 输出差异过大")
+        print(f"  [FAIL] Output difference too large")
         return False
 
 
 def optimize_with_olive(model_path, output_path):
     """使用 Olive 进一步优化模型。"""
     print(f"\n{'='*60}")
-    print(f"Olive 优化")
+    print(f"Olive optimization")
     print(f"{'='*60}")
 
     try:
@@ -395,7 +395,7 @@ def optimize_with_olive(model_path, output_path):
         from olive.passes import OnnxConversion
         from olive.passes.onnx.shape_inference import ShapeInference
         from olive.passes.onnx.peephole_optimizer import OnnxPeepholeOptimizer
-        print("  Olive API 可用")
+        print("  Olive API available")
 
         # 使用 Olive 进行形状推断和优化
         onnx_model = ONNXModelHandler(model_path=model_path)
@@ -406,30 +406,30 @@ def optimize_with_olive(model_path, output_path):
             config = ShapeInference.Config()
             pass_obj = ShapeInference(config, False)
             # Olive API 可能因版本不同而有差异，这里用 try-except 保护
-            print("  尝试 Olive ShapeInference...")
+            print("  Trying Olive ShapeInference...")
         except Exception as e:
-            print(f"  Olive ShapeInference 不可用: {e}")
+            print(f"  Olive ShapeInference unavailable: {e}")
 
-        print("  Olive 优化完成 (使用基础优化)")
+        print("  Olive optimization complete (using basic optimization)")
         return True
 
     except ImportError as e:
-        print(f"  Olive API 导入失败: {e}")
-        print("  跳过 Olive 优化，使用手动修复版本")
+        print(f"  Olive API import failed: {e}")
+        print("  Skipping Olive optimization, using manual fix version")
         return False
 
 
 def run_shape_inference(model_path, output_path):
     """使用 onnx.shape_inference 进行形状推断。"""
-    print(f"\n  运行 ONNX 形状推断...")
+    print(f"\n  Running ONNX shape inference...")
     try:
         model = onnx.load(model_path)
         inferred = onnx.shape_inference.infer_shapes(model)
         onnx.save(inferred, output_path)
-        print(f"  形状推断完成，保存到: {output_path}")
+        print(f"  Shape inference complete, saved to: {output_path}")
         return True
     except Exception as e:
-        print(f"  形状推断失败: {e}")
+        print(f"  Shape inference failed: {e}")
         # 即使失败也保存原模型
         import shutil
         shutil.copy2(model_path, output_path)
@@ -438,7 +438,7 @@ def run_shape_inference(model_path, output_path):
 
 def simplify_model(model_path, output_path):
     """使用 onnxsim 简化模型。如果失败则直接复制。"""
-    print(f"\n  尝试使用 onnxsim 简化模型 (保留动态输入形状)...")
+    print(f"\n  Trying onnxsim simplification (preserving dynamic input shapes)...")
     try:
         import onnxsim
         model = onnx.load(model_path)
@@ -451,20 +451,20 @@ def simplify_model(model_path, output_path):
         )
         if check:
             onnx.save(simplified, output_path)
-            print(f"  onnxsim 简化成功，保存到: {output_path}")
+            print(f"  onnxsim simplification succeeded, saved to: {output_path}")
             return True
         else:
-            print(f"  onnxsim 简化后验证失败，使用形状推断版本")
+            print(f"  onnxsim post-simplify verification failed, using shape inference version")
             import shutil
             shutil.copy2(model_path, output_path)
             return False
     except ImportError:
-        print(f"  onnxsim 未安装，跳过简化")
+        print(f"  onnxsim not installed, skipping simplification")
         import shutil
         shutil.copy2(model_path, output_path)
         return False
     except Exception as e:
-        print(f"  onnxsim 简化失败: {e}")
+        print(f"  onnxsim simplification failed: {e}")
         import shutil
         shutil.copy2(model_path, output_path)
         return False
@@ -472,42 +472,42 @@ def simplify_model(model_path, output_path):
 
 def main():
     print("=" * 60)
-    print("Vocoder DML 优化工具")
+    print("Vocoder DML optimization tool")
     print("=" * 60)
 
     if not os.path.exists(VOCODER_PATH):
-        print(f"\n❌ 找不到 vocoder 模型: {VOCODER_PATH}")
-        print("请确保模型文件已下载到 onnx_models 目录")
+        print(f"\n[FAIL] Vocoder model not found: {VOCODER_PATH}")
+        print("Please ensure model files are downloaded to the onnx_models directory")
         sys.exit(1)
 
     # Step 1: 检查原始模型
     model, problematic = inspect_model(VOCODER_PATH)
     if not problematic:
-        print("\n模型已经兼容 DML，无需修复")
+        print("\nModel already DML-compatible, no fix needed")
         # 但还是测试一下
         dml_ok = test_with_dml(VOCODER_PATH)
         if dml_ok:
-            print("\n✅ 原始模型可以在 DML 上运行")
+            print("\n[PASS] Original model can run on DML")
             # 复制为 vocoder_dml.onnx
             import shutil
             shutil.copy2(VOCODER_PATH, OUTPUT_PATH)
-            print(f"已复制到: {OUTPUT_PATH}")
+            print(f"Copied to: {OUTPUT_PATH}")
         sys.exit(0 if dml_ok else 1)
 
     # Step 2: 修复 ConvTranspose
     print(f"\n{'='*60}")
-    print(f"修复 ConvTranspose 节点")
+    print(f"Fix ConvTranspose nodes")
     print(f"{'='*60}")
 
     fixed = fix_conv_transpose(model, problematic[0])
     if not fixed:
-        print("❌ 修复失败")
+        print("[FAIL] Fix failed")
         sys.exit(1)
 
     # 保存中间结果
     temp_path = OUTPUT_PATH + '.temp'
     onnx.save(model, temp_path)
-    print(f"  保存中间模型到: {temp_path}")
+    print(f"  Saved intermediate model to: {temp_path}")
 
     # Step 3: 形状推断
     inferred_path = OUTPUT_PATH + '.inferred'
@@ -521,7 +521,7 @@ def main():
     output_correct = compare_outputs(VOCODER_PATH, simplified_path, input_frames=50)
 
     if not output_correct:
-        print("\n❌ 修复后模型输出与原始模型不一致，请检查修复逻辑")
+        print("\n[FAIL] Fixed model output does not match original, please check fix logic")
         # 清理临时文件
         for p in [temp_path, inferred_path, simplified_path]:
             if os.path.exists(p):
@@ -532,14 +532,14 @@ def main():
     dml_ok = test_with_dml(simplified_path, input_frames=10)
 
     if dml_ok:
-        print(f"\n✅ DML 推理成功!")
+        print(f"\n[PASS] DML inference succeeded!")
     else:
-        print(f"\n⚠️ DML 推理未激活，回退到 CPU")
+        print(f"\n[WARN] DML inference not active, falling back to CPU")
 
     # Step 7: 保存最终模型
     import shutil
     shutil.copy2(simplified_path, OUTPUT_PATH)
-    print(f"\n最终模型保存到: {OUTPUT_PATH}")
+    print(f"\nFinal model saved to: {OUTPUT_PATH}")
 
     # 清理临时文件
     for p in [temp_path, inferred_path, simplified_path]:
@@ -551,7 +551,7 @@ def main():
 
     # Step 8: 最终验证
     print(f"\n{'='*60}")
-    print(f"最终验证")
+    print(f"Final verification")
     print(f"{'='*60}")
 
     # 再次对比输出
@@ -559,17 +559,17 @@ def main():
     dml_final = test_with_dml(OUTPUT_PATH, input_frames=20)
 
     if final_correct and dml_final:
-        print(f"\n🎉 优化完成! vocoder_dml.onnx 已可在 DML 上运行")
+        print(f"\nOptimization complete! vocoder_dml.onnx can now run on DML")
     elif final_correct:
-        print(f"\n⚠️ 输出正确但 DML 未激活，模型将使用 CPU 运行 (但仍比原始 ConvTranspose 版本好)")
+        print(f"\n[WARN] Output correct but DML not active, model will run on CPU (but still better than original ConvTranspose version)")
     else:
-        print(f"\n❌ 优化失败")
+        print(f"\n[FAIL] Optimization failed")
         sys.exit(1)
 
     # 显示文件大小
     orig_size = os.path.getsize(VOCODER_PATH) / (1024 * 1024)
     new_size = os.path.getsize(OUTPUT_PATH) / (1024 * 1024)
-    print(f"\n文件大小: 原始={orig_size:.2f}MB, DML版={new_size:.2f}MB")
+    print(f"\nFile size: original={orig_size:.2f}MB, DML={new_size:.2f}MB")
 
 
 if __name__ == '__main__':

@@ -84,6 +84,8 @@ class PianoRoll {
     this._staticCache = null;
     this._staticCacheDirty = true;
 
+    this._renderRaf = 0;
+
     this._initEvents();
     this._resize();
   }
@@ -487,7 +489,7 @@ class PianoRoll {
     this.scrollX = Math.max(0, this.scrollX);
 
     this._staticCacheDirty = true;
-    this.render();
+    this._scheduleRender();
   }
 
   _onKeyDown(e) {
@@ -511,6 +513,14 @@ class PianoRoll {
     this._staticCacheDirty = true;
   }
 
+  _scheduleRender() {
+    if (this._renderRaf) return;
+    this._renderRaf = requestAnimationFrame(() => {
+      this._renderRaf = 0;
+      this.render();
+    });
+  }
+
   render() {
     const ctx = this.ctx;
     const w = this.width;
@@ -519,8 +529,8 @@ class PianoRoll {
 
     ctx.clearRect(0, 0, w, h);
 
-    if (this.isPlaying && !this._staticCacheDirty && this._staticCache) {
-      // During playback, use cached static layer
+    if (!this._staticCacheDirty && this._staticCache) {
+      // Use cached static layer (during playback or idle)
       ctx.drawImage(this._staticCache, 0, 0, w, h);
     } else {
       // Full redraw

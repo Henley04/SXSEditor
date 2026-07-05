@@ -1,6 +1,7 @@
 const { ipcMain } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { Worker } = require('node:worker_threads');
 const { RmvpePitchDetector } = require('../inference/rmvpePitchDetector');
 const { BasicPitchDetector } = require('../inference/basicPitch');
 const { RosvotDetector } = require('../inference/rosvotDetector');
@@ -20,7 +21,6 @@ function getBaseModelDir() {
   const precisionSuffixes = [
     path.sep + 'int8' + path.sep + 'optimized_npu' + path.sep,
     path.sep + 'int8' + path.sep,
-    path.sep + 'fp8' + path.sep,
     path.sep + 'fp16' + path.sep,
   ];
   for (const suffix of precisionSuffixes) {
@@ -36,7 +36,7 @@ const rmvpeLazy = createLazyInitializer(async () => {
   const modelPath = getBaseModelDir();
   const settings = loadSettings();
   const deviceId = settings.deviceId ?? undefined;
-  console.log(`[Main] 初始化 RMVPE Pitch Detector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+  console.log(`[Main] Initialize RMVPE Pitch Detector, model path: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}`);
   const detector = new RmvpePitchDetector(modelPath, { deviceId });
   await detector.init();
   return detector;
@@ -44,7 +44,7 @@ const rmvpeLazy = createLazyInitializer(async () => {
 
 const basicPitchLazy = createLazyInitializer(async () => {
   const modelPath = getBaseModelDir();
-  console.log(`[Main] 初始化 Basic Pitch Detector, 模型路径: ${modelPath}`);
+  console.log(`[Main] Initialize Basic Pitch Detector, model path: ${modelPath}`);
   const detector = new BasicPitchDetector(modelPath);
   await detector.init();
   return detector;
@@ -54,7 +54,7 @@ const rosvotLazy = createLazyInitializer(async () => {
   const modelPath = getBaseModelDir();
   const settings = loadSettings();
   const deviceId = settings.deviceId ?? undefined;
-  console.log(`[Main] 初始化 RosvotDetector, 模型路径: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : '自动'}`);
+  console.log(`[Main] Initialize RosvotDetector, model path: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}`);
   const detector = new RosvotDetector(modelPath, { deviceId });
   await detector.init();
   return detector;
@@ -80,14 +80,176 @@ function resetRosvot() {
   rosvotLazy.reset();
 }
 
+// ==================== RMVPE worker_thread (offload F0 extraction) ====================
+//
+// RMVPE inference (resample + ONNX run + argmax) is CPU/GPU heavy and can block
+// the main thread for hundreds of ms. We offload it to a worker_thread that
+// owns its own ONNX session. The worker auto-shuts after 60s of inactivity to
+// free GPU memory. If the worker fails to initialize or crashes mid-request,
+// we fall back to the synchronous in-process path (rmvpeLazy) so functionality
+// is never lost.
+
+let pitchWorker = null;
+let pitchWorkerReady = false;
+let pitchWorkerInitPromise = null;
+let pitchRequestId = 0;
+let _pitchWorkerFailedAt = 0;
+const PITCH_WORKER_RETRY_COOLDOWN_MS = 30000;
+const pitchPendingRequests = new Map();
+
+function _findPitchWorkerScript() {
+  const searchPaths = [
+    // Dev: src/main/ → src/inference/pitchWorker.js
+    path.join(__dirname, '..', 'inference', 'pitchWorker.js'),
+    // Bundled: .webpack/main/ → .webpack/main/inference/pitchWorker.js
+    path.join(__dirname, 'inference', 'pitchWorker.js'),
+  ];
+  for (const p of searchPaths) {
+    try { if (fs.existsSync(p)) return p; } catch (_) {}
+  }
+  return null;
+}
+
+function _rejectAllPitchPending(err) {
+  for (const [, { reject }] of pitchPendingRequests) {
+    reject(err);
+  }
+  pitchPendingRequests.clear();
+}
+
+function createPitchWorker() {
+  const workerScript = _findPitchWorkerScript();
+  if (!workerScript) {
+    throw new Error('pitchWorker.js not found');
+  }
+  const modelDir = getBaseModelDir();
+  const settings = loadSettings();
+  const deviceId = settings.deviceId ?? undefined;
+  const worker = new Worker(workerScript, {
+    workerData: { modelDir, deviceId },
+  });
+
+  worker.on('message', (msg) => {
+    if (msg.type === 'ready') {
+      pitchWorkerReady = true;
+      if (pitchWorkerInitPromise) {
+        pitchWorkerInitPromise.resolve();
+        pitchWorkerInitPromise = null;
+      }
+      return;
+    }
+    if (msg.type === 'init-error') {
+      const err = new Error(msg.error);
+      if (msg.code) err.code = msg.code;
+      if (pitchWorkerInitPromise) {
+        pitchWorkerInitPromise.reject(err);
+        pitchWorkerInitPromise = null;
+      }
+      return;
+    }
+    if (msg.type === 'inactive-shutdown') {
+      pitchWorker = null;
+      pitchWorkerReady = false;
+      if (pitchWorkerInitPromise) {
+        pitchWorkerInitPromise.reject(new Error('pitchWorker shut down during init'));
+        pitchWorkerInitPromise = null;
+      }
+      return;
+    }
+    if (msg.type === 'result' || msg.type === 'error') {
+      const pending = pitchPendingRequests.get(msg.id);
+      if (pending) {
+        pitchPendingRequests.delete(msg.id);
+        if (msg.type === 'result') {
+          // Reconstruct f0Array of objects from transferred TypedArrays
+          const n = msg.f0.length;
+          const f0Array = new Array(n);
+          for (let i = 0; i < n; i++) {
+            f0Array[i] = { time: msg.times[i], f0: msg.f0[i], confidence: 0 };
+          }
+          pending.resolve(f0Array);
+        } else {
+          const err = new Error(msg.error);
+          if (msg.code) err.code = msg.code;
+          pending.reject(err);
+        }
+      }
+    }
+  });
+
+  worker.on('error', (err) => {
+    console.warn('[Main] pitchWorker error:', err.message);
+    pitchWorker = null;
+    pitchWorkerReady = false;
+    if (pitchWorkerInitPromise) {
+      pitchWorkerInitPromise.reject(err);
+      pitchWorkerInitPromise = null;
+    }
+    _rejectAllPitchPending(err);
+  });
+
+  worker.on('exit', (code) => {
+    pitchWorker = null;
+    pitchWorkerReady = false;
+    if (pitchWorkerInitPromise) {
+      pitchWorkerInitPromise.reject(new Error(`pitchWorker exited with code ${code}`));
+      pitchWorkerInitPromise = null;
+    }
+    _rejectAllPitchPending(new Error(`pitchWorker exited (code=${code})`));
+  });
+
+  return worker;
+}
+
+async function ensurePitchWorker() {
+  if (pitchWorker && pitchWorkerReady) return pitchWorker;
+  if (pitchWorker && !pitchWorkerReady && pitchWorkerInitPromise) {
+    await pitchWorkerInitPromise.promise;
+    return pitchWorker;
+  }
+  // Cooldown: if the worker recently failed to init, don't retry immediately
+  // (avoids repeated slow init attempts on every call).
+  if (Date.now() - _pitchWorkerFailedAt < PITCH_WORKER_RETRY_COOLDOWN_MS) {
+    throw new Error('pitchWorker recently failed, in cooldown');
+  }
+  let resolve, reject;
+  const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+  pitchWorkerInitPromise = { promise, resolve, reject };
+  try {
+    pitchWorker = createPitchWorker();
+    await promise;
+    return pitchWorker;
+  } catch (err) {
+    pitchWorker = null;
+    pitchWorkerInitPromise = null;
+    _pitchWorkerFailedAt = Date.now();
+    throw err;
+  }
+}
+
+async function extractF0ViaWorker(audioData, sampleRate) {
+  const worker = await ensurePitchWorker();
+  const id = ++pitchRequestId;
+  return new Promise((resolve, reject) => {
+    pitchPendingRequests.set(id, { resolve, reject });
+    worker.postMessage({ type: 'extract', id, audioData, sampleRate });
+  });
+}
+
 function registerPitchMidiIpc() {
   ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate }) => {
     try {
-      const detector = await rmvpeLazy.get();
-      const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
-      return { success: true, f0Array };
+      try {
+        const f0Array = await extractF0ViaWorker(audioData, sampleRate || 44100);
+        return { success: true, f0Array };
+      } catch (workerErr) {
+        console.warn('[Main] pitchWorker unavailable, falling back to sync:', workerErr.message);
+        const detector = await rmvpeLazy.get();
+        const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
+        return { success: true, f0Array };
+      }
     } catch (err) {
-      console.error('[Main] F0提取失败:', err);
+      console.error('[Main] F0 extraction failed:', err);
       return { success: false, error: err.message };
     }
   });
@@ -111,30 +273,30 @@ function registerPitchMidiIpc() {
             notes = await rosvot.extractNotes(
               new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120
             );
-            console.log(`[Main] RosVot 提取到 ${notes.length} 个音符`);
+            console.log(`[Main] RosVot extracted ${notes.length} notes`);
 
             const validNotes = notes.filter(n => n.pitch > 0);
             if (validNotes.length === 0) {
-              console.log('[Main] RosVot 未提取到有效音符，回退到 f0ToNotes');
+              console.log('[Main] RosVot extracted no valid notes, falling back to f0ToNotes');
               notes = detector.f0ToNotes(f0Array, bpm || 120);
             }
           } catch (rosvotErr) {
-            console.warn('[Main] RosVot 模型推理失败，回退到 f0ToNotes:', rosvotErr.message);
+            console.warn('[Main] RosVot model inference failed, falling back to f0ToNotes:', rosvotErr.message);
             resetRosvot();
             notes = detector.f0ToNotes(f0Array, bpm || 120);
           }
         } else {
-          console.log('[Main] RosVot 模型不存在，使用 f0ToNotes 回退');
+          console.log('[Main] RosVot model does not exist, using f0ToNotes fallback');
           notes = detector.f0ToNotes(f0Array, bpm || 120);
         }
       } else {
-        console.log('[Main] 使用 f0ToNotes 从 F0 曲线提取 MIDI 音符');
+        console.log('[Main] Using f0ToNotes to extract MIDI notes from F0 curve');
         notes = detector.f0ToNotes(f0Array, bpm || 120);
       }
 
       return { success: true, f0Array, notes };
     } catch (err) {
-      console.error('[Main] MIDI提取失败:', err);
+      console.error('[Main] MIDI extraction failed:', err);
       return { success: false, error: err.message };
     }
   });
@@ -145,7 +307,7 @@ function registerPitchMidiIpc() {
       const result = await detector.extractF0AndNotes(new Float32Array(audioData), sampleRate || 44100, bpm || 120);
       return { success: true, f0Array: result.f0Array, notes: result.notes };
     } catch (err) {
-      console.error('[Main] Basic Pitch 提取失败:', err);
+      console.error('[Main] Basic Pitch extraction failed:', err);
       return { success: false, error: err.message };
     }
   });
@@ -171,7 +333,7 @@ function registerPitchMidiIpc() {
 
       return { success: true, notes };
     } catch (err) {
-      console.error('[Main] MIDI导入失败:', err);
+      console.error('[Main] MIDI import failed:', err);
       return { success: false, error: err.message };
     }
   });

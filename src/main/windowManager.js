@@ -38,8 +38,27 @@ function buildAppMenu() {
   const { Menu } = require('electron');
   const menuTemplate = [
     {
-      label: 'SXSEditor',
+      label: t('menu.file'),
       submenu: [
+        {
+          label: t('menu.save'),
+          accelerator: 'CommandOrControl+S',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('main-menu:save-request');
+            }
+          },
+        },
+        {
+          label: t('menu.saveAs'),
+          accelerator: 'CommandOrControl+Shift+S',
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) {
+              mainWindow.webContents.send('main-menu:save-as-request');
+            }
+          },
+        },
+        { type: 'separator' },
         {
           label: t('menu.aboutSXSEditor'),
           click: () => { showAboutDialog(); },
@@ -133,8 +152,14 @@ function createWindow(opts = {}) {
   mainWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
+  // Defer openDevTools until did-finish-load. Opening it earlier causes
+  // Chromium to reject internal blink.mojom.WidgetHost IPC messages during
+  // the initial renderer bootstrap (visible as "Message N rejected by
+  // interface blink.mojom.WidgetHost" errors on the console).
   if (isDev) {
-    mainWindow.webContents.openDevTools();
+    mainWindow.webContents.once('did-finish-load', () => {
+      mainWindow.webContents.openDevTools();
+    });
   }
 
   mainWindow.on('close', (e) => {
@@ -270,6 +295,9 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   if (fragmentWindows[fragment.id] && !fragmentWindows[fragment.id].isDestroyed()) {
     fragmentWindows[fragment.id].focus();
     fragmentWindows[fragment.id].webContents.send('loadFragment', sendData);
+    // 窗口复用时也更新 pendingFragmentData 快照，确保 fallback getFragmentData
+    // 拿到的是最新数据，避免分片编辑器在守卫放行后仍读到旧快照。
+    pendingFragmentData[fragment.id] = sendData;
     return;
   }
 
@@ -291,8 +319,11 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   fragmentWindow.loadURL(`${FRAGMENT_EDITOR_WINDOW_WEBPACK_ENTRY}#fragmentId=${encodeURIComponent(fragment.id)}`);
   fragmentWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   fragmentWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // Defer openDevTools until did-finish-load (see createWindow for rationale).
   if (isDev) {
-    fragmentWindow.webContents.openDevTools();
+    fragmentWindow.webContents.once('did-finish-load', () => {
+      fragmentWindow.webContents.openDevTools();
+    });
   }
 
   fragmentWindows[fragment.id] = fragmentWindow;
@@ -307,6 +338,69 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   });
 }
 
+function buildSingerCreatorMenu(win) {
+  const { Menu } = require('electron');
+  const menuTemplate = [
+    {
+      label: t('singerCreator.fileMenu'),
+      submenu: [
+        {
+          label: t('singerCreator.save'),
+          accelerator: 'CommandOrControl+S',
+          click: () => {
+            if (win && !win.isDestroyed()) {
+              win.webContents.send('singer-creator:save-request');
+            }
+          },
+        },
+        {
+          label: t('singerCreator.saveAs'),
+          accelerator: 'CommandOrControl+Shift+S',
+          click: () => {
+            if (win && !win.isDestroyed()) {
+              win.webContents.send('singer-creator:save-as-request');
+            }
+          },
+        },
+        { type: 'separator' },
+        {
+          label: t('singerCreator.close'),
+          role: 'close',
+        },
+      ],
+    },
+    {
+      label: t('menu.edit'),
+      submenu: [
+        { role: 'undo', label: t('menu.undo') },
+        { role: 'redo', label: t('menu.redo') },
+        { type: 'separator' },
+        { role: 'cut', label: t('menu.cut') },
+        { role: 'copy', label: t('menu.copy') },
+        { role: 'paste', label: t('menu.paste') },
+        { role: 'selectAll', label: t('menu.selectAll') },
+      ],
+    },
+    {
+      label: t('menu.view'),
+      submenu: [
+        { role: 'reload', label: t('menu.reload') },
+        { role: 'forceReload', label: t('menu.forceReload') },
+        { role: 'toggleDevTools', label: t('menu.devTools') },
+        { type: 'separator' },
+        { role: 'resetZoom', label: t('menu.resetZoom') },
+        { role: 'zoomIn', label: t('menu.zoomIn') },
+        { role: 'zoomOut', label: t('menu.zoomOut') },
+        { type: 'separator' },
+        { role: 'togglefullscreen', label: t('menu.fullscreen') },
+      ],
+    },
+  ];
+
+  const menu = Menu.buildFromTemplate(menuTemplate);
+  win.setMenu(menu);
+}
+
 function openSingerCreator() {
   if (singerCreatorWindow) {
     singerCreatorWindow.focus();
@@ -316,7 +410,7 @@ function openSingerCreator() {
   singerCreatorWindow = new BrowserWindow({
     width: 900,
     height: 600,
-    title: '歌手创建',
+    title: t('singerCreator.title'),
     icon: path.join(__dirname, '..', 'SXS.png'),
     minWidth: 700,
     minHeight: 500,
@@ -331,6 +425,8 @@ function openSingerCreator() {
   singerCreatorWindow.loadURL(SINGER_CREATOR_WINDOW_WEBPACK_ENTRY);
   singerCreatorWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   singerCreatorWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  buildSingerCreatorMenu(singerCreatorWindow);
 
   singerCreatorWindow.on('closed', () => {
     singerCreatorWindow = null;
@@ -384,6 +480,17 @@ function openAudioPreprocess(data) {
   });
 }
 
+function closeAllFragmentEditors() {
+  for (const id in fragmentWindows) {
+    const win = fragmentWindows[id];
+    if (win && !win.isDestroyed()) {
+      win.destroy();
+    }
+    delete fragmentWindows[id];
+    delete pendingFragmentData[id];
+  }
+}
+
 function getAllWebContents() {
   return BrowserWindow.getAllWindows().map(w => w.webContents).filter(Boolean);
 }
@@ -407,7 +514,7 @@ function registerWindowIpc() {
       }
       return true;
     } catch (err) {
-      console.error('[Main] 保存片段数据失败:', err);
+      console.error('[Main] Failed to save fragment data:', err);
       return false;
     }
   });
@@ -422,7 +529,20 @@ function registerWindowIpc() {
     return { success: true };
   });
 
+  ipcMain.handle('fragment:closeAll', async () => {
+    closeAllFragmentEditors();
+    return { success: true };
+  });
+
   ipcMain.handle('updateFragmentBounds', async (event, fragmentId, data) => {
+    // 同步刷新 pendingFragmentData 快照里的边界，避免分片编辑器在 currentFragment
+    // 就绪前收到 fragmentBoundsChanged 被守卫丢弃后，又用旧快照覆盖 currentFragment，
+    // 导致主页面对分片长度/结尾的修改偶现不同步。
+    const pending = pendingFragmentData[fragmentId];
+    if (pending && pending.fragment) {
+      if (data.startTime !== undefined) pending.fragment.startTime = data.startTime;
+      if (data.duration !== undefined) pending.fragment.duration = data.duration;
+    }
     if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
       fragmentWindows[fragmentId].webContents.send('fragmentBoundsChanged', { fragmentId, ...data });
     }
@@ -504,4 +624,5 @@ module.exports = {
   getIsDirty,
   setClosePending,
   getClosePending,
+  closeAllFragmentEditors,
 };

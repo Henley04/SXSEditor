@@ -76,7 +76,7 @@ def test_model(name):
 
 def main():
     print("=" * 60)
-    print("W8A8 vs FP32 精度对比")
+    print("W8A8 vs FP32 accuracy comparison")
     print("=" * 60)
 
     models = ['diff_step_dml', 'vocoder_dml', 'preflow', 'cond_emb']
@@ -91,11 +91,11 @@ def main():
         gc.collect()
 
     print(f"\n{'='*60}")
-    print("结果汇总")
+    print("Results summary")
     print(f"{'='*60}")
     for name, ok, mse, cos in results:
         print(f"  [{'PASS' if ok else 'WARN'}] {name}:  MSE={mse:.6f}  Cosine={cos:.6f}")
-    print(f"\n模型大小对比:")
+    print(f"\nModel size comparison:")
     for name in models:
         w8 = os.path.join(INT8_DIR, f'{name}.onnx.data')
         fp = os.path.join(FP32_DIR, f'{name}.onnx.data')

@@ -112,7 +112,7 @@ const MODEL_GROUPS = [
         nameEn: 'SiFiGAN Vocoder',
         description: '可选替代声码器，基于 Source-Filter HiFi-GAN，支持音高可控',
         descriptionEn: 'Optional alternative vocoder based on Source-Filter HiFi-GAN with pitch controllability',
-        files: ['sifigan_vocoder_dml.onnx', 'sifigan_stats.joblib'],
+        files: ['sifigan_vocoder_dml_fp16.onnx', 'sifigan_vocoder_dml.onnx', 'sifigan_stats.joblib'],
         sessionKey: 'sifigan',
       },
     ],

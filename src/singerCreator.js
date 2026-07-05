@@ -34,6 +34,14 @@ let previewRaf = null;
 
 let preprocessDataSavedCleanup = null;
 
+// Save state: track the file path so subsequent saves (Ctrl+S) write to the
+// original file silently instead of prompting with a Save As dialog.
+let currentSingerFilePath = null;
+// Whether the main window has already been notified about this singer (so we
+// don't add duplicate singer entries on every save).
+let singerCreatedNotified = false;
+let isSaving = false;
+
 const singerNameInput = document.getElementById('singer-name-input');
 const singerColorInput = document.getElementById('singer-color-input');
 const avatarFileInput = document.getElementById('avatar-file-input');
@@ -51,7 +59,6 @@ const btnPlayPreview = document.getElementById('btn-play-preview');
 const btnClearWav = document.getElementById('btn-clear-wav');
 const btnStartPreprocess = document.getElementById('btn-start-preprocess');
 const preprocessActions = document.getElementById('preprocess-actions');
-const btnCreate = document.getElementById('btn-create');
 const btnCancel = document.getElementById('btn-cancel');
 const previewName = document.getElementById('preview-name');
 const previewAvatar = document.getElementById('preview-avatar');
@@ -200,7 +207,14 @@ btnCancel.addEventListener('click', () => {
   window.close();
 });
 
-btnCreate.addEventListener('click', async () => {
+// ==================== Save / Save As logic ====================
+// Save (Ctrl+S): if a file path is already known, write to it silently.
+// Otherwise fall back to Save As (show the dialog).
+// Save As: always show the dialog and update the tracked path.
+// The main window is notified (singerCreated) only on the first successful
+// save, so subsequent saves don't add duplicate singer entries.
+async function performSave(isSaveAs = false) {
+  if (isSaving) return;
   if (!wavFileBuffer) {
     showAlertDialog(t('singerCreator.pleaseSelectWav'));
     return;
@@ -212,11 +226,14 @@ btnCreate.addEventListener('click', async () => {
 
   const singerName = singerNameInput.value.trim() || t('singerCreator.unnamedSinger');
   const singerColor = singerColorInput.value;
-
   const useAvatarImage = (avatarMode === 'image' && avatarImageData);
 
   stopPreviewPlayback();
 
+  const hasFilePath = !!currentSingerFilePath && !isSaveAs;
+  const notifyMainWindow = !singerCreatedNotified;
+
+  isSaving = true;
   try {
     const result = await window.electronAPI.saveSingerFile({
       singerName,
@@ -228,20 +245,44 @@ btnCreate.addEventListener('click', async () => {
       duration: wavDuration,
       isPreprocessed: isPreprocessed,
       preprocessResult: preprocessResult,
+      filePath: hasFilePath ? currentSingerFilePath : null,
+      notifyMainWindow,
     });
 
     if (result && result.success) {
-      showAlertDialog(t('singerCreator.createSuccess'));
-      cleanupListeners();
-      window.close();
+      if (result.filePath) {
+        currentSingerFilePath = result.filePath;
+      }
+      if (notifyMainWindow) {
+        singerCreatedNotified = true;
+      }
+      showAlertDialog(t('singerCreator.saved'));
+    } else if (result && result.canceled) {
+      // User cancelled the Save As dialog — do nothing.
     } else {
       showAlertDialog(t('singerCreator.createFailed') + ': ' + (result && result.error ? result.error : ''));
     }
   } catch (err) {
     console.error(t('singerCreator.saveFailed'), err);
     showAlertDialog(t('singerCreator.createFailed') + ': ' + (err && err.message ? err.message : ''));
+  } finally {
+    isSaving = false;
   }
-});
+}
+
+// Menu-driven save / save-as requests (sent from the main process menu).
+// The menu also registers the Ctrl+S / Ctrl+Shift+S accelerators, which
+// trigger these same requests — no separate keydown listener is needed.
+if (window.electronAPI?.onSingerCreatorSaveRequest) {
+  window.electronAPI.onSingerCreatorSaveRequest(() => {
+    performSave(false);
+  });
+}
+if (window.electronAPI?.onSingerCreatorSaveAsRequest) {
+  window.electronAPI.onSingerCreatorSaveAsRequest(() => {
+    performSave(true);
+  });
+}
 
 function handleAvatarFile(file) {
   if (!file.type.startsWith('image/')) {

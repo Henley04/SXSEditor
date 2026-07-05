@@ -59,7 +59,7 @@ export async function startPlayback() {
       startPlaybackLoop();
     }
   } catch (err) {
-    console.error('播放失败:', err);
+    console.error('Playback failed:', err);
   }
 }
 

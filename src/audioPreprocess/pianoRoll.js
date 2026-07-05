@@ -7,6 +7,29 @@ import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasThe
 import { drawWaveformWithPlayhead } from './canvasRenderer.js';
 import { updateMidiInfo, startInlineEdit, updateInlineInputPosition } from './uiControls.js';
 
+// visibilitychange handler: pause rAF-driven playback UI updates when tab hidden.
+// Registered once per module; resumes _tickPlayback when visible again.
+let _visibilityHandlerRegistered = false;
+
+function _ensureVisibilityHandler() {
+  if (_visibilityHandlerRegistered) return;
+  _visibilityHandlerRegistered = true;
+  document.addEventListener('visibilitychange', () => {
+    const pr = state.pianoRoll;
+    if (!pr) return;
+    if (document.hidden) {
+      if (pr.playbackRaf) {
+        cancelAnimationFrame(pr.playbackRaf);
+        pr.playbackRaf = null;
+      }
+    } else {
+      if (pr.isPlaying && !pr.playbackRaf) {
+        pr._tickPlayback();
+      }
+    }
+  });
+}
+
 export function initPianoRoll() {
   if (state.pianoRoll) return Promise.resolve();
 
@@ -33,6 +56,9 @@ export function initPianoRoll() {
     projectSettings: { bpm: BPM, timeSignature: [4, 4] },
     dpr: window.devicePixelRatio || 1,
 
+    _staticCache: null,
+    _staticCacheDirty: true,
+
     _initEvents() {
       this._boundResize = debounce(() => this._resize(), 100);
       this._boundMouseUp = () => this._onMouseUp();
@@ -42,6 +68,7 @@ export function initPianoRoll() {
           if (this.selectedNoteId !== null) {
             this.removeNote(this.selectedNoteId);
             this.selectedNoteId = null;
+            this._staticCacheDirty = true;
             this.render();
             updateMidiInfo();
           }
@@ -78,6 +105,7 @@ export function initPianoRoll() {
       this.height = height;
       this.ctx = this.canvas.getContext('2d');
       this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      this._staticCacheDirty = true;
       this.render();
     },
 
@@ -171,6 +199,7 @@ export function initPianoRoll() {
         this._dragMoved = false;
         updateMidiInfo();
       }
+      this._staticCacheDirty = true;
       this.render();
     },
 
@@ -213,6 +242,7 @@ export function initPianoRoll() {
         newDuration = Math.max(1 / 16, this._snapBeats(newDuration));
         note.duration = newDuration;
       }
+      this._staticCacheDirty = true;
       this.render();
     },
 
@@ -226,6 +256,7 @@ export function initPianoRoll() {
           note.start = this.dragNoteStart.start;
           note.pitch = this.dragNoteStart.pitch;
           note.duration = this.dragNoteStart.duration;
+          this._staticCacheDirty = true;
           this.render();
         }
       }
@@ -271,6 +302,7 @@ export function initPianoRoll() {
       }
       this.scrollY = Math.max(0, Math.min(128 * NOTE_HEIGHT * this.zoomY + HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT - this.height, this.scrollY));
       this.scrollX = Math.max(0, this.scrollX);
+      this._staticCacheDirty = true;
       this.render();
     },
 
@@ -279,6 +311,7 @@ export function initPianoRoll() {
     },
 
     startPlayback() {
+      _ensureVisibilityHandler();
       if (this.isPlaying) return;
       this.isPlaying = true;
       this.playStartTime = performance.now();
@@ -333,6 +366,7 @@ export function initPianoRoll() {
       if (idx !== -1) {
         this.notes.splice(idx, 1);
         if (this.selectedNoteId === noteId) this.selectedNoteId = null;
+        this._staticCacheDirty = true;
         this.render();
       }
     },
@@ -344,12 +378,36 @@ export function initPianoRoll() {
       if (!ctx) return;
 
       const c = getCanvasColors();
-      ctx.clearRect(0, 0, w, h);
-      this._drawBackground(ctx, w, h, c);
-      this._drawGrid(ctx, w, h, c);
-      this._drawF0Curve(ctx, w, h, c);
-      this._drawNotes(ctx, c);
-      this._drawPianoKeys(ctx, h, c);
+      const pixelW = Math.floor(w * this.dpr);
+      const pixelH = Math.floor(h * this.dpr);
+
+      if (!this._staticCacheDirty && this._staticCache && this._staticCache.width === pixelW && this._staticCache.height === pixelH) {
+        // Use cached static layer (background/grid/f0/notes/keys)
+        ctx.clearRect(0, 0, w, h);
+        ctx.drawImage(this._staticCache, 0, 0, w, h);
+      } else {
+        // Full redraw
+        ctx.clearRect(0, 0, w, h);
+        this._drawBackground(ctx, w, h, c);
+        this._drawGrid(ctx, w, h, c);
+        this._drawF0Curve(ctx, w, h, c);
+        this._drawNotes(ctx, c);
+        this._drawPianoKeys(ctx, h, c);
+
+        // Copy result to static cache
+        if (!this._staticCache || this._staticCache.width !== pixelW || this._staticCache.height !== pixelH) {
+          this._staticCache = document.createElement('canvas');
+          this._staticCache.width = pixelW;
+          this._staticCache.height = pixelH;
+        }
+        const cacheCtx = this._staticCache.getContext('2d');
+        cacheCtx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+        cacheCtx.clearRect(0, 0, w, h);
+        cacheCtx.drawImage(this.canvas, 0, 0, w, h);
+        this._staticCacheDirty = false;
+      }
+
+      // Always draw playhead on top
       this._drawPlayhead(ctx, h, c);
       updateInlineInputPosition(this);
     },

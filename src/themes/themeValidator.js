@@ -77,46 +77,46 @@ export function validate(theme, opts = {}) {
     const getThemeById = opts.getThemeById;
 
     if (!theme || typeof theme !== 'object') {
-        return { ok: false, errors: [{ field: 'root', message: '主题必须为对象' }], warnings };
+        return { ok: false, errors: [{ field: 'root', message: 'Theme must be an object' }], warnings };
     }
 
     // id
     if (typeof theme.id !== 'string' || !theme.id.length) {
-        errors.push({ field: 'id', message: '缺少 id' });
+        errors.push({ field: 'id', message: 'Missing id' });
     } else if (!ID_RE.test(theme.id)) {
-        errors.push({ field: 'id', message: `id "${theme.id}" 必须为 kebab-case（小写字母、数字、短横线，不能以短横线开头或结尾）` });
+        errors.push({ field: 'id', message: `id "${theme.id}" must be kebab-case (lowercase letters, digits, hyphens, cannot start or end with hyphen)` });
     }
 
     // name (optional but recommended)
     if (theme.name !== undefined && typeof theme.name !== 'string') {
-        errors.push({ field: 'name', message: 'name 必须为字符串' });
+        errors.push({ field: 'name', message: 'name must be a string' });
     }
 
     // version (optional, default 1.0.0)
     if (theme.version !== undefined && typeof theme.version !== 'string') {
-        errors.push({ field: 'version', message: 'version 必须为字符串' });
+        errors.push({ field: 'version', message: 'version must be a string' });
     }
 
     // isDark (optional, default false)
     if (theme.isDark !== undefined && typeof theme.isDark !== 'boolean') {
-        errors.push({ field: 'isDark', message: 'isDark 必须为布尔' });
+        errors.push({ field: 'isDark', message: 'isDark must be a boolean' });
     }
 
     // author / description
     if (theme.author !== undefined && typeof theme.author !== 'string') {
-        errors.push({ field: 'author', message: 'author 必须为字符串' });
+        errors.push({ field: 'author', message: 'author must be a string' });
     }
     if (theme.description !== undefined && typeof theme.description !== 'string') {
-        errors.push({ field: 'description', message: 'description 必须为字符串' });
+        errors.push({ field: 'description', message: 'description must be a string' });
     }
 
     // tokens
     if (!theme.tokens || typeof theme.tokens !== 'object' || Array.isArray(theme.tokens)) {
-        errors.push({ field: 'tokens', message: '缺少 tokens 或类型错误' });
+        errors.push({ field: 'tokens', message: 'Missing tokens or wrong type' });
     } else {
         for (const [name, value] of Object.entries(theme.tokens)) {
             if (!TOKEN_NAME_RE.test(name)) {
-                errors.push({ token: name, message: `令牌名 "${name}" 格式不合法（必须以 -- 开头，仅含小写字母、数字、短横线）` });
+                errors.push({ token: name, message: `Token name "${name}" invalid (must start with --, only lowercase letters, digits, hyphens)` });
                 continue;
             }
             // Try to detect type from value pattern when token is unknown
@@ -130,7 +130,7 @@ export function validate(theme, opts = {}) {
                 // Ignore — TOKEN_CATALOG may not be available in pure node test env without bundler
             }
             if (!isValidTokenValue(meta, value)) {
-                errors.push({ token: name, message: `令牌 "${name}" 的值 "${value}" 不合法` });
+                errors.push({ token: name, message: `Token "${name}" value "${value}" invalid` });
             }
         }
     }
@@ -138,7 +138,7 @@ export function validate(theme, opts = {}) {
     // extends
     if (theme.extends !== undefined) {
         if (typeof theme.extends !== 'string') {
-            errors.push({ field: 'extends', message: 'extends 必须为字符串' });
+            errors.push({ field: 'extends', message: 'extends must be a string' });
         } else if (getThemeById) {
             const chain = [];
             let current = theme;
@@ -146,27 +146,27 @@ export function validate(theme, opts = {}) {
             let ok = true;
             while (current && current.extends) {
                 if (chain.includes(current.id)) {
-                    errors.push({ field: 'extends', message: `检测到环状继承：${chain.join(' -> ')} -> ${current.id}` });
+                    errors.push({ field: 'extends', message: `Circular inheritance detected: ${chain.join(' -> ')} -> ${current.id}` });
                     ok = false;
                     break;
                 }
                 chain.push(current.id);
                 depth += 1;
                 if (depth > MAX_EXTENDS_DEPTH) {
-                    errors.push({ field: 'extends', message: `继承深度 ${depth} 超过 ${MAX_EXTENDS_DEPTH} 层` });
+                    errors.push({ field: 'extends', message: `Inheritance depth ${depth} exceeds ${MAX_EXTENDS_DEPTH} levels` });
                     ok = false;
                     break;
                 }
                 const parent = getThemeById(current.extends);
                 if (!parent) {
-                    errors.push({ field: 'extends', message: `父主题 "${current.extends}" 不存在` });
+                    errors.push({ field: 'extends', message: `Parent theme "${current.extends}" does not exist` });
                     ok = false;
                     break;
                 }
                 current = parent;
             }
             if (ok && current && current.extends) {
-                errors.push({ field: 'extends', message: `父主题 "${current.extends}" 不存在` });
+                errors.push({ field: 'extends', message: `Parent theme "${current.extends}" does not exist` });
             }
         }
     }
@@ -175,7 +175,7 @@ export function validate(theme, opts = {}) {
     if (theme.tokens && typeof theme.tokens === 'object') {
         for (const key of Object.keys(theme.tokens)) {
             if (!key.startsWith('--')) {
-                warnings.push({ token: key, message: `令牌键 "${key}" 缺少 -- 前缀，已自动补全` });
+                warnings.push({ token: key, message: `Token key "${key}" missing -- prefix, auto-completed` });
             }
         }
     }
@@ -213,7 +213,7 @@ export function parseThemeJson(jsonString) {
     try {
         parsed = JSON.parse(jsonString);
     } catch (e) {
-        throw new ThemeValidationError([{ field: 'root', message: `JSON 解析失败：${e.message}` }]);
+        throw new ThemeValidationError([{ field: 'root', message: `JSON parse failed: ${e.message}` }]);
     }
     const result = validate(parsed);
     if (!result.ok) {

@@ -81,7 +81,7 @@ def find_onnx_data_files(base_dir: Path) -> list[tuple[Path, str]]:
 
 def strip_shape_info(model_path: Path, output_path: Path) -> Path:
     """清除 ONNX 模型中的形状信息，避免形状推断冲突。"""
-    logger.info(f"清除形状信息: {model_path.name}")
+    logger.info(f"Clearing shape info: {model_path.name}")
     model = onnx.load(str(model_path))
 
     # 清除所有 value_info
@@ -100,7 +100,7 @@ def strip_shape_info(model_path: Path, output_path: Path) -> Path:
 
 def optimize_model_int8(input_path: Path, output_path: Path, work_dir: Path):
     """对单个模型执行 INT8 动态量化。"""
-    logger.info(f"[INT8] 开始处理: {input_path.name}")
+    logger.info(f"[INT8] Start processing: {input_path.name}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     # 步骤1: 清除形状信息（避免形状推断冲突）
@@ -108,7 +108,7 @@ def optimize_model_int8(input_path: Path, output_path: Path, work_dir: Path):
     strip_shape_info(input_path, temp_no_shape)
 
     # 步骤2: 动态 INT8 量化
-    logger.info(f"[INT8] 动态INT8量化 - {input_path.name}")
+    logger.info(f"[INT8] Dynamic INT8 quantization - {input_path.name}")
     quantize_dynamic(
         str(temp_no_shape),
         str(output_path),
@@ -119,36 +119,36 @@ def optimize_model_int8(input_path: Path, output_path: Path, work_dir: Path):
     if temp_no_shape.exists():
         temp_no_shape.unlink()
 
-    logger.info(f"[INT8] 完成: {input_path.name} -> {output_path}")
+    logger.info(f"[INT8] Completed: {input_path.name} -> {output_path}")
 
 
 def optimize_model_fp16(input_path: Path, output_path: Path, work_dir: Path):
     """对单个模型执行 FP16 转换优化。"""
-    logger.info(f"[FP16] 开始处理: {input_path.name}")
+    logger.info(f"[FP16] Start processing: {input_path.name}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     model = ONNXModelHandler(model_path=input_path)
 
     # 步骤1: 量化预处理
-    logger.info(f"[FP16] 步骤1: 量化预处理 - {input_path.name}")
+    logger.info(f"[FP16] Step 1: Quantization preprocessing - {input_path.name}")
     preprocess_dir = str(work_dir / "preprocessed")
     preprocess_config = OnnxQuantizationPreprocess.generate_config(
         ACCEL_SPEC, {"skip_symbolic_shape": True}
     )
     preprocess_pass = OnnxQuantizationPreprocess(ACCEL_SPEC, preprocess_config)
     model = preprocess_pass.run(model, preprocess_dir)
-    logger.info(f"[FP16] 预处理完成: {input_path.name}")
+    logger.info(f"[FP16] Preprocessing completed: {input_path.name}")
 
     # 步骤2: 窥孔优化
-    logger.info(f"[FP16] 步骤2: 窥孔优化 - {input_path.name}")
+    logger.info(f"[FP16] Step 2: Peephole optimization - {input_path.name}")
     peephole_dir = str(work_dir / "peephole")
     peephole_config = OnnxPeepholeOptimizer.generate_config(ACCEL_SPEC)
     peephole_pass = OnnxPeepholeOptimizer(ACCEL_SPEC, peephole_config)
     model = peephole_pass.run(model, peephole_dir)
-    logger.info(f"[FP16] 窥孔优化完成: {input_path.name}")
+    logger.info(f"[FP16] Peephole optimization completed: {input_path.name}")
 
     # 步骤3: FP16 转换
-    logger.info(f"[FP16] 步骤3: FP16转换 - {input_path.name}")
+    logger.info(f"[FP16] Step 3: FP16 conversion - {input_path.name}")
     fp16_dir = str(work_dir / "fp16")
     fp16_config = OnnxFloatToFloat16.generate_config(ACCEL_SPEC)
     fp16_pass = OnnxFloatToFloat16(ACCEL_SPEC, fp16_config)
@@ -156,7 +156,7 @@ def optimize_model_fp16(input_path: Path, output_path: Path, work_dir: Path):
 
     # 复制最终输出到目标位置
     _copy_model_output(model, output_path)
-    logger.info(f"[FP16] 完成: {input_path.name} -> {output_path}")
+    logger.info(f"[FP16] Completed: {input_path.name} -> {output_path}")
 
 
 def _copy_model_output(model: ONNXModelHandler, output_path: Path):
@@ -185,12 +185,12 @@ def copy_non_onnx_files(src_dir: Path, dst_dir: Path):
             if dst.exists():
                 shutil.rmtree(dst)
             shutil.copytree(src, dst)
-            logger.info(f"复制非ONNX目录: {src} -> {dst}")
+            logger.info(f"Copied non-ONNX directory: {src} -> {dst}")
 
 
 def main():
     logger.info("=" * 60)
-    logger.info("Olive ONNX 模型优化工具")
+    logger.info("Olive ONNX model optimization tool")
     logger.info("=" * 60)
 
     # 创建输出目录
@@ -205,8 +205,8 @@ def main():
     onnx_models = find_onnx_models(BASE_DIR)
     onnx_data_files = find_onnx_data_files(BASE_DIR)
 
-    logger.info(f"找到 {len(onnx_models)} 个 ONNX 模型文件")
-    logger.info(f"找到 {len(onnx_data_files)} 个外部数据文件")
+    logger.info(f"Found {len(onnx_models)} ONNX model files")
+    logger.info(f"Found {len(onnx_data_files)} external data files")
 
     for full_path, rel_path in onnx_models:
         size_mb = full_path.stat().st_size / (1024 * 1024)
@@ -216,7 +216,7 @@ def main():
         logger.info(f"  - {rel_path} ({size_mb:.1f} MB)")
 
     # 复制非ONNX文件到两个输出目录
-    logger.info("\n--- 复制非ONNX文件 ---")
+    logger.info("\n--- Copying non-ONNX files ---")
     copy_non_onnx_files(BASE_DIR, INT8_DIR)
     copy_non_onnx_files(BASE_DIR, FP16_DIR)
 
@@ -232,7 +232,7 @@ def main():
 
     # INT8 量化
     logger.info("\n" + "=" * 60)
-    logger.info("开始 INT8 动态量化")
+    logger.info("Starting INT8 dynamic quantization")
     logger.info("=" * 60)
 
     for i, (full_path, rel_path) in enumerate(onnx_models, 1):
@@ -244,17 +244,17 @@ def main():
         try:
             optimize_model_int8(full_path, output_path, model_work_dir)
         except Exception as e:
-            logger.error(f"[INT8] 失败: {rel_path} - {e}", exc_info=True)
+            logger.error(f"[INT8] Failed: {rel_path} - {e}", exc_info=True)
             # 失败时复制原始文件作为回退
             shutil.copy2(full_path, output_path)
             data_file = full_path.with_suffix(".onnx.data")
             if data_file.exists():
                 shutil.copy2(data_file, output_path.with_suffix(".onnx.data"))
-            logger.warning(f"[INT8] 回退: 复制原始文件 {rel_path}")
+            logger.warning(f"[INT8] Fallback: copied original file {rel_path}")
 
     # FP16 转换
     logger.info("\n" + "=" * 60)
-    logger.info("开始 FP16 转换")
+    logger.info("Starting FP16 conversion")
     logger.info("=" * 60)
 
     for i, (full_path, rel_path) in enumerate(onnx_models, 1):
@@ -266,42 +266,42 @@ def main():
         try:
             optimize_model_fp16(full_path, output_path, model_work_dir)
         except Exception as e:
-            logger.error(f"[FP16] 失败: {rel_path} - {e}", exc_info=True)
+            logger.error(f"[FP16] Failed: {rel_path} - {e}", exc_info=True)
             # 失败时复制原始文件作为回退
             shutil.copy2(full_path, output_path)
             data_file = full_path.with_suffix(".onnx.data")
             if data_file.exists():
                 shutil.copy2(data_file, output_path.with_suffix(".onnx.data"))
-            logger.warning(f"[FP16] 回退: 复制原始文件 {rel_path}")
+            logger.warning(f"[FP16] Fallback: copied original file {rel_path}")
 
     # 复制 .onnx.data 文件到输出目录（如果量化后模型仍需要）
-    logger.info("\n--- 检查外部数据文件 ---")
+    logger.info("\n--- Checking external data files ---")
     for output_base, label in [(INT8_DIR, "INT8"), (FP16_DIR, "FP16")]:
         for src_path, rel_path in onnx_data_files:
             dst_path = output_base / rel_path
             if not dst_path.exists():
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_path, dst_path)
-                logger.info(f"[{label}] 复制外部数据: {rel_path}")
+                logger.info(f"[{label}] Copied external data: {rel_path}")
 
     # 清理临时工作目录
-    logger.info("\n--- 清理临时文件 ---")
+    logger.info("\n--- Cleaning temporary files ---")
     if work_dir.exists():
         shutil.rmtree(work_dir)
-        logger.info("临时工作目录已清理")
+        logger.info("Temporary work directory cleaned")
 
     # 输出统计
     logger.info("\n" + "=" * 60)
-    logger.info("优化完成！统计信息：")
+    logger.info("Optimization completed! Statistics:")
     logger.info("=" * 60)
 
     for label, out_dir in [("INT8", INT8_DIR), ("FP16", FP16_DIR)]:
         total_size = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
-        logger.info(f"{label}: {total_size / (1024*1024):.1f} MB 总大小 ({out_dir})")
+        logger.info(f"{label}: {total_size / (1024*1024):.1f} MB total ({out_dir})")
 
     # 详细对比
-    logger.info("\n--- 模型大小对比 ---")
-    logger.info(f"{'模型':<40} {'原始':>10} {'INT8':>10} {'FP16':>10}")
+    logger.info("\n--- Model size comparison ---")
+    logger.info(f"{'Model':<40} {'Original':>10} {'INT8':>10} {'FP16':>10}")
     for full_path, rel_path in onnx_models:
         orig_size = full_path.stat().st_size / (1024 * 1024)
         data_file = full_path.with_suffix(".onnx.data")
@@ -322,7 +322,7 @@ def main():
 
         logger.info(f"{rel_path:<40} {orig_size:>8.1f}MB {int8_size:>8.1f}MB {fp16_size:>8.1f}MB")
 
-    logger.info("\n完成！")
+    logger.info("\nDone!")
 
 
 if __name__ == "__main__":

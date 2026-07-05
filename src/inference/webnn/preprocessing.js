@@ -5,7 +5,7 @@
 import { MEL_DIM, EMBED_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } from './constants.js';
 import { ensureOrt, getOrt } from './ortSetup.js';
 import { runSession } from './sessionManager.js';
-import { createFloatTensor, outputToFloat32, padInt64ToLength, padToLength, trimOutputToLength } from './utils.js';
+import { createFloatTensor, outputToFloat32, padInt64ToLength, padToLength, trimOutputToLength, disposeTensor } from './utils.js';
 
 /**
  * 运行编码器阶段（4 个编码器 + preflow + condEmb）
@@ -51,10 +51,14 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     console.log(`[WebNN]   enc prep: ${(t4 - tEncPrep).toFixed(1)}ms, infer: ${encInferMs.toFixed(1)}ms`);
 
     const tEncPost = performance.now();
+    // 提取 4 个编码器输出。float32 路径下 outputToFloat32/trimOutputToLength 返回张量数据的视图，
+    // 在 dispose 张量前必须将所需数据拷贝到独立数组。此处先取视图用于 combine，combine 完成后即可释放。
     const textEmb = useStaticShapes ? trimOutputToLength(textResults['embeddings'], tokenCount) : outputToFloat32(textResults['embeddings']);
     const pitchEmb = useStaticShapes ? trimOutputToLength(pitchResults['embeddings'], tokenCount) : outputToFloat32(pitchResults['embeddings']);
     const typeEmb = useStaticShapes ? trimOutputToLength(typeResults['embeddings'], tokenCount) : outputToFloat32(typeResults['embeddings']);
-    const f0Emb = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], totalFrames) : outputToFloat32(f0Results['embeddings']);
+    // f0Emb 需要返回给调用方，取独立拷贝（slice）以确保后续 dispose f0 张量后仍可用
+    const f0EmbRaw = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], totalFrames) : outputToFloat32(f0Results['embeddings']);
+    const f0Emb = f0EmbRaw.slice();
 
     // Combine token embeddings
     const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
@@ -68,6 +72,12 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     }
     console.log(`[WebNN]   enc postprocess (combine embeddings): ${(performance.now() - tEncPost).toFixed(1)}ms`);
 
+    // 释放 4 个编码器输出张量（tokenEmb 已是独立数组，f0Emb 已 slice）
+    disposeTensor(textResults['embeddings']);
+    disposeTensor(pitchResults['embeddings']);
+    disposeTensor(typeResults['embeddings']);
+    disposeTensor(f0Results['embeddings']);
+
     // Preflow
     const tpf = performance.now();
     const preflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
@@ -75,6 +85,8 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     const featuresTensor = createFloatTensor(floatType, preflowTokenEmb, [1, preflowSeqLen, EMBED_DIM]);
     const preflowResults = await runSession('preflow', { features: featuresTensor });
     const processedTokenEmb = useStaticShapes ? trimOutputToLength(preflowResults['processed_features'], tokenCount) : outputToFloat32(preflowResults['processed_features']);
+    // 释放 preflow 输入张量
+    disposeTensor(featuresTensor);
     console.log(`[WebNN] preflow: ${(performance.now() - tpf).toFixed(0)}ms [${tokenCount}tokens × ${EMBED_DIM}${useStaticShapes ? ', NPU static' : ''}]`);
 
     // Expand and combine with f0
@@ -90,6 +102,8 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
         }
     }
     console.log(`[WebNN]   expand+combine (mel2token+f0): ${(performance.now() - tExpand).toFixed(1)}ms [${totalCondFrames}condFrames]`);
+    // 释放 preflow 输出张量（condCodeData 已是独立数组）
+    disposeTensor(preflowResults['processed_features']);
 
     // Cond embedding
     const tce = performance.now();
@@ -97,7 +111,12 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     const paddedCondCode = useStaticShapes ? padToLength(condCodeData, condSeqLen * EMBED_DIM) : condCodeData;
     const condCodeTensor = createFloatTensor(floatType, paddedCondCode, [1, condSeqLen, EMBED_DIM]);
     const condEmbResults = await runSession('condEmb', { cond_code: condCodeTensor });
-    const combinedCond = useStaticShapes ? trimOutputToLength(condEmbResults['cond_embedding'], totalCondFrames) : outputToFloat32(condEmbResults['cond_embedding']);
+    // combinedCond 需返回给调用方，取独立拷贝
+    const combinedCondRaw = useStaticShapes ? trimOutputToLength(condEmbResults['cond_embedding'], totalCondFrames) : outputToFloat32(condEmbResults['cond_embedding']);
+    const combinedCond = combinedCondRaw.slice();
+    // 释放 condEmb 输入和输出张量
+    disposeTensor(condCodeTensor);
+    disposeTensor(condEmbResults['cond_embedding']);
     console.log(`[WebNN] condEmb: ${(performance.now() - tce).toFixed(0)}ms [${totalCondFrames}frames × ${COND_DIM}${useStaticShapes ? ', NPU static' : ''}]`);
 
     console.log(`[WebNN] Encoder total: ${(performance.now() - tEnc0).toFixed(0)}ms`);

@@ -12,6 +12,7 @@
 // ===== 共享维度常量 =====
 export const SAMPLE_RATE = 24000;
 export const HOP_SIZE = 480;
+export const SIFIGAN_HOP_SIZE = 120;
 export const MEL_DIM = 128;
 export const EMBED_DIM = 512;
 export const COND_DIM = 1024;

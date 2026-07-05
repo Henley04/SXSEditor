@@ -215,7 +215,7 @@ function renderModelGroups(groups) {
             try {
                 await window.electronAPI.resmgrLoadGroup(group.id);
             } catch (err) {
-                console.error('加载模型组失败:', err);
+                console.error('Failed to load model group:', err);
             }
             await loadData();
         });
@@ -231,7 +231,7 @@ function renderModelGroups(groups) {
             try {
                 await window.electronAPI.resmgrUnloadGroup(group.id);
             } catch (err) {
-                console.error('卸载模型组失败:', err);
+                console.error('Failed to unload model group:', err);
             }
             await loadData();
         });
@@ -305,7 +305,7 @@ function renderModelGroups(groups) {
                     try {
                         await window.electronAPI.resmgrUnloadModel(group.id, model.id);
                     } catch (err) {
-                        console.error('卸载模型失败:', err);
+                        console.error('Failed to unload model:', err);
                         setBtnLoading(btn, false);
                     }
                     await loadData();
@@ -320,7 +320,7 @@ function renderModelGroups(groups) {
                     try {
                         await window.electronAPI.resmgrLoadModel(group.id, model.id);
                     } catch (err) {
-                        console.error('加载模型失败:', err);
+                        console.error('Failed to load model:', err);
                         setBtnLoading(btn, false);
                     }
                     await loadData();
@@ -460,7 +460,7 @@ async function loadData() {
                 showLoadFailed(modelGroupsContent);
             }
         } catch (err) {
-            console.error('加载数据失败:', err);
+            console.error('Failed to load data:', err);
             showLoadFailed(gpuInfoContent);
             showLoadFailed(modelGroupsContent);
         } finally {

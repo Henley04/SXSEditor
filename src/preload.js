@@ -1,5 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+let _webnnReadModelFileReqId = 0;
+
 contextBridge.exposeInMainWorld('electronAPI', {
   showSaveDialog: (options) => ipcRenderer.invoke('dialog:showSaveDialog', options),
   showOpenDialog: (options) => ipcRenderer.invoke('dialog:showOpenDialog', options),
@@ -12,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveFragmentData: (fragmentId, data) => ipcRenderer.invoke('saveFragmentData', fragmentId, data),
   saveFragmentDataSync: (fragmentId, data) => ipcRenderer.invoke('saveFragmentDataSync', fragmentId, data),
   getFragmentData: (fragmentId) => ipcRenderer.invoke('getFragmentData', fragmentId),
+  closeAllFragmentEditors: () => ipcRenderer.invoke('fragment:closeAll'),
   onFragmentSaved: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('fragmentDataSaved', handler);
@@ -36,6 +39,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   openSingerCreator: () => ipcRenderer.invoke('openSingerCreator'),
   saveSingerFile: (singerData) => ipcRenderer.invoke('saveSingerFile', singerData),
+  onSingerCreatorSaveRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('singer-creator:save-request', handler);
+    return () => ipcRenderer.removeListener('singer-creator:save-request', handler);
+  },
+  onSingerCreatorSaveAsRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('singer-creator:save-as-request', handler);
+    return () => ipcRenderer.removeListener('singer-creator:save-as-request', handler);
+  },
   onSingerCreated: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('singerCreated', handler);
@@ -57,6 +70,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   initSVSPipeline: () => ipcRenderer.invoke('svs:init'),
   synthesizeSVS: (data) => ipcRenderer.invoke('svs:synthesize', data),
   disposeSVSPipeline: () => ipcRenderer.invoke('svs:dispose'),
+  onSVSProgress: (callback) => {
+    const handler = (event, data) => callback(data.progress);
+    ipcRenderer.on('svs:progress', handler);
+    return () => ipcRenderer.removeListener('svs:progress', handler);
+  },
   getFragmentSVSSampleRate: () => ipcRenderer.invoke('fragment-svs:getSampleRate'),
   initFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:init'),
   synthesizeFragmentSVS: async (data) => {
@@ -73,6 +91,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('fragment-svs:progress', handler);
     return () => ipcRenderer.removeListener('fragment-svs:progress', handler);
   },
+  onFragmentSVSChunkAudio: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('fragment-svs:chunk-audio', handler);
+    return () => ipcRenderer.removeListener('fragment-svs:chunk-audio', handler);
+  },
   extractF0: (data) => ipcRenderer.invoke('extractF0:onnx', data),
   extractMidiRosvot: (data) => ipcRenderer.invoke('extractMidi:rosvot', data),
   extractF0BasicPitch: (data) => ipcRenderer.invoke('extractF0:basicPitch', data),
@@ -82,6 +105,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getDMLDevices: () => ipcRenderer.invoke('settings:getDMLDevices'),
   getHardwareStatus: () => ipcRenderer.invoke('settings:getHardwareStatus'),
   getCurrentHardware: () => ipcRenderer.invoke('settings:getCurrentHardware'),
+  getVocoderChunkFramesInfo: () => ipcRenderer.invoke('settings:getVocoderChunkFramesInfo'),
+  getVocoderChunkFramesTable: () => ipcRenderer.invoke('settings:getVocoderChunkFramesTable'),
   getSettings: () => ipcRenderer.invoke('settings:getSettings'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:saveSettings', settings),
   checkModels: () => ipcRenderer.invoke('settings:check-models'),
@@ -164,6 +189,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('close-confirm', handler);
   },
   closeConfirmed: () => ipcRenderer.invoke('close-confirmed'),
+  onMainMenuSaveRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('main-menu:save-request', handler);
+    return () => ipcRenderer.removeListener('main-menu:save-request', handler);
+  },
+  onMainMenuSaveAsRequest: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('main-menu:save-as-request', handler);
+    return () => ipcRenderer.removeListener('main-menu:save-as-request', handler);
+  },
   // 资源管理器
   resmgrOpen: () => ipcRenderer.invoke('resmgr:open'),
   resmgrGetGPUInfo: () => ipcRenderer.invoke('resmgr:getGPUInfo'),
@@ -179,7 +214,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   webnnUnloadModel: (modelId) => ipcRenderer.invoke('webnn:unloadModel', modelId),
   webnnRunInference: (modelId, inputs) => ipcRenderer.invoke('webnn:runInference', modelId, inputs),
   webnnGetStatus: () => ipcRenderer.invoke('webnn:getStatus'),
-  webnnReadModelFile: (filePath) => ipcRenderer.invoke('webnn:readModelFile', filePath),
+  webnnReadModelFile: (filePath) => {
+    return new Promise((resolve, reject) => {
+      const reqId = ++_webnnReadModelFileReqId;
+      const replyChannel = `webnn:readModelFile:reply:${reqId}`;
+      ipcRenderer.once(replyChannel, (_event, result) => {
+        if (result && result.success) {
+          resolve(result);
+        } else {
+          reject(new Error(result && result.error ? result.error : 'webnn:readModelFile failed'));
+        }
+      });
+      ipcRenderer.send('webnn:readModelFile', { filePath, reqId });
+    });
+  },
   validateDevices: () => ipcRenderer.invoke('settings:validateDevices'),
 
   // WebNN 渲染进程监听器注册（主进程 → 渲染进程请求）
@@ -241,6 +289,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return;
     }
     ipcRenderer.send(progressChannel, data);
+  },
+  // Security: whitelist allowed WebNN chunk-audio channels (流式 vocoder chunk 推送)
+  webnnChunk: (chunkChannel, data) => {
+    if (!chunkChannel.startsWith('webnn:runSynthesis:response:chunk:')) {
+      console.error('[Preload] Blocked unauthorized webnnChunk channel:', chunkChannel);
+      return;
+    }
+    ipcRenderer.send(chunkChannel, data);
   },
 
   // ==================== Theme API ====================

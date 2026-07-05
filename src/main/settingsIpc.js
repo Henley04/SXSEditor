@@ -1,6 +1,6 @@
 const { ipcMain, dialog } = require('electron');
 const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, invalidateSettingsCache } = require('./settings');
-const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateGPUCache, invalidateNPUCache } = require('./gpuInfo');
+const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateNPUCache, getVocoderChunkFramesInfo, getVocoderChunkFramesTable } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
 const { enumerateDMLDevices } = require('../inference/pipeline');
 const { getSvsPipeline, resetSvsPipeline } = require('./svsIpc');
@@ -56,6 +56,18 @@ function registerSettingsIpc() {
           source: 'webnn',
         });
       }
+      if (npuResult.gpuAvailable && !devices.some(d => d.deviceType === 'webnn-gpu')) {
+        devices.push({
+          name: t('settings.webnnGpuDevice'),
+          deviceType: 'webnn-gpu',
+          isDiscrete: false,
+          vramBytes: 0,
+          vram: '0 MB',
+          vendor: '',
+          dxgiAdapterNumber: undefined,
+          source: 'webnn',
+        });
+      }
       return devices;
     } catch (err) {
       console.error('[Main] DML device enumeration failed:', err);
@@ -73,6 +85,35 @@ function registerSettingsIpc() {
     } catch (err) {
       console.error('[Main] Failed to get current hardware info:', err);
       return null;
+    }
+  });
+
+  // 智能分配的 vocoder 分片帧数（设置页 UI 显示用）
+  // GPU 检测完成后基于最大显存计算，启动前返回默认值。
+  ipcMain.handle('settings:getVocoderChunkFramesInfo', async () => {
+    try {
+      // 传入当前模型精度 + vocoderType，让设置页显示按精度扣除常驻权重 + 按 vocoder 类型独立分档的 smartFrames
+      // SiFiGAN 模式下返回值不再除以上采样倍率（模型体积小，可用更长分片）
+      const settings = loadSettings();
+      const vocoderType = settings.vocoderType === 'sifigan' ? 'sifigan' : 'default';
+      return getVocoderChunkFramesInfo(settings.modelPrecision, vocoderType);
+    } catch (err) {
+      console.error('[Main] Failed to get vocoder chunk frames info:', err);
+      return { gpuPhase: 'none', smartFrames: 1008, bestVramBytes: 0, bestGpuName: null };
+    }
+  });
+
+  // 不同显存档位下的 vocoder 分片对照表（设置页 UI 展示用）。
+  // 以 8GB 为基准，向下扩展到核显（2GB）、向上扩展到旗舰独显（24GB）。
+  // 当精度或 vocoder 类型切换时，前端会重新调用此接口刷新对照表。
+  ipcMain.handle('settings:getVocoderChunkFramesTable', async () => {
+    try {
+      const settings = loadSettings();
+      const vocoderType = settings.vocoderType === 'sifigan' ? 'sifigan' : 'default';
+      return getVocoderChunkFramesTable(settings.modelPrecision, vocoderType);
+    } catch (err) {
+      console.error('[Main] Failed to get vocoder chunk frames table:', err);
+      return [];
     }
   });
 
@@ -150,21 +191,67 @@ function registerSettingsIpc() {
       await updateLocaleSetting(settings.locale);
     }
 
-    // 精度 / vocoder 类型 / 设备设置变化时必须重置 pipeline，
+    // 精度 / 设备设置变化时必须重置 pipeline，
     // 否则切换 INT8-NPU 等精度后仍使用旧 pipeline（模型仍加载在旧设备上）
-    if (settings.deviceMode !== undefined ||
-        settings.preferredDeviceId !== undefined ||
-        settings.modelDeviceMapping !== undefined ||
-        settings.modelPrecision !== undefined ||
-        settings.vocoderType !== undefined) {
+    //
+    // 注意：必须比较新旧值是否真正变化，而不能用 `!== undefined` 判断。
+    // 因为 settings.js 的 collectSettings() 总是返回包含全部字段的完整对象
+    // （deviceMode/modelPrecision 等始终有值，永不为 undefined），
+    // 若仅判断 `!== undefined`，则修改 previewDiffSteps/exportDiffSteps/audioVolume
+    // 等无关参数时也会误触发 resetSvsPipeline()，导致 NPU 上 WebNN session 被销毁重建，
+    // 重建时若 NPU 资源未完全释放（dispose 异步卸载未 await），probe 会静默回退到 WASM/CPU，
+    // 然后 markNPUUnavailable() 永久污染 NPU 检测缓存，造成"修改 diffstep 后 NPU 静默回退 CPU"。
+    //
+    // vocoderType 不在此列：仅切换 vocoder 时走增量 swapVocoder 路径，只重载 vocoder session，
+    // 避免主模型（encoders/preflow/condEmb/diffStep/melTransform）被重新加载。
+    // 但若其他 RESET_TRIGGER_KEYS 同时变化，仍走完整 reset（重建时自动读取最新 vocoderType）。
+    const RESET_TRIGGER_KEYS = ['deviceMode', 'preferredDeviceId', 'modelDeviceMapping', 'modelPrecision', 'inferenceProvider'];
+    const needsPipelineReset = RESET_TRIGGER_KEYS.some(key => {
+      // modelDeviceMapping 是对象，需深比较；其他字段为标量，直接比较
+      if (key === 'modelDeviceMapping') {
+        return JSON.stringify(current[key] || {}) !== JSON.stringify(merged[key] || {});
+      }
+      return current[key] !== merged[key];
+    });
+    const vocoderTypeChanged = current.vocoderType !== merged.vocoderType;
+    const sifiganPrecisionChanged = current.sifiganPrecision !== merged.sifiganPrecision;
+    if (needsPipelineReset) {
       resetSvsPipeline();
       resetRmvpe();
       resetBasicPitch();
       resetRosvot();
+    } else if (vocoderTypeChanged) {
+      // 增量切换 vocoder：仅重载 vocoder session，主模型保持不变
+      const newVocoderType = merged.vocoderType === 'sifigan' ? 'sifigan' : 'default';
+      const pipeline = getSvsPipeline();
+      if (pipeline && pipeline.initialized && typeof pipeline.swapVocoder === 'function') {
+        try {
+          await pipeline.swapVocoder(newVocoderType);
+        } catch (err) {
+          console.error('[Main] Vocoder swap failed:', err.message);
+        }
+      } else {
+        // Pipeline 未初始化：下次 init 时会读取最新 vocoderType，无需立即处理
+        console.log('[Main] Pipeline not initialized, vocoderType will apply on next init');
+      }
+    } else if (sifiganPrecisionChanged && merged.vocoderType === 'sifigan') {
+      // 增量切换 SiFiGAN 精度（仅 vocoderType === 'sifigan' 时）：仅重载 vocoder session
+      const newPrecision = merged.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32';
+      const pipeline = getSvsPipeline();
+      if (pipeline && typeof pipeline.swapSifiganPrecision === 'function') {
+        try {
+          await pipeline.swapSifiganPrecision(newPrecision);
+        } catch (err) {
+          console.error('[Main] SiFiGAN precision swap failed:', err.message);
+        }
+      } else {
+        console.log('[Main] Pipeline not initialized or swapSifiganPrecision unavailable, sifiganPrecision will apply on next init');
+      }
     }
 
-    invalidateDMLDevices();
-    invalidateGPUCache();
+    // 硬件探测仅在应用启动后执行一次并缓存复用，
+    // 保存设置时不再失效 GPU/DML 缓存（避免运行时重复触发 GPU 检测与 DML 探针推理，
+    // 同时规避检测与推理并发提交命令流导致 DXGI_ERROR_DEVICE_REMOVED 的风险）。
 
     return { success: true };
   });
@@ -176,7 +263,7 @@ function registerSettingsIpc() {
   ipcMain.handle('settings:check-models', async () => {
     const { checkMissingFiles } = require('../modelManager');
     const modelDir = getModelDir();
-    const precisions = ['fp32', 'fp16', 'fp8', 'int8', 'int8-npu'];
+    const precisions = ['fp32', 'fp16', 'int8', 'int8-npu'];
     const result = {};
     for (const p of precisions) {
       const { missing, existing } = checkMissingFiles(modelDir, p);

@@ -10,6 +10,17 @@ const { detectJapaneseNotes: _detectJapaneseNotes, detectEnglishNotes: _detectEn
 
 let currentLanguage = null; // Track current pipeline language
 
+// 合成级互斥锁：DML 后端下同一个 GPU 设备上的多个 InferenceSession 不支持并发 session.run()，
+// 否则命令流交叉提交会导致 887A0005 (GPU device hung)。
+// 此锁确保同一时刻只有一个合成请求在执行，防止 playAll/exportAll/fragment 合成并发。
+let _synthMutex = Promise.resolve();
+function _withSynthMutex(fn) {
+  const prev = _synthMutex;
+  let release;
+  _synthMutex = new Promise((r) => { release = r; });
+  return prev.then(fn).finally(release);
+}
+
 function _createPipeline(languageOverride) {
   const modelPath = getModelDir();
   const settings = loadSettings();
@@ -18,6 +29,7 @@ function _createPipeline(languageOverride) {
   const preferredDeviceType = settings.preferredDeviceType || undefined;
   const modelDeviceMapping = settings.modelDeviceMapping || undefined;
   const modelPrecision = settings.modelPrecision || 'fp16';
+  const inferenceProvider = settings.inferenceProvider || 'ortnode';
 
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
   console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}`);
@@ -29,6 +41,7 @@ function _createPipeline(languageOverride) {
     modelDeviceMapping,
     modelPrecision,
     languageOverride,
+    inferenceProvider,
   });
   return pipeline;
 }
@@ -61,10 +74,15 @@ async function ensurePipelineLanguage(language) {
 
   if (pipeline && pipeline.initialized && language !== currentLanguage) {
     // Language changed — swap only the 2 language-specific models
-    console.log(`[Main] Language ${currentLanguage || 'base'} → ${language || 'base'}, swapping models`);
+    console.log(`[Main] Language ${currentLanguage || 'base'} -> ${language || 'base'}, swapping models`);
     try {
       await pipeline.swapLanguageModels(language);
       currentLanguage = language;
+      // 清除 NPU 失败缓存：新语言模型在 NPU 上的表现可能不同，允许重新检测
+      try {
+        const { clearNPUFailureCache } = require('./webnnIpc');
+        clearNPUFailureCache();
+      } catch (_) {}
       return pipeline;
     } catch (err) {
       if (err.message === 'JP_MODELS_MISSING') throw err;
@@ -129,10 +147,20 @@ function registerSvsIpc() {
       // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）
       const opts = options || {};
       opts.language = language; // 用于缓存 key 区分（避免命中错误模型的结果）
+      // 进度回调：推送 'svs:progress' 到主窗口，与 fragment-svs:progress 对齐。
+      // 之前主页面合成无进度推送，导致推理预览百分比不显示。
+      const win = event.sender;
+      opts.onProgress = (progress) => {
+        try {
+          if (win && !win.isDestroyed()) {
+            win.send('svs:progress', { progress });
+          }
+        } catch (_) {}
+      };
       if (opts.autoShift && opts.refAudioWavBuffer) {
         opts.refF0Extractor = _makeRmvpeExtractor();
       }
-      return await pipeline.synthesize(notes, bpm, opts);
+      return await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts));
     } catch (err) {
       console.error('[Main] svs:synthesize failed:', err.message);
       throw err;
@@ -188,12 +216,20 @@ function registerSvsIpc() {
         }
       } catch (_) {}
     };
+    // 流式 chunk 音频推送：vocoder 每完成一个 chunk 即推送到 fragment 窗口，实现边合成边播放
+    opts.onChunkAudio = (chunkInfo) => {
+      try {
+        if (!win.isDestroyed()) {
+          win.send('fragment-svs:chunk-audio', chunkInfo);
+        }
+      } catch (_) {}
+    };
     // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）
     if (opts.autoShift && opts.refAudioWavBuffer) {
       opts.refF0Extractor = _makeRmvpeExtractor();
     }
     try {
-      const data = await pipeline.synthesize(notes, bpm, opts);
+      const data = await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts));
       return { data };
     } catch (err) {
       return { error: err.message };

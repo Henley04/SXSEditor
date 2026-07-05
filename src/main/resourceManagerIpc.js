@@ -172,7 +172,7 @@ function registerResourceManagerIpc() {
 
       return { success: true, gpus: gpuList };
     } catch (err) {
-      console.error('[Main] 获取GPU信息失败:', err);
+      console.error('[Main] Failed to get GPU info:', err);
       return { success: false, gpus: [], error: err.message };
     }
   });
@@ -246,7 +246,7 @@ function registerResourceManagerIpc() {
     try {
       return await loadSingleModel(groupId, modelId);
     } catch (err) {
-      console.error(`[Main] 加载模型失败 (${groupId}/${modelId}):`, err.message);
+      console.error(`[Main] Failed to load model (${groupId}/${modelId}):`, err.message);
       cleanupOnLoadFailure(groupId);
       return { success: false, error: err.message };
     }
@@ -256,7 +256,7 @@ function registerResourceManagerIpc() {
     try {
       return await unloadSingleModel(groupId, modelId);
     } catch (err) {
-      console.error(`[Main] 卸载模型失败 (${groupId}/${modelId}):`, err.message);
+      console.error(`[Main] Failed to unload model (${groupId}/${modelId}):`, err.message);
       return { success: false, error: err.message };
     }
   });
@@ -280,7 +280,7 @@ function registerResourceManagerIpc() {
       }
       return { success: true };
     } catch (err) {
-      console.error(`[Main] 加载模型组失败 (${groupId}):`, err.message);
+      console.error(`[Main] Failed to load model group (${groupId}):`, err.message);
       cleanupOnLoadFailure(groupId);
       return { success: false, error: err.message };
     }
@@ -307,7 +307,7 @@ function registerResourceManagerIpc() {
       }
       return { success: true };
     } catch (err) {
-      console.error(`[Main] 卸载模型组失败 (${groupId}):`, err.message);
+      console.error(`[Main] Failed to unload model group (${groupId}):`, err.message);
       return { success: false, error: err.message };
     }
   });

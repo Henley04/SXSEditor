@@ -60,12 +60,12 @@ class RmvpePitchDetector {
     if (this.initialized) return true;
 
     const modelPath = path.join(this.modelDir, 'preprocess', 'rmvpe_model.onnx');
-    console.log('[RmvpePitchDetector] 尝试加载模型:', modelPath);
+    console.log('[RmvpePitchDetector] attempting to load model:', modelPath);
 
     // 检查文件是否存在
     const fs = require('fs');
     if (!fs.existsSync(modelPath)) {
-      const errMsg = `[RmvpePitchDetector] 模型文件不存在: ${modelPath}`;
+      const errMsg = `[RmvpePitchDetector] model file does not exist: ${modelPath}`;
       console.error(errMsg);
       const err = new Error(errMsg);
       err.code = 'MODEL_NOT_FOUND';
@@ -74,7 +74,7 @@ class RmvpePitchDetector {
     }
 
     const stats = fs.statSync(modelPath);
-    console.log(`[RmvpePitchDetector] 模型文件大小: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
+    console.log(`[RmvpePitchDetector] model file size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 
     try {
       let sessionOptions = {
@@ -93,12 +93,12 @@ class RmvpePitchDetector {
         this.session = await ort.InferenceSession.create(modelPath, dmlOptions);
         this.usingDML = true;
         const deviceTag = typeof this.deviceId === 'number' ? ` [DML deviceId=${this.deviceId}]` : ' [DML]';
-        console.log(`[RmvpePitchDetector] 模型加载成功${deviceTag}`);
+        console.log(`[RmvpePitchDetector] model loaded successfully${deviceTag}`);
       } catch (dmlErr) {
-        console.log('[RmvpePitchDetector] DirectML不可用，回退到CPU:', dmlErr.message);
+        console.log('[RmvpePitchDetector] DirectML unavailable, falling back to CPU:', dmlErr.message);
         this.session = await ort.InferenceSession.create(modelPath, sessionOptions);
         this.usingDML = false;
-        console.log('[RmvpePitchDetector] 模型加载成功 [CPU]');
+        console.log('[RmvpePitchDetector] model loaded successfully [CPU]');
       }
       
       this.initialized = true;
@@ -107,13 +107,13 @@ class RmvpePitchDetector {
       const inputMetadata = this.session.inputMetadata;
       const audioInputMeta = inputMetadata.find(m => m.name === 'audio') || inputMetadata[0];
       this.isFP16 = audioInputMeta?.type === 'float16';
-      console.log(`[RmvpePitchDetector] 模型精度: ${this.isFP16 ? 'FP16 (半精度)' : 'FP32 (全精度)'}`);
+      console.log(`[RmvpePitchDetector] model precision: ${this.isFP16 ? 'FP16 (half precision)' : 'FP32 (full precision)'}`);
 
-      console.log('[RmvpePitchDetector] 输入名称:', this.session.inputNames);
-      console.log('[RmvpePitchDetector] 输出名称:', this.session.outputNames);
+      console.log('[RmvpePitchDetector] input names:', this.session.inputNames);
+      console.log('[RmvpePitchDetector] output names:', this.session.outputNames);
       return true;
     } catch (err) {
-      console.error('[RmvpePitchDetector] 模型加载失败:', err.message);
+      console.error('[RmvpePitchDetector] model load failed:', err.message);
       err.modelPath = modelPath;
       throw err;
     }
@@ -133,9 +133,22 @@ class RmvpePitchDetector {
 
     const outputs = await this.session.run({ audio: inputTensor });
 
+    // 释放输入张量（性能审查 #3 中优先级：RMVPE 输入泄漏）
+    try { if (typeof inputTensor.dispose === 'function') inputTensor.dispose(); } catch (_) {}
+
     const pitchOutput = Object.values(outputs)[0];
     const pitchData = outputToFloat32(pitchOutput);
     const timeFrames = pitchOutput.dims[1];
+    // 释放输出张量（pitchData 已是独立拷贝）
+    try { if (typeof pitchOutput.dispose === 'function') pitchOutput.dispose(); } catch (_) {}
+
+    // indexToF0 LUT：避免每帧调用 Math.pow（性能审查 #4 中优先级）
+    if (!this._f0Lut) {
+      this._f0Lut = new Float32Array(N_CLASS);
+      for (let i = 0; i < N_CLASS; i++) {
+        this._f0Lut[i] = F0_MIN * Math.pow(F0_MAX / F0_MIN, i / (N_CLASS - 1));
+      }
+    }
 
     const rawF0 = new Float32Array(timeFrames);
 
@@ -151,7 +164,7 @@ class RmvpePitchDetector {
         }
       }
 
-      rawF0[t] = this.indexToF0(maxIndex);
+      rawF0[t] = this._f0Lut[maxIndex];
     }
 
     const interpolatedF0 = RmvpePitchDetector.interpolateF0(
@@ -311,7 +324,7 @@ class RmvpePitchDetector {
       try {
         this.session.release();
       } catch (e) {
-        console.warn('[RmvpePitchDetector] 释放会话失败:', e.message);
+        console.warn('[RmvpePitchDetector] session release failed:', e.message);
       }
       this.session = null;
       this.initialized = false;
