@@ -43,7 +43,7 @@ macOS / Linux: build from source (see below).
 5. Click **Start Audio Preprocessing** → extract F0 and MIDI → **edit lyrics for each note** → save.
 6. Use the **File → Save** menu (or `Ctrl+S`) to save the `.sxssinger` file. The first save prompts for a location; subsequent saves write to the same file silently. Use **File → Save As...** (`Ctrl+Shift+S`) to save to a new location.
 7. Click **+** on the singer row to add a fragment. Double-click to open the editor.
-8. Add notes, type lyrics, optionally draw pitch curves. Save.
+8. Add notes, type lyrics, optionally draw pitch curves. Edits auto-sync to the main window (no Save button needed — 500ms debounced auto-save). Use `Ctrl+S` to force-sync immediately.
 9. Press **Play** to synthesize and listen. Use **Export** to save as WAV.
 
 See the [Wiki](docs/wiki/Home.md) for full documentation.
@@ -152,7 +152,7 @@ macOS / Linux 用户请从源码构建。
 5. 点击**开始音频预处理** → 提取 F0 和 MIDI → **为每个音符填写歌词** → 保存。
 6. 通过 **文件 → 保存** 菜单（或 `Ctrl+S`）保存 `.sxssinger` 文件。首次保存会询问保存位置，之后再次保存会直接写入原文件。需要换位置保存时用 **文件 → 另存为...**（`Ctrl+Shift+S`）。
 7. 在歌手行点击 **+** 添加分片，双击打开编辑器。
-8. 添加音符、输入歌词、可选绘制音高曲线。保存。
+8. 添加音符、输入歌词、可选绘制音高曲线。编辑后自动同步到主页面（无需保存按钮，500ms 防抖自动保存）。按 `Ctrl+S` 可立即强制同步。
 9. 按 **播放**合成试听。用 **导出**保存为 WAV。
 
 完整文档见 [Wiki](docs/wiki/Home.md)。
@@ -257,7 +257,7 @@ macOS / Linux：ソースからビルドしてください。
 5. **音声前処理を開始** → F0 と MIDI を抽出 → **各音符に歌詞を入力** → 保存。
 6. **ファイル → 保存**メニュー（または `Ctrl+S`）で `.sxssinger` ファイルを保存。初回は保存先を尋ね、以降は同じファイルに直接上書き保存されます。別の場所に保存する場合は **ファイル → 名前を付けて保存...**（`Ctrl+Shift+S`）。
 7. 歌手行の **+** でフラグメントを追加、ダブルクリックでエディターを開く。
-8. 音符を追加、歌詞を入力、必要に応じてピッチカーブを描画。保存。
+8. 音符を追加、歌詞を入力、必要に応じてピッチカーブを描画。編集は自動的にメインウィンドウへ同期されます（保存ボタン不要、500ms デバウンス自動保存）。`Ctrl+S` で即時同期可能。
 9. **再生**で合成・試聴。**エクスポート**で WAV 保存。
 
 詳細は [Wiki](docs/wiki/Home.md) を参照。

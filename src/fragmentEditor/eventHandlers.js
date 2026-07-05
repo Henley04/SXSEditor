@@ -1,6 +1,5 @@
 import { PARAM_MODES } from '../editor/pianoRoll.js';
 import { showAlertDialog } from '../alertDialog.js';
-import { t } from '../i18n/index.js';
 import { HistoryManager } from '../editor/historyManager.js';
 import { initPipeline } from './pipeline.js';
 import {
@@ -1265,6 +1264,7 @@ export function setupEventListeners() {
     }
 
     if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+      // Ctrl+S：取消防抖立即推送到主页面（自动保存已开启，此为强制立即同步）
       e.preventDefault();
       const autoSaveTimer = getAutoSaveTimer();
       if (autoSaveTimer) {
@@ -1272,10 +1272,6 @@ export function setupEventListeners() {
         setAutoSaveTimer(null);
       }
       saveFragmentData();
-      const btnSave = document.getElementById('btn-save');
-      const origText = btnSave.textContent;
-      btnSave.textContent = t('fragment.saved');
-      setTimeout(() => { btnSave.textContent = origText; }, 1500);
       return;
     }
 
