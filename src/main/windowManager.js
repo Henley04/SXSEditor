@@ -295,6 +295,9 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   if (fragmentWindows[fragment.id] && !fragmentWindows[fragment.id].isDestroyed()) {
     fragmentWindows[fragment.id].focus();
     fragmentWindows[fragment.id].webContents.send('loadFragment', sendData);
+    // 窗口复用时也更新 pendingFragmentData 快照，确保 fallback getFragmentData
+    // 拿到的是最新数据，避免分片编辑器在守卫放行后仍读到旧快照。
+    pendingFragmentData[fragment.id] = sendData;
     return;
   }
 
@@ -477,6 +480,17 @@ function openAudioPreprocess(data) {
   });
 }
 
+function closeAllFragmentEditors() {
+  for (const id in fragmentWindows) {
+    const win = fragmentWindows[id];
+    if (win && !win.isDestroyed()) {
+      win.destroy();
+    }
+    delete fragmentWindows[id];
+    delete pendingFragmentData[id];
+  }
+}
+
 function getAllWebContents() {
   return BrowserWindow.getAllWindows().map(w => w.webContents).filter(Boolean);
 }
@@ -512,6 +526,11 @@ function registerWindowIpc() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('fragmentDataSaved', { fragmentId, ...data });
     }
+    return { success: true };
+  });
+
+  ipcMain.handle('fragment:closeAll', async () => {
+    closeAllFragmentEditors();
     return { success: true };
   });
 
@@ -605,4 +624,5 @@ module.exports = {
   getIsDirty,
   setClosePending,
   getClosePending,
+  closeAllFragmentEditors,
 };
