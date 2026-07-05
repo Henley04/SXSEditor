@@ -1,5 +1,99 @@
 import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
 
+// 复用分片编辑器 buildPitchCurveF0Data + getPitchAtTime + generateAutoPitchPoints 的逻辑，
+// 但接受 fragment 参数（不依赖分片编辑器全局 state）。
+// 主页面逐 fragment 合成时调用，确保与分片编辑器播放的 f0 轨迹完全一致。
+export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
+  if (!fragment || !fragment.pitchCurve || !fragment.pitchCurve.enabled) return null;
+  const pc = fragment.pitchCurve;
+  const hasCustom = pc.anchorPoints.length > 0 || pc.brushSegments.length > 0;
+  if (!hasCustom) return null;
+  if (!clippedNotes || clippedNotes.length === 0) return null;
+
+  const fragDuration = fragment.duration || Infinity;
+  const lastNote = clippedNotes[clippedNotes.length - 1];
+  const totalBeats = Math.min(lastNote.start + lastNote.duration, fragDuration);
+  const totalSeconds = (totalBeats / bpm) * 60;
+  const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / SVS_HOP_SIZE);
+
+  // 预排序 anchor points（与分片编辑器 getSortedAnchorPoints 一致）
+  const sortedAnchors = [...pc.anchorPoints].sort((a, b) => a.time - b.time);
+
+  // 预生成 autoPoints（与分片编辑器 generateAutoPitchPoints 一致），基于 clippedNotes
+  const autoPoints = [];
+  for (const note of clippedNotes) {
+    autoPoints.push({ time: note.start, pitch: note.pitch });
+    autoPoints.push({ time: note.start + note.duration, pitch: note.pitch, breakAfter: true });
+  }
+
+  const f0Array = new Float32Array(totalFrames);
+  for (let i = 0; i < totalFrames; i++) {
+    const frameTimeSec = (i * SVS_HOP_SIZE) / SAMPLE_RATE;
+    const frameBeat = (frameTimeSec / 60) * bpm;
+    const inNote = clippedNotes.some(n => frameBeat >= n.start && frameBeat < n.start + n.duration);
+    if (!inNote) {
+      f0Array[i] = 0;
+      continue;
+    }
+    const pitch = _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, frameBeat);
+    if (pitch !== null && pitch > 0) {
+      f0Array[i] = 440 * Math.pow(2, (pitch - 69) / 12);
+    } else {
+      f0Array[i] = 0;
+    }
+  }
+  return f0Array;
+}
+
+// 等价于分片编辑器 getPitchAtTime，但不依赖全局 state
+function _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, time) {
+  if (!pc.enabled) return null;
+
+  if (sortedAnchors.length > 0) {
+    if (time < sortedAnchors[0].time || time > sortedAnchors[sortedAnchors.length - 1].time) {
+      // outside anchor range, fall through to brush/auto
+    } else {
+      for (let i = 0; i < sortedAnchors.length - 1; i++) {
+        if (time >= sortedAnchors[i].time && time <= sortedAnchors[i + 1].time) {
+          const t = (sortedAnchors[i + 1].time - sortedAnchors[i].time) > 0
+            ? (time - sortedAnchors[i].time) / (sortedAnchors[i + 1].time - sortedAnchors[i].time)
+            : 0;
+          const smoothness = (sortedAnchors[i].smoothness || 0) / 100;
+          const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
+          return sortedAnchors[i].pitch + smoothT * (sortedAnchors[i + 1].pitch - sortedAnchors[i].pitch);
+        }
+      }
+      return sortedAnchors[sortedAnchors.length - 1].pitch;
+    }
+  }
+
+  for (const seg of pc.brushSegments) {
+    if (seg.points.length < 2) continue;
+    if (time >= seg.points[0].time && time <= seg.points[seg.points.length - 1].time) {
+      for (let i = 0; i < seg.points.length - 1; i++) {
+        if (time >= seg.points[i].time && time <= seg.points[i + 1].time) {
+          const t = (seg.points[i + 1].time - seg.points[i].time) > 0
+            ? (time - seg.points[i].time) / (seg.points[i + 1].time - seg.points[i].time)
+            : 0;
+          return seg.points[i].pitch + t * (seg.points[i + 1].pitch - seg.points[i].pitch);
+        }
+      }
+    }
+  }
+
+  if (autoPoints.length === 0) return null;
+  for (let i = 0; i < autoPoints.length - 1; i++) {
+    if (time >= autoPoints[i].time && time <= autoPoints[i + 1].time) {
+      if (autoPoints[i].breakAfter) continue;
+      const t = (autoPoints[i + 1].time - autoPoints[i].time) > 0
+        ? (time - autoPoints[i].time) / (autoPoints[i + 1].time - autoPoints[i].time)
+        : 0;
+      return autoPoints[i].pitch + t * (autoPoints[i + 1].pitch - autoPoints[i].pitch);
+    }
+  }
+  return null;
+}
+
 export function convertF0DataToPitchCurve(f0Data, totalSeconds) {
   if (!f0Data || f0Data.length === 0) return null;
   const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / SVS_HOP_SIZE);
