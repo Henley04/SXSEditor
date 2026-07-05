@@ -61,7 +61,7 @@ import {
   _valueToParamY,
   deepClone, clonePitchCurveState, applyPitchCurveSnapshot,
   cloneEnvelopeState, applyEnvelopeSnapshot,
-  genNoteId, hasNoteOverlap, clampNotePosition,
+  genNoteId, hasNoteOverlap, hasNoteOverlapMulti, clampNotePosition,
   findAnchorPointAt,
   convertBrushStrokeToAnchorPoints,
   getPhonemeAdjustments, getPhonemeStartX, normalizePhonemeRatios,
@@ -96,20 +96,39 @@ function applyNoteDrag(pos) {
     for (const n of notes) {
       if (selectedNoteIds.has(n.id)) noteMap[n.id] = n;
     }
-    let blocked = false;
-    const planned = [];
+    // 1. 先计算所有选中 notes 的原始新位置（未截断到 0）
+    const rawPlanned = [];
     for (const id of selectedNoteIds) {
       const note = noteMap[id];
       const start = getDragNoteStarts().get(id);
       if (note && start) {
-        const newStart = Math.max(0, snapBeats(start.start + dxBeats));
+        const rawStart = snapBeats(start.start + dxBeats);
         const newPitch = Math.max(0, Math.min(127, start.pitch + dyPitch));
-        if (hasNoteOverlap(id, newPitch, newStart, newStart + note.duration)) {
-          blocked = true;
-          break;
-        }
-        planned.push({ note, newStart, newPitch });
+        rawPlanned.push({ note, rawStart, newPitch, duration: note.duration });
       }
+    }
+    if (rawPlanned.length === 0) {
+      render();
+      return true;
+    }
+    // 2. 若最左 note 越界（rawStart < 0），整体平移使最左 note 落到 0，
+    //    保持选中 notes 之间的相对位置不变，避免 Math.max(0, ...) 单独截断
+    //    导致相对位置错乱、产生新重叠或视觉错位。
+    let minRawStart = Infinity;
+    for (const p of rawPlanned) {
+      if (p.rawStart < minRawStart) minRawStart = p.rawStart;
+    }
+    const shift = minRawStart < 0 ? -minRawStart : 0;
+    // 3. 计算最终新位置（已保证 >= 0）并检测与非选中 notes 的重叠
+    let blocked = false;
+    const planned = [];
+    for (const p of rawPlanned) {
+      const newStart = p.rawStart + shift;
+      if (hasNoteOverlapMulti(selectedNoteIds, p.newPitch, newStart, newStart + p.duration)) {
+        blocked = true;
+        break;
+      }
+      planned.push({ note: p.note, newStart, newPitch: p.newPitch });
     }
     if (!blocked) {
       for (const p of planned) {
@@ -1505,6 +1524,11 @@ export function setupEventListeners() {
         let blocked = false;
         const planned = [];
         const notes = getNotes();
+        // 多选时使用排除所有选中 notes 的重叠检测，避免相邻选中 notes 的"假重叠"
+        // 导致键盘多选移动被错误 blocked（与鼠标多选拖动同一根因）。
+        const checkOverlap = selectedNoteIds.size > 1
+          ? (id, pitch, start, end) => hasNoteOverlapMulti(selectedNoteIds, pitch, start, end)
+          : (id, pitch, start, end) => hasNoteOverlap(id, pitch, start, end);
         for (const id of selectedNoteIds) {
           const note = notes.find(n => n.id === id);
           if (note) {
@@ -1514,7 +1538,7 @@ export function setupEventListeners() {
             else if (e.key === 'ArrowDown') newPitch = Math.max(0, note.pitch - step);
             else if (e.key === 'ArrowLeft') newStart = Math.max(0, snapBeats(note.start - timeStep));
             else if (e.key === 'ArrowRight') newStart = Math.max(0, snapBeats(note.start + timeStep));
-            if (hasNoteOverlap(id, newPitch, newStart, newStart + note.duration)) {
+            if (checkOverlap(id, newPitch, newStart, newStart + note.duration)) {
               blocked = true;
               break;
             }
