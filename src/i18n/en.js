@@ -337,7 +337,7 @@ export default {
     vocoderChunkDesc: 'For long audio synthesis, the vocoder processes audio in chunks and crossfades the segments. Larger chunks use more VRAM but require fewer crossfades; smaller chunks save VRAM but increase crossfade overhead.',
     vocoderChunkMode: 'Chunk Size Mode',
     vocoderChunkSmart: 'Smart Allocation',
-    vocoderChunkSmartDesc: 'Automatically choose chunk size based on VRAM (<2GB→512, <4GB→768, <8GB→1008, ≥8GB→1536)',
+    vocoderChunkSmartDesc: 'Automatically choose chunk size based on VRAM, precision and vocoder type. Default vocoder is more conservative (8GB→536 frames); SiFiGAN has a smaller model footprint and supports longer chunks (8GB→1008 frames).',
     vocoderChunkManual: 'Manual',
     vocoderChunkManualDesc: 'Manually specify chunk size (frames); must be a multiple of 8, range 256~2048',
     vocoderChunkFrames: 'Chunk Size (frames)',
