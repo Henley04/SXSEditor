@@ -91,10 +91,15 @@ function applyNoteDrag(pos) {
   if (dragMode === 'move' && selectedNoteIds.size > 1) {
     const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
     const dyPitch = Math.round(yToPitchContinuous(pos.y) - getDragStartMousePitch());
+    // 构建 O(1) note 查询表，避免每帧对每个选中 note 做 O(n) 数组扫描
+    const noteMap = {};
+    for (const n of notes) {
+      if (selectedNoteIds.has(n.id)) noteMap[n.id] = n;
+    }
     let blocked = false;
     const planned = [];
     for (const id of selectedNoteIds) {
-      const note = notes.find(n => n.id === id);
+      const note = noteMap[id];
       const start = getDragNoteStarts().get(id);
       if (note && start) {
         const newStart = Math.max(0, snapBeats(start.start + dxBeats));
