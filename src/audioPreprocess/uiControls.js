@@ -361,7 +361,7 @@ export async function saveSingerData() {
       window.close();
     });
   } catch (err) {
-    console.error('保存失败:', err);
+    console.error('Save failed:', err);
     showAlertDialog(t('preprocess.saveFailed') + ': ' + err.message);
   } finally {
     hideLoading(loading);

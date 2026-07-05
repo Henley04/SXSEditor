@@ -1,6 +1,6 @@
-import { state, dom, trackManager } from './state.js';
+import { state, trackManager } from './state.js';
 import { initI18n, applyLocale, getLocale } from '../i18n/index.js';
-import { markDirty, markClean, autoSaveProject, showSaveBeforeCloseDialog } from './projectManager.js';
+import { markDirty, autoSaveProject, saveProject, showSaveBeforeCloseDialog } from './projectManager.js';
 import { refreshAll } from './timelineRenderer.js';
 
 // Singer created IPC handler
@@ -73,41 +73,21 @@ if (window.electronAPI?.onLocaleChanged) {
 
 // Close confirm IPC handler
 if (window.electronAPI?.onCloseConfirm) {
-  let closeAfterSave = false;
-  let closeSavePollTimer = null;
-  let closeSaveTimeoutTimer = null;
-
-  function cleanupCloseTimers() {
-    if (closeSavePollTimer) { clearInterval(closeSavePollTimer); closeSavePollTimer = null; }
-    if (closeSaveTimeoutTimer) { clearTimeout(closeSaveTimeoutTimer); closeSaveTimeoutTimer = null; }
-    closeAfterSave = false;
-  }
-
   function doCloseConfirmed() {
-    cleanupCloseTimers();
     if (window.electronAPI?.closeConfirmed) {
       window.electronAPI.closeConfirmed();
     }
   }
 
-  // Intercept save button click to close window after save
-  dom.btnSave.addEventListener('click', function onSaveForClose() {
-    if (!closeAfterSave) return;
-    cleanupCloseTimers();
-    closeSavePollTimer = setInterval(() => {
-      if (!state.isDirty) doCloseConfirmed();
-    }, 100);
-    closeSaveTimeoutTimer = setTimeout(() => {
-      doCloseConfirmed();
-    }, 10000);
-  });
-
   const cleanupClose = window.electronAPI.onCloseConfirm(async () => {
     try {
       const result = await showSaveBeforeCloseDialog();
       if (result === 'save') {
-        closeAfterSave = true;
-        dom.btnSave.click();
+        const res = await saveProject();
+        if (res && res.saved && !state.isDirty) {
+          doCloseConfirmed();
+        }
+        // If save was canceled or failed, leave the window open.
       } else if (result === 'discard') {
         doCloseConfirmed();
       }
@@ -237,11 +217,20 @@ if (window.electronAPI?.onCloseConfirm) {
         const onProgress = (progress) => {
           try { api.webnnProgress(`webnn:progress:${requestId}`, { progress }); } catch (_) {}
         };
-        // Array params = batch synthesis (2 segments, batch=4)
+        // Chunk audio callback: 流式推送 vocoder chunk 到主进程（主进程再转发到 fragment 窗口）
+        const onChunkComplete = (chunkInfo) => {
+          try {
+            // Float32Array 通过 structured clone 传输；主进程监听 chunkChannel
+            api.webnnChunk(`webnn:runSynthesis:response:chunk:${requestId}`, chunkInfo);
+          } catch (e) {
+            console.warn('[WebNN] Failed to forward chunk audio:', e.message);
+          }
+        };
+        // Array params = batch synthesis (2 segments, batch=4) — batch 路径暂不支持流式
         if (Array.isArray(params)) {
           result = await pipeline.runSynthesisBatch(params.map(p => ({ ...p, onProgress })));
         } else {
-          result = await pipeline.runSynthesis({ ...params, onProgress });
+          result = await pipeline.runSynthesis({ ...params, onProgress, onChunkComplete });
         }
       } catch (e) {
         result = { error: e.message };

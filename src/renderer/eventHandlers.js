@@ -4,7 +4,7 @@ import {
   HEADER_HEIGHT,
 } from './constants.js';
 import { t } from '../i18n/index.js';
-import { updateProjectSettings, saveProject, loadProject, showSingerSelectDialog } from './projectManager.js';
+import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog } from './projectManager.js';
 import { playAll, pausePlayback, stopPlayback, exportAll } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll } from './timelineRenderer.js';
@@ -50,10 +50,7 @@ dom.btnStop.addEventListener('click', () => {
 });
 
 // Project save/load/export
-dom.btnSave.addEventListener('click', async () => {
-  await saveProject();
-});
-
+// Save is triggered via menu (File → Save, Ctrl+S) or the menu-request IPC.
 dom.btnLoad.addEventListener('click', async () => {
   await loadProject();
   refreshAll();
@@ -144,12 +141,14 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
     const newDuration = Math.max(0.25, state.dragState.originalDuration + dx);
     trackManager.updateFragment(state.dragState.fragment.id, { duration: Math.round(newDuration * 4) / 4 });
   } else if (state.dragState.type === 'resize-left') {
+    const originalEnd = state.dragState.originalStart + state.dragState.originalDuration;
     const newStart = state.dragState.originalStart + dx;
-    const newDuration = state.dragState.originalDuration - dx;
-    if (newStart >= 0 && newDuration >= 0.25) {
+    const alignedStart = Math.max(0, Math.round(newStart * 4) / 4);
+    const newDuration = originalEnd - alignedStart;
+    if (alignedStart >= 0 && newDuration >= 0.25) {
       trackManager.updateFragment(state.dragState.fragment.id, {
-        startTime: Math.round(newStart * 4) / 4,
-        duration: Math.round(newDuration * 4) / 4,
+        startTime: alignedStart,
+        duration: newDuration,
       });
     }
   }
@@ -158,6 +157,13 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
     state.renderPending = true;
     requestAnimationFrame(() => {
       renderFragmentTimeline();
+      if (window.electronAPI?.updateFragmentBounds && state.dragState) {
+        const frag = state.dragState.fragment;
+        window.electronAPI.updateFragmentBounds(frag.id, {
+          startTime: frag.startTime,
+          duration: frag.duration,
+        });
+      }
       state.renderPending = false;
     });
   }
@@ -227,12 +233,6 @@ dom.singerListEl.addEventListener('wheel', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-  if ((e.ctrlKey || e.metaKey) && e.key === 's' && !e.shiftKey) {
-    e.preventDefault();
-    dom.btnSave.click();
-    return;
-  }
-
   if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
     e.preventDefault();
     if (history.canUndo()) {
@@ -259,3 +259,14 @@ window.addEventListener('beforeunload', () => {
   }
   state._ipcCleanups.length = 0;
 });
+
+// Menu-driven save / save-as requests (sent from the main process File menu).
+// The menu registers the Ctrl+S / Ctrl+Shift+S accelerators.
+if (window.electronAPI?.onMainMenuSaveRequest) {
+  const off1 = window.electronAPI.onMainMenuSaveRequest(() => { saveProject(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(off1);
+}
+if (window.electronAPI?.onMainMenuSaveAsRequest) {
+  const off2 = window.electronAPI.onMainMenuSaveAsRequest(() => { saveProjectAs(); });
+  if (state._ipcCleanups) state._ipcCleanups.push(off2);
+}

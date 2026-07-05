@@ -9,6 +9,7 @@ let fragmentAudioSource = null;
 let fragmentAudioData = null;
 let fragmentIsPlaying = false;
 let fragmentIsSynthesizing = false;
+let fragmentIsExporting = false;
 let fragmentPlaybackStartTime = 0;
 let fragmentPlaybackOffset = 0;
 let fragmentPlayheadRaf = null;
@@ -88,6 +89,9 @@ let paramPanelMode = 'VOL'; // 'VOL' | 'PAN' | 'Phoneme' | 'Timbre'
 
 let fragmentDataReceived = false;
 
+// 缓存在 currentFragment 就绪前到达的 fragmentBoundsChanged，待 handleFragmentData 完成后回放
+let pendingBoundsUpdate = null;
+
 const phonemeCache = new Map();
 
 const _ipcCleanups = [];
@@ -117,6 +121,9 @@ export function setFragmentIsPlaying(v) { fragmentIsPlaying = v; }
 
 export function getFragmentIsSynthesizing() { return fragmentIsSynthesizing; }
 export function setFragmentIsSynthesizing(v) { fragmentIsSynthesizing = v; }
+
+export function getFragmentIsExporting() { return fragmentIsExporting; }
+export function setFragmentIsExporting(v) { fragmentIsExporting = v; }
 
 export function getFragmentPlaybackStartTime() { return fragmentPlaybackStartTime; }
 export function setFragmentPlaybackStartTime(v) { fragmentPlaybackStartTime = v; }
@@ -288,6 +295,9 @@ export function setParamPanelMode(v) { paramPanelMode = v; }
 
 export function getFragmentDataReceived() { return fragmentDataReceived; }
 export function setFragmentDataReceived(v) { fragmentDataReceived = v; }
+
+export function getPendingBoundsUpdate() { return pendingBoundsUpdate; }
+export function setPendingBoundsUpdate(v) { pendingBoundsUpdate = v; }
 
 export function getPhonemeCache() { return phonemeCache; }
 

@@ -23,6 +23,21 @@ export function invalidateGridCache() {
   _gridCacheKey = '';
 }
 
+function _ensureCanvasSize(canvas, cssW, cssH, dpr) {
+  const pixelW = Math.floor(cssW * dpr);
+  const pixelH = Math.floor(cssH * dpr);
+  if (canvas.width !== pixelW || canvas.height !== pixelH) {
+    canvas.width = pixelW;
+    canvas.height = pixelH;
+  }
+  const expectedStyleW = cssW + 'px';
+  const expectedStyleH = cssH + 'px';
+  if (canvas.style.width !== expectedStyleW || canvas.style.height !== expectedStyleH) {
+    canvas.style.width = expectedStyleW;
+    canvas.style.height = expectedStyleH;
+  }
+}
+
 /**
  * Draw text clipped to a rounded rectangle with horizontal ellipsis.
  * If the text is wider than maxWidth, it is truncated and ends with "…".
@@ -87,15 +102,8 @@ export function renderFragmentTimeline() {
   const containerHeight = dom.fragmentContainer.clientHeight || contentHeight;
   const canvasHeight = Math.max(contentHeight, containerHeight);
 
-  dom.fragmentCanvas.style.width = canvasWidth + 'px';
-  dom.fragmentCanvas.style.height = canvasHeight + 'px';
-  dom.fragmentCanvas.width = Math.floor(canvasWidth * dpr);
-  dom.fragmentCanvas.height = Math.floor(canvasHeight * dpr);
-
-  dom.fragmentPlayheadCanvas.style.width = canvasWidth + 'px';
-  dom.fragmentPlayheadCanvas.style.height = canvasHeight + 'px';
-  dom.fragmentPlayheadCanvas.width = Math.floor(canvasWidth * dpr);
-  dom.fragmentPlayheadCanvas.height = Math.floor(canvasHeight * dpr);
+  _ensureCanvasSize(dom.fragmentCanvas, canvasWidth, canvasHeight, dpr);
+  _ensureCanvasSize(dom.fragmentPlayheadCanvas, canvasWidth, canvasHeight, dpr);
 
   syncFragmentScroll();
 

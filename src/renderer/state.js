@@ -48,7 +48,6 @@ export const dom = {
   timeSigNum: document.getElementById('time-sig-num'),
   timeSigDen: document.getElementById('time-sig-den'),
   autoShiftCheck: document.getElementById('auto-shift-check'),
-  btnSave: document.getElementById('btn-save'),
   btnLoad: document.getElementById('btn-load'),
   btnExport: document.getElementById('btn-export'),
   btnAudioToMidi: document.getElementById('btn-audio-to-midi'),

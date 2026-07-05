@@ -24,7 +24,6 @@ You must select a **model precision** before downloading. This determines the ba
 |-----------|----------|---------|------------|
 | **FP16** (recommended) | Discrete GPU users (4GB+ VRAM) | Best | High |
 | **FP32** | High-end discrete GPU (8GB+ VRAM) | Highest | Very High |
-| **FP8** | GPUs with FP8 hardware support | Near-FP16 | Medium |
 | **INT8** | Integrated GPU or low VRAM (<2GB) | Slight loss | Low |
 | **INT8-NPU** | NPU hardware users | Slight loss | Low |
 

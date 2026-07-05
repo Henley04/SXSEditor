@@ -40,11 +40,12 @@ The main window is the central hub. It contains:
 | BPM | Beats per minute (1–999). Default: 120 |
 | Time Signature | Numerator / Denominator (e.g., 4/4) |
 | Auto Shift | When enabled, notes in newly created fragments auto-align to beat boundaries |
-| 💾 Save | Save the project as `.sxsproj` |
 | 📂 Load | Open an existing `.sxsproj` or `.sxs` project file |
 | 📤 Export | Synthesize and export the entire project as WAV |
 | 🎵 Audio to MIDI | Convert an audio file to MIDI notes (see [Audio to MIDI](#audio-to-midi)) |
 | Version Display | Shows the current app version |
+
+> **Saving the project file** is done via the **File menu** (Ctrl+S / Ctrl+Shift+S), not a toolbar button. See [Save Logic](#save-logic) for the complete save behavior.
 
 ### Singer Panel (Left)
 
@@ -260,14 +261,24 @@ Each fragment stores:
 
 The Fragment Editor is a dedicated window with a full-featured piano-roll editor. It opens when you double-click a fragment.
 
+### Auto-Sync to Main Window
+
+**Edits in the Fragment Editor are automatically synced to the main window — there is no Save button.** After any edit (MIDI notes, lyrics, pitch curve, envelopes, phoneme parameters), a 500ms debounced auto-save fires, which:
+
+1. Sends the updated fragment data to the main process via IPC (`saveFragmentData`).
+2. The main process forwards the data to the main window (`fragmentDataSaved` event).
+3. The main window updates the corresponding fragment in `trackManager.fragments`, refreshes the timeline (`refreshAll`), and auto-saves the project file (if a `.sxsproj` path is already set).
+
+**Ctrl+S** in the Fragment Editor cancels the debounce timer and pushes the update immediately (force-sync). This is optional — the auto-save already handles sync.
+
 ### Window Layout
 
-- **Toolbar** (top): Play, Export, Import MIDI, mode switching, save, close.
+- **Toolbar** (top): Play, Export, Import MIDI, mode switching, close.
 - **Piano keys** (left): Vertical pitch reference.
 - **Piano roll** (center): The main editing canvas.
 - **Inspector** (right): Shows properties of the selected note or singer info.
 - **Parameter panel** (bottom): VOL, PAN, Phoneme, and (future) Timbre lanes.
-- **Status bar** (bottom): Shows pipeline status, sample rate, and hop size.
+- **Status bar** (bottom): Shows pipeline status, sample rate, hop size, and auto-sync indicator.
 
 ### Toolbar Controls
 
@@ -281,8 +292,7 @@ The Fragment Editor is a dedicated window with a full-featured piano-roll editor
 | MIDI button (1) | Switch to MIDI editing mode |
 | Pitch button (2) | Switch to pitch curve editing mode |
 | ⌨ (F1) | Show keyboard shortcuts overlay |
-| 💾 Save (Ctrl+S) | Save fragment data |
-| ✖ Close | Close the fragment editor |
+| ✖ Close | Close the fragment editor (auto-syncs before closing) |
 
 ### Inspector Panel
 
@@ -653,7 +663,7 @@ Slider from 0% to 100%.
 #### Model Precision
 
 Select which precision of ONNX models to use:
-- FP16, FP32, FP8, INT8, INT8-NPU
+- FP16, FP32, INT8, INT8-NPU
 - Different precisions are stored independently and coexist.
 - Switching does not require re-downloading — each precision has its own subdirectory.
 - See the precision info box in Settings for detailed descriptions.
@@ -772,29 +782,50 @@ User themes are stored in:
 
 ## Project Files
 
-### Saving Projects
+### Save Logic
 
-Click **💾 Save** or press `Ctrl+S`:
+SXSEditor has three independent save flows. Understanding them avoids confusion about what gets saved and when.
 
-1. A dialog asks whether to embed singer files.
-   - **Embed**: Singer reference audio and preprocessed data are included in the project file. Makes the project self-contained but larger.
-   - **Don't embed**: The project references external `.sxssinger` files by path. Smaller file, but requires singer files to be accessible.
-2. Choose a save location. Files are saved as `.sxsproj`.
+#### 1. Fragment Editor → Main Window (auto-sync, no button)
+
+Every edit in a Fragment Editor window (MIDI notes, lyrics, pitch curve, VOL/PAN envelopes, phoneme parameters) triggers a **500ms debounced auto-save** that pushes the updated fragment data to the main window:
+
+- **Trigger**: Any edit (note move/add/delete, lyric change, pitch anchor edit, envelope edit, phoneme adjustment, MIDI import).
+- **Mechanism**: `scheduleAutoSave()` → 500ms debounce → `saveFragmentData()` → IPC `saveFragmentData` → main process → `fragmentDataSaved` event → main window updates `trackManager.fragments` and calls `refreshAll()` + `autoSaveProject()`.
+- **No Save button**: The Fragment Editor toolbar does not have a Save button. Sync is fully automatic.
+- **Ctrl+S** (optional): Cancels the debounce and pushes immediately (force-sync). Useful if you want to see the change on the timeline instantly without waiting 500ms.
+- **Close button**: Auto-syncs before closing the window.
+
+> **Note**: When you load a new `.sxsproj` file, all open Fragment Editor windows are closed automatically. This prevents stale windows from holding references to fragment IDs that no longer exist in the new project (which would cause edits to be silently dropped).
+
+#### 2. Main Window → `.sxsproj` file (project file save)
+
+- **Auto-save**: After each fragment sync (flow #1 above), the main window auto-saves to `state.currentProjectFilePath` if a path is already set (i.e., you have saved or loaded a project at least once). This is silent — no dialog.
+- **Manual save** (File → Save / `Ctrl+S`): If a project path exists, writes silently to the same path. If no path exists yet, falls back to Save As.
+- **Save As** (File → Save As / `Ctrl+Shift+S`): Opens a dialog with the **embed singer files** option:
+  - **Embed**: Singer reference audio and preprocessed data are included in the project file. Makes the project self-contained but larger.
+  - **Don't embed**: The project references external `.sxssinger` files by path. Smaller file, but requires singer files to be accessible.
+- **Unsaved changes on close**: When closing the main window with unsaved changes, a dialog offers **Save & Exit**, **Don't Save**, or **Cancel**.
+
+#### 3. Singer Creator → `.sxssinger` file (singer file save)
+
+- **Save** (File → Save / `Ctrl+S`): Saves the singer to the existing `.sxssinger` path. If no path exists, falls back to Save As.
+- **Save As** (File → Save As / `Ctrl+Shift+S`): Opens a dialog to choose a new `.sxssinger` location.
+- **Create & Save** (✓ button): Creates a new singer file. Requires a WAV file to be loaded.
+- **Audio Preprocessing → Singer Creator**: The preprocessing window's Save button sends extracted F0/MIDI data back to the Singer Creator via IPC (does not write a file directly).
 
 ### Loading Projects
 
-Click **📂 Load** or press `Ctrl+O`:
+Click **📂 Load** in the toolbar:
 - Opens `.sxsproj` or `.sxs` files.
+- All open Fragment Editor windows are closed before loading (see flow #1 note above).
+- Fragments are normalized via `trackManager.addFragment()` to ensure all fields (`envelopes`, `pitchCurve`, etc.) are present.
 - If singer files are embedded, they are loaded directly.
 - If not embedded, SXSEditor attempts to load singer files from their stored paths. If files are missing, a warning appears with a **Relocate** option.
 
-### Auto-Save
-
-If you have saved the project at least once, SXSEditor auto-saves to the same file when you make changes.
-
 ### Unsaved Changes
 
-When closing with unsaved changes, a dialog offers:
+When closing the main window with unsaved changes, a dialog offers:
 - **Save & Exit**: Save and close.
 - **Don't Save**: Discard changes and close.
 - **Cancel**: Stay in the app.
@@ -805,13 +836,15 @@ When closing with unsaved changes, a dialog offers:
 
 Press **F1** in the Fragment Editor to see the full shortcuts overlay.
 
-### General
+> Shortcuts below apply to the **Fragment Editor** window unless noted. Main window shortcuts are accessed via the File menu (Ctrl+S = Save project, Ctrl+Shift+S = Save As).
+
+### General (Fragment Editor)
 
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` | Redo |
-| `Ctrl+S` | Save |
+| `Ctrl+S` | Force-sync fragment to main window (cancel 500ms debounce; auto-sync already handles this) |
 | `Space` | Play / Stop |
 | `1` | Switch to MIDI mode |
 | `2` | Switch to Pitch mode |

@@ -1,6 +1,7 @@
 import { t } from '../i18n/index.js';
 import {
   getFragmentIsSynthesizing,
+  getFragmentIsExporting,
   getFragmentIsPlaying,
   getFragmentAudioSettings,
   getFragmentAudioData,
@@ -14,6 +15,7 @@ import {
   getSelectedAnchorIndices,
   getIpcCleanups,
   getFragmentDataReceived,
+  getPendingBoundsUpdate, setPendingBoundsUpdate,
   getCurrentFragment,
   getCurrentProject,
   getEnvelopes,
@@ -50,11 +52,15 @@ export function setupIpcHandlers() {
   const _ipcCleanups = getIpcCleanups();
 
   const cleanupProgress = window.electronAPI.onFragmentSVSProgress((progress) => {
-    const btnPlayFragment = document.getElementById('btn-play-fragment');
-    const btnExportFragment = document.getElementById('btn-export-fragment');
+    // 区分播放预览和导出：各自只更新对应的按钮，避免互相覆盖。
+    // 之前回调同时更新两个按钮，播放时导出按钮也被改成"导出 X%"，
+    // 而导出时因 fragmentIsSynthesizing=false 两个按钮都不更新。
     if (getFragmentIsSynthesizing()) {
-      btnPlayFragment.textContent = t('fragment.synthesizingProgress', { progress });
-      btnExportFragment.textContent = t('fragment.exportingProgress', { progress });
+      const btnPlayFragment = document.getElementById('btn-play-fragment');
+      if (btnPlayFragment) btnPlayFragment.textContent = t('fragment.synthesizingProgress', { progress });
+    } else if (getFragmentIsExporting()) {
+      const btnExportFragment = document.getElementById('btn-export-fragment');
+      if (btnExportFragment) btnExportFragment.textContent = t('fragment.exportingProgress', { progress });
     }
   });
   if (cleanupProgress) _ipcCleanups.push(cleanupProgress);
@@ -74,6 +80,10 @@ export function setupIpcHandlers() {
         if (startTime !== undefined) currentFragment.startTime = startTime;
         if (duration !== undefined) currentFragment.duration = duration;
         render();
+      } else {
+        // currentFragment 尚未就绪（分片编辑器刚打开、handleFragmentData 还没跑完），
+        // 缓存最新的边界更新，待 handleFragmentData 完成后回放，避免静默丢弃。
+        setPendingBoundsUpdate({ fragmentId, startTime, duration });
       }
     });
     if (cleanup) _ipcCleanups.push(cleanup);
@@ -145,6 +155,19 @@ async function handleFragmentData(data) {
   // Center the vertical view on existing notes, or the middle pitch if empty
   setScrollY(computeInitialScrollY());
   render();
+
+  // 回放在 currentFragment 就绪前到达的 fragmentBoundsChanged，确保主页面对分片
+  // 长度/结尾的修改不会因为时序竞态被丢失。
+  const pendingBounds = getPendingBoundsUpdate();
+  if (pendingBounds) {
+    setPendingBoundsUpdate(null);
+    const cf = getCurrentFragment();
+    if (cf && cf.id === pendingBounds.fragmentId) {
+      if (pendingBounds.startTime !== undefined) cf.startTime = pendingBounds.startTime;
+      if (pendingBounds.duration !== undefined) cf.duration = pendingBounds.duration;
+      render();
+    }
+  }
 
   await resolvePhonemesFromPipeline();
 }

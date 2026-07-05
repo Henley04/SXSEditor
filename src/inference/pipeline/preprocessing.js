@@ -1,6 +1,6 @@
 const ort = require('onnxruntime-node');
 const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, F0_BIN, F0_MIN, NPU_STATIC_SEQ_LEN } = require('./constants');
-const { createFloatTensor, outputToFloat32 } = require('./utils');
+const { createFloatTensor, outputToFloat32, disposeTensor } = require('./utils');
 const durationStats = require('./durationStats');
 
 /**
@@ -120,7 +120,7 @@ class Preprocessing {
         return seq;
     }
 
-    notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift = 0) {
+    notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift = 0, pitchCurveOffsetSec = 0) {
         const PAD_ID = this.textProcessing.phone2idx['<PAD>'] || 0;
         const BOW_ID = this.textProcessing.phone2idx['<BOW>'] || 4;
         const EOW_ID = this.textProcessing.phone2idx['<EOW>'] || 5;
@@ -159,10 +159,13 @@ class Preprocessing {
             const lyric = note.lyric || '';
             const pitch = note.pitch;
             let noteType;
-            if (lyric.trim().length === 0) {
-                noteType = 1;
-            } else if (note.isSlur || note.isContinuation) {
+            // 注意: slur/continuation 检查必须优先于空歌词检查。slur 音符通常
+            // 歌词为空（延续前一个音节的发音），若先判空歌词会把 slur 误分类
+            // 为休止符（type 1），导致模型把连音当成静音处理。
+            if (note.isSlur || note.isContinuation) {
                 noteType = 3;
+            } else if (lyric.trim().length === 0) {
+                noteType = 1;
             } else {
                 noteType = 2;
             }
@@ -272,7 +275,11 @@ class Preprocessing {
                 const noteStartSec = (note.start / bpm) * 60;
                 const noteFreq = lyric.trim().length === 0 ? 0 : this.midiToFreq(note.pitch);
                 for (let f = 0; f < noteFrames && frameOffset + f < totalFrames; f++) {
-                    const absTimeSec = noteStartSec + f * HOP_SIZE / SAMPLE_RATE;
+                    // 多 segment 路径：segmentNotes.start 是相对 segStart，需要加
+                    // pitchCurveOffsetSec (= segStartBeat 对应秒数) 才能正确索引
+                    // 绝对时间的 pitchCurveF0。否则 f0 严重错位 → vocoder mel/f0
+                    // 不匹配 → 电流声。单 segment 路径 offset=0，行为不变。
+                    const absTimeSec = noteStartSec + pitchCurveOffsetSec + f * HOP_SIZE / SAMPLE_RATE;
                     const srcFrame = Math.floor(absTimeSec * SAMPLE_RATE / HOP_SIZE);
                     if (srcFrame >= 0 && srcFrame < srcData.length && srcData[srcFrame] > 0) {
                         f0Hz[frameOffset + f] = srcData[srcFrame];
@@ -302,7 +309,23 @@ class Preprocessing {
             }
         }
 
-        const f0Ids = this.quantizeF0(f0Hz, f0Shift);
+        // 对 f0Hz 应用 f0Shift（半音偏移）。
+        // f0Hz 同时用于：
+        //   1. quantizeF0 → f0Ids（diffusion 条件，已在 quantizeF0 内部偏移 bin）
+        //   2. SiFiGAN vocoder 的 f0 输入（_currentF0Hz → effectiveF0）
+        // 之前 f0Hz 未偏移导致 vocoder f0 与 diffusion mel（基于偏移后的音高）不匹配，
+        // autoShift 较大时产生口齿不清。现在统一在源头偏移 f0Hz，
+        // quantizeF0 的 bin 偏移改为基于已偏移的 f0Hz，避免双重偏移。
+        if (f0Shift !== 0) {
+            const shiftFactor = Math.pow(2, f0Shift / 12);
+            for (let i = 0; i < f0Hz.length; i++) {
+                if (f0Hz[i] > 0) {
+                    f0Hz[i] = f0Hz[i] * shiftFactor;
+                }
+            }
+        }
+
+        const f0Ids = this.quantizeF0(f0Hz, 0); // f0Hz 已偏移，不再传 f0Shift
 
         const tokenCount = newPhonemes.length;
         const noteTextSeq = new Int32Array(tokenCount);
@@ -677,6 +700,15 @@ class Preprocessing {
         const pitchEmb = useStaticShapes ? outputToFloat32(pitchResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(pitchResults['embeddings']);
         const typeEmb = useStaticShapes ? outputToFloat32(typeResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(typeResults['embeddings']);
         const f0Emb = useStaticShapes ? outputToFloat32(f0Results['embeddings']).subarray(0, totalFrames * EMBED_DIM) : outputToFloat32(f0Results['embeddings']);
+        // 释放 4 个 encoder 的输入和输出张量（outputToFloat32 已拷贝数据）
+        disposeTensor(textInput);
+        disposeTensor(pitchInput);
+        disposeTensor(typeInput);
+        disposeTensor(f0Input);
+        disposeTensor(textResults['embeddings']);
+        disposeTensor(pitchResults['embeddings']);
+        disposeTensor(typeResults['embeddings']);
+        disposeTensor(f0Results['embeddings']);
 
         const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
         for (let t = 0; t < tokenCount; t++) {
@@ -692,6 +724,14 @@ class Preprocessing {
         const featuresTensor = createFloatTensor(floatType, preflowTokenEmb, [1, preflowSeqLen, EMBED_DIM]);
         const preflowResults = await sessions.preflow.run({ features: featuresTensor });
         const processedTokenEmb = useStaticShapes ? outputToFloat32(preflowResults['processed_features']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(preflowResults['processed_features']);
+        // 释放 preflow 输入和输出张量
+        disposeTensor(featuresTensor);
+        disposeTensor(preflowResults['processed_features']);
+
+        // 长片段时在 preflow → expandedEmb 之间 yield 一次，避免连续 CPU 循环阻塞主线程
+        if (totalFrames > 256) {
+            await new Promise(r => setImmediate(r));
+        }
 
         // 用 subarray.set 替代元素级循环，走 native memcpy（每帧 EMBED_DIM=512 维拷贝）
         const mel2token = sequences.mel2token;
@@ -702,6 +742,11 @@ class Preprocessing {
                 processedTokenEmb.subarray(tokenIdx * EMBED_DIM, (tokenIdx + 1) * EMBED_DIM),
                 f * EMBED_DIM
             );
+        }
+
+        // expandedEmb → combinedFeatures 之间 yield
+        if (totalFrames > 256) {
+            await new Promise(r => setImmediate(r));
         }
 
         const combinedFeatures = new Float32Array(totalFrames * EMBED_DIM);
@@ -726,6 +771,9 @@ class Preprocessing {
         const condCodeTensor = createFloatTensor(floatType, paddedCondCode, [1, condSeqLen, EMBED_DIM]);
         const condEmbResults = await sessions.condEmb.run({ cond_code: condCodeTensor });
         const cond = useStaticShapes ? outputToFloat32(condEmbResults['cond_embedding']).subarray(0, totalCondFrames * COND_DIM) : outputToFloat32(condEmbResults['cond_embedding']);
+        // 释放 condEmb 输入和输出张量
+        disposeTensor(condCodeTensor);
+        disposeTensor(condEmbResults['cond_embedding']);
 
         return cond;
     }

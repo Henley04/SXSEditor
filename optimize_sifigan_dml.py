@@ -95,7 +95,7 @@ def find_problematic_conv_transposes(graph):
 def inspect_model(model_path):
     """检查模型结构, 打印算子统计与 DML 不兼容节点。仅扫描属性, 不加载权重数据。"""
     print(f"\n{'='*60}")
-    print(f"检查模型: {model_path}")
+    print(f"Inspecting model: {model_path}")
     print(f"{'='*60}")
 
     # 轻量扫描: 不加载外部权重数据 (仅读取节点属性)
@@ -108,14 +108,14 @@ def inspect_model(model_path):
 
     problematic = find_problematic_conv_transposes(graph)
 
-    print(f"  节点总数: {len(graph.node)}")
-    print(f"  算子统计 (top 10):")
+    print(f"  Total nodes: {len(graph.node)}")
+    print(f"  Operator stats (top 10):")
     for op, cnt in sorted(op_counts.items(), key=lambda x: -x[1])[:10]:
         print(f"    {op}: {cnt}")
     ct_total = op_counts.get('ConvTranspose', 0)
-    print(f"  ConvTranspose 节点总数: {ct_total}")
+    print(f"  ConvTranspose nodes total: {ct_total}")
     if problematic:
-        print(f"  DML 不兼容 (stride>1) 节点: {len(problematic)} 个")
+        print(f"  DML incompatible (stride>1) nodes: {len(problematic)}")
         for p in problematic:
             print(f"    - [{p['idx']}] {p['node'].name}: "
                   f"ConvTranspose(stride={p['stride']}, pads={p['pads']}, "
@@ -123,7 +123,7 @@ def inspect_model(model_path):
             print(f"      inputs: {list(p['node'].input)}")
             print(f"      outputs: {list(p['node'].output)}")
     else:
-        print(f"  未发现 stride>1 的 ConvTranspose 节点 (no optimization needed)")
+        print(f"  No stride>1 ConvTranspose nodes found (no optimization needed)")
 
     return problematic
 
@@ -146,12 +146,12 @@ def validate_conv_transpose(ct_node, graph):
 
     if stride is None:
         raise ValueError(
-            f"ConvTranspose '{ct_node.name}' 缺少 strides 属性, 无法分解"
+            f"ConvTranspose '{ct_node.name}' missing strides attribute, cannot decompose"
         )
     if len(stride) != 1:
         raise ValueError(
-            f"ConvTranspose '{ct_node.name}' strides 维度为 {len(stride)}D, "
-            f"仅支持 1D (strides 长度为 1) 分解, 多维 ConvTranspose 尚未实现"
+            f"ConvTranspose '{ct_node.name}' strides dimension is {len(stride)}D, "
+            f"only 1D (strides length 1) decomposition supported, multi-dim ConvTranspose not yet implemented"
         )
 
     # 权重必须为静态 initializer
@@ -159,27 +159,27 @@ def validate_conv_transpose(ct_node, graph):
     w_init = next((init for init in graph.initializer if init.name == w_name), None)
     if w_init is None:
         raise ValueError(
-            f"ConvTranspose '{ct_node.name}' 权重 '{w_name}' 未在 initializer 中找到, "
-            f"无法分解 (图输入作为权重的动态 ConvTranspose 不支持分解)"
+            f"ConvTranspose '{ct_node.name}' weight '{w_name}' not found in initializer, "
+            f"cannot decompose (dynamic ConvTranspose with graph input as weight is not supported for decomposition)"
         )
     w = numpy_helper.to_array(w_init)
     if w.ndim != 3:
         raise ValueError(
-            f"ConvTranspose '{ct_node.name}' 权重维度为 {w.ndim}D {w.shape}, "
-            f"仅支持 1D ConvTranspose (3D 权重 [c_in, c_out, K]) 分解, "
-            f"2D ConvTranspose 分解逻辑尚未实现"
+            f"ConvTranspose '{ct_node.name}' weight dimension is {w.ndim}D {w.shape}, "
+            f"only 1D ConvTranspose (3D weight [c_in, c_out, K]) decomposition supported, "
+            f"2D ConvTranspose decomposition not yet implemented"
         )
 
     if dilations is not None and any(d != 1 for d in dilations):
         raise ValueError(
             f"ConvTranspose '{ct_node.name}' dilations={dilations}, "
-            f"仅支持 dilations=1 (SiFiGAN 上采样层默认无 dilation), "
-            f"带 dilation 的 ConvTranspose 分解逻辑尚未实现"
+            f"only dilations=1 supported (SiFiGAN upsampling layers have no dilation by default), "
+            f"ConvTranspose decomposition with dilation not yet implemented"
         )
     if groups != 1:
         raise ValueError(
             f"ConvTranspose '{ct_node.name}' group={groups}, "
-            f"分组/深度卷积 ConvTranspose 分解逻辑尚未实现"
+            f"grouped/depthwise ConvTranspose decomposition not yet implemented"
         )
     # output_padding 已在 build_conv_transpose_replacement 中通过末尾 Pad 节点支持
 
@@ -251,7 +251,7 @@ def build_conv_transpose_replacement(graph, ct_node, uniq_id):
     if output_padding >= stride:
         raise NotImplementedError(
             f"output_padding={output_padding} >= stride={stride}, "
-            f"扩展 Conv1D 右 pad 的逻辑尚未实现"
+            f"extending Conv1D right pad not yet implemented"
         )
     p_left = K - 1 - ct_pad_left
     p_right = K - 1 - ct_pad_right
@@ -264,9 +264,9 @@ def build_conv_transpose_replacement(graph, ct_node, uniq_id):
     # output_padding 已通过减少 slice_amount 处理, 无需 Pad 节点
     need_output_pad = False
 
-    print(f"        Conv1D 替换: pads=[{p_left}, {p_right}], "
-          f"slice_amount={slice_amount} (上采样副产物 {upsample_excess} - OP {output_padding})"
-          + (f", output_padding={output_padding} (已合并到 slice_amount)" if output_padding > 0 else ""))
+    print(f"        Conv1D replacement: pads=[{p_left}, {p_right}], "
+          f"slice_amount={slice_amount} (upsampling excess {upsample_excess} - OP {output_padding})"
+          + (f", output_padding={output_padding} (merged into slice_amount)" if output_padding > 0 else ""))
 
     inp = ct_node.input[0]
     out = ct_node.output[0]
@@ -431,11 +431,11 @@ def fix_all_conv_transposes(model):
     problematic = find_problematic_conv_transposes(graph)
 
     print(f"\n{'='*60}")
-    print(f"分解 {len(problematic)} 个 ConvTranspose 节点")
+    print(f"Decomposing {len(problematic)} ConvTranspose nodes")
     print(f"{'='*60}")
 
     if not problematic:
-        print("  无需分解")
+        print("  No decomposition needed")
         return 0
 
     # 先验证所有节点可分解 (快速失败, 避免半途修改图)
@@ -461,19 +461,19 @@ def fix_all_conv_transposes(model):
     del graph.node[:]
     graph.node.extend(new_nodes)
 
-    print(f"  替换完成: {replaced_count} 个 ConvTranspose -> DML 兼容序列")
+    print(f"  Replacement complete: {replaced_count} ConvTranspose -> DML compatible sequence")
     return replaced_count
 
 
 def run_shape_inference(model):
     """对内存中的模型运行形状推断, 返回新模型 (失败则原样返回)。"""
-    print(f"\n  运行 ONNX 形状推断...")
+    print(f"\n  Running ONNX shape inference...")
     try:
         inferred = onnx.shape_inference.infer_shapes(model)
-        print(f"  形状推断完成")
+        print(f"  Shape inference complete")
         return inferred
     except Exception as e:
-        print(f"  形状推断失败: {e}")
+        print(f"  Shape inference failed: {e}")
         return model
 
 
@@ -482,7 +482,7 @@ def simplify_model(model, seq_len=10):
 
     onnxsim 会移除替换后被弃用的原始 ConvTranspose 权重等冗余 initializer。
     """
-    print(f"\n  尝试使用 onnxsim 简化模型 (保留动态输入形状)...")
+    print(f"\n  Trying onnxsim to simplify model (preserving dynamic input shapes)...")
     try:
         import onnxsim
         simplified, check = onnxsim.simplify(
@@ -497,16 +497,16 @@ def simplify_model(model, seq_len=10):
             },
         )
         if check:
-            print(f"  onnxsim 简化成功")
+            print(f"  onnxsim simplification succeeded")
             return simplified
         else:
-            print(f"  onnxsim 简化后验证失败, 使用形状推断版本")
+            print(f"  onnxsim verification failed after simplification, using shape inference version")
             return model
     except ImportError:
-        print(f"  onnxsim 未安装, 跳过简化")
+        print(f"  onnxsim not installed, skipping simplification")
         return model
     except Exception as e:
-        print(f"  onnxsim 简化失败: {e}")
+        print(f"  onnxsim simplification failed: {e}")
         return model
 
 
@@ -526,7 +526,7 @@ def save_model_external(model, path):
     )
     size_mb = os.path.getsize(path) / 1024 / 1024
     data_mb = os.path.getsize(data_path) / 1024 / 1024 if os.path.exists(data_path) else 0
-    print(f"  保存: {path} ({size_mb:.1f}MB graph + {data_mb:.1f}MB data)")
+    print(f"  Saved: {path} ({size_mb:.1f}MB graph + {data_mb:.1f}MB data)")
 
 
 def make_probe_inputs(seq_len):
@@ -555,7 +555,7 @@ def test_with_dml(model_path, seq_len=DEFAULT_SEQ_LEN):
     import onnxruntime as ort
 
     print(f"\n{'='*60}")
-    print(f"DML 探针推理: {os.path.basename(model_path)} (seq_len={seq_len})")
+    print(f"DML probe inference: {os.path.basename(model_path)} (seq_len={seq_len})")
     print(f"{'='*60}")
 
     try:
@@ -566,13 +566,13 @@ def test_with_dml(model_path, seq_len=DEFAULT_SEQ_LEN):
         if 'DML' in msg or 'DirectML' in msg or 'DmlExecutionProvider' in msg:
             print(f"  DML not available, skipping validation")
             return None
-        print(f"  ❌ 加载会话失败: {msg[:300]}")
+        print(f"  [ERROR] Failed to load session: {msg[:300]}")
         return False
 
     active_providers = sess.get_providers()
     dml_active = 'DmlExecutionProvider' in active_providers
-    print(f"  活跃 EP: {active_providers}")
-    print(f"  DML 状态: {'✅ 活跃' if dml_active else '❌ 未激活 (回退 CPU)'}")
+    print(f"  Active EP: {active_providers}")
+    print(f"  DML status: {'[OK] active' if dml_active else '[FAIL] not active (CPU fallback)'}")
 
     if not dml_active:
         print(f"  DML not available, skipping validation")
@@ -581,15 +581,15 @@ def test_with_dml(model_path, seq_len=DEFAULT_SEQ_LEN):
     inputs = make_probe_inputs(seq_len)
     try:
         results = sess.run(None, inputs)
-        print(f"  推理成功! 输出形状: {[r.shape for r in results]}")
-        print(f"  输出范围: [{results[0].min():.6f}, {results[0].max():.6f}]")
+        print(f"  Inference succeeded! Output shape: {[r.shape for r in results]}")
+        print(f"  Output range: [{results[0].min():.6f}, {results[0].max():.6f}]")
         return True
     except Exception as e:
         msg = str(e)
         if 'ConvTranspose' in msg or 'stride' in msg or 'DML' in msg:
-            print(f"  ❌ DML 推理失败 (疑似 ConvTranspose 不兼容): {msg[:300]}")
+            print(f"  [FAIL] DML inference failed (suspected ConvTranspose incompatibility): {msg[:300]}")
         else:
-            print(f"  ❌ DML 推理失败: {msg[:300]}")
+            print(f"  [FAIL] DML inference failed: {msg[:300]}")
         return False
 
 
@@ -598,7 +598,7 @@ def compare_outputs(original_path, fixed_path, seq_len=DEFAULT_SEQ_LEN):
     import onnxruntime as ort
 
     print(f"\n{'='*60}")
-    print(f"输出对比测试 (CPU, seq_len={seq_len})")
+    print(f"Output comparison test (CPU, seq_len={seq_len})")
     print(f"{'='*60}")
 
     inputs = make_probe_inputs(seq_len)
@@ -607,40 +607,40 @@ def compare_outputs(original_path, fixed_path, seq_len=DEFAULT_SEQ_LEN):
     try:
         sess_orig = ort.InferenceSession(original_path, providers=['CPUExecutionProvider'])
         result_orig = sess_orig.run(None, inputs)[0]
-        print(f"  原始模型: shape={result_orig.shape}, "
+        print(f"  Original model: shape={result_orig.shape}, "
               f"range=[{result_orig.min():.6f}, {result_orig.max():.6f}]")
     except Exception as e:
-        print(f"  ❌ 原始模型推理失败: {str(e)[:200]}")
+        print(f"  [FAIL] Original model inference failed: {str(e)[:200]}")
         return False
 
     # 优化后模型 (CPU)
     try:
         sess_fixed = ort.InferenceSession(fixed_path, providers=['CPUExecutionProvider'])
         result_fixed = sess_fixed.run(None, inputs)[0]
-        print(f"  优化模型: shape={result_fixed.shape}, "
+        print(f"  Optimized model: shape={result_fixed.shape}, "
               f"range=[{result_fixed.min():.6f}, {result_fixed.max():.6f}]")
     except Exception as e:
-        print(f"  ❌ 优化模型推理失败: {str(e)[:200]}")
+        print(f"  [FAIL] Optimized model inference failed: {str(e)[:200]}")
         return False
 
     if result_orig.shape != result_fixed.shape:
-        print(f"  ❌ 输出形状不匹配: {result_orig.shape} vs {result_fixed.shape}")
+        print(f"  [FAIL] Output shape mismatch: {result_orig.shape} vs {result_fixed.shape}")
         return False
 
     abs_diff = np.abs(result_orig - result_fixed)
     max_diff = abs_diff.max()
     mean_diff = abs_diff.mean()
 
-    print(f"  绝对误差: max={max_diff:.8f}, mean={mean_diff:.8f}")
+    print(f"  Absolute error: max={max_diff:.8f}, mean={mean_diff:.8f}")
 
     if max_diff < 1e-3:
-        print(f"  ✅ 输出一致 (误差 < 1e-3, 在可接受范围内)")
+        print(f"  [OK] Outputs match (error < 1e-3, within acceptable range)")
         return True
     elif max_diff < 1e-1:
-        print(f"  ⚠️ 输出存在较小差异, 但可能可接受")
+        print(f"  [WARN] Outputs have small differences, but may be acceptable")
         return True
     else:
-        print(f"  ❌ 输出差异过大 (max={max_diff:.8f} >= 1e-3)")
+        print(f"  [FAIL] Output difference too large (max={max_diff:.8f} >= 1e-3)")
         return False
 
 
@@ -659,13 +659,13 @@ def main():
     output_path = args.output
 
     print("=" * 60)
-    print("SiFiGAN DirectML 兼容性优化工具")
+    print("SiFiGAN DirectML compatibility optimizer")
     print("=" * 60)
-    print(f"  输入: {input_path}")
-    print(f"  输出: {output_path}")
+    print(f"  Input: {input_path}")
+    print(f"  Output: {output_path}")
 
     if not os.path.exists(input_path):
-        print(f"\n❌ 找不到输入模型: {input_path}")
+        print(f"\n[ERROR] Input model not found: {input_path}")
         sys.exit(1)
 
     # Step 1: 检查模型 (轻量扫描, 不加载权重数据)
@@ -679,19 +679,19 @@ def main():
         data_out = output_path + ".data"
         if os.path.exists(data_in) and os.path.abspath(data_in) != os.path.abspath(data_out):
             shutil.copy2(data_in, data_out)
-        print(f"  已复制到: {output_path}")
+        print(f"  Copied to: {output_path}")
         sys.exit(0)
 
     # Step 2: 加载完整模型 (含外部权重数据) 并分解所有 stride>1 的 ConvTranspose
     print(f"\n{'='*60}")
-    print(f"加载完整模型并分解 ConvTranspose")
+    print(f"Loading full model and decomposing ConvTranspose")
     print(f"{'='*60}")
     model = onnx.load(input_path, load_external_data=True)
 
     try:
         replaced = fix_all_conv_transposes(model)
     except ValueError as e:
-        print(f"\n❌ 分解失败 (不支持的算子配置): {e}")
+        print(f"\n[FAIL] Decomposition failed (unsupported operator configuration): {e}")
         sys.exit(1)
 
     if replaced == 0:
@@ -712,42 +712,42 @@ def main():
 
     # Step 5: 保存优化后模型 (external_data 格式)
     print(f"\n{'='*60}")
-    print(f"保存优化后模型")
+    print(f"Saving optimized model")
     print(f"{'='*60}")
     save_model_external(model, output_path)
 
     # Step 6: 数值正确性验证 (CPU 对比, 误差 < 1e-3)
     output_correct = compare_outputs(input_path, output_path, seq_len=args.seq_len)
     if not output_correct:
-        print("\n❌ 优化后模型输出与原始模型不一致, 请检查分解逻辑")
+        print("\n[FAIL] Optimized model output does not match original model, please check the decomposition logic")
         sys.exit(1)
 
     # Step 7: DML 探针推理验证
     dml_result = test_with_dml(output_path, seq_len=args.seq_len)
     if dml_result is True:
-        print(f"\n✅ DML 探针推理通过!")
+        print(f"\n[OK] DML probe inference passed!")
     elif dml_result is False:
-        print(f"\n⚠️ DML 探针推理失败 (数值已验证正确, 但 DML 仍无法运行该模型)")
+        print(f"\n[WARN] DML probe inference failed (numerical correctness verified, but DML still cannot run this model)")
     else:
         # DML 不可用, 已打印 skipping validation
         pass
 
     # Step 8: 文件大小对比与最终结果
     print(f"\n{'='*60}")
-    print(f"最终结果")
+    print(f"Final result")
     print(f"{'='*60}")
     orig_size = os.path.getsize(input_path) / (1024 * 1024)
     new_size = os.path.getsize(output_path) / (1024 * 1024)
-    print(f"  文件大小: 原始={orig_size:.2f}MB, DML版={new_size:.2f}MB")
+    print(f"  File size: original={orig_size:.2f}MB, DML version={new_size:.2f}MB")
 
     if output_correct and dml_result is True:
-        print(f"\n🎉 优化完成! {os.path.basename(output_path)} 已可在 DML 上运行")
+        print(f"\n[DONE] Optimization complete! {os.path.basename(output_path)} can now run on DML")
     elif output_correct and dml_result is None:
-        print(f"\n✅ 数值验证通过 (DML 不可用, 已跳过 DML 验证; CPU 推理可用)")
+        print(f"\n[OK] Numerical verification passed (DML not available, DML validation skipped; CPU inference available)")
     elif output_correct:
-        print(f"\n⚠️ 数值验证通过, 但 DML 探针推理失败 (模型可作 CPU 回退)")
+        print(f"\n[WARN] Numerical verification passed, but DML probe inference failed (model can be used as CPU fallback)")
     else:
-        print(f"\n❌ 优化失败")
+        print(f"\n[FAIL] Optimization failed")
         sys.exit(1)
 
 

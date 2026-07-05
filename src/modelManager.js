@@ -10,7 +10,6 @@ const { URL } = require('node:url');
 const MODEL_IDS = {
   fp32: 'syxppp/SoulX-Singer-onnx-directml',
   fp16: 'syxppp/SoulX-Singer-onnx-directml-fp16',
-  fp8: '',  // placeholder — download link TBD
   int8: 'syxppp/SoulX-Singer-onnx-directml-int8',
   'int8-npu': 'syxppp/SoulX-Singer-onnx-directml-int8-dynamic',
   // SiFiGAN ONNX 模型仓库 (FP32 DML 兼容版 + stats)
@@ -51,6 +50,8 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'cond_emb.onnx.data', required: true },
   { filePath: 'diff_step_dml.onnx', required: true },
   { filePath: 'vocoder_dml.onnx', required: true },
+  { filePath: 'sifigan_vocoder_dml_fp16.onnx', required: false, size: 0.3 * 1024 * 1024, group: 'sifigan-vocoder' },
+  { filePath: 'sifigan_vocoder_dml_fp16.onnx.data', required: false, size: 22.7 * 1024 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'sifigan_vocoder_dml.onnx', required: false, size: 340 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'sifigan_vocoder_dml.onnx.data', required: false, size: 47 * 1024 * 1024, group: 'sifigan-vocoder' },
   { filePath: 'sifigan_stats.joblib', required: false, size: 2.5 * 1024, group: 'sifigan-vocoder' },
@@ -93,12 +94,11 @@ function getJpModelId(precision) {
   return JP_MODEL_IDS[precision] || JP_MODEL_IDS[DEFAULT_PRECISION] || null;
 }
 
-const PRECISION_SUBDIR_PRECESIONS = new Set(['int8', 'fp16', 'fp8', 'int8-npu']);
+const PRECISION_SUBDIR_PRECESIONS = new Set(['int8', 'fp16', 'int8-npu']);
 
 const PRECISION_SUBDIR_MAP = {
   'int8': 'int8',
   'fp16': 'fp16',
-  'fp8': 'fp8',
   'int8-npu': path.join('int8', 'optimized_npu'),
 };
 
@@ -137,21 +137,44 @@ function getJpLocalFilePath(baseDir, filePath, precision) {
   return path.join(baseDir, 'JP', filePath);
 }
 
+// 缓存 checkJpModelsExist 结果，避免每次日文合成时 4 次 fs.statSync 阻塞主线程。
+// 通过 invalidateJpModelsCache() 在 JP 模型下载/删除后失效。
+const _jpModelsExistCache = new Map(); // key: `${baseDir}|${precision}` → boolean
+
 /**
  * Check if JP models are available for the given precision.
+ * 结果会被缓存直到 invalidateJpModelsCache() 被调用。
  */
 function checkJpModelsExist(baseDir, precision) {
+  const cacheKey = `${baseDir}|${precision}`;
+  if (_jpModelsExistCache.has(cacheKey)) {
+    return _jpModelsExistCache.get(cacheKey);
+  }
   const manifest = JP_MODEL_FILE_MANIFEST;
+  let allExist = true;
   for (const file of manifest) {
     const fullPath = getJpLocalFilePath(baseDir, file.filePath, precision);
     try {
       const stats = fs.statSync(fullPath);
-      if (stats.size <= 0) return false;
+      if (stats.size <= 0) { allExist = false; break; }
     } catch (_) {
-      return false;
+      allExist = false; break;
     }
   }
-  return true;
+  _jpModelsExistCache.set(cacheKey, allExist);
+  return allExist;
+}
+
+/**
+ * 失效 JP 模型存在性缓存。在 JP 模型下载完成或删除后调用。
+ * 不传参数时清空全部缓存。
+ */
+function invalidateJpModelsCache(baseDir, precision) {
+  if (baseDir && precision) {
+    _jpModelsExistCache.delete(`${baseDir}|${precision}`);
+  } else {
+    _jpModelsExistCache.clear();
+  }
 }
 
 function getFileDownloadUrl(filePath, precision) {
@@ -460,7 +483,7 @@ async function resolveRedirects(url, maxRedirects = 5, method = 'GET') {
       return { finalUrl: currentUrl, response };
     }
     if (!isAllowedDownloadHost(redirectUrl)) {
-      throw new Error(`重定向目标不允许: ${redirectUrl}`);
+      throw new Error(`Redirect target not allowed: ${redirectUrl}`);
     }
     // Drain response body before following redirect
     response.resume();
@@ -1128,6 +1151,7 @@ module.exports = {
   checkMissingFilesAsync,
   checkMissingJpFiles,
   checkJpModelsExist,
+  invalidateJpModelsCache,
   deleteModelFiles,
   downloadMissingFiles,
   downloadFileWithResume,

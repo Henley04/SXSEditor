@@ -37,6 +37,31 @@ if (require('electron-squirrel-startup')) {
   app.quit();
 }
 
+// ---- CLI 调试模式 ----
+// 检测 --cli 标志，进入命令行调试模式（跳过 GUI/窗口/IPC 注册）。
+// agent 可通过 `electron . --cli <command>` 验证功能并查看日志。
+if (process.argv.includes('--cli')) {
+  // CLI 模式不获取单实例锁（agent 可能并行触发多个命令）
+  const { runCli } = require('./main/cli');
+  app.whenReady().then(async () => {
+    let exitCode = 0;
+    try {
+      exitCode = await runCli(process.argv.slice(2));
+    } catch (e) {
+      process.stderr.write(`[CLI FATAL] ${e.stack || e.message}\n`);
+      exitCode = 1;
+    }
+    // app.exit() 立即退出，不触发 before-quit 清理（CLI 命令自行 dispose 管线）
+    try { app.exit(exitCode); } catch (_) { process.exit(exitCode); }
+  }).catch((err) => {
+    process.stderr.write(`[CLI FATAL] app.whenReady failed: ${err.stack || err.message}\n`);
+    app.exit(1);
+  });
+  // 阻止后续 GUI 启动代码执行（CLI 模式只走 whenReady 分支）
+  module.exports = {};
+  return;
+}
+
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
@@ -209,12 +234,26 @@ app.whenReady().then(() => {
       })();
     }
 
-    // 2. 后台执行硬件检测和设备校验（不阻塞窗口显示）
+    // 2. 后台执行一次性硬件检测和设备校验（不阻塞窗口显示）
+    //    GPU 探测仅在应用完全启动后开始一次，完成后结果缓存复用，运行时不再重复检查。
     (async () => {
       try {
+        // 启动一次性 GPU 信息加载（worker 两阶段：WMI 快速 → systeminformation 完整）
+        startGPUPreload();
         // 等待 NPU 检测完成（需要渲染进程处理 WebNN IPC）
         const { npuAvailable } = await detectAllHardware();
         console.log(`[Main] Hardware detection complete: NPU ${npuAvailable ? 'available' : 'not available'}`);
+
+        // DML 设备枚举（一次性，结果缓存复用，运行时不再重复探测）
+        const controllers = await ensureGPUInfo();
+        try {
+          const devices = await enumerateDMLDevices(getModelDir(), controllers);
+          setCachedDMLDevices(devices);
+          setSettingsCachedDMLDevices(devices);
+          console.log(`[Main] GPU device detection complete: ${devices.length}  device(s)`);
+        } catch (err) {
+          console.warn('[Main] GPU device preload failed:', err.message);
+        }
 
         const settings = loadSettings();
         const deviceMode = settings.deviceMode || (settings.deviceId !== undefined && settings.deviceId !== null ? 'manual' : 'smart');
@@ -251,10 +290,17 @@ app.whenReady().then(() => {
             // NPU devices are validated at pipeline init via probe — don't switch at startup
             if (preferredType === 'npu') {
               console.log('[Main] NPU device selected, skipping startup validation (will verify via probe at inference time)');
+            } else if (preferredId === undefined || preferredId === null) {
+              // manual 模式但未选具体设备（preferredDeviceId 为 null/undefined）—
+              // 这是不一致状态（通常由旧版本 smart/advanced 模式下保存的 null 覆盖导致），
+              // silently 切换到 smart 模式，不弹 "deviceId=null not found" 误导性对话框。
+              console.warn('[Main] Manual mode but preferredDeviceId is null/undefined, silently switching to smart mode');
+              const newSettings = { ...settings, deviceMode: 'smart' };
+              delete newSettings.preferredDeviceId;
+              delete newSettings.preferredDeviceType;
+              await saveSettingsFile(newSettings);
             } else {
-              const found = preferredId !== undefined && preferredId !== null
-                ? allDevices.find(d => d.dxgiAdapterNumber === preferredId)
-                : null;
+              const found = allDevices.find(d => d.dxgiAdapterNumber === preferredId);
 
               if (!found && !mainWindow.isDestroyed()) {
                 const deviceName = `deviceId=${preferredId}`;
@@ -281,17 +327,7 @@ app.whenReady().then(() => {
     })();
   });
 
-  // GPU 预加载（WMI 快速路径，不需要渲染进程）
-  startGPUPreload();
-  ensureGPUInfo().then(controllers => {
-    return enumerateDMLDevices(getModelDir(), controllers);
-  }).then(devices => {
-    setCachedDMLDevices(devices);
-    setSettingsCachedDMLDevices(devices);
-    console.log(`[Main] GPU device preload complete: ${devices.length}  device(s)`);
-  }).catch(err => {
-    console.warn('[Main] GPU device preload failed:', err.message);
-  });
+  // GPU 硬件探测已合并到上方 did-finish-load 处理器中（应用完全启动后一次性执行并缓存复用）。
   // Model检查延后执行，不阻塞窗口显示
   checkAndDownloadModels().catch(err => {
     console.warn('[Main] Model check failed:', err.message);

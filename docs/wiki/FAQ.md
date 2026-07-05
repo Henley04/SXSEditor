@@ -48,7 +48,6 @@ Multiple precisions can coexist — each has its own subdirectory.
 | Discrete GPU, 8GB+ VRAM | FP32 (highest quality) |
 | Integrated GPU / low VRAM | INT8 |
 | NPU hardware | INT8-NPU |
-| GPU with FP8 support | FP8 |
 
 If unsure, start with **FP16**. You can switch later without re-downloading.
 

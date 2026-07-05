@@ -7,13 +7,13 @@
  */
 
 import { detectNPU } from './npuDetection.js';
-import { loadModel, unloadModel, runInference, getStatus, runSession } from './sessionManager.js';
+import { loadModel, unloadModel, runInference, getStatus, runSession, withRunLock } from './sessionManager.js';
 import { runEncoderStage } from './preprocessing.js';
 import { runDiffusionLoop, runBatchDiffusionLoop } from './diffusion.js';
-import { runVocoder } from './postprocessing.js';
+import { runVocoder, normalizePeakTo } from './postprocessing.js';
 import { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, VOCODER_CHUNK_FRAMES, NPU_STATIC_SEQ_LEN, NPU_VOCODER_SEQ_LEN } from './constants.js';
 import { ensureOrt, getOrt } from './ortSetup.js';
-import { outputToFloat32, createFloatTensor, padInt64ToLength, padToLength, trimOutputToLength } from './utils.js';
+import { outputToFloat32, createFloatTensor, padInt64ToLength, padToLength, trimOutputToLength, disposeTensor } from './utils.js';
 import { runSegmentedVocoder } from './audioSegmentation.js';
 
 /**
@@ -33,6 +33,12 @@ import { runSegmentedVocoder } from './audioSegmentation.js';
  * @returns {{ audioData: number[], totalFrames: number }}
  */
 async function runSynthesis(params) {
+    // 整体持锁：防止与另一个 runSynthesis / runInference 并发执行，
+    // 触发 ORT WASM 共享栈损坏（"Session already started" / "memory access out of bounds"）。
+    return withRunLock(() => _runSynthesisUnlocked(params));
+}
+
+async function _runSynthesisUnlocked(params) {
     await ensureOrt();
 
     let {
@@ -44,17 +50,22 @@ async function runSynthesis(params) {
         npuDiffBatchSize = 4,
         npuVocoderBatchSize = 2,
         useStaticShapes = false,
+        vocoderChunkFrames = 0,
         onProgress,
+        onChunkComplete = null,
+        skipVocoder = false,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
     const vocoderFloatType = (vocoderIsFP16 ?? isFP16) ? 'float16' : 'float32';
+    const warnings = [];
 
     // NPU 静态形状模型限制：totalFramesWithPrompt 不能超过 2048
     if (useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
         const maxFrames = NPU_STATIC_SEQ_LEN - Math.min(ptFrameCount, 50);
         if (totalFrames > maxFrames) {
             console.warn(`[WebNN] NPU frame limit: ${totalFrames} > ${maxFrames}, truncating`);
+            warnings.push(`NPU_STATIC_SHAPE_TRUNCATION: audio truncated from ${totalFrames} to ${maxFrames} frames`);
             sequences = {
                 ...sequences,
                 f0Ids: sequences.f0Ids.subarray(0, maxFrames),
@@ -88,6 +99,16 @@ async function runSynthesis(params) {
     });
 
     // ===== Stage 3: Vocoder =====
+    // skipVocoder 模式：WebNN 路径下 vocoder 由主进程 DML 执行（支持 SiFiGAN 双输入），
+    // 渲染进程仅运行 encoder+diffusion，返回 mel (xtData) 给主进程。
+    if (skipVocoder) {
+        if (onProgress) onProgress(100);
+        const synthTotalMs = performance.now() - tEnc0;
+        const diffMs = diffResult.diffTotalMs;
+        console.log(`[WebNN] Synthesis (skipVocoder): ${tokenCount}tok, ${totalFrames}frm, ${totalSteps}steps, ${synthTotalMs.toFixed(0)}ms (diff ${diffMs.toFixed(0)}ms)`);
+        return { xtData: diffResult.xtData, totalFrames, warnings };
+    }
+
     if (onProgress) onProgress(80);
     const { audioData, vocTotalMs } = await runVocoder({
         xtData: diffResult.xtData,
@@ -95,6 +116,8 @@ async function runSynthesis(params) {
         floatType: vocoderFloatType,
         npuVocoderBatchSize,
         useStaticShapes,
+        vocoderChunkFrames,
+        onChunkComplete,
     });
 
     const synthTotalMs = performance.now() - tEnc0;
@@ -109,7 +132,7 @@ async function runSynthesis(params) {
     console.log(`[WebNN]   Output: ${totalFrames} frames, ${(totalFrames * HOP_SIZE / SAMPLE_RATE).toFixed(1)}s audio`);
     console.log(`[WebNN] ================================`);
 
-    return { audioData, totalFrames };
+    return { audioData, totalFrames, warnings };
 }
 
 /**
@@ -121,6 +144,11 @@ async function runSynthesisBatch(paramsArray) {
     if (!paramsArray || paramsArray.length === 0) return [];
     if (paramsArray.length === 1) return [await runSynthesis(paramsArray[0])];
 
+    // 整体持锁：原因同 runSynthesis（见 withRunLock 注释）。
+    return withRunLock(() => _runSynthesisBatchUnlocked(paramsArray));
+}
+
+async function _runSynthesisBatchUnlocked(paramsArray) {
     const onProgress = paramsArray[0].onProgress;
 
     await ensureOrt();
@@ -131,6 +159,8 @@ async function runSynthesisBatch(paramsArray) {
     const floatType = isFP16 ? 'float16' : 'float32';
     const vocoderFloatType = vocoderIsFP16 ? 'float16' : 'float32';
     const useStaticShapes = paramsArray[0].useStaticShapes || false;
+    const vocoderChunkFrames = paramsArray[0].vocoderChunkFrames || 0;
+    const skipVocoder = paramsArray[0].skipVocoder || false;
 
     // ===== Stage 1: Encode both segments in parallel =====
     if (onProgress) onProgress(10);
@@ -162,7 +192,9 @@ async function runSynthesisBatch(paramsArray) {
         const textEmb = useStaticShapes ? trimOutputToLength(textResults['embeddings'], tokenCount) : outputToFloat32(textResults['embeddings']);
         const pitchEmb = useStaticShapes ? trimOutputToLength(pitchResults['embeddings'], tokenCount) : outputToFloat32(pitchResults['embeddings']);
         const typeEmb = useStaticShapes ? trimOutputToLength(typeResults['embeddings'], tokenCount) : outputToFloat32(typeResults['embeddings']);
-        const f0Emb = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], totalFrames) : outputToFloat32(f0Results['embeddings']);
+        // f0Emb 需在后续 condCodeData 构建中使用，且 dispose f0 张量前需独立拷贝
+        const f0EmbRaw = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], totalFrames) : outputToFloat32(f0Results['embeddings']);
+        const f0Emb = f0EmbRaw.slice();
 
         const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
         for (let t = 0; t < tokenCount; t++) {
@@ -173,12 +205,18 @@ async function runSynthesisBatch(paramsArray) {
                     typeEmb[t * EMBED_DIM + d];
             }
         }
+        // 释放 4 个编码器输出张量
+        disposeTensor(textResults['embeddings']);
+        disposeTensor(pitchResults['embeddings']);
+        disposeTensor(typeResults['embeddings']);
+        disposeTensor(f0Results['embeddings']);
 
         const bPreflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
         const bPreflowTokenEmb = useStaticShapes ? padToLength(tokenEmb, bPreflowSeqLen * EMBED_DIM) : tokenEmb;
         const featuresTensor = createFloatTensor(floatType, bPreflowTokenEmb, [1, bPreflowSeqLen, EMBED_DIM]);
         const preflowResults = await runSession('preflow', { features: featuresTensor });
         const processedTokenEmb = useStaticShapes ? trimOutputToLength(preflowResults['processed_features'], tokenCount) : outputToFloat32(preflowResults['processed_features']);
+        disposeTensor(featuresTensor);
 
         const mel2token = sequences.mel2token;
         const totalCondFrames = ptFrameCount > 0 ? ptFrameCount + totalFrames : totalFrames;
@@ -190,12 +228,17 @@ async function runSynthesisBatch(paramsArray) {
                     processedTokenEmb[tokenIdx * EMBED_DIM + d] + f0Emb[f * EMBED_DIM + d];
             }
         }
+        disposeTensor(preflowResults['processed_features']);
 
         const bCondSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalCondFrames;
         const bPaddedCondCode = useStaticShapes ? padToLength(condCodeData, bCondSeqLen * EMBED_DIM) : condCodeData;
         const condCodeTensor = createFloatTensor(floatType, bPaddedCondCode, [1, bCondSeqLen, EMBED_DIM]);
         const condEmbResults = await runSession('condEmb', { cond_code: condCodeTensor });
-        const combinedCond = useStaticShapes ? trimOutputToLength(condEmbResults['cond_embedding'], totalCondFrames) : outputToFloat32(condEmbResults['cond_embedding']);
+        // combinedCond 需存入 segData 供后续 diffusion 使用，取独立拷贝
+        const combinedCondRaw = useStaticShapes ? trimOutputToLength(condEmbResults['cond_embedding'], totalCondFrames) : outputToFloat32(condEmbResults['cond_embedding']);
+        const combinedCond = combinedCondRaw.slice();
+        disposeTensor(condCodeTensor);
+        disposeTensor(condEmbResults['cond_embedding']);
 
         segData.push({
             totalFrames, tokenCount, ptMelData, ptFrameCount, combinedCond,
@@ -216,6 +259,14 @@ async function runSynthesisBatch(paramsArray) {
     const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType, useStaticShapes });
 
     // ===== Stage 3: Vocoder per segment =====
+    // skipVocoder 模式：返回 mel 给主进程，vocoder 由主进程 DML 执行（支持 SiFiGAN 双输入）
+    if (skipVocoder) {
+        if (onProgress) onProgress(100);
+        const batchSynthMs = performance.now() - tEnc0;
+        console.log(`[WebNN] Batch synthesis (skipVocoder): 2 segs (${segData[0].totalFrames}+${segData[1].totalFrames}frm), ${batchSynthMs.toFixed(0)}ms`);
+        return segData.map((s, si) => ({ xtData: xts[si], totalFrames: s.totalFrames }));
+    }
+
     if (onProgress) onProgress(80);
     const results = [];
     for (let si = 0; si < 2; si++) {
@@ -224,14 +275,21 @@ async function runSynthesisBatch(paramsArray) {
         const totalSamples = s.totalFrames * HOP_SIZE;
         let audioData;
 
-        const maxVocChunk = useStaticShapes ? NPU_VOCODER_SEQ_LEN : VOCODER_CHUNK_FRAMES;
+        const effectiveVocChunk = (vocoderChunkFrames && vocoderChunkFrames > 0) ? vocoderChunkFrames : VOCODER_CHUNK_FRAMES;
+        const maxVocChunk = useStaticShapes ? NPU_VOCODER_SEQ_LEN : effectiveVocChunk;
         if (s.totalFrames <= maxVocChunk) {
             const bVocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : s.totalFrames;
             const paddedMel = useStaticShapes ? padToLength(xt, bVocSeqLen * MEL_DIM) : xt;
             const melTensor = createFloatTensor(vocoderFloatType, paddedMel, [1, bVocSeqLen, MEL_DIM]);
             const vocoderResults = await runSession('vocoder', { mel: melTensor });
-            const waveform = outputToFloat32(vocoderResults['waveform']);
+            const waveformRaw = vocoderResults['waveform'];
+            const waveform = outputToFloat32(waveformRaw);
             audioData = Array.from(waveform.subarray(0, Math.min(waveform.length, totalSamples)));
+            // 释放 vocoder 输入和输出张量
+            disposeTensor(melTensor);
+            disposeTensor(waveformRaw);
+            // Peak 归一化（与 runVocoder 单 chunk 路径一致，确保 batch 段间响度匹配 DML）
+            normalizePeakTo(audioData);
         } else {
             const result = await runSegmentedVocoder({
                 xtData: xt,
@@ -239,8 +297,11 @@ async function runSynthesisBatch(paramsArray) {
                 floatType: vocoderFloatType,
                 npuVocoderBatchSize: s.npuVocoderBatchSize,
                 useStaticShapes,
+                vocoderChunkFrames: effectiveVocChunk,
             });
             audioData = result.audioData;
+            // Peak 归一化（runSegmentedVocoder 不做归一化，此处补齐，与单 chunk 路径一致）
+            normalizePeakTo(audioData);
         }
 
         results.push({ audioData, totalFrames: s.totalFrames });

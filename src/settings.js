@@ -12,11 +12,14 @@ import {
     normalize,
 } from './themes/index.js';
 
+const inferenceProviderSelect = document.getElementById('inferenceProvider');
+const inferenceProviderHint = document.getElementById('inferenceProviderHint');
 const inferenceDeviceSelect = document.getElementById('inferenceDevice');
 const deviceSelectGroup = document.getElementById('deviceSelectGroup');
 const webnnStatusGroup = document.getElementById('webnnStatusGroup');
 const webnnStatusValue = document.getElementById('webnnStatusValue');
 const npuStatusValue = document.getElementById('npuStatusValue');
+const gpuStatusValue = document.getElementById('gpuStatusValue');
 const advancedSettingsGroup = document.getElementById('advancedSettingsGroup');
 const modelDeviceMappingDiv = document.getElementById('modelDeviceMapping');
 const deviceModeRadios = document.querySelectorAll('input[name="deviceMode"]');
@@ -44,11 +47,20 @@ const languageSelect = document.getElementById('languageSelect');
 const modelPrecisionSelect = document.getElementById('modelPrecision');
 const midiExtractToolSelect = document.getElementById('midiExtractTool');
 const openModelDownloadBtn = document.getElementById('openModelDownloadBtn');
-const npuDiffBatchSizeSelect = document.getElementById('npuDiffBatchSize');
-const npuVocoderBatchSizeSelect = document.getElementById('npuVocoderBatchSize');
-const batchSizeDisabledHint = document.getElementById('batchSizeDisabledHint');
 const vocoderTypeSelect = document.getElementById('vocoderType');
 const vocoderTypeHint = document.getElementById('vocoderTypeHint');
+const sifiganPrecisionSelect = document.getElementById('sifiganPrecision');
+const sifiganPrecisionGroup = document.getElementById('sifiganPrecisionGroup');
+const vocoderChunkModeRadios = document.querySelectorAll('input[name="vocoderChunkMode"]');
+const vocoderChunkManualGroup = document.getElementById('vocoderChunkManualGroup');
+const vocoderChunkFramesSlider = document.getElementById('vocoderChunkFrames');
+const vocoderChunkFramesValue = document.getElementById('vocoderChunkFramesValue');
+const vocoderChunkSmartInfo = document.getElementById('vocoderChunkSmartInfo');
+const vocoderChunkSmartText = document.getElementById('vocoderChunkSmartText');
+const vocoderChunkTableBody = document.getElementById('vocoderChunkTableBody');
+const vocoderChunkTableGroup = document.getElementById('vocoderChunkTableGroup');
+const releaseDmlVramAfterSynthesisCheckbox = document.getElementById('releaseDmlVramAfterSynthesis');
+const releaseDiffStepBeforeVocoderCheckbox = document.getElementById('releaseDiffStepBeforeVocoder');
 
 // Device mode radio button handlers
 const MODEL_GROUPS = [
@@ -67,6 +79,13 @@ let cachedWebnnInfo = null;
  */
 function applySavedSettingsToUI(currentSetting) {
     if (!currentSetting) return;
+
+    // Inference provider
+    const inferenceProvider = currentSetting.inferenceProvider === 'ortweb' ? 'ortweb' : 'ortnode';
+    if (inferenceProviderSelect) {
+        inferenceProviderSelect.value = inferenceProvider;
+        updateInferenceProviderHint(inferenceProvider);
+    }
 
     // Device mode
     const deviceMode = currentSetting.deviceMode || 'smart';
@@ -121,18 +140,37 @@ function applySavedSettingsToUI(currentSetting) {
         midiExtractToolSelect.value = 'basicpitch';
     }
 
-    // NPU batch sizes (set saved values before updateBatchSizeState which may override)
-    _savedDiffBatch = String(currentSetting.npuDiffBatchSize ?? 4);
-    _savedVocoderBatch = String(currentSetting.npuVocoderBatchSize ?? 4);
-    updateBatchSizeState(modelPrecisionSelect.value);
-
     // Vocoder type (main process may have overridden 'sifigan' -> 'default' at startup)
     vocoderTypeSelect.value = currentSetting.vocoderType === 'sifigan' ? 'sifigan' : 'default';
+
+    // SiFiGAN precision (only meaningful when vocoderType === 'sifigan')
+    sifiganPrecisionSelect.value = currentSetting.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32';
+    updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
+
+    // Vocoder chunk mode (smart/manual)
+    const vocoderChunkMode = currentSetting.vocoderChunkMode === 'manual' ? 'manual' : 'smart';
+    const vcRadioToCheck = document.querySelector(`input[name="vocoderChunkMode"][value="${vocoderChunkMode}"]`);
+    if (vcRadioToCheck) vcRadioToCheck.checked = true;
+    updateVocoderChunkModeUI(vocoderChunkMode);
+
+    // Vocoder chunk frames (manual mode)
+    const vcFrames = Number.isFinite(currentSetting.vocoderChunkFrames) ? currentSetting.vocoderChunkFrames : 1008;
+    vocoderChunkFramesSlider.value = vcFrames;
+    vocoderChunkFramesValue.textContent = vcFrames;
 
     // Audio exclusive mode
     const isExclusive = audioOutputModeSelect.value === 'exclusive';
     exclusiveInfoDiv.classList.toggle('hidden', !isExclusive);
     audioBitDepthSelect.disabled = !isExclusive;
+
+    // DML 显存回收选项（默认关闭，仅 DML 后端有效）
+    if (releaseDmlVramAfterSynthesisCheckbox) {
+        releaseDmlVramAfterSynthesisCheckbox.checked = currentSetting.releaseDmlVramAfterSynthesis === true;
+    }
+    // Vocoder 推理前释放 diffStep（默认开启，仅 DML 后端有效）
+    if (releaseDiffStepBeforeVocoderCheckbox) {
+        releaseDiffStepBeforeVocoderCheckbox.checked = currentSetting.releaseDiffStepBeforeVocoder !== false;
+    }
 }
 
 function getDeviceTypeLabel(deviceType) {
@@ -140,6 +178,7 @@ function getDeviceTypeLabel(deviceType) {
         case 'discrete-gpu': return t('settings.discreteGpu');
         case 'integrated-gpu': return t('settings.integratedGpu');
         case 'npu': return t('settings.npuLabel');
+        case 'webnn-gpu': return t('settings.webnnGpuDevice');
         case 'cpu': return t('settings.cpuLabel');
         default: return deviceType || '';
     }
@@ -149,7 +188,17 @@ function getDeviceOptionText(d) {
     const vramStr = d.vram ? ` (${d.vram})` : '';
     const typeStr = getDeviceTypeLabel(d.deviceType);
     const npuTag = d.deviceType === 'npu' ? ' [NPU(WebNN)]' : '';
-    return `${d.name}${vramStr} ${typeStr}${npuTag}`;
+    const webnnGpuTag = d.deviceType === 'webnn-gpu' ? ' [WebNN GPU]' : '';
+    return `${d.name}${vramStr} ${typeStr}${npuTag}${webnnGpuTag}`;
+}
+
+function updateInferenceProviderHint(provider) {
+    if (!inferenceProviderHint) return;
+    if (provider === 'ortweb') {
+        inferenceProviderHint.textContent = t('settings.inferenceProviderHintOrtweb');
+    } else {
+        inferenceProviderHint.textContent = t('settings.inferenceProviderHintOrtnode');
+    }
 }
 
 function updateDeviceModeUI(mode) {
@@ -164,22 +213,85 @@ function updateDeviceModeUI(mode) {
     }
 }
 
-let _savedDiffBatch = null;
-let _savedVocoderBatch = null;
+// ==================== Vocoder chunk frames (smart/manual) ====================
 
-function updateBatchSizeState(precision) {
-    const isOptimized = precision === 'int8-npu';
-    npuDiffBatchSizeSelect.disabled = !isOptimized;
-    npuVocoderBatchSizeSelect.disabled = !isOptimized;
-    if (batchSizeDisabledHint) {
-        batchSizeDisabledHint.classList.toggle('hidden', isOptimized);
+function updateVocoderChunkModeUI(mode) {
+    const isManual = mode === 'manual';
+    vocoderChunkManualGroup.classList.toggle('hidden', !isManual);
+    // 智能模式下显示自动分配结果信息框；手动模式下隐藏（用户已自行指定）
+    if (vocoderChunkSmartInfo) {
+        vocoderChunkSmartInfo.classList.toggle('hidden', isManual);
     }
-    if (isOptimized) {
-        if (_savedDiffBatch !== null) npuDiffBatchSizeSelect.value = _savedDiffBatch;
-        if (_savedVocoderBatch !== null) npuVocoderBatchSizeSelect.value = _savedVocoderBatch;
-    } else {
-        npuDiffBatchSizeSelect.value = '1';
-        npuVocoderBatchSizeSelect.value = '1';
+    // 对照表在两种模式下都显示，作为参考信息
+}
+
+let _vocoderChunkInfoLoaded = false;
+let _currentVramGb = 0; // 当前显卡显存（GB），用于对照表高亮
+
+async function loadVocoderChunkFramesInfo() {
+    if (!window.electronAPI?.getVocoderChunkFramesInfo) return;
+    try {
+        const info = await window.electronAPI.getVocoderChunkFramesInfo();
+        // 检测未完成时不覆盖（保持默认提示文字，等启动后再次刷新）
+        if (info.gpuPhase !== 'full') return;
+        _vocoderChunkInfoLoaded = true;
+        const gb = info.bestVramBytes / (1024 * 1024 * 1024);
+        _currentVramGb = gb;
+        const gpuName = info.bestGpuName || '';
+        const vramStr = gb > 0 ? `${gb.toFixed(1)}GB` : '未知';
+        const text = t('settings.vocoderChunkSmartResult', {
+            frames: info.smartFrames,
+            vram: vramStr,
+            gpu: gpuName || t('settings.unknownGpu'),
+        });
+        if (vocoderChunkSmartText) {
+            vocoderChunkSmartText.textContent = text;
+        }
+        // 智能分配结果加载完成后，刷新对照表以高亮当前显卡对应的行
+        loadVocoderChunkFramesTable();
+    } catch (err) {
+        console.error('[Settings] Failed to load vocoder chunk frames info:', err);
+    }
+}
+
+/**
+ * 加载并渲染不同显存档位下的 vocoder 分片对照表。
+ * 当精度或 vocoder 类型切换时由对应的事件监听器调用，重新刷新。
+ */
+async function loadVocoderChunkFramesTable() {
+    if (!vocoderChunkTableBody || !window.electronAPI?.getVocoderChunkFramesTable) return;
+    try {
+        const rows = await window.electronAPI.getVocoderChunkFramesTable();
+        if (!Array.isArray(rows) || rows.length === 0) {
+            vocoderChunkTableBody.innerHTML = `<tr><td colspan="4">${t('settings.vocoderChunkTableEmpty')}</td></tr>`;
+            return;
+        }
+        // 当前显卡显存对应的档位：选取 ≤ _currentVramGb 的最大档位（即实际会落入的分档）
+        // 注意：这里用档位值本身做匹配，因为对照表中的 frames 是该档位显存下的推荐值
+        let currentTierGb = 0;
+        if (_currentVramGb > 0) {
+            for (const r of rows) {
+                if (r.tierGb <= _currentVramGb) currentTierGb = r.tierGb;
+            }
+        }
+        const rowsHtml = rows.map((r) => {
+            const isCurrent = r.tierGb === currentTierGb && currentTierGb > 0;
+            const budgetStr = r.budgetGb > 0 ? `${r.budgetGb.toFixed(2)}GB` : '—';
+            const durStr = `${r.approxSeconds.toFixed(1)}s`;
+            const currentBadge = isCurrent
+                ? `<span class="vram-current-badge">${t('settings.vocoderChunkTableCurrent')}</span>`
+                : '';
+            return `<tr class="${isCurrent ? 'vram-row-current' : ''}">
+                <td>${r.tierGb}GB${currentBadge}</td>
+                <td>${budgetStr}</td>
+                <td>${r.frames}</td>
+                <td>${durStr}</td>
+            </tr>`;
+        }).join('');
+        vocoderChunkTableBody.innerHTML = rowsHtml;
+    } catch (err) {
+        console.error('[Settings] Failed to load vocoder chunk frames table:', err);
+        vocoderChunkTableBody.innerHTML = `<tr><td colspan="4">${t('settings.vocoderChunkTableEmpty')}</td></tr>`;
     }
 }
 
@@ -196,13 +308,17 @@ async function checkSifiganVocoderFiles() {
         // 授权模型目录，使 file:exists 可访问其内部文件
         await window.electronAPI.authorizePath(modelDir);
         const base = modelDir.replace(/[\\/]+$/, '');
-        const [onnxExists, statsExists] = await Promise.all([
+        // SiFiGAN onnx 变体: FP16 优先, FP32 DML 优化版回退, FP32 plain 兜底
+        const [fp16Exists, fp32DmlExists, fp32PlainExists, statsExists] = await Promise.all([
+            window.electronAPI.fileExists(base + '/sifigan_vocoder_dml_fp16.onnx'),
             window.electronAPI.fileExists(base + '/sifigan_vocoder_dml.onnx'),
+            window.electronAPI.fileExists(base + '/sifigan_vocoder.onnx'),
             window.electronAPI.fileExists(base + '/sifigan_stats.joblib'),
         ]);
+        const onnxExists = !!(fp16Exists || fp32DmlExists || fp32PlainExists);
         return { onnxExists, statsExists };
     } catch (err) {
-        console.error('[Settings] 检测 SiFiGAN 模型文件失败:', err);
+        console.error('[Settings] Failed to detect SiFiGAN model files:', err);
         return { onnxExists: false, statsExists: false };
     }
 }
@@ -237,12 +353,22 @@ function updateVocoderTypeUI(fileStatus) {
             vocoderTypeHint.textContent = 'SiFiGAN 模型文件不存在，已自动回退到默认 Vocoder';
         }
     }
+    // SiFiGAN 精度下拉框仅在选择 SiFiGAN 时可见
+    updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
+}
+
+/**
+ * SiFiGAN 精度选择下拉框的显隐控制：仅当 vocoderType === 'sifigan' 时显示。
+ * @param {string} vocoderType - 'default' | 'sifigan'
+ */
+function updateSifiganPrecisionVisibility(vocoderType) {
+    if (!sifiganPrecisionGroup) return;
+    sifiganPrecisionGroup.classList.toggle('hidden', vocoderType !== 'sifigan');
 }
 
 const PRECISION_LABELS = {
     'fp32': 'FP32',
     'fp16': 'FP16',
-    'fp8': 'FP8',
     'int8': 'INT8',
     'int8-npu': 'INT8-NPU',
 };
@@ -272,33 +398,40 @@ function updateModelStatusDisplay(modelStatus) {
 async function loadDevices() {
     try {
         // 立即显示加载状态
-        webnnStatusValue.textContent = t('settings.webnnChecking');
-        webnnStatusValue.classList.remove('status-available', 'status-unavailable');
-        webnnStatusValue.classList.add('status-checking');
-        npuStatusValue.textContent = t('settings.webnnChecking');
-        npuStatusValue.classList.remove('status-available', 'status-unavailable');
-        npuStatusValue.classList.add('status-checking');
+        for (const el of [webnnStatusValue, npuStatusValue, gpuStatusValue]) {
+            if (!el) continue;
+            el.textContent = t('settings.webnnChecking');
+            el.classList.remove('status-available', 'status-unavailable');
+            el.classList.add('status-checking');
+        }
 
         // 先加载已保存的设置，立即应用到 UI（避免显示 HTML 默认值）
         const currentSetting = await window.electronAPI.getSettings();
         window._currentSetting = currentSetting;
         applySavedSettingsToUI(currentSetting);
+        const provider = currentSetting?.inferenceProvider || 'ortnode';
 
         // 再获取设备列表（硬件检测可能较慢）
-        const devices = await window.electronAPI.getDMLDevices();
+        const allDevices = await window.electronAPI.getDMLDevices();
+        const hasNpu = allDevices.some(d => d.deviceType === 'npu');
+        const hasWebnnGpu = allDevices.some(d => d.deviceType === 'webnn-gpu');
+        cachedWebnnInfo = {
+            webnnAvailable: hasNpu || hasWebnnGpu,
+            npuAvailable: hasNpu,
+            gpuAvailable: hasWebnnGpu,
+        };
 
+        // 根据推理提供者过滤可选项：ORTNODE 仅显示本地 GPU/CPU；ORTWEB 仅显示 WebNN NPU/GPU
+        const devices = provider === 'ortweb'
+            ? allDevices.filter(d => d.deviceType === 'npu' || d.deviceType === 'webnn-gpu')
+            : allDevices.filter(d => d.deviceType !== 'npu' && d.deviceType !== 'webnn-gpu');
         cachedDevices = devices;
-
-        // NPU 结果已经包含在 getDMLDevices 中（并行检测）
-        const hasNpu = devices.some(d => d.deviceType === 'npu');
-        const webnnInfo = { webnnAvailable: hasNpu, npuAvailable: hasNpu };
-        cachedWebnnInfo = webnnInfo;
 
         // 获取当前硬件信息（可能为 null 如果管道未初始化）
         const hardwareInfo = await window.electronAPI.getCurrentHardware();
 
-        // 更新 WebNN/NPU 状态指示器
-        if (webnnInfo.webnnAvailable) {
+        // 更新 WebNN/NPU/GPU 状态指示器
+        if (cachedWebnnInfo.webnnAvailable) {
             webnnStatusValue.textContent = t('settings.webnnAvailable');
             webnnStatusValue.classList.add('status-available');
             webnnStatusValue.classList.remove('status-unavailable', 'status-checking');
@@ -307,7 +440,7 @@ async function loadDevices() {
             webnnStatusValue.classList.add('status-unavailable');
             webnnStatusValue.classList.remove('status-available', 'status-checking');
         }
-        if (webnnInfo.npuAvailable) {
+        if (cachedWebnnInfo.npuAvailable) {
             npuStatusValue.textContent = t('settings.npuAvailable');
             npuStatusValue.classList.add('status-available');
             npuStatusValue.classList.remove('status-unavailable', 'status-checking');
@@ -316,11 +449,20 @@ async function loadDevices() {
             npuStatusValue.classList.add('status-unavailable');
             npuStatusValue.classList.remove('status-available', 'status-checking');
         }
+        if (cachedWebnnInfo.gpuAvailable) {
+            gpuStatusValue.textContent = t('settings.webnnGpuAvailable');
+            gpuStatusValue.classList.add('status-available');
+            gpuStatusValue.classList.remove('status-unavailable', 'status-checking');
+        } else {
+            gpuStatusValue.textContent = t('settings.webnnGpuNotAvailable');
+            gpuStatusValue.classList.add('status-unavailable');
+            gpuStatusValue.classList.remove('status-available', 'status-checking');
+        }
 
         inferenceDeviceSelect.innerHTML = '';
 
         const discreteGPUs = devices.filter(d => d.deviceType === 'discrete-gpu' || d.isDiscrete);
-        const autoLabel = discreteGPUs.length > 0
+        const autoLabel = provider === 'ortnode' && discreteGPUs.length > 0
             ? t('settings.autoSelectPreferDiscrete', { name: discreteGPUs[0].name })
             : t('settings.autoSelect');
         const autoOption = document.createElement('option');
@@ -330,33 +472,30 @@ async function loadDevices() {
 
         for (const d of devices) {
             const option = document.createElement('option');
-            // NPU devices use 'npu' as value, others use dxgiAdapterNumber
-            option.value = d.deviceType === 'npu' ? 'npu' : String(d.dxgiAdapterNumber);
+            if (d.deviceType === 'npu') {
+                option.value = 'npu';
+            } else if (d.deviceType === 'webnn-gpu') {
+                option.value = 'webnn-gpu';
+            } else {
+                option.value = String(d.dxgiAdapterNumber);
+            }
             option.textContent = getDeviceOptionText(d);
             option.dataset.deviceType = d.deviceType || (d.isDiscrete ? 'discrete-gpu' : 'integrated-gpu');
             inferenceDeviceSelect.appendChild(option);
         }
 
-        // Update cachedWebnnInfo from device list (NPU may now come from getDMLDevices)
-        if (!cachedWebnnInfo.npuAvailable && devices.some(d => d.deviceType === 'npu')) {
-            cachedWebnnInfo = { ...cachedWebnnInfo, npuAvailable: true };
-        }
-
-        // Restore device selection from settings (dropdown needs device list first)
-        if (currentSetting && currentSetting.preferredDeviceId !== undefined && currentSetting.preferredDeviceId !== null) {
-            inferenceDeviceSelect.value = String(currentSetting.preferredDeviceId);
-        } else if (currentSetting && currentSetting.deviceId !== undefined && currentSetting.deviceId !== null) {
-            inferenceDeviceSelect.value = String(currentSetting.deviceId);
-        } else {
-            inferenceDeviceSelect.value = 'auto';
-        }
+        // Restore device selection from settings（若当前 provider 下不可用则回退 auto）
+        const preferredId = currentSetting?.preferredDeviceId ?? currentSetting?.deviceId ?? null;
+        const desiredValue = preferredId !== null ? String(preferredId) : 'auto';
+        const validValues = new Set(Array.from(inferenceDeviceSelect.options).map(o => o.value));
+        inferenceDeviceSelect.value = validValues.has(desiredValue) ? desiredValue : 'auto';
 
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
 
         // Load audio device list (needs hardware detection for device enumeration)
         await loadAudioDevices();
     } catch (err) {
-        console.error('加载设备列表失败:', err);
+        console.error('Failed to load device list:', err);
         inferenceDeviceSelect.textContent = '';
         const opt = document.createElement('option');
         opt.value = 'auto';
@@ -400,7 +539,9 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
             deviceIdStr = ` [deviceId=${hardwareInfo.dmlDeviceId}]`;
         }
 
-        textEl.textContent = `${gpuName}${deviceTypeLabel}${deviceIdStr}${epDetail}`;
+        const provider = currentSetting?.inferenceProvider || 'ortnode';
+        const providerLabel = provider === 'ortweb' ? 'ORTWEB / ' : 'ORTNODE / ';
+        textEl.textContent = `${providerLabel}${gpuName}${deviceTypeLabel}${deviceIdStr}${epDetail}`;
         return;
     }
 
@@ -409,33 +550,52 @@ function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
         return;
     }
 
+    const provider = currentSetting?.inferenceProvider || 'ortnode';
+    const providerLabel = provider === 'ortweb' ? 'ORTWEB / ' : 'ORTNODE / ';
+
     const selectedDeviceId = currentSetting && (currentSetting.preferredDeviceId !== undefined && currentSetting.preferredDeviceId !== null)
         ? currentSetting.preferredDeviceId
         : (currentSetting && currentSetting.deviceId !== undefined && currentSetting.deviceId !== null ? currentSetting.deviceId : null);
 
     if (selectedDeviceId !== null) {
-        // NPU devices use 'npu' as value, match by deviceType
-        const selected = selectedDeviceId === 'npu'
-            ? devices.find(d => d.deviceType === 'npu')
-            : devices.find(d => d.dxgiAdapterNumber === selectedDeviceId);
+        // WebNN/NPU devices match by deviceType, local GPU by dxgiAdapterNumber
+        let selected;
+        if (selectedDeviceId === 'npu') {
+            selected = devices.find(d => d.deviceType === 'npu');
+        } else if (selectedDeviceId === 'webnn-gpu') {
+            selected = devices.find(d => d.deviceType === 'webnn-gpu');
+        } else {
+            selected = devices.find(d => d.dxgiAdapterNumber === selectedDeviceId);
+        }
         if (selected) {
             const vramStr = selected.vram ? ` (${selected.vram})` : '';
             const typeLabel = getDeviceTypeLabel(selected.deviceType || (selected.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'));
-            const npuTag = selected.deviceType === 'npu' ? ' [NPU(WebNN)]' : '';
-            textEl.textContent = `${selected.name}${vramStr} ${typeLabel}${npuTag} [deviceId=${selectedDeviceId}] ${t('settings.pendingInit')}`;
+            const webnnTag = selected.deviceType === 'npu' ? ' [NPU(WebNN)]' : (selected.deviceType === 'webnn-gpu' ? ' [WebNN GPU]' : '');
+            textEl.textContent = `${providerLabel}${selected.name}${vramStr} ${typeLabel}${webnnTag} [deviceId=${selectedDeviceId}] ${t('settings.pendingInit')}`;
             return;
         }
     }
 
     // Auto mode — show "自动选择" with best device hint, matching the dropdown display
+    if (provider === 'ortweb') {
+        const best = devices.find(d => d.deviceType === 'npu') || devices.find(d => d.deviceType === 'webnn-gpu');
+        if (best) {
+            const typeLabel = getDeviceTypeLabel(best.deviceType);
+            textEl.textContent = `${providerLabel}${t('settings.autoSelect')}: ${best.name} ${typeLabel} ${t('settings.pendingInit')}`;
+            return;
+        }
+    }
+
     const discrete = devices.filter(d => d.deviceType === 'discrete-gpu' || d.isDiscrete);
     if (discrete.length > 0) {
         const best = discrete.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
-        textEl.textContent = t('settings.autoSelectPreferDiscrete', { name: best.name }) + ` ${t('settings.pendingInit')}`;
+        textEl.textContent = `${providerLabel}${t('settings.autoSelectPreferDiscrete', { name: best.name })} ${t('settings.pendingInit')}`;
     } else {
         const best = devices.sort((a, b) => (b.vramBytes || 0) - (a.vramBytes || 0))[0];
-        const vramStr = best.vram ? ` (${best.vram})` : '';
-        textEl.textContent = `${t('settings.autoSelect')}: ${best.name}${vramStr} ${getDeviceTypeLabel(best.deviceType || (best.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'))} ${t('settings.pendingInit')}`;
+        const vramStr = best?.vram ? ` (${best.vram})` : '';
+        textEl.textContent = best
+            ? `${providerLabel}${t('settings.autoSelect')}: ${best.name}${vramStr} ${getDeviceTypeLabel(best.deviceType || (best.isDiscrete ? 'discrete-gpu' : 'integrated-gpu'))} ${t('settings.pendingInit')}`
+            : `${providerLabel}${t('settings.noGpuDetected')}`;
     }
 }
 
@@ -467,8 +627,13 @@ function buildModelDeviceMapping() {
         // Populate with available devices
         for (const d of cachedDevices) {
             const opt = document.createElement('option');
-            // NPU devices use 'npu' as value, others use dxgiAdapterNumber
-            opt.value = d.deviceType === 'npu' ? 'npu' : String(d.dxgiAdapterNumber);
+            if (d.deviceType === 'npu') {
+                opt.value = 'npu';
+            } else if (d.deviceType === 'webnn-gpu') {
+                opt.value = 'webnn-gpu';
+            } else {
+                opt.value = String(d.dxgiAdapterNumber);
+            }
             opt.textContent = getDeviceOptionText(d);
             select.appendChild(opt);
         }
@@ -516,7 +681,7 @@ async function loadAudioDevices() {
         const isExclusive = audioOutputModeSelect.value === 'exclusive';
         audioBitDepthSelect.disabled = !isExclusive || !isAudioAvailable;
     } catch (err) {
-        console.error('加载音频设备列表失败:', err);
+        console.error('Failed to load audio device list:', err);
     }
 }
 
@@ -543,7 +708,7 @@ async function updateAudioDeviceList() {
             audioOutputDeviceSelect.value = currentValue;
         }
     } catch (err) {
-        console.error('更新音频设备列表失败:', err);
+        console.error('Failed to update audio device list:', err);
     }
 }
 
@@ -552,21 +717,31 @@ async function updateAudioDeviceList() {
 let _saveDebounce = null;
 
 function collectSettings() {
-    const inferenceValue = inferenceDeviceSelect.value;
-    const preferredDeviceId = inferenceValue === 'auto' ? null : (inferenceValue === 'npu' ? 'npu' : parseInt(inferenceValue));
-
-    let preferredDeviceType = null;
-    if (preferredDeviceId !== null) {
-        if (preferredDeviceId === 'npu') {
-            preferredDeviceType = 'npu';
-        } else {
-            const selectedOption = inferenceDeviceSelect.options[inferenceDeviceSelect.selectedIndex];
-            preferredDeviceType = selectedOption?.dataset?.deviceType || null;
-        }
-    }
-
     const deviceModeRadio = document.querySelector('input[name="deviceMode"]:checked');
     const deviceMode = deviceModeRadio ? deviceModeRadio.value : 'smart';
+    const inferenceProvider = inferenceProviderSelect ? inferenceProviderSelect.value : 'ortnode';
+
+    // 仅在 manual 模式下从 inferenceDeviceSelect 提取 preferredDeviceId/preferredDeviceType/deviceId。
+    // smart/advanced 模式下这些字段保持 undefined，让 settingsIpc.saveSettings 跳过它们，
+    // 避免用 null 覆盖之前 manual 模式保存的具体设备 ID（否则切回 manual 时自定义设备会丢失，
+    // 且 main.js 启动验证会误弹 "deviceId=null not found" 对话框）。
+    let preferredDeviceId;
+    let preferredDeviceType;
+    if (deviceMode === 'manual') {
+        const inferenceValue = inferenceDeviceSelect.value;
+        preferredDeviceId = inferenceValue === 'auto'
+            ? null
+            : (inferenceValue === 'npu' || inferenceValue === 'webnn-gpu' ? inferenceValue : parseInt(inferenceValue));
+        preferredDeviceType = null;
+        if (preferredDeviceId !== null) {
+            if (preferredDeviceId === 'npu' || preferredDeviceId === 'webnn-gpu') {
+                preferredDeviceType = preferredDeviceId;
+            } else {
+                const selectedOption = inferenceDeviceSelect.options[inferenceDeviceSelect.selectedIndex];
+                preferredDeviceType = selectedOption?.dataset?.deviceType || null;
+            }
+        }
+    }
 
     let modelDeviceMapping = {};
     if (deviceMode === 'advanced') {
@@ -574,12 +749,15 @@ function collectSettings() {
         mappingSelects.forEach(sel => {
             const groupId = sel.dataset.groupId;
             const val = sel.value;
-            modelDeviceMapping[groupId] = val === 'auto' ? 'auto' : (val === 'npu' ? 'npu' : parseInt(val));
+            modelDeviceMapping[groupId] = val === 'auto'
+                ? 'auto'
+                : (val === 'npu' || val === 'webnn-gpu' ? val : parseInt(val));
         });
     }
 
     return {
         deviceMode,
+        inferenceProvider,
         preferredDeviceId,
         preferredDeviceType,
         modelDeviceMapping,
@@ -599,9 +777,15 @@ function collectSettings() {
         locale: languageSelect.value,
         modelPrecision: modelPrecisionSelect.value,
         midiExtractTool: midiExtractToolSelect.value,
-        npuDiffBatchSize: parseInt(npuDiffBatchSizeSelect.value),
-        npuVocoderBatchSize: parseInt(npuVocoderBatchSizeSelect.value),
         vocoderType: vocoderTypeSelect.value,
+        sifiganPrecision: sifiganPrecisionSelect.value === 'fp16' ? 'fp16' : 'fp32',
+        vocoderChunkMode: (() => {
+            const r = document.querySelector('input[name="vocoderChunkMode"]:checked');
+            return r ? r.value : 'smart';
+        })(),
+        vocoderChunkFrames: parseInt(vocoderChunkFramesSlider.value),
+        releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
+        releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : true,
     };
 }
 
@@ -619,13 +803,22 @@ async function applySettings(options = {}) {
         // Other settings (device, audio, diffusion) are saved and take effect on next synthesis / app restart
         // No main window reload needed — avoids losing user's work
     } catch (err) {
-        console.error('应用设置失败:', err);
+        console.error('Failed to apply settings:', err);
     }
 }
 
 function applySettingsDebounced() {
     if (_saveDebounce) clearTimeout(_saveDebounce);
     _saveDebounce = setTimeout(() => applySettings(), 300);
+}
+
+// Inference provider select
+if (inferenceProviderSelect) {
+    inferenceProviderSelect.addEventListener('change', async () => {
+        updateInferenceProviderHint(inferenceProviderSelect.value);
+        await applySettings();
+        await loadDevices();
+    });
 }
 
 // Device mode radio buttons
@@ -698,10 +891,14 @@ exportCfgRescaleSlider.addEventListener('input', () => {
 // Language, precision, MIDI tool
 languageSelect.addEventListener('change', () => applySettings({ reloadLocale: true }));
 modelPrecisionSelect.addEventListener('change', async () => {
-    updateBatchSizeState(modelPrecisionSelect.value);
     await applySettings(); // 等待保存 + pipeline 重置完成再刷新硬件显示
     // pipeline 已被重置，刷新"当前运行硬件"显示让用户确认精度切换生效
     updateCurrentHardwareDisplay(null, cachedDevices, collectSettings());
+    // 刷新对照表（精度变化导致常驻权重不同，预算与分片数会变化）
+    loadVocoderChunkFramesTable();
+    // 刷新智能分配结果信息框（精度变化也会影响 smartFrames）
+    _vocoderChunkInfoLoaded = false;
+    loadVocoderChunkFramesInfo();
     // Check if models exist for the new precision, auto-open download if not
     try {
         const modelStatus = await window.electronAPI.checkModels();
@@ -713,14 +910,6 @@ modelPrecisionSelect.addEventListener('change', async () => {
         }
     } catch (_) {}
 });
-npuDiffBatchSizeSelect.addEventListener('change', () => {
-    _savedDiffBatch = npuDiffBatchSizeSelect.value;
-    applySettings();
-});
-npuVocoderBatchSizeSelect.addEventListener('change', () => {
-    _savedVocoderBatch = npuVocoderBatchSizeSelect.value;
-    applySettings();
-});
 vocoderTypeSelect.addEventListener('change', () => {
     if (vocoderTypeSelect.value === 'sifigan') {
         const sifiganOption = vocoderTypeSelect.querySelector('option[value="sifigan"]');
@@ -730,11 +919,53 @@ vocoderTypeSelect.addEventListener('change', () => {
             if (vocoderTypeHint) {
                 vocoderTypeHint.textContent = 'SiFiGAN 不可用，已回退到默认 Vocoder';
             }
+            updateSifiganPrecisionVisibility('default');
             return;
         }
     }
+    updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
     applySettings();
+    // 刷新对照表（vocoder 类型变化导致常驻权重表与分档表都不同）
+    loadVocoderChunkFramesTable();
+    // 刷新智能分配结果信息框
+    _vocoderChunkInfoLoaded = false;
+    loadVocoderChunkFramesInfo();
 });
+sifiganPrecisionSelect.addEventListener('change', () => {
+    applySettings();
+    // SiFiGAN 精度变化也会影响常驻权重（fp32 vs fp16），刷新对照表
+    loadVocoderChunkFramesTable();
+    _vocoderChunkInfoLoaded = false;
+    loadVocoderChunkFramesInfo();
+});
+
+// Vocoder chunk mode (smart/manual) and manual frames slider
+vocoderChunkModeRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+        updateVocoderChunkModeUI(radio.value);
+        applySettings();
+    });
+});
+vocoderChunkFramesSlider.addEventListener('input', () => {
+    // 强制对齐到 8 的倍数（与 VOCODER_OVERLAP_FRAMES 兼容）
+    let v = parseInt(vocoderChunkFramesSlider.value);
+    if (!Number.isFinite(v)) v = 1008;
+    v = Math.round(v / 8) * 8;
+    if (v != vocoderChunkFramesSlider.value) {
+        vocoderChunkFramesSlider.value = v;
+    }
+    vocoderChunkFramesValue.textContent = v;
+    applySettingsDebounced();
+});
+
+if (releaseDmlVramAfterSynthesisCheckbox) {
+    releaseDmlVramAfterSynthesisCheckbox.addEventListener('change', () => applySettings());
+}
+
+if (releaseDiffStepBeforeVocoderCheckbox) {
+    releaseDiffStepBeforeVocoderCheckbox.addEventListener('change', () => applySettings());
+}
+
 midiExtractToolSelect.addEventListener('change', () => applySettings());
 
 openModelDownloadBtn.addEventListener('click', async () => {
@@ -742,7 +973,7 @@ openModelDownloadBtn.addEventListener('click', async () => {
     try {
         await window.electronAPI.modelDownloadOpen(precision);
     } catch (err) {
-        console.error('打开模型下载失败:', err);
+        console.error('Failed to open model download:', err);
     }
 });
 
@@ -762,6 +993,21 @@ openModelDownloadBtn.addEventListener('click', async () => {
 // makes the SiFiGAN detection appear instantly.
 loadDevices().catch(() => {});
 checkSifiganVocoderFiles().then(updateVocoderTypeUI).catch(() => {});
+
+// 立即加载显存对照表（不依赖 GPU 检测完成，因为对照表是按显存档位预算计算的）
+loadVocoderChunkFramesTable();
+
+// Load vocoder chunk frames info (smart allocation result).
+// GPU detection runs asynchronously after did-finish-load, so retry
+// until gpuPhase === 'full' (max 30s).
+(async () => {
+    const deadline = Date.now() + 30000;
+    while (Date.now() < deadline) {
+        await loadVocoderChunkFramesInfo();
+        if (_vocoderChunkInfoLoaded) break;
+        await new Promise(r => setTimeout(r, 2000));
+    }
+})();
 
 // Check model availability on load
 if (window.electronAPI?.checkModels) {
@@ -884,13 +1130,13 @@ async function applyThemeViaAPI(themeId) {
         try {
             await window.electronAPI.themeAPI.apply(themeId, { scope: 'global' });
         } catch (e) {
-            console.error('应用主题失败:', e);
+            console.error('Failed to apply theme:', e);
         }
     } else if (themeId && themeManager.get(themeId)) {
         try {
             themeManager.activate(themeId);
         } catch (e) {
-            console.error('应用主题失败:', e);
+            console.error('Failed to apply theme:', e);
         }
     }
 }
@@ -900,7 +1146,7 @@ async function refreshThemeList() {
         try {
             themeList = await window.electronAPI.themeAPI.list();
         } catch (e) {
-            console.error('列出主题失败:', e);
+            console.error('Failed to list themes:', e);
             themeList = BUILTIN_THEMES.map(t => ({ ...t, source: 'builtin' }));
         }
     } else {
@@ -927,7 +1173,7 @@ if (themeResetBtn) {
             try {
                 await window.electronAPI.themeAPI.reset();
             } catch (e) {
-                console.error('重置主题失败:', e);
+                console.error('Failed to reset theme:', e);
             }
         } else {
             try {
@@ -998,7 +1244,7 @@ if (themeDeleteBtn) {
             try {
                 await window.electronAPI.themeAPI.delete(id);
             } catch (e) {
-                console.error('删除主题失败:', e);
+                console.error('Failed to delete theme:', e);
                 return;
             }
         }
@@ -1137,7 +1383,7 @@ function applyTokenChange(tokenName, value) {
         try {
             themeManager.setOverrideValue(tokenName, value);
         } catch (e) {
-            console.error('设置令牌失败:', e);
+            console.error('Failed to set token:', e);
         }
     }, 80);
 }
@@ -1342,7 +1588,7 @@ if (themeSaveAsConfirmBtn) {
             populateThemeSelect();
         }
     } catch (e) {
-        console.error('初始化主题列表失败:', e);
+        console.error('Failed to initialize theme list:', e);
     }
 })();
 

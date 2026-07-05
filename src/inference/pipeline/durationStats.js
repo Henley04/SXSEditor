@@ -100,6 +100,42 @@ function getDurationStatsSync() {
 }
 
 /**
+ * 同步获取已加载的统计表。若未加载返回空表（让调用方走 unigram fallback），
+ * 永不阻塞主线程。
+ *
+ * 性能审查 (#5) 修复：原实现在 _cache 为 null 且 _loading 为 null 时
+ * 会同步 readFileSync + JSON.parse 4MB JSON，阻塞主线程 50-100ms。
+ * 实际文件 4MB（非审查报告所称 200MB，但仍不应在 IPC 路径同步解析）。
+ * 修复后：严格只读缓存，未加载则返回空表，由异步 preload() 在后台填充。
+ * preload() 在 Preprocessing 构造时调用，远早于 IPC 触发 resolveLyricToPhonemes。
+ * @returns {Object} 统计表对象（可能为空表）
+ */
+function loadDurationStatsSync() {
+    if (_cache) return _cache;
+    // 异步加载正在进行中或尚未开始：返回空表让调用方走 fallback，不阻塞主线程
+    if (!_loading) {
+        // 异步加载尚未触发：在后台启动一次（不阻塞当前同步调用）
+        preload().catch(() => {});
+    }
+    return { unigram: {}, bigram: {}, trigram: {}, trigram_full: {}, by_stress: {}, by_position: {} };
+}
+
+/**
+ * 释放已加载的统计表缓存，释放常驻内存。
+ * 适用于长时间不进行合成时主动回收内存。
+ * 注意：调用后再次合成时会触发异步重新加载（首次合成会有少量延迟）。
+ */
+function unloadDurationStats() {
+    if (_loading) {
+        // 正在加载中：不能直接清空，否则加载完成后会重新填充 _cache
+        // 将 _cache 置为 null，加载完成时 _loading.then 会重新赋值（这正是我们想要的）
+        _cache = null;
+        return;
+    }
+    _cache = null;
+}
+
+/**
  * 预加载（可选）：在 SVS pipeline 初始化时调用，避免首次推理时阻塞。
  */
 function preload() {
@@ -224,8 +260,10 @@ function computeNormalizedRatios(stats, phoneNames, position) {
 
 module.exports = {
     loadDurationStats,
+    loadDurationStatsSync,
     getDurationStatsSync,
     preload,
+    unloadDurationStats,
     extractStress,
     barePhone,
     lookupWeight,

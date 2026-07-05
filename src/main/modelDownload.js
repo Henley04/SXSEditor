@@ -12,19 +12,51 @@ let downloadAbortController = null;
 
 // ===== SiFiGAN helpers =====
 // SiFiGAN is an optional model group stored at the root of onnx_models/
-// (not in precision subdirs). These helpers inspect/delete the expected
-// files: sifigan_vocoder_dml.onnx, sifigan_vocoder_dml.onnx.data (external
-// weights), and sifigan_stats.joblib.
-const SIFIGAN_FILES = [
+// (not in precision subdirs). SiFiGAN has two onnx variants (FP16 量化版优先,
+// FP32 DML 优化版回退); only one variant needs to be present + stats file.
+//
+// SIFIGAN_DOWNLOAD_FILES: files downloadable from ModelScope (FP32 variant).
+//   The FP16 variant is generated locally via quantize_sifigan_fp16.py and
+//   is NOT on ModelScope, so it is excluded from the download list.
+// SIFIGAN_ALL_FILES: all possible files (FP16 + FP32 + stats) for deletion.
+const SIFIGAN_DOWNLOAD_FILES = [
   'sifigan_vocoder_dml.onnx',
   'sifigan_vocoder_dml.onnx.data',
   'sifigan_stats.joblib',
 ];
+const SIFIGAN_ALL_FILES = [
+  'sifigan_vocoder_dml_fp16.onnx',
+  'sifigan_vocoder_dml_fp16.onnx.data',
+  'sifigan_vocoder_dml.onnx',
+  'sifigan_vocoder_dml.onnx.data',
+  'sifigan_stats.joblib',
+];
+// 兼容旧引用 (SIFIGAN_FILES 仍指向完整列表, 用于 deleteSifiganFiles)
+const SIFIGAN_FILES = SIFIGAN_ALL_FILES;
+
+// SiFiGAN 安装判定: stats 文件 + (FP16 变体完整 OR FP32 变体完整)
+function _checkFileExists(modelDir, fileName) {
+  try {
+    const stats = fs.statSync(path.join(modelDir, fileName));
+    return stats.size > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+function isSifiganVariantComplete(modelDir, variant) {
+  // variant: 'fp16' | 'fp32'
+  if (variant === 'fp16') {
+    return _checkFileExists(modelDir, 'sifigan_vocoder_dml_fp16.onnx')
+        && _checkFileExists(modelDir, 'sifigan_vocoder_dml_fp16.onnx.data');
+  }
+  return _checkFileExists(modelDir, 'sifigan_vocoder_dml.onnx')
+      && _checkFileExists(modelDir, 'sifigan_vocoder_dml.onnx.data');
+}
 
 function checkSifiganFilesExist(modelDir) {
   const result = {};
-  let allExist = true;
-  for (const fileName of SIFIGAN_FILES) {
+  for (const fileName of SIFIGAN_ALL_FILES) {
     const fullPath = path.join(modelDir, fileName);
     let exists = false;
     let size = 0;
@@ -36,15 +68,19 @@ function checkSifiganFilesExist(modelDir) {
       }
     } catch (_) {}
     result[fileName] = { exists, size, fullPath };
-    if (!exists) allExist = false;
   }
-  return { allExist, files: result };
+  // SiFiGAN 视为已安装: stats 存在 + (FP16 变体完整 OR FP32 变体完整)
+  const statsOk = result['sifigan_stats.joblib'] && result['sifigan_stats.joblib'].exists;
+  const fp16Ok = isSifiganVariantComplete(modelDir, 'fp16');
+  const fp32Ok = isSifiganVariantComplete(modelDir, 'fp32');
+  const allExist = !!(statsOk && (fp16Ok || fp32Ok));
+  return { allExist, files: result, fp16Ok, fp32Ok, statsOk };
 }
 
 function deleteSifiganFiles(modelDir) {
   const deleted = [];
   const errors = [];
-  for (const fileName of SIFIGAN_FILES) {
+  for (const fileName of SIFIGAN_ALL_FILES) {
     const fullPath = path.join(modelDir, fileName);
     try {
       fs.unlinkSync(fullPath);
@@ -90,12 +126,12 @@ async function startModelDownload(modelDir, missingFiles, precision) {
     if (win && !win.isDestroyed()) {
       win.webContents.send('model-download:complete');
     }
-    console.log('[Main] 所有模型文件下载完成');
+    console.log('[Main] All model files downloaded');
   } catch (err) {
     if (err.message === 'Download cancelled') {
-      console.log('[Main] 模型下载已取消');
+      console.log('[Main] Model download cancelled');
     } else {
-      console.error('[Main] 模型下载失败:', err);
+      console.error('[Main] Model download failed:', err);
       const win = getModelDownloadWindow();
       if (win && !win.isDestroyed()) {
         win.webContents.send('model-download:error', { message: err.message });
@@ -139,7 +175,7 @@ async function checkAndDownloadModels() {
     });
 
     if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
-      console.log('[Main] 用户取消了模型下载位置选择');
+      console.log('[Main] User cancelled model download location selection');
       return false;
     }
 
@@ -159,16 +195,16 @@ async function checkAndDownloadModels() {
 
     const recheck = await checkMissingFilesAsync(downloadDir, precision);
     if (recheck.missing.length === 0) {
-      console.log('[Main] 所选目录中模型文件已就绪');
+      console.log('[Main] Model files ready in selected directory');
       return true;
     }
 
-    console.log(`[Main] 缺少 ${recheck.missing.length} 个模型文件:`, recheck.missing.map(f => f.filePath));
+    console.log(`[Main] Missing ${recheck.missing.length} model files:`, recheck.missing.map(f => f.filePath));
     createModelDownloadWindow(recheck.missing, precision, DEFAULT_PRECISION);
     return false;
   }
 
-  console.log(`[Main] 缺少 ${missing.length} 个模型文件:`, missing.map(f => f.filePath));
+  console.log(`[Main] Missing ${missing.length} model files:`, missing.map(f => f.filePath));
   createModelDownloadWindow(missing, precision, DEFAULT_PRECISION);
   return false;
 }
@@ -327,6 +363,9 @@ function registerModelDownloadIpc() {
       if (win && !win.isDestroyed()) {
         win.webContents.send('model-download:complete');
       }
+      // 失效 JP 模型存在性缓存，让下次合成重新检查文件
+      const { invalidateJpModelsCache } = require('../modelManager');
+      invalidateJpModelsCache(modelDir, currentPrecision);
       console.log('[Main] JP model download complete');
     } catch (err) {
       if (err.message === 'Download cancelled') {
@@ -405,8 +444,10 @@ function registerModelDownloadIpc() {
       return { status: 'installed', allExist, files: existingFiles };
     }
 
-    // Build the list of missing files to download
-    const missingFiles = SIFIGAN_FILES.filter(name => !existingFiles[name] || !existingFiles[name].exists);
+    // Build the list of missing files to download.
+    // Only download SIFIGAN_DOWNLOAD_FILES (FP32 variant + stats) from ModelScope.
+    // The FP16 variant is generated locally and is not on ModelScope.
+    const missingFiles = SIFIGAN_DOWNLOAD_FILES.filter(name => !existingFiles[name] || !existingFiles[name].exists);
     if (missingFiles.length === 0) {
       return { status: 'installed', allExist: true, files: existingFiles };
     }
@@ -534,7 +575,7 @@ function registerModelDownloadIpc() {
       if (win && !win.isDestroyed()) {
         win.webContents.send('model-download:complete');
       }
-      console.log('[Main] SiFiGAN 模型下载完成');
+      console.log('[Main] SiFiGAN model download complete');
       return {
         status: nowExists ? 'installed' : 'not_downloaded',
         allExist: nowExists,
@@ -542,9 +583,9 @@ function registerModelDownloadIpc() {
       };
     } catch (err) {
       if (err.message === 'Download cancelled') {
-        console.log('[Main] SiFiGAN 模型下载已取消');
+        console.log('[Main] SiFiGAN model download cancelled');
       } else {
-        console.error('[Main] SiFiGAN 模型下载失败:', err);
+        console.error('[Main] SiFiGAN model download failed:', err);
         if (win && !win.isDestroyed()) {
           win.webContents.send('model-download:error', { message: err.message });
         }
@@ -576,7 +617,7 @@ function registerModelDownloadIpc() {
         await saveSettingsFile(settings);
       }
     } catch (err) {
-      console.warn('[Main] 重置 vocoderType 失败:', err.message);
+      console.warn('[Main] Failed to reset vocoderType:', err.message);
     }
 
     // Release the loaded SiFiGAN InferenceSession via the SVS pipeline.
@@ -591,7 +632,7 @@ function registerModelDownloadIpc() {
         pipeline.unloadModel('sifigan');
       }
     } catch (err) {
-      console.warn('[Main] 释放 SiFiGAN InferenceSession 失败:', err.message);
+      console.warn('[Main] Failed to release SiFiGAN InferenceSession:', err.message);
     }
 
     // Re-check files after deletion to return fresh state

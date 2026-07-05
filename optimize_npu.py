@@ -131,13 +131,13 @@ def fix_vocoder_conv_transpose(model):
     del graph.node[ct_idx]
     for i, n in enumerate(ns):
         graph.node.insert(ct_idx + i, n)
-    print(f"  替换 ConvTranspose 为 {len(ns)} 个节点")
+    print(f"  Replaced ConvTranspose with {len(ns)} nodes")
     return model
 
 
 def convert_model(model_path, output_path, is_vocoder=False):
     print(f"\n{'='*60}")
-    print(f"转换: {os.path.basename(model_path)}")
+    print(f"Converting: {os.path.basename(model_path)}")
     print(f"{'='*60}")
 
     model = onnx.load(model_path)
@@ -145,30 +145,30 @@ def convert_model(model_path, output_path, is_vocoder=False):
     if is_vocoder:
         model = fix_vocoder_conv_transpose(model)
 
-    print(f"  转换为 FP16...")
+    print(f"  Converting to FP16...")
     model_fp16 = convert_float_to_float16(model, keep_io_types=True, disable_shape_infer=False)
 
     unsupported = check_npu_compatibility(model_fp16)
     if unsupported:
-        print(f"  仍不兼容: {unsupported}")
+        print(f"  Still incompatible: {unsupported}")
     else:
-        print(f"  全部 NPU 兼容")
+        print(f"  All NPU compatible")
 
     ops = list_ops(model_fp16)
     total = sum(ops.values())
-    print(f"  节点: {total}")
+    print(f"  Nodes: {total}")
     for op, cnt in sorted(ops.items(), key=lambda x: -x[1])[:6]:
         print(f"    {op}: {cnt}")
 
     onnx.save(model_fp16, output_path)
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    print(f"  保存: {output_path} ({size_mb:.1f} MB)")
+    print(f"  Saved: {output_path} ({size_mb:.1f} MB)")
     return model_fp16
 
 
 def main():
     print("=" * 60)
-    print("NPU FP16 模型转换")
+    print("NPU FP16 model conversion")
     print("=" * 60)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -177,7 +177,7 @@ def main():
     for model_file in MODELS:
         model_path = os.path.join(BASE_DIR, model_file)
         if not os.path.exists(model_path):
-            print(f"\n  不存在: {model_file}")
+            print(f"\n  Not found: {model_file}")
             continue
 
         output_path = os.path.join(OUTPUT_DIR, model_file)
@@ -189,12 +189,12 @@ def main():
             results.append({'name': model_file, 'ok': True, 'unsup': unsupported,
                            'size': os.path.getsize(output_path) / (1024*1024)})
         except Exception as e:
-            print(f"\n  失败: {model_file} - {e}")
+            print(f"\n  Failed: {model_file} - {e}")
             import traceback; traceback.print_exc()
             results.append({'name': model_file, 'ok': False, 'error': str(e)})
 
     print(f"\n{'='*60}")
-    print("结果")
+    print("Results")
     print(f"{'='*60}")
     for r in results:
         if r['ok']:

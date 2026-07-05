@@ -7,6 +7,9 @@ const mainLocales = {
     menu: {
       aboutSXSEditor: '关于 SXSEditor',
       quit: '退出',
+      file: '文件',
+      save: '保存',
+      saveAs: '另存为...',
       edit: '编辑',
       undo: '撤销',
       redo: '重做',
@@ -47,11 +50,21 @@ const mainLocales = {
     modelDownload: {
       sifiganUrlNotConfigured: '下载链接待配置，请等待作者上传至 ModelScope 或手动放置模型文件',
     },
+    singerCreator: {
+      title: '歌手创建',
+      fileMenu: '文件',
+      save: '保存',
+      saveAs: '另存为...',
+      close: '关闭',
+    },
   },
   'en': {
     menu: {
       aboutSXSEditor: 'About SXSEditor',
       quit: 'Quit',
+      file: 'File',
+      save: 'Save',
+      saveAs: 'Save As...',
       edit: 'Edit',
       undo: 'Undo',
       redo: 'Redo',
@@ -92,6 +105,13 @@ const mainLocales = {
     modelDownload: {
       sifiganUrlNotConfigured: 'Download URL not configured. Please wait for the author to upload to ModelScope or manually place the model files.',
     },
+    singerCreator: {
+      title: 'Singer Creator',
+      fileMenu: 'File',
+      save: 'Save',
+      saveAs: 'Save As...',
+      close: 'Close',
+    },
   },
 };
 
@@ -107,7 +127,7 @@ function loadMainLocale() {
         return;
       }
     }
-  } catch (err) { console.warn('[Main] 加载 locale 配置失败:', err.message); }
+  } catch (err) { console.warn('[Main] Failed to load locale config:', err.message); }
   // No config file — detect system language
   const sysLang = app.getLocale(); // e.g. 'zh-CN', 'en-US', 'ja'
   if (sysLang.startsWith('zh')) {

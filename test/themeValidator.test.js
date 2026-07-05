@@ -152,7 +152,7 @@ describe('themeValidator', () => {
         it('应当拒绝大写 token 键', () => {
             const r = validator.validate({ id: 't', tokens: { '--Color-blue': '#fff' } });
             expect(r.ok).to.be.false;
-            expect(r.errors.some(e => /令牌名/.test(e.message))).to.be.true;
+            expect(r.errors.some(e => /Token name/.test(e.message))).to.be.true;
         });
 
         it('应当拒绝不带 -- 前缀的键', () => {
@@ -195,7 +195,7 @@ describe('themeValidator', () => {
                 { getThemeById: () => null }
             );
             expect(r.ok).to.be.false;
-            expect(r.errors.some(e => /父主题.*不存在/.test(e.message))).to.be.true;
+            expect(r.errors.some(e => /Parent theme.*does not exist/.test(e.message))).to.be.true;
         });
 
         it('extends 链 3 层（含自身）应当通过', () => {
@@ -225,7 +225,7 @@ describe('themeValidator', () => {
                 { getThemeById: (id) => idMap[id] }
             );
             expect(r.ok).to.be.false;
-            expect(r.errors.some(e => /深度/.test(e.message))).to.be.true;
+            expect(r.errors.some(e => /depth/.test(e.message))).to.be.true;
         });
 
         it('环状继承应当失败', () => {
@@ -234,7 +234,7 @@ describe('themeValidator', () => {
             const getById = (id) => (id === 'cyc-a' ? a : (id === 'cyc-b' ? b : null));
             const r = validator.validate(a, { getThemeById: getById });
             expect(r.ok).to.be.false;
-            expect(r.errors.some(e => /环/.test(e.message))).to.be.true;
+            expect(r.errors.some(e => /Circular/.test(e.message))).to.be.true;
         });
 
         it('extends 非字符串应当失败', () => {
@@ -254,7 +254,7 @@ describe('themeValidator', () => {
                 },
             });
             // 校验器对缺前缀键同时报错并警告
-            expect(r.warnings.some(w => /前缀/.test(w.message))).to.be.true;
+            expect(r.warnings.some(w => /prefix/.test(w.message))).to.be.true;
         });
     });
 

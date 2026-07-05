@@ -131,12 +131,11 @@
 .loading-overlay {
   position: fixed;
   inset: 0;
-  background: var(--bg-overlay);
+  background: rgba(10, 10, 20, 0.85);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 9999;
-  backdrop-filter: blur(2px);
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--motion-slow) ease;
@@ -174,12 +173,11 @@
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: var(--overlay-scrim);
+  background: rgba(10, 10, 20, 0.85);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10000;
-  backdrop-filter: blur(2px);
 }
 
 .modal-dialog {

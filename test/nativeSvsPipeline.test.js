@@ -786,6 +786,132 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       }
       expect(foundDiff).to.be.true;
     });
+
+    it('should apply f0Shift to f0Hz for vocoder f0 consistency', () => {
+      // f0Hz 是 SiFiGAN vocoder 的 f0 输入，必须与 diffusion mel（基于偏移后音高）匹配。
+      // 之前 f0Hz 未偏移导致 autoShift 较大时口齿不清。
+      const bpm = 120;
+      const notes = [
+        { pitch: 60, start: 0, duration: 1, lyric: 'zh_a1' },
+      ];
+      const resultNoShift = pipeline.notesToSequences(notes, bpm, null, null, 0);
+      const resultShift2 = pipeline.notesToSequences(notes, bpm, null, null, 2);
+      let foundShifted = false;
+      const expectedFactor = Math.pow(2, 2 / 12); // +2 semitones
+      for (let i = 0; i < resultNoShift.f0Hz.length; i++) {
+        const base = resultNoShift.f0Hz[i];
+        const shifted = resultShift2.f0Hz[i];
+        if (base > 0 && shifted > 0) {
+          // 允许浮点误差
+          expect(shifted).to.be.closeTo(base * expectedFactor, 0.01);
+          foundShifted = true;
+        }
+      }
+      expect(foundShifted).to.be.true;
+    });
+  });
+
+  describe('_clampAutoShift', () => {
+    it('should return 0 unchanged', () => {
+      expect(pipeline._clampAutoShift(0, [60])).to.equal(0);
+    });
+
+    it('should return unchanged when within effective range', () => {
+      // pitch 60 (C4) + shift 5 → 65, within [28, 88]
+      expect(pipeline._clampAutoShift(5, [60])).to.equal(5);
+      expect(pipeline._clampAutoShift(-5, [60])).to.equal(-5);
+    });
+
+    it('should clamp positive shift when max pitch would exceed upper bound', () => {
+      // pitch 80 + shift 12 → 92 > 88, max allowed up = 88 - 80 = 8
+      expect(pipeline._clampAutoShift(12, [80])).to.equal(8);
+    });
+
+    it('should clamp negative shift when min pitch would fall below lower bound', () => {
+      // pitch 30 + shift -5 → 25 < 28, max allowed down = 28 - 30 = -2
+      expect(pipeline._clampAutoShift(-5, [30])).to.equal(-2);
+    });
+
+    it('should cap absolute shift to 12 semitones even when range allows more', () => {
+      // pitch 50, range allows ±38, but abs cap is 12
+      expect(pipeline._clampAutoShift(20, [50])).to.equal(12);
+      expect(pipeline._clampAutoShift(-20, [50])).to.equal(-12);
+    });
+
+    it('should handle wide pitch range within a fragment (root cause of garbled pronunciation)', () => {
+      // 分片内音高相差大：C3(48) 到 C6(84)
+      // max pitch 84, max allowed up = 88 - 84 = 4
+      // 即使 autoShift 想偏移 +12，也只能 +4
+      expect(pipeline._clampAutoShift(12, [48, 60, 72, 84])).to.equal(4);
+      // min pitch 48, max allowed down = 28 - 48 = -20, but abs cap is -12
+      expect(pipeline._clampAutoShift(-20, [48, 60, 72, 84])).to.equal(-12);
+    });
+
+    it('should return unchanged for empty or null pitch array', () => {
+      expect(pipeline._clampAutoShift(5, [])).to.equal(5);
+      expect(pipeline._clampAutoShift(5, null)).to.equal(5);
+    });
+
+    it('should use tighter upper bound (84) when vocoderType is sifigan', () => {
+      // B1: SiFiGAN 对 f0 敏感，上限收紧到 84（~C6）防止激励畸变
+      pipeline.vocoderType = 'sifigan';
+      // pitch 80 + shift 12 → 92 > 84, max allowed up = 84 - 80 = 4
+      expect(pipeline._clampAutoShift(12, [80])).to.equal(4);
+      // pitch 84 + shift 1 → 85 > 84, max allowed up = 0
+      expect(pipeline._clampAutoShift(1, [84])).to.equal(0);
+      // 恢复 default 后上限回到 88
+      pipeline.vocoderType = 'default';
+      expect(pipeline._clampAutoShift(12, [80])).to.equal(8);
+    });
+  });
+
+  describe('_computeSegF0Shift (B2 per-segment f0Shift)', () => {
+    it('should return global f0Shift when globalTargetMedian is null (autoShift off)', () => {
+      expect(pipeline._computeSegF0Shift(7, null, [{ pitch: 60, start: 0, duration: 1 }])).to.equal(7);
+    });
+
+    it('should return global f0Shift when segment has no pitched notes', () => {
+      expect(pipeline._computeSegF0Shift(5, 60, [{ pitch: 0, start: 0, duration: 1 }])).to.equal(5);
+    });
+
+    it('should return global f0Shift when segment median equals global median', () => {
+      // seg median 60 == global median 60, adjustment = 0
+      expect(pipeline._computeSegF0Shift(5, 60, [{ pitch: 60, start: 0, duration: 1 }])).to.equal(5);
+    });
+
+    it('should shift up for low segment (segment median below global)', () => {
+      // global median 60 (C4), seg median 48 (C3), adj = 60-48 = 12, capped to +5
+      // global f0Shift 3 + 5 = 8, clamped by _clampAutoShift (pitch 48 → 53, within range)
+      const segNotes = [{ pitch: 48, start: 0, duration: 1 }];
+      expect(pipeline._computeSegF0Shift(3, 60, segNotes)).to.equal(8);
+    });
+
+    it('should shift down for high segment (segment median above global)', () => {
+      // global median 60, seg median 72 (C5), adj = 60-72 = -12, capped to -5
+      // global f0Shift -2 + (-5) = -7, clamped by _clampAutoShift (pitch 72 → 65, within range)
+      const segNotes = [{ pitch: 72, start: 0, duration: 1 }];
+      expect(pipeline._computeSegF0Shift(-2, 60, segNotes)).to.equal(-7);
+    });
+
+    it('should cap adjustment to ±5 semitones', () => {
+      // global median 60, seg median 24 (very low), adj = 36, capped to +5
+      const segNotes = [{ pitch: 24, start: 0, duration: 1 }];
+      expect(pipeline._computeSegF0Shift(0, 60, segNotes)).to.equal(5);
+      // global median 60, seg median 84 (high but in range), adj = -24, capped to -5
+      // _clampAutoShift(-5, [84]): maxAllowedUp=4, maxAllowedDown=-56 → -5 (within range)
+      const highNotes = [{ pitch: 84, start: 0, duration: 1 }];
+      expect(pipeline._computeSegF0Shift(0, 60, highNotes)).to.equal(-5);
+    });
+
+    it('should respect _clampAutoShift bounds after per-segment adjustment', () => {
+      // SiFiGAN: upper bound 84. seg pitch 80, global f0Shift 0, global median 88
+      // seg median 80, adj = 88-80 = 8, capped to +5 → raw shift 5
+      // _clampAutoShift: pitch 80 + 5 = 85 > 84, max allowed up = 84-80 = 4 → clamped to 4
+      pipeline.vocoderType = 'sifigan';
+      const segNotes = [{ pitch: 80, start: 0, duration: 1 }];
+      expect(pipeline._computeSegF0Shift(0, 88, segNotes)).to.equal(4);
+      pipeline.vocoderType = 'default';
+    });
   });
 
   describe('quantizeF0 with f0Shift', () => {

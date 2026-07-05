@@ -27,7 +27,7 @@ function loadSettings() {
       _settingsCache = {};
     }
   } catch (err) {
-    console.warn('[Main] 加载设置失败，将使用默认设置:', err.message);
+    console.warn('[Main] Failed to load settings, using defaults:', err.message);
     _settingsCache = {};
   }
   // Merge defaults for theme fields
@@ -61,23 +61,65 @@ function loadSettings() {
     }
   }
 
+  // Vocoder 分片长度模式：'smart' 依据显存智能分配，'manual' 用户手动指定帧数
+  if (_settingsCache.vocoderChunkMode !== 'manual') {
+    _settingsCache.vocoderChunkMode = 'smart';
+  }
+  if (typeof _settingsCache.vocoderChunkFrames !== 'number' || !Number.isFinite(_settingsCache.vocoderChunkFrames) || _settingsCache.vocoderChunkFrames <= 0) {
+    _settingsCache.vocoderChunkFrames = 1008;
+  }
+
+  // 合成完成后是否释放并重建重型 DML session，强制回收 DirectML 内存池（默认关闭，仅 DML 后端有效）
+  if (typeof _settingsCache.releaseDmlVramAfterSynthesis !== 'boolean') {
+    _settingsCache.releaseDmlVramAfterSynthesis = false;
+  }
+
+  // Vocoder 推理前是否临时释放 diffStep session（默认开启，仅 DML 后端有效）
+  // diffStep 模型权重 + 32 步 diffusion 激活工作区（~2GB）在 vocoder 推理期间仍占用显存，
+  // 与 vocoder 激活叠加易触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR (屏幕全黑)。
+  // 开启后：diffusion 完成 → 释放 diffStep → vocoder 推理 → 重载 diffStep。
+  // 代价：每次 vocoder 推理后需重载 diffStep（~1-3秒），多 segment 合成会显著变慢。
+  // WebNN 路径无需此优化（diffStep 在渲染进程，vocoder 在主进程 DML，互不抢占显存）。
+  if (typeof _settingsCache.releaseDiffStepBeforeVocoder !== 'boolean') {
+    _settingsCache.releaseDiffStepBeforeVocoder = true;
+  }
+
+  // 推理提供者: 'ortnode' (默认, onnxruntime-node DirectML/CPU) | 'ortweb' (onnxruntime-web WebNN)
+  if (_settingsCache.inferenceProvider !== 'ortweb' && _settingsCache.inferenceProvider !== 'ortnode') {
+    _settingsCache.inferenceProvider = 'ortnode';
+  }
+
+  // SiFiGAN 精度: 'fp32' (默认, 全精度) | 'fp16' (低质量, cos≈0.95)
+  // 仅在 vocoderType === 'sifigan' 时生效，控制加载 sifigan_vocoder_dml_fp16.onnx 还是 sifigan_vocoder_dml.onnx
+  if (_settingsCache.sifiganPrecision !== 'fp16' && _settingsCache.sifiganPrecision !== 'fp32') {
+    _settingsCache.sifiganPrecision = 'fp32';
+  }
+
   // Vocoder type default + startup fallback:
-  // If stored value is 'sifigan' but the model file is missing, temporarily fall
-  // back to 'default' for this run (settings.json is NOT modified).
+  // If stored value is 'sifigan' but none of the SiFiGAN model files exist,
+  // temporarily fall back to 'default' for this run (settings.json is NOT modified).
+  // Recognized SiFiGAN files (in priority order):
+  //   sifigan_vocoder_dml_fp16.onnx (FP16, preferred)
+  //   sifigan_vocoder_dml.onnx      (FP32 DML optimized)
+  //   sifigan_vocoder.onnx          (FP32 plain)
   if (typeof _settingsCache.vocoderType !== 'string') {
     _settingsCache.vocoderType = 'default';
   } else if (_settingsCache.vocoderType === 'sifigan') {
     try {
       const { getModelDir } = require('./modelDir');
       const modelDir = getModelDir();
+      const sifiganFp16Onnx = path.join(modelDir, 'sifigan_vocoder_dml_fp16.onnx');
       const sifiganOnnx = path.join(modelDir, 'sifigan_vocoder_dml.onnx');
       const sifiganFallback = path.join(modelDir, 'sifigan_vocoder.onnx');
-      if (!fs.existsSync(sifiganOnnx) && !fs.existsSync(sifiganFallback)) {
-        console.warn('[Main] vocoderType=sifigan 但未找到 sifigan_vocoder_dml.onnx / sifigan_vocoder.onnx，本次运行回退到 default');
+      const hasAny = fs.existsSync(sifiganFp16Onnx)
+                  || fs.existsSync(sifiganOnnx)
+                  || fs.existsSync(sifiganFallback);
+      if (!hasAny) {
+        console.warn('[Main] vocoderType=sifigan but no SiFiGAN onnx file found, falling back to default for this run');
         _settingsCache.vocoderType = 'default';
       }
     } catch (err) {
-      console.warn('[Main] 检测 SiFiGAN 模型文件失败，回退到 default:', err.message);
+      console.warn('[Main] Failed to detect SiFiGAN model files, falling back to default:', err.message);
       _settingsCache.vocoderType = 'default';
     }
   }
@@ -91,7 +133,7 @@ async function saveSettingsFile(settings) {
     await fs.promises.writeFile(filePath, JSON.stringify(settings, null, 2), 'utf-8');
     _settingsCache = null;
   } catch (err) {
-    console.error('[Main] 保存设置失败:', err);
+    console.error('[Main] Failed to save settings:', err);
   }
 }
 
@@ -107,8 +149,13 @@ const ALLOWED_SETTINGS_KEYS = [
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
-  'npuDiffBatchSize', 'npuVocoderBatchSize',
-  'vocoderType',
+  'vocoderType', 'sifiganPrecision',
+  'vocoderChunkMode', 'vocoderChunkFrames',
+  'releaseDmlVramAfterSynthesis',
+  'releaseDiffStepBeforeVocoder',
+  'inferenceProvider',
+  'npuDiffBatchSize',
+  'npuVocoderBatchSize',
 ];
 
 async function updateLocaleSetting(locale) {

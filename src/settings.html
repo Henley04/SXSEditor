@@ -28,8 +28,8 @@
                 <div class="sidebar-item" data-target="section-export-params">
                     <span data-i18n="settings.exportInferenceParams">导出推理参数</span>
                 </div>
-                <div class="sidebar-item" data-target="section-npu">
-                    <span data-i18n="settings.npuInference">NPU 推理设置</span>
+                <div class="sidebar-item" data-target="section-vocoder-chunk">
+                    <span data-i18n="settings.vocoderChunkTitle">Vocoder 分片设置</span>
                 </div>
 
                 <div class="sidebar-category" data-i18n="settings.catAudio">音频</div>
@@ -83,6 +83,14 @@
 
             <!-- Inference Hardware -->
             <div class="settings-section hidden" id="section-inference">
+                <div class="setting-group">
+                    <label for="inferenceProvider" data-i18n="settings.inferenceProvider">推理提供者</label>
+                    <select id="inferenceProvider">
+                        <option value="ortnode" data-i18n="settings.inferenceProviderOrtnode">ORTNODE (DirectML/CPU)</option>
+                        <option value="ortweb" data-i18n="settings.inferenceProviderOrtweb">ORTWEB (WebNN)</option>
+                    </select>
+                    <p class="hint" id="inferenceProviderHint" data-i18n="settings.inferenceProviderHintOrtnode">使用 onnxruntime-node 在主进程运行 DirectML/CPU 推理。</p>
+                </div>
                 <div class="setting-group hardware-info">
                     <label data-i18n="settings.currentHardware">当前运行硬件</label>
                     <div id="currentHardwareInfo" class="info-box">
@@ -114,7 +122,7 @@
                     <select id="inferenceDevice" disabled>
                         <option value="auto" data-i18n="settings.autoSelect">自动选择</option>
                     </select>
-                    <p class="hint" data-i18n="settings.inferenceHardwareHint">选择用于 DirectML 推理的 GPU 设备。自动模式优先选择独显，若无独显则选择显存最大的 GPU。</p>
+                    <p class="hint" data-i18n="settings.inferenceHardwareHint">选择用于推理的硬件设备。自动模式优先选择独显，若无独显则选择显存最大的 GPU。NPU 设备通过 WebNN 后端推理。</p>
                 </div>
                 <div class="setting-group" id="webnnStatusGroup">
                     <div class="webnn-status-bar">
@@ -123,6 +131,9 @@
                         <span class="webnn-status-separator">|</span>
                         <span class="webnn-status-label">NPU:</span>
                         <span class="webnn-status-value status-checking" id="npuStatusValue" data-i18n="settings.webnnChecking">检测中...</span>
+                        <span class="webnn-status-separator">|</span>
+                        <span class="webnn-status-label">GPU:</span>
+                        <span class="webnn-status-value status-checking" id="gpuStatusValue" data-i18n="settings.webnnChecking">检测中...</span>
                     </div>
                 </div>
                 <div class="setting-group hidden" id="advancedSettingsGroup">
@@ -172,30 +183,51 @@
                 </div>
             </div>
 
-            <!-- NPU Settings -->
-            <div class="settings-section hidden" id="section-npu">
-                <p class="section-desc" data-i18n="settings.npuInferenceDesc">NPU (WebNN) 推理的批处理设置。增大 batch size 可提高 NPU 利用率，但会增加显存占用。</p>
+            <!-- Vocoder Chunk Settings -->
+            <div class="settings-section hidden" id="section-vocoder-chunk">
+                <p class="section-desc" data-i18n="settings.vocoderChunkDesc">长音频合成时，vocoder 按分片逐段推理再交叉淡入淡出拼接。分片越大显存占用越高、单次推理越慢；分片越小越省显存但拼接开销增加。</p>
                 <div class="setting-group">
-                    <label for="npuDiffBatchSize" data-i18n="settings.npuDiffBatchSize">扩散批次大小</label>
-                    <select id="npuDiffBatchSize">
-                        <option value="1">1 (单片段)</option>
-                        <option value="2">2 (CFG 标准)</option>
-                        <option value="4" selected>4 (双片段拼批, 推荐)</option>
-                    </select>
-                    <p class="hint" data-i18n="settings.npuDiffBatchSizeHint">NPU 扩散模型的推理批次大小。batch=4 同时处理 2 个片段的 CFG，可显著提升长音频合成速度。</p>
+                    <label data-i18n="settings.vocoderChunkMode">分片长度模式</label>
+                    <div class="device-mode-radios">
+                        <label class="device-mode-radio">
+                            <input type="radio" name="vocoderChunkMode" value="smart" checked>
+                            <span class="radio-label" data-i18n="settings.vocoderChunkSmart">智能分配</span>
+                            <span class="radio-desc" data-i18n="settings.vocoderChunkSmartDesc">依据显存大小自动选择最合适的分片长度（&lt;2GB→512, &lt;4GB→768, &lt;8GB→1008, ≥8GB→1536）</span>
+                        </label>
+                        <label class="device-mode-radio">
+                            <input type="radio" name="vocoderChunkMode" value="manual">
+                            <span class="radio-label" data-i18n="settings.vocoderChunkManual">手动设置</span>
+                            <span class="radio-desc" data-i18n="settings.vocoderChunkManualDesc">手动指定分片长度（帧），需要 8 的倍数，范围 256~2048</span>
+                        </label>
+                    </div>
                 </div>
-                <div class="setting-group">
-                    <label for="npuVocoderBatchSize" data-i18n="settings.npuVocoderBatchSize">声码器批次大小</label>
-                    <select id="npuVocoderBatchSize">
-                        <option value="1">1 (逐块处理)</option>
-                        <option value="2">2 (双块并行)</option>
-                        <option value="4" selected>4 (四块并行, 推荐)</option>
-                    </select>
-                    <p class="hint" data-i18n="settings.npuVocoderBatchSizeHint">NPU 声码器的推理批次大小。batch=4 同时处理 4 个音频块，可加速波形重建阶段。</p>
+                <div class="setting-group hidden" id="vocoderChunkManualGroup">
+                    <label for="vocoderChunkFrames"><span data-i18n="settings.vocoderChunkFrames">分片长度（帧）</span> <span id="vocoderChunkFramesValue" class="volume-display">1008</span></label>
+                    <input type="range" id="vocoderChunkFrames" min="256" max="2048" value="1008" step="8">
+                    <p class="hint" data-i18n="settings.vocoderChunkFramesHint">分片长度必须是 8 的倍数。值越大显存占用越高但拼接次数越少；值越小越省显存但拼接开销增加。默认 1008 帧（约 20 秒音频）。</p>
                 </div>
-                <div class="setting-group hidden" id="batchSizeDisabledHint">
+                <div class="setting-group" id="vocoderChunkSmartInfo">
                     <div class="info-box">
-                        <span data-i18n="settings.batchSizeDisabledHint"></span>
+                        <span id="vocoderChunkSmartText" data-i18n="settings.vocoderChunkSmartInfo">等待 GPU 检测完成后显示智能分配结果</span>
+                    </div>
+                </div>
+                <div class="setting-group" id="vocoderChunkTableGroup">
+                    <label data-i18n="settings.vocoderChunkTableTitle">不同显存对照表</label>
+                    <p class="hint" data-i18n="settings.vocoderChunkTableHint">以当前精度和 vocoder 类型计算各档显存的推荐分片。预算列为已扣除常驻权重/diff_step/OS 后的可用显存。当前显卡对应的行会高亮。</p>
+                    <div class="vram-table-wrapper">
+                        <table class="vram-table" id="vocoderChunkTable">
+                            <thead>
+                                <tr>
+                                    <th data-i18n="settings.vocoderChunkTableVram">显存</th>
+                                    <th data-i18n="settings.vocoderChunkTableBudget">可用预算</th>
+                                    <th data-i18n="settings.vocoderChunkTableFrames">推荐分片</th>
+                                    <th data-i18n="settings.vocoderChunkTableDuration">约时长</th>
+                                </tr>
+                            </thead>
+                            <tbody id="vocoderChunkTableBody">
+                                <tr><td colspan="4" data-i18n="settings.vocoderChunkTableLoading">加载中...</td></tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -290,7 +322,6 @@
                     <select id="modelPrecision">
                         <option value="fp16" data-i18n="settings.precisionFp16">FP16 (半精度)</option>
                         <option value="fp32" data-i18n="settings.precisionFp32">FP32 (全精度)</option>
-                        <option value="fp8" data-i18n="settings.precisionFp8">FP8 (8 位浮点)</option>
                         <option value="int8" data-i18n="settings.precisionInt8">INT8 (量化)</option>
                         <option value="int8-npu" data-i18n="settings.precisionInt8Npu">INT8-NPU (NPU 优化固定维度)</option>
                     </select>
@@ -301,7 +332,6 @@
                         <ul>
                             <li data-i18n="settings.precisionInfoFp32"></li>
                             <li data-i18n="settings.precisionInfoFp16"></li>
-                            <li data-i18n="settings.precisionInfoFp8"></li>
                             <li data-i18n="settings.precisionInfoInt8"></li>
                             <li data-i18n="settings.precisionInfoInt8Npu"></li>
                             <li data-i18n="settings.precisionInfoRecommend"></li>
@@ -315,6 +345,30 @@
                         <option value="sifigan" disabled data-i18n="settings.vocoderTypeSifigan">SiFiGAN（未下载）</option>
                     </select>
                     <p class="hint" id="vocoderTypeHint" data-i18n="settings.vocoderTypeHint">选择声码器模型。SiFiGAN 需先在模型下载页下载。</p>
+                </div>
+                <div class="setting-group hidden" id="sifiganPrecisionGroup">
+                    <label for="sifiganPrecision" data-i18n="settings.sifiganPrecision">SiFiGAN 精度</label>
+                    <select id="sifiganPrecision">
+                        <option value="fp32" data-i18n="settings.sifiganPrecisionFp32">FP32 (全精度, 推荐)</option>
+                        <option value="fp16" data-i18n="settings.sifiganPrecisionFp16">FP16 (低质量, cos≈0.95)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.sifiganPrecisionHint">SiFiGAN 单独选择精度。FP16 体积小、推理快，但音质下降明显 (余弦相似度约 0.95)；FP32 为全精度，音质最佳。默认 FP32。若所选精度的模型文件不存在，将自动回退到另一精度变体。</p>
+                </div>
+                <div class="setting-group">
+                    <label class="device-mode-radio">
+                        <input type="checkbox" id="releaseDmlVramAfterSynthesis">
+                        <span class="radio-label" data-i18n="settings.releaseDmlVramAfterSynthesis">合成后释放 DirectML 显存</span>
+                        <span class="radio-desc" data-i18n="settings.releaseDmlVramAfterSynthesisDesc">仅 DML 后端生效，默认关闭</span>
+                    </label>
+                    <p class="hint" data-i18n="settings.releaseDmlVramAfterSynthesisHint">每次合成完成后重新加载 diffStep 和 vocoder，强制 DirectML 回收中间张量内存池，缓解连续合成 OOM。开启后会增加一点合成后的等待时间。</p>
+                </div>
+                <div class="setting-group">
+                    <label class="device-mode-radio">
+                        <input type="checkbox" id="releaseDiffStepBeforeVocoder" checked>
+                        <span class="radio-label" data-i18n="settings.releaseDiffStepBeforeVocoder">Vocoder 推理前释放 diffStep</span>
+                        <span class="radio-desc" data-i18n="settings.releaseDiffStepBeforeVocoderDesc">仅 DML 后端生效，默认开启</span>
+                    </label>
+                    <p class="hint" data-i18n="settings.releaseDiffStepBeforeVocoderHint">diffusion 完成后释放 diffStep session，让 vocoder 推理独占显存（腾出 ~3-4GB），避免 0x887A0006/TDR 黑屏。代价：每次 vocoder 后需重载 diffStep（~1-3秒），多段合成会变慢。SiFiGAN/低显存显卡强烈建议开启。</p>
                 </div>
                 <div class="setting-group">
                     <button class="btn-open-model-download" id="openModelDownloadBtn" data-i18n="settings.openModelDownload">打开模型下载</button>

@@ -37,7 +37,7 @@ export async function extractF0BasicPitch() {
     }
 
     if (!result.success) {
-      throw new Error(result.error || 'MIDI提取失败');
+      throw new Error(result.error || 'MIDI extraction failed');
     }
 
     const notes = (result.notes || []).map((n, i) => ({
@@ -78,7 +78,7 @@ export async function extractF0BasicPitch() {
     updateMidiInfo();
     showAlertDialog(t('preprocess.midiExtractionComplete'));
   } catch (err) {
-    console.error('提取失败:', err);
+    console.error('Extraction failed:', err);
     showAlertDialog(t('preprocess.extractionFailed') + ': ' + err.message);
   } finally {
     hideLoading(loading);

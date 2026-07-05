@@ -80,15 +80,20 @@ export function validateSingerData(singerData) {
   return { valid: errors.length === 0, errors, warnings };
 }
 
-export function applySingerDataToSinger(singer, singerData) {
+function base64ToArrayBuffer(base64) {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes.buffer;
+}
+
+export async function applySingerDataToSinger(singer, singerData) {
   if (singerData.wavBase64) {
     try {
-      const binaryString = atob(singerData.wavBase64);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
-      }
-      singer.wavBuffer = bytes.buffer;
+      singer.wavBuffer = base64ToArrayBuffer(singerData.wavBase64);
     } catch (e) {
       console.error('Failed to decode wavBase64:', e);
     }
@@ -130,7 +135,7 @@ export async function loadSingerFile(singerId, buffer, filePath) {
         singerFileMissing: false,
       };
       trackManager.updateSinger(singerId, updates);
-      applySingerDataToSinger(singer, singerData);
+      await applySingerDataToSinger(singer, singerData);
     }
     // refreshAll will be called by the caller
   }
@@ -165,7 +170,7 @@ export async function addSingerFromFile(buffer, filePath) {
       singerFilePath: filePath || null,
       singerFileMissing: false,
     });
-    applySingerDataToSinger(singer, singerData);
+    await applySingerDataToSinger(singer, singerData);
     state.selectedSingerId = singer.id;
     // refreshAll will be called by the caller
   }
@@ -228,22 +233,26 @@ export function showSingerSelectDialog(singerId) {
   });
 }
 
-export function serializeProject(embedSingerFiles = false) {
-  const singers = trackManager.getSingers().map(singer => {
+export async function serializeProject(embedSingerFiles = false) {
+  const singers = await Promise.all(trackManager.getSingers().map(async (singer) => {
     const singerObj = { ...singer };
     if (embedSingerFiles && singer.wavBuffer) {
       let wavBase64 = null;
       try {
         const bytes = new Uint8Array(singer.wavBuffer);
-        const CHUNK_SIZE = 8192;
-        let binary = '';
-        for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-          const chunk = bytes.subarray(i, Math.min(i + CHUNK_SIZE, bytes.length));
-          binary += String.fromCharCode(...chunk);
-        }
-        wavBase64 = btoa(binary);
+        const blob = new Blob([bytes]);
+        wavBase64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const result = reader.result;
+            const base64 = result.substring(result.indexOf(',') + 1);
+            resolve(base64);
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
       } catch (e) {
-        console.error('Failed to decode wavBuffer:', e);
+        console.error('Failed to encode wavBuffer:', e);
       }
       singerObj.embeddedSingerData = {
         formatVersion: SXSSINGER_CURRENT_VERSION,
@@ -262,7 +271,7 @@ export function serializeProject(embedSingerFiles = false) {
       singerObj.embeddedSingerData = null;
     }
     return singerObj;
-  });
+  }));
 
   return JSON.stringify({
     version: '1.1.0',
@@ -303,7 +312,7 @@ export function updateProjectSettings() {
 export async function autoSaveProject() {
   if (!state.currentProjectFilePath) return;
   try {
-    const data = serializeProject(false);
+    const data = await serializeProject(false);
     await window.electronAPI.saveFile(state.currentProjectFilePath, data);
     markClean();
     console.log('Project auto-saved to', state.currentProjectFilePath);
@@ -397,28 +406,49 @@ export function showSaveBeforeCloseDialog() {
 }
 
 export async function saveProject() {
+  // Save in-place: if we already have a file path, write to it silently
+  // without showing a dialog or the save-options popup.
+  if (state.currentProjectFilePath) {
+    try {
+      const data = await serializeProject(false);
+      await window.electronAPI.saveFile(state.currentProjectFilePath, data);
+      markClean();
+      console.log('Project saved to', state.currentProjectFilePath);
+      return { saved: true, canceled: false };
+    } catch (err) {
+      console.error('Save failed', err);
+      return { saved: false, canceled: false, error: err.message };
+    }
+  }
+  // No file path yet — fall back to Save As (prompts for location & options).
+  return saveProjectAs();
+}
+
+export async function saveProjectAs() {
   if (window.electronAPI?.showSaveDialog) {
     try {
       const saveOptions = await showSaveProjectOptionsDialog();
-      if (!saveOptions) return;
+      if (!saveOptions) return { saved: false, canceled: true };
 
       const result = await window.electronAPI.showSaveDialog({
         filters: [{ name: 'SXSEditor Project', extensions: ['sxsproj'] }],
         defaultPath: state.currentProjectFilePath || undefined,
       });
       if (!result.canceled && result.filePath) {
-        const data = serializeProject(saveOptions.embedSingerFiles);
+        const data = await serializeProject(saveOptions.embedSingerFiles);
         await window.electronAPI.saveFile(result.filePath, data);
         state.currentProjectFilePath = result.filePath;
         markClean();
         console.log('Project saved to', result.filePath);
+        return { saved: true, canceled: false };
       }
+      return { saved: false, canceled: true };
     } catch (err) {
       console.error('Save failed', err);
+      return { saved: false, canceled: false, error: err.message };
     }
-  } else {
-      // TODO: translate garbled log
   }
+  return { saved: false, canceled: true };
 }
 
 export async function loadProject() {
@@ -429,9 +459,14 @@ export async function loadProject() {
         properties: ['openFile'],
       });
       if (!result.canceled && result.filePaths.length > 0) {
+        // 加载新工程前关闭所有分片编辑器窗口，避免旧窗口持有已失效的 fragment id
+        // 导致 onFragmentSaved 的 find(f => f.id === fragmentId) 失败、编辑静默丢失
+        if (window.electronAPI?.closeAllFragmentEditors) {
+          await window.electronAPI.closeAllFragmentEditors();
+        }
         const data = await window.electronAPI.readFile(result.filePaths[0]);
         const obj = JSON.parse(data);
-        if (!obj || typeof obj !== 'object') throw new Error('无效的项目文件');
+        if (!obj || typeof obj !== 'object') throw new Error('Invalid project file');
         if (obj.version) {
           const projVersion = obj.version.split('.').map(Number);
           const currentVersion = [1, 1, 0];
@@ -460,7 +495,7 @@ export async function loadProject() {
           for (const s of obj.singers) {
             const singer = trackManager.addSinger(s);
             if (s.embeddedSingerData) {
-              applySingerDataToSinger(singer, s.embeddedSingerData);
+              await applySingerDataToSinger(singer, s.embeddedSingerData);
               if (s.embeddedSingerData.wavDuration) {
                 singer.wavDuration = s.embeddedSingerData.wavDuration;
               }
@@ -480,7 +515,7 @@ export async function loadProject() {
                      console.warn('File load validation warnings:', validation.warnings);
                   }
                   if (validation.valid) {
-                    applySingerDataToSinger(singer, singerData);
+                    await applySingerDataToSinger(singer, singerData);
                     if (singerData.wavDuration) {
                       singer.wavDuration = singerData.wavDuration;
                     }
@@ -496,7 +531,9 @@ export async function loadProject() {
         }
         if (obj.fragments) {
           trackManager.fragments.length = 0;
-          for (const f of obj.fragments) trackManager.fragments.push(f);
+          // 使用 addFragment 规范化每个分片（补齐 envelopes/pitchCurve 等字段），
+          // 避免 raw JSON push 导致后续访问 fragment.envelopes 等字段时为 undefined
+          for (const f of obj.fragments) trackManager.addFragment(f);
         }
         state.currentProjectFilePath = result.filePaths[0];
         history.clear();
