@@ -79,6 +79,15 @@ const VRAM_SAFETY_FACTOR = 0.7;
 
 const DEFAULT_RESIDENT_PRECISION = 'fp16'; // 启动时精度未知，用 fp16 保守估算
 
+// 音频采样率与帧hop，用于估算分片时长（与 constants.js 保持一致，此处独立定义避免循环依赖）
+const AUDIO_SAMPLE_RATE = 24000;
+const AUDIO_HOP_SIZE = 480;
+
+// 常见显存档位（GB），用于 UI 对照表展示。
+// 覆盖从核显（2GB）到旗舰独显（24GB）的典型配置，
+// 让用户能直观看到不同显存下的推荐分片，而不只是当前显卡的单条结果。
+const VRAM_TIERS_GB = [2, 3, 4, 6, 8, 10, 12, 16, 20, 24];
+
 /**
  * 依据显存大小（字节）、模型精度、vocoder 类型计算推荐的 vocoder 分片帧数（user-visible）。
  *
@@ -225,6 +234,40 @@ function getVocoderChunkFramesInfo(precision, vocoderType = 'default') {
     bestVramBytes,
     bestGpuName,
   };
+}
+
+/**
+ * 返回不同显存档位下的 vocoder 分片帧数对照表（供设置页 UI 展示）。
+ *
+ * 以 8GB 为基准点，向下扩展到核显（2GB）、向上扩展到旗舰独显（24GB）。
+ * 对照表覆盖 VRAM_TIERS_GB 中所有档位，每行包含：
+ *   - tierGb：显存大小（GB）
+ *   - frames：推荐分片帧数（已对齐到 8 的倍数）
+ *   - budgetGb：可用预算（GB），即 (VRAM - 常驻 - diff_step - OS) × 安全系数
+ *   - approxSeconds：分片对应音频时长（秒），= frames × HOP_SIZE / SAMPLE_RATE
+ *
+ * 当 precision / vocoderType 变化时，常驻权重不同，budget 与 frames 会动态变化，
+ * 设置页在切换精度或 vocoder 类型时应重新调用此函数刷新对照表。
+ *
+ * @param {string} [precision] - 模型精度（fp32/fp16/int8/int8-npu），缺省按 fp16
+ * @param {string} [vocoderType] - vocoder 类型（'default' | 'sifigan'）
+ * @returns {{ tierGb: number, frames: number, budgetGb: number, approxSeconds: number }[]}
+ */
+function getVocoderChunkFramesTable(precision = DEFAULT_RESIDENT_PRECISION, vocoderType = 'default') {
+  const isSifigan = vocoderType === 'sifigan';
+  const weightTable = isSifigan ? RESIDENT_WEIGHT_MB.sifigan : RESIDENT_WEIGHT_MB.default;
+  const residentMb = weightTable[precision] || weightTable[DEFAULT_RESIDENT_PRECISION];
+  const residentBytes = residentMb * 1024 * 1024;
+  const diffstepBytes = DIFFSTEP_ACTIVATION_MB * 1024 * 1024;
+  const osReserveBytes = GPU_OS_RESERVE_MB * 1024 * 1024;
+  return VRAM_TIERS_GB.map((gb) => {
+    const vramBytes = gb * 1024 * 1024 * 1024;
+    const frames = computeVocoderChunkFramesFromVRAM(vramBytes, precision, vocoderType);
+    const budgetBytes = (vramBytes - residentBytes - diffstepBytes - osReserveBytes) * VRAM_SAFETY_FACTOR;
+    const budgetGb = Math.max(0, budgetBytes / (1024 * 1024 * 1024));
+    const approxSeconds = (frames * AUDIO_HOP_SIZE) / AUDIO_SAMPLE_RATE;
+    return { tierGb: gb, frames, budgetGb, approxSeconds };
+  });
 }
 
 /**
@@ -441,4 +484,5 @@ module.exports = {
   getCachedVocoderChunkFrames,
   getEffectiveVocoderChunkFrames,
   getVocoderChunkFramesInfo,
+  getVocoderChunkFramesTable,
 };

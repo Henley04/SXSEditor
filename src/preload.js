@@ -105,6 +105,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getHardwareStatus: () => ipcRenderer.invoke('settings:getHardwareStatus'),
   getCurrentHardware: () => ipcRenderer.invoke('settings:getCurrentHardware'),
   getVocoderChunkFramesInfo: () => ipcRenderer.invoke('settings:getVocoderChunkFramesInfo'),
+  getVocoderChunkFramesTable: () => ipcRenderer.invoke('settings:getVocoderChunkFramesTable'),
   getSettings: () => ipcRenderer.invoke('settings:getSettings'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:saveSettings', settings),
   checkModels: () => ipcRenderer.invoke('settings:check-models'),

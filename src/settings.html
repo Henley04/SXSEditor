@@ -211,6 +211,25 @@
                         <span id="vocoderChunkSmartText" data-i18n="settings.vocoderChunkSmartInfo">等待 GPU 检测完成后显示智能分配结果</span>
                     </div>
                 </div>
+                <div class="setting-group" id="vocoderChunkTableGroup">
+                    <label data-i18n="settings.vocoderChunkTableTitle">不同显存对照表</label>
+                    <p class="hint" data-i18n="settings.vocoderChunkTableHint">以当前精度和 vocoder 类型计算各档显存的推荐分片。预算列为已扣除常驻权重/diff_step/OS 后的可用显存。当前显卡对应的行会高亮。</p>
+                    <div class="vram-table-wrapper">
+                        <table class="vram-table" id="vocoderChunkTable">
+                            <thead>
+                                <tr>
+                                    <th data-i18n="settings.vocoderChunkTableVram">显存</th>
+                                    <th data-i18n="settings.vocoderChunkTableBudget">可用预算</th>
+                                    <th data-i18n="settings.vocoderChunkTableFrames">推荐分片</th>
+                                    <th data-i18n="settings.vocoderChunkTableDuration">约时长</th>
+                                </tr>
+                            </thead>
+                            <tbody id="vocoderChunkTableBody">
+                                <tr><td colspan="4" data-i18n="settings.vocoderChunkTableLoading">加载中...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
             </div>
 
             <!-- Audio Output -->

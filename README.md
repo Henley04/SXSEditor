@@ -67,7 +67,7 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | GPU Acceleration | DirectML (NVIDIA/AMD/Intel), NPU/GPU (WebNN) |
 | Inference Provider | Choose ORTNODE (DirectML/CPU) or ORTWEB (WebNN NPU/GPU) in settings |
 | One-shot Hardware Detection | GPU/NPU/DML/WebNN enumeration runs once after app startup; results cached and reused at runtime (no re-probing during synthesis) |
-| Smart Vocoder Chunk Sizing | Vocoder chunk size auto-allocated from VRAM budget = (VRAM − resident weights − diff_step activations ~2GB − OS reserve ~1GB) × 0.7 safety factor. Resident weights by precision: FP32≈2.9GB, FP16≈1.4GB, INT8≈0.96GB. Tiers (by budget): <0.5GB→256, <1GB→384, <2GB→512, <4GB→768, ≥4GB→1008; manual override available in settings |
+| Smart Vocoder Chunk Sizing | Vocoder chunk size auto-allocated from VRAM budget = (VRAM − resident weights − diff_step activations ~2GB − OS reserve ~1GB) × 0.7 safety factor. Resident weights by (vocoderType, precision): default FP32≈2.9GB / FP16≈1.4GB / INT8≈0.96GB, SiFiGAN FP32≈2.5GB / FP16≈0.95GB / INT8≈0.5GB. 8GB baseline: default→536 frames, SiFiGAN→1008 frames. Settings page shows a VRAM reference table (2/3/4/6/8/10/12/16/20/24GB) computed with the current precision and vocoder type, with the current GPU's tier highlighted; manual override available |
 | Vocoder Output Validation | Detects DML silent failures (all-zero/NaN waveform from VRAM exhaustion) and throws a clear OOM error instead of playing empty audio |
 | Model Auto-Download | Chunked parallel download from ModelScope |
 | Model Precision | FP32, FP16, INT8, INT8-NPU |
@@ -176,7 +176,7 @@ macOS / Linux 用户请从源码构建。
 | GPU 加速 | DirectML（NVIDIA/AMD/Intel）、NPU/GPU（WebNN） |
 | 推理提供者 | 在设置中选择 ORTNODE（DirectML/CPU）或 ORTWEB（WebNN NPU/GPU） |
 | 一次性硬件探测 | 应用启动后仅执行一次 GPU/NPU/DML/WebNN 设备枚举，结果缓存复用，运行时不再重复探测（避免与推理并发提交命令流） |
-| Vocoder 分片智能分配 | 显存预算 = (VRAM − 按 vocoderType/精度估算的常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB) × 0.7 安全系数；default vocoder 常驻权重 FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB，SiFiGAN 常驻权重更低（fp16: 23MB 模型 vs default 519MB）；default vocoder 采用保守档位（8GB→536 帧），SiFiGAN 模型体积小可用更长分片（8GB→1008 帧）；可在设置中切换为手动设置 |
+| Vocoder 分片智能分配 | 显存预算 = (VRAM − 按 vocoderType/精度估算的常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB) × 0.7 安全系数；default vocoder 常驻权重 FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB，SiFiGAN 常驻权重更低（fp16: 23MB 模型 vs default 519MB）；8GB 基准：default→536 帧，SiFiGAN→1008 帧；设置页提供显存对照表（2/3/4/6/8/10/12/16/20/24GB），按当前精度与 vocoder 类型实时计算，当前显卡对应行高亮；可在设置中切换为手动设置 |
 | Vocoder 输出校验 | 检测 DML 静默失败（显存耗尽导致的全零/NaN 波形）并抛出明确的 OOM 错误，避免误播空声音 |
 | 模型自动下载 | 从 ModelScope 分片并行下载 |
 | 模型精度 | FP32、FP16、INT8、INT8-NPU |

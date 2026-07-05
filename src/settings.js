@@ -57,6 +57,8 @@ const vocoderChunkFramesSlider = document.getElementById('vocoderChunkFrames');
 const vocoderChunkFramesValue = document.getElementById('vocoderChunkFramesValue');
 const vocoderChunkSmartInfo = document.getElementById('vocoderChunkSmartInfo');
 const vocoderChunkSmartText = document.getElementById('vocoderChunkSmartText');
+const vocoderChunkTableBody = document.getElementById('vocoderChunkTableBody');
+const vocoderChunkTableGroup = document.getElementById('vocoderChunkTableGroup');
 const releaseDmlVramAfterSynthesisCheckbox = document.getElementById('releaseDmlVramAfterSynthesis');
 const releaseDiffStepBeforeVocoderCheckbox = document.getElementById('releaseDiffStepBeforeVocoder');
 
@@ -220,9 +222,12 @@ function updateVocoderChunkModeUI(mode) {
     if (vocoderChunkSmartInfo) {
         vocoderChunkSmartInfo.classList.toggle('hidden', isManual);
     }
+    // 对照表在两种模式下都显示，作为参考信息
 }
 
 let _vocoderChunkInfoLoaded = false;
+let _currentVramGb = 0; // 当前显卡显存（GB），用于对照表高亮
+
 async function loadVocoderChunkFramesInfo() {
     if (!window.electronAPI?.getVocoderChunkFramesInfo) return;
     try {
@@ -231,6 +236,7 @@ async function loadVocoderChunkFramesInfo() {
         if (info.gpuPhase !== 'full') return;
         _vocoderChunkInfoLoaded = true;
         const gb = info.bestVramBytes / (1024 * 1024 * 1024);
+        _currentVramGb = gb;
         const gpuName = info.bestGpuName || '';
         const vramStr = gb > 0 ? `${gb.toFixed(1)}GB` : '未知';
         const text = t('settings.vocoderChunkSmartResult', {
@@ -241,8 +247,51 @@ async function loadVocoderChunkFramesInfo() {
         if (vocoderChunkSmartText) {
             vocoderChunkSmartText.textContent = text;
         }
+        // 智能分配结果加载完成后，刷新对照表以高亮当前显卡对应的行
+        loadVocoderChunkFramesTable();
     } catch (err) {
         console.error('[Settings] Failed to load vocoder chunk frames info:', err);
+    }
+}
+
+/**
+ * 加载并渲染不同显存档位下的 vocoder 分片对照表。
+ * 当精度或 vocoder 类型切换时由对应的事件监听器调用，重新刷新。
+ */
+async function loadVocoderChunkFramesTable() {
+    if (!vocoderChunkTableBody || !window.electronAPI?.getVocoderChunkFramesTable) return;
+    try {
+        const rows = await window.electronAPI.getVocoderChunkFramesTable();
+        if (!Array.isArray(rows) || rows.length === 0) {
+            vocoderChunkTableBody.innerHTML = `<tr><td colspan="4">${t('settings.vocoderChunkTableEmpty')}</td></tr>`;
+            return;
+        }
+        // 当前显卡显存对应的档位：选取 ≤ _currentVramGb 的最大档位（即实际会落入的分档）
+        // 注意：这里用档位值本身做匹配，因为对照表中的 frames 是该档位显存下的推荐值
+        let currentTierGb = 0;
+        if (_currentVramGb > 0) {
+            for (const r of rows) {
+                if (r.tierGb <= _currentVramGb) currentTierGb = r.tierGb;
+            }
+        }
+        const rowsHtml = rows.map((r) => {
+            const isCurrent = r.tierGb === currentTierGb && currentTierGb > 0;
+            const budgetStr = r.budgetGb > 0 ? `${r.budgetGb.toFixed(2)}GB` : '—';
+            const durStr = `${r.approxSeconds.toFixed(1)}s`;
+            const currentBadge = isCurrent
+                ? `<span class="vram-current-badge">${t('settings.vocoderChunkTableCurrent')}</span>`
+                : '';
+            return `<tr class="${isCurrent ? 'vram-row-current' : ''}">
+                <td>${r.tierGb}GB${currentBadge}</td>
+                <td>${budgetStr}</td>
+                <td>${r.frames}</td>
+                <td>${durStr}</td>
+            </tr>`;
+        }).join('');
+        vocoderChunkTableBody.innerHTML = rowsHtml;
+    } catch (err) {
+        console.error('[Settings] Failed to load vocoder chunk frames table:', err);
+        vocoderChunkTableBody.innerHTML = `<tr><td colspan="4">${t('settings.vocoderChunkTableEmpty')}</td></tr>`;
     }
 }
 
@@ -845,6 +894,11 @@ modelPrecisionSelect.addEventListener('change', async () => {
     await applySettings(); // 等待保存 + pipeline 重置完成再刷新硬件显示
     // pipeline 已被重置，刷新"当前运行硬件"显示让用户确认精度切换生效
     updateCurrentHardwareDisplay(null, cachedDevices, collectSettings());
+    // 刷新对照表（精度变化导致常驻权重不同，预算与分片数会变化）
+    loadVocoderChunkFramesTable();
+    // 刷新智能分配结果信息框（精度变化也会影响 smartFrames）
+    _vocoderChunkInfoLoaded = false;
+    loadVocoderChunkFramesInfo();
     // Check if models exist for the new precision, auto-open download if not
     try {
         const modelStatus = await window.electronAPI.checkModels();
@@ -871,8 +925,19 @@ vocoderTypeSelect.addEventListener('change', () => {
     }
     updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
     applySettings();
+    // 刷新对照表（vocoder 类型变化导致常驻权重表与分档表都不同）
+    loadVocoderChunkFramesTable();
+    // 刷新智能分配结果信息框
+    _vocoderChunkInfoLoaded = false;
+    loadVocoderChunkFramesInfo();
 });
-sifiganPrecisionSelect.addEventListener('change', () => applySettings());
+sifiganPrecisionSelect.addEventListener('change', () => {
+    applySettings();
+    // SiFiGAN 精度变化也会影响常驻权重（fp32 vs fp16），刷新对照表
+    loadVocoderChunkFramesTable();
+    _vocoderChunkInfoLoaded = false;
+    loadVocoderChunkFramesInfo();
+});
 
 // Vocoder chunk mode (smart/manual) and manual frames slider
 vocoderChunkModeRadios.forEach(radio => {
@@ -928,6 +993,9 @@ openModelDownloadBtn.addEventListener('click', async () => {
 // makes the SiFiGAN detection appear instantly.
 loadDevices().catch(() => {});
 checkSifiganVocoderFiles().then(updateVocoderTypeUI).catch(() => {});
+
+// 立即加载显存对照表（不依赖 GPU 检测完成，因为对照表是按显存档位预算计算的）
+loadVocoderChunkFramesTable();
 
 // Load vocoder chunk frames info (smart allocation result).
 // GPU detection runs asynchronously after did-finish-load, so retry
