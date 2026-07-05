@@ -36,6 +36,7 @@ import {
   getSampleRate,
   getParamPanelCollapsed,
   getParamPanelMode,
+  getDragMode,
 } from './state.js';
 
 const canvas = document.getElementById('piano-roll');
@@ -1262,14 +1263,22 @@ function _doRenderImpl(w, h) {
   const notes = getNotes();
   const selectedNoteIds = getSelectedNoteIds();
   const currentFragment = getCurrentFragment();
-  const inactiveNoteIds = getInactiveNoteIds(notes);
+  // 拖拽中跳过无效 note 检测（O(n²)），保持帧率不因碰撞检测而掉帧
+  const isDragging = getDragMode() !== null;
+  const inactiveNoteIds = isDragging ? new Set() : getInactiveNoteIds(notes);
   // 按语言模型检测音高范围外 note（基础模型 [28,88] / 日语模型 [48,84]）
   const { outOfRangeIds: oobNoteIds, range: pitchRange } = getOutOfPitchRangeNotes(notes);
 
+  // 预计算本帧常量，避免每 note 重复 getZoomX/getScrollX 函数调用
+  const zoomX = getZoomX();
+  const scrollX = getScrollX();
+  const scrollY = getScrollY();
+  const beatToPixel = BEAT_WIDTH * zoomX;
+
   for (const note of notes) {
-    const x = timeToX(note.start);
+    const x = note.start * beatToPixel - scrollX;
     const y = pitchToY(note.pitch);
-    const nw = note.duration * BEAT_WIDTH * getZoomX();
+    const nw = note.duration * beatToPixel;
     const nh = NOTE_HEIGHT;
     if (x + nw < 0 || x > w) continue;
 

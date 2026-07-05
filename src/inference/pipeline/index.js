@@ -2012,6 +2012,21 @@ class OnnxSVSPipeline {
             : [];
         const globalTargetMedian = globalNotePitches.length > 0 ? this._median(globalNotePitches) : null;
 
+        // 多 segment 路径修复：若 segment 0 的第一个 note 不在 segStartBeat（=0）处开始，
+        // 前置一个休止符，使生成的 audio 覆盖从 beat 0 到 endBeat 的完整区间。
+        // 否则 segment 0 的 audio 从 notes[0].start 开始但被放置在 finalAudio[0]，
+        // 造成左移 firstNoteStart 拍 → 与后续 segment 的 crossfade 时间错位 → 沙哑。
+        if (segments.length > 0 && segments[0].notes.length > 0 && segments[0].notes[0].start > 0.01) {
+            const firstSeg = segments[0];
+            firstSeg.notes.unshift({
+                lyric: '',
+                pitch: 0,
+                start: 0,
+                duration: firstSeg.notes[0].start,
+            });
+            console.log(`[OnnxSVSPipeline] Segment 0 leading rest prepended: ${firstSeg.notes[0].duration.toFixed(2)} beats`);
+        }
+
         while (segIdx < segments.length) {
             // 段间 GPU 排空：让事件循环处理 GC 并给 DML 50ms 时间回收上一段的
             // 中间张量（mel/f0/waveform/transformer 注意力），降低长音频多段合成时
@@ -2136,7 +2151,14 @@ class OnnxSVSPipeline {
 
         normalizePeakTo(finalAudio, totalSamples);
 
-        const audioData = finalAudio;
+        // 多 segment 路径修复：截取从 filledNotes[0].start 开始的紧致 buffer，
+        // 使返回值语义与单 segment 一致（audioData[0] ↔ notes[0].start 的音频）。
+        // 这样主页面 playAll / exportAll 的 startSample 偏移同时兼容两条路径。
+        // （segment 0 的前置休止符已确保 crossfade 在 finalAudio 内正确对齐）
+        const firstNoteStartSample = Math.floor((filledNotes[0].start / bpm) * 60 * SAMPLE_RATE);
+        const audioData = firstNoteStartSample > 0
+            ? finalAudio.subarray(firstNoteStartSample)
+            : finalAudio;
         const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
         if (audioData.length <= MAX_CACHE_SAMPLES) {
             this._synthCachePut(cacheKey, audioData);
