@@ -318,6 +318,29 @@ export function hasNoteOverlap(excludeId, pitch, start, end) {
 }
 
 /**
+ * 多选拖动专用重叠检测：排除所有选中的 notes。
+ * 在多选拖动场景中，选中 notes 会一起移动，相对位置保持不变，
+ * 因此检测新位置与未选中 notes 的重叠时需要排除所有选中 notes。
+ * 否则横向移动时当前 note 的新位置会与相邻选中 notes 的旧位置发生"假重叠"，
+ * 导致拖动被错误 blocked（"卡住"现象）。
+ * @param {Set<number>} excludeIds - 所有选中 notes 的 id 集合
+ * @param {number} pitch
+ * @param {number} start
+ * @param {number} end
+ * @returns {boolean}
+ */
+export function hasNoteOverlapMulti(excludeIds, pitch, start, end) {
+  const notes = getNotes();
+  for (const n of notes) {
+    if (excludeIds.has(n.id)) continue;
+    if (n.pitch !== pitch) continue;
+    const nEnd = n.start + n.duration;
+    if (start < nEnd && end > n.start) return true;
+  }
+  return false;
+}
+
+/**
  * 计算未激活（被遮挡）的 note id 集合。
  * 规则：同一时间点只能有一个 note 被激活，按数组顺序（先后顺序）决定激活的 note。
  * 后面的 note 如果与前面任意已激活 note 时间重叠（跨 pitch），则标记为未激活。
