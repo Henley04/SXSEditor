@@ -1,6 +1,6 @@
 const { ipcMain, dialog } = require('electron');
 const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, invalidateSettingsCache } = require('./settings');
-const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateNPUCache, getVocoderChunkFramesInfo } = require('./gpuInfo');
+const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateNPUCache, getVocoderChunkFramesInfo, getVocoderChunkFramesTable } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
 const { enumerateDMLDevices } = require('../inference/pipeline');
 const { getSvsPipeline, resetSvsPipeline } = require('./svsIpc');
@@ -100,6 +100,20 @@ function registerSettingsIpc() {
     } catch (err) {
       console.error('[Main] Failed to get vocoder chunk frames info:', err);
       return { gpuPhase: 'none', smartFrames: 1008, bestVramBytes: 0, bestGpuName: null };
+    }
+  });
+
+  // 不同显存档位下的 vocoder 分片对照表（设置页 UI 展示用）。
+  // 以 8GB 为基准，向下扩展到核显（2GB）、向上扩展到旗舰独显（24GB）。
+  // 当精度或 vocoder 类型切换时，前端会重新调用此接口刷新对照表。
+  ipcMain.handle('settings:getVocoderChunkFramesTable', async () => {
+    try {
+      const settings = loadSettings();
+      const vocoderType = settings.vocoderType === 'sifigan' ? 'sifigan' : 'default';
+      return getVocoderChunkFramesTable(settings.modelPrecision, vocoderType);
+    } catch (err) {
+      console.error('[Main] Failed to get vocoder chunk frames table:', err);
+      return [];
     }
   });
 
