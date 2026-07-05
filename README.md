@@ -176,7 +176,7 @@ macOS / Linux 用户请从源码构建。
 | GPU 加速 | DirectML（NVIDIA/AMD/Intel）、NPU/GPU（WebNN） |
 | 推理提供者 | 在设置中选择 ORTNODE（DirectML/CPU）或 ORTWEB（WebNN NPU/GPU） |
 | 一次性硬件探测 | 应用启动后仅执行一次 GPU/NPU/DML/WebNN 设备枚举，结果缓存复用，运行时不再重复探测（避免与推理并发提交命令流） |
-| Vocoder 分片智能分配 | 显存预算 = (VRAM − 按精度估算的常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB) × 0.7 安全系数；常驻权重按精度 FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB 扣除；分档（按预算）&lt;0.5GB→256, &lt;1GB→384, &lt;2GB→512, &lt;4GB→768, ≥4GB→1008；可在设置中切换为手动设置 |
+| Vocoder 分片智能分配 | 显存预算 = (VRAM − 按 vocoderType/精度估算的常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB) × 0.7 安全系数；default vocoder 常驻权重 FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB，SiFiGAN 常驻权重更低（fp16: 23MB 模型 vs default 519MB）；default vocoder 采用保守档位（8GB→536 帧），SiFiGAN 模型体积小可用更长分片（8GB→1008 帧）；可在设置中切换为手动设置 |
 | Vocoder 输出校验 | 检测 DML 静默失败（显存耗尽导致的全零/NaN 波形）并抛出明确的 OOM 错误，避免误播空声音 |
 | 模型自动下载 | 从 ModelScope 分片并行下载 |
 | 模型精度 | FP32、FP16、INT8、INT8-NPU |

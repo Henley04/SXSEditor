@@ -26,28 +26,37 @@ let _npuPending = null;
 // 启动后依据检测结果计算一次，运行时不再重新探测硬件，直接复用此缓存。
 // 缓存按 (precision, vocoderType) 独立存储：
 //   - 不同精度的常驻权重差异巨大（FP32≈2.9GB vs INT8≈0.96GB），可用显存余量不同
-//   - SiFiGAN 因 4× mel 上采样，同样 user-visible 帧数的实际 mel 张量是 default 的 4 倍，
-//     激活工作区随之放大 4 倍，必须按 vocoderType 独立预算（详见 postprocessing.js 的 SIFIGAN_UPSAMPLE_RATIO）
+//   - SiFiGAN 模型体积远小于 default vocoder（fp16: 23MB vs 519MB），
+//     虽然 SiFiGAN 内部有 4× mel 上采样，但模型本身占用与激活工作区远小于 default，
+//     因此 SiFiGAN 可用更长的分片。按 vocoderType 独立预算常驻权重与分片档位。
 const _vocoderChunkFramesCache = {};
 const MIN_VOCODER_CHUNK_FRAMES = 256;
 const MAX_VOCODER_CHUNK_FRAMES = 2048;
-// SiFiGAN 用户可见帧数上下限：实际 mel 帧数 = user_frames × SIFIGAN_UPSAMPLE_RATIO，
-// 必须将 user_frames 上限压到 default 的 1/4，否则 4× 上采样后激活工作区会爆显存
-// 触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR (屏幕全黑)。
-const SIFIGAN_UPSAMPLE_RATIO = 4; // HOP_SIZE(480) / SIFIGAN_HOP_SIZE(120)
-const MIN_SIFIGAN_CHUNK_FRAMES = Math.round(MIN_VOCODER_CHUNK_FRAMES / SIFIGAN_UPSAMPLE_RATIO / 8) * 8; // 64
-const MAX_SIFIGAN_CHUNK_FRAMES = Math.round(MAX_VOCODER_CHUNK_FRAMES / SIFIGAN_UPSAMPLE_RATIO / 8) * 8; // 512
+// SiFiGAN 与 default 共用同一 user-visible 帧数范围 [256, 2048]。
+// 旧版将 SiFiGAN 上限除以 4（基于"4× 上采样=4× 资源"的错误假设），
+// 实测 SiFiGAN 模型仅 23MB（fp16），整体资源占用远低于 default vocoder（519MB），
+// 无需缩减上限。
 
-// 各精度下常驻 GPU 显存的模型权重估算（MB）。
+// 各精度下常驻 GPU 显存的模型权重估算（MB），按 vocoderType 分别列出。
 // 包含 diff_step + vocoder + 6 个 encoder/辅助模型，数据来自 onnx_models/{precision}/README.md。
 // 注意：diff_step 在 vocoder 推理阶段不释放（_synthesizeSegment 连续执行 diffusion → vocoder），
 // 因此 vocoder 单片峰值显存 = 常驻权重 + diff_step 激活 + vocoder 激活工作区 + OS 占用，
 // 必须从 VRAM 中扣除前三项后再分配 vocoder 分片。
+// SiFiGAN 模型体积远小于 default vocoder（fp16: 23MB vs 519MB），
+// 因此 SiFiGAN 路径的常驻权重显著降低，可用显存余量更大。
 const RESIDENT_WEIGHT_MB = {
-  'fp32':     2906,  // 1772 + 1054 + ~80
-  'fp16':     1446,  // 887  + 519  + ~40
-  'int8':      960,  // 445  + 485  + ~30
-  'int8-npu':  960,  // 同 int8
+  default: {
+    'fp32':     2906,  // 1772 + 1054 + ~80
+    'fp16':     1446,  // 887  + 519  + ~40
+    'int8':      960,  // 445  + 485  + ~30
+    'int8-npu':  960,  // 同 int8
+  },
+  sifigan: {
+    'fp32':     2463,  // 1772 + 611 + ~80  (sifigan fp32 ≈ 611MB)
+    'fp16':      950,  // 887  + 23  + ~40  (sifigan fp16 ≈ 23MB)
+    'int8':      498,  // 445  + 23  + ~30
+    'int8-npu':  498,  // 同 int8
+  },
 };
 
 // diff_step 推理阶段驻留的激活工作区估算（MB），与精度无关。
@@ -74,31 +83,32 @@ const DEFAULT_RESIDENT_PRECISION = 'fp16'; // 启动时精度未知，用 fp16 �
  * 依据显存大小（字节）、模型精度、vocoder 类型计算推荐的 vocoder 分片帧数（user-visible）。
  *
  * 预算公式：available = (VRAM - 常驻权重 - diff_step 激活 - OS 占用) × 安全系数
- *   - 常驻权重 RESIDENT_WEIGHT_MB：按精度查表（FP32≈2.9GB / FP16≈1.4GB / INT8≈0.96GB）
+ *   - 常驻权重 RESIDENT_WEIGHT_MB：按 (vocoderType, precision) 查表
+ *     default: FP32≈2.9GB / FP16≈1.4GB / INT8≈0.96GB
+ *     sifigan: FP32≈2.5GB / FP16≈0.95GB / INT8≈0.5GB（vocoder 部分仅 23MB）
  *   - diff_step 激活 DIFFSTEP_ACTIVATION_MB：~2GB，与精度无关（diffusion 32 步激活工作区）
  *   - OS 占用 GPU_OS_RESERVE_MB：~1GB，DWM/浏览器/OS/DML 命令队列
  *   - 安全系数 VRAM_SAFETY_FACTOR=0.7：再预留 30% 给碎片化/多 segment 串行等
  *
- * 旧版仅扣除常驻权重并以 0.8 安全余量笼统覆盖 diff_step 激活 + OS 占用，
- * 在 4-6GB 低显存独显上经常触发 vocoder chunk 0 全零输出（887A0006 / VRAM exhaustion）。
- * 显式扣除这两项后，分档阈值相应下调以保证 vocoder 激活工作区峰值在预算内。
+ * default vocoder 与 SiFiGAN 使用各自独立的分档表：
+ *   - default vocoder 模型体积大（fp16: 519MB）、激活工作区大，采用更保守的档位
+ *     （8GB fp16 → 约 2.5GB 预算 → 536 帧 ≈ 10.7s）
+ *   - SiFiGAN 模型体积小（fp16: 23MB），虽有 4× mel 上采样但整体资源占用远低于 default，
+ *     采用更宽松的档位（8GB fp16 → 约 2.85GB 预算 → 1008 帧 ≈ 20.2s）
  *
- * vocoderType='sifigan' 时返回值除以 SIFIGAN_UPSAMPLE_RATIO(=4)：
- *   postprocessing.runVocoderChunked 内部 chunkSize = userFrames × SIFIGAN_UPSAMPLE_RATIO，
- *   实际 mel 帧数为 userFrames × 4。为了让 SiFiGAN 的实际 mel 张量大小与 default vocoder 一致
- *   （避免激活工作区 4× 暴涨触发 0x887A0006 / TDR 屏幕全黑），user-visible 帧数必须除以 4。
- *   返回值范围 [MIN_SIFIGAN_CHUNK_FRAMES(64), MAX_SIFIGAN_CHUNK_FRAMES(512)]。
+ * 旧版错误地将 SiFiGAN user-visible 帧数除以 4（基于"4× 上采样 = 4× 资源"假设），
+ * 实测 SiFiGAN 资源占用远低于 default vocoder，无需缩减。
  *
  * 所有返回值对齐到 8 的倍数（与 VOCODER_OVERLAP_FRAMES 兼容）。
  */
 function computeVocoderChunkFramesFromVRAM(vramBytes, precision = DEFAULT_RESIDENT_PRECISION, vocoderType = 'default') {
   const isSifigan = vocoderType === 'sifigan';
   if (!vramBytes || vramBytes <= 0) {
-    // 未知显存 → 默认值（SiFiGAN 除以 4）
-    const fallback = isSifigan ? Math.floor(VOCODER_CHUNK_FRAMES / SIFIGAN_UPSAMPLE_RATIO) : VOCODER_CHUNK_FRAMES;
-    return Math.round(fallback / 8) * 8;
+    // 未知显存 → 默认值（SiFiGAN 不再除以 4，使用 VOCODER_CHUNK_FRAMES）
+    return Math.round(VOCODER_CHUNK_FRAMES / 8) * 8;
   }
-  const residentMb = RESIDENT_WEIGHT_MB[precision] || RESIDENT_WEIGHT_MB[DEFAULT_RESIDENT_PRECISION];
+  const weightTable = isSifigan ? RESIDENT_WEIGHT_MB.sifigan : RESIDENT_WEIGHT_MB.default;
+  const residentMb = weightTable[precision] || weightTable[DEFAULT_RESIDENT_PRECISION];
   const residentBytes = residentMb * 1024 * 1024;
   const diffstepBytes = DIFFSTEP_ACTIVATION_MB * 1024 * 1024;
   const osReserveBytes = GPU_OS_RESERVE_MB * 1024 * 1024;
@@ -106,25 +116,36 @@ function computeVocoderChunkFramesFromVRAM(vramBytes, precision = DEFAULT_RESIDE
   const availableBytes = (vramBytes - residentBytes - diffstepBytes - osReserveBytes) * VRAM_SAFETY_FACTOR;
   // 常驻 + diff_step + OS 已超 VRAM：仅给最小片，避免加载阶段就 OOM
   if (availableBytes <= 0) {
-    return isSifigan ? MIN_SIFIGAN_CHUNK_FRAMES : MIN_VOCODER_CHUNK_FRAMES;
+    return MIN_VOCODER_CHUNK_FRAMES;
   }
   const availGb = availableBytes / (1024 * 1024 * 1024);
   let frames;
-  // 分档基于"可用预算"（已扣除常驻权重 + diff_step 激活 + OS 占用 + 安全系数），
-  // 阈值考虑 vocoder 激活工作区峰值随 seq_len 近似线性增长。
-  // 较旧版整体下调一档（旧版 512→1008→1280 现 384→768→1008），更保守以避免 OOM。
-  if (availGb < 0.5) frames = 256;       // 极紧张：常驻+diff_step+OS 几乎吃满，仅最小片
-  else if (availGb < 1.0) frames = 384;   // 紧张：~7.7s
-  else if (availGb < 2.0) frames = 512;   // 一般：~10.2s
-  else if (availGb < 4.0) frames = 768;   // 宽裕：~15.4s
-  else frames = 1008;                      // 很宽裕：~20.2s（与默认值一致，不再上调到 1280）
-  // SiFiGAN：除以上采样倍率，让实际 mel 张量大小与 default vocoder 一致
-  if (isSifigan) {
-    frames = Math.floor(frames / SIFIGAN_UPSAMPLE_RATIO);
-    frames = Math.max(MIN_SIFIGAN_CHUNK_FRAMES, Math.min(MAX_SIFIGAN_CHUNK_FRAMES, frames));
+  // 分档基于"可用预算"（已扣除常驻权重 + diff_step 激活 + OS 占用 + 安全系数）。
+  // default vocoder：保守档位，8GB fp16（预算≈2.5GB）→ 536 帧 ≈ 10.7s
+  //   旧版 768 帧在 8GB 显卡上偶发 OOM（default vocoder 模型 519MB + 激活工作区峰值高），
+  //   下调到 536 以留出更多余量。
+  if (!isSifigan) {
+    if (availGb < 0.5) frames = 256;       // 极紧张：常驻+diff_step+OS 几乎吃满，仅最小片
+    else if (availGb < 1.0) frames = 384;   // 紧张：~7.7s
+    else if (availGb < 1.5) frames = 448;   // 一般偏紧：~9.0s
+    else if (availGb < 2.0) frames = 512;   // 一般：~10.2s
+    else if (availGb < 3.0) frames = 536;   // 8GB fp16 落点：~10.7s
+    else if (availGb < 4.0) frames = 640;   // 宽裕：~12.8s
+    else if (availGb < 5.0) frames = 768;   // 很宽裕：~15.4s
+    else frames = 1008;                      // 极宽裕：~20.2s
   } else {
-    frames = Math.max(MIN_VOCODER_CHUNK_FRAMES, Math.min(MAX_VOCODER_CHUNK_FRAMES, frames));
+    // SiFiGAN：宽松档位，模型仅 23MB（fp16），激活工作区远小于 default vocoder
+    //   8GB fp16（预算≈2.85GB）→ 1008 帧 ≈ 20.2s
+    //   旧版错误地除以 4（仅 192 帧 ≈ 3.8s），导致分片过多、拼接开销大
+    if (availGb < 0.5) frames = 384;        // 极紧张
+    else if (availGb < 1.0) frames = 512;    // 紧张：~10.2s
+    else if (availGb < 2.0) frames = 768;    // 一般：~15.4s
+    else if (availGb < 3.0) frames = 1008;   // 8GB fp16 落点：~20.2s
+    else if (availGb < 4.0) frames = 1280;   // 宽裕：~25.6s
+    else if (availGb < 5.0) frames = 1536;   // 很宽裕：~30.7s
+    else frames = 2048;                       // 极宽裕：~40.9s
   }
+  frames = Math.max(MIN_VOCODER_CHUNK_FRAMES, Math.min(MAX_VOCODER_CHUNK_FRAMES, frames));
   frames = Math.round(frames / 8) * 8;
   return frames;
 }
@@ -135,7 +156,7 @@ function computeVocoderChunkFramesFromVRAM(vramBytes, precision = DEFAULT_RESIDE
  * 缓存按 (precision, vocoderType) 独立存储（键 `${precision}:${vocoderType}`），
  * 同一显卡在不同精度/vocoder 类型下会得到不同的分片帧数。
  * @param {string} [precision] - 模型精度（fp32/fp16/int8/int8-npu），缺省时按 fp16 保守估算
- * @param {string} [vocoderType] - vocoder 类型（'default' | 'sifigan'），SiFiGAN 模式下 user-visible 帧数除以 4
+ * @param {string} [vocoderType] - vocoder 类型（'default' | 'sifigan'）
  */
 function getCachedVocoderChunkFrames(precision = DEFAULT_RESIDENT_PRECISION, vocoderType = 'default') {
   const cacheKey = `${precision}:${vocoderType}`;
@@ -143,11 +164,8 @@ function getCachedVocoderChunkFrames(precision = DEFAULT_RESIDENT_PRECISION, voc
     return _vocoderChunkFramesCache[cacheKey];
   }
   if (!_gpuInfoCache) {
-    // GPU 未检测完成时：SiFiGAN 模式下返回保守值（默认值除以 4）
-    const fallback = vocoderType === 'sifigan'
-      ? Math.round(VOCODER_CHUNK_FRAMES / SIFIGAN_UPSAMPLE_RATIO / 8) * 8
-      : VOCODER_CHUNK_FRAMES;
-    return fallback;
+    // GPU 未检测完成时：返回默认值（SiFiGAN 不再除以 4）
+    return VOCODER_CHUNK_FRAMES;
   }
   let bestVramBytes = 0;
   for (const c of _gpuInfoCache) {
@@ -156,10 +174,10 @@ function getCachedVocoderChunkFrames(precision = DEFAULT_RESIDENT_PRECISION, voc
   }
   const frames = computeVocoderChunkFramesFromVRAM(bestVramBytes, precision, vocoderType);
   _vocoderChunkFramesCache[cacheKey] = frames;
-  const residentMb = RESIDENT_WEIGHT_MB[precision] || RESIDENT_WEIGHT_MB[DEFAULT_RESIDENT_PRECISION];
+  const weightTable = vocoderType === 'sifigan' ? RESIDENT_WEIGHT_MB.sifigan : RESIDENT_WEIGHT_MB.default;
+  const residentMb = weightTable[precision] || weightTable[DEFAULT_RESIDENT_PRECISION];
   const budgetMb = Math.max(0, (bestVramBytes / (1024 * 1024)) - residentMb - DIFFSTEP_ACTIVATION_MB - GPU_OS_RESERVE_MB) * VRAM_SAFETY_FACTOR;
-  const sifiganNote = vocoderType === 'sifigan' ? ` (sifigan: user_frames×${SIFIGAN_UPSAMPLE_RATIO} = ${frames * SIFIGAN_UPSAMPLE_RATIO} actual mel frames)` : '';
-  console.log(`[Main] Vocoder chunk frames from VRAM: ${frames}${sifiganNote} (precision=${precision}, vocoderType=${vocoderType}, bestVram=${(bestVramBytes / (1024 * 1024 * 1024)).toFixed(2)}GB, resident=${residentMb}MB, diffstep=${DIFFSTEP_ACTIVATION_MB}MB, osReserve=${GPU_OS_RESERVE_MB}MB, safetyFactor=${VRAM_SAFETY_FACTOR}, budget=${budgetMb.toFixed(0)}MB)`);
+  console.log(`[Main] Vocoder chunk frames from VRAM: ${frames} (precision=${precision}, vocoderType=${vocoderType}, bestVram=${(bestVramBytes / (1024 * 1024 * 1024)).toFixed(2)}GB, resident=${residentMb}MB, diffstep=${DIFFSTEP_ACTIVATION_MB}MB, osReserve=${GPU_OS_RESERVE_MB}MB, safetyFactor=${VRAM_SAFETY_FACTOR}, budget=${budgetMb.toFixed(0)}MB)`);
   return frames;
 }
 
@@ -169,18 +187,13 @@ function getCachedVocoderChunkFrames(precision = DEFAULT_RESIDENT_PRECISION, voc
  * @param {number} manualFrames - manual 模式下用户指定的帧数
  * @param {string} [precision] - 模型精度（仅 smart 模式生效，用于按精度扣除常驻权重）
  * @param {string} [vocoderType] - vocoder 类型（'default' | 'sifigan'）
- *   - smart 模式：SiFiGAN 返回值已除以上采样倍率，让实际 mel 张量与 default 一致
- *   - manual 模式：SiFiGAN 时用户输入值 clamp 到 [MIN_SIFIGAN_CHUNK_FRAMES, MAX_SIFIGAN_CHUNK_FRAMES]
- *     防止用户在 default UI 范围 [256, 2048] 内误设大值导致 SiFiGAN 实际 mel 4× 暴涨爆显存
+ *   - smart 模式：按 vocoderType 使用各自独立的分档表与常驻权重
+ *   - manual 模式：用户输入值 clamp 到 [256, 2048]（default 与 sifigan 共用同一范围）
  */
 function getEffectiveVocoderChunkFrames(mode, manualFrames, precision, vocoderType = 'default') {
-  const isSifigan = vocoderType === 'sifigan';
   if (mode === 'manual') {
     const v = parseInt(manualFrames);
     if (Number.isFinite(v) && v > 0) {
-      if (isSifigan) {
-        return Math.max(MIN_SIFIGAN_CHUNK_FRAMES, Math.min(MAX_SIFIGAN_CHUNK_FRAMES, v));
-      }
       return Math.max(MIN_VOCODER_CHUNK_FRAMES, Math.min(MAX_VOCODER_CHUNK_FRAMES, v));
     }
   }

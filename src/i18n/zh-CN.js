@@ -337,7 +337,7 @@ export default {
     vocoderChunkDesc: '长音频合成时，vocoder 按分片逐段推理再交叉淡入淡出拼接。分片越大显存占用越高、单次推理越慢；分片越小越省显存但拼接开销增加。',
     vocoderChunkMode: '分片长度模式',
     vocoderChunkSmart: '智能分配',
-    vocoderChunkSmartDesc: '依据显存大小自动选择最合适的分片长度（<2GB→512, <4GB→768, <8GB→1008, ≥8GB→1536）',
+    vocoderChunkSmartDesc: '依据显存大小、模型精度和 vocoder 类型自动选择分片长度。default vocoder 更保守（8GB→536 帧），SiFiGAN 模型体积小可用更长分片（8GB→1008 帧）。',
     vocoderChunkManual: '手动设置',
     vocoderChunkManualDesc: '手动指定分片长度（帧），需要 8 的倍数，范围 256~2048',
     vocoderChunkFrames: '分片长度（帧）',

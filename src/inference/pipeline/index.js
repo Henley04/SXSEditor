@@ -415,7 +415,7 @@ class OnnxSVSPipeline {
         const defVocFile = await this._resolveDefaultVocoderFile();
         this._resolvedVocoderFile = defVocFile;
         // 关键修复：回退 default vocoder 时必须同步更新 vocoderType，否则后续合成会按 sifigan
-        // 模式处理（mel 4× 上采样 + 传 f0 + chunkFrames 除以 4），但实际 session 是 default
+        // 模式处理（mel 4× 上采样 + 传 f0），但实际 session 是 default
         // vocoder，导致 mel 形状/输入签名不匹配 + 加载的是 1005MB default 而非 34MB sifigan，
         // 显存压力暴增触发 0x887A0006 OOM。
         if (this.vocoderType === 'sifigan') {
@@ -1404,7 +1404,7 @@ class OnnxSVSPipeline {
 
         // 一致性检测：vocoderType 与实际加载的 vocoder 文件必须匹配，否则 mel 处理模式
         // （sifigan 4× 上采样 + f0 输入 vs default 仅 mel）与 session 输入签名不匹配，
-        // 会导致音质劣化 + 显存压力错误（sifigan chunkFrames 除以 4 但 default 不除）。
+        // 会导致音质劣化 + 显存压力错误（sifigan 与 default 使用不同的常驻权重预算）。
         const expectedSifigan = this.vocoderType === 'sifigan';
         const actualIsSifigan = this._resolvedVocoderFile ? this._isSifiganVocoder(this._resolvedVocoderFile) : false;
         if (expectedSifigan !== actualIsSifigan) {
@@ -1513,18 +1513,18 @@ class OnnxSVSPipeline {
     /**
      * 依据当前设置（vocoderChunkMode: smart/manual）解析生效的 vocoder 分片帧数。
      * - smart: 复用启动时基于显存计算并缓存的值（不触发新的 GPU 探测）
-     * - manual: 使用用户手动指定的帧数（default clamp 到 [256, 2048]，sifigan clamp 到 [64, 512]）
+     * - manual: 使用用户手动指定的帧数（clamp 到 [256, 2048]）
      *
-     * 注意：vocoderType='sifigan' 时返回的是 user-visible 帧数（已除以 SIFIGAN_UPSAMPLE_RATIO=4），
-     * postprocessing.runVocoderChunked 内部会乘回 4 得到实际 mel 帧数。这样可以让 SiFiGAN 的实际
-     * mel 张量大小与 default vocoder 一致，避免 4× 上采样导致激活工作区暴涨爆显存。
+     * vocoderType='sifigan' 时返回的 user-visible 帧数不再除以上采样倍率。
+     * SiFiGAN 模型体积远小于 default vocoder（fp16: 23MB vs 519MB），
+     * 虽有 4× mel 上采样但整体资源占用更低，因此可用更长的分片。
+     * postprocessing.runVocoderChunked 内部会乘回 4 得到实际 mel 帧数。
      */
     _resolveVocoderChunkFrames() {
         try {
             const { loadSettings } = require('../../main/settings');
             const settings = loadSettings();
-            // 传入当前模型精度，让 smart 分片按精度扣除常驻权重（FP32≈2.9GB / FP16≈1.4GB / INT8≈0.96GB）
-            // 同时传入 vocoderType，SiFiGAN 模式下返回值会除以 4（避免激活工作区 4× 暴涨）
+            // 传入当前模型精度 + vocoderType，smart 模式下按 vocoderType 使用独立的常驻权重与分档表
             return getEffectiveVocoderChunkFrames(settings.vocoderChunkMode, settings.vocoderChunkFrames, this._modelPrecision, this.vocoderType);
         } catch (e) {
             return 0; // 0 → 回退到 VOCODER_CHUNK_FRAMES 默认值
