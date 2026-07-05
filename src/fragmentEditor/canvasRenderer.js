@@ -465,7 +465,9 @@ export function generateAutoPitchPoints() {
   const points = [];
   for (let i = 0; i < sortedNotes.length; i++) {
     const note = sortedNotes[i];
-    points.push({ time: note.start, pitch: note.pitch });
+    // 起始点和末端都标记 breakAfter: true，避免在 note 内部做线性插值产生 Midi 音高平线。
+    // 只有锚点/笔刷覆盖的时段才返回具体音高；未覆盖的中间帧返回 null，由 vocoder 回退到 noteFreq。
+    points.push({ time: note.start, pitch: note.pitch, breakAfter: true });
     points.push({ time: note.start + note.duration, pitch: note.pitch, breakAfter: true });
   }
   return points;
@@ -1108,6 +1110,22 @@ function renderPitchCurve(c) {
   }
 
   drawAutoPoints(c.pitchAutoLine, 1.5, [4, 3]);
+
+  // autoPoints 现在只在 note 起始/末端有拟合点（breakAfter 阻止 note 内部插值），
+  // drawAutoPoints 仅做 moveTo 不会画出线段，这里补画拟合点小圆点保持视觉参考。
+  ctx.fillStyle = c.pitchAutoLine;
+  for (const note of notes) {
+    const startX = timeToX(note.start);
+    const endX = timeToX(note.start + note.duration);
+    const y = pitchToY(note.pitch);
+    if (endX < 0 || startX > w) continue;
+    ctx.beginPath();
+    ctx.arc(startX, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(endX, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   if (pitchCurve.anchorPoints.length > 0) {
     const sorted = getSortedAnchorPoints();
