@@ -118,7 +118,6 @@ export function setupUiControls() {
     if (btn) {
       btn.addEventListener('click', () => {
         setCurrentParamMode(mode);
-        setParamPanelCollapsed(true);
         updateParamModeButtons();
         updateParamPanelState();
         resizeCanvases();
