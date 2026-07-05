@@ -1316,6 +1316,17 @@ class OnnxSVSPipeline {
             // For precision detection we only inspect 'mel' type (works for both).
             const isSifigan = modelPath && this._isSifiganVocoder(path.basename(modelPath));
 
+            // SiFiGAN 精度按文件名直接判断（与 _getSifiganDummyInputs 一致），避免文件大小阈值
+            // 在 MLP 版本（33.7MB）等边界情况下误判 FP32 为 FP16。
+            // - sifigan_vocoder_dml_fp16.onnx → FP16
+            // - sifigan_vocoder_dml.onnx / sifigan_vocoder.onnx / sifigan_vocoder_dml_mlp.onnx → FP32
+            if (isSifigan) {
+                const vocFile = path.basename(modelPath);
+                this.vocoderIsFP16 = vocFile === 'sifigan_vocoder_dml_fp16.onnx';
+                console.log(`[OnnxSVSPipeline] SiFiGAN precision by filename: ${vocFile} -> vocoderIsFP16=${this.vocoderIsFP16}`);
+                return;
+            }
+
             // Try to find 'mel' input metadata
             let melType = null;
             if (meta['mel'] && meta['mel'].type) {
