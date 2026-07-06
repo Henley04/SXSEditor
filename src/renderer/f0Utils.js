@@ -60,7 +60,8 @@ function _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, time) {
             ? (time - sortedAnchors[i].time) / (sortedAnchors[i + 1].time - sortedAnchors[i].time)
             : 0;
           const smoothness = (sortedAnchors[i].smoothness || 0) / 100;
-          const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
+          const smoothStepT = t * t * (3 - 2 * t);
+          const smoothT = t + (smoothStepT - t) * smoothness;
           return sortedAnchors[i].pitch + smoothT * (sortedAnchors[i + 1].pitch - sortedAnchors[i].pitch);
         }
       }
@@ -187,7 +188,8 @@ export function computePitchCurveF0(singerFragments, allNotes, bpm) {
             const t = (sorted[hi].time - sorted[lo].time) > 0
               ? (localBeat - sorted[lo].time) / (sorted[hi].time - sorted[lo].time) : 0;
             const sm = (sorted[lo].smoothness || 0) / 100;
-            const st = sm > 0 ? t * t * (3 - 2 * t) : t;
+            const smoothStepT = t * t * (3 - 2 * t);
+            const st = t + (smoothStepT - t) * sm;
             pitch = sorted[lo].pitch + st * (sorted[hi].pitch - sorted[lo].pitch);
           }
         }
