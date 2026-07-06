@@ -870,28 +870,27 @@ export function setupEventListeners() {
     const currentParamMode = getCurrentParamMode();
     const pitchCurve = getPitchCurve();
 
-    if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
-      handlePitchMouseDown(e, pos);
-      return;
-    }
-
+    // Bottom panel area takes precedence when the panel is expanded — this lets
+    // top=Pitch and bottom=Phoneme/VOL/PAN coexist without the pitch handler
+    // intercepting clicks meant for the parameter lane below.
     if (!getParamPanelCollapsed()) {
       const panelMode = getParamPanelMode();
-      if (panelMode === 'VOL' || panelMode === 'PAN') {
-        const areaTop = _getParamCurveAreaTop();
-        if (pos.y >= areaTop) {
+      const areaTop = _getParamCurveAreaTop();
+      if (pos.y >= areaTop) {
+        if (panelMode === 'VOL' || panelMode === 'PAN') {
           handleParamEnvelopeMouseDown(pos);
           return;
         }
-      }
-
-      if (panelMode === 'Phoneme') {
-        const areaTop = _getParamCurveAreaTop();
-        if (pos.y >= areaTop) {
+        if (panelMode === 'Phoneme') {
           handlePhonemeMouseDown(e, pos);
           return;
         }
       }
+    }
+
+    if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
+      handlePitchMouseDown(e, pos);
+      return;
     }
 
     const hit = findNoteAt(pos.x, pos.y);
@@ -1027,15 +1026,9 @@ export function setupEventListeners() {
     if (!dragMode) {
       const currentParamMode = getCurrentParamMode();
       const pitchCurve = getPitchCurve();
-      if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
-        if (e.shiftKey) {
-          canvas.style.cursor = 'crosshair';
-        } else {
-          const anchorIdx = findAnchorPointAt(pos.x, pos.y);
-          canvas.style.cursor = anchorIdx >= 0 ? 'grab' : 'crosshair';
-        }
-        return;
-      }
+      // Bottom panel area takes precedence (see mousedown handler) — check the
+      // phoneme lane first so cursor reflects phoneme interactions even when
+      // the top toolbar is in Pitch mode.
       if (!getParamPanelCollapsed() && getParamPanelMode() === 'Phoneme') {
         const areaTop = _getParamCurveAreaTop();
         const areaBottom = _getParamCurveAreaBottom();
@@ -1062,6 +1055,15 @@ export function setupEventListeners() {
           canvas.style.cursor = 'default';
           return;
         }
+      }
+      if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
+        if (e.shiftKey) {
+          canvas.style.cursor = 'crosshair';
+        } else {
+          const anchorIdx = findAnchorPointAt(pos.x, pos.y);
+          canvas.style.cursor = anchorIdx >= 0 ? 'grab' : 'crosshair';
+        }
+        return;
       }
       const hit = findNoteAt(pos.x, pos.y);
       if (hit) {
@@ -1197,11 +1199,16 @@ export function setupEventListeners() {
 
   canvas.addEventListener('contextmenu', (e) => {
     e.preventDefault();
+    const pos = getMousePos(e);
+    // Right-click in the bottom phoneme lane is used for phoneme lock toggle —
+    // skip pitch anchor deletion there even when the top toolbar is in Pitch.
+    if (!getParamPanelCollapsed() && getParamPanelMode() === 'Phoneme') {
+      const areaTop = _getParamCurveAreaTop();
+      if (pos.y >= areaTop) return;
+    }
     const currentParamMode = getCurrentParamMode();
-    if (currentParamMode === 'Phoneme') return;
     if (currentParamMode !== 'Pitch' || !getPitchCurve().enabled) return;
 
-    const pos = getMousePos(e);
     const anchorIdx = findAnchorPointAt(pos.x, pos.y);
     if (anchorIdx >= 0) {
       const selectedAnchorIndices = getSelectedAnchorIndices();
@@ -1387,28 +1394,22 @@ export function setupEventListeners() {
       return;
     }
     if (e.key === '3') {
-      setCurrentParamMode('VOL');
       setParamPanelMode('VOL');
       setParamPanelCollapsed(false);
-      updateParamModeButtons();
       updateParamPanelState();
       resizeCanvases();
       return;
     }
     if (e.key === '4') {
-      setCurrentParamMode('PAN');
       setParamPanelMode('PAN');
       setParamPanelCollapsed(false);
-      updateParamModeButtons();
       updateParamPanelState();
       resizeCanvases();
       return;
     }
     if (e.key === '5') {
-      setCurrentParamMode('Phoneme');
       setParamPanelMode('Phoneme');
       setParamPanelCollapsed(false);
-      updateParamModeButtons();
       updateParamPanelState();
       resolvePhonemesFromPipeline();
       resizeCanvases();

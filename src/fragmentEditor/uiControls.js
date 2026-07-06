@@ -135,19 +135,20 @@ export function setupUiControls() {
     });
   }
 
-  // Param mode dropdown
+  // Param mode dropdown — switches the BOTTOM panel lane (VOL/PAN/Phoneme/Timbre).
+  // The top toolbar mode (MIDI/Pitch) is independent and must be preserved.
   const paramModeSelect = document.getElementById('param-mode-select');
   if (paramModeSelect) {
     paramModeSelect.addEventListener('change', () => {
       const mode = paramModeSelect.value;
-      setCurrentParamMode(mode);
       setParamPanelMode(mode);
       // Auto-expand panel if collapsed
       if (getParamPanelCollapsed()) {
         setParamPanelCollapsed(false);
       }
       if (mode === 'Phoneme') resolvePhonemesFromPipeline();
-      updateParamModeButtons();
+      // NOTE: do NOT call setCurrentParamMode/updateParamModeButtons here —
+      // those track the top toolbar (MIDI/Pitch) and must stay untouched.
       updateParamPanelState();
       resizeCanvases();
     });
