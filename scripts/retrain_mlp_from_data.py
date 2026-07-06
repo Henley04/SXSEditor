@@ -83,6 +83,27 @@ def main():
     no_improve = 0
     log_lines = []
 
+    # 分批验证避免大数据 OOM（全量前向会同时占用 mel+target+pred 显存）
+    EVAL_BATCH = 65536
+    def evaluate():
+        """分批计算全量 L1/mcep_l1/in_range，避免一次性前向 OOM。"""
+        model.eval()
+        total_loss = 0.0
+        total_mcep_l1 = 0.0
+        total_in_range = 0.0
+        n_chunks = 0
+        with torch.no_grad():
+            for start in range(0, N, EVAL_BATCH):
+                end = min(start + EVAL_BATCH, N)
+                pred_chunk = model(mel_t[start:end])
+                target_chunk = target_t[start:end]
+                total_loss += nn.functional.l1_loss(pred_chunk, target_chunk).item()
+                total_mcep_l1 += nn.functional.l1_loss(pred_chunk[:, :40], target_chunk[:, :40]).item()
+                total_in_range += torch.mean((torch.abs(pred_chunk[:, :40]) <= 5).float()).item()
+                n_chunks += 1
+        model.train()
+        return total_loss / n_chunks, total_mcep_l1 / n_chunks, total_in_range / n_chunks
+
     for epoch in range(EPOCHS):
         model.train()
         perm = torch.randperm(N, device=device)
@@ -104,11 +125,7 @@ def main():
         avg_loss = epoch_loss / n_batches
         scheduler.step(avg_loss)
 
-        with torch.no_grad():
-            pred_all = model(mel_t)
-            full_loss = nn.functional.l1_loss(pred_all, target_t).item()
-            mcep_l1 = nn.functional.l1_loss(pred_all[:, :40], target_t[:, :40]).item()
-            in_range = torch.mean((torch.abs(pred_all[:, :40]) <= 5).float()).item()
+        full_loss, mcep_l1, in_range = evaluate()
 
         log_line = f"Epoch {epoch+1:3d}/{EPOCHS}: loss={avg_loss:.6f}, full={full_loss:.6f}, mcep_l1={mcep_l1:.4f}, in_range={in_range*100:.1f}%, lr={optimizer.param_groups[0]['lr']:.2e}"
         log_lines.append(log_line)
@@ -139,13 +156,11 @@ def main():
     print(f"\n[4] Saved MLP weight: {MLP_WEIGHT_PATH}")
 
     model.eval()
-    with torch.no_grad():
-        pred = model(mel_t)
-        loss = nn.functional.l1_loss(pred, target_t).item()
-        mcep_l1 = nn.functional.l1_loss(pred[:, :40], target_t[:, :40]).item()
+    loss, mcep_l1, in_range = evaluate()
     print(f"\n[5] Final validation:")
     print(f"    L1 loss: {loss:.6f}")
     print(f"    mcep L1 (normalized): {mcep_l1:.4f}")
+    print(f"    mcep in [-5, 5]: {in_range*100:.1f}%")
 
     with open(MLP_LOG_PATH, "w", encoding="utf-8") as f:
         f.write("\n".join(log_lines))
