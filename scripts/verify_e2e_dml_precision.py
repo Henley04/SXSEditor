@@ -36,7 +36,9 @@ def create_dml_session(model_path):
 
 
 def run_diffstep(sess, feeds, is_fp16):
-    if is_fp16:
+    # 自动检测模型输入类型（W16A32 模型用 keep_io_types=True，输入是 float32）
+    input_dtype = sess.get_inputs()[0].type
+    if 'float16' in str(input_dtype):
         feeds = {k: v.astype(np.float16) for k, v in feeds.items()}
     else:
         feeds = {k: v.astype(np.float32) for k, v in feeds.items()}
@@ -44,7 +46,12 @@ def run_diffstep(sess, feeds, is_fp16):
 
 
 def run_vocoder(sess, mel_np, is_fp16):
-    mel = mel_np.astype(np.float16) if is_fp16 else mel_np.astype(np.float32)
+    # 自动检测模型输入类型
+    input_dtype = sess.get_inputs()[0].type
+    if 'float16' in str(input_dtype):
+        mel = mel_np.astype(np.float16)
+    else:
+        mel = mel_np.astype(np.float32)
     return sess.run(['waveform'], {'mel': mel})[0].astype(np.float32)
 
 
