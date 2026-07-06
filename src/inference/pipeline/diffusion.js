@@ -131,39 +131,41 @@ class Diffusion {
     async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false) {
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
-        const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
-        // 条件分支 mask：所有帧均有效（含 prompt）
-        const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
-        // 非条件分支 mask：prompt 段为 0，target 段为 1。
-        // 关键：uncond 推理 seq_len 必须与 cond 一致（=totalFramesWithPrompt），
-        // 否则基于 Transformer 的 diff_step 会对同一目标帧产生不同位置编码，
-        // 导致 DML 与 WebNN 路径输出系统性偏差。
-        const uncondMask = new Float32Array(totalFramesWithPrompt);
-        uncondMask.fill(0, 0, ptFrameCount);
-        uncondMask.fill(1, ptFrameCount, totalFramesWithPrompt);
 
+        // 对齐官方 PyTorch reverse_diffusion (flow_matching.py:254-309)：
+        //   cond 分支:  xt_input = [prompt, xt],  seq_len = prompt_len + target_len
+        //   uncond 分支: xt_input = xt (target only), seq_len = target_len
+        //   uncond cond = zeros(target_len, COND_DIM), uncond mask = ones(target_len)
+        // 旧实现把 uncond seq_len 也用 totalFramesWithPrompt，导致 RoPE 位置编码与官方不一致，
+        // target 帧在 uncond 分支被赋予 position ptFrameCount.. 而非 0..，CFG 引导方向错误，
+        // 32 步累积导致 mel 严重偏离 → 咬字不清。
+
+        // cond 分支 cached tensors (seq_len = totalFramesWithPrompt)
+        const condSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
+        const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
         const xtInputBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
-        // uncond 输入：prompt 段为 0，target 段为 xt（与 cond 共享 seq_len 与位置编码）
-        const xtUncondBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
-        // 非条件 cond：全零（与 WebNN 路径一致）
-        const uncondCondBuf = new Float32Array(totalFramesWithPrompt * COND_DIM);
+
+        // uncond 分支 cached tensors (seq_len = totalFrames, 对齐官方)
+        const uncondSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+        const uncondCondBuf = new Float32Array(totalFrames * COND_DIM);  // 全零
+        const uncondMask = new Float32Array(totalFrames).fill(1);        // 全 1
+        const xtUncondBuf = new Float32Array(totalFrames * MEL_DIM);     // 只含 target 段
         const cfgPredBuf = new Float32Array(totalFrames * MEL_DIM);
 
-        // 预构建 cond/mask 张量（跨步不变，循环外构建一次，与 WebNN 路径对齐）
         const padFloat = (src, len) => {
             if (src.length >= len) return src;
             const padded = new Float32Array(len);
             padded.set(src);
             return padded;
         };
-        const condPadded = useStaticShapes ? padFloat(combinedCond, seqLen * COND_DIM) : combinedCond;
-        const condMaskPadded = useStaticShapes ? padFloat(frameMask, seqLen) : frameMask;
-        const uncondCondPadded = useStaticShapes ? padFloat(uncondCondBuf, seqLen * COND_DIM) : uncondCondBuf;
-        const uncondMaskPadded = useStaticShapes ? padFloat(uncondMask, seqLen) : uncondMask;
-        const condTensorCached = createFloatTensor(floatType, condPadded, [1, seqLen, COND_DIM]);
-        const condMaskTensorCached = createFloatTensor(floatType, condMaskPadded, [1, seqLen]);
-        const uncondCondTensorCached = createFloatTensor(floatType, uncondCondPadded, [1, seqLen, COND_DIM]);
-        const uncondMaskTensorCached = createFloatTensor(floatType, uncondMaskPadded, [1, seqLen]);
+        const condPadded = useStaticShapes ? padFloat(combinedCond, condSeqLen * COND_DIM) : combinedCond;
+        const condMaskPadded = useStaticShapes ? padFloat(frameMask, condSeqLen) : frameMask;
+        const uncondCondPadded = useStaticShapes ? padFloat(uncondCondBuf, uncondSeqLen * COND_DIM) : uncondCondBuf;
+        const uncondMaskPadded = useStaticShapes ? padFloat(uncondMask, uncondSeqLen) : uncondMask;
+        const condTensorCached = createFloatTensor(floatType, condPadded, [1, condSeqLen, COND_DIM]);
+        const condMaskTensorCached = createFloatTensor(floatType, condMaskPadded, [1, condSeqLen]);
+        const uncondCondTensorCached = createFloatTensor(floatType, uncondCondPadded, [1, uncondSeqLen, COND_DIM]);
+        const uncondMaskTensorCached = createFloatTensor(floatType, uncondMaskPadded, [1, uncondSeqLen]);
 
         const dt = 1.0 / totalSteps;
         const progressPerStep = progressRange / totalSteps;
@@ -175,29 +177,31 @@ class Diffusion {
             for (let step = 0; step < totalSteps; step++) {
                 const tVal = (step + 0.5) / totalSteps;
 
+                // cond 分支: xt_input = [prompt, xt]
                 xtInputBuf.set(xt.data, ptFrameCount * MEL_DIM);
-
                 const predData = await this._runDiffStepWithCachedTensors(sessions, xtInputBuf, tVal, condTensorCached, condMaskTensorCached, totalFramesWithPrompt, isFP16, useStaticShapes);
 
                 if (cfgStrength > 0) {
-                    // 构造 uncond 输入：prompt 段保持 0，target 段填入当前 xt
-                    xtUncondBuf.set(xt.data, ptFrameCount * MEL_DIM);
-
-                    const uncondPred = await this._runDiffStepWithCachedTensors(sessions, xtUncondBuf, tVal, uncondCondTensorCached, uncondMaskTensorCached, totalFramesWithPrompt, isFP16, useStaticShapes);
+                    // uncond 分支: xt_input = xt (target only, seq_len = totalFrames)
+                    xtUncondBuf.set(xt.data, 0);
+                    const uncondPred = await this._runDiffStepWithCachedTensors(sessions, xtUncondBuf, tVal, uncondCondTensorCached, uncondMaskTensorCached, totalFrames, isFP16, useStaticShapes);
 
                     const targetLen = totalFrames * MEL_DIM;
                     // Pass 1 (merged): compute CFG pred + write cfgPredBuf + accumulate
                     // sums AND sum-of-squares for variance in a single pass.
                     // Var(X) = E[X²] - E[X]²  →  sum((x-μ)²) = sumSq - sum²/n
+                    // 注意: cond flow 从 ptFrameCount 偏移读（cond 输入含 prompt），
+                    //       uncond flow 从 0 偏移读（uncond 输入只有 target）。
                     let posSum = 0;
                     let cfgAdjSum = 0;
                     let posSumSq = 0;
                     let cfgAdjSumSq = 0;
                     for (let f = 0; f < totalFrames; f++) {
-                        const tgtOffset = (ptFrameCount + f) * MEL_DIM;
+                        const condOffset = (ptFrameCount + f) * MEL_DIM;
+                        const uncondOffset = f * MEL_DIM;
                         for (let d = 0; d < MEL_DIM; d++) {
-                            const condVal = predData[tgtOffset + d];
-                            const uncondVal = uncondPred[tgtOffset + d];
+                            const condVal = predData[condOffset + d];
+                            const uncondVal = uncondPred[uncondOffset + d];
                             posSum += condVal;
                             posSumSq += condVal * condVal;
                             const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
@@ -206,8 +210,6 @@ class Diffusion {
                             cfgAdjSumSq += cfgVal * cfgVal;
                         }
                     }
-                    const posMean = posSum / targetLen;
-                    const cfgAdjMean = cfgAdjSum / targetLen;
                     const posVarSum = posSumSq - posSum * posSum / targetLen;
                     const cfgAdjVarSum = cfgAdjSumSq - cfgAdjSum * cfgAdjSum / targetLen;
 
@@ -218,9 +220,12 @@ class Diffusion {
                     }
 
                     // Pass 2: compute std/rescale + apply rescale + update xt
-                    const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
-                    const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
-                    const rescale = posStd / (cfgAdjStd + 1e-8);
+                    // 对齐官方 torch.std (unbiased, correction=1, 除以 N-1, 无 epsilon)。
+                    // 旧实现用总体方差(除以N)+分子分母加epsilon，在方差接近0时会压低 rescale，
+                    // 导致 CFG 引导强度被错误衰减。
+                    const posStd = Math.sqrt(posVarSum / Math.max(1, targetLen - 1));
+                    const cfgAdjStd = Math.sqrt(cfgAdjVarSum / Math.max(1, targetLen - 1));
+                    const rescale = posStd / cfgAdjStd;
 
                     for (let f = 0; f < totalFrames; f++) {
                         for (let d = 0; d < MEL_DIM; d++) {
