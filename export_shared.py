@@ -391,19 +391,10 @@ def fix_mixed_precision_types(model):
     # Step 2: Build initializer dtype map
     init_map = {init.name: init.data_type for init in graph.initializer}
 
-    # Debug: print state
-    fp16_init_count = sum(1 for v in init_map.values() if v == TensorProto.FLOAT16)
-    fp32_init_count = sum(1 for v in init_map.values() if v == TensorProto.FLOAT)
-    print(f"  fix_mixed_precision: FP16 init={fp16_init_count}, FP32 init={fp32_init_count}")
-
     # Step 3: Find FP16 weight initializers used by weight-bearing ops
     # Keyed by node index in graph.node (stable across iterations as long as
     # graph.node is not mutated between the scan and apply passes).
     cast_info_by_idx = {}
-    weight_in_init = 0
-    weight_fp16 = 0
-    weight_fp32 = 0
-    weight_not_init = 0
     cast_idx = 0
     node_list_snapshot = list(graph.node)  # materialize to stabilize indexing
     for idx, node in enumerate(node_list_snapshot):
@@ -413,14 +404,7 @@ def fix_mixed_precision_types(model):
             continue
         weight_name = node.input[1]
         if weight_name not in init_map:
-            weight_not_init += 1
             continue
-        weight_in_init += 1
-        if init_map[weight_name] == TensorProto.FLOAT16:
-            weight_fp16 += 1
-        elif init_map[weight_name] == TensorProto.FLOAT:
-            weight_fp32 += 1
-
         if init_map[weight_name] != TensorProto.FLOAT16:
             continue
 
@@ -437,8 +421,6 @@ def fix_mixed_precision_types(model):
         )
         cast_info_by_idx[idx] = (cast_node, 1, cast_output)
         cast_idx += 1
-
-    print(f"  fix_mixed_precision: weights in init={weight_in_init}, FP16={weight_fp16}, FP32={weight_fp32}, not_init={weight_not_init}")
 
     if not cast_info_by_idx:
         print(f"  fix_mixed_precision: no FP16 weights need Cast")
@@ -620,7 +602,6 @@ def resolve_neg1_in_reshape_shapes(model):
             continue
 
         neg1_int = int(neg1_val)
-        print(f"  resolve_neg1: -1 = {neg1_int} for Reshape {node.name}")
 
         # Create a NEW initializer for the resolved value, do NOT modify the
         # original [-1] initializer because it may be shared by other consumers
