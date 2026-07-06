@@ -17,32 +17,32 @@
 
       <!-- Toolbar -->
       <div id="toolbar">
-        <div class="toolbar-group">
-          <button id="btn-play-fragment" title="Space" data-i18n="fragment.play" data-icon="play">播放</button>
-          <button id="btn-export-fragment" data-i18n="fragment.export" data-icon="download">导出</button>
-        </div>
-        <div class="toolbar-divider"></div>
-        <div class="toolbar-group">
-          <span id="fragment-name" data-i18n="fragment.fragment">分片</span>
-        </div>
-        <div class="toolbar-divider"></div>
-        <div class="toolbar-group">
-          <button id="btn-import-midi" data-i18n="fragment.importMidi" data-icon="music">导入MIDI</button>
-          <input type="checkbox" id="autoShiftCheck" checked><label for="autoShiftCheck">Auto Shift</label>
-        </div>
-        <div class="toolbar-divider"></div>
-        <div class="toolbar-group param-group">
-          <button id="btn-param-MIDI" class="btn-param active" title="1">MIDI</button>
-          <button id="btn-param-Pitch" class="btn-param" title="2">Pitch</button>
-        </div>
-        <div class="toolbar-divider" id="pitch-tools-divider" style="display:none"></div>
-        <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
+      <div class="toolbar-group">
+        <button id="btn-play-fragment" title="Space" data-i18n="fragment.play" data-icon="play">播放</button>
+        <button id="btn-export-fragment" data-i18n="fragment.export" data-icon="download">导出</button>
+      </div>
+      <div class="toolbar-divider"></div>
+      <div class="toolbar-group">
+        <span id="fragment-name" data-i18n="fragment.fragment">分片</span>
+      </div>
+      <div class="toolbar-divider"></div>
+      <div class="toolbar-group">
+        <button id="btn-import-midi" data-i18n="fragment.importMidi" data-icon="music">导入MIDI</button>
+        <input type="checkbox" id="autoShiftCheck" checked><label for="autoShiftCheck">Auto Shift</label>
+      </div>
+      <div class="toolbar-divider"></div>
+      <div class="toolbar-group param-group">
+        <button id="btn-param-MIDI" class="btn-param active" title="1">MIDI</button>
+        <button id="btn-param-Pitch" class="btn-param" title="2">Pitch</button>
+      </div>
+      <div class="toolbar-divider" id="pitch-tools-divider" style="display:none"></div>
+      <div class="toolbar-group pitch-tools-group" id="pitch-tools" style="display:none">
           <button id="btn-pitch-reset" class="btn-pitch-tool" title="重置为MIDI自动曲线" data-i18n="fragment.reset" data-i18n-title="fragment.resetToAutoCurve" data-icon="refresh">重置</button>
-          <span class="pitch-hint" data-i18n="fragment.pitchHint">点击添加 · Shift+拖拽画笔 · 右键删除 · 中键框选</span>
+          <span class="pitch-hint" data-i18n="fragment.pitchHint">点击添加 · Shift+拖拽画笔 · 右键调节平滑 · 中键框选</span>
           <span class="pitch-hint" data-i18n="fragment.smoothing">平滑</span>
           <input type="range" id="brush-smoothing" min="0" max="100" value="30" class="brush-smoothing-slider">
           <span class="pitch-hint" id="brush-smoothing-label">30</span>
-        </div>
+      </div>
         <div class="toolbar-spacer"></div>
         <div class="toolbar-group">
           <button id="btn-shortcuts" class="btn-shortcuts" title="快捷键帮助 (F1)" aria-label="快捷键帮助" data-icon="keyboard" data-icon-class="icon-only"></button>
@@ -204,6 +204,23 @@
           </div>
         </div>
       </div>
+    </div>
+
+    <!-- Pitch anchor right-click context menu -->
+    <div id="pitch-anchor-context-menu" class="pitch-ctx-menu" role="menu" aria-hidden="true" style="display:none">
+      <div class="pitch-ctx-header">
+        <span data-i18n="fragment.smoothing">平滑</span>
+        <span class="pitch-ctx-value" id="pitch-ctx-smoothness-value">30</span>
+      </div>
+      <input type="range" id="pitch-ctx-smoothness-slider" min="0" max="100" value="30" class="brush-smoothing-slider pitch-ctx-slider">
+      <div class="pitch-ctx-presets">
+        <button type="button" class="pitch-ctx-preset" data-smoothness="0" data-i18n="fragment.smoothLinear">线性</button>
+        <button type="button" class="pitch-ctx-preset" data-smoothness="30" data-i18n="fragment.smoothSoft">柔和</button>
+        <button type="button" class="pitch-ctx-preset" data-smoothness="60" data-i18n="fragment.smoothMedium">中等</button>
+        <button type="button" class="pitch-ctx-preset" data-smoothness="100" data-i18n="fragment.smoothStrong">强烈</button>
+      </div>
+      <div class="pitch-ctx-divider"></div>
+      <button type="button" id="pitch-ctx-delete" class="pitch-ctx-action pitch-ctx-danger" data-i18n="fragment.deleteAnchor">删除锚点</button>
     </div>
   </body>
 </html>

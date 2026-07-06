@@ -26,6 +26,10 @@ import {
   getPitchDragStartValue, setPitchDragStartValue,
   getPitchDragStartTime, setPitchDragStartTime,
   getPitchDragAnchorStarts, setPitchDragAnchorStarts,
+  getPitchSmoothDragAnchorStarts, setPitchSmoothDragAnchorStarts,
+  getPitchSmoothDragMoved, setPitchSmoothDragMoved,
+  getPitchSmoothDragRightClickPos, setPitchSmoothDragRightClickPos,
+  getContextMenuAnchorIdx, setContextMenuAnchorIdx,
   getIsBrushDrawing, setIsBrushDrawing,
   getCurrentBrushStroke, setCurrentBrushStroke,
   getBrushSmoothing,
@@ -189,6 +193,254 @@ function applyPitchAnchorDrag(pos) {
   invalidatePitchCurveCache();
   render();
   return true;
+}
+
+// 右键拖拽调节 smoothness：水平移动（右增左减）+ 垂直移动（上增下减），
+// 两轴合并使用，1px ≈ 1 单位（总范围 0~100）。
+// 同时作用于所有选中的锚点，便于批量调整。
+function applyPitchSmoothnessDrag(pos) {
+  if (getDragMode() !== 'pitch-smoothness') return false;
+  const starts = getPitchSmoothDragAnchorStarts();
+  if (starts.size === 0) return false;
+
+  const dx = pos.x - getDragStartX();
+  const dy = pos.y - getDragStartY();
+  // 移动阈值：超过 2px 才视为真实拖拽，避免误触发
+  if (!getPitchSmoothDragMoved() && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
+    setPitchSmoothDragMoved(true);
+  }
+  if (!getPitchSmoothDragMoved()) return true;
+
+  // dx 正向（右）增加，dy 负向（上）增加
+  const delta = dx - dy;
+  const pitchCurve = getPitchCurve();
+  for (const [idx, start] of starts) {
+    const ap = pitchCurve.anchorPoints[idx];
+    if (!ap) continue;
+    const next = Math.max(0, Math.min(100, Math.round(start.smoothness + delta)));
+    ap.smoothness = next;
+  }
+  invalidatePitchCurveCache();
+  render();
+  return true;
+}
+
+function _pitchSmoothnessDragHasChange(startSnapshot) {
+  if (!startSnapshot) return false;
+  const starts = getPitchSmoothDragAnchorStarts();
+  const pitchCurve = getPitchCurve();
+  for (const [idx, start] of starts) {
+    const ap = pitchCurve.anchorPoints[idx];
+    if (!ap) continue;
+    if ((ap.smoothness ?? 0) !== (start.smoothness ?? 0)) return true;
+  }
+  return false;
+}
+
+function _finalizePitchSmoothnessDrag(commitHistory) {
+  const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+  setDragMode(null);
+  getPitchSmoothDragAnchorStarts().clear();
+  setPitchSmoothDragMoved(false);
+  setPitchSmoothDragRightClickPos(null);
+
+  if (commitHistory && startSnapshot) {
+    const newSnapshot = clonePitchCurveState();
+    history.push({
+      undo() { applyPitchCurveSnapshot(startSnapshot); },
+      redo() { applyPitchCurveSnapshot(newSnapshot); }
+    });
+    scheduleAutoSave();
+  } else {
+    // 未发生改动 → 还原 snapshot 以保持 history 干净
+    setPitchCurveSnapshotBeforeDrag(null);
+  }
+}
+
+// ==================== Pitch Anchor Context Menu ====================
+function showPitchContextMenu(clientX, clientY, anchorIdx) {
+  const menu = document.getElementById('pitch-anchor-context-menu');
+  if (!menu) return;
+  const pitchCurve = getPitchCurve();
+  if (anchorIdx < 0 || !pitchCurve.anchorPoints[anchorIdx]) {
+    hidePitchContextMenu();
+    return;
+  }
+  setContextMenuAnchorIdx(anchorIdx);
+
+  // 同步滑块与数值显示为当前锚点的 smoothness
+  const ap = pitchCurve.anchorPoints[anchorIdx];
+  const currentValue = Math.max(0, Math.min(100, Math.round(ap.smoothness ?? 0)));
+  const slider = document.getElementById('pitch-ctx-smoothness-slider');
+  const valueLabel = document.getElementById('pitch-ctx-smoothness-value');
+  if (slider) slider.value = String(currentValue);
+  if (valueLabel) valueLabel.textContent = String(currentValue);
+  _updatePresetActiveState(currentValue);
+
+  // 计算菜单位置，避免溢出窗口
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let x = clientX;
+  let y = clientY;
+  // 预先测量宽度（display:none 时无法测量，临时显示再读）
+  menu.style.visibility = 'hidden';
+  menu.style.display = 'flex';
+  const measured = menu.getBoundingClientRect();
+  const w = measured.width;
+  const h = measured.height;
+  menu.style.visibility = '';
+  if (x + w > vw - 4) x = Math.max(4, vw - w - 4);
+  if (y + h > vh - 4) y = Math.max(4, vh - h - 4);
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.setAttribute('aria-hidden', 'false');
+
+  // 为打开菜单时记录 snapshot，便于滑块/预设调整后入 history
+  setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
+}
+
+function hidePitchContextMenu() {
+  const menu = document.getElementById('pitch-anchor-context-menu');
+  if (menu) {
+    menu.style.display = 'none';
+    menu.setAttribute('aria-hidden', 'true');
+  }
+  if (getContextMenuAnchorIdx() >= 0) {
+    setContextMenuAnchorIdx(-1);
+  }
+  setPitchCurveSnapshotBeforeDrag(null);
+}
+
+function _updatePresetActiveState(currentValue) {
+  const menu = document.getElementById('pitch-anchor-context-menu');
+  if (!menu) return;
+  const presets = menu.querySelectorAll('.pitch-ctx-preset');
+  presets.forEach(btn => {
+    const v = parseInt(btn.getAttribute('data-smoothness') || '-1', 10);
+    btn.classList.toggle('active', v === currentValue);
+  });
+}
+
+function _applySmoothnessToAnchor(anchorIdx, newValue, commitHistory) {
+  const pitchCurve = getPitchCurve();
+  const ap = pitchCurve.anchorPoints[anchorIdx];
+  if (!ap) return;
+  const value = Math.max(0, Math.min(100, Math.round(newValue)));
+  if ((ap.smoothness ?? 0) === value) return;
+  ap.smoothness = value;
+  invalidatePitchCurveCache();
+  _updatePresetActiveState(value);
+  const valueLabel = document.getElementById('pitch-ctx-smoothness-value');
+  const slider = document.getElementById('pitch-ctx-smoothness-slider');
+  if (valueLabel) valueLabel.textContent = String(value);
+  if (slider) slider.value = String(value);
+  render();
+  if (commitHistory) {
+    const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+    if (startSnapshot) {
+      const newSnapshot = clonePitchCurveState();
+      history.push({
+        undo() { applyPitchCurveSnapshot(startSnapshot); },
+        redo() { applyPitchCurveSnapshot(newSnapshot); }
+      });
+      scheduleAutoSave();
+      // 一次完整修改后重置 snapshot，避免后续调整被合并到同一条历史
+      setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
+    } else {
+      scheduleAutoSave();
+    }
+  } else {
+    scheduleAutoSave();
+  }
+}
+
+function _setupPitchContextMenuListeners() {
+  const menu = document.getElementById('pitch-anchor-context-menu');
+  if (!menu) return;
+
+  const slider = document.getElementById('pitch-ctx-smoothness-slider');
+  if (slider) {
+    // input 事件实时更新（不入 history），change 事件提交一次 history
+    slider.addEventListener('input', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      const value = parseInt(slider.value, 10);
+      const pitchCurve = getPitchCurve();
+      const ap = pitchCurve.anchorPoints[anchorIdx];
+      if (!ap) return;
+      ap.smoothness = Math.max(0, Math.min(100, value));
+      invalidatePitchCurveCache();
+      _updatePresetActiveState(ap.smoothness);
+      const valueLabel = document.getElementById('pitch-ctx-smoothness-value');
+      if (valueLabel) valueLabel.textContent = String(ap.smoothness);
+      render();
+    });
+    slider.addEventListener('change', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      _applySmoothnessToAnchor(anchorIdx, parseInt(slider.value, 10), true);
+    });
+  }
+
+  const presets = menu.querySelectorAll('.pitch-ctx-preset');
+  presets.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      const value = parseInt(btn.getAttribute('data-smoothness') || '0', 10);
+      _applySmoothnessToAnchor(anchorIdx, value, true);
+    });
+  });
+
+  const deleteBtn = document.getElementById('pitch-ctx-delete');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      const pitchCurve = getPitchCurve();
+      const selectedAnchorIndices = getSelectedAnchorIndices();
+      // 优先删除所有选中锚点（与旧右键删除行为一致），否则仅删除当前锚点
+      const indicesToDelete = selectedAnchorIndices.size > 0
+        ? [...selectedAnchorIndices].sort((a, b) => b - a)
+        : [anchorIdx];
+      const oldSnapshot = clonePitchCurveState();
+      for (const idx of indicesToDelete) {
+        pitchCurve.anchorPoints.splice(idx, 1);
+      }
+      invalidatePitchCurveCache();
+      selectedAnchorIndices.clear();
+      const newSnapshot = clonePitchCurveState();
+      history.push({
+        undo() { applyPitchCurveSnapshot(oldSnapshot); },
+        redo() { applyPitchCurveSnapshot(newSnapshot); }
+      });
+      hidePitchContextMenu();
+      render();
+      scheduleAutoSave();
+    });
+  }
+
+  // 点击菜单外部关闭
+  document.addEventListener('mousedown', (e) => {
+    if (getContextMenuAnchorIdx() < 0) return;
+    if (menu.contains(e.target)) return;
+    hidePitchContextMenu();
+  }, true);
+
+  // 阻止菜单自身弹出浏览器默认右键菜单
+  menu.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // Esc 关闭
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && getContextMenuAnchorIdx() >= 0) {
+      hidePitchContextMenu();
+    }
+  });
+
+  // 窗口失焦时关闭
+  window.addEventListener('blur', () => {
+    if (getContextMenuAnchorIdx() >= 0) hidePitchContextMenu();
+  });
 }
 
 function finalizeDragOperation() {
@@ -867,6 +1119,45 @@ export function setupEventListeners() {
       return;
     }
 
+    // 右键按下：在 Pitch 模式下点击锚点时进入 smoothness 拖拽模式；
+    // 鼠标松开时若未发生明显位移则触发 context menu。
+    if (e.button === 2) {
+      hidePitchContextMenu();
+      const currentParamMode = getCurrentParamMode();
+      const pitchCurve = getPitchCurve();
+      if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
+        // 当底部面板展开为 Phoneme 时，底部区域右键交给音素面板，避免误吞。
+        if (!getParamPanelCollapsed() && getParamPanelMode() === 'Phoneme') {
+          const areaTop = _getParamCurveAreaTop();
+          if (pos.y >= areaTop) return;
+        }
+        const anchorIdx = findAnchorPointAt(pos.x, pos.y);
+        if (anchorIdx >= 0) {
+          const selectedAnchorIndices = getSelectedAnchorIndices();
+          if (!selectedAnchorIndices.has(anchorIdx)) {
+            selectedAnchorIndices.clear();
+            selectedAnchorIndices.add(anchorIdx);
+          }
+          const starts = new Map();
+          for (const idx of selectedAnchorIndices) {
+            const ap = pitchCurve.anchorPoints[idx];
+            if (ap) starts.set(idx, { smoothness: ap.smoothness ?? 0 });
+          }
+          setPitchSmoothDragAnchorStarts(starts);
+          setPitchSmoothDragMoved(false);
+          setPitchSmoothDragRightClickPos({ x: e.clientX, y: e.clientY, canvasX: pos.x, canvasY: pos.y });
+          setDragStartX(pos.x);
+          setDragStartY(pos.y);
+          setDragMode('pitch-smoothness');
+          setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
+          render();
+          return;
+        }
+      }
+      // 其他情况交由 contextmenu 事件处理（保留默认右键菜单或自定义菜单）。
+      return;
+    }
+
     const currentParamMode = getCurrentParamMode();
     const pitchCurve = getPitchCurve();
 
@@ -982,6 +1273,11 @@ export function setupEventListeners() {
 
     const dragMode = getDragMode();
 
+    if (dragMode === 'pitch-smoothness') {
+      applyPitchSmoothnessDrag(pos);
+      return;
+    }
+
     if (dragMode === 'pitch-anchor' && getPitchDragAnchorIdx() >= 0) {
       applyPitchAnchorDrag(pos);
       return;
@@ -1096,6 +1392,27 @@ export function setupEventListeners() {
       return;
     }
 
+    // 右键松开：若未发生明显位移则弹出 context menu，否则提交 smoothness 修改历史。
+    if (e.button === 2 && getDragMode() === 'pitch-smoothness') {
+      const moved = getPitchSmoothDragMoved();
+      const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+      const hadChange = startSnapshot && _pitchSmoothnessDragHasChange(startSnapshot);
+      if (!moved || !hadChange) {
+        // 没有真实改动 → 弹出右键菜单
+        const rightClickPos = getPitchSmoothDragRightClickPos();
+        const anchorIdx = getSelectedAnchorIndices().size > 0
+          ? Math.min(...getSelectedAnchorIndices())
+          : -1;
+        _finalizePitchSmoothnessDrag(false);
+        if (rightClickPos) {
+          showPitchContextMenu(rightClickPos.x, rightClickPos.y, anchorIdx);
+        }
+      } else {
+        _finalizePitchSmoothnessDrag(true);
+      }
+      return;
+    }
+
     if (getPhonemeDragState()) {
       handlePhonemeMouseUp();
       return;
@@ -1185,6 +1502,12 @@ export function setupEventListeners() {
       setIsBrushDrawing(false);
       render();
     }
+    // 右键 smoothness 拖拽期间鼠标离开 canvas → 提交当前修改并清理状态
+    if (getDragMode() === 'pitch-smoothness') {
+      const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+      const hadChange = startSnapshot && _pitchSmoothnessDragHasChange(startSnapshot);
+      _finalizePitchSmoothnessDrag(!!hadChange);
+    }
     finalizeDragOperation();
     setDragMode(null);
     setPitchDragAnchorIdx(-1);
@@ -1198,40 +1521,10 @@ export function setupEventListeners() {
   });
 
   canvas.addEventListener('contextmenu', (e) => {
+    // 我们已经在 mousedown/mouseup(button=2) 中处理了右键交互
+    // （锚点上：smoothness 拖拽或弹出菜单；空白处：什么都不做）。
+    // 这里仅阻止浏览器默认菜单弹出，避免重复触发。
     e.preventDefault();
-    const pos = getMousePos(e);
-    // Right-click in the bottom phoneme lane is used for phoneme lock toggle —
-    // skip pitch anchor deletion there even when the top toolbar is in Pitch.
-    if (!getParamPanelCollapsed() && getParamPanelMode() === 'Phoneme') {
-      const areaTop = _getParamCurveAreaTop();
-      if (pos.y >= areaTop) return;
-    }
-    const currentParamMode = getCurrentParamMode();
-    if (currentParamMode !== 'Pitch' || !getPitchCurve().enabled) return;
-
-    const anchorIdx = findAnchorPointAt(pos.x, pos.y);
-    if (anchorIdx >= 0) {
-      const selectedAnchorIndices = getSelectedAnchorIndices();
-      if (!selectedAnchorIndices.has(anchorIdx)) {
-        selectedAnchorIndices.clear();
-        selectedAnchorIndices.add(anchorIdx);
-      }
-      const oldSnapshot = clonePitchCurveState();
-      const indicesToDelete = [...selectedAnchorIndices].sort((a, b) => b - a);
-      const pitchCurve = getPitchCurve();
-      for (const idx of indicesToDelete) {
-        pitchCurve.anchorPoints.splice(idx, 1);
-      }
-      invalidatePitchCurveCache();
-      selectedAnchorIndices.clear();
-      const newSnapshot = clonePitchCurveState();
-      history.push({
-        undo() { applyPitchCurveSnapshot(oldSnapshot); },
-        redo() { applyPitchCurveSnapshot(newSnapshot); }
-      });
-      render();
-      scheduleAutoSave();
-    }
   });
 
   canvas.addEventListener('dblclick', (e) => {
@@ -1604,4 +1897,6 @@ export function setupEventListeners() {
 
     render();
   }, { passive: false });
+
+  _setupPitchContextMenuListeners();
 }

@@ -62,6 +62,14 @@ let pitchDragAnchorStarts = new Map();
 let isBrushDrawing = false;
 let currentBrushStroke = null;
 let brushSmoothing = 30;
+
+// 右键按住锚点拖动调节 smoothness 时的状态
+// pitchSmoothDragAnchorStarts: Map<anchorIdx, { smoothness: number }>
+let pitchSmoothDragAnchorStarts = new Map();
+let pitchSmoothDragMoved = false;
+let pitchSmoothDragRightClickPos = null; // { x, y } 屏幕坐标，用于触发 context menu
+// 当前 context menu 关联的锚点索引（-1 = 无菜单）
+let contextMenuAnchorIdx = -1;
 let sortedAnchorPointsCache = null;
 let sortedAnchorPointsCacheVersion = -1;
 let pitchCurveVersion = 0;
@@ -232,6 +240,18 @@ export function setPitchDragStartTime(v) { pitchDragStartTime = v; }
 
 export function getPitchDragAnchorStarts() { return pitchDragAnchorStarts; }
 export function setPitchDragAnchorStarts(v) { pitchDragAnchorStarts = v; }
+
+export function getPitchSmoothDragAnchorStarts() { return pitchSmoothDragAnchorStarts; }
+export function setPitchSmoothDragAnchorStarts(v) { pitchSmoothDragAnchorStarts = v; }
+
+export function getPitchSmoothDragMoved() { return pitchSmoothDragMoved; }
+export function setPitchSmoothDragMoved(v) { pitchSmoothDragMoved = v; }
+
+export function getPitchSmoothDragRightClickPos() { return pitchSmoothDragRightClickPos; }
+export function setPitchSmoothDragRightClickPos(v) { pitchSmoothDragRightClickPos = v; }
+
+export function getContextMenuAnchorIdx() { return contextMenuAnchorIdx; }
+export function setContextMenuAnchorIdx(v) { contextMenuAnchorIdx = v; }
 
 export function getIsBrushDrawing() { return isBrushDrawing; }
 export function setIsBrushDrawing(v) { isBrushDrawing = v; }
