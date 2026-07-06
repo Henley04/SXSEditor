@@ -39,6 +39,10 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/utils/gpuWorker.js'),
         },
         {
+          from: path.resolve(__dirname, 'src/utils/deviceClassifier.js'),
+          to: path.resolve(__dirname, '.webpack/main/utils/deviceClassifier.js'),
+        },
+        {
           from: path.resolve(__dirname, 'src/inference/pitchWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/inference/pitchWorker.js'),
         },
