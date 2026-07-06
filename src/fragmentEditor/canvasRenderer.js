@@ -502,7 +502,8 @@ export function getPitchAtTime(time) {
             ? (time - sorted[i].time) / (sorted[i + 1].time - sorted[i].time)
             : 0;
           const smoothness = (sorted[i].smoothness || 0) / 100;
-          const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
+          const smoothStepT = t * t * (3 - 2 * t);
+          const smoothT = t + (smoothStepT - t) * smoothness;
           return sorted[i].pitch + smoothT * (sorted[i + 1].pitch - sorted[i].pitch);
         }
       }
