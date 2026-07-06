@@ -1,0 +1,599 @@
+/* ==================== 导出对话框 ==================== */
+
+.export-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 8, 18, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10001;
+  backdrop-filter: blur(4px);
+  animation: export-dialog-fade-in var(--motion-base) ease;
+}
+
+@keyframes export-dialog-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes export-dialog-slide-up {
+  from { opacity: 0; transform: translateY(16px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.export-dialog-panel {
+  position: relative;
+  width: 92%;
+  max-width: 560px;
+  max-height: 90vh;
+  background: var(--bg-app);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 16px 48px var(--shadow-color-strong);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: export-dialog-slide-up var(--motion-base) ease;
+}
+
+/* ==================== Header ==================== */
+
+.export-dialog-header {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-6) var(--space-7) var(--space-5);
+  border-bottom: 1px solid var(--border-default);
+  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-app) 100%);
+  flex-shrink: 0;
+}
+
+.export-dialog-header h3 {
+  margin: 0;
+  font-size: var(--font-xl);
+  font-weight: 600;
+  color: var(--fg-primary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.export-dialog-header h3::before {
+  content: '';
+  width: 4px;
+  height: 20px;
+  background: linear-gradient(180deg, var(--accent), var(--accent-pressed));
+  border-radius: var(--radius-sm);
+}
+
+.export-dialog-subtitle {
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  padding-left: 11px;
+}
+
+/* ==================== Body ==================== */
+
+.export-dialog-body {
+  padding: var(--space-5) var(--space-7);
+  overflow-y: auto;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.export-dialog-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.export-dialog-section-title {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--accent-fg);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.export-dialog-section-title::before {
+  content: '';
+  width: 3px;
+  height: 12px;
+  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
+  border-radius: var(--radius-sm);
+}
+
+/* ==================== Form controls ==================== */
+
+.export-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.export-dialog-field-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: var(--font-md);
+  font-weight: 500;
+  color: var(--fg-secondary);
+}
+
+.export-dialog-field-value {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: var(--space-1) var(--space-4);
+  background: var(--accent-soft);
+  border-radius: var(--radius-xl);
+  font-size: var(--font-base);
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.export-dialog-field-hint {
+  font-size: var(--font-sm);
+  color: var(--fg-disabled);
+  line-height: 1.5;
+  padding-left: var(--space-2);
+  border-left: 2px solid var(--ink-soft);
+}
+
+.export-dialog select,
+.export-dialog input[type="text"] {
+  width: 100%;
+  padding: var(--space-3) 36px var(--space-3) var(--space-4);
+  font-size: var(--font-md);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  outline: none;
+  cursor: pointer;
+  box-sizing: border-box;
+  transition: border-color var(--motion-base), box-shadow var(--motion-base);
+  appearance: none;
+}
+
+.export-dialog input[type="text"] {
+  cursor: text;
+  padding-right: var(--space-4);
+}
+
+.export-dialog select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888a8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+
+.export-dialog select:hover,
+.export-dialog input[type="text"]:hover {
+  border-color: var(--button-secondary-border);
+}
+
+.export-dialog select:focus,
+.export-dialog input[type="text"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.export-dialog input[type="range"] {
+  width: 100%;
+  height: 6px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--border-strong);
+  border-radius: 3px;
+  outline: none;
+  margin-top: var(--space-2);
+  transition: background var(--motion-base);
+}
+
+.export-dialog input[type="range"]:hover {
+  background: var(--button-secondary-border);
+}
+
+.export-dialog input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-button-primary);
+  cursor: pointer;
+  border: 3px solid var(--bg-panel);
+  box-shadow: 0 2px 8px var(--accent-glow);
+  transition: transform var(--motion-fast), box-shadow var(--motion-fast);
+}
+
+.export-dialog input[type="range"]::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+  box-shadow: 0 4px 12px var(--accent-glow-strong);
+}
+
+.export-dialog input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--bg-button-primary);
+  cursor: pointer;
+  border: 3px solid var(--bg-panel);
+  box-shadow: 0 2px 8px var(--accent-glow);
+}
+
+/* ==================== Checkbox field ==================== */
+
+.export-dialog-checkbox {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--motion-base), background var(--motion-base);
+}
+
+.export-dialog-checkbox:hover {
+  border-color: var(--accent-glow);
+  background: var(--accent-softer);
+}
+
+.export-dialog-checkbox input[type="checkbox"] {
+  margin-top: 2px;
+  cursor: pointer;
+  accent-color: var(--accent);
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.export-dialog-checkbox-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+}
+
+.export-dialog-checkbox-label {
+  font-size: var(--font-md);
+  font-weight: 500;
+  color: var(--fg-secondary);
+}
+
+.export-dialog-checkbox-desc {
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+/* ==================== Output path ==================== */
+
+.export-dialog-path-row {
+  display: flex;
+  gap: var(--space-3);
+}
+
+.export-dialog-path-row input[type="text"] {
+  flex: 1;
+  min-width: 0;
+}
+
+.export-dialog-browse-btn {
+  padding: var(--space-3) var(--space-5);
+  font-size: var(--font-md);
+  font-weight: 500;
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--motion-base), border-color var(--motion-base), color var(--motion-base);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.export-dialog-browse-btn:hover {
+  background: var(--accent-softer);
+  border-color: var(--accent-glow);
+  color: var(--accent-fg);
+}
+
+/* ==================== Advanced toggle ==================== */
+
+.export-dialog-advanced-toggle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: transparent;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--motion-base), background var(--motion-base);
+  font-size: var(--font-md);
+  color: var(--fg-secondary);
+  width: 100%;
+  text-align: left;
+}
+
+.export-dialog-advanced-toggle:hover {
+  border-color: var(--accent-glow);
+  background: var(--accent-softer);
+  color: var(--accent-fg);
+}
+
+.export-dialog-advanced-toggle .chevron {
+  margin-left: auto;
+  transition: transform var(--motion-base);
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+}
+
+.export-dialog-advanced-toggle.expanded .chevron {
+  transform: rotate(180deg);
+}
+
+.export-dialog-advanced-content {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  animation: export-dialog-fade-in var(--motion-base) ease;
+}
+
+.export-dialog-advanced-content[hidden] {
+  display: none;
+}
+
+/* ==================== Precision badges ==================== */
+
+.export-dialog-precision-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--space-3);
+}
+
+.export-dialog-precision-option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-4);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--motion-base), background var(--motion-base), box-shadow var(--motion-base);
+}
+
+.export-dialog-precision-option:hover {
+  border-color: var(--accent-glow);
+  background: var(--accent-softer);
+}
+
+.export-dialog-precision-option.selected {
+  border-color: var(--accent);
+  background: var(--accent-softer);
+  box-shadow: 0 0 0 2px var(--accent-soft);
+}
+
+.export-dialog-precision-option input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.export-dialog-precision-name {
+  font-size: var(--font-md);
+  font-weight: 600;
+  color: var(--fg-primary);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.export-dialog-precision-option.selected .export-dialog-precision-name {
+  color: var(--accent-fg);
+}
+
+.export-dialog-precision-desc {
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  line-height: 1.4;
+}
+
+/* ==================== Footer ==================== */
+
+.export-dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-7) var(--space-6);
+  border-top: 1px solid var(--border-default);
+  background: var(--bg-panel);
+  flex-shrink: 0;
+}
+
+.export-dialog-btn {
+  padding: var(--space-3) var(--space-6);
+  font-size: var(--font-md);
+  font-weight: 500;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background var(--motion-base), border-color var(--motion-base), color var(--motion-base), opacity var(--motion-base);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid transparent;
+  min-width: 88px;
+  justify-content: center;
+}
+
+.export-dialog-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.export-dialog-btn-secondary {
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  border-color: var(--border-strong);
+}
+
+.export-dialog-btn-secondary:hover:not(:disabled) {
+  background: var(--bg-button-hover);
+  border-color: var(--accent-glow);
+  color: var(--fg-toolbar-hover);
+}
+
+.export-dialog-btn-primary {
+  background: var(--bg-button-primary);
+  color: var(--fg-on-accent);
+  border-color: var(--accent);
+}
+
+.export-dialog-btn-primary:hover:not(:disabled) {
+  background: var(--bg-button-primary-hover);
+}
+
+/* ==================== Progress view ==================== */
+
+.export-dialog-progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-7);
+  align-items: center;
+  text-align: center;
+}
+
+.export-dialog-progress-status {
+  font-size: var(--font-md);
+  color: var(--fg-secondary);
+  font-weight: 500;
+  min-height: 1.5em;
+}
+
+.export-dialog-progress-percent {
+  font-size: var(--font-2xl);
+  font-weight: 700;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+}
+
+.export-dialog-progress-bar {
+  width: 100%;
+  height: 8px;
+  background: var(--border-strong);
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+  position: relative;
+}
+
+.export-dialog-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  border-radius: var(--radius-xl);
+  transition: width 0.3s ease;
+  width: 0%;
+  position: relative;
+}
+
+.export-dialog-progress-bar-fill::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+  animation: export-dialog-progress-shimmer 1.6s infinite;
+}
+
+@keyframes export-dialog-progress-shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+.export-dialog-progress-result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  align-items: center;
+}
+
+.export-dialog-progress-result-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  background: var(--accent-softer);
+  color: var(--accent);
+  border: 2px solid var(--accent);
+}
+
+.export-dialog-progress-result-icon.error {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border-color: #ef4444;
+}
+
+.export-dialog-progress-result-path {
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  word-break: break-all;
+  max-width: 100%;
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-default);
+}
+
+.export-dialog-progress-actions {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+/* ==================== Hidden utility ==================== */
+
+.export-dialog-hidden {
+  display: none !important;
+}
+
+/* ==================== Responsive ==================== */
+
+@media (max-width: 520px) {
+  .export-dialog-precision-grid {
+    grid-template-columns: 1fr;
+  }
+  .export-dialog-panel {
+    max-width: 100%;
+    width: 96%;
+  }
+  .export-dialog-body {
+    padding: var(--space-4) var(--space-5);
+  }
+  .export-dialog-header,
+  .export-dialog-footer {
+    padding-left: var(--space-5);
+    padding-right: var(--space-5);
+  }
+}

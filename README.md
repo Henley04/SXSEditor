@@ -79,7 +79,7 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | Themes | Hot-swappable design token system |
 | SVG Icons | Flat, theme-aware inline SVG icon system (currentColor) |
 | Undo/Redo | 200-step edit history |
-| WAV Export | 24kHz output |
+| WAV Export | 24kHz output with export dialog (precision, inference params, advanced options, auto-open folder) |
 
 ### Build from Source
 
@@ -188,7 +188,7 @@ macOS / Linux 用户请从源码构建。
 | 主题系统 | 热切换设计令牌系统 |
 | SVG 图标 | 扁平化、主题感知的内联 SVG 图标系统 (currentColor) |
 | 撤销/重做 | 200 步编辑历史 |
-| WAV 导出 | 24kHz 输出 |
+| WAV 导出 | 24kHz 输出，配备导出对话框（精度选择、推理参数、高级选项、完成后自动打开所在文件夹） |
 
 ### 从源码构建
 
@@ -293,7 +293,7 @@ macOS / Linux：ソースからビルドしてください。
 | テーマ | ホットスワップ対応デザイントークンシステム |
 | SVG アイコン | フラット設計、テーマ連動インライン SVG アイコンシステム (currentColor) |
 | アンドゥ/リドゥ | 200 ステップの編集履歴 |
-| WAV エクスポート | 24kHz 出力 |
+| WAV エクスポート | 24kHz 出力、エクスポートダイアログ付き（精度選択、推論パラメータ、詳細オプション、完了後にフォルダを自動で開く） |
 
 ### ソースからビルド
 

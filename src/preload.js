@@ -102,6 +102,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importMidi: () => ipcRenderer.invoke('midi:import'),
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),
   getDirName: (filePath) => ipcRenderer.invoke('getDirName', filePath),
+  showItemInFolder: (filePath) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
   getDMLDevices: () => ipcRenderer.invoke('settings:getDMLDevices'),
   getHardwareStatus: () => ipcRenderer.invoke('settings:getHardwareStatus'),
   getCurrentHardware: () => ipcRenderer.invoke('settings:getCurrentHardware'),
