@@ -53,6 +53,7 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | Feature | Description |
 |---------|-------------|
 | Piano Roll Editor | Notes, lyrics, pitch curves, volume/pan envelopes, phoneme editing |
+| Pitch Curve Smoothing | Per-anchor smoothness (0–100) controls easing strength between anchor points; right-click on an anchor and drag (L/R or U/D) to scrub smoothness in real time, or release on the anchor to open a context menu with a slider, presets (Linear/Soft/Medium/Strong), and delete |
 | Neural SVS | SoulX-Singer diffusion model via ONNX Runtime |
 | Singer Creator | Custom voices from reference WAV audio |
 | Audio Preprocessing | RMVPE F0 extraction, Basic Pitch MIDI extraction |

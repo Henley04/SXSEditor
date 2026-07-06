@@ -1181,6 +1181,24 @@ function renderPitchCurve(c) {
         ctx.beginPath();
         ctx.arc(px, py, 12, 0, Math.PI * 2);
         ctx.stroke();
+
+        // 在选中锚点旁显示其 smoothness 值，便于右键拖拽时实时观察变化。
+        const sm = Math.max(0, Math.min(100, Math.round(ap.smoothness ?? 0)));
+        const label = `S${sm}`;
+        ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const labelX = px + 14;
+        const labelY = py - 12;
+        const padX = 3, padY = 1;
+        const metrics = ctx.measureText(label);
+        const tw = metrics.width;
+        const th = 11;
+        // 半透明背景便于阅读
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(labelX - padX, labelY - th / 2 - padY, tw + padX * 2, th + padY * 2);
+        ctx.fillStyle = c.accentLine || c.fgPrimary;
+        ctx.fillText(label, labelX, labelY);
       }
     }
   }

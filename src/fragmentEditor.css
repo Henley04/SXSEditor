@@ -714,3 +714,97 @@
   color: var(--fg-muted);
   font-size: var(--font-base);
 }
+
+/* ==================== Pitch Anchor Context Menu ==================== */
+.pitch-ctx-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 200px;
+  padding: 8px 10px 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 20px var(--shadow-color-mid), 0 2px 6px rgba(0,0,0,0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: var(--font-sm);
+  color: var(--fg-primary);
+  user-select: none;
+}
+
+.pitch-ctx-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.pitch-ctx-value {
+  display: inline-block;
+  min-width: 28px;
+  text-align: right;
+  color: var(--accent-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.pitch-ctx-slider {
+  width: 100%;
+}
+
+.pitch-ctx-presets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.pitch-ctx-preset {
+  padding: 4px 6px;
+  font-size: var(--font-xs);
+  color: var(--fg-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all var(--motion-fast) ease;
+}
+.pitch-ctx-preset:hover {
+  background: var(--accent-softer);
+  border-color: var(--accent-soft);
+  color: var(--accent-fg);
+}
+.pitch-ctx-preset.active {
+  background: var(--accent);
+  border-color: var(--accent-hover);
+  color: var(--fg-on-accent);
+}
+
+.pitch-ctx-divider {
+  height: 1px;
+  background: var(--border-default);
+  margin: 2px -2px 0;
+}
+
+.pitch-ctx-action {
+  padding: 6px 8px;
+  font-size: var(--font-sm);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  color: var(--fg-primary);
+  transition: all var(--motion-fast) ease;
+}
+.pitch-ctx-action:hover {
+  background: var(--bg-button-hover);
+}
+
+.pitch-ctx-danger {
+  color: var(--danger);
+}
+.pitch-ctx-danger:hover {
+  background: var(--danger-softer, rgba(220, 60, 60, 0.12));
+  border-color: var(--danger);
+}
