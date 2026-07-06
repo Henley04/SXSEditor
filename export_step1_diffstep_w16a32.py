@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Step 1: Export diff_step sub-model to W16A32 ONNX via torch.export (dynamo).
+"""Step 1: Export diff_step sub-model to W16A32 ONNX via torch.export (dynamo) + post-process.
 
 W16A32 = 权重 FP16 存储, 激活 FP32 计算
 
@@ -8,7 +8,10 @@ W16A32 = 权重 FP16 存储, 激活 FP32 计算
 - 不使用 autocast (CPU autocast + dynamo 有类型提升 bug)
 - PyTorch 在 forward 时自动将 FP16 weight 提升为 FP32 参与 MatMul 计算
 - 导出的 ONNX 图: FP16 weight initializer + Cast(FP16→FP32) + FP32 MatMul
-- 每个 Linear 一个 Cast 节点, 总数可控, 不会有 op_block_list 的 336 Cast 风暴
+- 每个 Linear 一个 Cast 节点, 总数可控
+
+关键: 导出后必须应用 postprocess_onnx (STFT 替换、onnxsim 等) 才能在 DML EP 上运行
+(与生产 FP32 模型导出流程一致, 参见 export_step3_postprocess.py)
 
 接口匹配生产环境:
 - cond 输入是 1024 维 (cond_emb 已外部应用)
@@ -16,7 +19,8 @@ W16A32 = 权重 FP16 存储, 激活 FP32 计算
 """
 import argparse, os, time, torch
 import torch.nn as nn
-from export_shared import load_config, load_model, clear_memory
+from torch.export import Dim
+from export_shared import load_config, load_model, postprocess_onnx, clear_memory
 
 
 class DiffStepOnlyWrapper(nn.Module):
@@ -73,6 +77,8 @@ def main():
     converted = convert_linear_weights_to_fp16(wrapper)
     print(f"  Converted {converted} Linear layers to FP16 weights")
 
+    # 先导出到临时文件, 再后处理到最终文件
+    raw_path = os.path.join(args.output_dir, 'diff_step_w16a32_raw.onnx')
     output_path = os.path.join(args.output_dir, 'diff_step_dml.onnx')
     seq_len = 2048
 
@@ -82,54 +88,63 @@ def main():
     dummy_cond = torch.randn(1, seq_len, 1024)
     dummy_mask = torch.ones(1, seq_len)
 
-    print("  Exporting via torch.onnx.export (dynamo=False, legacy TorchScript)...")
+    # 使用 Dim 对象指定动态维度
+    seq_len_dim = Dim('seq_len', min=1, max=10000)
+
+    print("  Exporting via torch.onnx.export (dynamo=True)...")
     with torch.no_grad():
         torch.onnx.export(
             wrapper,
             (dummy_xt, dummy_t, dummy_cond, dummy_mask),
-            output_path,
+            raw_path,
             input_names=['xt_input', 't', 'cond', 'xt_mask'],
             output_names=['flow_pred'],
             opset_version=18,
-            dynamo=False,
-            dynamic_axes={
-                'xt_input': {1: 'seq_len'},
-                'cond': {1: 'seq_len'},
-                'xt_mask': {1: 'seq_len'},
-                'flow_pred': {1: 'seq_len'},
+            dynamo=True,
+            dynamic_shapes={
+                'xt_input': {1: seq_len_dim},
+                't': None,
+                'cond': {1: seq_len_dim},
+                'xt_mask': {1: seq_len_dim},
             },
         )
+    print(f"  Raw export done in {time.time() - t0:.1f}s")
 
     del wrapper, model
     clear_memory()
 
+    # 后处理 (STFT 替换、onnxsim、拓扑排序等), 与生产 FP32 流程一致
+    # fix_mixed_precision=True: onnxsim 后重新插入 Cast(FP16->FP32) 修复混合类型
+    print("  Post-processing (STFT replacement, onnxsim, etc.)...")
+    postprocess_onnx(raw_path, output_path, fix_mixed_precision=True)
+
+    # 清理临时文件
+    if os.path.exists(raw_path):
+        os.remove(raw_path)
+    raw_data = raw_path + '.data'
+    if os.path.exists(raw_data):
+        os.remove(raw_data)
+
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
-    print(f"  Done in {time.time() - t0:.1f}s -> {output_path} ({size_mb:.1f} MB)")
+    data_path = output_path + '.data'
+    data_mb = os.path.getsize(data_path) / (1024 * 1024) if os.path.exists(data_path) else 0
+    print(f"  Done in {time.time() - t0:.1f}s -> {output_path} ({size_mb:.1f}MB + {data_mb:.1f}MB data)")
 
     # 检查导出结果
     import onnx
     from collections import Counter
     m = onnx.load(output_path, load_external_data=False)
-    dtypes = Counter()
-    for vi in m.graph.value_info:
-        t = vi.type.tensor_type.elem_type
-        dtypes[t] += 1
     cast_count = sum(1 for n in m.graph.node if n.op_type == 'Cast')
     total_nodes = sum(1 for n in m.graph.node)
-    # 1=FP32, 10=FP16
-    fp32_count = dtypes.get(1, 0)
-    fp16_count = dtypes.get(10, 0)
 
-    # 统计 FP16 vs FP32 initializer
     init_dtypes = Counter()
     for init in m.graph.initializer:
         init_dtypes[init.data_type] += 1
 
     print(f"  Nodes: {total_nodes}, Cast: {cast_count}")
-    print(f"  Value info: FP16={fp16_count}, FP32={fp32_count}")
     print(f"  Initializers: FP16={init_dtypes.get(10, 0)}, FP32={init_dtypes.get(1, 0)}")
-    print(f"  Inputs: {[(i.name, [d.dim_value for d in i.type.tensor_type.shape.dim]) for i in m.graph.input]}")
-    print(f"  Outputs: {[(o.name, [d.dim_value for d in o.type.tensor_type.shape.dim]) for o in m.graph.output]}")
+    print(f"  Inputs: {[(i.name, [d.dim_value for d in i.type.tensor_type.shape.dim], i.type.tensor_type.elem_type) for i in m.graph.input]}")
+    print(f"  Outputs: {[(o.name, [d.dim_value for d in o.type.tensor_type.shape.dim], o.type.tensor_type.elem_type) for o in m.graph.output]}")
 
 
 if __name__ == '__main__':
