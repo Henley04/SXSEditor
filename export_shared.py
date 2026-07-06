@@ -65,6 +65,12 @@ try:
 except ImportError:
     HAS_ONNXSIM = False
 
+try:
+    import sympy
+    HAS_SYMPY = True
+except ImportError:
+    HAS_SYMPY = False
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SOULX_DIR = os.path.join(SCRIPT_DIR, 'SoulX-Singer')
 sys.path.insert(0, SOULX_DIR)
@@ -347,7 +353,410 @@ def strip_metadata(model):
     return model
 
 
-def postprocess_onnx(input_path, output_path):
+def fix_mixed_precision_types(model):
+    """Fix mixed precision types in W16A32 models.
+
+    onnxsim may remove Cast(FP16->FP32) nodes, leaving MatMul/Conv with
+    FP16 weight (as Constant node or initializer) + FP32 activation,
+    which causes ONNX Runtime type mismatch errors.
+
+    This function:
+    1. Converts FP16 Constant nodes to initializers
+    2. Re-inserts Cast nodes for FP16 weights used by MatMul/Gemm/Conv/ConvTranspose
+    """
+    graph = model.graph
+    OPS_WITH_WEIGHTS = {'MatMul', 'Gemm', 'Conv', 'ConvTranspose'}
+
+    # Step 1: Convert FP16 Constant nodes to initializers
+    # onnxsim may fold FP16 weights into Constant nodes instead of initializers
+    constant_converted = 0
+    nodes_to_remove = []
+    for node in graph.node:
+        if node.op_type == 'Constant':
+            for attr in node.attribute:
+                if attr.name == 'value' and attr.t.data_type == TensorProto.FLOAT16:
+                    # Convert to initializer
+                    new_init = TensorProto.TensorProto()
+                    new_init.CopyFrom(attr.t)
+                    new_init.name = node.output[0]
+                    graph.initializer.append(new_init)
+                    nodes_to_remove.append(node)
+                    constant_converted += 1
+                    break
+    for node in nodes_to_remove:
+        graph.node.remove(node)
+    if constant_converted:
+        print(f"  fix_mixed_precision: converted {constant_converted} FP16 Constant nodes to initializers")
+
+    # Step 2: Build initializer dtype map
+    init_map = {init.name: init.data_type for init in graph.initializer}
+
+    # Debug: print state
+    fp16_init_count = sum(1 for v in init_map.values() if v == TensorProto.FLOAT16)
+    fp32_init_count = sum(1 for v in init_map.values() if v == TensorProto.FLOAT)
+    print(f"  fix_mixed_precision: FP16 init={fp16_init_count}, FP32 init={fp32_init_count}")
+
+    # Step 3: Find FP16 weight initializers used by weight-bearing ops
+    # Keyed by node index in graph.node (stable across iterations as long as
+    # graph.node is not mutated between the scan and apply passes).
+    cast_info_by_idx = {}
+    weight_in_init = 0
+    weight_fp16 = 0
+    weight_fp32 = 0
+    weight_not_init = 0
+    cast_idx = 0
+    node_list_snapshot = list(graph.node)  # materialize to stabilize indexing
+    for idx, node in enumerate(node_list_snapshot):
+        if node.op_type not in OPS_WITH_WEIGHTS:
+            continue
+        if len(node.input) < 2:
+            continue
+        weight_name = node.input[1]
+        if weight_name not in init_map:
+            weight_not_init += 1
+            continue
+        weight_in_init += 1
+        if init_map[weight_name] == TensorProto.FLOAT16:
+            weight_fp16 += 1
+        elif init_map[weight_name] == TensorProto.FLOAT:
+            weight_fp32 += 1
+
+        if init_map[weight_name] != TensorProto.FLOAT16:
+            continue
+
+        # Need to insert Cast for this FP16 weight
+        # Use unique cast_idx to guarantee unique node names and output names
+        cast_output = f"w16a32_cast_{cast_idx}_out"
+        cast_node_name = f"w16a32_cast_{cast_idx}"
+        cast_node = helper.make_node(
+            'Cast',
+            [weight_name],
+            [cast_output],
+            name=cast_node_name,
+            to=TensorProto.FLOAT,
+        )
+        cast_info_by_idx[idx] = (cast_node, 1, cast_output)
+        cast_idx += 1
+
+    print(f"  fix_mixed_precision: weights in init={weight_in_init}, FP16={weight_fp16}, FP32={weight_fp32}, not_init={weight_not_init}")
+
+    if not cast_info_by_idx:
+        print(f"  fix_mixed_precision: no FP16 weights need Cast")
+        return model
+
+    # Step 4: Apply Cast insertions using stable index lookup
+    new_node_list = []
+    cast_insertions = 0
+    for idx, node in enumerate(node_list_snapshot):
+        if idx in cast_info_by_idx:
+            cast_node, input_idx, cast_output = cast_info_by_idx[idx]
+            if input_idx < len(node.input):
+                new_node_list.append(cast_node)
+                node.input[input_idx] = cast_output
+                cast_insertions += 1
+        new_node_list.append(node)
+
+    del graph.node[:]
+    graph.node.extend(new_node_list)
+    print(f"  fix_mixed_precision: inserted {cast_insertions} Cast(FP16->FP32) nodes")
+    return model
+
+
+def resolve_neg1_in_reshape_shapes(model):
+    """Replace -1 in Reshape shape Concat with computed static value.
+
+    Dynamo export produces Concat([1, Shape(x)[start:end], -1, 64]) for Reshape.
+    DML EP doesn't support -1 in shape tensor (returns E_INVALIDARG 0x80070057).
+    Compute -1 statically using sympy to cancel dynamic dimensions.
+
+    Only resolves when -1 simplifies to an integer (dynamic dims cancel out).
+    """
+    if not HAS_SYMPY:
+        print("  resolve_neg1: sympy not available, skipping")
+        return model
+
+    graph = model.graph
+
+    # Build value_info map
+    vi_map = {vi.name: vi for vi in graph.value_info}
+    for vi in graph.input:
+        vi_map[vi.name] = vi
+    for vi in graph.output:
+        vi_map[vi.name] = vi
+
+    init_map = {init.name: init for init in graph.initializer}
+
+    def get_shape(vi_name):
+        if vi_name not in vi_map:
+            return None
+        t = vi_map[vi_name].type.tensor_type
+        if t.elem_type == 0:
+            return None
+        dims = []
+        for d in t.shape.dim:
+            if d.dim_value:
+                dims.append(d.dim_value)
+            elif d.dim_param:
+                dims.append(d.dim_param)
+            else:
+                dims.append(None)
+        return dims
+
+    def get_shape_node_dim(shape_node):
+        """For Shape(x) with start/end attrs, return the single dim of x[start]."""
+        x_name = shape_node.input[0]
+        x_shape = get_shape(x_name)
+        if x_shape is None:
+            return None
+        start = 0
+        end = len(x_shape)
+        for attr in shape_node.attribute:
+            if attr.name == 'start':
+                start = attr.i
+            elif attr.name == 'end':
+                end = attr.i
+        if end - start != 1:
+            return None  # multi-element output, can't resolve to single dim
+        idx = start if start >= 0 else start + len(x_shape)
+        if 0 <= idx < len(x_shape):
+            return x_shape[idx]
+        return None
+
+    # Find Shape producers: output_name -> shape_node
+    shape_nodes = {}
+    for node in graph.node:
+        if node.op_type == 'Shape':
+            shape_nodes[node.output[0]] = node
+
+    # Symbol cache
+    symbol_map = {}
+
+    def get_symbol(name):
+        if name not in symbol_map:
+            symbol_map[name] = sympy.Symbol(name)
+        return symbol_map[name]
+
+    resolved = 0
+    node_list_snapshot = list(graph.node)
+    for node in node_list_snapshot:
+        if node.op_type != 'Reshape' or len(node.input) < 2:
+            continue
+        shape_input = node.input[1]
+        data_input = node.input[0]
+
+        # Find Concat producing shape_input
+        concat_node = None
+        for n2 in node_list_snapshot:
+            if n2.op_type == 'Concat' and shape_input in n2.output:
+                concat_node = n2
+                break
+        if concat_node is None:
+            continue
+
+        # Check for [-1] in Concat inputs
+        neg1_init_name = None
+        for inp in concat_node.input:
+            if inp in init_map:
+                arr = numpy_helper.to_array(init_map[inp])
+                if arr.size == 1 and arr.item() == -1:
+                    neg1_init_name = inp
+                    break
+        if neg1_init_name is None:
+            continue
+
+        # Get Reshape input shape
+        data_shape = get_shape(data_input)
+        if data_shape is None:
+            continue
+
+        # Build sympy expression for total elements (Reshape preserves count)
+        total = sympy.Integer(1)
+        for dim in data_shape:
+            if isinstance(dim, int):
+                total *= dim
+            elif isinstance(dim, str):
+                total *= get_symbol(dim)
+            else:
+                total = None
+                break
+        if total is None:
+            continue
+
+        # Build sympy expression for Concat known dims (excluding -1)
+        known_prod = sympy.Integer(1)
+        for inp in concat_node.input:
+            if inp == neg1_init_name:
+                continue
+            if inp in init_map:
+                arr = numpy_helper.to_array(init_map[inp])
+                if arr.size == 1:
+                    known_prod *= int(arr.item())
+                else:
+                    known_prod = None
+                    break
+            elif inp in shape_nodes:
+                dim = get_shape_node_dim(shape_nodes[inp])
+                if dim is None:
+                    known_prod = None
+                    break
+                if isinstance(dim, int):
+                    known_prod *= dim
+                elif isinstance(dim, str):
+                    known_prod *= get_symbol(dim)
+                else:
+                    known_prod = None
+                    break
+            else:
+                known_prod = None
+                break
+
+        if known_prod is None:
+            continue
+
+        # Compute -1 = total / known_prod
+        neg1_val = sympy.simplify(total / known_prod)
+        if not neg1_val.is_Integer:
+            print(f"  resolve_neg1: cannot resolve to integer for {node.name}: {neg1_val}")
+            continue
+
+        neg1_int = int(neg1_val)
+        print(f"  resolve_neg1: -1 = {neg1_int} for Reshape {node.name}")
+
+        # Create a NEW initializer for the resolved value, do NOT modify the
+        # original [-1] initializer because it may be shared by other consumers
+        # (e.g., ReduceMean with axes=[-1] meaning last axis).
+        new_init_name = f"{neg1_init_name}_resolved_{neg1_int}"
+        new_arr = np.array([neg1_int], dtype=np.int64)
+        new_init = numpy_helper.from_array(new_arr, name=new_init_name)
+        graph.initializer.append(new_init)
+        # Update only this Concat's input to use the new initializer
+        for i, inp in enumerate(concat_node.input):
+            if inp == neg1_init_name:
+                concat_node.input[i] = new_init_name
+                break
+        resolved += 1
+
+    if resolved:
+        print(f"  resolve_neg1: resolved {resolved} -1 values in Reshape shapes")
+    return model
+
+
+def quantize_weights_to_fp16(model):
+    """Convert FP32 weight initializers to FP16 (W16A32 pattern).
+
+    Targets: 2D initializers consumed by MatMul/Gemm, 3D/4D initializers consumed
+    by Conv/ConvTranspose. Skips 1D (bias/LayerNorm), istft/window, and scalars.
+
+    For each quantized weight, inserts a Cast(FP16->FP32) node before its consumer
+    so activations stay FP32 (A32) while storage is FP16 (W16).
+    """
+    graph = model.graph
+    WEIGHT_OPS = {'MatMul', 'Gemm', 'Conv', 'ConvTranspose'}
+
+    # Build consumer map: init_name -> set of consumer op types
+    init_consumers = {}
+    for node in graph.node:
+        for inp in node.input:
+            if not inp:
+                continue
+            init_consumers.setdefault(inp, set()).add(node.op_type)
+
+    # Classify initializers
+    init_map = {init.name: init for init in graph.initializer}
+    quantized = 0
+    skipped_skip = 0
+    skipped_nonweight = 0
+    total_params = 0
+
+    # Use stable index as key (protobuf id() reuse issue)
+    node_list_snapshot = list(graph.node)
+    cast_info_by_idx = {}  # node_idx -> (cast_node, weight_input_position, cast_output_name)
+    cast_idx = 0
+
+    for init in list(graph.initializer):
+        name = init.name
+        if name not in init_map:
+            continue
+        dims = list(init.dims)
+        # Skip istft/window related
+        if 'istft' in name.lower() or 'window' in name.lower():
+            skipped_skip += 1
+            continue
+        # Skip 1D (bias, LayerNorm) and scalars
+        if len(dims) <= 1:
+            skipped_nonweight += 1
+            continue
+        # Must be consumed by a weight-accepting op
+        consumers = init_consumers.get(name, set())
+        if not (consumers & WEIGHT_OPS):
+            skipped_nonweight += 1
+            continue
+
+        # Quantize to FP16
+        arr = numpy_helper.to_array(init).astype(np.float16)
+        new_init = numpy_helper.from_array(arr, name=name)
+        # Replace in graph.initializer (preserve position)
+        for i, existing in enumerate(graph.initializer):
+            if existing.name == name:
+                graph.initializer[i].CopyFrom(new_init)
+                break
+        total_params += arr.size
+        quantized += 1
+
+        # Find consumer nodes and prepare Cast insertions
+        for idx, node in enumerate(node_list_snapshot):
+            if name in node.input:
+                # Only insert Cast for weight-accepting ops
+                if node.op_type not in WEIGHT_OPS:
+                    continue
+                # Determine weight input position
+                if node.op_type == 'MatMul':
+                    # MatMul: input[1] is weight
+                    wpos = 1
+                elif node.op_type == 'Gemm':
+                    # Gemm: input[1] is weight (B)
+                    wpos = 1
+                elif node.op_type in ('Conv', 'ConvTranspose'):
+                    # Conv: input[1] is weight
+                    wpos = 1
+                else:
+                    continue
+                # Only insert if this node actually uses the weight at expected position
+                if node.input[wpos] != name:
+                    continue
+                cast_output = f"w16a32_cast_{cast_idx}_out"
+                cast_node_name = f"w16a32_cast_{cast_idx}"
+                cast_node = helper.make_node(
+                    'Cast', [name], [cast_output],
+                    name=cast_node_name, to=TensorProto.FLOAT
+                )
+                cast_info_by_idx[idx] = (cast_node, wpos, cast_output)
+                cast_idx += 1
+
+    # Apply Cast insertions using stable index.
+    # IMPORTANT: update node.input BEFORE rebuilding graph.node, because
+    # protobuf may invalidate node references after `del graph.node[:]`.
+    if cast_info_by_idx:
+        new_nodes = []
+        for idx, node in enumerate(node_list_snapshot):
+            if idx in cast_info_by_idx:
+                cast_node, wpos, cast_output = cast_info_by_idx[idx]
+                # Update the original node's weight input first
+                node.input[wpos] = cast_output
+                new_nodes.append(cast_node)
+            new_nodes.append(node)
+        # Rebuild node list
+        del graph.node[:]
+        graph.node.extend(new_nodes)
+
+    print(f"  quantize_weights_to_fp16: {quantized} weights quantized "
+          f"({total_params / 1e6:.1f}M params), "
+          f"{len(cast_info_by_idx)} Cast nodes inserted")
+    print(f"    Skipped: {skipped_skip} istft/window, {skipped_nonweight} bias/scalar")
+    return model
+
+
+def postprocess_onnx(input_path, output_path, fix_mixed_precision=False):
     print(f"\n  Post-processing: {os.path.basename(input_path)}")
     model = onnx.load(input_path)
     replace_stft(model)
@@ -364,6 +773,11 @@ def postprocess_onnx(input_path, output_path):
                 model = simplified
         except Exception as e:
             print(f"    onnxsim error: {e}")
+    # Fix mixed precision types (W16A32: re-insert Cast for FP16 weights after onnxsim)
+    if fix_mixed_precision:
+        model = fix_mixed_precision_types(model)
+        # Resolve -1 in Reshape shape Concat (DML EP doesn't support -1 in shape tensor)
+        model = resolve_neg1_in_reshape_shapes(model)
     model = strip_metadata(model)
     topological_sort(model.graph)
 
