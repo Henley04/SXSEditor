@@ -429,6 +429,9 @@ class OnnxSVSPipeline {
             );
             this.sessions[sessionKey] = session;
             this.sessionEPs[sessionKey] = ep;
+            // 回退到 default vocoder 后必须重新检测精度：sifigan fp16 → default vocoder fp32
+            // 的回退会改变模型精度，若不更新 vocoderIsFP16 会构造错误精度的输入张量。
+            await this._detectVocoderPrecision(session, defVocPath);
             console.log(`[OnnxSVSPipeline] Default vocoder loaded as SiFiGAN fallback [${ep}]`);
             return { success: true, ep };
         } catch (defErr) {
@@ -2339,6 +2342,13 @@ class OnnxSVSPipeline {
             this.sessions[sessionKey] = session;
             this.sessionEPs[sessionKey] = ep;
             console.log(`[OnnxSVSPipeline] Model ${sessionKey} loaded [${ep}]`);
+            // 关键修复：vocoder 加载成功后必须重新检测精度，否则 swapVocoder / swapSifiganPrecision /
+            // _recreateHeavySessionsAfterSynthesis / ensureAllModelsLoaded 等路径下 vocoderIsFP16 会保留
+            // init 时的 stale 值，导致 _runVocoderChunked 用错误精度构造输入张量，触发
+            // "Unexpected input data type. Actual: (tensor(float16)) , expected: (tensor(float))" 错误。
+            if (sessionKey === 'vocoder') {
+                await this._detectVocoderPrecision(session, modelPath);
+            }
             return { success: true, ep };
         } catch (err) {
             const fallbackPath = this._getNpuFallbackPath(resolvedFile);
@@ -2351,6 +2361,9 @@ class OnnxSVSPipeline {
                     this.sessions[sessionKey] = session;
                     this.sessionEPs[sessionKey] = ep;
                     console.log(`[OnnxSVSPipeline] Model ${sessionKey} loaded from fallback [${ep}]`);
+                    if (sessionKey === 'vocoder') {
+                        await this._detectVocoderPrecision(session, fallbackPath);
+                    }
                     return { success: true, ep };
                 } catch (fbErr) {
                     // NPU fallback 也失败 — SiFiGAN 回退默认 vocoder
