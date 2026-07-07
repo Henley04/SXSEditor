@@ -35,20 +35,21 @@ except ImportError:
 TARGET_OPSET = 20
 
 # Models to upgrade (FP16/W16A32 + production)
+# Output directly to original path (no _opset20 suffix), backup as .bak
 MODELS = [
     # W16A32 models
-    (r'onnx_models\fp16\diff_step_dml.onnx', 'diff_step_dml_opset20.onnx', True),
-    (r'onnx_models\fp16\vocoder_dml.onnx', 'vocoder_dml_opset20.onnx', True),
+    (r'onnx_models\fp16\diff_step_dml.onnx', True),
+    (r'onnx_models\fp16\vocoder_dml.onnx', True),
     # Production FP32 models
-    (r'onnx_models\diff_step_dml.onnx', 'diff_step_dml_opset20.onnx', False),
-    (r'onnx_models\vocoder_dml.onnx', 'vocoder_dml_opset20.onnx', False),
-    (r'onnx_models\preflow.onnx', 'preflow_opset20.onnx', False),
-    (r'onnx_models\mel_transform.onnx', 'mel_transform_opset20.onnx', False),
-    (r'onnx_models\cond_emb.onnx', 'cond_emb_opset20.onnx', False),
-    (r'onnx_models\f0_encoder.onnx', 'f0_encoder_opset20.onnx', False),
-    (r'onnx_models\note_pitch_encoder.onnx', 'note_pitch_encoder_opset20.onnx', False),
-    (r'onnx_models\note_text_encoder.onnx', 'note_text_encoder_opset20.onnx', False),
-    (r'onnx_models\note_type_encoder.onnx', 'note_type_encoder_opset20.onnx', False),
+    (r'onnx_models\diff_step_dml.onnx', False),
+    (r'onnx_models\vocoder_dml.onnx', False),
+    (r'onnx_models\preflow.onnx', False),
+    (r'onnx_models\mel_transform.onnx', False),
+    (r'onnx_models\cond_emb.onnx', False),
+    (r'onnx_models\f0_encoder.onnx', False),
+    (r'onnx_models\note_pitch_encoder.onnx', False),
+    (r'onnx_models\note_text_encoder.onnx', False),
+    (r'onnx_models\note_type_encoder.onnx', False),
 ]
 
 
@@ -154,22 +155,58 @@ def main():
     print("=" * 60)
 
     results = {}
-    for rel_path, out_name, has_ext in MODELS:
+    for rel_path, has_ext in MODELS:
         model_path = os.path.join(PROJECT_DIR, rel_path)
-        output_path = os.path.join(PROJECT_DIR, os.path.dirname(rel_path), out_name)
         if not os.path.exists(model_path):
             print(f"  SKIP (not found): {rel_path}")
             continue
 
-        upgraded = upgrade_opset(model_path, output_path, has_ext)
+        # Backup original as .bak
+        bak_path = model_path + '.bak'
+        if os.path.exists(bak_path):
+            os.remove(bak_path)
+        shutil.copy2(model_path, bak_path)
+        # Also backup external data if any
+        if has_ext:
+            data_path = model_path + '.data'
+            bak_data = bak_path + '.data'
+            if os.path.exists(data_path):
+                if os.path.exists(bak_data):
+                    os.remove(bak_data)
+                shutil.copy2(data_path, bak_data)
+
+        # Upgrade in-place (overwrite original)
+        upgraded = upgrade_opset(model_path, model_path, has_ext)
         if not upgraded:
+            # Restore from backup
+            shutil.move(bak_path, model_path)
+            if has_ext:
+                bak_data = bak_path + '.data'
+                data_path = model_path + '.data'
+                if os.path.exists(bak_data):
+                    if os.path.exists(data_path):
+                        os.remove(data_path)
+                    shutil.move(bak_data, data_path)
             continue
 
         # DML verification
-        ok, info = verify_dml(output_path, out_name, has_ext)
+        ok, info = verify_dml(model_path, os.path.basename(rel_path), has_ext)
         status = "DML OK" if ok else f"DML FAIL: {info}"
         print(f"    DML: {status}")
-        results[out_name] = ok
+        results[rel_path] = ok
+
+        if not ok:
+            # Restore from backup on DML failure
+            print(f"    Restoring from backup...")
+            os.remove(model_path)
+            shutil.move(bak_path, model_path)
+            if has_ext:
+                data_path = model_path + '.data'
+                bak_data = bak_path + '.data'
+                if os.path.exists(data_path):
+                    os.remove(data_path)
+                if os.path.exists(bak_data):
+                    shutil.move(bak_data, data_path)
 
     print(f"\n{'='*60}")
     print(f"Summary:")
