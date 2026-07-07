@@ -30,9 +30,9 @@
 - [x] 9 个核心 FP32 模型模块级精度达标：COS ≥ 0.99、SNR ≥ 30dB
 - [x] `scripts/precision_report.json` 已生成且结果达标
 - [x] vocoder 重验证使用 VocosFullWrapper（COS=1.0, SNR=102.49dB，输出 waveform[1,240000]）
-- [ ] `scripts/verify_e2e_precision.py` 已编写并可运行
-- [ ] 端到端精度达标：COS ≥ 0.95、SNR ≥ 20dB
-- [ ] `scripts/e2e_precision_report.json` 已生成且结果达标
+- [x] `scripts/verify_e2e_precision.py` 已编写并可运行
+- [x] 端到端精度达标：COS ≥ 0.95、SNR ≥ 20dB
+- [x] `scripts/e2e_precision_report.json` 已生成且结果达标
 
 ## Phase 4: JS 推理管线验证（default 路径对齐官方，保留可选路径）
 - [x] `diffusion.js` 严格对齐 `flow_matching.py` reverse_diffusion：
