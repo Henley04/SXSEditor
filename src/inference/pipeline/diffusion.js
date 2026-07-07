@@ -134,19 +134,16 @@ class Diffusion {
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
         // 条件分支 mask：所有帧均有效（含 prompt）
         const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
-        // 非条件分支 mask：prompt 段为 0，target 段为 1。
-        // 关键：uncond 推理 seq_len 必须与 cond 一致（=totalFramesWithPrompt），
-        // 否则基于 Transformer 的 diff_step 会对同一目标帧产生不同位置编码，
-        // 导致 DML 与 WebNN 路径输出系统性偏差。
-        const uncondMask = new Float32Array(totalFramesWithPrompt);
-        uncondMask.fill(0, 0, ptFrameCount);
-        uncondMask.fill(1, ptFrameCount, totalFramesWithPrompt);
-
+        // 非条件分支（target-only，对齐官方 PyTorch reverse_diffusion）：
+        // uncond 使用 target-only 序列（长度 = totalFrames，无 prompt 段），
+        // cond 为 target-only zeros，mask 为 target-only x_mask（全 1）。
+        // 官方：uncond_flow_pred = diff_estimator(xt, t, zeros_like(cond)[:, :xt.shape[1], :], x_mask)
+        const uncondMask = new Float32Array(totalFrames).fill(1);
         const xtInputBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
-        // uncond 输入：prompt 段为 0，target 段为 xt（与 cond 共享 seq_len 与位置编码）
-        const xtUncondBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
-        // 非条件 cond：全零（与 WebNN 路径一致）
-        const uncondCondBuf = new Float32Array(totalFramesWithPrompt * COND_DIM);
+        // uncond 输入：target-only 序列（无 prompt 段），直接从 0 开始填 xt
+        const xtUncondBuf = new Float32Array(totalFrames * MEL_DIM);
+        // 非条件 cond：target-only 全零
+        const uncondCondBuf = new Float32Array(totalFrames * COND_DIM);
         const cfgPredBuf = new Float32Array(totalFrames * MEL_DIM);
 
         // 预构建 cond/mask 张量（跨步不变，循环外构建一次，与 WebNN 路径对齐）
@@ -158,12 +155,14 @@ class Diffusion {
         };
         const condPadded = useStaticShapes ? padFloat(combinedCond, seqLen * COND_DIM) : combinedCond;
         const condMaskPadded = useStaticShapes ? padFloat(frameMask, seqLen) : frameMask;
-        const uncondCondPadded = useStaticShapes ? padFloat(uncondCondBuf, seqLen * COND_DIM) : uncondCondBuf;
-        const uncondMaskPadded = useStaticShapes ? padFloat(uncondMask, seqLen) : uncondMask;
+        // uncond 张量维度：target-only（useStaticShapes 时填充到 NPU_STATIC_SEQ_LEN）
+        const uncondSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+        const uncondCondPadded = useStaticShapes ? padFloat(uncondCondBuf, uncondSeqLen * COND_DIM) : uncondCondBuf;
+        const uncondMaskPadded = useStaticShapes ? padFloat(uncondMask, uncondSeqLen) : uncondMask;
         const condTensorCached = createFloatTensor(floatType, condPadded, [1, seqLen, COND_DIM]);
         const condMaskTensorCached = createFloatTensor(floatType, condMaskPadded, [1, seqLen]);
-        const uncondCondTensorCached = createFloatTensor(floatType, uncondCondPadded, [1, seqLen, COND_DIM]);
-        const uncondMaskTensorCached = createFloatTensor(floatType, uncondMaskPadded, [1, seqLen]);
+        const uncondCondTensorCached = createFloatTensor(floatType, uncondCondPadded, [1, uncondSeqLen, COND_DIM]);
+        const uncondMaskTensorCached = createFloatTensor(floatType, uncondMaskPadded, [1, uncondSeqLen]);
 
         const dt = 1.0 / totalSteps;
         const progressPerStep = progressRange / totalSteps;
@@ -180,10 +179,10 @@ class Diffusion {
                 const predData = await this._runDiffStepWithCachedTensors(sessions, xtInputBuf, tVal, condTensorCached, condMaskTensorCached, totalFramesWithPrompt, isFP16, useStaticShapes);
 
                 if (cfgStrength > 0) {
-                    // 构造 uncond 输入：prompt 段保持 0，target 段填入当前 xt
-                    xtUncondBuf.set(xt.data, ptFrameCount * MEL_DIM);
+                    // 构造 uncond 输入：target-only 序列，直接从 0 开始填 xt
+                    xtUncondBuf.set(xt.data, 0);
 
-                    const uncondPred = await this._runDiffStepWithCachedTensors(sessions, xtUncondBuf, tVal, uncondCondTensorCached, uncondMaskTensorCached, totalFramesWithPrompt, isFP16, useStaticShapes);
+                    const uncondPred = await this._runDiffStepWithCachedTensors(sessions, xtUncondBuf, tVal, uncondCondTensorCached, uncondMaskTensorCached, totalFrames, isFP16, useStaticShapes);
 
                     const targetLen = totalFrames * MEL_DIM;
                     // Pass 1 (merged): compute CFG pred + write cfgPredBuf + accumulate
@@ -197,7 +196,7 @@ class Diffusion {
                         const tgtOffset = (ptFrameCount + f) * MEL_DIM;
                         for (let d = 0; d < MEL_DIM; d++) {
                             const condVal = predData[tgtOffset + d];
-                            const uncondVal = uncondPred[tgtOffset + d];
+                            const uncondVal = uncondPred[f * MEL_DIM + d];
                             posSum += condVal;
                             posSumSq += condVal * condVal;
                             const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
@@ -218,8 +217,9 @@ class Diffusion {
                     }
 
                     // Pass 2: compute std/rescale + apply rescale + update xt
-                    const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
-                    const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
+                    // Bessel 校正（N-1 分母），对齐 PyTorch torch.std() 默认行为
+                    const posStd = Math.sqrt(posVarSum / (targetLen - 1) + 1e-8);
+                    const cfgAdjStd = Math.sqrt(cfgAdjVarSum / (targetLen - 1) + 1e-8);
                     const rescale = posStd / (cfgAdjStd + 1e-8);
 
                     for (let f = 0; f < totalFrames; f++) {

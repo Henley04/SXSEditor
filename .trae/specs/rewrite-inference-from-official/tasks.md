@@ -78,12 +78,13 @@
 
 ## Phase 3: 精度验证脚本（PyTorch vs FP32 ONNX）
 
-- [ ] Task 12: 编写模块级精度验证脚本 `scripts/verify_module_precision.py`
+- [x] Task 12: 编写模块级精度验证脚本 `scripts/verify_module_precision.py`
   - 对 9 个核心 FP32 模型分别对比 PyTorch 输出 vs ONNX (DML EP) 输出
   - 使用真实输入数据（从 `SoulX-Singer/example/` 提取）
   - 指标：MSE、RMSE、COS(cosine similarity)、SNR(dB)
   - 阈值：COS ≥ 0.99、SNR ≥ 30dB
   - 输出：`scripts/precision_report.json` + 控制台汇总表
+  - 全部 9 个模型 PASS：COS ≥ 0.999995, SNR ≥ 49.86dB（mel_transform/vocoder 达到极限精度）
 
 - [ ] Task 13: 编写端到端精度验证脚本 `scripts/verify_e2e_precision.py`
   - 对比 PyTorch `model.infer()` 完整流程 vs JS ONNX 管线产出的最终音频

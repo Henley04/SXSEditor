@@ -26,9 +26,9 @@
 - [x] **保留验证**：`onnx_models/fp16/`、`onnx_models/int8/` 子目录内容未被覆盖
 
 ## Phase 3: 精度验证
-- [ ] `scripts/verify_module_precision.py` 已编写并可运行
-- [ ] 9 个核心 FP32 模型模块级精度达标：COS ≥ 0.99、SNR ≥ 30dB
-- [ ] `scripts/precision_report.json` 已生成且结果达标
+- [x] `scripts/verify_module_precision.py` 已编写并可运行
+- [x] 9 个核心 FP32 模型模块级精度达标：COS ≥ 0.99、SNR ≥ 30dB
+- [x] `scripts/precision_report.json` 已生成且结果达标
 - [ ] `scripts/verify_e2e_precision.py` 已编写并可运行
 - [ ] 端到端精度达标：COS ≥ 0.95、SNR ≥ 20dB
 - [ ] `scripts/e2e_precision_report.json` 已生成且结果达标
