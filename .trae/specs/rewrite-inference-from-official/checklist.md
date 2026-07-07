@@ -15,15 +15,15 @@
 - [x] Git 提交记录显示清理已完成
 
 ## Phase 2: FP32 ONNX 导出验证
-- [ ] `export_shared.py` 已更新（直接 opset 20 导出，保留 FP16/量化工具函数）
-- [ ] `export_step1_diffstep.py` 导出 diff_step_dml.onnx（opset 20, FP32）
-- [ ] `export_step2_vocoder.py` 导出 vocoder_dml.onnx（opset 20, FP32, ConvTranspose 已分解）
-- [ ] `export_step3_postprocess.py` 导出其他 7 个模型（opset 20, FP32）
-- [ ] JP 模型导出脚本生成 4 个 JP 专属 ONNX 到 `onnx_models/JP/`
-- [ ] `export_pipeline.py` 编排脚本可一键执行全部导出
-- [ ] `calibrate/check_opset.py` 验证 `onnx_models/` 根目录下所有 ONNX opset = 20
-- [ ] 所有 FP32 ONNX 在 DML EP 上可加载、可推理（无 unsupported op）
-- [ ] **保留验证**：`onnx_models/fp16/`、`onnx_models/int8/` 子目录内容未被覆盖
+- [x] `export_shared.py` 已更新（直接 opset 20 导出，保留 FP16/量化工具函数）
+- [x] `export_step1_diffstep.py` 导出 diff_step_dml.onnx（opset 20, FP32）
+- [x] `export_step2_vocoder.py` 导出 vocoder_dml.onnx（opset 20, FP32, ConvTranspose 已分解）
+- [x] `export_step3_postprocess.py` 导出其他 7 个模型（opset 20, FP32）
+- [x] JP 模型导出脚本生成 4 个 JP 专属 ONNX 到 `onnx_models/JP/`
+- [x] `export_pipeline.py` 编排脚本可一键执行全部导出
+- [x] `calibrate/check_opset.py` 验证 `onnx_models/` 根目录下所有 ONNX opset = 20
+- [x] 所有 FP32 ONNX 在 DML EP 上可加载、可推理（无 unsupported op）
+- [x] **保留验证**：`onnx_models/fp16/`、`onnx_models/int8/` 子目录内容未被覆盖
 
 ## Phase 3: 精度验证
 - [ ] `scripts/verify_module_precision.py` 已编写并可运行
