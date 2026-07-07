@@ -29,35 +29,38 @@
 - [x] `scripts/verify_module_precision.py` 已编写并可运行
 - [x] 9 个核心 FP32 模型模块级精度达标：COS ≥ 0.99、SNR ≥ 30dB
 - [x] `scripts/precision_report.json` 已生成且结果达标
+- [x] vocoder 重验证使用 VocosFullWrapper（COS=1.0, SNR=102.49dB，输出 waveform[1,240000]）
 - [ ] `scripts/verify_e2e_precision.py` 已编写并可运行
 - [ ] 端到端精度达标：COS ≥ 0.95、SNR ≥ 20dB
 - [ ] `scripts/e2e_precision_report.json` 已生成且结果达标
 
 ## Phase 4: JS 推理管线验证（default 路径对齐官方，保留可选路径）
-- [ ] `diffusion.js` 严格对齐 `flow_matching.py` reverse_diffusion：
+- [x] `diffusion.js` 严格对齐 `flow_matching.py` reverse_diffusion：
   - t 调度为 `(i + 0.5) * h`
   - uncond 分支使用 target-only 序列（xt/cond/mask 均 target-only）
   - CFG rescale 使用 Bessel 校正（N-1 分母）+ 单 epsilon
   - rescale 混合公式 `rescale_cfg * rescaled + (1 - rescale_cfg) * cfg`
   - Euler 积分 `xt = xt + flow_pred * h`
-- [ ] `preprocessing.js` 对齐 `DataProcessor.preprocess`：
+- [x] `preprocessing.js` 对齐 `DataProcessor.preprocess`：
   - mel2note 帧分配公式 `inner = next_start - i - 2`，`p_start = i+1 + floor(p*inner/j)`
   - 英文 en_ 拆分 + SEP，日文 jp_ 拆分无 SEP
   - BOW/EOW 包裹每个 note
   - f0_shift 三处同步（f0Hz/f0Ids/notePitchSeq）
-- [ ] `index.js` default 路径对齐 `SoulXSinger.infer` 编排：
+- [x] `index.js` default 路径对齐 `SoulXSinger.infer` 编排：
   - auto_shift 计算（score: median 差；melody: log2 × 12）
   - f0_shift 应用：`f0_to_coarse(gt_f0, f0_shift*5)`、`note_pitch += f0_shift`
   - 序列拼接（prompt + target，mel2note 偏移 len_prompt）
   - encoder → diffusion → vocoder 流程正确
-- [ ] `postprocessing.js` default vocoder 路径对齐官方调用
-- [ ] **保留验证**：`constants.js` 未被修改（SiFiGAN/INT8 常量保留）
-- [ ] **保留验证**：`modelLoader.js` 未被修改（FP16/INT8/NPU 加载保留）
-- [ ] **保留验证**：`svsIpc.js` 未被修改（SiFiGAN/精度切换 IPC 保留）
-- [ ] **保留验证**：`diffusion.js` 中 FP16/static shapes 分支保留
-- [ ] **保留验证**：`preprocessing.js` 中 SiFiGAN 4× 上采样分支保留
-- [ ] **保留验证**：`postprocessing.js` 中 SiFiGAN 分支保留
-- [ ] **保留验证**：`index.js` 中 `swapVocoder`、`swapSifiganPrecision`、INT8/NPU 路径保留
+- [x] `postprocessing.js` default vocoder 路径对齐官方调用
+- [x] **保留验证**：`constants.js` 未被修改（SiFiGAN/INT8 常量保留）
+- [x] **保留验证**：`modelLoader.js` 未被修改（FP16/INT8/NPU 加载保留）
+- [x] **保留验证**：`src/main/` IPC 文件未被修改（SiFiGAN/精度切换 IPC 保留）
+- [x] **保留验证**：`diffusion.js` 中 FP16/static shapes 分支保留
+- [x] **保留验证**：`preprocessing.js` 中 SiFiGAN F0 输入分支保留
+- [x] **保留验证**：`postprocessing.js` 中 SiFiGAN 分支保留（4× 上采样 + 双输入）
+- [x] **保留验证**：`index.js` 中 `swapVocoder`、`swapSifiganPrecision`、INT8/NPU 路径保留
+- [x] **保留验证**：`export_shared.py` 中 `VocoderBackboneWrapper` 保留（INT8 量化脚本依赖）
+- [x] **保留验证**：`onnx_models/fp16/`、`onnx_models/int8/`、SiFiGAN 模型文件完整
 
 ## Phase 5: 集成与兼容性验证
 - [ ] 现有 `.sxssinger` 文件可正常加载（singerName、wavBase64、midiNotes、f0Data 完整）

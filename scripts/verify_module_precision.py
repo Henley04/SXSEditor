@@ -38,7 +38,10 @@ SOULX_DIR = os.path.join(PROJECT_DIR, 'SoulX-Singer')
 sys.path.insert(0, PROJECT_DIR)
 sys.path.insert(0, SOULX_DIR)
 
-from export_shared import load_config, load_model, clear_memory, DiffStepWrapper, VocoderBackboneWrapper
+from export_shared import (
+    load_config, load_model, clear_memory,
+    DiffStepWrapper, VocoderBackboneWrapper, VocosFullWrapper,
+)
 
 # ============================================================
 # Thresholds
@@ -386,10 +389,12 @@ def verify_diff_step(model, onnx_dir, seq_len, verbose=False):
 
 
 def verify_vocoder(model, onnx_dir, seq_len, verbose=False):
-    """Verify vocoder (Vocos backbone + ISTFTHead.out via VocoderBackboneWrapper).
+    """Verify vocoder (full Vocos: backbone + ISTFTHead via VocosFullWrapper).
 
-    Input: mel(1,T,128) float32. Output: spec(1,T,1922) float32.
-    ONNX was exported with static shape T=500 and ConvTranspose decomposition applied.
+    Input: mel(1,T,128) float32. Output: waveform(1, T*hop) float32.
+    ONNX was exported with static shape T=500 using VocosFullWrapper which
+    includes MatMul-based IDFT and manual overlap-add (DML-compatible).
+    PyTorch reference uses the same VocosFullWrapper (full ISTFT reconstruction).
     """
     name = 'vocoder'
     onnx_path = os.path.join(onnx_dir, 'vocoder_dml.onnx')
@@ -407,7 +412,7 @@ def verify_vocoder(model, onnx_dir, seq_len, verbose=False):
 
     onnx_out = sess.run(None, {input_name: mel_np})[0]
 
-    wrapper = VocoderBackboneWrapper(model.vocoder)
+    wrapper = VocosFullWrapper(model.vocoder).eval()
     with torch.no_grad():
         pt_out = wrapper(mel_torch)
 

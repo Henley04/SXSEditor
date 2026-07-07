@@ -85,6 +85,7 @@
   - 阈值：COS ≥ 0.99、SNR ≥ 30dB
   - 输出：`scripts/precision_report.json` + 控制台汇总表
   - 全部 9 个模型 PASS：COS ≥ 0.999995, SNR ≥ 49.86dB（mel_transform/vocoder 达到极限精度）
+  - **vocoder 重验证**：更新 verify_vocoder 使用 VocosFullWrapper（含完整 ISTFT 重建），输出 `waveform[1,240000]`，COS=1.000000, SNR=102.49dB
 
 - [ ] Task 13: 编写端到端精度验证脚本 `scripts/verify_e2e_precision.py`
   - 对比 PyTorch `model.infer()` 完整流程 vs JS ONNX 管线产出的最终音频
@@ -96,7 +97,7 @@
 
 ## Phase 4: 重写 JS 核心推理管线（default 路径，保留可选路径）
 
-- [ ] Task 14: 重写 `src/inference/pipeline/diffusion.js`（flow-matching 循环，共享逻辑）
+- [x] Task 14: 重写 `src/inference/pipeline/diffusion.js`（flow-matching 循环，共享逻辑）
   - 严格对齐 `flow_matching.py` L253-309 的 `reverse_diffusion`
   - `t = (i + 0.5) * h`，`h = 1.0 / totalSteps`
   - uncond 分支：xt target-only、cond zeros target-only、mask x_mask target-only
@@ -106,7 +107,7 @@
   - 保留：GPU drain、progress 回调、tensor 缓存优化、FP16 分支（SiFiGAN/W16A32 路径仍用）、static shapes 分支（NPU 路径仍用）
   - 此修正是共享逻辑，所有 vocoder/精度路径都受益
 
-- [ ] Task 15: 重写 `src/inference/pipeline/preprocessing.js`（编码器前向 + 音素帧分配，共享逻辑）
+- [x] Task 15: 重写 `src/inference/pipeline/preprocessing.js`（编码器前向 + 音素帧分配，共享逻辑）
   - `notesToSequences`：对齐 `DataProcessor.preprocess`
     - mel2note 帧分配：`inner_frames = next_start - i - 2`，线性分配 `p_start = i+1 + floor(p*inner/j)`
     - 英文 `en_` 拆分 + SEP，日文 `jp_` 拆分无 SEP
@@ -116,7 +117,7 @@
   - f0_shift 三处同步：`f0Hz`(vocoder)、`f0Ids`(diffusion cond)、`notePitchSeq`(encoder)
   - 保留：SiFiGAN 4× 上采样分支、FP16 分支、所有现有工程逻辑
 
-- [ ] Task 16: 重写 `src/inference/pipeline/index.js`（主管线编排，default 路径对齐官方）
+- [x] Task 16: 重写 `src/inference/pipeline/index.js`（主管线编排，default 路径对齐官方）
   - `synthesize` / `_synthesizeImpl`：default 路径对齐 `SoulXSinger.infer` 编排
     - auto_shift 计算（score: median 差；melody: log2 比值 × 12）
     - f0_shift = round(...) 后：`f0_to_coarse(gt_f0, f0_shift*5)`、`note_pitch += f0_shift`
@@ -127,13 +128,13 @@
   - 保留：`swapLanguageModels`（JP/base）、多 segment 合成、crossfade、synth cache、runLock 互斥
   - 保留：`_runVocoderChunked`（vocoder 分块工程逻辑）
 
-- [ ] Task 17: 重写 `src/inference/pipeline/postprocessing.js`（default vocoder 路径对齐官方）
+- [x] Task 17: 重写 `src/inference/pipeline/postprocessing.js`（default vocoder 路径对齐官方）
   - `runVocoderChunked` default vocoder 分支：对齐官方 `vocoder(generated_mel.transpose(1,2))` 调用
   - 保留 SiFiGAN 分支（vocoderType 判断、4× 上采样、f0 输入）不动
   - 保留：分块串行、GPU drain、validateVocoderOutput、流式回调
   - 保留：`extractRefMelOnnx`、`extractRefF0FromWavAsync`、重采样、WAV 解析
 
-- [ ] Task 18: 验证 SiFiGAN/INT8/NPU 路径未受影响
+- [x] Task 18: 验证 SiFiGAN/INT8/NPU 路径未受影响
   - 确认 `constants.js`、`modelLoader.js`、`svsIpc.js` 未被修改（或仅最小改动）
   - 确认 SiFiGAN vocoder 切换正常工作
   - 确认 INT8/INT8-NPU 精度切换正常工作
