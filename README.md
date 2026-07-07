@@ -25,6 +25,10 @@ SXSEditor is an open-source desktop application for singing voice synthesis. It 
 
 Supported singing languages: **English** and **Chinese (Mandarin)**. Japanese is in development.
 
+### Attentions
+
+SXSEditor is development, model precision, functions, quality and performance may differ rapidly.
+
 ### Download
 
 **Windows** (models auto-downloaded on first launch):
