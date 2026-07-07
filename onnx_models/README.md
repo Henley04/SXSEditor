@@ -4,29 +4,42 @@ SoulX-Singer 模型转换为 ONNX 格式，用于非 PyTorch 环境的推理部�
 
 ## 导出模型
 
-### SoulXSinger 模型 (`onnx_models/`)
+### 默认主路径（FP32 opset 20, DML 兼容）
+
+**导出脚本:** `export_pipeline.py`（一键导出全部 13 个模型）
+**精度验证:** `scripts/verify_module_precision.py`（模块级）, `scripts/verify_e2e_precision.py`（端到端）
+
+#### SoulXSinger 基础模型 (`onnx_models/`, 9 个 FP32 opset 20)
 
 | 模型文件 | 输入 | 输出 | 说明 |
 |---------|------|------|------|
-| `note_text_encoder.onnx` | `(batch, seq_len)` Long | `(batch, seq_len, embed_dim)` | 文本嵌入 |
-| `note_pitch_encoder.onnx` | `(batch, seq_len)` Long | `(batch, seq_len, embed_dim)` | 音高嵌入 |
-| `note_type_encoder.onnx` | `(batch, seq_len)` Long | `(batch, seq_len, embed_dim)` | 音符类型嵌入 |
-| `f0_encoder.onnx` | `(batch, seq_len)` Long | `(batch, seq_len, embed_dim)` | F0 轮廓嵌入 |
-| `preflow.onnx` | `(batch, seq_len, text_dim)` Float | `(batch, seq_len, text_dim)` Float | 预处理流 |
-| `mel_transform.onnx` | `(batch, num_samples)` Float | `(batch, seq_len, mel_bins)` Float | 音频转梅尔频谱 |
-| `vocoder.onnx` | `(batch, seq_len, mel_dim)` Float | `(batch, num_samples)` Float | 梅尔频谱转波形 |
-| `cond_emb.onnx` | `(batch, seq_len, cond_emb_dim)` Float | `(batch, seq_len, hidden_size)` Float | 条件嵌入 |
-| `diff_step.onnx` | `xt_input, t, cond, xt_mask` | `(batch, seq_len, mel_dim)` Float | 扩散步骤预测 |
+| `note_text_encoder.onnx` | `(1, 100)` int64 | `(1, 100, 512)` float32 | 文本嵌入（静态形状） |
+| `note_pitch_encoder.onnx` | `(1, 100)` int64 | `(1, 100, 512)` float32 | 音高嵌入 |
+| `note_type_encoder.onnx` | `(1, 100)` int64 | `(1, 100, 512)` float32 | 音符类型嵌入 |
+| `f0_encoder.onnx` | `(1, 200)` int64 | `(1, 200, 512)` float32 | F0 轮廓嵌入 |
+| `preflow.onnx` | `(1, 100, 512)` float32 | `(1, 100, 512)` float32 | 预处理流（ConvNeXtV2） |
+| `mel_transform.onnx` | `(1, 24000)` float32 | `(1, 50, 128)` float32 | 音频转梅尔频谱（STFT→Conv） |
+| `cond_emb.onnx` | `(1, 100, 512)` float32 | `(1, 100, 1024)` float32 | 条件嵌入（nn.Linear） |
+| `diff_step_dml.onnx` | `xt_input(1,2048,128), t(1), cond(1,2048,512), xt_mask(1,2048)` | `(1, 2048, 128)` float32 | flow-matching 步骤预测（DiffLlama + 内嵌 cond_emb） |
+| `vocoder_dml.onnx` | `(1, 500, 128)` float32 | `(1, 240000)` float32 `waveform` | 梅尔频谱转波形（VocosFullWrapper：MatMul IDFT + manual overlap-add） |
 
-### SVC 模型 (`onnx_models/svc/`)
+#### JP 日文模型 (`onnx_models/JP/`, 4 个 FP32 opset 20)
 
-| 模型文件 | 输入 | 输出 | 说明 |
-|---------|------|------|------|
-| `f0_encoder_svc.onnx` | `(batch, seq_len)` Long | `(batch, seq_len, embed_dim)` | F0 嵌入 (SVC专用) |
-| `mel_transform.onnx` | `(batch, num_samples)` Float | `(batch, seq_len, mel_bins)` Float | 音频转梅尔频谱 |
-| `vocoder.onnx` | `(batch, seq_len, mel_dim)` Float | `(batch, num_samples)` Float | 梅尔频谱转波形 |
-| `cond_emb.onnx` | `(batch, seq_len, cond_emb_dim)` Float | `(batch, seq_len, hidden_size)` Float | 条件嵌入 |
-| `diff_step.onnx` | `xt_input, t, cond, xt_mask` | `(batch, seq_len, mel_dim)` Float | 扩散步骤预测 |
+| 模型文件 | 说明 |
+|---------|------|
+| `note_text_encoder.onnx` | 日文扩展音素嵌入 |
+| `preflow.onnx` | 日文微调预处理流 |
+| `cond_emb.onnx` | 日文条件嵌入 |
+| `diff_step_dml.onnx` | 日文微调 flow-matching 步骤预测 |
+
+### 可选精度路径
+
+| 路径 | 目录 | 说明 |
+|------|------|------|
+| FP32 主路径 | `onnx_models/` | 默认，opset 20，DML 兼容 |
+| W16A32 | `onnx_models/fp16/` | FP16 权重 + FP32 激活（`export_step2_vocoder_w16a32.py` 等） |
+| INT8 | `onnx_models/int8/` | W8A8 量化（`quantize_w8a8_v2.py`） |
+| INT8-NPU | `onnx_models/int8/optimized_npu/` | NPU 静态形状优化（`optimize_npu_int8.py`） |
 
 ## SiFiGAN Vocoder
 
@@ -168,27 +181,54 @@ session.Run(Ort::RunOptions{nullptr},
 - **n_fft**: 1920
 - **win_length**: 1920
 - **num_mels**: 128
-- **mel_dim**: 100
+- **mel_dim**: 128
 - **hidden_size**: 1024
+- **opset 版本**: 20（FP32 主路径，DML 兼容最大值）
 
 ## 注意事项
 
-1. **vocoder.onnx**: 使用 `torch-istft-onnx` 实现，支持复数 ISTFT 操作
-2. **动态轴**: 所有模型支持动态 batch_size 和 seq_len
-3. **数据类型**: 输入输出均为 Float32 类型
-4. **WhisperEncoder**: 未导出（SVC 模型的 whisper 编码器无法导出到 ONNX）
+1. **vocoder_dml.onnx**: 使用 `VocosFullWrapper` 导出，包含完整 ISTFT 重建（MatMul IDFT + manual overlap-add），输出名为 `waveform`（非旧版的 `spec`）
+2. **静态形状**: FP32 主路径模型使用静态形状（dynamo=True 导出），不支持动态 batch_size/seq_len
+3. **数据类型**: 输入输出均为 Float32 类型（除 note_*_encoder/f0_encoder 输入为 int64）
+4. **diff_step_dml.onnx**: 内嵌 cond_emb（DiffStepWrapper），输入 cond 为 512 维 cond_code，非 1024 维 cond_embedding
+5. **DML 兼容**: 所有 FP32 主路径模型不包含 STFT/DFT/ConvTranspose(stride>1)/Col2Im 等 DML 不支持算子
+6. **opset 20**: 使用 ONNX opset 20（DML EP 支持的最大版本），改进 Cast 算子和内核选择
+
+## 精度验证
+
+### 模块级精度（9 个 FP32 模型 vs PyTorch 子模块）
+
+```powershell
+python scripts/verify_module_precision.py --verbose
+```
+
+阈值: COS ≥ 0.99, SNR ≥ 30dB（mel_transform/vocoder 放宽至 COS ≥ 0.95, SNR ≥ 25dB）
+报告: `scripts/precision_report.json`
+
+### 端到端精度（PyTorch model.infer vs ONNX 管线复现）
+
+```powershell
+python scripts/verify_e2e_precision.py --verbose
+```
+
+阈值: COS ≥ 0.95, SNR ≥ 20dB
+报告: `scripts/e2e_precision_report.json`
 
 ## 依赖
 
-- onnxruntime >= 1.17
+- onnxruntime >= 1.17（推荐 1.27+）
 - numpy >= 1.23
+- torch >= 2.6（导出脚本需要 dynamo 支持）
 
 ## 导出命令
 
-```bash
-python convert_to_onnx.py --model-type both
-```
+```powershell
+# 一键导出全部 FP32 opset 20 模型（13 个，约 5 分钟）
+python export_pipeline.py
 
-- `--model-type soulx`: 仅导出 SoulXSinger 模型
-- `--model-type svc`: 仅导出 SVC 模型
-- `--model-type both`: 导出两个模型（默认）
+# 单步导出
+python export_step1_diffstep.py    # diff_step_dml.onnx
+python export_step2_vocoder.py     # vocoder_dml.onnx (full ISTFT)
+python export_step3_postprocess.py # 其他 7 个基础模型
+python export_step4_jp.py          # 4 个 JP 模型
+```
