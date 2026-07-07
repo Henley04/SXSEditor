@@ -210,8 +210,8 @@ class Diffusion {
                             cfgAdjSumSq += cfgVal * cfgVal;
                         }
                     }
-                    const posVarSum = posSumSq - posSum * posSum / targetLen;
-                    const cfgAdjVarSum = cfgAdjSumSq - cfgAdjSum * cfgAdjSum / targetLen;
+                    const posVarSum = Math.max(0, posSumSq - posSum * posSum / targetLen);
+                    const cfgAdjVarSum = Math.max(0, cfgAdjSumSq - cfgAdjSum * cfgAdjSum / targetLen);
 
                     // 长片段时 pass 之间 yield 一次，避免单步内 2 次 totalFrames*MEL_DIM
                     // 循环累积阻塞主线程（2000 frames × 128 = 256k 迭代/pass）
