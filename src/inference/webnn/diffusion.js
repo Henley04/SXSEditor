@@ -204,10 +204,10 @@ export async function runDiffusionLoop({
                 const cd = cfgPredBuf[i] - cfgAdjMean;
                 cfgAdjVarSum += cd * cd;
             }
-            // CFG rescale epsilon 公式与 DML 路径 (pipeline/diffusion.js:145-147) 及
-            // WebNN 批量路径 (本文件 :440-442) 保持一致：方差内加 epsilon 再开方，外层除以 (std+epsilon)。
-            const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
-            const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
+            // 对齐官方 PyTorch torch.std() (unbiased, N-1) 和 DML 路径：
+            // 分母用 N-1（贝塞尔修正），epsilon 仅在分母除零保护（不在 sqrt 内）。
+            const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
+            const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
             const rescale = posStd / (cfgAdjStd + 1e-8);
             for (let i = 0; i < targetLen; i++) {
                 const cfgVal = cfgPredBuf[i];
@@ -474,8 +474,8 @@ export async function runBatchDiffusionLoop({
                     cfgAdjVarSum += cd * cd;
                 }
             }
-            const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
-            const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
+            const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
+            const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
             const rescale = posStd / (cfgAdjStd + 1e-8);
 
             for (let f = 0; f < s.totalFrames; f++) {
