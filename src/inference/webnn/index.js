@@ -54,6 +54,7 @@ async function _runSynthesisUnlocked(params) {
         onProgress,
         onChunkComplete = null,
         skipVocoder = false,
+        promptSeq = null,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
@@ -79,7 +80,7 @@ async function _runSynthesisUnlocked(params) {
     if (onProgress) onProgress(10);
     const tEnc0 = performance.now();
     const { combinedCond, totalCondFrames, totalFramesWithPrompt } = await runEncoderStage({
-        sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes,
+        sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes, promptSeq,
     });
 
     // ===== Stage 2: Diffusion Loop =====
@@ -168,15 +169,40 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
     const segData = [];
 
     for (const params of paramsArray) {
-        const { sequences, tokenCount, totalFrames, ptMelData, ptFrameCount } = params;
+        const { sequences, tokenCount, totalFrames, ptMelData, ptFrameCount, promptSeq: batchPromptSeq } = params;
 
-        const phonemeIds = new BigInt64Array(sequences.noteTextSeq.map(v => BigInt(v)));
-        const pitchIds = new BigInt64Array(sequences.notePitchSeq.map(v => BigInt(v)));
-        const typeIds = new BigInt64Array(sequences.noteTypeSeq.map(v => BigInt(v)));
-        const f0IdsArr = new BigInt64Array(sequences.f0Ids.map(v => BigInt(v)));
+        // P1 fix: Merge prompt + target token sequences when promptSeq is available
+        const hasPrompt = batchPromptSeq && ptFrameCount > 0 && batchPromptSeq.tokenCount > 0;
+        const ptTokenCount = hasPrompt ? batchPromptSeq.tokenCount : 0;
+        const combinedTokenCount = ptTokenCount + tokenCount;
+        const combinedFrames = ptFrameCount + totalFrames;
 
-        const bEncSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
-        const bEncF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+        const phonemeIds = new BigInt64Array(combinedTokenCount);
+        const pitchIds = new BigInt64Array(combinedTokenCount);
+        const typeIds = new BigInt64Array(combinedTokenCount);
+        const f0IdsArr = new BigInt64Array(combinedFrames);
+
+        if (hasPrompt) {
+            for (let i = 0; i < ptTokenCount; i++) {
+                phonemeIds[i] = BigInt(batchPromptSeq.noteTextSeq[i]);
+                pitchIds[i] = BigInt(batchPromptSeq.notePitchSeq[i]);
+                typeIds[i] = BigInt(batchPromptSeq.noteTypeSeq[i]);
+            }
+            for (let i = 0; i < ptFrameCount; i++) {
+                f0IdsArr[i] = BigInt(batchPromptSeq.f0Ids[i]);
+            }
+        }
+        for (let i = 0; i < tokenCount; i++) {
+            phonemeIds[ptTokenCount + i] = BigInt(sequences.noteTextSeq[i]);
+            pitchIds[ptTokenCount + i] = BigInt(sequences.notePitchSeq[i]);
+            typeIds[ptTokenCount + i] = BigInt(sequences.noteTypeSeq[i]);
+        }
+        for (let i = 0; i < totalFrames; i++) {
+            f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
+        }
+
+        const bEncSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedTokenCount;
+        const bEncF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedFrames;
         const bEncText = useStaticShapes ? padInt64ToLength(phonemeIds, bEncSeqLen) : phonemeIds;
         const bEncPitch = useStaticShapes ? padInt64ToLength(pitchIds, bEncSeqLen) : pitchIds;
         const bEncType = useStaticShapes ? padInt64ToLength(typeIds, bEncSeqLen) : typeIds;
@@ -189,15 +215,15 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
             runSession('f0Encoder', { input_ids: new ort.Tensor('int64', bEncF0, [1, bEncF0Len]) }),
         ]);
 
-        const textEmb = useStaticShapes ? trimOutputToLength(textResults['embeddings'], tokenCount) : outputToFloat32(textResults['embeddings']);
-        const pitchEmb = useStaticShapes ? trimOutputToLength(pitchResults['embeddings'], tokenCount) : outputToFloat32(pitchResults['embeddings']);
-        const typeEmb = useStaticShapes ? trimOutputToLength(typeResults['embeddings'], tokenCount) : outputToFloat32(typeResults['embeddings']);
+        const textEmb = useStaticShapes ? trimOutputToLength(textResults['embeddings'], combinedTokenCount) : outputToFloat32(textResults['embeddings']);
+        const pitchEmb = useStaticShapes ? trimOutputToLength(pitchResults['embeddings'], combinedTokenCount) : outputToFloat32(pitchResults['embeddings']);
+        const typeEmb = useStaticShapes ? trimOutputToLength(typeResults['embeddings'], combinedTokenCount) : outputToFloat32(typeResults['embeddings']);
         // f0Emb 需在后续 condCodeData 构建中使用，且 dispose f0 张量前需独立拷贝
-        const f0EmbRaw = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], totalFrames) : outputToFloat32(f0Results['embeddings']);
+        const f0EmbRaw = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], combinedFrames) : outputToFloat32(f0Results['embeddings']);
         const f0Emb = f0EmbRaw.slice();
 
-        const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
-        for (let t = 0; t < tokenCount; t++) {
+        const tokenEmb = new Float32Array(combinedTokenCount * EMBED_DIM);
+        for (let t = 0; t < combinedTokenCount; t++) {
             for (let d = 0; d < EMBED_DIM; d++) {
                 tokenEmb[t * EMBED_DIM + d] =
                     textEmb[t * EMBED_DIM + d] +
@@ -211,20 +237,30 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
         disposeTensor(typeResults['embeddings']);
         disposeTensor(f0Results['embeddings']);
 
-        const bPreflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
+        const bPreflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedTokenCount;
         const bPreflowTokenEmb = useStaticShapes ? padToLength(tokenEmb, bPreflowSeqLen * EMBED_DIM) : tokenEmb;
         const featuresTensor = createFloatTensor(floatType, bPreflowTokenEmb, [1, bPreflowSeqLen, EMBED_DIM]);
         const preflowResults = await runSession('preflow', { features: featuresTensor });
-        const processedTokenEmb = useStaticShapes ? trimOutputToLength(preflowResults['processed_features'], tokenCount) : outputToFloat32(preflowResults['processed_features']);
+        const processedTokenEmb = useStaticShapes ? trimOutputToLength(preflowResults['processed_features'], combinedTokenCount) : outputToFloat32(preflowResults['processed_features']);
         disposeTensor(featuresTensor);
 
-        const mel2token = sequences.mel2token;
-        const totalCondFrames = ptFrameCount > 0 ? ptFrameCount + totalFrames : totalFrames;
-        const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
+        // Build combined mel2token
+        const combinedMel2token = new Int32Array(combinedFrames);
+        if (hasPrompt) {
+            for (let f = 0; f < ptFrameCount; f++) {
+                combinedMel2token[f] = batchPromptSeq.mel2token[f];
+            }
+        }
         for (let f = 0; f < totalFrames; f++) {
-            const tokenIdx = mel2token[f];
+            combinedMel2token[ptFrameCount + f] = ptTokenCount + sequences.mel2token[f];
+        }
+
+        const totalCondFrames = combinedFrames;
+        const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
+        for (let f = 0; f < combinedFrames; f++) {
+            const tokenIdx = combinedMel2token[f];
             for (let d = 0; d < EMBED_DIM; d++) {
-                condCodeData[(ptFrameCount + f) * EMBED_DIM + d] =
+                condCodeData[f * EMBED_DIM + d] =
                     processedTokenEmb[tokenIdx * EMBED_DIM + d] + f0Emb[f * EMBED_DIM + d];
             }
         }

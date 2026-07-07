@@ -18,20 +18,46 @@ import { createFloatTensor, outputToFloat32, padInt64ToLength, padToLength, trim
  * @param {string} params.floatType - 'float32' 或 'float16'
  * @returns {{ combinedCond: Float32Array, totalCondFrames: number, totalFramesWithPrompt: number }}
  */
-export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes = false }) {
+export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes = false, promptSeq = null }) {
     await ensureOrt();
     const ort = getOrt();
 
     const tEnc0 = performance.now();
 
-    const phonemeIds = new BigInt64Array(sequences.noteTextSeq.map(v => BigInt(v)));
-    const pitchIds = new BigInt64Array(sequences.notePitchSeq.map(v => BigInt(v)));
-    const typeIds = new BigInt64Array(sequences.noteTypeSeq.map(v => BigInt(v)));
-    const f0IdsArr = new BigInt64Array(sequences.f0Ids.map(v => BigInt(v)));
+    // P1 fix: When promptSeq is provided, merge prompt + target token sequences
+    // so the prompt section of cond has full encoder features (text+pitch+type+preflow+f0).
+    const hasPrompt = promptSeq && ptFrameCount > 0 && promptSeq.tokenCount > 0;
+    const ptTokenCount = hasPrompt ? promptSeq.tokenCount : 0;
+    const combinedTokenCount = ptTokenCount + tokenCount;
+    const combinedFrames = ptFrameCount + totalFrames;
+
+    const phonemeIds = new BigInt64Array(combinedTokenCount);
+    const pitchIds = new BigInt64Array(combinedTokenCount);
+    const typeIds = new BigInt64Array(combinedTokenCount);
+    const f0IdsArr = new BigInt64Array(combinedFrames);
+
+    if (hasPrompt) {
+        for (let i = 0; i < ptTokenCount; i++) {
+            phonemeIds[i] = BigInt(promptSeq.noteTextSeq[i]);
+            pitchIds[i] = BigInt(promptSeq.notePitchSeq[i]);
+            typeIds[i] = BigInt(promptSeq.noteTypeSeq[i]);
+        }
+        for (let i = 0; i < ptFrameCount; i++) {
+            f0IdsArr[i] = BigInt(promptSeq.f0Ids[i]);
+        }
+    }
+    for (let i = 0; i < tokenCount; i++) {
+        phonemeIds[ptTokenCount + i] = BigInt(sequences.noteTextSeq[i]);
+        pitchIds[ptTokenCount + i] = BigInt(sequences.notePitchSeq[i]);
+        typeIds[ptTokenCount + i] = BigInt(sequences.noteTypeSeq[i]);
+    }
+    for (let i = 0; i < totalFrames; i++) {
+        f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
+    }
     const tEncPrep = performance.now();
 
-    const encSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
-    const encF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+    const encSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedTokenCount;
+    const encF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedFrames;
 
     const encPaddedText = useStaticShapes ? padInt64ToLength(phonemeIds, encSeqLen) : phonemeIds;
     const encPaddedPitch = useStaticShapes ? padInt64ToLength(pitchIds, encSeqLen) : pitchIds;
@@ -47,22 +73,19 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
         runSession('f0Encoder', { input_ids: new ort.Tensor('int64', encPaddedF0, [1, encF0Len]) }),
     ]);
     const encInferMs = performance.now() - t4;
-    console.log(`[WebNN] 4 encoders (parallel): ${encInferMs.toFixed(0)}ms [tokens=${tokenCount}, f0Frames=${totalFrames}${useStaticShapes ? ', NPU static' : ''}]`);
+    console.log(`[WebNN] 4 encoders (parallel): ${encInferMs.toFixed(0)}ms [tokens=${combinedTokenCount}, f0Frames=${combinedFrames}${useStaticShapes ? ', NPU static' : ''}]`);
     console.log(`[WebNN]   enc prep: ${(t4 - tEncPrep).toFixed(1)}ms, infer: ${encInferMs.toFixed(1)}ms`);
 
     const tEncPost = performance.now();
-    // 提取 4 个编码器输出。float32 路径下 outputToFloat32/trimOutputToLength 返回张量数据的视图，
-    // 在 dispose 张量前必须将所需数据拷贝到独立数组。此处先取视图用于 combine，combine 完成后即可释放。
-    const textEmb = useStaticShapes ? trimOutputToLength(textResults['embeddings'], tokenCount) : outputToFloat32(textResults['embeddings']);
-    const pitchEmb = useStaticShapes ? trimOutputToLength(pitchResults['embeddings'], tokenCount) : outputToFloat32(pitchResults['embeddings']);
-    const typeEmb = useStaticShapes ? trimOutputToLength(typeResults['embeddings'], tokenCount) : outputToFloat32(typeResults['embeddings']);
-    // f0Emb 需要返回给调用方，取独立拷贝（slice）以确保后续 dispose f0 张量后仍可用
-    const f0EmbRaw = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], totalFrames) : outputToFloat32(f0Results['embeddings']);
+    const textEmb = useStaticShapes ? trimOutputToLength(textResults['embeddings'], combinedTokenCount) : outputToFloat32(textResults['embeddings']);
+    const pitchEmb = useStaticShapes ? trimOutputToLength(pitchResults['embeddings'], combinedTokenCount) : outputToFloat32(pitchResults['embeddings']);
+    const typeEmb = useStaticShapes ? trimOutputToLength(typeResults['embeddings'], combinedTokenCount) : outputToFloat32(typeResults['embeddings']);
+    const f0EmbRaw = useStaticShapes ? trimOutputToLength(f0Results['embeddings'], combinedFrames) : outputToFloat32(f0Results['embeddings']);
     const f0Emb = f0EmbRaw.slice();
 
     // Combine token embeddings
-    const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
-    for (let t = 0; t < tokenCount; t++) {
+    const tokenEmb = new Float32Array(combinedTokenCount * EMBED_DIM);
+    for (let t = 0; t < combinedTokenCount; t++) {
         for (let d = 0; d < EMBED_DIM; d++) {
             tokenEmb[t * EMBED_DIM + d] =
                 textEmb[t * EMBED_DIM + d] +
@@ -80,25 +103,36 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
 
     // Preflow
     const tpf = performance.now();
-    const preflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
+    const preflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedTokenCount;
     const preflowTokenEmb = useStaticShapes ? padToLength(tokenEmb, preflowSeqLen * EMBED_DIM) : tokenEmb;
     const featuresTensor = createFloatTensor(floatType, preflowTokenEmb, [1, preflowSeqLen, EMBED_DIM]);
     const preflowResults = await runSession('preflow', { features: featuresTensor });
-    const processedTokenEmb = useStaticShapes ? trimOutputToLength(preflowResults['processed_features'], tokenCount) : outputToFloat32(preflowResults['processed_features']);
+    const processedTokenEmb = useStaticShapes ? trimOutputToLength(preflowResults['processed_features'], combinedTokenCount) : outputToFloat32(preflowResults['processed_features']);
     // 释放 preflow 输入张量
     disposeTensor(featuresTensor);
-    console.log(`[WebNN] preflow: ${(performance.now() - tpf).toFixed(0)}ms [${tokenCount}tokens × ${EMBED_DIM}${useStaticShapes ? ', NPU static' : ''}]`);
+    console.log(`[WebNN] preflow: ${(performance.now() - tpf).toFixed(0)}ms [${combinedTokenCount}tokens × ${EMBED_DIM}${useStaticShapes ? ', NPU static' : ''}]`);
 
-    // Expand and combine with f0
-    const tExpand = performance.now();
-    const mel2token = sequences.mel2token;
-    const totalCondFrames = ptFrameCount > 0 ? ptFrameCount + totalFrames : totalFrames;
-    const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
+    // Build combined mel2token: prompt frames → prompt token indices (unchanged),
+    // target frames → target token indices shifted by ptTokenCount
+    const combinedMel2token = new Int32Array(combinedFrames);
+    if (hasPrompt) {
+        for (let f = 0; f < ptFrameCount; f++) {
+            combinedMel2token[f] = promptSeq.mel2token[f];
+        }
+    }
     for (let f = 0; f < totalFrames; f++) {
-        const tokenIdx = mel2token[f];
+        combinedMel2token[ptFrameCount + f] = ptTokenCount + sequences.mel2token[f];
+    }
+
+    // Expand and combine with f0: all frames (prompt + target) have real encoder features
+    const tExpand = performance.now();
+    const totalCondFrames = combinedFrames;
+    const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
+    for (let f = 0; f < combinedFrames; f++) {
+        const tokenIdx = combinedMel2token[f];
         for (let d = 0; d < EMBED_DIM; d++) {
             const combined = processedTokenEmb[tokenIdx * EMBED_DIM + d] + f0Emb[f * EMBED_DIM + d];
-            condCodeData[(ptFrameCount + f) * EMBED_DIM + d] = combined;
+            condCodeData[f * EMBED_DIM + d] = combined;
         }
     }
     console.log(`[WebNN]   expand+combine (mel2token+f0): ${(performance.now() - tExpand).toFixed(1)}ms [${totalCondFrames}condFrames]`);

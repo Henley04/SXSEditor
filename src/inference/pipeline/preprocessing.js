@@ -357,6 +357,145 @@ class Preprocessing {
         };
     }
 
+    // Convert prompt notes (from singer reference audio) to token sequences
+    // matching the format expected by runEncoder. The prompt notes are the
+    // reference audio's MIDI annotations with lyric text, providing the same
+    // encoder features (text/pitch/type/F0) that official SoulX-Singer uses
+    // for the prompt section of the diffusion cond.
+    buildPromptSequences(promptNotes, ptFrameCount) {
+        const PAD_ID = this.textProcessing.phone2idx['<PAD>'] || 0;
+        const BOW_ID = this.textProcessing.phone2idx['<BOW>'] || 4;
+        const EOW_ID = this.textProcessing.phone2idx['<EOW>'] || 5;
+        const SEP_ID = this.textProcessing.phone2idx['<SEP>'] || 9;
+
+        const newPhonemes = [PAD_ID];
+        const notePitches = [0];
+        const noteTypes = [1];
+        const phLocations = [];
+        let durSum = 0;
+
+        for (let phIdx = 0; phIdx < promptNotes.length; phIdx++) {
+            const note = promptNotes[phIdx];
+            const lyric = note.lyric || '';
+            const pitch = note.pitch;
+            const duration = note.duration || 0.25;
+            let noteType;
+            if (note.isSlur || note.isContinuation) {
+                noteType = 3;
+            } else if (lyric.trim().length === 0) {
+                noteType = 1;
+            } else {
+                noteType = 2;
+            }
+
+            let dur = Math.round(durSum * SAMPLE_RATE / HOP_SIZE);
+            dur = Math.min(dur, ptFrameCount - 1);
+
+            newPhonemes.push(BOW_ID);
+            notePitches.push(pitch);
+            noteTypes.push(noteType);
+
+            if (lyric.startsWith('en_') && lyric.includes('-')) {
+                const subParts = lyric.slice(3).split('-');
+                const enPhIds = [];
+                for (let s = 0; s < subParts.length; s++) {
+                    enPhIds.push(this.textProcessing._lookupPhonemeId('en_' + subParts[s].trim()));
+                }
+                enPhIds.push(SEP_ID);
+                phLocations.push([dur, Math.max(1, enPhIds.length), null, enPhIds]);
+                for (let e = 0; e < enPhIds.length; e++) {
+                    newPhonemes.push(enPhIds[e]);
+                    notePitches.push(pitch);
+                    noteTypes.push(noteType);
+                }
+            } else if (this.textProcessing._isJapanese && this.textProcessing._isJapanese(lyric)) {
+                const phonemeStr = this.textProcessing._japaneseG2p(lyric);
+                if (phonemeStr) {
+                    const phParts = phonemeStr.split(' ').filter(s => s);
+                    const jpPhIds = [];
+                    for (let s = 0; s < phParts.length; s++) {
+                        jpPhIds.push(this.textProcessing._lookupPhonemeId('jp_' + phParts[s].trim()));
+                    }
+                    phLocations.push([dur, Math.max(1, jpPhIds.length), null, jpPhIds]);
+                    for (let e = 0; e < jpPhIds.length; e++) {
+                        newPhonemes.push(jpPhIds[e]);
+                        notePitches.push(pitch);
+                        noteTypes.push(noteType);
+                    }
+                } else {
+                    const phId = this.textProcessing._lookupPhonemeId(lyric);
+                    phLocations.push([dur, 1, null, [phId]]);
+                    newPhonemes.push(phId);
+                    notePitches.push(pitch);
+                    noteTypes.push(noteType);
+                }
+            } else if (/^[a-zA-Z]+$/.test(lyric) && !lyric.startsWith('en_') && !lyric.startsWith('zh_') && !lyric.startsWith('yue_') && !lyric.startsWith('jp_')) {
+                const g2pResult = this.textProcessing._englishG2p(lyric);
+                if (g2pResult) {
+                    const phParts = g2pResult.split(' ');
+                    const enPhIds = [];
+                    for (let s = 0; s < phParts.length; s++) {
+                        enPhIds.push(this.textProcessing._lookupPhonemeId('en_' + phParts[s].trim()));
+                    }
+                    enPhIds.push(SEP_ID);
+                    phLocations.push([dur, Math.max(1, enPhIds.length), null, enPhIds]);
+                    for (let e = 0; e < enPhIds.length; e++) {
+                        newPhonemes.push(enPhIds[e]);
+                        notePitches.push(pitch);
+                        noteTypes.push(noteType);
+                    }
+                } else {
+                    const phId = this.textProcessing._lookupPhonemeId(lyric);
+                    phLocations.push([dur, 1, null, [phId]]);
+                    newPhonemes.push(phId);
+                    notePitches.push(pitch);
+                    noteTypes.push(noteType);
+                }
+            } else {
+                const phId = this.textProcessing._lookupPhonemeId(lyric);
+                phLocations.push([dur, 1, null, [phId]]);
+                newPhonemes.push(phId);
+                notePitches.push(pitch);
+                noteTypes.push(noteType);
+            }
+
+            newPhonemes.push(EOW_ID);
+            notePitches.push(pitch);
+            noteTypes.push(noteType);
+
+            durSum += duration;
+        }
+
+        const tokenCount = newPhonemes.length;
+        const mel2token = this._buildMel2token(phLocations, tokenCount, ptFrameCount);
+
+        // Build prompt F0 from note pitches (no f0Envelope/pitchCurveF0 for prompt)
+        const f0Hz = new Float32Array(ptFrameCount);
+        let frameOffset = 0;
+        for (let i = 0; i < promptNotes.length; i++) {
+            const note = promptNotes[i];
+            const lyric = note.lyric || '';
+            const freq = lyric.trim().length === 0 ? 0 : this.midiToFreq(note.pitch);
+            const noteFrames = Math.round(note.duration * SAMPLE_RATE / HOP_SIZE);
+            for (let f = 0; f < noteFrames && frameOffset + f < ptFrameCount; f++) {
+                f0Hz[frameOffset + f] = freq;
+            }
+            frameOffset += noteFrames;
+        }
+        const f0Ids = this.quantizeF0(f0Hz, 0);
+
+        const noteTextSeq = new Int32Array(tokenCount);
+        const notePitchSeq = new Int32Array(tokenCount);
+        const noteTypeSeq = new Int32Array(tokenCount);
+        for (let t = 0; t < tokenCount; t++) {
+            noteTextSeq[t] = newPhonemes[t];
+            notePitchSeq[t] = notePitches[t];
+            noteTypeSeq[t] = noteTypes[t];
+        }
+
+        return { f0Ids, f0Hz, noteTextSeq, notePitchSeq, noteTypeSeq, mel2token, tokenCount };
+    }
+
     _buildMel2token(phLocations, tokenCount, totalFrames) {
         const mel2token = new Int32Array(totalFrames);
         mel2token.fill(0);
@@ -653,23 +792,46 @@ class Preprocessing {
     /**
      * Run all encoders and produce the combined condition embedding
      */
-    async runEncoder(sessions, sequences, tokenCount, totalFrames, isFP16, ptFrameCount = 0, useStaticShapes = false) {
-        const phonemeIds = new BigInt64Array(tokenCount);
-        const pitchIds = new BigInt64Array(tokenCount);
-        const typeIds = new BigInt64Array(tokenCount);
-        const f0IdsArr = new BigInt64Array(totalFrames);
+    async runEncoder(sessions, sequences, tokenCount, totalFrames, isFP16, ptFrameCount = 0, useStaticShapes = false, promptSeq = null) {
+        // P1 fix: When promptSeq is provided, merge prompt + target token sequences
+        // so the prompt section of cond has full encoder features (text+pitch+type+preflow+f0),
+        // matching official SoulX-Singer behavior. Without this, prompt cond is zero-padded
+        // which causes cond_emb input distribution mismatch and quality degradation.
+        const hasPrompt = promptSeq && ptFrameCount > 0 && promptSeq.tokenCount > 0;
+        const ptTokenCount = hasPrompt ? promptSeq.tokenCount : 0;
+        const combinedTokenCount = ptTokenCount + tokenCount;
+        const combinedFrames = ptFrameCount + totalFrames;
 
+        const phonemeIds = new BigInt64Array(combinedTokenCount);
+        const pitchIds = new BigInt64Array(combinedTokenCount);
+        const typeIds = new BigInt64Array(combinedTokenCount);
+        const f0IdsArr = new BigInt64Array(combinedFrames);
+
+        if (hasPrompt) {
+            // Copy prompt token sequences
+            for (let i = 0; i < ptTokenCount; i++) {
+                phonemeIds[i] = BigInt(promptSeq.noteTextSeq[i]);
+                pitchIds[i] = BigInt(promptSeq.notePitchSeq[i]);
+                typeIds[i] = BigInt(promptSeq.noteTypeSeq[i]);
+            }
+            // Copy prompt F0
+            for (let i = 0; i < ptFrameCount; i++) {
+                f0IdsArr[i] = BigInt(promptSeq.f0Ids[i]);
+            }
+        }
+        // Copy target token sequences (offset by ptTokenCount)
         for (let i = 0; i < tokenCount; i++) {
-            phonemeIds[i] = BigInt(sequences.noteTextSeq[i]);
-            pitchIds[i] = BigInt(sequences.notePitchSeq[i]);
-            typeIds[i] = BigInt(sequences.noteTypeSeq[i]);
+            phonemeIds[ptTokenCount + i] = BigInt(sequences.noteTextSeq[i]);
+            pitchIds[ptTokenCount + i] = BigInt(sequences.notePitchSeq[i]);
+            typeIds[ptTokenCount + i] = BigInt(sequences.noteTypeSeq[i]);
         }
+        // Copy target F0 (offset by ptFrameCount)
         for (let i = 0; i < totalFrames; i++) {
-            f0IdsArr[i] = BigInt(sequences.f0Ids[i]);
+            f0IdsArr[ptFrameCount + i] = BigInt(sequences.f0Ids[i]);
         }
 
-        const encSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
-        const encF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
+        const encSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedTokenCount;
+        const encF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedFrames;
 
         const padInt64 = (src, len) => {
             if (src.length >= len) return src;
@@ -696,10 +858,10 @@ class Preprocessing {
             sessions.f0Encoder.run({ input_ids: f0Input }),
         ]);
 
-        const textEmb = useStaticShapes ? outputToFloat32(textResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(textResults['embeddings']);
-        const pitchEmb = useStaticShapes ? outputToFloat32(pitchResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(pitchResults['embeddings']);
-        const typeEmb = useStaticShapes ? outputToFloat32(typeResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(typeResults['embeddings']);
-        const f0Emb = useStaticShapes ? outputToFloat32(f0Results['embeddings']).subarray(0, totalFrames * EMBED_DIM) : outputToFloat32(f0Results['embeddings']);
+        const textEmb = useStaticShapes ? outputToFloat32(textResults['embeddings']).subarray(0, combinedTokenCount * EMBED_DIM) : outputToFloat32(textResults['embeddings']);
+        const pitchEmb = useStaticShapes ? outputToFloat32(pitchResults['embeddings']).subarray(0, combinedTokenCount * EMBED_DIM) : outputToFloat32(pitchResults['embeddings']);
+        const typeEmb = useStaticShapes ? outputToFloat32(typeResults['embeddings']).subarray(0, combinedTokenCount * EMBED_DIM) : outputToFloat32(typeResults['embeddings']);
+        const f0Emb = useStaticShapes ? outputToFloat32(f0Results['embeddings']).subarray(0, combinedFrames * EMBED_DIM) : outputToFloat32(f0Results['embeddings']);
         // 释放 4 个 encoder 的输入和输出张量（outputToFloat32 已拷贝数据）
         disposeTensor(textInput);
         disposeTensor(pitchInput);
@@ -710,8 +872,8 @@ class Preprocessing {
         disposeTensor(typeResults['embeddings']);
         disposeTensor(f0Results['embeddings']);
 
-        const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
-        for (let t = 0; t < tokenCount; t++) {
+        const tokenEmb = new Float32Array(combinedTokenCount * EMBED_DIM);
+        for (let t = 0; t < combinedTokenCount; t++) {
             const tBase = t * EMBED_DIM;
             for (let d = 0; d < EMBED_DIM; d++) {
                 tokenEmb[tBase + d] = textEmb[tBase + d] + pitchEmb[tBase + d] + typeEmb[tBase + d];
@@ -719,25 +881,36 @@ class Preprocessing {
         }
 
         const floatType = isFP16 ? 'float16' : 'float32';
-        const preflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : tokenCount;
+        const preflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedTokenCount;
         const preflowTokenEmb = useStaticShapes ? (() => { const p = new Float32Array(preflowSeqLen * EMBED_DIM); p.set(tokenEmb); return p; })() : tokenEmb;
         const featuresTensor = createFloatTensor(floatType, preflowTokenEmb, [1, preflowSeqLen, EMBED_DIM]);
         const preflowResults = await sessions.preflow.run({ features: featuresTensor });
-        const processedTokenEmb = useStaticShapes ? outputToFloat32(preflowResults['processed_features']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(preflowResults['processed_features']);
+        const processedTokenEmb = useStaticShapes ? outputToFloat32(preflowResults['processed_features']).subarray(0, combinedTokenCount * EMBED_DIM) : outputToFloat32(preflowResults['processed_features']);
         // 释放 preflow 输入和输出张量
         disposeTensor(featuresTensor);
         disposeTensor(preflowResults['processed_features']);
 
         // 长片段时在 preflow → expandedEmb 之间 yield 一次，避免连续 CPU 循环阻塞主线程
-        if (totalFrames > 256) {
+        if (combinedFrames > 256) {
             await new Promise(r => setImmediate(r));
         }
 
-        // 用 subarray.set 替代元素级循环，走 native memcpy（每帧 EMBED_DIM=512 维拷贝）
-        const mel2token = sequences.mel2token;
-        const expandedEmb = new Float32Array(totalFrames * EMBED_DIM);
+        // Build combined mel2token: prompt frames → prompt token indices (unchanged),
+        // target frames → target token indices shifted by ptTokenCount
+        const combinedMel2token = new Int32Array(combinedFrames);
+        if (hasPrompt) {
+            for (let f = 0; f < ptFrameCount; f++) {
+                combinedMel2token[f] = promptSeq.mel2token[f];
+            }
+        }
         for (let f = 0; f < totalFrames; f++) {
-            const tokenIdx = mel2token[f];
+            combinedMel2token[ptFrameCount + f] = ptTokenCount + sequences.mel2token[f];
+        }
+
+        // 用 subarray.set 替代元素级循环，走 native memcpy（每帧 EMBED_DIM=512 维拷贝）
+        const expandedEmb = new Float32Array(combinedFrames * EMBED_DIM);
+        for (let f = 0; f < combinedFrames; f++) {
+            const tokenIdx = combinedMel2token[f];
             expandedEmb.set(
                 processedTokenEmb.subarray(tokenIdx * EMBED_DIM, (tokenIdx + 1) * EMBED_DIM),
                 f * EMBED_DIM
@@ -745,26 +918,23 @@ class Preprocessing {
         }
 
         // expandedEmb → combinedFeatures 之间 yield
-        if (totalFrames > 256) {
+        if (combinedFrames > 256) {
             await new Promise(r => setImmediate(r));
         }
 
-        const combinedFeatures = new Float32Array(totalFrames * EMBED_DIM);
-        for (let f = 0; f < totalFrames; f++) {
+        const combinedFeatures = new Float32Array(combinedFrames * EMBED_DIM);
+        for (let f = 0; f < combinedFrames; f++) {
             const fBase = f * EMBED_DIM;
             for (let d = 0; d < EMBED_DIM; d++) {
                 combinedFeatures[fBase + d] = expandedEmb[fBase + d] + f0Emb[fBase + d];
             }
         }
 
-        const totalCondFrames = ptFrameCount > 0 ? ptFrameCount + totalFrames : totalFrames;
-        const condCodeData = new Float32Array(totalCondFrames * EMBED_DIM);
-        // 单次 set 完成整段拷贝（源/目的连续），替代元素级双重循环
-        if (ptFrameCount === 0) {
-            condCodeData.set(combinedFeatures);
-        } else {
-            condCodeData.set(combinedFeatures, ptFrameCount * EMBED_DIM);
-        }
+        // P1 fix: When promptSeq is provided, condCodeData = combinedFeatures directly
+        // (prompt section already has real encoder features, no zero-padding needed).
+        // When no promptSeq, keep original behavior: zero-pad ptFrameCount at the beginning.
+        const totalCondFrames = combinedFrames;
+        const condCodeData = combinedFeatures;
 
         const condSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalCondFrames;
         const paddedCondCode = useStaticShapes ? (() => { const p = new Float32Array(condSeqLen * EMBED_DIM); p.set(condCodeData); return p; })() : condCodeData;
