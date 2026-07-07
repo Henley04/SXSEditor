@@ -145,6 +145,9 @@ third_party/
 # Claude Code local settings
 .claude/
 
+# ONNX model backups (opset upgrade)
+*.bak
+
 # Python bytecode cache
 __pycache__/
 *.pyc
