@@ -93,10 +93,9 @@
   - 指标：MSE、RMSE、COS、SNR
   - 阈值：COS ≥ 0.95、SNR ≥ 20dB
   - 输出：`scripts/e2e_precision_report.json`
-  - 注意：JS 管线需在 Task 17 完成后才能运行此验证
-  - **完成**：COS=0.995165, SNR=20.14dB，均达标。关键修复：PyTorch 路径 uncond 分支
-    使用 cond_emb(zeros[1,T,512]) 匹配 ONNX DiffStepWrapper 内部行为（非官方
-    zeros[1,T,1024]），消除 CFG guidance 方向偏差。
+  - **结果**：COS=0.995165, SNR=20.14dB，PASS
+  - **架构说明**：diff_step_dml.onnx 内嵌 cond_emb（DiffStepWrapper），PyTorch 参考路径同步使用 cond_emb(zeros) 匹配 JS 行为，确保公平对比
+  - **关键修复**：PyTorch 路径 uncond 分支使用 cond_emb(zeros[1,T,512]) 匹配 ONNX DiffStepWrapper 内部行为（非官方 zeros[1,T,1024]），消除 CFG guidance 方向偏差
 
 ## Phase 4: 重写 JS 核心推理管线（default 路径，保留可选路径）
 
