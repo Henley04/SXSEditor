@@ -137,6 +137,8 @@ export async function playAll() {
           f0Envelope: null,
           pitchCurveF0,
           refAudioWavBuffer: singer?.wavBuffer || null,
+          refMidiNotes: singer?.midiNotes || null,
+          refF0Data: singer?.f0Data || null,
           autoShift: dom.autoShiftCheck.checked,
           nSteps: inferenceOpts.nSteps,
           cfg: inferenceOpts.cfg,
@@ -594,6 +596,8 @@ export async function runExportJob(opts) {
         bpm: state.project.bpm,
         options: {
           refAudioWavBuffer: singer?.wavBuffer || null,
+          refMidiNotes: singer?.midiNotes || null,
+          refF0Data: singer?.f0Data || null,
           pitchCurveF0,
           autoShift,
           nSteps,
