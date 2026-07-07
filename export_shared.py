@@ -150,6 +150,123 @@ class VocoderBackboneWrapper(nn.Module):
     def forward(self, mel):
         return self.head_out(self.backbone(mel.transpose(1, 2)))
 
+
+class VocosFullWrapper(nn.Module):
+    """Full Vocos wrapper: backbone + ISTFTHead with MatMul-based IDFT and manual overlap-add.
+
+    Outputs waveform [B, T*hop] instead of raw spec [B, T, n_fft+2].
+
+    Uses MatMul for inverse DFT (avoids DFT nodes unsupported by DML) and
+    a manual Pad+Add overlap-add (avoids Col2Im unsupported by DML).
+
+    The overlap-add exploits win = num_overlap * hop (here 1920 = 4 * 480):
+    ifft [B, win, T] is reshaped to [B, hop, num_overlap, T], each overlap
+    level j is shifted by j frames along T, then all levels are summed.
+    This unrolls to num_overlap-1 Add + num_overlap Pad nodes (constant,
+    known at trace time), all DML-compatible.
+
+    Buffer names include 'istft' so quantize_weights_to_fp16 skips them
+    (IDFT basis matrices need FP32 precision for numerical stability).
+    """
+
+    def __init__(self, vocoder):
+        super().__init__()
+        self.backbone = vocoder.model.backbone
+        self.head_out = vocoder.model.head.out  # Linear(dim, n_fft+2)
+
+        istft = vocoder.model.head.istft
+        self.hop_length = istft.hop_length
+        self.win_length = istft.win_length
+        self.n_fft = istft.n_fft
+        self.pad = (istft.win_length - istft.hop_length) // 2
+        self.num_overlap = istft.win_length // istft.hop_length
+        assert istft.win_length % istft.hop_length == 0, \
+            "win_length must be a multiple of hop_length for manual overlap-add"
+
+        # Window buffer (Hann window, win_length samples)
+        self.register_buffer('istft_window', istft.window.clone())
+
+        # Precompute inverse DFT basis matrices for irfft(spec, n_fft, norm="backward").
+        # For one-sided spectrum of length num_freq = n_fft//2+1, the irfft formula is:
+        #   x[n] = (1/n_fft) * sum_{k=0}^{num_freq-1} w[k] * Re(spec[k] * exp(2*pi*i*k*n/n_fft))
+        # where w[0]=1, w[num_freq-1]=1, w[1..num_freq-2]=2 (one-sided weighting).
+        n_fft = istft.n_fft
+        num_freq = n_fft // 2 + 1
+        n = torch.arange(n_fft, dtype=torch.float32)
+        k = torch.arange(num_freq, dtype=torch.float32).unsqueeze(1)  # [num_freq, 1]
+        weights = torch.ones(num_freq, dtype=torch.float32)
+        weights[1:-1] = 2.0
+        cos_basis = weights.unsqueeze(1) * torch.cos(2 * np.pi * k * n.unsqueeze(0) / n_fft) / n_fft
+        sin_basis = weights.unsqueeze(1) * torch.sin(2 * np.pi * k * n.unsqueeze(0) / n_fft) / n_fft
+        self.register_buffer('istft_cos_basis', cos_basis)  # [num_freq, n_fft]
+        self.register_buffer('istft_sin_basis', sin_basis)
+
+    def _overlap_add(self, frames):
+        """Manual overlap-add: frames [B, win, T] → output [B, T*hop].
+
+        Replaces torch.nn.functional.fold (which exports as Col2Im, unsupported
+        by DML). Exploits win = num_overlap * hop to decompose into Pad + Add.
+
+        frames[b, j*hop+h, t] contributes to output[b, (t+j)*hop + h].
+        """
+        B, win, T = frames.shape
+        hop = self.hop_length
+        num_ov = self.num_overlap
+
+        # Reshape [B, win, T] → [B, hop, num_overlap, T]
+        # frames[b, j*hop+h, t] → reshaped[b, h, j, t]
+        reshaped = frames.reshape(B, hop, num_ov, T)
+
+        # Shift each overlap level j by j frames along T, then sum.
+        # Level j: pad T with (j, num_ov-1-j) → [B, hop, T+num_ov-1]
+        accum = torch.nn.functional.pad(reshaped[:, :, 0, :], (0, num_ov - 1))
+        for j in range(1, num_ov):
+            padded = torch.nn.functional.pad(reshaped[:, :, j, :], (j, num_ov - 1 - j))
+            accum = accum + padded
+        # accum: [B, hop, T + num_overlap - 1], position f = t+j
+
+        # Transpose [B, hop, T+num_ov-1] → [B, T+num_ov-1, hop] → reshape [B, out_len]
+        # so that out[b, f*hop + h] = accum[b, h, f]
+        accum = accum.transpose(1, 2)
+        out = accum.reshape(B, -1)  # [B, (T+num_ov-1)*hop]
+
+        # Trim edges: [B, T*hop]
+        out = out[:, self.pad:-self.pad]
+        return out
+
+    def forward(self, mel):
+        # mel: [B, T, 128] → backbone expects [B, input_channels, T]
+        x = self.backbone(mel.transpose(1, 2))  # [B, T, dim]
+        x = self.head_out(x)  # [B, T, n_fft+2]
+        x = x.transpose(1, 2)  # [B, n_fft+2, T]
+        mag, p = x.chunk(2, dim=1)  # [B, num_freq, T] each
+        mag = torch.exp(mag)
+        mag = torch.clip(mag, max=1e2)
+        S_real = mag * torch.cos(p)  # [B, num_freq, T]
+        S_imag = mag * torch.sin(p)  # [B, num_freq, T]
+
+        # IDFT via MatMul: ifft[n] = sum_k (cos_basis[k,n]*S_real[k] - sin_basis[k,n]*S_imag[k])
+        # cos_basis: [num_freq, n_fft], S_real: [B, num_freq, T]
+        # matmul(cos_basis.t(), S_real) broadcasts to [B, n_fft, T]
+        ifft = torch.matmul(self.istft_cos_basis.t(), S_real) - \
+               torch.matmul(self.istft_sin_basis.t(), S_imag)  # [B, n_fft, T]
+
+        # Windowing
+        ifft = ifft * self.istft_window.unsqueeze(1)  # [B, n_fft, T] * [n_fft, 1]
+
+        # Overlap-add via manual Pad+Add (DML-compatible, no Col2Im)
+        y = self._overlap_add(ifft)  # [B, T*hop]
+
+        # Window envelope: overlap-add of window^2 (independent of input data)
+        T = ifft.shape[2]
+        window_sq = self.istft_window.square()  # [win]
+        # Expand to [1, win, T] for overlap-add
+        wsq_expanded = window_sq.unsqueeze(0).unsqueeze(-1).expand(1, -1, T)  # [1, win, T]
+        window_envelope = self._overlap_add(wsq_expanded)  # [1, T*hop]
+
+        y = y / window_envelope.clamp(min=1e-11)
+        return y  # [B, T*hop]
+
 # ============================================================
 # Constants
 # ============================================================

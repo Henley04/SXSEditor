@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-07 14:35:45",
+  "timestamp": "2026-07-07 15:39:18",
   "model_path": "D:\\Document\\electron\\SXSEditor\\SoulX-Singer\\pretrained_models\\SoulX-Singer\\model.pt",
   "onnx_dir": "D:\\Document\\electron\\SXSEditor\\onnx_models",
   "seq_len_hint": 100,
@@ -214,18 +214,16 @@
       "name": "vocoder",
       "pytorch_shape": [
         1,
-        500,
-        1922
+        240000
       ],
       "onnx_shape": [
         1,
-        500,
-        1922
+        240000
       ],
-      "mse": 3.5568151791980115e-11,
-      "rmse": 5.963904073002861e-06,
-      "cos": 0.999999999999699,
-      "snr_db": 121.88851368105476,
+      "mse": 4.713335975336686e-12,
+      "rmse": 2.1710218735279214e-06,
+      "cos": 0.9999999999767667,
+      "snr_db": 102.49092617516888,
       "passed": true,
       "relaxed": true,
       "threshold": {

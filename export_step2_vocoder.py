@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """Step 2: Export vocoder (Vocos) to FP32 opset 20 ONNX (DML-compatible).
 
-The Vocos head.out module contains a ConvTranspose1D with stride=480 that
-DirectML does not support. export_fp32_opset20(decompose_conv_transpose=True)
-automatically replaces it with a Reshape+Pad+Conv1D sequence via
-postprocess_onnx -> decompose_conv_transpose_dml.
+Uses VocosFullWrapper which includes the complete ISTFT reconstruction:
+  backbone → head.out (Linear) → exp/clip/cos/sin → MatMul IDFT →
+  windowing → fold overlap-add → window envelope normalization
+
+Output: 'waveform' [1, T*hop] (final audio waveform, not raw 'spec').
+
+The MatMul-based IDFT avoids torch.fft.irfft (which exports as DFT nodes
+unsupported by DML). The fold-based overlap-add is decomposed by dynamo
+export into basic ops (Reshape, Pad, Slice, Add, etc.).
 """
 import argparse
 import os
@@ -12,7 +17,7 @@ import time
 import torch
 
 from export_shared import (
-    load_config, load_model, VocoderBackboneWrapper,
+    load_config, load_model, VocosFullWrapper,
     FP32_OUTPUT_DIR, export_fp32_opset20, clear_memory,
 )
 
@@ -31,13 +36,13 @@ def main():
 
     config = load_config()
 
-    print("Step 2: Export vocoder FP32 opset 20 ONNX (DML-compatible)")
+    print("Step 2: Export vocoder FP32 opset 20 ONNX (DML-compatible, full ISTFT)")
     t0 = time.time()
 
     model = load_model(config, args.model_path)
-    wrapper = VocoderBackboneWrapper(model.vocoder).eval()
+    wrapper = VocosFullWrapper(model.vocoder).eval()
     param_count = sum(p.numel() for p in wrapper.parameters()) / 1e6
-    print(f"  vocoder: {param_count:.1f}M params")
+    print(f"  vocoder (full): {param_count:.1f}M params")
 
     output_path = os.path.join(args.output_dir, 'vocoder_dml.onnx')
     voc_seq_len = 500
@@ -48,8 +53,8 @@ def main():
         (mel,),
         output_path,
         input_names=['mel'],
-        output_names=['spec'],
-        decompose_conv_transpose=True,   # Vocos head.out ConvTranspose(stride=480)
+        output_names=['waveform'],
+        decompose_conv_transpose=True,   # No-op if no ConvTranspose, safe to keep
         fix_mixed_precision=False,       # FP32 main path
     )
 
