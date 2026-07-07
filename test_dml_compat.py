@@ -35,10 +35,10 @@ def main():
 
     # Test diffStep
     diff_feeds = {
-        'xt_input': np.random.randn(1, 100, 128).astype(np.float32),
-        't': np.array([0.5], dtype=np.float32),
-        'cond': np.random.randn(1, 100, 1024).astype(np.float32),
-        'xt_mask': np.ones((1, 100), dtype=np.float32),
+        'xt_input': np.random.randn(1, 100, 128).astype(np.float16),
+        't': np.array([0.5], dtype=np.float16),
+        'cond': np.random.randn(1, 100, 1024).astype(np.float16),
+        'xt_mask': np.ones((1, 100), dtype=np.float16),
     }
     diff_ok = test_session(
         r'd:\Document\electron\SXSEditor\onnx_models\fp16\diff_step_dml.onnx',
@@ -50,7 +50,7 @@ def main():
 
     # Test vocoder
     voc_feeds = {
-        'mel': np.random.randn(1, 100, 128).astype(np.float32),
+        'mel': np.random.randn(1, 100, 128).astype(np.float16),
     }
     voc_ok = test_session(
         r'd:\Document\electron\SXSEditor\onnx_models\fp16\vocoder_dml.onnx',
