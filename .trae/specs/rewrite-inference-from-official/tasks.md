@@ -144,7 +144,7 @@
 
 ## Phase 5: 集成测试与文档
 
-- [ ] Task 19: 端到端功能测试（default FP32 路径）
+- [x] Task 19: 端到端功能测试（default FP32 路径）
   - 用 `SoulX-Singer/example/` 中的 prompt + target 元数据生成参考音频
   - 在 SXSEditor 中加载相同 prompt 歌手文件，合成相同 target
   - 对比 JS 管线产出 vs PyTorch 官方产出（COS、SNR）
@@ -152,22 +152,22 @@
   - 测试多 segment 长音频合成
   - 测试歌手/工程文件加载保存
 
-- [ ] Task 20: 测试可选路径未受影响
+- [x] Task 20: 测试可选路径未受影响
   - 测试 SiFiGAN vocoder 切换后合成正常
   - 测试 INT8 精度切换后合成正常
   - 测试 INT8-NPU 路径（如环境支持）
 
-- [ ] Task 21: 运行精度验证脚本
+- [x] Task 21: 运行精度验证脚本
   - 执行 `python scripts/verify_module_precision.py`，确认 9 个 FP32 模型全部达标
   - 执行 `python scripts/verify_e2e_precision.py`，确认端到端达标
   - 如有未达标项，定位并修复（可能需调整 ONNX 导出或 JS 实现）
 
-- [ ] Task 22: 打包测试
+- [x] Task 22: 打包测试
   - 执行 `npm run package:lite`
   - 验证打包后的应用可正常加载模型、合成音频
   - 验证 `app.asar.unpacked/onnx_models/` 包含全部 9 个 FP32 模型 + JP/ 子目录 + fp16/ + int8/ + SiFiGAN 文件
 
-- [ ] Task 23: 更新文档
+- [x] Task 23: 更新文档
   - 更新 `tools.md`：新增 `export_pipeline.py` 用法，保留现有 SiFiGAN/INT8/NPU 脚本说明
   - 更新 `onnx_models/README.md`：标注 FP32 opset 20 为默认主路径，保留 FP16/INT8/SiFiGAN 说明
   - 更新 `README.md`（如有必要）

@@ -4,6 +4,55 @@ All commands are PowerShell one-liners, run from the project root `d:\Document\e
 
 ---
 
+## 0. FP32 Opset 20 Main Path Export (Default)
+
+**Script:** `export_pipeline.py`
+One-shot FP32 opset 20 ONNX export pipeline (DML-compatible). Exports all 9 base models + 4 JP models in isolated subprocesses to avoid memory leaks. This is the **default main path** used by SXSEditor.
+
+**Output:**
+- FP32 base models: `onnx_models/` (9 files: note_text_encoder, note_pitch_encoder, note_type_encoder, f0_encoder, preflow, cond_emb, diff_step_dml, vocoder_dml, mel_transform)
+- FP32 JP models: `onnx_models/JP/` (4 files: note_text_encoder, preflow, cond_emb, diff_step_dml)
+
+**DML optimizations applied:**
+- STFT → Conv replacement (mel_transform)
+- ConvTranspose(stride>1) decomposition (vocoder)
+- VocosFullWrapper: MatMul-based IDFT + manual overlap-add (vocoder, outputs `waveform` not `spec`)
+- onnxsim simplification + DML op validation
+- opset 20 (maximum DML-compatible)
+
+```powershell
+# Full export (all 13 models, ~5 min)
+python export_pipeline.py
+
+# Individual steps (run in isolated processes)
+python export_step1_diffstep.py    # diff_step_dml.onnx
+python export_step2_vocoder.py     # vocoder_dml.onnx (full ISTFT)
+python export_step3_postprocess.py # other 7 base models
+python export_step4_jp.py          # 4 JP models
+```
+
+### Precision Verification
+
+**Module-level:** `scripts/verify_module_precision.py`
+Compares each of 9 FP32 ONNX models against PyTorch submodules on identical fixed-seed inputs (CPU EP for determinism). Metrics: MSE, RMSE, COS, SNR.
+
+```powershell
+python scripts/verify_module_precision.py
+python scripts/verify_module_precision.py --verbose
+```
+
+**End-to-end:** `scripts/verify_e2e_precision.py`
+Compares PyTorch `model.infer()` full flow vs Python reproduction of JS ONNX pipeline (8 models chained via CPU EP). Uses identical prompt + target + noise seed.
+
+```powershell
+python scripts/verify_e2e_precision.py
+python scripts/verify_e2e_precision.py --verbose
+```
+
+**Reports:** `scripts/precision_report.json`, `scripts/e2e_precision_report.json`
+
+---
+
 ## 1. W8A8 INT8 Quantization v2 (Recommended)
 
 **Script:** `quantize_w8a8_v2.py`
@@ -82,9 +131,14 @@ python export_step1_diffstep.py --model-path "D:\Document\electron\SXSEditor\Sou
 ```
 
 ### Step 2: Export vocoder FP32 ONNX
-**Script:** `export_step2_vocoder.py`
+**Script:** `export_step2_vocoder.py` (FP32 main path, uses `VocosFullWrapper` with full ISTFT reconstruction)
 ```powershell
-python export_step2_vocoder.py --model-path "D:\Document\electron\SXSEditor\SoulX-Singer\pretrained_models\SoulX-Singer\model.pt" --output-dir "D:\Document\electron\SXSEditor\onnx_models\int8\from_pytorch"
+python export_step2_vocoder.py --model-path "D:\Document\electron\SXSEditor\SoulX-Singer\pretrained_models\SoulX-Singer\model.pt" --output-dir "D:\Document\electron\SXSEditor\onnx_models"
+```
+
+**W16A32 variant:** `export_step2_vocoder_w16a32.py` (FP16 weights + FP32 activations, based on FP32 production model)
+```powershell
+python export_step2_vocoder_w16a32.py
 ```
 
 ### Step 3: Post-process FP32 ONNX (STFT replacement, onnxsim)
