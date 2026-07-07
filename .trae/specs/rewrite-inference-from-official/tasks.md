@@ -27,22 +27,22 @@
 
 ## Phase 2: 重写 FP32 ONNX 导出流水线（opset 20, DML 兼容）
 
-- [ ] Task 5: 重写 `export_shared.py`
+- [x] Task 5: 重写 `export_shared.py`
   - 保留并复用：`replace_stft()`（STFT→Conv）、`optimize_vocoder_dml.py` 的 ConvTranspose 分解逻辑（合并进来）、`postprocess_onnx()`（onnxsim + DML 验证）、`load_model()`
   - 修改：所有 `torch.onnx.export` 调用直接使用 `opset_version=20`（不再事后升级）
   - **保留**：`quantize_weights_to_fp16()`、`fix_mixed_precision()`、`DiffStepWrapper`/`VocoderBackboneWrapper` 中 FP16 相关分支（SiFiGAN/INT8/W16A32 脚本仍依赖）
   - 新增：直接 opset 20 导出的便捷函数
 
-- [ ] Task 6: 重写 `export_step1_diffstep.py`（diffStep 导出，FP32 主路径）
+- [x] Task 6: 重写 `export_step1_diffstep.py`（diffStep 导出，FP32 主路径）
   - 从 `SoulX-Singer/pretrained_models/SoulX-Singer/model.pt` 加载 `SoulXSinger.cfm_decoder.diff_estimator`（DiffLlama）
   - 导出为 `onnx_models/diff_step_dml.onnx`，opset 20，FP32
-  - 输入：`xt_input (B,T,128)`、`t (B,)`、`cond (B,T,1024)`、`xt_mask (B,T,1)`
+  - 输入：`xt_input (B,T,128)`、`t (B,)`、`cond (B,T,512)`、`xt_mask (B,T)`
   - 输出：`flow_pred (B,T,128)`
   - 应用 `postprocess_onnx`（onnxsim + DML 验证）
   - 验证：DML EP 可加载、可推理
   - **不覆盖** `onnx_models/fp16/diff_step_dml.onnx`、`onnx_models/int8/diff_step_dml.onnx`
 
-- [ ] Task 7: 重写 `export_step2_vocoder.py`（vocoder 导出，FP32 主路径）
+- [x] Task 7: 重写 `export_step2_vocoder.py`（vocoder 导出，FP32 主路径）
   - 加载 `SoulXSinger.vocoder`（Vocos）
   - 导出为 `onnx_models/vocoder_dml.onnx`，opset 20，FP32
   - 应用 ConvTranspose(stride=480) 分解（来自 `optimize_vocoder_dml.py`）
@@ -50,7 +50,7 @@
   - 验证：DML EP 可加载、可推理
   - **不覆盖** SiFiGAN vocoder 文件、`onnx_models/fp16/`、`onnx_models/int8/` 下 vocoder
 
-- [ ] Task 8: 重写 `export_step3_postprocess.py`（其他 7 个模型导出，FP32 主路径）
+- [x] Task 8: 重写 `export_step3_postprocess.py`（其他 7 个模型导出，FP32 主路径）
   - 导出：`note_text_encoder`、`note_pitch_encoder`、`note_type_encoder`、`f0_encoder`、`preflow`、`cond_emb`、`mel_transform`
   - 全部 opset 20，FP32
   - `mel_transform` 应用 `replace_stft()`
@@ -58,23 +58,23 @@
   - 输出到 `onnx_models/` 根目录
   - **不覆盖** `onnx_models/fp16/`、`onnx_models/int8/` 子目录
 
-- [ ] Task 9: 重写 JP 模型导出脚本（FP32 主路径）
+- [x] Task 9: 重写 JP 模型导出脚本（FP32 主路径）
   - 基于 `SoulX-Singer/train/lora_jp_v3/export_onnx.py` 逻辑（LoRA 合并后导出）
   - 导出 4 个 JP 专属模型到 `onnx_models/JP/`：`note_text_encoder.onnx`、`preflow.onnx`、`cond_emb.onnx`、`diff_step_dml.onnx`
   - opset 20，FP32，应用相同 DML 兼容优化
   - **不覆盖** `onnx_models/fp16/JP/`
 
-- [ ] Task 10: 编写统一导出编排脚本 `export_pipeline.py`
+- [x] Task 10: 编写统一导出编排脚本 `export_pipeline.py`
   - 替代旧 `export_int8_pipeline.py`（保留旧文件不动）
   - 按序执行 step1（diffstep）→ step2（vocoder）→ step3（其他 7 个）→ step4（JP 4 个）
   - 每步独立进程（避免内存泄漏）
   - 完成后打印 `onnx_models/` 根目录文件清单和 opset 版本验证
   - 仅导出 FP32 主路径，不影响 fp16/int8 子目录
 
-- [ ] Task 11: 执行导出并验证 opset
-  - 运行 `python export_pipeline.py`
-  - 用 `calibrate/check_opset.py` 验证 `onnx_models/` 根目录下所有 ONNX opset = 20
-  - Git 提交：`git add -A && git commit -m "re-export FP32 opset 20 ONNX models for default path"`
+- [x] Task 11: 执行导出并验证 opset
+  - 运行 `python export_pipeline.py`（317.6s，13 个 ONNX 全部导出）
+  - 用 `calibrate/check_opset.py` 验证 `onnx_models/` 根目录下所有 ONNX opset = 20（9 主路径 + 4 JP 全部 PASS）
+  - SiFiGAN/FP16/INT8 子目录保留未动（opset 17/18，符合预期）
 
 ## Phase 3: 精度验证脚本（PyTorch vs FP32 ONNX）
 
