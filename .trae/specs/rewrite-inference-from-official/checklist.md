@@ -1,18 +1,18 @@
 # Checklist
 
 ## Phase 1: 清理验证（保留 SiFiGAN/INT8/NPU）
-- [ ] 所有 `*.bak` 和 `*.bak.data` 文件已删除（14 个）
-- [ ] `sifigan_vocoder_dml_backup.onnx` 及 `_linear_backup` 变体已删除
-- [ ] `onnx_models/fp16_w16a16_backup/` 目录已删除
-- [ ] `onnx_models/fp16/JP/_fp32_backup/` 目录已删除
-- [ ] `onnx_models/int8/optimized_npu_backup/` 目录已删除
-- [ ] `onnx_models/svc/` 目录已删除
-- [ ] `calibrate/upgrade_opset.py` 和 `calibrate/replace_with_opset20.py` 已删除
-- [ ] **保留验证**：`onnx_models/fp16/` 目录仍存在（W16A32 保留）
-- [ ] **保留验证**：`onnx_models/int8/` 目录仍存在（INT8 保留）
-- [ ] **保留验证**：SiFiGAN 模型和脚本仍存在
-- [ ] **保留验证**：INT8/NPU/W16A32 相关 Python 脚本仍存在
-- [ ] Git 提交记录显示清理已完成
+- [x] 所有 `*.bak` 和 `*.bak.data` 文件已删除（14 个）
+- [x] `sifigan_vocoder_dml_backup.onnx` 及 `_linear_backup` 变体已删除
+- [x] `onnx_models/fp16_w16a16_backup/` 目录已删除
+- [x] `onnx_models/fp16/JP/_fp32_backup/` 目录已删除
+- [x] `onnx_models/int8/optimized_npu_backup/` 目录已删除
+- [x] `onnx_models/svc/` 目录已删除（原本就不存在）
+- [x] `calibrate/upgrade_opset.py` 和 `calibrate/replace_with_opset20.py` 已删除
+- [x] **保留验证**：`onnx_models/fp16/` 目录仍存在（W16A32 保留）
+- [x] **保留验证**：`onnx_models/int8/` 目录仍存在（INT8 保留）
+- [x] **保留验证**：SiFiGAN 模型和脚本仍存在
+- [x] **保留验证**：INT8/NPU/W16A32 相关 Python 脚本仍存在
+- [x] Git 提交记录显示清理已完成
 
 ## Phase 2: FP32 ONNX 导出验证
 - [ ] `export_shared.py` 已更新（直接 opset 20 导出，保留 FP16/量化工具函数）

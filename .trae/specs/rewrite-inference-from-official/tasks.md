@@ -2,11 +2,11 @@
 
 ## Phase 1: 清理备份文件（保留 SiFiGAN/INT8/NPU）
 
-- [ ] Task 1: Git 备份当前工作区（不单独开分支）
+- [x] Task 1: Git 备份当前工作区（不单独开分支）
   - 在执行任何删除操作前，先 `git add -A && git commit -m "backup before inference pipeline rewrite"`
   - 确保工作区干净，可随时回滚
 
-- [ ] Task 2: 删除 ONNX 备份文件（仅备份，不动可选路径）
+- [x] Task 2: 删除 ONNX 备份文件（仅备份，不动可选路径）
   - 删除所有 `*.bak` 和 `*.bak.data` 文件（14 个，位于 `onnx_models/` 和 `onnx_models/fp16/`）
   - 删除 `onnx_models/sifigan_vocoder_dml_backup.onnx`
   - 删除 `onnx_models/sifigan_vocoder_dml_linear_backup.onnx` 及其 `.data`
@@ -17,12 +17,12 @@
   - 删除 `onnx_models/svc/` 目录（SVC 模型，当前 SVS 管线不使用）
   - **不删除**：`onnx_models/fp16/`（W16A32 保留）、`onnx_models/int8/`（INT8 保留）、SiFiGAN 模型、SiFiGAN 脚本
 
-- [ ] Task 3: 删除已被新流程取代的脚本（仅 opset 升级相关）
+- [x] Task 3: 删除已被新流程取代的脚本（仅 opset 升级相关）
   - 删除 `calibrate/upgrade_opset.py`（直接导出 opset 20 取代事后升级）
   - 删除 `calibrate/replace_with_opset20.py`（同上）
   - **不删除**：SiFiGAN 脚本、INT8/NPU 脚本、W16A32 脚本、其他 calibrate 脚本
 
-- [ ] Task 4: Git 提交清理结果
+- [x] Task 4: Git 提交清理结果
   - `git add -A && git commit -m "remove obsolete backup files and opset upgrade scripts"`
 
 ## Phase 2: 重写 FP32 ONNX 导出流水线（opset 20, DML 兼容）
