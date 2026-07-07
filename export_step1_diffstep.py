@@ -1,44 +1,64 @@
 # -*- coding: utf-8 -*-
-"""Step 1: Export diff_step sub-model to FP32 ONNX via torch.export (dynamo)."""
-import argparse, time, torch
-from export_shared import load_config, load_model, DiffStepWrapper, DEFAULT_OUTPUT_DIR, clear_memory
+"""Step 1: Export diff_step sub-model to FP32 opset 20 ONNX (DML main path)."""
+import argparse
+import os
+import time
+import torch
+from export_shared import (
+    load_config, load_model, DiffStepWrapper,
+    FP32_OUTPUT_DIR, export_fp32_opset20, clear_memory,
+)
+
+DEFAULT_MODEL_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    'SoulX-Singer', 'pretrained_models', 'SoulX-Singer', 'model.pt',
+)
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-path', default=None)
-    parser.add_argument('--output-dir', default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument('--model-path', default=DEFAULT_MODEL_PATH)
+    parser.add_argument('--output-dir', default=FP32_OUTPUT_DIR)
     args = parser.parse_args()
 
-    import os; os.makedirs(args.output_dir, exist_ok=True)
+    os.makedirs(args.output_dir, exist_ok=True)
 
-    config = load_config()
-    model_path = args.model_path or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), 'SoulX-Singer', 'pretrained_models', 'SoulX-Singer', 'model.pt')
-
-    print("Step 1: Export diff_step FP32 ONNX (torch.export via dynamo)")
+    print("Step 1: Export diff_step FP32 opset 20 ONNX (DML main path)")
     t0 = time.time()
 
-    model = load_model(config, model_path)
+    config = load_config()
+    model = load_model(config, args.model_path)
     wrapper = DiffStepWrapper(model.cfm_decoder).eval()
-    print(f"  diff_step: {sum(p.numel() for p in wrapper.parameters()) / 1e6:.1f}M params")
 
-    output_path = os.path.join(args.output_dir, 'diff_step_fp32.onnx')
+    param_count = sum(p.numel() for p in wrapper.parameters())
+    print(f"  diff_step: {param_count / 1e6:.1f}M params")
+
+    output_path = os.path.join(args.output_dir, 'diff_step_dml.onnx')
     seq_len = 2048
-    with torch.no_grad():
-        torch.onnx.export(
-            wrapper,
-            (torch.randn(1, seq_len, 128), torch.tensor([0.5]),
-             torch.randn(1, seq_len, 512), torch.ones(1, seq_len)),
-            output_path,
-            input_names=['xt_input', 't', 'cond', 'xt_mask'],
-            output_names=['flow_pred'],
-            opset_version=18,
-            dynamo=True,
-        )
+    args_tuple = (
+        torch.randn(1, seq_len, 128, dtype=torch.float32),
+        torch.tensor([0.5], dtype=torch.float32),
+        torch.randn(1, seq_len, 512, dtype=torch.float32),
+        torch.ones(1, seq_len, dtype=torch.float32),
+    )
+    input_names = ['xt_input', 't', 'cond', 'xt_mask']
+    output_names = ['flow_pred']
+
+    export_fp32_opset20(
+        wrapper, args_tuple, output_path,
+        input_names=input_names,
+        output_names=output_names,
+        dynamic_axes=None,
+        decompose_conv_transpose=False,
+        fix_mixed_precision=False,
+    )
+
     del wrapper, model
     clear_memory()
 
-    print(f"  Done in {time.time() - t0:.1f}s -> {output_path}")
+    elapsed = time.time() - t0
+    print(f"  Done in {elapsed:.1f}s -> {output_path}")
+
 
 if __name__ == '__main__':
     main()

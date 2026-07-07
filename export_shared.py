@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-Shared utilities for INT8 ONNX export pipeline.
-Contains: compatibility patches, model wrappers, ONNX post-processing, quantization.
+Shared utilities for ONNX export pipeline (FP32 opset 20 main path + INT8/FP16 utilities).
+Contains: compatibility patches, model wrappers, ONNX post-processing (STFT replacement,
+ConvTranspose decomposition, onnxsim), FP32 opset 20 export helper, FP16/INT8 quantization.
 """
 
 import os
@@ -154,6 +155,7 @@ class VocoderBackboneWrapper(nn.Module):
 # ============================================================
 
 DEFAULT_OUTPUT_DIR = os.path.join(SCRIPT_DIR, 'onnx_models', 'int8', 'from_pytorch')
+FP32_OUTPUT_DIR = os.path.join(SCRIPT_DIR, 'onnx_models')
 
 # ============================================================
 # Model loading
@@ -737,9 +739,207 @@ def quantize_weights_to_fp16(model):
     return model
 
 
-def postprocess_onnx(input_path, output_path, fix_mixed_precision=False):
+def decompose_conv_transpose_dml(model):
+    """Replace ConvTranspose(stride>1) nodes with a DML-compatible sequence.
+
+    DirectML does not support ConvTranspose with stride > 1. This decomposes each
+    ConvTranspose1D(x, w, stride=S) into the equivalent sequence:
+
+      Reshape(4D) -> Pad(insert stride-1 zeros) -> Reshape(3D) ->
+      Conv1D(flip-transposed weight, stride=1, pads=[K-1, K-S]) ->
+      optional Slice (when K < S, pads=[K-1, 0] + crop trailing S-K)
+
+    Math: ConvTranspose1D(x, w, stride=S) ==
+          Conv1D(upsample(x, S), flip(w.T), stride=1, pads=[K-1, K-S])
+    where flip(w_T)[co, ci, k] = w[ci, co, K-1-k].
+
+    Output length = T*S + (K-1) + (K-S) - K + 1 = T*S + K - S = (T-1)*S + K,
+    matching ConvTranspose exactly, so no Slice is needed when K >= S.
+
+    Handles multiple ConvTranspose nodes in a single graph (each gets a unique
+    index suffix on its node/initializer names). No-op when no ConvTranspose
+    with stride > 1 is present.
+
+    Args:
+        model: onnx.ModelProto to modify in place.
+
+    Returns:
+        The modified model.
+    """
+    graph = model.graph
+
+    # Scan ConvTranspose nodes with stride > 1 (preserve order)
+    init_map = {init.name: init for init in graph.initializer}
+    nodes_snapshot = list(graph.node)
+    ct_targets = []  # list of (idx_in_snapshot, node, stride)
+    for idx, node in enumerate(nodes_snapshot):
+        if node.op_type != 'ConvTranspose':
+            continue
+        stride = 1
+        for attr in node.attribute:
+            if attr.name == 'strides' and len(attr.ints) > 0:
+                stride = attr.ints[0]
+        if stride > 1:
+            ct_targets.append((idx, node, stride))
+
+    if not ct_targets:
+        return model  # No-op: nothing to decompose
+
+    new_initializers = []
+    replacements_by_idx = {}  # idx_in_snapshot -> list of replacement nodes
+    replaced_count = 0
+    replaced_strides = []
+
+    for ct_idx, (idx, ct_node, stride) in enumerate(ct_targets):
+        # Locate weight initializer (input[1])
+        w_name = ct_node.input[1] if len(ct_node.input) > 1 else None
+        if w_name is None or w_name not in init_map:
+            print(f"  [WARN] ConvTranspose {ct_node.name or ct_idx}: weight initializer "
+                  f"{w_name!r} not found, skipping")
+            continue
+        w = numpy_helper.to_array(init_map[w_name])
+        if w.ndim != 3:
+            print(f"  [WARN] ConvTranspose {ct_node.name or ct_idx}: weight rank {w.ndim} != 3, skipping")
+            continue
+        c_in, c_out, K = w.shape
+
+        has_bias = len(ct_node.input) >= 3
+        bias_name = ct_node.input[2] if has_bias else None
+
+        # Conv1D padding: P_left = K-1, P_right = K-S (when K >= S)
+        # When K < S: use pads=[K-1, 0] and Slice off the trailing S-K elements
+        p_left = K - 1
+        need_slice = K < stride
+        p_right = max(K - stride, 0)
+
+        # Unique base name per ConvTranspose (index suffix guarantees uniqueness)
+        if ct_node.name:
+            base = f"{ct_node.name}_dml{ct_idx}"
+        else:
+            base = f"ct_dml_{ct_idx}"
+
+        inp = ct_node.input[0]
+        out = ct_node.output[0]
+
+        # Flip + transpose weight: flip(w.T)[co, ci, k] = w[ci, co, K-1-k]
+        w_flipped_transposed = w.transpose(1, 0, 2)[:, :, ::-1].copy().astype(np.float32)
+        w_conv_name = f"{base}_flip_trans"
+        new_initializers.append(numpy_helper.from_array(w_flipped_transposed, name=w_conv_name))
+
+        # Scalar / 1D constants
+        new_initializers.append(numpy_helper.from_array(np.array(0, dtype=np.int64), name=f"{base}_c0"))
+        new_initializers.append(numpy_helper.from_array(np.array(2, dtype=np.int64), name=f"{base}_c2"))
+        new_initializers.append(numpy_helper.from_array(np.array([stride], dtype=np.int64), name=f"{base}_stride_1d"))
+        new_initializers.append(numpy_helper.from_array(np.array([c_in], dtype=np.int64), name=f"{base}_cin_1d"))
+        new_initializers.append(numpy_helper.from_array(np.array([1], dtype=np.int64), name=f"{base}_c1_1d"))
+
+        # Pad operands: insert S-1 zeros at the last axis
+        new_initializers.append(numpy_helper.from_array(
+            np.array([0, 0, 0, 0, 0, 0, 0, stride - 1], dtype=np.int64),
+            name=f"{base}_pad_pads_4d"))
+        new_initializers.append(numpy_helper.from_array(np.array(0.0, dtype=np.float32), name=f"{base}_pad_val"))
+
+        nodes = []
+
+        # Step 1: derive T = Shape(inp)[2] as a 1D tensor [T]
+        nodes.append(helper.make_node('Shape', [inp], [f"{base}_shape"], name=f"{base}_shape"))
+        nodes.append(helper.make_node('Gather', [f"{base}_shape", f"{base}_c2"],
+                                     [f"{base}_T_scalar"], name=f"{base}_gT", axis=0))
+        nodes.append(helper.make_node('Unsqueeze', [f"{base}_T_scalar", f"{base}_c0"],
+                                     [f"{base}_T"], name=f"{base}_uT"))
+        # T*S as 1D
+        nodes.append(helper.make_node('Mul', [f"{base}_T", f"{base}_stride_1d"],
+                                     [f"{base}_TS"], name=f"{base}_mul_TS"))
+
+        # Step 2: B = Shape(inp)[0] as 1D
+        nodes.append(helper.make_node('Gather', [f"{base}_shape", f"{base}_c0"],
+                                     [f"{base}_B_scalar"], name=f"{base}_gB", axis=0))
+        nodes.append(helper.make_node('Unsqueeze', [f"{base}_B_scalar", f"{base}_c0"],
+                                     [f"{base}_B"], name=f"{base}_uB"))
+
+        # Step 3: Reshape [B, C_in, T] -> [B, C_in, T, 1]
+        nodes.append(helper.make_node('Concat',
+                                     [f"{base}_B", f"{base}_cin_1d", f"{base}_T", f"{base}_c1_1d"],
+                                     [f"{base}_shape_4d"], name=f"{base}_cat_4d", axis=0))
+        nodes.append(helper.make_node('Reshape', [inp, f"{base}_shape_4d"],
+                                     [f"{base}_r4d"], name=f"{base}_reshape_4d"))
+
+        # Step 4: Pad [B, C_in, T, 1] -> [B, C_in, T, S]
+        nodes.append(helper.make_node('Pad',
+                                     [f"{base}_r4d", f"{base}_pad_pads_4d", f"{base}_pad_val"],
+                                     [f"{base}_padded"], name=f"{base}_pad", mode='constant'))
+
+        # Step 5: Reshape [B, C_in, T, S] -> [B, C_in, T*S]
+        nodes.append(helper.make_node('Concat',
+                                     [f"{base}_B", f"{base}_cin_1d", f"{base}_TS"],
+                                     [f"{base}_flat_shape"], name=f"{base}_cat_flat", axis=0))
+        nodes.append(helper.make_node('Reshape', [f"{base}_padded", f"{base}_flat_shape"],
+                                     [f"{base}_flat"], name=f"{base}_reshape_flat"))
+
+        # Step 6: Conv1D with flip(w.T), stride=1
+        conv_inputs = [f"{base}_flat", w_conv_name]
+        if has_bias:
+            conv_inputs.append(bias_name)
+        conv_out_name = f"{base}_conv_out"
+
+        if need_slice:
+            # K < S: pads=[K-1, 0], then Slice off the trailing S-K elements
+            nodes.append(helper.make_node('Conv', conv_inputs, [conv_out_name],
+                                         name=f"{base}_conv",
+                                         kernel_shape=[K], strides=[1], pads=[p_left, 0]))
+            new_initializers.append(numpy_helper.from_array(
+                np.array([stride - K], dtype=np.int64), name=f"{base}_smk"))
+            nodes.append(helper.make_node('Sub', [f"{base}_TS", f"{base}_smk"],
+                                         [f"{base}_out_len"], name=f"{base}_sub_outlen"))
+            new_initializers.append(numpy_helper.from_array(
+                np.array([0, 0, 0], dtype=np.int64), name=f"{base}_slice_starts"))
+            new_initializers.append(numpy_helper.from_array(
+                np.array([np.iinfo(np.int64).max], dtype=np.int64), name=f"{base}_max"))
+            nodes.append(helper.make_node('Concat',
+                                         [f"{base}_max", f"{base}_max", f"{base}_out_len"],
+                                         [f"{base}_slice_ends"], name=f"{base}_cat_ends", axis=0))
+            new_initializers.append(numpy_helper.from_array(
+                np.array([0, 1, 2], dtype=np.int64), name=f"{base}_slice_axes"))
+            nodes.append(helper.make_node('Slice',
+                                         [conv_out_name, f"{base}_slice_starts",
+                                          f"{base}_slice_ends", f"{base}_slice_axes"],
+                                         [out], name=f"{base}_slice"))
+        else:
+            # K >= S: pads=[K-1, K-S], output length already correct
+            nodes.append(helper.make_node('Conv', conv_inputs, [out],
+                                         name=f"{base}_conv",
+                                         kernel_shape=[K], strides=[1], pads=[p_left, p_right]))
+
+        replacements_by_idx[idx] = nodes
+        replaced_count += 1
+        replaced_strides.append(stride)
+
+    # Rebuild graph.node: emit replacement sequences in place of original ConvTranspose nodes
+    if replacements_by_idx:
+        rebuilt = []
+        for idx, node in enumerate(nodes_snapshot):
+            if idx in replacements_by_idx:
+                rebuilt.extend(replacements_by_idx[idx])
+            else:
+                rebuilt.append(node)
+        del graph.node[:]
+        graph.node.extend(rebuilt)
+
+    graph.initializer.extend(new_initializers)
+
+    if replaced_count > 0:
+        strides_seen = sorted(set(replaced_strides))
+        strides_str = ','.join(str(s) for s in strides_seen)
+        print(f"  Decomposed {replaced_count} ConvTranspose(stride={strides_str}) node(s)")
+    return model
+
+
+def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
+                     decompose_conv_transpose=True):
     print(f"\n  Post-processing: {os.path.basename(input_path)}")
     model = onnx.load(input_path)
+    if decompose_conv_transpose:
+        decompose_conv_transpose_dml(model)
     replace_stft(model)
     topological_sort(model.graph)
     try:
@@ -794,6 +994,56 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False):
     for op, cnt in sorted(ops.items(), key=lambda x: -x[1])[:8]:
         print(f"      {op}: {cnt}")
 
+    return model
+
+
+def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_names,
+                        dynamic_axes=None, decompose_conv_transpose=True,
+                        fix_mixed_precision=False):
+    """Export a PyTorch wrapper to FP32 ONNX with opset 20 + DML post-processing.
+
+    This is the main entry point for FP32 main-path exports. Writes to a temp file
+    first, then applies postprocess_onnx (STFT replacement, ConvTranspose decomposition,
+    onnxsim, shape inference, strip metadata) and saves to output_path.
+
+    Note: torch.onnx.export with dynamo=True does not accept dynamic_axes (dynamo uses
+    dynamic_shapes instead). When dynamic_axes is None (default), dynamo=True is used
+    to match the existing FP32 export pattern. When dynamic_axes is provided, the call
+    falls back to dynamo=False so dynamic_axes takes effect.
+
+    Args:
+        wrapper: nn.Module to export.
+        args_tuple: tuple of torch input tensors.
+        output_path: final ONNX output path (external data written alongside as .data).
+        input_names: list of input names.
+        output_names: list of output names.
+        dynamic_axes: optional dynamic_axes dict; when provided, dynamo is disabled.
+        decompose_conv_transpose: if True, decompose ConvTranspose(stride>1) for DML.
+        fix_mixed_precision: if True, re-insert Cast(FP16->FP32) after onnxsim (W16A32).
+
+    Returns:
+        The post-processed onnx.ModelProto.
+    """
+    tmp_path = output_path + '.raw.onnx'
+    use_dynamo = dynamic_axes is None
+    with torch.no_grad():
+        torch.onnx.export(
+            wrapper, args_tuple, tmp_path,
+            input_names=input_names,
+            output_names=output_names,
+            opset_version=20,
+            dynamo=use_dynamo,
+            dynamic_axes=dynamic_axes if not use_dynamo else None,
+        )
+    model = postprocess_onnx(
+        tmp_path, output_path,
+        fix_mixed_precision=fix_mixed_precision,
+        decompose_conv_transpose=decompose_conv_transpose,
+    )
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+    if os.path.exists(tmp_path + '.data'):
+        os.remove(tmp_path + '.data')
     return model
 
 
