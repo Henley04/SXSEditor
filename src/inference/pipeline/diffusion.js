@@ -220,12 +220,13 @@ class Diffusion {
                     }
 
                     // Pass 2: compute std/rescale + apply rescale + update xt
-                    // 对齐官方 torch.std (unbiased, correction=1, 除以 N-1, 无 epsilon)。
-                    // 旧实现用总体方差(除以N)+分子分母加epsilon，在方差接近0时会压低 rescale，
-                    // 导致 CFG 引导强度被错误衰减。
+                    // 对齐官方 torch.std (unbiased, correction=1, 除以 N-1)。
+                    // 分母加 1e-8 防止早期 step (xt=纯噪声, flow≈0) 时 cfgAdjStd→0 导致 rescale 爆炸。
+                    // 官方 PyTorch 的 torch.std() 在 std=0 时返回 0, 后续 0/0=nan 会被 PyTorch
+                    // 的 autograd 吸收; JS 的 x/0=Infinity 会直接传播导致 xt 溢出。
                     const posStd = Math.sqrt(posVarSum / Math.max(1, targetLen - 1));
                     const cfgAdjStd = Math.sqrt(cfgAdjVarSum / Math.max(1, targetLen - 1));
-                    const rescale = posStd / cfgAdjStd;
+                    const rescale = posStd / (cfgAdjStd + 1e-8);
 
                     for (let f = 0; f < totalFrames; f++) {
                         for (let d = 0; d < MEL_DIM; d++) {
