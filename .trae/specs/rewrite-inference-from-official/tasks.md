@@ -172,9 +172,10 @@
   - 更新 `onnx_models/README.md`：标注 FP32 opset 20 为默认主路径，保留 FP16/INT8/SiFiGAN 说明
   - 更新 `README.md`（如有必要）
 
-- [ ] Task 24: Git 提交并推送
+- [x] Task 24: Git 提交并推送
   - `git add -A && git commit -m "rewrite default inference pipeline from official SoulX-Singer, re-export FP32 opset 20 ONNX models"`
   - 推送到远程 GitHub 仓库
+  - **状态**：所有 commits 已在本地完成（31 个），push 待用户手动执行（代理 127.0.0.1:7897 暂不可用）
 
 # Task Dependencies
 
