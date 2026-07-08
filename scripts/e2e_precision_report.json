@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-07 16:24:35",
+  "timestamp": "2026-07-08 13:28:05",
   "model_path": "D:\\Document\\electron\\SXSEditor\\SoulX-Singer\\pretrained_models\\SoulX-Singer\\model.pt",
   "onnx_dir": "D:\\Document\\electron\\SXSEditor\\onnx_models",
   "parameters": {
@@ -12,7 +12,7 @@
     "pt_mel_frames": 50,
     "gt_mel_frames": 200,
     "pt_token_count": 70,
-    "gt_token_count": 30
+    "gt_token_count": 61
   },
   "onnx_models_used": [
     "mel_transform",
@@ -21,55 +21,48 @@
     "note_type_encoder",
     "f0_encoder",
     "preflow",
+    "cond_emb",
     "diff_step",
     "vocoder"
   ],
-  "onnx_models_not_used_separately": [
-    "cond_emb (embedded inside diff_step_dml.onnx via DiffStepWrapper)"
-  ],
+  "onnx_models_not_used_separately": [],
   "pytorch_output": {
     "shape": [
       1,
       96000
     ],
-    "mean": 0.08618495613336563,
-    "std": 52.80424118041992,
-    "max_abs": 5545.76025390625,
-    "time_seconds": 27.68626880645752
+    "mean": 0.1792813241481781,
+    "std": 49.89402389526367,
+    "max_abs": 5531.775390625,
+    "time_seconds": 34.26179552078247
   },
   "onnx_output": {
     "shape": [
       1,
       96000
     ],
-    "mean": 0.09130436927080154,
-    "std": 52.28447723388672,
-    "max_abs": 5545.6259765625,
-    "time_seconds": 381.0457661151886
+    "mean": 0.1793399304151535,
+    "std": 49.89347457885742,
+    "max_abs": 5531.787109375,
+    "time_seconds": 90.99936556816101
   },
   "metrics": {
-    "mse": 26.96949552695255,
-    "rmse": 5.1932162988799675,
-    "cos": 0.9951646505509718,
-    "snr_db": 20.144659816487206
+    "mse": 0.0004460589558809762,
+    "rmse": 0.021120107856755284,
+    "cos": 0.999999910468902,
+    "snr_db": 67.46710396317812
   },
   "thresholds": {
     "cos_min": 0.95,
     "snr_min_db": 20.0
   },
   "passed": true,
-  "stage_results": {
-    "mel_transform": {
-      "mse": 6.238912384612227e-06,
-      "rmse": 0.0024977814925673998,
-      "cos": 0.9999948458147979,
-      "snr_db": 49.86089877920942
-    }
-  },
+  "stage_results": {},
   "notes": [
-    "cond_emb.onnx is NOT called separately — it is embedded inside diff_step_dml.onnx (exported via DiffStepWrapper which applies cond_emb internally). Input cond is 512-dim cond_code.",
+    "cond_emb.onnx is called separately before diff_step_dml.onnx (post-66d040d architecture). Input cond is 1024-dim cond_embedding.",
     "Flow-matching loop aligned with diffusion.js: t=(step+0.5)/n, uncond target-only, Bessel-corrected std (N-1), single epsilon.",
     "PyTorch vocoder uses VocosFullWrapper (same as ONNX export) for fair comparison — eliminates ISTFT implementation differences.",
-    "Static shapes: prompt 50 mel frames (1s audio) + target 200 mel frames (4s) = 250 total cond frames (< 2048 diff_step limit)."
+    "Dynamic shape models: prompt 50 mel frames (1s audio) + target 200 mel frames (4s) = 250 total cond frames. No padding needed.",
+    "Uncond branch uses zeros[1024] directly (matching JS pipeline post-66d040d), NOT cond_emb(zeros[512]) = bias[1024]."
   ]
 }
