@@ -742,18 +742,28 @@ class Postprocessing {
 
     /**
      * Extract reference mel spectrogram using ONNX mel_transform model
+     *
+     * mel_transform 在不同精度/导出版本中输入输出名不一致：
+     *   - ROOT mel_transform.onnx:  input='audio',     output='mel'
+     *   - fp16/mel_transform.onnx:  input='waveform',   output='mel_spectrogram'
+     *   - int8/mel_transform.onnx:  input='waveform',   output='output'
+     * 这里通过 session.inputNames / outputNames 动态取首个输入/输出名，避免硬编码导致
+     * ROOT 模型运行时报 "input 'audio' is missing in 'feeds'"。
      */
     async extractRefMelOnnx(sessions, refAudioWavBuffer, isFP16, useStaticShapes = false) {
         const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(refAudioWavBuffer);
         const resampled = await resampleLinearAsync(audioFloat, srcSr, SAMPLE_RATE);
         const floatType = isFP16 ? 'float16' : 'float32';
+        // 动态获取输入/输出名（不同导出版本名称不同）
+        const melInputName = sessions.melTransform.inputNames[0];   // 'waveform' | 'audio'
+        const melOutputName = sessions.melTransform.outputNames[0]; // 'mel_spectrogram' | 'mel' | 'output'
         const NPU_STATIC_NUM_SAMPLES = 240000;
         if (useStaticShapes && resampled.length < NPU_STATIC_NUM_SAMPLES) {
             const padded = new Float32Array(NPU_STATIC_NUM_SAMPLES);
             padded.set(resampled);
             const waveform = createFloatTensor(floatType, padded, [1, NPU_STATIC_NUM_SAMPLES]);
-            const results = await sessions.melTransform.run({ waveform });
-            const melOutput = results['mel_spectrogram'];
+            const results = await sessions.melTransform.run({ [melInputName]: waveform });
+            const melOutput = results[melOutputName];
             const melData = outputToFloat32(melOutput);
             const melDims = melOutput.dims; // 先取 dims 再 dispose，避免 use-after-free
             const actualFrames = Math.ceil(resampled.length / HOP_SIZE);
@@ -766,8 +776,8 @@ class Postprocessing {
             return { data: trimmed.slice(), frames, melBands: MEL_DIM };
         }
         const waveform = createFloatTensor(floatType, resampled, [1, resampled.length]);
-        const results = await sessions.melTransform.run({ waveform });
-        const melOutput = results['mel_spectrogram'];
+        const results = await sessions.melTransform.run({ [melInputName]: waveform });
+        const melOutput = results[melOutputName];
         const melData = outputToFloat32(melOutput);
         const melDims = melOutput.dims; // 先取 dims 再 dispose
         const frames = melDims[1];
