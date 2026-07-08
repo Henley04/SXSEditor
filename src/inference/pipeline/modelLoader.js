@@ -52,7 +52,7 @@ const DUMMY_TEST_INPUTS_FP32 = {
         mel: new ort.Tensor('float32', new Float32Array(3 * MEL_DIM), [1, 3, MEL_DIM]),
         f0: new ort.Tensor('float32', new Float32Array(3), [1, 3, 1]),
     },
-    melTransform: { waveform: new ort.Tensor('float32', new Float32Array(HOP_SIZE * 3), [1, HOP_SIZE * 3]) },
+    melTransform: { audio: new ort.Tensor('float32', new Float32Array(HOP_SIZE * 3), [1, HOP_SIZE * 3]) },
 };
 
 const DUMMY_TEST_INPUTS_FP16 = {
@@ -74,7 +74,7 @@ const DUMMY_TEST_INPUTS_FP16 = {
         mel: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * MEL_DIM)), [1, 3, MEL_DIM]),
         f0: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3)), [1, 3, 1]),
     },
-    melTransform: { waveform: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(HOP_SIZE * 3)), [1, HOP_SIZE * 3]) },
+    melTransform: { audio: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(HOP_SIZE * 3)), [1, HOP_SIZE * 3]) },
 };
 
 // NPU 静态形状模型的验证输入（维度固定为 NPU_STATIC_SEQ_LEN=2048）
@@ -92,7 +92,7 @@ const DUMMY_TEST_INPUTS_NPU = {
         xt_mask: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN), [1, NPU_STATIC_SEQ_LEN]),
     },
     vocoder: { mel: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN * MEL_DIM), [1, NPU_STATIC_SEQ_LEN, MEL_DIM]) },
-    melTransform: { waveform: new ort.Tensor('float32', new Float32Array(240000), [1, 240000]) },
+    melTransform: { audio: new ort.Tensor('float32', new Float32Array(240000), [1, 240000]) },
 };
 
 /** @deprecated Using classifyDevice 替代 */
@@ -493,12 +493,10 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     try {
         await cpuSession.run(dummyInputs);
     } catch (runErr) {
-        // 当 DML EP 不可用而回退到 CPU 时，dummy 输入可能与模型的静态形状或
-        // 旧版输入名称不匹配。常见情况：
+        // 当 DML EP 不可用而回退到 CPU 时，dummy 输入可能与模型的静态形状不匹配。常见情况：
         //   1. *_dml.onnx 静态形状模型（diff_step seq_len=2048, vocoder seq_len=500）
         //      与动态 dummy（seq_len=3）不匹配 → "invalid dimensions"
-        //   2. 旧版 mel_transform.onnx 输入名为 'audio'（新版为 'waveform'）
-        //      且形状为静态 [1,24000] → "input 'X' is missing in 'feeds'"
+        //   2. mel_transform.onnx 形状为静态 [1,24000]，dummy 也是 [1,1440] → "invalid dimensions"
         // 模型已成功加载（create 成功），验证失败仅因 dummy 不匹配，
         // 跳过验证直接返回会话，首次实际推理时自然验证。动态形状的 fp16 模型不受影响。
         const errSummary = runErr.message.substring(0, 80).split('\n')[0];
