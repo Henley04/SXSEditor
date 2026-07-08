@@ -53,7 +53,7 @@ def main():
         wrapper, args_tuple, output_path,
         input_names=input_names,
         output_names=output_names,
-        dynamic_shapes={
+        dynamic_axes={
             'xt_input': {1: 'seq_len'},
             'cond': {1: 'seq_len'},
             'xt_mask': {1: 'seq_len'},
