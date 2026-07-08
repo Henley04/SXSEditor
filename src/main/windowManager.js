@@ -480,14 +480,18 @@ function openAudioPreprocess(data) {
   });
 }
 
+function closeFragmentEditor(fragmentId) {
+  const win = fragmentWindows[fragmentId];
+  if (win && !win.isDestroyed()) {
+    win.destroy();
+  }
+  delete fragmentWindows[fragmentId];
+  delete pendingFragmentData[fragmentId];
+}
+
 function closeAllFragmentEditors() {
   for (const id in fragmentWindows) {
-    const win = fragmentWindows[id];
-    if (win && !win.isDestroyed()) {
-      win.destroy();
-    }
-    delete fragmentWindows[id];
-    delete pendingFragmentData[id];
+    closeFragmentEditor(id);
   }
 }
 
@@ -526,6 +530,11 @@ function registerWindowIpc() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('fragmentDataSaved', { fragmentId, ...data });
     }
+    return { success: true };
+  });
+
+  ipcMain.handle('fragment:close', async (event, fragmentId) => {
+    closeFragmentEditor(fragmentId);
     return { success: true };
   });
 
@@ -625,4 +634,5 @@ module.exports = {
   setClosePending,
   getClosePending,
   closeAllFragmentEditors,
+  closeFragmentEditor,
 };

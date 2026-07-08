@@ -269,6 +269,18 @@ export function renderFragmentTimeline() {
       ctx.strokeRect(fragX - 2, y + 4, 4, FRAGMENT_HEIGHT);
       ctx.strokeRect(fragX + fragWidth - 2, y + 4, 4, FRAGMENT_HEIGHT);
       ctx.restore();
+
+      // Selection highlight
+      if (fragment.id === state.selectedFragmentId) {
+        ctx.save();
+        ctx.strokeStyle = c.accent;
+        ctx.lineWidth = 2.5;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.roundRect(fragX - 1, fragY - 1, fragWidth + 2, FRAGMENT_HEIGHT + 2, radius + 1);
+        ctx.stroke();
+        ctx.restore();
+      }
     });
 
     if (singerFragments.length === 0) {

@@ -24,6 +24,8 @@ export default {
     singerFileNotFound: '歌手文件未找到',
     relocate: '重新选定',
     addFragment: '添加分片',
+    deleteFragment: '删除分片',
+    confirmDeleteFragment: '确认删除分片 "{name}"？',
     deleteSinger: '删除歌手',
     synthesizing: '合成中...',
     synthesizingProgress: '合成中 {progress}%',
