@@ -311,12 +311,315 @@ def find_initializer(graph, name):
             return init
     return None
 
+def _build_cooley_tukey_stft(stft_node, graph, conv_input, signal_is_3d,
+                              hop_size, window, n_fft, onesided, eps_value,
+                              final_output_name):
+    """Build Cooley-Tukey MatMul DFT for STFT replacement (N=1920=64×30).
+
+    Decomposes N=1920 DFT into 64×30 two-step MatMul for higher precision.
+    Accumulated error: sqrt(64)+sqrt(30)≈13.5ε vs sqrt(1920)≈43.8ε for direct
+    Conv1D DFT. 3.2x improvement, sufficient to escape log() sensitivity region
+    that caused mel_transform SNR=49.86dB (vs 119dB for other models).
+
+    Algorithm (real-input DFT via Cooley-Tukey):
+      N = N1 × N2 = 64 × 30
+      Index map: n = N2*n1 + n2 (n1∈[0,64), n2∈[0,30))
+                 k = k1 + N1*k2 (k1∈[0,64), k2∈[0,30))
+      X[k1+N1*k2] = Σ_{n2} W_{N2}^(k2*n2) * W_N^(k1*n2) * [Σ_{n1} x[N2*n1+n2] * W_{N1}^(k1*n1)]
+
+    Steps:
+      1. Gather sliding window matrix [B, T_frames, N] + Mul window
+      2. Reshape → [B, T, 64, 30], Transpose → [B, T, 30, 64] (n2, n1)
+      3. DFT64: MatMul with cos/sin basis → G_real, G_imag [B, T, 30, 64] (n2, k1)
+      4. Twiddle: G' = G * (cos - i*sin)(2π*k1*n2/N)
+      5. Transpose → [B, T, 64, 30] (k1, n2)
+      6. DFT30: MatMul with cos/sin basis → X_real, X_imag [B, T, 64, 30] (k1, k2)
+      7. |X|^2, Reshape → [B, T, 1920], Slice onesided → [B, T, 961]
+      8. Transpose → [B, 961, T], Add(eps), Sqrt
+
+    Returns (new_nodes, new_initializers) or None if not applicable.
+    """
+    N1, N2 = 64, 30
+    if N1 * N2 != n_fft:
+        return None
+
+    num_freq = n_fft // 2 + 1 if onesided else n_fft
+
+    # Get static input shape for index precomputation
+    input_shape = None
+    for vi in list(graph.value_info) + list(graph.input):
+        if vi.name == conv_input:
+            dims = [d.dim_value for d in vi.type.tensor_type.shape.dim]
+            if dims and all(d > 0 for d in dims):
+                input_shape = dims
+            break
+    if input_shape is None:
+        return None  # Dynamic shape, can't precompute gather indices
+
+    T_padded = input_shape[-1]
+    T_frames = (T_padded - n_fft) // hop_size + 1
+    if T_frames <= 0:
+        return None
+
+    prefix = stft_node.name
+    new_nodes = []
+    new_initializers = []
+
+    # ============================================================
+    # Step 1: Sliding window matrix via Gather + Mul window
+    # ============================================================
+    # Gather indices [T_frames, n_fft]: indices[t, n] = t*hop + n
+    t_range = np.arange(T_frames, dtype=np.int64) * hop_size
+    n_range = np.arange(n_fft, dtype=np.int64)
+    gather_indices = t_range.reshape(-1, 1) + n_range.reshape(1, -1)
+    indices_name = f"{prefix}_gather_indices"
+    new_initializers.append(numpy_helper.from_array(gather_indices, name=indices_name))
+
+    # Ensure input is 3D [B, 1, T_padded]
+    if signal_is_3d:
+        gather_input = conv_input
+    else:
+        unsq_name = f"{prefix}_3d"
+        ax_name = f"{prefix}_ax"
+        new_nodes.append(helper.make_node('Unsqueeze', [conv_input, ax_name],
+                                           [unsq_name], name=f"{prefix}_unsq"))
+        new_initializers.append(numpy_helper.from_array(np.array([1], dtype=np.int64),
+                                                         name=ax_name))
+        gather_input = unsq_name
+
+    # Gather(axis=2): [B, 1, T_padded] → [B, 1, T_frames, n_fft]
+    frames_name = f"{prefix}_frames"
+    new_nodes.append(helper.make_node('Gather', [gather_input, indices_name],
+                                       [frames_name], name=f"{prefix}_gather", axis=2))
+
+    # Squeeze axis=1: → [B, T_frames, n_fft]
+    squeezed_name = f"{prefix}_squeezed"
+    sq_ax_name = f"{prefix}_sq_ax"
+    new_nodes.append(helper.make_node('Squeeze', [frames_name, sq_ax_name],
+                                       [squeezed_name], name=f"{prefix}_squeeze"))
+    new_initializers.append(numpy_helper.from_array(np.array([1], dtype=np.int64),
+                                                     name=sq_ax_name))
+
+    # Mul window (broadcast along n_fft dim)
+    window_name = f"{prefix}_window"
+    new_initializers.append(numpy_helper.from_array(window.astype(np.float32), name=window_name))
+    windowed_name = f"{prefix}_windowed"
+    new_nodes.append(helper.make_node('Mul', [squeezed_name, window_name],
+                                       [windowed_name], name=f"{prefix}_win_mul"))
+
+    # ============================================================
+    # Step 2: Reshape [B, T, 1920] → [B, T, 64, 30] + Transpose → [B, T, 30, 64]
+    # ============================================================
+    # Build shape [B, T, 64, 30] dynamically (first 2 dims from input, last 2 fixed)
+    shape_name = f"{prefix}_shape"
+    new_nodes.append(helper.make_node('Shape', [windowed_name], [shape_name],
+                                       name=f"{prefix}_shape_node"))
+    # Slice first 2 elements of shape (Shape is 1D [B, T, N], take [0:2] → [B, T])
+    bt_starts = f"{prefix}_bt_starts"
+    bt_ends = f"{prefix}_bt_ends"
+    bt_axes = f"{prefix}_bt_axes"
+    new_initializers.append(numpy_helper.from_array(np.array([0], dtype=np.int64), name=bt_starts))
+    new_initializers.append(numpy_helper.from_array(np.array([2], dtype=np.int64), name=bt_ends))
+    new_initializers.append(numpy_helper.from_array(np.array([0], dtype=np.int64), name=bt_axes))
+    bt_shape_name = f"{prefix}_bt_shape"
+    new_nodes.append(helper.make_node('Slice', [shape_name, bt_starts, bt_ends, bt_axes],
+                                       [bt_shape_name], name=f"{prefix}_bt_slice"))
+    # Concat with [N1, N2]
+    n1_n2_name = f"{prefix}_n1_n2"
+    new_initializers.append(numpy_helper.from_array(np.array([N1, N2], dtype=np.int64), name=n1_n2_name))
+    reshape_shape_name = f"{prefix}_reshape_shape"
+    new_nodes.append(helper.make_node('Concat', [bt_shape_name, n1_n2_name],
+                                       [reshape_shape_name], name=f"{prefix}_shape_concat", axis=0))
+    reshaped_name = f"{prefix}_reshaped"
+    new_nodes.append(helper.make_node('Reshape', [windowed_name, reshape_shape_name],
+                                       [reshaped_name], name=f"{prefix}_reshape"))
+
+    # Transpose [B, T, 64, 30] → [B, T, 30, 64] (n2, n1)
+    transposed_name = f"{prefix}_transposed"
+    new_nodes.append(helper.make_node('Transpose', [reshaped_name], [transposed_name],
+                                       name=f"{prefix}_transpose", perm=[0, 1, 3, 2]))
+
+    # ============================================================
+    # Step 3: DFT64 along n1 (MatMul)
+    # G_real[n2, k1] = Σ_{n1} x[n2, n1] * cos(2π*k1*n1/64)
+    # G_imag[n2, k1] = Σ_{n1} x[n2, n1] * (-sin(2π*k1*n1/64))
+    # MatMul(x_T[n2,n1], basis_T[n1,k1]) → [n2, k1]
+    # ============================================================
+    n1_arr = np.arange(N1, dtype=np.float32)
+    k1_arr = np.arange(N1, dtype=np.float32).reshape(-1, 1)
+    dft64_real = np.cos(2 * np.pi * k1_arr * n1_arr / N1).astype(np.float32)  # [k1, n1]
+    dft64_imag = (-np.sin(2 * np.pi * k1_arr * n1_arr / N1)).astype(np.float32)  # [k1, n1]
+    # Transpose to [n1, k1] for MatMul
+    dft64_real_T = dft64_real.T.copy()
+    dft64_imag_T = dft64_imag.T.copy()
+
+    dft64_real_name = f"{prefix}_dft64_real_T"
+    dft64_imag_name = f"{prefix}_dft64_imag_T"
+    new_initializers.append(numpy_helper.from_array(dft64_real_T, name=dft64_real_name))
+    new_initializers.append(numpy_helper.from_array(dft64_imag_T, name=dft64_imag_name))
+
+    g_real_name = f"{prefix}_g_real"
+    g_imag_name = f"{prefix}_g_imag"
+    new_nodes.append(helper.make_node('MatMul', [transposed_name, dft64_real_name],
+                                       [g_real_name], name=f"{prefix}_dft64_real"))
+    new_nodes.append(helper.make_node('MatMul', [transposed_name, dft64_imag_name],
+                                       [g_imag_name], name=f"{prefix}_dft64_imag"))
+
+    # ============================================================
+    # Step 4: Twiddle multiplication
+    # G'[n2, k1] = G[n2, k1] * W_N^(k1*n2), W_N = exp(-2πi/N)
+    # W_real = cos(2π*k1*n2/N), W_imag = -sin(2π*k1*n2/N)
+    # G'_real = G_real*Tw_real - G_imag*Tw_imag
+    # G'_imag = G_real*Tw_imag + G_imag*Tw_real
+    # ============================================================
+    n2_arr = np.arange(N2, dtype=np.float32).reshape(-1, 1)  # [n2, 1]
+    k1_arr2 = np.arange(N1, dtype=np.float32).reshape(1, -1)  # [1, k1]
+    twiddle_real = np.cos(2 * np.pi * k1_arr2 * n2_arr / n_fft).astype(np.float32)  # [n2, k1]
+    twiddle_imag = (-np.sin(2 * np.pi * k1_arr2 * n2_arr / n_fft)).astype(np.float32)  # [n2, k1]
+
+    twiddle_real_name = f"{prefix}_twiddle_real"
+    twiddle_imag_name = f"{prefix}_twiddle_imag"
+    new_initializers.append(numpy_helper.from_array(twiddle_real, name=twiddle_real_name))
+    new_initializers.append(numpy_helper.from_array(twiddle_imag, name=twiddle_imag_name))
+
+    temp1 = f"{prefix}_t1"; temp2 = f"{prefix}_t2"
+    temp3 = f"{prefix}_t3"; temp4 = f"{prefix}_t4"
+    gp_real = f"{prefix}_gp_real"; gp_imag = f"{prefix}_gp_imag"
+
+    new_nodes.append(helper.make_node('Mul', [g_real_name, twiddle_real_name],
+                                       [temp1], name=f"{prefix}_tw_r1"))
+    new_nodes.append(helper.make_node('Mul', [g_imag_name, twiddle_imag_name],
+                                       [temp2], name=f"{prefix}_tw_r2"))
+    new_nodes.append(helper.make_node('Sub', [temp1, temp2],
+                                       [gp_real], name=f"{prefix}_tw_rsub"))
+    new_nodes.append(helper.make_node('Mul', [g_real_name, twiddle_imag_name],
+                                       [temp3], name=f"{prefix}_tw_i1"))
+    new_nodes.append(helper.make_node('Mul', [g_imag_name, twiddle_real_name],
+                                       [temp4], name=f"{prefix}_tw_i2"))
+    new_nodes.append(helper.make_node('Add', [temp3, temp4],
+                                       [gp_imag], name=f"{prefix}_tw_iadd"))
+
+    # ============================================================
+    # Step 5: Transpose G' [B, T, 30, 64] → [B, T, 64, 30] (k1, n2)
+    # ============================================================
+    gp_real_T = f"{prefix}_gp_real_T"
+    gp_imag_T = f"{prefix}_gp_imag_T"
+    new_nodes.append(helper.make_node('Transpose', [gp_real], [gp_real_T],
+                                       name=f"{prefix}_gp_T_r", perm=[0, 1, 3, 2]))
+    new_nodes.append(helper.make_node('Transpose', [gp_imag], [gp_imag_T],
+                                       name=f"{prefix}_gp_T_i", perm=[0, 1, 3, 2]))
+
+    # ============================================================
+    # Step 6: DFT30 along n2 (MatMul)
+    # X_real[k1, k2] = Σ_{n2} G'_real[k1,n2]*cos(2π*k2*n2/30) + G'_imag[k1,n2]*sin(2π*k2*n2/30)
+    # X_imag[k1, k2] = -Σ_{n2} G'_real[k1,n2]*sin(2π*k2*n2/30) + G'_imag[k1,n2]*cos(2π*k2*n2/30)
+    # ============================================================
+    n2_arr2 = np.arange(N2, dtype=np.float32)
+    k2_arr = np.arange(N2, dtype=np.float32).reshape(-1, 1)
+    dft30_cos = np.cos(2 * np.pi * k2_arr * n2_arr2 / N2).astype(np.float32)  # [k2, n2]
+    dft30_sin = np.sin(2 * np.pi * k2_arr * n2_arr2 / N2).astype(np.float32)  # [k2, n2]
+    # Transpose to [n2, k2] for MatMul
+    dft30_cos_T = dft30_cos.T.copy()
+    dft30_sin_T = dft30_sin.T.copy()
+
+    dft30_cos_name = f"{prefix}_dft30_cos_T"
+    dft30_sin_name = f"{prefix}_dft30_sin_T"
+    new_initializers.append(numpy_helper.from_array(dft30_cos_T, name=dft30_cos_name))
+    new_initializers.append(numpy_helper.from_array(dft30_sin_T, name=dft30_sin_name))
+
+    # X_real = MatMul(G'_real, cos_T) + MatMul(G'_imag, sin_T)
+    x_real_p1 = f"{prefix}_x_r1"; x_real_p2 = f"{prefix}_x_r2"
+    x_real_name = f"{prefix}_x_real"
+    new_nodes.append(helper.make_node('MatMul', [gp_real_T, dft30_cos_name],
+                                       [x_real_p1], name=f"{prefix}_dft30_r1"))
+    new_nodes.append(helper.make_node('MatMul', [gp_imag_T, dft30_sin_name],
+                                       [x_real_p2], name=f"{prefix}_dft30_r2"))
+    new_nodes.append(helper.make_node('Add', [x_real_p1, x_real_p2],
+                                       [x_real_name], name=f"{prefix}_x_radd"))
+
+    # X_imag = -MatMul(G'_real, sin_T) + MatMul(G'_imag, cos_T)
+    x_imag_p1 = f"{prefix}_x_i1"; x_imag_p2 = f"{prefix}_x_i2"
+    x_imag_name = f"{prefix}_x_imag"
+    new_nodes.append(helper.make_node('MatMul', [gp_real_T, dft30_sin_name],
+                                       [x_imag_p1], name=f"{prefix}_dft30_i1"))
+    new_nodes.append(helper.make_node('MatMul', [gp_imag_T, dft30_cos_name],
+                                       [x_imag_p2], name=f"{prefix}_dft30_i2"))
+    new_nodes.append(helper.make_node('Sub', [x_imag_p2, x_imag_p1],
+                                       [x_imag_name], name=f"{prefix}_x_isub"))
+
+    # ============================================================
+    # Step 7: |X|^2 = X_real^2 + X_imag^2
+    # ============================================================
+    x_real_sq = f"{prefix}_x_rsq"; x_imag_sq = f"{prefix}_x_isq"
+    mag_sq_name = f"{prefix}_mag_sq"
+    new_nodes.append(helper.make_node('Mul', [x_real_name, x_real_name],
+                                       [x_real_sq], name=f"{prefix}_x_rsq"))
+    new_nodes.append(helper.make_node('Mul', [x_imag_name, x_imag_name],
+                                       [x_imag_sq], name=f"{prefix}_x_isq"))
+    new_nodes.append(helper.make_node('Add', [x_real_sq, x_imag_sq],
+                                       [mag_sq_name], name=f"{prefix}_mag_sq_add"))
+
+    # ============================================================
+    # Step 8: Transpose [B, T, 64, 30] → [B, T, 30, 64] (k2, k1),
+    #          then Reshape → [B, T, 1920] (k = k2*N1 + k1 = k1 + 64*k2),
+    #          then Onesided slice → [B, T, 961]
+    # ============================================================
+    # Output index: k = k1 + N1*k2. Row-major reshape of [k2, k1] gives k = k2*N1 + k1 ✓
+    mag_sq_transposed = f"{prefix}_mag_sq_k2k1"
+    new_nodes.append(helper.make_node('Transpose', [mag_sq_name], [mag_sq_transposed],
+                                       name=f"{prefix}_mag_sq_k2k1_transpose", perm=[0, 1, 3, 2]))
+    n_fft_const = f"{prefix}_n_fft_const"
+    new_initializers.append(numpy_helper.from_array(np.array([n_fft], dtype=np.int64), name=n_fft_const))
+    flat_shape = f"{prefix}_flat_shape"
+    new_nodes.append(helper.make_node('Concat', [bt_shape_name, n_fft_const],
+                                       [flat_shape], name=f"{prefix}_flat_concat", axis=0))
+    mag_sq_flat = f"{prefix}_mag_sq_flat"
+    new_nodes.append(helper.make_node('Reshape', [mag_sq_transposed, flat_shape],
+                                       [mag_sq_flat], name=f"{prefix}_mag_sq_reshape"))
+
+    if onesided:
+        # Slice [0:num_freq] along axis=2
+        sl_starts = f"{prefix}_sl_starts"; sl_ends = f"{prefix}_sl_ends"
+        sl_axes = f"{prefix}_sl_axes"; sl_steps = f"{prefix}_sl_steps"
+        new_initializers.append(numpy_helper.from_array(np.array([0], dtype=np.int64), name=sl_starts))
+        new_initializers.append(numpy_helper.from_array(np.array([num_freq], dtype=np.int64), name=sl_ends))
+        new_initializers.append(numpy_helper.from_array(np.array([2], dtype=np.int64), name=sl_axes))
+        new_initializers.append(numpy_helper.from_array(np.array([1], dtype=np.int64), name=sl_steps))
+        mag_sq_os = f"{prefix}_mag_sq_os"
+        new_nodes.append(helper.make_node('Slice',
+                                           [mag_sq_flat, sl_starts, sl_ends, sl_axes, sl_steps],
+                                           [mag_sq_os], name=f"{prefix}_os_slice"))
+    else:
+        mag_sq_os = mag_sq_flat
+
+    # ============================================================
+    # Step 9: Transpose [B, T, num_freq] → [B, num_freq, T] + Add(eps) + Sqrt
+    # ============================================================
+    mag_sq_t = f"{prefix}_mag_sq_t"
+    new_nodes.append(helper.make_node('Transpose', [mag_sq_os], [mag_sq_t],
+                                       name=f"{prefix}_mag_sq_transpose", perm=[0, 2, 1]))
+
+    if eps_value is None or eps_value == 0.0:
+        eps_value = 1e-9
+    eps_name = f"{prefix}_eps"
+    new_initializers.append(numpy_helper.from_array(
+        np.array([eps_value], dtype=np.float32), name=eps_name))
+    mag_sq_eps = f"{prefix}_mag_sq_eps"
+    new_nodes.append(helper.make_node('Add', [mag_sq_t, eps_name], [mag_sq_eps],
+                                       name=f"{prefix}_eps_add"))
+    new_nodes.append(helper.make_node('Sqrt', [mag_sq_eps], [final_output_name],
+                                       name=f"{prefix}_sqrt"))
+
+    return new_nodes, new_initializers
+
+
 def replace_stft(model):
     graph = model.graph
     nodes_to_remove = set()
     new_nodes = []
     new_initializers = []
     replaced = 0
+    ct_used = 0
 
     for stft_node in list(graph.node):
         if stft_node.op_type != 'STFT':
@@ -344,29 +647,11 @@ def replace_stft(model):
         onesided = any(a.name == 'onesided' and a.i == 1 for a in stft_node.attribute)
         num_freq = n_fft // 2 + 1 if onesided else n_fft
 
-        n = np.arange(n_fft, dtype=np.float32)
-        k = np.arange(num_freq, dtype=np.float32).reshape(-1, 1)
-        angles = 2 * np.pi * k * n / n_fft
-        cos_kernel = (window * np.cos(angles)).reshape(num_freq, 1, n_fft).astype(np.float32)
-        sin_kernel = (window * (-np.sin(angles))).reshape(num_freq, 1, n_fft).astype(np.float32)
-
-        cos_name = f"{stft_node.name}_cos_kernel"
-        sin_name = f"{stft_node.name}_sin_kernel"
-        new_initializers.append(numpy_helper.from_array(cos_kernel, name=cos_name))
-        new_initializers.append(numpy_helper.from_array(sin_kernel, name=sin_name))
-
         conv_input = stft_node.input[0]
         signal_is_3d = any(
             vi.name == conv_input and len([d.dim_value for d in vi.type.tensor_type.shape.dim]) == 3
             for vi in graph.value_info
         )
-        if not signal_is_3d:
-            unsq_name = f"{stft_node.name}_3d"
-            new_nodes.append(helper.make_node('Unsqueeze', [conv_input, f"{stft_node.name}_ax"],
-                                               [unsq_name], name=f"{stft_node.name}_unsq"))
-            new_initializers.append(numpy_helper.from_array(np.array([1], dtype=np.int64),
-                                                             name=f"{stft_node.name}_ax"))
-            conv_input = unsq_name
 
         stft_output = stft_node.output[0]
         trans_node = next((n2 for n2 in graph.node if n2.op_type == 'Transpose' and stft_output in n2.input), None)
@@ -391,8 +676,6 @@ def replace_stft(model):
             continue
 
         # Extract epsilon from original Add node (e.g., +1e-9 in sqrt(mag_sq + 1e-9)).
-        # Without this, Sqrt(0) at silent frames causes numerical instability and
-        # log() compression amplifies the error, degrading mel_transform SNR by ~70dB.
         eps_value = None
         if add_node is not None:
             other_input = add_node.input[1] if add_node.input[0] == reduce_node.output[0] else add_node.input[0]
@@ -413,6 +696,47 @@ def replace_stft(model):
                         break
 
         final_output = sqrt_node.output[0]
+
+        # ============================================================
+        # Try Cooley-Tukey MatMul DFT (N=1920=64×30) for higher precision.
+        # Accumulated error ~13.5ε vs ~43.8ε for Conv1D direct DFT.
+        # ============================================================
+        ct_result = _build_cooley_tukey_stft(
+            stft_node, graph, conv_input, signal_is_3d,
+            hop_size, window, n_fft, onesided, eps_value, final_output
+        )
+        if ct_result is not None:
+            ct_nodes, ct_inits = ct_result
+            new_nodes.extend(ct_nodes)
+            new_initializers.extend(ct_inits)
+            for n in [stft_node, trans_node, pow_node, reduce_node, sqrt_node] + ([add_node] if add_node else []):
+                nodes_to_remove.add(n.name)
+            replaced += 1
+            ct_used += 1
+            continue
+
+        # ============================================================
+        # Fallback: Conv1D-based direct DFT (for non-1920 N or dynamic shapes)
+        # ============================================================
+        n = np.arange(n_fft, dtype=np.float32)
+        k = np.arange(num_freq, dtype=np.float32).reshape(-1, 1)
+        angles = 2 * np.pi * k * n / n_fft
+        cos_kernel = (window * np.cos(angles)).reshape(num_freq, 1, n_fft).astype(np.float32)
+        sin_kernel = (window * (-np.sin(angles))).reshape(num_freq, 1, n_fft).astype(np.float32)
+
+        cos_name = f"{stft_node.name}_cos_kernel"
+        sin_name = f"{stft_node.name}_sin_kernel"
+        new_initializers.append(numpy_helper.from_array(cos_kernel, name=cos_name))
+        new_initializers.append(numpy_helper.from_array(sin_kernel, name=sin_name))
+
+        if not signal_is_3d:
+            unsq_name = f"{stft_node.name}_3d"
+            new_nodes.append(helper.make_node('Unsqueeze', [conv_input, f"{stft_node.name}_ax"],
+                                               [unsq_name], name=f"{stft_node.name}_unsq"))
+            new_initializers.append(numpy_helper.from_array(np.array([1], dtype=np.int64),
+                                                             name=f"{stft_node.name}_ax"))
+            conv_input = unsq_name
+
         real_name = f"{stft_node.name}_real"
         imag_name = f"{stft_node.name}_imag"
         real_sq = f"{stft_node.name}_real_sq"
@@ -430,13 +754,8 @@ def replace_stft(model):
         ])
 
         if eps_value is None or eps_value == 0.0:
-            # No Add(eps) node found in original graph (dynamo may have optimized it away).
-            # Use default 1e-9 to match PyTorch MelSpectrogram.forward: sqrt(mag_sq + 1e-9).
-            # Without this, Sqrt(0) at silent frames causes numerical instability and
-            # log() compression amplifies the error, degrading mel_transform SNR by ~70dB.
             eps_value = 1e-9
 
-        # Sqrt(mag_sq + eps) — always insert epsilon for numerical stability
         eps_name = f"{stft_node.name}_eps"
         new_initializers.append(numpy_helper.from_array(
             np.array([eps_value], dtype=np.float32), name=eps_name))
@@ -456,7 +775,8 @@ def replace_stft(model):
         graph.node.extend(remaining)
         graph.node.extend(new_nodes)
     graph.initializer.extend(new_initializers)
-    print(f"  Replaced {replaced} STFT nodes")
+    ct_label = f" ({ct_used} Cooley-Tukey, {replaced - ct_used} Conv1D)" if ct_used else ""
+    print(f"  Replaced {replaced} STFT nodes{ct_label}")
     return model
 
 
