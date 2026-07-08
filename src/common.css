@@ -31,6 +31,7 @@ html, body {
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: var(--radius-sm);
+  transition: background var(--motion-fast);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -41,6 +42,42 @@ html, body {
 ::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
+}
+
+/* ==================== 全局按钮基础样式与动效 ==================== */
+button {
+  padding: var(--space-4) var(--space-7);
+  font-size: var(--font-md);
+  border: none;
+  border-radius: var(--radius-lg);
+  clip-path: var(--clip-button, none);
+  cursor: pointer;
+  font-weight: 500;
+  transition: all var(--motion-base) cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  position: relative;
+  overflow: hidden;
+  /* Button press effect */
+  transform: translateZ(0);
+  will-change: transform, box-shadow;
+}
+
+button:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
+
+button:active:not(:disabled) {
+  transform: translateY(0) scale(0.97);
+  transition-duration: 0.06s;
+  transition-timing-function: ease-out;
+}
+
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none !important;
 }
 
 /* ==================== section-title 样式 ==================== */
@@ -85,27 +122,6 @@ h2::before {
   border-radius: var(--radius-sm);
 }
 
-/* ==================== @keyframes spin ==================== */
-@keyframes spin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-/* ==================== 按钮全局样式 ==================== */
-button {
-  padding: var(--space-4) var(--space-7);
-  font-size: var(--font-md);
-  border: none;
-  border-radius: var(--radius-lg);
-  clip-path: var(--clip-button, none);
-  cursor: pointer;
-  font-weight: 500;
-  transition: all var(--motion-base);
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-
 /* ==================== .section-desc 样式 ==================== */
 .section-desc {
   font-size: var(--font-sm);
@@ -114,4 +130,33 @@ button {
   line-height: 1.5;
   padding-left: 11px;
   border-left: 2px solid var(--ink-soft);
+}
+
+/* ==================== 全局交互增强 ==================== */
+
+/* Focus ring on all interactive elements */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+button:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Smooth transitions on interactive inputs */
+input,
+select,
+textarea {
+  transition: border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, background var(--motion-fast) ease;
+}
+
+/* Card-like panels get subtle hover lift */
+[class$="-panel"]:not(.modal-overlay):not(.loading-overlay) {
+  transition: box-shadow var(--motion-base) ease;
+}
+
+/* Selection/active states get accent glow */
+::selection {
+  background: var(--selection-bg);
+  color: var(--selection-fg);
 }

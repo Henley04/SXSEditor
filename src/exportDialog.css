@@ -3,12 +3,12 @@
 .export-dialog-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(8, 8, 18, 0.78);
+  background: var(--overlay-scrim);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10001;
-  backdrop-filter: blur(4px);
   animation: export-dialog-fade-in var(--motion-base) ease;
 }
 
@@ -30,11 +30,12 @@
   background: var(--bg-app);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
-  box-shadow: 0 16px 48px var(--shadow-color-strong);
+  clip-path: var(--clip-panel, none);
+  box-shadow: 0 16px 48px var(--shadow-color-strong), 0 0 40px var(--accent-softer);
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: export-dialog-slide-up var(--motion-base) ease;
+  animation: export-dialog-slide-up 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* ==================== Header ==================== */
