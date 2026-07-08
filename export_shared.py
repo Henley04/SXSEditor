@@ -102,15 +102,24 @@ LlamaNARDecoderLayer.forward = _pnar
 _orig_dli = DiffLlama.__init__
 def _pdli(self, *a, **kw):
     _orig_dli(self, *a, **kw)
-    # Store inv_freq for RoPE computation. In forward, we generate positions
-    # via ConstantOfShape+CumSum instead of Range(0, T, 1) because DML does
-    # not support Range with dynamic limit. ConstantOfShape and CumSum are
-    # both DML-compatible (opset 9 and 11 respectively).
+    # Precompute full RoPE cos/sin tables up to maximum supported sequence length (4096)
+    # and use dynamic Slice at runtime instead of ConstantOfShape+CumSum position generation.
+    # This avoids floating-point cumulative accumulation errors in DML that cause NaN output.
     layer_cfg = self.layers[0].self_attn.config
     head_dim = layer_cfg.hidden_size // layer_cfg.num_attention_heads
     base = getattr(layer_cfg, 'rope_theta', 10000.0)
+    max_seq_len = 4096
     inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
-    self.register_buffer('_rope_inv_freq', inv_freq, persistent=False)  # (head_dim/2,)
+    position = torch.arange(max_seq_len, dtype=torch.float32)  # precompute 0..4095 (constant)
+    freqs = position[:, None] * inv_freq[None, :]  # (max_seq_len, head_dim/2)
+    emb = torch.cat([freqs, freqs], dim=-1)  # (max_seq_len, head_dim)
+    cos = emb.cos()  # (max_seq_len, head_dim)
+    sin = emb.sin()
+    # Add singleton batch dimension for ONNX Slice compatibility: [1, max_seq_len, head_dim]
+    cos = cos.unsqueeze(0)
+    sin = sin.unsqueeze(0)
+    self.register_buffer('_rope_cos', cos, persistent=False)   # (1, 4096, head_dim)
+    self.register_buffer('_rope_sin', sin, persistent=False)   # (1, 4096, head_dim)
 DiffLlama.__init__ = _pdli
 
 def _pdl(self, x, diffusion_step, cond, x_mask, **kw):
@@ -122,16 +131,11 @@ def _pdl(self, x, diffusion_step, cond, x_mask, **kw):
     x = x + cond_embedding
     attention_mask = self._prepare_decoder_attention_mask(x_mask, (B, T), x, 0)
     hidden_states = x
-    # Generate position indices [0, 1, ..., T-1] via ConstantOfShape + CumSum.
-    # DML doesn't support Range with dynamic limit, but ConstantOfShape and
-    # CumSum are both DML-compatible. torch.ones(T) traces to ConstantOfShape
-    # with dynamic shape from Shape(xt_input) → Gather.
-    ones = torch.ones(T, device=x.device, dtype=torch.float32)
-    positions = torch.cumsum(ones, dim=0) - 1.0  # [0, 1, ..., T-1]
-    freqs = positions[:, None] * self._rope_inv_freq[None, :]  # (T, head_dim/2)
-    emb = torch.cat([freqs, freqs], dim=-1)  # (T, head_dim)
-    cos = emb.cos().unsqueeze(0).to(x.dtype)  # (1, T, head_dim)
-    sin = emb.sin().unsqueeze(0).to(x.dtype)
+    # Slice precomputed RoPE tables [1, 4096, head_dim] → [1, T, head_dim].
+    # This avoids ConstantOfShape+CumSum floating-point accumulation errors
+    # that cause NaN output on DML backend.
+    cos = self._rope_cos[:, :T, :].to(x.dtype)  # dynamic Slice, [1, T, head_dim]
+    sin = self._rope_sin[:, :T, :].to(x.dtype)
     position_embeddings = (cos, sin)
     for decoder_layer in self.layers:
         layer_outputs = decoder_layer(hidden_states, attention_mask=attention_mask,
@@ -1516,7 +1520,7 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
 
 
 def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_names,
-                        dynamic_axes=None, decompose_conv_transpose=True,
+                        dynamic_axes=None, dynamic_shapes=None, decompose_conv_transpose=True,
                         fix_mixed_precision=False):
     """Export a PyTorch wrapper to FP32 ONNX with opset 20 + DML post-processing.
 
@@ -1524,10 +1528,15 @@ def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_na
     first, then applies postprocess_onnx (STFT replacement, ConvTranspose decomposition,
     onnxsim, shape inference, strip metadata) and saves to output_path.
 
-    Note: torch.onnx.export with dynamo=True does not accept dynamic_axes (dynamo uses
-    dynamic_shapes instead). When dynamic_axes is None (default), dynamo=True is used
-    to match the existing FP32 export pattern. When dynamic_axes is provided, the call
-    falls back to dynamo=False so dynamic_axes takes effect.
+    Two export modes:
+      - dynamo=True (default, when dynamic_axes is None and dynamic_shapes is None):
+        torch.onnx.export with dynamo=True, static shapes. Best for models without
+        dynamic dims.
+      - dynamo=True + dynamic_shapes (when dynamic_shapes is provided):
+        Uses dynamo=True with dynamic_shapes dict for proper dynamic shape tracing.
+        Required for models with dynamic Slice/Range operations.
+      - dynamo=False + dynamic_axes (when dynamic_axes is provided, legacy):
+        Uses torch.jit.trace with dynamic_axes. Less accurate for dynamic ops.
 
     Args:
         wrapper: nn.Module to export.
@@ -1535,7 +1544,8 @@ def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_na
         output_path: final ONNX output path (external data written alongside as .data).
         input_names: list of input names.
         output_names: list of output names.
-        dynamic_axes: optional dynamic_axes dict; when provided, dynamo is disabled.
+        dynamic_axes: optional dynamic_axes dict (legacy, forces dynamo=False).
+        dynamic_shapes: optional dynamic_shapes dict (uses dynamo=True).
         decompose_conv_transpose: if True, decompose ConvTranspose(stride>1) for DML.
         fix_mixed_precision: if True, re-insert Cast(FP16->FP32) after onnxsim (W16A32).
 
@@ -1543,7 +1553,15 @@ def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_na
         The post-processed onnx.ModelProto.
     """
     tmp_path = output_path + '.raw.onnx'
-    use_dynamo = dynamic_axes is None
+    if dynamic_axes is not None:
+        use_dynamo = False
+        torch_dynamic_shapes = None
+    elif dynamic_shapes is not None:
+        use_dynamo = True
+        torch_dynamic_shapes = dynamic_shapes
+    else:
+        use_dynamo = True
+        torch_dynamic_shapes = None
     with torch.no_grad():
         torch.onnx.export(
             wrapper, args_tuple, tmp_path,
@@ -1552,12 +1570,13 @@ def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_na
             opset_version=20,
             dynamo=use_dynamo,
             dynamic_axes=dynamic_axes if not use_dynamo else None,
+            dynamic_shapes=torch_dynamic_shapes,
         )
     model = postprocess_onnx(
         tmp_path, output_path,
         fix_mixed_precision=fix_mixed_precision,
         decompose_conv_transpose=decompose_conv_transpose,
-        dynamic_input_shape=dynamic_axes is not None,
+        dynamic_input_shape=(dynamic_axes is not None) or (dynamic_shapes is not None),
     )
     if os.path.exists(tmp_path):
         os.remove(tmp_path)
