@@ -35,10 +35,15 @@ def main():
 
     output_path = os.path.join(args.output_dir, 'diff_step_dml.onnx')
     seq_len = 2048
+    # cond is cond_embedding (hidden_size-dim, already processed by cond_emb.onnx)
+    # Matches pipeline: preprocessing.js runs cond_emb first, then feeds
+    # cond_embedding to diff_step. hidden_size from config = COND_DIM (1024).
+    cond_dim = config.model.flow_matching.hidden_size
+    print(f"  cond_dim (hidden_size): {cond_dim}")
     args_tuple = (
         torch.randn(1, seq_len, 128, dtype=torch.float32),
         torch.tensor([0.5], dtype=torch.float32),
-        torch.randn(1, seq_len, 512, dtype=torch.float32),
+        torch.randn(1, seq_len, cond_dim, dtype=torch.float32),
         torch.ones(1, seq_len, dtype=torch.float32),
     )
     input_names = ['xt_input', 't', 'cond', 'xt_mask']
