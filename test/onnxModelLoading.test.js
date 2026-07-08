@@ -126,7 +126,7 @@ const MODEL_SPECS = [
     inputs: {
       xt_input: new ort.Tensor('float32', new Float32Array(2048 * MEL_DIM).fill(0.01), [1, 2048, MEL_DIM]),
       t: new ort.Tensor('float32', new Float32Array([0.5]), [1]),
-      cond: new ort.Tensor('float32', new Float32Array(2048 * EMBED_DIM).fill(0.01), [1, 2048, EMBED_DIM]),
+      cond: new ort.Tensor('float32', new Float32Array(2048 * COND_DIM).fill(0.01), [1, 2048, COND_DIM]),
       xt_mask: new ort.Tensor('float32', new Float32Array(2048).fill(1), [1, 2048]),
     },
     outputName: 'flow_pred',

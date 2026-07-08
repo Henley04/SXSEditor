@@ -134,13 +134,19 @@ print("[PATCHES] Applied transformers 5.x compatibility patches")
 # ============================================================
 
 class DiffStepWrapper(nn.Module):
+    """Wrap diff_estimator for ONNX export.
+
+    NOTE: cond_emb is NOT included here. The pipeline runs cond_emb.onnx
+    separately to convert cond_code (512-dim) -> cond_embedding (1024-dim),
+    then feeds cond_embedding directly to diff_step. This matches the
+    inference pipeline architecture in preprocessing.js + diffusion.js.
+    """
     def __init__(self, cfm_decoder):
         super().__init__()
-        self.cond_emb = cfm_decoder.model.cond_emb
         self.diff_estimator = cfm_decoder.model.diff_estimator
     def forward(self, xt_input, t, cond, xt_mask):
-        cond_emb = self.cond_emb(cond)
-        return self.diff_estimator(xt_input, t, cond_emb, xt_mask)
+        # cond is already cond_embedding (1024-dim), skip cond_emb
+        return self.diff_estimator(xt_input, t, cond, xt_mask)
 
 class VocoderBackboneWrapper(nn.Module):
     def __init__(self, vocoder):
