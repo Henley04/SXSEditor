@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-08 10:44:55",
+  "timestamp": "2026-07-08 13:25:27",
   "model_path": "D:\\Document\\electron\\SXSEditor\\SoulX-Singer\\pretrained_models\\SoulX-Singer\\model.pt",
   "onnx_dir": "D:\\Document\\electron\\SXSEditor\\onnx_models",
   "seq_len_hint": 100,
@@ -22,18 +22,18 @@
       "name": "note_text_encoder",
       "pytorch_shape": [
         1,
-        100,
+        1,
         512
       ],
       "onnx_shape": [
         1,
-        100,
+        1,
         512
       ],
       "mse": 0.0,
       "rmse": 0.0,
-      "cos": 1.0,
-      "snr_db": 119.9255256069617,
+      "cos": 0.9999999999999976,
+      "snr_db": 119.32410542246433,
       "passed": true,
       "relaxed": false,
       "threshold": {
@@ -46,18 +46,18 @@
       "name": "note_pitch_encoder",
       "pytorch_shape": [
         1,
-        100,
+        1,
         512
       ],
       "onnx_shape": [
         1,
-        100,
+        1,
         512
       ],
       "mse": 0.0,
       "rmse": 0.0,
-      "cos": 1.0000000000000002,
-      "snr_db": 119.96471837170299,
+      "cos": 0.9999999999999979,
+      "snr_db": 120.19654549398271,
       "passed": true,
       "relaxed": false,
       "threshold": {
@@ -70,18 +70,18 @@
       "name": "note_type_encoder",
       "pytorch_shape": [
         1,
-        100,
+        1,
         512
       ],
       "onnx_shape": [
         1,
-        100,
+        1,
         512
       ],
       "mse": 0.0,
       "rmse": 0.0,
-      "cos": 1.0,
-      "snr_db": 119.97051633097766,
+      "cos": 0.9999999999999982,
+      "snr_db": 120.0139599289161,
       "passed": true,
       "relaxed": false,
       "threshold": {
@@ -94,18 +94,18 @@
       "name": "f0_encoder",
       "pytorch_shape": [
         1,
-        200,
+        1,
         512
       ],
       "onnx_shape": [
         1,
-        200,
+        1,
         512
       ],
       "mse": 0.0,
       "rmse": 0.0,
-      "cos": 1.0,
-      "snr_db": 120.019262268507,
+      "cos": 0.999999999999998,
+      "snr_db": 119.70216583045881,
       "passed": true,
       "relaxed": false,
       "threshold": {
@@ -118,18 +118,18 @@
       "name": "preflow",
       "pytorch_shape": [
         1,
-        100,
+        1,
         512
       ],
       "onnx_shape": [
         1,
-        100,
+        1,
         512
       ],
-      "mse": 1.0433145072226706e-13,
-      "rmse": 3.2300379366544143e-07,
-      "cos": 0.9999999999999527,
-      "snr_db": 119.92646249124887,
+      "mse": 5.6446932902593644e-14,
+      "rmse": 2.3758563277814938e-07,
+      "cos": 0.9999999999999653,
+      "snr_db": 119.09401171514492,
       "passed": true,
       "relaxed": false,
       "threshold": {
@@ -142,18 +142,18 @@
       "name": "cond_emb",
       "pytorch_shape": [
         1,
-        100,
+        1,
         1024
       ],
       "onnx_shape": [
         1,
-        100,
+        1,
         1024
       ],
-      "mse": 2.0431036981138781e-16,
-      "rmse": 1.4293717844262486e-08,
-      "cos": 0.9999999999999978,
-      "snr_db": 106.38756692305576,
+      "mse": 4.146524432407234e-15,
+      "rmse": 6.439351234718629e-08,
+      "cos": 0.9999999999999212,
+      "snr_db": 105.8501920403043,
       "passed": true,
       "relaxed": false,
       "threshold": {
@@ -190,18 +190,18 @@
       "name": "diff_step",
       "pytorch_shape": [
         1,
-        2048,
+        1,
         128
       ],
       "onnx_shape": [
         1,
-        2048,
+        1,
         128
       ],
-      "mse": 1.1115539876535688e-13,
-      "rmse": 3.3339975819630833e-07,
-      "cos": 0.999999999999943,
-      "snr_db": 119.30445117512186,
+      "mse": 2.2055960031443222e-13,
+      "rmse": 4.696377330607414e-07,
+      "cos": 0.9999999999996948,
+      "snr_db": 114.97282986708205,
       "passed": true,
       "relaxed": false,
       "threshold": {
@@ -214,16 +214,16 @@
       "name": "vocoder",
       "pytorch_shape": [
         1,
-        240000
+        480
       ],
       "onnx_shape": [
         1,
-        240000
+        480
       ],
-      "mse": 4.920159601795718e-12,
-      "rmse": 2.2181432780133294e-06,
-      "cos": 0.999999999975736,
-      "snr_db": 102.33648966172831,
+      "mse": 1.9037194171248278e-10,
+      "rmse": 1.3797533899667824e-05,
+      "cos": 0.9999999998387928,
+      "snr_db": 94.84898808120143,
       "passed": true,
       "relaxed": true,
       "threshold": {

@@ -1447,6 +1447,15 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
                 model = simplified
         except Exception as e:
             print(f"    onnxsim error: {e}")
+    # Fix dynamic batch dimension: onnxsim may propagate symbolic batch dim to
+    # outputs, causing dim_value=0 with dim_param set. DML EP requires static
+    # batch dimension (dim_value=1). Clear the dim_param oneof and set dim_value=1.
+    for tensor_list in [model.graph.input, model.graph.output]:
+        for tensor in tensor_list:
+            dims = tensor.type.tensor_type.shape.dim
+            if len(dims) > 0 and dims[0].dim_value == 0 and dims[0].dim_param:
+                dims[0].ClearField('dim_param')
+                dims[0].dim_value = 1
     # Fix mixed precision types (W16A32: re-insert Cast for FP16 weights after onnxsim)
     if fix_mixed_precision:
         model = fix_mixed_precision_types(model)
