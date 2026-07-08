@@ -250,6 +250,18 @@ class Diffusion {
                     await new Promise(r => setImmediate(r));
                 }
             }
+            // 诊断：检测扩散输出是否包含 NaN/Inf
+            {
+                let xtNaN = 0, xtInf = 0;
+                const xtData = xt.data;
+                for (let i = 0; i < xtData.length; i++) {
+                    if (Number.isNaN(xtData[i])) xtNaN++;
+                    if (!Number.isFinite(xtData[i])) xtInf++;
+                }
+                if (xtNaN > 0 || xtInf > 0) {
+                    console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! NaN=${xtNaN}, Inf=${xtInf - xtNaN}, total=${xtData.length}, frames=${totalFrames}, mean=${(xtData.reduce((a,b)=>a+b,0)/xtData.length).toFixed(6)}`);
+                }
+            }
         } finally {
             // 循环结束：释放预构建的 cond/mask 张量
             disposeTensor(condTensorCached);

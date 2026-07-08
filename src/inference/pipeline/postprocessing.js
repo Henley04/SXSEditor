@@ -888,6 +888,19 @@ class Postprocessing {
             const paddedMel = useStaticShapes ? padFloat(melArr, vocSeqLen * MEL_DIM) : melArr;
             const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, effectiveTotalFrames);
+
+            // 诊断：检查 mel 输入是否包含 NaN（在 vocoder run 之前）
+            {
+                let melNaN = 0, melInf = 0;
+                for (let i = 0; i < paddedMel.length; i++) {
+                    if (Number.isNaN(paddedMel[i])) melNaN++;
+                    if (!Number.isFinite(paddedMel[i])) melInf++;
+                }
+                if (melNaN > 0 || melInf > 0) {
+                    console.error(`[VocoderDiag] MEL INPUT BEFORE VOCODER HAS NaN/Inf! NaN=${melNaN}, Inf=${melInf - melNaN}, total=${paddedMel.length}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}`);
+                }
+            }
+
             let results;
             try {
                 results = await sessions.vocoder.run(vocoderInputs);
@@ -907,6 +920,20 @@ class Postprocessing {
             disposeTensor(results['waveform']);
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
+            // 诊断：检查 vocoder 输出
+            {
+                let wavNaN = 0, wavInf = 0, wavZero = 0;
+                for (let i = 0; i < waveform.length; i++) {
+                    if (Number.isNaN(waveform[i])) wavNaN++;
+                    if (!Number.isFinite(waveform[i])) wavInf++;
+                    if (waveform[i] === 0) wavZero++;
+                }
+                const expectedSamples = effectiveTotalFrames * vocoderHopSize;
+                if (wavNaN > 0 || wavInf > 0) {
+                    console.error(`[VocoderDiag] VOCODER OUTPUT HAS NaN/Inf! NaN=${wavNaN}, Inf=${wavInf - wavNaN}, total=${waveform.length}, expected=${expectedSamples}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}`);
+                }
+                console.log(`[VocoderDiag] single-chunk: frames=${effectiveTotalFrames}, vocoderType=${vocoderType}, outputLen=${waveform.length}, expectedLen=${expectedSamples}, NaN=${wavNaN}, zero=${wavZero}/${waveform.length}`);
+            }
             // 校验输出：DML 在显存边界可能返回全零/NaN 而不抛错（silent failure）
             validateVocoderOutput(waveform, 0);
             // 诊断：vocoder 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
