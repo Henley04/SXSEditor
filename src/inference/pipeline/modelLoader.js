@@ -493,6 +493,22 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     try {
         await cpuSession.run(dummyInputs);
     } catch (runErr) {
+        // 当 DML EP 不可用而回退到 CPU 时，dummy 输入可能与模型的静态形状或
+        // 旧版输入名称不匹配。常见情况：
+        //   1. *_dml.onnx 静态形状模型（diff_step seq_len=2048, vocoder seq_len=500）
+        //      与动态 dummy（seq_len=3）不匹配 → "invalid dimensions"
+        //   2. 旧版 mel_transform.onnx 输入名为 'audio'（新版为 'waveform'）
+        //      且形状为静态 [1,24000] → "input 'X' is missing in 'feeds'"
+        // 模型已成功加载（create 成功），验证失败仅因 dummy 不匹配，
+        // 跳过验证直接返回会话，首次实际推理时自然验证。动态形状的 fp16 模型不受影响。
+        const errSummary = runErr.message.substring(0, 80).split('\n')[0];
+        const isDummyMismatch = runErr.message.includes('invalid dimensions')
+            || runErr.message.includes('is missing in \'feeds\'');
+        if (isDummyMismatch) {
+            console.warn(`[OnnxSVSPipeline] ${modelName} CPU validation skipped (dummy mismatch): ${errSummary}`);
+            console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (validation skipped)`);
+            return { session: cpuSession, ep: 'cpu', warmedUp: false };
+        }
         try { cpuSession.release(); } catch (_) {}
         throw runErr;
     }
