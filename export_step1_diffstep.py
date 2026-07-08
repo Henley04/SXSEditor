@@ -48,7 +48,12 @@ def main():
         wrapper, args_tuple, output_path,
         input_names=input_names,
         output_names=output_names,
-        dynamic_axes=None,
+        dynamic_axes={
+            'xt_input': {1: 'seq_len'},
+            'cond': {1: 'seq_len'},
+            'xt_mask': {1: 'seq_len'},
+            'flow_pred': {1: 'seq_len'},
+        },
         decompose_conv_transpose=False,
         fix_mixed_precision=False,
     )

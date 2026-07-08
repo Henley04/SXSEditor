@@ -76,14 +76,17 @@ class MelTransformWrapper(nn.Module):
 # Export helper
 # ============================================================
 
-def export_model(wrapper, args_tuple, output_path, input_names, output_names):
+def export_model(wrapper, args_tuple, output_path, input_names, output_names, dynamic_axes=None):
     print(f"\n  Exporting: {os.path.basename(output_path)}")
+    if dynamic_axes:
+        print(f"    dynamic_axes: {dynamic_axes}")
     export_fp32_opset20(
         wrapper,
         args_tuple,
         output_path,
         input_names=input_names,
         output_names=output_names,
+        dynamic_axes=dynamic_axes,
         decompose_conv_transpose=False,
         fix_mixed_precision=False,
     )
@@ -152,6 +155,7 @@ def main():
         os.path.join(args.output_dir, 'note_text_encoder.onnx'),
         ['input_ids'],
         ['embeddings'],
+        dynamic_axes={'input_ids': {1: 'seq_len'}, 'embeddings': {1: 'seq_len'}},
     )
     exported.append('note_text_encoder.onnx')
     clear_memory()
@@ -163,6 +167,7 @@ def main():
         os.path.join(args.output_dir, 'note_pitch_encoder.onnx'),
         ['input_ids'],
         ['embeddings'],
+        dynamic_axes={'input_ids': {1: 'seq_len'}, 'embeddings': {1: 'seq_len'}},
     )
     exported.append('note_pitch_encoder.onnx')
     clear_memory()
@@ -174,6 +179,7 @@ def main():
         os.path.join(args.output_dir, 'note_type_encoder.onnx'),
         ['input_ids'],
         ['embeddings'],
+        dynamic_axes={'input_ids': {1: 'seq_len'}, 'embeddings': {1: 'seq_len'}},
     )
     exported.append('note_type_encoder.onnx')
     clear_memory()
@@ -185,6 +191,7 @@ def main():
         os.path.join(args.output_dir, 'f0_encoder.onnx'),
         ['input_ids'],
         ['embeddings'],
+        dynamic_axes={'input_ids': {1: 'seq_len'}, 'embeddings': {1: 'seq_len'}},
     )
     exported.append('f0_encoder.onnx')
     clear_memory()
@@ -196,6 +203,7 @@ def main():
         os.path.join(args.output_dir, 'preflow.onnx'),
         ['features'],
         ['processed_features'],
+        dynamic_axes={'features': {1: 'seq_len'}, 'processed_features': {1: 'seq_len'}},
     )
     exported.append('preflow.onnx')
     clear_memory()
@@ -219,11 +227,13 @@ def main():
         os.path.join(args.output_dir, 'cond_emb.onnx'),
         ['cond_code'],
         ['cond_embedding'],
+        dynamic_axes={'cond_code': {1: 'seq_len'}, 'cond_embedding': {1: 'seq_len'}},
     )
     exported.append('cond_emb.onnx')
     clear_memory()
 
     # 7. mel_transform (MelSpectrogramEncoder, STFT replaced in postprocess)
+    #    保持静态: audio 固定为 1s (24000 samples), Cooley-Tukey DFT 图依赖固定帧数
     export_model(
         MelTransformWrapper(model.mel),
         (torch.randn(1, sample_rate),),

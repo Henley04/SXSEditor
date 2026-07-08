@@ -523,4 +523,53 @@ describe('ONNX Model Loading and Validation (JS端)', function () {
       expect(DUMMY_TEST_INPUTS_FP32.melTransform, 'melTransform should NOT have "waveform" key').to.not.have.property('waveform');
     });
   });
+
+  // ========== 6. 动态形状验证（seq_len 可变）==========
+  // 验证模型接受不同 seq_len 输入（生产场景: 歌词 token 数 = 127）
+  describe('6. Dynamic Shape Validation (variable seq_len)', () => {
+    const testCases = [
+      { name: 'note_text_encoder', file: 'note_text_encoder.onnx', seqLen: 127, inputKey: 'input_ids', outputKey: 'embeddings', embedDim: EMBED_DIM, dtype: 'int64' },
+      { name: 'preflow', file: 'preflow.onnx', seqLen: 50, inputKey: 'features', outputKey: 'processed_features', embedDim: EMBED_DIM, dtype: 'float32' },
+      { name: 'cond_emb', file: 'cond_emb.onnx', seqLen: 200, inputKey: 'cond_code', outputKey: 'cond_embedding', embedDim: COND_DIM, dtype: 'float32' },
+    ];
+
+    for (const tc of testCases) {
+      it(`${tc.name} should accept seq_len=${tc.seqLen} (non-default)`, async () => {
+        const session = await ort.InferenceSession.create(
+          path.join(ONNX_DIR, tc.file),
+          { executionProviders: DML_ONLY }
+        );
+
+        let inputTensor;
+        if (tc.dtype === 'int64') {
+          inputTensor = new ort.Tensor('int64', BigInt64Array.from({ length: tc.seqLen }, (_, i) => BigInt(i + 1)), [1, tc.seqLen]);
+        } else {
+          inputTensor = new ort.Tensor('float32', new Float32Array(tc.seqLen * EMBED_DIM).fill(0.1), [1, tc.seqLen, EMBED_DIM]);
+        }
+
+        const outputs = await session.run({ [tc.inputKey]: inputTensor });
+        const out = outputs[tc.outputKey];
+
+        // 输出 seq_len 应与输入一致（动态维度正确传播）
+        expect(out.dims[0], `${tc.name} batch dim`).to.equal(1);
+        expect(out.dims[1], `${tc.name} seq_len should be ${tc.seqLen}`).to.equal(tc.seqLen);
+        expect(out.dims[2], `${tc.name} embed_dim`).to.equal(tc.embedDim);
+        expect(countNaN(out.data), `${tc.name} output NaN`).to.equal(0);
+
+        session.release();
+      });
+    }
+
+    it('note_text_encoder should accept seq_len=3 (DUMMY_TEST_INPUTS size)', async () => {
+      // 验证 DUMMY_TEST_INPUTS 的 seq_len=3 也能正常工作（DML 验证场景）
+      const session = await ort.InferenceSession.create(
+        path.join(ONNX_DIR, 'note_text_encoder.onnx'),
+        { executionProviders: DML_ONLY }
+      );
+      const inputTensor = new ort.Tensor('int64', BigInt64Array.from([1n, 2n, 3n]), [1, 3]);
+      const outputs = await session.run({ input_ids: inputTensor });
+      expect(outputs.embeddings.dims).to.deep.equal([1, 3, EMBED_DIM]);
+      session.release();
+    });
+  });
 });
