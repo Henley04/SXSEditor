@@ -537,6 +537,7 @@ export async function loadProject() {
         }
         state.currentProjectFilePath = result.filePaths[0];
         history.clear();
+        state.selectedFragmentId = null;
         markClean();
         // refreshAll will be called by the caller
         console.log('Project loaded', result.filePaths[0]);

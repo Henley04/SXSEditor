@@ -237,7 +237,10 @@ class VocosFullWrapper(nn.Module):
         out = accum.reshape(B, -1)  # [B, (T+num_ov-1)*hop]
 
         # Trim edges: [B, T*hop]
-        out = out[:, self.pad:-self.pad]
+        # Use positive indexing (pad:pad+T*hop) instead of out[:, pad:-pad]
+        # because ONNX Slice with negative ends can produce wrong results
+        # under dynamic input shapes.
+        out = out[:, self.pad:self.pad + T * hop]
         return out
 
     def forward(self, mel):

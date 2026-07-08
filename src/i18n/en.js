@@ -24,6 +24,8 @@ export default {
     singerFileNotFound: 'Singer file not found',
     relocate: 'Relocate',
     addFragment: 'Add Fragment',
+    deleteFragment: 'Delete Fragment',
+    confirmDeleteFragment: 'Delete fragment "{name}"?',
     deleteSinger: 'Delete Singer',
     synthesizing: 'Synthesizing...',
     synthesizingProgress: 'Synthesizing {progress}%',

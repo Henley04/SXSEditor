@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveFragmentData: (fragmentId, data) => ipcRenderer.invoke('saveFragmentData', fragmentId, data),
   saveFragmentDataSync: (fragmentId, data) => ipcRenderer.invoke('saveFragmentDataSync', fragmentId, data),
   getFragmentData: (fragmentId) => ipcRenderer.invoke('getFragmentData', fragmentId),
+  closeFragmentEditor: (fragmentId) => ipcRenderer.invoke('fragment:close', fragmentId),
   closeAllFragmentEditors: () => ipcRenderer.invoke('fragment:closeAll'),
   onFragmentSaved: (callback) => {
     const handler = (event, data) => callback(data);

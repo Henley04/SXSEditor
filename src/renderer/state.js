@@ -30,6 +30,7 @@ export const state = {
   // UI
   fragmentZoomX: 1,
   selectedSingerId: null,
+  selectedFragmentId: null,
   editingTrackNameId: null,
   fragmentScrollX: 0,
   fragmentScrollY: 0,
