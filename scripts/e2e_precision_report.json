@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-08 14:38:09",
+  "timestamp": "2026-07-08 15:14:37",
   "model_path": "SoulX-Singer/pretrained_models/SoulX-Singer/model.pt",
   "onnx_dir": "D:\\Document\\electron\\SXSEditor\\onnx_models",
   "parameters": {
@@ -34,23 +34,23 @@
     "mean": 0.1792813241481781,
     "std": 49.89402389526367,
     "max_abs": 5531.775390625,
-    "time_seconds": 157.41674494743347
+    "time_seconds": 160.88786053657532
   },
   "onnx_output": {
     "shape": [
       1,
       96000
     ],
-    "mean": 0.17933335900306702,
-    "std": 49.893592834472656,
-    "max_abs": 5531.78857421875,
-    "time_seconds": 120.51513028144836
+    "mean": 0.1793399304151535,
+    "std": 49.89347457885742,
+    "max_abs": 5531.787109375,
+    "time_seconds": 36.6148407459259
   },
   "metrics": {
-    "mse": 0.0004238410555639638,
-    "rmse": 0.020587400408112817,
-    "cos": 0.9999999149089456,
-    "snr_db": 67.68899637183549
+    "mse": 0.0004460589558809762,
+    "rmse": 0.021120107856755284,
+    "cos": 0.999999910468902,
+    "snr_db": 67.46710396317812
   },
   "thresholds": {
     "cos_min": 0.95,
