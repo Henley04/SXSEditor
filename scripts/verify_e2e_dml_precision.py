@@ -57,7 +57,10 @@ def run_vocoder(sess, mel_np, is_fp16):
 
 def diffusion_loop(sess, is_fp16, prompt_mel, target_len, cond_emb,
                    n_steps=32, cfg_strength=3.0, cfg_rescale=0.75):
-    """SXSEditor 风格 diffusion loop。返回最终 target mel (target_len, 128)。"""
+    """SXSEditor 风格 diffusion loop。返回最终 target mel (target_len, 128)。
+    
+    Uses target-only uncond (matching JS pipeline post-66d040d).
+    """
     mel_dim = 128
     prompt_len = prompt_mel.shape[1]
     total_len = prompt_len + target_len
@@ -66,14 +69,14 @@ def diffusion_loop(sess, is_fp16, prompt_mel, target_len, cond_emb,
     z = np.random.randn(1, target_len, mel_dim).astype(np.float32)
     xt = z.copy()
 
-    uncond_cond = np.zeros((1, total_len, 1024), dtype=np.float32)
+    # 条件分支：全序列 cond + mask
     cond_mask = np.ones((1, total_len), dtype=np.float32)
-    uncond_mask = np.zeros((1, total_len), dtype=np.float32)
-    uncond_mask[0, prompt_len:] = 1.0
+    # 非条件分支：target-only（对齐 JS pipeline post-66d040d）
+    uncond_cond = np.zeros((1, target_len, 1024), dtype=np.float32)
+    uncond_mask = np.ones((1, target_len), dtype=np.float32)
 
     xt_input = np.zeros((1, total_len, mel_dim), dtype=np.float32)
     xt_input[0, :prompt_len] = prompt_mel[0]
-    xt_uncond = np.zeros((1, total_len, mel_dim), dtype=np.float32)
 
     dt = 1.0 / n_steps
 
@@ -85,12 +88,14 @@ def diffusion_loop(sess, is_fp16, prompt_mel, target_len, cond_emb,
         feeds_cond = {'xt_input': xt_input, 't': t_arr, 'cond': cond_emb, 'xt_mask': cond_mask}
         flow_cond = run_diffstep(sess, feeds_cond, is_fp16)
 
-        xt_uncond[0, prompt_len:] = xt[0]
+        # uncond: target-only xt + zeros cond (matching JS pipeline)
+        xt_uncond = np.zeros((1, target_len, mel_dim), dtype=np.float32)
+        xt_uncond[0] = xt[0]
         feeds_uncond = {'xt_input': xt_uncond, 't': t_arr, 'cond': uncond_cond, 'xt_mask': uncond_mask}
         flow_uncond = run_diffstep(sess, feeds_uncond, is_fp16)
 
         flow_cond_target = flow_cond[0, prompt_len:]
-        flow_uncond_target = flow_uncond[0, prompt_len:]
+        flow_uncond_target = flow_uncond[0, :target_len]
 
         if cfg_strength > 0:
             flow_cfg = flow_cond_target + cfg_strength * (flow_cond_target - flow_uncond_target)

@@ -16,22 +16,26 @@ Key alignments with diffusion.js / flow_matching.py:
 - Euler integration: xt += flow_pred * h,  h = 1.0 / totalSteps
 
 Architecture note:
-  diff_step_dml.onnx was exported via DiffStepWrapper which applies cond_emb
-  internally (input cond is 512-dim cond_code, not 1024-dim cond_embedding).
-  Therefore cond_emb.onnx is NOT called separately in the ONNX chain — it is
-  embedded inside diff_step_dml.onnx. This is mathematically equivalent to
-  PyTorch's CFMDecoder.reverse_diffusion which calls cond_emb then diff_estimator.
+  diff_step_dml.onnx was exported via DiffStepWrapper which does NOT include
+  cond_emb (commit 66d040d). The pipeline runs cond_emb.onnx separately in
+  preprocessing.js to convert cond_code (512-dim) → cond_embedding (1024-dim),
+  then feeds cond_embedding directly to diff_step. This matches the current
+  production pipeline architecture.
 
-Static shape constraints (ONNX models are static):
-  - mel_transform:     audio [1, 24000]      -> mel [1, 50, 128]
-  - note_*_encoder:    ids   [1, 100] int64  -> emb [1, 100, 512]
-  - f0_encoder:        ids   [1, 200] int64  -> emb [1, 200, 512]
-  - preflow:           feat  [1, 100, 512]   -> feat [1, 100, 512]
-  - diff_step_dml:     xt   [1, 2048, 128], t [1], cond [1, 2048, 512], mask [1, 2048]
-  - vocoder_dml:       mel  [1, 500, 128]    -> waveform [1, 240000]
+  For the uncond branch, the JS pipeline uses zeros[1024] directly (not
+  cond_emb(zeros[512]) = bias[1024]). This is the post-66d040d behavior.
+
+Dynamic shape models (re-exported via acee2f5):
+  - mel_transform:     audio [1, 24000]      -> mel [1, 50, 128]  (static, Cooley-Tukey DFT requires fixed N)
+  - note_*_encoder:    ids   [1, seq_len]    -> emb [1, seq_len, 512]  (dynamic)
+  - f0_encoder:        ids   [1, seq_len]    -> emb [1, seq_len, 512]  (dynamic)
+  - preflow:           feat  [1, seq_len, 512] -> feat [1, seq_len, 512]  (dynamic)
+  - cond_emb:          code  [1, seq_len, 512] -> emb [1, seq_len, 1024]  (dynamic)
+  - diff_step_dml:     xt [1, seq_len, 128], t [1], cond [1, seq_len, 1024], mask [1, seq_len]  (dynamic)
+  - vocoder_dml:       mel  [1, num_frames, 128] -> waveform [1, audio_len]  (dynamic)
 
   Test case sizing: prompt 50 mel frames (1s audio) + target 200 mel frames (4s)
-  = 250 total cond frames (< 2048 diff_step limit, < 500 vocoder limit).
+  = 250 total cond frames. No padding needed — models accept any seq_len.
 
 Usage:
     python scripts/verify_e2e_precision.py
@@ -70,13 +74,8 @@ COND_DIM = 1024  # cond_emb output dim (for reference; diff_step takes 512-dim)
 F0_BIN = 361
 F0_MIN = 32.7031956625
 
-# Static shape limits (from ONNX model signatures)
-ENCODER_SEQ_LEN = 100        # note_text/pitch/type_encoder
-F0_ENCODER_SEQ_LEN = 200    # f0_encoder
-PREFLOW_SEQ_LEN = 100       # preflow
-DIFF_STEP_SEQ_LEN = 2048    # diff_step_dml
-VOCODER_MEL_FRAMES = 500    # vocoder_dml
-MEL_TRANSFORM_AUDIO_SAMPLES = 24000  # mel_transform (1 second)
+# Dynamic shape models (no fixed limits except mel_transform)
+MEL_TRANSFORM_AUDIO_SAMPLES = 24000  # mel_transform (1 second, static due to Cooley-Tukey DFT)
 
 # Diffusion defaults
 DEFAULT_N_STEPS = 32
@@ -204,10 +203,10 @@ def prepare_test_data(args, verbose=False):
     prompt_audio_path = os.path.join(SOULX_DIR, 'example', 'audio', 'zh_prompt.mp3')
     pt_wav = load_prompt_audio(prompt_audio_path, MEL_TRANSFORM_AUDIO_SAMPLES)
 
-    # Truncate mel2note and f0 to fit static shapes
+    # Truncate mel2note and f0 to test target size
     # Prompt: 50 mel frames (1 second), Target: 200 mel frames (4 seconds)
     pt_mel_frames = MEL_TRANSFORM_AUDIO_SAMPLES // HOP_SIZE  # 50
-    gt_mel_frames = F0_ENCODER_SEQ_LEN  # 200
+    gt_mel_frames = 200  # 4 seconds at 50Hz
 
     pt_mel2note = pt_item['mel2note'][0]  # [T_pt]
     gt_mel2note = gt_item['mel2note'][0]  # [T_gt]
@@ -229,11 +228,7 @@ def prepare_test_data(args, verbose=False):
     pt_f0_np = truncate_or_pad(pt_f0, pt_mel_frames, pad_value=0.0).astype(np.float32)
     gt_f0_np = truncate_or_pad(gt_f0, gt_mel_frames, pad_value=0.0).astype(np.float32)
 
-    # Token sequences — truncate to fit ENCODER_SEQ_LEN (100) static shape.
-    # preflow/note_*_encoder ONNX models have static shape [1, 100, ...], so the
-    # combined prompt+target token count must be <= 100. We truncate the target
-    # tokens (keeping the full prompt) and clamp mel2note accordingly. This
-    # affects both PyTorch and ONNX paths identically for fair comparison.
+    # Token sequences — dynamic shape models accept any seq_len, no truncation needed.
     pt_note_text = pt_item['phoneme'][0].numpy().astype(np.int64)
     pt_note_pitch = pt_item['note_pitch'][0].numpy().astype(np.int64)
     pt_note_type = pt_item['note_type'][0].numpy().astype(np.int64)
@@ -243,34 +238,17 @@ def prepare_test_data(args, verbose=False):
 
     pt_token_count = len(pt_note_text)
     gt_token_count = len(gt_note_text)
-
-    # Truncate target tokens so pt + gt <= ENCODER_SEQ_LEN
-    max_gt_tokens = max(0, ENCODER_SEQ_LEN - pt_token_count)
-    if gt_token_count > max_gt_tokens:
-        if verbose:
-            print(f"  [INFO] Truncating target tokens {gt_token_count} -> {max_gt_tokens} "
-                  f"to fit ENCODER_SEQ_LEN={ENCODER_SEQ_LEN} (prompt={pt_token_count})")
-        gt_note_text = gt_note_text[:max_gt_tokens]
-        gt_note_pitch = gt_note_pitch[:max_gt_tokens]
-        gt_note_type = gt_note_type[:max_gt_tokens]
-        gt_token_count = max_gt_tokens
+    total_token_count = pt_token_count + gt_token_count
 
     if verbose:
         print(f"  Prompt: {pt_token_count} tokens, {pt_mel_frames} mel frames, "
               f"audio {len(pt_wav)} samples")
         print(f"  Target: {gt_token_count} tokens, {gt_mel_frames} mel frames")
+        print(f"  Total tokens: {total_token_count}")
         print(f"  pt_mel2note range: [{pt_mel2note_np.min()}, {pt_mel2note_np.max()}]")
         print(f"  gt_mel2note range: [{gt_mel2note_np.min()}, {gt_mel2note_np.max()}]")
         print(f"  pt_f0 range: [{pt_f0_np.min():.1f}, {pt_f0_np.max():.1f}]")
         print(f"  gt_f0 range: [{gt_f0_np.min():.1f}, {gt_f0_np.max():.1f}]")
-
-    # Validate mel2note indices are within token range
-    total_token_count = pt_token_count + gt_token_count
-    max_mel2note = max(pt_mel2note_np.max(), (gt_mel2note_np + pt_token_count).max())
-    if max_mel2note >= ENCODER_SEQ_LEN:
-        if verbose:
-            print(f"  [WARN] mel2note max ({max_mel2note}) >= ENCODER_SEQ_LEN ({ENCODER_SEQ_LEN}), "
-                  f"will be clamped to {ENCODER_SEQ_LEN - 1} during expand_states")
 
     return {
         'pt_wav': pt_wav,
@@ -329,10 +307,9 @@ def run_pytorch_reference(model, data, n_steps, cfg, rescale_cfg, verbose=False)
         note_text = torch.cat([pt_note_text, gt_note_text], 1)
         note_type = torch.cat([pt_note_type, gt_note_type], 1)
         mel2note = torch.cat([pt_mel2note, gt_mel2note + len_prompt], 1)
-        # Clamp mel2note to ENCODER_SEQ_LEN-1 to match ONNX static shape constraint.
-        # Frames referencing truncated tokens (> ENCODER_SEQ_LEN-1) are remapped
-        # to the last valid token index. This matches the ONNX path exactly.
-        mel2note = torch.clamp(mel2note, 0, ENCODER_SEQ_LEN - 1)
+        # Clamp mel2note to valid token range (safety, matches JS pipeline)
+        total_tokens = note_pitch.shape[1]
+        mel2note = torch.clamp(mel2note, 0, total_tokens - 1)
 
         # 3. F0 quantization
         f0_course_pt = model.f0_to_coarse(pt_f0)
@@ -375,14 +352,14 @@ def run_pytorch_reference(model, data, n_steps, cfg, rescale_cfg, verbose=False)
         cond_emb_module = model.cfm_decoder.model.cond_emb
         diff_estimator = model.cfm_decoder.model.diff_estimator
 
-        # Apply cond_emb to cond_code (same as DiffStepWrapper.forward)
-        cond_emb_full = cond_emb_module(diffusion_cond_code)  # [1, 250, 1024]
+        # Apply cond_emb to cond_code (same as DiffStepWrapper.forward in old architecture,
+        # but now cond_emb is separate in the pipeline: preprocessing.js → cond_emb.onnx)
+        cond_emb_full = cond_emb_module(diffusion_cond_code)  # [1, total_mel, 1024]
 
-        # uncond cond: zeros[1, target_len, 512] -> cond_emb -> bias[1, T, 1024]
-        # This matches ONNX DiffStepWrapper which applies cond_emb to zeros cond_code.
-        uncond_cond_code = torch.zeros(1, target_len, EMBED_DIM,
+        # uncond cond: zeros[1, target_len, 1024] directly (matching JS pipeline post-66d040d).
+        # The JS pipeline uses zeros[1024] for uncond, NOT cond_emb(zeros[512]) = bias[1024].
+        uncond_cond_emb = torch.zeros(1, target_len, COND_DIM,
                                        dtype=diffusion_cond_code.dtype)
-        uncond_cond_emb = cond_emb_module(uncond_cond_code)  # cond_emb(zeros) = bias
 
         # Masks (all ones)
         xt_mask = torch.ones(1, prompt_len + target_len)  # [1, 250]
@@ -448,7 +425,7 @@ def run_pytorch_reference(model, data, n_steps, cfg, rescale_cfg, verbose=False)
 def run_onnx_pipeline(sessions, data, n_steps, cfg, rescale_cfg, verbose=False):
     """Run ONNX SVS pipeline reproducing the JS pipeline in Python.
 
-    Uses 8 ONNX models (cond_emb is embedded inside diff_step_dml.onnx).
+    Uses 9 ONNX models (cond_emb.onnx is called separately before diff_step_dml.onnx).
     Returns generated audio as numpy [1, N_samples].
     """
     pt_wav = data['pt_wav']  # [24000]
@@ -468,24 +445,12 @@ def run_onnx_pipeline(sessions, data, n_steps, cfg, rescale_cfg, verbose=False):
         print(f"  [ONNX] pt_mel shape: {pt_mel.shape}, mean={pt_mel.mean():.4f}")
 
     # ---- 2. Note encoders (text, pitch, type) ----
-    # Concatenate prompt + target token sequences
-    note_text_seq = np.concatenate([data['pt_note_text'], data['gt_note_text']])  # [total_tokens]
+    # Concatenate prompt + target token sequences (dynamic shape, no padding)
+    note_text_seq = np.concatenate([data['pt_note_text'], data['gt_note_text']])
     note_pitch_seq = np.concatenate([data['pt_note_pitch'], data['gt_note_pitch']])
     note_type_seq = np.concatenate([data['pt_note_type'], data['gt_note_type']])
 
-    # Pad token sequences to ENCODER_SEQ_LEN (100)
-    def pad_int64(arr, target_len, pad_value=0):
-        if len(arr) >= target_len:
-            return arr[:target_len].astype(np.int64)
-        result = np.full(target_len, pad_value, dtype=np.int64)
-        result[:len(arr)] = arr
-        return result
-
-    text_ids = pad_int64(note_text_seq, ENCODER_SEQ_LEN)
-    pitch_ids = pad_int64(note_pitch_seq, ENCODER_SEQ_LEN)
-    type_ids = pad_int64(note_type_seq, ENCODER_SEQ_LEN)
-
-    # Run 4 encoders
+    # Run 4 encoders with actual seq_len (dynamic shape)
     text_sess = sessions['note_text_encoder']
     pitch_sess = sessions['note_pitch_encoder']
     type_sess = sessions['note_type_encoder']
@@ -496,68 +461,56 @@ def run_onnx_pipeline(sessions, data, n_steps, cfg, rescale_cfg, verbose=False):
     type_input_name = get_input_name(type_sess)
     f0_input_name = get_input_name(f0_sess)
 
-    text_emb = text_sess.run(None, {text_input_name: text_ids.reshape(1, -1)})[0]  # [1, 100, 512]
-    pitch_emb = pitch_sess.run(None, {pitch_input_name: pitch_ids.reshape(1, -1)})[0]
-    type_emb = type_sess.run(None, {type_input_name: type_ids.reshape(1, -1)})[0]
+    text_emb = text_sess.run(None, {text_input_name: note_text_seq.reshape(1, -1)})[0]
+    pitch_emb = pitch_sess.run(None, {pitch_input_name: note_pitch_seq.reshape(1, -1)})[0]
+    type_emb = type_sess.run(None, {type_input_name: note_type_seq.reshape(1, -1)})[0]
 
-    # Sum three embeddings (take first total_token_count tokens)
-    token_emb = text_emb + pitch_emb + type_emb  # [1, 100, 512]
+    token_emb = text_emb + pitch_emb + type_emb  # [1, total_tokens, 512]
     if verbose:
-        print(f"  [ONNX] token_emb shape: {token_emb.shape}, "
-              f"first {total_token_count} tokens used")
+        print(f"  [ONNX] token_emb shape: {token_emb.shape}")
 
     # ---- 3. Preflow ----
     preflow_sess = sessions['preflow']
     preflow_input_name = get_input_name(preflow_sess)
     preflow_out = preflow_sess.run(None, {preflow_input_name: token_emb.astype(np.float32)})[0]
-    # [1, 100, 512]
 
     # ---- 4. expand_states (gather using mel2note) ----
-    # Build combined mel2note: [pt_mel2note, gt_mel2note + pt_token_count]
     combined_mel2note = np.concatenate([
         data['pt_mel2note'],
         data['gt_mel2note'] + pt_token_count
     ])  # [total_mel_frames]
-    # Clamp to ENCODER_SEQ_LEN-1 (preflow static shape limit). Frames referencing
-    # truncated tokens are remapped to the last valid token index, matching the
-    # PyTorch path exactly.
-    combined_mel2note = np.clip(combined_mel2note, 0, ENCODER_SEQ_LEN - 1)
+    # Clamp to valid token indices
+    max_token_idx = preflow_out.shape[1] - 1
+    combined_mel2note = np.clip(combined_mel2note, 0, max_token_idx)
 
-    # Gather: expanded_features[f] = preflow_out[0, mel2note[f], :]
     expanded = preflow_out[0, combined_mel2note, :]  # [total_mel_frames, 512]
     expanded = expanded[np.newaxis, :, :]  # [1, total_mel_frames, 512]
 
     # ---- 5. F0 quantization and f0_encoder ----
-    # f0_shift = 0
     pt_f0_ids = f0_to_coarse(data['pt_f0'], f0_shift=0)  # [pt_mel_frames]
     gt_f0_ids = f0_to_coarse(data['gt_f0'], f0_shift=0)  # [gt_mel_frames]
     combined_f0_ids = np.concatenate([pt_f0_ids, gt_f0_ids])  # [total_mel_frames]
 
-    # Pad f0_ids to F0_ENCODER_SEQ_LEN (200)
-    # But total_mel_frames might be > 200... need to handle
-    # f0_encoder static shape is [1, 200]. If total_mel_frames > 200, we need to
-    # process in chunks or truncate. For our test case (250 > 200), we split.
-    # Actually, the f0_encoder accepts [1, 200] and outputs [1, 200, 512].
-    # But we need f0_emb for all 250 frames. Process in two chunks.
-    f0_emb_full = np.zeros((1, total_mel_frames, EMBED_DIM), dtype=np.float32)
-    chunk_size = F0_ENCODER_SEQ_LEN
-    for start in range(0, total_mel_frames, chunk_size):
-        end = min(start + chunk_size, total_mel_frames)
-        chunk = combined_f0_ids[start:end]
-        chunk_padded = pad_int64(chunk, chunk_size)
-        f0_out = f0_sess.run(None, {f0_input_name: chunk_padded.reshape(1, -1)})[0]
-        # f0_out shape: [1, 200, 512], take first (end-start) frames
-        f0_emb_full[0, start:end, :] = f0_out[0, :end-start, :]
+    # Dynamic shape: pass actual total_mel_frames directly (no chunking needed)
+    f0_emb = f0_sess.run(None, {f0_input_name: combined_f0_ids.reshape(1, -1)})[0]
+    # [1, total_mel_frames, 512]
 
     # ---- 6. Combine: features = expanded + f0_emb ----
-    cond_code = expanded + f0_emb_full  # [1, total_mel_frames, 512]
+    cond_code = expanded + f0_emb  # [1, total_mel_frames, 512]
     if verbose:
         print(f"  [ONNX] cond_code shape: {cond_code.shape}, "
               f"mean={cond_code.mean():.4f}")
 
-    # ---- 7. Flow-matching diffusion loop ----
-    # cond_code is [1, 250, 512] (512-dim, cond_emb applied inside diff_step)
-    # diff_step static shape: [1, 2048, ...]
+    # ---- 7. cond_emb: cond_code (512) -> cond_embedding (1024) ----
+    cond_emb_sess = sessions['cond_emb']
+    cond_emb_input_name = get_input_name(cond_emb_sess)
+    cond_embedding = cond_emb_sess.run(None, {cond_emb_input_name: cond_code.astype(np.float32)})[0]
+    # [1, total_mel_frames, 1024]
+    if verbose:
+        print(f"  [ONNX] cond_embedding shape: {cond_embedding.shape}, "
+              f"mean={cond_embedding.mean():.4f}")
+
+    # ---- 8. Flow-matching diffusion loop ----
     diff_sess = sessions['diff_step']
 
     # Generate noise z with same seed as PyTorch
@@ -565,35 +518,12 @@ def run_onnx_pipeline(sessions, data, n_steps, cfg, rescale_cfg, verbose=False):
     z = torch.randn(1, gt_mel_frames, MEL_DIM).numpy().astype(np.float32)  # [1, 200, 128]
     xt = z.copy()  # [1, 200, 128] target-only
 
-    # Prepare padding for diff_step (pad to 2048)
-    def pad_to_2d(arr, target_len, pad_value=0.0):
-        """Pad [1, T, D] to [1, target_len, D]."""
-        T, D = arr.shape[1], arr.shape[2]
-        if T >= target_len:
-            return arr[:, :target_len, :]
-        result = np.full((1, target_len, D), pad_value, dtype=arr.dtype)
-        result[:, :T, :] = arr
-        return result
-
-    def pad_to_1d(arr, target_len, pad_value=0.0):
-        """Pad [1, T] to [1, target_len]."""
-        T = arr.shape[1]
-        if T >= target_len:
-            return arr[:, :target_len]
-        result = np.full((1, target_len), pad_value, dtype=arr.dtype)
-        result[:, :T] = arr
-        return result
-
-    # cond for conditional branch: [1, 250, 512] -> pad to [1, 2048, 512]
-    cond_padded = pad_to_2d(cond_code, DIFF_STEP_SEQ_LEN)  # [1, 2048, 512]
+    # cond for conditional branch: [1, total_mel_frames, 1024]
     cond_mask = np.ones((1, total_mel_frames), dtype=np.float32)
-    cond_mask_padded = pad_to_1d(cond_mask, DIFF_STEP_SEQ_LEN)  # [1, 2048]
 
-    # uncond cond: target-only zeros [1, 200, 512] -> pad to [1, 2048, 512]
-    uncond_cond = np.zeros((1, gt_mel_frames, EMBED_DIM), dtype=np.float32)
-    uncond_cond_padded = pad_to_2d(uncond_cond, DIFF_STEP_SEQ_LEN)
+    # uncond: target-only zeros [1, target_len, 1024] (matching JS pipeline post-66d040d)
+    uncond_cond = np.zeros((1, gt_mel_frames, COND_DIM), dtype=np.float32)
     uncond_mask = np.ones((1, gt_mel_frames), dtype=np.float32)
-    uncond_mask_padded = pad_to_1d(uncond_mask, DIFF_STEP_SEQ_LEN)
 
     h = 1.0 / n_steps
 
@@ -602,46 +532,35 @@ def run_onnx_pipeline(sessions, data, n_steps, cfg, rescale_cfg, verbose=False):
         t_arr = np.array([t_val], dtype=np.float32)
 
         # Conditional branch: xt_input = cat([prompt, xt], dim=1)
-        # prompt is pt_mel [1, 50, 128], xt is [1, 200, 128]
-        xt_input = np.concatenate([pt_mel, xt], axis=1)  # [1, 250, 128]
-        xt_input_padded = pad_to_2d(xt_input, DIFF_STEP_SEQ_LEN)
+        xt_input = np.concatenate([pt_mel, xt], axis=1)  # [1, total_mel_frames, 128]
 
-        # Run diff_step (conditional)
         cond_pred = diff_sess.run(None, {
-            'xt_input': xt_input_padded,
+            'xt_input': xt_input.astype(np.float32),
             't': t_arr,
-            'cond': cond_padded,
-            'xt_mask': cond_mask_padded,
-        })[0]  # [1, 2048, 128]
-        # Extract target portion (skip prompt frames)
+            'cond': cond_embedding.astype(np.float32),
+            'xt_mask': cond_mask.astype(np.float32),
+        })[0]  # [1, total_mel_frames, 128]
         flow_pred = cond_pred[0, pt_mel_frames:pt_mel_frames + gt_mel_frames, :]  # [200, 128]
         flow_pred = flow_pred[np.newaxis, :, :]  # [1, 200, 128]
 
         # CFG branch
         if cfg > 0:
-            # uncond: xt is target-only [1, 200, 128]
-            xt_uncond_padded = pad_to_2d(xt, DIFF_STEP_SEQ_LEN)
-
             uncond_pred = diff_sess.run(None, {
-                'xt_input': xt_uncond_padded,
+                'xt_input': xt.astype(np.float32),
                 't': t_arr,
-                'cond': uncond_cond_padded,
-                'xt_mask': uncond_mask_padded,
-            })[0]  # [1, 2048, 128]
+                'cond': uncond_cond.astype(np.float32),
+                'xt_mask': uncond_mask.astype(np.float32),
+            })[0]  # [1, target_len, 128]
             uncond_flow_pred = uncond_pred[0, :gt_mel_frames, :]  # [200, 128]
             uncond_flow_pred = uncond_flow_pred[np.newaxis, :, :]  # [1, 200, 128]
 
-            # CFG: flow_pred_cfg = flow_pred + cfg * (flow_pred - uncond_flow_pred)
             flow_pred_cfg = flow_pred + cfg * (flow_pred - uncond_flow_pred)
 
             # Bessel-corrected std (N-1 denominator), single epsilon in denominator
-            # Aligned with diffusion.js: posStd / (cfgAdjStd + 1e-8)
-            target_len = gt_mel_frames * MEL_DIM
-            pos_std = np.std(flow_pred, ddof=1)  # Bessel correction
+            pos_std = np.std(flow_pred, ddof=1)
             cfg_std = np.std(flow_pred_cfg, ddof=1)
             rescale = pos_std / (cfg_std + 1e-8)
 
-            # rescale mix: rescale_cfg * rescaled + (1 - rescale_cfg) * cfg
             rescaled = flow_pred_cfg * rescale
             flow_pred = rescale_cfg * rescaled + (1.0 - rescale_cfg) * flow_pred_cfg
 
@@ -657,13 +576,10 @@ def run_onnx_pipeline(sessions, data, n_steps, cfg, rescale_cfg, verbose=False):
         print(f"  [ONNX] generated_mel shape: {generated_mel.shape}, "
               f"mean={generated_mel.mean():.4f}")
 
-    # ---- 8. Vocoder ----
+    # ---- 9. Vocoder (dynamic shape) ----
     vocoder_sess = sessions['vocoder']
     vocoder_input_name = get_input_name(vocoder_sess)
-
-    # Pad mel to VOCODER_MEL_FRAMES (500)
-    mel_padded = pad_to_2d(generated_mel, VOCODER_MEL_FRAMES)  # [1, 500, 128]
-    audio_out = vocoder_sess.run(None, {vocoder_input_name: mel_padded})[0]  # [1, 240000]
+    audio_out = vocoder_sess.run(None, {vocoder_input_name: generated_mel.astype(np.float32)})[0]
 
     # Trim to actual mel frames * HOP_SIZE
     expected_samples = gt_mel_frames * HOP_SIZE
@@ -752,6 +668,7 @@ def main():
         'note_type_encoder': 'note_type_encoder.onnx',
         'f0_encoder': 'f0_encoder.onnx',
         'preflow': 'preflow.onnx',
+        'cond_emb': 'cond_emb.onnx',
         'diff_step': 'diff_step_dml.onnx',
         'vocoder': 'vocoder_dml.onnx',
     }
@@ -768,8 +685,8 @@ def main():
             print(f"  {name}: in={[f'{i.name}{i.shape}' for i in inp]}, "
                   f"out={[f'{o.name}{o.shape}' for o in out]}")
     print(f"      {len(sessions)} sessions loaded in {time.time()-t0:.1f}s")
-    print(f"      Note: cond_emb.onnx is embedded inside diff_step_dml.onnx "
-          f"(DiffStepWrapper applies cond_emb internally)")
+    print(f"      Note: cond_emb.onnx is called separately before diff_step_dml.onnx "
+          f"(post-66d040d architecture)")
 
     # ---- Step 4: Run both pipelines and compare ----
     print("\n[4/4] Running pipelines...")
@@ -877,9 +794,7 @@ def main():
             'gt_token_count': data['gt_token_count'],
         },
         'onnx_models_used': list(onnx_files.keys()),
-        'onnx_models_not_used_separately': [
-            'cond_emb (embedded inside diff_step_dml.onnx via DiffStepWrapper)'
-        ],
+        'onnx_models_not_used_separately': [],
         'pytorch_output': {
             'shape': list(pt_audio.shape),
             'mean': float(pt_audio.mean()),
@@ -899,15 +814,16 @@ def main():
         'passed': passed,
         'stage_results': stage_results,
         'notes': [
-            'cond_emb.onnx is NOT called separately — it is embedded inside '
-            'diff_step_dml.onnx (exported via DiffStepWrapper which applies '
-            'cond_emb internally). Input cond is 512-dim cond_code.',
+            'cond_emb.onnx is called separately before diff_step_dml.onnx '
+            '(post-66d040d architecture). Input cond is 1024-dim cond_embedding.',
             'Flow-matching loop aligned with diffusion.js: t=(step+0.5)/n, '
             'uncond target-only, Bessel-corrected std (N-1), single epsilon.',
             'PyTorch vocoder uses VocosFullWrapper (same as ONNX export) for '
             'fair comparison — eliminates ISTFT implementation differences.',
-            'Static shapes: prompt 50 mel frames (1s audio) + target 200 mel '
-            'frames (4s) = 250 total cond frames (< 2048 diff_step limit).',
+            'Dynamic shape models: prompt 50 mel frames (1s audio) + target 200 mel '
+            'frames (4s) = 250 total cond frames. No padding needed.',
+            'Uncond branch uses zeros[1024] directly (matching JS pipeline post-66d040d), '
+            'NOT cond_emb(zeros[512]) = bias[1024].',
         ],
     }
 
