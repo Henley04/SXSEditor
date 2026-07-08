@@ -4,7 +4,7 @@ const ort = require('onnxruntime-node');
 const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { classifyDevice } = require('../../utils/deviceClassifier');
-const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
+const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
 
@@ -52,7 +52,7 @@ const DUMMY_TEST_INPUTS_FP32 = {
         mel: new ort.Tensor('float32', new Float32Array(3 * MEL_DIM), [1, 3, MEL_DIM]),
         f0: new ort.Tensor('float32', new Float32Array(3), [1, 3, 1]),
     },
-    melTransform: { audio: new ort.Tensor('float32', new Float32Array(HOP_SIZE * 3), [1, HOP_SIZE * 3]) },
+    melTransform: { audio: new ort.Tensor('float32', new Float32Array(SAMPLE_RATE), [1, SAMPLE_RATE]) },
 };
 
 const DUMMY_TEST_INPUTS_FP16 = {
@@ -74,7 +74,7 @@ const DUMMY_TEST_INPUTS_FP16 = {
         mel: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * MEL_DIM)), [1, 3, MEL_DIM]),
         f0: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3)), [1, 3, 1]),
     },
-    melTransform: { audio: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(HOP_SIZE * 3)), [1, HOP_SIZE * 3]) },
+    melTransform: { audio: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(SAMPLE_RATE)), [1, SAMPLE_RATE]) },
 };
 
 // NPU 静态形状模型的验证输入（维度固定为 NPU_STATIC_SEQ_LEN=2048）
@@ -92,7 +92,7 @@ const DUMMY_TEST_INPUTS_NPU = {
         xt_mask: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN), [1, NPU_STATIC_SEQ_LEN]),
     },
     vocoder: { mel: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN * MEL_DIM), [1, NPU_STATIC_SEQ_LEN, MEL_DIM]) },
-    melTransform: { audio: new ort.Tensor('float32', new Float32Array(240000), [1, 240000]) },
+    melTransform: { audio: new ort.Tensor('float32', new Float32Array(SAMPLE_RATE), [1, SAMPLE_RATE]) },
 };
 
 /** @deprecated Using classifyDevice 替代 */

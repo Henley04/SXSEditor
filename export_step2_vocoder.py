@@ -54,6 +54,10 @@ def main():
         output_path,
         input_names=['mel'],
         output_names=['waveform'],
+        dynamic_axes={
+            'mel': {1: 'num_frames'},
+            'waveform': {1: 'audio_len'},
+        },
         decompose_conv_transpose=True,   # No-op if no ConvTranspose, safe to keep
         fix_mixed_precision=False,       # FP32 main path
     )

@@ -1410,7 +1410,15 @@ def decompose_conv_transpose_dml(model):
 
 
 def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
-                     decompose_conv_transpose=True):
+                     decompose_conv_transpose=True, dynamic_input_shape=False):
+    """Post-process ONNX model: STFT replacement, ConvTranspose decomposition,
+    onnxsim, shape inference, strip metadata.
+
+    Args:
+        dynamic_input_shape: if True, onnxsim preserves dynamic input shapes
+            (required when export used dynamic_axes). If False, onnxsim may
+            fold dynamic dimensions into static constants.
+    """
     print(f"\n  Post-processing: {os.path.basename(input_path)}")
     model = onnx.load(input_path)
     if decompose_conv_transpose:
@@ -1423,7 +1431,8 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
         pass
     if HAS_ONNXSIM:
         try:
-            simplified, ok = onnxsim.simplify(model, check_n=0, skip_fuse_bn=True, dynamic_input_shape=False)
+            simplified, ok = onnxsim.simplify(model, check_n=0, skip_fuse_bn=True,
+                                               dynamic_input_shape=dynamic_input_shape)
             if ok:
                 print(f"    onnxsim: {len(model.graph.node)} -> {len(simplified.graph.node)} nodes")
                 model = simplified
@@ -1514,6 +1523,7 @@ def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_na
         tmp_path, output_path,
         fix_mixed_precision=fix_mixed_precision,
         decompose_conv_transpose=decompose_conv_transpose,
+        dynamic_input_shape=dynamic_axes is not None,
     )
     if os.path.exists(tmp_path):
         os.remove(tmp_path)
