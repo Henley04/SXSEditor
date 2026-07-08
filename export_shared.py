@@ -102,19 +102,15 @@ LlamaNARDecoderLayer.forward = _pnar
 _orig_dli = DiffLlama.__init__
 def _pdli(self, *a, **kw):
     _orig_dli(self, *a, **kw)
-    # Precompute full cos/sin table for RoPE to avoid Range(0, T, 1) with
-    # dynamic T on DML. DML doesn't support Range with dynamic limit, but
-    # Slice with dynamic ends is well-supported.
+    # Store inv_freq for RoPE computation. In forward, we generate positions
+    # via ConstantOfShape+CumSum instead of Range(0, T, 1) because DML does
+    # not support Range with dynamic limit. ConstantOfShape and CumSum are
+    # both DML-compatible (opset 9 and 11 respectively).
     layer_cfg = self.layers[0].self_attn.config
     head_dim = layer_cfg.hidden_size // layer_cfg.num_attention_heads
-    max_seq_len = getattr(layer_cfg, 'max_position_embeddings', 4096)
     base = getattr(layer_cfg, 'rope_theta', 10000.0)
     inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
-    positions = torch.arange(max_seq_len, dtype=torch.float32)
-    freqs = positions[:, None] * inv_freq[None, :]  # (max_seq_len, head_dim/2)
-    emb = torch.cat([freqs, freqs], dim=-1)  # (max_seq_len, head_dim)
-    self.register_buffer('_rope_cos', emb.cos().unsqueeze(0), persistent=False)  # (1, max_seq_len, head_dim)
-    self.register_buffer('_rope_sin', emb.sin().unsqueeze(0), persistent=False)
+    self.register_buffer('_rope_inv_freq', inv_freq, persistent=False)  # (head_dim/2,)
 DiffLlama.__init__ = _pdli
 
 def _pdl(self, x, diffusion_step, cond, x_mask, **kw):
@@ -126,11 +122,16 @@ def _pdl(self, x, diffusion_step, cond, x_mask, **kw):
     x = x + cond_embedding
     attention_mask = self._prepare_decoder_attention_mask(x_mask, (B, T), x, 0)
     hidden_states = x
-    # Use precomputed cos/sin table sliced to T to avoid Range(0, T, 1).
-    # DML doesn't support Range with dynamic limit, but Slice with dynamic
-    # ends is well-supported. torch.narrow maps to ONNX Slice.
-    cos = torch.narrow(self._rope_cos, 1, 0, T).to(x.dtype)  # (1, T, head_dim)
-    sin = torch.narrow(self._rope_sin, 1, 0, T).to(x.dtype)
+    # Generate position indices [0, 1, ..., T-1] via ConstantOfShape + CumSum.
+    # DML doesn't support Range with dynamic limit, but ConstantOfShape and
+    # CumSum are both DML-compatible. torch.ones(T) traces to ConstantOfShape
+    # with dynamic shape from Shape(xt_input) → Gather.
+    ones = torch.ones(T, device=x.device, dtype=torch.float32)
+    positions = torch.cumsum(ones, dim=0) - 1.0  # [0, 1, ..., T-1]
+    freqs = positions[:, None] * self._rope_inv_freq[None, :]  # (T, head_dim/2)
+    emb = torch.cat([freqs, freqs], dim=-1)  # (T, head_dim)
+    cos = emb.cos().unsqueeze(0).to(x.dtype)  # (1, T, head_dim)
+    sin = emb.sin().unsqueeze(0).to(x.dtype)
     position_embeddings = (cos, sin)
     for decoder_layer in self.layers:
         layer_outputs = decoder_layer(hidden_states, attention_mask=attention_mask,
