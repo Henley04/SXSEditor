@@ -351,8 +351,9 @@ def verify_mel_transform(model, onnx_dir, seq_len, verbose=False):
 def verify_diff_step(model, onnx_dir, seq_len, verbose=False):
     """Verify diff_step (DiffLlama via DiffStepWrapper).
 
-    Inputs: xt_input(1,T,128), t(1,), cond(1,T,512), xt_mask(1,T).
-    ONNX was exported with static shape T=2048.
+    Inputs: xt_input(1,T,128), t(1,), cond(1,T,1024), xt_mask(1,T).
+    cond is cond_embedding (1024-dim), already processed by cond_emb.onnx.
+    ONNX has dynamic seq_len (post-acee2f5 re-export).
     """
     name = 'diff_step'
     onnx_path = os.path.join(onnx_dir, 'diff_step_dml.onnx')
@@ -392,8 +393,7 @@ def verify_vocoder(model, onnx_dir, seq_len, verbose=False):
     """Verify vocoder (full Vocos: backbone + ISTFTHead via VocosFullWrapper).
 
     Input: mel(1,T,128) float32. Output: waveform(1, T*hop) float32.
-    ONNX was exported with static shape T=500 using VocosFullWrapper which
-    includes MatMul-based IDFT and manual overlap-add (DML-compatible).
+    ONNX has dynamic num_frames (post-acee2f5 re-export).
     PyTorch reference uses the same VocosFullWrapper (full ISTFT reconstruction).
     """
     name = 'vocoder'
