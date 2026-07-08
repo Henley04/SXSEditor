@@ -102,14 +102,25 @@ LlamaNARDecoderLayer.forward = _pnar
 _orig_dli = DiffLlama.__init__
 def _pdli(self, *a, **kw):
     _orig_dli(self, *a, **kw)
-    # Store inv_freq for RoPE computation. Positions are generated via
-    # ConstantOfShape(int32) + CumSum(int32) to avoid float32 accumulation
-    # errors that cause NaN on DML backend.
+    # Precompute full RoPE cos/sin tables up to maximum supported sequence length (4096)
+    # and use dynamic Slice at runtime. This avoids all dynamic computation (ConstantOfShape,
+    # CumSum, Dynamic Range) that can cause NaN on DML backend. DML supports dynamic Slice
+    # with static precomputed tables.
     layer_cfg = self.layers[0].self_attn.config
     head_dim = layer_cfg.hidden_size // layer_cfg.num_attention_heads
     base = getattr(layer_cfg, 'rope_theta', 10000.0)
+    max_seq_len = 4096
     inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
-    self.register_buffer('_rope_inv_freq', inv_freq, persistent=False)  # (head_dim/2,)
+    position = torch.arange(max_seq_len, dtype=torch.float32)  # precompute 0..4095 (constant)
+    freqs = position[:, None] * inv_freq[None, :]  # (max_seq_len, head_dim/2)
+    emb = torch.cat([freqs, freqs], dim=-1)  # (max_seq_len, head_dim)
+    cos = emb.cos()  # (max_seq_len, head_dim)
+    sin = emb.sin()
+    # Add singleton batch dimension for ONNX Slice compatibility: [1, max_seq_len, head_dim]
+    cos = cos.unsqueeze(0)
+    sin = sin.unsqueeze(0)
+    self.register_buffer('_rope_cos', cos, persistent=False)   # (1, 4096, head_dim)
+    self.register_buffer('_rope_sin', sin, persistent=False)   # (1, 4096, head_dim)
 DiffLlama.__init__ = _pdli
 
 def _pdl(self, x, diffusion_step, cond, x_mask, **kw):
@@ -121,16 +132,12 @@ def _pdl(self, x, diffusion_step, cond, x_mask, **kw):
     x = x + cond_embedding
     attention_mask = self._prepare_decoder_attention_mask(x_mask, (B, T), x, 0)
     hidden_states = x
-    # Generate position indices [0, 1, ..., T-1] via ConstantOfShape(int32) + CumSum(int32).
-    # Using int32 avoids float32 accumulation errors in CumSum that cause NaN on DML.
-    # DML supports ConstantOfShape and CumSum with int32 (opset 9 and 11).
-    ones = torch.ones(T, device=x.device, dtype=torch.int32)
-    positions = torch.cumsum(ones, dim=0) - 1  # [0, 1, ..., T-1] (int32)
-    positions = positions.float()  # convert to float32 for RoPE computation
-    freqs = positions[:, None] * self._rope_inv_freq[None, :]  # (T, head_dim/2)
-    emb = torch.cat([freqs, freqs], dim=-1)  # (T, head_dim)
-    cos = emb.cos().unsqueeze(0).to(x.dtype)  # (1, T, head_dim)
-    sin = emb.sin().unsqueeze(0).to(x.dtype)
+    # Slice precomputed RoPE tables [1, 4096, head_dim] → [1, T, head_dim].
+    # During dynamo=False tracing, this Slice has static ends (export seq_len).
+    # Post-processing in fix_dynamic_rope_slice() replaces static ends with
+    # dynamic ones computed from Shape(xt_input) → Gather, making it DML-safe.
+    cos = self._rope_cos[:, :T, :].to(x.dtype)  # Slice, [1, T, head_dim]
+    sin = self._rope_sin[:, :T, :].to(x.dtype)
     position_embeddings = (cos, sin)
     for decoder_layer in self.layers:
         layer_outputs = decoder_layer(hidden_states, attention_mask=attention_mask,
@@ -1433,10 +1440,101 @@ def decompose_conv_transpose_dml(model):
     return model
 
 
+def fix_dynamic_rope_slice(model):
+    """Replace static RoPE Slice ends with dynamic ones from Shape(xt_input).
+
+    When dynamo=False is used with dynamic_axes, PyTorch traces the Slice
+    [:,:T,:] with the export seq_len as a constant ends value. This function
+    finds the two RoPE Slice nodes (cos/sin) and replaces their static ends
+    with a dynamic value computed from Shape(xt_input) → Gather(dim=1).
+
+    DML supports dynamic Slice on precomputed initializers, but NOT
+    ConstantOfShape, CumSum, or dynamic Range operations.
+    """
+    graph = model.graph
+
+    # Find RoPE initializers: large [1, 4096, 64] tables
+    rope_init_names = set()
+    for init in graph.initializer:
+        dims = list(init.dims)
+        if dims == [1, 4096, 64]:
+            rope_init_names.add(init.name)
+
+    if not rope_init_names:
+        return  # No RoPE tables found, nothing to fix
+
+    # Find the Slice nodes that use these RoPE tables
+    slice_nodes = []
+    for node in graph.node:
+        if node.op_type == 'Slice' and node.input[0] in rope_init_names:
+            slice_nodes.append(node)
+
+    if not slice_nodes:
+        return
+
+    # Find xt_input to get dynamic seq_len
+    xt_input_name = None
+    for inp in graph.input:
+        if inp.name == 'xt_input':
+            xt_input_name = inp.name
+            break
+
+    if not xt_input_name:
+        return
+
+    # Create dynamic ends computation for each Slice
+    # Subgraph: Shape(xt_input) → Gather(axis=0, index=1)
+    # Shape returns [1, T, 128] as 1D int64 tensor.
+    # Gather with axis=0, index=1 extracts the 1D tensor [T] (already 1D).
+    # No Unsqueeze needed — Slice expects 1D ends tensor.
+    shape_node_name = '/diff_estimator/RopeShape'
+    gather_node_name = '/diff_estimator/RopeGather'
+
+    # Create initializer for Gather indices (index=1 for dim 1)
+    gather_indices_name = '/diff_estimator/RopeGather_indices'
+    gather_indices = numpy_helper.from_array(np.array([1], dtype=np.int64), name=gather_indices_name)
+    graph.initializer.append(gather_indices)
+
+    # Create Shape node
+    shape_node = helper.make_node(
+        'Shape',
+        inputs=[xt_input_name],
+        outputs=[shape_node_name],
+        name=shape_node_name,
+    )
+    graph.node.append(shape_node)
+
+    # Create Gather node
+    gather_node = helper.make_node(
+        'Gather',
+        inputs=[shape_node_name, gather_indices_name],
+        outputs=[gather_node_name],
+        name=gather_node_name,
+        axis=0,
+    )
+    graph.node.append(gather_node)
+
+    # Replace static ends with dynamic Gather output for each RoPE Slice
+    for node in slice_nodes:
+        # ends is input[2] in Slice (data, starts, ends, axes, steps)
+        old_ends_name = node.input[2]
+        node.input[2] = gather_node_name  # Gather output is 1D tensor [T]
+
+        # Remove the old static ends initializer
+        for init in list(graph.initializer):
+            if init.name == old_ends_name:
+                graph.initializer.remove(init)
+                break
+
+    print(f"    fix_dynamic_rope_slice: replaced {len(slice_nodes)} static Slice ends with dynamic Shape(xt_input)")
+
+    return model
+
+
 def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
                      decompose_conv_transpose=True, dynamic_input_shape=False):
     """Post-process ONNX model: STFT replacement, ConvTranspose decomposition,
-    onnxsim, shape inference, strip metadata.
+    onnxsim, shape inference, strip metadata, fix dynamic RoPE Slice.
 
     Args:
         dynamic_input_shape: if True, onnxsim preserves dynamic input shapes
@@ -1462,6 +1560,8 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
                 model = simplified
         except Exception as e:
             print(f"    onnxsim error: {e}")
+    # Fix dynamic RoPE Slice: replace static ends with dynamic Shape(xt_input)
+    model = fix_dynamic_rope_slice(model)
     # Fix dynamic batch dimension: onnxsim may propagate symbolic batch dim to
     # outputs, causing dim_value=0 with dim_param set. DML EP requires static
     # batch dimension (dim_value=1). Clear the dim_param oneof and set dim_value=1.
@@ -1480,7 +1580,7 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
     topological_sort(model.graph)
 
     graph = model.graph
-    used = {inp for node in graph.node for inp in node.input if inp} | {o.name for o in graph.output}
+    used = {inp for node in graph.node for inp in node.input} | {o.name for o in graph.output}
     for init in [i for i in graph.initializer if i.name not in used]:
         graph.initializer.remove(init)
 
