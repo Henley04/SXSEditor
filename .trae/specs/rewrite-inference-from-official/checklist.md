@@ -81,5 +81,5 @@
 ## Phase 6: 文档与提交
 - [x] `tools.md` 已更新（新增 export_pipeline.py，保留 SiFiGAN/INT8/NPU 脚本说明）
 - [x] `onnx_models/README.md` 已更新（FP32 opset 20 为默认主路径，保留 FP16/INT8/SiFiGAN 说明）
-- [ ] Git 提交记录完整
-- [ ] 已推送到远程 GitHub 仓库
+- [x] Git 提交记录完整（31 个 commits 本地就绪）
+- [ ] 已推送到远程 GitHub 仓库（待用户手动 push，代理暂不可用）

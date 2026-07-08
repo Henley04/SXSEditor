@@ -390,6 +390,28 @@ def replace_stft(model):
         if not sqrt_node:
             continue
 
+        # Extract epsilon from original Add node (e.g., +1e-9 in sqrt(mag_sq + 1e-9)).
+        # Without this, Sqrt(0) at silent frames causes numerical instability and
+        # log() compression amplifies the error, degrading mel_transform SNR by ~70dB.
+        eps_value = None
+        if add_node is not None:
+            other_input = add_node.input[1] if add_node.input[0] == reduce_node.output[0] else add_node.input[0]
+            eps_init = find_initializer(graph, other_input)
+            if eps_init is not None:
+                arr = numpy_helper.to_array(eps_init)
+                if arr.size == 1:
+                    eps_value = float(arr.item())
+            if eps_value is None:
+                for n2 in graph.node:
+                    if n2.op_type == 'Constant' and other_input in n2.output:
+                        for attr in n2.attribute:
+                            if attr.name == 'value':
+                                arr = numpy_helper.to_array(attr.t)
+                                if arr.size == 1:
+                                    eps_value = float(arr.item())
+                                break
+                        break
+
         final_output = sqrt_node.output[0]
         real_name = f"{stft_node.name}_real"
         imag_name = f"{stft_node.name}_imag"
@@ -405,8 +427,24 @@ def replace_stft(model):
             helper.make_node('Mul', [real_name, real_name], [real_sq], name=f"{stft_node.name}_m1"),
             helper.make_node('Mul', [imag_name, imag_name], [imag_sq], name=f"{stft_node.name}_m2"),
             helper.make_node('Add', [real_sq, imag_sq], [mag_sq], name=f"{stft_node.name}_a1"),
-            helper.make_node('Sqrt', [mag_sq], [final_output], name=f"{stft_node.name}_sq"),
         ])
+
+        if eps_value is None or eps_value == 0.0:
+            # No Add(eps) node found in original graph (dynamo may have optimized it away).
+            # Use default 1e-9 to match PyTorch MelSpectrogram.forward: sqrt(mag_sq + 1e-9).
+            # Without this, Sqrt(0) at silent frames causes numerical instability and
+            # log() compression amplifies the error, degrading mel_transform SNR by ~70dB.
+            eps_value = 1e-9
+
+        # Sqrt(mag_sq + eps) — always insert epsilon for numerical stability
+        eps_name = f"{stft_node.name}_eps"
+        new_initializers.append(numpy_helper.from_array(
+            np.array([eps_value], dtype=np.float32), name=eps_name))
+        mag_sq_eps = f"{stft_node.name}_mag_sq_eps"
+        new_nodes.append(helper.make_node('Add', [mag_sq, eps_name], [mag_sq_eps],
+                                          name=f"{stft_node.name}_a2"))
+        new_nodes.append(helper.make_node('Sqrt', [mag_sq_eps], [final_output],
+                                          name=f"{stft_node.name}_sq"))
 
         for n in [stft_node, trans_node, pow_node, reduce_node, sqrt_node] + ([add_node] if add_node else []):
             nodes_to_remove.add(n.name)
