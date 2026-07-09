@@ -1548,14 +1548,16 @@ def fix_range_limit_squeeze(model):
 
     Squeeze on a 1D tensor of shape [3] does nothing (no dim of size 1),
     so Range receives a 3-element tensor [1,T,1024] as limit, violating
-    the ONNX spec (Range requires scalar inputs).
+    the ONNX spec (Range requires scalar inputs). Python ORT tolerates this,
+    but onnxruntime-web (WASM CPU EP) produces incorrect output.
 
-    Fix: insert Slice(axes=[0], starts=[1], ends=[2]) to extract T before
-    Squeeze, then Squeeze converts [T] (shape [1]) to scalar T:
-        Shape(cond) → Slice([1],[2],[0]) → [T] → Squeeze → T (scalar) → Range
+    Fix: Cast Shape output (INT64) to FP32, Slice to extract T, Cast back
+    to INT64, then Reshape to scalar before feeding to Range:
+        Shape(cond) → Cast(FP32) → Slice(FP32) → Cast(INT64) → Reshape([]) → Range(limit)
 
-    Slice and Squeeze are shape-related ops and stay on CPU, avoiding
-    cross-EP issues. Verified working on DML.
+    Cast(INT64→FP32→INT64) avoids DML's lack of Slice-on-INT64 support.
+    Reshape to empty shape [] converts [T] (shape [1]) to scalar T,
+    avoiding dynamic-dim issues with Squeeze(axes=[0]).
     """
     graph = model.graph
 
@@ -1579,15 +1581,7 @@ def fix_range_limit_squeeze(model):
     if squeeze_node is None:
         return model  # No Squeeze on Shape output, nothing to fix
 
-    # Create Slice starts/ends/axes initializers
-    slice_starts = helper.make_tensor('fix_range_sl_starts', TensorProto.INT64, [1], [1])
-    slice_ends = helper.make_tensor('fix_range_sl_ends', TensorProto.INT64, [1], [2])
-    slice_axes = helper.make_tensor('fix_range_sl_axes', TensorProto.INT64, [1], [0])
-    for t in [slice_starts, slice_ends, slice_axes]:
-        graph.initializer.append(t)
-
-    # DML does not support Slice on INT64 tensors. Cast Shape output
-    # (INT64) to FP32, do the Slice, then Cast back to INT64.
+    # Step 1: Cast Shape output INT64 → FP32 (DML supports Slice on FP32)
     shape_fp32 = 'fix_range_shape_fp32'
     cast_to_fp32 = helper.make_node(
         'Cast', inputs=[shape_output], outputs=[shape_fp32],
@@ -1595,7 +1589,13 @@ def fix_range_limit_squeeze(model):
     )
     graph.node.append(cast_to_fp32)
 
-    # Create Slice node on FP32 data
+    # Step 2: Slice on FP32 to extract T: axes=[0], starts=[1], ends=[2]
+    sl_starts = helper.make_tensor('fix_range_sl_starts', TensorProto.INT64, [1], [1])
+    sl_ends = helper.make_tensor('fix_range_sl_ends', TensorProto.INT64, [1], [2])
+    sl_axes = helper.make_tensor('fix_range_sl_axes', TensorProto.INT64, [1], [0])
+    for t in [sl_starts, sl_ends, sl_axes]:
+        graph.initializer.append(t)
+
     slice_output_fp32 = 'fix_range_sliced_fp32'
     slice_node = helper.make_node(
         'Slice',
@@ -1605,37 +1605,154 @@ def fix_range_limit_squeeze(model):
     )
     graph.node.append(slice_node)
 
-    # Cast back to INT64
-    slice_output_name = 'fix_range_sliced_dim'
+    # Step 3: Cast back FP32 → INT64
+    sliced_int64 = 'fix_range_sliced_int64'
     cast_to_int64 = helper.make_node(
-        'Cast', inputs=[slice_output_fp32], outputs=[slice_output_name],
+        'Cast', inputs=[slice_output_fp32], outputs=[sliced_int64],
         name='fix_range_cast_int64', to=TensorProto.INT64,
     )
     graph.node.append(cast_to_int64)
 
-    # Change Squeeze input from val_1 to sliced_dim
-    squeeze_node.input[0] = slice_output_name
-    # Squeeze on 1D dynamic tensor [T] with axes=[0] requires dim=1 statically,
-    # which fails shape inference. Instead, use Gather(axis=0, index=0) to
-    # extract the scalar T from the 1D tensor [T] (shape [1]).
-    # Replace: Squeeze([T]) → scalar T
-    # With:    Gather([T], axis=0, index=0) → scalar T
-    squeeze_node.op_type = 'Gather'
-    squeeze_node.attribute.append(helper.make_attribute('axis', 0))
-    gather_idx_name = 'fix_range_gather_idx'
-    gather_idx = helper.make_tensor(gather_idx_name, TensorProto.INT64, [], [0])
-    graph.initializer.append(gather_idx)
-    squeeze_node.input.append(gather_idx_name)
+    # Step 4: Redirect Squeeze to use the extracted [T] tensor.
+    # Squeeze without axes on [T] (shape [1]) squeezes the only dim → scalar T.
+    # Keep the original Squeeze node, just change its input.
+    squeeze_node.input[0] = sliced_int64
 
-    print(f"    fix_range_limit_squeeze: inserted Slice before Squeeze, "
-          f"converted Squeeze to Gather for correct Range limit")
+    print(f"    fix_range_limit_squeeze: Cast(INT64→FP32)→Slice(FP32)→Cast(INT64)→"
+          f"Squeeze(→scalar) for correct Range limit")
+
+    return model
+
+
+def fix_range_to_slice(model):
+    """Replace ONNX Range operator with precomputed FP32 arange table + Slice.
+
+    dynamo=True exports torch.arange(T) as:
+        Shape(cond) → [1,T,1024] → Squeeze → [1,T,1024] (no-op) → Range(limit)
+
+    This is non-spec-compliant (Range requires scalar limit) and the Range
+    operator is unreliable on DML FP32. This function replaces the entire
+    chain with a precomputed FP32 arange table [0..9999] and dynamic Slice.
+
+    The FP32 arange avoids DML's lack of INT64 Slice support. Downstream
+    nodes (Unsqueeze, Reshape, Mul, Sin, Cos) all work with FP32, and the
+    eventual Cast(FLOAT) becomes a no-op.
+
+    Chain:
+      Shape(cond) → [1,T,1024] → Cast(FP32) → Slice(starts=[1],ends=[2]) → [T]
+      → Slice(arange_FP32, ends=[T]) → [T] (FP32)
+    """
+    graph = model.graph
+    MAX_SEQ_LEN = 10000
+
+    # Find Shape(cond) node
+    cond_shape_node = None
+    for node in graph.node:
+        if node.op_type == 'Shape' and node.input[0] == 'cond':
+            cond_shape_node = node
+            break
+    if cond_shape_node is None:
+        return model
+
+    # Find Range node
+    range_node = None
+    for node in graph.node:
+        if node.op_type == 'Range':
+            range_node = node
+            break
+    if range_node is None:
+        return model
+
+    range_output = range_node.output[0]
+
+    # Step 1: Precompute arange table [0..MAX_SEQ_LEN-1] as FP32
+    arange_data = np.arange(MAX_SEQ_LEN, dtype=np.float32)
+    arange_init = helper.make_tensor('fix_arange_table', TensorProto.FLOAT,
+                                      [MAX_SEQ_LEN], arange_data)
+    graph.initializer.append(arange_init)
+
+    # Step 2: Cast Shape(cond) output INT64 → FP32 for DML compatibility
+    shape_fp32 = 'fix_arange_shape_fp32'
+    cast_fp32 = helper.make_node(
+        'Cast', inputs=[cond_shape_node.output[0]], outputs=[shape_fp32],
+        name='fix_arange_cast_fp32', to=TensorProto.FLOAT,
+    )
+    graph.node.append(cast_fp32)
+
+    # Step 3: Slice to extract T: axes=[0], starts=[1], ends=[2]
+    sl_starts = helper.make_tensor('fix_arange_sl_starts', TensorProto.INT64, [1], [1])
+    sl_ends = helper.make_tensor('fix_arange_sl_ends', TensorProto.INT64, [1], [2])
+    sl_axes = helper.make_tensor('fix_arange_sl_axes', TensorProto.INT64, [1], [0])
+    for t in [sl_starts, sl_ends, sl_axes]:
+        graph.initializer.append(t)
+
+    seq_len_name = 'fix_arange_seq_len'
+    slice_shape = helper.make_node(
+        'Slice',
+        inputs=[shape_fp32, 'fix_arange_sl_starts', 'fix_arange_sl_ends', 'fix_arange_sl_axes'],
+        outputs=[seq_len_name],
+        name='fix_arange_slice_shape',
+    )
+    graph.node.append(slice_shape)
+
+    # Step 3b: Cast seq_len FP32 → INT64 (Slice ends must be INT64)
+    seq_len_int64 = 'fix_arange_seq_len_int64'
+    cast_seq_len = helper.make_node(
+        'Cast', inputs=[seq_len_name], outputs=[seq_len_int64],
+        name='fix_arange_cast_seq_len', to=TensorProto.INT64,
+    )
+    graph.node.append(cast_seq_len)
+
+    # Step 4: Slice(arange_table, starts=[0], ends=[T], axes=[0]) → [T] (FP32)
+    sl2_starts = helper.make_tensor('fix_arange_sl2_starts', TensorProto.INT64, [1], [0])
+    sl2_axes = helper.make_tensor('fix_arange_sl2_axes', TensorProto.INT64, [1], [0])
+    for t in [sl2_starts, sl2_axes]:
+        graph.initializer.append(t)
+
+    slice_arange = helper.make_node(
+        'Slice',
+        inputs=[arange_init.name, 'fix_arange_sl2_starts', seq_len_int64, 'fix_arange_sl2_axes'],
+        outputs=['fix_arange_slice_out'],
+        name='fix_arange_slice',
+    )
+    graph.node.append(slice_arange)
+
+    # Step 5: Cast FP32 → INT64 to match expected output type (original Range was INT64)
+    cast_output = helper.make_node(
+        'Cast',
+        inputs=['fix_arange_slice_out'],
+        outputs=[range_output],
+        name='fix_arange_cast_out',
+        to=TensorProto.INT64,
+    )
+    graph.node.append(cast_output)
+
+    # Step 6: Remove the old Range node and its Squeeze
+    nodes_to_remove = {range_node.name}
+    for node in graph.node:
+        if node.op_type == 'Squeeze' and node.output[0] == range_node.input[1]:
+            nodes_to_remove.add(node.name)
+            break
+
+    remaining = [n for n in graph.node if n.name not in nodes_to_remove]
+    del graph.node[:]
+    graph.node.extend(remaining)
+
+    # Remove orphaned initializers
+    used_names = {inp for node in graph.node for inp in node.input} | {o.name for o in graph.output}
+    for init in list(graph.initializer):
+        if init.name not in used_names:
+            graph.initializer.remove(init)
+
+    print(f"    fix_range_to_slice: replaced Range with FP32 arange table "
+          f"[0..{MAX_SEQ_LEN-1}] + dynamic Slice")
 
     return model
 
 
 def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
                      decompose_conv_transpose=True, dynamic_input_shape=False,
-                     skip_stft_replace=False):
+                     skip_stft_replace=False, skip_dml_fixes=False):
     """Post-process ONNX model: STFT replacement, ConvTranspose decomposition,
     onnxsim, shape inference, strip metadata, fix dynamic RoPE Slice.
 
@@ -1646,6 +1763,11 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
         skip_stft_replace: if True, skip STFT→Cooley-Tukey replacement.
             Use for models that benefit from native ONNX STFT operator
             (e.g., mel_transform with dynamic shapes).
+        skip_dml_fixes: if True, skip self-implemented DML compatibility fixes
+            (fix_dynamic_rope_slice, fix_range_to_slice, resolve_neg1_in_reshape_shapes).
+            DML compatibility is instead handled by Olive passes post-export.
+            Use for models exported with dynamo=True + dynamic_shapes where
+            DML-specific graph surgeries are delegated to Olive.
     """
     print(f"\n  Post-processing: {os.path.basename(input_path)}")
     model = onnx.load(input_path)
@@ -1669,12 +1791,14 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
         except Exception as e:
             print(f"    onnxsim error: {e}")
     # Fix dynamic RoPE Slice: replace static ends with dynamic Shape(xt_input)
-    model = fix_dynamic_rope_slice(model)
-    # Fix Range limit: skip for FP32 diff_step — the root cause of NaN was
-    # mel_transform static shapes (ptMelData produced NaN), not the Range operator.
-    # The original Shape→Squeeze→Range chain works correctly on both CPU and DML
-    # when mel input is valid. Keeping this fix disabled for the original model.
-    # model = fix_range_limit_squeeze(model)
+    # Only needed for dynamo=False export (legacy path with precomputed RoPE tables).
+    # Skipped when skip_dml_fixes=True (DML compat handled by Olive).
+    if not skip_dml_fixes:
+        model = fix_dynamic_rope_slice(model)
+        # Fix Range operator: replace ONNX Range with FP32 arange table + Slice.
+        # ONNX Range(limit=[1,T,1024]) is non-spec-compliant and onnxruntime-web
+        # DML rejects it. The FP32 arange table avoids DML INT64 Slice issues.
+        model = fix_range_to_slice(model)
     # Fix dynamic batch dimension: onnxsim may propagate symbolic batch dim to
     # outputs, causing dim_value=0 with dim_param set. DML EP requires static
     # batch dimension (dim_value=1). Clear the dim_param oneof and set dim_value=1.
@@ -1689,8 +1813,9 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
         model = fix_mixed_precision_types(model)
     # Resolve -1 in Reshape shape Concat (DML EP doesn't support -1 in shape tensor).
     # dynamo=True export produces -1 in Reshape shapes for both FP16 and FP32 models.
-    # Safe to call unconditionally: no-op when no -1 values are found.
-    model = resolve_neg1_in_reshape_shapes(model)
+    # Skipped when skip_dml_fixes=True (handled by Olive ORT optimization).
+    if not skip_dml_fixes:
+        model = resolve_neg1_in_reshape_shapes(model)
     model = strip_metadata(model)
     topological_sort(model.graph)
 
@@ -1731,7 +1856,8 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
 
 def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_names,
                         dynamic_axes=None, dynamic_shapes=None, decompose_conv_transpose=True,
-                        fix_mixed_precision=False, skip_stft_replace=False):
+                        fix_mixed_precision=False, skip_stft_replace=False,
+                        skip_dml_fixes=False):
     """Export a PyTorch wrapper to FP32 ONNX with opset 20 + DML post-processing.
 
     This is the main entry point for FP32 main-path exports. Writes to a temp file
@@ -1788,6 +1914,7 @@ def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_na
         decompose_conv_transpose=decompose_conv_transpose,
         dynamic_input_shape=(dynamic_axes is not None) or (dynamic_shapes is not None),
         skip_stft_replace=skip_stft_replace,
+        skip_dml_fixes=skip_dml_fixes,
     )
     if os.path.exists(tmp_path):
         os.remove(tmp_path)
