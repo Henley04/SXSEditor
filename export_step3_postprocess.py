@@ -76,10 +76,14 @@ class MelTransformWrapper(nn.Module):
 # Export helper
 # ============================================================
 
-def export_model(wrapper, args_tuple, output_path, input_names, output_names, dynamic_axes=None):
+def export_model(wrapper, args_tuple, output_path, input_names, output_names, dynamic_axes=None, dynamic_shapes=None, skip_stft_replace=False):
     print(f"\n  Exporting: {os.path.basename(output_path)}")
     if dynamic_axes:
         print(f"    dynamic_axes: {dynamic_axes}")
+    if dynamic_shapes:
+        print(f"    dynamic_shapes: {dynamic_shapes}")
+    if skip_stft_replace:
+        print(f"    skip_stft_replace: True (native STFT preserved)")
     export_fp32_opset20(
         wrapper,
         args_tuple,
@@ -87,8 +91,10 @@ def export_model(wrapper, args_tuple, output_path, input_names, output_names, dy
         input_names=input_names,
         output_names=output_names,
         dynamic_axes=dynamic_axes,
+        dynamic_shapes=dynamic_shapes,
         decompose_conv_transpose=False,
         fix_mixed_precision=False,
+        skip_stft_replace=skip_stft_replace,
     )
 
 
@@ -232,14 +238,22 @@ def main():
     exported.append('cond_emb.onnx')
     clear_memory()
 
-    # 7. mel_transform (MelSpectrogramEncoder, STFT replaced in postprocess)
-    #    保持静态: audio 固定为 1s (24000 samples), Cooley-Tukey DFT 图依赖固定帧数
+    # 7. mel_transform (MelSpectrogramEncoder)
+    #    Use native STFT operator with dynamic shapes for reference mel extraction
+    #    (skip Cooley-Tukey DFT replacement to support variable audio length)
+    #    Needs dynamo=True to handle complex STFT (requires torch.export)
+    from torch.export import Dim
+    len_dim = Dim('num_samples', min=1, max=1000000)
     export_model(
         MelTransformWrapper(model.mel),
         (torch.randn(1, sample_rate),),
         os.path.join(args.output_dir, 'mel_transform.onnx'),
         ['audio'],
         ['mel'],
+        dynamic_shapes={
+            'audio': {1: len_dim},
+        },
+        skip_stft_replace=True,
     )
     exported.append('mel_transform.onnx')
     clear_memory()
