@@ -226,6 +226,13 @@ class OnnxSVSPipeline {
                     // （适用于 v1/v2 未导出 diff_step 的旧 JP 模型包）
                     resolvedFile = 'diff_step.onnx';
                     console.warn('[OnnxSVSPipeline] JP diff_step_dml.onnx not found, falling back to base diff_step.onnx');
+                } else {
+                    console.log(`[OnnxSVSPipeline] Loading diff_step from: ${dmlPath}, isFP16=${this.isFP16}, dmlDeviceId=${this.dmlDeviceId}`);
+                    // Check file size for diagnostic
+                    try {
+                        const stat = await fs.promises.stat(dmlPath);
+                        console.log(`[OnnxSVSPipeline] diff_step_dml.onnx file size: ${(stat.size / 1024 / 1024).toFixed(1)} MB`);
+                    } catch (_) {}
                 }
             }
 
@@ -1184,6 +1191,10 @@ class OnnxSVSPipeline {
             const dmlCount = Object.values(this.sessionEPs).filter(e => e === 'dml').length;
             const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
             console.log(`[OnnxSVSPipeline] Init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
+            // Flush ORT native debug logs after init complete
+            if (typeof globalThis._flushOrtDebugLogs === 'function') {
+                globalThis._flushOrtDebugLogs();
+            }
             if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], this._getModelPath(this._resolvedVocoderFile || 'vocoder_dml.onnx'));
         } catch (err) {
             console.error('[OnnxSVSPipeline] ONNX Runtime init failed:', err.message);
@@ -1543,6 +1554,8 @@ class OnnxSVSPipeline {
     }
 
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
+        console.log(`[OnnxSVSPipeline] Diffusion start: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, totalSteps=${totalSteps}, isFP16=${this.isFP16}, ep=${this.sessionEPs.diffStep || 'unknown'}`);
+        console.log(`[OnnxSVSPipeline] Session diffStep: type=${this.sessions.diffStep?.constructor?.name}, ep=${this.sessionEPs.diffStep}`);
         return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.isFP16, onProgress, progressStart, progressRange, this.useStaticShapes);
     }
 

@@ -53,6 +53,18 @@ class Diffusion {
         }
 
         const pred = outputToFloat32(results['flow_pred']);
+
+        // 诊断：检查第一个 step 的输出
+        if (tVal < 0.1) {
+            let predNaN = 0, predInf = 0;
+            for (let i = 0; i < pred.length; i++) {
+                if (Number.isNaN(pred[i])) predNaN++;
+                if (!Number.isFinite(pred[i])) predInf++;
+            }
+            const nonNaN = pred.filter(v => Number.isFinite(v));
+            const predMean = nonNaN.length > 0 ? nonNaN.reduce((a,b)=>a+b,0)/nonNaN.length : 0;
+            console.log(`[DiffusionDiag] Step t=${tVal.toFixed(4)}: xt=[${xtTensor.type} ${xtTensor.dims}], cond=[${condTensor.type} ${condTensor.dims}], flow_pred NaN=${predNaN}, Inf=${predInf - predNaN}, mean=${predMean.toFixed(6)}`);
+        }
         // 立即释放输出张量和所有输入张量：outputToFloat32 已拷贝数据到独立 Float32Array
         disposeTensor(results['flow_pred']);
         disposeTensor(xtTensor);
@@ -99,6 +111,29 @@ class Diffusion {
         const xtTensor = createFloatTensor(floatType, xtPadded, [1, seqLen, MEL_DIM]);
         const tTensor = createFloatTensor(floatType, new Float32Array([tVal]), [1]);
 
+        // 诊断第一步：输入数据统计
+        if (tVal < 0.1) {
+            let xtNaN = 0, xtInf = 0, xtMin = Infinity, xtMax = -Infinity;
+            for (let i = 0; i < xtPadded.length; i++) {
+                if (Number.isNaN(xtPadded[i])) { xtNaN++; continue; }
+                if (!Number.isFinite(xtPadded[i])) { xtInf++; continue; }
+                if (xtPadded[i] < xtMin) xtMin = xtPadded[i];
+                if (xtPadded[i] > xtMax) xtMax = xtPadded[i];
+            }
+            console.log(`[DiffusionDiag] Input xt: t=${tVal.toFixed(4)}, len=${xtPadded.length}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}`);
+            
+            // Check cond tensor data
+            const condData = condTensor.data;
+            let cNaN = 0, cInf = 0, cMin = Infinity, cMax = -Infinity;
+            for (let i = 0; i < condData.length; i++) {
+                if (Number.isNaN(condData[i])) { cNaN++; continue; }
+                if (!Number.isFinite(condData[i])) { cInf++; continue; }
+                if (condData[i] < cMin) cMin = condData[i];
+                if (condData[i] > cMax) cMax = condData[i];
+            }
+            console.log(`[DiffusionDiag] Input cond: len=${condData.length}, NaN=${cNaN}, Inf=${cInf}, min=${cMin.toFixed(6)}, max=${cMax.toFixed(6)}`);
+        }
+
         let results;
         try {
             results = await sessions.diffStep.run({
@@ -132,6 +167,19 @@ class Diffusion {
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
+
+        // 诊断：输出 diffStep session 的输入元数据
+        if (sessions.diffStep) {
+            try {
+                const inputMeta = sessions.diffStep.inputMetadata;
+                console.log('[DiffusionDiag] diffStep input metadata:');
+                for (const [name, meta] of Object.entries(inputMeta)) {
+                    console.log(`  ${name}: type=${meta.type}, dims=${JSON.stringify(meta.dims)}`);
+                }
+            } catch (e) {
+                console.log('[DiffusionDiag] Failed to read diffStep inputMetadata:', e.message);
+            }
+        }
         // 条件分支 mask：所有帧均有效（含 prompt）
         const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
         // 非条件分支（target-only，对齐官方 PyTorch reverse_diffusion）：
@@ -260,6 +308,11 @@ class Diffusion {
                 }
                 if (xtNaN > 0 || xtInf > 0) {
                     console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! NaN=${xtNaN}, Inf=${xtInf - xtNaN}, total=${xtData.length}, frames=${totalFrames}, mean=${(xtData.reduce((a,b)=>a+b,0)/xtData.length).toFixed(6)}`);
+
+                    // Dump ORT native debug logs from stderr capture
+                    if (typeof globalThis._flushOrtDebugLogs === 'function') {
+                        globalThis._flushOrtDebugLogs();
+                    }
                 }
             }
         } finally {

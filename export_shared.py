@@ -1540,8 +1540,76 @@ def fix_dynamic_rope_slice(model):
     return model
 
 
+def fix_range_limit_squeeze(model):
+    """Fix Squeeze(Shape(cond)) → Range limit for dynamo=True export.
+
+    dynamo=True exports torch.arange(T) as:
+        Shape(cond) → [1,T,1024] → Squeeze → [1,T,1024] (no-op) → Range(limit)
+
+    Squeeze on a 1D tensor of shape [3] does nothing (no dim of size 1).
+    Range then receives a 3-element tensor [1,T,1024] as limit, which is
+    undefined behavior. Some runtimes handle it, others (onnxruntime-web DML)
+    may produce NaN.
+
+    Fix: insert Slice(axes=[0], starts=[1], ends=[2]) to extract T before Squeeze:
+        Shape(cond) → Slice([1], [2], [0]) → [T] → Squeeze → T (scalar) → Range
+
+    Slice is shape-related and stays on CPU, avoiding cross-EP Gather issues.
+    """
+    graph = model.graph
+
+    # Find Shape(cond) → val_1 → Squeeze(val_1) → sym_size_int_5 chain
+    shape_node = None
+    squeeze_node = None
+    for node in graph.node:
+        if node.op_type == 'Shape' and node.input[0] == 'cond':
+            shape_node = node
+            break
+
+    if shape_node is None:
+        return model  # No cond Shape node, nothing to fix
+
+    shape_output = shape_node.output[0]
+    for node in graph.node:
+        if node.op_type == 'Squeeze' and node.input[0] == shape_output:
+            squeeze_node = node
+            break
+
+    if squeeze_node is None:
+        return model  # No Squeeze on Shape output, nothing to fix
+
+    # Create Slice starts/ends/axes initializers
+    slice_starts_name = 'fix_range_slice_starts'
+    slice_ends_name = 'fix_range_slice_ends'
+    slice_axes_name = 'fix_range_slice_axes'
+    slice_starts = helper.make_tensor(slice_starts_name, TensorProto.INT64, [1], [1])
+    slice_ends = helper.make_tensor(slice_ends_name, TensorProto.INT64, [1], [2])
+    slice_axes = helper.make_tensor(slice_axes_name, TensorProto.INT64, [1], [0])
+    for t in [slice_starts, slice_ends, slice_axes]:
+        graph.initializer.append(t)
+
+    # Create Slice node: Slice(val_1, starts=[1], ends=[2], axes=[0]) → [T]
+    slice_output_name = 'fix_range_sliced_dim'
+    slice_node = helper.make_node(
+        'Slice',
+        inputs=[shape_output, slice_starts_name, slice_ends_name, slice_axes_name],
+        outputs=[slice_output_name],
+        name='fix_range_slice',
+    )
+    graph.node.append(slice_node)
+
+    # Change Squeeze input from val_1 to sliced_dim
+    squeeze_node.input[0] = slice_output_name
+
+    print(f"    fix_range_limit_squeeze: inserted Slice before Squeeze "
+          f"for correct Range limit ({shape_output} → {slice_output_name} → {squeeze_node.output[0]})")
+
+    return model
+
+
 def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
-                     decompose_conv_transpose=True, dynamic_input_shape=False):
+                     decompose_conv_transpose=True, dynamic_input_shape=False,
+                     skip_stft_replace=False):
     """Post-process ONNX model: STFT replacement, ConvTranspose decomposition,
     onnxsim, shape inference, strip metadata, fix dynamic RoPE Slice.
 
@@ -1549,12 +1617,18 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
         dynamic_input_shape: if True, onnxsim preserves dynamic input shapes
             (required when export used dynamic_axes). If False, onnxsim may
             fold dynamic dimensions into static constants.
+        skip_stft_replace: if True, skip STFT→Cooley-Tukey replacement.
+            Use for models that benefit from native ONNX STFT operator
+            (e.g., mel_transform with dynamic shapes).
     """
     print(f"\n  Post-processing: {os.path.basename(input_path)}")
     model = onnx.load(input_path)
     if decompose_conv_transpose:
         decompose_conv_transpose_dml(model)
-    replace_stft(model)
+    if not skip_stft_replace:
+        replace_stft(model)
+    else:
+        print("    Skipping STFT→Cooley-Tukey replacement (native STFT preserved)")
     topological_sort(model.graph)
     try:
         model = shape_inference.infer_shapes(model, check_type=False, strict_mode=False)
@@ -1570,6 +1644,10 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
             print(f"    onnxsim error: {e}")
     # Fix dynamic RoPE Slice: replace static ends with dynamic Shape(xt_input)
     model = fix_dynamic_rope_slice(model)
+    # Fix Range limit: dynamo=True exports torch.arange(T) as
+    # Shape(cond)→Squeeze→Range, but Squeeze on [1,T,1024] is a no-op.
+    # Range receives a 3-element tensor as limit which causes NaN on DML.
+    model = fix_range_limit_squeeze(model)
     # Fix dynamic batch dimension: onnxsim may propagate symbolic batch dim to
     # outputs, causing dim_value=0 with dim_param set. DML EP requires static
     # batch dimension (dim_value=1). Clear the dim_param oneof and set dim_value=1.
@@ -1626,7 +1704,7 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
 
 def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_names,
                         dynamic_axes=None, dynamic_shapes=None, decompose_conv_transpose=True,
-                        fix_mixed_precision=False):
+                        fix_mixed_precision=False, skip_stft_replace=False):
     """Export a PyTorch wrapper to FP32 ONNX with opset 20 + DML post-processing.
 
     This is the main entry point for FP32 main-path exports. Writes to a temp file
@@ -1682,6 +1760,7 @@ def export_fp32_opset20(wrapper, args_tuple, output_path, input_names, output_na
         fix_mixed_precision=fix_mixed_precision,
         decompose_conv_transpose=decompose_conv_transpose,
         dynamic_input_shape=(dynamic_axes is not None) or (dynamic_shapes is not None),
+        skip_stft_replace=skip_stft_replace,
     )
     if os.path.exists(tmp_path):
         os.remove(tmp_path)
