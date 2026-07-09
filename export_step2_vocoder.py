@@ -2,8 +2,8 @@
 """Step 2: Export vocoder (Vocos) to FP32 opset 20 ONNX (DML-compatible).
 
 Uses VocosFullWrapper which includes the complete ISTFT reconstruction:
-  backbone → head.out (Linear) → exp/clip/cos/sin → MatMul IDFT →
-  windowing → fold overlap-add → window envelope normalization
+  backbone -> head.out (Linear) -> exp/clip/cos/sin -> MatMul IDFT ->
+  windowing -> fold overlap-add -> window envelope normalization
 
 Output: 'waveform' [1, T*hop] (final audio waveform, not raw 'spec').
 

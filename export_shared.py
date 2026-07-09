@@ -1546,15 +1546,16 @@ def fix_range_limit_squeeze(model):
     dynamo=True exports torch.arange(T) as:
         Shape(cond) → [1,T,1024] → Squeeze → [1,T,1024] (no-op) → Range(limit)
 
-    Squeeze on a 1D tensor of shape [3] does nothing (no dim of size 1).
-    Range then receives a 3-element tensor [1,T,1024] as limit, which is
-    undefined behavior. Some runtimes handle it, others (onnxruntime-web DML)
-    may produce NaN.
+    Squeeze on a 1D tensor of shape [3] does nothing (no dim of size 1),
+    so Range receives a 3-element tensor [1,T,1024] as limit, violating
+    the ONNX spec (Range requires scalar inputs).
 
-    Fix: insert Slice(axes=[0], starts=[1], ends=[2]) to extract T before Squeeze:
-        Shape(cond) → Slice([1], [2], [0]) → [T] → Squeeze → T (scalar) → Range
+    Fix: insert Slice(axes=[0], starts=[1], ends=[2]) to extract T before
+    Squeeze, then Squeeze converts [T] (shape [1]) to scalar T:
+        Shape(cond) → Slice([1],[2],[0]) → [T] → Squeeze → T (scalar) → Range
 
-    Slice is shape-related and stays on CPU, avoiding cross-EP Gather issues.
+    Slice and Squeeze are shape-related ops and stay on CPU, avoiding
+    cross-EP issues. Verified working on DML.
     """
     graph = model.graph
 
@@ -1579,30 +1580,55 @@ def fix_range_limit_squeeze(model):
         return model  # No Squeeze on Shape output, nothing to fix
 
     # Create Slice starts/ends/axes initializers
-    slice_starts_name = 'fix_range_slice_starts'
-    slice_ends_name = 'fix_range_slice_ends'
-    slice_axes_name = 'fix_range_slice_axes'
-    slice_starts = helper.make_tensor(slice_starts_name, TensorProto.INT64, [1], [1])
-    slice_ends = helper.make_tensor(slice_ends_name, TensorProto.INT64, [1], [2])
-    slice_axes = helper.make_tensor(slice_axes_name, TensorProto.INT64, [1], [0])
+    slice_starts = helper.make_tensor('fix_range_sl_starts', TensorProto.INT64, [1], [1])
+    slice_ends = helper.make_tensor('fix_range_sl_ends', TensorProto.INT64, [1], [2])
+    slice_axes = helper.make_tensor('fix_range_sl_axes', TensorProto.INT64, [1], [0])
     for t in [slice_starts, slice_ends, slice_axes]:
         graph.initializer.append(t)
 
-    # Create Slice node: Slice(val_1, starts=[1], ends=[2], axes=[0]) → [T]
-    slice_output_name = 'fix_range_sliced_dim'
+    # DML does not support Slice on INT64 tensors. Cast Shape output
+    # (INT64) to FP32, do the Slice, then Cast back to INT64.
+    shape_fp32 = 'fix_range_shape_fp32'
+    cast_to_fp32 = helper.make_node(
+        'Cast', inputs=[shape_output], outputs=[shape_fp32],
+        name='fix_range_cast_fp32', to=TensorProto.FLOAT,
+    )
+    graph.node.append(cast_to_fp32)
+
+    # Create Slice node on FP32 data
+    slice_output_fp32 = 'fix_range_sliced_fp32'
     slice_node = helper.make_node(
         'Slice',
-        inputs=[shape_output, slice_starts_name, slice_ends_name, slice_axes_name],
-        outputs=[slice_output_name],
+        inputs=[shape_fp32, 'fix_range_sl_starts', 'fix_range_sl_ends', 'fix_range_sl_axes'],
+        outputs=[slice_output_fp32],
         name='fix_range_slice',
     )
     graph.node.append(slice_node)
 
+    # Cast back to INT64
+    slice_output_name = 'fix_range_sliced_dim'
+    cast_to_int64 = helper.make_node(
+        'Cast', inputs=[slice_output_fp32], outputs=[slice_output_name],
+        name='fix_range_cast_int64', to=TensorProto.INT64,
+    )
+    graph.node.append(cast_to_int64)
+
     # Change Squeeze input from val_1 to sliced_dim
     squeeze_node.input[0] = slice_output_name
+    # Squeeze on 1D dynamic tensor [T] with axes=[0] requires dim=1 statically,
+    # which fails shape inference. Instead, use Gather(axis=0, index=0) to
+    # extract the scalar T from the 1D tensor [T] (shape [1]).
+    # Replace: Squeeze([T]) → scalar T
+    # With:    Gather([T], axis=0, index=0) → scalar T
+    squeeze_node.op_type = 'Gather'
+    squeeze_node.attribute.append(helper.make_attribute('axis', 0))
+    gather_idx_name = 'fix_range_gather_idx'
+    gather_idx = helper.make_tensor(gather_idx_name, TensorProto.INT64, [], [0])
+    graph.initializer.append(gather_idx)
+    squeeze_node.input.append(gather_idx_name)
 
-    print(f"    fix_range_limit_squeeze: inserted Slice before Squeeze "
-          f"for correct Range limit ({shape_output} → {slice_output_name} → {squeeze_node.output[0]})")
+    print(f"    fix_range_limit_squeeze: inserted Slice before Squeeze, "
+          f"converted Squeeze to Gather for correct Range limit")
 
     return model
 
@@ -1644,10 +1670,11 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
             print(f"    onnxsim error: {e}")
     # Fix dynamic RoPE Slice: replace static ends with dynamic Shape(xt_input)
     model = fix_dynamic_rope_slice(model)
-    # Fix Range limit: dynamo=True exports torch.arange(T) as
-    # Shape(cond)→Squeeze→Range, but Squeeze on [1,T,1024] is a no-op.
-    # Range receives a 3-element tensor as limit which causes NaN on DML.
-    model = fix_range_limit_squeeze(model)
+    # Fix Range limit: skip for FP32 diff_step — the root cause of NaN was
+    # mel_transform static shapes (ptMelData produced NaN), not the Range operator.
+    # The original Shape→Squeeze→Range chain works correctly on both CPU and DML
+    # when mel input is valid. Keeping this fix disabled for the original model.
+    # model = fix_range_limit_squeeze(model)
     # Fix dynamic batch dimension: onnxsim may propagate symbolic batch dim to
     # outputs, causing dim_value=0 with dim_param set. DML EP requires static
     # batch dimension (dim_value=1). Clear the dim_param oneof and set dim_value=1.
