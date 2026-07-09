@@ -99,55 +99,60 @@ def _pnar(self, hidden_states, cond_embedding, attention_mask=None, position_ids
     return (hidden_states,)
 LlamaNARDecoderLayer.forward = _pnar
 
-_orig_dli = DiffLlama.__init__
-def _pdli(self, *a, **kw):
-    _orig_dli(self, *a, **kw)
-    # Precompute full RoPE cos/sin tables up to maximum supported sequence length (4096)
-    # and use dynamic Slice at runtime. This avoids all dynamic computation (ConstantOfShape,
-    # CumSum, Dynamic Range) that can cause NaN on DML backend. DML supports dynamic Slice
-    # with static precomputed tables.
-    layer_cfg = self.layers[0].self_attn.config
-    head_dim = layer_cfg.hidden_size // layer_cfg.num_attention_heads
-    base = getattr(layer_cfg, 'rope_theta', 10000.0)
-    max_seq_len = 4096
-    inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
-    position = torch.arange(max_seq_len, dtype=torch.float32)  # precompute 0..4095 (constant)
-    freqs = position[:, None] * inv_freq[None, :]  # (max_seq_len, head_dim/2)
-    emb = torch.cat([freqs, freqs], dim=-1)  # (max_seq_len, head_dim)
-    cos = emb.cos()  # (max_seq_len, head_dim)
-    sin = emb.sin()
-    # Add singleton batch dimension for ONNX Slice compatibility: [1, max_seq_len, head_dim]
-    cos = cos.unsqueeze(0)
-    sin = sin.unsqueeze(0)
-    self.register_buffer('_rope_cos', cos, persistent=False)   # (1, 4096, head_dim)
-    self.register_buffer('_rope_sin', sin, persistent=False)   # (1, 4096, head_dim)
-DiffLlama.__init__ = _pdli
+# RoPE precomputation patches: precompute full cos/sin tables [1,4096,64] and
+# use dynamic Slice at runtime. Only needed for dynamo=False export (legacy path).
+# dynamo=True export natively produces Range + Sin/Cos for RoPE, which is more
+# DML-compatible. Set SKIP_ROPE_PRECOMPUTE=1 to use the native dynamo=True path.
+if not os.environ.get('SKIP_ROPE_PRECOMPUTE'):
+    _orig_dli = DiffLlama.__init__
+    def _pdli(self, *a, **kw):
+        _orig_dli(self, *a, **kw)
+        # Precompute full RoPE cos/sin tables up to maximum supported sequence length (4096)
+        # and use dynamic Slice at runtime. This avoids all dynamic computation (ConstantOfShape,
+        # CumSum, Dynamic Range) that can cause NaN on DML backend. DML supports dynamic Slice
+        # with static precomputed tables.
+        layer_cfg = self.layers[0].self_attn.config
+        head_dim = layer_cfg.hidden_size // layer_cfg.num_attention_heads
+        base = getattr(layer_cfg, 'rope_theta', 10000.0)
+        max_seq_len = 4096
+        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim))
+        position = torch.arange(max_seq_len, dtype=torch.float32)  # precompute 0..4095 (constant)
+        freqs = position[:, None] * inv_freq[None, :]  # (max_seq_len, head_dim/2)
+        emb = torch.cat([freqs, freqs], dim=-1)  # (max_seq_len, head_dim)
+        cos = emb.cos()  # (max_seq_len, head_dim)
+        sin = emb.sin()
+        # Add singleton batch dimension for ONNX Slice compatibility: [1, max_seq_len, head_dim]
+        cos = cos.unsqueeze(0)
+        sin = sin.unsqueeze(0)
+        self.register_buffer('_rope_cos', cos, persistent=False)   # (1, 4096, head_dim)
+        self.register_buffer('_rope_sin', sin, persistent=False)   # (1, 4096, head_dim)
+    DiffLlama.__init__ = _pdli
 
-def _pdl(self, x, diffusion_step, cond, x_mask, **kw):
-    B, T, _ = x.shape
-    cond_embedding = self.cond_mlp(cond)
-    x = self.mel_mlp(x)
-    diffusion_step = self.diff_step_embedding(diffusion_step).to(x.device)
-    diffusion_step = self.diff_step_mlp(diffusion_step)
-    x = x + cond_embedding
-    attention_mask = self._prepare_decoder_attention_mask(x_mask, (B, T), x, 0)
-    hidden_states = x
-    # Slice precomputed RoPE tables [1, 4096, head_dim] → [1, T, head_dim].
-    # During dynamo=False tracing, this Slice has static ends (export seq_len).
-    # Post-processing in fix_dynamic_rope_slice() replaces static ends with
-    # dynamic ones computed from Shape(xt_input) → Gather, making it DML-safe.
-    cos = self._rope_cos[:, :T, :].to(x.dtype)  # Slice, [1, T, head_dim]
-    sin = self._rope_sin[:, :T, :].to(x.dtype)
-    position_embeddings = (cos, sin)
-    for decoder_layer in self.layers:
-        layer_outputs = decoder_layer(hidden_states, attention_mask=attention_mask,
-                                      position_embeddings=position_embeddings,
-                                      cond_embedding=diffusion_step)
-        hidden_states = layer_outputs[0]
-    hidden_states = self.norm(hidden_states, cond_embedding=diffusion_step)
-    hidden_states = self.mel_out_mlp(hidden_states)
-    return hidden_states
-DiffLlama.forward = _pdl
+    def _pdl(self, x, diffusion_step, cond, x_mask, **kw):
+        B, T, _ = x.shape
+        cond_embedding = self.cond_mlp(cond)
+        x = self.mel_mlp(x)
+        diffusion_step = self.diff_step_embedding(diffusion_step).to(x.device)
+        diffusion_step = self.diff_step_mlp(diffusion_step)
+        x = x + cond_embedding
+        attention_mask = self._prepare_decoder_attention_mask(x_mask, (B, T), x, 0)
+        hidden_states = x
+        # Slice precomputed RoPE tables [1, 4096, head_dim] → [1, T, head_dim].
+        # During dynamo=False tracing, this Slice has static ends (export seq_len).
+        # Post-processing in fix_dynamic_rope_slice() replaces static ends with
+        # dynamic ones computed from Shape(xt_input) → Gather, making it DML-safe.
+        cos = self._rope_cos[:, :T, :].to(x.dtype)  # Slice, [1, T, head_dim]
+        sin = self._rope_sin[:, :T, :].to(x.dtype)
+        position_embeddings = (cos, sin)
+        for decoder_layer in self.layers:
+            layer_outputs = decoder_layer(hidden_states, attention_mask=attention_mask,
+                                          position_embeddings=position_embeddings,
+                                          cond_embedding=diffusion_step)
+            hidden_states = layer_outputs[0]
+        hidden_states = self.norm(hidden_states, cond_embedding=diffusion_step)
+        hidden_states = self.mel_out_mlp(hidden_states)
+        return hidden_states
+    DiffLlama.forward = _pdl
 
 print("[PATCHES] Applied transformers 5.x compatibility patches")
 
@@ -1574,8 +1579,10 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
     # Fix mixed precision types (W16A32: re-insert Cast for FP16 weights after onnxsim)
     if fix_mixed_precision:
         model = fix_mixed_precision_types(model)
-        # Resolve -1 in Reshape shape Concat (DML EP doesn't support -1 in shape tensor)
-        model = resolve_neg1_in_reshape_shapes(model)
+    # Resolve -1 in Reshape shape Concat (DML EP doesn't support -1 in shape tensor).
+    # dynamo=True export produces -1 in Reshape shapes for both FP16 and FP32 models.
+    # Safe to call unconditionally: no-op when no -1 values are found.
+    model = resolve_neg1_in_reshape_shapes(model)
     model = strip_metadata(model)
     topological_sort(model.graph)
 
