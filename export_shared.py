@@ -80,6 +80,10 @@ from soulxsinger.models.soulxsinger import SoulXSinger
 from soulxsinger.models.modules.llama import DiffLlama, LlamaNARDecoderLayer
 
 # Patch LlamaNARDecoderLayer.forward
+# Return (hidden_states, None, None) to be compatible with original DiffLlama.forward
+# which accesses layer_outputs[1] (use_cache) and layer_outputs[2] (output_attentions).
+# With _pdl (precomputed RoPE) these indices are never accessed, but dynamo=True
+# export traces all code paths and needs the tuple to have sufficient elements.
 def _pnar(self, hidden_states, cond_embedding, attention_mask=None, position_ids=None,
           past_key_value=None, output_attentions=False, use_cache=False,
           position_embeddings=None, **kwargs):
@@ -96,7 +100,7 @@ def _pnar(self, hidden_states, cond_embedding, attention_mask=None, position_ids
     hidden_states = self.post_attention_layernorm(hidden_states, cond_embedding=cond_embedding)
     hidden_states = self.mlp(hidden_states)
     hidden_states = residual + hidden_states
-    return (hidden_states,)
+    return (hidden_states, None, None)
 LlamaNARDecoderLayer.forward = _pnar
 
 # RoPE precomputation patches: precompute full cos/sin tables [1,4096,64] and
@@ -1466,7 +1470,7 @@ def fix_dynamic_rope_slice(model):
             rope_init_names.add(init.name)
 
     if not rope_init_names:
-        return  # No RoPE tables found, nothing to fix
+        return model  # No RoPE tables found, nothing to fix
 
     # Find the Slice nodes that use these RoPE tables
     slice_nodes = []
@@ -1475,7 +1479,7 @@ def fix_dynamic_rope_slice(model):
             slice_nodes.append(node)
 
     if not slice_nodes:
-        return
+        return model
 
     # Find xt_input to get dynamic seq_len
     xt_input_name = None
@@ -1485,7 +1489,7 @@ def fix_dynamic_rope_slice(model):
             break
 
     if not xt_input_name:
-        return
+        return model
 
     # Create dynamic ends computation for each Slice
     # Subgraph: Shape(xt_input) → Gather(axis=0, index=1)
@@ -1558,8 +1562,7 @@ def postprocess_onnx(input_path, output_path, fix_mixed_precision=False,
         pass
     if HAS_ONNXSIM:
         try:
-            simplified, ok = onnxsim.simplify(model, check_n=0, skip_fuse_bn=True,
-                                               dynamic_input_shape=dynamic_input_shape)
+            simplified, ok = onnxsim.simplify(model, check_n=0, skip_fuse_bn=True)
             if ok:
                 print(f"    onnxsim: {len(model.graph.node)} -> {len(simplified.graph.node)} nodes")
                 model = simplified
