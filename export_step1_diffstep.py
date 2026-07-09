@@ -71,6 +71,7 @@ def main():
         },
         decompose_conv_transpose=False,
         fix_mixed_precision=False,
+        skip_dml_fixes=True,
     )
 
     del wrapper, model

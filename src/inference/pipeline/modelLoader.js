@@ -504,16 +504,11 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             enableMemPattern: false,
             executionMode: 'sequential',
         }));
-        // DEBUG: FORCE CPU EP for diff_step to test if issue is DML-specific
-        if (modelName === 'diff_step_dml.onnx') {
-            console.log('[DEBUG] FORCING CPU EP for diff_step_dml.onnx (DEBUG ONLY)');
-            sessionOptions.executionProviders = ['cpu'];
-        }
         dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
         console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
         await dmlSession.run(dummyInputs);
-        console.log(`[OnnxSVSPipeline] ${modelName} loaded [${modelName === 'diff_step_dml.onnx' ? 'CPU' : 'DML'}]${gpuTag} (inference verified)`);
-        return { session: dmlSession, ep: modelName === 'diff_step_dml.onnx' ? 'cpu' : 'dml', warmedUp: true };
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
+        return { session: dmlSession, ep: 'dml', warmedUp: true };
     } catch (dmlErr) {
         if (dmlSession) {
             try { dmlSession.release(); } catch (e) {
