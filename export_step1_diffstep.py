@@ -1,9 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Step 1: Export diff_step sub-model to FP32 opset 20 ONNX (DML main path)."""
-import argparse
+"""Step 1: Export diff_step sub-model to FP32 opset 20 ONNX (DML main path).
+
+Uses dynamo=True + dynamic_shapes with Dim to produce a DML-compatible graph
+with native Range-based RoPE (no precomputed tables / fix_dynamic_rope_slice).
+"""
 import os
+# Skip RoPE precomputation patches — use dynamo=True native Range + Sin/Cos RoPE
+os.environ['SKIP_ROPE_PRECOMPUTE'] = '1'
+
+import argparse
 import time
 import torch
+from torch.export import Dim
 from export_shared import (
     load_config, load_model, DiffStepWrapper,
     FP32_OUTPUT_DIR, export_fp32_opset20, clear_memory,
@@ -49,15 +57,17 @@ def main():
     input_names = ['xt_input', 't', 'cond', 'xt_mask']
     output_names = ['flow_pred']
 
+    seq_len_dim = Dim('seq_len', min=1, max=10000)
+
     export_fp32_opset20(
         wrapper, args_tuple, output_path,
         input_names=input_names,
         output_names=output_names,
-        dynamic_axes={
-            'xt_input': {1: 'seq_len'},
-            'cond': {1: 'seq_len'},
-            'xt_mask': {1: 'seq_len'},
-            'flow_pred': {1: 'seq_len'},
+        dynamic_shapes={
+            'xt_input': {1: seq_len_dim},
+            't': None,
+            'cond': {1: seq_len_dim},
+            'xt_mask': {1: seq_len_dim},
         },
         decompose_conv_transpose=False,
         fix_mixed_precision=False,
