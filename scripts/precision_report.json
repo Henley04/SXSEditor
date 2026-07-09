@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-07-08 13:25:27",
+  "timestamp": "2026-07-08 16:49:39",
   "model_path": "D:\\Document\\electron\\SXSEditor\\SoulX-Singer\\pretrained_models\\SoulX-Singer\\model.pt",
   "onnx_dir": "D:\\Document\\electron\\SXSEditor\\onnx_models",
   "seq_len_hint": 100,
