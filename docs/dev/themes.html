@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Themes &amp; UI — SXSEditor Developer Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+        <span class="brand-ver">v1.0</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="../user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="dev"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="build.html" data-i18n="sidebar.dev">Developer Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Themes &amp; UI</span><span data-lang="zh">主题与界面</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Themes &amp; UI</span>
+        <span data-lang="zh">主题与界面</span>
+      </h1>
+
+      <p data-lang="en">SXSEditor's UI is driven by a <strong>token-based theme system</strong>. Every color, spacing, radius, font size, motion duration, and shadow is a CSS custom property (<code>--token</code>) injected on <code>:root</code>. Themes are plain JSON objects that override these tokens. The system lives in <code>src/themes/</code> and runs in the renderer process.</p>
+      <p data-lang="zh">SXSEditor 的界面由<strong>基于 token 的主题系统</strong>驱动。每种颜色、间距、圆角、字号、动效时长与阴影都是一个注入到 <code>:root</code> 上的 CSS 自定义属性（<code>--token</code>）。主题是覆盖这些 token 的纯 JSON 对象。该系统位于 <code>src/themes/</code>，运行在渲染进程中。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Three source files form the core: <code>tokenCatalog.js</code> (token metadata + defaults), <code>themeManager.js</code> (registry, activation, history), and <code>themeValidator.js</code> (validation rules). <code>canvasTheme.js</code> bridges tokens to Canvas 2D rendering.</p>
+          <p data-lang="zh">三个源文件构成核心：<code>tokenCatalog.js</code>（token 元数据 + 默认值）、<code>themeManager.js</code>（注册表、激活、历史）、<code>themeValidator.js</code>（校验规则）。<code>canvasTheme.js</code> 将 token 桥接到 Canvas 2D 渲染。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Theme System Overview</span>
+        <span data-lang="zh">主题系统总览</span>
+      </h2>
+      <pre><code>┌─ tokenCatalog.js ─────────────────────────────────────────┐
+│  TOKEN_CATALOG: { '--token-name': { layer, group, type,   │
+│                    default, label } }                      │
+│  buildDefaultTokens(): flat { name: value } from catalog   │
+│  Layers: 'global' | 'alias' | 'component'                  │
+│  Types:  'color' | 'size' | 'motion' | 'shadow' | 'string' │
+└────────────────────────────────────────────────────────────┘
+        │ defaults
+        ▼
+┌─ themeManager.js (renderer) ───────────────────────────────┐
+│  registry: Map(id -> { theme, source })                    │
+│  activate(id): flattenTheme(extends chain) → injectTokens  │
+│  mergeOverrides(patch): transient patch (not persisted)    │
+│  pushHistory / undo / redo: 20-step undo stack             │
+│  export(id) → JSON string; import(json) → theme object     │
+│  Events: 'theme-changed', 'theme-list-changed',            │
+│          'theme-overwritten', 'theme-imported'              │
+└────────────────────────────────────────────────────────────┘
+        │ setProperty('--token', value) on documentElement
+        ▼
+┌─ DOM :root ────────────────────────────────────────────────┐
+│  All CSS in src/renderer.css consumes var(--token)          │
+│  Canvas 2D reads via canvasTheme.getCanvasColors()          │
+└────────────────────────────────────────────────────────────┘</code></pre>
+
+      <h2>
+        <span data-lang="en">Token Catalog</span>
+        <span data-lang="zh">Token 目录</span>
+      </h2>
+      <p data-lang="en"><code>TOKEN_CATALOG</code> in <code>src/themes/tokenCatalog.js</code> is the single source of truth for every token. Each entry has a <code>layer</code>, <code>group</code>, <code>type</code>, <code>default</code> value, and a Chinese <code>label</code>. Tokens are organized into three layers:</p>
+      <p data-lang="zh"><code>src/themes/tokenCatalog.js</code> 中的 <code>TOKEN_CATALOG</code> 是每个 token 的唯一来源。每个条目包含 <code>layer</code>、<code>group</code>、<code>type</code>、<code>default</code> 值与中文 <code>label</code>。token 分为三层：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Layer</span><span data-lang="zh">层级</span></th>
+            <th><span data-lang="en">Purpose</span><span data-lang="zh">用途</span></th>
+            <th><span data-lang="en">Example Groups</span><span data-lang="zh">示例分组</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>global</code></td>
+            <td><span data-lang="en">Raw design tokens (scales, primitives)</span><span data-lang="zh">原始设计 token（刻度、原语）</span></td>
+            <td><span data-lang="en"><code>color-blue</code>, <code>color-gray</code>, <code>color-ink</code>, <code>color-red</code>, <code>color-green</code>, <code>color-amber</code>, <code>color-purple</code>, <code>color-base</code>, <code>space</code>, <code>radius</code>, <code>font</code>, <code>motion</code>, <code>shadow</code></span><span data-lang="zh"><code>color-blue</code>、<code>color-gray</code>、<code>color-ink</code>、<code>color-red</code>、<code>color-green</code>、<code>color-amber</code>、<code>color-purple</code>、<code>color-base</code>、<code>space</code>、<code>radius</code>、<code>font</code>、<code>motion</code>、<code>shadow</code></span></td>
+          </tr>
+          <tr>
+            <td><code>alias</code></td>
+            <td><span data-lang="en">Semantic tokens referencing globals</span><span data-lang="zh">引用 global 的语义 token</span></td>
+            <td><span data-lang="en"><code>bg</code>, <code>fg</code>, <code>accent</code>, <code>border</code>, <code>status</code> (success/warning/danger/info)</span><span data-lang="zh"><code>bg</code>、<code>fg</code>、<code>accent</code>、<code>border</code>、<code>status</code>（success/warning/danger/info）</span></td>
+          </tr>
+          <tr>
+            <td><code>component</code></td>
+            <td><span data-lang="en">Component-scoped tokens (button, input, panel, tooltip, scrollbar, selection)</span><span data-lang="zh">组件级 token（button、input、panel、tooltip、scrollbar、selection）</span></td>
+            <td><span data-lang="en"><code>button-primary-bg</code>, <code>input-border</code>, <code>panel-bg</code>, <code>tooltip-bg</code></span><span data-lang="zh"><code>button-primary-bg</code>、<code>input-border</code>、<code>panel-bg</code>、<code>tooltip-bg</code></span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">Token types drive validation: <code>color</code> (hex/rgb/hsl), <code>size</code> (number + unit), <code>motion</code> (duration), <code>shadow</code> (free-form CSS), <code>string</code> (any non-empty). <code>buildDefaultTokens()</code> produces a flat <code>{ name: value }</code> map from the catalog defaults, used as the base when no theme is loaded.</p>
+      <p data-lang="zh">Token 类型驱动校验：<code>color</code>（hex/rgb/hsl）、<code>size</code>（数值 + 单位）、<code>motion</code>（时长）、<code>shadow</code>（自由 CSS）、<code>string</code>（任意非空）。<code>buildDefaultTokens()</code> 从目录默认值生成扁平的 <code>{ name: value }</code> 映射，作为未加载主题时的基础。</p>
+
+      <h2>
+        <span data-lang="en">Built-in Themes</span>
+        <span data-lang="zh">内置主题</span>
+      </h2>
+      <p data-lang="en">Four themes ship with SXSEditor, defined as JSON files in <code>src/themes/builtins/</code> and aggregated by <code>builtins/index.js</code> into the <code>BUILTIN_THEMES</code> array:</p>
+      <p data-lang="zh">SXSEditor 内置 4 个主题，以 JSON 文件形式定义在 <code>src/themes/builtins/</code>，由 <code>builtins/index.js</code> 聚合为 <code>BUILTIN_THEMES</code> 数组：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">ID</span><span data-lang="zh">ID</span></th>
+            <th><span data-lang="en">Name</span><span data-lang="zh">名称</span></th>
+            <th><span data-lang="en">Dark?</span><span data-lang="zh">暗色？</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">描述</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>dark-aurora</code></td>
+            <td><span data-lang="en">Aurora Dark</span><span data-lang="zh">Aurora Dark</span></td>
+            <td><span data-lang="en">Yes (default)</span><span data-lang="zh">是（默认）</span></td>
+            <td><span data-lang="en">Classic blue-purple dark style</span><span data-lang="zh">经典蓝紫暗色风格</span></td>
+          </tr>
+          <tr>
+            <td><code>light-paper</code></td>
+            <td><span data-lang="en">Paper Light</span><span data-lang="zh">Paper Light</span></td>
+            <td><span data-lang="en">No</span><span data-lang="zh">否</span></td>
+            <td><span data-lang="en">Bright white background, eye-friendly</span><span data-lang="zh">明亮白底，护眼清爽</span></td>
+          </tr>
+          <tr>
+            <td><code>midnight-amber</code></td>
+            <td><span data-lang="en">Midnight Amber</span><span data-lang="zh">Midnight Amber</span></td>
+            <td><span data-lang="en">Yes</span><span data-lang="zh">是</span></td>
+            <td><span data-lang="en">Dark with warm amber accent</span><span data-lang="zh">深色琥珀强调，温暖复古</span></td>
+          </tr>
+          <tr>
+            <td><code>acg</code></td>
+            <td><span data-lang="en">ACG Light</span><span data-lang="zh">ACG Light</span></td>
+            <td><span data-lang="en">No</span><span data-lang="zh">否</span></td>
+            <td><span data-lang="en">Parchment-style light, teal accent, ACG aesthetic</span><span data-lang="zh">羊皮纸风格亮色，青绿强调，ACG 美学</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">Built-in themes are imported as ES module exports so webpack bundles them. <code>BUILTIN_THEME_IDS</code> is the array of their ids. They are registered on startup via <code>themeManager.registerBuiltins(BUILTIN_THEMES)</code>.</p>
+      <p data-lang="zh">内置主题以 ES 模块导出导入，以便 webpack 打包。<code>BUILTIN_THEME_IDS</code> 是其 id 数组。启动时通过 <code>themeManager.registerBuiltins(BUILTIN_THEMES)</code> 注册。</p>
+
+      <h2>
+        <span data-lang="en">.theme.json Format</span>
+        <span data-lang="zh">.theme.json 格式</span>
+      </h2>
+      <p data-lang="en">A theme file is a JSON object with this shape (example abbreviated from <code>dark-aurora.theme.json</code>):</p>
+      <p data-lang="zh">主题文件是如下结构的 JSON 对象（示例节选自 <code>dark-aurora.theme.json</code>）：</p>
+      <pre><code>{
+  "id": "dark-aurora",
+  "name": "Aurora Dark",
+  "version": "1.0.0",
+  "author": "SXSEditor",
+  "isDark": true,
+  "description": "默认暗色主题，复刻 SXSEditor 经典蓝紫风格",
+  "tags": ["builtin", "dark", "default"],
+  "extends": null,
+  "tokens": {
+    "--color-blue-500": "#4a7de0",
+    "--bg-app":     "#14141f",
+    "--bg-panel":   "#1a1a2a",
+    "--fg-primary": "#e0e0f0",
+    "--accent":     "#5b8def",
+    "--button-primary-bg": "var(--bg-button-primary)",
+    ...
+  }
+}</code></pre>
+      <p data-lang="en">Fields:</p>
+      <p data-lang="zh">字段说明：</p>
+      <ul>
+        <li><span data-lang="en"><code>id</code> — kebab-case identifier (validated by <code>ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/</code>). Must be unique in the registry.</span><span data-lang="zh"><code>id</code> — kebab-case 标识符（由 <code>ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/</code> 校验）。在注册表中必须唯一。</span></li>
+        <li><span data-lang="en"><code>name</code> — human-readable display name.</span><span data-lang="zh"><code>name</code> — 人类可读的显示名。</span></li>
+        <li><span data-lang="en"><code>version</code> — semver string (defaults to <code>1.0.0</code>).</span><span data-lang="zh"><code>version</code> — semver 字符串（默认 <code>1.0.0</code>）。</span></li>
+        <li><span data-lang="en"><code>isDark</code> — boolean. If omitted, <code>computeIsDark</code> derives it from <code>--bg-app</code> perceived luminance.</span><span data-lang="zh"><code>isDark</code> — 布尔值。若省略，<code>computeIsDark</code> 由 <code>--bg-app</code> 的感知亮度推导。</span></li>
+        <li><span data-lang="en"><code>author</code>, <code>description</code>, <code>tags</code> — optional metadata.</span><span data-lang="zh"><code>author</code>、<code>description</code>、<code>tags</code> — 可选元数据。</span></li>
+        <li><span data-lang="en"><code>extends</code> — id of a parent theme to inherit from (depth ≤ 3, no cycles). Parent tokens are applied first, then this theme's <code>tokens</code> override them.</span><span data-lang="zh"><code>extends</code> — 要继承的父主题 id（深度 ≤ 3，无环）。父 token 先应用，再被本主题的 <code>tokens</code> 覆盖。</span></li>
+        <li><span data-lang="en"><code>tokens</code> — map of <code>--token-name</code> → value. Token names must match <code>TOKEN_NAME_RE = /^--[a-z0-9][a-z0-9-]*$/</code>.</span><span data-lang="zh"><code>tokens</code> — <code>--token-name</code> → 值 的映射。token 名必须匹配 <code>TOKEN_NAME_RE = /^--[a-z0-9][a-z0-9-]*$/</code>。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Creating a Custom Theme</span>
+        <span data-lang="zh">创建自定义主题</span>
+      </h2>
+      <ol>
+        <li><span data-lang="en"><strong>Create the JSON file</strong> — place it at <code>src/themes/builtins/my-theme.theme.json</code> (to bundle it) or load it at runtime via <code>themeManager.import(jsonString)</code>.</span><span data-lang="zh"><strong>创建 JSON 文件</strong>— 放在 <code>src/themes/builtins/my-theme.theme.json</code>（打包）或运行时通过 <code>themeManager.import(jsonString)</code> 加载。</span></li>
+        <li><span data-lang="en"><strong>Pick a parent</strong> — set <code>extends</code> to <code>"dark-aurora"</code> or <code>"light-paper"</code> so you only override the tokens you care about.</span><span data-lang="zh"><strong>选择父主题</strong>— 将 <code>extends</code> 设为 <code>"dark-aurora"</code> 或 <code>"light-paper"</code>，只覆盖关心的 token。</span></li>
+        <li><span data-lang="en"><strong>Override tokens</strong> — only list the <code>--token</code> keys you want to change. Unknown tokens are accepted as free CSS values but won't appear in the editor UI.</span><span data-lang="zh"><strong>覆盖 token</strong>— 只列出要改的 <code>--token</code> 键。未知 token 会作为自由 CSS 值接受，但不会出现在编辑器 UI 中。</span></li>
+        <li><span data-lang="en"><strong>Register it</strong> — for bundled themes, add an import to <code>builtins/index.js</code> and append to <code>BUILTIN_THEMES</code>. For runtime themes, call <code>themeManager.register(themeObj)</code>.</span><span data-lang="zh"><strong>注册</strong>— 打包主题：在 <code>builtins/index.js</code> 加导入并追加到 <code>BUILTIN_THEMES</code>。运行时主题：调用 <code>themeManager.register(themeObj)</code>。</span></li>
+        <li><span data-lang="en"><strong>Validate</strong> — run <code>validate(theme, { getThemeById })</code> from <code>themeValidator.js</code>. It returns <code>{ ok, errors, warnings }</code> and does not throw.</span><span data-lang="zh"><strong>校验</strong>— 调用 <code>themeValidator.js</code> 的 <code>validate(theme, { getThemeById })</code>。返回 <code>{ ok, errors, warnings }</code>，不会抛异常。</span></li>
+        <li><span data-lang="en"><strong>Activate</strong> — call <code>themeManager.activate('my-theme')</code>. Tokens are injected on <code>:root</code> and the <code>'theme-changed'</code> event fires.</span><span data-lang="zh"><strong>激活</strong>— 调用 <code>themeManager.activate('my-theme')</code>。token 注入到 <code>:root</code> 并触发 <code>'theme-changed'</code> 事件。</span></li>
+      </ol>
+
+      <div class="callout tip">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">
+          <p data-lang="en">For live preview in the theme editor, use <code>mergeOverrides(patch)</code> to apply a transient token patch without persisting. <code>pushHistory()</code> snapshots the current overrides into a 20-step undo stack (<code>HISTORY_LIMIT=20</code>); <code>undo()</code> / <code>redo()</code> traverse it. Call <code>clearOverrides()</code> to discard the patch and return to the base theme.</p>
+          <p data-lang="zh">在主题编辑器中实时预览，用 <code>mergeOverrides(patch)</code> 应用瞬态 token 补丁而不持久化。<code>pushHistory()</code> 将当前覆盖快照到 20 步撤销栈（<code>HISTORY_LIMIT=20</code>）；<code>undo()</code> / <code>redo()</code> 遍历该栈。调用 <code>clearOverrides()</code> 丢弃补丁并回到基础主题。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Theme Manager API</span>
+        <span data-lang="zh">主题管理器 API</span>
+      </h2>
+      <p data-lang="en">The <code>themeManager</code> singleton (renderer process) exposes:</p>
+      <p data-lang="zh"><code>themeManager</code> 单例（渲染进程）暴露：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Method</span><span data-lang="zh">方法</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>register(themeObj)</code></td>
+            <td><span data-lang="en">Add a theme to the registry</span><span data-lang="zh">将主题加入注册表</span></td>
+          </tr>
+          <tr>
+            <td><code>registerBuiltins(arr)</code></td>
+            <td><span data-lang="en">Register an array of built-in themes</span><span data-lang="zh">注册内置主题数组</span></td>
+          </tr>
+          <tr>
+            <td><code>unregister(id)</code></td>
+            <td><span data-lang="en">Remove a theme (built-ins cannot be removed)</span><span data-lang="zh">移除主题（内置不可移除）</span></td>
+          </tr>
+          <tr>
+            <td><code>list()</code></td>
+            <td><span data-lang="en">Return <code>[{id,name,isDark,author,version,source}]</code></span><span data-lang="zh">返回 <code>[{id,name,isDark,author,version,source}]</code></span></td>
+          </tr>
+          <tr>
+            <td><code>activate(id, { scope })</code></td>
+            <td><span data-lang="en">Resolve extends chain, inject tokens, fire event</span><span data-lang="zh">解析 extends 链，注入 token，触发事件</span></td>
+          </tr>
+          <tr>
+            <td><code>current()</code> / <code>currentTokens()</code></td>
+            <td><span data-lang="en">Get active id / resolved token map</span><span data-lang="zh">获取活动 id / 已解析 token 映射</span></td>
+          </tr>
+          <tr>
+            <td><code>export(id)</code> / <code>import(json)</code></td>
+            <td><span data-lang="en">Serialize to JSON string / parse and register</span><span data-lang="zh">序列化为 JSON 字符串 / 解析并注册</span></td>
+          </tr>
+          <tr>
+            <td><code>mergeOverrides(patch)</code> / <code>clearOverrides()</code></td>
+            <td><span data-lang="en">Transient patch (not persisted to localStorage)</span><span data-lang="zh">瞬态补丁（不持久化到 localStorage）</span></td>
+          </tr>
+          <tr>
+            <td><code>pushHistory()</code> / <code>undo()</code> / <code>redo()</code></td>
+            <td><span data-lang="en">20-step undo stack for editor history</span><span data-lang="zh">20 步撤销栈，用于编辑器历史</span></td>
+          </tr>
+          <tr>
+            <td><code>on(eventName, handler)</code></td>
+            <td><span data-lang="en">Subscribe; returns unsubscribe function</span><span data-lang="zh">订阅；返回取消订阅函数</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">Events: <code>'theme-changed'</code>, <code>'theme-list-changed'</code>, <code>'theme-overwritten'</code>, <code>'theme-imported'</code>. Persisted overrides use the localStorage key <code>sxseditor-theme-overrides</code>.</p>
+      <p data-lang="zh">事件：<code>'theme-changed'</code>、<code>'theme-list-changed'</code>、<code>'theme-overwritten'</code>、<code>'theme-imported'</code>。持久化的覆盖使用 localStorage 键 <code>sxseditor-theme-overrides</code>。</p>
+
+      <h2>
+        <span data-lang="en">Extends Resolution</span>
+        <span data-lang="zh">extends 解析</span>
+      </h2>
+      <p data-lang="en"><code>flattenTheme(theme)</code> walks the <code>extends</code> chain (parent first, child overrides last) and merges all <code>tokens</code> maps into one flat object. The chain depth is capped at <code>MAX_EXTENDS_DEPTH=3</code>; cycles are rejected. If a parent id is not in the registry, an error is thrown.</p>
+      <p data-lang="zh"><code>flattenTheme(theme)</code> 沿 <code>extends</code> 链（父在前、子覆盖在后）将所有 <code>tokens</code> 映射合并为一个扁平对象。链深度上限 <code>MAX_EXTENDS_DEPTH=3</code>；环会被拒绝。若父 id 不在注册表中，则抛错。</p>
+      <pre><code>// Example: a custom theme extending dark-aurora
+{
+  "id": "my-theme",
+  "name": "My Theme",
+  "extends": "dark-aurora",
+  "tokens": {
+    "--accent": "#a855f7",          // override accent to purple
+    "--bg-app":  "#1a0a2a"          // override app background
+    // all other tokens inherited from dark-aurora
+  }
+}</code></pre>
+
+      <h2>
+        <span data-lang="en">Canvas Theming</span>
+        <span data-lang="zh">Canvas 主题化</span>
+      </h2>
+      <p data-lang="en">Canvas 2D rendering cannot read CSS <code>var()</code> directly. <code>src/themes/canvasTheme.js</code> bridges this: <code>getCanvasColors()</code> reads the relevant custom properties from <code>:root</code> (inline style first, then <code>getComputedStyle</code>) and returns a plain object like <code>{ bgApp, bgPanel, fgPrimary, accent, success, danger, ... }</code>. Results are cached until <code>invalidateCanvasThemeCache()</code> is called.</p>
+      <p data-lang="zh">Canvas 2D 渲染无法直接读取 CSS <code>var()</code>。<code>src/themes/canvasTheme.js</code> 桥接此问题：<code>getCanvasColors()</code> 从 <code>:root</code> 读取相关自定义属性（先内联样式，再 <code>getComputedStyle</code>），返回 <code>{ bgApp, bgPanel, fgPrimary, accent, success, danger, ... }</code> 等普通对象。结果缓存直到调用 <code>invalidateCanvasThemeCache()</code>。</p>
+      <pre><code>import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
+import themeManager from '../themes/themeManager.js';
+
+themeManager.on('theme-changed', () => invalidateCanvasThemeCache());
+
+function drawPianoRoll(ctx) {
+  const c = getCanvasColors();
+  ctx.fillStyle = c.bgApp;
+  ctx.fillRect(0, 0, width, height);
+  ctx.strokeStyle = c.accent;
+  // ...
+}</code></pre>
+
+      <h2>
+        <span data-lang="en">Theme Validation</span>
+        <span data-lang="zh">主题校验</span>
+      </h2>
+      <p data-lang="en"><code>themeValidator.js</code> validates theme objects without throwing — it returns <code>{ ok, errors, warnings }</code>. Pass <code>getThemeById</code> to enable extends validation (parent existence, depth ≤ 3, no cycles). Validation rules:</p>
+      <p data-lang="zh"><code>themeValidator.js</code> 校验主题对象但不抛异常——返回 <code>{ ok, errors, warnings }</code>。传入 <code>getThemeById</code> 可启用 extends 校验（父存在、深度 ≤ 3、无环）。校验规则：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Field</span><span data-lang="zh">字段</span></th>
+            <th><span data-lang="en">Rule</span><span data-lang="zh">规则</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>id</code></td>
+            <td><span data-lang="en">Non-empty, kebab-case (<code>ID_RE</code>), no leading/trailing dash</span><span data-lang="zh">非空、kebab-case（<code>ID_RE</code>）、首尾无连字符</span></td>
+          </tr>
+          <tr>
+            <td><code>name</code> / <code>version</code> / <code>author</code> / <code>description</code></td>
+            <td><span data-lang="en">Optional; if present must be a string (<code>version</code> defaults to 1.0.0)</span><span data-lang="zh">可选；若存在必须为字符串（<code>version</code> 默认 1.0.0）</span></td>
+          </tr>
+          <tr>
+            <td><code>isDark</code></td>
+            <td><span data-lang="en">Optional boolean; else derived from <code>--bg-app</code></span><span data-lang="zh">可选布尔；否则由 <code>--bg-app</code> 推导</span></td>
+          </tr>
+          <tr>
+            <td><code>tokens</code> keys</td>
+            <td><span data-lang="en">Must match <code>TOKEN_NAME_RE = /^--[a-z0-9][a-z0-9-]*$/</code></span><span data-lang="zh">必须匹配 <code>TOKEN_NAME_RE = /^--[a-z0-9][a-z0-9-]*$/</code></span></td>
+          </tr>
+          <tr>
+            <td><code>tokens</code> color values</td>
+            <td><span data-lang="en"><code>COLOR_VALUE_RE</code>: <code>#hex</code>, <code>rgb()/rgba()</code>, <code>hsl()/hsla()</code>, <code>transparent</code>, <code>currentColor</code>, <code>inherit</code></span><span data-lang="zh"><code>COLOR_VALUE_RE</code>：<code>#hex</code>、<code>rgb()/rgba()</code>、<code>hsl()/hsla()</code>、<code>transparent</code>、<code>currentColor</code>、<code>inherit</code></span></td>
+          </tr>
+          <tr>
+            <td><code>tokens</code> size/motion values</td>
+            <td><span data-lang="en"><code>SIZE_VALUE_RE</code>: number + <code>px|rem|em|%|vh|vw|s|ms</code>, or <code>0</code></span><span data-lang="zh"><code>SIZE_VALUE_RE</code>：数值 + <code>px|rem|em|%|vh|vw|s|ms</code>，或 <code>0</code></span></td>
+          </tr>
+          <tr>
+            <td><code>extends</code></td>
+            <td><span data-lang="en">Parent must exist, depth ≤ <code>MAX_EXTENDS_DEPTH=3</code>, no cycles</span><span data-lang="zh">父必须存在、深度 ≤ <code>MAX_EXTENDS_DEPTH=3</code>、无环</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">If validation fails, <code>ThemeValidationError</code> can be constructed from the <code>errors</code> array (it carries <code>error.errors</code>) — but the validator itself never throws, so callers decide how to surface problems.</p>
+      <p data-lang="zh">若校验失败，可由 <code>errors</code> 数组构造 <code>ThemeValidationError</code>（它带有 <code>error.errors</code>）——但校验器本身从不抛异常，由调用方决定如何呈现问题。</p>
+
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en">When a theme is activated, <code>injectTokens</code> sets every token via <code>root.style.setProperty(k, v)</code>. Switching themes does <strong>not</strong> clear previously-injected properties that are absent from the new theme — call <code>clearInjectedTokens(tokenNames)</code> for the previous theme's tokens first, or design themes to override the same superset of tokens. Built-in themes all define the full token set, so switching among them is safe.</p>
+          <p data-lang="zh">激活主题时，<code>injectTokens</code> 通过 <code>root.style.setProperty(k, v)</code> 设置每个 token。切换主题<strong>不会</strong>清除新主题中缺失的先前注入属性——需先对前一主题的 token 调用 <code>clearInjectedTokens(tokenNames)</code>，或将主题设计为覆盖相同的 token 超集。内置主题都定义了完整 token 集，因此它们之间切换是安全的。</p>
+        </div>
+      </div>
+
+      <nav class="doc-pager">
+        <a href="onnx-models.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">ONNX Models</span><span data-lang="zh">ONNX 模型</span></div></div></a>
+        <a href="testing-cli.html" class="next"><div class="pager-card"><div class="pager-label" data-i18n="pager.next">Next</div><div class="pager-title"><span data-lang="en">Testing &amp; CLI</span><span data-lang="zh">测试与命令行</span></div></div></a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="../user/faq.html" data-i18n="footer.help">Help & FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

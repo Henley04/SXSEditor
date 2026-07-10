@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Inference Pipeline — SXSEditor Developer Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+        <span class="brand-ver">v1.0</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="../user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="dev"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="build.html" data-i18n="sidebar.dev">Developer Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Inference Pipeline</span><span data-lang="zh">推理管线</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Inference Pipeline</span>
+        <span data-lang="zh">推理管线</span>
+      </h1>
+
+      <p data-lang="en">The Singing Voice Synthesis (SVS) pipeline is the heart of SXSEditor. It is implemented in <code>src/inference/pipeline/index.js</code> by the <code>OnnxSVSPipeline</code> class, which loads 9 ONNX models and runs SoulX-Singer diffusion-based synthesis.</p>
+      <p data-lang="zh">歌声合成（SVS）管线是 SXSEditor 的核心。它由 <code>src/inference/pipeline/index.js</code> 中的 <code>OnnxSVSPipeline</code> 类实现，加载 9 个 ONNX 模型并运行基于扩散的 SoulX-Singer 合成。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">All pipeline constants live in two files: <code>src/inference/shared/constants.js</code> (shared with the WebNN module) and <code>src/inference/pipeline/constants.js</code> (pipeline-specific). The two inference paths (main-process ONNX Runtime + DirectML, renderer WebNN) must use the same values — that file is the single source of truth.</p>
+          <p data-lang="zh">所有管线常量分布在两个文件：<code>src/inference/shared/constants.js</code>（与 WebNN 模块共享）和 <code>src/inference/pipeline/constants.js</code>（管线专属）。两条推理路径（主进程 ONNX Runtime + DirectML、渲染进程 WebNN）必须使用相同的数值——该文件是唯一来源。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Pipeline Overview</span>
+        <span data-lang="zh">管线总览</span>
+      </h2>
+      <pre><code>Notes + Lyrics + BPM
+        │
+        ▼
+┌─ Stage 1: Text Processing (textProcessing.js) ─────────────┐
+│  Chinese → pinyin-pro  │  English → ARPAbet G2P dict        │
+│  Japanese → hiragana/katakana map                          │
+│  Output: phoneme ID sequences (phone_set.json, 2820 entries)│
+└────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─ Stage 2: Duration Statistics (durationStats.js) ──────────┐
+│  Lazy-loaded en_phoneme_durations.json (~4.1MB)            │
+│  Lookup chain: trigram_full → trigram → bigram → unigram    │
+│  Falls back to vowel-priority for very short notes         │
+└────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─ Stage 3: Preprocessing (preprocessing.js) ────────────────┐
+│  Build F0 frame sequence, mel2token, note type ids         │
+│  Pitch → MIDI → frequency (440 * 2^((midi-69)/12))         │
+│  F0 quantization to F0_BIN=361 bins, F0_MIN=32.70Hz        │
+└────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─ Stage 4: Encoders (parallel) ─────────────────────────────┐
+│  note_text_encoder  →  text embedding     (EMBED_DIM=512)   │
+│  note_pitch_encoder →  pitch embedding    (EMBED_DIM=512)   │
+│  note_type_encoder  →  type embedding     (rest/vocal/slur) │
+│  f0_encoder         →  quantized F0 emb                        │
+│  preflow (ConvNeXtV2) + cond_emb → condition (COND_DIM=1024)│
+└────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─ Stage 5: Diffusion (diffusion.js) ────────────────────────┐
+│  Iterative denoising, DEFAULT_DIFF_STEPS=32                │
+│  CFG: strength=3.0, rescale=0.75                           │
+│  Per-step: cond + uncond branches, flow_pred output        │
+│  NPU static shapes: pad to NPU_STATIC_SEQ_LEN=2048         │
+└────────────────────────────────────────────────────────────┘
+        │
+        ▼
+┌─ Stage 6: Vocoder / Postprocessing (postprocessing.js) ────┐
+│  Mel (MEL_DIM=128) → waveform at SAMPLE_RATE=24000         │
+│  Chunked vocoding: VOCODER_CHUNK_FRAMES=1008, overlap=8    │
+│  Default vocoder: vocoder_dml.onnx (Vocos, DirectML)       │
+│  Optional: SiFiGAN (SIFIGAN_HOP_SIZE=120, 200Hz mel)       │
+│  Output validation: reject all-zero / NaN waveforms (OOM)  │
+└────────────────────────────────────────────────────────────┘
+        │
+        ▼
+Float32Array PCM audio (24kHz mono)</code></pre>
+
+      <h2>
+        <span data-lang="en">Stage 1 — Text Processing</span>
+        <span data-lang="zh">第 1 阶段 — 文本处理</span>
+      </h2>
+      <p data-lang="en"><code>src/inference/pipeline/textProcessing.js</code> converts lyrics into phoneme ID sequences. The <code>TextProcessing</code> class loads <code>phone_set.json</code> (2820 entries) and <code>en_g2p_dict.json</code> (126k English words → ARPAbet) on construction.</p>
+      <p data-lang="zh"><code>src/inference/pipeline/textProcessing.js</code> 将歌词转换为音素 ID 序列。<code>TextProcessing</code> 类在构造时加载 <code>phone_set.json</code>（2820 条目）与 <code>en_g2p_dict.json</code>（12.6 万英文词 → ARPAbet）。</p>
+      <ul>
+        <li><span data-lang="en"><strong>Chinese</strong> — uses <code>pinyin-pro</code> to convert characters to pinyin, then maps pinyin syllables to <code>zh_*</code> phoneme IDs.</span><span data-lang="zh"><strong>中文</strong>— 使用 <code>pinyin-pro</code> 将汉字转换为拼音，再将拼音音节映射到 <code>zh_*</code> 音素 ID。</span></li>
+        <li><span data-lang="en"><strong>English</strong> — looks up the ARPAbet dictionary; unknown words fall back to a letter-based heuristic.</span><span data-lang="zh"><strong>英语</strong>— 查询 ARPAbet 词典；未知单词回退到基于字母的启发式规则。</span></li>
+        <li><span data-lang="en"><strong>Japanese</strong> — hiragana / katakana → phoneme map (built-in <code>JP_HIRAGANA_MAP</code>); a small kanji dictionary is also included. Requires the JP model variants in <code>onnx_models/&lt;precision&gt;/JP/</code>.</span><span data-lang="zh"><strong>日语</strong>— 平假名 / 片假名 → 音素映射（内置 <code>JP_HIRAGANA_MAP</code>）；还包含一个小型汉字字典。需要 <code>onnx_models/&lt;precision&gt;/JP/</code> 下的日语模型变体。</span></li>
+      </ul>
+      <p data-lang="en">Language auto-detection is done by <code>OnnxSVSPipeline.detectJapanese(notes)</code> (checks for <code>jp_*</code> phonemes or hiragana/katakana characters in lyrics).</p>
+      <p data-lang="zh">语言自动检测由 <code>OnnxSVSPipeline.detectJapanese(notes)</code> 完成（检查歌词中是否含 <code>jp_*</code> 音素或平假名/片假名字符）。</p>
+
+      <h2>
+        <span data-lang="en">Stage 2 — Duration Statistics</span>
+        <span data-lang="zh">第 2 阶段 — 时长统计</span>
+      </h2>
+      <p data-lang="en"><code>durationStats.js</code> lazily loads <code>src/inference/en_phoneme_durations.json</code> (~4.1MB), generated by <code>build_en_phoneme_duration_stats.py</code> from MFA-aligned LJSpeech. The lookup fallback chain (most precise → most robust):</p>
+      <p data-lang="zh"><code>durationStats.js</code> 懒加载 <code>src/inference/en_phoneme_durations.json</code>（约 4.1MB），由 <code>build_en_phoneme_duration_stats.py</code> 从 MFA 对齐的 LJSpeech 生成。查表回退链（精度从高到低）：</p>
+      <ol>
+        <li><code>trigram_full</code> <span data-lang="en">(prev | curr | next | pos | stress)</span><span data-lang="zh">（前 | 当前 | 后 | 位置 | 重音）</span></li>
+        <li><code>trigram</code> <span data-lang="en">(prev | curr | next)</span><span data-lang="zh">（前 | 当前 | 后）</span></li>
+        <li><code>bigram</code> <span data-lang="en">(prev | curr)</span><span data-lang="zh">（前 | 当前）</span></li>
+        <li><code>unigram</code> <span data-lang="en">(curr) — always hits</span><span data-lang="zh">（当前）— 总能命中</span></li>
+      </ol>
+      <p data-lang="en">Application policy (in <code>preprocessing.js</code> via <code>_allocateByStats</code>):</p>
+      <p data-lang="zh">应用策略（在 <code>preprocessing.js</code> 的 <code>_allocateByStats</code> 中实现）：</p>
+      <ul>
+        <li><span data-lang="en">User <code>phonemeAdjustments</code> (manual) always wins.</span><span data-lang="zh">用户 <code>phonemeAdjustments</code>（手动）始终优先。</span></li>
+        <li><span data-lang="en">English long notes use the trigram_full → trigram → bigram → unigram chain.</span><span data-lang="zh">英文长音符使用 trigram_full → trigram → bigram → unigram 链。</span></li>
+        <li><span data-lang="en">Extremely short notes (<code>innerFrames &lt; phonemeCount</code>) keep vowel-priority to prevent phoneme swallowing.</span><span data-lang="zh">极短音符（<code>innerFrames &lt; phonemeCount</code>）保留元音优先策略，避免音素被吞。</span></li>
+        <li><span data-lang="en">Non-English or stats-not-loaded → linear interpolation (unchanged behavior).</span><span data-lang="zh">非英文或统计表未加载 → 线性插值（行为不变）。</span></li>
+      </ul>
+      <div class="callout tip">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">
+          <p data-lang="en">The 4.1MB stats file is loaded asynchronously in the <code>Preprocessing</code> constructor — startup is never blocked. If loading fails, the pipeline silently falls back to linear allocation.</p>
+          <p data-lang="zh">4.1MB 统计表在 <code>Preprocessing</code> 构造函数中异步加载——绝不阻塞启动。若加载失败，管线会静默回退到线性分配。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Stage 3 — Preprocessing</span>
+        <span data-lang="zh">第 3 阶段 — 预处理</span>
+      </h2>
+      <p data-lang="en"><code>preprocessing.js</code> builds the frame-level inputs consumed by the encoders:</p>
+      <p data-lang="zh"><code>preprocessing.js</code> 构建编码器消费的帧级输入：</p>
+      <ul>
+        <li><span data-lang="en"><strong>F0 frame sequence</strong> — <code>buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0)</code>. MIDI note → frequency via <code>midiToFreq(pitch) = 440 * 2^((pitch-69)/12)</code>. Frame count = <code>totalSeconds * SAMPLE_RATE / HOP_SIZE</code>. Optional <code>f0Envelope</code> (pitch-bend keyframes) and <code>pitchCurveF0</code> (per-frame F0 override) are applied.</span><span data-lang="zh"><strong>F0 帧序列</strong>— <code>buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0)</code>。MIDI 音符 → 频率：<code>midiToFreq(pitch) = 440 * 2^((pitch-69)/12)</code>。帧数 = <code>totalSeconds * SAMPLE_RATE / HOP_SIZE</code>。可选的 <code>f0Envelope</code>（音高弯曲关键帧）与 <code>pitchCurveF0</code>（逐帧 F0 覆盖）会被应用。</span></li>
+        <li><span data-lang="en"><strong>F0 quantization</strong> — continuous F0 (Hz) → <code>F0_BIN=361</code> bins, anchored at <code>F0_MIN=32.703Hz</code>, for the <code>f0_encoder.onnx</code> lookup table.</span><span data-lang="zh"><strong>F0 量化</strong>— 连续 F0（Hz）→ <code>F0_BIN=361</code> 个 bin，锚点 <code>F0_MIN=32.703Hz</code>，供 <code>f0_encoder.onnx</code> 查表。</span></li>
+        <li><span data-lang="en"><strong>mel2token</strong> — maps each mel frame to the phoneme that owns it, derived from the duration allocation above.</span><span data-lang="zh"><strong>mel2token</strong>— 将每个 mel 帧映射到其所属音素，由上面的时长分配得到。</span></li>
+        <li><span data-lang="en"><strong>Note type ids</strong> — <code>rest</code> / <code>vocal</code> / <code>slur</code> classification, fed to <code>note_type_encoder.onnx</code>.</span><span data-lang="zh"><strong>音符类型 id</strong>— <code>rest</code> / <code>vocal</code> / <code>slur</code> 分类，送入 <code>note_type_encoder.onnx</code>。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Stage 4 — Encoders</span>
+        <span data-lang="zh">第 4 阶段 — 编码器</span>
+      </h2>
+      <p data-lang="en">Five encoder models run in parallel to produce the conditioning tensor <code>cond</code> of dimension <code>COND_DIM=1024</code>:</p>
+      <p data-lang="zh">五个编码器模型并行运行，生成维度为 <code>COND_DIM=1024</code> 的条件张量 <code>cond</code>：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Model</span><span data-lang="zh">模型</span></th>
+            <th><span data-lang="en">Input</span><span data-lang="zh">输入</span></th>
+            <th><span data-lang="en">Output dim</span><span data-lang="zh">输出维度</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>note_text_encoder.onnx</code></td>
+            <td><span data-lang="en">phoneme ids</span><span data-lang="zh">音素 id</span></td>
+            <td>EMBED_DIM=512</td>
+          </tr>
+          <tr>
+            <td><code>note_pitch_encoder.onnx</code></td>
+            <td><span data-lang="en">MIDI pitch ids</span><span data-lang="zh">MIDI 音高 id</span></td>
+            <td>EMBED_DIM=512</td>
+          </tr>
+          <tr>
+            <td><code>note_type_encoder.onnx</code></td>
+            <td><span data-lang="en">note type ids (rest/vocal/slur)</span><span data-lang="zh">音符类型 id（休止/人声/连音）</span></td>
+            <td>EMBED_DIM=512</td>
+          </tr>
+          <tr>
+            <td><code>f0_encoder.onnx</code></td>
+            <td><span data-lang="en">quantized F0 ids</span><span data-lang="zh">量化 F0 id</span></td>
+            <td>EMBED_DIM=512</td>
+          </tr>
+          <tr>
+            <td><code>preflow.onnx</code></td>
+            <td><span data-lang="en">sum of the four embeddings (ConvNeXtV2 pre-flow)</span><span data-lang="zh">四个嵌入之和（ConvNeXtV2 预流）</span></td>
+            <td>EMBED_DIM=512</td>
+          </tr>
+          <tr>
+            <td><code>cond_emb.onnx</code></td>
+            <td><span data-lang="en">preflow output</span><span data-lang="zh">preflow 输出</span></td>
+            <td>COND_DIM=1024</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Stage 5 — Diffusion</span>
+        <span data-lang="zh">第 5 阶段 — 扩散</span>
+      </h2>
+      <p data-lang="en"><code>diffusion.js</code> implements the iterative denoising loop using <code>diff_step_dml.onnx</code>. Each step takes <code>xt_input</code> (current noisy mel), <code>t</code> (timestep), <code>cond</code> (conditioning), and <code>xt_mask</code>; it outputs <code>flow_pred</code> used to update <code>xt</code>.</p>
+      <p data-lang="zh"><code>diffusion.js</code> 使用 <code>diff_step_dml.onnx</code> 实现迭代去噪循环。每步接收 <code>xt_input</code>（当前带噪 mel）、<code>t</code>（时间步）、<code>cond</code>（条件）、<code>xt_mask</code>，输出 <code>flow_pred</code> 用于更新 <code>xt</code>。</p>
+      <ul>
+        <li><span data-lang="en"><strong>Default steps</strong>: <code>DEFAULT_DIFF_STEPS=32</code>. The CLI <code>synth</code> command uses 4 steps by default for quick smoke tests.</span><span data-lang="zh"><strong>默认步数</strong>：<code>DEFAULT_DIFF_STEPS=32</code>。CLI <code>synth</code> 命令默认使用 4 步以快速冒烟测试。</span></li>
+        <li><span data-lang="en"><strong>Classifier-Free Guidance</strong>: <code>CFG_STRENGTH=3.0</code>, <code>CFG_RESCALE=0.75</code>. Each step runs a conditional and an unconditional branch.</span><span data-lang="zh"><strong>无分类器引导</strong>：<code>CFG_STRENGTH=3.0</code>、<code>CFG_RESCALE=0.75</code>。每步运行条件分支与无条件分支各一次。</span></li>
+        <li><span data-lang="en"><strong>Tensor lifecycle</strong>: input/output tensors are disposed immediately after each step to prevent GPU VRAM accumulation (32 steps × 2 branches × 5 tensors = 320 tensors per synthesis).</span><span data-lang="zh"><strong>张量生命周期</strong>：每步推理后立即释放输入/输出张量，避免 GPU 显存累积（32 步 × 2 分支 × 5 张量 = 每次合成 320 个张量）。</span></li>
+        <li><span data-lang="en"><strong>Cached tensors</strong>: <code>_runDiffStepWithCachedTensors</code> reuses <code>cond</code> / <code>mask</code> across steps (they don't change) to avoid 64× redundant FP16 conversion.</span><span data-lang="zh"><strong>缓存张量</strong>：<code>_runDiffStepWithCachedTensors</code> 跨步复用 <code>cond</code> / <code>mask</code>（它们不变），避免 64 倍冗余的 FP16 转换。</span></li>
+        <li><span data-lang="en"><strong>NPU static shapes</strong>: when <code>modelPrecision='int8-npu'</code>, inputs are padded to <code>NPU_STATIC_SEQ_LEN=2048</code> and the output is sliced back to the real frame count.</span><span data-lang="zh"><strong>NPU 静态形状</strong>：当 <code>modelPrecision='int8-npu'</code> 时，输入被填充到 <code>NPU_STATIC_SEQ_LEN=2048</code>，输出再切片回真实帧数。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Stage 6 — Vocoder &amp; Postprocessing</span>
+        <span data-lang="zh">第 6 阶段 — 声码器与后处理</span>
+      </h2>
+      <p data-lang="en"><code>postprocessing.js</code> converts the mel spectrogram (<code>MEL_DIM=128</code>) into a PCM waveform at <code>SAMPLE_RATE=24000</code>. Because vocoding is the most VRAM-hungry stage, it runs in chunks:</p>
+      <p data-lang="zh"><code>postprocessing.js</code> 将 mel 频谱（<code>MEL_DIM=128</code>）转换为 <code>SAMPLE_RATE=24000</code> 的 PCM 波形。由于声码器是最耗显存的阶段，因此采用分块运行：</p>
+      <ul>
+        <li><span data-lang="en"><strong>Chunk size</strong>: <code>VOCODER_CHUNK_FRAMES=1008</code> mel frames per chunk, <code>VOCODER_OVERLAP_FRAMES=8</code> frames of cross-fade overlap.</span><span data-lang="zh"><strong>分块大小</strong>：每块 <code>VOCODER_CHUNK_FRAMES=1008</code> 个 mel 帧，<code>VOCODER_OVERLAP_FRAMES=8</code> 帧交叉淡入淡出重叠。</span></li>
+        <li><span data-lang="en"><strong>Smart chunk sizing</strong>: the actual chunk size is auto-derived from VRAM budget = (VRAM − resident weights − diff_step activations ~2GB − OS reserve ~1GB) × 0.7 safety factor. Manual override is available in Settings.</span><span data-lang="zh"><strong>智能分块</strong>：实际分块大小由显存预算自动推导 =（VRAM − 常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB）× 0.7 安全系数。可在设置中手动覆盖。</span></li>
+        <li><span data-lang="en"><strong>Default vocoder</strong>: <code>vocoder_dml.onnx</code> (Vocos, DirectML-optimized).</span><span data-lang="zh"><strong>默认声码器</strong>：<code>vocoder_dml.onnx</code>（Vocos，DirectML 优化版）。</span></li>
+        <li><span data-lang="en"><strong>Optional SiFiGAN</strong>: <code>sifigan_vocoder_dml_fp16.onnx</code> or <code>sifigan_vocoder_dml.onnx</code> (ICASSP 2023). Uses <code>SIFIGAN_HOP_SIZE=120</code> (200 Hz mel frame rate, 4× upsampling to 24 kHz). Auto-falls back to the default vocoder on load failure.</span><span data-lang="zh"><strong>可选 SiFiGAN</strong>：<code>sifigan_vocoder_dml_fp16.onnx</code> 或 <code>sifigan_vocoder_dml.onnx</code>（ICASSP 2023）。使用 <code>SIFIGAN_HOP_SIZE=120</code>（200Hz mel 帧率，4× 上采样到 24kHz）。加载失败时自动回退到默认声码器。</span></li>
+        <li><span data-lang="en"><strong>Output validation</strong>: <code>validateVocoderOutput</code> samples the waveform and throws a clear OOM error if it's all-zero or NaN — DirectML can fail silently on VRAM exhaustion.</span><span data-lang="zh"><strong>输出校验</strong>：<code>validateVocoderOutput</code> 对波形抽样，若全零或含 NaN 则抛出明确的 OOM 错误——DirectML 在显存耗尽时可能静默失败。</span></li>
+        <li><span data-lang="en"><strong>Minimal swap</strong>: switching vocoder (default ↔ SiFiGAN) only reloads the vocoder session; encoders/diffusion stay loaded (<code>swapVocoder</code>).</span><span data-lang="zh"><strong>最小化切换</strong>：切换声码器（默认 ↔ SiFiGAN）仅重载声码器会话，编码器/扩散保持已加载状态（<code>swapVocoder</code>）。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Key Constants</span>
+        <span data-lang="zh">关键常量</span>
+      </h2>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Constant</span><span data-lang="zh">常量</span></th>
+            <th><span data-lang="en">Value</span><span data-lang="zh">值</span></th>
+            <th><span data-lang="en">Defined in</span><span data-lang="zh">定义于</span></th>
+            <th><span data-lang="en">Meaning</span><span data-lang="zh">含义</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>SAMPLE_RATE</code></td>
+            <td>24000</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">Output audio sample rate (Hz)</span><span data-lang="zh">输出音频采样率（Hz）</span></td>
+          </tr>
+          <tr>
+            <td><code>HOP_SIZE</code></td>
+            <td>480</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">Mel frame hop (50 Hz frame rate)</span><span data-lang="zh">Mel 帧步长（50Hz 帧率）</span></td>
+          </tr>
+          <tr>
+            <td><code>SIFIGAN_HOP_SIZE</code></td>
+            <td>120</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">SiFiGAN mel hop (200 Hz)</span><span data-lang="zh">SiFiGAN mel 步长（200Hz）</span></td>
+          </tr>
+          <tr>
+            <td><code>MEL_DIM</code></td>
+            <td>128</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">Mel spectrogram dimension</span><span data-lang="zh">Mel 频谱维度</span></td>
+          </tr>
+          <tr>
+            <td><code>EMBED_DIM</code></td>
+            <td>512</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">Encoder embedding dimension</span><span data-lang="zh">编码器嵌入维度</span></td>
+          </tr>
+          <tr>
+            <td><code>COND_DIM</code></td>
+            <td>1024</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">Diffusion conditioning dimension</span><span data-lang="zh">扩散条件维度</span></td>
+          </tr>
+          <tr>
+            <td><code>VOCODER_CHUNK_FRAMES</code></td>
+            <td>1008</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">Default vocoder chunk size</span><span data-lang="zh">默认声码器分块大小</span></td>
+          </tr>
+          <tr>
+            <td><code>VOCODER_OVERLAP_FRAMES</code></td>
+            <td>8</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">Cross-fade overlap frames</span><span data-lang="zh">交叉淡入淡出重叠帧数</span></td>
+          </tr>
+          <tr>
+            <td><code>NPU_STATIC_SEQ_LEN</code></td>
+            <td>2048</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">NPU encoder/diffusion fixed seq len</span><span data-lang="zh">NPU 编码器/扩散固定序列长度</span></td>
+          </tr>
+          <tr>
+            <td><code>NPU_VOCODER_SEQ_LEN</code></td>
+            <td>500</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">NPU vocoder fixed seq len (WebNN 2GB pad limit)</span><span data-lang="zh">NPU 声码器固定序列长度（受 WebNN 2GB pad 限制）</span></td>
+          </tr>
+          <tr>
+            <td><code>N_FFT</code></td>
+            <td>1920</td>
+            <td>pipeline/constants.js</td>
+            <td><span data-lang="en">FFT size for mel transform</span><span data-lang="zh">mel 变换的 FFT 大小</span></td>
+          </tr>
+          <tr>
+            <td><code>NUM_MELS</code></td>
+            <td>128</td>
+            <td>pipeline/constants.js</td>
+            <td><span data-lang="en">Mel filter banks</span><span data-lang="zh">mel 滤波器组数</span></td>
+          </tr>
+          <tr>
+            <td><code>F0_BIN</code> / <code>F0_MIN</code></td>
+            <td>361 / 32.703</td>
+            <td>pipeline/constants.js</td>
+            <td><span data-lang="en">F0 quantization bins / min Hz (C1)</span><span data-lang="zh">F0 量化 bin 数 / 最低 Hz（C1）</span></td>
+          </tr>
+          <tr>
+            <td><code>CFG_STRENGTH</code> / <code>CFG_RESCALE</code></td>
+            <td>3.0 / 0.75</td>
+            <td>pipeline/constants.js</td>
+            <td><span data-lang="en">Classifier-Free Guidance params</span><span data-lang="zh">无分类器引导参数</span></td>
+          </tr>
+          <tr>
+            <td><code>DEFAULT_DIFF_STEPS</code></td>
+            <td>32</td>
+            <td>pipeline/constants.js</td>
+            <td><span data-lang="en">Default diffusion denoising steps</span><span data-lang="zh">默认扩散去噪步数</span></td>
+          </tr>
+          <tr>
+            <td><code>LONG_AUDIO_THRESHOLD_SEC</code></td>
+            <td>30</td>
+            <td>pipeline/constants.js</td>
+            <td><span data-lang="en">Audio longer than this triggers segmentation</span><span data-lang="zh">超过该时长触发分段合成</span></td>
+          </tr>
+          <tr>
+            <td><code>SEGMENT_MIN_SEC</code> / <code>SEGMENT_MAX_SEC</code> / <code>SEGMENT_OVERLAP_SEC</code></td>
+            <td>15 / 30 / 2</td>
+            <td>pipeline/constants.js</td>
+            <td><span data-lang="en">Segment size range and overlap</span><span data-lang="zh">分段大小范围与重叠</span></td>
+          </tr>
+          <tr>
+            <td><code>MAX_SAFE_FRAMES</code></td>
+            <td>40000</td>
+            <td>pipeline/constants.js</td>
+            <td><span data-lang="en">Hard cap on mel frames per synthesis</span><span data-lang="zh">每次合成 mel 帧数硬上限</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Audio Segmentation</span>
+        <span data-lang="zh">音频分段</span>
+      </h2>
+      <p data-lang="en"><code>audioSegmentation.js</code> splits long vocals (&gt; <code>LONG_AUDIO_THRESHOLD_SEC=30s</code>) into segments of <code>SEGMENT_MIN_SEC=15s</code>–<code>SEGMENT_MAX_SEC=30s</code> with <code>SEGMENT_OVERLAP_SEC=2s</code> of overlap. Segment boundaries are chosen at rest-note midpoints to minimize stitching artifacts.</p>
+      <p data-lang="zh"><code>audioSegmentation.js</code> 将长人声（&gt; <code>LONG_AUDIO_THRESHOLD_SEC=30s</code>）切分为 <code>SEGMENT_MIN_SEC=15s</code>–<code>SEGMENT_MAX_SEC=30s</code> 的分段，重叠 <code>SEGMENT_OVERLAP_SEC=2s</code>。分段边界选择在休止音符中点，以最小化拼接瑕疵。</p>
+      <p data-lang="en"><code>fillNoteGaps</code> also inserts rest notes between non-adjacent notes so the diffusion model has silent reference frames.</p>
+      <p data-lang="zh"><code>fillNoteGaps</code> 还会在不相邻的音符之间插入休止符，让扩散模型拥有静音参考帧。</p>
+
+      <h2>
+        <span data-lang="en">Float16 Patch</span>
+        <span data-lang="zh">Float16 补丁</span>
+      </h2>
+      <p data-lang="en"><code>float16Patch.js</code> is loaded as a side-effect at the top of <code>pipeline/index.js</code>. It patches <code>onnxruntime-common</code>'s <code>NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP</code> so that <code>float16</code> tensors use <code>Uint16Array</code> instead of the native <code>Float16Array</code>.</p>
+      <p data-lang="zh"><code>float16Patch.js</code> 作为副作用在 <code>pipeline/index.js</code> 顶部加载。它修补 <code>onnxruntime-common</code> 的 <code>NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP</code>，使 <code>float16</code> 张量使用 <code>Uint16Array</code> 而非原生 <code>Float16Array</code>。</p>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en">Node.js v24+ / Electron 42+ (Chromium 138) natively supports <code>Float16Array</code>, but the <code>onnxruntime-node</code> C++ binding cannot read its buffer, causing <code>"not enough space: expected N, got 0"</code>. The patch is required for FP16 models to work. Under webpack, it uses <code>__non_webpack_require__</code> to reach the native <code>require.cache</code>.</p>
+          <p data-lang="zh">Node.js v24+ / Electron 42+（Chromium 138）原生支持 <code>Float16Array</code>，但 <code>onnxruntime-node</code> 的 C++ binding 无法读取其 buffer，会报 <code>"not enough space: expected N, got 0"</code>。该补丁是 FP16 模型正常工作的前提。在 webpack 下，它通过 <code>__non_webpack_require__</code> 访问原生 <code>require.cache</code>。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Model Loading &amp; Execution Providers</span>
+        <span data-lang="zh">模型加载与执行提供者</span>
+      </h2>
+      <p data-lang="en"><code>modelLoader.js</code> handles device enumeration, execution-provider selection, and session creation with validation:</p>
+      <p data-lang="zh"><code>modelLoader.js</code> 负责设备枚举、执行提供者选择，以及带校验的会话创建：</p>
+      <ul>
+        <li><span data-lang="en"><strong>Device enumeration</strong>: <code>enumerateDMLDevices</code> first tries <code>systeminformation</code> (cached); if it returns nothing, it falls back to creating a probe DML session on <code>note_text_encoder.onnx</code> and parsing ORT verbose stderr for <code>Discovered OrtHardwareDevice</code> lines.</span><span data-lang="zh"><strong>设备枚举</strong>：<code>enumerateDMLDevices</code> 优先使用 <code>systeminformation</code>（带缓存）；若无结果，回退到在 <code>note_text_encoder.onnx</code> 上创建探测 DML 会话，并解析 ORT verbose stderr 中的 <code>Discovered OrtHardwareDevice</code> 行。</span></li>
+        <li><span data-lang="en"><strong>Smart device selection</strong>: priority <code>discrete-gpu &gt; npu &gt; integrated-gpu &gt; cpu</code>, weighted by VRAM. <code>buildModelDeviceMapping</code> places large model groups (&gt;100MB) on GPU, small groups (&lt;10MB) on NPU when available.</span><span data-lang="zh"><strong>智能设备选择</strong>：优先级 <code>独显 &gt; NPU &gt; 核显 &gt; CPU</code>，并按显存加权。<code>buildModelDeviceMapping</code> 将大模型组（&gt;100MB）放在 GPU，小模型组（&lt;10MB）在 NPU 可用时放在 NPU。</span></li>
+        <li><span data-lang="en"><strong>Session creation</strong>: <code>createSessionWithValidation</code> tries DML first (with <code>enableMemPattern: false</code> + <code>executionMode: 'sequential'</code> to avoid DML over-allocation), runs a dummy inference to verify, and falls back to CPU on failure.</span><span data-lang="zh"><strong>会话创建</strong>：<code>createSessionWithValidation</code> 优先尝试 DML（设置 <code>enableMemPattern: false</code> + <code>executionMode: 'sequential'</code> 以避免 DML 过度分配），运行 dummy 推理校验，失败则回退到 CPU。</span></li>
+        <li><span data-lang="en"><strong>WebNN proxy</strong>: when <code>inferenceProvider='ortweb'</code> and NPU/GPU is available, a <code>WebNNSessionProxy</code> forwards <code>session.run()</code> calls to the renderer process via IPC (the main window renderer hosts <code>onnxruntime-web</code>).</span><span data-lang="zh"><strong>WebNN 代理</strong>：当 <code>inferenceProvider='ortweb'</code> 且 NPU/GPU 可用时，<code>WebNNSessionProxy</code> 通过 IPC 将 <code>session.run()</code> 调用转发到渲染进程（主窗口渲染进程承载 <code>onnxruntime-web</code>）。</span></li>
+        <li><span data-lang="en"><strong>W16A32 fallback</strong>: if a FP16 <code>diff_step</code> fails to load (e.g. partial FP16 support), the pipeline reloads it from the FP32 base directory while keeping other models in FP16.</span><span data-lang="zh"><strong>W16A32 回退</strong>：若 FP16 的 <code>diff_step</code> 加载失败（如 FP16 支持不完整），管线会从 FP32 基础目录重新加载它，其余模型保持 FP16。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Synthesis Cache</span>
+        <span data-lang="zh">合成缓存</span>
+      </h2>
+      <p data-lang="en">The pipeline keeps an LRU cache of recent synthesis results (<code>_synthCacheMaxEntries=4</code>, <code>_synthCacheMaxBytes=200MB</code>). Cache keys are derived from notes, bpm, and option fields. Switching vocoder type, SiFiGAN precision, or language invalidates the cache. A hit returns the cached audio without re-running the vocoder.</p>
+      <p data-lang="zh">管线维护一个 LRU 合成结果缓存（<code>_synthCacheMaxEntries=4</code>、<code>_synthCacheMaxBytes=200MB</code>）。缓存键由音符、bpm 与选项字段派生。切换声码器类型、SiFiGAN 精度或语言会使缓存失效。命中时直接返回缓存的音频，不再运行声码器。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Concurrent <code>synthesize()</code> calls are serialized via <code>_synthPromise</code>. This prevents a reload race where synthesis B starts while synthesis A is still rebuilding heavy sessions (<code>diff_step</code> 846MB / <code>vocoder</code>), which would double VRAM and trigger OOM.</p>
+          <p data-lang="zh">并发的 <code>synthesize()</code> 调用通过 <code>_synthPromise</code> 串行化。这避免了一种重载竞态：合成 A 仍在重建重量级会话（<code>diff_step</code> 846MB / <code>vocoder</code>）时合成 B 启动，导致显存翻倍并触发 OOM。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Pipeline API Surface</span>
+        <span data-lang="zh">管线 API 表面</span>
+      </h2>
+      <pre><code>const pipeline = new OnnxSVSPipeline(modelDir, {
+  modelPrecision,       // 'fp32' | 'fp16' | 'int8' | 'int8-npu'
+  deviceId,             // DML adapter index (undefined = auto)
+  preferredDeviceType,  // 'npu' | 'webnn-gpu' | undefined
+  inferenceProvider,    // 'ortnode' (default) | 'ortweb'
+  languageOverride,     // 'ja' | null
+});
+
+await pipeline.init();                 // loads all 9 sessions
+await pipeline.swapLanguageModels('ja');   // hot-swap JP models
+await pipeline.swapVocoder('sifigan');     // hot-swap vocoder only
+await pipeline.swapSifiganPrecision('fp16');
+
+const audio = await pipeline.synthesize(notes, bpm, {
+  nSteps,               // default 32
+  cfg, cfgRescale,      // default 3.0 / 0.75
+  autoShift, pitchShift,
+  f0Envelope, pitchCurveF0,
+  refAudioWavBuffer,    // reference audio for prompt mel + autoShift
+  onProgress,           // 0..100
+  onChunkAudio,         // streaming vocoder chunks
+});
+
+pipeline.dispose();                   // release all sessions</code></pre>
+
+      <nav class="doc-pager">
+        <a href="architecture.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Architecture Overview</span><span data-lang="zh">架构概览</span></div></div></a>
+        <a href="onnx-models.html" class="next"><div class="pager-card"><div class="pager-label" data-i18n="pager.next">Next</div><div class="pager-title"><span data-lang="en">ONNX Models</span><span data-lang="zh">ONNX 模型</span></div></div></a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="../user/faq.html" data-i18n="footer.help">Help & FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

@@ -50,7 +50,10 @@ macOS / Linux: build from source (see below).
 8. Add notes, type lyrics, optionally draw pitch curves. Edits auto-sync to the main window (no Save button needed — 500ms debounced auto-save). Use `Ctrl+S` to force-sync immediately.
 9. Press **Play** to synthesize and listen. Use **Export** to save as WAV.
 
-See the [Wiki](docs/wiki/Home.md) for full documentation.
+See the [Documentation](docs/index.html) for full guides:
+- [User Guide](docs/user/quick-start.html) — installation, singer creation, editing, synthesis, export
+- [Developer Guide](docs/dev/build.html) — architecture, build from source, inference pipeline, ONNX models
+- [Help & FAQ](docs/user/faq.html) — troubleshooting and common questions
 
 ### Features
 
@@ -163,7 +166,10 @@ macOS / Linux 用户请从源码构建。
 8. 添加音符、输入歌词、可选绘制音高曲线。编辑后自动同步到主页面（无需保存按钮，500ms 防抖自动保存）。按 `Ctrl+S` 可立即强制同步。
 9. 按 **播放**合成试听。用 **导出**保存为 WAV。
 
-完整文档见 [Wiki](docs/wiki/Home.md)。
+完整文档见 [文档首页](docs/index.html)：
+- [用户指南](docs/user/quick-start.html) — 安装、创建歌手、编辑、合成、导出
+- [开发者指南](docs/dev/build.html) — 架构、源码构建、推理管线、ONNX 模型
+- [帮助与常见问题](docs/user/faq.html) — 故障排查与常见问题
 
 ### 功能
 
@@ -271,7 +277,10 @@ macOS / Linux：ソースからビルドしてください。
 8. 音符を追加、歌詞を入力、必要に応じてピッチカーブを描画。編集は自動的にメインウィンドウへ同期されます（保存ボタン不要、500ms デバウンス自動保存）。`Ctrl+S` で即時同期可能。
 9. **再生**で合成・試聴。**エクスポート**で WAV 保存。
 
-詳細は [Wiki](docs/wiki/Home.md) を参照。
+詳細は [ドキュメント](docs/index.html) を参照：
+- [ユーザーガイド](docs/user/quick-start.html) — インストール、歌手作成、編集、合成、エクスポート
+- [開発者ガイド](docs/dev/build.html) — アーキテクチャ、ビルド、推論パイプライン、ONNX モデル
+- [ヘルプ & FAQ](docs/user/faq.html) — トラブルシューティングとよくある質問
 
 ### 機能
 

@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Singer Creation — SXSEditor Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+        <span class="brand-ver">v1.0</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="../dev/build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="user"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="quick-start.html" data-i18n="sidebar.user">User Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Singer Creation</span><span data-lang="zh">创建歌手</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Singer Creation</span>
+        <span data-lang="zh">创建歌手</span>
+      </h1>
+
+      <p data-lang="en">A <strong>singer</strong> is a voice profile built from a reference audio clip and its preprocessed musical data. The SVS model uses the singer's voice characteristics to synthesize new singing. This page covers the complete singer creation workflow, including audio preprocessing.</p>
+      <p data-lang="zh"><strong>歌手</strong> 是基于参考音频片段及其预处理后的音乐数据构建的声音配置文件。SVS 模型会利用歌手的语音特征来合成新的歌声。本页涵盖完整的歌手创建流程，包括音频预处理。</p>
+
+      <h2>
+        <span data-lang="en">Overview</span>
+        <span data-lang="zh">概览</span>
+      </h2>
+      <p data-lang="en">The Singer Creator is a dedicated window for creating new singers. It has three sections: <strong>Basic Info</strong> (name and avatar), <strong>Reference Audio</strong> (the WAV file), and <strong>Audio Preprocessing</strong> (F0 and MIDI extraction). The right panel shows a live preview of how the singer will appear.</p>
+      <p data-lang="zh">歌手创建器（Singer Creator）是用于创建新歌手的专用窗口。它包含三个部分：<strong>基本信息</strong>（名称和头像）、<strong>参考音频</strong>（WAV 文件）和 <strong>音频预处理</strong>（F0 与 MIDI 提取）。右侧面板会实时预览歌手的最终外观。</p>
+
+      <h2>
+        <span data-lang="en">Reference Audio Requirements</span>
+        <span data-lang="zh">参考音频要求</span>
+      </h2>
+      <p data-lang="en">The reference audio is the most important part of singer creation. It tells the model what voice to imitate. Requirements:</p>
+      <p data-lang="zh">参考音频是歌手创建中最关键的部分。它告诉模型要模仿的声音。要求如下：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Requirement</span><span data-lang="zh">要求项</span></th>
+            <th><span data-lang="en">Specification</span><span data-lang="zh">规格</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Format</span><span data-lang="zh">格式</span></td>
+            <td><span data-lang="en"><code>.wav</code> only</span><span data-lang="zh">仅限 <code>.wav</code></span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Duration</span><span data-lang="zh">时长</span></td>
+            <td><span data-lang="en">Maximum 30 seconds (a trim dialog opens if exceeded)</span><span data-lang="zh">最长 30 秒（超出会自动弹出裁剪对话框）</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Content</span><span data-lang="zh">内容</span></td>
+            <td><span data-lang="en"><strong>Pure vocals only</strong> — no background music, instruments, reverb, or effects</span><span data-lang="zh"><strong>仅纯人声</strong>——无背景音乐、乐器、混响或效果</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Sample Rate</span><span data-lang="zh">采样率</span></td>
+            <td><span data-lang="en">44100 Hz recommended (other rates accepted)</span><span data-lang="zh">推荐 44100 Hz（其他采样率也可接受）</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Quality</span><span data-lang="zh">质量</span></td>
+            <td><span data-lang="en">Clean recording with minimal background noise, clear articulation</span><span data-lang="zh">干净录音，背景噪音尽可能少，咬字清晰</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Why pure vocals matter:</strong> The model learns voice characteristics from this audio. Any non-vocal content (music, noise, effects) is treated as part of the voice and will cause artifacts in the synthesized output. If your source is a mixed song, use a vocal remover tool to isolate clean vocals first.</p>
+          <p data-lang="zh"><strong>为何必须纯人声：</strong>模型会从参考音频中学习声音特征。任何非人声内容（音乐、噪音、效果）都会被当作声音的一部分学习，导致合成输出出现伪影。如果源文件是混音歌曲，请先使用人声分离工具提取纯净人声。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Step-by-Step: Creating a Singer</span>
+        <span data-lang="zh">分步操作：创建歌手</span>
+      </h2>
+
+      <h3>
+        <span data-lang="en">1. Open the Singer Creator</span>
+        <span data-lang="zh">1. 打开歌手创建器</span>
+      </h3>
+      <ol>
+        <li><span data-lang="en">In the main window, click the <strong>+</strong> button in the singer panel header (left side).</span><span data-lang="zh">在主窗口中，点击歌手面板标题栏（左侧）的 <strong>+</strong> 按钮。</span></li>
+        <li><span data-lang="en">A dialog appears with two options: <strong>Open Singer Creator</strong> (create new) or <strong>Open Existing Singer File</strong> (load a <code>.sxssinger</code> file).</span><span data-lang="zh">弹出对话框，包含两个选项：<strong>Open Singer Creator</strong>（新建）或 <strong>Open Existing Singer File</strong>（加载 <code>.sxssinger</code> 文件）。</span></li>
+        <li><span data-lang="en">Click <strong>Open Singer Creator</strong>.</span><span data-lang="zh">点击 <strong>Open Singer Creator</strong>。</span></li>
+      </ol>
+
+      <h3>
+        <span data-lang="en">2. Enter Basic Info</span>
+        <span data-lang="zh">2. 填写基本信息</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en"><strong>Singer Name</strong> (required): Used for display and file naming. Example: "MyVoice".</span><span data-lang="zh"><strong>Singer Name</strong>（必填）：用于显示和文件命名。例如："MyVoice"。</span></li>
+        <li><span data-lang="en"><strong>Avatar</strong>: Choose <strong>Color</strong> (a solid color shown on the timeline track) or <strong>Image</strong> (upload a picture file).</span><span data-lang="zh"><strong>Avatar</strong>：选择 <strong>Color</strong>（时间线轨道上显示的纯色）或 <strong>Image</strong>（上传图片文件）。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">3. Upload the WAV File</span>
+        <span data-lang="zh">3. 上传 WAV 文件</span>
+      </h3>
+      <ol>
+        <li><span data-lang="en">Click the upload area (or drag a WAV file onto it).</span><span data-lang="zh">点击上传区域（或将 WAV 文件拖到该区域）。</span></li>
+        <li><span data-lang="en">Select a <code>.wav</code> file that meets the requirements above.</span><span data-lang="zh">选择符合上述要求的 <code>.wav</code> 文件。</span></li>
+        <li><span data-lang="en">After uploading, a waveform visualization appears. Click <strong>Preview</strong> to listen, or <strong>Clear</strong> to remove it.</span><span data-lang="zh">上传后会出现波形可视化。点击 <strong>Preview</strong> 试听，或点击 <strong>Clear</strong> 移除。</span></li>
+      </ol>
+
+      <h3>
+        <span data-lang="en">4. Trim if Longer Than 30 Seconds</span>
+        <span data-lang="zh">4. 超过 30 秒则裁剪</span>
+      </h3>
+      <p data-lang="en">If your WAV file exceeds 30 seconds, the WAV Trim dialog opens automatically:</p>
+      <p data-lang="zh">如果 WAV 文件超过 30 秒，会自动弹出 WAV 裁剪对话框：</p>
+      <ul>
+        <li><span data-lang="en"><strong>Drag</strong> the selection overlay to choose which 30-second segment to use.</span><span data-lang="zh"><strong>拖动</strong>选区覆盖层，选择要使用的 30 秒片段。</span></li>
+        <li><span data-lang="en"><strong>Drag the edges</strong> of the selection to adjust start/end.</span><span data-lang="zh"><strong>拖动选区边缘</strong>调整起始/结束位置。</span></li>
+        <li><span data-lang="en">Enter exact values in the <strong>Start Position</strong> and <strong>Clip Length</strong> fields.</span><span data-lang="zh">在 <strong>Start Position</strong> 和 <strong>Clip Length</strong> 输入框中填入精确数值。</span></li>
+        <li><span data-lang="en">Click <strong>Preview Clip</strong> to listen to the selected segment.</span><span data-lang="zh">点击 <strong>Preview Clip</strong> 试听所选片段。</span></li>
+        <li><span data-lang="en">Click <strong>Confirm Trim</strong> to apply, or <strong>Cancel</strong> to discard the file entirely.</span><span data-lang="zh">点击 <strong>Confirm Trim</strong> 应用裁剪，或点击 <strong>Cancel</strong> 完全丢弃该文件。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">5. Start Audio Preprocessing</span>
+        <span data-lang="zh">5. 开始音频预处理</span>
+      </h3>
+      <p data-lang="en">Preprocessing extracts the musical information (pitch, notes, timing) from your reference audio. This step is <strong>required</strong> — without it, the singer cannot be used for synthesis.</p>
+      <p data-lang="zh">预处理会从参考音频中提取音乐信息（音高、音符、时序）。此步骤<strong>必填</strong>——没有它，歌手无法用于合成。</p>
+      <ol>
+        <li><span data-lang="en">Click <strong>Start Audio Preprocessing</strong>. A new window opens showing the WAV waveform (top), MIDI editor (middle), and F0 curve (bottom).</span><span data-lang="zh">点击 <strong>Start Audio Preprocessing</strong>。新窗口打开，显示 WAV 波形（顶部）、MIDI 编辑器（中部）和 F0 曲线（底部）。</span></li>
+      </ol>
+      <p data-lang="en">Follow the detailed preprocessing steps in the next section.</p>
+      <p data-lang="zh">请按照下一节的详细预处理步骤操作。</p>
+
+      <h3>
+        <span data-lang="en">6. Save the Singer File</span>
+        <span data-lang="zh">6. 保存歌手文件</span>
+      </h3>
+      <ol>
+        <li><span data-lang="en">After preprocessing is complete, click <strong>Create &amp; Save</strong> (✓) in the Singer Creator.</span><span data-lang="zh">预处理完成后，在歌手创建器中点击 <strong>Create &amp; Save</strong>（✓）。</span></li>
+        <li><span data-lang="en">Choose a save location. The singer is saved as a <code>.sxssinger</code> file (JSON format with base64-encoded audio).</span><span data-lang="zh">选择保存位置。歌手以 <code>.sxssinger</code> 文件保存（JSON 格式，内含 base64 编码的音频）。</span></li>
+        <li><span data-lang="en">A success message confirms creation. The singer now appears in the main window's singer panel.</span><span data-lang="zh">成功消息确认创建完成。歌手随即出现在主窗口的歌手面板中。</span></li>
+      </ol>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Create &amp; Save</strong> requires a WAV file to be loaded. If preprocessing was completed, the preprocessed data is included in the saved file.</p>
+          <p data-lang="zh"><strong>Create &amp; Save</strong> 需要先加载 WAV 文件。如果已完成预处理，预处理数据会一并保存到文件中。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Audio Preprocessing in Detail</span>
+        <span data-lang="zh">音频预处理详解</span>
+      </h2>
+      <p data-lang="en">The Audio Preprocessing window extracts MIDI notes and F0 (fundamental frequency) data from the reference audio. The SVS model uses this data to understand the singer's vocal characteristics.</p>
+      <p data-lang="zh">音频预处理窗口会从参考音频中提取 MIDI 音符和 F0（基频）数据。SVS 模型利用这些数据来理解歌手的语音特征。</p>
+
+      <h3>
+        <span data-lang="en">Step 1: Extract F0 (Pitch)</span>
+        <span data-lang="zh">第 1 步：提取 F0（音高）</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en">Click <strong>RMVPE Extract F0</strong>. This uses the RMVPE neural model to detect the fundamental frequency curve from the audio.</span><span data-lang="zh">点击 <strong>RMVPE Extract F0</strong>。此操作使用 RMVPE 神经网络模型从音频中检测基频曲线。</span></li>
+        <li><span data-lang="en">The F0 curve appears in the bottom panel. This is a <strong>read-only</strong> visualization of the detected pitch contour — you cannot edit it directly.</span><span data-lang="zh">F0 曲线显示在底部面板。这是检测到的音高轮廓的<strong>只读</strong>可视化——无法直接编辑。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Step 2: Extract MIDI Notes</span>
+        <span data-lang="zh">第 2 步：提取 MIDI 音符</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en">Click <strong>Extract MIDI</strong>. This uses Basic Pitch (the recommended tool) to detect note boundaries and pitches.</span><span data-lang="zh">点击 <strong>Extract MIDI</strong>。此操作使用 Basic Pitch（推荐工具）检测音符边界和音高。</span></li>
+        <li><span data-lang="en">Extracted notes appear on the MIDI canvas, and the note count is displayed.</span><span data-lang="zh">提取的音符显示在 MIDI 画布上，并显示音符数量。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Step 3: Edit MIDI Notes (Mandatory)</span>
+        <span data-lang="zh">第 3 步：编辑 MIDI 音符（必填）</span>
+      </h3>
+      <div class="callout danger">
+        <div class="callout-icon">❗</div>
+        <div class="callout-body">
+          <p data-lang="en">Auto-extracted MIDI is approximate. You <strong>must</strong> verify and correct it before saving. Incorrect notes will degrade synthesis quality.</p>
+          <p data-lang="zh">自动提取的 MIDI 是近似的。保存前<strong>必须</strong>核对并修正。错误的音符会降低合成质量。</p>
+        </div>
+      </div>
+      <p data-lang="en">Check each note's pitch (does the MIDI pitch match the actual sung note?), note boundaries (do starts/ends align with the singing?), and note count (are all sung notes detected? are there false detections?). Edit operations:</p>
+      <p data-lang="zh">检查每个音符的音高（MIDI 音高是否与实际演唱一致？）、音符边界（起始/结束是否与演唱对齐？）和音符数量（是否所有演唱音符都被检测到？是否有误检？）。编辑操作如下：</p>
+      <ul>
+        <li><span data-lang="en"><strong>Move notes</strong>: Drag up/down (pitch) or left/right (timing).</span><span data-lang="zh"><strong>移动音符</strong>：上下拖动（音高）或左右拖动（时序）。</span></li>
+        <li><span data-lang="en"><strong>Resize notes</strong>: Drag the right edge.</span><span data-lang="zh"><strong>调整音符长度</strong>：拖动右边缘。</span></li>
+        <li><span data-lang="en"><strong>Add notes</strong>: Click on empty space.</span><span data-lang="zh"><strong>添加音符</strong>：在空白处点击。</span></li>
+        <li><span data-lang="en"><strong>Delete notes</strong>: Select and press <kbd class="kbd">Delete</kbd>.</span><span data-lang="zh"><strong>删除音符</strong>：选中后按 <kbd class="kbd">Delete</kbd>。</span></li>
+        <li><span data-lang="en"><strong>Edit lyrics</strong>: Double-click a note. <strong>You must type the lyrics yourself</strong> — they are not auto-detected.</span><span data-lang="zh"><strong>编辑歌词</strong>：双击音符。<strong>歌词必须自己输入</strong>——系统不会自动识别歌词。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Step 4: Fill in Lyrics (Mandatory)</span>
+        <span data-lang="zh">第 4 步：填写歌词（必填）</span>
+      </h3>
+      <p data-lang="en">Every note must have a lyric. The preprocessing does not detect lyrics from audio. You must manually type them:</p>
+      <p data-lang="zh">每个音符都必须有歌词。预处理不会从音频中识别歌词，必须手动输入：</p>
+      <ul>
+        <li><span data-lang="en">For <strong>Chinese singing</strong>: Enter Chinese characters (e.g., <code>我</code>, <code>你</code>, <code>好</code>). Pinyin is also accepted (e.g., <code>ni hao</code>).</span><span data-lang="zh"><strong>中文演唱</strong>：输入汉字（如 <code>我</code>、<code>你</code>、<code>好</code>）。也可输入拼音（如 <code>ni hao</code>）。</span></li>
+        <li><span data-lang="en">For <strong>English singing</strong>: Enter the English word being sung (e.g., <code>hello</code>, <code>love</code>).</span><span data-lang="zh"><strong>英文演唱</strong>：输入演唱的英文单词（如 <code>hello</code>、<code>love</code>）。</span></li>
+        <li><span data-lang="en">For notes with no sung content (rests, breaths): Leave the lyric empty or use a space.</span><span data-lang="zh">没有演唱内容的音符（休止、换气）：歌词留空或输入空格。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Step 5: Save Preprocessed Data</span>
+        <span data-lang="zh">第 5 步：保存预处理数据</span>
+      </h3>
+      <ol>
+        <li><span data-lang="en">Click <strong>Save</strong> (💾). This requires at least F0 or MIDI data to be extracted.</span><span data-lang="zh">点击 <strong>Save</strong>（💾）。此操作要求至少提取了 F0 或 MIDI 数据。</span></li>
+        <li><span data-lang="en">All preprocessed data is sent back to the Singer Creator window via IPC.</span><span data-lang="zh">所有预处理数据通过 IPC 发送回歌手创建器窗口。</span></li>
+        <li><span data-lang="en">The Singer Creator preview updates to show both "WAV ✓" and "Preprocess ✓" badges.</span><span data-lang="zh">歌手创建器预览会更新，显示 "WAV ✓" 和 "Preprocess ✓" 徽章。</span></li>
+      </ol>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">The F0 curve is <strong>read-only</strong> — you cannot edit it directly. MIDI note editing affects only the note data, not the F0 curve. If you are unhappy with extraction results, you can re-extract (this overwrites previous results).</p>
+          <p data-lang="zh">F0 曲线是<strong>只读</strong>的——无法直接编辑。MIDI 音符编辑只影响音符数据，不影响 F0 曲线。如果对提取结果不满意，可以重新提取（会覆盖之前的结果）。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Singer Preview</span>
+        <span data-lang="zh">歌手预览</span>
+      </h2>
+      <p data-lang="en">The right panel of the Singer Creator shows a live preview of how the singer will appear:</p>
+      <p data-lang="zh">歌手创建器右侧面板会实时预览歌手的最终外观：</p>
+      <ul>
+        <li><span data-lang="en">Avatar (color or image)</span><span data-lang="zh">头像（颜色或图片）</span></li>
+        <li><span data-lang="en">Singer name</span><span data-lang="zh">歌手名称</span></li>
+        <li><span data-lang="en">WAV status badge (✓ when audio is loaded)</span><span data-lang="zh">WAV 状态徽章（加载音频后显示 ✓）</span></li>
+        <li><span data-lang="en">Preprocess status badge (✓ when preprocessing is complete)</span><span data-lang="zh">预处理状态徽章（预处理完成后显示 ✓）</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Tips for Good Reference Audio</span>
+        <span data-lang="zh">优质参考音频的建议</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en">Use a clear, dry vocal recording with no reverb or echo.</span><span data-lang="zh">使用清晰、干涩的人声录音，不要混响或回声。</span></li>
+        <li><span data-lang="en">Ensure no background noise (fans, air conditioning, room ambience).</span><span data-lang="zh">确保没有背景噪音（风扇、空调、房间环境音）。</span></li>
+        <li><span data-lang="en">Include a varied pitch range — the model learns from what it hears.</span><span data-lang="zh">包含多变的音域范围——模型会从听到的内容中学习。</span></li>
+        <li><span data-lang="en">Good articulation helps the model learn clearer phonemes.</span><span data-lang="zh">清晰的咬字有助于模型学习更清晰的音素。</span></li>
+        <li><span data-lang="en">10–30 seconds of continuous singing is ideal.</span><span data-lang="zh">10–30 秒的连续演唱最为理想。</span></li>
+        <li><span data-lang="en">Use audio isolation tools (vocal removers) to extract clean vocals from mixed recordings if needed.</span><span data-lang="zh">如有必要，使用人声分离工具从混音中提取纯净人声。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Singer Management</span>
+        <span data-lang="zh">歌手管理</span>
+      </h2>
+      <h3>
+        <span data-lang="en">Singer Status Indicators</span>
+        <span data-lang="zh">歌手状态指示</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en"><strong>Normal</strong>: Singer loaded and ready.</span><span data-lang="zh"><strong>正常</strong>：歌手已加载，可用。</span></li>
+        <li><span data-lang="en"><strong>⚠ Singer file not found</strong>: The <code>.sxssinger</code> file was moved or deleted. Use <strong>Relocate</strong> to point to the new location.</span><span data-lang="zh"><strong>⚠ Singer file not found</strong>：<code>.sxssinger</code> 文件已被移动或删除。使用 <strong>Relocate</strong> 重新指向新位置。</span></li>
+      </ul>
+      <h3>
+        <span data-lang="en">Deleting a Singer</span>
+        <span data-lang="zh">删除歌手</span>
+      </h3>
+      <p data-lang="en">Right-click a singer and select <strong>Delete Singer</strong>. This removes the singer and all its fragments from the project.</p>
+      <p data-lang="zh">右键点击歌手并选择 <strong>Delete Singer</strong>。这会从项目中移除该歌手及其所有片段。</p>
+      <h3>
+        <span data-lang="en">Singer File Validation</span>
+        <span data-lang="zh">歌手文件校验</span>
+      </h3>
+      <p data-lang="en">When loading a <code>.sxssinger</code> file, SXSEditor validates file format/version compatibility, required fields (name, reference audio), and data integrity (MIDI notes, F0 data). Validation errors are shown in a report dialog; warnings indicate non-critical issues.</p>
+      <p data-lang="zh">加载 <code>.sxssinger</code> 文件时，SXSEditor 会校验文件格式/版本兼容性、必填字段（名称、参考音频）和数据完整性（MIDI 音符、F0 数据）。校验错误会显示在报告对话框中；警告表示非关键问题。</p>
+
+      <nav class="doc-pager">
+        <a href="quick-start.html">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.prev">Previous</div>
+            <div class="pager-title"><span data-lang="en">Quick Start</span><span data-lang="zh">快速开始</span></div>
+          </div>
+        </a>
+        <a href="fragment-editor.html" class="next">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.next">Next</div>
+            <div class="pager-title"><span data-lang="en">Fragment Editor</span><span data-lang="zh">片段编辑器</span></div>
+          </div>
+        </a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="faq.html" data-i18n="footer.help">Help &amp; FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

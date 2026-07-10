@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Quick Start — SXSEditor Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <!-- Header (identical on every page) -->
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+        <span class="brand-ver">v1.0</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="../dev/build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Docs Layout: sidebar + content + TOC -->
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="user"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="quick-start.html" data-i18n="sidebar.user">User Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Quick Start</span><span data-lang="zh">快速开始</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Quick Start</span>
+        <span data-lang="zh">快速开始</span>
+      </h1>
+
+      <p data-lang="en">This guide walks you through the complete workflow: from installing SXSEditor to synthesizing your first singing voice. Follow each step in order.</p>
+      <p data-lang="zh">本指南将引导你完成完整工作流程：从安装 SXSEditor 到合成第一段歌声。请按顺序逐步操作。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">SXSEditor is a desktop application for singing voice synthesis (SVS). It uses the SoulX-Singer neural model on ONNX Runtime with DirectML GPU, WebNN NPU, and CPU support. Supported singing languages: <strong>English</strong> and <strong>Chinese (Mandarin)</strong>. Japanese is in development.</p>
+          <p data-lang="zh">SXSEditor 是一个歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经网络模型，通过 ONNX Runtime 运行，支持 DirectML GPU、WebNN NPU 和 CPU 推理。支持的合成语言：<strong>英语</strong> 和 <strong>中文（普通话）</strong>。日语正在开发中。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">System Requirements</span>
+        <span data-lang="zh">系统要求</span>
+      </h2>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Component</span><span data-lang="zh">组件</span></th>
+            <th><span data-lang="en">Minimum</span><span data-lang="zh">最低</span></th>
+            <th><span data-lang="en">Recommended</span><span data-lang="zh">推荐</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">OS</span><span data-lang="zh">操作系统</span></td>
+            <td><span data-lang="en">Windows 10/11 64-bit</span><span data-lang="zh">Windows 10/11 64 位</span></td>
+            <td><span data-lang="en">Windows 11 64-bit</span><span data-lang="zh">Windows 11 64 位</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">CPU</span><span data-lang="zh">CPU</span></td>
+            <td><span data-lang="en">Any modern multi-core</span><span data-lang="zh">任意现代多核处理器</span></td>
+            <td><span data-lang="en">Recent Intel/AMD 6+ cores</span><span data-lang="zh">较新的 Intel/AMD 6 核以上</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">RAM</span><span data-lang="zh">内存</span></td>
+            <td><span data-lang="en">8 GB</span><span data-lang="zh">8 GB</span></td>
+            <td><span data-lang="en">16 GB</span><span data-lang="zh">16 GB</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">GPU</span><span data-lang="zh">GPU</span></td>
+            <td><span data-lang="en">None (CPU fallback)</span><span data-lang="zh">无（CPU 回退）</span></td>
+            <td><span data-lang="en">Discrete GPU with 4GB+ VRAM</span><span data-lang="zh">独立显卡，4GB 以上显存</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Storage</span><span data-lang="zh">存储</span></td>
+            <td><span data-lang="en">3 GB (app + models)</span><span data-lang="zh">3 GB（应用 + 模型）</span></td>
+            <td><span data-lang="en">SSD with 10+ GB free</span><span data-lang="zh">SSD，剩余 10 GB 以上</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">A discrete GPU is strongly recommended for reasonable synthesis speed. CPU inference works but is significantly slower.</p>
+      <p data-lang="zh">强烈推荐使用独立显卡以获得合理的合成速度。CPU 推理可用但速度明显较慢。</p>
+
+      <h2>
+        <span data-lang="en">Step 1: Download &amp; Install</span>
+        <span data-lang="zh">第 1 步：下载与安装</span>
+      </h2>
+      <p data-lang="en">Download the Windows installer (models are auto-downloaded on first launch):</p>
+      <p data-lang="zh">下载 Windows 安装包（模型在首次启动时自动下载）：</p>
+      <ul>
+        <li><span data-lang="en"><strong>GitHub Release</strong> (global): <a href="https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe">latest installer</a></span><span data-lang="zh"><strong>GitHub Release</strong>（全球）：<a href="https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe">最新安装包</a></span></li>
+        <li><span data-lang="en"><strong>GitCode Mirror</strong> (China, faster): <a href="https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe">latest installer</a></span><span data-lang="zh"><strong>GitCode 镜像</strong>（中国大陆加速）：<a href="https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe">最新安装包</a></span></li>
+      </ul>
+      <ol>
+        <li><span data-lang="en">Run the installer. Administrator privileges are required for installation.</span><span data-lang="zh">运行安装程序。安装需要管理员权限。</span></li>
+        <li><span data-lang="en">Launch SXSEditor from the Start Menu or desktop shortcut.</span><span data-lang="zh">从开始菜单或桌面快捷方式启动 SXSEditor。</span></li>
+      </ol>
+      <div class="callout tip">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">
+          <p data-lang="en">macOS / Linux users: build from source. See the Developer Guide for instructions.</p>
+          <p data-lang="zh">macOS / Linux 用户：请从源码构建。详见开发者指南。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Step 2: Download Models (First Launch)</span>
+        <span data-lang="zh">第 2 步：下载模型（首次启动）</span>
+      </h2>
+      <p data-lang="en">On first launch, SXSEditor detects that inference model files are missing and opens the <strong>Model Download</strong> window automatically. You must select a <strong>model precision</strong> before downloading.</p>
+      <p data-lang="zh">首次启动时，SXSEditor 检测到推理模型文件缺失，会自动打开<strong>模型下载</strong>窗口。下载前必须选择<strong>模型精度</strong>。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Precision</span><span data-lang="zh">精度</span></th>
+            <th><span data-lang="en">Best For</span><span data-lang="zh">适用场景</span></th>
+            <th><span data-lang="en">Disk Size</span><span data-lang="zh">磁盘占用</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en"><strong>FP16</strong> (recommended)</span><span data-lang="zh"><strong>FP16</strong>（推荐）</span></td>
+            <td><span data-lang="en">Discrete GPU (4GB+ VRAM)</span><span data-lang="zh">独立显卡（4GB+ 显存）</span></td>
+            <td><span data-lang="en">~1.5 GB</span><span data-lang="zh">约 1.5 GB</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">FP32</span><span data-lang="zh">FP32</span></td>
+            <td><span data-lang="en">High-end GPU (8GB+ VRAM)</span><span data-lang="zh">高端显卡（8GB+ 显存）</span></td>
+            <td><span data-lang="en">~3 GB</span><span data-lang="zh">约 3 GB</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">INT8</span><span data-lang="zh">INT8</span></td>
+            <td><span data-lang="en">Integrated GPU / low VRAM (&lt;2GB)</span><span data-lang="zh">集成显卡 / 低显存（&lt;2GB）</span></td>
+            <td><span data-lang="en">~1 GB</span><span data-lang="zh">约 1 GB</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">INT8-NPU</span><span data-lang="zh">INT8-NPU</span></td>
+            <td><span data-lang="en">NPU hardware</span><span data-lang="zh">NPU 硬件</span></td>
+            <td><span data-lang="en">~1 GB</span><span data-lang="zh">约 1 GB</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <ol>
+        <li><span data-lang="en">Select your desired precision. If unsure, choose <strong>FP16</strong>.</span><span data-lang="zh">选择所需精度。如不确定，请选 <strong>FP16</strong>。</span></li>
+        <li><span data-lang="en">(Optional) Click <strong>Change</strong> to choose a different download directory. The default location does not require admin privileges.</span><span data-lang="zh">（可选）点击 <strong>Change</strong> 选择其他下载目录。默认位置无需管理员权限。</span></li>
+        <li><span data-lang="en">Click <strong>Start Download</strong>.</span><span data-lang="zh">点击 <strong>Start Download</strong>。</span></li>
+        <li><span data-lang="en">Wait for all 9 ONNX model files to download. The window shows per-file and overall progress.</span><span data-lang="zh">等待 9 个 ONNX 模型文件全部下载完成。窗口会显示每个文件和总进度。</span></li>
+        <li><span data-lang="en">When all files show "Complete", click <strong>Close</strong>. The main window appears.</span><span data-lang="zh">当所有文件显示 "Complete" 时，点击 <strong>Close</strong>。主窗口随即出现。</span></li>
+      </ol>
+      <div class="callout tip">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">
+          <p data-lang="en">The download uses chunked parallel transfer (up to 16 concurrent connections). If a download fails, click <strong>Start Download</strong> again — completed files are skipped automatically.</p>
+          <p data-lang="zh">下载采用分片并行传输（最多 16 个并发连接）。如果下载失败，再次点击 <strong>Start Download</strong> 即可——已完成的文件会自动跳过。</p>
+        </div>
+      </div>
+      <p data-lang="en">Different precisions can coexist — you can switch later in Settings without re-downloading. Each precision has its own subdirectory.</p>
+      <p data-lang="zh">不同精度可共存——之后可在设置中切换而无需重新下载。每种精度有独立的子目录。</p>
+
+      <h2>
+        <span data-lang="en">Step 3: Create Your First Singer</span>
+        <span data-lang="zh">第 3 步：创建第一个歌手</span>
+      </h2>
+      <p data-lang="en">A <strong>singer</strong> is a voice profile built from a reference audio clip. The SVS model uses the singer's voice characteristics to synthesize new singing.</p>
+      <p data-lang="zh"><strong>歌手</strong> 是基于参考音频片段构建的声音配置文件。SVS 模型会利用歌手的语音特征来合成新的歌声。</p>
+      <ol>
+        <li><span data-lang="en">In the main window, click the <strong>+</strong> button in the singer panel (left side).</span><span data-lang="zh">在主窗口中，点击歌手面板（左侧）的 <strong>+</strong> 按钮。</span></li>
+        <li><span data-lang="en">In the dialog, click <strong>Open Singer Creator</strong>.</span><span data-lang="zh">在弹出的对话框中，点击 <strong>Open Singer Creator</strong>。</span></li>
+        <li><span data-lang="en">Enter a <strong>Singer Name</strong> (e.g., "MyVoice") and choose an avatar color.</span><span data-lang="zh">输入 <strong>Singer Name</strong>（如 "MyVoice"），并选择头像颜色。</span></li>
+        <li><span data-lang="en">Upload a <strong>pure vocal</strong> WAV file (max 30 seconds). If your file exceeds 30 seconds, a trim dialog opens — drag the selection to choose a 30-second clip, then click <strong>Confirm Trim</strong>.</span><span data-lang="zh">上传 <strong>纯人声</strong> WAV 文件（最长 30 秒）。如果文件超过 30 秒，会自动弹出裁剪对话框——拖动选区选择 30 秒片段，然后点击 <strong>Confirm Trim</strong>。</span></li>
+        <li><span data-lang="en">Click <strong>Start Audio Preprocessing</strong>, extract F0 and MIDI, then <strong>type the lyrics for each note</strong>. Click <strong>Save</strong>.</span><span data-lang="zh">点击 <strong>Start Audio Preprocessing</strong>，提取 F0 和 MIDI，然后<strong>为每个音符填写歌词</strong>。点击 <strong>Save</strong>。</span></li>
+        <li><span data-lang="en">Click <strong>Create &amp; Save</strong> (✓). Choose a save location. The singer is saved as a <code>.sxssinger</code> file.</span><span data-lang="zh">点击 <strong>Create &amp; Save</strong>（✓）。选择保存位置。歌手以 <code>.sxssinger</code> 文件保存。</span></li>
+      </ol>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en">The reference audio must be <strong>pure vocals only</strong> — no background music, instruments, or reverb. Any non-vocal content will be learned as part of the voice and cause artifacts in synthesized output.</p>
+          <p data-lang="zh">参考音频必须是 <strong>纯人声</strong>——不能有背景音乐、乐器或混响。任何非人声内容都会被当作声音的一部分学习，导致合成输出出现伪影。</p>
+        </div>
+      </div>
+      <p data-lang="en">For the full singer creation workflow, see <a href="singer-creation.html">Singer Creation</a>.</p>
+      <p data-lang="zh">完整的歌手创建流程请见 <a href="singer-creation.html">创建歌手</a>。</p>
+
+      <h2>
+        <span data-lang="en">Step 4: Add Your First Fragment</span>
+        <span data-lang="zh">第 4 步：添加第一个片段</span>
+      </h2>
+      <p data-lang="en">A <strong>fragment</strong> is a segment of music assigned to a singer. It contains MIDI notes, lyrics, and optional pitch curves.</p>
+      <p data-lang="zh"><strong>片段</strong> 是分配给某个歌手的一段音乐。它包含 MIDI 音符、歌词和可选的音高曲线。</p>
+      <ol>
+        <li><span data-lang="en">In the main window, find your singer in the left panel.</span><span data-lang="zh">在主窗口左侧面板找到你的歌手。</span></li>
+        <li><span data-lang="en">Click the <strong>+</strong> button on the singer's row. A new fragment appears on the timeline (right side).</span><span data-lang="zh">点击该歌手行的 <strong>+</strong> 按钮。时间线（右侧）上会出现一个新片段。</span></li>
+        <li><span data-lang="en">Drag the fragment to reposition it. Drag its edges to resize.</span><span data-lang="zh">拖动片段可重新定位。拖动其边缘可调整大小。</span></li>
+      </ol>
+
+      <h2>
+        <span data-lang="en">Step 5: Edit the Fragment (Piano Roll)</span>
+        <span data-lang="zh">第 5 步：编辑片段（钢琴卷帘）</span>
+      </h2>
+      <p data-lang="en"><strong>Double-click</strong> a fragment to open the <strong>Fragment Editor</strong> — a full piano-roll editor.</p>
+      <p data-lang="zh"><strong>双击</strong>片段打开 <strong>Fragment Editor</strong>——一个完整的钢琴卷帘编辑器。</p>
+      <ol>
+        <li><span data-lang="en">Click on the piano roll grid to create a note. Drag while clicking to set the note length. Notes snap to the beat grid.</span><span data-lang="zh">在钢琴卷帘网格上点击创建音符。点击时拖动可设置音符长度。音符会吸附到节拍网格。</span></li>
+        <li><span data-lang="en"><strong>Double-click</strong> a note to edit its lyric inline. For Chinese, type characters (e.g., <code>你好</code>) or Pinyin (e.g., <code>ni hao</code>). For English, type words (e.g., <code>hello</code>).</span><span data-lang="zh"><strong>双击</strong>音符可内联编辑歌词。中文可输入汉字（如 <code>你好</code>）或拼音（如 <code>ni hao</code>）。英文请输入单词（如 <code>hello</code>）。</span></li>
+        <li><span data-lang="en">Move notes by dragging. Resize by dragging the right edge. Delete with <kbd class="kbd">Delete</kbd>. Duplicate with <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">D</kbd>.</span><span data-lang="zh">拖动可移动音符。拖动右边缘可调整长度。按 <kbd class="kbd">Delete</kbd> 删除。按 <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">D</kbd> 复制。</span></li>
+        <li><span data-lang="en">Optionally switch to <strong>Pitch</strong> mode (press <kbd class="kbd">2</kbd>) to draw pitch curves, or <strong>VOL</strong>/<strong>PAN</strong> (press <kbd class="kbd">3</kbd>/<kbd class="kbd">4</kbd>) for envelopes.</span><span data-lang="zh">可选：切换到 <strong>Pitch</strong> 模式（按 <kbd class="kbd">2</kbd>）绘制音高曲线，或 <strong>VOL</strong>/<strong>PAN</strong>（按 <kbd class="kbd">3</kbd>/<kbd class="kbd">4</kbd>）编辑包络。</span></li>
+      </ol>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Edits auto-sync to the main window — there is no Save button. A 500ms debounced auto-save fires after every edit. Press <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">S</kbd> to force-sync immediately.</p>
+          <p data-lang="zh">编辑会自动同步到主窗口——没有保存按钮。每次编辑后触发 500ms 防抖自动保存。按 <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">S</kbd> 可立即强制同步。</p>
+        </div>
+      </div>
+      <p data-lang="en">For the full editor reference, see <a href="fragment-editor.html">Fragment Editor</a>.</p>
+      <p data-lang="zh">完整编辑器参考请见 <a href="fragment-editor.html">片段编辑器</a>。</p>
+
+      <h2>
+        <span data-lang="en">Step 6: Synthesize &amp; Listen</span>
+        <span data-lang="zh">第 6 步：合成与试听</span>
+      </h2>
+      <ol>
+        <li><span data-lang="en">Back in the main window, press <strong>▶ Play</strong> in the toolbar.</span><span data-lang="zh">回到主窗口，点击工具栏的 <strong>▶ Play</strong>。</span></li>
+        <li><span data-lang="en">The first synthesis takes longer as the SVS pipeline initializes (loads all 9 ONNX models into GPU memory). Subsequent plays are faster.</span><span data-lang="zh">首次合成较慢，因为 SVS 管线需要初始化（将 9 个 ONNX 模型加载到 GPU 显存）。之后再次播放会更快。</span></li>
+        <li><span data-lang="en">Use <strong>⏸ Pause</strong> and <strong>⏹ Stop</strong> to control playback.</span><span data-lang="zh">使用 <strong>⏸ Pause</strong> 和 <strong>⏹ Stop</strong> 控制播放。</span></li>
+      </ol>
+      <div class="callout tip">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">
+          <p data-lang="en">You can also press <strong>▶ Play</strong> inside the Fragment Editor to preview just that fragment. This uses the "Preview Inference Parameters" from Settings (fewer diffusion steps = faster but lower quality).</p>
+          <p data-lang="zh">你也可以在 Fragment Editor 中按 <strong>▶ Play</strong> 仅预览当前片段。这会使用设置中的"预览推理参数"（扩散步数更少 = 更快但音质略低）。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Step 7: Export</span>
+        <span data-lang="zh">第 7 步：导出</span>
+      </h2>
+      <ol>
+        <li><span data-lang="en">Click <strong>📤 Export</strong> in the main window toolbar.</span><span data-lang="zh">在主窗口工具栏点击 <strong>📤 Export</strong>。</span></li>
+        <li><span data-lang="en">The entire project is synthesized at export quality (uses "Export Inference Parameters" — more diffusion steps for higher quality).</span><span data-lang="zh">整个项目以导出质量合成（使用"导出推理参数"——更多扩散步数以获得更高音质）。</span></li>
+        <li><span data-lang="en">Choose a save location for the WAV file.</span><span data-lang="zh">选择 WAV 文件的保存位置。</span></li>
+        <li><span data-lang="en">The exported file is <strong>24kHz, 16-bit PCM WAV</strong>.</span><span data-lang="zh">导出文件为 <strong>24kHz、16-bit PCM WAV</strong>。</span></li>
+      </ol>
+      <p data-lang="en">For details on synthesis parameters and export options, see <a href="synthesis-export.html">Synthesis &amp; Export</a>.</p>
+      <p data-lang="zh">合成参数和导出选项详情请见 <a href="synthesis-export.html">合成与导出</a>。</p>
+
+      <h2>
+        <span data-lang="en">Step 8: Save Your Project</span>
+        <span data-lang="zh">第 8 步：保存项目</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en">Press <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">S</kbd> or use the <strong>File → Save</strong> menu. The project is saved as a <code>.sxsproj</code> file.</span><span data-lang="zh">按 <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">S</kbd> 或使用 <strong>File → Save</strong> 菜单。项目以 <code>.sxsproj</code> 文件保存。</span></li>
+        <li><span data-lang="en">Use <strong>File → Save As</strong> (<kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">S</kbd>) to save to a new location. You can optionally check "Embed singer files into project file" to make the project self-contained.</span><span data-lang="zh">使用 <strong>File → Save As</strong>（<kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">S</kbd>）保存到新位置。可选勾选 "Embed singer files into project file" 让项目自包含。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">What's Next?</span>
+        <span data-lang="zh">下一步</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><a href="singer-creation.html">Singer Creation</a> — Full singer creation workflow and preprocessing</span><span data-lang="zh"><a href="singer-creation.html">创建歌手</a> — 完整歌手创建流程与预处理</span></li>
+        <li><span data-lang="en"><a href="fragment-editor.html">Fragment Editor</a> — Detailed piano-roll editing reference</span><span data-lang="zh"><a href="fragment-editor.html">片段编辑器</a> — 详细的钢琴卷帘编辑参考</span></li>
+        <li><span data-lang="en"><a href="settings.html">Settings</a> — Configure inference hardware, audio output, themes</span><span data-lang="zh"><a href="settings.html">设置</a> — 配置推理硬件、音频输出、主题</span></li>
+        <li><span data-lang="en"><a href="faq.html">FAQ &amp; Troubleshooting</a> — Common questions and fixes</span><span data-lang="zh"><a href="faq.html">常见问题与故障排查</a> — 常见问题与修复方法</span></li>
+      </ul>
+
+      <nav class="doc-pager">
+        <a href="../index.html">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.prev">Previous</div>
+            <div class="pager-title"><span data-lang="en">Home</span><span data-lang="zh">首页</span></div>
+          </div>
+        </a>
+        <a href="singer-creation.html" class="next">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.next">Next</div>
+            <div class="pager-title"><span data-lang="en">Singer Creation</span><span data-lang="zh">创建歌手</span></div>
+          </div>
+        </a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="faq.html" data-i18n="footer.help">Help &amp; FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>
