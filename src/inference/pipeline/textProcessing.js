@@ -79,9 +79,27 @@ class TextProcessing {
             path.join(__dirname, '..', '..', 'inference', 'phone_set.json'),
             path.join(__dirname, '..', '..', '..', 'src', 'inference', 'phone_set.json'),
         ];
+        // Fallback paths for packaged Electron app (asar / unpacked)
+        try {
+            if (process.resourcesPath) {
+                searchPaths.push(path.join(process.resourcesPath, 'app.asar', '.webpack', 'main', 'phone_set.json'));
+                searchPaths.push(path.join(process.resourcesPath, 'app', '.webpack', 'main', 'phone_set.json'));
+            }
+        } catch (_) {}
+        // Fallback: require.main.path (non-webpack / CLI mode)
+        try {
+            if (require.main && require.main.path) {
+                searchPaths.push(path.join(require.main.path, 'inference', 'phone_set.json'));
+                searchPaths.push(path.join(require.main.path, 'src', 'inference', 'phone_set.json'));
+            }
+        } catch (_) {}
+
+        console.log(`[OnnxSVSPipeline] _loadPhoneSet: __dirname=${__dirname}`);
         for (const phoneSetPath of searchPaths) {
             try {
-                if (fs.existsSync(phoneSetPath)) {
+                const exists = fs.existsSync(phoneSetPath);
+                console.log(`[OnnxSVSPipeline]   checking: ${phoneSetPath} → ${exists ? 'FOUND' : 'missing'}`);
+                if (exists) {
                     const phoneList = JSON.parse(fs.readFileSync(phoneSetPath, 'utf-8'));
                     for (let i = 0; i < phoneList.length; i++) {
                         this.phone2idx[phoneList[i]] = i;
@@ -104,6 +122,20 @@ class TextProcessing {
             path.join(__dirname, '..', '..', 'inference', 'en_g2p_dict.json'),
             path.join(__dirname, '..', '..', '..', 'src', 'inference', 'en_g2p_dict.json'),
         ];
+        // Fallback paths for packaged Electron app (asar / unpacked)
+        try {
+            if (process.resourcesPath) {
+                searchPaths.push(path.join(process.resourcesPath, 'app.asar', '.webpack', 'main', 'en_g2p_dict.json'));
+                searchPaths.push(path.join(process.resourcesPath, 'app', '.webpack', 'main', 'en_g2p_dict.json'));
+            }
+        } catch (_) {}
+        // Fallback: require.main.path (non-webpack / CLI mode)
+        try {
+            if (require.main && require.main.path) {
+                searchPaths.push(path.join(require.main.path, 'inference', 'en_g2p_dict.json'));
+                searchPaths.push(path.join(require.main.path, 'src', 'inference', 'en_g2p_dict.json'));
+            }
+        } catch (_) {}
         for (const dictPath of searchPaths) {
             try {
                 if (fs.existsSync(dictPath)) {
