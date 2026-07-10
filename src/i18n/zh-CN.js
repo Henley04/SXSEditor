@@ -571,6 +571,16 @@ export default {
     sifiganUrlNotConfigured: '下载链接待配置，请等待作者上传至 ModelScope 或手动放置模型文件',
     sifiganUrlNotConfiguredTooltip: '下载链接待配置。SiFiGAN 模型尚未上传至 ModelScope，请等待作者上传，或从官方仓库下载后手动放置到 onnx_models/ 目录。',
     sifiganUnloadConfirmMessage: '确定要卸载 SiFiGAN 模型吗？将删除模型文件并将 Vocoder 类型重置为默认。',
+    sifiganUpdateConfirmMessage: '确定要更新 SiFiGAN 模型吗？将删除当前文件并从 ModelScope 重新下载最新版本。',
+    // Version management
+    currentVersion: '当前版本',
+    latestVersion: '最新版本',
+    legacyVersion: '旧版本',
+    versionDisplay: '当前: {local} | 最新: {latest}',
+    update: '更新',
+    updateAvailableHint: '检测到新版本可用（当前 {local} → 最新 {latest}），建议更新。',
+    legacyUpdateHint: '当前模型为旧版本（无版本信息），建议从 ModelScope 更新到最新版本。',
+    updateConfirmMessage: '确定要更新模型吗？将删除当前精度的模型文件并从 ModelScope 重新下载。',
   },
   menu: {
     aboutSXSEditor: '关于 SXSEditor',

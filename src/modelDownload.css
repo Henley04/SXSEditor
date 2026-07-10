@@ -40,6 +40,73 @@ body {
   flex-shrink: 0;
 }
 
+.version-info-section {
+  margin-bottom: var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  background: var(--bg-panel);
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-default);
+  flex-shrink: 0;
+}
+
+.version-info-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) 0;
+  font-size: var(--font-sm);
+}
+
+.version-label {
+  color: var(--fg-muted);
+}
+
+.version-value {
+  color: var(--fg-secondary);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.version-update-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--bg-elevated, rgba(255, 193, 7, 0.1));
+  border: 1px solid var(--warning, #f0ad4e);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+  color: var(--warning, #f0ad4e);
+}
+
+.version-update-banner .update-icon {
+  font-size: 1.1em;
+  flex-shrink: 0;
+}
+
+.version-update-banner .update-text {
+  flex: 1;
+  line-height: 1.4;
+}
+
+.version-update-banner .btn-update {
+  flex-shrink: 0;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-sm);
+  border: 1px solid var(--warning, #f0ad4e);
+  background: transparent;
+  color: var(--warning, #f0ad4e);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.version-update-banner .btn-update:hover {
+  background: var(--warning, #f0ad4e);
+  color: var(--bg-panel, #fff);
+}
+
 .precision-label {
   display: block;
   font-size: var(--font-md);
@@ -620,6 +687,29 @@ body {
 
 .model-card-status .status-text {
   color: var(--fg-muted);
+}
+
+.model-card-status .status-version {
+  color: var(--fg-muted);
+  font-size: var(--font-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.model-card-status .btn-update-sifigan {
+  margin-left: auto;
+  padding: var(--space-1) var(--space-3);
+  font-size: var(--font-xs);
+  border: 1px solid var(--warning, #f0ad4e);
+  background: transparent;
+  color: var(--warning, #f0ad4e);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.model-card-status .btn-update-sifigan:hover {
+  background: var(--warning, #f0ad4e);
+  color: var(--bg-panel, #fff);
 }
 
 .model-card-tooltip {

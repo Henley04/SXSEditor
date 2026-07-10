@@ -571,6 +571,16 @@ export default {
     sifiganUrlNotConfigured: 'Download URL not configured. Please wait for the author to upload to ModelScope or manually place the model files.',
     sifiganUrlNotConfiguredTooltip: 'Download URL not configured. The SiFiGAN model has not been uploaded to ModelScope yet. Please wait for the author to upload it, or download it from the official repository and place it manually in the onnx_models/ directory.',
     sifiganUnloadConfirmMessage: 'Are you sure you want to unload the SiFiGAN model? This will delete the model files and reset the Vocoder type to default.',
+    sifiganUpdateConfirmMessage: 'Are you sure you want to update the SiFiGAN model? This will delete the current files and re-download the latest version from ModelScope.',
+    // Version management
+    currentVersion: 'Current Version',
+    latestVersion: 'Latest Version',
+    legacyVersion: 'Legacy',
+    versionDisplay: 'Current: {local} | Latest: {latest}',
+    update: 'Update',
+    updateAvailableHint: 'New version available (current {local} → latest {latest}). Update recommended.',
+    legacyUpdateHint: 'This is a legacy model (no version info). Update from ModelScope to the latest version is recommended.',
+    updateConfirmMessage: 'Are you sure you want to update the model? This will delete the current precision model files and re-download from ModelScope.',
   },
   menu: {
     aboutSXSEditor: 'About SXSEditor',

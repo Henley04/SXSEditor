@@ -174,6 +174,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   modelDownloadCheckSifigan: () => ipcRenderer.invoke('model-download:check-sifigan'),
   modelDownloadStartSifigan: () => ipcRenderer.invoke('model-download:start-sifigan'),
   modelDownloadUnloadSifigan: () => ipcRenderer.invoke('model-download:unload-sifigan'),
+  // Model version management
+  modelDownloadCheckVersion: (precision) => ipcRenderer.invoke('model-download:check-version', precision),
+  modelDownloadCheckJpVersion: (precision) => ipcRenderer.invoke('model-download:check-jp-version', precision),
+  modelDownloadCheckSifiganVersion: () => ipcRenderer.invoke('model-download:check-sifigan-version'),
+  modelDownloadCheckAllVersions: (precision) => ipcRenderer.invoke('model-download:check-all-versions', precision),
+  modelDownloadUpdate: (precision) => ipcRenderer.invoke('model-download:update', precision),
+  modelDownloadUpdateJp: (precision) => ipcRenderer.invoke('model-download:update-jp', precision),
+  modelDownloadUpdateSifigan: () => ipcRenderer.invoke('model-download:update-sifigan'),
   // SVS JP model check
   svsCheckJpModels: () => ipcRenderer.invoke('svs:checkJpModels'),
   saveLocale: (locale) => ipcRenderer.invoke('save-locale', locale),

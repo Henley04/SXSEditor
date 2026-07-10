@@ -13,6 +13,7 @@ let lastSpeedTime = 0;
 let isDownloading = false;
 let renderedFileIds = [];
 let currentPrecision = 'fp16';
+let currentVersionInfo = null; // { updateAvailable, localVersion, latestVersion, hasModelFiles }
 
 function createIconSvg(status) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -143,6 +144,88 @@ function updateMissingFiles(newMissingFiles) {
   renderFileList(true);
 }
 
+// ===== Version management =====
+
+/**
+ * Check model version for the current precision and update the UI.
+ * Called on window load, precision switch, and after download completes.
+ */
+async function refreshVersionInfo() {
+  try {
+    const result = await window.electronAPI.modelDownloadCheckVersion(currentPrecision);
+    currentVersionInfo = result;
+    renderVersionInfo(result);
+  } catch (err) {
+    console.error('[Version] Failed to check model version:', err);
+    document.getElementById('versionInfoSection').style.display = 'none';
+  }
+}
+
+function renderVersionInfo(info) {
+  const section = document.getElementById('versionInfoSection');
+  const localEl = document.getElementById('localVersionValue');
+  const latestEl = document.getElementById('latestVersionValue');
+  const banner = document.getElementById('versionUpdateBanner');
+  const updateText = document.getElementById('versionUpdateText');
+  const updateBtn = document.getElementById('updateModelBtn');
+
+  if (!info || !info.hasModelFiles) {
+    // No model files installed — hide version info, no update needed
+    section.style.display = 'none';
+    return;
+  }
+
+  section.style.display = 'block';
+  localEl.textContent = info.localVersion || t('modelDownload.legacyVersion');
+  latestEl.textContent = info.latestVersion || '-';
+
+  if (info.updateAvailable) {
+    banner.style.display = 'flex';
+    if (!info.localVersion) {
+      updateText.textContent = t('modelDownload.legacyUpdateHint');
+    } else {
+      updateText.textContent = t('modelDownload.updateAvailableHint', {
+        local: info.localVersion,
+        latest: info.latestVersion,
+      });
+    }
+    updateBtn.style.display = 'inline-block';
+  } else {
+    banner.style.display = 'none';
+  }
+}
+
+document.getElementById('updateModelBtn').addEventListener('click', async () => {
+  if (isDownloading) return;
+  const confirmed = await showConfirmDialog(t('modelDownload.updateConfirmMessage'));
+  if (!confirmed) return;
+
+  isDownloading = true;
+  document.getElementById('updateModelBtn').style.display = 'none';
+  document.getElementById('startBtn').style.display = 'none';
+  document.getElementById('closeBtn').style.display = 'none';
+  document.getElementById('cancelBtn').style.display = 'inline-block';
+  document.getElementById('changeDirBtn').disabled = true;
+  document.getElementById('precisionSection').style.display = 'none';
+  document.getElementById('versionInfoSection').style.display = 'none';
+  document.getElementById('progressSection').style.display = 'block';
+  downloadStartTime = Date.now();
+  lastSpeedTime = downloadStartTime;
+  lastOverallDownloaded = 0;
+
+  const result = await window.electronAPI.modelDownloadUpdate(currentPrecision);
+  if (result && !result.success && result.error) {
+    document.getElementById('statusText').textContent = t('modelDownload.downloadNotAvailable');
+    document.getElementById('errorMessage').textContent = result.error;
+    document.getElementById('errorMessage').style.display = 'block';
+    document.getElementById('cancelBtn').style.display = 'none';
+    document.getElementById('closeBtn').style.display = 'inline-block';
+    document.getElementById('changeDirBtn').disabled = false;
+    document.getElementById('precisionSection').style.display = 'block';
+    isDownloading = false;
+  }
+});
+
 function formatSpeed(bytesPerSec) {
   if (bytesPerSec <= 0) return '';
   return formatBytes(bytesPerSec) + '/s';
@@ -238,6 +321,8 @@ window.electronAPI.onModelDownloadComplete(() => {
   }
   isDownloading = false;
   renderFileList();
+  // 刷新版本信息（下载完成后版本应已更新）
+  refreshVersionInfo();
 });
 
 window.electronAPI.onModelDownloadError((data) => {
@@ -291,6 +376,8 @@ document.querySelectorAll('input[name="modelPrecision"]').forEach(radio => {
     currentPrecision = newPrecision;
     document.getElementById('statusText').textContent = t('modelDownload.detecting');
     document.getElementById('startBtn').style.display = 'none';
+    // 切换精度时刷新版本信息
+    refreshVersionInfo();
     try {
       await window.electronAPI.modelDownloadRecheck(currentPrecision);
     } catch (err) {
@@ -341,6 +428,7 @@ const sifiganState = {
   status: 'checking', // 'installed' | 'not_downloaded' | 'download_url_not_configured' | 'checking' | 'downloading'
   files: null,
   isDownloading: false,
+  versionInfo: null, // { updateAvailable, localVersion, latestVersion, hasModelFiles }
 };
 
 function setSifiganStatusText(text) {
@@ -375,10 +463,14 @@ function renderSifiganCard() {
   const downloadBtn = document.getElementById('sifiganDownloadBtn');
   const unloadBtn = document.getElementById('sifiganUnloadBtn');
   const progress = document.getElementById('sifiganProgress');
+  const versionText = document.getElementById('sifiganVersionText');
+  const updateBtn = document.getElementById('sifiganUpdateBtn');
   if (!downloadBtn || !unloadBtn) return;
 
   // Reset visibility
   progress.style.display = 'none';
+  if (versionText) versionText.textContent = '';
+  if (updateBtn) updateBtn.style.display = 'none';
 
   switch (sifiganState.status) {
     case 'installed': {
@@ -389,6 +481,15 @@ function renderSifiganCard() {
       setSifiganStatusIndicator('installed');
       setSifiganStatusText(t('modelDownload.sifiganInstalled'));
       showSifiganTooltip('');
+      // 显示版本信息和更新按钮
+      if (sifiganState.versionInfo && versionText) {
+        const v = sifiganState.versionInfo;
+        const localStr = v.localVersion || t('modelDownload.legacyVersion');
+        versionText.textContent = t('modelDownload.versionDisplay', { local: localStr, latest: v.latestVersion || '-' });
+        if (v.updateAvailable && updateBtn) {
+          updateBtn.style.display = 'inline-block';
+        }
+      }
       break;
     }
     case 'not_downloaded': {
@@ -438,11 +539,18 @@ async function refreshSifiganCard() {
     const result = await window.electronAPI.modelDownloadCheckSifigan();
     sifiganState.status = result.status;
     sifiganState.files = result.files;
+    // 检查 SiFiGAN 版本
+    if (result.allExist) {
+      try {
+        sifiganState.versionInfo = await window.electronAPI.modelDownloadCheckSifiganVersion();
+      } catch (_) {
+        sifiganState.versionInfo = null;
+      }
+    } else {
+      sifiganState.versionInfo = null;
+    }
   } catch (err) {
     console.error('[SiFiGAN] status check failed:', err);
-    // On error, fall back to download_url_not_configured so the UI stays
-    // in a safe, non-actionable state instead of offering a download that
-    // would fail.
     sifiganState.status = 'download_url_not_configured';
   }
   renderSifiganCard();
@@ -464,6 +572,10 @@ document.getElementById('sifiganDownloadBtn').addEventListener('click', async ()
     } else if (result.status === 'installed') {
       sifiganState.status = 'installed';
       sifiganState.files = result.files;
+      // 下载完成后刷新版本信息
+      try {
+        sifiganState.versionInfo = await window.electronAPI.modelDownloadCheckSifiganVersion();
+      } catch (_) { sifiganState.versionInfo = null; }
     } else {
       sifiganState.status = 'not_downloaded';
       sifiganState.files = result.files;
@@ -488,9 +600,42 @@ document.getElementById('sifiganUnloadBtn').addEventListener('click', async () =
     const result = await window.electronAPI.modelDownloadUnloadSifigan();
     sifiganState.status = result.status || 'download_url_not_configured';
     sifiganState.files = result.files;
+    sifiganState.versionInfo = null;
   } catch (err) {
     console.error('[SiFiGAN] unload failed:', err);
     // Re-check on failure to get the actual state
+  } finally {
+    sifiganState.isDownloading = false;
+    renderSifiganCard();
+  }
+});
+
+// SiFiGAN 更新按钮：删除旧文件后重新下载
+document.getElementById('sifiganUpdateBtn').addEventListener('click', async () => {
+  if (sifiganState.isDownloading) return;
+  const confirmed = await showConfirmDialog(t('modelDownload.sifiganUpdateConfirmMessage'));
+  if (!confirmed) return;
+
+  sifiganState.isDownloading = true;
+  sifiganState.status = 'downloading';
+  renderSifiganCard();
+  try {
+    // 先删除旧文件（含版本文件），再触发下载
+    await window.electronAPI.modelDownloadUpdateSifigan();
+    const result = await window.electronAPI.modelDownloadStartSifigan();
+    if (result.status === 'installed') {
+      sifiganState.status = 'installed';
+      sifiganState.files = result.files;
+      try {
+        sifiganState.versionInfo = await window.electronAPI.modelDownloadCheckSifiganVersion();
+      } catch (_) { sifiganState.versionInfo = null; }
+    } else {
+      sifiganState.status = 'not_downloaded';
+      sifiganState.files = result.files;
+    }
+  } catch (err) {
+    console.error('[SiFiGAN] update failed:', err);
+    sifiganState.status = 'download_url_not_configured';
   } finally {
     sifiganState.isDownloading = false;
     renderSifiganCard();
@@ -502,6 +647,8 @@ initI18n().then(() => {
   document.documentElement.lang = getLocale();
   // Refresh SiFiGAN card once i18n is ready so status text is translated
   refreshSifiganCard();
+  // 检查主模型版本信息
+  refreshVersionInfo();
 });
 
 // Apply saved theme
