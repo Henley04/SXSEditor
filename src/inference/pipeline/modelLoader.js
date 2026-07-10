@@ -1,36 +1,30 @@
+// Detect test/CI environment to skip verbose ORT debug logging that would
+// pollute test output and keep the event loop alive. Mocha sets neither
+// NODE_ENV nor a dedicated flag, so check argv for the mocha binary.
+const _IS_TEST_ENV = process.env.CI === 'true' ||
+    process.argv.some(a => /\b_?mocha\b/.test(a));
+
 // Set log level BEFORE requiring onnxruntime-node!
 // (ORT initializes once when module is loaded, must set logLevel first)
-process.env.ORT_DML_DEBUG = '1';
-process.env.ORT_LOGGING_LEVEL = '0'; // 0=VERBOSE, 1=INFO, 2=WARNING, 3=ERROR, 4=FATAL
+if (!_IS_TEST_ENV) {
+    process.env.ORT_DML_DEBUG = '1';
+    process.env.ORT_LOGGING_LEVEL = '0'; // 0=VERBOSE, 1=INFO, 2=WARNING, 3=ERROR, 4=FATAL
+}
 
 const path = require('node:path');
 const fs = require('node:fs');
 const ort = require('onnxruntime-node');
 // Set logLevel on the real module (ort.env is from the external onnxruntime-node's onnxruntime-common)
-ort.env.logLevel = 'verbose';
-ort.env.debug = true;
+if (!_IS_TEST_ENV) {
+    ort.env.logLevel = 'verbose';
+    ort.env.debug = true;
+}
 const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { classifyDevice } = require('../../utils/deviceClassifier');
 const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
-
-console.log('[OnnxSVSPipeline] ONNX Runtime debug logging enabled (verbose, ORT_LOGGING_LEVEL=0, ORT_DML_DEBUG=1)');
-
-// Intercept C++ stderr from onnxruntime to capture verbose debug logs
-// (ORT logs go to native stderr, not to Node.js console.log)
-const iconv = require('iconv-lite');
-const origStderrWrite = process.stderr.write.bind(process.stderr);
-let ortDebugBuffer = '';
-process.stderr.write = function(chunk, encoding, callback) {
-    if (typeof chunk === 'string') {
-        ortDebugBuffer += chunk;
-    } else if (Buffer.isBuffer(chunk)) {
-        ortDebugBuffer += iconv.decode(chunk, process.platform === 'win32' ? 'gbk' : 'utf-8');
-    }
-    return origStderrWrite(chunk, encoding, callback);
-};
 
 // Flush ORT debug buffer to console after model loading
 function flushOrtDebugLogs() {
@@ -49,12 +43,36 @@ function flushOrtDebugLogs() {
 }
 globalThis._flushOrtDebugLogs = flushOrtDebugLogs;
 
-// Also dump ORT debug logs every 30 seconds to avoid missing important logs
-setInterval(() => {
-    if (ortDebugBuffer.length > 0) {
-        flushOrtDebugLogs();
-    }
-}, 30000);
+// Intercept C++ stderr from onnxruntime to capture verbose debug logs.
+// Skipped in test/CI to avoid capturing test console.error/warn output and
+// to prevent the periodic flush timer from polluting test output.
+let ortDebugBuffer = '';
+if (!_IS_TEST_ENV) {
+    console.log('[OnnxSVSPipeline] ONNX Runtime debug logging enabled (verbose, ORT_LOGGING_LEVEL=0, ORT_DML_DEBUG=1)');
+
+    // (ORT logs go to native stderr, not to Node.js console.log)
+    const iconv = require('iconv-lite');
+    const origStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = function(chunk, encoding, callback) {
+        if (typeof chunk === 'string') {
+            ortDebugBuffer += chunk;
+        } else if (Buffer.isBuffer(chunk)) {
+            ortDebugBuffer += iconv.decode(chunk, process.platform === 'win32' ? 'gbk' : 'utf-8');
+        }
+        return origStderrWrite(chunk, encoding, callback);
+    };
+
+    // Also dump ORT debug logs every 30 seconds to avoid missing important logs.
+    // .unref() ensures the timer does not keep the Node.js event loop alive,
+    // which would otherwise prevent mocha (and other short-lived processes) from
+    // exiting after all work is done.
+    const _ortDebugFlushTimer = setInterval(() => {
+        if (ortDebugBuffer.length > 0) {
+            flushOrtDebugLogs();
+        }
+    }, 30000);
+    _ortDebugFlushTimer.unref();
+}
 
 /**
  * 获取主窗口的 webContents（WebNN IPC 必须发送到主窗口，因为只有主窗口注册了 WebNN 处理器）
