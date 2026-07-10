@@ -31,6 +31,7 @@ export function createDialog(options) {
     align-items: center;
     justify-content: center;
     z-index: 10000;
+    animation: overlay-fade-in 0.2s ease;
   `;
 
   // Create dialog container
@@ -46,6 +47,7 @@ export function createDialog(options) {
     overflow-y: ${styles.overflowY || 'auto'};
     color: var(--fg-primary);
     box-shadow: 0 12px 40px var(--shadow-color-strong);
+    animation: dialog-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
   `;
 
   // Create title

@@ -283,9 +283,9 @@ dom.fragmentContainer.addEventListener('wheel', (e) => {
     state.fragmentScrollX = mouseBeats * newBeatWidth - mouseXInContainer;
     renderFragmentTimeline();
   } else if (e.shiftKey) {
-    state.fragmentScrollY += e.deltaY;
-  } else {
     state.fragmentScrollX += e.deltaY;
+  } else {
+    state.fragmentScrollY += e.deltaY;
   }
   syncFragmentScroll();
 }, { passive: false });

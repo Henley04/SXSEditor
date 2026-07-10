@@ -17,6 +17,8 @@ html, body {
   color: var(--fg-secondary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
+  animation: window-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  transform-origin: center center;
 }
 
 /* ==================== 滚动条样式 ==================== */

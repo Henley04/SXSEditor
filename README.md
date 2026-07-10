@@ -80,6 +80,8 @@ See the [Wiki](docs/wiki/Home.md) for full documentation.
 | SVG Icons | Flat, theme-aware inline SVG icon system (currentColor) |
 | Undo/Redo | 200-step edit history |
 | WAV Export | 24kHz output with export dialog (precision, inference params, advanced options, auto-open folder) |
+| Window Animations | Fade-in + scale entrance animation for all popup windows and dialogs; ready-to-show prevents white flash |
+| Timeline Scroll | Mouse wheel scrolls vertically (singer list + fragment timeline synced); Shift+wheel scrolls horizontally; Ctrl/Cmd+wheel zooms |
 
 ### Build from Source
 
@@ -189,6 +191,8 @@ macOS / Linux 用户请从源码构建。
 | SVG 图标 | 扁平化、主题感知的内联 SVG 图标系统 (currentColor) |
 | 撤销/重做 | 200 步编辑历史 |
 | WAV 导出 | 24kHz 输出，配备导出对话框（精度选择、推理参数、高级选项、完成后自动打开所在文件夹） |
+| 窗口动画 | 所有弹出窗口和对话框均有淡入+缩放进场动画；ready-to-show 防止白屏闪烁 |
+| 时间线滚动 | 鼠标滚轮上下滑动（歌手列表与分片时间线联动）；Shift+滚轮横向滚动；Ctrl/Cmd+滚轮缩放 |
 
 ### 从源码构建
 
@@ -294,6 +298,8 @@ macOS / Linux：ソースからビルドしてください。
 | SVG アイコン | フラット設計、テーマ連動インライン SVG アイコンシステム (currentColor) |
 | アンドゥ/リドゥ | 200 ステップの編集履歴 |
 | WAV エクスポート | 24kHz 出力、エクスポートダイアログ付き（精度選択、推論パラメータ、詳細オプション、完了後にフォルダを自動で開く） |
+| ウィンドウアニメーション | 全ポップアップウィンドウ・ダイアログにフェードイン＋スケール登場アニメーション；ready-to-show で白フラッシュを防止 |
+| タイムラインスクロール | マウスホイールで縦スクロール（歌手リスト＋フラグメントタイムライン連動）；Shift+ホイールで横スクロール；Ctrl/Cmd+ホイールでズーム |
 
 ### ソースからビルド
 
