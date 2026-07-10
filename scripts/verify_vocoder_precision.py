@@ -146,13 +146,9 @@ def main():
     torch.manual_seed(42)
     np.random.seed(42)
 
-    # Vocos 期望反标准化 mel（原始 log-mel 分布：mean≈-4.92, std≈2.85）。
-    # 扩散模型输出标准化 mel (mean=0, std=1)，vocoder 推理前必须反标准化：
-    #   mel = mel * sqrt(MEL_VAR) + MEL_MEAN
-    # 缺失此步骤会导致 vocoder 内部 mag=exp(mag) 指数放大，输出爆炸。
+    # Vocos vocoder 期望标准化 mel (mean=0, std=1)，与官方 PyTorch Vocoder.forward 一致。
+    # 此处生成标准化 mel 用于精度对比测试。
     mel_pt = torch.randn(B, seq_len, 128)
-    # 反标准化到真实 mel 范围
-    mel_pt = mel_pt * (8.14 ** 0.5) + (-4.92)
     print(f"    mel_pt: {tuple(mel_pt.shape)}, mean={mel_pt.mean():.4f}, std={mel_pt.std():.4f}")
     print(f"    min={mel_pt.min():.4f}, max={mel_pt.max():.4f}")
 
