@@ -38,6 +38,10 @@ html, body {
   flex-shrink: 0;
 }
 
+.toolbar-spacer {
+  flex: 1;
+}
+
 #toolbar button {
   background: var(--bg-button);
   color: var(--fg-muted);
