@@ -127,6 +127,7 @@ export function startInlineEdit(roll, note, hit) {
     if (input.parentElement) input.remove();
     state.activeInlineInput = null;
     state.activeInlineEditNote = null;
+    roll._staticCacheDirty = true;
     roll.render();
   };
 
