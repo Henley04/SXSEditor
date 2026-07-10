@@ -250,9 +250,11 @@ class VocosFullWrapper(nn.Module):
         hop = self.hop_length
         num_ov = self.num_overlap
 
-        # Reshape [B, win, T] → [B, hop, num_overlap, T]
-        # frames[b, j*hop+h, t] → reshaped[b, h, j, t]
-        reshaped = frames.reshape(B, hop, num_ov, T)
+        # Reshape [B, win, T] → [B, num_ov, hop, T] → transpose → [B, hop, num_ov, T]
+        # frames[b, n, t] where n = j*hop + h → reshaped[b, h, j, t]
+        # MUST use reshape(B, num_ov, hop, T).transpose(1, 2), NOT reshape(B, hop, num_ov, T).
+        # The latter maps n = h*num_ov + j (wrong), the former maps n = j*hop + h (correct).
+        reshaped = frames.reshape(B, num_ov, hop, T).transpose(1, 2)
 
         # Shift each overlap level j by j frames along T, then sum.
         # Level j: pad T with (j, num_ov-1-j) → [B, hop, T+num_ov-1]

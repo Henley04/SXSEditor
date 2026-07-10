@@ -821,19 +821,9 @@ class Postprocessing {
             }
         }
 
-        // 反标准化 mel：扩散模型输出标准化 mel (mean≈0, std≈1)，但 Vocos vocoder 在原始 log-mel 上训练。
-        // 测试证据：标准化 mel → vocoder 输出 std=61（爆炸），反标准化 mel → std=0.30（合理）。
-        // 官方 PyTorch soulxsinger.py 直接喂标准化 mel 可能是潜在 bug，或 vocoder checkpoint 训练数据分布不同。
-        // 必须在 SiFiGAN 上采样之后执行，保证所有帧都被反标准化。
-        // 仅对 default (Vocos) vocoder 应用反标准化；SiFiGAN 有独立的 mel_proj 处理。
-        if (vocoderType === 'default') {
-            const melStd = Math.sqrt(MEL_VAR);
-            const denormMelData = new Float32Array(effectiveMelData.length);
-            for (let i = 0; i < effectiveMelData.length; i++) {
-                denormMelData[i] = effectiveMelData[i] * melStd + MEL_MEAN;
-            }
-            effectiveMelData = denormMelData;
-        }
+        // vocoder 期望标准化 mel (mean=0, std=1)，与官方 PyTorch soulxsinger.py 一致。
+        // 之前的爆炸是 VocosFullWrapper._overlap_add 的 reshape 维度顺序 bug 导致的（已修复）。
+        // effectiveMelData 保持扩散模型输出（标准化 mel），不做反标准化。
         const chunkSize = ((chunkFrames && chunkFrames > 0) ? chunkFrames : VOCODER_CHUNK_FRAMES) * SIFIGAN_UPSAMPLE_RATIO;
         const overlapFrames = VOCODER_OVERLAP_FRAMES * SIFIGAN_UPSAMPLE_RATIO;
         const vocoderHopSize = vocoderType === 'sifigan' ? SIFIGAN_HOP_SIZE : HOP_SIZE;
@@ -907,7 +897,7 @@ class Postprocessing {
             const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, effectiveTotalFrames);
 
-            // 诊断：检查 mel 输入是否包含 NaN（在 vocoder run 之前）+ mel 统计（反标准化后，期望 mean≈-4.92 std≈2.85）
+            // 诊断：检查 mel 输入是否包含 NaN（在 vocoder run 之前）+ mel 统计（标准化 mel，期望 mean≈0 std≈1）
             {
                 let melNaN = 0, melInf = 0;
                 let melMin = Infinity, melMax = -Infinity, melSum = 0, melSumSq = 0;
