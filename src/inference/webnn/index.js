@@ -46,6 +46,7 @@ async function _runSynthesisUnlocked(params) {
         ptMelData, ptFrameCount,
         totalSteps, cfgStrength, cfgRescale,
         isFP16,
+        diffStepIsFP16,
         vocoderIsFP16,
         npuDiffBatchSize = 4,
         npuVocoderBatchSize = 2,
@@ -58,6 +59,8 @@ async function _runSynthesisUnlocked(params) {
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
+    // diff_step 可能有独立精度（W16A32 回退到 FP32 时 diffStepIsFP16=false 但 isFP16=true）
+    const diffFloatType = (diffStepIsFP16 ?? isFP16) ? 'float16' : 'float32';
     const vocoderFloatType = (vocoderIsFP16 ?? isFP16) ? 'float16' : 'float32';
     const warnings = [];
 
@@ -94,7 +97,7 @@ async function _runSynthesisUnlocked(params) {
         totalSteps,
         cfgStrength,
         cfgRescale,
-        floatType,
+        floatType: diffFloatType,
         npuDiffBatchSize,
         useStaticShapes,
     });
@@ -156,8 +159,10 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
 
     const ort = getOrt();
     const isFP16 = paramsArray[0].isFP16;
+    const diffStepIsFP16 = paramsArray[0].diffStepIsFP16;
     const vocoderIsFP16 = paramsArray[0].vocoderIsFP16 ?? isFP16;
     const floatType = isFP16 ? 'float16' : 'float32';
+    const diffFloatType = (diffStepIsFP16 ?? isFP16) ? 'float16' : 'float32';
     const vocoderFloatType = vocoderIsFP16 ? 'float16' : 'float32';
     const useStaticShapes = paramsArray[0].useStaticShapes || false;
     const vocoderChunkFrames = paramsArray[0].vocoderChunkFrames || 0;
@@ -292,7 +297,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
     // ===== Stage 2: Batched Diffusion Loop (batch=4) =====
     if (onProgress) onProgress(30);
     const totalSteps = segData[0].totalSteps;
-    const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType, useStaticShapes });
+    const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType: diffFloatType, useStaticShapes });
 
     // ===== Stage 3: Vocoder per segment =====
     // skipVocoder 模式：返回 mel 给主进程，vocoder 由主进程 DML 执行（支持 SiFiGAN 双输入）
