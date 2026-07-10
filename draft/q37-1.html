@@ -1,0 +1,1165 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Nexus Docs — Developer Documentation</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/inter@5.0.8/index.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.8/index.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/themes/prism-tomorrow.min.css" />
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/prism.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-javascript.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-python.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/prismjs@1.29.0/components/prism-bash.min.js"></script>
+<style>
+  :root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8fafc;
+    --bg-tertiary: #f1f5f9;
+    --bg-code: #1e293b;
+    --border: #e2e8f0;
+    --border-hover: #cbd5e1;
+    --text-primary: #0f172a;
+    --text-secondary: #475569;
+    --text-tertiary: #94a3b8;
+    --accent: #6366f1;
+    --accent-hover: #4f46e5;
+    --accent-soft: rgba(99, 102, 241, 0.1);
+    --success: #10b981;
+    --warning: #f59e0b;
+    --card-shadow: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.06);
+    --card-shadow-hover: 0 10px 25px rgba(0,0,0,0.08);
+  }
+
+  [data-theme="dark"] {
+    --bg-primary: #0b1020;
+    --bg-secondary: #0f1629;
+    --bg-tertiary: #1a2340;
+    --bg-code: #0f1629;
+    --border: #1e2a4a;
+    --border-hover: #2d3d66;
+    --text-primary: #f1f5f9;
+    --text-secondary: #94a3b8;
+    --text-tertiary: #64748b;
+    --accent: #818cf8;
+    --accent-hover: #a5b4fc;
+    --accent-soft: rgba(129, 140, 248, 0.12);
+    --success: #34d399;
+    --warning: #fbbf24;
+    --card-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    --card-shadow-hover: 0 10px 30px rgba(99, 102, 241, 0.2);
+  }
+
+  * { transition: background-color 0.25s ease, border-color 0.25s ease, color 0.2s ease; }
+
+  html, body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    scroll-behavior: smooth;
+  }
+
+  code, pre { font-family: 'JetBrains Mono', monospace; }
+
+  .scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+  .scrollbar-thin::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover { background: var(--border-hover); }
+
+  .nav-link {
+    display: flex;
+    align-items: center;
+    gap: 0.625rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.5rem;
+    color: var(--text-secondary);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: 1px solid transparent;
+  }
+  .nav-link:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+  }
+  .nav-link.active {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: transparent;
+  }
+
+  .section-group { margin-bottom: 1.5rem; }
+  .section-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-tertiary);
+    padding: 0 0.75rem;
+    margin-bottom: 0.5rem;
+  }
+
+  .btn-primary {
+    background: var(--accent);
+    color: white;
+    padding: 0.625rem 1.25rem;
+    border-radius: 0.625rem;
+    font-weight: 600;
+    font-size: 0.875rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    transition: all 0.2s;
+    box-shadow: 0 4px 14px rgba(99, 102, 241, 0.3);
+  }
+  .btn-primary:hover { background: var(--accent-hover); transform: translateY(-1px); }
+
+  .btn-ghost {
+    background: transparent;
+    color: var(--text-primary);
+    padding: 0.625rem 1.25rem;
+    border-radius: 0.625rem;
+    font-weight: 600;
+    font-size: 0.875rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    border: 1px solid var(--border);
+    transition: all 0.2s;
+  }
+  .btn-ghost:hover { background: var(--bg-tertiary); border-color: var(--border-hover); }
+
+  .card {
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 0.875rem;
+    padding: 1.5rem;
+    box-shadow: var(--card-shadow);
+    transition: all 0.3s;
+  }
+  .card:hover {
+    box-shadow: var(--card-shadow-hover);
+    border-color: var(--border-hover);
+    transform: translateY(-2px);
+  }
+
+  .icon-circle {
+    width: 2.75rem;
+    height: 2.75rem;
+    border-radius: 0.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--accent-soft);
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .code-block {
+    background: #0f172a;
+    border-radius: 0.75rem;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  [data-theme="dark"] .code-block { background: #050814; border-color: var(--border); }
+  .code-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.625rem 1rem;
+    background: rgba(0,0,0,0.3);
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-size: 0.75rem;
+    color: #94a3b8;
+  }
+  .code-block pre { margin: 0; padding: 1.25rem; background: transparent !important; overflow-x: auto; }
+  .code-block code { font-size: 0.8125rem; line-height: 1.7; }
+
+  .copy-btn {
+    padding: 0.25rem 0.625rem;
+    border-radius: 0.375rem;
+    background: rgba(255,255,255,0.08);
+    color: #cbd5e1;
+    font-size: 0.7rem;
+    cursor: pointer;
+    border: none;
+    transition: all 0.2s;
+  }
+  .copy-btn:hover { background: rgba(255,255,255,0.15); }
+  .copy-btn.copied { color: var(--success); }
+
+  .lang-btn {
+    padding: 0.375rem 0.75rem;
+    border-radius: 0.5rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    cursor: pointer;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    transition: all 0.2s;
+  }
+  .lang-btn:hover { color: var(--text-primary); }
+  .lang-btn.active {
+    background: var(--bg-tertiary);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .theme-toggle {
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.625rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    color: var(--text-primary);
+    transition: all 0.25s;
+  }
+  .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
+
+  .api-table { width: 100%; border-collapse: collapse; }
+  .api-table th, .api-table td {
+    padding: 0.875rem 1rem;
+    text-align: left;
+    font-size: 0.875rem;
+    border-bottom: 1px solid var(--border);
+  }
+  .api-table th {
+    background: var(--bg-tertiary);
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.08em;
+  }
+  .api-table tr:hover td { background: var(--bg-tertiary); }
+  .api-table code {
+    background: var(--bg-tertiary);
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.3rem;
+    font-size: 0.75rem;
+    color: var(--accent);
+  }
+
+  .badge {
+    display: inline-block;
+    padding: 0.15rem 0.5rem;
+    border-radius: 0.375rem;
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+  }
+  .badge-get { background: rgba(16, 185, 129, 0.15); color: var(--success); }
+  .badge-post { background: rgba(99, 102, 241, 0.15); color: var(--accent); }
+  .badge-put { background: rgba(245, 158, 11, 0.15); color: var(--warning); }
+  .badge-delete { background: rgba(239, 68, 68, 0.15); color: #ef4444; }
+
+  .toc-link {
+    display: block;
+    padding: 0.375rem 0;
+    font-size: 0.8125rem;
+    color: var(--text-tertiary);
+    text-decoration: none;
+    border-left: 2px solid transparent;
+    padding-left: 0.875rem;
+    margin-left: -2px;
+    transition: all 0.2s;
+  }
+  .toc-link:hover { color: var(--text-primary); }
+  .toc-link.active {
+    color: var(--accent);
+    border-left-color: var(--accent);
+    font-weight: 500;
+  }
+
+  .search-input {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 0.625rem;
+    padding: 0.5rem 0.875rem 0.5rem 2.25rem;
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    outline: none;
+    width: 280px;
+    transition: all 0.2s;
+  }
+  .search-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+  .search-input::placeholder { color: var(--text-tertiary); }
+
+  .kbd {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-bottom-width: 2px;
+    border-radius: 0.3rem;
+    padding: 0.1rem 0.4rem;
+    font-family: inherit;
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    margin-left: 0.5rem;
+  }
+
+  h1, h2, h3, h4 { letter-spacing: -0.02em; }
+
+  .gradient-text {
+    background: linear-gradient(135deg, var(--accent) 0%, #ec4899 50%, #f59e0b 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+  }
+
+  .hero-glow {
+    position: absolute;
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
+    border-radius: 50%;
+    filter: blur(60px);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .mobile-menu {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: var(--bg-primary);
+    z-index: 100;
+    padding: 1.5rem;
+    overflow-y: auto;
+  }
+  .mobile-menu.open { display: block; }
+
+  @media (max-width: 1024px) {
+    .desktop-sidebar { display: none; }
+    .desktop-toc { display: none; }
+  }
+
+  .hero-img {
+    max-width: 380px;
+    width: 100%;
+    filter: drop-shadow(0 20px 40px rgba(99, 102, 241, 0.25));
+    animation: float 6s ease-in-out infinite;
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-15px); }
+  }
+
+  [data-lang]:not(.show) { display: none; }
+  .show { display: initial; }
+  .show-block { display: block; }
+  .show-flex { display: flex; }
+  .show-grid { display: grid; }
+</style>
+</head>
+<body class="scrollbar-thin">
+
+<!-- Top Navigation -->
+<header class="sticky top-0 z-40 backdrop-blur-xl border-b" style="background: color-mix(in srgb, var(--bg-primary) 80%, transparent); border-color: var(--border);">
+  <div class="max-w-[1400px] mx-auto px-6 h-16 flex items-center justify-between gap-4">
+    <div class="flex items-center gap-8">
+      <div class="flex items-center gap-2.5 cursor-pointer">
+        <div class="w-8 h-8 rounded-lg flex items-center justify-center" style="background: linear-gradient(135deg, #6366f1, #ec4899);">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+        </div>
+        <span class="font-bold text-lg tracking-tight">Nexus<span style="color: var(--accent);">Docs</span></span>
+        <span class="badge ml-1" style="background: var(--accent-soft); color: var(--accent);">v3.2</span>
+      </div>
+      <nav class="hidden lg:flex items-center gap-1 text-sm font-medium">
+        <a href="#quickstart" class="nav-link" data-i18n="nav.docs">Documentation</a>
+        <a href="#api" class="nav-link" data-i18n="nav.api">API Reference</a>
+        <a href="#examples" class="nav-link" data-i18n="nav.examples">Examples</a>
+        <a href="#" class="nav-link" data-i18n="nav.blog">Blog</a>
+        <a href="#" class="nav-link" data-i18n="nav.community">Community</a>
+      </nav>
+    </div>
+
+    <div class="flex items-center gap-3">
+      <div class="relative hidden md:block">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--text-tertiary);"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input type="text" class="search-input" data-i18n-ph="nav.search" placeholder="Search docs..." />
+        <span class="kbd">⌘K</span>
+      </div>
+
+      <div class="flex items-center gap-1 p-1 rounded-lg" style="background: var(--bg-tertiary);">
+        <button class="lang-btn active" data-lang-btn="en">EN</button>
+        <button class="lang-btn" data-lang-btn="zh">中文</button>
+        <button class="lang-btn" data-lang-btn="ja">日本</button>
+      </div>
+
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle theme">
+        <svg id="sunIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+        <svg id="moonIcon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+      </button>
+
+      <button class="lg:hidden theme-toggle" id="mobileMenuBtn">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
+
+<!-- Main Layout -->
+<div class="max-w-[1400px] mx-auto px-6 py-8 grid grid-cols-12 gap-8">
+
+  <!-- Left Sidebar -->
+  <aside class="desktop-sidebar col-span-12 lg:col-span-3">
+    <div class="sticky top-24 space-y-2 max-h-[calc(100vh-120px)] overflow-y-auto scrollbar-thin pr-2">
+
+      <div class="section-group">
+        <div class="section-title" data-i18n="sidebar.gettingStarted">Getting Started</div>
+        <a href="#intro" class="nav-link active">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <span data-i18n="sidebar.intro">Introduction</span>
+        </a>
+        <a href="#quickstart" class="nav-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          <span data-i18n="sidebar.quickstart">Quick Start</span>
+        </a>
+        <a href="#installation" class="nav-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span data-i18n="sidebar.installation">Installation</span>
+        </a>
+      </div>
+
+      <div class="section-group">
+        <div class="section-title" data-i18n="sidebar.coreConcepts">Core Concepts</div>
+        <a href="#architecture" class="nav-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>
+          <span data-i18n="sidebar.architecture">Architecture</span>
+        </a>
+        <a href="#authentication" class="nav-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span data-i18n="sidebar.authentication">Authentication</span>
+        </a>
+        <a href="#configuration" class="nav-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span data-i18n="sidebar.configuration">Configuration</span>
+        </a>
+      </div>
+
+      <div class="section-group">
+        <div class="section-title" data-i18n="sidebar.reference">Reference</div>
+        <a href="#api" class="nav-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          <span data-i18n="sidebar.apiRef">API Reference</span>
+        </a>
+        <a href="#examples" class="nav-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/><path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/></svg>
+          <span data-i18n="sidebar.examples">Examples</span>
+        </a>
+        <a href="#" class="nav-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+          <span data-i18n="sidebar.faq">FAQ</span>
+        </a>
+        <a href="#" class="nav-link">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <span data-i18n="sidebar.changelog">Changelog</span>
+        </a>
+      </div>
+
+      <div class="card mt-6" style="background: linear-gradient(135deg, var(--accent-soft), transparent); border-color: var(--accent);">
+        <div class="flex items-center gap-2 mb-2">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="color: var(--accent);"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>
+          <span class="font-semibold text-sm" data-i18n="sidebar.pro">Nexus Pro</span>
+        </div>
+        <p class="text-xs mb-3" style="color: var(--text-secondary);" data-i18n="sidebar.proDesc">Unlock advanced features and priority support.</p>
+        <button class="btn-primary w-full justify-center" style="padding: 0.5rem 1rem; font-size: 0.75rem;" data-i18n="sidebar.upgrade">Upgrade Now</button>
+      </div>
+
+    </div>
+  </aside>
+
+  <!-- Main Content -->
+  <main class="col-span-12 lg:col-span-7 min-w-0">
+
+    <!-- Hero -->
+    <section id="intro" class="relative mb-12 overflow-hidden">
+      <div class="hero-glow" style="top: -100px; right: -100px;"></div>
+      <div class="relative z-10 grid md:grid-cols-2 gap-8 items-center">
+        <div>
+          <div class="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium mb-5" style="background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent);">
+            <span class="w-2 h-2 rounded-full animate-pulse" style="background: var(--accent);"></span>
+            <span data-i18n="hero.badge">New in v3.2 · Edge Functions</span>
+          </div>
+          <h1 class="text-4xl md:text-5xl font-bold mb-5 leading-tight">
+            <span data-i18n="hero.title">Build faster with</span><br>
+            <span class="gradient-text" data-i18n="hero.titleHighlight">Nexus SDK</span>
+          </h1>
+          <p class="text-base mb-8 leading-relaxed" style="color: var(--text-secondary);" data-i18n="hero.desc">
+            A powerful, type-safe SDK for building modern applications. Ship production-ready features in minutes with comprehensive APIs and intuitive documentation.
+          </p>
+          <div class="flex flex-wrap gap-3">
+            <button class="btn-primary">
+              <span data-i18n="hero.cta1">Get Started</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>
+            </button>
+            <button class="btn-ghost">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+              <span data-i18n="hero.cta2">GitHub</span>
+            </button>
+          </div>
+
+          <div class="flex items-center gap-6 mt-10 text-sm" style="color: var(--text-secondary);">
+            <div class="flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--success);"><polyline points="20 6 9 17 4 12"/></svg>
+              <span data-i18n="hero.stat1">TypeScript Ready</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="color: var(--success);"><polyline points="20 6 9 17 4 12"/></svg>
+              <span data-i18n="hero.stat2">Tree-shakeable</span>
+            </div>
+          </div>
+        </div>
+        <div class="flex justify-center">
+          <img src="https://image.qwenlm.ai/public_source/4ce8a1d5-caa1-4344-9ecb-9735400a4e5a/18042e0a3-196d-4557-ac01-2d75fa890494.png" alt="Nexus SDK" class="hero-img" />
+        </div>
+      </div>
+    </section>
+
+    <!-- Feature Cards -->
+    <section class="mb-14">
+      <div class="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div class="card">
+          <div class="icon-circle mb-4">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          </div>
+          <h3 class="font-semibold mb-1.5" data-i18n="features.lightning.title">Lightning Fast</h3>
+          <p class="text-sm leading-relaxed" style="color: var(--text-secondary);" data-i18n="features.lightning.desc">Sub-millisecond response times with edge-optimized infrastructure.</p>
+        </div>
+        <div class="card">
+          <div class="icon-circle mb-4">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+          </div>
+          <h3 class="font-semibold mb-1.5" data-i18n="features.secure.title">Secure by Default</h3>
+          <p class="text-sm leading-relaxed" style="color: var(--text-secondary);" data-i18n="features.secure.desc">End-to-end encryption and zero-trust authentication built in.</p>
+        </div>
+        <div class="card">
+          <div class="icon-circle mb-4">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          </div>
+          <h3 class="font-semibold mb-1.5" data-i18n="features.modular.title">Modular Design</h3>
+          <p class="text-sm leading-relaxed" style="color: var(--text-secondary);" data-i18n="features.modular.desc">Import only what you need. Every module works independently.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Quick Start -->
+    <section id="quickstart" class="mb-14">
+      <div class="flex items-baseline gap-3 mb-2">
+        <span class="text-sm font-bold" style="color: var(--accent);">01</span>
+        <h2 class="text-2xl font-bold" data-i18n="quickstart.title">Quick Start</h2>
+      </div>
+      <p class="mb-6" style="color: var(--text-secondary);" data-i18n="quickstart.desc">Get up and running with Nexus SDK in under 5 minutes.</p>
+
+      <div id="installation" class="mb-6">
+        <h3 class="text-lg font-semibold mb-3" data-i18n="quickstart.install">1. Installation</h3>
+        <p class="text-sm mb-4" style="color: var(--text-secondary);" data-i18n="quickstart.installDesc">Install via your preferred package manager:</p>
+
+        <!-- Tab switcher -->
+        <div class="flex gap-1 mb-3 p-1 rounded-lg w-fit" style="background: var(--bg-tertiary);">
+          <button class="lang-btn active" data-code-tab="npm">npm</button>
+          <button class="lang-btn" data-code-tab="yarn">yarn</button>
+          <button class="lang-btn" data-code-tab="pnpm">pnpm</button>
+        </div>
+
+        <div class="code-block">
+          <div class="code-header">
+            <span class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full" style="background:#ef4444;"></span>
+              <span class="w-2.5 h-2.5 rounded-full" style="background:#f59e0b;"></span>
+              <span class="w-2.5 h-2.5 rounded-full" style="background:#10b981;"></span>
+              <span class="ml-2">terminal</span>
+            </span>
+            <button class="copy-btn" data-copy="install">Copy</button>
+          </div>
+          <pre><code class="language-bash" id="install-npm">npm install @nexus/sdk</code><code class="language-bash hidden" id="install-yarn">yarn add @nexus/sdk</code><code class="language-bash hidden" id="install-pnpm">pnpm add @nexus/sdk</code></pre>
+        </div>
+      </div>
+
+      <div class="mb-6">
+        <h3 class="text-lg font-semibold mb-3" data-i18n="quickstart.init">2. Initialize Client</h3>
+        <div class="code-block">
+          <div class="code-header">
+            <span>app.js</span>
+            <button class="copy-btn" data-copy="init">Copy</button>
+          </div>
+          <pre><code class="language-javascript" id="init-code">import { NexusClient } from '@nexus/sdk';
+
+const nexus = new NexusClient({
+  apiKey: process.env.NEXUS_API_KEY,
+  region: 'us-east-1',
+  timeout: 5000,
+});
+
+// Ready to use!
+const user = await nexus.users.get('user_123');
+console.log(user);</code></pre>
+        </div>
+      </div>
+
+      <div>
+        <h3 class="text-lg font-semibold mb-3" data-i18n="quickstart.run">3. Run Your First Query</h3>
+        <div class="code-block">
+          <div class="code-header">
+            <span>query.py</span>
+            <button class="copy-btn" data-copy="query">Copy</button>
+          </div>
+          <pre><code class="language-python" id="query-code">from nexus import NexusClient
+
+client = NexusClient(api_key="your_key")
+
+# Fetch documents with filtering
+results = client.documents.query(
+    collection="articles",
+    filter={"status": "published"},
+    limit=10,
+    sort={"created_at": "desc"}
+)
+
+for doc in results:
+    print(doc.title)</code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- API Reference -->
+    <section id="api" class="mb-14">
+      <div class="flex items-baseline gap-3 mb-2">
+        <span class="text-sm font-bold" style="color: var(--accent);">02</span>
+        <h2 class="text-2xl font-bold" data-i18n="api.title">API Reference</h2>
+      </div>
+      <p class="mb-6" style="color: var(--text-secondary);" data-i18n="api.desc">Complete list of available REST endpoints and their parameters.</p>
+
+      <div class="rounded-xl overflow-hidden border" style="border-color: var(--border);">
+        <table class="api-table">
+          <thead>
+            <tr>
+              <th data-i18n="api.method">Method</th>
+              <th data-i18n="api.endpoint">Endpoint</th>
+              <th data-i18n="api.description">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="badge badge-get">GET</span></td>
+              <td><code>/v1/users/:id</code></td>
+              <td data-i18n="api.getUser">Retrieve a user by ID</td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-post">POST</span></td>
+              <td><code>/v1/users</code></td>
+              <td data-i18n="api.createUser">Create a new user account</td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-put">PUT</span></td>
+              <td><code>/v1/users/:id</code></td>
+              <td data-i18n="api.updateUser">Update user information</td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-delete">DEL</span></td>
+              <td><code>/v1/users/:id</code></td>
+              <td data-i18n="api.deleteUser">Permanently delete a user</td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-get">GET</span></td>
+              <td><code>/v1/documents</code></td>
+              <td data-i18n="api.listDocs">List all documents in a collection</td>
+            </tr>
+            <tr>
+              <td><span class="badge badge-post">POST</span></td>
+              <td><code>/v1/documents/query</code></td>
+              <td data-i18n="api.queryDocs">Execute a complex document query</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Configuration -->
+    <section id="configuration" class="mb-14">
+      <div class="flex items-baseline gap-3 mb-2">
+        <span class="text-sm font-bold" style="color: var(--accent);">03</span>
+        <h2 class="text-2xl font-bold" data-i18n="config.title">Configuration</h2>
+      </div>
+      <p class="mb-6" style="color: var(--text-secondary);" data-i18n="config.desc">Customize Nexus SDK behavior with these configuration options.</p>
+
+      <div class="space-y-3">
+        <div class="card">
+          <div class="flex items-start justify-between gap-4 mb-2">
+            <div>
+              <code class="font-semibold" style="color: var(--accent);">apiKey</code>
+              <span class="badge ml-2" style="background: rgba(239, 68, 68, 0.15); color: #ef4444;">Required</span>
+            </div>
+            <code class="text-xs" style="color: var(--text-tertiary);">string</code>
+          </div>
+          <p class="text-sm" style="color: var(--text-secondary);" data-i18n="config.apiKeyDesc">Your unique API key for authentication. Generate one in the dashboard.</p>
+        </div>
+
+        <div class="card">
+          <div class="flex items-start justify-between gap-4 mb-2">
+            <div>
+              <code class="font-semibold" style="color: var(--accent);">region</code>
+            </div>
+            <code class="text-xs" style="color: var(--text-tertiary);">string</code>
+          </div>
+          <p class="text-sm" style="color: var(--text-secondary);" data-i18n="config.regionDesc">Target deployment region. Defaults to the nearest edge location.</p>
+        </div>
+
+        <div class="card">
+          <div class="flex items-start justify-between gap-4 mb-2">
+            <div>
+              <code class="font-semibold" style="color: var(--accent);">timeout</code>
+            </div>
+            <code class="text-xs" style="color: var(--text-tertiary);">number</code>
+          </div>
+          <p class="text-sm" style="color: var(--text-secondary);" data-i18n="config.timeoutDesc">Request timeout in milliseconds. Default is 30000 (30 seconds).</p>
+        </div>
+
+        <div class="card">
+          <div class="flex items-start justify-between gap-4 mb-2">
+            <div>
+              <code class="font-semibold" style="color: var(--accent);">retryAttempts</code>
+            </div>
+            <code class="text-xs" style="color: var(--text-tertiary);">number</code>
+          </div>
+          <p class="text-sm" style="color: var(--text-secondary);" data-i18n="config.retryDesc">Number of automatic retry attempts on transient failures.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Examples -->
+    <section id="examples" class="mb-14">
+      <div class="flex items-baseline gap-3 mb-2">
+        <span class="text-sm font-bold" style="color: var(--accent);">04</span>
+        <h2 class="text-2xl font-bold" data-i18n="examples.title">Real-world Examples</h2>
+      </div>
+      <p class="mb-6" style="color: var(--text-secondary);" data-i18n="examples.desc">Explore production-ready patterns and common use cases.</p>
+
+      <div class="grid sm:grid-cols-2 gap-4">
+        <div class="card cursor-pointer">
+          <div class="icon-circle mb-4" style="background: rgba(16, 185, 129, 0.12); color: var(--success);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
+          </div>
+          <h3 class="font-semibold mb-1.5" data-i18n="examples.auth.title">User Authentication</h3>
+          <p class="text-sm mb-3" style="color: var(--text-secondary);" data-i18n="examples.auth.desc">Implement JWT-based authentication flows.</p>
+          <span class="text-xs font-medium" style="color: var(--accent);" data-i18n="examples.viewMore">View example →</span>
+        </div>
+
+        <div class="card cursor-pointer">
+          <div class="icon-circle mb-4" style="background: rgba(245, 158, 11, 0.12); color: var(--warning);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+          </div>
+          <h3 class="font-semibold mb-1.5" data-i18n="examples.realtime.title">Real-time Sync</h3>
+          <p class="text-sm mb-3" style="color: var(--text-secondary);" data-i18n="examples.realtime.desc">Build collaborative features with WebSocket events.</p>
+          <span class="text-xs font-medium" style="color: var(--accent);" data-i18n="examples.viewMore">View example →</span>
+        </div>
+
+        <div class="card cursor-pointer">
+          <div class="icon-circle mb-4" style="background: rgba(236, 72, 153, 0.12); color: #ec4899;">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          </div>
+          <h3 class="font-semibold mb-1.5" data-i18n="examples.upload.title">File Uploads</h3>
+          <p class="text-sm mb-3" style="color: var(--text-secondary);" data-i18n="examples.upload.desc">Handle multipart uploads with progress tracking.</p>
+          <span class="text-xs font-medium" style="color: var(--accent);" data-i18n="examples.viewMore">View example →</span>
+        </div>
+
+        <div class="card cursor-pointer">
+          <div class="icon-circle mb-4" style="background: rgba(99, 102, 241, 0.12); color: var(--accent);">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          </div>
+          <h3 class="font-semibold mb-1.5" data-i18n="examples.webhooks.title">Webhook Integration</h3>
+          <p class="text-sm mb-3" style="color: var(--text-secondary);" data-i18n="examples.webhooks.desc">Receive event notifications securely.</p>
+          <span class="text-xs font-medium" style="color: var(--accent);" data-i18n="examples.viewMore">View example →</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- CTA -->
+    <section class="card mb-10 relative overflow-hidden" style="background: linear-gradient(135deg, var(--accent) 0%, #ec4899 100%); border-color: transparent;">
+      <div class="relative z-10 text-center py-6">
+        <h2 class="text-2xl md:text-3xl font-bold text-white mb-3" data-i18n="cta.title">Ready to build something amazing?</h2>
+        <p class="text-white/90 mb-6 max-w-xl mx-auto" data-i18n="cta.desc">Join thousands of developers shipping faster with Nexus SDK.</p>
+        <div class="flex justify-center gap-3 flex-wrap">
+          <button class="bg-white text-indigo-600 px-5 py-2.5 rounded-lg font-semibold text-sm hover:bg-white/90 transition" data-i18n="cta.start">Start Building Free</button>
+          <button class="bg-white/10 backdrop-blur text-white border border-white/30 px-5 py-2.5 rounded-lg font-semibold text-sm hover:bg-white/20 transition" data-i18n="cta.contact">Talk to Sales</button>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Right TOC -->
+  <aside class="desktop-toc col-span-12 lg:col-span-2">
+    <div class="sticky top-24">
+      <div class="text-xs font-bold uppercase tracking-wider mb-3" style="color: var(--text-tertiary);" data-i18n="toc.title">On this page</div>
+      <nav class="space-y-1">
+        <a href="#intro" class="toc-link active" data-i18n="toc.intro">Introduction</a>
+        <a href="#quickstart" class="toc-link" data-i18n="toc.quickstart">Quick Start</a>
+        <a href="#api" class="toc-link" data-i18n="toc.api">API Reference</a>
+        <a href="#configuration" class="toc-link" data-i18n="toc.config">Configuration</a>
+        <a href="#examples" class="toc-link" data-i18n="toc.examples">Examples</a>
+      </nav>
+
+      <div class="mt-8 pt-6 border-t" style="border-color: var(--border);">
+        <div class="text-xs font-bold uppercase tracking-wider mb-3" style="color: var(--text-tertiary);" data-i18n="toc.resources">Resources</div>
+        <a href="#" class="toc-link" data-i18n="toc.github">GitHub Repository</a>
+        <a href="#" class="toc-link" data-i18n="toc.discord">Discord Community</a>
+        <a href="#" class="toc-link" data-i18n="toc.status">System Status</a>
+      </div>
+    </div>
+  </aside>
+
+</div>
+
+<!-- Footer -->
+<footer class="border-t mt-8" style="border-color: var(--border); background: var(--bg-secondary);">
+  <div class="max-w-[1400px] mx-auto px-6 py-12">
+    <div class="grid md:grid-cols-5 gap-8 mb-8">
+      <div class="md:col-span-2">
+        <div class="flex items-center gap-2.5 mb-3">
+          <div class="w-8 h-8 rounded-lg flex items-center justify-center" style="background: linear-gradient(135deg, #6366f1, #ec4899);">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>
+          </div>
+          <span class="font-bold text-lg">NexusDocs</span>
+        </div>
+        <p class="text-sm mb-4" style="color: var(--text-secondary);" data-i18n="footer.tagline">Empowering developers to build the next generation of applications.</p>
+        <div class="flex gap-3">
+          <a href="#" class="theme-toggle" style="width: 2rem; height: 2rem;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/></svg>
+          </a>
+          <a href="#" class="theme-toggle" style="width: 2rem; height: 2rem;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M23 3a10.9 10.9 0 0 1-3.14 1.53 4.48 4.48 0 0 0-7.86 3v1A10.66 10.66 0 0 1 3 4s-4 9 5 13a11.64 11.64 0 0 1-7 2c9 5 20 0 20-11.5a4.5 4.5 0 0 0-.08-.83A7.72 7.72 0 0 0 23 3z"/></svg>
+          </a>
+          <a href="#" class="theme-toggle" style="width: 2rem; height: 2rem;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-4 0v7h-4v-7a6 6 0 0 1 6-6z"/><rect x="2" y="9" width="4" height="12"/><circle cx="4" cy="4" r="2"/></svg>
+          </a>
+        </div>
+      </div>
+
+      <div>
+        <h4 class="font-semibold text-sm mb-3" data-i18n="footer.product">Product</h4>
+        <ul class="space-y-2 text-sm" style="color: var(--text-secondary);">
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.features">Features</a></li>
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.pricing">Pricing</a></li>
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.enterprise">Enterprise</a></li>
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.changelog">Changelog</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4 class="font-semibold text-sm mb-3" data-i18n="footer.developers">Developers</h4>
+        <ul class="space-y-2 text-sm" style="color: var(--text-secondary);">
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.docs">Documentation</a></li>
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.apiRef">API Reference</a></li>
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.guides">Guides</a></li>
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.status">Status</a></li>
+        </ul>
+      </div>
+
+      <div>
+        <h4 class="font-semibold text-sm mb-3" data-i18n="footer.company">Company</h4>
+        <ul class="space-y-2 text-sm" style="color: var(--text-secondary);">
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.about">About</a></li>
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.blog">Blog</a></li>
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.careers">Careers</a></li>
+          <li><a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.contact">Contact</a></li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="pt-6 border-t flex flex-col md:flex-row justify-between items-center gap-4 text-xs" style="border-color: var(--border); color: var(--text-tertiary);">
+      <div data-i18n="footer.copyright">© 2026 Nexus Labs, Inc. All rights reserved.</div>
+      <div class="flex gap-6">
+        <a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.privacy">Privacy</a>
+        <a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.terms">Terms</a>
+        <a href="#" class="hover:text-[var(--accent)]" data-i18n="footer.cookies">Cookies</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<!-- Mobile Menu -->
+<div class="mobile-menu" id="mobileMenu">
+  <div class="flex justify-between items-center mb-6">
+    <span class="font-bold text-lg">Menu</span>
+    <button class="theme-toggle" id="mobileMenuClose">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+  </div>
+  <nav class="space-y-1" id="mobileNav"></nav>
+</div>
+
+<script>
+/* ------------------ Translations ------------------ */
+const translations = {
+  en: {
+    "nav.docs": "Documentation", "nav.api": "API Reference", "nav.examples": "Examples", "nav.blog": "Blog", "nav.community": "Community", "nav.search": "Search docs...",
+    "sidebar.gettingStarted": "Getting Started", "sidebar.coreConcepts": "Core Concepts", "sidebar.reference": "Reference",
+    "sidebar.intro": "Introduction", "sidebar.quickstart": "Quick Start", "sidebar.installation": "Installation",
+    "sidebar.architecture": "Architecture", "sidebar.authentication": "Authentication", "sidebar.configuration": "Configuration",
+    "sidebar.apiRef": "API Reference", "sidebar.examples": "Examples", "sidebar.faq": "FAQ", "sidebar.changelog": "Changelog",
+    "sidebar.pro": "Nexus Pro", "sidebar.proDesc": "Unlock advanced features and priority support.", "sidebar.upgrade": "Upgrade Now",
+    "hero.badge": "New in v3.2 · Edge Functions", "hero.title": "Build faster with", "hero.titleHighlight": "Nexus SDK",
+    "hero.desc": "A powerful, type-safe SDK for building modern applications. Ship production-ready features in minutes with comprehensive APIs and intuitive documentation.",
+    "hero.cta1": "Get Started", "hero.cta2": "GitHub", "hero.stat1": "TypeScript Ready", "hero.stat2": "Tree-shakeable",
+    "features.lightning.title": "Lightning Fast", "features.lightning.desc": "Sub-millisecond response times with edge-optimized infrastructure.",
+    "features.secure.title": "Secure by Default", "features.secure.desc": "End-to-end encryption and zero-trust authentication built in.",
+    "features.modular.title": "Modular Design", "features.modular.desc": "Import only what you need. Every module works independently.",
+    "quickstart.title": "Quick Start", "quickstart.desc": "Get up and running with Nexus SDK in under 5 minutes.",
+    "quickstart.install": "1. Installation", "quickstart.installDesc": "Install via your preferred package manager:",
+    "quickstart.init": "2. Initialize Client", "quickstart.run": "3. Run Your First Query",
+    "api.title": "API Reference", "api.desc": "Complete list of available REST endpoints and their parameters.",
+    "api.method": "Method", "api.endpoint": "Endpoint", "api.description": "Description",
+    "api.getUser": "Retrieve a user by ID", "api.createUser": "Create a new user account", "api.updateUser": "Update user information",
+    "api.deleteUser": "Permanently delete a user", "api.listDocs": "List all documents in a collection", "api.queryDocs": "Execute a complex document query",
+    "config.title": "Configuration", "config.desc": "Customize Nexus SDK behavior with these configuration options.",
+    "config.apiKeyDesc": "Your unique API key for authentication. Generate one in the dashboard.",
+    "config.regionDesc": "Target deployment region. Defaults to the nearest edge location.",
+    "config.timeoutDesc": "Request timeout in milliseconds. Default is 30000 (30 seconds).",
+    "config.retryDesc": "Number of automatic retry attempts on transient failures.",
+    "examples.title": "Real-world Examples", "examples.desc": "Explore production-ready patterns and common use cases.",
+    "examples.auth.title": "User Authentication", "examples.auth.desc": "Implement JWT based authentication flows.",
+    "examples.realtime.title": "Real-time Sync", "examples.realtime.desc": "Build collaborative features with WebSocket events.",
+    "examples.upload.title": "File Uploads", "examples.upload.desc": "Handle multipart uploads with progress tracking.",
+    "examples.webhooks.title": "Webhook Integration", "examples.webhooks.desc": "Receive event notifications securely.",
+    "examples.viewMore": "View example →",
+    "cta.title": "Ready to build something amazing?", "cta.desc": "Join thousands of developers shipping faster with Nexus SDK.",
+    "cta.start": "Start Building Free", "cta.contact": "Talk to Sales",
+    "toc.title": "On this page", "toc.intro": "Introduction", "toc.quickstart": "Quick Start", "toc.api": "API Reference", "toc.config": "Configuration", "toc.examples": "Examples",
+    "toc.resources": "Resources", "toc.github": "GitHub Repository", "toc.discord": "Discord Community", "toc.status": "System Status",
+    "footer.tagline": "Empowering developers to build the next generation of applications.",
+    "footer.product": "Product", "footer.features": "Features", "footer.pricing": "Pricing", "footer.enterprise": "Enterprise", "footer.changelog": "Changelog",
+    "footer.developers": "Developers", "footer.docs": "Documentation", "footer.apiRef": "API Reference", "footer.guides": "Guides", "footer.status": "Status",
+    "footer.company": "Company", "footer.about": "About", "footer.blog": "Blog", "footer.careers": "Careers", "footer.contact": "Contact",
+    "footer.copyright": "© 2026 Nexus Labs, Inc. All rights reserved.",
+    "footer.privacy": "Privacy", "footer.terms": "Terms", "footer.cookies": "Cookies"
+  },
+  zh: {
+    "nav.docs": "文档", "nav.api": "API 参考", "nav.examples": "示例", "nav.blog": "博客", "nav.community": "社区", "nav.search": "搜索文档...",
+    "sidebar.gettingStarted": "快速开始", "sidebar.coreConcepts": "核心概念", "sidebar.reference": "参考",
+    "sidebar.intro": "简介", "sidebar.quickstart": "快速入门", "sidebar.installation": "安装",
+    "sidebar.architecture": "架构", "sidebar.authentication": "身份认证", "sidebar.configuration": "配置",
+    "sidebar.apiRef": "API 参考", "sidebar.examples": "示例", "sidebar.faq": "常见问题", "sidebar.changelog": "更新日志",
+    "sidebar.pro": "Nexus 专业版", "sidebar.proDesc": "解锁高级功能与优先支持。", "sidebar.upgrade": "立即升级",
+    "hero.badge": "v3.2 新特性 · 边缘函数", "hero.title": "更快地构建", "hero.titleHighlight": "Nexus SDK",
+    "hero.desc": "一款强大的类型安全 SDK,用于构建现代应用。借助全面的 API 和直观的文档,在几分钟内交付生产就绪的功能。",
+    "hero.cta1": "开始使用", "hero.cta2": "GitHub", "hero.stat1": "支持 TypeScript", "hero.stat2": "Tree-shakeable",
+    "features.lightning.title": "闪电般快速", "features.lightning.desc": "通过边缘优化基础设施实现亚毫秒级响应时间。",
+    "features.secure.title": "默认安全", "features.secure.desc": "内置端到端加密和零信任身份认证。",
+    "features.modular.title": "模块化设计", "features.modular.desc": "只导入需要的模块。每个模块都可独立工作。",
+    "quickstart.title": "快速开始", "quickstart.desc": "5 分钟内即可上手 Nexus SDK。",
+    "quickstart.install": "1. 安装", "quickstart.installDesc": "通过您常用的包管理器安装:",
+    "quickstart.init": "2. 初始化客户端", "quickstart.run": "3. 运行第一个查询",
+    "api.title": "API 参考", "api.desc": "所有可用的 REST 端点及其参数的完整列表。",
+    "api.method": "方法", "api.endpoint": "端点", "api.description": "描述",
+    "api.getUser": "通过 ID 获取用户", "api.createUser": "创建新用户账户", "api.updateUser": "更新用户信息",
+    "api.deleteUser": "永久删除用户", "api.listDocs": "列出集合中的所有文档", "api.queryDocs": "执行复杂的文档查询",
+    "config.title": "配置", "config.desc": "通过这些配置选项自定义 Nexus SDK 的行为。",
+    "config.apiKeyDesc": "用于身份验证的唯一 API 密钥。可在仪表板中生成。",
+    "config.regionDesc": "目标部署区域。默认为最近的边缘位置。",
+    "config.timeoutDesc": "请求超时时间(毫秒)。默认值为 30000(30 秒)。",
+    "config.retryDesc": "瞬时故障时的自动重试次数。",
+    "examples.title": "真实示例", "examples.desc": "探索生产就绪的模式和常见用例。",
+    "examples.auth.title": "用户认证", "examples.auth.desc": "实现基于 JWT 的认证流程。",
+    "examples.realtime.title": "实时同步", "examples.realtime.desc": "使用 WebSocket 事件构建协作功能。",
+    "examples.upload.title": "文件上传", "examples.upload.desc": "处理带进度追踪的多部分上传。",
+    "examples.webhooks.title": "Webhook 集成", "examples.webhooks.desc": "安全地接收事件通知。",
+    "examples.viewMore": "查看示例 →",
+    "cta.title": "准备好构建精彩应用了吗?", "cta.desc": "加入数千名开发者,使用 Nexus SDK 更快地交付。",
+    "cta.start": "免费开始构建", "cta.contact": "联系销售",
+    "toc.title": "本页内容", "toc.intro": "简介", "toc.quickstart": "快速开始", "toc.api": "API 参考", "toc.config": "配置", "toc.examples": "示例",
+    "toc.resources": "资源", "toc.github": "GitHub 仓库", "toc.discord": "Discord 社区", "toc.status": "系统状态",
+    "footer.tagline": "赋能开发者构建下一代应用程序。",
+    "footer.product": "产品", "footer.features": "功能", "footer.pricing": "定价", "footer.enterprise": "企业版", "footer.changelog": "更新日志",
+    "footer.developers": "开发者", "footer.docs": "文档", "footer.apiRef": "API 参考", "footer.guides": "指南", "footer.status": "状态",
+    "footer.company": "公司", "footer.about": "关于", "footer.blog": "博客", "footer.careers": "招聘", "footer.contact": "联系",
+    "footer.copyright": "© 2026 Nexus Labs, Inc. 保留所有权利。",
+    "footer.privacy": "隐私", "footer.terms": "条款", "footer.cookies": "Cookies"
+  },
+  ja: {
+    "nav.docs": "ドキュメント", "nav.api": "API リファレンス", "nav.examples": "サンプル", "nav.blog": "ブログ", "nav.community": "コミュニティ", "nav.search": "ドキュメントを検索...",
+    "sidebar.gettingStarted": "はじめに", "sidebar.coreConcepts": "コアコンセプト", "sidebar.reference": "リファレンス",
+    "sidebar.intro": "概要", "sidebar.quickstart": "クイックスタート", "sidebar.installation": "インストール",
+    "sidebar.architecture": "アーキテクチャ", "sidebar.authentication": "認証", "sidebar.configuration": "設定",
+    "sidebar.apiRef": "API リファレンス", "sidebar.examples": "サンプル", "sidebar.faq": "よくある質問", "sidebar.changelog": "変更履歴",
+    "sidebar.pro": "Nexus Pro", "sidebar.proDesc": "高度な機能と優先サポートをご利用いただけます。", "sidebar.upgrade": "今すぐアップグレード",
+    "hero.badge": "v3.2 の新機能 · エッジ関数", "hero.title": "より速く構築する", "hero.titleHighlight": "Nexus SDK",
+    "hero.desc": "モダンなアプリケーションを構築するための強力な型安全 SDK。包括的な API と直感的なドキュメントで、数分で本番対応の機能を提供します。",
+    "hero.cta1": "はじめる", "hero.cta2": "GitHub", "hero.stat1": "TypeScript 対応", "hero.stat2": "Tree-shakeable",
+    "features.lightning.title": "超高速", "features.lightning.desc": "エッジ最適化されたインフラでサブミリ秒の応答時間を実現。",
+    "features.secure.title": "デフォルトで安全", "features.secure.desc": "エンドツーエンド暗号化とゼロトラスト認証を内蔵。",
+    "features.modular.title": "モジュラー設計", "features.modular.desc": "必要なものだけをインポート。各モジュールは独立して動作します。",
+    "quickstart.title": "クイックスタート", "quickstart.desc": "5 分以内に Nexus SDK を使い始められます。",
+    "quickstart.install": "1. インストール", "quickstart.installDesc": "お好みのパッケージマネージャーでインストール:",
+    "quickstart.init": "2. クライアントの初期化", "quickstart.run": "3. 最初のクエリを実行",
+    "api.title": "API リファレンス", "api.desc": "利用可能なすべての REST エンドポイントとそのパラメータの一覧。",
+    "api.method": "メソッド", "api.endpoint": "エンドポイント", "api.description": "説明",
+    "api.getUser": "ID でユーザーを取得", "api.createUser": "新規ユーザーアカウントを作成", "api.updateUser": "ユーザー情報を更新",
+    "api.deleteUser": "ユーザーを完全に削除", "api.listDocs": "コレクション内の全ドキュメントを一覧表示", "api.queryDocs": "複雑なドキュメントクエリを実行",
+    "config.title": "設定", "config.desc": "これらの設定オプションで Nexus SDK の動作をカスタマイズ。",
+    "config.apiKeyDesc": "認証用の一意の API キー。ダッシュボードで生成できます。",
+    "config.regionDesc": "デプロイ先のリージョン。デフォルトは最寄りのエッジロケーション。",
+    "config.timeoutDesc": "リクエストのタイムアウト(ミリ秒)。デフォルトは 30000(30 秒)。",
+    "config.retryDesc": "一時的な障害時の自動リトライ回数。",
+    "examples.title": "実践的なサンプル", "examples.desc": "本番対応のパターンと一般的なユースケースを探る。",
+    "examples.auth.title": "ユーザー認証", "examples.auth.desc": "JWT ベースの認証フローを実装。",
+    "examples.realtime.title": "リアルタイム同期", "examples.realtime.desc": "WebSocket イベントでコラボレーション機能を構築。",
+    "examples.upload.title": "ファイルアップロード", "examples.upload.desc": "進行状況追跡付きマルチパートアップロードを処理。",
+    "examples.webhooks.title": "Webhook 統合", "examples.webhooks.desc": "イベント通知を安全に受信。",
+    "examples.viewMore": "サンプルを見る →",
+    "cta.title": "素晴らしいものを作る準備はできていますか?", "cta.desc": "Nexus SDK でより速く開発している何千人もの開発者に参加しましょう。",
+    "cta.start": "無料で始める", "cta.contact": "営業に相談",
+    "toc.title": "このページの内容", "toc.intro": "概要", "toc.quickstart": "クイックスタート", "toc.api": "API リファレンス", "toc.config": "設定", "toc.examples": "サンプル",
+    "toc.resources": "リソース", "toc.github": "GitHub リポジトリ", "toc.discord": "Discord コミュニティ", "toc.status": "システム状況",
+    "footer.tagline": "次世代のアプリケーションを構築する開発者を支援。",
+    "footer.product": "製品", "footer.features": "機能", "footer.pricing": "料金", "footer.enterprise": "エンタープライズ", "footer.changelog": "変更履歴",
+    "footer.developers": "開発者", "footer.docs": "ドキュメント", "footer.apiRef": "API リファレンス", "footer.guides": "ガイド", "footer.status": "ステータス",
+    "footer.company": "会社情報", "footer.about": "概要", "footer.blog": "ブログ", "footer.careers": "採用情報", "footer.contact": "お問い合わせ",
+    "footer.copyright": "© 2026 Nexus Labs, Inc. All rights reserved.",
+    "footer.privacy": "プライバシー", "footer.terms": "利用規約", "footer.cookies": "Cookie"
+  }
+};
+
+/* ------------------ Language Switching ------------------ */
+let currentLang = localStorage.getItem('nexus-lang') || 'en';
+
+function applyLanguage(lang) {
+  currentLang = lang;
+  localStorage.setItem('nexus-lang', lang);
+  document.documentElement.lang = lang;
+
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    const key = el.getAttribute('data-i18n');
+    if (translations[lang] && translations[lang][key]) {
+      el.textContent = translations[lang][key];
+    }
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+    const key = el.getAttribute('data-i18n-ph');
+    if (translations[lang] && translations[lang][key]) {
+      el.setAttribute('placeholder', translations[lang][key]);
+    }
+  });
+
+  document.querySelectorAll('[data-lang-btn]').forEach(btn => {
+    btn.classList.toggle('active', btn.getAttribute('data-lang-btn') === lang);
+  });
+}
+
+document.querySelectorAll('[data-lang-btn]').forEach(btn => {
+  btn.addEventListener('click', () => applyLanguage(btn.getAttribute('data-lang-btn')));
+});
+
+/* ------------------ Theme Toggle ------------------ */
+const themeToggle = document.getElementById('themeToggle');
+const sunIcon = document.getElementById('sunIcon');
+const moonIcon = document.getElementById('moonIcon');
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('nexus-theme', theme);
+  if (theme === 'dark') {
+    sunIcon.style.display = 'block';
+    moonIcon.style.display = 'none';
+  } else {
+    sunIcon.style.display = 'none';
+    moonIcon.style.display = 'block';
+  }
+}
+
+themeToggle.addEventListener('click', () => {
+  const current = document.documentElement.getAttribute('data-theme');
+  applyTheme(current === 'dark' ? 'light' : 'dark');
+});
+
+/* ------------------ Code Tab Switching ------------------ */
+document.querySelectorAll('[data-code-tab]').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('[data-code-tab]').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    const lang = tab.getAttribute('data-code-tab');
+    ['install-npm', 'install-yarn', 'install-pnpm'].forEach(id => {
+      document.getElementById(id).classList.add('hidden');
+    });
+    document.getElementById('install-' + lang).classList.remove('hidden');
+  });
+});
+
+/* ------------------ Copy Buttons ------------------ */
+document.querySelectorAll('.copy-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const target = btn.getAttribute('data-copy');
+    let text = '';
+    if (target === 'install') {
+      const active = document.querySelector('[data-code-tab].active').getAttribute('data-code-tab');
+      text = document.getElementById('install-' + active).textContent;
+    } else if (target === 'init') {
+      text = document.getElementById('init-code').textContent;
+    } else if (target === 'query') {
+      text = document.getElementById('query-code').textContent;
+    }
+    navigator.clipboard.writeText(text).then(() => {
+      const original = btn.textContent;
+      btn.textContent = '✓ Copied';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.textContent = original;
+        btn.classList.remove('copied');
+      }, 1500);
+    });
+  });
+});
+
+/* ------------------ Sidebar Active Link Tracking ------------------ */
+const navLinks = document.querySelectorAll('.desktop-sidebar .nav-link[href^="#"]');
+const tocLinks = document.querySelectorAll('.toc-link[href^="#"]');
+
+function updateActiveLink() {
+  let current = '';
+  document.querySelectorAll('section[id], div[id]').forEach(section => {
+    const rect = section.getBoundingClientRect();
+    if (rect.top <= 150) current = section.id;
+  });
+
+  navLinks.forEach(link => {
+    link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+  });
+  tocLinks.forEach(link => {
+    link.classList.toggle('active', link.getAttribute('href') === '#' + current);
+  });
+}
+
+window.addEventListener('scroll', updateActiveLink);
+
+/* ------------------ Mobile Menu ------------------ */
+const mobileMenuBtn = document.getElementById('mobileMenuBtn');
+const mobileMenu = document.getElementById('mobileMenu');
+const mobileMenuClose = document.getElementById('mobileMenuClose');
+const mobileNav = document.getElementById('mobileNav');
+
+// Clone sidebar nav into mobile menu
+document.querySelectorAll('.desktop-sidebar .section-group').forEach(group => {
+  const clone = group.cloneNode(true);
+  mobileNav.appendChild(clone);
+});
+
+mobileMenuBtn.addEventListener('click', () => mobileMenu.classList.add('open'));
+mobileMenuClose.addEventListener('click', () => mobileMenu.classList.remove('open'));
+
+/* ------------------ Initialize ------------------ */
+const savedTheme = localStorage.getItem('nexus-theme') || 'light';
+applyTheme(savedTheme);
+applyLanguage(currentLang);
+
+// Re-highlight code
+if (window.Prism) Prism.highlightAll();
+</script>
+</body>
+</html>
+
