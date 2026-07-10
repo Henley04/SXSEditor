@@ -1,0 +1,328 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Synthesis & Export — SXSEditor Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+        <span class="brand-ver">v1.0</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="../dev/build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="user"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="quick-start.html" data-i18n="sidebar.user">User Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Synthesis &amp; Export</span><span data-lang="zh">合成与导出</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Synthesis &amp; Export</span>
+        <span data-lang="zh">合成与导出</span>
+      </h1>
+
+      <p data-lang="en">SXSEditor synthesizes singing voice using the SoulX-Singer diffusion model on ONNX Runtime. This page covers the synthesis pipeline, playback controls, quality settings, and WAV export.</p>
+      <p data-lang="zh">SXSEditor 使用 SoulX-Singer 扩散模型在 ONNX Runtime 上合成歌声。本页涵盖合成管线、播放控制、质量设置和 WAV 导出。</p>
+
+      <h2>
+        <span data-lang="en">How Synthesis Works</span>
+        <span data-lang="zh">合成工作原理</span>
+      </h2>
+      <p data-lang="en">When you press Play, SXSEditor runs the SVS pipeline:</p>
+      <p data-lang="zh">按播放时，SXSEditor 会运行 SVS 管线：</p>
+      <ol>
+        <li><span data-lang="en"><strong>Prepares input</strong>: Collects MIDI notes, lyrics, pitch curve, and singer data.</span><span data-lang="zh"><strong>准备输入</strong>：收集 MIDI 音符、歌词、音高曲线和歌手数据。</span></li>
+        <li><span data-lang="en"><strong>Processes text</strong>: Converts lyrics to phoneme sequences using language-specific processing.</span><span data-lang="zh"><strong>文本处理</strong>：使用语言特定处理将歌词转换为音素序列。</span></li>
+        <li><span data-lang="en"><strong>Encodes</strong>: Runs 5 encoder models (text, pitch, note type, F0, condition embedding).</span><span data-lang="zh"><strong>编码</strong>：运行 5 个编码器模型（文本、音高、音符类型、F0、条件嵌入）。</span></li>
+        <li><span data-lang="en"><strong>Runs diffusion</strong>: Iteratively denoises a mel spectrogram using the diffusion model.</span><span data-lang="zh"><strong>扩散</strong>：使用扩散模型迭代地对梅尔频谱图去噪。</span></li>
+        <li><span data-lang="en"><strong>Vocalizes</strong>: Converts the mel spectrogram to a waveform using the vocoder.</span><span data-lang="zh"><strong>声码器</strong>：使用声码器将梅尔频谱图转换为波形。</span></li>
+        <li><span data-lang="en"><strong>Plays audio</strong>: Outputs the waveform through the audio system.</span><span data-lang="zh"><strong>播放</strong>：通过音频系统输出波形。</span></li>
+      </ol>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">The synthesis pipeline uses <strong>9 ONNX model files</strong> in total. The internal sample rate is <strong>24000 Hz</strong> with a hop size of <strong>480</strong>. The first synthesis is always slower because all models must be loaded into GPU memory; subsequent syntheses reuse the loaded pipeline.</p>
+          <p data-lang="zh">合成管线共使用 <strong>9 个 ONNX 模型文件</strong>。内部采样率为 <strong>24000 Hz</strong>，hop size 为 <strong>480</strong>。首次合成总是较慢，因为所有模型都要加载到 GPU 显存；之后的合成会复用已加载的管线。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Playback Controls</span>
+        <span data-lang="zh">播放控制</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>▶ Play</strong>: Start synthesis and playback. On first play, the SVS pipeline initializes (loads models into GPU).</span><span data-lang="zh"><strong>▶ Play</strong>：开始合成与播放。首次播放时，SVS 管线会初始化（将模型加载到 GPU）。</span></li>
+        <li><span data-lang="en"><strong>⏸ Pause</strong>: Pause playback. Resume from the paused position.</span><span data-lang="zh"><strong>⏸ Pause</strong>：暂停播放。从暂停位置继续。</span></li>
+        <li><span data-lang="en"><strong>⏹ Stop</strong>: Stop playback and reset to the beginning.</span><span data-lang="zh"><strong>⏹ Stop</strong>：停止播放并重置到开头。</span></li>
+      </ul>
+      <h3>
+        <span data-lang="en">Fragment-Level Playback</span>
+        <span data-lang="zh">片段级播放</span>
+      </h3>
+      <p data-lang="en">In the Fragment Editor, <strong>▶ Play</strong> synthesizes and plays only the current fragment. This is useful for quick previews while editing. It uses the "Preview Inference Parameters" from Settings (fewer diffusion steps = faster response).</p>
+      <p data-lang="zh">在片段编辑器中，<strong>▶ Play</strong> 仅合成并播放当前片段。便于编辑时快速预览。它使用设置中的"预览推理参数"（扩散步数更少 = 响应更快）。</p>
+
+      <h2>
+        <span data-lang="en">Preview vs Export Quality</span>
+        <span data-lang="zh">预览与导出质量</span>
+      </h2>
+      <p data-lang="en">SXSEditor uses two sets of inference parameters. Preview uses fewer steps for faster response; Export uses more steps for higher quality. Both are configurable in Settings.</p>
+      <p data-lang="zh">SXSEditor 使用两套推理参数。预览使用较少步数以加快响应；导出使用更多步数以获得更高音质。两者均可在设置中配置。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Preview (Default)</span><span data-lang="zh">预览（默认）</span></th>
+            <th><span data-lang="en">Export (Default)</span><span data-lang="zh">导出（默认）</span></th>
+            <th><span data-lang="en">Range</span><span data-lang="zh">范围</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Diffusion Steps</span><span data-lang="zh">扩散步数</span></td>
+            <td><span data-lang="en">16</span><span data-lang="zh">16</span></td>
+            <td><span data-lang="en">32</span><span data-lang="zh">32</span></td>
+            <td><span data-lang="en">4–64</span><span data-lang="zh">4–64</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">CFG Strength</span><span data-lang="zh">CFG 引导强度</span></td>
+            <td><span data-lang="en">3.0</span><span data-lang="zh">3.0</span></td>
+            <td><span data-lang="en">3.0</span><span data-lang="zh">3.0</span></td>
+            <td><span data-lang="en">0–10</span><span data-lang="zh">0–10</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">CFG Rescale</span><span data-lang="zh">CFG Rescale 系数</span></td>
+            <td><span data-lang="en">0.75</span><span data-lang="zh">0.75</span></td>
+            <td><span data-lang="en">0.75</span><span data-lang="zh">0.75</span></td>
+            <td><span data-lang="en">0–1</span><span data-lang="zh">0–1</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Diffusion Steps</span>
+        <span data-lang="zh">扩散步数</span>
+      </h2>
+      <p data-lang="en">The diffusion model iteratively denoises a mel spectrogram. The number of steps controls the trade-off between quality and speed:</p>
+      <p data-lang="zh">扩散模型会迭代地对梅尔频谱图去噪。步数控制质量与速度的权衡：</p>
+      <ul>
+        <li><span data-lang="en"><strong>More steps</strong> = higher quality, slower inference. Recommended for export: 32 steps.</span><span data-lang="zh"><strong>更多步数</strong> = 更高音质，推理更慢。导出推荐：32 步。</span></li>
+        <li><span data-lang="en"><strong>Fewer steps</strong> = faster inference, lower quality. Recommended for preview: 8–16 steps.</span><span data-lang="zh"><strong>更少步数</strong> = 推理更快，音质略低。预览推荐：8–16 步。</span></li>
+        <li><span data-lang="en">Range: 4–64 steps.</span><span data-lang="zh">范围：4–64 步。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">CFG Strength</span>
+        <span data-lang="zh">CFG 引导强度</span>
+      </h2>
+      <p data-lang="en">Classifier-Free Guidance (CFG) strength controls how closely the output adheres to the input conditions (notes, lyrics, pitch):</p>
+      <p data-lang="zh">无分类器引导（CFG）强度控制输出与输入条件（音符、歌词、音高）的贴合程度：</p>
+      <ul>
+        <li><span data-lang="en"><strong>Higher values</strong> = more aligned with conditions, but may over-strengthen. Recommended: 1.0–5.0.</span><span data-lang="zh"><strong>较高值</strong> = 更贴合条件，但可能过度强化。推荐：1.0–5.0。</span></li>
+        <li><span data-lang="en"><strong>Set to 0</strong> to skip unconditional prediction entirely. This roughly doubles synthesis speed since only the conditional pass runs.</span><span data-lang="zh"><strong>设为 0</strong> 可完全跳过无条件预测。由于只运行条件分支，合成速度约提升一倍。</span></li>
+        <li><span data-lang="en">Range: 0–10.</span><span data-lang="zh">范围：0–10。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">CFG Rescale</span>
+        <span data-lang="zh">CFG Rescale 系数</span>
+      </h2>
+      <p data-lang="en">The CFG rescale coefficient mitigates over-guidance artifacts caused by high CFG strength. Recommended: 0.5–0.9. Range: 0–1.</p>
+      <p data-lang="zh">CFG rescale 系数用于缓解高 CFG 强度造成的过度引导伪影。推荐：0.5–0.9。范围：0–1。</p>
+
+      <h2>
+        <span data-lang="en">Exporting to WAV</span>
+        <span data-lang="zh">导出为 WAV</span>
+      </h2>
+      <h3>
+        <span data-lang="en">Exporting a Single Fragment</span>
+        <span data-lang="zh">导出单个片段</span>
+      </h3>
+      <p data-lang="en">In the Fragment Editor, click <strong>💿 Export</strong>:</p>
+      <p data-lang="zh">在片段编辑器中，点击 <strong>💿 Export</strong>：</p>
+      <ol>
+        <li><span data-lang="en">The fragment is synthesized using export-quality parameters.</span><span data-lang="zh">片段以导出质量参数合成。</span></li>
+        <li><span data-lang="en">A file save dialog appears. Choose a location and filename.</span><span data-lang="zh">弹出文件保存对话框。选择位置和文件名。</span></li>
+        <li><span data-lang="en">The WAV file is saved (24kHz, 16-bit PCM).</span><span data-lang="zh">WAV 文件保存完成（24kHz、16-bit PCM）。</span></li>
+      </ol>
+      <h3>
+        <span data-lang="en">Exporting the Entire Project</span>
+        <span data-lang="zh">导出整个项目</span>
+      </h3>
+      <p data-lang="en">In the main window, click <strong>📤 Export</strong>:</p>
+      <p data-lang="zh">在主窗口中，点击 <strong>📤 Export</strong>：</p>
+      <ol>
+        <li><span data-lang="en">All fragments are synthesized sequentially using export-quality parameters.</span><span data-lang="zh">所有片段按顺序以导出质量参数合成。</span></li>
+        <li><span data-lang="en">Fragments are mixed together according to their timeline positions.</span><span data-lang="zh">片段根据时间线位置混合在一起。</span></li>
+        <li><span data-lang="en">A file save dialog appears. Choose a save location.</span><span data-lang="zh">弹出文件保存对话框。选择保存位置。</span></li>
+        <li><span data-lang="en">The mixed WAV file is saved (24kHz, 16-bit PCM).</span><span data-lang="zh">混合后的 WAV 文件保存完成（24kHz、16-bit PCM）。</span></li>
+      </ol>
+      <h3>
+        <span data-lang="en">Export Progress</span>
+        <span data-lang="zh">导出进度</span>
+      </h3>
+      <p data-lang="en">During export, a progress indicator shows:</p>
+      <p data-lang="zh">导出过程中，进度指示器会显示：</p>
+      <ul>
+        <li><span data-lang="en">Current fragment being processed.</span><span data-lang="zh">正在处理的当前片段。</span></li>
+        <li><span data-lang="en">Overall progress percentage.</span><span data-lang="zh">总进度百分比。</span></li>
+        <li><span data-lang="en">Status messages (preparing, synthesizing, encoding WAV, saving).</span><span data-lang="zh">状态消息（准备中、合成中、编码 WAV、保存中）。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Multi-Segment Synthesis</span>
+        <span data-lang="zh">多段合成</span>
+      </h2>
+      <p data-lang="en">Long audio is synthesized in segments. SXSEditor aligns F0 across segments using absolute-time alignment and applies per-segment autoShift f0Shift for wide-range songs, so multi-segment prompt mel frame counts stay consistent with the single-segment path. The vocoder processes audio in chunks (default 1008 frames, overlap 8 frames) with crossfade stitching.</p>
+      <p data-lang="zh">长音频会分段合成。SXSEditor 使用绝对时间对齐跨段的 F0，并针对宽音域片段应用 per-segment autoShift f0Shift，使多段 prompt mel 帧数与单段路径一致。声码器按分片处理音频（默认 1008 帧，重叠 8 帧），交叉淡入淡出拼接。</p>
+
+      <h2>
+        <span data-lang="en">Output Format</span>
+        <span data-lang="zh">输出格式</span>
+      </h2>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Property</span><span data-lang="zh">属性</span></th>
+            <th><span data-lang="en">Value</span><span data-lang="zh">值</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Format</span><span data-lang="zh">格式</span></td>
+            <td><span data-lang="en">WAV (PCM)</span><span data-lang="zh">WAV（PCM）</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Internal Sample Rate</span><span data-lang="zh">内部采样率</span></td>
+            <td><span data-lang="en">24000 Hz</span><span data-lang="zh">24000 Hz</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Bit Depth (export)</span><span data-lang="zh">位深度（导出）</span></td>
+            <td><span data-lang="en">16-bit PCM</span><span data-lang="zh">16-bit PCM</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Output Sample Rate (configurable)</span><span data-lang="zh">输出采样率（可配置）</span></td>
+            <td><span data-lang="en">22050, 24000 (native), 44100, 48000, 96000, 192000 Hz</span><span data-lang="zh">22050、24000（原生）、44100、48000、96000、192000 Hz</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Performance Tips</span>
+        <span data-lang="zh">性能优化建议</span>
+      </h2>
+      <div class="callout tip">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">
+          <p data-lang="en">If synthesis is slow, try these adjustments:</p>
+          <p data-lang="zh">如果合成速度慢，可尝试以下调整：</p>
+        </div>
+      </div>
+      <ul>
+        <li><span data-lang="en"><strong>Use a discrete GPU</strong> if available. CPU inference is significantly slower.</span><span data-lang="zh">如有 <strong>独立显卡</strong> 请使用。CPU 推理明显较慢。</span></li>
+        <li><span data-lang="en"><strong>Reduce diffusion steps</strong> in Settings &gt; Preview Inference Parameters. Default is 16; try 8 for faster preview.</span><span data-lang="zh">在设置 &gt; 预览推理参数中 <strong>减少扩散步数</strong>。默认 16；可尝试 8 以加快预览。</span></li>
+        <li><span data-lang="en"><strong>Set CFG Strength to 0</strong> to skip unconditional prediction, roughly doubling speed.</span><span data-lang="zh"><strong>将 CFG Strength 设为 0</strong> 可跳过无条件预测，速度约提升一倍。</span></li>
+        <li><span data-lang="en"><strong>Update GPU drivers</strong> to the latest version for best DirectML performance.</span><span data-lang="zh"><strong>更新显卡驱动</strong> 到最新版本以获得最佳 DirectML 性能。</span></li>
+        <li><span data-lang="en"><strong>Use FP16 precision</strong> instead of FP32 for lower VRAM usage and faster inference on most GPUs.</span><span data-lang="zh">在大多数显卡上 <strong>使用 FP16 精度</strong> 代替 FP32 可降低显存占用并加快推理。</span></li>
+        <li><span data-lang="en">The first synthesis is always slower — subsequent syntheses reuse the loaded pipeline.</span><span data-lang="zh">首次合成总是较慢——之后的合成会复用已加载的管线。</span></li>
+      </ul>
+
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>If the synthesized voice sounds wrong or has artifacts:</strong></p>
+          <p data-lang="zh"><strong>如果合成声音异常或有伪影：</strong></p>
+          <ul>
+            <li><span data-lang="en">Check the reference audio — ensure it contains pure vocals with no background music or effects.</span><span data-lang="zh">检查参考音频——确保为纯人声，无背景音乐或效果。</span></li>
+            <li><span data-lang="en">Check lyrics — every note must have the correct lyric. Missing or wrong lyrics cause phoneme errors.</span><span data-lang="zh">检查歌词——每个音符必须有正确歌词。缺失或错误歌词会导致音素错误。</span></li>
+            <li><span data-lang="en">Check MIDI notes — verify pitches and timing match the intended melody.</span><span data-lang="zh">检查 MIDI 音符——确认音高和时序与预期旋律一致。</span></li>
+            <li><span data-lang="en">Check model precision — if using INT8, try FP16 for higher quality.</span><span data-lang="zh">检查模型精度——如使用 INT8，可尝试 FP16 以获得更高音质。</span></li>
+            <li><span data-lang="en">Increase diffusion steps — more steps = better quality (try 32 or 48 for export).</span><span data-lang="zh">增加扩散步数——更多步数 = 更高音质（导出可尝试 32 或 48 步）。</span></li>
+          </ul>
+        </div>
+      </div>
+
+      <nav class="doc-pager">
+        <a href="fragment-editor.html">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.prev">Previous</div>
+            <div class="pager-title"><span data-lang="en">Fragment Editor</span><span data-lang="zh">片段编辑器</span></div>
+          </div>
+        </a>
+        <a href="settings.html" class="next">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.next">Next</div>
+            <div class="pager-title"><span data-lang="en">Settings</span><span data-lang="zh">设置</span></div>
+          </div>
+        </a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="faq.html" data-i18n="footer.help">Help &amp; FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>
