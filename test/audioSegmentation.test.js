@@ -209,6 +209,13 @@ describe('inference/pipeline/audioSegmentation', () => {
         seg.computeSynthCacheKey(notes, 120, opts)
       );
     });
+
+    it('should differ when singerId changes (regression: moving fragment to different singer must invalidate cache)', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      expect(seg.computeSynthCacheKey(notes, 120, { singerId: 'singerA' })).to.not.equal(
+        seg.computeSynthCacheKey(notes, 120, { singerId: 'singerB' })
+      );
+    });
   });
 
   describe('median', () => {
