@@ -816,6 +816,20 @@ class Postprocessing {
             }
         }
 
+        // 反标准化 mel：扩散模型输出标准化 mel (mean=0, std=1)，但 Vocos vocoder 在反标准化 mel (mean=-4.92, std=2.85) 上训练。
+        // 缺失此步骤导致 vocoder 内部 mag=exp(mag) 对正值指数放大，产生输出爆炸 (std=61, peak=4482)。
+        // 证据：vocoder_precision_result.npz 显示反标准化 mel → 合理输出 (std=0.000082)。
+        // 必须在 SiFiGAN 上采样之后执行，保证所有帧都被反标准化。
+        // 创建新数组避免修改调用方的 melData。
+        {
+            const melStd = Math.sqrt(MEL_VAR);
+            const denormMelData = new Float32Array(effectiveMelData.length);
+            for (let i = 0; i < effectiveMelData.length; i++) {
+                denormMelData[i] = effectiveMelData[i] * melStd + MEL_MEAN;
+            }
+            effectiveMelData = denormMelData;
+        }
+
         const chunkSize = ((chunkFrames && chunkFrames > 0) ? chunkFrames : VOCODER_CHUNK_FRAMES) * SIFIGAN_UPSAMPLE_RATIO;
         const overlapFrames = VOCODER_OVERLAP_FRAMES * SIFIGAN_UPSAMPLE_RATIO;
         const vocoderHopSize = vocoderType === 'sifigan' ? SIFIGAN_HOP_SIZE : HOP_SIZE;
@@ -1138,20 +1152,24 @@ class Postprocessing {
                 weightSum[outIdx] += w;
             }
 
-            // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，已归一化）
+            // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，overlap crossfade 权重和为 1）
             // - 首 chunk：stableEnd = (isLast ? chunkEnd : chunkEnd - overlapFrames) * vocoderHopSize
             // - 中间 chunk：包含头部 overlap 的 crossfade 结果 + 稳定段（weightSum=1）
             // - 末 chunk：stableEnd = chunkEnd * vocoderHopSize（尾部无 fade）
+            // 注意：peak 归一化在每 chunk 推送前独立应用（仅向下缩放，peak>0.95 时生效），
+            // 防止流式音频在 Int16 转换时削波。最终 output 仍会在循环结束后统一 normalizePeakTo。
             if (onChunkComplete) {
                 const stableEndFrames = spec.isLast ? spec.chunkEnd : (spec.chunkEnd - overlapFrames);
                 const stableEnd = Math.min(stableEndFrames * vocoderHopSize, totalSamples);
                 if (stableEnd > committedSamples) {
+                    const chunkAudio = output.slice(committedSamples, stableEnd);
+                    normalizePeakTo(chunkAudio);
                     try {
                         onChunkComplete({
                             chunkIndex: i,
                             sampleOffset: committedSamples,
                             sampleEnd: stableEnd,
-                            audio: output.slice(committedSamples, stableEnd),
+                            audio: chunkAudio,
                             totalSamples,
                             isLast: spec.isLast,
                         });
