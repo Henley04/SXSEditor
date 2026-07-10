@@ -192,6 +192,8 @@ function openSettingsWindow() {
     maximizable: false,
     parent: mainWindow,
     modal: true,
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: SETTINGS_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -201,6 +203,7 @@ function openSettingsWindow() {
   });
 
   settingsWindow.loadURL(SETTINGS_WINDOW_WEBPACK_ENTRY);
+  settingsWindow.once('ready-to-show', () => { settingsWindow.show(); });
   settingsWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   settingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
@@ -224,6 +227,8 @@ function openResourceManagerWindow() {
     minimizable: true,
     maximizable: false,
     parent: mainWindow,
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: RESOURCE_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -233,6 +238,7 @@ function openResourceManagerWindow() {
   });
 
   resourceManagerWindow.loadURL(RESOURCE_MANAGER_WINDOW_WEBPACK_ENTRY);
+  resourceManagerWindow.once('ready-to-show', () => { resourceManagerWindow.show(); });
   resourceManagerWindow.setMenu(null);
   resourceManagerWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   resourceManagerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -262,6 +268,8 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
     maximizable: true,
     closable: true,
     parent: mainWindow,
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: MODEL_DOWNLOAD_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -271,6 +279,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
   });
 
   modelDownloadWindow.loadURL(MODEL_DOWNLOAD_WINDOW_WEBPACK_ENTRY);
+  modelDownloadWindow.once('ready-to-show', () => { modelDownloadWindow.show(); });
   modelDownloadWindow.setMenu(null);
   modelDownloadWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   modelDownloadWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -308,6 +317,8 @@ function openFragmentEditor(fragment, project, wavBuffer) {
     height: 600,
     title: `分片编辑 - ${fragment.name}`,
     icon: path.join(__dirname, '..', 'SXS.png'),
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: FRAGMENT_EDITOR_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -317,6 +328,7 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   });
 
   fragmentWindow.loadURL(`${FRAGMENT_EDITOR_WINDOW_WEBPACK_ENTRY}#fragmentId=${encodeURIComponent(fragment.id)}`);
+  fragmentWindow.once('ready-to-show', () => { fragmentWindow.show(); });
   fragmentWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   fragmentWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   // Defer openDevTools until did-finish-load (see createWindow for rationale).
@@ -414,6 +426,8 @@ function openSingerCreator() {
     icon: path.join(__dirname, '..', 'SXS.png'),
     minWidth: 700,
     minHeight: 500,
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: SINGER_CREATOR_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -423,6 +437,7 @@ function openSingerCreator() {
   });
 
   singerCreatorWindow.loadURL(SINGER_CREATOR_WINDOW_WEBPACK_ENTRY);
+  singerCreatorWindow.once('ready-to-show', () => { singerCreatorWindow.show(); });
   singerCreatorWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   singerCreatorWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
@@ -456,6 +471,8 @@ function openAudioPreprocess(data) {
     icon: path.join(__dirname, '..', 'SXS.png'),
     minWidth: 800,
     minHeight: 600,
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: AUDIO_PREPROCESS_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -465,6 +482,7 @@ function openAudioPreprocess(data) {
   });
 
   audioPreprocessWindow.loadURL(AUDIO_PREPROCESS_WINDOW_WEBPACK_ENTRY);
+  audioPreprocessWindow.once('ready-to-show', () => { audioPreprocessWindow.show(); });
   audioPreprocessWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   audioPreprocessWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
