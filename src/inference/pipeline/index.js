@@ -1494,6 +1494,7 @@ class OnnxSVSPipeline {
         // Vocoder is loaded via DML (dynamic shapes), never use static shape padding
         // SiFiGAN 双输入：传入 vocoderType、F0 序列、stats 缺失标志；default vocoder 仅用 mel
         const chunkFrames = this._resolveVocoderChunkFrames();
+        console.log(`[OnnxSVSPipeline] Vocoder EP: ${this.sessionEPs.vocoder || 'unknown'}, vocoderIsFP16=${this.vocoderIsFP16}, isFP16=${this.isFP16}, vocoderType=${this.vocoderType}, resolvedFile=${this._resolvedVocoderFile}`);
 
         // 一致性检测：vocoderType 与实际加载的 vocoder 文件必须匹配，否则 mel 处理模式
         // （sifigan 4× 上采样 + f0 输入 vs default 仅 mel）与 session 输入签名不匹配，

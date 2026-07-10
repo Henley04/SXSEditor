@@ -1102,6 +1102,21 @@ class Postprocessing {
                     }
                     melParts.push(`m${f}=${Math.sqrt(s / MEL_DIM).toFixed(5)}`);
                 }
+                // 完整 mel 输入统计（整个 chunk）
+                {
+                    let melMin = Infinity, melMax = -Infinity, melSum = 0, melSumSq = 0;
+                    const melLen = paddedChunk.length;
+                    for (let i2 = 0; i2 < melLen; i2++) {
+                        const v = paddedChunk[i2];
+                        if (v < melMin) melMin = v;
+                        if (v > melMax) melMax = v;
+                        melSum += v;
+                        melSumSq += v * v;
+                    }
+                    const melMean = melSum / melLen;
+                    const melStd = Math.sqrt(Math.max(0, melSumSq / melLen - melMean * melMean));
+                    console.log(`[VocoderDiag] chunk0 FULL mel stats: frames=${spec.currentChunkFrames}, len=${melLen}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
+                }
                 console.log(`[VocoderDiag] chunk0: chunkFrames=${spec.currentChunkFrames}, vocoderType=${vocoderType}, melRMS=[${melParts.join(', ')}], wavRMS=[${parts.join(', ')}]`);
             }
             const writeStart = spec.chunkStart * vocoderHopSize;

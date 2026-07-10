@@ -305,16 +305,26 @@ class Diffusion {
                     await new Promise(r => setImmediate(r));
                 }
             }
-            // 诊断：检测扩散输出是否包含 NaN/Inf
+            // 诊断：检测扩散输出是否包含 NaN/Inf + 统计输出分布
             {
                 let xtNaN = 0, xtInf = 0;
+                let xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
                 const xtData = xt.data;
-                for (let i = 0; i < xtData.length; i++) {
-                    if (Number.isNaN(xtData[i])) xtNaN++;
-                    if (!Number.isFinite(xtData[i])) xtInf++;
+                const xtLen = xtData.length;
+                for (let i = 0; i < xtLen; i++) {
+                    const v = xtData[i];
+                    if (Number.isNaN(v)) { xtNaN++; continue; }
+                    if (!Number.isFinite(v)) { xtInf++; continue; }
+                    if (v < xtMin) xtMin = v;
+                    if (v > xtMax) xtMax = v;
+                    xtSum += v;
+                    xtSumSq += v * v;
                 }
+                const xtMean = xtSum / xtLen;
+                const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
+                console.log(`[DiffusionDiag] OUTPUT xt: frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
                 if (xtNaN > 0 || xtInf > 0) {
-                    console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! NaN=${xtNaN}, Inf=${xtInf - xtNaN}, total=${xtData.length}, frames=${totalFrames}, mean=${(xtData.reduce((a,b)=>a+b,0)/xtData.length).toFixed(6)}`);
+                    console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! NaN=${xtNaN}, Inf=${xtInf - xtNaN}, total=${xtLen}, frames=${totalFrames}, mean=${xtMean.toFixed(6)}`);
 
                     // Dump ORT native debug logs from stderr capture
                     if (typeof globalThis._flushOrtDebugLogs === 'function') {
