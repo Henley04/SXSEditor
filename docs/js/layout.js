@@ -151,7 +151,14 @@
   }
 
   // build TOC from h2/h3 in .prose if a [data-toc] container exists
-  function initAutoTOC() {
+  // Only shows the current language's text (respects [data-lang] spans).
+  function headingText(h) {
+    const lang = (window.SXS_i18n && window.SXS_i18n.lang) || 'en';
+    const span = h.querySelector('[data-lang="' + lang + '"]');
+    return span ? span.textContent : h.textContent;
+  }
+
+  function buildTOC() {
     const container = document.querySelector('[data-toc]');
     if (!container) return;
     const prose = document.querySelector('.prose');
@@ -163,7 +170,7 @@
       if (!h.id) h.id = 'sec-' + i;
       const a = document.createElement('a');
       a.href = '#' + h.id;
-      a.textContent = h.textContent;
+      a.textContent = headingText(h);
       a.className = 'toc-link' + (h.tagName === 'H3' ? ' toc-sub' : '');
       frag.appendChild(a);
     });
@@ -183,6 +190,18 @@
         });
       }, { rootMargin: '0px 0px -70% 0px' });
       heads.forEach(function (h) { io.observe(h); });
+    }
+  }
+
+  function initAutoTOC() {
+    buildTOC();
+    // rebuild TOC when language changes so headings stay in the active language
+    if (window.SXS_i18n) {
+      const orig = window.SXS_i18n.apply;
+      window.SXS_i18n.apply = function () {
+        orig.apply(this, arguments);
+        buildTOC();
+      };
     }
   }
 
