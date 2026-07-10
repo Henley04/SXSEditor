@@ -171,6 +171,9 @@ class AudioSegmentation {
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
         const language = options.language || null;
+        // singerId 必须纳入缓存键：分片移动到不同歌手时，即使参考音频内容相同（或均为空），
+        // 也必须触发重新合成，否则会命中旧缓存返回上一个歌手的音频。
+        const singerId = options.singerId || null;
 
         let notesHash = 0;
         for (let i = 0; i < notes.length; i++) {
@@ -212,7 +215,7 @@ class AudioSegmentation {
             }
         }
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}`;
     }
 
     /**
