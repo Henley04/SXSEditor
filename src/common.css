@@ -152,6 +152,84 @@ textarea {
   transition: border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, background var(--motion-fast) ease;
 }
 
+/* ==================== 自定义复选框（带动画） ==================== */
+/* 替换原生 checkbox 外观，统一所有页面的复选框样式 */
+input[type="checkbox"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg-input);
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  vertical-align: middle;
+  transition:
+    background var(--motion-fast) cubic-bezier(0.4, 0, 0.2, 1),
+    border-color var(--motion-fast) cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow var(--motion-fast) cubic-bezier(0.4, 0, 0.2, 1),
+    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 对勾：用伪元素绘制，通过 scale 做弹跳动画 */
+input[type="checkbox"]::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid var(--fg-on-accent);
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg) scale(0);
+  opacity: 0;
+  transition:
+    transform var(--motion-base) cubic-bezier(0.34, 1.56, 0.64, 1),
+    opacity var(--motion-fast) ease;
+}
+
+input[type="checkbox"]:hover:not(:disabled):not(:checked) {
+  border-color: var(--accent);
+  background: var(--accent-softer);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+input[type="checkbox"]:active:not(:disabled) {
+  transform: scale(0.88);
+}
+
+input[type="checkbox"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 1px 4px var(--accent-glow, var(--accent-soft));
+}
+
+input[type="checkbox"]:checked::after {
+  transform: rotate(45deg) scale(1);
+  opacity: 1;
+}
+
+input[type="checkbox"]:checked:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+input[type="checkbox"]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+input[type="checkbox"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* 兼容已有容器：保留 accent-color 回退（appearance:none 下无效，仅作向后兼容） */
+
 /* Card-like panels get subtle hover lift */
 [class$="-panel"]:not(.modal-overlay):not(.loading-overlay) {
   transition: box-shadow var(--motion-base) ease;
