@@ -53,6 +53,7 @@ class OnnxSVSPipeline {
         this.sessions = {};
         this.sessionEPs = {};
         this.isFP16 = false; // 是否为 FP16 精度Model
+        this.diffStepIsFP16 = false; // diff_step 独立精度（可能与 isFP16 不同，如 W16A32 回退到 FP32 时）
         this.gpuDeviceName = '';
         this.dmlDeviceId = undefined;
         this.initialized = false;
@@ -246,9 +247,29 @@ class OnnxSVSPipeline {
                 this.sessionEPs[key] = ep;
                 console.log(`[OnnxSVSPipeline] ${resolvedFile} swapped [${ep}] -> ${modelPath}`);
             } catch (err) {
-                console.error(`[OnnxSVSPipeline] Failed to swap ${resolvedFile}:`, err.message);
-                throw err;
+                // diff_step W16A32 回退（与 _loadModelsPartitioned / loadModel 一致）
+                if (key === 'diffStep' && this.baseModelDir && this.modelDir !== this.baseModelDir) {
+                    console.warn(`[OnnxSVSPipeline] diff_step swap failed, trying FP32 from ${this.baseModelDir}: ${err.message.substring(0, 80)}`);
+                    const fp32Path = path.join(this.baseModelDir, resolvedFile);
+                    let fp32Exists = false;
+                    try { await fs.promises.access(fp32Path); fp32Exists = true; } catch (_) {}
+                    if (fp32Exists) {
+                        const { session, ep } = await createSessionWithValidation(
+                            fp32Path, key, this.gpuDeviceName, this.dmlDeviceId, false, false
+                        );
+                        this.sessions[key] = session;
+                        this.sessionEPs[key] = ep;
+                        console.log(`[OnnxSVSPipeline] diff_step FP32 swapped from baseModelDir [${ep}] (W16A32 fallback)`);
+                    } else {
+                        throw err;
+                    }
+                } else {
+                    console.error(`[OnnxSVSPipeline] Failed to swap ${resolvedFile}:`, err.message);
+                    throw err;
+                }
             }
+            // 语言切换后重新检测 diff_step 精度
+            if (key === 'diffStep') this._detectDiffStepPrecision();
         }
 
         return true;
@@ -1196,6 +1217,7 @@ class OnnxSVSPipeline {
                 globalThis._flushOrtDebugLogs();
             }
             if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], this._getModelPath(this._resolvedVocoderFile || 'vocoder_dml.onnx'));
+            this._detectDiffStepPrecision();
         } catch (err) {
             console.error('[OnnxSVSPipeline] ONNX Runtime init failed:', err.message);
             for (const key of loadedSessions) {
@@ -1230,6 +1252,7 @@ class OnnxSVSPipeline {
             const cpuCount = Object.values(this.sessionEPs).filter(e => e === 'cpu').length;
             console.log(`[OnnxSVSPipeline] Fallback init complete: ${dmlCount}  model(s) using DML, ${cpuCount}  model(s) using CPU`);
             if (this.sessions['vocoder']) await this._detectVocoderPrecision(this.sessions['vocoder'], this._getModelPath(this._resolvedVocoderFile || 'vocoder_dml.onnx'));
+            this._detectDiffStepPrecision();
         } catch (err) {
             for (const key of loadedSessions) {
                 if (this.sessions[key] && typeof this.sessions[key].release === 'function') {
@@ -1299,6 +1322,19 @@ class OnnxSVSPipeline {
                     this.sessions[sessionKeys[i]] = session;
                     this.sessionEPs[sessionKeys[i]] = ep;
                     console.log(`[OnnxSVSPipeline] ${modelFile} loaded from fallback [${ep}]`);
+                } else if (sessionKeys[i] === 'diffStep' && this.baseModelDir && this.modelDir !== this.baseModelDir) {
+                    // W16A32 diff_step (fp16 subdir) 在 onnxruntime-node 1.27.0 上推理失败
+                    // 回退到 baseModelDir（根目录）的 FP32 diff_step 模型
+                    console.warn(`[OnnxSVSPipeline] diff_step load failed in ${this.modelDir}, trying FP32 from ${this.baseModelDir}: ${loadErr.message.substring(0, 80)}`);
+                    const fp32Path = path.join(this.baseModelDir, modelFile);
+                    let fp32Exists = false;
+                    try { await fs.promises.access(fp32Path); fp32Exists = true; } catch (_) {}
+                    if (!fp32Exists) throw loadErr;
+                    // FP32 模型用 isFP16=false 创建 dummy 输入
+                    const { session, ep } = await createSessionWithValidation(fp32Path, sessionKeys[i], this.gpuDeviceName, this.dmlDeviceId, false, this.useStaticShapes, sifiganDummy);
+                    this.sessions[sessionKeys[i]] = session;
+                    this.sessionEPs[sessionKeys[i]] = ep;
+                    console.log(`[OnnxSVSPipeline] diff_step FP32 loaded from baseModelDir [${ep}] (W16A32 fallback)`);
                 } else {
                     throw loadErr;
                 }
@@ -1407,6 +1443,41 @@ class OnnxSVSPipeline {
         }
     }
 
+    /**
+     * 独立检测 diff_step 模型精度。
+     *
+     * 背景：W16A32 diff_step 模型（fp16 子目录）在 onnxruntime-node 1.27.0 上推理时报
+     * "not enough space" 错误，需要回退到根目录的 FP32 模型。此时 isFP16（来自 preflow）
+     * 为 true，但实际加载的 diff_step 是 FP32，需要独立检测以创建正确类型的张量。
+     *
+     * 读取 sessions.diffStep.inputMetadata 的 xt_input 类型来设置 diffStepIsFP16。
+     */
+    _detectDiffStepPrecision() {
+        try {
+            const session = this.sessions.diffStep;
+            if (!session) {
+                this.diffStepIsFP16 = this.isFP16;
+                return;
+            }
+            const meta = session.inputMetadata || [];
+            // inputMetadata 是数组：[{name, type, ...}, ...]
+            let xtInputType = null;
+            for (const m of meta) {
+                if (m.name === 'xt_input') { xtInputType = m.type; break; }
+            }
+            if (xtInputType) {
+                this.diffStepIsFP16 = xtInputType === 'float16';
+                console.log(`[OnnxSVSPipeline] diff_step precision: ${xtInputType} (diffStepIsFP16=${this.diffStepIsFP16})`);
+            } else {
+                console.warn('[OnnxSVSPipeline] diff_step xt_input metadata not found, defaulting to global isFP16');
+                this.diffStepIsFP16 = this.isFP16;
+            }
+        } catch (e) {
+            console.warn('[OnnxSVSPipeline] diff_step precision detection failed:', e.message);
+            this.diffStepIsFP16 = this.isFP16;
+        }
+    }
+
     async _extractRefMelOnnx(refAudioWavBuffer) {
         return this._postprocessing.extractRefMelOnnx(this.sessions, refAudioWavBuffer, this.isFP16, this.useStaticShapes);
     }
@@ -1416,7 +1487,7 @@ class OnnxSVSPipeline {
     }
 
     async _runDiffStep(xtInputData, tVal, condData, maskData, totalFramesWithPrompt) {
-        return this._diffusion.runDiffStep(this.sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, this.isFP16, this.useStaticShapes);
+        return this._diffusion.runDiffStep(this.sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, this.diffStepIsFP16, this.useStaticShapes);
     }
 
     async _runVocoderChunked(melData, totalFrames, onChunkComplete = null) {
@@ -1554,9 +1625,9 @@ class OnnxSVSPipeline {
     }
 
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
-        console.log(`[OnnxSVSPipeline] Diffusion start: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, totalSteps=${totalSteps}, isFP16=${this.isFP16}, ep=${this.sessionEPs.diffStep || 'unknown'}`);
+        console.log(`[OnnxSVSPipeline] Diffusion start: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, totalSteps=${totalSteps}, isFP16=${this.isFP16}, diffStepIsFP16=${this.diffStepIsFP16}, ep=${this.sessionEPs.diffStep || 'unknown'}`);
         console.log(`[OnnxSVSPipeline] Session diffStep: type=${this.sessions.diffStep?.constructor?.name}, ep=${this.sessionEPs.diffStep}`);
-        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.isFP16, onProgress, progressStart, progressRange, this.useStaticShapes);
+        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes);
     }
 
     async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0) {
@@ -1656,6 +1727,7 @@ class OnnxSVSPipeline {
         const fullParams = {
             ...params,
             isFP16: this.isFP16,
+            diffStepIsFP16: this.diffStepIsFP16,
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
             vocoderChunkFrames: this._resolveVocoderChunkFrames(),
@@ -1740,6 +1812,7 @@ class OnnxSVSPipeline {
         const fullParams = paramsArray.map(p => ({
             ...p,
             isFP16: this.isFP16,
+            diffStepIsFP16: this.diffStepIsFP16,
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
             vocoderChunkFrames: this._resolveVocoderChunkFrames(),
@@ -2352,6 +2425,7 @@ class OnnxSVSPipeline {
             this.sessions[sessionKey] = session;
             this.sessionEPs[sessionKey] = ep;
             console.log(`[OnnxSVSPipeline] Model ${sessionKey} loaded [${ep}]`);
+            if (sessionKey === 'diffStep') this._detectDiffStepPrecision();
             return { success: true, ep };
         } catch (err) {
             const fallbackPath = this._getNpuFallbackPath(resolvedFile);
@@ -2364,6 +2438,7 @@ class OnnxSVSPipeline {
                     this.sessions[sessionKey] = session;
                     this.sessionEPs[sessionKey] = ep;
                     console.log(`[OnnxSVSPipeline] Model ${sessionKey} loaded from fallback [${ep}]`);
+                    if (sessionKey === 'diffStep') this._detectDiffStepPrecision();
                     return { success: true, ep };
                 } catch (fbErr) {
                     // NPU fallback 也失败 — SiFiGAN 回退默认 vocoder
@@ -2372,6 +2447,29 @@ class OnnxSVSPipeline {
                         return await this._loadDefaultVocoderAsFallback(sessionKey);
                     }
                     return { success: false, error: fbErr.message };
+                }
+            }
+            // diff_step W16A32 回退：fp16 子目录的 W16A32 模型在 onnxruntime-node 1.27.0 上推理失败，
+            // 回退到 baseModelDir（根目录）的 FP32 模型
+            if (sessionKey === 'diffStep' && this.baseModelDir && this.modelDir !== this.baseModelDir) {
+                console.warn(`[OnnxSVSPipeline] diff_step load failed in ${this.modelDir}, trying FP32 from ${this.baseModelDir}: ${err.message.substring(0, 80)}`);
+                const fp32Path = path.join(this.baseModelDir, resolvedFile);
+                let fp32Exists = false;
+                try { await fs.promises.access(fp32Path); fp32Exists = true; } catch (_) {}
+                if (fp32Exists) {
+                    try {
+                        const { session, ep } = await createSessionWithValidation(
+                            fp32Path, sessionKey, this.gpuDeviceName, this.dmlDeviceId, false, this.useStaticShapes, sifiganDummy
+                        );
+                        this.sessions[sessionKey] = session;
+                        this.sessionEPs[sessionKey] = ep;
+                        console.log(`[OnnxSVSPipeline] diff_step FP32 loaded from baseModelDir [${ep}] (W16A32 fallback)`);
+                        this._detectDiffStepPrecision();
+                        return { success: true, ep };
+                    } catch (fp32Err) {
+                        console.warn(`[OnnxSVSPipeline] diff_step FP32 fallback also failed: ${fp32Err.message.substring(0, 80)}`);
+                        return { success: false, error: fp32Err.message };
+                    }
                 }
             }
             // 无 NPU fallback — SiFiGAN 回退默认 vocoder

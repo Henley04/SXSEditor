@@ -173,9 +173,16 @@ class Diffusion {
             try {
                 const inputMeta = sessions.diffStep.inputMetadata;
                 console.log('[DiffusionDiag] diffStep input metadata:');
-                for (const [name, meta] of Object.entries(inputMeta)) {
-                    console.log(`  ${name}: type=${meta.type}, dims=${JSON.stringify(meta.dims)}`);
+                if (Array.isArray(inputMeta)) {
+                    for (const meta of inputMeta) {
+                        console.log(`  ${meta.name}: type=${meta.type}, dims=${JSON.stringify(meta.shape || meta.dims)}`);
+                    }
+                } else {
+                    for (const [name, meta] of Object.entries(inputMeta)) {
+                        console.log(`  ${name}: type=${meta.type}, dims=${JSON.stringify(meta.dims)}`);
+                    }
                 }
+                console.log(`[DiffusionDiag] isFP16=${isFP16}, floatType=${floatType}`);
             } catch (e) {
                 console.log('[DiffusionDiag] Failed to read diffStep inputMetadata:', e.message);
             }
