@@ -29,6 +29,23 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
+// ===== Model version management =====
+// Each precision has an independent version number. When a model is downloaded
+// from ModelScope, a version.json file is written to the precision subdirectory
+// recording the version. If version.json is missing, the local model is treated
+// as a legacy version and an update is flagged as available.
+const MODEL_VERSIONS = {
+  fp32: '1.0.0',
+  fp16: '1.0.0',
+  int8: '1.0.0',
+  'int8-npu': '1.0.0',
+};
+const JP_MODEL_VERSIONS = {
+  fp16: '1.0.0',
+};
+const SIFIGAN_MODEL_VERSION = '1.0.0';
+const VERSION_FILE_NAME = 'version.json';
+
 // 分片多线程下载相关常量
 const MAX_GLOBAL_CONCURRENCY = 16;
 const MIN_FILE_SIZE_FOR_CHUNKING = 16 * 1024 * 1024; // 16MB 以下不分片
@@ -207,6 +224,262 @@ function getSifiganFileDownloadUrl(filePath) {
   if (!modelId) return null;
   const encoded = encodeURIComponent(filePath);
   return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
+}
+
+// ===== Version management functions =====
+
+/**
+ * Get the path to the version.json file for a given precision.
+ * fp32 → modelDir/version.json
+ * fp16 → modelDir/fp16/version.json
+ * int8 → modelDir/int8/version.json
+ * int8-npu → modelDir/int8/optimized_npu/version.json
+ */
+function getModelVersionPath(modelDir, precision) {
+  if (precision && PRECISION_SUBDIR_PRECESIONS.has(precision)) {
+    const subdir = PRECISION_SUBDIR_MAP[precision] || precision;
+    return path.join(modelDir, subdir, VERSION_FILE_NAME);
+  }
+  return path.join(modelDir, VERSION_FILE_NAME);
+}
+
+/**
+ * Get the path to the version.json file for JP models.
+ * fp16 → modelDir/fp16/JP/version.json
+ */
+function getJpModelVersionPath(modelDir, precision) {
+  if (precision && PRECISION_SUBDIR_PRECESIONS.has(precision)) {
+    const subdir = PRECISION_SUBDIR_MAP[precision] || precision;
+    return path.join(modelDir, subdir, 'JP', VERSION_FILE_NAME);
+  }
+  return path.join(modelDir, 'JP', VERSION_FILE_NAME);
+}
+
+/**
+ * Get the path to the SiFiGAN version file.
+ * SiFiGAN lives at the root of onnx_models/, uses a dedicated file to avoid
+ * collision with the main model version.json.
+ */
+function getSifiganVersionPath(modelDir) {
+  return path.join(modelDir, 'sifigan_version.json');
+}
+
+/**
+ * Compare two semantic version strings (e.g. '1.0.0' vs '1.2.0').
+ * Returns: -1 if a < b, 0 if a == b, 1 if a > b
+ */
+function compareVersions(a, b) {
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+  const pa = String(a).split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b).split('.').map(n => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na < nb) return -1;
+    if (na > nb) return 1;
+  }
+  return 0;
+}
+
+/**
+ * Read the local model version for a given precision.
+ * Returns the version string (e.g. '1.0.0'), or null if version.json
+ * does not exist (treated as a legacy model).
+ */
+function getLocalModelVersion(modelDir, precision) {
+  const versionPath = getModelVersionPath(modelDir, precision);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.version || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Get the latest model version for a given precision.
+ */
+function getLatestModelVersion(precision) {
+  return MODEL_VERSIONS[precision] || null;
+}
+
+/**
+ * Check if a model update is available for the given precision.
+ * An update is available if:
+ *   - version.json is missing (legacy model) AND model files exist, OR
+ *   - local version is older than the latest version
+ * Returns { updateAvailable, localVersion, latestVersion, hasModelFiles }
+ */
+function checkModelVersion(modelDir, precision) {
+  const localVersion = getLocalModelVersion(modelDir, precision);
+  const latestVersion = getLatestModelVersion(precision);
+  const { existing } = checkMissingFiles(modelDir, precision);
+  const hasModelFiles = existing.length > 0;
+
+  let updateAvailable = false;
+  if (hasModelFiles) {
+    if (!localVersion) {
+      // Legacy model: files exist but no version info → update available
+      updateAvailable = true;
+    } else if (latestVersion && compareVersions(localVersion, latestVersion) < 0) {
+      updateAvailable = true;
+    }
+  }
+
+  return {
+    updateAvailable,
+    localVersion,
+    latestVersion,
+    hasModelFiles,
+  };
+}
+
+/**
+ * Save the model version to version.json after a successful download.
+ */
+function saveModelVersion(modelDir, precision) {
+  const versionPath = getModelVersionPath(modelDir, precision);
+  const latestVersion = getLatestModelVersion(precision);
+  if (!latestVersion) return;
+  try {
+    const dir = path.dirname(versionPath);
+    fs.mkdirSync(dir, { recursive: true });
+    const data = {
+      version: latestVersion,
+      precision,
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
+    console.log(`[ModelManager] Saved version ${latestVersion} for precision ${precision}`);
+  } catch (err) {
+    console.warn(`[ModelManager] Failed to save version for ${precision}:`, err.message);
+  }
+}
+
+// ===== JP model version management =====
+
+function getLocalJpModelVersion(modelDir, precision) {
+  const versionPath = getJpModelVersionPath(modelDir, precision);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.version || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function getLatestJpModelVersion(precision) {
+  return JP_MODEL_VERSIONS[precision] || null;
+}
+
+function checkJpModelVersion(modelDir, precision) {
+  const localVersion = getLocalJpModelVersion(modelDir, precision);
+  const latestVersion = getLatestJpModelVersion(precision);
+  const hasModelFiles = checkJpModelsExist(modelDir, precision);
+
+  let updateAvailable = false;
+  if (hasModelFiles) {
+    if (!localVersion) {
+      updateAvailable = true;
+    } else if (latestVersion && compareVersions(localVersion, latestVersion) < 0) {
+      updateAvailable = true;
+    }
+  }
+
+  return {
+    updateAvailable,
+    localVersion,
+    latestVersion,
+    hasModelFiles,
+  };
+}
+
+function saveJpModelVersion(modelDir, precision) {
+  const versionPath = getJpModelVersionPath(modelDir, precision);
+  const latestVersion = getLatestJpModelVersion(precision);
+  if (!latestVersion) return;
+  try {
+    const dir = path.dirname(versionPath);
+    fs.mkdirSync(dir, { recursive: true });
+    const data = {
+      version: latestVersion,
+      precision,
+      language: 'jp',
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
+    console.log(`[ModelManager] Saved JP version ${latestVersion} for precision ${precision}`);
+  } catch (err) {
+    console.warn(`[ModelManager] Failed to save JP version for ${precision}:`, err.message);
+  }
+}
+
+// ===== SiFiGAN version management =====
+
+function getLocalSifiganVersion(modelDir) {
+  const versionPath = getSifiganVersionPath(modelDir);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.version || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function getLatestSifiganVersion() {
+  return SIFIGAN_MODEL_VERSION;
+}
+
+function checkSifiganVersion(modelDir) {
+  const localVersion = getLocalSifiganVersion(modelDir);
+  const latestVersion = getLatestSifiganVersion();
+  // Check if SiFiGAN files exist by looking for stats + at least one variant
+  let hasModelFiles = false;
+  try {
+    const statsPath = path.join(modelDir, 'sifigan_stats.joblib');
+    const stats = fs.statSync(statsPath);
+    const fp16Onnx = path.join(modelDir, 'sifigan_vocoder_dml_fp16.onnx');
+    const fp32Onnx = path.join(modelDir, 'sifigan_vocoder_dml.onnx');
+    const hasFp16 = fs.existsSync(fp16Onnx) && fs.statSync(fp16Onnx).size > 0;
+    const hasFp32 = fs.existsSync(fp32Onnx) && fs.statSync(fp32Onnx).size > 0;
+    hasModelFiles = stats.size > 0 && (hasFp16 || hasFp32);
+  } catch (_) {}
+
+  let updateAvailable = false;
+  if (hasModelFiles) {
+    if (!localVersion) {
+      updateAvailable = true;
+    } else if (latestVersion && compareVersions(localVersion, latestVersion) < 0) {
+      updateAvailable = true;
+    }
+  }
+
+  return {
+    updateAvailable,
+    localVersion,
+    latestVersion,
+    hasModelFiles,
+  };
+}
+
+function saveSifiganVersion(modelDir) {
+  const versionPath = getSifiganVersionPath(modelDir);
+  const latestVersion = getLatestSifiganVersion();
+  if (!latestVersion) return;
+  try {
+    const data = {
+      version: latestVersion,
+      model: 'sifigan',
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
+    console.log(`[ModelManager] Saved SiFiGAN version ${latestVersion}`);
+  } catch (err) {
+    console.warn(`[ModelManager] Failed to save SiFiGAN version:`, err.message);
+  }
 }
 
 function checkMissingFiles(modelDir, precision) {
@@ -1135,6 +1408,9 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   if (errors.length > 0) {
     throw errors[0];
   }
+
+  // 下载成功后保存模型版本信息
+  saveModelVersion(modelDir, precision);
 }
 
 module.exports = {
@@ -1147,6 +1423,9 @@ module.exports = {
   PRECISION_SUBDIR_MAP,
   PRECISION_SUBDIR_PRECESIONS,
   MIN_FILE_SIZE_FOR_CHUNKING,
+  MODEL_VERSIONS,
+  JP_MODEL_VERSIONS,
+  SIFIGAN_MODEL_VERSION,
   checkMissingFiles,
   checkMissingFilesAsync,
   checkMissingJpFiles,
@@ -1170,4 +1449,21 @@ module.exports = {
   getManifestForPrecision,
   isSvsModelFile,
   isPrecisionDownloadable,
+  // Version management
+  getModelVersionPath,
+  getJpModelVersionPath,
+  getSifiganVersionPath,
+  compareVersions,
+  getLocalModelVersion,
+  getLatestModelVersion,
+  checkModelVersion,
+  saveModelVersion,
+  getLocalJpModelVersion,
+  getLatestJpModelVersion,
+  checkJpModelVersion,
+  saveJpModelVersion,
+  getLocalSifiganVersion,
+  getLatestSifiganVersion,
+  checkSifiganVersion,
+  saveSifiganVersion,
 };

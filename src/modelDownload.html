@@ -50,6 +50,22 @@
     </div>
   </div>
 
+  <div class="version-info-section" id="versionInfoSection" style="display:none;">
+    <div class="version-info-row">
+      <span class="version-label" data-i18n="modelDownload.currentVersion">当前版本</span>
+      <span class="version-value" id="localVersionValue">-</span>
+    </div>
+    <div class="version-info-row">
+      <span class="version-label" data-i18n="modelDownload.latestVersion">最新版本</span>
+      <span class="version-value" id="latestVersionValue">-</span>
+    </div>
+    <div class="version-update-banner" id="versionUpdateBanner" style="display:none;">
+      <span class="update-icon" aria-hidden="true">&#9888;</span>
+      <span class="update-text" id="versionUpdateText"></span>
+      <button class="btn btn-update" id="updateModelBtn" data-i18n="modelDownload.update">更新</button>
+    </div>
+  </div>
+
   <div class="overall-progress" id="progressSection" style="display:none;">
     <div class="label">
       <span id="overallLabel" data-i18n="modelDownload.overallProgress">总进度</span>
@@ -108,6 +124,8 @@
         <div class="model-card-status" id="sifiganStatus">
           <span class="status-indicator" id="sifiganStatusIndicator"></span>
           <span class="status-text" id="sifiganStatusText" data-i18n="modelDownload.checking">检测中...</span>
+          <span class="status-version" id="sifiganVersionText"></span>
+          <button class="btn-card btn-update-sifigan" id="sifiganUpdateBtn" style="display:none;" data-i18n="modelDownload.update">更新</button>
         </div>
 
         <div class="model-card-tooltip" id="sifiganTooltip" style="display:none;" role="tooltip"></div>
