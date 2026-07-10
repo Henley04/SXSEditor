@@ -1495,6 +1495,12 @@ class OnnxSVSPipeline {
         // SiFiGAN 双输入：传入 vocoderType、F0 序列、stats 缺失标志；default vocoder 仅用 mel
         const chunkFrames = this._resolveVocoderChunkFrames();
         console.log(`[OnnxSVSPipeline] Vocoder EP: ${this.sessionEPs.vocoder || 'unknown'}, vocoderIsFP16=${this.vocoderIsFP16}, isFP16=${this.isFP16}, vocoderType=${this.vocoderType}, resolvedFile=${this._resolvedVocoderFile}`);
+        if (this.sessionEPs.vocoder !== 'dml') {
+            console.warn(`[OnnxSVSPipeline] WARNING: Vocoder is NOT on DML (EP=${this.sessionEPs.vocoder}), will be slow and may explain low GPU usage!`);
+        }
+        if (!this.sessions.vocoder) {
+            console.error('[OnnxSVSPipeline] CRITICAL: sessions.vocoder is missing! Vocoder inference will throw.');
+        }
 
         // 一致性检测：vocoderType 与实际加载的 vocoder 文件必须匹配，否则 mel 处理模式
         // （sifigan 4× 上采样 + f0 输入 vs default 仅 mel）与 session 输入签名不匹配，
@@ -1703,6 +1709,27 @@ class OnnxSVSPipeline {
 
         await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange);
 
+        // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
+        {
+            let xtNaN = 0, xtInf = 0, xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
+            const xtLen = xt.data.length;
+            for (let i = 0; i < xtLen; i++) {
+                const v = xt.data[i];
+                if (Number.isNaN(v)) { xtNaN++; continue; }
+                if (!Number.isFinite(v)) { xtInf++; continue; }
+                if (v < xtMin) xtMin = v;
+                if (v > xtMax) xtMax = v;
+                xtSum += v;
+                xtSumSq += v * v;
+            }
+            const xtMean = xtSum / xtLen;
+            const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
+            console.log(`[DiffusionDiag] OUTPUT xt (vocoder input): frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
+            if (xtNaN > 0 || xtInf > 0) {
+                console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! This will cause vocoder explosion!`);
+            }
+        }
+
         // GPU 排空点 2：diffusion（64 次推理）→ vocoder 切换前等待 DML 回收 diffusion 的 GPU 资源。
         // 这是最关键的排空点：32 步 × 2 次 cond/uncond = 64 次连续 diff_step 推理后，
         // DML 内部资源池累积了大量 transformer 注意力中间张量，不排空直接进 vocoder 会 OOM。
@@ -1864,9 +1891,11 @@ class OnnxSVSPipeline {
         const cacheKey = this._computeSynthCacheKey(notes, bpm, options);
         const cachedAudio = this._synthCacheGet(cacheKey);
         if (cachedAudio) {
+            console.warn(`[OnnxSVSPipeline] >>> CACHE HIT <<< key=${cacheKey.substring(0, 32)}... | Returning CACHED audio, vocoder will NOT run! (Clear cache: switch model or restart app)`);
             onProgress(100);
             return cachedAudio;
         }
+        console.log(`[OnnxSVSPipeline] Cache MISS (key=${cacheKey.substring(0, 32)}...), running full synthesis pipeline`);
 
         let currentProgress = 0;
         onProgress(currentProgress);
@@ -2038,6 +2067,27 @@ class OnnxSVSPipeline {
             const xt = this.randomNoise(totalFrames, MEL_DIM);
 
             await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50);
+
+            // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
+            {
+                let xtNaN = 0, xtInf = 0, xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
+                const xtLen = xt.data.length;
+                for (let i = 0; i < xtLen; i++) {
+                    const v = xt.data[i];
+                    if (Number.isNaN(v)) { xtNaN++; continue; }
+                    if (!Number.isFinite(v)) { xtInf++; continue; }
+                    if (v < xtMin) xtMin = v;
+                    if (v > xtMax) xtMax = v;
+                    xtSum += v;
+                    xtSumSq += v * v;
+                }
+                const xtMean = xtSum / xtLen;
+                const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
+                console.log(`[DiffusionDiag] OUTPUT xt (vocoder input): frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
+                if (xtNaN > 0 || xtInf > 0) {
+                    console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! This will cause vocoder explosion!`);
+                }
+            }
 
             // GPU 排空点：diffusion（64 次推理）→ vocoder 切换前等待 DML 回收 GPU 资源
             await gpuDrain();
