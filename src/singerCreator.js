@@ -207,6 +207,10 @@ btnCancel.addEventListener('click', () => {
   window.close();
 });
 
+document.getElementById('btn-save').addEventListener('click', () => {
+  performSave(false);
+});
+
 // ==================== Save / Save As logic ====================
 // Save (Ctrl+S): if a file path is already known, write to it silently.
 // Otherwise fall back to Save As (show the dialog).
