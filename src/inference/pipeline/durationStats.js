@@ -49,6 +49,20 @@ function _findStatsPath() {
         path.join(__dirname, '..', '..', 'inference', 'en_phoneme_durations.json'),
         path.join(__dirname, '..', '..', '..', 'src', 'inference', 'en_phoneme_durations.json'),
     ];
+    // Fallback paths for packaged Electron app (asar / unpacked)
+    try {
+        if (process.resourcesPath) {
+            searchPaths.push(path.join(process.resourcesPath, 'app.asar', '.webpack', 'main', 'en_phoneme_durations.json'));
+            searchPaths.push(path.join(process.resourcesPath, 'app', '.webpack', 'main', 'en_phoneme_durations.json'));
+        }
+    } catch (_) {}
+    // Fallback: require.main.path (non-webpack / CLI mode)
+    try {
+        if (require.main && require.main.path) {
+            searchPaths.push(path.join(require.main.path, 'inference', 'en_phoneme_durations.json'));
+            searchPaths.push(path.join(require.main.path, 'src', 'inference', 'en_phoneme_durations.json'));
+        }
+    } catch (_) {}
     for (const p of searchPaths) {
         try {
             if (fs.existsSync(p)) return p;
