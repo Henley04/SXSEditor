@@ -203,7 +203,7 @@ Edit operations:
 
 **Every note must have a lyric.** The preprocessing does not detect lyrics from audio. You must manually type them:
 
-- For **Chinese singing**: Enter Chinese characters (e.g., `我`, `你`, `好`). Pinyin is also accepted.
+- For **Chinese singing**: Enter Chinese characters (e.g., `我`, `你`, `好`). You may append a digit `1`–`5` after a character to force a specific tone (e.g., `你2 好3`). Pinyin is **not** accepted.
 - For **English singing**: Enter the English word being sung (e.g., `hello`, `love`).
 - For notes with no sung content (rests, breaths): Leave the lyric empty or use a space.
 
@@ -367,7 +367,7 @@ The bottom panel has tabs for different parameter lanes:
 
 ### Lyric Input Rules
 
-- **Chinese**: Enter Chinese characters (e.g., `你好世界`). The system uses `pinyin-pro` to convert characters to Pinyin, then to phonemes. You can also enter Pinyin directly (e.g., `ni hao`).
+- **Chinese**: Enter Chinese characters (e.g., `你好世界`). You may append a digit `1`–`5` after a character to force a specific tone (e.g., `你2 好3`), where 1–4 are the four tones and 5 is the neutral tone (轻声). The system uses `pinyin-pro` to convert characters to Pinyin (with the forced tone if a digit is present), then to `zh_*` phonemes. Pinyin text (e.g., `ni hao`) is **not** accepted as Chinese — ASCII input is routed to the English G2P path.
 - **English**: Enter standard English words (e.g., `hello`, `love`). The system uses a built-in CMU pronunciation dictionary (126,000 words) to convert to phonemes. Unknown words fall back to letter-by-letter phoneme estimation.
 - **Special tokens**: Empty lyrics are treated as `<SP>` (short pause/silence).
 

@@ -103,7 +103,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td><span data-lang="en">Chinese (Mandarin)</span><span data-lang="zh">中文（普通话）</span></td><td><span data-lang="en">Supported — Chinese characters or Pinyin input</span><span data-lang="zh">支持——汉字或拼音输入</span></td></tr>
+          <tr><td><span data-lang="en">Chinese (Mandarin)</span><span data-lang="zh">中文（普通话）</span></td><td><span data-lang="en">Supported — Chinese characters with optional tone digit (1–5)</span><span data-lang="zh">支持——汉字，可附加声调数字（1–5）</span></td></tr>
           <tr><td><span data-lang="en">English</span><span data-lang="zh">英语</span></td><td><span data-lang="en">Supported — English words, auto-converted to phonemes</span><span data-lang="zh">支持——英文单词，自动转换为音素</span></td></tr>
           <tr><td><span data-lang="en">Japanese</span><span data-lang="zh">日语</span></td><td><span data-lang="en">In development</span><span data-lang="zh">开发中</span></td></tr>
         </tbody>
@@ -243,8 +243,8 @@
       </h3>
       <p data-lang="en">Double-click a note to open an inline text editor. Type the lyric and press <kbd class="kbd">Enter</kbd>. You can also edit lyrics in the Inspector panel on the right side.</p>
       <p data-lang="zh">双击音符打开内联文本编辑器。输入歌词后按 <kbd class="kbd">Enter</kbd>。也可在右侧检查器面板中编辑。</p>
-      <p data-lang="en">For Chinese singing, enter Chinese characters (e.g., <code>你好</code>) or Pinyin (e.g., <code>ni hao</code>). For English singing, enter English words (e.g., <code>hello</code>).</p>
-      <p data-lang="zh">中文演唱可输入汉字（如 <code>你好</code>）或拼音（如 <code>ni hao</code>）。英文演唱请输入英文单词（如 <code>hello</code>）。</p>
+      <p data-lang="en">For Chinese singing, enter Chinese characters (e.g., <code>你好</code>). You may append a digit <code>1</code>–<code>5</code> after a character to force a specific tone (e.g., <code>你2 好3</code>), where 1–4 are the four tones and 5 is the neutral tone (轻声). Pinyin text (e.g., <code>ni hao</code>) is <strong>not</strong> accepted as Chinese — ASCII input is routed to the English G2P path. For English singing, enter English words (e.g., <code>hello</code>).</p>
+      <p data-lang="zh">中文演唱请输入汉字（如 <code>你好</code>）。可在汉字后加数字 <code>1</code>–<code>5</code> 强制指定声调（如 <code>你2 好3</code>），其中 1–4 为四声，5 为轻声。<strong>不接受拼音</strong>（如 <code>ni hao</code>）作为中文输入——ASCII 输入会走英文 G2P 路径。英文演唱请输入英文单词（如 <code>hello</code>）。</p>
 
       <h3>
         <span data-lang="en">What is a slur note?</span>
@@ -505,10 +505,10 @@
       </ul>
 
       <nav class="doc-pager">
-        <a href="settings.html">
+        <a href="model-updates.html">
           <div class="pager-card">
             <div class="pager-label" data-i18n="pager.prev">Previous</div>
-            <div class="pager-title"><span data-lang="en">Settings</span><span data-lang="zh">设置</span></div>
+            <div class="pager-title"><span data-lang="en">Model Updates</span><span data-lang="zh">模型更新</span></div>
           </div>
         </a>
         <a href="quick-start.html" class="next">

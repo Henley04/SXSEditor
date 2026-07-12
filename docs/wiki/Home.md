@@ -12,7 +12,7 @@ You write notes on a piano roll, type lyrics, and SXSEditor generates a singing 
 
 | Language | Status | Lyric Input |
 |----------|--------|-------------|
-| Chinese (Mandarin) | Supported | Chinese characters or Pinyin |
+| Chinese (Mandarin) | Supported | Chinese characters (optional tone digit 1–5) |
 | English | Supported | English words (auto-converted to phonemes) |
 | Japanese | In Development | — |
 

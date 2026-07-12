@@ -52,6 +52,8 @@ macOS / Linux: build from source (see below).
 
 See the [Documentation](https://henley04.github.io/SXSEditor/) for full guides:
 - [User Guide](https://henley04.github.io/SXSEditor/user/quick-start.html) — installation, singer creation, editing, synthesis, export
+- [Application Updates](https://henley04.github.io/SXSEditor/user/app-updates.html) — notable user-facing application changes
+- [Model Updates](https://henley04.github.io/SXSEditor/user/model-updates.html) — ONNX model and inference pipeline changes
 - [Developer Guide](https://henley04.github.io/SXSEditor/dev/build.html) — architecture, build from source, inference pipeline, ONNX models
 - [Help & FAQ](https://henley04.github.io/SXSEditor/user/faq.html) — troubleshooting and common questions
 
@@ -168,6 +170,8 @@ macOS / Linux 用户请从源码构建。
 
 完整文档见 [文档首页](https://henley04.github.io/SXSEditor/)：
 - [用户指南](https://henley04.github.io/SXSEditor/user/quick-start.html) — 安装、创建歌手、编辑、合成、导出
+- [应用更新](https://henley04.github.io/SXSEditor/user/app-updates.html) — 面向用户的应用重大变更
+- [模型更新](https://henley04.github.io/SXSEditor/user/model-updates.html) — ONNX 模型与推理管线变更
 - [开发者指南](https://henley04.github.io/SXSEditor/dev/build.html) — 架构、源码构建、推理管线、ONNX 模型
 - [帮助与常见问题](https://henley04.github.io/SXSEditor/user/faq.html) — 故障排查与常见问题
 
