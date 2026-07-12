@@ -82,7 +82,7 @@ See the [Documentation](https://henley04.github.io/SXSEditor/) for full guides:
 | Smart Vocoder Chunk Sizing | Vocoder chunk size auto-allocated from VRAM budget = (VRAM − resident weights − diff_step activations ~2GB − OS reserve ~1GB) × 0.7 safety factor. Resident weights by (vocoderType, precision): default FP32≈2.9GB / FP16≈1.4GB / INT8≈0.96GB, SiFiGAN FP32≈2.5GB / FP16≈0.95GB / INT8≈0.5GB. 8GB baseline: default→536 frames, SiFiGAN→1008 frames. Settings page shows a VRAM reference table (2/3/4/6/8/10/12/16/20/24GB) computed with the current precision and vocoder type, with the current GPU's tier highlighted; manual override available |
 | Vocoder Output Validation | Detects DML silent failures (all-zero/NaN waveform from VRAM exhaustion) and throws a clear OOM error instead of playing empty audio |
 | Model Auto-Download | Chunked parallel download from ModelScope |
-| Model Version Management | Fetches available versions from ModelScope branches; defaults to latest (master); users can select a specific version to download; only one model per precision is stored (updating replaces the previous version); in-app link to model version details page |
+| Model Version Management | Fetches available tags from ModelScope /revisions API; defaults to latest (master branch, no tag); users can select a specific tag to download; branches are not shown; only one model per precision is stored (updating replaces the previous version); in-app link to model version details page |
 | Model Precision | FP32, FP16, INT8, INT8-NPU |
 | Themes | Hot-swappable design token system |
 | SVG Icons | Flat, theme-aware inline SVG icon system (currentColor) |
@@ -201,7 +201,7 @@ macOS / Linux 用户请从源码构建。
 | Vocoder 分片智能分配 | 显存预算 = (VRAM − 按 vocoderType/精度估算的常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB) × 0.7 安全系数；default vocoder 常驻权重 FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB，SiFiGAN 常驻权重更低（fp16: 23MB 模型 vs default 519MB）；8GB 基准：default→536 帧，SiFiGAN→1008 帧；设置页提供显存对照表（2/3/4/6/8/10/12/16/20/24GB），按当前精度与 vocoder 类型实时计算，当前显卡对应行高亮；可在设置中切换为手动设置 |
 | Vocoder 输出校验 | 检测 DML 静默失败（显存耗尽导致的全零/NaN 波形）并抛出明确的 OOM 错误，避免误播空声音 |
 | 模型自动下载 | 从 ModelScope 分片并行下载 |
-| 模型版本管理 | 从 ModelScope 分支获取可用版本；默认下载最新版本（master）；用户可选择特定版本下载；同一精度只保留一个模型（更新时替换旧版本）；应用内提供模型版本详情链接 |
+| 模型版本管理 | 从 ModelScope /revisions API 获取可用标签；默认下载最新版本（master 分支，不带标签）；用户可选择特定标签下载；不显示分支；同一精度只保留一个模型（更新时替换旧版本）；应用内提供模型版本详情链接 |
 | 模型精度 | FP32、FP16、INT8、INT8-NPU |
 | 主题系统 | 热切换设计令牌系统 |
 | SVG 图标 | 扁平化、主题感知的内联 SVG 图标系统 (currentColor) |
@@ -313,7 +313,7 @@ macOS / Linux：ソースからビルドしてください。
 | Vocoder チャンクサイズ自動割当 | VRAM 予算 = (VRAM − 精度別常駐重み − diff_step 活性化 ~2GB − OS 占用 ~1GB) × 0.7 安全係数；常駐重みは精度別 FP32≈2.9GB、FP16≈1.4GB、INT8≈0.96GB；予算別階層 &lt;0.5GB→256, &lt;1GB→384, &lt;2GB→512, &lt;4GB→768, ≥4GB→1008；設定で手動指定にも切替可能 |
 | Vocoder 出力検証 | DML サイレント失敗（VRAM 枯渇による全ゼロ/NaN 波形）を検出し、空音声の誤再生を防ぐ OOM エラーをスロー |
 | モデル自動ダウンロード | ModelScope からチャンク並列ダウンロード |
-| モデルバージョン管理 | ModelScope ブランチから利用可能なバージョンを取得；デフォルトは最新版（master）；ユーザーが特定バージョンを選択可能；同一精度のモデルは1つのみ保持（更新時に旧バージョンを置換）；アプリ内にモデルバージョン詳細リンクを提供 |
+| モデルバージョン管理 | ModelScope /revisions API から利用可能なタグを取得；デフォルトは最新版（master ブランチ、タグなし）；ユーザーが特定タグを選択可能；ブランチは非表示；同一精度のモデルは1つのみ保持（更新時に旧バージョンを置換）；アプリ内にモデルバージョン詳細リンクを提供 |
 | モデル精度 | FP32、FP16、INT8、INT8-NPU |
 | テーマ | ホットスワップ対応デザイントークンシステム |
 | SVG アイコン | フラット設計、テーマ連動インライン SVG アイコンシステム (currentColor) |

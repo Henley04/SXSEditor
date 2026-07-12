@@ -226,10 +226,13 @@ function getSifiganFileDownloadUrl(filePath, revision = 'master') {
   return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${encodeURIComponent(revision)}&FilePath=${encoded}`;
 }
 
-// ===== ModelScope branch (version) listing =====
-// ModelScope model repos are git-based. Branches represent model versions.
-// 'master' is always the latest version. Other branches are specific versions.
-// The branches API: GET /api/v1/models/{model_id}/branches → { Data: { Branches: [...] } }
+// ===== ModelScope tag (version) listing =====
+// ModelScope model repos are git-based. The default branch ('master') is the
+// latest version — downloading without a Revision tag fetches this default.
+// Tags represent specific released versions (e.g. 'v1.0', 'v2').
+// The revisions API: GET /api/v1/models/{model_id}/revisions
+//   → { Data: { RevisionMap: { Branches: [...], Tags: [...] } } }
+// Only tags are surfaced as selectable versions; branches are NOT shown.
 
 /**
  * Fetch a JSON document from ModelScope API via GET request.
@@ -251,66 +254,52 @@ async function _fetchModelScopeJson(url) {
 }
 
 /**
- * Fetch available branches (versions) for a main model precision from ModelScope.
- * Returns an array of branch names, e.g. ['master', 'v1.0', 'v0.9'].
- * 'master' is always first (latest). On failure returns ['master'].
+ * Extract tag names from a ModelScope revisions API response.
+ * Returns an array of tag name strings (e.g. ['v2', 'v1.0']).
+ * Returns [] if no tags exist or the response shape is unexpected.
  */
-async function getModelBranches(precision) {
+function _extractTags(data) {
+  if (!data || !data.Success || !data.Data) return [];
+  const revisionMap = (data.Data.RevisionMap) || {};
+  const tags = Array.isArray(revisionMap.Tags) ? revisionMap.Tags : [];
+  return tags
+    .map((t) => (t && typeof t === 'object' && t.Revision) ? t.Revision : null)
+    .filter((t) => typeof t === 'string' && t.length > 0);
+}
+
+/**
+ * Fetch available tags (versions) for a main model precision from ModelScope.
+ * Returns an array of tag names, e.g. ['v2', 'v1.0']. On failure returns [].
+ * The default (latest, no tag) is represented separately as 'master'.
+ */
+async function getModelTags(precision) {
   const modelId = getModelId(precision);
-  if (!modelId) return ['master'];
-  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/branches`;
+  if (!modelId) return [];
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
   const data = await _fetchModelScopeJson(url);
-  if (!data || !data.Success || !data.Data || !Array.isArray(data.Data.Branches)) {
-    return ['master'];
-  }
-  const branches = data.Data.Branches.slice();
-  // Ensure 'master' is always first (latest)
-  branches.sort((a, b) => {
-    if (a === 'master') return -1;
-    if (b === 'master') return 1;
-    return a.localeCompare(b);
-  });
-  return branches.length > 0 ? branches : ['master'];
+  return _extractTags(data);
 }
 
 /**
- * Fetch available branches for a JP model precision from ModelScope.
+ * Fetch available tags for a JP model precision from ModelScope.
  */
-async function getJpModelBranches(precision) {
+async function getJpModelTags(precision) {
   const modelId = getJpModelId(precision);
-  if (!modelId) return ['master'];
-  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/branches`;
+  if (!modelId) return [];
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
   const data = await _fetchModelScopeJson(url);
-  if (!data || !data.Success || !data.Data || !Array.isArray(data.Data.Branches)) {
-    return ['master'];
-  }
-  const branches = data.Data.Branches.slice();
-  branches.sort((a, b) => {
-    if (a === 'master') return -1;
-    if (b === 'master') return 1;
-    return a.localeCompare(b);
-  });
-  return branches.length > 0 ? branches : ['master'];
+  return _extractTags(data);
 }
 
 /**
- * Fetch available branches for the SiFiGAN model from ModelScope.
+ * Fetch available tags for the SiFiGAN model from ModelScope.
  */
-async function getSifiganBranches() {
+async function getSifiganTags() {
   const modelId = MODEL_IDS.sifigan;
-  if (!modelId) return ['master'];
-  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/branches`;
+  if (!modelId) return [];
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
   const data = await _fetchModelScopeJson(url);
-  if (!data || !data.Success || !data.Data || !Array.isArray(data.Data.Branches)) {
-    return ['master'];
-  }
-  const branches = data.Data.Branches.slice();
-  branches.sort((a, b) => {
-    if (a === 'master') return -1;
-    if (b === 'master') return 1;
-    return a.localeCompare(b);
-  });
-  return branches.length > 0 ? branches : ['master'];
+  return _extractTags(data);
 }
 
 // ===== Version management functions =====
@@ -446,7 +435,8 @@ function checkModelVersion(modelDir, precision) {
 
 /**
  * Save the model version to version.json after a successful download.
- * revision records the ModelScope branch that was downloaded.
+ * revision records the ModelScope revision that was downloaded ('master'
+ * for the latest default branch, or a tag name for a specific version).
  */
 function saveModelVersion(modelDir, precision, revision = 'master') {
   const versionPath = getModelVersionPath(modelDir, precision);
@@ -1592,10 +1582,10 @@ module.exports = {
   getManifestForPrecision,
   isSvsModelFile,
   isPrecisionDownloadable,
-  // Branch (version) listing
-  getModelBranches,
-  getJpModelBranches,
-  getSifiganBranches,
+  // Tag (version) listing
+  getModelTags,
+  getJpModelTags,
+  getSifiganTags,
   // Version management
   getModelVersionPath,
   getJpModelVersionPath,

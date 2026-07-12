@@ -5,7 +5,7 @@ const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, getLatestModelVersion, invalidateJpModelsCache, getModelBranches, getJpModelBranches, getSifiganBranches } = require('../modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, getLatestModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 let downloadAbortController = null;
@@ -234,35 +234,37 @@ function registerModelDownloadIpc() {
     }
   });
 
-  // List available model versions (branches) from ModelScope for a given precision
+  // List available model versions (tags) from ModelScope for a given precision.
+  // Tags are fetched from the /revisions endpoint; branches are NOT shown.
+  // The default 'latest' (no tag) is represented as 'master' on the client.
   ipcMain.handle('model-download:list-versions', async (event, precision) => {
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     try {
-      const branches = await getModelBranches(currentPrecision);
-      return { success: true, branches };
+      const tags = await getModelTags(currentPrecision);
+      return { success: true, tags };
     } catch (err) {
-      return { success: false, branches: ['master'], error: err.message };
+      return { success: false, tags: [], error: err.message };
     }
   });
 
-  // List available JP model versions from ModelScope
+  // List available JP model versions (tags) from ModelScope
   ipcMain.handle('model-download:list-jp-versions', async (event, precision) => {
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     try {
-      const branches = await getJpModelBranches(currentPrecision);
-      return { success: true, branches };
+      const tags = await getJpModelTags(currentPrecision);
+      return { success: true, tags };
     } catch (err) {
-      return { success: false, branches: ['master'], error: err.message };
+      return { success: false, tags: [], error: err.message };
     }
   });
 
-  // List available SiFiGAN model versions from ModelScope
+  // List available SiFiGAN model versions (tags) from ModelScope
   ipcMain.handle('model-download:list-sifigan-versions', async () => {
     try {
-      const branches = await getSifiganBranches();
-      return { success: true, branches };
+      const tags = await getSifiganTags();
+      return { success: true, tags };
     } catch (err) {
-      return { success: false, branches: ['master'], error: err.message };
+      return { success: false, tags: [], error: err.message };
     }
   });
 
