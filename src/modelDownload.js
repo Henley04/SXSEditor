@@ -13,8 +13,8 @@ let lastSpeedTime = 0;
 let isDownloading = false;
 let renderedFileIds = [];
 let currentPrecision = 'fp16';
-let currentRevision = 'master'; // selected ModelScope branch (version)
-let availableBranches = ['master']; // fetched from ModelScope
+let currentRevision = 'master'; // selected ModelScope revision ('master' = latest, no tag; other = tag name)
+let availableTags = []; // tags fetched from ModelScope (branches NOT shown)
 let currentVersionInfo = null; // { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
 
 function createIconSvg(status) {
@@ -164,8 +164,9 @@ async function refreshVersionInfo() {
 }
 
 /**
- * Fetch available model versions (branches) from ModelScope and populate
- * the version selector dropdown. 'master' is always first (latest).
+ * Fetch available model versions (tags) from ModelScope and populate
+ * the version selector dropdown. The first option is always 'master'
+ * (latest, no tag). Tags are appended after. Branches are NOT shown.
  */
 async function refreshVersionSelector() {
   const select = document.getElementById('versionSelect');
@@ -174,19 +175,20 @@ async function refreshVersionSelector() {
   select.innerHTML = '';
   try {
     const result = await window.electronAPI.modelDownloadListVersions(currentPrecision);
-    availableBranches = (result && result.branches) || ['master'];
+    availableTags = (result && result.tags) || [];
   } catch (_) {
-    availableBranches = ['master'];
+    availableTags = [];
   }
-  // Populate dropdown options
-  for (const branch of availableBranches) {
+  // First option: latest (master, no tag)
+  const latestOpt = document.createElement('option');
+  latestOpt.value = 'master';
+  latestOpt.textContent = t('modelDownload.latestVersionLabel');
+  select.appendChild(latestOpt);
+  // Remaining options: tags
+  for (const tag of availableTags) {
     const option = document.createElement('option');
-    option.value = branch;
-    if (branch === 'master') {
-      option.textContent = t('modelDownload.latestVersionLabel');
-    } else {
-      option.textContent = branch;
-    }
+    option.value = tag;
+    option.textContent = tag;
     select.appendChild(option);
   }
   // Set selected value to currentRevision (or local revision if installed)
@@ -194,7 +196,8 @@ async function refreshVersionSelector() {
   if (currentVersionInfo && currentVersionInfo.hasModelFiles && currentVersionInfo.localRevision) {
     targetRevision = currentVersionInfo.localRevision;
   }
-  if (availableBranches.includes(targetRevision)) {
+  const allOptions = ['master', ...availableTags];
+  if (allOptions.includes(targetRevision)) {
     select.value = targetRevision;
     currentRevision = targetRevision;
   } else {
@@ -221,7 +224,7 @@ function renderVersionInfo(info) {
   }
 
   section.style.display = 'block';
-  // Show revision info: "master" → "最新版本", other branches → branch name
+  // Show revision info: "master" → version number (latest), tag → tag name
   const localRev = info.localRevision || 'master';
   if (localRev === 'master') {
     localEl.textContent = info.localVersion || t('modelDownload.legacyVersion');
