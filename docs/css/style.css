@@ -140,11 +140,8 @@ h1, h2, h3, h4 { letter-spacing: -0.02em; line-height: 1.3; }
 [data-theme="dark"] .theme-toggle .icon-sun { display: block; }
 [data-theme="dark"] .theme-toggle .icon-moon { display: none; }
 
-.menu-btn { display: none; }
-@media (max-width: 1024px) {
-  .header-nav { display: none; }
-  .menu-btn { display: flex; }
-}
+/* .menu-btn + mobile .header-nav are defined later in the Mobile nav drawer section
+   to keep all related rules together and avoid conflicting display:none / transform. */
 
 /* ===== Buttons ===== */
 .btn-primary {
