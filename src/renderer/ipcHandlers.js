@@ -38,12 +38,13 @@ if (window.electronAPI?.onSingerCreated) {
 // Fragment saved IPC handler
 if (window.electronAPI?.onFragmentSaved) {
   const cleanup = window.electronAPI.onFragmentSaved((data) => {
-    const { fragmentId, notes, envelopes, pitchCurve, startTime, duration } = data;
+    const { fragmentId, notes, envelopes, pitchCurve, kanjiGroups, startTime, duration } = data;
     const fragment = trackManager.getFragments().find(f => f.id === fragmentId);
     if (fragment) {
       if (notes) fragment.notes = notes;
       if (envelopes) fragment.envelopes = envelopes;
       if (pitchCurve) fragment.pitchCurve = pitchCurve;
+      if (kanjiGroups) fragment.kanjiGroups = kanjiGroups;
       if (startTime !== undefined) fragment.startTime = startTime;
       if (duration !== undefined) fragment.duration = duration;
     }

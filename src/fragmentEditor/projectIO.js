@@ -3,6 +3,7 @@ import {
   getNotes,
   getEnvelopes,
   getPitchCurve,
+  getKanjiGroups,
   getAutoSaveTimer, setAutoSaveTimer,
 } from './state.js';
 
@@ -20,14 +21,17 @@ export function saveFragmentData() {
     const notes = getNotes();
     const envelopes = getEnvelopes();
     const pitchCurve = getPitchCurve();
+    const kanjiGroups = getKanjiGroups();
     currentFragment.notes = notes;
     currentFragment.envelopes = envelopes;
     currentFragment.pitchCurve = pitchCurve;
+    currentFragment.kanjiGroups = kanjiGroups;
     if (window.electronAPI?.saveFragmentData) {
       window.electronAPI.saveFragmentData(currentFragment.id, {
         notes,
         envelopes,
         pitchCurve,
+        kanjiGroups,
         startTime: currentFragment.startTime,
         duration: currentFragment.duration,
       });

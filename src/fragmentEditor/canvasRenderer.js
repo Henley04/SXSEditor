@@ -37,7 +37,11 @@ import {
   getParamPanelCollapsed,
   getParamPanelMode,
   getDragMode,
+  getKanjiGroups,
 } from './state.js';
+import {
+  findGroupByNoteId,
+} from './kanjiGroupUtils.js';
 
 const canvas = document.getElementById('piano-roll');
 const ctx = canvas.getContext('2d');
@@ -123,6 +127,112 @@ export function findNoteAt(x, y) {
     }
   }
   return null;
+}
+
+/**
+ * Hit-test for kanji group brackets/labels.
+ * Returns the group object if the point (x, y) is on a group's bracket line
+ * or kanji label, otherwise null.
+ */
+export function findKanjiGroupAt(x, y) {
+  const groups = getKanjiGroups();
+  if (!groups || groups.length === 0) return null;
+  const notes = getNotes();
+  const zoomX = getZoomX();
+  const scrollX = getScrollX();
+  const beatToPixel = BEAT_WIDTH * zoomX;
+
+  for (const group of groups) {
+    const groupNotes = group.noteIds
+      .map(id => notes.find(n => n.id === id))
+      .filter(Boolean);
+    if (groupNotes.length === 0) continue;
+    const sorted = [...groupNotes].sort((a, b) => a.start - b.start);
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const x1 = first.start * beatToPixel - scrollX;
+    const x2 = (last.start + last.duration) * beatToPixel - scrollX;
+    const yMin = Math.min(...groupNotes.map(n => pitchToY(n.pitch)));
+    const lineY = yMin - 10;
+    // Hit area: 6px tall band around the line + kanji label area
+    const labelW = 20;
+    const midX = (x1 + x2) / 2;
+    if (y >= lineY - 8 && y <= lineY + 8) {
+      // On the line itself (including label area)
+      if (x >= x1 && x <= x2) {
+        return { group, rightClickedNoteId: null };
+      }
+    }
+    // Also check a wider area around the label text
+    if (x >= midX - labelW && x <= midX + labelW && y >= lineY - 10 && y <= lineY + 10) {
+      return { group, rightClickedNoteId: null };
+    }
+  }
+  return null;
+}
+
+/**
+ * Draw kanji group brackets and labels above kana notes.
+ * For each group: a horizontal line from the first kana to the last kana,
+ * with the kanji character displayed in the middle.
+ */
+function _drawKanjiGroups(ctx, c) {
+  const groups = getKanjiGroups();
+  if (!groups || groups.length === 0) return;
+  const notes = getNotes();
+  const zoomX = getZoomX();
+  const scrollX = getScrollX();
+  const beatToPixel = BEAT_WIDTH * zoomX;
+
+  ctx.save();
+  for (const group of groups) {
+    const groupNotes = group.noteIds
+      .map(id => notes.find(n => n.id === id))
+      .filter(Boolean);
+    if (groupNotes.length < 2) continue;  // Single-note groups don't need a bracket
+    const sorted = [...groupNotes].sort((a, b) => a.start - b.start);
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const x1 = first.start * beatToPixel - scrollX;
+    const x2 = (last.start + last.duration) * beatToPixel - scrollX;
+    const yMin = Math.min(...groupNotes.map(n => pitchToY(n.pitch)));
+    const lineY = yMin - 10;
+
+    // Skip if entirely off-screen
+    if (x2 < 0 || x1 > canvas.width) continue;
+
+    // Draw bracket: horizontal line with small vertical ticks at each end
+    ctx.strokeStyle = c.accent;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x1, lineY);
+    ctx.lineTo(x2, lineY);
+    // Left tick
+    ctx.moveTo(x1, lineY);
+    ctx.lineTo(x1, lineY + 4);
+    // Right tick
+    ctx.moveTo(x2, lineY);
+    ctx.lineTo(x2, lineY + 4);
+    ctx.stroke();
+
+    // Draw kanji label in the middle
+    const midX = (x1 + x2) / 2;
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const textW = ctx.measureText(group.kanji).width + 8;
+    const textH = 14;
+    // Background pill
+    ctx.fillStyle = c.bgElevated;
+    ctx.fillRect(midX - textW / 2, lineY - textH / 2, textW, textH);
+    ctx.strokeStyle = c.accent;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(midX - textW / 2, lineY - textH / 2, textW, textH);
+    // Kanji text
+    ctx.fillStyle = c.accent;
+    ctx.fillText(group.kanji, midX, lineY);
+  }
+  ctx.restore();
 }
 
 export function _getParamCurveAreaTop() {
@@ -1421,6 +1531,9 @@ function _doRenderImpl(w, h) {
       ctx.fillText(tipText, tipX + 5, tipY + 4);
     }
   }
+
+  // Draw kanji group brackets and labels above kana notes
+  _drawKanjiGroups(ctx, c);
 
   if (currentParamMode === 'Pitch') {
     renderPitchCurve(c);

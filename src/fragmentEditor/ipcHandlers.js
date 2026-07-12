@@ -39,14 +39,16 @@ import {
   setCurrentProject,
   invalidatePitchCurveCache,
   setFragmentDataReceived,
+  getKanjiGroups, setKanjiGroups,
 } from './state.js';
 import { PARAM_MODES } from '../editor/pianoRoll.js';
 import { initPipeline } from './pipeline.js';
 import { stopFragmentPlayback, loadFragmentAudioSettings } from './audioPlayback.js';
-import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline } from './canvasRenderer.js';
+import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { updateParamModeButtons } from './uiControls.js';
 import { HistoryManager } from '../editor/historyManager.js';
+import { autoDetectKanjiGroups, cleanupKanjiGroups } from './kanjiGroupUtils.js';
 
 export function setupIpcHandlers() {
   const _ipcCleanups = getIpcCleanups();
@@ -141,6 +143,12 @@ async function handleFragmentData(data) {
   setLyricEditOldValue(null);
   setLyricEditNoteId(null);
   setNextNoteId(getNotes().reduce((max, n) => Math.max(max, (n.id || 0) + 1), 1));
+
+  // 加载已保存的汉字分组，并自动检测：若分片含假名，则将汉字切分为假名
+  setKanjiGroups(data.fragment.kanjiGroups || []);
+  const _kanjiGroups = getKanjiGroups();
+  autoDetectKanjiGroups(getNotes(), _kanjiGroups, genNoteId);
+  cleanupKanjiGroups(getNotes(), _kanjiGroups);
 
   setCurrentParamMode(PARAM_MODES.MIDI);
   updateParamModeButtons();
