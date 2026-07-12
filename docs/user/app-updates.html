@@ -60,8 +60,8 @@
         <span data-lang="zh">应用更新</span>
       </h1>
 
-      <p data-lang="en">This page tracks notable user-facing changes to the SXSEditor application. For the full commit history, see the <a href="https://github.com/Henley04/SXSEditor/commits/master">GitHub commit log</a>. Application version numbers are auto-incremented by GitHub CI; the entries below are grouped by the order in which features landed on <code>master</code>.</p>
-      <p data-lang="zh">本页追踪 SXSEditor 应用面向用户的重大变更。完整提交历史请查看 <a href="https://github.com/Henley04/SXSEditor/commits/master">GitHub 提交日志</a>。应用版本号由 GitHub CI 自动递增；下方条目按合入 <code>master</code> 的先后顺序分组。</p>
+      <p data-lang="en">This page tracks notable user-facing changes to the SXSEditor application, grouped by release version. Application version numbers are auto-incremented by GitHub CI. For the full commit history, see the <a href="https://github.com/Henley04/SXSEditor/commits/master">GitHub commit log</a>. Changes released before v1.0.5 are not tracked here.</p>
+      <p data-lang="zh">本页按发布版本追踪 SXSEditor 应用面向用户的重大变更。应用版本号由 GitHub CI 自动递增。完整提交历史请查看 <a href="https://github.com/Henley04/SXSEditor/commits/master">GitHub 提交日志</a>。v1.0.5 之前的变更不再追踪。</p>
 
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
@@ -72,96 +72,37 @@
       </div>
 
       <h2>
-        <span data-lang="en">Editor &amp; Piano Roll</span>
-        <span data-lang="zh">编辑器与钢琴卷帘</span>
+        <span data-lang="en">v1.0.5</span>
+        <span data-lang="zh">v1.0.5</span>
       </h2>
+
+      <h3>
+        <span data-lang="en">New Features</span>
+        <span data-lang="zh">新功能</span>
+      </h3>
       <ul>
         <li><span data-lang="en"><strong>Fragment selection &amp; deletion</strong> — fragments on the timeline can be selected with a click; press <kbd class="kbd">Delete</kbd> or use the right-click context menu to remove them.</span><span data-lang="zh"><strong>片段选择与删除</strong>——时间线上的片段可点击选中；按 <kbd class="kbd">Delete</kbd> 或右键菜单可删除。</span></li>
-        <li><span data-lang="en"><strong>Multi-note drag fix</strong> — resolved overlap and horizontal-stuck issues when dragging multiple notes at once.</span><span data-lang="zh"><strong>多音符拖动修复</strong>——修复了同时拖动多个音符时的重叠与水平卡顿问题。</span></li>
-        <li><span data-lang="en"><strong>Pitch smoothing slider</strong> — fixed the brush Smoothing slider having no effect; pitch curves now respect the slider value.</span><span data-lang="zh"><strong>音高平滑滑块</strong>——修复了画笔 Smoothing 滑块无效的问题；音高曲线现在会按滑块值平滑。</span></li>
-        <li><span data-lang="en"><strong>Right-click smoothness control</strong> — right-click a pitch anchor point to tune its smoothing strength individually.</span><span data-lang="zh"><strong>右键平滑度控制</strong>——右键点击音高锚点可单独调整其平滑强度。</span></li>
-        <li><span data-lang="en"><strong>Pitch curve auto-fit</strong> — the pitch curve is now fitted to the MIDI pitch only at note start/end, not across the whole note duration, preserving vibrato inside long notes.</span><span data-lang="zh"><strong>音高曲线自动拟合</strong>——音高曲线只在音符首尾拟合 MIDI 音高，而非整个音符时长，保留长音符内的颤音。</span></li>
-        <li><span data-lang="en"><strong>Lyric inline edit refresh</strong> — fixed lyrics entered inline not refreshing the note display until the next click.</span><span data-lang="zh"><strong>歌词内联编辑刷新</strong>——修复了内联输入的歌词在下次点击前不刷新音符显示的问题。</span></li>
-        <li><span data-lang="en"><strong>F1 shortcuts overlay</strong> — pressing <kbd class="kbd">F1</kbd> inside the Fragment Editor opens an in-app overlay listing all keyboard shortcuts.</span><span data-lang="zh"><strong>F1 快捷键面板</strong>——在片段编辑器中按 <kbd class="kbd">F1</kbd> 可打开应用内快捷键面板。</span></li>
-      </ul>
-
-      <h2>
-        <span data-lang="en">Singer Creator</span>
-        <span data-lang="zh">歌手创建器</span>
-      </h2>
-      <ul>
-        <li><span data-lang="en"><strong>File menu</strong> — the Singer Creator window now has a File menu with Save / Save As / Close actions.</span><span data-lang="zh"><strong>文件菜单</strong>——歌手创建器窗口新增文件菜单，提供 Save / Save As / Close 操作。</span></li>
-        <li><span data-lang="en"><strong>Save button in toolbar</strong> — a dedicated Save button is now available in the Singer Creator toolbar.</span><span data-lang="zh"><strong>工具栏保存按钮</strong>——歌手创建器工具栏新增专用 Save 按钮。</span></li>
-        <li><span data-lang="en"><strong>Preview playhead sync</strong> — the Singer Creator preview playhead is now synchronized with audible audio playback, fixing drift between visual and audio position.</span><span data-lang="zh"><strong>预览游标同步</strong>——歌手创建器预览游标现在与可听音频播放同步，修复了视觉与音频位置漂移。</span></li>
-      </ul>
-
-      <h2>
-        <span data-lang="en">UI &amp; Theming</span>
-        <span data-lang="zh">界面与主题</span>
-      </h2>
-      <ul>
-        <li><span data-lang="en"><strong>Bilingual documentation</strong> — the official website now ships bilingual EN / 中文 docs with automatic language switching. Older wiki markdown is superseded by the new HTML documentation tree.</span><span data-lang="zh"><strong>双语文档</strong>——官网现提供 EN / 中文 双语文档，支持自动语言切换。旧的 wiki markdown 已被新的 HTML 文档树取代。</span></li>
-        <li><span data-lang="en"><strong>ACG default theme</strong> — comprehensive UI optimization with the ACG theme as the new default.</span><span data-lang="zh"><strong>ACG 默认主题</strong>——全面 UI 优化，ACG 主题成为新的默认主题。</span></li>
-        <li><span data-lang="en"><strong>Window popup animations</strong> — windows now open with a popup animation; the timeline scroll direction was swapped to match user expectations.</span><span data-lang="zh"><strong>窗口弹出动效</strong>——窗口打开时增加弹出动效；时间线滚动方向已调整以符合用户预期。</span></li>
-        <li><span data-lang="en"><strong>Animated custom checkboxes</strong> — native checkboxes are replaced with animated custom checkboxes across settings dialogs.</span><span data-lang="zh"><strong>动画自定义复选框</strong>——设置对话框中的原生复选框已替换为带动画的自定义复选框。</span></li>
-        <li><span data-lang="en"><strong>Out-of-range MIDI pitch warning</strong> — notes outside the model's training pitch range (Japanese [48, 84], base [28, 88]) are visually marked with a gray fill, exclamation mark, and language-specific hover tooltip.</span><span data-lang="zh"><strong>超范围 MIDI 音高警告</strong>——超出模型训练音域的音符（日语 [48, 84]，基础模型 [28, 88]）会以灰色填充、感叹号及按语言显示的悬浮提示标记。</span></li>
-      </ul>
-
-      <h2>
-        <span data-lang="en">Playback &amp; Audio Output</span>
-        <span data-lang="zh">播放与音频输出</span>
-      </h2>
-      <ul>
-        <li><span data-lang="en"><strong>Per-fragment synthesis on main page</strong> — the main page now synthesizes per-fragment reusing the Fragment Editor logic, fixing audio mismatch between the two views.</span><span data-lang="zh"><strong>主页按片段合成</strong>——主页现在复用片段编辑器逻辑按片段合成，修复了两个视图间的音频不匹配。</span></li>
-        <li><span data-lang="en"><strong>VRAM-reference vocoder chunk sizing</strong> — a VRAM reference table is now used to pick a vocoder chunk size appropriate for the detected GPU.</span><span data-lang="zh"><strong>基于显存的 vocoder 分片</strong>——使用显存参考表为检测到的 GPU 选择合适的 vocoder 分片大小。</span></li>
-        <li><span data-lang="en"><strong>Long-synthesis OOM guard</strong> — prevents VRAM OOM and silent empty-audio playback on long synthesis runs.</span><span data-lang="zh"><strong>长合成 OOM 保护</strong>——防止长时合成时显存 OOM 与静音空音频播放。</span></li>
-        <li><span data-lang="en"><strong>Sequential synthesis</strong> — the <code>synthesize()</code> path is serialized to prevent session-rebuild races when multiple play requests overlap.</span><span data-lang="zh"><strong>串行合成</strong>——<code>synthesize()</code> 路径已串行化，防止多个播放请求重叠时会话重建竞争。</span></li>
-      </ul>
-
-      <h2>
-        <span data-lang="en">Model Management</span>
-        <span data-lang="zh">模型管理</span>
-      </h2>
-      <ul>
-        <li><span data-lang="en"><strong>Per-precision model version tracking</strong> — each precision (FP32 / FP16 / INT8 / INT8-NPU) now has its own version metadata; switching precisions no longer invalidates unrelated cache entries.</span><span data-lang="zh"><strong>按精度模型版本追踪</strong>——每种精度（FP32 / FP16 / INT8 / INT8-NPU）现在拥有独立的版本元数据；切换精度不再使无关缓存条目失效。</span></li>
+        <li><span data-lang="en"><strong>ACG default theme &amp; UI overhaul</strong> — comprehensive UI optimization with the ACG theme as the new default.</span><span data-lang="zh"><strong>ACG 默认主题与界面重构</strong>——全面 UI 优化，ACG 主题成为新的默认主题。</span></li>
+        <li><span data-lang="en"><strong>Right-click pitch smoothing control</strong> — right-click a pitch anchor point to tune its smoothing strength individually.</span><span data-lang="zh"><strong>右键音高平滑度控制</strong>——右键点击音高锚点可单独调整其平滑强度。</span></li>
         <li><span data-lang="en"><strong>Export dialog with precision selection</strong> — a dedicated export dialog lets you pick precision and shows per-file progress.</span><span data-lang="zh"><strong>带精度选择的导出对话框</strong>——专用导出对话框可挑选精度并显示每个文件的进度。</span></li>
-        <li><span data-lang="en"><strong>SiFiGAN precision selector</strong> — Settings now exposes a SiFiGAN precision selector (FP32 default, FP16 for low-resource).</span><span data-lang="zh"><strong>SiFiGAN 精度选择器</strong>——设置中新增 SiFiGAN 精度选择器（默认 FP32，低资源可选 FP16）。</span></li>
-        <li><span data-lang="en"><strong>FP8 precision removed</strong> — FP8 precision support was removed (the ONNX Runtime DirectML EP is not compatible with FP8).</span><span data-lang="zh"><strong>移除 FP8 精度</strong>——移除了 FP8 精度支持（ONNX Runtime DirectML EP 与 FP8 不兼容）。</span></li>
+        <li><span data-lang="en"><strong>Singer Creator toolbar Save button</strong> — a dedicated Save button is now available in the Singer Creator toolbar.</span><span data-lang="zh"><strong>歌手创建器工具栏保存按钮</strong>——歌手创建器工具栏新增专用 Save 按钮。</span></li>
+        <li><span data-lang="en"><strong>Window popup animations &amp; timeline scroll swap</strong> — windows now open with a popup animation; the timeline scroll direction was swapped to match user expectations.</span><span data-lang="zh"><strong>窗口弹出动效与时间线滚动方向调整</strong>——窗口打开时增加弹出动效；时间线滚动方向已调整以符合用户预期。</span></li>
+        <li><span data-lang="en"><strong>Per-precision model version tracking</strong> — each precision (FP32 / FP16 / INT8 / INT8-NPU) now has its own version metadata; switching precisions no longer invalidates unrelated cache entries.</span><span data-lang="zh"><strong>按精度模型版本追踪</strong>——每种精度（FP32 / FP16 / INT8 / INT8-NPU）现在拥有独立的版本元数据；切换精度不再使无关缓存条目失效。</span></li>
+        <li><span data-lang="en"><strong>Animated custom checkboxes</strong> — native checkboxes are replaced with animated custom checkboxes across settings dialogs.</span><span data-lang="zh"><strong>动画自定义复选框</strong>——设置对话框中的原生复选框已替换为带动画的自定义复选框。</span></li>
+        <li><span data-lang="en"><strong>Bilingual documentation website</strong> — the official website now ships bilingual EN / 中文 docs with automatic language switching.</span><span data-lang="zh"><strong>双语文档官网</strong>——官网现提供 EN / 中文 双语文档，支持自动语言切换。</span></li>
       </ul>
 
-      <h2>
-        <span data-lang="en">Settings &amp; Stability</span>
-        <span data-lang="zh">设置与稳定性</span>
-      </h2>
-      <ul>
-        <li><span data-lang="en"><strong>Inference progress display &amp; re-entrancy guard</strong> — synthesis progress is surfaced in the UI, with a re-entrancy guard preventing overlapping synthesis requests.</span><span data-lang="zh"><strong>推理进度显示与重入保护</strong>——合成进度在 UI 中显示，并加重入保护防止合成请求重叠。</span></li>
-        <li><span data-lang="en"><strong>ORTWEB / ORTNODE inference provider selection</strong> — Settings exposes an inference provider selector with WebNN GPU support.</span><span data-lang="zh"><strong>ORTWEB / ORTNODE 推理提供者选择</strong>——设置中新增推理提供者选择器，支持 WebNN GPU。</span></li>
-        <li><span data-lang="en"><strong>Optional DML VRAM release</strong> — releasing the DML memory pool after synthesis is now settings-controllable (recreates heavy sessions to reclaim VRAM).</span><span data-lang="zh"><strong>可选 DML 显存释放</strong>——合成后释放 DML 内存池现可由设置控制（通过重建重会话回收显存）。</span></li>
-        <li><span data-lang="en"><strong>NP/NPU settings keys</strong> — <code>npuDiffBatchSize</code> and <code>npuVocoderBatchSize</code> are now exposed through the allowlist.</span><span data-lang="zh"><strong>NPU 设置键</strong>——<code>npuDiffBatchSize</code> 与 <code>npuVocoderBatchSize</code> 已通过设置白名单暴露。</span></li>
-        <li><span data-lang="en"><strong>Process-exit timer unref</strong> — the ORT debug flush timer is now unreferenced so the process can exit cleanly.</span><span data-lang="zh"><strong>退出定时器 unref</strong>——ORT 调试刷新定时器已 unref，使进程能干净退出。</span></li>
-        <li><span data-lang="en"><strong>Cache key includes singerId</strong> — the synthesis cache key now includes <code>singerId</code>, so switching singers invalidates the cache correctly.</span><span data-lang="zh"><strong>缓存键包含 singerId</strong>——合成缓存键现在包含 <code>singerId</code>，切换歌手时缓存会正确失效。</span></li>
-        <li><span data-lang="en"><strong>phone_set.json fallback paths</strong> — added fallback paths and debug logging for <code>phone_set.json</code> loading.</span><span data-lang="zh"><strong>phone_set.json 回退路径</strong>——为 <code>phone_set.json</code> 加载新增回退路径与调试日志。</span></li>
-      </ul>
-
-      <h2>
-        <span data-lang="en">Project &amp; File Handling</span>
-        <span data-lang="zh">项目与文件处理</span>
-      </h2>
-      <ul>
-        <li><span data-lang="en"><strong>Save As embeds singers</strong> — <strong>File → Save As</strong> can optionally embed singer files into the project file to make it self-contained.</span><span data-lang="zh"><strong>另存为可嵌入歌手</strong>——<strong>File → Save As</strong> 可选择将歌手文件嵌入项目文件，使其自包含。</span></li>
-        <li><span data-lang="en"><strong>Fragment sync from <code>.sxsproj</code></strong> — fixed fragment MIDI edits not syncing to the main page when a project is loaded from a <code>.sxsproj</code> file.</span><span data-lang="zh"><strong>从 <code>.sxsproj</code> 同步片段</strong>——修复了从 <code>.sxsproj</code> 加载项目时片段 MIDI 编辑不同步到主页的问题。</span></li>
-        <li><span data-lang="en"><strong>Close-all fragment editors</strong> — a <code>closeAllFragmentEditors</code> API was added with a pending-fragment-data snapshot to prevent data loss on window teardown.</span><span data-lang="zh"><strong>关闭全部片段编辑器</strong>——新增 <code>closeAllFragmentEditors</code> API，并带 pending-fragment-data 快照，防止窗口关闭时数据丢失。</span></li>
-        <li><span data-lang="en"><strong>Packaged-build module fix</strong> — fixed missing modules in the packaged build.</span><span data-lang="zh"><strong>打包构建模块修复</strong>——修复了打包构建中缺失模块的问题。</span></li>
-      </ul>
-
-      <h2>
-        <span data-lang="en">Bugs Fixed</span>
+      <h3>
+        <span data-lang="en">Bug Fixes</span>
         <span data-lang="zh">缺陷修复</span>
-      </h2>
+      </h3>
       <ul>
-        <li><span data-lang="en">Resolved <strong>DXGI_ERROR_DEVICE_REMOVED (0x887A0006)</strong> / GPU device hung errors by serializing vocoder chunk inference (the root cause was concurrent <code>session.run()</code> calls on the same DML InferenceSession, not an ONNX Runtime version issue).</span><span data-lang="zh">通过串行化 vocoder 分片推理修复了 <strong>DXGI_ERROR_DEVICE_REMOVED (0x887A0006)</strong> / GPU 设备挂起错误（根因是同一 DML InferenceSession 上并发 <code>session.run()</code>，与 ONNX Runtime 版本无关）。</span></li>
-        <li><span data-lang="en">Fixed <strong>console encoding mojibake</strong>, <strong>audioWorker.js path</strong>, and <strong>mojo WidgetHost errors</strong> caused by premature <code>openDevTools</code>.</span><span data-lang="zh">修复了由过早 <code>openDevTools</code> 导致的 <strong>控制台编码乱码</strong>、<strong>audioWorker.js 路径</strong>与 <strong>mojo WidgetHost 错误</strong>。</span></li>
-        <li><span data-lang="en">Fixed <strong>pitch curve only fit MIDI pitch at note start/end</strong> to preserve vibrato inside long notes.</span><span data-lang="zh">修复了 <strong>音高曲线只在音符首尾拟合 MIDI 音高</strong>，保留长音符内的颤音。</span></li>
+        <li><span data-lang="en">Fixed the pitch-brush <strong>Smoothing slider</strong> having no effect; pitch curves now respect the slider value.</span><span data-lang="zh">修复了画笔<strong>平滑滑块</strong>无效的问题；音高曲线现在会按滑块值平滑。</span></li>
+        <li><span data-lang="en">Fixed <strong>missing modules in the packaged build</strong>.</span><span data-lang="zh">修复了<strong>打包构建缺失模块</strong>的问题。</span></li>
+        <li><span data-lang="en">Fixed <strong>lyrics entered inline not refreshing</strong> the note display until the next click.</span><span data-lang="zh">修复了<strong>内联输入的歌词不刷新</strong>音符显示（直到下次点击才刷新）的问题。</span></li>
+        <li><span data-lang="en">Fixed the <strong>Singer Creator preview playhead drifting</strong> out of sync with audible audio playback.</span><span data-lang="zh">修复了<strong>歌手创建器预览游标与音频播放不同步</strong>（漂移）的问题。</span></li>
+        <li><span data-lang="en">Fixed the <strong>synthesis cache not invalidating on singer switch</strong> by including <code>singerId</code> in the cache key.</span><span data-lang="zh">修复了<strong>切换歌手时合成缓存未失效</strong>的问题——将 <code>singerId</code> 加入缓存键。</span></li>
+        <li><span data-lang="en">Added <strong>fallback paths and debug logging for <code>phone_set.json</code></strong> loading.</span><span data-lang="zh">为 <code>phone_set.json</code> 加载新增<strong>回退路径与调试日志</strong>。</span></li>
       </ul>
 
       <nav class="doc-pager">
