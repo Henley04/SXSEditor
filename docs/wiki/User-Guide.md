@@ -385,6 +385,17 @@ Switch to Phoneme mode (press `5` or click the Phoneme tab):
 A **slur** (continuation) note is a note that continues the previous note's sound without re-attacking. To create a slur:
 - Add a note with an empty lyric (or a dash `-`). It will be treated as a continuation of the previous note.
 
+### Kanji / Kana Auto-Grouping
+
+When a fragment already contains Japanese kana (hiragana or katakana) in any note's lyric, every single-character kanji note in the same fragment is **automatically treated as Japanese** and split into an ordered group of kana notes. This avoids the ambiguity of using the same CJK ideographs for both Chinese and Japanese within one fragment.
+
+- **Visual bracket** — a horizontal bracket is drawn above the group with the original kanji displayed in the middle, so you can always see which kana belong to which kanji.
+- **Strict ordering** — the converted kana keep their dictionary order. You cannot insert other MIDI notes inside a group's time span.
+- **Movement** — kana notes can be moved in pitch and time, but they cannot be deleted individually.
+- **Whole-group deletion** — deleting any kana in a group removes the entire group (all kana in that kanji).
+- **Right-click toggle** — right-click the bracket, the kanji label, or any kana inside the group to open the *Kanji Settings* menu. Choose **Set as Chinese** to merge the whole group back into a single kanji note (length = total group span, pitch = right-clicked note's pitch); choose **Set as Japanese** to split it again.
+- **Manual override persists** — once you manually set a kanji to Chinese, it will not be auto-split again even if the fragment still contains kana.
+
 ---
 
 ## Pitch Curves
@@ -875,6 +886,7 @@ Press **F1** in the Fragment Editor to see the full shortcuts overlay.
 | `Delete` | Delete selected notes |
 | `Ctrl+D` | Duplicate selected notes |
 | Double-click | Edit note lyric |
+| Right-click kanji / kana group | Open Kanji Settings menu (toggle Chinese / Japanese) |
 
 ### Pitch Editing
 
