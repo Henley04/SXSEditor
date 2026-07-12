@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Application Updates — SXSEditor Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="../dev/build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="user"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="quick-start.html" data-i18n="sidebar.user">User Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Application Updates</span><span data-lang="zh">应用更新</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Application Updates</span>
+        <span data-lang="zh">应用更新</span>
+      </h1>
+
+      <p data-lang="en">This page tracks notable user-facing changes to the SXSEditor application. For the full commit history, see the <a href="https://github.com/Henley04/SXSEditor/commits/master">GitHub commit log</a>. Application version numbers are auto-incremented by GitHub CI; the entries below are grouped by the order in which features landed on <code>master</code>.</p>
+      <p data-lang="zh">本页追踪 SXSEditor 应用面向用户的重大变更。完整提交历史请查看 <a href="https://github.com/Henley04/SXSEditor/commits/master">GitHub 提交日志</a>。应用版本号由 GitHub CI 自动递增；下方条目按合入 <code>master</code> 的先后顺序分组。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Looking for model / inference changes? See <a href="model-updates.html">Model Updates</a>.</p>
+          <p data-lang="zh">查找模型 / 推理相关变更？请见 <a href="model-updates.html">模型更新</a>。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Editor &amp; Piano Roll</span>
+        <span data-lang="zh">编辑器与钢琴卷帘</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>Fragment selection &amp; deletion</strong> — fragments on the timeline can be selected with a click; press <kbd class="kbd">Delete</kbd> or use the right-click context menu to remove them.</span><span data-lang="zh"><strong>片段选择与删除</strong>——时间线上的片段可点击选中；按 <kbd class="kbd">Delete</kbd> 或右键菜单可删除。</span></li>
+        <li><span data-lang="en"><strong>Multi-note drag fix</strong> — resolved overlap and horizontal-stuck issues when dragging multiple notes at once.</span><span data-lang="zh"><strong>多音符拖动修复</strong>——修复了同时拖动多个音符时的重叠与水平卡顿问题。</span></li>
+        <li><span data-lang="en"><strong>Pitch smoothing slider</strong> — fixed the brush Smoothing slider having no effect; pitch curves now respect the slider value.</span><span data-lang="zh"><strong>音高平滑滑块</strong>——修复了画笔 Smoothing 滑块无效的问题；音高曲线现在会按滑块值平滑。</span></li>
+        <li><span data-lang="en"><strong>Right-click smoothness control</strong> — right-click a pitch anchor point to tune its smoothing strength individually.</span><span data-lang="zh"><strong>右键平滑度控制</strong>——右键点击音高锚点可单独调整其平滑强度。</span></li>
+        <li><span data-lang="en"><strong>Pitch curve auto-fit</strong> — the pitch curve is now fitted to the MIDI pitch only at note start/end, not across the whole note duration, preserving vibrato inside long notes.</span><span data-lang="zh"><strong>音高曲线自动拟合</strong>——音高曲线只在音符首尾拟合 MIDI 音高，而非整个音符时长，保留长音符内的颤音。</span></li>
+        <li><span data-lang="en"><strong>Lyric inline edit refresh</strong> — fixed lyrics entered inline not refreshing the note display until the next click.</span><span data-lang="zh"><strong>歌词内联编辑刷新</strong>——修复了内联输入的歌词在下次点击前不刷新音符显示的问题。</span></li>
+        <li><span data-lang="en"><strong>F1 shortcuts overlay</strong> — pressing <kbd class="kbd">F1</kbd> inside the Fragment Editor opens an in-app overlay listing all keyboard shortcuts.</span><span data-lang="zh"><strong>F1 快捷键面板</strong>——在片段编辑器中按 <kbd class="kbd">F1</kbd> 可打开应用内快捷键面板。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Singer Creator</span>
+        <span data-lang="zh">歌手创建器</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>File menu</strong> — the Singer Creator window now has a File menu with Save / Save As / Close actions.</span><span data-lang="zh"><strong>文件菜单</strong>——歌手创建器窗口新增文件菜单，提供 Save / Save As / Close 操作。</span></li>
+        <li><span data-lang="en"><strong>Save button in toolbar</strong> — a dedicated Save button is now available in the Singer Creator toolbar.</span><span data-lang="zh"><strong>工具栏保存按钮</strong>——歌手创建器工具栏新增专用 Save 按钮。</span></li>
+        <li><span data-lang="en"><strong>Preview playhead sync</strong> — the Singer Creator preview playhead is now synchronized with audible audio playback, fixing drift between visual and audio position.</span><span data-lang="zh"><strong>预览游标同步</strong>——歌手创建器预览游标现在与可听音频播放同步，修复了视觉与音频位置漂移。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">UI &amp; Theming</span>
+        <span data-lang="zh">界面与主题</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>Bilingual documentation</strong> — the official website now ships bilingual EN / 中文 docs with automatic language switching. Older wiki markdown is superseded by the new HTML documentation tree.</span><span data-lang="zh"><strong>双语文档</strong>——官网现提供 EN / 中文 双语文档，支持自动语言切换。旧的 wiki markdown 已被新的 HTML 文档树取代。</span></li>
+        <li><span data-lang="en"><strong>ACG default theme</strong> — comprehensive UI optimization with the ACG theme as the new default.</span><span data-lang="zh"><strong>ACG 默认主题</strong>——全面 UI 优化，ACG 主题成为新的默认主题。</span></li>
+        <li><span data-lang="en"><strong>Window popup animations</strong> — windows now open with a popup animation; the timeline scroll direction was swapped to match user expectations.</span><span data-lang="zh"><strong>窗口弹出动效</strong>——窗口打开时增加弹出动效；时间线滚动方向已调整以符合用户预期。</span></li>
+        <li><span data-lang="en"><strong>Animated custom checkboxes</strong> — native checkboxes are replaced with animated custom checkboxes across settings dialogs.</span><span data-lang="zh"><strong>动画自定义复选框</strong>——设置对话框中的原生复选框已替换为带动画的自定义复选框。</span></li>
+        <li><span data-lang="en"><strong>Out-of-range MIDI pitch warning</strong> — notes outside the model's training pitch range (Japanese [48, 84], base [28, 88]) are visually marked with a gray fill, exclamation mark, and language-specific hover tooltip.</span><span data-lang="zh"><strong>超范围 MIDI 音高警告</strong>——超出模型训练音域的音符（日语 [48, 84]，基础模型 [28, 88]）会以灰色填充、感叹号及按语言显示的悬浮提示标记。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Playback &amp; Audio Output</span>
+        <span data-lang="zh">播放与音频输出</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>Per-fragment synthesis on main page</strong> — the main page now synthesizes per-fragment reusing the Fragment Editor logic, fixing audio mismatch between the two views.</span><span data-lang="zh"><strong>主页按片段合成</strong>——主页现在复用片段编辑器逻辑按片段合成，修复了两个视图间的音频不匹配。</span></li>
+        <li><span data-lang="en"><strong>VRAM-reference vocoder chunk sizing</strong> — a VRAM reference table is now used to pick a vocoder chunk size appropriate for the detected GPU.</span><span data-lang="zh"><strong>基于显存的 vocoder 分片</strong>——使用显存参考表为检测到的 GPU 选择合适的 vocoder 分片大小。</span></li>
+        <li><span data-lang="en"><strong>Long-synthesis OOM guard</strong> — prevents VRAM OOM and silent empty-audio playback on long synthesis runs.</span><span data-lang="zh"><strong>长合成 OOM 保护</strong>——防止长时合成时显存 OOM 与静音空音频播放。</span></li>
+        <li><span data-lang="en"><strong>Sequential synthesis</strong> — the <code>synthesize()</code> path is serialized to prevent session-rebuild races when multiple play requests overlap.</span><span data-lang="zh"><strong>串行合成</strong>——<code>synthesize()</code> 路径已串行化，防止多个播放请求重叠时会话重建竞争。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Model Management</span>
+        <span data-lang="zh">模型管理</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>Per-precision model version tracking</strong> — each precision (FP32 / FP16 / INT8 / INT8-NPU) now has its own version metadata; switching precisions no longer invalidates unrelated cache entries.</span><span data-lang="zh"><strong>按精度模型版本追踪</strong>——每种精度（FP32 / FP16 / INT8 / INT8-NPU）现在拥有独立的版本元数据；切换精度不再使无关缓存条目失效。</span></li>
+        <li><span data-lang="en"><strong>Export dialog with precision selection</strong> — a dedicated export dialog lets you pick precision and shows per-file progress.</span><span data-lang="zh"><strong>带精度选择的导出对话框</strong>——专用导出对话框可挑选精度并显示每个文件的进度。</span></li>
+        <li><span data-lang="en"><strong>SiFiGAN precision selector</strong> — Settings now exposes a SiFiGAN precision selector (FP32 default, FP16 for low-resource).</span><span data-lang="zh"><strong>SiFiGAN 精度选择器</strong>——设置中新增 SiFiGAN 精度选择器（默认 FP32，低资源可选 FP16）。</span></li>
+        <li><span data-lang="en"><strong>FP8 precision removed</strong> — FP8 precision support was removed (the ONNX Runtime DirectML EP is not compatible with FP8).</span><span data-lang="zh"><strong>移除 FP8 精度</strong>——移除了 FP8 精度支持（ONNX Runtime DirectML EP 与 FP8 不兼容）。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Settings &amp; Stability</span>
+        <span data-lang="zh">设置与稳定性</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>Inference progress display &amp; re-entrancy guard</strong> — synthesis progress is surfaced in the UI, with a re-entrancy guard preventing overlapping synthesis requests.</span><span data-lang="zh"><strong>推理进度显示与重入保护</strong>——合成进度在 UI 中显示，并加重入保护防止合成请求重叠。</span></li>
+        <li><span data-lang="en"><strong>ORTWEB / ORTNODE inference provider selection</strong> — Settings exposes an inference provider selector with WebNN GPU support.</span><span data-lang="zh"><strong>ORTWEB / ORTNODE 推理提供者选择</strong>——设置中新增推理提供者选择器，支持 WebNN GPU。</span></li>
+        <li><span data-lang="en"><strong>Optional DML VRAM release</strong> — releasing the DML memory pool after synthesis is now settings-controllable (recreates heavy sessions to reclaim VRAM).</span><span data-lang="zh"><strong>可选 DML 显存释放</strong>——合成后释放 DML 内存池现可由设置控制（通过重建重会话回收显存）。</span></li>
+        <li><span data-lang="en"><strong>NP/NPU settings keys</strong> — <code>npuDiffBatchSize</code> and <code>npuVocoderBatchSize</code> are now exposed through the allowlist.</span><span data-lang="zh"><strong>NPU 设置键</strong>——<code>npuDiffBatchSize</code> 与 <code>npuVocoderBatchSize</code> 已通过设置白名单暴露。</span></li>
+        <li><span data-lang="en"><strong>Process-exit timer unref</strong> — the ORT debug flush timer is now unreferenced so the process can exit cleanly.</span><span data-lang="zh"><strong>退出定时器 unref</strong>——ORT 调试刷新定时器已 unref，使进程能干净退出。</span></li>
+        <li><span data-lang="en"><strong>Cache key includes singerId</strong> — the synthesis cache key now includes <code>singerId</code>, so switching singers invalidates the cache correctly.</span><span data-lang="zh"><strong>缓存键包含 singerId</strong>——合成缓存键现在包含 <code>singerId</code>，切换歌手时缓存会正确失效。</span></li>
+        <li><span data-lang="en"><strong>phone_set.json fallback paths</strong> — added fallback paths and debug logging for <code>phone_set.json</code> loading.</span><span data-lang="zh"><strong>phone_set.json 回退路径</strong>——为 <code>phone_set.json</code> 加载新增回退路径与调试日志。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Project &amp; File Handling</span>
+        <span data-lang="zh">项目与文件处理</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>Save As embeds singers</strong> — <strong>File → Save As</strong> can optionally embed singer files into the project file to make it self-contained.</span><span data-lang="zh"><strong>另存为可嵌入歌手</strong>——<strong>File → Save As</strong> 可选择将歌手文件嵌入项目文件，使其自包含。</span></li>
+        <li><span data-lang="en"><strong>Fragment sync from <code>.sxsproj</code></strong> — fixed fragment MIDI edits not syncing to the main page when a project is loaded from a <code>.sxsproj</code> file.</span><span data-lang="zh"><strong>从 <code>.sxsproj</code> 同步片段</strong>——修复了从 <code>.sxsproj</code> 加载项目时片段 MIDI 编辑不同步到主页的问题。</span></li>
+        <li><span data-lang="en"><strong>Close-all fragment editors</strong> — a <code>closeAllFragmentEditors</code> API was added with a pending-fragment-data snapshot to prevent data loss on window teardown.</span><span data-lang="zh"><strong>关闭全部片段编辑器</strong>——新增 <code>closeAllFragmentEditors</code> API，并带 pending-fragment-data 快照，防止窗口关闭时数据丢失。</span></li>
+        <li><span data-lang="en"><strong>Packaged-build module fix</strong> — fixed missing modules in the packaged build.</span><span data-lang="zh"><strong>打包构建模块修复</strong>——修复了打包构建中缺失模块的问题。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Bugs Fixed</span>
+        <span data-lang="zh">缺陷修复</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en">Resolved <strong>DXGI_ERROR_DEVICE_REMOVED (0x887A0006)</strong> / GPU device hung errors by serializing vocoder chunk inference (the root cause was concurrent <code>session.run()</code> calls on the same DML InferenceSession, not an ONNX Runtime version issue).</span><span data-lang="zh">通过串行化 vocoder 分片推理修复了 <strong>DXGI_ERROR_DEVICE_REMOVED (0x887A0006)</strong> / GPU 设备挂起错误（根因是同一 DML InferenceSession 上并发 <code>session.run()</code>，与 ONNX Runtime 版本无关）。</span></li>
+        <li><span data-lang="en">Fixed <strong>console encoding mojibake</strong>, <strong>audioWorker.js path</strong>, and <strong>mojo WidgetHost errors</strong> caused by premature <code>openDevTools</code>.</span><span data-lang="zh">修复了由过早 <code>openDevTools</code> 导致的 <strong>控制台编码乱码</strong>、<strong>audioWorker.js 路径</strong>与 <strong>mojo WidgetHost 错误</strong>。</span></li>
+        <li><span data-lang="en">Fixed <strong>pitch curve only fit MIDI pitch at note start/end</strong> to preserve vibrato inside long notes.</span><span data-lang="zh">修复了 <strong>音高曲线只在音符首尾拟合 MIDI 音高</strong>，保留长音符内的颤音。</span></li>
+      </ul>
+
+      <nav class="doc-pager">
+        <a href="settings.html">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.prev">Previous</div>
+            <div class="pager-title"><span data-lang="en">Settings</span><span data-lang="zh">设置</span></div>
+          </div>
+        </a>
+        <a href="model-updates.html" class="next">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.next">Next</div>
+            <div class="pager-title"><span data-lang="en">Model Updates</span><span data-lang="zh">模型更新</span></div>
+          </div>
+        </a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="faq.html" data-i18n="footer.help">Help &amp; FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

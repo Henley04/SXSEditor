@@ -19,7 +19,7 @@ Yes. SXSEditor is open-source under the MIT License.
 
 | Language | Status |
 |----------|--------|
-| Chinese (Mandarin) | Supported — Chinese characters or Pinyin input |
+| Chinese (Mandarin) | Supported — Chinese characters with optional tone digit (1–5) |
 | English | Supported — English words, auto-converted to phonemes |
 | Japanese | In development |
 
@@ -108,7 +108,7 @@ In the Fragment Editor, click on the piano roll grid to create a note. Drag whil
 
 Double-click a note to open an inline text editor. Type the lyric and press Enter. You can also edit lyrics in the Inspector panel on the right side.
 
-For Chinese singing, enter Chinese characters (e.g., `你好`) or Pinyin (e.g., `ni hao`). For English singing, enter English words (e.g., `hello`).
+For Chinese singing, enter Chinese characters (e.g., `你好`). You may append a digit `1`–`5` after a character to force a specific tone (e.g., `你2 好3`), where 1–4 are the four tones and 5 is the neutral tone (轻声). Pinyin text (e.g., `ni hao`) is **not** accepted as Chinese — ASCII input is routed to the English G2P path. For English singing, enter English words (e.g., `hello`).
 
 ### What is a slur note?
 
