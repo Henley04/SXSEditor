@@ -30,9 +30,10 @@ function _createPipeline(languageOverride) {
   const modelDeviceMapping = settings.modelDeviceMapping || undefined;
   const modelPrecision = settings.modelPrecision || 'fp16';
   const inferenceProvider = settings.inferenceProvider || 'ortnode';
+  const japaneseVocalization = settings.japaneseVocalization || 'en-phonemes';
 
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
-  console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}`);
+  console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}, jpVocal=${japaneseVocalization}`);
 
   const pipeline = new OnnxSVSPipeline(modelPath, {
     deviceId,
@@ -42,6 +43,7 @@ function _createPipeline(languageOverride) {
     modelPrecision,
     languageOverride,
     inferenceProvider,
+    japaneseVocalization,
   });
   return pipeline;
 }
@@ -126,10 +128,15 @@ function registerSvsIpc() {
   });
 
   ipcMain.handle('svs:synthesize', async (event, { notes, bpm, options }) => {
-    // Detect language: 含英文→base 模型，纯日文→JP 模型
-    const language = _resolveLanguage(notes);
+    // Load japaneseVocalization setting: 'en-phonemes' (default) uses English phonemes on base model;
+    // 'jp-lora' uses JP LoRA models (in development)
+    const settingsForLang = loadSettings();
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
 
-    // Check if JP models are needed but missing
+    // Detect language: en-phonemes mode always uses base model (null); jp-lora mode uses original logic
+    const language = _resolveLanguage(notes, japaneseVocalization);
+
+    // Check if JP models are needed but missing (only in jp-lora mode)
     if (language === 'ja') {
       const settings = loadSettings();
       const precision = settings.modelPrecision || 'fp16';
@@ -182,10 +189,15 @@ function registerSvsIpc() {
   });
 
   ipcMain.handle('fragment-svs:synthesize', async (event, { notes, bpm, options }) => {
-    // Detect language: 含英文→base 模型，纯日文→JP 模型
-    const language = _resolveLanguage(notes);
+    // Load japaneseVocalization setting: 'en-phonemes' (default) uses English phonemes on base model;
+    // 'jp-lora' uses JP LoRA models (in development)
+    const settingsForLang = loadSettings();
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
 
-    // Check if JP models are needed but missing
+    // Detect language: en-phonemes mode always uses base model (null); jp-lora mode uses original logic
+    const language = _resolveLanguage(notes, japaneseVocalization);
+
+    // Check if JP models are needed but missing (only in jp-lora mode)
     if (language === 'ja') {
       const settings = loadSettings();
       const precision = settings.modelPrecision || 'fp16';

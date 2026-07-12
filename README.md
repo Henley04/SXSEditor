@@ -9,7 +9,7 @@
   [![Version](https://img.shields.io/badge/version-1.0.0-blue?style=flat-square)](https://github.com/Henley04/SXSEditor/releases)
   [![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
   [![Platform](https://img.shields.io/badge/platform-Windows%20|%20macOS%20|%20Linux-lightgrey?style=flat-square)]()
-  [![SVS Languages](https://img.shields.io/badge/SVS-EN%20|%20ZH-orange?style=flat-square)]()
+  [![SVS Languages](https://img.shields.io/badge/SVS-EN%20|%20ZH%20|%20JP-orange?style=flat-square)]()
 
   **[English](#english) · [中文](#中文) · [日本語](#日本語)**
 
@@ -23,7 +23,7 @@
 
 SXSEditor is an open-source desktop application for singing voice synthesis. It uses the SoulX-Singer neural model running on ONNX Runtime with DirectML GPU, WebNN NPU/GPU, and CPU support.
 
-Supported singing languages: **English** and **Chinese (Mandarin)**. Japanese is in development.
+Supported singing languages: **English**, **Chinese (Mandarin)**, and **Japanese** (via English phoneme migration by default; JP LoRA model in development).
 
 ### Attentions
 
@@ -70,6 +70,7 @@ See the [Documentation](https://henley04.github.io/SXSEditor/) for full guides:
 | Optional SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) as an alternative DirectML vocoder with auto-fallback to default; WebNN/NPU path supported (vocoder runs on DML in main process, encoder+diffusion on NPU); autoShift clamp tightened for SiFiGAN f0 sensitivity |
 | Minimal Vocoder Swap | Switching vocoder (default ↔ SiFiGAN) reloads only the vocoder session; main models stay loaded |
 | SiFiGAN Precision Switch | SiFiGAN precision (FP32/FP16) selectable independently in settings; FP16 marked as low quality (cos≈0.95), defaults to FP32; missing variant auto-falls-back to the other |
+| Japanese Vocalization | Two modes selectable in settings: **English Phoneme Migration** (default — maps Japanese kana to nearest English ARPAbet phonemes, synthesized on the base multilingual model, no extra download) and **Japanese LoRA Model** (dedicated JP fine-tuned model for better quality, currently in development — not available for download) |
 | Audio to MIDI | Convert audio files to MIDI notes |
 | MIDI Import | Import standard MIDI files |
 | Multi-track Timeline | Drag-anddrop fragment arrangement |
@@ -145,7 +146,7 @@ Electron + Webpack, ONNX Runtime Node (DirectML) + ONNX Runtime Web (WebNN), Van
 
 SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神经网络模型，通过 ONNX Runtime 运行，支持 DirectML GPU、WebNN NPU/GPU 和 CPU 推理。
 
-支持的合成语言：**中文（普通话）** 和 **英语**。日语正在开发中。
+支持的合成语言：**中文（普通话）**、**英语** 和 **日语**（默认通过英语音素迁移合成；日语 LoRA 模型开发中）。
 
 ### 下载
 
@@ -187,6 +188,7 @@ macOS / Linux 用户请从源码构建。
 | 可选 SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) 作为可选 DirectML Vocoder，自动回退到默认 Vocoder；WebNN/NPU 路径支持（vocoder 在主进程 DML 执行，encoder+diffusion 在 NPU 上运行）；autoShift clamp 针对 SiFiGAN f0 敏感性收紧上限 |
 | Vocoder 最小化切换 | 切换 Vocoder（默认 ↔ SiFiGAN）仅重载 vocoder session，主模型保持已加载状态 |
 | SiFiGAN 精度切换 | SiFiGAN 精度（FP32/FP16）可在设置中单独选择；FP16 标注为低质量（cos≈0.95），默认 FP32；所选变体缺失时自动回退到另一变体 |
+| 日语发声方式 | 设置中可选两种模式：**英语音素迁移**（默认——将日文假名映射为最接近的英语 ARPAbet 音素，在基础多语言模型上合成，无需额外下载）和 **日语 LoRA 模型**（专用日语微调模型，音质更佳，当前开发中——暂不可下载） |
 | 音频转 MIDI | 从音频文件提取 MIDI 音符 |
 | MIDI 导入 | 导入标准 MIDI 文件 |
 | 多轨时间线 | 拖拽排列分片 |
@@ -258,7 +260,7 @@ Electron + Webpack，ONNX Runtime Node（DirectML）+ ONNX Runtime Web（WebNN�
 
 SXSEditor は歌声合成のためのオープンソースデスクトップアプリケーションです。SoulX-Singer ニューラルモデルを ONNX Runtime 上で動作させ、DirectML GPU、WebNN NPU/GPU、CPU をサポートします。
 
-対応言語：**中国語（普通話）** と **英語**。日本語は開発中です。
+対応言語：**中国語（普通話）**、**英語**、**日本語**（デフォルトは英語音素マイグレーションで合成、日本語 LoRA モデルは開発中）。
 
 ### ダウンロード
 
@@ -298,6 +300,7 @@ macOS / Linux：ソースからビルドしてください。
 | オプション SiFiGAN Vocoder | SiFiGAN (ICASSP 2023) をオプション DirectML Vocoder として提供、デフォルト Vocoder へ自動フォールバック；WebNN/NPU パス対応（vocoder はメインプロセスの DML で実行、encoder+diffusion は NPU で実行）；autoShift clamp は SiFiGAN の f0 感度に合わせて上限を引き下げ |
 | Vocoder 最小切替 | Vocoder 切替（デフォルト ↔ SiFiGAN）は vocoder session のみ再読み込み、メインモデルはロード済みのまま維持 |
 | SiFiGAN 精度切替 | SiFiGAN 精度（FP32/FP16）を設定で個別選択可能；FP16 は低品質（cos≈0.95）と明記、デフォルト FP32；選択変体が欠落時はもう一方へ自動フォールバック |
+| 日本語発声方式 | 設定で2モード選択可能：**英語音素マイグレーション**（デフォルト——日本語仮名を最も近い英語 ARPAbet 音素にマッピングし、ベース多言語モデルで合成、追加ダウンロード不要）と **日本語 LoRA モデル**（専用日本語ファインチューニングモデル、高音質だが現在開発中——ダウンロード不可） |
 | オーディオ→MIDI | 音声ファイルから MIDI ノート抽出 |
 | MIDI インポート | 標準 MIDI ファイルのインポート |
 | マルチトラックタイムライン | ドラッグ＆ドロップでフラグメント配置 |

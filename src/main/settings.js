@@ -95,6 +95,12 @@ function loadSettings() {
     _settingsCache.sifiganPrecision = 'fp32';
   }
 
+  // Japanese vocalization method: 'en-phonemes' (default, use English phonemes with base model)
+  // | 'jp-lora' (JP LoRA models, in development — not available for download yet)
+  if (_settingsCache.japaneseVocalization !== 'en-phonemes' && _settingsCache.japaneseVocalization !== 'jp-lora') {
+    _settingsCache.japaneseVocalization = 'en-phonemes';
+  }
+
   // Vocoder type default + startup fallback:
   // If stored value is 'sifigan' but none of the SiFiGAN model files exist,
   // temporarily fall back to 'default' for this run (settings.json is NOT modified).
@@ -149,7 +155,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
-  'vocoderType', 'sifiganPrecision',
+  'vocoderType', 'sifiganPrecision', 'japaneseVocalization',
   'vocoderChunkMode', 'vocoderChunkFrames',
   'releaseDmlVramAfterSynthesis',
   'releaseDiffStepBeforeVocoder',

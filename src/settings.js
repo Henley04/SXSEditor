@@ -51,6 +51,7 @@ const vocoderTypeSelect = document.getElementById('vocoderType');
 const vocoderTypeHint = document.getElementById('vocoderTypeHint');
 const sifiganPrecisionSelect = document.getElementById('sifiganPrecision');
 const sifiganPrecisionGroup = document.getElementById('sifiganPrecisionGroup');
+const japaneseVocalizationRadios = document.querySelectorAll('input[name="japaneseVocalization"]');
 const vocoderChunkModeRadios = document.querySelectorAll('input[name="vocoderChunkMode"]');
 const vocoderChunkManualGroup = document.getElementById('vocoderChunkManualGroup');
 const vocoderChunkFramesSlider = document.getElementById('vocoderChunkFrames');
@@ -146,6 +147,11 @@ function applySavedSettingsToUI(currentSetting) {
     // SiFiGAN precision (only meaningful when vocoderType === 'sifigan')
     sifiganPrecisionSelect.value = currentSetting.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32';
     updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
+
+    // Japanese vocalization mode: 'en-phonemes' (default) | 'jp-lora' (in development, disabled)
+    const jpVocalization = currentSetting.japaneseVocalization === 'jp-lora' ? 'jp-lora' : 'en-phonemes';
+    const jpVocalRadioToCheck = document.querySelector(`input[name="japaneseVocalization"][value="${jpVocalization}"]`);
+    if (jpVocalRadioToCheck) jpVocalRadioToCheck.checked = true;
 
     // Vocoder chunk mode (smart/manual)
     const vocoderChunkMode = currentSetting.vocoderChunkMode === 'manual' ? 'manual' : 'smart';
@@ -779,6 +785,10 @@ function collectSettings() {
         midiExtractTool: midiExtractToolSelect.value,
         vocoderType: vocoderTypeSelect.value,
         sifiganPrecision: sifiganPrecisionSelect.value === 'fp16' ? 'fp16' : 'fp32',
+        japaneseVocalization: (() => {
+            const r = document.querySelector('input[name="japaneseVocalization"]:checked');
+            return r ? r.value : 'en-phonemes';
+        })(),
         vocoderChunkMode: (() => {
             const r = document.querySelector('input[name="vocoderChunkMode"]:checked');
             return r ? r.value : 'smart';
@@ -937,6 +947,13 @@ sifiganPrecisionSelect.addEventListener('change', () => {
     loadVocoderChunkFramesTable();
     _vocoderChunkInfoLoaded = false;
     loadVocoderChunkFramesInfo();
+});
+
+// Japanese vocalization mode (en-phonemes / jp-lora)
+japaneseVocalizationRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+        applySettings();
+    });
 });
 
 // Vocoder chunk mode (smart/manual) and manual frames slider

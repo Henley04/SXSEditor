@@ -62,12 +62,88 @@ const JP_KANJI_DICT = {
     '九': 'ky u', '十': 'j u',
 };
 
+/**
+ * Japanese phoneme → English ARPAbet phoneme mapping table.
+ *
+ * Design rationale:
+ * - Vowels use stress=1 (primary stress) to ensure proper duration allocation
+ *   via durationStats. Japanese is mora-timed, so every syllable should get
+ *   similar vowel weight — stress=1 achieves this.
+ * - jp_a → AA1 (open back unrounded, closest to Japanese /a/ [ä])
+ * - jp_i → IY1 (close front unrounded, matches Japanese /i/ [i])
+ * - jp_u → UW1 (close back, closest available — Japanese /u/ is [ɯ] unrounded,
+ *   but ARPAbet has no pure [ɯ]; UW is the nearest high back vowel)
+ * - jp_e → EH1 (open-mid front unrounded, close to Japanese /e/ [e̞])
+ * - jp_o → OW1 (close-mid back rounded, closest to Japanese /o/ [o̞];
+ *   OW is technically a diphthong [oʊ] but starts at [o])
+ *
+ * Consonants map 1:1 to nearest ARPAbet:
+ * - jp_r → R (Japanese [ɾ] tap vs English [ɹ] approximant — closest available)
+ * - jp_f → F (Japanese [ɸ] bilabial vs English [f] labiodental — closest)
+ *
+ * Affricates map to multi-phoneme sequences:
+ * - jp_ts → T S (no single ARPAbet for [ts])
+ * - Palatal consonants (ky, gy, etc.) → consonant + Y (palatal glide)
+ *
+ * っ (cl): maps to T as an approximation of the gemination/stop effect.
+ *   In Japanese, っ lengthens the following consonant; since we can't easily
+ *   merge across notes, T provides a brief stop consonant. The durationStats
+ *   will give it a short duration.
+ */
+const JP_TO_EN_PHONEME_MAP = {
+    // Vowels (stress 1 = primary stress, ensures proper duration)
+    'a': ['AA1'],
+    'i': ['IY1'],
+    'u': ['UW1'],
+    'e': ['EH1'],
+    'o': ['OW1'],
+
+    // Consonants — 1:1 mapping to nearest ARPAbet
+    'k': ['K'],
+    's': ['S'],
+    'sh': ['SH'],
+    'ch': ['CH'],
+    't': ['T'],
+    'n': ['N'],
+    'h': ['HH'],
+    'm': ['M'],
+    'r': ['R'],
+    'w': ['W'],
+    'y': ['Y'],
+    'g': ['G'],
+    'z': ['Z'],
+    'd': ['D'],
+    'b': ['B'],
+    'p': ['P'],
+    'f': ['F'],
+    'j': ['JH'],
+
+    // Affricate — split into components
+    'ts': ['T', 'S'],
+
+    // Gemination marker (っ) — approximate with alveolar stop
+    'cl': ['T'],
+
+    // Palatal consonants (yōon) — consonant + palatal glide
+    'ky': ['K', 'Y'],
+    'gy': ['G', 'Y'],
+    'ny': ['N', 'Y'],
+    'hy': ['HH', 'Y'],
+    'my': ['M', 'Y'],
+    'ry': ['R', 'Y'],
+    'py': ['P', 'Y'],
+    'by': ['B', 'Y'],
+};
+
 class TextProcessing {
-    constructor() {
+    constructor(options = {}) {
         this.phone2idx = {};
         this.enG2pDict = {};
         this._vocabSize = 0;
         this._dictSize = 0;
+        // Japanese vocalization mode: 'en-phonemes' (default) uses English ARPAbet phonemes
+        // on the base multilingual model; 'jp-lora' uses JP LoRA models with jp_ phonemes.
+        this.japaneseVocalization = options.japaneseVocalization || 'en-phonemes';
         this._loadPhoneSet();
         this._loadEnG2pDict();
     }
@@ -254,10 +330,19 @@ class TextProcessing {
         }
 
         if (trimmed.startsWith('jp_')) {
+            // In en-phonemes mode, convert jp_ prefixed phonemes to English phonemes
+            if (this.japaneseVocalization === 'en-phonemes') {
+                const jpPhone = trimmed.slice(3);
+                return this._japanesePhoneToEnglishPhonemes(jpPhone);
+            }
             return [{ name: trimmed, display: trimmed.slice(3) }];
         }
 
         if (forceJp || this._isJapanese(trimmed)) {
+            // In en-phonemes mode, convert Japanese kana/kanji to English phonemes
+            if (this.japaneseVocalization === 'en-phonemes') {
+                return this._japaneseToEnglishPhonemes(trimmed);
+            }
             const phonemes = this._japaneseG2p(trimmed);
             if (phonemes) {
                 return phonemes.split(' ').filter(s => s).map(ph => {
@@ -294,6 +379,59 @@ class TextProcessing {
         }
 
         return [{ name: trimmed, display: trimmed }];
+    }
+
+    /**
+     * 将日文（假名/汉字）转换为英语音素对象数组（en_ 前缀）。
+     * 内部先调用 _japaneseG2p 得到日语音素序列（如 'k a'），再逐个查表映射为 ARPAbet。
+     * 映射后的音素附带 duration weight（通过 _attachEnglishWeights），用于 UI 时长分配。
+     *
+     * 'pau'（未知汉字回退）映射为 <SP>（静音）。
+     *
+     * @param {string} text - 日文歌词（假名/汉字/混合）
+     * @returns {Array<{name:string, display:string, weight?:number}>} 英语音素对象数组
+     */
+    _japaneseToEnglishPhonemes(text) {
+        const jpPhonemeStr = this._japaneseG2p(text);
+        if (!jpPhonemeStr) return [{ name: '<SP>', display: 'SP' }];
+
+        const jpParts = jpPhonemeStr.split(' ').filter(s => s);
+        const enPhonemes = [];
+        for (const jpPart of jpParts) {
+            if (jpPart === 'pau') {
+                // Unknown kanji → silence
+                enPhonemes.push({ name: '<SP>', display: 'SP' });
+                continue;
+            }
+            const mapped = JP_TO_EN_PHONEME_MAP[jpPart];
+            if (mapped) {
+                for (const enPh of mapped) {
+                    enPhonemes.push({ name: 'en_' + enPh, display: enPh });
+                }
+            } else {
+                // Fallback: if no mapping exists, try to use as-is (shouldn't happen normally)
+                console.warn(`[TextProcessing] No JP→EN mapping for "${jpPart}", using <UNK>`);
+                enPhonemes.push({ name: '<UNK>', display: jpPart });
+            }
+        }
+        return this._attachEnglishWeights(enPhonemes);
+    }
+
+    /**
+     * 将单个日语音素（如 'k', 'a', 'sh', 'ts', 'ky'）转换为英语音素对象数组。
+     * 用于 jp_ 前缀歌词的直接映射（如 'jp_k' → en_K）。
+     *
+     * @param {string} jpPhone - 日语音素基名（不含 jp_ 前缀）
+     * @returns {Array<{name:string, display:string, weight?:number}>} 英语音素对象数组
+     */
+    _japanesePhoneToEnglishPhonemes(jpPhone) {
+        const mapped = JP_TO_EN_PHONEME_MAP[jpPhone];
+        if (!mapped || mapped.length === 0) {
+            console.warn(`[TextProcessing] No JP→EN mapping for jp_${jpPhone}, using <UNK>`);
+            return [{ name: '<UNK>', display: jpPhone }];
+        }
+        const enPhonemes = mapped.map(enPh => ({ name: 'en_' + enPh, display: enPh }));
+        return this._attachEnglishWeights(enPhonemes);
     }
 
     /**
