@@ -13,7 +13,9 @@ let lastSpeedTime = 0;
 let isDownloading = false;
 let renderedFileIds = [];
 let currentPrecision = 'fp16';
-let currentVersionInfo = null; // { updateAvailable, localVersion, latestVersion, hasModelFiles }
+let currentRevision = 'master'; // selected ModelScope branch (version)
+let availableBranches = ['master']; // fetched from ModelScope
+let currentVersionInfo = null; // { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
 
 function createIconSvg(status) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -161,6 +163,47 @@ async function refreshVersionInfo() {
   }
 }
 
+/**
+ * Fetch available model versions (branches) from ModelScope and populate
+ * the version selector dropdown. 'master' is always first (latest).
+ */
+async function refreshVersionSelector() {
+  const select = document.getElementById('versionSelect');
+  if (!select) return;
+  select.disabled = true;
+  select.innerHTML = '';
+  try {
+    const result = await window.electronAPI.modelDownloadListVersions(currentPrecision);
+    availableBranches = (result && result.branches) || ['master'];
+  } catch (_) {
+    availableBranches = ['master'];
+  }
+  // Populate dropdown options
+  for (const branch of availableBranches) {
+    const option = document.createElement('option');
+    option.value = branch;
+    if (branch === 'master') {
+      option.textContent = t('modelDownload.latestVersionLabel');
+    } else {
+      option.textContent = branch;
+    }
+    select.appendChild(option);
+  }
+  // Set selected value to currentRevision (or local revision if installed)
+  let targetRevision = currentRevision;
+  if (currentVersionInfo && currentVersionInfo.hasModelFiles && currentVersionInfo.localRevision) {
+    targetRevision = currentVersionInfo.localRevision;
+  }
+  if (availableBranches.includes(targetRevision)) {
+    select.value = targetRevision;
+    currentRevision = targetRevision;
+  } else {
+    select.value = 'master';
+    currentRevision = 'master';
+  }
+  select.disabled = false;
+}
+
 function renderVersionInfo(info) {
   const section = document.getElementById('versionInfoSection');
   const localEl = document.getElementById('localVersionValue');
@@ -172,17 +215,28 @@ function renderVersionInfo(info) {
   if (!info || !info.hasModelFiles) {
     // No model files installed — hide version info, no update needed
     section.style.display = 'none';
+    // Still refresh the version selector so user can pick a version to download
+    refreshVersionSelector();
     return;
   }
 
   section.style.display = 'block';
-  localEl.textContent = info.localVersion || t('modelDownload.legacyVersion');
+  // Show revision info: "master" → "最新版本", other branches → branch name
+  const localRev = info.localRevision || 'master';
+  if (localRev === 'master') {
+    localEl.textContent = info.localVersion || t('modelDownload.legacyVersion');
+  } else {
+    localEl.textContent = localRev;
+  }
   latestEl.textContent = info.latestVersion || '-';
 
   if (info.updateAvailable) {
     banner.style.display = 'flex';
     if (!info.localVersion) {
       updateText.textContent = t('modelDownload.legacyUpdateHint');
+    } else if (localRev !== 'master') {
+      // Specific version installed → update to latest available
+      updateText.textContent = t('modelDownload.versionSwitchHint', { version: localRev });
     } else {
       updateText.textContent = t('modelDownload.updateAvailableHint', {
         local: info.localVersion,
@@ -193,6 +247,8 @@ function renderVersionInfo(info) {
   } else {
     banner.style.display = 'none';
   }
+  // Refresh the version selector to reflect installed revision
+  refreshVersionSelector();
 }
 
 document.getElementById('updateModelBtn').addEventListener('click', async () => {
@@ -213,7 +269,7 @@ document.getElementById('updateModelBtn').addEventListener('click', async () => 
   lastSpeedTime = downloadStartTime;
   lastOverallDownloaded = 0;
 
-  const result = await window.electronAPI.modelDownloadUpdate(currentPrecision);
+  const result = await window.electronAPI.modelDownloadUpdate(currentPrecision, currentRevision);
   if (result && !result.success && result.error) {
     document.getElementById('statusText').textContent = t('modelDownload.downloadNotAvailable');
     document.getElementById('errorMessage').textContent = result.error;
@@ -272,6 +328,17 @@ window.electronAPI.onModelDownloadPrecision((precision) => {
   currentPrecision = precision || 'fp16';
   const radio = document.querySelector(`input[name="modelPrecision"][value="${currentPrecision}"]`);
   if (radio) radio.checked = true;
+});
+
+// Receive initial revision context from main process when window opens
+window.electronAPI.onModelDownloadRevision((revision) => {
+  if (revision && typeof revision === 'string') {
+    currentRevision = revision;
+    const select = document.getElementById('versionSelect');
+    if (select && Array.from(select.options).some(opt => opt.value === revision)) {
+      select.value = revision;
+    }
+  }
 });
 
 window.electronAPI.onModelDownloadProgress((data) => {
@@ -351,7 +418,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   lastOverallDownloaded = 0;
   isDownloading = true;
 
-  const result = await window.electronAPI.modelDownloadStart(currentPrecision);
+  const result = await window.electronAPI.modelDownloadStart(currentPrecision, currentRevision);
   if (result && !result.success && result.error) {
     document.getElementById('statusText').textContent = t('modelDownload.downloadNotAvailable');
     document.getElementById('speedInfo').textContent = '';
@@ -640,6 +707,25 @@ document.getElementById('sifiganUpdateBtn').addEventListener('click', async () =
     sifiganState.isDownloading = false;
     renderSifiganCard();
   }
+});
+
+// Version selector: update currentRevision when user picks a different version
+document.getElementById('versionSelect').addEventListener('change', (e) => {
+  if (isDownloading) {
+    // revert selection during download
+    e.target.value = currentRevision;
+    return;
+  }
+  const newRevision = e.target.value;
+  if (newRevision && newRevision !== currentRevision) {
+    currentRevision = newRevision;
+  }
+});
+
+// Open model-updates docs page in system default browser
+document.getElementById('modelUpdatesLink').addEventListener('click', async (e) => {
+  e.preventDefault();
+  await window.electronAPI.modelDownloadOpenExternal('https://henley04.github.io/SXSEditor/user/model-updates.html');
 });
 
 initI18n().then(() => {

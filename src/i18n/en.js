@@ -581,6 +581,10 @@ export default {
     updateAvailableHint: 'New version available (current {local} → latest {latest}). Update recommended.',
     legacyUpdateHint: 'This is a legacy model (no version info). Update from ModelScope to the latest version is recommended.',
     updateConfirmMessage: 'Are you sure you want to update the model? This will delete the current precision model files and re-download from ModelScope.',
+    selectVersion: 'Select Version',
+    latestVersionLabel: 'Latest Version',
+    versionSwitchHint: 'Version {version} is installed, update to latest available.',
+    viewVersionDetails: 'View model version details',
   },
   menu: {
     aboutSXSEditor: 'About SXSEditor',
