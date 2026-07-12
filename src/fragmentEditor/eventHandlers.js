@@ -129,11 +129,13 @@ function applyNoteDrag(pos) {
     }
     const shift = minRawStart < 0 ? -minRawStart : 0;
     // 3. 计算最终新位置（已保证 >= 0）并检测与非选中 notes 的重叠
+    //    分组假名不受重叠限制，允许自由移动（重叠警告仍由 getInactiveNoteIds 渲染）
     let blocked = false;
     const planned = [];
     for (const p of rawPlanned) {
       const newStart = p.rawStart + shift;
-      if (hasNoteOverlapMulti(selectedNoteIds, p.newPitch, newStart, newStart + p.duration)) {
+      const isGroupedKana = findGroupByNoteId(p.note.id, getKanjiGroups()) !== null;
+      if (!isGroupedKana && hasNoteOverlapMulti(selectedNoteIds, p.newPitch, newStart, newStart + p.duration)) {
         blocked = true;
         break;
       }
@@ -157,15 +159,24 @@ function applyNoteDrag(pos) {
     const dyPitch = Math.round(yToPitchContinuous(pos.y) - getDragStartMousePitch());
     let newStart = Math.max(0, snapBeats(getDragNoteStart().start + dxBeats));
     const newPitch = Math.max(0, Math.min(127, getDragNoteStart().pitch + dyPitch));
-    newStart = clampNotePosition(note.id, newPitch, newStart, note.duration);
-    if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
+    // Grouped kana notes: allow free movement (no snap/clamp/overlap block)
+    // so users can position them freely; overlap warning still renders via getInactiveNoteIds.
+    const isGroupedKana = findGroupByNoteId(note.id, getKanjiGroups()) !== null;
+    if (isGroupedKana) {
       note.start = newStart;
       note.pitch = newPitch;
+    } else {
+      newStart = clampNotePosition(note.id, newPitch, newStart, note.duration);
+      if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
+        note.start = newStart;
+        note.pitch = newPitch;
+      }
     }
   } else if (dragMode === 'resize') {
     const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
     const newDuration = Math.max(1 / 16, snapBeats(getDragNoteStart().duration + dxBeats));
-    if (!hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
+    const isGroupedKana = findGroupByNoteId(note.id, getKanjiGroups()) !== null;
+    if (isGroupedKana || !hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
       note.duration = newDuration;
     }
   }
@@ -558,7 +569,10 @@ function _applySetKanjiJapanese(noteId) {
   if (!note) return;
 
   const result = splitKanjiNoteToKana(note, genNoteId);
-  if (!result) return;
+  if (!result) {
+    showAlertDialog(`汉字 "${note.lyric}" 不在日语字典中，无法转换为假名。\n\nKanji "${note.lyric}" is not in the Japanese dictionary and cannot be converted to kana.`);
+    return;
+  }
 
   // Capture old state for undo
   const oldNotes = deepClone(notes);
@@ -2125,7 +2139,9 @@ export function setupEventListeners() {
             else if (e.key === 'ArrowDown') newPitch = Math.max(0, note.pitch - step);
             else if (e.key === 'ArrowLeft') newStart = Math.max(0, snapBeats(note.start - timeStep));
             else if (e.key === 'ArrowRight') newStart = Math.max(0, snapBeats(note.start + timeStep));
-            if (checkOverlap(id, newPitch, newStart, newStart + note.duration)) {
+            // 分组假名不受重叠限制，允许自由移动
+            const isGroupedKana = findGroupByNoteId(id, getKanjiGroups()) !== null;
+            if (!isGroupedKana && checkOverlap(id, newPitch, newStart, newStart + note.duration)) {
               blocked = true;
               break;
             }
