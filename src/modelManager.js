@@ -194,24 +194,24 @@ function invalidateJpModelsCache(baseDir, precision) {
   }
 }
 
-function getFileDownloadUrl(filePath, precision) {
+function getFileDownloadUrl(filePath, precision, revision = 'master') {
   // Preprocess and basic_pitch models use int8 repo (dynamic shapes),
   // not int8-npu repo (static shapes with fixed input dimensions)
   const effectivePrecision = (!isSvsModelFile(filePath) && precision === 'int8-npu') ? 'int8' : precision;
   const modelId = getModelId(effectivePrecision);
   if (!modelId) return null;  // precision not yet available for download
   const encoded = encodeURIComponent(filePath);
-  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
+  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${encodeURIComponent(revision)}&FilePath=${encoded}`;
 }
 
 /**
  * Get the download URL for a JP language model file.
  */
-function getJpFileDownloadUrl(filePath, precision) {
+function getJpFileDownloadUrl(filePath, precision, revision = 'master') {
   const modelId = getJpModelId(precision);
   if (!modelId) return null;
   const encoded = encodeURIComponent(filePath);
-  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
+  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${encodeURIComponent(revision)}&FilePath=${encoded}`;
 }
 
 /**
@@ -219,11 +219,98 @@ function getJpFileDownloadUrl(filePath, precision) {
  * SiFiGAN files live in their own ModelScope repo (MODEL_IDS.sifigan)
  * and are stored at the root of onnx_models/ (not in precision subdirs).
  */
-function getSifiganFileDownloadUrl(filePath) {
+function getSifiganFileDownloadUrl(filePath, revision = 'master') {
   const modelId = MODEL_IDS.sifigan;
   if (!modelId) return null;
   const encoded = encodeURIComponent(filePath);
-  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
+  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${encodeURIComponent(revision)}&FilePath=${encoded}`;
+}
+
+// ===== ModelScope branch (version) listing =====
+// ModelScope model repos are git-based. Branches represent model versions.
+// 'master' is always the latest version. Other branches are specific versions.
+// The branches API: GET /api/v1/models/{model_id}/branches → { Data: { Branches: [...] } }
+
+/**
+ * Fetch a JSON document from ModelScope API via GET request.
+ * Returns parsed JSON object or null on failure.
+ */
+async function _fetchModelScopeJson(url) {
+  try {
+    const { response } = await resolveRedirects(url, 5, 'GET');
+    const chunks = [];
+    for await (const chunk of response) {
+      chunks.push(chunk);
+    }
+    const body = Buffer.concat(chunks).toString('utf-8');
+    return JSON.parse(body);
+  } catch (err) {
+    console.warn('[ModelManager] ModelScope API request failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Fetch available branches (versions) for a main model precision from ModelScope.
+ * Returns an array of branch names, e.g. ['master', 'v1.0', 'v0.9'].
+ * 'master' is always first (latest). On failure returns ['master'].
+ */
+async function getModelBranches(precision) {
+  const modelId = getModelId(precision);
+  if (!modelId) return ['master'];
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/branches`;
+  const data = await _fetchModelScopeJson(url);
+  if (!data || !data.Success || !data.Data || !Array.isArray(data.Data.Branches)) {
+    return ['master'];
+  }
+  const branches = data.Data.Branches.slice();
+  // Ensure 'master' is always first (latest)
+  branches.sort((a, b) => {
+    if (a === 'master') return -1;
+    if (b === 'master') return 1;
+    return a.localeCompare(b);
+  });
+  return branches.length > 0 ? branches : ['master'];
+}
+
+/**
+ * Fetch available branches for a JP model precision from ModelScope.
+ */
+async function getJpModelBranches(precision) {
+  const modelId = getJpModelId(precision);
+  if (!modelId) return ['master'];
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/branches`;
+  const data = await _fetchModelScopeJson(url);
+  if (!data || !data.Success || !data.Data || !Array.isArray(data.Data.Branches)) {
+    return ['master'];
+  }
+  const branches = data.Data.Branches.slice();
+  branches.sort((a, b) => {
+    if (a === 'master') return -1;
+    if (b === 'master') return 1;
+    return a.localeCompare(b);
+  });
+  return branches.length > 0 ? branches : ['master'];
+}
+
+/**
+ * Fetch available branches for the SiFiGAN model from ModelScope.
+ */
+async function getSifiganBranches() {
+  const modelId = MODEL_IDS.sifigan;
+  if (!modelId) return ['master'];
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/branches`;
+  const data = await _fetchModelScopeJson(url);
+  if (!data || !data.Success || !data.Data || !Array.isArray(data.Data.Branches)) {
+    return ['master'];
+  }
+  const branches = data.Data.Branches.slice();
+  branches.sort((a, b) => {
+    if (a === 'master') return -1;
+    if (b === 'master') return 1;
+    return a.localeCompare(b);
+  });
+  return branches.length > 0 ? branches : ['master'];
 }
 
 // ===== Version management functions =====
@@ -300,6 +387,20 @@ function getLocalModelVersion(modelDir, precision) {
 }
 
 /**
+ * Read the local model revision (ModelScope branch) for a given precision.
+ * Returns the branch name (e.g. 'master' or 'v1.0'), or 'master' if not recorded.
+ */
+function getLocalModelRevision(modelDir, precision) {
+  const versionPath = getModelVersionPath(modelDir, precision);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.revision || 'master';
+  } catch (_) {
+    return 'master';
+  }
+}
+
+/**
  * Get the latest model version for a given precision.
  */
 function getLatestModelVersion(precision) {
@@ -310,11 +411,13 @@ function getLatestModelVersion(precision) {
  * Check if a model update is available for the given precision.
  * An update is available if:
  *   - version.json is missing (legacy model) AND model files exist, OR
+ *   - local revision is not 'master' (a specific version is installed, latest is available)
  *   - local version is older than the latest version
- * Returns { updateAvailable, localVersion, latestVersion, hasModelFiles }
+ * Returns { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
  */
 function checkModelVersion(modelDir, precision) {
   const localVersion = getLocalModelVersion(modelDir, precision);
+  const localRevision = getLocalModelRevision(modelDir, precision);
   const latestVersion = getLatestModelVersion(precision);
   const { existing } = checkMissingFiles(modelDir, precision);
   const hasModelFiles = existing.length > 0;
@@ -323,6 +426,9 @@ function checkModelVersion(modelDir, precision) {
   if (hasModelFiles) {
     if (!localVersion) {
       // Legacy model: files exist but no version info → update available
+      updateAvailable = true;
+    } else if (localRevision !== 'master') {
+      // A specific version is installed → update to latest available
       updateAvailable = true;
     } else if (latestVersion && compareVersions(localVersion, latestVersion) < 0) {
       updateAvailable = true;
@@ -334,13 +440,15 @@ function checkModelVersion(modelDir, precision) {
     localVersion,
     latestVersion,
     hasModelFiles,
+    localRevision,
   };
 }
 
 /**
  * Save the model version to version.json after a successful download.
+ * revision records the ModelScope branch that was downloaded.
  */
-function saveModelVersion(modelDir, precision) {
+function saveModelVersion(modelDir, precision, revision = 'master') {
   const versionPath = getModelVersionPath(modelDir, precision);
   const latestVersion = getLatestModelVersion(precision);
   if (!latestVersion) return;
@@ -350,10 +458,11 @@ function saveModelVersion(modelDir, precision) {
     const data = {
       version: latestVersion,
       precision,
+      revision,
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
-    console.log(`[ModelManager] Saved version ${latestVersion} for precision ${precision}`);
+    console.log(`[ModelManager] Saved version ${latestVersion} (revision: ${revision}) for precision ${precision}`);
   } catch (err) {
     console.warn(`[ModelManager] Failed to save version for ${precision}:`, err.message);
   }
@@ -371,18 +480,31 @@ function getLocalJpModelVersion(modelDir, precision) {
   }
 }
 
+function getLocalJpModelRevision(modelDir, precision) {
+  const versionPath = getJpModelVersionPath(modelDir, precision);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.revision || 'master';
+  } catch (_) {
+    return 'master';
+  }
+}
+
 function getLatestJpModelVersion(precision) {
   return JP_MODEL_VERSIONS[precision] || null;
 }
 
 function checkJpModelVersion(modelDir, precision) {
   const localVersion = getLocalJpModelVersion(modelDir, precision);
+  const localRevision = getLocalJpModelRevision(modelDir, precision);
   const latestVersion = getLatestJpModelVersion(precision);
   const hasModelFiles = checkJpModelsExist(modelDir, precision);
 
   let updateAvailable = false;
   if (hasModelFiles) {
     if (!localVersion) {
+      updateAvailable = true;
+    } else if (localRevision !== 'master') {
       updateAvailable = true;
     } else if (latestVersion && compareVersions(localVersion, latestVersion) < 0) {
       updateAvailable = true;
@@ -394,10 +516,11 @@ function checkJpModelVersion(modelDir, precision) {
     localVersion,
     latestVersion,
     hasModelFiles,
+    localRevision,
   };
 }
 
-function saveJpModelVersion(modelDir, precision) {
+function saveJpModelVersion(modelDir, precision, revision = 'master') {
   const versionPath = getJpModelVersionPath(modelDir, precision);
   const latestVersion = getLatestJpModelVersion(precision);
   if (!latestVersion) return;
@@ -407,11 +530,12 @@ function saveJpModelVersion(modelDir, precision) {
     const data = {
       version: latestVersion,
       precision,
+      revision,
       language: 'jp',
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
-    console.log(`[ModelManager] Saved JP version ${latestVersion} for precision ${precision}`);
+    console.log(`[ModelManager] Saved JP version ${latestVersion} (revision: ${revision}) for precision ${precision}`);
   } catch (err) {
     console.warn(`[ModelManager] Failed to save JP version for ${precision}:`, err.message);
   }
@@ -429,12 +553,23 @@ function getLocalSifiganVersion(modelDir) {
   }
 }
 
+function getLocalSifiganRevision(modelDir) {
+  const versionPath = getSifiganVersionPath(modelDir);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.revision || 'master';
+  } catch (_) {
+    return 'master';
+  }
+}
+
 function getLatestSifiganVersion() {
   return SIFIGAN_MODEL_VERSION;
 }
 
 function checkSifiganVersion(modelDir) {
   const localVersion = getLocalSifiganVersion(modelDir);
+  const localRevision = getLocalSifiganRevision(modelDir);
   const latestVersion = getLatestSifiganVersion();
   // Check if SiFiGAN files exist by looking for stats + at least one variant
   let hasModelFiles = false;
@@ -452,6 +587,8 @@ function checkSifiganVersion(modelDir) {
   if (hasModelFiles) {
     if (!localVersion) {
       updateAvailable = true;
+    } else if (localRevision !== 'master') {
+      updateAvailable = true;
     } else if (latestVersion && compareVersions(localVersion, latestVersion) < 0) {
       updateAvailable = true;
     }
@@ -462,21 +599,23 @@ function checkSifiganVersion(modelDir) {
     localVersion,
     latestVersion,
     hasModelFiles,
+    localRevision,
   };
 }
 
-function saveSifiganVersion(modelDir) {
+function saveSifiganVersion(modelDir, revision = 'master') {
   const versionPath = getSifiganVersionPath(modelDir);
   const latestVersion = getLatestSifiganVersion();
   if (!latestVersion) return;
   try {
     const data = {
       version: latestVersion,
+      revision,
       model: 'sifigan',
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
-    console.log(`[ModelManager] Saved SiFiGAN version ${latestVersion}`);
+    console.log(`[ModelManager] Saved SiFiGAN version ${latestVersion} (revision: ${revision})`);
   } catch (err) {
     console.warn(`[ModelManager] Failed to save SiFiGAN version:`, err.message);
   }
@@ -1203,9 +1342,12 @@ async function checkModelScopeCLIAvailable() {
 }
 
 async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
-  const { abortSignal, precision } = options;
+  const { abortSignal, precision, revision = 'master' } = options;
   const modelId = getModelId(precision);
   const args = ['download', '--model', modelId, '--local_dir', modelDir];
+  if (revision && revision !== 'master') {
+    args.push('--revision', revision);
+  }
 
   for (const file of missingFiles) {
     args.push('--include', file.filePath);
@@ -1238,8 +1380,8 @@ async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
   });
 }
 
-async function getRemoteFileSize(filePath, precision) {
-  const url = getFileDownloadUrl(filePath, precision);
+async function getRemoteFileSize(filePath, precision, revision = 'master') {
+  const url = getFileDownloadUrl(filePath, precision, revision);
   try {
     const { response } = await resolveRedirects(url, 5, 'HEAD');
     const contentLength = parseInt(response.headers['content-length'] || '0', 10);
@@ -1266,7 +1408,7 @@ async function getRemoteFileSize(filePath, precision) {
  * - 支持断点续传
  */
 async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
-  const { onProgress, onFileStart, onFileComplete, abortSignal, precision = DEFAULT_PRECISION } = options;
+  const { onProgress, onFileStart, onFileComplete, abortSignal, precision = DEFAULT_PRECISION, revision = 'master' } = options;
 
   if (missingFiles.length === 0) return;
 
@@ -1275,8 +1417,9 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   if (cliAvailable) {
     console.log('[ModelManager] ModelScope CLI available, using CLI download');
     try {
-      await downloadWithModelScopeCLI(modelDir, missingFiles, { abortSignal, precision });
+      await downloadWithModelScopeCLI(modelDir, missingFiles, { abortSignal, precision, revision });
       console.log('[ModelManager] ModelScope CLI download complete');
+      saveModelVersion(modelDir, precision, revision);
       return;
     } catch (err) {
       if (err.message === 'Download cancelled') throw err;
@@ -1285,14 +1428,14 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   }
 
   const globalConcurrency = getOptimalConcurrency();
-  console.log(`[ModelManager] Using HTTP download with concurrent chunked support (concurrency: ${globalConcurrency})`);
+  console.log(`[ModelManager] Using HTTP download with concurrent chunked support (concurrency: ${globalConcurrency}, revision: ${revision})`);
   const pool = new ConcurrencyPool(globalConcurrency);
 
   // 获取所有文件的远程大小（并行 HEAD 请求）
   const fileSizes = {};
   let overallTotal = 0;
   const sizeResults = await Promise.all(
-    missingFiles.map(file => getRemoteFileSize(file.filePath, precision))
+    missingFiles.map(file => getRemoteFileSize(file.filePath, precision, revision))
   );
   for (let i = 0; i < missingFiles.length; i++) {
     fileSizes[missingFiles[i].filePath] = sizeResults[i];
@@ -1338,7 +1481,7 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
       }
 
       const destPath = getLocalFilePath(modelDir, file.filePath, precision);
-      const url = getFileDownloadUrl(file.filePath, precision);
+      const url = getFileDownloadUrl(file.filePath, precision, revision);
       const fileSize = fileSizes[file.filePath];
 
       if (onFileStart) {
@@ -1410,7 +1553,7 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   }
 
   // 下载成功后保存模型版本信息
-  saveModelVersion(modelDir, precision);
+  saveModelVersion(modelDir, precision, revision);
 }
 
 module.exports = {
@@ -1449,20 +1592,27 @@ module.exports = {
   getManifestForPrecision,
   isSvsModelFile,
   isPrecisionDownloadable,
+  // Branch (version) listing
+  getModelBranches,
+  getJpModelBranches,
+  getSifiganBranches,
   // Version management
   getModelVersionPath,
   getJpModelVersionPath,
   getSifiganVersionPath,
   compareVersions,
   getLocalModelVersion,
+  getLocalModelRevision,
   getLatestModelVersion,
   checkModelVersion,
   saveModelVersion,
   getLocalJpModelVersion,
+  getLocalJpModelRevision,
   getLatestJpModelVersion,
   checkJpModelVersion,
   saveJpModelVersion,
   getLocalSifiganVersion,
+  getLocalSifiganRevision,
   getLatestSifiganVersion,
   checkSifiganVersion,
   saveSifiganVersion,

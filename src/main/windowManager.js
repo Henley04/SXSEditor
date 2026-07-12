@@ -248,7 +248,7 @@ function openResourceManagerWindow() {
   });
 }
 
-function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
+function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, revision) {
   if (modelDownloadWindow) {
     modelDownloadWindow.focus();
     return;
@@ -287,6 +287,9 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
   modelDownloadWindow.webContents.once('did-finish-load', () => {
     modelDownloadWindow.webContents.send('model-download:missing-files', missingFiles);
     modelDownloadWindow.webContents.send('model-download:precision', currentPrecision);
+    if (revision) {
+      modelDownloadWindow.webContents.send('model-download:revision', revision);
+    }
     modelDownloadWindow.focus();
   });
 

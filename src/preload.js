@@ -158,7 +158,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('model-download:precision', handler);
     return () => ipcRenderer.removeListener('model-download:precision', handler);
   },
-  modelDownloadStart: (precision) => ipcRenderer.invoke('model-download:start', precision),
+  onModelDownloadRevision: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('model-download:revision', handler);
+    return () => ipcRenderer.removeListener('model-download:revision', handler);
+  },
+  modelDownloadStart: (precision, revision) => ipcRenderer.invoke('model-download:start', precision, revision),
   modelDownloadCancel: () => ipcRenderer.invoke('model-download:cancel'),
   modelDownloadCheck: () => ipcRenderer.invoke('model-download:check'),
   modelDownloadChangeDir: () => ipcRenderer.invoke('model-download:change-dir'),
@@ -168,20 +173,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   modelDownloadRecheck: (precision) => ipcRenderer.invoke('model-download:recheck', precision),
   // JP model download
   modelDownloadCheckJp: (precision) => ipcRenderer.invoke('model-download:check-jp', precision),
-  modelDownloadStartJp: (precision) => ipcRenderer.invoke('model-download:start-jp', precision),
+  modelDownloadStartJp: (precision, revision) => ipcRenderer.invoke('model-download:start-jp', precision, revision),
   modelDownloadCheckJpExists: () => ipcRenderer.invoke('model-download:check-jp-exists'),
   // SiFiGAN (optional vocoder) download/unload
   modelDownloadCheckSifigan: () => ipcRenderer.invoke('model-download:check-sifigan'),
-  modelDownloadStartSifigan: () => ipcRenderer.invoke('model-download:start-sifigan'),
+  modelDownloadStartSifigan: (revision) => ipcRenderer.invoke('model-download:start-sifigan', revision),
   modelDownloadUnloadSifigan: () => ipcRenderer.invoke('model-download:unload-sifigan'),
   // Model version management
   modelDownloadCheckVersion: (precision) => ipcRenderer.invoke('model-download:check-version', precision),
   modelDownloadCheckJpVersion: (precision) => ipcRenderer.invoke('model-download:check-jp-version', precision),
   modelDownloadCheckSifiganVersion: () => ipcRenderer.invoke('model-download:check-sifigan-version'),
   modelDownloadCheckAllVersions: (precision) => ipcRenderer.invoke('model-download:check-all-versions', precision),
-  modelDownloadUpdate: (precision) => ipcRenderer.invoke('model-download:update', precision),
-  modelDownloadUpdateJp: (precision) => ipcRenderer.invoke('model-download:update-jp', precision),
-  modelDownloadUpdateSifigan: () => ipcRenderer.invoke('model-download:update-sifigan'),
+  modelDownloadUpdate: (precision, revision) => ipcRenderer.invoke('model-download:update', precision, revision),
+  modelDownloadUpdateJp: (precision, revision) => ipcRenderer.invoke('model-download:update-jp', precision, revision),
+  modelDownloadUpdateSifigan: (revision) => ipcRenderer.invoke('model-download:update-sifigan', revision),
+  // Version listing (fetch available branches from ModelScope)
+  modelDownloadListVersions: (precision) => ipcRenderer.invoke('model-download:list-versions', precision),
+  modelDownloadListJpVersions: (precision) => ipcRenderer.invoke('model-download:list-jp-versions', precision),
+  modelDownloadListSifiganVersions: () => ipcRenderer.invoke('model-download:list-sifigan-versions'),
+  // Open external URL (for model-updates docs link)
+  modelDownloadOpenExternal: (url) => ipcRenderer.invoke('model-download:open-external', url),
   // SVS JP model check
   svsCheckJpModels: () => ipcRenderer.invoke('svs:checkJpModels'),
   saveLocale: (locale) => ipcRenderer.invoke('save-locale', locale),

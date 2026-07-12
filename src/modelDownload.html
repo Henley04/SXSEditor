@@ -59,11 +59,18 @@
       <span class="version-label" data-i18n="modelDownload.latestVersion">最新版本</span>
       <span class="version-value" id="latestVersionValue">-</span>
     </div>
+    <div class="version-select-row">
+      <span class="version-label" data-i18n="modelDownload.selectVersion">选择版本</span>
+      <select id="versionSelect" class="version-select" disabled>
+        <option value="master" data-i18n="modelDownload.latestVersionLabel">最新版本 (Latest)</option>
+      </select>
+    </div>
     <div class="version-update-banner" id="versionUpdateBanner" style="display:none;">
       <span class="update-icon" aria-hidden="true">&#9888;</span>
       <span class="update-text" id="versionUpdateText"></span>
       <button class="btn btn-update" id="updateModelBtn" data-i18n="modelDownload.update">更新</button>
     </div>
+    <a href="#" id="modelUpdatesLink" class="model-updates-link" data-i18n="modelDownload.viewVersionDetails">查看模型版本详情</a>
   </div>
 
   <div class="overall-progress" id="progressSection" style="display:none;">

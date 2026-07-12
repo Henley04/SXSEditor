@@ -98,6 +98,11 @@ const IPC_CHANNELS = {
   MODEL_DOWNLOAD_CHECK_JP: 'model-download:check-jp',
   MODEL_DOWNLOAD_START_JP: 'model-download:start-jp',
   MODEL_DOWNLOAD_CHECK_JP_EXISTS: 'model-download:check-jp-exists',
+  MODEL_DOWNLOAD_LIST_VERSIONS: 'model-download:list-versions',
+  MODEL_DOWNLOAD_LIST_JP_VERSIONS: 'model-download:list-jp-versions',
+  MODEL_DOWNLOAD_LIST_SIFIGAN_VERSIONS: 'model-download:list-sifigan-versions',
+  MODEL_DOWNLOAD_OPEN_EXTERNAL: 'model-download:open-external',
+  MODEL_DOWNLOAD_REVISION: 'model-download:revision',
 
   // ==================== Locale ====================
   SAVE_LOCALE: 'save-locale',

@@ -107,6 +107,52 @@ body {
   color: var(--bg-panel, #fff);
 }
 
+.version-select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-1) 0;
+  font-size: var(--font-sm);
+}
+
+.version-select {
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) var(--space-2);
+  font-size: var(--font-sm);
+  font-family: inherit;
+  cursor: pointer;
+  min-width: 160px;
+  max-width: 220px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.version-select:focus {
+  border-color: var(--accent, #4a9eff);
+}
+
+.version-select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.model-updates-link {
+  display: inline-block;
+  margin-top: var(--space-2);
+  font-size: var(--font-sm);
+  color: var(--accent, #4a9eff);
+  text-decoration: none;
+  cursor: pointer;
+  transition: text-decoration 0.15s;
+}
+
+.model-updates-link:hover {
+  text-decoration: underline;
+}
+
 .precision-label {
   display: block;
   font-size: var(--font-md);

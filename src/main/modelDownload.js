@@ -1,11 +1,11 @@
-const { ipcMain, dialog } = require('electron');
+const { ipcMain, dialog, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, getLatestModelVersion, invalidateJpModelsCache } = require('../modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, getLatestModelVersion, invalidateJpModelsCache, getModelBranches, getJpModelBranches, getSifiganBranches } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 let downloadAbortController = null;
@@ -92,7 +92,7 @@ function deleteSifiganFiles(modelDir) {
   return { deleted, errors };
 }
 
-async function startModelDownload(modelDir, missingFiles, precision) {
+async function startModelDownload(modelDir, missingFiles, precision, revision = 'master') {
   downloadAbortController = new AbortController();
   const abortSignal = downloadAbortController.signal;
   const currentPrecision = precision || DEFAULT_PRECISION;
@@ -102,6 +102,7 @@ async function startModelDownload(modelDir, missingFiles, precision) {
     await downloadMissingFiles(modelDir, missingFiles, {
       abortSignal,
       precision: currentPrecision,
+      revision,
       onProgress: (data) => {
         const win = getModelDownloadWindow();
         if (win && !win.isDestroyed()) {
@@ -215,15 +216,70 @@ function getCustomModelDir() {
 }
 
 function registerModelDownloadIpc() {
-  ipcMain.handle('model-download:start', async (event, precision) => {
+  // Open an external URL in the system default browser (for model-updates docs link)
+  ipcMain.handle('model-download:open-external', async (event, url) => {
+    const ALLOWED_EXTERNAL_URLS = [
+      'https://henley04.github.io/SXSEditor/',
+    ];
+    if (!url || typeof url !== 'string') return { success: false };
+    const isAllowed = ALLOWED_EXTERNAL_URLS.some(prefix => url.startsWith(prefix));
+    if (!isAllowed) {
+      return { success: false, error: 'URL not allowed' };
+    }
+    try {
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  // List available model versions (branches) from ModelScope for a given precision
+  ipcMain.handle('model-download:list-versions', async (event, precision) => {
+    const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    try {
+      const branches = await getModelBranches(currentPrecision);
+      return { success: true, branches };
+    } catch (err) {
+      return { success: false, branches: ['master'], error: err.message };
+    }
+  });
+
+  // List available JP model versions from ModelScope
+  ipcMain.handle('model-download:list-jp-versions', async (event, precision) => {
+    const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    try {
+      const branches = await getJpModelBranches(currentPrecision);
+      return { success: true, branches };
+    } catch (err) {
+      return { success: false, branches: ['master'], error: err.message };
+    }
+  });
+
+  // List available SiFiGAN model versions from ModelScope
+  ipcMain.handle('model-download:list-sifigan-versions', async () => {
+    try {
+      const branches = await getSifiganBranches();
+      return { success: true, branches };
+    } catch (err) {
+      return { success: false, branches: ['master'], error: err.message };
+    }
+  });
+
+  ipcMain.handle('model-download:start', async (event, precision, revision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    const currentRevision = revision || 'master';
     if (!isPrecisionDownloadable(currentPrecision)) {
       return { success: false, error: `Download not available for precision: ${currentPrecision}` };
     }
     const { missing } = checkMissingFiles(modelDir, currentPrecision);
-    if (missing.length === 0) return { success: true };
-    await startModelDownload(modelDir, missing, currentPrecision);
+    if (missing.length === 0) {
+      // All files present — just save version with revision
+      saveModelVersion(modelDir, currentPrecision, currentRevision);
+      return { success: true };
+    }
+    await startModelDownload(modelDir, missing, currentPrecision, currentRevision);
     return { success: true };
   });
 
@@ -319,10 +375,11 @@ function registerModelDownloadIpc() {
     return { missing, existing };
   });
 
-  ipcMain.handle('model-download:start-jp', async (event, precision) => {
+  ipcMain.handle('model-download:start-jp', async (event, precision, revision) => {
     const { checkMissingJpFiles, getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    const currentRevision = revision || 'master';
     const { missing } = checkMissingJpFiles(modelDir, currentPrecision);
     if (missing.length === 0) return { success: true };
 
@@ -347,7 +404,7 @@ function registerModelDownloadIpc() {
       // Use custom download for JP files
       for (const file of missing) {
         const destPath = getJpLocalFilePath(modelDir, file.filePath, currentPrecision);
-        const url = getJpFileDownloadUrl(file.filePath, currentPrecision);
+        const url = getJpFileDownloadUrl(file.filePath, currentPrecision, currentRevision);
         if (!url) continue;
 
         const { downloadFileWithRetry } = require('../modelManager');
@@ -366,7 +423,7 @@ function registerModelDownloadIpc() {
       // 失效 JP 模型存在性缓存，让下次合成重新检查文件
       invalidateJpModelsCache(modelDir, currentPrecision);
       // 保存 JP 模型版本信息
-      saveJpModelVersion(modelDir, currentPrecision);
+      saveJpModelVersion(modelDir, currentPrecision, currentRevision);
       console.log('[Main] JP model download complete');
     } catch (err) {
       if (err.message === 'Download cancelled') {
@@ -426,8 +483,9 @@ function registerModelDownloadIpc() {
   // Start SiFiGAN download. Downloads the 3 expected files from the
   // ModelScope repo (MODEL_IDS.sifigan) to the root of onnx_models/.
   // Uses chunked download for files >= 16MB, single-threaded for smaller.
-  ipcMain.handle('model-download:start-sifigan', async () => {
+  ipcMain.handle('model-download:start-sifigan', async (event, revision) => {
     const sifiganId = MODEL_IDS.sifigan || '';
+    const currentRevision = revision || 'master';
     if (!sifiganId) {
       const modelDir = getModelDir();
       const { allExist, files } = checkSifiganFilesExist(modelDir);
@@ -462,7 +520,7 @@ function registerModelDownloadIpc() {
         if (abortSignal.aborted) throw new Error('Download cancelled');
 
         const destPath = path.join(modelDir, fileName);
-        const url = getSifiganFileDownloadUrl(fileName);
+        const url = getSifiganFileDownloadUrl(fileName, currentRevision);
         if (!url) {
           throw new Error(`Failed to build download URL for ${fileName}`);
         }
@@ -575,7 +633,7 @@ function registerModelDownloadIpc() {
       const { allExist: nowExists, files: finalFiles } = checkSifiganFilesExist(modelDir);
       if (nowExists) {
         // 保存 SiFiGAN 模型版本信息
-        saveSifiganVersion(modelDir);
+        saveSifiganVersion(modelDir, currentRevision);
       }
       if (win && !win.isDestroyed()) {
         win.webContents.send('model-download:complete');
@@ -693,10 +751,12 @@ function registerModelDownloadIpc() {
   });
 
   // Update models: delete existing files for the precision and re-download
-  // from ModelScope. This is used when a model update is available.
-  ipcMain.handle('model-download:update', async (event, precision) => {
+  // from ModelScope. This is used when a model update is available or when
+  // switching to a different version (revision).
+  ipcMain.handle('model-download:update', async (event, precision, revision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    const currentRevision = revision || 'master';
     if (!isPrecisionDownloadable(currentPrecision)) {
       return { success: false, error: `Download not available for precision: ${currentPrecision}` };
     }
@@ -712,19 +772,21 @@ function registerModelDownloadIpc() {
     const { missing } = checkMissingFiles(modelDir, currentPrecision);
     if (missing.length === 0) {
       // Edge case: all files somehow present. Save version and return.
-      saveModelVersion(modelDir, currentPrecision);
+      saveModelVersion(modelDir, currentPrecision, currentRevision);
       return { success: true };
     }
 
-    createModelDownloadWindow(missing, currentPrecision, DEFAULT_PRECISION);
+    // Open download window with the selected revision
+    createModelDownloadWindow(missing, currentPrecision, DEFAULT_PRECISION, currentRevision);
     return { success: true, missingCount: missing.length };
   });
 
   // Update JP models: delete and re-download
-  ipcMain.handle('model-download:update-jp', async (event, precision) => {
+  ipcMain.handle('model-download:update-jp', async (event, precision, revision) => {
     const { getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS, JP_MODEL_FILE_MANIFEST } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
+    const currentRevision = revision || 'master';
 
     const jpModelId = JP_MODEL_IDS[currentPrecision] || JP_MODEL_IDS['fp16'];
     if (!jpModelId) {
@@ -747,7 +809,7 @@ function registerModelDownloadIpc() {
     const { checkMissingJpFiles } = require('../modelManager');
     const { missing } = checkMissingJpFiles(modelDir, currentPrecision);
     if (missing.length === 0) {
-      saveJpModelVersion(modelDir, currentPrecision);
+      saveJpModelVersion(modelDir, currentPrecision, currentRevision);
       return { success: true };
     }
 
@@ -756,12 +818,15 @@ function registerModelDownloadIpc() {
     if (win && !win.isDestroyed()) {
       win.webContents.send('model-download:missing-files', missing);
       win.webContents.send('model-download:precision', currentPrecision);
+      if (currentRevision && currentRevision !== 'master') {
+        win.webContents.send('model-download:revision', currentRevision);
+      }
     }
     return { success: true, missingCount: missing.length };
   });
 
   // Update SiFiGAN: delete and re-download
-  ipcMain.handle('model-download:update-sifigan', async () => {
+  ipcMain.handle('model-download:update-sifigan', async (event, revision) => {
     const modelDir = getModelDir();
     const sifiganId = MODEL_IDS.sifigan || '';
     if (!sifiganId) {
@@ -778,7 +843,7 @@ function registerModelDownloadIpc() {
     // Re-download via the existing start-sifigan handler logic
     const { allExist, files: existingFiles } = checkSifiganFilesExist(modelDir);
     if (allExist) {
-      saveSifiganVersion(modelDir);
+      saveSifiganVersion(modelDir, revision || 'master');
       return { status: 'installed', allExist, files: existingFiles };
     }
 
