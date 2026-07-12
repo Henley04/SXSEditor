@@ -355,6 +355,20 @@
                     <p class="hint" data-i18n="settings.sifiganPrecisionHint">SiFiGAN 单独选择精度。FP16 体积小、推理快，但音质下降明显 (余弦相似度约 0.95)；FP32 为全精度，音质最佳。默认 FP32。若所选精度的模型文件不存在，将自动回退到另一精度变体。</p>
                 </div>
                 <div class="setting-group">
+                    <label data-i18n="settings.japaneseVocalization">日语发声方式</label>
+                    <div class="radio-group" id="japaneseVocalizationGroup">
+                        <label class="device-mode-radio">
+                            <input type="radio" name="japaneseVocalization" value="en-phonemes" checked>
+                            <span class="radio-label" data-i18n="settings.japaneseVocalizationEnPhonemes">英语音素迁移（默认）</span>
+                        </label>
+                        <label class="device-mode-radio">
+                            <input type="radio" name="japaneseVocalization" value="jp-lora" disabled>
+                            <span class="radio-label" data-i18n="settings.japaneseVocalizationJpLora">日语 LoRA 模型（开发中）</span>
+                        </label>
+                    </div>
+                    <p class="hint" data-i18n="settings.japaneseVocalizationHint">选择日语歌词的发声方式。英语音素迁移使用基础多语言模型，将日文假名映射为最接近的英语 ARPAbet 音素合成，无需额外下载；日语 LoRA 模型使用专门的日语微调模型，音质更佳但需单独下载（当前开发中，暂不可用）。</p>
+                </div>
+                <div class="setting-group">
                     <label class="device-mode-radio">
                         <input type="checkbox" id="releaseDmlVramAfterSynthesis">
                         <span class="radio-label" data-i18n="settings.releaseDmlVramAfterSynthesis">合成后释放 DirectML 显存</span>

@@ -249,6 +249,24 @@ function registerSettingsIpc() {
       }
     }
 
+    // Japanese vocalization mode changed: update TextProcessing without reloading models.
+    // en-phonemes → base model + English phonemes; jp-lora → JP LoRA + jp_ phonemes.
+    // The actual model swap (base ↔ JP) happens per-synthesis via ensurePipelineLanguage(),
+    // so we only need to update the TextProcessing field and clear the synthesis cache.
+    const jpVocalizationChanged = current.japaneseVocalization !== merged.japaneseVocalization;
+    if (jpVocalizationChanged && !needsPipelineReset) {
+      const pipeline = getSvsPipeline();
+      if (pipeline && pipeline._textProcessing) {
+        pipeline._textProcessing.japaneseVocalization = merged.japaneseVocalization || 'en-phonemes';
+        pipeline._japaneseVocalization = merged.japaneseVocalization || 'en-phonemes';
+        // Clear synthesis cache: phoneme processing changed, old results are stale
+        if (typeof pipeline.clearSynthCache === 'function') {
+          pipeline.clearSynthCache();
+        }
+        console.log(`[Main] Japanese vocalization updated: ${current.japaneseVocalization || 'default'} -> ${merged.japaneseVocalization}`);
+      }
+    }
+
     // 硬件探测仅在应用启动后执行一次并缓存复用，
     // 保存设置时不再失效 GPU/DML 缓存（避免运行时重复触发 GPU 检测与 DML 探针推理，
     // 同时规避检测与推理并发提交命令流导致 DXGI_ERROR_DEVICE_REMOVED 的风险）。

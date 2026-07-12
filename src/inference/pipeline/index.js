@@ -49,6 +49,7 @@ class OnnxSVSPipeline {
         this._modelPrecision = options.modelPrecision || null;
         this.modelDir = this._resolveModelDir(modelDir, options.modelPrecision);
         this.languageOverride = options.languageOverride || null; // 'ja' for Japanese
+        this._japaneseVocalization = options.japaneseVocalization || 'en-phonemes';
         this.jpModelDir = this._resolveJpModelDir(modelDir, options.modelPrecision);
         this.sessions = {};
         this.sessionEPs = {};
@@ -84,7 +85,7 @@ class OnnxSVSPipeline {
         this._synthPromise = null;
 
         // Initialize sub-modules
-        this._textProcessing = new TextProcessing();
+        this._textProcessing = new TextProcessing({ japaneseVocalization: this._japaneseVocalization });
         this.phone2idx = this._textProcessing.phone2idx;
         this.enG2pDict = this._textProcessing.enG2pDict;
         this._preprocessing = new Preprocessing(this._textProcessing);
