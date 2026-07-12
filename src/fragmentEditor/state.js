@@ -25,6 +25,7 @@ let currentFragment = null;
 let currentProject = null;
 let currentParamMode = PARAM_MODES.MIDI;
 let notes = [];
+let kanjiGroups = [];
 let envelopes = {
   volume: { keyframes: [{ time: 0, value: 1, smoothness: 0 }] },
   pan: { keyframes: [{ time: 0, value: 0, smoothness: 0 }] },
@@ -171,6 +172,9 @@ export function setCurrentParamMode(v) { currentParamMode = v; }
 
 export function getNotes() { return notes; }
 export function setNotes(v) { notes = v; }
+
+export function getKanjiGroups() { return kanjiGroups; }
+export function setKanjiGroups(v) { kanjiGroups = v; }
 
 export function getEnvelopes() { return envelopes; }
 export function setEnvelopes(v) { envelopes = v; }

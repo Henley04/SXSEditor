@@ -55,11 +55,12 @@ import {
   getEnvelopes,
   getParamPanelCollapsed, setParamPanelCollapsed,
   getParamPanelMode, setParamPanelMode,
+  getKanjiGroups, setKanjiGroups,
 } from './state.js';
 import {
   canvas, ctx,
   timeToX, xToTime, pitchToY, yToPitch, yToPitchContinuous,
-  snapBeats, findNoteAt,
+  snapBeats, findNoteAt, findKanjiGroupAt,
   _getParamCurveAreaTop, _getParamCurveAreaBottom, _getParamCurveYRange,
   _valueToParamY,
   deepClone, clonePitchCurveState, applyPitchCurveSnapshot,
@@ -71,6 +72,11 @@ import {
   tokenizeLyric, resolvePhonemesFromPipeline,
   render, resizeCanvases,
 } from './canvasRenderer.js';
+import {
+  autoDetectKanjiGroups, cleanupKanjiGroups,
+  findGroupByNoteId, splitKanjiNoteToKana, mergeKanaGroupToKanji,
+  isSingleKanji, isTimeRangeWithinAnyGroup, getAllGroupedNoteIds,
+} from './kanjiGroupUtils.js';
 import { stopFragmentPlayback, playFragment, exportFragment } from './audioPlayback.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel } from './uiControls.js';
@@ -440,6 +446,200 @@ function _setupPitchContextMenuListeners() {
   // 窗口失焦时关闭
   window.addEventListener('blur', () => {
     if (getContextMenuAnchorIdx() >= 0) hidePitchContextMenu();
+  });
+}
+
+// ---- Kanji group context menu ----
+// _kanjiCtxState tracks the current kanji context menu target.
+// null = no menu open; otherwise { groupId, noteId } where:
+//   - groupId: the kanji group being right-clicked (for "Set as Chinese")
+//   - noteId: the right-clicked note ID (for pitch reference), or null if right-clicked on bracket/label
+//   - kanjiNoteId: the single kanji note being right-clicked (for "Set as Japanese"), or null
+let _kanjiCtxState = null;
+
+function showKanjiContextMenu(x, y, groupId, noteId, kanjiNoteId) {
+  const menu = document.getElementById('kanji-group-context-menu');
+  if (!menu) return;
+  _kanjiCtxState = { groupId, noteId, kanjiNoteId };
+
+  // Show/hide menu items based on context
+  const setChineseBtn = document.getElementById('kanji-ctx-set-chinese');
+  const setJapaneseBtn = document.getElementById('kanji-ctx-set-japanese');
+  if (groupId) {
+    // Right-clicked on a kana group → can set as Chinese (merge)
+    if (setChineseBtn) setChineseBtn.style.display = '';
+    if (setJapaneseBtn) setJapaneseBtn.style.display = 'none';
+  } else if (kanjiNoteId) {
+    // Right-clicked on a single kanji note → can set as Japanese (split)
+    if (setChineseBtn) setChineseBtn.style.display = 'none';
+    if (setJapaneseBtn) setJapaneseBtn.style.display = '';
+  }
+
+  menu.style.display = 'block';
+  menu.style.visibility = 'hidden';
+  const menuRect = menu.getBoundingClientRect();
+  let menuX = x;
+  let menuY = y;
+  if (menuX + menuRect.width > window.innerWidth) menuX = window.innerWidth - menuRect.width - 4;
+  if (menuY + menuRect.height > window.innerHeight) menuY = window.innerHeight - menuRect.height - 4;
+  menu.style.left = menuX + 'px';
+  menu.style.top = menuY + 'px';
+  menu.style.visibility = 'visible';
+}
+
+function hideKanjiContextMenu() {
+  const menu = document.getElementById('kanji-group-context-menu');
+  if (menu) menu.style.display = 'none';
+  _kanjiCtxState = null;
+}
+
+/** Merge a kana group back into a single Chinese kanji note. */
+function _applySetKanjiChinese(groupId, rightClickedNoteId) {
+  const groups = getKanjiGroups();
+  const notes = getNotes();
+  const group = groups.find(g => g.id === groupId);
+  if (!group) return;
+
+  const result = mergeKanaGroupToKanji(group, notes, rightClickedNoteId, genNoteId);
+  if (!result) return;
+
+  // Capture old state for undo
+  const oldNotes = deepClone(notes);
+  const oldGroups = deepClone(groups);
+
+  // Remove kana notes
+  const idsToRemove = new Set(result.kanaNoteIds);
+  for (let i = notes.length - 1; i >= 0; i--) {
+    if (idsToRemove.has(notes[i].id)) notes.splice(i, 1);
+  }
+  // Add the new kanji note at the correct position (sorted by start time)
+  const insertIdx = notes.findIndex(n => n.start > result.newNote.start);
+  if (insertIdx === -1) {
+    notes.push(result.newNote);
+  } else {
+    notes.splice(insertIdx, 0, result.newNote);
+  }
+  // Remove the group
+  const groupIdx = groups.findIndex(g => g.id === groupId);
+  if (groupIdx !== -1) groups.splice(groupIdx, 1);
+
+  history.push({
+    undo() {
+      const curNotes = getNotes();
+      const curGroups = getKanjiGroups();
+      curNotes.length = 0;
+      curNotes.push(...deepClone(oldNotes));
+      curGroups.length = 0;
+      curGroups.push(...deepClone(oldGroups));
+      render();
+    },
+    redo() {
+      const curNotes = getNotes();
+      const curGroups = getKanjiGroups();
+      curNotes.length = 0;
+      curNotes.push(...deepClone(notes));
+      curGroups.length = 0;
+      curGroups.push(...deepClone(groups));
+      render();
+    }
+  });
+
+  hideKanjiContextMenu();
+  resolvePhonemesFromPipeline();
+  render();
+  scheduleAutoSave();
+}
+
+/** Split a single kanji note into a kana group (set as Japanese). */
+function _applySetKanjiJapanese(noteId) {
+  const notes = getNotes();
+  const groups = getKanjiGroups();
+  const note = notes.find(n => n.id === noteId);
+  if (!note) return;
+
+  const result = splitKanjiNoteToKana(note, genNoteId);
+  if (!result) return;
+
+  // Capture old state for undo
+  const oldNotes = deepClone(notes);
+  const oldGroups = deepClone(groups);
+
+  // Replace the kanji note with kana notes
+  const noteIdx = notes.findIndex(n => n.id === noteId);
+  if (noteIdx !== -1) {
+    notes.splice(noteIdx, 1, ...result.kanaNotes);
+  }
+  // Clear kanjiForceChinese flag if set (it's now Japanese)
+  // (the old note is gone, new kana notes don't have the flag)
+  groups.push(result.group);
+
+  history.push({
+    undo() {
+      const curNotes = getNotes();
+      const curGroups = getKanjiGroups();
+      curNotes.length = 0;
+      curNotes.push(...deepClone(oldNotes));
+      curGroups.length = 0;
+      curGroups.push(...deepClone(oldGroups));
+      render();
+    },
+    redo() {
+      const curNotes = getNotes();
+      const curGroups = getKanjiGroups();
+      curNotes.length = 0;
+      curNotes.push(...deepClone(notes));
+      curGroups.length = 0;
+      curGroups.push(...deepClone(groups));
+      render();
+    }
+  });
+
+  hideKanjiContextMenu();
+  resolvePhonemesFromPipeline();
+  render();
+  scheduleAutoSave();
+}
+
+function _setupKanjiContextMenuListeners() {
+  const menu = document.getElementById('kanji-group-context-menu');
+  if (!menu) return;
+
+  const setChineseBtn = document.getElementById('kanji-ctx-set-chinese');
+  if (setChineseBtn) {
+    setChineseBtn.addEventListener('click', () => {
+      if (!_kanjiCtxState || !_kanjiCtxState.groupId) return;
+      _applySetKanjiChinese(_kanjiCtxState.groupId, _kanjiCtxState.noteId);
+    });
+  }
+
+  const setJapaneseBtn = document.getElementById('kanji-ctx-set-japanese');
+  if (setJapaneseBtn) {
+    setJapaneseBtn.addEventListener('click', () => {
+      if (!_kanjiCtxState || !_kanjiCtxState.kanjiNoteId) return;
+      _applySetKanjiJapanese(_kanjiCtxState.kanjiNoteId);
+    });
+  }
+
+  // Click outside closes
+  document.addEventListener('mousedown', (e) => {
+    if (!_kanjiCtxState) return;
+    if (menu.contains(e.target)) return;
+    hideKanjiContextMenu();
+  }, true);
+
+  // Prevent browser default context menu on the menu itself
+  menu.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // Esc closes
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && _kanjiCtxState) {
+      hideKanjiContextMenu();
+    }
+  });
+
+  // Window blur closes
+  window.addEventListener('blur', () => {
+    if (_kanjiCtxState) hideKanjiContextMenu();
   });
 }
 
@@ -1073,6 +1273,35 @@ function startInlineEdit(note, hit) {
             }
           }
         });
+
+        // Auto-detect kanji groups: if the fragment has kana, split any new
+        // kanji notes into kana. Push a separate history entry so the user
+        // can undo the auto-split independently from the lyric edit.
+        const kanjiGroups = getKanjiGroups();
+        const beforeNotes = deepClone(notes);
+        const beforeGroups = deepClone(kanjiGroups);
+        if (autoDetectKanjiGroups(notes, kanjiGroups, genNoteId)) {
+          history.push({
+            undo() {
+              const curNotes = getNotes();
+              const curGroups = getKanjiGroups();
+              curNotes.length = 0;
+              curNotes.push(...deepClone(beforeNotes));
+              curGroups.length = 0;
+              curGroups.push(...deepClone(beforeGroups));
+              render();
+            },
+            redo() {
+              const curNotes = getNotes();
+              const curGroups = getKanjiGroups();
+              curNotes.length = 0;
+              curNotes.push(...deepClone(notes));
+              curGroups.length = 0;
+              curGroups.push(...deepClone(kanjiGroups));
+              render();
+            }
+          });
+        }
       }
     }
     if (input.parentElement) input.remove();
@@ -1154,6 +1383,34 @@ export function setupEventListeners() {
           return;
         }
       }
+      // Kanji group right-click: check bracket/label hit, then kana note in group,
+      // then single kanji note (not in group).
+      const currentParamMode2 = getCurrentParamMode();
+      if (currentParamMode2 !== 'Pitch') {
+        // 1. Check if right-clicking on a kanji group bracket/label
+        const groupHit = findKanjiGroupAt(pos.x, pos.y);
+        if (groupHit) {
+          e.preventDefault();
+          showKanjiContextMenu(e.clientX, e.clientY, groupHit.group.id, null, null);
+          return;
+        }
+        // 2. Check if right-clicking a note that belongs to a kanji group
+        const noteHit = findNoteAt(pos.x, pos.y);
+        if (noteHit) {
+          const group = findGroupByNoteId(noteHit.note.id, getKanjiGroups());
+          if (group) {
+            e.preventDefault();
+            showKanjiContextMenu(e.clientX, e.clientY, group.id, noteHit.note.id, null);
+            return;
+          }
+          // 3. Check if right-clicking a single kanji note (not in a group)
+          if (isSingleKanji(noteHit.note.lyric)) {
+            e.preventDefault();
+            showKanjiContextMenu(e.clientX, e.clientY, null, null, noteHit.note.id);
+            return;
+          }
+        }
+      }
       // 其他情况交由 contextmenu 事件处理（保留默认右键菜单或自定义菜单）。
       return;
     }
@@ -1233,6 +1490,11 @@ export function setupEventListeners() {
       const clampedPitch = Math.max(0, Math.min(127, pitch));
       const newDuration = 1 / 4;
       if (hasNoteOverlap(null, clampedPitch, beats, beats + newDuration)) {
+        render();
+        return;
+      }
+      // Block creating new notes within a kanji group's time span
+      if (isTimeRangeWithinAnyGroup(beats, beats + newDuration, getNotes(), getKanjiGroups())) {
         render();
         return;
       }
@@ -1738,9 +2000,21 @@ export function setupEventListeners() {
       const selectedNoteIds = getSelectedNoteIds();
       if (selectedNoteIds.size > 0) {
         const notes = getNotes();
+        const kanjiGroups = getKanjiGroups();
+        // Expand selection: if a selected note is in a kanji group, select all
+        // notes in that group (deleting any kana = deleting the whole kanji)
+        const expandedIds = new Set(selectedNoteIds);
+        const deletedGroupIds = [];
+        for (const id of selectedNoteIds) {
+          const group = findGroupByNoteId(id, kanjiGroups);
+          if (group) {
+            for (const gid of group.noteIds) expandedIds.add(gid);
+            if (!deletedGroupIds.includes(group.id)) deletedGroupIds.push(group.id);
+          }
+        }
         const deletedNotes = [];
         const deletedIndices = [];
-        for (const id of selectedNoteIds) {
+        for (const id of expandedIds) {
           const idx = notes.findIndex(n => n.id === id);
           if (idx !== -1) {
             deletedNotes.push({ ...notes[idx] });
@@ -1751,6 +2025,15 @@ export function setupEventListeners() {
         for (const idx of sortedForDelete) {
           notes.splice(idx, 1);
         }
+        // Remove deleted groups
+        const deletedGroups = deletedGroupIds
+          .map(gid => {
+            const g = kanjiGroups.find(gg => gg.id === gid);
+            const idx = kanjiGroups.indexOf(g);
+            if (idx !== -1) kanjiGroups.splice(idx, 1);
+            return g ? { group: deepClone(g), index: idx } : null;
+          })
+          .filter(Boolean);
         const oldSelectedIds = new Set(selectedNoteIds);
         selectedNoteIds.clear();
         const undoOrder = deletedIndices
@@ -1761,14 +2044,28 @@ export function setupEventListeners() {
             for (const { idx, note } of undoOrder) {
               notes.splice(idx, 0, { ...note });
             }
+            // Restore deleted groups
+            for (const dg of deletedGroups) {
+              if (dg.index >= 0 && dg.index <= kanjiGroups.length) {
+                kanjiGroups.splice(dg.index, 0, deepClone(dg.group));
+              } else {
+                kanjiGroups.push(deepClone(dg.group));
+              }
+            }
             setSelectedNoteIds(new Set(oldSelectedIds));
+            render();
           },
           redo() {
             for (const dn of deletedNotes) {
               const idx = notes.findIndex(n => n.id === dn.id);
               if (idx !== -1) notes.splice(idx, 1);
             }
+            for (const dg of deletedGroups) {
+              const idx = kanjiGroups.findIndex(g => g.id === dg.group.id);
+              if (idx !== -1) kanjiGroups.splice(idx, 1);
+            }
             selectedNoteIds.clear();
+            render();
           }
         });
         render();
@@ -1899,4 +2196,5 @@ export function setupEventListeners() {
   }, { passive: false });
 
   _setupPitchContextMenuListeners();
+  _setupKanjiContextMenuListeners();
 }
