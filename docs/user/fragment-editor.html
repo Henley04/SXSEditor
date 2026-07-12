@@ -197,6 +197,21 @@
       <p data-lang="en">A <strong>slur</strong> note continues the previous note's sound without re-attacking. To create a slur, add a note with an empty lyric (or a dash <code>-</code>). It will be treated as a continuation of the previous note's phoneme.</p>
       <p data-lang="zh"><strong>连音</strong>音符延续前一个音符的声音而不重新起音。创建连音的方法是：添加一个空歌词（或破折号 <code>-</code>）的音符。它会被视为前一个音符音素的延续。</p>
 
+      <h3>
+        <span data-lang="en">Kanji / Kana Auto-Grouping</span>
+        <span data-lang="zh">汉字 / 假名自动分组</span>
+      </h3>
+      <p data-lang="en">When a fragment already contains Japanese kana (hiragana or katakana) in any note's lyric, every single-character kanji note in the same fragment is <strong>automatically treated as Japanese</strong> and split into an ordered group of kana notes. This avoids the ambiguity of using the same CJK ideographs for both Chinese and Japanese within one fragment.</p>
+      <p data-lang="zh">当分片中任一音符的歌词已包含日语假名（平假名或片假名）时，同一分片内的所有单字汉字音符会被<strong>自动识别为日语</strong>，并按顺序切分为一组假名音符。这避免了在同一分片中用同一套 CJK 汉字同时表示中文和日语的歧义。</p>
+      <ul>
+        <li><span data-lang="en"><strong>Visual bracket</strong> — a horizontal bracket is drawn above the group with the original kanji displayed in the middle, so you can always see which kana belong to which kanji.</span><span data-lang="zh"><strong>连接线</strong>——分组上方绘制水平连接线，中间显示原汉字，便于辨识哪些假名属于哪个汉字。</span></li>
+        <li><span data-lang="en"><strong>Strict ordering</strong> — the converted kana keep their dictionary order. You cannot insert other MIDI notes inside a group's time span.</span><span data-lang="zh"><strong>严格顺序</strong>——转换后的假名保持字典顺序。分组时间范围内不允许插入其他 MIDI 音符。</span></li>
+        <li><span data-lang="en"><strong>Movement</strong> — kana notes can be moved in pitch and time, but they cannot be deleted individually.</span><span data-lang="zh"><strong>移动</strong>——假名音符允许音高与左右移动，但不允许单独删除。</span></li>
+        <li><span data-lang="en"><strong>Whole-group deletion</strong> — deleting any kana in a group removes the entire group (all kana in that kanji).</span><span data-lang="zh"><strong>整组删除</strong>——删除分组内任一假名即删除整个分组（该汉字的所有假名）。</span></li>
+        <li><span data-lang="en"><strong>Right-click toggle</strong> — right-click the bracket, the kanji label, or any kana inside the group to open the <em>Kanji Settings</em> menu. Choose <strong>Set as Chinese</strong> to merge the whole group back into a single kanji note (length = total group span, pitch = right-clicked note's pitch); choose <strong>Set as Japanese</strong> to split it again.</span><span data-lang="zh"><strong>右键切换</strong>——右键点击连接线、汉字标签或分组内任一假名，可打开<em>汉字设置</em>菜单。选择<strong>设为中文</strong>可将整个合并回单个汉字音符（长度 = 分组总跨度，音高 = 右键音符的音高）；选择<strong>设为日语</strong>可再次切分。</span></li>
+        <li><span data-lang="en"><strong>Manual override persists</strong> — once you manually set a kanji to Chinese, it will not be auto-split again even if the fragment still contains kana.</span><span data-lang="zh"><strong>手动覆盖持久化</strong>——一旦手动将某汉字设为中文，即使分片仍含假名，也不会再被自动切分。</span></li>
+      </ul>
+
       <h2>
         <span data-lang="en">Pitch Curves</span>
         <span data-lang="zh">音高曲线</span>
@@ -379,6 +394,7 @@
           <tr><td><kbd class="kbd">Delete</kbd></td><td><span data-lang="en">Delete selected notes</span><span data-lang="zh">删除选中音符</span></td></tr>
           <tr><td><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">D</kbd></td><td><span data-lang="en">Duplicate selected notes</span><span data-lang="zh">复制选中音符</span></td></tr>
           <tr><td><span data-lang="en">Double-click</span><span data-lang="zh">双击</span></td><td><span data-lang="en">Edit note lyric</span><span data-lang="zh">编辑音符歌词</span></td></tr>
+          <tr><td><span data-lang="en">Right-click kanji / kana group</span><span data-lang="zh">右键汉字 / 假名分组</span></td><td><span data-lang="en">Open Kanji Settings menu (toggle Chinese / Japanese)</span><span data-lang="zh">打开汉字设置菜单（切换中文 / 日语）</span></td></tr>
         </tbody>
       </table>
 

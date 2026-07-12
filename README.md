@@ -63,6 +63,7 @@ See the [Documentation](https://henley04.github.io/SXSEditor/) for full guides:
 |---------|-------------|
 | Piano Roll Editor | Notes, lyrics, pitch curves, volume/pan envelopes, phoneme editing |
 | Pitch Curve Smoothing | Per-anchor smoothness (0–100) controls easing strength between anchor points; right-click on an anchor and drag (L/R or U/D) to scrub smoothness in real time, or release on the anchor to open a context menu with a slider, presets (Linear/Soft/Medium/Strong), and delete |
+| Kanji / Kana Auto-Grouping | When a fragment contains Japanese kana, all kanji in the same fragment are auto-split into ordered kana notes with a visual bracket; right-click to toggle between Chinese (single note) and Japanese (kana group); whole-group delete only |
 | Neural SVS | SoulX-Singer diffusion model via ONNX Runtime |
 | Singer Creator | Custom voices from reference WAV audio |
 | Audio Preprocessing | RMVPE F0 extraction, Basic Pitch MIDI extraction |
@@ -181,6 +182,7 @@ macOS / Linux 用户请从源码构建。
 | 功能 | 说明 |
 |------|------|
 | 钢琴卷帘编辑器 | 音符、歌词、音高曲线、音量/声像包络、音素编辑 |
+| 汉字 / 假名自动分组 | 分片含假名时，所有汉字自动按顺序切分为假名音符并绘制连接线；右键可在中文（单音符）与日语（假名分组）间切换；仅支持整组删除 |
 | 神经歌声合成 | SoulX-Singer 扩散模型 + ONNX Runtime |
 | 歌手创建器 | 从参考 WAV 音频创建自定义声音 |
 | 音频预处理 | RMVPE F0 提取、Basic Pitch MIDI 提取 |
