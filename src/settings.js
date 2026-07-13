@@ -148,8 +148,9 @@ function applySavedSettingsToUI(currentSetting) {
     sifiganPrecisionSelect.value = currentSetting.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32';
     updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
 
-    // Japanese vocalization mode: 'en-phonemes' (default) | 'jp-lora' (in development, disabled)
-    const jpVocalization = currentSetting.japaneseVocalization === 'jp-lora' ? 'jp-lora' : 'en-phonemes';
+    // Japanese vocalization mode: 'en-phonemes' (default) | 'hybrid' (improved mapping) | 'jp-lora' (in development, disabled)
+    const validJpVocalizations = ['en-phonemes', 'hybrid', 'jp-lora'];
+    const jpVocalization = validJpVocalizations.includes(currentSetting.japaneseVocalization) ? currentSetting.japaneseVocalization : 'en-phonemes';
     const jpVocalRadioToCheck = document.querySelector(`input[name="japaneseVocalization"][value="${jpVocalization}"]`);
     if (jpVocalRadioToCheck) jpVocalRadioToCheck.checked = true;
 

@@ -273,6 +273,41 @@
       <p data-lang="en">Smart mode calculates VRAM budget = (VRAM − resident weights − diff_step activations ~2GB − OS reserve ~1GB) × 0.7 safety factor. The settings page shows a VRAM reference table (2/3/4/6/8/10/12/16/20/24GB) computed with the current precision and vocoder type, with the current GPU's tier highlighted.</p>
       <p data-lang="zh">智能模式计算显存预算 =（VRAM − 常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB）× 0.7 安全系数。设置页提供显存对照表（2/3/4/6/8/10/12/16/20/24GB），按当前精度与 vocoder 类型实时计算，当前显卡对应行高亮。</p>
 
+      <h3>
+        <span data-lang="en">Japanese Vocalization</span>
+        <span data-lang="zh">日语发声方式</span>
+      </h3>
+      <p data-lang="en">Japanese lyrics can be synthesized on the base multilingual model (no extra download) or via a dedicated JP LoRA model (in development). Three modes are available:</p>
+      <p data-lang="zh">日语歌词可在基础多语言模型上合成（无需额外下载），或通过专用日语 LoRA 模型合成（开发中）。提供三种模式：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Mode</span><span data-lang="zh">模式</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+            <th><span data-lang="en">Download</span><span data-lang="zh">下载</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en"><strong>English Phoneme Migration</strong> (default)</span><span data-lang="zh"><strong>英语音素迁移</strong>（默认）</span></td>
+            <td><span data-lang="en">Maps Japanese kana to the nearest English ARPAbet phonemes. Uses the base multilingual model. ら-row maps to R, お-column maps to OW (diphthong).</span><span data-lang="zh">将日文假名映射为最接近的英语 ARPAbet 音素，在基础多语言模型上合成。ら行映射为 R，お段映射为 OW（双元音）。</span></td>
+            <td><span data-lang="en">No</span><span data-lang="zh">否</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Hybrid Phonemes</strong></span><span data-lang="zh"><strong>混合音素</strong></span></td>
+            <td><span data-lang="en">Improved ARPAbet mapping on the base model: ら-row uses L (acoustically closer to the Japanese tap /ɾ/ than R /ɹ/), お-column uses AO (a pure vowel, not the OW diphthong /oʊ/). More natural pronunciation with no extra download.</span><span data-lang="zh">在基础模型上使用改进的 ARPAbet 映射：ら行使用 L（比 R /ɹ/ 更接近日语弹音 /ɾ/），お段使用 AO（纯元音，非双元音 OW /oʊ/）。发音更自然，无需额外下载。</span></td>
+            <td><span data-lang="en">No</span><span data-lang="zh">否</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Japanese LoRA Model</strong></span><span data-lang="zh"><strong>日语 LoRA 模型</strong></span></td>
+            <td><span data-lang="en">Dedicated Japanese fine-tuned model with native jp_ phonemes for best quality.</span><span data-lang="zh">专用日语微调模型，使用原生 jp_ 音素，音质最佳。</span></td>
+            <td><span data-lang="en">Required (in development)</span><span data-lang="zh">需下载（开发中）</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">Both English Phoneme Migration and Hybrid Phonemes use the same base multilingual model — the only difference is the kana→ARPAbet mapping table. Hybrid mode is recommended for more natural-sounding Japanese. The phoneme boundary editor (per-note timing/volume) works the same in all modes.</p>
+      <p data-lang="zh">英语音素迁移与混合音素均使用同一基础多语言模型——唯一区别在于假名→ARPAbet 映射表。推荐使用混合音素以获得更自然的日语发音。音素边界编辑器（逐音符时长/音量调整）在所有模式下工作方式相同。</p>
+
       <h2>
         <span data-lang="en">Audio</span>
         <span data-lang="zh">音频</span>
