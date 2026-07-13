@@ -197,10 +197,12 @@ class Preprocessing {
                     noteTypes.push(noteType);
                 }
             } else if (this.textProcessing._isJapanese && this.textProcessing._isJapanese(lyric)) {
-                // In en-phonemes mode, convert Japanese kana/kanji to English ARPAbet phonemes.
+                // In en-phonemes / hybrid mode, convert Japanese kana/kanji to English ARPAbet phonemes.
                 // The base multilingual model (not JP LoRA) is used, so English phonemes + SEP
                 // are the correct input format — consistent with how English lyrics are processed.
-                if (this.textProcessing.japaneseVocalization === 'en-phonemes') {
+                // hybrid mode uses an improved mapping table (L for ら行, AO for お段) but the
+                // token format (en_ prefix + SEP) is identical to en-phonemes.
+                if (this.textProcessing.japaneseVocalization === 'en-phonemes' || this.textProcessing.japaneseVocalization === 'hybrid') {
                     const enPhonemeObjs = this.textProcessing._japaneseToEnglishPhonemes(lyric);
                     const enPhIds = [];
                     for (const obj of enPhonemeObjs) {
@@ -265,9 +267,10 @@ class Preprocessing {
                     notePitches.push(pitch);
                     noteTypes.push(noteType);
                 }
-            } else if (lyric.startsWith('jp_') && this.textProcessing.japaneseVocalization === 'en-phonemes') {
-                // In en-phonemes mode, convert jp_ prefixed phonemes to English ARPAbet phonemes.
+            } else if (lyric.startsWith('jp_') && (this.textProcessing.japaneseVocalization === 'en-phonemes' || this.textProcessing.japaneseVocalization === 'hybrid')) {
+                // In en-phonemes / hybrid mode, convert jp_ prefixed phonemes to English ARPAbet phonemes.
                 // e.g., 'jp_k' → en_K, 'jp_ts' → en_T en_S, 'jp_ky' → en_K en_Y
+                // hybrid mode: 'jp_r' → en_L (not R), 'jp_o' → en_AO1 (not OW1)
                 const jpPhone = lyric.slice(3);
                 const enPhonemeObjs = this.textProcessing._japanesePhoneToEnglishPhonemes(jpPhone);
                 const enPhIds = [];

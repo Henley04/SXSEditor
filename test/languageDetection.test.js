@@ -217,4 +217,64 @@ describe('languageDetection', () => {
             expect(resolveLanguage([{ lyric: 'watashino' }], 'jp-lora')).to.equal(null);
         });
     });
+
+    // ===== hybrid mode =====
+    describe('hybrid mode', () => {
+        // Hybrid mode uses the base multilingual model with improved ARPAbet mapping
+        // (L for ら行, AO for お段). It should ALWAYS return null (base model),
+        // same as en-phonemes mode — never switch to JP LoRA.
+
+        it('hybrid: should return null for pure Japanese (uses base model)', () => {
+            expect(resolveLanguage([{ lyric: 'さくら' }], 'hybrid')).to.equal(null);
+            expect(resolveLanguage([{ lyric: 'わたし' }], 'hybrid')).to.equal(null);
+        });
+
+        it('hybrid: should return null for pure Japanese (katakana)', () => {
+            expect(resolveLanguage([{ lyric: 'サクラ' }], 'hybrid')).to.equal(null);
+            expect(resolveLanguage([{ lyric: 'ワタシ' }], 'hybrid')).to.equal(null);
+        });
+
+        it('hybrid: should return null for jp_ prefixed phonemes', () => {
+            expect(resolveLanguage([{ lyric: 'jp_a' }], 'hybrid')).to.equal(null);
+            expect(resolveLanguage([{ lyric: 'jp_t-a' }], 'hybrid')).to.equal(null);
+            expect(resolveLanguage([{ lyric: 'jp_r' }], 'hybrid')).to.equal(null);
+        });
+
+        it('hybrid: should return null for pure English', () => {
+            expect(resolveLanguage([{ lyric: 'hello' }], 'hybrid')).to.equal(null);
+            expect(resolveLanguage([{ lyric: 'apples' }], 'hybrid')).to.equal(null);
+        });
+
+        it('hybrid: should return null for mixed Japanese + English', () => {
+            const notes = [
+                { lyric: 'あ' },
+                { lyric: 'hello' },
+            ];
+            expect(resolveLanguage(notes, 'hybrid')).to.equal(null);
+        });
+
+        it('hybrid: should return null for silence/SP notes', () => {
+            expect(resolveLanguage([{ lyric: '' }], 'hybrid')).to.equal(null);
+            expect(resolveLanguage([{ lyric: 'SP' }], 'hybrid')).to.equal(null);
+            expect(resolveLanguage([{ lyric: '<SP>' }], 'hybrid')).to.equal(null);
+        });
+
+        it('hybrid: should return null for empty note array', () => {
+            expect(resolveLanguage([], 'hybrid')).to.equal(null);
+        });
+
+        it('hybrid: should behave identically to en-phonemes (both use base model)', () => {
+            const testCases = [
+                [{ lyric: 'さくら' }],
+                [{ lyric: 'jp_a' }],
+                [{ lyric: 'hello' }],
+                [{ lyric: 'あ' }, { lyric: 'hello' }],
+                [{ lyric: 'SP' }],
+                [],
+            ];
+            for (const notes of testCases) {
+                expect(resolveLanguage(notes, 'hybrid')).to.equal(resolveLanguage(notes, 'en-phonemes'));
+            }
+        });
+    });
 });

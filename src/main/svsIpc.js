@@ -128,12 +128,12 @@ function registerSvsIpc() {
   });
 
   ipcMain.handle('svs:synthesize', async (event, { notes, bpm, options }) => {
-    // Load japaneseVocalization setting: 'en-phonemes' (default) uses English phonemes on base model;
+    // Load japaneseVocalization setting: 'en-phonemes' (default) / 'hybrid' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
     const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
 
-    // Detect language: en-phonemes mode always uses base model (null); jp-lora mode uses original logic
+    // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);
 
     // Check if JP models are needed but missing (only in jp-lora mode)
@@ -189,12 +189,12 @@ function registerSvsIpc() {
   });
 
   ipcMain.handle('fragment-svs:synthesize', async (event, { notes, bpm, options }) => {
-    // Load japaneseVocalization setting: 'en-phonemes' (default) uses English phonemes on base model;
+    // Load japaneseVocalization setting: 'en-phonemes' (default) / 'hybrid' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
     const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
 
-    // Detect language: en-phonemes mode always uses base model (null); jp-lora mode uses original logic
+    // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);
 
     // Check if JP models are needed but missing (only in jp-lora mode)

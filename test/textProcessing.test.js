@@ -4,10 +4,12 @@ const { TextProcessing } = require('../src/inference/pipeline/textProcessing');
 describe('inference/pipeline/textProcessing - G2P', () => {
   // tpJp: JP LoRA mode (jp_ phonemes) — preserves original behavior
   // tpEn: English phoneme migration mode (en_ phonemes) — new default
-  let tpJp, tpEn;
+  // tpHybrid: Hybrid mode (improved ARPAbet mapping: L for ら行, AO for お段)
+  let tpJp, tpEn, tpHybrid;
   before(() => {
     tpJp = new TextProcessing({ japaneseVocalization: 'jp-lora' });
     tpEn = new TextProcessing({ japaneseVocalization: 'en-phonemes' });
+    tpHybrid = new TextProcessing({ japaneseVocalization: 'hybrid' });
   });
 
   describe('vocabulary loading', () => {
@@ -291,6 +293,134 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       const out = tpEn.resolveLyricToPhonemes('ふ');
       const names = out.map(p => p.name);
       expect(names).to.include('en_F');
+    });
+  });
+
+  describe('resolveLyricToPhonemes (hybrid mode)', () => {
+    // Hybrid mode key differences from en-phonemes:
+    //   ら行 (r) → L (not R) — closer to Japanese tap [ɾ]
+    //   お段 (o) → AO1 (not OW1) — pure vowel, not diphthong
+    //   り拗音 (ry) → L Y (not R Y)
+    // All other phonemes match en-phonemes mode.
+
+    it('should resolve jp_ prefixed vowel to English phoneme (same as en-phonemes for a)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('jp_a');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_AA1');
+    });
+
+    it('should map jp_o to AO1 in hybrid mode (not OW1)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('jp_o');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_AO1');
+    });
+
+    it('should map jp_r to L in hybrid mode (not R)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('jp_r');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_L');
+    });
+
+    it('should map jp_ry to L Y in hybrid mode (not R Y)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('jp_ry');
+      expect(out).to.have.lengthOf(2);
+      expect(out[0].name).to.equal('en_L');
+      expect(out[1].name).to.equal('en_Y');
+    });
+
+    it('should resolve hiragana お to AO1 in hybrid mode', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('お');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_AO1');
+    });
+
+    it('should resolve hiragana ら to L + AA1 in hybrid mode', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('ら');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_L');
+      expect(names).to.include('en_AA1');
+      // Should NOT include R
+      expect(names).to.not.include('en_R');
+    });
+
+    it('should resolve hiragana ろ to L + AO1 in hybrid mode', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('ろ');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_L');
+      expect(names).to.include('en_AO1');
+      // Should NOT include R or OW1
+      expect(names).to.not.include('en_R');
+      expect(names).to.not.include('en_OW1');
+    });
+
+    it('should resolve りょ to L Y AO1 in hybrid mode', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('りょ');
+      const names = out.map(p => p.name);
+      expect(names).to.deep.equal(['en_L', 'en_Y', 'en_AO1']);
+    });
+
+    it('should map か (ka) same as en-phonemes (K + AA1)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('か');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_K');
+      expect(names).to.include('en_AA1');
+    });
+
+    it('should map つ (ts) to T + S same as en-phonemes', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('つ');
+      const names = out.map(p => p.name);
+      expect(names).to.deep.equal(['en_T', 'en_S', 'en_UW1']);
+    });
+
+    it('should produce en_ prefixed phonemes (base model compatible)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('ありがとう');
+      expect(out.length).to.be.greaterThan(2);
+      out.forEach(p => expect(p.name.startsWith('en_') || p.name === '<SP>').to.be.true);
+    });
+
+    it('should differ from en-phonemes for ら行 (L vs R)', () => {
+      const hybridOut = tpHybrid.resolveLyricToPhonemes('ら');
+      const enOut = tpEn.resolveLyricToPhonemes('ら');
+      const hybridNames = hybridOut.map(p => p.name);
+      const enNames = enOut.map(p => p.name);
+      // Both should have 2 phonemes
+      expect(hybridNames).to.have.lengthOf(2);
+      expect(enNames).to.have.lengthOf(2);
+      // Consonant differs: hybrid uses L, en-phonemes uses R
+      expect(hybridNames[0]).to.equal('en_L');
+      expect(enNames[0]).to.equal('en_R');
+      // Vowel is same
+      expect(hybridNames[1]).to.equal(enNames[1]);
+    });
+
+    it('should differ from en-phonemes for お段 (AO1 vs OW1)', () => {
+      const hybridOut = tpHybrid.resolveLyricToPhonemes('お');
+      const enOut = tpEn.resolveLyricToPhonemes('お');
+      expect(hybridOut[0].name).to.equal('en_AO1');
+      expect(enOut[0].name).to.equal('en_OW1');
+    });
+
+    it('should attach duration weights to mapped phonemes', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('か');
+      out.forEach(p => expect(p).to.have.property('weight'));
+    });
+
+    it('should handle っ (small tsu) same as en-phonemes (T)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('っ');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_T');
+    });
+
+    it('should skip ー and 〜 in hybrid mode', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('あーあ');
+      const names = out.map(p => p.name);
+      expect(names).to.deep.equal(['en_AA1', 'en_AA1']);
+    });
+
+    it('should force Japanese→English with <jp> prefix for kanji', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('<jp>愛');
+      expect(out.length).to.be.greaterThan(0);
+      out.forEach(p => expect(p.name.startsWith('en_') || p.name === '<SP>').to.be.true);
     });
   });
 
