@@ -1,0 +1,138 @@
+{
+  "diff_step_dml": {
+    "num_samples": 8,
+    "input_names": [
+      "xt_input",
+      "t",
+      "cond",
+      "xt_mask"
+    ],
+    "input_shapes": [
+      [
+        1,
+        2048,
+        128
+      ],
+      [
+        1
+      ],
+      [
+        1,
+        2048,
+        1024
+      ],
+      [
+        1,
+        2048
+      ]
+    ],
+    "file": "D:\\Document\\electron\\SXSEditor\\calibrate\\data\\fp16_calib\\diff_step_dml.npz"
+  },
+  "vocoder_dml": {
+    "num_samples": 8,
+    "input_names": [
+      "mel"
+    ],
+    "input_shapes": [
+      [
+        1,
+        500,
+        128
+      ]
+    ],
+    "file": "D:\\Document\\electron\\SXSEditor\\calibrate\\data\\fp16_calib\\vocoder_dml.npz"
+  },
+  "preflow": {
+    "num_samples": 8,
+    "input_names": [
+      "features"
+    ],
+    "input_shapes": [
+      [
+        1,
+        2048,
+        512
+      ]
+    ],
+    "file": "D:\\Document\\electron\\SXSEditor\\calibrate\\data\\fp16_calib\\preflow.npz"
+  },
+  "cond_emb": {
+    "num_samples": 8,
+    "input_names": [
+      "cond_code"
+    ],
+    "input_shapes": [
+      [
+        1,
+        2048,
+        512
+      ]
+    ],
+    "file": "D:\\Document\\electron\\SXSEditor\\calibrate\\data\\fp16_calib\\cond_emb.npz"
+  },
+  "mel_transform": {
+    "num_samples": 8,
+    "input_names": [
+      "audio"
+    ],
+    "input_shapes": [
+      [
+        1,
+        24000
+      ]
+    ],
+    "file": "D:\\Document\\electron\\SXSEditor\\calibrate\\data\\fp16_calib\\mel_transform.npz"
+  },
+  "note_text_encoder": {
+    "num_samples": 8,
+    "input_names": [
+      "input_ids"
+    ],
+    "input_shapes": [
+      [
+        1,
+        2048
+      ]
+    ],
+    "file": "D:\\Document\\electron\\SXSEditor\\calibrate\\data\\fp16_calib\\note_text_encoder.npz"
+  },
+  "note_pitch_encoder": {
+    "num_samples": 8,
+    "input_names": [
+      "input_ids"
+    ],
+    "input_shapes": [
+      [
+        1,
+        2048
+      ]
+    ],
+    "file": "D:\\Document\\electron\\SXSEditor\\calibrate\\data\\fp16_calib\\note_pitch_encoder.npz"
+  },
+  "note_type_encoder": {
+    "num_samples": 8,
+    "input_names": [
+      "input_ids"
+    ],
+    "input_shapes": [
+      [
+        1,
+        2048
+      ]
+    ],
+    "file": "D:\\Document\\electron\\SXSEditor\\calibrate\\data\\fp16_calib\\note_type_encoder.npz"
+  },
+  "f0_encoder": {
+    "num_samples": 8,
+    "input_names": [
+      "input_ids"
+    ],
+    "input_shapes": [
+      [
+        1,
+        2048
+      ]
+    ],
+    "file": "D:\\Document\\electron\\SXSEditor\\calibrate\\data\\fp16_calib\\f0_encoder.npz"
+  }
+}
