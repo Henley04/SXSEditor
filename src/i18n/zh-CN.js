@@ -617,6 +617,7 @@ export default {
     reEnableReminder: '重新启用更新提醒',
     rateLimited: 'GitHub API 速率限制，请稍后重试',
     networkError: '网络错误，无法检查更新',
+    modelCheckError: '无法检查模型更新（网络错误）',
     publishedAt: '发布时间',
     releaseNotes: '更新说明',
     appUpdateAreaTitle: '应用本体',

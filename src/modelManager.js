@@ -30,20 +30,11 @@ const RETRY_DELAY_MS = 2000;
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 // ===== Model version management =====
-// Each precision has an independent version number. When a model is downloaded
-// from ModelScope, a version.json file is written to the precision subdirectory
-// recording the version. If version.json is missing, the local model is treated
-// as a legacy version and an update is flagged as available.
-const MODEL_VERSIONS = {
-  fp32: '1.0.0',
-  fp16: '1.0.0',
-  int8: '1.0.0',
-  'int8-npu': '1.0.0',
-};
-const JP_MODEL_VERSIONS = {
-  fp16: '1.0.0',
-};
-const SIFIGAN_MODEL_VERSION = '1.0.0';
+// Model versions are determined by ModelScope tags (e.g. 'v0', 'v1').
+// When a model is downloaded, a version.json file is written to the precision
+// subdirectory recording the revision (tag name or 'master'). If version.json
+// is missing, the local model is treated as a legacy version and an update
+// is flagged as available.
 const VERSION_FILE_NAME = 'version.json';
 
 // 分片多线程下载相关常量
@@ -341,15 +332,27 @@ function getSifiganVersionPath(modelDir) {
 }
 
 /**
- * Compare two semantic version strings (e.g. '1.0.0' vs '1.2.0').
+ * Normalize a version string into an array of integers.
+ * Handles 'v' prefix (e.g. 'v1' → [1]) and dot-separated segments
+ * (e.g. '1.0.0' → [1, 0, 0], 'v2.1' → [2, 1]).
+ */
+function _normalizeVersion(v) {
+  return String(v)
+    .replace(/^v/i, '')
+    .split('.')
+    .map(n => parseInt(n, 10) || 0);
+}
+
+/**
+ * Compare two version strings (e.g. '1.0.0' vs '1.2.0', 'v0' vs 'v1').
  * Returns: -1 if a < b, 0 if a == b, 1 if a > b
  */
 function compareVersions(a, b) {
   if (!a && !b) return 0;
   if (!a) return -1;
   if (!b) return 1;
-  const pa = String(a).split('.').map(n => parseInt(n, 10) || 0);
-  const pb = String(b).split('.').map(n => parseInt(n, 10) || 0);
+  const pa = _normalizeVersion(a);
+  const pb = _normalizeVersion(b);
   const len = Math.max(pa.length, pb.length);
   for (let i = 0; i < len; i++) {
     const na = pa[i] || 0;
@@ -358,6 +361,19 @@ function compareVersions(a, b) {
     if (na > nb) return 1;
   }
   return 0;
+}
+
+/**
+ * Pick the latest tag from a list of ModelScope version tags.
+ * Tags are expected in 'v0', 'v1', ... format. Non-matching tags are ignored.
+ * Returns the latest tag string (e.g. 'v2'), or null if none match.
+ */
+function getLatestTag(tags) {
+  if (!Array.isArray(tags) || tags.length === 0) return null;
+  const valid = tags.filter(t => typeof t === 'string' && /^v?\d+/i.test(t));
+  if (valid.length === 0) return null;
+  valid.sort((a, b) => compareVersions(b, a)); // descending
+  return valid[0];
 }
 
 /**
@@ -390,37 +406,41 @@ function getLocalModelRevision(modelDir, precision) {
 }
 
 /**
- * Get the latest model version for a given precision.
- */
-function getLatestModelVersion(precision) {
-  return MODEL_VERSIONS[precision] || null;
-}
-
-/**
  * Check if a model update is available for the given precision.
- * An update is available if:
- *   - version.json is missing (legacy model) AND model files exist, OR
- *   - local revision is not 'master' (a specific version is installed, latest is available)
- *   - local version is older than the latest version
+ * - master branch is treated as always up-to-date (no update prompt).
+ * - Specific tag revisions (e.g. 'v1') are compared against the latest
+ *   remote tag fetched from ModelScope.
+ * - Legacy models (no version.json) are flagged for update.
+ * - Network failures do NOT flag an update (avoids false positives).
  * Returns { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
  */
-function checkModelVersion(modelDir, precision) {
+async function checkModelVersion(modelDir, precision) {
   const localVersion = getLocalModelVersion(modelDir, precision);
   const localRevision = getLocalModelRevision(modelDir, precision);
-  const latestVersion = getLatestModelVersion(precision);
   const { existing } = checkMissingFiles(modelDir, precision);
   const hasModelFiles = existing.length > 0;
 
   let updateAvailable = false;
+  let latestVersion = null;
+
   if (hasModelFiles) {
     if (!localVersion) {
       // Legacy model: files exist but no version info → update available
       updateAvailable = true;
-    } else if (localRevision !== 'master') {
-      // A specific version is installed → update to latest available
-      updateAvailable = true;
-    } else if (latestVersion && compareVersions(localVersion, latestVersion) < 0) {
-      updateAvailable = true;
+    } else if (localRevision === 'master') {
+      // master branch is always latest → no update needed
+      updateAvailable = false;
+    } else {
+      // Specific tag installed → fetch remote tags and compare
+      try {
+        const tags = await getModelTags(precision);
+        latestVersion = getLatestTag(tags);
+        if (latestVersion && compareVersions(localRevision, latestVersion) < 0) {
+          updateAvailable = true;
+        }
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote tags for ${precision}:`, err.message);
+      }
     }
   }
 
@@ -437,22 +457,22 @@ function checkModelVersion(modelDir, precision) {
  * Save the model version to version.json after a successful download.
  * revision records the ModelScope revision that was downloaded ('master'
  * for the latest default branch, or a tag name for a specific version).
+ * The version field mirrors the revision so checkModelVersion can compare
+ * localRevision against the latest remote tag.
  */
 function saveModelVersion(modelDir, precision, revision = 'master') {
   const versionPath = getModelVersionPath(modelDir, precision);
-  const latestVersion = getLatestModelVersion(precision);
-  if (!latestVersion) return;
   try {
     const dir = path.dirname(versionPath);
     fs.mkdirSync(dir, { recursive: true });
     const data = {
-      version: latestVersion,
+      version: revision,
       precision,
       revision,
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
-    console.log(`[ModelManager] Saved version ${latestVersion} (revision: ${revision}) for precision ${precision}`);
+    console.log(`[ModelManager] Saved version ${revision} (revision: ${revision}) for precision ${precision}`);
   } catch (err) {
     console.warn(`[ModelManager] Failed to save version for ${precision}:`, err.message);
   }
@@ -480,24 +500,30 @@ function getLocalJpModelRevision(modelDir, precision) {
   }
 }
 
-function getLatestJpModelVersion(precision) {
-  return JP_MODEL_VERSIONS[precision] || null;
-}
-
-function checkJpModelVersion(modelDir, precision) {
+async function checkJpModelVersion(modelDir, precision) {
   const localVersion = getLocalJpModelVersion(modelDir, precision);
   const localRevision = getLocalJpModelRevision(modelDir, precision);
-  const latestVersion = getLatestJpModelVersion(precision);
   const hasModelFiles = checkJpModelsExist(modelDir, precision);
 
   let updateAvailable = false;
+  let latestVersion = null;
+
   if (hasModelFiles) {
     if (!localVersion) {
       updateAvailable = true;
-    } else if (localRevision !== 'master') {
-      updateAvailable = true;
-    } else if (latestVersion && compareVersions(localVersion, latestVersion) < 0) {
-      updateAvailable = true;
+    } else if (localRevision === 'master') {
+      updateAvailable = false;
+    } else {
+      // Specific tag installed → fetch remote tags and compare
+      try {
+        const tags = await getJpModelTags(precision);
+        latestVersion = getLatestTag(tags);
+        if (latestVersion && compareVersions(localRevision, latestVersion) < 0) {
+          updateAvailable = true;
+        }
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote JP tags for ${precision}:`, err.message);
+      }
     }
   }
 
@@ -512,20 +538,18 @@ function checkJpModelVersion(modelDir, precision) {
 
 function saveJpModelVersion(modelDir, precision, revision = 'master') {
   const versionPath = getJpModelVersionPath(modelDir, precision);
-  const latestVersion = getLatestJpModelVersion(precision);
-  if (!latestVersion) return;
   try {
     const dir = path.dirname(versionPath);
     fs.mkdirSync(dir, { recursive: true });
     const data = {
-      version: latestVersion,
+      version: revision,
       precision,
       revision,
       language: 'jp',
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
-    console.log(`[ModelManager] Saved JP version ${latestVersion} (revision: ${revision}) for precision ${precision}`);
+    console.log(`[ModelManager] Saved JP version ${revision} (revision: ${revision}) for precision ${precision}`);
   } catch (err) {
     console.warn(`[ModelManager] Failed to save JP version for ${precision}:`, err.message);
   }
@@ -553,14 +577,9 @@ function getLocalSifiganRevision(modelDir) {
   }
 }
 
-function getLatestSifiganVersion() {
-  return SIFIGAN_MODEL_VERSION;
-}
-
-function checkSifiganVersion(modelDir) {
+async function checkSifiganVersion(modelDir) {
   const localVersion = getLocalSifiganVersion(modelDir);
   const localRevision = getLocalSifiganRevision(modelDir);
-  const latestVersion = getLatestSifiganVersion();
   // Check if SiFiGAN files exist by looking for stats + at least one variant
   let hasModelFiles = false;
   try {
@@ -574,13 +593,24 @@ function checkSifiganVersion(modelDir) {
   } catch (_) {}
 
   let updateAvailable = false;
+  let latestVersion = null;
+
   if (hasModelFiles) {
     if (!localVersion) {
       updateAvailable = true;
-    } else if (localRevision !== 'master') {
-      updateAvailable = true;
-    } else if (latestVersion && compareVersions(localVersion, latestVersion) < 0) {
-      updateAvailable = true;
+    } else if (localRevision === 'master') {
+      updateAvailable = false;
+    } else {
+      // Specific tag installed → fetch remote tags and compare
+      try {
+        const tags = await getSifiganTags();
+        latestVersion = getLatestTag(tags);
+        if (latestVersion && compareVersions(localRevision, latestVersion) < 0) {
+          updateAvailable = true;
+        }
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote SiFiGAN tags:`, err.message);
+      }
     }
   }
 
@@ -595,17 +625,15 @@ function checkSifiganVersion(modelDir) {
 
 function saveSifiganVersion(modelDir, revision = 'master') {
   const versionPath = getSifiganVersionPath(modelDir);
-  const latestVersion = getLatestSifiganVersion();
-  if (!latestVersion) return;
   try {
     const data = {
-      version: latestVersion,
+      version: revision,
       revision,
       model: 'sifigan',
       updatedAt: new Date().toISOString(),
     };
     fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
-    console.log(`[ModelManager] Saved SiFiGAN version ${latestVersion} (revision: ${revision})`);
+    console.log(`[ModelManager] Saved SiFiGAN version ${revision} (revision: ${revision})`);
   } catch (err) {
     console.warn(`[ModelManager] Failed to save SiFiGAN version:`, err.message);
   }
@@ -1556,9 +1584,6 @@ module.exports = {
   PRECISION_SUBDIR_MAP,
   PRECISION_SUBDIR_PRECESIONS,
   MIN_FILE_SIZE_FOR_CHUNKING,
-  MODEL_VERSIONS,
-  JP_MODEL_VERSIONS,
-  SIFIGAN_MODEL_VERSION,
   checkMissingFiles,
   checkMissingFilesAsync,
   checkMissingJpFiles,
@@ -1591,19 +1616,17 @@ module.exports = {
   getJpModelVersionPath,
   getSifiganVersionPath,
   compareVersions,
+  getLatestTag,
   getLocalModelVersion,
   getLocalModelRevision,
-  getLatestModelVersion,
   checkModelVersion,
   saveModelVersion,
   getLocalJpModelVersion,
   getLocalJpModelRevision,
-  getLatestJpModelVersion,
   checkJpModelVersion,
   saveJpModelVersion,
   getLocalSifiganVersion,
   getLocalSifiganRevision,
-  getLatestSifiganVersion,
   checkSifiganVersion,
   saveSifiganVersion,
 };

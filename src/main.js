@@ -337,7 +337,12 @@ app.whenReady().then(() => {
         if (!shouldAutoCheck(settings, isPackaged)) return;
         const channel = settings.updateChannel || 'release';
         const result = await checkAllUpdates(channel);
-        await recordCheckTime();
+        // Only record check time on success (no app error). If the check failed
+        // (e.g. rate limited, network error), skip recording so the next launch
+        // can retry instead of waiting 24h.
+        if (!result.app.error) {
+          await recordCheckTime();
+        }
         const freshSettings = loadSettings();
         if (shouldShowNotification(result.app, result.models, freshSettings, false)) {
           openUpdateNotificationWindow(result);

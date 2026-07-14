@@ -134,7 +134,7 @@ async function checkAppUpdate(channel) {
   } catch (err) {
     let errorMsg = err.message;
     if (errorMsg.includes('RATE_LIMIT')) {
-      errorMsg = 'GitHub API rate limit reached. Please try again later.';
+      errorMsg = 'rate_limited';
     }
     return {
       updateAvailable: false,
@@ -154,14 +154,16 @@ async function checkAppUpdate(channel) {
  * Check for model updates (main, JP, SiFiGAN) against the local model dir.
  * Returns { main, jp, sifigan, anyUpdateAvailable }.
  */
-function checkModelUpdates() {
+async function checkModelUpdates() {
   try {
     const modelDir = getModelDir();
     const settings = loadSettings();
     const precision = settings.modelPrecision || 'fp16';
-    const main = checkModelVersion(modelDir, precision);
-    const jp = checkJpModelVersion(modelDir, precision);
-    const sifigan = checkSifiganVersion(modelDir);
+    const [main, jp, sifigan] = await Promise.all([
+      checkModelVersion(modelDir, precision),
+      checkJpModelVersion(modelDir, precision),
+      checkSifiganVersion(modelDir),
+    ]);
     const anyUpdateAvailable = !!(main.updateAvailable || jp.updateAvailable || sifigan.updateAvailable);
     return { main, jp, sifigan, anyUpdateAvailable };
   } catch (err) {
@@ -176,7 +178,7 @@ function checkModelUpdates() {
 async function checkAllUpdates(channel) {
   const [appResult, models] = await Promise.all([
     checkAppUpdate(channel),
-    Promise.resolve(checkModelUpdates()),
+    checkModelUpdates(),
   ]);
   return { app: appResult, models };
 }
@@ -217,7 +219,6 @@ function shouldShowNotification(appResult, modelsResult, settings, isManual) {
   if (isManual) {
     return appUpdateToShow || modelUpdateToShow;
   }
-  if (settings.dontRemindAppUpdates) return false;
   return appUpdateToShow || modelUpdateToShow;
 }
 

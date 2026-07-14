@@ -56,14 +56,14 @@ function registerUpdateIpc() {
   });
 
   ipcMain.handle('update:open-model-download', async () => {
-    // Reuse existing model-download window logic by calling the modelDownload module
+    // Open the model download window so the user can update any model group
+    // (main / JP / SiFiGAN). Passing an empty missing list lets the window
+    // perform its own checks and display the current state of all groups.
     const { createModelDownloadWindow } = require('./windowManager');
-    const { checkMissingFiles, DEFAULT_PRECISION } = require('../modelManager');
-    const { getModelDir } = require('./modelDir');
+    const { DEFAULT_PRECISION } = require('../modelManager');
     const s = loadSettings();
     const precision = s.modelPrecision || DEFAULT_PRECISION;
-    const { missing } = checkMissingFiles(getModelDir(), precision);
-    createModelDownloadWindow(missing, precision, DEFAULT_PRECISION);
+    createModelDownloadWindow([], precision, DEFAULT_PRECISION);
     return { success: true };
   });
 }

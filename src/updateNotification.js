@@ -68,7 +68,25 @@ function renderModelArea(models) {
   const area = document.getElementById('modelUpdateArea');
   const list = document.getElementById('modelUpdateList');
 
-  if (!models || !models.anyUpdateAvailable) {
+  if (!models) {
+    area.classList.add('hidden');
+    list.innerHTML = '';
+    return;
+  }
+
+  if (models.error) {
+    // Model check failed — show the error so the user knows why no updates
+    // are reported (e.g. network failure, ModelScope API unreachable).
+    area.classList.remove('hidden');
+    list.innerHTML = '';
+    const li = document.createElement('li');
+    li.className = 'model-error';
+    li.textContent = t('update.modelCheckError');
+    list.appendChild(li);
+    return;
+  }
+
+  if (!models.anyUpdateAvailable) {
     area.classList.add('hidden');
     list.innerHTML = '';
     return;
