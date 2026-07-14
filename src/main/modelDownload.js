@@ -271,9 +271,9 @@ function registerModelDownloadIpc() {
   ipcMain.handle('model-download:start', async (event, precision, revision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    // If no revision (tag) specified, fetch the latest tag from ModelScope
+    // If no revision (tag) specified or 'latest' requested, fetch the latest tag from ModelScope
     let currentRevision = revision;
-    if (!currentRevision) {
+    if (!currentRevision || currentRevision === 'latest') {
       try {
         const tags = await getModelTags(currentPrecision);
         currentRevision = getLatestTag(tags);
@@ -393,9 +393,9 @@ function registerModelDownloadIpc() {
     const { checkMissingJpFiles, getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    // If no revision (tag) specified, fetch the latest JP tag from ModelScope
+    // If no revision (tag) specified or 'latest' requested, fetch the latest JP tag from ModelScope
     let currentRevision = revision;
-    if (!currentRevision) {
+    if (!currentRevision || currentRevision === 'latest') {
       try {
         const tags = await getJpModelTags(currentPrecision);
         currentRevision = getLatestTag(tags);
@@ -511,9 +511,9 @@ function registerModelDownloadIpc() {
   // Uses chunked download for files >= 16MB, single-threaded for smaller.
   ipcMain.handle('model-download:start-sifigan', async (event, revision) => {
     const sifiganId = MODEL_IDS.sifigan || '';
-    // If no revision (tag) specified, fetch the latest SiFiGAN tag from ModelScope
+    // If no revision (tag) specified or 'latest' requested, fetch the latest SiFiGAN tag from ModelScope
     let currentRevision = revision;
-    if (!currentRevision && sifiganId) {
+    if ((!currentRevision || currentRevision === 'latest') && sifiganId) {
       try {
         const tags = await getSifiganTags();
         currentRevision = getLatestTag(tags);
@@ -796,9 +796,9 @@ function registerModelDownloadIpc() {
   ipcMain.handle('model-download:update', async (event, precision, revision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    // If no revision (tag) specified, fetch the latest tag from ModelScope
+    // If no revision (tag) specified or 'latest' requested, fetch the latest tag from ModelScope
     let currentRevision = revision;
-    if (!currentRevision) {
+    if (!currentRevision || currentRevision === 'latest') {
       try {
         const tags = await getModelTags(currentPrecision);
         currentRevision = getLatestTag(tags);
@@ -838,9 +838,9 @@ function registerModelDownloadIpc() {
     const { getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS, JP_MODEL_FILE_MANIFEST } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    // If no revision (tag) specified, fetch the latest JP tag from ModelScope
+    // If no revision (tag) specified or 'latest' requested, fetch the latest JP tag from ModelScope
     let currentRevision = revision;
-    if (!currentRevision) {
+    if (!currentRevision || currentRevision === 'latest') {
       try {
         const tags = await getJpModelTags(currentPrecision);
         currentRevision = getLatestTag(tags);
@@ -896,9 +896,9 @@ function registerModelDownloadIpc() {
     if (!sifiganId) {
       return { status: 'download_url_not_configured', message: t('modelDownload.sifiganUrlNotConfigured') };
     }
-    // If no revision (tag) specified, fetch the latest SiFiGAN tag from ModelScope
+    // If no revision (tag) specified or 'latest' requested, fetch the latest SiFiGAN tag from ModelScope
     let currentRevision = revision;
-    if (!currentRevision) {
+    if (!currentRevision || currentRevision === 'latest') {
       try {
         const tags = await getSifiganTags();
         currentRevision = getLatestTag(tags);

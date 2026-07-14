@@ -13,7 +13,7 @@ let lastSpeedTime = 0;
 let isDownloading = false;
 let renderedFileIds = [];
 let currentPrecision = 'fp16';
-let currentRevision = null; // selected ModelScope tag (e.g. 'v1'); null = not yet selected
+let currentRevision = 'latest'; // selected revision: 'latest' = auto-pick newest tag, or a specific tag (e.g. 'v1')
 let availableTags = []; // tags fetched from ModelScope (branches NOT shown)
 let currentVersionInfo = null; // { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
 
@@ -165,8 +165,9 @@ async function refreshVersionInfo() {
 
 /**
  * Fetch available model versions (tags) from ModelScope and populate
- * the version selector dropdown. Only tags are shown — there is no
- * 'master' (latest) option. The latest tag is selected by default.
+ * the version selector dropdown. The first option is always 'latest'
+ * (auto-pick the newest tag). Tags are appended after. Branches are
+ * NOT shown. 'latest' is the default selection.
  */
 async function refreshVersionSelector() {
   const select = document.getElementById('versionSelect');
@@ -179,34 +180,30 @@ async function refreshVersionSelector() {
   } catch (_) {
     availableTags = [];
   }
-  // Populate tag options only (no 'master' / latest option)
+  // First option: latest (auto-pick newest tag on download)
+  const latestOpt = document.createElement('option');
+  latestOpt.value = 'latest';
+  latestOpt.textContent = t('modelDownload.latestVersionLabel');
+  select.appendChild(latestOpt);
+  // Remaining options: tags
   for (const tag of availableTags) {
     const option = document.createElement('option');
     option.value = tag;
     option.textContent = tag;
     select.appendChild(option);
   }
-  // Determine which tag to select:
-  // 1. If user already selected a revision, keep it
-  // 2. Else if local model has a revision, use that
-  // 3. Else default to the latest tag (first in sorted descending order)
-  let targetRevision = currentRevision;
-  if (!targetRevision && currentVersionInfo && currentVersionInfo.hasModelFiles && currentVersionInfo.localRevision) {
-    targetRevision = currentVersionInfo.localRevision;
-  }
-  if (!targetRevision && availableTags.length > 0) {
-    // Pick the latest tag (availableTags is sorted descending by getLatestTag logic)
-    targetRevision = availableTags[0];
-  }
-  if (targetRevision && availableTags.includes(targetRevision)) {
-    select.value = targetRevision;
-    currentRevision = targetRevision;
-  } else if (availableTags.length > 0) {
-    select.value = availableTags[0];
-    currentRevision = availableTags[0];
+  // Determine which option to select:
+  // 1. If local model has a specific tag installed, select that tag
+  // 2. Else default to 'latest'
+  const localRev = currentVersionInfo && currentVersionInfo.hasModelFiles
+    ? currentVersionInfo.localRevision
+    : null;
+  if (localRev && localRev !== 'master' && availableTags.includes(localRev)) {
+    select.value = localRev;
+    currentRevision = localRev;
   } else {
-    // No tags available — leave empty
-    currentRevision = null;
+    select.value = 'latest';
+    currentRevision = 'latest';
   }
   select.disabled = false;
 }
@@ -336,7 +333,7 @@ window.electronAPI.onModelDownloadPrecision((precision) => {
 
 // Receive initial revision context from main process when window opens
 window.electronAPI.onModelDownloadRevision((revision) => {
-  if (revision && typeof revision === 'string') {
+  if (revision && typeof revision === 'string' && revision !== 'latest') {
     currentRevision = revision;
     const select = document.getElementById('versionSelect');
     if (select && Array.from(select.options).some(opt => opt.value === revision)) {
