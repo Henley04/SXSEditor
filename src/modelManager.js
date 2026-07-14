@@ -23,18 +23,17 @@ const JP_MODEL_IDS = {
 };
 const DEFAULT_PRECISION = 'fp16';
 const MODELSCOPE_ENDPOINT = 'https://modelscope.cn';
-const REVISION = 'master';
 const TEMP_SUFFIX = '.download';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 // ===== Model version management =====
-// Model versions are determined by ModelScope tags (e.g. 'v0', 'v1').
-// When a model is downloaded, a version.json file is written to the precision
-// subdirectory recording the revision (tag name or 'master'). If version.json
-// is missing, the local model is treated as a legacy version and an update
-// is flagged as available.
+// Model versions are determined solely by ModelScope tags (e.g. 'v0', 'v1').
+// Downloads always use a specific tag — branch-based downloads ('master')
+// are no longer supported. When a model is downloaded, a version.json file
+// is written to the precision subdirectory recording the tag. If version.json
+// is missing or records 'master' (legacy), an update is flagged as available.
 const VERSION_FILE_NAME = 'version.json';
 
 // 分片多线程下载相关常量
@@ -185,7 +184,8 @@ function invalidateJpModelsCache(baseDir, precision) {
   }
 }
 
-function getFileDownloadUrl(filePath, precision, revision = 'master') {
+function getFileDownloadUrl(filePath, precision, revision) {
+  if (!revision) return null;
   // Preprocess and basic_pitch models use int8 repo (dynamic shapes),
   // not int8-npu repo (static shapes with fixed input dimensions)
   const effectivePrecision = (!isSvsModelFile(filePath) && precision === 'int8-npu') ? 'int8' : precision;
@@ -198,7 +198,8 @@ function getFileDownloadUrl(filePath, precision, revision = 'master') {
 /**
  * Get the download URL for a JP language model file.
  */
-function getJpFileDownloadUrl(filePath, precision, revision = 'master') {
+function getJpFileDownloadUrl(filePath, precision, revision) {
+  if (!revision) return null;
   const modelId = getJpModelId(precision);
   if (!modelId) return null;
   const encoded = encodeURIComponent(filePath);
@@ -210,7 +211,8 @@ function getJpFileDownloadUrl(filePath, precision, revision = 'master') {
  * SiFiGAN files live in their own ModelScope repo (MODEL_IDS.sifigan)
  * and are stored at the root of onnx_models/ (not in precision subdirs).
  */
-function getSifiganFileDownloadUrl(filePath, revision = 'master') {
+function getSifiganFileDownloadUrl(filePath, revision) {
+  if (!revision) return null;
   const modelId = MODEL_IDS.sifigan;
   if (!modelId) return null;
   const encoded = encodeURIComponent(filePath);
@@ -218,9 +220,9 @@ function getSifiganFileDownloadUrl(filePath, revision = 'master') {
 }
 
 // ===== ModelScope tag (version) listing =====
-// ModelScope model repos are git-based. The default branch ('master') is the
-// latest version — downloading without a Revision tag fetches this default.
-// Tags represent specific released versions (e.g. 'v1.0', 'v2').
+// ModelScope model repos are git-based. Downloads are tag-only — the default
+// branch ('master') is NOT used. Tags represent specific released versions
+// (e.g. 'v0', 'v1', 'v2').
 // The revisions API: GET /api/v1/models/{model_id}/revisions
 //   → { Data: { RevisionMap: { Branches: [...], Tags: [...] } } }
 // Only tags are surfaced as selectable versions; branches are NOT shown.
@@ -392,25 +394,24 @@ function getLocalModelVersion(modelDir, precision) {
 }
 
 /**
- * Read the local model revision (ModelScope branch) for a given precision.
- * Returns the branch name (e.g. 'master' or 'v1.0'), or 'master' if not recorded.
+ * Read the local model revision (ModelScope tag) for a given precision.
+ * Returns the tag name (e.g. 'v1'), or null if not recorded.
+ * A 'master' value indicates a legacy branch-based install.
  */
 function getLocalModelRevision(modelDir, precision) {
   const versionPath = getModelVersionPath(modelDir, precision);
   try {
     const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
-    return data.revision || 'master';
+    return data.revision || null;
   } catch (_) {
-    return 'master';
+    return null;
   }
 }
 
 /**
  * Check if a model update is available for the given precision.
- * - master branch is treated as always up-to-date (no update prompt).
- * - Specific tag revisions (e.g. 'v1') are compared against the latest
- *   remote tag fetched from ModelScope.
- * - Legacy models (no version.json) are flagged for update.
+ * - Legacy models (no version.json or revision='master') are flagged for update.
+ * - Tag-based installs (e.g. 'v1') are compared against the latest remote tag.
  * - Network failures do NOT flag an update (avoids false positives).
  * Returns { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
  */
@@ -424,12 +425,9 @@ async function checkModelVersion(modelDir, precision) {
   let latestVersion = null;
 
   if (hasModelFiles) {
-    if (!localVersion) {
-      // Legacy model: files exist but no version info → update available
+    if (!localVersion || !localRevision || localRevision === 'master') {
+      // Legacy model: no version info or branch-based install → update available
       updateAvailable = true;
-    } else if (localRevision === 'master') {
-      // master branch is always latest → no update needed
-      updateAvailable = false;
     } else {
       // Specific tag installed → fetch remote tags and compare
       try {
@@ -455,12 +453,15 @@ async function checkModelVersion(modelDir, precision) {
 
 /**
  * Save the model version to version.json after a successful download.
- * revision records the ModelScope revision that was downloaded ('master'
- * for the latest default branch, or a tag name for a specific version).
+ * revision is the ModelScope tag (e.g. 'v1') that was downloaded.
  * The version field mirrors the revision so checkModelVersion can compare
  * localRevision against the latest remote tag.
  */
-function saveModelVersion(modelDir, precision, revision = 'master') {
+function saveModelVersion(modelDir, precision, revision) {
+  if (!revision) {
+    console.warn(`[ModelManager] saveModelVersion: revision is required`);
+    return;
+  }
   const versionPath = getModelVersionPath(modelDir, precision);
   try {
     const dir = path.dirname(versionPath);
@@ -494,9 +495,9 @@ function getLocalJpModelRevision(modelDir, precision) {
   const versionPath = getJpModelVersionPath(modelDir, precision);
   try {
     const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
-    return data.revision || 'master';
+    return data.revision || null;
   } catch (_) {
-    return 'master';
+    return null;
   }
 }
 
@@ -509,10 +510,9 @@ async function checkJpModelVersion(modelDir, precision) {
   let latestVersion = null;
 
   if (hasModelFiles) {
-    if (!localVersion) {
+    if (!localVersion || !localRevision || localRevision === 'master') {
+      // Legacy model: no version info or branch-based install → update available
       updateAvailable = true;
-    } else if (localRevision === 'master') {
-      updateAvailable = false;
     } else {
       // Specific tag installed → fetch remote tags and compare
       try {
@@ -536,7 +536,11 @@ async function checkJpModelVersion(modelDir, precision) {
   };
 }
 
-function saveJpModelVersion(modelDir, precision, revision = 'master') {
+function saveJpModelVersion(modelDir, precision, revision) {
+  if (!revision) {
+    console.warn(`[ModelManager] saveJpModelVersion: revision is required`);
+    return;
+  }
   const versionPath = getJpModelVersionPath(modelDir, precision);
   try {
     const dir = path.dirname(versionPath);
@@ -571,9 +575,9 @@ function getLocalSifiganRevision(modelDir) {
   const versionPath = getSifiganVersionPath(modelDir);
   try {
     const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
-    return data.revision || 'master';
+    return data.revision || null;
   } catch (_) {
-    return 'master';
+    return null;
   }
 }
 
@@ -596,10 +600,9 @@ async function checkSifiganVersion(modelDir) {
   let latestVersion = null;
 
   if (hasModelFiles) {
-    if (!localVersion) {
+    if (!localVersion || !localRevision || localRevision === 'master') {
+      // Legacy model: no version info or branch-based install → update available
       updateAvailable = true;
-    } else if (localRevision === 'master') {
-      updateAvailable = false;
     } else {
       // Specific tag installed → fetch remote tags and compare
       try {
@@ -623,7 +626,11 @@ async function checkSifiganVersion(modelDir) {
   };
 }
 
-function saveSifiganVersion(modelDir, revision = 'master') {
+function saveSifiganVersion(modelDir, revision) {
+  if (!revision) {
+    console.warn(`[ModelManager] saveSifiganVersion: revision is required`);
+    return;
+  }
   const versionPath = getSifiganVersionPath(modelDir);
   try {
     const data = {

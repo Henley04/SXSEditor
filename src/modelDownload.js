@@ -13,7 +13,7 @@ let lastSpeedTime = 0;
 let isDownloading = false;
 let renderedFileIds = [];
 let currentPrecision = 'fp16';
-let currentRevision = 'master'; // selected ModelScope revision ('master' = latest, no tag; other = tag name)
+let currentRevision = null; // selected ModelScope tag (e.g. 'v1'); null = not yet selected
 let availableTags = []; // tags fetched from ModelScope (branches NOT shown)
 let currentVersionInfo = null; // { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
 
@@ -165,8 +165,8 @@ async function refreshVersionInfo() {
 
 /**
  * Fetch available model versions (tags) from ModelScope and populate
- * the version selector dropdown. The first option is always 'master'
- * (latest, no tag). Tags are appended after. Branches are NOT shown.
+ * the version selector dropdown. Only tags are shown — there is no
+ * 'master' (latest) option. The latest tag is selected by default.
  */
 async function refreshVersionSelector() {
   const select = document.getElementById('versionSelect');
@@ -179,30 +179,34 @@ async function refreshVersionSelector() {
   } catch (_) {
     availableTags = [];
   }
-  // First option: latest (master, no tag)
-  const latestOpt = document.createElement('option');
-  latestOpt.value = 'master';
-  latestOpt.textContent = t('modelDownload.latestVersionLabel');
-  select.appendChild(latestOpt);
-  // Remaining options: tags
+  // Populate tag options only (no 'master' / latest option)
   for (const tag of availableTags) {
     const option = document.createElement('option');
     option.value = tag;
     option.textContent = tag;
     select.appendChild(option);
   }
-  // Set selected value to currentRevision (or local revision if installed)
+  // Determine which tag to select:
+  // 1. If user already selected a revision, keep it
+  // 2. Else if local model has a revision, use that
+  // 3. Else default to the latest tag (first in sorted descending order)
   let targetRevision = currentRevision;
-  if (currentVersionInfo && currentVersionInfo.hasModelFiles && currentVersionInfo.localRevision) {
+  if (!targetRevision && currentVersionInfo && currentVersionInfo.hasModelFiles && currentVersionInfo.localRevision) {
     targetRevision = currentVersionInfo.localRevision;
   }
-  const allOptions = ['master', ...availableTags];
-  if (allOptions.includes(targetRevision)) {
+  if (!targetRevision && availableTags.length > 0) {
+    // Pick the latest tag (availableTags is sorted descending by getLatestTag logic)
+    targetRevision = availableTags[0];
+  }
+  if (targetRevision && availableTags.includes(targetRevision)) {
     select.value = targetRevision;
     currentRevision = targetRevision;
+  } else if (availableTags.length > 0) {
+    select.value = availableTags[0];
+    currentRevision = availableTags[0];
   } else {
-    select.value = 'master';
-    currentRevision = 'master';
+    // No tags available — leave empty
+    currentRevision = null;
   }
   select.disabled = false;
 }
@@ -224,10 +228,11 @@ function renderVersionInfo(info) {
   }
 
   section.style.display = 'block';
-  // Show revision info: "master" → version number (latest), tag → tag name
-  const localRev = info.localRevision || 'master';
-  if (localRev === 'master') {
-    localEl.textContent = info.localVersion || t('modelDownload.legacyVersion');
+  // Show local revision (tag name) and latest version
+  const localRev = info.localRevision;
+  if (!localRev || localRev === 'master') {
+    // Legacy branch-based install — show as legacy
+    localEl.textContent = t('modelDownload.legacyVersion');
   } else {
     localEl.textContent = localRev;
   }
@@ -235,16 +240,12 @@ function renderVersionInfo(info) {
 
   if (info.updateAvailable) {
     banner.style.display = 'flex';
-    if (!info.localVersion) {
+    if (!localRev || localRev === 'master') {
+      // Legacy install → update to latest tag
       updateText.textContent = t('modelDownload.legacyUpdateHint');
-    } else if (localRev !== 'master') {
-      // Specific version installed → update to latest available
-      updateText.textContent = t('modelDownload.versionSwitchHint', { version: localRev });
     } else {
-      updateText.textContent = t('modelDownload.updateAvailableHint', {
-        local: info.localVersion,
-        latest: info.latestVersion,
-      });
+      // Specific tag installed → update to latest available
+      updateText.textContent = t('modelDownload.versionSwitchHint', { version: localRev });
     }
     updateBtn.style.display = 'inline-block';
   } else {

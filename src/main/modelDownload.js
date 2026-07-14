@@ -5,7 +5,7 @@ const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags } = require('../modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getLatestTag } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 let downloadAbortController = null;
@@ -92,7 +92,7 @@ function deleteSifiganFiles(modelDir) {
   return { deleted, errors };
 }
 
-async function startModelDownload(modelDir, missingFiles, precision, revision = 'master') {
+async function startModelDownload(modelDir, missingFiles, precision, revision) {
   downloadAbortController = new AbortController();
   const abortSignal = downloadAbortController.signal;
   const currentPrecision = precision || DEFAULT_PRECISION;
@@ -236,7 +236,7 @@ function registerModelDownloadIpc() {
 
   // List available model versions (tags) from ModelScope for a given precision.
   // Tags are fetched from the /revisions endpoint; branches are NOT shown.
-  // The default 'latest' (no tag) is represented as 'master' on the client.
+  // Downloads are tag-only — there is no 'master' (latest) option.
   ipcMain.handle('model-download:list-versions', async (event, precision) => {
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     try {
@@ -271,7 +271,19 @@ function registerModelDownloadIpc() {
   ipcMain.handle('model-download:start', async (event, precision, revision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    const currentRevision = revision || 'master';
+    // If no revision (tag) specified, fetch the latest tag from ModelScope
+    let currentRevision = revision;
+    if (!currentRevision) {
+      try {
+        const tags = await getModelTags(currentPrecision);
+        currentRevision = getLatestTag(tags);
+      } catch (err) {
+        return { success: false, error: `Failed to fetch model tags: ${err.message}` };
+      }
+    }
+    if (!currentRevision) {
+      return { success: false, error: 'No model tags available for download' };
+    }
     if (!isPrecisionDownloadable(currentPrecision)) {
       return { success: false, error: `Download not available for precision: ${currentPrecision}` };
     }
@@ -381,7 +393,19 @@ function registerModelDownloadIpc() {
     const { checkMissingJpFiles, getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    const currentRevision = revision || 'master';
+    // If no revision (tag) specified, fetch the latest JP tag from ModelScope
+    let currentRevision = revision;
+    if (!currentRevision) {
+      try {
+        const tags = await getJpModelTags(currentPrecision);
+        currentRevision = getLatestTag(tags);
+      } catch (err) {
+        return { success: false, error: `Failed to fetch JP model tags: ${err.message}` };
+      }
+    }
+    if (!currentRevision) {
+      return { success: false, error: 'No JP model tags available for download' };
+    }
     const { missing } = checkMissingJpFiles(modelDir, currentPrecision);
     if (missing.length === 0) return { success: true };
 
@@ -487,7 +511,16 @@ function registerModelDownloadIpc() {
   // Uses chunked download for files >= 16MB, single-threaded for smaller.
   ipcMain.handle('model-download:start-sifigan', async (event, revision) => {
     const sifiganId = MODEL_IDS.sifigan || '';
-    const currentRevision = revision || 'master';
+    // If no revision (tag) specified, fetch the latest SiFiGAN tag from ModelScope
+    let currentRevision = revision;
+    if (!currentRevision && sifiganId) {
+      try {
+        const tags = await getSifiganTags();
+        currentRevision = getLatestTag(tags);
+      } catch (err) {
+        return { status: 'download_url_not_configured', message: `Failed to fetch SiFiGAN tags: ${err.message}` };
+      }
+    }
     if (!sifiganId) {
       const modelDir = getModelDir();
       const { allExist, files } = checkSifiganFilesExist(modelDir);
@@ -497,6 +530,9 @@ function registerModelDownloadIpc() {
         allExist,
         files,
       };
+    }
+    if (!currentRevision) {
+      return { status: 'download_url_not_configured', message: 'No SiFiGAN tags available for download' };
     }
 
     const modelDir = getModelDir();
@@ -760,7 +796,19 @@ function registerModelDownloadIpc() {
   ipcMain.handle('model-download:update', async (event, precision, revision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    const currentRevision = revision || 'master';
+    // If no revision (tag) specified, fetch the latest tag from ModelScope
+    let currentRevision = revision;
+    if (!currentRevision) {
+      try {
+        const tags = await getModelTags(currentPrecision);
+        currentRevision = getLatestTag(tags);
+      } catch (err) {
+        return { success: false, error: `Failed to fetch model tags: ${err.message}` };
+      }
+    }
+    if (!currentRevision) {
+      return { success: false, error: 'No model tags available for download' };
+    }
     if (!isPrecisionDownloadable(currentPrecision)) {
       return { success: false, error: `Download not available for precision: ${currentPrecision}` };
     }
@@ -790,7 +838,19 @@ function registerModelDownloadIpc() {
     const { getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS, JP_MODEL_FILE_MANIFEST } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    const currentRevision = revision || 'master';
+    // If no revision (tag) specified, fetch the latest JP tag from ModelScope
+    let currentRevision = revision;
+    if (!currentRevision) {
+      try {
+        const tags = await getJpModelTags(currentPrecision);
+        currentRevision = getLatestTag(tags);
+      } catch (err) {
+        return { success: false, error: `Failed to fetch JP model tags: ${err.message}` };
+      }
+    }
+    if (!currentRevision) {
+      return { success: false, error: 'No JP model tags available for download' };
+    }
 
     const jpModelId = JP_MODEL_IDS[currentPrecision] || JP_MODEL_IDS['fp16'];
     if (!jpModelId) {
@@ -822,7 +882,7 @@ function registerModelDownloadIpc() {
     if (win && !win.isDestroyed()) {
       win.webContents.send('model-download:missing-files', missing);
       win.webContents.send('model-download:precision', currentPrecision);
-      if (currentRevision && currentRevision !== 'master') {
+      if (currentRevision) {
         win.webContents.send('model-download:revision', currentRevision);
       }
     }
@@ -836,6 +896,19 @@ function registerModelDownloadIpc() {
     if (!sifiganId) {
       return { status: 'download_url_not_configured', message: t('modelDownload.sifiganUrlNotConfigured') };
     }
+    // If no revision (tag) specified, fetch the latest SiFiGAN tag from ModelScope
+    let currentRevision = revision;
+    if (!currentRevision) {
+      try {
+        const tags = await getSifiganTags();
+        currentRevision = getLatestTag(tags);
+      } catch (err) {
+        return { status: 'download_url_not_configured', message: `Failed to fetch SiFiGAN tags: ${err.message}` };
+      }
+    }
+    if (!currentRevision) {
+      return { status: 'download_url_not_configured', message: 'No SiFiGAN tags available for download' };
+    }
 
     // Delete existing SiFiGAN files
     deleteSifiganFiles(modelDir);
@@ -847,7 +920,7 @@ function registerModelDownloadIpc() {
     // Re-download via the existing start-sifigan handler logic
     const { allExist, files: existingFiles } = checkSifiganFilesExist(modelDir);
     if (allExist) {
-      saveSifiganVersion(modelDir, revision || 'master');
+      saveSifiganVersion(modelDir, currentRevision);
       return { status: 'installed', allExist, files: existingFiles };
     }
 
