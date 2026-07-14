@@ -1,0 +1,26 @@
+# Checklist
+
+- [x] `src/main/settings.js` 的 `ALLOWED_SETTINGS_KEYS` 包含 `updateChannel`、`autoCheckUpdates`、`skippedAppVersion`、`dontRemindAppUpdates`、`lastUpdateCheckTime` 五个新键
+- [x] `loadSettings()` 对五个新键做类型校正与默认值回填（`updateChannel='release'`、`autoCheckUpdates=true`、`skippedAppVersion=null`、`dontRemindAppUpdates=false`、`lastUpdateCheckTime=null`）
+- [x] `src/shared/ipcChannels.js` 包含全部 `UPDATE_*` 通道常量
+- [x] `src/main/updateChecker.js` 实现 `_fetchGithubJson`、`checkAppUpdate(channel)`、`checkModelUpdates()`、`checkAllUpdates(channel)`、`shouldAutoCheck`、`recordCheckTime`、`shouldShowNotification`，且 GitHub API 请求带 `User-Agent` 头、处理 403 速率限制与超时
+- [x] `checkAppUpdate('release')` 请求 `/releases/latest` 并用 `compareVersions` 比较 `tag_name` 与 `app.getVersion()`
+- [x] `checkAppUpdate('nightly')` 请求 `/releases/tags/nightly` 并比较 `published_at` 与 `build-info.json` 的 `buildTimestamp`
+- [x] `checkModelUpdates()` 复用 `modelManager.checkModelVersion` / `checkJpModelVersion` / `checkSifiganVersion`，未修改这些函数
+- [x] `src/main/updateIpc.js` 注册 `update:check-now`、`update:get-status`、`update:skip-version`、`update:dont-remind`、`update:open-download-page`、`update:open-model-download` 六个 handler
+- [x] `update:open-download-page` 通过 `shell.openExternal` 打开 URL，且白名单包含 `https://github.com/Henley04/SXSEditor/`
+- [x] `src/main.js` 调用 `registerUpdateIpc()`，并在主窗口 `did-finish-load` 后台逻辑中按 `shouldAutoCheck` 触发自动检查，结果满足 `shouldShowNotification` 时调用 `openUpdateNotificationWindow`
+- [x] `src/main/windowManager.js` 实现 `openUpdateNotificationWindow(data)`，使用 `UPDATE_NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY` preload，`did-finish-load` 后 send `update:notification-show`
+- [x] `forge.config.js` 的 `entryPoints` 包含 `update_notification_window`
+- [x] `src/updateNotification.html` / `.js` / `.css` 实现更新提示窗口：监听 `update:notification-show` 填充数据，按钮调用对应 IPC，无应用更新时隐藏应用区按钮，无模型更新时隐藏模型区
+- [x] `src/preload.js` 暴露 `updateAPI` 命名空间（`checkNow`、`getStatus`、`skipVersion`、`dontRemind`、`openDownloadPage`、`openModelDownload`、`onNotificationShow`）
+- [x] `src/settings.html` 侧边栏与 main 区域包含「更新」分区（`#section-update`）
+- [x] 设置页「更新」分区包含：频道 select、自动检查 checkbox、立即检查按钮、结果展示区、重新启用提醒按钮（条件显示）
+- [x] `src/settings.js` 绑定频道切换、自动检查 toggle、立即检查按钮事件，立即检查显示 loading 与结果
+- [x] `src/i18n/zh-CN.js` 与 `src/i18n/en.js` 包含 `update` 命名空间全部键
+- [x] GitHub API 请求在主进程发起，渲染进程 CSP `connect-src` 未添加 `api.github.com`
+- [x] dev 模式（`app.isPackaged===false`）启动时跳过自动检查
+- [x] `dontRemindAppUpdates=true` 时启动跳过自动检查；设置页显示「重新启用更新提醒」按钮
+- [x] `npm test` 全部通过，无回归
+- [x] `npm run package:lite` 打包成功
+- [x] README.md 已补充「自动检查更新」功能说明

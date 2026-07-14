@@ -8,6 +8,7 @@ let mainWindow = null;
 let settingsWindow = null;
 let resourceManagerWindow = null;
 let modelDownloadWindow = null;
+let updateNotificationWindow = null;
 let fragmentWindows = {};
 let pendingFragmentData = {};
 let singerCreatorWindow = null;
@@ -22,6 +23,8 @@ function getMainWindow() { return mainWindow; }
 function getSettingsWindow() { return settingsWindow; }
 function getResourceManagerWindow() { return resourceManagerWindow; }
 function getModelDownloadWindow() { return modelDownloadWindow; }
+function getUpdateNotificationWindow() { return updateNotificationWindow; }
+function setUpdateNotificationWindow(win) { updateNotificationWindow = win; }
 function getFragmentWindows() { return fragmentWindows; }
 function getSingerCreatorWindow() { return singerCreatorWindow; }
 function getAudioPreprocessWindow() { return audioPreprocessWindow; }
@@ -300,6 +303,49 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
 
 function setModelDownloadWindow(win) {
   modelDownloadWindow = win;
+}
+
+function openUpdateNotificationWindow(data) {
+  if (updateNotificationWindow) {
+    updateNotificationWindow.focus();
+    return;
+  }
+
+  updateNotificationWindow = new BrowserWindow({
+    width: 560,
+    height: 640,
+    minWidth: 420,
+    minHeight: 480,
+    title: t('update.title'),
+    icon: path.join(__dirname, '..', 'SXS.png'),
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    parent: mainWindow,
+    modal: true,
+    backgroundColor: '#14141f',
+    show: false,
+    webPreferences: {
+      preload: UPDATE_NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+    },
+  });
+
+  updateNotificationWindow.loadURL(UPDATE_NOTIFICATION_WINDOW_WEBPACK_ENTRY);
+  updateNotificationWindow.once('ready-to-show', () => { updateNotificationWindow.show(); });
+  updateNotificationWindow.setMenu(null);
+  updateNotificationWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  updateNotificationWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  updateNotificationWindow.webContents.once('did-finish-load', () => {
+    updateNotificationWindow.webContents.send('update:notification-show', data);
+  });
+
+  updateNotificationWindow.on('closed', () => {
+    updateNotificationWindow = null;
+  });
 }
 
 function openFragmentEditor(fragment, project, wavBuffer) {
@@ -633,6 +679,9 @@ module.exports = {
   openResourceManagerWindow,
   createModelDownloadWindow,
   setModelDownloadWindow,
+  openUpdateNotificationWindow,
+  getUpdateNotificationWindow,
+  setUpdateNotificationWindow,
   openFragmentEditor,
   openSingerCreator,
   openAudioPreprocess,

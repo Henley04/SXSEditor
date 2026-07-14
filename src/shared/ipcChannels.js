@@ -150,6 +150,15 @@ const IPC_CHANNELS = {
   THEME_RESET: 'theme:reset',
   THEME_CHANGED: 'theme:changed',
   THEME_LIST_CHANGED: 'theme:list-changed',
+
+  // ==================== Update ====================
+  UPDATE_CHECK_NOW: 'update:check-now',
+  UPDATE_GET_STATUS: 'update:get-status',
+  UPDATE_SKIP_VERSION: 'update:skip-version',
+  UPDATE_DONT_REMIND: 'update:dont-remind',
+  UPDATE_OPEN_DOWNLOAD_PAGE: 'update:open-download-page',
+  UPDATE_OPEN_MODEL_DOWNLOAD: 'update:open-model-download',
+  UPDATE_NOTIFICATION_SHOW: 'update:notification-show',
 };
 
 module.exports = { IPC_CHANNELS };

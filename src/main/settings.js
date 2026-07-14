@@ -131,6 +131,23 @@ function loadSettings() {
     }
   }
 
+  // Update check settings
+  if (_settingsCache.updateChannel !== 'nightly' && _settingsCache.updateChannel !== 'release') {
+    _settingsCache.updateChannel = 'release';
+  }
+  if (typeof _settingsCache.autoCheckUpdates !== 'boolean') {
+    _settingsCache.autoCheckUpdates = true;
+  }
+  if (typeof _settingsCache.skippedAppVersion !== 'string') {
+    _settingsCache.skippedAppVersion = null;
+  }
+  if (typeof _settingsCache.dontRemindAppUpdates !== 'boolean') {
+    _settingsCache.dontRemindAppUpdates = false;
+  }
+  if (typeof _settingsCache.lastUpdateCheckTime !== 'string') {
+    _settingsCache.lastUpdateCheckTime = null;
+  }
+
   return _settingsCache;
 }
 
@@ -163,6 +180,11 @@ const ALLOWED_SETTINGS_KEYS = [
   'inferenceProvider',
   'npuDiffBatchSize',
   'npuVocoderBatchSize',
+  'updateChannel',
+  'autoCheckUpdates',
+  'skippedAppVersion',
+  'dontRemindAppUpdates',
+  'lastUpdateCheckTime',
 ];
 
 async function updateLocaleSetting(locale) {
