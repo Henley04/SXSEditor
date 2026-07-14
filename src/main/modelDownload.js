@@ -5,7 +5,7 @@ const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, getLatestModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags } = require('../modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 let downloadAbortController = null;
@@ -725,20 +725,20 @@ function registerModelDownloadIpc() {
   ipcMain.handle('model-download:check-version', async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    return checkModelVersion(modelDir, currentPrecision);
+    return await checkModelVersion(modelDir, currentPrecision);
   });
 
   // Check JP model version
   ipcMain.handle('model-download:check-jp-version', async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    return checkJpModelVersion(modelDir, currentPrecision);
+    return await checkJpModelVersion(modelDir, currentPrecision);
   });
 
   // Check SiFiGAN model version
   ipcMain.handle('model-download:check-sifigan-version', async () => {
     const modelDir = getModelDir();
-    return checkSifiganVersion(modelDir);
+    return await checkSifiganVersion(modelDir);
   });
 
   // Check versions for all model groups at once (main + jp + sifigan)
@@ -746,9 +746,11 @@ function registerModelDownloadIpc() {
   ipcMain.handle('model-download:check-all-versions', async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    const main = checkModelVersion(modelDir, currentPrecision);
-    const jp = checkJpModelVersion(modelDir, currentPrecision);
-    const sifigan = checkSifiganVersion(modelDir);
+    const [main, jp, sifigan] = await Promise.all([
+      checkModelVersion(modelDir, currentPrecision),
+      checkJpModelVersion(modelDir, currentPrecision),
+      checkSifiganVersion(modelDir),
+    ]);
     return { main, jp, sifigan };
   });
 

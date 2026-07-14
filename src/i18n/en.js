@@ -617,6 +617,7 @@ export default {
     reEnableReminder: 'Re-enable update notifications',
     rateLimited: 'GitHub API rate limited, please try again later',
     networkError: 'Network error, unable to check for updates',
+    modelCheckError: 'Unable to check for model updates (network error)',
     publishedAt: 'Published',
     releaseNotes: 'Release Notes',
     appUpdateAreaTitle: 'Application',
