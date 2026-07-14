@@ -313,9 +313,9 @@ function openUpdateNotificationWindow(data) {
 
   updateNotificationWindow = new BrowserWindow({
     width: 560,
-    height: 640,
+    height: 720,
     minWidth: 420,
-    minHeight: 480,
+    minHeight: 520,
     title: t('update.title'),
     icon: path.join(__dirname, '..', 'SXS.png'),
     resizable: true,

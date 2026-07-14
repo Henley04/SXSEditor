@@ -3,6 +3,7 @@ const https = require('node:https');
 const { compareVersions, checkModelVersion, checkJpModelVersion, checkSifiganVersion } = require('../modelManager');
 const { getModelDir } = require('./modelDir');
 const { loadSettings, saveSettingsFile, invalidateSettingsCache } = require('./settings');
+const { fetchAppReleaseNotes, fetchModelReleaseNotes } = require('./releaseNotesFetcher');
 
 const GITHUB_REPO = 'Henley04/SXSEditor';
 const GITHUB_API_BASE = `https://api.github.com/repos/${GITHUB_REPO}`;
@@ -79,6 +80,11 @@ function _fetchGithubJson(url) {
 /**
  * Check for an app update on the given channel ('release' | 'nightly').
  * Returns a result object describing availability, URLs, and release notes.
+ *
+ * Release notes are fetched from the official docs site (app-updates.html)
+ * and returned as structured `appReleaseNotes`. The GitHub `releaseNotesHtml`
+ * is kept as a fallback when the official site is unreachable or the version
+ * is not yet documented there.
  */
 async function checkAppUpdate(channel) {
   const currentVersion = app.getVersion();
@@ -121,6 +127,13 @@ async function checkAppUpdate(channel) {
       }
     }
 
+    // Fetch structured release notes from the official docs site.
+    // For nightly, there is no per-version docs page, so skip.
+    let appReleaseNotes = null;
+    if (updateAvailable && channel !== 'nightly' && latestVersion) {
+      appReleaseNotes = await fetchAppReleaseNotes(latestVersion);
+    }
+
     return {
       updateAvailable,
       currentVersion,
@@ -129,6 +142,7 @@ async function checkAppUpdate(channel) {
       downloadUrl,
       publishedAt,
       releaseNotesHtml,
+      appReleaseNotes,
       channel,
     };
   } catch (err) {
@@ -144,6 +158,7 @@ async function checkAppUpdate(channel) {
       downloadUrl: null,
       publishedAt: null,
       releaseNotesHtml: null,
+      appReleaseNotes: null,
       channel,
       error: errorMsg,
     };
@@ -152,7 +167,11 @@ async function checkAppUpdate(channel) {
 
 /**
  * Check for model updates (main, JP, SiFiGAN) against the local model dir.
- * Returns { main, jp, sifigan, anyUpdateAvailable }.
+ * Returns { main, jp, sifigan, anyUpdateAvailable, modelReleaseNotes }.
+ *
+ * When an update is available, `modelReleaseNotes` contains structured content
+ * extracted from the official docs site (model-updates.html) for the latest
+ * model version, so the UI can display what changed.
  */
 async function checkModelUpdates() {
   try {
@@ -165,9 +184,29 @@ async function checkModelUpdates() {
       checkSifiganVersion(modelDir),
     ]);
     const anyUpdateAvailable = !!(main.updateAvailable || jp.updateAvailable || sifigan.updateAvailable);
-    return { main, jp, sifigan, anyUpdateAvailable };
+
+    // Fetch structured release notes from the official docs site.
+    // Use the highest latestVersion among models with updates; fall back to
+    // any available latestVersion. If all are legacy (no latestVersion), the
+    // docs site's latest version (v1) is used as the default target.
+    let modelReleaseNotes = null;
+    if (anyUpdateAvailable) {
+      const candidates = [main, jp, sifigan]
+        .filter((x) => x && x.latestVersion)
+        .map((x) => x.latestVersion);
+      // Pick the highest version tag; if none (all legacy), default to 'v1'
+      let targetVersion = null;
+      if (candidates.length > 0) {
+        targetVersion = candidates.reduce((a, b) => (compareVersions(a, b) >= 0 ? a : b));
+      } else {
+        targetVersion = 'v1';
+      }
+      modelReleaseNotes = await fetchModelReleaseNotes(targetVersion);
+    }
+
+    return { main, jp, sifigan, anyUpdateAvailable, modelReleaseNotes };
   } catch (err) {
-    return { main: null, jp: null, sifigan: null, anyUpdateAvailable: false, error: err.message };
+    return { main: null, jp: null, sifigan: null, anyUpdateAvailable: false, modelReleaseNotes: null, error: err.message };
   }
 }
 
