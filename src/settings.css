@@ -1082,3 +1082,19 @@ body {
     filter: blur(3px);
   }
 }
+
+/* ==================== Update Section ==================== */
+
+#updateResultBox > div {
+  margin-bottom: var(--space-2);
+}
+
+#updateResultBox > div:last-child {
+  margin-bottom: 0;
+}
+
+#checkUpdateBtn + #updateCheckStatus {
+  display: inline-block;
+  margin-left: var(--space-3);
+  vertical-align: middle;
+}

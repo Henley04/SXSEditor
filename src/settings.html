@@ -44,6 +44,11 @@
                 <div class="sidebar-item" data-target="section-model">
                     <span data-i18n="settings.modelManagement">模型管理</span>
                 </div>
+
+                <div class="sidebar-category" data-i18n="update.section">更新</div>
+                <div class="sidebar-item" data-target="section-update">
+                    <span data-i18n="update.section">更新</span>
+                </div>
             </div>
             <div class="sidebar-footer">
                 <span id="settings-version" class="sidebar-version">v-</span>
@@ -391,6 +396,35 @@
                 <div class="setting-group">
                     <button class="btn-open-model-download" id="openModelDownloadBtn" data-i18n="settings.openModelDownload">打开模型下载</button>
                     <p class="hint" data-i18n="settings.openModelDownloadHint">打开模型下载页面，下载或更新推理所需的模型文件。</p>
+                </div>
+            </div>
+
+            <!-- Update -->
+            <div class="settings-section hidden" id="section-update">
+                <div class="setting-group">
+                    <label for="updateChannelSelect" data-i18n="update.channel">更新频道</label>
+                    <select id="updateChannelSelect">
+                        <option value="release" data-i18n="update.channelRelease">Release（正式版）</option>
+                        <option value="nightly" data-i18n="update.channelNightly">Nightly（每构建必更新）</option>
+                    </select>
+                    <p class="hint" data-i18n="update.channelHint">选择检查更新的频道。Nightly 跟随 master 分支每次推送滚动更新；Release 为正式发布版本。</p>
+                </div>
+                <div class="setting-group">
+                    <label class="device-mode-radio">
+                        <input type="checkbox" id="autoCheckUpdates">
+                        <span class="radio-label" data-i18n="update.autoCheck">自动检查更新</span>
+                    </label>
+                    <p class="hint" data-i18n="update.autoCheckHint">启动应用时自动检查更新（每 24 小时至多一次）。</p>
+                </div>
+                <div class="setting-group">
+                    <button class="btn-open-model-download" id="checkUpdateBtn" data-i18n="update.checkNow">立即检查更新</button>
+                    <span id="updateCheckStatus" class="hint"></span>
+                </div>
+                <div class="setting-group hidden" id="updateResultGroup">
+                    <div id="updateResultBox" class="info-box"></div>
+                </div>
+                <div class="setting-group hidden" id="reEnableReminderGroup">
+                    <button class="btn-open-model-download" id="reEnableReminderBtn" data-i18n="update.reEnableReminder">重新启用更新提醒</button>
                 </div>
             </div>
 

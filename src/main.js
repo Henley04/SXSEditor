@@ -95,6 +95,7 @@ const { registerDialogIpc } = require('./main/dialogIpc');
 const { registerSettingsIpc, setCachedDMLDevices, getCachedDMLDevices, invalidateDMLDevices } = require('./main/settingsIpc');
 const { registerResourceManagerIpc } = require('./main/resourceManagerIpc');
 const { registerWebnnIpc } = require('./main/webnnIpc');
+const { registerUpdateIpc } = require('./main/updateIpc');
 const {
   createSplashWindow,
   closeSplashWindow,
@@ -325,6 +326,26 @@ app.whenReady().then(() => {
         console.warn('[Main] Device validation failed:', err.message);
       }
     })();
+
+    // Auto update check (once per 24h, packaged only)
+    (async () => {
+      try {
+        const { shouldAutoCheck, checkAllUpdates, recordCheckTime, shouldShowNotification } = require('./main/updateChecker');
+        const { openUpdateNotificationWindow } = require('./main/windowManager');
+        const isPackaged = app.isPackaged;
+        const settings = loadSettings();
+        if (!shouldAutoCheck(settings, isPackaged)) return;
+        const channel = settings.updateChannel || 'release';
+        const result = await checkAllUpdates(channel);
+        await recordCheckTime();
+        const freshSettings = loadSettings();
+        if (shouldShowNotification(result.app, result.models, freshSettings, false)) {
+          openUpdateNotificationWindow(result);
+        }
+      } catch (err) {
+        console.warn('[Main] Auto update check failed:', err.message);
+      }
+    })();
   });
 
   // GPU 硬件探测已合并到上方 did-finish-load 处理器中（应用完全启动后一次性执行并缓存复用）。
@@ -376,4 +397,5 @@ registerAudioIpc();
 registerModelDownloadIpc();
 registerResourceManagerIpc();
 registerWebnnIpc();
+registerUpdateIpc();
 registerSplashIpc();

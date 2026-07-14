@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title data-i18n="update.title">更新提示</title>
+  <script src="./themes/themeBootstrap.js"></script>
+</head>
+<body>
+  <div class="header">
+    <h1 data-i18n="update.updateAvailable">发现新版本</h1>
+  </div>
+
+  <section id="appUpdateArea" class="update-section">
+    <h2 data-i18n="update.appUpdateAreaTitle">应用本体</h2>
+    <div class="info-grid">
+      <div class="info-row">
+        <span class="info-label" data-i18n="update.currentVersion">当前版本</span>
+        <span class="info-value" id="appCurrentVersion">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label" data-i18n="update.latestVersion">最新版本</span>
+        <span class="info-value" id="appLatestVersion">-</span>
+      </div>
+      <div class="info-row">
+        <span class="info-label" data-i18n="update.publishedAt">发布时间</span>
+        <span class="info-value" id="appPublishedAt">-</span>
+      </div>
+    </div>
+    <div class="release-notes-wrapper">
+      <div class="release-notes-title" data-i18n="update.releaseNotes">更新说明</div>
+      <div class="release-notes" id="releaseNotes"></div>
+    </div>
+    <button class="btn btn-primary" id="updateNowBtn" data-i18n="update.updateNow">立即更新</button>
+  </section>
+
+  <section id="modelUpdateArea" class="update-section hidden">
+    <h2 data-i18n="update.modelUpdateAreaTitle">模型</h2>
+    <ul id="modelUpdateList" class="model-update-list"></ul>
+    <button class="btn btn-primary" id="openModelDownloadBtn" data-i18n="update.openModelDownload">打开模型下载</button>
+  </section>
+
+  <footer class="actions">
+    <button class="btn btn-secondary" id="skipVersionBtn" data-i18n="update.skipVersion">跳过本次更新</button>
+    <button class="btn btn-secondary" id="dontRemindBtn" data-i18n="update.dontRemind">不再提醒</button>
+    <button class="btn btn-primary" id="closeBtn" data-i18n="update.close">关闭</button>
+  </footer>
+
+  <div class="toast" id="toast" hidden></div>
+</body>
+</html>

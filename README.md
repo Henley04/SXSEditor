@@ -83,6 +83,7 @@ See the [Documentation](https://henley04.github.io/SXSEditor/) for full guides:
 | Vocoder Output Validation | Detects DML silent failures (all-zero/NaN waveform from VRAM exhaustion) and throws a clear OOM error instead of playing empty audio |
 | Model Auto-Download | Chunked parallel download from ModelScope |
 | Model Version Management | Fetches available tags from ModelScope /revisions API; defaults to latest (master branch, no tag); users can select a specific tag to download; branches are not shown; only one model per precision is stored (updating replaces the previous version); in-app link to model version details page |
+| Auto Update Check | Checks both app and model updates on startup (packaged builds only, 24h throttle); choose `release` or `nightly` channel in settings; app channel compares semver tag (release) or published_at timestamp vs build-info.json (nightly) via GitHub Releases API; model check reuses ModelScope version logic; on detected update an explicit notification window shows release notes and model list; supports "Skip this version" and "Don't remind me"; manual "Check now" button in Settings → Update |
 | Model Precision | FP32, FP16, INT8, INT8-NPU |
 | Themes | Hot-swappable design token system |
 | SVG Icons | Flat, theme-aware inline SVG icon system (currentColor) |
@@ -202,6 +203,7 @@ macOS / Linux 用户请从源码构建。
 | Vocoder 输出校验 | 检测 DML 静默失败（显存耗尽导致的全零/NaN 波形）并抛出明确的 OOM 错误，避免误播空声音 |
 | 模型自动下载 | 从 ModelScope 分片并行下载 |
 | 模型版本管理 | 从 ModelScope /revisions API 获取可用标签；默认下载最新版本（master 分支，不带标签）；用户可选择特定标签下载；不显示分支；同一精度只保留一个模型（更新时替换旧版本）；应用内提供模型版本详情链接 |
+| 自动检查更新 | 启动时自动检查应用与模型更新（仅打包版本，24 小时节流）；在设置中选择 `release` 或 `nightly` 频道；应用频道通过 GitHub Releases API 比较 semver 标签（release）或 published_at 时间戳与 build-info.json（nightly）；模型检查复用 ModelScope 版本逻辑；检测到更新时显式弹出通知窗口，展示更新说明与模型列表；支持「跳过本次更新」和「不再提醒」；设置 → 更新 中提供「立即检查」按钮 |
 | 模型精度 | FP32、FP16、INT8、INT8-NPU |
 | 主题系统 | 热切换设计令牌系统 |
 | SVG 图标 | 扁平化、主题感知的内联 SVG 图标系统 (currentColor) |
@@ -314,6 +316,7 @@ macOS / Linux：ソースからビルドしてください。
 | Vocoder 出力検証 | DML サイレント失敗（VRAM 枯渇による全ゼロ/NaN 波形）を検出し、空音声の誤再生を防ぐ OOM エラーをスロー |
 | モデル自動ダウンロード | ModelScope からチャンク並列ダウンロード |
 | モデルバージョン管理 | ModelScope /revisions API から利用可能なタグを取得；デフォルトは最新版（master ブランチ、タグなし）；ユーザーが特定タグを選択可能；ブランチは非表示；同一精度のモデルは1つのみ保持（更新時に旧バージョンを置換）；アプリ内にモデルバージョン詳細リンクを提供 |
+| 自動更新チェック | 起動時にアプリとモデルの更新を自動確認（パッケージ版のみ、24時間スロットル）；設定で `release` または `nightly` チャネルを選択；アプリチャネルは GitHub Releases API で semver タグ（release）または published_at タイムスタンプと build-info.json（nightly）を比較；モデル確認は ModelScope バージョンロジックを再利用；更新検出時にリリースノートとモデルリストを表示する通知ウィンドウを明示的にポップアップ；「今回の更新をスキップ」「今後通知しない」に対応；設定 → 更新 に「今すぐ確認」ボタンを提供 |
 | モデル精度 | FP32、FP16、INT8、INT8-NPU |
 | テーマ | ホットスワップ対応デザイントークンシステム |
 | SVG アイコン | フラット設計、テーマ連動インライン SVG アイコンシステム (currentColor) |

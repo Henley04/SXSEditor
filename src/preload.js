@@ -343,4 +343,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       return () => ipcRenderer.removeListener('theme:list-changed', handler);
     },
   },
+
+  // ==================== Update API ====================
+  updateAPI: {
+    checkNow: () => ipcRenderer.invoke('update:check-now'),
+    getStatus: () => ipcRenderer.invoke('update:get-status'),
+    skipVersion: (version) => ipcRenderer.invoke('update:skip-version', version),
+    dontRemind: () => ipcRenderer.invoke('update:dont-remind'),
+    openDownloadPage: (url) => ipcRenderer.invoke('update:open-download-page', url),
+    openModelDownload: () => ipcRenderer.invoke('update:open-model-download'),
+    onNotificationShow: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('update:notification-show', handler);
+      return () => ipcRenderer.removeListener('update:notification-show', handler);
+    },
+  },
 });

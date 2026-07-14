@@ -124,6 +124,14 @@ module.exports = {
                 js: './src/splashPreload.js',
               },
             },
+            {
+              html: './src/updateNotification.html',
+              js: './src/updateNotification.js',
+              name: 'update_notification_window',
+              preload: {
+                js: './src/preload.js',
+              },
+            },
           ],
         },
       },
