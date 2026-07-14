@@ -29,7 +29,7 @@
     </div>
     <div class="release-notes-wrapper">
       <div class="release-notes-title" data-i18n="update.releaseNotes">更新说明</div>
-      <div class="release-notes" id="releaseNotes"></div>
+      <div class="release-notes release-notes-structured" id="releaseNotes"></div>
     </div>
     <button class="btn btn-primary" id="updateNowBtn" data-i18n="update.updateNow">立即更新</button>
   </section>
@@ -37,6 +37,10 @@
   <section id="modelUpdateArea" class="update-section hidden">
     <h2 data-i18n="update.modelUpdateAreaTitle">模型</h2>
     <ul id="modelUpdateList" class="model-update-list"></ul>
+    <div class="release-notes-wrapper hidden" id="modelReleaseNotesWrapper">
+      <div class="release-notes-title" data-i18n="update.releaseNotes">更新说明</div>
+      <div class="release-notes release-notes-structured" id="modelReleaseNotes"></div>
+    </div>
     <button class="btn btn-primary" id="openModelDownloadBtn" data-i18n="update.openModelDownload">打开模型下载</button>
   </section>
 

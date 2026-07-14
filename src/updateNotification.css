@@ -39,6 +39,10 @@ body {
   display: none;
 }
 
+.hidden {
+  display: none !important;
+}
+
 .update-section h2 {
   font-size: var(--font-md);
   font-weight: 600;
@@ -101,6 +105,99 @@ body {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Structured release notes (from official docs site) */
+.release-notes-structured {
+  white-space: normal;
+}
+
+.release-notes-structured .rn-intro {
+  margin: 0 0 var(--space-3) 0;
+  padding: var(--space-2) var(--space-3);
+  border-left: 3px solid var(--accent);
+  background: var(--bg-panel);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  line-height: 1.5;
+}
+
+.release-notes-structured .rn-section-title {
+  font-size: var(--font-sm);
+  font-weight: 600;
+  color: var(--accent);
+  margin: var(--space-3) 0 var(--space-2) 0;
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border-default);
+}
+
+.release-notes-structured .rn-section-title:first-child {
+  margin-top: 0;
+}
+
+.release-notes-structured .rn-item-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.release-notes-structured .rn-item-list li {
+  position: relative;
+  padding-left: var(--space-4);
+  color: var(--fg-secondary);
+  font-size: var(--font-sm);
+  line-height: 1.5;
+}
+
+.release-notes-structured .rn-item-list li::before {
+  content: '';
+  position: absolute;
+  left: var(--space-1);
+  top: 0.55em;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.7;
+}
+
+.release-notes-structured strong {
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+
+.release-notes-structured code {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 0.85em;
+  padding: 1px 5px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+}
+
+.release-notes-structured kbd {
+  font-family: 'JetBrains Mono', 'Consolas', monospace;
+  font-size: 0.85em;
+  padding: 1px 5px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  color: var(--fg-primary);
+}
+
+.release-notes-structured a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.release-notes-structured a:hover {
+  text-decoration: underline;
 }
 
 .release-notes::-webkit-scrollbar {

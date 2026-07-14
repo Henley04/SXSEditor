@@ -12,6 +12,102 @@ const MODEL_LABELS = {
   sifigan: 'SiFiGAN',
 };
 
+/**
+ * Map the app locale ('en' | 'zh-CN') to the data-lang code used in the docs
+ * HTML ('en' | 'zh').
+ */
+function docsLang() {
+  return getLocale().startsWith('zh') ? 'zh' : 'en';
+}
+
+/**
+ * Escape HTML special characters in a plain string so it can be safely
+ * inserted via textContent. (We use innerHTML for structured notes because
+ * they contain trusted formatting tags like <strong>, <code>, <kbd>.)
+ */
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+/**
+ * Sanitize the inner HTML extracted from the docs site. Only a small whitelist
+ * of formatting tags is allowed; everything else is stripped. This prevents
+ * any unexpected content from the remote page being injected as raw HTML.
+ *
+ * Allowed tags: <strong>, <em>, <code>, <kbd>, <a>, <br>
+ */
+function sanitizeRichHtml(html) {
+  if (!html) return '';
+  // Decode common entities first so we can re-encode consistently
+  let out = html;
+  // Whitelist approach: replace allowed tags with placeholders, strip all
+  // other tags, then restore the placeholders.
+  const allowed = [];
+  // Capture allowed tags (opening, closing, self-closing)
+  out = out.replace(/<\/?(strong|em|code|kbd|a|br)\b[^>]*>/gi, (tag) => {
+    const idx = allowed.length;
+    allowed.push(tag);
+    return `\x00${idx}\x00`;
+  });
+  // For <a> tags, only keep href
+  for (let i = 0; i < allowed.length; i++) {
+    const tag = allowed[i];
+    if (/^<a\b/i.test(tag)) {
+      const hrefMatch = tag.match(/href="([^"]*)"/i);
+      const href = hrefMatch ? hrefMatch[1] : '#';
+      allowed[i] = `<a href="${escapeHtml(href)}" target="_blank" rel="noopener">`;
+    }
+  }
+  // Strip all remaining tags
+  out = out.replace(/<[^>]+>/g, '');
+  // Restore allowed tags
+  out = out.replace(/\x00(\d+)\x00/g, (_, idx) => allowed[Number(idx)] || '');
+  return out;
+}
+
+/**
+ * Render structured release notes (from the official docs site) as HTML.
+ * Returns an HTML string suitable for innerHTML.
+ *
+ * Structure: { sections: [{ title: {en, zh}, items: [{en, zh}, ...] }], intro: {en, zh}|null }
+ */
+function renderStructuredNotes(notes) {
+  if (!notes || !notes.sections || notes.sections.length === 0) return '';
+  const lang = docsLang();
+  const parts = [];
+
+  if (notes.intro) {
+    const introText = notes.intro[lang] || notes.intro.en || notes.intro.zh;
+    if (introText) {
+      parts.push(`<p class="rn-intro">${sanitizeRichHtml(introText)}</p>`);
+    }
+  }
+
+  for (const section of notes.sections) {
+    const title = (section.title && (section.title[lang] || section.title.en || section.title.zh)) || '';
+    if (title) {
+      parts.push(`<h4 class="rn-section-title">${escapeHtml(title)}</h4>`);
+    }
+    if (section.items && section.items.length > 0) {
+      const items = section.items
+        .map((item) => {
+          const text = item[lang] || item.en || item.zh || '';
+          return `<li>${sanitizeRichHtml(text)}</li>`;
+        })
+        .join('');
+      parts.push(`<ul class="rn-item-list">${items}</ul>`);
+    }
+  }
+
+  return parts.join('');
+}
+
 function applyTranslations() {
   // applyLocale() iterates [data-i18n] elements and sets textContent = t(key)
   applyLocale();
@@ -56,8 +152,13 @@ function renderAppArea(app) {
   document.getElementById('appLatestVersion').textContent = app.latestVersion || '-';
   document.getElementById('appPublishedAt').textContent = app.publishedAt || '-';
 
-  // Release notes come from GitHub body_html (HTML content). Use innerHTML.
-  if (typeof app.releaseNotesHtml === 'string') {
+  // Prefer structured release notes from the official docs site.
+  // Fall back to GitHub body_html when the docs site is unreachable or the
+  // version is not yet documented there.
+  const structuredHtml = renderStructuredNotes(app.appReleaseNotes);
+  if (structuredHtml) {
+    releaseNotes.innerHTML = structuredHtml;
+  } else if (typeof app.releaseNotesHtml === 'string') {
     releaseNotes.innerHTML = app.releaseNotesHtml;
   } else {
     releaseNotes.textContent = '';
@@ -67,10 +168,13 @@ function renderAppArea(app) {
 function renderModelArea(models) {
   const area = document.getElementById('modelUpdateArea');
   const list = document.getElementById('modelUpdateList');
+  const notesWrapper = document.getElementById('modelReleaseNotesWrapper');
+  const notesEl = document.getElementById('modelReleaseNotes');
 
   if (!models) {
     area.classList.add('hidden');
     list.innerHTML = '';
+    notesWrapper.classList.add('hidden');
     return;
   }
 
@@ -83,12 +187,14 @@ function renderModelArea(models) {
     li.className = 'model-error';
     li.textContent = t('update.modelCheckError');
     list.appendChild(li);
+    notesWrapper.classList.add('hidden');
     return;
   }
 
   if (!models.anyUpdateAvailable) {
     area.classList.add('hidden');
     list.innerHTML = '';
+    notesWrapper.classList.add('hidden');
     return;
   }
 
@@ -111,6 +217,16 @@ function renderModelArea(models) {
     li.appendChild(name);
     li.appendChild(version);
     list.appendChild(li);
+  }
+
+  // Render structured model release notes from the official docs site
+  const notesHtml = renderStructuredNotes(models.modelReleaseNotes);
+  if (notesHtml) {
+    notesEl.innerHTML = notesHtml;
+    notesWrapper.classList.remove('hidden');
+  } else {
+    notesEl.innerHTML = '';
+    notesWrapper.classList.add('hidden');
   }
 }
 
