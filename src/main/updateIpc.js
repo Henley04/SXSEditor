@@ -16,6 +16,14 @@ const { openUpdateNotificationWindow, getUpdateNotificationWindow } = require('.
 const MAX_REDIRECTS = 5;
 const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 min socket timeout
 const PROGRESS_THROTTLE_MS = 100;
+// Installer temp dir under os.tmpdir(). All downloaded installers land here
+// so they can be cleaned up centrally (old files are pruned on app start and
+// before each new download).
+const UPDATE_TMP_DIR = path.join(os.tmpdir(), 'sxseditor-update');
+// Leftover installers older than this are considered stale and removed on
+// app startup. 7 days is long enough for the user to retry a failed install
+// while still reclaiming disk space from forgotten downloads.
+const STALE_INSTALLER_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 let currentDownload = null; // { abortController, filePath }
 
@@ -37,6 +45,46 @@ function _sendComplete(payload) {
 function _sendError(payload) {
   const win = _getUpdateWindow();
   if (win) win.webContents.send('update:download-error', payload);
+}
+
+/**
+ * Remove leftover installer .exe files from UPDATE_TMP_DIR.
+ *
+ * - With `mode === 'all'`: removes every .exe in the dir (used right before a
+ *   new download so we don't accumulate stale installers).
+ * - With `mode === 'stale'`: removes only files older than STALE_INSTALLER_TTL_MS
+ *   (used on app startup to reclaim disk from forgotten downloads).
+ *
+ * Files currently being written or locked by the installer are skipped
+ * silently — fs.unlinkSync errors are swallowed because the OS will reap
+ * them later, and we never want cleanup to break a running download.
+ */
+function cleanupInstallerTempFiles(mode) {
+  try {
+    if (!fs.existsSync(UPDATE_TMP_DIR)) return;
+    const entries = fs.readdirSync(UPDATE_TMP_DIR);
+    const now = Date.now();
+    for (const name of entries) {
+      if (!name.toLowerCase().endsWith('.exe')) continue;
+      const filePath = path.join(UPDATE_TMP_DIR, name);
+      // Never touch the file currently being downloaded.
+      if (currentDownload && currentDownload.filePath === filePath) continue;
+      try {
+        const stat = fs.statSync(filePath);
+        if (mode === 'all') {
+          try { fs.unlinkSync(filePath); } catch (_) {}
+        } else if (mode === 'stale') {
+          if (now - stat.mtimeMs > STALE_INSTALLER_TTL_MS) {
+            try { fs.unlinkSync(filePath); } catch (_) {}
+          }
+        }
+      } catch (_) {
+        // stat failed (file vanished or locked) — skip
+      }
+    }
+  } catch (_) {
+    // readdirSync failed — temp dir inaccessible, nothing to clean
+  }
 }
 
 /**
@@ -227,16 +275,18 @@ function registerUpdateIpc() {
       return { success: false, error: 'invalid_url' };
     }
 
-    const tmpDir = path.join(os.tmpdir(), 'sxseditor-update');
     try {
-      fs.mkdirSync(tmpDir, { recursive: true });
+      fs.mkdirSync(UPDATE_TMP_DIR, { recursive: true });
     } catch (e) {
       return { success: false, error: `mkdir_failed: ${e.message}` };
     }
+    // Purge any previous installers so we don't accumulate stale .exe files
+    // across versions (the InnoSetup installer has already run for those).
+    cleanupInstallerTempFiles('all');
 
     const safeVersion = (version || 'unknown').replace(/[^A-Za-z0-9._-]/g, '_');
     const fileName = `sxsinstaller-${safeVersion}.exe`;
-    const filePath = path.join(tmpDir, fileName);
+    const filePath = path.join(UPDATE_TMP_DIR, fileName);
 
     const abortController = new AbortController();
     currentDownload = { abortController, filePath };
@@ -303,4 +353,4 @@ function registerUpdateIpc() {
   });
 }
 
-module.exports = { registerUpdateIpc };
+module.exports = { registerUpdateIpc, cleanupInstallerTempFiles };
