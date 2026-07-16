@@ -40,6 +40,9 @@ jobs:
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Fetch full history so git tags are available for version bumping
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
@@ -49,38 +52,23 @@ jobs:
       - name: Determine version and tag
         id: version
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="${GITHUB_REF##*/}"
           SHORT_SHA="${GITHUB_SHA::7}"
           DATE=$(date -u +%Y%m%d)
           if [ "$BRANCH" = "release" ]; then
-            # Tag is now the version number itself (semver X.Y.Z). Find the highest
-            # existing semver tag across all releases and bump the patch component.
-            # Falls back to package.json version on the very first release.
-            LAST_VERSION=""
-            if curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" > /tmp/releases.json 2>/dev/null; then
-              LAST_VERSION=$(node -e "
-                const fs=require('fs');
-                try {
-                  const releases = JSON.parse(fs.readFileSync('/tmp/releases.json','utf8'));
-                  const semverRe = /^\d+\.\d+\.\d+$/;
-                  const versions = releases
-                    .map(r => r.tag_name || '')
-                    .filter(t => semverRe.test(t))
-                    .map(v => v.split('.').map(Number))
-                    .sort((a,b) => a[0]-b[0] || a[1]-b[1] || a[2]-b[2]);
-                  console.log(versions.length ? versions[versions.length-1].join('.') : '');
-                } catch { console.log(''); }
-              ")
-            fi
+            # Tag is the semver X.Y.Z itself. Find the highest existing semver
+            # git tag and bump the patch component. Git tags are the source of
+            # truth (more reliable than the releases API which can be delayed,
+            # paginated, or silently fail on auth errors).
+            echo "[ci] Listing all semver tags..."
+            git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 20
+            LAST_VERSION=$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
             if [ -z "$LAST_VERSION" ]; then
               LAST_VERSION=$(node -p "require('./package.json').version")
-              echo "[ci] No previous semver release found, using package.json version: $LAST_VERSION"
+              echo "[ci] No previous semver tag found, using package.json version: $LAST_VERSION"
             else
-              echo "[ci] Last semver release tag: $LAST_VERSION"
+              echo "[ci] Last semver tag: $LAST_VERSION"
             fi
             IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_VERSION"
             NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
