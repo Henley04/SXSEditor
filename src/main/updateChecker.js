@@ -173,7 +173,7 @@ async function checkModelUpdates() {
   try {
     const modelDir = getModelDir();
     const settings = loadSettings();
-    const precision = settings.modelPrecision || 'fp16';
+    const precision = settings.modelPrecision || 'fp32';
     const [main, jp, sifigan] = await Promise.all([
       checkModelVersion(modelDir, precision),
       checkJpModelVersion(modelDir, precision),

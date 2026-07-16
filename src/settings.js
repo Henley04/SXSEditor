@@ -138,7 +138,7 @@ function applySavedSettingsToUI(currentSetting) {
     if (currentSetting.modelPrecision) {
         modelPrecisionSelect.value = currentSetting.modelPrecision;
     } else {
-        modelPrecisionSelect.value = 'fp16';
+        modelPrecisionSelect.value = 'fp32';
     }
 
     // MIDI tool

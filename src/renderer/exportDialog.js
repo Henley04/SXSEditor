@@ -66,7 +66,7 @@ export async function openExportDialog() {
 
     // 表单状态（与设置 key 一一对应）
     const form = {
-      modelPrecision: settings.modelPrecision || 'fp16',
+      modelPrecision: settings.modelPrecision || 'fp32',
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
       exportCfgRescale: settings.exportCfgRescale ?? 0.75,
@@ -549,7 +549,7 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
   }
 
   // 检测精度是否变更（用于显示提示）
-  const precisionChanged = (settings.modelPrecision || 'fp16') !== form.modelPrecision;
+  const precisionChanged = (settings.modelPrecision || 'fp32') !== form.modelPrecision;
 
   // 保存设置（触发 pipeline 重置如果精度变化）
   const settingsToSave = {
