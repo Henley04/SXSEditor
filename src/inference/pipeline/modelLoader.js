@@ -23,6 +23,7 @@ const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { classifyDevice } = require('../../utils/deviceClassifier');
 const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
+const { buildSessionOptions } = require('../shared/ortOptions');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
 
@@ -490,17 +491,18 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     const gpuTag = gpuDeviceName ? ` [${gpuDeviceName}]` : '';
 
     if (!dummyInputs) {
-        const session = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
+        const session = await ort.InferenceSession.create(modelPath,
+            buildSessionOptions({ executionProviders: ['cpu'] }));
         return { session, ep: 'cpu', warmedUp: false };
     }
 
     // NPU 静态形状模型直接创建 CPU 会话（跳过 DML 验证，NPU 模型不适合 DML）
     if (useStaticShapes) {
         // NPU 模型已离线优化（onnxsim），跳过运行时图优化以加速加载
-        const session = await ort.InferenceSession.create(modelPath, {
+        const session = await ort.InferenceSession.create(modelPath, buildSessionOptions({
             executionProviders: ['cpu'],
-            graphOptimizationLevel: 'basic',
-        });
+            graphOptimizationLevel: 'basic', // 显式 override：NPU 模型已离线优化
+        }));
         // 跳过推理验证 — NPU 模型已通过离线验证，且大模型（如 diff_step 423MB）的验证耗时过长
         console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (NPU static shapes, opt=basic)`);
         return { session, ep: 'cpu', warmedUp: false };
@@ -511,17 +513,13 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         const dmlOpts = typeof dmlDeviceId === 'number'
             ? { name: 'dml', deviceId: dmlDeviceId }
             : 'dml';
-        const sessionOptions = {
+        // ORT session 选项由 buildSessionOptions() 依据用户设置生成。
+        // 默认策略：DML 路径 enableMemPattern=false（防止 DirectML 过度预分配 GPU 内存池）；
+        // 用户可在设置中开启 ortForceMemPatternOnDml 显式启用。
+        const sessionOptions = buildSessionOptions({
             executionProviders: [dmlOpts, 'cpu'],
-            // DirectML EP 要求 disable memory pattern + sequential execution；否则 DML 可能过度预分配 GPU 内存池。
-            enableMemPattern: false,
-            executionMode: 'sequential',
-        };
-        console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify({
-            executionProviders: Array.isArray(dmlOpts) ? [dmlOpts] : ['dml', 'cpu'],
-            enableMemPattern: false,
-            executionMode: 'sequential',
-        }));
+        });
+        console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify(sessionOptions));
         dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
         console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
         await dmlSession.run(dummyInputs);
@@ -548,7 +546,8 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         try { await fs.promises.access(dmlModelPath); dmlModelExists = true; } catch (_) {}
         if (dmlModelExists) {
             try {
-                const dmlModelSession = await ort.InferenceSession.create(dmlModelPath, { executionProviders: ['cpu'] });
+                const dmlModelSession = await ort.InferenceSession.create(dmlModelPath,
+                    buildSessionOptions({ executionProviders: ['cpu'] }));
                 try {
                     await dmlModelSession.run(dummyInputs);
                 } catch (runErr) {
@@ -562,7 +561,8 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         }
     }
 
-    const cpuSession = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
+    const cpuSession = await ort.InferenceSession.create(modelPath,
+        buildSessionOptions({ executionProviders: ['cpu'] }));
     try {
         await cpuSession.run(dummyInputs);
     } catch (runErr) {

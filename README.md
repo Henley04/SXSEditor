@@ -57,6 +57,8 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 
 MIDI 导入：基于 `@tonejs/midi` 的标准 MIDI 文件解析（支持格式 0/1/2、SMPTE 时间格式、多轨）。鼓轨（channel 10）自动过滤。主页面"导入MIDI"按钮支持多轨文件——每个非鼓轨道创建一个独立歌手轨道；分片编辑器与音频预处理窗口的导入将所有非鼓轨道合并为单时间线。
 
+ORT 高级设置：设置界面新增"ORT 高级设置"区域，暴露 ONNX Runtime session 选项（enableMemPattern、enableCpuMemArena、graphOptimizationLevel、executionMode、intra/interOpNumThreads、logSeverityLevel）。默认值遵循项目经验：DML 路径下 enableMemPattern 默认关闭（防止 DirectML 过度预分配 GPU 内存池）；CPU/WASM 路径默认开启。高级选项（如强制在 DML 启用 memPattern、verbose 日志）默认折叠并标记为"高风险"。
+
 - [官网](https://henley04.github.io/SXSEditor/)
 - [用户文档](https://henley04.github.io/SXSEditor/user/quick-start.html)
 - [开发者文档](https://henley04.github.io/SXSEditor/dev/build.html)

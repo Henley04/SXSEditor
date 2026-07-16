@@ -62,6 +62,19 @@ const vocoderChunkTableBody = document.getElementById('vocoderChunkTableBody');
 const vocoderChunkTableGroup = document.getElementById('vocoderChunkTableGroup');
 const releaseDmlVramAfterSynthesisCheckbox = document.getElementById('releaseDmlVramAfterSynthesis');
 const releaseDiffStepBeforeVocoderCheckbox = document.getElementById('releaseDiffStepBeforeVocoder');
+
+// ORT advanced settings
+const ortEnableMemPatternCheckbox = document.getElementById('ortEnableMemPattern');
+const ortEnableCpuMemArenaCheckbox = document.getElementById('ortEnableCpuMemArena');
+const ortGraphOptLevelSelect = document.getElementById('ortGraphOptLevel');
+const ortExecutionModeSelect = document.getElementById('ortExecutionMode');
+const ortForceMemPatternOnDmlCheckbox = document.getElementById('ortForceMemPatternOnDml');
+const ortIntraOpNumThreadsSlider = document.getElementById('ortIntraOpNumThreads');
+const ortIntraOpNumThreadsValue = document.getElementById('ortIntraOpNumThreadsValue');
+const ortInterOpNumThreadsSlider = document.getElementById('ortInterOpNumThreads');
+const ortInterOpNumThreadsValue = document.getElementById('ortInterOpNumThreadsValue');
+const ortLogSeverityLevelSelect = document.getElementById('ortLogSeverityLevel');
+
 const updateChannelSelect = document.getElementById('updateChannelSelect');
 const autoCheckUpdatesCheckbox = document.getElementById('autoCheckUpdates');
 const checkUpdateBtn = document.getElementById('checkUpdateBtn');
@@ -185,6 +198,43 @@ function applySavedSettingsToUI(currentSetting) {
     // Vocoder 推理前释放 diffStep（默认开启，仅 DML 后端有效）
     if (releaseDiffStepBeforeVocoderCheckbox) {
         releaseDiffStepBeforeVocoderCheckbox.checked = currentSetting.releaseDiffStepBeforeVocoder !== false;
+    }
+
+    // ORT 高级设置
+    if (ortEnableMemPatternCheckbox) {
+        ortEnableMemPatternCheckbox.checked = currentSetting.ortEnableMemPattern !== false;
+    }
+    if (ortEnableCpuMemArenaCheckbox) {
+        ortEnableCpuMemArenaCheckbox.checked = currentSetting.ortEnableCpuMemArena !== false;
+    }
+    if (ortGraphOptLevelSelect) {
+        const lvl = ['disabled', 'basic', 'extended', 'all'].includes(currentSetting.ortGraphOptLevel)
+            ? currentSetting.ortGraphOptLevel : 'all';
+        ortGraphOptLevelSelect.value = lvl;
+    }
+    if (ortExecutionModeSelect) {
+        const m = currentSetting.ortExecutionMode === 'parallel' ? 'parallel' : 'sequential';
+        ortExecutionModeSelect.value = m;
+    }
+    if (ortForceMemPatternOnDmlCheckbox) {
+        ortForceMemPatternOnDmlCheckbox.checked = currentSetting.ortForceMemPatternOnDml === true;
+    }
+    if (ortIntraOpNumThreadsSlider) {
+        const v = Number.isFinite(currentSetting.ortIntraOpNumThreads) && currentSetting.ortIntraOpNumThreads > 0
+            ? Math.min(64, Math.floor(currentSetting.ortIntraOpNumThreads)) : 0;
+        ortIntraOpNumThreadsSlider.value = v;
+        if (ortIntraOpNumThreadsValue) ortIntraOpNumThreadsValue.textContent = v;
+    }
+    if (ortInterOpNumThreadsSlider) {
+        const v = Number.isFinite(currentSetting.ortInterOpNumThreads) && currentSetting.ortInterOpNumThreads > 0
+            ? Math.min(64, Math.floor(currentSetting.ortInterOpNumThreads)) : 0;
+        ortInterOpNumThreadsSlider.value = v;
+        if (ortInterOpNumThreadsValue) ortInterOpNumThreadsValue.textContent = v;
+    }
+    if (ortLogSeverityLevelSelect) {
+        const lvl = ['verbose', 'info', 'warning', 'error', 'fatal'].includes(currentSetting.ortLogSeverityLevel)
+            ? currentSetting.ortLogSeverityLevel : 'warning';
+        ortLogSeverityLevelSelect.value = lvl;
     }
 
     // Update channel & auto-check (persisted via saveSettings)
@@ -814,6 +864,15 @@ function collectSettings() {
         vocoderChunkFrames: parseInt(vocoderChunkFramesSlider.value),
         releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
         releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : true,
+        // ORT 高级设置
+        ortEnableMemPattern: ortEnableMemPatternCheckbox ? ortEnableMemPatternCheckbox.checked : true,
+        ortEnableCpuMemArena: ortEnableCpuMemArenaCheckbox ? ortEnableCpuMemArenaCheckbox.checked : true,
+        ortGraphOptLevel: ortGraphOptLevelSelect ? ortGraphOptLevelSelect.value : 'all',
+        ortExecutionMode: ortExecutionModeSelect ? ortExecutionModeSelect.value : 'sequential',
+        ortForceMemPatternOnDml: ortForceMemPatternOnDmlCheckbox ? ortForceMemPatternOnDmlCheckbox.checked : false,
+        ortIntraOpNumThreads: ortIntraOpNumThreadsSlider ? parseInt(ortIntraOpNumThreadsSlider.value) : 0,
+        ortInterOpNumThreads: ortInterOpNumThreadsSlider ? parseInt(ortInterOpNumThreadsSlider.value) : 0,
+        ortLogSeverityLevel: ortLogSeverityLevelSelect ? ortLogSeverityLevelSelect.value : 'warning',
         updateChannel: updateChannelSelect ? updateChannelSelect.value : 'release',
         autoCheckUpdates: autoCheckUpdatesCheckbox ? autoCheckUpdatesCheckbox.checked : true,
     };
@@ -1001,6 +1060,38 @@ if (releaseDmlVramAfterSynthesisCheckbox) {
 
 if (releaseDiffStepBeforeVocoderCheckbox) {
     releaseDiffStepBeforeVocoderCheckbox.addEventListener('change', () => applySettings());
+}
+
+// ORT advanced settings — 修改后需要重置 pipeline（RESET_TRIGGER_KEYS 已在 main 端处理）
+if (ortEnableMemPatternCheckbox) {
+    ortEnableMemPatternCheckbox.addEventListener('change', () => applySettings());
+}
+if (ortEnableCpuMemArenaCheckbox) {
+    ortEnableCpuMemArenaCheckbox.addEventListener('change', () => applySettings());
+}
+if (ortGraphOptLevelSelect) {
+    ortGraphOptLevelSelect.addEventListener('change', () => applySettings());
+}
+if (ortExecutionModeSelect) {
+    ortExecutionModeSelect.addEventListener('change', () => applySettings());
+}
+if (ortForceMemPatternOnDmlCheckbox) {
+    ortForceMemPatternOnDmlCheckbox.addEventListener('change', () => applySettings());
+}
+if (ortIntraOpNumThreadsSlider) {
+    ortIntraOpNumThreadsSlider.addEventListener('input', () => {
+        ortIntraOpNumThreadsValue.textContent = ortIntraOpNumThreadsSlider.value;
+        applySettingsDebounced();
+    });
+}
+if (ortInterOpNumThreadsSlider) {
+    ortInterOpNumThreadsSlider.addEventListener('input', () => {
+        ortInterOpNumThreadsValue.textContent = ortInterOpNumThreadsSlider.value;
+        applySettingsDebounced();
+    });
+}
+if (ortLogSeverityLevelSelect) {
+    ortLogSeverityLevelSelect.addEventListener('change', () => applySettings());
 }
 
 midiExtractToolSelect.addEventListener('change', () => applySettings());

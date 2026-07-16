@@ -31,6 +31,9 @@
                 <div class="sidebar-item" data-target="section-vocoder-chunk">
                     <span data-i18n="settings.vocoderChunkTitle">Vocoder 分片设置</span>
                 </div>
+                <div class="sidebar-item" data-target="section-ort">
+                    <span data-i18n="settings.ortSectionTitle">ORT 高级设置</span>
+                </div>
 
                 <div class="sidebar-category" data-i18n="settings.catAudio">音频</div>
                 <div class="sidebar-item" data-target="section-audio">
@@ -235,6 +238,102 @@
                         </table>
                     </div>
                 </div>
+            </div>
+
+            <!-- ORT Advanced Settings -->
+            <div class="settings-section hidden" id="section-ort">
+                <p class="section-desc" data-i18n="settings.ortSectionDesc">ONNX Runtime 会话选项。这些参数在模型加载时生效，修改后会自动重置推理流水线。普通用户保持默认即可，高级用户可按需调优。</p>
+                <div class="info-box ort-default-info">
+                    <strong data-i18n="settings.ortDefaultNote">默认值说明</strong>
+                    <ul>
+                        <li data-i18n="settings.ortDefaultNote1">DML（DirectML GPU）路径下 enableMemPattern 默认关闭，防止 DirectML 过度预分配 GPU 内存池导致 OOM/TDR。</li>
+                        <li data-i18n="settings.ortDefaultNote2">CPU/WASM 路径下 enableMemPattern 默认开启（ORT 官方推荐）。</li>
+                        <li data-i18n="settings.ortDefaultNote3">NPU 静态形状模型强制使用 graphOptimizationLevel='basic'（已离线优化）。</li>
+                    </ul>
+                </div>
+
+                <div class="setting-group">
+                    <label class="checkbox-label" for="ortEnableMemPattern">
+                        <input type="checkbox" id="ortEnableMemPattern">
+                        <span data-i18n="settings.ortEnableMemPattern">启用内存模式优化 (enableMemPattern)</span>
+                    </label>
+                    <p class="hint" data-i18n="settings.ortEnableMemPatternHint">分析计算图执行计划，让多个中间张量复用同一块内存，降低峰值显存并减少 malloc/free 开销。CPU 路径默认开启。DML 路径默认关闭（见下方"强制 DML 启用"）。</p>
+                </div>
+
+                <div class="setting-group">
+                    <label class="checkbox-label" for="ortEnableCpuMemArena">
+                        <input type="checkbox" id="ortEnableCpuMemArena">
+                        <span data-i18n="settings.ortEnableCpuMemArena">启用 CPU 内存池 (enableCpuMemArena)</span>
+                    </label>
+                    <p class="hint" data-i18n="settings.ortEnableCpuMemArenaHint">CPU 路径上的内存池分配器，复用已释放的内存块避免频繁分配。CPU 推理时建议开启；纯 GPU 推理时无影响。</p>
+                </div>
+
+                <div class="setting-group">
+                    <label for="ortGraphOptLevel" data-i18n="settings.ortGraphOptLevel">图优化级别 (graphOptimizationLevel)</label>
+                    <select id="ortGraphOptLevel">
+                        <option value="disabled" data-i18n="settings.ortGraphOptDisabled">禁用 (disabled)</option>
+                        <option value="basic" data-i18n="settings.ortGraphOptBasic">基础 (basic)</option>
+                        <option value="extended" data-i18n="settings.ortGraphOptExtended">扩展 (extended)</option>
+                        <option value="all" data-i18n="settings.ortGraphOptAll">全部 (all, 推荐)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.ortGraphOptLevelHint">图优化器级别。级别越高，加载时图变换越多（耗时增加），但运行时性能越好。NPU 静态形状模型固定为 basic（已离线优化）。</p>
+                </div>
+
+                <div class="setting-group">
+                    <label for="ortExecutionMode" data-i18n="settings.ortExecutionMode">执行模式 (executionMode)</label>
+                    <select id="ortExecutionMode">
+                        <option value="sequential" data-i18n="settings.ortExecSequential">顺序 (sequential, 推荐)</option>
+                        <option value="parallel" data-i18n="settings.ortExecParallel">并行 (parallel)</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.ortExecutionModeHint">顺序模式按计算图顺序执行算子，延迟低；并行模式并行执行独立算子，吞吐量高但显存占用更大。单次推理建议顺序。</p>
+                </div>
+
+                <!-- Advanced / high-risk settings — collapsed by default -->
+                <details class="ort-advanced-collapse">
+                    <summary data-i18n="settings.ortAdvancedGroup">高级与高风险选项</summary>
+                    <div class="ort-advanced-content">
+                        <div class="info-box">
+                            <strong data-i18n="settings.ortRiskWarning">⚠ 高风险警告</strong>
+                            <ul>
+                                <li data-i18n="settings.ortRiskWarning1">以下选项在不合适的配置下可能导致推理失败、显存溢出或性能退化。</li>
+                                <li data-i18n="settings.ortRiskWarning2">仅在排查问题或性能调优时修改，并务必逐项测试。</li>
+                            </ul>
+                        </div>
+
+                        <div class="setting-group setting-risk">
+                            <label class="checkbox-label" for="ortForceMemPatternOnDml">
+                                <input type="checkbox" id="ortForceMemPatternOnDml">
+                                <span class="risk-badge" data-i18n="settings.riskBadge">高风险</span>
+                                <span data-i18n="settings.ortForceMemPatternOnDml">强制在 DML 路径启用 enableMemPattern</span>
+                            </label>
+                            <p class="hint" data-i18n="settings.ortForceMemPatternOnDmlHint">在 DML（DirectML）执行提供者路径下启用 enableMemPattern。默认关闭。开启后 DirectML 可能过度预分配 GPU 内存池，触发 OOM 或 TDR 黑屏。仅在显存充裕且想测试 DML 内存复用收益时开启，并密切观察连续合成时的稳定性。</p>
+                        </div>
+
+                        <div class="setting-group setting-risk">
+                            <label for="ortIntraOpNumThreads"><span class="risk-badge" data-i18n="settings.riskBadge">高风险</span> <span data-i18n="settings.ortIntraOpNumThreads">算子内并发线程数 (intraOpNumThreads)</span> <span id="ortIntraOpNumThreadsValue" class="volume-display">0</span></label>
+                            <input type="range" id="ortIntraOpNumThreads" min="0" max="64" value="0" step="1">
+                            <p class="hint" data-i18n="settings.ortIntraOpNumThreadsHint">单个算子（如 MatMul）内部并行线程数，仅 CPU 路径有效。0=自动（由 ORT 按硬件决定）。设置过高可能引起线程竞争反而变慢；建议 ≤ 物理核心数。</p>
+                        </div>
+
+                        <div class="setting-group setting-risk">
+                            <label for="ortInterOpNumThreads"><span class="risk-badge" data-i18n="settings.riskBadge">高风险</span> <span data-i18n="settings.ortInterOpNumThreads">算子间并发线程数 (interOpNumThreads)</span> <span id="ortInterOpNumThreadsValue" class="volume-display">0</span></label>
+                            <input type="range" id="ortInterOpNumThreads" min="0" max="64" value="0" step="1">
+                            <p class="hint" data-i18n="settings.ortInterOpNumThreadsHint">独立算子之间的并行线程数，仅 CPU 路径且 executionMode=parallel 时有效。0=自动。多数模型按顺序执行收益不大，通常保持默认 0。</p>
+                        </div>
+
+                        <div class="setting-group setting-risk">
+                            <label for="ortLogSeverityLevel"><span class="risk-badge" data-i18n="settings.riskBadge">高风险</span> <span data-i18n="settings.ortLogSeverityLevel">日志级别 (logSeverityLevel)</label>
+                            <select id="ortLogSeverityLevel">
+                                <option value="verbose" data-i18n="settings.ortLogVerbose">详细 (verbose)</option>
+                                <option value="info" data-i18n="settings.ortLogInfo">信息 (info)</option>
+                                <option value="warning" data-i18n="settings.ortLogWarning">警告 (warning, 默认)</option>
+                                <option value="error" data-i18n="settings.ortLogError">错误 (error)</option>
+                                <option value="fatal" data-i18n="settings.ortLogFatal">致命 (fatal)</option>
+                            </select>
+                            <p class="hint" data-i18n="settings.ortLogSeverityLevelHint">ORT native 日志级别。verbose 会打印每步推理的详细信息，严重影响性能（大量 IO）；仅用于排查问题。默认 warning。</p>
+                        </div>
+                    </div>
+                </details>
             </div>
 
             <!-- Audio Output -->

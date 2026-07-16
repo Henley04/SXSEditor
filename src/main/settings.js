@@ -89,6 +89,55 @@ function loadSettings() {
     _settingsCache.inferenceProvider = 'ortnode';
   }
 
+  // ===== ONNX Runtime session 选项 =====
+  // 这些选项在模型加载时（InferenceSession.create）生效，修改后需要重置 pipeline。
+  // 详细说明在 settings.html 的 "ORT 高级设置" 区域。
+  // 默认值策略见 src/inference/shared/ortOptions.js。
+
+  // 是否启用内存模式优化（默认 true，ORT 官方默认值）。
+  // DML 路径会单独受 ortForceMemPatternOnDml 控制。
+  if (typeof _settingsCache.ortEnableMemPattern !== 'boolean') {
+    _settingsCache.ortEnableMemPattern = true;
+  }
+
+  // 是否在 DML 执行提供者路径上启用 enableMemPattern（默认 false，高风险项）。
+  // 原因：DML EP + memory pattern 会导致 DirectML 过度预分配 GPU 内存池，
+  // 可能引发 OOM 或 TDR。仅在显存充裕且想测试 DML 路径下内存复用收益时开启。
+  if (typeof _settingsCache.ortForceMemPatternOnDml !== 'boolean') {
+    _settingsCache.ortForceMemPatternOnDml = false;
+  }
+
+  // 是否启用 CPU 内存池分配器（默认 true）
+  if (typeof _settingsCache.ortEnableCpuMemArena !== 'boolean') {
+    _settingsCache.ortEnableCpuMemArena = true;
+  }
+
+  // 图优化级别: 'disabled' | 'basic' | 'extended' | 'all'（默认 'all'）
+  if (!['disabled', 'basic', 'extended', 'all'].includes(_settingsCache.ortGraphOptLevel)) {
+    _settingsCache.ortGraphOptLevel = 'all';
+  }
+
+  // 执行模式: 'sequential' | 'parallel'（默认 'sequential'）
+  if (_settingsCache.ortExecutionMode !== 'sequential' && _settingsCache.ortExecutionMode !== 'parallel') {
+    _settingsCache.ortExecutionMode = 'sequential';
+  }
+
+  // 算子内并发线程数（CPU 路径有效；0 = 自动，由 ORT 决定）
+  if (!Number.isFinite(_settingsCache.ortIntraOpNumThreads) || _settingsCache.ortIntraOpNumThreads < 0) {
+    _settingsCache.ortIntraOpNumThreads = 0;
+  }
+
+  // 算子间并发线程数（CPU 路径有效；0 = 自动，由 ORT 决定）
+  if (!Number.isFinite(_settingsCache.ortInterOpNumThreads) || _settingsCache.ortInterOpNumThreads < 0) {
+    _settingsCache.ortInterOpNumThreads = 0;
+  }
+
+  // 日志严重级别: 'verbose' | 'info' | 'warning' | 'error' | 'fatal'（默认 'warning'）
+  // 注意：开启 verbose 会显著影响推理性能（大量 IO），仅用于排查问题。
+  if (!['verbose', 'info', 'warning', 'error', 'fatal'].includes(_settingsCache.ortLogSeverityLevel)) {
+    _settingsCache.ortLogSeverityLevel = 'warning';
+  }
+
   // SiFiGAN 精度: 'fp32' (默认, 全精度) | 'fp16' (低质量, cos≈0.95)
   // 仅在 vocoderType === 'sifigan' 时生效，控制加载 sifigan_vocoder_dml_fp16.onnx 还是 sifigan_vocoder_dml.onnx
   if (_settingsCache.sifiganPrecision !== 'fp16' && _settingsCache.sifiganPrecision !== 'fp32') {
@@ -178,6 +227,14 @@ const ALLOWED_SETTINGS_KEYS = [
   'releaseDmlVramAfterSynthesis',
   'releaseDiffStepBeforeVocoder',
   'inferenceProvider',
+  'ortEnableMemPattern',
+  'ortForceMemPatternOnDml',
+  'ortEnableCpuMemArena',
+  'ortGraphOptLevel',
+  'ortExecutionMode',
+  'ortIntraOpNumThreads',
+  'ortInterOpNumThreads',
+  'ortLogSeverityLevel',
   'npuDiffBatchSize',
   'npuVocoderBatchSize',
   'updateChannel',
