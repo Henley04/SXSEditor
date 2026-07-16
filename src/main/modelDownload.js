@@ -5,7 +5,7 @@ const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getLatestTag } = require('../modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getLatestTag, getRemoteFileSizeByUrl } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 let downloadAbortController = null;
@@ -562,6 +562,21 @@ function registerModelDownloadIpc() {
     const win = getModelDownloadWindow();
 
     try {
+      // Fetch all remote file sizes in parallel using Range requests for
+      // accurate size detection (ModelScope CDN: HEAD returns 404, GET returns
+      // 302 redirect page size; only GET+Range returns the correct size).
+      const fileUrls = missingFiles.map(fileName => getSifiganFileDownloadUrl(fileName, currentRevision));
+      const sizeResults = await Promise.all(
+        fileUrls.map(url => url ? getRemoteFileSizeByUrl(url) : Promise.resolve(0))
+      );
+      const fileSizes = {};
+      let overallTotal = 0;
+      for (let i = 0; i < missingFiles.length; i++) {
+        fileSizes[missingFiles[i]] = sizeResults[i];
+        overallTotal += sizeResults[i];
+      }
+      let cumulativeDownloaded = 0;
+
       for (const fileName of missingFiles) {
         if (abortSignal.aborted) throw new Error('Download cancelled');
 
@@ -582,52 +597,8 @@ function registerModelDownloadIpc() {
           });
         }
 
-        // Get remote file size via HEAD request to decide chunked vs single-threaded.
-        // ModelScope redirects to CDN, so follow one redirect hop.
-        let remoteSize = 0;
-        try {
-          const https = require('node:https');
-          const http = require('node:http');
-          const { URL } = require('node:url');
-          const urlObj = new URL(url);
-          const lib = urlObj.protocol === 'https:' ? https : http;
-          remoteSize = await new Promise((resolve) => {
-            const req = lib.request({
-              hostname: urlObj.hostname,
-              port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
-              path: urlObj.pathname + urlObj.search,
-              method: 'HEAD',
-              headers: { 'User-Agent': 'Mozilla/5.0' },
-            }, (response) => {
-              if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                // Follow redirect — simplified single-hop
-                const redirectUrl = new URL(response.headers.location, url).href;
-                const redirectObj = new URL(redirectUrl);
-                const redirectLib = redirectObj.protocol === 'https:' ? https : http;
-                const redirectReq = redirectLib.request({
-                  hostname: redirectObj.hostname,
-                  port: redirectObj.port || (redirectObj.protocol === 'https:' ? 443 : 80),
-                  path: redirectObj.pathname + redirectObj.search,
-                  method: 'HEAD',
-                  headers: { 'User-Agent': 'Mozilla/5.0' },
-                }, (redirectResponse) => {
-                  const cl = parseInt(redirectResponse.headers['content-length'] || '0', 10);
-                  redirectResponse.resume();
-                  resolve(cl);
-                });
-                redirectReq.on('error', () => resolve(0));
-                redirectReq.end();
-              } else {
-                const cl = parseInt(response.headers['content-length'] || '0', 10);
-                response.resume();
-                resolve(cl);
-              }
-            });
-            req.on('error', () => resolve(0));
-            req.setTimeout(10000, () => { req.destroy(); resolve(0); });
-            req.end();
-          });
-        } catch (_) {}
+        const remoteSize = fileSizes[fileName] || 0;
+        const fileBaseDownloaded = cumulativeDownloaded;
 
         // Use chunked download for large files, single-threaded for small
         if (remoteSize >= MIN_FILE_SIZE_FOR_CHUNKING) {
@@ -641,8 +612,8 @@ function registerModelDownloadIpc() {
                   totalFiles: missingFiles.length,
                   bytesDownloaded: downloaded,
                   bytesTotal: total,
-                  overallDownloaded: downloaded,
-                  overallTotal: total,
+                  overallDownloaded: fileBaseDownloaded + downloaded,
+                  overallTotal: overallTotal,
                 });
               }
             },
@@ -658,13 +629,15 @@ function registerModelDownloadIpc() {
                   totalFiles: missingFiles.length,
                   bytesDownloaded: downloaded,
                   bytesTotal: total,
-                  overallDownloaded: downloaded,
-                  overallTotal: total,
+                  overallDownloaded: fileBaseDownloaded + downloaded,
+                  overallTotal: overallTotal,
                 });
               }
             },
           });
         }
+
+        cumulativeDownloaded += remoteSize;
 
         if (win && !win.isDestroyed()) {
           win.webContents.send('model-download:file-complete', {
