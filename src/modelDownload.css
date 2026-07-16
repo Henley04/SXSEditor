@@ -5,7 +5,7 @@ body {
   color: var(--fg-secondary);
   padding: var(--space-6) var(--space-8);
   margin: 0;
-  overflow: hidden;
+  overflow-y: auto;
   user-select: none;
   display: flex;
   flex-direction: column;
@@ -274,8 +274,6 @@ body {
 
 .file-list {
   flex: 1;
-  min-height: 0;
-  overflow-y: auto;
   margin-bottom: var(--space-6);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
