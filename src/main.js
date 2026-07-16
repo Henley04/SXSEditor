@@ -95,7 +95,7 @@ const { registerDialogIpc } = require('./main/dialogIpc');
 const { registerSettingsIpc, setCachedDMLDevices, getCachedDMLDevices, invalidateDMLDevices } = require('./main/settingsIpc');
 const { registerResourceManagerIpc } = require('./main/resourceManagerIpc');
 const { registerWebnnIpc } = require('./main/webnnIpc');
-const { registerUpdateIpc } = require('./main/updateIpc');
+const { registerUpdateIpc, cleanupInstallerTempFiles } = require('./main/updateIpc');
 const {
   createSplashWindow,
   closeSplashWindow,
@@ -170,6 +170,16 @@ app.whenReady().then(() => {
   });
 
   loadMainLocale();
+
+  // Clean up leftover installer .exe files from a previous in-app update.
+  // By the time the app launches again, the previous install flow has
+  // finished (success or cancel), so the temp installer is no longer needed.
+  // Using 'all' here reclaims disk immediately instead of waiting 7 days.
+  try {
+    cleanupInstallerTempFiles('all');
+  } catch (err) {
+    console.warn('[Main] Installer temp cleanup failed:', err.message);
+  }
 
   // Splash screen is shown only in packaged builds. In dev mode the
   // main window is shown immediately — devs don't need the splash and
