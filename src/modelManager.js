@@ -573,9 +573,9 @@ async function checkModelVersion(modelDir, precision) {
   if (hasModelFiles) {
     const isLegacy = !localVersion || !localRevision || localRevision === 'master';
     if (isLegacy) {
-      // Legacy model: always flag for update. Fetch remote tags so the UI
-      // can display the latest version (e.g. 'v2'). If remote tags cannot be
-      // fetched, the update flag stays true (legacy always needs updating).
+      // Legacy model: flag for update only when a real remote version exists.
+      // v0 or null latestVersion means no meaningful update (v0 is the
+      // initial/legacy version with the same content), so we do NOT notify.
       updateAvailable = true;
       try {
         const tags = await getModelTags(precision);
@@ -597,12 +597,21 @@ async function checkModelVersion(modelDir, precision) {
     }
   }
 
+  // v0 or null latest means no real update available — v0 is the initial
+  // version whose content is identical to legacy installs. Suppress the
+  // update flag even for legacy models to avoid false notifications.
+  const isLatestV0OrNull = !latestVersion || latestVersion === 'v0';
+  if (isLatestV0OrNull) {
+    updateAvailable = false;
+  }
+
   return {
     updateAvailable,
     localVersion,
     latestVersion,
     hasModelFiles,
     localRevision,
+    isLatestV0OrNull,
   };
 }
 
@@ -667,9 +676,8 @@ async function checkJpModelVersion(modelDir, precision) {
   if (hasModelFiles) {
     const isLegacy = !localVersion || !localRevision || localRevision === 'master';
     if (isLegacy) {
-      // Legacy JP model: always flag for update. Fetch remote tags so the UI
-      // can display the latest version. Network failures do not clear the
-      // update flag (legacy always needs updating).
+      // Legacy JP model: flag for update only when a real remote version
+      // exists. v0 or null latestVersion means no meaningful update.
       updateAvailable = true;
       try {
         const tags = await getJpModelTags(precision);
@@ -691,12 +699,20 @@ async function checkJpModelVersion(modelDir, precision) {
     }
   }
 
+  // v0 or null latest means no real update available — suppress notification
+  // even for legacy models (v0 content is identical to legacy).
+  const isLatestV0OrNull = !latestVersion || latestVersion === 'v0';
+  if (isLatestV0OrNull) {
+    updateAvailable = false;
+  }
+
   return {
     updateAvailable,
     localVersion,
     latestVersion,
     hasModelFiles,
     localRevision,
+    isLatestV0OrNull,
   };
 }
 
@@ -766,9 +782,8 @@ async function checkSifiganVersion(modelDir) {
   if (hasModelFiles) {
     const isLegacy = !localVersion || !localRevision || localRevision === 'master';
     if (isLegacy) {
-      // Legacy SiFiGAN model: always flag for update. Fetch remote tags so
-      // the UI can display the latest version. Network failures do not clear
-      // the update flag (legacy always needs updating).
+      // Legacy SiFiGAN model: flag for update only when a real remote
+      // version exists. v0 or null latestVersion means no meaningful update.
       updateAvailable = true;
       try {
         const tags = await getSifiganTags();
@@ -790,12 +805,20 @@ async function checkSifiganVersion(modelDir) {
     }
   }
 
+  // v0 or null latest means no real update available — suppress notification
+  // even for legacy models (v0 content is identical to legacy).
+  const isLatestV0OrNull = !latestVersion || latestVersion === 'v0';
+  if (isLatestV0OrNull) {
+    updateAvailable = false;
+  }
+
   return {
     updateAvailable,
     localVersion,
     latestVersion,
     hasModelFiles,
     localRevision,
+    isLatestV0OrNull,
   };
 }
 
