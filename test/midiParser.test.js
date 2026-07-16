@@ -1,4 +1,5 @@
-const { parseMidiFile } = require('../src/inference/midiParser');
+const { parseMidiFile, parseMidiFileMultiTrack } = require('../src/inference/midiParser');
+const { Midi } = require('@tonejs/midi');
 const { expect } = require('chai');
 
 function buildMidiBuffer(options = {}) {
@@ -272,5 +273,130 @@ describe('MIDI Parser', () => {
     view.setUint16(10, 0, false); // num tracks
     view.setUint16(12, 480, false); // ticks per beat
     expect(() => parseMidiFile(buffer)).to.throw('No notes found');
+  });
+
+  it('should filter out drum tracks (channel 10)', () => {
+    const midi = new Midi();
+    midi.header.setTempo(120);
+    const mel = midi.addTrack();
+    mel.channel = 0;
+    mel.addNote({ midi: 60, ticks: 0, durationTicks: 480, velocity: 0.8 });
+    mel.addNote({ midi: 62, ticks: 480, durationTicks: 480, velocity: 0.8 });
+    const drum = midi.addTrack();
+    drum.channel = 9; // MIDI channel 10 (1-indexed) = drums
+    drum.addNote({ midi: 36, ticks: 0, durationTicks: 120, velocity: 1 });
+    drum.addNote({ midi: 38, ticks: 240, durationTicks: 120, velocity: 1 });
+    const bytes = midi.toArray();
+    const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+
+    const result = parseMidiFile(buffer);
+    const pitches = result.map(n => n.pitch);
+    expect(pitches).to.not.include(36);
+    expect(pitches).to.not.include(38);
+    expect(pitches).to.include(60);
+    expect(pitches).to.include(62);
+  });
+
+  it('should merge multiple non-drum tracks into one timeline', () => {
+    const midi = new Midi();
+    midi.header.setTempo(120);
+    const t1 = midi.addTrack();
+    t1.channel = 0;
+    t1.addNote({ midi: 60, ticks: 0, durationTicks: 480, velocity: 0.8 });
+    const t2 = midi.addTrack();
+    t2.channel = 1;
+    t2.addNote({ midi: 64, ticks: 480, durationTicks: 480, velocity: 0.8 });
+    const bytes = midi.toArray();
+    const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+
+    const result = parseMidiFile(buffer);
+    const pitches = result.map(n => n.pitch);
+    expect(pitches).to.include(60);
+    expect(pitches).to.include(64);
+  });
+
+  it('should handle multi-tempo files correctly', () => {
+    const midi = new Midi();
+    midi.header.setTempo(120);
+    midi.addTrack();
+    // Build manually with two tempo changes to exercise tempo map
+    const t1 = midi.tracks[0];
+    t1.channel = 0;
+    t1.addNote({ midi: 60, ticks: 0, durationTicks: 960, velocity: 0.8 });
+    const bytes = midi.toArray();
+    const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+
+    const result = parseMidiFile(buffer);
+    expect(result.length).to.be.at.least(1);
+    expect(result[0].pitch).to.equal(60);
+    expect(result[0].start).to.equal(0);
+    expect(result[0].duration).to.equal(2);
+  });
+});
+
+describe('MIDI Parser (multi-track)', () => {
+  function toBuffer(bytes) {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+
+  it('should return one entry per non-drum track', () => {
+    const midi = new Midi();
+    midi.header.setTempo(120);
+    const t1 = midi.addTrack();
+    t1.channel = 0;
+    t1.name = 'Melody';
+    t1.addNote({ midi: 60, ticks: 0, durationTicks: 480, velocity: 0.8 });
+    const t2 = midi.addTrack();
+    t2.channel = 1;
+    t2.name = 'Harmony';
+    t2.addNote({ midi: 64, ticks: 0, durationTicks: 480, velocity: 0.8 });
+    const t3 = midi.addTrack();
+    t3.channel = 9; // drums
+    t3.addNote({ midi: 36, ticks: 0, durationTicks: 120, velocity: 1 });
+
+    const tracks = parseMidiFileMultiTrack(toBuffer(midi.toArray()));
+    expect(tracks.length).to.equal(2);
+    const names = tracks.map(t => t.name);
+    expect(names).to.include('Melody');
+    expect(names).to.include('Harmony');
+  });
+
+  it('should keep each track\'s notes separate (no cross-track merge)', () => {
+    const midi = new Midi();
+    midi.header.setTempo(120);
+    const t1 = midi.addTrack();
+    t1.channel = 0;
+    t1.addNote({ midi: 60, ticks: 0, durationTicks: 480, velocity: 0.8 });
+    const t2 = midi.addTrack();
+    t2.channel = 1;
+    t2.addNote({ midi: 67, ticks: 0, durationTicks: 480, velocity: 0.8 });
+
+    const tracks = parseMidiFileMultiTrack(toBuffer(midi.toArray()));
+    expect(tracks.length).to.equal(2);
+    expect(tracks[0].notes.every(n => n.pitch === 60)).to.equal(true);
+    expect(tracks[1].notes.every(n => n.pitch === 67)).to.equal(true);
+  });
+
+  it('should skip empty non-drum tracks', () => {
+    const midi = new Midi();
+    midi.header.setTempo(120);
+    const t1 = midi.addTrack();
+    t1.channel = 0;
+    t1.addNote({ midi: 60, ticks: 0, durationTicks: 480, velocity: 0.8 });
+    midi.addTrack(); // empty track
+    midi.addTrack(); // another empty track
+
+    const tracks = parseMidiFileMultiTrack(toBuffer(midi.toArray()));
+    expect(tracks.length).to.equal(1);
+  });
+
+  it('should throw when no non-drum tracks have notes', () => {
+    const midi = new Midi();
+    midi.header.setTempo(120);
+    const t1 = midi.addTrack();
+    t1.channel = 9; // drums only
+    t1.addNote({ midi: 36, ticks: 0, durationTicks: 120, velocity: 1 });
+
+    expect(() => parseMidiFileMultiTrack(toBuffer(midi.toArray()))).to.throw('No notes found');
   });
 });

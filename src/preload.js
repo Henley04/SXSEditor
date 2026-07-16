@@ -101,6 +101,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   extractMidiRosvot: (data) => ipcRenderer.invoke('extractMidi:rosvot', data),
   extractF0BasicPitch: (data) => ipcRenderer.invoke('extractF0:basicPitch', data),
   importMidi: () => ipcRenderer.invoke('midi:import'),
+  importMidiMultiTrack: () => ipcRenderer.invoke('midi:importMultiTrack'),
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),
   getDirName: (filePath) => ipcRenderer.invoke('getDirName', filePath),
   showItemInFolder: (filePath) => ipcRenderer.invoke('shell:showItemInFolder', filePath),

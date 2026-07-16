@@ -236,3 +236,74 @@ export async function handleAudioToMidi() {
     showAlertDialog(t('main.audioToMidiFailed') + ': ' + err.message);
   }
 }
+
+/**
+ * Import a standard MIDI file. Multi-track files create one singer track per
+ * non-drum MIDI track (behavior mirrors handleAudioToMidi). Each singer gets
+ * a single fragment spanning all of that track's notes.
+ */
+export async function handleImportMidi() {
+  try {
+    const result = await window.electronAPI.importMidiMultiTrack();
+    if (!result.success) {
+      if (!result.canceled) {
+        showAlertDialog(t('main.midiImportFailed') + ': ' + (result.error || t('main.audioToMidiFailed')));
+      }
+      return;
+    }
+
+    const tracks = result.tracks || [];
+    if (tracks.length === 0) {
+      showAlertDialog(t('main.midiImportFailed') + ': no notes found');
+      return;
+    }
+
+    const createdSingers = [];
+    for (const track of tracks) {
+      const notes = track.notes.map((n, i) => ({
+        id: n.id ?? (Date.now() + i),
+        pitch: n.pitch ?? 60,
+        start: n.start ?? 0,
+        duration: n.duration ?? 0.25,
+        lyric: n.lyric || 'la',
+        noteType: n.noteType,
+      }));
+
+      const lastNote = notes[notes.length - 1];
+      const totalBeats = lastNote.start + lastNote.duration;
+      const duration = Math.max(4, Math.ceil(totalBeats));
+
+      const trackName = track.name || t('main.midiImportTrackName');
+
+      const singer = trackManager.addSinger({
+        trackName,
+        singerName: trackName,
+        singerFileMissing: true,
+      });
+
+      trackManager.addFragment({
+        singerId: singer.id,
+        startTime: 0,
+        duration,
+        notes,
+      });
+
+      createdSingers.push(singer);
+    }
+
+    if (createdSingers.length > 0) {
+      state.selectedSingerId = createdSingers[0].id;
+    }
+
+    refreshAll();
+    markDirty();
+
+    const msg = createdSingers.length === 1
+      ? t('main.midiImportCompleteSingle')
+      : t('main.midiImportCompleteMulti').replace('{count}', createdSingers.length);
+    showAlertDialog(msg);
+  } catch (err) {
+    console.error('MIDI import process error:', err);
+    showAlertDialog(t('main.midiImportFailed') + ': ' + err.message);
+  }
+}

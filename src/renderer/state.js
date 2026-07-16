@@ -52,6 +52,7 @@ export const dom = {
   btnLoad: document.getElementById('btn-load'),
   btnExport: document.getElementById('btn-export'),
   btnAudioToMidi: document.getElementById('btn-audio-to-midi'),
+  btnImportMidi: document.getElementById('btn-import-midi'),
   btnAddSinger: document.getElementById('btn-add-singer'),
   singerListEl: document.getElementById('singer-list'),
   fragmentCanvas: document.getElementById('fragment-canvas'),
