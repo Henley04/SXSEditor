@@ -63,15 +63,18 @@ export async function runDiffusionLoop({
     const cfgCondBuf = new Float32Array(diffBatch * diffSeqLen * COND_DIM);
     const cfgMaskBuf = new Float32Array(diffBatch * diffSeqLen);
     // Rows 0,2,4,... mask = all ones (conditional)
-    // Rows 1,3,5,... mask = zeros for prompt, ones for target (unconditional)
+    // Rows 1,3,5,... mask = all ones for target, zeros for padding (unconditional)
     for (let r = 0; r < diffBatch; r++) {
         const rowOff = r * diffSeqLen;
         if (r % 2 === 0) {
             // conditional: all ones
             cfgMaskBuf.fill(1, rowOff, rowOff + totalFramesWithPrompt);
         } else {
-            // unconditional: zeros for prompt, ones for target
-            cfgMaskBuf.fill(1, rowOff + ptFrameCount, rowOff + totalFramesWithPrompt);
+            // unconditional: all ones for target (positions 0..totalFrames-1),
+            // zeros for padding (positions totalFrames..diffSeqLen-1).
+            // Aligns with DML path and official reverse_diffusion which use
+            // target_len as the unconditional seq_len.
+            cfgMaskBuf.fill(1, rowOff, rowOff + totalFrames);
         }
     }
     // Cond rows: even rows = combinedCond, odd rows = zeros (unconditional)
@@ -137,9 +140,11 @@ export async function runDiffusionLoop({
                 if (r % 2 === 0) {
                     cfgBatchBuf.set(xtInputBuf, rowOff);
                 } else {
+                    // unconditional: xt at position 0 (no prompt offset),
+                    // matching DML path and official reverse_diffusion
                     for (let f = 0; f < totalFrames; f++) {
                         for (let d = 0; d < MEL_DIM; d++) {
-                            cfgBatchBuf[rowOff + (ptFrameCount + f) * MEL_DIM + d] = xt.data[f * MEL_DIM + d];
+                            cfgBatchBuf[rowOff + f * MEL_DIM + d] = xt.data[f * MEL_DIM + d];
                         }
                     }
                 }
@@ -174,7 +179,7 @@ export async function runDiffusionLoop({
             let posSum = 0, cfgAdjSum = 0;
             for (let f = 0; f < totalFrames; f++) {
                 const condSrc = (ptFrameCount + f) * MEL_DIM;
-                const uncondSrc = (diffSeqLen + ptFrameCount + f) * MEL_DIM;
+                const uncondSrc = (diffSeqLen + f) * MEL_DIM;
                 const flatBase = f * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
                     const condVal = batchPredSafe[condSrc + d];
@@ -199,10 +204,10 @@ export async function runDiffusionLoop({
                 const cd = cfgPredBuf[i] - cfgAdjMean;
                 cfgAdjVarSum += cd * cd;
             }
-            // CFG rescale epsilon 公式与 DML 路径 (pipeline/diffusion.js:145-147) 及
-            // WebNN 批量路径 (本文件 :440-442) 保持一致：方差内加 epsilon 再开方，外层除以 (std+epsilon)。
-            const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
-            const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
+            // 对齐官方 PyTorch torch.std() (unbiased, N-1) 和 DML 路径：
+            // 分母用 N-1（贝塞尔修正），epsilon 仅在分母除零保护（不在 sqrt 内）。
+            const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
+            const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
             const rescale = posStd / (cfgAdjStd + 1e-8);
             for (let i = 0; i < targetLen; i++) {
                 const cfgVal = cfgPredBuf[i];
@@ -345,7 +350,7 @@ export async function runBatchDiffusionLoop({
 
         cfgCondBuf.set(s.combinedCond, condOff);
         cfgMaskBuf.fill(1, maskCondOff, maskCondOff + s.totalFramesWithPrompt);
-        cfgMaskBuf.fill(1, maskUncondOff + s.ptFrameCount, maskUncondOff + s.totalFramesWithPrompt);
+        cfgMaskBuf.fill(1, maskUncondOff, maskUncondOff + s.totalFrames);
 
         if (s.ptMelData) {
             const copyLen = s.ptFrameCount * MEL_DIM;
@@ -403,9 +408,11 @@ export async function runBatchDiffusionLoop({
                 }
             }
             cfgBatchBuf.set(xtInputBuf, condRowOff);
+            // unconditional: xt at position 0 (no prompt offset),
+            // matching DML path and official reverse_diffusion
             for (let f = 0; f < s.totalFrames; f++) {
                 for (let d = 0; d < MEL_DIM; d++) {
-                    cfgBatchBuf[uncondRowOff + (s.ptFrameCount + f) * MEL_DIM + d] = xt[f * MEL_DIM + d];
+                    cfgBatchBuf[uncondRowOff + f * MEL_DIM + d] = xt[f * MEL_DIM + d];
                 }
             }
         }
@@ -445,7 +452,7 @@ export async function runBatchDiffusionLoop({
             let posSum = 0, cfgAdjSum = 0;
             for (let f = 0; f < s.totalFrames; f++) {
                 const condSrc = condRowOff + (s.ptFrameCount + f) * MEL_DIM;
-                const uncondSrc = uncondRowOff + (s.ptFrameCount + f) * MEL_DIM;
+                const uncondSrc = uncondRowOff + f * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
                     const condVal = batchPredSafe[condSrc + d];
                     const uncondVal = batchPredSafe[uncondSrc + d];
@@ -467,8 +474,8 @@ export async function runBatchDiffusionLoop({
                     cfgAdjVarSum += cd * cd;
                 }
             }
-            const posStd = Math.sqrt(posVarSum / targetLen + 1e-8);
-            const cfgAdjStd = Math.sqrt(cfgAdjVarSum / targetLen + 1e-8);
+            const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
+            const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
             const rescale = posStd / (cfgAdjStd + 1e-8);
 
             for (let f = 0; f < s.totalFrames; f++) {

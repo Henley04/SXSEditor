@@ -1,5 +1,102 @@
 /* Shared component styles — imported via common.css */
 
+/* ==================== 0. Motion Keyframes ==================== */
+
+@keyframes button-hover-glow {
+  0% { box-shadow: 0 0 0 0 transparent; }
+  100% { box-shadow: 0 0 12px 2px var(--accent-glow); }
+}
+
+@keyframes button-press {
+  0% { transform: scale(1); }
+  50% { transform: scale(0.96); }
+  100% { transform: scale(1); }
+}
+
+@keyframes window-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes overlay-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes overlay-fade-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes dialog-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+    filter: blur(3px);
+  }
+}
+
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+
+@keyframes toast-exit {
+  from {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-50%) translateY(-8px);
+  }
+}
+
+@keyframes shimmer {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+
+@keyframes loading-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 /* ==================== 1. Toolbar ==================== */
 
 #toolbar {
@@ -56,21 +153,30 @@
   font-size: var(--font-base);
   transition: all var(--motion-fast) ease;
   white-space: nowrap;
+  position: relative;
+  overflow: hidden;
 }
 
 #toolbar button:hover {
   background: var(--bg-button-hover);
   color: var(--fg-primary);
   border-color: var(--accent);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px var(--accent-soft);
 }
 
 #toolbar button:active {
   background: var(--bg-button-active);
+  transform: translateY(0) scale(0.97);
+  box-shadow: none;
+  transition-duration: 0.06s;
 }
 
 #toolbar button:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }
 
 #toolbar button.btn-primary,
@@ -78,6 +184,16 @@
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
   border-color: var(--accent-pressed);
+}
+
+#toolbar button.btn-primary:hover {
+  background: var(--bg-button-primary-hover);
+  box-shadow: 0 2px 12px var(--accent-glow);
+}
+
+#toolbar button.btn-primary:active {
+  transform: translateY(0) scale(0.97);
+  box-shadow: 0 0 6px var(--accent-soft);
 }
 
 #toolbar button.btn-success {
@@ -88,6 +204,7 @@
 
 #toolbar button.btn-success:hover {
   background: var(--bg-button-success-hover);
+  box-shadow: 0 2px 12px var(--success-glow);
 }
 
 #toolbar button.btn-danger {
@@ -98,6 +215,7 @@
 
 #toolbar button.btn-danger:hover {
   background: var(--bg-button-danger-hover);
+  box-shadow: 0 2px 12px var(--danger-glow);
 }
 
 #toolbar input[type="number"] {
@@ -131,7 +249,7 @@
 .loading-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(10, 10, 20, 0.85);
+  background: var(--overlay-scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -139,6 +257,8 @@
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--motion-slow) ease;
+  backdrop-filter: blur(4px);
+  animation: overlay-fade-in var(--motion-slow) ease;
 }
 
 .loading-overlay.visible {
@@ -151,6 +271,7 @@
   flex-direction: column;
   align-items: center;
   gap: var(--space-6);
+  animation: dialog-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .loading-spinner {
@@ -166,6 +287,7 @@
   color: var(--fg-primary);
   font-size: var(--font-lg);
   font-weight: 500;
+  animation: loading-pulse 1.5s ease-in-out infinite;
 }
 
 /* ==================== 3. Modal ==================== */
@@ -173,22 +295,26 @@
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(10, 10, 20, 0.85);
+  background: var(--overlay-scrim);
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 10000;
+  animation: overlay-fade-in var(--motion-base) ease;
+  backdrop-filter: blur(4px);
 }
 
 .modal-dialog {
   background: var(--bg-panel);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
+  clip-path: var(--clip-panel, none);
   padding: var(--space-8);
   max-width: 90vw;
   max-height: 90vh;
   overflow-y: auto;
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-xl), 0 0 40px var(--accent-softer);
+  animation: dialog-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .modal-title {
@@ -221,7 +347,7 @@
   font-size: var(--font-base);
   z-index: 10000;
   max-width: 80%;
-  transition: opacity var(--motion-base);
+  animation: toast-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .toast-success {
@@ -250,6 +376,12 @@
   font-size: var(--font-base);
   line-height: 1.6;
   margin-top: 10px;
+  transition: border-color var(--motion-base), box-shadow var(--motion-base);
+}
+
+.info-box:hover {
+  border-left-color: var(--accent-hover);
+  box-shadow: 0 4px 16px var(--accent-softer);
 }
 
 .info-box strong {
@@ -293,7 +425,7 @@
   border-radius: var(--radius-md);
   color: var(--fg-primary);
   font-size: var(--font-md);
-  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast);
 }
 
 .form-group input[type="text"]:focus {
@@ -315,13 +447,24 @@
   color: var(--fg-muted);
   border: 1px solid var(--button-secondary-border);
   border-radius: var(--radius-md);
+  clip-path: var(--clip-button, none);
   cursor: pointer;
   transition: all var(--motion-fast) ease;
+  position: relative;
+  overflow: hidden;
 }
 
 .btn-small:hover {
   background: var(--bg-button-hover);
   color: var(--fg-primary);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 6px var(--shadow-color);
+}
+
+.btn-small:active {
+  transform: translateY(0) scale(0.97);
+  box-shadow: none;
+  transition-duration: 0.06s;
 }
 
 .btn-small.btn-danger {
@@ -332,6 +475,7 @@
 
 .btn-small.btn-danger:hover {
   background: var(--bg-button-danger-hover);
+  box-shadow: 0 2px 8px var(--danger-glow);
 }
 
 .btn-small.btn-primary {
@@ -345,9 +489,18 @@
 
 .btn-small.btn-primary:hover {
   background: var(--bg-button-primary-hover);
+  box-shadow: 0 2px 12px var(--accent-glow);
+  transform: translateY(-1px);
+}
+
+.btn-small.btn-primary:active {
+  transform: translateY(0) scale(0.97);
+  box-shadow: 0 0 6px var(--accent-soft);
 }
 
 .btn-small:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
 }

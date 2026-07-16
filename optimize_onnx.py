@@ -3,13 +3,20 @@
 
 输出结构：
   onnx_models/int8/  - INT8 动态量化模型
-  onnx_models/fp16/  - FP16 转换模型
+  onnx_models/fp16/  - FP16 转换模型 (W16A32 混合精度)
 
 非 ONNX 模型（如 TensorFlow basic_pitch_model）按原结构复制到两个输出文件夹中。
 
 优化流程：
   INT8: 清除形状信息 -> onnxruntime 动态量化 (QInt8)
-  FP16: Olive 量化预处理 -> 窥孔优化 -> FP16 转换
+  FP16: Olive 量化预处理 -> 窥孔优化 -> FP16 转换 (op_block_list 保持敏感算子 FP32)
+
+W16A32 混合精度策略：
+  - MatMul/Conv/Gemm: 权重 FP16，激活 FP16 (省显存+加速)
+  - Softmax/LayerNorm/ReduceMean/Pow/Sqrt/Reciprocal: FP32 (数值稳定性)
+  - Exp/Cos/Sin: FP32 (ISTFT 重建头 + RoPE)
+  - Erf/Sigmoid/Tanh: FP32 (饱和激活函数)
+  - 端到端 FP16 vs FP32 SNR 从 17.47 dB 提升到接近 30+ dB
 """
 
 import os
@@ -40,6 +47,41 @@ SKIP_NAMES = {"int8", "fp16", "README.md", "_olive_work", "_test_work", "_test_i
 
 # 需要原样复制的非ONNX文件夹
 NON_ONNX_DIRS = ["basic_pitch_model"]
+
+# W16A32 混合精度: 敏感算子保持 FP32，MatMul/Conv/Gemm 保持 FP16
+# 这些算子在 FP16 下精度损失大或数值不稳定:
+# - Softmax: attention 概率计算，exp 累积误差
+# - LayerNormalization: 归一化，方差计算不稳
+# - ReduceMean/Pow/Sqrt/Reciprocal: LayerNorm 内部计算
+# - Exp/Cos/Sin: ISTFT 重建头 (mag=exp(x)) + RoPE rotary embedding
+# - Erf: GELU 激活函数
+# - Sigmoid/Tanh: 饱和激活函数，FP16 下边界精度损失
+OP_BLOCK_LIST = [
+    'Softmax',
+    'LayerNormalization',
+    'ReduceMean',
+    'Pow',
+    'Sqrt',
+    'Reciprocal',
+    'Exp',
+    'Cos',
+    'Sin',
+    'Erf',
+    'Sigmoid',
+    'Tanh',
+]
+
+# Per-model op_block_list 覆盖
+# diffStep (DiffLlama) 用 LayerNorm 实现 (ReduceMean+Pow+Sqrt+Reciprocal)，
+# 全部 block 会产生 336 个 Cast 节点，FP32→FP16 截断累积误差反而恶化精度。
+# 实测：diffStep 用 W16A32 (336 Cast) SNR=11.49 dB < W16A16 SNR=17.84 dB。
+# 因此 diffStep 保持 W16A16 (空 block_list)，只 block Softmax 减少量化误差。
+# vocoder (Vocos) 用原生 LayerNormalization op，block 后 Cast 少，精度改善明显
+# (SNR 19.09 → 26.75 dB)。
+PER_MODEL_OP_BLOCK_LIST = {
+    'diff_step_dml.onnx': ['Softmax'],  # 只 block Softmax，避免 LayerNorm 实现的 Cast 风暴
+    'vocoder_dml.onnx': OP_BLOCK_LIST,  # 全量 block，vocoder 受益明显
+}
 
 # CPU 加速器规格
 ACCEL_SPEC = AcceleratorSpec(accelerator_type="cpu", execution_provider="CPUExecutionProvider")
@@ -123,40 +165,50 @@ def optimize_model_int8(input_path: Path, output_path: Path, work_dir: Path):
 
 
 def optimize_model_fp16(input_path: Path, output_path: Path, work_dir: Path):
-    """对单个模型执行 FP16 转换优化。"""
-    logger.info(f"[FP16] Start processing: {input_path.name}")
+    """对单个模型执行 FP16 转换优化 (W16A32 混合精度)."""
+    model_name = input_path.name
+    logger.info(f"[FP16] Start processing: {model_name}")
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # 选择 per-model op_block_list
+    op_block_list = PER_MODEL_OP_BLOCK_LIST.get(model_name, OP_BLOCK_LIST)
 
     model = ONNXModelHandler(model_path=input_path)
 
     # 步骤1: 量化预处理
-    logger.info(f"[FP16] Step 1: Quantization preprocessing - {input_path.name}")
+    logger.info(f"[FP16] Step 1: Quantization preprocessing - {model_name}")
     preprocess_dir = str(work_dir / "preprocessed")
     preprocess_config = OnnxQuantizationPreprocess.generate_config(
         ACCEL_SPEC, {"skip_symbolic_shape": True}
     )
     preprocess_pass = OnnxQuantizationPreprocess(ACCEL_SPEC, preprocess_config)
     model = preprocess_pass.run(model, preprocess_dir)
-    logger.info(f"[FP16] Preprocessing completed: {input_path.name}")
+    logger.info(f"[FP16] Preprocessing completed: {model_name}")
 
     # 步骤2: 窥孔优化
-    logger.info(f"[FP16] Step 2: Peephole optimization - {input_path.name}")
+    logger.info(f"[FP16] Step 2: Peephole optimization - {model_name}")
     peephole_dir = str(work_dir / "peephole")
     peephole_config = OnnxPeepholeOptimizer.generate_config(ACCEL_SPEC)
     peephole_pass = OnnxPeepholeOptimizer(ACCEL_SPEC, peephole_config)
     model = peephole_pass.run(model, peephole_dir)
-    logger.info(f"[FP16] Peephole optimization completed: {input_path.name}")
+    logger.info(f"[FP16] Peephole optimization completed: {model_name}")
 
-    # 步骤3: FP16 转换
-    logger.info(f"[FP16] Step 3: FP16 conversion - {input_path.name}")
+    # 步骤3: FP16 转换 (W16A32: 敏感算子保持 FP32 via op_block_list)
+    logger.info(f"[FP16] Step 3: FP16 conversion (op_block_list={op_block_list}) - {model_name}")
     fp16_dir = str(work_dir / "fp16")
-    fp16_config = OnnxFloatToFloat16.generate_config(ACCEL_SPEC)
+    fp16_config = OnnxFloatToFloat16.generate_config(
+        ACCEL_SPEC,
+        {
+            "op_block_list": op_block_list,
+            "keep_io_types": True,
+        },
+    )
     fp16_pass = OnnxFloatToFloat16(ACCEL_SPEC, fp16_config)
     model = fp16_pass.run(model, fp16_dir)
 
     # 复制最终输出到目标位置
     _copy_model_output(model, output_path)
-    logger.info(f"[FP16] Completed: {input_path.name} -> {output_path}")
+    logger.info(f"[FP16] Completed: {model_name} -> {output_path}")
 
 
 def _copy_model_output(model: ONNXModelHandler, output_path: Path):
@@ -189,8 +241,18 @@ def copy_non_onnx_files(src_dir: Path, dst_dir: Path):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="Olive ONNX optimization (INT8 + W16A32 FP16)")
+    parser.add_argument('--models', nargs='+', default=None,
+                        help='只处理指定模型文件名（如 diff_step_dml.onnx vocoder_dml.onnx）')
+    parser.add_argument('--fp16-only', action='store_true',
+                        help='只执行 FP16 转换，跳过 INT8')
+    parser.add_argument('--int8-only', action='store_true',
+                        help='只执行 INT8 量化，跳过 FP16')
+    args = parser.parse_args()
+
     logger.info("=" * 60)
-    logger.info("Olive ONNX model optimization tool")
+    logger.info("Olive ONNX model optimization tool (W16A32 mixed precision)")
     logger.info("=" * 60)
 
     # 创建输出目录
@@ -205,6 +267,12 @@ def main():
     onnx_models = find_onnx_models(BASE_DIR)
     onnx_data_files = find_onnx_data_files(BASE_DIR)
 
+    # 按 --models 过滤
+    if args.models:
+        model_set = set(args.models)
+        onnx_models = [(p, r) for p, r in onnx_models if Path(r).name in model_set]
+        logger.info(f"Filtered to {len(onnx_models)} models: {[r for _, r in onnx_models]}")
+
     logger.info(f"Found {len(onnx_models)} ONNX model files")
     logger.info(f"Found {len(onnx_data_files)} external data files")
 
@@ -216,73 +284,77 @@ def main():
         logger.info(f"  - {rel_path} ({size_mb:.1f} MB)")
 
     # 复制非ONNX文件到两个输出目录
-    logger.info("\n--- Copying non-ONNX files ---")
-    copy_non_onnx_files(BASE_DIR, INT8_DIR)
-    copy_non_onnx_files(BASE_DIR, FP16_DIR)
+    if not args.fp16_only and not args.int8_only:
+        logger.info("\n--- Copying non-ONNX files ---")
+        copy_non_onnx_files(BASE_DIR, INT8_DIR)
+        copy_non_onnx_files(BASE_DIR, FP16_DIR)
 
     # 复制 README 文件
-    for readme in BASE_DIR.glob("README.md"):
-        shutil.copy2(readme, INT8_DIR / "README.md")
-        shutil.copy2(readme, FP16_DIR / "README.md")
-    for readme in (BASE_DIR / "preprocess").glob("README.md"):
-        (INT8_DIR / "preprocess").mkdir(parents=True, exist_ok=True)
-        (FP16_DIR / "preprocess").mkdir(parents=True, exist_ok=True)
-        shutil.copy2(readme, INT8_DIR / "preprocess" / "README.md")
-        shutil.copy2(readme, FP16_DIR / "preprocess" / "README.md")
+    if not args.fp16_only and not args.int8_only:
+        for readme in BASE_DIR.glob("README.md"):
+            shutil.copy2(readme, INT8_DIR / "README.md")
+            shutil.copy2(readme, FP16_DIR / "README.md")
+        for readme in (BASE_DIR / "preprocess").glob("README.md"):
+            (INT8_DIR / "preprocess").mkdir(parents=True, exist_ok=True)
+            (FP16_DIR / "preprocess").mkdir(parents=True, exist_ok=True)
+            shutil.copy2(readme, INT8_DIR / "preprocess" / "README.md")
+            shutil.copy2(readme, FP16_DIR / "preprocess" / "README.md")
 
     # INT8 量化
-    logger.info("\n" + "=" * 60)
-    logger.info("Starting INT8 dynamic quantization")
-    logger.info("=" * 60)
+    if not args.fp16_only:
+        logger.info("\n" + "=" * 60)
+        logger.info("Starting INT8 dynamic quantization")
+        logger.info("=" * 60)
 
-    for i, (full_path, rel_path) in enumerate(onnx_models, 1):
-        logger.info(f"\n[{i}/{len(onnx_models)}] INT8: {rel_path}")
-        output_path = INT8_DIR / rel_path
-        model_work_dir = work_dir / "int8" / Path(rel_path).stem
-        model_work_dir.mkdir(parents=True, exist_ok=True)
+        for i, (full_path, rel_path) in enumerate(onnx_models, 1):
+            logger.info(f"\n[{i}/{len(onnx_models)}] INT8: {rel_path}")
+            output_path = INT8_DIR / rel_path
+            model_work_dir = work_dir / "int8" / Path(rel_path).stem
+            model_work_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            optimize_model_int8(full_path, output_path, model_work_dir)
-        except Exception as e:
-            logger.error(f"[INT8] Failed: {rel_path} - {e}", exc_info=True)
-            # 失败时复制原始文件作为回退
-            shutil.copy2(full_path, output_path)
-            data_file = full_path.with_suffix(".onnx.data")
-            if data_file.exists():
-                shutil.copy2(data_file, output_path.with_suffix(".onnx.data"))
-            logger.warning(f"[INT8] Fallback: copied original file {rel_path}")
+            try:
+                optimize_model_int8(full_path, output_path, model_work_dir)
+            except Exception as e:
+                logger.error(f"[INT8] Failed: {rel_path} - {e}", exc_info=True)
+                # 失败时复制原始文件作为回退
+                shutil.copy2(full_path, output_path)
+                data_file = full_path.with_suffix(".onnx.data")
+                if data_file.exists():
+                    shutil.copy2(data_file, output_path.with_suffix(".onnx.data"))
+                logger.warning(f"[INT8] Fallback: copied original file {rel_path}")
 
-    # FP16 转换
-    logger.info("\n" + "=" * 60)
-    logger.info("Starting FP16 conversion")
-    logger.info("=" * 60)
+    # FP16 转换 (W16A32)
+    if not args.int8_only:
+        logger.info("\n" + "=" * 60)
+        logger.info("Starting FP16 conversion (W16A32 mixed precision)")
+        logger.info(f"op_block_list: {OP_BLOCK_LIST}")
+        logger.info("=" * 60)
 
-    for i, (full_path, rel_path) in enumerate(onnx_models, 1):
-        logger.info(f"\n[{i}/{len(onnx_models)}] FP16: {rel_path}")
-        output_path = FP16_DIR / rel_path
-        model_work_dir = work_dir / "fp16" / Path(rel_path).stem
-        model_work_dir.mkdir(parents=True, exist_ok=True)
+        for i, (full_path, rel_path) in enumerate(onnx_models, 1):
+            logger.info(f"\n[{i}/{len(onnx_models)}] FP16: {rel_path}")
+            output_path = FP16_DIR / rel_path
+            model_work_dir = work_dir / "fp16" / Path(rel_path).stem
+            model_work_dir.mkdir(parents=True, exist_ok=True)
 
-        try:
-            optimize_model_fp16(full_path, output_path, model_work_dir)
-        except Exception as e:
-            logger.error(f"[FP16] Failed: {rel_path} - {e}", exc_info=True)
-            # 失败时复制原始文件作为回退
-            shutil.copy2(full_path, output_path)
-            data_file = full_path.with_suffix(".onnx.data")
-            if data_file.exists():
-                shutil.copy2(data_file, output_path.with_suffix(".onnx.data"))
-            logger.warning(f"[FP16] Fallback: copied original file {rel_path}")
+            try:
+                optimize_model_fp16(full_path, output_path, model_work_dir)
+            except Exception as e:
+                logger.error(f"[FP16] Failed: {rel_path} - {e}", exc_info=True)
+                # 失败时复制原始文件作为回退
+                shutil.copy2(full_path, output_path)
+                data_file = full_path.with_suffix(".onnx.data")
+                if data_file.exists():
+                    shutil.copy2(data_file, output_path.with_suffix(".onnx.data"))
+                logger.warning(f"[FP16] Fallback: copied original file {rel_path}")
 
-    # 复制 .onnx.data 文件到输出目录（如果量化后模型仍需要）
-    logger.info("\n--- Checking external data files ---")
-    for output_base, label in [(INT8_DIR, "INT8"), (FP16_DIR, "FP16")]:
+        # 复制 .onnx.data 文件到 FP16 输出目录（如果量化后模型仍需要）
+        logger.info("\n--- Checking external data files for FP16 ---")
         for src_path, rel_path in onnx_data_files:
-            dst_path = output_base / rel_path
+            dst_path = FP16_DIR / rel_path
             if not dst_path.exists():
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(src_path, dst_path)
-                logger.info(f"[{label}] Copied external data: {rel_path}")
+                logger.info(f"[FP16] Copied external data: {rel_path}")
 
     # 清理临时工作目录
     logger.info("\n--- Cleaning temporary files ---")
@@ -296,6 +368,8 @@ def main():
     logger.info("=" * 60)
 
     for label, out_dir in [("INT8", INT8_DIR), ("FP16", FP16_DIR)]:
+        if not out_dir.exists():
+            continue
         total_size = sum(f.stat().st_size for f in out_dir.rglob("*") if f.is_file())
         logger.info(f"{label}: {total_size / (1024*1024):.1f} MB total ({out_dir})")
 

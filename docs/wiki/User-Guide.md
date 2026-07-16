@@ -24,6 +24,7 @@ Complete documentation of all SXSEditor features.
 18. [Themes](#themes)
 19. [Project Files](#project-files)
 20. [Keyboard Shortcuts](#keyboard-shortcuts)
+21. [Uninstall](#uninstall)
 
 ---
 
@@ -203,7 +204,7 @@ Edit operations:
 
 **Every note must have a lyric.** The preprocessing does not detect lyrics from audio. You must manually type them:
 
-- For **Chinese singing**: Enter Chinese characters (e.g., `我`, `你`, `好`). Pinyin is also accepted.
+- For **Chinese singing**: Enter Chinese characters (e.g., `我`, `你`, `好`). You may append a digit `1`–`5` after a character to force a specific tone (e.g., `你2 好3`). Pinyin is **not** accepted.
 - For **English singing**: Enter the English word being sung (e.g., `hello`, `love`).
 - For notes with no sung content (rests, breaths): Leave the lyric empty or use a space.
 
@@ -367,7 +368,7 @@ The bottom panel has tabs for different parameter lanes:
 
 ### Lyric Input Rules
 
-- **Chinese**: Enter Chinese characters (e.g., `你好世界`). The system uses `pinyin-pro` to convert characters to Pinyin, then to phonemes. You can also enter Pinyin directly (e.g., `ni hao`).
+- **Chinese**: Enter Chinese characters (e.g., `你好世界`). You may append a digit `1`–`5` after a character to force a specific tone (e.g., `你2 好3`), where 1–4 are the four tones and 5 is the neutral tone (轻声). The system uses `pinyin-pro` to convert characters to Pinyin (with the forced tone if a digit is present), then to `zh_*` phonemes. Pinyin text (e.g., `ni hao`) is **not** accepted as Chinese — ASCII input is routed to the English G2P path.
 - **English**: Enter standard English words (e.g., `hello`, `love`). The system uses a built-in CMU pronunciation dictionary (126,000 words) to convert to phonemes. Unknown words fall back to letter-by-letter phoneme estimation.
 - **Special tokens**: Empty lyrics are treated as `<SP>` (short pause/silence).
 
@@ -384,6 +385,17 @@ Switch to Phoneme mode (press `5` or click the Phoneme tab):
 
 A **slur** (continuation) note is a note that continues the previous note's sound without re-attacking. To create a slur:
 - Add a note with an empty lyric (or a dash `-`). It will be treated as a continuation of the previous note.
+
+### Kanji / Kana Auto-Grouping
+
+When a fragment already contains Japanese kana (hiragana or katakana) in any note's lyric, every single-character kanji note in the same fragment is **automatically treated as Japanese** and split into an ordered group of kana notes. This avoids the ambiguity of using the same CJK ideographs for both Chinese and Japanese within one fragment.
+
+- **Visual bracket** — a horizontal bracket is drawn above the group with the original kanji displayed in the middle, so you can always see which kana belong to which kanji.
+- **Strict ordering** — the converted kana keep their dictionary order. You cannot insert other MIDI notes inside a group's time span.
+- **Movement** — kana notes can be moved in pitch and time, but they cannot be deleted individually.
+- **Whole-group deletion** — deleting any kana in a group removes the entire group (all kana in that kanji).
+- **Right-click toggle** — right-click the bracket, the kanji label, or any kana inside the group to open the *Kanji Settings* menu. Choose **Set as Chinese** to merge the whole group back into a single kanji note (length = total group span, pitch = right-clicked note's pitch); choose **Set as Japanese** to split it again.
+- **Manual override persists** — once you manually set a kanji to Chinese, it will not be auto-split again even if the fragment still contains kana.
 
 ---
 
@@ -875,6 +887,7 @@ Press **F1** in the Fragment Editor to see the full shortcuts overlay.
 | `Delete` | Delete selected notes |
 | `Ctrl+D` | Duplicate selected notes |
 | Double-click | Edit note lyric |
+| Right-click kanji / kana group | Open Kanji Settings menu (toggle Chinese / Japanese) |
 
 ### Pitch Editing
 
@@ -900,6 +913,67 @@ Press **F1** in the Fragment Editor to see the full shortcuts overlay.
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+Scroll` | Horizontal zoom |
-| `Shift+Scroll` | Horizontal scroll |
+| `Ctrl+scroll` | Horizontal zoom |
+| `Shift+scroll` | Horizontal scroll |
 | `Scroll` | Vertical scroll |
+
+---
+
+## Uninstall
+
+The default uninstaller only removes the application itself — **downloaded models and user settings are left on disk** and must be cleaned up manually if you no longer need them. ONNX model files can total several GB, so check the model location before uninstalling.
+
+### Step 1: Check your model download location
+
+Before uninstalling, open SXSEditor and confirm where models are stored:
+
+1. Open **Settings > Model** and click **Open Model Download** (or open the Model Download window from the menu).
+2. The **Download directory** line shows the current model directory. Write it down or copy it.
+3. If you previously clicked **Change** to redirect downloads to a custom folder, that folder is the one you must clean up — not the default location below.
+
+### Step 2: Identify the default model location
+
+If you never changed the download directory, models live in one of the following locations depending on how the app was installed:
+
+| Type | Path | Removed by uninstaller? |
+|------|------|-------------------------|
+| Bundled models (full installer) | `<install_dir>\resources\app.asar.unpacked\onnx_models\` | Yes |
+| Downloaded models (default) | `%APPDATA%\sxseditor\onnx_models\` | **No** — must delete manually |
+| Custom directory | The folder you selected via **Change** | **No** — must delete manually |
+
+On a typical Windows install, `%APPDATA%` expands to `C:\Users\<your-username>\AppData\Roaming`. You can paste `%APPDATA%\sxseditor\onnx_models` directly into the File Explorer address bar to jump there.
+
+> **Note**: Downloaded models include subdirectories per precision: `fp16/`, `int8/`, `int8/optimized_npu/`, and a `JP/` subfolder for Japanese models. Each precision is independent, so you can delete one without affecting others.
+
+### Step 3: Delete models to free space
+
+If you no longer need the models, delete the entire model directory identified in Step 1 or Step 2:
+
+- **Default location**: delete the `%APPDATA%\sxseditor\onnx_models\` folder.
+- **Custom location**: delete the folder you selected via **Change**.
+- **Partial cleanup**: to keep settings but remove only models, delete just the `onnx_models` subfolder and leave the rest of `%APPDATA%\sxseditor\` intact.
+
+> **Tip**: Reinstalling later? Leave the `onnx_models` folder in place — SXSEditor will detect the existing files and skip re-downloading them.
+
+### Step 4: Remove leftover user data (optional)
+
+After uninstalling the app, the following user data remains in `%APPDATA%\sxseditor\`. Delete this folder if you want a fully clean removal:
+
+| File / Folder | Purpose |
+|---------------|---------|
+| `settings.json` | App settings (audio, inference, theme, etc.) |
+| `sxseditor-locale.json` | Language preference |
+| `themes\` | User-created or imported themes |
+| `onnx_models\` | Downloaded models (see Step 3) |
+
+Leftover installer files in `%TEMP%\sxseditor-update\` are pruned automatically 7 days after they were downloaded, so no manual cleanup is required there.
+
+### Step 5: Run the uninstaller
+
+After backing up or deleting the data above, run the uninstaller:
+
+1. Open **Settings > Apps > Installed apps** (Windows 11) or **Control Panel > Programs and Features** (Windows 10).
+2. Find **SXSEditor** and click **Uninstall**.
+3. Follow the InnoSetup wizard to complete removal.
+
+> **Note**: The uninstaller removes the application files (including bundled models in `app.asar.unpacked\onnx_models\`) but does **not** delete `%APPDATA%\sxseditor\`. That folder must be removed manually as described in Steps 3 and 4.

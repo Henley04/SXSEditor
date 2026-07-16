@@ -62,12 +62,158 @@ const JP_KANJI_DICT = {
     '九': 'ky u', '十': 'j u',
 };
 
+/**
+ * Japanese phoneme → English ARPAbet phoneme mapping table.
+ *
+ * Design rationale:
+ * - Vowels use stress=1 (primary stress) to ensure proper duration allocation
+ *   via durationStats. Japanese is mora-timed, so every syllable should get
+ *   similar vowel weight — stress=1 achieves this.
+ * - jp_a → AA1 (open back unrounded, closest to Japanese /a/ [ä])
+ * - jp_i → IY1 (close front unrounded, matches Japanese /i/ [i])
+ * - jp_u → UW1 (close back, closest available — Japanese /u/ is [ɯ] unrounded,
+ *   but ARPAbet has no pure [ɯ]; UW is the nearest high back vowel)
+ * - jp_e → EH1 (open-mid front unrounded, close to Japanese /e/ [e̞])
+ * - jp_o → OW1 (close-mid back rounded, closest to Japanese /o/ [o̞];
+ *   OW is technically a diphthong [oʊ] but starts at [o])
+ *
+ * Consonants map 1:1 to nearest ARPAbet:
+ * - jp_r → R (Japanese [ɾ] tap vs English [ɹ] approximant — closest available)
+ * - jp_f → F (Japanese [ɸ] bilabial vs English [f] labiodental — closest)
+ *
+ * Affricates map to multi-phoneme sequences:
+ * - jp_ts → T S (no single ARPAbet for [ts])
+ * - Palatal consonants (ky, gy, etc.) → consonant + Y (palatal glide)
+ *
+ * っ (cl): maps to T as an approximation of the gemination/stop effect.
+ *   In Japanese, っ lengthens the following consonant; since we can't easily
+ *   merge across notes, T provides a brief stop consonant. The durationStats
+ *   will give it a short duration.
+ */
+const JP_TO_EN_PHONEME_MAP = {
+    // Vowels (stress 1 = primary stress, ensures proper duration)
+    'a': ['AA1'],
+    'i': ['IY1'],
+    'u': ['UW1'],
+    'e': ['EH1'],
+    'o': ['OW1'],
+
+    // Consonants — 1:1 mapping to nearest ARPAbet
+    'k': ['K'],
+    's': ['S'],
+    'sh': ['SH'],
+    'ch': ['CH'],
+    't': ['T'],
+    'n': ['N'],
+    'h': ['HH'],
+    'm': ['M'],
+    'r': ['R'],
+    'w': ['W'],
+    'y': ['Y'],
+    'g': ['G'],
+    'z': ['Z'],
+    'd': ['D'],
+    'b': ['B'],
+    'p': ['P'],
+    'f': ['F'],
+    'j': ['JH'],
+
+    // Affricate — split into components
+    'ts': ['T', 'S'],
+
+    // Gemination marker (っ) — approximate with alveolar stop
+    'cl': ['T'],
+
+    // Palatal consonants (yōon) — consonant + palatal glide
+    'ky': ['K', 'Y'],
+    'gy': ['G', 'Y'],
+    'ny': ['N', 'Y'],
+    'hy': ['HH', 'Y'],
+    'my': ['M', 'Y'],
+    'ry': ['R', 'Y'],
+    'py': ['P', 'Y'],
+    'by': ['B', 'Y'],
+};
+
+/**
+ * Hybrid mode JP→EN phoneme mapping table.
+ *
+ * Hybrid mode is an improved variant of en-phonemes that produces more
+ * accurate Japanese pronunciation on the base multilingual model. Key
+ * differences from JP_TO_EN_PHONEME_MAP:
+ *
+ * 1. ら行 (r) → L (alveolar lateral [l]) instead of R (approximant [ɹ]).
+ *    Japanese /ɾ/ is an alveolar tap; ARPAbet R [ɹ] is a labiodental-ish
+ *    approximant and sounds too "American". L [l] is acoustically closer
+ *    to the tap and avoids the English r-coloring. This mirrors the
+ *    design intent of the Cantonese y_l extension in the hybrid plan.
+ *
+ * 2. お段 (o) → AO1 (close-mid back rounded, pure vowel) instead of
+ *    OW1 (diphthong [oʊ]). Japanese /o/ is a pure monophthong [o̞];
+ *    OW introduces an off-glide that sounds Anglicized.
+ *
+ * 3. り拗音 (ry) → L Y (matching the r→L change for palatalized forms).
+ *
+ * All other phonemes match JP_TO_EN_PHONEME_MAP. The base model vocabulary
+ * already contains en_L, en_AO1, etc., so no vocabulary extension or
+ * model retraining is required.
+ */
+const JP_TO_EN_PHONEME_MAP_HYBRID = {
+    // Vowels — AO1 for o (pure vowel, not OW diphthong)
+    'a': ['AA1'],
+    'i': ['IY1'],
+    'u': ['UW1'],
+    'e': ['EH1'],
+    'o': ['AO1'],
+
+    // Consonants — L for r (closer to Japanese tap [ɾ] than R [ɹ])
+    'k': ['K'],
+    's': ['S'],
+    'sh': ['SH'],
+    'ch': ['CH'],
+    't': ['T'],
+    'n': ['N'],
+    'h': ['HH'],
+    'm': ['M'],
+    'r': ['L'],
+    'w': ['W'],
+    'y': ['Y'],
+    'g': ['G'],
+    'z': ['Z'],
+    'd': ['D'],
+    'b': ['B'],
+    'p': ['P'],
+    'f': ['F'],
+    'j': ['JH'],
+
+    // Affricate — split into components
+    'ts': ['T', 'S'],
+
+    // Gemination marker (っ) — approximate with alveolar stop
+    'cl': ['T'],
+
+    // Palatal consonants (yōon) — consonant + palatal glide
+    'ky': ['K', 'Y'],
+    'gy': ['G', 'Y'],
+    'ny': ['N', 'Y'],
+    'hy': ['HH', 'Y'],
+    'my': ['M', 'Y'],
+    'ry': ['L', 'Y'],
+    'py': ['P', 'Y'],
+    'by': ['B', 'Y'],
+};
+
 class TextProcessing {
-    constructor() {
+    constructor(options = {}) {
         this.phone2idx = {};
         this.enG2pDict = {};
         this._vocabSize = 0;
         this._dictSize = 0;
+        // Japanese vocalization mode:
+        // - 'en-phonemes' (default): uses English ARPAbet phonemes on the base multilingual model
+        // - 'hybrid': improved ARPAbet mapping (L for ら行, AO for お段) on the base model
+        // - 'jp-lora': uses JP LoRA models with jp_ phonemes
+        this.japaneseVocalization = options.japaneseVocalization || 'en-phonemes';
         this._loadPhoneSet();
         this._loadEnG2pDict();
     }
@@ -79,9 +225,27 @@ class TextProcessing {
             path.join(__dirname, '..', '..', 'inference', 'phone_set.json'),
             path.join(__dirname, '..', '..', '..', 'src', 'inference', 'phone_set.json'),
         ];
+        // Fallback paths for packaged Electron app (asar / unpacked)
+        try {
+            if (process.resourcesPath) {
+                searchPaths.push(path.join(process.resourcesPath, 'app.asar', '.webpack', 'main', 'phone_set.json'));
+                searchPaths.push(path.join(process.resourcesPath, 'app', '.webpack', 'main', 'phone_set.json'));
+            }
+        } catch (_) {}
+        // Fallback: require.main.path (non-webpack / CLI mode)
+        try {
+            if (require.main && require.main.path) {
+                searchPaths.push(path.join(require.main.path, 'inference', 'phone_set.json'));
+                searchPaths.push(path.join(require.main.path, 'src', 'inference', 'phone_set.json'));
+            }
+        } catch (_) {}
+
+        console.log(`[OnnxSVSPipeline] _loadPhoneSet: __dirname=${__dirname}`);
         for (const phoneSetPath of searchPaths) {
             try {
-                if (fs.existsSync(phoneSetPath)) {
+                const exists = fs.existsSync(phoneSetPath);
+                console.log(`[OnnxSVSPipeline]   checking: ${phoneSetPath} → ${exists ? 'FOUND' : 'missing'}`);
+                if (exists) {
                     const phoneList = JSON.parse(fs.readFileSync(phoneSetPath, 'utf-8'));
                     for (let i = 0; i < phoneList.length; i++) {
                         this.phone2idx[phoneList[i]] = i;
@@ -104,6 +268,20 @@ class TextProcessing {
             path.join(__dirname, '..', '..', 'inference', 'en_g2p_dict.json'),
             path.join(__dirname, '..', '..', '..', 'src', 'inference', 'en_g2p_dict.json'),
         ];
+        // Fallback paths for packaged Electron app (asar / unpacked)
+        try {
+            if (process.resourcesPath) {
+                searchPaths.push(path.join(process.resourcesPath, 'app.asar', '.webpack', 'main', 'en_g2p_dict.json'));
+                searchPaths.push(path.join(process.resourcesPath, 'app', '.webpack', 'main', 'en_g2p_dict.json'));
+            }
+        } catch (_) {}
+        // Fallback: require.main.path (non-webpack / CLI mode)
+        try {
+            if (require.main && require.main.path) {
+                searchPaths.push(path.join(require.main.path, 'inference', 'en_g2p_dict.json'));
+                searchPaths.push(path.join(require.main.path, 'src', 'inference', 'en_g2p_dict.json'));
+            }
+        } catch (_) {}
         for (const dictPath of searchPaths) {
             try {
                 if (fs.existsSync(dictPath)) {
@@ -222,10 +400,19 @@ class TextProcessing {
         }
 
         if (trimmed.startsWith('jp_')) {
+            // In en-phonemes / hybrid mode, convert jp_ prefixed phonemes to English phonemes
+            if (this.japaneseVocalization === 'en-phonemes' || this.japaneseVocalization === 'hybrid') {
+                const jpPhone = trimmed.slice(3);
+                return this._japanesePhoneToEnglishPhonemes(jpPhone);
+            }
             return [{ name: trimmed, display: trimmed.slice(3) }];
         }
 
         if (forceJp || this._isJapanese(trimmed)) {
+            // In en-phonemes / hybrid mode, convert Japanese kana/kanji to English phonemes
+            if (this.japaneseVocalization === 'en-phonemes' || this.japaneseVocalization === 'hybrid') {
+                return this._japaneseToEnglishPhonemes(trimmed);
+            }
             const phonemes = this._japaneseG2p(trimmed);
             if (phonemes) {
                 return phonemes.split(' ').filter(s => s).map(ph => {
@@ -262,6 +449,74 @@ class TextProcessing {
         }
 
         return [{ name: trimmed, display: trimmed }];
+    }
+
+    /**
+     * 根据当前模式返回 JP→EN 映射表。
+     * hybrid 模式使用改进的映射（L 替代 R、AO 替代 OW），其他模式使用默认表。
+     */
+    _getJpToEnMap() {
+        return this.japaneseVocalization === 'hybrid'
+            ? JP_TO_EN_PHONEME_MAP_HYBRID
+            : JP_TO_EN_PHONEME_MAP;
+    }
+
+    /**
+     * 将日文（假名/汉字）转换为英语音素对象数组（en_ 前缀）。
+     * 内部先调用 _japaneseG2p 得到日语音素序列（如 'k a'），再逐个查表映射为 ARPAbet。
+     * 映射后的音素附带 duration weight（通过 _attachEnglishWeights），用于 UI 时长分配。
+     *
+     * hybrid 模式使用改进映射表（L 替代 R、AO 替代 OW），en-phonemes 模式使用默认表。
+     * 'pau'（未知汉字回退）映射为 <SP>（静音）。
+     *
+     * @param {string} text - 日文歌词（假名/汉字/混合）
+     * @returns {Array<{name:string, display:string, weight?:number}>} 英语音素对象数组
+     */
+    _japaneseToEnglishPhonemes(text) {
+        const jpPhonemeStr = this._japaneseG2p(text);
+        if (!jpPhonemeStr) return [{ name: '<SP>', display: 'SP' }];
+
+        const map = this._getJpToEnMap();
+        const jpParts = jpPhonemeStr.split(' ').filter(s => s);
+        const enPhonemes = [];
+        for (const jpPart of jpParts) {
+            if (jpPart === 'pau') {
+                // Unknown kanji → silence
+                enPhonemes.push({ name: '<SP>', display: 'SP' });
+                continue;
+            }
+            const mapped = map[jpPart];
+            if (mapped) {
+                for (const enPh of mapped) {
+                    enPhonemes.push({ name: 'en_' + enPh, display: enPh });
+                }
+            } else {
+                // Fallback: if no mapping exists, try to use as-is (shouldn't happen normally)
+                console.warn(`[TextProcessing] No JP→EN mapping for "${jpPart}", using <UNK>`);
+                enPhonemes.push({ name: '<UNK>', display: jpPart });
+            }
+        }
+        return this._attachEnglishWeights(enPhonemes);
+    }
+
+    /**
+     * 将单个日语音素（如 'k', 'a', 'sh', 'ts', 'ky'）转换为英语音素对象数组。
+     * 用于 jp_ 前缀歌词的直接映射（如 'jp_k' → en_K）。
+     *
+     * hybrid 模式使用改进映射表（L 替代 R、AO 替代 OW），en-phonemes 模式使用默认表。
+     *
+     * @param {string} jpPhone - 日语音素基名（不含 jp_ 前缀）
+     * @returns {Array<{name:string, display:string, weight?:number}>} 英语音素对象数组
+     */
+    _japanesePhoneToEnglishPhonemes(jpPhone) {
+        const map = this._getJpToEnMap();
+        const mapped = map[jpPhone];
+        if (!mapped || mapped.length === 0) {
+            console.warn(`[TextProcessing] No JP→EN mapping for jp_${jpPhone}, using <UNK>`);
+            return [{ name: '<UNK>', display: jpPhone }];
+        }
+        const enPhonemes = mapped.map(enPh => ({ name: 'en_' + enPh, display: enPh }));
+        return this._attachEnglishWeights(enPhonemes);
     }
 
     /**

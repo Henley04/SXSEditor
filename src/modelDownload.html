@@ -16,19 +16,19 @@
     <label class="precision-label" data-i18n="modelDownload.precisionLabel">模型精度</label>
     <div class="precision-options">
       <label class="precision-option">
-        <input type="radio" name="modelPrecision" value="fp16" checked>
-        <span class="precision-radio"></span>
-        <span class="precision-text">
-          <span class="precision-name" data-i18n="modelDownload.precisionFp16">FP16 (半精度)</span>
-          <span class="precision-desc" data-i18n="modelDownload.precisionFp16Desc">音质最佳，显存占用较大，推荐独显用户使用</span>
-        </span>
-      </label>
-      <label class="precision-option">
-        <input type="radio" name="modelPrecision" value="fp32">
+        <input type="radio" name="modelPrecision" value="fp32" checked>
         <span class="precision-radio"></span>
         <span class="precision-text">
           <span class="precision-name" data-i18n="modelDownload.precisionFp32">FP32 (全精度)</span>
           <span class="precision-desc" data-i18n="modelDownload.precisionFp32Desc">最高精度，音质最好，显存占用最大，推荐高性能独显用户使用</span>
+        </span>
+      </label>
+      <label class="precision-option">
+        <input type="radio" name="modelPrecision" value="fp16">
+        <span class="precision-radio"></span>
+        <span class="precision-text">
+          <span class="precision-name" data-i18n="modelDownload.precisionFp16">FP16 (半精度)</span>
+          <span class="precision-desc" data-i18n="modelDownload.precisionFp16Desc">音质接近全精度，显存占用适中，推荐独显用户使用</span>
         </span>
       </label>
       <label class="precision-option">
@@ -48,6 +48,29 @@
         </span>
       </label>
     </div>
+  </div>
+
+  <div class="version-info-section" id="versionInfoSection" style="display:none;">
+    <div class="version-info-row">
+      <span class="version-label" data-i18n="modelDownload.currentVersion">当前版本</span>
+      <span class="version-value" id="localVersionValue">-</span>
+    </div>
+    <div class="version-info-row">
+      <span class="version-label" data-i18n="modelDownload.latestVersion">最新版本</span>
+      <span class="version-value" id="latestVersionValue">-</span>
+    </div>
+    <div class="version-select-row">
+      <span class="version-label" data-i18n="modelDownload.selectVersion">选择版本</span>
+      <select id="versionSelect" class="version-select" disabled>
+        <option value="latest" data-i18n="modelDownload.latestVersionLabel">最新版本 (Latest)</option>
+      </select>
+    </div>
+    <div class="version-update-banner" id="versionUpdateBanner" style="display:none;">
+      <span class="update-icon" aria-hidden="true">&#9888;</span>
+      <span class="update-text" id="versionUpdateText"></span>
+      <button class="btn btn-update" id="updateModelBtn" data-i18n="modelDownload.update">更新</button>
+    </div>
+    <a href="#" id="modelUpdatesLink" class="model-updates-link" data-i18n="modelDownload.viewVersionDetails">查看模型版本详情</a>
   </div>
 
   <div class="overall-progress" id="progressSection" style="display:none;">
@@ -108,6 +131,8 @@
         <div class="model-card-status" id="sifiganStatus">
           <span class="status-indicator" id="sifiganStatusIndicator"></span>
           <span class="status-text" id="sifiganStatusText" data-i18n="modelDownload.checking">检测中...</span>
+          <span class="status-version" id="sifiganVersionText"></span>
+          <button class="btn-card btn-update-sifigan" id="sifiganUpdateBtn" style="display:none;" data-i18n="modelDownload.update">更新</button>
         </div>
 
         <div class="model-card-tooltip" id="sifiganTooltip" style="display:none;" role="tooltip"></div>

@@ -742,18 +742,28 @@ class Postprocessing {
 
     /**
      * Extract reference mel spectrogram using ONNX mel_transform model
+     *
+     * mel_transform 在不同精度/导出版本中输入输出名不一致：
+     *   - ROOT mel_transform.onnx:  input='audio',     output='mel'
+     *   - fp16/mel_transform.onnx:  input='waveform',   output='mel_spectrogram'
+     *   - int8/mel_transform.onnx:  input='waveform',   output='output'
+     * 这里通过 session.inputNames / outputNames 动态取首个输入/输出名，避免硬编码导致
+     * ROOT 模型运行时报 "input 'audio' is missing in 'feeds'"。
      */
     async extractRefMelOnnx(sessions, refAudioWavBuffer, isFP16, useStaticShapes = false) {
         const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(refAudioWavBuffer);
         const resampled = await resampleLinearAsync(audioFloat, srcSr, SAMPLE_RATE);
         const floatType = isFP16 ? 'float16' : 'float32';
+        // 动态获取输入/输出名（不同导出版本名称不同）
+        const melInputName = sessions.melTransform.inputNames[0];   // 'waveform' | 'audio'
+        const melOutputName = sessions.melTransform.outputNames[0]; // 'mel_spectrogram' | 'mel' | 'output'
         const NPU_STATIC_NUM_SAMPLES = 240000;
         if (useStaticShapes && resampled.length < NPU_STATIC_NUM_SAMPLES) {
             const padded = new Float32Array(NPU_STATIC_NUM_SAMPLES);
             padded.set(resampled);
             const waveform = createFloatTensor(floatType, padded, [1, NPU_STATIC_NUM_SAMPLES]);
-            const results = await sessions.melTransform.run({ waveform });
-            const melOutput = results['mel_spectrogram'];
+            const results = await sessions.melTransform.run({ [melInputName]: waveform });
+            const melOutput = results[melOutputName];
             const melData = outputToFloat32(melOutput);
             const melDims = melOutput.dims; // 先取 dims 再 dispose，避免 use-after-free
             const actualFrames = Math.ceil(resampled.length / HOP_SIZE);
@@ -766,8 +776,8 @@ class Postprocessing {
             return { data: trimmed.slice(), frames, melBands: MEL_DIM };
         }
         const waveform = createFloatTensor(floatType, resampled, [1, resampled.length]);
-        const results = await sessions.melTransform.run({ waveform });
-        const melOutput = results['mel_spectrogram'];
+        const results = await sessions.melTransform.run({ [melInputName]: waveform });
+        const melOutput = results[melOutputName];
         const melData = outputToFloat32(melOutput);
         const melDims = melOutput.dims; // 先取 dims 再 dispose
         const frames = melDims[1];
@@ -785,6 +795,11 @@ class Postprocessing {
      *        audio 为该 chunk 贡献的"已确定"音频段（weightSum=1，可直接播放），按顺序拼接即得完整音频。
      */
     async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0) {
+        const _vocoderStartMs = performance.now();
+        if (!sessions || !sessions.vocoder) {
+            console.error(`[VocoderDiag] CRITICAL: sessions.vocoder is ${sessions ? (sessions.vocoder === undefined ? 'undefined' : 'null') : 'sessions is null'}! Vocoder will throw. sessionEPs=${JSON.stringify(sessions ? Object.keys(sessions) : [])}`);
+        }
+        console.log(`[VocoderDiag] runVocoderChunked START: totalFrames=${totalFrames}, vocoderType=${vocoderType}, isFP16=${isFP16}, melDataLen=${melData.length}`);
         // SiFiGAN mel 帧率（200Hz, hop=120）与 SVS 管线 mel 帧率（50Hz, hop=480）不一致。
         // SiFiGANWrapper 内部 T_audio = T_frames * 120，若直接喂 50Hz mel 会输出 1/4 期望时长。
         // 修复：在 SiFiGAN 路径下将 mel 和 F0 在时间维度 4× 上采样（最近邻），让 SiFiGAN 看到正确帧率。
@@ -806,6 +821,9 @@ class Postprocessing {
             }
         }
 
+        // vocoder 期望标准化 mel (mean=0, std=1)，与官方 PyTorch soulxsinger.py 一致。
+        // 之前的爆炸是 VocosFullWrapper._overlap_add 的 reshape 维度顺序 bug 导致的（已修复）。
+        // effectiveMelData 保持扩散模型输出（标准化 mel），不做反标准化。
         const chunkSize = ((chunkFrames && chunkFrames > 0) ? chunkFrames : VOCODER_CHUNK_FRAMES) * SIFIGAN_UPSAMPLE_RATIO;
         const overlapFrames = VOCODER_OVERLAP_FRAMES * SIFIGAN_UPSAMPLE_RATIO;
         const vocoderHopSize = vocoderType === 'sifigan' ? SIFIGAN_HOP_SIZE : HOP_SIZE;
@@ -878,6 +896,28 @@ class Postprocessing {
             const paddedMel = useStaticShapes ? padFloat(melArr, vocSeqLen * MEL_DIM) : melArr;
             const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, effectiveTotalFrames);
+
+            // 诊断：检查 mel 输入是否包含 NaN（在 vocoder run 之前）+ mel 统计（标准化 mel，期望 mean≈0 std≈1）
+            {
+                let melNaN = 0, melInf = 0;
+                let melMin = Infinity, melMax = -Infinity, melSum = 0, melSumSq = 0;
+                for (let i = 0; i < paddedMel.length; i++) {
+                    const v = paddedMel[i];
+                    if (Number.isNaN(v)) { melNaN++; continue; }
+                    if (!Number.isFinite(v)) { melInf++; continue; }
+                    if (v < melMin) melMin = v;
+                    if (v > melMax) melMax = v;
+                    melSum += v;
+                    melSumSq += v * v;
+                }
+                const melMean = melSum / paddedMel.length;
+                const melStd = Math.sqrt(Math.max(0, melSumSq / paddedMel.length - melMean * melMean));
+                console.log(`[VocoderDiag] single-chunk mel stats: frames=${effectiveTotalFrames}, len=${paddedMel.length}, NaN=${melNaN}, Inf=${melInf}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
+                if (melNaN > 0 || melInf > 0) {
+                    console.error(`[VocoderDiag] MEL INPUT BEFORE VOCODER HAS NaN/Inf! NaN=${melNaN}, Inf=${melInf - melNaN}, total=${paddedMel.length}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}`);
+                }
+            }
+
             let results;
             try {
                 results = await sessions.vocoder.run(vocoderInputs);
@@ -897,6 +937,20 @@ class Postprocessing {
             disposeTensor(results['waveform']);
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
+            // 诊断：检查 vocoder 输出
+            {
+                let wavNaN = 0, wavInf = 0, wavZero = 0;
+                for (let i = 0; i < waveform.length; i++) {
+                    if (Number.isNaN(waveform[i])) wavNaN++;
+                    if (!Number.isFinite(waveform[i])) wavInf++;
+                    if (waveform[i] === 0) wavZero++;
+                }
+                const expectedSamples = effectiveTotalFrames * vocoderHopSize;
+                if (wavNaN > 0 || wavInf > 0) {
+                    console.error(`[VocoderDiag] VOCODER OUTPUT HAS NaN/Inf! NaN=${wavNaN}, Inf=${wavInf - wavNaN}, total=${waveform.length}, expected=${expectedSamples}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}`);
+                }
+                console.log(`[VocoderDiag] single-chunk: frames=${effectiveTotalFrames}, vocoderType=${vocoderType}, outputLen=${waveform.length}, expectedLen=${expectedSamples}, NaN=${wavNaN}, zero=${wavZero}/${waveform.length}`);
+            }
             // 校验输出：DML 在显存边界可能返回全零/NaN 而不抛错（silent failure）
             validateVocoderOutput(waveform, 0);
             // 诊断：vocoder 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
@@ -945,6 +999,7 @@ class Postprocessing {
                     console.warn('[OnnxSVSPipeline] onChunkComplete callback error:', e.message);
                 }
             }
+            console.log(`[VocoderDiag] runVocoderChunked END (single-chunk): ${(performance.now() - _vocoderStartMs).toFixed(0)}ms, outputLen=${output.length}`);
             return output;
         }
 
@@ -1065,6 +1120,21 @@ class Postprocessing {
                     }
                     melParts.push(`m${f}=${Math.sqrt(s / MEL_DIM).toFixed(5)}`);
                 }
+                // 完整 mel 输入统计（整个 chunk）
+                {
+                    let melMin = Infinity, melMax = -Infinity, melSum = 0, melSumSq = 0;
+                    const melLen = paddedChunk.length;
+                    for (let i2 = 0; i2 < melLen; i2++) {
+                        const v = paddedChunk[i2];
+                        if (v < melMin) melMin = v;
+                        if (v > melMax) melMax = v;
+                        melSum += v;
+                        melSumSq += v * v;
+                    }
+                    const melMean = melSum / melLen;
+                    const melStd = Math.sqrt(Math.max(0, melSumSq / melLen - melMean * melMean));
+                    console.log(`[VocoderDiag] chunk0 FULL mel stats: frames=${spec.currentChunkFrames}, len=${melLen}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
+                }
                 console.log(`[VocoderDiag] chunk0: chunkFrames=${spec.currentChunkFrames}, vocoderType=${vocoderType}, melRMS=[${melParts.join(', ')}], wavRMS=[${parts.join(', ')}]`);
             }
             const writeStart = spec.chunkStart * vocoderHopSize;
@@ -1086,20 +1156,24 @@ class Postprocessing {
                 weightSum[outIdx] += w;
             }
 
-            // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，已归一化）
+            // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，overlap crossfade 权重和为 1）
             // - 首 chunk：stableEnd = (isLast ? chunkEnd : chunkEnd - overlapFrames) * vocoderHopSize
             // - 中间 chunk：包含头部 overlap 的 crossfade 结果 + 稳定段（weightSum=1）
             // - 末 chunk：stableEnd = chunkEnd * vocoderHopSize（尾部无 fade）
+            // 注意：peak 归一化在每 chunk 推送前独立应用（仅向下缩放，peak>0.95 时生效），
+            // 防止流式音频在 Int16 转换时削波。最终 output 仍会在循环结束后统一 normalizePeakTo。
             if (onChunkComplete) {
                 const stableEndFrames = spec.isLast ? spec.chunkEnd : (spec.chunkEnd - overlapFrames);
                 const stableEnd = Math.min(stableEndFrames * vocoderHopSize, totalSamples);
                 if (stableEnd > committedSamples) {
+                    const chunkAudio = output.slice(committedSamples, stableEnd);
+                    normalizePeakTo(chunkAudio);
                     try {
                         onChunkComplete({
                             chunkIndex: i,
                             sampleOffset: committedSamples,
                             sampleEnd: stableEnd,
-                            audio: output.slice(committedSamples, stableEnd),
+                            audio: chunkAudio,
                             totalSamples,
                             isLast: spec.isLast,
                         });
@@ -1122,6 +1196,7 @@ class Postprocessing {
         const elapsed = performance.now() - t0;
         const logFrames = SIFIGAN_UPSAMPLE_RATIO > 1 ? `${effectiveTotalFrames} (${totalFrames}x${SIFIGAN_UPSAMPLE_RATIO})` : `${totalFrames}`;
         console.log(`[OnnxSVSPipeline] Vocoder chunked: ${logFrames} frames, ${totalChunkCount} chunks (serial, streaming), ${elapsed.toFixed(0)}ms`);
+        console.log(`[VocoderDiag] runVocoderChunked END (multi-chunk): ${(performance.now() - _vocoderStartMs).toFixed(0)}ms, outputLen=${output.length}`);
         return output;
     }
 

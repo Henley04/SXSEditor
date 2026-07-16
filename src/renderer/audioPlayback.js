@@ -137,6 +137,9 @@ export async function playAll() {
           f0Envelope: null,
           pitchCurveF0,
           refAudioWavBuffer: singer?.wavBuffer || null,
+          refMidiNotes: singer?.midiNotes || null,
+          refF0Data: singer?.f0Data || null,
+          singerId: singer?.id || null,
           autoShift: dom.autoShiftCheck.checked,
           nSteps: inferenceOpts.nSteps,
           cfg: inferenceOpts.cfg,
@@ -483,54 +486,95 @@ export function stopPlayheadAnimation() {
 }
 
 export async function exportAll() {
+  // 导出流程现在由导出对话框驱动：
+  // 1. 打开对话框让用户配置精度/参数/输出位置
+  // 2. 对话框保存设置后调用 runExportJob 执行合成
+  // 3. 对话框负责显示进度、保存文件、打开导出位置
+  const { openExportDialog } = await import('./exportDialog.js');
+  await openExportDialog();
+}
+
+/**
+ * 执行导出合成任务（由导出对话框调用）。
+ * 遍历所有有音符的分片，逐个合成并混音，返回混音后的音频数据。
+ *
+ * @param {Object} opts - 导出选项
+ * @param {number} opts.nSteps - 扩散步数
+ * @param {number} opts.cfg - CFG 引导强度
+ * @param {number} opts.cfgRescale - CFG Rescale 系数
+ * @param {boolean} opts.autoShift - 是否启用 Auto Shift
+ * @param {Function} [opts.onFragmentProgress] - 单分片推理进度回调 (progress: 0-100)
+ * @param {Function} [opts.onOverallProgress] - 总体进度回调 (progress: 0-100)
+ * @param {Function} [opts.onStatus] - 状态文本回调 (statusKey: string, params?: object)
+ * @returns {Promise<{mixedAudio: Float32Array, maxDuration: number, fragmentCount: number}>}
+ */
+export async function runExportJob(opts) {
+  const {
+    nSteps,
+    cfg,
+    cfgRescale,
+    autoShift,
+    onFragmentProgress,
+    onOverallProgress,
+    onStatus,
+  } = opts;
+
   const fragments = trackManager.getFragments();
   if (fragments.length === 0) {
-    showAlertDialog(t('main.noFragmentsToExport'));
-    return;
+    throw new Error(t('main.exportDialog.noFragments'));
   }
 
-  const originalText = dom.btnExport.textContent;
-  dom.btnExport.disabled = true;
-  dom.btnExport.textContent = t('main.exporting');
-  dom.timeDisplay.textContent = t('main.preparing');
+  const singers = trackManager.getSingers();
+  const singerMap = new Map();
+  singers.forEach(s => singerMap.set(s.id, s));
 
-  // 注册推理进度监听：更新导出按钮文本显示百分比
-  let exportProgressCleanup = null;
+  // 收集所有有 notes 的 fragments，按 startTime 排序后逐个合成。
+  // 与 playAll 一致：每个 fragment 用相对 notes（clippedNotes）
+  // + 该 fragment 自己的 pitchCurve（buildFragmentPitchCurveF0），
+  // 确保与分片编辑器播放/导出结果完全一致。
+  const allFragments = fragments
+    .filter(f => f.notes && f.notes.length > 0)
+    .sort((a, b) => a.startTime - b.startTime);
+
+  if (allFragments.length === 0) {
+    throw new Error(t('main.exportDialog.noNotes'));
+  }
+
+  if (onStatus) onStatus('progressPreparing');
+
+  await ensurePipelineInitialized();
+  await loadAudioSettings();
+
+  const totalFragments = allFragments.length;
+  let audioResults = [];
+  let maxDuration = 0;
+
+  // 注册推理进度监听：转换为单分片进度
+  let fragmentProgressCleanup = null;
+  if (onFragmentProgress) {
+    try {
+      fragmentProgressCleanup = window.electronAPI.onSVSProgress((progress) => {
+        onFragmentProgress(progress);
+        // 同时计算总体进度：(已完成分片数 + 当前分片进度) / 总分片数
+        if (onOverallProgress) {
+          const overall = ((audioResults.length + progress / 100) / totalFragments) * 100;
+          onOverallProgress(Math.min(99, overall));
+        }
+      });
+    } catch (_) {}
+  }
+
   try {
-    exportProgressCleanup = window.electronAPI.onSVSProgress((progress) => {
-      dom.btnExport.textContent = t('main.exportingProgress', { progress });
-    });
-  } catch (_) {}
-
-  try {
-    const singers = trackManager.getSingers();
-    const singerMap = new Map();
-    singers.forEach(s => singerMap.set(s.id, s));
-
-    // 收集所有有 notes 的 fragments，按 startTime 排序后逐个合成。
-    // 与 playAll 一致：每个 fragment 用相对 notes（clippedNotes）
-    // + 该 fragment 自己的 pitchCurve（buildFragmentPitchCurveF0），
-    // 确保与分片编辑器播放/导出结果完全一致。
-    const allFragments = fragments
-      .filter(f => f.notes && f.notes.length > 0)
-      .sort((a, b) => a.startTime - b.startTime);
-
-    if (allFragments.length === 0) {
-      showAlertDialog(t('main.noNotesToExport'));
-      return;
-    }
-
-    await ensurePipelineInitialized();
-    await loadAudioSettings();
-
-    const exportInferenceOpts = getExportInferenceOptions();
-
-    let audioResults = [];
-    let maxDuration = 0;
-
     for (const fragment of allFragments) {
       const singer = singerMap.get(fragment.singerId);
-      if (!singer) continue;
+      if (!singer) {
+        // 跳过找不到歌手的分片，但仍计入进度
+        if (onOverallProgress) {
+          const overall = ((audioResults.length + 1) / totalFragments) * 100;
+          onOverallProgress(Math.min(99, overall));
+        }
+        continue;
+      }
 
       // clippedNotes：相对 fragment 的 notes，截断到 fragment.duration（与分片编辑器 getClippedNotes 一致）
       const fragDuration = fragment.duration;
@@ -553,11 +597,14 @@ export async function exportAll() {
         bpm: state.project.bpm,
         options: {
           refAudioWavBuffer: singer?.wavBuffer || null,
+          refMidiNotes: singer?.midiNotes || null,
+          refF0Data: singer?.f0Data || null,
+          singerId: singer?.id || null,
           pitchCurveF0,
-          autoShift: dom.autoShiftCheck.checked,
-          nSteps: exportInferenceOpts.nSteps,
-          cfg: exportInferenceOpts.cfg,
-          cfgRescale: exportInferenceOpts.cfgRescale,
+          autoShift,
+          nSteps,
+          cfg,
+          cfgRescale,
         },
       });
 
@@ -575,46 +622,43 @@ export async function exportAll() {
 
       const fragEndSec = (fragDuration / state.project.bpm) * 60;
       if (fragEndSec > maxDuration) maxDuration = fragEndSec;
-    }
 
-    dom.timeDisplay.textContent = t('main.encodingWav');
-
-    const totalSamples = Math.ceil(maxDuration * SAMPLE_RATE);
-    const mixedAudio = new Float32Array(totalSamples);
-
-    for (const result of audioResults) {
-      const startSample = Math.round((result.startTimeBeat / state.project.bpm * 60) * SAMPLE_RATE);
-      const samplesToMix = result.audioData.length;
-
-      for (let i = 0; i < samplesToMix; i++) {
-        const targetIndex = startSample + i;
-        if (targetIndex < totalSamples) {
-          mixedAudio[targetIndex] += result.audioData[i];
-        }
+      // 完成一个分片后更新总体进度（onSVSProgress 只在推理过程中触发，
+      // 这里补充分片完成后的进度跃迁）
+      if (onOverallProgress) {
+        const overall = (audioResults.length / totalFragments) * 100;
+        onOverallProgress(Math.min(99, overall));
       }
     }
-
-    const { encodeWav } = await import('../audio/wavEncoder.js');
-    const wavData = encodeWav(mixedAudio, SAMPLE_RATE);
-
-    dom.timeDisplay.textContent = t('main.savingFile');
-
-    const result = await window.electronAPI.showSaveDialog({
-      filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
-    });
-
-    if (!result.canceled && result.filePath) {
-      await window.electronAPI.saveFile(result.filePath, wavData);
-      dom.timeDisplay.textContent = formatTime(maxDuration);
-    }
-
-  } catch (err) {
-    console.error('Synthesis failed:', err);
-    showAlertDialog(t('main.exportFailed') + ': ' + (err.message || ''));
-    dom.timeDisplay.textContent = t('main.exportFailed');
   } finally {
-    dom.btnExport.disabled = false;
-    dom.btnExport.textContent = originalText;
-    if (exportProgressCleanup) { try { exportProgressCleanup(); } catch (_) {} exportProgressCleanup = null; }
+    if (fragmentProgressCleanup) {
+      try { fragmentProgressCleanup(); } catch (_) {}
+      fragmentProgressCleanup = null;
+    }
   }
+
+  if (onStatus) onStatus('progressEncoding');
+
+  const totalSamples = Math.ceil(maxDuration * SAMPLE_RATE);
+  const mixedAudio = new Float32Array(totalSamples);
+
+  for (const result of audioResults) {
+    const startSample = Math.round((result.startTimeBeat / state.project.bpm * 60) * SAMPLE_RATE);
+    const samplesToMix = result.audioData.length;
+
+    for (let i = 0; i < samplesToMix; i++) {
+      const targetIndex = startSample + i;
+      if (targetIndex < totalSamples) {
+        mixedAudio[targetIndex] += result.audioData[i];
+      }
+    }
+  }
+
+  if (onOverallProgress) onOverallProgress(100);
+
+  return {
+    mixedAudio,
+    maxDuration,
+    fragmentCount: audioResults.length,
+  };
 }

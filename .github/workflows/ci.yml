@@ -30,7 +30,8 @@ jobs:
 
       - run: npm ci
 
-      - run: npm test
+      - name: Run tests (skip network & model loading/inference)
+        run: npm run test:ci
 
   build-and-release:
     name: Build and Release (${{ github.ref_name }})

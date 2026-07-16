@@ -2,222 +2,522 @@ const { expect } = require('chai');
 const { TextProcessing } = require('../src/inference/pipeline/textProcessing');
 
 describe('inference/pipeline/textProcessing - G2P', () => {
-  let tp;
+  // tpJp: JP LoRA mode (jp_ phonemes) — preserves original behavior
+  // tpEn: English phoneme migration mode (en_ phonemes) — new default
+  // tpHybrid: Hybrid mode (improved ARPAbet mapping: L for ら行, AO for お段)
+  let tpJp, tpEn, tpHybrid;
   before(() => {
-    tp = new TextProcessing();
+    tpJp = new TextProcessing({ japaneseVocalization: 'jp-lora' });
+    tpEn = new TextProcessing({ japaneseVocalization: 'en-phonemes' });
+    tpHybrid = new TextProcessing({ japaneseVocalization: 'hybrid' });
   });
 
   describe('vocabulary loading', () => {
     it('should load phone_set.json with non-empty vocabulary', () => {
-      expect(Object.keys(tp.phone2idx).length).to.be.greaterThan(0);
+      expect(Object.keys(tpEn.phone2idx).length).to.be.greaterThan(0);
     });
     it('should include special tokens', () => {
-      expect(tp.phone2idx['<PAD>']).to.not.equal(undefined);
-      expect(tp.phone2idx['<SP>']).to.not.equal(undefined);
-      expect(tp.phone2idx['<UNK>']).to.not.equal(undefined);
+      expect(tpEn.phone2idx['<PAD>']).to.not.equal(undefined);
+      expect(tpEn.phone2idx['<SP>']).to.not.equal(undefined);
+      expect(tpEn.phone2idx['<UNK>']).to.not.equal(undefined);
     });
     it('should load English G2P dictionary', () => {
-      expect(Object.keys(tp.enG2pDict).length).to.be.greaterThan(0);
+      expect(Object.keys(tpEn.enG2pDict).length).to.be.greaterThan(0);
     });
   });
 
   describe('_isJapanese', () => {
     it('should detect hiragana as Japanese', () => {
-      expect(tp._isJapanese('あいう')).to.be.true;
-      expect(tp._isJapanese('こんにちは')).to.be.true;
+      expect(tpEn._isJapanese('あいう')).to.be.true;
+      expect(tpEn._isJapanese('こんにちは')).to.be.true;
     });
     it('should detect katakana as Japanese', () => {
-      expect(tp._isJapanese('アイウ')).to.be.true;
-      expect(tp._isJapanese('コンニチハ')).to.be.true;
+      expect(tpEn._isJapanese('アイウ')).to.be.true;
+      expect(tpEn._isJapanese('コンニチハ')).to.be.true;
     });
     it('should NOT detect kanji as Japanese (shared with Chinese)', () => {
-      expect(tp._isJapanese('愛')).to.be.false;
-      expect(tp._isJapanese('空')).to.be.false;
+      expect(tpEn._isJapanese('愛')).to.be.false;
+      expect(tpEn._isJapanese('空')).to.be.false;
     });
     it('should NOT detect latin as Japanese', () => {
-      expect(tp._isJapanese('hello')).to.be.false;
+      expect(tpEn._isJapanese('hello')).to.be.false;
     });
   });
 
-  describe('resolveLyricToPhonemes', () => {
+  describe('resolveLyricToPhonemes (common)', () => {
     it('should resolve empty lyric to <SP>', () => {
-      const out = tp.resolveLyricToPhonemes('');
+      const out = tpEn.resolveLyricToPhonemes('');
       expect(out).to.have.lengthOf(1);
       expect(out[0].name).to.equal('<SP>');
     });
 
     it('should resolve <SP> literal to <SP>', () => {
-      const out = tp.resolveLyricToPhonemes('<SP>');
+      const out = tpEn.resolveLyricToPhonemes('<SP>');
       expect(out).to.have.lengthOf(1);
       expect(out[0].name).to.equal('<SP>');
     });
 
     it('should resolve <AP> literal to <SP>', () => {
-      const out = tp.resolveLyricToPhonemes('<AP>');
+      const out = tpEn.resolveLyricToPhonemes('<AP>');
       expect(out).to.have.lengthOf(1);
       expect(out[0].name).to.equal('<SP>');
     });
 
-    it('should resolve jp_ prefixed lyric directly', () => {
-      const out = tp.resolveLyricToPhonemes('jp_a');
-      expect(out).to.have.lengthOf(1);
-      expect(out[0].name).to.equal('jp_a');
-      expect(out[0].display).to.equal('a');
-    });
-
     it('should resolve en_ prefixed dashed lyric into multiple phonemes', () => {
-      const out = tp.resolveLyricToPhonemes('en_HH-EH1-L-OW0');
+      const out = tpEn.resolveLyricToPhonemes('en_HH-EH1-L-OW0');
       expect(out.length).to.be.greaterThan(1);
       expect(out[0].name).to.equal('en_HH');
       out.forEach(p => expect(p.name.startsWith('en_')).to.be.true);
     });
 
+    it('should resolve english word via CMUdict', () => {
+      const out = tpEn.resolveLyricToPhonemes('hello');
+      expect(out.length).to.be.greaterThan(1);
+      out.forEach(p => expect(p.name.startsWith('en_')).to.be.true);
+    });
+
+    it('should resolve unknown english word via letter-level fallback', () => {
+      const out = tpEn.resolveLyricToPhonemes('hahaha');
+      expect(out.length).to.be.greaterThan(0);
+      out.forEach(p => expect(p.name.startsWith('en_')).to.be.true);
+    });
+
+    it('should resolve Chinese character to zh_ pinyin phoneme', () => {
+      const out = tpEn.resolveLyricToPhonemes('你');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name.startsWith('zh_')).to.be.true;
+    });
+
+    it('should respect explicit tone digit on Chinese char', () => {
+      const out1 = tpEn.resolveLyricToPhonemes('你3');
+      const out2 = tpEn.resolveLyricToPhonemes('你');
+      // both should resolve; tone override changes the syllable
+      expect(out1[0].name.startsWith('zh_')).to.be.true;
+      expect(out2[0].name.startsWith('zh_')).to.be.true;
+    });
+  });
+
+  describe('resolveLyricToPhonemes (jp-lora mode)', () => {
+    it('should resolve jp_ prefixed lyric directly to jp_ phoneme', () => {
+      const out = tpJp.resolveLyricToPhonemes('jp_a');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('jp_a');
+      expect(out[0].display).to.equal('a');
+    });
+
     it('should resolve hiragana to jp_ phonemes', () => {
-      const out = tp.resolveLyricToPhonemes('あ');
+      const out = tpJp.resolveLyricToPhonemes('あ');
       expect(out).to.have.lengthOf(1);
       expect(out[0].name).to.equal('jp_a');
     });
 
     it('should resolve hiragana syllable (ka) to consonant+vowel', () => {
-      const out = tp.resolveLyricToPhonemes('か');
+      const out = tpJp.resolveLyricToPhonemes('か');
       const names = out.map(p => p.name);
       expect(names).to.include('jp_k');
       expect(names).to.include('jp_a');
     });
 
     it('should resolve katakana the same as hiragana', () => {
-      const hira = tp.resolveLyricToPhonemes('あ');
-      const kata = tp.resolveLyricToPhonemes('ア');
+      const hira = tpJp.resolveLyricToPhonemes('あ');
+      const kata = tpJp.resolveLyricToPhonemes('ア');
       expect(kata.map(p => p.name)).to.deep.equal(hira.map(p => p.name));
     });
 
     it('should resolve yōon (きゃ) to palatal consonant + vowel', () => {
-      const out = tp.resolveLyon ? tp.resolveLyon('きゃ') : tp.resolveLyricToPhonemes('きゃ');
+      const out = tpJp.resolveLyricToPhonemes('きゃ');
       const names = out.map(p => p.name);
       expect(names).to.include('jp_ky');
       expect(names).to.include('jp_a');
     });
 
     it('should handle っ (small tsu) as cl', () => {
-      const out = tp.resolveLyricToPhonemes('っ');
+      const out = tpJp.resolveLyricToPhonemes('っ');
       const names = out.map(p => p.name);
       expect(names).to.include('jp_cl');
     });
 
     it('should skip ー and 〜 (prolonged sound mark)', () => {
-      const out = tp.resolveLyricToPhonemes('あーあ');
-      // ー should be skipped, leaving a + a
+      const out = tpJp.resolveLyricToPhonemes('あーあ');
       const names = out.map(p => p.name);
       expect(names).to.deep.equal(['jp_a', 'jp_a']);
     });
 
-    it('should resolve english word via CMUdict', () => {
-      const out = tp.resolveLyricToPhonemes('hello');
-      expect(out.length).to.be.greaterThan(1);
-      out.forEach(p => expect(p.name.startsWith('en_')).to.be.true);
-    });
-
-    it('should resolve unknown english word via letter-level fallback', () => {
-      const out = tp.resolveLyricToPhonemes('hahaha');
-      expect(out.length).to.be.greaterThan(0);
-      out.forEach(p => expect(p.name.startsWith('en_')).to.be.true);
-    });
-
-    it('should resolve Chinese character to zh_ pinyin phoneme', () => {
-      const out = tp.resolveLyricToPhonemes('你');
-      expect(out).to.have.lengthOf(1);
-      expect(out[0].name.startsWith('zh_')).to.be.true;
-    });
-
-    it('should respect explicit tone digit on Chinese char', () => {
-      const out1 = tp.resolveLyricToPhonemes('你3');
-      const out2 = tp.resolveLyricToPhonemes('你');
-      // both should resolve; tone override changes the syllable
-      expect(out1[0].name.startsWith('zh_')).to.be.true;
-      expect(out2[0].name.startsWith('zh_')).to.be.true;
-    });
-
     it('should force Japanese G2P with <jp> prefix for kanji', () => {
-      const out = tp.resolveLyricToPhonemes('<jp>愛');
+      const out = tpJp.resolveLyricToPhonemes('<jp>愛');
       expect(out.length).to.be.greaterThan(0);
       out.forEach(p => expect(p.name.startsWith('jp_')).to.be.true);
     });
   });
 
+  describe('resolveLyricToPhonemes (en-phonemes mode)', () => {
+    it('should resolve jp_ prefixed vowel to English phoneme', () => {
+      const out = tpEn.resolveLyricToPhonemes('jp_a');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_AA1');
+    });
+
+    it('should resolve jp_ prefixed consonant to English phoneme', () => {
+      const out = tpEn.resolveLyricToPhonemes('jp_k');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_K');
+    });
+
+    it('should resolve jp_ prefixed affricate (ts) to multiple English phonemes', () => {
+      const out = tpEn.resolveLyricToPhonemes('jp_ts');
+      expect(out).to.have.lengthOf(2);
+      expect(out[0].name).to.equal('en_T');
+      expect(out[1].name).to.equal('en_S');
+    });
+
+    it('should resolve jp_ prefixed palatal (ky) to consonant + Y', () => {
+      const out = tpEn.resolveLyricToPhonemes('jp_ky');
+      expect(out).to.have.lengthOf(2);
+      expect(out[0].name).to.equal('en_K');
+      expect(out[1].name).to.equal('en_Y');
+    });
+
+    it('should resolve hiragana vowel to English phoneme', () => {
+      const out = tpEn.resolveLyricToPhonemes('あ');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_AA1');
+    });
+
+    it('should resolve hiragana syllable (ka) to English consonant+vowel', () => {
+      const out = tpEn.resolveLyricToPhonemes('か');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_K');
+      expect(names).to.include('en_AA1');
+    });
+
+    it('should resolve katakana the same as hiragana', () => {
+      const hira = tpEn.resolveLyricToPhonemes('あ');
+      const kata = tpEn.resolveLyricToPhonemes('ア');
+      expect(kata.map(p => p.name)).to.deep.equal(hira.map(p => p.name));
+    });
+
+    it('should resolve yōon (きゃ) to English palatal sequence', () => {
+      const out = tpEn.resolveLyricToPhonemes('きゃ');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_K');
+      expect(names).to.include('en_Y');
+      expect(names).to.include('en_AA1');
+    });
+
+    it('should handle っ (small tsu) as English T', () => {
+      const out = tpEn.resolveLyricToPhonemes('っ');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_T');
+    });
+
+    it('should skip ー and 〜 (prolonged sound mark) in en-phonemes mode', () => {
+      const out = tpEn.resolveLyricToPhonemes('あーあ');
+      const names = out.map(p => p.name);
+      expect(names).to.deep.equal(['en_AA1', 'en_AA1']);
+    });
+
+    it('should force Japanese→English with <jp> prefix for kanji', () => {
+      const out = tpEn.resolveLyricToPhonemes('<jp>愛');
+      expect(out.length).to.be.greaterThan(0);
+      out.forEach(p => expect(p.name.startsWith('en_')).to.be.true);
+    });
+
+    it('should attach duration weights to mapped phonemes', () => {
+      const out = tpEn.resolveLyricToPhonemes('か');
+      // Each phoneme should have a weight property (from _attachEnglishWeights)
+      out.forEach(p => expect(p).to.have.property('weight'));
+    });
+
+    it('should map all 5 Japanese vowels to stressed English vowels', () => {
+      const vowelMap = {
+        'あ': 'en_AA1', // a → AA1
+        'い': 'en_IY1', // i → IY1
+        'う': 'en_UW1', // u → UW1
+        'え': 'en_EH1', // e → EH1
+        'お': 'en_OW1', // o → OW1
+      };
+      for (const [kana, expected] of Object.entries(vowelMap)) {
+        const out = tpEn.resolveLyricToPhonemes(kana);
+        expect(out).to.have.lengthOf(1);
+        expect(out[0].name).to.equal(expected);
+      }
+    });
+
+    it('should map Japanese consonants to nearest ARPAbet', () => {
+      const consonantKana = {
+        'か': 'en_K',   // k → K
+        'さ': 'en_S',   // s → S
+        'た': 'en_T',   // t → T
+        'な': 'en_N',   // n → N
+        'は': 'en_HH',  // h → HH
+        'ま': 'en_M',   // m → M
+        'ら': 'en_R',   // r → R
+        'が': 'en_G',   // g → G
+        'ざ': 'en_Z',   // z → Z
+        'だ': 'en_D',   // d → D
+        'ば': 'en_B',   // b → B
+        'ぱ': 'en_P',   // p → P
+      };
+      for (const [kana, expected] of Object.entries(consonantKana)) {
+        const out = tpEn.resolveLyricToPhonemes(kana);
+        const names = out.map(p => p.name);
+        expect(names).to.include(expected);
+      }
+    });
+
+    it('should map し (sh) to English SH', () => {
+      const out = tpEn.resolveLyricToPhonemes('し');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_SH');
+    });
+
+    it('should map ち (ch) to English CH', () => {
+      const out = tpEn.resolveLyricToPhonemes('ち');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_CH');
+    });
+
+    it('should map つ (ts) to English T + S', () => {
+      const out = tpEn.resolveLyricToPhonemes('つ');
+      const names = out.map(p => p.name);
+      expect(names).to.deep.equal(['en_T', 'en_S', 'en_UW1']);
+    });
+
+    it('should map じ (j) to English JH', () => {
+      const out = tpEn.resolveLyricToPhonemes('じ');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_JH');
+    });
+
+    it('should map ふ (f) to English F', () => {
+      const out = tpEn.resolveLyricToPhonemes('ふ');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_F');
+    });
+  });
+
+  describe('resolveLyricToPhonemes (hybrid mode)', () => {
+    // Hybrid mode key differences from en-phonemes:
+    //   ら行 (r) → L (not R) — closer to Japanese tap [ɾ]
+    //   お段 (o) → AO1 (not OW1) — pure vowel, not diphthong
+    //   り拗音 (ry) → L Y (not R Y)
+    // All other phonemes match en-phonemes mode.
+
+    it('should resolve jp_ prefixed vowel to English phoneme (same as en-phonemes for a)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('jp_a');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_AA1');
+    });
+
+    it('should map jp_o to AO1 in hybrid mode (not OW1)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('jp_o');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_AO1');
+    });
+
+    it('should map jp_r to L in hybrid mode (not R)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('jp_r');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_L');
+    });
+
+    it('should map jp_ry to L Y in hybrid mode (not R Y)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('jp_ry');
+      expect(out).to.have.lengthOf(2);
+      expect(out[0].name).to.equal('en_L');
+      expect(out[1].name).to.equal('en_Y');
+    });
+
+    it('should resolve hiragana お to AO1 in hybrid mode', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('お');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('en_AO1');
+    });
+
+    it('should resolve hiragana ら to L + AA1 in hybrid mode', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('ら');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_L');
+      expect(names).to.include('en_AA1');
+      // Should NOT include R
+      expect(names).to.not.include('en_R');
+    });
+
+    it('should resolve hiragana ろ to L + AO1 in hybrid mode', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('ろ');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_L');
+      expect(names).to.include('en_AO1');
+      // Should NOT include R or OW1
+      expect(names).to.not.include('en_R');
+      expect(names).to.not.include('en_OW1');
+    });
+
+    it('should resolve りょ to L Y AO1 in hybrid mode', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('りょ');
+      const names = out.map(p => p.name);
+      expect(names).to.deep.equal(['en_L', 'en_Y', 'en_AO1']);
+    });
+
+    it('should map か (ka) same as en-phonemes (K + AA1)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('か');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_K');
+      expect(names).to.include('en_AA1');
+    });
+
+    it('should map つ (ts) to T + S same as en-phonemes', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('つ');
+      const names = out.map(p => p.name);
+      expect(names).to.deep.equal(['en_T', 'en_S', 'en_UW1']);
+    });
+
+    it('should produce en_ prefixed phonemes (base model compatible)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('ありがとう');
+      expect(out.length).to.be.greaterThan(2);
+      out.forEach(p => expect(p.name.startsWith('en_') || p.name === '<SP>').to.be.true);
+    });
+
+    it('should differ from en-phonemes for ら行 (L vs R)', () => {
+      const hybridOut = tpHybrid.resolveLyricToPhonemes('ら');
+      const enOut = tpEn.resolveLyricToPhonemes('ら');
+      const hybridNames = hybridOut.map(p => p.name);
+      const enNames = enOut.map(p => p.name);
+      // Both should have 2 phonemes
+      expect(hybridNames).to.have.lengthOf(2);
+      expect(enNames).to.have.lengthOf(2);
+      // Consonant differs: hybrid uses L, en-phonemes uses R
+      expect(hybridNames[0]).to.equal('en_L');
+      expect(enNames[0]).to.equal('en_R');
+      // Vowel is same
+      expect(hybridNames[1]).to.equal(enNames[1]);
+    });
+
+    it('should differ from en-phonemes for お段 (AO1 vs OW1)', () => {
+      const hybridOut = tpHybrid.resolveLyricToPhonemes('お');
+      const enOut = tpEn.resolveLyricToPhonemes('お');
+      expect(hybridOut[0].name).to.equal('en_AO1');
+      expect(enOut[0].name).to.equal('en_OW1');
+    });
+
+    it('should attach duration weights to mapped phonemes', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('か');
+      out.forEach(p => expect(p).to.have.property('weight'));
+    });
+
+    it('should handle っ (small tsu) same as en-phonemes (T)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('っ');
+      const names = out.map(p => p.name);
+      expect(names).to.include('en_T');
+    });
+
+    it('should skip ー and 〜 in hybrid mode', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('あーあ');
+      const names = out.map(p => p.name);
+      expect(names).to.deep.equal(['en_AA1', 'en_AA1']);
+    });
+
+    it('should force Japanese→English with <jp> prefix for kanji', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('<jp>愛');
+      expect(out.length).to.be.greaterThan(0);
+      out.forEach(p => expect(p.name.startsWith('en_') || p.name === '<SP>').to.be.true);
+    });
+  });
+
   describe('_japaneseG2p', () => {
     it('should convert hiragana sentence to phoneme string', () => {
-      const result = tp._japaneseG2p('わたし');
+      const result = tpEn._japaneseG2p('わたし');
       expect(result).to.be.a('string');
       expect(result.split(' ')).to.include('w');
       expect(result.split(' ')).to.include('a');
     });
 
     it('should handle mixed kanji via dictionary', () => {
-      const result = tp._japaneseG2p('音楽');
+      const result = tpEn._japaneseG2p('音楽');
       expect(result).to.be.a('string');
       expect(result.length).to.be.greaterThan(0);
     });
 
     it('should return pau for unknown kanji', () => {
-      const result = tp._japaneseG2p('龘');
+      const result = tpEn._japaneseG2p('龘');
       expect(result).to.include('pau');
     });
 
     it('should pass through lowercase ascii as lowercase phoneme', () => {
-      const result = tp._japaneseG2p('a');
+      const result = tpEn._japaneseG2p('a');
       expect(result).to.equal('a');
     });
 
     it('should uppercase-less: ascii chars go to lowercase', () => {
-      const result = tp._japaneseG2p('A');
+      const result = tpEn._japaneseG2p('A');
       expect(result).to.equal('a');
+    });
+  });
+
+  describe('_japaneseToEnglishPhonemes', () => {
+    it('should convert hiragana word to English phoneme sequence', () => {
+      const out = tpEn._japaneseToEnglishPhonemes('ありがとう');
+      expect(out.length).to.be.greaterThan(2);
+      out.forEach(p => expect(p.name.startsWith('en_')).to.be.true);
+    });
+
+    it('should map pau (unknown kanji) to <SP>', () => {
+      const out = tpEn._japaneseToEnglishPhonemes('龘');
+      const spCount = out.filter(p => p.name === '<SP>').length;
+      expect(spCount).to.be.greaterThan(0);
+    });
+
+    it('should produce different output than jp-lora mode', () => {
+      const enOut = tpEn._japaneseToEnglishPhonemes('か');
+      const jpOut = tpJp._japaneseG2p('か').split(' ');
+      // en-phonemes should have en_ prefix; jp-lora uses jp_ prefix
+      enOut.forEach(p => expect(p.name.startsWith('en_') || p.name === '<SP>').to.be.true);
+      jpOut.forEach(p => expect(p).to.not.match(/^en_/));
     });
   });
 
   describe('_lookupPhonemeId', () => {
     it('should return <SP> id for empty lyric', () => {
-      const id = tp._lookupPhonemeId('');
-      expect(id).to.equal(tp.phone2idx['<SP>']);
+      const id = tpEn._lookupPhonemeId('');
+      expect(id).to.equal(tpEn.phone2idx['<SP>']);
     });
     it('should return <SP> id for whitespace lyric', () => {
-      const id = tp._lookupPhonemeId('   ');
-      expect(id).to.equal(tp.phone2idx['<SP>']);
+      const id = tpEn._lookupPhonemeId('   ');
+      expect(id).to.equal(tpEn.phone2idx['<SP>']);
     });
     it('should return <UNK> id for unknown phoneme', () => {
-      const id = tp._lookupPhonemeId('___definitely_unknown_phoneme___');
-      expect(id).to.equal(tp.phone2idx['<UNK>']);
+      const id = tpEn._lookupPhonemeId('___definitely_unknown_phoneme___');
+      expect(id).to.equal(tpEn.phone2idx['<UNK>']);
     });
     it('should resolve zh_ prefixed phonemes when present', () => {
-      // pick a known zh_ phoneme from vocab
-      const zhKey = Object.keys(tp.phone2idx).find(k => k.startsWith('zh_'));
+      const zhKey = Object.keys(tpEn.phone2idx).find(k => k.startsWith('zh_'));
       if (zhKey) {
-        const id = tp._lookupPhonemeId(zhKey);
-        expect(id).to.equal(tp.phone2idx[zhKey]);
+        const id = tpEn._lookupPhonemeId(zhKey);
+        expect(id).to.equal(tpEn.phone2idx[zhKey]);
       }
     });
     it('should resolve en_ prefixed phonemes when present', () => {
-      const enKey = Object.keys(tp.phone2idx).find(k => k.startsWith('en_'));
+      const enKey = Object.keys(tpEn.phone2idx).find(k => k.startsWith('en_'));
       if (enKey) {
-        const id = tp._lookupPhonemeId(enKey);
-        expect(id).to.equal(tp.phone2idx[enKey]);
+        const id = tpEn._lookupPhonemeId(enKey);
+        expect(id).to.equal(tpEn.phone2idx[enKey]);
       }
     });
   });
 
   describe('_charToZhPhoneme', () => {
     it('should return null for non-CJK input', () => {
-      expect(tp._charToZhPhoneme('abc')).to.be.null;
-      expect(tp._charToZhPhoneme('hello')).to.be.null;
+      expect(tpEn._charToZhPhoneme('abc')).to.be.null;
+      expect(tpEn._charToZhPhoneme('hello')).to.be.null;
     });
     it('should return zh_ prefixed phoneme for chinese char', () => {
-      const result = tp._charToZhPhoneme('你');
+      const result = tpEn._charToZhPhoneme('你');
       expect(result).to.not.be.null;
       expect(result.startsWith('zh_')).to.be.true;
     });
     it('should respect override tone', () => {
-      // 好 default tone is 3 (hǎo); override to 1 should yield a different phoneme.
-      const r1 = tp._charToZhPhoneme('好');
-      const rOverride = tp._charToZhPhoneme('好1');
+      const r1 = tpEn._charToZhPhoneme('好');
+      const rOverride = tpEn._charToZhPhoneme('好1');
       expect(r1).to.not.equal(rOverride);
       expect(rOverride).to.match(/1$/);
       expect(r1).to.match(/3$/);
@@ -226,24 +526,23 @@ describe('inference/pipeline/textProcessing - G2P', () => {
 
   describe('_englishG2p', () => {
     it('should return CMUdict entry for known word', () => {
-      const result = tp._englishG2p('hello');
+      const result = tpEn._englishG2p('hello');
       expect(result).to.be.a('string');
       expect(result.length).to.be.greaterThan(0);
     });
     it('should be case-insensitive', () => {
-      const lower = tp._englishG2p('hello');
-      const upper = tp._englishG2p('HELLO');
+      const lower = tpEn._englishG2p('hello');
+      const upper = tpEn._englishG2p('HELLO');
       expect(upper).to.equal(lower);
     });
     it('should use letter-level fallback for unknown word', () => {
-      const result = tp._englishG2p('qqzx');
+      const result = tpEn._englishG2p('qqzx');
       expect(result).to.not.be.null;
-      // q → K, z → Z, x → K S
       expect(result).to.include('K');
       expect(result).to.include('Z');
     });
     it('should return null for word with no mappable letters', () => {
-      const result = tp._englishG2p('12345');
+      const result = tpEn._englishG2p('12345');
       expect(result).to.be.null;
     });
   });

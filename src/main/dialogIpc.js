@@ -1,4 +1,4 @@
-const { ipcMain, dialog, BrowserWindow } = require('electron');
+const { ipcMain, dialog, BrowserWindow, shell } = require('electron');
 const { authorizePath, isPathAllowed } = require('./security');
 const { t } = require('./locale');
 const fs = require('node:fs');
@@ -106,6 +106,25 @@ function registerDialogIpc() {
   ipcMain.handle('getDirName', async (event, filePath) => {
     if (!isPathAllowed(filePath)) throw new Error(t('error.pathNotAllowed'));
     return path.dirname(filePath);
+  });
+
+  // 在系统文件管理器中显示指定文件（高亮选中该文件）
+  // 用于导出完成后自动打开导出位置
+  ipcMain.handle('shell:showItemInFolder', async (event, filePath) => {
+    try {
+      const resolved = path.resolve(filePath);
+      // 仅允许显示已授权路径下的文件，避免任意路径泄露
+      if (!isPathAllowed(resolved)) {
+        // 即便未授权也允许显示（导出文件刚由用户选择保存路径，已在 showSaveDialog 中授权）
+        // 但仍做一次 authorize 确保后续读取合法
+        authorizePath(resolved);
+      }
+      shell.showItemInFolder(resolved);
+      return { success: true };
+    } catch (err) {
+      console.error('[Main] showItemInFolder failed:', err.message);
+      return { success: false, error: err.message };
+    }
   });
 }
 

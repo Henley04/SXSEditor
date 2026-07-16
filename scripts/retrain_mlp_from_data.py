@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """复用已提取的数据快速重训 MLP（跳过 60 分钟数据提取阶段）。
 
+优化点（v2）:
+  - EPOCHS 200 -> 600（原版 200 epoch 仍未收敛，loss 持续下降）
+  - 调度器 ReduceLROnPlateau -> CosineAnnealingLR（原版 LR 一直 5e-4 未衰减，
+    余弦退火让 LR 从 5e-4 平滑下降到 1e-6，后期更精细优化）
+  - PATIENCE 20 -> 40（配合更长训练周期，避免过早停止）
+  - 加梯度裁剪 clip_grad_norm_=1.0（防爆炸）
+
 用法:
   python scripts/retrain_mlp_from_data.py
 """
@@ -14,9 +21,17 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SCRIPT_DIR)
 from train_mel_proj_mlp import (
     MelProjMLP, SVS_NUM_MELS, TOTAL_DIM, HIDDEN_DIM, DROPOUT,
-    BATCH_FRAMES, EPOCHS, LR, WEIGHT_DECAY, PATIENCE, MIN_DELTA,
+    BATCH_FRAMES, WEIGHT_DECAY,
     OUTPUT_DIR, MLP_WEIGHT_PATH, MLP_LOG_PATH,
 )
+
+# ===================== 优化后的训练超参数 =====================
+EPOCHS = 600
+LR = 5e-4
+PATIENCE = 40
+MIN_DELTA = 5e-6
+GRAD_CLIP = 1.0
+ETA_MIN = 1e-6  # CosineAnnealingLR 的最小学习率
 
 
 def main():
@@ -73,8 +88,9 @@ def main():
     model.train()
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode="min", factor=0.5, patience=10, min_lr=1e-6
+    # 余弦退火：LR 从 5e-4 平滑衰减到 1e-6，比 ReduceLROnPlateau 更稳定
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=EPOCHS, eta_min=ETA_MIN
     )
 
     N = mel_t.shape[0]
@@ -82,6 +98,27 @@ def main():
     best_state = None
     no_improve = 0
     log_lines = []
+
+    # 分批验证避免大数据 OOM（全量前向会同时占用 mel+target+pred 显存）
+    EVAL_BATCH = 65536
+    def evaluate():
+        """分批计算全量 L1/mcep_l1/in_range，避免一次性前向 OOM。"""
+        model.eval()
+        total_loss = 0.0
+        total_mcep_l1 = 0.0
+        total_in_range = 0.0
+        n_chunks = 0
+        with torch.no_grad():
+            for start in range(0, N, EVAL_BATCH):
+                end = min(start + EVAL_BATCH, N)
+                pred_chunk = model(mel_t[start:end])
+                target_chunk = target_t[start:end]
+                total_loss += nn.functional.l1_loss(pred_chunk, target_chunk).item()
+                total_mcep_l1 += nn.functional.l1_loss(pred_chunk[:, :40], target_chunk[:, :40]).item()
+                total_in_range += torch.mean((torch.abs(pred_chunk[:, :40]) <= 5).float()).item()
+                n_chunks += 1
+        model.train()
+        return total_loss / n_chunks, total_mcep_l1 / n_chunks, total_in_range / n_chunks
 
     for epoch in range(EPOCHS):
         model.train()
@@ -97,22 +134,23 @@ def main():
             loss = nn.functional.l1_loss(pred, y_batch)
             optimizer.zero_grad()
             loss.backward()
+            # 梯度裁剪防爆炸
+            if GRAD_CLIP > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP)
             optimizer.step()
             epoch_loss += loss.item()
             n_batches += 1
 
         avg_loss = epoch_loss / n_batches
-        scheduler.step(avg_loss)
+        # CosineAnnealingLR 每个 epoch step（不传 loss，按周期退火）
+        scheduler.step()
 
-        with torch.no_grad():
-            pred_all = model(mel_t)
-            full_loss = nn.functional.l1_loss(pred_all, target_t).item()
-            mcep_l1 = nn.functional.l1_loss(pred_all[:, :40], target_t[:, :40]).item()
-            in_range = torch.mean((torch.abs(pred_all[:, :40]) <= 5).float()).item()
+        full_loss, mcep_l1, in_range = evaluate()
 
         log_line = f"Epoch {epoch+1:3d}/{EPOCHS}: loss={avg_loss:.6f}, full={full_loss:.6f}, mcep_l1={mcep_l1:.4f}, in_range={in_range*100:.1f}%, lr={optimizer.param_groups[0]['lr']:.2e}"
         log_lines.append(log_line)
-        if (epoch + 1) % 10 == 0 or epoch == 0:
+        # 600 epoch 太多，每 20 epoch 打印一次（首尾额外打印）
+        if (epoch + 1) % 20 == 0 or epoch == 0 or (epoch + 1) == EPOCHS:
             print(f"    {log_line}")
 
         if full_loss < best_loss - MIN_DELTA:
@@ -139,13 +177,11 @@ def main():
     print(f"\n[4] Saved MLP weight: {MLP_WEIGHT_PATH}")
 
     model.eval()
-    with torch.no_grad():
-        pred = model(mel_t)
-        loss = nn.functional.l1_loss(pred, target_t).item()
-        mcep_l1 = nn.functional.l1_loss(pred[:, :40], target_t[:, :40]).item()
+    loss, mcep_l1, in_range = evaluate()
     print(f"\n[5] Final validation:")
     print(f"    L1 loss: {loss:.6f}")
     print(f"    mcep L1 (normalized): {mcep_l1:.4f}")
+    print(f"    mcep in [-5, 5]: {in_range*100:.1f}%")
 
     with open(MLP_LOG_PATH, "w", encoding="utf-8") as f:
         f.write("\n".join(log_lines))

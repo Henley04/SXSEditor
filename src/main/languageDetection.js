@@ -52,10 +52,20 @@ function detectEnglishNotes(notes) {
  * - 纯日文 → 'ja'（JP LoRA 模型）
  * - 含英文（含日英混合）→ null（base multilingual 模型，含英文训练数据）
  * - 其他 → null（base 模型）
+ *
+ * 当 japaneseVocalization === 'en-phonemes' 或 'hybrid' 时，日文歌词使用英语音素在 base 模型上合成，
+ * 永远返回 null（不切换 JP LoRA 模型）。hybrid 模式仅改进音素映射表（L 替代 R、AO 替代 OW），
+ * 仍使用 base 多语言模型，不需要切换 JP LoRA。
+ *
  * @param {Array<{lyric?: string}>} notes
+ * @param {string} [japaneseVocalization='en-phonemes'] - 'en-phonemes' | 'hybrid' | 'jp-lora'
  * @returns {string|null} 'ja' 或 null
  */
-function resolveLanguage(notes) {
+function resolveLanguage(notes, japaneseVocalization = 'en-phonemes') {
+  // en-phonemes / hybrid 模式：日文歌词用英语音素在 base 模型上合成，不切换 JP LoRA
+  // hybrid 仅改进映射表（L 替代 R、AO 替代 OW），模型路径与 en-phonemes 一致
+  if (japaneseVocalization === 'en-phonemes' || japaneseVocalization === 'hybrid') return null;
+  // jp-lora 模式：使用原有逻辑检测语言
   const isJapanese = detectJapaneseNotes(notes);
   const hasEnglish = detectEnglishNotes(notes);
   if (hasEnglish) return null; // 含英文 → base 模型（JP 模型对英文 OOD）

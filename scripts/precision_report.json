@@ -1,0 +1,241 @@
+{
+  "timestamp": "2026-07-08 16:49:39",
+  "model_path": "D:\\Document\\electron\\SXSEditor\\SoulX-Singer\\pretrained_models\\SoulX-Singer\\model.pt",
+  "onnx_dir": "D:\\Document\\electron\\SXSEditor\\onnx_models",
+  "seq_len_hint": 100,
+  "thresholds": {
+    "strict": {
+      "cos_min": 0.99,
+      "snr_min_db": 30.0
+    },
+    "relaxed": {
+      "cos_min": 0.95,
+      "snr_min_db": 25.0
+    },
+    "relaxed_models": [
+      "mel_transform",
+      "vocoder"
+    ]
+  },
+  "results": [
+    {
+      "name": "note_text_encoder",
+      "pytorch_shape": [
+        1,
+        1,
+        512
+      ],
+      "onnx_shape": [
+        1,
+        1,
+        512
+      ],
+      "mse": 0.0,
+      "rmse": 0.0,
+      "cos": 0.9999999999999976,
+      "snr_db": 119.32410542246433,
+      "passed": true,
+      "relaxed": false,
+      "threshold": {
+        "cos_min": 0.99,
+        "snr_min_db": 30.0
+      },
+      "shape_mismatch": false
+    },
+    {
+      "name": "note_pitch_encoder",
+      "pytorch_shape": [
+        1,
+        1,
+        512
+      ],
+      "onnx_shape": [
+        1,
+        1,
+        512
+      ],
+      "mse": 0.0,
+      "rmse": 0.0,
+      "cos": 0.9999999999999979,
+      "snr_db": 120.19654549398271,
+      "passed": true,
+      "relaxed": false,
+      "threshold": {
+        "cos_min": 0.99,
+        "snr_min_db": 30.0
+      },
+      "shape_mismatch": false
+    },
+    {
+      "name": "note_type_encoder",
+      "pytorch_shape": [
+        1,
+        1,
+        512
+      ],
+      "onnx_shape": [
+        1,
+        1,
+        512
+      ],
+      "mse": 0.0,
+      "rmse": 0.0,
+      "cos": 0.9999999999999982,
+      "snr_db": 120.0139599289161,
+      "passed": true,
+      "relaxed": false,
+      "threshold": {
+        "cos_min": 0.99,
+        "snr_min_db": 30.0
+      },
+      "shape_mismatch": false
+    },
+    {
+      "name": "f0_encoder",
+      "pytorch_shape": [
+        1,
+        1,
+        512
+      ],
+      "onnx_shape": [
+        1,
+        1,
+        512
+      ],
+      "mse": 0.0,
+      "rmse": 0.0,
+      "cos": 0.999999999999998,
+      "snr_db": 119.70216583045881,
+      "passed": true,
+      "relaxed": false,
+      "threshold": {
+        "cos_min": 0.99,
+        "snr_min_db": 30.0
+      },
+      "shape_mismatch": false
+    },
+    {
+      "name": "preflow",
+      "pytorch_shape": [
+        1,
+        1,
+        512
+      ],
+      "onnx_shape": [
+        1,
+        1,
+        512
+      ],
+      "mse": 5.6446932902593644e-14,
+      "rmse": 2.3758563277814938e-07,
+      "cos": 0.9999999999999653,
+      "snr_db": 119.09401171514492,
+      "passed": true,
+      "relaxed": false,
+      "threshold": {
+        "cos_min": 0.99,
+        "snr_min_db": 30.0
+      },
+      "shape_mismatch": false
+    },
+    {
+      "name": "cond_emb",
+      "pytorch_shape": [
+        1,
+        1,
+        1024
+      ],
+      "onnx_shape": [
+        1,
+        1,
+        1024
+      ],
+      "mse": 4.146524432407234e-15,
+      "rmse": 6.439351234718629e-08,
+      "cos": 0.9999999999999212,
+      "snr_db": 105.8501920403043,
+      "passed": true,
+      "relaxed": false,
+      "threshold": {
+        "cos_min": 0.99,
+        "snr_min_db": 30.0
+      },
+      "shape_mismatch": false
+    },
+    {
+      "name": "mel_transform",
+      "pytorch_shape": [
+        1,
+        50,
+        128
+      ],
+      "onnx_shape": [
+        1,
+        50,
+        128
+      ],
+      "mse": 2.672080989811842e-09,
+      "rmse": 5.169217532481915e-05,
+      "cos": 0.9999999977965555,
+      "snr_db": 83.54186716903634,
+      "passed": true,
+      "relaxed": true,
+      "threshold": {
+        "cos_min": 0.95,
+        "snr_min_db": 25.0
+      },
+      "shape_mismatch": false
+    },
+    {
+      "name": "diff_step",
+      "pytorch_shape": [
+        1,
+        1,
+        128
+      ],
+      "onnx_shape": [
+        1,
+        1,
+        128
+      ],
+      "mse": 2.2055960031443222e-13,
+      "rmse": 4.696377330607414e-07,
+      "cos": 0.9999999999996948,
+      "snr_db": 114.97282986708205,
+      "passed": true,
+      "relaxed": false,
+      "threshold": {
+        "cos_min": 0.99,
+        "snr_min_db": 30.0
+      },
+      "shape_mismatch": false
+    },
+    {
+      "name": "vocoder",
+      "pytorch_shape": [
+        1,
+        480
+      ],
+      "onnx_shape": [
+        1,
+        480
+      ],
+      "mse": 1.9037194171248278e-10,
+      "rmse": 1.3797533899667824e-05,
+      "cos": 0.9999999998387928,
+      "snr_db": 94.84898808120143,
+      "passed": true,
+      "relaxed": true,
+      "threshold": {
+        "cos_min": 0.95,
+        "snr_min_db": 25.0
+      },
+      "shape_mismatch": false
+    }
+  ],
+  "summary": {
+    "total": 9,
+    "passed": 9,
+    "failed": 0
+  }
+}

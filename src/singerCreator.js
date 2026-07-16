@@ -207,6 +207,10 @@ btnCancel.addEventListener('click', () => {
   window.close();
 });
 
+document.getElementById('btn-save').addEventListener('click', () => {
+  performSave(false);
+});
+
 // ==================== Save / Save As logic ====================
 // Save (Ctrl+S): if a file path is already known, write to it silently.
 // Otherwise fall back to Save As (show the dialog).
@@ -434,12 +438,25 @@ async function playPreviewWav() {
     source.buffer = wavAudioBuffer;
     source.connect(previewAudioContext.destination);
 
-    if (previewPlayStartOffset > 0 && previewPlayStartOffset < wavAudioBuffer.duration) {
-      source.start(0, previewPlayStartOffset);
-    } else {
-      source.start();
-      previewPlayStartOffset = 0;
-    }
+    let startOffset = (previewPlayStartOffset > 0 && previewPlayStartOffset < wavAudioBuffer.duration)
+      ? previewPlayStartOffset
+      : 0;
+    previewPlayStartOffset = startOffset;
+
+    // Schedule playback slightly in the future so the audio system has time to
+    // prepare the first buffer. Using an explicit `when` (instead of 0) makes
+    // the start time deterministic and lets us align the playhead baseline to
+    // the exact moment audio begins generating.
+    const SCHEDULE_AHEAD = 0.05;
+    const scheduledStartTime = previewAudioContext.currentTime + SCHEDULE_AHEAD;
+    // The audible signal lags behind the AudioContext clock by the output
+    // latency. Aligning the baseline to scheduledStartTime + outputLatency
+    // keeps the playhead in sync with what is actually heard, preventing the
+    // bar from running ahead of the audio.
+    const outputLatency = (previewAudioContext.outputLatency != null
+      ? previewAudioContext.outputLatency
+      : previewAudioContext.baseLatency) || 0;
+    source.start(scheduledStartTime, startOffset);
 
     source.onended = () => {
       if (isPlayingPreview) {
@@ -453,7 +470,7 @@ async function playPreviewWav() {
 
     previewAudioSource = source;
     isPlayingPreview = true;
-    previewPlayStartContextTime = previewAudioContext.currentTime;
+    previewPlayStartContextTime = scheduledStartTime + outputLatency;
     btnPlayPreview.textContent = t('singerCreator.pausePreview');
     startPreviewPlaybackLoop();
   } catch (err) {
@@ -473,7 +490,7 @@ function pausePreviewPlayback() {
     previewAudioSource = null;
   }
 
-  const elapsed = previewAudioContext.currentTime - previewPlayStartContextTime;
+  const elapsed = Math.max(0, previewAudioContext.currentTime - previewPlayStartContextTime);
   previewPlayStartOffset += elapsed;
 
   if (previewPlayStartOffset >= wavDuration) {
@@ -488,7 +505,9 @@ function pausePreviewPlayback() {
 function startPreviewPlaybackLoop() {
   if (!isPlayingPreview) return;
 
-  const elapsed = previewAudioContext.currentTime - previewPlayStartContextTime;
+  // Clamp to 0 so the playhead stays put until the scheduled (audible) start
+  // time is reached, instead of running ahead of the audio.
+  const elapsed = Math.max(0, previewAudioContext.currentTime - previewPlayStartContextTime);
   const currentTime = previewPlayStartOffset + elapsed;
 
   drawWaveform(currentTime);

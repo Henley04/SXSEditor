@@ -95,6 +95,7 @@ const { registerDialogIpc } = require('./main/dialogIpc');
 const { registerSettingsIpc, setCachedDMLDevices, getCachedDMLDevices, invalidateDMLDevices } = require('./main/settingsIpc');
 const { registerResourceManagerIpc } = require('./main/resourceManagerIpc');
 const { registerWebnnIpc } = require('./main/webnnIpc');
+const { registerUpdateIpc, cleanupInstallerTempFiles } = require('./main/updateIpc');
 const {
   createSplashWindow,
   closeSplashWindow,
@@ -169,6 +170,16 @@ app.whenReady().then(() => {
   });
 
   loadMainLocale();
+
+  // Clean up leftover installer .exe files from a previous in-app update.
+  // By the time the app launches again, the previous install flow has
+  // finished (success or cancel), so the temp installer is no longer needed.
+  // Using 'all' here reclaims disk immediately instead of waiting 7 days.
+  try {
+    cleanupInstallerTempFiles('all');
+  } catch (err) {
+    console.warn('[Main] Installer temp cleanup failed:', err.message);
+  }
 
   // Splash screen is shown only in packaged builds. In dev mode the
   // main window is shown immediately — devs don't need the splash and
@@ -325,6 +336,31 @@ app.whenReady().then(() => {
         console.warn('[Main] Device validation failed:', err.message);
       }
     })();
+
+    // Auto update check (once per 24h, packaged only)
+    (async () => {
+      try {
+        const { shouldAutoCheck, checkAllUpdates, recordCheckTime, shouldShowNotification } = require('./main/updateChecker');
+        const { openUpdateNotificationWindow } = require('./main/windowManager');
+        const isPackaged = app.isPackaged;
+        const settings = loadSettings();
+        if (!shouldAutoCheck(settings, isPackaged)) return;
+        const channel = settings.updateChannel || 'release';
+        const result = await checkAllUpdates(channel);
+        // Only record check time on success (no app error). If the check failed
+        // (e.g. rate limited, network error), skip recording so the next launch
+        // can retry instead of waiting 24h.
+        if (!result.app.error) {
+          await recordCheckTime();
+        }
+        const freshSettings = loadSettings();
+        if (shouldShowNotification(result.app, result.models, freshSettings, false)) {
+          openUpdateNotificationWindow(result);
+        }
+      } catch (err) {
+        console.warn('[Main] Auto update check failed:', err.message);
+      }
+    })();
   });
 
   // GPU 硬件探测已合并到上方 did-finish-load 处理器中（应用完全启动后一次性执行并缓存复用）。
@@ -376,4 +412,5 @@ registerAudioIpc();
 registerModelDownloadIpc();
 registerResourceManagerIpc();
 registerWebnnIpc();
+registerUpdateIpc();
 registerSplashIpc();

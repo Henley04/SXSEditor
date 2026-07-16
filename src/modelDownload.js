@@ -12,7 +12,17 @@ let lastOverallDownloaded = 0;
 let lastSpeedTime = 0;
 let isDownloading = false;
 let renderedFileIds = [];
-let currentPrecision = 'fp16';
+let currentPrecision = 'fp32';
+let currentRevision = 'latest'; // selected revision: 'latest' = auto-pick newest tag, or a specific tag (e.g. 'v1')
+let availableTags = []; // tags fetched from ModelScope (branches NOT shown)
+let currentVersionInfo = null; // { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
+let i18nReady = false;
+// Resolved when the main process pushes the initial precision via
+// 'model-download:precision'. Used to make refreshVersionInfo() wait for the
+// real precision instead of falling back to the 'fp16' default — otherwise
+// an FP32 install would briefly display the FP16 version number on open.
+let resolveInitialPrecision;
+const initialPrecisionReady = new Promise((resolve) => { resolveInitialPrecision = resolve; });
 
 function createIconSvg(status) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -143,6 +153,190 @@ function updateMissingFiles(newMissingFiles) {
   renderFileList(true);
 }
 
+// ===== Version management =====
+
+/**
+ * Check model version for the current precision and update the UI.
+ * Called on window load, precision switch, and after download completes.
+ */
+async function refreshVersionInfo() {
+  try {
+    const result = await window.electronAPI.modelDownloadCheckVersion(currentPrecision);
+    currentVersionInfo = result;
+    renderVersionInfo(result);
+  } catch (err) {
+    console.error('[Version] Failed to check model version:', err);
+    document.getElementById('versionInfoSection').style.display = 'none';
+  }
+}
+
+/**
+ * Resolve the latest tag from availableTags (same logic as getLatestTag in
+ * modelManager.js). Returns the latest tag string or null if none match.
+ */
+function resolveLatestTag(tags) {
+  if (!Array.isArray(tags) || tags.length === 0) return null;
+  const valid = tags.filter(t => typeof t === 'string' && /^v?\d+/i.test(t));
+  if (valid.length === 0) return null;
+  valid.sort((a, b) => {
+    const na = a.replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+    const nb = b.replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+    const len = Math.max(na.length, nb.length);
+    for (let i = 0; i < len; i++) {
+      const da = na[i] || 0, db = nb[i] || 0;
+      if (da !== db) return db - da; // descending
+    }
+    return 0;
+  });
+  return valid[0];
+}
+
+/**
+ * Check if the currently selected main model revision resolves to v0 or
+ * null (no real version). In such cases the download/update confirmation
+ * should warn the user that v0 and legacy content are identical.
+ */
+function isMainModelTargetV0OrLegacy() {
+  if (currentRevision === 'v0') return true;
+  if (currentRevision === 'latest') {
+    const latest = resolveLatestTag(availableTags);
+    return !latest || latest === 'v0';
+  }
+  return false;
+}
+
+/**
+ * Check if SiFiGAN's latest version is v0 or null based on cached versionInfo.
+ */
+function isSifiganTargetV0OrLegacy() {
+  const info = sifiganState.versionInfo;
+  if (!info) return false; // unknown — don't block initial download
+  return !info.latestVersion || info.latestVersion === 'v0';
+}
+
+/**
+ * Fetch available model versions (tags) from ModelScope and populate
+ * the version selector dropdown. The first option is always 'latest'
+ * (auto-pick the newest tag). Tags are appended after. Branches are
+ * NOT shown. 'latest' is the default selection.
+ */
+async function refreshVersionSelector() {
+  const select = document.getElementById('versionSelect');
+  if (!select) return;
+  select.disabled = true;
+  select.innerHTML = '';
+  try {
+    const result = await window.electronAPI.modelDownloadListVersions(currentPrecision);
+    availableTags = (result && result.tags) || [];
+  } catch (_) {
+    availableTags = [];
+  }
+  // First option: latest (auto-pick newest tag on download)
+  const latestOpt = document.createElement('option');
+  latestOpt.value = 'latest';
+  latestOpt.textContent = t('modelDownload.latestVersionLabel');
+  select.appendChild(latestOpt);
+  // Remaining options: tags
+  for (const tag of availableTags) {
+    const option = document.createElement('option');
+    option.value = tag;
+    option.textContent = tag;
+    select.appendChild(option);
+  }
+  // Determine which option to select:
+  // 1. If local model has a specific tag installed, select that tag
+  // 2. Else default to 'latest'
+  const localRev = currentVersionInfo && currentVersionInfo.hasModelFiles
+    ? currentVersionInfo.localRevision
+    : null;
+  if (localRev && localRev !== 'master' && availableTags.includes(localRev)) {
+    select.value = localRev;
+    currentRevision = localRev;
+  } else {
+    select.value = 'latest';
+    currentRevision = 'latest';
+  }
+  select.disabled = false;
+}
+
+function renderVersionInfo(info) {
+  const section = document.getElementById('versionInfoSection');
+  const localEl = document.getElementById('localVersionValue');
+  const latestEl = document.getElementById('latestVersionValue');
+  const banner = document.getElementById('versionUpdateBanner');
+  const updateText = document.getElementById('versionUpdateText');
+  const updateBtn = document.getElementById('updateModelBtn');
+
+  if (!info || !info.hasModelFiles) {
+    // No model files installed — hide version info, no update needed
+    section.style.display = 'none';
+    // Still refresh the version selector so user can pick a version to download
+    refreshVersionSelector();
+    return;
+  }
+
+  section.style.display = 'block';
+  // Show local revision (tag name) and latest version
+  const localRev = info.localRevision;
+  if (!localRev || localRev === 'master') {
+    // Legacy branch-based install — show as legacy
+    localEl.textContent = t('modelDownload.legacyVersion');
+  } else {
+    localEl.textContent = localRev;
+  }
+  latestEl.textContent = info.latestVersion || '-';
+
+  if (info.updateAvailable) {
+    banner.style.display = 'flex';
+    if (!localRev || localRev === 'master') {
+      // Legacy install → update to latest tag
+      updateText.textContent = t('modelDownload.legacyUpdateHint');
+    } else {
+      // Specific tag installed → update to latest available
+      updateText.textContent = t('modelDownload.versionSwitchHint', { version: localRev });
+    }
+    updateBtn.style.display = 'inline-block';
+  } else {
+    banner.style.display = 'none';
+  }
+  // Refresh the version selector to reflect installed revision
+  refreshVersionSelector();
+}
+
+document.getElementById('updateModelBtn').addEventListener('click', async () => {
+  if (isDownloading) return;
+  const confirmMsg = isMainModelTargetV0OrLegacy()
+    ? t('modelDownload.v0LegacyConfirmMessage')
+    : t('modelDownload.updateConfirmMessage');
+  const confirmed = await showConfirmDialog(confirmMsg);
+  if (!confirmed) return;
+
+  isDownloading = true;
+  document.getElementById('updateModelBtn').style.display = 'none';
+  document.getElementById('startBtn').style.display = 'none';
+  document.getElementById('closeBtn').style.display = 'none';
+  document.getElementById('cancelBtn').style.display = 'inline-block';
+  document.getElementById('changeDirBtn').disabled = true;
+  document.getElementById('precisionSection').style.display = 'none';
+  document.getElementById('versionInfoSection').style.display = 'none';
+  document.getElementById('progressSection').style.display = 'block';
+  downloadStartTime = Date.now();
+  lastSpeedTime = downloadStartTime;
+  lastOverallDownloaded = 0;
+
+  const result = await window.electronAPI.modelDownloadUpdate(currentPrecision, currentRevision);
+  if (result && !result.success && result.error) {
+    document.getElementById('statusText').textContent = t('modelDownload.downloadNotAvailable');
+    document.getElementById('errorMessage').textContent = result.error;
+    document.getElementById('errorMessage').style.display = 'block';
+    document.getElementById('cancelBtn').style.display = 'none';
+    document.getElementById('closeBtn').style.display = 'inline-block';
+    document.getElementById('changeDirBtn').disabled = false;
+    document.getElementById('precisionSection').style.display = 'block';
+    isDownloading = false;
+  }
+});
+
 function formatSpeed(bytesPerSec) {
   if (bytesPerSec <= 0) return '';
   return formatBytes(bytesPerSec) + '/s';
@@ -175,20 +369,51 @@ window.electronAPI.onModelDownloadMissingFiles((files) => {
   for (const file of files) {
     fileStates[file.filePath] = { status: 'pending', progress: 0, downloaded: 0, total: 0 };
   }
+  renderFileList(true);
+  loadModelDir();
+  // During an in-window update (updateModelBtn flow), isDownloading is true
+  // and the progress section is already visible. Don't reset the UI back to
+  // the "ready to download" state — the download is about to start.
+  if (isDownloading) {
+    document.getElementById('errorMessage').style.display = 'none';
+    return;
+  }
   document.getElementById('statusText').textContent = t('modelDownload.needDownloadCount', { count: files.length });
   document.getElementById('startBtn').style.display = 'inline-block';
   document.getElementById('closeBtn').style.display = 'inline-block';
   document.getElementById('precisionSection').style.display = 'block';
   document.getElementById('progressSection').style.display = 'none';
   document.getElementById('errorMessage').style.display = 'none';
-  renderFileList(true);
-  loadModelDir();
 });
 
 window.electronAPI.onModelDownloadPrecision((precision) => {
-  currentPrecision = precision || 'fp16';
+  const newPrecision = precision || 'fp32';
+  const changed = newPrecision !== currentPrecision;
+  currentPrecision = newPrecision;
   const radio = document.querySelector(`input[name="modelPrecision"][value="${currentPrecision}"]`);
   if (radio) radio.checked = true;
+  // Resolve the initial-precision promise so the first refreshVersionInfo()
+  // call (in initI18n().then()) uses the real precision.
+  if (resolveInitialPrecision) {
+    const r = resolveInitialPrecision;
+    resolveInitialPrecision = null;
+    r();
+  } else if (i18nReady && changed) {
+    // Subsequent precision pushes (e.g. after delete-and-recheck) — refresh
+    // version info so the UI reflects the new precision.
+    refreshVersionInfo();
+  }
+});
+
+// Receive initial revision context from main process when window opens
+window.electronAPI.onModelDownloadRevision((revision) => {
+  if (revision && typeof revision === 'string' && revision !== 'latest') {
+    currentRevision = revision;
+    const select = document.getElementById('versionSelect');
+    if (select && Array.from(select.options).some(opt => opt.value === revision)) {
+      select.value = revision;
+    }
+  }
 });
 
 window.electronAPI.onModelDownloadProgress((data) => {
@@ -238,6 +463,8 @@ window.electronAPI.onModelDownloadComplete(() => {
   }
   isDownloading = false;
   renderFileList();
+  // 刷新版本信息（下载完成后版本应已更新）
+  refreshVersionInfo();
 });
 
 window.electronAPI.onModelDownloadError((data) => {
@@ -255,6 +482,13 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   const selectedRadio = document.querySelector('input[name="modelPrecision"]:checked');
   currentPrecision = selectedRadio ? selectedRadio.value : 'fp16';
 
+  // When the target revision is v0 or null (no real version), warn the user
+  // that v0 and legacy content are identical before starting the download.
+  if (isMainModelTargetV0OrLegacy()) {
+    const confirmed = await showConfirmDialog(t('modelDownload.v0LegacyConfirmMessage'));
+    if (!confirmed) return;
+  }
+
   document.getElementById('startBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'none';
   document.getElementById('cancelBtn').style.display = 'inline-block';
@@ -266,7 +500,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   lastOverallDownloaded = 0;
   isDownloading = true;
 
-  const result = await window.electronAPI.modelDownloadStart(currentPrecision);
+  const result = await window.electronAPI.modelDownloadStart(currentPrecision, currentRevision);
   if (result && !result.success && result.error) {
     document.getElementById('statusText').textContent = t('modelDownload.downloadNotAvailable');
     document.getElementById('speedInfo').textContent = '';
@@ -291,6 +525,8 @@ document.querySelectorAll('input[name="modelPrecision"]').forEach(radio => {
     currentPrecision = newPrecision;
     document.getElementById('statusText').textContent = t('modelDownload.detecting');
     document.getElementById('startBtn').style.display = 'none';
+    // 切换精度时刷新版本信息
+    refreshVersionInfo();
     try {
       await window.electronAPI.modelDownloadRecheck(currentPrecision);
     } catch (err) {
@@ -341,6 +577,7 @@ const sifiganState = {
   status: 'checking', // 'installed' | 'not_downloaded' | 'download_url_not_configured' | 'checking' | 'downloading'
   files: null,
   isDownloading: false,
+  versionInfo: null, // { updateAvailable, localVersion, latestVersion, hasModelFiles }
 };
 
 function setSifiganStatusText(text) {
@@ -375,10 +612,14 @@ function renderSifiganCard() {
   const downloadBtn = document.getElementById('sifiganDownloadBtn');
   const unloadBtn = document.getElementById('sifiganUnloadBtn');
   const progress = document.getElementById('sifiganProgress');
+  const versionText = document.getElementById('sifiganVersionText');
+  const updateBtn = document.getElementById('sifiganUpdateBtn');
   if (!downloadBtn || !unloadBtn) return;
 
   // Reset visibility
   progress.style.display = 'none';
+  if (versionText) versionText.textContent = '';
+  if (updateBtn) updateBtn.style.display = 'none';
 
   switch (sifiganState.status) {
     case 'installed': {
@@ -389,6 +630,15 @@ function renderSifiganCard() {
       setSifiganStatusIndicator('installed');
       setSifiganStatusText(t('modelDownload.sifiganInstalled'));
       showSifiganTooltip('');
+      // 显示版本信息和更新按钮
+      if (sifiganState.versionInfo && versionText) {
+        const v = sifiganState.versionInfo;
+        const localStr = v.localVersion || t('modelDownload.legacyVersion');
+        versionText.textContent = t('modelDownload.versionDisplay', { local: localStr, latest: v.latestVersion || '-' });
+        if (v.updateAvailable && updateBtn) {
+          updateBtn.style.display = 'inline-block';
+        }
+      }
       break;
     }
     case 'not_downloaded': {
@@ -438,11 +688,18 @@ async function refreshSifiganCard() {
     const result = await window.electronAPI.modelDownloadCheckSifigan();
     sifiganState.status = result.status;
     sifiganState.files = result.files;
+    // 检查 SiFiGAN 版本
+    if (result.allExist) {
+      try {
+        sifiganState.versionInfo = await window.electronAPI.modelDownloadCheckSifiganVersion();
+      } catch (_) {
+        sifiganState.versionInfo = null;
+      }
+    } else {
+      sifiganState.versionInfo = null;
+    }
   } catch (err) {
     console.error('[SiFiGAN] status check failed:', err);
-    // On error, fall back to download_url_not_configured so the UI stays
-    // in a safe, non-actionable state instead of offering a download that
-    // would fail.
     sifiganState.status = 'download_url_not_configured';
   }
   renderSifiganCard();
@@ -450,6 +707,11 @@ async function refreshSifiganCard() {
 
 document.getElementById('sifiganDownloadBtn').addEventListener('click', async () => {
   if (sifiganState.isDownloading) return;
+  // Warn if SiFiGAN's latest version is v0 or null (same as legacy content).
+  if (isSifiganTargetV0OrLegacy()) {
+    const confirmed = await showConfirmDialog(t('modelDownload.v0LegacyConfirmMessage'));
+    if (!confirmed) return;
+  }
   sifiganState.isDownloading = true;
   sifiganState.status = 'downloading';
   renderSifiganCard();
@@ -464,6 +726,10 @@ document.getElementById('sifiganDownloadBtn').addEventListener('click', async ()
     } else if (result.status === 'installed') {
       sifiganState.status = 'installed';
       sifiganState.files = result.files;
+      // 下载完成后刷新版本信息
+      try {
+        sifiganState.versionInfo = await window.electronAPI.modelDownloadCheckSifiganVersion();
+      } catch (_) { sifiganState.versionInfo = null; }
     } else {
       sifiganState.status = 'not_downloaded';
       sifiganState.files = result.files;
@@ -488,6 +754,7 @@ document.getElementById('sifiganUnloadBtn').addEventListener('click', async () =
     const result = await window.electronAPI.modelDownloadUnloadSifigan();
     sifiganState.status = result.status || 'download_url_not_configured';
     sifiganState.files = result.files;
+    sifiganState.versionInfo = null;
   } catch (err) {
     console.error('[SiFiGAN] unload failed:', err);
     // Re-check on failure to get the actual state
@@ -497,11 +764,75 @@ document.getElementById('sifiganUnloadBtn').addEventListener('click', async () =
   }
 });
 
-initI18n().then(() => {
+// SiFiGAN 更新按钮：删除旧文件后重新下载
+document.getElementById('sifiganUpdateBtn').addEventListener('click', async () => {
+  if (sifiganState.isDownloading) return;
+  const confirmMsg = isSifiganTargetV0OrLegacy()
+    ? t('modelDownload.v0LegacyConfirmMessage')
+    : t('modelDownload.sifiganUpdateConfirmMessage');
+  const confirmed = await showConfirmDialog(confirmMsg);
+  if (!confirmed) return;
+
+  sifiganState.isDownloading = true;
+  sifiganState.status = 'downloading';
+  renderSifiganCard();
+  try {
+    // 先删除旧文件（含版本文件），再触发下载
+    await window.electronAPI.modelDownloadUpdateSifigan();
+    const result = await window.electronAPI.modelDownloadStartSifigan();
+    if (result.status === 'installed') {
+      sifiganState.status = 'installed';
+      sifiganState.files = result.files;
+      try {
+        sifiganState.versionInfo = await window.electronAPI.modelDownloadCheckSifiganVersion();
+      } catch (_) { sifiganState.versionInfo = null; }
+    } else {
+      sifiganState.status = 'not_downloaded';
+      sifiganState.files = result.files;
+    }
+  } catch (err) {
+    console.error('[SiFiGAN] update failed:', err);
+    sifiganState.status = 'download_url_not_configured';
+  } finally {
+    sifiganState.isDownloading = false;
+    renderSifiganCard();
+  }
+});
+
+// Version selector: update currentRevision when user picks a different version
+document.getElementById('versionSelect').addEventListener('change', (e) => {
+  if (isDownloading) {
+    // revert selection during download
+    e.target.value = currentRevision;
+    return;
+  }
+  const newRevision = e.target.value;
+  if (newRevision && newRevision !== currentRevision) {
+    currentRevision = newRevision;
+  }
+});
+
+// Open model-updates docs page in system default browser
+document.getElementById('modelUpdatesLink').addEventListener('click', async (e) => {
+  e.preventDefault();
+  await window.electronAPI.modelDownloadOpenExternal('https://henley04.github.io/SXSEditor/user/model-updates.html');
+});
+
+initI18n().then(async () => {
   applyLocale();
   document.documentElement.lang = getLocale();
+  i18nReady = true;
+  // Wait for the main process to push the real precision before querying
+  // the version — otherwise an FP32 install would briefly show the FP16
+  // version. Fall back after a short timeout in case the push never arrives.
+  await Promise.race([
+    initialPrecisionReady,
+    new Promise((r) => setTimeout(r, 1000)),
+  ]);
   // Refresh SiFiGAN card once i18n is ready so status text is translated
   refreshSifiganCard();
+  // 检查主模型版本信息
+  refreshVersionInfo();
 });
 
 // Apply saved theme

@@ -4,11 +4,16 @@ import {
   HEADER_HEIGHT,
 } from './constants.js';
 import { t } from '../i18n/index.js';
-import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog } from './projectManager.js';
+import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty } from './projectManager.js';
 import { playAll, pausePlayback, stopPlayback, exportAll } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi } from './fragmentOperations.js';
+import { showConfirmDialog } from '../alertDialog.js';
+
+// Click-vs-drag tracking for fragment selection
+let _clickStartPos = null;
+const CLICK_THRESHOLD = 3;
 
 // BPM and time signature inputs
 dom.bpmInput.addEventListener('change', () => {
@@ -78,6 +83,9 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
   const fragments = trackManager.getFragments();
   const beatWidth = getBeatWidth();
 
+  // Record click position for click-vs-drag detection
+  _clickStartPos = { x: e.clientX, y: e.clientY };
+
   for (let i = 0; i < singers.length; i++) {
     const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
 
@@ -107,6 +115,10 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
       }
     }
   }
+
+  // Clicked on empty area → deselect fragment
+  state.selectedFragmentId = null;
+  renderFragmentTimeline();
 });
 
 dom.fragmentCanvas.addEventListener('mousemove', (e) => {
@@ -169,8 +181,29 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
   }
 });
 
-dom.fragmentCanvas.addEventListener('mouseup', finishDrag);
-dom.fragmentCanvas.addEventListener('mouseleave', finishDrag);
+dom.fragmentCanvas.addEventListener('mouseup', (e) => {
+  // Check if this was a click (no significant movement) vs drag
+  if (_clickStartPos && state.dragState) {
+    const dx = e.clientX - _clickStartPos.x;
+    const dy = e.clientY - _clickStartPos.y;
+    if (Math.abs(dx) < CLICK_THRESHOLD && Math.abs(dy) < CLICK_THRESHOLD) {
+      // It's a click — select the fragment
+      const fragment = state.dragState.fragment;
+      state.selectedFragmentId = fragment.id;
+      state.dragState = null;
+      state.fragmentDragSnapshot = null;
+      _clickStartPos = null;
+      renderFragmentTimeline();
+      return;
+    }
+  }
+  _clickStartPos = null;
+  finishDrag();
+});
+dom.fragmentCanvas.addEventListener('mouseleave', () => {
+  _clickStartPos = null;
+  finishDrag();
+});
 
 dom.fragmentCanvas.addEventListener('dblclick', (e) => {
   const rect = dom.fragmentCanvas.getBoundingClientRect();
@@ -200,6 +233,40 @@ dom.fragmentCanvas.addEventListener('dblclick', (e) => {
   }
 });
 
+dom.fragmentCanvas.addEventListener('contextmenu', (e) => {
+  e.preventDefault();
+  const rect = dom.fragmentCanvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+
+  const singers = trackManager.getSingers();
+  const fragments = trackManager.getFragments();
+  const beatWidth = getBeatWidth();
+
+  for (let i = 0; i < singers.length; i++) {
+    const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+
+    if (y >= singerY && y < singerY + SINGER_ROW_HEIGHT) {
+      const singerFragments = fragments.filter(f => f.singerId === singers[i].id);
+
+      for (const fragment of singerFragments) {
+        const fragX = fragment.startTime * beatWidth;
+        const fragWidth = fragment.duration * beatWidth;
+
+        if (x >= fragX && x <= fragX + fragWidth) {
+          // Select the fragment first
+          state.selectedFragmentId = fragment.id;
+          renderFragmentTimeline();
+
+          // Show context menu
+          showFragmentContextMenu(e.clientX, e.clientY, fragment);
+          return;
+        }
+      }
+    }
+  }
+});
+
 // Scroll events
 dom.fragmentContainer.addEventListener('wheel', (e) => {
   e.preventDefault();
@@ -216,9 +283,9 @@ dom.fragmentContainer.addEventListener('wheel', (e) => {
     state.fragmentScrollX = mouseBeats * newBeatWidth - mouseXInContainer;
     renderFragmentTimeline();
   } else if (e.shiftKey) {
-    state.fragmentScrollY += e.deltaY;
-  } else {
     state.fragmentScrollX += e.deltaY;
+  } else {
+    state.fragmentScrollY += e.deltaY;
   }
   syncFragmentScroll();
 }, { passive: false });
@@ -250,6 +317,14 @@ document.addEventListener('keydown', (e) => {
     }
     return;
   }
+
+  if (e.key === 'Delete' || e.key === 'Backspace') {
+    if (state.selectedFragmentId) {
+      e.preventDefault();
+      deleteSelectedFragment();
+    }
+    return;
+  }
 });
 
 // Window beforeunload
@@ -269,4 +344,87 @@ if (window.electronAPI?.onMainMenuSaveRequest) {
 if (window.electronAPI?.onMainMenuSaveAsRequest) {
   const off2 = window.electronAPI.onMainMenuSaveAsRequest(() => { saveProjectAs(); });
   if (state._ipcCleanups) state._ipcCleanups.push(off2);
+}
+
+// ---- Fragment context menu ----
+let _fragmentCtxMenu = null;
+
+function hideFragmentContextMenu() {
+  if (_fragmentCtxMenu) {
+    _fragmentCtxMenu.remove();
+    _fragmentCtxMenu = null;
+  }
+}
+
+function showFragmentContextMenu(clientX, clientY, fragment) {
+  hideFragmentContextMenu();
+
+  const menu = document.createElement('div');
+  menu.className = 'fragment-ctx-menu';
+  menu.style.left = clientX + 'px';
+  menu.style.top = clientY + 'px';
+
+  const deleteItem = document.createElement('div');
+  deleteItem.className = 'fragment-ctx-item fragment-ctx-danger';
+  deleteItem.textContent = t('main.deleteFragment');
+  deleteItem.addEventListener('click', async () => {
+    hideFragmentContextMenu();
+    if (await showConfirmDialog(t('main.confirmDeleteFragment', { name: fragment.name }))) {
+      deleteSelectedFragment();
+    }
+  });
+
+  menu.appendChild(deleteItem);
+  document.body.appendChild(menu);
+  _fragmentCtxMenu = menu;
+
+  // Close on click outside
+  const closeHandler = (e) => {
+    if (!menu.contains(e.target)) {
+      hideFragmentContextMenu();
+      document.removeEventListener('click', closeHandler);
+    }
+  };
+  setTimeout(() => document.addEventListener('click', closeHandler), 0);
+}
+
+// ---- Fragment deletion ----
+async function deleteSelectedFragment() {
+  const fragmentId = state.selectedFragmentId;
+  if (!fragmentId) return;
+  const fragment = trackManager.getFragment(fragmentId);
+  if (!fragment) return;
+
+  // Close fragment editor window if open
+  if (window.electronAPI?.closeFragmentEditor) {
+    window.electronAPI.closeFragmentEditor(fragmentId);
+  }
+
+  const fragmentClone = JSON.parse(JSON.stringify(fragment));
+  const idx = trackManager.getFragments().findIndex(f => f.id === fragmentId);
+  if (idx === -1) return;
+
+  trackManager.removeFragment(fragmentId);
+  state.selectedFragmentId = null;
+
+  history.push({
+    undo() {
+      trackManager.addFragment(fragmentClone);
+      // Re-insert at the original position
+      const frags = trackManager.getFragments();
+      const added = frags.pop();
+      frags.splice(idx, 0, added);
+      refreshAll();
+    },
+    redo() {
+      trackManager.removeFragment(fragmentId);
+      if (state.selectedFragmentId === fragmentId) {
+        state.selectedFragmentId = null;
+      }
+      refreshAll();
+    }
+  });
+
+  markDirty();
+  refreshAll();
 }

@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveFragmentData: (fragmentId, data) => ipcRenderer.invoke('saveFragmentData', fragmentId, data),
   saveFragmentDataSync: (fragmentId, data) => ipcRenderer.invoke('saveFragmentDataSync', fragmentId, data),
   getFragmentData: (fragmentId) => ipcRenderer.invoke('getFragmentData', fragmentId),
+  closeFragmentEditor: (fragmentId) => ipcRenderer.invoke('fragment:close', fragmentId),
   closeAllFragmentEditors: () => ipcRenderer.invoke('fragment:closeAll'),
   onFragmentSaved: (callback) => {
     const handler = (event, data) => callback(data);
@@ -102,6 +103,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   importMidi: () => ipcRenderer.invoke('midi:import'),
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),
   getDirName: (filePath) => ipcRenderer.invoke('getDirName', filePath),
+  showItemInFolder: (filePath) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
   getDMLDevices: () => ipcRenderer.invoke('settings:getDMLDevices'),
   getHardwareStatus: () => ipcRenderer.invoke('settings:getHardwareStatus'),
   getCurrentHardware: () => ipcRenderer.invoke('settings:getCurrentHardware'),
@@ -156,7 +158,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('model-download:precision', handler);
     return () => ipcRenderer.removeListener('model-download:precision', handler);
   },
-  modelDownloadStart: (precision) => ipcRenderer.invoke('model-download:start', precision),
+  onModelDownloadRevision: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('model-download:revision', handler);
+    return () => ipcRenderer.removeListener('model-download:revision', handler);
+  },
+  modelDownloadStart: (precision, revision) => ipcRenderer.invoke('model-download:start', precision, revision),
   modelDownloadCancel: () => ipcRenderer.invoke('model-download:cancel'),
   modelDownloadCheck: () => ipcRenderer.invoke('model-download:check'),
   modelDownloadChangeDir: () => ipcRenderer.invoke('model-download:change-dir'),
@@ -166,12 +173,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   modelDownloadRecheck: (precision) => ipcRenderer.invoke('model-download:recheck', precision),
   // JP model download
   modelDownloadCheckJp: (precision) => ipcRenderer.invoke('model-download:check-jp', precision),
-  modelDownloadStartJp: (precision) => ipcRenderer.invoke('model-download:start-jp', precision),
+  modelDownloadStartJp: (precision, revision) => ipcRenderer.invoke('model-download:start-jp', precision, revision),
   modelDownloadCheckJpExists: () => ipcRenderer.invoke('model-download:check-jp-exists'),
   // SiFiGAN (optional vocoder) download/unload
   modelDownloadCheckSifigan: () => ipcRenderer.invoke('model-download:check-sifigan'),
-  modelDownloadStartSifigan: () => ipcRenderer.invoke('model-download:start-sifigan'),
+  modelDownloadStartSifigan: (revision) => ipcRenderer.invoke('model-download:start-sifigan', revision),
   modelDownloadUnloadSifigan: () => ipcRenderer.invoke('model-download:unload-sifigan'),
+  // Model version management
+  modelDownloadCheckVersion: (precision) => ipcRenderer.invoke('model-download:check-version', precision),
+  modelDownloadCheckJpVersion: (precision) => ipcRenderer.invoke('model-download:check-jp-version', precision),
+  modelDownloadCheckSifiganVersion: () => ipcRenderer.invoke('model-download:check-sifigan-version'),
+  modelDownloadCheckAllVersions: (precision) => ipcRenderer.invoke('model-download:check-all-versions', precision),
+  modelDownloadUpdate: (precision, revision) => ipcRenderer.invoke('model-download:update', precision, revision),
+  modelDownloadUpdateJp: (precision, revision) => ipcRenderer.invoke('model-download:update-jp', precision, revision),
+  modelDownloadUpdateSifigan: (revision) => ipcRenderer.invoke('model-download:update-sifigan', revision),
+  // Version listing (fetch available branches from ModelScope)
+  modelDownloadListVersions: (precision) => ipcRenderer.invoke('model-download:list-versions', precision),
+  modelDownloadListJpVersions: (precision) => ipcRenderer.invoke('model-download:list-jp-versions', precision),
+  modelDownloadListSifiganVersions: () => ipcRenderer.invoke('model-download:list-sifigan-versions'),
+  // Open external URL (for model-updates docs link)
+  modelDownloadOpenExternal: (url) => ipcRenderer.invoke('model-download:open-external', url),
   // SVS JP model check
   svsCheckJpModels: () => ipcRenderer.invoke('svs:checkJpModels'),
   saveLocale: (locale) => ipcRenderer.invoke('save-locale', locale),
@@ -320,6 +341,40 @@ contextBridge.exposeInMainWorld('electronAPI', {
       const handler = () => callback();
       ipcRenderer.on('theme:list-changed', handler);
       return () => ipcRenderer.removeListener('theme:list-changed', handler);
+    },
+  },
+
+  // ==================== Update API ====================
+  updateAPI: {
+    checkNow: () => ipcRenderer.invoke('update:check-now'),
+    getStatus: () => ipcRenderer.invoke('update:get-status'),
+    skipVersion: (version) => ipcRenderer.invoke('update:skip-version', version),
+    dontRemind: () => ipcRenderer.invoke('update:dont-remind'),
+    openDownloadPage: (url) => ipcRenderer.invoke('update:open-download-page', url),
+    openModelDownload: () => ipcRenderer.invoke('update:open-model-download'),
+    // In-app installer download
+    downloadInstaller: (url, version) => ipcRenderer.invoke('update:download-installer', { url, version }),
+    cancelDownload: () => ipcRenderer.invoke('update:cancel-download'),
+    installInstaller: (filePath) => ipcRenderer.invoke('update:install-installer', { filePath }),
+    onDownloadProgress: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('update:download-progress', handler);
+      return () => ipcRenderer.removeListener('update:download-progress', handler);
+    },
+    onDownloadComplete: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('update:download-complete', handler);
+      return () => ipcRenderer.removeListener('update:download-complete', handler);
+    },
+    onDownloadError: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('update:download-error', handler);
+      return () => ipcRenderer.removeListener('update:download-error', handler);
+    },
+    onNotificationShow: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('update:notification-show', handler);
+      return () => ipcRenderer.removeListener('update:notification-show', handler);
     },
   },
 });

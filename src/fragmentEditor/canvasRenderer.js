@@ -37,7 +37,11 @@ import {
   getParamPanelCollapsed,
   getParamPanelMode,
   getDragMode,
+  getKanjiGroups,
 } from './state.js';
+import {
+  findGroupByNoteId,
+} from './kanjiGroupUtils.js';
 
 const canvas = document.getElementById('piano-roll');
 const ctx = canvas.getContext('2d');
@@ -123,6 +127,112 @@ export function findNoteAt(x, y) {
     }
   }
   return null;
+}
+
+/**
+ * Hit-test for kanji group brackets/labels.
+ * Returns the group object if the point (x, y) is on a group's bracket line
+ * or kanji label, otherwise null.
+ */
+export function findKanjiGroupAt(x, y) {
+  const groups = getKanjiGroups();
+  if (!groups || groups.length === 0) return null;
+  const notes = getNotes();
+  const zoomX = getZoomX();
+  const scrollX = getScrollX();
+  const beatToPixel = BEAT_WIDTH * zoomX;
+
+  for (const group of groups) {
+    const groupNotes = group.noteIds
+      .map(id => notes.find(n => n.id === id))
+      .filter(Boolean);
+    if (groupNotes.length === 0) continue;
+    const sorted = [...groupNotes].sort((a, b) => a.start - b.start);
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const x1 = first.start * beatToPixel - scrollX;
+    const x2 = (last.start + last.duration) * beatToPixel - scrollX;
+    const yMin = Math.min(...groupNotes.map(n => pitchToY(n.pitch)));
+    const lineY = yMin - 10;
+    // Hit area: 6px tall band around the line + kanji label area
+    const labelW = 20;
+    const midX = (x1 + x2) / 2;
+    if (y >= lineY - 8 && y <= lineY + 8) {
+      // On the line itself (including label area)
+      if (x >= x1 && x <= x2) {
+        return { group, rightClickedNoteId: null };
+      }
+    }
+    // Also check a wider area around the label text
+    if (x >= midX - labelW && x <= midX + labelW && y >= lineY - 10 && y <= lineY + 10) {
+      return { group, rightClickedNoteId: null };
+    }
+  }
+  return null;
+}
+
+/**
+ * Draw kanji group brackets and labels above kana notes.
+ * For each group: a horizontal line from the first kana to the last kana,
+ * with the kanji character displayed in the middle.
+ */
+function _drawKanjiGroups(ctx, c) {
+  const groups = getKanjiGroups();
+  if (!groups || groups.length === 0) return;
+  const notes = getNotes();
+  const zoomX = getZoomX();
+  const scrollX = getScrollX();
+  const beatToPixel = BEAT_WIDTH * zoomX;
+
+  ctx.save();
+  for (const group of groups) {
+    const groupNotes = group.noteIds
+      .map(id => notes.find(n => n.id === id))
+      .filter(Boolean);
+    if (groupNotes.length < 2) continue;  // Single-note groups don't need a bracket
+    const sorted = [...groupNotes].sort((a, b) => a.start - b.start);
+    const first = sorted[0];
+    const last = sorted[sorted.length - 1];
+    const x1 = first.start * beatToPixel - scrollX;
+    const x2 = (last.start + last.duration) * beatToPixel - scrollX;
+    const yMin = Math.min(...groupNotes.map(n => pitchToY(n.pitch)));
+    const lineY = yMin - 10;
+
+    // Skip if entirely off-screen
+    if (x2 < 0 || x1 > canvas.width) continue;
+
+    // Draw bracket: horizontal line with small vertical ticks at each end
+    ctx.strokeStyle = c.accent;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x1, lineY);
+    ctx.lineTo(x2, lineY);
+    // Left tick
+    ctx.moveTo(x1, lineY);
+    ctx.lineTo(x1, lineY + 4);
+    // Right tick
+    ctx.moveTo(x2, lineY);
+    ctx.lineTo(x2, lineY + 4);
+    ctx.stroke();
+
+    // Draw kanji label in the middle
+    const midX = (x1 + x2) / 2;
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const textW = ctx.measureText(group.kanji).width + 8;
+    const textH = 14;
+    // Background pill
+    ctx.fillStyle = c.bgElevated;
+    ctx.fillRect(midX - textW / 2, lineY - textH / 2, textW, textH);
+    ctx.strokeStyle = c.accent;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(midX - textW / 2, lineY - textH / 2, textW, textH);
+    // Kanji text
+    ctx.fillStyle = c.accent;
+    ctx.fillText(group.kanji, midX, lineY);
+  }
+  ctx.restore();
 }
 
 export function _getParamCurveAreaTop() {
@@ -465,7 +575,9 @@ export function generateAutoPitchPoints() {
   const points = [];
   for (let i = 0; i < sortedNotes.length; i++) {
     const note = sortedNotes[i];
-    points.push({ time: note.start, pitch: note.pitch });
+    // 起始点和末端都标记 breakAfter: true，避免在 note 内部做线性插值产生 Midi 音高平线。
+    // 只有锚点/笔刷覆盖的时段才返回具体音高；未覆盖的中间帧返回 null，由 vocoder 回退到 noteFreq。
+    points.push({ time: note.start, pitch: note.pitch, breakAfter: true });
     points.push({ time: note.start + note.duration, pitch: note.pitch, breakAfter: true });
   }
   return points;
@@ -500,7 +612,8 @@ export function getPitchAtTime(time) {
             ? (time - sorted[i].time) / (sorted[i + 1].time - sorted[i].time)
             : 0;
           const smoothness = (sorted[i].smoothness || 0) / 100;
-          const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
+          const smoothStepT = t * t * (3 - 2 * t);
+          const smoothT = t + (smoothStepT - t) * smoothness;
           return sorted[i].pitch + smoothT * (sorted[i + 1].pitch - sorted[i].pitch);
         }
       }
@@ -1109,6 +1222,22 @@ function renderPitchCurve(c) {
 
   drawAutoPoints(c.pitchAutoLine, 1.5, [4, 3]);
 
+  // autoPoints 现在只在 note 起始/末端有拟合点（breakAfter 阻止 note 内部插值），
+  // drawAutoPoints 仅做 moveTo 不会画出线段，这里补画拟合点小圆点保持视觉参考。
+  ctx.fillStyle = c.pitchAutoLine;
+  for (const note of notes) {
+    const startX = timeToX(note.start);
+    const endX = timeToX(note.start + note.duration);
+    const y = pitchToY(note.pitch);
+    if (endX < 0 || startX > w) continue;
+    ctx.beginPath();
+    ctx.arc(startX, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(endX, y, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   if (pitchCurve.anchorPoints.length > 0) {
     const sorted = getSortedAnchorPoints();
     const maxTime = Math.max(endBeat, sorted[sorted.length - 1].time) + 2;
@@ -1162,6 +1291,24 @@ function renderPitchCurve(c) {
         ctx.beginPath();
         ctx.arc(px, py, 12, 0, Math.PI * 2);
         ctx.stroke();
+
+        // 在选中锚点旁显示其 smoothness 值，便于右键拖拽时实时观察变化。
+        const sm = Math.max(0, Math.min(100, Math.round(ap.smoothness ?? 0)));
+        const label = `S${sm}`;
+        ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        const labelX = px + 14;
+        const labelY = py - 12;
+        const padX = 3, padY = 1;
+        const metrics = ctx.measureText(label);
+        const tw = metrics.width;
+        const th = 11;
+        // 半透明背景便于阅读
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(labelX - padX, labelY - th / 2 - padY, tw + padX * 2, th + padY * 2);
+        ctx.fillStyle = c.accentLine || c.fgPrimary;
+        ctx.fillText(label, labelX, labelY);
       }
     }
   }
@@ -1384,6 +1531,9 @@ function _doRenderImpl(w, h) {
       ctx.fillText(tipText, tipX + 5, tipY + 4);
     }
   }
+
+  // Draw kanji group brackets and labels above kana notes
+  _drawKanjiGroups(ctx, c);
 
   if (currentParamMode === 'Pitch') {
     renderPitchCurve(c);

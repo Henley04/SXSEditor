@@ -8,6 +8,7 @@ let mainWindow = null;
 let settingsWindow = null;
 let resourceManagerWindow = null;
 let modelDownloadWindow = null;
+let updateNotificationWindow = null;
 let fragmentWindows = {};
 let pendingFragmentData = {};
 let singerCreatorWindow = null;
@@ -22,6 +23,8 @@ function getMainWindow() { return mainWindow; }
 function getSettingsWindow() { return settingsWindow; }
 function getResourceManagerWindow() { return resourceManagerWindow; }
 function getModelDownloadWindow() { return modelDownloadWindow; }
+function getUpdateNotificationWindow() { return updateNotificationWindow; }
+function setUpdateNotificationWindow(win) { updateNotificationWindow = win; }
 function getFragmentWindows() { return fragmentWindows; }
 function getSingerCreatorWindow() { return singerCreatorWindow; }
 function getAudioPreprocessWindow() { return audioPreprocessWindow; }
@@ -192,6 +195,8 @@ function openSettingsWindow() {
     maximizable: false,
     parent: mainWindow,
     modal: true,
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: SETTINGS_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -201,6 +206,7 @@ function openSettingsWindow() {
   });
 
   settingsWindow.loadURL(SETTINGS_WINDOW_WEBPACK_ENTRY);
+  settingsWindow.once('ready-to-show', () => { settingsWindow.show(); });
   settingsWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   settingsWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
@@ -224,6 +230,8 @@ function openResourceManagerWindow() {
     minimizable: true,
     maximizable: false,
     parent: mainWindow,
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: RESOURCE_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -233,6 +241,7 @@ function openResourceManagerWindow() {
   });
 
   resourceManagerWindow.loadURL(RESOURCE_MANAGER_WINDOW_WEBPACK_ENTRY);
+  resourceManagerWindow.once('ready-to-show', () => { resourceManagerWindow.show(); });
   resourceManagerWindow.setMenu(null);
   resourceManagerWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   resourceManagerWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -242,7 +251,7 @@ function openResourceManagerWindow() {
   });
 }
 
-function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
+function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, revision) {
   if (modelDownloadWindow) {
     modelDownloadWindow.focus();
     return;
@@ -262,6 +271,8 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
     maximizable: true,
     closable: true,
     parent: mainWindow,
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: MODEL_DOWNLOAD_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -271,6 +282,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
   });
 
   modelDownloadWindow.loadURL(MODEL_DOWNLOAD_WINDOW_WEBPACK_ENTRY);
+  modelDownloadWindow.once('ready-to-show', () => { modelDownloadWindow.show(); });
   modelDownloadWindow.setMenu(null);
   modelDownloadWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   modelDownloadWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -278,6 +290,9 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
   modelDownloadWindow.webContents.once('did-finish-load', () => {
     modelDownloadWindow.webContents.send('model-download:missing-files', missingFiles);
     modelDownloadWindow.webContents.send('model-download:precision', currentPrecision);
+    if (revision) {
+      modelDownloadWindow.webContents.send('model-download:revision', revision);
+    }
     modelDownloadWindow.focus();
   });
 
@@ -288,6 +303,49 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION) {
 
 function setModelDownloadWindow(win) {
   modelDownloadWindow = win;
+}
+
+function openUpdateNotificationWindow(data) {
+  if (updateNotificationWindow) {
+    updateNotificationWindow.focus();
+    return;
+  }
+
+  updateNotificationWindow = new BrowserWindow({
+    width: 560,
+    height: 720,
+    minWidth: 420,
+    minHeight: 520,
+    title: t('update.title'),
+    icon: path.join(__dirname, '..', 'SXS.png'),
+    resizable: true,
+    minimizable: false,
+    maximizable: false,
+    parent: mainWindow,
+    modal: true,
+    backgroundColor: '#14141f',
+    show: false,
+    webPreferences: {
+      preload: UPDATE_NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+    },
+  });
+
+  updateNotificationWindow.loadURL(UPDATE_NOTIFICATION_WINDOW_WEBPACK_ENTRY);
+  updateNotificationWindow.once('ready-to-show', () => { updateNotificationWindow.show(); });
+  updateNotificationWindow.setMenu(null);
+  updateNotificationWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  updateNotificationWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  updateNotificationWindow.webContents.once('did-finish-load', () => {
+    updateNotificationWindow.webContents.send('update:notification-show', data);
+  });
+
+  updateNotificationWindow.on('closed', () => {
+    updateNotificationWindow = null;
+  });
 }
 
 function openFragmentEditor(fragment, project, wavBuffer) {
@@ -308,6 +366,8 @@ function openFragmentEditor(fragment, project, wavBuffer) {
     height: 600,
     title: `分片编辑 - ${fragment.name}`,
     icon: path.join(__dirname, '..', 'SXS.png'),
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: FRAGMENT_EDITOR_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -317,6 +377,7 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   });
 
   fragmentWindow.loadURL(`${FRAGMENT_EDITOR_WINDOW_WEBPACK_ENTRY}#fragmentId=${encodeURIComponent(fragment.id)}`);
+  fragmentWindow.once('ready-to-show', () => { fragmentWindow.show(); });
   fragmentWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   fragmentWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   // Defer openDevTools until did-finish-load (see createWindow for rationale).
@@ -414,6 +475,8 @@ function openSingerCreator() {
     icon: path.join(__dirname, '..', 'SXS.png'),
     minWidth: 700,
     minHeight: 500,
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: SINGER_CREATOR_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -423,6 +486,7 @@ function openSingerCreator() {
   });
 
   singerCreatorWindow.loadURL(SINGER_CREATOR_WINDOW_WEBPACK_ENTRY);
+  singerCreatorWindow.once('ready-to-show', () => { singerCreatorWindow.show(); });
   singerCreatorWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   singerCreatorWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
@@ -456,6 +520,8 @@ function openAudioPreprocess(data) {
     icon: path.join(__dirname, '..', 'SXS.png'),
     minWidth: 800,
     minHeight: 600,
+    backgroundColor: '#14141f',
+    show: false,
     webPreferences: {
       preload: AUDIO_PREPROCESS_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
@@ -465,6 +531,7 @@ function openAudioPreprocess(data) {
   });
 
   audioPreprocessWindow.loadURL(AUDIO_PREPROCESS_WINDOW_WEBPACK_ENTRY);
+  audioPreprocessWindow.once('ready-to-show', () => { audioPreprocessWindow.show(); });
   audioPreprocessWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   audioPreprocessWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
@@ -480,14 +547,18 @@ function openAudioPreprocess(data) {
   });
 }
 
+function closeFragmentEditor(fragmentId) {
+  const win = fragmentWindows[fragmentId];
+  if (win && !win.isDestroyed()) {
+    win.destroy();
+  }
+  delete fragmentWindows[fragmentId];
+  delete pendingFragmentData[fragmentId];
+}
+
 function closeAllFragmentEditors() {
   for (const id in fragmentWindows) {
-    const win = fragmentWindows[id];
-    if (win && !win.isDestroyed()) {
-      win.destroy();
-    }
-    delete fragmentWindows[id];
-    delete pendingFragmentData[id];
+    closeFragmentEditor(id);
   }
 }
 
@@ -526,6 +597,11 @@ function registerWindowIpc() {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('fragmentDataSaved', { fragmentId, ...data });
     }
+    return { success: true };
+  });
+
+  ipcMain.handle('fragment:close', async (event, fragmentId) => {
+    closeFragmentEditor(fragmentId);
     return { success: true };
   });
 
@@ -603,6 +679,9 @@ module.exports = {
   openResourceManagerWindow,
   createModelDownloadWindow,
   setModelDownloadWindow,
+  openUpdateNotificationWindow,
+  getUpdateNotificationWindow,
+  setUpdateNotificationWindow,
   openFragmentEditor,
   openSingerCreator,
   openAudioPreprocess,
@@ -625,4 +704,5 @@ module.exports = {
   setClosePending,
   getClosePending,
   closeAllFragmentEditors,
+  closeFragmentEditor,
 };

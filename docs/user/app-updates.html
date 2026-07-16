@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Application Updates — SXSEditor Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="../dev/build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="user"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="quick-start.html" data-i18n="sidebar.user">User Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Application Updates</span><span data-lang="zh">应用更新</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Application Updates</span>
+        <span data-lang="zh">应用更新</span>
+      </h1>
+
+      <p data-lang="en">This page tracks notable user-facing changes to the SXSEditor application, grouped by release version. Application version numbers are auto-incremented by GitHub CI. For the full commit history, see the <a href="https://github.com/Henley04/SXSEditor/commits/master">GitHub commit log</a>. Changes released before v1.0.5 are not tracked here.</p>
+      <p data-lang="zh">本页按发布版本追踪 SXSEditor 应用面向用户的重大变更。应用版本号由 GitHub CI 自动递增。完整提交历史请查看 <a href="https://github.com/Henley04/SXSEditor/commits/master">GitHub 提交日志</a>。v1.0.5 之前的变更不再追踪。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Looking for model / inference changes? See <a href="model-updates.html">Model Updates</a>.</p>
+          <p data-lang="zh">查找模型 / 推理相关变更？请见 <a href="model-updates.html">模型更新</a>。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">v1.0.5</span>
+        <span data-lang="zh">v1.0.5</span>
+      </h2>
+
+      <h3>
+        <span data-lang="en">New Features</span>
+        <span data-lang="zh">新功能</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en"><strong>Japanese support (experimental)</strong> — initial experimental support for Japanese vocals, with kanji / kana auto-grouping in the fragment editor and a hybrid phoneme mode that improves Japanese pronunciation on the base multilingual model.</span><span data-lang="zh"><strong>日语支持（实验性）</strong>——首次实验性支持日语人声，分片编辑器中提供汉字 / 假名自动分组，以及混合音素模式在基础多语言模型上改善日语发音。</span></li>
+        <li><span data-lang="en"><strong>Fragment selection &amp; deletion</strong> — fragments on the timeline can be selected with a click; press <kbd class="kbd">Delete</kbd> or use the right-click context menu to remove them.</span><span data-lang="zh"><strong>片段选择与删除</strong>——时间线上的片段可点击选中；按 <kbd class="kbd">Delete</kbd> 或右键菜单可删除。</span></li>
+        <li><span data-lang="en"><strong>ACG default theme &amp; UI overhaul</strong> — comprehensive UI optimization with the ACG theme as the new default.</span><span data-lang="zh"><strong>ACG 默认主题与界面重构</strong>——全面 UI 优化，ACG 主题成为新的默认主题。</span></li>
+        <li><span data-lang="en"><strong>Right-click pitch smoothing control</strong> — right-click a pitch anchor point to tune its smoothing strength individually.</span><span data-lang="zh"><strong>右键音高平滑度控制</strong>——右键点击音高锚点可单独调整其平滑强度。</span></li>
+        <li><span data-lang="en"><strong>Export dialog with precision selection</strong> — a dedicated export dialog lets you pick precision and shows per-file progress.</span><span data-lang="zh"><strong>带精度选择的导出对话框</strong>——专用导出对话框可挑选精度并显示每个文件的进度。</span></li>
+        <li><span data-lang="en"><strong>Singer Creator toolbar Save button</strong> — a dedicated Save button is now available in the Singer Creator toolbar.</span><span data-lang="zh"><strong>歌手创建器工具栏保存按钮</strong>——歌手创建器工具栏新增专用 Save 按钮。</span></li>
+        <li><span data-lang="en"><strong>Window popup animations &amp; timeline scroll swap</strong> — windows now open with a popup animation; the timeline scroll direction was swapped to match user expectations.</span><span data-lang="zh"><strong>窗口弹出动效与时间线滚动方向调整</strong>——窗口打开时增加弹出动效；时间线滚动方向已调整以符合用户预期。</span></li>
+        <li><span data-lang="en"><strong>Per-precision model version tracking</strong> — each precision (FP32 / FP16 / INT8 / INT8-NPU) now has its own version metadata; switching precisions no longer invalidates unrelated cache entries.</span><span data-lang="zh"><strong>按精度模型版本追踪</strong>——每种精度（FP32 / FP16 / INT8 / INT8-NPU）现在拥有独立的版本元数据；切换精度不再使无关缓存条目失效。</span></li>
+        <li><span data-lang="en"><strong>In-app update checker for app &amp; models</strong> — a new <strong>Update</strong> section in Settings checks both the application build (via GitHub Releases, selectable <em>nightly</em> / <em>release</em> channel) and installed models (main / JP / SiFiGAN) for new versions. On startup it auto-checks at most once every 24h and, when an update is found, pops a dedicated notification window with <em>Update now</em> (opens the installer / model download), <em>Skip this version</em>, and <em>Don't remind me</em> actions; a manual <em>Check now</em> button is also available.</span><span data-lang="zh"><strong>应用与模型应用内更新检查</strong>——设置页新增「更新」分区，同时检查应用本体（通过 GitHub Releases，可选 <em>nightly</em> / <em>release</em> 频道）与已安装模型（main / JP / SiFiGAN）的新版本。启动时每 24 小时至多自动检查一次，发现更新时弹出专用提示窗口，提供「立即更新」（打开安装包 / 模型下载）、「跳过本次更新」、「不再提醒」操作；同时提供手动「立即检查更新」按钮。</span></li>
+        <li><span data-lang="en"><strong>Animated custom checkboxes</strong> — native checkboxes are replaced with animated custom checkboxes across settings dialogs.</span><span data-lang="zh"><strong>动画自定义复选框</strong>——设置对话框中的原生复选框已替换为带动画的自定义复选框。</span></li>
+        <li><span data-lang="en"><strong>Kanji / kana auto-grouping in fragment editor</strong> — when a fragment already contains Japanese kana, any kanji in the same fragment is automatically treated as Japanese and split into ordered kana notes. A connecting bracket with the kanji label is drawn above the group. Right-click the bracket, label, or any kana in the group to toggle the whole group between Chinese (single kanji note) and Japanese (kana group). Kana notes can be moved in pitch and time, but cannot be deleted individually — deleting any kana removes the entire group. New notes cannot be inserted inside a group's time span.</span><span data-lang="zh"><strong>分片编辑器汉字 / 假名自动分组</strong>——当分片中已存在日语假名时，同一分片内的所有汉字会被自动识别为日语并按顺序切分为假名音符。分组上方绘制带汉字标签的连接线。右键点击连接线、标签或分组内任一假名，可将整个分组在中文（单个汉字音符）与日语（假名分组）之间切换。假名音符允许音高与时间移动，但不允许单独删除——删除任一假名即删除整个分组。分组时间范围内也不允许插入新音符。</span></li>
+        <li><span data-lang="en"><strong>Hybrid Japanese phoneme mode</strong> — a new <strong>Hybrid Phonemes</strong> option in Settings → Japanese Vocalization improves Japanese pronunciation on the base multilingual model: ら-row uses ARPAbet L (acoustically closer to the Japanese tap /ɾ/ than R /ɹ/), お-column uses AO (a pure vowel, not the OW diphthong /oʊ/). No extra model download required; fully compatible with the per-note phoneme boundary editor.</span><span data-lang="zh"><strong>混合日语音素模式</strong>——设置 → 日语发声方式中新增 <strong>混合音素</strong> 选项，在基础多语言模型上改进日语发音：ら行使用 ARPAbet L（比 R /ɹ/ 更接近日语弹音 /ɾ/），お段使用 AO（纯元音，非双元音 OW /oʊ/）。无需额外下载模型；完全兼容逐音符音素边界编辑器。</span></li>
+        <li><span data-lang="en"><strong>Bilingual documentation website</strong> — the official website now ships bilingual EN / 中文 docs with automatic language switching.</span><span data-lang="zh"><strong>双语文档官网</strong>——官网现提供 EN / 中文 双语文档，支持自动语言切换。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Bug Fixes</span>
+        <span data-lang="zh">缺陷修复</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en">Fixed the pitch-brush <strong>Smoothing slider</strong> having no effect; pitch curves now respect the slider value.</span><span data-lang="zh">修复了画笔<strong>平滑滑块</strong>无效的问题；音高曲线现在会按滑块值平滑。</span></li>
+        <li><span data-lang="en">Fixed <strong>missing modules in the packaged build</strong>.</span><span data-lang="zh">修复了<strong>打包构建缺失模块</strong>的问题。</span></li>
+        <li><span data-lang="en">Fixed <strong>lyrics entered inline not refreshing</strong> the note display until the next click.</span><span data-lang="zh">修复了<strong>内联输入的歌词不刷新</strong>音符显示（直到下次点击才刷新）的问题。</span></li>
+        <li><span data-lang="en">Fixed the <strong>Singer Creator preview playhead drifting</strong> out of sync with audible audio playback.</span><span data-lang="zh">修复了<strong>歌手创建器预览游标与音频播放不同步</strong>（漂移）的问题。</span></li>
+        <li><span data-lang="en">Fixed the <strong>synthesis cache not invalidating on singer switch</strong> by including <code>singerId</code> in the cache key.</span><span data-lang="zh">修复了<strong>切换歌手时合成缓存未失效</strong>的问题——将 <code>singerId</code> 加入缓存键。</span></li>
+        <li><span data-lang="en">Added <strong>fallback paths and debug logging for <code>phone_set.json</code></strong> loading.</span><span data-lang="zh">为 <code>phone_set.json</code> 加载新增<strong>回退路径与调试日志</strong>。</span></li>
+      </ul>
+
+      <nav class="doc-pager">
+        <a href="settings.html">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.prev">Previous</div>
+            <div class="pager-title"><span data-lang="en">Settings</span><span data-lang="zh">设置</span></div>
+          </div>
+        </a>
+        <a href="model-updates.html" class="next">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.next">Next</div>
+            <div class="pager-title"><span data-lang="en">Model Updates</span><span data-lang="zh">模型更新</span></div>
+          </div>
+        </a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="faq.html" data-i18n="footer.help">Help &amp; FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

@@ -242,7 +242,7 @@ async function cmdInitPipeline() {
 
   const settings = loadSettings();
   const modelDir = getModelDir();
-  const modelPrecision = settings.modelPrecision || 'fp16';
+  const modelPrecision = settings.modelPrecision || 'fp32';
   log(`modelDir     : ${modelDir}`);
   log(`precision    : ${modelPrecision}`);
   log(`deviceMode   : ${settings.deviceMode || 'smart'}`);
@@ -284,7 +284,7 @@ async function cmdSynth(opts) {
 
   const settings = loadSettings();
   const modelDir = getModelDir();
-  const modelPrecision = settings.modelPrecision || 'fp16';
+  const modelPrecision = settings.modelPrecision || 'fp32';
   const steps = opts.steps || 4;
   const bpm = opts.bpm || 120;
 

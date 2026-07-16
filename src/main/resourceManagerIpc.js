@@ -29,7 +29,7 @@ async function getModelFilesInfo() {
   }
 
   const { loadSettings } = require('./settings');
-  const currentPrecision = loadSettings().modelPrecision || 'fp16';
+  const currentPrecision = loadSettings().modelPrecision || 'fp32';
   const skipExternalData = PRECISION_NO_EXTERNAL_DATA.has(currentPrecision);
 
   const groups = getModelGroups();

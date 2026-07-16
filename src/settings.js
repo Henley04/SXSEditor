@@ -51,6 +51,7 @@ const vocoderTypeSelect = document.getElementById('vocoderType');
 const vocoderTypeHint = document.getElementById('vocoderTypeHint');
 const sifiganPrecisionSelect = document.getElementById('sifiganPrecision');
 const sifiganPrecisionGroup = document.getElementById('sifiganPrecisionGroup');
+const japaneseVocalizationRadios = document.querySelectorAll('input[name="japaneseVocalization"]');
 const vocoderChunkModeRadios = document.querySelectorAll('input[name="vocoderChunkMode"]');
 const vocoderChunkManualGroup = document.getElementById('vocoderChunkManualGroup');
 const vocoderChunkFramesSlider = document.getElementById('vocoderChunkFrames');
@@ -61,6 +62,14 @@ const vocoderChunkTableBody = document.getElementById('vocoderChunkTableBody');
 const vocoderChunkTableGroup = document.getElementById('vocoderChunkTableGroup');
 const releaseDmlVramAfterSynthesisCheckbox = document.getElementById('releaseDmlVramAfterSynthesis');
 const releaseDiffStepBeforeVocoderCheckbox = document.getElementById('releaseDiffStepBeforeVocoder');
+const updateChannelSelect = document.getElementById('updateChannelSelect');
+const autoCheckUpdatesCheckbox = document.getElementById('autoCheckUpdates');
+const checkUpdateBtn = document.getElementById('checkUpdateBtn');
+const updateCheckStatus = document.getElementById('updateCheckStatus');
+const updateResultGroup = document.getElementById('updateResultGroup');
+const updateResultBox = document.getElementById('updateResultBox');
+const reEnableReminderGroup = document.getElementById('reEnableReminderGroup');
+const reEnableReminderBtn = document.getElementById('reEnableReminderBtn');
 
 // Device mode radio button handlers
 const MODEL_GROUPS = [
@@ -129,7 +138,7 @@ function applySavedSettingsToUI(currentSetting) {
     if (currentSetting.modelPrecision) {
         modelPrecisionSelect.value = currentSetting.modelPrecision;
     } else {
-        modelPrecisionSelect.value = 'fp16';
+        modelPrecisionSelect.value = 'fp32';
     }
 
     // MIDI tool
@@ -146,6 +155,12 @@ function applySavedSettingsToUI(currentSetting) {
     // SiFiGAN precision (only meaningful when vocoderType === 'sifigan')
     sifiganPrecisionSelect.value = currentSetting.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32';
     updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
+
+    // Japanese vocalization mode: 'en-phonemes' (default) | 'hybrid' (improved mapping) | 'jp-lora' (in development, disabled)
+    const validJpVocalizations = ['en-phonemes', 'hybrid', 'jp-lora'];
+    const jpVocalization = validJpVocalizations.includes(currentSetting.japaneseVocalization) ? currentSetting.japaneseVocalization : 'en-phonemes';
+    const jpVocalRadioToCheck = document.querySelector(`input[name="japaneseVocalization"][value="${jpVocalization}"]`);
+    if (jpVocalRadioToCheck) jpVocalRadioToCheck.checked = true;
 
     // Vocoder chunk mode (smart/manual)
     const vocoderChunkMode = currentSetting.vocoderChunkMode === 'manual' ? 'manual' : 'smart';
@@ -170,6 +185,15 @@ function applySavedSettingsToUI(currentSetting) {
     // Vocoder 推理前释放 diffStep（默认开启，仅 DML 后端有效）
     if (releaseDiffStepBeforeVocoderCheckbox) {
         releaseDiffStepBeforeVocoderCheckbox.checked = currentSetting.releaseDiffStepBeforeVocoder !== false;
+    }
+
+    // Update channel & auto-check (persisted via saveSettings)
+    if (updateChannelSelect) {
+        const channel = currentSetting.updateChannel === 'nightly' ? 'nightly' : 'release';
+        updateChannelSelect.value = channel;
+    }
+    if (autoCheckUpdatesCheckbox) {
+        autoCheckUpdatesCheckbox.checked = currentSetting.autoCheckUpdates !== false;
     }
 }
 
@@ -779,6 +803,10 @@ function collectSettings() {
         midiExtractTool: midiExtractToolSelect.value,
         vocoderType: vocoderTypeSelect.value,
         sifiganPrecision: sifiganPrecisionSelect.value === 'fp16' ? 'fp16' : 'fp32',
+        japaneseVocalization: (() => {
+            const r = document.querySelector('input[name="japaneseVocalization"]:checked');
+            return r ? r.value : 'en-phonemes';
+        })(),
         vocoderChunkMode: (() => {
             const r = document.querySelector('input[name="vocoderChunkMode"]:checked');
             return r ? r.value : 'smart';
@@ -786,6 +814,8 @@ function collectSettings() {
         vocoderChunkFrames: parseInt(vocoderChunkFramesSlider.value),
         releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
         releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : true,
+        updateChannel: updateChannelSelect ? updateChannelSelect.value : 'release',
+        autoCheckUpdates: autoCheckUpdatesCheckbox ? autoCheckUpdatesCheckbox.checked : true,
     };
 }
 
@@ -939,6 +969,13 @@ sifiganPrecisionSelect.addEventListener('change', () => {
     loadVocoderChunkFramesInfo();
 });
 
+// Japanese vocalization mode (en-phonemes / jp-lora)
+japaneseVocalizationRadios.forEach(radio => {
+    radio.addEventListener('change', () => {
+        applySettings();
+    });
+});
+
 // Vocoder chunk mode (smart/manual) and manual frames slider
 vocoderChunkModeRadios.forEach(radio => {
     radio.addEventListener('change', () => {
@@ -976,6 +1013,107 @@ openModelDownloadBtn.addEventListener('click', async () => {
         console.error('Failed to open model download:', err);
     }
 });
+
+// ==================== Update section ====================
+
+if (updateChannelSelect) {
+    updateChannelSelect.addEventListener('change', () => applySettings());
+}
+if (autoCheckUpdatesCheckbox) {
+    autoCheckUpdatesCheckbox.addEventListener('change', () => applySettings());
+}
+
+if (checkUpdateBtn) {
+    checkUpdateBtn.addEventListener('click', async () => {
+        const api = window.electronAPI && window.electronAPI.updateAPI;
+        if (!api || typeof api.checkNow !== 'function') return;
+        const originalText = checkUpdateBtn.textContent;
+        checkUpdateBtn.disabled = true;
+        checkUpdateBtn.textContent = t('update.checking');
+        if (updateCheckStatus) updateCheckStatus.textContent = '';
+        try {
+            const result = await api.checkNow();
+            renderUpdateResult(result);
+        } catch (err) {
+            console.error('[Update] checkNow failed:', err);
+            if (updateResultBox) {
+                updateResultBox.textContent = t('update.networkError');
+            }
+            if (updateResultGroup) updateResultGroup.classList.remove('hidden');
+        } finally {
+            checkUpdateBtn.disabled = false;
+            checkUpdateBtn.textContent = originalText || t('update.checkNow');
+        }
+    });
+}
+
+function renderUpdateResult(result) {
+    if (!updateResultBox || !updateResultGroup) return;
+    if (!result) {
+        updateResultBox.textContent = t('update.networkError');
+        updateResultGroup.classList.remove('hidden');
+        return;
+    }
+    const app = result.app || {};
+    const lines = [];
+    if (app.error) {
+        lines.push(app.error === 'rate_limited' ? t('update.rateLimited') : t('update.networkError'));
+    }
+    lines.push(`${t('update.currentVersion')}: ${app.currentVersion || '-'}`);
+    lines.push(`${t('update.latestVersion')}: ${app.latestVersion || '-'}`);
+    if (app.error) {
+        // status line already pushed
+    } else if (app.updateAvailable) {
+        lines.push(t('update.updateAvailable'));
+    } else {
+        lines.push(t('update.upToDate'));
+    }
+    updateResultBox.innerHTML = lines.map(l => `<div>${l}</div>`).join('');
+    updateResultGroup.classList.remove('hidden');
+}
+
+async function initUpdateSection() {
+    const api = window.electronAPI && window.electronAPI.updateAPI;
+    if (!api || typeof api.getStatus !== 'function') return;
+    let status;
+    try {
+        status = await api.getStatus();
+    } catch (err) {
+        console.error('[Update] getStatus failed:', err);
+        return;
+    }
+    if (!status) return;
+    if (status.updateChannel && updateChannelSelect) {
+        const v = status.updateChannel === 'nightly' ? 'nightly' : 'release';
+        updateChannelSelect.value = v;
+    }
+    if (typeof status.autoCheckUpdates === 'boolean' && autoCheckUpdatesCheckbox) {
+        autoCheckUpdatesCheckbox.checked = status.autoCheckUpdates;
+    }
+    if (status.dontRemindAppUpdates === true && reEnableReminderGroup) {
+        reEnableReminderGroup.classList.remove('hidden');
+    }
+    if (status.lastUpdateCheckTime && updateCheckStatus) {
+        const d = new Date(status.lastUpdateCheckTime);
+        updateCheckStatus.textContent = `${t('update.lastCheck')}: ${d.toLocaleString()}`;
+    }
+}
+
+if (reEnableReminderBtn) {
+    reEnableReminderBtn.addEventListener('click', async () => {
+        try {
+            const current = await window.electronAPI.getSettings();
+            current.dontRemindAppUpdates = false;
+            current.skippedAppVersion = null;
+            await window.electronAPI.saveSettings(current);
+        } catch (err) {
+            console.error('[Update] re-enable reminder failed:', err);
+        }
+        if (reEnableReminderGroup) reEnableReminderGroup.classList.add('hidden');
+    });
+}
+
+initUpdateSection().catch(() => {});
 
 (async () => {
     try {

@@ -197,28 +197,51 @@ class Preprocessing {
                     noteTypes.push(noteType);
                 }
             } else if (this.textProcessing._isJapanese && this.textProcessing._isJapanese(lyric)) {
-                const phonemeStr = this.textProcessing._japaneseG2p(lyric);
-                if (phonemeStr) {
-                    const phParts = phonemeStr.split(' ').filter(s => s);
-                    const jpPhIds = [];
-                    for (let s = 0; s < phParts.length; s++) {
-                        jpPhIds.push(this.textProcessing._lookupPhonemeId('jp_' + phParts[s].trim()));
+                // In en-phonemes / hybrid mode, convert Japanese kana/kanji to English ARPAbet phonemes.
+                // The base multilingual model (not JP LoRA) is used, so English phonemes + SEP
+                // are the correct input format — consistent with how English lyrics are processed.
+                // hybrid mode uses an improved mapping table (L for ら行, AO for お段) but the
+                // token format (en_ prefix + SEP) is identical to en-phonemes.
+                if (this.textProcessing.japaneseVocalization === 'en-phonemes' || this.textProcessing.japaneseVocalization === 'hybrid') {
+                    const enPhonemeObjs = this.textProcessing._japaneseToEnglishPhonemes(lyric);
+                    const enPhIds = [];
+                    for (const obj of enPhonemeObjs) {
+                        enPhIds.push(this.textProcessing._lookupPhonemeId(obj.name));
                     }
-                    // Don't add SEP_ID for Japanese — training doesn't use it
-                    phLocations.push([dur, Math.max(1, jpPhIds.length), durationRatios, jpPhIds]);
-                    for (let e = 0; e < jpPhIds.length; e++) {
-                        newPhonemes.push(jpPhIds[e]);
+                    // Add SEP_ID — English phoneme sequences use SEP as syllable boundary marker
+                    enPhIds.push(SEP_ID);
+                    phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios, enPhIds]);
+                    for (let e = 0; e < enPhIds.length; e++) {
+                        newPhonemes.push(enPhIds[e]);
                         note2origin.push(phIdx);
                         notePitches.push(pitch);
                         noteTypes.push(noteType);
                     }
                 } else {
-                    const phId = this.textProcessing._lookupPhonemeId(lyric);
-                    phLocations.push([dur, 1, durationRatios, [phId]]);
-                    newPhonemes.push(phId);
-                    note2origin.push(phIdx);
-                    notePitches.push(pitch);
-                    noteTypes.push(noteType);
+                    // jp-lora mode: use jp_ phonemes (no SEP, consistent with JP training data)
+                    const phonemeStr = this.textProcessing._japaneseG2p(lyric);
+                    if (phonemeStr) {
+                        const phParts = phonemeStr.split(' ').filter(s => s);
+                        const jpPhIds = [];
+                        for (let s = 0; s < phParts.length; s++) {
+                            jpPhIds.push(this.textProcessing._lookupPhonemeId('jp_' + phParts[s].trim()));
+                        }
+                        // Don't add SEP_ID for Japanese — training doesn't use it
+                        phLocations.push([dur, Math.max(1, jpPhIds.length), durationRatios, jpPhIds]);
+                        for (let e = 0; e < jpPhIds.length; e++) {
+                            newPhonemes.push(jpPhIds[e]);
+                            note2origin.push(phIdx);
+                            notePitches.push(pitch);
+                            noteTypes.push(noteType);
+                        }
+                    } else {
+                        const phId = this.textProcessing._lookupPhonemeId(lyric);
+                        phLocations.push([dur, 1, durationRatios, [phId]]);
+                        newPhonemes.push(phId);
+                        note2origin.push(phIdx);
+                        notePitches.push(pitch);
+                        noteTypes.push(noteType);
+                    }
                 }
             } else if (/^[a-zA-Z]+$/.test(lyric) && !lyric.startsWith('en_') && !lyric.startsWith('zh_') && !lyric.startsWith('yue_') && !lyric.startsWith('jp_')) {
                 const g2pResult = this.textProcessing._englishG2p(lyric);
@@ -240,6 +263,24 @@ class Preprocessing {
                     const phId = this.textProcessing._lookupPhonemeId(lyric);
                     phLocations.push([dur, 1, durationRatios, [phId]]);
                     newPhonemes.push(phId);
+                    note2origin.push(phIdx);
+                    notePitches.push(pitch);
+                    noteTypes.push(noteType);
+                }
+            } else if (lyric.startsWith('jp_') && (this.textProcessing.japaneseVocalization === 'en-phonemes' || this.textProcessing.japaneseVocalization === 'hybrid')) {
+                // In en-phonemes / hybrid mode, convert jp_ prefixed phonemes to English ARPAbet phonemes.
+                // e.g., 'jp_k' → en_K, 'jp_ts' → en_T en_S, 'jp_ky' → en_K en_Y
+                // hybrid mode: 'jp_r' → en_L (not R), 'jp_o' → en_AO1 (not OW1)
+                const jpPhone = lyric.slice(3);
+                const enPhonemeObjs = this.textProcessing._japanesePhoneToEnglishPhonemes(jpPhone);
+                const enPhIds = [];
+                for (const obj of enPhonemeObjs) {
+                    enPhIds.push(this.textProcessing._lookupPhonemeId(obj.name));
+                }
+                enPhIds.push(SEP_ID);
+                phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios, enPhIds]);
+                for (let e = 0; e < enPhIds.length; e++) {
+                    newPhonemes.push(enPhIds[e]);
                     note2origin.push(phIdx);
                     notePitches.push(pitch);
                     noteTypes.push(noteType);

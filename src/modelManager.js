@@ -21,13 +21,20 @@ const MODEL_IDS = {
 const JP_MODEL_IDS = {
   fp16: 'syxppp/SoulX-Singer-onnx-fp16-lora-jp',
 };
-const DEFAULT_PRECISION = 'fp16';
+const DEFAULT_PRECISION = 'fp32';
 const MODELSCOPE_ENDPOINT = 'https://modelscope.cn';
-const REVISION = 'master';
 const TEMP_SUFFIX = '.download';
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2000;
 const DEFAULT_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+// ===== Model version management =====
+// Model versions are determined solely by ModelScope tags (e.g. 'v0', 'v1').
+// Downloads always use a specific tag — branch-based downloads ('master')
+// are no longer supported. When a model is downloaded, a version.json file
+// is written to the precision subdirectory recording the tag. If version.json
+// is missing or records 'master' (legacy), an update is flagged as available.
+const VERSION_FILE_NAME = 'version.json';
 
 // 分片多线程下载相关常量
 const MAX_GLOBAL_CONCURRENCY = 16;
@@ -177,24 +184,184 @@ function invalidateJpModelsCache(baseDir, precision) {
   }
 }
 
-function getFileDownloadUrl(filePath, precision) {
+function getFileDownloadUrl(filePath, precision, revision) {
+  if (!revision) return null;
   // Preprocess and basic_pitch models use int8 repo (dynamic shapes),
   // not int8-npu repo (static shapes with fixed input dimensions)
   const effectivePrecision = (!isSvsModelFile(filePath) && precision === 'int8-npu') ? 'int8' : precision;
   const modelId = getModelId(effectivePrecision);
   if (!modelId) return null;  // precision not yet available for download
   const encoded = encodeURIComponent(filePath);
-  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
+  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${encodeURIComponent(revision)}&FilePath=${encoded}`;
+}
+
+/**
+ * 列出 ModelScope 仓库中所有 blob 文件的路径。
+ * 用于智能检测远程模型是「分开的 onnx+data」还是「单 onnx 文件」。
+ *
+ * 策略：
+ *   1. 首选查询指定 revision（如 v1）的文件列表
+ *   2. 若该 revision 返回空（部分 tag 的 Files 字段为 null），
+ *      回退到 master 分支查询（文件结构通常一致）
+ *   3. 若仍失败，返回 null —— 调用方应回退到本地硬编码清单
+ *
+ * @param {string} modelId  ModelScope 仓库 ID（如 'syxppp/SoulX-Singer-onnx-directml-fp16'）
+ * @param {string} revision tag 名（如 'v1'）
+ * @returns {Promise<Set<string>|null>} 文件路径集合，null 表示无法确定
+ */
+async function listModelFiles(modelId, revision) {
+  if (!modelId || !revision) return null;
+  const fetch = async (rev) => {
+    // Recursive=true is required so subdirectory files (preprocess/*.onnx,
+    // basic_pitch_model/*) are included. Without it ModelScope only returns
+    // root-level blobs, causing required manifest files in subdirectories
+    // to be wrongly skipped by filterMissingByRemote.
+    const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo/files?Revision=${encodeURIComponent(rev)}&Recursive=true`;
+    const data = await _fetchModelScopeJson(url);
+    if (data && data.Success && data.Data && Array.isArray(data.Data.Files)) {
+      const set = new Set();
+      for (const f of data.Data.Files) {
+        if (f && f.Type === 'blob' && typeof f.Path === 'string') {
+          set.add(f.Path);
+        }
+      }
+      return set;
+    }
+    return null;
+  };
+  // 1. 指定 revision
+  let files = null;
+  try { files = await fetch(revision); } catch (_) { files = null; }
+  if (files && files.size > 0) return files;
+  // 2. 回退 master（仅当 revision 本身不是 master 时）
+  if (revision !== 'master') {
+    console.warn(`[ModelManager] Remote file list for revision "${revision}" empty/unavailable (${modelId}), falling back to master branch`);
+    try { files = await fetch('master'); } catch (_) { files = null; }
+    if (files && files.size > 0) return files;
+  }
+  // 3. 无法确定 —— 调用方将回退到本地硬编码清单
+  console.warn(`[ModelManager] Remote file list unavailable for ${modelId} (revision "${revision}" and master both empty), falling back to local manifest`);
+  return null;
+}
+
+/**
+ * 根据 ModelScope 远程文件列表，智能调整缺失文件清单：
+ *
+ * 1. 过滤：移除远程不存在的文件（如「单 onnx 文件」仓库中清单里的 .onnx.data）
+ * 2. 补充：对于清单中缺失的 .onnx 文件，若远程存在对应 .onnx.data 且本地也没有，
+ *          则将 .onnx.data 加入下载列表（「连带 data 一起下载」）
+ *
+ * 这让下载逻辑不再依赖硬编码的 PRECISION_NO_EXTERNAL_DATA：
+ *   - 若远程存在 xxx.onnx 与 xxx.onnx.data → 保留两者（连带下载）
+ *   - 若远程只有 xxx.onnx（权重自包含）→ 移除 xxx.onnx.data，避免下载失败
+ *   - 若清单因 PRECISION_NO_EXTERNAL_DATA 过滤了 data，但远程实际有 data → 补回
+ *
+ * 注意：preprocess/ 与 basic_pitch_model/ 前缀的文件使用 int8 仓库，
+ *       而主 SVS 模型文件使用 precision 对应的仓库，因此需要分别查询。
+ *
+ * 容错：若远程文件列表获取失败（返回 null），返回原清单不变，
+ *       回退到当前硬编码清单行为。
+ *
+ * @param {Array} missingFiles  缺失文件数组（元素含 filePath 字段）
+ * @param {string} modelDir     模型根目录（用于检查本地 data 文件是否存在）
+ * @param {string} precision    当前精度
+ * @param {string} revision     ModelScope tag
+ * @returns {Promise<Array>}    调整后的缺失文件数组
+ */
+async function filterMissingByRemote(missingFiles, modelDir, precision, revision) {
+  if (!missingFiles || missingFiles.length === 0) return missingFiles;
+
+  // 主 SVS 模型仓库（precision 对应）与 preprocess/basic_pitch 仓库（int8）可能不同，
+  // 分别查询。int8-npu 的 preprocess/basic_pitch 走 int8 仓库（getFileDownloadUrl 逻辑）。
+  const svsModelId = getModelId(precision);
+  const auxPrecision = precision === 'int8-npu' ? 'int8' : precision;
+  const auxModelId = getModelId(auxPrecision);
+  const sameRepo = !auxModelId || auxModelId === svsModelId;
+
+  const [svsSet, auxSetRaw] = await Promise.all([
+    svsModelId ? listModelFiles(svsModelId, revision) : Promise.resolve(null),
+    auxModelId && !sameRepo ? listModelFiles(auxModelId, revision) : Promise.resolve(null),
+  ]);
+  // 仓库相同时复用同一结果
+  const auxSet = sameRepo ? svsSet : auxSetRaw;
+
+  // 两个列表都拿不到 → 回退到原清单
+  if (!svsSet && !auxSet) {
+    console.warn('[ModelManager] Remote file list unavailable for both SVS and aux repos, falling back to local manifest as-is');
+    return missingFiles;
+  }
+
+  // 阶段 1：过滤掉远程不存在的文件
+  const filtered = [];
+  const skipped = [];
+  // 预先检测单仓库回退场景（避免在循环内重复打印 warn）
+  const hasSvsFiles = missingFiles.some(f => isSvsModelFile(f.filePath));
+  const hasAuxFiles = missingFiles.some(f => !isSvsModelFile(f.filePath));
+  if (hasSvsFiles && !svsSet) {
+    console.warn(`[ModelManager] SVS remote file list unavailable (${svsModelId}), keeping SVS files from manifest without filtering`);
+  }
+  if (hasAuxFiles && !auxSet) {
+    console.warn(`[ModelManager] Aux remote file list unavailable (${auxModelId}), keeping aux files from manifest without filtering`);
+  }
+  for (const file of missingFiles) {
+    const isSvs = isSvsModelFile(file.filePath);
+    const remoteSet = isSvs ? svsSet : auxSet;
+    if (!remoteSet) {
+      // 该仓库的远程列表拿不到 → 保留原文件（不因探测失败而丢弃）
+      filtered.push(file);
+      continue;
+    }
+    if (remoteSet.has(file.filePath)) {
+      filtered.push(file);
+    } else {
+      skipped.push(file.filePath);
+    }
+  }
+
+  // 阶段 2：补充远程存在但清单中没有的 .onnx.data（连带 data 一起下载）
+  // 典型场景：int8-npu 的 PRECISION_NO_EXTERNAL_DATA 过滤了所有 data，
+  // 但远程实际有小模型的 data 文件 → 补回
+  const existingPaths = new Set(filtered.map(f => f.filePath));
+  const added = [];
+  for (const file of filtered) {
+    // 只对 .onnx 文件（非 .onnx.data 自身）检查是否有配套 data
+    if (!file.filePath.endsWith('.onnx')) continue;
+    const dataPath = file.filePath + '.data';
+    if (existingPaths.has(dataPath)) continue; // 已在列表中
+    const isSvs = isSvsModelFile(file.filePath);
+    const remoteSet = isSvs ? svsSet : auxSet;
+    if (!remoteSet || !remoteSet.has(dataPath)) continue; // 远程没有 data
+    // 检查本地是否已有该 data 文件（避免重复下载）
+    const localDataPath = getLocalFilePath(modelDir, dataPath, precision);
+    let localExists = false;
+    try {
+      const stats = fs.statSync(localDataPath);
+      if (stats.size > 0) localExists = true;
+    } catch (_) {}
+    if (localExists) continue;
+    // 远程有 data 且本地缺失 → 连带下载
+    added.push({ ...file, filePath: dataPath, required: true });
+    existingPaths.add(dataPath);
+  }
+
+  if (skipped.length > 0) {
+    console.log(`[ModelManager] Remote check: skipped ${skipped.length} file(s) not present on ModelScope:`, skipped);
+  }
+  if (added.length > 0) {
+    console.log(`[ModelManager] Remote check: added ${added.length} external data file(s) for bundled download:`, added.map(f => f.filePath));
+  }
+  return filtered.concat(added);
 }
 
 /**
  * Get the download URL for a JP language model file.
  */
-function getJpFileDownloadUrl(filePath, precision) {
+function getJpFileDownloadUrl(filePath, precision, revision) {
+  if (!revision) return null;
   const modelId = getJpModelId(precision);
   if (!modelId) return null;
   const encoded = encodeURIComponent(filePath);
-  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
+  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${encodeURIComponent(revision)}&FilePath=${encoded}`;
 }
 
 /**
@@ -202,11 +369,492 @@ function getJpFileDownloadUrl(filePath, precision) {
  * SiFiGAN files live in their own ModelScope repo (MODEL_IDS.sifigan)
  * and are stored at the root of onnx_models/ (not in precision subdirs).
  */
-function getSifiganFileDownloadUrl(filePath) {
+function getSifiganFileDownloadUrl(filePath, revision) {
+  if (!revision) return null;
   const modelId = MODEL_IDS.sifigan;
   if (!modelId) return null;
   const encoded = encodeURIComponent(filePath);
-  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${REVISION}&FilePath=${encoded}`;
+  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${encodeURIComponent(revision)}&FilePath=${encoded}`;
+}
+
+// ===== ModelScope tag (version) listing =====
+// ModelScope model repos are git-based. Downloads are tag-only — the default
+// branch ('master') is NOT used. Tags represent specific released versions
+// (e.g. 'v0', 'v1', 'v2').
+// The revisions API: GET /api/v1/models/{model_id}/revisions
+//   → { Data: { RevisionMap: { Branches: [...], Tags: [...] } } }
+// Only tags are surfaced as selectable versions; branches are NOT shown.
+
+/**
+ * Fetch a JSON document from ModelScope API via GET request.
+ * Returns parsed JSON object or null on failure.
+ */
+async function _fetchModelScopeJson(url) {
+  try {
+    const { response } = await resolveRedirects(url, 5, 'GET');
+    const chunks = [];
+    for await (const chunk of response) {
+      chunks.push(chunk);
+    }
+    const body = Buffer.concat(chunks).toString('utf-8');
+    return JSON.parse(body);
+  } catch (err) {
+    console.warn('[ModelManager] ModelScope API request failed:', err.message);
+    return null;
+  }
+}
+
+/**
+ * Extract tag names from a ModelScope revisions API response.
+ * Returns an array of tag name strings (e.g. ['v2', 'v1.0']).
+ * Returns [] if no tags exist or the response shape is unexpected.
+ */
+function _extractTags(data) {
+  if (!data || !data.Success || !data.Data) return [];
+  const revisionMap = (data.Data.RevisionMap) || {};
+  const tags = Array.isArray(revisionMap.Tags) ? revisionMap.Tags : [];
+  return tags
+    .map((t) => (t && typeof t === 'object' && t.Revision) ? t.Revision : null)
+    .filter((t) => typeof t === 'string' && t.length > 0);
+}
+
+/**
+ * Fetch available tags (versions) for a main model precision from ModelScope.
+ * Returns an array of tag names, e.g. ['v2', 'v1.0']. On failure returns [].
+ * The default (latest, no tag) is represented separately as 'master'.
+ */
+async function getModelTags(precision) {
+  const modelId = getModelId(precision);
+  if (!modelId) return [];
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
+  const data = await _fetchModelScopeJson(url);
+  return _extractTags(data);
+}
+
+/**
+ * Fetch available tags for a JP model precision from ModelScope.
+ */
+async function getJpModelTags(precision) {
+  const modelId = getJpModelId(precision);
+  if (!modelId) return [];
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
+  const data = await _fetchModelScopeJson(url);
+  return _extractTags(data);
+}
+
+/**
+ * Fetch available tags for the SiFiGAN model from ModelScope.
+ */
+async function getSifiganTags() {
+  const modelId = MODEL_IDS.sifigan;
+  if (!modelId) return [];
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
+  const data = await _fetchModelScopeJson(url);
+  return _extractTags(data);
+}
+
+// ===== Version management functions =====
+
+/**
+ * Get the path to the version.json file for a given precision.
+ * fp32 → modelDir/version.json
+ * fp16 → modelDir/fp16/version.json
+ * int8 → modelDir/int8/version.json
+ * int8-npu → modelDir/int8/optimized_npu/version.json
+ */
+function getModelVersionPath(modelDir, precision) {
+  if (precision && PRECISION_SUBDIR_PRECESIONS.has(precision)) {
+    const subdir = PRECISION_SUBDIR_MAP[precision] || precision;
+    return path.join(modelDir, subdir, VERSION_FILE_NAME);
+  }
+  return path.join(modelDir, VERSION_FILE_NAME);
+}
+
+/**
+ * Get the path to the version.json file for JP models.
+ * fp16 → modelDir/fp16/JP/version.json
+ */
+function getJpModelVersionPath(modelDir, precision) {
+  if (precision && PRECISION_SUBDIR_PRECESIONS.has(precision)) {
+    const subdir = PRECISION_SUBDIR_MAP[precision] || precision;
+    return path.join(modelDir, subdir, 'JP', VERSION_FILE_NAME);
+  }
+  return path.join(modelDir, 'JP', VERSION_FILE_NAME);
+}
+
+/**
+ * Get the path to the SiFiGAN version file.
+ * SiFiGAN lives at the root of onnx_models/, uses a dedicated file to avoid
+ * collision with the main model version.json.
+ */
+function getSifiganVersionPath(modelDir) {
+  return path.join(modelDir, 'sifigan_version.json');
+}
+
+/**
+ * Normalize a version string into an array of integers.
+ * Handles 'v' prefix (e.g. 'v1' → [1]) and dot-separated segments
+ * (e.g. '1.0.0' → [1, 0, 0], 'v2.1' → [2, 1]).
+ */
+function _normalizeVersion(v) {
+  return String(v)
+    .replace(/^v/i, '')
+    .split('.')
+    .map(n => parseInt(n, 10) || 0);
+}
+
+/**
+ * Compare two version strings (e.g. '1.0.0' vs '1.2.0', 'v0' vs 'v1').
+ * Returns: -1 if a < b, 0 if a == b, 1 if a > b
+ */
+function compareVersions(a, b) {
+  if (!a && !b) return 0;
+  if (!a) return -1;
+  if (!b) return 1;
+  const pa = _normalizeVersion(a);
+  const pb = _normalizeVersion(b);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const na = pa[i] || 0;
+    const nb = pb[i] || 0;
+    if (na < nb) return -1;
+    if (na > nb) return 1;
+  }
+  return 0;
+}
+
+/**
+ * Pick the latest tag from a list of ModelScope version tags.
+ * Tags are expected in 'v0', 'v1', ... format. Non-matching tags are ignored.
+ * Returns the latest tag string (e.g. 'v2'), or null if none match.
+ */
+function getLatestTag(tags) {
+  if (!Array.isArray(tags) || tags.length === 0) return null;
+  const valid = tags.filter(t => typeof t === 'string' && /^v?\d+/i.test(t));
+  if (valid.length === 0) return null;
+  valid.sort((a, b) => compareVersions(b, a)); // descending
+  return valid[0];
+}
+
+/**
+ * Read the local model version for a given precision.
+ * Returns the version string (e.g. '1.0.0'), or null if version.json
+ * does not exist (treated as a legacy model).
+ */
+function getLocalModelVersion(modelDir, precision) {
+  const versionPath = getModelVersionPath(modelDir, precision);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.version || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Read the local model revision (ModelScope tag) for a given precision.
+ * Returns the tag name (e.g. 'v1'), or null if not recorded.
+ * A 'master' value indicates a legacy branch-based install.
+ */
+function getLocalModelRevision(modelDir, precision) {
+  const versionPath = getModelVersionPath(modelDir, precision);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.revision || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Check if a model update is available for the given precision.
+ * - Legacy models (no version.json or revision='master') are flagged for
+ *   update as soon as any remote version tag exists. The latest tag is also
+ *   fetched so the UI can display the version the user would update to.
+ * - Tag-based installs (e.g. 'v1') are compared against the latest remote tag.
+ * - Network failures do NOT flag an update (avoids false positives), but for
+ *   legacy models the update flag stays true (legacy always needs updating).
+ * Returns { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
+ */
+async function checkModelVersion(modelDir, precision) {
+  const localVersion = getLocalModelVersion(modelDir, precision);
+  const localRevision = getLocalModelRevision(modelDir, precision);
+  const { existing } = checkMissingFiles(modelDir, precision);
+  const hasModelFiles = existing.length > 0;
+
+  let updateAvailable = false;
+  let latestVersion = null;
+
+  if (hasModelFiles) {
+    const isLegacy = !localVersion || !localRevision || localRevision === 'master';
+    if (isLegacy) {
+      // Legacy model: flag for update only when a real remote version exists.
+      // v0 or null latestVersion means no meaningful update (v0 is the
+      // initial/legacy version with the same content), so we do NOT notify.
+      updateAvailable = true;
+      try {
+        const tags = await getModelTags(precision);
+        latestVersion = getLatestTag(tags);
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote tags for legacy ${precision}:`, err.message);
+      }
+    } else {
+      // Specific tag installed → fetch remote tags and compare
+      try {
+        const tags = await getModelTags(precision);
+        latestVersion = getLatestTag(tags);
+        if (latestVersion && compareVersions(localRevision, latestVersion) < 0) {
+          updateAvailable = true;
+        }
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote tags for ${precision}:`, err.message);
+      }
+    }
+  }
+
+  // v0 or null latest means no real update available — v0 is the initial
+  // version whose content is identical to legacy installs. Suppress the
+  // update flag even for legacy models to avoid false notifications.
+  const isLatestV0OrNull = !latestVersion || latestVersion === 'v0';
+  if (isLatestV0OrNull) {
+    updateAvailable = false;
+  }
+
+  return {
+    updateAvailable,
+    localVersion,
+    latestVersion,
+    hasModelFiles,
+    localRevision,
+    isLatestV0OrNull,
+  };
+}
+
+/**
+ * Save the model version to version.json after a successful download.
+ * revision is the ModelScope tag (e.g. 'v1') that was downloaded.
+ * The version field mirrors the revision so checkModelVersion can compare
+ * localRevision against the latest remote tag.
+ */
+function saveModelVersion(modelDir, precision, revision) {
+  if (!revision) {
+    console.warn(`[ModelManager] saveModelVersion: revision is required`);
+    return;
+  }
+  const versionPath = getModelVersionPath(modelDir, precision);
+  try {
+    const dir = path.dirname(versionPath);
+    fs.mkdirSync(dir, { recursive: true });
+    const data = {
+      version: revision,
+      precision,
+      revision,
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
+    console.log(`[ModelManager] Saved version ${revision} (revision: ${revision}) for precision ${precision}`);
+  } catch (err) {
+    console.warn(`[ModelManager] Failed to save version for ${precision}:`, err.message);
+  }
+}
+
+// ===== JP model version management =====
+
+function getLocalJpModelVersion(modelDir, precision) {
+  const versionPath = getJpModelVersionPath(modelDir, precision);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.version || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function getLocalJpModelRevision(modelDir, precision) {
+  const versionPath = getJpModelVersionPath(modelDir, precision);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.revision || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function checkJpModelVersion(modelDir, precision) {
+  const localVersion = getLocalJpModelVersion(modelDir, precision);
+  const localRevision = getLocalJpModelRevision(modelDir, precision);
+  const hasModelFiles = checkJpModelsExist(modelDir, precision);
+
+  let updateAvailable = false;
+  let latestVersion = null;
+
+  if (hasModelFiles) {
+    const isLegacy = !localVersion || !localRevision || localRevision === 'master';
+    if (isLegacy) {
+      // Legacy JP model: flag for update only when a real remote version
+      // exists. v0 or null latestVersion means no meaningful update.
+      updateAvailable = true;
+      try {
+        const tags = await getJpModelTags(precision);
+        latestVersion = getLatestTag(tags);
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote JP tags for legacy ${precision}:`, err.message);
+      }
+    } else {
+      // Specific tag installed → fetch remote tags and compare
+      try {
+        const tags = await getJpModelTags(precision);
+        latestVersion = getLatestTag(tags);
+        if (latestVersion && compareVersions(localRevision, latestVersion) < 0) {
+          updateAvailable = true;
+        }
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote JP tags for ${precision}:`, err.message);
+      }
+    }
+  }
+
+  // v0 or null latest means no real update available — suppress notification
+  // even for legacy models (v0 content is identical to legacy).
+  const isLatestV0OrNull = !latestVersion || latestVersion === 'v0';
+  if (isLatestV0OrNull) {
+    updateAvailable = false;
+  }
+
+  return {
+    updateAvailable,
+    localVersion,
+    latestVersion,
+    hasModelFiles,
+    localRevision,
+    isLatestV0OrNull,
+  };
+}
+
+function saveJpModelVersion(modelDir, precision, revision) {
+  if (!revision) {
+    console.warn(`[ModelManager] saveJpModelVersion: revision is required`);
+    return;
+  }
+  const versionPath = getJpModelVersionPath(modelDir, precision);
+  try {
+    const dir = path.dirname(versionPath);
+    fs.mkdirSync(dir, { recursive: true });
+    const data = {
+      version: revision,
+      precision,
+      revision,
+      language: 'jp',
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
+    console.log(`[ModelManager] Saved JP version ${revision} (revision: ${revision}) for precision ${precision}`);
+  } catch (err) {
+    console.warn(`[ModelManager] Failed to save JP version for ${precision}:`, err.message);
+  }
+}
+
+// ===== SiFiGAN version management =====
+
+function getLocalSifiganVersion(modelDir) {
+  const versionPath = getSifiganVersionPath(modelDir);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.version || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function getLocalSifiganRevision(modelDir) {
+  const versionPath = getSifiganVersionPath(modelDir);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.revision || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function checkSifiganVersion(modelDir) {
+  const localVersion = getLocalSifiganVersion(modelDir);
+  const localRevision = getLocalSifiganRevision(modelDir);
+  // Check if SiFiGAN files exist by looking for stats + at least one variant
+  let hasModelFiles = false;
+  try {
+    const statsPath = path.join(modelDir, 'sifigan_stats.joblib');
+    const stats = fs.statSync(statsPath);
+    const fp16Onnx = path.join(modelDir, 'sifigan_vocoder_dml_fp16.onnx');
+    const fp32Onnx = path.join(modelDir, 'sifigan_vocoder_dml.onnx');
+    const hasFp16 = fs.existsSync(fp16Onnx) && fs.statSync(fp16Onnx).size > 0;
+    const hasFp32 = fs.existsSync(fp32Onnx) && fs.statSync(fp32Onnx).size > 0;
+    hasModelFiles = stats.size > 0 && (hasFp16 || hasFp32);
+  } catch (_) {}
+
+  let updateAvailable = false;
+  let latestVersion = null;
+
+  if (hasModelFiles) {
+    const isLegacy = !localVersion || !localRevision || localRevision === 'master';
+    if (isLegacy) {
+      // Legacy SiFiGAN model: flag for update only when a real remote
+      // version exists. v0 or null latestVersion means no meaningful update.
+      updateAvailable = true;
+      try {
+        const tags = await getSifiganTags();
+        latestVersion = getLatestTag(tags);
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote SiFiGAN tags for legacy:`, err.message);
+      }
+    } else {
+      // Specific tag installed → fetch remote tags and compare
+      try {
+        const tags = await getSifiganTags();
+        latestVersion = getLatestTag(tags);
+        if (latestVersion && compareVersions(localRevision, latestVersion) < 0) {
+          updateAvailable = true;
+        }
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote SiFiGAN tags:`, err.message);
+      }
+    }
+  }
+
+  // v0 or null latest means no real update available — suppress notification
+  // even for legacy models (v0 content is identical to legacy).
+  const isLatestV0OrNull = !latestVersion || latestVersion === 'v0';
+  if (isLatestV0OrNull) {
+    updateAvailable = false;
+  }
+
+  return {
+    updateAvailable,
+    localVersion,
+    latestVersion,
+    hasModelFiles,
+    localRevision,
+    isLatestV0OrNull,
+  };
+}
+
+function saveSifiganVersion(modelDir, revision) {
+  if (!revision) {
+    console.warn(`[ModelManager] saveSifiganVersion: revision is required`);
+    return;
+  }
+  const versionPath = getSifiganVersionPath(modelDir);
+  try {
+    const data = {
+      version: revision,
+      revision,
+      model: 'sifigan',
+      updatedAt: new Date().toISOString(),
+    };
+    fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
+    console.log(`[ModelManager] Saved SiFiGAN version ${revision} (revision: ${revision})`);
+  } catch (err) {
+    console.warn(`[ModelManager] Failed to save SiFiGAN version:`, err.message);
+  }
 }
 
 function checkMissingFiles(modelDir, precision) {
@@ -930,9 +1578,12 @@ async function checkModelScopeCLIAvailable() {
 }
 
 async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
-  const { abortSignal, precision } = options;
+  const { abortSignal, precision, revision = 'master' } = options;
   const modelId = getModelId(precision);
   const args = ['download', '--model', modelId, '--local_dir', modelDir];
+  if (revision && revision !== 'master') {
+    args.push('--revision', revision);
+  }
 
   for (const file of missingFiles) {
     args.push('--include', file.filePath);
@@ -965,8 +1616,8 @@ async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
   });
 }
 
-async function getRemoteFileSize(filePath, precision) {
-  const url = getFileDownloadUrl(filePath, precision);
+async function getRemoteFileSize(filePath, precision, revision = 'master') {
+  const url = getFileDownloadUrl(filePath, precision, revision);
   try {
     const { response } = await resolveRedirects(url, 5, 'HEAD');
     const contentLength = parseInt(response.headers['content-length'] || '0', 10);
@@ -993,17 +1644,31 @@ async function getRemoteFileSize(filePath, precision) {
  * - 支持断点续传
  */
 async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
-  const { onProgress, onFileStart, onFileComplete, abortSignal, precision = DEFAULT_PRECISION } = options;
+  const { onProgress, onFileStart, onFileComplete, onFilesResolved, abortSignal, precision = DEFAULT_PRECISION, revision = 'master' } = options;
 
   if (missingFiles.length === 0) return;
+
+  // 智能检测远程仓库实际文件结构：
+  //   - 移除远程不存在的 .onnx.data（单 onnx 文件仓库）
+  //   - 补充远程存在但清单中没有的 .onnx.data（连带 data 一起下载）
+  // 远程列表不可用时回退到本地清单。
+  missingFiles = await filterMissingByRemote(missingFiles, modelDir, precision, revision);
+  if (missingFiles.length === 0) {
+    console.log('[ModelManager] All missing files filtered out by remote check (single onnx, no external data)');
+    saveModelVersion(modelDir, precision, revision);
+    return;
+  }
+  // 通知调用方调整后的最终文件列表（让 UI 显示补充的 data 文件）
+  if (onFilesResolved) onFilesResolved(missingFiles);
 
   const usePrecisionSubdir = precision && PRECISION_SUBDIR_PRECESIONS.has(precision);
   const cliAvailable = !usePrecisionSubdir && await checkModelScopeCLIAvailable();
   if (cliAvailable) {
     console.log('[ModelManager] ModelScope CLI available, using CLI download');
     try {
-      await downloadWithModelScopeCLI(modelDir, missingFiles, { abortSignal, precision });
+      await downloadWithModelScopeCLI(modelDir, missingFiles, { abortSignal, precision, revision });
       console.log('[ModelManager] ModelScope CLI download complete');
+      saveModelVersion(modelDir, precision, revision);
       return;
     } catch (err) {
       if (err.message === 'Download cancelled') throw err;
@@ -1012,14 +1677,14 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   }
 
   const globalConcurrency = getOptimalConcurrency();
-  console.log(`[ModelManager] Using HTTP download with concurrent chunked support (concurrency: ${globalConcurrency})`);
+  console.log(`[ModelManager] Using HTTP download with concurrent chunked support (concurrency: ${globalConcurrency}, revision: ${revision})`);
   const pool = new ConcurrencyPool(globalConcurrency);
 
   // 获取所有文件的远程大小（并行 HEAD 请求）
   const fileSizes = {};
   let overallTotal = 0;
   const sizeResults = await Promise.all(
-    missingFiles.map(file => getRemoteFileSize(file.filePath, precision))
+    missingFiles.map(file => getRemoteFileSize(file.filePath, precision, revision))
   );
   for (let i = 0; i < missingFiles.length; i++) {
     fileSizes[missingFiles[i].filePath] = sizeResults[i];
@@ -1065,7 +1730,7 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
       }
 
       const destPath = getLocalFilePath(modelDir, file.filePath, precision);
-      const url = getFileDownloadUrl(file.filePath, precision);
+      const url = getFileDownloadUrl(file.filePath, precision, revision);
       const fileSize = fileSizes[file.filePath];
 
       if (onFileStart) {
@@ -1135,6 +1800,9 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   if (errors.length > 0) {
     throw errors[0];
   }
+
+  // 下载成功后保存模型版本信息
+  saveModelVersion(modelDir, precision, revision);
 }
 
 module.exports = {
@@ -1170,4 +1838,29 @@ module.exports = {
   getManifestForPrecision,
   isSvsModelFile,
   isPrecisionDownloadable,
+  // Remote file list (smart onnx+data detection)
+  listModelFiles,
+  filterMissingByRemote,
+  // Tag (version) listing
+  getModelTags,
+  getJpModelTags,
+  getSifiganTags,
+  // Version management
+  getModelVersionPath,
+  getJpModelVersionPath,
+  getSifiganVersionPath,
+  compareVersions,
+  getLatestTag,
+  getLocalModelVersion,
+  getLocalModelRevision,
+  checkModelVersion,
+  saveModelVersion,
+  getLocalJpModelVersion,
+  getLocalJpModelRevision,
+  checkJpModelVersion,
+  saveJpModelVersion,
+  getLocalSifiganVersion,
+  getLocalSifiganRevision,
+  checkSifiganVersion,
+  saveSifiganVersion,
 };

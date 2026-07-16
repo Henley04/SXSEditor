@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ONNX Models — SXSEditor Developer Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="../user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="dev"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="build.html" data-i18n="sidebar.dev">Developer Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">ONNX Models</span><span data-lang="zh">ONNX 模型</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">ONNX Models</span>
+        <span data-lang="zh">ONNX 模型</span>
+      </h1>
+
+      <p data-lang="en">SXSEditor ships with <strong>9 required ONNX models</strong> plus an <strong>optional SiFiGAN vocoder</strong>. All models are exported from the PyTorch SoulX-Singer checkpoint and converted to ONNX (opset 20) for DirectML / WebNN / CPU execution. Model files live in <code>onnx_models/&lt;precision&gt;/</code> and are downloaded on first launch from ModelScope.</p>
+      <p data-lang="zh">SXSEditor 内置 <strong>9 个必需的 ONNX 模型</strong>，外加一个 <strong>可选的 SiFiGAN 声码器</strong>。所有模型均由 PyTorch 版 SoulX-Singer 检查点导出，并转换为 ONNX（opset 20）以支持 DirectML / WebNN / CPU 执行。模型文件位于 <code>onnx_models/&lt;precision&gt;/</code>，首次启动时从 ModelScope 下载。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">The authoritative list of required model files is <code>ONNX_MODEL_FILES</code> in <code>src/inference/pipeline/constants.js</code>. SiFiGAN files are listed separately in <code>SIFIGAN_MODEL_FILES</code>. The download manager (<code>src/modelManager.js</code>) maps each precision to a ModelScope repository.</p>
+          <p data-lang="zh">必需模型文件的权威清单是 <code>src/inference/pipeline/constants.js</code> 中的 <code>ONNX_MODEL_FILES</code>。SiFiGAN 文件单独列在 <code>SIFIGAN_MODEL_FILES</code> 中。下载管理器（<code>src/modelManager.js</code>）将每种精度映射到一个 ModelScope 仓库。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">The 9 Required Models</span>
+        <span data-lang="zh">9 个必需模型</span>
+      </h2>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">File</span><span data-lang="zh">文件</span></th>
+            <th><span data-lang="en">Group</span><span data-lang="zh">分组</span></th>
+            <th><span data-lang="en">Role</span><span data-lang="zh">作用</span></th>
+            <th><span data-lang="en">FP16 Size</span><span data-lang="zh">FP16 大小</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>note_text_encoder.onnx</code></td>
+            <td><span data-lang="en">svs_encoder</span><span data-lang="zh">svs_encoder</span></td>
+            <td><span data-lang="en">Phoneme id → text embedding (EMBED_DIM=512)</span><span data-lang="zh">音素 id → 文本嵌入（EMBED_DIM=512）</span></td>
+            <td>2.93 MB</td>
+          </tr>
+          <tr>
+            <td><code>note_pitch_encoder.onnx</code></td>
+            <td><span data-lang="en">svs_encoder</span><span data-lang="zh">svs_encoder</span></td>
+            <td><span data-lang="en">MIDI pitch id → pitch embedding</span><span data-lang="zh">MIDI 音高 id → 音高嵌入</span></td>
+            <td>0.13 MB</td>
+          </tr>
+          <tr>
+            <td><code>note_type_encoder.onnx</code></td>
+            <td><span data-lang="en">svs_encoder</span><span data-lang="zh">svs_encoder</span></td>
+            <td><span data-lang="en">Note type (rest/vocal/slur) → embedding</span><span data-lang="zh">音符类型（休止/人声/连音）→ 嵌入</span></td>
+            <td>0.13 MB</td>
+          </tr>
+          <tr>
+            <td><code>f0_encoder.onnx</code></td>
+            <td><span data-lang="en">svs_encoder</span><span data-lang="zh">svs_encoder</span></td>
+            <td><span data-lang="en">Quantized F0 id → F0 embedding (F0_BIN=361)</span><span data-lang="zh">量化 F0 id → F0 嵌入（F0_BIN=361）</span></td>
+            <td>0.13 MB</td>
+          </tr>
+          <tr>
+            <td><code>preflow.onnx</code></td>
+            <td><span data-lang="en">svs_encoder</span><span data-lang="zh">svs_encoder</span></td>
+            <td><span data-lang="en">ConvNeXtV2 pre-flow over summed embeddings</span><span data-lang="zh">对四嵌入之和做 ConvNeXtV2 预流</span></td>
+            <td>8.2 MB</td>
+          </tr>
+          <tr>
+            <td><code>cond_emb.onnx</code></td>
+            <td><span data-lang="en">svs_encoder</span><span data-lang="zh">svs_encoder</span></td>
+            <td><span data-lang="en">preflow output → diffusion condition (COND_DIM=1024)</span><span data-lang="zh">preflow 输出 → 扩散条件（COND_DIM=1024）</span></td>
+            <td>0.51 MB</td>
+          </tr>
+          <tr>
+            <td><code>diff_step_dml.onnx</code></td>
+            <td><span data-lang="en">svs_diffusion</span><span data-lang="zh">svs_diffusion</span></td>
+            <td><span data-lang="en">Single diffusion denoising step (flow matching)</span><span data-lang="zh">单步扩散去噪（flow matching）</span></td>
+            <td>846 MB</td>
+          </tr>
+          <tr>
+            <td><code>vocoder_dml.onnx</code></td>
+            <td><span data-lang="en">svs_diffusion</span><span data-lang="zh">svs_diffusion</span></td>
+            <td><span data-lang="en">Default Vocos vocoder: mel (128D) → 24kHz PCM</span><span data-lang="zh">默认 Vocos 声码器：mel（128D）→ 24kHz PCM</span></td>
+            <td>495 MB</td>
+          </tr>
+          <tr>
+            <td><code>mel_transform.onnx</code></td>
+            <td><span data-lang="en">svs_auxiliary</span><span data-lang="zh">svs_auxiliary</span></td>
+            <td><span data-lang="en">STFT → mel for reference audio (Cooley-Tukey FFT)</span><span data-lang="zh">参考音频 STFT → mel（Cooley-Tukey FFT）</span></td>
+            <td>0.25 MB</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Model Groups &amp; Device Placement</span>
+        <span data-lang="zh">模型分组与设备分配</span>
+      </h2>
+      <p data-lang="en">Models are organized into <strong>groups</strong> (defined in <code>MODEL_GROUPS</code>). <code>buildModelDeviceMapping</code> in <code>modelLoader.js</code> assigns each group to a device based on total group size and available hardware:</p>
+      <p data-lang="zh">模型被组织为若干 <strong>分组</strong>（定义于 <code>MODEL_GROUPS</code>）。<code>modelLoader.js</code> 中的 <code>buildModelDeviceMapping</code> 根据分组总大小与可用硬件为每个分组分配设备：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Group</span><span data-lang="zh">分组</span></th>
+            <th><span data-lang="en">Models</span><span data-lang="zh">模型</span></th>
+            <th><span data-lang="en">Total FP16 Size</span><span data-lang="zh">FP16 总大小</span></th>
+            <th><span data-lang="en">Placement Rule</span><span data-lang="zh">分配规则</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>svs_diffusion</code></td>
+            <td><span data-lang="en">diff_step, vocoder</span><span data-lang="zh">diff_step, vocoder</span></td>
+            <td><span data-lang="en">~1.3 GB</span><span data-lang="zh">约 1.3 GB</span></td>
+            <td><span data-lang="en">&gt;100 MB → discrete GPU (DirectML)</span><span data-lang="zh">&gt;100 MB → 独显（DirectML）</span></td>
+          </tr>
+          <tr>
+            <td><code>svs_encoder</code></td>
+            <td><span data-lang="en">6 encoders</span><span data-lang="zh">6 个编码器</span></td>
+            <td><span data-lang="en">~12 MB</span><span data-lang="zh">约 12 MB</span></td>
+            <td><span data-lang="en">10–100 MB → GPU preferred, else NPU/CPU</span><span data-lang="zh">10–100 MB → 优先 GPU，否则 NPU/CPU</span></td>
+          </tr>
+          <tr>
+            <td><code>svs_auxiliary</code></td>
+            <td><span data-lang="en">mel_transform</span><span data-lang="zh">mel_transform</span></td>
+            <td><span data-lang="en">0.25 MB</span><span data-lang="zh">0.25 MB</span></td>
+            <td><span data-lang="en">&lt;10 MB → NPU preferred (frees GPU VRAM), else CPU</span><span data-lang="zh">&lt;10 MB → 优先 NPU（释放 GPU 显存），否则 CPU</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">Device selection priority (in <code>selectBestDevice</code>): <code>discrete-gpu &gt; npu &gt; integrated-gpu &gt; cpu</code>, weighted by VRAM within each tier.</p>
+      <p data-lang="zh">设备选择优先级（<code>selectBestDevice</code>）：<code>独显 &gt; NPU &gt; 核显 &gt; CPU</code>，同级内按显存加权。</p>
+
+      <h2>
+        <span data-lang="en">Precision Variants</span>
+        <span data-lang="zh">精度变体</span>
+      </h2>
+      <p data-lang="en">SXSEditor supports 4 model precisions, each in its own subdirectory of <code>onnx_models/</code>:</p>
+      <p data-lang="zh">SXSEditor 支持 4 种模型精度，每种位于 <code>onnx_models/</code> 下的独立子目录：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Precision</span><span data-lang="zh">精度</span></th>
+            <th><span data-lang="en">Subdirectory</span><span data-lang="zh">子目录</span></th>
+            <th><span data-lang="en">ModelScope Repo</span><span data-lang="zh">ModelScope 仓库</span></th>
+            <th><span data-lang="en">Notes</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>fp32</code></td>
+            <td><span data-lang="en"><code>onnx_models/</code> (root)</span><span data-lang="zh"><code>onnx_models/</code>（根目录）</span></td>
+            <td><code>syxppp/SoulX-Singer-onnx-directml</code></td>
+            <td><span data-lang="en">Highest quality, ~3 GB disk</span><span data-lang="zh">最高质量，约 3 GB 磁盘</span></td>
+          </tr>
+          <tr>
+            <td><code>fp16</code></td>
+            <td><code>onnx_models/fp16/</code></td>
+            <td><code>syxppp/SoulX-Singer-onnx-directml-fp16</code></td>
+            <td><span data-lang="en">Recommended; ~1.5 GB disk. Uses Float16 patch.</span><span data-lang="zh">推荐；约 1.5 GB 磁盘。使用 Float16 补丁。</span></td>
+          </tr>
+          <tr>
+            <td><code>int8</code></td>
+            <td><code>onnx_models/int8/</code></td>
+            <td><code>syxppp/SoulX-Singer-onnx-directml-int8</code></td>
+            <td><span data-lang="en">Quantized; ~1 GB. For low-VRAM GPUs.</span><span data-lang="zh">量化；约 1 GB。适用于低显存 GPU。</span></td>
+          </tr>
+          <tr>
+            <td><code>int8-npu</code></td>
+            <td><code>onnx_models/int8-npu/</code></td>
+            <td><span data-lang="en">(NPU-optimized static-shape export)</span><span data-lang="zh">（NPU 优化静态形状导出）</span></td>
+            <td><span data-lang="en">Static shapes padded to NPU_STATIC_SEQ_LEN=2048</span><span data-lang="zh">静态形状，填充到 NPU_STATIC_SEQ_LEN=2048</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">The set <code>PRECISION_SUBDIR_PRECESIONS = {'int8', 'fp16', 'int8-npu'}</code> determines which precisions live in a named subdirectory; <code>fp32</code> lives at the <code>onnx_models/</code> root. Different precisions can coexist — switching in Settings just changes which directory the pipeline reads from.</p>
+      <p data-lang="zh">集合 <code>PRECISION_SUBDIR_PRECESIONS = {'int8', 'fp16', 'int8-npu'}</code> 决定哪些精度位于命名子目录；<code>fp32</code> 位于 <code>onnx_models/</code> 根目录。不同精度可共存——在设置中切换只会改变管线读取的目录。</p>
+
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>W16A32 fallback</strong>: if the FP16 <code>diff_step_dml.onnx</code> fails to load (some GPUs have incomplete FP16 kernel support), the pipeline automatically reloads it from the FP32 base directory while keeping all other models in FP16. This combines FP16 memory savings with FP32 numerical stability for the diffusion step. Watch the console for <code>"FP16 diff_step failed, falling back to FP32 (W16A32)"</code>.</p>
+          <p data-lang="zh"><strong>W16A32 回退</strong>：若 FP16 的 <code>diff_step_dml.onnx</code> 加载失败（部分 GPU 的 FP16 算子支持不完整），管线会自动从 FP32 基础目录重新加载它，其余模型保持 FP16。这结合了 FP16 的显存节省与扩散步的 FP32 数值稳定性。注意控制台输出 <code>"FP16 diff_step failed, falling back to FP32 (W16A32)"</code>。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">SiFiGAN Vocoder (Optional)</span>
+        <span data-lang="zh">SiFiGAN 声码器（可选）</span>
+      </h2>
+      <p data-lang="en">SiFiGAN (ICASSP 2023) is an alternative vocoder that can be swapped in at runtime via <code>pipeline.swapVocoder('sifigan')</code>. It is a dual-input model (mel + f0):</p>
+      <p data-lang="zh">SiFiGAN（ICASSP 2023）是可在运行时通过 <code>pipeline.swapVocoder('sifigan')</code> 切换的替代声码器。它是双输入模型（mel + f0）：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">File</span><span data-lang="zh">文件</span></th>
+            <th><span data-lang="en">Size</span><span data-lang="zh">大小</span></th>
+            <th><span data-lang="en">Notes</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>sifigan_vocoder_dml_fp16.onnx</code></td>
+            <td>23.1 MB</td>
+            <td><span data-lang="en">FP16 quantized variant (preferred)</span><span data-lang="zh">FP16 量化变体（首选）</span></td>
+          </tr>
+          <tr>
+            <td><code>sifigan_vocoder_dml.onnx</code></td>
+            <td>611 MB</td>
+            <td><span data-lang="en">FP32 DML-optimized variant (fallback)</span><span data-lang="zh">FP32 DML 优化变体（回退）</span></td>
+          </tr>
+          <tr>
+            <td><code>sifigan_stats.joblib</code></td>
+            <td><span data-lang="en">small</span><span data-lang="zh">较小</span></td>
+            <td><span data-lang="en">Input feature normalization statistics</span><span data-lang="zh">输入特征归一化统计</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">The FP16 variant is generated locally from the FP32 model and is <strong>not</strong> on ModelScope — only the FP32 variant and stats file are downloaded. SiFiGAN files live at the <code>onnx_models/</code> root (not in precision subdirectories).</p>
+      <p data-lang="zh">FP16 变体由 FP32 模型在本地生成，<strong>不</strong>在 ModelScope 上——仅下载 FP32 变体与统计文件。SiFiGAN 文件位于 <code>onnx_models/</code> 根目录（不在精度子目录中）。</p>
+
+      <div class="callout tip">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Frame-rate mismatch</strong>: SiFiGAN expects 200 Hz mel (<code>SIFIGAN_HOP_SIZE=120</code>), but the SVS pipeline produces 50 Hz mel (<code>HOP_SIZE=480</code>). <code>runVocoderChunked</code> performs 4× nearest-neighbor upsampling on both mel and f0 in the time dimension before feeding SiFiGAN, so that <code>effectiveTotalFrames × 120 == totalFrames × 480</code> yields the correct output audio length.</p>
+          <p data-lang="zh"><strong>帧率不匹配</strong>：SiFiGAN 期望 200Hz mel（<code>SIFIGAN_HOP_SIZE=120</code>），但 SVS 管线产出 50Hz mel（<code>HOP_SIZE=480</code>）。<code>runVocoderChunked</code> 在送入 SiFiGAN 前对 mel 与 f0 在时间维度做 4× 最近邻上采样，使 <code>effectiveTotalFrames × 120 == totalFrames × 480</code>，输出音频长度正确。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Execution Providers</span>
+        <span data-lang="zh">执行提供者</span>
+      </h2>
+      <p data-lang="en">Models run on one of three execution providers, selected at session-creation time by <code>createSessionWithValidation</code> in <code>modelLoader.js</code>:</p>
+      <p data-lang="zh">模型运行在三种执行提供者之一上，由 <code>modelLoader.js</code> 的 <code>createSessionWithValidation</code> 在创建会话时选择：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Provider</span><span data-lang="zh">提供者</span></th>
+            <th><span data-lang="en">Runtime</span><span data-lang="zh">运行时</span></th>
+            <th><span data-lang="en">Process</span><span data-lang="zh">进程</span></th>
+            <th><span data-lang="en">Used For</span><span data-lang="zh">用途</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en"><strong>DirectML</strong></span><span data-lang="zh"><strong>DirectML</strong></span></td>
+            <td><code>onnxruntime-node</code></td>
+            <td><span data-lang="en">Main</span><span data-lang="zh">主进程</span></td>
+            <td><span data-lang="en">Large models (diff_step, vocoder) on discrete/integrated GPU</span><span data-lang="zh">独显/核显上的大模型（diff_step、vocoder）</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>WebNN</strong></span><span data-lang="zh"><strong>WebNN</strong></span></td>
+            <td><code>onnxruntime-web</code></td>
+            <td><span data-lang="en">Renderer</span><span data-lang="zh">渲染进程</span></td>
+            <td><span data-lang="en">Small models on NPU (via WebNNSessionProxy IPC)</span><span data-lang="zh">NPU 上的小模型（通过 WebNNSessionProxy IPC）</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>CPU</strong></span><span data-lang="zh"><strong>CPU</strong></span></td>
+            <td><code>onnxruntime-node</code></td>
+            <td><span data-lang="en">Main</span><span data-lang="zh">主进程</span></td>
+            <td><span data-lang="en">Fallback when no GPU/NPU, or session validation fails</span><span data-lang="zh">无 GPU/NPU 或会话校验失败时回退</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en"><code>createSessionWithValidation</code> creates a DML session first (with <code>enableMemPattern: false</code> and <code>executionMode: 'sequential'</code> to avoid DML over-allocation), runs a dummy inference against the model's expected input shape to verify it actually executes, and falls back to CPU on any failure. NPU static-shape models skip DML validation and load directly on CPU (they are consumed by the WebNN proxy, not DML).</p>
+      <p data-lang="zh"><code>createSessionWithValidation</code> 优先创建 DML 会话（设置 <code>enableMemPattern: false</code> 与 <code>executionMode: 'sequential'</code> 以避免 DML 过度分配），用模型期望的输入形状跑一次 dummy 推理验证其确实可执行，任何失败都回退到 CPU。NPU 静态形状模型跳过 DML 校验，直接在 CPU 上加载（它们由 WebNN 代理消费，而非 DML）。</p>
+
+      <h2>
+        <span data-lang="en">WebNN Session Proxy</span>
+        <span data-lang="zh">WebNN 会话代理</span>
+      </h2>
+      <p data-lang="en">When <code>inferenceProvider='ortweb'</code> and NPU/GPU is available, <code>WebNNSessionProxy</code> in <code>modelLoader.js</code> forwards <code>session.run()</code> calls to the renderer process via IPC. The main window renderer hosts <code>onnxruntime-web</code> and registers the WebNN execution provider. This lets small models (<code>mel_transform</code>, encoders) run on the NPU while heavy models stay on DirectML in the main process.</p>
+      <p data-lang="zh">当 <code>inferenceProvider='ortweb'</code> 且 NPU/GPU 可用时，<code>modelLoader.js</code> 中的 <code>WebNNSessionProxy</code> 通过 IPC 将 <code>session.run()</code> 调用转发到渲染进程。主窗口渲染进程承载 <code>onnxruntime-web</code> 并注册 WebNN 执行提供者。这让小模型（<code>mel_transform</code>、编码器）在 NPU 上运行，而重量级模型仍留在主进程的 DirectML 上。</p>
+      <ul>
+        <li><span data-lang="en"><strong>NPU static shapes</strong>: NPU models use fixed sequence lengths — <code>NPU_STATIC_SEQ_LEN=2048</code> for encoders/diffusion, <code>NPU_VOCODER_SEQ_LEN=500</code> for the vocoder (the ISTFT Conv pad tensor exceeds the WebNN 2GB limit at 2048). Inputs are padded to the static length and the output is sliced back to the real frame count.</span><span data-lang="zh"><strong>NPU 静态形状</strong>：NPU 模型使用固定序列长度——编码器/扩散为 <code>NPU_STATIC_SEQ_LEN=2048</code>，声码器为 <code>NPU_VOCODER_SEQ_LEN=500</code>（ISTFT Conv pad 张量在 2048 时超过 WebNN 2GB 限制）。输入被填充到静态长度，输出再切片回真实帧数。</span></li>
+        <li><span data-lang="en"><strong>IPC timeouts</strong>: <code>IPC_TIMEOUT_INFERENCE=120s</code> (single model run), <code>IPC_TIMEOUT_MODEL_LOAD=180s</code> (load + EP init + weight upload), <code>IPC_TIMEOUT_SYNTHESIS=600s</code> (full synth loop).</span><span data-lang="zh"><strong>IPC 超时</strong>：<code>IPC_TIMEOUT_INFERENCE=120s</code>（单模型推理）、<code>IPC_TIMEOUT_MODEL_LOAD=180s</code>（加载 + EP 初始化 + 权重上传）、<code>IPC_TIMEOUT_SYNTHESIS=600s</code>（完整合成循环）。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Model Download (First Launch)</span>
+        <span data-lang="zh">模型下载（首次启动）</span>
+      </h2>
+      <p data-lang="en">On first launch, SXSEditor detects missing model files and opens the <strong>Model Download</strong> window. The download is managed by <code>src/main/modelDownload.js</code> and <code>src/modelManager.js</code>:</p>
+      <p data-lang="zh">首次启动时，SXSEditor 检测到模型文件缺失，会打开<strong>模型下载</strong>窗口。下载由 <code>src/main/modelDownload.js</code> 与 <code>src/modelManager.js</code> 管理：</p>
+      <ul>
+        <li><span data-lang="en"><strong>Source</strong>: ModelScope (<code>https://modelscope.cn</code>). Each file is fetched from <code>/api/v1/models/{modelId}/repo?Revision=master&amp;FilePath={file}</code>. ModelScope redirects to its CDN, so one redirect hop is followed.</span><span data-lang="zh"><strong>来源</strong>：ModelScope（<code>https://modelscope.cn</code>）。每个文件从 <code>/api/v1/models/{modelId}/repo?Revision=master&amp;FilePath={file}</code> 拉取。ModelScope 会重定向到 CDN，因此跟随一次重定向。</span></li>
+        <li><span data-lang="en"><strong>Chunked parallel transfer</strong>: large files are split into chunks (up to 16 concurrent connections) via <code>downloadFileChunked</code>. <code>getOptimalConcurrency</code> tunes concurrency based on file size. Small files use a single-stream <code>downloadFileWithRetry</code>.</span><span data-lang="zh"><strong>分片并行传输</strong>：大文件通过 <code>downloadFileChunked</code> 分片（最多 16 个并发连接）。<code>getOptimalConcurrency</code> 根据文件大小调整并发数。小文件使用单流 <code>downloadFileWithRetry</code>。</span></li>
+        <li><span data-lang="en"><strong>Resume / skip</strong>: files are written to a <code>.download</code> temp suffix and renamed on completion. Re-running the download skips already-complete files automatically. <code>MAX_RETRIES=3</code> per file.</span><span data-lang="zh"><strong>续传 / 跳过</strong>：文件先写入 <code>.download</code> 临时后缀，完成后重命名。重新下载会自动跳过已完成的文件。每文件 <code>MAX_RETRIES=3</code> 次重试。</span></li>
+        <li><span data-lang="en"><strong>Versioning</strong>: <code>checkModelVersion</code> compares the local version file against the ModelScope repo metadata, enabling update prompts when a new model revision is published.</span><span data-lang="zh"><strong>版本管理</strong>：<code>checkModelVersion</code> 将本地版本文件与 ModelScope 仓库元数据对比，发布新模型版本时可触发更新提示。</span></li>
+      </ul>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Japanese (JP) models live in <code>onnx_models/&lt;precision&gt;/JP/</code> and are downloaded from a separate LoRA repository (<code>syxppp/SoulX-Singer-onnx-fp16-lora-jp</code>). They are optional — Japanese inference is unavailable until the JP directory is populated. <code>pipeline.swapLanguageModels('ja')</code> hot-swaps them at runtime.</p>
+          <p data-lang="zh">日语（JP）模型位于 <code>onnx_models/&lt;precision&gt;/JP/</code>，从独立的 LoRA 仓库（<code>syxppp/SoulX-Singer-onnx-fp16-lora-jp</code>）下载。它们是可选的——JP 目录未填充前日语推理不可用。<code>pipeline.swapLanguageModels('ja')</code> 可在运行时热切换。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">ONNX Opset &amp; DML Compatibility</span>
+        <span data-lang="zh">ONNX Opset 与 DML 兼容性</span>
+      </h2>
+      <p data-lang="en">All models are exported with <strong>opset 20</strong> (the maximum supported by the DirectML EP). Key DML compatibility constraints handled during export / post-processing:</p>
+      <p data-lang="zh">所有模型以 <strong>opset 20</strong> 导出（DirectML EP 支持的最大版本）。导出 / 后处理阶段处理的 DML 兼容性约束：</p>
+      <ul>
+        <li><span data-lang="en"><strong>No <code>-1</code> in Reshape shapes</strong>: DML returns <code>E_INVALIDARG 0x80070057</code> for any <code>-1</code> in a Reshape shape. A post-processing step resolves all <code>-1</code> values to concrete dimensions.</span><span data-lang="zh"><strong>Reshape 形状不含 <code>-1</code></strong>：DML 对 Reshape 形状中的任何 <code>-1</code> 都返回 <code>E_INVALIDARG 0x80070057</code>。后处理步骤将所有 <code>-1</code> 解析为具体维度。</span></li>
+        <li><span data-lang="en"><strong>Precomputed RoPE tables</strong>: diffusion models precompute full <code>cos/sin</code> RoPE tables <code>[1, 4096, 64]</code> and use dynamic <code>Slice</code> instead of <code>Range(0, T, 1)</code>, because DML does not support dynamic <code>limit</code> in <code>Range</code> and produces NaN output.</span><span data-lang="zh"><strong>预计算 RoPE 表</strong>：扩散模型预计算完整的 <code>cos/sin</code> RoPE 表 <code>[1, 4096, 64]</code>，并使用动态 <code>Slice</code> 替代 <code>Range(0, T, 1)</code>，因为 DML 不支持 <code>Range</code> 的动态 <code>limit</code>，且会产生 NaN 输出。</span></li>
+        <li><span data-lang="en"><strong>Cooley-Tukey mel_transform</strong>: <code>mel_transform.onnx</code> decomposes the N=1920 DFT into 64×30 via MatMul (Cooley-Tukey FFT) instead of a direct Conv1D DFT, reducing numerical error from O(√N)≈43.8ε to O(√64+√30)≈13.5ε and improving SNR from 49.86 dB to 83.54 dB.</span><span data-lang="zh"><strong>Cooley-Tukey mel_transform</strong>：<code>mel_transform.onnx</code> 通过 MatMul 将 N=1920 的 DFT 分解为 64×30（Cooley-Tukey FFT），而非直接 Conv1D DFT，将数值误差从 O(√N)≈43.8ε 降到 O(√64+√30)≈13.5ε，SNR 从 49.86 dB 提升到 83.54 dB。</span></li>
+        <li><span data-lang="en"><strong>W16A32 input casting</strong>: W16A32 models (FP16 weights, FP32 activations) require <code>Cast(FP16→FP32)</code> nodes on diff_step/vocoder inputs to prevent DML input type errors.</span><span data-lang="zh"><strong>W16A32 输入转换</strong>：W16A32 模型（FP16 权重、FP32 激活）需要在 diff_step/vocoder 输入上加 <code>Cast(FP16→FP32)</code> 节点，避免 DML 输入类型错误。</span></li>
+        <li><span data-lang="en"><strong>Olive post-process type fix</strong>: Olive's <code>onnxscript_optimize</code> pass removes <code>Cast(FP16→FP32)</code> nodes in W16A32 <code>diff_step_dml</code> (treating them as redundant) but does not update the weight initializer dtype, leaving <code>MatMul</code> with mismatched FP32/FP16 inputs. The conversion script runs <strong>full Olive optimization</strong> (all passes enabled) then post-processes the optimized model with <code>fix_type_mismatches()</code> to re-insert the deleted <code>Cast</code> nodes. This preserves all Olive benefits (node fusion, dead code elimination, reshape fusion) while restoring type safety. TrueFP16 <code>diff_step_dml</code> has a similar post-fix for <code>Cast(INT64→FP32)</code> that <code>onnxconverter_common</code> misses (the <code>to</code> attribute and corresponding <code>value_info</code> are updated to FP16).</span><span data-lang="zh"><strong>Olive 后处理类型修复</strong>：Olive 的 <code>onnxscript_optimize</code> pass 会删除 W16A32 <code>diff_step_dml</code> 中的 <code>Cast(FP16→FP32)</code> 节点（误判为冗余），但不更新权重初始化器的 dtype，导致 <code>MatMul</code> 输入类型不匹配（FP32/FP16 混合）。转换脚本运行<strong>完整 Olive 优化</strong>（所有 pass 启用），然后对优化后的模型执行 <code>fix_type_mismatches()</code> 后处理，重新插入被删除的 <code>Cast</code> 节点。这样既保留了 Olive 的全部优化收益（节点融合、死代码消除、reshape 融合），又恢复了类型安全。TrueFP16 <code>diff_step_dml</code> 有类似的后处理修复：<code>onnxconverter_common</code> 漏掉了 <code>Cast(INT64→FP32)</code> 的 <code>to</code> 属性更新，后处理会同时更新 <code>to</code> 属性和对应的 <code>value_info</code> 为 FP16。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Switching Precision at Runtime</span>
+        <span data-lang="zh">运行时切换精度</span>
+      </h2>
+      <p data-lang="en">Precision is controlled by <code>settings.modelPrecision</code>. Users switch it in <strong>Settings → Inference</strong>; the change triggers a full pipeline reload. Developers can switch programmatically:</p>
+      <p data-lang="zh">精度由 <code>settings.modelPrecision</code> 控制。用户在<strong>设置 → 推理</strong>中切换；切换会触发管线完整重载。开发者可编程切换：</p>
+      <pre><code>// rebuild the pipeline with a new precision directory
+const pipeline = new OnnxSVSPipeline(modelDir, {
+  modelPrecision: 'fp32',   // 'fp32' | 'fp16' | 'int8' | 'int8-npu'
+  deviceId,                 // DML adapter index
+  preferredDeviceType,      // 'npu' | 'webnn-gpu' | undefined
+  inferenceProvider,        // 'ortnode' (default) | 'ortweb'
+});
+await pipeline.init();
+
+// swap vocoder without reloading encoders/diffusion
+await pipeline.swapVocoder('sifigan');
+await pipeline.swapSifiganPrecision('fp16');
+
+// swap language models (JP) without reloading the vocoder
+await pipeline.swapLanguageModels('ja');</code></pre>
+      <p data-lang="en">Switching vocoder type, SiFiGAN precision, or language invalidates the synthesis cache (4 entries / 200 MB LRU), so the next <code>synthesize()</code> re-runs the vocoder.</p>
+      <p data-lang="zh">切换声码器类型、SiFiGAN 精度或语言都会使合成缓存（4 条 / 200MB LRU）失效，因此下一次 <code>synthesize()</code> 会重新运行声码器。</p>
+
+      <h2>
+        <span data-lang="en">Device Enumeration</span>
+        <span data-lang="zh">设备枚举</span>
+      </h2>
+      <p data-lang="en"><code>enumerateDMLDevices</code> first tries <code>systeminformation</code> (cached via <code>gpuCache.js</code>); if it returns nothing, it falls back to creating a probe DML session on <code>note_text_encoder.onnx</code> and parsing ORT verbose stderr for <code>Discovered OrtHardwareDevice</code> lines. Each device is classified by <code>classifyDevice</code> (in <code>utils/deviceClassifier.js</code>) into <code>discrete-gpu</code>, <code>integrated-gpu</code>, <code>npu</code>, or <code>cpu</code>.</p>
+      <p data-lang="zh"><code>enumerateDMLDevices</code> 优先使用 <code>systeminformation</code>（经 <code>gpuCache.js</code> 缓存）；若无结果，回退到在 <code>note_text_encoder.onnx</code> 上创建探测 DML 会话，并解析 ORT verbose stderr 中的 <code>Discovered OrtHardwareDevice</code> 行。每个设备由 <code>classifyDevice</code>（位于 <code>utils/deviceClassifier.js</code>）分类为 <code>discrete-gpu</code>、<code>integrated-gpu</code>、<code>npu</code> 或 <code>cpu</code>。</p>
+
+      <nav class="doc-pager">
+        <a href="inference-pipeline.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Inference Pipeline</span><span data-lang="zh">推理管线</span></div></div></a>
+        <a href="themes.html" class="next"><div class="pager-card"><div class="pager-label" data-i18n="pager.next">Next</div><div class="pager-title"><span data-lang="en">Themes &amp; UI</span><span data-lang="zh">主题与界面</span></div></div></a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="../user/faq.html" data-i18n="footer.help">Help & FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

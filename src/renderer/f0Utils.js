@@ -20,9 +20,10 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   const sortedAnchors = [...pc.anchorPoints].sort((a, b) => a.time - b.time);
 
   // 预生成 autoPoints（与分片编辑器 generateAutoPitchPoints 一致），基于 clippedNotes
+  // 起始点和末端都标记 breakAfter: true，note 内部不做线性插值，避免强制拟合 Midi 音高平线。
   const autoPoints = [];
   for (const note of clippedNotes) {
-    autoPoints.push({ time: note.start, pitch: note.pitch });
+    autoPoints.push({ time: note.start, pitch: note.pitch, breakAfter: true });
     autoPoints.push({ time: note.start + note.duration, pitch: note.pitch, breakAfter: true });
   }
 
@@ -59,7 +60,8 @@ function _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, time) {
             ? (time - sortedAnchors[i].time) / (sortedAnchors[i + 1].time - sortedAnchors[i].time)
             : 0;
           const smoothness = (sortedAnchors[i].smoothness || 0) / 100;
-          const smoothT = smoothness > 0 ? t * t * (3 - 2 * t) : t;
+          const smoothStepT = t * t * (3 - 2 * t);
+          const smoothT = t + (smoothStepT - t) * smoothness;
           return sortedAnchors[i].pitch + smoothT * (sortedAnchors[i + 1].pitch - sortedAnchors[i].pitch);
         }
       }
@@ -186,7 +188,8 @@ export function computePitchCurveF0(singerFragments, allNotes, bpm) {
             const t = (sorted[hi].time - sorted[lo].time) > 0
               ? (localBeat - sorted[lo].time) / (sorted[hi].time - sorted[lo].time) : 0;
             const sm = (sorted[lo].smoothness || 0) / 100;
-            const st = sm > 0 ? t * t * (3 - 2 * t) : t;
+            const smoothStepT = t * t * (3 - 2 * t);
+            const st = t + (smoothStepT - t) * sm;
             pitch = sorted[lo].pitch + st * (sorted[hi].pitch - sorted[lo].pitch);
           }
         }

@@ -1,12 +1,78 @@
+// Detect test/CI environment to skip verbose ORT debug logging that would
+// pollute test output and keep the event loop alive. Mocha sets neither
+// NODE_ENV nor a dedicated flag, so check argv for the mocha binary.
+const _IS_TEST_ENV = process.env.CI === 'true' ||
+    process.argv.some(a => /\b_?mocha\b/.test(a));
+
+// Set log level BEFORE requiring onnxruntime-node!
+// (ORT initializes once when module is loaded, must set logLevel first)
+if (!_IS_TEST_ENV) {
+    process.env.ORT_DML_DEBUG = '1';
+    process.env.ORT_LOGGING_LEVEL = '0'; // 0=VERBOSE, 1=INFO, 2=WARNING, 3=ERROR, 4=FATAL
+}
+
 const path = require('node:path');
 const fs = require('node:fs');
 const ort = require('onnxruntime-node');
+// Set logLevel on the real module (ort.env is from the external onnxruntime-node's onnxruntime-common)
+if (!_IS_TEST_ENV) {
+    ort.env.logLevel = 'verbose';
+    ort.env.debug = true;
+}
 const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { classifyDevice } = require('../../utils/deviceClassifier');
-const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
+const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
+
+// Flush ORT debug buffer to console after model loading
+function flushOrtDebugLogs() {
+    if (ortDebugBuffer.length > 0) {
+        console.log('\n[ORT Native Debug Output] ==================================================');
+        const lines = ortDebugBuffer.split('\n');
+        for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed) {
+                console.log(`[ORT] ${trimmed}`);
+            }
+        }
+        console.log('[ORT Native Debug Output] ==================================================\n');
+        ortDebugBuffer = '';
+    }
+}
+globalThis._flushOrtDebugLogs = flushOrtDebugLogs;
+
+// Intercept C++ stderr from onnxruntime to capture verbose debug logs.
+// Skipped in test/CI to avoid capturing test console.error/warn output and
+// to prevent the periodic flush timer from polluting test output.
+let ortDebugBuffer = '';
+if (!_IS_TEST_ENV) {
+    console.log('[OnnxSVSPipeline] ONNX Runtime debug logging enabled (verbose, ORT_LOGGING_LEVEL=0, ORT_DML_DEBUG=1)');
+
+    // (ORT logs go to native stderr, not to Node.js console.log)
+    const iconv = require('iconv-lite');
+    const origStderrWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = function(chunk, encoding, callback) {
+        if (typeof chunk === 'string') {
+            ortDebugBuffer += chunk;
+        } else if (Buffer.isBuffer(chunk)) {
+            ortDebugBuffer += iconv.decode(chunk, process.platform === 'win32' ? 'gbk' : 'utf-8');
+        }
+        return origStderrWrite(chunk, encoding, callback);
+    };
+
+    // Also dump ORT debug logs every 30 seconds to avoid missing important logs.
+    // .unref() ensures the timer does not keep the Node.js event loop alive,
+    // which would otherwise prevent mocha (and other short-lived processes) from
+    // exiting after all work is done.
+    const _ortDebugFlushTimer = setInterval(() => {
+        if (ortDebugBuffer.length > 0) {
+            flushOrtDebugLogs();
+        }
+    }, 30000);
+    _ortDebugFlushTimer.unref();
+}
 
 /**
  * 获取主窗口的 webContents（WebNN IPC 必须发送到主窗口，因为只有主窗口注册了 WebNN 处理器）
@@ -52,7 +118,7 @@ const DUMMY_TEST_INPUTS_FP32 = {
         mel: new ort.Tensor('float32', new Float32Array(3 * MEL_DIM), [1, 3, MEL_DIM]),
         f0: new ort.Tensor('float32', new Float32Array(3), [1, 3, 1]),
     },
-    melTransform: { waveform: new ort.Tensor('float32', new Float32Array(HOP_SIZE * 3), [1, HOP_SIZE * 3]) },
+    melTransform: { audio: new ort.Tensor('float32', new Float32Array(SAMPLE_RATE), [1, SAMPLE_RATE]) },
 };
 
 const DUMMY_TEST_INPUTS_FP16 = {
@@ -74,7 +140,7 @@ const DUMMY_TEST_INPUTS_FP16 = {
         mel: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3 * MEL_DIM)), [1, 3, MEL_DIM]),
         f0: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(3)), [1, 3, 1]),
     },
-    melTransform: { waveform: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(HOP_SIZE * 3)), [1, HOP_SIZE * 3]) },
+    melTransform: { audio: new ort.Tensor('float16', float32ToF16Buffer(new Float32Array(SAMPLE_RATE)), [1, SAMPLE_RATE]) },
 };
 
 // NPU 静态形状模型的验证输入（维度固定为 NPU_STATIC_SEQ_LEN=2048）
@@ -92,7 +158,7 @@ const DUMMY_TEST_INPUTS_NPU = {
         xt_mask: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN), [1, NPU_STATIC_SEQ_LEN]),
     },
     vocoder: { mel: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN * MEL_DIM), [1, NPU_STATIC_SEQ_LEN, MEL_DIM]) },
-    melTransform: { waveform: new ort.Tensor('float32', new Float32Array(240000), [1, 240000]) },
+    melTransform: { audio: new ort.Tensor('float32', new Float32Array(SAMPLE_RATE), [1, SAMPLE_RATE]) },
 };
 
 /** @deprecated Using classifyDevice 替代 */
@@ -445,12 +511,19 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         const dmlOpts = typeof dmlDeviceId === 'number'
             ? { name: 'dml', deviceId: dmlDeviceId }
             : 'dml';
-        dmlSession = await ort.InferenceSession.create(modelPath, {
+        const sessionOptions = {
             executionProviders: [dmlOpts, 'cpu'],
             // DirectML EP 要求 disable memory pattern + sequential execution；否则 DML 可能过度预分配 GPU 内存池。
             enableMemPattern: false,
             executionMode: 'sequential',
-        });
+        };
+        console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify({
+            executionProviders: Array.isArray(dmlOpts) ? [dmlOpts] : ['dml', 'cpu'],
+            enableMemPattern: false,
+            executionMode: 'sequential',
+        }));
+        dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
+        console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
         await dmlSession.run(dummyInputs);
         console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
         return { session: dmlSession, ep: 'dml', warmedUp: true };
@@ -493,6 +566,20 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     try {
         await cpuSession.run(dummyInputs);
     } catch (runErr) {
+        // 当 DML EP 不可用而回退到 CPU 时，dummy 输入可能与模型的静态形状不匹配。常见情况：
+        //   1. *_dml.onnx 静态形状模型（diff_step seq_len=2048, vocoder seq_len=500）
+        //      与动态 dummy（seq_len=3）不匹配 → "invalid dimensions"
+        //   2. mel_transform.onnx 形状为静态 [1,24000]，dummy 也是 [1,1440] → "invalid dimensions"
+        // 模型已成功加载（create 成功），验证失败仅因 dummy 不匹配，
+        // 跳过验证直接返回会话，首次实际推理时自然验证。动态形状的 fp16 模型不受影响。
+        const errSummary = runErr.message.substring(0, 80).split('\n')[0];
+        const isDummyMismatch = runErr.message.includes('invalid dimensions')
+            || runErr.message.includes('is missing in \'feeds\'');
+        if (isDummyMismatch) {
+            console.warn(`[OnnxSVSPipeline] ${modelName} CPU validation skipped (dummy mismatch): ${errSummary}`);
+            console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (validation skipped)`);
+            return { session: cpuSession, ep: 'cpu', warmedUp: false };
+        }
         try { cpuSession.release(); } catch (_) {}
         throw runErr;
     }

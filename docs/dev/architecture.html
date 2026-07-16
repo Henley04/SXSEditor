@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Architecture Overview — SXSEditor Developer Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <!-- Header (identical on every page) -->
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="../user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Docs Layout: sidebar + content + TOC -->
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="dev"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="build.html" data-i18n="sidebar.dev">Developer Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Architecture Overview</span><span data-lang="zh">架构概览</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Architecture Overview</span>
+        <span data-lang="zh">架构概览</span>
+      </h1>
+
+      <p data-lang="en">SXSEditor is a multi-window Electron application. The main process owns all heavy resources (ONNX sessions, audio output, file system), while renderer processes run isolated UI on top of an HTML5 Canvas. All cross-process communication is funneled through a single preload-exposed bridge.</p>
+      <p data-lang="zh">SXSEditor 是一个多窗口 Electron 应用。主进程持有所有重量级资源（ONNX 会话、音频输出、文件系统），渲染进程在隔离的 HTML5 Canvas 之上运行 UI。所有跨进程通信都通过单一的 preload 桥接进行。</p>
+
+      <h2>
+        <span data-lang="en">Process Model at a Glance</span>
+        <span data-lang="zh">进程模型一览</span>
+      </h2>
+      <pre><code>┌─────────────────────────────── Main Process (src/main.js) ───────────────────────────────┐
+│  windowManager        modelDownload        svsIpc          pitchMidiIpc                   │
+│  singerIpc            audioIpc             dialogIpc       resourceManagerIpc             │
+│  settingsIpc          themeIpc             webnnIpc        splashManager                  │
+│  security.js          settings.js          gpuInfo.js      modelDir.js  locale.js         │
+│                                                                                              │
+│  OnnxSVSPipeline  ──►  onnxruntime-node (DirectML / CPU)                                   │
+│  WebNN requests   ──►  forwarded to main window renderer via ipcMain ↔ ipcRenderer         │
+└──────────────────────────────────────────────────────────────────────────────────────────┘
+                                   ▲   IPC (ipcMain.handle / ipcRenderer.invoke)   ▼
+                                   │                                                 │
+┌── Preload (src/preload.js) ──── contextBridge.exposeInMainWorld('electronAPI', {...}) ───┐
+│  All renderer code can ONLY touch window.electronAPI — no Node.js, no require.            │
+└───────────────────────────────────────────────────────────────────────────────────────────┘
+                                   ▲                                                 ▼
+┌──────────────── Renderer Processes (one per window) ──────────────────────────────────────┐
+│  main_window          (src/renderer/)        Multi-track timeline, project management    │
+│  fragment_editor      (src/fragmentEditor/)  Piano-roll editor, SVS preview              │
+│  singer_creator       (src/singerCreator.js) Singer creation wizard                      │
+│  audio_preprocess     (src/audioPreprocess/) F0 / MIDI extraction UI                     │
+│  settings             (src/settings.js)      Device, inference, audio config             │
+│  model_download       (src/modelDownload.js) Chunked parallel download from ModelScope   │
+│  resource_manager     (src/resourceManager.js) GPU/VRAM monitor, model load/unload       │
+│  splash               (src/splash.js)        Startup splash (packaged builds only)       │
+└───────────────────────────────────────────────────────────────────────────────────────────┘</code></pre>
+
+      <h2>
+        <span data-lang="en">Main Process Responsibilities</span>
+        <span data-lang="zh">主进程职责</span>
+      </h2>
+      <p data-lang="en">The main process (<code>src/main.js</code>) is the single owner of privileged resources:</p>
+      <p data-lang="zh">主进程（<code>src/main.js</code>）是所有特权资源的唯一持有者：</p>
+      <ul>
+        <li><span data-lang="en"><strong>Window management</strong> — creates and tracks all BrowserWindows via <code>main/windowManager.js</code>.</span><span data-lang="zh"><strong>窗口管理</strong>— 通过 <code>main/windowManager.js</code> 创建并跟踪所有 BrowserWindow。</span></li>
+        <li><span data-lang="en"><strong>IPC handlers</strong> — registers all <code>ipcMain.handle</code> / <code>ipcMain.on</code> endpoints (see IPC pattern below).</span><span data-lang="zh"><strong>IPC 处理器</strong>— 注册所有 <code>ipcMain.handle</code> / <code>ipcMain.on</code> 端点（见下文 IPC 模式）。</span></li>
+        <li><span data-lang="en"><strong>Model loading</strong> — owns <code>OnnxSVSPipeline</code> sessions and DirectML device enumeration (<code>enumerateDMLDevices</code>).</span><span data-lang="zh"><strong>模型加载</strong>— 持有 <code>OnnxSVSPipeline</code> 会话与 DirectML 设备枚举（<code>enumerateDMLDevices</code>）。</span></li>
+        <li><span data-lang="en"><strong>Audio output</strong> — WASAPI playback through <code>decibri</code> via <code>main/audioIpc.js</code>.</span><span data-lang="zh"><strong>音频输出</strong>— 通过 <code>main/audioIpc.js</code> 使用 <code>decibri</code> 进行 WASAPI 播放。</span></li>
+        <li><span data-lang="en"><strong>File I/O</strong> — all reads/writes pass through path validation in <code>main/security.js</code>.</span><span data-lang="zh"><strong>文件 I/O</strong>— 所有读写都经过 <code>main/security.js</code> 的路径校验。</span></li>
+        <li><span data-lang="en"><strong>Settings persistence</strong> — <code>main/settings.js</code> reads/writes <code>settings.json</code> in the userData directory.</span><span data-lang="zh"><strong>设置持久化</strong>— <code>main/settings.js</code> 读写 userData 目录下的 <code>settings.json</code>。</span></li>
+        <li><span data-lang="en"><strong>Hardware detection</strong> — one-shot GPU/NPU/DML enumeration on startup, cached for the lifetime of the app.</span><span data-lang="zh"><strong>硬件检测</strong>— 启动时一次性枚举 GPU/NPU/DML，结果在应用生命周期内缓存复用。</span></li>
+        <li><span data-lang="en"><strong>Custom protocol</strong> — registers <code>onnx://</code> scheme so renderers can fetch model files safely.</span><span data-lang="zh"><strong>自定义协议</strong>— 注册 <code>onnx://</code> scheme，使渲染进程可以安全读取模型文件。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Renderer Process Responsibilities</span>
+        <span data-lang="zh">渲染进程职责</span>
+      </h2>
+      <p data-lang="en">Each renderer is a self-contained Vanilla JS app communicating only through <code>window.electronAPI</code>. Renderers never touch Node.js APIs directly.</p>
+      <p data-lang="zh">每个渲染进程都是独立的原生 JS 应用，仅通过 <code>window.electronAPI</code> 通信。渲染进程绝不直接调用 Node.js API。</p>
+      <ul>
+        <li><span data-lang="en"><strong>Canvas rendering</strong> — <code>editor/pianoRoll.js</code> and <code>renderer/timelineRenderer.js</code> draw the piano roll and multi-track timeline.</span><span data-lang="zh"><strong>Canvas 渲染</strong>— <code>editor/pianoRoll.js</code> 与 <code>renderer/timelineRenderer.js</code> 绘制钢琴卷帘与多轨时间线。</span></li>
+        <li><span data-lang="en"><strong>User interaction</strong> — mouse/keyboard handlers in <code>fragmentEditor/eventHandlers.js</code> and <code>renderer/eventHandlers.js</code>.</span><span data-lang="zh"><strong>用户交互</strong>— <code>fragmentEditor/eventHandlers.js</code> 与 <code>renderer/eventHandlers.js</code> 中的鼠标/键盘处理。</span></li>
+        <li><span data-lang="en"><strong>Audio playback control</strong> — renderers issue <code>audioPlay</code> / <code>audioStop</code> requests; the main process owns the actual WASAPI session.</span><span data-lang="zh"><strong>音频播放控制</strong>— 渲染进程发起 <code>audioPlay</code> / <code>audioStop</code> 请求，主进程持有真正的 WASAPI 会话。</span></li>
+        <li><span data-lang="en"><strong>State management</strong> — <code>renderer/state.js</code> wraps TrackManager + HistoryManager; <code>fragmentEditor/state.js</code> holds editor state.</span><span data-lang="zh"><strong>状态管理</strong>— <code>renderer/state.js</code> 封装 TrackManager + HistoryManager；<code>fragmentEditor/state.js</code> 持有编辑器状态。</span></li>
+        <li><span data-lang="en"><strong>WebNN host</strong> — the main window renderer is the only window that registers WebNN request handlers and runs <code>onnxruntime-web</code> sessions.</span><span data-lang="zh"><strong>WebNN 宿主</strong>— 主窗口渲染进程是唯一注册 WebNN 请求处理器并运行 <code>onnxruntime-web</code> 会话的窗口。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Preload Bridge</span>
+        <span data-lang="zh">Preload 桥接</span>
+      </h2>
+      <p data-lang="en"><code>src/preload.js</code> uses <code>contextBridge.exposeInMainWorld('electronAPI', {...})</code> to publish a curated API surface. Every IPC call in renderer code goes through this object — there is no direct access to <code>ipcRenderer</code>, <code>require</code>, or Node.js modules.</p>
+      <p data-lang="zh"><code>src/preload.js</code> 通过 <code>contextBridge.exposeInMainWorld('electronAPI', {...})</code> 发布经过筛选的 API 表面。渲染进程中的每一次 IPC 调用都经由该对象——无法直接访问 <code>ipcRenderer</code>、<code>require</code> 或 Node.js 模块。</p>
+
+      <p data-lang="en">Example members exposed on <code>window.electronAPI</code>:</p>
+      <p data-lang="zh"><code>window.electronAPI</code> 上暴露的示例成员：</p>
+      <pre><code>// Request-response (Promise-based)
+electronAPI.initSVSPipeline()                       // svs:init
+electronAPI.synthesizeSVS(data)                     // svs:synthesize
+electronAPI.getSettings()                           // settings:getSettings
+electronAPI.saveSettings(settings)                  // settings:saveSettings
+electronAPI.audioPlay(audioData, options)           // audio:play
+
+// Fire-and-forget listeners (return unsubscribe fn)
+electronAPI.onSVSProgress(p =&gt; console.log(p))      // svs:progress
+electronAPI.onAudioEnded(() =&gt; replay())            // audio:ended
+electronAPI.onModelDownloadProgress(p =&gt; updateUI(p))
+
+// WebNN — channel names whitelisted in preload to prevent arbitrary IPC
+electronAPI.webnnRespond(responseChannel, result)
+electronAPI.webnnProgress(progressChannel, data)
+
+// Theme sub-API
+electronAPI.themeAPI.apply(themeId, { scope })      // theme:apply
+electronAPI.themeAPI.list()                         // theme:list</code></pre>
+
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en">WebNN response/progress channels (<code>webnnRespond</code>, <code>webnnProgress</code>, <code>webnnChunk</code>) validate the channel prefix against a whitelist before invoking <code>ipcRenderer</code>. This prevents compromised renderer code from sending arbitrary IPC messages.</p>
+          <p data-lang="zh">WebNN 的响应/进度通道（<code>webnnRespond</code>、<code>webnnProgress</code>、<code>webnnChunk</code>）在调用 <code>ipcRenderer</code> 前会按白名单校验通道前缀。这可以防止被攻破的渲染进程发送任意 IPC 消息。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">IPC Pattern</span>
+        <span data-lang="zh">IPC 模式</span>
+      </h2>
+      <p data-lang="en">SXSEditor uses two IPC styles consistently:</p>
+      <p data-lang="zh">SXSEditor 一致地使用两种 IPC 风格：</p>
+      <ul>
+        <li><span data-lang="en"><strong>Request-response</strong> — <code>ipcRenderer.invoke</code> ↔ <code>ipcMain.handle</code>. Used for almost every API call (file I/O, SVS synthesis, settings, theme ops).</span><span data-lang="zh"><strong>请求-响应</strong>— <code>ipcRenderer.invoke</code> ↔ <code>ipcMain.handle</code>。几乎所有 API 调用都采用此模式（文件 I/O、SVS 合成、设置、主题操作）。</span></li>
+        <li><span data-lang="en"><strong>Fire-and-forget</strong> — <code>ipcRenderer.send</code> ↔ <code>ipcMain.on</code>, or main → renderer via <code>webContents.send</code>. Used for progress events (<code>svs:progress</code>, <code>model-download:progress</code>, <code>audio:ended</code>).</span><span data-lang="zh"><strong>即发即弃</strong>— <code>ipcRenderer.send</code> ↔ <code>ipcMain.on</code>，或主进程通过 <code>webContents.send</code> 推送给渲染进程。用于进度事件（<code>svs:progress</code>、<code>model-download:progress</code>、<code>audio:ended</code>）。</span></li>
+      </ul>
+      <p data-lang="en">All channel names are centralized in <code>src/shared/ipcChannels.js</code> as <code>IPC_CHANNELS</code> constants (e.g. <code>SVS_SYNTHESIZE = 'svs:synthesize'</code>) to prevent typos and enable refactoring.</p>
+      <p data-lang="zh">所有通道名都集中在 <code>src/shared/ipcChannels.js</code> 中作为 <code>IPC_CHANNELS</code> 常量（例如 <code>SVS_SYNTHESIZE = 'svs:synthesize'</code>），以避免拼写错误并便于重构。</p>
+
+      <p data-lang="en">Binary audio data is transferred as <code>Float32Array</code> for low latency — the renderer ships PCM samples to the main process, which feeds them into the WASAPI output manager.</p>
+      <p data-lang="zh">二进制音频数据以 <code>Float32Array</code> 传输以降低延迟——渲染进程将 PCM 采样发送到主进程，再由主进程送入 WASAPI 输出管理器。</p>
+
+      <h3><span data-lang="en">IPC channel groups</span><span data-lang="zh">IPC 通道分组</span></h3>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Group</span><span data-lang="zh">分组</span></th>
+            <th><span data-lang="en">Example channels</span><span data-lang="zh">示例通道</span></th>
+            <th><span data-lang="en">Registrar</span><span data-lang="zh">注册模块</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Dialog</span><span data-lang="zh">对话框</span></td>
+            <td><code>dialog:showSaveDialog</code>, <code>dialog:showOpenDialog</code></td>
+            <td><code>main/dialogIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">File</span><span data-lang="zh">文件</span></td>
+            <td><code>file:saveFile</code>, <code>file:readFile</code>, <code>file:authorizePath</code></td>
+            <td><code>main/dialogIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">SVS</span><span data-lang="zh">SVS</span></td>
+            <td><code>svs:init</code>, <code>svs:synthesize</code>, <code>fragment-svs:synthesize</code></td>
+            <td><code>main/svsIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Pitch / MIDI</span><span data-lang="zh">音高 / MIDI</span></td>
+            <td><code>extractF0:onnx</code>, <code>extractF0:basicPitch</code>, <code>midi:import</code></td>
+            <td><code>main/pitchMidiIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Settings</span><span data-lang="zh">设置</span></td>
+            <td><code>settings:getSettings</code>, <code>settings:saveSettings</code>, <code>settings:getDMLDevices</code></td>
+            <td><code>main/settingsIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Audio</span><span data-lang="zh">音频</span></td>
+            <td><code>audio:play</code>, <code>audio:stop</code>, <code>audio:ended</code></td>
+            <td><code>main/audioIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Model download</span><span data-lang="zh">模型下载</span></td>
+            <td><code>model-download:start</code>, <code>model-download:progress</code>, <code>model-download:complete</code></td>
+            <td><code>main/modelDownload.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">WebNN / NPU</span><span data-lang="zh">WebNN / NPU</span></td>
+            <td><code>webnn:detectNPU</code>, <code>webnn:loadModel</code>, <code>webnn:runInference</code></td>
+            <td><code>main/webnnIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Theme</span><span data-lang="zh">主题</span></td>
+            <td><code>theme:bootstrap</code>, <code>theme:list</code>, <code>theme:apply</code>, <code>theme:changed</code></td>
+            <td><code>main/themeIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Resource manager</span><span data-lang="zh">资源管理器</span></td>
+            <td><code>resmgr:getGPUInfo</code>, <code>resmgr:loadModel</code>, <code>resmgr:loadGroup</code></td>
+            <td><code>main/resourceManagerIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Locale</span><span data-lang="zh">语言</span></td>
+            <td><code>save-locale</code>, <code>get-locale</code>, <code>locale-changed</code></td>
+            <td><code>main.js</code></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Security Model</span>
+        <span data-lang="zh">安全模型</span>
+      </h2>
+      <p data-lang="en">Security is enforced through a layered design in <code>src/main/security.js</code> and the main process bootstrap:</p>
+      <p data-lang="zh">安全通过 <code>src/main/security.js</code> 与主进程启动代码的分层设计实现：</p>
+
+      <ul>
+        <li><span data-lang="en"><strong>contextIsolation: true</strong> and <strong>sandbox: true</strong> on every BrowserWindow — renderer JS cannot reach Node.js primitives.</span><span data-lang="zh">每个 BrowserWindow 都启用 <strong>contextIsolation: true</strong> 与 <strong>sandbox: true</strong>— 渲染进程 JS 无法触及 Node.js 原语。</span></li>
+        <li><span data-lang="en"><strong>nodeIntegration disabled</strong> — renderers load only via webpack bundles, no <code>require</code> in page context.</span><span data-lang="zh"><strong>禁用 nodeIntegration</strong>— 渲染进程仅通过 webpack bundle 加载，页面上下文中没有 <code>require</code>。</span></li>
+        <li><span data-lang="en"><strong>Path validation</strong> — <code>authorizePath</code> / <code>isPathAllowed</code> restrict file operations to <code>userData</code>, <code>documents</code>, <code>desktop</code>, <code>home</code>, <code>temp</code>, plus dialog-authorized paths (tracked in a bounded Set with a 1000-entry cap).</span><span data-lang="zh"><strong>路径校验</strong>— <code>authorizePath</code> / <code>isPathAllowed</code> 将文件操作限制在 <code>userData</code>、<code>documents</code>、<code>desktop</code>、<code>home</code>、<code>temp</code>，以及通过对话框授权的路径（保存在一个上限 1000 条的 Set 中）。</span></li>
+        <li><span data-lang="en"><strong>System path guard</strong> — <code>isSystemPath</code> blocks writes to <code>C:\Windows</code>, <code>C:\Program Files</code>, <code>C:\ProgramData</code> on Windows, and <code>/etc</code>, <code>/root</code>, <code>/sys</code>, <code>/proc</code>, <code>/dev</code>, <code>/boot</code>, <code>/System</code>, <code>/Library</code> on Unix.</span><span data-lang="zh"><strong>系统路径保护</strong>— <code>isSystemPath</code> 拦截对 Windows <code>C:\Windows</code>、<code>C:\Program Files</code>、<code>C:\ProgramData</code> 的写入，以及 Unix 下 <code>/etc</code>、<code>/root</code>、<code>/sys</code>、<code>/proc</code>、<code>/dev</code>、<code>/boot</code>、<code>/System</code>、<code>/Library</code> 的写入。</span></li>
+        <li><span data-lang="en"><strong>onnx:// protocol handler</strong> — restricts model file fetches to the resolved model directory and only serves <code>.onnx</code> / <code>.onnx.data</code> files.</span><span data-lang="zh"><strong>onnx:// 协议处理器</strong>— 将模型文件读取限制在解析后的模型目录内，且仅提供 <code>.onnx</code> / <code>.onnx.data</code> 文件。</span></li>
+        <li><span data-lang="en"><strong>Content Security Policy</strong> — set via <code>session.defaultSession.webRequest.onHeadersReceived</code>: <code>default-src 'self'</code>, <code>connect-src</code> limited to <code>'self'</code> and <code>https://modelscope.cn</code> (plus dev-server WS in dev mode). Cross-origin isolation headers (<code>COOP: same-origin</code>, <code>COEP: require-corp</code>) enable <code>SharedArrayBuffer</code> for multi-threaded WASM.</span><span data-lang="zh"><strong>内容安全策略</strong>— 通过 <code>session.defaultSession.webRequest.onHeadersReceived</code> 设置：<code>default-src 'self'</code>，<code>connect-src</code> 限制为 <code>'self'</code> 与 <code>https://modelscope.cn</code>（开发模式额外允许开发服务器 WS）。跨域隔离头（<code>COOP: same-origin</code>、<code>COEP: require-corp</code>）启用 <code>SharedArrayBuffer</code> 以支持多线程 WASM。</span></li>
+        <li><span data-lang="en"><strong>Electron Fuses</strong> — packaged builds enable ASAR integrity validation, cookie encryption, and disable <code>NODE_OPTIONS</code> / <code>--inspect</code> at runtime.</span><span data-lang="zh"><strong>Electron Fuses</strong>— 打包构建启用 ASAR 完整性校验、Cookie 加密，并在运行时禁用 <code>NODE_OPTIONS</code> / <code>--inspect</code>。</span></li>
+        <li><span data-lang="en"><strong>WebNN channel whitelist</strong> — <code>webnnRespond</code> / <code>webnnProgress</code> / <code>webnnChunk</code> in preload reject channel names that do not match expected prefixes.</span><span data-lang="zh"><strong>WebNN 通道白名单</strong>— preload 中的 <code>webnnRespond</code> / <code>webnnProgress</code> / <code>webnnChunk</code> 会拒绝不符合预期前缀的通道名。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Window Types</span>
+        <span data-lang="zh">窗口类型</span>
+      </h2>
+      <p data-lang="en">Each window is registered as a webpack entry point in <code>forge.config.js</code> and has its own HTML + JS bundle. All windows share the same preload (<code>src/preload.js</code>), except the splash window which uses <code>src/splashPreload.js</code>.</p>
+      <p data-lang="zh">每个窗口在 <code>forge.config.js</code> 中注册为 webpack 入口，并拥有独立的 HTML + JS bundle。所有窗口共享同一个 preload（<code>src/preload.js</code>），启动画面窗口除外，它使用 <code>src/splashPreload.js</code>。</p>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Window</span><span data-lang="zh">窗口</span></th>
+            <th><span data-lang="en">Entry Point</span><span data-lang="zh">入口</span></th>
+            <th><span data-lang="en">Purpose</span><span data-lang="zh">用途</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>main_window</code></td>
+            <td><code>src/renderer/index.js</code></td>
+            <td><span data-lang="en">Multi-track timeline, project management, singer list. Also hosts WebNN request handlers.</span><span data-lang="zh">多轨时间线、项目管理、歌手列表。同时承载 WebNN 请求处理器。</span></td>
+          </tr>
+          <tr>
+            <td><code>fragment_editor_window</code></td>
+            <td><code>src/fragmentEditor/index.js</code></td>
+            <td><span data-lang="en">Piano-roll editor for an individual fragment; previews SVS synthesis.</span><span data-lang="zh">单个分片的钢琴卷帘编辑器，可预览 SVS 合成结果。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer_creator_window</code></td>
+            <td><code>src/singerCreator.js</code></td>
+            <td><span data-lang="en">Custom-singer creation wizard from reference WAV.</span><span data-lang="zh">从参考 WAV 创建自定义歌手的向导。</span></td>
+          </tr>
+          <tr>
+            <td><code>audio_preprocess_window</code></td>
+            <td><code>src/audioPreprocess/index.js</code></td>
+            <td><span data-lang="en">F0 (RMVPE) and MIDI (Basic Pitch) extraction UI.</span><span data-lang="zh">F0（RMVPE）与 MIDI（Basic Pitch）提取界面。</span></td>
+          </tr>
+          <tr>
+            <td><code>settings_window</code></td>
+            <td><code>src/settings.js</code></td>
+            <td><span data-lang="en">Device selection, inference params, audio config, theme picker.</span><span data-lang="zh">设备选择、推理参数、音频配置、主题选择。</span></td>
+          </tr>
+          <tr>
+            <td><code>model_download_window</code></td>
+            <td><code>src/modelDownload.js</code></td>
+            <td><span data-lang="en">Chunked parallel download of ONNX models from ModelScope.</span><span data-lang="zh">从 ModelScope 分片并行下载 ONNX 模型。</span></td>
+          </tr>
+          <tr>
+            <td><code>resource_manager_window</code></td>
+            <td><code>src/resourceManager.js</code></td>
+            <td><span data-lang="en">GPU/VRAM monitor, model load/unload controls.</span><span data-lang="zh">GPU/显存监控、模型加载/卸载控制。</span></td>
+          </tr>
+          <tr>
+            <td><code>splash_window</code></td>
+            <td><code>src/splash.js</code></td>
+            <td><span data-lang="en">Startup splash (packaged builds only; skipped in <code>npm start</code>).</span><span data-lang="zh">启动画面（仅打包构建使用；<code>npm start</code> 时跳过）。</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Startup Flow</span>
+        <span data-lang="zh">启动流程</span>
+      </h2>
+      <ol>
+        <li><span class="step-num">1</span><span data-lang="en"><code>src/main.js</code> sets <code>WebMachineLearningNeuralNetwork</code> feature flag, registers the <code>onnx://</code> protocol scheme, and applies CSP headers.</span><span data-lang="zh"><code>src/main.js</code> 设置 <code>WebMachineLearningNeuralNetwork</code> 特性开关，注册 <code>onnx://</code> 协议 scheme，并应用 CSP 头。</span></li>
+        <li><span class="step-num">2</span><span data-lang="en">In packaged builds the splash window is created first; in dev mode the main window is created with <code>show: false</code>.</span><span data-lang="zh">打包构建时先创建启动画面窗口；开发模式下以 <code>show: false</code> 创建主窗口。</span></li>
+        <li><span class="step-num">3</span><span data-lang="en">All IPC registrars modules (<code>registerWindowIpc</code>, <code>registerSvsIpc</code>, ...) are called <em>before</em> <code>app.whenReady()</code> resolves, so handlers exist when renderers load.</span><span data-lang="zh">所有 IPC 注册模块（<code>registerWindowIpc</code>、<code>registerSvsIpc</code> 等）在 <code>app.whenReady()</code> 完成前就被调用，确保渲染进程加载时处理器已就绪。</span></li>
+        <li><span class="step-num">4</span><span data-lang="en">On <code>did-finish-load</code> the main window is revealed (immediately in dev, after splash paint in packaged mode).</span><span data-lang="zh">在 <code>did-finish-load</code> 时显示主窗口（开发模式立即显示，打包模式等待启动画面绘制后再显示）。</span></li>
+        <li><span class="step-num">5</span><span data-lang="en">Background hardware detection (<code>startGPUPreload</code> + <code>detectAllHardware</code> + <code>enumerateDMLDevices</code>) runs once and caches results — it never blocks window reveal.</span><span data-lang="zh">后台硬件检测（<code>startGPUPreload</code> + <code>detectAllHardware</code> + <code>enumerateDMLDevices</code>）一次性执行并缓存结果——绝不阻塞窗口显示。</span></li>
+        <li><span class="step-num">6</span><span data-lang="en"><code>checkAndDownloadModels()</code> fires next, prompting the user to download missing models on first launch.</span><span data-lang="zh">随后触发 <code>checkAndDownloadModels()</code>，首次启动时提示用户下载缺失的模型。</span></li>
+      </ol>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">The CLI debug mode (<code>--cli</code>) intercepts startup <em>before</em> any window is created. It calls <code>app.whenReady()</code>, runs the requested command, and exits with <code>app.exit(code)</code> — see <a href="testing-cli.html">Testing &amp; CLI</a>.</p>
+          <p data-lang="zh">CLI 调试模式（<code>--cli</code>）在任何窗口创建之前拦截启动流程。它调用 <code>app.whenReady()</code>，执行请求的命令，并通过 <code>app.exit(code)</code> 退出——见 <a href="testing-cli.html">测试与命令行</a>。</p>
+        </div>
+      </div>
+
+      <nav class="doc-pager">
+        <a href="build.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Build from Source</span><span data-lang="zh">从源码构建</span></div></div></a>
+        <a href="inference-pipeline.html" class="next"><div class="pager-card"><div class="pager-label" data-i18n="pager.next">Next</div><div class="pager-title"><span data-lang="en">Inference Pipeline</span><span data-lang="zh">推理管线</span></div></div></a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="../user/faq.html" data-i18n="footer.help">Help & FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

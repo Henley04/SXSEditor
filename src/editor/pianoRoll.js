@@ -404,6 +404,7 @@ class PianoRoll {
       if (input.parentElement) input.remove();
       this._activeInlineInput = null;
       this._activeInlineEditNote = null;
+      this._staticCacheDirty = true;
       this.render();
     };
 
@@ -419,7 +420,7 @@ class PianoRoll {
 
     input.addEventListener('keydown', (e) => {
       e.stopPropagation();
-      if (e.key === 'Enter') {
+      if (e.key === 'Enter' && !e.isComposing) {
         e.preventDefault();
         finish(true);
       } else if (e.key === 'Escape') {

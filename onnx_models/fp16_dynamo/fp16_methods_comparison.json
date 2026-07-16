@@ -1,0 +1,35 @@
+{
+  "fp32_baseline": {
+    "speed_ms": 234.85489999875426,
+    "speed_std": 27.815975894699005,
+    "output_std": 0.0045971996150910854
+  },
+  "fp32_dynamo_base": {
+    "snr_db": Infinity,
+    "cosine": 1.0,
+    "max_abs_diff": 0.0,
+    "out_std": 0.004597199647794471,
+    "avg_ms": 273.31422001007013,
+    "std_ms": 11.243940137622758,
+    "speedup": 0.8592853309648548
+  },
+  "methods": {
+    "1_ort_mixed_precision": {
+      "error": "[TypeInferenceError] Inferred elem type differs from existing elem type: (1) vs (10)"
+    },
+    "6_mixed_precision_peephole": {
+      "error": "evaluation failed"
+    },
+    "7_dml_fp16_restore_istft": {
+      "snr_db": -43.668402224655935,
+      "cosine": -0.00022534879450936116,
+      "max_abs_diff": 2.953195594949648,
+      "out_std": 0.7008648800185595,
+      "avg_ms": 17.80185999814421,
+      "std_ms": 0.8188752945184599,
+      "speedup": 13.192716942119374,
+      "model_size_mb": 1001.9956102371216,
+      "conversion_time_s": 37.78670525550842
+    }
+  }
+}

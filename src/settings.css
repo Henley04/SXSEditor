@@ -686,7 +686,9 @@ body {
 .theme-saveas-overlay {
     position: absolute;
     inset: 0;
-    background: rgba(10, 10, 20, 0.85);
+    background: var(--overlay-scrim);
+    backdrop-filter: blur(4px);
+    animation: sxs-overlay-in 0.25s ease;
 }
 
 .theme-editor-panel,
@@ -698,10 +700,12 @@ body {
     background: var(--bg-app);
     border: 1px solid var(--border-default);
     border-radius: var(--radius-xl);
-    box-shadow: 0 8px 32px var(--shadow-color-strong);
+    clip-path: var(--clip-panel, none);
+    box-shadow: 0 16px 48px var(--shadow-color-strong), 0 0 40px var(--accent-softer);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    animation: sxs-dialog-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .theme-saveas-panel {
@@ -1039,4 +1043,58 @@ body {
         flex: 0 0 120px;
         font-size: var(--font-sm);
     }
+}
+
+/* ==================== Dialog Animation Keyframes ==================== */
+
+@keyframes sxs-overlay-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes sxs-overlay-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes sxs-dialog-enter {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes sxs-dialog-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+    filter: blur(3px);
+  }
+}
+
+/* ==================== Update Section ==================== */
+
+#updateResultBox > div {
+  margin-bottom: var(--space-2);
+}
+
+#updateResultBox > div:last-child {
+  margin-bottom: 0;
+}
+
+#checkUpdateBtn + #updateCheckStatus {
+  display: inline-block;
+  margin-left: var(--space-3);
+  vertical-align: middle;
 }

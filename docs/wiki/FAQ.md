@@ -19,7 +19,7 @@ Yes. SXSEditor is open-source under the MIT License.
 
 | Language | Status |
 |----------|--------|
-| Chinese (Mandarin) | Supported — Chinese characters or Pinyin input |
+| Chinese (Mandarin) | Supported — Chinese characters with optional tone digit (1–5) |
 | English | Supported — English words, auto-converted to phonemes |
 | Japanese | In development |
 
@@ -44,12 +44,12 @@ Multiple precisions can coexist — each has its own subdirectory.
 
 | Your hardware | Recommended precision |
 |---------------|----------------------|
-| Discrete GPU, 4GB+ VRAM | FP16 |
+| Discrete GPU, 4GB+ VRAM | FP32 (recommended, highest quality) |
 | Discrete GPU, 8GB+ VRAM | FP32 (highest quality) |
-| Integrated GPU / low VRAM | INT8 |
+| Integrated GPU / low VRAM | FP16 or INT8 |
 | NPU hardware | INT8-NPU |
 
-If unsure, start with **FP16**. You can switch later without re-downloading.
+If unsure, start with **FP32** for the best quality. You can switch later without re-downloading.
 
 ### Can I use custom models?
 
@@ -108,7 +108,7 @@ In the Fragment Editor, click on the piano roll grid to create a note. Drag whil
 
 Double-click a note to open an inline text editor. Type the lyric and press Enter. You can also edit lyrics in the Inspector panel on the right side.
 
-For Chinese singing, enter Chinese characters (e.g., `你好`) or Pinyin (e.g., `ni hao`). For English singing, enter English words (e.g., `hello`).
+For Chinese singing, enter Chinese characters (e.g., `你好`). You may append a digit `1`–`5` after a character to force a specific tone (e.g., `你2 好3`), where 1–4 are the four tones and 5 is the neutral tone (轻声). Pinyin text (e.g., `ni hao`) is **not** accepted as Chinese — ASCII input is routed to the English G2P path. For English singing, enter English words (e.g., `hello`).
 
 ### What is a slur note?
 
@@ -144,7 +144,7 @@ Press `Ctrl+Z` to undo and `Ctrl+Y` to redo. The editor supports up to 200 undo 
 - **Check the reference audio**: Ensure it contains pure vocals with no background music or effects.
 - **Check lyrics**: Make sure every note has the correct lyric. Missing or wrong lyrics cause phoneme errors.
 - **Check MIDI notes**: Verify that note pitches and timing match the intended melody.
-- **Check model precision**: If using INT8, try FP16 for higher quality.
+- **Check model precision**: If using INT8 or FP16, try FP32 for higher quality.
 - **Increase diffusion steps**: More steps = better quality (try 32 or 48 for export).
 
 ### What hardware do I need?

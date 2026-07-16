@@ -98,6 +98,11 @@ const IPC_CHANNELS = {
   MODEL_DOWNLOAD_CHECK_JP: 'model-download:check-jp',
   MODEL_DOWNLOAD_START_JP: 'model-download:start-jp',
   MODEL_DOWNLOAD_CHECK_JP_EXISTS: 'model-download:check-jp-exists',
+  MODEL_DOWNLOAD_LIST_VERSIONS: 'model-download:list-versions',
+  MODEL_DOWNLOAD_LIST_JP_VERSIONS: 'model-download:list-jp-versions',
+  MODEL_DOWNLOAD_LIST_SIFIGAN_VERSIONS: 'model-download:list-sifigan-versions',
+  MODEL_DOWNLOAD_OPEN_EXTERNAL: 'model-download:open-external',
+  MODEL_DOWNLOAD_REVISION: 'model-download:revision',
 
   // ==================== Locale ====================
   SAVE_LOCALE: 'save-locale',
@@ -145,6 +150,15 @@ const IPC_CHANNELS = {
   THEME_RESET: 'theme:reset',
   THEME_CHANGED: 'theme:changed',
   THEME_LIST_CHANGED: 'theme:list-changed',
+
+  // ==================== Update ====================
+  UPDATE_CHECK_NOW: 'update:check-now',
+  UPDATE_GET_STATUS: 'update:get-status',
+  UPDATE_SKIP_VERSION: 'update:skip-version',
+  UPDATE_DONT_REMIND: 'update:dont-remind',
+  UPDATE_OPEN_DOWNLOAD_PAGE: 'update:open-download-page',
+  UPDATE_OPEN_MODEL_DOWNLOAD: 'update:open-model-download',
+  UPDATE_NOTIFICATION_SHOW: 'update:notification-show',
 };
 
 module.exports = { IPC_CHANNELS };

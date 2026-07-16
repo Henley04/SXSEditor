@@ -26,6 +26,10 @@ import {
   getPitchDragStartValue, setPitchDragStartValue,
   getPitchDragStartTime, setPitchDragStartTime,
   getPitchDragAnchorStarts, setPitchDragAnchorStarts,
+  getPitchSmoothDragAnchorStarts, setPitchSmoothDragAnchorStarts,
+  getPitchSmoothDragMoved, setPitchSmoothDragMoved,
+  getPitchSmoothDragRightClickPos, setPitchSmoothDragRightClickPos,
+  getContextMenuAnchorIdx, setContextMenuAnchorIdx,
   getIsBrushDrawing, setIsBrushDrawing,
   getCurrentBrushStroke, setCurrentBrushStroke,
   getBrushSmoothing,
@@ -51,11 +55,12 @@ import {
   getEnvelopes,
   getParamPanelCollapsed, setParamPanelCollapsed,
   getParamPanelMode, setParamPanelMode,
+  getKanjiGroups, setKanjiGroups,
 } from './state.js';
 import {
   canvas, ctx,
   timeToX, xToTime, pitchToY, yToPitch, yToPitchContinuous,
-  snapBeats, findNoteAt,
+  snapBeats, findNoteAt, findKanjiGroupAt,
   _getParamCurveAreaTop, _getParamCurveAreaBottom, _getParamCurveYRange,
   _valueToParamY,
   deepClone, clonePitchCurveState, applyPitchCurveSnapshot,
@@ -67,6 +72,11 @@ import {
   tokenizeLyric, resolvePhonemesFromPipeline,
   render, resizeCanvases,
 } from './canvasRenderer.js';
+import {
+  autoDetectKanjiGroups, cleanupKanjiGroups,
+  findGroupByNoteId, splitKanjiNoteToKana, mergeKanaGroupToKanji,
+  isSingleKanji, isTimeRangeWithinAnyGroup, getAllGroupedNoteIds,
+} from './kanjiGroupUtils.js';
 import { stopFragmentPlayback, playFragment, exportFragment } from './audioPlayback.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel } from './uiControls.js';
@@ -119,11 +129,13 @@ function applyNoteDrag(pos) {
     }
     const shift = minRawStart < 0 ? -minRawStart : 0;
     // 3. 计算最终新位置（已保证 >= 0）并检测与非选中 notes 的重叠
+    //    分组假名不受重叠限制，允许自由移动（重叠警告仍由 getInactiveNoteIds 渲染）
     let blocked = false;
     const planned = [];
     for (const p of rawPlanned) {
       const newStart = p.rawStart + shift;
-      if (hasNoteOverlapMulti(selectedNoteIds, p.newPitch, newStart, newStart + p.duration)) {
+      const isGroupedKana = findGroupByNoteId(p.note.id, getKanjiGroups()) !== null;
+      if (!isGroupedKana && hasNoteOverlapMulti(selectedNoteIds, p.newPitch, newStart, newStart + p.duration)) {
         blocked = true;
         break;
       }
@@ -147,15 +159,24 @@ function applyNoteDrag(pos) {
     const dyPitch = Math.round(yToPitchContinuous(pos.y) - getDragStartMousePitch());
     let newStart = Math.max(0, snapBeats(getDragNoteStart().start + dxBeats));
     const newPitch = Math.max(0, Math.min(127, getDragNoteStart().pitch + dyPitch));
-    newStart = clampNotePosition(note.id, newPitch, newStart, note.duration);
-    if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
+    // Grouped kana notes: allow free movement (no snap/clamp/overlap block)
+    // so users can position them freely; overlap warning still renders via getInactiveNoteIds.
+    const isGroupedKana = findGroupByNoteId(note.id, getKanjiGroups()) !== null;
+    if (isGroupedKana) {
       note.start = newStart;
       note.pitch = newPitch;
+    } else {
+      newStart = clampNotePosition(note.id, newPitch, newStart, note.duration);
+      if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
+        note.start = newStart;
+        note.pitch = newPitch;
+      }
     }
   } else if (dragMode === 'resize') {
     const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
     const newDuration = Math.max(1 / 16, snapBeats(getDragNoteStart().duration + dxBeats));
-    if (!hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
+    const isGroupedKana = findGroupByNoteId(note.id, getKanjiGroups()) !== null;
+    if (isGroupedKana || !hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
       note.duration = newDuration;
     }
   }
@@ -189,6 +210,451 @@ function applyPitchAnchorDrag(pos) {
   invalidatePitchCurveCache();
   render();
   return true;
+}
+
+// 右键拖拽调节 smoothness：水平移动（右增左减）+ 垂直移动（上增下减），
+// 两轴合并使用，1px ≈ 1 单位（总范围 0~100）。
+// 同时作用于所有选中的锚点，便于批量调整。
+function applyPitchSmoothnessDrag(pos) {
+  if (getDragMode() !== 'pitch-smoothness') return false;
+  const starts = getPitchSmoothDragAnchorStarts();
+  if (starts.size === 0) return false;
+
+  const dx = pos.x - getDragStartX();
+  const dy = pos.y - getDragStartY();
+  // 移动阈值：超过 2px 才视为真实拖拽，避免误触发
+  if (!getPitchSmoothDragMoved() && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
+    setPitchSmoothDragMoved(true);
+  }
+  if (!getPitchSmoothDragMoved()) return true;
+
+  // dx 正向（右）增加，dy 负向（上）增加
+  const delta = dx - dy;
+  const pitchCurve = getPitchCurve();
+  for (const [idx, start] of starts) {
+    const ap = pitchCurve.anchorPoints[idx];
+    if (!ap) continue;
+    const next = Math.max(0, Math.min(100, Math.round(start.smoothness + delta)));
+    ap.smoothness = next;
+  }
+  invalidatePitchCurveCache();
+  render();
+  return true;
+}
+
+function _pitchSmoothnessDragHasChange(startSnapshot) {
+  if (!startSnapshot) return false;
+  const starts = getPitchSmoothDragAnchorStarts();
+  const pitchCurve = getPitchCurve();
+  for (const [idx, start] of starts) {
+    const ap = pitchCurve.anchorPoints[idx];
+    if (!ap) continue;
+    if ((ap.smoothness ?? 0) !== (start.smoothness ?? 0)) return true;
+  }
+  return false;
+}
+
+function _finalizePitchSmoothnessDrag(commitHistory) {
+  const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+  setDragMode(null);
+  getPitchSmoothDragAnchorStarts().clear();
+  setPitchSmoothDragMoved(false);
+  setPitchSmoothDragRightClickPos(null);
+
+  if (commitHistory && startSnapshot) {
+    const newSnapshot = clonePitchCurveState();
+    history.push({
+      undo() { applyPitchCurveSnapshot(startSnapshot); },
+      redo() { applyPitchCurveSnapshot(newSnapshot); }
+    });
+    scheduleAutoSave();
+  } else {
+    // 未发生改动 → 还原 snapshot 以保持 history 干净
+    setPitchCurveSnapshotBeforeDrag(null);
+  }
+}
+
+// ==================== Pitch Anchor Context Menu ====================
+function showPitchContextMenu(clientX, clientY, anchorIdx) {
+  const menu = document.getElementById('pitch-anchor-context-menu');
+  if (!menu) return;
+  const pitchCurve = getPitchCurve();
+  if (anchorIdx < 0 || !pitchCurve.anchorPoints[anchorIdx]) {
+    hidePitchContextMenu();
+    return;
+  }
+  setContextMenuAnchorIdx(anchorIdx);
+
+  // 同步滑块与数值显示为当前锚点的 smoothness
+  const ap = pitchCurve.anchorPoints[anchorIdx];
+  const currentValue = Math.max(0, Math.min(100, Math.round(ap.smoothness ?? 0)));
+  const slider = document.getElementById('pitch-ctx-smoothness-slider');
+  const valueLabel = document.getElementById('pitch-ctx-smoothness-value');
+  if (slider) slider.value = String(currentValue);
+  if (valueLabel) valueLabel.textContent = String(currentValue);
+  _updatePresetActiveState(currentValue);
+
+  // 计算菜单位置，避免溢出窗口
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  let x = clientX;
+  let y = clientY;
+  // 预先测量宽度（display:none 时无法测量，临时显示再读）
+  menu.style.visibility = 'hidden';
+  menu.style.display = 'flex';
+  const measured = menu.getBoundingClientRect();
+  const w = measured.width;
+  const h = measured.height;
+  menu.style.visibility = '';
+  if (x + w > vw - 4) x = Math.max(4, vw - w - 4);
+  if (y + h > vh - 4) y = Math.max(4, vh - h - 4);
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  menu.setAttribute('aria-hidden', 'false');
+
+  // 为打开菜单时记录 snapshot，便于滑块/预设调整后入 history
+  setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
+}
+
+function hidePitchContextMenu() {
+  const menu = document.getElementById('pitch-anchor-context-menu');
+  if (menu) {
+    menu.style.display = 'none';
+    menu.setAttribute('aria-hidden', 'true');
+  }
+  if (getContextMenuAnchorIdx() >= 0) {
+    setContextMenuAnchorIdx(-1);
+  }
+  setPitchCurveSnapshotBeforeDrag(null);
+}
+
+function _updatePresetActiveState(currentValue) {
+  const menu = document.getElementById('pitch-anchor-context-menu');
+  if (!menu) return;
+  const presets = menu.querySelectorAll('.pitch-ctx-preset');
+  presets.forEach(btn => {
+    const v = parseInt(btn.getAttribute('data-smoothness') || '-1', 10);
+    btn.classList.toggle('active', v === currentValue);
+  });
+}
+
+function _applySmoothnessToAnchor(anchorIdx, newValue, commitHistory) {
+  const pitchCurve = getPitchCurve();
+  const ap = pitchCurve.anchorPoints[anchorIdx];
+  if (!ap) return;
+  const value = Math.max(0, Math.min(100, Math.round(newValue)));
+  if ((ap.smoothness ?? 0) === value) return;
+  ap.smoothness = value;
+  invalidatePitchCurveCache();
+  _updatePresetActiveState(value);
+  const valueLabel = document.getElementById('pitch-ctx-smoothness-value');
+  const slider = document.getElementById('pitch-ctx-smoothness-slider');
+  if (valueLabel) valueLabel.textContent = String(value);
+  if (slider) slider.value = String(value);
+  render();
+  if (commitHistory) {
+    const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+    if (startSnapshot) {
+      const newSnapshot = clonePitchCurveState();
+      history.push({
+        undo() { applyPitchCurveSnapshot(startSnapshot); },
+        redo() { applyPitchCurveSnapshot(newSnapshot); }
+      });
+      scheduleAutoSave();
+      // 一次完整修改后重置 snapshot，避免后续调整被合并到同一条历史
+      setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
+    } else {
+      scheduleAutoSave();
+    }
+  } else {
+    scheduleAutoSave();
+  }
+}
+
+function _setupPitchContextMenuListeners() {
+  const menu = document.getElementById('pitch-anchor-context-menu');
+  if (!menu) return;
+
+  const slider = document.getElementById('pitch-ctx-smoothness-slider');
+  if (slider) {
+    // input 事件实时更新（不入 history），change 事件提交一次 history
+    slider.addEventListener('input', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      const value = parseInt(slider.value, 10);
+      const pitchCurve = getPitchCurve();
+      const ap = pitchCurve.anchorPoints[anchorIdx];
+      if (!ap) return;
+      ap.smoothness = Math.max(0, Math.min(100, value));
+      invalidatePitchCurveCache();
+      _updatePresetActiveState(ap.smoothness);
+      const valueLabel = document.getElementById('pitch-ctx-smoothness-value');
+      if (valueLabel) valueLabel.textContent = String(ap.smoothness);
+      render();
+    });
+    slider.addEventListener('change', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      _applySmoothnessToAnchor(anchorIdx, parseInt(slider.value, 10), true);
+    });
+  }
+
+  const presets = menu.querySelectorAll('.pitch-ctx-preset');
+  presets.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      const value = parseInt(btn.getAttribute('data-smoothness') || '0', 10);
+      _applySmoothnessToAnchor(anchorIdx, value, true);
+    });
+  });
+
+  const deleteBtn = document.getElementById('pitch-ctx-delete');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      const pitchCurve = getPitchCurve();
+      const selectedAnchorIndices = getSelectedAnchorIndices();
+      // 优先删除所有选中锚点（与旧右键删除行为一致），否则仅删除当前锚点
+      const indicesToDelete = selectedAnchorIndices.size > 0
+        ? [...selectedAnchorIndices].sort((a, b) => b - a)
+        : [anchorIdx];
+      const oldSnapshot = clonePitchCurveState();
+      for (const idx of indicesToDelete) {
+        pitchCurve.anchorPoints.splice(idx, 1);
+      }
+      invalidatePitchCurveCache();
+      selectedAnchorIndices.clear();
+      const newSnapshot = clonePitchCurveState();
+      history.push({
+        undo() { applyPitchCurveSnapshot(oldSnapshot); },
+        redo() { applyPitchCurveSnapshot(newSnapshot); }
+      });
+      hidePitchContextMenu();
+      render();
+      scheduleAutoSave();
+    });
+  }
+
+  // 点击菜单外部关闭
+  document.addEventListener('mousedown', (e) => {
+    if (getContextMenuAnchorIdx() < 0) return;
+    if (menu.contains(e.target)) return;
+    hidePitchContextMenu();
+  }, true);
+
+  // 阻止菜单自身弹出浏览器默认右键菜单
+  menu.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // Esc 关闭
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && getContextMenuAnchorIdx() >= 0) {
+      hidePitchContextMenu();
+    }
+  });
+
+  // 窗口失焦时关闭
+  window.addEventListener('blur', () => {
+    if (getContextMenuAnchorIdx() >= 0) hidePitchContextMenu();
+  });
+}
+
+// ---- Kanji group context menu ----
+// _kanjiCtxState tracks the current kanji context menu target.
+// null = no menu open; otherwise { groupId, noteId } where:
+//   - groupId: the kanji group being right-clicked (for "Set as Chinese")
+//   - noteId: the right-clicked note ID (for pitch reference), or null if right-clicked on bracket/label
+//   - kanjiNoteId: the single kanji note being right-clicked (for "Set as Japanese"), or null
+let _kanjiCtxState = null;
+
+function showKanjiContextMenu(x, y, groupId, noteId, kanjiNoteId) {
+  const menu = document.getElementById('kanji-group-context-menu');
+  if (!menu) return;
+  _kanjiCtxState = { groupId, noteId, kanjiNoteId };
+
+  // Show/hide menu items based on context
+  const setChineseBtn = document.getElementById('kanji-ctx-set-chinese');
+  const setJapaneseBtn = document.getElementById('kanji-ctx-set-japanese');
+  if (groupId) {
+    // Right-clicked on a kana group → can set as Chinese (merge)
+    if (setChineseBtn) setChineseBtn.style.display = '';
+    if (setJapaneseBtn) setJapaneseBtn.style.display = 'none';
+  } else if (kanjiNoteId) {
+    // Right-clicked on a single kanji note → can set as Japanese (split)
+    if (setChineseBtn) setChineseBtn.style.display = 'none';
+    if (setJapaneseBtn) setJapaneseBtn.style.display = '';
+  }
+
+  menu.style.display = 'block';
+  menu.style.visibility = 'hidden';
+  const menuRect = menu.getBoundingClientRect();
+  let menuX = x;
+  let menuY = y;
+  if (menuX + menuRect.width > window.innerWidth) menuX = window.innerWidth - menuRect.width - 4;
+  if (menuY + menuRect.height > window.innerHeight) menuY = window.innerHeight - menuRect.height - 4;
+  menu.style.left = menuX + 'px';
+  menu.style.top = menuY + 'px';
+  menu.style.visibility = 'visible';
+}
+
+function hideKanjiContextMenu() {
+  const menu = document.getElementById('kanji-group-context-menu');
+  if (menu) menu.style.display = 'none';
+  _kanjiCtxState = null;
+}
+
+/** Merge a kana group back into a single Chinese kanji note. */
+function _applySetKanjiChinese(groupId, rightClickedNoteId) {
+  const groups = getKanjiGroups();
+  const notes = getNotes();
+  const group = groups.find(g => g.id === groupId);
+  if (!group) return;
+
+  const result = mergeKanaGroupToKanji(group, notes, rightClickedNoteId, genNoteId);
+  if (!result) return;
+
+  // Capture old state for undo
+  const oldNotes = deepClone(notes);
+  const oldGroups = deepClone(groups);
+
+  // Remove kana notes
+  const idsToRemove = new Set(result.kanaNoteIds);
+  for (let i = notes.length - 1; i >= 0; i--) {
+    if (idsToRemove.has(notes[i].id)) notes.splice(i, 1);
+  }
+  // Add the new kanji note at the correct position (sorted by start time)
+  const insertIdx = notes.findIndex(n => n.start > result.newNote.start);
+  if (insertIdx === -1) {
+    notes.push(result.newNote);
+  } else {
+    notes.splice(insertIdx, 0, result.newNote);
+  }
+  // Remove the group
+  const groupIdx = groups.findIndex(g => g.id === groupId);
+  if (groupIdx !== -1) groups.splice(groupIdx, 1);
+
+  history.push({
+    undo() {
+      const curNotes = getNotes();
+      const curGroups = getKanjiGroups();
+      curNotes.length = 0;
+      curNotes.push(...deepClone(oldNotes));
+      curGroups.length = 0;
+      curGroups.push(...deepClone(oldGroups));
+      render();
+    },
+    redo() {
+      const curNotes = getNotes();
+      const curGroups = getKanjiGroups();
+      curNotes.length = 0;
+      curNotes.push(...deepClone(notes));
+      curGroups.length = 0;
+      curGroups.push(...deepClone(groups));
+      render();
+    }
+  });
+
+  hideKanjiContextMenu();
+  resolvePhonemesFromPipeline();
+  render();
+  scheduleAutoSave();
+}
+
+/** Split a single kanji note into a kana group (set as Japanese). */
+function _applySetKanjiJapanese(noteId) {
+  const notes = getNotes();
+  const groups = getKanjiGroups();
+  const note = notes.find(n => n.id === noteId);
+  if (!note) return;
+
+  const result = splitKanjiNoteToKana(note, genNoteId);
+  if (!result) {
+    showAlertDialog(`汉字 "${note.lyric}" 不在日语字典中，无法转换为假名。\n\nKanji "${note.lyric}" is not in the Japanese dictionary and cannot be converted to kana.`);
+    return;
+  }
+
+  // Capture old state for undo
+  const oldNotes = deepClone(notes);
+  const oldGroups = deepClone(groups);
+
+  // Replace the kanji note with kana notes
+  const noteIdx = notes.findIndex(n => n.id === noteId);
+  if (noteIdx !== -1) {
+    notes.splice(noteIdx, 1, ...result.kanaNotes);
+  }
+  // Clear kanjiForceChinese flag if set (it's now Japanese)
+  // (the old note is gone, new kana notes don't have the flag)
+  groups.push(result.group);
+
+  history.push({
+    undo() {
+      const curNotes = getNotes();
+      const curGroups = getKanjiGroups();
+      curNotes.length = 0;
+      curNotes.push(...deepClone(oldNotes));
+      curGroups.length = 0;
+      curGroups.push(...deepClone(oldGroups));
+      render();
+    },
+    redo() {
+      const curNotes = getNotes();
+      const curGroups = getKanjiGroups();
+      curNotes.length = 0;
+      curNotes.push(...deepClone(notes));
+      curGroups.length = 0;
+      curGroups.push(...deepClone(groups));
+      render();
+    }
+  });
+
+  hideKanjiContextMenu();
+  resolvePhonemesFromPipeline();
+  render();
+  scheduleAutoSave();
+}
+
+function _setupKanjiContextMenuListeners() {
+  const menu = document.getElementById('kanji-group-context-menu');
+  if (!menu) return;
+
+  const setChineseBtn = document.getElementById('kanji-ctx-set-chinese');
+  if (setChineseBtn) {
+    setChineseBtn.addEventListener('click', () => {
+      if (!_kanjiCtxState || !_kanjiCtxState.groupId) return;
+      _applySetKanjiChinese(_kanjiCtxState.groupId, _kanjiCtxState.noteId);
+    });
+  }
+
+  const setJapaneseBtn = document.getElementById('kanji-ctx-set-japanese');
+  if (setJapaneseBtn) {
+    setJapaneseBtn.addEventListener('click', () => {
+      if (!_kanjiCtxState || !_kanjiCtxState.kanjiNoteId) return;
+      _applySetKanjiJapanese(_kanjiCtxState.kanjiNoteId);
+    });
+  }
+
+  // Click outside closes
+  document.addEventListener('mousedown', (e) => {
+    if (!_kanjiCtxState) return;
+    if (menu.contains(e.target)) return;
+    hideKanjiContextMenu();
+  }, true);
+
+  // Prevent browser default context menu on the menu itself
+  menu.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // Esc closes
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && _kanjiCtxState) {
+      hideKanjiContextMenu();
+    }
+  });
+
+  // Window blur closes
+  window.addEventListener('blur', () => {
+    if (_kanjiCtxState) hideKanjiContextMenu();
+  });
 }
 
 function finalizeDragOperation() {
@@ -821,6 +1287,35 @@ function startInlineEdit(note, hit) {
             }
           }
         });
+
+        // Auto-detect kanji groups: if the fragment has kana, split any new
+        // kanji notes into kana. Push a separate history entry so the user
+        // can undo the auto-split independently from the lyric edit.
+        const kanjiGroups = getKanjiGroups();
+        const beforeNotes = deepClone(notes);
+        const beforeGroups = deepClone(kanjiGroups);
+        if (autoDetectKanjiGroups(notes, kanjiGroups, genNoteId)) {
+          history.push({
+            undo() {
+              const curNotes = getNotes();
+              const curGroups = getKanjiGroups();
+              curNotes.length = 0;
+              curNotes.push(...deepClone(beforeNotes));
+              curGroups.length = 0;
+              curGroups.push(...deepClone(beforeGroups));
+              render();
+            },
+            redo() {
+              const curNotes = getNotes();
+              const curGroups = getKanjiGroups();
+              curNotes.length = 0;
+              curNotes.push(...deepClone(notes));
+              curGroups.length = 0;
+              curGroups.push(...deepClone(kanjiGroups));
+              render();
+            }
+          });
+        }
       }
     }
     if (input.parentElement) input.remove();
@@ -867,31 +1362,97 @@ export function setupEventListeners() {
       return;
     }
 
-    const currentParamMode = getCurrentParamMode();
-    const pitchCurve = getPitchCurve();
-
-    if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
-      handlePitchMouseDown(e, pos);
-      return;
-    }
-
-    if (!getParamPanelCollapsed()) {
-      const panelMode = getParamPanelMode();
-      if (panelMode === 'VOL' || panelMode === 'PAN') {
-        const areaTop = _getParamCurveAreaTop();
-        if (pos.y >= areaTop) {
-          handleParamEnvelopeMouseDown(pos);
+    // 右键按下：在 Pitch 模式下点击锚点时进入 smoothness 拖拽模式；
+    // 鼠标松开时若未发生明显位移则触发 context menu。
+    if (e.button === 2) {
+      hidePitchContextMenu();
+      const currentParamMode = getCurrentParamMode();
+      const pitchCurve = getPitchCurve();
+      if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
+        // 当底部面板展开为 Phoneme 时，底部区域右键交给音素面板，避免误吞。
+        if (!getParamPanelCollapsed() && getParamPanelMode() === 'Phoneme') {
+          const areaTop = _getParamCurveAreaTop();
+          if (pos.y >= areaTop) return;
+        }
+        const anchorIdx = findAnchorPointAt(pos.x, pos.y);
+        if (anchorIdx >= 0) {
+          const selectedAnchorIndices = getSelectedAnchorIndices();
+          if (!selectedAnchorIndices.has(anchorIdx)) {
+            selectedAnchorIndices.clear();
+            selectedAnchorIndices.add(anchorIdx);
+          }
+          const starts = new Map();
+          for (const idx of selectedAnchorIndices) {
+            const ap = pitchCurve.anchorPoints[idx];
+            if (ap) starts.set(idx, { smoothness: ap.smoothness ?? 0 });
+          }
+          setPitchSmoothDragAnchorStarts(starts);
+          setPitchSmoothDragMoved(false);
+          setPitchSmoothDragRightClickPos({ x: e.clientX, y: e.clientY, canvasX: pos.x, canvasY: pos.y });
+          setDragStartX(pos.x);
+          setDragStartY(pos.y);
+          setDragMode('pitch-smoothness');
+          setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
+          render();
           return;
         }
       }
+      // Kanji group right-click: check bracket/label hit, then kana note in group,
+      // then single kanji note (not in group).
+      const currentParamMode2 = getCurrentParamMode();
+      if (currentParamMode2 !== 'Pitch') {
+        // 1. Check if right-clicking on a kanji group bracket/label
+        const groupHit = findKanjiGroupAt(pos.x, pos.y);
+        if (groupHit) {
+          e.preventDefault();
+          showKanjiContextMenu(e.clientX, e.clientY, groupHit.group.id, null, null);
+          return;
+        }
+        // 2. Check if right-clicking a note that belongs to a kanji group
+        const noteHit = findNoteAt(pos.x, pos.y);
+        if (noteHit) {
+          const group = findGroupByNoteId(noteHit.note.id, getKanjiGroups());
+          if (group) {
+            e.preventDefault();
+            showKanjiContextMenu(e.clientX, e.clientY, group.id, noteHit.note.id, null);
+            return;
+          }
+          // 3. Check if right-clicking a single kanji note (not in a group)
+          if (isSingleKanji(noteHit.note.lyric)) {
+            e.preventDefault();
+            showKanjiContextMenu(e.clientX, e.clientY, null, null, noteHit.note.id);
+            return;
+          }
+        }
+      }
+      // 其他情况交由 contextmenu 事件处理（保留默认右键菜单或自定义菜单）。
+      return;
+    }
 
-      if (panelMode === 'Phoneme') {
-        const areaTop = _getParamCurveAreaTop();
-        if (pos.y >= areaTop) {
+    const currentParamMode = getCurrentParamMode();
+    const pitchCurve = getPitchCurve();
+
+    // Bottom panel area takes precedence when the panel is expanded — this lets
+    // top=Pitch and bottom=Phoneme/VOL/PAN coexist without the pitch handler
+    // intercepting clicks meant for the parameter lane below.
+    if (!getParamPanelCollapsed()) {
+      const panelMode = getParamPanelMode();
+      const areaTop = _getParamCurveAreaTop();
+      if (pos.y >= areaTop) {
+        if (panelMode === 'VOL' || panelMode === 'PAN') {
+          handleParamEnvelopeMouseDown(pos);
+          return;
+        }
+        if (panelMode === 'Phoneme') {
           handlePhonemeMouseDown(e, pos);
           return;
         }
       }
+    }
+
+    if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
+      handlePitchMouseDown(e, pos);
+      return;
     }
 
     const hit = findNoteAt(pos.x, pos.y);
@@ -946,6 +1507,11 @@ export function setupEventListeners() {
         render();
         return;
       }
+      // Block creating new notes within a kanji group's time span
+      if (isTimeRangeWithinAnyGroup(beats, beats + newDuration, getNotes(), getKanjiGroups())) {
+        render();
+        return;
+      }
       const newNote = {
         id: genNoteId(),
         pitch: clampedPitch,
@@ -982,6 +1548,11 @@ export function setupEventListeners() {
     }
 
     const dragMode = getDragMode();
+
+    if (dragMode === 'pitch-smoothness') {
+      applyPitchSmoothnessDrag(pos);
+      return;
+    }
 
     if (dragMode === 'pitch-anchor' && getPitchDragAnchorIdx() >= 0) {
       applyPitchAnchorDrag(pos);
@@ -1027,15 +1598,9 @@ export function setupEventListeners() {
     if (!dragMode) {
       const currentParamMode = getCurrentParamMode();
       const pitchCurve = getPitchCurve();
-      if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
-        if (e.shiftKey) {
-          canvas.style.cursor = 'crosshair';
-        } else {
-          const anchorIdx = findAnchorPointAt(pos.x, pos.y);
-          canvas.style.cursor = anchorIdx >= 0 ? 'grab' : 'crosshair';
-        }
-        return;
-      }
+      // Bottom panel area takes precedence (see mousedown handler) — check the
+      // phoneme lane first so cursor reflects phoneme interactions even when
+      // the top toolbar is in Pitch mode.
       if (!getParamPanelCollapsed() && getParamPanelMode() === 'Phoneme') {
         const areaTop = _getParamCurveAreaTop();
         const areaBottom = _getParamCurveAreaBottom();
@@ -1062,6 +1627,15 @@ export function setupEventListeners() {
           canvas.style.cursor = 'default';
           return;
         }
+      }
+      if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
+        if (e.shiftKey) {
+          canvas.style.cursor = 'crosshair';
+        } else {
+          const anchorIdx = findAnchorPointAt(pos.x, pos.y);
+          canvas.style.cursor = anchorIdx >= 0 ? 'grab' : 'crosshair';
+        }
+        return;
       }
       const hit = findNoteAt(pos.x, pos.y);
       if (hit) {
@@ -1091,6 +1665,27 @@ export function setupEventListeners() {
       setIsBoxSelecting(false);
       finalizeBoxSelection();
       render();
+      return;
+    }
+
+    // 右键松开：若未发生明显位移则弹出 context menu，否则提交 smoothness 修改历史。
+    if (e.button === 2 && getDragMode() === 'pitch-smoothness') {
+      const moved = getPitchSmoothDragMoved();
+      const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+      const hadChange = startSnapshot && _pitchSmoothnessDragHasChange(startSnapshot);
+      if (!moved || !hadChange) {
+        // 没有真实改动 → 弹出右键菜单
+        const rightClickPos = getPitchSmoothDragRightClickPos();
+        const anchorIdx = getSelectedAnchorIndices().size > 0
+          ? Math.min(...getSelectedAnchorIndices())
+          : -1;
+        _finalizePitchSmoothnessDrag(false);
+        if (rightClickPos) {
+          showPitchContextMenu(rightClickPos.x, rightClickPos.y, anchorIdx);
+        }
+      } else {
+        _finalizePitchSmoothnessDrag(true);
+      }
       return;
     }
 
@@ -1183,6 +1778,12 @@ export function setupEventListeners() {
       setIsBrushDrawing(false);
       render();
     }
+    // 右键 smoothness 拖拽期间鼠标离开 canvas → 提交当前修改并清理状态
+    if (getDragMode() === 'pitch-smoothness') {
+      const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+      const hadChange = startSnapshot && _pitchSmoothnessDragHasChange(startSnapshot);
+      _finalizePitchSmoothnessDrag(!!hadChange);
+    }
     finalizeDragOperation();
     setDragMode(null);
     setPitchDragAnchorIdx(-1);
@@ -1196,35 +1797,10 @@ export function setupEventListeners() {
   });
 
   canvas.addEventListener('contextmenu', (e) => {
+    // 我们已经在 mousedown/mouseup(button=2) 中处理了右键交互
+    // （锚点上：smoothness 拖拽或弹出菜单；空白处：什么都不做）。
+    // 这里仅阻止浏览器默认菜单弹出，避免重复触发。
     e.preventDefault();
-    const currentParamMode = getCurrentParamMode();
-    if (currentParamMode === 'Phoneme') return;
-    if (currentParamMode !== 'Pitch' || !getPitchCurve().enabled) return;
-
-    const pos = getMousePos(e);
-    const anchorIdx = findAnchorPointAt(pos.x, pos.y);
-    if (anchorIdx >= 0) {
-      const selectedAnchorIndices = getSelectedAnchorIndices();
-      if (!selectedAnchorIndices.has(anchorIdx)) {
-        selectedAnchorIndices.clear();
-        selectedAnchorIndices.add(anchorIdx);
-      }
-      const oldSnapshot = clonePitchCurveState();
-      const indicesToDelete = [...selectedAnchorIndices].sort((a, b) => b - a);
-      const pitchCurve = getPitchCurve();
-      for (const idx of indicesToDelete) {
-        pitchCurve.anchorPoints.splice(idx, 1);
-      }
-      invalidatePitchCurveCache();
-      selectedAnchorIndices.clear();
-      const newSnapshot = clonePitchCurveState();
-      history.push({
-        undo() { applyPitchCurveSnapshot(oldSnapshot); },
-        redo() { applyPitchCurveSnapshot(newSnapshot); }
-      });
-      render();
-      scheduleAutoSave();
-    }
   });
 
   canvas.addEventListener('dblclick', (e) => {
@@ -1387,28 +1963,22 @@ export function setupEventListeners() {
       return;
     }
     if (e.key === '3') {
-      setCurrentParamMode('VOL');
       setParamPanelMode('VOL');
       setParamPanelCollapsed(false);
-      updateParamModeButtons();
       updateParamPanelState();
       resizeCanvases();
       return;
     }
     if (e.key === '4') {
-      setCurrentParamMode('PAN');
       setParamPanelMode('PAN');
       setParamPanelCollapsed(false);
-      updateParamModeButtons();
       updateParamPanelState();
       resizeCanvases();
       return;
     }
     if (e.key === '5') {
-      setCurrentParamMode('Phoneme');
       setParamPanelMode('Phoneme');
       setParamPanelCollapsed(false);
-      updateParamModeButtons();
       updateParamPanelState();
       resolvePhonemesFromPipeline();
       resizeCanvases();
@@ -1444,9 +2014,21 @@ export function setupEventListeners() {
       const selectedNoteIds = getSelectedNoteIds();
       if (selectedNoteIds.size > 0) {
         const notes = getNotes();
+        const kanjiGroups = getKanjiGroups();
+        // Expand selection: if a selected note is in a kanji group, select all
+        // notes in that group (deleting any kana = deleting the whole kanji)
+        const expandedIds = new Set(selectedNoteIds);
+        const deletedGroupIds = [];
+        for (const id of selectedNoteIds) {
+          const group = findGroupByNoteId(id, kanjiGroups);
+          if (group) {
+            for (const gid of group.noteIds) expandedIds.add(gid);
+            if (!deletedGroupIds.includes(group.id)) deletedGroupIds.push(group.id);
+          }
+        }
         const deletedNotes = [];
         const deletedIndices = [];
-        for (const id of selectedNoteIds) {
+        for (const id of expandedIds) {
           const idx = notes.findIndex(n => n.id === id);
           if (idx !== -1) {
             deletedNotes.push({ ...notes[idx] });
@@ -1457,6 +2039,15 @@ export function setupEventListeners() {
         for (const idx of sortedForDelete) {
           notes.splice(idx, 1);
         }
+        // Remove deleted groups
+        const deletedGroups = deletedGroupIds
+          .map(gid => {
+            const g = kanjiGroups.find(gg => gg.id === gid);
+            const idx = kanjiGroups.indexOf(g);
+            if (idx !== -1) kanjiGroups.splice(idx, 1);
+            return g ? { group: deepClone(g), index: idx } : null;
+          })
+          .filter(Boolean);
         const oldSelectedIds = new Set(selectedNoteIds);
         selectedNoteIds.clear();
         const undoOrder = deletedIndices
@@ -1467,14 +2058,28 @@ export function setupEventListeners() {
             for (const { idx, note } of undoOrder) {
               notes.splice(idx, 0, { ...note });
             }
+            // Restore deleted groups
+            for (const dg of deletedGroups) {
+              if (dg.index >= 0 && dg.index <= kanjiGroups.length) {
+                kanjiGroups.splice(dg.index, 0, deepClone(dg.group));
+              } else {
+                kanjiGroups.push(deepClone(dg.group));
+              }
+            }
             setSelectedNoteIds(new Set(oldSelectedIds));
+            render();
           },
           redo() {
             for (const dn of deletedNotes) {
               const idx = notes.findIndex(n => n.id === dn.id);
               if (idx !== -1) notes.splice(idx, 1);
             }
+            for (const dg of deletedGroups) {
+              const idx = kanjiGroups.findIndex(g => g.id === dg.group.id);
+              if (idx !== -1) kanjiGroups.splice(idx, 1);
+            }
             selectedNoteIds.clear();
+            render();
           }
         });
         render();
@@ -1534,7 +2139,9 @@ export function setupEventListeners() {
             else if (e.key === 'ArrowDown') newPitch = Math.max(0, note.pitch - step);
             else if (e.key === 'ArrowLeft') newStart = Math.max(0, snapBeats(note.start - timeStep));
             else if (e.key === 'ArrowRight') newStart = Math.max(0, snapBeats(note.start + timeStep));
-            if (checkOverlap(id, newPitch, newStart, newStart + note.duration)) {
+            // 分组假名不受重叠限制，允许自由移动
+            const isGroupedKana = findGroupByNoteId(id, getKanjiGroups()) !== null;
+            if (!isGroupedKana && checkOverlap(id, newPitch, newStart, newStart + note.duration)) {
               blocked = true;
               break;
             }
@@ -1603,4 +2210,7 @@ export function setupEventListeners() {
 
     render();
   }, { passive: false });
+
+  _setupPitchContextMenuListeners();
+  _setupKanjiContextMenuListeners();
 }

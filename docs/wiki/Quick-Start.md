@@ -22,12 +22,12 @@ You must select a **model precision** before downloading. This determines the ba
 
 | Precision | Best For | Quality | VRAM Usage |
 |-----------|----------|---------|------------|
-| **FP16** (recommended) | Discrete GPU users (4GB+ VRAM) | Best | High |
-| **FP32** | High-end discrete GPU (8GB+ VRAM) | Highest | Very High |
-| **INT8** | Integrated GPU or low VRAM (<2GB) | Slight loss | Low |
+| **FP32** (recommended) | Discrete GPU users (4GB+ VRAM) | Highest | Very High |
+| **FP16** | Integrated GPU or moderate VRAM | Slight loss | High |
+| **INT8** | Low VRAM (<2GB) | Loss | Low |
 | **INT8-NPU** | NPU hardware users | Slight loss | Low |
 
-**If you are unsure, choose FP16.** Different precisions can coexist — you can switch later in Settings without re-downloading.
+**If you are unsure, choose FP32** for the best quality. Different precisions can coexist — you can switch later in Settings without re-downloading.
 
 ### Starting the Download
 
@@ -100,7 +100,7 @@ Preprocessing extracts the musical information (pitch, notes, timing) from your 
 
 1. **Check note boundaries**: Make sure each note's start, end, and pitch match the actual singing in the audio. Drag note edges to resize, drag notes to reposition.
 2. **Fill in lyrics**: Each note needs a lyric. **You must type the lyrics yourself** — the system does not auto-detect lyrics from audio.
-   - For **Chinese**: Enter Chinese characters (e.g., `你好`) or Pinyin (e.g., `ni hao`).
+   - For **Chinese**: Enter Chinese characters (e.g., `你好`). You may append a digit `1`–`5` after a character to force a specific tone (e.g., `你2 好3`). Pinyin text (e.g., `ni hao`) is **not** accepted as Chinese.
    - For **English**: Enter the English word (e.g., `hello`). The system converts it to phonemes automatically.
    - Double-click a note to edit its lyric inline.
 3. **Verify note count**: Check that the number of notes matches the actual singing.
@@ -140,7 +140,7 @@ Double-click a fragment to open the **Fragment Editor** — a full piano-roll ed
 
 1. Click on the piano roll grid to create a note. Drag to set the note length.
 2. Each note must have a **lyric**:
-   - **Chinese**: Type Chinese characters or Pinyin.
+   - **Chinese**: Type Chinese characters (optionally append a tone digit `1`–`5`, e.g. `你2 好3`). Pinyin is **not** accepted.
    - **English**: Type English words.
    - Double-click a note to edit its lyric.
 

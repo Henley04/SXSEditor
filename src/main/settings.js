@@ -3,7 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { getLocale, setLocale } = require('./locale');
 
-const DEFAULT_THEME = 'dark-aurora';
+const DEFAULT_THEME = 'acg';
 const DEFAULT_THEME_PER_WINDOW = {};
 
 let _settingsCache = null;
@@ -95,6 +95,13 @@ function loadSettings() {
     _settingsCache.sifiganPrecision = 'fp32';
   }
 
+  // Japanese vocalization method: 'en-phonemes' (default, English ARPAbet on base model)
+  // | 'hybrid' (improved ARPAbet mapping: L for ら行, AO for お段, on base model)
+  // | 'jp-lora' (JP LoRA models, in development — not available for download yet)
+  if (_settingsCache.japaneseVocalization !== 'en-phonemes' && _settingsCache.japaneseVocalization !== 'hybrid' && _settingsCache.japaneseVocalization !== 'jp-lora') {
+    _settingsCache.japaneseVocalization = 'en-phonemes';
+  }
+
   // Vocoder type default + startup fallback:
   // If stored value is 'sifigan' but none of the SiFiGAN model files exist,
   // temporarily fall back to 'default' for this run (settings.json is NOT modified).
@@ -124,6 +131,23 @@ function loadSettings() {
     }
   }
 
+  // Update check settings
+  if (_settingsCache.updateChannel !== 'nightly' && _settingsCache.updateChannel !== 'release') {
+    _settingsCache.updateChannel = 'release';
+  }
+  if (typeof _settingsCache.autoCheckUpdates !== 'boolean') {
+    _settingsCache.autoCheckUpdates = true;
+  }
+  if (typeof _settingsCache.skippedAppVersion !== 'string') {
+    _settingsCache.skippedAppVersion = null;
+  }
+  if (typeof _settingsCache.dontRemindAppUpdates !== 'boolean') {
+    _settingsCache.dontRemindAppUpdates = false;
+  }
+  if (typeof _settingsCache.lastUpdateCheckTime !== 'string') {
+    _settingsCache.lastUpdateCheckTime = null;
+  }
+
   return _settingsCache;
 }
 
@@ -149,13 +173,18 @@ const ALLOWED_SETTINGS_KEYS = [
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
-  'vocoderType', 'sifiganPrecision',
+  'vocoderType', 'sifiganPrecision', 'japaneseVocalization',
   'vocoderChunkMode', 'vocoderChunkFrames',
   'releaseDmlVramAfterSynthesis',
   'releaseDiffStepBeforeVocoder',
   'inferenceProvider',
   'npuDiffBatchSize',
   'npuVocoderBatchSize',
+  'updateChannel',
+  'autoCheckUpdates',
+  'skippedAppVersion',
+  'dontRemindAppUpdates',
+  'lastUpdateCheckTime',
 ];
 
 async function updateLocaleSetting(locale) {
