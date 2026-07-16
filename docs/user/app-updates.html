@@ -72,6 +72,22 @@
       </div>
 
       <h2>
+        <span data-lang="en">v1.0.6</span>
+        <span data-lang="zh">v1.0.6</span>
+      </h2>
+
+      <h3>
+        <span data-lang="en">Bug Fixes</span>
+        <span data-lang="zh">缺陷修复</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en">Fixed <strong>model download percentage overflow</strong> — progress percentages are now clamped to [0, 100] to prevent values exceeding 100% during download.</span><span data-lang="zh">修复<strong>模型下载百分比溢出</strong>——进度百分比现在限制在 [0, 100] 范围内，防止下载过程中超过 100%。</span></li>
+        <li><span data-lang="en">Fixed <strong>inaccurate remote file size detection</strong> — switched from HEAD requests (which return 404 on ModelScope CDN) to <code>Range: bytes=0-0</code> requests that return the correct file size via the <code>Content-Range</code> header.</span><span data-lang="zh">修复<strong>远程文件大小检测不准确</strong>——从 HEAD 请求（在 ModelScope CDN 上返回 404）改为 <code>Range: bytes=0-0</code> 请求，通过 <code>Content-Range</code> 头返回正确的文件大小。</span></li>
+        <li><span data-lang="en">Fixed <strong>file size display anomalies</strong> caused by floating-point precision errors in <code>formatBytes</code> — switched to <code>Math.log2</code> for accurate unit selection.</span><span data-lang="zh">修复 <code>formatBytes</code> 中浮点精度误差导致的<strong>文件大小显示异常</strong>——改用 <code>Math.log2</code> 进行准确的单位选择。</span></li>
+        <li><span data-lang="en">Fixed <strong>SiFiGAN download progress resetting</strong> to 0 for each file — progress is now accumulated across all files in the download batch.</span><span data-lang="zh">修复<strong>SiFiGAN 下载进度每个文件重置为 0</strong>——进度现在在下载批次的所有文件中累计。</span></li>
+      </ul>
+
+      <h2>
         <span data-lang="en">v1.0.5</span>
         <span data-lang="zh">v1.0.5</span>
       </h2>

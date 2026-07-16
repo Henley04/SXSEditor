@@ -64,7 +64,10 @@ function getStatusText(state) {
   if (state.status === 'pending') {
     return t('modelDownload.pending');
   } else if (state.status === 'downloading') {
-    const pct = state.total > 0 ? Math.round(state.downloaded / state.total * 100) : 0;
+    let pct = 0;
+    if (state.total > 0) {
+      pct = Math.min(Math.max(Math.round(state.downloaded / state.total * 100), 0), 100);
+    }
     return `${pct}% (${formatBytes(state.downloaded)}/${formatBytes(state.total)})`;
   } else if (state.status === 'complete') {
     return `${t('modelDownload.complete')} (${formatBytes(state.total)})`;
@@ -343,7 +346,8 @@ function formatSpeed(bytesPerSec) {
 }
 
 function updateOverallProgress(overallDownloaded, overallTotal) {
-  const percent = overallTotal > 0 ? Math.round(overallDownloaded / overallTotal * 100) : 0;
+  let percent = overallTotal > 0 ? Math.round(overallDownloaded / overallTotal * 100) : 0;
+  percent = Math.min(Math.max(percent, 0), 100);
   document.getElementById('overallPercent').textContent = `${percent}%`;
   document.getElementById('overallBar').style.width = `${percent}%`;
   document.querySelector('.progress-bar-bg').setAttribute('aria-valuenow', percent);

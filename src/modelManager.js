@@ -1123,10 +1123,10 @@ function isAllowedDownloadHost(urlStr) {
   }
 }
 
-async function resolveRedirects(url, maxRedirects = 5, method = 'GET') {
+async function resolveRedirects(url, maxRedirects = 5, method = 'GET', headers = {}) {
   let currentUrl = url;
   for (let i = 0; i < maxRedirects; i++) {
-    const { redirectUrl, response } = await httpRequest(currentUrl, { method, timeout: 10000 });
+    const { redirectUrl, response } = await httpRequest(currentUrl, { method, timeout: 10000, headers });
     if (!redirectUrl) {
       return { finalUrl: currentUrl, response };
     }
@@ -1618,16 +1618,36 @@ async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
 
 async function getRemoteFileSize(filePath, precision, revision = 'master') {
   const url = getFileDownloadUrl(filePath, precision, revision);
+  return getRemoteFileSizeByUrl(url);
+}
+
+/**
+ * Get the real remote file size by issuing a Range: bytes=0-0 request.
+ *
+ * ModelScope CDN behavior:
+ *   - HEAD returns 404
+ *   - GET returns 302 redirect with wrong content-length (redirect page size)
+ *   - GET + Range: bytes=0-0 returns 206 with correct size in Content-Range header
+ *
+ * Parses the real file size from `Content-Range: bytes 0-0/<real_size>` header.
+ * Falls back to `Content-Length` if the server doesn't support Range.
+ *
+ * @param {string} url  Download URL (will follow redirects)
+ * @returns {Promise<number>}  File size in bytes, or 0 on failure
+ */
+async function getRemoteFileSizeByUrl(url) {
   try {
-    const { response } = await resolveRedirects(url, 5, 'HEAD');
-    const contentLength = parseInt(response.headers['content-length'] || '0', 10);
-    response.resume();
-    if (contentLength > 0) return contentLength;
-  } catch (_) {}
-  // HEAD unsupported or returned 0 — fall back to GET
-  console.warn(`[ModelManager] HEAD failed for ${filePath}, falling back to GET`);
-  try {
-    const { response } = await resolveRedirects(url, 5, 'GET');
+    const { response } = await resolveRedirects(url, 5, 'GET', { Range: 'bytes=0-0' });
+    const contentRange = response.headers['content-range'];
+    if (contentRange) {
+      // Format: bytes 0-0/<real_size>
+      const match = contentRange.match(/\/(\d+)/);
+      if (match) {
+        response.resume();
+        return parseInt(match[1], 10);
+      }
+    }
+    // Fallback to Content-Length if server doesn't support Range
     const contentLength = parseInt(response.headers['content-length'] || '0', 10);
     response.resume();
     return contentLength;
@@ -1832,6 +1852,7 @@ module.exports = {
   getModelId,
   getJpModelId,
   getRemoteFileSize,
+  getRemoteFileSizeByUrl,
   getOptimalConcurrency,
   getLocalFilePath,
   getJpLocalFilePath,
