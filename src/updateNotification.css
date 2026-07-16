@@ -200,6 +200,17 @@ body {
   text-decoration: underline;
 }
 
+.release-notes-link {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: var(--font-sm);
+  cursor: pointer;
+}
+
+.release-notes-link:hover {
+  text-decoration: underline;
+}
+
 .release-notes::-webkit-scrollbar {
   width: 6px;
 }
