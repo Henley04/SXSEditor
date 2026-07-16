@@ -171,6 +171,50 @@ async function refreshVersionInfo() {
 }
 
 /**
+ * Resolve the latest tag from availableTags (same logic as getLatestTag in
+ * modelManager.js). Returns the latest tag string or null if none match.
+ */
+function resolveLatestTag(tags) {
+  if (!Array.isArray(tags) || tags.length === 0) return null;
+  const valid = tags.filter(t => typeof t === 'string' && /^v?\d+/i.test(t));
+  if (valid.length === 0) return null;
+  valid.sort((a, b) => {
+    const na = a.replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+    const nb = b.replace(/^v/i, '').split('.').map(n => parseInt(n, 10) || 0);
+    const len = Math.max(na.length, nb.length);
+    for (let i = 0; i < len; i++) {
+      const da = na[i] || 0, db = nb[i] || 0;
+      if (da !== db) return db - da; // descending
+    }
+    return 0;
+  });
+  return valid[0];
+}
+
+/**
+ * Check if the currently selected main model revision resolves to v0 or
+ * null (no real version). In such cases the download/update confirmation
+ * should warn the user that v0 and legacy content are identical.
+ */
+function isMainModelTargetV0OrLegacy() {
+  if (currentRevision === 'v0') return true;
+  if (currentRevision === 'latest') {
+    const latest = resolveLatestTag(availableTags);
+    return !latest || latest === 'v0';
+  }
+  return false;
+}
+
+/**
+ * Check if SiFiGAN's latest version is v0 or null based on cached versionInfo.
+ */
+function isSifiganTargetV0OrLegacy() {
+  const info = sifiganState.versionInfo;
+  if (!info) return false; // unknown — don't block initial download
+  return !info.latestVersion || info.latestVersion === 'v0';
+}
+
+/**
  * Fetch available model versions (tags) from ModelScope and populate
  * the version selector dropdown. The first option is always 'latest'
  * (auto-pick the newest tag). Tags are appended after. Branches are
