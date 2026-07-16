@@ -92,6 +92,60 @@ function deleteSifiganFiles(modelDir) {
   return { deleted, errors };
 }
 
+/**
+ * Get remote file size via HEAD request for a SiFiGAN file URL.
+ * ModelScope redirects to CDN, so follow one redirect hop.
+ * Returns 0 if the size cannot be determined.
+ */
+async function getSifiganRemoteSize(url) {
+  if (!url) return 0;
+  try {
+    const https = require('node:https');
+    const http = require('node:http');
+    const { URL } = require('node:url');
+    const urlObj = new URL(url);
+    const lib = urlObj.protocol === 'https:' ? https : http;
+    return await new Promise((resolve) => {
+      const req = lib.request({
+        hostname: urlObj.hostname,
+        port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
+        path: urlObj.pathname + urlObj.search,
+        method: 'HEAD',
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+      }, (response) => {
+        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+          // Follow redirect — simplified single-hop
+          const redirectUrl = new URL(response.headers.location, url).href;
+          const redirectObj = new URL(redirectUrl);
+          const redirectLib = redirectObj.protocol === 'https:' ? https : http;
+          const redirectReq = redirectLib.request({
+            hostname: redirectObj.hostname,
+            port: redirectObj.port || (redirectObj.protocol === 'https:' ? 443 : 80),
+            path: redirectObj.pathname + redirectObj.search,
+            method: 'HEAD',
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+          }, (redirectResponse) => {
+            const cl = parseInt(redirectResponse.headers['content-length'] || '0', 10);
+            redirectResponse.resume();
+            resolve(cl);
+          });
+          redirectReq.on('error', () => resolve(0));
+          redirectReq.end();
+        } else {
+          const cl = parseInt(response.headers['content-length'] || '0', 10);
+          response.resume();
+          resolve(cl);
+        }
+      });
+      req.on('error', () => resolve(0));
+      req.setTimeout(10000, () => { req.destroy(); resolve(0); });
+      req.end();
+    });
+  } catch (_) {
+    return 0;
+  }
+}
+
 async function startModelDownload(modelDir, missingFiles, precision, revision) {
   downloadAbortController = new AbortController();
   const abortSignal = downloadAbortController.signal;
@@ -562,6 +616,20 @@ function registerModelDownloadIpc() {
     const win = getModelDownloadWindow();
 
     try {
+      // Pre-fetch all remote file sizes (parallel HEAD requests) so the overall
+      // progress bar can report cumulative progress across all SiFiGAN files
+      // instead of resetting to 0 for each file.
+      const sifiganFileSizes = await Promise.all(
+        missingFiles.map(fileName => getSifiganRemoteSize(getSifiganFileDownloadUrl(fileName, currentRevision)))
+      );
+      const sifiganSizeMap = {};
+      let sifiganOverallTotal = 0;
+      for (let i = 0; i < missingFiles.length; i++) {
+        sifiganSizeMap[missingFiles[i]] = sifiganFileSizes[i];
+        sifiganOverallTotal += sifiganFileSizes[i];
+      }
+      let sifiganCompletedDownloaded = 0;
+
       for (const fileName of missingFiles) {
         if (abortSignal.aborted) throw new Error('Download cancelled');
 
@@ -582,52 +650,9 @@ function registerModelDownloadIpc() {
           });
         }
 
-        // Get remote file size via HEAD request to decide chunked vs single-threaded.
-        // ModelScope redirects to CDN, so follow one redirect hop.
-        let remoteSize = 0;
-        try {
-          const https = require('node:https');
-          const http = require('node:http');
-          const { URL } = require('node:url');
-          const urlObj = new URL(url);
-          const lib = urlObj.protocol === 'https:' ? https : http;
-          remoteSize = await new Promise((resolve) => {
-            const req = lib.request({
-              hostname: urlObj.hostname,
-              port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
-              path: urlObj.pathname + urlObj.search,
-              method: 'HEAD',
-              headers: { 'User-Agent': 'Mozilla/5.0' },
-            }, (response) => {
-              if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-                // Follow redirect — simplified single-hop
-                const redirectUrl = new URL(response.headers.location, url).href;
-                const redirectObj = new URL(redirectUrl);
-                const redirectLib = redirectObj.protocol === 'https:' ? https : http;
-                const redirectReq = redirectLib.request({
-                  hostname: redirectObj.hostname,
-                  port: redirectObj.port || (redirectObj.protocol === 'https:' ? 443 : 80),
-                  path: redirectObj.pathname + redirectObj.search,
-                  method: 'HEAD',
-                  headers: { 'User-Agent': 'Mozilla/5.0' },
-                }, (redirectResponse) => {
-                  const cl = parseInt(redirectResponse.headers['content-length'] || '0', 10);
-                  redirectResponse.resume();
-                  resolve(cl);
-                });
-                redirectReq.on('error', () => resolve(0));
-                redirectReq.end();
-              } else {
-                const cl = parseInt(response.headers['content-length'] || '0', 10);
-                response.resume();
-                resolve(cl);
-              }
-            });
-            req.on('error', () => resolve(0));
-            req.setTimeout(10000, () => { req.destroy(); resolve(0); });
-            req.end();
-          });
-        } catch (_) {}
+        const remoteSize = sifiganSizeMap[fileName] || 0;
+        const baseDownloaded = sifiganCompletedDownloaded;
+        const overallTotal = sifiganOverallTotal;
 
         // Use chunked download for large files, single-threaded for small
         if (remoteSize >= MIN_FILE_SIZE_FOR_CHUNKING) {
@@ -641,8 +666,8 @@ function registerModelDownloadIpc() {
                   totalFiles: missingFiles.length,
                   bytesDownloaded: downloaded,
                   bytesTotal: total,
-                  overallDownloaded: downloaded,
-                  overallTotal: total,
+                  overallDownloaded: baseDownloaded + downloaded,
+                  overallTotal,
                 });
               }
             },
@@ -658,13 +683,17 @@ function registerModelDownloadIpc() {
                   totalFiles: missingFiles.length,
                   bytesDownloaded: downloaded,
                   bytesTotal: total,
-                  overallDownloaded: downloaded,
-                  overallTotal: total,
+                  overallDownloaded: baseDownloaded + downloaded,
+                  overallTotal,
                 });
               }
             },
           });
         }
+
+        // Accumulate this file's size into the completed total so the next
+        // file's progress reports cumulative overallDownloaded correctly.
+        sifiganCompletedDownloaded += remoteSize;
 
         if (win && !win.isDestroyed()) {
           win.webContents.send('model-download:file-complete', {

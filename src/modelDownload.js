@@ -64,7 +64,17 @@ function getStatusText(state) {
   if (state.status === 'pending') {
     return t('modelDownload.pending');
   } else if (state.status === 'downloading') {
-    const pct = state.total > 0 ? Math.round(state.downloaded / state.total * 100) : 0;
+    // HEAD 请求失败时 total 可能为 0，此时只显示已下载量
+    if (!state.total || state.total <= 0) {
+      return formatBytes(state.downloaded);
+    }
+    // 实际下载量可能超过 HEAD 估计值，此时只显示已下载量
+    if (state.downloaded > state.total) {
+      return formatBytes(state.downloaded);
+    }
+    let pct = Math.round(state.downloaded / state.total * 100);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
     return `${pct}% (${formatBytes(state.downloaded)}/${formatBytes(state.total)})`;
   } else if (state.status === 'complete') {
     return `${t('modelDownload.complete')} (${formatBytes(state.total)})`;
@@ -343,7 +353,9 @@ function formatSpeed(bytesPerSec) {
 }
 
 function updateOverallProgress(overallDownloaded, overallTotal) {
-  const percent = overallTotal > 0 ? Math.round(overallDownloaded / overallTotal * 100) : 0;
+  let percent = overallTotal > 0 ? Math.round(overallDownloaded / overallTotal * 100) : 0;
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
   document.getElementById('overallPercent').textContent = `${percent}%`;
   document.getElementById('overallBar').style.width = `${percent}%`;
   document.querySelector('.progress-bar-bg').setAttribute('aria-valuenow', percent);
