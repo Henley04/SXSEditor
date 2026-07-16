@@ -5,7 +5,7 @@ const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getLatestTag } = require('../modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getLatestTag, getRemoteFileSizeByUrl } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 let downloadAbortController = null;
@@ -93,57 +93,20 @@ function deleteSifiganFiles(modelDir) {
 }
 
 /**
- * Get remote file size via HEAD request for a SiFiGAN file URL.
- * ModelScope redirects to CDN, so follow one redirect hop.
- * Returns 0 if the size cannot be determined.
+ * 获取 SiFiGAN 远程文件的真实大小（字节）。
+ *
+ * ModelScope 的 /api/v1/.../repo 端点：
+ *   1. 不支持 HEAD 方法（返回 404）
+ *   2. GET 请求第一跳返回 302 重定向到 CDN，302 响应里的 Content-Length
+ *      是 HTML 重定向页面的大小（几百字节），不是真实文件大小
+ *
+ * 解决方案：使用 GET + Range: bytes=0-0 请求 1 字节，CDN 返回 206 + Content-Range，
+ * 从 Content-Range: bytes 0-0/<真实大小> 解析真实文件大小，只下载 1 字节，无带宽浪费。
+ *
+ * 复用 modelManager.js 里的 getRemoteFileSizeByUrl 实现（已处理重定向 + Range 解析）。
  */
 async function getSifiganRemoteSize(url) {
-  if (!url) return 0;
-  try {
-    const https = require('node:https');
-    const http = require('node:http');
-    const { URL } = require('node:url');
-    const urlObj = new URL(url);
-    const lib = urlObj.protocol === 'https:' ? https : http;
-    return await new Promise((resolve) => {
-      const req = lib.request({
-        hostname: urlObj.hostname,
-        port: urlObj.port || (urlObj.protocol === 'https:' ? 443 : 80),
-        path: urlObj.pathname + urlObj.search,
-        method: 'HEAD',
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-      }, (response) => {
-        if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
-          // Follow redirect — simplified single-hop
-          const redirectUrl = new URL(response.headers.location, url).href;
-          const redirectObj = new URL(redirectUrl);
-          const redirectLib = redirectObj.protocol === 'https:' ? https : http;
-          const redirectReq = redirectLib.request({
-            hostname: redirectObj.hostname,
-            port: redirectObj.port || (redirectObj.protocol === 'https:' ? 443 : 80),
-            path: redirectObj.pathname + redirectObj.search,
-            method: 'HEAD',
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-          }, (redirectResponse) => {
-            const cl = parseInt(redirectResponse.headers['content-length'] || '0', 10);
-            redirectResponse.resume();
-            resolve(cl);
-          });
-          redirectReq.on('error', () => resolve(0));
-          redirectReq.end();
-        } else {
-          const cl = parseInt(response.headers['content-length'] || '0', 10);
-          response.resume();
-          resolve(cl);
-        }
-      });
-      req.on('error', () => resolve(0));
-      req.setTimeout(10000, () => { req.destroy(); resolve(0); });
-      req.end();
-    });
-  } catch (_) {
-    return 0;
-  }
+  return getRemoteFileSizeByUrl(url);
 }
 
 async function startModelDownload(modelDir, missingFiles, precision, revision) {

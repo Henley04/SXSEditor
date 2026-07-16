@@ -1069,7 +1069,7 @@ function httpRequest(urlStr, options = {}) {
       method: options.method || 'GET',
       headers: {
         'User-Agent': DEFAULT_USER_AGENT,
-        ...options.headers,
+        ...(options.headers || {}),
       },
     };
 
@@ -1123,10 +1123,10 @@ function isAllowedDownloadHost(urlStr) {
   }
 }
 
-async function resolveRedirects(url, maxRedirects = 5, method = 'GET') {
+async function resolveRedirects(url, maxRedirects = 5, method = 'GET', headers = null) {
   let currentUrl = url;
   for (let i = 0; i < maxRedirects; i++) {
-    const { redirectUrl, response } = await httpRequest(currentUrl, { method, timeout: 10000 });
+    const { redirectUrl, response } = await httpRequest(currentUrl, { method, timeout: 10000, headers });
     if (!redirectUrl) {
       return { finalUrl: currentUrl, response };
     }
@@ -1616,24 +1616,52 @@ async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
   });
 }
 
-async function getRemoteFileSize(filePath, precision, revision = 'master') {
-  const url = getFileDownloadUrl(filePath, precision, revision);
+/**
+ * 获取远程文件的真实大小（字节）。
+ *
+ * ModelScope 的 /api/v1/.../repo 端点有以下几个坑，旧实现都没正确处理：
+ *   1. 不支持 HEAD 方法（返回 404）
+ *   2. GET 请求第一跳返回 302 重定向到 CDN，302 响应里的 Content-Length
+ *      是 HTML 重定向页面的大小（几百字节），不是真实文件大小
+ *   3. 旧实现的「GET + response.resume()」回退方案会让服务端推流整个
+ *      文件，对几百 MB 的大文件会长时间挂起或浪费带宽，且 resume 期间
+ *      Content-Length 仍是 302 重定向页的值
+ *
+ * 正确方案：使用 GET + Range: bytes=0-0 请求 1 字节。
+ *   - CDN 返回 206 Partial Content
+ *   - 响应头 Content-Range: bytes 0-0/<真实大小> 包含真实总大小
+ *   - 只下载 1 字节，立即关闭流，无带宽浪费
+ *   - 同时支持回退：若服务器返回 200 而非 206（不支持 Range），
+ *     则用 Content-Length 作为大小（此时是完整文件大小）
+ */
+async function getRemoteFileSizeByUrl(url) {
+  if (!url) return 0;
   try {
-    const { response } = await resolveRedirects(url, 5, 'HEAD');
-    const contentLength = parseInt(response.headers['content-length'] || '0', 10);
-    response.resume();
-    if (contentLength > 0) return contentLength;
-  } catch (_) {}
-  // HEAD unsupported or returned 0 — fall back to GET
-  console.warn(`[ModelManager] HEAD failed for ${filePath}, falling back to GET`);
-  try {
-    const { response } = await resolveRedirects(url, 5, 'GET');
+    const { response } = await resolveRedirects(url, 5, 'GET', { 'Range': 'bytes=0-0' });
+    // 优先从 Content-Range 解析（Range 请求返回 206 时的权威来源）
+    const contentRange = response.headers['content-range'];
+    if (contentRange) {
+      // 格式: bytes 0-0/887485563  或  bytes 0-0/*
+      const match = contentRange.match(/\/(\d+)$/);
+      if (match) {
+        const size = parseInt(match[1], 10);
+        response.resume();
+        if (size > 0) return size;
+      }
+    }
+    // 不支持 Range 时，服务器返回 200 + 完整 Content-Length
     const contentLength = parseInt(response.headers['content-length'] || '0', 10);
     response.resume();
     return contentLength;
-  } catch (_) {
+  } catch (err) {
+    console.warn(`[ModelManager] getRemoteFileSizeByUrl failed for ${url.substring(0, 120)}: ${err.message}`);
     return 0;
   }
+}
+
+async function getRemoteFileSize(filePath, precision, revision = 'master') {
+  const url = getFileDownloadUrl(filePath, precision, revision);
+  return getRemoteFileSizeByUrl(url);
 }
 
 /**
@@ -1832,6 +1860,7 @@ module.exports = {
   getModelId,
   getJpModelId,
   getRemoteFileSize,
+  getRemoteFileSizeByUrl,
   getOptimalConcurrency,
   getLocalFilePath,
   getJpLocalFilePath,
