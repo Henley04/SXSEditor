@@ -793,6 +793,9 @@ function registerModelDownloadIpc() {
   // Update models: delete existing files for the precision and re-download
   // from ModelScope. This is used when a model update is available or when
   // switching to a different version (revision).
+  // When invoked from an already-open download window, the download is
+  // started in that window directly (createModelDownloadWindow would
+  // otherwise no-op because the window already exists).
   ipcMain.handle('model-download:update', async (event, precision, revision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
@@ -828,7 +831,20 @@ function registerModelDownloadIpc() {
       return { success: true };
     }
 
-    // Open download window with the selected revision
+    // If a download window is already open (e.g. user clicked the update
+    // button inside the download window), push the new missing-files list
+    // and revision into it, then start the download in that same window.
+    const existingWin = getModelDownloadWindow();
+    if (existingWin && !existingWin.isDestroyed()) {
+      existingWin.webContents.send('model-download:missing-files', missing);
+      existingWin.webContents.send('model-download:precision', currentPrecision);
+      existingWin.webContents.send('model-download:revision', currentRevision);
+      await startModelDownload(modelDir, missing, currentPrecision, currentRevision);
+      return { success: true, missingCount: missing.length };
+    }
+
+    // No existing window — create one. The renderer will call
+    // model-download:start with the pre-resolved revision.
     createModelDownloadWindow(missing, currentPrecision, DEFAULT_PRECISION, currentRevision);
     return { success: true, missingCount: missing.length };
   });
