@@ -42,7 +42,11 @@ for (const [hira, ph] of Object.entries(JP_HIRAGANA_MAP)) {
     JP_KATAKANA_MAP[kata] = ph;
 }
 
-const JP_KANJI_DICT = {
+// Hand-curated kanji → phoneme dictionary (fallback when JSON is unavailable).
+// These ~50 entries are also included in jpKanjiDict.json as overrides, but
+// kept here as a safety net so the module still works if the JSON file fails
+// to load (e.g., missing in a packaged build).
+const JP_KANJI_DICT_FALLBACK = {
     '愛': 'a i', '雨': 'a m e', '空': 's o r a', '花': 'h a n a',
     '風': 'k a z e', '月': 'ts u k i', '星': 'h o sh i', '雪': 'y u k i',
     '海': 'u m i', '山': 'y a m a', '川': 'k a w a', '森': 'm o r i',
@@ -61,6 +65,59 @@ const JP_KANJI_DICT = {
     '五': 'g o', '六': 'r o k u', '七': 'n a n a', '八': 'h a ch i',
     '九': 'ky u', '十': 'j u',
 };
+
+/**
+ * Load the full kanji → phoneme dictionary from jpKanjiDict.json.
+ *
+ * The JSON is generated from KANJIDIC2 (see scripts/generate_jp_kanji_dict.py)
+ * and contains ~2600 entries covering all Jōyō kanji (2136) plus other common
+ * kanji with frequency rankings. The hand-curated entries in
+ * JP_KANJI_DICT_FALLBACK are already merged into the JSON as overrides, so
+ * the JSON is the single source of truth when available.
+ *
+ * Falls back to JP_KANJI_DICT_FALLBACK (~50 entries) if the JSON cannot be
+ * loaded, ensuring the module always has a working dictionary.
+ */
+function _loadJpKanjiDict() {
+    const searchPaths = [
+        path.join(__dirname, 'jpKanjiDict.json'),
+        path.join(__dirname, '..', 'jpKanjiDict.json'),
+        path.join(__dirname, '..', 'inference', 'jpKanjiDict.json'),
+        path.join(__dirname, '..', 'inference', 'pipeline', 'jpKanjiDict.json'),
+        path.join(__dirname, '..', '..', 'src', 'inference', 'pipeline', 'jpKanjiDict.json'),
+    ];
+    // Packaged Electron app (asar / unpacked)
+    try {
+        if (process.resourcesPath) {
+            searchPaths.push(path.join(process.resourcesPath, 'app.asar', '.webpack', 'main', 'jpKanjiDict.json'));
+            searchPaths.push(path.join(process.resourcesPath, 'app', '.webpack', 'main', 'jpKanjiDict.json'));
+        }
+    } catch (_) {}
+    // Non-webpack / CLI mode
+    try {
+        if (require.main && require.main.path) {
+            searchPaths.push(path.join(require.main.path, 'inference', 'pipeline', 'jpKanjiDict.json'));
+            searchPaths.push(path.join(require.main.path, 'src', 'inference', 'pipeline', 'jpKanjiDict.json'));
+        }
+    } catch (_) {}
+
+    for (const dictPath of searchPaths) {
+        try {
+            if (fs.existsSync(dictPath)) {
+                const loaded = JSON.parse(fs.readFileSync(dictPath, 'utf-8'));
+                const count = Object.keys(loaded).length;
+                console.log(`[TextProcessing] Loaded JP kanji dictionary: ${count} entries (path: ${dictPath})`);
+                return loaded;
+            }
+        } catch (e) {
+            console.warn(`[TextProcessing] Failed to load JP kanji dictionary (${dictPath}):`, e.message);
+        }
+    }
+    console.warn('[TextProcessing] jpKanjiDict.json not found — falling back to hardcoded JP_KANJI_DICT_FALLBACK (~50 entries). Run `python scripts/generate_jp_kanji_dict.py` to regenerate.');
+    return JP_KANJI_DICT_FALLBACK;
+}
+
+const JP_KANJI_DICT = _loadJpKanjiDict();
 
 /**
  * Japanese phoneme → English ARPAbet phoneme mapping table.

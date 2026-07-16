@@ -27,6 +27,10 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/en_phoneme_durations.json'),
         },
         {
+          from: path.resolve(__dirname, 'src/inference/pipeline/jpKanjiDict.json'),
+          to: path.resolve(__dirname, '.webpack/main/jpKanjiDict.json'),
+        },
+        {
           from: path.resolve(__dirname, 'src/audio/audioWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/audio/audioWorker.js'),
         },

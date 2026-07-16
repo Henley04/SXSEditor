@@ -7,10 +7,16 @@
  * Users can manually toggle individual kanji between Chinese (single note) and
  * Japanese (kana group) via right-click.
  *
- * NOTE: JP_HIRAGANA_MAP and JP_KANJI_DICT are duplicated from
- * src/inference/pipeline/textProcessing.js because the renderer process uses
- * ES modules and cannot require CommonJS modules. Keep them in sync.
+ * NOTE: JP_HIRAGANA_MAP is duplicated from src/inference/pipeline/textProcessing.js
+ * because the renderer process uses ES modules and cannot require CommonJS modules.
+ * Keep them in sync.
+ *
+ * JP_KANJI_DICT is loaded from the shared jpKanjiDict.json (generated from
+ * KANJIDIC2, ~2600 entries covering all Jōyō kanji). The JSON is imported at
+ * build time via webpack, so no runtime file access is needed in the renderer.
  */
+
+import jpKanjiDictData from '../inference/pipeline/jpKanjiDict.json';
 
 // ---- Japanese hiragana → phoneme mapping (mirrors textProcessing.js) ----
 const JP_HIRAGANA_MAP = {
@@ -51,26 +57,10 @@ for (const [hira, ph] of Object.entries(JP_HIRAGANA_MAP)) {
     JP_KATAKANA_MAP[kata] = ph;
 }
 
-// ---- Kanji → phoneme dictionary (mirrors textProcessing.js) ----
-const JP_KANJI_DICT = {
-    '愛': 'a i', '雨': 'a m e', '空': 's o r a', '花': 'h a n a',
-    '風': 'k a z e', '月': 'ts u k i', '星': 'h o sh i', '雪': 'y u k i',
-    '海': 'u m i', '山': 'y a m a', '川': 'k a w a', '森': 'm o r i',
-    '光': 'h i k a r i', '音': 'o t o', '声': 'k o e', '梦': 'y u m e',
-    '心': 'k o k o r o', '恋': 'k o i', '涙': 'n a m i d a',
-    '歌': 'u t a', '飛': 't o b u', '歩': 'a r u k u',
-    '走': 'h a sh i r u', '泳': 'o y o g u', '読': 'y o m u',
-    '食': 't a b e r u', '飲': 'n o m u', '見': 'm i r u', '聞': 'k i k u',
-    '帰': 'k a e r u', '行': 'i k u', '来': 'k u r u', '立': 't a ts u',
-    '入': 'h a i r u', '出': 'd e r u', '上': 'u e', '下': 's h i t a',
-    '大': 'o o', '小': 'ch i i s a', '長': 'n a g a i', '強': 'ts u y o i',
-    '春': 'h a r u', '夏': 'n a ts u', '秋': 'a k i', '冬': 'f u y u',
-    '朝': 'a s a', '昼': 'h i r u', '夜': 'y o r u',
-    '今': 'i m a', '私': 'w a t a sh i', '君': 'k i m i',
-    '一': 'i ch i', '二': 'n i', '三': 's a n', '四': 'y o n',
-    '五': 'g o', '六': 'r o k u', '七': 'n a n a', '八': 'h a ch i',
-    '九': 'ky u', '十': 'j u',
-};
+// ---- Kanji → phoneme dictionary (loaded from shared jpKanjiDict.json) ----
+// ~2600 entries covering all Jōyō kanji, generated from KANJIDIC2.
+// See scripts/generate_jp_kanji_dict.py for regeneration instructions.
+const JP_KANJI_DICT = jpKanjiDictData;
 
 // ---- Reverse map: phoneme string → kana character ----
 const PHONEME_TO_KANA = {};
