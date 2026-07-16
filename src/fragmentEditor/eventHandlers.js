@@ -49,6 +49,8 @@ import {
   getPitchCurve,
   getCurrentProject,
   getFragmentIsPlaying,
+  getFragmentCurrentTime,
+  getFragmentPlayStartPosition, setFragmentPlayStartPosition,
   getCurrentFragment,
   invalidatePitchCurveCache,
   getAutoSaveTimer, setAutoSaveTimer,
@@ -60,7 +62,7 @@ import {
 import {
   canvas, ctx,
   timeToX, xToTime, pitchToY, yToPitch, yToPitchContinuous,
-  snapBeats, findNoteAt, findKanjiGroupAt,
+  snapBeats, findNoteAt, findKanjiGroupAt, findPlayheadAt, getPlayheadX,
   _getParamCurveAreaTop, _getParamCurveAreaBottom, _getParamCurveYRange,
   _valueToParamY,
   deepClone, clonePitchCurveState, applyPitchCurveSnapshot,
@@ -77,7 +79,7 @@ import {
   findGroupByNoteId, splitKanjiNoteToKana, mergeKanaGroupToKanji,
   isSingleKanji, isTimeRangeWithinAnyGroup, getAllGroupedNoteIds,
 } from './kanjiGroupUtils.js';
-import { stopFragmentPlayback, playFragment, exportFragment } from './audioPlayback.js';
+import { stopFragmentPlayback, playFragment, exportFragment, seekFragmentPlayback } from './audioPlayback.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel } from './uiControls.js';
 
@@ -1362,6 +1364,30 @@ export function setupEventListeners() {
       return;
     }
 
+    // 左键点击播放头或 header 区域 → 拖拽设置播放起始位置
+    if (e.button === 0) {
+      const canvasH = canvas.clientHeight;
+      // 1. 直接点击在现有 playhead 上
+      const onPlayhead = findPlayheadAt(pos.x, pos.y, canvasH);
+      // 2. 点击 header 区域（时间轴）→ 移动 playhead 到点击位置
+      const onHeader = pos.y <= HEADER_HEIGHT;
+      if (onPlayhead || onHeader) {
+        const beats = xToTime(pos.x);
+        const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+        const newStartTime = Math.max(0, (beats / bpm) * 60);
+        setFragmentPlayStartPosition(newStartTime);
+
+        if (getFragmentIsPlaying()) {
+          // 播放中拖拽 → 跳转到新位置
+          seekFragmentPlayback(newStartTime);
+        } else {
+          setDragMode('playhead');
+          render();
+        }
+        return;
+      }
+    }
+
     // 右键按下：在 Pitch 模式下点击锚点时进入 smoothness 拖拽模式；
     // 鼠标松开时若未发生明显位移则触发 context menu。
     if (e.button === 2) {
@@ -1549,6 +1575,16 @@ export function setupEventListeners() {
 
     const dragMode = getDragMode();
 
+    // 播放头拖拽：实时更新起始位置
+    if (dragMode === 'playhead') {
+      const beats = xToTime(pos.x);
+      const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+      const newStartTime = Math.max(0, (beats / bpm) * 60);
+      setFragmentPlayStartPosition(newStartTime);
+      render();
+      return;
+    }
+
     if (dragMode === 'pitch-smoothness') {
       applyPitchSmoothnessDrag(pos);
       return;
@@ -1598,6 +1634,12 @@ export function setupEventListeners() {
     if (!dragMode) {
       const currentParamMode = getCurrentParamMode();
       const pitchCurve = getPitchCurve();
+      // 播放头悬停时显示 ew-resize 光标
+      const canvasH = canvas.clientHeight;
+      if (findPlayheadAt(pos.x, pos.y, canvasH) || pos.y <= HEADER_HEIGHT) {
+        canvas.style.cursor = 'ew-resize';
+        return;
+      }
       // Bottom panel area takes precedence (see mousedown handler) — check the
       // phoneme lane first so cursor reflects phoneme interactions even when
       // the top toolbar is in Pitch mode.
@@ -1664,6 +1706,13 @@ export function setupEventListeners() {
     if (getIsBoxSelecting()) {
       setIsBoxSelecting(false);
       finalizeBoxSelection();
+      render();
+      return;
+    }
+
+    // 播放头拖拽结束
+    if (getDragMode() === 'playhead') {
+      setDragMode(null);
       render();
       return;
     }
@@ -1769,6 +1818,10 @@ export function setupEventListeners() {
     if (getIsBoxSelecting()) {
       setIsBoxSelecting(false);
       finalizeBoxSelection();
+    }
+    // 播放头拖拽中离开 canvas → 结束拖拽
+    if (getDragMode() === 'playhead') {
+      setDragMode(null);
     }
     if (getDragMode() === 'pitch-brush' && getIsBrushDrawing() && getCurrentBrushStroke()) {
       if (getCurrentBrushStroke().points.length >= 2) {

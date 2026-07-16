@@ -17,6 +17,7 @@ import {
   getBoxSelectStart, getBoxSelectEnd,
   getFragmentIsPlaying,
   getFragmentCurrentTime,
+  getFragmentPlayStartPosition,
   getCurrentProject,
   getSelectedPhonemeNoteId,
   getSelectedPhonemeIndex,
@@ -127,6 +128,34 @@ export function findNoteAt(x, y) {
     }
   }
   return null;
+}
+
+/**
+ * 计算播放头当前的 X 坐标（用于 hit-test）。
+ * 播放中使用 currentTime，未播放时使用 playStartPosition。
+ */
+export function getPlayheadX() {
+  const currentProject = getCurrentProject();
+  const bpm = currentProject ? currentProject.bpm : 120;
+  const isPlaying = getFragmentIsPlaying();
+  const timeToShow = isPlaying ? getFragmentCurrentTime() : getFragmentPlayStartPosition();
+  const beat = (timeToShow / 60) * bpm;
+  return timeToX(beat);
+}
+
+/**
+ * Hit-test for playhead: checks if a point is on the playhead line or its triangle handle.
+ * The hit zone is a vertical band of PLAYHEAD_HIT_WIDTH px centered on the playhead X,
+ * spanning from HEADER_HEIGHT down to the canvas bottom.
+ */
+export const PLAYHEAD_HIT_WIDTH = 10;
+
+export function findPlayheadAt(x, y, h) {
+  const playheadX = getPlayheadX();
+  const timeToShow = getFragmentIsPlaying() ? getFragmentCurrentTime() : getFragmentPlayStartPosition();
+  if (timeToShow <= 0 && !getFragmentIsPlaying()) return false;
+  if (y < HEADER_HEIGHT - 8 || y > h) return false;
+  return Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2;
 }
 
 /**
@@ -1646,14 +1675,29 @@ function _doRenderImpl(w, h) {
 }
 
 function drawPlayhead(ctxToUse, w, h, c) {
-  if (!getFragmentIsPlaying() && getFragmentCurrentTime() <= 0) return;
+  // 播放中：显示当前播放位置
+  // 未播放：显示用户拖拽设置的起始位置（如果有）
+  const isPlaying = getFragmentIsPlaying();
+  const currentTime = getFragmentCurrentTime();
+  const playStartPosition = getFragmentPlayStartPosition();
+
+  if (!isPlaying && currentTime <= 0 && playStartPosition <= 0) return;
 
   const currentProject = getCurrentProject();
   const bpm = currentProject ? currentProject.bpm : 120;
-  const beat = (getFragmentCurrentTime() / 60) * bpm;
+  // 未播放时显示 playStartPosition，播放中显示 currentTime
+  const timeToShow = isPlaying ? currentTime : playStartPosition;
+  const beat = (timeToShow / 60) * bpm;
   const x = timeToX(beat);
 
   if (x < 0 || x > w) return;
+
+  // 未播放时用半透明虚线区分
+  ctxToUse.save();
+  if (!isPlaying) {
+    ctxToUse.globalAlpha = 0.6;
+    ctxToUse.setLineDash([4, 3]);
+  }
 
   ctxToUse.strokeStyle = c.playhead;
   ctxToUse.lineWidth = 2;
@@ -1669,6 +1713,7 @@ function drawPlayhead(ctxToUse, w, h, c) {
   ctxToUse.lineTo(x + 6, HEADER_HEIGHT - 6);
   ctxToUse.closePath();
   ctxToUse.fill();
+  ctxToUse.restore();
 }
 
 function updateInlineInputPosition() {
