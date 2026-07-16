@@ -44,12 +44,12 @@ Multiple precisions can coexist — each has its own subdirectory.
 
 | Your hardware | Recommended precision |
 |---------------|----------------------|
-| Discrete GPU, 4GB+ VRAM | FP16 |
+| Discrete GPU, 4GB+ VRAM | FP32 (recommended, highest quality) |
 | Discrete GPU, 8GB+ VRAM | FP32 (highest quality) |
-| Integrated GPU / low VRAM | INT8 |
+| Integrated GPU / low VRAM | FP16 or INT8 |
 | NPU hardware | INT8-NPU |
 
-If unsure, start with **FP16**. You can switch later without re-downloading.
+If unsure, start with **FP32** for the best quality. You can switch later without re-downloading.
 
 ### Can I use custom models?
 
@@ -144,7 +144,7 @@ Press `Ctrl+Z` to undo and `Ctrl+Y` to redo. The editor supports up to 200 undo 
 - **Check the reference audio**: Ensure it contains pure vocals with no background music or effects.
 - **Check lyrics**: Make sure every note has the correct lyric. Missing or wrong lyrics cause phoneme errors.
 - **Check MIDI notes**: Verify that note pitches and timing match the intended melody.
-- **Check model precision**: If using INT8, try FP16 for higher quality.
+- **Check model precision**: If using INT8 or FP16, try FP32 for higher quality.
 - **Increase diffusion steps**: More steps = better quality (try 32 or 48 for export).
 
 ### What hardware do I need?

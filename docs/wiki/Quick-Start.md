@@ -22,12 +22,12 @@ You must select a **model precision** before downloading. This determines the ba
 
 | Precision | Best For | Quality | VRAM Usage |
 |-----------|----------|---------|------------|
-| **FP16** (recommended) | Discrete GPU users (4GB+ VRAM) | Best | High |
-| **FP32** | High-end discrete GPU (8GB+ VRAM) | Highest | Very High |
-| **INT8** | Integrated GPU or low VRAM (<2GB) | Slight loss | Low |
+| **FP32** (recommended) | Discrete GPU users (4GB+ VRAM) | Highest | Very High |
+| **FP16** | Integrated GPU or moderate VRAM | Slight loss | High |
+| **INT8** | Low VRAM (<2GB) | Loss | Low |
 | **INT8-NPU** | NPU hardware users | Slight loss | Low |
 
-**If you are unsure, choose FP16.** Different precisions can coexist — you can switch later in Settings without re-downloading.
+**If you are unsure, choose FP32** for the best quality. Different precisions can coexist — you can switch later in Settings without re-downloading.
 
 ### Starting the Download
 

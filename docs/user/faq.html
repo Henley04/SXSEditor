@@ -145,14 +145,14 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td><span data-lang="en">Discrete GPU, 4GB+ VRAM</span><span data-lang="zh">独立显卡，4GB+ 显存</span></td><td><span data-lang="en">FP16</span><span data-lang="zh">FP16</span></td></tr>
+          <tr><td><span data-lang="en">Discrete GPU, 4GB+ VRAM</span><span data-lang="zh">独立显卡，4GB+ 显存</span></td><td><span data-lang="en">FP32 (recommended, highest quality)</span><span data-lang="zh">FP32（推荐，最高音质）</span></td></tr>
           <tr><td><span data-lang="en">Discrete GPU, 8GB+ VRAM</span><span data-lang="zh">独立显卡，8GB+ 显存</span></td><td><span data-lang="en">FP32 (highest quality)</span><span data-lang="zh">FP32（最高音质）</span></td></tr>
-          <tr><td><span data-lang="en">Integrated GPU / low VRAM</span><span data-lang="zh">集成显卡 / 低显存</span></td><td><span data-lang="en">INT8</span><span data-lang="zh">INT8</span></td></tr>
+          <tr><td><span data-lang="en">Integrated GPU / low VRAM</span><span data-lang="zh">集成显卡 / 低显存</span></td><td><span data-lang="en">FP16 or INT8</span><span data-lang="zh">FP16 或 INT8</span></td></tr>
           <tr><td><span data-lang="en">NPU hardware</span><span data-lang="zh">NPU 硬件</span></td><td><span data-lang="en">INT8-NPU</span><span data-lang="zh">INT8-NPU</span></td></tr>
         </tbody>
       </table>
-      <p data-lang="en">If unsure, start with <strong>FP16</strong>. You can switch later without re-downloading.</p>
-      <p data-lang="zh">如不确定，请先选 <strong>FP16</strong>。之后可切换而无需重新下载。</p>
+      <p data-lang="en">If unsure, start with <strong>FP32</strong> for the best quality. You can switch later without re-downloading.</p>
+      <p data-lang="zh">如不确定，请先选 <strong>FP32</strong> 以获得最佳音质。之后可切换而无需重新下载。</p>
 
       <h3>
         <span data-lang="en">Can I use custom models?</span>
@@ -299,7 +299,7 @@
         <li><span data-lang="en"><strong>Check the reference audio</strong>: Ensure it contains pure vocals with no background music or effects.</span><span data-lang="zh"><strong>检查参考音频</strong>：确保为纯人声，无背景音乐或效果。</span></li>
         <li><span data-lang="en"><strong>Check lyrics</strong>: Make sure every note has the correct lyric. Missing or wrong lyrics cause phoneme errors.</span><span data-lang="zh"><strong>检查歌词</strong>：确保每个音符都有正确歌词。缺失或错误歌词会导致音素错误。</span></li>
         <li><span data-lang="en"><strong>Check MIDI notes</strong>: Verify that note pitches and timing match the intended melody.</span><span data-lang="zh"><strong>检查 MIDI 音符</strong>：确认音高和时序与预期旋律一致。</span></li>
-        <li><span data-lang="en"><strong>Check model precision</strong>: If using INT8, try FP16 for higher quality.</span><span data-lang="zh"><strong>检查模型精度</strong>：如使用 INT8，可尝试 FP16 以获得更高音质。</span></li>
+        <li><span data-lang="en"><strong>Check model precision</strong>: If using INT8 or FP16, try FP32 for higher quality.</span><span data-lang="zh"><strong>检查模型精度</strong>：如使用 INT8 或 FP16，可尝试 FP32 以获得更高音质。</span></li>
         <li><span data-lang="en"><strong>Increase diffusion steps</strong>: More steps = better quality (try 32 or 48 for export).</span><span data-lang="zh"><strong>增加扩散步数</strong>：更多步数 = 更高音质（导出可尝试 32 或 48 步）。</span></li>
       </ul>
 
