@@ -31,6 +31,8 @@ Smart model download: automatically detects whether the remote ModelScope repo s
 
 MIDI import: standards-compliant MIDI file parsing (format 0/1/2, SMPTE time division, multi-track) via `@tonejs/midi`. Drum tracks (channel 10) are filtered out automatically. The main window's "Import MIDI" button supports multi-track files — each non-drum track creates an independent singer track. The Fragment Editor and Audio Preprocessing window import by merging all non-drum tracks onto a single timeline.
 
+Fragment Editor draggable playhead: click or drag the playhead (or the header timeline) to set a custom playback start position — playback begins from that offset instead of always from zero. Dragging during playback seeks to the new position without re-synthesizing. A client-side signature cache reuses the previously synthesized audio whenever notes and inference options are unchanged, so different start positions play instantly.
+
 - [Website](https://henley04.github.io/SXSEditor/)
 - [User Docs](https://henley04.github.io/SXSEditor/user/quick-start.html)
 - [Developer Docs](https://henley04.github.io/SXSEditor/dev/build.html)
@@ -56,6 +58,8 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 智能模型下载：自动检测远程 ModelScope 仓库的权重是分开存储（onnx + data）还是单 onnx 文件，当检测到 data 时连带下载。远程文件列表递归获取，确保子目录（`preprocess/`、`basic_pitch_model/`）下的必需文件被纳入下载。
 
 MIDI 导入：基于 `@tonejs/midi` 的标准 MIDI 文件解析（支持格式 0/1/2、SMPTE 时间格式、多轨）。鼓轨（channel 10）自动过滤。主页面"导入MIDI"按钮支持多轨文件——每个非鼓轨道创建一个独立歌手轨道；分片编辑器与音频预处理窗口的导入将所有非鼓轨道合并为单时间线。
+
+分片编辑器可拖动播放进度条：点击或拖拽播放头（或顶部时间轴）可设置自定义播放起始位置，播放将从该位置开始而非从头开始。播放中拖拽进度条会跳转到新位置且不重新合成。客户端签名缓存会在 notes 与推理选项未变化时直接复用已合成的音频，因此不同起始位置均可秒播。
 
 ORT 高级设置：设置界面新增"ORT 高级设置"区域，暴露 ONNX Runtime session 选项（enableMemPattern、enableCpuMemArena、graphOptimizationLevel、executionMode、intra/interOpNumThreads、logSeverityLevel）。默认值遵循项目经验：DML 路径下 enableMemPattern 默认关闭（防止 DirectML 过度预分配 GPU 内存池）；CPU/WASM 路径默认开启。高级选项（如强制在 DML 启用 memPattern、verbose 日志）默认折叠并标记为"高风险"。
 
@@ -84,6 +88,8 @@ SXSEditor は歌声合成のためのオープンソースデスクトップア�
 スマートモデルダウンロード：リモート ModelScope リポジトリの重みが分割保存（onnx + data）か単体 onnx かを自動検出し、data が存在する場合は一緒にダウンロードします。リモートファイルリストは再帰的に取得され、サブディレクトリ（`preprocess/`、`basic_pitch_model/`）内の必須ファイルも確実にダウンロード対象に含めます。
 
 MIDI インポート：`@tonejs/midi` による標準 MIDI ファイル解析（フォーマット 0/1/2、SMPTE タイムディビジョン、マルチトラック対応）。ドラムトラック（channel 10）は自動フィルタリングされます。メインウィンドウの「MIDIインポート」ボタンはマルチトラックファイルに対応——ドラム以外の各トラックが独立した歌手トラックとして作成されます。フラグメントエディタとオーディオ前処理ウィンドウのインポートはドラム以外の全トラックを単一タイムラインにマージします。
+
+フラグメントエディタのドラッグ可能再生ヘッド：再生ヘッド（または上部タイムライン）をクリックまたはドラッグしてカスタム再生開始位置を設定できます。再生は先頭からではなくそのオフセットから開始します。再生中のドラッグは再合成なしで新しい位置にシークします。クライアント側の署名キャッシュは、ノートと推論オプションが変更されていない場合に以前に合成されたオーディオを再利用するため、異なる開始位置でも瞬時に再生できます。
 
 - [ウェブサイト](https://henley04.github.io/SXSEditor/)
 - [ユーザードキュメント](https://henley04.github.io/SXSEditor/user/quick-start.html)
