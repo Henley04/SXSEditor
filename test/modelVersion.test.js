@@ -342,11 +342,12 @@ describe('Model Version Management', () => {
       expect(result.latestVersion).to.equal('v2');
     });
 
-    it('should keep updateAvailable=true even if network fails (legacy always needs update)', async () => {
+    it('should NOT flag update if network fails and latestVersion is null (v0/null = no real update)', async () => {
       httpsStub = stubModelScopeNetworkError('ECONNREFUSED');
       const result = await checkModelVersion(tmpDir, 'fp16');
-      expect(result.updateAvailable).to.be.true;
+      expect(result.updateAvailable).to.be.false;
       expect(result.latestVersion).to.be.null;
+      expect(result.isLatestV0OrNull).to.be.true;
     });
 
     it('should flag updateAvailable when only one remote tag exists', async () => {
@@ -354,6 +355,22 @@ describe('Model Version Management', () => {
       const result = await checkModelVersion(tmpDir, 'fp16');
       expect(result.updateAvailable).to.be.true;
       expect(result.latestVersion).to.equal('v1');
+    });
+
+    it('should NOT flag update when remote latest is v0 (v0 = legacy content)', async () => {
+      httpsStub = stubModelScopeTags(['v0']);
+      const result = await checkModelVersion(tmpDir, 'fp16');
+      expect(result.updateAvailable).to.be.false;
+      expect(result.latestVersion).to.equal('v0');
+      expect(result.isLatestV0OrNull).to.be.true;
+    });
+
+    it('should NOT flag update when remote returns no tags', async () => {
+      httpsStub = stubModelScopeTags([]);
+      const result = await checkModelVersion(tmpDir, 'fp16');
+      expect(result.updateAvailable).to.be.false;
+      expect(result.latestVersion).to.be.null;
+      expect(result.isLatestV0OrNull).to.be.true;
     });
   });
 
@@ -472,11 +489,12 @@ describe('Model Version Management', () => {
       expect(result.latestVersion).to.equal('v2');
     });
 
-    it('should keep updateAvailable=true on network failure (legacy)', async () => {
+    it('should NOT flag update on network failure (v0/null = no real update)', async () => {
       httpsStub = stubModelScopeNetworkError('fail');
       const result = await checkJpModelVersion(tmpDir, 'fp16');
-      expect(result.updateAvailable).to.be.true;
+      expect(result.updateAvailable).to.be.false;
       expect(result.latestVersion).to.be.null;
+      expect(result.isLatestV0OrNull).to.be.true;
     });
 
     it('should not flag update when JP tag is current', async () => {
@@ -511,11 +529,12 @@ describe('Model Version Management', () => {
       expect(result.latestVersion).to.equal('v2');
     });
 
-    it('should keep updateAvailable=true on network failure (legacy)', async () => {
+    it('should NOT flag update on network failure (v0/null = no real update)', async () => {
       httpsStub = stubModelScopeNetworkError('fail');
       const result = await checkSifiganVersion(tmpDir);
-      expect(result.updateAvailable).to.be.true;
+      expect(result.updateAvailable).to.be.false;
       expect(result.latestVersion).to.be.null;
+      expect(result.isLatestV0OrNull).to.be.true;
     });
 
     it('should not flag update when SiFiGAN tag is current', async () => {
