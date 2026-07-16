@@ -352,6 +352,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
     dontRemind: () => ipcRenderer.invoke('update:dont-remind'),
     openDownloadPage: (url) => ipcRenderer.invoke('update:open-download-page', url),
     openModelDownload: () => ipcRenderer.invoke('update:open-model-download'),
+    // In-app installer download
+    downloadInstaller: (url, version) => ipcRenderer.invoke('update:download-installer', { url, version }),
+    cancelDownload: () => ipcRenderer.invoke('update:cancel-download'),
+    installInstaller: (filePath) => ipcRenderer.invoke('update:install-installer', { filePath }),
+    onDownloadProgress: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('update:download-progress', handler);
+      return () => ipcRenderer.removeListener('update:download-progress', handler);
+    },
+    onDownloadComplete: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('update:download-complete', handler);
+      return () => ipcRenderer.removeListener('update:download-complete', handler);
+    },
+    onDownloadError: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('update:download-error', handler);
+      return () => ipcRenderer.removeListener('update:download-error', handler);
+    },
     onNotificationShow: (callback) => {
       const handler = (event, data) => callback(data);
       ipcRenderer.on('update:notification-show', handler);

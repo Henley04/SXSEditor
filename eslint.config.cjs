@@ -113,6 +113,8 @@ module.exports = [
                 RESOURCE_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
                 SPLASH_WINDOW_WEBPACK_ENTRY: 'readonly',
                 SPLASH_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
+                UPDATE_NOTIFICATION_WINDOW_WEBPACK_ENTRY: 'readonly',
+                UPDATE_NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
             },
         },
     },
@@ -135,6 +137,7 @@ module.exports = [
             'src/alertDialog.js',
             'src/splash.js',
             'src/splashPreload.js',
+            'src/updateNotification.js',
             // 这些文件使用 ESM export 语法，但被主进程 require（webpack interop）
             'src/audio/wavEncoder.js',
             'src/utils/escapeHtml.js',

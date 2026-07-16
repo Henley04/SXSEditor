@@ -1,6 +1,6 @@
 import './common.css';
 import './updateNotification.css';
-import { t, initI18n, applyLocale } from './i18n/index.js';
+import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { initWindowTheme } from './themes/themeInit.js';
 
 // Cached result so button handlers can access data.app.downloadUrl / latestVersion
@@ -35,6 +35,18 @@ function renderReleaseNotesLink(el, url) {
       window.electronAPI.updateAPI.openDownloadPage(url);
     });
   }
+}
+
+function formatBytes(n) {
+  if (!n || n < 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 function render(data) {
@@ -149,6 +161,31 @@ function updateActionButtons(app, models) {
   dontRemindBtn.hidden = !hasAppUpdate;
 }
 
+function showDownloadProgress() {
+  document.getElementById('downloadProgressContainer').classList.remove('hidden');
+  document.getElementById('updateNowBtn').hidden = true;
+  document.getElementById('skipVersionBtn').hidden = true;
+  document.getElementById('dontRemindBtn').hidden = true;
+  document.getElementById('progressBar').style.width = '0%';
+  document.getElementById('downloadSize').textContent = '0%';
+  document.getElementById('downloadStatus').textContent = t('update.downloading');
+}
+
+function hideDownloadProgress() {
+  document.getElementById('downloadProgressContainer').classList.add('hidden');
+}
+
+function setProgress(percent, received, total) {
+  const pct = Math.max(0, Math.min(100, percent || 0));
+  document.getElementById('progressBar').style.width = `${pct.toFixed(1)}%`;
+  const sizeEl = document.getElementById('downloadSize');
+  if (total > 0) {
+    sizeEl.textContent = `${pct.toFixed(1)}% (${formatBytes(received)} / ${formatBytes(total)})`;
+  } else {
+    sizeEl.textContent = `${formatBytes(received)}`;
+  }
+}
+
 let toastTimer = null;
 function showToast(msg) {
   const toast = document.getElementById('toast');
@@ -160,16 +197,97 @@ function showToast(msg) {
   }, 4000);
 }
 
-function wireButtons() {
+function wireDownloadHandlers() {
+  const api = window.electronAPI && window.electronAPI.updateAPI;
+  if (!api) return;
+
+  // Replace the original "Update Now" behavior: instead of opening the
+  // browser to GitHub, start an in-app download with a progress bar.
   document.getElementById('updateNowBtn').addEventListener('click', async () => {
-    const url = currentData && currentData.app && currentData.app.downloadUrl;
+    const app = currentData && currentData.app;
+    if (!app || !app.downloadUrl) {
+      showToast(t('update.networkError'));
+      return;
+    }
+    showDownloadProgress();
     try {
-      await window.electronAPI.updateAPI.openDownloadPage(url);
-      showToast(t('update.openBrowserHint'));
+      const result = await api.downloadInstaller(app.downloadUrl, app.latestVersion);
+      // Success: the 'download-complete' event handler will trigger the installer.
+      // If the IPC returns success:false without an event (rare), surface the error.
+      if (result && result.success === false && result.error !== 'cancelled') {
+        hideDownloadProgress();
+        document.getElementById('updateNowBtn').hidden = false;
+        const msg = result.error === 'download_in_progress'
+          ? t('update.downloadInProgress')
+          : t('update.downloadFailed');
+        showToast(msg);
+      }
     } catch (err) {
-      console.error('[UpdateNotification] openDownloadPage failed:', err);
+      console.error('[UpdateNotification] downloadInstaller failed:', err);
+      hideDownloadProgress();
+      document.getElementById('updateNowBtn').hidden = false;
+      showToast(t('update.downloadFailed'));
     }
   });
+
+  document.getElementById('cancelDownloadBtn').addEventListener('click', async () => {
+    try {
+      await api.cancelDownload();
+    } catch (err) {
+      console.error('[UpdateNotification] cancelDownload failed:', err);
+    }
+    hideDownloadProgress();
+    const app = currentData && currentData.app;
+    if (app && app.updateAvailable && !app.error) {
+      document.getElementById('updateNowBtn').hidden = false;
+      document.getElementById('skipVersionBtn').hidden = false;
+      document.getElementById('dontRemindBtn').hidden = false;
+    }
+    showToast(t('update.downloadCancelled'));
+  });
+
+  // Main process pushes progress updates while the installer downloads.
+  api.onDownloadProgress((data) => {
+    setProgress(data.percent, data.received, data.total);
+  });
+
+  // When the download completes, automatically launch the installer.
+  // The main process spawns the installer detached and quits the app.
+  api.onDownloadComplete(async (data) => {
+    setProgress(100, data.size, data.size);
+    document.getElementById('downloadStatus').textContent = t('update.downloadComplete');
+    document.getElementById('cancelDownloadBtn').disabled = true;
+    try {
+      const res = await api.installInstaller(data.filePath);
+      if (res && res.success === false) {
+        document.getElementById('downloadStatus').textContent = t('update.installFailed');
+        document.getElementById('cancelDownloadBtn').disabled = false;
+        showToast(t('update.installFailed'));
+      } else {
+        // App will quit shortly; show a transient status.
+        document.getElementById('downloadStatus').textContent = t('update.startingInstaller');
+      }
+    } catch (err) {
+      console.error('[UpdateNotification] installInstaller failed:', err);
+      document.getElementById('downloadStatus').textContent = t('update.installFailed');
+      document.getElementById('cancelDownloadBtn').disabled = false;
+      showToast(t('update.installFailed'));
+    }
+  });
+
+  // Surface download errors (non-cancel) with a toast and reset the UI.
+  api.onDownloadError((data) => {
+    console.error('[UpdateNotification] download error:', data && data.error);
+    hideDownloadProgress();
+    document.getElementById('updateNowBtn').hidden = false;
+    document.getElementById('skipVersionBtn').hidden = false;
+    document.getElementById('dontRemindBtn').hidden = false;
+    showToast(t('update.downloadFailed'));
+  });
+}
+
+function wireButtons() {
+  wireDownloadHandlers();
 
   document.getElementById('openModelDownloadBtn').addEventListener('click', async () => {
     try {
