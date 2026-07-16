@@ -29,6 +29,8 @@ Supported singing languages: **English**, **Chinese (Mandarin)**, and **Japanese
 
 Smart model download: automatically detects whether the remote ModelScope repo stores weights as split `onnx + data` or a single `onnx` file, and downloads external data alongside when present. The remote file list is fetched recursively so required files in subdirectories (`preprocess/`, `basic_pitch_model/`) are included.
 
+MIDI import: standards-compliant MIDI file parsing (format 0/1/2, SMPTE time division, multi-track) via `@tonejs/midi`. Drum tracks (channel 10) are filtered out automatically. The main window's "Import MIDI" button supports multi-track files — each non-drum track creates an independent singer track. The Fragment Editor and Audio Preprocessing window import by merging all non-drum tracks onto a single timeline.
+
 - [Website](https://henley04.github.io/SXSEditor/)
 - [User Docs](https://henley04.github.io/SXSEditor/user/quick-start.html)
 - [Developer Docs](https://henley04.github.io/SXSEditor/dev/build.html)
@@ -53,6 +55,8 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 
 智能模型下载：自动检测远程 ModelScope 仓库的权重是分开存储（onnx + data）还是单 onnx 文件，当检测到 data 时连带下载。远程文件列表递归获取，确保子目录（`preprocess/`、`basic_pitch_model/`）下的必需文件被纳入下载。
 
+MIDI 导入：基于 `@tonejs/midi` 的标准 MIDI 文件解析（支持格式 0/1/2、SMPTE 时间格式、多轨）。鼓轨（channel 10）自动过滤。主页面"导入MIDI"按钮支持多轨文件——每个非鼓轨道创建一个独立歌手轨道；分片编辑器与音频预处理窗口的导入将所有非鼓轨道合并为单时间线。
+
 - [官网](https://henley04.github.io/SXSEditor/)
 - [用户文档](https://henley04.github.io/SXSEditor/user/quick-start.html)
 - [开发者文档](https://henley04.github.io/SXSEditor/dev/build.html)
@@ -76,6 +80,8 @@ SXSEditor は歌声合成のためのオープンソースデスクトップア�
 対応言語：**中国語（普通話）**、**英語**、**日本語**。
 
 スマートモデルダウンロード：リモート ModelScope リポジトリの重みが分割保存（onnx + data）か単体 onnx かを自動検出し、data が存在する場合は一緒にダウンロードします。リモートファイルリストは再帰的に取得され、サブディレクトリ（`preprocess/`、`basic_pitch_model/`）内の必須ファイルも確実にダウンロード対象に含めます。
+
+MIDI インポート：`@tonejs/midi` による標準 MIDI ファイル解析（フォーマット 0/1/2、SMPTE タイムディビジョン、マルチトラック対応）。ドラムトラック（channel 10）は自動フィルタリングされます。メインウィンドウの「MIDIインポート」ボタンはマルチトラックファイルに対応——ドラム以外の各トラックが独立した歌手トラックとして作成されます。フラグメントエディタとオーディオ前処理ウィンドウのインポートはドラム以外の全トラックを単一タイムラインにマージします。
 
 - [ウェブサイト](https://henley04.github.io/SXSEditor/)
 - [ユーザードキュメント](https://henley04.github.io/SXSEditor/user/quick-start.html)

@@ -69,6 +69,7 @@
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "@tonejs/midi": "^2.0.28",
     "decibri": "^5.0.0",
     "onnxruntime-node": "^1.27.0",
     "onnxruntime-web": "^1.27.0",

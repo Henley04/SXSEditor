@@ -3,7 +3,7 @@ import { PIANO_KEY_WIDTH, BEAT_WIDTH, BPM, HEADER_HEIGHT, NOTE_HEIGHT } from './
 import { drawWaveformWithPlayhead } from './canvasRenderer.js';
 import { togglePlayback, startPlayback, stopPlayback } from './playback.js';
 import { extractF0AndPitch } from './f0Extraction.js';
-import { extractF0BasicPitch } from './midiExtraction.js';
+import { extractF0BasicPitch, importMidiFile } from './midiExtraction.js';
 import { saveSingerData } from './uiControls.js';
 
 export function setupEventHandlers() {
@@ -19,6 +19,9 @@ export function setupEventHandlers() {
   dom.btnPlayPause.addEventListener('click', togglePlayback);
   dom.btnExtractF0.addEventListener('click', extractF0AndPitch);
   dom.btnExtractF0BasicPitch.addEventListener('click', extractF0BasicPitch);
+  if (dom.btnImportMidi) {
+    dom.btnImportMidi.addEventListener('click', importMidiFile);
+  }
   dom.btnSave.addEventListener('click', saveSingerData);
   dom.btnBack.addEventListener('click', () => {
     stopPlayback();

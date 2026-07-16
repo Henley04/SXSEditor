@@ -8,7 +8,7 @@ import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSin
 import { playAll, pausePlayback, stopPlayback, exportAll } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll } from './timelineRenderer.js';
-import { openFragmentEditor, finishDrag, handleAudioToMidi } from './fragmentOperations.js';
+import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 
 // Click-vs-drag tracking for fragment selection
@@ -72,6 +72,9 @@ dom.btnAddSinger.addEventListener('click', () => {
 
 // Audio to MIDI
 dom.btnAudioToMidi.addEventListener('click', handleAudioToMidi);
+
+// Import MIDI file (multi-track → one singer per track)
+dom.btnImportMidi.addEventListener('click', handleImportMidi);
 
 // Fragment canvas mouse events
 dom.fragmentCanvas.addEventListener('mousedown', (e) => {

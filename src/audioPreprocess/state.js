@@ -33,6 +33,7 @@ const dom = {
   btnPlayPause: null,
   btnExtractF0: null,
   btnExtractF0BasicPitch: null,
+  btnImportMidi: null,
   btnSave: null,
   btnBack: null,
   wavFileNameEl: null,
@@ -48,6 +49,7 @@ export function initDomRefs() {
   dom.btnPlayPause = document.getElementById('btn-play-pause');
   dom.btnExtractF0 = document.getElementById('btn-extract-f0');
   dom.btnExtractF0BasicPitch = document.getElementById('btn-extract-f0-basic-pitch');
+  dom.btnImportMidi = document.getElementById('btn-import-midi');
   dom.btnSave = document.getElementById('btn-save');
   dom.btnBack = document.getElementById('btn-back');
   dom.wavFileNameEl = document.getElementById('wav-file-name');

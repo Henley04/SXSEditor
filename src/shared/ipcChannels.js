@@ -55,6 +55,7 @@ const IPC_CHANNELS = {
   EXTRACT_MIDI_ROSVOT: 'extractMidi:rosvot',
   EXTRACT_F0_BASIC_PITCH: 'extractF0:basicPitch',
   MIDI_IMPORT: 'midi:import',
+  MIDI_IMPORT_MULTI_TRACK: 'midi:importMultiTrack',
 
   // ==================== Path Utilities ====================
   RESOLVE_PATH: 'resolvePath',

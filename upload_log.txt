@@ -1,0 +1,19 @@
+﻿python : 2026-07-16 10:22:05,295 [INFO] Logging in to ModelScope...
+At line:15 char:3980
++ ... NIOENCODING='utf-8'; python upload_fp16_to_modelscope.py 2>&1 | Tee-O ...
++                          ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (2026-07-16 10:2...o ModelScope...:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+2026-07-16 10:22:05,826 [INFO] Login successful, git_token: TsMPwHvbTxLapLJHDcEv
+2026-07-16 10:22:05,826 [INFO]   diff_step_dml.onnx: 2.3 MB
+2026-07-16 10:22:05,826 [INFO]   diff_step_dml.onnx.data: 844.1 MB
+2026-07-16 10:22:05,826 [INFO]   vocoder_dml.onnx: 494.3 MB
+2026-07-16 10:22:06,127 [INFO] Current branches: ['master']
+2026-07-16 10:22:06,127 [INFO] Current tags: ['v0']
+2026-07-16 10:22:06,127 [INFO] 
+Step 1: Creating branch 'release' via push_model...
+2026-07-16 10:22:06,679 - modelscope - INFO - Pushing folder D:\Document\electron\SXSEditor\_ms_temp_push as model syxp
+pp/SoulX-Singer-onnx-directml-fp16.
+2026-07-16 10:22:06,679 - modelscope - INFO - Total folder size 49.0 B, this may take a while depending on actual pushi
+ng size...

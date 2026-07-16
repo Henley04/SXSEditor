@@ -4,6 +4,53 @@ import { t } from '../i18n/index.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { buildSingerFields, showLoading, hideLoading, updateMidiInfo } from './uiControls.js';
 
+export async function importMidiFile() {
+  try {
+    const result = await window.electronAPI.importMidi();
+    if (!result.success) {
+      if (!result.canceled) {
+        showAlertDialog(t('preprocess.midiImportFailed') + ': ' + (result.error || t('preprocess.extractionFailed')));
+      }
+      return;
+    }
+
+    const notes = (result.notes || []).map((n, i) => ({
+      id: n.id ?? (Date.now() + i),
+      pitch: n.pitch ?? 60,
+      start: n.start ?? 0,
+      duration: n.duration ?? 0.25,
+      lyric: n.lyric || '',
+      noteType: n.noteType,
+    }));
+
+    if (state.pianoRoll) {
+      state.pianoRoll.notes = notes;
+      state.pianoRoll._staticCacheDirty = true;
+      state.pianoRoll.render();
+      updateMidiInfo();
+    }
+
+    const fields = buildSingerFields(notes);
+    state.singerData = {
+      index: `vocal_${Math.floor(state.wavDuration * 1000)}`,
+      language: 'Mandarin',
+      time: [0, Math.floor(state.wavDuration * 1000)],
+      duration: notes.map((n) => (n.duration * (60 / BPM)).toFixed(2)).join(' '),
+      text: fields.text,
+      phoneme: fields.phoneme,
+      note_pitch: notes.map((n) => n.pitch).join(' '),
+      note_type: fields.note_type,
+      f0: (state.f0Data || []).map((f) => f.f0.toFixed(1)).join(' '),
+    };
+
+    updateMidiInfo();
+    showAlertDialog(t('preprocess.midiImportComplete'));
+  } catch (err) {
+    console.error('MIDI import failed:', err);
+    showAlertDialog(t('preprocess.midiImportFailed') + ': ' + err.message);
+  }
+}
+
 export async function extractF0BasicPitch() {
   if (!state.wavAudioBuffer) {
     showAlertDialog(t('preprocess.pleaseLoadAudio'));
