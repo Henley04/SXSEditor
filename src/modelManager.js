@@ -231,10 +231,12 @@ async function listModelFiles(modelId, revision) {
   if (files && files.size > 0) return files;
   // 2. 回退 master（仅当 revision 本身不是 master 时）
   if (revision !== 'master') {
+    console.warn(`[ModelManager] Remote file list for revision "${revision}" empty/unavailable (${modelId}), falling back to master branch`);
     try { files = await fetch('master'); } catch (_) { files = null; }
     if (files && files.size > 0) return files;
   }
-  // 3. 无法确定
+  // 3. 无法确定 —— 调用方将回退到本地硬编码清单
+  console.warn(`[ModelManager] Remote file list unavailable for ${modelId} (revision "${revision}" and master both empty), falling back to local manifest`);
   return null;
 }
 
@@ -281,13 +283,22 @@ async function filterMissingByRemote(missingFiles, modelDir, precision, revision
 
   // 两个列表都拿不到 → 回退到原清单
   if (!svsSet && !auxSet) {
-    console.log('[ModelManager] Remote file list unavailable, using manifest as-is');
+    console.warn('[ModelManager] Remote file list unavailable for both SVS and aux repos, falling back to local manifest as-is');
     return missingFiles;
   }
 
   // 阶段 1：过滤掉远程不存在的文件
   const filtered = [];
   const skipped = [];
+  // 预先检测单仓库回退场景（避免在循环内重复打印 warn）
+  const hasSvsFiles = missingFiles.some(f => isSvsModelFile(f.filePath));
+  const hasAuxFiles = missingFiles.some(f => !isSvsModelFile(f.filePath));
+  if (hasSvsFiles && !svsSet) {
+    console.warn(`[ModelManager] SVS remote file list unavailable (${svsModelId}), keeping SVS files from manifest without filtering`);
+  }
+  if (hasAuxFiles && !auxSet) {
+    console.warn(`[ModelManager] Aux remote file list unavailable (${auxModelId}), keeping aux files from manifest without filtering`);
+  }
   for (const file of missingFiles) {
     const isSvs = isSvsModelFile(file.filePath);
     const remoteSet = isSvs ? svsSet : auxSet;
