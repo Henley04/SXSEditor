@@ -1,6 +1,7 @@
 const path = require('node:path');
 const ort = require('onnxruntime-node');
 const { resampleAudio } = require('../utils/resampleAudio');
+const { buildSessionOptions } = require('./shared/ortOptions');
 
 let _noteIdCounter = 0;
 
@@ -54,9 +55,9 @@ class RosvotDetector {
 
     try {
       // RosVot 模型包含 ConvTranspose 等不兼容 DML 的算子，直接使用 CPU
-      const sessionOptions = {
+      const sessionOptions = buildSessionOptions({
         executionProviders: ['cpu'],
-      };
+      });
       this.session = await ort.InferenceSession.create(modelPath, sessionOptions);
       this.usingDML = false;
       console.log('[RosvotDetector] model loaded successfully [CPU] (ConvTranspose incompatible with DML)');
@@ -195,9 +196,8 @@ class RosvotDetector {
         this.usingDML = false;
 
         const modelPath = path.join(this.modelDir, 'preprocess', 'rosvot_model.onnx');
-        this.session = await ort.InferenceSession.create(modelPath, {
-          executionProviders: ['cpu'],
-        });
+        this.session = await ort.InferenceSession.create(modelPath,
+          buildSessionOptions({ executionProviders: ['cpu'] }));
         console.log('[RosvotDetector] fell back to CPU inference');
         results = await this.session.run(feeds);
       } else {

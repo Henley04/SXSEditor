@@ -6,6 +6,7 @@ require('./float16Patch');
 
 const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
+const { buildSessionOptions } = require('../shared/ortOptions');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
@@ -963,7 +964,8 @@ class OnnxSVSPipeline {
     async _detectModelPrecision(resolvedModelFiles) {
         try {
             const probeModelPath = path.join(this.modelDir, resolvedModelFiles[4]); // preflow (~8MB)
-            const probeSession = await require('onnxruntime-node').InferenceSession.create(probeModelPath, { executionProviders: ['cpu'] });
+            const probeSession = await require('onnxruntime-node').InferenceSession.create(probeModelPath,
+                buildSessionOptions({ executionProviders: ['cpu'] }));
             const probeInputType = probeSession.inputMetadata[0]?.type;
             this.isFP16 = probeInputType === 'float16';
             await probeSession.release();
@@ -1158,18 +1160,15 @@ class OnnxSVSPipeline {
                 ? { name: 'dml', deviceId: this.dmlDeviceId }
                 : 'dml';
             try {
-                const session = await ort.InferenceSession.create(vocPath, {
+                const session = await ort.InferenceSession.create(vocPath, buildSessionOptions({
                     executionProviders: [dmlOpts, 'cpu'],
-                    enableMemPattern: false,
-                    executionMode: 'sequential',
-                });
+                }));
                 return { session, ep: 'dml', vocFile };
             } catch (vocErr) {
                 console.warn(`[OnnxSVSPipeline] Vocoder DML load failed (${vocFile}), falling back to CPU: ${vocErr.message}`);
-                const session = await ort.InferenceSession.create(vocPath, {
+                const session = await ort.InferenceSession.create(vocPath, buildSessionOptions({
                     executionProviders: ['cpu'],
-                    executionMode: 'sequential',
-                });
+                }));
                 return { session, ep: 'cpu', vocFile };
             }
         };
