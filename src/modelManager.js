@@ -21,7 +21,7 @@ const MODEL_IDS = {
 const JP_MODEL_IDS = {
   fp16: 'syxppp/SoulX-Singer-onnx-fp16-lora-jp',
 };
-const DEFAULT_PRECISION = 'fp16';
+const DEFAULT_PRECISION = 'fp32';
 const MODELSCOPE_ENDPOINT = 'https://modelscope.cn';
 const TEMP_SUFFIX = '.download';
 const MAX_RETRIES = 3;

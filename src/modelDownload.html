@@ -16,19 +16,19 @@
     <label class="precision-label" data-i18n="modelDownload.precisionLabel">模型精度</label>
     <div class="precision-options">
       <label class="precision-option">
-        <input type="radio" name="modelPrecision" value="fp16" checked>
-        <span class="precision-radio"></span>
-        <span class="precision-text">
-          <span class="precision-name" data-i18n="modelDownload.precisionFp16">FP16 (半精度)</span>
-          <span class="precision-desc" data-i18n="modelDownload.precisionFp16Desc">音质最佳，显存占用较大，推荐独显用户使用</span>
-        </span>
-      </label>
-      <label class="precision-option">
-        <input type="radio" name="modelPrecision" value="fp32">
+        <input type="radio" name="modelPrecision" value="fp32" checked>
         <span class="precision-radio"></span>
         <span class="precision-text">
           <span class="precision-name" data-i18n="modelDownload.precisionFp32">FP32 (全精度)</span>
           <span class="precision-desc" data-i18n="modelDownload.precisionFp32Desc">最高精度，音质最好，显存占用最大，推荐高性能独显用户使用</span>
+        </span>
+      </label>
+      <label class="precision-option">
+        <input type="radio" name="modelPrecision" value="fp16">
+        <span class="precision-radio"></span>
+        <span class="precision-text">
+          <span class="precision-name" data-i18n="modelDownload.precisionFp16">FP16 (半精度)</span>
+          <span class="precision-desc" data-i18n="modelDownload.precisionFp16Desc">音质接近全精度，显存占用适中，推荐独显用户使用</span>
         </span>
       </label>
       <label class="precision-option">

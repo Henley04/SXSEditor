@@ -28,7 +28,7 @@ function _createPipeline(languageOverride) {
   const deviceId = settings.preferredDeviceId ?? settings.deviceId ?? undefined;
   const preferredDeviceType = settings.preferredDeviceType || undefined;
   const modelDeviceMapping = settings.modelDeviceMapping || undefined;
-  const modelPrecision = settings.modelPrecision || 'fp16';
+  const modelPrecision = settings.modelPrecision || 'fp32';
   const inferenceProvider = settings.inferenceProvider || 'ortnode';
   const japaneseVocalization = settings.japaneseVocalization || 'en-phonemes';
 
@@ -139,7 +139,7 @@ function registerSvsIpc() {
     // Check if JP models are needed but missing (only in jp-lora mode)
     if (language === 'ja') {
       const settings = loadSettings();
-      const precision = settings.modelPrecision || 'fp16';
+      const precision = settings.modelPrecision || 'fp32';
       const modelDir = getModelDir();
       if (!checkJpModelsExist(modelDir, precision)) {
         return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
@@ -200,7 +200,7 @@ function registerSvsIpc() {
     // Check if JP models are needed but missing (only in jp-lora mode)
     if (language === 'ja') {
       const settings = loadSettings();
-      const precision = settings.modelPrecision || 'fp16';
+      const precision = settings.modelPrecision || 'fp32';
       const modelDir = getModelDir();
       if (!checkJpModelsExist(modelDir, precision)) {
         return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
@@ -268,7 +268,7 @@ function registerSvsIpc() {
 
   ipcMain.handle('svs:checkJpModels', async () => {
     const settings = loadSettings();
-    const precision = settings.modelPrecision || 'fp16';
+    const precision = settings.modelPrecision || 'fp32';
     const modelDir = getModelDir();
     return checkJpModelsExist(modelDir, precision);
   });

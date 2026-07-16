@@ -12,7 +12,7 @@ let lastOverallDownloaded = 0;
 let lastSpeedTime = 0;
 let isDownloading = false;
 let renderedFileIds = [];
-let currentPrecision = 'fp16';
+let currentPrecision = 'fp32';
 let currentRevision = 'latest'; // selected revision: 'latest' = auto-pick newest tag, or a specific tag (e.g. 'v1')
 let availableTags = []; // tags fetched from ModelScope (branches NOT shown)
 let currentVersionInfo = null; // { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
@@ -387,7 +387,7 @@ window.electronAPI.onModelDownloadMissingFiles((files) => {
 });
 
 window.electronAPI.onModelDownloadPrecision((precision) => {
-  const newPrecision = precision || 'fp16';
+  const newPrecision = precision || 'fp32';
   const changed = newPrecision !== currentPrecision;
   currentPrecision = newPrecision;
   const radio = document.querySelector(`input[name="modelPrecision"][value="${currentPrecision}"]`);
