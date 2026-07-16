@@ -35,6 +35,7 @@ Smart model download: automatically detects whether the remote ModelScope repo s
 - [Application Updates](https://henley04.github.io/SXSEditor/user/app-updates.html)
 - [Model Updates](https://henley04.github.io/SXSEditor/user/model-updates.html)
 - [Help & FAQ](https://henley04.github.io/SXSEditor/user/faq.html)
+- [Uninstall](https://henley04.github.io/SXSEditor/user/uninstall.html)
 
 ### License
 
@@ -58,6 +59,7 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 - [应用更新](https://henley04.github.io/SXSEditor/user/app-updates.html)
 - [模型更新](https://henley04.github.io/SXSEditor/user/model-updates.html)
 - [帮助与常见问题](https://henley04.github.io/SXSEditor/user/faq.html)
+- [卸载](https://henley04.github.io/SXSEditor/user/uninstall.html)
 
 ### 许可证
 
@@ -81,6 +83,7 @@ SXSEditor は歌声合成のためのオープンソースデスクトップア�
 - [アプリケーション更新](https://henley04.github.io/SXSEditor/user/app-updates.html)
 - [モデル更新](https://henley04.github.io/SXSEditor/user/model-updates.html)
 - [ヘルプ & FAQ](https://henley04.github.io/SXSEditor/user/faq.html)
+- [アンインストール](https://henley04.github.io/SXSEditor/user/uninstall.html)
 
 ### ライセンス
 
