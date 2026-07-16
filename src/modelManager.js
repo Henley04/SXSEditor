@@ -212,7 +212,11 @@ function getFileDownloadUrl(filePath, precision, revision) {
 async function listModelFiles(modelId, revision) {
   if (!modelId || !revision) return null;
   const fetch = async (rev) => {
-    const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo/files?Revision=${encodeURIComponent(rev)}`;
+    // Recursive=true is required so subdirectory files (preprocess/*.onnx,
+    // basic_pitch_model/*) are included. Without it ModelScope only returns
+    // root-level blobs, causing required manifest files in subdirectories
+    // to be wrongly skipped by filterMissingByRemote.
+    const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo/files?Revision=${encodeURIComponent(rev)}&Recursive=true`;
     const data = await _fetchModelScopeJson(url);
     if (data && data.Success && data.Data && Array.isArray(data.Data.Files)) {
       const set = new Set();
