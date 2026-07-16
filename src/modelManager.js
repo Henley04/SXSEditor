@@ -410,9 +410,12 @@ function getLocalModelRevision(modelDir, precision) {
 
 /**
  * Check if a model update is available for the given precision.
- * - Legacy models (no version.json or revision='master') are flagged for update.
+ * - Legacy models (no version.json or revision='master') are flagged for
+ *   update as soon as any remote version tag exists. The latest tag is also
+ *   fetched so the UI can display the version the user would update to.
  * - Tag-based installs (e.g. 'v1') are compared against the latest remote tag.
- * - Network failures do NOT flag an update (avoids false positives).
+ * - Network failures do NOT flag an update (avoids false positives), but for
+ *   legacy models the update flag stays true (legacy always needs updating).
  * Returns { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
  */
 async function checkModelVersion(modelDir, precision) {
@@ -425,9 +428,18 @@ async function checkModelVersion(modelDir, precision) {
   let latestVersion = null;
 
   if (hasModelFiles) {
-    if (!localVersion || !localRevision || localRevision === 'master') {
-      // Legacy model: no version info or branch-based install → update available
+    const isLegacy = !localVersion || !localRevision || localRevision === 'master';
+    if (isLegacy) {
+      // Legacy model: always flag for update. Fetch remote tags so the UI
+      // can display the latest version (e.g. 'v2'). If remote tags cannot be
+      // fetched, the update flag stays true (legacy always needs updating).
       updateAvailable = true;
+      try {
+        const tags = await getModelTags(precision);
+        latestVersion = getLatestTag(tags);
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote tags for legacy ${precision}:`, err.message);
+      }
     } else {
       // Specific tag installed → fetch remote tags and compare
       try {
@@ -510,9 +522,18 @@ async function checkJpModelVersion(modelDir, precision) {
   let latestVersion = null;
 
   if (hasModelFiles) {
-    if (!localVersion || !localRevision || localRevision === 'master') {
-      // Legacy model: no version info or branch-based install → update available
+    const isLegacy = !localVersion || !localRevision || localRevision === 'master';
+    if (isLegacy) {
+      // Legacy JP model: always flag for update. Fetch remote tags so the UI
+      // can display the latest version. Network failures do not clear the
+      // update flag (legacy always needs updating).
       updateAvailable = true;
+      try {
+        const tags = await getJpModelTags(precision);
+        latestVersion = getLatestTag(tags);
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote JP tags for legacy ${precision}:`, err.message);
+      }
     } else {
       // Specific tag installed → fetch remote tags and compare
       try {
@@ -600,9 +621,18 @@ async function checkSifiganVersion(modelDir) {
   let latestVersion = null;
 
   if (hasModelFiles) {
-    if (!localVersion || !localRevision || localRevision === 'master') {
-      // Legacy model: no version info or branch-based install → update available
+    const isLegacy = !localVersion || !localRevision || localRevision === 'master';
+    if (isLegacy) {
+      // Legacy SiFiGAN model: always flag for update. Fetch remote tags so
+      // the UI can display the latest version. Network failures do not clear
+      // the update flag (legacy always needs updating).
       updateAvailable = true;
+      try {
+        const tags = await getSifiganTags();
+        latestVersion = getLatestTag(tags);
+      } catch (err) {
+        console.warn(`[ModelManager] Failed to fetch remote SiFiGAN tags for legacy:`, err.message);
+      }
     } else {
       // Specific tag installed → fetch remote tags and compare
       try {
