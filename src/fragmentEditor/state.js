@@ -15,6 +15,12 @@ let fragmentPlaybackOffset = 0;
 let fragmentPlayheadRaf = null;
 let fragmentCurrentTime = 0;
 let fragmentGainNode = null;
+// 用户拖拽 playhead 设置的播放起始位置（秒）。
+// playFragment 时从此位置开始播放；0 表示从头播放。
+let fragmentPlayStartPosition = 0;
+// 上一次合成时 notes 的签名（用于判断 fragmentAudioData 是否可复用）。
+// 当 notes 发生变化时置 null，强制下次 playFragment 重新合成。
+let fragmentAudioDataSignature = null;
 let fragmentUseExclusiveMode = false;
 let fragmentExclusiveRaf = null;
 let fragmentAudioSettings = null;
@@ -148,6 +154,12 @@ export function setFragmentCurrentTime(v) { fragmentCurrentTime = v; }
 
 export function getFragmentGainNode() { return fragmentGainNode; }
 export function setFragmentGainNode(v) { fragmentGainNode = v; }
+
+export function getFragmentPlayStartPosition() { return fragmentPlayStartPosition; }
+export function setFragmentPlayStartPosition(v) { fragmentPlayStartPosition = v; }
+
+export function getFragmentAudioDataSignature() { return fragmentAudioDataSignature; }
+export function setFragmentAudioDataSignature(v) { fragmentAudioDataSignature = v; }
 
 export function getFragmentUseExclusiveMode() { return fragmentUseExclusiveMode; }
 export function setFragmentUseExclusiveMode(v) { fragmentUseExclusiveMode = v; }

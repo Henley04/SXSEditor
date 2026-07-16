@@ -18,6 +18,8 @@ import {
   getFragmentUseExclusiveMode, setFragmentUseExclusiveMode,
   getFragmentExclusiveRaf, setFragmentExclusiveRaf,
   getFragmentAudioSettings, setFragmentAudioSettings,
+  getFragmentPlayStartPosition, setFragmentPlayStartPosition,
+  getFragmentAudioDataSignature, setFragmentAudioDataSignature,
   getPipelineInitialized,
   getWavFileBuffer,
   getCurrentProject,
@@ -163,6 +165,41 @@ export function stopFragmentPlayback() {
   updateFragmentPlayButton();
 }
 
+/**
+ * 播放中拖拽 playhead 时跳转到新位置。
+ * 不重新合成：直接复用已缓存的 fragmentAudioData，从 newStartTime 开始播放。
+ * 需要先停止当前播放（source.stop / audioStop），再用现有 audioData 重启。
+ */
+export async function seekFragmentPlayback(newStartTime) {
+  // 停止当前播放（不重置 playStartPosition）
+  stopStreamingPlayback();
+  const source = getFragmentAudioSource();
+  if (source) {
+    try { source.onended = null; source.stop(); } catch (e) {}
+    setFragmentAudioSource(null);
+  }
+  stopFragmentExclusivePlayback();
+  setFragmentIsPlaying(false);
+  const raf = getFragmentPlayheadRaf();
+  if (raf) {
+    cancelAnimationFrame(raf);
+    setFragmentPlayheadRaf(null);
+  }
+
+  // 设置新的起始位置
+  setFragmentPlayStartPosition(newStartTime);
+
+  // 复用已缓存的 audioData 重启播放
+  const audioData = getFragmentAudioData();
+  if (!audioData || audioData.length === 0) return;
+
+  if (getFragmentUseExclusiveMode()) {
+    await playFragmentExclusive();
+  } else {
+    await playFragmentShared();
+  }
+}
+
 function stopFragmentExclusivePlayback() {
   const raf = getFragmentExclusiveRaf();
   if (raf) {
@@ -188,6 +225,7 @@ export function updateFragmentPlayhead() {
     if (getFragmentCurrentTime() >= duration) {
       stopFragmentPlayback();
       setFragmentCurrentTime(0);
+      setFragmentPlayStartPosition(0);
     }
   }
 
@@ -214,39 +252,45 @@ async function playFragmentShared() {
   const volumeEnv = envelopes.volume;
   const panEnv = envelopes.pan;
 
+  // 播放起始位置（秒），由用户拖拽 playhead 设置
+  const startOffset = Math.min(getFragmentPlayStartPosition(), audioDuration - 0.01);
+
   if (volumeEnv && volumeEnv.keyframes && volumeEnv.keyframes.length > 0) {
     const now = ctx.currentTime;
     const sortedKfs = [...volumeEnv.keyframes].sort((a, b) => a.time - b.time);
-    envGainNode.gain.setValueAtTime(sortedKfs[0].value, now);
+    // 从 startOffset 处的包络值开始
+    const startVal = _interpolateEnvValue(sortedKfs, startOffset);
+    envGainNode.gain.setValueAtTime(startVal, now);
     for (let i = 0; i < sortedKfs.length; i++) {
       const kf = sortedKfs[i];
       const timeSec = (kf.time / bpm) * 60;
-      if (timeSec <= audioDuration) {
-        envGainNode.gain.linearRampToValueAtTime(kf.value, now + timeSec);
+      if (timeSec > startOffset && timeSec <= audioDuration) {
+        envGainNode.gain.linearRampToValueAtTime(kf.value, now + (timeSec - startOffset));
       }
     }
     const lastKf = sortedKfs[sortedKfs.length - 1];
     const lastTimeSec = (lastKf.time / bpm) * 60;
     if (lastTimeSec < audioDuration) {
-      envGainNode.gain.linearRampToValueAtTime(lastKf.value, now + audioDuration);
+      envGainNode.gain.linearRampToValueAtTime(lastKf.value, now + (audioDuration - startOffset));
     }
   }
 
   if (panEnv && panEnv.keyframes && panEnv.keyframes.length > 0) {
     const now = ctx.currentTime;
     const sortedKfs = [...panEnv.keyframes].sort((a, b) => a.time - b.time);
-    panNode.pan.setValueAtTime(sortedKfs[0].value, now);
+    const startVal = _interpolateEnvValue(sortedKfs, startOffset);
+    panNode.pan.setValueAtTime(startVal, now);
     for (let i = 0; i < sortedKfs.length; i++) {
       const kf = sortedKfs[i];
       const timeSec = (kf.time / bpm) * 60;
-      if (timeSec <= audioDuration) {
-        panNode.pan.linearRampToValueAtTime(kf.value, now + timeSec);
+      if (timeSec > startOffset && timeSec <= audioDuration) {
+        panNode.pan.linearRampToValueAtTime(kf.value, now + (timeSec - startOffset));
       }
     }
     const lastKf = sortedKfs[sortedKfs.length - 1];
     const lastTimeSec = (lastKf.time / bpm) * 60;
     if (lastTimeSec < audioDuration) {
-      panNode.pan.linearRampToValueAtTime(lastKf.value, now + audioDuration);
+      panNode.pan.linearRampToValueAtTime(lastKf.value, now + (audioDuration - startOffset));
     }
   }
 
@@ -260,17 +304,37 @@ async function playFragmentShared() {
       setFragmentPlayheadRaf(null);
     }
     setFragmentCurrentTime(0);
+    setFragmentPlayStartPosition(0);
     updateFragmentPlayButton();
     render();
   };
-  source.start();
+  // source.start(when, offset) — offset 是音频缓冲区内的时间偏移
+  source.start(0, Math.max(0, startOffset));
   setFragmentAudioSource(source);
   setFragmentIsPlaying(true);
   setFragmentPlaybackStartTime(ctx.currentTime);
-  setFragmentPlaybackOffset(0);
-  setFragmentCurrentTime(0);
+  setFragmentPlaybackOffset(startOffset);
+  setFragmentCurrentTime(startOffset);
   updateFragmentPlayhead();
   updateFragmentPlayButton();
+}
+
+/**
+ * 线性插值计算 envelope 在指定时间的值（用于播放起始偏移处的包络初始化）。
+ * sortedKfs 必须已按 time 升序排序。time 单位为秒。
+ */
+function _interpolateEnvValue(sortedKfs, timeSec) {
+  if (!sortedKfs || sortedKfs.length === 0) return 1;
+  if (sortedKfs.length === 1) return sortedKfs[0].value;
+  if (timeSec <= sortedKfs[0].time) return sortedKfs[0].value;
+  if (timeSec >= sortedKfs[sortedKfs.length - 1].time) return sortedKfs[sortedKfs.length - 1].value;
+  for (let i = 0; i < sortedKfs.length - 1; i++) {
+    if (timeSec >= sortedKfs[i].time && timeSec <= sortedKfs[i + 1].time) {
+      const t = (timeSec - sortedKfs[i].time) / (sortedKfs[i + 1].time - sortedKfs[i].time);
+      return sortedKfs[i].value + t * (sortedKfs[i + 1].value - sortedKfs[i].value);
+    }
+  }
+  return sortedKfs[sortedKfs.length - 1].value;
 }
 
 async function playFragmentExclusive() {
@@ -279,6 +343,9 @@ async function playFragmentExclusive() {
   try {
     const settings = getFragmentAudioSettings();
     const audioData = getFragmentAudioData();
+    const audioDuration = audioData.length / getSampleRate();
+    // 播放起始位置（秒），由用户拖拽 playhead 设置
+    const startOffset = Math.min(getFragmentPlayStartPosition(), audioDuration - 0.01);
     const options = {
       deviceId: settings?.audioOutputDevice ?? -1,
       sampleRate: settings?.audioSampleRate ?? getSampleRate(),
@@ -287,7 +354,7 @@ async function playFragmentExclusive() {
       bufferSize: settings?.audioBufferSize ?? 1024,
       exclusiveMode: true,
       volume: settings?.audioVolume ?? 1.0,
-      offset: 0,
+      offset: Math.max(0, startOffset),
     };
 
     const result = await window.electronAPI.audioPlay(audioData, options);
@@ -301,8 +368,8 @@ async function playFragmentExclusive() {
 
     setFragmentIsPlaying(true);
     setFragmentPlaybackStartTime(performance.now());
-    setFragmentPlaybackOffset(0);
-    setFragmentCurrentTime(0);
+    setFragmentPlaybackOffset(startOffset);
+    setFragmentCurrentTime(startOffset);
 
     const removeEndedListener = window.electronAPI.onAudioEnded(() => {
       setFragmentIsPlaying(false);
@@ -312,6 +379,7 @@ async function playFragmentExclusive() {
         setFragmentPlayheadRaf(null);
       }
       setFragmentCurrentTime(0);
+      setFragmentPlayStartPosition(0);
       updateFragmentPlayButton();
       render();
     });
@@ -341,6 +409,7 @@ function updateFragmentExclusivePlayhead(removeEndedListener) {
     if (elapsed >= duration) {
       setFragmentIsPlaying(false);
       setFragmentCurrentTime(0);
+      setFragmentPlayStartPosition(0);
       stopFragmentExclusivePlayback();
       const raf = getFragmentPlayheadRaf();
       if (raf) {
@@ -373,6 +442,60 @@ function padAudioToFragmentDuration(audioData) {
   return padded;
 }
 
+/**
+ * 计算当前 fragment 合成输入的签名（notes + 选项）。
+ * 与服务端 computeSynthCacheKey 覆盖的字段一致：notes 内容、bpm、pitchCurveF0、
+ * refAudioWavBuffer 长度、autoShift、nSteps、cfg、cfgRescale、singerId。
+ * 用于判断 fragmentAudioData 是否可复用，避免重复 IPC 合成调用。
+ * 注意：签名不包含 playStartPosition — 起始位置变化不影响音频内容。
+ */
+function _computeFragmentAudioSignature() {
+  const notes = getClippedNotes();
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  const previewOpts = getFragmentPreviewInferenceOptions();
+  const pitchCurveF0 = buildPitchCurveF0Data();
+  const refAudioWavBuffer = getWavFileBuffer();
+  const autoShiftEl = document.getElementById('autoShiftCheck');
+  const autoShift = autoShiftEl ? autoShiftEl.checked : false;
+  const singerId = getCurrentFragment()?.singerId || null;
+
+  // notes hash — 与服务端 computeSynthCacheKey 保持一致的字段拼接
+  let notesHash = 0;
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    let s = `${n.lyric || ''}|${n.pitch}|${n.start}|${n.duration}|${n.isSlur ? 1 : 0}|${n.isContinuation ? 1 : 0}`;
+    if (n.phonemeAdjustments) {
+      for (const adj of n.phonemeAdjustments) {
+        s += `|dr:${adj.durationRatio}|or:${adj.offsetRatio || 0}`;
+        if (adj.volumePoints) {
+          for (const vp of adj.volumePoints) {
+            s += `:${vp.t}:${vp.v}`;
+          }
+        }
+      }
+    }
+    for (let j = 0; j < s.length; j++) {
+      notesHash = ((notesHash << 5) - notesHash + s.charCodeAt(j)) | 0;
+    }
+  }
+
+  // pitchCurveF0 hash
+  let f0Hash = 0;
+  if (pitchCurveF0) {
+    const step = Math.max(1, Math.floor(pitchCurveF0.length / 4000));
+    for (let i = 0; i < pitchCurveF0.length; i += step) {
+      f0Hash = ((f0Hash << 5) - f0Hash + (Math.floor(pitchCurveF0[i] * 1000) | 0)) | 0;
+    }
+  }
+
+  // refAudioWavBuffer hash — 仅用长度，避免对大 buffer 做完整哈希
+  const refHash = refAudioWavBuffer
+    ? (refAudioWavBuffer.byteLength || refAudioWavBuffer.length || 0)
+    : 0;
+
+  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}`;
+}
+
 export async function playFragment() {
   // 重入保护：防止连续调用导致前一次 finally 提前把 fragmentIsSynthesizing
   // 置 false，使后续进度回调失效（进度百分比偶发不显示的根因之一）。
@@ -385,57 +508,77 @@ export async function playFragment() {
   streamingSources = [];
   streamingNextStart = 0;
 
-  // 注册 chunk 监听：vocoder 每完成一个 chunk 即开始播放（边合成边播）
-  // chunk 顺序由 IPC 保证（按发送顺序触发），无需额外排序
-  streamingCleanup = window.electronAPI.onFragmentSVSChunkAudio(async (chunkInfo) => {
-    try {
-      if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
-      if (streamingFinished) return;
-      const ctx = await getFragmentAudioContextInternal();
-      const audioBuffer = ctx.createBuffer(1, chunkInfo.audio.length, getSampleRate());
-      audioBuffer.getChannelData(0).set(chunkInfo.audio);
-      const source = ctx.createBufferSource();
-      source.buffer = audioBuffer;
-      const gainNode = getFragmentGainNode();
-      if (gainNode) source.connect(gainNode);
-      else source.connect(ctx.destination);
-
-      // 第一个 chunk 立即播放，后续 chunk 接续前一个结束时间
-      if (streamingSources.length === 0) {
-        streamingNextStart = ctx.currentTime + 0.05; // 50ms 延迟避免调度抖动
-        setFragmentIsPlaying(true);
-        setFragmentPlaybackStartTime(ctx.currentTime + 0.05);
-        setFragmentPlaybackOffset(0);
-        setFragmentCurrentTime(0);
-        updateFragmentPlayButton();
-      }
-      source.start(streamingNextStart);
-      streamingNextStart += chunkInfo.audio.length / getSampleRate();
-
-      // 最后一个 chunk：标记流式结束，更新 UI
-      source.onended = () => {
-        if (chunkInfo.isLast && !streamingFinished) {
-          streamingFinished = true;
-          setFragmentIsPlaying(false);
-          const raf = getFragmentPlayheadRaf();
-          if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
-          setFragmentCurrentTime(0);
-          updateFragmentPlayButton();
-          render();
-        }
-      };
-      streamingSources.push(source);
-    } catch (e) {
-      console.warn('[FragmentAudio] Streaming chunk playback failed:', e.message);
-    }
-  });
-
   try {
     if (!getPipelineInitialized()) {
       await initPipeline();
     }
 
     await loadFragmentAudioSettings();
+
+    // 缓存优化：计算当前合成输入签名，若与上次相同且已有 fragmentAudioData，
+    // 直接复用缓存音频从 playStartPosition 开始播放，跳过 IPC 合成调用。
+    // 这样即使起始位置不同，只要 notes/options 未变就能秒播。
+    const currentSignature = _computeFragmentAudioSignature();
+    const cachedAudio = getFragmentAudioData();
+    const canReuseCache = cachedAudio && cachedAudio.length > 0 &&
+                         getFragmentAudioDataSignature() === currentSignature;
+
+    if (canReuseCache) {
+      // 复用缓存：无需注册 chunk 监听，直接整段播放
+      setFragmentUseExclusiveMode(getFragmentAudioSettings()?.audioOutputMode === 'exclusive');
+      if (getFragmentUseExclusiveMode()) {
+        await playFragmentExclusive();
+      } else {
+        await playFragmentShared();
+      }
+      return;
+    }
+
+    // 注册 chunk 监听：vocoder 每完成一个 chunk 即开始播放（边合成边播）
+    // chunk 顺序由 IPC 保证（按发送顺序触发），无需额外排序
+    streamingCleanup = window.electronAPI.onFragmentSVSChunkAudio(async (chunkInfo) => {
+      try {
+        if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
+        if (streamingFinished) return;
+        const ctx = await getFragmentAudioContextInternal();
+        const audioBuffer = ctx.createBuffer(1, chunkInfo.audio.length, getSampleRate());
+        audioBuffer.getChannelData(0).set(chunkInfo.audio);
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        const gainNode = getFragmentGainNode();
+        if (gainNode) source.connect(gainNode);
+        else source.connect(ctx.destination);
+
+        // 第一个 chunk 立即播放，后续 chunk 接续前一个结束时间
+        if (streamingSources.length === 0) {
+          streamingNextStart = ctx.currentTime + 0.05; // 50ms 延迟避免调度抖动
+          setFragmentIsPlaying(true);
+          setFragmentPlaybackStartTime(ctx.currentTime + 0.05);
+          setFragmentPlaybackOffset(0);
+          setFragmentCurrentTime(0);
+          updateFragmentPlayButton();
+        }
+        source.start(streamingNextStart);
+        streamingNextStart += chunkInfo.audio.length / getSampleRate();
+
+        // 最后一个 chunk：标记流式结束，更新 UI
+        source.onended = () => {
+          if (chunkInfo.isLast && !streamingFinished) {
+            streamingFinished = true;
+            setFragmentIsPlaying(false);
+            const raf = getFragmentPlayheadRaf();
+            if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+            setFragmentCurrentTime(0);
+            setFragmentPlayStartPosition(0);
+            updateFragmentPlayButton();
+            render();
+          }
+        };
+        streamingSources.push(source);
+      } catch (e) {
+        console.warn('[FragmentAudio] Streaming chunk playback failed:', e.message);
+      }
+    });
 
     const pitchCurveF0 = buildPitchCurveF0Data();
     const pitchCurveF0Serializable = pitchCurveF0 || null;
@@ -457,6 +600,8 @@ export async function playFragment() {
       },
     });
     setFragmentAudioData(padAudioToFragmentDuration(audioData));
+    // 合成成功后更新签名，后续播放可复用此缓存
+    setFragmentAudioDataSignature(currentSignature);
 
     // 合成完成：缓存完整 audioData 用于后续播放/导出
     // 流式播放不中断，让它播完已调度的 chunk

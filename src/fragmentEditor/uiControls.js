@@ -11,6 +11,7 @@ import {
   getSelectedNoteIds, setSelectedNoteIds,
   getSelectedAnchorIndices,
   setFragmentCurrentTime,
+  setFragmentPlayStartPosition,
   setBrushSmoothing,
   invalidatePitchCurveCache,
   getParamPanelCollapsed, setParamPanelCollapsed,
@@ -218,6 +219,9 @@ export function setupUiControls() {
     if (getFragmentIsPlaying()) {
       stopFragmentPlayback();
       setFragmentCurrentTime(0);
+      // 停止时重置播放起始位置，下次点击播放从头开始。
+      // 用户可再次拖拽 playhead 设置新的起始位置。
+      setFragmentPlayStartPosition(0);
       render();
       return;
     }
