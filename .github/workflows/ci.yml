@@ -25,13 +25,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - run: npm ci
 
-      - name: Run tests (skip network & model loading/inference)
-        run: npm run test:ci
+      - run: npm test
 
   build-and-release:
     name: Build and Release (${{ github.ref_name }})
@@ -40,77 +39,58 @@ jobs:
     if: github.event_name == 'push'
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Fetch full history so git tags are available for version bumping
+          fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
 
       - name: Determine version and tag
         id: version
         shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BRANCH="${GITHUB_REF##*/}"
           SHORT_SHA="${GITHUB_SHA::7}"
           DATE=$(date -u +%Y%m%d)
           if [ "$BRANCH" = "release" ]; then
-            # Tag is now the version number itself (semver X.Y.Z). Find the highest
-            # existing semver tag across all releases and bump the patch component.
-            # Falls back to package.json version on the very first release.
-            LAST_VERSION=""
-            if curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100" > /tmp/releases.json 2>/dev/null; then
-              LAST_VERSION=$(node -e "
-                const fs=require('fs');
-                try {
-                  const releases = JSON.parse(fs.readFileSync('/tmp/releases.json','utf8'));
-                  const semverRe = /^\d+\.\d+\.\d+$/;
-                  const versions = releases
-                    .map(r => r.tag_name || '')
-                    .filter(t => semverRe.test(t))
-                    .map(v => v.split('.').map(Number))
-                    .sort((a,b) => a[0]-b[0] || a[1]-b[1] || a[2]-b[2]);
-                  console.log(versions.length ? versions[versions.length-1].join('.') : '');
-                } catch { console.log(''); }
-              ")
-            fi
+            # Tag is the semver X.Y.Z itself. Find the highest existing semver
+            # git tag and bump the patch component. Git tags are the source of
+            # truth (more reliable than the releases API which can be delayed,
+            # paginated, or silently fail on auth errors).
+            echo "[ci] Listing all semver tags..."
+            git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n 20
+            LAST_VERSION=$(git tag --list '[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)
             if [ -z "$LAST_VERSION" ]; then
               LAST_VERSION=$(node -p "require('./package.json').version")
-              echo "[ci] No previous semver release found, using package.json version: $LAST_VERSION"
+              echo "[ci] No previous semver tag found, using package.json version: $LAST_VERSION"
             else
-              echo "[ci] Last semver release tag: $LAST_VERSION"
+              echo "[ci] Last semver tag: $LAST_VERSION"
             fi
             IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_VERSION"
             NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
-            BUILD_VERSION="$NEW_VERSION"
             TAG="$NEW_VERSION"
             PRERELEASE="false"
             IS_RELEASE="true"
             MAKE_LATEST="true"
           else
-            # Display version stays descriptive for the release name/body;
-            # BUILD_VERSION must be numeric (X.Y.Z.W) because Windows resedit
-            # (@electron/packager) requires integer version components.
             NEW_VERSION="nightly_${DATE}_${SHORT_SHA}"
-            BUILD_VERSION="1.0.0.${{ github.run_number }}"
             TAG="nightly"
             PRERELEASE="true"
             IS_RELEASE="false"
             MAKE_LATEST="false"
           fi
-          # Write BUILD_VERSION to package.json (NOT committed; only for this build).
-          # resedit rejects non-integer components like "nightly_20260630_abc1234".
-          node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$BUILD_VERSION"
+          # Write version to package.json (NOT committed; only for this build)
+          node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$NEW_VERSION"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-          echo "build_version=$BUILD_VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
           echo "make_latest=$MAKE_LATEST" >> $GITHUB_OUTPUT
-          echo "[ci] branch=$BRANCH version=$NEW_VERSION build_version=$BUILD_VERSION tag=$TAG prerelease=$PRERELEASE make_latest=$MAKE_LATEST"
+          echo "[ci] branch=$BRANCH version=$NEW_VERSION tag=$TAG prerelease=$PRERELEASE make_latest=$MAKE_LATEST"
 
       - name: Install dependencies
         run: npm ci
@@ -125,6 +105,7 @@ jobs:
           $electronVersion = "42.4.1"
           $cacheDir = "$env:LOCALAPPDATA\electron\Cache"
           $zipName = "electron-v$electronVersion-win32-x64.zip"
+          $zipPath = Join-Path $cacheDir $zipName
 
           Write-Host "=== Checking Electron binary ==="
           if (-not (Test-Path $electronExe)) {
@@ -145,25 +126,21 @@ jobs:
 
           Write-Host "=== Checking Electron zip cache (needed by electron-packager) ==="
           Write-Host "Cache dir: $cacheDir"
-          # @electron/get stores zips under Cache/<hash>/<zipName>, so search recursively.
-          $existingZip = $null
           if (Test-Path $cacheDir) {
-            $existingZip = Get-ChildItem $cacheDir -Recurse -Filter $zipName -File -ErrorAction SilentlyContinue | Select-Object -First 1
             Get-ChildItem $cacheDir -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
           } else {
             Write-Host "Cache dir does not exist"
           }
 
-          if (-not $existingZip) {
+          if (-not (Test-Path $zipPath)) {
             Write-Host "Electron zip not in cache, downloading via @electron/get..."
-            $downloadResult = node -e "const get = require('@electron/get'); get.downloadArtifact({ version: '$electronVersion', platform: 'win32', arch: 'x64', artifactName: 'electron' }).then(p => console.log(p)).catch(e => { console.error(e); process.exit(1); })"
-            Write-Host "cached at: $downloadResult"
+            node -e "const get = require('@electron/get'); get.downloadArtifact({ version: '42.4.1', platform: 'win32', arch: 'x64', artifactName: 'electron' }).then(p => console.log('cached at:', p)).catch(e => { console.error(e); process.exit(1); })"
             if (Test-Path $cacheDir) {
               Write-Host "=== Cache contents after download ==="
               Get-ChildItem $cacheDir -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
             }
           } else {
-            Write-Host "Electron zip already cached: $($existingZip.FullName) ($($existingZip.Length) bytes)"
+            Write-Host "Electron zip already cached: $zipPath"
           }
 
       - name: Verify environment before build
@@ -252,8 +229,7 @@ jobs:
       - name: Compile installer with Inno Setup
         shell: pwsh
         run: |
-          # Inno Setup / Windows expects a numeric X.Y.Z[.W] version.
-          $version = "${{ steps.version.outputs.build_version }}"
+          $version = "${{ steps.version.outputs.version }}"
           $iscc = Get-Command iscc -ErrorAction SilentlyContinue
           if (-not $iscc) {
             $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -294,9 +270,10 @@ jobs:
             Download `sxsinstaller_x64_no_models.exe` below and run it.
             ONNX models are auto-downloaded on first launch.
 
-            ### Direct download
+            ### Direct download (always points to latest)
 
-            - GitHub: ${{ steps.version.outputs.is_release == 'true' && 'https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe' || format('https://github.com/Henley04/SXSEditor/releases/download/{0}/sxsinstaller_x64_no_models.exe', steps.version.outputs.tag) }}
+            - GitHub: https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe
+            - GitCode mirror: https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.version.outputs.make_latest }}
           files: inno/${{ env.INSTALLER_NAME }}
