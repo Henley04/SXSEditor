@@ -196,6 +196,149 @@ function getFileDownloadUrl(filePath, precision, revision) {
 }
 
 /**
+ * 列出 ModelScope 仓库中所有 blob 文件的路径。
+ * 用于智能检测远程模型是「分开的 onnx+data」还是「单 onnx 文件」。
+ *
+ * 策略：
+ *   1. 首选查询指定 revision（如 v1）的文件列表
+ *   2. 若该 revision 返回空（部分 tag 的 Files 字段为 null），
+ *      回退到 master 分支查询（文件结构通常一致）
+ *   3. 若仍失败，返回 null —— 调用方应回退到本地硬编码清单
+ *
+ * @param {string} modelId  ModelScope 仓库 ID（如 'syxppp/SoulX-Singer-onnx-directml-fp16'）
+ * @param {string} revision tag 名（如 'v1'）
+ * @returns {Promise<Set<string>|null>} 文件路径集合，null 表示无法确定
+ */
+async function listModelFiles(modelId, revision) {
+  if (!modelId || !revision) return null;
+  const fetch = async (rev) => {
+    const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo/files?Revision=${encodeURIComponent(rev)}`;
+    const data = await _fetchModelScopeJson(url);
+    if (data && data.Success && data.Data && Array.isArray(data.Data.Files)) {
+      const set = new Set();
+      for (const f of data.Data.Files) {
+        if (f && f.Type === 'blob' && typeof f.Path === 'string') {
+          set.add(f.Path);
+        }
+      }
+      return set;
+    }
+    return null;
+  };
+  // 1. 指定 revision
+  let files = null;
+  try { files = await fetch(revision); } catch (_) { files = null; }
+  if (files && files.size > 0) return files;
+  // 2. 回退 master（仅当 revision 本身不是 master 时）
+  if (revision !== 'master') {
+    try { files = await fetch('master'); } catch (_) { files = null; }
+    if (files && files.size > 0) return files;
+  }
+  // 3. 无法确定
+  return null;
+}
+
+/**
+ * 根据 ModelScope 远程文件列表，智能调整缺失文件清单：
+ *
+ * 1. 过滤：移除远程不存在的文件（如「单 onnx 文件」仓库中清单里的 .onnx.data）
+ * 2. 补充：对于清单中缺失的 .onnx 文件，若远程存在对应 .onnx.data 且本地也没有，
+ *          则将 .onnx.data 加入下载列表（「连带 data 一起下载」）
+ *
+ * 这让下载逻辑不再依赖硬编码的 PRECISION_NO_EXTERNAL_DATA：
+ *   - 若远程存在 xxx.onnx 与 xxx.onnx.data → 保留两者（连带下载）
+ *   - 若远程只有 xxx.onnx（权重自包含）→ 移除 xxx.onnx.data，避免下载失败
+ *   - 若清单因 PRECISION_NO_EXTERNAL_DATA 过滤了 data，但远程实际有 data → 补回
+ *
+ * 注意：preprocess/ 与 basic_pitch_model/ 前缀的文件使用 int8 仓库，
+ *       而主 SVS 模型文件使用 precision 对应的仓库，因此需要分别查询。
+ *
+ * 容错：若远程文件列表获取失败（返回 null），返回原清单不变，
+ *       回退到当前硬编码清单行为。
+ *
+ * @param {Array} missingFiles  缺失文件数组（元素含 filePath 字段）
+ * @param {string} modelDir     模型根目录（用于检查本地 data 文件是否存在）
+ * @param {string} precision    当前精度
+ * @param {string} revision     ModelScope tag
+ * @returns {Promise<Array>}    调整后的缺失文件数组
+ */
+async function filterMissingByRemote(missingFiles, modelDir, precision, revision) {
+  if (!missingFiles || missingFiles.length === 0) return missingFiles;
+
+  // 主 SVS 模型仓库（precision 对应）与 preprocess/basic_pitch 仓库（int8）可能不同，
+  // 分别查询。int8-npu 的 preprocess/basic_pitch 走 int8 仓库（getFileDownloadUrl 逻辑）。
+  const svsModelId = getModelId(precision);
+  const auxPrecision = precision === 'int8-npu' ? 'int8' : precision;
+  const auxModelId = getModelId(auxPrecision);
+  const sameRepo = !auxModelId || auxModelId === svsModelId;
+
+  const [svsSet, auxSetRaw] = await Promise.all([
+    svsModelId ? listModelFiles(svsModelId, revision) : Promise.resolve(null),
+    auxModelId && !sameRepo ? listModelFiles(auxModelId, revision) : Promise.resolve(null),
+  ]);
+  // 仓库相同时复用同一结果
+  const auxSet = sameRepo ? svsSet : auxSetRaw;
+
+  // 两个列表都拿不到 → 回退到原清单
+  if (!svsSet && !auxSet) {
+    console.log('[ModelManager] Remote file list unavailable, using manifest as-is');
+    return missingFiles;
+  }
+
+  // 阶段 1：过滤掉远程不存在的文件
+  const filtered = [];
+  const skipped = [];
+  for (const file of missingFiles) {
+    const isSvs = isSvsModelFile(file.filePath);
+    const remoteSet = isSvs ? svsSet : auxSet;
+    if (!remoteSet) {
+      // 该仓库的远程列表拿不到 → 保留原文件（不因探测失败而丢弃）
+      filtered.push(file);
+      continue;
+    }
+    if (remoteSet.has(file.filePath)) {
+      filtered.push(file);
+    } else {
+      skipped.push(file.filePath);
+    }
+  }
+
+  // 阶段 2：补充远程存在但清单中没有的 .onnx.data（连带 data 一起下载）
+  // 典型场景：int8-npu 的 PRECISION_NO_EXTERNAL_DATA 过滤了所有 data，
+  // 但远程实际有小模型的 data 文件 → 补回
+  const existingPaths = new Set(filtered.map(f => f.filePath));
+  const added = [];
+  for (const file of filtered) {
+    // 只对 .onnx 文件（非 .onnx.data 自身）检查是否有配套 data
+    if (!file.filePath.endsWith('.onnx')) continue;
+    const dataPath = file.filePath + '.data';
+    if (existingPaths.has(dataPath)) continue; // 已在列表中
+    const isSvs = isSvsModelFile(file.filePath);
+    const remoteSet = isSvs ? svsSet : auxSet;
+    if (!remoteSet || !remoteSet.has(dataPath)) continue; // 远程没有 data
+    // 检查本地是否已有该 data 文件（避免重复下载）
+    const localDataPath = getLocalFilePath(modelDir, dataPath, precision);
+    let localExists = false;
+    try {
+      const stats = fs.statSync(localDataPath);
+      if (stats.size > 0) localExists = true;
+    } catch (_) {}
+    if (localExists) continue;
+    // 远程有 data 且本地缺失 → 连带下载
+    added.push({ ...file, filePath: dataPath, required: true });
+    existingPaths.add(dataPath);
+  }
+
+  if (skipped.length > 0) {
+    console.log(`[ModelManager] Remote check: skipped ${skipped.length} file(s) not present on ModelScope:`, skipped);
+  }
+  if (added.length > 0) {
+    console.log(`[ModelManager] Remote check: added ${added.length} external data file(s) for bundled download:`, added.map(f => f.filePath));
+  }
+  return filtered.concat(added);
+}
+
+/**
  * Get the download URL for a JP language model file.
  */
 function getJpFileDownloadUrl(filePath, precision, revision) {
@@ -1463,9 +1606,22 @@ async function getRemoteFileSize(filePath, precision, revision = 'master') {
  * - 支持断点续传
  */
 async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
-  const { onProgress, onFileStart, onFileComplete, abortSignal, precision = DEFAULT_PRECISION, revision = 'master' } = options;
+  const { onProgress, onFileStart, onFileComplete, onFilesResolved, abortSignal, precision = DEFAULT_PRECISION, revision = 'master' } = options;
 
   if (missingFiles.length === 0) return;
+
+  // 智能检测远程仓库实际文件结构：
+  //   - 移除远程不存在的 .onnx.data（单 onnx 文件仓库）
+  //   - 补充远程存在但清单中没有的 .onnx.data（连带 data 一起下载）
+  // 远程列表不可用时回退到本地清单。
+  missingFiles = await filterMissingByRemote(missingFiles, modelDir, precision, revision);
+  if (missingFiles.length === 0) {
+    console.log('[ModelManager] All missing files filtered out by remote check (single onnx, no external data)');
+    saveModelVersion(modelDir, precision, revision);
+    return;
+  }
+  // 通知调用方调整后的最终文件列表（让 UI 显示补充的 data 文件）
+  if (onFilesResolved) onFilesResolved(missingFiles);
 
   const usePrecisionSubdir = precision && PRECISION_SUBDIR_PRECESIONS.has(precision);
   const cliAvailable = !usePrecisionSubdir && await checkModelScopeCLIAvailable();
@@ -1644,6 +1800,9 @@ module.exports = {
   getManifestForPrecision,
   isSvsModelFile,
   isPrecisionDownloadable,
+  // Remote file list (smart onnx+data detection)
+  listModelFiles,
+  filterMissingByRemote,
   // Tag (version) listing
   getModelTags,
   getJpModelTags,

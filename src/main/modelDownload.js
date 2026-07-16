@@ -109,6 +109,14 @@ async function startModelDownload(modelDir, missingFiles, precision, revision) {
           win.webContents.send('model-download:progress', data);
         }
       },
+      onFilesResolved: (resolvedFiles) => {
+        // 远程检测后文件列表可能变化（补充了 data 文件或过滤了远程不存在的文件），
+        // 推送给渲染进程让 UI 显示最终的下载列表
+        const win = getModelDownloadWindow();
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('model-download:missing-files', resolvedFiles);
+        }
+      },
       onFileStart: (filePath, fileIndex, totalFiles) => {
         const win = getModelDownloadWindow();
         if (win && !win.isDestroyed()) {
