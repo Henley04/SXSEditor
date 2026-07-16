@@ -16,6 +16,13 @@ let currentPrecision = 'fp16';
 let currentRevision = 'latest'; // selected revision: 'latest' = auto-pick newest tag, or a specific tag (e.g. 'v1')
 let availableTags = []; // tags fetched from ModelScope (branches NOT shown)
 let currentVersionInfo = null; // { updateAvailable, localVersion, latestVersion, hasModelFiles, localRevision }
+let i18nReady = false;
+// Resolved when the main process pushes the initial precision via
+// 'model-download:precision'. Used to make refreshVersionInfo() wait for the
+// real precision instead of falling back to the 'fp16' default — otherwise
+// an FP32 install would briefly display the FP16 version number on open.
+let resolveInitialPrecision;
+const initialPrecisionReady = new Promise((resolve) => { resolveInitialPrecision = resolve; });
 
 function createIconSvg(status) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -315,20 +322,40 @@ window.electronAPI.onModelDownloadMissingFiles((files) => {
   for (const file of files) {
     fileStates[file.filePath] = { status: 'pending', progress: 0, downloaded: 0, total: 0 };
   }
+  renderFileList(true);
+  loadModelDir();
+  // During an in-window update (updateModelBtn flow), isDownloading is true
+  // and the progress section is already visible. Don't reset the UI back to
+  // the "ready to download" state — the download is about to start.
+  if (isDownloading) {
+    document.getElementById('errorMessage').style.display = 'none';
+    return;
+  }
   document.getElementById('statusText').textContent = t('modelDownload.needDownloadCount', { count: files.length });
   document.getElementById('startBtn').style.display = 'inline-block';
   document.getElementById('closeBtn').style.display = 'inline-block';
   document.getElementById('precisionSection').style.display = 'block';
   document.getElementById('progressSection').style.display = 'none';
   document.getElementById('errorMessage').style.display = 'none';
-  renderFileList(true);
-  loadModelDir();
 });
 
 window.electronAPI.onModelDownloadPrecision((precision) => {
-  currentPrecision = precision || 'fp16';
+  const newPrecision = precision || 'fp16';
+  const changed = newPrecision !== currentPrecision;
+  currentPrecision = newPrecision;
   const radio = document.querySelector(`input[name="modelPrecision"][value="${currentPrecision}"]`);
   if (radio) radio.checked = true;
+  // Resolve the initial-precision promise so the first refreshVersionInfo()
+  // call (in initI18n().then()) uses the real precision.
+  if (resolveInitialPrecision) {
+    const r = resolveInitialPrecision;
+    resolveInitialPrecision = null;
+    r();
+  } else if (i18nReady && changed) {
+    // Subsequent precision pushes (e.g. after delete-and-recheck) — refresh
+    // version info so the UI reflects the new precision.
+    refreshVersionInfo();
+  }
 });
 
 // Receive initial revision context from main process when window opens
@@ -729,9 +756,17 @@ document.getElementById('modelUpdatesLink').addEventListener('click', async (e) 
   await window.electronAPI.modelDownloadOpenExternal('https://henley04.github.io/SXSEditor/user/model-updates.html');
 });
 
-initI18n().then(() => {
+initI18n().then(async () => {
   applyLocale();
   document.documentElement.lang = getLocale();
+  i18nReady = true;
+  // Wait for the main process to push the real precision before querying
+  // the version — otherwise an FP32 install would briefly show the FP16
+  // version. Fall back after a short timeout in case the push never arrives.
+  await Promise.race([
+    initialPrecisionReady,
+    new Promise((r) => setTimeout(r, 1000)),
+  ]);
   // Refresh SiFiGAN card once i18n is ready so status text is translated
   refreshSifiganCard();
   // 检查主模型版本信息
