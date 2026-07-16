@@ -32,7 +32,8 @@
             { href: 'settings.html', title: { en: 'Settings', zh: '设置' } },
             { href: 'app-updates.html', title: { en: 'Application Updates', zh: '应用更新' } },
             { href: 'model-updates.html', title: { en: 'Model Updates', zh: '模型更新' } },
-            { href: 'faq.html', title: { en: 'FAQ & Troubleshooting', zh: '常见问题与故障排查' } }
+            { href: 'faq.html', title: { en: 'FAQ & Troubleshooting', zh: '常见问题与故障排查' } },
+            { href: 'uninstall.html', title: { en: 'Uninstall', zh: '卸载' } }
           ]
         }
       ]

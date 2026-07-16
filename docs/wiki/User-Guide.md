@@ -24,6 +24,7 @@ Complete documentation of all SXSEditor features.
 18. [Themes](#themes)
 19. [Project Files](#project-files)
 20. [Keyboard Shortcuts](#keyboard-shortcuts)
+21. [Uninstall](#uninstall)
 
 ---
 
@@ -912,6 +913,67 @@ Press **F1** in the Fragment Editor to see the full shortcuts overlay.
 
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+Scroll` | Horizontal zoom |
-| `Shift+Scroll` | Horizontal scroll |
+| `Ctrl+scroll` | Horizontal zoom |
+| `Shift+scroll` | Horizontal scroll |
 | `Scroll` | Vertical scroll |
+
+---
+
+## Uninstall
+
+The default uninstaller only removes the application itself — **downloaded models and user settings are left on disk** and must be cleaned up manually if you no longer need them. ONNX model files can total several GB, so check the model location before uninstalling.
+
+### Step 1: Check your model download location
+
+Before uninstalling, open SXSEditor and confirm where models are stored:
+
+1. Open **Settings > Model** and click **Open Model Download** (or open the Model Download window from the menu).
+2. The **Download directory** line shows the current model directory. Write it down or copy it.
+3. If you previously clicked **Change** to redirect downloads to a custom folder, that folder is the one you must clean up — not the default location below.
+
+### Step 2: Identify the default model location
+
+If you never changed the download directory, models live in one of the following locations depending on how the app was installed:
+
+| Type | Path | Removed by uninstaller? |
+|------|------|-------------------------|
+| Bundled models (full installer) | `<install_dir>\resources\app.asar.unpacked\onnx_models\` | Yes |
+| Downloaded models (default) | `%APPDATA%\sxseditor\onnx_models\` | **No** — must delete manually |
+| Custom directory | The folder you selected via **Change** | **No** — must delete manually |
+
+On a typical Windows install, `%APPDATA%` expands to `C:\Users\<your-username>\AppData\Roaming`. You can paste `%APPDATA%\sxseditor\onnx_models` directly into the File Explorer address bar to jump there.
+
+> **Note**: Downloaded models include subdirectories per precision: `fp16/`, `int8/`, `int8/optimized_npu/`, and a `JP/` subfolder for Japanese models. Each precision is independent, so you can delete one without affecting others.
+
+### Step 3: Delete models to free space
+
+If you no longer need the models, delete the entire model directory identified in Step 1 or Step 2:
+
+- **Default location**: delete the `%APPDATA%\sxseditor\onnx_models\` folder.
+- **Custom location**: delete the folder you selected via **Change**.
+- **Partial cleanup**: to keep settings but remove only models, delete just the `onnx_models` subfolder and leave the rest of `%APPDATA%\sxseditor\` intact.
+
+> **Tip**: Reinstalling later? Leave the `onnx_models` folder in place — SXSEditor will detect the existing files and skip re-downloading them.
+
+### Step 4: Remove leftover user data (optional)
+
+After uninstalling the app, the following user data remains in `%APPDATA%\sxseditor\`. Delete this folder if you want a fully clean removal:
+
+| File / Folder | Purpose |
+|---------------|---------|
+| `settings.json` | App settings (audio, inference, theme, etc.) |
+| `sxseditor-locale.json` | Language preference |
+| `themes\` | User-created or imported themes |
+| `onnx_models\` | Downloaded models (see Step 3) |
+
+Leftover installer files in `%TEMP%\sxseditor-update\` are pruned automatically 7 days after they were downloaded, so no manual cleanup is required there.
+
+### Step 5: Run the uninstaller
+
+After backing up or deleting the data above, run the uninstaller:
+
+1. Open **Settings > Apps > Installed apps** (Windows 11) or **Control Panel > Programs and Features** (Windows 10).
+2. Find **SXSEditor** and click **Uninstall**.
+3. Follow the InnoSetup wizard to complete removal.
+
+> **Note**: The uninstaller removes the application files (including bundled models in `app.asar.unpacked\onnx_models\`) but does **not** delete `%APPDATA%\sxseditor\`. That folder must be removed manually as described in Steps 3 and 4.
