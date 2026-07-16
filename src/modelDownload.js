@@ -305,7 +305,10 @@ function renderVersionInfo(info) {
 
 document.getElementById('updateModelBtn').addEventListener('click', async () => {
   if (isDownloading) return;
-  const confirmed = await showConfirmDialog(t('modelDownload.updateConfirmMessage'));
+  const confirmMsg = isMainModelTargetV0OrLegacy()
+    ? t('modelDownload.v0LegacyConfirmMessage')
+    : t('modelDownload.updateConfirmMessage');
+  const confirmed = await showConfirmDialog(confirmMsg);
   if (!confirmed) return;
 
   isDownloading = true;
@@ -478,6 +481,13 @@ window.electronAPI.onModelDownloadError((data) => {
 document.getElementById('startBtn').addEventListener('click', async () => {
   const selectedRadio = document.querySelector('input[name="modelPrecision"]:checked');
   currentPrecision = selectedRadio ? selectedRadio.value : 'fp16';
+
+  // When the target revision is v0 or null (no real version), warn the user
+  // that v0 and legacy content are identical before starting the download.
+  if (isMainModelTargetV0OrLegacy()) {
+    const confirmed = await showConfirmDialog(t('modelDownload.v0LegacyConfirmMessage'));
+    if (!confirmed) return;
+  }
 
   document.getElementById('startBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'none';
@@ -697,6 +707,11 @@ async function refreshSifiganCard() {
 
 document.getElementById('sifiganDownloadBtn').addEventListener('click', async () => {
   if (sifiganState.isDownloading) return;
+  // Warn if SiFiGAN's latest version is v0 or null (same as legacy content).
+  if (isSifiganTargetV0OrLegacy()) {
+    const confirmed = await showConfirmDialog(t('modelDownload.v0LegacyConfirmMessage'));
+    if (!confirmed) return;
+  }
   sifiganState.isDownloading = true;
   sifiganState.status = 'downloading';
   renderSifiganCard();
@@ -752,7 +767,10 @@ document.getElementById('sifiganUnloadBtn').addEventListener('click', async () =
 // SiFiGAN 更新按钮：删除旧文件后重新下载
 document.getElementById('sifiganUpdateBtn').addEventListener('click', async () => {
   if (sifiganState.isDownloading) return;
-  const confirmed = await showConfirmDialog(t('modelDownload.sifiganUpdateConfirmMessage'));
+  const confirmMsg = isSifiganTargetV0OrLegacy()
+    ? t('modelDownload.v0LegacyConfirmMessage')
+    : t('modelDownload.sifiganUpdateConfirmMessage');
+  const confirmed = await showConfirmDialog(confirmMsg);
   if (!confirmed) return;
 
   sifiganState.isDownloading = true;
