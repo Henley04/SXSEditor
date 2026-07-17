@@ -86,7 +86,8 @@ export function pausePlayback() {
   stopPlaybackRaf();
 
   const currentTime = state.playStartOffset;
-  drawWaveformWithPlayhead(currentTime);
+  // 绘制暂停态播放头（虚线 + 顶部三角手柄），提示用户当前可拖拽位置
+  drawWaveformWithPlayhead(currentTime, { isPaused: true });
   if (state.pianoRoll) {
     state.pianoRoll.pausePlayback();
     state.pianoRoll.setCurrentTime(currentTime);
@@ -107,6 +108,41 @@ export function stopPlayback() {
   dom.btnPlayPause.textContent = t('preprocess.play');
   drawWaveformWithPlayhead(0);
   if (state.pianoRoll) state.pianoRoll.stopPlayback();
+}
+
+/**
+ * 实时跳转到新的播放位置。
+ * 播放中：停止当前 source，从 newOffset 重新 start（边播边拖无延迟）。
+ * 未播放：仅更新 playStartOffset 并重绘暂停态播放头。
+ */
+export function seekPlayback(newOffset) {
+  if (!state.wavAudioBuffer) return;
+  const duration = state.wavAudioBuffer.duration;
+  const clamped = Math.max(0, Math.min(duration - 0.001, newOffset));
+
+  // 停止当前 source（不重置 playStartOffset）
+  if (state.audioSource) {
+    try {
+      state.audioSource.onended = null;
+      state.audioSource.stop();
+    } catch (e) {}
+    state.audioSource = null;
+  }
+
+  state.playStartOffset = clamped;
+
+  if (state.isPlaying) {
+    // 播放中拖拽：立即从新位置重启 source
+    state.isPlaying = false;
+    stopPlaybackRaf();
+    startPlayback();
+  } else {
+    // 未播放：仅更新视觉
+    drawWaveformWithPlayhead(clamped, { isPaused: true });
+    if (state.pianoRoll) {
+      state.pianoRoll.setCurrentTime(clamped);
+    }
+  }
 }
 
 export function stopPlaybackRaf() {

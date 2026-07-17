@@ -7,7 +7,7 @@ import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasThe
 let _waveformCacheCanvas = null;
 let _waveformCacheKey = '';
 
-export function drawWaveformWithPlayhead(currentTime) {
+export function drawWaveformWithPlayhead(currentTime, options = {}) {
   if (!state.wavAudioBuffer) return;
 
   const canvas = dom.waveformCanvas;
@@ -125,23 +125,60 @@ export function drawWaveformWithPlayhead(currentTime) {
     const playheadX = PIANO_KEY_WIDTH + currentBeat * BEAT_WIDTH * zoomX - scrollX;
 
     if (playheadX >= PIANO_KEY_WIDTH && playheadX <= width) {
+      ctx.save();
+      // 暂停/拖拽态：半透明虚线，区分"已设置位置"与"实时播放"
+      if (options.isPaused) {
+        ctx.globalAlpha = 0.65;
+        ctx.setLineDash([4, 3]);
+      }
       ctx.strokeStyle = c.playhead;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(playheadX, 0);
       ctx.lineTo(playheadX, height);
       ctx.stroke();
+      ctx.restore();
 
+      // 顶部三角手柄：底边在 canvas 顶端 y=0，顶点指向下 y=8，
+      // 视觉上像挂在天花板上的小旗，提示用户可在此处按下并拖拽跳转播放进度。
       ctx.fillStyle = c.playhead;
       ctx.beginPath();
-      ctx.moveTo(playheadX, 0);
-      ctx.lineTo(playheadX - 6, -2);
-      ctx.lineTo(playheadX + 6, -2);
+      ctx.moveTo(playheadX - 6, 0);
+      ctx.lineTo(playheadX + 6, 0);
+      ctx.lineTo(playheadX, 8);
       ctx.closePath();
       ctx.fill();
     }
   }
 }
+
+/**
+ * 计算播放头当前 X 坐标（用于 hit-test）。
+ * 播放中使用 currentTime 参数；未播放时由调用方传入 state.playStartOffset。
+ */
+export function getPlayheadXForTime(seconds) {
+  if (!state.wavAudioBuffer) return -1;
+  const zoomX = state.pianoRoll ? state.pianoRoll.zoomX : state.waveformZoomX;
+  const scrollX = state.pianoRoll ? state.pianoRoll.scrollX : state.waveformScrollX;
+  const currentBeat = (seconds / 60) * BPM;
+  return PIANO_KEY_WIDTH + currentBeat * BEAT_WIDTH * zoomX - scrollX;
+}
+
+/**
+ * 把波形 canvas 内部 X 坐标转换为秒数。
+ * 用于拖拽时根据鼠标位置计算新的播放时间。
+ */
+export function xToWaveformTime(x) {
+  const zoomX = state.pianoRoll ? state.pianoRoll.zoomX : state.waveformZoomX;
+  const scrollX = state.pianoRoll ? state.pianoRoll.scrollX : state.waveformScrollX;
+  if (x < PIANO_KEY_WIDTH) return 0;
+  const beat = (x + scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * zoomX);
+  const secondsPerBeat = 60 / BPM;
+  return Math.max(0, beat * secondsPerBeat);
+}
+
+// 播放头拖拽 hit-test 容差（像素）
+export const PLAYHEAD_HIT_WIDTH = 12;
 
 export function invalidateWaveformCache() {
   _waveformCacheKey = '';
