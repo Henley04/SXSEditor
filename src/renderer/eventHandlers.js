@@ -5,15 +5,92 @@ import {
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty } from './projectManager.js';
-import { playAll, pausePlayback, stopPlayback, exportAll } from './audioPlayback.js';
+import { playAll, pausePlayback, stopPlayback, exportAll, seekPlayback, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
-import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll } from './timelineRenderer.js';
+import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 
 // Click-vs-drag tracking for fragment selection
 let _clickStartPos = null;
 const CLICK_THRESHOLD = 3;
+
+// Playhead drag state — 拖拽进度条时记录是否在拖拽 playhead
+let _isPlayheadDragging = false;
+// Playhead tooltip 元素（懒创建）
+let _playheadTooltip = null;
+
+function _ensurePlayheadTooltip() {
+  if (_playheadTooltip && document.body.contains(_playheadTooltip)) return _playheadTooltip;
+  _playheadTooltip = document.createElement('div');
+  _playheadTooltip.className = 'playhead-tooltip';
+  _playheadTooltip.style.cssText = `
+    position: fixed;
+    z-index: 9999;
+    padding: 4px 8px;
+    background: var(--bg-tooltip, #1a1a2e);
+    color: var(--fg-tooltip, #e0e0f0);
+    border: 1px solid var(--border-tooltip, #3a3a5a);
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: sans-serif;
+    pointer-events: none;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    display: none;
+  `;
+  document.body.appendChild(_playheadTooltip);
+  return _playheadTooltip;
+}
+
+function _showPlayheadTooltip(clientX, clientY, seconds) {
+  const tip = _ensurePlayheadTooltip();
+  tip.textContent = formatTime(seconds) + ' · ' + t('main.dragToSeek');
+  tip.style.left = (clientX + 12) + 'px';
+  tip.style.top = (clientY + 12) + 'px';
+  tip.style.display = 'block';
+}
+
+function _hidePlayheadTooltip() {
+  if (_playheadTooltip) _playheadTooltip.style.display = 'none';
+}
+
+/**
+ * 计算当前播放头在 fragment canvas 内部坐标系下的 X。
+ * 播放中：实时计算；未播放：使用 playbackPauseOffset。
+ */
+function _getCurrentPlayheadX() {
+  return playbackTimeToX(getCurrentPlaybackSeconds());
+}
+
+/**
+ * 把鼠标事件的 clientX 转换为 fragment canvas 内部 X 坐标。
+ * 因为 fragment-canvas 自身有 translate(-scrollX, -scrollY) 变换，
+ * getBoundingClientRect() 已反映了变换后的位置，所以 clientX-rect.left
+ * 直接就是 canvas 内部坐标。
+ */
+function _mouseToCanvasX(e) {
+  const rect = dom.fragmentCanvas.getBoundingClientRect();
+  return e.clientX - rect.left;
+}
+
+function _mouseToCanvasY(e) {
+  const rect = dom.fragmentCanvas.getBoundingClientRect();
+  return e.clientY - rect.top;
+}
+
+/**
+ * 把 canvas 内部 X 坐标转换为可播放的秒数，并截断到 [0, duration]。
+ */
+function _canvasXToClampedSeconds(x) {
+  const seconds = xToPlaybackTime(x);
+  const audioData = state.currentAudioData;
+  if (!audioData || audioData.length === 0) {
+    return Math.max(0, seconds);
+  }
+  const duration = audioData.length / 24000; // SAMPLE_RATE
+  return Math.max(0, Math.min(duration - 0.001, seconds));
+}
 
 // BPM and time signature inputs
 dom.bpmInput.addEventListener('change', () => {
@@ -37,10 +114,16 @@ dom.btnPlay.addEventListener('click', async () => {
     showAlertDialog(t('main.noFragmentsToPlay'));
     return;
   }
-  if (state.isSynthesizing) {
+  if (state.isPlaying || state.isSynthesizing) {
     return;
   }
-  await playAll();
+  // 已有缓存的合成音频：从暂停位置恢复播放（无需重新合成）。
+  // stopPlayback / 自然结束时 currentAudioData 会被置 null，下次点击 Play 会重新合成。
+  if (state.currentAudioData && state.currentAudioData.length > 0) {
+    await startAudioPlayback(state.playbackPauseOffset);
+  } else {
+    await playAll();
+  }
 });
 
 dom.btnPause.addEventListener('click', () => {

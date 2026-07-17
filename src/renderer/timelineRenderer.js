@@ -291,7 +291,32 @@ export function renderFragmentTimeline() {
   });
 }
 
-export function drawPlayheadLine(elapsedSeconds) {
+// 播放头拖拽 hit-test 容差（像素）
+export const PLAYHEAD_HIT_WIDTH = 12;
+
+/**
+ * 把秒数转换为 fragment canvas 内部的 X 坐标（含 zoom，不含 scroll，
+ * 因为 fragment-canvas 自身有 translate(-scrollX, -scrollY) 变换，
+ * 鼠标事件的 clientX-rect.left 已经反映了 scroll）。
+ */
+export function playbackTimeToX(seconds) {
+  const beatWidth = getBeatWidth();
+  const beat = (seconds / 60) * (state.project?.bpm || 120);
+  return beat * beatWidth;
+}
+
+/**
+ * 把 fragment canvas 内部的 X 坐标转换为秒数。
+ * 用于拖拽时根据鼠标位置计算新的播放时间。
+ */
+export function xToPlaybackTime(x) {
+  const beatWidth = getBeatWidth();
+  if (beatWidth <= 0) return 0;
+  const beat = x / beatWidth;
+  return (beat * 60) / (state.project?.bpm || 120);
+}
+
+export function drawPlayheadLine(elapsedSeconds, options = {}) {
   if (!dom.fragmentPlayheadCanvas) return;
   const ctx = dom.fragmentPlayheadCanvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
@@ -301,27 +326,52 @@ export function drawPlayheadLine(elapsedSeconds) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const beatWidth = getBeatWidth();
-  const currentBeat = (elapsedSeconds / 60) * state.project.bpm;
-  const x = currentBeat * beatWidth;
-
+  const x = playbackTimeToX(elapsedSeconds);
   if (x < 0 || x > w) return;
 
   const c = getCanvasColors();
+  const isPaused = options.isPaused === true;
+  const isHandleVisible = options.showHandle !== false;
+
+  ctx.save();
+  if (isPaused) {
+    // 暂停/拖拽态：半透明虚线，区分"已设置位置"与"实时播放"
+    ctx.globalAlpha = 0.65;
+    ctx.setLineDash([4, 3]);
+  }
+
   ctx.strokeStyle = c.playhead;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(x, 0);
   ctx.lineTo(x, h);
   ctx.stroke();
+  ctx.restore();
 
-  ctx.fillStyle = c.playhead;
-  ctx.beginPath();
-  ctx.moveTo(x - 5, 0);
-  ctx.lineTo(x + 5, 0);
-  ctx.lineTo(x, 8);
-  ctx.closePath();
-  ctx.fill();
+  if (isHandleVisible) {
+    // 顶部三角手柄：底边在 canvas 顶端 y=0，顶点指向下 y=8，
+    // 视觉上像挂在天花板上的小旗，提示用户可在此处按下并拖拽跳转播放进度。
+    ctx.fillStyle = c.playhead;
+    ctx.beginPath();
+    ctx.moveTo(x - 6, 0);
+    ctx.lineTo(x + 6, 0);
+    ctx.lineTo(x, 8);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+/**
+ * 绘制"已设置但未播放"的播放头位置（用户拖拽后或暂停后）。
+ * 不带三角手柄时也可用作纯位置指示。
+ */
+export function drawPausedPlayheadAt(offsetSeconds) {
+  if (!dom.fragmentPlayheadCanvas) return;
+  if (offsetSeconds == null || offsetSeconds < 0) {
+    clearPlayheadLine();
+    return;
+  }
+  drawPlayheadLine(offsetSeconds, { isPaused: true, showHandle: true });
 }
 
 export function clearPlayheadLine() {

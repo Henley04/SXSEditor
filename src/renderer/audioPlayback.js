@@ -4,7 +4,7 @@ import { t } from '../i18n/index.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
-import { drawPlayheadLine, clearPlayheadLine } from './timelineRenderer.js';
+import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine, playbackTimeToX, PLAYHEAD_HIT_WIDTH } from './timelineRenderer.js';
 
 // visibilitychange handler: pause rAF-driven UI updates when tab hidden
 // (audio playback continues via WebAudio/WASAPI in background).
@@ -182,9 +182,13 @@ export async function playAll() {
 
     state.currentAudioData = mixedAudio;
 
-    dom.timeDisplay.textContent = formatTime(0);
-    state.playbackPauseOffset = 0;
-    await startAudioPlayback(0);
+    // 不重置 playbackPauseOffset：若用户在合成前已通过拖拽 playhead 设置了起始位置，
+    // 则从该位置开始播放。stopPlayback / 自然结束时已重置为 0。
+    dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+    if (state.playbackPauseOffset > 0) {
+      drawPausedPlayheadAt(state.playbackPauseOffset);
+    }
+    await startAudioPlayback(state.playbackPauseOffset);
 
   } catch (error) {
     console.error('Synthesis failed:', error);
@@ -297,6 +301,7 @@ export function startSharedPlayback(offset) {
       state.playbackPauseOffset = 0;
       stopPlayheadAnimation();
       dom.timeDisplay.textContent = formatTime(0);
+      clearPlayheadLine();
     }
   };
 
@@ -345,6 +350,7 @@ export async function startExclusivePlayback(offset) {
         stopExclusivePlayback();
         stopPlayheadAnimation();
         dom.timeDisplay.textContent = formatTime(0);
+        clearPlayheadLine();
       }
     });
 
@@ -408,8 +414,13 @@ export function pausePlayback() {
     state.playbackPauseOffset = elapsed;
     stopExclusivePlayback();
     state.isPlaying = false;
-    stopPlayheadAnimation();
+    // 仅取消 rAF，不清除 playhead 视觉——保留显示"已暂停位置"的虚线播放头
+    if (state.exclusivePlaybackRaf) {
+      cancelAnimationFrame(state.exclusivePlaybackRaf);
+      state.exclusivePlaybackRaf = null;
+    }
     dom.timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
+    drawPausedPlayheadAt(elapsed);
   } else {
     if (!state.currentAudioSource) return;
     const context = getAudioContext();
@@ -417,8 +428,9 @@ export function pausePlayback() {
     state.playbackPauseOffset = elapsed;
     stopAudioSource();
     state.isPlaying = false;
-    stopPlayheadAnimation();
+    // stopAudioSource 已 cancel rAF，但不会清除画布；这里手动绘制暂停态播放头
     dom.timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
+    drawPausedPlayheadAt(elapsed);
   }
 }
 
@@ -432,6 +444,67 @@ export function stopPlayback() {
   stopPlayheadAnimation();
   state.currentAudioData = null;
   state.currentAudioBuffer = null;
+  dom.timeDisplay.textContent = formatTime(0);
+}
+
+/**
+ * 实时跳转到新的播放位置（不重新合成）。
+ * 复用已缓存的 state.currentAudioData，从 newOffset 开始播放。
+ * 播放中拖拽 playhead 时调用，避免重新合成的延迟。
+ *
+ * 如果未在播放，仅更新 playbackPauseOffset 和暂停态播放头视觉，
+ * 等用户点击 Play 时从该位置开始。
+ */
+export async function seekPlayback(newOffset) {
+  const audioData = state.currentAudioData;
+  if (!audioData || audioData.length === 0) {
+    // 没有缓存的音频：仅记录用户选择的位置，等合成后从这里开始
+    state.playbackPauseOffset = Math.max(0, newOffset);
+    drawPausedPlayheadAt(state.playbackPauseOffset);
+    dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+    return;
+  }
+
+  // 限制到 [0, duration)
+  const duration = audioData.length / SAMPLE_RATE;
+  const clamped = Math.max(0, Math.min(duration - 0.001, newOffset));
+
+  // 停止当前播放（保留 currentAudioData，不 null）
+  if (state.useExclusiveMode) {
+    if (state.exclusivePlaybackRaf) {
+      cancelAnimationFrame(state.exclusivePlaybackRaf);
+      state.exclusivePlaybackRaf = null;
+    }
+    window.electronAPI.audioStop().catch(() => {});
+  } else {
+    stopAudioSource();
+  }
+  state.isPlaying = false;
+
+  // 设置新的起始位置
+  state.playbackPauseOffset = clamped;
+
+  // 从新位置重新启动播放
+  await startAudioPlayback(clamped);
+}
+
+/**
+ * 返回当前播放位置（秒）。
+ * 播放中：根据 playbackStartTime 实时计算；
+ * 未播放：返回 state.playbackPauseOffset（用户拖拽/暂停保留的位置）。
+ * 用于事件处理器的 hit-test 与 tooltip 显示。
+ */
+export function getCurrentPlaybackSeconds() {
+  if (state.isPlaying) {
+    if (state.useExclusiveMode) {
+      return Math.max(0, Date.now() / 1000 - state.playbackStartTime);
+    }
+    if (state.audioContext) {
+      return Math.max(0, state.audioContext.currentTime - state.playbackStartTime);
+    }
+    return 0;
+  }
+  return state.playbackPauseOffset || 0;
 }
 
 export function stopAudioSource() {
