@@ -260,6 +260,88 @@ const JP_TO_EN_PHONEME_MAP_HYBRID = {
     'by': ['B', 'Y'],
 };
 
+/**
+ * Japanese kana → Cantonese (yue_) syllable-level phoneme mapping for hybrid mode.
+ *
+ * The base multilingual model vocabulary contains yue_ phonemes at the syllable
+ * level (e.g. yue_gaa1 = 粤拼 gaa1 = /kaː/). For each Japanese kana, we pick
+ * whichever representation — English ARPAbet (phoneme-level) or Cantonese
+ * yue_ (syllable-level) — is phonetically closest to the Japanese sound:
+ *
+ * - Vowels あ/お → yue_aa1 / yue_o1 (pure monophthongs, closer than English
+ *   AA /ɑ/ and AO /ɔ/ which have English-specific coloring).
+ * - い/う/え → en_IY1/UW1/EH1: Cantonese has no pure /i//u//e/ syllables
+ *   (ji1 = /ji/, wu1 = /wu/, no pure e), so ARPAbet stays closer.
+ * - か行 (k) → yue_g* (Cantonese g = /k/ unaspirated, matches Japanese k
+ *   better than English K = /kʰ/ aspirated).
+ * - さ行 (s) → yue_s* for pure /sV/ syllables; し → en_SH+IY1 (Japanese
+ *   /ɕi/ is palatalized, English SH /ʃ/ closer than Cantonese /s/);
+ *   す → en_S+UW1 (Cantonese lacks /su/).
+ * - た行 (t) → yue_d* (Cantonese d = /t/ unaspirated, matches Japanese t);
+ *   ち → en_CH+IY1 (Japanese /tɕi/, English CH closer); つ → en_T+S+UW1.
+ * - は行 (h) → yue_h* / yue_fu1 (Cantonese h/f match Japanese h/ɸ well).
+ * - ま行 (m) → yue_m* for /mV/; み/む → en_M+IY1/UW1 (Cantonese lacks
+ *   pure /mi//mu/).
+ * - や/よ → yue_jaa1 / yue_jo1 (Cantonese j = /j/); ゆ → en_Y+UW1
+ *   (Cantonese jyu1 = /jy/ rounded, not close to Japanese /jɯ/).
+ * - ら行 (r→l) → yue_l* (Cantonese l = /l/ closest to Japanese tap /ɾ/);
+ *   る → en_L+UW1 (Cantonese lacks pure /lu/).
+ * - わ → yue_waa1; を → yue_o1 (same as お).
+ * - ぱ行 (p) → yue_paa3 / yue_po3 (Cantonese p = /pʰ/ aspirated, matches
+ *   Japanese p); ぴ/ぷ/ぺ → en_P+IY1/UW1/EH1 (Cantonese lacks pure /pi//pu//pe/).
+ * - ん → en_N (universal nasal, more flexible than yue_ng4).
+ * - が/ざ/だ/ば行 → ARPAbet (Japanese voiced stops /g z d b/ have no
+ *   Cantonese equivalent — Cantonese b/d/g are voiceless unaspirated /p t k/).
+ * - 拗音 (yōon) → ARPAbet (Japanese palatalized consonants /CjV/ have no
+ *   Cantonese equivalent at the syllable level).
+ * - 促音 っ → en_T (matches existing hybrid behavior).
+ *
+ * Cantonese tones are arbitrary (1 high-level / 3 mid-level / 4 low-falling
+ * chosen as available) — the SVS model receives F0 from the musical note,
+ * so the tone field acts mainly as a vocabulary distinguisher.
+ */
+const JpKanaToYueSyllableMap = {
+    // あ段 — pure vowels where Cantonese has them
+    'あ': 'yue_aa1', 'お': 'yue_o1', 'を': 'yue_o1',
+
+    // か行 — Cantonese g unaspirated /k/ matches Japanese k
+    'か': 'yue_gaa1', 'く': 'yue_gu1', 'こ': 'yue_go1',
+
+    // さ行 — Cantonese s /s/ matches Japanese s
+    'さ': 'yue_saa1', 'せ': 'yue_se1', 'そ': 'yue_so1',
+
+    // た行 — Cantonese d unaspirated /t/ matches Japanese t
+    'た': 'yue_daa1', 'て': 'yue_de1', 'と': 'yue_do1',
+
+    // な行 — Cantonese n /n/ matches Japanese n (only low-tone variants exist)
+    'な': 'yue_naa4', 'ね': 'yue_ne1', 'の': 'yue_no4',
+
+    // は行 — Cantonese h /h/ and f /f/ match Japanese h /h/ and ɸ
+    'は': 'yue_haa1', 'ひ': 'yue_hi1', 'ふ': 'yue_fu1', 'へ': 'yue_he3', 'ほ': 'yue_ho1',
+
+    // ま行 — Cantonese m /m/ matches Japanese m
+    'ま': 'yue_maa1', 'め': 'yue_me1', 'も': 'yue_mo1',
+
+    // や行 — Cantonese j /j/ matches Japanese y
+    'や': 'yue_jaa1', 'よ': 'yue_jo1',
+
+    // ら行 — Cantonese l /l/ closest to Japanese tap /ɾ/
+    'ら': 'yue_laa1', 'り': 'yue_li1', 'れ': 'yue_le4', 'ろ': 'yue_lo1',
+
+    // わ行 — Cantonese w /w/ matches Japanese w
+    'わ': 'yue_waa1',
+
+    // ぱ行 — Cantonese p aspirated /pʰ/ matches Japanese p
+    'ぱ': 'yue_paa3', 'ぽ': 'yue_po3',
+};
+
+// Katakana equivalents (ア↔あ offset 0x60), generated at module load.
+const JpKataKanaToYueSyllableMap = {};
+for (const [hira, yue] of Object.entries(JpKanaToYueSyllableMap)) {
+    const kata = String.fromCharCode(hira.charCodeAt(0) + 0x60);
+    JpKataKanaToYueSyllableMap[kata] = yue;
+}
+
 class TextProcessing {
     constructor(options = {}) {
         this.phone2idx = {};
@@ -523,13 +605,24 @@ class TextProcessing {
      * 内部先调用 _japaneseG2p 得到日语音素序列（如 'k a'），再逐个查表映射为 ARPAbet。
      * 映射后的音素附带 duration weight（通过 _attachEnglishWeights），用于 UI 时长分配。
      *
-     * hybrid 模式使用改进映射表（L 替代 R、AO 替代 OW），en-phonemes 模式使用默认表。
+     * hybrid 模式：
+     *   1) 优先尝试假名→粤语音节级映射（_japaneseKanaToYuePhonemes）。当整段歌词
+     *      完全由"有粤语对应音节"的假名组成时，返回 yue_ 音素数组。
+     *   2) 否则回退到 ARPAbet 映射（处理汉字、が/ざ/だ/ば行、拗音、促音、ん等）。
+     *
+     * en-phonemes 模式使用默认 ARPAbet 映射表。
      * 'pau'（未知汉字回退）映射为 <SP>（静音）。
      *
      * @param {string} text - 日文歌词（假名/汉字/混合）
      * @returns {Array<{name:string, display:string, weight?:number}>} 英语音素对象数组
      */
     _japaneseToEnglishPhonemes(text) {
+        // hybrid 模式：优先用假名→粤语映射（仅当整段歌词都是可映射假名时）
+        if (this.japaneseVocalization === 'hybrid') {
+            const yueResult = this._japaneseKanaToYuePhonemes(text);
+            if (yueResult) return this._attachEnglishWeights(yueResult);
+        }
+
         const jpPhonemeStr = this._japaneseG2p(text);
         if (!jpPhonemeStr) return [{ name: '<SP>', display: 'SP' }];
 
@@ -554,6 +647,51 @@ class TextProcessing {
             }
         }
         return this._attachEnglishWeights(enPhonemes);
+    }
+
+    /**
+     * 尝试把日文歌词（假名）逐假名映射为粤语音节级音素（yue_ 前缀）。
+     *
+     * 仅当歌词完全由"在 JpKanaToYueSyllableMap 中"的假名组成时返回数组；
+     * 一旦遇到任何未覆盖的字符（汉字、字母、が/ざ/だ/ば行、拗音、促音、
+     * ん 等），立即返回 null，让上层走 ARPAbet 回退。
+     *
+     * 长音符号（ー / 〜）被跳过，与 _japaneseG2p 行为一致。
+     *
+     * @param {string} text - 日文歌词（仅假名）
+     * @returns {Array<{name:string, display:string}>|null} yue_ 音素对象数组，或 null
+     */
+    _japaneseKanaToYuePhonemes(text) {
+        if (!text || text.length === 0) return null;
+        const result = [];
+        let i = 0;
+        while (i < text.length) {
+            const ch = text[i];
+            // 跳过长音符号
+            if (ch === 'ー' || ch === '〜') { i++; continue; }
+
+            // 先尝试拗音两字符（如 きゃ）—— 这些都不在粤语映射表里，
+            // 一旦遇到就返回 null 让 ARPAbet 处理
+            if (i + 1 < text.length) {
+                const combo = ch + text[i + 1];
+                if (JP_HIRAGANA_MAP[combo] || JP_KATAKANA_MAP[combo]) {
+                    // 拗音存在但粤语映射表未覆盖 → 回退 ARPAbet
+                    return null;
+                }
+            }
+
+            // 单字符假名
+            const yueName = JpKanaToYueSyllableMap[ch] || JpKataKanaToYueSyllableMap[ch];
+            if (yueName) {
+                result.push({ name: yueName, display: ch });
+                i++;
+                continue;
+            }
+
+            // 该字符不是可映射的假名（汉字、字母、未覆盖假名等）→ 回退 ARPAbet
+            return null;
+        }
+        return result.length > 0 ? result : null;
     }
 
     /**

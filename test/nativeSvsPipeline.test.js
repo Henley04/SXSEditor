@@ -547,13 +547,15 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
     });
 
     it('should prioritize vowel over consonant in short Japanese syllable note', () => {
+      // 使用 jp-lora 模式确保 か -> jp_k + jp_a 两token结构（hybrid 模式下 か 会映射为单个 yue_gaa1）
+      const jpPipeline = new NativeSVSPipeline('/fake/model/dir/', { japaneseVocalization: 'jp-lora' });
       // "か" -> k a = 2 tokens (j=2, no SEP for Japanese)
       // bpm=120, duration=0.125 beats = 0.0625s ≈ 3 frames; innerFrames = 3-2 = 1 < 2
       // 元音优先策略：帧数不足时，元音 a 优先于辅音 k 获得帧
       const notes = [
         { pitch: 60, start: 0, duration: 0.125, lyric: 'か' },
       ];
-      const result = pipeline.notesToSequences(notes, 120, null);
+      const result = jpPipeline.notesToSequences(notes, 120, null);
 
       // token sequence: PAD(0), BOW(1), jp_k(2), jp_a(3), EOW(4)
       // 元音 a (token 3) 应获得至少 1 帧（优先于辅音 k）
@@ -566,13 +568,15 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
     });
 
     it('should give vowel 2 frames in 8th-note Japanese syllable', () => {
+      // 使用 jp-lora 模式确保 か -> jp_k + jp_a 两token结构
+      const jpPipeline = new NativeSVSPipeline('/fake/model/dir/', { japaneseVocalization: 'jp-lora' });
       // "か" -> k a = 2 tokens (j=2)
       // bpm=120, duration=0.25 beats = 0.125s ≈ 6 frames; innerFrames = 6-2 = 4 >= 2
       // 帧数充足时走基数+余数，但元音应获得合理帧数
       const notes = [
         { pitch: 60, start: 0, duration: 0.25, lyric: 'か' },
       ];
-      const result = pipeline.notesToSequences(notes, 120, null);
+      const result = jpPipeline.notesToSequences(notes, 120, null);
 
       // 元音 a (token 3) 应获得至少 2 帧
       const aToken = 3;

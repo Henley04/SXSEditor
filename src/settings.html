@@ -467,14 +467,14 @@
                         </label>
                         <label class="device-mode-radio">
                             <input type="radio" name="japaneseVocalization" value="hybrid" checked>
-                            <span class="radio-label" data-i18n="settings.japaneseVocalizationHybrid">混合音素（改进映射，默认）</span>
+                            <span class="radio-label" data-i18n="settings.japaneseVocalizationHybrid">混合音素（ARPAbet+粤语，默认）</span>
                         </label>
                         <label class="device-mode-radio">
                             <input type="radio" name="japaneseVocalization" value="jp-lora" disabled>
                             <span class="radio-label" data-i18n="settings.japaneseVocalizationJpLora">日语 LoRA 模型（开发中）</span>
                         </label>
                     </div>
-                    <p class="hint" data-i18n="settings.japaneseVocalizationHint">选择日语歌词的发声方式。英语音素迁移使用基础多语言模型，将日文假名映射为最接近的英语 ARPAbet 音素合成，无需额外下载；混合音素在英语音素迁移的基础上改进映射——ら行使用 L（更接近日语弹音 [ɾ]）、お段使用 AO（纯元音，非双元音 OW），发音更自然；日语 LoRA 模型使用专门的日语微调模型，音质更佳但需单独下载（当前开发中，暂不可用）。</p>
+                    <p class="hint" data-i18n="settings.japaneseVocalizationHint">选择日语歌词的发声方式。英语音素迁移使用基础多语言模型，将日文假名映射为最接近的英语 ARPAbet 音素合成，无需额外下载；混合音素在英语音素迁移的基础上，对每个假名在英语 ARPAbet（音素级）与粤语 yue_（音节级）之间挑选发音最接近的一项——辅音优先粤语、纯元音优先粤语、ら行用粤 l 接近日语弹音 /ɾ/；拗音/浊行/汉字回退 ARPAbet；日语 LoRA 模型使用专门的日语微调模型，音质更佳但需单独下载（当前开发中，暂不可用）。</p>
                 </div>
                 <div class="setting-group">
                     <label class="device-mode-radio">

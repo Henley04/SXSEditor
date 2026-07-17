@@ -328,79 +328,66 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       expect(out[1].name).to.equal('en_Y');
     });
 
-    it('should resolve hiragana お to AO1 in hybrid mode', () => {
+    it('should resolve hiragana お to yue_o1 in hybrid mode (Cantonese pure vowel)', () => {
       const out = tpHybrid.resolveLyricToPhonemes('お');
       expect(out).to.have.lengthOf(1);
-      expect(out[0].name).to.equal('en_AO1');
+      expect(out[0].name).to.equal('yue_o1');
     });
 
-    it('should resolve hiragana ら to L + AA1 in hybrid mode', () => {
+    it('should resolve hiragana ら to yue_laa1 in hybrid mode (Cantonese l for Japanese r)', () => {
       const out = tpHybrid.resolveLyricToPhonemes('ら');
-      const names = out.map(p => p.name);
-      expect(names).to.include('en_L');
-      expect(names).to.include('en_AA1');
-      // Should NOT include R
-      expect(names).to.not.include('en_R');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('yue_laa1');
     });
 
-    it('should resolve hiragana ろ to L + AO1 in hybrid mode', () => {
+    it('should resolve hiragana ろ to yue_lo1 in hybrid mode', () => {
       const out = tpHybrid.resolveLyricToPhonemes('ろ');
-      const names = out.map(p => p.name);
-      expect(names).to.include('en_L');
-      expect(names).to.include('en_AO1');
-      // Should NOT include R or OW1
-      expect(names).to.not.include('en_R');
-      expect(names).to.not.include('en_OW1');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('yue_lo1');
     });
 
-    it('should resolve りょ to L Y AO1 in hybrid mode', () => {
+    it('should resolve りょ to L Y AO1 in hybrid mode (yōon falls back to ARPAbet)', () => {
       const out = tpHybrid.resolveLyricToPhonemes('りょ');
       const names = out.map(p => p.name);
       expect(names).to.deep.equal(['en_L', 'en_Y', 'en_AO1']);
     });
 
-    it('should map か (ka) same as en-phonemes (K + AA1)', () => {
+    it('should map か (ka) to yue_gaa1 in hybrid mode (Cantonese unaspirated g)', () => {
       const out = tpHybrid.resolveLyricToPhonemes('か');
-      const names = out.map(p => p.name);
-      expect(names).to.include('en_K');
-      expect(names).to.include('en_AA1');
+      expect(out).to.have.lengthOf(1);
+      expect(out[0].name).to.equal('yue_gaa1');
     });
 
-    it('should map つ (ts) to T + S same as en-phonemes', () => {
+    it('should map つ (ts) to T + S same as en-phonemes (no Cantonese /su/)', () => {
       const out = tpHybrid.resolveLyricToPhonemes('つ');
       const names = out.map(p => p.name);
       expect(names).to.deep.equal(['en_T', 'en_S', 'en_UW1']);
     });
 
-    it('should produce en_ prefixed phonemes (base model compatible)', () => {
+    it('should fall back to ARPAbet when lyric contains が (no Cantonese voiced /g/)', () => {
       const out = tpHybrid.resolveLyricToPhonemes('ありがとう');
       expect(out.length).to.be.greaterThan(2);
       out.forEach(p => expect(p.name.startsWith('en_') || p.name === '<SP>').to.be.true);
     });
 
-    it('should differ from en-phonemes for ら行 (L vs R)', () => {
+    it('should differ from en-phonemes for ら (Cantonese yue_laa1 vs en_R + en_AA1)', () => {
       const hybridOut = tpHybrid.resolveLyricToPhonemes('ら');
       const enOut = tpEn.resolveLyricToPhonemes('ら');
       const hybridNames = hybridOut.map(p => p.name);
       const enNames = enOut.map(p => p.name);
-      // Both should have 2 phonemes
-      expect(hybridNames).to.have.lengthOf(2);
-      expect(enNames).to.have.lengthOf(2);
-      // Consonant differs: hybrid uses L, en-phonemes uses R
-      expect(hybridNames[0]).to.equal('en_L');
-      expect(enNames[0]).to.equal('en_R');
-      // Vowel is same
-      expect(hybridNames[1]).to.equal(enNames[1]);
+      // hybrid uses Cantonese syllable-level yue_laa1, en-phonemes uses ARPAbet R + AA1
+      expect(hybridNames).to.deep.equal(['yue_laa1']);
+      expect(enNames).to.deep.equal(['en_R', 'en_AA1']);
     });
 
-    it('should differ from en-phonemes for お段 (AO1 vs OW1)', () => {
+    it('should differ from en-phonemes for お (Cantonese yue_o1 vs en_OW1)', () => {
       const hybridOut = tpHybrid.resolveLyricToPhonemes('お');
       const enOut = tpEn.resolveLyricToPhonemes('お');
-      expect(hybridOut[0].name).to.equal('en_AO1');
+      expect(hybridOut[0].name).to.equal('yue_o1');
       expect(enOut[0].name).to.equal('en_OW1');
     });
 
-    it('should attach duration weights to mapped phonemes', () => {
+    it('should attach duration weights to mapped phonemes (incl. yue_)', () => {
       const out = tpHybrid.resolveLyricToPhonemes('か');
       out.forEach(p => expect(p).to.have.property('weight'));
     });
@@ -411,16 +398,207 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       expect(names).to.include('en_T');
     });
 
-    it('should skip ー and 〜 in hybrid mode', () => {
+    it('should skip ー and 〜 in hybrid mode (Cantonese path)', () => {
       const out = tpHybrid.resolveLyricToPhonemes('あーあ');
       const names = out.map(p => p.name);
-      expect(names).to.deep.equal(['en_AA1', 'en_AA1']);
+      expect(names).to.deep.equal(['yue_aa1', 'yue_aa1']);
     });
 
     it('should force Japanese→English with <jp> prefix for kanji', () => {
       const out = tpHybrid.resolveLyricToPhonemes('<jp>愛');
       expect(out.length).to.be.greaterThan(0);
       out.forEach(p => expect(p.name.startsWith('en_') || p.name === '<SP>').to.be.true);
+    });
+  });
+
+  describe('resolveLyricToPhonemes (hybrid mode — Cantonese yue_ mapping)', () => {
+    // Hybrid mode now mixes Cantonese yue_ (syllable-level) and English ARPAbet
+    // (phoneme-level) phonemes, picking whichever is phonetically closer to each
+    // Japanese kana. Kanji, voiced rows (が/ざ/だ/ば), yōon (拗音), っ, ん all
+    // fall back to ARPAbet since Cantonese has no close equivalent.
+
+    it('should map あ row vowels to Cantonese pure vowels where available', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('あ')[0].name).to.equal('yue_aa1');
+      expect(tpHybrid.resolveLyricToPhonemes('お')[0].name).to.equal('yue_o1');
+      expect(tpHybrid.resolveLyricToPhonemes('を')[0].name).to.equal('yue_o1');
+    });
+
+    it('should map い/う/え to ARPAbet (no pure Cantonese /i//u//e/)', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('い')[0].name).to.equal('en_IY1');
+      expect(tpHybrid.resolveLyricToPhonemes('う')[0].name).to.equal('en_UW1');
+      expect(tpHybrid.resolveLyricToPhonemes('え')[0].name).to.equal('en_EH1');
+    });
+
+    it('should map か行 (k) to Cantonese g* (unaspirated /k/)', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('か')[0].name).to.equal('yue_gaa1');
+      expect(tpHybrid.resolveLyricToPhonemes('く')[0].name).to.equal('yue_gu1');
+      expect(tpHybrid.resolveLyricToPhonemes('こ')[0].name).to.equal('yue_go1');
+      // き/け fall back to ARPAbet (no pure Cantonese /ki//ke/)
+      const kiOut = tpHybrid.resolveLyricToPhonemes('き').map(p => p.name);
+      expect(kiOut).to.deep.equal(['en_K', 'en_IY1']);
+      const keOut = tpHybrid.resolveLyricToPhonemes('け').map(p => p.name);
+      expect(keOut).to.deep.equal(['en_K', 'en_EH1']);
+    });
+
+    it('should map さ行 (s) to Cantonese s* for pure /sV/ syllables', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('さ')[0].name).to.equal('yue_saa1');
+      expect(tpHybrid.resolveLyricToPhonemes('せ')[0].name).to.equal('yue_se1');
+      expect(tpHybrid.resolveLyricToPhonemes('そ')[0].name).to.equal('yue_so1');
+      // し → ARPAbet SH+IY1 (Japanese /ɕi/ palatalized, closer to English /ʃ/)
+      const shiOut = tpHybrid.resolveLyricToPhonemes('し').map(p => p.name);
+      expect(shiOut).to.deep.equal(['en_SH', 'en_IY1']);
+      // す → ARPAbet S+UW1 (no Cantonese /su/)
+      const suOut = tpHybrid.resolveLyricToPhonemes('す').map(p => p.name);
+      expect(suOut).to.deep.equal(['en_S', 'en_UW1']);
+    });
+
+    it('should map た行 (t) to Cantonese d* (unaspirated /t/)', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('た')[0].name).to.equal('yue_daa1');
+      expect(tpHybrid.resolveLyricToPhonemes('て')[0].name).to.equal('yue_de1');
+      expect(tpHybrid.resolveLyricToPhonemes('と')[0].name).to.equal('yue_do1');
+      // ち → ARPAbet CH+IY1; つ → ARPAbet T+S+UW1
+      const chiOut = tpHybrid.resolveLyricToPhonemes('ち').map(p => p.name);
+      expect(chiOut).to.deep.equal(['en_CH', 'en_IY1']);
+      const tsuOut = tpHybrid.resolveLyricToPhonemes('つ').map(p => p.name);
+      expect(tsuOut).to.deep.equal(['en_T', 'en_S', 'en_UW1']);
+    });
+
+    it('should map な行 (n) to Cantonese n* where available', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('な')[0].name).to.equal('yue_naa4');
+      expect(tpHybrid.resolveLyricToPhonemes('ね')[0].name).to.equal('yue_ne1');
+      expect(tpHybrid.resolveLyricToPhonemes('の')[0].name).to.equal('yue_no4');
+      // に → ARPAbet N+Y+IY1 (G2P yields 'ny i', hybrid maps ny→N+Y, i→IY1)
+      const niOut = tpHybrid.resolveLyricToPhonemes('に').map(p => p.name);
+      expect(niOut).to.deep.equal(['en_N', 'en_Y', 'en_IY1']);
+      const nuOut = tpHybrid.resolveLyricToPhonemes('ぬ').map(p => p.name);
+      expect(nuOut).to.deep.equal(['en_N', 'en_UW1']);
+    });
+
+    it('should map は行 (h) to Cantonese h* / fu1', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('は')[0].name).to.equal('yue_haa1');
+      expect(tpHybrid.resolveLyricToPhonemes('ひ')[0].name).to.equal('yue_hi1');
+      expect(tpHybrid.resolveLyricToPhonemes('ふ')[0].name).to.equal('yue_fu1');
+      expect(tpHybrid.resolveLyricToPhonemes('へ')[0].name).to.equal('yue_he3');
+      expect(tpHybrid.resolveLyricToPhonemes('ほ')[0].name).to.equal('yue_ho1');
+    });
+
+    it('should map ま行 (m) to Cantonese m* where available', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('ま')[0].name).to.equal('yue_maa1');
+      expect(tpHybrid.resolveLyricToPhonemes('め')[0].name).to.equal('yue_me1');
+      expect(tpHybrid.resolveLyricToPhonemes('も')[0].name).to.equal('yue_mo1');
+      // み → ARPAbet M+Y+IY1 (G2P yields 'my i', hybrid maps my→M+Y, i→IY1)
+      const miOut = tpHybrid.resolveLyricToPhonemes('み').map(p => p.name);
+      expect(miOut).to.deep.equal(['en_M', 'en_Y', 'en_IY1']);
+      const muOut = tpHybrid.resolveLyricToPhonemes('む').map(p => p.name);
+      expect(muOut).to.deep.equal(['en_M', 'en_UW1']);
+    });
+
+    it('should map や/よ to Cantonese j* (and ゆ to ARPAbet)', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('や')[0].name).to.equal('yue_jaa1');
+      expect(tpHybrid.resolveLyricToPhonemes('よ')[0].name).to.equal('yue_jo1');
+      const yuOut = tpHybrid.resolveLyricToPhonemes('ゆ').map(p => p.name);
+      expect(yuOut).to.deep.equal(['en_Y', 'en_UW1']);
+    });
+
+    it('should map ら行 (r) to Cantonese l* (closest to Japanese tap /ɾ/)', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('ら')[0].name).to.equal('yue_laa1');
+      expect(tpHybrid.resolveLyricToPhonemes('り')[0].name).to.equal('yue_li1');
+      expect(tpHybrid.resolveLyricToPhonemes('れ')[0].name).to.equal('yue_le4');
+      expect(tpHybrid.resolveLyricToPhonemes('ろ')[0].name).to.equal('yue_lo1');
+      // る → ARPAbet (no Cantonese /lu/)
+      const ruOut = tpHybrid.resolveLyricToPhonemes('る').map(p => p.name);
+      expect(ruOut).to.deep.equal(['en_L', 'en_UW1']);
+    });
+
+    it('should map わ to Cantonese waa1', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('わ')[0].name).to.equal('yue_waa1');
+    });
+
+    it('should map ぱ行 (p) to Cantonese p* (aspirated /pʰ/)', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('ぱ')[0].name).to.equal('yue_paa3');
+      expect(tpHybrid.resolveLyricToPhonemes('ぽ')[0].name).to.equal('yue_po3');
+      // ぴ → ARPAbet P+Y+IY1 (G2P yields 'py i', hybrid maps py→P+Y, i→IY1)
+      const piOut = tpHybrid.resolveLyricToPhonemes('ぴ').map(p => p.name);
+      expect(piOut).to.deep.equal(['en_P', 'en_Y', 'en_IY1']);
+    });
+
+    it('should fall back to ARPAbet for が/ざ/だ/ば行 (voiced stops)', () => {
+      const gaOut = tpHybrid.resolveLyricToPhonemes('が').map(p => p.name);
+      expect(gaOut).to.deep.equal(['en_G', 'en_AA1']);
+      const zaOut = tpHybrid.resolveLyricToPhonemes('ざ').map(p => p.name);
+      expect(zaOut).to.deep.equal(['en_Z', 'en_AA1']);
+      const daOut = tpHybrid.resolveLyricToPhonemes('だ').map(p => p.name);
+      expect(daOut).to.deep.equal(['en_D', 'en_AA1']);
+      const baOut = tpHybrid.resolveLyricToPhonemes('ば').map(p => p.name);
+      expect(baOut).to.deep.equal(['en_B', 'en_AA1']);
+    });
+
+    it('should fall back to ARPAbet for ん (universal nasal)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('ん').map(p => p.name);
+      expect(out).to.deep.equal(['en_N']);
+    });
+
+    it('should fall back to ARPAbet for っ (gemination marker)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('っ').map(p => p.name);
+      expect(out).to.deep.equal(['en_T']);
+    });
+
+    it('should fall back to ARPAbet for yōon (palatalized consonants)', () => {
+      const kyaOut = tpHybrid.resolveLyricToPhonemes('きゃ').map(p => p.name);
+      expect(kyaOut).to.deep.equal(['en_K', 'en_Y', 'en_AA1']);
+      const ryoOut = tpHybrid.resolveLyricToPhonemes('りょ').map(p => p.name);
+      expect(ryoOut).to.deep.equal(['en_L', 'en_Y', 'en_AO1']);
+    });
+
+    it('should map multi-kana lyrics to mixed yue_ sequence when all kanas are covered', () => {
+      // さくら = さ + く + ら → all in Cantonese map
+      const out = tpHybrid.resolveLyricToPhonemes('さくら').map(p => p.name);
+      expect(out).to.deep.equal(['yue_saa1', 'yue_gu1', 'yue_laa1']);
+    });
+
+    it('should fall back to ARPAbet for multi-kana lyrics with any uncovered kana', () => {
+      // さくらが = さ + く + ら + が → が not in Cantonese map → all ARPAbet
+      const out = tpHybrid.resolveLyricToPhonemes('さくらが');
+      expect(out.length).to.be.greaterThan(3);
+      out.forEach(p => expect(p.name.startsWith('en_') || p.name === '<SP>').to.be.true);
+    });
+
+    it('should map katakana to same Cantonese phonemes as hiragana', () => {
+      expect(tpHybrid.resolveLyricToPhonemes('カ')[0].name).to.equal('yue_gaa1');
+      expect(tpHybrid.resolveLyricToPhonemes('サ')[0].name).to.equal('yue_saa1');
+      expect(tpHybrid.resolveLyricToPhonemes('ラ')[0].name).to.equal('yue_laa1');
+    });
+
+    it('should attach weight=1.0 to yue_ phonemes (durationStats has no yue_ entries)', () => {
+      const out = tpHybrid.resolveLyricToPhonemes('さくら');
+      out.forEach(p => {
+        expect(p).to.have.property('weight');
+        if (p.name.startsWith('yue_')) {
+          expect(p.weight).to.equal(1.0);
+        }
+      });
+    });
+
+    it('should fall back to ARPAbet for kanji input (with <jp> prefix)', () => {
+      // 愛 is a kanji — _isJapanese() only matches kana, so <jp> prefix is needed
+      // to force the Japanese G2P path. Without <jp>, 愛 would be treated as
+      // Chinese (zh_ai4) by _charToZhPhoneme.
+      const out = tpHybrid.resolveLyricToPhonemes('<jp>愛');
+      expect(out.length).to.be.greaterThan(0);
+      out.forEach(p => expect(p.name.startsWith('en_') || p.name === '<SP>').to.be.true);
+    });
+
+    it('should not affect en-phonemes mode (still pure ARPAbet)', () => {
+      // en-phonemes mode should NOT use Cantonese mapping
+      const out = tpEn.resolveLyricToPhonemes('か').map(p => p.name);
+      expect(out).to.deep.equal(['en_K', 'en_AA1']);
+      const raOut = tpEn.resolveLyricToPhonemes('ら').map(p => p.name);
+      expect(raOut).to.deep.equal(['en_R', 'en_AA1']);
+    });
+
+    it('should not affect jp-lora mode (still uses jp_ phonemes)', () => {
+      const out = tpJp.resolveLyricToPhonemes('か').map(p => p.name);
+      expect(out).to.deep.equal(['jp_k', 'jp_a']);
     });
   });
 
