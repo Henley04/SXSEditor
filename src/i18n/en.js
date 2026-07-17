@@ -152,7 +152,8 @@ export default {
     unsavedChangesDesc: 'The project has unsaved changes. Do you want to save before exiting?',
     saveAndExit: 'Save & Exit',
     discardChanges: "Don't Save",
-    discardCancel: 'Cancel'
+    discardCancel: 'Cancel',
+    dragToSeek: 'Drag to seek'
   },
   fragment: {
     title: 'Fragment Editor',
@@ -327,7 +328,8 @@ export default {
     saveFailed: 'Save failed',
     noAudioReceived: 'No audio data received',
     initFailed: 'Initialization failed',
-    consoleStarted: 'Audio preprocessing page started'
+    consoleStarted: 'Audio preprocessing page started',
+    dragToSeek: 'Drag to seek'
   },
   settings: {
     title: 'Settings',

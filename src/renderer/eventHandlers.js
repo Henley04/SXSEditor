@@ -172,6 +172,25 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
   // Record click position for click-vs-drag detection
   _clickStartPos = { x: e.clientX, y: e.clientY };
 
+  // 左键点击播放头三角形手柄或 header 区域 → 开始拖拽设置/跳转播放位置
+  // 优先级高于分片拖拽，避免 playhead 卡在分片边缘时无法拖动
+  if (e.button === 0) {
+    const canvasH = dom.fragmentCanvas.clientHeight;
+    const playheadX = _getCurrentPlayheadX();
+    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
+      && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
+    const onHeader = y <= HEADER_HEIGHT;
+    if (onPlayhead || onHeader) {
+      const newSeconds = _canvasXToClampedSeconds(x);
+      _isPlayheadDragging = true;
+      // 拖拽起始位置即跳转到此处
+      seekPlayback(newSeconds);
+      // 在拖拽期间持续 seek，由 mousemove 处理
+      _hidePlayheadTooltip();
+      return;
+    }
+  }
+
   for (let i = 0; i < singers.length; i++) {
     const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
 
@@ -208,7 +227,35 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
 });
 
 dom.fragmentCanvas.addEventListener('mousemove', (e) => {
-  if (!state.dragState) return;
+  // 拖拽 playhead 优先级最高
+  if (_isPlayheadDragging) {
+    const x = _mouseToCanvasX(e);
+    const newSeconds = _canvasXToClampedSeconds(x);
+    seekPlayback(newSeconds);
+    return;
+  }
+
+  if (!state.dragState) {
+    // 鼠标悬停在 playhead 上时：显示 ew-resize 光标 + 时间 tooltip
+    const rect = dom.fragmentCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const canvasH = dom.fragmentCanvas.clientHeight;
+    const playheadX = _getCurrentPlayheadX();
+    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
+      && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
+    const onHeader = y <= HEADER_HEIGHT;
+    if (onPlayhead || onHeader) {
+      dom.fragmentCanvas.style.cursor = 'ew-resize';
+      const tipSeconds = _canvasXToClampedSeconds(x);
+      _showPlayheadTooltip(e.clientX, e.clientY, tipSeconds);
+      return;
+    } else {
+      dom.fragmentCanvas.style.cursor = 'default';
+      _hidePlayheadTooltip();
+    }
+    return;
+  }
 
   const rect = dom.fragmentCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
@@ -268,6 +315,13 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
 });
 
 dom.fragmentCanvas.addEventListener('mouseup', (e) => {
+  // 结束 playhead 拖拽
+  if (_isPlayheadDragging) {
+    _isPlayheadDragging = false;
+    _hidePlayheadTooltip();
+    return;
+  }
+
   // Check if this was a click (no significant movement) vs drag
   if (_clickStartPos && state.dragState) {
     const dx = e.clientX - _clickStartPos.x;
@@ -288,6 +342,8 @@ dom.fragmentCanvas.addEventListener('mouseup', (e) => {
 });
 dom.fragmentCanvas.addEventListener('mouseleave', () => {
   _clickStartPos = null;
+  _isPlayheadDragging = false;
+  _hidePlayheadTooltip();
   finishDrag();
 });
 

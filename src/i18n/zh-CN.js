@@ -149,10 +149,11 @@ export default {
     midiProjectInfoApplied: '已同步项目信息',
     midiProjectInfoSkipped: '已跳过项目信息同步',
     unsavedChanges: '未保存的更改',
-    unsavedChangesDesc: '项目有未保存的更改，是否在退出前保存？',
+    unsavedChangesDesc: '项目有未保存的更改。退出前是否保存？',
     saveAndExit: '保存并退出',
     discardChanges: '不保存',
-    discardCancel: '取消'
+    discardCancel: '取消',
+    dragToSeek: '拖动以跳转播放进度'
   },
   fragment: {
     title: '分片编辑',
@@ -327,7 +328,8 @@ export default {
     saveFailed: '保存失败',
     noAudioReceived: '未接收到音频数据',
     initFailed: '初始化失败',
-    consoleStarted: '音频预处理页面已启动'
+    consoleStarted: '音频预处理页面已启动',
+    dragToSeek: '拖动以跳转播放进度'
   },
   settings: {
     title: '设置',
