@@ -1887,6 +1887,328 @@ class OnnxSVSPipeline {
         }
     }
 
+    /**
+     * 多分片时间交错流式合成（主页面 Play All 启用 diffStep 分块时使用）。
+     *
+     * 将所有分片的 diffusion chunk 按全局时间顺序交错推理：
+     *   T1chunk1 → T2chunk1 → T1chunk2 → T2chunk2 → ...
+     * 而非逐分片推理完再推理下一个，使首音频延迟与分片数量无关。
+     *
+     * 流程：
+     * 1. 逐分片准备（encoder + 初始化噪声 + 分块规划）
+     * 2. 合并所有分片的 chunk 到全局时间队列，按时间排序
+     * 3. 按时间顺序执行：diffusion chunk → vocoder → 流式推送
+     * 4. 混合所有分片音频到最终输出
+     *
+     * @param {Array} fragments - 分片规格数组 [{notes, startTimeBeat, durationBeats, options}]
+     * @param {number} bpm
+     * @param {Object} options - {onProgress, onChunkAudio}
+     * @returns {Promise<Float32Array>} 混合后的完整音频
+     */
+    async synthesizeMultiStreaming(fragments, bpm, options = {}) {
+        if (!this.initialized) {
+            await this.init();
+        }
+        await this.ensureAllModelsLoaded();
+        this._currentF0Hz = null;
+        const onProgress = options.onProgress || (() => {});
+        const onChunkAudio = options.onChunkAudio || null;
+
+        if (!fragments || fragments.length === 0) {
+            return new Float32Array(0);
+        }
+
+        // 检查是否启用分块（从第一个分片的 options 读取，所有分片共用）
+        const firstOpts = fragments[0].options || {};
+        const chunkEnabled = firstOpts.diffStepChunk === true && !this.useStaticShapes;
+        const chunkFrames = firstOpts.diffStepChunkFrames || 500;
+        const overlapFrames = firstOpts.diffStepOverlapFrames !== undefined ? firstOpts.diffStepOverlapFrames : 50;
+        const totalSteps = firstOpts.nSteps || DEFAULT_DIFF_STEPS;
+        const cfgStrength = firstOpts.cfg || CFG_STRENGTH;
+        const cfgRescale = firstOpts.cfgRescale !== undefined ? firstOpts.cfgRescale : CFG_RESCALE;
+
+        // 设置分块选项（供 _runDiffusionLoop 内部判断）
+        this._currentDiffStepChunkOpts = {
+            enabled: chunkEnabled,
+            chunkFrames,
+            overlapFrames,
+        };
+
+        console.log(`[OnnxSVSPipeline] synthesizeMultiStreaming: ${fragments.length} fragments, chunkEnabled=${chunkEnabled}, chunkFrames=${chunkFrames}`);
+
+        // ===== Phase 1: 逐分片准备 =====
+        const prepared = [];
+        for (let fi = 0; fi < fragments.length; fi++) {
+            const frag = fragments[fi];
+            const fragOpts = frag.options || {};
+            const filledNotes = this._fillNoteGaps(frag.notes);
+            if (filledNotes.length === 0) {
+                console.log(`[MultiStream] Fragment ${fi}: empty notes, skipping`);
+                continue;
+            }
+
+            // autoShift F0 计算（简化版，复用 _synthesizeImpl 的逻辑）
+            const autoShift = fragOpts.autoShift || false;
+            const pitchShift = fragOpts.pitchShift || 0;
+            const refAudioWavBuffer = fragOpts.refAudioWavBuffer || null;
+            const pitchCurveF0 = fragOpts.pitchCurveF0 || null;
+            const f0Envelope = fragOpts.f0Envelope || null;
+
+            const targetNotePitches = [];
+            for (const note of filledNotes) {
+                if (note.pitch >= 1) targetNotePitches.push(note.pitch);
+            }
+
+            let f0Shift = 0;
+            if (autoShift && pitchShift === 0) {
+                const targetF0 = this.buildF0FrameSequence(filledNotes, bpm, f0Envelope, pitchCurveF0);
+                const targetNonZero = [];
+                for (let i = 0; i < targetF0.length; i++) {
+                    if (targetF0[i] > 0) targetNonZero.push(targetF0[i]);
+                }
+                let refF0 = null;
+                if (refAudioWavBuffer) {
+                    try {
+                        refF0 = await this._extractRefF0WithFallback(refAudioWavBuffer, fragOpts.refF0Extractor || null);
+                    } catch (e) {
+                        console.warn(`[MultiStream] Fragment ${fi} ref F0 extraction failed:`, e.message);
+                    }
+                }
+                if (refF0 && refF0.length > 0) {
+                    const refNonZero = [];
+                    for (let i = 0; i < refF0.length; i++) {
+                        if (refF0[i] > 0) refNonZero.push(refF0[i]);
+                    }
+                    if (refNonZero.length > 0 && targetNonZero.length > 0) {
+                        const refMedian = this._median(refNonZero);
+                        const targetMedian = this._median(targetNonZero);
+                        f0Shift = Math.round(Math.log2(refMedian / targetMedian) * 1200 / 100);
+                    } else if (targetNotePitches.length > 0) {
+                        const refNotePitches = await this._extractRefNotePitchesAsync(refAudioWavBuffer);
+                        if (refNotePitches && refNotePitches.length > 0) {
+                            f0Shift = Math.round(this._median(refNotePitches) - this._median(targetNotePitches));
+                        }
+                    }
+                } else if (targetNotePitches.length > 0) {
+                    const refNotePitches = fragOpts.refNotePitches || fragOpts.refMidiNotes || null;
+                    if (refNotePitches && refNotePitches.length > 0) {
+                        f0Shift = Math.round(this._median(refNotePitches) - this._median(targetNotePitches));
+                    }
+                }
+                const clampedShift = this._clampAutoShift(f0Shift, targetNotePitches);
+                if (clampedShift !== f0Shift) f0Shift = clampedShift;
+            } else {
+                f0Shift = pitchShift;
+            }
+            if (this.languageOverride === 'ja' && targetNotePitches.length > 0) {
+                f0Shift = this._clampJpPitchRange(f0Shift, targetNotePitches);
+            }
+
+            // Reference mel 提取
+            let ptMelData = null;
+            let ptFrameCount = 0;
+            if (refAudioWavBuffer) {
+                try {
+                    const melResult = await this._extractRefMelOnnx(refAudioWavBuffer);
+                    ptMelData = melResult.data;
+                    ptFrameCount = melResult.frames;
+                } catch (e) {
+                    try {
+                        const melResult = await this._extractRefMelAsync(refAudioWavBuffer);
+                        ptMelData = melResult.data;
+                        ptFrameCount = melResult.frames;
+                    } catch (_) {}
+                }
+            }
+
+            // 构建 sequences
+            const segments = this._buildVocalSegments(filledNotes, bpm);
+            const seg = segments[0];
+            const segNotes = seg.notes || filledNotes;
+            const pitchCurveOffsetSec = 0;
+            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, pitchCurveOffsetSec);
+            let totalFrames = sequences.f0Ids.length;
+            if (totalFrames === 0) {
+                console.log(`[MultiStream] Fragment ${fi}: 0 frames, skipping`);
+                continue;
+            }
+            if (totalFrames > MAX_SAFE_FRAMES) {
+                sequences.f0Ids = sequences.f0Ids.subarray(0, MAX_SAFE_FRAMES);
+                sequences.mel2token = sequences.mel2token.subarray(0, MAX_SAFE_FRAMES);
+                totalFrames = MAX_SAFE_FRAMES;
+            }
+            if (!ptMelData || ptFrameCount === 0) {
+                ptFrameCount = Math.min(50, Math.max(10, Math.floor(totalFrames * 0.1)));
+                ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
+            }
+
+            // Encoder
+            const combinedCond = await this._runEncoder(sequences, sequences.tokenCount, totalFrames, ptFrameCount);
+            await gpuDrain();
+
+            // 初始化噪声
+            const xt = this.randomNoise(totalFrames, MEL_DIM);
+            const f0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
+
+            // 分块规划
+            let chunkPlan = null;
+            if (chunkEnabled) {
+                chunkPlan = this._diffusion._planChunks(totalFrames, chunkFrames, overlapFrames);
+            }
+
+            prepared.push({
+                fragIdx: fi,
+                startTimeBeat: frag.startTimeBeat,
+                durationBeats: frag.durationBeats,
+                bpm,
+                xt,
+                combinedCond,
+                ptMelData,
+                ptFrameCount,
+                totalFrames,
+                f0Hz,
+                sequences,
+                chunkPlan,
+                committedFrames: 0,
+                segAudio: new Float32Array(totalFrames * HOP_SIZE),
+            });
+            console.log(`[MultiStream] Fragment ${fi} prepared: ${totalFrames} frames, startTime=${frag.startTimeBeat}beat, chunks=${chunkPlan ? chunkPlan.specs.length : 0}`);
+        }
+
+        if (prepared.length === 0) {
+            return new Float32Array(0);
+        }
+
+        // ===== Phase 2: 构建全局时间顺序 chunk 队列 =====
+        const globalChunks = [];
+        for (const p of prepared) {
+            const fragStartSec = (p.startTimeBeat / bpm) * 60;
+            if (p.chunkPlan) {
+                for (let ci = 0; ci < p.chunkPlan.specs.length; ci++) {
+                    const spec = p.chunkPlan.specs[ci];
+                    const chunkGlobalTimeSec = fragStartSec + (spec.chunkStart / 50); // 50Hz mel frame rate
+                    globalChunks.push({ prepIdx: prepared.indexOf(p), chunkIdx: ci, spec, globalTimeSec: chunkGlobalTimeSec, isChunked: true });
+                }
+            } else {
+                // 无分块：整段作为一个"chunk"
+                globalChunks.push({ prepIdx: prepared.indexOf(p), chunkIdx: 0, spec: { chunkStart: 0, chunkEnd: p.totalFrames, currentChunkFrames: p.totalFrames, isFirst: true, isLast: true }, globalTimeSec: fragStartSec, isChunked: false });
+            }
+        }
+        globalChunks.sort((a, b) => a.globalTimeSec - b.globalTimeSec);
+
+        console.log(`[MultiStream] Global chunk queue: ${globalChunks.length} chunks, time-ordered`);
+
+        // ===== Phase 3: 按时间顺序执行 =====
+        const totalGlobalChunks = globalChunks.length;
+        const progressPerChunk = 100 / totalGlobalChunks;
+
+        for (let gi = 0; gi < globalChunks.length; gi++) {
+            const gc = globalChunks[gi];
+            const p = prepared[gc.prepIdx];
+
+            if (gc.isChunked) {
+                // 分块路径：执行单个 diffusion chunk
+                const ctx = {
+                    sessions: this.sessions,
+                    xt: p.xt,
+                    ptMelData: p.ptMelData,
+                    ptFrameCount: p.ptFrameCount,
+                    combinedCond: p.combinedCond,
+                    totalSteps, cfgStrength, cfgRescale,
+                    isFP16: this.diffStepIsFP16,
+                    useStaticShapes: this.useStaticShapes,
+                    overlap: p.chunkPlan.overlap,
+                    fadeWindow: p.chunkPlan.fadeWindow,
+                };
+                const { newCommitted } = await this._diffusion._runSingleDiffusionChunk(
+                    ctx, gc.spec, onProgress,
+                    gi * progressPerChunk, progressPerChunk
+                );
+
+                // Vocoder on committed region
+                if (newCommitted > p.committedFrames) {
+                    const melStart = p.committedFrames;
+                    const melEnd = newCommitted;
+                    const melLen = melEnd - melStart;
+                    const melData = new Float32Array(melLen * MEL_DIM);
+                    melData.set(p.xt.data.subarray(melStart * MEL_DIM, melEnd * MEL_DIM));
+                    const segF0 = p.f0Hz ? p.f0Hz.subarray(melStart, melEnd) : null;
+                    const segAudio = await this._runVocoderChunkedForSegment(melData, melLen, segF0, null);
+
+                    // 存储到分片音频
+                    const sampleOffset = melStart * HOP_SIZE;
+                    const copyLen = Math.min(segAudio.length, p.segAudio.length - sampleOffset);
+                    p.segAudio.set(segAudio.subarray(0, copyLen), sampleOffset);
+
+                    // 流式推送
+                    if (onChunkAudio) {
+                        const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
+                        const isLastChunk = gi === globalChunks.length - 1;
+                        try {
+                            onChunkAudio({
+                                chunkIndex: gi,
+                                sampleOffset: fragStartSample + sampleOffset,
+                                sampleEnd: fragStartSample + sampleOffset + segAudio.length,
+                                audio: segAudio,
+                                totalSamples: Math.ceil((Math.max(...prepared.map(pp => pp.startTimeBeat + pp.durationBeats)) / bpm) * 60 * SAMPLE_RATE),
+                                isLast: isLastChunk,
+                            });
+                        } catch (e) {
+                            console.warn(`[MultiStream] onChunkAudio error: ${e.message}`);
+                        }
+                    }
+                    p.committedFrames = newCommitted;
+                }
+            } else {
+                // 无分块路径：整段 diffusion + vocoder
+                await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk);
+                await gpuDrain();
+                const segAudio = await this._runVocoderChunkedForSegment(p.xt.data, p.totalFrames, p.f0Hz, null);
+                const copyLen = Math.min(segAudio.length, p.segAudio.length);
+                p.segAudio.set(segAudio.subarray(0, copyLen), 0);
+
+                if (onChunkAudio) {
+                    const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
+                    const isLastChunk = gi === globalChunks.length - 1;
+                    try {
+                        onChunkAudio({
+                            chunkIndex: gi,
+                            sampleOffset: fragStartSample,
+                            sampleEnd: fragStartSample + segAudio.length,
+                            audio: segAudio,
+                            totalSamples: Math.ceil((Math.max(...prepared.map(pp => pp.startTimeBeat + pp.durationBeats)) / bpm) * 60 * SAMPLE_RATE),
+                            isLast: isLastChunk,
+                        });
+                    } catch (e) {
+                        console.warn(`[MultiStream] onChunkAudio error: ${e.message}`);
+                    }
+                }
+                p.committedFrames = p.totalFrames;
+            }
+
+            onProgress(Math.round((gi + 1) * progressPerChunk));
+        }
+
+        // ===== Phase 4: 混合所有分片音频 =====
+        const maxEndBeat = Math.max(...prepared.map(p => p.startTimeBeat + p.durationBeats));
+        const totalSamples = Math.ceil((maxEndBeat / bpm) * 60 * SAMPLE_RATE);
+        const mixedAudio = new Float32Array(totalSamples);
+        for (const p of prepared) {
+            const startSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
+            for (let i = 0; i < p.segAudio.length; i++) {
+                const targetIdx = startSample + i;
+                if (targetIdx < totalSamples) {
+                    mixedAudio[targetIdx] += p.segAudio[i];
+                }
+            }
+        }
+
+        console.log(`[MultiStream] Complete: ${prepared.length} fragments, ${globalChunks.length} chunks, ${totalSamples} samples`);
+        onProgress(100);
+        await this._recreateHeavySessionsAfterSynthesis();
+        return mixedAudio;
+    }
+
     async _synthesizeImpl(notes, bpm, options = {}) {
         if (!this.initialized) {
             await this.init();

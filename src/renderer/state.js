@@ -27,6 +27,10 @@ export const state = {
   pipelineInitialized: false,
   pipelineInitPromise: null,
 
+  // 流式播放（主页面 Play All 启用 diffStepChunk 时使用）
+  streamingSources: [],
+  streamingFinished: false,
+
   // UI
   fragmentZoomX: 1,
   selectedSingerId: null,

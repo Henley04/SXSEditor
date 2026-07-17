@@ -70,11 +70,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getModelDir: () => ipcRenderer.invoke('getModelDir'),
   initSVSPipeline: () => ipcRenderer.invoke('svs:init'),
   synthesizeSVS: (data) => ipcRenderer.invoke('svs:synthesize', data),
+  synthesizeMultiStreaming: (data) => ipcRenderer.invoke('svs:synthesizeMultiStreaming', data),
   disposeSVSPipeline: () => ipcRenderer.invoke('svs:dispose'),
   onSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);
     ipcRenderer.on('svs:progress', handler);
     return () => ipcRenderer.removeListener('svs:progress', handler);
+  },
+  onSVSChunkAudio: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('svs:chunk-audio', handler);
+    return () => ipcRenderer.removeListener('svs:chunk-audio', handler);
   },
   getFragmentSVSSampleRate: () => ipcRenderer.invoke('fragment-svs:getSampleRate'),
   initFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:init'),
