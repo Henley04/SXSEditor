@@ -368,8 +368,11 @@ class Diffusion {
      * @param {boolean} useStaticShapes
      * @param {number} chunkFrames - 分块大小（帧）
      * @param {number} overlapFrames - 分块间重叠（帧）
+     * @param {Function} [onChunkMel] - 流式回调：每块完成且 mel 已确定后调用，用于立即运行 vocoder
+     *   签名: async ({chunkIndex, frameStart, frameEnd, melData, isLast}) => {}
+     *   frameStart/frameEnd 为已确定帧在完整 mel 中的绝对位置；melData 为该段 mel 副本
      */
-    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames) {
+    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames, onChunkMel = null) {
         // 安全校验：分块参数
         const safeChunk = Math.max(50, Math.floor(chunkFrames));
         let safeOverlap = Math.max(0, Math.floor(overlapFrames));
@@ -411,6 +414,7 @@ class Diffusion {
 
         const progressPerChunk = progressRange / totalChunks;
         const xtOut = xt.data; // 最终写回目标
+        let committedFrames = 0; // 已确定（不会再被后续 chunk 修改）的帧数
 
         try {
             for (let ci = 0; ci < totalChunks; ci++) {
@@ -470,6 +474,33 @@ class Diffusion {
                 // 块间 GPU 排空：非末尾块时等待 DML 回收上块的 GPU 资源
                 if (!isLast) {
                     await gpuDrain();
+                }
+
+                // 流式回调：推送已确定的 mel 片段，让调用方立即运行 vocoder
+                // committed 区间 = [prevCommitted, newCommitted)
+                //   - 非末尾块：newCommitted = chunkEnd - safeOverlap（重叠区会被下块修改）
+                //   - 末尾块：newCommitted = chunkEnd（全部确定）
+                if (onChunkMel) {
+                    const newCommitted = isLast ? chunkEnd : Math.max(committedFrames, chunkEnd - safeOverlap);
+                    if (newCommitted > committedFrames) {
+                        const melStart = committedFrames;
+                        const melEnd = newCommitted;
+                        const melLen = melEnd - melStart;
+                        const melData = new Float32Array(melLen * MEL_DIM);
+                        melData.set(xtOut.subarray(melStart * MEL_DIM, melEnd * MEL_DIM));
+                        try {
+                            await onChunkMel({
+                                chunkIndex: ci,
+                                frameStart: melStart,
+                                frameEnd: melEnd,
+                                melData,
+                                isLast,
+                            });
+                        } catch (cbErr) {
+                            console.error(`[DiffusionChunk] onChunkMel callback error (chunk ${ci}): ${cbErr.message}`);
+                        }
+                        committedFrames = newCommitted;
+                    }
                 }
             }
         } catch (err) {

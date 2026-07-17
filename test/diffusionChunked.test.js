@@ -211,4 +211,108 @@ describe('Diffusion.runDiffusionLoopChunked - 分块扩散推理测试', () => {
     }
     expect(nanCount).to.equal(0);
   });
+
+  describe('onChunkMel 流式回调', () => {
+    it('回调推送的 committed 帧区间连续且覆盖全部帧', async () => {
+      const totalFrames = 250;
+      const ptFrameCount = 10;
+      const chunkFrames = 100;
+      const overlapFrames = 20;
+      const totalSteps = 1;
+      const cfgStrength = 0;
+
+      const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
+      const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
+      const combinedCond = new Float32Array((ptFrameCount + totalFrames) * COND_DIM).fill(0.1);
+
+      const melCallbacks = [];
+      const onChunkMel = async (info) => {
+        melCallbacks.push({ ...info });
+      };
+
+      await diffusion.runDiffusionLoopChunked(
+        makeSessions(), xt, totalFrames, ptMelData, ptFrameCount,
+        combinedCond, totalSteps, cfgStrength, 0.75, false,
+        () => {}, 0, 100, false, chunkFrames, overlapFrames, onChunkMel
+      );
+
+      // 3 chunks → 3 回调
+      expect(melCallbacks).to.have.lengthOf(3);
+      // 第一个回调：frameStart=0
+      expect(melCallbacks[0].frameStart).to.equal(0);
+      // 帧区间连续：前一个 frameEnd = 后一个 frameStart
+      for (let i = 1; i < melCallbacks.length; i++) {
+        expect(melCallbacks[i].frameStart).to.equal(melCallbacks[i - 1].frameEnd);
+      }
+      // 最后一个回调覆盖到 totalFrames
+      expect(melCallbacks[melCallbacks.length - 1].frameEnd).to.equal(totalFrames);
+      // 最后一个回调 isLast=true，其余 false
+      expect(melCallbacks[melCallbacks.length - 1].isLast).to.equal(true);
+      for (let i = 0; i < melCallbacks.length - 1; i++) {
+        expect(melCallbacks[i].isLast).to.equal(false);
+      }
+      // 每个 melData 长度 = (frameEnd - frameStart) * MEL_DIM
+      for (const cb of melCallbacks) {
+        expect(cb.melData.length).to.equal((cb.frameEnd - cb.frameStart) * MEL_DIM);
+      }
+    });
+
+    it('回调的 melData 与 xt.data 对应区间一致', async () => {
+      const totalFrames = 200;
+      const ptFrameCount = 10;
+      const chunkFrames = 100;
+      const overlapFrames = 20;
+      const totalSteps = 1;
+      const cfgStrength = 0;
+
+      const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
+      const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
+      const combinedCond = new Float32Array((ptFrameCount + totalFrames) * COND_DIM).fill(0.1);
+
+      const melCallbacks = [];
+      const onChunkMel = async (info) => {
+        melCallbacks.push({ ...info, melData: new Float32Array(info.melData) });
+      };
+
+      await diffusion.runDiffusionLoopChunked(
+        makeSessions(), xt, totalFrames, ptMelData, ptFrameCount,
+        combinedCond, totalSteps, cfgStrength, 0.75, false,
+        () => {}, 0, 100, false, chunkFrames, overlapFrames, onChunkMel
+      );
+
+      // 验证 melData 与 xt.data 对应区间一致
+      for (const cb of melCallbacks) {
+        for (let f = 0; f < cb.frameEnd - cb.frameStart; f++) {
+          for (let d = 0; d < MEL_DIM; d++) {
+            const expected = xt.data[(cb.frameStart + f) * MEL_DIM + d];
+            const actual = cb.melData[f * MEL_DIM + d];
+            expect(actual).to.be.closeTo(expected, 1e-6);
+          }
+        }
+      }
+    });
+
+    it('无 onChunkMel 时跳过回调（不影响推理）', async () => {
+      const totalFrames = 200;
+      const ptFrameCount = 10;
+      const chunkFrames = 100;
+      const overlapFrames = 20;
+      const totalSteps = 1;
+      const cfgStrength = 0;
+
+      const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
+      const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
+      const combinedCond = new Float32Array((ptFrameCount + totalFrames) * COND_DIM).fill(0.1);
+
+      // 不传 onChunkMel（undefined）
+      await diffusion.runDiffusionLoopChunked(
+        makeSessions(), xt, totalFrames, ptMelData, ptFrameCount,
+        combinedCond, totalSteps, cfgStrength, 0.75, false,
+        () => {}, 0, 100, false, chunkFrames, overlapFrames
+      );
+
+      // 仍然 3 chunks × 1 step × 1 run = 3 runs
+      expect(runCalls).to.have.lengthOf(3);
+    });
+  });
 });

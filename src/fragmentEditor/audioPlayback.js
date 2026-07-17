@@ -597,6 +597,9 @@ export async function playFragment() {
         nSteps: previewOpts.nSteps,
         cfg: previewOpts.cfg,
         cfgRescale: previewOpts.cfgRescale,
+        diffStepChunk: previewOpts.diffStepChunk,
+        diffStepChunkFrames: previewOpts.diffStepChunkFrames,
+        diffStepOverlapFrames: previewOpts.diffStepOverlapFrames,
       },
     });
     setFragmentAudioData(padAudioToFragmentDuration(audioData));
