@@ -144,11 +144,12 @@ function loadSettings() {
     _settingsCache.sifiganPrecision = 'fp32';
   }
 
-  // Japanese vocalization method: 'en-phonemes' (default, English ARPAbet on base model)
-  // | 'hybrid' (improved ARPAbet mapping: L for ら行, AO for お段, on base model)
+  // Japanese vocalization method: 'hybrid' (default, improved ARPAbet mapping:
+  // L for ら行, AO for お段, on base model)
+  // | 'en-phonemes' (English ARPAbet on base model, original mapping)
   // | 'jp-lora' (JP LoRA models, in development — not available for download yet)
   if (_settingsCache.japaneseVocalization !== 'en-phonemes' && _settingsCache.japaneseVocalization !== 'hybrid' && _settingsCache.japaneseVocalization !== 'jp-lora') {
-    _settingsCache.japaneseVocalization = 'en-phonemes';
+    _settingsCache.japaneseVocalization = 'hybrid';
   }
 
   // Vocoder type default + startup fallback:

@@ -30,7 +30,7 @@ function _createPipeline(languageOverride) {
   const modelDeviceMapping = settings.modelDeviceMapping || undefined;
   const modelPrecision = settings.modelPrecision || 'fp32';
   const inferenceProvider = settings.inferenceProvider || 'ortnode';
-  const japaneseVocalization = settings.japaneseVocalization || 'en-phonemes';
+  const japaneseVocalization = settings.japaneseVocalization || 'hybrid';
 
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
   console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}, jpVocal=${japaneseVocalization}`);
@@ -128,10 +128,10 @@ function registerSvsIpc() {
   });
 
   ipcMain.handle('svs:synthesize', async (event, { notes, bpm, options }) => {
-    // Load japaneseVocalization setting: 'en-phonemes' (default) / 'hybrid' use English phonemes on base model;
+    // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
-    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
 
     // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);
@@ -189,10 +189,10 @@ function registerSvsIpc() {
   });
 
   ipcMain.handle('fragment-svs:synthesize', async (event, { notes, bpm, options }) => {
-    // Load japaneseVocalization setting: 'en-phonemes' (default) / 'hybrid' use English phonemes on base model;
+    // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
-    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
 
     // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);

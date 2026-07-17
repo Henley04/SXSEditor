@@ -169,9 +169,9 @@ function applySavedSettingsToUI(currentSetting) {
     sifiganPrecisionSelect.value = currentSetting.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32';
     updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
 
-    // Japanese vocalization mode: 'en-phonemes' (default) | 'hybrid' (improved mapping) | 'jp-lora' (in development, disabled)
+    // Japanese vocalization mode: 'hybrid' (default, improved mapping) | 'en-phonemes' (original mapping) | 'jp-lora' (in development, disabled)
     const validJpVocalizations = ['en-phonemes', 'hybrid', 'jp-lora'];
-    const jpVocalization = validJpVocalizations.includes(currentSetting.japaneseVocalization) ? currentSetting.japaneseVocalization : 'en-phonemes';
+    const jpVocalization = validJpVocalizations.includes(currentSetting.japaneseVocalization) ? currentSetting.japaneseVocalization : 'hybrid';
     const jpVocalRadioToCheck = document.querySelector(`input[name="japaneseVocalization"][value="${jpVocalization}"]`);
     if (jpVocalRadioToCheck) jpVocalRadioToCheck.checked = true;
 
@@ -855,7 +855,7 @@ function collectSettings() {
         sifiganPrecision: sifiganPrecisionSelect.value === 'fp16' ? 'fp16' : 'fp32',
         japaneseVocalization: (() => {
             const r = document.querySelector('input[name="japaneseVocalization"]:checked');
-            return r ? r.value : 'en-phonemes';
+            return r ? r.value : 'hybrid';
         })(),
         vocoderChunkMode: (() => {
             const r = document.querySelector('input[name="vocoderChunkMode"]:checked');

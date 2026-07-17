@@ -65,6 +65,8 @@ MIDI 导入：基于 `@tonejs/midi` 的标准 MIDI 文件解析（支持格式 0
 
 日语汉字词典扩展：覆盖全部 2136 个日本常用汉字（Jōyō kanji，日本官方常用汉字表）以及 465 个高频汉字，共 2601 条。词典由 `scripts/generate_jp_kanji_dict.py` 脚本从 KANJIDIC2（EDRDG）自动生成，并合并了最常用汉字的人工校对条目。运行时从 `jpKanjiDict.json` 加载（若 JSON 不可用则回退到约 50 条的内置词典），日语模式 G2P 不再为绝大多数常用汉字回退到 `pau`。
 
+日语发声方式默认改为混合音素（Hybrid Phonemes）：在基础多语言模型上使用改进的 ARPAbet 映射——ら行使用 L（比 R /ɹ/ 更接近日语弹音 /ɾ/）、お段使用 AO（纯元音，非双元音 OW /oʊ/），发音更自然，无需额外下载。设置中仍可在"英语音素迁移"（原始映射）与"混合音素"之间切换；日语 LoRA 模型选项开发中。
+
 ORT 高级设置：设置界面新增"ORT 高级设置"区域，暴露 ONNX Runtime session 选项（enableMemPattern、enableCpuMemArena、graphOptimizationLevel、executionMode、intra/interOpNumThreads、logSeverityLevel）。默认值遵循项目经验：DML 路径下 enableMemPattern 默认关闭（防止 DirectML 过度预分配 GPU 内存池）；CPU/WASM 路径默认开启。高级选项（如强制在 DML 启用 memPattern、verbose 日志）默认折叠并标记为"高风险"。
 
 - [官网](https://henley04.github.io/SXSEditor/)

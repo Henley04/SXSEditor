@@ -267,10 +267,10 @@ class TextProcessing {
         this._vocabSize = 0;
         this._dictSize = 0;
         // Japanese vocalization mode:
-        // - 'en-phonemes' (default): uses English ARPAbet phonemes on the base multilingual model
-        // - 'hybrid': improved ARPAbet mapping (L for ら行, AO for お段) on the base model
+        // - 'hybrid' (default): improved ARPAbet mapping (L for ら行, AO for お段) on the base model
+        // - 'en-phonemes': uses English ARPAbet phonemes (original mapping) on the base multilingual model
         // - 'jp-lora': uses JP LoRA models with jp_ phonemes
-        this.japaneseVocalization = options.japaneseVocalization || 'en-phonemes';
+        this.japaneseVocalization = options.japaneseVocalization || 'hybrid';
         this._loadPhoneSet();
         this._loadEnG2pDict();
     }

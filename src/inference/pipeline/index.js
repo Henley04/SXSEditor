@@ -50,7 +50,7 @@ class OnnxSVSPipeline {
         this._modelPrecision = options.modelPrecision || null;
         this.modelDir = this._resolveModelDir(modelDir, options.modelPrecision);
         this.languageOverride = options.languageOverride || null; // 'ja' for Japanese
-        this._japaneseVocalization = options.japaneseVocalization || 'en-phonemes';
+        this._japaneseVocalization = options.japaneseVocalization || 'hybrid';
         this.jpModelDir = this._resolveJpModelDir(modelDir, options.modelPrecision);
         this.sessions = {};
         this.sessionEPs = {};
