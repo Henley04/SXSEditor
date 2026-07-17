@@ -84,6 +84,20 @@ function loadSettings() {
     _settingsCache.releaseDiffStepBeforeVocoder = true;
   }
 
+  // ===== 预览 diffStep 分块推理设置 =====
+  // 预览时将 diffStep 的目标帧分块推理（每块独立运行完整扩散循环，再交叉淡入淡出拼接）。
+  // 注意力复杂度 O(n²)，分块可显著加速长片段预览，代价是块边界可能产生轻微伪影。
+  // 仅影响预览路径（getPreviewInferenceOptions 传入），导出始终使用整段推理。
+  if (typeof _settingsCache.previewDiffStepChunkEnabled !== 'boolean') {
+    _settingsCache.previewDiffStepChunkEnabled = false;
+  }
+  if (!Number.isFinite(_settingsCache.previewDiffStepChunkFrames) || _settingsCache.previewDiffStepChunkFrames < 100) {
+    _settingsCache.previewDiffStepChunkFrames = 500;
+  }
+  if (!Number.isFinite(_settingsCache.previewDiffStepOverlapFrames) || _settingsCache.previewDiffStepOverlapFrames < 0) {
+    _settingsCache.previewDiffStepOverlapFrames = 50;
+  }
+
   // 推理提供者: 'ortnode' (默认, onnxruntime-node DirectML/CPU) | 'ortweb' (onnxruntime-web WebNN)
   if (_settingsCache.inferenceProvider !== 'ortweb' && _settingsCache.inferenceProvider !== 'ortnode') {
     _settingsCache.inferenceProvider = 'ortnode';
@@ -218,6 +232,7 @@ function invalidateSettingsCache() {
 const ALLOWED_SETTINGS_KEYS = [
   'deviceId', 'modelDir', 'modelPrecision', 'midiExtractTool', 'useRosvot',
   'previewDiffSteps', 'previewCfgStrength', 'previewCfgRescale',
+  'previewDiffStepChunkEnabled', 'previewDiffStepChunkFrames', 'previewDiffStepOverlapFrames',
   'exportDiffSteps', 'exportCfgStrength', 'exportCfgRescale',
   'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth',
   'audioBufferSize', 'audioVolume', 'locale',

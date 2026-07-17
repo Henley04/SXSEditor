@@ -169,6 +169,26 @@
                     <input type="range" id="previewCfgRescale" min="0" max="1" value="0.75" step="0.05">
                     <p class="hint" data-i18n="settings.cfgRescaleHint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。推荐 0.5~0.9。</p>
                 </div>
+                <div class="setting-group">
+                    <label class="device-mode-radio">
+                        <input type="checkbox" id="previewDiffStepChunkEnabled">
+                        <span class="radio-label" data-i18n="settings.previewDiffStepChunkEnabled">预览时启用 diffStep 分块推理</span>
+                        <span class="radio-desc" data-i18n="settings.previewDiffStepChunkEnabledDesc">将目标帧分块独立推理再交叉淡入淡出拼接，利用注意力 O(n²) 特性加速长片段预览。仅影响预览，导出始终整段推理。</span>
+                    </label>
+                    <p class="hint" data-i18n="settings.previewDiffStepChunkHint">分块可显著加速长片段预览（片段越长加速越明显），代价是块边界处可能产生轻微伪影。短片段（短于分块大小）不会分块。</p>
+                </div>
+                <div class="setting-group hidden" id="previewDiffStepChunkGroup">
+                    <div class="setting-group">
+                        <label for="previewDiffStepChunkFrames"><span data-i18n="settings.previewDiffStepChunkFrames">分块大小（帧）</span> <span id="previewDiffStepChunkFramesValue" class="volume-display">500</span></label>
+                        <input type="range" id="previewDiffStepChunkFrames" min="100" max="2000" value="500" step="50">
+                        <p class="hint" data-i18n="settings.previewDiffStepChunkFramesHint">每个分块的目标帧数（1 帧 = 20ms 音频）。值越小加速越明显但边界伪影增多；值越大质量越好但加速减弱。推荐 300~800。</p>
+                    </div>
+                    <div class="setting-group">
+                        <label for="previewDiffStepOverlapFrames"><span data-i18n="settings.previewDiffStepOverlapFrames">分块重叠（帧）</span> <span id="previewDiffStepOverlapFramesValue" class="volume-display">50</span></label>
+                        <input type="range" id="previewDiffStepOverlapFrames" min="0" max="200" value="50" step="10">
+                        <p class="hint" data-i18n="settings.previewDiffStepOverlapFramesHint">相邻分块间的重叠帧数，用 Hann 窗交叉淡入淡出消除拼接痕迹。值越大边界越平滑但计算量增加。推荐 30~100。设为 0 则不重叠（不推荐）。</p>
+                    </div>
+                </div>
             </div>
 
             <!-- Export Inference Params -->
