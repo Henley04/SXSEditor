@@ -103,95 +103,238 @@ export async function playAll() {
 
     const inferenceOpts = getPreviewInferenceOptions();
 
-    const totalSeconds = ((globalLastEnd - globalFirstStart) / state.project.bpm) * 60;
-    const totalFrags = allFragments.length;
-    let completedFrags = 0;
+    if (inferenceOpts.diffStepChunk) {
+      // === 流式合成路径 ===
+      // 启用分块时使用 synthesizeMultiStreaming：按全局时间顺序交错推理各分片的 chunk，
+      // 边推理边推送音频，实现多分片时间交错流式播放。
+      // 示例：T1chunk1 → T2chunk1 → T1chunk2 → T2chunk2
+      const multiFragments = [];
+      for (const fragment of allFragments) {
+        const singer = singerMap.get(fragment.singerId);
+        if (!singer) continue;
+        const fragDuration = fragment.duration;
+        const clippedNotes = [];
+        for (const note of fragment.notes) {
+          if (note.start >= fragDuration) continue;
+          const noteEnd = note.start + note.duration;
+          if (noteEnd > fragDuration) {
+            clippedNotes.push({ ...note, duration: fragDuration - note.start });
+          } else {
+            clippedNotes.push(note);
+          }
+        }
+        if (clippedNotes.length === 0) continue;
+        const pitchCurveF0 = buildFragmentPitchCurveF0(fragment, clippedNotes, state.project.bpm);
+        multiFragments.push({
+          notes: clippedNotes,
+          startTimeBeat: fragment.startTime,
+          durationBeats: fragment.duration,
+          options: {
+            f0Envelope: null,
+            pitchCurveF0,
+            refAudioWavBuffer: singer?.wavBuffer || null,
+            refMidiNotes: singer?.midiNotes || null,
+            refF0Data: singer?.f0Data || null,
+            singerId: singer?.id || null,
+            autoShift: dom.autoShiftCheck.checked,
+            nSteps: inferenceOpts.nSteps,
+            cfg: inferenceOpts.cfg,
+            cfgRescale: inferenceOpts.cfgRescale,
+            diffStepChunk: true,
+            diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
+            diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
+          },
+        });
+      }
 
-    const audioResults = [];
+      if (multiFragments.length === 0) {
+        showAlertDialog(t('main.noFragmentsToPlay'));
+        return;
+      }
 
-    for (const fragment of allFragments) {
-      const singer = singerMap.get(fragment.singerId);
-      if (!singer) { completedFrags++; continue; }
+      // 流式播放状态：仅在 playbackPauseOffset === 0 时启用流式播放。
+      // 若用户已拖拽 playhead 设置了起始位置，则等合成完成后从该位置整段播放。
+      const canStreamPlayback = state.playbackPauseOffset === 0;
+      let streamingChunkCleanup = null;
+      let streamingStarted = false;
+      let streamingStartCtxTime = 0;
+      state.streamingSources = [];
+      state.streamingFinished = false;
 
-      // clippedNotes：相对 fragment 的 notes，截断到 fragment.duration（与分片编辑器 getClippedNotes 一致）
-      const fragDuration = fragment.duration;
-      const clippedNotes = [];
-      for (const note of fragment.notes) {
-        if (note.start >= fragDuration) continue;
-        const noteEnd = note.start + note.duration;
-        if (noteEnd > fragDuration) {
-          clippedNotes.push({ ...note, duration: fragDuration - note.start });
+      if (canStreamPlayback) {
+        streamingChunkCleanup = window.electronAPI.onSVSChunkAudio(async (chunkInfo) => {
+          try {
+            if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
+            if (state.streamingFinished) return;
+
+            const ctx = getAudioContext();
+            const audioBuffer = ctx.createBuffer(1, chunkInfo.audio.length, SAMPLE_RATE);
+            audioBuffer.getChannelData(0).set(chunkInfo.audio);
+            const source = ctx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(state.gainNode);
+
+            // 第一个 chunk 立即开始播放
+            if (!streamingStarted) {
+              streamingStarted = true;
+              streamingStartCtxTime = ctx.currentTime + 0.05; // 50ms 延迟避免调度抖动
+              state.playbackStartTime = streamingStartCtxTime;
+              state.playbackPauseOffset = 0;
+              state.isPlaying = true;
+              startPlayheadAnimation();
+            }
+
+            // 按绝对时间调度：每个 chunk 在其全局时间位置播放，
+            // 多分片同时段的 chunk 会叠加播放（而非顺序播放）
+            const chunkStartSec = chunkInfo.sampleOffset / SAMPLE_RATE;
+            const scheduleTime = streamingStartCtxTime + chunkStartSec;
+            const minTime = ctx.currentTime + 0.01;
+            source.start(Math.max(scheduleTime, minTime));
+
+            // 最后一个 chunk：结束时清理状态
+            if (chunkInfo.isLast) {
+              source.onended = () => {
+                if (!state.streamingFinished) {
+                  state.streamingFinished = true;
+                  state.isPlaying = false;
+                  state.playbackPauseOffset = 0;
+                  state.streamingSources = [];
+                  stopPlayheadAnimation();
+                  dom.timeDisplay.textContent = formatTime(0);
+                  clearPlayheadLine();
+                }
+              };
+            }
+            state.streamingSources.push(source);
+          } catch (e) {
+            console.warn('[Audio] Streaming chunk playback failed:', e.message);
+          }
+        });
+      }
+
+      try {
+        const mixedAudio = await window.electronAPI.synthesizeMultiStreaming({
+          fragments: multiFragments,
+          bpm: state.project.bpm,
+        });
+
+        // 合成完成：移除 chunk 监听器
+        if (streamingChunkCleanup) { try { streamingChunkCleanup(); } catch (_) {} streamingChunkCleanup = null; }
+
+        state.currentAudioData = mixedAudio;
+        state.currentAudioBuffer = null; // 流式播放无整段 buffer，置空避免 playhead 动画误判
+
+        if (!streamingStarted) {
+          // 流式未启动（offset > 0 或无 chunk 到达）：回退到整段播放
+          dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+          if (state.playbackPauseOffset > 0) {
+            drawPausedPlayheadAt(state.playbackPauseOffset);
+          }
+          await startAudioPlayback(state.playbackPauseOffset);
         } else {
-          clippedNotes.push(note);
+          // 流式播放已启动，playhead 动画已在运行
+          dom.timeDisplay.textContent = formatTime(0);
+        }
+      } catch (error) {
+        if (streamingChunkCleanup) { try { streamingChunkCleanup(); } catch (_) {} streamingChunkCleanup = null; }
+        // 停止已调度的流式 source
+        state.streamingFinished = true;
+        for (const src of state.streamingSources) { try { src.onended = null; src.stop(); } catch (_) {} }
+        state.streamingSources = [];
+        throw error;
+      }
+    } else {
+      // === 顺序合成路径（未启用分块） ===
+      const totalSeconds = ((globalLastEnd - globalFirstStart) / state.project.bpm) * 60;
+      const totalFrags = allFragments.length;
+      let completedFrags = 0;
+
+      const audioResults = [];
+
+      for (const fragment of allFragments) {
+        const singer = singerMap.get(fragment.singerId);
+        if (!singer) { completedFrags++; continue; }
+
+        // clippedNotes：相对 fragment 的 notes，截断到 fragment.duration（与分片编辑器 getClippedNotes 一致）
+        const fragDuration = fragment.duration;
+        const clippedNotes = [];
+        for (const note of fragment.notes) {
+          if (note.start >= fragDuration) continue;
+          const noteEnd = note.start + note.duration;
+          if (noteEnd > fragDuration) {
+            clippedNotes.push({ ...note, duration: fragDuration - note.start });
+          } else {
+            clippedNotes.push(note);
+          }
+        }
+        if (clippedNotes.length === 0) { completedFrags++; continue; }
+
+        // 该 fragment 的 pitchCurveF0（与分片编辑器 buildPitchCurveF0Data 等价）
+        const pitchCurveF0 = buildFragmentPitchCurveF0(fragment, clippedNotes, state.project.bpm);
+
+        const audioData = await window.electronAPI.synthesizeSVS({
+          notes: clippedNotes,
+          bpm: state.project.bpm,
+          options: {
+            f0Envelope: null,
+            pitchCurveF0,
+            refAudioWavBuffer: singer?.wavBuffer || null,
+            refMidiNotes: singer?.midiNotes || null,
+            refF0Data: singer?.f0Data || null,
+            singerId: singer?.id || null,
+            autoShift: dom.autoShiftCheck.checked,
+            nSteps: inferenceOpts.nSteps,
+            cfg: inferenceOpts.cfg,
+            cfgRescale: inferenceOpts.cfgRescale,
+            diffStepChunk: false,
+            diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
+            diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
+          },
+        });
+
+        // padding 到 fragment 时长，确保混音时长对齐
+        const expectedSamples = Math.ceil((fragDuration / state.project.bpm) * 60 * SAMPLE_RATE);
+        let paddedAudio = audioData;
+        if (audioData.length < expectedSamples) {
+          paddedAudio = new Float32Array(expectedSamples);
+          paddedAudio.set(audioData);
+        }
+        audioResults.push({
+          audioData: paddedAudio,
+          startTimeBeat: fragment.startTime,
+        });
+
+        completedFrags++;
+        const overallProgress = (completedFrags / totalFrags) * 100;
+        const currentSeconds = (overallProgress / 100) * totalSeconds;
+        dom.timeDisplay.textContent = t('main.synthesizingShort') + ': ' + formatTime(currentSeconds) + ' / ' + formatTime(totalSeconds);
+      }
+
+      const maxEndBeat = globalLastEnd;
+      const totalSamples = Math.ceil(((maxEndBeat / state.project.bpm) * 60) * SAMPLE_RATE);
+      const mixedAudio = new Float32Array(totalSamples);
+
+      for (const result of audioResults) {
+        const startSample = Math.round((result.startTimeBeat / state.project.bpm * 60) * SAMPLE_RATE);
+        const samplesToMix = result.audioData.length;
+        for (let i = 0; i < samplesToMix; i++) {
+          const targetIndex = startSample + i;
+          if (targetIndex < totalSamples) {
+            mixedAudio[targetIndex] += result.audioData[i];
+          }
         }
       }
-      if (clippedNotes.length === 0) { completedFrags++; continue; }
 
-      // 该 fragment 的 pitchCurveF0（与分片编辑器 buildPitchCurveF0Data 等价）
-      const pitchCurveF0 = buildFragmentPitchCurveF0(fragment, clippedNotes, state.project.bpm);
+      state.currentAudioData = mixedAudio;
 
-      const audioData = await window.electronAPI.synthesizeSVS({
-        notes: clippedNotes,
-        bpm: state.project.bpm,
-        options: {
-          f0Envelope: null,
-          pitchCurveF0,
-          refAudioWavBuffer: singer?.wavBuffer || null,
-          refMidiNotes: singer?.midiNotes || null,
-          refF0Data: singer?.f0Data || null,
-          singerId: singer?.id || null,
-          autoShift: dom.autoShiftCheck.checked,
-          nSteps: inferenceOpts.nSteps,
-          cfg: inferenceOpts.cfg,
-          cfgRescale: inferenceOpts.cfgRescale,
-          diffStepChunk: inferenceOpts.diffStepChunk,
-          diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
-          diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
-        },
-      });
-
-      // padding 到 fragment 时长，确保混音时长对齐
-      const expectedSamples = Math.ceil((fragDuration / state.project.bpm) * 60 * SAMPLE_RATE);
-      let paddedAudio = audioData;
-      if (audioData.length < expectedSamples) {
-        paddedAudio = new Float32Array(expectedSamples);
-        paddedAudio.set(audioData);
+      // 不重置 playbackPauseOffset：若用户在合成前已通过拖拽 playhead 设置了起始位置，
+      // 则从该位置开始播放。stopPlayback / 自然结束时已重置为 0。
+      dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+      if (state.playbackPauseOffset > 0) {
+        drawPausedPlayheadAt(state.playbackPauseOffset);
       }
-      audioResults.push({
-        audioData: paddedAudio,
-        startTimeBeat: fragment.startTime,
-      });
-
-      completedFrags++;
-      const overallProgress = (completedFrags / totalFrags) * 100;
-      const currentSeconds = (overallProgress / 100) * totalSeconds;
-      dom.timeDisplay.textContent = t('main.synthesizingShort') + ': ' + formatTime(currentSeconds) + ' / ' + formatTime(totalSeconds);
+      await startAudioPlayback(state.playbackPauseOffset);
     }
-
-    const maxEndBeat = globalLastEnd;
-    const totalSamples = Math.ceil(((maxEndBeat / state.project.bpm) * 60) * SAMPLE_RATE);
-    const mixedAudio = new Float32Array(totalSamples);
-
-    for (const result of audioResults) {
-      const startSample = Math.round((result.startTimeBeat / state.project.bpm * 60) * SAMPLE_RATE);
-      const samplesToMix = result.audioData.length;
-      for (let i = 0; i < samplesToMix; i++) {
-        const targetIndex = startSample + i;
-        if (targetIndex < totalSamples) {
-          mixedAudio[targetIndex] += result.audioData[i];
-        }
-      }
-    }
-
-    state.currentAudioData = mixedAudio;
-
-    // 不重置 playbackPauseOffset：若用户在合成前已通过拖拽 playhead 设置了起始位置，
-    // 则从该位置开始播放。stopPlayback / 自然结束时已重置为 0。
-    dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
-    if (state.playbackPauseOffset > 0) {
-      drawPausedPlayheadAt(state.playbackPauseOffset);
-    }
-    await startAudioPlayback(state.playbackPauseOffset);
 
   } catch (error) {
     console.error('Synthesis failed:', error);
@@ -415,6 +558,26 @@ export function pausePlayback() {
     return;
   }
 
+  // 流式播放暂停：停止所有流式 source，记录当前位置
+  if (state.streamingSources && state.streamingSources.length > 0) {
+    const context = getAudioContext();
+    const elapsed = context.currentTime - state.playbackStartTime;
+    state.playbackPauseOffset = Math.max(0, elapsed);
+    state.streamingFinished = true;
+    for (const src of state.streamingSources) {
+      try { src.onended = null; src.stop(); } catch (_) {}
+    }
+    state.streamingSources = [];
+    state.isPlaying = false;
+    if (state.playheadRaf) {
+      cancelAnimationFrame(state.playheadRaf);
+      state.playheadRaf = null;
+    }
+    dom.timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
+    drawPausedPlayheadAt(elapsed);
+    return;
+  }
+
   if (state.useExclusiveMode) {
     const elapsed = Date.now() / 1000 - state.playbackStartTime;
     state.playbackPauseOffset = elapsed;
@@ -441,6 +604,14 @@ export function pausePlayback() {
 }
 
 export function stopPlayback() {
+  // 停止流式播放
+  if (state.streamingSources && state.streamingSources.length > 0) {
+    state.streamingFinished = true;
+    for (const src of state.streamingSources) {
+      try { src.onended = null; src.stop(); } catch (_) {}
+    }
+    state.streamingSources = [];
+  }
   if (state.useExclusiveMode) {
     stopExclusivePlayback();
   }
@@ -462,6 +633,25 @@ export function stopPlayback() {
  * 等用户点击 Play 时从该位置开始。
  */
 export async function seekPlayback(newOffset) {
+  // 流式播放中拖拽 playhead：停止流式播放，记录位置。
+  // 合成仍在后台进行，完成后 state.currentAudioData 会被设置，用户可从该位置按 Play 继续播放。
+  if (state.streamingSources && state.streamingSources.length > 0) {
+    state.streamingFinished = true;
+    for (const src of state.streamingSources) {
+      try { src.onended = null; src.stop(); } catch (_) {}
+    }
+    state.streamingSources = [];
+    state.isPlaying = false;
+    if (state.playheadRaf) {
+      cancelAnimationFrame(state.playheadRaf);
+      state.playheadRaf = null;
+    }
+    state.playbackPauseOffset = Math.max(0, newOffset);
+    drawPausedPlayheadAt(state.playbackPauseOffset);
+    dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+    return;
+  }
+
   const audioData = state.currentAudioData;
   if (!audioData || audioData.length === 0) {
     // 没有缓存的音频：仅记录用户选择的位置，等合成后从这里开始
