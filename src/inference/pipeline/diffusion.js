@@ -1,5 +1,5 @@
 const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
-const { createFloatTensor, outputToFloat32, disposeTensor } = require('./utils');
+const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrain } = require('./utils');
 
 /**
  * Diffusion sampling loop (the core synthesis algorithm)
@@ -339,6 +339,145 @@ class Diffusion {
             disposeTensor(uncondCondTensorCached);
             disposeTensor(uncondMaskTensorCached);
         }
+    }
+
+    /**
+     * 分块扩散推理：将目标帧分块，每块独立运行完整扩散循环后交叉淡入淡出拼接。
+     *
+     * 注意力复杂度 O(n²)，分块后总计算量 N×(pt+chunk)² 通常小于 (pt+total)²，
+     * 对长片段预览有显著加速；代价是块边界处可能产生轻微伪影（由 overlap 交叉淡入淡出缓解）。
+     * 每块均以 prompt mel 为前缀，保证音色/风格上下文一致。
+     *
+     * 仅用于预览路径（由 _runDiffusionLoop 在 previewDiffStepChunkEnabled 时调用）。
+     * useStaticShapes（NPU 固定形状）路径不适用分块（每块仍 pad 到 NPU_STATIC_SEQ_LEN，
+     * 无计算量收益），调用方应在该路径下跳过分块。
+     *
+     * @param {Object} sessions
+     * @param {{data: Float32Array, dims: number[]}} xt - 噪声容器，分块结果最终写回 xt.data
+     * @param {number} totalFrames - 目标帧数（不含 prompt）
+     * @param {Float32Array} ptMelData - prompt mel 数据
+     * @param {number} ptFrameCount - prompt 帧数
+     * @param {Float32Array} combinedCond - 完整条件向量 (ptFrameCount+totalFrames)*COND_DIM
+     * @param {number} totalSteps
+     * @param {number} cfgStrength
+     * @param {number} cfgRescale
+     * @param {boolean} isFP16
+     * @param {Function} onProgress
+     * @param {number} progressStart
+     * @param {number} progressRange
+     * @param {boolean} useStaticShapes
+     * @param {number} chunkFrames - 分块大小（帧）
+     * @param {number} overlapFrames - 分块间重叠（帧）
+     */
+    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames) {
+        // 安全校验：分块参数
+        const safeChunk = Math.max(50, Math.floor(chunkFrames));
+        let safeOverlap = Math.max(0, Math.floor(overlapFrames));
+        if (safeOverlap >= safeChunk) safeOverlap = Math.floor(safeChunk / 2);
+        // 若分块大小 >= 总帧数，无需分块，直接走原路径
+        if (safeChunk >= totalFrames) {
+            return this.runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes);
+        }
+
+        console.log(`[DiffusionChunk] Chunked diffusion: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, chunkFrames=${safeChunk}, overlapFrames=${safeOverlap}, steps=${totalSteps}`);
+
+        // 计算分块边界（与 vocoder 分块策略一致）
+        const chunkSpecs = [];
+        let framePos = 0;
+        let chunkIdx = 0;
+        while (framePos < totalFrames) {
+            const isFirst = chunkIdx === 0;
+            const chunkStart = isFirst ? 0 : Math.max(0, framePos - safeOverlap);
+            const chunkEnd = Math.min(chunkStart + safeChunk, totalFrames);
+            const currentChunkFrames = chunkEnd - chunkStart;
+            const isLast = chunkEnd >= totalFrames;
+            chunkSpecs.push({ chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast });
+            if (isLast) break;
+            framePos = chunkEnd;
+            chunkIdx++;
+        }
+        const totalChunks = chunkSpecs.length;
+        console.log(`[DiffusionChunk] ${totalChunks} chunks planned`);
+
+        // Hann 交叉淡入淡出窗口（按帧）
+        const fadeWindow = new Float32Array(safeOverlap);
+        for (let i = 0; i < safeOverlap; i++) {
+            fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * i / safeOverlap));
+        }
+
+        // prompt cond 切片（所有块共用）
+        const promptCondBytes = ptFrameCount * COND_DIM;
+        const promptCond = combinedCond.subarray(0, promptCondBytes);
+
+        const progressPerChunk = progressRange / totalChunks;
+        const xtOut = xt.data; // 最终写回目标
+
+        try {
+            for (let ci = 0; ci < totalChunks; ci++) {
+                const spec = chunkSpecs[ci];
+                const { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast } = spec;
+
+                // 1. 提取当前块的噪声（从原始 xt.data 复制对应帧区间）
+                const chunkNoise = new Float32Array(currentChunkFrames * MEL_DIM);
+                chunkNoise.set(xtOut.subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM));
+                const subXt = { data: chunkNoise, dims: [1, currentChunkFrames, MEL_DIM] };
+
+                // 2. 构建当前块的条件向量：prompt cond + chunk target cond
+                const chunkTargetCondBytes = currentChunkFrames * COND_DIM;
+                const chunkCondStart = (ptFrameCount + chunkStart) * COND_DIM;
+                const chunkCondEnd = chunkCondStart + chunkTargetCondBytes;
+                const chunkCond = new Float32Array(promptCondBytes + chunkTargetCondBytes);
+                chunkCond.set(promptCond, 0);
+                chunkCond.set(combinedCond.subarray(chunkCondStart, chunkCondEnd), promptCondBytes);
+
+                // 3. 子进度回调：将当前块的进度映射到整体进度区间
+                const chunkProgressStart = progressStart + ci * progressPerChunk;
+                const chunkProgressRange = progressPerChunk;
+                const chunkOnProgress = (p) => {
+                    onProgress(Math.min(Math.round(p), 90));
+                };
+
+                // 4. 运行完整扩散循环（每块独立去噪）
+                console.log(`[DiffusionChunk] chunk ${ci}/${totalChunks}: frames[${chunkStart},${chunkEnd})=${currentChunkFrames}frames`);
+                await this.runDiffusionLoop(
+                    sessions, subXt, currentChunkFrames, ptMelData, ptFrameCount,
+                    chunkCond, totalSteps, cfgStrength, cfgRescale, isFP16,
+                    chunkOnProgress, chunkProgressStart, chunkProgressRange, useStaticShapes
+                );
+
+                // 5. 将去噪结果写入 xt.data，重叠区用 Hann 窗交叉淡入淡出
+                if (isFirst) {
+                    // 第一块：直接写入全部帧
+                    xtOut.set(subXt.data.subarray(0, currentChunkFrames * MEL_DIM), chunkStart * MEL_DIM);
+                } else {
+                    // 非第一块：前 safeOverlap 帧与前一块尾部重叠，交叉淡入淡出
+                    for (let f = 0; f < currentChunkFrames; f++) {
+                        const dstOffset = (chunkStart + f) * MEL_DIM;
+                        const srcOffset = f * MEL_DIM;
+                        if (f < safeOverlap) {
+                            const w = fadeWindow[f];
+                            for (let d = 0; d < MEL_DIM; d++) {
+                                xtOut[dstOffset + d] = xtOut[dstOffset + d] * (1 - w) + subXt.data[srcOffset + d] * w;
+                            }
+                        } else {
+                            for (let d = 0; d < MEL_DIM; d++) {
+                                xtOut[dstOffset + d] = subXt.data[srcOffset + d];
+                            }
+                        }
+                    }
+                }
+
+                // 块间 GPU 排空：非末尾块时等待 DML 回收上块的 GPU 资源
+                if (!isLast) {
+                    await gpuDrain();
+                }
+            }
+        } catch (err) {
+            console.error(`[DiffusionChunk] Chunked diffusion failed: ${err.message}`);
+            throw err;
+        }
+
+        console.log(`[DiffusionChunk] Chunked diffusion complete: ${totalChunks} chunks, ${totalFrames} frames`);
     }
 
     /**

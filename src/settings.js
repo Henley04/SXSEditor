@@ -29,6 +29,12 @@ const previewCfgStrengthSlider = document.getElementById('previewCfgStrength');
 const previewCfgStrengthValue = document.getElementById('previewCfgStrengthValue');
 const previewCfgRescaleSlider = document.getElementById('previewCfgRescale');
 const previewCfgRescaleValue = document.getElementById('previewCfgRescaleValue');
+const previewDiffStepChunkEnabledCheckbox = document.getElementById('previewDiffStepChunkEnabled');
+const previewDiffStepChunkGroup = document.getElementById('previewDiffStepChunkGroup');
+const previewDiffStepChunkFramesSlider = document.getElementById('previewDiffStepChunkFrames');
+const previewDiffStepChunkFramesValue = document.getElementById('previewDiffStepChunkFramesValue');
+const previewDiffStepOverlapFramesSlider = document.getElementById('previewDiffStepOverlapFrames');
+const previewDiffStepOverlapFramesValue = document.getElementById('previewDiffStepOverlapFramesValue');
 const exportDiffStepsSlider = document.getElementById('exportDiffSteps');
 const exportDiffStepsValue = document.getElementById('exportDiffStepsValue');
 const exportCfgStrengthSlider = document.getElementById('exportCfgStrength');
@@ -125,6 +131,17 @@ function applySavedSettingsToUI(currentSetting) {
     previewCfgStrengthValue.textContent = parseFloat(pCfg).toFixed(1);
     previewCfgRescaleSlider.value = pRescale;
     previewCfgRescaleValue.textContent = parseFloat(pRescale).toFixed(2);
+
+    // diffStep 分块推理设置
+    const pChunkEnabled = currentSetting.previewDiffStepChunkEnabled === true;
+    const pChunkFrames = currentSetting.previewDiffStepChunkFrames ?? 500;
+    const pOverlapFrames = currentSetting.previewDiffStepOverlapFrames ?? 50;
+    if (previewDiffStepChunkEnabledCheckbox) previewDiffStepChunkEnabledCheckbox.checked = pChunkEnabled;
+    if (previewDiffStepChunkGroup) previewDiffStepChunkGroup.classList.toggle('hidden', !pChunkEnabled);
+    if (previewDiffStepChunkFramesSlider) previewDiffStepChunkFramesSlider.value = pChunkFrames;
+    if (previewDiffStepChunkFramesValue) previewDiffStepChunkFramesValue.textContent = pChunkFrames;
+    if (previewDiffStepOverlapFramesSlider) previewDiffStepOverlapFramesSlider.value = pOverlapFrames;
+    if (previewDiffStepOverlapFramesValue) previewDiffStepOverlapFramesValue.textContent = pOverlapFrames;
 
     const eSteps = currentSetting.exportDiffSteps ?? 32;
     const eCfg = currentSetting.exportCfgStrength ?? 3.0;
@@ -839,6 +856,9 @@ function collectSettings() {
         previewDiffSteps: parseInt(previewDiffStepsSlider.value),
         previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
         previewCfgRescale: parseFloat(previewCfgRescaleSlider.value),
+        previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : false,
+        previewDiffStepChunkFrames: previewDiffStepChunkFramesSlider ? parseInt(previewDiffStepChunkFramesSlider.value) : 500,
+        previewDiffStepOverlapFrames: previewDiffStepOverlapFramesSlider ? parseInt(previewDiffStepOverlapFramesSlider.value) : 50,
         exportDiffSteps: parseInt(exportDiffStepsSlider.value),
         exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
         exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
@@ -964,6 +984,25 @@ previewCfgRescaleSlider.addEventListener('input', () => {
     previewCfgRescaleValue.textContent = parseFloat(previewCfgRescaleSlider.value).toFixed(2);
     applySettingsDebounced();
 });
+// diffStep 分块推理设置
+if (previewDiffStepChunkEnabledCheckbox) {
+    previewDiffStepChunkEnabledCheckbox.addEventListener('change', () => {
+        if (previewDiffStepChunkGroup) previewDiffStepChunkGroup.classList.toggle('hidden', !previewDiffStepChunkEnabledCheckbox.checked);
+        applySettings();
+    });
+}
+if (previewDiffStepChunkFramesSlider) {
+    previewDiffStepChunkFramesSlider.addEventListener('input', () => {
+        previewDiffStepChunkFramesValue.textContent = previewDiffStepChunkFramesSlider.value;
+        applySettingsDebounced();
+    });
+}
+if (previewDiffStepOverlapFramesSlider) {
+    previewDiffStepOverlapFramesSlider.addEventListener('input', () => {
+        previewDiffStepOverlapFramesValue.textContent = previewDiffStepOverlapFramesSlider.value;
+        applySettingsDebounced();
+    });
+}
 exportDiffStepsSlider.addEventListener('input', () => {
     exportDiffStepsValue.textContent = exportDiffStepsSlider.value;
     applySettingsDebounced();

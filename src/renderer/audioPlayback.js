@@ -236,6 +236,9 @@ export function getPreviewInferenceOptions() {
     cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.75,
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
+    diffStepChunk: state.audioSettings?.previewDiffStepChunkEnabled === true,
+    diffStepChunkFrames: state.audioSettings?.previewDiffStepChunkFrames ?? 500,
+    diffStepOverlapFrames: state.audioSettings?.previewDiffStepOverlapFrames ?? 50,
   };
 }
 

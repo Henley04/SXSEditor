@@ -216,6 +216,17 @@ describe('inference/pipeline/audioSegmentation', () => {
         seg.computeSynthCacheKey(notes, 120, { singerId: 'singerB' })
       );
     });
+
+    it('should differ when diffStepChunk settings change', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      const noChunk = seg.computeSynthCacheKey(notes, 120, {});
+      const chunkOn = seg.computeSynthCacheKey(notes, 120, { diffStepChunk: true, diffStepChunkFrames: 500, diffStepOverlapFrames: 50 });
+      const chunkDifferentSize = seg.computeSynthCacheKey(notes, 120, { diffStepChunk: true, diffStepChunkFrames: 800, diffStepOverlapFrames: 50 });
+      const chunkDifferentOverlap = seg.computeSynthCacheKey(notes, 120, { diffStepChunk: true, diffStepChunkFrames: 500, diffStepOverlapFrames: 100 });
+      expect(noChunk).to.not.equal(chunkOn);
+      expect(chunkOn).to.not.equal(chunkDifferentSize);
+      expect(chunkOn).to.not.equal(chunkDifferentOverlap);
+    });
   });
 
   describe('median', () => {

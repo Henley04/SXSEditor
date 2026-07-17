@@ -39,6 +39,9 @@ export function getFragmentPreviewInferenceOptions() {
     cfgRescale: settings?.previewCfgRescale ?? 0.75,
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
+    diffStepChunk: settings?.previewDiffStepChunkEnabled === true,
+    diffStepChunkFrames: settings?.previewDiffStepChunkFrames ?? 500,
+    diffStepOverlapFrames: settings?.previewDiffStepOverlapFrames ?? 50,
   };
 }
 

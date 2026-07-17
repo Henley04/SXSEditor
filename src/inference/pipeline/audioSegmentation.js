@@ -171,6 +171,10 @@ class AudioSegmentation {
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
         const language = options.language || null;
+        // diffStep 分块推理参数影响合成结果，必须纳入缓存键
+        const diffStepChunk = options.diffStepChunk === true ? 1 : 0;
+        const diffStepChunkFrames = options.diffStepChunkFrames || 0;
+        const diffStepOverlapFrames = options.diffStepOverlapFrames !== undefined ? options.diffStepOverlapFrames : 0;
         // singerId 必须纳入缓存键：分片移动到不同歌手时，即使参考音频内容相同（或均为空），
         // 也必须触发重新合成，否则会命中旧缓存返回上一个歌手的音频。
         const singerId = options.singerId || null;
@@ -215,7 +219,7 @@ class AudioSegmentation {
             }
         }
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}`;
     }
 
     /**
