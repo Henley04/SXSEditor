@@ -67,8 +67,9 @@ if (!gotTheLock) {
   app.quit();
 }
 
-const { enumerateDMLDevices } = require('./inference/pipeline');
-
+// ---- Light module requires (safe to load before app.whenReady) ----
+// These modules do NOT transitively load onnxruntime-node, so they
+// don't block the main thread before the splash window appears.
 const {
   createWindow,
   getMainWindow,
@@ -87,13 +88,9 @@ const {
 } = require('./main/gpuInfo');
 const { checkAndDownloadModels, registerModelDownloadIpc } = require('./main/modelDownload');
 const { registerThemeIpc } = require('./main/themeIpc');
-const { registerSvsIpc, resetSvsPipeline } = require('./main/svsIpc');
-const { registerPitchMidiIpc, resetRmvpe, resetBasicPitch, resetRosvot } = require('./main/pitchMidiIpc');
 const { registerSingerIpc } = require('./main/singerIpc');
 const { registerAudioIpc, resetAudioManagers } = require('./main/audioIpc');
 const { registerDialogIpc } = require('./main/dialogIpc');
-const { registerSettingsIpc, setCachedDMLDevices, getCachedDMLDevices, invalidateDMLDevices } = require('./main/settingsIpc');
-const { registerResourceManagerIpc } = require('./main/resourceManagerIpc');
 const { registerWebnnIpc } = require('./main/webnnIpc');
 const { registerUpdateIpc, cleanupInstallerTempFiles } = require('./main/updateIpc');
 const {
@@ -103,6 +100,28 @@ const {
   waitForSplashReady,
   registerSplashIpc,
 } = require('./main/splashManager');
+
+// ---- Heavy module exports (assigned inside app.whenReady, AFTER splash) ----
+// These modules transitively load onnxruntime-node (a native addon that
+// takes hundreds of ms to load). Deferring their require() until after
+// the splash window is created lets the splash appear immediately at
+// app startup, while the heavy loads run in parallel with the main
+// window's renderer loading.
+let enumerateDMLDevices;
+let registerSvsIpc;
+let registerPitchMidiIpc;
+let registerSettingsIpc;
+let registerResourceManagerIpc;
+let setCachedDMLDevices;
+let getCachedDMLDevices;
+// `reset*` functions are referenced by the before-quit handler, which
+// may theoretically fire before whenReady completes (e.g. user quits
+// during startup). Initialize them as no-ops so the handler is always
+// safe to call; the real implementations are assigned in whenReady.
+let resetSvsPipeline = () => {};
+let resetRmvpe = () => {};
+let resetBasicPitch = () => {};
+let resetRosvot = () => {};
 
 app.on('second-instance', () => {
   const mainWindow = getMainWindow();
@@ -130,6 +149,36 @@ protocol.registerSchemesAsPrivileged([
 app.whenReady().then(() => {
   const isDev = !app.isPackaged;
 
+  // Splash screen is shown only in packaged builds. In dev mode the
+  // main window is shown immediately — devs don't need the splash and
+  // forcing it would slow down iteration.
+  const showSplash = !isDev;
+  // Minimum visible duration of the splash, measured from when the
+  // splash's SVG actually painted. Set to 0 so the splash never
+  // artificially delays startup — the main window is revealed as soon
+  // as the splash has painted (see waitForSplashReady below).
+  const MIN_SPLASH_MS = 0;
+
+  // ========================================================================
+  // STEP 1: Show the splash window IMMEDIATELY.
+  //
+  // This is the very first thing we do inside whenReady so the user sees
+  // *something* (the splash's dark background + SVG) the moment Electron
+  // is ready, before any heavy module loading, CSP setup, locale loading,
+  // or file cleanup runs. The splash window paints its backgroundColor
+  // synchronously on creation, so it's visible even before did-finish-load
+  // fires for the splash itself.
+  // ========================================================================
+  if (showSplash) {
+    createSplashWindow();
+  }
+
+  // ========================================================================
+  // STEP 2: Fast setup (registrations only, no heavy I/O).
+  // CSP + protocol handler + locale. These are all synchronous
+  // registrations or fast file reads and don't materially delay the
+  // main window creation that follows.
+  // ========================================================================
   const cspScriptSrc = isDev ? "'self' 'unsafe-eval'" : "'self'";
   const cspConnectSrc = isDev
     ? "'self' https://modelscope.cn ws://0.0.0.0:3000 ws://localhost:3000"
@@ -169,33 +218,16 @@ app.whenReady().then(() => {
     return net.fetch(`file:///${resolvedPath.replace(/\\/g, '/')}`);
   });
 
+  // loadMainLocale() must run before createWindow() because createWindow()
+  // calls buildAppMenu(), which uses t() for menu labels.
   loadMainLocale();
 
-  // Clean up leftover installer .exe files from a previous in-app update.
-  // By the time the app launches again, the previous install flow has
-  // finished (success or cancel), so the temp installer is no longer needed.
-  // Using 'all' here reclaims disk immediately instead of waiting 7 days.
-  try {
-    cleanupInstallerTempFiles('all');
-  } catch (err) {
-    console.warn('[Main] Installer temp cleanup failed:', err.message);
-  }
-
-  // Splash screen is shown only in packaged builds. In dev mode the
-  // main window is shown immediately — devs don't need the splash and
-  // forcing it would slow down iteration. (isDev was declared above,
-  // next to the CSP setup.)
-  const showSplash = !isDev;
-  // Minimum visible duration of the splash, measured from when the
-  // splash's SVG actually painted. Set to 0 so the splash never
-  // artificially delays startup — the main window is revealed as soon
-  // as the splash has painted (see waitForSplashReady below).
-  const MIN_SPLASH_MS = 0;
-
-  if (showSplash) {
-    createSplashWindow();
-  }
-
+  // ========================================================================
+  // STEP 3: Create the main window (hidden) so its renderer starts loading
+  // IN PARALLEL with the heavy requires in STEP 4. The renderer runs in a
+  // separate process, so its loading progresses even while the main thread
+  // is blocked by synchronous require() calls below.
+  // ========================================================================
   const mainWindow = createWindow({ show: false });
 
   // Helper: reveal the main window (and close the splash if any). In
@@ -215,6 +247,15 @@ app.whenReady().then(() => {
   // （此前此处 await detectAllHardware() 会阻塞主窗口显示，因为完整
   //  systeminformation GPU 检测可能耗时数秒甚至 ~9s。现将窗口显示与
   //  硬件检测解耦，让用户立即看到应用界面。）
+  //
+  // This listener is registered BEFORE the heavy requires in STEP 4 so
+  // we never miss the did-finish-load event even if the renderer finishes
+  // loading while the main thread is blocked. The listener body uses
+  // enumerateDMLDevices / setCachedDMLDevices / getCachedDMLDevices, which
+  // are `let` variables assigned in STEP 4. Because did-finish-load is
+  // delivered on the event loop (after all synchronous code in this
+  // callback completes), those variables are guaranteed to be assigned
+  // by the time the listener fires.
   mainWindow.webContents.once('did-finish-load', () => {
     // 1. 立即显示主窗口（不等待 GPU/NPU 检测）
     // In dev mode: reveal the main window immediately.
@@ -363,6 +404,61 @@ app.whenReady().then(() => {
     })();
   });
 
+  // ========================================================================
+  // STEP 4: Heavy module loading + IPC registration + deferred cleanup.
+  //
+  // These require() calls load onnxruntime-node (a native addon) and its
+  // transitive dependencies, which can take hundreds of milliseconds.
+  // By deferring them to here — AFTER the splash is visible and the main
+  // window's renderer has started loading — the heavy loading runs in
+  // PARALLEL with the renderer's loading, so it doesn't extend the total
+  // startup time. The user sees the splash during this entire phase.
+  //
+  // The did-finish-load listener above is already registered, so it will
+  // fire (after this synchronous block completes) once the renderer is
+  // ready. The `let` variables assigned here are captured by that
+  // listener's closure and are guaranteed to be initialized by the time
+  // the listener fires.
+  // ========================================================================
+  ({ enumerateDMLDevices } = require('./inference/pipeline'));
+  ({
+    registerSvsIpc,
+    resetSvsPipeline,
+  } = require('./main/svsIpc'));
+  ({
+    registerPitchMidiIpc,
+    resetRmvpe,
+    resetBasicPitch,
+    resetRosvot,
+  } = require('./main/pitchMidiIpc'));
+  ({
+    registerSettingsIpc,
+    setCachedDMLDevices,
+    getCachedDMLDevices,
+  } = require('./main/settingsIpc'));
+  ({ registerResourceManagerIpc } = require('./main/resourceManagerIpc'));
+
+  // Register the heavy IPC handlers now that their modules are loaded.
+  // These must be registered before the main window's renderer calls them
+  // (which happens after did-finish-load). Since did-finish-load is
+  // delivered on the event loop after this synchronous block completes,
+  // the handlers are always registered in time.
+  registerSettingsIpc();
+  registerSvsIpc();
+  registerPitchMidiIpc();
+  registerResourceManagerIpc();
+
+  // Clean up leftover installer .exe files from a previous in-app update.
+  // Deferred to here so it doesn't delay the splash window appearing.
+  // By the time the app launches again, the previous install flow has
+  // finished (success or cancel), so the temp installer is no longer needed.
+  // Using 'all' here reclaims disk immediately instead of waiting 7 days.
+  try {
+    cleanupInstallerTempFiles('all');
+  } catch (err) {
+    console.warn('[Main] Installer temp cleanup failed:', err.message);
+  }
+
   // GPU 硬件探测已合并到上方 did-finish-load 处理器中（应用完全启动后一次性执行并缓存复用）。
   // Model检查延后执行，不阻塞窗口显示
   checkAndDownloadModels().catch(err => {
@@ -400,17 +496,17 @@ app.on('before-quit', () => {
   }
 });
 
-// 注册所有 IPC
+// Register light IPC handlers at top-level (these modules don't load
+// onnxruntime-node, so they're safe to load before app.whenReady).
+// Heavy IPC handlers (registerSettingsIpc, registerSvsIpc,
+// registerPitchMidiIpc, registerResourceManagerIpc) are registered
+// inside app.whenReady after the splash window is shown — see STEP 4.
 registerWindowIpc();
 registerDialogIpc();
-registerSettingsIpc();
 registerThemeIpc();
-registerSvsIpc();
-registerPitchMidiIpc();
 registerSingerIpc();
 registerAudioIpc();
 registerModelDownloadIpc();
-registerResourceManagerIpc();
 registerWebnnIpc();
 registerUpdateIpc();
 registerSplashIpc();
