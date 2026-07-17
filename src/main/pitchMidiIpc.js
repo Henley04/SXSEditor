@@ -5,7 +5,7 @@ const { Worker } = require('node:worker_threads');
 const { RmvpePitchDetector } = require('../inference/rmvpePitchDetector');
 const { BasicPitchDetector } = require('../inference/basicPitch');
 const { RosvotDetector } = require('../inference/rosvotDetector');
-const { parseMidiFile, parseMidiFileMultiTrack } = require('../inference/midiParser');
+const { parseMidiFile, parseMidiFileMultiTrack, parseMidiProjectInfo } = require('../inference/midiParser');
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
 const { createLazyInitializer } = require('./lazyInitializer');
@@ -357,7 +357,17 @@ function registerPitchMidiIpc() {
       const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
       const tracks = parseMidiFileMultiTrack(arrayBuffer);
 
-      return { success: true, tracks };
+      // Also extract project-level info (BPM, time signature) so the
+      // renderer can ask the user whether to sync them into the project.
+      let projectInfo = null;
+      try {
+        projectInfo = parseMidiProjectInfo(arrayBuffer);
+      } catch (err) {
+        // projectInfo is best-effort; if it fails, continue without it.
+        console.warn('[Main] MIDI projectInfo extraction failed:', err.message);
+      }
+
+      return { success: true, tracks, projectInfo };
     } catch (err) {
       console.error('[Main] Multi-track MIDI import failed:', err);
       return { success: false, error: err.message };

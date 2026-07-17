@@ -1,4 +1,4 @@
-const { parseMidiFile, parseMidiFileMultiTrack } = require('../src/inference/midiParser');
+const { parseMidiFile, parseMidiFileMultiTrack, parseMidiProjectInfo } = require('../src/inference/midiParser');
 const { Midi } = require('@tonejs/midi');
 const { expect } = require('chai');
 
@@ -398,5 +398,72 @@ describe('MIDI Parser (multi-track)', () => {
     t1.addNote({ midi: 36, ticks: 0, durationTicks: 120, velocity: 1 });
 
     expect(() => parseMidiFileMultiTrack(toBuffer(midi.toArray()))).to.throw('No notes found');
+  });
+});
+
+describe('MIDI Parser (project info)', () => {
+  function toBuffer(bytes) {
+    return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  }
+
+  it('should extract BPM from the first tempo event', () => {
+    const midi = new Midi();
+    midi.header.setTempo(154); // 154 BPM
+    midi.addTrack(); // need at least one track to form a valid file
+    const info = parseMidiProjectInfo(toBuffer(midi.toArray()));
+    expect(info.bpm).to.be.a('number');
+    expect(Math.abs(info.bpm - 154)).to.be.at.most(1); // allow rounding
+  });
+
+  it('should extract the time signature when present', () => {
+    const midi = new Midi();
+    midi.header.setTempo(120);
+    midi.header.timeSignatures.push({ ticks: 0, timeSignature: [3, 4], measures: 0 });
+    midi.addTrack();
+    const info = parseMidiProjectInfo(toBuffer(midi.toArray()));
+    expect(info.timeSignature).to.deep.equal([3, 4]);
+  });
+
+  it('should return null bpm when no tempo event exists', () => {
+    const midi = new Midi();
+    // No setTempo call — @tonejs/midi defaults to 120 internally but does
+    // not push anything to header.tempos until the user sets one.
+    midi.addTrack();
+    const info = parseMidiProjectInfo(toBuffer(midi.toArray()));
+    expect(info.bpm).to.equal(null);
+  });
+
+  it('should return null timeSignature when no time signature event exists', () => {
+    const midi = new Midi();
+    midi.header.setTempo(120);
+    midi.addTrack();
+    const info = parseMidiProjectInfo(toBuffer(midi.toArray()));
+    expect(info.timeSignature).to.equal(null);
+  });
+
+  it('should use the first tempo when multiple are present', () => {
+    const midi = new Midi();
+    // setTempo in @tonejs/midi is set-style (overwrites), so push two
+    // tempo events directly to simulate a multi-tempo MIDI file.
+    midi.header.tempos.push({ bpm: 100, ticks: 0, time: 0 });
+    midi.header.tempos.push({ bpm: 200, ticks: 960, time: 2 });
+    midi.addTrack();
+    const info = parseMidiProjectInfo(toBuffer(midi.toArray()));
+    expect(info.bpm).to.equal(100);
+  });
+
+  it('should throw on invalid buffer', () => {
+    const buffer = new ArrayBuffer(10);
+    expect(() => parseMidiProjectInfo(buffer)).to.throw();
+  });
+
+  it('should extract both BPM and time signature together', () => {
+    const midi = new Midi();
+    midi.header.setTempo(140);
+    midi.header.timeSignatures.push({ ticks: 0, timeSignature: [6, 8], measures: 0 });
+    midi.addTrack();
+    const info = parseMidiProjectInfo(toBuffer(midi.toArray()));
+    expect(info.bpm).to.equal(140);
+    expect(info.timeSignature).to.deep.equal([6, 8]);
   });
 });
