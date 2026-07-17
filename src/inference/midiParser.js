@@ -18,6 +18,137 @@ function _validateMidiBuffer(buffer) {
 }
 
 /**
+ * Walk the raw MIDI byte stream and extract lyric meta events (type 0x05)
+ * directly. @tonejs/midi drops track-level lyric events (it only keeps the
+ * ones on the tempo/header track), so VOCALOID-style MIDI files — where
+ * lyrics live on the melody track itself — lose all lyric data after
+ * parsing. This restores them.
+ *
+ * Returns:
+ *   {
+ *     byChannel: Map<channel, Array<{ticks, text}>>,
+ *     global: Array<{ticks, text}>   // lyrics from tracks with no notes
+ *   }
+ */
+function _extractRawLyrics(buffer) {
+  const view = new DataView(buffer);
+  const numTracks = _readUint16(view, 10);
+  const byChannel = new Map();
+  const global = [];
+  let off = 14;
+
+  for (let t = 0; t < numTracks && off + 8 <= buffer.byteLength; t++) {
+    const tag = String.fromCharCode(
+      view.getUint8(off), view.getUint8(off + 1),
+      view.getUint8(off + 2), view.getUint8(off + 3),
+    );
+    if (tag !== 'MTrk') break;
+    const trackLen = view.getUint32(off + 4);
+    const trackEnd = off + 8 + trackLen;
+    if (trackEnd > buffer.byteLength) break;
+
+    let p = off + 8;
+    let tick = 0;
+    let lastStatus = null;
+    let trackChannel = -1;
+    let trackHasNotes = false;
+    const trackLyrics = [];
+
+    while (p < trackEnd) {
+      // delta time (variable length)
+      let delta = 0;
+      let byte;
+      do {
+        if (p >= trackEnd) { byte = 0; break; }
+        byte = view.getUint8(p++);
+        delta = (delta << 7) | (byte & 0x7f);
+      } while (byte & 0x80);
+      tick += delta;
+
+      if (p >= trackEnd) break;
+
+      let status;
+      const firstByte = view.getUint8(p);
+      if (firstByte < 0x80) {
+        // running status
+        if (lastStatus === null) break;
+        status = lastStatus;
+      } else {
+        status = firstByte;
+        p++;
+        if (status < 0xf0) {
+          lastStatus = status;
+        } else if (status >= 0xf0 && status <= 0xf7) {
+          // system common resets running status
+          lastStatus = null;
+        }
+        // 0xf8-0xff (system real-time) do not reset running status
+      }
+
+      if (status === 0xff) {
+        // meta event
+        if (p >= trackEnd) break;
+        const metaType = view.getUint8(p++);
+        let ml = 0;
+        let mb;
+        do {
+          if (p >= trackEnd) { mb = 0; break; }
+          mb = view.getUint8(p++);
+          ml = (ml << 7) | (mb & 0x7f);
+        } while (mb & 0x80);
+        const dataStart = p;
+        p += ml;
+        if (metaType === 0x05 && p <= trackEnd) {
+          const text = new TextDecoder('utf-8').decode(
+            new Uint8Array(buffer, dataStart, ml),
+          );
+          trackLyrics.push({ ticks: tick, text });
+        }
+      } else if (status === 0xf0 || status === 0xf7) {
+        // sysex event
+        let ml = 0;
+        let mb;
+        do {
+          if (p >= trackEnd) { mb = 0; break; }
+          mb = view.getUint8(p++);
+          ml = (ml << 7) | (mb & 0x7f);
+        } while (mb & 0x80);
+        p += ml;
+      } else {
+        // channel voice / mode message
+        const hi = status >> 4;
+        const lo = status & 0x0f;
+        if (hi >= 0x8 && hi <= 0xe) {
+          trackChannel = lo;
+          if (hi === 0x9) trackHasNotes = true;
+        }
+        let dataLen = 0;
+        switch (hi) {
+          case 0xc: case 0xd: dataLen = 1; break;
+          case 0x8: case 0x9: case 0xa: case 0xb: case 0xe: dataLen = 2; break;
+        }
+        p += dataLen;
+      }
+    }
+
+    if (trackLyrics.length > 0) {
+      if (trackHasNotes && trackChannel >= 0) {
+        if (!byChannel.has(trackChannel)) byChannel.set(trackChannel, []);
+        byChannel.get(trackChannel).push(...trackLyrics);
+      } else {
+        // Lyrics on a track with no notes (e.g. tempo/conductor track):
+        // treat as global fallback.
+        global.push(...trackLyrics);
+      }
+    }
+
+    off = trackEnd;
+  }
+
+  return { byChannel, global };
+}
+
+/**
  * Apply SVS-specific post-processing to a single track's raw notes:
  *   - trim overlapping notes (monophonic timeline)
  *   - attach lyrics (from the track or shared header) by tick proximity
@@ -58,18 +189,38 @@ function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds, seco
     .map((m) => ({ ticks: m.ticks, text: m.text || '' }))
     .sort((a, b) => a.ticks - b.ticks);
 
-  const tolerance = Math.max(1, Math.floor(ticksPerBeat / 100));
+  // Lyric-to-note matching strategy:
+  //   - @tonejs/midi-aligned files usually place lyrics exactly at the
+  //     note's start tick (tolerance = ticksPerBeat/100 ≈ 1 tick).
+  //   - VOCALOID-exported MIDI files place each lyric event slightly
+  //     before its corresponding note-on (commonly 12-168 ticks early).
+  //     Strict tick matching fails for these, so we additionally allow a
+  //     lyric to be matched if it sits within [note - maxLead, note +
+  //     exactTolerance]. maxLead = 1 beat covers observed VOCALOID drift
+  //     without stealing lyrics from adjacent notes (which are typically
+  //     >= 1 beat apart in melody lines).
+  //   - Lyrics are consumed in tick order; once a lyric matches a note it
+  //     is not reused.
+  const exactTolerance = Math.max(1, Math.floor(ticksPerBeat / 100));
+  const maxLead = ticksPerBeat; // 1 beat
   let lyricIdx = 0;
   for (const note of trimmed) {
-    while (lyricIdx < sortedLyrics.length && sortedLyrics[lyricIdx].ticks < note.startTicks - tolerance) {
+    // Skip lyrics that are too early for this note (outside maxLead window)
+    while (
+      lyricIdx < sortedLyrics.length &&
+      note.startTicks - sortedLyrics[lyricIdx].ticks > maxLead
+    ) {
       lyricIdx++;
     }
-    if (lyricIdx < sortedLyrics.length) {
-      if (Math.abs(sortedLyrics[lyricIdx].ticks - note.startTicks) <= tolerance) {
-        note.lyric = sortedLyrics[lyricIdx].text;
-        lyricIdx++;
-      }
+    if (lyricIdx >= sortedLyrics.length) break;
+    const diff = note.startTicks - sortedLyrics[lyricIdx].ticks;
+    if (diff >= -exactTolerance) {
+      // lyric is at/after note (within exactTolerance) or before note
+      // (within maxLead) — accept it.
+      note.lyric = sortedLyrics[lyricIdx].text;
+      lyricIdx++;
     }
+    // else: lyric is too late for this note; leave it for the next note
   }
 
   const result = [];
@@ -170,11 +321,22 @@ function parseMidiFile(buffer) {
     throw new Error('No notes found in MIDI file');
   }
 
-  // Lyrics are global (header-level) in MIDI format 0; attach them to the
-  // merged timeline.
-  const lyrics = midi.header.meta
-    .filter((m) => m.type === 'lyrics')
-    .map((m) => ({ ticks: m.ticks, text: m.text || '' }));
+  // Lyrics: @tonejs/midi drops track-level lyric meta events, so extract
+  // them directly from the raw bytes. Use tonejs header lyrics only as a
+  // fallback when raw extraction finds nothing (e.g. malformed input where
+  // our parser missed events but tonejs caught them) — otherwise the two
+  // would duplicate and break tick-based matching.
+  const { byChannel: rawByChannel, global: rawGlobal } = _extractRawLyrics(buffer);
+  const rawLyrics = [...rawGlobal];
+  for (const [, channelLyrics] of rawByChannel) {
+    rawLyrics.push(...channelLyrics);
+  }
+  const headerLyrics = rawLyrics.length === 0
+    ? midi.header.meta
+        .filter((m) => m.type === 'lyrics')
+        .map((m) => ({ ticks: m.ticks, text: m.text || '' }))
+    : [];
+  const lyrics = [...rawLyrics, ...headerLyrics];
 
   const ticksToSeconds = (t) => midi.header.ticksToSeconds(t);
   const secondsToTicks = (s) => midi.header.secondsToTicks(s);
@@ -203,11 +365,20 @@ function parseMidiFileMultiTrack(buffer) {
   const ticksToSeconds = (t) => midi.header.ticksToSeconds(t);
   const secondsToTicks = (s) => midi.header.secondsToTicks(s);
 
-  // Global lyrics (format 0 / tempo track). Used as a fallback when a track
-  // has no lyrics of its own.
-  const globalLyrics = midi.header.meta
-    .filter((m) => m.type === 'lyrics')
-    .map((m) => ({ ticks: m.ticks, text: m.text || '' }));
+  // @tonejs/midi drops track-level lyric meta events. Extract them from the
+  // raw bytes and bucket by channel so each virtual track can recover its
+  // own lyrics. Use tonejs header lyrics only as a fallback when raw
+  // extraction finds nothing (avoids duplicating lyrics that tonejs already
+  // hoisted from track 0 to the header).
+  const { byChannel: rawByChannel, global: rawGlobal } = _extractRawLyrics(buffer);
+  const hasRawLyrics = rawGlobal.length > 0
+    || [...rawByChannel.values()].some((v) => v.length > 0);
+  const headerLyrics = hasRawLyrics
+    ? []
+    : midi.header.meta
+        .filter((m) => m.type === 'lyrics')
+        .map((m) => ({ ticks: m.ticks, text: m.text || '' }));
+  const globalLyrics = [...rawGlobal, ...headerLyrics];
 
   const result = [];
   for (const track of midi.tracks) {
@@ -222,10 +393,11 @@ function parseMidiFileMultiTrack(buffer) {
       lyric: '',
     }));
 
-    // Per-track lyrics (some MIDI exporters attach lyrics to the track
-    // they belong to rather than the global tempo track).
-    const trackLyrics = (track && Array.isArray(track.lyrics))
-      ? track.lyrics.map((l) => ({ ticks: l.ticks, text: l.text || '' }))
+    // Prefer lyrics extracted from this track's channel; fall back to global
+    // lyrics (header / tempo track) when the channel has none.
+    const channelLyrics = rawByChannel.get(track.channel);
+    const trackLyrics = channelLyrics && channelLyrics.length > 0
+      ? channelLyrics
       : globalLyrics;
 
     const notes = _processTrackNotes(

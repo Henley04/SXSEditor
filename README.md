@@ -29,7 +29,7 @@ Supported singing languages: **English**, **Chinese (Mandarin)**, and **Japanese
 
 Smart model download: automatically detects whether the remote ModelScope repo stores weights as split `onnx + data` or a single `onnx` file, and downloads external data alongside when present. The remote file list is fetched recursively so required files in subdirectories (`preprocess/`, `basic_pitch_model/`) are included.
 
-MIDI import: standards-compliant MIDI file parsing (format 0/1/2, SMPTE time division, multi-track) via `@tonejs/midi`. Drum tracks (channel 10) are filtered out automatically. The main window's "Import MIDI" button supports multi-track files — each non-drum track creates an independent singer track. The Fragment Editor and Audio Preprocessing window import by merging all non-drum tracks onto a single timeline.
+MIDI import: standards-compliant MIDI file parsing (format 0/1/2, SMPTE time division, multi-track) via `@tonejs/midi`. Drum tracks (channel 10) are filtered out automatically. The main window's "Import MIDI" button supports multi-track files — each non-drum track creates an independent singer track. The Fragment Editor and Audio Preprocessing window import by merging all non-drum tracks onto a single timeline. Lyric events (meta type 0x05) are extracted directly from the raw MIDI byte stream — including track-level lyrics that `@tonejs/midi` drops — so VOCALOID-exported MIDI files (where lyrics sit on the melody track, often a few ticks ahead of each note-on) import with their original lyrics instead of falling back to `la`.
 
 Fragment Editor draggable playhead: click or drag the playhead (or the header timeline) to set a custom playback start position — playback begins from that offset instead of always from zero. Dragging during playback seeks to the new position without re-synthesizing. A client-side signature cache reuses the previously synthesized audio whenever notes and inference options are unchanged, so different start positions play instantly.
 
@@ -59,7 +59,7 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 
 智能模型下载：自动检测远程 ModelScope 仓库的权重是分开存储（onnx + data）还是单 onnx 文件，当检测到 data 时连带下载。远程文件列表递归获取，确保子目录（`preprocess/`、`basic_pitch_model/`）下的必需文件被纳入下载。
 
-MIDI 导入：基于 `@tonejs/midi` 的标准 MIDI 文件解析（支持格式 0/1/2、SMPTE 时间格式、多轨）。鼓轨（channel 10）自动过滤。主页面"导入MIDI"按钮支持多轨文件——每个非鼓轨道创建一个独立歌手轨道；分片编辑器与音频预处理窗口的导入将所有非鼓轨道合并为单时间线。
+MIDI 导入：基于 `@tonejs/midi` 的标准 MIDI 文件解析（支持格式 0/1/2、SMPTE 时间格式、多轨）。鼓轨（channel 10）自动过滤。主页面"导入MIDI"按钮支持多轨文件——每个非鼓轨道创建一个独立歌手轨道；分片编辑器与音频预处理窗口的导入将所有非鼓轨道合并为单时间线。歌词事件（meta type 0x05）直接从原始 MIDI 字节流提取，包括 `@tonejs/midi` 丢弃的轨道级歌词——因此 VOCALOID 导出的 MIDI 文件（歌词位于旋律轨道上，通常比 note-on 提前数 tick）能保留原始歌词导入，而非全部回退为 `la`。
 
 分片编辑器可拖动播放进度条：点击或拖拽播放头（或顶部时间轴）可设置自定义播放起始位置，播放将从该位置开始而非从头开始。播放中拖拽进度条会跳转到新位置且不重新合成。客户端签名缓存会在 notes 与推理选项未变化时直接复用已合成的音频，因此不同起始位置均可秒播。
 
