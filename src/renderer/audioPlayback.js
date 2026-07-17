@@ -144,6 +144,9 @@ export async function playAll() {
           nSteps: inferenceOpts.nSteps,
           cfg: inferenceOpts.cfg,
           cfgRescale: inferenceOpts.cfgRescale,
+          diffStepChunk: inferenceOpts.diffStepChunk,
+          diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
+          diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
         },
       });
 

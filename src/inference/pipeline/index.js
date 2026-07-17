@@ -1545,6 +1545,21 @@ class OnnxSVSPipeline {
     }
 
     /**
+     * 分块流式路径专用：对 mel 片段运行 vocoder 推理。
+     * 与 _runVocoderChunked 的区别：
+     * 1. 不释放 diffStep（下一个 diffusion chunk 还需要它，释放/重载开销过大）
+     * 2. 接受 f0Override 参数（每段 mel 对应不同的 F0 片段）
+     * 3. 不做 vocoderType 一致性检测（已在主路径做过，片段路径重复检测浪费）
+     */
+    async _runVocoderChunkedForSegment(melData, segFrames, f0Override, onChunkComplete) {
+        const chunkFrames = this._resolveVocoderChunkFrames();
+        return this._postprocessing.runVocoderChunked(
+            this.sessions, melData, segFrames, this.vocoderIsFP16 ?? this.isFP16, false,
+            this.vocoderType, f0Override, this.sifiganStatsMissing, onChunkComplete, chunkFrames
+        );
+    }
+
+    /**
      * 在 vocoder 推理前临时释放 diffStep session（仅 DML 后端 + 用户开启时）。
      * 目的：腾出 diffStep 模型权重 + diffusion 32 步激活工作区（合计 ~3-4GB）的显存，
      * 避免 vocoder 推理时显存叠加触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR。
@@ -1631,14 +1646,14 @@ class OnnxSVSPipeline {
         }
     }
 
-    async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange) {
+    async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null) {
         console.log(`[OnnxSVSPipeline] Diffusion start: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, totalSteps=${totalSteps}, isFP16=${this.isFP16}, diffStepIsFP16=${this.diffStepIsFP16}, ep=${this.sessionEPs.diffStep || 'unknown'}`);
         console.log(`[OnnxSVSPipeline] Session diffStep: type=${this.sessions.diffStep?.constructor?.name}, ep=${this.sessionEPs.diffStep}`);
         // 分块扩散推理（仅预览路径启用，useStaticShapes 路径跳过）
         const chunkOpts = this._currentDiffStepChunkOpts;
         if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > chunkOpts.chunkFrames) {
-            console.log(`[OnnxSVSPipeline] Using chunked diffusion: chunkFrames=${chunkOpts.chunkFrames}, overlapFrames=${chunkOpts.overlapFrames}`);
-            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames);
+            console.log(`[OnnxSVSPipeline] Using chunked diffusion: chunkFrames=${chunkOpts.chunkFrames}, overlapFrames=${chunkOpts.overlapFrames}, streaming=${!!onChunkMel}`);
+            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel);
         }
         return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes);
     }
@@ -2079,6 +2094,75 @@ class OnnxSVSPipeline {
             await gpuDrain();
             const xt = this.randomNoise(totalFrames, MEL_DIM);
 
+            // 提前设置 F0（分块流式路径在 diffusion 期间就需要 F0 片段）
+            this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
+            // 单 segment 路径流式推送：仅在没有 contextPadding 截取时启用，避免 totalSamples 不一致
+            const singleSegOnChunk = onChunkAudio && !contextPadding ? onChunkAudio : null;
+
+            // 检测是否走分块流式路径（diffusion chunk + 即时 vocoder）
+            const chunkOpts = this._currentDiffStepChunkOpts;
+            const useStreamingChunked = chunkOpts && chunkOpts.enabled && !this.useStaticShapes
+                && chunkOpts.chunkFrames > 0 && totalFrames > chunkOpts.chunkFrames
+                && singleSegOnChunk; // 流式推送可用时才走此路径
+
+            if (useStreamingChunked) {
+                // ===== 分块流式路径：每 diffusion chunk 完成后立即 vocoder 推送音频 =====
+                console.log(`[OnnxSVSPipeline] Streaming chunked diffusion+vocoder: totalFrames=${totalFrames}, chunkFrames=${chunkOpts.chunkFrames}, overlap=${chunkOpts.overlapFrames}`);
+                const totalSamplesEst = totalFrames * HOP_SIZE;
+                const segmentAudios = []; // {frameStart, audio}
+
+                const onChunkMel = async (chunkInfo) => {
+                    const { frameStart, frameEnd, melData, isLast } = chunkInfo;
+                    const segFrames = frameEnd - frameStart;
+                    const segF0 = this._currentF0Hz ? this._currentF0Hz.subarray(frameStart, frameEnd) : null;
+                    const sampleOffsetBase = frameStart * HOP_SIZE;
+                    // 包装流式回调：vocoder 内部 sampleOffset 是相对片段的，需加上片段在完整音频中的偏移
+                    const wrappedOnChunk = (info) => {
+                        singleSegOnChunk({
+                            chunkIndex: info.chunkIndex,
+                            sampleOffset: info.sampleOffset + sampleOffsetBase,
+                            sampleEnd: info.sampleEnd + sampleOffsetBase,
+                            audio: info.audio,
+                            totalSamples: totalSamplesEst,
+                            isLast: isLast && info.isLast,
+                        });
+                    };
+                    const segAudio = await this._runVocoderChunkedForSegment(melData, segFrames, segF0, wrappedOnChunk);
+                    segmentAudios.push({ frameStart, audio: segAudio });
+                };
+
+                await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, onChunkMel);
+
+                // 拼接各段音频为完整 audioData（用于缓存和返回）
+                let audioData = new Float32Array(totalSamplesEst);
+                for (const { frameStart, audio } of segmentAudios) {
+                    const offset = frameStart * HOP_SIZE;
+                    const copyLen = Math.min(audio.length, totalSamplesEst - offset);
+                    audioData.set(audio.subarray(0, copyLen), offset);
+                }
+                // 末尾截断到实际长度（vocoder 可能多输出几个样本）
+                if (audioData.length > totalSamplesEst) {
+                    audioData = audioData.subarray(0, totalSamplesEst);
+                }
+                console.log(`[OnnxSVSPipeline] Streaming chunked complete: ${segmentAudios.length} segments, ${audioData.length} samples`);
+
+                // 单 note 上下文 padding 截取
+                if (contextPadding) {
+                    const startSample = contextPadding.offsetFrames * HOP_SIZE;
+                    const validSamples = contextPadding.validFrames * HOP_SIZE;
+                    const endSample = Math.min(startSample + validSamples, audioData.length);
+                    audioData = audioData.subarray(startSample, endSample);
+                }
+                const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
+                if (audioData.length <= MAX_CACHE_SAMPLES) {
+                    this._synthCachePut(cacheKey, audioData);
+                }
+                onProgress(100);
+                await this._recreateHeavySessionsAfterSynthesis();
+                return audioData;
+            }
+
+            // ===== 常规路径：整段 diffusion → 整段 vocoder =====
             await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50);
 
             // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
@@ -2106,9 +2190,6 @@ class OnnxSVSPipeline {
             await gpuDrain();
 
             onProgress(90);
-            this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
-            // 单 segment 路径流式推送：仅在没有 contextPadding 截取时启用，避免 totalSamples 不一致
-            const singleSegOnChunk = onChunkAudio && !contextPadding ? onChunkAudio : null;
             let audioData = await this._runVocoderChunked(xt.data, totalFrames, singleSegOnChunk);
 
             // 单 note 上下文 padding：截取有效音频（丢弃前后 rest padding）
