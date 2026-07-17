@@ -424,4 +424,47 @@ function parseMidiFileMultiTrack(buffer) {
   return result;
 }
 
-module.exports = { parseMidiFile, parseMidiFileMultiTrack };
+/**
+ * Extract project-level metadata from a MIDI file: the first tempo event
+ * (BPM) and the first time-signature event. Returns null when neither is
+ * present so callers can decide whether to fall back to defaults.
+ *
+ * Returned shape:
+ *   {
+ *     bpm: number | null,                 // e.g. 154
+ *     timeSignature: [number, number] | null  // e.g. [4, 4]
+ *   }
+ *
+ * @param {ArrayBuffer} buffer
+ * @returns {{bpm:number|null, timeSignature:[number,number]|null}}
+ */
+function parseMidiProjectInfo(buffer) {
+  _validateMidiBuffer(buffer);
+  const midi = new Midi(buffer);
+
+  let bpm = null;
+  if (midi.header.tempos && midi.header.tempos.length > 0) {
+    // Use the first tempo event — most MIDI files set tempo once at tick 0.
+    // If the file has multiple tempo changes, the first one is the project's
+    // initial BPM and is what the user typically wants to sync.
+    const tempo = midi.header.tempos[0];
+    if (typeof tempo.bpm === 'number' && isFinite(tempo.bpm) && tempo.bpm > 0) {
+      bpm = Math.round(tempo.bpm);
+    }
+  }
+
+  let timeSignature = null;
+  if (midi.header.timeSignatures && midi.header.timeSignatures.length > 0) {
+    const ts = midi.header.timeSignatures[0];
+    if (Array.isArray(ts.timeSignature)
+      && ts.timeSignature.length === 2
+      && Number.isInteger(ts.timeSignature[0]) && ts.timeSignature[0] > 0
+      && Number.isInteger(ts.timeSignature[1]) && ts.timeSignature[1] > 0) {
+      timeSignature = [ts.timeSignature[0], ts.timeSignature[1]];
+    }
+  }
+
+  return { bpm, timeSignature };
+}
+
+module.exports = { parseMidiFile, parseMidiFileMultiTrack, parseMidiProjectInfo };
