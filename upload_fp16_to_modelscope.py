@@ -22,7 +22,10 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 FP16_DIR = os.path.join(SCRIPT_DIR, 'onnx_models', 'fp16_dynamo')
 
 MODEL_ID = 'syxppp/SoulX-Singer-onnx-directml-fp16'
-ACCESS_TOKEN = '***REDACTED_MS_ACCESS_TOKEN***'
+ACCESS_TOKEN = os.environ.get('MODELSCOPE_ACCESS_TOKEN')
+if not ACCESS_TOKEN:
+    logger.error("MODELSCOPE_ACCESS_TOKEN environment variable not set")
+    sys.exit(1)
 NEW_BRANCH = 'release'
 TAG_NAME = 'v1'
 
@@ -42,7 +45,7 @@ def main():
     if not git_token:
         logger.error("Login failed: no git_token returned")
         sys.exit(1)
-    logger.info(f"Login successful, git_token: {git_token}")
+    logger.info("Login successful")
 
     # Verify files exist
     for local_path, remote_path in FILES_TO_UPLOAD:
