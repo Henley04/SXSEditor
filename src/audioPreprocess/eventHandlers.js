@@ -78,13 +78,17 @@ function _mouseToCanvasX(e) {
 }
 
 /**
- * 把 canvas 内部 X 坐标转换为可播放的秒数，并截断到 [0, duration - 0.001]。
+ * 把 canvas 内部 X 坐标转换为可播放的秒数，并截断到 [0, duration - 0.05]。
+ * 余量 50ms 防止拖拽到接近末尾时 source.start(0, offset) 几乎立即结束触发 onended
+ * 重置位置到 0，导致 playhead 从拖拽位置跳回开头。
  */
 function _canvasXToClampedSeconds(x) {
   const seconds = xToWaveformTime(x);
   if (!state.wavAudioBuffer) return Math.max(0, seconds);
   const duration = state.wavAudioBuffer.duration;
-  return Math.max(0, Math.min(duration - 0.001, seconds));
+  // 短音频 fallback：若音频本身不足 100ms，余量缩减到 duration / 2
+  const margin = duration > 0.1 ? 0.05 : duration * 0.5;
+  return Math.max(0, Math.min(duration - margin, seconds));
 }
 
 /**

@@ -32,12 +32,27 @@ export async function startPlayback() {
       source.start();
     }
 
+    // 记录播放启动时刻，用于 onended 触发时判断是否"刚启动就结束"
+    // （用户拖拽到接近末尾时 source 会几乎立即结束，此时不应重置位置到 0，
+    // 否则 playhead 会从拖拽位置跳回开头）
+    const playbackStartWallTime = performance.now();
+
     source.onended = () => {
-      if (state.isPlaying) {
-        state.isPlaying = false;
+      if (!state.isPlaying) return;
+      const realElapsed = (performance.now() - playbackStartWallTime) / 1000;
+      state.isPlaying = false;
+      dom.btnPlayPause.textContent = t('preprocess.play');
+      stopPlaybackRaf();
+      if (realElapsed < 0.2) {
+        // 播放刚启动就结束（用户拖拽到接近末尾）：保留当前位置，不重置到 0
+        drawWaveformWithPlayhead(state.playStartOffset, { isPaused: true });
+        if (state.pianoRoll) {
+          state.pianoRoll.pausePlayback();
+          state.pianoRoll.setCurrentTime(state.playStartOffset);
+        }
+      } else {
+        // 自然播放结束：重置到 0
         state.playStartOffset = 0;
-        dom.btnPlayPause.textContent = t('preprocess.play');
-        stopPlaybackRaf();
         drawWaveformWithPlayhead(0);
         if (state.pianoRoll) state.pianoRoll.stopPlayback();
       }
@@ -118,7 +133,9 @@ export function stopPlayback() {
 export function seekPlayback(newOffset) {
   if (!state.wavAudioBuffer) return;
   const duration = state.wavAudioBuffer.duration;
-  const clamped = Math.max(0, Math.min(duration - 0.001, newOffset));
+  // 余量 50ms 防止拖拽到接近末尾时 source 立即结束触发 onended 重置位置
+  const margin = duration > 0.1 ? 0.05 : duration * 0.5;
+  const clamped = Math.max(0, Math.min(duration - margin, newOffset));
 
   // 停止当前 source（不重置 playStartOffset）
   if (state.audioSource) {
