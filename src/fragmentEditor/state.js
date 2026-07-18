@@ -1,4 +1,4 @@
-import { PARAM_MODES } from '../editor/pianoRoll.js';
+import { PARAM_MODES } from './constants.js';
 
 let SAMPLE_RATE = 24000;
 let pipelineInitialized = false;

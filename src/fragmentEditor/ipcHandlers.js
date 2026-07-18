@@ -41,7 +41,7 @@ import {
   setFragmentDataReceived,
   getKanjiGroups, setKanjiGroups,
 } from './state.js';
-import { PARAM_MODES } from '../editor/pianoRoll.js';
+import { PARAM_MODES } from './constants.js';
 import { initPipeline } from './pipeline.js';
 import { stopFragmentPlayback, loadFragmentAudioSettings } from './audioPlayback.js';
 import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
