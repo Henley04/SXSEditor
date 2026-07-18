@@ -375,14 +375,18 @@ class Diffusion {
 
     /**
      * 计算分块边界与 Hann 窗。
-     * 返回 null 表示无需分块（chunkFrames >= totalFrames）。
+     * 返回 null 表示无需分块（chunkFrames >= totalFrames 或 totalFrames <= 0）。
      * @returns {{specs: Array, overlap: number, fadeWindow: Float32Array}|null}
      */
     _planChunks(totalFrames, chunkFrames, overlapFrames) {
+        // 防御：totalFrames <= 0 时直接返回 null，由调用方短路处理
+        if (!Number.isFinite(totalFrames) || totalFrames <= 0) return null;
         const safeChunk = Math.max(50, Math.floor(chunkFrames));
         let safeOverlap = Math.max(0, Math.floor(overlapFrames));
         if (safeOverlap >= safeChunk) safeOverlap = Math.floor(safeChunk / 2);
         if (safeChunk >= totalFrames) return null;
+        // safeOverlap === 0 时无交叉淡入淡出，fadeWindow 为空数组（循环不执行）
+        if (safeOverlap < 1) safeOverlap = 0;
 
         const specs = [];
         let framePos = 0;
@@ -399,9 +403,12 @@ class Diffusion {
             chunkIdx++;
         }
 
+        // Hann 交叉淡入淡出窗：使用 (i+1)/(N+1) 归一化保证 w[i] + w[N-1-i] = 1 严格成立
+        // 旧实现 i/N 在 i=N-1 时 w < 1，紧邻非重叠区权重=1 存在微小不连续。
         const fadeWindow = new Float32Array(safeOverlap);
         for (let i = 0; i < safeOverlap; i++) {
-            fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * i / safeOverlap));
+            // w[i] = 0.5 * (1 - cos(π * (i+1) / (N+1)))，对称且 w[i] + w[N-1-i] = 1
+            fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * (i + 1) / (safeOverlap + 1)));
         }
         return { specs, overlap: safeOverlap, fadeWindow };
     }
@@ -439,8 +446,10 @@ class Diffusion {
         chunkCond.set(combinedCond.subarray(chunkCondStart, chunkCondEnd), promptCondBytes);
 
         // 3. 运行完整扩散循环
+        // 子进度直接透传：onProgress 已被外层映射到本 chunk 的 [progressStart, progressStart+progressRange] 区间，
+        // 不再截断到 90，避免 32 步 diffusion 期间进度条停滞。
         const chunkOnProgress = (p) => {
-            if (onProgress) onProgress(Math.min(Math.round(p), 90));
+            if (onProgress) onProgress(Math.round(p));
         };
         await this.runDiffusionLoop(
             sessions, subXt, currentChunkFrames, ptMelData, ptFrameCount,
@@ -450,21 +459,28 @@ class Diffusion {
 
         // 4. Hann 交叉淡入淡出写回
         if (isFirst) {
+            // 首 chunk：无前序数据，直接整段 memcpy
             xtOut.set(subXt.data.subarray(0, currentChunkFrames * MEL_DIM), chunkStart * MEL_DIM);
         } else {
-            for (let f = 0; f < currentChunkFrames; f++) {
+            // 重叠区：逐帧加权混合（overlap 帧 × MEL_DIM 元素，无法用 set 批量）
+            const ov = overlap;
+            for (let f = 0; f < ov && f < currentChunkFrames; f++) {
                 const dstOffset = (chunkStart + f) * MEL_DIM;
                 const srcOffset = f * MEL_DIM;
-                if (f < overlap) {
-                    const w = fadeWindow[f];
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        xtOut[dstOffset + d] = xtOut[dstOffset + d] * (1 - w) + subXt.data[srcOffset + d] * w;
-                    }
-                } else {
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        xtOut[dstOffset + d] = subXt.data[srcOffset + d];
-                    }
+                const w = fadeWindow[f];
+                const invW = 1 - w;
+                for (let d = 0; d < MEL_DIM; d++) {
+                    xtOut[dstOffset + d] = xtOut[dstOffset + d] * invW + subXt.data[srcOffset + d] * w;
                 }
+            }
+            // 非重叠区：用 TypedArray.set 走 memcpy，比逐元素快 2-3 倍
+            const nonOverlapStart = ov * MEL_DIM;
+            const nonOverlapLen = (currentChunkFrames - ov) * MEL_DIM;
+            if (nonOverlapLen > 0) {
+                xtOut.set(
+                    subXt.data.subarray(nonOverlapStart, nonOverlapStart + nonOverlapLen),
+                    (chunkStart + ov) * MEL_DIM
+                );
             }
         }
 

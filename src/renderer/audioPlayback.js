@@ -175,10 +175,14 @@ export async function playAll() {
             source.connect(state.gainNode);
 
             // 第一个 chunk 立即开始播放
+            // 注意：playbackStartTime 必须与首 chunk 的发声时刻对齐，
+            // 否则若首 fragment 的 startTimeBeat > 0（chunkStartSec > 0），
+            // 播放头会从 0 开始走，但实际声音要在 chunkStartSec 后才发出，造成"走但没声音"的体验。
             if (!streamingStarted) {
               streamingStarted = true;
+              const chunkStartSec = chunkInfo.sampleOffset / SAMPLE_RATE;
               streamingStartCtxTime = ctx.currentTime + 0.05; // 50ms 延迟避免调度抖动
-              state.playbackStartTime = streamingStartCtxTime;
+              state.playbackStartTime = streamingStartCtxTime + chunkStartSec;
               state.playbackPauseOffset = 0;
               state.isPlaying = true;
               startPlayheadAnimation();
@@ -191,7 +195,11 @@ export async function playAll() {
             const minTime = ctx.currentTime + 0.01;
             source.start(Math.max(scheduleTime, minTime));
 
-            // 最后一个 chunk：结束时清理状态
+            // source.onended：非末 chunk 从 streamingSources 移除并释放引用，
+            // 末 chunk 标记流式结束并清理状态。
+            // 这样长流式合成时（如 100 个 chunk）中间 chunk 的 AudioBuffer 内存能及时回收。
+            const sourceIdx = state.streamingSources.length;
+            state.streamingSources.push(source);
             if (chunkInfo.isLast) {
               source.onended = () => {
                 if (!state.streamingFinished) {
@@ -204,8 +212,14 @@ export async function playAll() {
                   clearPlayheadLine();
                 }
               };
+            } else {
+              source.onended = () => {
+                // 释放已结束的非末 source 引用，避免长流式合成时内存累积
+                if (state.streamingSources[sourceIdx] === source) {
+                  state.streamingSources[sourceIdx] = null;
+                }
+              };
             }
-            state.streamingSources.push(source);
           } catch (e) {
             console.warn('[Audio] Streaming chunk playback failed:', e.message);
           }
@@ -239,7 +253,10 @@ export async function playAll() {
         if (streamingChunkCleanup) { try { streamingChunkCleanup(); } catch (_) {} streamingChunkCleanup = null; }
         // 停止已调度的流式 source
         state.streamingFinished = true;
-        for (const src of state.streamingSources) { try { src.onended = null; src.stop(); } catch (_) {} }
+        for (const src of state.streamingSources) {
+          if (!src) continue;
+          try { src.onended = null; src.stop(); } catch (_) {}
+        }
         state.streamingSources = [];
         throw error;
       }
@@ -565,6 +582,7 @@ export function pausePlayback() {
     state.playbackPauseOffset = Math.max(0, elapsed);
     state.streamingFinished = true;
     for (const src of state.streamingSources) {
+      if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
       try { src.onended = null; src.stop(); } catch (_) {}
     }
     state.streamingSources = [];
@@ -608,6 +626,7 @@ export function stopPlayback() {
   if (state.streamingSources && state.streamingSources.length > 0) {
     state.streamingFinished = true;
     for (const src of state.streamingSources) {
+      if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
       try { src.onended = null; src.stop(); } catch (_) {}
     }
     state.streamingSources = [];
@@ -638,6 +657,7 @@ export async function seekPlayback(newOffset) {
   if (state.streamingSources && state.streamingSources.length > 0) {
     state.streamingFinished = true;
     for (const src of state.streamingSources) {
+      if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
       try { src.onended = null; src.stop(); } catch (_) {}
     }
     state.streamingSources = [];

@@ -85,7 +85,12 @@ function _ensureVisibilityHandler() {
 }
 
 function stopStreamingPlayback() {
+  // 与主页面 stopPlayback 语义一致：设 streamingFinished=true 拦截已在事件队列中
+  // 排队的 onChunkAudio 回调（IPC 监听器虽已移除，但已派发的回调仍可能到达）。
+  // playFragment 开头会显式重置为 false 启动新一轮流式合成。
+  streamingFinished = true;
   for (const src of streamingSources) {
+    if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
     try { src.onended = null; src.stop(); } catch (_) {}
   }
   streamingSources = [];
@@ -93,7 +98,6 @@ function stopStreamingPlayback() {
     try { streamingCleanup(); } catch (_) {}
     streamingCleanup = null;
   }
-  streamingFinished = false;
 }
 
 export async function getFragmentAudioContextInternal() {
@@ -561,20 +565,31 @@ export async function playFragment() {
         source.start(streamingNextStart);
         streamingNextStart += chunkInfo.audio.length / getSampleRate();
 
-        // 最后一个 chunk：标记流式结束，更新 UI
-        source.onended = () => {
-          if (chunkInfo.isLast && !streamingFinished) {
-            streamingFinished = true;
-            setFragmentIsPlaying(false);
-            const raf = getFragmentPlayheadRaf();
-            if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
-            setFragmentCurrentTime(0);
-            setFragmentPlayStartPosition(0);
-            updateFragmentPlayButton();
-            render();
-          }
-        };
+        // source.onended：非末 chunk 从 streamingSources 移除并释放引用，
+        // 末 chunk 标记流式结束并更新 UI。
+        // 长流式合成（如 100 个 chunk）时中间 chunk 的 AudioBuffer 内存能及时回收。
+        const sourceIdx = streamingSources.length;
         streamingSources.push(source);
+        if (chunkInfo.isLast) {
+          source.onended = () => {
+            if (!streamingFinished) {
+              streamingFinished = true;
+              setFragmentIsPlaying(false);
+              const raf = getFragmentPlayheadRaf();
+              if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+              setFragmentCurrentTime(0);
+              setFragmentPlayStartPosition(0);
+              updateFragmentPlayButton();
+              render();
+            }
+          };
+        } else {
+          source.onended = () => {
+            if (streamingSources[sourceIdx] === source) {
+              streamingSources[sourceIdx] = null;
+            }
+          };
+        }
       } catch (e) {
         console.warn('[FragmentAudio] Streaming chunk playback failed:', e.message);
       }
