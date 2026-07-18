@@ -1,6 +1,6 @@
 import { state, dom } from './state.js';
-import { PIANO_KEY_WIDTH, BEAT_WIDTH, HEADER_HEIGHT, NOTE_HEIGHT } from './constants.js';
-import { drawWaveformWithPlayhead, getPlayheadXForTime, xToWaveformTime, PLAYHEAD_HIT_WIDTH } from './canvasRenderer.js';
+import { PIANO_KEY_WIDTH, BEAT_WIDTH, HEADER_HEIGHT } from './constants.js';
+import { drawWaveformWithPlayhead, getPlayheadXForTime, xToWaveformTime, PLAYHEAD_HIT_WIDTH, getMaxScrollX, getMaxScrollY } from './canvasRenderer.js';
 import { togglePlayback, startPlayback, stopPlayback, pausePlayback } from './playback.js';
 import { extractF0AndPitch } from './f0Extraction.js';
 import { extractF0BasicPitch, importMidiFile } from './midiExtraction.js';
@@ -241,34 +241,22 @@ export function setupEventHandlers() {
     if (e.ctrlKey || e.metaKey) {
       const oldZoomX = state.pianoRoll.zoomX;
       const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      state.pianoRoll.zoomX = Math.max(0.25, Math.min(4, state.pianoRoll.zoomX * delta));
+      state.pianoRoll.zoomX = Math.max(0.05, Math.min(4, state.pianoRoll.zoomX * delta));
       const mouseBeats = (pos.x + state.pianoRoll.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
       state.pianoRoll.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * state.pianoRoll.zoomX - pos.x;
-      state.pianoRoll.scrollX = Math.max(0, state.pianoRoll.scrollX);
+      state.pianoRoll.scrollX = Math.max(0, Math.min(getMaxScrollX(), state.pianoRoll.scrollX));
+      state.waveformScrollX = state.pianoRoll.scrollX;
+      state.waveformZoomX = state.pianoRoll.zoomX;
+      state.pianoRoll._staticCacheDirty = true;
       state.pianoRoll.render();
     } else if (e.shiftKey) {
       state.pianoRoll.scrollX += e.deltaY;
-      state.pianoRoll.scrollX = Math.max(0, state.pianoRoll.scrollX);
+      state.pianoRoll.scrollX = Math.max(0, Math.min(getMaxScrollX(), state.pianoRoll.scrollX));
+      state.waveformScrollX = state.pianoRoll.scrollX;
       state.pianoRoll.render();
     } else {
       state.pianoRoll.scrollY += e.deltaY;
-      const totalHeight = 128 * NOTE_HEIGHT * state.pianoRoll.zoomY + HEADER_HEIGHT;
-      state.pianoRoll.scrollY = Math.max(0, Math.min(totalHeight - state.pianoRoll.height, state.pianoRoll.scrollY));
-      state.pianoRoll.render();
-    }
-
-    // 缩放/滚动后确保 playhead 在可见范围内：若超出则调整 scrollX 使其靠近边缘可见。
-    // 否则 drawWaveformWithPlayhead 会因 playheadX 超出 [PIANO_KEY_WIDTH, width] 而不绘制，
-    // 导致"缩放后进度条消失"的问题。
-    const canvasWidth = dom.waveformCanvas.clientWidth;
-    const playheadX = getPlayheadXForTime(state.pianoRoll.getCurrentTime());
-    if (playheadX < PIANO_KEY_WIDTH) {
-      state.pianoRoll.scrollX = Math.max(0, state.pianoRoll.scrollX - (PIANO_KEY_WIDTH - playheadX + 20));
-      state.waveformScrollX = state.pianoRoll.scrollX;
-      state.pianoRoll.render();
-    } else if (playheadX > canvasWidth - 20) {
-      state.pianoRoll.scrollX += (playheadX - canvasWidth + 40);
-      state.waveformScrollX = state.pianoRoll.scrollX;
+      state.pianoRoll.scrollY = Math.max(0, Math.min(getMaxScrollY(), state.pianoRoll.scrollY));
       state.pianoRoll.render();
     }
 
@@ -294,5 +282,77 @@ export function setupEventHandlers() {
 
   document.addEventListener('mouseup', () => {
     state.isResizing = false;
+  });
+
+  // 滚动条拖拽：允许用户用鼠标拖拽底部水平滑块和右侧垂直滑块调整视图位置。
+  // 拖拽时根据滑块位移按比例换算 scrollX/scrollY，并同步到 pianoRoll 和 waveform。
+  _setupScrollbarDrag();
+}
+
+// 滚动条拖拽状态：'h'=水平, 'v'=垂直, null=未拖拽
+let _scrollbarDragMode = null;
+// 拖拽起点：鼠标坐标 + 滑块起始偏移
+let _scrollbarDragStart = { mouse: 0, thumb: 0 };
+
+function _setupScrollbarDrag() {
+  if (dom.hscrollThumb) {
+    dom.hscrollThumb.addEventListener('mousedown', (e) => {
+      if (!state.pianoRoll) return;
+      e.preventDefault();
+      e.stopPropagation();
+      _scrollbarDragMode = 'h';
+      _scrollbarDragStart = {
+        mouse: e.clientX,
+        thumb: parseFloat(dom.hscrollThumb.style.left) || 0,
+      };
+    });
+  }
+
+  if (dom.vscrollThumb) {
+    dom.vscrollThumb.addEventListener('mousedown', (e) => {
+      if (!state.pianoRoll) return;
+      e.preventDefault();
+      e.stopPropagation();
+      _scrollbarDragMode = 'v';
+      _scrollbarDragStart = {
+        mouse: e.clientY,
+        thumb: parseFloat(dom.vscrollThumb.style.top) || 0,
+      };
+    });
+  }
+
+  document.addEventListener('mousemove', (e) => {
+    if (!_scrollbarDragMode || !state.pianoRoll) return;
+    const pr = state.pianoRoll;
+
+    if (_scrollbarDragMode === 'h') {
+      const trackWidth = dom.hscroll.clientWidth;
+      const thumbWidth = parseFloat(dom.hscrollThumb.style.width) || 24;
+      const usableTrack = Math.max(0, trackWidth - thumbWidth);
+      const delta = e.clientX - _scrollbarDragStart.mouse;
+      let newThumbX = _scrollbarDragStart.thumb + delta;
+      newThumbX = Math.max(0, Math.min(usableTrack, newThumbX));
+      const ratio = usableTrack > 0 ? newThumbX / usableTrack : 0;
+      pr.scrollX = ratio * getMaxScrollX();
+      state.waveformScrollX = pr.scrollX;
+      pr._staticCacheDirty = true;
+      pr.render();
+      drawWaveformWithPlayhead(pr.getCurrentTime(), { isPaused: !state.isPlaying });
+    } else if (_scrollbarDragMode === 'v') {
+      const trackHeight = dom.vscroll.clientHeight;
+      const thumbHeight = parseFloat(dom.vscrollThumb.style.height) || 24;
+      const usableTrack = Math.max(0, trackHeight - thumbHeight);
+      const delta = e.clientY - _scrollbarDragStart.mouse;
+      let newThumbY = _scrollbarDragStart.thumb + delta;
+      newThumbY = Math.max(0, Math.min(usableTrack, newThumbY));
+      const ratio = usableTrack > 0 ? newThumbY / usableTrack : 0;
+      pr.scrollY = ratio * getMaxScrollY();
+      pr._staticCacheDirty = true;
+      pr.render();
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    _scrollbarDragMode = null;
   });
 }

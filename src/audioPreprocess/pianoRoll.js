@@ -4,7 +4,7 @@ import { t } from '../i18n/index.js';
 import { debounce } from '../utils/debounce.js';
 import { midiToNoteName } from '../utils/midiUtils.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
-import { drawWaveformWithPlayhead } from './canvasRenderer.js';
+import { drawWaveformWithPlayhead, getMaxScrollX, getMaxScrollY, updateScrollbars } from './canvasRenderer.js';
 import { updateMidiInfo, startInlineEdit, updateInlineInputPosition } from './uiControls.js';
 
 // visibilitychange handler: pause rAF-driven playback UI updates when tab hidden.
@@ -105,6 +105,10 @@ export function initPianoRoll() {
       this.height = height;
       this.ctx = this.canvas.getContext('2d');
       this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      // 视口尺寸变化后，原有 scrollX/scrollY 可能超出新的最大值，需重新 clamp
+      this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
+      this.scrollY = Math.max(0, Math.min(getMaxScrollY(), this.scrollY));
+      state.waveformScrollX = this.scrollX;
       this._staticCacheDirty = true;
       this.render();
     },
@@ -285,23 +289,22 @@ export function initPianoRoll() {
       if (e.ctrlKey || e.metaKey) {
         const oldZoomX = this.zoomX;
         const delta = e.deltaY > 0 ? 0.9 : 1.1;
-        this.zoomX = Math.max(0.25, Math.min(4, this.zoomX * delta));
+        this.zoomX = Math.max(0.05, Math.min(4, this.zoomX * delta));
         const mouseBeats = (pos.x + this.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
         this.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * this.zoomX - pos.x;
-        this.scrollX = Math.max(0, this.scrollX);
+        this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
         state.waveformZoomX = this.zoomX;
         state.waveformScrollX = this.scrollX;
         drawWaveformWithPlayhead(this.getCurrentTime());
       } else if (e.shiftKey) {
         this.scrollX += e.deltaY;
-        this.scrollX = Math.max(0, this.scrollX);
+        this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
         state.waveformScrollX = this.scrollX;
         drawWaveformWithPlayhead(this.getCurrentTime());
       } else {
         this.scrollY += e.deltaY;
+        this.scrollY = Math.max(0, Math.min(getMaxScrollY(), this.scrollY));
       }
-      this.scrollY = Math.max(0, Math.min(128 * NOTE_HEIGHT * this.zoomY + HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT - this.height, this.scrollY));
-      this.scrollX = Math.max(0, this.scrollX);
       this._staticCacheDirty = true;
       this.render();
     },
@@ -410,6 +413,8 @@ export function initPianoRoll() {
       // Always draw playhead on top
       this._drawPlayhead(ctx, h, c);
       updateInlineInputPosition(this);
+      // 同步底部和右侧滚动条滑块位置（在所有视口/内容变化后）
+      updateScrollbars();
     },
 
     _drawBackground(ctx, w, h, c) {

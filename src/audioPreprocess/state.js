@@ -43,6 +43,11 @@ const dom = {
   resizeHandle: null,
   waveformSection: null,
   mainContent: null,
+  // 滚动条（底部水平 + 右侧垂直），允许用户用鼠标拖拽调整视图位置
+  hscroll: null,
+  hscrollThumb: null,
+  vscroll: null,
+  vscrollThumb: null,
 };
 
 export function initDomRefs() {
@@ -59,6 +64,10 @@ export function initDomRefs() {
   dom.resizeHandle = document.getElementById('resize-handle');
   dom.waveformSection = document.getElementById('waveform-section');
   dom.mainContent = document.getElementById('main-content');
+  dom.hscroll = document.getElementById('midi-hscroll');
+  dom.hscrollThumb = document.getElementById('midi-hscroll-thumb');
+  dom.vscroll = document.getElementById('midi-vscroll');
+  dom.vscrollThumb = document.getElementById('midi-vscroll-thumb');
 }
 
 export { state, dom };

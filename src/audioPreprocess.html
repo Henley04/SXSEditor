@@ -43,8 +43,16 @@
             <span class="section-title" data-i18n="preprocess.midiEditor">MIDI 编辑器</span>
             <span id="midi-info" class="file-info" data-i18n="preprocess.waitingForExtraction">-</span>
           </div>
-          <div id="midi-container">
-            <canvas id="midi-canvas" role="img" aria-label="MIDI编辑器"></canvas>
+          <div id="midi-body">
+            <div id="midi-container">
+              <canvas id="midi-canvas" role="img" aria-label="MIDI编辑器"></canvas>
+            </div>
+            <div id="midi-vscroll" class="scrollbar scrollbar-vertical" role="scrollbar" aria-orientation="vertical" tabindex="-1">
+              <div id="midi-vscroll-thumb" class="scrollbar-thumb"></div>
+            </div>
+          </div>
+          <div id="midi-hscroll" class="scrollbar scrollbar-horizontal" role="scrollbar" aria-orientation="horizontal" tabindex="-1">
+            <div id="midi-hscroll-thumb" class="scrollbar-thumb"></div>
           </div>
         </div>
       </div>
