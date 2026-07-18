@@ -342,6 +342,77 @@ for (const [hira, yue] of Object.entries(JpKanaToYueSyllableMap)) {
     JpKataKanaToYueSyllableMap[kata] = yue;
 }
 
+/**
+ * Japanese mora-timing duration weights for JP→EN mapped phonemes.
+ *
+ * Japanese is a mora-timed language: each mora (syllable-like unit) receives
+ * approximately equal duration. This contrasts with English stress-timing
+ * (captured by en_phoneme_durations.json) where stressed vowels are much
+ * longer than unstressed ones. Using English stats for Japanese phonemes
+ * produces unnatural duration ratios (e.g., AA1 vs AA0 differ enormously in
+ * English but Japanese /a/ has no stress contrast).
+ *
+ * This table assigns each Japanese phoneme a relative weight reflecting its
+ * contribution to a mora:
+ *   - Vowels (a/i/u/e/o): 1.0 — full mora, the sonority peak
+ *   - Single consonants (k/s/t/n/h/m/r/w...): 0.35 — short onset, ~35% of
+ *     the following vowel's duration. Matches phonetic measurements of
+ *     Japanese consonant-to-vowel duration ratios.
+ *   - Palatal consonants (ky/gy/ny/...): 0.45 — consonant + palatal glide,
+ *     slightly longer than single consonants due to the /j/ off-glide.
+ *   - Affricates (sh/ch/ts): 0.45-0.55 — longer than stops due to the
+ *     fricative component.
+ *   - Nasal murmur (n before vowel): 0.40 — slightly longer than oral stops.
+ *   - 促音 cl (gemination marker): 0.20 — very brief stop; in real Japanese
+ *     it lengthens the FOLLOWING consonant, but as a standalone phoneme it
+ *     should be short to avoid sounding like a full /t/.
+ *   - pau (unknown kanji fallback): 0.5 — neutral.
+ *
+ * When a Japanese phoneme maps to multiple English phonemes (e.g., ts→T+S,
+ * ky→K+Y), the weight is split equally among the components. The resulting
+ * component weights are then used by getPhonemeAdjustments() to compute
+ * durationRatio, and by _allocateByStats (when extended) for inference.
+ *
+ * Tuning rationale: weights are derived from Japanese phonetics literature
+ * (Han 1962, Sato 1993) showing typical consonant/vowel duration ratios of
+ * ~0.35-0.45 for stops and ~0.50 for nasals/liquids in Tokyo Japanese.
+ */
+const JP_MORA_WEIGHTS = {
+    // Vowels — full mora weight (sonority peak)
+    'a': 1.0, 'i': 1.0, 'u': 1.0, 'e': 1.0, 'o': 1.0,
+
+    // Single consonants — short onset (~35% of vowel duration)
+    'k': 0.35, 'g': 0.35, 's': 0.35, 'z': 0.35,
+    't': 0.35, 'd': 0.35, 'h': 0.35, 'b': 0.35,
+    'p': 0.35, 'f': 0.35, 'w': 0.35, 'y': 0.35,
+
+    // Voiced/nasal/liquid — slightly longer (~40%)
+    'n': 0.40, 'm': 0.40, 'r': 0.40,
+
+    // Voiced affricate /ɟ/ — ~40%
+    'j': 0.40,
+
+    // Palatal consonants (yōon) — consonant + /j/ glide, ~45%
+    'ky': 0.45, 'gy': 0.45, 'ny': 0.50, 'hy': 0.45,
+    'my': 0.50, 'ry': 0.50, 'py': 0.45, 'by': 0.45,
+
+    // Affricates — stop + fricative, longer than pure stops
+    'sh': 0.45,  // /ɕ/ — fricative, ~45%
+    'ch': 0.50,  // /tɕ/ — affricate, ~50%
+    'ts': 0.55,  // /ts/ — affricate, ~55%
+
+    // 促音 (gemination marker) — very brief stop
+    'cl': 0.20,
+
+    // Unknown kanji fallback — neutral
+    'pau': 0.50,
+};
+
+/**
+ * Default weight for any Japanese phoneme not explicitly in JP_MORA_WEIGHTS.
+ */
+const JP_MORA_DEFAULT_WEIGHT = 0.50;
+
 class TextProcessing {
     constructor(options = {}) {
         this.phone2idx = {};
@@ -620,7 +691,7 @@ class TextProcessing {
         // hybrid 模式：优先用假名→粤语映射（仅当整段歌词都是可映射假名时）
         if (this.japaneseVocalization === 'hybrid') {
             const yueResult = this._japaneseKanaToYuePhonemes(text);
-            if (yueResult) return this._attachEnglishWeights(yueResult);
+            if (yueResult) return this._attachJapaneseWeights(yueResult, null, true);
         }
 
         const jpPhonemeStr = this._japaneseG2p(text);
@@ -629,24 +700,30 @@ class TextProcessing {
         const map = this._getJpToEnMap();
         const jpParts = jpPhonemeStr.split(' ').filter(s => s);
         const enPhonemes = [];
+        // Track the JP source phoneme for each EN phoneme, so we can attach
+        // mora-based weights (e.g., 'ts' → [T, S] each gets half of ts weight).
+        const jpSources = [];
         for (const jpPart of jpParts) {
             if (jpPart === 'pau') {
                 // Unknown kanji → silence
                 enPhonemes.push({ name: '<SP>', display: 'SP' });
+                jpSources.push('pau');
                 continue;
             }
             const mapped = map[jpPart];
             if (mapped) {
                 for (const enPh of mapped) {
                     enPhonemes.push({ name: 'en_' + enPh, display: enPh });
+                    jpSources.push(jpPart);
                 }
             } else {
                 // Fallback: if no mapping exists, try to use as-is (shouldn't happen normally)
                 console.warn(`[TextProcessing] No JP→EN mapping for "${jpPart}", using <UNK>`);
                 enPhonemes.push({ name: '<UNK>', display: jpPart });
+                jpSources.push(jpPart);
             }
         }
-        return this._attachEnglishWeights(enPhonemes);
+        return this._attachJapaneseWeights(enPhonemes, jpSources, false);
     }
 
     /**
@@ -667,8 +744,18 @@ class TextProcessing {
         let i = 0;
         while (i < text.length) {
             const ch = text[i];
-            // 跳过长音符号
-            if (ch === 'ー' || ch === '〜') { i++; continue; }
+            // 長音 (ー): repeat the last emitted yue syllable to double its
+            // duration, matching Japanese long-vowel timing. 〜 (wave dash)
+            // is stylistic and skipped.
+            if (ch === 'ー') {
+                if (result.length > 0) {
+                    const last = result[result.length - 1];
+                    result.push({ name: last.name, display: ch });
+                }
+                i++;
+                continue;
+            }
+            if (ch === '〜') { i++; continue; }
 
             // 先尝试拗音两字符（如 きゃ）—— 这些都不在粤语映射表里，
             // 一旦遇到就返回 null 让 ARPAbet 处理
@@ -708,10 +795,12 @@ class TextProcessing {
         const mapped = map[jpPhone];
         if (!mapped || mapped.length === 0) {
             console.warn(`[TextProcessing] No JP→EN mapping for jp_${jpPhone}, using <UNK>`);
-            return [{ name: '<UNK>', display: jpPhone }];
+            return [{ name: '<UNK>', display: jpPhone, weight: JP_MORA_DEFAULT_WEIGHT }];
         }
         const enPhonemes = mapped.map(enPh => ({ name: 'en_' + enPh, display: enPh }));
-        return this._attachEnglishWeights(enPhonemes);
+        // Attach mora-based weights using the JP source phoneme identity.
+        const jpSources = new Array(mapped.length).fill(jpPhone);
+        return this._attachJapaneseWeights(enPhonemes, jpSources, false);
     }
 
     /**
@@ -742,6 +831,65 @@ class TextProcessing {
         return phonemes;
     }
 
+    /**
+     * 给日语音素对象数组附带 mora-timing duration weight。
+     *
+     * 与 _attachEnglishWeights 不同，这里使用 JP_MORA_WEIGHTS 表（基于日语
+     * 拍时序 phonetics），而非英文统计表（基于重音时序）。原因：
+     *   - 日语每个拍 (mora) 时长基本相等，元音不应因"重音"差异而时长悬殊
+     *   - 英文 AA1 vs AA0 时长差可达 3x，对日语 /a/ 毫无意义
+     *   - 辅音应明显短于元音（C:V ≈ 0.35），符合日语语音学测量
+     *
+     * 当 jpSources 为 null（yue 路径）时，每个 yue_ 音节视为一个完整拍，
+     * weight = 1.0（拍等长原则）。yue_ 音节本身已包含辅音+元音，无需拆分。
+     *
+     * 当 jpSources 提供时（ARPAbet 路径），按 JP 源音素查 JP_MORA_WEIGHTS，
+     * 若一个 JP 音素映射到多个 EN 音素（如 ts→T+S），权重均分到各分量。
+     *
+     * @param {Array<{name:string, display:string}>} phonemes 音素对象数组
+     * @param {string[]|null} jpSources 每个音素对应的 JP 源音素基名，或 null（yue 路径）
+     * @param {boolean} isYue 是否为 yue 音节路径
+     * @returns {Array} 同一数组，每个对象附带 weight 字段
+     */
+    _attachJapaneseWeights(phonemes, jpSources, isYue) {
+        if (!phonemes || phonemes.length === 0) return phonemes;
+        const SPECIAL = new Set(['<SEP>', '<BOW>', '<EOW>', '<PAD>', '<SP>']);
+
+        if (isYue || !jpSources) {
+            // yue_ syllable path: each syllable = 1 mora, equal weight.
+            // Special tokens (rare in this path) get reduced weight.
+            for (let i = 0; i < phonemes.length; i++) {
+                const name = phonemes[i].name || '';
+                phonemes[i].weight = SPECIAL.has(name) ? 0.3 : 1.0;
+            }
+            return phonemes;
+        }
+
+        // ARPAbet path: group consecutive phonemes by their JP source, then
+        // split the source's mora weight equally among the components.
+        // E.g., jpParts = ['k', 'a', 'ts', 'a'] → EN = [K, AA1, T, S, AA1]
+        //   jpSources = ['k', 'a', 'ts', 'ts', 'a']
+        //   weights   = [0.35, 1.0, 0.275, 0.275, 1.0]  (ts weight 0.55 / 2)
+        for (let i = 0; i < phonemes.length; i++) {
+            const name = phonemes[i].name || '';
+            if (SPECIAL.has(name)) {
+                phonemes[i].weight = 0.3;
+                continue;
+            }
+            const jpSrc = jpSources[i] || '';
+            const baseWeight = JP_MORA_WEIGHTS[jpSrc] !== undefined
+                ? JP_MORA_WEIGHTS[jpSrc]
+                : JP_MORA_DEFAULT_WEIGHT;
+            // Count how many EN phonemes share this same JP source (consecutive)
+            let componentCount = 1;
+            for (let k = i + 1; k < phonemes.length && jpSources[k] === jpSrc; k++) {
+                componentCount++;
+            }
+            phonemes[i].weight = baseWeight / componentCount;
+        }
+        return phonemes;
+    }
+
     _isJapanese(text) {
         // Only detect hiragana/katakana as Japanese, NOT CJK kanji (shared with Chinese)
         return /[ぁ-ゟァ-ヿ]/.test(text);
@@ -749,10 +897,28 @@ class TextProcessing {
 
     _japaneseG2p(text) {
         const result = [];
+        // Japanese vowel phonemes — used to handle 長音 (ー) by repeating the
+        // preceding vowel. In Japanese, ー doubles the duration of the vowel
+        // it follows (e.g., おかあさん → /o k a a s a N/). Previously ー was
+        // skipped entirely, which lost the long/short vowel contrast and made
+        // words like おばさん (obasan) and おばあさん (obaasan) sound identical.
+        const JP_VOWELS = new Set(['a', 'i', 'u', 'e', 'o']);
         let i = 0;
         while (i < text.length) {
             const ch = text[i];
-            if (ch === 'ー' || ch === '〜') { i++; continue; }
+            // 長音 (ー): repeat the last emitted vowel to double its duration.
+            // 〜 (wave dash) is a stylistic mark, not phonetic — skip it.
+            if (ch === 'ー') {
+                for (let k = result.length - 1; k >= 0; k--) {
+                    if (JP_VOWELS.has(result[k])) {
+                        result.push(result[k]);
+                        break;
+                    }
+                }
+                i++;
+                continue;
+            }
+            if (ch === '〜') { i++; continue; }
 
             if (i + 1 < text.length) {
                 const combo = ch + text[i + 1];
@@ -794,4 +960,4 @@ class TextProcessing {
     }
 }
 
-module.exports = { TextProcessing };
+module.exports = { TextProcessing, JP_MORA_WEIGHTS, JP_MORA_DEFAULT_WEIGHT };

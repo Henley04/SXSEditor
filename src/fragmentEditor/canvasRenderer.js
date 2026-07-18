@@ -840,6 +840,126 @@ export async function resolvePhonemesFromPipeline() {
   }
 }
 
+/**
+ * Default volume envelope for a phoneme, tailored to its phonetic class.
+ *
+ * Phonetic classes and their envelope shapes:
+ *   - Vowels: smooth fade-in/out with sustained peak. Vowels are the sonority
+ *     peak of a syllable and should be loud throughout, with gentle edges to
+ *     avoid clicks at phoneme boundaries.
+ *   - Stops (P/B/T/D/K/G): sharp attack (burst release) then quick decay.
+ *     Stops have a brief transient at onset followed by silence/aspiration;
+ *     the envelope captures this with a fast rise to t=0.05 and decay by t=0.3.
+ *   - Fricatives (S/Z/SH/F/V/HH/...): gradual attack, sustained plateau.
+ *     Fricatives require airflow buildup and sustain noise throughout.
+ *   - Affricates (CH/JH): stop burst + fricative sustain, so sharp attack
+ *     with a longer sustained tail than pure stops.
+ *   - Nasals (M/N/NG): soft attack, sustained murmur, soft release. Nasals
+ *     have lower intensity than oral sounds, so peak is 0.9 instead of 1.0.
+ *   - Approximants (L/R/W/Y): smooth, sustained, no sharp transients.
+ *
+ * For non-English phonemes (zh_, yue_, jp_) we return the default envelope
+ * since their phonetic class isn't easily classified by ARPAbet categories.
+ * The default is also used as a fallback for unrecognized phonemes.
+ *
+ * @param {string} phonemeName - Full phoneme name (e.g., 'en_AA1', 'jp_a', 'yue_gaa1')
+ * @returns {Array<{t:number, v:number}>} Volume envelope keyframes
+ */
+export function getVolumeEnvelopeForPhoneme(phonemeName) {
+  // Default envelope — generic fade in/out with sustained peak
+  const DEFAULT = [
+    { t: 0, v: 0.3 },
+    { t: 0.1, v: 1.0 },
+    { t: 0.85, v: 1.0 },
+    { t: 1.0, v: 0.3 },
+  ];
+  if (!phonemeName) return DEFAULT;
+
+  // Extract base phoneme (strip language prefix)
+  let base = phonemeName;
+  if (base.startsWith('en_')) {
+    base = base.slice(3);
+  } else {
+    // zh_, yue_, jp_ phonemes and special tokens use the default envelope
+    return DEFAULT;
+  }
+
+  // Strip stress digit from vowels for class lookup
+  const stressless = base.replace(/[012]$/, '');
+
+  // ARPAbet vowel bases
+  const VOWELS = new Set([
+    'AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'EH', 'ER', 'EY',
+    'IH', 'IY', 'OW', 'OY', 'UH', 'UW',
+  ]);
+  // Stop consonants — burst release
+  const STOPS = new Set(['P', 'B', 'T', 'D', 'K', 'G']);
+  // Fricatives — sustained noise
+  const FRICATIVES = new Set(['S', 'Z', 'SH', 'ZH', 'F', 'V', 'TH', 'DH', 'HH']);
+  // Affricates — stop + fricative
+  const AFFRICATES = new Set(['CH', 'JH']);
+  // Nasals — sustained murmur
+  const NASALS = new Set(['M', 'N', 'NG']);
+  // Approximants — smooth glide
+  const APPROXIMANTS = new Set(['L', 'R', 'W', 'Y']);
+
+  if (VOWELS.has(stressless)) {
+    // Vowels: smooth fade in/out, sustained peak at 1.0
+    return [
+      { t: 0, v: 0.4 },
+      { t: 0.15, v: 1.0 },
+      { t: 0.8, v: 1.0 },
+      { t: 1.0, v: 0.4 },
+    ];
+  }
+  if (STOPS.has(base)) {
+    // Stops: sharp attack (burst), quick decay to low level
+    return [
+      { t: 0, v: 0.0 },
+      { t: 0.05, v: 1.0 },
+      { t: 0.3, v: 0.5 },
+      { t: 1.0, v: 0.3 },
+    ];
+  }
+  if (FRICATIVES.has(base)) {
+    // Fricatives: gradual airflow buildup, sustained noise
+    return [
+      { t: 0, v: 0.2 },
+      { t: 0.2, v: 1.0 },
+      { t: 0.8, v: 1.0 },
+      { t: 1.0, v: 0.3 },
+    ];
+  }
+  if (AFFRICATES.has(base)) {
+    // Affricates: stop burst + fricative sustain
+    return [
+      { t: 0, v: 0.0 },
+      { t: 0.05, v: 1.0 },
+      { t: 0.7, v: 1.0 },
+      { t: 1.0, v: 0.3 },
+    ];
+  }
+  if (NASALS.has(base)) {
+    // Nasals: soft attack, sustained murmur (lower peak), soft release
+    return [
+      { t: 0, v: 0.2 },
+      { t: 0.2, v: 0.9 },
+      { t: 0.8, v: 0.9 },
+      { t: 1.0, v: 0.3 },
+    ];
+  }
+  if (APPROXIMANTS.has(base)) {
+    // Approximants: smooth, sustained, no sharp transients
+    return [
+      { t: 0, v: 0.3 },
+      { t: 0.15, v: 0.95 },
+      { t: 0.85, v: 0.95 },
+      { t: 1.0, v: 0.3 },
+    ];
+  }
+  return DEFAULT;
+}
+
 export function getPhonemeAdjustments(note) {
   const phonemes = resolvePhonemes(note.lyric);
   // resolvePhonemes 缓存未命中时返回 fallback [{name: lyric, display: lyric}]（单一音素）。
@@ -867,10 +987,12 @@ export function getPhonemeAdjustments(note) {
   // 导致打开音素菜单后再次播放触发不必要的二次推理。用户实际拖拽/锁定音素时，
   // 由 handlePhonemeMouseDown 显式提交保存，自定义音素排列仍可正常生效。
   //
-  // 默认 durationRatio 按 phoneme.weight 比例分配（英文音素由 main 进程
-  // resolveLyricToPhonemes 用 en_phoneme_durations.json 统计表附带），
+  // 默认 durationRatio 按 phoneme.weight 比例分配：
+  //   - 英文音素：由 main 进程 resolveLyricToPhonemes 用 en_phoneme_durations.json
+  //     统计表附带 weight
+  //   - 日语音素：由 _attachJapaneseWeights 用 JP_MORA_WEIGHTS 拍时序表附带 weight
+  //   - 其他（中文/未解析 fallback）：weight 缺失，回退到平均分布
   // 使 UI 默认分布呈现"元音长、辅音短"，与推理时的 _allocateByStats 趋势一致。
-  // weight 缺失或全为 0 时（如日语/中文/未解析 fallback），回退到平均分布。
   const weights = phonemes.map(ph => (typeof ph.weight === 'number' && ph.weight > 0) ? ph.weight : 0);
   const weightSum = weights.reduce((s, v) => s + v, 0);
   const hasWeights = weightSum > 0;
@@ -880,12 +1002,7 @@ export function getPhonemeAdjustments(note) {
     display: ph.display,
     offsetRatio: 0,
     durationRatio: hasWeights ? weights[i] / weightSum : 1 / phonemes.length,
-    volumePoints: [
-      { t: 0, v: 0.3 },
-      { t: 0.1, v: 1.0 },
-      { t: 0.85, v: 1.0 },
-      { t: 1.0, v: 0.3 },
-    ],
+    volumePoints: getVolumeEnvelopeForPhoneme(ph.name),
     locked: i === 0,
   }));
   return adjustments;

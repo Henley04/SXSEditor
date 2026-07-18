@@ -137,10 +137,11 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       expect(names).to.include('jp_cl');
     });
 
-    it('should skip ー and 〜 (prolonged sound mark)', () => {
+    it('should repeat preceding vowel on ー (long vowel) and skip 〜', () => {
       const out = tpJp.resolveLyricToPhonemes('あーあ');
       const names = out.map(p => p.name);
-      expect(names).to.deep.equal(['jp_a', 'jp_a']);
+      // あ → jp_a, ー → repeats jp_a (long vowel), あ → jp_a
+      expect(names).to.deep.equal(['jp_a', 'jp_a', 'jp_a']);
     });
 
     it('should force Japanese G2P with <jp> prefix for kanji', () => {
@@ -210,10 +211,11 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       expect(names).to.include('en_T');
     });
 
-    it('should skip ー and 〜 (prolonged sound mark) in en-phonemes mode', () => {
+    it('should repeat preceding vowel on ー (long vowel) in en-phonemes mode', () => {
       const out = tpEn.resolveLyricToPhonemes('あーあ');
       const names = out.map(p => p.name);
-      expect(names).to.deep.equal(['en_AA1', 'en_AA1']);
+      // あ → en_AA1, ー → repeats en_AA1, あ → en_AA1
+      expect(names).to.deep.equal(['en_AA1', 'en_AA1', 'en_AA1']);
     });
 
     it('should force Japanese→English with <jp> prefix for kanji', () => {
@@ -398,10 +400,11 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       expect(names).to.include('en_T');
     });
 
-    it('should skip ー and 〜 in hybrid mode (Cantonese path)', () => {
+    it('should repeat preceding vowel on ー (long vowel) in hybrid mode', () => {
       const out = tpHybrid.resolveLyricToPhonemes('あーあ');
       const names = out.map(p => p.name);
-      expect(names).to.deep.equal(['yue_aa1', 'yue_aa1']);
+      // あ → yue_aa1, ー → repeats yue_aa1, あ → yue_aa1
+      expect(names).to.deep.equal(['yue_aa1', 'yue_aa1', 'yue_aa1']);
     });
 
     it('should force Japanese→English with <jp> prefix for kanji', () => {

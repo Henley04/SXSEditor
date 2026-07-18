@@ -205,12 +205,19 @@ class Preprocessing {
                 if (this.textProcessing.japaneseVocalization === 'en-phonemes' || this.textProcessing.japaneseVocalization === 'hybrid') {
                     const enPhonemeObjs = this.textProcessing._japaneseToEnglishPhonemes(lyric);
                     const enPhIds = [];
+                    // Collect mora-based weights from the phoneme objects (set by
+                    // _attachJapaneseWeights). These are passed to _allocateByStats
+                    // via phLocations[4] so inference uses mora timing instead of
+                    // English stress-based stats for Japanese notes.
+                    const jpWeights = [];
                     for (const obj of enPhonemeObjs) {
                         enPhIds.push(this.textProcessing._lookupPhonemeId(obj.name));
+                        jpWeights.push(typeof obj.weight === 'number' ? obj.weight : 0.5);
                     }
                     // Add SEP_ID — English phoneme sequences use SEP as syllable boundary marker
                     enPhIds.push(SEP_ID);
-                    phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios, enPhIds]);
+                    jpWeights.push(0.1); // SEP gets minimal weight (boundary marker)
+                    phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios, enPhIds, jpWeights]);
                     for (let e = 0; e < enPhIds.length; e++) {
                         newPhonemes.push(enPhIds[e]);
                         note2origin.push(phIdx);
@@ -223,11 +230,17 @@ class Preprocessing {
                     if (phonemeStr) {
                         const phParts = phonemeStr.split(' ').filter(s => s);
                         const jpPhIds = [];
+                        // jp-lora mode: derive weights from JP_MORA_WEIGHTS for jp_ phonemes
+                        const jpWeights = [];
+                        const { JP_MORA_WEIGHTS, JP_MORA_DEFAULT_WEIGHT } = require('./textProcessing');
                         for (let s = 0; s < phParts.length; s++) {
-                            jpPhIds.push(this.textProcessing._lookupPhonemeId('jp_' + phParts[s].trim()));
+                            const part = phParts[s].trim();
+                            jpPhIds.push(this.textProcessing._lookupPhonemeId('jp_' + part));
+                            const w = JP_MORA_WEIGHTS[part] !== undefined ? JP_MORA_WEIGHTS[part] : JP_MORA_DEFAULT_WEIGHT;
+                            jpWeights.push(w);
                         }
                         // Don't add SEP_ID for Japanese — training doesn't use it
-                        phLocations.push([dur, Math.max(1, jpPhIds.length), durationRatios, jpPhIds]);
+                        phLocations.push([dur, Math.max(1, jpPhIds.length), durationRatios, jpPhIds, jpWeights]);
                         for (let e = 0; e < jpPhIds.length; e++) {
                             newPhonemes.push(jpPhIds[e]);
                             note2origin.push(phIdx);
@@ -274,11 +287,14 @@ class Preprocessing {
                 const jpPhone = lyric.slice(3);
                 const enPhonemeObjs = this.textProcessing._japanesePhoneToEnglishPhonemes(jpPhone);
                 const enPhIds = [];
+                const jpWeights = [];
                 for (const obj of enPhonemeObjs) {
                     enPhIds.push(this.textProcessing._lookupPhonemeId(obj.name));
+                    jpWeights.push(typeof obj.weight === 'number' ? obj.weight : 0.5);
                 }
                 enPhIds.push(SEP_ID);
-                phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios, enPhIds]);
+                jpWeights.push(0.1); // SEP gets minimal weight
+                phLocations.push([dur, Math.max(1, enPhIds.length), durationRatios, enPhIds, jpWeights]);
                 for (let e = 0; e < enPhIds.length; e++) {
                     newPhonemes.push(enPhIds[e]);
                     note2origin.push(phIdx);
@@ -423,6 +439,10 @@ class Preprocessing {
 
             const innerFrames = Math.max(0, nextPhonemeStart - i - 2);
             const phonemeIds = phLocations[idx][3] || [];
+            // Optional Japanese mora weights (5th element, set by notesToSequences
+            // for Japanese lyrics). When present and no user ratios, used for
+            // mora-timing allocation instead of English stress-based stats.
+            const jpWeights = phLocations[idx][4] || null;
             let allocation;
 
             if (innerFrames >= j) {
@@ -452,6 +472,10 @@ class Preprocessing {
                             }
                         }
                     }
+                } else if (jpWeights && jpWeights.length === j) {
+                    // 日语默认：按 mora 权重比例分配（用户未自定义时）
+                    // 使用 JP_MORA_WEIGHTS 而非英文统计表，符合日语拍时序
+                    allocation = this._allocateByWeights(jpWeights, j, innerFrames);
                 } else {
                     // 默认：数据驱动统计表查表（英文）或线性插值（其他语言/表未加载）
                     allocation = this._allocateByStats(idx, phLocations, phonemeIds, j, innerFrames);
@@ -630,6 +654,62 @@ class Preprocessing {
         }
 
         // 修正总和误差
+        let used = allocation.reduce((s, v) => s + v, 0);
+        let diff = innerFrames - used;
+        if (diff > 0) {
+            // 帧不够：按权重降序补给
+            const order = [...Array(j).keys()].sort((a, b) => weights[b] - weights[a]);
+            for (let k = 0; k < diff; k++) allocation[order[k % j]]++;
+        } else if (diff < 0) {
+            // 帧过多：按权重升序削减（不低于 1）
+            const order = [...Array(j).keys()].sort((a, b) => weights[a] - weights[b]);
+            let toRemove = -diff;
+            for (let k = 0; k < j && toRemove > 0; k++) {
+                const idx2 = order[k];
+                while (allocation[idx2] > 1 && toRemove > 0) {
+                    allocation[idx2]--;
+                    toRemove--;
+                }
+            }
+        }
+
+        return allocation;
+    }
+
+    /**
+     * 按预计算权重分配帧（日语 mora 时序）。
+     *
+     * 与 _allocateByStats 不同：本方法不做统计表查表，直接使用 textProcessing
+     * 在 G2P 阶段附带的 jpWeights（来自 JP_MORA_WEIGHTS 表）。这些权重已经过
+     * 拍时序校准（元音=1.0，单辅音=0.35，鼻音=0.40，拗音=0.45-0.50，促音=0.20），
+     * 适合日语 mora-timing 而非英文 stress-timing。
+     *
+     * 分配规则与 _allocateByStats 一致：
+     *   1. 每个音素至少 1 帧
+     *   2. 按权重比例 round 分配
+     *   3. 修正总和误差使 sum(allocation) == innerFrames
+     *
+     * @param {number[]} weights 预计算的 mora 权重数组（长度 == j）
+     * @param {number} j 音素个数
+     * @param {number} innerFrames 可分配帧数（>= j，由调用方保证）
+     * @returns {number[]} 每个音素的帧数分配，长度 == j，总和 == innerFrames
+     */
+    _allocateByWeights(weights, j, innerFrames) {
+        if (!weights || weights.length !== j || j <= 0) {
+            return this._linearAllocate(j, innerFrames);
+        }
+
+        const sum = weights.reduce((s, v) => s + Math.max(0, v), 0);
+        if (sum <= 0) {
+            return this._linearAllocate(j, innerFrames);
+        }
+
+        const allocation = new Array(j);
+        for (let p = 0; p < j; p++) {
+            allocation[p] = Math.max(1, Math.round(innerFrames * Math.max(0, weights[p]) / sum));
+        }
+
+        // 修正总和误差（与 _allocateByStats 相同的策略）
         let used = allocation.reduce((s, v) => s + v, 0);
         let diff = innerFrames - used;
         if (diff > 0) {
