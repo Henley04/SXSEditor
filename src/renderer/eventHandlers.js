@@ -22,6 +22,11 @@ let _isPlayheadDragging = false;
 let _wasPlayingBeforeDrag = false;
 // Playhead tooltip 元素（懒创建）
 let _playheadTooltip = null;
+// rAF 节流：mousemove 触发频率高于刷新率，合并同一帧内的多次 playhead 视觉更新。
+// _playheadDragRaf 标记是否有 pending 的 rAF 回调；
+// _playheadDragPendingSeconds 记录最新一次 mousemove 计算出的秒数，供 rAF 回调读取。
+let _playheadDragRaf = 0;
+let _playheadDragPendingSeconds = 0;
 
 function _ensurePlayheadTooltip() {
   if (_playheadTooltip && document.body.contains(_playheadTooltip)) return _playheadTooltip;
@@ -99,20 +104,34 @@ function _canvasXToClampedSeconds(x) {
  * 拖拽期间只更新视觉（不重启 source）。
  * 更新 state.playbackPauseOffset（作为 mouseup 后恢复播放的起点）、
  * 绘制暂停态 playhead、更新时间显示。
+ * playhead 绘制走 rAF 节流：mousemove 频率高于刷新率，合并同一帧内的多次更新，
+ * 避免分片变长后大 canvas 重复 clearRect/drawImage 造成掉帧。
  */
 function _updatePlayheadVisual(seconds) {
   state.playbackPauseOffset = seconds;
-  drawPausedPlayheadAt(seconds);
   dom.timeDisplay.textContent = formatTime(seconds);
+  _playheadDragPendingSeconds = seconds;
+  if (!_playheadDragRaf) {
+    _playheadDragRaf = requestAnimationFrame(() => {
+      _playheadDragRaf = 0;
+      drawPausedPlayheadAt(_playheadDragPendingSeconds);
+    });
+  }
 }
 
 /**
  * 结束拖拽：若拖拽前正在播放，从当前位置恢复播放。
+ * 取消 pending rAF 并立即绘制最终位置，确保 mouseup 后 playhead 视觉与播放起点一致。
  */
 function _endPlayheadDrag() {
   if (!_isPlayheadDragging) return;
   _isPlayheadDragging = false;
   _hidePlayheadTooltip();
+  if (_playheadDragRaf) {
+    cancelAnimationFrame(_playheadDragRaf);
+    _playheadDragRaf = 0;
+  }
+  drawPausedPlayheadAt(state.playbackPauseOffset);
   if (_wasPlayingBeforeDrag) {
     _wasPlayingBeforeDrag = false;
     startAudioPlayback(state.playbackPauseOffset);

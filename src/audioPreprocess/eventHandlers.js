@@ -15,6 +15,10 @@ let _isPlayheadDragging = false;
 let _wasPlayingBeforeDrag = false;
 // Tooltip 元素（懒创建，附加到 document.body）
 let _playheadTooltip = null;
+// rAF 节流：mousemove 触发频率高于刷新率，合并同一帧内的多次 playhead 视觉更新，
+// 避免长音频拖拽时 drawWaveformWithPlayhead 重复 drawImage 造成掉帧。
+let _playheadDragRaf = 0;
+let _playheadDragPendingSeconds = 0;
 
 function _formatTime(seconds) {
   const m = Math.floor(seconds / 60);
@@ -87,20 +91,33 @@ function _canvasXToClampedSeconds(x) {
  * 拖拽期间只更新视觉（不重启 source）。
  * 更新 state.playStartOffset（作为 mouseup 后恢复播放的起点）、
  * 绘制暂停态 playhead、同步 pianoRoll 当前时间。
+ * playhead 绘制走 rAF 节流：mousemove 频率高于刷新率，合并同一帧内的多次更新。
  */
 function _updatePlayheadVisual(seconds) {
   state.playStartOffset = seconds;
-  drawWaveformWithPlayhead(seconds, { isPaused: true });
   if (state.pianoRoll) state.pianoRoll.setCurrentTime(seconds);
+  _playheadDragPendingSeconds = seconds;
+  if (!_playheadDragRaf) {
+    _playheadDragRaf = requestAnimationFrame(() => {
+      _playheadDragRaf = 0;
+      drawWaveformWithPlayhead(_playheadDragPendingSeconds, { isPaused: true });
+    });
+  }
 }
 
 /**
  * 结束拖拽：若拖拽前正在播放，从当前位置恢复播放。
+ * 取消 pending rAF 并立即绘制最终位置，确保 mouseup 后 playhead 视觉与播放起点一致。
  */
 function _endPlayheadDrag() {
   if (!_isPlayheadDragging) return;
   _isPlayheadDragging = false;
   _hidePlayheadTooltip();
+  if (_playheadDragRaf) {
+    cancelAnimationFrame(_playheadDragRaf);
+    _playheadDragRaf = 0;
+  }
+  drawWaveformWithPlayhead(state.playStartOffset, { isPaused: true });
   if (_wasPlayingBeforeDrag) {
     _wasPlayingBeforeDrag = false;
     startPlayback();

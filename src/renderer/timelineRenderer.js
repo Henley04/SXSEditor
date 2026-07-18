@@ -74,7 +74,7 @@ export function syncFragmentScroll() {
   const fragments = trackManager.getFragments();
   const beatWidth = getBeatWidth();
   const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
-  const totalBeats = Math.max(64, Math.ceil((maxBeat + 16) / 16) * 16);
+  const totalBeats = Math.max(64, Math.ceil((maxBeat + 64) / 64) * 64);
   const canvasWidth = totalBeats * beatWidth;
   const canvasHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
   const containerW = dom.fragmentContainer.clientWidth;
@@ -83,8 +83,10 @@ export function syncFragmentScroll() {
   state.fragmentScrollX = Math.max(0, Math.min(state.fragmentScrollX, canvasWidth - containerW));
   state.fragmentScrollY = Math.max(0, Math.min(state.fragmentScrollY, canvasHeight - containerH));
 
+  // fragment canvas 应用 translate 变换以实现滚动；
+  // playhead canvas 不再应用 translate，改为固定覆盖可视区域，
+  // 绘制时由 drawPlayheadLine 自行减去 scrollX（避免大 canvas clearRect 卡顿）。
   dom.fragmentCanvas.style.transform = `translate(${-state.fragmentScrollX}px, ${-state.fragmentScrollY}px)`;
-  dom.fragmentPlayheadCanvas.style.transform = `translate(${-state.fragmentScrollX}px, ${-state.fragmentScrollY}px)`;
   dom.singerListEl.scrollTop = state.fragmentScrollY;
 }
 
@@ -96,14 +98,21 @@ export function renderFragmentTimeline() {
 
   const beatWidth = getBeatWidth();
   const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
-  const totalBeats = Math.max(64, Math.ceil((maxBeat + 16) / 16) * 16);
+  // grid cache 步长加大到 64 拍：拖拽分片时 maxBeat 变化不再频繁触发 totalBeats 跨步，
+  // 避免 grid cache 反复失效重建（O(canvasW*canvasH) 的重绘）。
+  const totalBeats = Math.max(64, Math.ceil((maxBeat + 64) / 64) * 64);
   const canvasWidth = totalBeats * beatWidth;
   const contentHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
   const containerHeight = dom.fragmentContainer.clientHeight || contentHeight;
   const canvasHeight = Math.max(contentHeight, containerHeight);
 
   _ensureCanvasSize(dom.fragmentCanvas, canvasWidth, canvasHeight, dpr);
-  _ensureCanvasSize(dom.fragmentPlayheadCanvas, canvasWidth, canvasHeight, dpr);
+  // playhead canvas 只覆盖可视区域（container 大小），不再随 fragment canvas 一起放大。
+  // 这样拖拽进度条时 clearRect 只需清除 container 大小的区域，
+  // 而不是整个 canvasWidth*canvasHeight（分片变长时可达数万 px）。
+  const playheadW = dom.fragmentContainer.clientWidth || canvasWidth;
+  const playheadH = containerHeight;
+  _ensureCanvasSize(dom.fragmentPlayheadCanvas, playheadW, playheadH, dpr);
 
   syncFragmentScroll();
 
@@ -173,13 +182,23 @@ export function renderFragmentTimeline() {
   }
 
   // Draw dynamic content (fragments) on top of cached grid
+  // 预计算可视区域范围，跳过不可见分片的绘制（拖拽时若有大量分片在可视区域外可显著提速）。
+  const _viewLeft = state.fragmentScrollX;
+  const _viewRight = state.fragmentScrollX + (dom.fragmentContainer.clientWidth || canvasWidth);
+  const _viewTop = state.fragmentScrollY;
+  const _viewBottom = state.fragmentScrollY + (dom.fragmentContainer.clientHeight || canvasHeight);
+
   singers.forEach((singer, index) => {
     const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+    // 跳过整行不在可视区域的 singer
+    if (y + SINGER_ROW_HEIGHT < _viewTop || y > _viewBottom) return;
 
     const singerFragments = fragments.filter(f => f.singerId === singer.id);
     singerFragments.forEach(fragment => {
       const fragX = fragment.startTime * beatWidth;
       const fragWidth = fragment.duration * beatWidth;
+      // 跳过不可见分片（在可视区域左右两侧之外）
+      if (fragX + fragWidth < _viewLeft || fragX > _viewRight) return;
       const fragY = y + 4;
       const radius = 6;
 
@@ -289,6 +308,13 @@ export function renderFragmentTimeline() {
       ctx.fillText(t('main.clickToAddFragment'), 8, y + 30);
     }
   });
+
+  // 调整 playhead canvas 大小会清空其内容；非播放态时立即重绘 playhead，
+  // 避免缩放/滚动后 playhead 消失（播放态由 rAF 循环自动刷新）。
+  // playhead canvas 只覆盖 container 大小，重绘成本很低。
+  if (!state.isPlaying && (state.playbackPauseOffset > 0 || state.currentAudioData)) {
+    drawPausedPlayheadAt(state.playbackPauseOffset);
+  }
 }
 
 // 播放头拖拽 hit-test 容差（像素）
@@ -326,7 +352,9 @@ export function drawPlayheadLine(elapsedSeconds, options = {}) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const x = playbackTimeToX(elapsedSeconds);
+  // playhead canvas 固定覆盖可视区域（不再随 fragment canvas translate），
+  // 因此 x 需减去 scrollX 才能与 fragment canvas 内容对齐。
+  const x = playbackTimeToX(elapsedSeconds) - state.fragmentScrollX;
   if (x < 0 || x > w) return;
 
   const c = getCanvasColors();
