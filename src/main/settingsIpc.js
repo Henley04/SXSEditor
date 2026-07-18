@@ -174,10 +174,6 @@ function registerSettingsIpc() {
     return { issues, deviceMode, npuAvailable, devices: allDevices };
   });
 
-  ipcMain.handle('app:getVersion', async () => {
-    return require('electron').app.getVersion();
-  });
-
   ipcMain.handle('settings:saveSettings', async (event, settings) => {
     const current = loadSettings();
     const filtered = {};

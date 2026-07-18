@@ -110,6 +110,7 @@ function createSplashWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 

@@ -148,6 +148,7 @@ function createWindow(opts = {}) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -202,6 +203,7 @@ function openSettingsWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -237,6 +239,7 @@ function openResourceManagerWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -278,6 +281,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -330,6 +334,7 @@ function openUpdateNotificationWindow(data) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -373,6 +378,7 @@ function openFragmentEditor(fragment, project, wavBuffer) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -482,6 +488,7 @@ function openSingerCreator() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -527,6 +534,7 @@ function openAudioPreprocess(data) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 

@@ -37,6 +37,26 @@ process.on('unhandledRejection', (reason) => {
 // 启用 WebNN API，使渲染进程可通过 onnxruntime-web WebNN EP Using NPU 推理
 app.commandLine.appendSwitch('enable-features', 'WebMachineLearningNeuralNetwork');
 
+// 禁用未使用的 Chromium 子系统以加速浏览器进程初始化。
+// 每个 disabled feature 都避免在启动时加载其服务实现，省 20-100ms。
+// 这些功能 SXSEditor 均不使用：内置翻译、Cast 发现、Dial 媒体路由、
+// 扩展系统、自动填充服务器通信、证书验证器后台任务。
+app.commandLine.appendSwitch('disable-features', [
+  'Translate',
+  'MediaRouter',
+  'DialMediaRouteProvider',
+  'Extensions',
+  'AutofillServerCommunication',
+  'CertificateVerifier',
+].join(','));
+// Disable background throttling & renderer backgrounding so audio playback
+// keeps running smoothly when the window is occluded/minimized. Audio
+// editors commonly need this to prevent glitched playback during background
+// operation.
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
+
 if (require('electron-squirrel-startup')) {
   app.quit();
 }
@@ -175,8 +195,18 @@ app.whenReady().then(() => {
   // ========================================================================
   if (showSplash) {
     createSplashWindow();
+    // Yield once so the splash's did-finish-load event can be delivered
+    // and the SVG can paint BEFORE STEP 1.5+2+3 block the main thread
+    // for ~50-150ms. Without this yield, the user sees a dark rectangle
+    // (the splash's backgroundColor) for 100-200ms before the branded
+    // SVG appears. In dev mode (no splash) we call initMainSteps()
+    // directly to avoid the ~5ms setImmediate overhead.
+    setImmediate(initMainSteps);
+  } else {
+    initMainSteps();
   }
 
+  function initMainSteps() {
   // ========================================================================
   // STEP 1.5: Require light modules + register light IPC handlers.
   //
@@ -203,28 +233,38 @@ app.whenReady().then(() => {
     ensureGPUInfo,
     detectAllHardware,
   } = require('./main/gpuInfo'));
-  ({ checkAndDownloadModels, registerModelDownloadIpc } = require('./main/modelDownload'));
   ({ registerThemeIpc } = require('./main/themeIpc'));
   ({ registerSingerIpc } = require('./main/singerIpc'));
-  ({ registerAudioIpc, resetAudioManagers: _resetAudio } = require('./main/audioIpc'));
-  resetAudioManagers = _resetAudio;
   ({ registerDialogIpc } = require('./main/dialogIpc'));
   ({ registerWebnnIpc } = require('./main/webnnIpc'));
-  ({ registerUpdateIpc, cleanupInstallerTempFiles } = require('./main/updateIpc'));
+  // audioIpc, modelDownload, updateIpc are deferred to STEP 4 because they
+  // transitively load heavy Node built-ins (child_process, https, http, os,
+  // stream/promises) via AudioOutputManager and modelManager. The renderer
+  // does not call audio:*/model:download:*/update:* IPC at startup, so
+  // deferring their registration is safe.
 
   // Register light IPC handlers now that their modules are loaded.
   // Heavy IPC handlers (registerSettingsIpc, registerSvsIpc,
-  // registerPitchMidiIpc, registerResourceManagerIpc) are registered
-  // in STEP 4 after onnxruntime-node is loaded.
+  // registerPitchMidiIpc, registerResourceManagerIpc, registerAudioIpc,
+  // registerModelDownloadIpc, registerUpdateIpc) are registered in
+  // STEP 4 after their heavy transitive deps (onnxruntime-node,
+  // AudioOutputManager, modelManager) are loaded.
   registerWindowIpc();
   registerDialogIpc();
   registerThemeIpc();
   registerSingerIpc();
-  registerAudioIpc();
-  registerModelDownloadIpc();
   registerWebnnIpc();
-  registerUpdateIpc();
   registerSplashIpc();
+
+  // Register app:getVersion early — the renderer calls it immediately at
+  // did-finish-load (src/renderer/index.js:30) to populate the version badge.
+  // Previously this handler lived inside registerSettingsIpc(), which is
+  // deferred to STEP 4 because settingsIpc.js transitively requires
+  // onnxruntime-node (a native addon that takes 200-500ms to load). The
+  // handler itself is trivial (just app.getVersion()) and has no heavy
+  // deps, so registering it here eliminates the 200-500ms "v-" flicker
+  // in the version badge that was introduced by the STEP 4 deferral.
+  ipcMain.handle('app:getVersion', async () => app.getVersion());
 
   // ========================================================================
   // STEP 2: Fast setup (registrations only, no heavy I/O).
@@ -404,6 +444,16 @@ app.whenReady().then(() => {
       getCachedDMLDevices,
     } = require('./main/settingsIpc'));
     ({ registerResourceManagerIpc } = require('./main/resourceManagerIpc'));
+    // audioIpc/modelDownload/updateIpc were moved here from STEP 1.5 to
+    // avoid loading their heavy transitive deps (AudioOutputManager →
+    // child_process/fs; modelManager → https/http/os/stream-promises/
+    // child_process/url; updateChecker → same as modelManager) on the
+    // critical path before createWindow(). The renderer does not call
+    // audio:*/model:download:*/update:* IPC at startup.
+    ({ registerAudioIpc, resetAudioManagers: _resetAudio } = require('./main/audioIpc'));
+    resetAudioManagers = _resetAudio;
+    ({ checkAndDownloadModels, registerModelDownloadIpc } = require('./main/modelDownload'));
+    ({ registerUpdateIpc, cleanupInstallerTempFiles } = require('./main/updateIpc'));
 
     // Register the heavy IPC handlers now that their modules are loaded.
     // These must be registered before the renderer invokes them (which
@@ -412,6 +462,9 @@ app.whenReady().then(() => {
     registerSvsIpc();
     registerPitchMidiIpc();
     registerResourceManagerIpc();
+    registerAudioIpc();
+    registerModelDownloadIpc();
+    registerUpdateIpc();
 
     // 后台执行一次性硬件检测和设备校验（原位于 did-finish-load 回调，
     // 移到此处因为它依赖 enumerateDMLDevices / setCachedDMLDevices 等
@@ -524,6 +577,7 @@ app.whenReady().then(() => {
       console.warn('[Main] Model check failed:', err.message);
     });
   });
+  } // end of initMainSteps()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
