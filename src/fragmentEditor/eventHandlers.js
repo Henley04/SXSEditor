@@ -1,9 +1,8 @@
-import { PARAM_MODES } from '../editor/pianoRoll.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { HistoryManager } from '../editor/historyManager.js';
 import { initPipeline } from './pipeline.js';
 import {
-  BEAT_WIDTH, NOTE_HEIGHT, HEADER_HEIGHT, PARAM_CURVE_HEIGHT,
+  BEAT_WIDTH, NOTE_HEIGHT, HEADER_HEIGHT, PARAM_CURVE_HEIGHT, PARAM_MODES,
 } from './constants.js';
 import {
   getNotes, setNotes,

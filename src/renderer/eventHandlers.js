@@ -5,9 +5,9 @@ import {
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty } from './projectManager.js';
-import { playAll, pausePlayback, stopPlayback, exportAll, seekPlayback, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
+import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
-import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH } from './timelineRenderer.js';
+import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 
@@ -17,6 +17,9 @@ const CLICK_THRESHOLD = 3;
 
 // Playhead drag state — 拖拽进度条时记录是否在拖拽 playhead
 let _isPlayheadDragging = false;
+// 拖拽开始时是否正在播放。mouseup 时若为 true，则从新位置恢复播放。
+// 拖拽期间只更新视觉（不重启 source），避免每次 mousemove 重启播放导致卡顿。
+let _wasPlayingBeforeDrag = false;
 // Playhead tooltip 元素（懒创建）
 let _playheadTooltip = null;
 
@@ -90,6 +93,30 @@ function _canvasXToClampedSeconds(x) {
   }
   const duration = audioData.length / 24000; // SAMPLE_RATE
   return Math.max(0, Math.min(duration - 0.001, seconds));
+}
+
+/**
+ * 拖拽期间只更新视觉（不重启 source）。
+ * 更新 state.playbackPauseOffset（作为 mouseup 后恢复播放的起点）、
+ * 绘制暂停态 playhead、更新时间显示。
+ */
+function _updatePlayheadVisual(seconds) {
+  state.playbackPauseOffset = seconds;
+  drawPausedPlayheadAt(seconds);
+  dom.timeDisplay.textContent = formatTime(seconds);
+}
+
+/**
+ * 结束拖拽：若拖拽前正在播放，从当前位置恢复播放。
+ */
+function _endPlayheadDrag() {
+  if (!_isPlayheadDragging) return;
+  _isPlayheadDragging = false;
+  _hidePlayheadTooltip();
+  if (_wasPlayingBeforeDrag) {
+    _wasPlayingBeforeDrag = false;
+    startAudioPlayback(state.playbackPauseOffset);
+  }
 }
 
 // BPM and time signature inputs
@@ -174,6 +201,7 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
 
   // 左键点击播放头三角形手柄或 header 区域 → 开始拖拽设置/跳转播放位置
   // 优先级高于分片拖拽，避免 playhead 卡在分片边缘时无法拖动
+  // 拖拽期间只更新视觉（不重启 source），mouseup 时若之前在播放则恢复播放。
   if (e.button === 0) {
     const canvasH = dom.fragmentCanvas.clientHeight;
     const playheadX = _getCurrentPlayheadX();
@@ -182,10 +210,14 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
     const onHeader = y <= HEADER_HEIGHT;
     if (onPlayhead || onHeader) {
       const newSeconds = _canvasXToClampedSeconds(x);
+      if (state.isPlaying) {
+        _wasPlayingBeforeDrag = true;
+        pausePlayback();
+      } else {
+        _wasPlayingBeforeDrag = false;
+      }
       _isPlayheadDragging = true;
-      // 拖拽起始位置即跳转到此处
-      seekPlayback(newSeconds);
-      // 在拖拽期间持续 seek，由 mousemove 处理
+      _updatePlayheadVisual(newSeconds);
       _hidePlayheadTooltip();
       return;
     }
@@ -227,11 +259,11 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
 });
 
 dom.fragmentCanvas.addEventListener('mousemove', (e) => {
-  // 拖拽 playhead 优先级最高
+  // 拖拽 playhead 优先级最高：只更新视觉（不重启 source，避免卡顿）
   if (_isPlayheadDragging) {
     const x = _mouseToCanvasX(e);
     const newSeconds = _canvasXToClampedSeconds(x);
-    seekPlayback(newSeconds);
+    _updatePlayheadVisual(newSeconds);
     return;
   }
 
@@ -315,10 +347,9 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
 });
 
 dom.fragmentCanvas.addEventListener('mouseup', (e) => {
-  // 结束 playhead 拖拽
+  // 结束 playhead 拖拽：若拖拽前正在播放，从新位置恢复播放
   if (_isPlayheadDragging) {
-    _isPlayheadDragging = false;
-    _hidePlayheadTooltip();
+    _endPlayheadDrag();
     return;
   }
 
@@ -342,8 +373,7 @@ dom.fragmentCanvas.addEventListener('mouseup', (e) => {
 });
 dom.fragmentCanvas.addEventListener('mouseleave', () => {
   _clickStartPos = null;
-  _isPlayheadDragging = false;
-  _hidePlayheadTooltip();
+  _endPlayheadDrag();
   finishDrag();
 });
 

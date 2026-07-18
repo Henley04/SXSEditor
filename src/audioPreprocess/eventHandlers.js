@@ -1,15 +1,18 @@
 import { state, dom } from './state.js';
 import { PIANO_KEY_WIDTH, BEAT_WIDTH, HEADER_HEIGHT, NOTE_HEIGHT } from './constants.js';
 import { drawWaveformWithPlayhead, getPlayheadXForTime, xToWaveformTime, PLAYHEAD_HIT_WIDTH } from './canvasRenderer.js';
-import { togglePlayback, stopPlayback, seekPlayback } from './playback.js';
+import { togglePlayback, startPlayback, stopPlayback, pausePlayback } from './playback.js';
 import { extractF0AndPitch } from './f0Extraction.js';
 import { extractF0BasicPitch, importMidiFile } from './midiExtraction.js';
 import { saveSingerData } from './uiControls.js';
 import { t } from '../i18n/index.js';
 
 // Playhead 拖拽状态：mousedown 时置 true，mouseup/mouseleave 时置 false。
-// 用于在 mousemove 中区分"拖拽中实时 seek"与"仅悬停显示光标/tooltip"。
+// 用于在 mousemove 中区分"拖拽中实时更新视觉"与"仅悬停显示光标/tooltip"。
 let _isPlayheadDragging = false;
+// 拖拽开始时是否正在播放。mouseup 时若为 true，则从新位置恢复播放。
+// 这样拖拽期间只更新视觉（不重启 source，避免每次 mousemove 创建 AudioBufferSourceNode 导致卡顿）。
+let _wasPlayingBeforeDrag = false;
 // Tooltip 元素（懒创建，附加到 document.body）
 let _playheadTooltip = null;
 
@@ -80,6 +83,30 @@ function _canvasXToClampedSeconds(x) {
   return Math.max(0, Math.min(duration - 0.001, seconds));
 }
 
+/**
+ * 拖拽期间只更新视觉（不重启 source）。
+ * 更新 state.playStartOffset（作为 mouseup 后恢复播放的起点）、
+ * 绘制暂停态 playhead、同步 pianoRoll 当前时间。
+ */
+function _updatePlayheadVisual(seconds) {
+  state.playStartOffset = seconds;
+  drawWaveformWithPlayhead(seconds, { isPaused: true });
+  if (state.pianoRoll) state.pianoRoll.setCurrentTime(seconds);
+}
+
+/**
+ * 结束拖拽：若拖拽前正在播放，从当前位置恢复播放。
+ */
+function _endPlayheadDrag() {
+  if (!_isPlayheadDragging) return;
+  _isPlayheadDragging = false;
+  _hidePlayheadTooltip();
+  if (_wasPlayingBeforeDrag) {
+    _wasPlayingBeforeDrag = false;
+    startPlayback();
+  }
+}
+
 export function setupEventHandlers() {
   // Keyboard
   document.addEventListener('keydown', (e) => {
@@ -103,8 +130,8 @@ export function setupEventHandlers() {
   });
 
   // Waveform canvas: playhead 拖拽 + 悬停 tooltip
-  // 替换原有简单 click 跳转逻辑：mousedown 启动拖拽并立即 seek，
-  // mousemove 持续 seek（播放中也可实时拖动），mouseup/mouseleave 结束。
+  // 拖拽期间只更新视觉（不重启 source），避免每次 mousemove 创建 AudioBufferSourceNode 导致卡顿。
+  // 若拖拽前正在播放：mousedown 先暂停（保留当前位置），mouseup 时从新位置恢复播放。
   dom.waveformCanvas.addEventListener('mousedown', (e) => {
     if (!state.wavAudioBuffer || !state.wavDuration) return;
     if (e.button !== 0) return;
@@ -116,7 +143,7 @@ export function setupEventHandlers() {
     if (x < PIANO_KEY_WIDTH) return;
 
     // 点击 playhead 热区（横向 ±PLAYHEAD_HIT_WIDTH/2）或顶部 header（y <= HEADER_HEIGHT）
-    // 即启动拖拽并 seek 到点击位置。header 区域整条带状都可作为拖拽热区，
+    // 即启动拖拽并跳转到点击位置。header 区域整条带状都可作为拖拽热区，
     // 因为顶部三角手柄只在 playhead 当前 X 处，但 header 整体可见且无其它交互，
     // 让用户在 header 任意位置按下都能跳转，体验与分片编辑器一致。
     const playheadX = _getCurrentPlayheadX();
@@ -125,18 +152,26 @@ export function setupEventHandlers() {
     if (!onPlayhead && !onHeader) return;
 
     e.preventDefault();
+    // 若正在播放：先暂停（停止 source 但保留 playStartOffset），拖拽期间只更新视觉。
+    // mouseup 时若 _wasPlayingBeforeDrag 为 true，则从新位置恢复播放。
+    if (state.isPlaying) {
+      _wasPlayingBeforeDrag = true;
+      pausePlayback();
+    } else {
+      _wasPlayingBeforeDrag = false;
+    }
     _isPlayheadDragging = true;
     const newSeconds = _canvasXToClampedSeconds(x);
-    seekPlayback(newSeconds);
+    _updatePlayheadVisual(newSeconds);
     _hidePlayheadTooltip();
   });
 
   dom.waveformCanvas.addEventListener('mousemove', (e) => {
-    // 拖拽中：实时 seek（即使播放中也正常）
+    // 拖拽中：只更新视觉（不重启 source，避免卡顿）
     if (_isPlayheadDragging) {
       const x = _mouseToCanvasX(e);
       const newSeconds = _canvasXToClampedSeconds(x);
-      seekPlayback(newSeconds);
+      _updatePlayheadVisual(newSeconds);
       return;
     }
 
@@ -166,15 +201,11 @@ export function setupEventHandlers() {
   });
 
   dom.waveformCanvas.addEventListener('mouseup', () => {
-    if (_isPlayheadDragging) {
-      _isPlayheadDragging = false;
-      _hidePlayheadTooltip();
-    }
+    _endPlayheadDrag();
   });
 
   dom.waveformCanvas.addEventListener('mouseleave', () => {
-    _isPlayheadDragging = false;
-    _hidePlayheadTooltip();
+    _endPlayheadDrag();
     dom.waveformCanvas.style.cursor = 'default';
   });
 
@@ -205,7 +236,22 @@ export function setupEventHandlers() {
       state.pianoRoll.render();
     }
 
-    drawWaveformWithPlayhead(state.pianoRoll.getCurrentTime());
+    // 缩放/滚动后确保 playhead 在可见范围内：若超出则调整 scrollX 使其靠近边缘可见。
+    // 否则 drawWaveformWithPlayhead 会因 playheadX 超出 [PIANO_KEY_WIDTH, width] 而不绘制，
+    // 导致"缩放后进度条消失"的问题。
+    const canvasWidth = dom.waveformCanvas.clientWidth;
+    const playheadX = getPlayheadXForTime(state.pianoRoll.getCurrentTime());
+    if (playheadX < PIANO_KEY_WIDTH) {
+      state.pianoRoll.scrollX = Math.max(0, state.pianoRoll.scrollX - (PIANO_KEY_WIDTH - playheadX + 20));
+      state.waveformScrollX = state.pianoRoll.scrollX;
+      state.pianoRoll.render();
+    } else if (playheadX > canvasWidth - 20) {
+      state.pianoRoll.scrollX += (playheadX - canvasWidth + 40);
+      state.waveformScrollX = state.pianoRoll.scrollX;
+      state.pianoRoll.render();
+    }
+
+    drawWaveformWithPlayhead(state.pianoRoll.getCurrentTime(), { isPaused: !state.isPlaying });
   }, { passive: false });
 
   // Resize handle
