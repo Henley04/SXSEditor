@@ -1,18 +1,24 @@
 // Splash window manager.
 //
 // Shows a small frameless splash window while the main window boots.
-// The splash reads build-info.json (generated at package time by
-// scripts/generate-build-info.js) and the bundled app icon, and
-// serves both to the splash renderer via IPC.
+// The splash HTML inlines an SVG that paints immediately on HTML parse
+// (before any JS bundle loads), so the user sees the branded splash
+// the moment did-finish-load fires. splash.js then enriches the SVG
+// with build-info.json data (version, build date) via a single IPC
+// call. The app icon is loaded by the SVG directly via a relative
+// ./SXS.png URL (copied to the splash_window renderer folder by
+// webpack.renderer.config.js), removing the icon IPC round-trip from
+// the critical path.
 //
 // Timing strategy:
 //   - The splash window is shown IMMEDIATELY on creation (show: true)
 //     with a dark backgroundColor so the user sees *something* right
 //     away, before the SVG even paints.
-//   - did-finish-load fires once the splash's SVG has rendered; we
-//     record that timestamp so the main process can enforce a minimum
-//     *visible* splash duration measured from when content actually
-//     appeared (not from when the empty window was created).
+//   - did-finish-load fires once the splash's HTML (with inline SVG)
+//     has parsed; we record that timestamp so the main process can
+//     enforce a minimum *visible* splash duration measured from when
+//     content actually appeared (not from when the empty window was
+//     created).
 
 const { BrowserWindow, ipcMain, app } = require('electron');
 const path = require('node:path');
@@ -22,9 +28,10 @@ let splashWindow = null;
 let splashReadyAt = 0; // ms timestamp when splash content first painted
 let splashReadyResolvers = []; // resolved when splash content first paints
 
-// Cached values (loaded once per process)
+// Cached build info (loaded once per process). The icon is no longer
+// cached here — it is loaded directly by the splash renderer via a
+// relative ./SXS.png URL.
 let cachedBuildInfo = null;
-let cachedIconDataUrl = null;
 
 function readBuildInfo() {
   if (cachedBuildInfo) return cachedBuildInfo;
@@ -53,26 +60,8 @@ function readBuildInfo() {
   return cachedBuildInfo;
 }
 
-function readIconDataUrl() {
-  if (cachedIconDataUrl) return cachedIconDataUrl;
-
-  // webpack.main.config.js copies assets/SXS.png to .webpack/main/SXS.png
-  const candidate = path.join(__dirname, 'SXS.png');
-  try {
-    if (fs.existsSync(candidate)) {
-      const buf = fs.readFileSync(candidate);
-      cachedIconDataUrl = `data:image/png;base64,${buf.toString('base64')}`;
-    }
-  } catch (err) {
-    console.warn('[Splash] Failed to read app icon:', err.message);
-  }
-  if (!cachedIconDataUrl) cachedIconDataUrl = '';
-  return cachedIconDataUrl;
-}
-
 function registerSplashIpc() {
   ipcMain.handle('splash:getBuildInfo', async () => readBuildInfo());
-  ipcMain.handle('splash:getIconDataUrl', async () => readIconDataUrl());
 }
 
 function createSplashWindow() {
@@ -172,5 +161,4 @@ module.exports = {
   waitForSplashReady,
   registerSplashIpc,
   readBuildInfo,
-  readIconDataUrl,
 };
