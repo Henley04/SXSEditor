@@ -223,8 +223,13 @@ export function updateFragmentPlayhead() {
   const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
   setFragmentCurrentTime(getFragmentPlaybackOffset() + elapsed);
 
+  // 流式播放期间跳过 duration 检查：
+  // setFragmentAudioData 在 synthesizeFragmentSVS 返回后才更新，流式期间
+  // getFragmentAudioData 返回上一次合成的旧 audioData，旧 duration 可能短于
+  // 当前流式时长，导致 currentTime >= duration 误判并提前 stopFragmentPlayback。
+  // 流式结束由末 chunk source.onended 触发，不依赖此处的 duration 检查。
   const audioData = getFragmentAudioData();
-  if (audioData) {
+  if (audioData && streamingSources.length === 0) {
     const duration = audioData.length / getSampleRate();
     if (getFragmentCurrentTime() >= duration) {
       stopFragmentPlayback();
@@ -561,6 +566,11 @@ export async function playFragment() {
           setFragmentPlaybackOffset(0);
           setFragmentCurrentTime(0);
           updateFragmentPlayButton();
+          // 启动 playhead rAF 动画循环：与主页面 startPlayheadAnimation、
+          // playFragmentShared 末尾的 updateFragmentPlayhead 调用对齐。
+          // 缺失此调用会导致流式播放期间音频正常播放但 playhead 不移动、
+          // 画布不重绘，用户感知为“流式播放未生效”。
+          updateFragmentPlayhead();
         }
         source.start(streamingNextStart);
         streamingNextStart += chunkInfo.audio.length / getSampleRate();
