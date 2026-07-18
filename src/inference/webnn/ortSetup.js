@@ -1,9 +1,50 @@
 /**
  * WebNN 推理模块 — onnxruntime-web 初始化与全局 ort 引用
+ *
+ * ort.all.min.js 历史上通过 index.html 的 <script src> 同步加载，会阻塞
+ * 主窗口渲染进程的 did-finish-load 事件（5-10MB UMD 解析）。
+ * 现已从 HTML 移除，改为按需动态加载：首次调用 ensureOrt() 时注入
+ * <script> 标签，加载完成后配置 WASM 路径并返回 ort 引用。
  */
 
-// onnxruntime-web 通过 script 标签加载（ort.all.min.js），暴露为全局变量 ort
+// onnxruntime-web UMD bundle path (relative to main window's HTML).
+// webpack.renderer.config.js copies ort.all.min.js alongside each entry's HTML.
+const ORT_UMD_PATH = './ort.all.min.js';
+
+// Cached ort reference once loaded.
 let ort = null;
+
+// In-flight loader promise so concurrent callers share the same script load.
+let _loadPromise = null;
+
+/**
+ * Dynamically inject <script src="./ort.all.min.js"> into <head>.
+ * Resolves with window.ort once the UMD bundle has executed.
+ * Idempotent: concurrent callers share the same promise.
+ */
+function loadOrtScript() {
+    if (window.ort) return Promise.resolve(window.ort);
+    if (_loadPromise) return _loadPromise;
+    _loadPromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = ORT_UMD_PATH;
+        script.async = true;
+        script.onload = () => {
+            if (window.ort) {
+                resolve(window.ort);
+            } else {
+                _loadPromise = null; // allow retry
+                reject(new Error('ort.all.min.js loaded but window.ort is undefined'));
+            }
+        };
+        script.onerror = () => {
+            _loadPromise = null; // allow retry
+            reject(new Error(`Failed to load ${ORT_UMD_PATH}`));
+        };
+        document.head.appendChild(script);
+    });
+    return _loadPromise;
+}
 
 /**
  * 确保 ort 全局变量已初始化，并配置 WASM 路径
@@ -11,7 +52,14 @@ let ort = null;
  */
 export async function ensureOrt() {
     if (ort) return ort;
-    // UMD bundle exposes 'ort' as a global variable
+
+    // If the UMD bundle has already been loaded (e.g. by another window or
+    // legacy <script> tag), use the global directly. Otherwise, load it
+    // dynamically now.
+    if (typeof window === 'undefined' || !window.ort) {
+        await loadOrtScript();
+    }
+
     if (typeof window !== 'undefined' && window.ort) {
         ort = window.ort;
         console.log('[WebNN] onnxruntime-web loaded from global, version:', ort.env?.versions?.web || 'unknown');
@@ -29,7 +77,7 @@ export async function ensureOrt() {
             console.log(`[WebNN] WASM paths configured: ${ort.env.wasm.wasmPaths}, numThreads: ${ort.env.wasm.numThreads} (cpu cores: ${cpuCores}), memoryLimit: ${ort.env.wasm.memoryLimit}MB (32-bit WASM), crossOriginIsolated: ${self.crossOriginIsolated}`);
         }
     } else {
-        throw new Error('onnxruntime-web not loaded. Ensure ort.all.min.js is included via <script> tag.');
+        throw new Error('onnxruntime-web failed to load. ensureOrt() did not find window.ort.');
     }
     return ort;
 }

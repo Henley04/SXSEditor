@@ -58,7 +58,10 @@
         </div>
       </div>
     </div>
-    <!-- onnxruntime-web (WebNN NPU support) — loaded before app scripts -->
-    <script src="./ort.all.min.js"></script>
+    <!-- ort.all.min.js (onnxruntime-web UMD bundle, ~5-10MB) was previously
+         loaded synchronously here, blocking did-finish-load. It is now
+         loaded dynamically on first use via src/inference/webnn/ortSetup.js
+         loadOrtScript(). The .wasm files are still copied alongside by
+         webpack CopyPlugin (webpack.renderer.config.js). -->
   </body>
 </html>
