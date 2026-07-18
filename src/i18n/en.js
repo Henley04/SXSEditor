@@ -29,6 +29,7 @@ export default {
     deleteSinger: 'Delete Singer',
     synthesizing: 'Synthesizing...',
     synthesizingProgress: 'Synthesizing {progress}%',
+    waitingForInference: 'Waiting for inference...',
     exportingProgress: 'Exporting {progress}%',
     noFragmentsToPlay: 'No fragments to play',
     noNotesToPlay: 'No notes to play',

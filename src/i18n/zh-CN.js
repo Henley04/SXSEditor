@@ -29,6 +29,7 @@ export default {
     deleteSinger: '删除歌手',
     synthesizing: '合成中...',
     synthesizingProgress: '合成中 {progress}%',
+    waitingForInference: '等待推理...',
     exportingProgress: '导出中 {progress}%',
     noFragmentsToPlay: '当前没有分片，无法播放',
     noNotesToPlay: '当前没有音符，无法播放',
