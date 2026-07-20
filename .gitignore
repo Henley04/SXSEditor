@@ -168,3 +168,6 @@ third_party/
 __pycache__/
 *.pyc
 *.pyo
+
+# Web design draft templates (not part of shipped site)
+draft/

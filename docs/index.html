@@ -1,255 +1,1334 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-CN" data-theme="light" data-lang="zh">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SXSEditor — AI Singing Voice Synthesis Workstation</title>
-  <meta name="description" content="SXSEditor is an open-source desktop application for singing voice synthesis (SVS) powered by the SoulX-Singer neural model on ONNX Runtime." />
-  <link rel="icon" href="images/icon.png" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css" />
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title data-i18n="meta.title">SXSEditor — AI 歌声合成工作台</title>
+<meta name="description" data-i18n-attr="content:meta.desc" content="SXSEditor：开源 AI 歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经模型与 ONNX Runtime，支持 DirectML GPU、WebNN NPU 与 CPU 推理。从 MIDI 与歌词到完整歌声，一站完成。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23FFC53D' stroke='%2312233F' stroke-width='1.4' d='M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link href="https://cdn.jsdelivr.net/fontsource/css/zcool-qingke-huangyou@latest/chinese-simplified-400-normal.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/fontsource/css/noto-sans-sc@latest/chinese-simplified-400-normal.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/fontsource/css/noto-sans-sc@latest/chinese-simplified-500-normal.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/fontsource/css/noto-sans-sc@latest/chinese-simplified-700-normal.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/fontsource/css/rajdhani@latest/latin-500-normal.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/fontsource/css/rajdhani@latest/latin-600-normal.css" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/fontsource/css/rajdhani@latest/latin-700-normal.css" rel="stylesheet">
+<style>
+/* ============ 设计变量 ============ */
+:root{
+  --bg:#F3F8FD; --bg2:#E8F1FA; --panel:#FFFFFF; --panel2:#F5FAFE;
+  --ink:#182A4C; --ink2:#5B6C8F; --line:#D9E5F4; --line2:#BFD3EC;
+  --blue:#1E9BF0; --blue2:#0D7DD6; --blue-soft:#DCEBFA;
+  --yellow:#FFC53D; --yellow2:#FFB020; --cyan:#22BFD8; --red:#FF6B7A; --green:#2FBF8B;
+  --navy:#12233F; --navy2:#182B4D; --navy-line:#2C4370;
+  --hard:rgba(18,35,63,.16); --hard-solid:#14264A;
+  --band:#E2EEFB; --dot:#C7DCF2;
+  --disp:'ZCOOL QingKe HuangYou','Noto Sans SC',sans-serif;
+  --body:'Noto Sans SC','PingFang SC','Microsoft YaHei',sans-serif;
+  --num:'Rajdhani','Noto Sans SC',sans-serif;
+}
+html[data-theme="dark"]{
+  --bg:#0B1120; --bg2:#0D1526; --panel:#131D33; --panel2:#0F1830;
+  --ink:#EAF1FD; --ink2:#8FA2C4; --line:#233354; --line2:#31456E;
+  --blue:#3FA9F5; --blue2:#6CC2FF; --blue-soft:#16264A;
+  --yellow:#FFC94A; --yellow2:#FFD873; --cyan:#3FD8EE; --red:#FF7B88; --green:#4ADE9C;
+  --navy:#0A0F1C; --navy2:#101A30; --navy-line:#243456;
+  --hard:rgba(0,0,0,.55); --hard-solid:#04070F;
+  --band:#101A30; --dot:#1D2C4E;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:86px}
+body{font-family:var(--body);background:var(--bg);color:var(--ink);font-size:15px;line-height:1.75;overflow-x:hidden;transition:background-color .35s ease,color .35s ease}
+img{display:block;max-width:100%}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+ul{list-style:none}
+::selection{background:var(--yellow);color:var(--navy)}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.wrap{max-width:1200px;margin:0 auto;padding:0 24px}
+.num{font-family:var(--num)}
+.cut{clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px)}
+.cut-s{clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
+
+/* ============ 顶部滚动公告 ============ */
+.ticker{background:var(--blue);color:#fff;font-size:13px;overflow:hidden;border-bottom:2px solid var(--navy)}
+html[data-theme="dark"] .ticker{border-bottom-color:#04070F}
+.ticker-track{display:flex;width:max-content;animation:tick 30s linear infinite}
+.ticker:hover .ticker-track{animation-play-state:paused}
+.ticker-track span{display:inline-flex;align-items:center;gap:8px;padding:7px 0;margin-right:56px;white-space:nowrap;font-weight:500;letter-spacing:.02em}
+.ticker-track b{color:var(--yellow);font-family:var(--num);font-weight:700}
+@keyframes tick{to{transform:translateX(-50%)}}
+
+/* ============ 导航 ============ */
+.nav{position:sticky;top:0;z-index:100;background:var(--bg);border-bottom:2px solid var(--line);transition:background-color .35s,border-color .35s,box-shadow .25s}
+.nav.scrolled{box-shadow:0 4px 0 var(--hard)}
+.nav-in{display:flex;align-items:center;gap:28px;height:66px}
+.logo{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.logo svg{width:30px;height:30px;transition:transform .5s cubic-bezier(.34,1.56,.64,1)}
+.logo:hover svg{transform:rotate(180deg) scale(1.1)}
+.logo-t{line-height:1.15}
+.logo-t b{font-family:var(--disp);font-size:21px;font-weight:400;letter-spacing:.04em;display:block}
+.logo-t i{font-family:var(--num);font-style:normal;font-size:10px;font-weight:700;letter-spacing:.32em;color:var(--blue)}
+.nav-links{display:flex;align-items:center;gap:4px;margin-left:8px}
+.nav-links a{position:relative;padding:8px 13px;font-size:14.5px;font-weight:500;color:var(--ink2);transition:color .2s}
+.nav-links a::after{content:"";position:absolute;left:13px;right:13px;bottom:2px;height:3px;background:var(--yellow);transform:scaleX(0);transform-origin:left;transition:transform .25s}
+.nav-links a:hover,.nav-links a.act{color:var(--ink)}
+.nav-links a:hover::after,.nav-links a.act::after{transform:scaleX(1)}
+.nav-r{margin-left:auto;display:flex;align-items:center;gap:10px}
+.theme-btn{width:38px;height:38px;display:grid;place-items:center;border:2px solid var(--line2);background:var(--panel);color:var(--ink);transition:border-color .2s,transform .15s,background-color .35s}
+.theme-btn:hover{border-color:var(--blue);transform:translateY(-2px)}
+.theme-btn svg{width:19px;height:19px}
+html[data-theme="light"] .ic-sun{display:none}
+html[data-theme="dark"] .ic-moon{display:none}
+.burger{display:none;width:38px;height:38px;border:2px solid var(--line2);background:var(--panel);place-items:center}
+.burger svg{width:20px;height:20px}
+
+/* ============ 按钮 ============ */
+.btn{display:inline-flex;align-items:center;gap:9px;font-weight:700;font-size:15px;padding:12px 24px;background:var(--yellow);color:var(--navy);border:2px solid var(--hard-solid);filter:drop-shadow(4px 4px 0 var(--hard));transition:transform .16s,filter .16s,background-color .2s;clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+.btn:hover{transform:translate(-2px,-2px);filter:drop-shadow(6px 6px 0 var(--hard));background:var(--yellow2)}
+.btn:active{transform:translate(1px,1px);filter:drop-shadow(2px 2px 0 var(--hard))}
+.btn svg{width:17px;height:17px}
+.btn.ghost{background:var(--panel);color:var(--ink);border-color:var(--line2);filter:drop-shadow(3px 3px 0 var(--hard))}
+.btn.ghost:hover{border-color:var(--blue);color:var(--blue);background:var(--panel)}
+.btn.sm{padding:8px 16px;font-size:13.5px}
+.btn.wht{background:#fff;border-color:#0A0F1C}
+.btn.wht:hover{background:var(--yellow)}
+
+/* ============ 通用节标题 ============ */
+section{position:relative}
+.sec{padding:92px 0}
+.sec-head{display:flex;align-items:baseline;gap:16px;margin-bottom:14px;flex-wrap:wrap}
+.sec-tag{font-family:var(--num);font-weight:700;font-size:13px;letter-spacing:.28em;background:var(--yellow);color:var(--navy);padding:3px 12px 2px;clip-path:polygon(6px 0,100% 0,calc(100% - 6px) 100%,0 100%)}
+.sec-head h2{font-family:var(--disp);font-weight:400;font-size:clamp(28px,4vw,40px);letter-spacing:.05em}
+.sec-sub{color:var(--ink2);font-size:14px}
+.sec-line{flex-basis:100%;height:2px;background:var(--line);position:relative;margin-top:6px}
+.sec-line::after{content:"";position:absolute;right:0;top:-4px;width:10px;height:10px;background:var(--blue);transform:rotate(45deg)}
+.sec-head2{margin-bottom:34px}
+
+/* ============ 滚动显现 ============ */
+.reveal{opacity:0;transform:translateY(26px);transition:opacity .7s ease var(--d,0s),transform .7s cubic-bezier(.22,.9,.3,1) var(--d,0s)}
+.reveal.in{opacity:1;transform:none}
+
+/* ============ HERO ============ */
+.hero{padding:64px 0 84px;overflow:hidden}
+.hero-band{position:absolute;inset:0;background:var(--band);clip-path:polygon(56% 0,100% 0,100% 100%,34% 100%);transition:background-color .35s}
+.hero-band::after{content:"";position:absolute;inset:0;background-image:radial-gradient(var(--dot) 1.4px,transparent 1.4px);background-size:22px 22px}
+.hero-stripe{position:absolute;right:-140px;top:96px;width:520px;height:26px;background:var(--yellow);transform:rotate(-14deg);opacity:.9}
+.hero-stripe.s2{top:140px;height:10px;background:var(--blue);opacity:.75}
+.hero-in{position:relative;display:grid;grid-template-columns:1.05fr .95fr;gap:40px;align-items:center}
+.chips{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:22px}
+.chip{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;padding:5px 13px;letter-spacing:.04em}
+.chip.y{background:var(--yellow);color:var(--navy);clip-path:polygon(7px 0,100% 0,calc(100% - 7px) 100%,0 100%)}
+.chip.b{border:2px solid var(--blue);color:var(--blue);background:var(--panel)}
+.chip .dotp{width:7px;height:7px;border-radius:50%;background:var(--red);animation:blink 1.4s infinite}
+@keyframes blink{50%{opacity:.25}}
+.hero h1{font-family:var(--disp);font-weight:400;font-size:clamp(42px,6vw,68px);line-height:1.18;letter-spacing:.03em;margin-bottom:20px}
+.hero h1 em{font-style:normal;color:var(--yellow);text-shadow:4px 4px 0 var(--blue)}
+.hero-p{color:var(--ink2);font-size:16px;max-width:520px;margin-bottom:30px}
+.hero-p b{color:var(--ink);font-weight:700}
+.hero-btns{display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.hero-note{font-size:12.5px;color:var(--ink2);margin-bottom:34px}
+.hero-note i{font-style:normal;color:var(--blue);font-weight:700}
+.stats{display:flex;gap:0;border:2px solid var(--line);background:var(--panel);filter:drop-shadow(4px 4px 0 var(--hard));max-width:520px}
+.stat{flex:1;padding:14px 18px;border-right:2px solid var(--line)}
+.stat:last-child{border-right:none}
+.stat b{display:block;font-family:var(--num);font-weight:700;font-size:27px;color:var(--blue);line-height:1.1}
+.stat span{font-size:12px;color:var(--ink2)}
+
+/* 主界面橱窗 */
+.hero-vis{position:relative;justify-self:center;width:min(460px,100%)}
+.halo{position:absolute;left:50%;top:46%;width:470px;height:470px;transform:translate(-50%,-50%);border:2px dashed var(--line2);border-radius:50%;animation:spin 46s linear infinite;pointer-events:none}
+.halo::before{content:"";position:absolute;inset:34px;border:2px solid var(--line);border-radius:50%}
+@keyframes spin{to{transform:translate(-50%,-50%) rotate(360deg)}}
+.char-win{position:relative;background:var(--panel);border:2px solid var(--line2);filter:drop-shadow(8px 8px 0 var(--hard));clip-path:polygon(18px 0,100% 0,100% calc(100% - 18px),calc(100% - 18px) 100%,0 100%,0 18px);z-index:2}
+.char-head{display:flex;align-items:center;gap:10px;background:var(--blue);color:#fff;padding:9px 16px;font-family:var(--num);font-weight:700;font-size:12.5px;letter-spacing:.14em}
+.char-head .stars{margin-left:auto;color:var(--yellow);letter-spacing:2px;font-size:13px}
+.char-img{position:relative;overflow:hidden}
+.char-img img{width:100%;aspect-ratio:5/5.6;object-fit:cover;object-position:top center}
+.char-foot{display:flex;align-items:center;gap:8px;padding:11px 16px;border-top:2px solid var(--line);flex-wrap:wrap}
+.tagc{font-size:11.5px;font-weight:700;padding:3px 10px;border:1.5px solid var(--line2);color:var(--ink2);background:var(--panel2)}
+.tagc.hot{border-color:var(--yellow);background:var(--yellow);color:var(--navy)}
+/* 浮动HUD */
+.hud{position:absolute;background:var(--panel);border:2px solid var(--line2);filter:drop-shadow(5px 5px 0 var(--hard));clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px);z-index:3;width:236px}
+.hud-a{top:-26px;left:-84px;animation:floaty 5.5s ease-in-out infinite}
+.hud-b{bottom:-34px;left:-110px;animation:floaty 6.5s ease-in-out infinite reverse}
+@keyframes floaty{0%,100%{transform:translateY(0)}50%{transform:translateY(-9px)}}
+.hud-h{display:flex;align-items:center;gap:7px;padding:8px 12px;border-bottom:2px solid var(--line);font-size:11.5px;font-weight:700;color:var(--ink2)}
+.hud-h .live{width:7px;height:7px;border-radius:50%;background:var(--green);animation:blink 1.2s infinite}
+.hud-bd{padding:10px 12px}
+.spec{display:flex;align-items:flex-end;gap:3px;height:52px}
+.spec i{flex:1;background:var(--blue);min-height:4px;transition:height .12s linear}
+.hud-b.playing .spec i{background:var(--yellow)}
+.hud-meta{display:flex;justify-content:space-between;font-family:var(--num);font-weight:600;font-size:11px;color:var(--ink2);margin-top:7px;letter-spacing:.06em}
+.hud-meta b{color:var(--blue)}
+.hud-b.playing .hud-meta b{color:var(--yellow2)}
+html[data-theme="dark"] .hud-b.playing .hud-meta b{color:var(--yellow)}
+.play-row{display:flex;align-items:center;gap:10px;margin-top:10px}
+.play-btn{display:inline-flex;align-items:center;gap:7px;background:var(--blue);color:#fff;font-weight:700;font-size:12.5px;padding:7px 13px;clip-path:polygon(7px 0,100% 0,calc(100% - 7px) 100%,0 100%);transition:background-color .2s,transform .15s}
+.play-btn:hover{background:var(--blue2);transform:translateY(-1px)}
+.play-btn svg{width:12px;height:12px}
+.bpm{font-family:var(--num);font-weight:700;font-size:12px;color:var(--ink2);letter-spacing:.08em}
+/* 漂浮装饰 */
+.deco{position:absolute;pointer-events:none;z-index:1}
+.deco svg{display:block}
+.d-star1{top:-14px;right:6%;animation:floaty 7s ease-in-out infinite}
+.d-star2{bottom:10%;right:-8px;animation:floaty 5s ease-in-out infinite reverse}
+.d-plus1{top:34%;left:-58px;color:var(--blue);animation:floaty 6s ease-in-out infinite}
+.d-plus2{bottom:-6px;right:22%;color:var(--yellow);animation:floaty 8s ease-in-out infinite}
+@keyframes twinkle{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(.72);opacity:.55}}
+.d-star1 svg,.d-star2 svg{animation:twinkle 3.4s ease-in-out infinite}
+
+/* 钢琴卷帘 */
+.roll{position:relative;background-color:var(--panel2);border:1.5px solid var(--line);background-image:repeating-linear-gradient(to right,var(--line) 0 1px,transparent 1px 6.25%),repeating-linear-gradient(to bottom,var(--line) 0 1px,transparent 1px 12.5%);overflow:hidden}
+.rn{position:absolute;background:var(--blue);border-radius:2px;transform:scaleY(.68);transition:background-color .12s}
+.rn.hit{background:var(--yellow)}
+.ph{position:absolute;top:0;bottom:0;width:2px;background:var(--yellow);left:0;box-shadow:0 0 0 1px rgba(0,0,0,.12)}
+.curve{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+
+/* ============ 功能 ============ */
+.features{background:var(--bg)}
+.f-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px;margin-top:38px}
+.f-card{position:relative;background:var(--panel);border:2px solid var(--line);padding:24px;clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px);transition:transform .22s,border-color .22s,filter .22s,background-color .35s}
+.f-card:hover{transform:translateY(-5px);border-color:var(--blue);filter:drop-shadow(6px 6px 0 var(--hard))}
+.f-idx{position:absolute;top:14px;right:18px;font-family:var(--num);font-weight:700;font-size:30px;color:transparent;-webkit-text-stroke:1.5px var(--line2);transition:.25s}
+.f-card:hover .f-idx{-webkit-text-stroke:1.5px var(--blue)}
+.f-ic{width:42px;height:42px;display:grid;place-items:center;background:var(--blue);color:#fff;margin-bottom:14px;clip-path:polygon(8px 0,100% 0,100% calc(100% - 8px),calc(100% - 8px) 100%,0 100%,0 8px)}
+.f-ic svg{width:21px;height:21px}
+.f-ic.y{background:var(--yellow);color:var(--navy)}
+.f-ic.c{background:var(--cyan)}
+.f-ic.n{background:var(--navy);color:var(--yellow)}
+html[data-theme="dark"] .f-ic.n{background:var(--blue-soft);color:var(--yellow)}
+.f-card h3{font-family:var(--disp);font-weight:400;font-size:21px;letter-spacing:.04em;margin-bottom:8px}
+.f-card p{font-size:13.5px;color:var(--ink2);margin-bottom:14px}
+.f-tags{display:flex;gap:8px;flex-wrap:wrap}
+.f-a{grid-column:span 7;grid-row:span 2;display:flex;flex-direction:column}
+.f-b,.f-c{grid-column:span 5}
+.f-d{grid-column:span 5}.f-e{grid-column:span 4}.f-f{grid-column:span 3}
+.scope-box{margin-top:auto;border:1.5px solid var(--line);background:var(--panel2)}
+#scope{display:block;width:100%;height:96px}
+.f-mini-stats{display:flex;gap:0;margin-top:14px;border:1.5px solid var(--line)}
+.f-mini-stats div{flex:1;padding:8px 12px;border-right:1.5px solid var(--line);text-align:center}
+.f-mini-stats div:last-child{border-right:none}
+.f-mini-stats b{display:block;font-family:var(--num);font-size:19px;font-weight:700;color:var(--blue)}
+.f-mini-stats span{font-size:11px;color:var(--ink2)}
+.f-roll{height:118px;margin-bottom:14px;position:relative}
+.lyr{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
+.lyr .w{text-align:center}
+.lyr .w b{display:block;font-family:var(--disp);font-size:22px;font-weight:400;padding:4px 12px;border:1.5px solid var(--line2);background:var(--panel2);animation:chipGlow 4s infinite}
+.lyr .w i{font-style:normal;font-family:var(--num);font-size:11px;font-weight:600;color:var(--ink2);letter-spacing:.05em}
+.lyr .w:nth-child(2) b{animation-delay:1s}
+.lyr .w:nth-child(3) b{animation-delay:2s}
+.lyr .w:nth-child(4) b{animation-delay:3s}
+@keyframes chipGlow{0%,18%,100%{background:var(--panel2);border-color:var(--line2);color:var(--ink)}8%{background:var(--yellow);border-color:var(--yellow2);color:var(--navy)}}
+.faders{display:grid;gap:11px;margin-bottom:14px}
+.fader{position:relative;height:6px;background:var(--line);border-radius:0}
+.fader::before{content:"";position:absolute;left:0;top:0;bottom:0;background:var(--blue);width:40%}
+.fader i{position:absolute;top:50%;width:13px;height:19px;background:var(--yellow);border:2px solid var(--hard-solid);transform:translate(-50%,-50%);left:40%;animation:fd 4.6s ease-in-out infinite}
+.fader:nth-child(1) i{animation-delay:0s}
+.fader:nth-child(2) i{animation-delay:.7s;animation-duration:5.4s}
+.fader:nth-child(3) i{animation-delay:1.3s;animation-duration:4.1s}
+.fader:nth-child(4) i{animation-delay:.4s;animation-duration:6s}
+@keyframes fd{0%,100%{left:24%}50%{left:74%}}
+.plug-chips{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.plug-chips span{font-family:var(--num);font-weight:700;font-size:12.5px;letter-spacing:.08em;padding:5px 12px;border:2px solid var(--line2);color:var(--ink);background:var(--panel2);transition:.2s}
+.f-card:hover .plug-chips span{border-color:var(--blue)}
+.sync-bar{height:10px;border:1.5px solid var(--line2);background:var(--panel2);margin-bottom:8px}
+.sync-fill{height:100%;width:0;background:repeating-linear-gradient(-45deg,var(--blue) 0 8px,var(--blue2) 8px 16px);transition:width 1.4s cubic-bezier(.22,.9,.3,1)}
+.in .sync-fill{width:78%}
+.sync-t{font-size:11.5px;color:var(--ink2);font-family:var(--num);font-weight:600;letter-spacing:.05em}
+
+/* ============ 工作流 ============ */
+.voices{background:var(--bg2);border-top:2px solid var(--line);border-bottom:2px solid var(--line)}
+.v-filters{display:flex;gap:10px;flex-wrap:wrap;margin:34px 0 26px}
+.vf{font-size:13px;font-weight:700;padding:7px 18px;border:2px solid var(--line2);background:var(--panel);color:var(--ink2);clip-path:polygon(8px 0,100% 0,calc(100% - 8px) 100%,0 100%);transition:.2s}
+.vf:hover{border-color:var(--blue);color:var(--blue)}
+.vf.act{background:var(--blue);border-color:var(--blue);color:#fff}
+.v-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px}
+.v-feat{grid-column:span 5}
+.v-main{grid-column:span 7;display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+.v-card{background:var(--panel);border:2px solid var(--line);clip-path:polygon(12px 0,100% 0,100% calc(100% - 12px),calc(100% - 12px) 100%,0 100%,0 12px);overflow:hidden;display:flex;flex-direction:column;transition:transform .22s,border-color .22s,filter .22s}
+.v-card:hover{transform:translateY(-6px);border-color:var(--yellow);filter:drop-shadow(6px 6px 0 var(--hard))}
+.v-card.off{display:none}
+.v-img{position:relative;overflow:hidden}
+.v-img img{width:100%;aspect-ratio:4/4.4;object-fit:cover;object-position:top;transition:transform .5s cubic-bezier(.22,.9,.3,1)}
+.v-card:hover .v-img img{transform:scale(1.07)}
+.v-rar{position:absolute;top:10px;left:10px;font-family:var(--num);font-weight:700;font-size:12px;letter-spacing:.12em;padding:3px 11px;background:var(--yellow);color:var(--navy);clip-path:polygon(6px 0,100% 0,calc(100% - 6px) 100%,0 100%)}
+.v-rar.sr{background:var(--blue);color:#fff}
+.v-lang{position:absolute;top:10px;right:10px;font-size:11px;font-weight:700;padding:3px 9px;background:rgba(10,15,28,.72);color:#fff}
+.v-body{padding:16px 16px 18px;display:flex;flex-direction:column;flex:1}
+.v-stars{color:var(--yellow2);font-size:13px;letter-spacing:3px;margin-bottom:5px;text-shadow:1px 1px 0 var(--hard)}
+.v-card h3{font-family:var(--disp);font-weight:400;font-size:22px;letter-spacing:.04em;line-height:1.2}
+.v-card h3 i{font-style:normal;font-family:var(--num);font-size:11.5px;font-weight:700;letter-spacing:.22em;color:var(--blue);display:block;margin-top:2px}
+.v-meta{font-size:12px;color:var(--ink2);margin:8px 0 10px}
+.v-tags{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:14px}
+.v-tags span{font-size:11px;font-weight:700;padding:2px 9px;background:var(--blue-soft);color:var(--blue)}
+.v-act{margin-top:auto;display:flex;gap:8px;transform:translateY(6px);opacity:.55;transition:.25s}
+.v-card:hover .v-act{transform:none;opacity:1}
+.v-act button{flex:1;font-size:12.5px;font-weight:700;padding:8px 0;border:2px solid var(--line2);background:var(--panel2);color:var(--ink);transition:.2s}
+.v-act button:hover{border-color:var(--blue);color:var(--blue)}
+.v-act button.pri{background:var(--yellow);border-color:var(--yellow2);color:var(--navy)}
+.v-act button.pri:hover{background:var(--yellow2);color:var(--navy)}
+.v-feat .v-card h3{font-size:28px}
+.v-feat .v-img img{aspect-ratio:4/4.9}
+.v-feat .v-desc{font-size:13px;color:var(--ink2);margin:-4px 0 12px}
+.v-more{margin-top:26px;text-align:center}
+
+/* ============ 情报 ============ */
+.news-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:22px;margin-top:38px}
+.news-l{grid-column:span 7}
+.news-r{grid-column:span 5}
+.n-tabs{display:flex;gap:8px;margin-bottom:18px;flex-wrap:wrap}
+.nt{font-size:13.5px;font-weight:700;padding:8px 18px;border-bottom:3px solid var(--line2);color:var(--ink2);transition:.2s}
+.nt:hover{color:var(--ink)}
+.nt.act{color:var(--blue);border-bottom-color:var(--yellow)}
+.n-list{border:2px solid var(--line);background:var(--panel);filter:drop-shadow(5px 5px 0 var(--hard))}
+.n-item{display:flex;align-items:center;gap:16px;padding:15px 18px;border-bottom:1.5px solid var(--line);transition:background-color .18s;cursor:pointer}
+.n-item:last-child{border-bottom:none}
+.n-item:hover{background:var(--panel2)}
+.n-item.hide{display:none}
+.n-date{flex-shrink:0;text-align:center;padding-right:16px;border-right:2px solid var(--line)}
+.n-date b{display:block;font-family:var(--num);font-weight:700;font-size:19px;line-height:1;color:var(--ink)}
+.n-date i{font-style:normal;font-family:var(--num);font-size:11px;color:var(--ink2);font-weight:600}
+.n-tag{flex-shrink:0;font-size:11px;font-weight:700;padding:3px 10px;clip-path:polygon(5px 0,100% 0,calc(100% - 5px) 100%,0 100%)}
+.t-notice{background:var(--blue);color:#fff}
+.t-event{background:var(--yellow);color:var(--navy)}
+.t-patch{background:var(--cyan);color:var(--navy)}
+.n-title{flex:1;font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;transition:color .18s}
+.n-item:hover .n-title{color:var(--blue)}
+.n-arrow{color:var(--line2);font-weight:700;transition:.2s}
+.n-item:hover .n-arrow{color:var(--yellow2);transform:translateX(4px)}
+/* 项目动态卡片 */
+.event-card{position:relative;background:var(--blue);color:#fff;padding:28px 26px 30px;overflow:hidden;clip-path:polygon(16px 0,100% 0,100% calc(100% - 16px),calc(100% - 16px) 100%,0 100%,0 16px);filter:drop-shadow(7px 7px 0 var(--hard));align-self:start}
+.ev-sun{position:absolute;top:-46px;right:-46px;width:170px;height:170px;background:var(--yellow);border-radius:50%}
+.ev-sun::after{content:"";position:absolute;inset:16px;border:3px dashed rgba(18,35,63,.35);border-radius:50%;animation:spin2 24s linear infinite}
+@keyframes spin2{to{transform:rotate(360deg)}}
+.ev-wave{position:absolute;left:0;right:0;bottom:0;height:56px;opacity:.22}
+.ev-tag{display:inline-block;font-family:var(--num);font-weight:700;font-size:12px;letter-spacing:.3em;background:var(--navy);color:var(--yellow);padding:4px 12px;margin-bottom:14px;position:relative}
+.event-card h3{font-family:var(--disp);font-weight:400;font-size:33px;letter-spacing:.05em;line-height:1.2;position:relative}
+.event-card .ev-p{font-size:13.5px;opacity:.92;margin:8px 0 20px;position:relative}
+.cd{display:flex;gap:9px;position:relative;margin-bottom:22px}
+.cd div{flex:1;background:#fff;color:var(--navy);text-align:center;padding:9px 0 7px;clip-path:polygon(7px 0,100% 0,100% calc(100% - 7px),calc(100% - 7px) 100%,0 100%,0 7px)}
+.cd b{display:block;font-family:var(--num);font-weight:700;font-size:27px;line-height:1}
+.cd span{font-size:10.5px;font-weight:700;opacity:.65}
+.ev-num{position:relative;font-size:12px;opacity:.9;margin-top:14px}
+.ev-num b{font-family:var(--num);font-size:15px}
+
+/* ============ 下载 ============ */
+.download{background:var(--navy);color:#EAF1FD;border-top:4px solid var(--yellow)}
+html[data-theme="dark"] .download{background:#080D18;border-top-color:var(--yellow)}
+.download .sec-head h2{color:#fff}
+.download .sec-sub{color:#93A5C6}
+.download .sec-line{background:var(--navy-line)}
+.dl-grid{display:grid;grid-template-columns:repeat(12,1fr);gap:18px;margin-top:40px}
+.dl-card{position:relative;background:var(--navy2);border:2px solid var(--navy-line);padding:26px 24px;clip-path:polygon(14px 0,100% 0,100% calc(100% - 14px),calc(100% - 14px) 100%,0 100%,0 14px);transition:transform .22s,border-color .22s}
+.dl-card:hover{transform:translateY(-5px);border-color:var(--blue)}
+.dl-win{grid-column:span 5;border-color:var(--yellow)}
+.dl-win:hover{border-color:var(--yellow)}
+.dl-mac{grid-column:span 4}
+.dl-linux{grid-column:span 3}
+.dl-badge{position:absolute;top:-2px;right:18px;background:var(--yellow);color:var(--navy);font-size:11px;font-weight:700;padding:3px 12px 5px;clip-path:polygon(0 0,100% 0,calc(100% - 7px) 100%,7px 100%)}
+.dl-os{display:flex;align-items:center;gap:12px;margin-bottom:16px}
+.dl-os svg{width:34px;height:34px;color:var(--blue)}
+.dl-win .dl-os svg{color:var(--yellow)}
+.dl-os b{font-family:var(--disp);font-weight:400;font-size:22px;letter-spacing:.04em;display:block;line-height:1.2}
+.dl-os i{font-style:normal;font-family:var(--num);font-size:11px;font-weight:600;letter-spacing:.18em;color:#8FA2C4}
+.dl-meta{font-size:12.5px;color:#93A5C6;margin-bottom:6px;display:flex;gap:8px;align-items:center}
+.dl-meta b{font-family:var(--num);color:#fff;font-size:14px}
+.dl-req{font-size:12px;color:#7488AC;margin-bottom:20px;line-height:1.6}
+.dl-card .btn{width:100%;justify-content:center}
+.dl-card .btn.ghost{background:transparent;color:#fff;border-color:var(--navy-line)}
+.dl-card .btn.ghost:hover{border-color:var(--blue);color:var(--blue)}
+.dl-foot{margin-top:20px;display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;font-family:var(--num);font-size:11.5px;color:#7488AC;letter-spacing:.05em}
+.dl-foot a{color:var(--yellow);border-bottom:1px dashed var(--yellow)}
+/* 更新日志 */
+.changelog{margin-top:44px;max-width:860px}
+.cl-h{font-family:var(--disp);font-weight:400;font-size:22px;letter-spacing:.05em;margin-bottom:16px;display:flex;align-items:center;gap:12px}
+.cl-h::after{content:"";flex:1;height:2px;background:var(--navy-line)}
+.acc{border:2px solid var(--navy-line);background:var(--navy2);margin-bottom:10px;clip-path:polygon(10px 0,100% 0,100% calc(100% - 10px),calc(100% - 10px) 100%,0 100%,0 10px)}
+.acc-h{width:100%;display:flex;align-items:center;gap:14px;padding:15px 20px;text-align:left;color:#EAF1FD;font-weight:700;font-size:14.5px}
+.acc-h .v{font-family:var(--num);color:var(--yellow);letter-spacing:.06em}
+.acc-h .d{margin-left:auto;font-family:var(--num);font-weight:600;font-size:12px;color:#7488AC}
+.acc-h .pm{width:22px;height:22px;display:grid;place-items:center;border:2px solid var(--navy-line);color:var(--yellow);font-weight:700;transition:transform .3s;flex-shrink:0}
+.acc.open .pm{transform:rotate(45deg)}
+.acc-b{max-height:0;overflow:hidden;transition:max-height .4s ease}
+.acc-b ul{padding:0 20px 18px 36px}
+.acc-b li{font-size:13px;color:#93A5C6;padding:4px 0;position:relative}
+.acc-b li::before{content:"▸";position:absolute;left:-16px;color:var(--blue)}
+.acc-b li.hot::before{color:var(--yellow)}
+
+/* ============ 页脚 ============ */
+footer{background:var(--navy);color:#93A5C6;border-top:2px solid var(--navy-line)}
+html[data-theme="dark"] footer{background:#070B14}
+.ft-grid{display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1fr;gap:34px;padding:58px 0 44px}
+.ft-logo b{font-family:var(--disp);font-weight:400;font-size:24px;color:#fff;letter-spacing:.05em;display:flex;align-items:center;gap:9px}
+.ft-logo svg{width:24px;height:24px}
+.ft-logo p{font-size:12.5px;margin:12px 0 18px;max-width:280px}
+.socials{display:flex;gap:9px}
+.socials a{width:36px;height:36px;display:grid;place-items:center;border:2px solid var(--navy-line);color:#93A5C6;transition:.2s}
+.socials a:hover{border-color:var(--yellow);color:var(--yellow);transform:translateY(-3px)}
+.socials svg{width:17px;height:17px}
+.ft-col h4{color:#fff;font-size:14px;font-weight:700;margin-bottom:16px;letter-spacing:.08em}
+.ft-col a{display:block;font-size:13px;padding:4.5px 0;transition:color .18s,transform .18s}
+.ft-col a:hover{color:var(--yellow);transform:translateX(4px)}
+.ft-bot{border-top:1px solid var(--navy-line);padding:20px 0;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;font-size:11.5px;color:#5F7396}
+.ft-bot a{color:#7488AC}
+.ft-bot a:hover{color:var(--yellow)}
+
+/* ============ 返回顶部 ============ */
+.totop{position:fixed;right:26px;bottom:30px;width:46px;height:46px;background:var(--yellow);color:var(--navy);border:2px solid var(--hard-solid);font-weight:700;font-size:19px;clip-path:polygon(9px 0,100% 0,100% calc(100% - 9px),calc(100% - 9px) 100%,0 100%,0 9px);filter:drop-shadow(4px 4px 0 var(--hard));opacity:0;pointer-events:none;transform:translateY(14px);transition:.3s;z-index:90}
+.totop.show{opacity:1;pointer-events:auto;transform:none}
+.totop:hover{transform:translateY(-3px)}
+
+/* ============ 语言切换 ============ */
+.lang-btn{display:inline-flex;align-items:center;gap:6px;height:38px;padding:0 12px;border:2px solid var(--line2);background:var(--panel);color:var(--ink);font-family:var(--num);font-weight:700;font-size:12px;letter-spacing:.08em;transition:border-color .2s,transform .15s,background-color .35s;clip-path:polygon(7px 0,100% 0,calc(100% - 7px) 100%,0 100%)}
+.lang-btn:hover{border-color:var(--blue);transform:translateY(-2px)}
+.lang-btn .lg-cur{color:var(--blue);min-width:22px;text-align:center}
+.lang-btn .lg-sep{opacity:.4}
+.lang-btn svg{width:14px;height:14px}
+
+/* ============ 响应式 ============ */
+@media (max-width:1080px){
+  .hero-in{grid-template-columns:1fr;gap:70px}
+  .hero-vis{margin-top:10px}
+  .hud-a{left:-10px;top:-30px}
+  .hud-b{left:auto;right:-10px;bottom:-30px}
+  .d-plus1{left:-10px}
+  .f-a{grid-column:span 12}
+  .f-b,.f-c,.f-d,.f-e{grid-column:span 6}
+  .f-f{grid-column:span 12}
+  .v-feat{grid-column:span 12}
+  .v-main{grid-column:span 12}
+  .news-l,.news-r{grid-column:span 12}
+  .dl-win{grid-column:span 12}
+  .dl-mac,.dl-linux{grid-column:span 6}
+  .ft-grid{grid-template-columns:1fr 1fr 1fr}
+  .ft-logo{grid-column:span 3}
+}
+@media (max-width:980px){
+  .nav-links{position:absolute;left:0;right:0;top:66px;background:var(--panel);border-bottom:2px solid var(--line);flex-direction:column;align-items:stretch;padding:10px 20px 18px;gap:2px;transform:scaleY(0);transform-origin:top;opacity:0;transition:.25s;z-index:99}
+  .nav-links.open{transform:scaleY(1);opacity:1}
+  .nav-links a{padding:12px 8px;border-bottom:1px solid var(--line)}
+  .nav-links a::after{display:none}
+  .burger{display:grid}
+  .nav .btn{display:none}
+}
+@media (max-width:760px){
+  .sec{padding:66px 0}
+  .hero{padding:44px 0 70px}
+  .hero-band{clip-path:polygon(0 62%,100% 46%,100% 100%,0 100%)}
+  .stats{flex-direction:column}
+  .stat{border-right:none;border-bottom:2px solid var(--line)}
+  .stat:last-child{border-bottom:none}
+  .v-main{grid-template-columns:1fr 1fr}
+  .dl-mac,.dl-linux{grid-column:span 12}
+  .ft-grid{grid-template-columns:1fr 1fr}
+  .ft-logo{grid-column:span 2}
+  .hud{width:200px}
+  .halo{width:360px;height:360px}
+}
+@media (max-width:520px){
+  .v-main{grid-template-columns:1fr}
+  .f-b,.f-c,.f-d,.f-e{grid-column:span 12}
+  .hud-a{left:0}
+  .hud-b{right:0}
+  .n-title{white-space:normal}
+}
+@media (prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms !important;animation-iteration-count:1 !important;transition-duration:.01ms !important}
+  html{scroll-behavior:auto}
+}
+</style>
 </head>
 <body>
 
-  <!-- ===== Header ===== -->
-  <header class="site-header">
-    <div class="site-header-inner">
-      <a class="brand" href="index.html">
-        <img src="images/icon.png" alt="SXSEditor" class="brand-logo" />
-        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+<!-- 顶部公告滚动条 -->
+<div class="ticker" aria-label="公告栏">
+  <div class="ticker-track" id="tickerTrack">
+    <span data-i18n-html="ticker.1">✦ SXSEditor <b>v1.0.6</b> 现已发布</span>
+    <span data-i18n-html="ticker.2">✦ 日语实验性支持上线 · 汉字假名自动分组</span>
+    <span data-i18n-html="ticker.3">✦ DirectML GPU 推理速度最高提升 <b>6 倍</b></span>
+    <span data-i18n-html="ticker.4">✦ 三精度模型共存：<b>FP32 / FP16 / INT8</b> 自由切换</span>
+    <span data-i18n-html="ticker.5">✦ 新增 SiFiGAN 声码器 · mel SNR 提升至 <b>83.54 dB</b></span>
+  </div>
+</div>
+
+<!-- 导航 -->
+<header class="nav" id="nav">
+  <div class="wrap nav-in">
+    <a class="logo" href="#home" aria-label="SXSEditor 首页">
+      <svg viewBox="0 0 24 24" fill="none"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" fill="var(--yellow)" stroke="var(--hard-solid)" stroke-width="1.4" stroke-linejoin="round"/></svg>
+      <span class="logo-t"><b>SXSEditor</b><i>SOULX SINGER</i></span>
+    </a>
+    <nav class="nav-links" id="navLinks">
+      <a href="#home" class="act" data-i18n="nav.home">首页</a>
+      <a href="#features" data-i18n="nav.features">核心功能</a>
+      <a href="#workflow" data-i18n="nav.workflow">工作流</a>
+      <a href="#news" data-i18n="nav.news">版本情报</a>
+      <a href="#download" data-i18n="nav.download">下载</a>
+      <a href="user/quick-start.html" data-i18n="nav.docs">文档中心</a>
+    </nav>
+    <div class="nav-r">
+      <button class="lang-btn" id="langBtn" aria-label="Switch language">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg>
+        <span class="lg-cur" id="lgCur">中</span><span class="lg-sep">/</span><span style="opacity:.6">EN</span>
+      </button>
+      <button class="theme-btn" id="themeBtn" aria-label="切换明暗主题">
+        <svg class="ic-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+        <svg class="ic-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M2 12h2.4M19.6 12H22M4.9 4.9l1.7 1.7M17.4 17.4l1.7 1.7M4.9 19.1l1.7-1.7M17.4 6.6l1.7-1.7"/></svg>
+      </button>
+      <a class="btn sm" href="#download">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
+        <span data-i18n="nav.downloadBtn">立即下载</span>
       </a>
+      <button class="burger" id="burger" aria-label="打开菜单">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+      </button>
+    </div>
+  </div>
+</header>
 
-      <nav class="header-nav" data-header-nav>
-        <a class="nav-link" href="index.html" data-i18n="nav.home">Home</a>
-        <a class="nav-link" href="user/quick-start.html" data-i18n="nav.user">User Guide</a>
-        <a class="nav-link" href="dev/build.html" data-i18n="nav.dev">Developer Guide</a>
-        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
-          <span data-i18n="nav.github">GitHub</span>
+<main>
+<!-- ============ HERO ============ -->
+<section class="hero" id="home">
+  <div class="hero-band"></div>
+  <div class="hero-stripe"></div>
+  <div class="hero-stripe s2"></div>
+  <div class="wrap hero-in">
+    <div class="hero-copy">
+      <div class="chips reveal">
+        <span class="chip y"><span class="dotp"></span>VERSION 1.0.6「SoulX-Singer」</span>
+        <span class="chip b">ONNX Runtime · DirectML</span>
+      </div>
+      <h1 class="reveal" style="--d:.08s" data-i18n-html="hero.title">让每个音符，<br>都为你<em>歌唱</em>。</h1>
+      <p class="hero-p reveal" style="--d:.16s" data-i18n-html="hero.desc"><b>SXSEditor</b> 是一款开源的 AI 歌声合成（SVS）桌面应用——基于 SoulX-Singer 神经模型 × ONNX Runtime 推理 × DirectML GPU 加速，从 MIDI 音符与歌词到完整歌声，一个软件走完全部流程。</p>
+      <div class="hero-btns reveal" style="--d:.24s">
+        <a class="btn" href="#download">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
+          <span data-i18n-html="hero.dlBtn">免费下载 v1.0.6</span>
         </a>
-      </nav>
-
-      <div class="header-actions">
-        <div class="lang-switcher" role="group" aria-label="Language">
-          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
-          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
-        </div>
-        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
-          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
-          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
-        </button>
-        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
-        </button>
-      </div>
-    </div>
-  </header>
-
-  <!-- ===== Hero ===== -->
-  <section class="hero">
-    <div class="hero-glow"></div>
-    <div class="hero-grid">
-      <div class="fade-in">
-        <span class="hero-badge"><span class="dot"></span><span data-lang="en">Open Source · ONNX Runtime · DirectML</span><span data-lang="zh">开源 · ONNX Runtime · DirectML</span></span>
-        <h1>
-          <span data-lang="en">AI Singing Voice Synthesis</span>
-          <span data-lang="zh">AI 歌声合成工作台</span>
-          <br /><span class="gradient-text" data-lang="en">Workstation</span><span class="gradient-text" data-lang="zh">工作站</span>
-        </h1>
-        <p class="hero-desc" data-lang="en">SXSEditor is an open-source desktop application that turns MIDI notes and lyrics into singing voice. Powered by the SoulX-Singer neural model on ONNX Runtime with DirectML GPU, WebNN NPU/GPU, and CPU support.</p>
-        <p class="hero-desc" data-lang="zh">SXSEditor 是一款开源桌面应用，将 MIDI 音符与歌词转化为歌声。基于 SoulX-Singer 神经模型，运行在 ONNX Runtime 之上，支持 DirectML GPU、WebNN NPU/GPU 与 CPU 推理。</p>
-        <div class="hero-cta">
-          <a class="btn-primary" href="#download">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
-            <span data-lang="en">Download</span><span data-lang="zh">下载</span>
-          </a>
-          <a class="btn-ghost" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
-            GitHub
-          </a>
-          <a class="btn-ghost" href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M12 22V12M3 7l9 5 9-5"/></svg>
-            <span data-lang="en">GitCode Mirror</span><span data-lang="zh">GitCode 镜像</span>
-          </a>
-        </div>
-        <div class="hero-stats">
-          <span class="stat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg> <span data-lang="en">English & Chinese</span><span data-lang="zh">英语与中文</span></span>
-          <span class="stat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg> <span data-lang="en">MIT License</span><span data-lang="zh">MIT 许可证</span></span>
-          <span class="stat"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg> <span data-lang="en">Windows · macOS · Linux</span><span data-lang="zh">Windows · macOS · Linux</span></span>
-        </div>
-      </div>
-      <div class="fade-in">
-        <img class="hero-img" src="images/new_fragment.png" alt="SXSEditor main interface" loading="lazy" />
-      </div>
-    </div>
-  </section>
-
-  <!-- ===== Features ===== -->
-  <section class="section" id="features">
-    <div class="section-head fade-in">
-      <h2 data-lang="en">Features</h2>
-      <h2 data-lang="zh">核心功能</h2>
-      <p class="subtitle" data-lang="en">Everything you need to turn a melody into a sung performance.</p>
-      <p class="subtitle" data-lang="zh">将旋律变为演唱所需的一切能力。</p>
-    </div>
-    <div class="features-grid">
-      <div class="card hoverable feature-card fade-in">
-        <div class="icon-circle"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div>
-        <h3 data-lang="en">Piano Roll Editor</h3>
-        <h3 data-lang="zh">钢琴卷帘编辑器</h3>
-        <p data-lang="en">Notes, lyrics, pitch curves, volume/pan envelopes, and phoneme-level editing.</p>
-        <p data-lang="zh">音符、歌词、音高曲线、音量/声像包络，以及音素级编辑。</p>
-      </div>
-      <div class="card hoverable feature-card fade-in">
-        <div class="icon-circle"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12c0-5 4-9 9-9s9 4 9 9-4 9-9 9"/><path d="M3 12c0 5 4 9 9 9"/><path d="M8 12h8M12 8v8"/></svg></div>
-        <h3 data-lang="en">Singer Creation</h3>
-        <h3 data-lang="zh">歌手创建</h3>
-        <p data-lang="en">Build a custom singer from a 30-second pure-vocal reference — F0 and MIDI extracted automatically.</p>
-        <p data-lang="zh">从 30 秒纯人声样本构建专属歌手，自动提取 F0 与 MIDI。</p>
-      </div>
-      <div class="card hoverable feature-card fade-in">
-        <div class="icon-circle"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2L3 14h9l-1 8 10-12h-9z"/></svg></div>
-        <h3 data-lang="en">GPU Acceleration</h3>
-        <h3 data-lang="zh">GPU 加速</h3>
-        <p data-lang="en">DirectML (NVIDIA / AMD / Intel), WebNN NPU, and CPU fallback — all in one binary.</p>
-        <p data-lang="zh">DirectML（NVIDIA / AMD / Intel）、WebNN NPU 与 CPU 回退，单一二进制全支持。</p>
-      </div>
-      <div class="card hoverable feature-card fade-in">
-        <div class="icon-circle"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h10M4 17h7"/></svg></div>
-        <h3 data-lang="en">Multi-precision Models</h3>
-        <h3 data-lang="zh">多精度模型</h3>
-        <p data-lang="en">FP32 (recommended), FP16, and INT8 precisions coexist — switch without re-downloading.</p>
-        <p data-lang="zh">FP32（推荐）、FP16、INT8 多精度共存，切换无需重新下载。</p>
-      </div>
-      <div class="card hoverable feature-card fade-in">
-        <div class="icon-circle"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M3 12h18"/><circle cx="12" cy="12" r="9"/></svg></div>
-        <h3 data-lang="en">Audio to MIDI</h3>
-        <h3 data-lang="zh">音频转 MIDI</h3>
-        <p data-lang="en">Convert existing audio files into MIDI notes with optional F0 pitch curve extraction.</p>
-        <p data-lang="zh">将现有音频转换为 MIDI 音符，可选同时提取 F0 音高曲线。</p>
-      </div>
-      <div class="card hoverable feature-card fade-in">
-        <div class="icon-circle"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16v16H4z"/><path d="M4 9h16M9 4v16"/></svg></div>
-        <h3 data-lang="en">Project & Resource Manager</h3>
-        <h3 data-lang="zh">项目与资源管理</h3>
-        <p data-lang="en">Self-contained .sxsproj files, embeddable .sxssinger files, and a resource manager for assets.</p>
-        <p data-lang="zh">自包含的 .sxsproj 文件、可嵌入的 .sxssinger 文件，以及资源管理器。</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- ===== Download ===== -->
-  <section class="section" id="download" style="background: var(--bg-secondary);">
-    <div class="download-card fade-in">
-      <h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem;" data-lang="en">Download</h2>
-      <h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 0.5rem;" data-lang="zh">下载</h2>
-      <p class="subtitle" data-lang="en">Windows installer (models auto-download on first launch). macOS / Linux: build from source.</p>
-      <p class="subtitle" data-lang="zh">Windows 安装包（首次启动时自动下载模型）。macOS / Linux：请从源码构建。</p>
-      <div class="download-btns">
-        <a class="dl-btn dl-btn-github" href="https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe" target="_blank" rel="noopener">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
-          <span data-lang="en">GitHub Release</span><span data-lang="zh">GitHub 发布</span>
-        </a>
-        <a class="dl-btn dl-btn-gitcode" href="https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe" target="_blank" rel="noopener">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M12 22V12M3 7l9 5 9-5"/></svg>
-          <span data-lang="en">GitCode Mirror</span><span data-lang="zh">GitCode 镜像</span>
-          <span class="dl-badge-cn" data-lang="en">CN</span>
+        <a class="btn ghost" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="hero.srcBtn">查看源码</span>
         </a>
       </div>
-      <div class="dl-info">
-        <a href="https://github.com/Henley04/SXSEditor/releases/latest" target="_blank" rel="noopener" style="color: var(--accent);"><span data-lang="en">Latest Release</span><span data-lang="zh">最新版本</span> →</a>
-        <span><span class="label" data-lang="en">Platform:</span><span class="label" data-lang="zh">平台：</span> Windows x64</span>
-        <span><span class="label" data-lang="en">License:</span><span class="label" data-lang="zh">许可证：</span> MIT</span>
+      <p class="hero-note reveal" style="--d:.3s" data-i18n-html="hero.note">支持 <i>Windows · macOS · Linux</i> ｜ MIT 开源协议 ｜ 三语合成：中 · 英 · 日</p>
+      <div class="stats reveal" style="--d:.36s">
+        <div class="stat"><b class="num" data-count="3" data-suffix="">0</b><span data-i18n="stat.lang">合成语言</span></div>
+        <div class="stat"><b class="num" data-count="3" data-suffix="">0</b><span data-i18n="stat.prec">模型精度</span></div>
+        <div class="stat"><b class="num" data-count="6" data-suffix="x">0</b><span data-i18n="stat.gpu">GPU 加速比</span></div>
       </div>
-      <p class="muted" style="margin-top: 1rem; font-size: 0.85rem;" data-lang="en">GitCode mirror is recommended for users in mainland China for faster download speeds.</p>
-      <p class="muted" style="margin-top: 1rem; font-size: 0.85rem;" data-lang="zh">中国大陆用户推荐使用 GitCode 镜像以获得更快的下载速度。</p>
     </div>
-  </section>
 
-  <!-- ===== About ===== -->
-  <section class="section" id="about">
-    <div class="about-card fade-in">
-      <h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 1.5rem;" data-lang="en">About SXSEditor</h2>
-      <h2 style="font-size: 2rem; font-weight: 700; margin-bottom: 1.5rem;" data-lang="zh">关于 SXSEditor</h2>
+    <div class="hero-vis reveal" style="--d:.2s">
+      <div class="halo"></div>
+      <span class="deco d-star1"><svg width="46" height="46" viewBox="0 0 24 24"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" fill="var(--yellow)" stroke="var(--hard-solid)" stroke-width="1"/></svg></span>
+      <span class="deco d-star2"><svg width="26" height="26" viewBox="0 0 24 24"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" fill="var(--blue)"/></svg></span>
+      <span class="deco d-plus1"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M12 4v16M4 12h16"/></svg></span>
+      <span class="deco d-plus2"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="M12 4v16M4 12h16"/></svg></span>
 
-      <div class="about-block">
-        <h3 data-lang="en">What is it?</h3>
-        <h3 data-lang="zh">它是什么？</h3>
-        <p data-lang="en">SXSEditor is an open-source desktop application for singing voice synthesis (SVS). You create MIDI notes with lyrics on a piano-roll editor, and the application synthesizes singing voice audio using the SoulX-Singer neural model running on ONNX Runtime. Supported singing languages: <strong>English</strong> and <strong>Chinese (Mandarin)</strong>. Japanese is in development.</p>
-        <p data-lang="zh">SXSEditor 是一款用于歌声合成（SVS）的开源桌面应用。您在钢琴卷帘编辑器中创建带歌词的 MIDI 音符，应用通过运行在 ONNX Runtime 上的 SoulX-Singer 神经模型合成歌声。支持的演唱语言：<strong>英语</strong>与<strong>中文（普通话）</strong>。日语开发中。</p>
-      </div>
-
-      <div class="about-block">
-        <h3 data-lang="en">Tech Stack</h3>
-        <h3 data-lang="zh">技术栈</h3>
-        <div class="tech-tags">
-          <span class="tech-tag">Electron 42</span>
-          <span class="tech-tag">ONNX Runtime 1.27</span>
-          <span class="tech-tag">DirectML</span>
-          <span class="tech-tag">WebNN</span>
-          <span class="tech-tag">TensorFlow.js</span>
-          <span class="tech-tag">pinyin-pro</span>
+      <div class="char-win">
+        <div class="char-head">SXSEditor // FRAGMENT EDITOR <span class="stars">v1.0.6</span></div>
+        <div class="char-img">
+          <img src="images/new_fragment.png" alt="SXSEditor 片段编辑器界面" width="460" height="515">
+        </div>
+        <div class="char-foot">
+          <span class="tagc hot" data-i18n="hero.tag1">实时合成</span>
+          <span class="tagc" data-i18n="hero.tag2">音域 C2 – G5</span>
+          <span class="tagc" data-i18n="hero.tag3">中 · 英 · 日 跨语种</span>
         </div>
       </div>
 
-      <div class="about-block">
-        <h3 data-lang="en">Attention</h3>
-        <h3 data-lang="zh">注意</h3>
-        <p data-lang="en">SXSEditor is under active development. Model precision, features, quality, and performance may change rapidly between releases.</p>
-        <p data-lang="zh">SXSEditor 正在积极开发中。模型精度、功能、质量与性能可能在版本间快速变化。</p>
+      <div class="hud hud-a">
+        <div class="hud-h"><span class="live"></span><span data-i18n="hero.hud1">ONNX Runtime 推理</span></div>
+        <div class="hud-bd">
+          <div class="spec" id="spec" aria-hidden="true"></div>
+          <div class="hud-meta"><span data-i18n="hero.hud1meta">DirectML · GPU</span><b data-i18n="hero.hud1val">6x 加速</b></div>
+        </div>
+      </div>
+
+      <div class="hud hud-b" id="hudB">
+        <div class="hud-h">DEMO TRACK — demo.sxsproj</div>
+        <div class="hud-bd">
+          <div class="roll" id="heroRoll" style="height:112px" aria-hidden="true"></div>
+          <div class="play-row">
+            <button class="play-btn" id="playBtn" aria-pressed="false"></button>
+            <span class="bpm">♩ = 132</span>
+          </div>
+        </div>
       </div>
     </div>
-  </section>
+  </div>
+</section>
 
-  <!-- ===== Docs Landing ===== -->
-  <section class="section" id="docs" style="background: var(--bg-secondary);">
-    <div class="section-head fade-in">
-      <h2 data-lang="en">Documentation</h2>
-      <h2 data-lang="zh">文档</h2>
-      <p class="subtitle" data-lang="en">Pick a track to get started.</p>
-      <p class="subtitle" data-lang="zh">选择一个方向开始。</p>
+<!-- ============ 核心功能 ============ -->
+<section class="sec features" id="features">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="sec-tag">FEATURE</span>
+      <h2 data-i18n="feat.title">核心功能</h2>
+      <span class="sec-sub" data-i18n="feat.sub">为歌声合成而生的创作工作台</span>
+      <i class="sec-line"></i>
     </div>
-    <div class="docs-landing-grid">
-      <a class="card hoverable landing-card fade-in" href="user/quick-start.html">
-        <div class="icon-circle"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
-        <h3 data-lang="en">User Guide</h3>
-        <h3 data-lang="zh">用户指南</h3>
-        <p data-lang="en">Install, create singers, edit fragments, synthesize, and export your first song.</p>
-        <p data-lang="zh">安装、创建歌手、编辑片段、合成并导出您的第一首作品。</p>
-        <span class="text-accent" data-i18n="docs.start">Get started →</span>
-      </a>
-      <a class="card hoverable landing-card fade-in" href="dev/build.html">
-        <div class="icon-circle"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></svg></div>
-        <h3 data-lang="en">Developer Guide</h3>
-        <h3 data-lang="zh">开发者指南</h3>
-        <p data-lang="en">Architecture, build from source, ONNX models, inference pipeline, and testing.</p>
-        <p data-lang="zh">架构、源码构建、ONNX 模型、推理管线与测试。</p>
-        <span class="text-accent" data-i18n="docs.start">Get started →</span>
-      </a>
-    </div>
-  </section>
 
-  <!-- ===== Footer ===== -->
-  <footer class="site-footer">
-    <div class="footer-inner">
-      <div class="footer-links">
-        <a href="index.html" data-i18n="footer.docs">Documentation</a>
-        <a href="user/faq.html" data-i18n="footer.help">Help & FAQ</a>
-        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
-        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
-        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+    <div class="f-grid">
+      <article class="f-card f-a reveal">
+        <span class="f-idx">01</span>
+        <div class="f-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 12h3l2.5-7 4 14 2.5-7h6"/></svg></div>
+        <h3 data-i18n="feat.f1.h">SoulX-Singer 神经合成</h3>
+        <p data-i18n="feat.f1.p">深度学习歌声合成模型，运行于 ONNX Runtime 之上。DirectML GPU 加速将声码器推理速度提升 6 倍，mel 频谱前端信噪比从 49.86 dB 提升到 83.54 dB。中英日三语跨语种合成，同一模型自由演唱多语言曲目。</p>
+        <div class="f-tags">
+          <span class="tagc hot" data-i18n="feat.f1.t1">AI 声线</span><span class="tagc" data-i18n="feat.f1.t2">跨语种合成</span><span class="tagc" data-i18n="feat.f1.t3">ONNX opset 20</span>
+        </div>
+        <div class="scope-box" style="margin-top:18px"><canvas id="scope"></canvas></div>
+        <div class="f-mini-stats">
+          <div><b>6x</b><span data-i18n="feat.f1.s1">GPU 加速比</span></div>
+          <div><b>83dB</b><span data-i18n="feat.f1.s2">mel SNR</span></div>
+          <div><b>W16A32</b><span data-i18n="feat.f1.s3">量化精度</span></div>
+        </div>
+      </article>
+
+      <article class="f-card f-b reveal" style="--d:.08s">
+        <span class="f-idx">02</span>
+        <div class="f-ic y"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="1"/><path d="M8 4v9M13 4v9M18 4v9" stroke-width="1.6"/></svg></div>
+        <h3 data-i18n="feat.f2.h">钢琴卷帘编辑器</h3>
+        <p data-i18n="feat.f2.p">音符、歌词、音高曲线、音量/声像包络，以及音素级边界编辑。所画即所听，参数修改即时反馈。</p>
+        <div class="roll f-roll" id="featRoll"></div>
+        <div class="f-tags"><span class="tagc" data-i18n="feat.f2.t1">音高笔刷</span><span class="tagc" data-i18n="feat.f2.t2">MIDI 导入</span><span class="tagc" data-i18n="feat.f2.t3">音素边界</span></div>
+      </article>
+
+      <article class="f-card f-c reveal" style="--d:.14s">
+        <span class="f-idx">03</span>
+        <div class="f-ic c"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h13"/><circle cx="19" cy="16.5" r="2.4"/></svg></div>
+        <h3 data-i18n="feat.f3.h">多语种咬字对齐</h3>
+        <p data-i18n="feat.f3.p">输入歌词自动切分音节，中文拼音 / 英文音素 / 日文假名智能标注，逐字对齐到毫秒级。</p>
+        <div class="lyr">
+          <span class="w"><b data-i18n="feat.f3.l1">星</b><i>xīng</i></span>
+          <span class="w"><b data-i18n="feat.f3.l2">辉</b><i>huī</i></span>
+          <span class="w"><b data-i18n="feat.f3.l3">穹</b><i>qióng</i></span>
+          <span class="w"><b data-i18n="feat.f3.l4">响</b><i>xiǎng</i></span>
+        </div>
+        <div class="f-tags"><span class="tagc" data-i18n="feat.f3.t1">自动注音</span><span class="tagc" data-i18n="feat.f3.t2">汉字假名分组</span></div>
+      </article>
+
+      <article class="f-card f-d reveal" style="--d:.1s">
+        <span class="f-idx">04</span>
+        <div class="f-ic n"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 4v16M12 4v16M19 4v16"/><circle cx="5" cy="14" r="2" fill="currentColor"/><circle cx="12" cy="9" r="2" fill="currentColor"/><circle cx="19" cy="16" r="2" fill="currentColor"/></svg></div>
+        <h3 data-i18n="feat.f4.h">多精度模型共存</h3>
+        <p data-i18n="feat.f4.p">FP32（推荐）/ FP16 / INT8 / INT8-NPU 多精度模型共存，切换无需重新下载。W16A32 量化在降低显存占用的同时接近 FP32 质量。</p>
+        <div class="faders"><span class="fader"><i></i></span><span class="fader"><i></i></span><span class="fader"><i></i></span><span class="fader"><i></i></span></div>
+        <div class="f-tags"><span class="tagc">FP32</span><span class="tagc">FP16</span><span class="tagc">INT8</span></div>
+      </article>
+
+      <article class="f-card f-e reveal" style="--d:.16s">
+        <span class="f-idx">05</span>
+        <div class="f-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v6M15 3v6M7 9h10v4a5 5 0 0 1-10 0zM12 18v3"/></svg></div>
+        <h3 data-i18n="feat.f5.h">多后端推理</h3>
+        <p data-i18n="feat.f5.p">单一二进制支持 DirectML GPU、WebNN NPU/GPU 与 CPU 回退，自动选择最优后端。</p>
+        <div class="plug-chips"><span>DirectML</span><span>WebNN</span><span>NPU</span><span>CPU</span></div>
+      </article>
+
+      <article class="f-card f-f reveal" style="--d:.22s">
+        <span class="f-idx">06</span>
+        <div class="f-ic y"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 18a4.5 4.5 0 0 1-.4-9A6 6 0 0 1 17.4 10 3.8 3.8 0 0 1 17 18z"/></svg></div>
+        <h3 data-i18n="feat.f6.h">音频转 MIDI</h3>
+        <p data-i18n="feat.f6.p">basic_pitch 模型将现有音频转换为 MIDI 音符，可选同时提取 F0 音高曲线。</p>
+        <div class="sync-bar"><div class="sync-fill"></div></div>
+        <span class="sync-t" data-i18n="feat.f6.t">F0 / MIDI 自动提取</span>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 工作流（已注释） ============
+<section class="sec voices" id="workflow">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="sec-tag">WORKFLOW</span>
+      <h2>创作工作流</h2>
+      <span class="sec-sub">从样本到歌声，SXSEditor 全流程覆盖</span>
+      <i class="sec-line"></i>
+    </div>
+
+    <div class="v-filters reveal">
+      <button class="vf act" data-f="all">全部</button>
+      <button class="vf" data-f="cn">中文</button>
+      <button class="vf" data-f="jp">日文</button>
+      <button class="vf" data-f="en">英文</button>
+      <button class="vf" data-f="f">女声</button>
+      <button class="vf" data-f="m">男声</button>
+    </div>
+
+    <div class="v-grid">
+      <div class="v-feat reveal">
+        <article class="v-card" data-lang="cn" data-gender="f">
+          <div class="v-img">
+            <img src="images/singercreator.png" alt="歌手创建器界面" loading="lazy">
+            <span class="v-rar">CORE</span><span class="v-lang">中文</span>
+          </div>
+          <div class="v-body">
+            <div class="v-stars">★★★★★</div>
+            <h3>歌手创建 <i>SINGER CREATOR</i></h3>
+            <p class="v-desc">从 30 秒纯人声样本构建专属歌手，自动提取 F0 与 MIDI 特征，无需预录声库即录即用。支持音域、音色、发声风格的全参数定制。</p>
+            <div class="v-tags"><span>F0 提取</span><span>MIDI 自动</span><span>30s 样本</span><span>专属音色</span></div>
+            <div class="v-act">
+              <button class="pri" data-freq="523.25">▶ 试听声线</button>
+              <a href="user/singer-creation.html" style="flex:1"><button>查看教程</button></a>
+            </div>
+          </div>
+        </article>
       </div>
-      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+
+      <div class="v-main">
+        <article class="v-card reveal" style="--d:.08s" data-lang="cn" data-gender="f">
+          <div class="v-img">
+            <img src="images/new_fragment.png" alt="片段编辑器界面" loading="lazy">
+            <span class="v-rar">SSR</span><span class="v-lang">中文</span>
+          </div>
+          <div class="v-body">
+            <div class="v-stars">★★★★★</div>
+            <h3>片段编辑 <i>FRAGMENT EDITOR</i></h3>
+            <p class="v-meta">钢琴卷帘 · 音高曲线 · 音素边界</p>
+            <div class="v-tags"><span>音符</span><span>歌词</span></div>
+            <div class="v-act">
+              <button class="pri" data-freq="659.25">▶ 试听</button>
+              <a href="user/fragment-editor.html" style="flex:1"><button>详情</button></a>
+            </div>
+          </div>
+        </article>
+
+        <article class="v-card reveal" style="--d:.14s" data-lang="jp" data-gender="f">
+          <div class="v-img">
+            <img src="images/singerpreprocess.png" alt="音频预处理界面" loading="lazy">
+            <span class="v-rar sr">SR</span><span class="v-lang">日文</span>
+          </div>
+          <div class="v-body">
+            <div class="v-stars">★★★★☆</div>
+            <h3>音频预处理 <i>PREPROCESS</i></h3>
+            <p class="v-meta">F0 提取 · MIDI 检测 · 降噪</p>
+            <div class="v-tags"><span>basic_pitch</span><span>RMVPE</span></div>
+            <div class="v-act">
+              <button class="pri" data-freq="440">▶ 试听</button>
+              <a href="user/quick-start.html" style="flex:1"><button>详情</button></a>
+            </div>
+          </div>
+        </article>
+
+        <article class="v-card reveal" style="--d:.2s" data-lang="en" data-gender="f">
+          <div class="v-img">
+            <img src="images/mainpage.png" alt="主工作台界面" loading="lazy">
+            <span class="v-rar sr">SR</span><span class="v-lang">英文</span>
+          </div>
+          <div class="v-body">
+            <div class="v-stars">★★★★☆</div>
+            <h3>主工作台 <i>WORKSPACE</i></h3>
+            <p class="v-meta">多轨工程 · 项目管理 · 导出</p>
+            <div class="v-tags"><span>.sxsproj</span><span>多轨</span></div>
+            <div class="v-act">
+              <button class="pri" data-freq="392">▶ 试听</button>
+              <a href="user/synthesis-export.html" style="flex:1"><button>详情</button></a>
+            </div>
+          </div>
+        </article>
+      </div>
     </div>
-  </footer>
 
-  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
-  </button>
+    <div class="v-more reveal">
+      <a class="btn ghost" href="user/quick-start.html">查阅完整用户文档 →</a>
+    </div>
+  </div>
+</section>
+-->
 
-  <script src="js/i18n.js"></script>
-  <script src="js/layout.js"></script>
+<!-- ============ 创作工作流（暂未上线） ============ -->
+
+<!-- ============ 版本情报 ============ -->
+<section class="sec" id="news">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="sec-tag">NEWS</span>
+      <h2 data-i18n="news.title">版本情报</h2>
+      <span class="sec-sub" data-i18n="news.sub">应用公告 · 模型更新 · 缺陷修复</span>
+      <i class="sec-line"></i>
+    </div>
+
+    <div class="news-grid">
+      <div class="news-l reveal">
+        <div class="n-tabs" role="tablist">
+          <button class="nt act" data-t="all" data-i18n="news.tab.all">全部</button>
+          <button class="nt" data-t="notice" data-i18n="news.tab.notice">公告</button>
+          <button class="nt" data-t="event" data-i18n="news.tab.event">活动</button>
+          <button class="nt" data-t="patch" data-i18n="news.tab.patch">更新</button>
+        </div>
+        <div class="n-list">
+          <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>07-18</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n1">v1.0.6 发布：模型下载百分比溢出修复</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>06-20</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n2">v1.0.5 发布：日语实验性支持 · 汉字假名分组</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>06-12</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n3">模型 v1：DirectML GPU 重优化，推理速度 6 倍提升</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>06-08</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n4">SiFiGAN 声码器选项上线 · mel SNR 提升至 83.54 dB</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>05-30</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n5">应用内更新检查器上线：应用与模型双通道检测</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="event" href="https://github.com/Henley04/SXSEditor/releases" target="_blank" rel="noopener"><span class="n-date"><b>04-15</b><i>2026</i></span><span class="n-tag t-event" data-i18n="news.tag.event">活动</span><span class="n-title" data-i18n="news.n6">SXSEditor v1.0.0 正式开源 · MIT 协议发布</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>03-20</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n7">ONNX opset 升级到 20 · W16A32 量化精度方案落地</span><span class="n-arrow">→</span></a>
+        </div>
+      </div>
+
+      <aside class="news-r reveal" style="--d:.12s">
+        <div class="event-card">
+          <div class="ev-sun"></div>
+          <svg class="ev-wave" viewBox="0 0 400 56" preserveAspectRatio="none"><path d="M0 30 Q50 10 100 30 T200 30 T300 30 T400 30 V56 H0 Z" fill="#fff"/><path d="M0 44 Q50 26 100 44 T200 44 T300 44 T400 44 V56 H0 Z" fill="#fff" opacity=".7"/></svg>
+          <span class="ev-tag">OPEN SOURCE 2026</span>
+          <h3 data-i18n-html="news.ev.title"> SXSEditor<br> v1.0.6 已发布</h3>
+          <p class="ev-p" data-i18n="news.ev.desc">MIT 开源协议 · 个人创作永久免费 · 三语合成 · 多精度模型 · DirectML GPU 加速。立即下载体验。</p>
+          <div class="cd" id="cd" aria-label="版本发布信息">
+            <div><b class="num">1.0</b><span data-i18n="news.ev.maj">主版本</span></div>
+            <div><b class="num">6</b><span data-i18n="news.ev.min">修订号</span></div>
+            <div><b class="num">3</b><span data-i18n="news.ev.lang">语言</span></div>
+            <div><b class="num">MIT</b><span data-i18n="news.ev.lic">协议</span></div>
+          </div>
+          <a class="btn" href="#download" style="position:relative"><span data-i18n="news.ev.btn">立即下载体验</span></a>
+          <p class="ev-num" data-i18n-html="news.ev.mirror">已发布到 <b>GitHub</b> 与 <b>GitCode</b> 镜像</p>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 下载 ============ -->
+<section class="sec download" id="download">
+  <div class="wrap">
+    <div class="sec-head reveal">
+      <span class="sec-tag">DOWNLOAD</span>
+      <h2 data-i18n="dl.title">获取 SXSEditor</h2>
+      <span class="sec-sub" data-i18n="dl.sub">MIT 开源 · 个人创作永久免费 · 模型首次启动自动下载</span>
+      <i class="sec-line"></i>
+    </div>
+
+    <div class="dl-grid">
+      <div class="dl-card dl-win reveal">
+        <span class="dl-badge" data-i18n="dl.win.badge">推荐平台</span>
+        <div class="dl-os">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.5L10.5 4.4v7.1H3zM11.5 4.2L21 3v8.5h-9.5zM3 12.5h7.5v7.1L3 18.5zM11.5 12.5H21V21l-9.5-1.3z"/></svg>
+          <span><b data-i18n="dl.win.os">Windows 版</b><i>STABLE RELEASE</i></span>
+        </div>
+        <p class="dl-meta" data-i18n-html="dl.win.meta">最新版本 <b>v1.0.6</b> · 64 位安装包 · 模型按需下载</p>
+        <p class="dl-req" data-i18n="dl.win.req">系统要求：Windows 10 / 11（64 位）· 8GB 内存 · 推荐 4GB+ VRAM 独立显卡</p>
+        <a class="btn" href="https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
+          <span data-i18n="dl.win.btn">GitHub 下载安装包</span>
+        </a>
+      </div>
+
+      <div class="dl-card dl-mac reveal" style="--d:.1s">
+        <div class="dl-os">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.4 12.7c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3.1 2.4 1.2 0 1.7-.8 3.2-.8s1.9.8 3.2.8c1.3 0 2.2-1.2 3-2.4.9-1.4 1.3-2.7 1.3-2.8-.1 0-2.6-1-2.7-3.9zM14 5.6c.7-.8 1.1-1.9 1-3.1-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.6 2.8-1.4z"/></svg>
+          <span><b data-i18n="dl.mac.os">GitCode 镜像</b><i>CN MIRROR</i></span>
+        </div>
+        <p class="dl-meta" data-i18n-html="dl.mac.meta">最新版本 <b>v1.0.6</b> · 中国大陆加速</p>
+        <p class="dl-req" data-i18n="dl.mac.req">适用于 GitHub 下载缓慢的中国大陆用户，文件与 GitHub 发布版完全一致。</p>
+        <a class="btn ghost" href="https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe" target="_blank" rel="noopener"><span data-i18n="dl.mac.btn">GitCode 镜像下载</span></a>
+      </div>
+
+      <div class="dl-card dl-linux reveal" style="--d:.18s">
+        <div class="dl-os">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c-2.8 0-4.6 2.2-4.6 5.2 0 1.9-.6 3.3-1.4 4.5-1 1.5-2.3 2.9-2.3 4.8 0 1.5 1 2.6 2.2 3.1-.1.4-.1.8 0 1.2.2 1 1.1 1.7 2.2 1.7.9 0 1.6-.4 2.2-1 .7.6 1.4 1 2.2 1h3c.8 0 1.5-.4 2.2-1 .6.6 1.3 1 2.2 1 1.1 0 2-.7 2.2-1.7.1-.4.1-.8 0-1.2 1.2-.5 2.2-1.6 2.2-3.1 0-1.9-1.3-3.3-2.3-4.8-.8-1.2-1.4-2.6-1.4-4.5C16.6 4.2 14.8 2 12 2z"/></svg>
+          <span><b data-i18n="dl.lnx.os">源码构建</b><i>MACOS · LINUX</i></span>
+        </div>
+        <p class="dl-meta" data-i18n-html="dl.lnx.meta">仓库：<b>github.com/Henley04/SXSEditor</b></p>
+        <p class="dl-req" data-i18n="dl.lnx.req">macOS / Linux 用户请克隆仓库从源码构建。需 Node.js 与 Electron Forge。</p>
+        <a class="btn ghost" href="dev/build.html" target="_blank" rel="noopener"><span data-i18n="dl.lnx.btn">查看构建指南</span></a>
+      </div>
+    </div>
+
+    <div class="dl-foot reveal">
+      <span data-i18n="dl.foot.note">历史版本与发布说明详见 GitHub Releases</span>
+      <a href="https://github.com/Henley04/SXSEditor/releases" target="_blank" rel="noopener" data-i18n="dl.foot.link">查看历史版本 →</a>
+    </div>
+
+    <div class="changelog reveal">
+      <h3 class="cl-h" data-i18n="dl.cl.title">更新日志</h3>
+      <div class="acc open">
+        <button class="acc-h"><span class="v">v1.0.6</span> <span data-i18n="dl.cl.v106">稳定性更新</span><span class="d">2026-07-18</span><span class="pm">+</span></button>
+        <div class="acc-b"><ul>
+          <li class="hot" data-i18n="dl.cl.v106.l1">修复模型下载百分比溢出——进度百分比现在限制在 [0, 100] 范围内</li>
+          <li class="hot" data-i18n="dl.cl.v106.l2">修复远程文件大小检测不准确——改用 Range 请求通过 Content-Range 头返回正确文件大小</li>
+          <li data-i18n="dl.cl.v106.l3">修复 formatBytes 浮点精度误差导致的文件大小显示异常</li>
+          <li data-i18n="dl.cl.v106.l4">修复 SiFiGAN 下载进度每个文件重置为 0——进度现在在下载批次的所有文件中累计</li>
+        </ul></div>
+      </div>
+      <div class="acc">
+        <button class="acc-h"><span class="v">v1.0.5</span> <span data-i18n="dl.cl.v105">日语实验性支持</span><span class="d">2026-06-20</span><span class="pm">+</span></button>
+        <div class="acc-b"><ul>
+          <li class="hot" data-i18n="dl.cl.v105.l1">实验性日语支持——汉字假名自动分组、混合音素模式（ら行 L / お段 AO）</li>
+          <li class="hot" data-i18n="dl.cl.v105.l2">片段选择与删除——点击选中、Delete 键或右键菜单删除</li>
+          <li data-i18n="dl.cl.v105.l3">ACG 默认主题与界面重构</li>
+          <li data-i18n="dl.cl.v105.l4">右键音高平滑度控制——逐锚点调整平滑强度</li>
+          <li data-i18n="dl.cl.v105.l5">带精度选择的导出对话框</li>
+          <li data-i18n="dl.cl.v105.l6">应用内更新检查器：应用与模型双通道检测，24 小时至多自动检查一次</li>
+          <li data-i18n="dl.cl.v105.l7">按精度模型版本追踪——切换精度不再使无关缓存条目失效</li>
+          <li data-i18n="dl.cl.v105.l8">动画自定义复选框、窗口弹出动效</li>
+        </ul></div>
+      </div>
+      <div class="acc">
+        <button class="acc-h"><span class="v">v1.0.0</span> <span data-i18n="dl.cl.v100">正式开源发布</span><span class="d">2026-04-15</span><span class="pm">+</span></button>
+        <div class="acc-b"><ul>
+          <li class="hot" data-i18n="dl.cl.v100.l1">SXSEditor 正式开源，MIT 协议发布</li>
+          <li data-i18n="dl.cl.v100.l2">基于 SoulX-Singer 神经模型，ONNX Runtime 推理</li>
+          <li data-i18n="dl.cl.v100.l3">DirectML GPU / WebNN NPU / CPU 三后端共存</li>
+          <li data-i18n="dl.cl.v100.l4">钢琴卷帘编辑器：音符、歌词、音高曲线、音素级编辑</li>
+          <li data-i18n="dl.cl.v100.l5">歌手创建：30 秒纯人声样本构建专属歌手</li>
+        </ul></div>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ============ 页脚 ============ -->
+<footer>
+  <div class="wrap">
+    <div class="ft-grid">
+      <div class="ft-logo">
+        <b><svg viewBox="0 0 24 24"><path d="M12 2l2.4 7.2L22 12l-7.6 2.8L12 22l-2.4-7.2L2 12l7.6-2.8z" fill="var(--yellow)"/></svg>SXSEditor</b>
+        <p data-i18n="ft.desc">开源 AI 歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经模型，让每一位创作者都能从 MIDI 与歌词唤醒属于自己的歌声。</p>
+        <div class="socials">
+          <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" aria-label="GitHub"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg></a>
+          <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" aria-label="GitCode 镜像"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M12 22V12M3 7l9 5 9-5"/></svg></a>
+          <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" aria-label="Issue 反馈"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/></svg></a>
+          <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" aria-label="项目主页"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg></a>
+        </div>
+      </div>
+      <div class="ft-col"><h4 data-i18n="ft.col.prod">产品</h4><a href="#features" data-i18n="nav.features">核心功能</a><a href="#workflow" data-i18n="nav.workflow">工作流</a><a href="#download" data-i18n="ft.downloadCenter">下载中心</a><a href="user/app-updates.html" data-i18n="ft.appUpdate">应用更新</a><a href="user/model-updates.html" data-i18n="ft.modelUpdate">模型更新</a></div>
+      <div class="ft-col"><h4 data-i18n="ft.col.docs">文档</h4><a href="user/quick-start.html" data-i18n="ft.quickStart">快速开始</a><a href="user/fragment-editor.html" data-i18n="ft.fragEditor">片段编辑器</a><a href="user/singer-creation.html" data-i18n="ft.singerCreate">歌手创建</a><a href="user/synthesis-export.html" data-i18n="ft.synthExport">合成与导出</a><a href="user/faq.html" data-i18n="ft.faq">常见问题</a></div>
+      <div class="ft-col"><h4 data-i18n="ft.col.dev">开发者</h4><a href="dev/build.html" data-i18n="ft.buildGuide">构建指南</a><a href="dev/architecture.html" data-i18n="ft.arch">架构总览</a><a href="dev/onnx-models.html" data-i18n="ft.onnxModel">ONNX 模型</a><a href="dev/inference-pipeline.html" data-i18n="ft.inferPipeline">推理管线</a><a href="dev/testing-cli.html" data-i18n="ft.testingCli">测试与 CLI</a></div>
+      <div class="ft-col"><h4 data-i18n="ft.col.about">关于</h4><a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="ft.githubRepo">GitHub 仓库</a><a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="ft.gitcodeMirror">GitCode 镜像</a><a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="ft.issueFeedback">Issue 反馈</a><a href="user/uninstall.html" data-i18n="ft.uninstall">卸载说明</a></div>
+    </div>
+    <div class="ft-bot">
+      <span data-i18n="ft.copy">© 2026 SXSEditor. MIT License. SoulX-Singer · ONNX Runtime · DirectML</span>
+      <span data-i18n-html="ft.links"><a href="#">隐私政策</a> · <a href="user/faq.html">帮助中心</a> · <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">GitHub</a> · <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener">GitCode 镜像</a></span>
+    </div>
+  </div>
+</footer>
+
+<button class="totop" id="toTop" aria-label="返回顶部" data-i18n-attr="aria-label:ft.toTop">↑</button>
+
+<script>
+(function(){
+'use strict';
+
+/* ============ i18n 字典与切换 ============ */
+var I18N={
+  "zh":{
+    "meta.title":"SXSEditor — AI 歌声合成工作台",
+    "meta.desc":"SXSEditor：开源 AI 歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经模型与 ONNX Runtime，支持 DirectML GPU、WebNN NPU 与 CPU 推理。从 MIDI 与歌词到完整歌声，一站完成。",
+    "ticker.1":"✦ SXSEditor <b>v1.0.6</b> 现已发布",
+    "ticker.2":"✦ 日语实验性支持上线 · 汉字假名自动分组",
+    "ticker.3":"✦ DirectML GPU 推理速度最高提升 <b>6 倍</b>",
+    "ticker.4":"✦ 三精度模型共存：<b>FP32 / FP16 / INT8</b> 自由切换",
+    "ticker.5":"✦ 新增 SiFiGAN 声码器 · mel SNR 提升至 <b>83.54 dB</b>",
+    "nav.home":"首页","nav.features":"核心功能","nav.workflow":"工作流","nav.news":"版本情报","nav.download":"下载","nav.docs":"文档中心","nav.downloadBtn":"立即下载",
+    "hero.title":"让每个音符，<br>都为你<em>歌唱</em>。",
+    "hero.desc":"<b>SXSEditor</b> 是一款开源的 AI 歌声合成（SVS）桌面应用——基于 SoulX-Singer 神经模型 × ONNX Runtime 推理 × DirectML GPU 加速，从 MIDI 音符与歌词到完整歌声，一个软件走完全部流程。",
+    "hero.dlBtn":"免费下载 v1.0.6",
+    "hero.srcBtn":"查看源码",
+    "hero.note":"支持 <i>Windows · macOS · Linux</i> ｜ MIT 开源协议 ｜ 三语合成：中 · 英 · 日",
+    "stat.lang":"合成语言","stat.prec":"模型精度","stat.gpu":"GPU 加速比",
+    "hero.tag1":"实时合成","hero.tag2":"音域 C2 – G5","hero.tag3":"中 · 英 · 日 跨语种",
+    "hero.hud1":"ONNX Runtime 推理","hero.hud1meta":"DirectML · GPU","hero.hud1val":"6x 加速",
+    "hero.play":"试听 Demo","hero.pause":"暂停",
+    "feat.title":"核心功能","feat.sub":"为歌声合成而生的创作工作台",
+    "feat.f1.h":"SoulX-Singer 神经合成","feat.f1.p":"深度学习歌声合成模型，运行于 ONNX Runtime 之上。DirectML GPU 加速将声码器推理速度提升 6 倍，mel 频谱前端信噪比从 49.86 dB 提升到 83.54 dB。中英日三语跨语种合成，同一模型自由演唱多语言曲目。",
+    "feat.f1.t1":"AI 声线","feat.f1.t2":"跨语种合成","feat.f1.t3":"ONNX opset 20",
+    "feat.f1.s1":"GPU 加速比","feat.f1.s2":"mel SNR","feat.f1.s3":"量化精度",
+    "feat.f2.h":"钢琴卷帘编辑器","feat.f2.p":"音符、歌词、音高曲线、音量/声像包络，以及音素级边界编辑。所画即所听，参数修改即时反馈。",
+    "feat.f2.t1":"音高笔刷","feat.f2.t2":"MIDI 导入","feat.f2.t3":"音素边界",
+    "feat.f3.h":"多语种咬字对齐","feat.f3.p":"输入歌词自动切分音节，中文拼音 / 英文音素 / 日文假名智能标注，逐字对齐到毫秒级。",
+    "feat.f3.l1":"星","feat.f3.l2":"辉","feat.f3.l3":"穹","feat.f3.l4":"响",
+    "feat.f3.t1":"自动注音","feat.f3.t2":"汉字假名分组",
+    "feat.f4.h":"多精度模型共存","feat.f4.p":"FP32（推荐）/ FP16 / INT8 / INT8-NPU 多精度模型共存，切换无需重新下载。W16A32 量化在降低显存占用的同时接近 FP32 质量。",
+    "feat.f5.h":"多后端推理","feat.f5.p":"单一二进制支持 DirectML GPU、WebNN NPU/GPU 与 CPU 回退，自动选择最优后端。",
+    "feat.f6.h":"音频转 MIDI","feat.f6.p":"basic_pitch 模型将现有音频转换为 MIDI 音符，可选同时提取 F0 音高曲线。","feat.f6.t":"F0 / MIDI 自动提取",
+    "news.title":"版本情报","news.sub":"应用公告 · 模型更新 · 缺陷修复",
+    "news.tab.all":"全部","news.tab.notice":"公告","news.tab.event":"活动","news.tab.patch":"更新",
+    "news.tag.patch":"更新","news.tag.notice":"公告","news.tag.event":"活动",
+    "news.n1":"v1.0.6 发布：模型下载百分比溢出修复","news.n2":"v1.0.5 发布：日语实验性支持 · 汉字假名分组","news.n3":"模型 v1：DirectML GPU 重优化，推理速度 6 倍提升","news.n4":"SiFiGAN 声码器选项上线 · mel SNR 提升至 83.54 dB","news.n5":"应用内更新检查器上线：应用与模型双通道检测","news.n6":"SXSEditor v1.0.0 正式开源 · MIT 协议发布","news.n7":"ONNX opset 升级到 20 · W16A32 量化精度方案落地",
+    "news.ev.title":" SXSEditor<br> v1.0.6 已发布","news.ev.desc":"MIT 开源协议 · 个人创作永久免费 · 三语合成 · 多精度模型 · DirectML GPU 加速。立即下载体验。",
+    "news.ev.maj":"主版本","news.ev.min":"修订号","news.ev.lang":"语言","news.ev.lic":"协议","news.ev.btn":"立即下载体验","news.ev.mirror":"已发布到 <b>GitHub</b> 与 <b>GitCode</b> 镜像",
+    "dl.title":"获取 SXSEditor","dl.sub":"MIT 开源 · 个人创作永久免费 · 模型首次启动自动下载",
+    "dl.win.badge":"推荐平台","dl.win.os":"Windows 版","dl.win.meta":"最新版本 <b>v1.0.6</b> · 64 位安装包 · 模型按需下载","dl.win.req":"系统要求：Windows 10 / 11（64 位）· 8GB 内存 · 推荐 4GB+ VRAM 独立显卡","dl.win.btn":"GitHub 下载安装包",
+    "dl.mac.os":"GitCode 镜像","dl.mac.meta":"最新版本 <b>v1.0.6</b> · 中国大陆加速","dl.mac.req":"适用于 GitHub 下载缓慢的中国大陆用户，文件与 GitHub 发布版完全一致。","dl.mac.btn":"GitCode 镜像下载",
+    "dl.lnx.os":"源码构建","dl.lnx.meta":"仓库：<b>github.com/Henley04/SXSEditor</b>","dl.lnx.req":"macOS / Linux 用户请克隆仓库从源码构建。需 Node.js 与 Electron Forge。","dl.lnx.btn":"查看构建指南",
+    "dl.foot.note":"历史版本与发布说明详见 GitHub Releases","dl.foot.link":"查看历史版本 →",
+    "dl.cl.title":"更新日志",
+    "dl.cl.v106":"稳定性更新","dl.cl.v106.l1":"修复模型下载百分比溢出——进度百分比现在限制在 [0, 100] 范围内","dl.cl.v106.l2":"修复远程文件大小检测不准确——改用 Range 请求通过 Content-Range 头返回正确文件大小","dl.cl.v106.l3":"修复 formatBytes 浮点精度误差导致的文件大小显示异常","dl.cl.v106.l4":"修复 SiFiGAN 下载进度每个文件重置为 0——进度现在在下载批次的所有文件中累计",
+    "dl.cl.v105":"日语实验性支持","dl.cl.v105.l1":"实验性日语支持——汉字假名自动分组、混合音素模式（ら行 L / お段 AO）","dl.cl.v105.l2":"片段选择与删除——点击选中、Delete 键或右键菜单删除","dl.cl.v105.l3":"ACG 默认主题与界面重构","dl.cl.v105.l4":"右键音高平滑度控制——逐锚点调整平滑强度","dl.cl.v105.l5":"带精度选择的导出对话框","dl.cl.v105.l6":"应用内更新检查器：应用与模型双通道检测，24 小时至多自动检查一次","dl.cl.v105.l7":"按精度模型版本追踪——切换精度不再使无关缓存条目失效","dl.cl.v105.l8":"动画自定义复选框、窗口弹出动效",
+    "dl.cl.v100":"正式开源发布","dl.cl.v100.l1":"SXSEditor 正式开源，MIT 协议发布","dl.cl.v100.l2":"基于 SoulX-Singer 神经模型，ONNX Runtime 推理","dl.cl.v100.l3":"DirectML GPU / WebNN NPU / CPU 三后端共存","dl.cl.v100.l4":"钢琴卷帘编辑器：音符、歌词、音高曲线、音素级编辑","dl.cl.v100.l5":"歌手创建：30 秒纯人声样本构建专属歌手",
+    "ft.desc":"开源 AI 歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经模型，让每一位创作者都能从 MIDI 与歌词唤醒属于自己的歌声。",
+    "ft.col.prod":"产品","ft.col.docs":"文档","ft.col.dev":"开发者","ft.col.about":"关于",
+    "ft.downloadCenter":"下载中心","ft.appUpdate":"应用更新","ft.modelUpdate":"模型更新","ft.quickStart":"快速开始","ft.fragEditor":"片段编辑器","ft.singerCreate":"歌手创建","ft.synthExport":"合成与导出","ft.faq":"常见问题","ft.buildGuide":"构建指南","ft.arch":"架构总览","ft.onnxModel":"ONNX 模型","ft.inferPipeline":"推理管线","ft.testingCli":"测试与 CLI","ft.githubRepo":"GitHub 仓库","ft.gitcodeMirror":"GitCode 镜像","ft.issueFeedback":"Issue 反馈","ft.uninstall":"卸载说明",
+    "ft.copy":"© 2026 SXSEditor. MIT License. SoulX-Singer · ONNX Runtime · DirectML",
+    "ft.links":"<a href=\"#\">隐私政策</a> · <a href=\"user/faq.html\">帮助中心</a> · <a href=\"https://github.com/Henley04/SXSEditor\" target=\"_blank\" rel=\"noopener\">GitHub</a> · <a href=\"https://gitcode.com/qq_50331623/SXSEditor\" target=\"_blank\" rel=\"noopener\">GitCode 镜像</a>",
+    "ft.toTop":"返回顶部","ft.theme":"切换明暗主题","ft.menu":"打开菜单","ft.lang":"Switch language"
+  },
+  "en":{
+    "meta.title":"SXSEditor — AI Singing Synthesis Workbench",
+    "meta.desc":"SXSEditor: open-source AI Singing Voice Synthesis (SVS) desktop app. Powered by the SoulX-Singer neural model and ONNX Runtime, supporting DirectML GPU, WebNN NPU and CPU inference. From MIDI and lyrics to full vocals — all in one place.",
+    "ticker.1":"✦ SXSEditor <b>v1.0.6</b> is now available",
+    "ticker.2":"✦ Experimental Japanese support · auto kanji-kana grouping",
+    "ticker.3":"✦ DirectML GPU inference up to <b>6x faster</b>",
+    "ticker.4":"✦ Three precision tiers in one app: <b>FP32 / FP16 / INT8</b>",
+    "ticker.5":"✦ SiFiGAN vocoder added · mel SNR up to <b>83.54 dB</b>",
+    "nav.home":"Home","nav.features":"Features","nav.workflow":"Workflow","nav.news":"News","nav.download":"Download","nav.docs":"Docs","nav.downloadBtn":"Download Now",
+    "hero.title":"Let every note<br><em>sing</em> for you.",
+    "hero.desc":"<b>SXSEditor</b> is an open-source AI Singing Voice Synthesis (SVS) desktop app — built on the SoulX-Singer neural model × ONNX Runtime inference × DirectML GPU acceleration. From MIDI notes and lyrics to a complete vocal performance, the entire pipeline lives in one app.",
+    "hero.dlBtn":"Download Free v1.0.6",
+    "hero.srcBtn":"View Source",
+    "hero.note":"Runs on <i>Windows · macOS · Linux</i> ｜ MIT licensed ｜ Trilingual synthesis: CN · EN · JP",
+    "stat.lang":"Synth Languages","stat.prec":"Model Precisions","stat.gpu":"GPU Speedup",
+    "hero.tag1":"Real-time Synthesis","hero.tag2":"Range C2 – G5","hero.tag3":"CN · EN · JP Cross-lingual",
+    "hero.hud1":"ONNX Runtime Inference","hero.hud1meta":"DirectML · GPU","hero.hud1val":"6x Faster",
+    "hero.play":"Play Demo","hero.pause":"Pause",
+    "feat.title":"Features","feat.sub":"A workbench built for singing synthesis",
+    "feat.f1.h":"SoulX-Singer Neural Synthesis","feat.f1.p":"Deep-learning singing synthesis model running on ONNX Runtime. DirectML GPU acceleration speeds up vocoder inference by 6x; mel-frontend SNR rises from 49.86 dB to 83.54 dB. Trilingual cross-lingual synthesis — one model sings freely across CN / EN / JP repertoires.",
+    "feat.f1.t1":"AI Voice","feat.f1.t2":"Cross-lingual","feat.f1.t3":"ONNX opset 20",
+    "feat.f1.s1":"GPU Speedup","feat.f1.s2":"mel SNR","feat.f1.s3":"Quantization",
+    "feat.f2.h":"Piano-roll Editor","feat.f2.p":"Notes, lyrics, pitch curves, volume/pan envelopes, plus phoneme-level boundary editing. What you draw is what you hear — parameter changes are audible instantly.",
+    "feat.f2.t1":"Pitch Brush","feat.f2.t2":"MIDI Import","feat.f2.t3":"Phoneme Bounds",
+    "feat.f3.h":"Multilingual Lyric Alignment","feat.f3.p":"Lyrics are auto-segmented into syllables; CN pinyin / EN phonemes / JP kana are labeled intelligently and aligned word-by-word to millisecond precision.",
+    "feat.f3.l1":"星","feat.f3.l2":"辉","feat.f3.l3":"穹","feat.f3.l4":"响",
+    "feat.f3.t1":"Auto Phonemize","feat.f3.t2":"Kanji-Kana Group",
+    "feat.f4.h":"Multi-Precision Models","feat.f4.p":"FP32 (recommended) / FP16 / INT8 / INT8-NPU coexist; switch without re-downloading. W16A32 quantization cuts VRAM usage while staying close to FP32 quality.",
+    "feat.f5.h":"Multi-Backend Inference","feat.f5.p":"A single binary supports DirectML GPU, WebNN NPU/GPU, and CPU fallback — auto-picks the best backend.",
+    "feat.f6.h":"Audio to MIDI","feat.f6.p":"The basic_pitch model converts existing audio into MIDI notes, with optional F0 pitch curve extraction.","feat.f6.t":"F0 / MIDI Auto Extract",
+    "news.title":"Release Notes","news.sub":"Announcements · Model updates · Bug fixes",
+    "news.tab.all":"All","news.tab.notice":"Notice","news.tab.event":"Event","news.tab.patch":"Patch",
+    "news.tag.patch":"Patch","news.tag.notice":"Notice","news.tag.event":"Event",
+    "news.n1":"v1.0.6 released: model download percentage overflow fix","news.n2":"v1.0.5 released: experimental Japanese · kanji-kana grouping","news.n3":"Model v1: DirectML GPU re-optimized, 6x inference speedup","news.n4":"SiFiGAN vocoder option available · mel SNR up to 83.54 dB","news.n5":"In-app update checker launched: app + model dual-channel detection","news.n6":"SXSEditor v1.0.0 open-sourced · MIT license released","news.n7":"ONNX opset upgraded to 20 · W16A32 quantization lands",
+    "news.ev.title":" SXSEditor<br> v1.0.6 Released",
+    "news.ev.desc":"MIT licensed · free for personal creative use forever · trilingual synthesis · multi-precision models · DirectML GPU acceleration. Download and try it now.",
+    "news.ev.maj":"Major","news.ev.min":"Minor","news.ev.lang":"Langs","news.ev.lic":"License","news.ev.btn":"Download Now","news.ev.mirror":"Published to <b>GitHub</b> and <b>GitCode</b> mirror",
+    "dl.title":"Get SXSEditor","dl.sub":"MIT open source · free for personal creative use forever · models auto-download on first launch",
+    "dl.win.badge":"Recommended","dl.win.os":"Windows","dl.win.meta":"Latest <b>v1.0.6</b> · 64-bit installer · models on demand","dl.win.req":"Requirements: Windows 10 / 11 (64-bit) · 8 GB RAM · 4 GB+ VRAM GPU recommended","dl.win.btn":"Download from GitHub",
+    "dl.mac.os":"GitCode Mirror","dl.mac.meta":"Latest <b>v1.0.6</b> · China mainland CDN","dl.mac.req":"For China-mainland users with slow GitHub access. Identical to the GitHub release.","dl.mac.btn":"Download from GitCode",
+    "dl.lnx.os":"Build from Source","dl.lnx.meta":"Repo: <b>github.com/Henley04/SXSEditor</b>","dl.lnx.req":"macOS / Linux users please clone the repo and build from source. Requires Node.js and Electron Forge.","dl.lnx.btn":"Build Guide",
+    "dl.foot.note":"See GitHub Releases for older versions and release notes","dl.foot.link":"View older releases →",
+    "dl.cl.title":"Changelog",
+    "dl.cl.v106":"Stability Update","dl.cl.v106.l1":"Fixed model download percentage overflow — progress is now clamped to [0, 100]","dl.cl.v106.l2":"Fixed inaccurate remote file size detection — now uses Range request with Content-Range header to get the correct size","dl.cl.v106.l3":"Fixed formatBytes floating-point precision error causing wrong file size display","dl.cl.v106.l4":"Fixed SiFiGAN download progress resetting to 0 per file — progress now accumulates across all files in a batch",
+    "dl.cl.v105":"Experimental Japanese","dl.cl.v105.l1":"Experimental Japanese support — auto kanji-kana grouping, mixed phoneme modes (ら-row L / お段 AO)","dl.cl.v105.l2":"Fragment select & delete — click to select, Delete key or context menu to remove","dl.cl.v105.l3":"ACG default theme and UI refactor","dl.cl.v105.l4":"Right-click pitch smoothness control — per-anchor smoothing strength","dl.cl.v105.l5":"Export dialog with precision selection","dl.cl.v105.l6":"In-app update checker: app + model dual-channel detection, auto-check at most once per 24h","dl.cl.v105.l7":"Per-precision model version tracking — switching precision no longer invalidates unrelated cache entries","dl.cl.v105.l8":"Animated custom checkboxes, window pop-in animations",
+    "dl.cl.v100":"Open-source Release","dl.cl.v100.l1":"SXSEditor officially open-sourced under MIT license","dl.cl.v100.l2":"Built on the SoulX-Singer neural model with ONNX Runtime inference","dl.cl.v100.l3":"DirectML GPU / WebNN NPU / CPU — three backends coexist","dl.cl.v100.l4":"Piano-roll editor: notes, lyrics, pitch curves, phoneme-level editing","dl.cl.v100.l5":"Singer creation: build a custom singer from 30 seconds of clean vocals",
+    "ft.desc":"Open-source AI Singing Voice Synthesis (SVS) desktop app. Built on the SoulX-Singer neural model — every creator can wake their own voice from MIDI and lyrics.",
+    "ft.col.prod":"Product","ft.col.docs":"Docs","ft.col.dev":"Developers","ft.col.about":"About",
+    "ft.downloadCenter":"Download Center","ft.appUpdate":"App Updates","ft.modelUpdate":"Model Updates","ft.quickStart":"Quick Start","ft.fragEditor":"Fragment Editor","ft.singerCreate":"Singer Creation","ft.synthExport":"Synthesis & Export","ft.faq":"FAQ","ft.buildGuide":"Build Guide","ft.arch":"Architecture","ft.onnxModel":"ONNX Models","ft.inferPipeline":"Inference Pipeline","ft.testingCli":"Testing & CLI","ft.githubRepo":"GitHub Repo","ft.gitcodeMirror":"GitCode Mirror","ft.issueFeedback":"Issue Feedback","ft.uninstall":"Uninstall",
+    "ft.copy":"© 2026 SXSEditor. MIT License. SoulX-Singer · ONNX Runtime · DirectML",
+    "ft.links":"<a href=\"#\">Privacy</a> · <a href=\"user/faq.html\">Help Center</a> · <a href=\"https://github.com/Henley04/SXSEditor\" target=\"_blank\" rel=\"noopener\">GitHub</a> · <a href=\"https://gitcode.com/qq_50331623/SXSEditor\" target=\"_blank\" rel=\"noopener\">GitCode Mirror</a>",
+    "ft.toTop":"Back to top","ft.theme":"Toggle theme","ft.menu":"Open menu","ft.lang":"切换语言"
+  }
+};
+
+function applyLang(lang){
+  var dict=I18N[lang]||I18N.zh;
+  document.querySelectorAll('[data-i18n]').forEach(function(el){
+    var k=el.getAttribute('data-i18n');if(dict[k]!==undefined)el.textContent=dict[k];
+  });
+  document.querySelectorAll('[data-i18n-html]').forEach(function(el){
+    var k=el.getAttribute('data-i18n-html');if(dict[k]!==undefined)el.innerHTML=dict[k];
+  });
+  document.querySelectorAll('[data-i18n-attr]').forEach(function(el){
+    var spec=el.getAttribute('data-i18n-attr');
+    spec.split(',').forEach(function(pair){
+      var p=pair.split(':');var attr=p[0].trim(),key=p[1].trim();
+      if(dict[key]!==undefined)el.setAttribute(attr,dict[key]);
+    });
+  });
+  document.documentElement.setAttribute('data-lang',lang);
+  document.documentElement.setAttribute('lang',lang==='en'?'en':'zh-CN');
+  var lgCur=document.getElementById('lgCur');
+  if(lgCur)lgCur.textContent=lang==='en'?'EN':'中';
+  var other=document.querySelector('.lang-btn [style*="opacity:.6"]');
+  if(other)other.textContent=lang==='en'?'中':'EN';
+  /* 更新动态按钮文字 */
+  if(typeof window.updatePlayBtnLabel==='function')window.updatePlayBtnLabel();
+  /* ticker 复制一份以保持无缝滚动 */
+  var tk=document.getElementById('tickerTrack');if(tk){tk.innerHTML=tk.innerHTML;}
+  /* 重新打开的手风琴需重算高度 */
+  var openAcc=document.querySelector('.acc.open .acc-b');if(openAcc)openAcc.style.maxHeight=openAcc.scrollHeight+'px';
+}
+function getLang(){var l=null;try{l=localStorage.getItem('sxs-lang');}catch(e){}return l;}
+function setLang(l){try{localStorage.setItem('sxs-lang',l);}catch(e){}}
+function detectLang(){
+  /* 优先使用用户保存的偏好；否则按浏览器语言推断 */
+  var saved=getLang();if(saved)return saved;
+  var navLangs=navigator.languages&&navigator.languages.length?navigator.languages:[(navigator.language||navigator.userLanguage||'zh-CN')];
+  for(var i=0;i<navLangs.length;i++){
+    var l=(navLangs[i]||'').toLowerCase();
+    if(l.indexOf('en')===0)return 'en';
+    if(l.indexOf('zh')===0)return 'zh';
+  }
+  return 'zh';
+}
+var curLang=detectLang();
+document.documentElement.setAttribute('data-lang',curLang);
+applyLang(curLang);
+var langBtn=document.getElementById('langBtn');
+if(langBtn)langBtn.addEventListener('click',function(){
+  curLang=curLang==='en'?'zh':'en';
+  setLang(curLang);applyLang(curLang);
+});
+
+/* ---------- 主题切换 ---------- */
+var root=document.documentElement;
+var saved=null; try{saved=localStorage.getItem('sxs-theme');}catch(e){}
+var preferDark=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches;
+root.setAttribute('data-theme',saved||(preferDark?'dark':'light'));
+document.getElementById('themeBtn').addEventListener('click',function(){
+  var next=root.getAttribute('data-theme')==='light'?'dark':'light';
+  root.setAttribute('data-theme',next);
+  try{localStorage.setItem('sxs-theme',next);}catch(e){}
+});
+
+/* ---------- 公告滚动：复制一份实现无缝 ---------- */
+var tk=document.getElementById('tickerTrack');
+tk.innerHTML+=tk.innerHTML;
+
+/* ---------- 导航 ---------- */
+var nav=document.getElementById('nav'),links=document.getElementById('navLinks'),burger=document.getElementById('burger');
+burger.addEventListener('click',function(){links.classList.toggle('open');});
+links.querySelectorAll('a').forEach(function(a){a.addEventListener('click',function(){links.classList.remove('open');});});
+var toTop=document.getElementById('toTop');
+window.addEventListener('scroll',function(){
+  nav.classList.toggle('scrolled',window.scrollY>8);
+  toTop.classList.toggle('show',window.scrollY>620);
+},{passive:true});
+toTop.addEventListener('click',function(){window.scrollTo({top:0,behavior:'smooth'});});
+
+/* ---------- 滚动显现 ---------- */
+var io=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target);}});},{threshold:.12});
+document.querySelectorAll('.reveal').forEach(function(el){io.observe(el);});
+
+/* ---------- 滚动高亮导航 ---------- */
+var navA=links.querySelectorAll('a[href^="#"]');
+var spy=new IntersectionObserver(function(es){es.forEach(function(e){
+  if(e.isIntersecting){navA.forEach(function(a){a.classList.toggle('act',a.getAttribute('href')==='#'+e.target.id);});}
+});},{rootMargin:'-40% 0px -55% 0px'});
+['home','features','workflow','news','download'].forEach(function(id){var s=document.getElementById(id);if(s)spy.observe(s);});
+
+/* ---------- 数字滚动 ---------- */
+function runCount(el){
+  var target=parseFloat(el.dataset.count),suf=el.dataset.suffix||'',t0=performance.now(),dur=1500;
+  function step(t){var p=Math.min(1,(t-t0)/dur),e=1-Math.pow(1-p,3);
+    el.textContent=Math.round(target*e).toLocaleString('zh-CN')+suf;
+    if(p<1)requestAnimationFrame(step);}
+  requestAnimationFrame(step);
+}
+var cio=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting){runCount(e.target);cio.unobserve(e.target);}});},{threshold:.5});
+document.querySelectorAll('[data-count]').forEach(function(el){cio.observe(el);});
+
+/* ---------- 情报筛选 ---------- */
+var nts=document.querySelectorAll('.nt'),nItems=document.querySelectorAll('.n-item');
+nts.forEach(function(b){b.addEventListener('click',function(){
+  nts.forEach(function(x){x.classList.remove('act');});b.classList.add('act');
+  var t=b.dataset.t;
+  nItems.forEach(function(it){it.classList.toggle('hide',t!=='all'&&it.dataset.type!==t);});
+});});
+
+/* ---------- 工作流筛选 ---------- */
+var vfs=document.querySelectorAll('.vf'),vCards=document.querySelectorAll('.v-card');
+vfs.forEach(function(b){b.addEventListener('click',function(){
+  vfs.forEach(function(x){x.classList.remove('act');});b.classList.add('act');
+  var f=b.dataset.f;
+  vCards.forEach(function(c){
+    var show=f==='all'||c.dataset.lang===f||c.dataset.gender===f;
+    c.classList.toggle('off',!show);
+  });
+});});
+
+/* ---------- 更新日志手风琴 ---------- */
+document.querySelectorAll('.acc-h').forEach(function(h){
+  h.addEventListener('click',function(){
+    var item=h.parentElement,body=item.querySelector('.acc-b'),open=item.classList.toggle('open');
+    body.style.maxHeight=open?body.scrollHeight+'px':'0px';
+  });
+});
+var firstAcc=document.querySelector('.acc.open .acc-b');
+if(firstAcc)firstAcc.style.maxHeight=firstAcc.scrollHeight+'px';
+
+/* ---------- 钢琴卷帘构建 ---------- */
+var MELODY=[{r:2,c:0,l:2},{r:4,c:2,l:2},{r:3,c:4,l:2},{r:4,c:6,l:2},{r:0,c:8,l:2},{r:1,c:10,l:2},{r:2,c:12,l:4}];
+function buildRoll(el,notes,withPlayhead){
+  el.classList.add('roll');
+  var out=[];
+  notes.forEach(function(n){
+    var d=document.createElement('i');d.className='rn';
+    d.style.left=(n.c/16*100)+'%';d.style.width=(n.l/16*100)+'%';
+    d.style.top=(n.r/8*100)+'%';d.style.height=(100/8)+'%';
+    el.appendChild(d);out.push(d);
+  });
+  var ph=null;
+  if(withPlayhead){ph=document.createElement('i');ph.className='ph';el.appendChild(ph);}
+  return {notes:out,ph:ph};
+}
+var heroRoll=buildRoll(document.getElementById('heroRoll'),MELODY,true);
+var featNotes=[{r:5,c:0,l:2},{r:4,c:2,l:1},{r:3,c:3,l:1},{r:2,c:4,l:2},{r:3,c:6,l:2},{r:4,c:8,l:1},{r:5,c:9,l:1},{r:4,c:10,l:2},{r:2,c:12,l:2},{r:1,c:14,l:2}];
+buildRoll(document.getElementById('featRoll'),featNotes,false);
+(function(){
+  var fr=document.getElementById('featRoll');
+  var svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+  svg.setAttribute('class','curve');svg.setAttribute('viewBox','0 0 100 100');svg.setAttribute('preserveAspectRatio','none');
+  var pl=document.createElementNS('http://www.w3.org/2000/svg','polyline');
+  pl.setAttribute('points','0,70 9,66 15,45 22,34 28,30 40,42 47,58 53,60 59,52 66,38 72,30 78,26 88,44 100,30');
+  pl.setAttribute('fill','none');pl.setAttribute('stroke','var(--yellow)');pl.setAttribute('stroke-width','2');
+  pl.setAttribute('vector-effect','non-scaling-stroke');pl.setAttribute('stroke-linecap','round');pl.setAttribute('stroke-linejoin','round');
+  svg.appendChild(pl);fr.appendChild(svg);
+})();
+
+/* ---------- 频谱条 ---------- */
+var spec=document.getElementById('spec'),bars=[];
+for(var i=0;i<26;i++){var b=document.createElement('i');spec.appendChild(b);bars.push({el:b,ph:i*0.73});}
+
+/* ---------- 示波器 ---------- */
+var scope=document.getElementById('scope'),sctx=scope.getContext('2d');
+function sizeScope(){
+  var dpr=window.devicePixelRatio||1,w=scope.clientWidth,h=96;
+  scope.width=w*dpr;scope.height=h*dpr;sctx.setTransform(dpr,0,0,dpr,0,0);
+}
+sizeScope();window.addEventListener('resize',sizeScope);
+
+/* ---------- 音频试听（洛天依示例音频） ---------- */
+var AC=null,master=null,analyser=null,srcNode=null,freqData=null,timeData=null,playing=false;
+var BEAT=60/132,LOOP=16*BEAT;
+var demoAudio=new Audio('res/example_lty_cn.wav');
+demoAudio.preload='auto';demoAudio.loop=false;
+var playBtn=document.getElementById('playBtn'),hudB=document.getElementById('hudB');
+var ICON_PLAY='<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5l13 7.5-13 7.5z"/></svg>';
+var ICON_PAUSE='<svg viewBox="0 0 24 24" fill="currentColor"><rect x="5" y="4" width="5" height="16"/><rect x="14" y="4" width="5" height="16"/></svg>';
+function t(k){var dict=I18N[curLang]||I18N.zh;return dict[k]!==undefined?dict[k]:k;}
+function updatePlayBtnLabel(){
+  if(!playBtn)return;
+  var ic=playing?ICON_PAUSE:ICON_PLAY;
+  var lbl=t(playing?'hero.pause':'hero.play');
+  playBtn.innerHTML=ic+'<span style="margin-left:4px">'+lbl+'</span>';
+}
+window.updatePlayBtnLabel=updatePlayBtnLabel;
+playBtn.innerHTML=ICON_PLAY+'<span style="margin-left:4px">'+t('hero.play')+'</span>';
+function ensureAC(){
+  if(!AC){
+    var Ctx=window.AudioContext||window.webkitAudioContext;if(!Ctx)return null;
+    AC=new Ctx();
+    master=AC.createGain();master.gain.value=0.8;master.connect(AC.destination);
+    analyser=AC.createAnalyser();analyser.fftSize=256;analyser.smoothingTimeConstant=0.78;
+    freqData=new Uint8Array(analyser.frequencyBinCount);
+    timeData=new Uint8Array(analyser.fftSize);
+    try{
+      srcNode=AC.createMediaElementSource(demoAudio);
+      srcNode.connect(analyser);analyser.connect(master);
+    }catch(e){console.warn('MediaElementSource 创建失败:',e);}
+  }
+  if(AC.state==='suspended')AC.resume();
+  return AC;
+}
+/* 音频事件 */
+demoAudio.addEventListener('timeupdate',function(){
+  if(!isFinite(demoAudio.duration)||demoAudio.duration<=0)return;
+  var pos=demoAudio.currentTime/demoAudio.duration;
+  if(heroRoll.ph)heroRoll.ph.style.left=(pos*100)+'%';
+  /* 按当前 beat 高亮对应音符 */
+  var beat=(demoAudio.currentTime*132/60)%16;
+  MELODY.forEach(function(n,i){
+    var el=heroRoll.notes[i];if(!el)return;
+    var on=n.c<=beat&&beat<n.c+n.l;
+    el.classList.toggle('hit',on);
+  });
+});
+demoAudio.addEventListener('ended',function(){
+  playing=false;hudB.classList.remove('playing');
+  updatePlayBtnLabel();playBtn.setAttribute('aria-pressed','false');
+  if(heroRoll.ph)heroRoll.ph.style.left='0%';
+  heroRoll.notes.forEach(function(el){el.classList.remove('hit');});
+});
+playBtn.addEventListener('click',function(){
+  if(!ensureAC())return;
+  if(demoAudio.paused){
+    demoAudio.play().then(function(){
+      playing=true;hudB.classList.add('playing');
+      updatePlayBtnLabel();playBtn.setAttribute('aria-pressed','true');
+    }).catch(function(err){console.warn('播放失败:',err);});
+  }else{
+    demoAudio.pause();
+    playing=false;hudB.classList.remove('playing');
+    updatePlayBtnLabel();playBtn.setAttribute('aria-pressed','false');
+  }
+});
+document.addEventListener('visibilitychange',function(){
+  if(document.hidden&&!demoAudio.paused)demoAudio.pause();
+});
+
+/* 声库试听按钮（如页面有 [data-freq] 元素，也统一指向示例音频） */
+document.querySelectorAll('[data-freq]').forEach(function(btn){
+  btn.addEventListener('click',function(){
+    if(!ensureAC())return;
+    if(!demoAudio.paused)demoAudio.currentTime=0;
+    demoAudio.play().then(function(){
+      playing=true;hudB.classList.add('playing');
+      updatePlayBtnLabel();
+    }).catch(function(){});
+  });
+});
+
+/* ---------- 动画主循环：频谱 + 示波器 ---------- */
+function anim(ts){
+  var t=ts/1000;
+  var hasData=playing&&analyser;
+  /* 频谱条 */
+  if(hasData){
+    analyser.getByteFrequencyData(freqData);
+    var step=Math.floor(freqData.length/bars.length)||1;
+    for(var j=0;j<bars.length;j++){
+      var idx=Math.min(freqData.length-1,j*step);
+      var v=Math.max(0.05,freqData[idx]/255);
+      bars[j].el.style.height=(v*100)+'%';
+    }
+  }else{
+    for(var k=0;k<bars.length;k++){
+      var br=bars[k];
+      var v=0.14+0.11*Math.sin(t*1.6+br.ph)+0.06*Math.sin(t*3.1+br.ph*1.7);
+      br.el.style.height=Math.max(5,Math.min(100,v*100))+'%';
+    }
+  }
+  /* 示波器 */
+  var w=scope.clientWidth,h=96,mid=h/2;
+  sctx.clearRect(0,0,w,h);
+  sctx.lineWidth=1;
+  sctx.strokeStyle=getComputedStyle(root).getPropertyValue('--line');
+  sctx.beginPath();sctx.moveTo(0,mid);sctx.lineTo(w,mid);sctx.stroke();
+  if(hasData){
+    analyser.getByteTimeDomainData(timeData);
+    var amp=h*0.38;
+    [['--blue',1],['--yellow',0.55]].forEach(function(L){
+      sctx.strokeStyle=getComputedStyle(root).getPropertyValue(L[0]).trim();
+      sctx.lineWidth=2;sctx.beginPath();
+      for(var x=0;x<=w;x+=2){
+        var idx=Math.min(timeData.length-1,Math.floor(x/w*timeData.length));
+        var v=(timeData[idx]-128)/128;
+        var y=mid+v*amp*L[1];
+        if(x===0)sctx.moveTo(x,y);else sctx.lineTo(x,y);
+      }
+      sctx.stroke();
+    });
+  }else{
+    var ampBase=h*0.3*(0.55+0.2*Math.sin(t*0.9));
+    [['--blue',0.021,2.2,1],['--yellow',0.033,-3.1,0.55]].forEach(function(L){
+      sctx.strokeStyle=getComputedStyle(root).getPropertyValue(L[0]).trim();
+      sctx.lineWidth=2;sctx.beginPath();
+      for(var x=0;x<=w;x+=3){
+        var env=Math.sin(x/w*Math.PI);
+        var y=mid+Math.sin(x*L[1]+t*L[2])*ampBase*L[3]*env+Math.sin(x*L[1]*2.7+t*L[2]*1.6)*ampBase*0.22*env;
+        if(x===0)sctx.moveTo(x,y);else sctx.lineTo(x,y);
+      }
+      sctx.stroke();
+    });
+  }
+  requestAnimationFrame(anim);
+}
+requestAnimationFrame(anim);
+})();
+</script>
 </body>
 </html>
