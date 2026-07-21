@@ -761,6 +761,7 @@ html[data-theme="dark"] footer{background:#070B14}
           <button class="nt" data-t="patch" data-i18n="news.tab.patch">更新</button>
         </div>
         <div class="n-list">
+          <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>07-21</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n8">模型 DiT 部分 GGUF 格式转换与量化启动，进一步提升性能与精度</span><span class="n-arrow">→</span></a>
           <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>07-18</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n1">v1.0.6 发布：模型下载百分比溢出修复</span><span class="n-arrow">→</span></a>
           <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>06-20</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n2">v1.0.5 发布：日语实验性支持 · 汉字假名分组</span><span class="n-arrow">→</span></a>
           <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>06-12</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n3">模型 v1：DirectML GPU 重优化，推理速度 6 倍提升</span><span class="n-arrow">→</span></a>
@@ -949,7 +950,7 @@ var I18N={
     "news.title":"版本情报","news.sub":"应用公告 · 模型更新 · 缺陷修复",
     "news.tab.all":"全部","news.tab.notice":"公告","news.tab.event":"活动","news.tab.patch":"更新",
     "news.tag.patch":"更新","news.tag.notice":"公告","news.tag.event":"活动",
-    "news.n1":"v1.0.6 发布：模型下载百分比溢出修复","news.n2":"v1.0.5 发布：日语实验性支持 · 汉字假名分组","news.n3":"模型 v1：DirectML GPU 重优化，推理速度 6 倍提升","news.n4":"SiFiGAN 声码器选项上线 · mel SNR 提升至 83.54 dB","news.n5":"应用内更新检查器上线：应用与模型双通道检测","news.n6":"SXSEditor v1.0.0 正式开源 · MIT 协议发布","news.n7":"ONNX opset 升级到 20 · W16A32 量化精度方案落地",
+    "news.n1":"v1.0.6 发布：模型下载百分比溢出修复","news.n2":"v1.0.5 发布：日语实验性支持 · 汉字假名分组","news.n3":"模型 v1：DirectML GPU 重优化，推理速度 6 倍提升","news.n4":"SiFiGAN 声码器选项上线 · mel SNR 提升至 83.54 dB","news.n5":"应用内更新检查器上线：应用与模型双通道检测","news.n6":"SXSEditor v1.0.0 正式开源 · MIT 协议发布","news.n7":"ONNX opset 升级到 20 · W16A32 量化精度方案落地","news.n8":"模型 DiT 部分 GGUF 格式转换与量化启动，进一步提升性能与精度",
     "news.ev.title":" SXSEditor<br> v1.0.6 已发布","news.ev.desc":"MIT 开源协议 · 个人创作永久免费 · 三语合成 · 多精度模型 · DirectML GPU 加速。立即下载体验。",
     "news.ev.maj":"主版本","news.ev.min":"修订号","news.ev.lang":"语言","news.ev.lic":"协议","news.ev.btn":"立即下载体验","news.ev.mirror":"已发布到 <b>GitHub</b> 与 <b>GitCode</b> 镜像",
     "dl.title":"获取 SXSEditor","dl.sub":"MIT 开源 · 个人创作永久免费 · 模型首次启动自动下载",
@@ -1001,7 +1002,7 @@ var I18N={
     "news.title":"Release Notes","news.sub":"Announcements · Model updates · Bug fixes",
     "news.tab.all":"All","news.tab.notice":"Notice","news.tab.event":"Event","news.tab.patch":"Patch",
     "news.tag.patch":"Patch","news.tag.notice":"Notice","news.tag.event":"Event",
-    "news.n1":"v1.0.6 released: model download percentage overflow fix","news.n2":"v1.0.5 released: experimental Japanese · kanji-kana grouping","news.n3":"Model v1: DirectML GPU re-optimized, 6x inference speedup","news.n4":"SiFiGAN vocoder option available · mel SNR up to 83.54 dB","news.n5":"In-app update checker launched: app + model dual-channel detection","news.n6":"SXSEditor v1.0.0 open-sourced · MIT license released","news.n7":"ONNX opset upgraded to 20 · W16A32 quantization lands",
+    "news.n1":"v1.0.6 released: model download percentage overflow fix","news.n2":"v1.0.5 released: experimental Japanese · kanji-kana grouping","news.n3":"Model v1: DirectML GPU re-optimized, 6x inference speedup","news.n4":"SiFiGAN vocoder option available · mel SNR up to 83.54 dB","news.n5":"In-app update checker launched: app + model dual-channel detection","news.n6":"SXSEditor v1.0.0 open-sourced · MIT license released","news.n7":"ONNX opset upgraded to 20 · W16A32 quantization lands","news.n8":"Model DiT GGUF format conversion and quantization started, improving performance and precision",
     "news.ev.title":" SXSEditor<br> v1.0.6 Released",
     "news.ev.desc":"MIT licensed · free for personal creative use forever · trilingual synthesis · multi-precision models · DirectML GPU acceleration. Download and try it now.",
     "news.ev.maj":"Major","news.ev.min":"Minor","news.ev.lang":"Langs","news.ev.lic":"License","news.ev.btn":"Download Now","news.ev.mirror":"Published to <b>GitHub</b> and <b>GitCode</b> mirror",
