@@ -57,8 +57,19 @@ class OnnxSVSPipeline {
         this.jpModelDir = this._resolveJpModelDir(modelDir, options.modelPrecision);
         this.sessions = {};
         this.sessionEPs = {};
-        this.isFP16 = false; // 是否为 FP16 精度Model
+        // ===== Three-tier precision separation =====
+        // SVS 模型按精度管理分为三类（见 modelManager.js 的 BASE_SVS_MODEL_FILES /
+        // DIFF_STEP_MODEL_FILES / VOCODER_MODEL_FILES）：
+        //   1. baseModelsIsFP16: 7 个基础模型共用（probe preflow 检测）
+        //      - note_text_encoder / note_pitch_encoder / note_type_encoder / f0_encoder
+        //      - preflow / cond_emb / mel_transform
+        //   2. diffStepIsFP16: diff_step 独立精度（W16A32 回退 FP32 时与 base 不同）
+        //   3. vocoderIsFP16: vocoder 独立精度（由 vocoder 文件类型/大小检测）
+        // 三者互不影响，分别跟踪。`isFP16` 为 `baseModelsIsFP16` 的历史别名，
+        // 保留以兼容外部引用（cli.js / webnn / tests 等）。
+        this.isFP16 = false; // 基础模型精度（历史字段名，等同 baseModelsIsFP16）
         this.diffStepIsFP16 = false; // diff_step 独立精度（可能与 isFP16 不同，如 W16A32 回退到 FP32 时）
+        this.vocoderIsFP16 = false; // vocoder 独立精度（由 vocoder 文件类型/大小检测，与 isFP16 解耦）
         this.gpuDeviceName = '';
         this.dmlDeviceId = undefined;
         this.initialized = false;
@@ -96,6 +107,21 @@ class OnnxSVSPipeline {
         this._diffusion = new Diffusion();
         this._postprocessing = new Postprocessing();
         this._audioSegmentation = new AudioSegmentation();
+    }
+
+    /**
+     * 基础模型精度（baseModelsIsFP16）的读写访问器。
+     * 内部与 `this.isFP16` 保持同步 —— `isFP16` 是历史字段名，保留以兼容外部
+     * 引用（cli.js / webnn/index.js / tests）；新代码推荐使用 `baseModelsIsFP16`
+     * 以明确语义：该标志只代表 7 个基础模型（probe preflow）的精度，与
+     * diffStepIsFP16 / vocoderIsFP16 相互独立。
+     */
+    get baseModelsIsFP16() {
+        return this.isFP16;
+    }
+
+    set baseModelsIsFP16(value) {
+        this.isFP16 = !!value;
     }
 
     /**
@@ -961,8 +987,12 @@ class OnnxSVSPipeline {
     }
 
     /**
-     * 检测模型精度（FP16/FP32/INT8）：通过 preflow probe session 的 I/O 类型 + 量化算子扫描
-     * 设置 this.isFP16
+     * 检测基础模型精度（FP16/FP32/INT8）：通过 preflow probe session 的 I/O 类型 + 量化算子扫描
+     * 设置 this.isFP16（等同 baseModelsIsFP16）。
+     *
+     * 仅检测基础模型精度 —— diff_step 与 vocoder 的精度分别由
+     * `_detectDiffStepPrecision` / `_detectVocoderPrecision` 独立检测，
+     * 三者互不影响（参见构造函数中三层精度分离说明）。
      */
     async _detectModelPrecision(resolvedModelFiles) {
         try {
@@ -985,7 +1015,7 @@ class OnnxSVSPipeline {
             const precisionLabel = isINT8
                 ? `INT8 (${ioLabel} I/O, INT8 weights)`
                 : this.isFP16 ? 'FP16 (half precision)' : 'FP32 (full precision)';
-            console.log(`[OnnxSVSPipeline] Model precision: ${precisionLabel}`);
+            console.log(`[OnnxSVSPipeline] Base models precision: ${precisionLabel} (isFP16=${this.isFP16})`);
         } catch (e) {
             console.warn('[OnnxSVSPipeline] Precision detection failed, defaulting to FP32:', e.message);
             this.isFP16 = false;
@@ -1356,6 +1386,14 @@ class OnnxSVSPipeline {
         return loadedSessions;
     }
 
+    /**
+     * 独立检测 vocoder 模型精度（与基础模型 isFP16 解耦）。
+     *
+     * vocoder 的精度由文件名/输入类型/文件大小综合判定：
+     *   - SiFiGAN: 按文件名（sifigan_vocoder_dml_fp16.onnx → FP16）
+     *   - 默认 vocoder: 优先用 mel 输入类型，否则按文件大小阈值推断
+     * 失败时回退到基础模型精度（this.isFP16）作为兜底。
+     */
     async _detectVocoderPrecision(session, modelPath) {
         try {
             const meta = session.inputMetadata || {};
@@ -1447,13 +1485,15 @@ class OnnxSVSPipeline {
     }
 
     /**
-     * 独立检测 diff_step 模型精度。
+     * 独立检测 diff_step 模型精度（与基础模型 isFP16 解耦）。
      *
      * 背景：W16A32 diff_step 模型（fp16 子目录）在 onnxruntime-node 1.27.0 上推理时报
-     * "not enough space" 错误，需要回退到根目录的 FP32 模型。此时 isFP16（来自 preflow）
-     * 为 true，但实际加载的 diff_step 是 FP32，需要独立检测以创建正确类型的张量。
+     * "not enough space" 错误，需要回退到根目录的 FP32 模型。此时基础模型 isFP16（来自
+     * preflow probe）为 true，但实际加载的 diff_step 是 FP32，需要独立检测以创建正确
+     * 类型的张量。
      *
      * 读取 sessions.diffStep.inputMetadata 的 xt_input 类型来设置 diffStepIsFP16。
+     * 失败时回退到基础模型精度（this.isFP16）作为兜底。
      */
     _detectDiffStepPrecision() {
         try {
@@ -1779,6 +1819,7 @@ class OnnxSVSPipeline {
         const fullParams = {
             ...params,
             isFP16: this.isFP16,
+            baseModelsIsFP16: this.baseModelsIsFP16,
             diffStepIsFP16: this.diffStepIsFP16,
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
@@ -1864,6 +1905,7 @@ class OnnxSVSPipeline {
         const fullParams = paramsArray.map(p => ({
             ...p,
             isFP16: this.isFP16,
+            baseModelsIsFP16: this.baseModelsIsFP16,
             diffStepIsFP16: this.diffStepIsFP16,
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
