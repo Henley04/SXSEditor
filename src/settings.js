@@ -53,6 +53,19 @@ const languageSelect = document.getElementById('languageSelect');
 const modelPrecisionSelect = document.getElementById('modelPrecision');
 const midiExtractToolSelect = document.getElementById('midiExtractTool');
 const openModelDownloadBtn = document.getElementById('openModelDownloadBtn');
+const openModelDownloadBtnTop = document.getElementById('openModelDownloadBtnTop');
+
+// 模型状态总览区元素引用（聚合主模型/JP/SiFiGAN 三类模型状态）
+const modelOverviewMainDot = document.getElementById('overviewMainDotSettings');
+const modelOverviewMainStatus = document.getElementById('overviewMainStatusText');
+const modelOverviewMainVersion = document.getElementById('overviewMainVersion');
+const modelOverviewMainPrecision = document.getElementById('overviewMainPrecision');
+const modelOverviewJpDot = document.getElementById('overviewJpDotSettings');
+const modelOverviewJpStatus = document.getElementById('overviewJpStatusText');
+const modelOverviewJpVersion = document.getElementById('overviewJpVersion');
+const modelOverviewSifiganDot = document.getElementById('overviewSifiganDotSettings');
+const modelOverviewSifiganStatus = document.getElementById('overviewSifiganStatusText');
+const modelOverviewSifiganVersion = document.getElementById('overviewSifiganVersion');
 const vocoderTypeSelect = document.getElementById('vocoderType');
 const vocoderTypeHint = document.getElementById('vocoderTypeHint');
 const sifiganPrecisionSelect = document.getElementById('sifiganPrecision');
@@ -483,6 +496,146 @@ function updateModelStatusDisplay(modelStatus) {
         item.appendChild(label);
         item.appendChild(info);
         el.appendChild(item);
+    }
+}
+
+// ==================== 模型状态总览区 ====================
+// 聚合主模型/JP/SiFiGAN 三类模型的安装与版本状态，使用 model-download:check-all-versions
+// 一次性获取三类模型的版本信息，避免多次 IPC 调用。
+// 兼容旧版本：若 IPC 不可用或返回异常，总览区保持默认"检测中..."状态，不影响其他功能。
+
+function _setOverviewCard(dotEl, statusEl, versionEl, dotState, statusText, versionText, statusClass) {
+    if (dotEl) dotEl.className = 'model-overview-dot ' + dotState;
+    if (statusEl) {
+        statusEl.textContent = statusText;
+        statusEl.className = 'model-overview-status' + (statusClass ? ' ' + statusClass : '');
+    }
+    if (versionEl) versionEl.textContent = versionText || '';
+}
+
+/**
+ * 解析单个模型组的版本信息，返回 { dotState, statusText, versionText, statusClass }
+ * dotState: 'installed' | 'missing' | 'warning' | 'checking'
+ * 与 modelDownload.js 中的 updateOverviewStatus 保持一致的语义。
+ */
+function _resolveOverviewState(info, opts = {}) {
+    const { isDownloading = false } = opts;
+    if (isDownloading) {
+        return {
+            dotState: 'checking',
+            statusText: t('modelDownload.overviewDownloading'),
+            versionText: '',
+            statusClass: 'checking',
+        };
+    }
+    if (!info) {
+        return {
+            dotState: 'checking',
+            statusText: t('settings.modelOverviewChecking'),
+            versionText: '',
+            statusClass: 'checking',
+        };
+    }
+    // SiFiGAN 特殊状态：download_url_not_configured（视为未安装，无可用下载源）
+    if (info.status === 'download_url_not_configured' || info.status === 'not_downloaded') {
+        return {
+            dotState: 'missing',
+            statusText: t('settings.modelOverviewMissing'),
+            versionText: '',
+            statusClass: 'missing',
+        };
+    }
+    if (info.hasModelFiles === false && !info.allExist) {
+        return {
+            dotState: 'missing',
+            statusText: t('settings.modelOverviewMissing'),
+            versionText: '',
+            statusClass: 'missing',
+        };
+    }
+    // 已安装：根据 updateAvailable 进一步区分
+    const installed = info.hasModelFiles === true || info.allExist === true || info.updateAvailable !== undefined;
+    if (!installed) {
+        return {
+            dotState: 'missing',
+            statusText: t('settings.modelOverviewMissing'),
+            versionText: '',
+            statusClass: 'missing',
+        };
+    }
+    if (info.updateAvailable) {
+        return {
+            dotState: 'warning',
+            statusText: t('settings.modelOverviewUpdateAvailable'),
+            versionText: _formatVersionLine(info),
+            statusClass: 'warning',
+        };
+    }
+    return {
+        dotState: 'installed',
+        statusText: t('settings.modelOverviewInstalled'),
+        versionText: _formatVersionLine(info),
+        statusClass: 'installed',
+    };
+}
+
+function _formatVersionLine(info) {
+    if (!info) return '';
+    const localRaw = info.localVersion;
+    const localStr = (!localRaw || localRaw === 'master')
+        ? t('settings.modelOverviewLegacyVersion')
+        : localRaw;
+    const latestStr = info.latestVersion || '-';
+    // 仅当存在本地版本时才显示版本行，避免未安装时显示多余信息
+    if (!localRaw && !info.latestVersion) return '';
+    return `${t('settings.modelOverviewVersionLocal', { version: localStr })}  ·  ${t('settings.modelOverviewVersionLatest', { version: latestStr })}`;
+}
+
+/**
+ * 刷新模型状态总览区。调用 model-download:check-all-versions 一次性获取
+ * 主模型/JP/SiFiGAN 的版本信息并更新 UI。
+ * 在以下场景调用：
+ *  - 设置页面加载完成
+ *  - 精度切换后
+ *  - 模型下载窗口关闭后（用户可能下载/更新了模型）
+ */
+async function refreshModelOverview() {
+    // 若总览区不在 DOM 中（旧版 HTML），直接跳过
+    if (!modelOverviewMainDot && !modelOverviewJpDot && !modelOverviewSifiganDot) return;
+    // 显示检测中状态
+    _setOverviewCard(modelOverviewMainDot, modelOverviewMainStatus, modelOverviewMainVersion, 'checking', t('settings.modelOverviewChecking'), '');
+    _setOverviewCard(modelOverviewJpDot, modelOverviewJpStatus, modelOverviewJpVersion, 'checking', t('settings.modelOverviewChecking'), '');
+    _setOverviewCard(modelOverviewSifiganDot, modelOverviewSifiganStatus, modelOverviewSifiganVersion, 'checking', t('settings.modelOverviewChecking'), '');
+
+    // 显示当前精度标签
+    if (modelOverviewMainPrecision) {
+        const prec = modelPrecisionSelect.value || 'fp32';
+        modelOverviewMainPrecision.textContent = PRECISION_LABELS[prec] || prec;
+    }
+
+    if (!window.electronAPI?.modelDownloadCheckAllVersions) return;
+    try {
+        const precision = modelPrecisionSelect.value || 'fp32';
+        const result = await window.electronAPI.modelDownloadCheckAllVersions(precision);
+        const mainInfo = result?.main;
+        const jpInfo = result?.jp;
+        const sifiganInfo = result?.sifigan;
+
+        const mainState = _resolveOverviewState(mainInfo);
+        _setOverviewCard(modelOverviewMainDot, modelOverviewMainStatus, modelOverviewMainVersion,
+            mainState.dotState, mainState.statusText, mainState.versionText, mainState.statusClass);
+
+        const jpState = _resolveOverviewState(jpInfo);
+        _setOverviewCard(modelOverviewJpDot, modelOverviewJpStatus, modelOverviewJpVersion,
+            jpState.dotState, jpState.statusText, jpState.versionText, jpState.statusClass);
+
+        // SiFiGAN: 当 status === 'download_url_not_configured' 时也视为未安装
+        const sifiganState = _resolveOverviewState(sifiganInfo);
+        _setOverviewCard(modelOverviewSifiganDot, modelOverviewSifiganStatus, modelOverviewSifiganVersion,
+            sifiganState.dotState, sifiganState.statusText, sifiganState.versionText, sifiganState.statusClass);
+    } catch (err) {
+        console.error('[Settings] Failed to refresh model overview:', err);
+        // IPC 失败时显示"检测中..."，不影响其他功能
     }
 }
 
@@ -1037,6 +1190,8 @@ modelPrecisionSelect.addEventListener('change', async () => {
             await window.electronAPI.modelDownloadOpen(prec);
         }
     } catch (_) {}
+    // 精度切换后刷新模型状态总览区（不同精度对应不同主模型/JP 模型版本）
+    refreshModelOverview().catch(() => {});
 });
 vocoderTypeSelect.addEventListener('change', () => {
     if (vocoderTypeSelect.value === 'sifigan') {
@@ -1135,14 +1290,37 @@ if (ortLogSeverityLevelSelect) {
 
 midiExtractToolSelect.addEventListener('change', () => applySettings());
 
-openModelDownloadBtn.addEventListener('click', async () => {
+async function _openModelDownloadWindow() {
     const precision = modelPrecisionSelect.value;
     try {
         await window.electronAPI.modelDownloadOpen(precision);
     } catch (err) {
         console.error('Failed to open model download:', err);
     }
-});
+}
+
+openModelDownloadBtn.addEventListener('click', _openModelDownloadWindow);
+
+// 顶部"打开模型下载"按钮：与底部按钮行为一致
+if (openModelDownloadBtnTop) {
+    openModelDownloadBtnTop.addEventListener('click', _openModelDownloadWindow);
+}
+
+// 监听模型下载窗口关闭事件：用户可能在下载窗口中下载/更新了模型，
+// 关闭后刷新总览区，让设置页面状态与实际文件状态保持同步。
+if (window.electronAPI?.onModelDownloadWindowClosed) {
+    window.electronAPI.onModelDownloadWindowClosed(() => {
+        refreshModelOverview().catch(() => {});
+        // 同时刷新模型状态列表（按精度列出各精度文件就绪情况）
+        if (window.electronAPI?.checkModels) {
+            window.electronAPI.checkModels().then(modelStatus => {
+                updateModelStatusDisplay(modelStatus);
+            }).catch(() => {});
+        }
+        // 重新检测 SiFiGAN 文件状态（可能刚下载完）
+        checkSifiganVocoderFiles().then(updateVocoderTypeUI).catch(() => {});
+    });
+}
 
 // ==================== Update section ====================
 
@@ -1283,6 +1461,14 @@ if (window.electronAPI?.checkModels) {
         updateModelStatusDisplay(modelStatus);
     }).catch(() => {});
 }
+
+// 初始加载模型状态总览区（主模型/JP/SiFiGAN 安装与版本状态）
+// 等 i18n 初始化完成后再调用，确保状态文字正确翻译。
+initI18n().then(() => {
+    refreshModelOverview().catch(() => {});
+}).catch(() => {
+    refreshModelOverview().catch(() => {});
+});
 
 initI18n().then(() => {
   applyLocale();

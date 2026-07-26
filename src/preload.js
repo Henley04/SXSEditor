@@ -165,6 +165,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('model-download:precision', handler);
     return () => ipcRenderer.removeListener('model-download:precision', handler);
   },
+  // 模型下载窗口关闭事件：用于设置页面刷新模型状态总览区
+  onModelDownloadWindowClosed: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('model-download:window-closed', handler);
+    return () => ipcRenderer.removeListener('model-download:window-closed', handler);
+  },
   onModelDownloadRevision: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('model-download:revision', handler);

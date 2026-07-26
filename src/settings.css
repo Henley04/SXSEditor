@@ -371,6 +371,150 @@ body {
 
 /* ==================== Model Status ==================== */
 
+/* 模型状态总览：聚合主模型/JP/SiFiGAN 三类模型的安装与版本状态 */
+.model-overview {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    margin-bottom: var(--space-5);
+    padding: var(--space-4) var(--space-5);
+    background: var(--bg-panel);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+}
+
+.model-overview-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+}
+
+.model-overview-title {
+    font-size: var(--font-md);
+    font-weight: 600;
+    color: var(--fg-primary);
+}
+
+/* 顶部"打开模型下载"按钮：宽度自适应内容，不再占满整行 */
+.model-overview-header .btn-open-model-download {
+    width: auto;
+    padding: 6px var(--space-4);
+    font-size: var(--font-sm);
+}
+
+.model-overview-cards {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-3);
+}
+
+@media (max-width: 720px) {
+    .model-overview-cards {
+        grid-template-columns: 1fr;
+    }
+}
+
+.model-overview-card {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    min-width: 0;
+}
+
+.model-overview-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.model-overview-dot {
+    flex-shrink: 0;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--fg-disabled);
+}
+
+.model-overview-dot.installed {
+    background: var(--success);
+    box-shadow: 0 0 6px var(--success);
+}
+
+.model-overview-dot.missing {
+    background: var(--fg-muted);
+}
+
+.model-overview-dot.warning {
+    background: var(--warning, #f0ad4e);
+}
+
+.model-overview-dot.checking {
+    background: var(--accent);
+    animation: pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+.model-overview-name {
+    font-weight: 600;
+    color: var(--fg-primary);
+    font-size: var(--font-sm);
+}
+
+.model-overview-precision {
+    margin-left: auto;
+    font-size: var(--font-xs);
+    color: var(--fg-muted);
+    padding: 2px 6px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+}
+
+.model-overview-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--font-xs);
+}
+
+.model-overview-status {
+    color: var(--fg-secondary);
+}
+
+.model-overview-status.installed {
+    color: var(--success);
+}
+
+.model-overview-status.missing {
+    color: var(--fg-muted);
+}
+
+.model-overview-status.warning {
+    color: var(--warning, #f0ad4e);
+}
+
+.model-overview-status.checking {
+    color: var(--accent);
+}
+
+.model-overview-version {
+    color: var(--fg-muted);
+    font-size: var(--font-xs);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 .model-status-list {
     display: flex;
     flex-direction: column;

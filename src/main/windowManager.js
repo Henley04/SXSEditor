@@ -302,6 +302,11 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
 
   modelDownloadWindow.on('closed', () => {
     modelDownloadWindow = null;
+    // 通知所有窗口（特别是设置窗口）：模型下载窗口已关闭，
+    // 让设置页面可以刷新模型状态总览区，反映最新下载/更新结果。
+    for (const wc of getAllWebContents()) {
+      try { wc.send('model-download:window-closed'); } catch (_) {}
+    }
   });
 }
 

@@ -441,6 +441,49 @@
 
             <!-- Model Management -->
             <div class="settings-section hidden" id="section-model">
+                <!-- 模型状态总览：聚合主模型/JP/SiFiGAN 的安装与版本状态 -->
+                <div class="model-overview" id="modelOverview">
+                    <div class="model-overview-header">
+                        <span class="model-overview-title" data-i18n="settings.modelOverviewTitle">模型状态总览</span>
+                        <button class="btn-open-model-download" id="openModelDownloadBtnTop" data-i18n="settings.openModelDownload">打开模型下载</button>
+                    </div>
+                    <div class="model-overview-cards">
+                        <div class="model-overview-card" id="overviewMainCard">
+                            <div class="model-overview-card-header">
+                                <span class="model-overview-dot" id="overviewMainDotSettings"></span>
+                                <span class="model-overview-name" data-i18n="settings.modelOverviewMain">主模型</span>
+                                <span class="model-overview-precision" id="overviewMainPrecision"></span>
+                            </div>
+                            <div class="model-overview-card-body">
+                                <span class="model-overview-status" id="overviewMainStatusText" data-i18n="settings.modelOverviewChecking">检测中...</span>
+                                <span class="model-overview-version" id="overviewMainVersion"></span>
+                            </div>
+                        </div>
+                        <div class="model-overview-card" id="overviewJpCard">
+                            <div class="model-overview-card-header">
+                                <span class="model-overview-dot" id="overviewJpDotSettings"></span>
+                                <span class="model-overview-name" data-i18n="settings.modelOverviewJp">日语模型</span>
+                                <span class="model-overview-precision" data-i18n="settings.modelOverviewJpPrecision">FP16</span>
+                            </div>
+                            <div class="model-overview-card-body">
+                                <span class="model-overview-status" id="overviewJpStatusText" data-i18n="settings.modelOverviewChecking">检测中...</span>
+                                <span class="model-overview-version" id="overviewJpVersion"></span>
+                            </div>
+                        </div>
+                        <div class="model-overview-card" id="overviewSifiganCard">
+                            <div class="model-overview-card-header">
+                                <span class="model-overview-dot" id="overviewSifiganDotSettings"></span>
+                                <span class="model-overview-name" data-i18n="settings.modelOverviewSifigan">SiFiGAN</span>
+                                <span class="model-overview-precision" data-i18n="settings.modelOverviewOptional">可选</span>
+                            </div>
+                            <div class="model-overview-card-body">
+                                <span class="model-overview-status" id="overviewSifiganStatusText" data-i18n="settings.modelOverviewChecking">检测中...</span>
+                                <span class="model-overview-version" id="overviewSifiganVersion"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="setting-group">
                     <label for="modelPrecision" data-i18n="settings.modelPrecision">模型精度</label>
                     <select id="modelPrecision">
