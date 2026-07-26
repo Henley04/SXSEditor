@@ -72,6 +72,63 @@
       </div>
 
       <h2>
+        <span data-lang="en">v1.0.7</span>
+        <span data-lang="zh">v1.0.7</span>
+      </h2>
+
+      <h3>
+        <span data-lang="en">New Features</span>
+        <span data-lang="zh">新功能</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en"><strong>Draggable playhead with seek</strong> — the playhead on the main page, audio preprocess page, and fragment editor can now be dragged to any position to start playback from there. A tooltip shows the current time while dragging, and playback resumes from the dropped position using cached audio when possible.</span><span data-lang="zh"><strong>可拖拽播放头跳转</strong>——主页面、音频预处理页面与分片编辑器的播放头现可拖拽到任意位置开始播放。拖拽时显示当前时间提示，松开后尽可能复用缓存音频从该位置继续播放。</span></li>
+        <li><span data-lang="en"><strong>diffStep chunked inference for faster preview</strong> — a new <em>diffStep chunked inference</em> setting splits the diffusion loop into chunks so audio can be streamed per chunk during preview, dramatically reducing time-to-first-audio for long fragments.</span><span data-lang="zh"><strong>diffStep 分块推理加速预览</strong>——新增「diffStep 分块推理」设置，将扩散循环切分为多个 chunk，预览时可按 chunk 流式推送音频，大幅缩短长分片的首音到达时间。</span></li>
+        <li><span data-lang="en"><strong>Time-ordered multi-fragment streaming for Play All</strong> — Play All now interleaves inference chunks across all fragments in global time order, so multiple fragments are synthesized and played back as one continuous timeline instead of sequentially.</span><span data-lang="zh"><strong>Play All 多分片时间顺序流式播放</strong>——Play All 现按全局时间顺序在所有分片间交错推理 chunk，多个分片作为一条连续时间线合成与播放，而非顺序逐个处理。</span></li>
+        <li><span data-lang="en"><strong>Per-chunk audio streaming via onChunkMel</strong> — the preview path now streams audio per diffusion chunk through a new <code>onChunkMel</code> callback, enabling true streaming synthesis instead of waiting for the entire diffusion loop to finish.</span><span data-lang="zh"><strong>通过 onChunkMel 按 chunk 流式推送音频</strong>——预览路径现通过新的 <code>onChunkMel</code> 回调按 diffusion chunk 流式推送音频，实现真正的流式合成，无需等待整个扩散循环完成。</span></li>
+        <li><span data-lang="en"><strong>Comprehensive Japanese pronunciation optimization</strong> — Japanese pronunciation has been comprehensively tuned. The default Japanese vocalization mode is now <strong>Hybrid Phonemes</strong>, and the hybrid mode now also covers Cantonese <code>yue_</code> phonemes.</span><span data-lang="zh"><strong>日语发音全面优化</strong>——日语发音已全面调校。默认日语发声方式改为「<strong>混合音素</strong>」，混合模式还新增粤语 <code>yue_</code> 音素覆盖。</span></li>
+        <li><span data-lang="en"><strong>Expanded kanji dictionary to all 2136 Jōyō kanji</strong> — the Japanese g2p kanji dictionary now covers all 2136 commonly-used kanji, greatly reducing the chance of unresolved kanji in Japanese lyrics.</span><span data-lang="zh"><strong>汉字字典扩展至全部 2136 个常用汉字</strong>——日语 g2p 汉字字典现覆盖全部 2136 个常用汉字，大幅降低日语歌词中出现未解析汉字的概率。</span></li>
+        <li><span data-lang="en"><strong>MIDI import BPM / time signature sync prompt</strong> — when importing a MIDI file, SXSEditor now asks whether to sync the project's BPM and time signature from the file, instead of always silently applying them.</span><span data-lang="zh"><strong>MIDI 导入 BPM / 拍号同步提示</strong>——导入 MIDI 文件时，SXSEditor 现会询问是否从文件同步项目的 BPM 与拍号，而非始终静默应用。</span></li>
+        <li><span data-lang="en"><strong>ORT session options exposed as settings</strong> — advanced ONNX Runtime session options are now user-configurable in Settings, letting power users tune execution providers and thread counts.</span><span data-lang="zh"><strong>ORT session 选项开放为设置</strong>——高级 ONNX Runtime session 选项现可在设置中由用户配置，便于进阶用户调校执行提供器与线程数。</span></li>
+        <li><span data-lang="en"><strong>Model status overview in Settings</strong> — a new model status overview section in Settings shows installed precisions and versions at a glance, and refreshes after settings load to reflect the active precision.</span><span data-lang="zh"><strong>设置页模型状态总览</strong>——设置页新增模型状态总览分区，一目了然显示已安装精度与版本；设置加载后会刷新以反映当前生效精度。</span></li>
+        <li><span data-lang="en"><strong>Base model precision separated from diffusion models</strong> — base model precision is now configured independently from diffusion models, so a single base precision can be reused across multiple diffusion model precisions.</span><span data-lang="zh"><strong>基础模型精度与扩散模型分离</strong>——基础模型精度现与扩散模型独立配置，单个基础精度可被多个扩散模型精度复用。</span></li>
+        <li><span data-lang="en"><strong>Rebuilt landing page</strong> — the official website's landing page was rebuilt with a new template, bilingual CN/EN support, and a Chinese 洛天依 demo audio.</span><span data-lang="zh"><strong>官网首页重建</strong>——官网首页已基于新模板重建，支持中英双语并提供中文洛天依演示音频。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Performance</span>
+        <span data-lang="zh">性能优化</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en"><strong>Startup optimization v2</strong> — heavy modules are now deferred until after the splash window paints, the <code>app:getVersion</code> regression is fixed, audio / model / update IPC is deferred, and unused Chromium features (spellcheck, etc.) are disabled for faster cold start.</span><span data-lang="zh"><strong>启动优化 v2</strong>——重型模块推迟到 splash 窗口绘制完成后再加载，修复了 <code>app:getVersion</code> 回归，音频 / 模型 / 更新 IPC 推迟初始化，并禁用了未使用的 Chromium 特性（拼写检查等）以加速冷启动。</span></li>
+        <li><span data-lang="en"><strong>Inline SVG splash for instant first paint</strong> — the splash screen SVG is now inlined into <code>splash.html</code> for an instant first paint instead of waiting for an external file.</span><span data-lang="zh"><strong>Splash SVG 内联首帧即时绘制</strong>——启动画面 SVG 现内联到 <code>splash.html</code> 中，首帧即时绘制，无需等待外部文件加载。</span></li>
+        <li><span data-lang="en"><strong>Long-fragment playhead drag &amp; fragment move lag fixed</strong> — playhead dragging on long fragments and moving fragments on the timeline are now smooth, eliminating the previous lag.</span><span data-lang="zh"><strong>长分片播放头拖拽与分片移动卡顿修复</strong>——长分片上的播放头拖拽与时间线上的分片移动现已流畅，消除了之前的卡顿。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Bug Fixes</span>
+        <span data-lang="zh">缺陷修复</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en">Fixed <strong>vocal audio playing earlier than MIDI notes</strong> — vocals were starting at the fragment's start position instead of the first note's position within the fragment, causing a visible offset between MIDI notes and audio. All playback / export paths (streaming Play All, non-streaming Play All, fragment editor playback, fragment export, and full-project export) are now aligned with MIDI note positions.</span><span data-lang="zh">修复<strong>歌声比 MIDI 音符更早出现</strong>——歌声此前从分片起点开始播放，而非分片内首个音符的位置，导致 MIDI 音符与音频之间出现明显偏移。所有播放 / 导出路径（流式 Play All、非流式 Play All、分片编辑器播放、分片导出、整项目导出）现均与 MIDI 音符位置对齐。</span></li>
+        <li><span data-lang="en">Fixed <strong>segmented streaming playback incompleteness</strong> — late-arriving chunks were previously scheduled at wrong times, causing playback to end prematurely. A new "waiting for inference" UI now pauses the playhead at the buffer frontier until the next chunk arrives.</span><span data-lang="zh">修复<strong>分段流式播放不完整</strong>——此前延迟到达的 chunk 被错误调度，导致播放提前结束。新增「等待推理」UI 会在缓冲前沿暂停播放头，直到下一个 chunk 到达。</span></li>
+        <li><span data-lang="en">Fixed <strong>comprehensive chunked streaming inference issues</strong> — multiple issues in the chunked streaming inference path are resolved, making streaming preview reliable across fragment boundaries.</span><span data-lang="zh">修复<strong>流式分块推理的多个问题</strong>——流式分块推理路径中的多个问题已解决，流式预览在分片边界处也能可靠工作。</span></li>
+        <li><span data-lang="en">Fixed <strong>playhead jumping back to start after dragging near the end</strong> — dragging the playhead close to the end of a fragment no longer snaps it back to position 0.</span><span data-lang="zh">修复<strong>播放头拖拽到末尾后跳回起点</strong>——将播放头拖到分片末尾附近时不再跳回 0 位置。</span></li>
+        <li><span data-lang="en">Fixed <strong>playhead not animating on streaming chunk arrival</strong> in the fragment editor — the playhead rAF loop is now started when the first streaming chunk arrives, so the canvas redraws and the playhead moves during streaming playback.</span><span data-lang="zh">修复<strong>分片编辑器流式 chunk 到达时播放头不动</strong>——首个流式 chunk 到达时即启动播放头 rAF 循环，流式播放期间画布会重绘、播放头会移动。</span></li>
+        <li><span data-lang="en">Fixed <strong>preprocess playhead sticking to the view on scroll / zoom</strong> — the preprocess playhead no longer follows the viewport on scroll / zoom; scrollbars were added and the minimum zoom was lowered for better navigation.</span><span data-lang="zh">修复<strong>预处理播放头在滚动 / 缩放时跟随视图</strong>——预处理播放头不再在滚动 / 缩放时跟随视口；新增滚动条并降低了最小缩放比例，便于导航。</span></li>
+        <li><span data-lang="en">Fixed <strong>track-level lyrics dropped by @tonejs/midi</strong> — track-level lyrics that were previously lost during MIDI import are now restored.</span><span data-lang="zh">修复<strong>@tonejs/midi 丢弃轨道级歌词</strong>——此前 MIDI 导入时丢失的轨道级歌词现已恢复。</span></li>
+        <li><span data-lang="en">Fixed <strong>FP16 / FP32 input type mismatch</strong> — the inference pipeline now auto-retries with corrected dummy inputs when an FP16 / FP32 input type mismatch is detected, instead of failing the synthesis outright.</span><span data-lang="zh">修复<strong>FP16 / FP32 输入类型不匹配</strong>——推理管道在检测到 FP16 / FP32 输入类型不匹配时会自动用修正后的 dummy inputs 重试，而非直接合成失败。</span></li>
+        <li><span data-lang="en">Fixed <strong>model overview precision race after settings load</strong> — the model status overview now refreshes after settings are loaded, so it correctly reflects the active precision instead of a stale one.</span><span data-lang="zh">修复<strong>设置加载后模型总览精度竞态</strong>——模型状态总览现会在设置加载完成后刷新，正确反映当前生效精度而非过期值。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Security</span>
+        <span data-lang="zh">安全</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en"><strong>Scrubbed ModelScope credentials from git history</strong> — any accidentally committed ModelScope credentials were scrubbed from git history, and safeguards were added to prevent future leaks.</span><span data-lang="zh"><strong>清除 git 历史中的 ModelScope 凭据</strong>——已从 git 历史中清除误提交的 ModelScope 凭据，并新增防护以防止未来再次泄漏。</span></li>
+      </ul>
+
+      <h2>
         <span data-lang="en">v1.0.6</span>
         <span data-lang="zh">v1.0.6</span>
       </h2>
