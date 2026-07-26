@@ -202,33 +202,34 @@ export async function playAll() {
 
             const chunkStartSec = chunkInfo.sampleOffset / SAMPLE_RATE;
             const chunkEndSec = chunkInfo.sampleEnd / SAMPLE_RATE;
-            // playhead 坐标系：playheadSec = globalSec - firstChunkOffsetSec
-            // （首 chunk 从 playhead 0 开始，与 playbackStartTime 对齐）
-            const chunkStartPlayheadSec = chunkStartSec - _streamingFirstChunkOffsetSec;
-            const chunkEndPlayheadSec = chunkEndSec - _streamingFirstChunkOffsetSec;
+            // 所有计算使用全局秒（项目时间线上的绝对位置）：
+            // playhead 在 drawPlayheadLine 中也以全局秒绘制，与 MIDI note 的
+            // global beat 位置对齐。pipeline 已将 chunk 的 sampleOffset 调整为
+            // fragStartSample + firstNoteOffsetSample + segSampleOffset + ...，
+            // 即首 chunk 的全局位置就是首音符的全局位置，playhead 直接从该位置开始。
 
-            // 第一个 chunk：初始化时间基准
-            // playbackStartTime = startCtxTime + firstChunkOffsetSec，使得首 chunk
-            // 发声时 elapsed=0，playhead 从 0 开始。即使首 fragment 的 startTimeBeat>0
-            // 也不会出现"走但没声音"的体验。
+            // 第一个 chunk：初始化时间基准。
+            // playbackStartTime = startCtxTime + 0.05 - chunkStartSec，使得首 chunk
+            // 在 startCtxTime+0.05 发声时，elapsed = chunkStartSec，playhead 跳到
+            // 首音符的全局位置（而非 0），与 MIDI note 对齐。
             if (!streamingStarted) {
               streamingStarted = true;
               _streamingFirstChunkOffsetSec = chunkStartSec;
-              state.playbackStartTime = ctx.currentTime + 0.05 + chunkStartSec;
+              state.playbackStartTime = ctx.currentTime + 0.05 - chunkStartSec;
               state.playbackPauseOffset = 0;
               state.isPlaying = true;
               startPlayheadAnimation();
             }
 
-            // 更新 buffer 前沿（已收到音频的最远位置）
-            if (chunkEndPlayheadSec > _streamingBufferEndSec) {
-              _streamingBufferEndSec = chunkEndPlayheadSec;
+            // 更新 buffer 前沿（已收到音频的最远全局位置）
+            if (chunkEndSec > _streamingBufferEndSec) {
+              _streamingBufferEndSec = chunkEndSec;
             }
 
             // 检测 chunk 是否到达过晚（调度时间已过去）。
             // 这可能发生在 rAF underrun 检测尚未触发的竞态条件下。
             // 若到达过晚且推理未完成，进入等待状态，由下方恢复逻辑重新调度。
-            const prelimScheduleTime = state.playbackStartTime + chunkStartPlayheadSec;
+            const prelimScheduleTime = state.playbackStartTime + chunkStartSec;
             const minTime = ctx.currentTime + 0.01;
             if (prelimScheduleTime < minTime && !_streamingInferenceDone && !_streamingWaitingForInference) {
               _streamingWaitingForInference = true;
@@ -241,18 +242,18 @@ export async function playAll() {
             }
 
             // 如果正在等待推理，恢复播放：调整 playbackStartTime 使 chunk
-            // 在 currentTime+0.05 发声（此时 playhead 位于 chunkStartPlayheadSec），
+            // 在 currentTime+0.05 发声（此时 playhead 位于 chunkStartSec 全局位置），
             // 并重启 rAF 动画。
             if (_streamingWaitingForInference) {
               _streamingWaitingForInference = false;
-              state.playbackStartTime = (ctx.currentTime + 0.05) - chunkStartPlayheadSec;
+              state.playbackStartTime = (ctx.currentTime + 0.05) - chunkStartSec;
               startPlayheadAnimation();
             }
 
-            // 调度 chunk：在其 playhead 位置发声。
-            // scheduleTime = playbackStartTime + chunkStartPlayheadSec
+            // 调度 chunk：在其全局位置发声。
+            // scheduleTime = playbackStartTime + chunkStartSec
             // 这样多分片同时段的 chunk 会叠加播放（而非顺序播放）。
-            const scheduleTime = state.playbackStartTime + chunkStartPlayheadSec;
+            const scheduleTime = state.playbackStartTime + chunkStartSec;
             source.start(Math.max(scheduleTime, minTime));
 
             // 统一的 onended：递减活跃 source 计数，释放引用，
@@ -390,13 +391,16 @@ export async function playAll() {
           },
         });
 
-        // padding 到 fragment 时长，确保混音时长对齐
+        // padding 到 fragment 时长，并在前面填充 firstNoteOffsetSample 个零样本：
+        // synthesizeSVS 返回的 audioData[0] 对应 filledNotes[0].start（首音符起点
+        // 相对 fragment），而非 fragment 起点。前置零样本使 paddedAudio[0] 对齐到
+        // fragment 起点，与下游 startSample = fragment.startTime→sample 的混音逻辑
+        // 协作，最终将 audioData[0] 放置在首音符的全局位置，与 MIDI note 对齐。
         const expectedSamples = Math.ceil((fragDuration / state.project.bpm) * 60 * SAMPLE_RATE);
-        let paddedAudio = audioData;
-        if (audioData.length < expectedSamples) {
-          paddedAudio = new Float32Array(expectedSamples);
-          paddedAudio.set(audioData);
-        }
+        const firstNoteOffsetSample = Math.floor((clippedNotes[0].start / state.project.bpm) * 60 * SAMPLE_RATE);
+        const requiredLength = Math.max(expectedSamples, firstNoteOffsetSample + audioData.length);
+        const paddedAudio = new Float32Array(requiredLength);
+        paddedAudio.set(audioData, firstNoteOffsetSample);
         audioResults.push({
           audioData: paddedAudio,
           startTimeBeat: fragment.startTime,
@@ -1054,13 +1058,16 @@ export async function runExportJob(opts) {
         },
       });
 
-      // padding 到 fragment 时长，确保混音时长对齐
+      // padding 到 fragment 时长，并在前面填充 firstNoteOffsetSample 个零样本：
+      // synthesizeSVS 返回的 audioData[0] 对应 filledNotes[0].start（首音符起点
+      // 相对 fragment），而非 fragment 起点。前置零样本使 paddedAudio[0] 对齐到
+      // fragment 起点，与下游 startSample = fragment.startTime→sample 的混音逻辑
+      // 协作，最终将 audioData[0] 放置在首音符的全局位置，与 MIDI note 对齐。
       const expectedSamples = Math.ceil((fragDuration / state.project.bpm) * 60 * SAMPLE_RATE);
-      let paddedAudio = audioData;
-      if (audioData.length < expectedSamples) {
-        paddedAudio = new Float32Array(expectedSamples);
-        paddedAudio.set(audioData);
-      }
+      const firstNoteOffsetSample = Math.floor((clippedNotes[0].start / state.project.bpm) * 60 * SAMPLE_RATE);
+      const requiredLength = Math.max(expectedSamples, firstNoteOffsetSample + audioData.length);
+      const paddedAudio = new Float32Array(requiredLength);
+      paddedAudio.set(audioData, firstNoteOffsetSample);
       audioResults.push({
         audioData: paddedAudio,
         startTimeBeat: fragment.startTime,

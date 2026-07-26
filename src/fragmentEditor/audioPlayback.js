@@ -445,9 +445,18 @@ function padAudioToFragmentDuration(audioData) {
   if (!fragment || !fragment.duration || !audioData || audioData.length === 0) return audioData;
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
   const expectedSamples = Math.ceil((fragment.duration / bpm) * 60 * getSampleRate());
-  if (audioData.length >= expectedSamples) return audioData;
-  const padded = new Float32Array(expectedSamples);
-  padded.set(audioData);
+  // synthesizeFragmentSVS 返回的 audioData[0] 对应 filledNotes[0].start（首音符起点
+  // 相对 fragment），而非 fragment 起点。前置 firstNoteOffsetSample 个零样本使
+  // paddedAudio[0] 对齐到 fragment 起点，这样下游 startOffset / currentTime 都以
+  // fragment 起点为参考，与 canvas 中 note.start 的 beat 坐标一致。
+  const clippedNotes = getClippedNotes();
+  const firstNoteOffsetSample = clippedNotes.length > 0
+    ? Math.floor((clippedNotes[0].start / bpm) * 60 * getSampleRate())
+    : 0;
+  const requiredLength = Math.max(expectedSamples, firstNoteOffsetSample + audioData.length);
+  if (requiredLength <= audioData.length && firstNoteOffsetSample === 0) return audioData;
+  const padded = new Float32Array(requiredLength);
+  padded.set(audioData, firstNoteOffsetSample);
   return padded;
 }
 
@@ -559,12 +568,21 @@ export async function playFragment() {
         else source.connect(ctx.destination);
 
         // 第一个 chunk 立即播放，后续 chunk 接续前一个结束时间
+        // chunk 的音频对应 audioData[0..]，即 filledNotes[0].start 起点的音频
+        // （pipeline 已在 _synthesizeImpl 末尾截掉前导休止符）。playhead 需要从
+        // firstNoteStartSec 开始，使 currentTime 与 canvas 中 note.start 的 beat
+        // 坐标对齐，避免"歌声比 MIDI 更早出现"的偏移。
         if (streamingSources.length === 0) {
           streamingNextStart = ctx.currentTime + 0.05; // 50ms 延迟避免调度抖动
+          const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+          const clippedNotes = getClippedNotes();
+          const firstNoteStartSec = clippedNotes.length > 0
+            ? (clippedNotes[0].start / bpm) * 60
+            : 0;
           setFragmentIsPlaying(true);
           setFragmentPlaybackStartTime(ctx.currentTime + 0.05);
-          setFragmentPlaybackOffset(0);
-          setFragmentCurrentTime(0);
+          setFragmentPlaybackOffset(firstNoteStartSec);
+          setFragmentCurrentTime(firstNoteStartSec);
           updateFragmentPlayButton();
           // 启动 playhead rAF 动画循环：与主页面 startPlayheadAnimation、
           // playFragmentShared 末尾的 updateFragmentPlayhead 调用对齐。

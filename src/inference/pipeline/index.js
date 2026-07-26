@@ -2114,10 +2114,20 @@ class OnnxSVSPipeline {
                 chunkPlan = this._diffusion._planChunks(totalFrames, chunkFrames, overlapFrames);
             }
 
+            // filledNotes[0].start is the first note's start beat within the fragment.
+            // notesToSequences generates audio starting from this beat (totalDuration
+            // = sum of note durations, NOT including leading silence before the first
+            // note). So segAudio[0] corresponds to filledNotes[0].start, not beat 0.
+            // firstNoteStartBeat is used to offset the chunk's sampleOffset so that
+            // the audio is placed at its correct absolute project position
+            // (fragment.startTime + firstNote.start, not fragment.startTime).
+            const firstNoteStartBeat = filledNotes[0].start;
+
             prepared.push({
                 fragIdx: fi,
                 startTimeBeat: frag.startTimeBeat,
                 durationBeats: frag.durationBeats,
+                firstNoteStartBeat,
                 bpm,
                 xt,
                 combinedCond,
@@ -2130,7 +2140,7 @@ class OnnxSVSPipeline {
                 committedFrames: 0,
                 segAudio: new Float32Array(totalFrames * HOP_SIZE),
             });
-            console.log(`[MultiStream] Fragment ${fi} prepared: ${totalFrames} frames, startTime=${frag.startTimeBeat}beat, chunks=${chunkPlan ? chunkPlan.specs.length : 0}`);
+            console.log(`[MultiStream] Fragment ${fi} prepared: ${totalFrames} frames, startTime=${frag.startTimeBeat}beat, firstNoteStart=${firstNoteStartBeat}beat, chunks=${chunkPlan ? chunkPlan.specs.length : 0}`);
         }
 
         if (prepared.length === 0) {
@@ -2197,18 +2207,23 @@ class OnnxSVSPipeline {
                     melData.set(p.xt.data.subarray(melStart * MEL_DIM, melEnd * MEL_DIM));
                     const segF0 = p.f0Hz ? p.f0Hz.subarray(melStart, melEnd) : null;
                     const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
+                    // segAudio[0] corresponds to filledNotes[0].start (first note's
+                    // start within fragment), not beat 0. Add firstNoteOffsetSample
+                    // so chunk's sampleOffset reflects the audio's true absolute
+                    // project position (fragment.startTime + firstNote.start).
+                    const firstNoteOffsetSample = Math.floor((p.firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE);
                     const segSampleOffset = melStart * HOP_SIZE;
                     const isLastGlobalChunk = gi === globalChunks.length - 1;
 
                     // 透传流式回调：vocoder 内部 chunk 完成时立即推送，
-                    // sampleOffset 转换为全局采样位置（fragment 起点 + diffusion chunk 偏移 + vocoder chunk 偏移）。
+                    // sampleOffset 转换为全局采样位置（fragment 起点 + firstNote 偏移 + diffusion chunk 偏移 + vocoder chunk 偏移）。
                     // 这样大 chunkFrames 下 vocoder 内部分片时也能流式播放，避免等到整个 diffusion chunk 完成。
                     const vocoderOnChunk = onChunkAudio ? (chunkInfo) => {
                         try {
                             onChunkAudio({
                                 chunkIndex: gi,
-                                sampleOffset: fragStartSample + segSampleOffset + chunkInfo.sampleOffset,
-                                sampleEnd: fragStartSample + segSampleOffset + chunkInfo.sampleEnd,
+                                sampleOffset: fragStartSample + firstNoteOffsetSample + segSampleOffset + chunkInfo.sampleOffset,
+                                sampleEnd: fragStartSample + firstNoteOffsetSample + segSampleOffset + chunkInfo.sampleEnd,
                                 audio: chunkInfo.audio,
                                 totalSamples: totalMixedSamples,
                                 isLast: isLastGlobalChunk && chunkInfo.isLast,
@@ -2231,13 +2246,15 @@ class OnnxSVSPipeline {
                 await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk);
                 await gpuDrain();
                 const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
+                // 同分块路径：segAudio[0] 对应 filledNotes[0].start，需加 firstNoteOffsetSample
+                const firstNoteOffsetSample = Math.floor((p.firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE);
                 const isLastGlobalChunk = gi === globalChunks.length - 1;
                 const vocoderOnChunk = onChunkAudio ? (chunkInfo) => {
                     try {
                         onChunkAudio({
                             chunkIndex: gi,
-                            sampleOffset: fragStartSample + chunkInfo.sampleOffset,
-                            sampleEnd: fragStartSample + chunkInfo.sampleEnd,
+                            sampleOffset: fragStartSample + firstNoteOffsetSample + chunkInfo.sampleOffset,
+                            sampleEnd: fragStartSample + firstNoteOffsetSample + chunkInfo.sampleEnd,
                             audio: chunkInfo.audio,
                             totalSamples: totalMixedSamples,
                             isLast: isLastGlobalChunk && chunkInfo.isLast,
@@ -2259,7 +2276,10 @@ class OnnxSVSPipeline {
         // ===== Phase 4: 混合所有分片音频 =====
         const mixedAudio = new Float32Array(totalMixedSamples);
         for (const p of prepared) {
-            const startSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
+            // segAudio[0] 对应 filledNotes[0].start，需加 firstNoteOffsetSample
+            // 使音频放置在正确的绝对工程位置 (fragment.startTime + firstNote.start)
+            const firstNoteOffsetSample = Math.floor((p.firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE);
+            const startSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE) + firstNoteOffsetSample;
             for (let i = 0; i < p.segAudio.length; i++) {
                 const targetIdx = startSample + i;
                 if (targetIdx < totalMixedSamples) {
