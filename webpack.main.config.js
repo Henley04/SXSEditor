@@ -3,6 +3,9 @@ const path = require('node:path');
 
 module.exports = {
   entry: './src/main.js',
+  // Disable source maps in production builds to shrink app.asar. Dev mode
+  // (`npm start`) keeps source maps because NODE_ENV is not set there.
+  devtool: process.env.NODE_ENV === 'production' ? false : undefined,
   module: {
     rules: require('./webpack.rules'),
   },
