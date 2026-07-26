@@ -653,6 +653,11 @@ async function loadDevices() {
         const currentSetting = await window.electronAPI.getSettings();
         window._currentSetting = currentSetting;
         applySavedSettingsToUI(currentSetting);
+        // 设置加载完成后刷新模型状态总览区：初次调用（initI18n 触发）时 DOM 下拉框
+        // 仍是 HTML 默认值 'fp32'，会按错误精度扫描模型目录。此处 DOM 已更新为用户
+        // 保存的精度，重新刷新以覆盖错误结果。注意：精度切换的 change 事件仍读 DOM
+        // 当前值（预览未保存的新值），此处的二次调用不影响该路径。
+        refreshModelOverview().catch(() => {});
         const provider = currentSetting?.inferenceProvider || 'ortnode';
 
         // 再获取设备列表（硬件检测可能较慢）
