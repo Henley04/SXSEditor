@@ -5,15 +5,142 @@ import {
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty } from './projectManager.js';
-import { playAll, pausePlayback, stopPlayback, exportAll } from './audioPlayback.js';
+import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
-import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll } from './timelineRenderer.js';
-import { openFragmentEditor, finishDrag, handleAudioToMidi } from './fragmentOperations.js';
+import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
+import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 
 // Click-vs-drag tracking for fragment selection
 let _clickStartPos = null;
 const CLICK_THRESHOLD = 3;
+
+// Playhead drag state — 拖拽进度条时记录是否在拖拽 playhead
+let _isPlayheadDragging = false;
+// 拖拽开始时是否正在播放。mouseup 时若为 true，则从新位置恢复播放。
+// 拖拽期间只更新视觉（不重启 source），避免每次 mousemove 重启播放导致卡顿。
+let _wasPlayingBeforeDrag = false;
+// Playhead tooltip 元素（懒创建）
+let _playheadTooltip = null;
+// rAF 节流：mousemove 触发频率高于刷新率，合并同一帧内的多次 playhead 视觉更新。
+// _playheadDragRaf 标记是否有 pending 的 rAF 回调；
+// _playheadDragPendingSeconds 记录最新一次 mousemove 计算出的秒数，供 rAF 回调读取。
+let _playheadDragRaf = 0;
+let _playheadDragPendingSeconds = 0;
+
+function _ensurePlayheadTooltip() {
+  if (_playheadTooltip && document.body.contains(_playheadTooltip)) return _playheadTooltip;
+  _playheadTooltip = document.createElement('div');
+  _playheadTooltip.className = 'playhead-tooltip';
+  _playheadTooltip.style.cssText = `
+    position: fixed;
+    z-index: 9999;
+    padding: 4px 8px;
+    background: var(--bg-tooltip, #1a1a2e);
+    color: var(--fg-tooltip, #e0e0f0);
+    border: 1px solid var(--border-tooltip, #3a3a5a);
+    border-radius: 3px;
+    font-size: 11px;
+    font-family: sans-serif;
+    pointer-events: none;
+    white-space: nowrap;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+    display: none;
+  `;
+  document.body.appendChild(_playheadTooltip);
+  return _playheadTooltip;
+}
+
+function _showPlayheadTooltip(clientX, clientY, seconds) {
+  const tip = _ensurePlayheadTooltip();
+  tip.textContent = formatTime(seconds) + ' · ' + t('main.dragToSeek');
+  tip.style.left = (clientX + 12) + 'px';
+  tip.style.top = (clientY + 12) + 'px';
+  tip.style.display = 'block';
+}
+
+function _hidePlayheadTooltip() {
+  if (_playheadTooltip) _playheadTooltip.style.display = 'none';
+}
+
+/**
+ * 计算当前播放头在 fragment canvas 内部坐标系下的 X。
+ * 播放中：实时计算；未播放：使用 playbackPauseOffset。
+ */
+function _getCurrentPlayheadX() {
+  return playbackTimeToX(getCurrentPlaybackSeconds());
+}
+
+/**
+ * 把鼠标事件的 clientX 转换为 fragment canvas 内部 X 坐标。
+ * 因为 fragment-canvas 自身有 translate(-scrollX, -scrollY) 变换，
+ * getBoundingClientRect() 已反映了变换后的位置，所以 clientX-rect.left
+ * 直接就是 canvas 内部坐标。
+ */
+function _mouseToCanvasX(e) {
+  const rect = dom.fragmentCanvas.getBoundingClientRect();
+  return e.clientX - rect.left;
+}
+
+function _mouseToCanvasY(e) {
+  const rect = dom.fragmentCanvas.getBoundingClientRect();
+  return e.clientY - rect.top;
+}
+
+/**
+ * 把 canvas 内部 X 坐标转换为可播放的秒数，并截断到 [0, duration - 0.05]。
+ * 余量 50ms 防止拖拽到接近末尾时 source.start(0, offset) 几乎立即结束触发 onended
+ * 重置位置到 0，导致 playhead 从拖拽位置跳回开头。
+ */
+function _canvasXToClampedSeconds(x) {
+  const seconds = xToPlaybackTime(x);
+  const audioData = state.currentAudioData;
+  if (!audioData || audioData.length === 0) {
+    return Math.max(0, seconds);
+  }
+  const duration = audioData.length / 24000; // SAMPLE_RATE
+  // 短音频 fallback：若音频本身不足 100ms，余量缩减到 duration / 2
+  const margin = duration > 0.1 ? 0.05 : duration * 0.5;
+  return Math.max(0, Math.min(duration - margin, seconds));
+}
+
+/**
+ * 拖拽期间只更新视觉（不重启 source）。
+ * 更新 state.playbackPauseOffset（作为 mouseup 后恢复播放的起点）、
+ * 绘制暂停态 playhead、更新时间显示。
+ * playhead 绘制走 rAF 节流：mousemove 频率高于刷新率，合并同一帧内的多次更新，
+ * 避免分片变长后大 canvas 重复 clearRect/drawImage 造成掉帧。
+ */
+function _updatePlayheadVisual(seconds) {
+  state.playbackPauseOffset = seconds;
+  dom.timeDisplay.textContent = formatTime(seconds);
+  _playheadDragPendingSeconds = seconds;
+  if (!_playheadDragRaf) {
+    _playheadDragRaf = requestAnimationFrame(() => {
+      _playheadDragRaf = 0;
+      drawPausedPlayheadAt(_playheadDragPendingSeconds);
+    });
+  }
+}
+
+/**
+ * 结束拖拽：若拖拽前正在播放，从当前位置恢复播放。
+ * 取消 pending rAF 并立即绘制最终位置，确保 mouseup 后 playhead 视觉与播放起点一致。
+ */
+function _endPlayheadDrag() {
+  if (!_isPlayheadDragging) return;
+  _isPlayheadDragging = false;
+  _hidePlayheadTooltip();
+  if (_playheadDragRaf) {
+    cancelAnimationFrame(_playheadDragRaf);
+    _playheadDragRaf = 0;
+  }
+  drawPausedPlayheadAt(state.playbackPauseOffset);
+  if (_wasPlayingBeforeDrag) {
+    _wasPlayingBeforeDrag = false;
+    startAudioPlayback(state.playbackPauseOffset);
+  }
+}
 
 // BPM and time signature inputs
 dom.bpmInput.addEventListener('change', () => {
@@ -37,10 +164,16 @@ dom.btnPlay.addEventListener('click', async () => {
     showAlertDialog(t('main.noFragmentsToPlay'));
     return;
   }
-  if (state.isSynthesizing) {
+  if (state.isPlaying || state.isSynthesizing) {
     return;
   }
-  await playAll();
+  // 已有缓存的合成音频：从暂停位置恢复播放（无需重新合成）。
+  // stopPlayback / 自然结束时 currentAudioData 会被置 null，下次点击 Play 会重新合成。
+  if (state.currentAudioData && state.currentAudioData.length > 0) {
+    await startAudioPlayback(state.playbackPauseOffset);
+  } else {
+    await playAll();
+  }
 });
 
 dom.btnPause.addEventListener('click', () => {
@@ -73,6 +206,9 @@ dom.btnAddSinger.addEventListener('click', () => {
 // Audio to MIDI
 dom.btnAudioToMidi.addEventListener('click', handleAudioToMidi);
 
+// Import MIDI file (multi-track → one singer per track)
+dom.btnImportMidi.addEventListener('click', handleImportMidi);
+
 // Fragment canvas mouse events
 dom.fragmentCanvas.addEventListener('mousedown', (e) => {
   const rect = dom.fragmentCanvas.getBoundingClientRect();
@@ -85,6 +221,30 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
 
   // Record click position for click-vs-drag detection
   _clickStartPos = { x: e.clientX, y: e.clientY };
+
+  // 左键点击播放头三角形手柄或 header 区域 → 开始拖拽设置/跳转播放位置
+  // 优先级高于分片拖拽，避免 playhead 卡在分片边缘时无法拖动
+  // 拖拽期间只更新视觉（不重启 source），mouseup 时若之前在播放则恢复播放。
+  if (e.button === 0) {
+    const canvasH = dom.fragmentCanvas.clientHeight;
+    const playheadX = _getCurrentPlayheadX();
+    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
+      && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
+    const onHeader = y <= HEADER_HEIGHT;
+    if (onPlayhead || onHeader) {
+      const newSeconds = _canvasXToClampedSeconds(x);
+      if (state.isPlaying) {
+        _wasPlayingBeforeDrag = true;
+        pausePlayback();
+      } else {
+        _wasPlayingBeforeDrag = false;
+      }
+      _isPlayheadDragging = true;
+      _updatePlayheadVisual(newSeconds);
+      _hidePlayheadTooltip();
+      return;
+    }
+  }
 
   for (let i = 0; i < singers.length; i++) {
     const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
@@ -122,7 +282,35 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
 });
 
 dom.fragmentCanvas.addEventListener('mousemove', (e) => {
-  if (!state.dragState) return;
+  // 拖拽 playhead 优先级最高：只更新视觉（不重启 source，避免卡顿）
+  if (_isPlayheadDragging) {
+    const x = _mouseToCanvasX(e);
+    const newSeconds = _canvasXToClampedSeconds(x);
+    _updatePlayheadVisual(newSeconds);
+    return;
+  }
+
+  if (!state.dragState) {
+    // 鼠标悬停在 playhead 上时：显示 ew-resize 光标 + 时间 tooltip
+    const rect = dom.fragmentCanvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+    const canvasH = dom.fragmentCanvas.clientHeight;
+    const playheadX = _getCurrentPlayheadX();
+    const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
+      && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
+    const onHeader = y <= HEADER_HEIGHT;
+    if (onPlayhead || onHeader) {
+      dom.fragmentCanvas.style.cursor = 'ew-resize';
+      const tipSeconds = _canvasXToClampedSeconds(x);
+      _showPlayheadTooltip(e.clientX, e.clientY, tipSeconds);
+      return;
+    } else {
+      dom.fragmentCanvas.style.cursor = 'default';
+      _hidePlayheadTooltip();
+    }
+    return;
+  }
 
   const rect = dom.fragmentCanvas.getBoundingClientRect();
   const x = e.clientX - rect.left;
@@ -182,6 +370,12 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
 });
 
 dom.fragmentCanvas.addEventListener('mouseup', (e) => {
+  // 结束 playhead 拖拽：若拖拽前正在播放，从新位置恢复播放
+  if (_isPlayheadDragging) {
+    _endPlayheadDrag();
+    return;
+  }
+
   // Check if this was a click (no significant movement) vs drag
   if (_clickStartPos && state.dragState) {
     const dx = e.clientX - _clickStartPos.x;
@@ -202,6 +396,7 @@ dom.fragmentCanvas.addEventListener('mouseup', (e) => {
 });
 dom.fragmentCanvas.addEventListener('mouseleave', () => {
   _clickStartPos = null;
+  _endPlayheadDrag();
   finishDrag();
 });
 

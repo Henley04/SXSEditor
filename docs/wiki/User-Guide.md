@@ -185,6 +185,8 @@ Click **Extract MIDI**:
 - Extracted notes appear on the MIDI canvas.
 - Note count is displayed.
 
+Alternatively, click **Import MIDI** to load notes from an existing `.mid` or `.midi` file. This replaces any notes currently on the canvas. Standard MIDI files (format 0/1/2, including SMPTE and multi-track) are supported; drum tracks (channel 10) are filtered out automatically.
+
 ### Step 3: Edit MIDI Notes
 
 **This step is mandatory.** Auto-extracted MIDI is approximate. You must verify and correct it:
@@ -568,8 +570,9 @@ Import a standard MIDI file into the Fragment Editor.
 
 ### MIDI File Handling
 
-- Multi-track MIDI files: The first track with notes is used.
-- Lyrics from MIDI are preserved if present.
+- Standard MIDI files (format 0, 1, 2) are supported, including SMPTE time division.
+- Multi-track MIDI files: all non-drum tracks are merged onto a single timeline. Drum tracks (MIDI channel 10) are automatically filtered out.
+- Lyrics from MIDI (meta event 0x05) are preserved if present.
 - Note timing is converted to the project's BPM.
 
 ---

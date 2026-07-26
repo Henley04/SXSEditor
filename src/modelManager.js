@@ -71,6 +71,75 @@ const MODEL_FILE_MANIFEST = [
   { filePath: 'basic_pitch_model/group1-shard1of1.bin', required: true },
 ];
 
+// ===== SVS model classification (base vs diffusion) =====
+// SVS 模型按精度管理需求分为两类：
+//   1. base (基础模型): 7 个轻量模型，统一精度检测（probe preflow），共用 isFP16 标志
+//      - note_text_encoder / note_pitch_encoder / note_type_encoder / f0_encoder
+//      - preflow / cond_emb / mel_transform
+//   2. diffusion (扩散模型): 2 个大模型，各自独立精度检测
+//      - diff_step_dml (diffStepIsFP16)
+//      - vocoder_dml  (vocoderIsFP16)
+//
+// 这三类模型的精度在 pipeline 中分别用 baseModelsIsFP16 / diffStepIsFP16 /
+// vocoderIsFP16 跟踪，互不影响（例如 W16A32 diff_step 回退 FP32 时
+// baseModelsIsFP16 仍可为 true）。
+//
+// 文件夹与版本管理：所有 SVS 模型（base + diffusion）仍共用同一精度子目录
+// （fp16/ int8/ int8/optimized_npu/），共用同一 version.json —— 这里只是
+// 在代码层面区分模型类别，不改变磁盘布局。
+const BASE_SVS_MODEL_FILES = new Set([
+  'note_text_encoder.onnx',
+  'note_pitch_encoder.onnx',
+  'note_type_encoder.onnx',
+  'f0_encoder.onnx',
+  'preflow.onnx',
+  'cond_emb.onnx',
+  'mel_transform.onnx',
+]);
+
+// diff_step 有 _dml 与非 _dml 两种导出变体（后者为 JP v1/v2 旧包回退用）
+const DIFF_STEP_MODEL_FILES = new Set([
+  'diff_step_dml.onnx',
+  'diff_step.onnx',
+]);
+
+// vocoder 有 _dml 与非 _dml 两种导出变体（后者为 DML 不兼容时的回退）
+const VOCODER_MODEL_FILES = new Set([
+  'vocoder_dml.onnx',
+  'vocoder.onnx',
+]);
+
+/**
+ * 判断是否为 SVS 基础模型文件（除 vocoder 和 diffstep 外的 SVS 模型）。
+ * 基础模型共用 preflow probe 检测精度（baseModelsIsFP16）。
+ */
+function isBaseSvsModelFile(filePath) {
+  if (!filePath || typeof filePath !== 'string') return false;
+  // 排除 .onnx.data 外部数据文件（基础模型的 .data 与 .onnx 同名）
+  const baseName = filePath.replace(/\.onnx\.data$/, '.onnx');
+  return BASE_SVS_MODEL_FILES.has(baseName);
+}
+
+/**
+ * 判断是否为 diff_step 模型文件（独立精度检测 diffStepIsFP16）。
+ */
+function isDiffStepModelFile(filePath) {
+  if (!filePath || typeof filePath !== 'string') return false;
+  const baseName = filePath.replace(/\.onnx\.data$/, '.onnx');
+  return DIFF_STEP_MODEL_FILES.has(baseName);
+}
+
+/**
+ * 判断是否为 vocoder 模型文件（独立精度检测 vocoderIsFP16）。
+ * 注意：SiFiGAN 变体（sifigan_vocoder_*）不属于此类别，SiFiGAN 由
+ * sifiganPrecision 单独管理，与主模型精度完全解耦。
+ */
+function isVocoderModelFile(filePath) {
+  if (!filePath || typeof filePath !== 'string') return false;
+  const baseName = filePath.replace(/\.onnx\.data$/, '.onnx');
+  return VOCODER_MODEL_FILES.has(baseName);
+}
+
 // JP language models: fine-tuned files (note_text_encoder + preflow + cond_emb + diff_step_dml).
 // All four are required for correct JP inference (v3+): cond_emb must match the
 // JP fine-tuned preflow+embedding, and diff_step_dml must contain the merged
@@ -1123,10 +1192,10 @@ function isAllowedDownloadHost(urlStr) {
   }
 }
 
-async function resolveRedirects(url, maxRedirects = 5, method = 'GET') {
+async function resolveRedirects(url, maxRedirects = 5, method = 'GET', headers = {}) {
   let currentUrl = url;
   for (let i = 0; i < maxRedirects; i++) {
-    const { redirectUrl, response } = await httpRequest(currentUrl, { method, timeout: 10000 });
+    const { redirectUrl, response } = await httpRequest(currentUrl, { method, timeout: 10000, headers });
     if (!redirectUrl) {
       return { finalUrl: currentUrl, response };
     }
@@ -1618,16 +1687,36 @@ async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
 
 async function getRemoteFileSize(filePath, precision, revision = 'master') {
   const url = getFileDownloadUrl(filePath, precision, revision);
+  return getRemoteFileSizeByUrl(url);
+}
+
+/**
+ * Get the real remote file size by issuing a Range: bytes=0-0 request.
+ *
+ * ModelScope CDN behavior:
+ *   - HEAD returns 404
+ *   - GET returns 302 redirect with wrong content-length (redirect page size)
+ *   - GET + Range: bytes=0-0 returns 206 with correct size in Content-Range header
+ *
+ * Parses the real file size from `Content-Range: bytes 0-0/<real_size>` header.
+ * Falls back to `Content-Length` if the server doesn't support Range.
+ *
+ * @param {string} url  Download URL (will follow redirects)
+ * @returns {Promise<number>}  File size in bytes, or 0 on failure
+ */
+async function getRemoteFileSizeByUrl(url) {
   try {
-    const { response } = await resolveRedirects(url, 5, 'HEAD');
-    const contentLength = parseInt(response.headers['content-length'] || '0', 10);
-    response.resume();
-    if (contentLength > 0) return contentLength;
-  } catch (_) {}
-  // HEAD unsupported or returned 0 — fall back to GET
-  console.warn(`[ModelManager] HEAD failed for ${filePath}, falling back to GET`);
-  try {
-    const { response } = await resolveRedirects(url, 5, 'GET');
+    const { response } = await resolveRedirects(url, 5, 'GET', { Range: 'bytes=0-0' });
+    const contentRange = response.headers['content-range'];
+    if (contentRange) {
+      // Format: bytes 0-0/<real_size>
+      const match = contentRange.match(/\/(\d+)/);
+      if (match) {
+        response.resume();
+        return parseInt(match[1], 10);
+      }
+    }
+    // Fallback to Content-Length if server doesn't support Range
     const contentLength = parseInt(response.headers['content-length'] || '0', 10);
     response.resume();
     return contentLength;
@@ -1832,11 +1921,18 @@ module.exports = {
   getModelId,
   getJpModelId,
   getRemoteFileSize,
+  getRemoteFileSizeByUrl,
   getOptimalConcurrency,
   getLocalFilePath,
   getJpLocalFilePath,
   getManifestForPrecision,
   isSvsModelFile,
+  isBaseSvsModelFile,
+  isDiffStepModelFile,
+  isVocoderModelFile,
+  BASE_SVS_MODEL_FILES,
+  DIFF_STEP_MODEL_FILES,
+  VOCODER_MODEL_FILES,
   isPrecisionDownloadable,
   // Remote file list (smart onnx+data detection)
   listModelFiles,

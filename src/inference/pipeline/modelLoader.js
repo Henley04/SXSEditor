@@ -23,6 +23,7 @@ const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { classifyDevice } = require('../../utils/deviceClassifier');
 const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
+const { buildSessionOptions } = require('../shared/ortOptions');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
 
@@ -490,41 +491,73 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     const gpuTag = gpuDeviceName ? ` [${gpuDeviceName}]` : '';
 
     if (!dummyInputs) {
-        const session = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
+        const session = await ort.InferenceSession.create(modelPath,
+            buildSessionOptions({ executionProviders: ['cpu'] }));
         return { session, ep: 'cpu', warmedUp: false };
     }
 
     // NPU 静态形状模型直接创建 CPU 会话（跳过 DML 验证，NPU 模型不适合 DML）
     if (useStaticShapes) {
         // NPU 模型已离线优化（onnxsim），跳过运行时图优化以加速加载
-        const session = await ort.InferenceSession.create(modelPath, {
+        const session = await ort.InferenceSession.create(modelPath, buildSessionOptions({
             executionProviders: ['cpu'],
-            graphOptimizationLevel: 'basic',
-        });
+            graphOptimizationLevel: 'basic', // 显式 override：NPU 模型已离线优化
+        }));
         // 跳过推理验证 — NPU 模型已通过离线验证，且大模型（如 diff_step 423MB）的验证耗时过长
         console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (NPU static shapes, opt=basic)`);
         return { session, ep: 'cpu', warmedUp: false };
     }
+
+    // === FP16/FP32 类型不匹配自动重试 ===
+    // 背景：dummy 输入精度由 isFP16（preflow probe）决定，但单个模型（diffStep/vocoder）
+    // 可能与 preflow 精度不一致——例如 W16A32 diff_step 回退到 FP32，或 _dml.onnx 变体为 FP32。
+    // _detectDiffStepPrecision / _detectVocoderPrecision 在加载后才运行，加载阶段无信号。
+    // 当 session.run() 报 "Unexpected input data type" 时，自动用相反精度的 dummy 重试。
+    const _isTypeMismatchErr = (err) => {
+        const msg = err && err.message ? err.message : '';
+        // 例: "Unexpected input data type. Actual: (tensor(float16)) , expected: (tensor(float))"
+        return msg.includes('Unexpected input data type') && msg.includes('tensor(float');
+    };
+    const _getAlternateDummy = () => {
+        if (overrideDummyInputs || useStaticShapes) return null;
+        const fp16Set = DUMMY_TEST_INPUTS_FP16[sessionKey];
+        const fp32Set = DUMMY_TEST_INPUTS_FP32[sessionKey];
+        if (!fp16Set || !fp32Set) return null;
+        if (dummyInputs === fp16Set) return fp32Set;
+        if (dummyInputs === fp32Set) return fp16Set;
+        return null;
+    };
+    const _runWithPrecisionFallback = async (session, label) => {
+        try {
+            await session.run(dummyInputs);
+        } catch (err) {
+            if (_isTypeMismatchErr(err)) {
+                const alt = _getAlternateDummy();
+                if (alt) {
+                    console.warn(`[OnnxSVSPipeline] ${modelName} ${label} dummy precision mismatch (isFP16=${isFP16}), retrying with alternate precision...`);
+                    await session.run(alt);
+                    return;
+                }
+            }
+            throw err;
+        }
+    };
 
     let dmlSession = null;
     try {
         const dmlOpts = typeof dmlDeviceId === 'number'
             ? { name: 'dml', deviceId: dmlDeviceId }
             : 'dml';
-        const sessionOptions = {
+        // ORT session 选项由 buildSessionOptions() 依据用户设置生成。
+        // 默认策略：DML 路径 enableMemPattern=false（防止 DirectML 过度预分配 GPU 内存池）；
+        // 用户可在设置中开启 ortForceMemPatternOnDml 显式启用。
+        const sessionOptions = buildSessionOptions({
             executionProviders: [dmlOpts, 'cpu'],
-            // DirectML EP 要求 disable memory pattern + sequential execution；否则 DML 可能过度预分配 GPU 内存池。
-            enableMemPattern: false,
-            executionMode: 'sequential',
-        };
-        console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify({
-            executionProviders: Array.isArray(dmlOpts) ? [dmlOpts] : ['dml', 'cpu'],
-            enableMemPattern: false,
-            executionMode: 'sequential',
-        }));
+        });
+        console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify(sessionOptions));
         dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
         console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
-        await dmlSession.run(dummyInputs);
+        await _runWithPrecisionFallback(dmlSession, 'DML');
         console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
         return { session: dmlSession, ep: 'dml', warmedUp: true };
     } catch (dmlErr) {
@@ -548,9 +581,10 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         try { await fs.promises.access(dmlModelPath); dmlModelExists = true; } catch (_) {}
         if (dmlModelExists) {
             try {
-                const dmlModelSession = await ort.InferenceSession.create(dmlModelPath, { executionProviders: ['cpu'] });
+                const dmlModelSession = await ort.InferenceSession.create(dmlModelPath,
+                    buildSessionOptions({ executionProviders: ['cpu'] }));
                 try {
-                    await dmlModelSession.run(dummyInputs);
+                    await _runWithPrecisionFallback(dmlModelSession, 'DML-optimized');
                 } catch (runErr) {
                     try { dmlModelSession.release(); } catch (_) {}
                     throw runErr;
@@ -562,9 +596,10 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         }
     }
 
-    const cpuSession = await ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'] });
+    const cpuSession = await ort.InferenceSession.create(modelPath,
+        buildSessionOptions({ executionProviders: ['cpu'] }));
     try {
-        await cpuSession.run(dummyInputs);
+        await _runWithPrecisionFallback(cpuSession, 'CPU');
     } catch (runErr) {
         // 当 DML EP 不可用而回退到 CPU 时，dummy 输入可能与模型的静态形状不匹配。常见情况：
         //   1. *_dml.onnx 静态形状模型（diff_step seq_len=2048, vocoder seq_len=500）
@@ -572,6 +607,8 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         //   2. mel_transform.onnx 形状为静态 [1,24000]，dummy 也是 [1,1440] → "invalid dimensions"
         // 模型已成功加载（create 成功），验证失败仅因 dummy 不匹配，
         // 跳过验证直接返回会话，首次实际推理时自然验证。动态形状的 fp16 模型不受影响。
+        // 注：FP16/FP32 类型不匹配已由 _runWithPrecisionFallback 自动重试，到达此处说明
+        // 两种精度均失败（非类型问题）或 alternate dummy 不可用。
         const errSummary = runErr.message.substring(0, 80).split('\n')[0];
         const isDummyMismatch = runErr.message.includes('invalid dimensions')
             || runErr.message.includes('is missing in \'feeds\'');

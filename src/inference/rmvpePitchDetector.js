@@ -1,6 +1,7 @@
 const path = require('node:path');
 const ort = require('onnxruntime-node');
 const { resampleAudio } = require('../utils/resampleAudio');
+const { buildSessionOptions } = require('./shared/ortOptions');
 
 // float16 patch 由 nativeSvsPipeline.js 统一执行，此处不再重复
 let _noteIdCounter = 0;
@@ -77,19 +78,19 @@ class RmvpePitchDetector {
     console.log(`[RmvpePitchDetector] model file size: ${(stats.size / 1024 / 1024).toFixed(2)} MB`);
 
     try {
-      let sessionOptions = {
+      // sessionOptions 由 buildSessionOptions() 依据设置生成；
+      // RMVPE 模型较小，DML 路径下是否启用 memPattern 由 ortForceMemPatternOnDml 决定
+      let sessionOptions = buildSessionOptions({
         executionProviders: ['cpu'],
-      };
+      });
       
       try {
         const dmlEp = typeof this.deviceId === 'number'
           ? { name: 'dml', deviceId: this.deviceId }
           : 'dml';
-        const dmlOptions = {
+        const dmlOptions = buildSessionOptions({
           executionProviders: [dmlEp],
-          enableMemPattern: true,
-          enableCpuMemArena: true,
-        };
+        });
         this.session = await ort.InferenceSession.create(modelPath, dmlOptions);
         this.usingDML = true;
         const deviceTag = typeof this.deviceId === 'number' ? ` [DML deviceId=${this.deviceId}]` : ' [DML]';

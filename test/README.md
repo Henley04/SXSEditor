@@ -67,7 +67,6 @@ npm run test:ci
 远程 CI 使用精简测试套件，跳过以下不适用于 CI 环境的测试：
 
 - `onnxModelLoading.test.js` — ONNX 模型加载与推理（需要本地 ONNX 模型文件和 DML EP）
-- `releaseNotesFetcher.test.js` — 网络功能（release notes 抓取模块）
 
 本地开发时仍应运行 `npm test` 执行完整测试套件。
 

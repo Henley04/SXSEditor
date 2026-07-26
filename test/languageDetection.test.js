@@ -115,34 +115,34 @@ describe('languageDetection', () => {
     });
 
     describe('resolveLanguage', () => {
-        // ===== en-phonemes mode (default) =====
+        // ===== default mode (now 'hybrid'; behaves identically to 'en-phonemes' in resolveLanguage) =====
         it('should return null for null/undefined input', () => {
             expect(resolveLanguage(null)).to.equal(null);
             expect(resolveLanguage(undefined)).to.equal(null);
         });
 
-        it('en-phonemes: should return null for pure Japanese (uses base model)', () => {
+        it('default mode: should return null for pure Japanese (uses base model)', () => {
             expect(resolveLanguage([{ lyric: 'さくら' }])).to.equal(null);
             expect(resolveLanguage([{ lyric: 'わたし' }])).to.equal(null);
         });
 
-        it('en-phonemes: should return null for jp_ prefixed phonemes', () => {
+        it('default mode: should return null for jp_ prefixed phonemes', () => {
             expect(resolveLanguage([{ lyric: 'jp_a' }])).to.equal(null);
             expect(resolveLanguage([{ lyric: 'jp_t-a' }])).to.equal(null);
         });
 
-        it('en-phonemes: should return null for pure English', () => {
+        it('default mode: should return null for pure English', () => {
             expect(resolveLanguage([{ lyric: 'hello' }])).to.equal(null);
             expect(resolveLanguage([{ lyric: 'apples' }])).to.equal(null);
         });
 
-        it('en-phonemes: should return null for silence/SP notes', () => {
+        it('default mode: should return null for silence/SP notes', () => {
             expect(resolveLanguage([{ lyric: '' }])).to.equal(null);
             expect(resolveLanguage([{ lyric: 'SP' }])).to.equal(null);
             expect(resolveLanguage([{ lyric: '<SP>' }])).to.equal(null);
         });
 
-        it('en-phonemes: should return null for empty note array', () => {
+        it('default mode: should return null for empty note array', () => {
             expect(resolveLanguage([])).to.equal(null);
         });
 

@@ -5,7 +5,7 @@ const { Worker } = require('node:worker_threads');
 const { RmvpePitchDetector } = require('../inference/rmvpePitchDetector');
 const { BasicPitchDetector } = require('../inference/basicPitch');
 const { RosvotDetector } = require('../inference/rosvotDetector');
-const { parseMidiFile } = require('../inference/midiParser');
+const { parseMidiFile, parseMidiFileMultiTrack, parseMidiProjectInfo } = require('../inference/midiParser');
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
 const { createLazyInitializer } = require('./lazyInitializer');
@@ -334,6 +334,42 @@ function registerPitchMidiIpc() {
       return { success: true, notes };
     } catch (err) {
       console.error('[Main] MIDI import failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('midi:importMultiTrack', async () => {
+    try {
+      const { dialog } = require('electron');
+      const { t } = require('./locale');
+      const result = await dialog.showOpenDialog({
+        title: t('dialog.importMidi'),
+        filters: [{ name: 'MIDI Files', extensions: ['mid', 'midi'] }],
+        properties: ['openFile'],
+      });
+
+      if (result.canceled || result.filePaths.length === 0) {
+        return { success: false, canceled: true };
+      }
+
+      const filePath = result.filePaths[0];
+      const buffer = await require('node:fs').promises.readFile(filePath);
+      const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
+      const tracks = parseMidiFileMultiTrack(arrayBuffer);
+
+      // Also extract project-level info (BPM, time signature) so the
+      // renderer can ask the user whether to sync them into the project.
+      let projectInfo = null;
+      try {
+        projectInfo = parseMidiProjectInfo(arrayBuffer);
+      } catch (err) {
+        // projectInfo is best-effort; if it fails, continue without it.
+        console.warn('[Main] MIDI projectInfo extraction failed:', err.message);
+      }
+
+      return { success: true, tracks, projectInfo };
+    } catch (err) {
+      console.error('[Main] Multi-track MIDI import failed:', err);
       return { success: false, error: err.message };
     }
   });

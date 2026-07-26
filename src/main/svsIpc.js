@@ -30,7 +30,7 @@ function _createPipeline(languageOverride) {
   const modelDeviceMapping = settings.modelDeviceMapping || undefined;
   const modelPrecision = settings.modelPrecision || 'fp32';
   const inferenceProvider = settings.inferenceProvider || 'ortnode';
-  const japaneseVocalization = settings.japaneseVocalization || 'en-phonemes';
+  const japaneseVocalization = settings.japaneseVocalization || 'hybrid';
 
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
   console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}, jpVocal=${japaneseVocalization}`);
@@ -128,10 +128,10 @@ function registerSvsIpc() {
   });
 
   ipcMain.handle('svs:synthesize', async (event, { notes, bpm, options }) => {
-    // Load japaneseVocalization setting: 'en-phonemes' (default) / 'hybrid' use English phonemes on base model;
+    // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
-    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
 
     // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);
@@ -174,6 +174,61 @@ function registerSvsIpc() {
     }
   });
 
+  // 多分片时间交错流式合成（主页面 Play All 启用分块时使用）
+  // 接收所有分片，按时间顺序交错推理各分片的 diffusion chunk，边推理边推送音频
+  ipcMain.handle('svs:synthesizeMultiStreaming', async (event, { fragments, bpm }) => {
+    const settingsForLang = loadSettings();
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
+
+    // 确定第一个分片的语言用于 pipeline 初始化（假设所有分片同语言）
+    const firstNotes = fragments && fragments.length > 0 ? fragments[0].notes : [];
+    const language = _resolveLanguage(firstNotes, japaneseVocalization);
+
+    if (language === 'ja') {
+      const settings = loadSettings();
+      const precision = settings.modelPrecision || 'fp32';
+      const modelDir = getModelDir();
+      if (!checkJpModelsExist(modelDir, precision)) {
+        return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
+      }
+    }
+
+    try {
+      const pipeline = await ensurePipelineLanguage(language);
+      if (!pipeline) {
+        throw new Error(t('error.svsNotInitialized'));
+      }
+      const win = event.sender;
+      const opts = {
+        onProgress: (progress) => {
+          try {
+            if (win && !win.isDestroyed()) {
+              win.send('svs:progress', { progress });
+            }
+          } catch (_) {}
+        },
+        onChunkAudio: (chunkInfo) => {
+          try {
+            if (win && !win.isDestroyed()) {
+              win.send('svs:chunk-audio', chunkInfo);
+            }
+          } catch (_) {}
+        },
+      };
+      // 注入 RMVPE F0 提取器
+      for (const frag of fragments) {
+        if (frag.options && frag.options.autoShift && frag.options.refAudioWavBuffer) {
+          frag.options.refF0Extractor = _makeRmvpeExtractor();
+          break;
+        }
+      }
+      return await _withSynthMutex(() => pipeline.synthesizeMultiStreaming(fragments, bpm, opts));
+    } catch (err) {
+      console.error('[Main] svs:synthesizeMultiStreaming failed:', err.message);
+      throw err;
+    }
+  });
+
   ipcMain.handle('svs:dispose', async () => {
     resetSvsPipeline();
     return { success: true };
@@ -189,10 +244,10 @@ function registerSvsIpc() {
   });
 
   ipcMain.handle('fragment-svs:synthesize', async (event, { notes, bpm, options }) => {
-    // Load japaneseVocalization setting: 'en-phonemes' (default) / 'hybrid' use English phonemes on base model;
+    // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
-    const japaneseVocalization = settingsForLang.japaneseVocalization || 'en-phonemes';
+    const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
 
     // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);

@@ -898,10 +898,13 @@ class Postprocessing {
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, effectiveTotalFrames);
 
             // 诊断：检查 mel 输入是否包含 NaN（在 vocoder run 之前）+ mel 统计（标准化 mel，期望 mean≈0 std≈1）
+            // 采样统计：每 64 个采样取 1 个，避免长音频（如 2000 帧 × 128 = 256000 元素）下全量遍历的开销
             {
+                const DIAG_STRIDE = 64;
                 let melNaN = 0, melInf = 0;
                 let melMin = Infinity, melMax = -Infinity, melSum = 0, melSumSq = 0;
-                for (let i = 0; i < paddedMel.length; i++) {
+                let sampledCount = 0;
+                for (let i = 0; i < paddedMel.length; i += DIAG_STRIDE) {
                     const v = paddedMel[i];
                     if (Number.isNaN(v)) { melNaN++; continue; }
                     if (!Number.isFinite(v)) { melInf++; continue; }
@@ -909,10 +912,18 @@ class Postprocessing {
                     if (v > melMax) melMax = v;
                     melSum += v;
                     melSumSq += v * v;
+                    sampledCount++;
                 }
-                const melMean = melSum / paddedMel.length;
-                const melStd = Math.sqrt(Math.max(0, melSumSq / paddedMel.length - melMean * melMean));
-                console.log(`[VocoderDiag] single-chunk mel stats: frames=${effectiveTotalFrames}, len=${paddedMel.length}, NaN=${melNaN}, Inf=${melInf}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
+                // 全量扫描 NaN/Inf（采样检测可能漏掉 NaN 簇），但 min/max/mean/std 用采样值
+                if (melNaN === 0 && melInf === 0) {
+                    for (let i = 0; i < paddedMel.length; i++) {
+                        if (Number.isNaN(paddedMel[i])) { melNaN++; }
+                        else if (!Number.isFinite(paddedMel[i])) { melInf++; }
+                    }
+                }
+                const melMean = sampledCount > 0 ? melSum / sampledCount : 0;
+                const melStd = sampledCount > 0 ? Math.sqrt(Math.max(0, melSumSq / sampledCount - melMean * melMean)) : 0;
+                console.log(`[VocoderDiag] single-chunk mel stats (sampled 1/${DIAG_STRIDE}): frames=${effectiveTotalFrames}, len=${paddedMel.length}, NaN=${melNaN}, Inf=${melInf}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
                 if (melNaN > 0 || melInf > 0) {
                     console.error(`[VocoderDiag] MEL INPUT BEFORE VOCODER HAS NaN/Inf! NaN=${melNaN}, Inf=${melInf - melNaN}, total=${paddedMel.length}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}`);
                 }
@@ -1012,9 +1023,11 @@ class Postprocessing {
         const weightSum = new Float32Array(totalSamples);
 
         const fadeSamples = overlapFrames * vocoderHopSize;
+        // Hann 交叉淡入淡出窗：使用 (i+1)/(N+1) 归一化保证 w[i] + w[N-1-i] = 1 严格成立，
+        // 避免 i=N-1 时 w < 1 与紧邻非重叠区权重=1 的微小不连续。
         const fadeWindow = new Float32Array(fadeSamples);
         for (let i = 0; i < fadeSamples; i++) {
-            fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * i / fadeSamples));
+            fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * (i + 1) / (fadeSamples + 1)));
         }
 
         // 第一阶段：仅计算所有 chunk 的边界元数据（不创建张量）。
@@ -1120,20 +1133,23 @@ class Postprocessing {
                     }
                     melParts.push(`m${f}=${Math.sqrt(s / MEL_DIM).toFixed(5)}`);
                 }
-                // 完整 mel 输入统计（整个 chunk）
+                // 完整 mel 输入统计（整个 chunk，采样 1/64 降低开销）
                 {
+                    const DIAG_STRIDE = 64;
                     let melMin = Infinity, melMax = -Infinity, melSum = 0, melSumSq = 0;
+                    let sampledCount = 0;
                     const melLen = paddedChunk.length;
-                    for (let i2 = 0; i2 < melLen; i2++) {
+                    for (let i2 = 0; i2 < melLen; i2 += DIAG_STRIDE) {
                         const v = paddedChunk[i2];
                         if (v < melMin) melMin = v;
                         if (v > melMax) melMax = v;
                         melSum += v;
                         melSumSq += v * v;
+                        sampledCount++;
                     }
-                    const melMean = melSum / melLen;
-                    const melStd = Math.sqrt(Math.max(0, melSumSq / melLen - melMean * melMean));
-                    console.log(`[VocoderDiag] chunk0 FULL mel stats: frames=${spec.currentChunkFrames}, len=${melLen}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
+                    const melMean = sampledCount > 0 ? melSum / sampledCount : 0;
+                    const melStd = sampledCount > 0 ? Math.sqrt(Math.max(0, melSumSq / sampledCount - melMean * melMean)) : 0;
+                    console.log(`[VocoderDiag] chunk0 FULL mel stats (sampled 1/${DIAG_STRIDE}): frames=${spec.currentChunkFrames}, len=${melLen}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
                 }
                 console.log(`[VocoderDiag] chunk0: chunkFrames=${spec.currentChunkFrames}, vocoderType=${vocoderType}, melRMS=[${melParts.join(', ')}], wavRMS=[${parts.join(', ')}]`);
             }

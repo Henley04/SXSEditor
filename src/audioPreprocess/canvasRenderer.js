@@ -1,5 +1,5 @@
 import { state, dom } from './state.js';
-import { PIANO_KEY_WIDTH, BEAT_WIDTH, BPM, HEADER_HEIGHT, F0_CURVE_AREA_HEIGHT } from './constants.js';
+import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, BPM, HEADER_HEIGHT, F0_CURVE_AREA_HEIGHT } from './constants.js';
 import { t } from '../i18n/index.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 
@@ -7,7 +7,7 @@ import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasThe
 let _waveformCacheCanvas = null;
 let _waveformCacheKey = '';
 
-export function drawWaveformWithPlayhead(currentTime) {
+export function drawWaveformWithPlayhead(currentTime, options = {}) {
   if (!state.wavAudioBuffer) return;
 
   const canvas = dom.waveformCanvas;
@@ -125,23 +125,60 @@ export function drawWaveformWithPlayhead(currentTime) {
     const playheadX = PIANO_KEY_WIDTH + currentBeat * BEAT_WIDTH * zoomX - scrollX;
 
     if (playheadX >= PIANO_KEY_WIDTH && playheadX <= width) {
+      ctx.save();
+      // 暂停/拖拽态：半透明虚线，区分"已设置位置"与"实时播放"
+      if (options.isPaused) {
+        ctx.globalAlpha = 0.65;
+        ctx.setLineDash([4, 3]);
+      }
       ctx.strokeStyle = c.playhead;
       ctx.lineWidth = 2;
       ctx.beginPath();
       ctx.moveTo(playheadX, 0);
       ctx.lineTo(playheadX, height);
       ctx.stroke();
+      ctx.restore();
 
+      // 顶部三角手柄：底边在 canvas 顶端 y=0，顶点指向下 y=8，
+      // 视觉上像挂在天花板上的小旗，提示用户可在此处按下并拖拽跳转播放进度。
       ctx.fillStyle = c.playhead;
       ctx.beginPath();
-      ctx.moveTo(playheadX, 0);
-      ctx.lineTo(playheadX - 6, -2);
-      ctx.lineTo(playheadX + 6, -2);
+      ctx.moveTo(playheadX - 6, 0);
+      ctx.lineTo(playheadX + 6, 0);
+      ctx.lineTo(playheadX, 8);
       ctx.closePath();
       ctx.fill();
     }
   }
 }
+
+/**
+ * 计算播放头当前 X 坐标（用于 hit-test）。
+ * 播放中使用 currentTime 参数；未播放时由调用方传入 state.playStartOffset。
+ */
+export function getPlayheadXForTime(seconds) {
+  if (!state.wavAudioBuffer) return -1;
+  const zoomX = state.pianoRoll ? state.pianoRoll.zoomX : state.waveformZoomX;
+  const scrollX = state.pianoRoll ? state.pianoRoll.scrollX : state.waveformScrollX;
+  const currentBeat = (seconds / 60) * BPM;
+  return PIANO_KEY_WIDTH + currentBeat * BEAT_WIDTH * zoomX - scrollX;
+}
+
+/**
+ * 把波形 canvas 内部 X 坐标转换为秒数。
+ * 用于拖拽时根据鼠标位置计算新的播放时间。
+ */
+export function xToWaveformTime(x) {
+  const zoomX = state.pianoRoll ? state.pianoRoll.zoomX : state.waveformZoomX;
+  const scrollX = state.pianoRoll ? state.pianoRoll.scrollX : state.waveformScrollX;
+  if (x < PIANO_KEY_WIDTH) return 0;
+  const beat = (x + scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * zoomX);
+  const secondsPerBeat = 60 / BPM;
+  return Math.max(0, beat * secondsPerBeat);
+}
+
+// 播放头拖拽 hit-test 容差（像素）
+export const PLAYHEAD_HIT_WIDTH = 12;
 
 export function invalidateWaveformCache() {
   _waveformCacheKey = '';
@@ -160,4 +197,106 @@ export function syncPianoRollZoomToWaveform() {
   state.waveformZoomX = state.pianoRoll.zoomX;
   state.waveformScrollX = state.pianoRoll.scrollX;
   drawWaveformWithPlayhead(state.pianoRoll.getCurrentTime());
+}
+
+/**
+ * 计算水平方向最大 scrollX（数据区总宽度 - 可视宽度）。
+ * 总内容宽度取音频结尾与最后一个音符结尾的较大者，确保音符超出音频范围时也可滚动到。
+ */
+export function getMaxScrollX() {
+  if (!state.pianoRoll) return 0;
+  const pr = state.pianoRoll;
+  if (!pr.width) return 0;
+  const viewportWidth = pr.width - PIANO_KEY_WIDTH;
+  if (viewportWidth <= 0) return 0;
+  const audioEndBeat = state.wavDuration > 0 ? (state.wavDuration / 60) * BPM : 0;
+  let lastNoteEnd = 0;
+  if (pr.notes && pr.notes.length > 0) {
+    for (const n of pr.notes) {
+      const end = n.start + n.duration;
+      if (end > lastNoteEnd) lastNoteEnd = end;
+    }
+  }
+  const totalBeats = Math.max(audioEndBeat, lastNoteEnd);
+  const totalContentWidth = totalBeats * BEAT_WIDTH * pr.zoomX;
+  return Math.max(0, totalContentWidth - viewportWidth);
+}
+
+/**
+ * 计算垂直方向最大 scrollY（钢琴键区总高度 - 可视高度）。
+ */
+export function getMaxScrollY() {
+  if (!state.pianoRoll) return 0;
+  const pr = state.pianoRoll;
+  if (!pr.height) return 0;
+  const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+  const viewportHeight = pr.height - pianoAreaTop;
+  if (viewportHeight <= 0) return 0;
+  const totalContentHeight = 128 * NOTE_HEIGHT * pr.zoomY;
+  return Math.max(0, totalContentHeight - viewportHeight);
+}
+
+/**
+ * 根据 pianoRoll 当前 scrollX/scrollY/zoomX/zoomY 更新底部和右侧滚动条滑块位置与大小。
+ * 内容不足时隐藏对应滚动条；内容溢出时显示并按比例定位滑块。
+ * 应在 render()、wheel、resize 等改变视口或内容的入口后调用。
+ */
+export function updateScrollbars() {
+  const pr = state.pianoRoll;
+  // pianoRoll 未初始化时隐藏滚动条（避免无内容时显示空滑块）
+  if (!pr || !pr.width || !pr.height) {
+    if (dom.hscroll) dom.hscroll.style.display = 'none';
+    if (dom.vscroll) dom.vscroll.style.display = 'none';
+    return;
+  }
+
+  // 水平滚动条
+  if (dom.hscroll && dom.hscrollThumb) {
+    const viewportWidth = pr.width - PIANO_KEY_WIDTH;
+    const audioEndBeat = state.wavDuration > 0 ? (state.wavDuration / 60) * BPM : 0;
+    let lastNoteEnd = 0;
+    if (pr.notes && pr.notes.length > 0) {
+      for (const n of pr.notes) {
+        const end = n.start + n.duration;
+        if (end > lastNoteEnd) lastNoteEnd = end;
+      }
+    }
+    const totalBeats = Math.max(audioEndBeat, lastNoteEnd);
+    const totalContentWidth = Math.max(totalBeats * BEAT_WIDTH * pr.zoomX, viewportWidth);
+    const maxScrollX = Math.max(0, totalContentWidth - viewportWidth);
+    const trackWidth = dom.hscroll.clientWidth;
+
+    if (totalContentWidth <= viewportWidth || trackWidth <= 0) {
+      dom.hscroll.style.display = 'none';
+    } else {
+      dom.hscroll.style.display = '';
+      const thumbWidth = Math.max(24, (viewportWidth / totalContentWidth) * trackWidth);
+      const usableTrack = trackWidth - thumbWidth;
+      const ratio = maxScrollX > 0 ? Math.max(0, Math.min(1, pr.scrollX / maxScrollX)) : 0;
+      const thumbX = ratio * usableTrack;
+      dom.hscrollThumb.style.width = thumbWidth + 'px';
+      dom.hscrollThumb.style.left = thumbX + 'px';
+    }
+  }
+
+  // 垂直滚动条
+  if (dom.vscroll && dom.vscrollThumb) {
+    const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
+    const viewportHeight = pr.height - pianoAreaTop;
+    const totalContentHeight = 128 * NOTE_HEIGHT * pr.zoomY;
+    const maxScrollY = Math.max(0, totalContentHeight - viewportHeight);
+    const trackHeight = dom.vscroll.clientHeight;
+
+    if (totalContentHeight <= viewportHeight || trackHeight <= 0) {
+      dom.vscroll.style.display = 'none';
+    } else {
+      dom.vscroll.style.display = '';
+      const thumbHeight = Math.max(24, (viewportHeight / totalContentHeight) * trackHeight);
+      const usableTrack = trackHeight - thumbHeight;
+      const ratio = maxScrollY > 0 ? Math.max(0, Math.min(1, pr.scrollY / maxScrollY)) : 0;
+      const thumbY = ratio * usableTrack;
+      dom.vscrollThumb.style.height = thumbHeight + 'px';
+      dom.vscrollThumb.style.top = thumbY + 'px';
+    }
+  }
 }

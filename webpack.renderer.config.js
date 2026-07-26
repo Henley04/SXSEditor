@@ -81,7 +81,17 @@ module.exports = {
           from: path.resolve(__dirname, 'src/themes/themeBootstrap.js'),
           to: path.resolve(__dirname, `.webpack/renderer/${name}/themes/themeBootstrap.js`),
         },
-      ]).concat(onnxruntimeWasmPatterns),
+      ]).concat(onnxruntimeWasmPatterns).concat([
+        // Splash window icon: the inline SVG in splash.html references
+        // ./SXS.png via a relative URL so the icon loads in parallel
+        // with HTML parse (no IPC round-trip on the critical path to
+        // first paint). Only the splash_window needs this copy because
+        // other windows don't render the splash SVG.
+        {
+          from: path.resolve(__dirname, 'assets/SXS.png'),
+          to: path.resolve(__dirname, '.webpack/renderer/splash_window/SXS.png'),
+        },
+      ]),
     }),
   ],
   resolve: {

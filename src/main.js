@@ -2,9 +2,13 @@ const { app, BrowserWindow, ipcMain, dialog, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 
-// Fix Windows console encoding for Chinese log output
+// Fix Windows console encoding for Chinese log output.
+// Fire-and-forget async exec: spawning cmd.exe synchronously costs ~50-200ms
+// on the critical path before splash appears. The encoding switch takes
+// effect ~100ms later; the early startup window has essentially no Chinese
+// log output, so the delay is acceptable.
 if (process.platform === 'win32') {
-  try { require('child_process').execSync('chcp 65001', { stdio: ['ignore', 'ignore', 'pipe'] }); } catch (_) {}
+  try { require('child_process').exec('chcp 65001', { stdio: ['ignore', 'ignore', 'ignore'] }, () => {}); } catch (_) {}
 }
 
 // Suppress EPIPE errors when stdout/stderr pipe breaks (e.g. terminal closed)
@@ -32,6 +36,26 @@ process.on('unhandledRejection', (reason) => {
 
 // 启用 WebNN API，使渲染进程可通过 onnxruntime-web WebNN EP Using NPU 推理
 app.commandLine.appendSwitch('enable-features', 'WebMachineLearningNeuralNetwork');
+
+// 禁用未使用的 Chromium 子系统以加速浏览器进程初始化。
+// 每个 disabled feature 都避免在启动时加载其服务实现，省 20-100ms。
+// 这些功能 SXSEditor 均不使用：内置翻译、Cast 发现、Dial 媒体路由、
+// 扩展系统、自动填充服务器通信、证书验证器后台任务。
+app.commandLine.appendSwitch('disable-features', [
+  'Translate',
+  'MediaRouter',
+  'DialMediaRouteProvider',
+  'Extensions',
+  'AutofillServerCommunication',
+  'CertificateVerifier',
+].join(','));
+// Disable background throttling & renderer backgrounding so audio playback
+// keeps running smoothly when the window is occluded/minimized. Audio
+// editors commonly need this to prevent glitched playback during background
+// operation.
+app.commandLine.appendSwitch('disable-background-timer-throttling');
+app.commandLine.appendSwitch('disable-renderer-backgrounding');
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows');
 
 if (require('electron-squirrel-startup')) {
   app.quit();
@@ -67,35 +91,11 @@ if (!gotTheLock) {
   app.quit();
 }
 
-const { enumerateDMLDevices } = require('./inference/pipeline');
-
-const {
-  createWindow,
-  getMainWindow,
-  buildAppMenu,
-  registerWindowIpc,
-} = require('./main/windowManager');
-const { loadMainLocale, t } = require('./main/locale');
-const { loadSettings, saveSettingsFile, setCachedDMLDevices: setSettingsCachedDMLDevices } = require('./main/settings');
-const { authorizePath, isPathAllowed } = require('./main/security');
-const { getModelDir } = require('./main/modelDir');
-const {
-  classifyDeviceFromName,
-  startGPUPreload,
-  ensureGPUInfo,
-  detectAllHardware,
-} = require('./main/gpuInfo');
-const { checkAndDownloadModels, registerModelDownloadIpc } = require('./main/modelDownload');
-const { registerThemeIpc } = require('./main/themeIpc');
-const { registerSvsIpc, resetSvsPipeline } = require('./main/svsIpc');
-const { registerPitchMidiIpc, resetRmvpe, resetBasicPitch, resetRosvot } = require('./main/pitchMidiIpc');
-const { registerSingerIpc } = require('./main/singerIpc');
-const { registerAudioIpc, resetAudioManagers } = require('./main/audioIpc');
-const { registerDialogIpc } = require('./main/dialogIpc');
-const { registerSettingsIpc, setCachedDMLDevices, getCachedDMLDevices, invalidateDMLDevices } = require('./main/settingsIpc');
-const { registerResourceManagerIpc } = require('./main/resourceManagerIpc');
-const { registerWebnnIpc } = require('./main/webnnIpc');
-const { registerUpdateIpc, cleanupInstallerTempFiles } = require('./main/updateIpc');
+// ---- Only splashManager is required at top level (needed for createSplashWindow) ----
+// All other light modules (windowManager, locale, settings, gpuInfo, etc.)
+// are deferred to inside app.whenReady() AFTER createSplashWindow() so they
+// don't block the critical path to "splash visible". They're declared as
+// `let` here and assigned in STEP 1.5 below.
 const {
   createSplashWindow,
   closeSplashWindow,
@@ -104,8 +104,51 @@ const {
   registerSplashIpc,
 } = require('./main/splashManager');
 
+// ---- Light module placeholders (assigned in STEP 1.5 inside app.whenReady) ----
+let createWindow, getMainWindow, buildAppMenu, registerWindowIpc;
+let loadMainLocale, t;
+let loadSettings, saveSettingsFile, setSettingsCachedDMLDevices;
+let authorizePath, isPathAllowed;
+let getModelDir;
+let classifyDeviceFromName, startGPUPreload, ensureGPUInfo, detectAllHardware;
+let checkAndDownloadModels, registerModelDownloadIpc;
+let registerThemeIpc;
+let registerSingerIpc;
+let registerAudioIpc;
+let registerDialogIpc;
+let registerWebnnIpc;
+let registerUpdateIpc, cleanupInstallerTempFiles;
+
+// ---- Heavy module exports (assigned inside app.whenReady, AFTER splash) ----
+// These modules transitively load onnxruntime-node (a native addon that
+// takes hundreds of ms to load). Deferring their require() until after
+// the splash window is created lets the splash appear immediately at
+// app startup, while the heavy loads run in parallel with the main
+// window's renderer loading.
+let enumerateDMLDevices;
+let registerSvsIpc;
+let registerPitchMidiIpc;
+let registerSettingsIpc;
+let registerResourceManagerIpc;
+let setCachedDMLDevices;
+let getCachedDMLDevices;
+// `reset*` functions are referenced by the before-quit handler, which
+// may theoretically fire before whenReady completes (e.g. user quits
+// during startup). Initialize them as no-ops so the handler is always
+// safe to call; the real implementations are assigned in whenReady.
+let resetSvsPipeline = () => {};
+let resetRmvpe = () => {};
+let resetBasicPitch = () => {};
+let resetRosvot = () => {};
+let resetAudioManagers = () => {};
+
 app.on('second-instance', () => {
-  const mainWindow = getMainWindow();
+  // Lazy require: getMainWindow is in windowManager which is loaded in
+  // STEP 1.5 inside app.whenReady(). By the time a second instance can
+  // fire this event, STEP 1.5 has completed, but using lazy require keeps
+  // the handler safe even if it fires during the brief init window.
+  const { getMainWindow: getMainWindowLazy } = require('./main/windowManager');
+  const mainWindow = getMainWindowLazy();
   if (mainWindow) {
     if (mainWindow.isMinimized()) {
       mainWindow.restore();
@@ -130,6 +173,105 @@ protocol.registerSchemesAsPrivileged([
 app.whenReady().then(() => {
   const isDev = !app.isPackaged;
 
+  // Splash screen is shown only in packaged builds. In dev mode the
+  // main window is shown immediately — devs don't need the splash and
+  // forcing it would slow down iteration.
+  const showSplash = !isDev;
+  // Minimum visible duration of the splash, measured from when the
+  // splash's SVG actually painted. Set to 0 so the splash never
+  // artificially delays startup — the main window is revealed as soon
+  // as the splash has painted (see waitForSplashReady below).
+  const MIN_SPLASH_MS = 0;
+
+  // ========================================================================
+  // STEP 1: Show the splash window IMMEDIATELY.
+  //
+  // This is the very first thing we do inside whenReady so the user sees
+  // *something* (the splash's dark background + SVG) the moment Electron
+  // is ready, before any heavy module loading, CSP setup, locale loading,
+  // or file cleanup runs. The splash window paints its backgroundColor
+  // synchronously on creation, so it's visible even before did-finish-load
+  // fires for the splash itself.
+  // ========================================================================
+  if (showSplash) {
+    createSplashWindow();
+    // Yield once so the splash's did-finish-load event can be delivered
+    // and the SVG can paint BEFORE STEP 1.5+2+3 block the main thread
+    // for ~50-150ms. Without this yield, the user sees a dark rectangle
+    // (the splash's backgroundColor) for 100-200ms before the branded
+    // SVG appears. In dev mode (no splash) we call initMainSteps()
+    // directly to avoid the ~5ms setImmediate overhead.
+    setImmediate(initMainSteps);
+  } else {
+    initMainSteps();
+  }
+
+  function initMainSteps() {
+  // ========================================================================
+  // STEP 1.5: Require light modules + register light IPC handlers.
+  //
+  // These modules are NOT transitively loading onnxruntime-node, but their
+  // sequential require chain (~50-100ms cumulative) was previously on the
+  // critical path BEFORE app.whenReady() fired, delaying splash appearance.
+  // Moving them here — AFTER createSplashWindow() — lets the splash paint
+  // first in packaged mode. In dev mode (no splash) the cost is the same
+  // as before, just shifted slightly later within whenReady.
+  // ========================================================================
+  ({
+    createWindow,
+    getMainWindow,
+    buildAppMenu,
+    registerWindowIpc,
+  } = require('./main/windowManager'));
+  ({ loadMainLocale, t } = require('./main/locale'));
+  ({ loadSettings, saveSettingsFile, setCachedDMLDevices: setSettingsCachedDMLDevices } = require('./main/settings'));
+  ({ authorizePath, isPathAllowed } = require('./main/security'));
+  ({ getModelDir } = require('./main/modelDir'));
+  ({
+    classifyDeviceFromName,
+    startGPUPreload,
+    ensureGPUInfo,
+    detectAllHardware,
+  } = require('./main/gpuInfo'));
+  ({ registerThemeIpc } = require('./main/themeIpc'));
+  ({ registerSingerIpc } = require('./main/singerIpc'));
+  ({ registerDialogIpc } = require('./main/dialogIpc'));
+  ({ registerWebnnIpc } = require('./main/webnnIpc'));
+  // audioIpc, modelDownload, updateIpc are deferred to STEP 4 because they
+  // transitively load heavy Node built-ins (child_process, https, http, os,
+  // stream/promises) via AudioOutputManager and modelManager. The renderer
+  // does not call audio:*/model:download:*/update:* IPC at startup, so
+  // deferring their registration is safe.
+
+  // Register light IPC handlers now that their modules are loaded.
+  // Heavy IPC handlers (registerSettingsIpc, registerSvsIpc,
+  // registerPitchMidiIpc, registerResourceManagerIpc, registerAudioIpc,
+  // registerModelDownloadIpc, registerUpdateIpc) are registered in
+  // STEP 4 after their heavy transitive deps (onnxruntime-node,
+  // AudioOutputManager, modelManager) are loaded.
+  registerWindowIpc();
+  registerDialogIpc();
+  registerThemeIpc();
+  registerSingerIpc();
+  registerWebnnIpc();
+  registerSplashIpc();
+
+  // Register app:getVersion early — the renderer calls it immediately at
+  // did-finish-load (src/renderer/index.js:30) to populate the version badge.
+  // Previously this handler lived inside registerSettingsIpc(), which is
+  // deferred to STEP 4 because settingsIpc.js transitively requires
+  // onnxruntime-node (a native addon that takes 200-500ms to load). The
+  // handler itself is trivial (just app.getVersion()) and has no heavy
+  // deps, so registering it here eliminates the 200-500ms "v-" flicker
+  // in the version badge that was introduced by the STEP 4 deferral.
+  ipcMain.handle('app:getVersion', async () => app.getVersion());
+
+  // ========================================================================
+  // STEP 2: Fast setup (registrations only, no heavy I/O).
+  // CSP + protocol handler + locale. These are all synchronous
+  // registrations or fast file reads and don't materially delay the
+  // main window creation that follows.
+  // ========================================================================
   const cspScriptSrc = isDev ? "'self' 'unsafe-eval'" : "'self'";
   const cspConnectSrc = isDev
     ? "'self' https://modelscope.cn ws://0.0.0.0:3000 ws://localhost:3000"
@@ -169,33 +311,16 @@ app.whenReady().then(() => {
     return net.fetch(`file:///${resolvedPath.replace(/\\/g, '/')}`);
   });
 
+  // loadMainLocale() must run before createWindow() because createWindow()
+  // calls buildAppMenu(), which uses t() for menu labels.
   loadMainLocale();
 
-  // Clean up leftover installer .exe files from a previous in-app update.
-  // By the time the app launches again, the previous install flow has
-  // finished (success or cancel), so the temp installer is no longer needed.
-  // Using 'all' here reclaims disk immediately instead of waiting 7 days.
-  try {
-    cleanupInstallerTempFiles('all');
-  } catch (err) {
-    console.warn('[Main] Installer temp cleanup failed:', err.message);
-  }
-
-  // Splash screen is shown only in packaged builds. In dev mode the
-  // main window is shown immediately — devs don't need the splash and
-  // forcing it would slow down iteration. (isDev was declared above,
-  // next to the CSP setup.)
-  const showSplash = !isDev;
-  // Minimum visible duration of the splash, measured from when the
-  // splash's SVG actually painted. Set to 0 so the splash never
-  // artificially delays startup — the main window is revealed as soon
-  // as the splash has painted (see waitForSplashReady below).
-  const MIN_SPLASH_MS = 0;
-
-  if (showSplash) {
-    createSplashWindow();
-  }
-
+  // ========================================================================
+  // STEP 3: Create the main window (hidden) so its renderer starts loading
+  // IN PARALLEL with the heavy requires in STEP 4. The renderer runs in a
+  // separate process, so its loading progresses even while the main thread
+  // is blocked by synchronous require() calls below.
+  // ========================================================================
   const mainWindow = createWindow({ show: false });
 
   // Helper: reveal the main window (and close the splash if any). In
@@ -215,6 +340,15 @@ app.whenReady().then(() => {
   // （此前此处 await detectAllHardware() 会阻塞主窗口显示，因为完整
   //  systeminformation GPU 检测可能耗时数秒甚至 ~9s。现将窗口显示与
   //  硬件检测解耦，让用户立即看到应用界面。）
+  //
+  // This listener is registered BEFORE the setImmediate(Step 4) call below
+  // so it never misses did-finish-load even if the renderer finishes loading
+  // before Step 4 runs. The listener body only reveals the main window and
+  // kicks off the auto-update check — both of which are independent of the
+  // heavy modules loaded in Step 4. GPU/DML device detection has been moved
+  // INTO Step 4's setImmediate block, because it depends on
+  // enumerateDMLDevices / setCachedDMLDevices / getCachedDMLDevices, which
+  // are assigned by Step 4's heavy require() calls.
   mainWindow.webContents.once('did-finish-load', () => {
     // 1. 立即显示主窗口（不等待 GPU/NPU 检测）
     // In dev mode: reveal the main window immediately.
@@ -245,8 +379,97 @@ app.whenReady().then(() => {
       })();
     }
 
-    // 2. 后台执行一次性硬件检测和设备校验（不阻塞窗口显示）
-    //    GPU 探测仅在应用完全启动后开始一次，完成后结果缓存复用，运行时不再重复检查。
+    // 2. Auto update check (once per 24h, packaged only).
+    //    Independent of Step 4 modules — only uses updateChecker (light)
+    //    and windowManager (loaded in STEP 1.5).
+    (async () => {
+      try {
+        const { shouldAutoCheck, checkAllUpdates, recordCheckTime, shouldShowNotification } = require('./main/updateChecker');
+        const { openUpdateNotificationWindow } = require('./main/windowManager');
+        const isPackaged = app.isPackaged;
+        const settings = loadSettings();
+        if (!shouldAutoCheck(settings, isPackaged)) return;
+        const channel = settings.updateChannel || 'release';
+        const result = await checkAllUpdates(channel);
+        // Only record check time on success (no app error). If the check failed
+        // (e.g. rate limited, network error), skip recording so the next launch
+        // can retry instead of waiting 24h.
+        if (!result.app.error) {
+          await recordCheckTime();
+        }
+        const freshSettings = loadSettings();
+        if (shouldShowNotification(result.app, result.models, freshSettings, false)) {
+          openUpdateNotificationWindow(result);
+        }
+      } catch (err) {
+        console.warn('[Main] Auto update check failed:', err.message);
+      }
+    })();
+  });
+
+  // ========================================================================
+  // STEP 4: Heavy module loading + IPC registration + GPU detection.
+  //
+  // These require() calls load onnxruntime-node (a native addon) and its
+  // transitive dependencies, which can take hundreds of milliseconds.
+  //
+  // Wrapped in setImmediate so the did-finish-load event (which is queued
+  // when the renderer finishes loading) can be delivered to the listener
+  // above BEFORE this heavy synchronous block runs. Otherwise the heavy
+  // require() chain would block the event loop and delay did-finish-load
+  // delivery —推迟主窗口 show() 直到 Step 4 完成，浪费数百毫秒。
+  //
+  // Safety: the renderer does not invoke any heavy IPC (svs:init,
+  // settings:getDMLDevices, etc.) immediately after did-finish-load —
+  // those calls are triggered by user interaction, which happens far
+  // later than this setImmediate. Verified in src/renderer/index.js:
+  // post-did-finish-load work is just getAppVersion + initWindowTheme +
+  // hydrateIcons + updateProjectSettings + refreshAll (all light IPC).
+  // ========================================================================
+  setImmediate(() => {
+    ({ enumerateDMLDevices } = require('./inference/pipeline'));
+    ({
+      registerSvsIpc,
+      resetSvsPipeline,
+    } = require('./main/svsIpc'));
+    ({
+      registerPitchMidiIpc,
+      resetRmvpe,
+      resetBasicPitch,
+      resetRosvot,
+    } = require('./main/pitchMidiIpc'));
+    ({
+      registerSettingsIpc,
+      setCachedDMLDevices,
+      getCachedDMLDevices,
+    } = require('./main/settingsIpc'));
+    ({ registerResourceManagerIpc } = require('./main/resourceManagerIpc'));
+    // audioIpc/modelDownload/updateIpc were moved here from STEP 1.5 to
+    // avoid loading their heavy transitive deps (AudioOutputManager →
+    // child_process/fs; modelManager → https/http/os/stream-promises/
+    // child_process/url; updateChecker → same as modelManager) on the
+    // critical path before createWindow(). The renderer does not call
+    // audio:*/model:download:*/update:* IPC at startup.
+    ({ registerAudioIpc, resetAudioManagers: _resetAudio } = require('./main/audioIpc'));
+    resetAudioManagers = _resetAudio;
+    ({ checkAndDownloadModels, registerModelDownloadIpc } = require('./main/modelDownload'));
+    ({ registerUpdateIpc, cleanupInstallerTempFiles } = require('./main/updateIpc'));
+
+    // Register the heavy IPC handlers now that their modules are loaded.
+    // These must be registered before the renderer invokes them (which
+    // happens on user interaction, far after this setImmediate runs).
+    registerSettingsIpc();
+    registerSvsIpc();
+    registerPitchMidiIpc();
+    registerResourceManagerIpc();
+    registerAudioIpc();
+    registerModelDownloadIpc();
+    registerUpdateIpc();
+
+    // 后台执行一次性硬件检测和设备校验（原位于 did-finish-load 回调，
+    // 移到此处因为它依赖 enumerateDMLDevices / setCachedDMLDevices 等
+    // Step 4 重型模块的导出）。GPU 探测仅在应用完全启动后开始一次，
+    // 完成后结果缓存复用，运行时不再重复检查。
     (async () => {
       try {
         // 启动一次性 GPU 信息加载（worker 两阶段：WMI 快速 → systeminformation 完整）
@@ -337,37 +560,24 @@ app.whenReady().then(() => {
       }
     })();
 
-    // Auto update check (once per 24h, packaged only)
-    (async () => {
-      try {
-        const { shouldAutoCheck, checkAllUpdates, recordCheckTime, shouldShowNotification } = require('./main/updateChecker');
-        const { openUpdateNotificationWindow } = require('./main/windowManager');
-        const isPackaged = app.isPackaged;
-        const settings = loadSettings();
-        if (!shouldAutoCheck(settings, isPackaged)) return;
-        const channel = settings.updateChannel || 'release';
-        const result = await checkAllUpdates(channel);
-        // Only record check time on success (no app error). If the check failed
-        // (e.g. rate limited, network error), skip recording so the next launch
-        // can retry instead of waiting 24h.
-        if (!result.app.error) {
-          await recordCheckTime();
-        }
-        const freshSettings = loadSettings();
-        if (shouldShowNotification(result.app, result.models, freshSettings, false)) {
-          openUpdateNotificationWindow(result);
-        }
-      } catch (err) {
-        console.warn('[Main] Auto update check failed:', err.message);
-      }
-    })();
-  });
+    // Clean up leftover installer .exe files from a previous in-app update.
+    // Deferred to here so it doesn't delay the splash window appearing.
+    // By the time the app launches again, the previous install flow has
+    // finished (success or cancel), so the temp installer is no longer needed.
+    // Using 'all' here reclaims disk immediately instead of waiting 7 days.
+    try {
+      cleanupInstallerTempFiles('all');
+    } catch (err) {
+      console.warn('[Main] Installer temp cleanup failed:', err.message);
+    }
 
-  // GPU 硬件探测已合并到上方 did-finish-load 处理器中（应用完全启动后一次性执行并缓存复用）。
-  // Model检查延后执行，不阻塞窗口显示
-  checkAndDownloadModels().catch(err => {
-    console.warn('[Main] Model check failed:', err.message);
+    // GPU 硬件探测已合并到上方 setImmediate 内（应用完全启动后一次性执行并缓存复用）。
+    // Model检查延后执行，不阻塞窗口显示
+    checkAndDownloadModels().catch(err => {
+      console.warn('[Main] Model check failed:', err.message);
+    });
   });
+  } // end of initMainSteps()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -400,17 +610,7 @@ app.on('before-quit', () => {
   }
 });
 
-// 注册所有 IPC
-registerWindowIpc();
-registerDialogIpc();
-registerSettingsIpc();
-registerThemeIpc();
-registerSvsIpc();
-registerPitchMidiIpc();
-registerSingerIpc();
-registerAudioIpc();
-registerModelDownloadIpc();
-registerResourceManagerIpc();
-registerWebnnIpc();
-registerUpdateIpc();
-registerSplashIpc();
+// Light IPC handlers used to be registered here at top-level, but they
+// have been moved into STEP 1.5 inside app.whenReady() (after
+// createSplashWindow) so the splash window appears first in packaged
+// mode. See STEP 1.5 above for the actual registrations.

@@ -109,11 +109,35 @@ export async function loadModel(modelId, modelPath, options = { deviceType: 'npu
     epChain.push('wasm'); // 最终回退到 WASM (CPU)
 
     const sessionOptions = {
-        // Performance options for onnxruntime-web
+        // Performance options for onnxruntime-web — 默认值与 ORT 官方推荐一致
         graphOptimizationLevel: 'all',   // Enable all graph optimizations
-        executionMode: 'sequential',      // Sequential execution (lower latency for single inference)
-        enableCpuMemArena: true,          // Enable CPU memory arena for better allocation
+        executionMode: 'sequential',     // Sequential execution (lower latency for single inference)
+        enableCpuMemArena: true,         // Enable CPU memory arena for better allocation
     };
+
+    // 应用用户在设置中配置的 ORT 选项（onnxruntime-web 仅支持部分 onnxruntime-node 选项；
+    // intraOp/interOpNumThreads 由 ortSetup.js 全局 env.wasm.numThreads 控制，这里不重复设置）
+    try {
+        const ortSettings = await window.electronAPI?.getSettings?.();
+        if (ortSettings) {
+            if (typeof ortSettings.ortEnableMemPattern === 'boolean') {
+                sessionOptions.enableMemPattern = ortSettings.ortEnableMemPattern;
+            }
+            if (typeof ortSettings.ortEnableCpuMemArena === 'boolean') {
+                sessionOptions.enableCpuMemArena = ortSettings.ortEnableCpuMemArena;
+            }
+            if (['disabled', 'basic', 'extended', 'all'].includes(ortSettings.ortGraphOptLevel)) {
+                sessionOptions.graphOptimizationLevel = ortSettings.ortGraphOptLevel;
+            }
+            if (ortSettings.ortExecutionMode === 'sequential' || ortSettings.ortExecutionMode === 'parallel') {
+                sessionOptions.executionMode = ortSettings.ortExecutionMode;
+            }
+            // logSeverityLevel 在 onnxruntime-web 中通过 ort.env.logLevel 全局设置，
+            // sessionOptions 不直接接受 logSeverityLevel，由 ortSetup.js 统一处理
+        }
+    } catch (err) {
+        console.warn('[WebNN] Failed to read ORT session settings, using defaults:', err.message);
+    }
 
     // 大模型（>100MB）禁用运行时图优化以加速加载
     // 这些模型已经过离线优化，运行时优化是冗余的且 NPU 编译很慢

@@ -27,8 +27,6 @@ SXSEditor is an open-source desktop application for singing voice synthesis. It 
 
 Supported singing languages: **English**, **Chinese (Mandarin)**, and **Japanese**.
 
-Smart model download: automatically detects whether the remote ModelScope repo stores weights as split `onnx + data` or a single `onnx` file, and downloads external data alongside when present. The remote file list is fetched recursively so required files in subdirectories (`preprocess/`, `basic_pitch_model/`) are included.
-
 - [Website](https://henley04.github.io/SXSEditor/)
 - [User Docs](https://henley04.github.io/SXSEditor/user/quick-start.html)
 - [Developer Docs](https://henley04.github.io/SXSEditor/dev/build.html)
@@ -51,8 +49,6 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 
 支持的合成语言：**中文（普通话）**、**英语** 和 **日语**。
 
-智能模型下载：自动检测远程 ModelScope 仓库的权重是分开存储（onnx + data）还是单 onnx 文件，当检测到 data 时连带下载。远程文件列表递归获取，确保子目录（`preprocess/`、`basic_pitch_model/`）下的必需文件被纳入下载。
-
 - [官网](https://henley04.github.io/SXSEditor/)
 - [用户文档](https://henley04.github.io/SXSEditor/user/quick-start.html)
 - [开发者文档](https://henley04.github.io/SXSEditor/dev/build.html)
@@ -74,8 +70,6 @@ SXSEditor 是一个开源的桌面歌声合成应用。基于 SoulX-Singer 神�
 SXSEditor は歌声合成のためのオープンソースデスクトップアプリケーションです。SoulX-Singer ニューラルモデルを ONNX Runtime 上で動作させ、DirectML GPU、WebNN NPU/GPU、CPU をサポートします。
 
 対応言語：**中国語（普通話）**、**英語**、**日本語**。
-
-スマートモデルダウンロード：リモート ModelScope リポジトリの重みが分割保存（onnx + data）か単体 onnx かを自動検出し、data が存在する場合は一緒にダウンロードします。リモートファイルリストは再帰的に取得され、サブディレクトリ（`preprocess/`、`basic_pitch_model/`）内の必須ファイルも確実にダウンロード対象に含めます。
 
 - [ウェブサイト](https://henley04.github.io/SXSEditor/)
 - [ユーザードキュメント](https://henley04.github.io/SXSEditor/user/quick-start.html)

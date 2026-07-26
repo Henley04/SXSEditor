@@ -41,6 +41,8 @@ const IPC_CHANNELS = {
   // ==================== SVS Pipeline ====================
   SVS_INIT: 'svs:init',
   SVS_SYNTHESIZE: 'svs:synthesize',
+  SVS_SYNTHESIZE_MULTI_STREAMING: 'svs:synthesizeMultiStreaming',
+  SVS_CHUNK_AUDIO: 'svs:chunk-audio',
   SVS_DISPOSE: 'svs:dispose',
   SVS_CHECK_JP_MODELS: 'svs:checkJpModels',
   FRAGMENT_SVS_GET_SAMPLE_RATE: 'fragment-svs:getSampleRate',
@@ -55,6 +57,7 @@ const IPC_CHANNELS = {
   EXTRACT_MIDI_ROSVOT: 'extractMidi:rosvot',
   EXTRACT_F0_BASIC_PITCH: 'extractF0:basicPitch',
   MIDI_IMPORT: 'midi:import',
+  MIDI_IMPORT_MULTI_TRACK: 'midi:importMultiTrack',
 
   // ==================== Path Utilities ====================
   RESOLVE_PATH: 'resolvePath',

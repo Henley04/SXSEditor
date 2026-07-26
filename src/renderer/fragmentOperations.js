@@ -1,6 +1,6 @@
 import { state, dom, trackManager, history } from './state.js';
 import { t } from '../i18n/index.js';
-import { showAlertDialog } from '../alertDialog.js';
+import { showAlertDialog, showProjectInfoImportDialog } from '../alertDialog.js';
 import { showAudioToMidiDialog, showLoadingOverlay, updateLoadingMessage, hideLoadingOverlay } from './uiControls.js';
 import { f0DataToPitchCurveAnchorPoints } from './f0Utils.js';
 import { markDirty } from './projectManager.js';
@@ -234,5 +234,117 @@ export async function handleAudioToMidi() {
   } catch (err) {
     console.error('Audio to MIDI process error:', err);
     showAlertDialog(t('main.audioToMidiFailed') + ': ' + err.message);
+  }
+}
+
+/**
+ * Import a standard MIDI file. Multi-track files create one singer track per
+ * non-drum MIDI track (behavior mirrors handleAudioToMidi). Each singer gets
+ * a single fragment spanning all of that track's notes.
+ *
+ * After creating the tracks, if the MIDI file contains project-level
+ * metadata (BPM, time signature), a dialog asks the user whether to sync
+ * those fields into the current project.
+ */
+export async function handleImportMidi() {
+  try {
+    const result = await window.electronAPI.importMidiMultiTrack();
+    if (!result.success) {
+      if (!result.canceled) {
+        showAlertDialog(t('main.midiImportFailed') + ': ' + (result.error || t('main.audioToMidiFailed')));
+      }
+      return;
+    }
+
+    const tracks = result.tracks || [];
+    if (tracks.length === 0) {
+      showAlertDialog(t('main.midiImportFailed') + ': no notes found');
+      return;
+    }
+
+    const createdSingers = [];
+    for (const track of tracks) {
+      const notes = track.notes.map((n, i) => ({
+        id: n.id ?? (Date.now() + i),
+        pitch: n.pitch ?? 60,
+        start: n.start ?? 0,
+        duration: n.duration ?? 0.25,
+        lyric: n.lyric || 'la',
+        noteType: n.noteType,
+      }));
+
+      const lastNote = notes[notes.length - 1];
+      const totalBeats = lastNote.start + lastNote.duration;
+      const duration = Math.max(4, Math.ceil(totalBeats));
+
+      const trackName = track.name || t('main.midiImportTrackName');
+
+      const singer = trackManager.addSinger({
+        trackName,
+        singerName: trackName,
+        singerFileMissing: true,
+      });
+
+      trackManager.addFragment({
+        singerId: singer.id,
+        startTime: 0,
+        duration,
+        notes,
+      });
+
+      createdSingers.push(singer);
+    }
+
+    if (createdSingers.length > 0) {
+      state.selectedSingerId = createdSingers[0].id;
+    }
+
+    refreshAll();
+    markDirty();
+
+    // Ask whether to sync BPM / time signature from the MIDI file. The
+    // dialog is skipped (resolves null) when the file has no project info.
+    const projectInfo = result.projectInfo;
+    if (projectInfo && (projectInfo.bpm != null || projectInfo.timeSignature != null)) {
+      const choice = await showProjectInfoImportDialog(projectInfo, {
+        currentBpm: state.project.bpm,
+        currentTimeSignature: state.project.timeSignature,
+      });
+      if (choice && (choice.applyBpm || choice.applyTimeSig)) {
+        if (choice.applyBpm && projectInfo.bpm != null) {
+          state.project.bpm = projectInfo.bpm;
+          if (dom.bpmInput) dom.bpmInput.value = String(projectInfo.bpm);
+          if (dom.bpmDisplayBadge) {
+            const bpmText = dom.bpmDisplayBadge.querySelector('#bpm-display-text') ||
+              document.getElementById('bpm-display-text');
+            if (bpmText) bpmText.textContent = `${state.project.bpm} BPM`;
+            dom.bpmDisplayBadge.classList.remove('bpm-flash');
+            void dom.bpmDisplayBadge.offsetWidth;
+            dom.bpmDisplayBadge.classList.add('bpm-flash');
+          }
+        }
+        if (choice.applyTimeSig && projectInfo.timeSignature != null) {
+          state.project.timeSignature = [projectInfo.timeSignature[0], projectInfo.timeSignature[1]];
+          if (dom.timeSigNum) dom.timeSigNum.value = String(projectInfo.timeSignature[0]);
+          if (dom.timeSigDen) dom.timeSigDen.value = String(projectInfo.timeSignature[1]);
+        }
+        if (window.electronAPI?.updateProjectSettings) {
+          window.electronAPI.updateProjectSettings({
+            bpm: state.project.bpm,
+            timeSignature: state.project.timeSignature,
+          });
+        }
+        markDirty();
+        refreshAll();
+      }
+    }
+
+    const msg = createdSingers.length === 1
+      ? t('main.midiImportCompleteSingle')
+      : t('main.midiImportCompleteMulti').replace('{count}', createdSingers.length);
+    showAlertDialog(msg);
+  } catch (err) {
+    console.error('MIDI import process error:', err);
+    showAlertDialog(t('main.midiImportFailed') + ': ' + err.message);
   }
 }

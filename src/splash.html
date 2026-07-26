@@ -29,6 +29,74 @@
     </style>
   </head>
   <body>
-    <div id="splash-root"></div>
+    <!--
+      Inline SVG: renders on HTML parse, BEFORE any JS bundle loads or
+      IPC round-trip completes. This is the key to "double-click →
+      instant popup" — the user sees the branded splash the moment
+      did-finish-load fires for the splash itself, with zero JS
+      execution on the critical path.
+
+      splash.js runs AFTER first paint and only enriches the existing
+      SVG (updates #splash-version, #splash-build-date, #splash-icon).
+      If JS or IPC fails, the default values below remain visible.
+    -->
+    <div id="splash-root">
+      <svg xmlns="http://www.w3.org/2000/svg"
+           width="440" height="280" viewBox="0 0 440 280"
+           role="img" aria-label="SXSEditor splash screen">
+
+        <!-- Solid app background (matches --bg-app). -->
+        <rect x="0" y="0" width="440" height="280" fill="#14141f" />
+
+        <!-- 3px accent bar at the top, matching --toolbar-accent-line. -->
+        <rect x="0" y="0" width="440" height="3" fill="#5b8def" />
+
+        <!-- App icon (top-left, 64x64). Initially empty; splash.js
+             fills it via #splash-icon href once IPC resolves. A
+             relative ./SXS.png path is used so the icon can load
+             directly without an IPC round-trip. -->
+        <image id="splash-icon" x="20" y="20" width="64" height="64"
+               preserveAspectRatio="xMidYMid meet" href="./SXS.png" />
+
+        <!-- App name -->
+        <text x="100" y="50"
+              font-size="22" font-weight="600" letter-spacing="0.5"
+              fill="#e0e0f0"
+              font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+          SXSEditor
+        </text>
+
+        <!-- Tagline / brief introduction -->
+        <text x="100" y="72"
+              font-size="12" font-weight="400"
+              fill="#8888a8"
+              font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+          AI Singing Voice Synthesis Workstation
+        </text>
+
+        <!-- Footer divider -->
+        <line x1="20" y1="240" x2="420" y2="240"
+              stroke="#2a2a3d" stroke-width="1" />
+
+        <!-- Version (left) — updated by splash.js -->
+        <text id="splash-version" x="20" y="262"
+              font-size="11" font-weight="500"
+              fill="#8888a8"
+              font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+        </text>
+
+        <!-- Build date (right) — updated by splash.js -->
+        <text id="splash-build-date" x="420" y="262" text-anchor="end"
+              font-size="11" font-weight="400"
+              fill="#8888a8"
+              font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
+          Build dev
+        </text>
+      </svg>
+    </div>
+    <!-- splash.js is auto-injected by webpack at end of body. It runs
+         AFTER the inline SVG paints and only enriches the existing
+         elements (version, build date, icon). Removing it from the
+         critical path is what makes the splash appear instantly. -->
   </body>
 </html>

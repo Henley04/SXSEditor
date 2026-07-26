@@ -70,11 +70,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getModelDir: () => ipcRenderer.invoke('getModelDir'),
   initSVSPipeline: () => ipcRenderer.invoke('svs:init'),
   synthesizeSVS: (data) => ipcRenderer.invoke('svs:synthesize', data),
+  synthesizeMultiStreaming: (data) => ipcRenderer.invoke('svs:synthesizeMultiStreaming', data),
   disposeSVSPipeline: () => ipcRenderer.invoke('svs:dispose'),
   onSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);
     ipcRenderer.on('svs:progress', handler);
     return () => ipcRenderer.removeListener('svs:progress', handler);
+  },
+  onSVSChunkAudio: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('svs:chunk-audio', handler);
+    return () => ipcRenderer.removeListener('svs:chunk-audio', handler);
   },
   getFragmentSVSSampleRate: () => ipcRenderer.invoke('fragment-svs:getSampleRate'),
   initFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:init'),
@@ -101,6 +107,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   extractMidiRosvot: (data) => ipcRenderer.invoke('extractMidi:rosvot', data),
   extractF0BasicPitch: (data) => ipcRenderer.invoke('extractF0:basicPitch', data),
   importMidi: () => ipcRenderer.invoke('midi:import'),
+  importMidiMultiTrack: () => ipcRenderer.invoke('midi:importMultiTrack'),
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),
   getDirName: (filePath) => ipcRenderer.invoke('getDirName', filePath),
   showItemInFolder: (filePath) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
@@ -157,6 +164,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('model-download:precision', handler);
     return () => ipcRenderer.removeListener('model-download:precision', handler);
+  },
+  // 模型下载窗口关闭事件：用于设置页面刷新模型状态总览区
+  onModelDownloadWindowClosed: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('model-download:window-closed', handler);
+    return () => ipcRenderer.removeListener('model-download:window-closed', handler);
   },
   onModelDownloadRevision: (callback) => {
     const handler = (event, data) => callback(data);

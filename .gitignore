@@ -1,6 +1,7 @@
 # Logs
 logs
 *.log
+*_log.txt
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -167,3 +168,6 @@ third_party/
 __pycache__/
 *.pyc
 *.pyo
+
+# Web design draft templates (not part of shipped site)
+draft/

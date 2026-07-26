@@ -174,10 +174,6 @@ function registerSettingsIpc() {
     return { issues, deviceMode, npuAvailable, devices: allDevices };
   });
 
-  ipcMain.handle('app:getVersion', async () => {
-    return require('electron').app.getVersion();
-  });
-
   ipcMain.handle('settings:saveSettings', async (event, settings) => {
     const current = loadSettings();
     const filtered = {};
@@ -205,7 +201,13 @@ function registerSettingsIpc() {
     // vocoderType 不在此列：仅切换 vocoder 时走增量 swapVocoder 路径，只重载 vocoder session，
     // 避免主模型（encoders/preflow/condEmb/diffStep/melTransform）被重新加载。
     // 但若其他 RESET_TRIGGER_KEYS 同时变化，仍走完整 reset（重建时自动读取最新 vocoderType）。
-    const RESET_TRIGGER_KEYS = ['deviceMode', 'preferredDeviceId', 'modelDeviceMapping', 'modelPrecision', 'inferenceProvider'];
+    const RESET_TRIGGER_KEYS = [
+        'deviceMode', 'preferredDeviceId', 'modelDeviceMapping', 'modelPrecision', 'inferenceProvider',
+        // ORT session 选项在模型加载时生效，修改后必须重置 pipeline 让新会话使用新配置
+        'ortEnableMemPattern', 'ortForceMemPatternOnDml', 'ortEnableCpuMemArena',
+        'ortGraphOptLevel', 'ortExecutionMode',
+        'ortIntraOpNumThreads', 'ortInterOpNumThreads', 'ortLogSeverityLevel',
+    ];
     const needsPipelineReset = RESET_TRIGGER_KEYS.some(key => {
       // modelDeviceMapping 是对象，需深比较；其他字段为标量，直接比较
       if (key === 'modelDeviceMapping') {
@@ -257,8 +259,8 @@ function registerSettingsIpc() {
     if (jpVocalizationChanged && !needsPipelineReset) {
       const pipeline = getSvsPipeline();
       if (pipeline && pipeline._textProcessing) {
-        pipeline._textProcessing.japaneseVocalization = merged.japaneseVocalization || 'en-phonemes';
-        pipeline._japaneseVocalization = merged.japaneseVocalization || 'en-phonemes';
+        pipeline._textProcessing.japaneseVocalization = merged.japaneseVocalization || 'hybrid';
+        pipeline._japaneseVocalization = merged.japaneseVocalization || 'hybrid';
         // Clear synthesis cache: phoneme processing changed, old results are stale
         if (typeof pipeline.clearSynthCache === 'function') {
           pipeline.clearSynthCache();

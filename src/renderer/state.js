@@ -27,6 +27,10 @@ export const state = {
   pipelineInitialized: false,
   pipelineInitPromise: null,
 
+  // 流式播放（主页面 Play All 启用 diffStepChunk 时使用）
+  streamingSources: [],
+  streamingFinished: false,
+
   // UI
   fragmentZoomX: 1,
   selectedSingerId: null,
@@ -52,6 +56,7 @@ export const dom = {
   btnLoad: document.getElementById('btn-load'),
   btnExport: document.getElementById('btn-export'),
   btnAudioToMidi: document.getElementById('btn-audio-to-midi'),
+  btnImportMidi: document.getElementById('btn-import-midi'),
   btnAddSinger: document.getElementById('btn-add-singer'),
   singerListEl: document.getElementById('singer-list'),
   fragmentCanvas: document.getElementById('fragment-canvas'),

@@ -15,7 +15,7 @@
     "publish": "electron-forge publish",
     "lint": "eslint src test scripts *.config.js --ext .js",
     "test": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --reporter spec",
-    "test:ci": "mocha --require ./test/setup.js \"test/**/*.test.js\" --ignore \"test/onnxModelLoading.test.js\" --ignore \"test/releaseNotesFetcher.test.js\" --timeout 30000 --reporter spec",
+    "test:ci": "mocha --require ./test/setup.js \"test/**/*.test.js\" --ignore \"test/onnxModelLoading.test.js\" --timeout 30000 --reporter spec",
     "test:coverage": "nyc --reporter=text --reporter=html npm test",
     "test:watch": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --watch",
     "cli": "electron-forge start -- --cli",
@@ -69,6 +69,7 @@
   "dependencies": {
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
+    "@tonejs/midi": "^2.0.28",
     "decibri": "^5.0.0",
     "onnxruntime-node": "^1.27.0",
     "onnxruntime-web": "^1.27.0",

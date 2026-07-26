@@ -1,6 +1,9 @@
-// Splash screen renderer.
-// Reads build info via IPC and renders an SVG-based splash card.
-// Loaded as a webpack renderer entry point (splash_window).
+// Splash screen renderer — enrichment pass.
+//
+// The inline SVG in splash.html paints immediately on HTML parse
+// (before this script loads), with safe default values. This script
+// runs AFTER first paint and only updates the version text, build date
+// text, and icon image href if the IPC provides richer data.
 //
 // Design notes:
 //   - Colors are pulled directly from the Aurora Dark theme tokens
@@ -8,7 +11,8 @@
 //     visually belongs to the app, not to a generic AI template.
 //   - No purple-to-cyan "AI" gradient. Just the app's accent (#5b8def)
 //     on the existing dark navy background (#14141f / #1a1a2a).
-//   - Minimal layout: icon → name → tagline → footer divider → meta.
+//   - If this script fails to load or IPC rejects, the defaults in
+//     splash.html remain visible — the splash is never blank.
 
 const BUILD_INFO_DEFAULT = {
   productName: 'SXSEditor',
@@ -17,108 +21,48 @@ const BUILD_INFO_DEFAULT = {
   buildDateISO: '',
 };
 
-// Aurora Dark theme tokens (kept in sync with dark-aurora.theme.json).
-const THEME = {
-  bgApp:      '#14141f', // --bg-app / --color-ink-900
-  bgPanel:    '#1a1a2a', // --bg-panel / --color-ink-700
-  bgElevated: '#1e1e2e', // --bg-elevated
-  border:     '#2a2a3d', // --color-ink-300
-  fgPrimary:  '#e0e0f0', // --fg-primary
-  fgMuted:    '#8888a8', // --fg-muted
-  accent:     '#5b8def', // --accent
-  accentSoft: '#6b9df5', // --accent-hover
-};
-
-function renderSplash(info, iconDataUrl) {
-  const W = 440, H = 280;
-  const versionText = info.version ? `v${info.version}` : '';
-
-  const iconImage = iconDataUrl
-    ? `<image x="20" y="20" width="64" height="64"
-         preserveAspectRatio="xMidYMid meet" href="${iconDataUrl}" />`
-    : '';
-
-  return `
-<svg xmlns="http://www.w3.org/2000/svg"
-     width="${W}" height="${H}" viewBox="0 0 ${W} ${H}"
-     role="img" aria-label="SXSEditor splash screen">
-
-  <!-- Solid app background (matches --bg-app). No gradient — the app
-       itself doesn't use one on its main surface, and gradients here
-       are what gives generic AI splashes their "AI flavor". -->
-  <rect x="0" y="0" width="${W}" height="${H}" fill="${THEME.bgApp}" />
-
-  <!-- 3px accent bar at the very top, matching the app's
-       --toolbar-accent-line decoration. Subtle, on-brand. -->
-  <rect x="0" y="0" width="${W}" height="3" fill="${THEME.accent}" />
-
-  <!-- App icon (top-left, 64x64 — same proportions the app uses in
-       its own headers, no decorative ring around it). -->
-  ${iconImage}
-
-  <!-- App name -->
-  <text x="100" y="50"
-        font-size="22" font-weight="600" letter-spacing="0.5"
-        fill="${THEME.fgPrimary}"
-        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
-    ${escapeXml(info.productName || 'SXSEditor')}
-  </text>
-
-  <!-- Tagline / brief introduction -->
-  <text x="100" y="72"
-        font-size="12" font-weight="400"
-        fill="${THEME.fgMuted}"
-        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
-    ${escapeXml(info.description || 'AI Singing Voice Synthesis Workstation')}
-  </text>
-
-  <!-- Footer divider -->
-  <line x1="20" y1="${H - 40}" x2="${W - 20}" y2="${H - 40}"
-        stroke="${THEME.border}" stroke-width="1" />
-
-  <!-- Version (left) -->
-  <text x="20" y="${H - 18}"
-        font-size="11" font-weight="500"
-        fill="${THEME.fgMuted}"
-        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
-    ${escapeXml(versionText)}
-  </text>
-
-  <!-- Build date (right) -->
-  <text x="${W - 20}" y="${H - 18}" text-anchor="end"
-        font-size="11" font-weight="400"
-        fill="${THEME.fgMuted}"
-        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
-    ${escapeXml(info.buildDate ? `Build ${info.buildDate}` : 'Build dev')}
-  </text>
-</svg>`.trim();
-}
-
-function escapeXml(s) {
-  if (s === undefined || s === null) return '';
-  return String(s)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-async function init() {
-  const root = document.getElementById('splash-root');
+async function enrichSplash() {
   let info = BUILD_INFO_DEFAULT;
-  let iconDataUrl = '';
 
   try {
     if (window.splashAPI && typeof window.splashAPI.getBuildInfo === 'function') {
-      info = await window.splashAPI.getBuildInfo();
-      iconDataUrl = await window.splashAPI.getIconDataUrl();
+      info = { ...BUILD_INFO_DEFAULT, ...(await window.splashAPI.getBuildInfo()) };
     }
   } catch (err) {
-    // fall back to defaults
+    // Keep defaults — the inline SVG is already visible.
+    return;
   }
 
-  root.innerHTML = renderSplash(info, iconDataUrl);
+  // Update version text (left of footer).
+  const versionEl = document.getElementById('splash-version');
+  if (versionEl) {
+    versionEl.textContent = info.version ? `v${info.version}` : '';
+  }
+
+  // Update build date text (right of footer).
+  const buildEl = document.getElementById('splash-build-date');
+  if (buildEl) {
+    buildEl.textContent = info.buildDate ? `Build ${info.buildDate}` : 'Build dev';
+  }
+
+  // Icon: the inline SVG already references ./SXS.png via a relative
+  // URL, which loads in parallel with this script. We don't override
+  // it here unless the IPC provided an explicit data URL fallback
+  // (which it no longer does — see splashManager.js). The relative
+  // path is the primary mechanism and avoids an IPC round-trip on
+  // the critical path.
+  //
+  // If a future enhancement wants to fall back to a base64 data URL
+  // when the relative path fails (e.g. in dev mode where webpack
+  // dev server doesn't serve the PNG), this is where it would go.
+  // For now, the relative path is sufficient for both dev and
+  // packaged mode (webpack CopyPlugin copies SXS.png to the
+  // splash_window renderer folder in both cases).
 }
 
-document.addEventListener('DOMContentLoaded', init);
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', enrichSplash);
+} else {
+  // DOM already parsed (script injected at end of body) — run now.
+  enrichSplash();
+}

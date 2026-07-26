@@ -42,7 +42,11 @@ for (const [hira, ph] of Object.entries(JP_HIRAGANA_MAP)) {
     JP_KATAKANA_MAP[kata] = ph;
 }
 
-const JP_KANJI_DICT = {
+// Hand-curated kanji → phoneme dictionary (fallback when JSON is unavailable).
+// These ~50 entries are also included in jpKanjiDict.json as overrides, but
+// kept here as a safety net so the module still works if the JSON file fails
+// to load (e.g., missing in a packaged build).
+const JP_KANJI_DICT_FALLBACK = {
     '愛': 'a i', '雨': 'a m e', '空': 's o r a', '花': 'h a n a',
     '風': 'k a z e', '月': 'ts u k i', '星': 'h o sh i', '雪': 'y u k i',
     '海': 'u m i', '山': 'y a m a', '川': 'k a w a', '森': 'm o r i',
@@ -61,6 +65,59 @@ const JP_KANJI_DICT = {
     '五': 'g o', '六': 'r o k u', '七': 'n a n a', '八': 'h a ch i',
     '九': 'ky u', '十': 'j u',
 };
+
+/**
+ * Load the full kanji → phoneme dictionary from jpKanjiDict.json.
+ *
+ * The JSON is generated from KANJIDIC2 (see scripts/generate_jp_kanji_dict.py)
+ * and contains ~2600 entries covering all Jōyō kanji (2136) plus other common
+ * kanji with frequency rankings. The hand-curated entries in
+ * JP_KANJI_DICT_FALLBACK are already merged into the JSON as overrides, so
+ * the JSON is the single source of truth when available.
+ *
+ * Falls back to JP_KANJI_DICT_FALLBACK (~50 entries) if the JSON cannot be
+ * loaded, ensuring the module always has a working dictionary.
+ */
+function _loadJpKanjiDict() {
+    const searchPaths = [
+        path.join(__dirname, 'jpKanjiDict.json'),
+        path.join(__dirname, '..', 'jpKanjiDict.json'),
+        path.join(__dirname, '..', 'inference', 'jpKanjiDict.json'),
+        path.join(__dirname, '..', 'inference', 'pipeline', 'jpKanjiDict.json'),
+        path.join(__dirname, '..', '..', 'src', 'inference', 'pipeline', 'jpKanjiDict.json'),
+    ];
+    // Packaged Electron app (asar / unpacked)
+    try {
+        if (process.resourcesPath) {
+            searchPaths.push(path.join(process.resourcesPath, 'app.asar', '.webpack', 'main', 'jpKanjiDict.json'));
+            searchPaths.push(path.join(process.resourcesPath, 'app', '.webpack', 'main', 'jpKanjiDict.json'));
+        }
+    } catch (_) {}
+    // Non-webpack / CLI mode
+    try {
+        if (require.main && require.main.path) {
+            searchPaths.push(path.join(require.main.path, 'inference', 'pipeline', 'jpKanjiDict.json'));
+            searchPaths.push(path.join(require.main.path, 'src', 'inference', 'pipeline', 'jpKanjiDict.json'));
+        }
+    } catch (_) {}
+
+    for (const dictPath of searchPaths) {
+        try {
+            if (fs.existsSync(dictPath)) {
+                const loaded = JSON.parse(fs.readFileSync(dictPath, 'utf-8'));
+                const count = Object.keys(loaded).length;
+                console.log(`[TextProcessing] Loaded JP kanji dictionary: ${count} entries (path: ${dictPath})`);
+                return loaded;
+            }
+        } catch (e) {
+            console.warn(`[TextProcessing] Failed to load JP kanji dictionary (${dictPath}):`, e.message);
+        }
+    }
+    console.warn('[TextProcessing] jpKanjiDict.json not found — falling back to hardcoded JP_KANJI_DICT_FALLBACK (~50 entries). Run `python scripts/generate_jp_kanji_dict.py` to regenerate.');
+    return JP_KANJI_DICT_FALLBACK;
+}
+
+const JP_KANJI_DICT = _loadJpKanjiDict();
 
 /**
  * Japanese phoneme → English ARPAbet phoneme mapping table.
@@ -203,6 +260,159 @@ const JP_TO_EN_PHONEME_MAP_HYBRID = {
     'by': ['B', 'Y'],
 };
 
+/**
+ * Japanese kana → Cantonese (yue_) syllable-level phoneme mapping for hybrid mode.
+ *
+ * The base multilingual model vocabulary contains yue_ phonemes at the syllable
+ * level (e.g. yue_gaa1 = 粤拼 gaa1 = /kaː/). For each Japanese kana, we pick
+ * whichever representation — English ARPAbet (phoneme-level) or Cantonese
+ * yue_ (syllable-level) — is phonetically closest to the Japanese sound:
+ *
+ * - Vowels あ/お → yue_aa1 / yue_o1 (pure monophthongs, closer than English
+ *   AA /ɑ/ and AO /ɔ/ which have English-specific coloring).
+ * - い/う/え → en_IY1/UW1/EH1: Cantonese has no pure /i//u//e/ syllables
+ *   (ji1 = /ji/, wu1 = /wu/, no pure e), so ARPAbet stays closer.
+ * - か行 (k) → yue_g* (Cantonese g = /k/ unaspirated, matches Japanese k
+ *   better than English K = /kʰ/ aspirated).
+ * - さ行 (s) → yue_s* for pure /sV/ syllables; し → en_SH+IY1 (Japanese
+ *   /ɕi/ is palatalized, English SH /ʃ/ closer than Cantonese /s/);
+ *   す → en_S+UW1 (Cantonese lacks /su/).
+ * - た行 (t) → yue_d* (Cantonese d = /t/ unaspirated, matches Japanese t);
+ *   ち → en_CH+IY1 (Japanese /tɕi/, English CH closer); つ → en_T+S+UW1.
+ * - は行 (h) → yue_h* / yue_fu1 (Cantonese h/f match Japanese h/ɸ well).
+ * - ま行 (m) → yue_m* for /mV/; み/む → en_M+IY1/UW1 (Cantonese lacks
+ *   pure /mi//mu/).
+ * - や/よ → yue_jaa1 / yue_jo1 (Cantonese j = /j/); ゆ → en_Y+UW1
+ *   (Cantonese jyu1 = /jy/ rounded, not close to Japanese /jɯ/).
+ * - ら行 (r→l) → yue_l* (Cantonese l = /l/ closest to Japanese tap /ɾ/);
+ *   る → en_L+UW1 (Cantonese lacks pure /lu/).
+ * - わ → yue_waa1; を → yue_o1 (same as お).
+ * - ぱ行 (p) → yue_paa3 / yue_po3 (Cantonese p = /pʰ/ aspirated, matches
+ *   Japanese p); ぴ/ぷ/ぺ → en_P+IY1/UW1/EH1 (Cantonese lacks pure /pi//pu//pe/).
+ * - ん → en_N (universal nasal, more flexible than yue_ng4).
+ * - が/ざ/だ/ば行 → ARPAbet (Japanese voiced stops /g z d b/ have no
+ *   Cantonese equivalent — Cantonese b/d/g are voiceless unaspirated /p t k/).
+ * - 拗音 (yōon) → ARPAbet (Japanese palatalized consonants /CjV/ have no
+ *   Cantonese equivalent at the syllable level).
+ * - 促音 っ → en_T (matches existing hybrid behavior).
+ *
+ * Cantonese tones are arbitrary (1 high-level / 3 mid-level / 4 low-falling
+ * chosen as available) — the SVS model receives F0 from the musical note,
+ * so the tone field acts mainly as a vocabulary distinguisher.
+ */
+const JpKanaToYueSyllableMap = {
+    // あ段 — pure vowels where Cantonese has them
+    'あ': 'yue_aa1', 'お': 'yue_o1', 'を': 'yue_o1',
+
+    // か行 — Cantonese g unaspirated /k/ matches Japanese k
+    'か': 'yue_gaa1', 'く': 'yue_gu1', 'こ': 'yue_go1',
+
+    // さ行 — Cantonese s /s/ matches Japanese s
+    'さ': 'yue_saa1', 'せ': 'yue_se1', 'そ': 'yue_so1',
+
+    // た行 — Cantonese d unaspirated /t/ matches Japanese t
+    'た': 'yue_daa1', 'て': 'yue_de1', 'と': 'yue_do1',
+
+    // な行 — Cantonese n /n/ matches Japanese n (only low-tone variants exist)
+    'な': 'yue_naa4', 'ね': 'yue_ne1', 'の': 'yue_no4',
+
+    // は行 — Cantonese h /h/ and f /f/ match Japanese h /h/ and ɸ
+    'は': 'yue_haa1', 'ひ': 'yue_hi1', 'ふ': 'yue_fu1', 'へ': 'yue_he3', 'ほ': 'yue_ho1',
+
+    // ま行 — Cantonese m /m/ matches Japanese m
+    'ま': 'yue_maa1', 'め': 'yue_me1', 'も': 'yue_mo1',
+
+    // や行 — Cantonese j /j/ matches Japanese y
+    'や': 'yue_jaa1', 'よ': 'yue_jo1',
+
+    // ら行 — Cantonese l /l/ closest to Japanese tap /ɾ/
+    'ら': 'yue_laa1', 'り': 'yue_li1', 'れ': 'yue_le4', 'ろ': 'yue_lo1',
+
+    // わ行 — Cantonese w /w/ matches Japanese w
+    'わ': 'yue_waa1',
+
+    // ぱ行 — Cantonese p aspirated /pʰ/ matches Japanese p
+    'ぱ': 'yue_paa3', 'ぽ': 'yue_po3',
+};
+
+// Katakana equivalents (ア↔あ offset 0x60), generated at module load.
+const JpKataKanaToYueSyllableMap = {};
+for (const [hira, yue] of Object.entries(JpKanaToYueSyllableMap)) {
+    const kata = String.fromCharCode(hira.charCodeAt(0) + 0x60);
+    JpKataKanaToYueSyllableMap[kata] = yue;
+}
+
+/**
+ * Japanese mora-timing duration weights for JP→EN mapped phonemes.
+ *
+ * Japanese is a mora-timed language: each mora (syllable-like unit) receives
+ * approximately equal duration. This contrasts with English stress-timing
+ * (captured by en_phoneme_durations.json) where stressed vowels are much
+ * longer than unstressed ones. Using English stats for Japanese phonemes
+ * produces unnatural duration ratios (e.g., AA1 vs AA0 differ enormously in
+ * English but Japanese /a/ has no stress contrast).
+ *
+ * This table assigns each Japanese phoneme a relative weight reflecting its
+ * contribution to a mora:
+ *   - Vowels (a/i/u/e/o): 1.0 — full mora, the sonority peak
+ *   - Single consonants (k/s/t/n/h/m/r/w...): 0.35 — short onset, ~35% of
+ *     the following vowel's duration. Matches phonetic measurements of
+ *     Japanese consonant-to-vowel duration ratios.
+ *   - Palatal consonants (ky/gy/ny/...): 0.45 — consonant + palatal glide,
+ *     slightly longer than single consonants due to the /j/ off-glide.
+ *   - Affricates (sh/ch/ts): 0.45-0.55 — longer than stops due to the
+ *     fricative component.
+ *   - Nasal murmur (n before vowel): 0.40 — slightly longer than oral stops.
+ *   - 促音 cl (gemination marker): 0.20 — very brief stop; in real Japanese
+ *     it lengthens the FOLLOWING consonant, but as a standalone phoneme it
+ *     should be short to avoid sounding like a full /t/.
+ *   - pau (unknown kanji fallback): 0.5 — neutral.
+ *
+ * When a Japanese phoneme maps to multiple English phonemes (e.g., ts→T+S,
+ * ky→K+Y), the weight is split equally among the components. The resulting
+ * component weights are then used by getPhonemeAdjustments() to compute
+ * durationRatio, and by _allocateByStats (when extended) for inference.
+ *
+ * Tuning rationale: weights are derived from Japanese phonetics literature
+ * (Han 1962, Sato 1993) showing typical consonant/vowel duration ratios of
+ * ~0.35-0.45 for stops and ~0.50 for nasals/liquids in Tokyo Japanese.
+ */
+const JP_MORA_WEIGHTS = {
+    // Vowels — full mora weight (sonority peak)
+    'a': 1.0, 'i': 1.0, 'u': 1.0, 'e': 1.0, 'o': 1.0,
+
+    // Single consonants — short onset (~35% of vowel duration)
+    'k': 0.35, 'g': 0.35, 's': 0.35, 'z': 0.35,
+    't': 0.35, 'd': 0.35, 'h': 0.35, 'b': 0.35,
+    'p': 0.35, 'f': 0.35, 'w': 0.35, 'y': 0.35,
+
+    // Voiced/nasal/liquid — slightly longer (~40%)
+    'n': 0.40, 'm': 0.40, 'r': 0.40,
+
+    // Voiced affricate /ɟ/ — ~40%
+    'j': 0.40,
+
+    // Palatal consonants (yōon) — consonant + /j/ glide, ~45%
+    'ky': 0.45, 'gy': 0.45, 'ny': 0.50, 'hy': 0.45,
+    'my': 0.50, 'ry': 0.50, 'py': 0.45, 'by': 0.45,
+
+    // Affricates — stop + fricative, longer than pure stops
+    'sh': 0.45,  // /ɕ/ — fricative, ~45%
+    'ch': 0.50,  // /tɕ/ — affricate, ~50%
+    'ts': 0.55,  // /ts/ — affricate, ~55%
+
+    // 促音 (gemination marker) — very brief stop
+    'cl': 0.20,
+
+    // Unknown kanji fallback — neutral
+    'pau': 0.50,
+};
+
+/**
+ * Default weight for any Japanese phoneme not explicitly in JP_MORA_WEIGHTS.
+ */
+const JP_MORA_DEFAULT_WEIGHT = 0.50;
+
 class TextProcessing {
     constructor(options = {}) {
         this.phone2idx = {};
@@ -210,10 +420,10 @@ class TextProcessing {
         this._vocabSize = 0;
         this._dictSize = 0;
         // Japanese vocalization mode:
-        // - 'en-phonemes' (default): uses English ARPAbet phonemes on the base multilingual model
-        // - 'hybrid': improved ARPAbet mapping (L for ら行, AO for お段) on the base model
+        // - 'hybrid' (default): improved ARPAbet mapping (L for ら行, AO for お段) on the base model
+        // - 'en-phonemes': uses English ARPAbet phonemes (original mapping) on the base multilingual model
         // - 'jp-lora': uses JP LoRA models with jp_ phonemes
-        this.japaneseVocalization = options.japaneseVocalization || 'en-phonemes';
+        this.japaneseVocalization = options.japaneseVocalization || 'hybrid';
         this._loadPhoneSet();
         this._loadEnG2pDict();
     }
@@ -466,37 +676,109 @@ class TextProcessing {
      * 内部先调用 _japaneseG2p 得到日语音素序列（如 'k a'），再逐个查表映射为 ARPAbet。
      * 映射后的音素附带 duration weight（通过 _attachEnglishWeights），用于 UI 时长分配。
      *
-     * hybrid 模式使用改进映射表（L 替代 R、AO 替代 OW），en-phonemes 模式使用默认表。
+     * hybrid 模式：
+     *   1) 优先尝试假名→粤语音节级映射（_japaneseKanaToYuePhonemes）。当整段歌词
+     *      完全由"有粤语对应音节"的假名组成时，返回 yue_ 音素数组。
+     *   2) 否则回退到 ARPAbet 映射（处理汉字、が/ざ/だ/ば行、拗音、促音、ん等）。
+     *
+     * en-phonemes 模式使用默认 ARPAbet 映射表。
      * 'pau'（未知汉字回退）映射为 <SP>（静音）。
      *
      * @param {string} text - 日文歌词（假名/汉字/混合）
      * @returns {Array<{name:string, display:string, weight?:number}>} 英语音素对象数组
      */
     _japaneseToEnglishPhonemes(text) {
+        // hybrid 模式：优先用假名→粤语映射（仅当整段歌词都是可映射假名时）
+        if (this.japaneseVocalization === 'hybrid') {
+            const yueResult = this._japaneseKanaToYuePhonemes(text);
+            if (yueResult) return this._attachJapaneseWeights(yueResult, null, true);
+        }
+
         const jpPhonemeStr = this._japaneseG2p(text);
         if (!jpPhonemeStr) return [{ name: '<SP>', display: 'SP' }];
 
         const map = this._getJpToEnMap();
         const jpParts = jpPhonemeStr.split(' ').filter(s => s);
         const enPhonemes = [];
+        // Track the JP source phoneme for each EN phoneme, so we can attach
+        // mora-based weights (e.g., 'ts' → [T, S] each gets half of ts weight).
+        const jpSources = [];
         for (const jpPart of jpParts) {
             if (jpPart === 'pau') {
                 // Unknown kanji → silence
                 enPhonemes.push({ name: '<SP>', display: 'SP' });
+                jpSources.push('pau');
                 continue;
             }
             const mapped = map[jpPart];
             if (mapped) {
                 for (const enPh of mapped) {
                     enPhonemes.push({ name: 'en_' + enPh, display: enPh });
+                    jpSources.push(jpPart);
                 }
             } else {
                 // Fallback: if no mapping exists, try to use as-is (shouldn't happen normally)
                 console.warn(`[TextProcessing] No JP→EN mapping for "${jpPart}", using <UNK>`);
                 enPhonemes.push({ name: '<UNK>', display: jpPart });
+                jpSources.push(jpPart);
             }
         }
-        return this._attachEnglishWeights(enPhonemes);
+        return this._attachJapaneseWeights(enPhonemes, jpSources, false);
+    }
+
+    /**
+     * 尝试把日文歌词（假名）逐假名映射为粤语音节级音素（yue_ 前缀）。
+     *
+     * 仅当歌词完全由"在 JpKanaToYueSyllableMap 中"的假名组成时返回数组；
+     * 一旦遇到任何未覆盖的字符（汉字、字母、が/ざ/だ/ば行、拗音、促音、
+     * ん 等），立即返回 null，让上层走 ARPAbet 回退。
+     *
+     * 长音符号（ー / 〜）被跳过，与 _japaneseG2p 行为一致。
+     *
+     * @param {string} text - 日文歌词（仅假名）
+     * @returns {Array<{name:string, display:string}>|null} yue_ 音素对象数组，或 null
+     */
+    _japaneseKanaToYuePhonemes(text) {
+        if (!text || text.length === 0) return null;
+        const result = [];
+        let i = 0;
+        while (i < text.length) {
+            const ch = text[i];
+            // 長音 (ー): repeat the last emitted yue syllable to double its
+            // duration, matching Japanese long-vowel timing. 〜 (wave dash)
+            // is stylistic and skipped.
+            if (ch === 'ー') {
+                if (result.length > 0) {
+                    const last = result[result.length - 1];
+                    result.push({ name: last.name, display: ch });
+                }
+                i++;
+                continue;
+            }
+            if (ch === '〜') { i++; continue; }
+
+            // 先尝试拗音两字符（如 きゃ）—— 这些都不在粤语映射表里，
+            // 一旦遇到就返回 null 让 ARPAbet 处理
+            if (i + 1 < text.length) {
+                const combo = ch + text[i + 1];
+                if (JP_HIRAGANA_MAP[combo] || JP_KATAKANA_MAP[combo]) {
+                    // 拗音存在但粤语映射表未覆盖 → 回退 ARPAbet
+                    return null;
+                }
+            }
+
+            // 单字符假名
+            const yueName = JpKanaToYueSyllableMap[ch] || JpKataKanaToYueSyllableMap[ch];
+            if (yueName) {
+                result.push({ name: yueName, display: ch });
+                i++;
+                continue;
+            }
+
+            // 该字符不是可映射的假名（汉字、字母、未覆盖假名等）→ 回退 ARPAbet
+            return null;
+        }
+        return result.length > 0 ? result : null;
     }
 
     /**
@@ -513,10 +795,12 @@ class TextProcessing {
         const mapped = map[jpPhone];
         if (!mapped || mapped.length === 0) {
             console.warn(`[TextProcessing] No JP→EN mapping for jp_${jpPhone}, using <UNK>`);
-            return [{ name: '<UNK>', display: jpPhone }];
+            return [{ name: '<UNK>', display: jpPhone, weight: JP_MORA_DEFAULT_WEIGHT }];
         }
         const enPhonemes = mapped.map(enPh => ({ name: 'en_' + enPh, display: enPh }));
-        return this._attachEnglishWeights(enPhonemes);
+        // Attach mora-based weights using the JP source phoneme identity.
+        const jpSources = new Array(mapped.length).fill(jpPhone);
+        return this._attachJapaneseWeights(enPhonemes, jpSources, false);
     }
 
     /**
@@ -547,6 +831,65 @@ class TextProcessing {
         return phonemes;
     }
 
+    /**
+     * 给日语音素对象数组附带 mora-timing duration weight。
+     *
+     * 与 _attachEnglishWeights 不同，这里使用 JP_MORA_WEIGHTS 表（基于日语
+     * 拍时序 phonetics），而非英文统计表（基于重音时序）。原因：
+     *   - 日语每个拍 (mora) 时长基本相等，元音不应因"重音"差异而时长悬殊
+     *   - 英文 AA1 vs AA0 时长差可达 3x，对日语 /a/ 毫无意义
+     *   - 辅音应明显短于元音（C:V ≈ 0.35），符合日语语音学测量
+     *
+     * 当 jpSources 为 null（yue 路径）时，每个 yue_ 音节视为一个完整拍，
+     * weight = 1.0（拍等长原则）。yue_ 音节本身已包含辅音+元音，无需拆分。
+     *
+     * 当 jpSources 提供时（ARPAbet 路径），按 JP 源音素查 JP_MORA_WEIGHTS，
+     * 若一个 JP 音素映射到多个 EN 音素（如 ts→T+S），权重均分到各分量。
+     *
+     * @param {Array<{name:string, display:string}>} phonemes 音素对象数组
+     * @param {string[]|null} jpSources 每个音素对应的 JP 源音素基名，或 null（yue 路径）
+     * @param {boolean} isYue 是否为 yue 音节路径
+     * @returns {Array} 同一数组，每个对象附带 weight 字段
+     */
+    _attachJapaneseWeights(phonemes, jpSources, isYue) {
+        if (!phonemes || phonemes.length === 0) return phonemes;
+        const SPECIAL = new Set(['<SEP>', '<BOW>', '<EOW>', '<PAD>', '<SP>']);
+
+        if (isYue || !jpSources) {
+            // yue_ syllable path: each syllable = 1 mora, equal weight.
+            // Special tokens (rare in this path) get reduced weight.
+            for (let i = 0; i < phonemes.length; i++) {
+                const name = phonemes[i].name || '';
+                phonemes[i].weight = SPECIAL.has(name) ? 0.3 : 1.0;
+            }
+            return phonemes;
+        }
+
+        // ARPAbet path: group consecutive phonemes by their JP source, then
+        // split the source's mora weight equally among the components.
+        // E.g., jpParts = ['k', 'a', 'ts', 'a'] → EN = [K, AA1, T, S, AA1]
+        //   jpSources = ['k', 'a', 'ts', 'ts', 'a']
+        //   weights   = [0.35, 1.0, 0.275, 0.275, 1.0]  (ts weight 0.55 / 2)
+        for (let i = 0; i < phonemes.length; i++) {
+            const name = phonemes[i].name || '';
+            if (SPECIAL.has(name)) {
+                phonemes[i].weight = 0.3;
+                continue;
+            }
+            const jpSrc = jpSources[i] || '';
+            const baseWeight = JP_MORA_WEIGHTS[jpSrc] !== undefined
+                ? JP_MORA_WEIGHTS[jpSrc]
+                : JP_MORA_DEFAULT_WEIGHT;
+            // Count how many EN phonemes share this same JP source (consecutive)
+            let componentCount = 1;
+            for (let k = i + 1; k < phonemes.length && jpSources[k] === jpSrc; k++) {
+                componentCount++;
+            }
+            phonemes[i].weight = baseWeight / componentCount;
+        }
+        return phonemes;
+    }
+
     _isJapanese(text) {
         // Only detect hiragana/katakana as Japanese, NOT CJK kanji (shared with Chinese)
         return /[ぁ-ゟァ-ヿ]/.test(text);
@@ -554,10 +897,28 @@ class TextProcessing {
 
     _japaneseG2p(text) {
         const result = [];
+        // Japanese vowel phonemes — used to handle 長音 (ー) by repeating the
+        // preceding vowel. In Japanese, ー doubles the duration of the vowel
+        // it follows (e.g., おかあさん → /o k a a s a N/). Previously ー was
+        // skipped entirely, which lost the long/short vowel contrast and made
+        // words like おばさん (obasan) and おばあさん (obaasan) sound identical.
+        const JP_VOWELS = new Set(['a', 'i', 'u', 'e', 'o']);
         let i = 0;
         while (i < text.length) {
             const ch = text[i];
-            if (ch === 'ー' || ch === '〜') { i++; continue; }
+            // 長音 (ー): repeat the last emitted vowel to double its duration.
+            // 〜 (wave dash) is a stylistic mark, not phonetic — skip it.
+            if (ch === 'ー') {
+                for (let k = result.length - 1; k >= 0; k--) {
+                    if (JP_VOWELS.has(result[k])) {
+                        result.push(result[k]);
+                        break;
+                    }
+                }
+                i++;
+                continue;
+            }
+            if (ch === '〜') { i++; continue; }
 
             if (i + 1 < text.length) {
                 const combo = ch + text[i + 1];
@@ -599,4 +960,4 @@ class TextProcessing {
     }
 }
 
-module.exports = { TextProcessing };
+module.exports = { TextProcessing, JP_MORA_WEIGHTS, JP_MORA_DEFAULT_WEIGHT };

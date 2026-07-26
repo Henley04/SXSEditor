@@ -29,6 +29,12 @@ const previewCfgStrengthSlider = document.getElementById('previewCfgStrength');
 const previewCfgStrengthValue = document.getElementById('previewCfgStrengthValue');
 const previewCfgRescaleSlider = document.getElementById('previewCfgRescale');
 const previewCfgRescaleValue = document.getElementById('previewCfgRescaleValue');
+const previewDiffStepChunkEnabledCheckbox = document.getElementById('previewDiffStepChunkEnabled');
+const previewDiffStepChunkGroup = document.getElementById('previewDiffStepChunkGroup');
+const previewDiffStepChunkFramesSlider = document.getElementById('previewDiffStepChunkFrames');
+const previewDiffStepChunkFramesValue = document.getElementById('previewDiffStepChunkFramesValue');
+const previewDiffStepOverlapFramesSlider = document.getElementById('previewDiffStepOverlapFrames');
+const previewDiffStepOverlapFramesValue = document.getElementById('previewDiffStepOverlapFramesValue');
 const exportDiffStepsSlider = document.getElementById('exportDiffSteps');
 const exportDiffStepsValue = document.getElementById('exportDiffStepsValue');
 const exportCfgStrengthSlider = document.getElementById('exportCfgStrength');
@@ -47,6 +53,19 @@ const languageSelect = document.getElementById('languageSelect');
 const modelPrecisionSelect = document.getElementById('modelPrecision');
 const midiExtractToolSelect = document.getElementById('midiExtractTool');
 const openModelDownloadBtn = document.getElementById('openModelDownloadBtn');
+const openModelDownloadBtnTop = document.getElementById('openModelDownloadBtnTop');
+
+// 模型状态总览区元素引用（聚合主模型/JP/SiFiGAN 三类模型状态）
+const modelOverviewMainDot = document.getElementById('overviewMainDotSettings');
+const modelOverviewMainStatus = document.getElementById('overviewMainStatusText');
+const modelOverviewMainVersion = document.getElementById('overviewMainVersion');
+const modelOverviewMainPrecision = document.getElementById('overviewMainPrecision');
+const modelOverviewJpDot = document.getElementById('overviewJpDotSettings');
+const modelOverviewJpStatus = document.getElementById('overviewJpStatusText');
+const modelOverviewJpVersion = document.getElementById('overviewJpVersion');
+const modelOverviewSifiganDot = document.getElementById('overviewSifiganDotSettings');
+const modelOverviewSifiganStatus = document.getElementById('overviewSifiganStatusText');
+const modelOverviewSifiganVersion = document.getElementById('overviewSifiganVersion');
 const vocoderTypeSelect = document.getElementById('vocoderType');
 const vocoderTypeHint = document.getElementById('vocoderTypeHint');
 const sifiganPrecisionSelect = document.getElementById('sifiganPrecision');
@@ -62,6 +81,19 @@ const vocoderChunkTableBody = document.getElementById('vocoderChunkTableBody');
 const vocoderChunkTableGroup = document.getElementById('vocoderChunkTableGroup');
 const releaseDmlVramAfterSynthesisCheckbox = document.getElementById('releaseDmlVramAfterSynthesis');
 const releaseDiffStepBeforeVocoderCheckbox = document.getElementById('releaseDiffStepBeforeVocoder');
+
+// ORT advanced settings
+const ortEnableMemPatternCheckbox = document.getElementById('ortEnableMemPattern');
+const ortEnableCpuMemArenaCheckbox = document.getElementById('ortEnableCpuMemArena');
+const ortGraphOptLevelSelect = document.getElementById('ortGraphOptLevel');
+const ortExecutionModeSelect = document.getElementById('ortExecutionMode');
+const ortForceMemPatternOnDmlCheckbox = document.getElementById('ortForceMemPatternOnDml');
+const ortIntraOpNumThreadsSlider = document.getElementById('ortIntraOpNumThreads');
+const ortIntraOpNumThreadsValue = document.getElementById('ortIntraOpNumThreadsValue');
+const ortInterOpNumThreadsSlider = document.getElementById('ortInterOpNumThreads');
+const ortInterOpNumThreadsValue = document.getElementById('ortInterOpNumThreadsValue');
+const ortLogSeverityLevelSelect = document.getElementById('ortLogSeverityLevel');
+
 const updateChannelSelect = document.getElementById('updateChannelSelect');
 const autoCheckUpdatesCheckbox = document.getElementById('autoCheckUpdates');
 const checkUpdateBtn = document.getElementById('checkUpdateBtn');
@@ -113,6 +145,17 @@ function applySavedSettingsToUI(currentSetting) {
     previewCfgRescaleSlider.value = pRescale;
     previewCfgRescaleValue.textContent = parseFloat(pRescale).toFixed(2);
 
+    // diffStep 分块推理设置
+    const pChunkEnabled = currentSetting.previewDiffStepChunkEnabled === true;
+    const pChunkFrames = currentSetting.previewDiffStepChunkFrames ?? 500;
+    const pOverlapFrames = currentSetting.previewDiffStepOverlapFrames ?? 50;
+    if (previewDiffStepChunkEnabledCheckbox) previewDiffStepChunkEnabledCheckbox.checked = pChunkEnabled;
+    if (previewDiffStepChunkGroup) previewDiffStepChunkGroup.classList.toggle('hidden', !pChunkEnabled);
+    if (previewDiffStepChunkFramesSlider) previewDiffStepChunkFramesSlider.value = pChunkFrames;
+    if (previewDiffStepChunkFramesValue) previewDiffStepChunkFramesValue.textContent = pChunkFrames;
+    if (previewDiffStepOverlapFramesSlider) previewDiffStepOverlapFramesSlider.value = pOverlapFrames;
+    if (previewDiffStepOverlapFramesValue) previewDiffStepOverlapFramesValue.textContent = pOverlapFrames;
+
     const eSteps = currentSetting.exportDiffSteps ?? 32;
     const eCfg = currentSetting.exportCfgStrength ?? 3.0;
     const eRescale = currentSetting.exportCfgRescale ?? 0.75;
@@ -156,9 +199,9 @@ function applySavedSettingsToUI(currentSetting) {
     sifiganPrecisionSelect.value = currentSetting.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32';
     updateSifiganPrecisionVisibility(vocoderTypeSelect.value);
 
-    // Japanese vocalization mode: 'en-phonemes' (default) | 'hybrid' (improved mapping) | 'jp-lora' (in development, disabled)
+    // Japanese vocalization mode: 'hybrid' (default, improved mapping) | 'en-phonemes' (original mapping) | 'jp-lora' (in development, disabled)
     const validJpVocalizations = ['en-phonemes', 'hybrid', 'jp-lora'];
-    const jpVocalization = validJpVocalizations.includes(currentSetting.japaneseVocalization) ? currentSetting.japaneseVocalization : 'en-phonemes';
+    const jpVocalization = validJpVocalizations.includes(currentSetting.japaneseVocalization) ? currentSetting.japaneseVocalization : 'hybrid';
     const jpVocalRadioToCheck = document.querySelector(`input[name="japaneseVocalization"][value="${jpVocalization}"]`);
     if (jpVocalRadioToCheck) jpVocalRadioToCheck.checked = true;
 
@@ -185,6 +228,43 @@ function applySavedSettingsToUI(currentSetting) {
     // Vocoder 推理前释放 diffStep（默认开启，仅 DML 后端有效）
     if (releaseDiffStepBeforeVocoderCheckbox) {
         releaseDiffStepBeforeVocoderCheckbox.checked = currentSetting.releaseDiffStepBeforeVocoder !== false;
+    }
+
+    // ORT 高级设置
+    if (ortEnableMemPatternCheckbox) {
+        ortEnableMemPatternCheckbox.checked = currentSetting.ortEnableMemPattern !== false;
+    }
+    if (ortEnableCpuMemArenaCheckbox) {
+        ortEnableCpuMemArenaCheckbox.checked = currentSetting.ortEnableCpuMemArena !== false;
+    }
+    if (ortGraphOptLevelSelect) {
+        const lvl = ['disabled', 'basic', 'extended', 'all'].includes(currentSetting.ortGraphOptLevel)
+            ? currentSetting.ortGraphOptLevel : 'all';
+        ortGraphOptLevelSelect.value = lvl;
+    }
+    if (ortExecutionModeSelect) {
+        const m = currentSetting.ortExecutionMode === 'parallel' ? 'parallel' : 'sequential';
+        ortExecutionModeSelect.value = m;
+    }
+    if (ortForceMemPatternOnDmlCheckbox) {
+        ortForceMemPatternOnDmlCheckbox.checked = currentSetting.ortForceMemPatternOnDml === true;
+    }
+    if (ortIntraOpNumThreadsSlider) {
+        const v = Number.isFinite(currentSetting.ortIntraOpNumThreads) && currentSetting.ortIntraOpNumThreads > 0
+            ? Math.min(64, Math.floor(currentSetting.ortIntraOpNumThreads)) : 0;
+        ortIntraOpNumThreadsSlider.value = v;
+        if (ortIntraOpNumThreadsValue) ortIntraOpNumThreadsValue.textContent = v;
+    }
+    if (ortInterOpNumThreadsSlider) {
+        const v = Number.isFinite(currentSetting.ortInterOpNumThreads) && currentSetting.ortInterOpNumThreads > 0
+            ? Math.min(64, Math.floor(currentSetting.ortInterOpNumThreads)) : 0;
+        ortInterOpNumThreadsSlider.value = v;
+        if (ortInterOpNumThreadsValue) ortInterOpNumThreadsValue.textContent = v;
+    }
+    if (ortLogSeverityLevelSelect) {
+        const lvl = ['verbose', 'info', 'warning', 'error', 'fatal'].includes(currentSetting.ortLogSeverityLevel)
+            ? currentSetting.ortLogSeverityLevel : 'warning';
+        ortLogSeverityLevelSelect.value = lvl;
     }
 
     // Update channel & auto-check (persisted via saveSettings)
@@ -419,6 +499,146 @@ function updateModelStatusDisplay(modelStatus) {
     }
 }
 
+// ==================== 模型状态总览区 ====================
+// 聚合主模型/JP/SiFiGAN 三类模型的安装与版本状态，使用 model-download:check-all-versions
+// 一次性获取三类模型的版本信息，避免多次 IPC 调用。
+// 兼容旧版本：若 IPC 不可用或返回异常，总览区保持默认"检测中..."状态，不影响其他功能。
+
+function _setOverviewCard(dotEl, statusEl, versionEl, dotState, statusText, versionText, statusClass) {
+    if (dotEl) dotEl.className = 'model-overview-dot ' + dotState;
+    if (statusEl) {
+        statusEl.textContent = statusText;
+        statusEl.className = 'model-overview-status' + (statusClass ? ' ' + statusClass : '');
+    }
+    if (versionEl) versionEl.textContent = versionText || '';
+}
+
+/**
+ * 解析单个模型组的版本信息，返回 { dotState, statusText, versionText, statusClass }
+ * dotState: 'installed' | 'missing' | 'warning' | 'checking'
+ * 与 modelDownload.js 中的 updateOverviewStatus 保持一致的语义。
+ */
+function _resolveOverviewState(info, opts = {}) {
+    const { isDownloading = false } = opts;
+    if (isDownloading) {
+        return {
+            dotState: 'checking',
+            statusText: t('modelDownload.overviewDownloading'),
+            versionText: '',
+            statusClass: 'checking',
+        };
+    }
+    if (!info) {
+        return {
+            dotState: 'checking',
+            statusText: t('settings.modelOverviewChecking'),
+            versionText: '',
+            statusClass: 'checking',
+        };
+    }
+    // SiFiGAN 特殊状态：download_url_not_configured（视为未安装，无可用下载源）
+    if (info.status === 'download_url_not_configured' || info.status === 'not_downloaded') {
+        return {
+            dotState: 'missing',
+            statusText: t('settings.modelOverviewMissing'),
+            versionText: '',
+            statusClass: 'missing',
+        };
+    }
+    if (info.hasModelFiles === false && !info.allExist) {
+        return {
+            dotState: 'missing',
+            statusText: t('settings.modelOverviewMissing'),
+            versionText: '',
+            statusClass: 'missing',
+        };
+    }
+    // 已安装：根据 updateAvailable 进一步区分
+    const installed = info.hasModelFiles === true || info.allExist === true || info.updateAvailable !== undefined;
+    if (!installed) {
+        return {
+            dotState: 'missing',
+            statusText: t('settings.modelOverviewMissing'),
+            versionText: '',
+            statusClass: 'missing',
+        };
+    }
+    if (info.updateAvailable) {
+        return {
+            dotState: 'warning',
+            statusText: t('settings.modelOverviewUpdateAvailable'),
+            versionText: _formatVersionLine(info),
+            statusClass: 'warning',
+        };
+    }
+    return {
+        dotState: 'installed',
+        statusText: t('settings.modelOverviewInstalled'),
+        versionText: _formatVersionLine(info),
+        statusClass: 'installed',
+    };
+}
+
+function _formatVersionLine(info) {
+    if (!info) return '';
+    const localRaw = info.localVersion;
+    const localStr = (!localRaw || localRaw === 'master')
+        ? t('settings.modelOverviewLegacyVersion')
+        : localRaw;
+    const latestStr = info.latestVersion || '-';
+    // 仅当存在本地版本时才显示版本行，避免未安装时显示多余信息
+    if (!localRaw && !info.latestVersion) return '';
+    return `${t('settings.modelOverviewVersionLocal', { version: localStr })}  ·  ${t('settings.modelOverviewVersionLatest', { version: latestStr })}`;
+}
+
+/**
+ * 刷新模型状态总览区。调用 model-download:check-all-versions 一次性获取
+ * 主模型/JP/SiFiGAN 的版本信息并更新 UI。
+ * 在以下场景调用：
+ *  - 设置页面加载完成
+ *  - 精度切换后
+ *  - 模型下载窗口关闭后（用户可能下载/更新了模型）
+ */
+async function refreshModelOverview() {
+    // 若总览区不在 DOM 中（旧版 HTML），直接跳过
+    if (!modelOverviewMainDot && !modelOverviewJpDot && !modelOverviewSifiganDot) return;
+    // 显示检测中状态
+    _setOverviewCard(modelOverviewMainDot, modelOverviewMainStatus, modelOverviewMainVersion, 'checking', t('settings.modelOverviewChecking'), '');
+    _setOverviewCard(modelOverviewJpDot, modelOverviewJpStatus, modelOverviewJpVersion, 'checking', t('settings.modelOverviewChecking'), '');
+    _setOverviewCard(modelOverviewSifiganDot, modelOverviewSifiganStatus, modelOverviewSifiganVersion, 'checking', t('settings.modelOverviewChecking'), '');
+
+    // 显示当前精度标签
+    if (modelOverviewMainPrecision) {
+        const prec = modelPrecisionSelect.value || 'fp32';
+        modelOverviewMainPrecision.textContent = PRECISION_LABELS[prec] || prec;
+    }
+
+    if (!window.electronAPI?.modelDownloadCheckAllVersions) return;
+    try {
+        const precision = modelPrecisionSelect.value || 'fp32';
+        const result = await window.electronAPI.modelDownloadCheckAllVersions(precision);
+        const mainInfo = result?.main;
+        const jpInfo = result?.jp;
+        const sifiganInfo = result?.sifigan;
+
+        const mainState = _resolveOverviewState(mainInfo);
+        _setOverviewCard(modelOverviewMainDot, modelOverviewMainStatus, modelOverviewMainVersion,
+            mainState.dotState, mainState.statusText, mainState.versionText, mainState.statusClass);
+
+        const jpState = _resolveOverviewState(jpInfo);
+        _setOverviewCard(modelOverviewJpDot, modelOverviewJpStatus, modelOverviewJpVersion,
+            jpState.dotState, jpState.statusText, jpState.versionText, jpState.statusClass);
+
+        // SiFiGAN: 当 status === 'download_url_not_configured' 时也视为未安装
+        const sifiganState = _resolveOverviewState(sifiganInfo);
+        _setOverviewCard(modelOverviewSifiganDot, modelOverviewSifiganStatus, modelOverviewSifiganVersion,
+            sifiganState.dotState, sifiganState.statusText, sifiganState.versionText, sifiganState.statusClass);
+    } catch (err) {
+        console.error('[Settings] Failed to refresh model overview:', err);
+        // IPC 失败时显示"检测中..."，不影响其他功能
+    }
+}
+
 async function loadDevices() {
     try {
         // 立即显示加载状态
@@ -433,6 +653,11 @@ async function loadDevices() {
         const currentSetting = await window.electronAPI.getSettings();
         window._currentSetting = currentSetting;
         applySavedSettingsToUI(currentSetting);
+        // 设置加载完成后刷新模型状态总览区：初次调用（initI18n 触发）时 DOM 下拉框
+        // 仍是 HTML 默认值 'fp32'，会按错误精度扫描模型目录。此处 DOM 已更新为用户
+        // 保存的精度，重新刷新以覆盖错误结果。注意：精度切换的 change 事件仍读 DOM
+        // 当前值（预览未保存的新值），此处的二次调用不影响该路径。
+        refreshModelOverview().catch(() => {});
         const provider = currentSetting?.inferenceProvider || 'ortnode';
 
         // 再获取设备列表（硬件检测可能较慢）
@@ -789,6 +1014,9 @@ function collectSettings() {
         previewDiffSteps: parseInt(previewDiffStepsSlider.value),
         previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
         previewCfgRescale: parseFloat(previewCfgRescaleSlider.value),
+        previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : false,
+        previewDiffStepChunkFrames: previewDiffStepChunkFramesSlider ? parseInt(previewDiffStepChunkFramesSlider.value) : 500,
+        previewDiffStepOverlapFrames: previewDiffStepOverlapFramesSlider ? parseInt(previewDiffStepOverlapFramesSlider.value) : 50,
         exportDiffSteps: parseInt(exportDiffStepsSlider.value),
         exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
         exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
@@ -805,7 +1033,7 @@ function collectSettings() {
         sifiganPrecision: sifiganPrecisionSelect.value === 'fp16' ? 'fp16' : 'fp32',
         japaneseVocalization: (() => {
             const r = document.querySelector('input[name="japaneseVocalization"]:checked');
-            return r ? r.value : 'en-phonemes';
+            return r ? r.value : 'hybrid';
         })(),
         vocoderChunkMode: (() => {
             const r = document.querySelector('input[name="vocoderChunkMode"]:checked');
@@ -814,6 +1042,15 @@ function collectSettings() {
         vocoderChunkFrames: parseInt(vocoderChunkFramesSlider.value),
         releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
         releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : true,
+        // ORT 高级设置
+        ortEnableMemPattern: ortEnableMemPatternCheckbox ? ortEnableMemPatternCheckbox.checked : true,
+        ortEnableCpuMemArena: ortEnableCpuMemArenaCheckbox ? ortEnableCpuMemArenaCheckbox.checked : true,
+        ortGraphOptLevel: ortGraphOptLevelSelect ? ortGraphOptLevelSelect.value : 'all',
+        ortExecutionMode: ortExecutionModeSelect ? ortExecutionModeSelect.value : 'sequential',
+        ortForceMemPatternOnDml: ortForceMemPatternOnDmlCheckbox ? ortForceMemPatternOnDmlCheckbox.checked : false,
+        ortIntraOpNumThreads: ortIntraOpNumThreadsSlider ? parseInt(ortIntraOpNumThreadsSlider.value) : 0,
+        ortInterOpNumThreads: ortInterOpNumThreadsSlider ? parseInt(ortInterOpNumThreadsSlider.value) : 0,
+        ortLogSeverityLevel: ortLogSeverityLevelSelect ? ortLogSeverityLevelSelect.value : 'warning',
         updateChannel: updateChannelSelect ? updateChannelSelect.value : 'release',
         autoCheckUpdates: autoCheckUpdatesCheckbox ? autoCheckUpdatesCheckbox.checked : true,
     };
@@ -905,6 +1142,25 @@ previewCfgRescaleSlider.addEventListener('input', () => {
     previewCfgRescaleValue.textContent = parseFloat(previewCfgRescaleSlider.value).toFixed(2);
     applySettingsDebounced();
 });
+// diffStep 分块推理设置
+if (previewDiffStepChunkEnabledCheckbox) {
+    previewDiffStepChunkEnabledCheckbox.addEventListener('change', () => {
+        if (previewDiffStepChunkGroup) previewDiffStepChunkGroup.classList.toggle('hidden', !previewDiffStepChunkEnabledCheckbox.checked);
+        applySettings();
+    });
+}
+if (previewDiffStepChunkFramesSlider) {
+    previewDiffStepChunkFramesSlider.addEventListener('input', () => {
+        previewDiffStepChunkFramesValue.textContent = previewDiffStepChunkFramesSlider.value;
+        applySettingsDebounced();
+    });
+}
+if (previewDiffStepOverlapFramesSlider) {
+    previewDiffStepOverlapFramesSlider.addEventListener('input', () => {
+        previewDiffStepOverlapFramesValue.textContent = previewDiffStepOverlapFramesSlider.value;
+        applySettingsDebounced();
+    });
+}
 exportDiffStepsSlider.addEventListener('input', () => {
     exportDiffStepsValue.textContent = exportDiffStepsSlider.value;
     applySettingsDebounced();
@@ -939,6 +1195,8 @@ modelPrecisionSelect.addEventListener('change', async () => {
             await window.electronAPI.modelDownloadOpen(prec);
         }
     } catch (_) {}
+    // 精度切换后刷新模型状态总览区（不同精度对应不同主模型/JP 模型版本）
+    refreshModelOverview().catch(() => {});
 });
 vocoderTypeSelect.addEventListener('change', () => {
     if (vocoderTypeSelect.value === 'sifigan') {
@@ -1003,16 +1261,71 @@ if (releaseDiffStepBeforeVocoderCheckbox) {
     releaseDiffStepBeforeVocoderCheckbox.addEventListener('change', () => applySettings());
 }
 
+// ORT advanced settings — 修改后需要重置 pipeline（RESET_TRIGGER_KEYS 已在 main 端处理）
+if (ortEnableMemPatternCheckbox) {
+    ortEnableMemPatternCheckbox.addEventListener('change', () => applySettings());
+}
+if (ortEnableCpuMemArenaCheckbox) {
+    ortEnableCpuMemArenaCheckbox.addEventListener('change', () => applySettings());
+}
+if (ortGraphOptLevelSelect) {
+    ortGraphOptLevelSelect.addEventListener('change', () => applySettings());
+}
+if (ortExecutionModeSelect) {
+    ortExecutionModeSelect.addEventListener('change', () => applySettings());
+}
+if (ortForceMemPatternOnDmlCheckbox) {
+    ortForceMemPatternOnDmlCheckbox.addEventListener('change', () => applySettings());
+}
+if (ortIntraOpNumThreadsSlider) {
+    ortIntraOpNumThreadsSlider.addEventListener('input', () => {
+        ortIntraOpNumThreadsValue.textContent = ortIntraOpNumThreadsSlider.value;
+        applySettingsDebounced();
+    });
+}
+if (ortInterOpNumThreadsSlider) {
+    ortInterOpNumThreadsSlider.addEventListener('input', () => {
+        ortInterOpNumThreadsValue.textContent = ortInterOpNumThreadsSlider.value;
+        applySettingsDebounced();
+    });
+}
+if (ortLogSeverityLevelSelect) {
+    ortLogSeverityLevelSelect.addEventListener('change', () => applySettings());
+}
+
 midiExtractToolSelect.addEventListener('change', () => applySettings());
 
-openModelDownloadBtn.addEventListener('click', async () => {
+async function _openModelDownloadWindow() {
     const precision = modelPrecisionSelect.value;
     try {
         await window.electronAPI.modelDownloadOpen(precision);
     } catch (err) {
         console.error('Failed to open model download:', err);
     }
-});
+}
+
+openModelDownloadBtn.addEventListener('click', _openModelDownloadWindow);
+
+// 顶部"打开模型下载"按钮：与底部按钮行为一致
+if (openModelDownloadBtnTop) {
+    openModelDownloadBtnTop.addEventListener('click', _openModelDownloadWindow);
+}
+
+// 监听模型下载窗口关闭事件：用户可能在下载窗口中下载/更新了模型，
+// 关闭后刷新总览区，让设置页面状态与实际文件状态保持同步。
+if (window.electronAPI?.onModelDownloadWindowClosed) {
+    window.electronAPI.onModelDownloadWindowClosed(() => {
+        refreshModelOverview().catch(() => {});
+        // 同时刷新模型状态列表（按精度列出各精度文件就绪情况）
+        if (window.electronAPI?.checkModels) {
+            window.electronAPI.checkModels().then(modelStatus => {
+                updateModelStatusDisplay(modelStatus);
+            }).catch(() => {});
+        }
+        // 重新检测 SiFiGAN 文件状态（可能刚下载完）
+        checkSifiganVocoderFiles().then(updateVocoderTypeUI).catch(() => {});
+    });
+}
 
 // ==================== Update section ====================
 
@@ -1153,6 +1466,14 @@ if (window.electronAPI?.checkModels) {
         updateModelStatusDisplay(modelStatus);
     }).catch(() => {});
 }
+
+// 初始加载模型状态总览区（主模型/JP/SiFiGAN 安装与版本状态）
+// 等 i18n 初始化完成后再调用，确保状态文字正确翻译。
+initI18n().then(() => {
+    refreshModelOverview().catch(() => {});
+}).catch(() => {
+    refreshModelOverview().catch(() => {});
+});
 
 initI18n().then(() => {
   applyLocale();

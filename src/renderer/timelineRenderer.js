@@ -74,7 +74,7 @@ export function syncFragmentScroll() {
   const fragments = trackManager.getFragments();
   const beatWidth = getBeatWidth();
   const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
-  const totalBeats = Math.max(64, Math.ceil((maxBeat + 16) / 16) * 16);
+  const totalBeats = Math.max(64, Math.ceil((maxBeat + 64) / 64) * 64);
   const canvasWidth = totalBeats * beatWidth;
   const canvasHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
   const containerW = dom.fragmentContainer.clientWidth;
@@ -83,8 +83,10 @@ export function syncFragmentScroll() {
   state.fragmentScrollX = Math.max(0, Math.min(state.fragmentScrollX, canvasWidth - containerW));
   state.fragmentScrollY = Math.max(0, Math.min(state.fragmentScrollY, canvasHeight - containerH));
 
+  // fragment canvas 应用 translate 变换以实现滚动；
+  // playhead canvas 不再应用 translate，改为固定覆盖可视区域，
+  // 绘制时由 drawPlayheadLine 自行减去 scrollX（避免大 canvas clearRect 卡顿）。
   dom.fragmentCanvas.style.transform = `translate(${-state.fragmentScrollX}px, ${-state.fragmentScrollY}px)`;
-  dom.fragmentPlayheadCanvas.style.transform = `translate(${-state.fragmentScrollX}px, ${-state.fragmentScrollY}px)`;
   dom.singerListEl.scrollTop = state.fragmentScrollY;
 }
 
@@ -96,14 +98,21 @@ export function renderFragmentTimeline() {
 
   const beatWidth = getBeatWidth();
   const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
-  const totalBeats = Math.max(64, Math.ceil((maxBeat + 16) / 16) * 16);
+  // grid cache 步长加大到 64 拍：拖拽分片时 maxBeat 变化不再频繁触发 totalBeats 跨步，
+  // 避免 grid cache 反复失效重建（O(canvasW*canvasH) 的重绘）。
+  const totalBeats = Math.max(64, Math.ceil((maxBeat + 64) / 64) * 64);
   const canvasWidth = totalBeats * beatWidth;
   const contentHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
   const containerHeight = dom.fragmentContainer.clientHeight || contentHeight;
   const canvasHeight = Math.max(contentHeight, containerHeight);
 
   _ensureCanvasSize(dom.fragmentCanvas, canvasWidth, canvasHeight, dpr);
-  _ensureCanvasSize(dom.fragmentPlayheadCanvas, canvasWidth, canvasHeight, dpr);
+  // playhead canvas 只覆盖可视区域（container 大小），不再随 fragment canvas 一起放大。
+  // 这样拖拽进度条时 clearRect 只需清除 container 大小的区域，
+  // 而不是整个 canvasWidth*canvasHeight（分片变长时可达数万 px）。
+  const playheadW = dom.fragmentContainer.clientWidth || canvasWidth;
+  const playheadH = containerHeight;
+  _ensureCanvasSize(dom.fragmentPlayheadCanvas, playheadW, playheadH, dpr);
 
   syncFragmentScroll();
 
@@ -173,13 +182,23 @@ export function renderFragmentTimeline() {
   }
 
   // Draw dynamic content (fragments) on top of cached grid
+  // 预计算可视区域范围，跳过不可见分片的绘制（拖拽时若有大量分片在可视区域外可显著提速）。
+  const _viewLeft = state.fragmentScrollX;
+  const _viewRight = state.fragmentScrollX + (dom.fragmentContainer.clientWidth || canvasWidth);
+  const _viewTop = state.fragmentScrollY;
+  const _viewBottom = state.fragmentScrollY + (dom.fragmentContainer.clientHeight || canvasHeight);
+
   singers.forEach((singer, index) => {
     const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+    // 跳过整行不在可视区域的 singer
+    if (y + SINGER_ROW_HEIGHT < _viewTop || y > _viewBottom) return;
 
     const singerFragments = fragments.filter(f => f.singerId === singer.id);
     singerFragments.forEach(fragment => {
       const fragX = fragment.startTime * beatWidth;
       const fragWidth = fragment.duration * beatWidth;
+      // 跳过不可见分片（在可视区域左右两侧之外）
+      if (fragX + fragWidth < _viewLeft || fragX > _viewRight) return;
       const fragY = y + 4;
       const radius = 6;
 
@@ -289,9 +308,41 @@ export function renderFragmentTimeline() {
       ctx.fillText(t('main.clickToAddFragment'), 8, y + 30);
     }
   });
+
+  // 调整 playhead canvas 大小会清空其内容；非播放态时立即重绘 playhead，
+  // 避免缩放/滚动后 playhead 消失（播放态由 rAF 循环自动刷新）。
+  // playhead canvas 只覆盖 container 大小，重绘成本很低。
+  if (!state.isPlaying && (state.playbackPauseOffset > 0 || state.currentAudioData)) {
+    drawPausedPlayheadAt(state.playbackPauseOffset);
+  }
 }
 
-export function drawPlayheadLine(elapsedSeconds) {
+// 播放头拖拽 hit-test 容差（像素）
+export const PLAYHEAD_HIT_WIDTH = 12;
+
+/**
+ * 把秒数转换为 fragment canvas 内部的 X 坐标（含 zoom，不含 scroll，
+ * 因为 fragment-canvas 自身有 translate(-scrollX, -scrollY) 变换，
+ * 鼠标事件的 clientX-rect.left 已经反映了 scroll）。
+ */
+export function playbackTimeToX(seconds) {
+  const beatWidth = getBeatWidth();
+  const beat = (seconds / 60) * (state.project?.bpm || 120);
+  return beat * beatWidth;
+}
+
+/**
+ * 把 fragment canvas 内部的 X 坐标转换为秒数。
+ * 用于拖拽时根据鼠标位置计算新的播放时间。
+ */
+export function xToPlaybackTime(x) {
+  const beatWidth = getBeatWidth();
+  if (beatWidth <= 0) return 0;
+  const beat = x / beatWidth;
+  return (beat * 60) / (state.project?.bpm || 120);
+}
+
+export function drawPlayheadLine(elapsedSeconds, options = {}) {
   if (!dom.fragmentPlayheadCanvas) return;
   const ctx = dom.fragmentPlayheadCanvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
@@ -301,27 +352,54 @@ export function drawPlayheadLine(elapsedSeconds) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  const beatWidth = getBeatWidth();
-  const currentBeat = (elapsedSeconds / 60) * state.project.bpm;
-  const x = currentBeat * beatWidth;
-
+  // playhead canvas 固定覆盖可视区域（不再随 fragment canvas translate），
+  // 因此 x 需减去 scrollX 才能与 fragment canvas 内容对齐。
+  const x = playbackTimeToX(elapsedSeconds) - state.fragmentScrollX;
   if (x < 0 || x > w) return;
 
   const c = getCanvasColors();
+  const isPaused = options.isPaused === true;
+  const isHandleVisible = options.showHandle !== false;
+
+  ctx.save();
+  if (isPaused) {
+    // 暂停/拖拽态：半透明虚线，区分"已设置位置"与"实时播放"
+    ctx.globalAlpha = 0.65;
+    ctx.setLineDash([4, 3]);
+  }
+
   ctx.strokeStyle = c.playhead;
   ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(x, 0);
   ctx.lineTo(x, h);
   ctx.stroke();
+  ctx.restore();
 
-  ctx.fillStyle = c.playhead;
-  ctx.beginPath();
-  ctx.moveTo(x - 5, 0);
-  ctx.lineTo(x + 5, 0);
-  ctx.lineTo(x, 8);
-  ctx.closePath();
-  ctx.fill();
+  if (isHandleVisible) {
+    // 顶部三角手柄：底边在 canvas 顶端 y=0，顶点指向下 y=8，
+    // 视觉上像挂在天花板上的小旗，提示用户可在此处按下并拖拽跳转播放进度。
+    ctx.fillStyle = c.playhead;
+    ctx.beginPath();
+    ctx.moveTo(x - 6, 0);
+    ctx.lineTo(x + 6, 0);
+    ctx.lineTo(x, 8);
+    ctx.closePath();
+    ctx.fill();
+  }
+}
+
+/**
+ * 绘制"已设置但未播放"的播放头位置（用户拖拽后或暂停后）。
+ * 不带三角手柄时也可用作纯位置指示。
+ */
+export function drawPausedPlayheadAt(offsetSeconds) {
+  if (!dom.fragmentPlayheadCanvas) return;
+  if (offsetSeconds == null || offsetSeconds < 0) {
+    clearPlayheadLine();
+    return;
+  }
+  drawPlayheadLine(offsetSeconds, { isPaused: true, showHandle: true });
 }
 
 export function clearPlayheadLine() {

@@ -148,6 +148,7 @@ function createWindow(opts = {}) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -202,6 +203,7 @@ function openSettingsWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -237,6 +239,7 @@ function openResourceManagerWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -278,6 +281,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -298,6 +302,11 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
 
   modelDownloadWindow.on('closed', () => {
     modelDownloadWindow = null;
+    // 通知所有窗口（特别是设置窗口）：模型下载窗口已关闭，
+    // 让设置页面可以刷新模型状态总览区，反映最新下载/更新结果。
+    for (const wc of getAllWebContents()) {
+      try { wc.send('model-download:window-closed'); } catch (_) {}
+    }
   });
 }
 
@@ -330,6 +339,7 @@ function openUpdateNotificationWindow(data) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -373,6 +383,7 @@ function openFragmentEditor(fragment, project, wavBuffer) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -482,6 +493,7 @@ function openSingerCreator() {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 
@@ -527,6 +539,7 @@ function openAudioPreprocess(data) {
       nodeIntegration: false,
       contextIsolation: true,
       sandbox: false,
+      spellcheck: false,
     },
   });
 

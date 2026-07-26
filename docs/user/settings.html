@@ -289,13 +289,13 @@
         </thead>
         <tbody>
           <tr>
-            <td><span data-lang="en"><strong>English Phoneme Migration</strong> (default)</span><span data-lang="zh"><strong>英语音素迁移</strong>（默认）</span></td>
+            <td><span data-lang="en"><strong>English Phoneme Migration</strong></span><span data-lang="zh"><strong>英语音素迁移</strong></span></td>
             <td><span data-lang="en">Maps Japanese kana to the nearest English ARPAbet phonemes. Uses the base multilingual model. ら-row maps to R, お-column maps to OW (diphthong).</span><span data-lang="zh">将日文假名映射为最接近的英语 ARPAbet 音素，在基础多语言模型上合成。ら行映射为 R，お段映射为 OW（双元音）。</span></td>
             <td><span data-lang="en">No</span><span data-lang="zh">否</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en"><strong>Hybrid Phonemes</strong></span><span data-lang="zh"><strong>混合音素</strong></span></td>
-            <td><span data-lang="en">Improved ARPAbet mapping on the base model: ら-row uses L (acoustically closer to the Japanese tap /ɾ/ than R /ɹ/), お-column uses AO (a pure vowel, not the OW diphthong /oʊ/). More natural pronunciation with no extra download.</span><span data-lang="zh">在基础模型上使用改进的 ARPAbet 映射：ら行使用 L（比 R /ɹ/ 更接近日语弹音 /ɾ/），お段使用 AO（纯元音，非双元音 OW /oʊ/）。发音更自然，无需额外下载。</span></td>
+            <td><span data-lang="en"><strong>Hybrid Phonemes</strong> (default)</span><span data-lang="zh"><strong>混合音素</strong>（默认）</span></td>
+            <td><span data-lang="en">Builds on English Phoneme Migration by picking, for each kana, whichever is phonetically closer between English ARPAbet (phoneme-level) and Cantonese yue_ (syllable-level). Consonants prefer Cantonese (e.g. か-row uses Cantonese g = unaspirated /k/, closer to Japanese k than English aspirated K /kʰ/); pure vowels prefer Cantonese (e.g. あ→yue_aa1, お→yue_o1, purer than English AA/AO); ら-row uses Cantonese l /l/ to approximate the Japanese tap /ɾ/. Yōon, voiced rows, and kanji fall back to ARPAbet. No extra download.</span><span data-lang="zh">在英语音素迁移的基础上，对每个假名在英语 ARPAbet（音素级）与粤语 yue_（音节级）之间挑选发音最接近的一项。辅音优先粤语（如 か 行用粤 g 不送气 /k/，比英语 K 送气 /kʰ/ 更接近日语）；纯元音优先粤语（如 あ→yue_aa1、お→yue_o1，比英语 AA/AO 更纯净）；ら行用粤 l /l/ 接近日语弹音 /ɾ/。拗音、浊行、汉字回退 ARPAbet。无需额外下载。</span></td>
             <td><span data-lang="en">No</span><span data-lang="zh">否</span></td>
           </tr>
           <tr>
@@ -305,8 +305,8 @@
           </tr>
         </tbody>
       </table>
-      <p data-lang="en">Both English Phoneme Migration and Hybrid Phonemes use the same base multilingual model — the only difference is the kana→ARPAbet mapping table. Hybrid mode is recommended for more natural-sounding Japanese. The phoneme boundary editor (per-note timing/volume) works the same in all modes.</p>
-      <p data-lang="zh">英语音素迁移与混合音素均使用同一基础多语言模型——唯一区别在于假名→ARPAbet 映射表。推荐使用混合音素以获得更自然的日语发音。音素边界编辑器（逐音符时长/音量调整）在所有模式下工作方式相同。</p>
+      <p data-lang="en">Both English Phoneme Migration and Hybrid Phonemes use the same base multilingual model — the only difference is how each kana is mapped (English-only ARPAbet vs. ARPAbet/Cantonese per-kana selection). Hybrid mode is recommended for more natural-sounding Japanese. The phoneme boundary editor (per-note timing/volume) works the same in all modes.</p>
+      <p data-lang="zh">英语音素迁移与混合音素均使用同一基础多语言模型——唯一区别在于每个假名的映射方式（纯 ARPAbet vs. ARPAbet/粤语按假名逐个挑选）。推荐使用混合音素以获得更自然的日语发音。音素边界编辑器（逐音符时长/音量调整）在所有模式下工作方式相同。</p>
 
       <h2>
         <span data-lang="en">Audio</span>

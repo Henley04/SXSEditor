@@ -240,6 +240,162 @@ export function showConfirmDialog(message) {
 }
 
 /**
+ * Show a non-blocking dialog that asks the user which project-level fields
+ * to import from a MIDI file (BPM, time signature). Returns a promise that
+ * resolves to:
+ *   - { applyBpm: bool, applyTimeSig: bool }  — user clicked OK
+ *   - null                                       — user clicked Cancel
+ *
+ * Both checkboxes are checked by default. When the MIDI file does not
+ * provide one of the fields, the corresponding checkbox is hidden so the
+ * user can only choose to import fields that actually exist.
+ *
+ * @param {{bpm:number|null, timeSignature:[number,number]|null}} projectInfo
+ * @param {{currentBpm:number, currentTimeSignature:[number,number]}} current
+ * @returns {Promise<{applyBpm:boolean, applyTimeSig:boolean}|null>}
+ */
+export function showProjectInfoImportDialog(projectInfo, current) {
+  return new Promise((resolve) => {
+    const hasBpm = projectInfo.bpm != null;
+    const hasTimeSig = projectInfo.timeSignature != null;
+
+    // Nothing to ask about — short-circuit with both flags off.
+    if (!hasBpm && !hasTimeSig) {
+      resolve(null);
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-dialog-overlay';
+    overlay.style.cssText = `
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--overlay-scrim);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10000;
+      backdrop-filter: blur(4px);
+      animation: sxs-overlay-in 0.25s ease;
+    `;
+
+    const dialog = document.createElement('div');
+    dialog.className = 'confirm-dialog-box';
+    dialog.style.cssText = `
+      background: var(--bg-elevated);
+      border: 1px solid var(--border-strong);
+      border-radius: 10px;
+      clip-path: var(--clip-panel, none);
+      padding: 20px;
+      min-width: 320px;
+      max-width: 460px;
+      color: var(--fg-primary);
+      box-shadow: 0 16px 48px var(--shadow-color-strong), 0 0 40px var(--accent-softer);
+      animation: sxs-dialog-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+    `;
+
+    const title = t('main.midiProjectInfoTitle') || 'Import Project Info';
+    const desc = t('main.midiProjectInfoDesc') || 'Select which fields to sync from the MIDI file:';
+
+    const bpmRow = hasBpm ? `
+      <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;">
+        <input type="checkbox" id="midi-info-bpm" checked style="cursor:pointer;" />
+        <span><strong>${t('main.midiProjectInfoBpm') || 'BPM'}</strong>: ${escapeHtml(String(projectInfo.bpm))} → ${escapeHtml(String(current.currentBpm))}</span>
+      </label>` : '';
+    const tsRow = hasTimeSig ? `
+      <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;margin-top:8px;">
+        <input type="checkbox" id="midi-info-timesig" checked style="cursor:pointer;" />
+        <span><strong>${t('main.midiProjectInfoTimeSig') || 'Time Signature'}</strong>: ${escapeHtml(projectInfo.timeSignature.join('/'))} → ${escapeHtml(current.currentTimeSignature.join('/'))}</span>
+      </label>` : '';
+
+    dialog.innerHTML = `
+      <div style="margin-bottom:12px;font-size:15px;font-weight:600;">${escapeHtml(title)}</div>
+      <div style="margin-bottom:14px;line-height:1.5;white-space:pre-wrap;color:var(--fg-muted);">${escapeHtml(desc)}</div>
+      <div>
+        ${bpmRow}
+        ${tsRow}
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">
+        <button class="confirm-cancel-btn" style="
+          padding: 6px 20px;
+          background: var(--bg-button);
+          border: 1px solid var(--border-strong);
+          border-radius: 6px;
+          clip-path: var(--clip-button, none);
+          color: var(--fg-muted);
+          cursor: pointer;
+          font-weight: 500;
+          transition: all 0.15s ease;
+        ">${t('common.cancel') || 'Cancel'}</button>
+        <button class="confirm-ok-btn" style="
+          padding: 6px 20px;
+          background: var(--accent, #4a90e2);
+          border: none;
+          border-radius: 6px;
+          clip-path: var(--clip-button, none);
+          color: var(--fg-on-accent, #fff);
+          cursor: pointer;
+          font-weight: 500;
+          transition: all 0.15s ease;
+        ">${t('common.confirm') || 'OK'}</button>
+      </div>
+    `;
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    ensureAnimationStyles();
+
+    const okBtn = dialog.querySelector('.confirm-ok-btn');
+    const cancelBtn = dialog.querySelector('.confirm-cancel-btn');
+    const bpmCheckbox = dialog.querySelector('#midi-info-bpm');
+    const tsCheckbox = dialog.querySelector('#midi-info-timesig');
+
+    [okBtn, cancelBtn].forEach(btn => {
+      btn.addEventListener('mouseenter', () => {
+        btn.style.transform = 'translateY(-1px)';
+      });
+      btn.addEventListener('mouseleave', () => {
+        btn.style.transform = 'translateY(0)';
+        btn.style.boxShadow = 'none';
+      });
+      btn.addEventListener('mousedown', () => {
+        btn.style.transform = 'translateY(0) scale(0.97)';
+        btn.style.transitionDuration = '0.06s';
+      });
+      btn.addEventListener('mouseup', () => {
+        btn.style.transitionDuration = '0.15s';
+      });
+    });
+
+    const close = (result) => {
+      dialog.style.animation = 'sxs-dialog-exit 0.2s ease forwards';
+      overlay.style.animation = 'sxs-overlay-out 0.2s ease forwards';
+      setTimeout(() => {
+        if (overlay.parentElement) overlay.remove();
+        resolve(result);
+      }, 200);
+    };
+
+    okBtn.addEventListener('click', () => close({
+      applyBpm: hasBpm && bpmCheckbox.checked,
+      applyTimeSig: hasTimeSig && tsCheckbox.checked,
+    }));
+    cancelBtn.addEventListener('click', () => close(null));
+    overlay.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); okBtn.click(); }
+      if (e.key === 'Escape') { e.preventDefault(); cancelBtn.click(); }
+    });
+
+    requestAnimationFrame(() => {
+      okBtn.focus();
+    });
+  });
+}
+
+/**
  * Ensure animation keyframes are injected into the document (once).
  */
 function ensureAnimationStyles() {
