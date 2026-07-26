@@ -171,6 +171,8 @@ async function refreshVersionInfo() {
     console.error('[Version] Failed to check model version:', err);
     document.getElementById('versionInfoSection').style.display = 'none';
   }
+  // Update overview after main model version info is refreshed
+  updateOverviewStatus();
 }
 
 /**
@@ -364,6 +366,12 @@ function updateOverallProgress(overallDownloaded, overallTotal) {
 }
 
 window.electronAPI.onModelDownloadMissingFiles((files) => {
+  // Skip main-model UI updates when an optional model (JP/SiFiGAN) is being
+  // downloaded — those flows reuse the same IPC events but should not reset
+  // the main model panel.
+  if (jpState.isDownloading || sifiganState.isDownloading) {
+    return;
+  }
   missingFiles.length = 0;
   missingFiles.push(...files);
   // 清除旧的文件状态
@@ -406,6 +414,8 @@ window.electronAPI.onModelDownloadPrecision((precision) => {
     // Subsequent precision pushes (e.g. after delete-and-recheck) — refresh
     // version info so the UI reflects the new precision.
     refreshVersionInfo();
+    // JP model status depends on precision (JP files live under <precision>/JP/)
+    refreshJpCard();
   }
 });
 
@@ -421,6 +431,12 @@ window.electronAPI.onModelDownloadRevision((revision) => {
 });
 
 window.electronAPI.onModelDownloadProgress((data) => {
+  // Skip main-model UI updates when an optional model (JP/SiFiGAN) is being
+  // downloaded — those flows reuse the same IPC events but should not update
+  // the main model progress bar / file list.
+  if (jpState.isDownloading || sifiganState.isDownloading) {
+    return;
+  }
   const state = fileStates[data.currentFile];
   if (state) {
     state.status = 'downloading';
@@ -432,6 +448,10 @@ window.electronAPI.onModelDownloadProgress((data) => {
 });
 
 window.electronAPI.onModelDownloadFileStart((data) => {
+  // Skip for optional model downloads (JP/SiFiGAN)
+  if (jpState.isDownloading || sifiganState.isDownloading) {
+    return;
+  }
   fileStates[data.filePath] = { status: 'downloading', progress: 0, downloaded: 0, total: 0 };
   // 统计当前正在下载的文件数
   const downloadingCount = Object.values(fileStates).filter(s => s.status === 'downloading').length;
@@ -446,6 +466,10 @@ window.electronAPI.onModelDownloadFileStart((data) => {
 });
 
 window.electronAPI.onModelDownloadFileComplete((data) => {
+  // Skip for optional model downloads (JP/SiFiGAN)
+  if (jpState.isDownloading || sifiganState.isDownloading) {
+    return;
+  }
   const state = fileStates[data.filePath];
   if (state) {
     state.status = 'complete';
@@ -454,6 +478,22 @@ window.electronAPI.onModelDownloadFileComplete((data) => {
 });
 
 window.electronAPI.onModelDownloadComplete(() => {
+  // JP/SiFiGAN downloads reuse the same 'complete' event. Route to the right
+  // card refresh and skip main-model UI updates. Note: isDownloading flags
+  // may have already been reset by the click handler's finally block (the
+  // IPC event can fire before or after the await returns), so we check
+  // isDownloading (main model) first — if it's true, this is a main model
+  // download. Otherwise, treat it as an optional model completion and
+  // refresh all optional cards.
+  if (!isDownloading) {
+    // Optional model (JP or SiFiGAN) completed — refresh both cards
+    jpState.isDownloading = false;
+    sifiganState.isDownloading = false;
+    refreshJpCard();
+    refreshSifiganCard();
+    updateOverviewStatus();
+    return;
+  }
   document.getElementById('statusText').textContent = t('modelDownload.allComplete');
   document.getElementById('speedInfo').textContent = '';
   document.getElementById('cancelBtn').style.display = 'none';
@@ -469,9 +509,20 @@ window.electronAPI.onModelDownloadComplete(() => {
   renderFileList();
   // 刷新版本信息（下载完成后版本应已更新）
   refreshVersionInfo();
+  updateOverviewStatus();
 });
 
 window.electronAPI.onModelDownloadError((data) => {
+  // Optional model error — refresh cards and skip main-model UI updates
+  if (!isDownloading) {
+    jpState.isDownloading = false;
+    sifiganState.isDownloading = false;
+    if (data && data.message) showJpTooltip(data.message);
+    refreshJpCard();
+    refreshSifiganCard();
+    updateOverviewStatus();
+    return;
+  }
   document.getElementById('statusText').textContent = t('modelDownload.downloadFailed');
   document.getElementById('speedInfo').textContent = '';
   document.getElementById('errorMessage').textContent = data.message || '未知错误';
@@ -531,6 +582,8 @@ document.querySelectorAll('input[name="modelPrecision"]').forEach(radio => {
     document.getElementById('startBtn').style.display = 'none';
     // 切换精度时刷新版本信息
     refreshVersionInfo();
+    // 切换精度时也刷新 JP 卡片（JP 文件存放在 <precision>/JP/ 下）
+    refreshJpCard();
     try {
       await window.electronAPI.modelDownloadRecheck(currentPrecision);
     } catch (err) {
@@ -568,6 +621,279 @@ document.getElementById('changeDirBtn').addEventListener('click', async () => {
     document.getElementById('closeBtn').style.display = 'inline-block';
   }
 });
+
+// ===== JP (Japanese LoRA) card rendering & state management =====
+// The JP card is an optional model group. The download is triggered via
+// model-download:start-jp, which sends the same IPC events as the main
+// model download (model-download:file-complete / model-download:complete).
+// To prevent these events from resetting the main model panel, the global
+// event callbacks above check jpState.isDownloading / sifiganState.isDownloading
+// and route the refresh to the correct card.
+
+const jpState = {
+  status: 'checking', // 'installed' | 'not_downloaded' | 'checking' | 'downloading'
+  isDownloading: false,
+  versionInfo: null, // { updateAvailable, localVersion, latestVersion, hasModelFiles }
+};
+
+function setJpStatusText(text) {
+  const el = document.getElementById('jpStatusText');
+  if (el) el.textContent = text;
+}
+
+function setJpStatusIndicator(state) {
+  // state: 'installed' | 'not_downloaded' | 'checking' | 'downloading'
+  const el = document.getElementById('jpStatusIndicator');
+  if (!el) return;
+  el.className = 'status-indicator ' + state;
+}
+
+function showJpTooltip(message) {
+  const el = document.getElementById('jpTooltip');
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.style.display = 'block';
+    el.classList.add('visible');
+  } else {
+    el.style.display = 'none';
+    el.classList.remove('visible');
+  }
+}
+
+function renderJpCard() {
+  const downloadBtn = document.getElementById('jpDownloadBtn');
+  const unloadBtn = document.getElementById('jpUnloadBtn');
+  const progress = document.getElementById('jpProgress');
+  const versionText = document.getElementById('jpVersionText');
+  const updateBtn = document.getElementById('jpUpdateBtn');
+  if (!downloadBtn || !unloadBtn) return;
+
+  // Reset transient visibility
+  progress.style.display = 'none';
+  if (versionText) versionText.textContent = '';
+  if (updateBtn) updateBtn.style.display = 'none';
+
+  switch (jpState.status) {
+    case 'installed': {
+      downloadBtn.style.display = 'none';
+      unloadBtn.style.display = 'inline-block';
+      unloadBtn.disabled = false;
+      downloadBtn.disabled = false;
+      setJpStatusIndicator('installed');
+      setJpStatusText(t('modelDownload.jpInstalled'));
+      showJpTooltip('');
+      if (jpState.versionInfo && versionText) {
+        const v = jpState.versionInfo;
+        const localStr = v.localVersion || t('modelDownload.legacyVersion');
+        versionText.textContent = t('modelDownload.versionDisplay', { local: localStr, latest: v.latestVersion || '-' });
+        if (v.updateAvailable && updateBtn) {
+          updateBtn.style.display = 'inline-block';
+        }
+      }
+      break;
+    }
+    case 'not_downloaded': {
+      downloadBtn.style.display = 'inline-block';
+      unloadBtn.style.display = 'none';
+      downloadBtn.disabled = false;
+      setJpStatusIndicator('not_downloaded');
+      setJpStatusText(t('modelDownload.jpNotDownloaded'));
+      showJpTooltip('');
+      break;
+    }
+    case 'downloading': {
+      downloadBtn.style.display = 'inline-block';
+      downloadBtn.disabled = true;
+      unloadBtn.style.display = 'none';
+      progress.style.display = 'block';
+      setJpStatusIndicator('downloading');
+      setJpStatusText(t('modelDownload.checking'));
+      break;
+    }
+    case 'checking':
+    default: {
+      downloadBtn.style.display = 'inline-block';
+      downloadBtn.disabled = true;
+      unloadBtn.style.display = 'none';
+      setJpStatusIndicator('checking');
+      setJpStatusText(t('modelDownload.checking'));
+      showJpTooltip('');
+      break;
+    }
+  }
+}
+
+async function refreshJpCard() {
+  jpState.status = 'checking';
+  renderJpCard();
+  try {
+    const result = await window.electronAPI.modelDownloadCheckJp(currentPrecision);
+    if (result && result.missing && result.missing.length === 0) {
+      jpState.status = 'installed';
+      try {
+        jpState.versionInfo = await window.electronAPI.modelDownloadCheckJpVersion(currentPrecision);
+      } catch (_) { jpState.versionInfo = null; }
+    } else {
+      jpState.status = 'not_downloaded';
+      jpState.versionInfo = null;
+    }
+  } catch (err) {
+    console.error('[JP] status check failed:', err);
+    jpState.status = 'not_downloaded';
+    jpState.versionInfo = null;
+  }
+  renderJpCard();
+  updateOverviewStatus();
+}
+
+document.getElementById('jpDownloadBtn').addEventListener('click', async () => {
+  if (jpState.isDownloading) return;
+  jpState.isDownloading = true;
+  jpState.status = 'downloading';
+  renderJpCard();
+  try {
+    const result = await window.electronAPI.modelDownloadStartJp(currentPrecision, 'latest');
+    if (result && result.success === false && result.error) {
+      showJpTooltip(result.error);
+      jpState.status = 'not_downloaded';
+    } else {
+      // Refresh state after download
+      const checkResult = await window.electronAPI.modelDownloadCheckJp(currentPrecision);
+      if (checkResult && checkResult.missing && checkResult.missing.length === 0) {
+        jpState.status = 'installed';
+        try {
+          jpState.versionInfo = await window.electronAPI.modelDownloadCheckJpVersion(currentPrecision);
+        } catch (_) { jpState.versionInfo = null; }
+      } else {
+        jpState.status = 'not_downloaded';
+      }
+    }
+  } catch (err) {
+    console.error('[JP] download failed:', err);
+    showJpTooltip(err.message || t('modelDownload.jpDownloadFailed'));
+    jpState.status = 'not_downloaded';
+  } finally {
+    jpState.isDownloading = false;
+    renderJpCard();
+    updateOverviewStatus();
+  }
+});
+
+document.getElementById('jpUnloadBtn').addEventListener('click', async () => {
+  if (jpState.isDownloading) return;
+  // Inform user that frontend unloading is not supported in this version
+  await showConfirmDialog(t('modelDownload.jpUnloadNotSupported'));
+});
+
+document.getElementById('jpUpdateBtn').addEventListener('click', async () => {
+  if (jpState.isDownloading) return;
+  const confirmed = await showConfirmDialog(t('modelDownload.jpUpdateConfirmMessage'));
+  if (!confirmed) return;
+  jpState.isDownloading = true;
+  jpState.status = 'downloading';
+  renderJpCard();
+  try {
+    // Delete existing files then re-download
+    await window.electronAPI.modelDownloadUpdateJp(currentPrecision, 'latest');
+    const result = await window.electronAPI.modelDownloadStartJp(currentPrecision, 'latest');
+    if (result && result.success === false && result.error) {
+      showJpTooltip(result.error);
+      jpState.status = 'not_downloaded';
+    } else {
+      const checkResult = await window.electronAPI.modelDownloadCheckJp(currentPrecision);
+      if (checkResult && checkResult.missing && checkResult.missing.length === 0) {
+        jpState.status = 'installed';
+        try {
+          jpState.versionInfo = await window.electronAPI.modelDownloadCheckJpVersion(currentPrecision);
+        } catch (_) { jpState.versionInfo = null; }
+      } else {
+        jpState.status = 'not_downloaded';
+      }
+    }
+  } catch (err) {
+    console.error('[JP] update failed:', err);
+    showJpTooltip(err.message || t('modelDownload.jpDownloadFailed'));
+    jpState.status = 'not_downloaded';
+  } finally {
+    jpState.isDownloading = false;
+    renderJpCard();
+    updateOverviewStatus();
+  }
+});
+
+// ===== Overview section: aggregate status of all three model groups =====
+// Updates the three overview cards at the top of the download window based
+// on the current main / jp / sifigan state. Called whenever a model group's
+// state changes (after refresh, after download, etc.).
+
+function setOverviewCard(groupId, dotState, statusText) {
+  const dot = document.getElementById(`overview${groupId.charAt(0).toUpperCase() + groupId.slice(1)}Dot`);
+  const status = document.getElementById(`overview${groupId.charAt(0).toUpperCase() + groupId.slice(1)}Status`);
+  if (dot) dot.className = 'overview-dot ' + dotState;
+  if (status && statusText) status.textContent = statusText;
+}
+
+function updateOverviewStatus() {
+  const section = document.getElementById('overviewSection');
+  if (!section) return;
+  section.style.display = 'flex';
+
+  // Main model: derive from currentVersionInfo (refreshVersionInfo populates it)
+  let mainState = 'checking';
+  let mainText = t('modelDownload.overviewChecking');
+  if (currentVersionInfo) {
+    if (currentVersionInfo.hasModelFiles) {
+      mainState = currentVersionInfo.updateAvailable ? 'warning' : 'installed';
+      mainText = currentVersionInfo.updateAvailable
+        ? t('modelDownload.overviewUpdateAvailable')
+        : t('modelDownload.overviewReady');
+    } else {
+      mainState = 'missing';
+      mainText = t('modelDownload.overviewMissing');
+    }
+  }
+  // When main model is downloading, override to 'checking' (animated)
+  if (isDownloading) {
+    mainState = 'checking';
+    mainText = t('modelDownload.overviewDownloading');
+  }
+  setOverviewCard('main', mainState, mainText);
+
+  // JP model
+  let jpDotState = 'checking';
+  let jpText = t('modelDownload.overviewChecking');
+  if (jpState.status === 'installed') {
+    jpDotState = (jpState.versionInfo && jpState.versionInfo.updateAvailable) ? 'warning' : 'installed';
+    jpText = (jpState.versionInfo && jpState.versionInfo.updateAvailable)
+      ? t('modelDownload.overviewUpdateAvailable')
+      : t('modelDownload.overviewReady');
+  } else if (jpState.status === 'not_downloaded') {
+    jpDotState = 'missing';
+    jpText = t('modelDownload.overviewMissing');
+  } else if (jpState.status === 'downloading') {
+    jpDotState = 'checking';
+    jpText = t('modelDownload.overviewDownloading');
+  }
+  setOverviewCard('jp', jpDotState, jpText);
+
+  // SiFiGAN
+  let sifiganDotState = 'checking';
+  let sifiganText = t('modelDownload.overviewChecking');
+  if (sifiganState.status === 'installed') {
+    sifiganDotState = (sifiganState.versionInfo && sifiganState.versionInfo.updateAvailable) ? 'warning' : 'installed';
+    sifiganText = (sifiganState.versionInfo && sifiganState.versionInfo.updateAvailable)
+      ? t('modelDownload.overviewUpdateAvailable')
+      : t('modelDownload.overviewReady');
+  } else if (sifiganState.status === 'not_downloaded' || sifiganState.status === 'download_url_not_configured') {
+    sifiganDotState = 'missing';
+    sifiganText = t('modelDownload.overviewMissing');
+  } else if (sifiganState.status === 'downloading') {
+    sifiganDotState = 'checking';
+    sifiganText = t('modelDownload.overviewDownloading');
+  }
+  setOverviewCard('sifigan', sifiganDotState, sifiganText);
+}
 
 // ===== SiFiGAN card rendering & state management =====
 // The SiFiGAN card is an independent optional model group. Its download
@@ -707,6 +1033,7 @@ async function refreshSifiganCard() {
     sifiganState.status = 'download_url_not_configured';
   }
   renderSifiganCard();
+  updateOverviewStatus();
 }
 
 document.getElementById('sifiganDownloadBtn').addEventListener('click', async () => {
@@ -835,8 +1162,12 @@ initI18n().then(async () => {
   ]);
   // Refresh SiFiGAN card once i18n is ready so status text is translated
   refreshSifiganCard();
+  // Refresh JP card after precision is known
+  refreshJpCard();
   // 检查主模型版本信息
   refreshVersionInfo();
+  // Initial overview status (will be re-updated as each refresh completes)
+  updateOverviewStatus();
 });
 
 // Apply saved theme
