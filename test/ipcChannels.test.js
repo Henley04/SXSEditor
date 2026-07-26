@@ -81,7 +81,7 @@ describe('IPC Channels Constants', function () {
   });
 
   it('should not have any empty channel names', function () {
-    for (const [key, value] of Object.entries(IPC_CHANNELS)) {
+    for (const [_key, value] of Object.entries(IPC_CHANNELS)) {
       expect(value).to.be.a('string').with.length.greaterThan(0);
     }
   });

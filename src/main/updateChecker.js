@@ -2,7 +2,7 @@ const { app } = require('electron');
 const https = require('node:https');
 const { compareVersions, checkModelVersion, checkJpModelVersion, checkSifiganVersion } = require('../modelManager');
 const { getModelDir } = require('./modelDir');
-const { loadSettings, saveSettingsFile, invalidateSettingsCache } = require('./settings');
+const { loadSettings, saveSettingsFile } = require('./settings');
 
 const GITHUB_REPO = 'Henley04/SXSEditor';
 const GITHUB_API_BASE = `https://api.github.com/repos/${GITHUB_REPO}`;

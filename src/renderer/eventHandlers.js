@@ -233,7 +233,6 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
   // 优先级高于分片拖拽，避免 playhead 卡在分片边缘时无法拖动
   // 拖拽期间只更新视觉（不重启 source），mouseup 时若之前在播放则恢复播放。
   if (e.button === 0) {
-    const canvasH = dom.fragmentCanvas.clientHeight;
     const playheadX = _getCurrentPlayheadX();
     const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
       && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
@@ -302,7 +301,6 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
     const rect = dom.fragmentCanvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const canvasH = dom.fragmentCanvas.clientHeight;
     const playheadX = _getCurrentPlayheadX();
     const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
       && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);

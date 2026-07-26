@@ -28,7 +28,7 @@ async function enrichSplash() {
     if (window.splashAPI && typeof window.splashAPI.getBuildInfo === 'function') {
       info = { ...BUILD_INFO_DEFAULT, ...(await window.splashAPI.getBuildInfo()) };
     }
-  } catch (err) {
+  } catch (_err) {
     // Keep defaults — the inline SVG is already visible.
     return;
   }

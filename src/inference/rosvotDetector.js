@@ -22,7 +22,6 @@ const ROSVOT_SAMPLE_RATE = 24000;
 const ROSVOT_HOP_SIZE = 128;
 const ROSVOT_MAX_FRAMES = 4000;
 const ROSVOT_MAX_SAMPLES = ROSVOT_MAX_FRAMES * ROSVOT_HOP_SIZE; // 512000
-const F0_MIN = 30;
 const F0_THRESHOLD = 50;
 
 class RosvotDetector {
@@ -81,7 +80,7 @@ class RosvotDetector {
    * @param {number} audioLength - 原始音频样本数
    * @returns {{pitch: BigInt64Array, uv: BigInt64Array}}
    */
-  f0ToRosvotInput(f0Array, targetFrames, audioSampleRate, audioLength) {
+  f0ToRosvotInput(f0Array, targetFrames, _audioSampleRate, _audioLength) {
     const pitch = new BigInt64Array(targetFrames);
     const uv = new BigInt64Array(targetFrames);
 

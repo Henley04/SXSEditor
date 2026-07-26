@@ -1,4 +1,4 @@
-const { SAMPLE_RATE, HOP_SIZE, LONG_AUDIO_THRESHOLD_SEC, SEGMENT_MIN_SEC, SEGMENT_MAX_SEC, SEGMENT_OVERLAP_SEC } = require('./constants');
+const { LONG_AUDIO_THRESHOLD_SEC, SEGMENT_MIN_SEC, SEGMENT_MAX_SEC, SEGMENT_OVERLAP_SEC } = require('./constants');
 
 /**
  * Long audio segmentation and stitching logic
@@ -161,7 +161,7 @@ class AudioSegmentation {
     /**
      * Compute synthesis cache key
      */
-    computeSynthCacheKey(notes, bpm, options, interpolateEnvelope) {
+    computeSynthCacheKey(notes, bpm, options, _interpolateEnvelope) {
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
         const refAudioWavBuffer = options.refAudioWavBuffer || null;

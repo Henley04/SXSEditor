@@ -15,8 +15,6 @@ import {
 const inferenceProviderSelect = document.getElementById('inferenceProvider');
 const inferenceProviderHint = document.getElementById('inferenceProviderHint');
 const inferenceDeviceSelect = document.getElementById('inferenceDevice');
-const deviceSelectGroup = document.getElementById('deviceSelectGroup');
-const webnnStatusGroup = document.getElementById('webnnStatusGroup');
 const webnnStatusValue = document.getElementById('webnnStatusValue');
 const npuStatusValue = document.getElementById('npuStatusValue');
 const gpuStatusValue = document.getElementById('gpuStatusValue');
@@ -80,7 +78,6 @@ const vocoderChunkFramesValue = document.getElementById('vocoderChunkFramesValue
 const vocoderChunkSmartInfo = document.getElementById('vocoderChunkSmartInfo');
 const vocoderChunkSmartText = document.getElementById('vocoderChunkSmartText');
 const vocoderChunkTableBody = document.getElementById('vocoderChunkTableBody');
-const vocoderChunkTableGroup = document.getElementById('vocoderChunkTableGroup');
 const releaseDmlVramAfterSynthesisCheckbox = document.getElementById('releaseDmlVramAfterSynthesis');
 const releaseDiffStepBeforeVocoderCheckbox = document.getElementById('releaseDiffStepBeforeVocoder');
 
@@ -762,8 +759,6 @@ async function loadDevices() {
 function updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting) {
     const textEl = document.getElementById('currentHardwareText');
     if (!textEl) return;
-
-    const deviceMode = currentSetting?.deviceMode || 'smart';
 
     if (hardwareInfo) {
         const gpuName = hardwareInfo.gpuDeviceName || t('settings.cpuOnly');
@@ -1585,11 +1580,6 @@ function populateThemeSelect() {
         ? null
         : (themeManager.current()?.themeId || null));
     if (current) themeSelect.value = current;
-}
-
-function getCurrentThemeId() {
-    if (window.electronAPI?.themeAPI?.current) return null;
-    return themeManager.current()?.themeId || null;
 }
 
 async function applyThemeViaAPI(themeId) {

@@ -151,7 +151,7 @@ function renderModelArea(models) {
   notesWrapper.classList.remove('hidden');
 }
 
-function updateActionButtons(app, models) {
+function updateActionButtons(app, _models) {
   const updateNowBtn = document.getElementById('updateNowBtn');
   const skipVersionBtn = document.getElementById('skipVersionBtn');
   const dontRemindBtn = document.getElementById('dontRemindBtn');

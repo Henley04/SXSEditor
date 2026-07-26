@@ -1,4 +1,4 @@
-const { TrackManager, createSinger, createFragment } = require('../src/editor/trackManager');
+const { TrackManager } = require('../src/editor/trackManager');
 const { expect } = require('chai');
 
 describe('TrackManager', () => {
@@ -321,9 +321,9 @@ describe('TrackManager', () => {
 
   describe('color management', () => {
     it('should reuse colors after singer removal', () => {
-      const s1 = manager.addSinger({ singerName: 'Singer 1' });
+      const _s1 = manager.addSinger({ singerName: 'Singer 1' });
       const s2 = manager.addSinger({ singerName: 'Singer 2' });
-      const s3 = manager.addSinger({ singerName: 'Singer 3' });
+      const _s3 = manager.addSinger({ singerName: 'Singer 3' });
 
       manager.removeSinger(s2.id);
       const s4 = manager.addSinger({ singerName: 'Singer 4' });

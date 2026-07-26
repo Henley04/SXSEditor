@@ -4,7 +4,7 @@
 
 import { ensureOrt, getOrt } from './ortSetup.js';
 import { WEBNN_EP_TIMEOUT, WEBNN_VOCODER_TIMEOUT } from './constants.js';
-import { extractRelativePath, batchFloat32ToFloat16, disposeTensor } from './utils.js';
+import { batchFloat32ToFloat16, disposeTensor } from './utils.js';
 
 // 会话管理
 const sessions = new Map(); // modelId -> { session, status, ep, lastAccess }
@@ -58,7 +58,7 @@ async function readModelFiles(modelPath) {
  * @param {string} [modelUrl] - 模型 URL（未使用，保留兼容性）
  * @returns {{ success: boolean, ep: string, error?: string }}
  */
-export async function loadModel(modelId, modelPath, options = { deviceType: 'npu' }, modelUrl = null) {
+export async function loadModel(modelId, modelPath, options = { deviceType: 'npu' }, _modelUrl = null) {
     await ensureOrt();
     const ort = getOrt();
 

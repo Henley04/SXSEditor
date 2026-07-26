@@ -29,11 +29,9 @@
  * Events: 'theme-changed', 'theme-list-changed', 'theme-overwritten', 'theme-imported'
  */
 
-import { buildDefaultTokens, TOKEN_CATALOG } from './tokenCatalog.js';
+import { buildDefaultTokens } from './tokenCatalog.js';
 import { validate, normalize, ThemeValidationError } from './themeValidator.js';
 import { computeIsDark as computeIsDarkUtil } from './colorUtils.js';
-
-const STORAGE_KEY_OVERRIDES = 'sxseditor-theme-overrides';
 
 class ThemeNotFoundError extends Error {
     constructor(id) {
@@ -48,7 +46,7 @@ let currentId = null;
 let currentScope = 'global';
 let currentScopeId = null;
 let overrides = {};
-let lastBaseTokens = buildDefaultTokens();
+let _lastBaseTokens = buildDefaultTokens();
 
 const listeners = new Map();
 function emit(name, detail) {
@@ -103,17 +101,9 @@ function injectTokens(tokens) {
     for (const [k, v] of Object.entries(tokens)) {
         try {
             root.style.setProperty(k, v);
-        } catch (e) {
+        } catch (_e) {
             // Skip invalid property names silently
         }
-    }
-}
-
-function clearInjectedTokens(tokenNames) {
-    if (typeof document === 'undefined') return;
-    const root = document.documentElement;
-    for (const name of tokenNames) {
-        root.style.removeProperty(name);
     }
 }
 
@@ -152,9 +142,6 @@ function activateHistory() {
     historyIndex = -1;
     historyActive = true;
     pushHistory();
-}
-function deactivateHistory() {
-    historyActive = false;
 }
 
 function snapshot() {
@@ -236,7 +223,7 @@ function list() {
 
 function applyCurrent() {
     const base = currentId ? flattenTheme(get(currentId)) : buildDefaultTokens();
-    lastBaseTokens = base;
+    _lastBaseTokens = base;
     const merged = { ...base, ...overrides };
     injectTokens(merged);
     emit('theme-changed', {

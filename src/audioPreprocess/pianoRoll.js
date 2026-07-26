@@ -3,7 +3,7 @@ import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, F0_CURVE_AREA_
 import { t } from '../i18n/index.js';
 import { debounce } from '../utils/debounce.js';
 import { midiToNoteName } from '../utils/midiUtils.js';
-import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
+import { getCanvasColors } from '../themes/canvasTheme.js';
 import { drawWaveformWithPlayhead, getMaxScrollX, getMaxScrollY, updateScrollbars } from './canvasRenderer.js';
 import { updateMidiInfo, startInlineEdit, updateInlineInputPosition } from './uiControls.js';
 
@@ -157,7 +157,6 @@ export function initPianoRoll() {
     _pitchToY(pitch) {
       const maxPitch = 127;
       const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
-      const pianoAreaBottom = this.height;
       return pianoAreaTop + (maxPitch - pitch) * NOTE_HEIGHT * this.zoomY - this.scrollY;
     },
 
@@ -584,7 +583,6 @@ export function initPianoRoll() {
       ctx.beginPath();
 
       let isFirst = true;
-      let lastVisibleX = -1;
       for (const frame of this.f0Data) {
         if (frame.f0 <= 0) {
           if (!isFirst) {
@@ -614,7 +612,6 @@ export function initPianoRoll() {
         } else {
           ctx.lineTo(x, y);
         }
-        lastVisibleX = x;
       }
 
       ctx.stroke();

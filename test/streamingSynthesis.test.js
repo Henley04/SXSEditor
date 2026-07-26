@@ -1,16 +1,11 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
-const { OnnxSVSPipeline, SAMPLE_RATE } = require('../src/inference/pipeline');
+const { OnnxSVSPipeline } = require('../src/inference/pipeline');
 const {
   MEL_DIM,
   COND_DIM,
   HOP_SIZE,
   VOCODER_CHUNK_FRAMES,
-  VOCODER_OVERLAP_FRAMES,
-  DEFAULT_DIFF_STEPS,
-  CFG_STRENGTH,
-  CFG_RESCALE,
-  MAX_SAFE_FRAMES,
   NPU_STATIC_SEQ_LEN,
 } = require('../src/inference/pipeline/constants');
 
@@ -1107,7 +1102,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
     it('首 chunk：直接整段 memcpy 写回（无交叉淡入淡出）', async () => {
       const totalFrames = 200;
       const ptFrameCount = 10;
-      const chunkFrames = 100;
+      const _chunkFrames = 100;
       const overlap = 20;
 
       const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
@@ -1137,7 +1132,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
     it('非首 chunk：重叠区逐帧加权混合', async () => {
       const totalFrames = 200;
       const ptFrameCount = 10;
-      const chunkFrames = 100;
+      const _chunkFrames = 100;
       const overlap = 20;
 
       const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
@@ -1177,7 +1172,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
     it('末 chunk：newCommitted = chunkEnd（不扣 overlap）', async () => {
       const totalFrames = 250;
       const ptFrameCount = 10;
-      const chunkFrames = 100;
+      const _chunkFrames = 100;
       const overlap = 20;
 
       const xt = diffusion.randomNoise(totalFrames, MEL_DIM);

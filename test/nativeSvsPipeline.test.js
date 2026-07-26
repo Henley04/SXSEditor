@@ -1,8 +1,5 @@
 const { NativeSVSPipeline, SAMPLE_RATE } = require('../src/inference/pipeline');
 const { expect } = require('chai');
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
 
 describe('NativeSVSPipeline - Pure Logic Tests', () => {
   let pipeline;

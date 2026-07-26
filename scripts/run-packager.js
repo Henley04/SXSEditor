@@ -13,7 +13,7 @@ process.on('exit', (code) => {
     console.log('[run-packager] WARNING: packager() Promise never resolved - this is the silent-exit bug');
   }
 });
-process.on('unhandledRejection', (reason, promise) => {
+process.on('unhandledRejection', (reason, _promise) => {
   console.error('[run-packager] UNHANDLED REJECTION:', reason);
 });
 process.on('uncaughtException', (err) => {

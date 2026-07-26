@@ -224,7 +224,7 @@ class AudioOutputManager {
       // B3: getDevices is a quick status command, use 2s timeout.
       const result = await this._sendCommand('getDevices', {}, null, 2000);
       return result.devices || [];
-    } catch (e) {
+    } catch (_e) {
       return [];
     }
   }

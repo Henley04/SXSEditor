@@ -217,13 +217,11 @@ export function computePitchCurveF0(singerFragments, allNotes, bpm) {
     if (pitch === null) {
       // Binary search in sorted notes
       let lo = 0, hi = sortedNotes.length - 1;
-      let found = false;
       while (lo <= hi) {
         const mid = (lo + hi) >> 1;
         const note = sortedNotes[mid];
         if (frameBeat >= note.start && frameBeat < note.start + note.duration) {
           pitch = note.pitch;
-          found = true;
           break;
         }
         if (note.start + note.duration <= frameBeat) {

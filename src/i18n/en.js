@@ -838,7 +838,10 @@ export default {
     resetZoom: 'Reset Zoom',
     zoomIn: 'Zoom In',
     zoomOut: 'Zoom Out',
-    fullscreen: 'Fullscreen'
+    fullscreen: 'Fullscreen',
+    help: 'Help',
+    openLogDir: 'Open Logs Folder',
+    openDumpDir: 'Open Crash Dumps Folder'
   },
   dialog: {
     saveSingerFile: 'Save Singer File',

@@ -1148,7 +1148,7 @@ function httpRequest(urlStr, options = {}) {
     let urlObj;
     try {
       urlObj = new URL(urlStr);
-    } catch (e) {
+    } catch (_e) {
       reject(new Error(`Invalid URL: ${urlStr}`));
       return;
     }
@@ -1685,7 +1685,7 @@ async function downloadFileChunked(url, destPath, fileSize, options = {}) {
         try {
           await downloadChunk(url, destPath, chunk.index, chunk.start, chunk.end, {
             abortSignal,
-            onProgress: (chunkIdx, downloaded, total) => {
+            onProgress: (chunkIdx, downloaded, _total) => {
               chunkDownloaded[chunkIdx] = downloaded;
               reportProgress();
             },
@@ -1761,7 +1761,7 @@ async function downloadWithModelScopeCLI(modelDir, missingFiles, options = {}) {
 
   return new Promise((resolve, reject) => {
     const cmd = process.platform === 'win32' ? 'modelscope.exe' : 'modelscope';
-    const child = execFile(cmd, args, { timeout: 0, maxBuffer: 50 * 1024 * 1024 }, (error, stdout, stderr) => {
+    const child = execFile(cmd, args, { timeout: 0, maxBuffer: 50 * 1024 * 1024 }, (error, stdout, _stderr) => {
       if (error) {
         if (error.killed) {
           reject(new Error('Download cancelled'));
@@ -1997,7 +1997,6 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
 
       // 检查是否有旧的单线程临时文件（兼容旧版断点续传）
       const tempPath = destPath + TEMP_SUFFIX;
-      const metaPath = destPath + CHUNK_META_SUFFIX;
       let hasOldTempFile = false;
       try {
         const stats = fs.statSync(tempPath);
@@ -2011,7 +2010,7 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
       if (useChunked) {
         try {
           await downloadFileChunked(url, destPath, fileSize, {
-            onProgress: (downloaded, total) => {
+            onProgress: (downloaded, _total) => {
               fileDownloadedMap.set(file.filePath, downloaded);
               reportOverallProgress(file.filePath);
             },
@@ -2030,7 +2029,7 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
 
       if (!useChunked) {
         await downloadFileWithRetry(url, destPath, {
-          onProgress: (downloaded, total) => {
+          onProgress: (downloaded, _total) => {
             fileDownloadedMap.set(file.filePath, downloaded);
             reportOverallProgress(file.filePath);
           },

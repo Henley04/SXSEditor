@@ -1,5 +1,42 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Forward renderer errors to the main process for centralized logging.
+// Runs in the preload's isolated world, but DOM event listeners added via
+// window.addEventListener still catch errors thrown from the main world
+// (with contextIsolation: true). This catches window.onerror,
+// unhandledrejection, and console.error — the most common sources of silent
+// renderer failures — and persists them to the same log file used by the
+// main process. This runs before contextBridge.exposeInMainWorld so it
+// applies to every renderer (main, fragment, settings, modelDownload,
+// resourceManager, singerCreator, audioPreprocess, splash,
+// updateNotification) without any per-window setup.
+(function attachRendererErrorForwarding() {
+  try {
+    const fmt = (e) => {
+      if (e instanceof Error) return e.stack || e.message;
+      if (typeof e === 'object' && e !== null) {
+        try { return JSON.stringify(e); } catch { return String(e); }
+      }
+      return String(e);
+    };
+    const fwd = (level, message) => {
+      try { ipcRenderer.send('crash:log', { level, source: 'renderer', message }); } catch (_) {}
+    };
+    window.addEventListener('error', (event) => {
+      const where = `${event.filename || ''}:${event.lineno || 0}:${event.colno || 0}`;
+      fwd('ERROR', `[window.onerror] ${event.message || ''} @ ${where}` + (event.error ? '\n' + fmt(event.error) : ''));
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+      fwd('ERROR', `[unhandledrejection] ${fmt(event.reason)}`);
+    });
+    const origConsoleError = console.error.bind(console);
+    console.error = (...args) => {
+      try { fwd('ERROR', args.map(fmt).join(' ')); } catch (_) {}
+      try { origConsoleError(...args); } catch (_) {}
+    };
+  } catch (_) {}
+})();
+
 let _webnnReadModelFileReqId = 0;
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -408,5 +445,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     download: (fileId) => ipcRenderer.invoke('singer-market:download', fileId),
     pickFile: () => ipcRenderer.invoke('singer-market:pick-file'),
     pickSavePath: (suggestedName) => ipcRenderer.invoke('singer-market:pick-save-path', suggestedName),
+  },
+
+  // ==================== Crash Reporting API ====================
+  // Used by settings/help UI to surface log/dump file locations so users can
+  // attach them when filing issues. Log forwarding (window.onerror /
+  // unhandledrejection / console.error) is wired up automatically at the top
+  // of this file — renderers do not need to call into this API to report errors.
+  crashReportAPI: {
+    getReportInfo: () => ipcRenderer.invoke('crash:getReportInfo'),
+    openLogDir: () => ipcRenderer.invoke('crash:openLogDir'),
+    openDumpDir: () => ipcRenderer.invoke('crash:openDumpDir'),
+    log: (level, message) => ipcRenderer.send('crash:log', { level, source: 'renderer', message }),
   },
 });

@@ -13,7 +13,6 @@ const {
 const { expect } = require('chai');
 
 const MIDI_OFFSET = 21;
-const CONTOUR_BINS_PER_SEMITONE = 1;
 const ANNOTATIONS_FPS = Math.floor(BASIC_PITCH_SAMPLE_RATE / 256);
 
 describe('BasicPitch - Utility Functions', () => {
@@ -136,7 +135,7 @@ describe('BasicPitch - Utility Functions', () => {
 
     it('should return 0 std for constant array', () => {
       const arr = [[5, 5], [5, 5]];
-      const [mean, std] = meanStdDev(arr);
+      const [mean] = meanStdDev(arr);
       expect(mean).to.equal(5);
     });
   });

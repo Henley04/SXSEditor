@@ -1,5 +1,4 @@
 const { expect } = require('chai');
-const path = require('path');
 
 const {
   MODEL_FILE_MANIFEST,

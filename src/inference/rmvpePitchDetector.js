@@ -39,7 +39,6 @@ function outputToFloat32(tensor) {
 }
 
 const RMVPE_SAMPLE_RATE = 16000;
-const HOP_LENGTH = 160;
 const N_CLASS = 2560;
 const F0_MIN = 30;
 const F0_MAX = 7600;

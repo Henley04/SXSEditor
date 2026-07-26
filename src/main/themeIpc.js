@@ -25,7 +25,7 @@ function flattenTheme(themeObj) {
 }
 
 function listAllThemes() {
-  const settings = loadSettings();
+  const _settings = loadSettings();
   const userDir = app.getPath('userData');
   const { themes: userThemes } = themeStorage.loadUserThemes(userDir);
   return [
@@ -164,7 +164,7 @@ function registerThemeIpc() {
     }
   });
 
-  ipcMain.handle('theme:import', async (event) => {
+  ipcMain.handle('theme:import', async (_event) => {
     try {
       const result = await dialog.showOpenDialog({
         title: 'Import Theme',
@@ -226,7 +226,7 @@ function registerThemeIpc() {
     return { success: true, themeId: DEFAULT_THEME };
   });
 
-  ipcMain.handle('theme:bootstrap', async (event) => {
+  ipcMain.handle('theme:bootstrap', async (_event) => {
     const settings = loadSettings();
     const all = listAllThemes();
     return {

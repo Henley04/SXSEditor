@@ -41,7 +41,7 @@ function validateSingerFileData(data) {
       } else if (wavBuf.length > 50 * 1024 * 1024) {
         warnings.push('wavBase64 exceeds 50MB, may cause performance issues');
       }
-    } catch (e) {
+    } catch (_e) {
       errors.push('wavBase64 Base64 decode failed');
     }
   }

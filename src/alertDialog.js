@@ -13,11 +13,6 @@
 import { tOr } from './i18n/index.js';
 import { escapeHtml } from './utils/escapeHtml.js';
 
-function getThemeVar(name, fallback) {
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-  return v || fallback;
-}
-
 /**
  * 显示非阻塞的 alert 对话框
  * @param {string} message - 要显示的消息

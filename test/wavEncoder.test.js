@@ -6,7 +6,7 @@ describe('wavEncoder', () => {
     it('should produce valid WAV header with correct magic bytes', () => {
       const audio = new Float32Array(100);
       const result = encodeWav(audio, 24000);
-      const view = new DataView(result.buffer);
+      const _view = new DataView(result.buffer);
 
       expect(String.fromCharCode(...result.slice(0, 4))).to.equal('RIFF');
       expect(String.fromCharCode(...result.slice(8, 12))).to.equal('WAVE');

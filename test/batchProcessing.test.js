@@ -155,7 +155,7 @@ describe('NPU Batch Processing - Logic Tests', () => {
       const xtData = new Float32Array(totalFrames * MEL_DIM);
       xtData.fill(2.0);
 
-      const { cfgBatchBuf, cfgCondBuf, cfgMaskBuf } = buildCfGBatchBuf(
+      const { cfgBatchBuf, cfgCondBuf } = buildCfGBatchBuf(
         diffBatch, totalFramesWithPrompt, MEL_DIM, ptFrameCount, totalFrames, xtInputBuf, xtData
       );
 

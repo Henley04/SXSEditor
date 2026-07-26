@@ -22,7 +22,7 @@ if (!_IS_TEST_ENV) {
 const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { classifyDevice } = require('../../utils/deviceClassifier');
-const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
+const { EMBED_DIM, MEL_DIM, COND_DIM, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { buildSessionOptions } = require('../shared/ortOptions');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
@@ -403,7 +403,7 @@ function selectBestDevice(devices, npuAvailable = false) {
  * @returns {Object} modelDeviceMapping — { modelGroup: { deviceType, deviceId, process } }
  */
 function buildModelDeviceMapping(devices, npuAvailable = false) {
-    const best = selectBestDevice(devices, npuAvailable);
+    const _best = selectBestDevice(devices, npuAvailable);
     const hasDiscreteGPU = devices.some(d => d.deviceType === 'discrete-gpu' && d.dxgiAdapterNumber !== undefined);
     const discreteGPU = devices.find(d => d.deviceType === 'discrete-gpu' && d.dxgiAdapterNumber !== undefined);
     const integratedGPU = devices.find(d => d.deviceType === 'integrated-gpu' && d.dxgiAdapterNumber !== undefined);
@@ -633,8 +633,6 @@ class WebNNSessionProxy {
     }
 
     async run(feeds) {
-        const { ipcMain } = require('electron');
-
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN inference');
 

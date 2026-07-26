@@ -2,7 +2,7 @@
  * WebNN 推理模块 — 预处理：文本/音素编码、音高编码、F0 编码
  */
 
-import { MEL_DIM, EMBED_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } from './constants.js';
+import { EMBED_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } from './constants.js';
 import { ensureOrt, getOrt } from './ortSetup.js';
 import { runSession } from './sessionManager.js';
 import { createFloatTensor, outputToFloat32, padInt64ToLength, padToLength, trimOutputToLength, disposeTensor } from './utils.js';
@@ -18,7 +18,7 @@ import { createFloatTensor, outputToFloat32, padInt64ToLength, padToLength, trim
  * @param {string} params.floatType - 'float32' 或 'float16'
  * @returns {{ combinedCond: Float32Array, totalCondFrames: number, totalFramesWithPrompt: number }}
  */
-export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, ptMelData, floatType, useStaticShapes = false, promptSeq = null }) {
+export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFrameCount, _ptMelData, floatType, useStaticShapes = false, promptSeq = null }) {
     await ensureOrt();
     const ort = getOrt();
 

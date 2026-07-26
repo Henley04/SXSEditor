@@ -1,8 +1,4 @@
 const { expect } = require('chai');
-const sinon = require('sinon');
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
 const { resampleAudio } = require('../src/utils/resampleAudio');
 
 describe('Audio Processing Pipeline - Integration Tests', () => {
@@ -53,7 +49,7 @@ describe('Audio Processing Pipeline - Integration Tests', () => {
   describe('Audio Resampling Pipeline', () => {
     it('should resample audio for RMVPE (44100 -> 16000)', () => {
       const { RmvpePitchDetector } = require('../src/inference/rmvpePitchDetector');
-      const detector = new RmvpePitchDetector('/fake/');
+      const _detector = new RmvpePitchDetector('/fake/');
 
       const input = new Float32Array(4410);
       for (let i = 0; i < input.length; i++) {
@@ -67,8 +63,6 @@ describe('Audio Processing Pipeline - Integration Tests', () => {
     });
 
     it('should resample audio for Basic Pitch (44100 -> 22050)', () => {
-      const { BasicPitchDetector } = require('../src/inference/basicPitch');
-
       const input = new Float32Array(4410);
       for (let i = 0; i < input.length; i++) {
         input[i] = Math.sin(2 * Math.PI * 440 * i / 44100);
@@ -139,10 +133,9 @@ describe('Audio Processing Pipeline - Integration Tests', () => {
   describe('Token State Expansion to Frames', () => {
     it('should correctly expand token-level embeddings to frame-level via mel2token', () => {
       const { NativeSVSPipeline } = require('../src/inference/pipeline');
-      const pipeline = new NativeSVSPipeline('/fake/');
+      const _pipeline = new NativeSVSPipeline('/fake/');
 
       const embedDim = 3;
-      const tokenCount = 3;
       const totalFrames = 6;
       const encoderOutData = new Float32Array([
         1, 2, 3,
@@ -189,7 +182,7 @@ describe('Track and Fragment Pipeline - Integration Tests', () => {
     const retrieved = manager.getFragment(fragment.id);
     expect(retrieved.name).to.equal('Test Fragment');
 
-    const active = manager.setActiveFragment(fragment.id);
+    const _active = manager.setActiveFragment(fragment.id);
     expect(manager.getActiveFragment().id).to.equal(fragment.id);
   });
 
@@ -212,8 +205,8 @@ describe('Track and Fragment Pipeline - Integration Tests', () => {
     const manager = new TrackManager();
 
     manager.addSinger({ id: 1 });
-    const f1 = manager.addFragment({ id: 1, singerId: 1 });
-    const f2 = manager.addFragment({ id: 2, singerId: 1 });
+    const _f1 = manager.addFragment({ id: 1, singerId: 1 });
+    const _f2 = manager.addFragment({ id: 2, singerId: 1 });
 
     manager.setActiveFragment(1);
     manager.removeFragment(1);

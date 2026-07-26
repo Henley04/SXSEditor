@@ -4,7 +4,7 @@ import { initI18n, applyLocale, getLocale, t } from '../i18n/index.js';
 import { initWindowTheme } from '../themes/themeInit.js';
 import { hydrateIcons } from '../icons/iconHelper.js';
 import { initPipeline } from './pipeline.js';
-import { resizeCanvases, render } from './canvasRenderer.js';
+import { resizeCanvases } from './canvasRenderer.js';
 import { setupEventListeners } from './eventHandlers.js';
 import { setupIpcHandlers, loadFragmentFromHash } from './ipcHandlers.js';
 import { setupUiControls } from './uiControls.js';
@@ -16,7 +16,6 @@ import {
   getEnvelopes,
   getPitchCurve,
 } from './state.js';
-import { saveFragmentData } from './projectIO.js';
 
 // Initialize pipeline
 initPipeline();

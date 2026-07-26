@@ -2,7 +2,7 @@
  * WebNN 推理模块 — Vocoder、mel-to-audio 转换
  */
 
-import { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, NPU_VOCODER_SEQ_LEN, VOCODER_OUTPUT_TRIM_SAMPLES } from './constants.js';
+import { MEL_DIM, HOP_SIZE, VOCODER_CHUNK_FRAMES, NPU_VOCODER_SEQ_LEN } from './constants.js';
 import { runSession } from './sessionManager.js';
 import { createFloatTensor, outputToFloat32, padToLength, disposeTensor } from './utils.js';
 import { runSegmentedVocoder } from './audioSegmentation.js';

@@ -6,7 +6,6 @@ const fs = require('fs');
 const {
   MODEL_FILE_MANIFEST,
   PRECISION_SUBDIR_MAP,
-  PRECISION_SUBDIR_PRECESIONS,
   getLocalFilePath,
   getManifestForPrecision,
   isSvsModelFile,

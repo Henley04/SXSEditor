@@ -4,7 +4,7 @@ import { t } from '../i18n/index.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
-import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine, playbackTimeToX, PLAYHEAD_HIT_WIDTH } from './timelineRenderer.js';
+import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './timelineRenderer.js';
 
 // visibilitychange handler: pause rAF-driven UI updates when tab hidden
 // (audio playback continues via WebAudio/WASAPI in background).
@@ -496,7 +496,7 @@ export async function loadAudioSettings() {
   try {
     state.audioSettings = await window.electronAPI.getSettings();
     state.useExclusiveMode = state.audioSettings?.audioOutputMode === 'exclusive';
-  } catch (e) {
+  } catch (_e) {
     state.audioSettings = {};
   }
 }
@@ -544,7 +544,7 @@ export function applyAudioSettings() {
   if (state.audioContext && state.audioSettings.audioOutputDevice !== undefined && state.audioSettings.audioOutputDevice !== -1) {
     const sinkId = String(state.audioSettings.audioOutputDevice);
     if (state.audioContext.setSinkId && typeof state.audioContext.setSinkId === 'function') {
-      state.audioContext.setSinkId(sinkId).catch(err => {
+      state.audioContext.setSinkId(sinkId).catch(_err => {
       // TODO: translate garbled log
       });
     }
@@ -671,7 +671,7 @@ export async function startExclusivePlayback(offset) {
     });
 
     startExclusivePlayheadAnimation(removeEndedListener, playbackStartWallTime);
-  } catch (err) {
+  } catch (_err) {
       // TODO: translate garbled log
     state.useExclusiveMode = false;
     startSharedPlayback(offset);
@@ -897,7 +897,7 @@ export function stopAudioSource() {
     try {
       state.currentAudioSource.onended = null;
       state.currentAudioSource.stop();
-    } catch (e) {
+    } catch (_e) {
     }
     state.currentAudioSource = null;
   }

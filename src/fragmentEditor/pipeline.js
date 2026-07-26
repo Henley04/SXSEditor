@@ -1,5 +1,5 @@
 import {
-  getSampleRate, setSampleRate,
+  setSampleRate,
   getPipelineInitialized, setPipelineInitialized,
   getPipelineInitPromise, setPipelineInitPromise,
   getFragmentAudioSettings,

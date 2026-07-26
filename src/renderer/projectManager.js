@@ -108,7 +108,7 @@ export async function loadSingerFile(singerId, buffer, filePath) {
   try {
     const text = new TextDecoder().decode(buffer);
     singerData = JSON.parse(text);
-  } catch (e) {
+  } catch (_e) {
     await showSingerValidationReport({
       valid: false,
       errors: [t('main.singerJsonParseFailed')],
@@ -146,7 +146,7 @@ export async function addSingerFromFile(buffer, filePath) {
   try {
     const text = new TextDecoder().decode(buffer);
     singerData = JSON.parse(text);
-  } catch (e) {
+  } catch (_e) {
     await showSingerValidationReport({
       valid: false,
       errors: [t('main.singerJsonParseFailed')],
@@ -316,7 +316,7 @@ export async function autoSaveProject() {
     await window.electronAPI.saveFile(state.currentProjectFilePath, data);
     markClean();
     console.log('Project auto-saved to', state.currentProjectFilePath);
-  } catch (err) {
+  } catch (_err) {
       // TODO: translate garbled log
   }
 }
@@ -521,7 +521,7 @@ export async function loadProject() {
                     }
                     singer.singerFileMissing = false;
                   }
-                } catch (err) {
+                } catch (_err) {
       // TODO: translate garbled log
                   singer.singerFileMissing = true;
                 }

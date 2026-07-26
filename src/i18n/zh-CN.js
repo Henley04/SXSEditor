@@ -838,7 +838,10 @@ export default {
     resetZoom: '重置缩放',
     zoomIn: '放大',
     zoomOut: '缩小',
-    fullscreen: '全屏'
+    fullscreen: '全屏',
+    help: '帮助',
+    openLogDir: '打开日志文件夹',
+    openDumpDir: '打开崩溃转储文件夹'
   },
   dialog: {
     saveSingerFile: '保存歌手文件',

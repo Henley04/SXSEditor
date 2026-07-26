@@ -2,14 +2,7 @@ import { t } from '../i18n/index.js';
 import {
   getFragmentIsSynthesizing,
   getFragmentIsExporting,
-  getFragmentIsPlaying,
-  getFragmentAudioSettings,
-  getFragmentAudioData,
-  getFragmentAudioContext, setFragmentAudioContext,
-  getFragmentGainNode, setFragmentGainNode,
-  getCurrentParamMode,
   getPitchCurve,
-  getAutoSaveTimer, setAutoSaveTimer,
   getNotes,
   getSelectedNoteIds,
   getSelectedAnchorIndices,
@@ -18,19 +11,16 @@ import {
   getPendingBoundsUpdate, setPendingBoundsUpdate,
   getCurrentFragment,
   getCurrentProject,
-  getEnvelopes,
-  getScrollY, setScrollY,
-  getWavFileBuffer, setWavFileBuffer,
-  getPitchCurveSnapshotBeforeDrag, setPitchCurveSnapshotBeforeDrag,
-  getEnvelopeSnapshotBeforeDrag, setEnvelopeSnapshotBeforeDrag,
-  getDragOperation, setDragOperation,
-  getDragMode, setDragMode,
-  getLyricEditOldValue, setLyricEditOldValue,
-  getLyricEditNoteId, setLyricEditNoteId,
-  getNextNoteId, setNextNoteId,
+  setScrollY,
+  setWavFileBuffer,
+  setPitchCurveSnapshotBeforeDrag,
+  setEnvelopeSnapshotBeforeDrag,
+  setDragOperation,
+  setDragMode,
+  setLyricEditOldValue,
+  setLyricEditNoteId,
+  setNextNoteId,
   getPhonemeCache,
-  setSelectedNoteIds,
-  setSelectedAnchorIndices,
   setCurrentParamMode,
   setNotes,
   setEnvelopes,
@@ -42,12 +32,8 @@ import {
   getKanjiGroups, setKanjiGroups,
 } from './state.js';
 import { PARAM_MODES } from './constants.js';
-import { initPipeline } from './pipeline.js';
-import { stopFragmentPlayback, loadFragmentAudioSettings } from './audioPlayback.js';
 import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
-import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { updateParamModeButtons } from './uiControls.js';
-import { HistoryManager } from '../editor/historyManager.js';
 import { autoDetectKanjiGroups, cleanupKanjiGroups } from './kanjiGroupUtils.js';
 
 export function setupIpcHandlers() {

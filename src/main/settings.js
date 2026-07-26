@@ -1,7 +1,7 @@
 const { app } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const { getLocale, setLocale } = require('./locale');
+const { setLocale } = require('./locale');
 
 const DEFAULT_THEME = 'acg';
 const DEFAULT_THEME_PER_WINDOW = {};

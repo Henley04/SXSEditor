@@ -4,7 +4,6 @@ import { showAlertDialog } from '../alertDialog.js';
 import { drawWaveformWithPlayhead } from './canvasRenderer.js';
 import { initPianoRoll } from './pianoRoll.js';
 import { processWavBuffer } from './audioLoader.js';
-import { updateMidiInfo } from './uiControls.js';
 
 // W21: IPC cleanup tracking array (mirrors renderer/fragmentEditor _ipcCleanups
 // pattern). Each registered IPC listener pushes its unsubscribe function here

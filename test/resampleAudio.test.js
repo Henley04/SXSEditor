@@ -23,7 +23,7 @@ describe('utils/resampleAudio', () => {
 
   it('should produce empty array when output length is 0', () => {
     const data = new Float32Array([1]);
-    const out = resampleAudio(data, 8000, 16000);
+    const _out = resampleAudio(data, 8000, 16000);
     // newLength = floor(1 / 0.5) = 2, not 0; test true-empty path:
     const out2 = resampleAudio(new Float32Array(0), 8000, 16000);
     expect(out2.length).to.equal(0);

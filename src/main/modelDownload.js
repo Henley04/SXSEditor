@@ -5,8 +5,8 @@ const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed, isSystemPath } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getLatestTag, getRemoteFileSizeByUrl } = require('../modelManager');
-const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getLatestTag, getRemoteFileSizeByUrl } = require('../modelManager');
+const { createModelDownloadWindow, getModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 // W5: Per-download-key AbortController map. Replaces the single shared
 // `downloadAbortController` global so concurrent downloads (main/JP/SiFiGAN)
@@ -51,8 +51,6 @@ const SIFIGAN_ALL_FILES = [
   'sifigan_vocoder_dml.onnx.data',
   'sifigan_stats.joblib',
 ];
-// 兼容旧引用 (SIFIGAN_FILES 仍指向完整列表, 用于 deleteSifiganFiles)
-const SIFIGAN_FILES = SIFIGAN_ALL_FILES;
 
 // SiFiGAN 安装判定: stats 文件 + (FP16 变体完整 OR FP32 变体完整)
 function _checkFileExists(modelDir, fileName) {
@@ -120,7 +118,7 @@ async function startModelDownload(modelDir, missingFiles, precision, revision) {
   downloadAbortControllers.set(downloadKey, downloadAbortController);
   const abortSignal = downloadAbortController.signal;
   const currentPrecision = precision || DEFAULT_PRECISION;
-  const modelDownloadWindow = getModelDownloadWindow();
+  const _modelDownloadWindow = getModelDownloadWindow();
 
   try {
     await downloadMissingFiles(modelDir, missingFiles, {
@@ -191,7 +189,7 @@ async function checkAndDownloadModels() {
   const modelDir = getModelDir();
   const precision = loadSettings().modelPrecision || DEFAULT_PRECISION;
   console.log('[Main] Check model files, dir:', modelDir, 'precision:', precision);
-  const { missing, existing } = await checkMissingFilesAsync(modelDir, precision);
+  const { missing } = await checkMissingFilesAsync(modelDir, precision);
 
   if (missing.length === 0) {
     console.log('[Main] All model files ready');
@@ -478,12 +476,11 @@ function registerModelDownloadIpc() {
     const downloadAbortController = new AbortController();
     downloadAbortControllers.set(jpDownloadKey, downloadAbortController);
     const abortSignal = downloadAbortController.signal;
-    const modelDownloadWindow = getModelDownloadWindow();
+    const _modelDownloadWindow = getModelDownloadWindow();
 
     try {
-      const { downloadMissingFiles } = require('../modelManager');
       // Download JP files to the JP subdirectory
-      const jpMissingFiles = missing.map(f => ({
+      const _jpMissingFiles = missing.map(f => ({
         ...f,
         _jpFilePath: getJpLocalFilePath(modelDir, f.filePath, currentPrecision),
       }));
@@ -895,7 +892,7 @@ function registerModelDownloadIpc() {
 
   // Update JP models: delete and re-download
   ipcMain.handle('model-download:update-jp', async (event, precision, revision) => {
-    const { getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS, JP_MODEL_FILE_MANIFEST } = require('../modelManager');
+    const { getJpLocalFilePath, JP_MODEL_IDS, JP_MODEL_FILE_MANIFEST } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     // If no revision (tag) specified or 'latest' requested, fetch the latest JP tag from ModelScope

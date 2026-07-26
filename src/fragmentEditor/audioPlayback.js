@@ -4,7 +4,7 @@ import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
 import { initPipeline, getFragmentPreviewInferenceOptions, getFragmentExportInferenceOptions } from './pipeline.js';
 import {
-  getSampleRate, setSampleRate,
+  getSampleRate,
   getFragmentAudioContext, setFragmentAudioContext,
   getFragmentAudioSource, setFragmentAudioSource,
   getFragmentAudioData, setFragmentAudioData,
@@ -26,24 +26,9 @@ import {
   getCurrentProject,
   getCurrentFragment,
   getEnvelopes,
-  getNotes,
-  getSelectedNoteIds,
-  getSelectedAnchorIndices,
-  getPitchCurve,
-  getDragMode, setDragMode,
-  getPitchCurveSnapshotBeforeDrag, setPitchCurveSnapshotBeforeDrag,
-  getEnvelopeSnapshotBeforeDrag, setEnvelopeSnapshotBeforeDrag,
-  getPhonemeDragState,
-  getParamEnvelopeDrag, setParamEnvelopeDrag,
-  getPitchDragAnchorIdx, setPitchDragAnchorIdx,
-  getPitchDragAnchorStarts,
-  getIsBrushDrawing, setIsBrushDrawing,
-  getCurrentBrushStroke, setCurrentBrushStroke,
-  getDragNoteStarts,
-  getDragOperation, setDragOperation,
 } from './state.js';
 import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
-import { updateFragmentPlayButton, updateParamModeButtons } from './uiControls.js';
+import { updateFragmentPlayButton } from './uiControls.js';
 
 /**
  * 构建导出用的 per-note 渐入/渐出列表（与 wavEncoder.applyEnvelopesToAudio 对接）。
@@ -288,7 +273,7 @@ export async function loadFragmentAudioSettings() {
     const settings = await window.electronAPI.getSettings();
     setFragmentAudioSettings(settings);
     setFragmentUseExclusiveMode(settings?.audioOutputMode === 'exclusive');
-  } catch (e) {
+  } catch (_e) {
     setFragmentAudioSettings({});
   }
 }
@@ -323,7 +308,7 @@ export function stopFragmentPlayback() {
     try {
       source.onended = null;
       source.stop();
-    } catch (e) {}
+    } catch (_e) {}
     setFragmentAudioSource(null);
   }
   stopFragmentExclusivePlayback();
@@ -346,7 +331,7 @@ export async function seekFragmentPlayback(newStartTime) {
   stopStreamingPlayback();
   const source = getFragmentAudioSource();
   if (source) {
-    try { source.onended = null; source.stop(); } catch (e) {}
+    try { source.onended = null; source.stop(); } catch (_e) {}
     setFragmentAudioSource(null);
   }
   stopFragmentExclusivePlayback();

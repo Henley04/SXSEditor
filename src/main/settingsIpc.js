@@ -1,6 +1,6 @@
-const { ipcMain, dialog } = require('electron');
-const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, invalidateSettingsCache } = require('./settings');
-const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateNPUCache, getVocoderChunkFramesInfo, getVocoderChunkFramesTable } = require('./gpuInfo');
+const { ipcMain } = require('electron');
+const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting } = require('./settings');
+const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectNPUCached, getVocoderChunkFramesInfo, getVocoderChunkFramesTable } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
 const { enumerateDMLDevices } = require('../inference/pipeline');
 const { getSvsPipeline, resetSvsPipeline } = require('./svsIpc');

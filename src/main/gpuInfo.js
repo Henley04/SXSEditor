@@ -370,7 +370,7 @@ async function ensureGPUInfo(waitComplete = false) {
     _gpuPhase = 'full';
     // 依据显存预计算 vocoder 分片帧数（一次性，运行时复用）
     try { getCachedVocoderChunkFrames(); } catch (_) {}
-  } catch (e) {
+  } catch (_e) {
     _gpuInfoCache = [];
   }
   return _gpuInfoCache;

@@ -66,14 +66,6 @@ function isValidTokenValue(meta, v) {
     }
 }
 
-function looksLikeColor(v) {
-    return typeof v === 'string' && (v.startsWith('#') || v.startsWith('rgb') || v.startsWith('hsl'));
-}
-
-function looksLikeSize(v) {
-    return typeof v === 'string' && /^-?[0-9.]/.test(v);
-}
-
 /**
  * Validate a theme object. Pass `getThemeById` to enable extends validation
  * (parent existence + depth + cycle). If not provided, extends is only
@@ -131,7 +123,7 @@ export function validate(theme, opts = {}) {
             let meta = null;
             try {
                 // Lazy import to avoid circular dep
-                // eslint-disable-next-line global-require
+                 
                 const { TOKEN_CATALOG } = require('./tokenCatalog.js');
                 meta = TOKEN_CATALOG[name];
             } catch (_) {
@@ -195,7 +187,7 @@ export function validate(theme, opts = {}) {
  * Normalize a theme object: add -- prefix where missing, ensure version,
  * and compute isDark from --bg-app if not provided.
  */
-export function normalize(theme, opts = {}) {
+export function normalize(theme, _opts = {}) {
     const out = { ...theme };
     if (!out.version) out.version = '1.0.0';
     if (out.isDark === undefined) {

@@ -30,7 +30,6 @@ import {
   getCurrentProject,
   getSelectedPhonemeNoteId,
   getSelectedPhonemeIndex,
-  getPhonemeDragState,
   getHoveredNoteId,
   getActiveNoteId,
   getActiveAnchorIdx,
@@ -52,9 +51,6 @@ import {
   getDragMode,
   getKanjiGroups,
 } from './state.js';
-import {
-  findGroupByNoteId,
-} from './kanjiGroupUtils.js';
 
 const canvas = document.getElementById('piano-roll');
 const ctx = canvas.getContext('2d');
@@ -97,7 +93,7 @@ export function xToTime(x) {
 export function pitchToY(pitch) {
   const pianoAreaTop = HEADER_HEIGHT;
   const showParamArea = isParamAreaVisible();
-  const pianoAreaBottom = _getParentHeight() - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
+  const _pianoAreaBottom = _getParentHeight() - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   const maxPitch = 127;
   return pianoAreaTop + (maxPitch - pitch) * NOTE_HEIGHT - getScrollY();
 }
@@ -1912,7 +1908,7 @@ function _doRenderImpl(w, h) {
   // 预计算本帧常量，避免每 note 重复 getZoomX/getScrollX 函数调用
   const zoomX = getZoomX();
   const scrollX = getScrollX();
-  const scrollY = getScrollY();
+  const _scrollY = getScrollY();
   const beatToPixel = BEAT_WIDTH * zoomX;
 
   // Viewport culling: only iterate notes whose [start, start+duration)
@@ -2002,7 +1998,7 @@ function _doRenderImpl(w, h) {
     if (hoveredNote) {
       const hx = timeToX(hoveredNote.start);
       const hy = pitchToY(hoveredNote.pitch);
-      const hw = hoveredNote.duration * BEAT_WIDTH * getZoomX();
+      const _hw = hoveredNote.duration * BEAT_WIDTH * getZoomX();
       let tipText;
       if (inactiveNoteIds.has(hoveredId)) {
         tipText = '此 MIDI 与另一同时刻 MIDI 重叠，未被激活';

@@ -26,13 +26,15 @@ for (const stream of [process.stdout, process.stderr]) {
   }
 }
 
-// Catch unhandled errors to prevent silent crashes
-process.on('uncaughtException', (err) => {
-  try { process.stderr.write(`[FATAL] ${err.stack || err}\n`); } catch (_) {}
-});
-process.on('unhandledRejection', (reason) => {
-  try { process.stderr.write(`[UNHANDLED REJECTION] ${reason}\n`); } catch (_) {}
-});
+// Initialize comprehensive crash/error logging as early as possible.
+// crashReporter.start() and app.setPath('crashDumps', ...) MUST run before
+// app.ready to capture renderer native crashes. This module also installs
+// uncaughtException / unhandledRejection handlers (replacing the previous
+// stderr-only ones), patches console.log/warn/error to mirror output into a
+// per-session log file under appData/logs, rotates logs (keep 10) and dump
+// files (keep 3), and records dump file info in the log so users know which
+// files to attach when reporting issues.
+require('./main/crashReporter').init();
 
 // 启用 WebNN API，使渲染进程可通过 onnxruntime-web WebNN EP Using NPU 推理
 app.commandLine.appendSwitch('enable-features', 'WebMachineLearningNeuralNetwork');
@@ -105,10 +107,9 @@ const {
 } = require('./main/splashManager');
 
 // ---- Light module placeholders (assigned in STEP 1.5 inside app.whenReady) ----
-let createWindow, getMainWindow, buildAppMenu, registerWindowIpc;
-let loadMainLocale, t;
+let createWindow, registerWindowIpc;
+let loadMainLocale;
 let loadSettings, saveSettingsFile, setSettingsCachedDMLDevices;
-let authorizePath, isPathAllowed;
 let getModelDir;
 let classifyDeviceFromName, startGPUPreload, ensureGPUInfo, detectAllHardware;
 let checkAndDownloadModels, registerModelDownloadIpc;
@@ -220,13 +221,10 @@ app.whenReady().then(() => {
   // ========================================================================
   ({
     createWindow,
-    getMainWindow,
-    buildAppMenu,
     registerWindowIpc,
   } = require('./main/windowManager'));
-  ({ loadMainLocale, t } = require('./main/locale'));
+  ({ loadMainLocale } = require('./main/locale'));
   ({ loadSettings, saveSettingsFile, setCachedDMLDevices: setSettingsCachedDMLDevices } = require('./main/settings'));
-  ({ authorizePath, isPathAllowed } = require('./main/security'));
   ({ getModelDir } = require('./main/modelDir'));
   ({
     classifyDeviceFromName,

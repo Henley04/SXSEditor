@@ -342,7 +342,7 @@ function renderModelGroups(groups) {
             if (isExpanded) {
                 body.style.maxHeight = body.scrollHeight + 'px';
                 // 强制重排后设置为0以触发过渡
-                body.offsetHeight; // eslint-disable-line no-unused-expressions
+                body.offsetHeight;  
                 body.style.maxHeight = '0px';
                 body.classList.remove('expanded');
                 arrow.classList.remove('expanded');

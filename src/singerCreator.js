@@ -489,7 +489,7 @@ function pausePreviewPlayback() {
     try {
       previewAudioSource.onended = null;
       previewAudioSource.stop();
-    } catch (e) {}
+    } catch (_e) {}
     previewAudioSource = null;
   }
 
@@ -531,7 +531,7 @@ function stopPreviewPlayback() {
     try {
       previewAudioSource.onended = null;
       previewAudioSource.stop();
-    } catch (e) {}
+    } catch (_e) {}
     previewAudioSource = null;
   }
   if (previewAudioContext && previewAudioContext.state !== 'closed') {
@@ -954,7 +954,7 @@ btnTrimPreview.addEventListener('click', async () => {
 
 function stopTrimPreview() {
   if (trimPreviewSource) {
-    try { trimPreviewSource.onended = null; trimPreviewSource.stop(); } catch (e) {}
+    try { trimPreviewSource.onended = null; trimPreviewSource.stop(); } catch (_e) {}
     trimPreviewSource = null;
   }
   if (trimPreviewContext && trimPreviewContext.state !== 'closed') {

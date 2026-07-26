@@ -583,7 +583,7 @@ export function renderSingerList() {
               await loadSingerFile(singer.id, buffer, filePath);
               refreshAll();
             }
-          } catch (err) {
+          } catch (_err) {
       // TODO: translate garbled log
           }
         });
@@ -659,7 +659,7 @@ export function renderSingerList() {
         redo() {
           const singer = trackManager.getSinger(singerId);
           const color = singer ? singer.color : getCanvasColors().accent;
-          const frag = trackManager.addFragment({ singerId, startTime, duration: 4, color });
+          const _frag = trackManager.addFragment({ singerId, startTime, duration: 4, color });
           renderFragmentTimeline();
         }
       });
@@ -680,7 +680,7 @@ export function renderSingerList() {
             trackManager.removeSinger(singerId);
             history.push({
               undo() {
-                const restoredSinger = trackManager.addSinger(singerClone);
+                const _restoredSinger = trackManager.addSinger(singerClone);
                 for (const fc of fragmentsClone) {
                   trackManager.addFragment(fc);
                 }

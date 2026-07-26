@@ -18,11 +18,10 @@
 const path = require('path');
 const fs = require('fs');
 const ort = require('onnxruntime-node');
-const { loadSettings } = require('../src/main/settings');
 
 // 复用 pipeline 的工具
-const { createFloatTensor, disposeTensor, gpuDrain, gpuDrainLong } = require('../src/inference/pipeline/utils');
-const { MEL_DIM, HOP_SIZE, SIFIGAN_HOP_SIZE } = require('../src/inference/pipeline/constants');
+const { createFloatTensor, disposeTensor, gpuDrainLong } = require('../src/inference/pipeline/utils');
+const { MEL_DIM } = require('../src/inference/pipeline/constants');
 
 const args = process.argv.slice(2);
 const precision = args[0] === 'fp16' ? 'fp16' : 'fp32';

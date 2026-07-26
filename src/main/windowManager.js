@@ -110,6 +110,35 @@ function buildAppMenu() {
         { role: 'togglefullscreen', label: t('menu.fullscreen') },
       ],
     },
+    {
+      label: t('menu.help'),
+      submenu: [
+        {
+          label: t('menu.openLogDir'),
+          click: () => {
+            try {
+              const nodePath = require('node:path');
+              const logDir = nodePath.join(require('electron').app.getPath('userData'), 'logs');
+              require('electron').shell.openPath(logDir);
+            } catch (err) {
+              console.warn('[Menu] Open log dir failed:', err.message);
+            }
+          },
+        },
+        {
+          label: t('menu.openDumpDir'),
+          click: () => {
+            try {
+              const nodePath = require('node:path');
+              const dumpDir = nodePath.join(require('electron').app.getPath('userData'), 'dumps');
+              require('electron').shell.openPath(dumpDir);
+            } catch (err) {
+              console.warn('[Menu] Open dump dir failed:', err.message);
+            }
+          },
+        },
+      ],
+    },
   ];
 
   const menu = Menu.buildFromTemplate(menuTemplate);
