@@ -13,6 +13,32 @@ let _visibilityHandlerRegistered = false;
 let _exclusiveUpdateFn = null;
 let _sharedUpdateFn = null;
 
+function _onVisibilityChange() {
+  if (document.hidden) {
+    if (state.exclusivePlaybackRaf) {
+      cancelAnimationFrame(state.exclusivePlaybackRaf);
+      state.exclusivePlaybackRaf = null;
+    }
+    if (state.playheadRaf) {
+      cancelAnimationFrame(state.playheadRaf);
+      state.playheadRaf = null;
+    }
+  } else {
+    if (state.isPlaying && state.useExclusiveMode && _exclusiveUpdateFn && !state.exclusivePlaybackRaf) {
+      state.exclusivePlaybackRaf = requestAnimationFrame(_exclusiveUpdateFn);
+    } else if (state.isPlaying && !state.useExclusiveMode && _sharedUpdateFn && !state.playheadRaf) {
+      state.playheadRaf = requestAnimationFrame(_sharedUpdateFn);
+    }
+  }
+}
+
+function _onBeforeUnloadForVisibility() {
+  if (_visibilityHandlerRegistered) {
+    document.removeEventListener('visibilitychange', _onVisibilityChange);
+    _visibilityHandlerRegistered = false;
+  }
+}
+
 // Streaming playback state (main page Play All with diffStepChunk).
 // Buffer-based waiting: when playback catches up to the inference frontier
 // (all received audio has been played), pause the playhead and show
@@ -32,24 +58,8 @@ let _streamingActiveSourceCount = 0;    // Currently-playing source count
 function _ensureVisibilityHandler() {
   if (_visibilityHandlerRegistered) return;
   _visibilityHandlerRegistered = true;
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      if (state.exclusivePlaybackRaf) {
-        cancelAnimationFrame(state.exclusivePlaybackRaf);
-        state.exclusivePlaybackRaf = null;
-      }
-      if (state.playheadRaf) {
-        cancelAnimationFrame(state.playheadRaf);
-        state.playheadRaf = null;
-      }
-    } else {
-      if (state.isPlaying && state.useExclusiveMode && _exclusiveUpdateFn && !state.exclusivePlaybackRaf) {
-        state.exclusivePlaybackRaf = requestAnimationFrame(_exclusiveUpdateFn);
-      } else if (state.isPlaying && !state.useExclusiveMode && _sharedUpdateFn && !state.playheadRaf) {
-        state.playheadRaf = requestAnimationFrame(_sharedUpdateFn);
-      }
-    }
-  });
+  document.addEventListener('visibilitychange', _onVisibilityChange);
+  window.addEventListener('beforeunload', _onBeforeUnloadForVisibility, { once: true });
 }
 
 export async function ensurePipelineInitialized() {

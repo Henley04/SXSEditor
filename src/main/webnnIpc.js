@@ -12,6 +12,17 @@ let _npuFailureTime = 0;
 const NPU_FAILURE_TTL_MS = 5 * 60 * 1000; // 5 分钟后允许重新检测
 
 /**
+ * 创建一个在超时后自动清理对应 IPC handler 的 timeout。
+ * 避免 renderer 未响应时 handleOnce handler 一直残留。
+ */
+function _createIpcTimeout(responseChannel, ms, callback) {
+  return setTimeout(() => {
+    try { ipcMain.removeHandler(responseChannel); } catch (_) { /* handler 可能已被响应移除 */ }
+    callback();
+  }, ms);
+}
+
+/**
  * 判断缓存的失败结果是否已过期（超过 TTL 则允许重新检测）
  */
 function _isFailureCacheExpired() {
@@ -40,14 +51,15 @@ function registerWebnnIpc() {
 
     return new Promise((resolve) => {
       const requestId = `webnn-detect-${Date.now()}`;
-      const timeout = setTimeout(() => {
+      const responseChannel = `webnn:detectNPU:response:${requestId}`;
+      const timeout = _createIpcTimeout(responseChannel, 10000, () => {
         const result = { webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: 'Detection timeout' };
         _npuDetectionCache = result;
         _npuFailureTime = Date.now();
         resolve(result);
-      }, 10000);
+      });
 
-      ipcMain.handleOnce(`webnn:detectNPU:response:${requestId}`, async (_, result) => {
+      ipcMain.handleOnce(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         _npuDetectionCache = result;
         if (!result.npuAvailable && !result.gpuAvailable) {
@@ -71,11 +83,12 @@ function registerWebnnIpc() {
 
     return new Promise((resolve) => {
       const requestId = `webnn-load-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const timeout = setTimeout(() => {
+      const responseChannel = `webnn:loadModel:response:${requestId}`;
+      const timeout = _createIpcTimeout(responseChannel, loadTimeout, () => {
         resolve({ success: false, error: 'Load model timeout' });
-      }, loadTimeout);
+      });
 
-      ipcMain.handleOnce(`webnn:loadModel:response:${requestId}`, async (_, result) => {
+      ipcMain.handleOnce(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         resolve(result);
       });
@@ -90,11 +103,12 @@ function registerWebnnIpc() {
 
     return new Promise((resolve) => {
       const requestId = `webnn-unload-${Date.now()}`;
-      const timeout = setTimeout(() => {
+      const responseChannel = `webnn:unloadModel:response:${requestId}`;
+      const timeout = _createIpcTimeout(responseChannel, 10000, () => {
         resolve({ success: false, error: 'Unload model timeout' });
-      }, 10000);
+      });
 
-      ipcMain.handleOnce(`webnn:unloadModel:response:${requestId}`, async (_, result) => {
+      ipcMain.handleOnce(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         resolve(result);
       });
@@ -109,11 +123,12 @@ function registerWebnnIpc() {
 
     return new Promise((resolve, reject) => {
       const requestId = `webnn-infer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const timeout = setTimeout(() => {
+      const responseChannel = `webnn:runInference:response:${requestId}`;
+      const timeout = _createIpcTimeout(responseChannel, 120000, () => {
         reject(new Error('Inference timeout'));
-      }, 120000);
+      });
 
-      ipcMain.handleOnce(`webnn:runInference:response:${requestId}`, async (_, result) => {
+      ipcMain.handleOnce(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         if (result.error) {
           reject(new Error(result.error));
@@ -132,9 +147,10 @@ function registerWebnnIpc() {
 
     return new Promise((resolve) => {
       const requestId = `webnn-status-${Date.now()}`;
-      const timeout = setTimeout(() => resolve({}), 5000);
+      const responseChannel = `webnn:getStatus:response:${requestId}`;
+      const timeout = _createIpcTimeout(responseChannel, 5000, () => resolve({}));
 
-      ipcMain.handleOnce(`webnn:getStatus:response:${requestId}`, async (_, result) => {
+      ipcMain.handleOnce(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         resolve(result);
       });
@@ -150,9 +166,10 @@ function registerWebnnIpc() {
 
     return new Promise((resolve) => {
       const requestId = `webnn-synth-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      const timeout = setTimeout(() => resolve({ error: 'Synthesis timeout' }), 600000);
+      const responseChannel = `webnn:runSynthesis:response:${requestId}`;
+      const timeout = _createIpcTimeout(responseChannel, 600000, () => resolve({ error: 'Synthesis timeout' }));
 
-      ipcMain.handleOnce(`webnn:runSynthesis:response:${requestId}`, async (_, result) => {
+      ipcMain.handleOnce(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         resolve(result);
       });
@@ -215,11 +232,12 @@ async function detectNPUAvailability() {
       }
 
       const requestId = `webnn-detect-npu-avail-${Date.now()}`;
-      const timeout = setTimeout(() => {
+      const responseChannel = `webnn:detectNPU:response:${requestId}`;
+      const timeout = _createIpcTimeout(responseChannel, 10000, () => {
         resolve({ webnnAvailable: false, npuAvailable: false, gpuAvailable: false, details: 'Detection timeout' });
-      }, 10000);
+      });
 
-      ipcMain.handleOnce(`webnn:detectNPU:response:${requestId}`, async (_, result) => {
+      ipcMain.handleOnce(responseChannel, async (_, result) => {
         clearTimeout(timeout);
         resolve(result);
       });
