@@ -58,6 +58,22 @@ function getForbiddenPrefixes() {
 }
 
 function isSystemPath(dirPath) {
+  if (!dirPath || typeof dirPath !== 'string') return false;
+
+  // Normalize Windows-style separators and case so the check works regardless
+  // of the current host OS (e.g. CI running on Linux validating Windows paths).
+  const normalized = dirPath.replace(/\\/g, '/').toLowerCase();
+  const windowsSystemPrefixes = [
+    'c:/windows',
+    'c:/program files',
+    'c:/program files (x86)',
+    'c:/programdata',
+  ];
+  const isWindowsSystemPath = windowsSystemPrefixes.some(prefix =>
+    normalized === prefix || normalized.startsWith(prefix + '/')
+  );
+  if (isWindowsSystemPath) return true;
+
   const resolvedPath = path.resolve(dirPath);
   const forbiddenPrefixes = getForbiddenPrefixes();
   return forbiddenPrefixes.some(prefix => resolvedPath.startsWith(prefix + path.sep) || resolvedPath === prefix);
