@@ -450,8 +450,7 @@ app.whenReady().then(() => {
     // child_process/url; updateChecker → same as modelManager) on the
     // critical path before createWindow(). The renderer does not call
     // audio:*/model:download:*/update:* IPC at startup.
-    ({ registerAudioIpc, resetAudioManagers: _resetAudio } = require('./main/audioIpc'));
-    resetAudioManagers = _resetAudio;
+    ({ registerAudioIpc, resetAudioManagers } = require('./main/audioIpc'));
     ({ checkAndDownloadModels, registerModelDownloadIpc } = require('./main/modelDownload'));
     ({ registerUpdateIpc, cleanupInstallerTempFiles } = require('./main/updateIpc'));
 
