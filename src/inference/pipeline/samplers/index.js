@@ -18,6 +18,7 @@
 const EulerSolver = require('./euler');
 const HeunSolver = require('./heun');
 const ExtrapSolver = require('./extrap');
+const Stork2Solver = require('./stork2');
 
 // 求解器注册表：value -> {label, labelKey, descKey, create()}
 const SOLVERS = {
@@ -38,6 +39,12 @@ const SOLVERS = {
         labelKey: 'main.exportDialog.samplerExtrap',
         descKey: 'main.exportDialog.samplerExtrapDesc',
         create: () => new ExtrapSolver(2),
+    },
+    stork2: {
+        label: 'STORK-2',
+        labelKey: 'main.exportDialog.samplerStork2',
+        descKey: 'main.exportDialog.samplerStork2Desc',
+        create: () => new Stork2Solver(8),
     },
 };
 
@@ -74,6 +81,7 @@ module.exports = {
     EulerSolver,
     HeunSolver,
     ExtrapSolver,
+    Stork2Solver,
     SOLVERS,
     DEFAULT_SOLVER,
     VALID_SOLVERS,

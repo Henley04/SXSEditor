@@ -2,6 +2,7 @@ const { expect } = require('chai');
 const EulerSolver = require('../src/inference/pipeline/samplers/euler');
 const HeunSolver = require('../src/inference/pipeline/samplers/heun');
 const ExtrapSolver = require('../src/inference/pipeline/samplers/extrap');
+const Stork2Solver = require('../src/inference/pipeline/samplers/stork2');
 const { createSampler, resolveSamplerName, SOLVERS, DEFAULT_SOLVER, LEGACY_ALIASES } = require('../src/inference/pipeline/samplers');
 
 /**
@@ -11,9 +12,10 @@ const { createSampler, resolveSamplerName, SOLVERS, DEFAULT_SOLVER, LEGACY_ALIAS
  * 1. Euler：t=(step+0.5)/N, delta = v*dt（写入 deltaBuf）
  * 2. Heun 二阶梯形公式，末步退化为 Euler（tNext>1 保护）
  * 3. Extrapolated Euler 首步退化为 Euler，后续步用速度外推，含数值稳定性保护
- * 4. 注册表与工厂函数（含 stork→extrap 旧名称兼容）
- * 5. NFE 计数正确
- * 6. combine CFG/Rescale 数值正确性
+ * 4. STORK-2：首步 Euler bootstrap，常量速度场退化为 Euler，RKC 递推正确性
+ * 5. 注册表与工厂函数（含 stork→extrap 旧名称兼容）
+ * 6. NFE 计数正确
+ * 7. combine CFG/Rescale 数值正确性
  */
 
 const MEL_DIM = 4;
@@ -243,6 +245,184 @@ describe('Samplers - 求解器单元测试', () => {
         });
     });
 
+    describe('Stork2Solver', () => {
+        it('首步退化为 Euler bootstrap（无历史速度）', async () => {
+            const c = 0.5;
+            const N = 4;
+            const solver = new Stork2Solver(8);
+            const buffers = makeBuffers();
+            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
+            const { nfe } = await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(c, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: N, xtData, buffers,
+            });
+            // 首步：delta = v * dt = c / N
+            expect(nfe).to.equal(1);
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(buffers.deltaBuf[i]).to.be.closeTo(c / N, 1e-6);
+            }
+        });
+
+        it('常量速度场后续步也退化为 Euler（v_deriv=0, RKC 稳定性多项式 R(0)=1）', async () => {
+            // 关键性质：对于 dx/dt = const，RKC 二阶递推满足 R_s(0)=1, R_s'(0)=1，
+            // 即 Y_s = sample + v*dt，delta = v*dt（与 Euler 完全一致）。
+            const c = 0.5;
+            const N = 4;
+            const solver = new Stork2Solver(8);
+            const buffers = makeBuffers();
+            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
+            // 首步 bootstrap
+            await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(c, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: N, xtData, buffers,
+            });
+            // 第二步：v_prev = v = c, v_deriv = 0, 所有 sub-stage 的 Taylor = v
+            const { nfe } = await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(c, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 1, totalSteps: N, xtData, buffers,
+            });
+            expect(nfe).to.equal(1);
+            // 常量场：delta 应等于 v*dt = c/N
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(buffers.deltaBuf[i]).to.be.closeTo(c / N, 1e-6);
+            }
+        });
+
+        it('NFE 始终为 1（virtual NFE: s 个 sub-stage 不调模型）', async () => {
+            const solver = new Stork2Solver(8);
+            const buffers = makeBuffers();
+            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
+            for (let step = 0; step < 4; step++) {
+                const { nfe } = await solver.step({
+                    evalDiffStep: makeConstEvalDiffStep(0.5 * step, false),
+                    combine: makeIdentityCombine(buffers.vBuf),
+                    step, totalSteps: 4, xtData, buffers,
+                });
+                expect(nfe).to.equal(1);
+            }
+        });
+
+        it('reset() 清空跨步状态（下一步重新 bootstrap）', async () => {
+            const solver = new Stork2Solver(8);
+            const buffers = makeBuffers();
+            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
+            // 跑两步建立状态
+            await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(0.5, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: 4, xtData, buffers,
+            });
+            await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(0.5, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 1, totalSteps: 4, xtData, buffers,
+            });
+            // reset 后应重新 bootstrap
+            solver.reset();
+            expect(solver._velPreds.length).to.equal(0);
+            expect(solver._Yj).to.be.null;
+            // 首步应再次退化为 Euler
+            const { nfe } = await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(0.5, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: 4, xtData, buffers,
+            });
+            expect(nfe).to.equal(1);
+            // bootstrap: delta = v * dt
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(buffers.deltaBuf[i]).to.be.closeTo(0.5 / 4, 1e-6);
+            }
+        });
+
+        it('s=1 自动 fallback 到 s=8（避免除零）', () => {
+            const solver = new Stork2Solver(1);
+            // s=1 会导致 muTildeBase 除零，构造函数应 fallback
+            expect(solver.s).to.equal(8);
+        });
+
+        it('s=0 自动 fallback 到 s=8', () => {
+            const solver = new Stork2Solver(0);
+            expect(solver.s).to.equal(8);
+        });
+
+        it('s=2 时正常工作（最小有效 sub-stage 数）', async () => {
+            const c = 0.5;
+            const N = 4;
+            const solver = new Stork2Solver(2);
+            const buffers = makeBuffers();
+            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
+            // 首步 bootstrap
+            await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(c, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: N, xtData, buffers,
+            });
+            // 第二步: s=2, 跑 j=1 和 j=2
+            const { nfe } = await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(c, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 1, totalSteps: N, xtData, buffers,
+            });
+            expect(nfe).to.equal(1);
+            // 常量场: delta 仍应 = v*dt
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(buffers.deltaBuf[i]).to.be.closeTo(c / N, 1e-6);
+            }
+        });
+
+        it('_bCoeff 闭式公式正确', () => {
+            const solver = new Stork2Solver(8);
+            expect(solver._bCoeff(0)).to.equal(1);
+            expect(solver._bCoeff(1)).to.be.closeTo(1 / 3, 1e-10);
+            // b(2) = 4*1*6 / (3*2*3*4*5) = 24/360 = 1/15
+            expect(solver._bCoeff(2)).to.be.closeTo(1 / 15, 1e-10);
+            // b(3) = 4*2*7 / (3*3*4*5*6) = 56/1080 = 7/135
+            expect(solver._bCoeff(3)).to.be.closeTo(7 / 135, 1e-10);
+        });
+
+        it('时变速度场产生不同于 Euler 的 delta（验证 RKC 递推生效）', async () => {
+            // 速度场随 step 线性变化: v = c0 + c1*step
+            // v_deriv = (v_prev - v) / dt ≠ 0, Taylor 展开引入校正
+            const c0 = 1.0, c1 = 0.5;
+            const N = 4;
+            const dt = 1 / N;
+            const solver = new Stork2Solver(8);
+            const buffers = makeBuffers();
+            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
+            // 首步 bootstrap (v = c0)
+            await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(c0, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: N, xtData, buffers,
+            });
+            // 第二步: v = c0 + c1*1 = 1.5, v_prev = 1.0
+            // v_deriv = (1.0 - 1.5) / dt = -0.5 * N = -2.0
+            // Euler delta = v * dt = 1.5 * 0.25 = 0.375
+            // STORK-2 delta ≠ 0.375（RKC 递推 + Taylor 校正会改变结果）
+            await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(c0 + c1 * 1, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 1, totalSteps: N, xtData, buffers,
+            });
+            const eulerDelta = (c0 + c1 * 1) * dt;
+            let allDifferent = true;
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                if (Math.abs(buffers.deltaBuf[i] - eulerDelta) < 1e-6) {
+                    allDifferent = false;
+                    break;
+                }
+            }
+            expect(allDifferent).to.be.true;
+            // delta 应为有限值（无 NaN/Inf）
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(Number.isFinite(buffers.deltaBuf[i])).to.be.true;
+            }
+        });
+    });
+
     describe('combine CFG/Rescale 数值正确性', () => {
         it('CFG + Rescale 产生正确的缩放输出（手算验证）', async () => {
             // 构造 condPred: 2 帧 × 2 dim，ptFrameCount=1
@@ -333,16 +513,18 @@ describe('Samplers - 求解器单元测试', () => {
             expect(DEFAULT_SOLVER).to.equal('euler');
         });
 
-        it('SOLVERS 包含 euler/heun/extrap', () => {
+        it('SOLVERS 包含 euler/heun/extrap/stork2', () => {
             expect(SOLVERS).to.have.property('euler');
             expect(SOLVERS).to.have.property('heun');
             expect(SOLVERS).to.have.property('extrap');
+            expect(SOLVERS).to.have.property('stork2');
         });
 
         it('resolveSamplerName 合法值原样返回', () => {
             expect(resolveSamplerName('euler')).to.equal('euler');
             expect(resolveSamplerName('heun')).to.equal('heun');
             expect(resolveSamplerName('extrap')).to.equal('extrap');
+            expect(resolveSamplerName('stork2')).to.equal('stork2');
         });
 
         it('resolveSamplerName 旧名称 stork → extrap（向后兼容）', () => {
@@ -365,6 +547,7 @@ describe('Samplers - 求解器单元测试', () => {
             expect(createSampler('euler')).to.be.instanceOf(EulerSolver);
             expect(createSampler('heun')).to.be.instanceOf(HeunSolver);
             expect(createSampler('extrap')).to.be.instanceOf(ExtrapSolver);
+            expect(createSampler('stork2')).to.be.instanceOf(Stork2Solver);
             // 旧名称也返回 ExtrapSolver
             expect(createSampler('stork')).to.be.instanceOf(ExtrapSolver);
             // 非法值返回 Euler
