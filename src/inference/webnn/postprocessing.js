@@ -53,27 +53,35 @@ export async function runVocoder({ xtData, totalFrames, floatType, npuVocoderBat
         const vocPrepMs = performance.now() - tVocPrep;
 
         const tVocInfer = performance.now();
-        const vocoderResults = await runSession('vocoder', { mel: melTensor });
-        const vocInferMs = performance.now() - tVocInfer;
+        // W17: ensure vocoder input/output tensors are disposed even if inference
+        // or post-processing throws (was leaking on exception).
+        let vocoderResults = null;
+        try {
+            vocoderResults = await runSession('vocoder', { mel: melTensor });
+            const vocInferMs = performance.now() - tVocInfer;
 
-        const tVocPost = performance.now();
-        const waveformRaw = vocoderResults['waveform'];
-        const waveform = outputToFloat32(waveformRaw);
-        // Vocoder ISTFT Conv + Slice 产生略少于 seq_len*HOP_SIZE 的样本
-        // 实际输出 = seq_len*HOP_SIZE - VOCODER_OUTPUT_TRIM_SAMPLES
-        const trimmed = waveform.subarray(0, Math.min(waveform.length, totalSamples));
-        // float32 输出下 waveform 是张量数据视图，slice() 取独立副本后即可释放张量
-        audioData = trimmed.slice(); // TypedArray.slice() 比 Array.from() 快得多
-        // 释放 vocoder 输入和输出张量
-        disposeTensor(melTensor);
-        disposeTensor(waveformRaw);
-        const vocPostMs = performance.now() - tVocPost;
+            const tVocPost = performance.now();
+            const waveformRaw = vocoderResults['waveform'];
+            const waveform = outputToFloat32(waveformRaw);
+            // Vocoder ISTFT Conv + Slice 产生略少于 seq_len*HOP_SIZE 的样本
+            // 实际输出 = seq_len*HOP_SIZE - VOCODER_OUTPUT_TRIM_SAMPLES
+            const trimmed = waveform.subarray(0, Math.min(waveform.length, totalSamples));
+            // float32 输出下 waveform 是张量数据视图，slice() 取独立副本后即可释放张量
+            audioData = trimmed.slice(); // TypedArray.slice() 比 Array.from() 快得多
+            const vocPostMs = performance.now() - tVocPost;
 
-        vocChunkCount = 1;
-        vocPrepTotal = vocPrepMs;
-        vocInferTotal = vocInferMs;
-        vocPostTotal = vocPostMs;
-        console.log(`[WebNN] vocoder (single): prep=${vocPrepMs.toFixed(1)} infer=${vocInferMs.toFixed(1)} post=${vocPostMs.toFixed(1)} [${totalFrames}frames -> ${totalSamples}samples${useStaticShapes ? ', NPU static' : ''}]`);
+            vocChunkCount = 1;
+            vocPrepTotal = vocPrepMs;
+            vocInferTotal = vocInferMs;
+            vocPostTotal = vocPostMs;
+            console.log(`[WebNN] vocoder (single): prep=${vocPrepMs.toFixed(1)} infer=${vocInferMs.toFixed(1)} post=${vocPostMs.toFixed(1)} [${totalFrames}frames -> ${totalSamples}samples${useStaticShapes ? ', NPU static' : ''}]`);
+        } finally {
+            // 释放 vocoder 输入和输出张量
+            disposeTensor(melTensor);
+            if (vocoderResults && vocoderResults['waveform']) {
+                disposeTensor(vocoderResults['waveform']);
+            }
+        }
 
         // Peak 归一化（与 DML postprocessing.js:788 单 chunk 路径一致）。
         // 在 onChunkComplete 流式推送之前归一化，确保流式音频与最终返回音频响度一致。

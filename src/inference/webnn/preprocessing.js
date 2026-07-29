@@ -66,12 +66,26 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
 
     // Run 4 encoders in parallel (they are independent)
     const t4 = performance.now();
-    const [textResults, pitchResults, typeResults, f0Results] = await Promise.all([
+    // W17: use allSettled so a rejection in one encoder doesn't leak the
+    // successfully-resolved output tensors of the others. With Promise.all,
+    // the first rejection discards the resolved results without disposing them.
+    const encoderSettled = await Promise.allSettled([
         runSession('noteTextEncoder', { input_ids: new ort.Tensor('int64', encPaddedText, [1, encSeqLen]) }),
         runSession('notePitchEncoder', { input_ids: new ort.Tensor('int64', encPaddedPitch, [1, encSeqLen]) }),
         runSession('noteTypeEncoder', { input_ids: new ort.Tensor('int64', encPaddedType, [1, encSeqLen]) }),
         runSession('f0Encoder', { input_ids: new ort.Tensor('int64', encPaddedF0, [1, encF0Len]) }),
     ]);
+    const firstReject = encoderSettled.find(s => s.status === 'rejected');
+    if (firstReject) {
+        // Dispose all successfully-resolved output tensors to prevent NPU/GPU memory leak.
+        for (const s of encoderSettled) {
+            if (s.status === 'fulfilled' && s.value && s.value['embeddings']) {
+                disposeTensor(s.value['embeddings']);
+            }
+        }
+        throw firstReject.reason;
+    }
+    const [textResults, pitchResults, typeResults, f0Results] = encoderSettled.map(s => s.value);
     const encInferMs = performance.now() - t4;
     console.log(`[WebNN] 4 encoders (parallel): ${encInferMs.toFixed(0)}ms [tokens=${combinedTokenCount}, f0Frames=${combinedFrames}${useStaticShapes ? ', NPU static' : ''}]`);
     console.log(`[WebNN]   enc prep: ${(t4 - tEncPrep).toFixed(1)}ms, infer: ${encInferMs.toFixed(1)}ms`);
@@ -106,10 +120,15 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     const preflowSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : combinedTokenCount;
     const preflowTokenEmb = useStaticShapes ? padToLength(tokenEmb, preflowSeqLen * EMBED_DIM) : tokenEmb;
     const featuresTensor = createFloatTensor(floatType, preflowTokenEmb, [1, preflowSeqLen, EMBED_DIM]);
-    const preflowResults = await runSession('preflow', { features: featuresTensor });
+    // W17: ensure preflow input tensor is disposed even if runSession rejects
+    // or post-encoder processing throws (input tensor leak on exception).
+    let preflowResults;
+    try {
+        preflowResults = await runSession('preflow', { features: featuresTensor });
+    } finally {
+        disposeTensor(featuresTensor);
+    }
     const processedTokenEmb = useStaticShapes ? trimOutputToLength(preflowResults['processed_features'], combinedTokenCount) : outputToFloat32(preflowResults['processed_features']);
-    // 释放 preflow 输入张量
-    disposeTensor(featuresTensor);
     console.log(`[WebNN] preflow: ${(performance.now() - tpf).toFixed(0)}ms [${combinedTokenCount}tokens × ${EMBED_DIM}${useStaticShapes ? ', NPU static' : ''}]`);
 
     // Build combined mel2token: prompt frames → prompt token indices (unchanged),
@@ -144,12 +163,18 @@ export async function runEncoderStage({ sequences, tokenCount, totalFrames, ptFr
     const condSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalCondFrames;
     const paddedCondCode = useStaticShapes ? padToLength(condCodeData, condSeqLen * EMBED_DIM) : condCodeData;
     const condCodeTensor = createFloatTensor(floatType, paddedCondCode, [1, condSeqLen, EMBED_DIM]);
-    const condEmbResults = await runSession('condEmb', { cond_code: condCodeTensor });
+    // W17: ensure condEmb input tensor is disposed even if runSession rejects
+    // or post-encoder processing throws (input tensor leak on exception).
+    let condEmbResults;
+    try {
+        condEmbResults = await runSession('condEmb', { cond_code: condCodeTensor });
+    } finally {
+        disposeTensor(condCodeTensor);
+    }
     // combinedCond 需返回给调用方，取独立拷贝
     const combinedCondRaw = useStaticShapes ? trimOutputToLength(condEmbResults['cond_embedding'], totalCondFrames) : outputToFloat32(condEmbResults['cond_embedding']);
     const combinedCond = combinedCondRaw.slice();
-    // 释放 condEmb 输入和输出张量
-    disposeTensor(condCodeTensor);
+    // 释放 condEmb 输出张量
     disposeTensor(condEmbResults['cond_embedding']);
     console.log(`[WebNN] condEmb: ${(performance.now() - tce).toFixed(0)}ms [${totalCondFrames}frames × ${COND_DIM}${useStaticShapes ? ', NPU static' : ''}]`);
 
