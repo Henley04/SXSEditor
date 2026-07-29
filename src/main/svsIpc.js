@@ -142,7 +142,8 @@ function registerSvsIpc() {
       const precision = settings.modelPrecision || 'fp32';
       const modelDir = getModelDir();
       if (!checkJpModelsExist(modelDir, precision)) {
-        return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
+        // W19: use i18n key instead of hardcoded Chinese error message.
+        return { error: 'JP_MODELS_MISSING', message: t('error.jpModelNotDownloaded') };
       }
     }
 
@@ -189,7 +190,8 @@ function registerSvsIpc() {
       const precision = settings.modelPrecision || 'fp32';
       const modelDir = getModelDir();
       if (!checkJpModelsExist(modelDir, precision)) {
-        return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
+        // W19: use i18n key instead of hardcoded Chinese error message.
+        return { error: 'JP_MODELS_MISSING', message: t('error.jpModelNotDownloaded') };
       }
     }
 
@@ -258,7 +260,8 @@ function registerSvsIpc() {
       const precision = settings.modelPrecision || 'fp32';
       const modelDir = getModelDir();
       if (!checkJpModelsExist(modelDir, precision)) {
-        return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
+        // W19: use i18n key instead of hardcoded Chinese error message.
+        return { error: 'JP_MODELS_MISSING', message: t('error.jpModelNotDownloaded') };
       }
     }
 

@@ -419,7 +419,8 @@ export async function playAll() {
         completedFrags++;
         const overallProgress = (completedFrags / totalFrags) * 100;
         const currentSeconds = (overallProgress / 100) * totalSeconds;
-        dom.timeDisplay.textContent = t('main.synthesizingShort') + ': ' + formatTime(currentSeconds) + ' / ' + formatTime(totalSeconds);
+        // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+        dom.timeDisplay.textContent = t('main.synthesizingProgressTime', { current: formatTime(currentSeconds), total: formatTime(totalSeconds) });
       }
 
       const maxEndBeat = globalLastEnd;
@@ -450,7 +451,8 @@ export async function playAll() {
 
   } catch (error) {
     console.error('Synthesis failed:', error);
-    showAlertDialog(t('main.synthesisFailed') + ': ' + error.message);
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('main.synthesisFailedDetail', { detail: error.message }));
     dom.timeDisplay.textContent = formatTime(0);
   } finally {
     state.isSynthesizing = false;
@@ -739,7 +741,7 @@ export function pausePlayback() {
       cancelAnimationFrame(state.playheadRaf);
       state.playheadRaf = null;
     }
-    dom.timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
+    dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
     return;
   }
@@ -754,7 +756,7 @@ export function pausePlayback() {
       cancelAnimationFrame(state.exclusivePlaybackRaf);
       state.exclusivePlaybackRaf = null;
     }
-    dom.timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
+    dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
   } else {
     if (!state.currentAudioSource) return;
@@ -764,7 +766,7 @@ export function pausePlayback() {
     stopAudioSource();
     state.isPlaying = false;
     // stopAudioSource 已 cancel rAF，但不会清除画布；这里手动绘制暂停态播放头
-    dom.timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
+    dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
   }
 }

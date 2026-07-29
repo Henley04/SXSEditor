@@ -1,6 +1,15 @@
 import zhCN from './zh-CN.js';
 import en from './en.js';
 
+// B7: NOTE — there are two parallel i18n systems in this codebase:
+//   1. This file (src/i18n/index.js + zh-CN.js + en.js) — ESM, used by the
+//      renderer process.
+//   2. src/main/locale.js — CJS, used by the main process.
+// They are intentionally separate (renderer vs main) but must be kept in
+// SYNC: any key used by both processes must exist in both dictionaries with
+// matching semantics. When adding a key, check whether the other system
+// needs it too.
+
 const STORAGE_KEY = 'sxseditor-locale';
 
 const locales = {
@@ -71,6 +80,29 @@ function t(key, params) {
     });
 }
 
+/**
+ * W25: Translate with an explicit fallback. t() returns the raw key string
+ * when a key is missing (never undefined), so `t(key) || 'fallback'` is dead
+ * code that masks missing-key bugs and can leak raw key names (e.g.
+ * 'common.confirm') to users. tOr() returns `fallback` ONLY when the key is
+ * genuinely absent from both the current locale and the English dictionary.
+ */
+function tOr(key, fallback, params) {
+    let value = resolve(locales[currentLocale], key);
+    if (value === undefined) {
+        value = resolve(locales['en'], key);
+    }
+    if (value === undefined) {
+        return fallback;
+    }
+    if (params) {
+        return value.replace(/\{(\w+)\}/g, (_, name) => {
+            return params[name] !== undefined ? params[name] : `{${name}}`;
+        });
+    }
+    return value;
+}
+
 function applyLocale() {
     const elements = document.querySelectorAll('[data-i18n]');
     elements.forEach(el => {
@@ -93,6 +125,17 @@ function applyLocale() {
         const key = el.getAttribute('data-i18n-title');
         if (key) {
             el.title = t(key);
+        }
+    });
+
+    // B9: support aria-label so accessibility labels can be localized too
+    // (previously only data-i18n / -placeholder / -title were handled, which
+    // left aria-labels like "波形预览" hardcoded in HTML).
+    const ariaLabelElements = document.querySelectorAll('[data-i18n-aria-label]');
+    ariaLabelElements.forEach(el => {
+        const key = el.getAttribute('data-i18n-aria-label');
+        if (key) {
+            el.setAttribute('aria-label', t(key));
         }
     });
 }
@@ -124,4 +167,4 @@ async function initI18n() {
     }
 }
 
-export { t, setLocale, getLocale, applyLocale, initI18n };
+export { t, tOr, setLocale, getLocale, applyLocale, initI18n };

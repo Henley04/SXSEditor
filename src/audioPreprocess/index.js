@@ -28,5 +28,22 @@ initWindowTheme();
 
 // Cleanup on unload
 window.addEventListener('beforeunload', () => {
+  // W21: remove registered IPC listeners (mirrors fragmentEditor pattern).
+  if (state._ipcCleanups) {
+    for (const cleanup of state._ipcCleanups) {
+      try { cleanup(); } catch (_) {}
+    }
+    state._ipcCleanups.length = 0;
+  }
+  // W21: stop pending playback rAF loop and close the audio context so
+  // resources are released on unload.
+  if (state.playbackRaf) {
+    cancelAnimationFrame(state.playbackRaf);
+    state.playbackRaf = null;
+  }
+  if (state.audioContext) {
+    try { state.audioContext.close(); } catch (_) {}
+    state.audioContext = null;
+  }
   if (state.pianoRoll && state.pianoRoll.destroy) state.pianoRoll.destroy();
 });

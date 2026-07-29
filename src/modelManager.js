@@ -42,6 +42,32 @@ const MIN_FILE_SIZE_FOR_CHUNKING = 16 * 1024 * 1024; // 16MB 以下不分片
 const CHUNK_META_SUFFIX = '.download.meta';
 const CHUNK_PART_SUFFIX = '.download.part';
 
+/**
+ * W7: atomically write a JSON file by writing to a temp file then renaming.
+ * A crash mid-write of the direct fs.writeFileSync would leave the file
+ * truncated to invalid JSON, and the next read returns {} (lost data).
+ * fs.rename is atomic on POSIX; on Windows it's atomic when both files are
+ * on the same filesystem (which they are, since the temp is in the same dir).
+ */
+function _atomicWriteJsonSync(filePath, data) {
+  const tmpPath = filePath + '.tmp';
+  const content = JSON.stringify(data, null, 2);
+  fs.writeFileSync(tmpPath, content, 'utf-8');
+  try {
+    fs.renameSync(tmpPath, filePath);
+  } catch (e) {
+    // Windows can fail with EPERM if an AV scanner has the file open.
+    // Retry once after a short sleep, then give up and try direct write.
+    try { fs.unlinkSync(tmpPath); } catch (_) {}
+    if (e.code === 'EPERM' || e.code === 'EACCES') {
+      // Best-effort fallback: direct write (non-atomic, but better than losing data).
+      fs.writeFileSync(filePath, content, 'utf-8');
+    } else {
+      throw e;
+    }
+  }
+}
+
 const MODEL_FILE_MANIFEST = [
   { filePath: 'note_text_encoder.onnx', required: true },
   { filePath: 'note_text_encoder.onnx.data', required: true },
@@ -720,7 +746,7 @@ function saveModelVersion(modelDir, precision, revision) {
       revision,
       updatedAt: new Date().toISOString(),
     };
-    fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
+    _atomicWriteJsonSync(versionPath, data);
     console.log(`[ModelManager] Saved version ${revision} (revision: ${revision}) for precision ${precision}`);
   } catch (err) {
     console.warn(`[ModelManager] Failed to save version for ${precision}:`, err.message);
@@ -816,7 +842,7 @@ function saveJpModelVersion(modelDir, precision, revision) {
       language: 'jp',
       updatedAt: new Date().toISOString(),
     };
-    fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
+    _atomicWriteJsonSync(versionPath, data);
     console.log(`[ModelManager] Saved JP version ${revision} (revision: ${revision}) for precision ${precision}`);
   } catch (err) {
     console.warn(`[ModelManager] Failed to save JP version for ${precision}:`, err.message);
@@ -919,7 +945,7 @@ function saveSifiganVersion(modelDir, revision) {
       model: 'sifigan',
       updatedAt: new Date().toISOString(),
     };
-    fs.writeFileSync(versionPath, JSON.stringify(data, null, 2), 'utf-8');
+    _atomicWriteJsonSync(versionPath, data);
     console.log(`[ModelManager] Saved SiFiGAN version ${revision} (revision: ${revision})`);
   } catch (err) {
     console.warn(`[ModelManager] Failed to save SiFiGAN version:`, err.message);

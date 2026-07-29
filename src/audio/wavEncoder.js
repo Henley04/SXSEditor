@@ -3,7 +3,10 @@
  * 将 Float32Array 音频数据编码为 32-bit float PCM WAV 文件
  */
 
-import { smoothstep } from '../utils/smoothstep.js';
+// B2: use CommonJS require to match the rest of src/audio (audioWorker.js is
+// forked directly and copied via CopyPlugin; mixing ESM/CJS can break under
+// packaging config changes). smoothstep.js already exports via CommonJS.
+const { smoothstep } = require('../utils/smoothstep.js');
 
 const _TRIG_LUT_SIZE = 1024;
 const _cosLut = new Float32Array(_TRIG_LUT_SIZE);
@@ -64,8 +67,16 @@ function _encodeWavBase(audioData, sampleRate, numChannels) {
  * @returns {Uint8Array} WAV 文件数据
  */
 function encodeWav(float32Array, sampleRate, numChannels = 1) {
-  if (numChannels === 2 && float32Array instanceof Float32Array && float32Array.length % 2 === 0) {
-    return _encodeWavBase(float32Array, sampleRate, 2);
+  // B4: stereo WAV requires interleaved L,R sample pairs, so the data length
+  // must be a multiple of 2 (blockAlign = numChannels * bitsPerSample/8 = 8).
+  // If an odd-length array is passed for stereo, pad with a single zero
+  // sample at the end so the WAV header (numChannels=2) matches the data
+  // length. Padding preserves all original audio data and is backwards-
+  // compatible.
+  if (numChannels === 2 && float32Array.length % 2 !== 0) {
+    const padded = new Float32Array(float32Array.length + 1);
+    padded.set(float32Array);
+    return _encodeWavBase(padded, sampleRate, 2);
   }
   return _encodeWavBase(float32Array, sampleRate, numChannels);
 }
@@ -133,4 +144,5 @@ function _interpEnv(envelope, time) {
   return kfs[lo].value + smoothT * (kfs[lo + 1].value - kfs[lo].value);
 }
 
-export { encodeWav, applyEnvelopesToAudio };
+// B2: use CommonJS module.exports to match the rest of src/audio modules.
+module.exports = { encodeWav, applyEnvelopesToAudio };

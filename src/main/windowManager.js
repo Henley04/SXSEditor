@@ -267,7 +267,8 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
     height: 720,
     minWidth: 480,
     minHeight: 560,
-    title: '模型文件下载',
+    // W20: use i18n key instead of hardcoded Chinese window title.
+    title: t('modelDownload.title'),
     icon: path.join(__dirname, '..', 'SXS.png'),
     resizable: true,
     minimizable: true,
@@ -374,7 +375,8 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   const fragmentWindow = new BrowserWindow({
     width: 1000,
     height: 600,
-    title: `分片编辑 - ${fragment.name}`,
+    // W20: use i18n key with name param instead of hardcoded Chinese title.
+    title: t('fragment.title', { name: fragment.name }),
     icon: path.join(__dirname, '..', 'SXS.png'),
     backgroundColor: '#14141f',
     show: false,
@@ -405,6 +407,16 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   });
 
   fragmentWindow.on('closed', () => {
+    // W23: stop audio from the closing fragment window. The fragment audio
+    // manager is shared across all fragment windows; without this the audio
+    // keeps playing after the window closes and the onEnded callback can no
+    // longer reach a live sender. stop() is a no-op when not playing, so this
+    // is safe even if no audio was active. Lazy-require to avoid a circular
+    // dependency with audioIpc.js (which requires getFragmentWindows from here).
+    try {
+      const { getFragmentAudioManager } = require('./audioIpc');
+      getFragmentAudioManager().stop();
+    } catch (_) {}
     delete fragmentWindows[fragment.id];
     delete pendingFragmentData[fragment.id];
   });
@@ -528,7 +540,8 @@ function openAudioPreprocess(data) {
   audioPreprocessWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    title: '音频预处理',
+    // W20: use i18n key instead of hardcoded Chinese window title.
+    title: t('preprocess.title'),
     icon: path.join(__dirname, '..', 'SXS.png'),
     minWidth: 800,
     minHeight: 600,

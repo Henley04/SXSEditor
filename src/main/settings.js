@@ -215,13 +215,36 @@ function loadSettings() {
   return _settingsCache;
 }
 
+// W7: Atomic settings write. Writes to settings.json.tmp then renames it
+// (atomic on the same filesystem) to settings.json, so a crash mid-write
+// cannot leave a truncated/invalid JSON file that would lose all settings
+// on next launch. On failure the cache is invalidated and an error result
+// is returned so callers do not report a false success.
 async function saveSettingsFile(settings) {
+  const filePath = getSettingsFilePath();
+  const tmpPath = `${filePath}.tmp`;
   try {
-    const filePath = getSettingsFilePath();
-    await fs.promises.writeFile(filePath, JSON.stringify(settings, null, 2), 'utf-8');
+    const data = JSON.stringify(settings, null, 2);
+    await fs.promises.writeFile(tmpPath, data, 'utf-8');
+    try {
+      await fs.promises.rename(tmpPath, filePath);
+    } catch (renameErr) {
+      // On Windows, rename may fail if the target exists; fall back to a
+      // synchronous rename which POSIX-overwrites the target.
+      try {
+        fs.renameSync(tmpPath, filePath);
+      } catch (_) {
+        throw renameErr;
+      }
+    }
     _settingsCache = null;
+    return { success: true };
   } catch (err) {
     console.error('[Main] Failed to save settings:', err);
+    // Clean up the leftover temp file if it still exists.
+    try { await fs.promises.unlink(tmpPath); } catch (_) {}
+    invalidateSettingsCache();
+    return { success: false, error: err.message };
   }
 }
 

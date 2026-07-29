@@ -107,7 +107,8 @@ export async function handleAudioToMidi() {
       audioBuffer = await ac.decodeAudioData(buffer.slice(0));
     } catch (decodeErr) {
       console.error('Audio decode failed:', decodeErr);
-      showAlertDialog(t('main.audioToMidiDecodeFailed') + ': ' + decodeErr.message);
+      // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+      showAlertDialog(t('main.audioToMidiDecodeFailedDetail', { detail: decodeErr.message }));
       return;
     } finally {
       ac.close();
@@ -188,14 +189,16 @@ export async function handleAudioToMidi() {
     } catch (err) {
       hideLoadingOverlay(loading);
       console.error('Audio to MIDI failed:', err);
-      showAlertDialog(t('main.audioToMidiFailed') + ': ' + err.message);
+      // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+      showAlertDialog(t('main.audioToMidiFailedDetail', { detail: err.message }));
       return;
     }
 
     hideLoadingOverlay(loading);
 
     if (midiNotes.length === 0) {
-      showAlertDialog(t('main.audioToMidiFailed') + ': no notes extracted');
+      // W24: use a dedicated localized key instead of t(key) + ': <literal>'.
+      showAlertDialog(t('main.audioToMidiNoNotesExtracted'));
       return;
     }
 
@@ -251,14 +254,17 @@ export async function handleImportMidi() {
     const result = await window.electronAPI.importMidiMultiTrack();
     if (!result.success) {
       if (!result.canceled) {
-        showAlertDialog(t('main.midiImportFailed') + ': ' + (result.error || t('main.audioToMidiFailed')));
+        // W24: use t(key, params); t('main.audioToMidiFailed') stays as the
+        // fallback detail (its key is unchanged, so it resolves cleanly).
+        showAlertDialog(t('main.midiImportFailedDetail', { detail: result.error || t('main.audioToMidiFailed') }));
       }
       return;
     }
 
     const tracks = result.tracks || [];
     if (tracks.length === 0) {
-      showAlertDialog(t('main.midiImportFailed') + ': no notes found');
+      // W24: use a dedicated localized key instead of t(key) + ': <literal>'.
+      showAlertDialog(t('main.midiImportNoNotesFound'));
       return;
     }
 
@@ -339,12 +345,14 @@ export async function handleImportMidi() {
       }
     }
 
+    // W24: use t(key, params) instead of String.replace('{count}', ...) to bypass i18n.
     const msg = createdSingers.length === 1
       ? t('main.midiImportCompleteSingle')
-      : t('main.midiImportCompleteMulti').replace('{count}', createdSingers.length);
+      : t('main.midiImportCompleteMulti', { count: createdSingers.length });
     showAlertDialog(msg);
   } catch (err) {
     console.error('MIDI import process error:', err);
-    showAlertDialog(t('main.midiImportFailed') + ': ' + err.message);
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('main.midiImportFailedDetail', { detail: err.message }));
   }
 }

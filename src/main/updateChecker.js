@@ -108,8 +108,12 @@ async function checkAppUpdate(channel) {
       releaseUrl = release.html_url || null;
       downloadUrl = `https://github.com/${GITHUB_REPO}/releases/download/nightly/${INSTALLER_ASSET}`;
       releaseNotesHtml = release.body_html || release.body || null;
+      // W26: Validate buildTimestamp before comparing. If it is undefined or
+      // non-finite, `undefined + 60000 = NaN` and `publishedMs > NaN` is always
+      // false, silently suppressing nightly update prompts. Bail out explicitly
+      // so the invalid case is intentional rather than accidental NaN arithmetic.
       const buildTimestamp = buildInfo.buildTimestamp;
-      if (publishedAt) {
+      if (typeof buildTimestamp === 'number' && isFinite(buildTimestamp) && publishedAt) {
         const publishedMs = Date.parse(publishedAt);
         if (!isNaN(publishedMs)) {
           updateAvailable = publishedMs > buildTimestamp + NIGHTLY_TOLERANCE_MS;

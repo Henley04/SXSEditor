@@ -278,6 +278,12 @@ function startGPUPreload() {
     try {
       const worker = new Worker(path.join(__dirname, 'utils', 'gpuWorker.js'));
       let settled = false;
+      // W8: ensure the worker thread is terminated in every exit path so a
+      // hung systeminformation.graphics() call does not keep consuming
+      // CPU/memory in the background after the promise has settled.
+      const terminateWorker = () => {
+        try { worker.terminate(); } catch (_) {}
+      };
 
       worker.on('message', (msg) => {
         if (msg.phase === 'fast' && msg.success && msg.data && msg.data.length > 0) {
@@ -291,16 +297,16 @@ function startGPUPreload() {
           console.log(`[Main] GPU full detection complete (systeminformation): ${msg.data.length}  device(s)`);
           // 依据显存预计算 vocoder 分片帧数（一次性，运行时复用）
           try { getCachedVocoderChunkFrames(); } catch (_) {}
-          if (!settled) { settled = true; resolve(); }
+          if (!settled) { settled = true; terminateWorker(); resolve(); }
         } else if (msg.phase === 'error') {
           console.warn('[Main] GPU detection failed:', msg.error);
-          if (!settled) { settled = true; resolve(); }
+          if (!settled) { settled = true; terminateWorker(); resolve(); }
         }
       });
 
       worker.once('error', (err) => {
         console.warn('[Main] GPU worker error:', err.message);
-        if (!settled) { settled = true; resolve(); }
+        if (!settled) { settled = true; terminateWorker(); resolve(); }
       });
 
       // 超时保护：15 秒后强制完成
@@ -308,6 +314,7 @@ function startGPUPreload() {
         if (!settled) {
            console.warn('[Main] GPU detection timeout, using fallback');
           settled = true;
+          terminateWorker();
           resolve();
         }
       }, 15000);
