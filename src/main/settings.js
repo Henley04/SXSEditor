@@ -231,9 +231,9 @@ function invalidateSettingsCache() {
 
 const ALLOWED_SETTINGS_KEYS = [
   'deviceId', 'modelDir', 'modelPrecision', 'midiExtractTool', 'useRosvot',
-  'previewDiffSteps', 'previewCfgStrength', 'previewCfgRescale',
+  'previewDiffSteps', 'previewCfgStrength', 'previewCfgRescale', 'previewSampler',
   'previewDiffStepChunkEnabled', 'previewDiffStepChunkFrames', 'previewDiffStepOverlapFrames',
-  'exportDiffSteps', 'exportCfgStrength', 'exportCfgRescale',
+  'exportDiffSteps', 'exportCfgStrength', 'exportCfgRescale', 'exportSampler',
   'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth',
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',

@@ -25,6 +25,7 @@ const modelDeviceMappingDiv = document.getElementById('modelDeviceMapping');
 const deviceModeRadios = document.querySelectorAll('input[name="deviceMode"]');
 const previewDiffStepsSlider = document.getElementById('previewDiffSteps');
 const previewDiffStepsValue = document.getElementById('previewDiffStepsValue');
+const previewSamplerSelect = document.getElementById('previewSampler');
 const previewCfgStrengthSlider = document.getElementById('previewCfgStrength');
 const previewCfgStrengthValue = document.getElementById('previewCfgStrengthValue');
 const previewCfgRescaleSlider = document.getElementById('previewCfgRescale');
@@ -37,6 +38,7 @@ const previewDiffStepOverlapFramesSlider = document.getElementById('previewDiffS
 const previewDiffStepOverlapFramesValue = document.getElementById('previewDiffStepOverlapFramesValue');
 const exportDiffStepsSlider = document.getElementById('exportDiffSteps');
 const exportDiffStepsValue = document.getElementById('exportDiffStepsValue');
+const exportSamplerSelect = document.getElementById('exportSampler');
 const exportCfgStrengthSlider = document.getElementById('exportCfgStrength');
 const exportCfgStrengthValue = document.getElementById('exportCfgStrengthValue');
 const exportCfgRescaleSlider = document.getElementById('exportCfgRescale');
@@ -138,8 +140,10 @@ function applySavedSettingsToUI(currentSetting) {
     const pSteps = currentSetting.previewDiffSteps ?? 16;
     const pCfg = currentSetting.previewCfgStrength ?? 3.0;
     const pRescale = currentSetting.previewCfgRescale ?? 0.75;
+    const pSampler = currentSetting.previewSampler || 'euler';
     previewDiffStepsSlider.value = pSteps;
     previewDiffStepsValue.textContent = pSteps;
+    if (previewSamplerSelect) previewSamplerSelect.value = pSampler;
     previewCfgStrengthSlider.value = pCfg;
     previewCfgStrengthValue.textContent = parseFloat(pCfg).toFixed(1);
     previewCfgRescaleSlider.value = pRescale;
@@ -159,8 +163,10 @@ function applySavedSettingsToUI(currentSetting) {
     const eSteps = currentSetting.exportDiffSteps ?? 32;
     const eCfg = currentSetting.exportCfgStrength ?? 3.0;
     const eRescale = currentSetting.exportCfgRescale ?? 0.75;
+    const eSampler = currentSetting.exportSampler || 'euler';
     exportDiffStepsSlider.value = eSteps;
     exportDiffStepsValue.textContent = eSteps;
+    if (exportSamplerSelect) exportSamplerSelect.value = eSampler;
     exportCfgStrengthSlider.value = eCfg;
     exportCfgStrengthValue.textContent = parseFloat(eCfg).toFixed(1);
     exportCfgRescaleSlider.value = eRescale;
@@ -1014,12 +1020,14 @@ function collectSettings() {
         previewDiffSteps: parseInt(previewDiffStepsSlider.value),
         previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
         previewCfgRescale: parseFloat(previewCfgRescaleSlider.value),
+        previewSampler: previewSamplerSelect ? previewSamplerSelect.value : 'euler',
         previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : false,
         previewDiffStepChunkFrames: previewDiffStepChunkFramesSlider ? parseInt(previewDiffStepChunkFramesSlider.value) : 500,
         previewDiffStepOverlapFrames: previewDiffStepOverlapFramesSlider ? parseInt(previewDiffStepOverlapFramesSlider.value) : 50,
         exportDiffSteps: parseInt(exportDiffStepsSlider.value),
         exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
         exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
+        exportSampler: exportSamplerSelect ? exportSamplerSelect.value : 'euler',
         audioOutputMode: audioOutputModeSelect.value,
         audioOutputDevice: parseInt(audioOutputDeviceSelect.value),
         audioSampleRate: parseInt(audioSampleRateSelect.value),

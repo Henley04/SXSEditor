@@ -70,6 +70,7 @@ export async function openExportDialog() {
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
       exportCfgRescale: settings.exportCfgRescale ?? 0.75,
+      exportSampler: settings.exportSampler || 'euler',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
       sifiganPrecision: settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32',
@@ -231,6 +232,37 @@ function buildParamsSection(form) {
   const section = document.createElement('div');
   section.className = 'export-dialog-section';
   section.appendChild(buildSectionTitle('main.exportDialog.paramsSection'));
+
+  // 求解器（扩散采样器）
+  const samplerField = document.createElement('div');
+  samplerField.className = 'export-dialog-field';
+  const samplerLabel = document.createElement('div');
+  samplerLabel.className = 'export-dialog-field-label';
+  samplerLabel.textContent = t('main.exportDialog.sampler');
+  samplerField.appendChild(samplerLabel);
+  const samplerHint = document.createElement('div');
+  samplerHint.className = 'export-dialog-field-hint';
+  samplerHint.textContent = t('main.exportDialog.samplerHint');
+  samplerField.appendChild(samplerHint);
+  const samplerSelect = document.createElement('select');
+  // 求解器选项（与 src/inference/pipeline/samplers/index.js SOLVERS 对齐）
+  const samplerOptions = [
+    { value: 'euler', labelKey: 'main.exportDialog.samplerEuler' },
+    { value: 'heun', labelKey: 'main.exportDialog.samplerHeun' },
+    { value: 'stork', labelKey: 'main.exportDialog.samplerStork' },
+  ];
+  for (const opt of samplerOptions) {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = t(opt.labelKey);
+    samplerSelect.appendChild(o);
+  }
+  samplerSelect.value = form.exportSampler;
+  samplerSelect.addEventListener('change', () => {
+    form.exportSampler = samplerSelect.value;
+  });
+  samplerField.appendChild(samplerSelect);
+  section.appendChild(samplerField);
 
   // 扩散步数
   section.appendChild(buildRangeField({
@@ -557,6 +589,7 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     exportDiffSteps: form.exportDiffSteps,
     exportCfgStrength: form.exportCfgStrength,
     exportCfgRescale: form.exportCfgRescale,
+    exportSampler: form.exportSampler,
     vocoderType: form.vocoderType,
     sifiganPrecision: form.sifiganPrecision,
     vocoderChunkMode: form.vocoderChunkMode,
@@ -658,6 +691,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
       nSteps: form.exportDiffSteps,
       cfg: form.exportCfgStrength,
       cfgRescale: form.exportCfgRescale,
+      sampler: form.exportSampler,
       autoShift: form.autoShift,
       onFragmentProgress: (p) => {
         setStatus('progressSynthesizing', { progress: p });
