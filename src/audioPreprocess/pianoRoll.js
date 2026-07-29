@@ -151,14 +151,20 @@ export function initPianoRoll() {
     },
 
     /**
-     * Half-width of the trailing resize hot zone in BEATS, scaled to roughly
-     * 6px at current zoom and clamped to [4, 12]px for usability. Returns
-     * beats so the hot zone scales naturally with zoom level.
+     * Half-width of the trailing resize hot zone in BEATS.
+     *
+     * targetPx = clamp(halfGridPx, 4, 12) where halfGridPx = (snapGrid *
+     * pxPerBeat) / 2. Scaling with the snap grid makes the clamp actually
+     * reachable: fine grids shrink the hot zone toward 4px, coarse grids
+     * grow it toward 12px. Returns beats so the hot zone scales naturally
+     * with zoom level.
      */
     _resizeHotZoneBeats() {
       const pxPerBeat = BEAT_WIDTH * this.zoomX;
       if (pxPerBeat <= 0) return 0.06;
-      const clampedPx = Math.max(4, Math.min(12, 6));
+      const gridPx = this.snapGrid * pxPerBeat;
+      const targetPx = gridPx / 2;
+      const clampedPx = Math.max(4, Math.min(12, targetPx));
       return clampedPx / pxPerBeat;
     },
 

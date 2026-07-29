@@ -166,14 +166,27 @@ export function _resetNotesIndex() {
 
 /**
  * Half-width of the trailing resize hot zone, expressed in BEATS (not pixels).
- * 0.06 beats ≈ 1/16 of a quarter note. Scales naturally with zoomX so the
- * resize handle stays easy to grab at low zoom and not over-eager at high
- * zoom. Pixel width is clamped to [4, 12] for usability.
+ *
+ * The target pixel width scales with the current snap grid so the hot zone
+ * is always a sensible fraction of one grid cell:
+ *   targetPx = clamp(halfGridPx, 4, 12)
+ * where halfGridPx = (snapGrid * pxPerBeat) / 2.
+ *
+ * Why scale with grid: at fine grids (1/32) the cell is small, so the hot
+ * zone shrinks toward 4px (still grabbable); at coarse grids (1/4) the cell
+ * is large, so the hot zone grows toward 12px (easier to grab, but capped
+ * so it doesn't swallow the whole note). The [4, 12] clamp is now actually
+ * reachable — at zoomX=1, BEAT_WIDTH=80, grid=1/4 → halfGridPx=10 (mid);
+ * grid=1/32 → halfGridPx=1.25 → clamped to 4; zoomX=4, grid=1/4 →
+ * halfGridPx=40 → clamped to 12.
+ *
+ * Returns beats so the hot zone scales naturally with zoomX.
  */
 function _resizeHotZoneBeats() {
   const pxPerBeat = BEAT_WIDTH * getZoomX();
   if (pxPerBeat <= 0) return 0.06;
-  const targetPx = 6;
+  const gridPx = getSnapGrid() * pxPerBeat;
+  const targetPx = gridPx / 2;
   const clampedPx = Math.max(4, Math.min(12, targetPx));
   return clampedPx / pxPerBeat;
 }

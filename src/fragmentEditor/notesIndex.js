@@ -41,6 +41,11 @@ export function createNotesIndex(notes) {
     sorted: false,
     pitchIndex: null,
     pitchIndexVersion: -1,
+    // Max note duration seen in the array. Refreshed on every sort. Used as
+    // a lower-bound safety window for findAdjacentBoundary so we can binary
+    // search the start index instead of scanning from 0.
+    maxDuration: 0,
+    maxDurationVersion: -1,
     version: 0,
   };
   ensureSorted(idx);
@@ -55,6 +60,8 @@ export function markDirty(idx) {
   idx.sorted = false;
   idx.pitchIndex = null;
   idx.pitchIndexVersion = -1;
+  idx.maxDuration = 0;
+  idx.maxDurationVersion = -1;
   idx.version++;
 }
 
@@ -76,12 +83,34 @@ export function ensureSorted(idx) {
       }
     }
   }
-  if (idx.sorted) return;
+  if (idx.sorted) {
+    _ensureMaxDuration(idx);
+    return;
+  }
   idx.notes.sort(compareNotes);
   idx.sorted = true;
   idx.pitchIndex = null;
   idx.pitchIndexVersion = -1;
+  idx.maxDuration = 0;
+  idx.maxDurationVersion = -1;
   idx.version++;
+  _ensureMaxDuration(idx);
+}
+
+/**
+ * Refresh idx.maxDuration if stale. O(n) scan but only runs when version
+ * changed; cached otherwise. Used by findAdjacentBoundary to lower-bound
+ * the binary search window.
+ */
+function _ensureMaxDuration(idx) {
+  if (idx.maxDurationVersion === idx.version) return;
+  let m = 0;
+  for (let i = 0; i < idx.notes.length; i++) {
+    const d = idx.notes[i].duration;
+    if (d > m) m = d;
+  }
+  idx.maxDuration = m;
+  idx.maxDurationVersion = idx.version;
 }
 
 function _ensurePitchIndex(idx) {
