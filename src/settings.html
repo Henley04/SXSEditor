@@ -160,6 +160,16 @@
                     <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
                 </div>
                 <div class="setting-group">
+                    <label for="previewSampler"><span data-i18n="settings.sampler">求解器</span></label>
+                    <select id="previewSampler">
+                        <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，默认）</option>
+                        <option value="heun" data-i18n="settings.samplerHeun">Heun（二阶，2 倍推理）</option>
+                        <option value="extrap" data-i18n="settings.samplerExtrap">Extrapolated Euler（1 倍推理）</option>
+                        <option value="stork2" data-i18n="settings.samplerStork2">STORK-2（1 倍推理，论文原版）</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）；STORK-2 为论文原版 RKC 递推 + virtual NFE（每步 1 次推理 + 8 个 sub-stage）。分块预览时 Extrapolated Euler 与 STORK-2 均优势减弱。</p>
+                </div>
+                <div class="setting-group">
                     <label for="previewCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
                     <input type="range" id="previewCfgStrength" min="0" max="10" value="3.0" step="0.5">
                     <p class="hint" data-i18n="settings.cfgStrengthHint">无分类器引导强度。值越大贴合条件，但可能过度强化。设为 0 可跳过无条件预测。推荐 1.0~5.0。</p>
@@ -198,6 +208,16 @@
                     <label for="exportDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="exportDiffStepsValue" class="volume-display">32</span></label>
                     <input type="range" id="exportDiffSteps" min="4" max="64" value="32" step="4">
                     <p class="hint" data-i18n="settings.exportDiffStepsHint">导出时的扩散步数。更多步数 = 更高质量。推荐导出使用 32 步。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="exportSampler"><span data-i18n="settings.sampler">求解器</span></label>
+                    <select id="exportSampler">
+                        <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，默认）</option>
+                        <option value="heun" data-i18n="settings.samplerHeun">Heun（二阶，2 倍推理）</option>
+                        <option value="extrap" data-i18n="settings.samplerExtrap">Extrapolated Euler（1 倍推理）</option>
+                        <option value="stork2" data-i18n="settings.samplerStork2">STORK-2（1 倍推理，论文原版）</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）；STORK-2 为论文原版 RKC 递推 + virtual NFE（每步 1 次推理 + 8 个 sub-stage）。分块预览时 Extrapolated Euler 与 STORK-2 均优势减弱。</p>
                 </div>
                 <div class="setting-group">
                     <label for="exportCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
