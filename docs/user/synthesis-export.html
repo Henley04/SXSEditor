@@ -135,8 +135,34 @@
             <td><span data-lang="en">0.75</span><span data-lang="zh">0.75</span></td>
             <td><span data-lang="en">0–1</span><span data-lang="zh">0–1</span></td>
           </tr>
+          <tr>
+            <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
+            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
+            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
+            <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
+          </tr>
         </tbody>
       </table>
+
+      <h2>
+        <span data-lang="en">Diffusion Sampler</span>
+        <span data-lang="zh">扩散求解器</span>
+      </h2>
+      <p data-lang="en">The sampler is the ODE solver used inside the diffusion loop. It decides how each denoising step combines model evaluations (NFE = number of function evaluations) into the mel-state update. Four solvers are available; the preview and export samplers are configured independently in <a href="settings.html#diffusion-sampler">Settings &gt; Diffusion Sampler</a>:</p>
+      <p data-lang="zh">求解器是扩散循环中使用的 ODE 求解器，决定每个去噪步如何将模型推理（NFE = 模型评估次数）组合为 mel 状态更新。提供四种求解器；预览与导出的求解器可在 <a href="settings.html#diffusion-sampler">设置 &gt; 扩散求解器</a> 中独立配置：</p>
+      <ul>
+        <li><span data-lang="en"><strong>Euler</strong> (default) — 1 NFE/step. First-order explicit, midpoint time evaluation. Fastest, the original baseline.</span><span data-lang="zh"><strong>Euler</strong>（默认）— 每步 1 次推理。一阶显式，中点时间评估。最快，原始基线。</span></li>
+        <li><span data-lang="en"><strong>Heun</strong> — 2 NFE/step. Second-order improved Euler (trapezoidal rule). Higher accuracy, roughly 2× inference time. Final step falls back to Euler to avoid <code>t &gt; 1</code>.</span><span data-lang="zh"><strong>Heun</strong> — 每步 2 次推理。二阶改进欧拉（梯形公式）。精度更高，推理时间约 2 倍。末步退化为 Euler 以避免 <code>t &gt; 1</code> 越界。</span></li>
+        <li><span data-lang="en"><strong>Extrapolated Euler</strong> — 1 NFE/step. Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity for linear extrapolation; not the full stabilized RK formulation. Best when the velocity field changes smoothly; falls back to Euler when extrapolation is unsafe.</span><span data-lang="zh"><strong>Extrapolated Euler</strong> — 每步 1 次推理。受 STORK（ICLR 2026）启发的速度外推启发式。复用上一步速度做线性外推；非论文完整 stabilized RK 格式。速度场缓变时效果最佳；外推不安全时退化为 Euler。</span></li>
+        <li><span data-lang="en"><strong>STORK-2</strong> — 1 NFE/step. Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with extended stability region (~2s² = 128×); higher per-step algebraic cost than Euler.</span><span data-lang="zh"><strong>STORK-2</strong> — 每步 1 次推理。论文原版 Stabilized Taylor Orthogonal Runge-Kutta（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍；每步代数运算开销高于 Euler。</span></li>
+      </ul>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Extrapolated Euler and STORK-2 carry cross-step velocity state. In chunked preview inference (long fragments split into chunks), this state resets at each chunk boundary, reducing their benefit — for chunked previews prefer Euler or Heun. The <strong>Export dialog</strong> exposes a Sampler dropdown so you can override the export sampler per export without changing the global setting.</p>
+          <p data-lang="zh">Extrapolated Euler 与 STORK-2 需要跨步速度状态。分块预览推理（长片段切成多块）时，每块边界都会重置状态，使其优势减弱——分块预览建议使用 Euler 或 Heun。<strong>导出对话框</strong>提供求解器下拉框，可在不修改全局设置的情况下为本次导出单独覆盖求解器。</p>
+        </div>
+      </div>
 
       <h2>
         <span data-lang="en">Diffusion Steps</span>
@@ -180,7 +206,8 @@
       <p data-lang="en">In the Fragment Editor, click <strong>💿 Export</strong>:</p>
       <p data-lang="zh">在片段编辑器中，点击 <strong>💿 Export</strong>：</p>
       <ol>
-        <li><span data-lang="en">The fragment is synthesized using export-quality parameters.</span><span data-lang="zh">片段以导出质量参数合成。</span></li>
+        <li><span data-lang="en">The <strong>Export dialog</strong> opens, pre-filled with the export-quality parameters from Settings. You can override them for this export only: <strong>Sampler</strong>, Diffusion Steps, CFG Strength, CFG Rescale, Auto Shift, plus advanced options (the global Settings values are not changed).</span><span data-lang="zh">弹出 <strong>导出对话框</strong>，预填设置中的导出质量参数。可仅为本次导出覆盖：<strong>求解器</strong>、扩散步数、CFG 强度、CFG Rescale、Auto Shift 以及高级选项（不会修改全局设置）。</span></li>
+        <li><span data-lang="en">After confirming, the fragment is synthesized using the chosen parameters.</span><span data-lang="zh">确认后，片段按所选参数合成。</span></li>
         <li><span data-lang="en">A file save dialog appears. Choose a location and filename.</span><span data-lang="zh">弹出文件保存对话框。选择位置和文件名。</span></li>
         <li><span data-lang="en">The WAV file is saved (24kHz, 16-bit PCM).</span><span data-lang="zh">WAV 文件保存完成（24kHz、16-bit PCM）。</span></li>
       </ol>
@@ -191,7 +218,8 @@
       <p data-lang="en">In the main window, click <strong>📤 Export</strong>:</p>
       <p data-lang="zh">在主窗口中，点击 <strong>📤 Export</strong>：</p>
       <ol>
-        <li><span data-lang="en">All fragments are synthesized sequentially using export-quality parameters.</span><span data-lang="zh">所有片段按顺序以导出质量参数合成。</span></li>
+        <li><span data-lang="en">The <strong>Export dialog</strong> opens (same options as single-fragment export: Sampler, Diffusion Steps, CFG, Auto Shift, advanced).</span><span data-lang="zh">弹出 <strong>导出对话框</strong>（选项与单片段导出相同：求解器、扩散步数、CFG、Auto Shift、高级）。</span></li>
+        <li><span data-lang="en">All fragments are synthesized sequentially using the chosen parameters.</span><span data-lang="zh">所有片段按所选参数顺序合成。</span></li>
         <li><span data-lang="en">Fragments are mixed together according to their timeline positions.</span><span data-lang="zh">片段根据时间线位置混合在一起。</span></li>
         <li><span data-lang="en">A file save dialog appears. Choose a save location.</span><span data-lang="zh">弹出文件保存对话框。选择保存位置。</span></li>
         <li><span data-lang="en">The mixed WAV file is saved (24kHz, 16-bit PCM).</span><span data-lang="zh">混合后的 WAV 文件保存完成（24kHz、16-bit PCM）。</span></li>

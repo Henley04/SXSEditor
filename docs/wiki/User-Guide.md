@@ -483,8 +483,9 @@ When you press Play, SXSEditor:
 | Diffusion Steps | 16 (default) | 32 (default) |
 | CFG Strength | 3.0 | 3.0 |
 | CFG Rescale | 0.75 | 0.75 |
+| Sampler | Euler (default) | Euler (default) |
 
-Preview uses fewer steps for faster response. Export uses more steps for higher quality. Both are configurable in Settings.
+Preview uses fewer steps for faster response. Export uses more steps for higher quality. Both are configurable in Settings. The Sampler (diffusion ODE solver) is also configurable per path — see [Diffusion Sampler](#diffusion-sampler).
 
 ### Playback Controls
 
@@ -503,18 +504,20 @@ In the Fragment Editor, **▶ Play** synthesizes and plays only the current frag
 ### Exporting a Fragment
 
 In the Fragment Editor, click **💿 Export**:
-1. The fragment is synthesized using export-quality parameters.
-2. A file save dialog appears.
-3. Choose a location and filename.
-4. The WAV file is saved (24kHz, 16-bit PCM).
+1. The **Export dialog** opens, pre-filled with the export-quality parameters from Settings. You can override them for this export only: **Sampler**, Diffusion Steps, CFG Strength, CFG Rescale, Auto Shift, plus advanced options (the global Settings values are not changed).
+2. After confirming, the fragment is synthesized using the chosen parameters.
+3. A file save dialog appears.
+4. Choose a location and filename.
+5. The WAV file is saved (24kHz, 16-bit PCM).
 
 ### Exporting the Entire Project
 
 In the main window, click **📤 Export**:
-1. All fragments are synthesized sequentially.
-2. Fragments are mixed together according to their timeline positions.
-3. A file save dialog appears.
-4. The mixed WAV file is saved.
+1. The **Export dialog** opens (same options as single-fragment export: Sampler, Diffusion Steps, CFG, Auto Shift, advanced).
+2. All fragments are synthesized sequentially using the chosen parameters.
+3. Fragments are mixed together according to their timeline positions.
+4. A file save dialog appears.
+5. The mixed WAV file is saved.
 
 ### Export Progress
 
@@ -620,6 +623,7 @@ Used when playing back in the editor (fast preview):
 | Diffusion Steps | 16 | 4–64 | Fewer steps = faster, lower quality |
 | CFG Strength | 3.0 | 0–10 | Higher = more aligned with conditions. 0 = skip unconditional prediction (2x speed) |
 | CFG Rescale | 0.75 | 0–1 | Mitigates over-guidance artifacts |
+| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver. See [Diffusion Sampler](#diffusion-sampler) below. |
 
 #### Export Inference Parameters
 
@@ -630,6 +634,20 @@ Used when exporting WAV files (high quality):
 | Diffusion Steps | 32 | 4–64 | More steps = higher quality |
 | CFG Strength | 3.0 | 0–10 | Same as preview |
 | CFG Rescale | 0.75 | 0–1 | Same as preview |
+| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver. The export dialog also lets you override this per export. |
+
+#### Diffusion Sampler
+
+The diffusion model iteratively denoises a mel spectrogram by integrating the flow-matching velocity-field ODE. The **sampler** is the ODE solver that decides how each denoising step combines model evaluations (NFE = number of function evaluations) into the state update. Four samplers are available, selectable independently for preview and export:
+
+| Sampler | NFE / step | Description |
+|---------|------------|-------------|
+| **Euler** (default) | 1 | First-order explicit Euler, midpoint time evaluation. The original baseline; fastest and most predictable. |
+| **Heun** | 2 | Second-order improved Euler (trapezoidal rule). Higher accuracy, roughly 2× inference time. Falls back to Euler on the final step to avoid evaluating `t > 1`. |
+| **Extrapolated Euler** | 1 | Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity for linear extrapolation. Not the full stabilized RK formulation; benefit is heuristic and strongest when the velocity field changes smoothly. Falls back to Euler when extrapolation is unsafe (amplitude / sign-flip / NaN guards). |
+| **STORK-2** | 1 | Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost than Euler. |
+
+> **Note**: Extrapolated Euler and STORK-2 carry cross-step velocity state. In **chunked preview inference** (long fragments split into chunks), this state resets at every chunk boundary, reducing their benefit — for chunked previews, Euler or Heun is usually the safer choice. The sampler setting is stored in `previewSampler` / `exportSampler`; the legacy value `stork` is silently mapped to `extrap` for backward compatibility.
 
 #### NPU Inference Settings
 

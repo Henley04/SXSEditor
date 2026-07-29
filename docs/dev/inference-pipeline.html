@@ -234,15 +234,76 @@ Float32Array PCM audio (24kHz mono)</code></pre>
         <span data-lang="en">Stage 5 — Diffusion</span>
         <span data-lang="zh">第 5 阶段 — 扩散</span>
       </h2>
-      <p data-lang="en"><code>diffusion.js</code> implements the iterative denoising loop using <code>diff_step_dml.onnx</code>. Each step takes <code>xt_input</code> (current noisy mel), <code>t</code> (timestep), <code>cond</code> (conditioning), and <code>xt_mask</code>; it outputs <code>flow_pred</code> used to update <code>xt</code>.</p>
-      <p data-lang="zh"><code>diffusion.js</code> 使用 <code>diff_step_dml.onnx</code> 实现迭代去噪循环。每步接收 <code>xt_input</code>（当前带噪 mel）、<code>t</code>（时间步）、<code>cond</code>（条件）、<code>xt_mask</code>，输出 <code>flow_pred</code> 用于更新 <code>xt</code>。</p>
+      <p data-lang="en"><code>diffusion.js</code> implements the iterative denoising loop using <code>diff_step_dml.onnx</code>. Each step takes <code>xt_input</code> (current noisy mel), <code>t</code> (timestep), <code>cond</code> (conditioning), and <code>xt_mask</code>; it outputs <code>flow_pred</code> used to update <code>xt</code>. The loop is driven through a pluggable <strong>sampler</strong> interface (see <a href="#samplers-module">Samplers Module</a> below).</p>
+      <p data-lang="zh"><code>diffusion.js</code> 使用 <code>diff_step_dml.onnx</code> 实现迭代去噪循环。每步接收 <code>xt_input</code>（当前带噪 mel）、<code>t</code>（时间步）、<code>cond</code>（条件）、<code>xt_mask</code>，输出 <code>flow_pred</code> 用于更新 <code>xt</code>。循环通过可插拔的 <strong>求解器</strong> 接口驱动（见下方 <a href="#samplers-module">求解器模块</a>）。</p>
       <ul>
         <li><span data-lang="en"><strong>Default steps</strong>: <code>DEFAULT_DIFF_STEPS=32</code>. The CLI <code>synth</code> command uses 4 steps by default for quick smoke tests.</span><span data-lang="zh"><strong>默认步数</strong>：<code>DEFAULT_DIFF_STEPS=32</code>。CLI <code>synth</code> 命令默认使用 4 步以快速冒烟测试。</span></li>
-        <li><span data-lang="en"><strong>Classifier-Free Guidance</strong>: <code>CFG_STRENGTH=3.0</code>, <code>CFG_RESCALE=0.75</code>. Each step runs a conditional and an unconditional branch.</span><span data-lang="zh"><strong>无分类器引导</strong>：<code>CFG_STRENGTH=3.0</code>、<code>CFG_RESCALE=0.75</code>。每步运行条件分支与无条件分支各一次。</span></li>
+        <li><span data-lang="en"><strong>Classifier-Free Guidance</strong>: <code>CFG_STRENGTH=3.0</code>, <code>CFG_RESCALE=0.75</code>. Each step runs a conditional and an unconditional branch; the <code>combine()</code> callback (shared by both inference paths) merges them into a single velocity vector and applies the two-pass variance + rescale.</span><span data-lang="zh"><strong>无分类器引导</strong>：<code>CFG_STRENGTH=3.0</code>、<code>CFG_RESCALE=0.75</code>。每步运行条件分支与无条件分支各一次；<code>combine()</code> 回调（两条推理路径共用）将二者合并为单一速度向量，并执行两遍方差 + rescale。</span></li>
+        <li><span data-lang="en"><strong>Sampler selection</strong>: <code>runDiffusionLoop</code> / <code>runDiffusionLoopChunked</code> take a <code>samplerName</code> arg (<code>'euler'</code> | <code>'heun'</code> | <code>'extrap'</code> | <code>'stork2'</code>, default <code>'euler'</code>). The batch path (<code>runBatchDiffusionLoop</code>) keeps the <code>batch=4</code> optimization for Euler and falls back to sequential single-segment calls for non-Euler samplers.</span><span data-lang="zh"><strong>求解器选择</strong>：<code>runDiffusionLoop</code> / <code>runDiffusionLoopChunked</code> 接收 <code>samplerName</code> 参数（<code>'euler'</code> | <code>'heun'</code> | <code>'extrap'</code> | <code>'stork2'</code>，默认 <code>'euler'</code>）。批量路径（<code>runBatchDiffusionLoop</code>）对 Euler 保留 <code>batch=4</code> 优化，非 Euler 求解器回退为顺序单段调用。</span></li>
         <li><span data-lang="en"><strong>Tensor lifecycle</strong>: input/output tensors are disposed immediately after each step to prevent GPU VRAM accumulation (32 steps × 2 branches × 5 tensors = 320 tensors per synthesis).</span><span data-lang="zh"><strong>张量生命周期</strong>：每步推理后立即释放输入/输出张量，避免 GPU 显存累积（32 步 × 2 分支 × 5 张量 = 每次合成 320 个张量）。</span></li>
-        <li><span data-lang="en"><strong>Cached tensors</strong>: <code>_runDiffStepWithCachedTensors</code> reuses <code>cond</code> / <code>mask</code> across steps (they don't change) to avoid 64× redundant FP16 conversion.</span><span data-lang="zh"><strong>缓存张量</strong>：<code>_runDiffStepWithCachedTensors</code> 跨步复用 <code>cond</code> / <code>mask</code>（它们不变），避免 64 倍冗余的 FP16 转换。</span></li>
+        <li><span data-lang="en"><strong>Cached tensors &amp; shared buffers</strong>: <code>_runDiffStepWithCachedTensors</code> reuses <code>cond</code> / <code>mask</code> across steps (they don't change) to avoid 64× redundant FP16 conversion. The sampler is given a pre-allocated <code>buffers</code> object (<code>vBuf</code> / <code>deltaBuf</code> / <code>v1Buf</code> / <code>xPredBuf</code>) that is reused across all steps, eliminating per-step <code>Float32Array</code> allocations.</span><span data-lang="zh"><strong>缓存张量与共享缓冲</strong>：<code>_runDiffStepWithCachedTensors</code> 跨步复用 <code>cond</code> / <code>mask</code>（它们不变），避免 64 倍冗余的 FP16 转换。求解器获预分配的 <code>buffers</code> 对象（<code>vBuf</code> / <code>deltaBuf</code> / <code>v1Buf</code> / <code>xPredBuf</code>），跨所有步复用，消除每步 <code>Float32Array</code> 分配。</span></li>
+        <li><span data-lang="en"><strong>NFE accounting</strong>: both paths track <code>totalNFE</code> (number of function evaluations) and log it, making the cost difference between Euler (1 NFE/step), Heun (2 NFE/step), and Extrap/STORK-2 (1 NFE/step) visible.</span><span data-lang="zh"><strong>NFE 统计</strong>：两条路径均跟踪 <code>totalNFE</code>（模型评估次数）并打印日志，使 Euler（每步 1 次）、Heun（每步 2 次）、Extrap/STORK-2（每步 1 次）的开销差异可见。</span></li>
         <li><span data-lang="en"><strong>NPU static shapes</strong>: when <code>modelPrecision='int8-npu'</code>, inputs are padded to <code>NPU_STATIC_SEQ_LEN=2048</code> and the output is sliced back to the real frame count.</span><span data-lang="zh"><strong>NPU 静态形状</strong>：当 <code>modelPrecision='int8-npu'</code> 时，输入被填充到 <code>NPU_STATIC_SEQ_LEN=2048</code>，输出再切片回真实帧数。</span></li>
       </ul>
+
+      <h2 id="samplers-module">
+        <span data-lang="en">Samplers Module</span>
+        <span data-lang="zh">求解器模块</span>
+      </h2>
+      <p data-lang="en"><code>src/inference/pipeline/samplers/</code> contains the pluggable ODE-solver abstraction for the flow-matching diffusion loop. The model outputs a velocity field <code>flow_pred = v(x, t)</code>; sampling solves <code>dx/dt = v(x, t)</code> with <code>t</code> going 0 → 1 (equivalent to the paper's reverse integration). The solver only decides <em>when</em> to call <code>diffStep</code> and <em>how</em> to combine predictions into the <code>xt</code> delta; CFG / Rescale / tensor lifecycle stay with the caller so both inference paths share one algorithm.</p>
+      <p data-lang="zh"><code>src/inference/pipeline/samplers/</code> 包含 flow-matching 扩散循环的可插拔 ODE 求解器抽象。模型输出速度场 <code>flow_pred = v(x, t)</code>；采样即求解 <code>dx/dt = v(x, t)</code>，<code>t</code> 从 0 到 1（等价于论文的反向积分）。求解器只决定<em>何时调用 diffStep</em>与<em>如何组合预测为 xt 增量</em>；CFG / Rescale / 张量生命周期仍由调用方管理，保证两条推理路径共用同一份算法。</p>
+      <p data-lang="en"><strong>Unified interface</strong> — every solver implements:</p>
+      <p data-lang="zh"><strong>统一接口</strong>——每个求解器实现：</p>
+      <pre><code>async step({ evalDiffStep, combine, step, totalSteps, xtData, buffers }) → { nfe }
+//   evalDiffStep(t, xtOverride?) → Promise&lt;{condPred, uncondPred}&gt;
+//   combine(condPred, uncondPred) → Float32Array  // writes buffers.vBuf, returns it
+//   buffers: { vBuf, deltaBuf, v1Buf, xPredBuf }  // caller-allocated, reused across steps
+//   delta is written into buffers.deltaBuf; the caller accumulates it onto xt.data</code></pre>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Solver</span><span data-lang="zh">求解器</span></th>
+            <th><span data-lang="en">File</span><span data-lang="zh">文件</span></th>
+            <th><span data-lang="en">NFE / step</span><span data-lang="zh">每步 NFE</span></th>
+            <th><span data-lang="en">Algorithm</span><span data-lang="zh">算法</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>euler</code> <span data-lang="en">(default)</span><span data-lang="zh">（默认）</span></td>
+            <td><code>euler.js</code></td>
+            <td>1</td>
+            <td><span data-lang="en">First-order explicit, midpoint time <code>t = (step + 0.5) / totalSteps</code>. Equivalent to the pre-refactor loop.</span><span data-lang="zh">一阶显式，中点时间 <code>t = (step + 0.5) / totalSteps</code>。等价于重构前的循环。</span></td>
+          </tr>
+          <tr>
+            <td><code>heun</code></td>
+            <td><code>heun.js</code></td>
+            <td>2</td>
+            <td><span data-lang="en">RK2 trapezoidal: predict <code>x_pred = x + v1·dt</code>, then correct <code>delta = 0.5·(v1 + v2)·dt</code>. Final step degrades to Euler to avoid <code>t &gt; 1</code>.</span><span data-lang="zh">RK2 梯形：预测 <code>x_pred = x + v1·dt</code>，再校正 <code>delta = 0.5·(v1 + v2)·dt</code>。末步退化为 Euler 以避免 <code>t &gt; 1</code>。</span></td>
+          </tr>
+          <tr>
+            <td><code>extrap</code></td>
+            <td><code>extrap.js</code></td>
+            <td>1</td>
+            <td><span data-lang="en">Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). <code>v2 = v1 + γ·(v1 − v_prev)</code> with γ=0.5; <code>delta = 0.5·dt·(v1 + v2)</code>. First step and unsafe extrapolation fall back to Euler. Stability guards: velocity-jump ratio &gt; 2, <code>|v2|/|v1| &gt; 3</code>, sign-flip with growing amplitude, and NaN/Inf.</span><span data-lang="zh">受 STORK（ICLR 2026）启发的速度外推启发式。<code>v2 = v1 + γ·(v1 − v_prev)</code>，γ=0.5；<code>delta = 0.5·dt·(v1 + v2)</code>。首步与不安全外推退化为 Euler。稳定性保护：速度突变比 &gt; 2、<code>|v2|/|v1| &gt; 3</code>、符号翻转且幅度增大、NaN/Inf。</span></td>
+          </tr>
+          <tr>
+            <td><code>stork2</code></td>
+            <td><code>stork2.js</code></td>
+            <td>1</td>
+            <td><span data-lang="en">Paper-faithful STORK-2 (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with <code>s=8</code> sub-stages and Taylor-expansion virtual NFE. First step bootstraps as Euler. <code>b(j)</code> coefficients via closed-form RKG formula. Designed for stiff ODEs (stability region ~2s² = 128×).</span><span data-lang="zh">论文原版 STORK-2（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + <code>s=8</code> 个 sub-stage + Taylor 展开 virtual NFE。首步以 Euler 启动。<code>b(j)</code> 系数用 RKG 闭式公式。专为刚性 ODE 设计（稳定性域约 2s²=128 倍）。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en"><strong>Registry &amp; factory</strong> — <code>samplers/index.js</code> exports <code>SOLVERS</code> (id → <code>{label, labelKey, descKey, create()}</code>), <code>DEFAULT_SOLVER='euler'</code>, <code>resolveSamplerName()</code> (validates + normalizes), and <code>createSampler()</code>. <code>LEGACY_ALIASES = { stork: 'extrap' }</code> keeps old user settings working. The dropdown options in <code>src/renderer/exportDialog.js</code> and the settings UI must stay aligned with <code>SOLVERS</code>.</p>
+      <p data-lang="zh"><strong>注册表与工厂</strong>——<code>samplers/index.js</code> 导出 <code>SOLVERS</code>（id → <code>{label, labelKey, descKey, create()}</code>）、<code>DEFAULT_SOLVER='euler'</code>、<code>resolveSamplerName()</code>（校验 + 归一化）与 <code>createSampler()</code>。<code>LEGACY_ALIASES = { stork: 'extrap' }</code> 兼容旧用户设置。<code>src/renderer/exportDialog.js</code> 与设置 UI 的下拉选项必须与 <code>SOLVERS</code> 保持一致。</p>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Chunked inference caveat</strong>: <code>extrap</code> and <code>stork2</code> keep cross-step velocity state (<code>_vPrev</code> / <code>_velPreds</code>). A fresh sampler instance is created per <code>runDiffusionLoop</code> call, so each vocoder chunk starts from Euler-equivalent behavior at its first step. For chunked previews this resets their advantage at every chunk boundary — prefer <code>euler</code> or <code>heun</code> there. <code>reset()</code> is provided for callers that reuse a sampler instance across runs.</p>
+          <p data-lang="zh"><strong>分块推理注意事项</strong>：<code>extrap</code> 与 <code>stork2</code> 保留跨步速度状态（<code>_vPrev</code> / <code>_velPreds</code>）。每次 <code>runDiffusionLoop</code> 调用都会新建 sampler 实例，因此每个 vocoder 块的首步都相当于 Euler 行为。分块预览时每块边界都会重置其优势——建议分块预览使用 <code>euler</code> 或 <code>heun</code>。跨运行复用 sampler 实例的调用方可调用 <code>reset()</code>。</p>
+        </div>
+      </div>
 
       <h2>
         <span data-lang="en">Stage 6 — Vocoder &amp; Postprocessing</span>
@@ -456,6 +517,7 @@ await pipeline.swapSifiganPrecision('fp16');
 const audio = await pipeline.synthesize(notes, bpm, {
   nSteps,               // default 32
   cfg, cfgRescale,      // default 3.0 / 0.75
+  sampler,              // 'euler' (default) | 'heun' | 'extrap' | 'stork2'
   autoShift, pitchShift,
   f0Envelope, pitchCurveF0,
   refAudioWavBuffer,    // reference audio for prompt mel + autoShift

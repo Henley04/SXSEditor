@@ -135,6 +135,12 @@ SXSEditor/
 │   │   │   ├── modelLoader.js
 │   │   │   ├── constants.js
 │   │   │   ├── float16Patch.js
+│   │   │   ├── samplers/      # Pluggable diffusion ODE solvers
+│   │   │   │   ├── index.js   # Registry + factory (resolveSamplerName, createSampler)
+│   │   │   │   ├── euler.js   # Euler (1st-order, default baseline)
+│   │   │   │   ├── heun.js    # Heun (2nd-order trapezoidal)
+│   │   │   │   ├── extrap.js  # Extrapolated Euler (STORK-inspired heuristic)
+│   │   │   │   └── stork2.js  # STORK-2 (paper-faithful, RKC 2nd-order)
 │   │   │   └── utils.js
 │   │   ├── webnn/             # WebNN NPU pipeline
 │   │   ├── rmvpePitchDetector.js  # RMVPE F0 extraction
@@ -222,6 +228,33 @@ Binary audio data uses `Float32Array` transfer for low latency.
 5. **Audio Segmentation**: Long audio is split into segments for processing
 
 Key constants: `SAMPLE_RATE=24000`, `HOP_SIZE=480`, `EMBED_DIM=512`, `COND_DIM=1024`.
+
+### Diffusion Samplers
+
+`src/inference/pipeline/samplers/` is a pluggable ODE-solver abstraction for the flow-matching diffusion loop. The model outputs a velocity field `flow_pred = v(x, t)`; sampling solves `dx/dt = v(x, t)` with `t` going 0 → 1 (equivalent to the paper's reverse integration). The solver only decides *when* to call `diffStep` and *how* to combine predictions into the `xt` delta — CFG / Rescale / tensor lifecycle stay with the caller, so both the ORT/DML path (`pipeline/diffusion.js`) and the WebNN/NPU path (`webnn/diffusion.js`) share one algorithm.
+
+**Unified interface** — every solver implements:
+
+```js
+async step({ evalDiffStep, combine, step, totalSteps, xtData, buffers }) → { nfe }
+//   evalDiffStep(t, xtOverride?) → Promise<{condPred, uncondPred}>
+//   combine(condPred, uncondPred) → Float32Array  // writes buffers.vBuf, returns it
+//   buffers: { vBuf, deltaBuf, v1Buf, xPredBuf }  // caller-allocated, reused across steps
+//   delta is written into buffers.deltaBuf; the caller accumulates it onto xt.data
+```
+
+| Solver | File | NFE / step | Algorithm |
+|--------|------|------------|-----------|
+| `euler` (default) | `euler.js` | 1 | First-order explicit, midpoint time `t = (step + 0.5) / totalSteps`. Equivalent to the pre-refactor loop. |
+| `heun` | `heun.js` | 2 | RK2 trapezoidal: predict `x_pred = x + v1·dt`, then correct `delta = 0.5·(v1 + v2)·dt`. Final step degrades to Euler to avoid `t > 1`. |
+| `extrap` | `extrap.js` | 1 | Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). `v2 = v1 + γ·(v1 − v_prev)` with γ=0.5; `delta = 0.5·dt·(v1 + v2)`. First step and unsafe extrapolation fall back to Euler. Stability guards: velocity-jump ratio > 2, `\|v2\|/\|v1\| > 3`, sign-flip with growing amplitude, NaN/Inf. |
+| `stork2` | `stork2.js` | 1 | Paper-faithful STORK-2 (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with `s=8` sub-stages and Taylor-expansion virtual NFE. First step bootstraps as Euler. `b(j)` coefficients via closed-form RKG formula. Designed for stiff ODEs (stability region ~2s² = 128×). |
+
+**Registry & factory** — `samplers/index.js` exports `SOLVERS` (id → `{label, labelKey, descKey, create()}`), `DEFAULT_SOLVER='euler'`, `resolveSamplerName()` (validates + normalizes), and `createSampler()`. `LEGACY_ALIASES = { stork: 'extrap' }` keeps old user settings working. The dropdown options in `src/renderer/exportDialog.js` and the settings UI must stay aligned with `SOLVERS`.
+
+**Plumbing** — `runDiffusionLoop` / `runDiffusionLoopChunked` take a `samplerName` arg (default `'euler'`). The batch path (`runBatchDiffusionLoop`) keeps the `batch=4` optimization for Euler and falls back to sequential single-segment calls for non-Euler samplers. Both paths track `totalNFE` (number of function evaluations) in logs. `synthesize(notes, bpm, { sampler, ... })` threads the value through; settings keys are `previewSampler` / `exportSampler`.
+
+> **Chunked inference caveat**: `extrap` and `stork2` keep cross-step velocity state (`_vPrev` / `_velPreds`). A fresh sampler instance is created per `runDiffusionLoop` call, so each vocoder chunk starts from Euler-equivalent behavior at its first step. For chunked previews this resets their advantage at every chunk boundary — prefer `euler` or `heun` there. `reset()` is provided for callers that reuse a sampler instance across runs.
 
 ### Phoneme Duration Statistics (Data-Driven)
 
@@ -332,6 +365,7 @@ The test suite includes **470+ test cases** covering:
 - WAV encoding/decoding
 - Track management (add, remove, move, resize fragments)
 - SVS pipeline logic (text processing, phoneme merging, note type detection)
+- Diffusion samplers (Euler equivalence, Heun trapezoidal + last-step fallback, Extrap stability guards, STORK-2 RKC recurrence, registry/factory behavior)
 - Pitch detection (RMVPE)
 - MIDI parsing
 - Model path consistency

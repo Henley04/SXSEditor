@@ -203,6 +203,12 @@
             <td><span data-lang="en">0–1 / step 0.05</span><span data-lang="zh">0–1 / 步进 0.05</span></td>
             <td><span data-lang="en">Mitigates over-guidance artifacts. Recommended 0.5–0.9.</span><span data-lang="zh">缓解过度引导伪影。推荐 0.5–0.9。</span></td>
           </tr>
+          <tr>
+            <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
+            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
+            <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
+            <td><span data-lang="en">Diffusion sampling solver. See <a href="#diffusion-sampler">Diffusion Sampler</a> below.</span><span data-lang="zh">扩散采样求解器。见下方 <a href="#diffusion-sampler">扩散求解器</a>。</span></td>
+          </tr>
         </tbody>
       </table>
 
@@ -240,8 +246,59 @@
             <td><span data-lang="en">0–1 / step 0.05</span><span data-lang="zh">0–1 / 步进 0.05</span></td>
             <td><span data-lang="en">Same as preview.</span><span data-lang="zh">同预览。</span></td>
           </tr>
+          <tr>
+            <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
+            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
+            <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
+            <td><span data-lang="en">Diffusion sampling solver. See <a href="#diffusion-sampler">Diffusion Sampler</a> below. The export dialog also lets you override this per export.</span><span data-lang="zh">扩散采样求解器。见下方 <a href="#diffusion-sampler">扩散求解器</a>。导出对话框也支持每次导出单独覆盖。</span></td>
+          </tr>
         </tbody>
       </table>
+
+      <h3 id="diffusion-sampler">
+        <span data-lang="en">Diffusion Sampler</span>
+        <span data-lang="zh">扩散求解器</span>
+      </h3>
+      <p data-lang="en">The diffusion model iteratively denoises a mel spectrogram by integrating the flow-matching velocity field ODE. The <strong>sampler</strong> decides how each denoising step combines model evaluations into the state update. SXSEditor exposes four samplers, selectable independently for preview and export:</p>
+      <p data-lang="zh">扩散模型通过积分 flow-matching 速度场 ODE 迭代去噪 mel 频谱。<strong>求解器</strong>决定每个去噪步如何将模型推理组合为状态更新。SXSEditor 提供四种求解器，预览与导出可独立选择：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></th>
+            <th><span data-lang="en">NFE / step</span><span data-lang="zh">每步推理次数</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en"><strong>Euler</strong> (default)</span><span data-lang="zh"><strong>Euler</strong>（默认）</span></td>
+            <td><span data-lang="en">1</span><span data-lang="zh">1</span></td>
+            <td><span data-lang="en">First-order explicit Euler, midpoint time evaluation. The original baseline implementation; fastest and most predictable.</span><span data-lang="zh">一阶显式欧拉法，中点时间评估。原始基线实现，最快且最稳定。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Heun</strong></span><span data-lang="zh"><strong>Heun</strong></span></td>
+            <td><span data-lang="en">2</span><span data-lang="zh">2</span></td>
+            <td><span data-lang="en">Second-order improved Euler (trapezoidal rule). Higher accuracy at the cost of roughly 2× inference time. Falls back to Euler on the final step to avoid evaluating <code>t &gt; 1</code>.</span><span data-lang="zh">二阶改进欧拉（梯形公式）。精度更高，代价是推理时间约 2 倍。末步退化为 Euler 以避免 <code>t &gt; 1</code> 越界。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Extrapolated Euler</strong></span><span data-lang="zh"><strong>Extrapolated Euler</strong></span></td>
+            <td><span data-lang="en">1</span><span data-lang="zh">1</span></td>
+            <td><span data-lang="en">Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity to linearly extrapolate the next velocity — 1 inference/step. Not the full stabilized Runge-Kutta formulation; benefit is heuristic and strongest when the velocity field changes smoothly. Includes numerical-stability guards (amplitude / sign-flip / NaN) that fall back to Euler when extrapolation is unsafe.</span><span data-lang="zh">受 STORK（ICLR 2026）启发的速度外推启发式。复用上一步速度线性外推下一步速度——每步 1 次推理。并非论文完整的 stabilized Runge-Kutta 格式；收益为启发式，速度场缓变时效果最佳。含数值稳定性保护（幅度 / 符号翻转 / NaN），外推不安全时退化为 Euler。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>STORK-2</strong></span><span data-lang="zh"><strong>STORK-2</strong></span></td>
+            <td><span data-lang="en">1</span><span data-lang="zh">1</span></td>
+            <td><span data-lang="en">Paper-faithful implementation of STORK-2 (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE — only 1 model inference per step despite the 8 sub-stages. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost (8 full-array passes) than Euler.</span><span data-lang="zh">STORK-2 论文原版实现（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE——尽管 8 个 sub-stage，每步仅 1 次模型推理。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍。代价：每步代数运算开销高于 Euler（8 趟全数组遍历）。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Both Extrapolated Euler and STORK-2 keep cross-step velocity history. In <strong>chunked preview inference</strong> (long fragments split into chunks), this history resets at every chunk boundary, which reduces their advantage — for chunked previews, Euler or Heun is usually the safer choice. The sampler setting is stored in <code>previewSampler</code> / <code>exportSampler</code>; the legacy value <code>stork</code> is silently mapped to <code>extrap</code> for backward compatibility.</p>
+          <p data-lang="zh">Extrapolated Euler 与 STORK-2 都需要跨步速度历史。在<strong>分块预览推理</strong>（长片段被切成多块）时，每块边界都会重置历史，使其优势减弱——分块预览通常 Euler 或 Heun 更稳妥。求解器设置存储于 <code>previewSampler</code> / <code>exportSampler</code>；旧值 <code>stork</code> 会被静默映射为 <code>extrap</code> 以保持向后兼容。</p>
+        </div>
+      </div>
 
       <h3>
         <span data-lang="en">Vocoder Chunk Settings</span>
