@@ -6,7 +6,7 @@
  * 推理输入/输出通过 IPC 与主进程协调。
  */
 
-import { detectNPU } from './npuDetection.js';
+import { detectNPU, clearCache } from './npuDetection.js';
 import { loadModel, unloadModel, runInference, getStatus, runSession, withRunLock } from './sessionManager.js';
 import { runEncoderStage } from './preprocessing.js';
 import { runDiffusionLoop, runBatchDiffusionLoop } from './diffusion.js';
@@ -127,7 +127,7 @@ async function _runSynthesisUnlocked(params) {
     });
 
     const synthTotalMs = performance.now() - tEnc0;
-    const encMs = diffResult.diffTotalMs > 0 ? tEnc0 : 0; // placeholder, encMs computed from tDiff0 - tEnc0
+    // B10: removed dead `encMs` placeholder (was computed but never used)
     const diffMs = diffResult.diffTotalMs;
     const vocMs = vocTotalMs;
     console.log(`[WebNN] ===== Synthesis Summary =====`);
@@ -363,6 +363,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
 // 导出接口供 IPC 调用（保持与原始模块相同的 API）
 export {
     detectNPU,
+    clearCache, // W12: 暴露缓存清除入口，供需要强制重新检测时调用
     loadModel,
     unloadModel,
     runInference,

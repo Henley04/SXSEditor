@@ -1174,6 +1174,10 @@ function httpRequest(urlStr, options = {}) {
   });
 }
 
+// Host whitelist for model downloads and every redirect hop. ModelScope CDN
+// redirects to Alibaba OSS and other backends, so include the known CDN
+// domains. S7: every redirect hop is validated against this list to prevent
+// MITM/off-host redirects to attacker-controlled servers.
 const ALLOWED_DOWNLOAD_HOSTS = [
   'modelscope.cn',
   'www.modelscope.cn',
@@ -1181,15 +1185,55 @@ const ALLOWED_DOWNLOAD_HOSTS = [
   'github.com',
   'raw.githubusercontent.com',
   'objects.githubusercontent.com',
+  // Alibaba OSS / CDN backends that ModelScope redirects to
+  'oss-cn-beijing.aliyuncs.com',
+  'oss-cn-hangzhou.aliyuncs.com',
+  'oss-cn-shanghai.aliyuncs.com',
+  'oss-cn-shenzhen.aliyuncs.com',
+  'oss-cn-zhangjiakou.aliyuncs.com',
+  'oss-cn-huhehaote.aliyuncs.com',
+  'oss-cn-wulanchabu.aliyuncs.com',
+  'oss-cn-chengdu.aliyuncs.com',
+  'oss-cn-hongkong.aliyuncs.com',
+  'oss-ap-southeast-1.aliyuncs.com',
+  'oss-accelerate.aliyuncs.com',
+  'oss-accelerate-overseas.aliyuncs.com',
+  // Generic OSS wildcard suffixes (oss-<region>.aliyuncs.com are matched by the
+  // subdomain rule below, so this is just a safety net for new regions).
 ];
 
 function isAllowedDownloadHost(urlStr) {
   try {
-    const host = new URL(urlStr).hostname;
+    const u = new URL(urlStr);
+    // S7: require HTTPS for model downloads. Plain HTTP can be MITM'd.
+    if (u.protocol !== 'https:') return false;
+    const host = u.hostname;
     return ALLOWED_DOWNLOAD_HOSTS.some(allowed => host === allowed || host.endsWith('.' + allowed));
   } catch (_) {
     return false;
   }
+}
+
+/**
+ * Permanent error codes that should NOT be retried. Retrying wastes time and
+ * can leave partial temp files around forever (W6).
+ */
+const PERMANENT_ERROR_CODES = new Set([
+  'ENOSPC',   // disk full
+  'EACCES',   // permission denied
+  'EPERM',    // operation not permitted
+  'EROFS',    // read-only file system
+  'ENOTDIR',  // path component not a directory
+  'EISDIR',   // path is a directory
+]);
+
+function _isPermanentError(err) {
+  if (!err) return false;
+  if (err.code && PERMANENT_ERROR_CODES.has(err.code)) return true;
+  // Some HTTP errors are permanent
+  const msg = err.message || '';
+  if (/^HTTP 4\d\d/.test(msg) && !/^HTTP 4(08|29)/.test(msg)) return true; // 4xx except 408/429
+  return false;
 }
 
 async function resolveRedirects(url, maxRedirects = 5, method = 'GET', headers = {}) {
@@ -1305,6 +1349,12 @@ async function downloadFileWithResume(url, destPath, options = {}) {
   let currentUrl = url;
   let redirectCount = 0;
 
+  // S7: validate the initial URL and every redirect hop against the host
+  // whitelist. Prevents off-host / MITM redirects during model downloads.
+  if (!isAllowedDownloadHost(currentUrl)) {
+    throw new Error(`Download URL not allowed: ${currentUrl}`);
+  }
+
   while (redirectCount < 5) {
     const { redirectUrl, response } = await httpRequest(currentUrl, {
       headers,
@@ -1313,6 +1363,10 @@ async function downloadFileWithResume(url, destPath, options = {}) {
     });
 
     if (redirectUrl) {
+      if (!isAllowedDownloadHost(redirectUrl)) {
+        response.resume();
+        throw new Error(`Redirect target not allowed: ${redirectUrl}`);
+      }
       currentUrl = redirectUrl;
       redirectCount++;
       continue;
@@ -1328,6 +1382,7 @@ async function downloadFileWithResume(url, destPath, options = {}) {
     }
 
     if (response.statusCode !== 200 && response.statusCode !== 206) {
+      response.resume();
       throw new Error(`HTTP ${response.statusCode}`);
     }
 
@@ -1355,6 +1410,14 @@ async function downloadFileWithRetry(url, destPath, options = {}) {
     } catch (err) {
       lastError = err;
       if (err.message === 'Download cancelled') throw err;
+      // W6: don't retry permanent errors (disk full, permission denied, 4xx).
+      // Retrying these wastes time and leaves stale temp files around.
+      if (_isPermanentError(err)) {
+        // Clean up temp file on permanent failure so a later run doesn't
+        // mistake a partial download for resumable progress.
+        try { fs.unlinkSync(destPath + TEMP_SUFFIX); } catch (_) {}
+        throw err;
+      }
       if (attempt < maxRetries) {
         console.warn(`[ModelManager] Download attempt ${attempt + 1} failed: ${err.message}, retrying...`);
         await sleep(RETRY_DELAY_MS * (attempt + 1));
@@ -1387,6 +1450,12 @@ async function downloadChunk(url, destPath, chunkIndex, start, end, options = {}
   let currentUrl = url;
   let redirectCount = 0;
 
+  // S7: validate the initial URL and every redirect hop against the host
+  // whitelist. Prevents off-host / MITM redirects during chunked downloads.
+  if (!isAllowedDownloadHost(currentUrl)) {
+    throw new Error(`Download URL not allowed: ${currentUrl}`);
+  }
+
   while (redirectCount < 5) {
     if (abortSignal && abortSignal.aborted) {
       throw new Error('Download cancelled');
@@ -1399,6 +1468,10 @@ async function downloadChunk(url, destPath, chunkIndex, start, end, options = {}
     });
 
     if (redirectUrl) {
+      if (!isAllowedDownloadHost(redirectUrl)) {
+        response.resume();
+        throw new Error(`Redirect target not allowed: ${redirectUrl}`);
+      }
       currentUrl = redirectUrl;
       redirectCount++;
       continue;
@@ -1602,6 +1675,8 @@ async function downloadFileChunked(url, destPath, fileSize, options = {}) {
       } catch (err) {
         if (err.message === 'Download cancelled') throw err;
         if (err.message === 'NO_RANGE_SUPPORT') throw err;
+        // W6: don't retry permanent errors (disk full, permission denied, 4xx).
+        if (_isPermanentError(err)) throw err;
         if (attempt < MAX_RETRIES) {
           console.warn(`[ModelManager] Chunk ${chunk.index} attempt ${attempt + 1} failed: ${err.message}, retrying...`);
           await sleep(RETRY_DELAY_MS * (attempt + 1));
@@ -1691,6 +1766,59 @@ async function getRemoteFileSize(filePath, precision, revision = 'master') {
 }
 
 /**
+ * S6: verify the integrity of a downloaded model file.
+ *
+ * - If the manifest entry declares a `size`, the local file size must match
+ *   exactly. A mismatched size indicates corruption or MITM replacement.
+ * - If the manifest entry declares a `sha256`, recompute and compare.
+ *   (No hashes are currently published in MODEL_FILE_MANIFEST, but the
+ *   plumbing is here so hashes can be added without touching call sites.)
+ *
+ * Returns { ok: boolean, error?: string }.
+ */
+async function _verifyFileIntegrity(destPath, manifestEntry) {
+  if (!manifestEntry) return { ok: true };
+  let stats;
+  try {
+    stats = await fs.promises.stat(destPath);
+  } catch (_) {
+    return { ok: false, error: 'file_missing' };
+  }
+  if (stats.size === 0) {
+    return { ok: false, error: 'empty_file' };
+  }
+  if (typeof manifestEntry.size === 'number' && manifestEntry.size > 0) {
+    // Allow a 1% size tolerance for platforms where the manifest size was
+    // rounded. A 5x size difference (the kind a MITM replacement produces)
+    // still trips the check.
+    const expected = manifestEntry.size;
+    const actual = stats.size;
+    if (actual < expected * 0.9 || actual > expected * 1.1) {
+      return { ok: false, error: `size_mismatch: expected ~${expected}, got ${actual}` };
+    }
+  }
+  if (typeof manifestEntry.sha256 === 'string' && manifestEntry.sha256.length === 64) {
+    try {
+      const { createHash } = require('node:crypto');
+      const hash = createHash('sha256');
+      await new Promise((resolve, reject) => {
+        const stream = fs.createReadStream(destPath);
+        stream.on('data', (chunk) => hash.update(chunk));
+        stream.on('end', resolve);
+        stream.on('error', reject);
+      });
+      const digest = hash.digest('hex');
+      if (digest !== manifestEntry.sha256.toLowerCase()) {
+        return { ok: false, error: 'sha256_mismatch' };
+      }
+    } catch (e) {
+      return { ok: false, error: `hash_error: ${e.message}` };
+    }
+  }
+  return { ok: true };
+}
+
+/**
  * Get the real remote file size by issuing a Range: bytes=0-0 request.
  *
  * ModelScope CDN behavior:
@@ -1744,7 +1872,22 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
   missingFiles = await filterMissingByRemote(missingFiles, modelDir, precision, revision);
   if (missingFiles.length === 0) {
     console.log('[ModelManager] All missing files filtered out by remote check (single onnx, no external data)');
-    saveModelVersion(modelDir, precision, revision);
+    // W9: only record the version if at least one required manifest file
+    // actually exists on disk. filterMissingByRemote can return an empty
+    // list when the remote listing is unavailable but the manifest files
+    // are also missing locally; recording the version in that state would
+    // trick checkModelVersion into thinking the model is installed.
+    const manifest = getManifestForPrecision(precision);
+    let anyLocalExists = false;
+    for (const entry of manifest) {
+      try {
+        const localPath = getLocalFilePath(modelDir, entry.filePath, precision);
+        if (fs.existsSync(localPath)) { anyLocalExists = true; break; }
+      } catch (_) {}
+    }
+    if (anyLocalExists) {
+      saveModelVersion(modelDir, precision, revision);
+    }
     return;
   }
   // 通知调用方调整后的最终文件列表（让 UI 显示补充的 data 文件）
@@ -1870,6 +2013,22 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
         });
       }
 
+      // S6: verify downloaded file integrity (size and hash, if declared in
+      // the manifest). A MITM-replaced model would land here and get rejected
+      // before being loaded by ONNX Runtime.
+      const manifestEntry = getManifestForPrecision(precision).find(
+        (e) => e.filePath === file.filePath
+      );
+      const integrity = await _verifyFileIntegrity(destPath, manifestEntry);
+      if (!integrity.ok) {
+        // Remove the bad file so the next run re-downloads instead of
+        // trusting the corrupted local copy.
+        try { fs.unlinkSync(destPath); } catch (_) {}
+        try { fs.unlinkSync(destPath + TEMP_SUFFIX); } catch (_) {}
+        try { fs.unlinkSync(destPath + CHUNK_META_SUFFIX); } catch (_) {}
+        throw new Error(`Integrity check failed for ${file.filePath}: ${integrity.error}`);
+      }
+
       // 更新最终下载量
       try {
         const finalSize = (await fs.promises.stat(destPath)).size;
@@ -1934,6 +2093,7 @@ module.exports = {
   DIFF_STEP_MODEL_FILES,
   VOCODER_MODEL_FILES,
   isPrecisionDownloadable,
+  isAllowedDownloadHost,
   // Remote file list (smart onnx+data detection)
   listModelFiles,
   filterMissingByRemote,

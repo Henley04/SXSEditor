@@ -299,7 +299,9 @@ app.whenReady().then(() => {
     const modelPath = decodeURIComponent(url.pathname);
     const modelDir = getModelDir();
     const resolvedPath = path.resolve(modelDir, modelPath.replace(/^\/+/, ''));
-    if (!resolvedPath.startsWith(path.resolve(modelDir))) {
+    // Use path.sep to avoid prefix confusion (e.g. /home/user vs /home/userevil).
+    const allowedRoot = path.resolve(modelDir);
+    if (resolvedPath !== allowedRoot && !resolvedPath.startsWith(allowedRoot + path.sep)) {
       return new Response('Forbidden', { status: 403 });
     }
     if (!resolvedPath.endsWith('.onnx') && !resolvedPath.endsWith('.onnx.data')) {

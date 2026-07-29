@@ -37,9 +37,18 @@ class AudioOutputManager {
     this._playbackOffset = 0;
     this._readyResolve = null;
     this._readyPromise = null;
+    // S12: Track unexpected worker death so _ensureWorker() won't fork zombies
+    // during getPosition polls; cleared only by an explicit start() request.
+    this._workerCrashed = false;
+    // S12: Guard against firing onEnded twice (interval + Speaker finish/crash).
+    this._endedSent = false;
   }
 
   _ensureWorker() {
+    // S12: Don't auto-fork a new worker if the previous one died unexpectedly.
+    // This prevents getPosition polls from forking zombie workers every 200ms.
+    // The flag is cleared only in start() when a fresh play is requested.
+    if (this._workerCrashed) return null;
     if (this._worker) return this._worker;
 
     const workerScript = _findWorkerScript();
@@ -76,6 +85,9 @@ class AudioOutputManager {
       }
 
       if (msg.type === 'ended') {
+        // S12: Guard against firing onEnded twice (e.g. interval + Speaker finish).
+        if (this._endedSent) return;
+        this._endedSent = true;
         this._isPlaying = false;
         this._stopPositionTracking();
         if (this._onEndedCallback) {
@@ -99,6 +111,9 @@ class AudioOutputManager {
       console.error('[AudioOutputManager] child process error:', err.message);
       this._workerReady = false;
       this._workerAvailable = false;
+      // S12: Mark crashed so _ensureWorker() won't fork zombies during polls.
+      this._workerCrashed = true;
+      this._handleWorkerDeath();
       if (this._readyResolve) {
         this._readyResolve(false);
         this._readyResolve = null;
@@ -110,6 +125,9 @@ class AudioOutputManager {
       this._workerReady = false;
       this._workerAvailable = false;
       this._worker = null;
+      // S12: Mark crashed so _ensureWorker() won't fork zombies during polls.
+      this._workerCrashed = true;
+      this._handleWorkerDeath();
       if (this._readyResolve) {
         this._readyResolve(false);
         this._readyResolve = null;
@@ -127,7 +145,21 @@ class AudioOutputManager {
     this._pendingRequests.clear();
   }
 
-  _sendCommand(type, data = {}, transferList = null) {
+  // S12: Called from worker 'error'/'exit' handlers to clean up playing state
+  // and fire a synthetic onEnded so the UI doesn't stay stuck in "playing".
+  _handleWorkerDeath() {
+    const wasPlaying = this._isPlaying;
+    this._isPlaying = false;
+    this._stopPositionTracking();
+    if (wasPlaying && !this._endedSent) {
+      this._endedSent = true;
+      if (this._onEndedCallback) {
+        try { this._onEndedCallback(); } catch (_) {}
+      }
+    }
+  }
+
+  _sendCommand(type, data = {}, transferList = null, timeoutMs = 15000) {
     return new Promise((resolve, reject) => {
       const worker = this._ensureWorker();
       if (!worker) {
@@ -136,19 +168,23 @@ class AudioOutputManager {
       }
 
       const id = ++this._requestId;
+      // B3: Per-command timeout (default 15s; quick status commands use 2s).
       const timeout = setTimeout(() => {
         if (this._pendingRequests.has(id)) {
           this._pendingRequests.delete(id);
           reject(new Error(`Command timeout: ${type}`));
         }
-      }, 15000);
+      }, timeoutMs);
 
       this._pendingRequests.set(id, {
         resolve: (result) => { clearTimeout(timeout); resolve(result); },
         reject: (err) => { clearTimeout(timeout); reject(err); },
       });
 
-      worker.send({ id, type, ...data }, transferList || []);
+      // W4: transferList must be passed in the options argument (3rd param),
+      // not as sendHandle (2nd param). Passing an array as the 2nd arg silently
+      // falls back to structured clone (full copy of large audio buffers).
+      worker.send({ id, type, ...data }, undefined, transferList ? { transferList } : undefined);
     });
   }
 
@@ -157,7 +193,8 @@ class AudioOutputManager {
     this._positionInterval = setInterval(async () => {
       if (!this._isPlaying) return;
       try {
-        const result = await this._sendCommand('getPosition');
+        // B3: getPosition is a quick status command, use 2s timeout.
+        const result = await this._sendCommand('getPosition', {}, null, 2000);
         if (result.position !== undefined) {
           this._lastPosition = result.position;
           this._duration = result.duration || 0;
@@ -184,7 +221,8 @@ class AudioOutputManager {
 
   async getDevices() {
     try {
-      const result = await this._sendCommand('getDevices');
+      // B3: getDevices is a quick status command, use 2s timeout.
+      const result = await this._sendCommand('getDevices', {}, null, 2000);
       return result.devices || [];
     } catch (e) {
       return [];
@@ -193,6 +231,11 @@ class AudioOutputManager {
 
   async start(audioData, options = {}) {
     await this.stop();
+
+    // S12: Clear crash flag so start() can fork a fresh worker; reset ended
+    // flag so the new playback session can fire onEnded.
+    this._workerCrashed = false;
+    this._endedSent = false;
 
     const {
       volume = 1.0,

@@ -35,6 +35,28 @@ let _audioData = null;
 let _sampleRate = 24000;
 let _duration = 0;
 let _positionInterval = null;
+// W3: Idempotency guard for 'ended' notifications (interval + Speaker finish/close).
+let _endedSent = false;
+
+// W2: Wrap process.send so we never throw ERR_IPC_CHANNEL_CLOSED when the
+// parent has already disconnected the IPC channel (e.g. during SIGTERM shutdown).
+function _safeSend(msg) {
+  try {
+    if (process.connected) {
+      process.send(msg);
+    }
+  } catch (_) {}
+}
+
+// W3: Fire 'ended' to parent with idempotency guard. Used by the Speaker
+// finish/close listeners and the interval fallback.
+function _notifyEnded() {
+  if (_endedSent) return;
+  _endedSent = true;
+  _isPlaying = false;
+  _stopPositionTracking();
+  _safeSend({ type: 'ended' });
+}
 
 function handleGetDevices() {
   if (!Speaker) return { devices: [], isAvailable: false };
@@ -55,6 +77,9 @@ function handleStart(audioData, options) {
   }
 
   handleStop();
+
+  // W3: Reset ended guard for the new playback session.
+  _endedSent = false;
 
   const {
     sampleRate = 24000,
@@ -85,6 +110,21 @@ function handleStart(audioData, options) {
   } catch (e) {
     return { success: false, error: `Failed to create audio output: ${e.message}` };
   }
+
+  // W3: Attach error/finish/close listeners so native audio device errors don't
+  // crash the worker as unhandled 'error' events, and 'ended' is driven by the
+  // Speaker's actual finish event (with the interval as a fallback).
+  _output.on('error', (err) => {
+    console.error('[AudioWorker] Speaker error:', err.message);
+    _safeSend({ type: 'error', error: err.message });
+    _notifyEnded();
+  });
+  _output.on('finish', () => {
+    _notifyEnded();
+  });
+  _output.on('close', () => {
+    _notifyEnded();
+  });
 
   _isPlaying = true;
   _playbackStartTime = performance.now();
@@ -117,6 +157,12 @@ function handleStop() {
   _stopPositionTracking();
 
   if (_output) {
+    // W3: Remove our listeners before stop() so the Speaker's finish/close
+    // events (triggered by stop()) don't fire a spurious 'ended' to parent.
+    // handleStop is idempotent: subsequent calls find _output already null.
+    try { _output.removeAllListeners('error'); } catch (_) {}
+    try { _output.removeAllListeners('finish'); } catch (_) {}
+    try { _output.removeAllListeners('close'); } catch (_) {}
     // stop() 立即停止并丢弃剩余音频（区别于 end() 的 drain 行为）
     try { _output.stop(); } catch (_) {}
     _output = null;
@@ -146,9 +192,9 @@ function _startPositionTracking() {
     const position = _playbackOffset + elapsedSeconds;
 
     if (position >= _duration) {
-      _isPlaying = false;
-      _stopPositionTracking();
-      process.send({ type: 'ended' });
+      // W3: Interval-based fallback; prefer the Speaker's actual finish event
+      // when it fires. _notifyEnded is idempotent so both paths are safe.
+      _notifyEnded();
     }
   }, 100);
 }
@@ -185,10 +231,21 @@ process.on('message', (msg) => {
       default:
         result = { error: `Unknown command: ${type}` };
     }
-    process.send({ id, type, result });
+    // W2: Use _safeSend to avoid ERR_IPC_CHANNEL_CLOSED if parent disconnected.
+    _safeSend({ id, type, result });
   } catch (err) {
-    process.send({ id, type, result: { error: err.message } });
+    // W2: Use _safeSend to avoid ERR_IPC_CHANNEL_CLOSED if parent disconnected.
+    _safeSend({ id, type, result: { error: err.message } });
   }
 });
 
-process.send({ type: 'ready', isAvailable: !!Speaker });
+// W2: Handle SIGTERM so worker.kill() from the parent runs handleStop()
+// (→ Speaker.stop()) and cleanly releases native audio device handles.
+// handleStop is idempotent, so calling it here even if already stopped is safe.
+process.on('SIGTERM', async () => {
+  try { await handleStop(); } catch (_) {}
+  process.exit(0);
+});
+
+// W2: Use _safeSend for the initial ready signal as well.
+_safeSend({ type: 'ready', isAvailable: !!Speaker });
