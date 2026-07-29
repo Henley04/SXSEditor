@@ -54,6 +54,9 @@ export function initPianoRoll() {
     hoverNoteId: null,
     bpm: BPM,
     projectSettings: { bpm: BPM, timeSignature: [4, 4] },
+    // Snap grid in beats per cell. Default 1/16 (sixteenth note) matches the
+    // historical behavior. Mutators below read this so the grid is configurable.
+    snapGrid: 1 / 16,
     dpr: window.devicePixelRatio || 1,
 
     _staticCache: null,
@@ -143,26 +146,60 @@ export function initPianoRoll() {
     },
 
     _snapBeats(beats) {
-      const grid = 1 / 16;
+      const grid = this.snapGrid;
       return Math.round(beats / grid) * grid;
     },
 
+    /**
+     * Half-width of the trailing resize hot zone in BEATS.
+     *
+     * targetPx = clamp(halfGridPx, 4, 12) where halfGridPx = (snapGrid *
+     * pxPerBeat) / 2. Scaling with the snap grid makes the clamp actually
+     * reachable: fine grids shrink the hot zone toward 4px, coarse grids
+     * grow it toward 12px. Returns beats so the hot zone scales naturally
+     * with zoom level.
+     */
+    _resizeHotZoneBeats() {
+      const pxPerBeat = BEAT_WIDTH * this.zoomX;
+      if (pxPerBeat <= 0) return 0.06;
+      const gridPx = this.snapGrid * pxPerBeat;
+      const targetPx = gridPx / 2;
+      const clampedPx = Math.max(4, Math.min(12, targetPx));
+      return clampedPx / pxPerBeat;
+    },
+
     _findNoteAt(x, y) {
+      // Half-open interval [start, start+duration) to eliminate boundary
+      // ambiguity between adjacent notes. Iterate last-first so the most
+      // recently added note wins on shared boundaries (matches old behavior
+      // for the rare case of true overlap). Resize-edge flag is computed
+      // from a zoom-aware hot zone instead of a fixed 6px.
+      //
+      // No adjacent-pitch fallback: clicking in the empty space of a pitch
+      // row must not snap to a note in the row above/below. This keeps the
+      // hit-test consistent with the fragmentEditor pianoRoll, whose
+      // findNoteAtBeat uses exact pitch match only.
+      const resizeBeats = this._resizeHotZoneBeats();
+      const xTime = this._xToTime(x);
+      const pitch = this._yToPitch(y);
+      // Iterate from last to first to preserve historical "newest wins"
+      // tie-break for genuinely overlapping notes at the same pitch.
       for (let i = this.notes.length - 1; i >= 0; i--) {
         const note = this.notes[i];
-        const rx = Math.round(this._timeToX(note.start));
-        const ry = Math.round(this._pitchToY(note.pitch));
-        const rw = Math.round(note.duration * BEAT_WIDTH * this.zoomX);
-        const rh = Math.round(NOTE_HEIGHT * this.zoomY);
-        if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) {
-          return { note, nx: rx, ny: ry, nw: rw, nh: rh };
+        if (note.pitch !== pitch) continue;
+        const nEnd = note.start + note.duration;
+        // Half-open: click exactly at start is inside; click exactly at end
+        // is NOT inside (belongs to next note or empty space).
+        if (xTime >= note.start && xTime < nEnd) {
+          const rx = Math.round(this._timeToX(note.start));
+          const ry = Math.round(this._pitchToY(note.pitch));
+          const rw = Math.round(note.duration * BEAT_WIDTH * this.zoomX);
+          const rh = Math.round(NOTE_HEIGHT * this.zoomY);
+          const onResizeEdge = (nEnd - xTime) <= resizeBeats + 1e-9;
+          return { note, nx: rx, ny: ry, nw: rw, nh: rh, onResizeEdge };
         }
       }
       return null;
-    },
-
-    _isResizeEdge(x, nx, nw) {
-      return x >= nx + nw - 6 && x <= nx + nw;
     },
 
     _onMouseDown(e) {
@@ -174,7 +211,7 @@ export function initPianoRoll() {
       const hit = this._findNoteAt(x, y);
       if (hit) {
         this.selectedNoteId = hit.note.id;
-        if (this._isResizeEdge(x, hit.nx, hit.nw)) {
+        if (hit.onResizeEdge) {
           this.dragMode = 'resize';
         } else {
           this.dragMode = 'move';
@@ -214,7 +251,7 @@ export function initPianoRoll() {
         const hit = this._findNoteAt(x, y);
         if (hit) {
           this.hoverNoteId = hit.note.id;
-          this.canvas.style.cursor = this._isResizeEdge(x, hit.nx, hit.nw) ? 'ew-resize' : 'move';
+          this.canvas.style.cursor = hit.onResizeEdge ? 'ew-resize' : 'move';
         } else {
           this.hoverNoteId = null;
           this.canvas.style.cursor = 'default';
@@ -243,7 +280,9 @@ export function initPianoRoll() {
       } else if (this.dragMode === 'resize') {
         const dxBeats = (x - this.dragStartX) / (BEAT_WIDTH * this.zoomX);
         let newDuration = this.dragNoteStart.duration + dxBeats;
-        newDuration = Math.max(1 / 16, this._snapBeats(newDuration));
+        // Resize minimum = one snap grid cell so the result always lands on
+        // a grid line.
+        newDuration = Math.max(this.snapGrid, this._snapBeats(newDuration));
         note.duration = newDuration;
       }
       this._staticCacheDirty = true;

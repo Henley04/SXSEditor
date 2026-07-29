@@ -31,6 +31,11 @@ let currentFragment = null;
 let currentProject = null;
 let currentParamMode = PARAM_MODES.MIDI;
 let notes = [];
+// Snap grid for the fragmentEditor piano roll, in beats per grid cell.
+// 1/4 = quarter note, 1/8 = eighth, 1/16 = sixteenth, 1/32 = thirty-second.
+// Default is 1/16 (finer than the historical hard-coded 1/4) so resize/move
+// snap matches audioPreprocess pianoRoll and respects user-selected grid.
+let snapGrid = 1 / 16;
 let kanjiGroups = [];
 let envelopes = {
   volume: { keyframes: [{ time: 0, value: 1, smoothness: 0 }] },
@@ -184,6 +189,9 @@ export function setCurrentParamMode(v) { currentParamMode = v; }
 
 export function getNotes() { return notes; }
 export function setNotes(v) { notes = v; }
+
+export function getSnapGrid() { return snapGrid; }
+export function setSnapGrid(v) { snapGrid = v; }
 
 export function getKanjiGroups() { return kanjiGroups; }
 export function setKanjiGroups(v) { kanjiGroups = v; }

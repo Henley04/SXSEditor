@@ -6,6 +6,7 @@ import {
 } from './constants.js';
 import {
   getNotes, setNotes,
+  getSnapGrid,
   getSelectedNoteIds, setSelectedNoteIds,
   getSelectedAnchorIndices, setSelectedAnchorIndices,
   getDragMode, setDragMode,
@@ -72,7 +73,9 @@ import {
   getPhonemeAdjustments, getPhonemeStartX, normalizePhonemeRatios,
   tokenizeLyric, resolvePhonemesFromPipeline,
   render, resizeCanvases,
+  _getCanvasRendererNotesIndex,
 } from './canvasRenderer.js';
+import { computeMultiDragResult, findAdjacentBoundary } from './notesIndex.js';
 import {
   autoDetectKanjiGroups, cleanupKanjiGroups,
   findGroupByNoteId, splitKanjiNoteToKana, mergeKanaGroupToKanji,
@@ -129,22 +132,34 @@ function applyNoteDrag(pos) {
       if (p.rawStart < minRawStart) minRawStart = p.rawStart;
     }
     const shift = minRawStart < 0 ? -minRawStart : 0;
-    // 3. 计算最终新位置（已保证 >= 0）并检测与非选中 notes 的重叠
-    //    分组假名不受重叠限制，允许自由移动（重叠警告仍由 getInactiveNoteIds 渲染）
-    let blocked = false;
-    const planned = [];
+    // 3. 计算最终新位置（已保证 >= 0）并检测与非选中 notes 的重叠。
+    //    分组假名不受重叠限制，允许自由移动（重叠警告仍由 getInactiveNoteIds 渲染）。
+    //    批量化：用 computeMultiDragResult 一次性算所有非 grouped 选中 notes 与
+    //    障碍的重叠情况，O((k+n) log k) 而非 O(k·log n)。
+    const nonGroupedSelected = new Set();
+    const newPositions = new Map();
     for (const p of rawPlanned) {
       const newStart = p.rawStart + shift;
       const isGroupedKana = findGroupByNoteId(p.note.id, getKanjiGroups()) !== null;
-      if (!isGroupedKana && hasNoteOverlapMulti(selectedNoteIds, p.newPitch, newStart, newStart + p.duration)) {
-        blocked = true;
-        break;
+      if (!isGroupedKana) {
+        nonGroupedSelected.add(p.note.id);
+        newPositions.set(p.note.id, {
+          start: newStart,
+          pitch: p.newPitch,
+          duration: p.duration,
+        });
       }
-      planned.push({ note: p.note, newStart, newPitch: p.newPitch });
+    }
+    let blocked = false;
+    if (nonGroupedSelected.size > 0) {
+      const idx = _getCanvasRendererNotesIndex();
+      const r = computeMultiDragResult(idx, nonGroupedSelected, newPositions);
+      blocked = r.blocked;
     }
     if (!blocked) {
-      for (const p of planned) {
-        p.note.start = p.newStart;
+      for (const p of rawPlanned) {
+        const newStart = p.rawStart + shift;
+        p.note.start = newStart;
         p.note.pitch = p.newPitch;
       }
     }
@@ -167,6 +182,19 @@ function applyNoteDrag(pos) {
       note.start = newStart;
       note.pitch = newPitch;
     } else {
+      // Magnetic boundary snap: if newStart is within 4px of an adjacent
+      // note's start or end at this pitch, snap to that boundary. Lets the
+      // user feel when notes "click" together; bypasses grid snap.
+      const idx = _getCanvasRendererNotesIndex();
+      const pxPerBeat = BEAT_WIDTH * getZoomX();
+      if (pxPerBeat > 0) {
+        const snapBeatsWindow = 4 / pxPerBeat;
+        const excludeSet = new Set([note.id]);
+        const snappedStart = findAdjacentBoundary(idx, excludeSet, newPitch, newStart, snapBeatsWindow);
+        if (snappedStart !== newStart && snappedStart >= 0) {
+          newStart = snappedStart;
+        }
+      }
       newStart = clampNotePosition(note.id, newPitch, newStart, note.duration);
       if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
         note.start = newStart;
@@ -175,9 +203,28 @@ function applyNoteDrag(pos) {
     }
   } else if (dragMode === 'resize') {
     const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
-    const newDuration = Math.max(1 / 16, snapBeats(getDragNoteStart().duration + dxBeats));
+    // Resize minimum = one snap grid cell, so the result always lands on a
+    // grid line and stays >= the smallest editable unit.
+    const minDuration = getSnapGrid();
+    let newDuration = Math.max(minDuration, snapBeats(getDragNoteStart().duration + dxBeats));
     const isGroupedKana = findGroupByNoteId(note.id, getKanjiGroups()) !== null;
     if (isGroupedKana || !hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
+      // Magnetic snap for resize: snap the trailing edge to the nearest
+      // adjacent note boundary at this pitch (start or end of neighbor).
+      const idx = _getCanvasRendererNotesIndex();
+      const pxPerBeat = BEAT_WIDTH * getZoomX();
+      if (pxPerBeat > 0) {
+        const snapBeatsWindow = 4 / pxPerBeat;
+        const excludeSet = new Set([note.id]);
+        const proposedEnd = note.start + newDuration;
+        const snappedEnd = findAdjacentBoundary(idx, excludeSet, note.pitch, proposedEnd, snapBeatsWindow);
+        if (snappedEnd !== proposedEnd && snappedEnd > note.start) {
+          const snappedDur = snappedEnd - note.start;
+          if (snappedDur >= minDuration && !hasNoteOverlap(note.id, note.pitch, note.start, snappedEnd)) {
+            newDuration = snappedDur;
+          }
+        }
+      }
       note.duration = newDuration;
     }
   }
@@ -1499,7 +1546,7 @@ export function setupEventListeners() {
         }
       }
 
-      if (pos.x >= hit.nx + hit.nw - 6) {
+      if (hit.onResizeEdge) {
         setDragMode('resize');
         setDragOperation({ type: 'noteResize', noteId: hit.note.id, oldDuration: hit.note.duration });
       } else {

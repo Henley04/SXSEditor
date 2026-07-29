@@ -5,9 +5,18 @@ import {
   PHONEME_COLORS,
 } from './constants.js';
 import {
+  createNotesIndex,
+  ensureSorted as ensureNotesSorted,
+  hasOverlapAtPitch,
+  clampPosition as clampPositionIdx,
+  findNoteAtBeat,
+  notesInRange,
+} from './notesIndex.js';
+import {
   getScrollX, getScrollY, getZoomX,
   getCurrentParamMode,
   getNotes,
+  getSnapGrid,
   getSelectedNoteIds,
   getSelectedAnchorIndices,
   getPitchCurve,
@@ -111,23 +120,91 @@ export function yToPitchContinuous(y) {
 }
 
 export function snapBeats(beats) {
-  const grid = 1 / 4;
+  const grid = getSnapGrid();
   return Math.round(beats / grid) * grid;
+}
+
+// --- Notes index (sorted array + pitch-bucketed binary search) -------------
+// Module-level cache wrapping the live notes array from state. The cache is
+// rebuilt automatically when getNotes() returns a new array reference, and
+// ensureSorted() also re-validates on every read so external in-place
+// mutations (note.start = ..., notes.push(...)) are picked up correctly.
+let _notesIdx = null;
+
+/**
+ * Get (or rebuild) the notes index for the current state.notes array.
+ * @returns {object} notes index
+ */
+function _getNotesIdx() {
+  const notes = getNotes();
+  if (!_notesIdx || _notesIdx.notes !== notes) {
+    _notesIdx = createNotesIndex(notes);
+  } else {
+    ensureNotesSorted(_notesIdx);
+  }
+  return _notesIdx;
+}
+
+/**
+ * Public accessor for the cached notes index (used by eventHandlers for
+ * batched multi-drag overlap checks via computeMultiDragResult).
+ */
+export function _getCanvasRendererNotesIndex() {
+  return _getNotesIdx();
+}
+
+/**
+ * Reset the cached notes index. Call after setNotes() replaces the array
+ * reference, or whenever notes are mutated in a way that changes ordering
+ * (the O(n) verification scan in ensureSorted will catch most cases, but
+ * explicitly resetting avoids the per-call scan cost).
+ */
+export function _resetNotesIndex() {
+  _notesIdx = null;
+}
+
+/**
+ * Half-width of the trailing resize hot zone, expressed in BEATS (not pixels).
+ *
+ * The target pixel width scales with the current snap grid so the hot zone
+ * is always a sensible fraction of one grid cell:
+ *   targetPx = clamp(halfGridPx, 4, 12)
+ * where halfGridPx = (snapGrid * pxPerBeat) / 2.
+ *
+ * Why scale with grid: at fine grids (1/32) the cell is small, so the hot
+ * zone shrinks toward 4px (still grabbable); at coarse grids (1/4) the cell
+ * is large, so the hot zone grows toward 12px (easier to grab, but capped
+ * so it doesn't swallow the whole note). The [4, 12] clamp is now actually
+ * reachable — at zoomX=1, BEAT_WIDTH=80, grid=1/4 → halfGridPx=10 (mid);
+ * grid=1/32 → halfGridPx=1.25 → clamped to 4; zoomX=4, grid=1/4 →
+ * halfGridPx=40 → clamped to 12.
+ *
+ * Returns beats so the hot zone scales naturally with zoomX.
+ */
+function _resizeHotZoneBeats() {
+  const pxPerBeat = BEAT_WIDTH * getZoomX();
+  if (pxPerBeat <= 0) return 0.06;
+  const gridPx = getSnapGrid() * pxPerBeat;
+  const targetPx = gridPx / 2;
+  const clampedPx = Math.max(4, Math.min(12, targetPx));
+  return clampedPx / pxPerBeat;
 }
 
 export function findNoteAt(x, y) {
   const notes = getNotes();
-  for (let i = notes.length - 1; i >= 0; i--) {
-    const note = notes[i];
-    const rx = Math.round(timeToX(note.start));
-    const ry = Math.round(pitchToY(note.pitch));
-    const rw = Math.round(note.duration * BEAT_WIDTH * getZoomX());
-    const rh = Math.round(NOTE_HEIGHT);
-    if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) {
-      return { note, nx: rx, ny: ry, nw: rw, nh: rh };
-    }
-  }
-  return null;
+  if (notes.length === 0) return null;
+  const pitch = yToPitch(y);
+  if (pitch <= 0 || pitch > 127) return null;
+  const xTime = xToTime(x);
+  const idx = _getNotesIdx();
+  const r = findNoteAtBeat(idx, xTime, pitch, _resizeHotZoneBeats());
+  if (!r) return null;
+  const note = r.note;
+  const nx = Math.round(timeToX(note.start));
+  const ny = Math.round(pitchToY(note.pitch));
+  const nw = Math.round(note.duration * BEAT_WIDTH * getZoomX());
+  const nh = Math.round(NOTE_HEIGHT);
+  return { note, nx, ny, nw, nh, onResizeEdge: r.onResizeEdge };
 }
 
 /**
@@ -446,14 +523,8 @@ export function genNoteId() {
 }
 
 export function hasNoteOverlap(excludeId, pitch, start, end) {
-  const notes = getNotes();
-  for (const n of notes) {
-    if (n.id === excludeId) continue;
-    if (n.pitch !== pitch) continue;
-    const nEnd = n.start + n.duration;
-    if (start < nEnd && end > n.start) return true;
-  }
-  return false;
+  const idx = _getNotesIdx();
+  return hasOverlapAtPitch(idx, excludeId !== null ? new Set([excludeId]) : null, pitch, start, end);
 }
 
 /**
@@ -469,20 +540,22 @@ export function hasNoteOverlap(excludeId, pitch, start, end) {
  * @returns {boolean}
  */
 export function hasNoteOverlapMulti(excludeIds, pitch, start, end) {
-  const notes = getNotes();
-  for (const n of notes) {
-    if (excludeIds.has(n.id)) continue;
-    if (n.pitch !== pitch) continue;
-    const nEnd = n.start + n.duration;
-    if (start < nEnd && end > n.start) return true;
-  }
-  return false;
+  const idx = _getNotesIdx();
+  return hasOverlapAtPitch(idx, excludeIds, pitch, start, end);
 }
 
 /**
  * 计算未激活（被遮挡）的 note id 集合。
- * 规则：同一时间点只能有一个 note 被激活，按数组顺序（先后顺序）决定激活的 note。
- * 后面的 note 如果与前面任意已激活 note 时间重叠（跨 pitch），则标记为未激活。
+ * 规则：同一时间点只能有一个 note 被激活，按 start 升序（相同 start 时
+ * duration 降序）决定激活的 note。后面的 note 如果与前面任意已激活 note
+ * 时间重叠（跨 pitch），则标记为未激活。
+ *
+ * 保留原插入序语义：按 notes 数组顺序（而非排序后顺序）判定激活。
+ * 后面的 note 如果与前面任意已激活 note 时间重叠（跨 pitch），则标记为
+ * 未激活。这与同 start 多 note 时"先插入者激活"的历史行为一致；如果
+ * 改用排序后顺序（start 升序、同 start 时 duration 降序），则同 start
+ * 多 note 会变成"更长者激活"，是用户可见的行为变化，故此处不委托给
+ * notesIndex.computeInactiveNoteIds（其按排序序处理）。
  * @param {Array} notes
  * @returns {Set<number>} 未激活的 note id 集合
  */
@@ -577,21 +650,8 @@ function _pitchToName(pitch) {
 }
 
 export function clampNotePosition(noteId, pitch, start, duration) {
-  const notes = getNotes();
-  const end = start + duration;
-  for (const n of notes) {
-    if (n.id === noteId) continue;
-    if (n.pitch !== pitch) continue;
-    const nEnd = n.start + n.duration;
-    if (start < nEnd && end > n.start) {
-      if (start >= n.start && start < nEnd) {
-        start = nEnd;
-      } else if (end > n.start && end <= nEnd) {
-        start = n.start - duration;
-      }
-    }
-  }
-  return Math.max(0, start);
+  const idx = _getNotesIdx();
+  return clampPositionIdx(idx, noteId, pitch, start, duration);
 }
 
 export function generateAutoPitchPoints() {
@@ -681,14 +741,55 @@ export function getPitchAtTime(time) {
 export function findAnchorPointAt(x, y) {
   const pitchCurve = getPitchCurve();
   if (pitchCurve.anchorPoints.length === 0) return -1;
+  // O(log n + k) lookup: binary search the sorted anchors by time around the
+  // click x, then distance-check only the few candidates in the 8px window.
+  const sorted = getSortedAnchorPoints();
+  // Build object -> original-index map once (O(n)) so the candidate loop
+  // below is O(1) per lookup instead of O(n) via indexOf. Previously each
+  // candidate did pitchCurve.anchorPoints.indexOf(ap), making the inner loop
+  // O(k * n) when several anchors fall in the 8px window.
+  const origIndex = new Map();
   for (let i = 0; i < pitchCurve.anchorPoints.length; i++) {
-    const ap = pitchCurve.anchorPoints[i];
+    origIndex.set(pitchCurve.anchorPoints[i], i);
+  }
+  const zoomX = getZoomX();
+  const beatToPixel = BEAT_WIDTH * zoomX;
+  if (beatToPixel <= 0) {
+    // Degenerate zoom — fall back to linear scan.
+    for (let i = 0; i < pitchCurve.anchorPoints.length; i++) {
+      const ap = pitchCurve.anchorPoints[i];
+      const px = timeToX(ap.time);
+      const py = pitchToY(ap.pitch);
+      const dist = Math.sqrt((x - px) ** 2 + (y - py) ** 2);
+      if (dist <= 8) return i;
+    }
+    return -1;
+  }
+  const clickBeat = (x + getScrollX()) / beatToPixel;
+  const windowBeats = 8 / beatToPixel; // 8px in beats
+  // Binary search first index with time >= clickBeat - windowBeats.
+  let lo = 0;
+  let hi = sorted.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (sorted[mid].time < clickBeat - windowBeats) lo = mid + 1;
+    else hi = mid;
+  }
+  // Scan forward until time > clickBeat + windowBeats.
+  let bestIdx = -1;
+  let bestDist = Infinity;
+  for (let i = lo; i < sorted.length; i++) {
+    const ap = sorted[i];
+    if (ap.time > clickBeat + windowBeats) break;
     const px = timeToX(ap.time);
     const py = pitchToY(ap.pitch);
     const dist = Math.sqrt((x - px) ** 2 + (y - py) ** 2);
-    if (dist <= 8) return i;
+    if (dist <= 8 && dist < bestDist) {
+      bestDist = dist;
+      bestIdx = origIndex.get(ap);
+    }
   }
-  return -1;
+  return bestIdx;
 }
 
 export function smoothBrushPoints(points, smoothing) {
@@ -1591,7 +1692,19 @@ function _doRenderImpl(w, h) {
   const scrollY = getScrollY();
   const beatToPixel = BEAT_WIDTH * zoomX;
 
-  for (const note of notes) {
+  // Viewport culling: only iterate notes whose [start, start+duration)
+  // intersects the visible beat range. O(log n + visible) instead of O(n).
+  // x = start * beatToPixel - scrollX, so visible x ∈ [0, w] maps to
+  // beat ∈ [scrollX / beatToPixel, (w + scrollX) / beatToPixel].
+  let visibleNotes = notes;
+  if (notes.length > 64 && beatToPixel > 0) {
+    const viewStartBeat = scrollX / beatToPixel;
+    const viewEndBeat = (w + scrollX) / beatToPixel;
+    const idx = _getNotesIdx();
+    visibleNotes = notesInRange(idx, viewStartBeat, viewEndBeat);
+  }
+
+  for (const note of visibleNotes) {
     const x = note.start * beatToPixel - scrollX;
     const y = pitchToY(note.pitch);
     const nw = note.duration * beatToPixel;
