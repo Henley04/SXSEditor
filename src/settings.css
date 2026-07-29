@@ -46,7 +46,9 @@ body {
     color: var(--fg-secondary);
     cursor: pointer;
     border-left: 3px solid transparent;
-    transition: background var(--motion-fast), color var(--motion-fast), border-color var(--motion-fast);
+    transition: background var(--motion-fast) var(--ease-standard),
+                color var(--motion-fast) var(--ease-standard),
+                border-color var(--motion-fast) var(--ease-standard);
 }
 
 .sidebar-item:hover {
@@ -455,12 +457,12 @@ body {
 
 .model-overview-dot.checking {
     background: var(--accent);
-    animation: pulse 1.2s ease-in-out infinite;
+    animation: pulse-dot 1.2s ease-in-out infinite;
 }
 
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.4; transform: scale(0.9); }
 }
 
 .model-overview-name {
@@ -582,7 +584,9 @@ body {
     border-radius: var(--radius-lg);
     background: var(--bg-elevated);
     cursor: pointer;
-    transition: border-color var(--motion-base), background var(--motion-base), box-shadow var(--motion-base);
+    transition: border-color var(--motion-base) var(--ease-standard),
+                background var(--motion-base) var(--ease-standard),
+                box-shadow var(--motion-base) var(--ease-standard);
 }
 
 .device-mode-radio:hover {
@@ -655,10 +659,10 @@ body {
 
 .webnn-status-value.status-checking {
     color: var(--warning);
-    animation: pulse 1.5s ease-in-out infinite;
+    animation: pulse-text 1.5s ease-in-out infinite;
 }
 
-@keyframes pulse {
+@keyframes pulse-text {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.5; }
 }
@@ -711,7 +715,8 @@ body {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888a8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 8px center;
-    transition: border-color var(--motion-base), box-shadow var(--motion-base);
+    transition: border-color var(--motion-base) var(--ease-standard),
+                box-shadow var(--motion-base) var(--ease-standard);
 }
 
 .model-mapping-select:hover {
@@ -735,16 +740,22 @@ body {
     background: var(--accent-softer);
     color: var(--accent);
     cursor: pointer;
-    transition: background var(--motion-base), border-color var(--motion-base);
+    transition: background var(--motion-base) var(--ease-standard),
+                border-color var(--motion-base) var(--ease-standard),
+                transform var(--motion-fast) var(--ease-bounce);
 }
 
 .btn-open-model-download:hover {
     background: var(--accent-soft);
     border-color: var(--accent-pressed);
+    transform: translateY(-1px);
 }
 
 .btn-open-model-download:active {
     background: var(--accent-soft);
+    transform: translateY(0) scale(0.98);
+    transition-duration: 0.06s;
+    transition-timing-function: var(--ease-standard);
 }
 
 /* ==================== Theme Actions ==================== */
@@ -767,17 +778,24 @@ body {
     background: var(--bg-elevated);
     color: var(--fg-secondary);
     cursor: pointer;
-    transition: background var(--motion-base), border-color var(--motion-base), color var(--motion-base);
+    transition: background var(--motion-base) var(--ease-standard),
+                border-color var(--motion-base) var(--ease-standard),
+                color var(--motion-base) var(--ease-standard),
+                transform var(--motion-fast) var(--ease-bounce);
 }
 
 .btn-theme-action:hover {
     border-color: var(--accent-glow-strong);
     background: var(--accent-softer);
     color: var(--accent-fg);
+    transform: translateY(-1px);
 }
 
 .btn-theme-action:active {
     background: var(--accent-softer);
+    transform: translateY(0) scale(0.98);
+    transition-duration: 0.06s;
+    transition-timing-function: var(--ease-standard);
 }
 
 .btn-theme-action.btn-theme-secondary {
@@ -889,13 +907,23 @@ body {
     background: var(--bg-elevated);
     color: var(--fg-secondary);
     cursor: pointer;
-    transition: background var(--motion-base), border-color var(--motion-base), color var(--motion-base);
+    transition: background var(--motion-base) var(--ease-standard),
+                border-color var(--motion-base) var(--ease-standard),
+                color var(--motion-base) var(--ease-standard),
+                transform var(--motion-fast) var(--ease-bounce);
 }
 
 .btn-theme-editor:hover {
     background: var(--accent-softer);
     border-color: var(--accent-glow);
     color: var(--accent-fg);
+    transform: translateY(-1px);
+}
+
+.btn-theme-editor:active {
+    transform: translateY(0) scale(0.97);
+    transition-duration: 0.06s;
+    transition-timing-function: var(--ease-standard);
 }
 
 .btn-theme-editor.btn-theme-editor-primary {
@@ -1036,13 +1064,23 @@ body {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background var(--motion-base), color var(--motion-base);
+    transition: background var(--motion-base) var(--ease-standard),
+                color var(--motion-base) var(--ease-standard),
+                border-color var(--motion-base) var(--ease-standard),
+                transform var(--motion-fast) var(--ease-bounce);
 }
 
 .theme-token-reset:hover {
     background: var(--accent-softer);
     color: var(--accent);
     border-color: var(--accent-glow);
+    transform: scale(1.08);
+}
+
+.theme-token-reset:active {
+    transform: scale(0.92);
+    transition-duration: 0.06s;
+    transition-timing-function: var(--ease-standard);
 }
 
 /* ==================== Save As Modal ==================== */
@@ -1324,8 +1362,8 @@ body {
   }
   to {
     opacity: 0;
-    transform: translateY(8px) scale(0.98);
-    filter: blur(3px);
+    transform: translateY(6px) scale(0.985);
+    filter: blur(2px);
   }
 }
 

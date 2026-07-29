@@ -99,6 +99,12 @@ export function initPianoRoll() {
         cancelAnimationFrame(this.playbackRaf);
         this.playbackRaf = null;
       }
+      // Cancel any pending wheel rAF so no frame fires after destroy.
+      if (this._wheelRaf) {
+        cancelAnimationFrame(this._wheelRaf);
+        this._wheelRaf = 0;
+      }
+      this._pendingWheel = null;
       window.removeEventListener('resize', this._boundResize);
       document.removeEventListener('mouseup', this._boundMouseUp);
       document.removeEventListener('keydown', this._boundKeyDown);
@@ -343,28 +349,41 @@ export function initPianoRoll() {
 
     _onWheel(e) {
       e.preventDefault();
-      const pos = this._getMousePos(e);
-      if (e.ctrlKey || e.metaKey) {
-        const oldZoomX = this.zoomX;
-        const delta = e.deltaY > 0 ? 0.9 : 1.1;
-        this.zoomX = Math.max(0.05, Math.min(4, this.zoomX * delta));
-        const mouseBeats = (pos.x + this.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
-        this.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * this.zoomX - pos.x;
-        this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
-        state.waveformZoomX = this.zoomX;
-        state.waveformScrollX = this.scrollX;
-        drawWaveformWithPlayhead(this.getCurrentTime());
-      } else if (e.shiftKey) {
-        this.scrollX += e.deltaY;
-        this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
-        state.waveformScrollX = this.scrollX;
-        drawWaveformWithPlayhead(this.getCurrentTime());
-      } else {
-        this.scrollY += e.deltaY;
-        this.scrollY = Math.max(0, Math.min(getMaxScrollY(), this.scrollY));
-      }
-      this._staticCacheDirty = true;
-      this.render();
+      // rAF-coalesce wheel events: trackpads fire many events per frame, and
+      // re-rendering the piano roll on every event causes jank. Capture the
+      // latest event and process it inside a single rAF callback; subsequent
+      // events before the frame fires just overwrite the pending state.
+      this._pendingWheel = e;
+      if (this._wheelRaf) return;
+      this._wheelRaf = requestAnimationFrame(() => {
+        this._wheelRaf = 0;
+        const ev = this._pendingWheel;
+        this._pendingWheel = null;
+        if (!ev) return;
+
+        const pos = this._getMousePos(ev);
+        if (ev.ctrlKey || ev.metaKey) {
+          const oldZoomX = this.zoomX;
+          const delta = ev.deltaY > 0 ? 0.9 : 1.1;
+          this.zoomX = Math.max(0.05, Math.min(4, this.zoomX * delta));
+          const mouseBeats = (pos.x + this.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
+          this.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * this.zoomX - pos.x;
+          this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
+          state.waveformZoomX = this.zoomX;
+          state.waveformScrollX = this.scrollX;
+          drawWaveformWithPlayhead(this.getCurrentTime());
+        } else if (ev.shiftKey) {
+          this.scrollX += ev.deltaY;
+          this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
+          state.waveformScrollX = this.scrollX;
+          drawWaveformWithPlayhead(this.getCurrentTime());
+        } else {
+          this.scrollY += ev.deltaY;
+          this.scrollY = Math.max(0, Math.min(getMaxScrollY(), this.scrollY));
+        }
+        this._staticCacheDirty = true;
+        this.render();
+      });
     },
 
     _secondsToBeats(seconds) {

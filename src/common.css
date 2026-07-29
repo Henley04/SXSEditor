@@ -17,7 +17,7 @@ html, body {
   color: var(--fg-secondary);
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
-  animation: window-enter 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: window-enter 0.22s var(--ease-emphasized);
   transform-origin: center center;
 }
 
@@ -33,7 +33,7 @@ html, body {
 ::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb);
   border-radius: var(--radius-sm);
-  transition: background var(--motion-fast);
+  transition: background var(--motion-fast) var(--ease-standard);
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -55,7 +55,11 @@ button {
   clip-path: var(--clip-button, none);
   cursor: pointer;
   font-weight: 500;
-  transition: all var(--motion-base) cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--motion-base) var(--ease-standard),
+              border-color var(--motion-base) var(--ease-standard),
+              color var(--motion-base) var(--ease-standard),
+              transform var(--motion-base) var(--ease-bounce),
+              box-shadow var(--motion-base) var(--ease-standard);
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -63,7 +67,7 @@ button {
   overflow: hidden;
   /* Button press effect */
   transform: translateZ(0);
-  will-change: transform, box-shadow;
+  will-change: transform;
 }
 
 button:hover:not(:disabled) {
@@ -73,7 +77,7 @@ button:hover:not(:disabled) {
 button:active:not(:disabled) {
   transform: translateY(0) scale(0.97);
   transition-duration: 0.06s;
-  transition-timing-function: ease-out;
+  transition-timing-function: var(--ease-standard);
 }
 
 button:disabled {
@@ -149,7 +153,9 @@ button:focus-visible {
 input,
 select,
 textarea {
-  transition: border-color var(--motion-fast) ease, box-shadow var(--motion-fast) ease, background var(--motion-fast) ease;
+  transition: border-color var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard),
+              background var(--motion-fast) var(--ease-standard);
 }
 
 /* ==================== 自定义复选框（带动画） ==================== */
@@ -168,10 +174,10 @@ input[type="checkbox"] {
   position: relative;
   vertical-align: middle;
   transition:
-    background var(--motion-fast) cubic-bezier(0.4, 0, 0.2, 1),
-    border-color var(--motion-fast) cubic-bezier(0.4, 0, 0.2, 1),
-    box-shadow var(--motion-fast) cubic-bezier(0.4, 0, 0.2, 1),
-    transform 0.12s cubic-bezier(0.4, 0, 0.2, 1);
+    background var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform 0.12s var(--ease-standard);
 }
 
 /* 对勾：用伪元素绘制，通过 scale 做弹跳动画 */
@@ -187,8 +193,8 @@ input[type="checkbox"]::after {
   transform: rotate(45deg) scale(0);
   opacity: 0;
   transition:
-    transform var(--motion-base) cubic-bezier(0.34, 1.56, 0.64, 1),
-    opacity var(--motion-fast) ease;
+    transform var(--motion-base) var(--ease-bounce),
+    opacity var(--motion-fast) var(--ease-standard);
 }
 
 input[type="checkbox"]:hover:not(:disabled):not(:checked) {
@@ -232,11 +238,23 @@ input[type="checkbox"]:disabled {
 
 /* Card-like panels get subtle hover lift */
 [class$="-panel"]:not(.modal-overlay):not(.loading-overlay) {
-  transition: box-shadow var(--motion-base) ease;
+  transition: box-shadow var(--motion-base) var(--ease-standard);
 }
 
 /* Selection/active states get accent glow */
 ::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
+}
+
+/* ==================== Reduced Motion Support ==================== */
+/* Respect user OS-level preference for reduced motion. Disables non-essential
+   animations while keeping functional transitions (e.g. dialog enter/exit). */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
