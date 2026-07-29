@@ -166,7 +166,7 @@ class AudioSegmentation {
         const pitchCurveF0 = options.pitchCurveF0 || null;
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
         const totalSteps = options.nSteps || 32;
-        const cfgStrength = options.cfg || 3.0;
+        const cfgStrength = options.cfg !== undefined ? options.cfg : 3.0;
         const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.75;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;

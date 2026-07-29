@@ -514,7 +514,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
           diffStepOverlapFrames: 5,
           onChunkAudio,
           nSteps: 1, // 减少测试时间
-          cfg: 0,    // 注意：cfg=0 因 || 运算符回退到 CFG_STRENGTH=3.0
+          cfg: 0,    // cfg=0 跳过无条件预测，仅 cond 分支
         }
       );
       // 流式路径输出长度 = totalFrames * HOP_SIZE = 200 * 480 = 96000
@@ -547,7 +547,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       // 不传 onChunkAudio，即使 diffStepChunk=true，也不进入流式分块路径（singleSegOnChunk=null）。
       // 注意：常规路径仍会通过 _runDiffusionLoop 内部的 chunkOpts 检查进入 diffusion 分块
       // （runDiffusionLoopChunked），只是不流式推送 vocoder。diffStep.run 调用次数
-      // = chunks × nSteps × 2（cond + uncond，因 cfg=0 || CFG_STRENGTH=3.0）
+      // = chunks × nSteps × 1（仅 cond 分支，cfg=0）
       const out = await pipeline.synthesize(
         makeNotes(1),
         120,
@@ -593,7 +593,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       const onChunkAudio = sinon.spy();
       // 单音符 context padding 后 totalFrames=150（+25 前后 rest），chunkFrames=200
       // → 150 <= 200，不进入 diffusion 分块，走 runDiffusionLoop 整段
-      // nSteps=2, cfgStrength=3.0（cfg=0 || CFG_STRENGTH）→ 2 steps × 2 分支 (cond+uncond) = 4 runs
+      // nSteps=2, cfg=0 → 仅 cond 分支 → 2 steps × 1 run = 2 runs
       await pipeline.synthesize(
         makeNotes(1),
         120,
@@ -606,8 +606,8 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
           cfg: 0,
         }
       );
-      // 不分块：2 steps × 2 分支 = 4 runs
-      expect(diffRecord.length).to.equal(4);
+      // 不分块：2 steps × 1 分支 (cond only) = 2 runs
+      expect(diffRecord.length).to.equal(2);
     });
 
     it('流式分块路径：audioData 长度 = totalFrames * HOP_SIZE', async () => {
