@@ -1972,7 +1972,7 @@ class OnnxSVSPipeline {
         const chunkFrames = firstOpts.diffStepChunkFrames || 500;
         const overlapFrames = firstOpts.diffStepOverlapFrames !== undefined ? firstOpts.diffStepOverlapFrames : 50;
         const totalSteps = firstOpts.nSteps || DEFAULT_DIFF_STEPS;
-        const cfgStrength = firstOpts.cfg || CFG_STRENGTH;
+        const cfgStrength = firstOpts.cfg !== undefined ? firstOpts.cfg : CFG_STRENGTH;
         const cfgRescale = firstOpts.cfgRescale !== undefined ? firstOpts.cfgRescale : CFG_RESCALE;
         if (fragments.length > 1) {
             for (let fi = 1; fi < fragments.length; fi++) {
@@ -2312,7 +2312,7 @@ class OnnxSVSPipeline {
         const pitchCurveF0 = options.pitchCurveF0 || null;
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
         const totalSteps = options.nSteps || DEFAULT_DIFF_STEPS;
-        const cfgStrength = options.cfg || CFG_STRENGTH;
+        const cfgStrength = options.cfg !== undefined ? options.cfg : CFG_STRENGTH;
         const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : CFG_RESCALE;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
