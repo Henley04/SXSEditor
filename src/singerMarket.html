@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title data-i18n="singerMarket.title">Singer Market</title>
+    <script src="./themes/themeBootstrap.js"></script>
+  </head>
+  <body>
+    <div id="app">
+      <!-- Top toolbar -->
+      <div id="toolbar">
+        <div class="toolbar-group">
+          <span id="page-title" data-i18n="singerMarket.title">Singer Market</span>
+        </div>
+        <div class="toolbar-spacer"></div>
+        <div class="toolbar-group" id="auth-area">
+          <span id="auth-status" class="auth-status" data-i18n="singerMarket.notLoggedIn">Not logged in</span>
+          <button id="btn-login" data-i18n="singerMarket.login">Login</button>
+          <button id="btn-register" data-i18n="singerMarket.register">Register</button>
+          <button id="btn-logout" style="display:none;" data-i18n="singerMarket.logout">Logout</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+          <button id="btn-refresh" data-i18n="singerMarket.refresh" data-icon="refresh">Refresh</button>
+          <button id="btn-upload" style="display:none;" data-i18n="singerMarket.upload" data-icon="upload">Upload</button>
+        </div>
+      </div>
+
+      <!-- Search + filters bar -->
+      <div id="filter-bar">
+        <div class="search-wrap">
+          <span class="search-icon" data-icon="search"></span>
+          <input type="text" id="search-input" data-i18n-placeholder="singerMarket.searchPlaceholder" placeholder="Search singers by name or description..." />
+        </div>
+        <div class="filter-chips" id="active-tag-chips"></div>
+        <div class="filter-spacer"></div>
+        <div class="tag-filter-wrap">
+          <span class="filter-label" data-i18n="singerMarket.tags">Tags</span>
+          <div class="tag-suggestions" id="tag-suggestions"></div>
+        </div>
+      </div>
+
+      <!-- Main content -->
+      <div id="main-content">
+        <div id="singer-grid" class="singer-grid">
+          <div class="empty-state" id="empty-state">
+            <div class="empty-icon" data-icon="microphone"></div>
+            <div class="empty-text" data-i18n="singerMarket.emptyState">No singers found. Try adjusting your search or filters.</div>
+          </div>
+        </div>
+        <div id="loading-state" class="loading-state" style="display:none;">
+          <div class="spinner"></div>
+          <div class="loading-text" data-i18n="singerMarket.loading">Loading...</div>
+        </div>
+      </div>
+
+      <!-- Pagination -->
+      <div id="pagination" class="pagination" style="display:none;">
+        <button id="btn-prev-page" data-i18n="singerMarket.prevPage">Previous</button>
+        <span id="page-info" class="page-info">1 / 1</span>
+        <button id="btn-next-page" data-i18n="singerMarket.nextPage">Next</button>
+      </div>
+    </div>
+
+    <!-- Login / Register dialog -->
+    <div id="auth-dialog" class="modal-overlay" style="display:none;">
+      <div class="modal-dialog">
+        <div class="modal-title" id="auth-dialog-title" data-i18n="singerMarket.loginTitle">Login</div>
+        <div class="form-group">
+          <label for="auth-username" data-i18n="singerMarket.username">Username</label>
+          <input type="text" id="auth-username" autocomplete="username" />
+        </div>
+        <div class="form-group">
+          <label for="auth-password" data-i18n="singerMarket.password">Password</label>
+          <input type="password" id="auth-password" autocomplete="current-password" />
+        </div>
+        <div class="modal-hint" id="auth-error" style="display:none;"></div>
+        <div class="modal-actions">
+          <button id="btn-auth-cancel" class="btn-secondary" data-i18n="common.cancel">Cancel</button>
+          <button id="btn-auth-submit" class="btn-primary" data-i18n="singerMarket.submit">Submit</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Upload dialog -->
+    <div id="upload-dialog" class="modal-overlay" style="display:none;">
+      <div class="modal-dialog modal-dialog-wide">
+        <div class="modal-title" data-i18n="singerMarket.uploadTitle">Upload Singer to Market</div>
+        <div class="upload-area" id="upload-drop-area">
+          <div class="upload-icon" data-icon="music"></div>
+          <div class="upload-text" data-i18n="singerMarket.uploadDropText">Click or drag a .sxssinger file here</div>
+          <input type="file" id="upload-file-input" accept=".sxssinger" hidden />
+        </div>
+        <div id="upload-info" class="upload-info" style="display:none;">
+          <div class="info-row">
+            <span class="info-label" data-i18n="singerMarket.fileName">File</span>
+            <span id="upload-file-name" class="info-value"></span>
+          </div>
+          <div class="info-row">
+            <span class="info-label" data-i18n="singerMarket.singerName">Singer Name</span>
+            <span id="upload-singer-name" class="info-value"></span>
+          </div>
+        </div>
+        <div class="form-group">
+          <label for="upload-description" data-i18n="singerMarket.description">Description</label>
+          <textarea id="upload-description" rows="3" data-i18n-placeholder="singerMarket.descriptionPlaceholder" placeholder="Describe this singer..."></textarea>
+        </div>
+        <div class="form-group">
+          <label for="upload-tags" data-i18n="singerMarket.tagsLabel">Tags (comma-separated)</label>
+          <input type="text" id="upload-tags" placeholder="vocal, female, pop..." />
+        </div>
+        <div class="form-group">
+          <label for="upload-visibility" data-i18n="singerMarket.visibility">Visibility</label>
+          <select id="upload-visibility">
+            <option value="public" data-i18n="singerMarket.public">Public</option>
+            <option value="private" data-i18n="singerMarket.private">Private</option>
+          </select>
+        </div>
+        <div class="modal-actions">
+          <button id="btn-upload-cancel" class="btn-secondary" data-i18n="common.cancel">Cancel</button>
+          <button id="btn-upload-submit" class="btn-primary" data-i18n="singerMarket.upload">Upload</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Singer detail + download confirmation dialog -->
+    <div id="detail-dialog" class="modal-overlay" style="display:none;">
+      <div class="modal-dialog modal-dialog-wide">
+        <div class="modal-title" id="detail-title">Singer</div>
+        <div class="detail-body" id="detail-body"></div>
+        <div class="disclaimer-box" id="disclaimer-box">
+          <div class="disclaimer-icon" data-icon="info"></div>
+          <div class="disclaimer-text" id="disclaimer-text">
+            This Singer file is licensed to you by its owner. SXSEditor is not responsible for, nor does it grant any licenses to, third-party singers. For details, see
+            <a href="#" id="disclaimer-link" target="_blank" rel="noopener">official website</a>.
+          </div>
+        </div>
+        <div class="modal-actions">
+          <button id="btn-detail-cancel" class="btn-secondary" data-i18n="common.cancel">Cancel</button>
+          <button id="btn-detail-download" class="btn-primary" data-i18n="singerMarket.download">Download</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast notifications -->
+    <div id="toast-container" class="toast-container"></div>
+  </body>
+</html>

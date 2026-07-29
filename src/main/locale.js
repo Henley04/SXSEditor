@@ -76,6 +76,9 @@ const mainLocales = {
       saveAs: '另存为...',
       close: '关闭',
     },
+    singerMarket: {
+      title: '歌手市场',
+    },
   },
   'en': {
     menu: {
@@ -141,6 +144,9 @@ const mainLocales = {
       save: 'Save',
       saveAs: 'Save As...',
       close: 'Close',
+    },
+    singerMarket: {
+      title: 'Singer Market',
     },
   },
 };

@@ -203,6 +203,13 @@ dom.btnAddSinger.addEventListener('click', () => {
   showSingerSelectDialog(null);
 });
 
+// Open the Singer Market window (browse / upload / download community singers)
+dom.btnOpenSingerMarket.addEventListener('click', () => {
+  if (window.electronAPI?.openSingerMarket) {
+    window.electronAPI.openSingerMarket();
+  }
+});
+
 // Audio to MIDI
 dom.btnAudioToMidi.addEventListener('click', handleAudioToMidi);
 

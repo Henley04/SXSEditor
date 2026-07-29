@@ -12,6 +12,7 @@ let updateNotificationWindow = null;
 let fragmentWindows = {};
 let pendingFragmentData = {};
 let singerCreatorWindow = null;
+let singerMarketWindow = null;
 let audioPreprocessWindow = null;
 let pendingPreprocessData = null;
 let preprocessWavBuffer = null;
@@ -521,6 +522,40 @@ function openSingerCreator() {
   });
 }
 
+function openSingerMarket() {
+  if (singerMarketWindow) {
+    singerMarketWindow.focus();
+    return;
+  }
+
+  singerMarketWindow = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    title: t('singerMarket.title'),
+    icon: path.join(__dirname, '..', 'SXS.png'),
+    minWidth: 900,
+    minHeight: 600,
+    backgroundColor: '#14141f',
+    show: false,
+    webPreferences: {
+      preload: SINGER_MARKET_WINDOW_PRELOAD_WEBPACK_ENTRY,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false,
+      spellcheck: false,
+    },
+  });
+
+  singerMarketWindow.loadURL(SINGER_MARKET_WINDOW_WEBPACK_ENTRY);
+  singerMarketWindow.once('ready-to-show', () => { singerMarketWindow.show(); });
+  singerMarketWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
+  singerMarketWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+
+  singerMarketWindow.on('closed', () => {
+    singerMarketWindow = null;
+  });
+}
+
 function openAudioPreprocess(data) {
   pendingPreprocessData = {
     wavFileName: data.wavFileName,
@@ -664,6 +699,10 @@ function registerWindowIpc() {
     openSingerCreator();
   });
 
+  ipcMain.handle('openSingerMarket', async () => {
+    openSingerMarket();
+  });
+
   ipcMain.handle('openAudioPreprocess', async (event, data) => {
     openAudioPreprocess(data);
   });
@@ -710,6 +749,7 @@ module.exports = {
   setUpdateNotificationWindow,
   openFragmentEditor,
   openSingerCreator,
+  openSingerMarket,
   openAudioPreprocess,
   showAboutDialog,
   buildAppMenu,

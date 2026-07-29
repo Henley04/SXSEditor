@@ -34,6 +34,8 @@ export const ICON_REGISTRY = {
     'music-note': () => '<path d="M10 18V5l9-2v13"/><circle cx="7" cy="18" r="3"/><circle cx="16" cy="16" r="3"/>',
     'file-music': () => '<path d="M14 3H6a1 1 0 0 0-1 1v16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V8z"/><path d="M14 3v5h5"/><circle cx="11" cy="16" r="2"/><path d="M13 16V11l3-1v6"/><circle cx="14" cy="15" r="2"/>',
     sliders: () => '<path d="M4 6h10"/><path d="M18 6h2"/><path d="M4 12h4"/><path d="M12 12h8"/><path d="M4 18h12"/><path d="M20 18h0"/><circle cx="16" cy="6" r="2.2"/><circle cx="10" cy="12" r="2.2"/><circle cx="18" cy="18" r="2.2"/>',
+    search: () => '<circle cx="11" cy="11" r="7"/><path d="M16.5 16.5L21 21"/>',
+    market: () => '<path d="M3 7h18l-1.5 12a1 1 0 0 1-1 0.9H5.5a1 1 0 0 1-1-0.9z"/><path d="M8 7V5a4 4 0 0 1 8 0v2"/>',
 
     // ===== Actions =====
     check: () => '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
