@@ -209,6 +209,22 @@ describe('fragmentEditor/notesIndex', () => {
       const idx = createNotesIndex(notes);
       expect(clampPosition(idx, 99, 60, -5, 1)).to.equal(0);
     });
+    it('terminates at the 16-iteration cap on pathological oscillation', () => {
+      // Two notes [0,1) and [2,3) at pitch 60; placing a duration-2 note
+      // starting at 0.5 oscillates: push right to 1 (lands on B → push left
+      // to 0 → lands on A → push right to 1 …). The multi-pass loop caps at
+      // 16 iterations to guarantee termination; this test exercises that cap
+      // so the safety bound is not silently removed by a future refactor.
+      const notes = [makeNote(1, 0, 1, 60), makeNote(2, 2, 1, 60)];
+      const idx = createNotesIndex(notes);
+      const r = clampPosition(idx, 99, 60, 0.5, 2);
+      // Oscillation flips between 0 (even iter) and 1 (odd iter); after 16
+      // iterations (0..15) the last value is 1. Just assert termination and
+      // a finite, non-negative result in the oscillation set.
+      expect(r).to.be.a('number');
+      expect(r).to.be.at.least(0);
+      expect([0, 1]).to.include(r);
+    });
   });
 
   describe('computeInactiveNoteIds', () => {
@@ -388,18 +404,21 @@ describe('fragmentEditor/notesIndex', () => {
       const r = computeMultiDragResult(idx, selected, newPos);
       expect(r.blocked).to.be.false;
     });
-    it('blocks when selected notes overlap each other at proposed positions', () => {
-      // Actually: selected notes are allowed to overlap each other in the
-      // current implementation (they move together). The block only applies
-      // to non-selected obstacles. Verify this matches the design.
+    it('does NOT block when selected notes overlap each other (grouped free movement)', () => {
+      // Design: selected notes are allowed to overlap each other. The block
+      // check only considers NON-selected obstacles. This mirrors
+      // applyNoteDrag's semantics where grouped/kana notes are free to move
+      // without mutual overlap restriction (the overlap is still rendered as
+      // a warning via getInactiveNoteIds). So moving two selected notes onto
+      // the same spot must NOT be blocked.
       const notes = [
         makeNote(1, 0, 1, 60),
         makeNote(2, 5, 1, 60),
       ];
       const idx = createNotesIndex(notes);
       const selected = new Set([1, 2]);
-      // Move both to same spot at pitch 60 → would overlap each other but
-      // since both are selected, not blocked by design.
+      // Move both to overlapping spots at pitch 60 — both selected, so the
+      // mutual overlap is permitted by design.
       const newPos = new Map([
         [1, { start: 3, pitch: 60, duration: 1 }],
         [2, { start: 3.2, pitch: 60, duration: 1 }],

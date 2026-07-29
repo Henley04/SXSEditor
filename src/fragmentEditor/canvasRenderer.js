@@ -9,7 +9,6 @@ import {
   ensureSorted as ensureNotesSorted,
   hasOverlapAtPitch,
   clampPosition as clampPositionIdx,
-  computeInactiveNoteIds as computeInactiveNoteIdsIdx,
   findNoteAtBeat,
   notesInRange,
 } from './notesIndex.js';
@@ -196,13 +195,6 @@ export function findNoteAt(x, y) {
   if (notes.length === 0) return null;
   const pitch = yToPitch(y);
   if (pitch <= 0 || pitch > 127) return null;
-  // Quick Y reject: ensure click is within this note's row.
-  const ry = Math.round(pitchToY(pitch));
-  const rh = Math.round(NOTE_HEIGHT);
-  if (y < ry - 1 || y > ry + rh + 1) {
-    // Click is in a different row than the snapped pitch. Still allow
-    // hit-testing in case rounding places the note in an adjacent row.
-  }
   const xTime = xToTime(x);
   const idx = _getNotesIdx();
   const r = findNoteAtBeat(idx, xTime, pitch, _resizeHotZoneBeats());
@@ -558,15 +550,35 @@ export function hasNoteOverlapMulti(excludeIds, pitch, start, end) {
  * duration 降序）决定激活的 note。后面的 note 如果与前面任意已激活 note
  * 时间重叠（跨 pitch），则标记为未激活。
  *
- * 实现委托给 notesIndex.computeInactiveNoteIds，O(n) 扫描而非原 O(n²)
- * 嵌套循环。
+ * 保留原插入序语义：按 notes 数组顺序（而非排序后顺序）判定激活。
+ * 后面的 note 如果与前面任意已激活 note 时间重叠（跨 pitch），则标记为
+ * 未激活。这与同 start 多 note 时"先插入者激活"的历史行为一致；如果
+ * 改用排序后顺序（start 升序、同 start 时 duration 降序），则同 start
+ * 多 note 会变成"更长者激活"，是用户可见的行为变化，故此处不委托给
+ * notesIndex.computeInactiveNoteIds（其按排序序处理）。
  * @param {Array} notes
  * @returns {Set<number>} 未激活的 note id 集合
  */
 export function getInactiveNoteIds(notes) {
-  // 用临时索引包装，不污染全局缓存。
-  const tmpIdx = createNotesIndex(notes);
-  return computeInactiveNoteIdsIdx(tmpIdx);
+  const inactive = new Set();
+  const activeRanges = []; // 已激活 note 的时间区间 [{start, end}]
+  for (const n of notes) {
+    const nEnd = n.start + n.duration;
+    // 检查是否与任意已激活 note 时间重叠
+    let overlapped = false;
+    for (const r of activeRanges) {
+      if (n.start < r.end && nEnd > r.start) {
+        overlapped = true;
+        break;
+      }
+    }
+    if (overlapped) {
+      inactive.add(n.id);
+    } else {
+      activeRanges.push({ start: n.start, end: nEnd });
+    }
+  }
+  return inactive;
 }
 
 // 各语言模型的训练音高范围（MIDI 半音）。与 index.js 的 _clampAutoShift /
@@ -732,6 +744,14 @@ export function findAnchorPointAt(x, y) {
   // O(log n + k) lookup: binary search the sorted anchors by time around the
   // click x, then distance-check only the few candidates in the 8px window.
   const sorted = getSortedAnchorPoints();
+  // Build object -> original-index map once (O(n)) so the candidate loop
+  // below is O(1) per lookup instead of O(n) via indexOf. Previously each
+  // candidate did pitchCurve.anchorPoints.indexOf(ap), making the inner loop
+  // O(k * n) when several anchors fall in the 8px window.
+  const origIndex = new Map();
+  for (let i = 0; i < pitchCurve.anchorPoints.length; i++) {
+    origIndex.set(pitchCurve.anchorPoints[i], i);
+  }
   const zoomX = getZoomX();
   const beatToPixel = BEAT_WIDTH * zoomX;
   if (beatToPixel <= 0) {
@@ -766,7 +786,7 @@ export function findAnchorPointAt(x, y) {
     const dist = Math.sqrt((x - px) ** 2 + (y - py) ** 2);
     if (dist <= 8 && dist < bestDist) {
       bestDist = dist;
-      bestIdx = pitchCurve.anchorPoints.indexOf(ap);
+      bestIdx = origIndex.get(ap);
     }
   }
   return bestIdx;

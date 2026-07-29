@@ -171,26 +171,21 @@ export function bisectFirstStartGE(notes, t) {
  */
 export function notesInRange(idx, tStart, tEnd) {
   ensureSorted(idx);
+  _ensureMaxDuration(idx);
   const notes = idx.notes;
-  // First candidate: largest i with notes[i].start < tEnd.
-  // Last candidate: smallest j with notes[j].start + duration > tStart.
-  // We can't binary search by end directly, but we can lower-bound the start
-  // to tStart - maxDuration. To keep it simple, lower-bound by
-  // (tStart - SAFETY) where SAFETY is the max duration seen; if unknown we
-  // scan backwards from the tEnd upper bound until start < tStart - safety
-  // AND start + duration < tStart (which can only stay false while we still
-  // have a candidate).
-  const firstGE = bisectFirstStartGE(notes, tStart);
-  // Walk backwards a bit to catch notes whose start < tStart but extend past.
-  let i = firstGE;
-  while (i > 0) {
-    const prev = notes[i - 1];
-    if (prev.start + prev.duration <= tStart + EPS) break;
-    i--;
-    if (i > 0 && notes[i - 1].start < prev.start - 1000) break; // safety
-  }
+  // Lower-bound the scan start to tStart - maxDuration: a note whose start is
+  // earlier than that cannot extend into [tStart, tEnd) because its duration
+  // is <= maxDuration. Previously this used a hardcoded "1000 beats" safety
+  // which would prematurely break the backwards walk for very long notes
+  // (>1000 beats ≈ hundreds of bars), causing them to be dropped from the
+  // viewport. Using the actual maxDuration keeps the lower bound both tight
+  // and correct for any note length.
+  const lowerBound = tStart - idx.maxDuration - EPS;
+  const firstGE = Math.max(0, bisectFirstStartGE(notes, lowerBound));
+  // Walk forward from firstGE; notes are sorted by start so we can break
+  // once start > tEnd.
   const result = [];
-  for (; i < notes.length; i++) {
+  for (let i = firstGE; i < notes.length; i++) {
     const n = notes[i];
     if (n.start > tEnd + EPS) break;
     const nEnd = n.start + n.duration;
@@ -433,17 +428,30 @@ export function findNoteAtBeat(idx, xTime, pitch, resizeBeats) {
  */
 export function findAdjacentBoundary(idx, excludeIds, pitch, t, maxBeats) {
   _ensurePitchIndex(idx);
+  _ensureMaxDuration(idx);
   const arr = idx.pitchIndex.get(pitch);
   if (!arr || arr.length === 0) return t;
   const notes = idx.notes;
   let bestT = t;
   let bestDist = maxBeats;
-  // Scan forward from index 0 until start > t + maxBeats (upper bound is
-  // tight). Lower bound can't be binary-searched because a note that starts
-  // long before t may still have its END inside the snap window. With small
-  // maxBeats (typically 4px ≈ 0.06 beats), the upper-bound cutoff still
-  // prunes the vast majority of notes in practice.
-  for (let i = 0; i < arr.length; i++) {
+  // A note's END can reach into the snap window only if its start is within
+  // (t - maxBeats - maxDuration). Use that as a binary-searchable lower
+  // bound: find the first arr index whose note.start >= lowerBound, then
+  // scan forward. Upper bound is tight (start > t + maxBeats).
+  //
+  // Complexity: O(log n + k) where k = notes whose [start, start+duration]
+  // intersects [t - maxBeats, t + maxBeats]. Previously this scanned from
+  // index 0, which degenerated to O(n) when t was near the array end.
+  const safety = Math.max(idx.maxDuration, maxBeats);
+  const lowerBound = t - safety - EPS;
+  let lo = 0;
+  let hi = arr.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (notes[arr[mid]].start < lowerBound) lo = mid + 1;
+    else hi = mid;
+  }
+  for (let i = lo; i < arr.length; i++) {
     const n = notes[arr[i]];
     if (n.start > t + maxBeats + EPS) break;
     if (excludeIds && excludeIds.has(n.id)) continue;
@@ -532,10 +540,18 @@ export function computeMultiDragResult(idx, selectedIds, newPositions) {
     if (blocked) break;
   }
   if (!blocked) {
+    // Build id -> note map once (O(n)) so the per-id lookup below is O(1).
+    // Previously this used idx.notes.find() inside the loop, making the
+    // whole planned construction O(k * n) — which directly contradicts the
+    // O((k+n) log k) goal for the large-scale multi-drag case.
+    const idToNote = new Map();
+    for (let i = 0; i < idx.notes.length; i++) {
+      idToNote.set(idx.notes[i].id, idx.notes[i]);
+    }
     for (const id of selectedIds) {
       const np = newPositions.get(id);
       if (!np) continue;
-      planned.push({ note: idx.notes.find((n) => n.id === id), newStart: np.start, newPitch: np.pitch });
+      planned.push({ note: idToNote.get(id), newStart: np.start, newPitch: np.pitch });
     }
   }
   return { blocked, planned };

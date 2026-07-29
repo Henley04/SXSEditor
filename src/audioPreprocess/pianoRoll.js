@@ -174,6 +174,11 @@ export function initPianoRoll() {
       // recently added note wins on shared boundaries (matches old behavior
       // for the rare case of true overlap). Resize-edge flag is computed
       // from a zoom-aware hot zone instead of a fixed 6px.
+      //
+      // No adjacent-pitch fallback: clicking in the empty space of a pitch
+      // row must not snap to a note in the row above/below. This keeps the
+      // hit-test consistent with the fragmentEditor pianoRoll, whose
+      // findNoteAtBeat uses exact pitch match only.
       const resizeBeats = this._resizeHotZoneBeats();
       const xTime = this._xToTime(x);
       const pitch = this._yToPitch(y);
@@ -194,32 +199,7 @@ export function initPianoRoll() {
           return { note, nx: rx, ny: ry, nw: rw, nh: rh, onResizeEdge };
         }
       }
-      // Allow pitch rounding tolerance: try neighbor pitches if exact match missed.
-      for (let dy = -1; dy <= 1; dy += 2) {
-        const adjPitch = pitch + dy;
-        if (adjPitch < 0 || adjPitch > 127) continue;
-        for (let i = this.notes.length - 1; i >= 0; i--) {
-          const note = this.notes[i];
-          if (note.pitch !== adjPitch) continue;
-          const nEnd = note.start + note.duration;
-          const ry = Math.round(this._pitchToY(note.pitch));
-          const rh = Math.round(NOTE_HEIGHT * this.zoomY);
-          // Only count if click y is within this note's pixel row.
-          if (y < ry - 1 || y > ry + rh + 1) continue;
-          if (xTime >= note.start && xTime < nEnd) {
-            const rx = Math.round(this._timeToX(note.start));
-            const rw = Math.round(note.duration * BEAT_WIDTH * this.zoomX);
-            const onResizeEdge = (nEnd - xTime) <= resizeBeats + 1e-9;
-            return { note, nx: rx, ny: ry, nw: rw, nh: rh, onResizeEdge };
-          }
-        }
-      }
       return null;
-    },
-
-    _isResizeEdge(x, nx, nw) {
-      // Legacy pixel-based check; kept for backward-compat with old call sites.
-      return x >= nx + nw - 6 && x <= nx + nw;
     },
 
     _onMouseDown(e) {
