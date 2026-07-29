@@ -16,6 +16,26 @@ const { openUpdateNotificationWindow, getUpdateNotificationWindow } = require('.
 const MAX_REDIRECTS = 5;
 const DOWNLOAD_TIMEOUT_MS = 5 * 60 * 1000; // 5 min socket timeout
 const PROGRESS_THROTTLE_MS = 100;
+// Only GitHub hosts may serve the installer. The download URL is built by
+// updateChecker from the GitHub releases API; validating the host (and every
+// redirect target) prevents a compromised renderer from pointing the
+// in-app installer download at an arbitrary server.
+const ALLOWED_INSTALLER_HOSTS = new Set([
+  'github.com',
+  'www.github.com',
+  'objects.githubusercontent.com',
+  'github-releases.githubusercontent.com',
+  'codeload.github.com',
+]);
+
+function _isAllowedInstallerHost(urlStr) {
+  try {
+    const host = new URL(urlStr).hostname;
+    return ALLOWED_INSTALLER_HOSTS.has(host);
+  } catch (_) {
+    return false;
+  }
+}
 // Installer temp dir under os.tmpdir(). All downloaded installers land here
 // so they can be cleaned up centrally (old files are pruned on app start and
 // before each new download).
@@ -110,6 +130,12 @@ function _downloadFile(url, destPath, abortController) {
     };
 
     const doRequest = (targetUrl) => {
+      // Enforce HTTPS + host whitelist for the installer download and every
+      // redirect hop. Prevents MITM/plain-HTTP and off-host redirects.
+      if (!_isAllowedInstallerHost(targetUrl) || !targetUrl.startsWith('https://')) {
+        if (!settled) { settled = true; reject(new Error('URL not allowed')); }
+        return;
+      }
       const req = https.request(targetUrl, {
         method: 'GET',
         headers: { 'User-Agent': 'SXSEditor-Updater' },
@@ -122,7 +148,8 @@ function _downloadFile(url, destPath, abortController) {
         ) {
           redirectCount++;
           res.resume();
-          doRequest(res.headers.location);
+          const resolvedRedirect = new URL(res.headers.location, targetUrl).href;
+          doRequest(resolvedRedirect);
           return;
         }
         if (status < 200 || status >= 300) {
@@ -274,6 +301,11 @@ function registerUpdateIpc() {
     if (!url) {
       return { success: false, error: 'invalid_url' };
     }
+    // Defense-in-depth: _downloadFile also enforces HTTPS + host whitelist,
+    // but reject up front with a clear error for an obviously bad URL.
+    if (!url.startsWith('https://') || !_isAllowedInstallerHost(url)) {
+      return { success: false, error: 'url_not_allowed' };
+    }
 
     try {
       fs.mkdirSync(UPDATE_TMP_DIR, { recursive: true });
@@ -325,6 +357,13 @@ function registerUpdateIpc() {
       return { success: false, error: 'invalid_path' };
     }
     const resolvedPath = path.resolve(filePath);
+    // Confine execution to the installer temp dir so a compromised renderer
+    // cannot spawn an arbitrary existing .exe (e.g. C:\Windows\System32\cmd.exe).
+    const normResolved = resolvedPath.replace(/\\/g, '/');
+    const normTmp = path.resolve(UPDATE_TMP_DIR).replace(/\\/g, '/');
+    if (normResolved !== normTmp && !normResolved.startsWith(normTmp + '/')) {
+      return { success: false, error: 'installer_path_not_allowed' };
+    }
     if (!fs.existsSync(resolvedPath)) {
       return { success: false, error: 'file_not_found' };
     }

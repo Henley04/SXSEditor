@@ -168,6 +168,28 @@ describe('wavEncoder', () => {
 
       expect(view.getUint16(32, true)).to.equal(8);
     });
+
+    it('should pad odd-length stereo input with a zero sample (B4)', () => {
+      // B4: stereo with odd length would otherwise produce a corrupt WAV
+      // (header numChannels=2 but data not a multiple of blockAlign=8).
+      const oddStereo = new Float32Array([0.1, 0.2, 0.3]); // length 3, odd
+      const result = encodeWav(oddStereo, 24000, 2);
+      const view = new DataView(result.buffer);
+
+      // Header still says 2 channels.
+      expect(view.getUint16(22, true)).to.equal(2);
+      // Data size must be a multiple of blockAlign (8) for stereo 32-bit.
+      const dataSize = view.getUint32(40, true);
+      expect(dataSize % 8).to.equal(0);
+      // Total length = 44 header + 4 padded samples * 4 bytes.
+      expect(result.length).to.equal(44 + 4 * 4);
+      // Original samples are preserved.
+      expect(view.getFloat32(44 + 0 * 4, true)).to.be.closeTo(0.1, 0.0001);
+      expect(view.getFloat32(44 + 1 * 4, true)).to.be.closeTo(0.2, 0.0001);
+      expect(view.getFloat32(44 + 2 * 4, true)).to.be.closeTo(0.3, 0.0001);
+      // Padded trailing sample is zero.
+      expect(view.getFloat32(44 + 3 * 4, true)).to.equal(0);
+    });
   });
 
   describe('applyEnvelopesToAudio', () => {

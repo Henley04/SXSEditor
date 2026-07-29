@@ -113,11 +113,11 @@ function registerDialogIpc() {
   ipcMain.handle('shell:showItemInFolder', async (event, filePath) => {
     try {
       const resolved = path.resolve(filePath);
-      // 仅允许显示已授权路径下的文件，避免任意路径泄露
+      // Only reveal files under already-authorized paths. Previously this
+      // branch auto-authorized any path, which let a compromised renderer
+      // reveal arbitrary file-system locations (information leak / phishing).
       if (!isPathAllowed(resolved)) {
-        // 即便未授权也允许显示（导出文件刚由用户选择保存路径，已在 showSaveDialog 中授权）
-        // 但仍做一次 authorize 确保后续读取合法
-        authorizePath(resolved);
+        return { success: false, error: t('error.pathNotAllowed') };
       }
       shell.showItemInFolder(resolved);
       return { success: true };

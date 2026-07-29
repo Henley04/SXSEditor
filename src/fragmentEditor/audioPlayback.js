@@ -1,4 +1,5 @@
-import { encodeWav, applyEnvelopesToAudio } from '../audio/wavEncoder.js';
+// B2: wavEncoder.js is now CommonJS — use require instead of ESM import.
+const { encodeWav, applyEnvelopesToAudio } = require('../audio/wavEncoder.js');
 import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
 import { initPipeline, getFragmentPreviewInferenceOptions, getFragmentExportInferenceOptions } from './pipeline.js';
@@ -668,7 +669,8 @@ export async function playFragment() {
     }
   } catch (error) {
     console.error(t('fragment.synthesisFailed') + ':', error);
-    showAlertDialog(t('fragment.synthesisFailed') + ': ' + error.message);
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('fragment.synthesisFailedDetail', { detail: error.message }));
     stopStreamingPlayback();
   } finally {
     setFragmentIsSynthesizing(false);
@@ -723,7 +725,8 @@ export async function exportFragment() {
     }
   } catch (error) {
     console.error(t('fragment.exportFailed') + ':', error);
-    showAlertDialog(t('fragment.exportFailed') + ': ' + error.message);
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('fragment.exportFailedDetail', { detail: error.message }));
   } finally {
     setFragmentIsExporting(false);
     btnExportFragment.disabled = false;

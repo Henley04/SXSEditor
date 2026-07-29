@@ -10,11 +10,13 @@ import { updateMidiInfo, startInlineEdit, updateInlineInputPosition } from './ui
 // visibilitychange handler: pause rAF-driven playback UI updates when tab hidden.
 // Registered once per module; resumes _tickPlayback when visible again.
 let _visibilityHandlerRegistered = false;
+// W22: store the handler reference so destroy() can remove it.
+let _visibilityChangeHandler = null;
 
 function _ensureVisibilityHandler() {
   if (_visibilityHandlerRegistered) return;
   _visibilityHandlerRegistered = true;
-  document.addEventListener('visibilitychange', () => {
+  _visibilityChangeHandler = () => {
     const pr = state.pianoRoll;
     if (!pr) return;
     if (document.hidden) {
@@ -27,7 +29,8 @@ function _ensureVisibilityHandler() {
         pr._tickPlayback();
       }
     }
-  });
+  };
+  document.addEventListener('visibilitychange', _visibilityChangeHandler);
 }
 
 export function initPianoRoll() {
@@ -91,9 +94,25 @@ export function initPianoRoll() {
     },
 
     destroy() {
+      // W22: cancel any pending playback rAF so no frame fires after destroy.
+      if (this.playbackRaf) {
+        cancelAnimationFrame(this.playbackRaf);
+        this.playbackRaf = null;
+      }
       window.removeEventListener('resize', this._boundResize);
       document.removeEventListener('mouseup', this._boundMouseUp);
       document.removeEventListener('keydown', this._boundKeyDown);
+      // W22: release offscreen static cache canvas + its context so they can be GC'd.
+      this._staticCache = null;
+      this.ctx = null;
+      // W22: remove the module-level visibilitychange listener so a destroyed
+      // instance doesn't receive callbacks, and reset the flag so a new
+      // instance can register again.
+      if (_visibilityHandlerRegistered && _visibilityChangeHandler) {
+        document.removeEventListener('visibilitychange', _visibilityChangeHandler);
+        _visibilityHandlerRegistered = false;
+        _visibilityChangeHandler = null;
+      }
     },
 
     _resize() {

@@ -6,6 +6,11 @@ import { initPianoRoll } from './pianoRoll.js';
 import { processWavBuffer } from './audioLoader.js';
 import { updateMidiInfo } from './uiControls.js';
 
+// W21: IPC cleanup tracking array (mirrors renderer/fragmentEditor _ipcCleanups
+// pattern). Each registered IPC listener pushes its unsubscribe function here
+// so beforeunload can remove the listeners.
+state._ipcCleanups = state._ipcCleanups || [];
+
 export function setupIpcHandlers() {
   window.addEventListener('DOMContentLoaded', async () => {
     try {
@@ -42,9 +47,12 @@ export function setupIpcHandlers() {
         });
       }
 
-      ipc.onLoadPreprocessData((data) => {
+      // W21: capture the unsubscribe function returned by onLoadPreprocessData
+      // and track it so beforeunload can remove the IPC listener.
+      const cleanupLoad = ipc.onLoadPreprocessData((data) => {
         initializeWithData(data);
       });
+      if (cleanupLoad) state._ipcCleanups.push(cleanupLoad);
 
       const initialData = window._pendingPreprocessData;
       if (initialData) {

@@ -7,7 +7,10 @@
  * - 关闭对话框后，Electron 无法正确将焦点归还给窗口内的输入元素
  */
 
-import { t } from './i18n/index.js';
+// W25: use tOr() instead of t() || 'fallback'. t() returns the raw key string
+// on a miss (never undefined), so `t(key) || 'fallback'` is dead code that can
+// leak raw key names to users. tOr() returns the fallback only on a genuine miss.
+import { tOr } from './i18n/index.js';
 import { escapeHtml } from './utils/escapeHtml.js';
 
 function getThemeVar(name, fallback) {
@@ -66,7 +69,7 @@ export function showAlertDialog(message, onClose) {
         cursor: pointer;
         font-weight: 500;
         transition: all 0.15s ease;
-      ">${t('common.confirm') || 'OK'}</button>
+      ">${tOr('common.confirm', 'OK')}</button>
     </div>
   `;
 
@@ -171,7 +174,7 @@ export function showConfirmDialog(message) {
           cursor: pointer;
           font-weight: 500;
           transition: all 0.15s ease;
-        ">${t('common.cancel') || 'Cancel'}</button>
+        ">${tOr('common.cancel', 'Cancel')}</button>
         <button class="confirm-ok-btn" style="
           padding: 6px 20px;
           background: var(--bg-button-danger);
@@ -182,7 +185,7 @@ export function showConfirmDialog(message) {
           cursor: pointer;
           font-weight: 500;
           transition: all 0.15s ease;
-        ">${t('common.confirm') || 'OK'}</button>
+        ">${tOr('common.confirm', 'OK')}</button>
       </div>
     `;
 
@@ -297,18 +300,18 @@ export function showProjectInfoImportDialog(projectInfo, current) {
       animation: sxs-dialog-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
     `;
 
-    const title = t('main.midiProjectInfoTitle') || 'Import Project Info';
-    const desc = t('main.midiProjectInfoDesc') || 'Select which fields to sync from the MIDI file:';
+    const title = tOr('main.midiProjectInfoTitle', 'Import Project Info');
+    const desc = tOr('main.midiProjectInfoDesc', 'Select which fields to sync from the MIDI file:');
 
     const bpmRow = hasBpm ? `
       <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;">
         <input type="checkbox" id="midi-info-bpm" checked style="cursor:pointer;" />
-        <span><strong>${t('main.midiProjectInfoBpm') || 'BPM'}</strong>: ${escapeHtml(String(projectInfo.bpm))} → ${escapeHtml(String(current.currentBpm))}</span>
+        <span><strong>${tOr('main.midiProjectInfoBpm', 'BPM')}</strong>: ${escapeHtml(String(projectInfo.bpm))} → ${escapeHtml(String(current.currentBpm))}</span>
       </label>` : '';
     const tsRow = hasTimeSig ? `
       <label style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--border);border-radius:6px;cursor:pointer;margin-top:8px;">
         <input type="checkbox" id="midi-info-timesig" checked style="cursor:pointer;" />
-        <span><strong>${t('main.midiProjectInfoTimeSig') || 'Time Signature'}</strong>: ${escapeHtml(projectInfo.timeSignature.join('/'))} → ${escapeHtml(current.currentTimeSignature.join('/'))}</span>
+        <span><strong>${tOr('main.midiProjectInfoTimeSig', 'Time Signature')}</strong>: ${escapeHtml(projectInfo.timeSignature.join('/'))} → ${escapeHtml(current.currentTimeSignature.join('/'))}</span>
       </label>` : '';
 
     dialog.innerHTML = `
@@ -329,7 +332,7 @@ export function showProjectInfoImportDialog(projectInfo, current) {
           cursor: pointer;
           font-weight: 500;
           transition: all 0.15s ease;
-        ">${t('common.cancel') || 'Cancel'}</button>
+        ">${tOr('common.cancel', 'Cancel')}</button>
         <button class="confirm-ok-btn" style="
           padding: 6px 20px;
           background: var(--accent, #4a90e2);
@@ -340,7 +343,7 @@ export function showProjectInfoImportDialog(projectInfo, current) {
           cursor: pointer;
           font-weight: 500;
           transition: all 0.15s ease;
-        ">${t('common.confirm') || 'OK'}</button>
+        ">${tOr('common.confirm', 'OK')}</button>
       </div>
     `;
 

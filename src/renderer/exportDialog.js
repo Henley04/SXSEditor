@@ -709,7 +709,8 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setProgress(95);
 
     // 编码 WAV
-    const { encodeWav } = await import('../audio/wavEncoder.js');
+    // B2: wavEncoder.js is now CommonJS — use require instead of dynamic import.
+    const { encodeWav } = require('../audio/wavEncoder.js');
     const wavData = encodeWav(mixedAudio, SAMPLE_RATE);
 
     setStatus('progressSaving');
