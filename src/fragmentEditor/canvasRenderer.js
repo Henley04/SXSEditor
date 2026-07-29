@@ -32,6 +32,9 @@ import {
   getSelectedPhonemeIndex,
   getPhonemeDragState,
   getHoveredNoteId,
+  getActiveNoteId,
+  getActiveAnchorIdx,
+  getNotesVersion,
   getActiveInlineInput,
   getActiveInlineEditNote,
   getPitchCurveVersion,
@@ -579,6 +582,34 @@ export function getInactiveNoteIds(notes) {
     }
   }
   return inactive;
+}
+
+// ---- 缓存：getInactiveNoteIds / getOutOfPitchRangeNotes ----
+// 这两个计算每帧（非拖拽时）都会调用，getInactiveNoteIds 是 O(n²)。
+// 用 notes 引用 + notesVersion 作为缓存键：notes 数组替换或其元素被修改时
+// state.js 会自增 notesVersion，从而失效缓存。
+let _inactiveCache = { notesRef: null, version: -1, result: null };
+let _oobCache = { notesRef: null, version: -1, result: null };
+
+export function getCachedInactiveNoteIds(notes) {
+  const v = getNotesVersion();
+  if (_inactiveCache.notesRef !== notes || _inactiveCache.version !== v) {
+    _inactiveCache = { notesRef: notes, version: v, result: getInactiveNoteIds(notes) };
+  }
+  return _inactiveCache.result;
+}
+
+export function getCachedOutOfPitchRangeNotes(notes) {
+  const v = getNotesVersion();
+  if (_oobCache.notesRef !== notes || _oobCache.version !== v) {
+    _oobCache = { notesRef: notes, version: v, result: getOutOfPitchRangeNotes(notes) };
+  }
+  return _oobCache.result;
+}
+
+export function invalidateNoteAnalysisCache() {
+  _inactiveCache = { notesRef: null, version: -1, result: null };
+  _oobCache = { notesRef: null, version: -1, result: null };
 }
 
 // 各语言模型的训练音高范围（MIDI 半音）。与 index.js 的 _clampAutoShift /
@@ -1522,15 +1553,26 @@ function renderPitchCurve(c) {
       const px = timeToX(ap.time);
       const py = pitchToY(ap.pitch);
       const isSelected = selectedAnchorIndices.has(i) || i === pitchDragAnchorIdx;
+      const isActive = i === getActiveAnchorIdx(); // 鼠标按住此锚点
 
-      ctx.fillStyle = isSelected ? c.fgPrimary : c.pitchPoint;
+      // 按压反馈：放大 + 发光阴影，让用户清楚知道"按下了哪个锚点"。
+      if (isActive) {
+        ctx.save();
+        ctx.shadowColor = c.accent;
+        ctx.shadowBlur = 14;
+      }
+      const radius = isSelected ? 7 : (isActive ? 7 : 6);
+      ctx.fillStyle = isSelected ? c.fgPrimary : (isActive ? c.accent : c.pitchPoint);
       ctx.beginPath();
-      ctx.arc(px, py, isSelected ? 7 : 6, 0, Math.PI * 2);
+      ctx.arc(px, py, radius, 0, Math.PI * 2);
       ctx.fill();
 
-      ctx.strokeStyle = isSelected ? c.accent : c.shadowColor;
-      ctx.lineWidth = isSelected ? 2.5 : 1.5;
+      ctx.strokeStyle = isSelected ? c.accent : (isActive ? c.accent : c.shadowColor);
+      ctx.lineWidth = isSelected ? 2.5 : (isActive ? 2.5 : 1.5);
       ctx.stroke();
+      if (isActive) {
+        ctx.restore();
+      }
 
       if (isSelected) {
         ctx.strokeStyle = c.accentLine;
@@ -1682,9 +1724,12 @@ function _doRenderImpl(w, h) {
   const currentFragment = getCurrentFragment();
   // 拖拽中跳过无效 note 检测（O(n²)），保持帧率不因碰撞检测而掉帧
   const isDragging = getDragMode() !== null;
-  const inactiveNoteIds = isDragging ? new Set() : getInactiveNoteIds(notes);
+  // 使用缓存版本（基于 notesVersion 失效），避免每帧 O(n²) 重算
+  const inactiveNoteIds = isDragging ? new Set() : getCachedInactiveNoteIds(notes);
   // 按语言模型检测音高范围外 note（基础模型 [28,88] / 日语模型 [48,84]）
-  const { outOfRangeIds: oobNoteIds, range: pitchRange } = getOutOfPitchRangeNotes(notes);
+  const { outOfRangeIds: oobNoteIds, range: pitchRange } = getCachedOutOfPitchRangeNotes(notes);
+  // 鼠标按住的 note（mousedown 期间），用于绘制按压反馈
+  const activeNoteId = getActiveNoteId();
 
   // 预计算本帧常量，避免每 note 重复 getZoomX/getScrollX 函数调用
   const zoomX = getZoomX();
@@ -1696,8 +1741,10 @@ function _doRenderImpl(w, h) {
   // intersects the visible beat range. O(log n + visible) instead of O(n).
   // x = start * beatToPixel - scrollX, so visible x ∈ [0, w] maps to
   // beat ∈ [scrollX / beatToPixel, (w + scrollX) / beatToPixel].
+  // 阈值从 64 降到 16：即使是中等规模项目（30~60 notes）也启用裁剪，
+  // 避免每帧迭代全部 notes。
   let visibleNotes = notes;
-  if (notes.length > 64 && beatToPixel > 0) {
+  if (notes.length > 16 && beatToPixel > 0) {
     const viewStartBeat = scrollX / beatToPixel;
     const viewEndBeat = (w + scrollX) / beatToPixel;
     const idx = _getNotesIdx();
@@ -1712,18 +1759,34 @@ function _doRenderImpl(w, h) {
     if (x + nw < 0 || x > w) continue;
 
     const isSelected = selectedNoteIds.has(note.id);
+    const isActive = note.id === activeNoteId; // 鼠标按住此 note
     const isPitchMode = currentParamMode === 'Pitch';
     const isInactive = inactiveNoteIds.has(note.id);
     // 音高范围外 note 用灰色（参考重叠 note 的视觉提示）。
     // 注意：oob note 仍参与合成（JP 会自动移调，base 可能影响质量），只是视觉上标注警告。
     const isOob = oobNoteIds.has(note.id);
     const isWarned = isInactive || isOob;
+
+    // 鼠标按住反馈：轻微放大 + 发光阴影，让用户清楚知道"按下了哪个分片音符"。
+    // 使用 save/translate/scale 包裹整条 note 绘制，确保 fill+stroke+text+handle
+    // 一起缩放，视觉一致。
+    if (isActive) {
+      ctx.save();
+      ctx.shadowColor = c.accent;
+      ctx.shadowBlur = 12;
+      const cx = x + nw / 2;
+      const cy = y + nh / 2;
+      ctx.translate(cx, cy);
+      ctx.scale(1.04, 1.04);
+      ctx.translate(-cx, -cy);
+    }
+
     ctx.fillStyle = isWarned ? c.fgDisabled : c.accent;
-    ctx.globalAlpha = isSelected ? 1.0 : (isPitchMode ? 0.4 : 0.8);
+    ctx.globalAlpha = isSelected ? 1.0 : (isPitchMode ? 0.4 : (isActive ? 0.95 : 0.8));
     ctx.fillRect(x, y, nw, nh);
     ctx.globalAlpha = 1.0;
-    ctx.strokeStyle = isSelected ? c.noteSelectedBg : c.noteBorder;
-    ctx.lineWidth = isSelected ? 2 : 1;
+    ctx.strokeStyle = isSelected ? c.noteSelectedBg : (isActive ? c.accent : c.noteBorder);
+    ctx.lineWidth = isSelected ? 2 : (isActive ? 2 : 1);
     ctx.strokeRect(x, y, nw, nh);
 
     if (nw > 16) {
@@ -1744,6 +1807,10 @@ function _doRenderImpl(w, h) {
       ctx.textAlign = 'right';
       ctx.textBaseline = 'top';
       ctx.fillText('!', x + nw - 4, y + 1);
+    }
+
+    if (isActive) {
+      ctx.restore();
     }
   }
 
