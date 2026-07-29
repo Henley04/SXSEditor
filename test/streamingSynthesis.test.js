@@ -823,9 +823,11 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       const onChunkMel = sinon.spy();
       await pipeline._runDiffusionLoop(xt, 100, ptMelData, 10, combinedCond, 1, 0, 0.75, () => {}, 0, 100, onChunkMel);
       expect(stub.calledOnce).to.equal(true);
-      // 最后一个参数应为 onChunkMel
+      // 倒数第二个参数应为 onChunkMel（最后一个为 samplerName，由求解器特性新增）
       const callArgs = stub.firstCall.args;
-      expect(callArgs[callArgs.length - 1]).to.equal(onChunkMel);
+      expect(callArgs[callArgs.length - 2]).to.equal(onChunkMel);
+      // 最后一个参数为 samplerName，默认 'euler'
+      expect(callArgs[callArgs.length - 1]).to.equal('euler');
     });
   });
 

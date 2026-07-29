@@ -20,7 +20,7 @@ const TOTAL_FRAMES = 8;
 
 // 构造常量速度场 v(x,t) = c（与 x/t 无关），便于解析验证
 function makeConstEvalDiffStep(c, cfg = true) {
-    return async (t, xtOverride) => {
+    return async (_t, _xtOverride) => {
         const condPred = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(c);
         const uncondPred = cfg ? new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(c * 0.5) : null;
         return { condPred, uncondPred };
@@ -29,7 +29,7 @@ function makeConstEvalDiffStep(c, cfg = true) {
 
 // combine: 无 CFG 时直接返回 condPred；有 CFG 时返回 condPred（忽略 uncond，简化测试）
 function makeIdentityCombine(useCfg) {
-    return (condPred, uncondPred) => {
+    return (condPred, _uncondPred) => {
         if (!useCfg) return condPred;
         // 简化：直接返回 condPred，不实际做 CFG 合并
         return condPred;
