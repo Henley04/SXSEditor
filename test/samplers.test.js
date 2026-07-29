@@ -1,18 +1,19 @@
 const { expect } = require('chai');
 const EulerSolver = require('../src/inference/pipeline/samplers/euler');
 const HeunSolver = require('../src/inference/pipeline/samplers/heun');
-const StorkSolver = require('../src/inference/pipeline/samplers/stork');
-const { createSampler, resolveSamplerName, SOLVERS, DEFAULT_SOLVER } = require('../src/inference/pipeline/samplers');
+const ExtrapSolver = require('../src/inference/pipeline/samplers/extrap');
+const { createSampler, resolveSamplerName, SOLVERS, DEFAULT_SOLVER, LEGACY_ALIASES } = require('../src/inference/pipeline/samplers');
 
 /**
  * 采样器（求解器）单元测试。
  *
  * 验证：
- * 1. Euler 等价于原实现：t=(step+0.5)/N, delta = v*dt
+ * 1. Euler：t=(step+0.5)/N, delta = v*dt（写入 deltaBuf）
  * 2. Heun 二阶梯形公式，末步退化为 Euler（tNext>1 保护）
- * 3. STORK-2 首步退化为 Euler，后续步用 Taylor 外推，含数值稳定性保护
- * 4. 注册表与工厂函数
+ * 3. Extrapolated Euler 首步退化为 Euler，后续步用速度外推，含数值稳定性保护
+ * 4. 注册表与工厂函数（含 stork→extrap 旧名称兼容）
  * 5. NFE 计数正确
+ * 6. combine CFG/Rescale 数值正确性
  */
 
 const MEL_DIM = 4;
@@ -27,12 +28,23 @@ function makeConstEvalDiffStep(c, cfg = true) {
     };
 }
 
-// combine: 无 CFG 时直接返回 condPred；有 CFG 时返回 condPred（忽略 uncond，简化测试）
-function makeIdentityCombine(useCfg) {
+// combine: 写入 vBuf（通过闭包绑定，模拟 pipeline 的 combine 接口）
+// 实际 pipeline 的 combine 是 (condPred, uncondPred) → vBuf，vBuf 通过闭包访问
+function makeIdentityCombine(vBuf) {
     return (condPred, _uncondPred) => {
-        if (!useCfg) return condPred;
-        // 简化：直接返回 condPred，不实际做 CFG 合并
-        return condPred;
+        vBuf.set(condPred);
+        return vBuf;
+    };
+}
+
+// 构造复用缓冲区（模拟调用方预分配）
+function makeBuffers() {
+    const len = TOTAL_FRAMES * MEL_DIM;
+    return {
+        vBuf: new Float32Array(len),
+        deltaBuf: new Float32Array(len),
+        v1Buf: new Float32Array(len),
+        xPredBuf: new Float32Array(len),
     };
 }
 
@@ -42,16 +54,16 @@ describe('Samplers - 求解器单元测试', () => {
             const c = 0.7;
             const N = 4;
             const solver = new EulerSolver();
-            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
-            const { delta, nfe } = await solver.step({
+            const buffers = makeBuffers();
+            const { nfe } = await solver.step({
                 evalDiffStep: makeConstEvalDiffStep(c, false),
-                combine: makeIdentityCombine(false),
-                step: 1, totalSteps: N, xtData,
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 1, totalSteps: N, buffers,
             });
             // dt = 1/4 = 0.25, delta = c * dt = 0.7 * 0.25 = 0.175
             expect(nfe).to.equal(1);
-            for (let i = 0; i < delta.length; i++) {
-                expect(delta[i]).to.be.closeTo(0.175, 1e-6);
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(buffers.deltaBuf[i]).to.be.closeTo(0.175, 1e-6);
             }
         });
 
@@ -59,14 +71,15 @@ describe('Samplers - 求解器单元测试', () => {
             const c = 1.0;
             const N = 10;
             const solver = new EulerSolver();
+            const buffers = makeBuffers();
             let xt = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
             for (let s = 0; s < N; s++) {
-                const { delta } = await solver.step({
+                await solver.step({
                     evalDiffStep: makeConstEvalDiffStep(c, false),
-                    combine: makeIdentityCombine(false),
-                    step: s, totalSteps: N, xtData: xt,
+                    combine: makeIdentityCombine(buffers.vBuf),
+                    step: s, totalSteps: N, buffers,
                 });
-                for (let i = 0; i < xt.length; i++) xt[i] += delta[i];
+                for (let i = 0; i < xt.length; i++) xt[i] += buffers.deltaBuf[i];
             }
             // x = v * N * dt = v * 1 = 1.0
             for (let i = 0; i < xt.length; i++) {
@@ -80,16 +93,17 @@ describe('Samplers - 求解器单元测试', () => {
             const c = 0.5;
             const N = 4;
             const solver = new HeunSolver();
+            const buffers = makeBuffers();
             const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
-            const { delta, nfe } = await solver.step({
+            const { nfe } = await solver.step({
                 evalDiffStep: makeConstEvalDiffStep(c, false),
-                combine: makeIdentityCombine(false),
-                step: 0, totalSteps: N, xtData,
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: N, xtData, buffers,
             });
             // 常量场：v1 = v2 = c, delta = 0.5*(c+c)*dt = c*dt = 0.5*0.25 = 0.125
             expect(nfe).to.equal(2);
-            for (let i = 0; i < delta.length; i++) {
-                expect(delta[i]).to.be.closeTo(0.125, 1e-6);
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(buffers.deltaBuf[i]).to.be.closeTo(0.125, 1e-6);
             }
         });
 
@@ -97,110 +111,220 @@ describe('Samplers - 求解器单元测试', () => {
             const c = 0.5;
             const N = 4;
             const solver = new HeunSolver();
+            const buffers = makeBuffers();
             const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
             const { nfe } = await solver.step({
                 evalDiffStep: makeConstEvalDiffStep(c, false),
-                combine: makeIdentityCombine(false),
-                step: N - 1, totalSteps: N, xtData,
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: N - 1, totalSteps: N, xtData, buffers,
             });
             expect(nfe).to.equal(1);
         });
 
         it('非末步 nfe=2', async () => {
             const solver = new HeunSolver();
+            const buffers = makeBuffers();
             const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
             const { nfe } = await solver.step({
                 evalDiffStep: makeConstEvalDiffStep(0.5, false),
-                combine: makeIdentityCombine(false),
-                step: 0, totalSteps: 4, xtData,
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: 4, xtData, buffers,
             });
             expect(nfe).to.equal(2);
         });
     });
 
-    describe('StorkSolver', () => {
+    describe('ExtrapSolver', () => {
         it('首步退化为 Euler（无 v_prev）', async () => {
             const c = 0.6;
             const N = 4;
-            const solver = new StorkSolver(2);
-            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
-            const { delta, nfe } = await solver.step({
+            const solver = new ExtrapSolver(2);
+            const buffers = makeBuffers();
+            const { nfe } = await solver.step({
                 evalDiffStep: makeConstEvalDiffStep(c, false),
-                combine: makeIdentityCombine(false),
-                step: 0, totalSteps: N, xtData,
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: N, buffers,
             });
             // 首步 v2 = v1 = c, delta = 0.5*(c+c)*dt = c*dt
             expect(nfe).to.equal(1);
-            for (let i = 0; i < delta.length; i++) {
-                expect(delta[i]).to.be.closeTo(c / N, 1e-6);
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(buffers.deltaBuf[i]).to.be.closeTo(c / N, 1e-6);
             }
         });
 
         it('常量速度场后续步 delta = v*dt（v1=v_prev，外推无变化）', async () => {
             const c = 0.6;
             const N = 4;
-            const solver = new StorkSolver(2);
-            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
+            const solver = new ExtrapSolver(2);
+            const buffers = makeBuffers();
             // 首步填充 v_prev
             await solver.step({
                 evalDiffStep: makeConstEvalDiffStep(c, false),
-                combine: makeIdentityCombine(false),
-                step: 0, totalSteps: N, xtData,
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: N, buffers,
             });
             // 第二步：v1 = v_prev = c，v2 = c + 0.5*(c-c) = c，delta = c*dt
-            const { delta, nfe } = await solver.step({
+            const { nfe } = await solver.step({
                 evalDiffStep: makeConstEvalDiffStep(c, false),
-                combine: makeIdentityCombine(false),
-                step: 1, totalSteps: N, xtData,
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 1, totalSteps: N, buffers,
             });
             expect(nfe).to.equal(1);
-            for (let i = 0; i < delta.length; i++) {
-                expect(delta[i]).to.be.closeTo(c / N, 1e-6);
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(buffers.deltaBuf[i]).to.be.closeTo(c / N, 1e-6);
             }
         });
 
         it('reset() 清空 v_prev 状态', async () => {
-            const solver = new StorkSolver(2);
-            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
+            const solver = new ExtrapSolver(2);
+            const buffers = makeBuffers();
             await solver.step({
                 evalDiffStep: makeConstEvalDiffStep(0.5, false),
-                combine: makeIdentityCombine(false),
-                step: 0, totalSteps: 4, xtData,
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: 4, buffers,
             });
             solver.reset();
             expect(solver._vPrev).to.be.null;
         });
 
         it('不支持的高阶自动降级到 2', () => {
-            const solver = new StorkSolver(3);
+            const solver = new ExtrapSolver(3);
             expect(solver.order).to.equal(2);
         });
 
-        it('数值稳定性保护：v_prev 突变时退化为 Euler', async () => {
-            const solver = new StorkSolver(2);
-            const xtData = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(0);
+        it('数值稳定性保护：v_prev 突变时退化为 Euler（幅度检测）', async () => {
+            const solver = new ExtrapSolver(2);
+            const buffers = makeBuffers();
             // 首步：v = 0.001（小值），建立 v_prev
             await solver.step({
                 evalDiffStep: makeConstEvalDiffStep(0.001, false),
-                combine: makeIdentityCombine(false),
-                step: 0, totalSteps: 4, xtData,
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: 4, buffers,
             });
-            // 第二步：v = 10（大值），v_prev=0.001，外推 v2 = 10 + 0.5*(10-0.001) = 14.9995
-            // ratio = 14.9995 / 10 ≈ 1.5 < 3，不会触发 fallback
-            // 改用更极端：v=100，v2 = 100 + 0.5*(100-0.001) = 149.9995，ratio ≈ 1.5 仍不触发
-            // 用 v_prev=0.001, v=0.001 但手动注入大 v_prev 测试 fallback 路径
-            // 直接验证 needsFallback 逻辑：构造 v_prev 使 ratio > 3
+            // 手动注入大 v_prev 使 ratio > 3
             solver._vPrev = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(1000);
-            const { delta } = await solver.step({
+            await solver.step({
                 evalDiffStep: makeConstEvalDiffStep(1.0, false),
-                combine: makeIdentityCombine(false),
-                step: 1, totalSteps: 4, xtData,
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 1, totalSteps: 4, buffers,
             });
-            // v1=1.0, v_prev=1000, v2 = 1 + 0.5*(1-1000) = -499，|v2|/|v1| = 499 > 3 → fallback
-            // fallback 后 v2=v1=1.0, delta = 0.5*(1+1)*dt = dt = 0.25
-            for (let i = 0; i < delta.length; i++) {
-                expect(delta[i]).to.be.closeTo(0.25, 1e-6);
+            // v1=1.0, v_prev=1000, 速度突变 ratio = |1-1000|/1 = 999 > 2 → 不外推，v2=v1
+            // delta = 0.5*(1+1)*dt = dt = 0.25
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(buffers.deltaBuf[i]).to.be.closeTo(0.25, 1e-6);
             }
+        });
+
+        it('数值稳定性保护：符号翻转且幅度增大时退化为 Euler', async () => {
+            const solver = new ExtrapSolver(2);
+            const buffers = makeBuffers();
+            // 首步建立 v_prev
+            await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(1.0, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 0, totalSteps: 4, buffers,
+            });
+            // 构造符号翻转场景：v1=1.0, v_prev=2.1
+            // 速度突变 ratio = |1-2.1|/1 = 1.1 < 2 → 速度检测不触发，进入外推
+            // 提高外推系数 γ=2.0 使 v2 翻转：v2 = 1 + 2*(1-2.1) = 1 - 2.2 = -1.2
+            // |v2|/|v1| = 1.2 < 3 → 幅度检测不触发
+            // v1*v2 = -1.2 < 0 且 |v2|=1.2 > |v1|=1 → 符号翻转检测触发，退化为 Euler
+            solver._vPrev = new Float32Array(TOTAL_FRAMES * MEL_DIM).fill(2.1);
+            solver._gamma = 2.0;
+            await solver.step({
+                evalDiffStep: makeConstEvalDiffStep(1.0, false),
+                combine: makeIdentityCombine(buffers.vBuf),
+                step: 1, totalSteps: 4, buffers,
+            });
+            // fallback: v2 = v1 = 1.0, delta = 0.5*(1+1)*dt = dt = 0.25
+            for (let i = 0; i < buffers.deltaBuf.length; i++) {
+                expect(buffers.deltaBuf[i]).to.be.closeTo(0.25, 1e-6);
+            }
+        });
+    });
+
+    describe('combine CFG/Rescale 数值正确性', () => {
+        it('CFG + Rescale 产生正确的缩放输出（手算验证）', async () => {
+            // 构造 condPred: 2 帧 × 2 dim，ptFrameCount=1
+            // condPred = [pt_val, pt_val, 1.0, 1.0]  (ptFrameCount=1, totalFrames=2, MEL_DIM=2)
+            // uncondPred = [0.5, 0.5, 0.5, 0.5]
+            // cfgStrength=2.0, cfgRescale=0.5
+            const ptFrameCount = 1;
+            const _totalFrames = 2;
+            const _melDim = 2;
+            const condPred = new Float32Array((ptFrameCount + _totalFrames) * _melDim);
+            // pt 段 [0,0]，target 段 4 个元素全 1.0（2 帧 × 2 dim）
+            condPred[2] = 1.0; condPred[3] = 1.0;
+            condPred[4] = 1.0; condPred[5] = 1.0;
+            const uncondPred = new Float32Array(_totalFrames * _melDim).fill(0.5);
+
+            const cfgStrength = 2.0;
+            const cfgRescale = 0.5;
+
+            // 手算：
+            // cfgVal = condVal + 2*(condVal - uncondVal) = 1.0 + 2*(1.0-0.5) = 2.0
+            // posSum = 1.0+1.0 = 2.0, posMean = 1.0
+            // cfgAdjSum = 2.0+2.0 = 4.0, cfgAdjMean = 2.0
+            // posVarSum = (1-1)²+(1-1)² = 0, posStd = 0
+            // cfgAdjVarSum = (2-2)²+(2-2)² = 0, cfgAdjStd = 0
+            // rescale = 0 / (0 + 1e-8) = 0
+            // v = 0.5 * (2.0 * 0) + 0.5 * 2.0 = 1.0
+            const vBuf = new Float32Array(_totalFrames * _melDim);
+            const cfgPredBuf = new Float32Array(_totalFrames * _melDim);
+            // 内联 combine（维度与测试数据匹配，不使用外层 TOTAL_FRAMES/MEL_DIM）
+            const targetLen = _totalFrames * _melDim;
+            let posSum = 0, cfgAdjSum = 0;
+            for (let f = 0; f < _totalFrames; f++) {
+                const tgtOffset = (ptFrameCount + f) * _melDim;
+                for (let d = 0; d < _melDim; d++) {
+                    const condVal = condPred[tgtOffset + d];
+                    const uncondVal = uncondPred[f * _melDim + d];
+                    const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
+                    cfgPredBuf[f * _melDim + d] = cfgVal;
+                    posSum += condVal;
+                    cfgAdjSum += cfgVal;
+                }
+            }
+            const posMean = posSum / targetLen;
+            const cfgAdjMean = cfgAdjSum / targetLen;
+            let posVarSum = 0, cfgAdjVarSum = 0;
+            for (let f = 0; f < _totalFrames; f++) {
+                const tgtOffset = (ptFrameCount + f) * _melDim;
+                for (let d = 0; d < _melDim; d++) {
+                    const pv = condPred[tgtOffset + d] - posMean;
+                    posVarSum += pv * pv;
+                    const cv = cfgPredBuf[f * _melDim + d] - cfgAdjMean;
+                    cfgAdjVarSum += cv * cv;
+                }
+            }
+            const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
+            const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
+            const rescale = posStd / (cfgAdjStd + 1e-8);
+            for (let i = 0; i < targetLen; i++) {
+                const cfgVal = cfgPredBuf[i];
+                vBuf[i] = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
+            }
+            for (let i = 0; i < vBuf.length; i++) {
+                expect(vBuf[i]).to.be.closeTo(1.0, 1e-5);
+            }
+        });
+
+        it('无 CFG 时 combine 直接返回 condPred target 段', () => {
+            const ptFrameCount = 1;
+            const _totalFrames = 2;
+            const _melDim = 2;
+            const condPred = new Float32Array((ptFrameCount + _totalFrames) * _melDim);
+            condPred[2] = 0.7; condPred[3] = 0.3; // target 段
+            const vBuf = new Float32Array(_totalFrames * _melDim);
+            // 内联 combine（无 CFG 分支：直接取 target 段）
+            for (let f = 0; f < _totalFrames; f++) {
+                const tgtOffset = (ptFrameCount + f) * _melDim;
+                for (let d = 0; d < _melDim; d++) {
+                    vBuf[f * _melDim + d] = condPred[tgtOffset + d];
+                }
+            }
+            expect(vBuf[0]).to.be.closeTo(0.7, 1e-6);
+            expect(vBuf[1]).to.be.closeTo(0.3, 1e-6);
         });
     });
 
@@ -209,16 +333,25 @@ describe('Samplers - 求解器单元测试', () => {
             expect(DEFAULT_SOLVER).to.equal('euler');
         });
 
-        it('SOLVERS 包含 euler/heun/stork', () => {
+        it('SOLVERS 包含 euler/heun/extrap', () => {
             expect(SOLVERS).to.have.property('euler');
             expect(SOLVERS).to.have.property('heun');
-            expect(SOLVERS).to.have.property('stork');
+            expect(SOLVERS).to.have.property('extrap');
         });
 
         it('resolveSamplerName 合法值原样返回', () => {
             expect(resolveSamplerName('euler')).to.equal('euler');
             expect(resolveSamplerName('heun')).to.equal('heun');
-            expect(resolveSamplerName('stork')).to.equal('stork');
+            expect(resolveSamplerName('extrap')).to.equal('extrap');
+        });
+
+        it('resolveSamplerName 旧名称 stork → extrap（向后兼容）', () => {
+            expect(resolveSamplerName('stork')).to.equal('extrap');
+        });
+
+        it('LEGACY_ALIASES 包含 stork→extrap 映射', () => {
+            expect(LEGACY_ALIASES).to.have.property('stork');
+            expect(LEGACY_ALIASES.stork).to.equal('extrap');
         });
 
         it('resolveSamplerName 非法值回退到默认', () => {
@@ -231,7 +364,9 @@ describe('Samplers - 求解器单元测试', () => {
         it('createSampler 返回正确类型', () => {
             expect(createSampler('euler')).to.be.instanceOf(EulerSolver);
             expect(createSampler('heun')).to.be.instanceOf(HeunSolver);
-            expect(createSampler('stork')).to.be.instanceOf(StorkSolver);
+            expect(createSampler('extrap')).to.be.instanceOf(ExtrapSolver);
+            // 旧名称也返回 ExtrapSolver
+            expect(createSampler('stork')).to.be.instanceOf(ExtrapSolver);
             // 非法值返回 Euler
             expect(createSampler('invalid')).to.be.instanceOf(EulerSolver);
         });

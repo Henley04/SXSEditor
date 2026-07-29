@@ -5,7 +5,7 @@
 import { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } from './constants.js';
 import { getOrt } from './ortSetup.js';
 import { runSession } from './sessionManager.js';
-import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom, padToLength, trimOutputToLength, disposeTensor } from './utils.js';
+import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom, padToLength, disposeTensor } from './utils.js';
 import { createSampler } from '../pipeline/samplers/index.js';
 
 /**
@@ -41,7 +41,6 @@ export async function runDiffusionLoop({
     const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
     const xtInputBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
     const cfgPredBuf = new Float32Array(totalFrames * MEL_DIM);
-    const dt = 1.0 / totalSteps;
 
     // prompt frames don't change, copy once
     if (ptMelData) {
@@ -124,10 +123,19 @@ export async function runDiffusionLoop({
     // ===== 求解器抽象 =====
     // 与 ORT/DML 路径 (pipeline/diffusion.js) 对齐：
     //   evalDiffStep(t, xtOverride?): 执行 cond + (可选)uncond 推理，返回独立副本
-    //   combine(condPred, uncondPred): CFG + Rescale 合并，返回 v(x,t)
-    //   sampler.step 返回 delta，调用方累加到 xt.data
+    //   combine(condPred, uncondPred): CFG + Rescale 合并，写入 vBuf（复用）
+    //   sampler.step 将 delta 写入 deltaBuf（复用），返回 { nfe }
     const sampler = createSampler(samplerName);
     const useCfg = cfgStrength > 0;
+
+    // 预分配复用缓冲区（跨步复用，0 per-step 分配）
+    const _targetLen = totalFrames * MEL_DIM;
+    const buffers = {
+        vBuf: new Float32Array(_targetLen),
+        deltaBuf: new Float32Array(_targetLen),
+        v1Buf: new Float32Array(_targetLen),
+        xPredBuf: new Float32Array(_targetLen),
+    };
 
     // evalDiffStep: 执行 cond + (可选)uncond 推理
     // xtOverride 可选：用于多步评估求解器（如 Heun）的预测子步骤
@@ -239,10 +247,17 @@ export async function runDiffusionLoop({
         }
     };
 
-    // combine: CFG + Rescale 合并，返回 v(x,t)（target 段）
-    const combine = (condPred, uncondPred) => {
+    // combine: CFG + Rescale 合并，写入 vBuf（复用），返回 vBuf 引用
+    // 无 CFG 时直接拷贝 condPred 到 vBuf（condPred 已是 target 段）。
+    // 有 CFG 时 three-pass（与 ORT 路径完全一致）：
+    //   Pass 1: cfgVal → cfgPredBuf, 累加 sum
+    //   Pass 2: two-pass 方差
+    //   Pass 3: 应用 rescale → vBuf
+    const combineRaw = (condPred, uncondPred) => {
+        const v = buffers.vBuf;
         if (!useCfg) {
-            return condPred; // 已经是 target 段
+            v.set(condPred); // condPred 已是 target 段
+            return v;
         }
         const targetLen = totalFrames * MEL_DIM;
         let posSum = 0, cfgAdjSum = 0;
@@ -261,11 +276,9 @@ export async function runDiffusionLoop({
             const cd = cfgPredBuf[i] - cfgAdjMean;
             cfgAdjVarSum += cd * cd;
         }
-        // 对齐 PyTorch torch.std() (unbiased, N-1) 和 DML 路径
         const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
         const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
         const rescale = posStd / (cfgAdjStd + 1e-8);
-        const v = new Float32Array(targetLen);
         for (let i = 0; i < targetLen; i++) {
             const cfgVal = cfgPredBuf[i];
             v[i] = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
@@ -273,18 +286,33 @@ export async function runDiffusionLoop({
         return v;
     };
 
+    // 计时包装：combine 调用前后累加 diffCfg 统计
+    const combine = (condPred, uncondPred) => {
+        const tCfg = performance.now();
+        const result = combineRaw(condPred, uncondPred);
+        const cfgMs = performance.now() - tCfg;
+        diffCfgMin = Math.min(diffCfgMin, cfgMs);
+        diffCfgMax = Math.max(diffCfgMax, cfgMs);
+        diffCfgTotal += cfgMs;
+        return result;
+    };
+
+    let totalNFE = 0;
     for (let step = 0; step < totalSteps; step++) {
         const tStep = performance.now();
-        const { delta } = await sampler.step({
-            evalDiffStep, combine, step, totalSteps, xtData: xt.data,
+        const { nfe } = await sampler.step({
+            evalDiffStep, combine, step, totalSteps,
+            xtData: xt.data, buffers,
         });
-        // 累加 delta 到 xt.data
+        totalNFE += nfe;
+        // 累加 deltaBuf 到 xt.data
+        const delta = buffers.deltaBuf;
         for (let i = 0; i < delta.length; i++) {
             xt.data[i] += delta[i];
         }
 
         if (step === 0 || step === totalSteps - 1) {
-            console.log(`[WebNN] diffStep batch=${diffBatch} sampler=${samplerName} [${step}/${totalSteps}]: total=${(performance.now() - tStep).toFixed(0)}ms`);
+            console.log(`[WebNN] diffStep batch=${diffBatch} sampler=${samplerName} [${step}/${totalSteps}]: total=${(performance.now() - tStep).toFixed(0)}ms nfe=${nfe}`);
         }
     }
 
@@ -299,7 +327,7 @@ export async function runDiffusionLoop({
     disposeTensor(tTensor);
 
     const diffTotalMs = performance.now() - tDiff0;
-    console.log(`[WebNN] Diffusion total: ${diffTotalMs.toFixed(0)}ms (${totalSteps} steps, batch=${diffBatch})`);
+    console.log(`[WebNN] Diffusion total: ${diffTotalMs.toFixed(0)}ms (${totalSteps} steps, ${totalNFE} NFE, batch=${diffBatch})`);
     console.log(`[WebNN]   prep  — min=${diffPrepMin.toFixed(1)} max=${diffPrepMax.toFixed(1)} avg=${(diffPrepTotal / totalSteps).toFixed(1)} total=${diffPrepTotal.toFixed(0)}ms`);
     console.log(`[WebNN]   infer — min=${diffInferMin.toFixed(1)} max=${diffInferMax.toFixed(1)} avg=${(diffInferTotal / totalSteps).toFixed(1)} total=${diffInferTotal.toFixed(0)}ms`);
     if (cfgStrength > 0) {
@@ -313,13 +341,14 @@ export async function runDiffusionLoop({
         totalFrames,
         diffTotalMs,
         diffInferTotal,
+        totalNFE,
     };
 }
 
 /**
  * 批量扩散采样循环（2 个片段，batch=4）
  *
- * 注意：批量路径的 batch=4 优化与多步评估求解器（Heun/STORK）的 per-segment
+ * 注意：批量路径的 batch=4 优化与多步评估求解器（Heun/Extrap）的 per-segment
  * evalDiffStep 抽象不兼容。Phase 1 策略：
  *   - Euler 求解器：走原 batch=4 优化路径
  *   - 非 Euler 求解器：退化为两次独立 runDiffusionLoop 调用（牺牲 batch 优化，保证正确性）
@@ -362,7 +391,6 @@ export async function runBatchDiffusionLoop({
     const diffBatch = 4; // 2 segments × 2 CFG
 
     const maxTotalFramesWithPrompt = Math.max(...segData.map(s => s.totalFramesWithPrompt));
-    const maxTotalFrames = Math.max(...segData.map(s => s.totalFrames));
     const batchDiffSeqLen = useStaticShapes ? Math.max(maxTotalFramesWithPrompt, NPU_STATIC_SEQ_LEN) : maxTotalFramesWithPrompt;
 
     // Initialize xt for both segments

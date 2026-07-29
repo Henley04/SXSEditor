@@ -164,9 +164,9 @@
                     <select id="previewSampler">
                         <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，默认）</option>
                         <option value="heun" data-i18n="settings.samplerHeun">Heun（二阶，2 倍推理）</option>
-                        <option value="stork" data-i18n="settings.samplerStork">STORK-2（二阶，1 倍推理）</option>
+                        <option value="extrap" data-i18n="settings.samplerExtrap">Extrapolated Euler（1 倍推理）</option>
                     </select>
-                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；STORK-2 为 ICLR 2026 论文求解器（每步 1 次推理，推荐低步数时使用）。</p>
+                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）。分块预览时 Extrapolated Euler 优势减弱。</p>
                 </div>
                 <div class="setting-group">
                     <label for="previewCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
@@ -213,9 +213,9 @@
                     <select id="exportSampler">
                         <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，默认）</option>
                         <option value="heun" data-i18n="settings.samplerHeun">Heun（二阶，2 倍推理）</option>
-                        <option value="stork" data-i18n="settings.samplerStork">STORK-2（二阶，1 倍推理）</option>
+                        <option value="extrap" data-i18n="settings.samplerExtrap">Extrapolated Euler（1 倍推理）</option>
                     </select>
-                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；STORK-2 为 ICLR 2026 论文求解器（每步 1 次推理，推荐低步数时使用）。</p>
+                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）。分块预览时 Extrapolated Euler 优势减弱。</p>
                 </div>
                 <div class="setting-group">
                     <label for="exportCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>

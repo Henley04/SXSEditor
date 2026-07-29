@@ -249,7 +249,7 @@ function buildParamsSection(form) {
   const samplerOptions = [
     { value: 'euler', labelKey: 'main.exportDialog.samplerEuler' },
     { value: 'heun', labelKey: 'main.exportDialog.samplerHeun' },
-    { value: 'stork', labelKey: 'main.exportDialog.samplerStork' },
+    { value: 'extrap', labelKey: 'main.exportDialog.samplerExtrap' },
   ];
   for (const opt of samplerOptions) {
     const o = document.createElement('option');

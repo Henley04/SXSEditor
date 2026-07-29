@@ -1,6 +1,6 @@
 const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrain } = require('./utils');
-const { createSampler, resolveSamplerName } = require('./samplers');
+const { createSampler } = require('./samplers');
 
 /**
  * Diffusion sampling loop (the core synthesis algorithm)
@@ -222,7 +222,6 @@ class Diffusion {
         const uncondCondTensorCached = createFloatTensor(floatType, uncondCondPadded, [1, uncondSeqLen, COND_DIM]);
         const uncondMaskTensorCached = createFloatTensor(floatType, uncondMaskPadded, [1, uncondSeqLen]);
 
-        const dt = 1.0 / totalSteps;
         const progressPerStep = progressRange / totalSteps;
 
         // prompt frames在循环中不变，预先拷贝一次
@@ -230,12 +229,21 @@ class Diffusion {
 
         // ===== 求解器抽象 =====
         // evalDiffStep(t, xtOverride?): 执行 cond + (可选)uncond 推理，返回独立副本
-        // combine(condPred, uncondPred): CFG + Rescale 合并，返回 v(x,t)
-        // sampler.step 返回 delta，调用方累加到 xt.data
-        // 注：每次 runDiffusionLoop 新建 sampler 实例，STORK 的跨步 v_prev 缓存在
-        // chunk 边界会丢失（分块路径每 chunk 新建），退化为局部 Euler，不影响正确性。
+        // combine(condPred, uncondPred): CFG + Rescale 合并，写入 vBuf（复用），返回 vBuf 引用
+        // sampler.step 将 delta 写入 deltaBuf（复用），调用方累加到 xt.data
+        // 注：每次 runDiffusionLoop 新建 sampler 实例。Extrapolated Euler 的跨步 v_prev
+        // 缓存在 chunk 边界会丢失（分块路径每 chunk 新建），退化为局部 Euler，不影响正确性。
         const sampler = createSampler(samplerName);
         const useCfg = cfgStrength > 0;
+
+        // 预分配复用缓冲区（跨步复用，0 per-step 分配）
+        const targetLen = totalFrames * MEL_DIM;
+        const buffers = {
+            vBuf: new Float32Array(targetLen),     // combine 输出
+            deltaBuf: new Float32Array(targetLen),  // sampler delta 输出
+            v1Buf: new Float32Array(targetLen),     // Heun 保存 v1
+            xPredBuf: new Float32Array(targetLen),  // Heun 预测状态
+        };
 
         // evalDiffStep: 执行 cond + (可选)uncond 推理，返回 {condPred, uncondPred}
         // xtOverride 可选：用于多步评估求解器（如 Heun）的预测子步骤，覆盖默认 xt.data
@@ -260,11 +268,16 @@ class Diffusion {
             return { condPred, uncondPred };
         };
 
-        // combine: CFG + Rescale 合并，返回 v(x,t)（target 段，长度 totalFrames*MEL_DIM）
+        // combine: CFG + Rescale 合并，写入 vBuf（复用），返回 vBuf 引用
+        // 无 CFG 时直接拷贝 cond 分支 target 段到 vBuf。
+        // 有 CFG 时使用 three-pass（与 WebNN 路径完全一致）：
+        //   Pass 1: 计算 cfgVal → cfgPredBuf，累加 posSum + cfgAdjSum
+        //   Pass 2: two-pass 方差（数值稳定，不使用 sumSq - sum²/n 的 one-pass 公式）
+        //   Pass 3: 应用 rescale，写入 vBuf
         const combine = (condPred, uncondPred) => {
+            const v = buffers.vBuf;
             if (!useCfg) {
-                // 无 CFG：直接取 cond 分支 target 段
-                const v = new Float32Array(totalFrames * MEL_DIM);
+                // 无 CFG：直接取 cond 分支 target 段 → vBuf
                 for (let f = 0; f < totalFrames; f++) {
                     const tgtOffset = (ptFrameCount + f) * MEL_DIM;
                     for (let d = 0; d < MEL_DIM; d++) {
@@ -273,47 +286,54 @@ class Diffusion {
                 }
                 return v;
             }
-            // CFG + Rescale：复用原 2-pass 逻辑
-            const targetLen = totalFrames * MEL_DIM;
-            let posSum = 0, cfgAdjSum = 0, posSumSq = 0, cfgAdjSumSq = 0;
+            // Pass 1: cfgVal → cfgPredBuf, 累加 sum
+            let posSum = 0, cfgAdjSum = 0;
             for (let f = 0; f < totalFrames; f++) {
                 const tgtOffset = (ptFrameCount + f) * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
                     const condVal = condPred[tgtOffset + d];
                     const uncondVal = uncondPred[f * MEL_DIM + d];
-                    posSum += condVal;
-                    posSumSq += condVal * condVal;
                     const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
                     cfgPredBuf[f * MEL_DIM + d] = cfgVal;
+                    posSum += condVal;
                     cfgAdjSum += cfgVal;
-                    cfgAdjSumSq += cfgVal * cfgVal;
                 }
             }
             const posMean = posSum / targetLen;
             const cfgAdjMean = cfgAdjSum / targetLen;
-            const posVarSum = posSumSq - posSum * posSum / targetLen;
-            const cfgAdjVarSum = cfgAdjSumSq - cfgAdjSum * cfgAdjSum / targetLen;
-            // Bessel 校正（N-1 分母），对齐 PyTorch torch.std()
-            const posStd = Math.sqrt(posVarSum / (targetLen - 1) + 1e-8);
-            const cfgAdjStd = Math.sqrt(cfgAdjVarSum / (targetLen - 1) + 1e-8);
-            const rescale = posStd / (cfgAdjStd + 1e-8);
-
-            const v = new Float32Array(targetLen);
+            // Pass 2: two-pass 方差（数值稳定）
+            let posVarSum = 0, cfgAdjVarSum = 0;
             for (let f = 0; f < totalFrames; f++) {
+                const tgtOffset = (ptFrameCount + f) * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
-                    const cfgVal = cfgPredBuf[f * MEL_DIM + d];
-                    v[f * MEL_DIM + d] = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
+                    const pv = condPred[tgtOffset + d] - posMean;
+                    posVarSum += pv * pv;
+                    const cv = cfgPredBuf[f * MEL_DIM + d] - cfgAdjMean;
+                    cfgAdjVarSum += cv * cv;
                 }
+            }
+            // Bessel 校正（N-1 分母），对齐 PyTorch torch.std()
+            const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
+            const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
+            const rescale = posStd / (cfgAdjStd + 1e-8);
+            // Pass 3: 应用 rescale → vBuf
+            for (let i = 0; i < targetLen; i++) {
+                const cfgVal = cfgPredBuf[i];
+                v[i] = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
             }
             return v;
         };
 
         try {
+            let totalNFE = 0;
             for (let step = 0; step < totalSteps; step++) {
-                const { delta } = await sampler.step({
-                    evalDiffStep, combine, step, totalSteps, xtData: xt.data,
+                const { nfe } = await sampler.step({
+                    evalDiffStep, combine, step, totalSteps,
+                    xtData: xt.data, buffers,
                 });
-                // 累加 delta 到 xt.data
+                totalNFE += nfe;
+                // 累加 deltaBuf 到 xt.data
+                const delta = buffers.deltaBuf;
                 for (let i = 0; i < delta.length; i++) {
                     xt.data[i] += delta[i];
                 }
@@ -322,11 +342,11 @@ class Diffusion {
                 onProgress(Math.min(Math.round(currentProgress), 90));
                 // GPU 排空：每 8 步用 setTimeout(20) 代替 setImmediate，给 DML 后端 20ms 时间
                 // 回收内部 GPU 资源池中的 transformer 注意力中间张量。
-                // 旧版 setImmediate(~1ms) 太短，DML 来不及回收，64 次连续推理后累积导致 887A0005。
-                // 每 8 步一次（共 4 次/32 步）增加总合成时间约 80ms，可接受。
                 if (step % 8 === 7) {
                     await new Promise(r => setTimeout(r, 20));
-                } else if (step % 4 === 3) {
+                } else if (totalFrames > 256) {
+                    // 长片段每步 yield：combine 的 3 趟全数组遍历（256k+ 迭代/趟）
+                    // 会阻塞主线程，原实现在 CFG pass 1/2 之间有 setImmediate yield。
                     await new Promise(r => setImmediate(r));
                 }
             }
@@ -347,7 +367,7 @@ class Diffusion {
                 }
                 const xtMean = xtSum / xtLen;
                 const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
-                console.log(`[DiffusionDiag] OUTPUT xt: frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
+                console.log(`[DiffusionDiag] OUTPUT xt: frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}, nfe=${totalNFE}`);
                 if (xtNaN > 0 || xtInf > 0) {
                     console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! NaN=${xtNaN}, Inf=${xtInf - xtNaN}, total=${xtLen}, frames=${totalFrames}, mean=${xtMean.toFixed(6)}`);
 
@@ -452,7 +472,7 @@ class Diffusion {
      * @returns {Promise<{newCommitted: number}>} 本块完成后新确定的帧数（不含重叠区，末尾块为 chunkEnd）
      */
     async _runSingleDiffusionChunk(ctx, spec, onProgress, progressStart, progressRange) {
-        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, fadeWindow, samplerName } = ctx;
+        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, fadeWindow } = ctx;
         const { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast } = spec;
         const xtOut = xt.data;
 
