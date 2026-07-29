@@ -85,6 +85,14 @@ module.exports = {
               },
             },
             {
+              html: './src/singerMarket.html',
+              js: './src/singerMarket.js',
+              name: 'singer_market_window',
+              preload: {
+                js: './src/preload.js',
+              },
+            },
+            {
               html: './src/audioPreprocess.html',
               js: './src/audioPreprocess/index.js',
               name: 'audio_preprocess_window',

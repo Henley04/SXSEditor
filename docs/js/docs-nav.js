@@ -16,7 +16,8 @@
           title: { en: 'Getting Started', zh: '快速上手' },
           items: [
             { href: 'quick-start.html', title: { en: 'Quick Start', zh: '快速开始' } },
-            { href: 'singer-creation.html', title: { en: 'Singer Creation', zh: '创建歌手' } }
+            { href: 'singer-creation.html', title: { en: 'Singer Creation', zh: '创建歌手' } },
+            { href: 'singer-market.html', title: { en: 'Singer Market', zh: '歌手市场' } }
           ]
         },
         {

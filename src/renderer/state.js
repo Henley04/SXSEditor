@@ -58,6 +58,7 @@ export const dom = {
   btnAudioToMidi: document.getElementById('btn-audio-to-midi'),
   btnImportMidi: document.getElementById('btn-import-midi'),
   btnAddSinger: document.getElementById('btn-add-singer'),
+  btnOpenSingerMarket: document.getElementById('btn-open-singer-market'),
   singerListEl: document.getElementById('singer-list'),
   fragmentCanvas: document.getElementById('fragment-canvas'),
   fragmentContainer: document.getElementById('fragment-canvas-container'),

@@ -114,6 +114,7 @@ let classifyDeviceFromName, startGPUPreload, ensureGPUInfo, detectAllHardware;
 let checkAndDownloadModels, registerModelDownloadIpc;
 let registerThemeIpc;
 let registerSingerIpc;
+let registerSingerMarketIpc;
 let registerAudioIpc;
 let registerDialogIpc;
 let registerWebnnIpc;
@@ -235,6 +236,7 @@ app.whenReady().then(() => {
   } = require('./main/gpuInfo'));
   ({ registerThemeIpc } = require('./main/themeIpc'));
   ({ registerSingerIpc } = require('./main/singerIpc'));
+  ({ registerSingerMarketIpc } = require('./main/singerMarketIpc'));
   ({ registerDialogIpc } = require('./main/dialogIpc'));
   ({ registerWebnnIpc } = require('./main/webnnIpc'));
   // audioIpc, modelDownload, updateIpc are deferred to STEP 4 because they
@@ -253,6 +255,7 @@ app.whenReady().then(() => {
   registerDialogIpc();
   registerThemeIpc();
   registerSingerIpc();
+  registerSingerMarketIpc();
   registerWebnnIpc();
   registerSplashIpc();
 

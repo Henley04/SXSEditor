@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('projectSettingsChanged', handler);
   },
   openSingerCreator: () => ipcRenderer.invoke('openSingerCreator'),
+  openSingerMarket: () => ipcRenderer.invoke('openSingerMarket'),
   saveSingerFile: (singerData) => ipcRenderer.invoke('saveSingerFile', singerData),
   onSingerCreatorSaveRequest: (callback) => {
     const handler = () => callback();
@@ -389,5 +390,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('update:notification-show', handler);
       return () => ipcRenderer.removeListener('update:notification-show', handler);
     },
+  },
+
+  // ==================== Singer Market API ====================
+  // Proxy to the Cloudflare Workers backend. The Bearer token never
+  // leaves the main process; the renderer only sees the high-level
+  // { success, data, error } results.
+  singerMarket: {
+    login: (username, password) => ipcRenderer.invoke('singer-market:login', { username, password }),
+    register: (username, password) => ipcRenderer.invoke('singer-market:register', { username, password }),
+    logout: () => ipcRenderer.invoke('singer-market:logout'),
+    me: () => ipcRenderer.invoke('singer-market:me'),
+    list: (params) => ipcRenderer.invoke('singer-market:list', params),
+    fileDetail: (fileId) => ipcRenderer.invoke('singer-market:file-detail', fileId),
+    tags: (params) => ipcRenderer.invoke('singer-market:tags', params),
+    upload: (payload) => ipcRenderer.invoke('singer-market:upload', payload),
+    download: (fileId) => ipcRenderer.invoke('singer-market:download', fileId),
+    pickFile: () => ipcRenderer.invoke('singer-market:pick-file'),
+    pickSavePath: (suggestedName) => ipcRenderer.invoke('singer-market:pick-save-path', suggestedName),
   },
 });

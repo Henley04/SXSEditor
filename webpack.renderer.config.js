@@ -10,6 +10,7 @@ const WINDOW_NAMES = [
   'main_window',
   'fragment_editor_window',
   'singer_creator_window',
+  'singer_market_window',
   'audio_preprocess_window',
   'settings_window',
   'model_download_window',
@@ -19,8 +20,12 @@ const WINDOW_NAMES = [
 
 // Windows that need onnxruntime-web wasm/JS files copied alongside.
 // The splash window does not run inference, so it is excluded to keep
-// its bundle small.
-const ONNX_WINDOW_NAMES = WINDOW_NAMES.filter((n) => n !== 'splash_window');
+// its bundle small. The singer market window is also excluded — it only
+// talks to the Cloudflare Workers backend via IPC and never runs ONNX
+// inference, so copying the multi-MB wasm/JS bundle would be wasteful.
+const ONNX_WINDOW_NAMES = WINDOW_NAMES.filter(
+  (n) => n !== 'splash_window' && n !== 'singer_market_window'
+);
 
 rules.push({
   test: /\.css$/,
