@@ -60,25 +60,204 @@
         <span data-lang="zh">歌手市场</span>
       </h1>
 
-      <p data-lang="en">The <strong>Singer Market</strong> is a community-driven marketplace where SXSEditor users can browse, upload, and download <code>.sxssinger</code> voice profiles. It is opened from the main toolbar via the <em>Singer Market</em> button.</p>
-      <p data-lang="zh"><strong>歌手市场</strong> 是一个由社区驱动的交流平台，SXSEditor 用户可以在其中浏览、上传和下载 <code>.sxssinger</code> 歌手声音配置文件。可通过主工具栏上的 <em>歌手市场</em> 按钮打开。</p>
+      <p data-lang="en">The <strong>Singer Market</strong> is a community-driven marketplace where SXSEditor users can browse, search, upload, and download <code>.sxssinger</code> voice profiles. It is opened from the main toolbar via the <em>Singer Market</em> button. The marketplace runs on a self-hosted backend (Cloudflare Workers + Backblaze B2) — see the <a href="../dev/singer-market.html">Developer Guide</a> for the technical architecture.</p>
+      <p data-lang="zh"><strong>歌手市场</strong> 是一个由社区驱动的交流平台，SXSEditor 用户可以在其中浏览、搜索、上传和下载 <code>.sxssinger</code> 歌手声音配置文件。可通过主工具栏上的 <em>歌手市场</em> 按钮打开。市场后端为自托管服务（Cloudflare Workers + Backblaze B2），技术架构详见 <a href="../dev/singer-market.html">开发者指南</a>。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">A <code>.sxssinger</code> file is the package produced by the <a href="singer-creation.html">Singer Creator</a>. It contains the reference audio, F0/MIDI features, and metadata the SVS pipeline needs to imitate a voice. The Market is the easiest way to share voices you have created or to discover voices made by others.</p>
+          <p data-lang="zh"><code>.sxssinger</code> 文件由 <a href="singer-creation.html">歌手创建器</a> 生成，包含参考音频、F0/MIDI 特征以及 SVS 管线模仿该声音所需的元数据。市场是分享你创建的声音或发现他人声音的最便捷方式。</p>
+        </div>
+      </div>
 
       <h2>
-        <span data-lang="en">Features</span>
-        <span data-lang="zh">功能</span>
+        <span data-lang="en">Features at a Glance</span>
+        <span data-lang="zh">功能概览</span>
       </h2>
       <ul>
-        <li data-lang="en"><strong>Browse</strong> public singers uploaded by the community.</li>
-        <li data-lang="zh"><strong>浏览</strong> 社区用户上传的公开歌手。</li>
-        <li data-lang="en"><strong>Search</strong> by name or description.</li>
-        <li data-lang="zh">按名称或描述 <strong>搜索</strong>。</li>
-        <li data-lang="en"><strong>Filter</strong> by tags to find the right voice quickly.</li>
-        <li data-lang="zh">按标签 <strong>筛选</strong>，快速找到合适的声音。</li>
-        <li data-lang="en"><strong>Upload</strong> your own singers to share with the community (login required).</li>
-        <li data-lang="zh"><strong>上传</strong> 你的歌手与社区分享（需登录）。</li>
+        <li data-lang="en"><strong>Browse</strong> public singers uploaded by the community, paginated 24 per page.</li>
+        <li data-lang="zh"><strong>浏览</strong> 社区用户上传的公开歌手，每页 24 项分页展示。</li>
+        <li data-lang="en"><strong>Search</strong> by singer name or description (debounced 350 ms).</li>
+        <li data-lang="zh">按歌手名称或描述 <strong>搜索</strong>（输入防抖 350 毫秒）。</li>
+        <li data-lang="en"><strong>Filter</strong> by multiple tags using AND semantics to narrow down quickly.</li>
+        <li data-lang="zh">按多标签 <strong>筛选</strong>（AND 语义），快速定位目标声音。</li>
+        <li data-lang="en"><strong>Upload</strong> your own <code>.sxssinger</code> files to share with the community (login required).</li>
+        <li data-lang="zh"><strong>上传</strong> 你的 <code>.sxssinger</code> 文件与社区分享（需登录）。</li>
         <li data-lang="en"><strong>Download</strong> singers to your machine for use in projects.</li>
         <li data-lang="zh"><strong>下载</strong> 歌手到本地以在项目中使用。</li>
+        <li data-lang="en"><strong>Ownership</strong> — every upload is bound to your account; only you (or an admin) can edit or delete your own files.</li>
+        <li data-lang="zh"><strong>所有权</strong>— 每个上传都与你的账号绑定；只有你（或管理员）能修改或删除自己的文件。</li>
       </ul>
+
+      <h2>
+        <span data-lang="en">Opening the Market</span>
+        <span data-lang="zh">打开歌手市场</span>
+      </h2>
+      <p data-lang="en">From the SXSEditor main window, click the <em>Singer Market</em> button in the toolbar. A dedicated window opens — you can keep it open alongside your project while you browse.</p>
+      <p data-lang="zh">在 SXSEditor 主窗口中，点击工具栏上的 <em>歌手市场</em> 按钮。会打开一个独立窗口——你可以在浏览时让它与项目并排保持打开。</p>
+      <p data-lang="en">The window has three regions:</p>
+      <p data-lang="zh">窗口分为三个区域：</p>
+      <ol>
+        <li><span data-lang="en"><strong>Toolbar</strong> — auth status, login/register/logout buttons, refresh and upload buttons.</span><span data-lang="zh"><strong>工具栏</strong>— 登录状态、登录/注册/登出按钮、刷新与上传按钮。</span></li>
+        <li><span data-lang="en"><strong>Filter bar</strong> — search input, active tag chips, and a row of popular tag suggestions.</span><span data-lang="zh"><strong>筛选栏</strong>— 搜索框、已选标签 chips、热门标签建议行。</span></li>
+        <li><span data-lang="en"><strong>Grid + pagination</strong> — singer cards (avatar, name, size, date, description, tags) with prev/next paging.</span><span data-lang="zh"><strong>网格 + 分页</strong>— 歌手卡片（头像、名称、大小、日期、描述、标签），支持上一页/下一页。</span></li>
+      </ol>
+
+      <h2>
+        <span data-lang="en">Accounts &amp; Login</span>
+        <span data-lang="zh">账号与登录</span>
+      </h2>
+      <p data-lang="en">You can browse, search, and download public singers <strong>without an account</strong>. An account is only required to upload. To register:</p>
+      <p data-lang="zh">你<strong>无需账号</strong>即可浏览、搜索和下载公开歌手。仅在需要上传时才要求登录。注册流程：</p>
+      <ol>
+        <li><span data-lang="en">Click <strong>Register</strong> in the toolbar.</span><span data-lang="zh">点击工具栏的 <strong>注册</strong> 按钮。</span></li>
+        <li><span data-lang="en">Pick a username and password (the password is hashed with PBKDF2-SHA256 on the server, never stored in plain text).</span><span data-lang="zh">填写用户名和密码（密码在服务端用 PBKDF2-SHA256 哈希，绝不以明文存储）。</span></li>
+        <li><span data-lang="en">Submit — you are auto-logged-in and the toolbar updates to show your username.</span><span data-lang="zh">提交后即自动登录，工具栏显示你的用户名。</span></li>
+      </ol>
+      <p data-lang="en">Returning users click <strong>Login</strong> and enter the same credentials. Self-registration can be disabled by the server admin; in that case accounts must be created for you by an admin.</p>
+      <p data-lang="zh">已注册用户点击 <strong>登录</strong> 并输入相同凭据。服务端管理员可关闭自助注册；此时账号需由管理员为你创建。</p>
+
+      <div class="callout tip">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">
+          <p data-lang="en">Your session token is persisted to <code>userData/singer-market-token.json</code> with file mode <code>0o600</code> on macOS/Linux, so you stay logged in across launches. The token never enters any renderer's JavaScript context — all API calls are proxied through the Electron main process. Click <strong>Logout</strong> to revoke the session on the server and delete the local token file.</p>
+          <p data-lang="zh">你的会话令牌会以文件权限 <code>0o600</code> 保存到 <code>userData/singer-market-token.json</code>（macOS/Linux），因此重启应用后仍保持登录。令牌从不进入任何渲染进程的 JavaScript 上下文——所有 API 调用都通过 Electron 主进程代理转发。点击 <strong>登出</strong> 会同时撤销服务端会话并删除本地令牌文件。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Browsing, Searching &amp; Filtering</span>
+        <span data-lang="zh">浏览、搜索与筛选</span>
+      </h2>
+      <p data-lang="en">The grid shows public singers in pages of 24. Use the filter bar to find what you need:</p>
+      <p data-lang="zh">网格以每页 24 项展示公开歌手。使用筛选栏定位目标：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Control</span><span data-lang="zh">控件</span></th>
+            <th><span data-lang="en">Behavior</span><span data-lang="zh">行为</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Search box</span><span data-lang="zh">搜索框</span></td>
+            <td><span data-lang="en">Free-text match against the singer name (filename without <code>.sxssinger</code>) and description. Auto-searches 350 ms after you stop typing.</span><span data-lang="zh">对歌手名称（去掉 <code>.sxssinger</code> 的文件名）与描述做全文匹配。停止输入 350 毫秒后自动搜索。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Popular tag chips</span><span data-lang="zh">热门标签 chips</span></td>
+            <td><span data-lang="en">Click a tag to toggle it as an active filter; click again to remove. Multiple active tags combine with <strong>AND</strong> (a singer must have <em>all</em> of them).</span><span data-lang="zh">点击标签将其加入筛选条件，再次点击移除。多个标签以 <strong>AND</strong> 组合（歌手需同时拥有<em>全部</em>所选标签）。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Active filter chips</span><span data-lang="zh">已选筛选 chips</span></td>
+            <td><span data-lang="en">Shows the tags currently applied. Each chip has an <code>×</code> button for quick removal.</span><span data-lang="zh">显示当前生效的标签。每个 chip 带 <code>×</code> 按钮可快速移除。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Refresh</span><span data-lang="zh">刷新</span></td>
+            <td><span data-lang="en">Re-fetches the current page and the popular-tags list. Use after uploading or if you suspect new content has been posted.</span><span data-lang="zh">重新拉取当前页与热门标签列表。上传后或想查看新内容时使用。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Pagination</span><span data-lang="zh">分页</span></td>
+            <td><span data-lang="en">Prev/Next buttons plus a page indicator (<code>page / total</code>). Hidden when there is only one page.</span><span data-lang="zh">上一页 / 下一页按钮及页码指示（<code>当前 / 总数</code>）。仅一页时隐藏。</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Viewing &amp; Downloading a Singer</span>
+        <span data-lang="zh">查看与下载歌手</span>
+      </h2>
+      <p data-lang="en">Click any singer card to open the detail dialog. It shows the full metadata — name, size, upload date, owner, visibility, all tags, and the full description. Review the information, then click <strong>Download</strong>:</p>
+      <p data-lang="zh">点击任意歌手卡片打开详情对话框。它会展示完整元数据——名称、大小、上传日期、所有者、可见性、全部标签及完整描述。核对信息后点击 <strong>下载</strong>：</p>
+      <ol>
+        <li><span data-lang="en">A native save dialog opens with the singer's filename pre-filled (you can rename it).</span><span data-lang="zh">弹出原生保存对话框，文件名已预填（可重命名）。</span></li>
+        <li><span data-lang="en">The file bytes are streamed from the backend and written to the path you chose.</span><span data-lang="zh">文件字节从后端流式传输并写入你选择的路径。</span></li>
+        <li><span data-lang="en">A toast confirms the saved path. The downloaded <code>.sxssinger</code> can be loaded into the Singer Creator or imported into a project.</span><span data-lang="zh">Toast 提示已保存路径。下载的 <code>.sxssinger</code> 可在歌手创建器中加载或导入项目使用。</span></li>
+      </ol>
+
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en">Public files are <strong>read-only to everyone except the owner</strong>. You can download and use a public singer, but you cannot modify, re-tag, or delete someone else's upload. Only the original uploader (or an admin) can change it.</p>
+          <p data-lang="zh">公开文件对除所有者外的所有人<strong>只读</strong>。你可以下载并使用公开歌手，但不能修改、重新打标或删除他人上传的文件。只有原始上传者（或管理员）才能更改。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Uploading a Singer</span>
+        <span data-lang="zh">上传歌手</span>
+      </h2>
+      <p data-lang="en">You must be logged in to upload. Once logged in, the <strong>Upload</strong> button appears in the toolbar. The upload dialog lets you:</p>
+      <p data-lang="zh">上传需先登录。登录后工具栏会出现 <strong>上传</strong> 按钮。上传对话框允许你：</p>
+      <ul>
+        <li data-lang="en"><strong>Pick a file</strong> — click the drop area or drag a <code>.sxssinger</code> file onto it. Only the <code>.sxssinger</code> extension is accepted.</li>
+        <li data-lang="zh"><strong>选择文件</strong>— 点击拖放区域或将 <code>.sxssinger</code> 文件拖入。仅接受 <code>.sxssinger</code> 扩展名。</li>
+        <li data-lang="en"><strong>Singer name</strong> — auto-detected from the <code>singerName</code> field inside the file; falls back to the filename if absent.</li>
+        <li data-lang="zh"><strong>歌手名称</strong>— 自动从文件内的 <code>singerName</code> 字段读取；缺失时回退为文件名。</li>
+        <li data-lang="en"><strong>Description</strong> — free text shown in the card and detail dialog.</li>
+        <li data-lang="zh"><strong>描述</strong>— 自由文本，显示在卡片与详情对话框中。</li>
+        <li data-lang="en"><strong>Tags</strong> — comma-separated (e.g. <code>vocal, female, pop</code>). Used by the search and filter.</li>
+        <li data-lang="zh"><strong>标签</strong>— 逗号分隔（如 <code>vocal, female, pop</code>）。用于搜索与筛选。</li>
+        <li data-lang="en"><strong>Visibility</strong> — <code>public</code> (default, anyone can browse/download) or <code>private</code> (only you and admins can see it).</li>
+        <li data-lang="zh"><strong>可见性</strong>— <code>public</code>（默认，任何人可浏览/下载）或 <code>private</code>（仅你和管理员可见）。</li>
+      </ul>
+      <p data-lang="en">Click <strong>Upload</strong> to submit. The file is streamed from disk through the main process to the backend, so large <code>.sxssinger</code> files (multi-megabyte) work without loading the entire file into renderer memory. A success toast appears when the upload completes, and the list refreshes automatically.</p>
+      <p data-lang="zh">点击 <strong>上传</strong> 提交。文件从磁盘经由主进程流式传输到后端，因此大型 <code>.sxssinger</code> 文件（数 MB）也无需将整个文件载入渲染进程内存。上传完成后弹出成功提示，列表自动刷新。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">The server imposes a hard upload size cap (default 100 MB, the Cloudflare Workers free-tier limit). <code>.sxssinger</code> files are typically a few MB, so this is rarely an issue.</p>
+          <p data-lang="zh">服务端对上传大小有硬性上限（默认 100 MB，Cloudflare Workers 免费层限制）。<code>.sxssinger</code> 文件通常仅几 MB，因此基本不会触及上限。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Managing Your Uploads</span>
+        <span data-lang="zh">管理你的上传</span>
+      </h2>
+      <p data-lang="en">Every file you upload is bound to your account. The ownership model is:</p>
+      <p data-lang="zh">你上传的每个文件都与你的账号绑定。所有权模型如下：</p>
+      <ul>
+        <li data-lang="en">You can read, edit metadata (description, visibility, tags), and delete <strong>your own</strong> files.</li>
+        <li data-lang="zh">你可以读取、修改元数据（描述、可见性、标签）并删除<strong>自己</strong>的文件。</li>
+        <li data-lang="en">Other logged-in users can <strong>download</strong> your public files but cannot modify them.</li>
+        <li data-lang="zh">其他登录用户可以<strong>下载</strong>你的公开文件，但无法修改。</li>
+        <li data-lang="en">Admins can manage all files regardless of owner.</li>
+        <li data-lang="zh">管理员可管理所有文件，不论所有者是谁。</li>
+      </ul>
+      <p data-lang="en">Edits and deletes are performed via the backend's REST API — the SXSEditor Market window currently focuses on browse/upload/download. If you need to edit or remove an upload, ask an admin (or run the API calls directly — see the <a href="../dev/singer-market.html">Developer Guide</a>).</p>
+      <p data-lang="zh">编辑与删除通过后端 REST API 完成——SXSEditor 市场窗口当前聚焦于浏览/上传/下载。若需编辑或删除自己的上传，请联系管理员（或直接调用 API，详见 <a href="../dev/singer-market.html">开发者指南</a>）。</p>
+
+      <h2>
+        <span data-lang="en">Rate Limits &amp; Quotas</span>
+        <span data-lang="zh">速率限制与配额</span>
+      </h2>
+      <p data-lang="en">The backend enforces per-IP rate limits and daily quota caps to keep the service on the Cloudflare / Backblaze free tiers. From a user's perspective, you may occasionally see these errors:</p>
+      <p data-lang="zh">后端对每个 IP 实施速率限制与每日配额上限，以维持服务在 Cloudflare / Backblaze 免费层运行。从用户视角，你偶尔会遇到以下错误：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Error</span><span data-lang="zh">错误</span></th>
+            <th><span data-lang="en">Cause</span><span data-lang="zh">原因</span></th>
+            <th><span data-lang="en">What to do</span><span data-lang="zh">处理方式</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Too many requests</span><span data-lang="zh">请求过于频繁</span></td>
+            <td><span data-lang="en">You hit the per-minute read/write/auth limit (default 600 / 120 / 60 per minute).</span><span data-lang="zh">触发了每分钟读/写/登录限制（默认 600 / 120 / 60 每分钟）。</span></td>
+            <td><span data-lang="en">Wait a minute and retry. The response carries a <code>Retry-After</code> header.</span><span data-lang="zh">等待约一分钟再试。响应带 <code>Retry-After</code> 头。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Upload rejected (quota exceeded)</span><span data-lang="zh">上传被拒（配额超限）</span></td>
+            <td><span data-lang="en">Daily B2 transaction / D1 write / Worker request caps were hit, or storage is full.</span><span data-lang="zh">当日 B2 事务 / D1 写入 / Worker 请求达到上限，或存储已满。</span></td>
+            <td><span data-lang="en">Wait until UTC midnight (counters reset) or contact an admin. Storage-full is permanent until files are deleted.</span><span data-lang="zh">等待 UTC 午夜（计数器重置）或联系管理员。存储满需删除文件后才能恢复。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">Under normal use these limits are essentially invisible — you would need to upload hundreds of files in a day or script thousands of requests per minute to trip them.</p>
+      <p data-lang="zh">正常使用下这些限制几乎无感——通常需要一天内上传数百个文件或脚本化每分钟数千次请求才会触发。</p>
 
       <h2>
         <span data-lang="en">Licensing &amp; Disclaimer</span>
@@ -91,8 +270,16 @@
         <p>This Singer file is licensed to you by its owner. SXSEditor is not responsible for, nor does it grant any licenses to, third-party singers. For details, see <a href="#full-agreement">official website</a>.</p>
       </blockquote>
 
-      <p data-lang="en">By downloading a singer, you acknowledge that the file is provided by its uploader, not by SXSEditor. SXSEditor acts only as a hosting and discovery platform and does not verify the legality, quality, or ownership of any uploaded content.</p>
-      <p data-lang="zh">下载歌手即表示你知悉：该文件由上传者提供，而非 SXSEditor。SXSEditor 仅作为托管与发现平台，不对任何上传内容的合法性、质量或所有权进行审核。</p>
+      <p data-lang="en">By downloading a singer, you acknowledge that the file is provided by its uploader, not by SXSEditor. SXSEditor acts only as a hosting and discovery platform and does not verify the legality, quality, or ownership of any uploaded content. In particular:</p>
+      <p data-lang="zh">下载歌手即表示你知悉：该文件由上传者提供，而非 SXSEditor。SXSEditor 仅作为托管与发现平台，不对任何上传内容的合法性、质量或所有权进行审核。具体而言：</p>
+      <ul>
+        <li data-lang="en">Do not upload voices you do not have the right to share (e.g. copyrighted vocal recordings, voices cloned without consent).</li>
+        <li data-lang="zh">请勿上传你无权分享的声音（例如受版权保护的录音、未经同意克隆的声音）。</li>
+        <li data-lang="en">Treat downloaded voices as licensed to you by their uploader — respect any usage terms stated in the description.</li>
+        <li data-lang="zh">下载的声音视为上传者授权给你使用——请遵守描述中注明的任何使用条款。</li>
+        <li data-lang="en">If you believe a file infringes your rights, report it via the GitHub issue tracker (see below).</li>
+        <li data-lang="zh">如果你认为某个文件侵犯了你的权利，请通过 GitHub Issue 报告（见下文）。</li>
+      </ul>
 
       <h2 id="full-agreement">
         <span data-lang="en">Full Disclaimer &amp; Agreement</span>
@@ -105,11 +292,62 @@
 
       <p data-lang="en">If you believe a singer file infringes your copyright or other rights, please contact the project maintainer via the <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener">GitHub issue tracker</a> with details and we will review the report promptly.</p>
       <p data-lang="zh">如果你认为某个歌手文件侵犯了你的版权或其他权利，请通过 <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener">GitHub Issue</a> 联系项目维护者并附上详细信息，我们会尽快审核处理。</p>
+
+      <h2>
+        <span data-lang="en">Troubleshooting</span>
+        <span data-lang="zh">常见问题排查</span>
+      </h2>
+      <h3><span data-lang="en">Login fails with “Authentication failed”</span><span data-lang="zh">登录提示 “Authentication failed”</span></h3>
+      <p data-lang="en">Check the username and password. If your account was created by an admin, it may have been deactivated — ask the admin to re-enable it. If self-registration is disabled on the server, you cannot create your own account.</p>
+      <p data-lang="zh">请核对用户名与密码。若账号由管理员创建，可能已被停用——请联系管理员重新启用。若服务端关闭了自助注册，你无法自行创建账号。</p>
+
+      <h3><span data-lang="en">Upload fails with “Not logged in”</span><span data-lang="zh">上传提示 “Not logged in”</span></h3>
+      <p data-lang="en">Your session may have expired (default 30 days). Click <strong>Logout</strong> then <strong>Login</strong> again. If the problem persists, the saved token file may be corrupt — log out, manually delete <code>userData/singer-market-token.json</code>, and log in fresh.</p>
+      <p data-lang="zh">会话可能已过期（默认 30 天）。请先 <strong>登出</strong> 再 <strong>登录</strong>。若仍无效，可能是本地令牌文件损坏——登出后手动删除 <code>userData/singer-market-token.json</code> 再重新登录。</p>
+
+      <h3><span data-lang="en">Upload fails with “quota_exceeded”</span><span data-lang="zh">上传提示 “quota_exceeded”</span></h3>
+      <p data-lang="en">The server hit a daily free-tier safety cap. Wait until UTC midnight (counters reset) and retry. If it persists past midnight, the storage cap may be full — only an admin can free space.</p>
+      <p data-lang="zh">服务端当日触及免费层安全上限。请等待 UTC 午夜（计数器重置）后重试。若午夜后仍失败，可能是存储上限已满——需管理员清理空间。</p>
+
+      <h3><span data-lang="en">Download produces an empty or corrupt file</span><span data-lang="zh">下载得到空文件或损坏文件</span></h3>
+      <p data-lang="en">Network hiccup or the backend's B2 object went missing. Try the download again. If it fails repeatedly, the file may have been soft-deleted by its owner — the card may still appear in the list until the next refresh.</p>
+      <p data-lang="zh">可能是网络抖动或后端 B2 对象丢失。请重试下载。若反复失败，可能是文件已被所有者软删除——卡片在下次刷新前可能仍显示在列表中。</p>
+
+      <h3><span data-lang="en">I can't see my own private upload in the list</span><span data-lang="zh">看不到自己上传的私有歌手</span></h3>
+      <p data-lang="en">The Market window only lists <code>public</code> singers (it forces <code>visibility=public</code> on the list query). Private files are visible only via the API with your token. To see them in the Market, re-upload as <code>public</code>, or check them via the admin UI / API.</p>
+      <p data-lang="zh">市场窗口仅列出 <code>public</code> 歌手（列表查询强制 <code>visibility=public</code>）。私有文件只能通过 API 携带你的令牌查看。若想在市场中看到，请重新以 <code>public</code> 上传，或通过管理员界面 / API 查看。</p>
+
+      <nav class="doc-pager">
+        <a href="singer-creation.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Singer Creation</span><span data-lang="zh">创建歌手</span></div></div></a>
+        <a href="fragment-editor.html" class="next"><div class="pager-card"><div class="pager-label" data-i18n="pager.next">Next</div><div class="pager-title"><span data-lang="en">Fragment Editor</span><span data-lang="zh">片段编辑器</span></div></div></a>
+      </nav>
     </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
   </div>
 
-  <script src="../js/docs-nav.js"></script>
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="faq.html" data-i18n="footer.help">Help & FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
   <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
   <script src="../js/layout.js"></script>
 </body>
 </html>
