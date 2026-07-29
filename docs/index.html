@@ -331,6 +331,8 @@ html[data-theme="dark"] .download{background:#080D18;border-top-color:var(--yell
 .dl-os{display:flex;align-items:center;gap:12px;margin-bottom:16px}
 .dl-os svg{width:34px;height:34px;color:var(--blue)}
 .dl-win .dl-os svg{color:var(--yellow)}
+.dl-os-icons{display:flex;align-items:center;gap:6px}
+.dl-os-icons svg{width:26px;height:26px}
 .dl-os b{font-family:var(--disp);font-weight:400;font-size:22px;letter-spacing:.04em;display:block;line-height:1.2}
 .dl-os i{font-style:normal;font-family:var(--num);font-size:11px;font-weight:600;letter-spacing:.18em;color:#8FA2C4}
 .dl-meta{font-size:12.5px;color:#93A5C6;margin-bottom:6px;display:flex;gap:8px;align-items:center}
@@ -445,7 +447,7 @@ html[data-theme="dark"] footer{background:#070B14}
 <!-- 顶部公告滚动条 -->
 <div class="ticker" aria-label="公告栏">
   <div class="ticker-track" id="tickerTrack">
-    <span data-i18n-html="ticker.1">✦ SXSEditor <b>v1.0.6</b> 现已发布</span>
+    <span data-i18n-html="ticker.1">✦ SXSEditor <b>v1.0.8</b> 现已发布</span>
     <span data-i18n-html="ticker.2">✦ 日语实验性支持上线 · 汉字假名自动分组</span>
     <span data-i18n-html="ticker.3">✦ DirectML GPU 推理速度最高提升 <b>6 倍</b></span>
     <span data-i18n-html="ticker.4">✦ 三精度模型共存：<b>FP32 / FP16 / INT8</b> 自由切换</span>
@@ -497,7 +499,7 @@ html[data-theme="dark"] footer{background:#070B14}
   <div class="wrap hero-in">
     <div class="hero-copy">
       <div class="chips reveal">
-        <span class="chip y"><span class="dotp"></span>VERSION 1.0.6「SoulX-Singer」</span>
+        <span class="chip y"><span class="dotp"></span>VERSION 1.0.8「SoulX-Singer」</span>
         <span class="chip b">ONNX Runtime · DirectML</span>
       </div>
       <h1 class="reveal" style="--d:.08s" data-i18n-html="hero.title">让每个音符，<br>都为你<em>歌唱</em>。</h1>
@@ -505,7 +507,7 @@ html[data-theme="dark"] footer{background:#070B14}
       <div class="hero-btns reveal" style="--d:.24s">
         <a class="btn" href="#download">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
-          <span data-i18n-html="hero.dlBtn">免费下载 v1.0.6</span>
+          <span data-i18n-html="hero.dlBtn">免费下载 v1.0.8</span>
         </a>
         <a class="btn ghost" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
@@ -528,7 +530,7 @@ html[data-theme="dark"] footer{background:#070B14}
       <span class="deco d-plus2"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="M12 4v16M4 12h16"/></svg></span>
 
       <div class="char-win">
-        <div class="char-head">SXSEditor // FRAGMENT EDITOR <span class="stars">v1.0.6</span></div>
+        <div class="char-head">SXSEditor // FRAGMENT EDITOR <span class="stars">v1.0.8</span></div>
         <div class="char-img">
           <img src="images/new_fragment.png" alt="SXSEditor 片段编辑器界面" width="460" height="515">
         </div>
@@ -761,13 +763,14 @@ html[data-theme="dark"] footer{background:#070B14}
           <button class="nt" data-t="patch" data-i18n="news.tab.patch">更新</button>
         </div>
         <div class="n-list">
-          <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>07-18</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n1">v1.0.6 发布：模型下载百分比溢出修复</span><span class="n-arrow">→</span></a>
-          <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>06-20</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n2">v1.0.5 发布：日语实验性支持 · 汉字假名分组</span><span class="n-arrow">→</span></a>
-          <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>06-12</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n3">模型 v1：DirectML GPU 重优化，推理速度 6 倍提升</span><span class="n-arrow">→</span></a>
-          <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>06-08</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n4">SiFiGAN 声码器选项上线 · mel SNR 提升至 83.54 dB</span><span class="n-arrow">→</span></a>
-          <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>05-30</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n5">应用内更新检查器上线：应用与模型双通道检测</span><span class="n-arrow">→</span></a>
-          <a class="n-item" data-type="event" href="https://github.com/Henley04/SXSEditor/releases" target="_blank" rel="noopener"><span class="n-date"><b>04-15</b><i>2026</i></span><span class="n-tag t-event" data-i18n="news.tag.event">活动</span><span class="n-title" data-i18n="news.n6">SXSEditor v1.0.0 正式开源 · MIT 协议发布</span><span class="n-arrow">→</span></a>
-          <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>03-20</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n7">ONNX opset 升级到 20 · W16A32 量化精度方案落地</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>07-26</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n1">v1.0.8 发布：可拖拽播放头跳转 · diffStep 分块推理 · 日语发音优化</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>07-18</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n2">v1.0.6 发布：模型下载百分比溢出修复</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>06-20</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n3">v1.0.5 发布：日语实验性支持 · 汉字假名分组</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>06-12</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n4">模型 v1：DirectML GPU 重优化，推理速度 6 倍提升</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>06-08</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n5">SiFiGAN 声码器选项上线 · mel SNR 提升至 83.54 dB</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>05-30</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n6">应用内更新检查器上线：应用与模型双通道检测</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="event" href="https://github.com/Henley04/SXSEditor/releases" target="_blank" rel="noopener"><span class="n-date"><b>04-15</b><i>2026</i></span><span class="n-tag t-event" data-i18n="news.tag.event">活动</span><span class="n-title" data-i18n="news.n7">SXSEditor v1.0.0 正式开源 · MIT 协议发布</span><span class="n-arrow">→</span></a>
+          <a class="n-item" data-type="notice" href="user/model-updates.html"><span class="n-date"><b>03-20</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n8">ONNX opset 升级到 20 · W16A32 量化精度方案落地</span><span class="n-arrow">→</span></a>
         </div>
       </div>
 
@@ -776,16 +779,16 @@ html[data-theme="dark"] footer{background:#070B14}
           <div class="ev-sun"></div>
           <svg class="ev-wave" viewBox="0 0 400 56" preserveAspectRatio="none"><path d="M0 30 Q50 10 100 30 T200 30 T300 30 T400 30 V56 H0 Z" fill="#fff"/><path d="M0 44 Q50 26 100 44 T200 44 T300 44 T400 44 V56 H0 Z" fill="#fff" opacity=".7"/></svg>
           <span class="ev-tag">OPEN SOURCE 2026</span>
-          <h3 data-i18n-html="news.ev.title"> SXSEditor<br> v1.0.6 已发布</h3>
+          <h3 data-i18n-html="news.ev.title"> SXSEditor<br> v1.0.8 已发布</h3>
           <p class="ev-p" data-i18n="news.ev.desc">MIT 开源协议 · 个人创作永久免费 · 三语合成 · 多精度模型 · DirectML GPU 加速。立即下载体验。</p>
           <div class="cd" id="cd" aria-label="版本发布信息">
             <div><b class="num">1.0</b><span data-i18n="news.ev.maj">主版本</span></div>
-            <div><b class="num">6</b><span data-i18n="news.ev.min">修订号</span></div>
+            <div><b class="num">8</b><span data-i18n="news.ev.min">修订号</span></div>
             <div><b class="num">3</b><span data-i18n="news.ev.lang">语言</span></div>
             <div><b class="num">MIT</b><span data-i18n="news.ev.lic">协议</span></div>
           </div>
           <a class="btn" href="#download" style="position:relative"><span data-i18n="news.ev.btn">立即下载体验</span></a>
-          <p class="ev-num" data-i18n-html="news.ev.mirror">已发布到 <b>GitHub</b> 与 <b>GitCode</b> 镜像</p>
+          <p class="ev-num" data-i18n-html="news.ev.mirror">发行版已在 <b>GitHub</b> 发布 · 代码镜像同步至 <b>GitCode</b></p>
         </div>
       </aside>
     </div>
@@ -809,27 +812,30 @@ html[data-theme="dark"] footer{background:#070B14}
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.5L10.5 4.4v7.1H3zM11.5 4.2L21 3v8.5h-9.5zM3 12.5h7.5v7.1L3 18.5zM11.5 12.5H21V21l-9.5-1.3z"/></svg>
           <span><b data-i18n="dl.win.os">Windows 版</b><i>STABLE RELEASE</i></span>
         </div>
-        <p class="dl-meta" data-i18n-html="dl.win.meta">最新版本 <b>v1.0.6</b> · 64 位安装包 · 模型按需下载</p>
+        <p class="dl-meta" data-i18n-html="dl.win.meta">最新版本 <b>v1.0.8</b> · 64 位安装包 · 模型按需下载</p>
         <p class="dl-req" data-i18n="dl.win.req">系统要求：Windows 10 / 11（64 位）· 8GB 内存 · 推荐 4GB+ VRAM 独立显卡</p>
-        <a class="btn" href="https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe" target="_blank" rel="noopener">
+        <a class="btn" href="https://github.com/Henley04/SXSEditor/releases/latest" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
-          <span data-i18n="dl.win.btn">GitHub 下载安装包</span>
+          <span data-i18n="dl.win.btn">前往 GitHub 最新发行版</span>
         </a>
       </div>
 
       <div class="dl-card dl-mac reveal" style="--d:.1s">
         <div class="dl-os">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.4 12.7c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3.1 2.4 1.2 0 1.7-.8 3.2-.8s1.9.8 3.2.8c1.3 0 2.2-1.2 3-2.4.9-1.4 1.3-2.7 1.3-2.8-.1 0-2.6-1-2.7-3.9zM14 5.6c.7-.8 1.1-1.9 1-3.1-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.6 2.8-1.4z"/></svg>
-          <span><b data-i18n="dl.mac.os">GitCode 镜像</b><i>CN MIRROR</i></span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2l9 5v10l-9 5-9-5V7z"/><path d="M12 22V12M3 7l9 5 9-5"/></svg>
+          <span><b data-i18n="dl.mac.os">GitCode 镜像</b><i>CODE MIRROR</i></span>
         </div>
-        <p class="dl-meta" data-i18n-html="dl.mac.meta">最新版本 <b>v1.0.6</b> · 中国大陆加速</p>
-        <p class="dl-req" data-i18n="dl.mac.req">适用于 GitHub 下载缓慢的中国大陆用户，文件与 GitHub 发布版完全一致。</p>
-        <a class="btn ghost" href="https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe" target="_blank" rel="noopener"><span data-i18n="dl.mac.btn">GitCode 镜像下载</span></a>
+        <p class="dl-meta" data-i18n-html="dl.mac.meta">代码镜像 · <b>gitcode.com/qq_50331623/SXSEditor</b></p>
+        <p class="dl-req" data-i18n="dl.mac.req">GitCode 现仅同步源代码镜像，不再托管发行版安装包。安装包请通过 GitHub 最新发行版获取。</p>
+        <a class="btn ghost" href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener"><span data-i18n="dl.mac.btn">查看代码镜像</span></a>
       </div>
 
       <div class="dl-card dl-linux reveal" style="--d:.18s">
         <div class="dl-os">
-          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c-2.8 0-4.6 2.2-4.6 5.2 0 1.9-.6 3.3-1.4 4.5-1 1.5-2.3 2.9-2.3 4.8 0 1.5 1 2.6 2.2 3.1-.1.4-.1.8 0 1.2.2 1 1.1 1.7 2.2 1.7.9 0 1.6-.4 2.2-1 .7.6 1.4 1 2.2 1h3c.8 0 1.5-.4 2.2-1 .6.6 1.3 1 2.2 1 1.1 0 2-.7 2.2-1.7.1-.4.1-.8 0-1.2 1.2-.5 2.2-1.6 2.2-3.1 0-1.9-1.3-3.3-2.3-4.8-.8-1.2-1.4-2.6-1.4-4.5C16.6 4.2 14.8 2 12 2z"/></svg>
+          <span class="dl-os-icons">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.4 12.7c0-2.4 2-3.6 2.1-3.7-1.1-1.7-2.9-1.9-3.5-1.9-1.5-.2-2.9.9-3.7.9-.8 0-1.9-.9-3.2-.8-1.6 0-3.1 1-4 2.4-1.7 3-.4 7.4 1.2 9.8.8 1.2 1.8 2.5 3.1 2.4 1.2 0 1.7-.8 3.2-.8s1.9.8 3.2.8c1.3 0 2.2-1.2 3-2.4.9-1.4 1.3-2.7 1.3-2.8-.1 0-2.6-1-2.7-3.9zM14 5.6c.7-.8 1.1-1.9 1-3.1-1 0-2.1.7-2.8 1.5-.6.7-1.2 1.9-1 3 1.1.1 2.2-.6 2.8-1.4z"/></svg>
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2c-2.8 0-4.6 2.2-4.6 5.2 0 1.9-.6 3.3-1.4 4.5-1 1.5-2.3 2.9-2.3 4.8 0 1.5 1 2.6 2.2 3.1-.1.4-.1.8 0 1.2.2 1 1.1 1.7 2.2 1.7.9 0 1.6-.4 2.2-1 .7.6 1.4 1 2.2 1h3c.8 0 1.5-.4 2.2-1 .6.6 1.3 1 2.2 1 1.1 0 2-.7 2.2-1.7.1-.4.1-.8 0-1.2 1.2-.5 2.2-1.6 2.2-3.1 0-1.9-1.3-3.3-2.3-4.8-.8-1.2-1.4-2.6-1.4-4.5C16.6 4.2 14.8 2 12 2z"/></svg>
+          </span>
           <span><b data-i18n="dl.lnx.os">源码构建</b><i>MACOS · LINUX</i></span>
         </div>
         <p class="dl-meta" data-i18n-html="dl.lnx.meta">仓库：<b>github.com/Henley04/SXSEditor</b></p>
@@ -846,6 +852,30 @@ html[data-theme="dark"] footer{background:#070B14}
     <div class="changelog reveal">
       <h3 class="cl-h" data-i18n="dl.cl.title">更新日志</h3>
       <div class="acc open">
+        <button class="acc-h"><span class="v">v1.0.8</span> <span data-i18n="dl.cl.v108">流式合成与播放头跳转</span><span class="d">2026-07-26</span><span class="pm">+</span></button>
+        <div class="acc-b"><ul>
+          <li class="hot" data-i18n="dl.cl.v108.l1">可拖拽播放头跳转——主页面、音频预处理页面与分片编辑器的播放头现可拖拽到任意位置开始播放</li>
+          <li class="hot" data-i18n="dl.cl.v108.l2">diffStep 分块推理加速预览——将扩散循环切分为多个 chunk，预览时按 chunk 流式推送音频，大幅缩短长分片的首音到达时间</li>
+          <li class="hot" data-i18n="dl.cl.v108.l3">Play All 多分片时间顺序流式播放——多个分片作为一条连续时间线合成与播放，而非顺序逐个处理</li>
+          <li class="hot" data-i18n="dl.cl.v108.l4">通过 onChunkMel 按 chunk 流式推送音频——实现真正的流式合成，无需等待整个扩散循环完成</li>
+          <li class="hot" data-i18n="dl.cl.v108.l5">日语发音全面优化——默认日语发声方式改为「混合音素」，混合模式还新增粤语 yue_ 音素覆盖</li>
+          <li data-i18n="dl.cl.v108.l6">汉字字典扩展至全部 2136 个常用汉字——大幅降低日语歌词中出现未解析汉字的概率</li>
+          <li data-i18n="dl.cl.v108.l7">MIDI 导入 BPM / 拍号同步提示——导入 MIDI 时会询问是否从文件同步项目的 BPM 与拍号</li>
+          <li data-i18n="dl.cl.v108.l8">ORT session 选项开放为设置——进阶用户可调校执行提供器与线程数</li>
+          <li data-i18n="dl.cl.v108.l9">设置页模型状态总览——一目了然显示已安装精度与版本</li>
+          <li data-i18n="dl.cl.v108.l10">基础模型精度与扩散模型分离——单个基础精度可被多个扩散模型精度复用</li>
+          <li data-i18n="dl.cl.v108.l11">官网首页重建——基于新模板重建，支持中英双语并提供中文洛天依演示音频</li>
+          <li data-i18n="dl.cl.v108.l12">启动优化 v2——重型模块推迟到 splash 窗口绘制完成后再加载，禁用未使用的 Chromium 特性以加速冷启动</li>
+          <li data-i18n="dl.cl.v108.l13">修复歌声比 MIDI 音符更早出现——所有播放 / 导出路径现均与 MIDI 音符位置对齐</li>
+          <li data-i18n="dl.cl.v108.l14">修复分段流式播放不完整——新增「等待推理」UI 在缓冲前沿暂停播放头直到下一个 chunk 到达</li>
+          <li data-i18n="dl.cl.v108.l15">修复流式分块推理的多个问题——流式预览在分片边界处也能可靠工作</li>
+          <li data-i18n="dl.cl.v108.l16">修复播放头拖拽到末尾后跳回起点、流式 chunk 到达时播放头不动等问题</li>
+          <li data-i18n="dl.cl.v108.l17">修复 @tonejs/midi 丢弃轨道级歌词——此前 MIDI 导入时丢失的轨道级歌词现已恢复</li>
+          <li data-i18n="dl.cl.v108.l18">修复 FP16 / FP32 输入类型不匹配——推理管道在检测到不匹配时会自动用修正后的 dummy inputs 重试</li>
+          <li data-i18n="dl.cl.v108.l19">清除 git 历史中的 ModelScope 凭据——新增防护以防止未来再次泄漏</li>
+        </ul></div>
+      </div>
+      <div class="acc">
         <button class="acc-h"><span class="v">v1.0.6</span> <span data-i18n="dl.cl.v106">稳定性更新</span><span class="d">2026-07-18</span><span class="pm">+</span></button>
         <div class="acc-b"><ul>
           <li class="hot" data-i18n="dl.cl.v106.l1">修复模型下载百分比溢出——进度百分比现在限制在 [0, 100] 范围内</li>
@@ -919,7 +949,7 @@ var I18N={
   "zh":{
     "meta.title":"SXSEditor — AI 歌声合成工作台",
     "meta.desc":"SXSEditor：开源 AI 歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经模型与 ONNX Runtime，支持 DirectML GPU、WebNN NPU 与 CPU 推理。从 MIDI 与歌词到完整歌声，一站完成。",
-    "ticker.1":"✦ SXSEditor <b>v1.0.6</b> 现已发布",
+    "ticker.1":"✦ SXSEditor <b>v1.0.8</b> 现已发布",
     "ticker.2":"✦ 日语实验性支持上线 · 汉字假名自动分组",
     "ticker.3":"✦ DirectML GPU 推理速度最高提升 <b>6 倍</b>",
     "ticker.4":"✦ 三精度模型共存：<b>FP32 / FP16 / INT8</b> 自由切换",
@@ -927,7 +957,7 @@ var I18N={
     "nav.home":"首页","nav.features":"核心功能","nav.workflow":"工作流","nav.news":"版本情报","nav.download":"下载","nav.docs":"文档中心","nav.downloadBtn":"立即下载",
     "hero.title":"让每个音符，<br>都为你<em>歌唱</em>。",
     "hero.desc":"<b>SXSEditor</b> 是一款开源的 AI 歌声合成（SVS）桌面应用——基于 SoulX-Singer 神经模型 × ONNX Runtime 推理 × DirectML GPU 加速，从 MIDI 音符与歌词到完整歌声，一个软件走完全部流程。",
-    "hero.dlBtn":"免费下载 v1.0.6",
+    "hero.dlBtn":"免费下载 v1.0.8",
     "hero.srcBtn":"查看源码",
     "hero.note":"支持 <i>Windows · macOS · Linux</i> ｜ MIT 开源协议 ｜ 三语合成：中 · 英 · 日",
     "stat.lang":"合成语言","stat.prec":"模型精度","stat.gpu":"GPU 加速比",
@@ -949,15 +979,16 @@ var I18N={
     "news.title":"版本情报","news.sub":"应用公告 · 模型更新 · 缺陷修复",
     "news.tab.all":"全部","news.tab.notice":"公告","news.tab.event":"活动","news.tab.patch":"更新",
     "news.tag.patch":"更新","news.tag.notice":"公告","news.tag.event":"活动",
-    "news.n1":"v1.0.6 发布：模型下载百分比溢出修复","news.n2":"v1.0.5 发布：日语实验性支持 · 汉字假名分组","news.n3":"模型 v1：DirectML GPU 重优化，推理速度 6 倍提升","news.n4":"SiFiGAN 声码器选项上线 · mel SNR 提升至 83.54 dB","news.n5":"应用内更新检查器上线：应用与模型双通道检测","news.n6":"SXSEditor v1.0.0 正式开源 · MIT 协议发布","news.n7":"ONNX opset 升级到 20 · W16A32 量化精度方案落地",
-    "news.ev.title":" SXSEditor<br> v1.0.6 已发布","news.ev.desc":"MIT 开源协议 · 个人创作永久免费 · 三语合成 · 多精度模型 · DirectML GPU 加速。立即下载体验。",
-    "news.ev.maj":"主版本","news.ev.min":"修订号","news.ev.lang":"语言","news.ev.lic":"协议","news.ev.btn":"立即下载体验","news.ev.mirror":"已发布到 <b>GitHub</b> 与 <b>GitCode</b> 镜像",
+    "news.n1":"v1.0.8 发布：可拖拽播放头跳转 · diffStep 分块推理 · 日语发音优化","news.n2":"v1.0.6 发布：模型下载百分比溢出修复","news.n3":"v1.0.5 发布：日语实验性支持 · 汉字假名分组","news.n4":"模型 v1：DirectML GPU 重优化，推理速度 6 倍提升","news.n5":"SiFiGAN 声码器选项上线 · mel SNR 提升至 83.54 dB","news.n6":"应用内更新检查器上线：应用与模型双通道检测","news.n7":"SXSEditor v1.0.0 正式开源 · MIT 协议发布","news.n8":"ONNX opset 升级到 20 · W16A32 量化精度方案落地",
+    "news.ev.title":" SXSEditor<br> v1.0.8 已发布","news.ev.desc":"MIT 开源协议 · 个人创作永久免费 · 三语合成 · 多精度模型 · DirectML GPU 加速。立即下载体验。",
+    "news.ev.maj":"主版本","news.ev.min":"修订号","news.ev.lang":"语言","news.ev.lic":"协议","news.ev.btn":"立即下载体验","news.ev.mirror":"发行版已在 <b>GitHub</b> 发布 · 代码镜像同步至 <b>GitCode</b>",
     "dl.title":"获取 SXSEditor","dl.sub":"MIT 开源 · 个人创作永久免费 · 模型首次启动自动下载",
-    "dl.win.badge":"推荐平台","dl.win.os":"Windows 版","dl.win.meta":"最新版本 <b>v1.0.6</b> · 64 位安装包 · 模型按需下载","dl.win.req":"系统要求：Windows 10 / 11（64 位）· 8GB 内存 · 推荐 4GB+ VRAM 独立显卡","dl.win.btn":"GitHub 下载安装包",
-    "dl.mac.os":"GitCode 镜像","dl.mac.meta":"最新版本 <b>v1.0.6</b> · 中国大陆加速","dl.mac.req":"适用于 GitHub 下载缓慢的中国大陆用户，文件与 GitHub 发布版完全一致。","dl.mac.btn":"GitCode 镜像下载",
+    "dl.win.badge":"推荐平台","dl.win.os":"Windows 版","dl.win.meta":"最新版本 <b>v1.0.8</b> · 64 位安装包 · 模型按需下载","dl.win.req":"系统要求：Windows 10 / 11（64 位）· 8GB 内存 · 推荐 4GB+ VRAM 独立显卡","dl.win.btn":"前往 GitHub 最新发行版",
+    "dl.mac.os":"GitCode 镜像","dl.mac.meta":"代码镜像 · <b>gitcode.com/qq_50331623/SXSEditor</b>","dl.mac.req":"GitCode 现仅同步源代码镜像，不再托管发行版安装包。安装包请通过 GitHub 最新发行版获取。","dl.mac.btn":"查看代码镜像",
     "dl.lnx.os":"源码构建","dl.lnx.meta":"仓库：<b>github.com/Henley04/SXSEditor</b>","dl.lnx.req":"macOS / Linux 用户请克隆仓库从源码构建。需 Node.js 与 Electron Forge。","dl.lnx.btn":"查看构建指南",
     "dl.foot.note":"历史版本与发布说明详见 GitHub Releases","dl.foot.link":"查看历史版本 →",
     "dl.cl.title":"更新日志",
+    "dl.cl.v108":"流式合成与播放头跳转","dl.cl.v108.l1":"可拖拽播放头跳转——主页面、音频预处理页面与分片编辑器的播放头现可拖拽到任意位置开始播放","dl.cl.v108.l2":"diffStep 分块推理加速预览——将扩散循环切分为多个 chunk，预览时按 chunk 流式推送音频，大幅缩短长分片的首音到达时间","dl.cl.v108.l3":"Play All 多分片时间顺序流式播放——多个分片作为一条连续时间线合成与播放，而非顺序逐个处理","dl.cl.v108.l4":"通过 onChunkMel 按 chunk 流式推送音频——实现真正的流式合成，无需等待整个扩散循环完成","dl.cl.v108.l5":"日语发音全面优化——默认日语发声方式改为「混合音素」，混合模式还新增粤语 yue_ 音素覆盖","dl.cl.v108.l6":"汉字字典扩展至全部 2136 个常用汉字——大幅降低日语歌词中出现未解析汉字的概率","dl.cl.v108.l7":"MIDI 导入 BPM / 拍号同步提示——导入 MIDI 时会询问是否从文件同步项目的 BPM 与拍号","dl.cl.v108.l8":"ORT session 选项开放为设置——进阶用户可调校执行提供器与线程数","dl.cl.v108.l9":"设置页模型状态总览——一目了然显示已安装精度与版本","dl.cl.v108.l10":"基础模型精度与扩散模型分离——单个基础精度可被多个扩散模型精度复用","dl.cl.v108.l11":"官网首页重建——基于新模板重建，支持中英双语并提供中文洛天依演示音频","dl.cl.v108.l12":"启动优化 v2——重型模块推迟到 splash 窗口绘制完成后再加载，禁用未使用的 Chromium 特性以加速冷启动","dl.cl.v108.l13":"修复歌声比 MIDI 音符更早出现——所有播放 / 导出路径现均与 MIDI 音符位置对齐","dl.cl.v108.l14":"修复分段流式播放不完整——新增「等待推理」UI 在缓冲前沿暂停播放头直到下一个 chunk 到达","dl.cl.v108.l15":"修复流式分块推理的多个问题——流式预览在分片边界处也能可靠工作","dl.cl.v108.l16":"修复播放头拖拽到末尾后跳回起点、流式 chunk 到达时播放头不动等问题","dl.cl.v108.l17":"修复 @tonejs/midi 丢弃轨道级歌词——此前 MIDI 导入时丢失的轨道级歌词现已恢复","dl.cl.v108.l18":"修复 FP16 / FP32 输入类型不匹配——推理管道在检测到不匹配时会自动用修正后的 dummy inputs 重试","dl.cl.v108.l19":"清除 git 历史中的 ModelScope 凭据——新增防护以防止未来再次泄漏",
     "dl.cl.v106":"稳定性更新","dl.cl.v106.l1":"修复模型下载百分比溢出——进度百分比现在限制在 [0, 100] 范围内","dl.cl.v106.l2":"修复远程文件大小检测不准确——改用 Range 请求通过 Content-Range 头返回正确文件大小","dl.cl.v106.l3":"修复 formatBytes 浮点精度误差导致的文件大小显示异常","dl.cl.v106.l4":"修复 SiFiGAN 下载进度每个文件重置为 0——进度现在在下载批次的所有文件中累计",
     "dl.cl.v105":"日语实验性支持","dl.cl.v105.l1":"实验性日语支持——汉字假名自动分组、混合音素模式（ら行 L / お段 AO）","dl.cl.v105.l2":"片段选择与删除——点击选中、Delete 键或右键菜单删除","dl.cl.v105.l3":"ACG 默认主题与界面重构","dl.cl.v105.l4":"右键音高平滑度控制——逐锚点调整平滑强度","dl.cl.v105.l5":"带精度选择的导出对话框","dl.cl.v105.l6":"应用内更新检查器：应用与模型双通道检测，24 小时至多自动检查一次","dl.cl.v105.l7":"按精度模型版本追踪——切换精度不再使无关缓存条目失效","dl.cl.v105.l8":"动画自定义复选框、窗口弹出动效",
     "dl.cl.v100":"正式开源发布","dl.cl.v100.l1":"SXSEditor 正式开源，MIT 协议发布","dl.cl.v100.l2":"基于 SoulX-Singer 神经模型，ONNX Runtime 推理","dl.cl.v100.l3":"DirectML GPU / WebNN NPU / CPU 三后端共存","dl.cl.v100.l4":"钢琴卷帘编辑器：音符、歌词、音高曲线、音素级编辑","dl.cl.v100.l5":"歌手创建：30 秒纯人声样本构建专属歌手",
@@ -971,7 +1002,7 @@ var I18N={
   "en":{
     "meta.title":"SXSEditor — AI Singing Synthesis Workbench",
     "meta.desc":"SXSEditor: open-source AI Singing Voice Synthesis (SVS) desktop app. Powered by the SoulX-Singer neural model and ONNX Runtime, supporting DirectML GPU, WebNN NPU and CPU inference. From MIDI and lyrics to full vocals — all in one place.",
-    "ticker.1":"✦ SXSEditor <b>v1.0.6</b> is now available",
+    "ticker.1":"✦ SXSEditor <b>v1.0.8</b> is now available",
     "ticker.2":"✦ Experimental Japanese support · auto kanji-kana grouping",
     "ticker.3":"✦ DirectML GPU inference up to <b>6x faster</b>",
     "ticker.4":"✦ Three precision tiers in one app: <b>FP32 / FP16 / INT8</b>",
@@ -979,7 +1010,7 @@ var I18N={
     "nav.home":"Home","nav.features":"Features","nav.workflow":"Workflow","nav.news":"News","nav.download":"Download","nav.docs":"Docs","nav.downloadBtn":"Download Now",
     "hero.title":"Let every note<br><em>sing</em> for you.",
     "hero.desc":"<b>SXSEditor</b> is an open-source AI Singing Voice Synthesis (SVS) desktop app — built on the SoulX-Singer neural model × ONNX Runtime inference × DirectML GPU acceleration. From MIDI notes and lyrics to a complete vocal performance, the entire pipeline lives in one app.",
-    "hero.dlBtn":"Download Free v1.0.6",
+    "hero.dlBtn":"Download Free v1.0.8",
     "hero.srcBtn":"View Source",
     "hero.note":"Runs on <i>Windows · macOS · Linux</i> ｜ MIT licensed ｜ Trilingual synthesis: CN · EN · JP",
     "stat.lang":"Synth Languages","stat.prec":"Model Precisions","stat.gpu":"GPU Speedup",
@@ -1001,16 +1032,17 @@ var I18N={
     "news.title":"Release Notes","news.sub":"Announcements · Model updates · Bug fixes",
     "news.tab.all":"All","news.tab.notice":"Notice","news.tab.event":"Event","news.tab.patch":"Patch",
     "news.tag.patch":"Patch","news.tag.notice":"Notice","news.tag.event":"Event",
-    "news.n1":"v1.0.6 released: model download percentage overflow fix","news.n2":"v1.0.5 released: experimental Japanese · kanji-kana grouping","news.n3":"Model v1: DirectML GPU re-optimized, 6x inference speedup","news.n4":"SiFiGAN vocoder option available · mel SNR up to 83.54 dB","news.n5":"In-app update checker launched: app + model dual-channel detection","news.n6":"SXSEditor v1.0.0 open-sourced · MIT license released","news.n7":"ONNX opset upgraded to 20 · W16A32 quantization lands",
-    "news.ev.title":" SXSEditor<br> v1.0.6 Released",
+    "news.n1":"v1.0.8 released: draggable playhead · diffStep chunked inference · Japanese pronunciation optimization","news.n2":"v1.0.6 released: model download percentage overflow fix","news.n3":"v1.0.5 released: experimental Japanese · kanji-kana grouping","news.n4":"Model v1: DirectML GPU re-optimized, 6x inference speedup","news.n5":"SiFiGAN vocoder option available · mel SNR up to 83.54 dB","news.n6":"In-app update checker launched: app + model dual-channel detection","news.n7":"SXSEditor v1.0.0 open-sourced · MIT license released","news.n8":"ONNX opset upgraded to 20 · W16A32 quantization lands",
+    "news.ev.title":" SXSEditor<br> v1.0.8 Released",
     "news.ev.desc":"MIT licensed · free for personal creative use forever · trilingual synthesis · multi-precision models · DirectML GPU acceleration. Download and try it now.",
-    "news.ev.maj":"Major","news.ev.min":"Minor","news.ev.lang":"Langs","news.ev.lic":"License","news.ev.btn":"Download Now","news.ev.mirror":"Published to <b>GitHub</b> and <b>GitCode</b> mirror",
+    "news.ev.maj":"Major","news.ev.min":"Minor","news.ev.lang":"Langs","news.ev.lic":"License","news.ev.btn":"Download Now","news.ev.mirror":"Releases published on <b>GitHub</b> · code mirror synced to <b>GitCode</b>",
     "dl.title":"Get SXSEditor","dl.sub":"MIT open source · free for personal creative use forever · models auto-download on first launch",
-    "dl.win.badge":"Recommended","dl.win.os":"Windows","dl.win.meta":"Latest <b>v1.0.6</b> · 64-bit installer · models on demand","dl.win.req":"Requirements: Windows 10 / 11 (64-bit) · 8 GB RAM · 4 GB+ VRAM GPU recommended","dl.win.btn":"Download from GitHub",
-    "dl.mac.os":"GitCode Mirror","dl.mac.meta":"Latest <b>v1.0.6</b> · China mainland CDN","dl.mac.req":"For China-mainland users with slow GitHub access. Identical to the GitHub release.","dl.mac.btn":"Download from GitCode",
+    "dl.win.badge":"Recommended","dl.win.os":"Windows","dl.win.meta":"Latest <b>v1.0.8</b> · 64-bit installer · models on demand","dl.win.req":"Requirements: Windows 10 / 11 (64-bit) · 8 GB RAM · 4 GB+ VRAM GPU recommended","dl.win.btn":"Go to GitHub Latest Release",
+    "dl.mac.os":"GitCode Mirror","dl.mac.meta":"Code mirror · <b>gitcode.com/qq_50331623/SXSEditor</b>","dl.mac.req":"GitCode now mirrors source code only and no longer hosts release installers. Please get the installer from the GitHub latest release.","dl.mac.btn":"View Code Mirror",
     "dl.lnx.os":"Build from Source","dl.lnx.meta":"Repo: <b>github.com/Henley04/SXSEditor</b>","dl.lnx.req":"macOS / Linux users please clone the repo and build from source. Requires Node.js and Electron Forge.","dl.lnx.btn":"Build Guide",
     "dl.foot.note":"See GitHub Releases for older versions and release notes","dl.foot.link":"View older releases →",
     "dl.cl.title":"Changelog",
+    "dl.cl.v108":"Streaming Synthesis & Playhead Seek","dl.cl.v108.l1":"Draggable playhead with seek — the playhead on the main page, audio preprocess page, and fragment editor can now be dragged to any position to start playback from there","dl.cl.v108.l2":"diffStep chunked inference for faster preview — splits the diffusion loop into chunks so audio can be streamed per chunk during preview, dramatically reducing time-to-first-audio for long fragments","dl.cl.v108.l3":"Time-ordered multi-fragment streaming for Play All — Play All now interleaves inference chunks across all fragments in global time order, so multiple fragments are synthesized and played back as one continuous timeline","dl.cl.v108.l4":"Per-chunk audio streaming via onChunkMel — the preview path now streams audio per diffusion chunk through a new onChunkMel callback, enabling true streaming synthesis","dl.cl.v108.l5":"Comprehensive Japanese pronunciation optimization — the default Japanese vocalization mode is now Hybrid Phonemes, and the hybrid mode now also covers Cantonese yue_ phonemes","dl.cl.v108.l6":"Expanded kanji dictionary to all 2136 Jōyō kanji — greatly reducing the chance of unresolved kanji in Japanese lyrics","dl.cl.v108.l7":"MIDI import BPM / time signature sync prompt — when importing a MIDI file, SXSEditor now asks whether to sync the project's BPM and time signature from the file","dl.cl.v108.l8":"ORT session options exposed as settings — advanced ONNX Runtime session options are now user-configurable in Settings","dl.cl.v108.l9":"Model status overview in Settings — a new model status overview section shows installed precisions and versions at a glance","dl.cl.v108.l10":"Base model precision separated from diffusion models — a single base precision can be reused across multiple diffusion model precisions","dl.cl.v108.l11":"Rebuilt landing page — the official website's landing page was rebuilt with a new template, bilingual CN/EN support, and a Chinese Luotianyi demo audio","dl.cl.v108.l12":"Startup optimization v2 — heavy modules are now deferred until after the splash window paints, and unused Chromium features are disabled for faster cold start","dl.cl.v108.l13":"Fixed vocal audio playing earlier than MIDI notes — all playback / export paths are now aligned with MIDI note positions","dl.cl.v108.l14":"Fixed segmented streaming playback incompleteness — a new waiting-for-inference UI now pauses the playhead at the buffer frontier until the next chunk arrives","dl.cl.v108.l15":"Fixed comprehensive chunked streaming inference issues — streaming preview is now reliable across fragment boundaries","dl.cl.v108.l16":"Fixed playhead jumping back to start after dragging near the end, and playhead not animating on streaming chunk arrival","dl.cl.v108.l17":"Fixed track-level lyrics dropped by @tonejs/midi — track-level lyrics that were previously lost during MIDI import are now restored","dl.cl.v108.l18":"Fixed FP16 / FP32 input type mismatch — the inference pipeline now auto-retries with corrected dummy inputs when an FP16 / FP32 input type mismatch is detected","dl.cl.v108.l19":"Scrubbed ModelScope credentials from git history — safeguards were added to prevent future leaks",
     "dl.cl.v106":"Stability Update","dl.cl.v106.l1":"Fixed model download percentage overflow — progress is now clamped to [0, 100]","dl.cl.v106.l2":"Fixed inaccurate remote file size detection — now uses Range request with Content-Range header to get the correct size","dl.cl.v106.l3":"Fixed formatBytes floating-point precision error causing wrong file size display","dl.cl.v106.l4":"Fixed SiFiGAN download progress resetting to 0 per file — progress now accumulates across all files in a batch",
     "dl.cl.v105":"Experimental Japanese","dl.cl.v105.l1":"Experimental Japanese support — auto kanji-kana grouping, mixed phoneme modes (ら-row L / お段 AO)","dl.cl.v105.l2":"Fragment select & delete — click to select, Delete key or context menu to remove","dl.cl.v105.l3":"ACG default theme and UI refactor","dl.cl.v105.l4":"Right-click pitch smoothness control — per-anchor smoothing strength","dl.cl.v105.l5":"Export dialog with precision selection","dl.cl.v105.l6":"In-app update checker: app + model dual-channel detection, auto-check at most once per 24h","dl.cl.v105.l7":"Per-precision model version tracking — switching precision no longer invalidates unrelated cache entries","dl.cl.v105.l8":"Animated custom checkboxes, window pop-in animations",
     "dl.cl.v100":"Open-source Release","dl.cl.v100.l1":"SXSEditor officially open-sourced under MIT license","dl.cl.v100.l2":"Built on the SoulX-Singer neural model with ONNX Runtime inference","dl.cl.v100.l3":"DirectML GPU / WebNN NPU / CPU — three backends coexist","dl.cl.v100.l4":"Piano-roll editor: notes, lyrics, pitch curves, phoneme-level editing","dl.cl.v100.l5":"Singer creation: build a custom singer from 30 seconds of clean vocals",
