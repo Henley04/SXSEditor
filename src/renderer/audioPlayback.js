@@ -499,8 +499,8 @@ export function getPreviewInferenceOptions() {
   return {
     nSteps: state.audioSettings?.previewDiffSteps ?? 16,
     cfg: state.audioSettings?.previewCfgStrength ?? 3.0,
-    cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.75,
-    sampler: state.audioSettings?.previewSampler ?? 'euler',
+    cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.6,
+    sampler: state.audioSettings?.previewSampler ?? 'stork2',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     diffStepChunk: state.audioSettings?.previewDiffStepChunkEnabled === true,
@@ -513,8 +513,8 @@ export function getExportInferenceOptions() {
   return {
     nSteps: state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.exportCfgStrength ?? 3.0,
-    cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.75,
-    sampler: state.audioSettings?.exportSampler ?? 'euler',
+    cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.6,
+    sampler: state.audioSettings?.exportSampler ?? 'stork2',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
   };

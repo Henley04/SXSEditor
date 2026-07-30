@@ -33,15 +33,16 @@ describe('Diffusion.runDiffusionLoopChunked - 分块扩散推理测试', () => {
           { name: 'xt_mask', type: 'float32', shape: [1, -1] },
         ],
         async run(inputs) {
+          const batch = inputs.xt_input.dims[0];
           const seqLen = inputs.xt_input.dims[1];
           runCalls.push({ seqLen });
-          const data = new Float32Array(seqLen * MEL_DIM);
+          const data = new Float32Array(batch * seqLen * MEL_DIM);
           data.fill(fillValue);
           return {
             flow_pred: {
               type: 'float32',
               data,
-              dims: [1, seqLen, MEL_DIM],
+              dims: [batch, seqLen, MEL_DIM],
               dispose() {},
             },
           };
@@ -105,13 +106,13 @@ describe('Diffusion.runDiffusionLoopChunked - 分块扩散推理测试', () => {
     expect(nanCount).to.equal(0);
   });
 
-  it('CFG > 0 时每个 step 产生 2 次推理（cond + uncond）', async () => {
+  it('CFG > 0 时每个 step 产生 1 次推理（cond/uncond batch 合并）', async () => {
     const totalFrames = 250;
     const ptFrameCount = 10;
     const chunkFrames = 100;
     const overlapFrames = 20;
     const totalSteps = 2;
-    const cfgStrength = 3.0; // CFG on → 2 runs/step
+    const cfgStrength = 3.0; // CFG on → batch merge: 1 run/step (was 2)
 
     const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
     const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
@@ -124,8 +125,8 @@ describe('Diffusion.runDiffusionLoopChunked - 分块扩散推理测试', () => {
     );
 
     // chunk 0: [0,100), chunk 1: [80,180), chunk 2: [160,250) → 3 chunks
-    // 3 chunks × 2 steps × 2 runs (cfg>0) = 12 runs
-    expect(runCalls).to.have.lengthOf(12);
+    // Task 1 batch merge: 3 chunks × 2 steps × 1 run (batch=2) = 6 runs
+    expect(runCalls).to.have.lengthOf(6);
     expect(xt.data.length).to.equal(totalFrames * MEL_DIM);
   });
 

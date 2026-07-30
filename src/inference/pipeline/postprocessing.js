@@ -1,6 +1,84 @@
 const { MEL_DIM, HOP_SIZE, SIFIGAN_HOP_SIZE, VOCODER_CHUNK_FRAMES, VOCODER_OVERLAP_FRAMES, NPU_VOCODER_SEQ_LEN, SAMPLE_RATE, N_FFT, NUM_MELS, MEL_MEAN, MEL_VAR } = require('./constants');
 const { TWIDDLE_REAL, TWIDDLE_IMAG, HANN_WINDOW } = require('./constants');
-const { createFloatTensor, outputToFloat32, disposeTensor, normalizePeakTo, gpuDrain } = require('./utils');
+const { createFloatTensor, outputToFloat32, disposeTensor, normalizePeakTo, gpuDrainAdaptive } = require('./utils');
+const { wsolaCrossfade } = require('./wsola');
+const { loudnormFinal } = require('./loudnorm');
+
+/**
+ * Read diagnosticMode flag lazily from settings. Returns false if settings
+ * cannot be loaded (e.g. running outside Electron main process, in tests).
+ * Used to gate [VocoderDiag] statistical console.log blocks; NaN/Inf fatal
+ * console.error is always-on regardless of this flag.
+ * @returns {boolean}
+ */
+function _readDiagnosticMode() {
+    try {
+        const { loadSettings } = require('../../main/settings');
+        return loadSettings().diagnosticMode === true;
+    } catch (_) {
+        return false;
+    }
+}
+
+/**
+ * Read enableLoudnormFinal flag lazily from settings. Returns true (the spec
+ * default) if settings cannot be loaded (e.g. running outside Electron main
+ * process, in tests without settings). When true, the final vocoder output is
+ * EBU R128-normalized to −14 LUFS with a −1 dBTP true-peak limit.
+ * @returns {boolean}
+ */
+function _readEnableLoudnormFinal() {
+    try {
+        const { loadSettings } = require('../../main/settings');
+        return loadSettings().enableLoudnormFinal !== false;
+    } catch (_) {
+        return true;
+    }
+}
+
+/**
+ * Read enableAntiAliasing flag lazily from settings. Returns false (the spec
+ * default — anti-aliasing is opt-in to avoid changing default output
+ * characteristics) if settings cannot be loaded.
+ * @returns {boolean}
+ */
+function _readEnableAntiAliasing() {
+    try {
+        const { loadSettings } = require('../../main/settings');
+        return loadSettings().enableAntiAliasing === true;
+    } catch (_) {
+        return false;
+    }
+}
+
+/**
+ * 1st-order Butterworth low-pass filter (bilinear-transformed IIR).
+ *
+ * Applied before decimation in resampleLinear when enableAntiAliasing is on,
+ * to attenuate content above the destination Nyquist (dstSr/2) that the
+ * finite-width sinc kernel only partially rejects. Complementary to the
+ * existing Kaiser-windowed sinc interpolation — together they provide
+ * steeper stopband rejection than either alone.
+ *
+ * @param {Float32Array} samples - input audio
+ * @param {number} srcSr - source sample rate
+ * @param {number} cutoffFreq - cutoff frequency (Hz), typically dstSr/2
+ * @returns {Float32Array} filtered copy
+ */
+function _butterworthLp1(samples, srcSr, cutoffFreq) {
+    // Bilinear transform of 1st-order Butterworth H(s) = 1/(s/ωc + 1).
+    const K = Math.tan(Math.PI * cutoffFreq / srcSr);
+    const b0 = K / (1 + K);
+    const a1 = (K - 1) / (1 + K);
+    const out = new Float32Array(samples.length);
+    let y1 = 0;
+    for (let i = 0; i < samples.length; i++) {
+        const y0 = b0 * samples[i] + b0 * (i > 0 ? samples[i - 1] : samples[i]) - a1 * y1;
+        out[i] = y0;
+        y1 = y0;
+    }
+    return out;
+}
 
 /**
  * Post-processing: mel transform, vocoder, audio generation
@@ -185,6 +263,13 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     const newLength = Math.floor(audioFloat.length / ratio);
     if (newLength <= 0) return new Float32Array(0);
 
+    // 抗混叠：降采样时（srcSr > dstSr）可选 Butterworth 1st-order LP 预滤波
+    // （截止 dstSr/2），减少 sinc 有限核残留的高频镜像。受 enableAntiAliasing
+    // 设置控制（默认 false — 不改变默认输出特征）。
+    const input = (srcSampleRate > dstSampleRate && _readEnableAntiAliasing())
+        ? _butterworthLp1(audioFloat, srcSampleRate, dstSampleRate / 2)
+        : audioFloat;
+
     // 窗口化 sinc 插值 (Kaiser 窗, β=5)
     const kaiserBeta = 5.0;
     const halfWidth = Math.ceil(12 * kaiserBeta / 5); // ~12 零交叉
@@ -200,14 +285,14 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     for (let i = 0; i < newLength; i++) {
         const center = (i + 0.5) * ratio;
         const left = Math.max(0, Math.floor(center - halfWidth));
-        const right = Math.min(audioFloat.length - 1, Math.ceil(center + halfWidth));
+        const right = Math.min(input.length - 1, Math.ceil(center + halfWidth));
 
         let sum = 0;
         let weightSum = 0;
         for (let j = left; j <= right; j++) {
             const t = center - j;
             if (Math.abs(t) < 1e-7) {
-                sum += audioFloat[j];
+                sum += input[j];
                 weightSum += 1;
             } else {
                 const sincVal = Math.sin(twoPiCutoff * t) * invPi / t;
@@ -216,7 +301,7 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
                     ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0Beta
                     : 0;
                 const w = sincVal * windowVal;
-                sum += audioFloat[j] * w;
+                sum += input[j] * w;
                 weightSum += w;
             }
         }
@@ -237,6 +322,11 @@ async function resampleLinearAsync(audioFloat, srcSampleRate, dstSampleRate) {
     const newLength = Math.floor(audioFloat.length / ratio);
     if (newLength <= 0) return new Float32Array(0);
 
+    // 抗混叠：与 resampleLinear 同步实现（详见上方注释）。
+    const input = (srcSampleRate > dstSampleRate && _readEnableAntiAliasing())
+        ? _butterworthLp1(audioFloat, srcSampleRate, dstSampleRate / 2)
+        : audioFloat;
+
     const kaiserBeta = 5.0;
     const halfWidth = Math.ceil(12 * kaiserBeta / 5);
     const cutoff = (dstSampleRate < srcSampleRate ? 0.95 * dstSampleRate / srcSampleRate : 0.95) * 0.5;
@@ -249,14 +339,14 @@ async function resampleLinearAsync(audioFloat, srcSampleRate, dstSampleRate) {
     for (let i = 0; i < newLength; i++) {
         const center = (i + 0.5) * ratio;
         const left = Math.max(0, Math.floor(center - halfWidth));
-        const right = Math.min(audioFloat.length - 1, Math.ceil(center + halfWidth));
+        const right = Math.min(input.length - 1, Math.ceil(center + halfWidth));
 
         let sum = 0;
         let weightSum = 0;
         for (let j = left; j <= right; j++) {
             const t = center - j;
             if (Math.abs(t) < 1e-7) {
-                sum += audioFloat[j];
+                sum += input[j];
                 weightSum += 1;
             } else {
                 const sincVal = Math.sin(twoPiCutoff * t) * invPi / t;
@@ -265,7 +355,7 @@ async function resampleLinearAsync(audioFloat, srcSampleRate, dstSampleRate) {
                     ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0Beta
                     : 0;
                 const w = sincVal * windowVal;
-                sum += audioFloat[j] * w;
+                sum += input[j] * w;
                 weightSum += w;
             }
         }
@@ -794,12 +884,14 @@ class Postprocessing {
      *        chunkInfo = { chunkIndex, sampleOffset, sampleEnd, audio: Float32Array, totalSamples, isLast }
      *        audio 为该 chunk 贡献的"已确定"音频段（weightSum=1，可直接播放），按顺序拼接即得完整音频。
      */
-    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0) {
+    async runVocoderChunked(sessions, melData, totalFrames, isFP16, useStaticShapes = false, vocoderType = 'default', f0Data = null, sifiganStatsMissing = false, onChunkComplete = null, chunkFrames = 0, overlapFramesOverride = 0) {
         const _vocoderStartMs = performance.now();
         if (!sessions || !sessions.vocoder) {
             console.error(`[VocoderDiag] CRITICAL: sessions.vocoder is ${sessions ? (sessions.vocoder === undefined ? 'undefined' : 'null') : 'sessions is null'}! Vocoder will throw. sessionEPs=${JSON.stringify(sessions ? Object.keys(sessions) : [])}`);
         }
-        console.log(`[VocoderDiag] runVocoderChunked START: totalFrames=${totalFrames}, vocoderType=${vocoderType}, isFP16=${isFP16}, melDataLen=${melData.length}`);
+        if (_readDiagnosticMode()) {
+            console.log(`[VocoderDiag] runVocoderChunked START: totalFrames=${totalFrames}, vocoderType=${vocoderType}, isFP16=${isFP16}, melDataLen=${melData.length}`);
+        }
         // SiFiGAN mel 帧率（200Hz, hop=120）与 SVS 管线 mel 帧率（50Hz, hop=480）不一致。
         // SiFiGANWrapper 内部 T_audio = T_frames * 120，若直接喂 50Hz mel 会输出 1/4 期望时长。
         // 修复：在 SiFiGAN 路径下将 mel 和 F0 在时间维度 4× 上采样（最近邻），让 SiFiGAN 看到正确帧率。
@@ -825,7 +917,13 @@ class Postprocessing {
         // 之前的爆炸是 VocosFullWrapper._overlap_add 的 reshape 维度顺序 bug 导致的（已修复）。
         // effectiveMelData 保持扩散模型输出（标准化 mel），不做反标准化。
         const chunkSize = ((chunkFrames && chunkFrames > 0) ? chunkFrames : VOCODER_CHUNK_FRAMES) * SIFIGAN_UPSAMPLE_RATIO;
-        const overlapFrames = VOCODER_OVERLAP_FRAMES * SIFIGAN_UPSAMPLE_RATIO;
+        // Vocoder 分块重叠帧数：优先使用调用方透传的 overlapFramesOverride（来自
+        // settings.vocoderOverlapFrames，范围 8-96），否则回退到 VOCODER_OVERLAP_FRAMES 常量（32）。
+        // SiFiGAN 路径下乘以 SIFIGAN_UPSAMPLE_RATIO 以保持与上采样后的 mel 帧率对齐。
+        const _baseOverlapFrames = (Number.isFinite(overlapFramesOverride) && overlapFramesOverride >= 8 && overlapFramesOverride <= 96)
+            ? Math.floor(overlapFramesOverride)
+            : VOCODER_OVERLAP_FRAMES;
+        const overlapFrames = _baseOverlapFrames * SIFIGAN_UPSAMPLE_RATIO;
         const vocoderHopSize = vocoderType === 'sifigan' ? SIFIGAN_HOP_SIZE : HOP_SIZE;
         const totalSamples = effectiveTotalFrames * vocoderHopSize;
         const output = new Float32Array(totalSamples);
@@ -854,9 +952,17 @@ class Postprocessing {
                 const alignedF0 = (srcArr.length === totalFrames) ? srcArr : resizeF0Linear(srcArr, totalFrames);
                 if (SIFIGAN_UPSAMPLE_RATIO > 1) {
                     effectiveF0 = new Float32Array(effectiveTotalFrames);
+                    const ratio = SIFIGAN_UPSAMPLE_RATIO;
+                    // F0 4× 上采样：线性插值（取代最近邻"每帧重复 4 次"）。
+                    // 最近邻在 F0 阶跃处产生瞬时跳变，线性插值平滑过渡，消除激励畸变。
+                    // mel 上采样保持最近邻（模型训练时即如此），仅 F0 改线性。
                     for (let f = 0; f < totalFrames; f++) {
-                        for (let r = 0; r < SIFIGAN_UPSAMPLE_RATIO; r++) {
-                            effectiveF0[f * SIFIGAN_UPSAMPLE_RATIO + r] = alignedF0[f];
+                        const f0 = alignedF0[f];
+                        // 最后一帧无 f+1，clamp 到末尾值（保持常量）。
+                        const f1 = (f + 1 < totalFrames) ? alignedF0[f + 1] : f0;
+                        for (let r = 0; r < ratio; r++) {
+                            const frac = r / ratio;
+                            effectiveF0[f * ratio + r] = f0 * (1 - frac) + f1 * frac;
                         }
                     }
                 } else {
@@ -898,34 +1004,34 @@ class Postprocessing {
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, effectiveTotalFrames);
 
             // 诊断：检查 mel 输入是否包含 NaN（在 vocoder run 之前）+ mel 统计（标准化 mel，期望 mean≈0 std≈1）
-            // 采样统计：每 64 个采样取 1 个，避免长音频（如 2000 帧 × 128 = 256000 元素）下全量遍历的开销
+            // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
+            // 全量扫描 NaN/Inf（采样检测可能漏掉 NaN 簇），always-on 以保证致命错误不被静默
             {
-                const DIAG_STRIDE = 64;
                 let melNaN = 0, melInf = 0;
-                let melMin = Infinity, melMax = -Infinity, melSum = 0, melSumSq = 0;
-                let sampledCount = 0;
-                for (let i = 0; i < paddedMel.length; i += DIAG_STRIDE) {
-                    const v = paddedMel[i];
-                    if (Number.isNaN(v)) { melNaN++; continue; }
-                    if (!Number.isFinite(v)) { melInf++; continue; }
-                    if (v < melMin) melMin = v;
-                    if (v > melMax) melMax = v;
-                    melSum += v;
-                    melSumSq += v * v;
-                    sampledCount++;
+                for (let i = 0; i < paddedMel.length; i++) {
+                    if (Number.isNaN(paddedMel[i])) { melNaN++; }
+                    else if (!Number.isFinite(paddedMel[i])) { melInf++; }
                 }
-                // 全量扫描 NaN/Inf（采样检测可能漏掉 NaN 簇），但 min/max/mean/std 用采样值
-                if (melNaN === 0 && melInf === 0) {
-                    for (let i = 0; i < paddedMel.length; i++) {
-                        if (Number.isNaN(paddedMel[i])) { melNaN++; }
-                        else if (!Number.isFinite(paddedMel[i])) { melInf++; }
-                    }
-                }
-                const melMean = sampledCount > 0 ? melSum / sampledCount : 0;
-                const melStd = sampledCount > 0 ? Math.sqrt(Math.max(0, melSumSq / sampledCount - melMean * melMean)) : 0;
-                console.log(`[VocoderDiag] single-chunk mel stats (sampled 1/${DIAG_STRIDE}): frames=${effectiveTotalFrames}, len=${paddedMel.length}, NaN=${melNaN}, Inf=${melInf}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
                 if (melNaN > 0 || melInf > 0) {
                     console.error(`[VocoderDiag] MEL INPUT BEFORE VOCODER HAS NaN/Inf! NaN=${melNaN}, Inf=${melInf - melNaN}, total=${paddedMel.length}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}`);
+                }
+                // 采样统计：每 64 个采样取 1 个，避免长音频（如 2000 帧 × 128 = 256000 元素）下全量遍历的开销
+                if (_readDiagnosticMode()) {
+                    const DIAG_STRIDE = 64;
+                    let melMin = Infinity, melMax = -Infinity, melSum = 0, melSumSq = 0;
+                    let sampledCount = 0;
+                    for (let i = 0; i < paddedMel.length; i += DIAG_STRIDE) {
+                        const v = paddedMel[i];
+                        if (Number.isNaN(v) || !Number.isFinite(v)) continue;
+                        if (v < melMin) melMin = v;
+                        if (v > melMax) melMax = v;
+                        melSum += v;
+                        melSumSq += v * v;
+                        sampledCount++;
+                    }
+                    const melMean = sampledCount > 0 ? melSum / sampledCount : 0;
+                    const melStd = sampledCount > 0 ? Math.sqrt(Math.max(0, melSumSq / sampledCount - melMean * melMean)) : 0;
+                    console.log(`[VocoderDiag] single-chunk mel stats (sampled 1/${DIAG_STRIDE}): frames=${effectiveTotalFrames}, len=${paddedMel.length}, NaN=${melNaN}, Inf=${melInf}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
                 }
             }
 
@@ -949,23 +1055,30 @@ class Postprocessing {
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
             // 诊断：检查 vocoder 输出
+            // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
             {
-                let wavNaN = 0, wavInf = 0, wavZero = 0;
+                let wavNaN = 0, wavInf = 0;
                 for (let i = 0; i < waveform.length; i++) {
                     if (Number.isNaN(waveform[i])) wavNaN++;
                     if (!Number.isFinite(waveform[i])) wavInf++;
-                    if (waveform[i] === 0) wavZero++;
                 }
                 const expectedSamples = effectiveTotalFrames * vocoderHopSize;
                 if (wavNaN > 0 || wavInf > 0) {
                     console.error(`[VocoderDiag] VOCODER OUTPUT HAS NaN/Inf! NaN=${wavNaN}, Inf=${wavInf - wavNaN}, total=${waveform.length}, expected=${expectedSamples}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}`);
                 }
-                console.log(`[VocoderDiag] single-chunk: frames=${effectiveTotalFrames}, vocoderType=${vocoderType}, outputLen=${waveform.length}, expectedLen=${expectedSamples}, NaN=${wavNaN}, zero=${wavZero}/${waveform.length}`);
+                if (_readDiagnosticMode()) {
+                    let wavZero = 0;
+                    for (let i = 0; i < waveform.length; i++) {
+                        if (waveform[i] === 0) wavZero++;
+                    }
+                    console.log(`[VocoderDiag] single-chunk: frames=${effectiveTotalFrames}, vocoderType=${vocoderType}, outputLen=${waveform.length}, expectedLen=${expectedSamples}, NaN=${wavNaN}, zero=${wavZero}/${waveform.length}`);
+                }
             }
             // 校验输出：DML 在显存边界可能返回全零/NaN 而不抛错（silent failure）
             validateVocoderOutput(waveform, 0);
             // 诊断：vocoder 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
-            {
+            // 纯统计采样，受 diagnosticMode 控制
+            if (_readDiagnosticMode()) {
                 const hopSamples = vocoderHopSize; // 1 mel frame = hopSamples audio samples
                 const diagFrames = Math.min(10, Math.floor(waveform.length / hopSamples));
                 const parts = [];
@@ -995,6 +1108,12 @@ class Postprocessing {
             const copyLen = Math.min(waveform.length, totalSamples);
             output.set(waveform.subarray(0, copyLen));
             normalizePeakTo(output);
+            // EBU R128 响度归一化（−14 LUFS）+ true-peak 限制（−1 dBTP）。
+            // 受 enableLoudnormFinal 设置控制（默认 true）；关闭时仅走上面的
+            // normalizePeakTo(0.95) 峰值归一化（旧行为）。
+            if (_readEnableLoudnormFinal()) {
+                loudnormFinal(output, SAMPLE_RATE);
+            }
             // 单 chunk 路径：一次性推送全部音频（流式播放用）
             if (onChunkComplete) {
                 try {
@@ -1010,7 +1129,9 @@ class Postprocessing {
                     console.warn('[OnnxSVSPipeline] onChunkComplete callback error:', e.message);
                 }
             }
-            console.log(`[VocoderDiag] runVocoderChunked END (single-chunk): ${(performance.now() - _vocoderStartMs).toFixed(0)}ms, outputLen=${output.length}`);
+            if (_readDiagnosticMode()) {
+                console.log(`[VocoderDiag] runVocoderChunked END (single-chunk): ${(performance.now() - _vocoderStartMs).toFixed(0)}ms, outputLen=${output.length}`);
+            }
             return output;
         }
 
@@ -1023,12 +1144,12 @@ class Postprocessing {
         const weightSum = new Float32Array(totalSamples);
 
         const fadeSamples = overlapFrames * vocoderHopSize;
-        // Hann 交叉淡入淡出窗：使用 (i+1)/(N+1) 归一化保证 w[i] + w[N-1-i] = 1 严格成立，
-        // 避免 i=N-1 时 w < 1 与紧邻非重叠区权重=1 的微小不连续。
-        const fadeWindow = new Float32Array(fadeSamples);
-        for (let i = 0; i < fadeSamples; i++) {
-            fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * (i + 1) / (fadeSamples + 1)));
-        }
+        // WSOLA 分块交叉淡入淡出：取代旧的对称 Hann OLA 窗。
+        // 旧 fadeWindow 已移除——WSOLA 内部使用互相关搜索最佳对齐后再做 Hann OLA，
+        // 消除有音高信号在 chunk 边界的 flanging/梳状滤波。
+        // prevChunkTail 在循环中跨 chunk 维护：每个非末尾 chunk 保存其波形尾部
+        // (fadeSamples 长)，下个 chunk 用 WSOLA 与自身头部对齐后写回重叠区。
+        let prevChunkTail = null;
 
         // 第一阶段：仅计算所有 chunk 的边界元数据（不创建张量）。
         // 旧版本在此阶段预创建所有 chunk 的 melTensor/f0Tensor 并存入 chunkSpecs，
@@ -1099,11 +1220,12 @@ class Postprocessing {
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
             results = null;
-            // chunk 间 GPU 排空：非末尾 chunk 时等待 50ms 让 DML 回收上 chunk 的 GPU 资源。
-            // 旧版 yieldToEventLoop (setImmediate ~1ms) 不够 DML 回收，连续 chunk 推理时
-            // GPU 资源累积导致 887A0006 (GPU device removed) — 尤其长音频 2+ chunks 时复现。
+            // chunk 间 GPU 排空：非末尾 chunk 时使用自适应排空（正常 setImmediate yield，
+            // OOM 后 200ms 长等待）。自适应排空由 utils.gpuDrainAdaptive 实现，OOM 标志由
+            // pipeline/index.js 的 OOM catch 通过 markGpuOom() 设置。
+            // 旧版固定 50ms gpuDrain 在无 OOM 压力下浪费累积时间，已替换为自适应版本。
             if (i < totalChunkCount - 1) {
-                await gpuDrain();
+                await gpuDrainAdaptive();
             } else {
                 await yieldToEventLoop();
             }
@@ -1111,7 +1233,8 @@ class Postprocessing {
             // 校验输出：拦截 DML silent failure（全零/NaN）
             validateVocoderOutput(waveform, i);
             // 诊断：首 chunk 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
-            if (spec.isFirst) {
+            // 纯统计采样，受 diagnosticMode 控制
+            if (spec.isFirst && _readDiagnosticMode()) {
                 const hopSamples = vocoderHopSize;
                 const diagFrames = Math.min(10, Math.floor(waveform.length / hopSamples));
                 const parts = [];
@@ -1155,21 +1278,40 @@ class Postprocessing {
             }
             const writeStart = spec.chunkStart * vocoderHopSize;
             const writeLen = Math.min(waveform.length, totalSamples - writeStart);
-
-            for (let j = 0; j < writeLen; j++) {
-                const outIdx = writeStart + j;
-                if (outIdx >= totalSamples) break;
-                let w = 1.0;
-                // 头部 fade：非首 chunk 的前 overlapFrames 帧
-                if (!spec.isFirst && j < fadeSamples) {
-                    w = fadeWindow[j];
+            // WSOLA 交叉淡入淡出写回：
+            // - 首 chunk 或样本不足：直接整段写入（weight=1）。
+            // - 非首 chunk 且 prevChunkTail/currHead 均有足够样本：WSOLA 对齐后写入重叠区
+            //   （覆盖前一 chunk 尾部贡献），再写入非重叠区。
+            // - 非末 chunk：保存尾部 fadeSamples 样本到 prevChunkTail 供下个 chunk WSOLA。
+            const overlapWriteLen = Math.min(fadeSamples, writeLen);
+            const canWsola = !spec.isFirst && prevChunkTail && overlapWriteLen > 0 &&
+                prevChunkTail.length >= overlapWriteLen && waveform.length >= overlapWriteLen;
+            if (canWsola) {
+                const currChunkHead = waveform.subarray(0, overlapWriteLen);
+                const wsolaResult = wsolaCrossfade(prevChunkTail, currChunkHead, overlapWriteLen, SAMPLE_RATE);
+                for (let j = 0; j < overlapWriteLen; j++) {
+                    const outIdx = writeStart + j;
+                    if (outIdx >= totalSamples) break;
+                    output[outIdx] = wsolaResult[j]; // 覆盖前一 chunk 尾部
+                    weightSum[outIdx] = 1;
                 }
-                // 尾部 fade：非末 chunk 的后 overlapFrames 帧
-                if (!spec.isLast && j >= writeLen - fadeSamples) {
-                    w = Math.min(w, 1.0 - fadeWindow[writeLen - 1 - j]);
+                for (let j = overlapWriteLen; j < writeLen; j++) {
+                    const outIdx = writeStart + j;
+                    if (outIdx >= totalSamples) break;
+                    output[outIdx] = waveform[j];
+                    weightSum[outIdx] = 1;
                 }
-                output[outIdx] += waveform[j] * w;
-                weightSum[outIdx] += w;
+            } else {
+                for (let j = 0; j < writeLen; j++) {
+                    const outIdx = writeStart + j;
+                    if (outIdx >= totalSamples) break;
+                    output[outIdx] = waveform[j];
+                    weightSum[outIdx] = 1;
+                }
+            }
+            // 保存尾部供下个 chunk WSOLA 对齐（仅非末尾 chunk 且样本足够）
+            if (!spec.isLast && fadeSamples > 0 && waveform.length >= fadeSamples) {
+                prevChunkTail = waveform.slice(waveform.length - fadeSamples);
             }
 
             // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，overlap crossfade 权重和为 1）
@@ -1209,10 +1351,20 @@ class Postprocessing {
 
         normalizePeakTo(output, totalSamples);
 
+        // EBU R128 响度归一化（−14 LUFS）+ true-peak 限制（−1 dBTP）。
+        // 受 enableLoudnormFinal 设置控制（默认 true）；关闭时仅走上面的
+        // normalizePeakTo(0.95) 峰值归一化（旧行为）。多 chunk 路径在所有
+        // chunk 合并归一化后统一应用，避免逐 chunk 响度跳变。
+        if (_readEnableLoudnormFinal()) {
+            loudnormFinal(output, SAMPLE_RATE);
+        }
+
         const elapsed = performance.now() - t0;
         const logFrames = SIFIGAN_UPSAMPLE_RATIO > 1 ? `${effectiveTotalFrames} (${totalFrames}x${SIFIGAN_UPSAMPLE_RATIO})` : `${totalFrames}`;
         console.log(`[OnnxSVSPipeline] Vocoder chunked: ${logFrames} frames, ${totalChunkCount} chunks (serial, streaming), ${elapsed.toFixed(0)}ms`);
-        console.log(`[VocoderDiag] runVocoderChunked END (multi-chunk): ${(performance.now() - _vocoderStartMs).toFixed(0)}ms, outputLen=${output.length}`);
+        if (_readDiagnosticMode()) {
+            console.log(`[VocoderDiag] runVocoderChunked END (multi-chunk): ${(performance.now() - _vocoderStartMs).toFixed(0)}ms, outputLen=${output.length}`);
+        }
         return output;
     }
 

@@ -1,6 +1,24 @@
+const ort = require('onnxruntime-node');
 const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
-const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrain } = require('./utils');
+const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16 } = require('./utils');
 const { createSampler } = require('./samplers');
+const { wsolaCrossfadeMel } = require('./wsola');
+
+/**
+ * Read diagnosticMode flag lazily from settings. Returns false if settings
+ * cannot be loaded (e.g. running outside Electron main process, in tests).
+ * Used to gate [DiffusionDiag] statistical console.log blocks; NaN/Inf fatal
+ * console.error is always-on regardless of this flag.
+ * @returns {boolean}
+ */
+function _readDiagnosticMode() {
+    try {
+        const { loadSettings } = require('../../main/settings');
+        return loadSettings().diagnosticMode === true;
+    } catch (_) {
+        return false;
+    }
+}
 
 /**
  * Diffusion sampling loop (the core synthesis algorithm)
@@ -55,8 +73,8 @@ class Diffusion {
 
         const pred = outputToFloat32(results['flow_pred']);
 
-        // 诊断：检查第一个 step 的输出
-        if (tVal < 0.1) {
+        // 诊断：检查第一个 step 的输出（gated by diagnosticMode；NaN/Inf 致命错误见下方 always-on console.error）
+        if (tVal < 0.1 && _readDiagnosticMode()) {
             let predNaN = 0, predInf = 0;
             for (let i = 0; i < pred.length; i++) {
                 if (Number.isNaN(pred[i])) predNaN++;
@@ -112,8 +130,8 @@ class Diffusion {
         const xtTensor = createFloatTensor(floatType, xtPadded, [1, seqLen, MEL_DIM]);
         const tTensor = createFloatTensor(floatType, new Float32Array([tVal]), [1]);
 
-        // 诊断第一步：输入数据统计
-        if (tVal < 0.1) {
+        // 诊断第一步：输入数据统计（gated by diagnosticMode）
+        if (tVal < 0.1 && _readDiagnosticMode()) {
             let xtNaN = 0, xtInf = 0, xtMin = Infinity, xtMax = -Infinity;
             for (let i = 0; i < xtPadded.length; i++) {
                 if (Number.isNaN(xtPadded[i])) { xtNaN++; continue; }
@@ -122,7 +140,7 @@ class Diffusion {
                 if (xtPadded[i] > xtMax) xtMax = xtPadded[i];
             }
             console.log(`[DiffusionDiag] Input xt: t=${tVal.toFixed(4)}, len=${xtPadded.length}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}`);
-            
+
             // Check cond tensor data
             const condData = condTensor.data;
             let cNaN = 0, cInf = 0, cMin = Infinity, cMax = -Infinity;
@@ -164,15 +182,29 @@ class Diffusion {
     /**
      * Run the full diffusion sampling loop
      *
+     * Task 1 (batch merge): when cfgStrength > 0, cond + uncond are merged
+     *   into a single [2, seqLen, MEL_DIM] batched session.run call (was 2
+     *   separate calls). Aligns DML path with webnn/diffusion.js.
+     * Task 6 (tensor reuse): xtInputTensor / tTensor / cfgXtTensor / cfgTTensor
+     *   are pre-allocated once before the loop and their .data buffers are
+     *   rewritten each step (no per-step `new ort.Tensor`).
+     * Task 7 (Welford): combine uses single-pass Welford online variance
+     *   instead of three-pass sum/Var/rescale.
+     *
      * @param {string} [samplerName='euler'] - 求解器名称，见 samplers/index.js
      */
     async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = 'euler') {
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
+        const useCfg = cfgStrength > 0;
+        // Task 1: cond + uncond batched into a single [2, seqLen, MEL_DIM] call.
+        // No-CFG path uses batch=1 (cond only).
+        const diffBatch = useCfg ? 2 : 1;
+        const diagnosticMode = _readDiagnosticMode();
 
-        // 诊断：输出 diffStep session 的输入元数据
-        if (sessions.diffStep) {
+        // 诊断：输出 diffStep session 的输入元数据（gated by diagnosticMode）
+        if (diagnosticMode && sessions.diffStep) {
             try {
                 const inputMeta = sessions.diffStep.inputMetadata;
                 console.log('[DiffusionDiag] diffStep input metadata:');
@@ -190,42 +222,87 @@ class Diffusion {
                 console.log('[DiffusionDiag] Failed to read diffStep inputMetadata:', e.message);
             }
         }
-        // 条件分支 mask：所有帧均有效（含 prompt）
-        const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
-        // 非条件分支（target-only，对齐官方 PyTorch reverse_diffusion）：
-        // uncond 使用 target-only 序列（长度 = totalFrames，无 prompt 段），
-        // cond 为 target-only zeros，mask 为 target-only x_mask（全 1）。
-        // 官方：uncond_flow_pred = diff_estimator(xt, t, zeros_like(cond)[:, :xt.shape[1], :], x_mask)
-        const uncondMask = new Float32Array(totalFrames).fill(1);
-        const xtInputBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
-        // uncond 输入：target-only 序列（无 prompt 段），直接从 0 开始填 xt
-        const xtUncondBuf = new Float32Array(totalFrames * MEL_DIM);
-        // 非条件 cond：target-only 全零
-        const uncondCondBuf = new Float32Array(totalFrames * COND_DIM);
-        const cfgPredBuf = new Float32Array(totalFrames * MEL_DIM);
 
-        // 预构建 cond/mask 张量（跨步不变，循环外构建一次，与 WebNN 路径对齐）
         const padFloat = (src, len) => {
             if (src.length >= len) return src;
             const padded = new Float32Array(len);
             padded.set(src);
             return padded;
         };
+
+        // 条件分支 mask：所有 prompt+target 帧均有效
+        const frameMask = new Float32Array(seqLen).fill(0);
+        for (let i = 0; i < totalFramesWithPrompt; i++) frameMask[i] = 1;
+
         const condPadded = useStaticShapes ? padFloat(combinedCond, seqLen * COND_DIM) : combinedCond;
         const condMaskPadded = useStaticShapes ? padFloat(frameMask, seqLen) : frameMask;
-        // uncond 张量维度：target-only（useStaticShapes 时填充到 NPU_STATIC_SEQ_LEN）
-        const uncondSeqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
-        const uncondCondPadded = useStaticShapes ? padFloat(uncondCondBuf, uncondSeqLen * COND_DIM) : uncondCondBuf;
-        const uncondMaskPadded = useStaticShapes ? padFloat(uncondMask, uncondSeqLen) : uncondMask;
-        const condTensorCached = createFloatTensor(floatType, condPadded, [1, seqLen, COND_DIM]);
-        const condMaskTensorCached = createFloatTensor(floatType, condMaskPadded, [1, seqLen]);
-        const uncondCondTensorCached = createFloatTensor(floatType, uncondCondPadded, [1, uncondSeqLen, COND_DIM]);
-        const uncondMaskTensorCached = createFloatTensor(floatType, uncondMaskPadded, [1, uncondSeqLen]);
+
+        // cond 分支输入 buffer：[ptMelData | xtData]，prompt 段在循环外拷贝一次
+        const xtInputBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
+        xtInputBuf.set(ptMelData, 0);
+
+        // ===== Task 6: pre-allocate per-step tensors once, reuse .data =====
+        // No-CFG (batch=1) path tensors
+        const condTensorConst = createFloatTensor(floatType, condPadded, [1, seqLen, COND_DIM]);
+        const condMaskTensorConst = createFloatTensor(floatType, condMaskPadded, [1, seqLen]);
+        let xtInputTensor, tTensorBuf, tTensor;
+        if (floatType === 'float16') {
+            xtInputTensor = new ort.Tensor('float16', new Uint16Array(seqLen * MEL_DIM), [1, seqLen, MEL_DIM]);
+            tTensorBuf = new Uint16Array(1);
+            tTensor = new ort.Tensor('float16', tTensorBuf, [1]);
+        } else {
+            xtInputTensor = new ort.Tensor('float32', new Float32Array(seqLen * MEL_DIM), [1, seqLen, MEL_DIM]);
+            tTensorBuf = new Float32Array(1);
+            tTensor = new ort.Tensor('float32', tTensorBuf, [1]);
+        }
+
+        // ===== Task 1: CFG batch tensors (only when useCfg) =====
+        // Row 0 = cond (full xt incl. prompt, cond=combinedCond, mask all ones for prompt+target)
+        // Row 1 = uncond (target xt at position 0..totalFrames-1, padding zeros,
+        //                  cond=zeros, mask ones for target only zeros for padding)
+        // Aligns with webnn/diffusion.js lines 60-101 (DML path previously used
+        // a target-only uncond seqLen which is now folded into the batch).
+        let cfgXtTensor = null, cfgTTensor = null, cfgTBuf = null;
+        let cfgCondTensor = null, cfgMaskTensor = null;
+        let cfgBatchBuf = null, cfgPredBuf = null;
+        if (useCfg) {
+            cfgBatchBuf = new Float32Array(diffBatch * seqLen * MEL_DIM);
+            cfgPredBuf = new Float32Array(totalFrames * MEL_DIM);
+            const cfgCondBuf = new Float32Array(diffBatch * seqLen * COND_DIM);
+            const cfgMaskBuf = new Float32Array(diffBatch * seqLen);
+            // Row 0 (cond): combinedCond + mask all ones for prompt+target
+            cfgCondBuf.set(condPadded, 0);
+            cfgMaskBuf.fill(1, 0, totalFramesWithPrompt);
+            // Row 1 (uncond): cond zeros (already zero), mask ones for target only
+            cfgMaskBuf.fill(1, seqLen, seqLen + totalFrames);
+            // (positions seqLen+totalFrames .. 2*seqLen-1 remain 0, padding)
+
+            cfgCondTensor = createFloatTensor(floatType, cfgCondBuf, [diffBatch, seqLen, COND_DIM]);
+            cfgMaskTensor = createFloatTensor(floatType, cfgMaskBuf, [diffBatch, seqLen]);
+
+            if (floatType === 'float16') {
+                cfgXtTensor = new ort.Tensor('float16', new Uint16Array(diffBatch * seqLen * MEL_DIM), [diffBatch, seqLen, MEL_DIM]);
+                cfgTBuf = new Uint16Array(diffBatch);
+                cfgTTensor = new ort.Tensor('float16', cfgTBuf, [diffBatch]);
+            } else {
+                cfgXtTensor = new ort.Tensor('float32', cfgBatchBuf, [diffBatch, seqLen, MEL_DIM]);
+                cfgTBuf = new Float32Array(diffBatch);
+                cfgTTensor = new ort.Tensor('float32', cfgTBuf, [diffBatch]);
+            }
+        }
+
+        const _disposeAllTensors = () => {
+            disposeTensor(condTensorConst);
+            disposeTensor(condMaskTensorConst);
+            disposeTensor(xtInputTensor);
+            disposeTensor(tTensor);
+            if (cfgXtTensor) disposeTensor(cfgXtTensor);
+            if (cfgTTensor) disposeTensor(cfgTTensor);
+            if (cfgCondTensor) disposeTensor(cfgCondTensor);
+            if (cfgMaskTensor) disposeTensor(cfgMaskTensor);
+        };
 
         const progressPerStep = progressRange / totalSteps;
-
-        // prompt frames在循环中不变，预先拷贝一次
-        xtInputBuf.set(ptMelData, 0);
 
         // ===== 求解器抽象 =====
         // evalDiffStep(t, xtOverride?): 执行 cond + (可选)uncond 推理，返回独立副本
@@ -234,7 +311,6 @@ class Diffusion {
         // 注：每次 runDiffusionLoop 新建 sampler 实例。Extrapolated Euler 的跨步 v_prev
         // 缓存在 chunk 边界会丢失（分块路径每 chunk 新建），退化为局部 Euler，不影响正确性。
         const sampler = createSampler(samplerName);
-        const useCfg = cfgStrength > 0;
 
         // 预分配复用缓冲区（跨步复用，0 per-step 分配）
         const targetLen = totalFrames * MEL_DIM;
@@ -247,76 +323,147 @@ class Diffusion {
 
         // evalDiffStep: 执行 cond + (可选)uncond 推理，返回 {condPred, uncondPred}
         // xtOverride 可选：用于多步评估求解器（如 Heun）的预测子步骤，覆盖默认 xt.data
+        //
+        // Task 1: when useCfg, cond + uncond are merged into a single
+        // [2, seqLen, MEL_DIM] batched session.run call (halves NFE session
+        // calls). When !useCfg, batch=1 cond-only path is used.
         const evalDiffStep = async (t, xtOverride) => {
             const xtData = xtOverride || xt.data;
             // cond 分支：xtInputBuf = [ptMelData | xtData]
             xtInputBuf.set(xtData, ptFrameCount * MEL_DIM);
-            const condPred = await this._runDiffStepWithCachedTensors(
-                sessions, xtInputBuf, t, condTensorCached, condMaskTensorCached,
-                totalFramesWithPrompt, isFP16, useStaticShapes
-            );
 
-            let uncondPred = null;
             if (useCfg) {
-                // uncond 分支：target-only 序列
-                xtUncondBuf.set(xtData, 0);
-                uncondPred = await this._runDiffStepWithCachedTensors(
-                    sessions, xtUncondBuf, t, uncondCondTensorCached, uncondMaskTensorCached,
-                    totalFrames, isFP16, useStaticShapes
-                );
+                // === Task 1: CFG batched call ===
+                // Fill cfgBatchBuf: row 0 = xtInputBuf (prompt+target), row 1 = target xt at pos 0
+                cfgBatchBuf.fill(0);
+                cfgBatchBuf.set(xtInputBuf, 0);  // row 0: full xt (prompt + target)
+                const row1Off = seqLen * MEL_DIM;
+                for (let f = 0; f < totalFrames; f++) {
+                    const srcOff = f * MEL_DIM;
+                    const dstOff = row1Off + f * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        cfgBatchBuf[dstOff + d] = xtData[srcOff + d];
+                    }
+                }
+                // Write t into pre-allocated t buffer
+                if (floatType === 'float16') {
+                    batchFloat32ToFloat16(cfgBatchBuf, cfgXtTensor.data, cfgBatchBuf.length);
+                    cfgTBuf[0] = float32ToFloat16(t);
+                    cfgTBuf[1] = float32ToFloat16(t);
+                } else {
+                    // FP32: cfgXtTensor.data aliases cfgBatchBuf (same buffer);
+                    // tBuf is Float32Array, just fill.
+                    cfgTBuf[0] = t;
+                    cfgTBuf[1] = t;
+                }
+
+                let batchResults;
+                try {
+                    batchResults = await sessions.diffStep.run({
+                        xt_input: cfgXtTensor,
+                        t: cfgTTensor,
+                        cond: cfgCondTensor,
+                        xt_mask: cfgMaskTensor,
+                    });
+                } catch (err) {
+                    throw err;
+                }
+                const batchPredRaw = batchResults['flow_pred'];
+                const batchPred = outputToFloat32(batchPredRaw);
+                // outputToFloat32 returns a fresh Float32Array; safe to dispose source now
+                disposeTensor(batchPredRaw);
+
+                // Split batchPred [diffBatch, seqLen, MEL_DIM] into cond + uncond target slices.
+                // Row 0 (cond): target at positions ptFrameCount..ptFrameCount+totalFrames-1
+                // Row 1 (uncond): target at positions 0..totalFrames-1 (no prompt offset)
+                const condPred = new Float32Array(targetLen);
+                const uncondPred = new Float32Array(targetLen);
+                for (let f = 0; f < totalFrames; f++) {
+                    const condSrc = (ptFrameCount + f) * MEL_DIM;
+                    const uncondSrc = (seqLen + f) * MEL_DIM;
+                    const dstBase = f * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        condPred[dstBase + d] = batchPred[condSrc + d];
+                        uncondPred[dstBase + d] = batchPred[uncondSrc + d];
+                    }
+                }
+                return { condPred, uncondPred };
             }
-            return { condPred, uncondPred };
+
+            // === No-CFG: batch=1 cond-only call (Task 6 pre-allocated tensors) ===
+            if (floatType === 'float16') {
+                batchFloat32ToFloat16(xtInputBuf, xtInputTensor.data, xtInputBuf.length);
+                tTensorBuf[0] = float32ToFloat16(t);
+            } else {
+                // FP32: xtInputTensor.data is a fresh Float32Array buffer; copy xtInputBuf in
+                xtInputTensor.data.set(xtInputBuf);
+                tTensorBuf[0] = t;
+            }
+
+            let results;
+            try {
+                results = await sessions.diffStep.run({
+                    xt_input: xtInputTensor,
+                    t: tTensor,
+                    cond: condTensorConst,
+                    xt_mask: condMaskTensorConst,
+                });
+            } catch (err) {
+                throw err;
+            }
+            const predRaw = results['flow_pred'];
+            const pred = outputToFloat32(predRaw);
+            disposeTensor(predRaw);
+
+            // Slice target segment (skip prompt prefix)
+            const condPred = new Float32Array(targetLen);
+            for (let f = 0; f < totalFrames; f++) {
+                const tgtOffset = (ptFrameCount + f) * MEL_DIM;
+                const dstBase = f * MEL_DIM;
+                for (let d = 0; d < MEL_DIM; d++) {
+                    condPred[dstBase + d] = pred[tgtOffset + d];
+                }
+            }
+            return { condPred, uncondPred: null };
         };
 
         // combine: CFG + Rescale 合并，写入 vBuf（复用），返回 vBuf 引用
         // 无 CFG 时直接拷贝 cond 分支 target 段到 vBuf。
-        // 有 CFG 时使用 three-pass（与 WebNN 路径完全一致）：
-        //   Pass 1: 计算 cfgVal → cfgPredBuf，累加 posSum + cfgAdjSum
-        //   Pass 2: two-pass 方差（数值稳定，不使用 sumSq - sum²/n 的 one-pass 公式）
-        //   Pass 3: 应用 rescale，写入 vBuf
+        // 有 CFG 时使用 single-pass Welford online variance（Task 7）：
+        //   Pass 1: 计算 cfgVal → cfgPredBuf，同时 Welford 累加 posMean/posM2 + cfgAdjMean/cfgAdjM2
+        //   Pass 2: 用 Welford 最终值算 std/rescale，写入 vBuf
+        // 数值与原 three-pass 实现在 1e-7 内一致（Bessel 校正 N-1 分母）。
         const combine = (condPred, uncondPred) => {
             const v = buffers.vBuf;
             if (!useCfg) {
-                // 无 CFG：直接取 cond 分支 target 段 → vBuf
-                for (let f = 0; f < totalFrames; f++) {
-                    const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        v[f * MEL_DIM + d] = condPred[tgtOffset + d];
-                    }
-                }
+                // 无 CFG：condPred 已是 target 段（evalDiffStep 切片过），直接拷贝
+                v.set(condPred);
                 return v;
             }
-            // Pass 1: cfgVal → cfgPredBuf, 累加 sum
-            let posSum = 0, cfgAdjSum = 0;
-            for (let f = 0; f < totalFrames; f++) {
-                const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                for (let d = 0; d < MEL_DIM; d++) {
-                    const condVal = condPred[tgtOffset + d];
-                    const uncondVal = uncondPred[f * MEL_DIM + d];
-                    const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
-                    cfgPredBuf[f * MEL_DIM + d] = cfgVal;
-                    posSum += condVal;
-                    cfgAdjSum += cfgVal;
-                }
+            // Pass 1: cfgVal → cfgPredBuf, Welford accumulate posMean/posM2 + cfgAdjMean/cfgAdjM2
+            let posMean = 0, posM2 = 0;
+            let cfgAdjMean = 0, cfgAdjM2 = 0;
+            let n = 0;
+            for (let i = 0; i < targetLen; i++) {
+                const condVal = condPred[i];
+                const uncondVal = uncondPred[i];
+                const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
+                cfgPredBuf[i] = cfgVal;
+                n++;
+                // Welford for posMean/posM2 (on condVal)
+                const posDelta = condVal - posMean;
+                posMean += posDelta / n;
+                posM2 += posDelta * (condVal - posMean);
+                // Welford for cfgAdjMean/cfgAdjM2 (on cfgVal)
+                const cfgDelta = cfgVal - cfgAdjMean;
+                cfgAdjMean += cfgDelta / n;
+                cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
             }
-            const posMean = posSum / targetLen;
-            const cfgAdjMean = cfgAdjSum / targetLen;
-            // Pass 2: two-pass 方差（数值稳定）
-            let posVarSum = 0, cfgAdjVarSum = 0;
-            for (let f = 0; f < totalFrames; f++) {
-                const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                for (let d = 0; d < MEL_DIM; d++) {
-                    const pv = condPred[tgtOffset + d] - posMean;
-                    posVarSum += pv * pv;
-                    const cv = cfgPredBuf[f * MEL_DIM + d] - cfgAdjMean;
-                    cfgAdjVarSum += cv * cv;
-                }
-            }
-            // Bessel 校正（N-1 分母），对齐 PyTorch torch.std()
-            const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
-            const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
+            // Pass 2: std/rescale + write vBuf
+            // Bessel 校正（N-1 分母），对齐 PyTorch torch.std() 与原 two-pass 实现
+            const posStd = Math.sqrt(Math.max(0, posM2) / Math.max(1, n - 1));
+            const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjM2) / Math.max(1, n - 1));
             const rescale = posStd / (cfgAdjStd + 1e-8);
-            // Pass 3: 应用 rescale → vBuf
             for (let i = 0; i < targetLen; i++) {
                 const cfgVal = cfgPredBuf[i];
                 v[i] = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
@@ -345,12 +492,13 @@ class Diffusion {
                 if (step % 8 === 7) {
                     await new Promise(r => setTimeout(r, 20));
                 } else if (totalFrames > 256) {
-                    // 长片段每步 yield：combine 的 3 趟全数组遍历（256k+ 迭代/趟）
-                    // 会阻塞主线程，原实现在 CFG pass 1/2 之间有 setImmediate yield。
+                    // 长片段每步 yield：combine 的全数组遍历（256k+ 迭代）
+                    // 会阻塞主线程，需要 setImmediate yield。
                     await new Promise(r => setImmediate(r));
                 }
             }
-            // 诊断：检测扩散输出是否包含 NaN/Inf + 统计输出分布
+            // 诊断：检测扩散输出是否包含 NaN/Inf + 统计输出分布（gated by diagnosticMode）
+            // NaN/Inf 致命错误 console.error 始终输出（always-on），不受 diagnosticMode 影响。
             {
                 let xtNaN = 0, xtInf = 0;
                 let xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
@@ -367,7 +515,9 @@ class Diffusion {
                 }
                 const xtMean = xtSum / xtLen;
                 const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
-                console.log(`[DiffusionDiag] OUTPUT xt: frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}, nfe=${totalNFE}`);
+                if (diagnosticMode) {
+                    console.log(`[DiffusionDiag] OUTPUT xt: frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}, nfe=${totalNFE}`);
+                }
                 if (xtNaN > 0 || xtInf > 0) {
                     console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! NaN=${xtNaN}, Inf=${xtInf - xtNaN}, total=${xtLen}, frames=${totalFrames}, mean=${xtMean.toFixed(6)}`);
 
@@ -378,11 +528,8 @@ class Diffusion {
                 }
             }
         } finally {
-            // 循环结束：释放预构建的 cond/mask 张量
-            disposeTensor(condTensorCached);
-            disposeTensor(condMaskTensorCached);
-            disposeTensor(uncondCondTensorCached);
-            disposeTensor(uncondMaskTensorCached);
+            // Task 6: dispose all pre-allocated tensors on exit (success or exception)
+            _disposeAllTensors();
         }
     }
 
@@ -472,7 +619,7 @@ class Diffusion {
      * @returns {Promise<{newCommitted: number}>} 本块完成后新确定的帧数（不含重叠区，末尾块为 chunkEnd）
      */
     async _runSingleDiffusionChunk(ctx, spec, onProgress, progressStart, progressRange) {
-        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, fadeWindow } = ctx;
+        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap } = ctx;
         const { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast } = spec;
         const xtOut = xt.data;
 
@@ -502,35 +649,34 @@ class Diffusion {
             chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName
         );
 
-        // 4. Hann 交叉淡入淡出写回
+        // 4. WSOLA mel 域交叉淡入淡出写回（取代对称 Hann 加权混合）
         if (isFirst) {
             // 首 chunk：无前序数据，直接整段 memcpy
             xtOut.set(subXt.data.subarray(0, currentChunkFrames * MEL_DIM), chunkStart * MEL_DIM);
         } else {
-            // 重叠区：逐帧加权混合（overlap 帧 × MEL_DIM 元素，无法用 set 批量）
-            const ov = overlap;
-            for (let f = 0; f < ov && f < currentChunkFrames; f++) {
-                const dstOffset = (chunkStart + f) * MEL_DIM;
-                const srcOffset = f * MEL_DIM;
-                const w = fadeWindow[f];
-                const invW = 1 - w;
-                for (let d = 0; d < MEL_DIM; d++) {
-                    xtOut[dstOffset + d] = xtOut[dstOffset + d] * invW + subXt.data[srcOffset + d] * w;
-                }
+            // WSOLA mel 域交叉淡入淡出：prevTailMel 为已提交的前一 chunk 尾部 mel，
+            // currHeadMel 为当前 chunk 头部 mel，按帧用余弦相似度对齐后 Hann OLA，
+            // 消除有音高信号在 chunk 边界的 flanging/梳状滤波。
+            const actualOv = Math.min(overlap, currentChunkFrames);
+            if (actualOv > 0) {
+                const prevTailMel = xtOut.subarray(chunkStart * MEL_DIM, (chunkStart + actualOv) * MEL_DIM);
+                const currHeadMel = subXt.data.subarray(0, actualOv * MEL_DIM);
+                const wsolaMel = wsolaCrossfadeMel(prevTailMel, currHeadMel, actualOv, MEL_DIM);
+                xtOut.set(wsolaMel, chunkStart * MEL_DIM);
             }
             // 非重叠区：用 TypedArray.set 走 memcpy，比逐元素快 2-3 倍
-            const nonOverlapStart = ov * MEL_DIM;
-            const nonOverlapLen = (currentChunkFrames - ov) * MEL_DIM;
+            const nonOverlapStart = actualOv * MEL_DIM;
+            const nonOverlapLen = (currentChunkFrames - actualOv) * MEL_DIM;
             if (nonOverlapLen > 0) {
                 xtOut.set(
                     subXt.data.subarray(nonOverlapStart, nonOverlapStart + nonOverlapLen),
-                    (chunkStart + ov) * MEL_DIM
+                    (chunkStart + actualOv) * MEL_DIM
                 );
             }
         }
 
-        // 5. GPU 排空
-        await gpuDrain();
+        // 5. GPU 排空（自适应：正常 setImmediate yield，OOM 后 200ms 长等待）
+        await gpuDrainAdaptive();
 
         // 6. 计算 committed 帧数
         const newCommitted = isLast ? chunkEnd : Math.max(0, chunkEnd - overlap);

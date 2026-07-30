@@ -10,11 +10,27 @@ const { buildSessionOptions } = require('../shared/ortOptions');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
-const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram } = require('./postprocessing');
+const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram, isVramOOMError } = require('./postprocessing');
 const { AudioSegmentation } = require('./audioSegmentation');
-const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain, gpuDrainLong } = require('./utils');
+const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain, gpuDrainLong, markGpuOom } = require('./utils');
 const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
 const { getEffectiveVocoderChunkFrames } = require('../../main/gpuInfo');
+
+/**
+ * Read diagnosticMode flag lazily from settings. Returns false if settings
+ * cannot be loaded (e.g. running outside Electron main process, in tests).
+ * Used to gate [DiffusionDiag] / [VocoderDiag] statistical console.log
+ * blocks; NaN/Inf fatal console.error is always-on regardless of this flag.
+ * @returns {boolean}
+ */
+function _readDiagnosticMode() {
+    try {
+        const { loadSettings } = require('../../main/settings');
+        return loadSettings().diagnosticMode === true;
+    } catch (_) {
+        return false;
+    }
+}
 
 // Mel frame rate (Hz) = sample_rate / hop_size; used for chunk time calculation
 const MEL_FRAME_RATE = SAMPLE_RATE / HOP_SIZE;
@@ -46,6 +62,14 @@ const SESSION_KEYS = [
     'noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder',
     'f0Encoder', 'preflow', 'condEmb', 'diffStep', 'vocoder', 'melTransform',
 ];
+
+// Module-level dynamic release flag for diffStep-before-vocoder.
+// Set to true when a vocoder inference throws isVramOOMError; the next
+// _maybeUnloadDiffStepBeforeVocoder call will then return true (release)
+// regardless of the user setting, and the flag is cleared after that
+// segment completes. This avoids imposing the 1-3s/segment reload tax on
+// all users while still recovering from rare OOM events.
+let _dynamicReleaseDiffStepNextSegment = false;
 
 class OnnxSVSPipeline {
     constructor(modelDir, options = {}) {
@@ -1595,6 +1619,7 @@ class OnnxSVSPipeline {
         // Vocoder is loaded via DML (dynamic shapes), never use static shape padding
         // SiFiGAN 双输入：传入 vocoderType、F0 序列、stats 缺失标志；default vocoder 仅用 mel
         const chunkFrames = this._resolveVocoderChunkFrames();
+        const overlapFramesOverride = this._resolveVocoderOverlapFrames();
         console.log(`[OnnxSVSPipeline] Vocoder EP: ${this.sessionEPs.vocoder || 'unknown'}, vocoderIsFP16=${this.vocoderIsFP16}, isFP16=${this.isFP16}, vocoderType=${this.vocoderType}, resolvedFile=${this._resolvedVocoderFile}`);
         if (this.sessionEPs.vocoder !== 'dml') {
             console.warn(`[OnnxSVSPipeline] WARNING: Vocoder is NOT on DML (EP=${this.sessionEPs.vocoder}), will be slow and may explain low GPU usage!`);
@@ -1613,7 +1638,8 @@ class OnnxSVSPipeline {
         }
 
         // 临时释放 diffStep session，让 vocoder 推理独占 GPU 显存。
-        // 触发条件：DML 后端 + 用户开启 releaseDiffStepBeforeVocoder + diffStep 当前已加载。
+        // 触发条件：DML 后端 + (用户开启 releaseDiffStepBeforeVocoder || 上一次 vocoder
+        //   抛 isVramOOMError 设置的 _dynamicReleaseDiffStepNextSegment) + diffStep 当前已加载。
         // 不释放 vocoder（马上要用），不释放 encoders（体积小）。
         // WebNN 路径跳过（diffStep 在渲染进程，与主进程 vocoder 互不抢占显存）。
         const releasedDiffStep = this._maybeUnloadDiffStepBeforeVocoder();
@@ -1631,8 +1657,46 @@ class OnnxSVSPipeline {
         try {
             return await this._postprocessing.runVocoderChunked(
                 this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
-                this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames
+                this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
             );
+        } catch (err) {
+            // Dynamic OOM recovery: if this is the first OOM in this segment
+            // and we did NOT already release diffStep, set the dynamic flag and
+            // retry the segment with diffStep released first. After the retry
+            // (success or another failure), the finally block clears the flag
+            // so behavior reverts to the user setting for the next segment.
+            if (isVramOOMError(err) && !releasedDiffStep && !_dynamicReleaseDiffStepNextSegment) {
+                console.warn(`[OnnxSVSPipeline] Vocoder OOM caught, retrying segment with diffStep released first: ${err.message}`);
+                _dynamicReleaseDiffStepNextSegment = true;
+                // 标记 OOM 使下一次自适应 gpuDrain 延长到 200ms（让 DML 资源池恢复），
+                // 标志在 gpuDrainAdaptive 内部消费后自动清除。
+                markGpuOom();
+                // Declare outside try so the finally block can observe it.
+                let releasedRetry = false;
+                try {
+                    releasedRetry = this._maybeUnloadDiffStepBeforeVocoder();
+                    if (releasedRetry) {
+                        console.log('[OnnxSVSPipeline] Waiting for DML to reclaim diffStep VRAM before vocoder retry...');
+                        const r0 = performance.now();
+                        await gpuDrainLong();
+                        console.log(`[OnnxSVSPipeline] DML drain complete (${(performance.now() - r0).toFixed(0)}ms), starting vocoder retry`);
+                    }
+                    return await this._postprocessing.runVocoderChunked(
+                        this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
+                        this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
+                    );
+                } finally {
+                    if (releasedRetry) {
+                        await this._reloadDiffStepAfterVocoder();
+                    }
+                    _dynamicReleaseDiffStepNextSegment = false;
+                }
+            }
+            // Either not an OOM, or already retried: rethrow to caller.
+            // If the retry above also threw, we reach here without clearing the
+            // dynamic flag — clear it now so the next segment starts clean.
+            _dynamicReleaseDiffStepNextSegment = false;
+            throw err;
         } finally {
             // Vocoder 推理完成（或抛错）后立即重载 diffStep，保持 session 状态一致：
             // - 多 segment 合成的下一段需要 diffStep
@@ -1642,6 +1706,9 @@ class OnnxSVSPipeline {
             if (releasedDiffStep) {
                 await this._reloadDiffStepAfterVocoder();
             }
+            // Always clear the dynamic flag at the end of a segment (success or
+            // failure) so the next segment reverts to the user setting.
+            _dynamicReleaseDiffStepNextSegment = false;
         }
     }
 
@@ -1654,9 +1721,10 @@ class OnnxSVSPipeline {
      */
     async _runVocoderChunkedForSegment(melData, segFrames, f0Override, onChunkComplete) {
         const chunkFrames = this._resolveVocoderChunkFrames();
+        const overlapFramesOverride = this._resolveVocoderOverlapFrames();
         return this._postprocessing.runVocoderChunked(
             this.sessions, melData, segFrames, this.vocoderIsFP16 ?? this.isFP16, false,
-            this.vocoderType, f0Override, this.sifiganStatsMissing, onChunkComplete, chunkFrames
+            this.vocoderType, f0Override, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
         );
     }
 
@@ -1664,6 +1732,12 @@ class OnnxSVSPipeline {
      * 在 vocoder 推理前临时释放 diffStep session（仅 DML 后端 + 用户开启时）。
      * 目的：腾出 diffStep 模型权重 + diffusion 32 步激活工作区（合计 ~3-4GB）的显存，
      * 避免 vocoder 推理时显存叠加触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR。
+     *
+     * 触发条件（任一即可）：
+     *   1) 用户设置 releaseDiffStepBeforeVocoder === true（持久化偏好）
+     *   2) 模块级 _dynamicReleaseDiffStepNextSegment === true
+     *      （由上一次 vocoder 抛 isVramOOMError 设置，仅下一段生效，调用方负责在
+     *      segment 完成后清除此标志以恢复用户默认行为）
      *
      * @returns {boolean} true 表示已释放（调用方需在 vocoder 完成后调用 _reloadDiffStepAfterVocoder）
      */
@@ -1681,16 +1755,23 @@ class OnnxSVSPipeline {
             return false; // CPU 后端无需释放
         }
 
-        try {
-            const { loadSettings } = require('../../main/settings');
-            const settings = loadSettings();
-            if (settings.releaseDiffStepBeforeVocoder !== true) {
-                console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings.releaseDiffStepBeforeVocoder=${settings.releaseDiffStepBeforeVocoder})`);
+        // Dynamic OOM-triggered release takes priority over the user setting.
+        // The caller (_runVocoderChunked) is responsible for clearing the
+        // dynamic flag after the segment completes so behavior reverts.
+        if (_dynamicReleaseDiffStepNextSegment) {
+            console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: dynamic release triggered by prior OOM');
+        } else {
+            try {
+                const { loadSettings } = require('../../main/settings');
+                const settings = loadSettings();
+                if (settings.releaseDiffStepBeforeVocoder !== true) {
+                    console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings.releaseDiffStepBeforeVocoder=${settings.releaseDiffStepBeforeVocoder})`);
+                    return false;
+                }
+            } catch (e) {
+                console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings load failed: ${e.message})`);
                 return false;
             }
-        } catch (e) {
-            console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings load failed: ${e.message})`);
-            return false;
         }
 
         console.log('[OnnxSVSPipeline] Temporarily releasing diffStep session before vocoder inference to free VRAM...');
@@ -1744,6 +1825,23 @@ class OnnxSVSPipeline {
             return getEffectiveVocoderChunkFrames(settings.vocoderChunkMode, settings.vocoderChunkFrames, this._modelPrecision, this.vocoderType);
         } catch (e) {
             return 0; // 0 → 回退到 VOCODER_CHUNK_FRAMES 默认值
+        }
+    }
+
+    /**
+     * 读取用户配置的 vocoder 分块重叠帧数（settings.vocoderOverlapFrames，默认 32，范围 8-96）。
+     * 返回 0 表示回退到 VOCODER_OVERLAP_FRAMES 常量（32），由 runVocoderChunked 内部处理。
+     * 在测试环境（无 Electron settings）下返回 0，保持与既有测试一致的默认行为。
+     * @returns {number}
+     */
+    _resolveVocoderOverlapFrames() {
+        try {
+            const { loadSettings } = require('../../main/settings');
+            const settings = loadSettings();
+            const v = settings.vocoderOverlapFrames;
+            return (Number.isFinite(v) && v >= 8 && v <= 96) ? Math.floor(v) : 0;
+        } catch (e) {
+            return 0;
         }
     }
 
@@ -1833,23 +1931,31 @@ class OnnxSVSPipeline {
         await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange);
 
         // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
+        // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
         {
-            let xtNaN = 0, xtInf = 0, xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
             const xtLen = xt.data.length;
+            let xtNaN = 0, xtInf = 0;
             for (let i = 0; i < xtLen; i++) {
                 const v = xt.data[i];
                 if (Number.isNaN(v)) { xtNaN++; continue; }
-                if (!Number.isFinite(v)) { xtInf++; continue; }
-                if (v < xtMin) xtMin = v;
-                if (v > xtMax) xtMax = v;
-                xtSum += v;
-                xtSumSq += v * v;
+                if (!Number.isFinite(v)) { xtInf++; }
             }
-            const xtMean = xtSum / xtLen;
-            const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
-            console.log(`[DiffusionDiag] OUTPUT xt (vocoder input): frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
             if (xtNaN > 0 || xtInf > 0) {
                 console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! This will cause vocoder explosion!`);
+            }
+            if (_readDiagnosticMode()) {
+                let xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
+                for (let i = 0; i < xtLen; i++) {
+                    const v = xt.data[i];
+                    if (Number.isNaN(v) || !Number.isFinite(v)) continue;
+                    if (v < xtMin) xtMin = v;
+                    if (v > xtMax) xtMax = v;
+                    xtSum += v;
+                    xtSumSq += v * v;
+                }
+                const xtMean = xtSum / xtLen;
+                const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
+                console.log(`[DiffusionDiag] OUTPUT xt (vocoder input): frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
             }
         }
 
@@ -2640,23 +2746,31 @@ class OnnxSVSPipeline {
             await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50);
 
             // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
+            // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
             {
-                let xtNaN = 0, xtInf = 0, xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
                 const xtLen = xt.data.length;
+                let xtNaN = 0, xtInf = 0;
                 for (let i = 0; i < xtLen; i++) {
                     const v = xt.data[i];
                     if (Number.isNaN(v)) { xtNaN++; continue; }
-                    if (!Number.isFinite(v)) { xtInf++; continue; }
-                    if (v < xtMin) xtMin = v;
-                    if (v > xtMax) xtMax = v;
-                    xtSum += v;
-                    xtSumSq += v * v;
+                    if (!Number.isFinite(v)) { xtInf++; }
                 }
-                const xtMean = xtSum / xtLen;
-                const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
-                console.log(`[DiffusionDiag] OUTPUT xt (vocoder input): frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
                 if (xtNaN > 0 || xtInf > 0) {
                     console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! This will cause vocoder explosion!`);
+                }
+                if (_readDiagnosticMode()) {
+                    let xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
+                    for (let i = 0; i < xtLen; i++) {
+                        const v = xt.data[i];
+                        if (Number.isNaN(v) || !Number.isFinite(v)) continue;
+                        if (v < xtMin) xtMin = v;
+                        if (v > xtMax) xtMax = v;
+                        xtSum += v;
+                        xtSumSq += v * v;
+                    }
+                    const xtMean = xtSum / xtLen;
+                    const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
+                    console.log(`[DiffusionDiag] OUTPUT xt (vocoder input): frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
                 }
             }
 

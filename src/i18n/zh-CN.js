@@ -383,6 +383,7 @@ export default {
     cfgStrengthHint: '无分类器引导 (Classifier-Free Guidance) 强度。值越大，生成结果越贴合条件（音高/歌词），但可能过度强化导致伪影。设为 0 可跳过无条件预测，推理速度约提升一倍。推荐范围 1.0~5.0。',
     cfgRescale: 'CFG Rescale 系数',
     cfgRescaleHint: 'CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。0 = 完全使用 CFG 增强结果，1 = 完全使用原始预测。推荐 0.5~0.9。',
+    cfgRescaleRangeWarn: '⚠ 当前值超出 SVS 推荐甜区 [0.5, 0.7]，可能产生伪影。仍可继续使用此值合成。',
     previewDiffStepChunkEnabled: '预览时启用 diffStep 分块推理',
     previewDiffStepChunkEnabledDesc: '将目标帧分块独立推理再交叉淡入淡出拼接，利用注意力 O(n²) 特性加速长片段预览。仅影响预览，导出始终整段推理。',
     previewDiffStepChunkHint: '分块可显著加速长片段预览（片段越长加速越明显），代价是块边界处可能产生轻微伪影。短片段（短于分块大小）不会分块。',

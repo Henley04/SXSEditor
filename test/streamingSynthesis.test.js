@@ -1101,10 +1101,11 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
             { name: 'xt_mask', type: 'float32', shape: [1, -1] },
           ],
           async run(inputs) {
+            const batch = inputs.xt_input.dims[0];
             const seqLen = inputs.xt_input.dims[1];
             runCalls.push({ seqLen, tVal: inputs.t.data[0] });
-            const data = new Float32Array(seqLen * MEL_DIM).fill(fillValue);
-            return { flow_pred: { type: 'float32', data, dims: [1, seqLen, MEL_DIM], dispose() {} } };
+            const data = new Float32Array(batch * seqLen * MEL_DIM).fill(fillValue);
+            return { flow_pred: { type: 'float32', data, dims: [batch, seqLen, MEL_DIM], dispose() {} } };
           },
         },
       };
@@ -1218,7 +1219,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       expect(result.newCommitted).to.equal(250); // isLast → chunkEnd
     });
 
-    it('CFG > 0 时每 step 调用 2 次 diffStep.run（cond + uncond）', async () => {
+    it('CFG > 0 时每 step 调用 1 次 diffStep.run（cond/uncond batch 合并）', async () => {
       const totalFrames = 200;
       const ptFrameCount = 10;
 
@@ -1242,8 +1243,8 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       };
       const spec = { chunkStart: 0, chunkEnd: 100, currentChunkFrames: 100, isFirst: true, isLast: false };
       await diffusion._runSingleDiffusionChunk(ctx, spec, () => {}, 0, 50);
-      // 2 steps × 2 runs (cfg>0) = 4 runs
-      expect(runCalls.length).to.equal(4);
+      // Task 1 batch merge: 2 steps × 1 run (batch=2) = 2 runs
+      expect(runCalls.length).to.equal(2);
     });
 
     it('输出无 NaN/Inf（数值稳定性）', async () => {

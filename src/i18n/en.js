@@ -383,6 +383,7 @@ export default {
     cfgStrengthHint: 'Classifier-Free Guidance strength. Higher values make the output more aligned with conditions (pitch/lyrics), but may cause artifacts. Setting to 0 skips unconditional prediction, roughly doubling inference speed. Recommended range: 1.0~5.0.',
     cfgRescale: 'CFG Rescale Factor',
     cfgRescaleHint: 'Rescaling factor for CFG results, used to mitigate artifacts from over-guidance. 0 = fully use CFG-enhanced result, 1 = fully use original prediction. Recommended: 0.5~0.9.',
+    cfgRescaleRangeWarn: '⚠ Value is outside the SVS sweet spot [0.5, 0.7] and may produce artifacts. You can still synthesize with this value.',
     previewDiffStepChunkEnabled: 'Enable diffStep chunked inference for preview',
     previewDiffStepChunkEnabledDesc: 'Splits target frames into chunks, runs full diffusion loop per chunk independently, then crossfades. Leverages O(n²) attention for faster long-segment preview. Preview only; export always uses full-sequence inference.',
     previewDiffStepChunkHint: 'Chunking significantly speeds up long-segment preview (longer segments = more speedup), at the cost of minor artifacts at chunk boundaries. Short segments (shorter than chunk size) are not chunked.',

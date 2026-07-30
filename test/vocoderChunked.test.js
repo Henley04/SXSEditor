@@ -109,13 +109,14 @@ describe('Postprocessing.runVocoderChunked - 分块循环终止回归测试', ()
     const out = await pp.runVocoderChunked(
       makeSessions(), melData, totalFrames, false, false, 'default', null, false
     );
-    // 每 chunk 推进 1000 帧（chunkSize - overlap = 1000）
-    // chunk 0: [0, 1008)    -> framePos=1008
-    // chunk 1: [1000, 2008) -> framePos=2008
-    // chunk 2: [2000, 3008) -> framePos=3008
-    // chunk 3: [3000, 4008) -> framePos=4008
-    // chunk 4: [4000, 5000) isLast -> break
-    expect(runCalls).to.have.lengthOf(5);
+    // 每 chunk 推进 976 帧（chunkSize - overlap = 1008 - 32 = 976，VOCODER_OVERLAP_FRAMES=32）
+    // chunk 0: [0, 1008)     -> framePos=1008
+    // chunk 1: [976, 1984)   -> framePos=1984
+    // chunk 2: [1952, 2960)  -> framePos=2960
+    // chunk 3: [2928, 3936)  -> framePos=3936
+    // chunk 4: [3904, 4912)  -> framePos=4912 (4912 < 5000，非末尾)
+    // chunk 5: [4880, 5000)  isLast -> break
+    expect(runCalls).to.have.lengthOf(6);
     expect(out.length).to.equal(totalFrames * HOP_SIZE);
   });
 
@@ -134,8 +135,11 @@ describe('Postprocessing.runVocoderChunked - 分块循环终止回归测试', ()
     expect(zeroCount).to.equal(0);
   });
 
-  it('chunk 数量上限保护：极大 totalFrames 也能在有限步内终止', async () => {
-    // 100000 帧 ≈ 33 分钟音频，旧逻辑会死循环；新逻辑应产生有限 chunk 数
+  it('chunk 数量上限保护：极大 totalFrames 也能在有限步内终止', async function () {
+    // 100000 帧 ≈ 33 分钟音频，旧逻辑会死循环；新逻辑应产生有限 chunk 数。
+    // loudnorm 末端响度归一化对 48M 样本做 2-pass K-weighting + true-peak
+    // 检测，耗时数秒——这是 33 分钟音频的合理一次性成本，放宽超时到 30s。
+    this.timeout(30000);
     const totalFrames = 100000;
     const melData = new Float32Array(totalFrames * MEL_DIM);
     const out = await pp.runVocoderChunked(

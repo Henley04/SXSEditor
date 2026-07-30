@@ -2,66 +2,66 @@
 
 ## P0 — 性能关键路径
 
-- [ ] Task 1: DML 路径 cond/uncond batch 合并
-  - [ ] 1.1 在 `src/inference/pipeline/diffusion.js` 的 `runDiffusionLoop` 内构造 `cfgBatchBuf`/`cfgCondBuf`/`cfgMaskBuf`，将 cond（含 prompt）与 uncond（target-only）拼成 `[2, seqLen, MEL_DIM]` 单次 `sessions.diffStep.run` 调用，对齐 `src/inference/webnn/diffusion.js` 第 60-101 行的实现。
-  - [ ] 1.2 拆分 `flow_pred` 输出为 cond target 段与 uncond target 段，传给现有 `combine`。无 CFG 时走 batch=1 路径。
-  - [ ] 1.3 同步改造 `_runDiffStepWithCachedTensors`：增加 batch 维度参数；保留 useStaticShapes（NPU）路径不变（NPU 走 `npuDiffBatchSize`，本任务只对齐 DML）。
-  - [ ] 1.4 验证：`test/diffusionChunked.test.js` 与新增 `test/diffusionBatchMerge.test.js` 通过；输出数值与改造前在 FP16 epsilon 内一致（用固定 seed 噪声对比）。
+- [x] Task 1: DML 路径 cond/uncond batch 合并
+  - [x] 1.1 在 `src/inference/pipeline/diffusion.js` 的 `runDiffusionLoop` 内构造 `cfgBatchBuf`/`cfgCondBuf`/`cfgMaskBuf`，将 cond（含 prompt）与 uncond（target-only）拼成 `[2, seqLen, MEL_DIM]` 单次 `sessions.diffStep.run` 调用，对齐 `src/inference/webnn/diffusion.js` 第 60-101 行的实现。
+  - [x] 1.2 拆分 `flow_pred` 输出为 cond target 段与 uncond target 段，传给现有 `combine`。无 CFG 时走 batch=1 路径。
+  - [x] 1.3 同步改造 `_runDiffStepWithCachedTensors`：增加 batch 维度参数；保留 useStaticShapes（NPU）路径不变（NPU 走 `npuDiffBatchSize`，本任务只对齐 DML）。
+  - [x] 1.4 验证：`test/diffusionChunked.test.js` 与新增 `test/diffusionBatchMerge.test.js` 通过；输出数值与改造前在 FP16 epsilon 内一致（用固定 seed 噪声对比）。
 
-- [ ] Task 2: 诊断日志 gating
-  - [ ] 2.1 在 `src/main/settings.js` `loadSettings` 加 `diagnosticMode` 默认 `false`；加入 `ALLOWED_SETTINGS_KEYS`。
-  - [ ] 2.2 在 `src/inference/pipeline/diffusion.js` 与 `src/inference/pipeline/postprocessing.js` 顶部读取 `diagnosticMode`（通过参数透传或模块级 lazy 读取），把所有 `[DiffusionDiag]` / `[VocoderDiag]` 的 `console.log` 统计/采样块包到 `if (diagnosticMode) { ... }` 内。
-  - [ ] 2.3 保留所有 `console.error` 的 NaN/Inf 致命错误为 always-on。
-  - [ ] 2.4 验证：默认模式下 `npm test` 不输出诊断日志（捕获 stdout 检查）；`diagnosticMode=true` 时日志恢复。
+- [x] Task 2: 诊断日志 gating
+  - [x] 2.1 在 `src/main/settings.js` `loadSettings` 加 `diagnosticMode` 默认 `false`；加入 `ALLOWED_SETTINGS_KEYS`。
+  - [x] 2.2 在 `src/inference/pipeline/diffusion.js` 与 `src/inference/pipeline/postprocessing.js` 顶部读取 `diagnosticMode`（通过参数透传或模块级 lazy 读取），把所有 `[DiffusionDiag]` / `[VocoderDiag]` 的 `console.log` 统计/采样块包到 `if (diagnosticMode) { ... }` 内。
+  - [x] 2.3 保留所有 `console.error` 的 NaN/Inf 致命错误为 always-on。
+  - [x] 2.4 验证：默认模式下 `npm test` 不输出诊断日志（捕获 stdout 检查）；`diagnosticMode=true` 时日志恢复。
 
-- [ ] Task 3: releaseDiffStepBeforeVocoder 默认 false + OOM 动态启用
-  - [ ] 3.1 在 `src/main/settings.js` 将 `releaseDiffStepBeforeVocoder` 默认值从 `true` 改为 `false`。
-  - [ ] 3.2 在 `src/inference/pipeline/index.js` 的 `_runVocoderChunked`（约 1619 行）外层加 OOM 捕获：若 `isVramOOMError(err)` 且当前未启用 release，则置 `_dynamicReleaseDiffStepNextSegment = true` 并重试该 segment（释放 diffStep → vocoder → 重载）。
-  - [ ] 3.3 `_maybeUnloadDiffStepBeforeVocoder` 读取 `_dynamicReleaseDiffStepNextSegment || settings.releaseDiffStepBeforeVocoder`；segment 完成后清除动态标志。
-  - [ ] 3.4 验证：单元测试模拟 OOM，断言下一次调用 release，再下一次恢复。
+- [x] Task 3: releaseDiffStepBeforeVocoder 默认 false + OOM 动态启用
+  - [x] 3.1 在 `src/main/settings.js` 将 `releaseDiffStepBeforeVocoder` 默认值从 `true` 改为 `false`。
+  - [x] 3.2 在 `src/inference/pipeline/index.js` 的 `_runVocoderChunked`（约 1619 行）外层加 OOM 捕获：若 `isVramOOMError(err)` 且当前未启用 release，则置 `_dynamicReleaseDiffStepNextSegment = true` 并重试该 segment（释放 diffStep → vocoder → 重载）。
+  - [x] 3.3 `_maybeUnloadDiffStepBeforeVocoder` 读取 `_dynamicReleaseDiffStepNextSegment || settings.releaseDiffStepBeforeVocoder`；segment 完成后清除动态标志。
+  - [x] 3.4 验证：单元测试模拟 OOM，断言下一次调用 release，再下一次恢复。
 
-- [ ] Task 4: 默认采样器 Euler → STORK-2
-  - [ ] 4.1 在 `src/inference/pipeline/samplers/index.js` 将 `DEFAULT_SOLVER` 从 `'euler'` 改为 `'stork2'`。
-  - [ ] 4.2 在 `src/renderer/audioPlayback.js` `getPreviewInferenceOptions` 与 `getExportInferenceOptions` 默认值从 `'euler'` 改为 `'stork2'`（仅当 settings 缺失时生效）。
-  - [ ] 4.3 保留 `euler`/`heun`/`extrap`/`stork2` 在 export dialog 下拉中不删除。
-  - [ ] 4.4 验证：`test/samplers.test.js` 全部通过；新用户首启 sampler 解析为 `stork2`。
+- [x] Task 4: 默认采样器 Euler → STORK-2
+  - [x] 4.1 在 `src/inference/pipeline/samplers/index.js` 将 `DEFAULT_SOLVER` 从 `'euler'` 改为 `'stork2'`。
+  - [x] 4.2 在 `src/renderer/audioPlayback.js` `getPreviewInferenceOptions` 与 `getExportInferenceOptions` 默认值从 `'euler'` 改为 `'stork2'`（仅当 settings 缺失时生效）。
+  - [x] 4.3 保留 `euler`/`heun`/`extrap`/`stork2` 在 export dialog 下拉中不删除。
+  - [x] 4.4 验证：`test/samplers.test.js` 全部通过；新用户首启 sampler 解析为 `stork2`。
 
 ## P1 — 性能与音质
 
-- [ ] Task 5: VOCODER_OVERLAP_FRAMES 8 → 32 + 可调
-  - [ ] 5.1 在 `src/inference/shared/constants.js` 将 `VOCODER_OVERLAP_FRAMES` 从 `8` 改为 `32`。
-  - [ ] 5.2 在 `src/main/settings.js` 加 `vocoderOverlapFrames` 设置（默认 32，范围 8-96），加入 `ALLOWED_SETTINGS_KEYS`。
-  - [ ] 5.3 `runVocoderChunked` 接受 `overlapFramesOverride` 参数（从 `pipeline/index.js` 透传 settings 值），缺失时回退到常量 32。
-  - [ ] 5.4 验证：`test/vocoderChunked.test.js` 通过；多 chunk 路径 overlap=32 不再产生边界伪影（用正弦波 + 频谱检验无突变）。
+- [x] Task 5: VOCODER_OVERLAP_FRAMES 8 → 32 + 可调
+  - [x] 5.1 在 `src/inference/shared/constants.js` 将 `VOCODER_OVERLAP_FRAMES` 从 `8` 改为 `32`。
+  - [x] 5.2 在 `src/main/settings.js` 加 `vocoderOverlapFrames` 设置（默认 32，范围 8-96），加入 `ALLOWED_SETTINGS_KEYS`。
+  - [x] 5.3 `runVocoderChunked` 接受 `overlapFramesOverride` 参数（从 `pipeline/index.js` 透传 settings 值），缺失时回退到常量 32。
+  - [x] 5.4 验证：`test/vocoderChunked.test.js` 通过；多 chunk 路径 overlap=32 不再产生边界伪影（用正弦波 + 频谱检验无突变）。
 
-- [ ] Task 6: 每步 xt/t 张量预分配复用
-  - [ ] 6.1 在 `src/inference/pipeline/diffusion.js` `runDiffusionLoop` 循环外预分配 `xtTensor`/`tTensor`（FP16 用 `Uint16Array`，FP32 用 `Float32Array`），每步只写 `.data`，对齐 `src/inference/webnn/diffusion.js` 第 87-114 行。
-  - [ ] 6.2 `_runDiffStepWithCachedTensors` 改为接受预分配张量参数；循环结束统一 dispose。
-  - [ ] 6.3 验证：单步张量分配计数为 0（用 `ort.Tensor` 构造函数 spy 验证）；输出不变。
+- [x] Task 6: 每步 xt/t 张量预分配复用
+  - [x] 6.1 在 `src/inference/pipeline/diffusion.js` `runDiffusionLoop` 循环外预分配 `xtTensor`/`tTensor`（FP16 用 `Uint16Array`，FP32 用 `Float32Array`），每步只写 `.data`，对齐 `src/inference/webnn/diffusion.js` 第 87-114 行。
+  - [x] 6.2 `_runDiffStepWithCachedTensors` 改为接受预分配张量参数；循环结束统一 dispose。
+  - [x] 6.3 验证：单步张量分配计数为 0（用 `ort.Tensor` 构造函数 spy 验证）；输出不变。
 
-- [ ] Task 7: CFG combine 三趟 → 单趟 Welford
-  - [ ] 7.1 在 `src/inference/pipeline/diffusion.js` 的 `combine` 函数内，将 pass1（cfgVal+sum）+ pass2（two-pass 方差）+ pass3（rescale）合并为单次遍历，使用 Welford 在线算法计算 cfgAdjMean/cfgAdjM2，posMean/posM2 同理。
-  - [ ] 7.2 同步改造 `src/inference/webnn/diffusion.js` 的 `combineRaw`（保持两路径一致）。
-  - [ ] 7.3 第二趟小循环用 Welford 最终值计算 std 与 rescale，第三趟写入 vBuf（与原数值在 1e-7 内一致）。
-  - [ ] 7.4 验证：新增 `test/cfgCombineWelford.test.js`，对比 Welford 与 two-pass 在随机数据上的 std/rescale 数值一致性。
+- [x] Task 7: CFG combine 三趟 → 单趟 Welford
+  - [x] 7.1 在 `src/inference/pipeline/diffusion.js` 的 `combine` 函数内，将 pass1（cfgVal+sum）+ pass2（two-pass 方差）+ pass3（rescale）合并为单次遍历，使用 Welford 在线算法计算 cfgAdjMean/cfgAdjM2，posMean/posM2 同理。
+  - [x] 7.2 同步改造 `src/inference/webnn/diffusion.js` 的 `combineRaw`（保持两路径一致）。
+  - [x] 7.3 第二趟小循环用 Welford 最终值计算 std 与 rescale，第三趟写入 vBuf（与原数值在 1e-7 内一致）。
+  - [x] 7.4 验证：新增 `test/cfgCombineWelford.test.js`，对比 Welford 与 two-pass 在随机数据上的 std/rescale 数值一致性。
 
-- [ ] Task 8: 自适应 gpuDrain
-  - [ ] 8.1 在 `src/inference/pipeline/utils.js` 加 `gpuDrainAdaptive()` 函数：模块级 `_oomFlag` 标志，正常时 `setImmediate` yield，OOM 后下次 drain 等 200ms 然后清标志。
-  - [ ] 8.2 加 `markGpuOom()` 函数供 OOM catch 调用。
-  - [ ] 8.3 替换 `diffusion.js` 与 `postprocessing.js` 中的 `gpuDrain()` 调用为 `gpuDrainAdaptive()`；保留 `gpuDrainLong()` 不变（diffStep 释放后仍需长排空）。
-  - [ ] 8.4 验证：正常路径无 50ms 等待（用 perf.now 断言 < 5ms）；模拟 OOM 后下次 drain > 150ms。
+- [x] Task 8: 自适应 gpuDrain
+  - [x] 8.1 在 `src/inference/pipeline/utils.js` 加 `gpuDrainAdaptive()` 函数：模块级 `_oomFlag` 标志，正常时 `setImmediate` yield，OOM 后下次 drain 等 200ms 然后清标志。
+  - [x] 8.2 加 `markGpuOom()` 函数供 OOM catch 调用。
+  - [x] 8.3 替换 `diffusion.js` 与 `postprocessing.js` 中的 `gpuDrain()` 调用为 `gpuDrainAdaptive()`；保留 `gpuDrainLong()` 不变（diffStep 释放后仍需长排空）。
+  - [x] 8.4 验证：正常路径无 50ms 等待（用 perf.now 断言 < 5ms）；模拟 OOM 后下次 drain > 150ms。
 
-- [ ] Task 9: WSOLA 分块交叉淡入淡出
-  - [ ] 9.1 新建 `src/inference/pipeline/wsola.js`：实现 `wsolaCrossfade(prevTail, currHead, overlapSamples, sampleRate, searchWindowMs=4)`，基于归一化互相关搜索最佳对齐 + Hann 加权 OLA。导出 `wsolaCrossfade` 与 `wsolaCrossfadeMel`（mel 域版本，按帧搜索）。
-  - [ ] 9.2 在 `src/inference/pipeline/postprocessing.js` 的多 chunk 路径（约 1156-1173 行）替换 Hann OLA 为 WSOLA：保留 `prevChunkTail`（overlapSamples 长度），与当前 chunk 头做 WSOLA 对齐后加权写入。
-  - [ ] 9.3 在 `src/inference/pipeline/diffusion.js` 的 `_runSingleDiffusionChunk`（约 505-530 行）替换 mel 域 Hann 加权为 `wsolaCrossfadeMel`。
-  - [ ] 9.4 验证：新增 `test/wsola.test.js`，正弦波 chunk 边界无相位跳变（频谱无旁瓣）；现有 `test/vocoderChunked.test.js` + `test/diffusionChunked.test.js` 通过。
+- [x] Task 9: WSOLA 分块交叉淡入淡出
+  - [x] 9.1 新建 `src/inference/pipeline/wsola.js`：实现 `wsolaCrossfade(prevTail, currHead, overlapSamples, sampleRate, searchWindowMs=4)`，基于归一化互相关搜索最佳对齐 + Hann 加权 OLA。导出 `wsolaCrossfade` 与 `wsolaCrossfadeMel`（mel 域版本，按帧搜索）。
+  - [x] 9.2 在 `src/inference/pipeline/postprocessing.js` 的多 chunk 路径（约 1156-1173 行）替换 Hann OLA 为 WSOLA：保留 `prevChunkTail`（overlapSamples 长度），与当前 chunk 头做 WSOLA 对齐后加权写入。
+  - [x] 9.3 在 `src/inference/pipeline/diffusion.js` 的 `_runSingleDiffusionChunk`（约 505-530 行）替换 mel 域 Hann 加权为 `wsolaCrossfadeMel`。
+  - [x] 9.4 验证：新增 `test/wsola.test.js`，正弦波 chunk 边界无相位跳变（频谱无旁瓣）；现有 `test/vocoderChunked.test.js` + `test/diffusionChunked.test.js` 通过。
 
-- [ ] Task 10: EBU R128 loudnorm + true-peak 限制
-  - [ ] 10.1 新建 `src/inference/pipeline/loudnorm.js`：实现 `loudnormFinal(samples, sampleRate, targetLufs=-14, maxTruePeak=-1.0)` —— 纯 JS EBU R128 2-pass（K-weighting + gating block），返回归一化后 Float32Array；true-peak 限制器用 4× 过采样采样峰值检测 + 软限制。
-  - [ ] 10.2 在 `src/inference/pipeline/postprocessing.js` 的 `runVocoderChunked` 末端（`normalizePeakTo(output)` 之后）调用 `loudnormFinal`，受 `enableLoudnormFinal` 设置控制（默认 true）。
-  - [ ] 10.3 单 chunk 路径同样应用（单 chunk 末端 `normalizePeakTo(output)` 之后）。
-  - [ ] 10.4 验证：新增 `test/loudnorm.test.js`，正弦波输入归一化到 −14 LUFS ±0.5；峰值 ≤ −1 dBTP。
+- [x] Task 10: EBU R128 loudnorm + true-peak 限制
+  - [x] 10.1 新建 `src/inference/pipeline/loudnorm.js`：实现 `loudnormFinal(samples, sampleRate, targetLufs=-14, maxTruePeak=-1.0)` —— 纯 JS EBU R128 2-pass（K-weighting + gating block），返回归一化后 Float32Array；true-peak 限制器用 4× 过采样采样峰值检测 + 软限制。
+  - [x] 10.2 在 `src/inference/pipeline/postprocessing.js` 的 `runVocoderChunked` 末端（`normalizePeakTo(output)` 之后）调用 `loudnormFinal`，受 `enableLoudnormFinal` 设置控制（默认 true）。
+  - [x] 10.3 单 chunk 路径同样应用（单 chunk 末端 `normalizePeakTo(output)` 之后）。
+  - [x] 10.4 验证：新增 `test/loudnorm.test.js`，正弦波输入归一化到 −14 LUFS ±0.5；峰值 ≤ −1 dBTP。
 
 - [ ] Task 11: CFG 强度曲线调度
   - [ ] 11.1 新建 `src/inference/pipeline/cfgSchedule.js`：导出 `resolveCfgAtStep({mode, cfgStrength, cfgStrengthStart, cfgStrengthEnd, keyframes, step, totalSteps})` 返回当前步有效 cfg 值。支持 `constant | linear | cosine | custom` 四种模式。`linear`: `start + (end - start) * step / (totalSteps - 1)`；`cosine`: `start + (end - start) * (1 - cos(π * step / (totalSteps - 1))) / 2`；`custom`: keyframes 分段线性插值。
@@ -71,17 +71,17 @@
   - [ ] 11.5 在 `src/inference/pipeline/index.js` `_synthesizeImpl` 与 `synthesizeMultiStreaming` 读取 schedule opts 并透传到 `_runDiffusionLoop` → `runDiffusionLoop`。
   - [ ] 11.6 验证：新增 `test/cfgSchedule.test.js`，四种模式数值正确；`constant` 模式与旧行为字节级一致。
 
-- [ ] Task 12: CFG rescale 默认 0.6 + 范围校验
-  - [ ] 12.1 在 `src/inference/pipeline/constants.js` 将 `CFG_RESCALE` 从 `0.75` 改为 `0.6`。
-  - [ ] 12.2 在 `src/renderer/exportDialog.js` 的 cfgRescale `buildRangeField` 加超界警告 hint（< 0.5 或 > 0.7 时显示），不阻止设值。
-  - [ ] 12.3 默认值：`src/renderer/exportDialog.js` 中 `exportCfgRescale ?? 0.75` 改为 `?? 0.6`；`src/renderer/audioPlayback.js` 同步。
-  - [ ] 12.4 验证：默认值 0.6 生效；UI 警告在 0.4 / 0.8 时显示，0.55 时隐藏。
+- [x] Task 12: CFG rescale 默认 0.6 + 范围校验
+  - [x] 12.1 在 `src/inference/pipeline/constants.js` 将 `CFG_RESCALE` 从 `0.75` 改为 `0.6`。
+  - [x] 12.2 在 `src/renderer/exportDialog.js` 的 cfgRescale `buildRangeField` 加超界警告 hint（< 0.5 或 > 0.7 时显示），不阻止设值。
+  - [x] 12.3 默认值：`src/renderer/exportDialog.js` 中 `exportCfgRescale ?? 0.75` 改为 `?? 0.6`；`src/renderer/audioPlayback.js` 同步。
+  - [x] 12.4 验证：默认值 0.6 生效；UI 警告在 0.4 / 0.8 时显示，0.55 时隐藏。
 
 ## P2 — 音质细节
 
-- [ ] Task 13: SiFiGAN F0 4× 最近邻 → 线性插值
-  - [ ] 13.1 在 `src/inference/pipeline/postprocessing.js` `runVocoderChunked` 的 SiFiGAN F0 上采样块（约 855-864 行）将"每帧重复 4 次"改为线性插值（`alignedF0[f]` 与 `alignedF0[f+1]` 之间线性插值 4 点）。同样改造 mel 上采样（约 810-822 行）—— 但 mel 上采样保持最近邻（模型训练时即如此），仅 F0 改线性。
-  - [ ] 13.2 验证：F0 阶跃处不再产生瞬时跳变；`test/vocoderChunked.test.js` 通过。
+- [x] Task 13: SiFiGAN F0 4× 最近邻 → 线性插值
+  - [x] 13.1 在 `src/inference/pipeline/postprocessing.js` `runVocoderChunked` 的 SiFiGAN F0 上采样块（约 855-864 行）将"每帧重复 4 次"改为线性插值（`alignedF0[f]` 与 `alignedF0[f+1]` 之间线性插值 4 点）。同样改造 mel 上采样（约 810-822 行）—— 但 mel 上采样保持最近邻（模型训练时即如此），仅 F0 改线性。
+  - [x] 13.2 验证：F0 阶跃处不再产生瞬时跳变；`test/vocoderChunked.test.js` 通过。
 
 - [ ] Task 14: refHash FNV-1a 全长
   - [ ] 14.1 在 `src/inference/pipeline/audioSegmentation.js` `computeSynthCacheKey`（约 210-220 行）将 refHash 从"前 4000 字节 + 步长"扫描改为调用现有 `this.hashArray(buf)`（FNV-1a 全长）。注意 `hashArray` 接受 array-like，`Uint8Array`/`Buffer` 可直接传入。
@@ -92,10 +92,10 @@
   - [ ] 15.2 `runDiffusionLoopChunked` 接受可选 `pitchCurveF0`，计算 `f0Slope`（差分）后传入 `_planChunks`。
   - [ ] 15.3 验证：F0 斜率突变处不被选为边界；`test/diffusionChunked.test.js` 通过。
 
-- [ ] Task 16: 2× 过采样→LP→降采样抗混叠（可选，默认 false）
-  - [ ] 16.1 在 `src/inference/pipeline/postprocessing.js` 的 `resampleLinear`（约 182-280 行）当 `srcSr > dstSr` 且 `enableAntiAliasing` 时，先 LP 滤波（截止 `dstSr/2`）再降采样。LP 用 Butterworth 1-order IIR 简化实现。
-  - [ ] 16.2 在 `src/main/settings.js` 加 `enableAntiAliasing` 设置（默认 false）。
-  - [ ] 16.3 验证：`test/resampleAudio.test.js` 通过；`enableAntiAliasing=true` 时高频混叠减少（用 chirp 信号检验）。
+- [x] Task 16: 2× 过采样→LP→降采样抗混叠（可选，默认 false）
+  - [x] 16.1 在 `src/inference/pipeline/postprocessing.js` 的 `resampleLinear`（约 182-280 行）当 `srcSr > dstSr` 且 `enableAntiAliasing` 时，先 LP 滤波（截止 `dstSr/2`）再降采样。LP 用 Butterworth 1-order IIR 简化实现。
+  - [x] 16.2 在 `src/main/settings.js` 加 `enableAntiAliasing` 设置（默认 false）。
+  - [x] 16.3 验证：`test/resampleAudio.test.js` 通过；`enableAntiAliasing=true` 时高频混叠减少（用 chirp 信号检验）。
 
 - [ ] Task 17: SDEdit 局部修复（可选，默认 false）
   - [ ] 17.1 在 `src/inference/pipeline/diffusion.js` `runDiffusionLoop` 末端增加可选 SDEdit 修复：若 `enableSDEditRepair` 且检测到 mel 局部 NaN/能量突变（帧能量 > 中位数 ×5），对该区间加浅噪声（t=0.3）+ 5 步重采样（用 STORK-2）。修复仅在该帧区间，边界交叉淡入淡出。

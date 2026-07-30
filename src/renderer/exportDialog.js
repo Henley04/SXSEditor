@@ -69,15 +69,15 @@ export async function openExportDialog() {
       modelPrecision: settings.modelPrecision || 'fp32',
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
-      exportCfgRescale: settings.exportCfgRescale ?? 0.75,
-      exportSampler: settings.exportSampler || 'euler',
+      exportCfgRescale: settings.exportCfgRescale ?? 0.6,
+      exportSampler: settings.exportSampler || 'stork2',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
       sifiganPrecision: settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32',
       vocoderChunkMode: settings.vocoderChunkMode === 'manual' ? 'manual' : 'smart',
       vocoderChunkFrames: Number.isFinite(settings.vocoderChunkFrames) ? settings.vocoderChunkFrames : 1008,
       releaseDmlVramAfterSynthesis: settings.releaseDmlVramAfterSynthesis === true,
-      releaseDiffStepBeforeVocoder: settings.releaseDiffStepBeforeVocoder !== false,
+      releaseDiffStepBeforeVocoder: settings.releaseDiffStepBeforeVocoder === true,
       outputPath: '',
     };
 
@@ -289,6 +289,7 @@ function buildParamsSection(form) {
     value: form.exportCfgRescale,
     format: (v) => parseFloat(v).toFixed(2),
     onChange: (v) => { form.exportCfgRescale = v; },
+    warning: (v) => (v < 0.5 || v > 0.7) ? t('main.exportDialog.cfgRescaleRangeWarn') : '',
   }));
 
   // Auto Shift 复选框
@@ -528,14 +529,38 @@ function buildRangeField(opts) {
   slider.max = opts.max;
   slider.step = opts.step;
   slider.value = opts.value;
+
+  // Optional warning hint element. When `opts.warning(v)` returns a non-empty
+  // string, the hint is shown below the slider; the value is still applied
+  // (no clamping/blocking).
+  let warnEl = null;
+  const updateWarning = (v) => {
+    if (typeof opts.warning !== 'function') return;
+    const msg = opts.warning(v);
+    if (msg) {
+      if (!warnEl) {
+        warnEl = document.createElement('div');
+        warnEl.className = 'export-dialog-field-hint export-dialog-field-warn';
+        field.appendChild(warnEl);
+      }
+      warnEl.textContent = msg;
+      warnEl.hidden = false;
+    } else if (warnEl) {
+      warnEl.hidden = true;
+    }
+  };
+
   slider.addEventListener('input', () => {
     const v = parseFloat(slider.value);
     valueBox.textContent = opts.format ? opts.format(v) : v;
     opts.onChange(v);
+    updateWarning(v);
   });
 
   field.appendChild(label);
   field.appendChild(slider);
+  // Initialize warning visibility for the starting value.
+  updateWarning(parseFloat(slider.value));
   return field;
 }
 
