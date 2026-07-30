@@ -2751,6 +2751,13 @@ class OnnxSVSPipeline {
         // 与上次完全相同 → 音频相同，可直接复用缓存跳过 diffusion+vocoder，只重算改动 segment。
         // 此处在前置休止符补齐之后计算键，确保键反映 segment 实际使用的 notes。
         // segF0Shift 与循环内 _computeSegF0Shift 调用使用相同入参，结果一致。
+        //
+        // 适用范围与优雅降级（结果始终正确，仅命中率下降）：
+        //   - 最有效：pitch-only 编辑且 autoShift 关（或全局中位数稳定）→ 仅改动 segment 失效。
+        //   - autoShift 开启时，编辑触及全局中位数会使 globalTargetMedian 漂移 → 所有 segment
+        //     的 segF0Shift 变化 → _fs 后缀变化 → 全部分片失效（此时输出确实不同，失效正确）。
+        //   - 自定义音高曲线（pitchCurveF0 非空）随音符 start/duration 变化 → f0Hash 变化 →
+        //     全部分片失效。这两种场景下退化为整曲重算，行为与未引入分片缓存时一致。
         const segCacheKeys = new Array(segments.length);
         const segCachedAudios = new Array(segments.length);
         let segCacheHits = 0;
@@ -2853,9 +2860,11 @@ class OnnxSVSPipeline {
             let segResult;
             const cachedSegAudio = segCachedAudios[segIdx];
             if (cachedSegAudio) {
-                console.warn(`[OnnxSVSPipeline] >>> SEGMENT CACHE HIT <<< seg=${segIdx} startBeat=${seg.startBeat.toFixed(2)} | skipping diffusion+vocoder for this segment`);
+                console.log(`[OnnxSVSPipeline] >>> SEGMENT CACHE HIT <<< seg=${segIdx} startBeat=${seg.startBeat.toFixed(2)} | skipping diffusion+vocoder for this segment`);
                 onProgress(Math.round(segProgressStart + segProgressRange));
-                segResult = { audio: cachedSegAudio, frames: Math.floor(cachedSegAudio.length / HOP_SIZE) };
+                // 下游只消费 segResult.audio（写入 finalAudio），无需 frames；
+                // 真实 mel 帧数在 _synthesizeSegment 内部使用，缓存命中路径不涉及。
+                segResult = { audio: cachedSegAudio };
             } else {
                 segResult = await this._synthesizeSegment(
                     seg.notes, bpm, f0Envelope, pitchCurveF0, segF0Shift,
