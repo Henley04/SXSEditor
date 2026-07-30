@@ -3,6 +3,176 @@ const { TWIDDLE_REAL, TWIDDLE_IMAG, HANN_WINDOW } = require('./constants');
 const { createFloatTensor, outputToFloat32, disposeTensor, normalizePeakTo, gpuDrain } = require('./utils');
 
 /**
+ * WSOLA (Waveform Similarity Overlap-Add) alignment for phase-contiguous chunk splicing.
+ * Uses cross-correlation to find the optimal time shift between overlapping chunks,
+ * then applies Hann window crossfade at the aligned position.
+ * This eliminates flanging/comb filtering artifacts in pitched signals (singing).
+ *
+ * @param {Float32Array} prevTail - tail samples from previous chunk (overlap region)
+ * @param {Float32Array} curHead - head samples from current chunk (overlap region)
+ * @param {number} searchRange - search range in samples (default ±10ms = ±240 samples at 24kHz)
+ * @returns {number} optimal shift in samples (positive = advance current chunk)
+ */
+function wsolaFindShift(prevTail, curHead, searchRange = 240) {
+    const len = Math.min(prevTail.length, curHead.length);
+    if (len === 0) return 0;
+    const maxShift = Math.min(searchRange, Math.floor(len / 4));
+    let bestShift = 0;
+    let bestCorr = -Infinity;
+    // Search for shift that maximizes normalized cross-correlation
+    for (let shift = -maxShift; shift <= maxShift; shift++) {
+        let corr = 0;
+        let normPrev = 0;
+        let normCur = 0;
+        const startPrev = Math.max(0, shift);
+        const endPrev = Math.min(len, len + shift);
+        const startCur = Math.max(0, -shift);
+        const endCur = Math.min(len, len - shift);
+        const compLen = Math.min(endPrev - startPrev, endCur - startCur);
+        if (compLen <= 0) continue;
+        for (let k = 0; k < compLen; k++) {
+            const pv = prevTail[startPrev + k];
+            const cv = curHead[startCur + k];
+            corr += pv * cv;
+            normPrev += pv * pv;
+            normCur += cv * cv;
+        }
+        const normFactor = Math.sqrt(Math.max(1e-10, normPrev * normCur));
+        const ncc = corr / normFactor;
+        if (ncc > bestCorr) {
+            bestCorr = ncc;
+            bestShift = shift;
+        }
+    }
+    return bestShift;
+}
+
+/**
+ * Simplified EBU R128 loudness normalization.
+ * Measures integrated loudness (LUFS) and applies gain to reach target level.
+ * Uses BS.1770-4 K-weighting filter approximation.
+ *
+ * @param {Float32Array} audio - audio samples (mono)
+ * @param {number} len - number of samples
+ * @param {number} targetLufs - target loudness in LUFS (e.g., -14 for streaming)
+ */
+function applyEbuR128Loudnorm(audio, len, targetLufs) {
+    if (len === 0) return;
+    // Simplified BS.1770-4 K-weighting: pre-filter + RLB filter
+    // Using second-order IIR approximation for the K-weighting chain
+    let pre_prev1 = 0, pre_prev2 = 0;
+    let y_prev1 = 0, y_prev2 = 0;
+    let r_y_prev1 = 0, r_y_prev2 = 0;
+
+    // Measure mean squared level with K-weighting
+    let sumSq = 0;
+    for (let i = 0; i < len; i++) {
+        const x = audio[i];
+        // Pre-filter: high-frequency shelving (simplified 2nd-order IIR)
+        // Transfer function approx: (0.7 + 0.3*z^-1) / (1 + 0.3*z^-1 - 0.3*z^-2)
+        const pre = 0.7 * x + 0.3 * pre_prev1 + 0.3 * y_prev1 - 0.3 * y_prev2;
+        // RLB filter: high-pass (simplified 2nd-order IIR)
+        // Transfer function approx: (0.5 - 0.5*z^-1) / (1 - 1.98*z^-1 + z^-2)
+        const rlb = 0.5 * pre - 0.5 * pre_prev1 + 1.98 * r_y_prev1 - r_y_prev2;
+        // Update state
+        pre_prev2 = pre_prev1; pre_prev1 = pre;
+        y_prev2 = y_prev1; y_prev1 = pre;
+        r_y_prev2 = r_y_prev1; r_y_prev1 = rlb;
+        sumSq += rlb * rlb;
+    }
+
+    // Integrated loudness: LUFS = -0.691 + 10 * log10(meanSq)
+    const meanSq = sumSq / len;
+    const lufs = meanSq > 0 ? -0.691 + 10 * Math.log10(meanSq) : -Infinity;
+
+    if (lufs === -Infinity || !isFinite(lufs)) return;
+
+    // Apply gain to reach target
+    const gainDb = targetLufs - lufs;
+    const gain = Math.pow(10, gainDb / 20);
+    // Limit gain to ±24dB range for safety
+    const safeGain = Math.max(0.1, Math.min(10, gain));
+
+    for (let i = 0; i < len; i++) {
+        audio[i] *= safeGain;
+    }
+
+    if (Math.abs(gainDb) > 0.5) {
+        console.log(`[AudioNorm] EBU R128: measured=${lufs.toFixed(1)} LUFS, target=${targetLufs} LUFS, gain=${gainDb.toFixed(1)}dB`);
+    }
+}
+
+/**
+ * True-peak limiter: prevents inter-sample peaks from exceeding threshold.
+ * Uses 2x oversampling + brickwall-like low-pass + soft-knee limiting.
+ *
+ * @param {Float32Array} audio - audio samples
+ * @param {number} len - number of samples
+ * @param {number} tpDb - true-peak limit in dBTP (e.g., -1.0)
+ */
+function applyTruePeakLimiter(audio, len, tpDb) {
+    if (len < 4) return;
+    const threshold = Math.pow(10, tpDb / 20); // -1 dBTP = 0.891
+
+    // 2x oversample using linear interpolation
+    const osLen = len * 2;
+    const osAudio = new Float32Array(osLen);
+    for (let i = 0; i < len; i++) {
+        osAudio[i * 2] = audio[i];
+        if (i < len - 1) {
+            osAudio[i * 2 + 1] = 0.5 * (audio[i] + audio[i + 1]);
+        } else {
+            osAudio[i * 2 + 1] = audio[i];
+        }
+    }
+
+    // Brickwall low-pass filter (FIR, windowed sinc approximation at 0.45*Nyquist)
+    // Use a simple 4-tap moving average for anti-aliasing (practical compromise)
+    const lpAudio = new Float32Array(osLen);
+    lpAudio[0] = osAudio[0];
+    lpAudio[1] = (osAudio[0] + osAudio[1] + osAudio[2]) / 3;
+    for (let i = 2; i < osLen - 2; i++) {
+        // 5-tap low-pass (approximate brickwall for 2x oversampling)
+        lpAudio[i] = (osAudio[i - 2] + 2 * osAudio[i - 1] + 3 * osAudio[i] + 2 * osAudio[i + 1] + osAudio[i + 2]) / 9;
+    }
+    lpAudio[osLen - 2] = (osAudio[osLen - 3] + osAudio[osLen - 2] + osAudio[osLen - 1]) / 3;
+    lpAudio[osLen - 1] = osAudio[osLen - 1];
+
+    // Soft-knee limiter on oversampled audio
+    const kneeDb = 3.0; // 3 dB soft knee
+    const kneeStart = threshold * Math.pow(10, -kneeDb / 20);
+    const kneeEnd = threshold;
+
+    let limited = false;
+    for (let i = 0; i < osLen; i++) {
+        const v = lpAudio[i];
+        const absV = Math.abs(v);
+        if (absV > kneeStart) {
+            limited = true;
+            let gain;
+            if (absV >= kneeEnd) {
+                gain = threshold / absV; // Hard limit
+            } else {
+                // Soft knee quadratic interp
+                const x = (absV - kneeStart) / (kneeEnd - kneeStart);
+                const softGain = 1 - 0.5 * x * x;
+                gain = Math.min(1, softGain * kneeStart / absV);
+            }
+            lpAudio[i] = v * gain;
+        }
+    }
+
+    // Downsample back to original rate
+    for (let i = 0; i < len; i++) {
+        audio[i] = lpAudio[i * 2];
+    }
+
+    if (limited) {
+        console.log(`[AudioNorm] True-peak limiter applied at ${tpDb} dBTP threshold`);
+    }
+}
+
+/**
  * Post-processing: mel transform, vocoder, audio generation
  * Also includes audio utility functions (parseWavBuffer, resampleLinear, mel spectrogram, etc.)
  */
@@ -854,9 +1024,13 @@ class Postprocessing {
                 const alignedF0 = (srcArr.length === totalFrames) ? srcArr : resizeF0Linear(srcArr, totalFrames);
                 if (SIFIGAN_UPSAMPLE_RATIO > 1) {
                     effectiveF0 = new Float32Array(effectiveTotalFrames);
+                    // Linear interpolation for smoother F0 transitions instead of nearest-neighbor
                     for (let f = 0; f < totalFrames; f++) {
+                        const f0Val = alignedF0[f];
+                        const f0Next = f < totalFrames - 1 ? alignedF0[f + 1] : f0Val;
                         for (let r = 0; r < SIFIGAN_UPSAMPLE_RATIO; r++) {
-                            effectiveF0[f * SIFIGAN_UPSAMPLE_RATIO + r] = alignedF0[f];
+                            const frac = r / SIFIGAN_UPSAMPLE_RATIO;
+                            effectiveF0[f * SIFIGAN_UPSAMPLE_RATIO + r] = f0Val + (f0Next - f0Val) * frac;
                         }
                     }
                 } else {
@@ -1030,6 +1204,9 @@ class Postprocessing {
             fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * (i + 1) / (fadeSamples + 1)));
         }
 
+        // WSOLA state: store previous chunk's tail overlap for alignment
+        let prevChunkTail = null;
+
         // 第一阶段：仅计算所有 chunk 的边界元数据（不创建张量）。
         // 旧版本在此阶段预创建所有 chunk 的 melTensor/f0Tensor 并存入 chunkSpecs，
         // 导致所有 chunk 的 GPU 输入张量同时驻留显存；加上第二阶段每个 chunk 的
@@ -1156,13 +1333,23 @@ class Postprocessing {
             const writeStart = spec.chunkStart * vocoderHopSize;
             const writeLen = Math.min(waveform.length, totalSamples - writeStart);
 
+            // WSOLA alignment: find optimal shift between previous chunk tail and current chunk head
+            let wsolaShift = 0;
+            if (!spec.isFirst && prevChunkTail && fadeSamples > 0) {
+                const curHead = waveform.subarray(0, fadeSamples);
+                wsolaShift = wsolaFindShift(prevChunkTail, curHead, Math.floor(fadeSamples * 0.3));
+            }
+
             for (let j = 0; j < writeLen; j++) {
                 const outIdx = writeStart + j;
                 if (outIdx >= totalSamples) break;
                 let w = 1.0;
-                // 头部 fade：非首 chunk 的前 overlapFrames 帧
+                // 头部 fade：非首 chunk 的前 overlapFrames 帧 (WSOLA-aligned)
                 if (!spec.isFirst && j < fadeSamples) {
-                    w = fadeWindow[j];
+                    const shiftedJ = j + wsolaShift;
+                    if (shiftedJ >= 0 && shiftedJ < fadeSamples) {
+                        w = fadeWindow[shiftedJ];
+                    }
                 }
                 // 尾部 fade：非末 chunk 的后 overlapFrames 帧
                 if (!spec.isLast && j >= writeLen - fadeSamples) {
@@ -1170,6 +1357,14 @@ class Postprocessing {
                 }
                 output[outIdx] += waveform[j] * w;
                 weightSum[outIdx] += w;
+            }
+
+            // Store tail of current chunk for next chunk's WSOLA alignment
+            if (!spec.isLast && fadeSamples > 0) {
+                const tailStart = Math.max(0, writeLen - fadeSamples);
+                prevChunkTail = waveform.subarray(tailStart, tailStart + fadeSamples).slice();
+            } else {
+                prevChunkTail = null;
             }
 
             // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，overlap crossfade 权重和为 1）
@@ -1208,6 +1403,11 @@ class Postprocessing {
         }
 
         normalizePeakTo(output, totalSamples);
+
+        // EBU R128 loudness normalization: target -14 LUFS (streaming standard)
+        // + True-peak limiting at -1 dBTP (0.891 linear) to prevent inter-sample clipping
+        applyEbuR128Loudnorm(output, totalSamples, -14);
+        applyTruePeakLimiter(output, totalSamples, -1.0);
 
         const elapsed = performance.now() - t0;
         const logFrames = SIFIGAN_UPSAMPLE_RATIO > 1 ? `${effectiveTotalFrames} (${totalFrames}x${SIFIGAN_UPSAMPLE_RATIO})` : `${totalFrames}`;

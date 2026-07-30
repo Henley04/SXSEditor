@@ -74,14 +74,14 @@ function loadSettings() {
     _settingsCache.releaseDmlVramAfterSynthesis = false;
   }
 
-  // Vocoder 推理前是否临时释放 diffStep session（默认开启，仅 DML 后端有效）
+  // Vocoder 推理前是否临时释放 diffStep session（默认关闭，仅 DML 后端有效）
   // diffStep 模型权重 + 32 步 diffusion 激活工作区（~2GB）在 vocoder 推理期间仍占用显存，
   // 与 vocoder 激活叠加易触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR (屏幕全黑)。
   // 开启后：diffusion 完成 → 释放 diffStep → vocoder 推理 → 重载 diffStep。
   // 代价：每次 vocoder 推理后需重载 diffStep（~1-3秒），多 segment 合成会显著变慢。
   // WebNN 路径无需此优化（diffStep 在渲染进程，vocoder 在主进程 DML，互不抢占显存）。
   if (typeof _settingsCache.releaseDiffStepBeforeVocoder !== 'boolean') {
-    _settingsCache.releaseDiffStepBeforeVocoder = true;
+    _settingsCache.releaseDiffStepBeforeVocoder = false;
   }
 
   // ===== 预览 diffStep 分块推理设置 =====
@@ -193,6 +193,36 @@ function loadSettings() {
       console.warn('[Main] Failed to detect SiFiGAN model files, falling back to default:', err.message);
       _settingsCache.vocoderType = 'default';
     }
+  }
+
+  // Diagnostic mode: verbose logging for inference debugging (default off for production)
+  if (typeof _settingsCache.diagnosticMode !== 'boolean') {
+    _settingsCache.diagnosticMode = false;
+  }
+
+  // CFG strength curve: dynamic scheduling of CFG strength during diffusion steps
+  // - 'fixed': use constant cfgStrength throughout
+  // - 'linear': linearly ramp from cfgStartStrength to cfgStrength
+  // - 'cosine': cosine ramp (smooth ease-in, best for singing)
+  // - 'exponential': exponential ramp (aggressive early)
+  // Custom: { curve: 'custom', points: [{step: 0, strength: 1.5}, {step: 16, strength: 3.0}] }
+  if (!_settingsCache.cfgCurve || typeof _settingsCache.cfgCurve !== 'object') {
+    _settingsCache.cfgCurve = {
+      curve: 'cosine',
+      startStrength: 1.5,   // Starting CFG strength (first step)
+      endStrength: 3.0,     // Ending CFG strength (last step)
+      useCurve: true        // When false, uses fixed cfgStrength
+    };
+  }
+
+  // Default sampler for diffusion: STORK-2 (1 NFE, 2nd order, flow-matching compatible)
+  if (!['euler', 'heun', 'extrap', 'stork2'].includes(_settingsCache.defaultSampler)) {
+    _settingsCache.defaultSampler = 'stork2';
+  }
+
+  // CFG rescale default: 0.6 (optimal for SVS, between 0.5-0.7 range)
+  if (!Number.isFinite(_settingsCache.cfgRescale) || _settingsCache.cfgRescale < 0.1 || _settingsCache.cfgRescale > 2.0) {
+    _settingsCache.cfgRescale = 0.6;
   }
 
   // Update check settings

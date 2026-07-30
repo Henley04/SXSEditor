@@ -69,8 +69,8 @@ export async function openExportDialog() {
       modelPrecision: settings.modelPrecision || 'fp32',
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
-      exportCfgRescale: settings.exportCfgRescale ?? 0.75,
-      exportSampler: settings.exportSampler || 'euler',
+      exportCfgRescale: settings.exportCfgRescale ?? 0.6,
+      exportSampler: settings.exportSampler || settings.defaultSampler || 'stork2',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
       sifiganPrecision: settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32',
@@ -78,6 +78,7 @@ export async function openExportDialog() {
       vocoderChunkFrames: Number.isFinite(settings.vocoderChunkFrames) ? settings.vocoderChunkFrames : 1008,
       releaseDmlVramAfterSynthesis: settings.releaseDmlVramAfterSynthesis === true,
       releaseDiffStepBeforeVocoder: settings.releaseDiffStepBeforeVocoder !== false,
+      cfgCurve: settings.cfgCurve || { curve: 'cosine', startStrength: 1.5, endStrength: 3.0, useCurve: true },
       outputPath: '',
     };
 
@@ -290,6 +291,62 @@ function buildParamsSection(form) {
     format: (v) => parseFloat(v).toFixed(2),
     onChange: (v) => { form.exportCfgRescale = v; },
   }));
+
+  // CFG 强度曲线（动态调度）
+  const cfgCurveField = document.createElement('div');
+  cfgCurveField.className = 'export-dialog-field';
+  const cfgCurveLabel = document.createElement('div');
+  cfgCurveLabel.className = 'export-dialog-field-label';
+  cfgCurveLabel.textContent = 'CFG 强度曲线';
+  cfgCurveField.appendChild(cfgCurveLabel);
+
+  // Curve preset selector
+  const cfgCurveRow = document.createElement('div');
+  cfgCurveRow.style.display = 'flex';
+  cfgCurveRow.style.gap = '8px';
+  cfgCurveRow.style.alignItems = 'center';
+
+  const cfgCurveSelect = document.createElement('select');
+  const curveOptions = [
+    { value: 'fixed', label: '固定值' },
+    { value: 'linear', label: '线性递增' },
+    { value: 'cosine', label: '余弦递增 (推荐)' },
+    { value: 'exponential', label: '指数递增' },
+  ];
+  for (const opt of curveOptions) {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = opt.label;
+    if (form.cfgCurve.curve === opt.value) o.selected = true;
+    cfgCurveSelect.appendChild(o);
+  }
+  cfgCurveSelect.addEventListener('change', () => {
+    form.cfgCurve.curve = cfgCurveSelect.value;
+    form.cfgCurve.useCurve = cfgCurveSelect.value !== 'fixed';
+  });
+  cfgCurveRow.appendChild(cfgCurveSelect);
+
+  // Start strength (for curve modes)
+  const cfgStartLabel = document.createElement('span');
+  cfgStartLabel.textContent = '起始:';
+  cfgStartLabel.style.fontSize = '12px';
+  cfgStartLabel.style.color = 'var(--text-secondary)';
+  cfgCurveRow.appendChild(cfgStartLabel);
+
+  const cfgStartInput = document.createElement('input');
+  cfgStartInput.type = 'number';
+  cfgStartInput.min = '0';
+  cfgStartInput.max = '10';
+  cfgStartInput.step = '0.5';
+  cfgStartInput.value = form.cfgCurve.startStrength ?? 1.5;
+  cfgStartInput.style.width = '60px';
+  cfgStartInput.addEventListener('change', () => {
+    form.cfgCurve.startStrength = parseFloat(cfgStartInput.value) || 1.5;
+  });
+  cfgCurveRow.appendChild(cfgStartInput);
+
+  cfgCurveField.appendChild(cfgCurveRow);
+  section.appendChild(cfgCurveField);
 
   // Auto Shift 复选框
   section.appendChild(buildCheckboxField({
@@ -693,6 +750,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
       cfg: form.exportCfgStrength,
       cfgRescale: form.exportCfgRescale,
       sampler: form.exportSampler,
+      cfgCurve: form.cfgCurve,
       autoShift: form.autoShift,
       onFragmentProgress: (p) => {
         setStatus('progressSynthesizing', { progress: p });
