@@ -45,6 +45,65 @@ import {
 import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
 import { updateFragmentPlayButton, updateParamModeButtons } from './uiControls.js';
 
+/**
+ * 构建导出用的 per-note 渐入/渐出列表（与 wavEncoder.applyEnvelopesToAudio 对接）。
+ * 跳过 fadeIn=0 且 fadeOut=0 的 note，节省计算。
+ * 时间单位：start/duration 用 beats，fadeIn/fadeOut 用秒。
+ */
+function _buildNoteFadesForExport() {
+  const notes = getClippedNotes();
+  const out = [];
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    const fadeInSec = (n.fadeIn && n.fadeIn > 0) ? n.fadeIn / 1000 : 0;
+    const fadeOutSec = (n.fadeOut && n.fadeOut > 0) ? n.fadeOut / 1000 : 0;
+    if (fadeInSec <= 0 && fadeOutSec <= 0) continue;
+    out.push({
+      startBeat: n.start,
+      durationBeats: n.duration,
+      fadeInSec,
+      fadeOutSec,
+    });
+  }
+  return out;
+}
+
+/**
+ * 计算实时播放时 per-note 渐入/渐出的 WebAudio 自动化调度参数。
+ * 返回 [{ startSec, endSec, fromGain, toGain }] 列表，由调用方 setValueAtTime /
+ * linearRampToValueAtTime 应用到 fadeGainNode。
+ * 仅包含 fadeIn>0 或 fadeOut>0 的 note。
+ */
+function _buildNoteFadesForRealtime(bpm) {
+  const notes = getClippedNotes();
+  const out = [];
+  const secondsPerBeat = 60 / bpm;
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    const noteStartSec = n.start * secondsPerBeat;
+    const noteEndSec = noteStartSec + n.duration * secondsPerBeat;
+    if (n.fadeIn && n.fadeIn > 0) {
+      const fadeInSec = n.fadeIn / 1000;
+      out.push({
+        atSec: noteStartSec,
+        rampEndSec: noteStartSec + fadeInSec,
+        fromGain: 0,
+        toGain: 1,
+      });
+    }
+    if (n.fadeOut && n.fadeOut > 0) {
+      const fadeOutSec = n.fadeOut / 1000;
+      out.push({
+        atSec: Math.max(noteStartSec, noteEndSec - fadeOutSec),
+        rampEndSec: noteEndSec,
+        fromGain: 1,
+        toGain: 0,
+      });
+    }
+  }
+  return out;
+}
+
 // 流式播放状态（vocoder chunk 边合成边播放）
 // streamingSources: 已调度的 AudioBufferSourceNode 列表（按顺序）
 // streamingCleanup: chunk 监听器 cleanup 函数
@@ -254,6 +313,7 @@ async function playFragmentShared() {
   source.buffer = audioBuffer;
 
   const envGainNode = ctx.createGain();
+  const fadeGainNode = ctx.createGain();
   const panNode = ctx.createStereoPanner();
 
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
@@ -285,6 +345,27 @@ async function playFragmentShared() {
     }
   }
 
+  // Per-note 渐入/渐出（与导出时 wavEncoder.applyEnvelopesToAudio 一致）：
+  // fadeGainNode 接在 envGainNode 之后、panNode 之前，作为片段级音量包络之外的
+  // per-note amplitude 调制。仅当某 note 启用 fade 时才调度自动化，否则保持 1。
+  const fades = _buildNoteFadesForRealtime(bpm);
+  if (fades.length > 0) {
+    const now = ctx.currentTime;
+    fadeGainNode.gain.setValueAtTime(1, now);
+    for (let i = 0; i < fades.length; i++) {
+      const f = fades[i];
+      // 仅调度 startOffset 之后的事件；起播位置之前的自动化直接跳过
+      if (f.rampEndSec <= startOffset) continue;
+      const atSec = Math.max(f.atSec, startOffset);
+      const fromGain = f.atSec <= startOffset
+        // 起播位置落在 fade 内：估算起播点处的 gain
+        ? (f.toGain - f.fromGain) * Math.max(0, Math.min(1, (startOffset - f.atSec) / Math.max(0.0001, f.rampEndSec - f.atSec))) + f.fromGain
+        : f.fromGain;
+      fadeGainNode.gain.setValueAtTime(fromGain, now + (atSec - startOffset));
+      fadeGainNode.gain.linearRampToValueAtTime(f.toGain, now + (f.rampEndSec - startOffset));
+    }
+  }
+
   if (panEnv && panEnv.keyframes && panEnv.keyframes.length > 0) {
     const now = ctx.currentTime;
     const sortedKfs = [...panEnv.keyframes].sort((a, b) => a.time - b.time);
@@ -305,7 +386,7 @@ async function playFragmentShared() {
   }
 
   const gainNode = getFragmentGainNode();
-  source.connect(envGainNode).connect(panNode).connect(gainNode);
+  source.connect(envGainNode).connect(fadeGainNode).connect(panNode).connect(gainNode);
   source.onended = () => {
     setFragmentIsPlaying(false);
     const raf = getFragmentPlayheadRaf();
@@ -492,6 +573,10 @@ function _computeFragmentAudioSignature() {
           }
         }
       }
+    }
+    // 颤音字段进入签名：颤音改变 F0，必须重新合成
+    if (n.vibrato && n.vibrato.enabled) {
+      s += `|vib:${n.vibrato.enabled ? 1 : 0}:${n.vibrato.depth}:${n.vibrato.rate}:${n.vibrato.start}:${n.vibrato.length}:${n.vibrato.fadeIn}`;
     }
     for (let j = 0; j < s.length; j++) {
       notesHash = ((notesHash << 5) - notesHash + s.charCodeAt(j)) | 0;
@@ -715,7 +800,8 @@ export async function exportFragment() {
     const paddedAudio = padAudioToFragmentDuration(audioData);
     const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
     const envelopes = getEnvelopes();
-    const stereoData = applyEnvelopesToAudio(paddedAudio, getSampleRate(), bpm, envelopes.volume, envelopes.pan);
+    const noteFades = _buildNoteFadesForExport();
+    const stereoData = applyEnvelopesToAudio(paddedAudio, getSampleRate(), bpm, envelopes.volume, envelopes.pan, noteFades);
     const wavData = encodeWav(stereoData, getSampleRate(), 2);
     const result = await window.electronAPI.showSaveDialog({
       filters: [{ name: 'WAV Audio', extensions: ['wav'] }],

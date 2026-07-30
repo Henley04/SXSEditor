@@ -85,16 +85,56 @@ function encodeWavStereo(interleavedStereo, sampleRate) {
   return _encodeWavBase(interleavedStereo, sampleRate, 2);
 }
 
-function applyEnvelopesToAudio(monoAudio, sampleRate, bpm, volumeEnvelope, panEnvelope) {
+function applyEnvelopesToAudio(monoAudio, sampleRate, bpm, volumeEnvelope, panEnvelope, noteFades) {
   const numSamples = monoAudio.length;
   const stereoData = new Float32Array(numSamples * 2);
 
   const hasVolume = volumeEnvelope && volumeEnvelope.keyframes && volumeEnvelope.keyframes.length > 0;
   const hasPan = panEnvelope && panEnvelope.keyframes && panEnvelope.keyframes.length > 0;
+  const hasFades = noteFades && noteFades.length > 0;
 
   // Precompute beat time increment to avoid per-sample division
   const beatTimeInc = bpm / (60 * sampleRate);
   let beatTime = 0;
+
+  // Precompute per-sample fade gain once (O(n*m) then O(1) per sample).
+  // fadeGains starts at 1 everywhere; each note multiplies in its fade envelope.
+  // For non-overlapping notes (the normal SVS case) this is equivalent to
+  // "active note's fade gain at time t". For overlapping notes, gains multiply,
+  // which is the safe default (no clicks at boundaries).
+  let fadeGains = null;
+  if (hasFades) {
+    fadeGains = new Float32Array(numSamples);
+    fadeGains.fill(1);
+    const secondsPerBeat = 60 / bpm;
+    for (let f = 0; f < noteFades.length; f++) {
+      const nf = noteFades[f];
+      if (!nf) continue;
+      const fadeInSec = nf.fadeInSec > 0 ? nf.fadeInSec : 0;
+      const fadeOutSec = nf.fadeOutSec > 0 ? nf.fadeOutSec : 0;
+      if (fadeInSec <= 0 && fadeOutSec <= 0) continue;
+      const noteStartSec = nf.startBeat * secondsPerBeat;
+      const noteDurSec = nf.durationBeats * secondsPerBeat;
+      const noteEndSec = noteStartSec + noteDurSec;
+      const startSample = Math.max(0, Math.floor(noteStartSec * sampleRate));
+      const endSample = Math.min(numSamples, Math.ceil(noteEndSec * sampleRate));
+      const fadeInSamples = Math.max(1, Math.floor(fadeInSec * sampleRate));
+      const fadeOutSamples = Math.max(1, Math.floor(fadeOutSec * sampleRate));
+      for (let i = startSample; i < endSample; i++) {
+        let g = 1;
+        if (fadeInSec > 0 && i < startSample + fadeInSamples) {
+          g = (i - startSample) / fadeInSamples;
+        }
+        if (fadeOutSec > 0 && i > endSample - fadeOutSamples) {
+          const fo = Math.max(0, (endSample - i) / fadeOutSamples);
+          if (fo < g) g = fo;
+        }
+        if (g < 0) g = 0;
+        if (g > 1) g = 1;
+        fadeGains[i] *= g;
+      }
+    }
+  }
 
   for (let i = 0; i < numSamples; i++) {
     let volume = 1;
@@ -107,7 +147,12 @@ function applyEnvelopesToAudio(monoAudio, sampleRate, bpm, volumeEnvelope, panEn
       pan = _interpEnv(panEnvelope, beatTime);
     }
 
-    const sample = monoAudio[i] * volume;
+    let fadeGain = 1;
+    if (hasFades) {
+      fadeGain = fadeGains[i];
+    }
+
+    const sample = monoAudio[i] * volume * fadeGain;
     // LUT lookup for equal-power panning gains.
     // angle = (pan+1) * π/4 ∈ [0, π/2] for pan ∈ [-1, 1], within LUT coverage [0, 2π).
     const angle = (pan + 1) * _PI4;

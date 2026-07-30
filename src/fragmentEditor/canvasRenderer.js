@@ -705,7 +705,98 @@ export function generateAutoPitchPoints() {
 
 export function isPitchCurveCustomized() {
   const pitchCurve = getPitchCurve();
-  return pitchCurve.anchorPoints.length > 0 || pitchCurve.brushSegments.length > 0;
+  if (pitchCurve.anchorPoints.length > 0 || pitchCurve.brushSegments.length > 0) return true;
+  // 启用了颤音的 note 也算作"已自定义"，确保 buildPitchCurveF0Data 会生成 F0
+  const notes = getNotes();
+  for (let i = 0; i < notes.length; i++) {
+    if (notes[i].vibrato && notes[i].vibrato.enabled) return true;
+  }
+  return false;
+}
+
+/**
+ * 默认颤音参数。首次启用颤音或加载旧项目时使用。
+ * depth: 80 cents（半音的 80%），rate: 5.5Hz（典型人声颤音频率），
+ * start: 0.2（音符长度 20% 处开始），length: 0.8（持续 80% 音符长度），
+ * fadeIn: 0.3（颤音前 30% 渐入）。
+ */
+export const DEFAULT_VIBRATO = {
+  enabled: false,
+  depth: 80,
+  rate: 5.5,
+  start: 0.2,
+  length: 0.8,
+  fadeIn: 0.3,
+};
+
+/** 确保 note 上有完整的 vibrato 字段（向后兼容旧项目）。 */
+export function ensureVibrato(note) {
+  if (!note.vibrato || typeof note.vibrato !== 'object') {
+    note.vibrato = { ...DEFAULT_VIBRATO };
+  } else {
+    const v = note.vibrato;
+    if (typeof v.depth !== 'number') v.depth = DEFAULT_VIBRATO.depth;
+    if (typeof v.rate !== 'number') v.rate = DEFAULT_VIBRATO.rate;
+    if (typeof v.start !== 'number') v.start = DEFAULT_VIBRATO.start;
+    if (typeof v.length !== 'number') v.length = DEFAULT_VIBRATO.length;
+    if (typeof v.fadeIn !== 'number') v.fadeIn = DEFAULT_VIBRATO.fadeIn;
+    if (typeof v.enabled !== 'boolean') v.enabled = false;
+  }
+  return note.vibrato;
+}
+
+/** 查找包含给定 beat 时间且处于激活状态的 note（用于颤音叠加）。 */
+function _findActiveNoteAtTime(time) {
+  const notes = getNotes();
+  if (notes.length === 0) return null;
+  const inactiveIds = getInactiveNoteIds(notes);
+  // 按 start 升序，相同 start 取较长者（与 generateAutoPitchPoints 一致）
+  const sorted = inactiveIds.size > 0
+    ? notes.filter(n => !inactiveIds.has(n.id))
+    : notes.slice();
+  sorted.sort((a, b) => a.start - b.start || b.duration - a.duration);
+  for (let i = 0; i < sorted.length; i++) {
+    const n = sorted[i];
+    if (time >= n.start && time < n.start + n.duration) return n;
+  }
+  return null;
+}
+
+/**
+ * 计算指定 note 在 beat 时间 time 处的颤音音高偏移（MIDI 单位）。
+ * 颤音区域 = [start * duration, (start + length) * duration]。
+ * 渐入段内通过线性包络从 0 升至 1。
+ * 相位基于颤音起始点的秒数（保证每次从 0 相位上升）。
+ */
+export function computeVibratoOffset(note, time) {
+  const v = note.vibrato;
+  if (!v || !v.enabled) return 0;
+  const dur = note.duration;
+  if (dur <= 0) return 0;
+  const vibStartBeat = note.start + v.start * dur;
+  const vibLenBeat = v.length * dur;
+  if (vibLenBeat <= 0) return 0;
+  const vibEndBeat = vibStartBeat + vibLenBeat;
+  if (time < vibStartBeat || time > vibEndBeat) return 0;
+  const pos = (time - vibStartBeat) / vibLenBeat; // 0..1
+  let env = 1;
+  if (v.fadeIn > 0 && pos < v.fadeIn) {
+    env = pos / v.fadeIn;
+  }
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  // 以颤音起始点为 0 相位，sin 在 0 处为 0、上升段，避免相位跳变
+  const vibTimeSec = ((time - vibStartBeat) / bpm) * 60;
+  const depthInMidi = v.depth / 100; // cents → semitones → MIDI
+  return depthInMidi * Math.sin(2 * Math.PI * v.rate * vibTimeSec) * env;
+}
+
+/** 是否有任何激活 note 启用了颤音（用于决定是否生成 pitchCurveF0）。 */
+export function hasAnyVibratoEnabled() {
+  const notes = getNotes();
+  for (let i = 0; i < notes.length; i++) {
+    if (notes[i].vibrato && notes[i].vibrato.enabled) return true;
+  }
+  return false;
 }
 
 export function getSortedAnchorPoints() {
@@ -721,6 +812,8 @@ export function getPitchAtTime(time) {
   const pitchCurve = getPitchCurve();
   if (!pitchCurve.enabled) return null;
 
+  let basePitch = null;
+
   if (pitchCurve.anchorPoints.length > 0) {
     const sorted = getSortedAnchorPoints();
     if (time < sorted[0].time || time > sorted[sorted.length - 1].time) {
@@ -734,39 +827,60 @@ export function getPitchAtTime(time) {
           const smoothness = (sorted[i].smoothness || 0) / 100;
           const smoothStepT = t * t * (3 - 2 * t);
           const smoothT = t + (smoothStepT - t) * smoothness;
-          return sorted[i].pitch + smoothT * (sorted[i + 1].pitch - sorted[i].pitch);
+          basePitch = sorted[i].pitch + smoothT * (sorted[i + 1].pitch - sorted[i].pitch);
+          break;
         }
       }
-      return sorted[sorted.length - 1].pitch;
+      if (basePitch === null) basePitch = sorted[sorted.length - 1].pitch;
     }
   }
 
-  for (const seg of pitchCurve.brushSegments) {
-    if (seg.points.length < 2) continue;
-    if (time >= seg.points[0].time && time <= seg.points[seg.points.length - 1].time) {
-      for (let i = 0; i < seg.points.length - 1; i++) {
-        if (time >= seg.points[i].time && time <= seg.points[i + 1].time) {
-          const t = (seg.points[i + 1].time - seg.points[i].time) > 0
-            ? (time - seg.points[i].time) / (seg.points[i + 1].time - seg.points[i].time)
+  if (basePitch === null) {
+    for (const seg of pitchCurve.brushSegments) {
+      if (seg.points.length < 2) continue;
+      if (time >= seg.points[0].time && time <= seg.points[seg.points.length - 1].time) {
+        for (let i = 0; i < seg.points.length - 1; i++) {
+          if (time >= seg.points[i].time && time <= seg.points[i + 1].time) {
+            const t = (seg.points[i + 1].time - seg.points[i].time) > 0
+              ? (time - seg.points[i].time) / (seg.points[i + 1].time - seg.points[i].time)
+              : 0;
+            basePitch = seg.points[i].pitch + t * (seg.points[i + 1].pitch - seg.points[i].pitch);
+            break;
+          }
+        }
+        break;
+      }
+    }
+  }
+
+  if (basePitch === null) {
+    const autoPoints = generateAutoPitchPoints();
+    if (autoPoints.length > 0) {
+      for (let i = 0; i < autoPoints.length - 1; i++) {
+        if (time >= autoPoints[i].time && time <= autoPoints[i + 1].time) {
+          if (autoPoints[i].breakAfter) break;
+          const t = (autoPoints[i + 1].time - autoPoints[i].time) > 0
+            ? (time - autoPoints[i].time) / (autoPoints[i + 1].time - autoPoints[i].time)
             : 0;
-          return seg.points[i].pitch + t * (seg.points[i + 1].pitch - seg.points[i].pitch);
+          basePitch = autoPoints[i].pitch + t * (autoPoints[i + 1].pitch - autoPoints[i].pitch);
+          break;
         }
       }
     }
   }
 
-  const autoPoints = generateAutoPitchPoints();
-  if (autoPoints.length === 0) return null;
-  for (let i = 0; i < autoPoints.length - 1; i++) {
-    if (time >= autoPoints[i].time && time <= autoPoints[i + 1].time) {
-      if (autoPoints[i].breakAfter) continue;
-      const t = (autoPoints[i + 1].time - autoPoints[i].time) > 0
-        ? (time - autoPoints[i].time) / (autoPoints[i + 1].time - autoPoints[i].time)
-        : 0;
-      return autoPoints[i].pitch + t * (autoPoints[i + 1].pitch - autoPoints[i].pitch);
-    }
+  // 颤音叠加：在锚点/笔刷/自动音高之上加正弦调制。
+  // 兼容性说明：
+  //   - 若 note 有自定义锚点/笔刷，颤音在它们算出的音高上叠加（保留滑音等表现）。
+  //   - 若 note 没有自定义曲线，颤音在 note.pitch 上叠加，并把 basePitch 从 null 提升为
+  //     note.pitch，让 buildPitchCurveF0Data 能为该帧生成 F0（否则该帧 F0=0 静音）。
+  const note = _findActiveNoteAtTime(time);
+  if (note && note.vibrato && note.vibrato.enabled) {
+    if (basePitch === null) basePitch = note.pitch;
+    basePitch += computeVibratoOffset(note, time);
   }
-  return null;
+
+  return basePitch;
 }
 
 export function findAnchorPointAt(x, y) {
@@ -1617,6 +1731,79 @@ function renderPitchCurve(c) {
   }
 }
 
+/**
+ * 在 note 上叠加颤音 / 渐入渐出的视觉指示，让用户一眼看出哪些 note 启用了效果。
+ * - 渐入/渐出：在 note 左/右边缘画半透明三角形（从 0 → 1 / 1 → 0 的增益包络示意）。
+ * - 颤音：在 note 左上角画一个小正弦波标记（≈），仅在 note 宽度足够时显示。
+ * 颜色采用半透明叠加，避免遮挡 note 本体的歌词与选中态。
+ */
+function _drawNoteEffectIndicators(ctx, c, note, x, y, w, h) {
+  const hasFadeIn = note.fadeIn && note.fadeIn > 0;
+  const hasFadeOut = note.fadeOut && note.fadeOut > 0;
+  const hasVibrato = note.vibrato && note.vibrato.enabled;
+
+  if (!hasFadeIn && !hasFadeOut && !hasVibrato) return;
+
+  // 渐入/渐出三角形：宽度按 fade 时长占 note 时长的比例缩放（最大不超过 note 宽度的 40%）。
+  // fade 时长单位 ms，note 时长单位 beats；通过 bpm 换算成同单位比较。
+  const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+  const noteDurSec = (note.duration / bpm) * 60;
+  if (hasFadeIn || hasFadeOut) {
+    ctx.save();
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.28)';
+    const maxFadeW = w * 0.4;
+    if (hasFadeIn) {
+      const fadeInSec = note.fadeIn / 1000;
+      const ratio = noteDurSec > 0 ? Math.min(1, fadeInSec / noteDurSec) : 1;
+      const fw = Math.max(4, Math.min(maxFadeW, w * ratio));
+      // 左边缘三角形：从左上角 (x, y) → (x+fw, y+h/2) → (x, y+h)，模拟 0→1 增益
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + fw, y + h / 2);
+      ctx.lineTo(x, y + h);
+      ctx.closePath();
+      ctx.fill();
+    }
+    if (hasFadeOut) {
+      const fadeOutSec = note.fadeOut / 1000;
+      const ratio = noteDurSec > 0 ? Math.min(1, fadeOutSec / noteDurSec) : 1;
+      const fw = Math.max(4, Math.min(maxFadeW, w * ratio));
+      // 右边缘三角形：从 (x+w-fw, y+h/2) → (x+w, y) → (x+w, y+h)，模拟 1→0 增益
+      ctx.beginPath();
+      ctx.moveTo(x + w - fw, y + h / 2);
+      ctx.lineTo(x + w, y);
+      ctx.lineTo(x + w, y + h);
+      ctx.closePath();
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // 颤音标记：左上角小正弦波，仅在 note 宽度足够（> 22px）时显示，避免挤占歌词空间。
+  // 用 accent 色 + 半透明，与 note 本体形成对比但不过分突兀。
+  if (hasVibrato && w > 22) {
+    ctx.save();
+    ctx.strokeStyle = c.accent;
+    ctx.globalAlpha = 0.85;
+    ctx.lineWidth = 1.2;
+    const bx = x + 3;
+    const by = y + 3;
+    const bw = 12;
+    const bh = 5;
+    ctx.beginPath();
+    // 简化的正弦波：两个半周期，从左到右
+    for (let i = 0; i <= 16; i++) {
+      const t = i / 16;
+      const px = bx + t * bw;
+      const py = by + bh / 2 + Math.sin(t * Math.PI * 2) * (bh / 2);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
 let _renderRaf = 0;
 export function render() {
   if (_renderRaf) return;
@@ -1808,6 +1995,9 @@ function _doRenderImpl(w, h) {
       ctx.textBaseline = 'top';
       ctx.fillText('!', x + nw - 4, y + 1);
     }
+
+    // 颤音 / 渐入渐出视觉指示（在 note 本体之上叠加，便于一眼看出哪些 note 启用了效果）
+    _drawNoteEffectIndicators(ctx, c, note, x, y, nw, nh);
 
     if (isActive) {
       ctx.restore();

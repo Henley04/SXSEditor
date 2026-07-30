@@ -229,5 +229,78 @@
       <button type="button" id="kanji-ctx-set-chinese" class="kanji-ctx-action">设为中文</button>
       <button type="button" id="kanji-ctx-set-japanese" class="kanji-ctx-action">设为日语</button>
     </div>
+
+    <!-- Note right-click context menu (vibrato + fade) -->
+    <div id="note-context-menu" class="note-ctx-menu" role="menu" aria-hidden="true" style="display:none">
+      <div class="note-ctx-header">
+        <span data-i18n="fragment.noteCtxVibrato">颤音</span>
+        <label class="note-ctx-toggle" aria-hidden="true">
+          <input type="checkbox" id="note-ctx-vibrato-toggle">
+          <span class="note-ctx-toggle-track"><span class="note-ctx-toggle-thumb"></span></span>
+        </label>
+      </div>
+      <div class="note-ctx-params" id="note-ctx-vibrato-params">
+        <div class="note-ctx-param">
+          <label class="note-ctx-label" data-i18n="fragment.noteCtxDepth">幅度</label>
+          <input type="range" id="note-ctx-vibrato-depth" min="0" max="200" step="5" value="80" class="note-ctx-slider">
+          <span class="note-ctx-value" id="note-ctx-vibrato-depth-value">80¢</span>
+        </div>
+        <div class="note-ctx-param">
+          <label class="note-ctx-label" data-i18n="fragment.noteCtxRate">频率</label>
+          <input type="range" id="note-ctx-vibrato-rate" min="2" max="10" step="0.1" value="5.5" class="note-ctx-slider">
+          <span class="note-ctx-value" id="note-ctx-vibrato-rate-value">5.5Hz</span>
+        </div>
+        <div class="note-ctx-param">
+          <label class="note-ctx-label" data-i18n="fragment.noteCtxStart">起始点</label>
+          <input type="range" id="note-ctx-vibrato-start" min="0" max="80" step="1" value="20" class="note-ctx-slider">
+          <span class="note-ctx-value" id="note-ctx-vibrato-start-value">20%</span>
+        </div>
+        <div class="note-ctx-param">
+          <label class="note-ctx-label" data-i18n="fragment.noteCtxLength">长度</label>
+          <input type="range" id="note-ctx-vibrato-length" min="20" max="100" step="1" value="80" class="note-ctx-slider">
+          <span class="note-ctx-value" id="note-ctx-vibrato-length-value">80%</span>
+        </div>
+        <div class="note-ctx-param">
+          <label class="note-ctx-label" data-i18n="fragment.noteCtxFadeIn">渐入</label>
+          <input type="range" id="note-ctx-vibrato-fadein" min="0" max="100" step="1" value="30" class="note-ctx-slider">
+          <span class="note-ctx-value" id="note-ctx-vibrato-fadein-value">30%</span>
+        </div>
+      </div>
+      <div class="note-ctx-presets">
+        <button type="button" class="note-ctx-preset" data-preset="vibrato-soft" data-i18n="fragment.noteCtxPresetSoft">柔和</button>
+        <button type="button" class="note-ctx-preset" data-preset="vibrato-medium" data-i18n="fragment.noteCtxPresetMedium">中等</button>
+        <button type="button" class="note-ctx-preset" data-preset="vibrato-strong" data-i18n="fragment.noteCtxPresetStrong">强烈</button>
+      </div>
+
+      <div class="note-ctx-divider"></div>
+
+      <div class="note-ctx-header">
+        <span data-i18n="fragment.noteCtxFade">渐强渐弱</span>
+      </div>
+      <div class="note-ctx-param">
+        <label class="note-ctx-label" data-i18n="fragment.noteCtxFadeInDur">渐强</label>
+        <input type="range" id="note-ctx-fade-in" min="0" max="500" step="10" value="0" class="note-ctx-slider">
+        <span class="note-ctx-value" id="note-ctx-fade-in-value">0ms</span>
+      </div>
+      <div class="note-ctx-param">
+        <label class="note-ctx-label" data-i18n="fragment.noteCtxFadeOutDur">渐弱</label>
+        <input type="range" id="note-ctx-fade-out" min="0" max="500" step="10" value="0" class="note-ctx-slider">
+        <span class="note-ctx-value" id="note-ctx-fade-out-value">0ms</span>
+      </div>
+      <div class="note-ctx-presets">
+        <button type="button" class="note-ctx-preset" data-preset="fade-in" data-i18n="fragment.noteCtxPresetFadeIn">渐强</button>
+        <button type="button" class="note-ctx-preset" data-preset="fade-out" data-i18n="fragment.noteCtxPresetFadeOut">渐弱</button>
+        <button type="button" class="note-ctx-preset" data-preset="fade-both" data-i18n="fragment.noteCtxPresetFadeBoth">渐入渐出</button>
+      </div>
+
+      <div class="note-ctx-divider"></div>
+      <div class="note-ctx-footer">
+        <span class="note-ctx-target" id="note-ctx-target-info"></span>
+        <div class="note-ctx-footer-actions">
+          <button type="button" id="note-ctx-kanji" class="note-ctx-action" style="display:none" data-i18n="fragment.noteCtxKanji">汉字设置</button>
+          <button type="button" id="note-ctx-clear" class="note-ctx-action note-ctx-danger" data-i18n="fragment.noteCtxClear">清除效果</button>
+        </div>
+      </div>
+    </div>
   </body>
 </html>
