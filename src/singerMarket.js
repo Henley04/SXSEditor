@@ -90,8 +90,9 @@ const dom = {
   toastContainer: document.getElementById('toast-container'),
 };
 
-// Disclaimer link target (placeholder doc on the official website).
-const DISCLAIMER_URL = 'https://henley04.github.io/SXSEditor/user/singer-market.html';
+// Disclaimer link target — the legally controlling English version of the
+// Singer Market Terms of Use (the Chinese translation is linked from that page).
+const DISCLAIMER_URL = 'https://henley04.github.io/SXSEditor/singer-market-terms-en.html';
 
 // ==================== Utility helpers ====================
 function escapeHtml(s) {
