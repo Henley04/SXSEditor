@@ -53,6 +53,7 @@ export default {
       diffSteps: '扩散步数',
       cfgStrength: 'CFG 引导强度',
       cfgRescale: 'CFG Rescale 系数',
+      cfgRescaleRangeWarn: '⚠ 当前值超出 SVS 推荐甜区 [0.5, 0.7]，可能产生伪影。仍可继续使用此值合成。',
       sampler: '求解器',
       samplerHint: '扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理，精度更高但更慢）；Extrapolated Euler 为受 STORK 启发的速度外推启发式（每步 1 次推理）；STORK-2 为论文原版 Stabilized Taylor Orthogonal Runge-Kutta 方法（每步 1 次推理 + 8 个 RKC sub-stage，通过 virtual NFE 复用速度场）。注意：分块预览推理时 Extrapolated Euler 与 STORK-2 均在块边界丢失跨步状态，优势减弱。',
       samplerEuler: 'Euler（一阶，默认）',
@@ -95,6 +96,42 @@ export default {
       noFragments: '当前没有分片，无法导出',
       noNotes: '当前分片没有音符，无法导出',
       precisionChanged: '精度已变更，将重置推理管线（首次合成会稍慢）',
+      // Task 11: CFG 强度曲线调度
+      cfgScheduleMode: 'CFG 强度曲线调度',
+      cfgScheduleModeHint: '在扩散步数间动态调整 CFG 强度。Constant = 固定值（旧行为）；Linear 从 start 线性升至 end；Cosine 平滑缓入缓出；Custom 使用关键帧插值。',
+      cfgScheduleConstant: 'Constant（固定值）',
+      cfgScheduleLinear: 'Linear（start → end）',
+      cfgScheduleCosine: 'Cosine（平滑缓动）',
+      cfgScheduleCustom: 'Custom（关键帧）',
+      cfgStrengthStart: '起始 CFG 强度',
+      cfgStrengthStartHint: '第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。',
+      cfgStrengthStartPlaceholder: '自动（cfgStrength × 0.5）',
+      cfgScheduleKeyframes: '调度关键帧',
+      cfgScheduleKeyframesHint: '逗号分隔的 step:value 对，例如 "0:1.5,16:3.0,31:3.0"。关键帧间线性插值。仅 Custom 模式生效。',
+      cfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
+      // M5: 预览 CFG 强度曲线调度（与导出调度镜像，应用于预览播放）
+      previewCfgScheduleMode: 'CFG 强度曲线调度（预览）',
+      previewCfgScheduleModeHint: '与导出调度一致，但应用于预览播放。在扩散步数间动态调整 CFG 强度。Constant = 固定值；Linear 从 start 线性升至 end；Cosine 平滑缓入缓出；Custom 使用关键帧插值。',
+      previewCfgStrengthStart: '起始 CFG 强度（预览）',
+      previewCfgStrengthStartHint: '预览时第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。',
+      previewCfgStrengthStartPlaceholder: '自动（cfgStrength × 0.5）',
+      previewCfgScheduleKeyframes: '调度关键帧（预览）',
+      previewCfgScheduleKeyframesHint: '逗号分隔的 step:value 对，例如 "0:1.5,16:3.0,31:3.0"。关键帧间线性插值。仅 Custom 模式生效。',
+      previewCfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
+      // Task 5: Vocoder overlap
+      vocoderOverlapFrames: 'Vocoder 重叠帧数',
+      // Task 10: Loudnorm
+      enableLoudnormFinal: 'EBU R128 响度归一化',
+      enableLoudnormFinalHint: '对最终输出应用 2-pass EBU R128 响度归一化（目标 −14 LUFS）及 true-peak 限制（−1 dBTP）。',
+      // Task 16: 抗混叠
+      enableAntiAliasing: '降采样抗混叠',
+      enableAntiAliasingHint: '降采样前先做低通滤波以减少高频混叠。略增 CPU 开销。',
+      // Task 17: SDEdit 局部修复
+      enableSDEditRepair: 'SDEdit 局部修复',
+      enableSDEditRepairHint: '扩散后检测 mel 局部异常（NaN / 能量突变）并以浅噪声注入局部重采样。默认关闭，仅在排查伪影时启用。',
+      // Task 2: 诊断模式
+      diagnosticMode: '诊断模式',
+      diagnosticModeHint: '在控制台输出详细的 [DiffusionDiag] / [VocoderDiag] 统计。NaN/Inf 致命错误无论此设置如何都会上报。',
     },
     synthesisFailed: '合成失败',
     // W24: parameterized variants for t('key') + ': ' + value concatenation.
@@ -383,6 +420,7 @@ export default {
     cfgStrengthHint: '无分类器引导 (Classifier-Free Guidance) 强度。值越大，生成结果越贴合条件（音高/歌词），但可能过度强化导致伪影。设为 0 可跳过无条件预测，推理速度约提升一倍。推荐范围 1.0~5.0。',
     cfgRescale: 'CFG Rescale 系数',
     cfgRescaleHint: 'CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。0 = 完全使用 CFG 增强结果，1 = 完全使用原始预测。推荐 0.5~0.9。',
+    cfgRescaleRangeWarn: '⚠ 当前值超出 SVS 推荐甜区 [0.5, 0.7]，可能产生伪影。仍可继续使用此值合成。',
     previewDiffStepChunkEnabled: '预览时启用 diffStep 分块推理',
     previewDiffStepChunkEnabledDesc: '将目标帧分块独立推理再交叉淡入淡出拼接，利用注意力 O(n²) 特性加速长片段预览。仅影响预览，导出始终整段推理。',
     previewDiffStepChunkHint: '分块可显著加速长片段预览（片段越长加速越明显），代价是块边界处可能产生轻微伪影。短片段（短于分块大小）不会分块。',
@@ -500,7 +538,7 @@ export default {
     releaseDmlVramAfterSynthesisDesc: '仅 DML 后端生效，默认关闭',
     releaseDmlVramAfterSynthesisHint: '每次合成完成后重新加载 diffStep 和 vocoder，强制 DirectML 回收中间张量内存池，缓解连续合成 OOM。开启后会增加一点合成后的等待时间。',
     releaseDiffStepBeforeVocoder: 'Vocoder 推理前释放 diffStep',
-    releaseDiffStepBeforeVocoderDesc: '仅 DML 后端生效，默认开启',
+    releaseDiffStepBeforeVocoderDesc: '仅 DML 后端生效，默认关闭',
     releaseDiffStepBeforeVocoderHint: 'diffusion 完成后释放 diffStep session，让 vocoder 推理独占显存（腾出约 3-4GB），避免 0x887A0006/TDR 黑屏。代价：每次 vocoder 后需重载 diffStep（约 1-3 秒），多段合成会变慢。SiFiGAN 与低显存显卡强烈建议开启。',
 
     // ORT advanced settings section

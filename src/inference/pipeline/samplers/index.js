@@ -48,7 +48,7 @@ const SOLVERS = {
     },
 };
 
-const DEFAULT_SOLVER = 'euler';
+const DEFAULT_SOLVER = 'stork2';
 const VALID_SOLVERS = Object.keys(SOLVERS);
 
 // 旧名称兼容映射（用户已保存的 settings 可能含 'stork'）

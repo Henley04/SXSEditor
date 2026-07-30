@@ -74,14 +74,87 @@ function loadSettings() {
     _settingsCache.releaseDmlVramAfterSynthesis = false;
   }
 
-  // Vocoder 推理前是否临时释放 diffStep session（默认开启，仅 DML 后端有效）
+  // Vocoder 推理前是否临时释放 diffStep session（默认关闭，仅 DML 后端有效）
   // diffStep 模型权重 + 32 步 diffusion 激活工作区（~2GB）在 vocoder 推理期间仍占用显存，
   // 与 vocoder 激活叠加易触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR (屏幕全黑)。
   // 开启后：diffusion 完成 → 释放 diffStep → vocoder 推理 → 重载 diffStep。
   // 代价：每次 vocoder 推理后需重载 diffStep（~1-3秒），多 segment 合成会显著变慢。
+  // 默认 false：pipeline/index.js 在 vocoder 捕获 isVramOOMError 后会动态启用一次
+  // （仅下一个 segment），完成后自动恢复用户设置，避免对所有用户加 1-3s/段的时间税。
   // WebNN 路径无需此优化（diffStep 在渲染进程，vocoder 在主进程 DML，互不抢占显存）。
   if (typeof _settingsCache.releaseDiffStepBeforeVocoder !== 'boolean') {
-    _settingsCache.releaseDiffStepBeforeVocoder = true;
+    _settingsCache.releaseDiffStepBeforeVocoder = false;
+  }
+
+  // 诊断模式（默认关闭）。开启后输出 [DiffusionDiag] / [VocoderDiag] 统计/采样日志，
+  // 用于排查 NaN/Inf / silent failure 等推理问题。NaN/Inf 致命错误（console.error）
+  // 始终输出，不受此开关影响。
+  if (typeof _settingsCache.diagnosticMode !== 'boolean') {
+    _settingsCache.diagnosticMode = false;
+  }
+
+  // Vocoder 分块间重叠帧数（默认 32，范围 8-96）。重叠越大边界越平滑但计算量增加。
+  // 与 shared/constants.js 的 VOCODER_OVERLAP_FRAMES 常量对齐（32 帧 ≈ 640ms 感受野）。
+  // 用户可在 settings.json 覆盖；运行时由 pipeline/index.js 透传到 runVocoderChunked。
+  if (!Number.isFinite(_settingsCache.vocoderOverlapFrames) ||
+      _settingsCache.vocoderOverlapFrames < 8 || _settingsCache.vocoderOverlapFrames > 96) {
+    _settingsCache.vocoderOverlapFrames = 32;
+  }
+
+  // 末端 EBU R128 响度归一化（−14 LUFS）+ true-peak 限制器（−1 dBTP）。
+  // 默认开启，符合流媒体分发标准；关闭时仅保留旧的 normalizePeakTo(0.95) 行为。
+  if (typeof _settingsCache.enableLoudnormFinal !== 'boolean') {
+    _settingsCache.enableLoudnormFinal = true;
+  }
+
+  // resampleLinear 降采样前的 Butterworth 1st-order IIR 抗混叠低通滤波（截止 = dstSr/2）。
+  // 默认关闭以保持默认输出特征不变；开启后可减少降采样混叠（以少量 CPU 开销为代价）。
+  if (typeof _settingsCache.enableAntiAliasing !== 'boolean') {
+    _settingsCache.enableAntiAliasing = false;
+  }
+
+  // SDEdit 局部修复（默认关闭）。检测 diffusion 输出 mel 局部 NaN/能量突变后用浅噪声重噪
+  // + 少步重采样修复（STORK-2 5 步，仅更新异常帧）。默认 false 时不执行任何修复代码路径。
+  if (typeof _settingsCache.enableSDEditRepair !== 'boolean') {
+    _settingsCache.enableSDEditRepair = false;
+  }
+
+  // ===== Task 11: CFG 强度曲线调度 =====
+  // 在 diffusion 采样循环中按 step 动态调整 CFG 引导强度。
+  // mode: 'constant'（固定，与改造前字节一致）| 'linear'（线性）| 'cosine'（余弦）| 'custom'（关键帧）
+  // cfgStrengthStart: null 时回退到 cfgStrength * 0.5（linear/cosine 从 0.5×cfg 上升到 cfg）
+  // cfgScheduleKeyframes: null 或 [{step, value}, ...]（custom 模式分段线性插值）
+  // 默认 'linear'：早期低 CFG 稳定结构，后期高 CFG 锐化细节。
+  // 顶层键为通用默认；preview*/export* 镜像键分别覆盖预览/导出路径。
+  const _validScheduleModes = ['constant', 'linear', 'cosine', 'custom'];
+  if (!_validScheduleModes.includes(_settingsCache.cfgScheduleMode)) {
+    _settingsCache.cfgScheduleMode = 'linear';
+  }
+  if (_settingsCache.cfgStrengthStart !== null && !Number.isFinite(_settingsCache.cfgStrengthStart)) {
+    _settingsCache.cfgStrengthStart = null;
+  }
+  if (_settingsCache.cfgScheduleKeyframes !== null && !Array.isArray(_settingsCache.cfgScheduleKeyframes)) {
+    _settingsCache.cfgScheduleKeyframes = null;
+  }
+  // 预览镜像键
+  if (!_validScheduleModes.includes(_settingsCache.previewCfgScheduleMode)) {
+    _settingsCache.previewCfgScheduleMode = 'linear';
+  }
+  if (_settingsCache.previewCfgStrengthStart !== null && !Number.isFinite(_settingsCache.previewCfgStrengthStart)) {
+    _settingsCache.previewCfgStrengthStart = null;
+  }
+  if (_settingsCache.previewCfgScheduleKeyframes !== null && !Array.isArray(_settingsCache.previewCfgScheduleKeyframes)) {
+    _settingsCache.previewCfgScheduleKeyframes = null;
+  }
+  // 导出镜像键
+  if (!_validScheduleModes.includes(_settingsCache.exportCfgScheduleMode)) {
+    _settingsCache.exportCfgScheduleMode = 'linear';
+  }
+  if (_settingsCache.exportCfgStrengthStart !== null && !Number.isFinite(_settingsCache.exportCfgStrengthStart)) {
+    _settingsCache.exportCfgStrengthStart = null;
+  }
+  if (_settingsCache.exportCfgScheduleKeyframes !== null && !Array.isArray(_settingsCache.exportCfgScheduleKeyframes)) {
+    _settingsCache.exportCfgScheduleKeyframes = null;
   }
 
   // ===== 预览 diffStep 分块推理设置 =====
@@ -265,6 +338,20 @@ const ALLOWED_SETTINGS_KEYS = [
   'vocoderChunkMode', 'vocoderChunkFrames',
   'releaseDmlVramAfterSynthesis',
   'releaseDiffStepBeforeVocoder',
+  'diagnosticMode',
+  'vocoderOverlapFrames',
+  'enableLoudnormFinal',
+  'enableAntiAliasing',
+  'enableSDEditRepair',
+  'cfgScheduleMode',
+  'cfgStrengthStart',
+  'cfgScheduleKeyframes',
+  'previewCfgScheduleMode',
+  'previewCfgStrengthStart',
+  'previewCfgScheduleKeyframes',
+  'exportCfgScheduleMode',
+  'exportCfgStrengthStart',
+  'exportCfgScheduleKeyframes',
   'inferenceProvider',
   'ortEnableMemPattern',
   'ortForceMemPatternOnDml',

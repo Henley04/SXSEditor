@@ -169,6 +169,9 @@ export async function playAll() {
             diffStepChunk: true,
             diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
             diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
+            cfgScheduleMode: inferenceOpts.cfgScheduleMode,
+            cfgStrengthStart: inferenceOpts.cfgStrengthStart,
+            cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
           },
         });
       }
@@ -398,6 +401,9 @@ export async function playAll() {
             diffStepChunk: false,
             diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
             diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
+            cfgScheduleMode: inferenceOpts.cfgScheduleMode,
+            cfgStrengthStart: inferenceOpts.cfgStrengthStart,
+            cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
           },
         });
 
@@ -499,13 +505,17 @@ export function getPreviewInferenceOptions() {
   return {
     nSteps: state.audioSettings?.previewDiffSteps ?? 16,
     cfg: state.audioSettings?.previewCfgStrength ?? 3.0,
-    cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.75,
-    sampler: state.audioSettings?.previewSampler ?? 'euler',
+    cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.6,
+    sampler: state.audioSettings?.previewSampler ?? 'stork2',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     diffStepChunk: state.audioSettings?.previewDiffStepChunkEnabled === true,
     diffStepChunkFrames: state.audioSettings?.previewDiffStepChunkFrames ?? 500,
     diffStepOverlapFrames: state.audioSettings?.previewDiffStepOverlapFrames ?? 50,
+    // Task 11: CFG schedule (preview mirrors). Falls back to top-level keys.
+    cfgScheduleMode: state.audioSettings?.previewCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'linear',
+    cfgStrengthStart: state.audioSettings?.previewCfgStrengthStart ?? state.audioSettings?.cfgStrengthStart ?? null,
+    cfgScheduleKeyframes: state.audioSettings?.previewCfgScheduleKeyframes ?? state.audioSettings?.cfgScheduleKeyframes ?? null,
   };
 }
 
@@ -513,10 +523,14 @@ export function getExportInferenceOptions() {
   return {
     nSteps: state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.exportCfgStrength ?? 3.0,
-    cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.75,
-    sampler: state.audioSettings?.exportSampler ?? 'euler',
+    cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.6,
+    sampler: state.audioSettings?.exportSampler ?? 'stork2',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
+    // Task 11: CFG schedule (export mirrors). Falls back to top-level keys.
+    cfgScheduleMode: state.audioSettings?.exportCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'linear',
+    cfgStrengthStart: state.audioSettings?.exportCfgStrengthStart ?? state.audioSettings?.cfgStrengthStart ?? null,
+    cfgScheduleKeyframes: state.audioSettings?.exportCfgScheduleKeyframes ?? state.audioSettings?.cfgScheduleKeyframes ?? null,
   };
 }
 
@@ -1071,6 +1085,9 @@ export async function runExportJob(opts) {
           cfg,
           cfgRescale,
           sampler,
+          cfgScheduleMode: opts.cfgScheduleMode,
+          cfgStrengthStart: opts.cfgStrengthStart,
+          cfgScheduleKeyframes: opts.cfgScheduleKeyframes,
         },
       });
 

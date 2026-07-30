@@ -509,8 +509,8 @@ describe('Samplers - 求解器单元测试', () => {
     });
 
     describe('注册表与工厂', () => {
-        it('DEFAULT_SOLVER = "euler"', () => {
-            expect(DEFAULT_SOLVER).to.equal('euler');
+        it('DEFAULT_SOLVER = "stork2"', () => {
+            expect(DEFAULT_SOLVER).to.equal('stork2');
         });
 
         it('SOLVERS 包含 euler/heun/extrap/stork2', () => {
@@ -537,10 +537,10 @@ describe('Samplers - 求解器单元测试', () => {
         });
 
         it('resolveSamplerName 非法值回退到默认', () => {
-            expect(resolveSamplerName('dpm')).to.equal('euler');
-            expect(resolveSamplerName(undefined)).to.equal('euler');
-            expect(resolveSamplerName(null)).to.equal('euler');
-            expect(resolveSamplerName(123)).to.equal('euler');
+            expect(resolveSamplerName('dpm')).to.equal('stork2');
+            expect(resolveSamplerName(undefined)).to.equal('stork2');
+            expect(resolveSamplerName(null)).to.equal('stork2');
+            expect(resolveSamplerName(123)).to.equal('stork2');
         });
 
         it('createSampler 返回正确类型', () => {
@@ -550,8 +550,8 @@ describe('Samplers - 求解器单元测试', () => {
             expect(createSampler('stork2')).to.be.instanceOf(Stork2Solver);
             // 旧名称也返回 ExtrapSolver
             expect(createSampler('stork')).to.be.instanceOf(ExtrapSolver);
-            // 非法值返回 Euler
-            expect(createSampler('invalid')).to.be.instanceOf(EulerSolver);
+            // 非法值返回默认 Stork2Solver
+            expect(createSampler('invalid')).to.be.instanceOf(Stork2Solver);
         });
     });
 });

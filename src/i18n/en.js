@@ -53,6 +53,7 @@ export default {
       diffSteps: 'Diffusion Steps',
       cfgStrength: 'CFG Strength',
       cfgRescale: 'CFG Rescale Factor',
+      cfgRescaleRangeWarn: '⚠ Value is outside the SVS sweet spot [0.5, 0.7] and may produce artifacts. You can still synthesize with this value.',
       sampler: 'Sampler',
       samplerHint: 'Diffusion sampling solver. Euler is the default baseline; Heun is a 2nd-order improved Euler (2 inferences per step, higher accuracy but slower); Extrapolated Euler is a velocity-extrapolation heuristic inspired by STORK (1 inference/step); STORK-2 is the full paper-faithful Stabilized Taylor Orthogonal Runge-Kutta method (1 inference/step via virtual NFE, 8 RKC sub-stages). Note: in chunked preview inference, both Extrapolated Euler and STORK-2 lose cross-step state at chunk boundaries, reducing their advantage.',
       samplerEuler: 'Euler (1st-order, default)',
@@ -95,6 +96,42 @@ export default {
       noFragments: 'No fragments to export',
       noNotes: 'No notes in fragments to export',
       precisionChanged: 'Precision changed — inference pipeline will be reset (first synthesis may be slower)',
+      // Task 11: CFG strength schedule
+      cfgScheduleMode: 'CFG Strength Schedule',
+      cfgScheduleModeHint: 'Adjusts CFG strength across diffusion steps. Constant = fixed value (legacy behavior); Linear ramps from start to end; Cosine eases in/out smoothly; Custom uses keyframe interpolation.',
+      cfgScheduleConstant: 'Constant (fixed)',
+      cfgScheduleLinear: 'Linear (start → end)',
+      cfgScheduleCosine: 'Cosine (smooth ease)',
+      cfgScheduleCustom: 'Custom (keyframes)',
+      cfgStrengthStart: 'CFG Strength Start',
+      cfgStrengthStartHint: 'Starting CFG strength at step 0. Falls back to cfgStrength × 0.5 when empty. Ignored in Constant mode.',
+      cfgStrengthStartPlaceholder: 'auto (cfgStrength × 0.5)',
+      cfgScheduleKeyframes: 'Schedule Keyframes',
+      cfgScheduleKeyframesHint: 'Comma-separated step:value pairs, e.g. "0:1.5,16:3.0,31:3.0". Linearly interpolated between keyframes. Only used in Custom mode.',
+      cfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
+      // M5: Preview CFG strength schedule (mirrors export schedule for preview playback)
+      previewCfgScheduleMode: 'CFG Strength Schedule (Preview)',
+      previewCfgScheduleModeHint: 'Same as export schedule, but applied to preview playback. Adjusts CFG strength across diffusion steps. Constant = fixed value; Linear ramps from start to end; Cosine eases in/out smoothly; Custom uses keyframe interpolation.',
+      previewCfgStrengthStart: 'CFG Strength Start (Preview)',
+      previewCfgStrengthStartHint: 'Starting CFG strength at step 0 for preview. Falls back to cfgStrength × 0.5 when empty. Ignored in Constant mode.',
+      previewCfgStrengthStartPlaceholder: 'auto (cfgStrength × 0.5)',
+      previewCfgScheduleKeyframes: 'Schedule Keyframes (Preview)',
+      previewCfgScheduleKeyframesHint: 'Comma-separated step:value pairs, e.g. "0:1.5,16:3.0,31:3.0". Linearly interpolated between keyframes. Only used in Custom mode.',
+      previewCfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
+      // Task 5: Vocoder overlap
+      vocoderOverlapFrames: 'Vocoder Overlap (frames)',
+      // Task 10: Loudnorm
+      enableLoudnormFinal: 'EBU R128 Loudness Normalization',
+      enableLoudnormFinalHint: 'Apply 2-pass EBU R128 loudness normalization (target −14 LUFS) with true-peak limiting (−1 dBTP) on final output.',
+      // Task 16: Anti-aliasing
+      enableAntiAliasing: 'Anti-aliasing on downsample',
+      enableAntiAliasingHint: 'Apply low-pass filter before downsampling to reduce high-frequency aliasing. Increases CPU usage slightly.',
+      // Task 17: SDEdit repair
+      enableSDEditRepair: 'SDEdit Local Repair',
+      enableSDEditRepairHint: 'Detect mel anomalies (NaN / energy spikes) after diffusion and locally re-sample with shallow noise injection. Disabled by default; enable only for diagnosing artifacts.',
+      // Task 2: Diagnostic mode
+      diagnosticMode: 'Diagnostic Mode',
+      diagnosticModeHint: 'Print detailed [DiffusionDiag] / [VocoderDiag] statistics to console. NaN/Inf fatal errors are always reported regardless of this setting.',
     },
     synthesisFailed: 'Synthesis failed',
     // W24: parameterized variants for t('key') + ': ' + value concatenation.
@@ -383,6 +420,7 @@ export default {
     cfgStrengthHint: 'Classifier-Free Guidance strength. Higher values make the output more aligned with conditions (pitch/lyrics), but may cause artifacts. Setting to 0 skips unconditional prediction, roughly doubling inference speed. Recommended range: 1.0~5.0.',
     cfgRescale: 'CFG Rescale Factor',
     cfgRescaleHint: 'Rescaling factor for CFG results, used to mitigate artifacts from over-guidance. 0 = fully use CFG-enhanced result, 1 = fully use original prediction. Recommended: 0.5~0.9.',
+    cfgRescaleRangeWarn: '⚠ Value is outside the SVS sweet spot [0.5, 0.7] and may produce artifacts. You can still synthesize with this value.',
     previewDiffStepChunkEnabled: 'Enable diffStep chunked inference for preview',
     previewDiffStepChunkEnabledDesc: 'Splits target frames into chunks, runs full diffusion loop per chunk independently, then crossfades. Leverages O(n²) attention for faster long-segment preview. Preview only; export always uses full-sequence inference.',
     previewDiffStepChunkHint: 'Chunking significantly speeds up long-segment preview (longer segments = more speedup), at the cost of minor artifacts at chunk boundaries. Short segments (shorter than chunk size) are not chunked.',
@@ -500,7 +538,7 @@ export default {
     releaseDmlVramAfterSynthesisDesc: 'Only affects DML backend; off by default',
     releaseDmlVramAfterSynthesisHint: 'Reload diffStep and vocoder after each synthesis to force DirectML to reclaim transient tensor memory pools, reducing OOM on consecutive syntheses. Adds a short wait after each synthesis.',
     releaseDiffStepBeforeVocoder: 'Release diffStep before vocoder inference',
-    releaseDiffStepBeforeVocoderDesc: 'Only affects DML backend; on by default',
+    releaseDiffStepBeforeVocoderDesc: 'Only affects DML backend; off by default',
     releaseDiffStepBeforeVocoderHint: 'Release diffStep session after diffusion completes so vocoder inference gets full VRAM (~3-4GB freed), preventing 0x887A0006/TDR black screen. Cost: diffStep must be reloaded after each vocoder pass (~1-3s), slowing multi-segment synthesis. Strongly recommended for SiFiGAN and low-VRAM GPUs.',
 
     // ORT advanced settings section

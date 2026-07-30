@@ -7,6 +7,7 @@ import { getOrt } from './ortSetup.js';
 import { runSession } from './sessionManager.js';
 import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom, padToLength, disposeTensor } from './utils.js';
 import { createSampler } from '../pipeline/samplers/index.js';
+import { resolveCfgAtStep } from '../pipeline/cfgSchedule.js';
 
 /**
  * 单片段扩散采样循环
@@ -27,6 +28,7 @@ export async function runDiffusionLoop({
     npuDiffBatchSize = 4,
     useStaticShapes = false,
     samplerName = 'euler',
+    cfgScheduleOpts = null,
 }) {
     const ort = getOrt();
 
@@ -261,12 +263,16 @@ export async function runDiffusionLoop({
         }
     };
 
+    // Task 11 / M1: track current step for CFG schedule resolution (aligned with
+    // pipeline/diffusion.js). constant mode returns cfgStrength byte-identically;
+    // linear/cosine/custom adjust CFG per step. cfgScheduleOpts null = legacy fixed CFG.
+    let currentStep = 0;
+
     // combine: CFG + Rescale 合并，写入 vBuf（复用），返回 vBuf 引用
     // 无 CFG 时直接拷贝 condPred 到 vBuf（condPred 已是 target 段）。
-    // 有 CFG 时 three-pass（与 ORT 路径完全一致）：
-    //   Pass 1: cfgVal → cfgPredBuf, 累加 sum
-    //   Pass 2: two-pass 方差
-    //   Pass 3: 应用 rescale → vBuf
+    // 有 CFG 时 single-pass Welford 在线方差（Task 7.2 — 与 ORT 路径对齐）：
+    //   Pass 1: cfgVal → cfgPredBuf，Welford 累加 posMean/posM2 + cfgAdjMean/cfgAdjM2
+    //   Pass 2: 用 Welford 最终值算 std/rescale → vBuf
     const combineRaw = (condPred, uncondPred) => {
         const v = buffers.vBuf;
         if (!useCfg) {
@@ -274,24 +280,32 @@ export async function runDiffusionLoop({
             return v;
         }
         const targetLen = totalFrames * MEL_DIM;
-        let posSum = 0, cfgAdjSum = 0;
+        // Task 11 / M1: resolve effective CFG for this step once (constant = cfgStrength,
+        // byte-identical; linear/cosine/custom adjust per step). Aligned with DML path.
+        const effectiveCfg = cfgScheduleOpts
+            ? resolveCfgAtStep({ ...cfgScheduleOpts, cfgStrength, step: currentStep, totalSteps })
+            : cfgStrength;
+        // Single-pass Welford online variance (Task 7.2 — aligned with pipeline/diffusion.js)
+        // Pass 1: cfgVal → cfgPredBuf, Welford accumulate posMean/posM2 + cfgAdjMean/cfgAdjM2
+        let posMean = 0, posM2 = 0;
+        let cfgAdjMean = 0, cfgAdjM2 = 0;
+        let n = 0;
         for (let i = 0; i < targetLen; i++) {
-            posSum += condPred[i];
-            const cfgVal = condPred[i] + cfgStrength * (condPred[i] - uncondPred[i]);
+            const condVal = condPred[i];
+            const uncondVal = uncondPred[i];
+            const cfgVal = condVal + effectiveCfg * (condVal - uncondVal);
             cfgPredBuf[i] = cfgVal;
-            cfgAdjSum += cfgVal;
+            n++;
+            const posDelta = condVal - posMean;
+            posMean += posDelta / n;
+            posM2 += posDelta * (condVal - posMean);
+            const cfgDelta = cfgVal - cfgAdjMean;
+            cfgAdjMean += cfgDelta / n;
+            cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
         }
-        const posMean = posSum / targetLen;
-        const cfgAdjMean = cfgAdjSum / targetLen;
-        let posVarSum = 0, cfgAdjVarSum = 0;
-        for (let i = 0; i < targetLen; i++) {
-            const pv = condPred[i] - posMean;
-            posVarSum += pv * pv;
-            const cd = cfgPredBuf[i] - cfgAdjMean;
-            cfgAdjVarSum += cd * cd;
-        }
-        const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
-        const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
+        // Pass 2: std/rescale + write vBuf (Bessel correction N-1 denominator)
+        const posStd = Math.sqrt(Math.max(0, posM2) / Math.max(1, n - 1));
+        const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjM2) / Math.max(1, n - 1));
         const rescale = posStd / (cfgAdjStd + 1e-8);
         for (let i = 0; i < targetLen; i++) {
             const cfgVal = cfgPredBuf[i];
@@ -314,6 +328,7 @@ export async function runDiffusionLoop({
     let totalNFE = 0;
     try {
         for (let step = 0; step < totalSteps; step++) {
+            currentStep = step;
             const tStep = performance.now();
             const { nfe } = await sampler.step({
                 evalDiffStep, combine, step, totalSteps,
@@ -374,6 +389,7 @@ export async function runBatchDiffusionLoop({
     floatType,
     useStaticShapes = false,
     samplerName = 'euler',
+    cfgScheduleOpts = null,
 }) {
     // 非 Euler 求解器：退化为两次单段调用，保证正确性
     if (samplerName !== 'euler') {
@@ -393,6 +409,7 @@ export async function runBatchDiffusionLoop({
                 npuDiffBatchSize: 2,
                 useStaticShapes,
                 samplerName,
+                cfgScheduleOpts,
             });
             results.push({ xtData: r.xtData, totalFrames: r.totalFrames });
         }
@@ -528,6 +545,11 @@ export async function runBatchDiffusionLoop({
             const inferMs = performance.now() - tStepInfer;
 
             const tStepCfg = performance.now();
+            // Task 11 / M1: resolve effective CFG for this step once (constant = cfgStrength0,
+            // byte-identical; linear/cosine/custom adjust per step). Aligned with DML path.
+            const effectiveCfg = cfgScheduleOpts
+                ? resolveCfgAtStep({ ...cfgScheduleOpts, cfgStrength: cfgStrength0, step, totalSteps })
+                : cfgStrength0;
             // Apply CFG per segment
             for (let si = 0; si < 2; si++) {
                 const s = segData[si];
@@ -537,35 +559,30 @@ export async function runBatchDiffusionLoop({
                 const uncondRow = si * 2 + 1;
                 const condRowOff = condRow * batchDiffSeqLen * MEL_DIM;
                 const uncondRowOff = uncondRow * batchDiffSeqLen * MEL_DIM;
-                const targetLen = s.totalFrames * MEL_DIM;
 
-                let posSum = 0, cfgAdjSum = 0;
+                // Single-pass Welford online variance (Task 7.2 — aligned with pipeline/diffusion.js)
+                let posMean = 0, posM2 = 0;
+                let cfgAdjMean = 0, cfgAdjM2 = 0;
+                let n = 0;
                 for (let f = 0; f < s.totalFrames; f++) {
                     const condSrc = condRowOff + (s.ptFrameCount + f) * MEL_DIM;
                     const uncondSrc = uncondRowOff + f * MEL_DIM;
                     for (let d = 0; d < MEL_DIM; d++) {
                         const condVal = batchPredSafe[condSrc + d];
                         const uncondVal = batchPredSafe[uncondSrc + d];
-                        posSum += condVal;
-                        const cfgVal = condVal + cfgStrength0 * (condVal - uncondVal);
+                        const cfgVal = condVal + effectiveCfg * (condVal - uncondVal);
                         cfgPredBuf[f * MEL_DIM + d] = cfgVal;
-                        cfgAdjSum += cfgVal;
+                        n++;
+                        const posDelta = condVal - posMean;
+                        posMean += posDelta / n;
+                        posM2 += posDelta * (condVal - posMean);
+                        const cfgDelta = cfgVal - cfgAdjMean;
+                        cfgAdjMean += cfgDelta / n;
+                        cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
                     }
                 }
-                const posMean = posSum / targetLen;
-                const cfgAdjMean = cfgAdjSum / targetLen;
-                let posVarSum = 0, cfgAdjVarSum = 0;
-                for (let f = 0; f < s.totalFrames; f++) {
-                    const condSrc = condRowOff + (s.ptFrameCount + f) * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        const pv = batchPredSafe[condSrc + d] - posMean;
-                        posVarSum += pv * pv;
-                        const cd = cfgPredBuf[f * MEL_DIM + d] - cfgAdjMean;
-                        cfgAdjVarSum += cd * cd;
-                    }
-                }
-                const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
-                const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
+                const posStd = Math.sqrt(Math.max(0, posM2) / Math.max(1, n - 1));
+                const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjM2) / Math.max(1, n - 1));
                 const rescale = posStd / (cfgAdjStd + 1e-8);
 
                 for (let f = 0; f < s.totalFrames; f++) {

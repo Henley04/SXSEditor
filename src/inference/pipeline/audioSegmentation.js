@@ -207,15 +207,28 @@ class AudioSegmentation {
 
         const f0Hash = this.hashArray(pitchCurveF0);
 
+        // Task 14: refHash uses FNV-1a over the full buffer via the existing
+        // `hashArray` helper, replacing the old "first 4000 bytes with stride"
+        // polynomial scan. `hashArray` already strides long arrays for cost
+        // control but covers the full length (so two buffers sharing only the
+        // first 4000 bytes produce different hashes — eliminating false cache
+        // hits on long reference audio). It also folds in `arr.length`, so
+        // length-differing prefixes never collide.
+        // `hashArray` accepts any array-like (ArrayBuffer, Uint8Array / TypedArray,
+        // Buffer, plain array); normalize the input accordingly.
         let refHash = 0;
         if (refAudioWavBuffer) {
-            const buf = refAudioWavBuffer instanceof ArrayBuffer ? new Uint8Array(refAudioWavBuffer) :
-                        Buffer.isBuffer(refAudioWavBuffer) ? refAudioWavBuffer : null;
+            let buf = null;
+            if (refAudioWavBuffer instanceof ArrayBuffer) {
+                buf = new Uint8Array(refAudioWavBuffer);
+            } else if (ArrayBuffer.isView(refAudioWavBuffer)) {
+                // Covers Uint8Array / Uint8ClampedArray / Buffer / Int16Array / etc.
+                buf = refAudioWavBuffer;
+            } else if (Array.isArray(refAudioWavBuffer)) {
+                buf = refAudioWavBuffer;
+            }
             if (buf) {
-                refHash = buf.length;
-                for (let i = 0; i < Math.min(buf.length, 4000); i += Math.max(1, Math.floor(buf.length / 2000))) {
-                    refHash = ((refHash << 5) - refHash + buf[i]) | 0;
-                }
+                refHash = this.hashArray(buf);
             }
         }
 

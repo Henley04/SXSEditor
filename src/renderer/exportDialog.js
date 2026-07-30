@@ -69,15 +69,28 @@ export async function openExportDialog() {
       modelPrecision: settings.modelPrecision || 'fp32',
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
-      exportCfgRescale: settings.exportCfgRescale ?? 0.75,
-      exportSampler: settings.exportSampler || 'euler',
+      exportCfgRescale: settings.exportCfgRescale ?? 0.6,
+      exportSampler: settings.exportSampler || 'stork2',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
       sifiganPrecision: settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32',
       vocoderChunkMode: settings.vocoderChunkMode === 'manual' ? 'manual' : 'smart',
       vocoderChunkFrames: Number.isFinite(settings.vocoderChunkFrames) ? settings.vocoderChunkFrames : 1008,
       releaseDmlVramAfterSynthesis: settings.releaseDmlVramAfterSynthesis === true,
-      releaseDiffStepBeforeVocoder: settings.releaseDiffStepBeforeVocoder !== false,
+      releaseDiffStepBeforeVocoder: settings.releaseDiffStepBeforeVocoder === true,
+      // Task 11/17/18: new settings keys
+      exportCfgScheduleMode: settings.exportCfgScheduleMode || settings.cfgScheduleMode || 'linear',
+      exportCfgStrengthStart: Number.isFinite(settings.exportCfgStrengthStart) ? settings.exportCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
+      exportCfgScheduleKeyframes: Array.isArray(settings.exportCfgScheduleKeyframes) ? settings.exportCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
+      // M5: preview CFG schedule mirrors (fall back to top-level cfg* keys)
+      previewCfgScheduleMode: settings.previewCfgScheduleMode || settings.cfgScheduleMode || 'linear',
+      previewCfgStrengthStart: Number.isFinite(settings.previewCfgStrengthStart) ? settings.previewCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
+      previewCfgScheduleKeyframes: Array.isArray(settings.previewCfgScheduleKeyframes) ? settings.previewCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
+      vocoderOverlapFrames: Number.isFinite(settings.vocoderOverlapFrames) ? settings.vocoderOverlapFrames : 32,
+      diagnosticMode: settings.diagnosticMode === true,
+      enableLoudnormFinal: settings.enableLoudnormFinal !== false,
+      enableAntiAliasing: settings.enableAntiAliasing === true,
+      enableSDEditRepair: settings.enableSDEditRepair === true,
       outputPath: '',
     };
 
@@ -289,7 +302,15 @@ function buildParamsSection(form) {
     value: form.exportCfgRescale,
     format: (v) => parseFloat(v).toFixed(2),
     onChange: (v) => { form.exportCfgRescale = v; },
+    warning: (v) => (v < 0.5 || v > 0.7) ? t('main.exportDialog.cfgRescaleRangeWarn') : '',
   }));
+
+  // Task 11: CFG strength schedule (export path)
+  section.appendChild(buildCfgScheduleField(form, 'export'));
+
+  // M5: CFG strength schedule (preview path) — mirrors export so preview
+  // playback uses the same configurable schedule instead of always 'linear'.
+  section.appendChild(buildCfgScheduleField(form, 'preview'));
 
   // Auto Shift 复选框
   section.appendChild(buildCheckboxField({
@@ -304,6 +325,129 @@ function buildParamsSection(form) {
   }));
 
   return section;
+}
+
+// ==================== CFG schedule field (export + preview) ====================
+
+// M5: Builds a CFG strength schedule field for either the export or preview
+// path. Mirrors the previous inline export schedule UI; preview uses the
+// previewCfgSchedule* i18n keys and form fields so preview playback is
+// configurable instead of always falling back to 'linear'.
+function buildCfgScheduleField(form, scope) {
+  const isPreview = scope === 'preview';
+  // Export uses unprefixed cfgSchedule* keys; preview uses previewCfgSchedule*.
+  const i18nKey = (base) => isPreview
+    ? `main.exportDialog.preview${base.charAt(0).toUpperCase()}${base.slice(1)}`
+    : `main.exportDialog.${base}`;
+  const formMode = `${scope}CfgScheduleMode`;
+  const formStart = `${scope}CfgStrengthStart`;
+  const formKf = `${scope}CfgScheduleKeyframes`;
+
+  const scheduleField = document.createElement('div');
+  scheduleField.className = 'export-dialog-field';
+  const scheduleLabel = document.createElement('div');
+  scheduleLabel.className = 'export-dialog-field-label';
+  scheduleLabel.textContent = t(i18nKey('cfgScheduleMode'));
+  scheduleField.appendChild(scheduleLabel);
+  const scheduleHint = document.createElement('div');
+  scheduleHint.className = 'export-dialog-field-hint';
+  scheduleHint.textContent = t(i18nKey('cfgScheduleModeHint'));
+  scheduleField.appendChild(scheduleHint);
+  const scheduleSelect = document.createElement('select');
+  // Option labels (Constant/Linear/Cosine/Custom) are shared between scopes.
+  const scheduleOptions = [
+    { value: 'constant', labelKey: 'main.exportDialog.cfgScheduleConstant' },
+    { value: 'linear', labelKey: 'main.exportDialog.cfgScheduleLinear' },
+    { value: 'cosine', labelKey: 'main.exportDialog.cfgScheduleCosine' },
+    { value: 'custom', labelKey: 'main.exportDialog.cfgScheduleCustom' },
+  ];
+  for (const opt of scheduleOptions) {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = t(opt.labelKey);
+    scheduleSelect.appendChild(o);
+  }
+  scheduleSelect.value = form[formMode];
+  scheduleField.appendChild(scheduleSelect);
+
+  // cfgStrengthStart input (hidden in constant mode)
+  const startField = document.createElement('div');
+  startField.className = 'export-dialog-field';
+  startField.dataset.cfgStartField = 'true';
+  const startLabel = document.createElement('div');
+  startLabel.className = 'export-dialog-field-label';
+  startLabel.textContent = t(i18nKey('cfgStrengthStart'));
+  startField.appendChild(startLabel);
+  const startHint = document.createElement('div');
+  startHint.className = 'export-dialog-field-hint';
+  startHint.textContent = t(i18nKey('cfgStrengthStartHint'));
+  startField.appendChild(startHint);
+  const startInput = document.createElement('input');
+  startInput.type = 'number';
+  startInput.min = '0';
+  startInput.max = '10';
+  startInput.step = '0.1';
+  startInput.value = form[formStart] ?? '';
+  startInput.placeholder = t(i18nKey('cfgStrengthStartPlaceholder'));
+  // M12: clamp parsed value to [0, 10] to prevent negative/out-of-range CFG
+  // (negative CFG is undefined behavior in SVS).
+  startInput.addEventListener('input', () => {
+    let v = parseFloat(startInput.value);
+    if (Number.isFinite(v)) {
+      v = Math.max(0, Math.min(10, v));  // clamp to [0, 10]
+    } else {
+      v = null;
+    }
+    form[formStart] = v;
+  });
+  startField.appendChild(startInput);
+  scheduleField.appendChild(startField);
+
+  // custom keyframe editor (only visible in custom mode)
+  const keyframeField = document.createElement('div');
+  keyframeField.className = 'export-dialog-field';
+  keyframeField.dataset.cfgKeyframeField = 'true';
+  const kfLabel = document.createElement('div');
+  kfLabel.className = 'export-dialog-field-label';
+  kfLabel.textContent = t(i18nKey('cfgScheduleKeyframes'));
+  keyframeField.appendChild(kfLabel);
+  const kfHint = document.createElement('div');
+  kfHint.className = 'export-dialog-field-hint';
+  kfHint.textContent = t(i18nKey('cfgScheduleKeyframesHint'));
+  keyframeField.appendChild(kfHint);
+  const kfInput = document.createElement('input');
+  kfInput.type = 'text';
+  kfInput.placeholder = t(i18nKey('cfgScheduleKeyframesPlaceholder'));
+  // Render existing keyframes as text
+  if (Array.isArray(form[formKf]) && form[formKf].length > 0) {
+    kfInput.value = form[formKf].map(kf => `${kf.step}:${kf.value}`).join(',');
+  }
+  kfInput.addEventListener('input', () => {
+    const text = kfInput.value.trim();
+    if (!text) { form[formKf] = null; return; }
+    const parsed = [];
+    for (const part of text.split(',')) {
+      const [s, v] = part.split(':').map(x => parseFloat(x.trim()));
+      if (Number.isFinite(s) && Number.isFinite(v)) parsed.push({ step: s, value: v });
+    }
+    form[formKf] = parsed.length > 0 ? parsed : null;
+  });
+  keyframeField.appendChild(kfInput);
+  scheduleField.appendChild(keyframeField);
+
+  // Toggle start/keyframe visibility on mode change
+  const updateVisibility = () => {
+    const mode = scheduleSelect.value;
+    startField.hidden = (mode === 'constant');
+    keyframeField.hidden = (mode !== 'custom');
+  };
+  scheduleSelect.addEventListener('change', () => {
+    form[formMode] = scheduleSelect.value;
+    updateVisibility();
+  });
+  updateVisibility();
+
+  return scheduleField;
 }
 
 function buildAdvancedSection(form, settings) {
@@ -453,6 +597,46 @@ function buildAdvancedSection(form, settings) {
     onChange: (v) => { form.releaseDiffStepBeforeVocoder = v; },
   }));
 
+  // Task 5: Vocoder overlap frames (8-96, default 32)
+  content.appendChild(buildRangeField({
+    labelKey: 'main.exportDialog.vocoderOverlapFrames',
+    min: 8, max: 96, step: 4,
+    value: form.vocoderOverlapFrames,
+    onChange: (v) => { form.vocoderOverlapFrames = v; },
+  }));
+
+  // Task 10: Loudnorm toggle (default on)
+  content.appendChild(buildCheckboxField({
+    labelKey: 'main.exportDialog.enableLoudnormFinal',
+    descKey: 'main.exportDialog.enableLoudnormFinalHint',
+    checked: form.enableLoudnormFinal,
+    onChange: (v) => { form.enableLoudnormFinal = v; },
+  }));
+
+  // Task 16: Anti-aliasing toggle (default off)
+  content.appendChild(buildCheckboxField({
+    labelKey: 'main.exportDialog.enableAntiAliasing',
+    descKey: 'main.exportDialog.enableAntiAliasingHint',
+    checked: form.enableAntiAliasing,
+    onChange: (v) => { form.enableAntiAliasing = v; },
+  }));
+
+  // Task 17: SDEdit repair toggle (default off)
+  content.appendChild(buildCheckboxField({
+    labelKey: 'main.exportDialog.enableSDEditRepair',
+    descKey: 'main.exportDialog.enableSDEditRepairHint',
+    checked: form.enableSDEditRepair,
+    onChange: (v) => { form.enableSDEditRepair = v; },
+  }));
+
+  // Task 2: Diagnostic mode toggle (default off)
+  content.appendChild(buildCheckboxField({
+    labelKey: 'main.exportDialog.diagnosticMode',
+    descKey: 'main.exportDialog.diagnosticModeHint',
+    checked: form.diagnosticMode,
+    onChange: (v) => { form.diagnosticMode = v; },
+  }));
+
   updateSifiganPrecisionVisibility(content, form);
 
   return section;
@@ -528,14 +712,38 @@ function buildRangeField(opts) {
   slider.max = opts.max;
   slider.step = opts.step;
   slider.value = opts.value;
+
+  // Optional warning hint element. When `opts.warning(v)` returns a non-empty
+  // string, the hint is shown below the slider; the value is still applied
+  // (no clamping/blocking).
+  let warnEl = null;
+  const updateWarning = (v) => {
+    if (typeof opts.warning !== 'function') return;
+    const msg = opts.warning(v);
+    if (msg) {
+      if (!warnEl) {
+        warnEl = document.createElement('div');
+        warnEl.className = 'export-dialog-field-hint export-dialog-field-warn';
+        field.appendChild(warnEl);
+      }
+      warnEl.textContent = msg;
+      warnEl.hidden = false;
+    } else if (warnEl) {
+      warnEl.hidden = true;
+    }
+  };
+
   slider.addEventListener('input', () => {
     const v = parseFloat(slider.value);
     valueBox.textContent = opts.format ? opts.format(v) : v;
     opts.onChange(v);
+    updateWarning(v);
   });
 
   field.appendChild(label);
   field.appendChild(slider);
+  // Initialize warning visibility for the starting value.
+  updateWarning(parseFloat(slider.value));
   return field;
 }
 
@@ -597,6 +805,19 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     vocoderChunkFrames: form.vocoderChunkFrames,
     releaseDmlVramAfterSynthesis: form.releaseDmlVramAfterSynthesis,
     releaseDiffStepBeforeVocoder: form.releaseDiffStepBeforeVocoder,
+    // Task 11/17/18: new settings keys
+    exportCfgScheduleMode: form.exportCfgScheduleMode,
+    exportCfgStrengthStart: form.exportCfgStrengthStart,
+    exportCfgScheduleKeyframes: form.exportCfgScheduleKeyframes,
+    // M5: preview CFG schedule mirrors
+    previewCfgScheduleMode: form.previewCfgScheduleMode,
+    previewCfgStrengthStart: form.previewCfgStrengthStart,
+    previewCfgScheduleKeyframes: form.previewCfgScheduleKeyframes,
+    vocoderOverlapFrames: form.vocoderOverlapFrames,
+    diagnosticMode: form.diagnosticMode,
+    enableLoudnormFinal: form.enableLoudnormFinal,
+    enableAntiAliasing: form.enableAntiAliasing,
+    enableSDEditRepair: form.enableSDEditRepair,
   };
 
   // 禁用开始按钮，显示保存中状态
@@ -694,6 +915,10 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
       cfgRescale: form.exportCfgRescale,
       sampler: form.exportSampler,
       autoShift: form.autoShift,
+      // Task 11: CFG schedule opts
+      cfgScheduleMode: form.exportCfgScheduleMode,
+      cfgStrengthStart: form.exportCfgStrengthStart,
+      cfgScheduleKeyframes: form.exportCfgScheduleKeyframes,
       onFragmentProgress: (p) => {
         setStatus('progressSynthesizing', { progress: p });
       },
