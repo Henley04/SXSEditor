@@ -63,13 +63,13 @@
   - [x] 10.3 单 chunk 路径同样应用（单 chunk 末端 `normalizePeakTo(output)` 之后）。
   - [x] 10.4 验证：新增 `test/loudnorm.test.js`，正弦波输入归一化到 −14 LUFS ±0.5；峰值 ≤ −1 dBTP。
 
-- [ ] Task 11: CFG 强度曲线调度
-  - [ ] 11.1 新建 `src/inference/pipeline/cfgSchedule.js`：导出 `resolveCfgAtStep({mode, cfgStrength, cfgStrengthStart, cfgStrengthEnd, keyframes, step, totalSteps})` 返回当前步有效 cfg 值。支持 `constant | linear | cosine | custom` 四种模式。`linear`: `start + (end - start) * step / (totalSteps - 1)`；`cosine`: `start + (end - start) * (1 - cos(π * step / (totalSteps - 1))) / 2`；`custom`: keyframes 分段线性插值。
-  - [ ] 11.2 在 `src/main/settings.js` 加 `cfgScheduleMode`（默认 `'linear'`）、`cfgStrengthStart`（默认 null，回退到 `cfgStrength * 0.5`）、`cfgScheduleKeyframes`（默认 null）、`enableLoudnormFinal`（默认 true），加入 `ALLOWED_SETTINGS_KEYS`。同时为 `preview*` 与 `export*` 加镜像键：`previewCfgScheduleMode`/`previewCfgStrengthStart`/`exportCfgScheduleMode`/`exportCfgStrengthStart`/`exportCfgScheduleKeyframes`/`previewCfgScheduleKeyframes`。
-  - [ ] 11.3 在 `src/inference/pipeline/diffusion.js` `runDiffusionLoop` 内，`combine` 函数从闭包读取固定 `cfgStrength` 改为按 `step` 调用 `resolveCfgAtStep`。`combine` 接收 `step` 参数（修改 sampler.step 调用约定，把 `step` 透传到 combine）。
-  - [ ] 11.4 在 `src/renderer/audioPlayback.js` 的 `getPreviewInferenceOptions` / `getExportInferenceOptions` 透传 schedule 参数到 opts。
-  - [ ] 11.5 在 `src/inference/pipeline/index.js` `_synthesizeImpl` 与 `synthesizeMultiStreaming` 读取 schedule opts 并透传到 `_runDiffusionLoop` → `runDiffusionLoop`。
-  - [ ] 11.6 验证：新增 `test/cfgSchedule.test.js`，四种模式数值正确；`constant` 模式与旧行为字节级一致。
+- [x] Task 11: CFG 强度曲线调度
+  - [x] 11.1 新建 `src/inference/pipeline/cfgSchedule.js`：导出 `resolveCfgAtStep({mode, cfgStrength, cfgStrengthStart, cfgStrengthEnd, keyframes, step, totalSteps})` 返回当前步有效 cfg 值。支持 `constant | linear | cosine | custom` 四种模式。`linear`: `start + (end - start) * step / (totalSteps - 1)`；`cosine`: `start + (end - start) * (1 - cos(π * step / (totalSteps - 1))) / 2`；`custom`: keyframes 分段线性插值。
+  - [x] 11.2 在 `src/main/settings.js` 加 `cfgScheduleMode`（默认 `'linear'`）、`cfgStrengthStart`（默认 null，回退到 `cfgStrength * 0.5`）、`cfgScheduleKeyframes`（默认 null）、`enableLoudnormFinal`（默认 true），加入 `ALLOWED_SETTINGS_KEYS`。同时为 `preview*` 与 `export*` 加镜像键：`previewCfgScheduleMode`/`previewCfgStrengthStart`/`exportCfgScheduleMode`/`exportCfgStrengthStart`/`exportCfgScheduleKeyframes`/`previewCfgScheduleKeyframes`。
+  - [x] 11.3 在 `src/inference/pipeline/diffusion.js` `runDiffusionLoop` 内，`combine` 函数从闭包读取固定 `cfgStrength` 改为按 `step` 调用 `resolveCfgAtStep`。`combine` 接收 `step` 参数（修改 sampler.step 调用约定，把 `step` 透传到 combine）。
+  - [x] 11.4 在 `src/renderer/audioPlayback.js` 的 `getPreviewInferenceOptions` / `getExportInferenceOptions` 透传 schedule 参数到 opts。
+  - [x] 11.5 在 `src/inference/pipeline/index.js` `_synthesizeImpl` 与 `synthesizeMultiStreaming` 读取 schedule opts 并透传到 `_runDiffusionLoop` → `runDiffusionLoop`。
+  - [x] 11.6 验证：新增 `test/cfgSchedule.test.js`，四种模式数值正确；`constant` 模式与旧行为字节级一致。
 
 - [x] Task 12: CFG rescale 默认 0.6 + 范围校验
   - [x] 12.1 在 `src/inference/pipeline/constants.js` 将 `CFG_RESCALE` 从 `0.75` 改为 `0.6`。
@@ -83,43 +83,43 @@
   - [x] 13.1 在 `src/inference/pipeline/postprocessing.js` `runVocoderChunked` 的 SiFiGAN F0 上采样块（约 855-864 行）将"每帧重复 4 次"改为线性插值（`alignedF0[f]` 与 `alignedF0[f+1]` 之间线性插值 4 点）。同样改造 mel 上采样（约 810-822 行）—— 但 mel 上采样保持最近邻（模型训练时即如此），仅 F0 改线性。
   - [x] 13.2 验证：F0 阶跃处不再产生瞬时跳变；`test/vocoderChunked.test.js` 通过。
 
-- [ ] Task 14: refHash FNV-1a 全长
-  - [ ] 14.1 在 `src/inference/pipeline/audioSegmentation.js` `computeSynthCacheKey`（约 210-220 行）将 refHash 从"前 4000 字节 + 步长"扫描改为调用现有 `this.hashArray(buf)`（FNV-1a 全长）。注意 `hashArray` 接受 array-like，`Uint8Array`/`Buffer` 可直接传入。
-  - [ ] 14.2 验证：`test/audioSegmentation.test.js` 通过；新增测试：两个仅前 4000 字节相同的长 buffer 产生不同 hash。
+- [x] Task 14: refHash FNV-1a 全长
+  - [x] 14.1 在 `src/inference/pipeline/audioSegmentation.js` `computeSynthCacheKey`（约 210-220 行）将 refHash 从"前 4000 字节 + 步长"扫描改为调用现有 `this.hashArray(buf)`（FNV-1a 全长）。注意 `hashArray` 接受 array-like，`Uint8Array`/`Buffer` 可直接传入。
+  - [x] 14.2 验证：`test/audioSegmentation.test.js` 通过；新增测试：两个仅前 4000 字节相同的长 buffer 产生不同 hash。
 
-- [ ] Task 15: 分块 diffusion 边界 F0 感知
-  - [ ] 15.1 在 `src/inference/pipeline/diffusion.js` `_planChunks` 增加可选 `f0Slope` 参数（每帧 F0 斜率数组）。若提供，调整 `safeOverlap` 区内 chunkEnd 选择：在 `[chunkStart + minBeats, chunkStart + maxBeats]` 候选边界中选 `|f0Slope[boundary]|` 最小的位置。
-  - [ ] 15.2 `runDiffusionLoopChunked` 接受可选 `pitchCurveF0`，计算 `f0Slope`（差分）后传入 `_planChunks`。
-  - [ ] 15.3 验证：F0 斜率突变处不被选为边界；`test/diffusionChunked.test.js` 通过。
+- [x] Task 15: 分块 diffusion 边界 F0 感知
+  - [x] 15.1 在 `src/inference/pipeline/diffusion.js` `_planChunks` 增加可选 `f0Slope` 参数（每帧 F0 斜率数组）。若提供，调整 `safeOverlap` 区内 chunkEnd 选择：在 `[chunkStart + minBeats, chunkStart + maxBeats]` 候选边界中选 `|f0Slope[boundary]|` 最小的位置。
+  - [x] 15.2 `runDiffusionLoopChunked` 接受可选 `pitchCurveF0`，计算 `f0Slope`（差分）后传入 `_planChunks`。
+  - [x] 15.3 验证：F0 斜率突变处不被选为边界；`test/diffusionChunked.test.js` 通过。
 
 - [x] Task 16: 2× 过采样→LP→降采样抗混叠（可选，默认 false）
   - [x] 16.1 在 `src/inference/pipeline/postprocessing.js` 的 `resampleLinear`（约 182-280 行）当 `srcSr > dstSr` 且 `enableAntiAliasing` 时，先 LP 滤波（截止 `dstSr/2`）再降采样。LP 用 Butterworth 1-order IIR 简化实现。
   - [x] 16.2 在 `src/main/settings.js` 加 `enableAntiAliasing` 设置（默认 false）。
   - [x] 16.3 验证：`test/resampleAudio.test.js` 通过；`enableAntiAliasing=true` 时高频混叠减少（用 chirp 信号检验）。
 
-- [ ] Task 17: SDEdit 局部修复（可选，默认 false）
-  - [ ] 17.1 在 `src/inference/pipeline/diffusion.js` `runDiffusionLoop` 末端增加可选 SDEdit 修复：若 `enableSDEditRepair` 且检测到 mel 局部 NaN/能量突变（帧能量 > 中位数 ×5），对该区间加浅噪声（t=0.3）+ 5 步重采样（用 STORK-2）。修复仅在该帧区间，边界交叉淡入淡出。
-  - [ ] 17.2 在 `src/main/settings.js` 加 `enableSDEditRepair` 设置（默认 false）。
-  - [ ] 17.3 验证：默认 false 不影响现有行为；`true` 时局部 NaN 被修复，输出无 NaN。
+- [x] Task 17: SDEdit 局部修复（可选，默认 false）
+  - [x] 17.1 在 `src/inference/pipeline/diffusion.js` `runDiffusionLoop` 末端增加可选 SDEdit 修复：若 `enableSDEditRepair` 且检测到 mel 局部 NaN/能量突变（帧能量 > 中位数 ×5），对该区间加浅噪声（t=0.3）+ 5 步重采样（用 STORK-2）。修复仅在该帧区间，边界交叉淡入淡出。
+  - [x] 17.2 在 `src/main/settings.js` 加 `enableSDEditRepair` 设置（默认 false）。
+  - [x] 17.3 验证：默认 false 不影响现有行为；`true` 时局部 NaN 被修复，输出无 NaN。
 
 ## 设置与 UI 整合
 
-- [ ] Task 18: settings.js / i18n / exportDialog UI 整合
-  - [ ] 18.1 在 `src/main/settings.js` 完成所有新增键与默认值变更（前述任务已分散加），统一在 `ALLOWED_SETTINGS_KEYS` 加入：`diagnosticMode`、`vocoderOverlapFrames`、`cfgScheduleMode`、`cfgStrengthStart`、`cfgScheduleKeyframes`、`previewCfgScheduleMode`、`previewCfgStrengthStart`、`previewCfgScheduleKeyframes`、`exportCfgScheduleMode`、`exportCfgStrengthStart`、`exportCfgScheduleKeyframes`、`enableLoudnormFinal`、`enableAntiAliasing`、`enableSDEditRepair`。
-  - [ ] 18.2 在 `src/i18n/zh-CN.js` 与 `src/i18n/en.js` 新增所有新设置键对应的 label/hint/desc。
-  - [ ] 18.3 在 `src/renderer/exportDialog.js` 新增：CFG 调度模式选择器（constant/linear/cosine/custom）+ start 值输入 + custom keyframe 编辑器（简单文本框，格式 `step:value,step:value`）；vocoder overlap frames 数字输入；诊断模式复选框；loudnorm 开关；抗混叠开关；SDEdit 修复开关。
-  - [ ] 18.4 在 `src/renderer/exportDialog.js` 的 `settingsToSave` 加入所有新键。
-  - [ ] 18.5 验证：UI 渲染正常；保存后 settings.json 含新键；切换 mode 时 start 输入框启用/禁用。
+- [x] Task 18: settings.js / i18n / exportDialog UI 整合
+  - [x] 18.1 在 `src/main/settings.js` 完成所有新增键与默认值变更（前述任务已分散加），统一在 `ALLOWED_SETTINGS_KEYS` 加入：`diagnosticMode`、`vocoderOverlapFrames`、`cfgScheduleMode`、`cfgStrengthStart`、`cfgScheduleKeyframes`、`previewCfgScheduleMode`、`previewCfgStrengthStart`、`previewCfgScheduleKeyframes`、`exportCfgScheduleMode`、`exportCfgStrengthStart`、`exportCfgScheduleKeyframes`、`enableLoudnormFinal`、`enableAntiAliasing`、`enableSDEditRepair`。
+  - [x] 18.2 在 `src/i18n/zh-CN.js` 与 `src/i18n/en.js` 新增所有新设置键对应的 label/hint/desc。
+  - [x] 18.3 在 `src/renderer/exportDialog.js` 新增：CFG 调度模式选择器（constant/linear/cosine/custom）+ start 值输入 + custom keyframe 编辑器（简单文本框，格式 `step:value,step:value`）；vocoder overlap frames 数字输入；诊断模式复选框；loudnorm 开关；抗混叠开关；SDEdit 修复开关。
+  - [x] 18.4 在 `src/renderer/exportDialog.js` 的 `settingsToSave` 加入所有新键。
+  - [x] 18.5 验证：UI 渲染正常；保存后 settings.json 含新键；切换 mode 时 start 输入框启用/禁用。
 
 ## 验证与发版
 
-- [ ] Task 19: 测试与 lint
-  - [ ] 19.1 运行 `npm test`，确保全部既有测试通过 + 新增测试通过。
-  - [ ] 19.2 运行 `npm run lint`，确保无新增 lint 错误。
-  - [ ] 19.3 手动检查：默认 sampler=stork2、releaseDiffStepBeforeVocoder=false、cfgRescale=0.6、vocoder overlap=32、cfgScheduleMode=linear 全部在 settings.json 缺失时生效。
+- [x] Task 19: 测试与 lint
+  - [x] 19.1 运行 `npm test`，确保全部既有测试通过 + 新增测试通过。
+  - [x] 19.2 运行 `npm run lint`，确保无新增 lint 错误。
+  - [x] 19.3 手动检查：默认 sampler=stork2、releaseDiffStepBeforeVocoder=false、cfgRescale=0.6、vocoder overlap=32、cfgScheduleMode=linear 全部在 settings.json 缺失时生效。
 
 - [ ] Task 20: git 备份与 PR
-  - [ ] 20.1 `git add -A && git commit -m "perf+quality: apply SVS inference review (batch merge, WSOLA, CFG schedule, loudnorm, etc.)"`
+  - [x] 20.1 `git add -A && git commit -m "perf+quality: apply SVS inference review (batch merge, WSOLA, CFG schedule, loudnorm, etc.)"`
   - [ ] 20.2 推送到远程：`git push origin <branch>`
   - [ ] 20.3 通过 GitHub MCP 创建 PR，标题与 commit message 一致，body 列出所有变更项。
 
