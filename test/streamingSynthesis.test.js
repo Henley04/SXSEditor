@@ -1515,3 +1515,151 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 分片级缓存 (Segment-level cache)
+//
+// 验证长音频多 segment 合成时，编辑某个音符只会重算包含该音符的 segment，
+// 其余 segment 直接复用缓存音频，跳过 diffusion+vocoder。
+// 测试通过 sinon.spy(pipeline, '_synthesizeSegment') 统计实际推理的 segment 数：
+//   - 命中分片缓存 → 不调用 _synthesizeSegment
+//   - 未命中 → 调用 _synthesizeSegment 并把结果写入分片缓存
+// ---------------------------------------------------------------------------
+
+describe('分片级缓存 (Segment-level cache) - 未改动 segment 不再推理', () => {
+  // 长音频 notes：N 个 1 拍音符 @ bpm=60 → N 秒（>30s 触发多 segment 路径）
+  function makeLongNotes(count, basePitch = 60) {
+    const notes = [];
+    for (let i = 0; i < count; i++) {
+      notes.push({ pitch: basePitch + (i % 12), start: i, duration: 1, lyric: 'la' });
+    }
+    return notes;
+  }
+
+  describe('LRU 基础 (_segCachePut / _segCacheGet / clearSynthCache)', () => {
+    it('未写入时 _segCacheGet 返回 null', () => {
+      const pipeline = buildMockPipeline();
+      expect(pipeline._segCacheGet('nope')).to.be.null;
+    });
+
+    it('写入后可读取，clearSynthCache 同时清空分片缓存', () => {
+      const pipeline = buildMockPipeline();
+      const audio = new Float32Array(100).fill(0.5);
+      pipeline._segCachePut('k1', audio);
+      expect(pipeline._segCacheGet('k1')).to.equal(audio);
+      expect(pipeline._segCacheMap.size).to.equal(1);
+      pipeline.clearSynthCache();
+      expect(pipeline._segCacheMap).to.be.null;
+      expect(pipeline._segCacheBytes).to.equal(0);
+      expect(pipeline._segCacheGet('k1')).to.be.null;
+    });
+
+    it('dispose 清空分片缓存', () => {
+      const pipeline = buildMockPipeline();
+      pipeline._segCachePut('k1', new Float32Array(100));
+      expect(pipeline._segCacheMap).to.not.be.null;
+      pipeline.dispose();
+      expect(pipeline._segCacheMap).to.be.null;
+      expect(pipeline._segCacheBytes).to.equal(0);
+    });
+
+    it('空音频与超长音频不缓存', () => {
+      const pipeline = buildMockPipeline();
+      pipeline._segCachePut('empty', new Float32Array(0));
+      pipeline._segCachePut('huge', new Float32Array(SAMPLE_RATE * 121));
+      expect(pipeline._segCacheMap).to.be.null;
+    });
+
+    it('LRU 淘汰最旧条目', () => {
+      const pipeline = buildMockPipeline();
+      pipeline._segCacheMaxEntries = 2;
+      pipeline._segCachePut('a', new Float32Array(10).fill(1));
+      pipeline._segCachePut('b', new Float32Array(10).fill(2));
+      pipeline._segCachePut('c', new Float32Array(10).fill(3)); // 淘汰 a
+      expect(pipeline._segCacheGet('a')).to.be.null;
+      expect(pipeline._segCacheGet('b')).to.not.be.null;
+      expect(pipeline._segCacheGet('c')).to.not.be.null;
+    });
+  });
+
+  describe('多 segment 合成路径', () => {
+    it('首次合成长音频：每个 segment 都推理并写入分片缓存', async () => {
+      const pipeline = buildMockPipeline();
+      installRecordingSessions(pipeline);
+      const spy = sinon.spy(pipeline, '_synthesizeSegment');
+      const notes = makeLongNotes(40); // 40s @ bpm=60 → 多 segment
+      const segments = pipeline._buildVocalSegments(pipeline._fillNoteGaps(notes), 60);
+      expect(segments.length).to.be.greaterThan(1);
+
+      await pipeline.synthesize(notes, 60, { nSteps: 1, cfg: 0 });
+
+      // 每个 segment 都未命中分片缓存 → 全部走 _synthesizeSegment
+      expect(spy.callCount).to.equal(segments.length);
+      // 全部 segment 已写入分片缓存（不同 segStartBeat → 不同 key）
+      expect(pipeline._segCacheMap.size).to.equal(segments.length);
+    });
+
+    it('改动单个 segment 内的音符：只重算该 segment，其余命中分片缓存', async () => {
+      const pipeline = buildMockPipeline();
+      installRecordingSessions(pipeline);
+      const notesA = makeLongNotes(40);
+      // 首次合成填充分片缓存
+      await pipeline.synthesize(notesA, 60, { nSteps: 1, cfg: 0 });
+      expect(pipeline._segCacheMap.size).to.be.greaterThan(0);
+
+      // 改动 beat 2 的音符音高：仅落在 seg[0]（beats 0~30）内，
+      // 不影响 segment 边界（pitch 不参与 buildVocalSegments），其余 segment 输入不变。
+      const notesB = notesA.map(n => ({ ...n }));
+      notesB[2].pitch = 80;
+
+      // 仅清空整曲缓存（_synthCacheMap），保留分片缓存，强制进入 segment 循环
+      pipeline._synthCache = null;
+      pipeline._synthCacheMap = null;
+      pipeline._synthCacheBytes = 0;
+
+      const spy = sinon.spy(pipeline, '_synthesizeSegment');
+      await pipeline.synthesize(notesB, 60, { nSteps: 1, cfg: 0 });
+
+      // 只有包含 beat 2 的 seg[0] 未命中 → 仅推理 1 次；seg[1] 命中缓存
+      expect(spy.callCount).to.equal(1);
+    });
+
+    it('未改动整曲（仅清空整曲缓存）：全部 segment 命中，不调用 _synthesizeSegment', async () => {
+      const pipeline = buildMockPipeline();
+      installRecordingSessions(pipeline);
+      const notes = makeLongNotes(40);
+      await pipeline.synthesize(notes, 60, { nSteps: 1, cfg: 0 });
+
+      // 清空整曲缓存，保留分片缓存 → 强制进入 segment 循环
+      pipeline._synthCache = null;
+      pipeline._synthCacheMap = null;
+      pipeline._synthCacheBytes = 0;
+
+      const spy = sinon.spy(pipeline, '_synthesizeSegment');
+      const out = await pipeline.synthesize(notes, 60, { nSteps: 1, cfg: 0 });
+
+      // 全部分片命中 → 不推理
+      expect(spy.callCount).to.equal(0);
+      expect(out.length).to.be.greaterThan(0);
+    });
+
+    it('clearSynthCache 后重新合成：全部 segment 重新推理', async () => {
+      const pipeline = buildMockPipeline();
+      installRecordingSessions(pipeline);
+      const notes = makeLongNotes(40);
+      await pipeline.synthesize(notes, 60, { nSteps: 1, cfg: 0 });
+      expect(pipeline._segCacheMap.size).to.be.greaterThan(0);
+
+      // 清空所有缓存（整曲 + 分片）
+      pipeline.clearSynthCache();
+      expect(pipeline._segCacheMap).to.be.null;
+
+      const segments = pipeline._buildVocalSegments(pipeline._fillNoteGaps(notes), 60);
+      const spy = sinon.spy(pipeline, '_synthesizeSegment');
+      await pipeline.synthesize(notes, 60, { nSteps: 1, cfg: 0 });
+
+      // 无分片缓存命中 → 每个 segment 都重新推理
+      expect(spy.callCount).to.equal(segments.length);
+    });
+  });
+});
