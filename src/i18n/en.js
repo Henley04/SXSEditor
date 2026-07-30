@@ -53,6 +53,7 @@ export default {
       diffSteps: 'Diffusion Steps',
       cfgStrength: 'CFG Strength',
       cfgRescale: 'CFG Rescale Factor',
+      cfgRescaleRangeWarn: '⚠ Value is outside the SVS sweet spot [0.5, 0.7] and may produce artifacts. You can still synthesize with this value.',
       sampler: 'Sampler',
       samplerHint: 'Diffusion sampling solver. Euler is the default baseline; Heun is a 2nd-order improved Euler (2 inferences per step, higher accuracy but slower); Extrapolated Euler is a velocity-extrapolation heuristic inspired by STORK (1 inference/step); STORK-2 is the full paper-faithful Stabilized Taylor Orthogonal Runge-Kutta method (1 inference/step via virtual NFE, 8 RKC sub-stages). Note: in chunked preview inference, both Extrapolated Euler and STORK-2 lose cross-step state at chunk boundaries, reducing their advantage.',
       samplerEuler: 'Euler (1st-order, default)',
@@ -106,7 +107,17 @@ export default {
       cfgStrengthStartHint: 'Starting CFG strength at step 0. Falls back to cfgStrength × 0.5 when empty. Ignored in Constant mode.',
       cfgStrengthStartPlaceholder: 'auto (cfgStrength × 0.5)',
       cfgScheduleKeyframes: 'Schedule Keyframes',
-      cfgScheduleKeyframesHint: 'Comma-separated step:value pairs, e.g. "0:1.5,16:3.0,32:3.0". Linearly interpolated between keyframes. Only used in Custom mode.',
+      cfgScheduleKeyframesHint: 'Comma-separated step:value pairs, e.g. "0:1.5,16:3.0,31:3.0". Linearly interpolated between keyframes. Only used in Custom mode.',
+      cfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
+      // M5: Preview CFG strength schedule (mirrors export schedule for preview playback)
+      previewCfgScheduleMode: 'CFG Strength Schedule (Preview)',
+      previewCfgScheduleModeHint: 'Same as export schedule, but applied to preview playback. Adjusts CFG strength across diffusion steps. Constant = fixed value; Linear ramps from start to end; Cosine eases in/out smoothly; Custom uses keyframe interpolation.',
+      previewCfgStrengthStart: 'CFG Strength Start (Preview)',
+      previewCfgStrengthStartHint: 'Starting CFG strength at step 0 for preview. Falls back to cfgStrength × 0.5 when empty. Ignored in Constant mode.',
+      previewCfgStrengthStartPlaceholder: 'auto (cfgStrength × 0.5)',
+      previewCfgScheduleKeyframes: 'Schedule Keyframes (Preview)',
+      previewCfgScheduleKeyframesHint: 'Comma-separated step:value pairs, e.g. "0:1.5,16:3.0,31:3.0". Linearly interpolated between keyframes. Only used in Custom mode.',
+      previewCfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
       // Task 5: Vocoder overlap
       vocoderOverlapFrames: 'Vocoder Overlap (frames)',
       // Task 10: Loudnorm
@@ -527,7 +538,7 @@ export default {
     releaseDmlVramAfterSynthesisDesc: 'Only affects DML backend; off by default',
     releaseDmlVramAfterSynthesisHint: 'Reload diffStep and vocoder after each synthesis to force DirectML to reclaim transient tensor memory pools, reducing OOM on consecutive syntheses. Adds a short wait after each synthesis.',
     releaseDiffStepBeforeVocoder: 'Release diffStep before vocoder inference',
-    releaseDiffStepBeforeVocoderDesc: 'Only affects DML backend; on by default',
+    releaseDiffStepBeforeVocoderDesc: 'Only affects DML backend; off by default',
     releaseDiffStepBeforeVocoderHint: 'Release diffStep session after diffusion completes so vocoder inference gets full VRAM (~3-4GB freed), preventing 0x887A0006/TDR black screen. Cost: diffStep must be reloaded after each vocoder pass (~1-3s), slowing multi-segment synthesis. Strongly recommended for SiFiGAN and low-VRAM GPUs.',
 
     // ORT advanced settings section

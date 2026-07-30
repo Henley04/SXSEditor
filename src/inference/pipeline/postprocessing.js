@@ -1108,12 +1108,13 @@ class Postprocessing {
             const copyLen = Math.min(waveform.length, totalSamples);
             output.set(waveform.subarray(0, copyLen));
             normalizePeakTo(output);
-            // EBU R128 响度归一化（−14 LUFS）+ true-peak 限制（−1 dBTP）。
-            // 受 enableLoudnormFinal 设置控制（默认 true）；关闭时仅走上面的
-            // normalizePeakTo(0.95) 峰值归一化（旧行为）。
-            if (_readEnableLoudnormFinal()) {
-                loudnormFinal(output, SAMPLE_RATE);
-            }
+            // M7: streaming preview consistency — push the peak-normalized
+            // chunk to onChunkComplete BEFORE loudnorm, so the streaming
+            // preview receives the same peak-normalized audio as the
+            // multi-chunk path (whose onChunkComplete also sends
+            // normalizePeakTo(chunkAudio), with loudnorm applied only to the
+            // final merged output). The final returned `output` is loudnorm'd
+            // below, matching the multi-chunk path's final loudnormFinal.
             // 单 chunk 路径：一次性推送全部音频（流式播放用）
             if (onChunkComplete) {
                 try {
@@ -1128,6 +1129,13 @@ class Postprocessing {
                 } catch (e) {
                     console.warn('[OnnxSVSPipeline] onChunkComplete callback error:', e.message);
                 }
+            }
+            // EBU R128 响度归一化（−14 LUFS）+ true-peak 限制（−1 dBTP）。
+            // 受 enableLoudnormFinal 设置控制（默认 true）；关闭时仅走上面的
+            // normalizePeakTo(0.95) 峰值归一化（旧行为）。单 chunk 路径在
+            // onChunkComplete 推送后统一应用，与多 chunk 路径保持一致。
+            if (_readEnableLoudnormFinal()) {
+                loudnormFinal(output, SAMPLE_RATE);
             }
             if (_readDiagnosticMode()) {
                 console.log(`[VocoderDiag] runVocoderChunked END (single-chunk): ${(performance.now() - _vocoderStartMs).toFixed(0)}ms, outputLen=${output.length}`);

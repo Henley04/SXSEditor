@@ -53,6 +53,7 @@ export default {
       diffSteps: '扩散步数',
       cfgStrength: 'CFG 引导强度',
       cfgRescale: 'CFG Rescale 系数',
+      cfgRescaleRangeWarn: '⚠ 当前值超出 SVS 推荐甜区 [0.5, 0.7]，可能产生伪影。仍可继续使用此值合成。',
       sampler: '求解器',
       samplerHint: '扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理，精度更高但更慢）；Extrapolated Euler 为受 STORK 启发的速度外推启发式（每步 1 次推理）；STORK-2 为论文原版 Stabilized Taylor Orthogonal Runge-Kutta 方法（每步 1 次推理 + 8 个 RKC sub-stage，通过 virtual NFE 复用速度场）。注意：分块预览推理时 Extrapolated Euler 与 STORK-2 均在块边界丢失跨步状态，优势减弱。',
       samplerEuler: 'Euler（一阶，默认）',
@@ -106,7 +107,17 @@ export default {
       cfgStrengthStartHint: '第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。',
       cfgStrengthStartPlaceholder: '自动（cfgStrength × 0.5）',
       cfgScheduleKeyframes: '调度关键帧',
-      cfgScheduleKeyframesHint: '逗号分隔的 step:value 对，例如 "0:1.5,16:3.0,32:3.0"。关键帧间线性插值。仅 Custom 模式生效。',
+      cfgScheduleKeyframesHint: '逗号分隔的 step:value 对，例如 "0:1.5,16:3.0,31:3.0"。关键帧间线性插值。仅 Custom 模式生效。',
+      cfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
+      // M5: 预览 CFG 强度曲线调度（与导出调度镜像，应用于预览播放）
+      previewCfgScheduleMode: 'CFG 强度曲线调度（预览）',
+      previewCfgScheduleModeHint: '与导出调度一致，但应用于预览播放。在扩散步数间动态调整 CFG 强度。Constant = 固定值；Linear 从 start 线性升至 end；Cosine 平滑缓入缓出；Custom 使用关键帧插值。',
+      previewCfgStrengthStart: '起始 CFG 强度（预览）',
+      previewCfgStrengthStartHint: '预览时第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。',
+      previewCfgStrengthStartPlaceholder: '自动（cfgStrength × 0.5）',
+      previewCfgScheduleKeyframes: '调度关键帧（预览）',
+      previewCfgScheduleKeyframesHint: '逗号分隔的 step:value 对，例如 "0:1.5,16:3.0,31:3.0"。关键帧间线性插值。仅 Custom 模式生效。',
+      previewCfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
       // Task 5: Vocoder overlap
       vocoderOverlapFrames: 'Vocoder 重叠帧数',
       // Task 10: Loudnorm
@@ -527,7 +538,7 @@ export default {
     releaseDmlVramAfterSynthesisDesc: '仅 DML 后端生效，默认关闭',
     releaseDmlVramAfterSynthesisHint: '每次合成完成后重新加载 diffStep 和 vocoder，强制 DirectML 回收中间张量内存池，缓解连续合成 OOM。开启后会增加一点合成后的等待时间。',
     releaseDiffStepBeforeVocoder: 'Vocoder 推理前释放 diffStep',
-    releaseDiffStepBeforeVocoderDesc: '仅 DML 后端生效，默认开启',
+    releaseDiffStepBeforeVocoderDesc: '仅 DML 后端生效，默认关闭',
     releaseDiffStepBeforeVocoderHint: 'diffusion 完成后释放 diffStep session，让 vocoder 推理独占显存（腾出约 3-4GB），避免 0x887A0006/TDR 黑屏。代价：每次 vocoder 后需重载 diffStep（约 1-3 秒），多段合成会变慢。SiFiGAN 与低显存显卡强烈建议开启。',
 
     // ORT advanced settings section

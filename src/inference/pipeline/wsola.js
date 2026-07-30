@@ -23,12 +23,22 @@
  * Algorithm:
  *   1. Copy the non-overlapping prefix of prevTail and suffix of currHead
  *      unchanged.
- *   2. Over the overlap region, divide into ~2 ms analysis frames with 50 %
- *      overlap. For each frame, take prevTail as reference and search currHead
- *      within ±searchWindowMs for the offset that maximizes the (zero-mean
- *      normalized) cross-correlation.
- *   3. OLA the per-frame-aligned currHead samples into an `alignedCurr` buffer
- *      using a Hann analysis window, then normalize by the window sum.
+ *   2. Over the overlap region, find ONE global alignment offset via a single
+ *      zero-mean normalized cross-correlation search over the FULL overlap
+ *      (search window ±searchWindowMs). This is intentionally NOT per-frame
+ *      WSOLA: per-frame WSOLA divides the overlap into ~2 ms analysis frames
+ *      and can pick *different* offsets per frame on periodic signals (the
+ *      periodic cross-correlation has multiple equal peaks, so consecutive
+ *      frames may land on different peaks and stitch together a discontinuous
+ *      alignedCurr). A global search uses the entire overlap as the
+ *      correlation window — the longer window sharpens the peak and produces
+ *      ONE consistent offset, so alignedCurr is a contiguous slice of
+ *      currHead with no internal discontinuities. This keeps the Hann
+ *      crossfade smooth even on pitched (periodic) signals where per-frame
+ *      WSOLA breaks down.
+ *   3. Build alignedCurr by shifting currHead by the best offset (edge-clamp
+ *      samples that fall outside currHead; the Hann window is ~0 at the edges
+ *      so the clamp has negligible effect).
  *   4. Apply a Hann crossfade window over the full overlap:
  *      result[i] = prevTail[i] * (1 - w[i]) + alignedCurr[i] * w[i].
  *
@@ -36,7 +46,7 @@
  * @param {Float32Array|number[]} currHead - head of the current segment
  * @param {number} overlapSamples - number of overlapping samples
  * @param {number} sampleRate - sample rate of the waveforms (Hz)
- * @param {number} [searchWindowMs=4] - per-frame alignment search window (±ms)
+ * @param {number} [searchWindowMs=4] - global alignment search window (±ms)
  * @returns {Float32Array} crossfaded output, length prevTail.length + currHead.length - overlapSamples
  */
 function wsolaCrossfade(prevTail, currHead, overlapSamples, sampleRate, searchWindowMs = 4) {

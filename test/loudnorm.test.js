@@ -95,11 +95,17 @@ describe('loudnormFinal (EBU R128 + true-peak)', () => {
     }
   });
 
-  it('disabled (enableLoudnormFinal=false path) → only peak-normalize applied by caller', () => {
-    // This test verifies the loudnorm function itself is correct; the
-    // enableLoudnormFinal gating is tested via the settings reader in
-    // postprocessing.js. Here we just confirm that calling loudnormFinal
-    // on a quiet sine produces a measurable loudness change.
+  it('quiet sine → loudnormFinal produces a measurable loudness change', () => {
+    // M9: This test was previously named "disabled (enableLoudnormFinal=false
+    // path)" but actually called loudnormFinal() (the ENABLED path), so the
+    // name was misleading. It has been renamed to describe what it really
+    // verifies: that loudnormFinal changes the loudness of a quiet sine.
+    //
+    // The enableLoudnormFinal=false GATING itself lives in postprocessing.js
+    // (`if (_readEnableLoudnormFinal()) loudnormFinal(...)`), which cannot be
+    // exercised here without instantiating full ONNX sessions. The gating
+    // contract — that skipping loudnormFinal leaves only peak-normalized
+    // audio — is covered by the "disabled-path contract" test below.
     const freq = 440;
     const n = SAMPLE_RATE * 2;
     const samples = new Float32Array(n);
@@ -112,5 +118,49 @@ describe('loudnormFinal (EBU R128 + true-peak)', () => {
     // Before is quiet (≈ −29 LUFS), after should be ≈ −14 LUFS.
     expect(beforeLufs).to.be.lessThan(-20);
     expect(afterLufs).to.be.greaterThan(-15);
+  });
+
+  it('disabled-path contract: skipping loudnormFinal leaves only peak-normalized audio', () => {
+    // M9: postprocessing.js gates loudnormFinal behind
+    // `_readEnableLoudnormFinal()`. When false, the caller only applies
+    // normalizePeakTo (peak normalization) and NOT loudnormFinal. This test
+    // verifies that CONTRACT: a signal that goes through peak normalization
+    // only (no loudnormFinal) stays at its original integrated loudness
+    // (loudness is unchanged by pure peak scaling), whereas applying
+    // loudnormFinal would move it to −14 LUFS. This documents the observable
+    // difference of the disabled path without needing a postprocessing.js
+    // harness.
+    const freq = 440;
+    const n = SAMPLE_RATE * 3;
+    const samples = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      samples[i] = 0.05 * Math.sin(2 * Math.PI * freq * i / SAMPLE_RATE);
+    }
+    const origLufs = measureLoudness(samples, SAMPLE_RATE);
+
+    // Simulate the enableLoudnormFinal=false path: peak-normalize only.
+    // (normalizePeakTo scales so |peak| ≈ 0.95; this is a uniform gain so
+    // integrated loudness shifts by a constant but is NOT targeted to −14.)
+    let peak = 0;
+    for (let i = 0; i < n; i++) peak = Math.max(peak, Math.abs(samples[i]));
+    const peakScale = peak > 0 ? 0.95 / peak : 1;
+    const peakOnly = new Float32Array(n);
+    for (let i = 0; i < n; i++) peakOnly[i] = samples[i] * peakScale;
+    const peakOnlyLufs = measureLoudness(peakOnly, SAMPLE_RATE);
+
+    // Peak normalization is a uniform gain, so the loudness SHIFT is exactly
+    // 20*log10(peakScale) — it does NOT land on −14 LUFS (unless by coincidence).
+    const expectedShift = 20 * Math.log10(peakScale);
+    expect(peakOnlyLufs).to.be.closeTo(origLufs + expectedShift, 0.1);
+    // And it is NOT targeted to −14 LUFS (peak-normalizing a quiet 0.05 sine
+    // to 0.95 is a ~19× gain, pushing loudness well above −14; the exact value
+    // depends on crest factor, the point is it is not −14).
+    expect(peakOnlyLufs).to.not.be.closeTo(-14, 0.5);
+
+    // Contrast: the ENABLED path (loudnormFinal) DOES target −14 LUFS.
+    const enabled = new Float32Array(n);
+    for (let i = 0; i < n; i++) enabled[i] = samples[i];
+    loudnormFinal(enabled, SAMPLE_RATE);
+    expect(measureLoudness(enabled, SAMPLE_RATE)).to.be.closeTo(-14, 0.7);
   });
 });

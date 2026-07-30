@@ -1,7 +1,7 @@
 const ort = require('onnxruntime-node');
 const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16 } = require('./utils');
-const { createSampler } = require('./samplers');
+const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep } = require('./cfgSchedule');
 
@@ -210,7 +210,7 @@ class Diffusion {
      *
      * @param {string} [samplerName='euler'] - 求解器名称，见 samplers/index.js
      */
-    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = 'euler', cfgScheduleOpts = null) {
+    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null) {
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
@@ -456,7 +456,7 @@ class Diffusion {
         // 直接返回 cfgStrength（字节级一致，无浮点误差）；linear/cosine/custom
         // 按 step 动态调整。cfgScheduleOpts 为 null 时行为与改造前完全一致。
         let currentStep = 0;
-        const combine = (condPred, uncondPred) => {
+        const combine = (condPred, uncondPred, stepOverride, totalStepsOverride) => {
             const v = buffers.vBuf;
             if (!useCfg) {
                 // 无 CFG：condPred 已是 target 段（evalDiffStep 切片过），直接拷贝
@@ -464,8 +464,12 @@ class Diffusion {
                 return v;
             }
             // Task 11: resolve effective CFG for this step (constant = cfgStrength, byte-identical)
+            // M3: allow step/totalSteps override so SDEdit repair steps use the
+            // repair loop's step index instead of the stale main-loop currentStep.
+            const effStep = stepOverride != null ? stepOverride : currentStep;
+            const effTotal = totalStepsOverride != null ? totalStepsOverride : totalSteps;
             const effectiveCfg = cfgScheduleOpts
-                ? resolveCfgAtStep({ ...cfgScheduleOpts, cfgStrength, step: currentStep, totalSteps })
+                ? resolveCfgAtStep({ ...cfgScheduleOpts, cfgStrength, step: effStep, totalSteps: effTotal })
                 : cfgStrength;
             // Pass 1: cfgVal → cfgPredBuf, Welford accumulate posMean/posM2 + cfgAdjMean/cfgAdjM2
             let posMean = 0, posM2 = 0;
@@ -680,9 +684,13 @@ class Diffusion {
             }
 
             // 5 步 STORK-2 重采样：仅更新区间内帧
+            // M3: repairCombine forwards step/REPAIR_STEPS to combine so the CFG
+            // schedule resolves against the repair loop's 0..4/5 progress instead
+            // of the stale main-loop currentStep (totalSteps-1)/totalSteps.
             for (let step = 0; step < REPAIR_STEPS; step++) {
+                const repairCombine = (condPred, uncondPred) => combine(condPred, uncondPred, step, REPAIR_STEPS);
                 await repairSampler.step({
-                    evalDiffStep, combine, step, totalSteps: REPAIR_STEPS,
+                    evalDiffStep, combine: repairCombine, step, totalSteps: REPAIR_STEPS,
                     xtData: xt.data, buffers,
                 });
                 const delta = buffers.deltaBuf;
@@ -771,7 +779,7 @@ class Diffusion {
      * @param {number} chunkFrames
      * @param {number} overlapFrames
      * @param {Float32Array|number[]|null} [f0Slope=null] - per-frame F0 slope (f0[i+1]-f0[i])
-     * @returns {{specs: Array, overlap: number, fadeWindow: Float32Array}|null}
+     * @returns {{specs: Array, overlap: number}|null}
      */
     _planChunks(totalFrames, chunkFrames, overlapFrames, f0Slope = null) {
         // 防御：totalFrames <= 0 时直接返回 null，由调用方短路处理
@@ -780,7 +788,7 @@ class Diffusion {
         let safeOverlap = Math.max(0, Math.floor(overlapFrames));
         if (safeOverlap >= safeChunk) safeOverlap = Math.floor(safeChunk / 2);
         if (safeChunk >= totalFrames) return null;
-        // safeOverlap === 0 时无交叉淡入淡出，fadeWindow 为空数组（循环不执行）
+        // safeOverlap === 0 时无交叉淡入淡出
         if (safeOverlap < 1) safeOverlap = 0;
 
         // Task 15: F0-aware boundary selection setup.
@@ -837,14 +845,7 @@ class Diffusion {
             chunkIdx++;
         }
 
-        // Hann 交叉淡入淡出窗：使用 (i+1)/(N+1) 归一化保证 w[i] + w[N-1-i] = 1 严格成立
-        // 旧实现 i/N 在 i=N-1 时 w < 1，紧邻非重叠区权重=1 存在微小不连续。
-        const fadeWindow = new Float32Array(safeOverlap);
-        for (let i = 0; i < safeOverlap; i++) {
-            // w[i] = 0.5 * (1 - cos(π * (i+1) / (N+1)))，对称且 w[i] + w[N-1-i] = 1
-            fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * (i + 1) / (safeOverlap + 1)));
-        }
-        return { specs, overlap: safeOverlap, fadeWindow };
+        return { specs, overlap: safeOverlap };
     }
 
     /**
@@ -853,7 +854,7 @@ class Diffusion {
      *
      * @param {Object} ctx - 分块上下文（由调用方持有，跨块共享 xt.data 状态）
      *   { sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond,
-     *     totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, fadeWindow }
+     *     totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap }
      * @param {Object} spec - 分块规格 { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast }
      * @param {Function} onProgress
      * @param {number} progressStart
@@ -925,7 +926,7 @@ class Diffusion {
         return { newCommitted };
     }
 
-    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames, onChunkMel = null, samplerName = 'euler', pitchCurveF0 = null, cfgScheduleOpts = null) {
+    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames, onChunkMel = null, samplerName = DEFAULT_SOLVER, pitchCurveF0 = null, cfgScheduleOpts = null) {
         // Task 15: compute per-frame F0 slope from pitchCurveF0 for F0-aware
         // chunk boundary selection. f0Slope[i] = f0[i+1] - f0[i], with 0 at the
         // last index. When pitchCurveF0 is null/undefined or too short, f0Slope
@@ -946,11 +947,11 @@ class Diffusion {
             return this.runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, samplerName, cfgScheduleOpts);
         }
 
-        const { specs, overlap, fadeWindow } = plan;
+        const { specs, overlap } = plan;
         const totalChunks = specs.length;
         console.log(`[DiffusionChunk] Chunked diffusion: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, chunkFrames=${chunkFrames}, overlap=${overlap}, steps=${totalSteps}, chunks=${totalChunks}, sampler=${samplerName}`);
 
-        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, fadeWindow, samplerName, cfgScheduleOpts };
+        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, samplerName, cfgScheduleOpts };
         const progressPerChunk = progressRange / totalChunks;
         let committedFrames = 0;
 

@@ -82,6 +82,10 @@ export async function openExportDialog() {
       exportCfgScheduleMode: settings.exportCfgScheduleMode || settings.cfgScheduleMode || 'linear',
       exportCfgStrengthStart: Number.isFinite(settings.exportCfgStrengthStart) ? settings.exportCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
       exportCfgScheduleKeyframes: Array.isArray(settings.exportCfgScheduleKeyframes) ? settings.exportCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
+      // M5: preview CFG schedule mirrors (fall back to top-level cfg* keys)
+      previewCfgScheduleMode: settings.previewCfgScheduleMode || settings.cfgScheduleMode || 'linear',
+      previewCfgStrengthStart: Number.isFinite(settings.previewCfgStrengthStart) ? settings.previewCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
+      previewCfgScheduleKeyframes: Array.isArray(settings.previewCfgScheduleKeyframes) ? settings.previewCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
       vocoderOverlapFrames: Number.isFinite(settings.vocoderOverlapFrames) ? settings.vocoderOverlapFrames : 32,
       diagnosticMode: settings.diagnosticMode === true,
       enableLoudnormFinal: settings.enableLoudnormFinal !== false,
@@ -301,103 +305,12 @@ function buildParamsSection(form) {
     warning: (v) => (v < 0.5 || v > 0.7) ? t('main.exportDialog.cfgRescaleRangeWarn') : '',
   }));
 
-  // Task 11: CFG 强度曲线调度模式
-  const scheduleField = document.createElement('div');
-  scheduleField.className = 'export-dialog-field';
-  const scheduleLabel = document.createElement('div');
-  scheduleLabel.className = 'export-dialog-field-label';
-  scheduleLabel.textContent = t('main.exportDialog.cfgScheduleMode');
-  scheduleField.appendChild(scheduleLabel);
-  const scheduleHint = document.createElement('div');
-  scheduleHint.className = 'export-dialog-field-hint';
-  scheduleHint.textContent = t('main.exportDialog.cfgScheduleModeHint');
-  scheduleField.appendChild(scheduleHint);
-  const scheduleSelect = document.createElement('select');
-  const scheduleOptions = [
-    { value: 'constant', labelKey: 'main.exportDialog.cfgScheduleConstant' },
-    { value: 'linear', labelKey: 'main.exportDialog.cfgScheduleLinear' },
-    { value: 'cosine', labelKey: 'main.exportDialog.cfgScheduleCosine' },
-    { value: 'custom', labelKey: 'main.exportDialog.cfgScheduleCustom' },
-  ];
-  for (const opt of scheduleOptions) {
-    const o = document.createElement('option');
-    o.value = opt.value;
-    o.textContent = t(opt.labelKey);
-    scheduleSelect.appendChild(o);
-  }
-  scheduleSelect.value = form.exportCfgScheduleMode;
-  scheduleField.appendChild(scheduleSelect);
+  // Task 11: CFG strength schedule (export path)
+  section.appendChild(buildCfgScheduleField(form, 'export'));
 
-  // Task 11: cfgStrengthStart 输入（constant 模式时隐藏）
-  const startField = document.createElement('div');
-  startField.className = 'export-dialog-field';
-  startField.dataset.cfgStartField = 'true';
-  const startLabel = document.createElement('div');
-  startLabel.className = 'export-dialog-field-label';
-  startLabel.textContent = t('main.exportDialog.cfgStrengthStart');
-  startField.appendChild(startLabel);
-  const startHint = document.createElement('div');
-  startHint.className = 'export-dialog-field-hint';
-  startHint.textContent = t('main.exportDialog.cfgStrengthStartHint');
-  startField.appendChild(startHint);
-  const startInput = document.createElement('input');
-  startInput.type = 'number';
-  startInput.min = '0';
-  startInput.max = '10';
-  startInput.step = '0.1';
-  startInput.value = form.exportCfgStrengthStart ?? '';
-  startInput.placeholder = t('main.exportDialog.cfgStrengthStartPlaceholder');
-  startInput.addEventListener('input', () => {
-    const v = parseFloat(startInput.value);
-    form.exportCfgStrengthStart = Number.isFinite(v) ? v : null;
-  });
-  startField.appendChild(startInput);
-  scheduleField.appendChild(startField);
-
-  // Task 11: custom keyframe 编辑器（仅 custom 模式显示）
-  const keyframeField = document.createElement('div');
-  keyframeField.className = 'export-dialog-field';
-  keyframeField.dataset.cfgKeyframeField = 'true';
-  const kfLabel = document.createElement('div');
-  kfLabel.className = 'export-dialog-field-label';
-  kfLabel.textContent = t('main.exportDialog.cfgScheduleKeyframes');
-  keyframeField.appendChild(kfLabel);
-  const kfHint = document.createElement('div');
-  kfHint.className = 'export-dialog-field-hint';
-  kfHint.textContent = t('main.exportDialog.cfgScheduleKeyframesHint');
-  keyframeField.appendChild(kfHint);
-  const kfInput = document.createElement('input');
-  kfInput.type = 'text';
-  kfInput.placeholder = '0:1.5,16:3.0,32:3.0';
-  // Render existing keyframes as text
-  if (Array.isArray(form.exportCfgScheduleKeyframes) && form.exportCfgScheduleKeyframes.length > 0) {
-    kfInput.value = form.exportCfgScheduleKeyframes.map(kf => `${kf.step}:${kf.value}`).join(',');
-  }
-  kfInput.addEventListener('input', () => {
-    const text = kfInput.value.trim();
-    if (!text) { form.exportCfgScheduleKeyframes = null; return; }
-    const parsed = [];
-    for (const part of text.split(',')) {
-      const [s, v] = part.split(':').map(x => parseFloat(x.trim()));
-      if (Number.isFinite(s) && Number.isFinite(v)) parsed.push({ step: s, value: v });
-    }
-    form.exportCfgScheduleKeyframes = parsed.length > 0 ? parsed : null;
-  });
-  keyframeField.appendChild(kfInput);
-  scheduleField.appendChild(keyframeField);
-
-  // 切换 mode 时显示/隐藏 start/keyframe 输入
-  const updateScheduleVisibility = () => {
-    const mode = scheduleSelect.value;
-    startField.hidden = (mode === 'constant');
-    keyframeField.hidden = (mode !== 'custom');
-  };
-  scheduleSelect.addEventListener('change', () => {
-    form.exportCfgScheduleMode = scheduleSelect.value;
-    updateScheduleVisibility();
-  });
-  updateScheduleVisibility();
-  section.appendChild(scheduleField);
+  // M5: CFG strength schedule (preview path) — mirrors export so preview
+  // playback uses the same configurable schedule instead of always 'linear'.
+  section.appendChild(buildCfgScheduleField(form, 'preview'));
 
   // Auto Shift 复选框
   section.appendChild(buildCheckboxField({
@@ -412,6 +325,129 @@ function buildParamsSection(form) {
   }));
 
   return section;
+}
+
+// ==================== CFG schedule field (export + preview) ====================
+
+// M5: Builds a CFG strength schedule field for either the export or preview
+// path. Mirrors the previous inline export schedule UI; preview uses the
+// previewCfgSchedule* i18n keys and form fields so preview playback is
+// configurable instead of always falling back to 'linear'.
+function buildCfgScheduleField(form, scope) {
+  const isPreview = scope === 'preview';
+  // Export uses unprefixed cfgSchedule* keys; preview uses previewCfgSchedule*.
+  const i18nKey = (base) => isPreview
+    ? `main.exportDialog.preview${base.charAt(0).toUpperCase()}${base.slice(1)}`
+    : `main.exportDialog.${base}`;
+  const formMode = `${scope}CfgScheduleMode`;
+  const formStart = `${scope}CfgStrengthStart`;
+  const formKf = `${scope}CfgScheduleKeyframes`;
+
+  const scheduleField = document.createElement('div');
+  scheduleField.className = 'export-dialog-field';
+  const scheduleLabel = document.createElement('div');
+  scheduleLabel.className = 'export-dialog-field-label';
+  scheduleLabel.textContent = t(i18nKey('cfgScheduleMode'));
+  scheduleField.appendChild(scheduleLabel);
+  const scheduleHint = document.createElement('div');
+  scheduleHint.className = 'export-dialog-field-hint';
+  scheduleHint.textContent = t(i18nKey('cfgScheduleModeHint'));
+  scheduleField.appendChild(scheduleHint);
+  const scheduleSelect = document.createElement('select');
+  // Option labels (Constant/Linear/Cosine/Custom) are shared between scopes.
+  const scheduleOptions = [
+    { value: 'constant', labelKey: 'main.exportDialog.cfgScheduleConstant' },
+    { value: 'linear', labelKey: 'main.exportDialog.cfgScheduleLinear' },
+    { value: 'cosine', labelKey: 'main.exportDialog.cfgScheduleCosine' },
+    { value: 'custom', labelKey: 'main.exportDialog.cfgScheduleCustom' },
+  ];
+  for (const opt of scheduleOptions) {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = t(opt.labelKey);
+    scheduleSelect.appendChild(o);
+  }
+  scheduleSelect.value = form[formMode];
+  scheduleField.appendChild(scheduleSelect);
+
+  // cfgStrengthStart input (hidden in constant mode)
+  const startField = document.createElement('div');
+  startField.className = 'export-dialog-field';
+  startField.dataset.cfgStartField = 'true';
+  const startLabel = document.createElement('div');
+  startLabel.className = 'export-dialog-field-label';
+  startLabel.textContent = t(i18nKey('cfgStrengthStart'));
+  startField.appendChild(startLabel);
+  const startHint = document.createElement('div');
+  startHint.className = 'export-dialog-field-hint';
+  startHint.textContent = t(i18nKey('cfgStrengthStartHint'));
+  startField.appendChild(startHint);
+  const startInput = document.createElement('input');
+  startInput.type = 'number';
+  startInput.min = '0';
+  startInput.max = '10';
+  startInput.step = '0.1';
+  startInput.value = form[formStart] ?? '';
+  startInput.placeholder = t(i18nKey('cfgStrengthStartPlaceholder'));
+  // M12: clamp parsed value to [0, 10] to prevent negative/out-of-range CFG
+  // (negative CFG is undefined behavior in SVS).
+  startInput.addEventListener('input', () => {
+    let v = parseFloat(startInput.value);
+    if (Number.isFinite(v)) {
+      v = Math.max(0, Math.min(10, v));  // clamp to [0, 10]
+    } else {
+      v = null;
+    }
+    form[formStart] = v;
+  });
+  startField.appendChild(startInput);
+  scheduleField.appendChild(startField);
+
+  // custom keyframe editor (only visible in custom mode)
+  const keyframeField = document.createElement('div');
+  keyframeField.className = 'export-dialog-field';
+  keyframeField.dataset.cfgKeyframeField = 'true';
+  const kfLabel = document.createElement('div');
+  kfLabel.className = 'export-dialog-field-label';
+  kfLabel.textContent = t(i18nKey('cfgScheduleKeyframes'));
+  keyframeField.appendChild(kfLabel);
+  const kfHint = document.createElement('div');
+  kfHint.className = 'export-dialog-field-hint';
+  kfHint.textContent = t(i18nKey('cfgScheduleKeyframesHint'));
+  keyframeField.appendChild(kfHint);
+  const kfInput = document.createElement('input');
+  kfInput.type = 'text';
+  kfInput.placeholder = t(i18nKey('cfgScheduleKeyframesPlaceholder'));
+  // Render existing keyframes as text
+  if (Array.isArray(form[formKf]) && form[formKf].length > 0) {
+    kfInput.value = form[formKf].map(kf => `${kf.step}:${kf.value}`).join(',');
+  }
+  kfInput.addEventListener('input', () => {
+    const text = kfInput.value.trim();
+    if (!text) { form[formKf] = null; return; }
+    const parsed = [];
+    for (const part of text.split(',')) {
+      const [s, v] = part.split(':').map(x => parseFloat(x.trim()));
+      if (Number.isFinite(s) && Number.isFinite(v)) parsed.push({ step: s, value: v });
+    }
+    form[formKf] = parsed.length > 0 ? parsed : null;
+  });
+  keyframeField.appendChild(kfInput);
+  scheduleField.appendChild(keyframeField);
+
+  // Toggle start/keyframe visibility on mode change
+  const updateVisibility = () => {
+    const mode = scheduleSelect.value;
+    startField.hidden = (mode === 'constant');
+    keyframeField.hidden = (mode !== 'custom');
+  };
+  scheduleSelect.addEventListener('change', () => {
+    form[formMode] = scheduleSelect.value;
+    updateVisibility();
+  });
+  updateVisibility();
+
+  return scheduleField;
 }
 
 function buildAdvancedSection(form, settings) {
@@ -773,6 +809,10 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     exportCfgScheduleMode: form.exportCfgScheduleMode,
     exportCfgStrengthStart: form.exportCfgStrengthStart,
     exportCfgScheduleKeyframes: form.exportCfgScheduleKeyframes,
+    // M5: preview CFG schedule mirrors
+    previewCfgScheduleMode: form.previewCfgScheduleMode,
+    previewCfgStrengthStart: form.previewCfgStrengthStart,
+    previewCfgScheduleKeyframes: form.previewCfgScheduleKeyframes,
     vocoderOverlapFrames: form.vocoderOverlapFrames,
     diagnosticMode: form.diagnosticMode,
     enableLoudnormFinal: form.enableLoudnormFinal,

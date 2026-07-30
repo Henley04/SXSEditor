@@ -155,6 +155,114 @@ describe('cfgSchedule - Task 11 CFG strength scheduling', () => {
         });
     });
 
+    // M11: keyframe parsing/filtering edge cases.
+    //
+    // The exportDialog.js UI parses keyframe TEXT ("0:1.5,16:3.0,31:3.0" →
+    // [{step,value}]) in DOM event handlers. exportDialog.js does not export
+    // those functions and is out of scope for this review-fix pass, so the
+    // text→array parsing cannot be unit-tested here without a DOM harness
+    // (jsdom is available in devDeps, but the parsing is inline in unexported
+    // handlers). Instead we strengthen coverage of the keyframe DATA logic that
+    // cfgSchedule.js DOES export: `interpolateKeyframes` (via custom mode)
+    // filters invalid entries, sorts, clamps to first/last, and falls back to
+    // linear when no valid keyframes remain. These are the edge cases the UI
+    // parsing feeds into, so validating them here covers the contract the UI
+    // relies on.
+    describe('M11: keyframe parsing/filtering edge cases', () => {
+        it('should filter out keyframes with non-number step/value', () => {
+            const keyframes = [
+                { step: 0, value: 1.0 },
+                { step: 'bad', value: 2.0 },      // non-number step → filtered
+                { step: 16, value: 'nope' },      // non-number value → filtered
+                { step: null, value: 3.0 },        // non-number step → filtered
+                { step: 31, value: 2.0 },
+            ];
+            // Valid keyframes: [{0,1.0},{31,2.0}]. step 16 → between → linear
+            // interp: 1.0 + (2.0-1.0) * 16/31 ≈ 1.516
+            const r = resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, step: 16, totalSteps: 32 });
+            const expected = 1.0 + (2.0 - 1.0) * 16 / 31;
+            expect(r).to.be.closeTo(expected, 1e-10);
+        });
+
+        it('should filter out keyframes with NaN/Infinity step/value', () => {
+            const keyframes = [
+                { step: 0, value: 1.0 },
+                { step: NaN, value: 2.0 },         // NaN step → filtered
+                { step: 16, value: Infinity },     // Infinity value → filtered
+                { step: 31, value: 2.0 },
+            ];
+            const r = resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, step: 16, totalSteps: 32 });
+            const expected = 1.0 + (2.0 - 1.0) * 16 / 31;
+            expect(r).to.be.closeTo(expected, 1e-10);
+        });
+
+        it('should handle a single valid keyframe (clamp to its value)', () => {
+            const keyframes = [{ step: 10, value: 1.5 }];
+            // step <= 10 → 1.5; step >= 10 → 1.5 (only one keyframe)
+            expect(resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, step: 0, totalSteps: 32 })).to.be.closeTo(1.5, 1e-10);
+            expect(resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, step: 10, totalSteps: 32 })).to.be.closeTo(1.5, 1e-10);
+            expect(resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, step: 31, totalSteps: 32 })).to.be.closeTo(1.5, 1e-10);
+        });
+
+        it('should handle duplicate-step keyframes (last one wins via sort stability / boundary check)', () => {
+            const keyframes = [
+                { step: 0, value: 1.0 },
+                { step: 16, value: 3.0 },
+                { step: 16, value: 4.0 },  // duplicate step
+                { step: 31, value: 2.0 },
+            ];
+            // At step 16 the boundary check `step >= b.step` lands exactly on
+            // the 16-keyframe; both duplicates have step 16. The loop returns
+            // b.value when step == b.step within a segment. Either 3.0 or 4.0
+            // is acceptable (sort order of equal keys is not guaranteed), so we
+            // just assert it equals one of the duplicate values.
+            const r = resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, step: 16, totalSteps: 32 });
+            expect(r === 3.0 || r === 4.0).to.equal(true);
+            // Off the duplicate: step 8 → between 0 (1.0) and 16 → 1.0 + (v16-1.0)*0.5
+            const r8 = resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, step: 8, totalSteps: 32 });
+            const v16 = r; // value at step 16
+            expect(r8).to.be.closeTo(1.0 + (v16 - 1.0) * 0.5, 1e-10);
+        });
+
+        it('should fall back to linear when all keyframes are invalid', () => {
+            const keyframes = [
+                { step: 'x', value: 1.0 },
+                { step: 16, value: null },
+                { step: NaN, value: undefined },
+            ];
+            // No valid keyframes → interpolateKeyframes falls back to linear.
+            const r = resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, cfgStrengthStart: 1.0, cfgStrengthEnd: 3.0, step: 0, totalSteps: 32 });
+            expect(r).to.be.closeTo(1.0, 1e-10);
+            const rEnd = resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, cfgStrengthStart: 1.0, cfgStrengthEnd: 3.0, step: 31, totalSteps: 32 });
+            expect(rEnd).to.be.closeTo(3.0, 1e-10);
+        });
+
+        it('should handle keyframes with non-integer steps (fractional boundaries)', () => {
+            const keyframes = [
+                { step: 0, value: 1.0 },
+                { step: 15.5, value: 2.5 },
+                { step: 31, value: 3.0 },
+            ];
+            // step 8 → between 0 and 15.5: t = 8/15.5; v = 1 + 1.5*8/15.5
+            const r8 = resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, step: 8, totalSteps: 32 });
+            expect(r8).to.be.closeTo(1.0 + 1.5 * 8 / 15.5, 1e-10);
+            // step 20 → between 15.5 and 31: t = (20-15.5)/(31-15.5) = 4.5/15.5
+            const r20 = resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, step: 20, totalSteps: 32 });
+            expect(r20).to.be.closeTo(2.5 + (3.0 - 2.5) * 4.5 / 15.5, 1e-10);
+        });
+
+        it('should ignore null/undefined entries in the keyframes array', () => {
+            const keyframes = [
+                { step: 0, value: 1.0 },
+                null,
+                undefined,
+                { step: 31, value: 2.0 },
+            ];
+            const r = resolveCfgAtStep({ mode: 'custom', cfgStrength: CFG, keyframes, step: 16, totalSteps: 32 });
+            expect(r).to.be.closeTo(1.0 + (2.0 - 1.0) * 16 / 31, 1e-10);
+        });
+    });
+
     describe('integration: monotonic increase for linear/cosine defaults', () => {
         it('linear mode with default start/end should be monotonically increasing', () => {
             let prev = -Infinity;

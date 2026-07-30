@@ -63,28 +63,31 @@ function resolveCfgAtStep({ mode, cfgStrength, cfgStrengthStart, cfgStrengthEnd,
 
     // 边界：totalSteps <= 1 时无法插值，返回 end（= 最终目标 CFG）
     if (!Number.isFinite(totalSteps) || totalSteps <= 1) {
-        return end;
+        // M12: safety clamp — scheduled CFG must be >= 0 (negative CFG is
+        // undefined behavior in SVS).
+        return Math.max(0, end);
     }
 
     const clampedStep = Math.max(0, Math.min(step, totalSteps - 1));
 
+    let result;
     if (resolvedMode === 'linear') {
         // start + (end - start) * step / (totalSteps - 1)
-        return start + (end - start) * clampedStep / (totalSteps - 1);
-    }
-
-    if (resolvedMode === 'cosine') {
+        result = start + (end - start) * clampedStep / (totalSteps - 1);
+    } else if (resolvedMode === 'cosine') {
         // start + (end - start) * (1 - cos(π * step / (totalSteps - 1))) / 2
-        return start + (end - start) * (1 - Math.cos(Math.PI * clampedStep / (totalSteps - 1))) / 2;
+        result = start + (end - start) * (1 - Math.cos(Math.PI * clampedStep / (totalSteps - 1))) / 2;
+    } else if (resolvedMode === 'custom') {
+        // custom: keyframes 分段线性插值
+        result = interpolateKeyframes(keyframes, clampedStep, start, end, totalSteps);
+    } else {
+        // 兜底（不应到达）
+        return cfgStrength;
     }
 
-    // custom: keyframes 分段线性插值
-    if (resolvedMode === 'custom') {
-        return interpolateKeyframes(keyframes, clampedStep, start, end, totalSteps);
-    }
-
-    // 兜底（不应到达）
-    return cfgStrength;
+    // M12: safety clamp — scheduled CFG must be >= 0 (negative CFG is undefined
+    // behavior in SVS). constant mode is exempt (returns cfgStrength directly).
+    return Math.max(0, result);
 }
 
 /**

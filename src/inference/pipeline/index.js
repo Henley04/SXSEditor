@@ -10,6 +10,7 @@ const { buildSessionOptions } = require('../shared/ortOptions');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
+const { DEFAULT_SOLVER } = require('./samplers');
 const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram, isVramOOMError } = require('./postprocessing');
 const { AudioSegmentation } = require('./audioSegmentation');
 const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain, gpuDrainLong, markGpuOom } = require('./utils');
@@ -1846,7 +1847,7 @@ class OnnxSVSPipeline {
     }
 
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null) {
-        const samplerName = this._currentSamplerName || 'euler';
+        const samplerName = this._currentSamplerName || DEFAULT_SOLVER;
         // Task 15: pass per-frame F0 curve to chunked diffusion for F0-aware
         // boundary selection. Set by _synthesizeSegment / synthesizeMultiStreaming
         // / _synthesizeImpl from sequences.f0Hz. null = no F0 info → fallback.
@@ -1910,6 +1911,7 @@ class OnnxSVSPipeline {
                 ptMelData, ptFrameCount,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
+                cfgScheduleOpts: this._currentCfgScheduleOpts,
             }, webnnOnProgress);
             // Forward WebNN warnings (e.g. NPU static shape truncation)
             if (result.warnings && result.warnings.length > 0) {
@@ -1999,6 +2001,7 @@ class OnnxSVSPipeline {
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
             vocoderChunkFrames: this._resolveVocoderChunkFrames(),
+            cfgScheduleOpts: this._currentCfgScheduleOpts || null,
             skipVocoder: true,
         };
         return requestSynthesis(wc, fullParams, onProgress);
@@ -2038,12 +2041,14 @@ class OnnxSVSPipeline {
                 ptMelData, ptFrameCount,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
+                cfgScheduleOpts: this._currentCfgScheduleOpts,
             },
             {
                 sequences: seqB, tokenCount: seqB.tokenCount, totalFrames: framesB,
                 ptMelData, ptFrameCount,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
+                cfgScheduleOpts: this._currentCfgScheduleOpts,
             },
         ], webnnOnProgress);
         const ms = performance.now() - t0;
@@ -2169,12 +2174,12 @@ class OnnxSVSPipeline {
             overlapFrames,
         };
         // 求解器名称（取首片段配置，多片段必须一致）
-        this._currentSamplerName = firstOpts.sampler || 'euler';
+        this._currentSamplerName = firstOpts.sampler || DEFAULT_SOLVER;
         // Task 11: CFG 强度曲线调度（取首片段配置，多片段必须一致）
         this._currentCfgScheduleOpts = {
             mode: firstOpts.cfgScheduleMode || 'linear',
             cfgStrengthStart: firstOpts.cfgStrengthStart ?? null,
-            cfgScheduleKeyframes: firstOpts.cfgScheduleKeyframes ?? null,
+            keyframes: firstOpts.cfgScheduleKeyframes ?? null,
         };
 
         console.log(`[OnnxSVSPipeline] synthesizeMultiStreaming: ${fragments.length} fragments, chunkEnabled=${chunkEnabled}, chunkFrames=${chunkFrames}`);
@@ -2387,7 +2392,6 @@ class OnnxSVSPipeline {
                     isFP16: this.diffStepIsFP16,
                     useStaticShapes: this.useStaticShapes,
                     overlap: p.chunkPlan.overlap,
-                    fadeWindow: p.chunkPlan.fadeWindow,
                 };
                 const { newCommitted } = await this._diffusion._runSingleDiffusionChunk(
                     ctx, gc.spec, onProgress,
@@ -2518,12 +2522,12 @@ class OnnxSVSPipeline {
         const onChunkAudio = options.onChunkAudio || null;
 
         // 求解器名称（透传到 _runDiffusionLoop → diffusion.js）
-        this._currentSamplerName = options.sampler || 'euler';
+        this._currentSamplerName = options.sampler || DEFAULT_SOLVER;
         // Task 11: CFG 强度曲线调度（透传到 _runDiffusionLoop → diffusion.js）
         this._currentCfgScheduleOpts = {
             mode: options.cfgScheduleMode || 'linear',
             cfgStrengthStart: options.cfgStrengthStart ?? null,
-            cfgScheduleKeyframes: options.cfgScheduleKeyframes ?? null,
+            keyframes: options.cfgScheduleKeyframes ?? null,
         };
 
         // diffStep 分块推理选项（仅预览路径传入，导出不传 → 默认关闭）

@@ -7,6 +7,7 @@ import { getOrt } from './ortSetup.js';
 import { runSession } from './sessionManager.js';
 import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom, padToLength, disposeTensor } from './utils.js';
 import { createSampler } from '../pipeline/samplers/index.js';
+import { resolveCfgAtStep } from '../pipeline/cfgSchedule.js';
 
 /**
  * 单片段扩散采样循环
@@ -27,6 +28,7 @@ export async function runDiffusionLoop({
     npuDiffBatchSize = 4,
     useStaticShapes = false,
     samplerName = 'euler',
+    cfgScheduleOpts = null,
 }) {
     const ort = getOrt();
 
@@ -261,6 +263,11 @@ export async function runDiffusionLoop({
         }
     };
 
+    // Task 11 / M1: track current step for CFG schedule resolution (aligned with
+    // pipeline/diffusion.js). constant mode returns cfgStrength byte-identically;
+    // linear/cosine/custom adjust CFG per step. cfgScheduleOpts null = legacy fixed CFG.
+    let currentStep = 0;
+
     // combine: CFG + Rescale 合并，写入 vBuf（复用），返回 vBuf 引用
     // 无 CFG 时直接拷贝 condPred 到 vBuf（condPred 已是 target 段）。
     // 有 CFG 时 single-pass Welford 在线方差（Task 7.2 — 与 ORT 路径对齐）：
@@ -273,6 +280,11 @@ export async function runDiffusionLoop({
             return v;
         }
         const targetLen = totalFrames * MEL_DIM;
+        // Task 11 / M1: resolve effective CFG for this step once (constant = cfgStrength,
+        // byte-identical; linear/cosine/custom adjust per step). Aligned with DML path.
+        const effectiveCfg = cfgScheduleOpts
+            ? resolveCfgAtStep({ ...cfgScheduleOpts, cfgStrength, step: currentStep, totalSteps })
+            : cfgStrength;
         // Single-pass Welford online variance (Task 7.2 — aligned with pipeline/diffusion.js)
         // Pass 1: cfgVal → cfgPredBuf, Welford accumulate posMean/posM2 + cfgAdjMean/cfgAdjM2
         let posMean = 0, posM2 = 0;
@@ -281,7 +293,7 @@ export async function runDiffusionLoop({
         for (let i = 0; i < targetLen; i++) {
             const condVal = condPred[i];
             const uncondVal = uncondPred[i];
-            const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
+            const cfgVal = condVal + effectiveCfg * (condVal - uncondVal);
             cfgPredBuf[i] = cfgVal;
             n++;
             const posDelta = condVal - posMean;
@@ -316,6 +328,7 @@ export async function runDiffusionLoop({
     let totalNFE = 0;
     try {
         for (let step = 0; step < totalSteps; step++) {
+            currentStep = step;
             const tStep = performance.now();
             const { nfe } = await sampler.step({
                 evalDiffStep, combine, step, totalSteps,
@@ -376,6 +389,7 @@ export async function runBatchDiffusionLoop({
     floatType,
     useStaticShapes = false,
     samplerName = 'euler',
+    cfgScheduleOpts = null,
 }) {
     // 非 Euler 求解器：退化为两次单段调用，保证正确性
     if (samplerName !== 'euler') {
@@ -395,6 +409,7 @@ export async function runBatchDiffusionLoop({
                 npuDiffBatchSize: 2,
                 useStaticShapes,
                 samplerName,
+                cfgScheduleOpts,
             });
             results.push({ xtData: r.xtData, totalFrames: r.totalFrames });
         }
@@ -530,6 +545,11 @@ export async function runBatchDiffusionLoop({
             const inferMs = performance.now() - tStepInfer;
 
             const tStepCfg = performance.now();
+            // Task 11 / M1: resolve effective CFG for this step once (constant = cfgStrength0,
+            // byte-identical; linear/cosine/custom adjust per step). Aligned with DML path.
+            const effectiveCfg = cfgScheduleOpts
+                ? resolveCfgAtStep({ ...cfgScheduleOpts, cfgStrength: cfgStrength0, step, totalSteps })
+                : cfgStrength0;
             // Apply CFG per segment
             for (let si = 0; si < 2; si++) {
                 const s = segData[si];
@@ -550,7 +570,7 @@ export async function runBatchDiffusionLoop({
                     for (let d = 0; d < MEL_DIM; d++) {
                         const condVal = batchPredSafe[condSrc + d];
                         const uncondVal = batchPredSafe[uncondSrc + d];
-                        const cfgVal = condVal + cfgStrength0 * (condVal - uncondVal);
+                        const cfgVal = condVal + effectiveCfg * (condVal - uncondVal);
                         cfgPredBuf[f * MEL_DIM + d] = cfgVal;
                         n++;
                         const posDelta = condVal - posMean;

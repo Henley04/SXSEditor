@@ -808,7 +808,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       expect(stubLoop.calledOnce).to.equal(true);
     });
 
-    it('onChunkMel 透传给 runDiffusionLoopChunked', async () => {
+    it('onChunkMel / samplerName / pitchCurveF0 / cfgScheduleOpts 透传给 runDiffusionLoopChunked', async () => {
       pipeline = buildMockPipeline();
       installRecordingSessions(pipeline);
       const stub = sinon.spy(pipeline._diffusion, 'runDiffusionLoopChunked');
@@ -821,14 +821,23 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         overlapFrames: 5,
       };
       const onChunkMel = sinon.spy();
+      // M10: set pitchCurveF0 / cfgScheduleOpts on the pipeline so we can
+      // verify they are forwarded to runDiffusionLoopChunked.
+      const pitchCurveF0 = new Float32Array(100).fill(440);
+      const cfgScheduleOpts = { mode: 'linear', cfgStrengthStart: 1.0 };
+      pipeline._currentPitchCurveF0 = pitchCurveF0;
+      pipeline._currentCfgScheduleOpts = cfgScheduleOpts;
       await pipeline._runDiffusionLoop(xt, 100, ptMelData, 10, combinedCond, 1, 0, 0.75, () => {}, 0, 100, onChunkMel);
       expect(stub.calledOnce).to.equal(true);
       // 末尾参数顺序：[..., onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts]
       // （Task 11/15 新增 pitchCurveF0 与 cfgScheduleOpts 两个尾部参数）
       const callArgs = stub.firstCall.args;
       expect(callArgs[callArgs.length - 4]).to.equal(onChunkMel);
-      // 倒数第三个为 samplerName，默认 'euler'
-      expect(callArgs[callArgs.length - 3]).to.equal('euler');
+      // 倒数第三个为 samplerName，默认 'stork2'（M6 changed DEFAULT_SOLVER euler→stork2）
+      expect(callArgs[callArgs.length - 3]).to.equal('stork2');
+      // M10: pitchCurveF0 与 cfgScheduleOpts 透传
+      expect(callArgs[callArgs.length - 2]).to.equal(pitchCurveF0);
+      expect(callArgs[callArgs.length - 1]).to.equal(cfgScheduleOpts);
     });
   });
 
@@ -1002,12 +1011,13 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       expect(plan.specs.length).to.equal(3);
     });
 
-    it('overlapFrames=0 → overlap=0，fadeWindow 为空数组', () => {
+    it('overlapFrames=0 → overlap=0，无交叉淡入淡出（2 chunks）', () => {
       // totalFrames=200, chunkFrames=100, overlap=0
       // 步长 = 100，2 chunks
+      // N2: the per-chunk Hann fade window was removed as dead code (WSOLA
+      // replaced Hann OLA); _planChunks now returns { specs, overlap } only.
       const plan = diffusion._planChunks(200, 100, 0);
       expect(plan.overlap).to.equal(0);
-      expect(plan.fadeWindow.length).to.equal(0);
       expect(plan.specs.length).to.equal(2);
     });
 
@@ -1035,24 +1045,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       expect(plan.specs[n - 1].isLast).to.equal(true);
       for (let i = 0; i < n - 1; i++) {
         expect(plan.specs[i].isLast).to.equal(false);
-      }
-    });
-
-    it('Hann 窗满足 w[i] + w[N-1-i] = 1（对称归一化）', () => {
-      const plan = diffusion._planChunks(250, 100, 20);
-      const w = plan.fadeWindow;
-      const N = w.length;
-      for (let i = 0; i < N; i++) {
-        const sum = w[i] + w[N - 1 - i];
-        expect(sum).to.be.closeTo(1.0, 1e-6);
-      }
-    });
-
-    it('Hann 窗值在 [0, 1] 区间内', () => {
-      const plan = diffusion._planChunks(250, 100, 20);
-      for (let i = 0; i < plan.fadeWindow.length; i++) {
-        expect(plan.fadeWindow[i]).to.be.at.least(0);
-        expect(plan.fadeWindow[i]).to.be.at.most(1);
       }
     });
 
@@ -1121,7 +1113,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
       const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
       const combinedCond = new Float32Array((ptFrameCount + totalFrames) * COND_DIM).fill(0.1);
-      const fadeWindow = new Float32Array(overlap).fill(0.5);
 
       const ctx = {
         sessions: makeSessions(),
@@ -1135,7 +1126,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap,
-        fadeWindow,
       };
       const spec = { chunkStart: 0, chunkEnd: 100, currentChunkFrames: 100, isFirst: true, isLast: false };
       const result = await diffusion._runSingleDiffusionChunk(ctx, spec, () => {}, 0, 50);
@@ -1157,10 +1147,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       }
       const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
       const combinedCond = new Float32Array((ptFrameCount + totalFrames) * COND_DIM).fill(0.1);
-      const fadeWindow = new Float32Array(overlap);
-      for (let i = 0; i < overlap; i++) {
-        fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * (i + 1) / (overlap + 1)));
-      }
 
       const ctx = {
         sessions: makeSessions(0.5),
@@ -1174,7 +1160,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap,
-        fadeWindow,
       };
       const spec = { chunkStart: 80, chunkEnd: 180, currentChunkFrames: 100, isFirst: false, isLast: false };
       const result = await diffusion._runSingleDiffusionChunk(ctx, spec, () => {}, 0, 50);
@@ -1198,7 +1183,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
       const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
       const combinedCond = new Float32Array((ptFrameCount + totalFrames) * COND_DIM).fill(0.1);
-      const fadeWindow = new Float32Array(overlap).fill(0.5);
 
       const ctx = {
         sessions: makeSessions(),
@@ -1212,7 +1196,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap,
-        fadeWindow,
       };
       // 末 chunk: [160, 250), 90 帧
       const spec = { chunkStart: 160, chunkEnd: 250, currentChunkFrames: 90, isFirst: false, isLast: true };
@@ -1240,7 +1223,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap: 20,
-        fadeWindow: new Float32Array(20).fill(0.5),
       };
       const spec = { chunkStart: 0, chunkEnd: 100, currentChunkFrames: 100, isFirst: true, isLast: false };
       await diffusion._runSingleDiffusionChunk(ctx, spec, () => {}, 0, 50);
@@ -1268,7 +1250,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap: 20,
-        fadeWindow: new Float32Array(20).fill(0.5),
       };
       const spec = { chunkStart: 0, chunkEnd: 100, currentChunkFrames: 100, isFirst: true, isLast: false };
       await diffusion._runSingleDiffusionChunk(ctx, spec, () => {}, 0, 50);
@@ -1302,7 +1283,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap: 20,
-        fadeWindow: new Float32Array(20).fill(0.5),
       };
       const spec = { chunkStart: 0, chunkEnd: 100, currentChunkFrames: 100, isFirst: true, isLast: false };
       const onProgress = sinon.spy();

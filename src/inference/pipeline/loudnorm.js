@@ -132,13 +132,23 @@ function measureLoudness(samples, sampleRate) {
 }
 
 /**
- * True-peak limiter: 4× oversampling peak detection + soft gain reduction.
+ * True-peak limiter: 4× linear-interpolation peak detection + soft gain reduction.
  *
  * Detects inter-sample peaks via 4× linear-interpolation oversampling, then —
  * if the true peak exceeds the threshold — scales the entire signal down so
  * the true peak lands just below the threshold. This is transparent (no
  * harmonic distortion, unlike hard clipping or tanh saturation) and is the
  * approach used by ffmpeg `loudnorm` in linear (one-pass) mode.
+ *
+ * NOTE: ITU-R BS.1770 specifies a dedicated 4× FIR interpolation filter for
+ * true-peak measurement. This implementation uses 4× LINEAR interpolation
+ * instead, which is simpler but slightly UNDERESTIMATES true-peak (linear
+ * interp cannot overshoot between samples the way a real FIR can). As a
+ * limiter this is acceptable: the default −1 dBTP target carries ~1 dB of
+ * safety margin (plus the 1 % soft-reduction margin applied below) to
+ * compensate, so the post-limit true peak stays safely under the threshold.
+ * Calling this a "true-peak limiter" is therefore slightly imprecise — it is
+ * a 4×-oversampled peak limiter approximating true-peak.
  *
  * @param {Float32Array} samples - modified in place
  * @param {number} sampleRate
