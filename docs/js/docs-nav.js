@@ -60,7 +60,8 @@
           title: { en: 'Extending', zh: '扩展开发' },
           items: [
             { href: 'themes.html', title: { en: 'Themes & UI', zh: '主题与界面' } },
-            { href: 'testing-cli.html', title: { en: 'Testing & CLI', zh: '测试与命令行' } }
+            { href: 'testing-cli.html', title: { en: 'Testing & CLI', zh: '测试与命令行' } },
+            { href: 'singer-market.html', title: { en: 'Singer Market', zh: '歌手市场' } }
           ]
         }
       ]
