@@ -1847,13 +1847,17 @@ class OnnxSVSPipeline {
 
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null) {
         const samplerName = this._currentSamplerName || 'euler';
+        // Task 15: pass per-frame F0 curve to chunked diffusion for F0-aware
+        // boundary selection. Set by _synthesizeSegment / synthesizeMultiStreaming
+        // / _synthesizeImpl from sequences.f0Hz. null = no F0 info → fallback.
+        const pitchCurveF0 = this._currentPitchCurveF0 || null;
         console.log(`[OnnxSVSPipeline] Diffusion start: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, totalSteps=${totalSteps}, sampler=${samplerName}, isFP16=${this.isFP16}, diffStepIsFP16=${this.diffStepIsFP16}, ep=${this.sessionEPs.diffStep || 'unknown'}`);
         console.log(`[OnnxSVSPipeline] Session diffStep: type=${this.sessions.diffStep?.constructor?.name}, ep=${this.sessionEPs.diffStep}`);
         // 分块扩散推理（仅预览路径启用，useStaticShapes 路径跳过）
         const chunkOpts = this._currentDiffStepChunkOpts;
         if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > chunkOpts.chunkFrames) {
             console.log(`[OnnxSVSPipeline] Using chunked diffusion: chunkFrames=${chunkOpts.chunkFrames}, overlapFrames=${chunkOpts.overlapFrames}, streaming=${!!onChunkMel}`);
-            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName);
+            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0);
         }
         return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName);
     }
@@ -1927,6 +1931,10 @@ class OnnxSVSPipeline {
         await gpuDrain();
 
         const xt = this.randomNoise(totalFrames, MEL_DIM);
+
+        // Task 15: per-frame F0 curve for F0-aware chunked diffusion boundary
+        // selection. Slice to totalFrames to match the segment's frame range.
+        this._currentPitchCurveF0 = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
 
         await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange);
 
@@ -2121,6 +2129,8 @@ class OnnxSVSPipeline {
         }
         await this.ensureAllModelsLoaded();
         this._currentF0Hz = null;
+        // Task 15: reset per-frame F0 curve for F0-aware chunked diffusion.
+        this._currentPitchCurveF0 = null;
         const onProgress = options.onProgress || (() => {});
         const onChunkAudio = options.onChunkAudio || null;
 
@@ -2278,7 +2288,18 @@ class OnnxSVSPipeline {
             // 分块规划
             let chunkPlan = null;
             if (chunkEnabled) {
-                chunkPlan = this._diffusion._planChunks(totalFrames, chunkFrames, overlapFrames);
+                // Task 15: compute per-frame F0 slope for F0-aware chunk boundary
+                // selection (avoids splitting at F0 discontinuities). Matches the
+                // f0Slope computation in runDiffusionLoopChunked.
+                let f0Slope = null;
+                if (f0Hz && f0Hz.length >= 2) {
+                    f0Slope = new Float32Array(f0Hz.length);
+                    for (let i = 0; i < f0Hz.length - 1; i++) {
+                        f0Slope[i] = f0Hz[i + 1] - f0Hz[i];
+                    }
+                    f0Slope[f0Hz.length - 1] = 0;
+                }
+                chunkPlan = this._diffusion._planChunks(totalFrames, chunkFrames, overlapFrames, f0Slope);
             }
 
             // filledNotes[0].start is the first note's start beat within the fragment.
@@ -2410,6 +2431,8 @@ class OnnxSVSPipeline {
                 }
             } else {
                 // 无分块路径：整段 diffusion + vocoder
+                // Task 15: set per-fragment F0 curve for F0-aware chunked diffusion.
+                this._currentPitchCurveF0 = p.f0Hz || null;
                 await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk);
                 await gpuDrain();
                 const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
@@ -2471,6 +2494,8 @@ class OnnxSVSPipeline {
         await this.ensureAllModelsLoaded();
         // Reset per-call F0 cache so a stale F0 from a previous synthesis cannot leak into SiFiGAN vocoder input
         this._currentF0Hz = null;
+        // Task 15: reset per-frame F0 curve for F0-aware chunked diffusion.
+        this._currentPitchCurveF0 = null;
         const onProgress = options.onProgress || (() => {});
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
@@ -2676,6 +2701,9 @@ class OnnxSVSPipeline {
 
             // 提前设置 F0（分块流式路径在 diffusion 期间就需要 F0 片段）
             this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
+            // Task 15: same per-frame F0 curve drives F0-aware chunked diffusion
+            // boundary selection in _runDiffusionLoop → runDiffusionLoopChunked.
+            this._currentPitchCurveF0 = this._currentF0Hz;
             // 单 segment 路径流式推送：仅在没有 contextPadding 截取时启用，避免 totalSamples 不一致
             const singleSegOnChunk = onChunkAudio && !contextPadding ? onChunkAudio : null;
 

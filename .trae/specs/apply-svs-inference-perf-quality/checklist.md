@@ -59,6 +59,6 @@
 - [x] 新增测试全部通过：`test/wsola.test.js`、`test/loudnorm.test.js`、`test/gpuDrainAdaptive.test.js`、`test/diffusionBatchMerge.test.js`、`test/cfgCombineWelford.test.js`（`test/cfgSchedule.test.js` 属 Task 11，未在本批次）
 - [x] `npm run lint` 无新增错误
 - [ ] 手动检查：清空 settings.json 后默认值全部生效（sampler=stork2、releaseDiffStepBeforeVocoder=false、cfgRescale=0.6、vocoder overlap=32、cfgScheduleMode=linear）
-- [ ] Git commit 已创建，message 为英文
+- [x] Git commit 已创建，message 为英文 (a50d535)
 - [ ] 已推送到远程分支
 - [ ] GitHub PR 已创建，body 列出所有变更项

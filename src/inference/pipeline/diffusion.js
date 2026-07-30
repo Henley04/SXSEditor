@@ -568,9 +568,21 @@ class Diffusion {
     /**
      * 计算分块边界与 Hann 窗。
      * 返回 null 表示无需分块（chunkFrames >= totalFrames 或 totalFrames <= 0）。
+     *
+     * Task 15: 当提供 f0Slope（每帧 F0 斜率数组）时，在安全重叠区
+     *   [chunkStart + minBeats, chunkStart + maxBeats]
+     * 内选择 |f0Slope[boundary]| 最小的位置作为 chunkEnd，避开 F0 斜率突变处
+     * （颤音起止、音符转换）切分，减少边界伪影（RDSinger arXiv:2410.21641 启发）。
+     * f0Slope 为 null/undefined 或长度不足（out-of-range）时回退到固定 safeChunk
+     * 逻辑，行为与改造前完全一致。
+     *
+     * @param {number} totalFrames
+     * @param {number} chunkFrames
+     * @param {number} overlapFrames
+     * @param {Float32Array|number[]|null} [f0Slope=null] - per-frame F0 slope (f0[i+1]-f0[i])
      * @returns {{specs: Array, overlap: number, fadeWindow: Float32Array}|null}
      */
-    _planChunks(totalFrames, chunkFrames, overlapFrames) {
+    _planChunks(totalFrames, chunkFrames, overlapFrames, f0Slope = null) {
         // 防御：totalFrames <= 0 时直接返回 null，由调用方短路处理
         if (!Number.isFinite(totalFrames) || totalFrames <= 0) return null;
         const safeChunk = Math.max(50, Math.floor(chunkFrames));
@@ -580,17 +592,56 @@ class Diffusion {
         // safeOverlap === 0 时无交叉淡入淡出，fadeWindow 为空数组（循环不执行）
         if (safeOverlap < 1) safeOverlap = 0;
 
+        // Task 15: F0-aware boundary selection setup.
+        // hasF0 requires f0Slope to cover the full totalFrames range so every
+        // candidate boundary index is in-range; otherwise fall back to fixed
+        // safeChunk (no behavior change).
+        const hasF0 = !!(f0Slope && f0Slope.length >= totalFrames);
+        // Safe overlap zone: chunk size may vary by up to ±safeOverlap around
+        // safeChunk (clamped to [75%, 125%] of safeChunk to avoid degenerate
+        // chunks). When safeOverlap = 0 the zone collapses and no search runs.
+        const minBeats = hasF0
+            ? Math.max(Math.floor(safeChunk * 0.75), safeChunk - safeOverlap)
+            : safeChunk;
+        const maxBeats = hasF0
+            ? Math.min(safeChunk + safeOverlap, Math.floor(safeChunk * 1.25))
+            : safeChunk;
+        const canSearch = hasF0 && maxBeats > minBeats;
+
         const specs = [];
         let framePos = 0;
         let chunkIdx = 0;
         while (framePos < totalFrames) {
             const isFirst = chunkIdx === 0;
             const chunkStart = isFirst ? 0 : Math.max(0, framePos - safeOverlap);
-            const chunkEnd = Math.min(chunkStart + safeChunk, totalFrames);
+            const defaultChunkEnd = Math.min(chunkStart + safeChunk, totalFrames);
+            const isLast = defaultChunkEnd >= totalFrames;
+            let chunkEnd;
+            if (isLast) {
+                chunkEnd = totalFrames;
+            } else if (canSearch) {
+                // Task 15: search [chunkStart + minBeats, chunkStart + maxBeats]
+                // for the boundary with smallest |f0Slope[boundary]|.
+                const lo = Math.max(chunkStart + minBeats, chunkStart + 1);
+                const hi = Math.min(chunkStart + maxBeats, totalFrames - 1);
+                let bestBoundary = defaultChunkEnd;
+                let bestSlope = Infinity;
+                for (let b = lo; b <= hi; b++) {
+                    if (b < 0 || b >= f0Slope.length) continue;
+                    const s = Math.abs(f0Slope[b]);
+                    if (s < bestSlope) {
+                        bestSlope = s;
+                        bestBoundary = b;
+                    }
+                }
+                chunkEnd = bestBoundary;
+            } else {
+                chunkEnd = defaultChunkEnd;
+            }
             const currentChunkFrames = chunkEnd - chunkStart;
-            const isLast = chunkEnd >= totalFrames;
-            specs.push({ chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast });
-            if (isLast) break;
+            const finalIsLast = chunkEnd >= totalFrames;
+            specs.push({ chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast: finalIsLast });
+            if (finalIsLast) break;
             framePos = chunkEnd;
             chunkIdx++;
         }
@@ -683,9 +734,22 @@ class Diffusion {
         return { newCommitted };
     }
 
-    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames, onChunkMel = null, samplerName = 'euler') {
+    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames, onChunkMel = null, samplerName = 'euler', pitchCurveF0 = null) {
+        // Task 15: compute per-frame F0 slope from pitchCurveF0 for F0-aware
+        // chunk boundary selection. f0Slope[i] = f0[i+1] - f0[i], with 0 at the
+        // last index. When pitchCurveF0 is null/undefined or too short, f0Slope
+        // is null and _planChunks falls back to fixed safeChunk (no change).
+        let f0Slope = null;
+        if (pitchCurveF0 && pitchCurveF0.length >= 2) {
+            f0Slope = new Float32Array(pitchCurveF0.length);
+            for (let i = 0; i < pitchCurveF0.length - 1; i++) {
+                f0Slope[i] = pitchCurveF0[i + 1] - pitchCurveF0[i];
+            }
+            f0Slope[pitchCurveF0.length - 1] = 0;
+        }
+
         // 分块规划
-        const plan = this._planChunks(totalFrames, chunkFrames, overlapFrames);
+        const plan = this._planChunks(totalFrames, chunkFrames, overlapFrames, f0Slope);
         if (!plan) {
             // 无需分块，直接整段推理
             return this.runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, samplerName);

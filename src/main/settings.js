@@ -113,6 +113,12 @@ function loadSettings() {
     _settingsCache.enableAntiAliasing = false;
   }
 
+  // SDEdit 局部修复（默认关闭）。检测 diffusion 输出 mel 局部 NaN/能量突变后用浅噪声重噪
+  // + 少步重采样修复（STORK-2 5 步，仅更新异常帧）。默认 false 时不执行任何修复代码路径。
+  if (typeof _settingsCache.enableSDEditRepair !== 'boolean') {
+    _settingsCache.enableSDEditRepair = false;
+  }
+
   // ===== 预览 diffStep 分块推理设置 =====
   // 预览时将 diffStep 的目标帧分块推理（每块独立运行完整扩散循环，再交叉淡入淡出拼接）。
   // 注意力复杂度 O(n²)，分块可显著加速长片段预览，代价是块边界可能产生轻微伪影。
