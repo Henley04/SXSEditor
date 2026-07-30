@@ -40,6 +40,10 @@ import {
   getSelectedPhonemeNoteId, setSelectedPhonemeNoteId,
   getSelectedPhonemeIndex, setSelectedPhonemeIndex,
   getHoveredNoteId, setHoveredNoteId,
+  setActiveNoteId,
+  setActiveAnchorIdx,
+  setActivePhonemeKey,
+  bumpNotesVersion,
   getParamEnvelopeDrag, setParamEnvelopeDrag,
   getActiveInlineInput, setActiveInlineInput,
   getActiveInlineEditNote, setActiveInlineEditNote,
@@ -89,8 +93,21 @@ const history = new HistoryManager();
 
 export { history };
 
+// 缓存 canvas 的 bounding rect，避免每个 mousemove 事件都触发 layout read。
+// 在 scroll/resize/drag 结束时通过 _invalidateCanvasRect() 失效。
+let _canvasRectCache = null;
+function _getCanvasRect() {
+  if (!_canvasRectCache) {
+    _canvasRectCache = canvas.getBoundingClientRect();
+  }
+  return _canvasRectCache;
+}
+function _invalidateCanvasRect() {
+  _canvasRectCache = null;
+}
+
 function getMousePos(e) {
-  const rect = canvas.getBoundingClientRect();
+  const rect = _getCanvasRect();
   return { x: e.clientX - rect.left, y: e.clientY - rect.top };
 }
 
@@ -708,6 +725,8 @@ function _setupKanjiContextMenuListeners() {
 function finalizeDragOperation() {
   const dragOperation = getDragOperation();
   if (!dragOperation) return;
+  // 拖拽可能就地修改了 notes（move/resize/add/delete），失效 inactive/oob 缓存
+  bumpNotesVersion();
 
   switch (dragOperation.type) {
     case 'noteAdd': {
@@ -952,6 +971,7 @@ function handlePitchMouseDown(e, pos) {
         }
       }
       setPitchDragAnchorIdx(anchorIdx);
+      setActiveAnchorIdx(anchorIdx); // 按压反馈
       setPitchDragStartTime(pitchCurve.anchorPoints[anchorIdx].time);
       setPitchDragStartValue(pitchCurve.anchorPoints[anchorIdx].pitch);
       getPitchDragAnchorStarts().clear();
@@ -977,6 +997,7 @@ function handlePitchMouseDown(e, pos) {
       });
       invalidatePitchCurveCache();
       setPitchDragAnchorIdx(pitchCurve.anchorPoints.length - 1);
+      setActiveAnchorIdx(getPitchDragAnchorIdx()); // 按压反馈
       selectedAnchorIndices.add(getPitchDragAnchorIdx());
       setPitchDragStartTime(time);
       setPitchDragStartValue(clampedPitch);
@@ -1395,6 +1416,9 @@ function startInlineEdit(note, hit) {
 
 export function setupEventListeners() {
   canvas.addEventListener('mousedown', (e) => {
+    // mousedown 前布局可能已变化（inspector resize / param panel toggle / window resize），
+    // 失效 rect 缓存以确保本次拖拽使用最新的 canvas 位置。
+    _invalidateCanvasRect();
     const pos = getMousePos(e);
 
     if (e.button === 1) {
@@ -1464,6 +1488,7 @@ export function setupEventListeners() {
           setDragStartX(pos.x);
           setDragStartY(pos.y);
           setDragMode('pitch-smoothness');
+          setActiveAnchorIdx(anchorIdx); // 按压反馈
           setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
           render();
           return;
@@ -1531,6 +1556,8 @@ export function setupEventListeners() {
     const selectedNoteIds = getSelectedNoteIds();
 
     if (hit) {
+      // 记录鼠标按住的 note，用于绘制按压反馈（阴影 + 轻微放大）
+      setActiveNoteId(hit.note.id);
       if (e.ctrlKey || e.metaKey) {
         if (selectedNoteIds.has(hit.note.id)) {
           selectedNoteIds.delete(hit.note.id);
@@ -1592,8 +1619,10 @@ export function setupEventListeners() {
         lyric: 'la',
       };
       getNotes().push(newNote);
+      bumpNotesVersion(); // 新增 note，失效 inactive/oob 缓存
       selectedNoteIds.clear();
       selectedNoteIds.add(newNote.id);
+      setActiveNoteId(newNote.id); // 按住新建 note 时也显示按压反馈
       setDragMode('resize');
       setDragStartX(pos.x);
       setDragStartMouseTime(xToTime(pos.x));
@@ -1749,6 +1778,11 @@ export function setupEventListeners() {
   });
 
   canvas.addEventListener('mouseup', (e) => {
+    // 清除鼠标按压反馈状态（无论后续分支是否 early return，按压都已结束）
+    setActiveNoteId(null);
+    setActiveAnchorIdx(-1);
+    setActivePhonemeKey(null);
+
     if (getIsBoxSelecting()) {
       setIsBoxSelecting(false);
       finalizeBoxSelection();
@@ -1861,6 +1895,10 @@ export function setupEventListeners() {
   });
 
   canvas.addEventListener('mouseleave', () => {
+    // 清除按压反馈状态
+    setActiveNoteId(null);
+    setActiveAnchorIdx(-1);
+    setActivePhonemeKey(null);
     if (getIsBoxSelecting()) {
       setIsBoxSelecting(false);
       finalizeBoxSelection();
@@ -1922,6 +1960,7 @@ export function setupEventListeners() {
       e.preventDefault();
       if (history.canUndo()) {
         history.undo();
+        bumpNotesVersion(); // undo 就地改了 notes，失效 inactive/oob 缓存
         render();
         scheduleAutoSave();
       }
@@ -1932,6 +1971,7 @@ export function setupEventListeners() {
       e.preventDefault();
       if (history.canRedo()) {
         history.redo();
+        bumpNotesVersion(); // redo 就地改了 notes，失效 inactive/oob 缓存
         render();
         scheduleAutoSave();
       }
@@ -2275,39 +2315,52 @@ export function setupEventListeners() {
     }
   });
 
+  // rAF 合并 wheel 事件：trackpad 缩放/滚动会每秒触发数十次 wheel，
+  // 每次都同步 render() 会掉帧。这里将同一帧内的多次 wheel 合并为一次 render。
+  let _wheelRaf = 0;
+  let _pendingWheel = null;
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const isZoom = e.ctrlKey || e.metaKey;
+    // 缓存最后一次 wheel 的鼠标位置（zoom 需要用）
+    _pendingWheel = e;
+    if (_wheelRaf) return;
+    _wheelRaf = requestAnimationFrame(() => {
+      _wheelRaf = 0;
+      const ev = _pendingWheel;
+      _pendingWheel = null;
+      if (!ev) return;
+      const isZoom = ev.ctrlKey || ev.metaKey;
 
-    if (isZoom) {
-      const oldZoomX = getZoomX();
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      const newZoomX = Math.max(0.25, Math.min(4, oldZoomX * delta));
-      setZoomX(newZoomX);
+      if (isZoom) {
+        const oldZoomX = getZoomX();
+        const delta = ev.deltaY > 0 ? 0.9 : 1.1;
+        const newZoomX = Math.max(0.25, Math.min(4, oldZoomX * delta));
+        setZoomX(newZoomX);
 
-      const pos = getMousePos(e);
-      // Compute mouseBeats using OLD zoom/scroll (the actual beat under cursor before zoom),
-      // then set scroll so the same beat stays under the cursor after zoom.
-      // NOTE: Must use oldZoomX here — xToTime() would use the already-updated newZoomX,
-      // giving a wrong beat and causing the note to "disconnect" from the mouse.
-      const oldScrollX = getScrollX();
-      const mouseBeats = (pos.x + oldScrollX) / (BEAT_WIDTH * oldZoomX);
-      const newScrollX = mouseBeats * BEAT_WIDTH * newZoomX - pos.x;
-      setScrollX(Math.max(0, newScrollX));
+        const pos = getMousePos(ev);
+        // Compute mouseBeats using OLD zoom/scroll (the actual beat under cursor before zoom),
+        // then set scroll so the same beat stays under the cursor after zoom.
+        // NOTE: Must use oldZoomX here — xToTime() would use the already-updated newZoomX,
+        // giving a wrong beat and causing the note to "disconnect" from the mouse.
+        const oldScrollX = getScrollX();
+        const mouseBeats = (pos.x + oldScrollX) / (BEAT_WIDTH * oldZoomX);
+        const newScrollX = mouseBeats * BEAT_WIDTH * newZoomX - pos.x;
+        setScrollX(Math.max(0, newScrollX));
 
-      // No special drag handling needed: since mouseBeats is preserved across the zoom,
-      // dxBeats (xToTime(pos) - dragStartMouseTime) stays the same, and the note
-      // naturally remains anchored to the mouse on the next mousemove.
-    } else if (e.shiftKey) {
-      setScrollX(getScrollX() + e.deltaY);
-      setScrollX(Math.max(0, getScrollX()));
-    } else {
-      setScrollY(getScrollY() + e.deltaY);
-      const maxScrollY = Math.max(0, 128 * NOTE_HEIGHT + HEADER_HEIGHT + PARAM_CURVE_HEIGHT - canvas.parentElement.clientHeight);
-      setScrollY(Math.max(0, Math.min(maxScrollY, getScrollY())));
-    }
+        // No special drag handling needed: since mouseBeats is preserved across the zoom,
+        // dxBeats (xToTime(pos) - dragStartMouseTime) stays the same, and the note
+        // naturally remains anchored to the mouse on the next mousemove.
+      } else if (ev.shiftKey) {
+        setScrollX(getScrollX() + ev.deltaY);
+        setScrollX(Math.max(0, getScrollX()));
+      } else {
+        setScrollY(getScrollY() + ev.deltaY);
+        const maxScrollY = Math.max(0, 128 * NOTE_HEIGHT + HEADER_HEIGHT + PARAM_CURVE_HEIGHT - canvas.parentElement.clientHeight);
+        setScrollY(Math.max(0, Math.min(maxScrollY, getScrollY())));
+      }
 
-    render();
+      render();
+    });
   }, { passive: false });
 
   _setupPitchContextMenuListeners();

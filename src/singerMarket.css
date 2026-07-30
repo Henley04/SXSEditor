@@ -45,7 +45,10 @@
   padding: 6px 12px;
   cursor: pointer;
   font-size: var(--font-base);
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
   white-space: nowrap;
   display: inline-flex;
   align-items: center;
@@ -172,7 +175,9 @@
   font-size: 11px;
   color: var(--fg-muted);
   cursor: pointer;
-  transition: all var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard);
   user-select: none;
 }
 
@@ -246,7 +251,10 @@
   border-radius: var(--radius-lg);
   padding: var(--space-5);
   cursor: pointer;
-  transition: all var(--motion-base) cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--motion-base) var(--ease-standard),
+              border-color var(--motion-base) var(--ease-standard),
+              transform var(--motion-base) var(--ease-emphasized),
+              box-shadow var(--motion-base) var(--ease-standard);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -492,7 +500,10 @@
   color: var(--fg-muted);
   cursor: pointer;
   font-weight: 500;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+              border-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+              color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+              transform 0.15s var(--ease-bounce, cubic-bezier(0.34, 1.56, 0.64, 1));
 }
 
 .btn-secondary:hover {
@@ -508,7 +519,9 @@
   cursor: pointer;
   font-weight: 500;
   border: none;
-  transition: all 0.15s ease;
+  transition: background-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+              box-shadow 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+              transform 0.15s var(--ease-bounce, cubic-bezier(0.34, 1.56, 0.64, 1));
 }
 
 .form-group {
@@ -561,7 +574,8 @@
   padding: var(--space-5);
   text-align: center;
   cursor: pointer;
-  transition: all var(--motion-fast);
+  transition: border-color var(--motion-fast) var(--ease-standard),
+              background var(--motion-fast) var(--ease-standard);
   display: flex;
   flex-direction: column;
   align-items: center;

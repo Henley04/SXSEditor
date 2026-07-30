@@ -230,37 +230,49 @@ export function setupEventHandlers() {
     dom.waveformCanvas.style.cursor = 'default';
   });
 
-  // Waveform canvas wheel
+  // Waveform canvas wheel — rAF-coalesced to avoid layout thrash on trackpads.
+  // The latest wheel event is captured and processed inside a single rAF callback;
+  // subsequent events before the frame fires just overwrite the pending state.
+  let _wheelRaf = 0;
+  let _pendingWheel = null;
   dom.waveformCanvas.addEventListener('wheel', (e) => {
     if (!state.wavAudioBuffer || !state.pianoRoll) return;
     e.preventDefault();
+    _pendingWheel = e;
+    if (_wheelRaf) return;
+    _wheelRaf = requestAnimationFrame(() => {
+      _wheelRaf = 0;
+      const ev = _pendingWheel;
+      _pendingWheel = null;
+      if (!ev || !state.pianoRoll) return;
 
-    const rect = dom.waveformCanvas.getBoundingClientRect();
-    const pos = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+      const rect = dom.waveformCanvas.getBoundingClientRect();
+      const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
 
-    if (e.ctrlKey || e.metaKey) {
-      const oldZoomX = state.pianoRoll.zoomX;
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      state.pianoRoll.zoomX = Math.max(0.05, Math.min(4, state.pianoRoll.zoomX * delta));
-      const mouseBeats = (pos.x + state.pianoRoll.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
-      state.pianoRoll.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * state.pianoRoll.zoomX - pos.x;
-      state.pianoRoll.scrollX = Math.max(0, Math.min(getMaxScrollX(), state.pianoRoll.scrollX));
-      state.waveformScrollX = state.pianoRoll.scrollX;
-      state.waveformZoomX = state.pianoRoll.zoomX;
-      state.pianoRoll._staticCacheDirty = true;
-      state.pianoRoll.render();
-    } else if (e.shiftKey) {
-      state.pianoRoll.scrollX += e.deltaY;
-      state.pianoRoll.scrollX = Math.max(0, Math.min(getMaxScrollX(), state.pianoRoll.scrollX));
-      state.waveformScrollX = state.pianoRoll.scrollX;
-      state.pianoRoll.render();
-    } else {
-      state.pianoRoll.scrollY += e.deltaY;
-      state.pianoRoll.scrollY = Math.max(0, Math.min(getMaxScrollY(), state.pianoRoll.scrollY));
-      state.pianoRoll.render();
-    }
+      if (ev.ctrlKey || ev.metaKey) {
+        const oldZoomX = state.pianoRoll.zoomX;
+        const delta = ev.deltaY > 0 ? 0.9 : 1.1;
+        state.pianoRoll.zoomX = Math.max(0.05, Math.min(4, state.pianoRoll.zoomX * delta));
+        const mouseBeats = (pos.x + state.pianoRoll.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
+        state.pianoRoll.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * state.pianoRoll.zoomX - pos.x;
+        state.pianoRoll.scrollX = Math.max(0, Math.min(getMaxScrollX(), state.pianoRoll.scrollX));
+        state.waveformScrollX = state.pianoRoll.scrollX;
+        state.waveformZoomX = state.pianoRoll.zoomX;
+        state.pianoRoll._staticCacheDirty = true;
+        state.pianoRoll.render();
+      } else if (ev.shiftKey) {
+        state.pianoRoll.scrollX += ev.deltaY;
+        state.pianoRoll.scrollX = Math.max(0, Math.min(getMaxScrollX(), state.pianoRoll.scrollX));
+        state.waveformScrollX = state.pianoRoll.scrollX;
+        state.pianoRoll.render();
+      } else {
+        state.pianoRoll.scrollY += ev.deltaY;
+        state.pianoRoll.scrollY = Math.max(0, Math.min(getMaxScrollY(), state.pianoRoll.scrollY));
+        state.pianoRoll.render();
+      }
 
-    drawWaveformWithPlayhead(state.pianoRoll.getCurrentTime(), { isPaused: !state.isPlaying });
+      drawWaveformWithPlayhead(state.pianoRoll.getCurrentTime(), { isPaused: !state.isPlaying });
+    });
   }, { passive: false });
 
   // Resize handle

@@ -68,7 +68,9 @@ export function showAlertDialog(message, onClose) {
         color: var(--fg-on-accent);
         cursor: pointer;
         font-weight: 500;
-        transition: all 0.15s ease;
+        transition: background-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                    box-shadow 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                    transform 0.15s var(--ease-bounce, cubic-bezier(0.34, 1.56, 0.64, 1));
       ">${tOr('common.confirm', 'OK')}</button>
     </div>
   `;
@@ -99,13 +101,13 @@ export function showAlertDialog(message, onClose) {
   });
 
   const close = () => {
-    // Exit animation
-    dialog.style.animation = 'sxs-dialog-exit 0.2s ease forwards';
-    overlay.style.animation = 'sxs-overlay-out 0.2s ease forwards';
+    // Exit animation: faster than enter, with ease-in feel for a "completed" gesture.
+    dialog.style.animation = 'sxs-dialog-exit 0.18s cubic-bezier(0.4, 0, 1, 1) forwards';
+    overlay.style.animation = 'sxs-overlay-out 0.18s cubic-bezier(0.4, 0, 1, 1) forwards';
     setTimeout(() => {
       if (overlay.parentElement) overlay.remove();
       if (onClose) onClose();
-    }, 200);
+    }, 180);
   };
 
   okBtn.addEventListener('click', close);
@@ -173,7 +175,11 @@ export function showConfirmDialog(message) {
           color: var(--fg-muted);
           cursor: pointer;
           font-weight: 500;
-          transition: all 0.15s ease;
+          transition: background-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      border-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      box-shadow 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      transform 0.15s var(--ease-bounce, cubic-bezier(0.34, 1.56, 0.64, 1));
         ">${tOr('common.cancel', 'Cancel')}</button>
         <button class="confirm-ok-btn" style="
           padding: 6px 20px;
@@ -184,7 +190,9 @@ export function showConfirmDialog(message) {
           color: var(--fg-on-accent);
           cursor: pointer;
           font-weight: 500;
-          transition: all 0.15s ease;
+          transition: background-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      box-shadow 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      transform 0.15s var(--ease-bounce, cubic-bezier(0.34, 1.56, 0.64, 1));
         ">${tOr('common.confirm', 'OK')}</button>
       </div>
     `;
@@ -221,12 +229,12 @@ export function showConfirmDialog(message) {
     });
 
     const close = (result) => {
-      dialog.style.animation = 'sxs-dialog-exit 0.2s ease forwards';
-      overlay.style.animation = 'sxs-overlay-out 0.2s ease forwards';
+      dialog.style.animation = 'sxs-dialog-exit 0.18s cubic-bezier(0.4, 0, 1, 1) forwards';
+      overlay.style.animation = 'sxs-overlay-out 0.18s cubic-bezier(0.4, 0, 1, 1) forwards';
       setTimeout(() => {
         if (overlay.parentElement) overlay.remove();
         resolve(result);
-      }, 200);
+      }, 180);
     };
 
     okBtn.addEventListener('click', () => close(true));
@@ -331,7 +339,11 @@ export function showProjectInfoImportDialog(projectInfo, current) {
           color: var(--fg-muted);
           cursor: pointer;
           font-weight: 500;
-          transition: all 0.15s ease;
+          transition: background-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      border-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      box-shadow 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      transform 0.15s var(--ease-bounce, cubic-bezier(0.34, 1.56, 0.64, 1));
         ">${tOr('common.cancel', 'Cancel')}</button>
         <button class="confirm-ok-btn" style="
           padding: 6px 20px;
@@ -342,7 +354,9 @@ export function showProjectInfoImportDialog(projectInfo, current) {
           color: var(--fg-on-accent, #fff);
           cursor: pointer;
           font-weight: 500;
-          transition: all 0.15s ease;
+          transition: background-color 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      box-shadow 0.15s var(--ease-standard, cubic-bezier(0.4, 0, 0.2, 1)),
+                      transform 0.15s var(--ease-bounce, cubic-bezier(0.34, 1.56, 0.64, 1));
         ">${tOr('common.confirm', 'OK')}</button>
       </div>
     `;
@@ -374,12 +388,12 @@ export function showProjectInfoImportDialog(projectInfo, current) {
     });
 
     const close = (result) => {
-      dialog.style.animation = 'sxs-dialog-exit 0.2s ease forwards';
-      overlay.style.animation = 'sxs-overlay-out 0.2s ease forwards';
+      dialog.style.animation = 'sxs-dialog-exit 0.18s cubic-bezier(0.4, 0, 1, 1) forwards';
+      overlay.style.animation = 'sxs-overlay-out 0.18s cubic-bezier(0.4, 0, 1, 1) forwards';
       setTimeout(() => {
         if (overlay.parentElement) overlay.remove();
         resolve(result);
-      }, 200);
+      }, 180);
     };
 
     okBtn.addEventListener('click', () => close({
@@ -434,8 +448,8 @@ function ensureAnimationStyles() {
       }
       to {
         opacity: 0;
-        transform: translateY(8px) scale(0.98);
-        filter: blur(3px);
+        transform: translateY(6px) scale(0.985);
+        filter: blur(2px);
       }
     }
   `;

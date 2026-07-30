@@ -46,7 +46,10 @@ html, body {
   padding: var(--space-2) 10px;
   cursor: pointer;
   font-size: var(--font-base);
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
   white-space: nowrap;
 }
 
@@ -54,10 +57,14 @@ html, body {
   background: var(--bg-button-hover);
   color: var(--fg-primary);
   border-color: var(--accent-glow);
+  transform: translateY(-1px);
 }
 
 .btn-toolbar:active {
   background: var(--bg-button-active);
+  transform: translateY(0) scale(0.97);
+  transition-duration: 0.06s;
+  transition-timing-function: var(--ease-standard);
 }
 
 .btn-toolbar:disabled {
@@ -114,13 +121,16 @@ html, body {
   background: var(--bg-header-start);
   cursor: ns-resize;
   flex-shrink: 0;
-  transition: background-color var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-bounce);
   border-top: 1px solid var(--border-subtle);
   border-bottom: 1px solid var(--border-subtle);
 }
 
-#resize-handle:hover {
+#resize-handle:hover,
+#resize-handle.dragging {
   background: var(--accent);
+  transform: scaleY(1.6);
 }
 
 #midi-section {
@@ -212,7 +222,7 @@ html, body {
   background: var(--scrollbar-thumb, rgba(120, 120, 140, 0.5));
   border-radius: 3px;
   cursor: grab;
-  transition: background-color var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard);
   box-sizing: border-box;
 }
 

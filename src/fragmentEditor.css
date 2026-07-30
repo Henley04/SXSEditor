@@ -18,7 +18,7 @@
   z-index: 9999;
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--motion-slow) ease;
+  transition: opacity var(--motion-slow) var(--ease-emphasized);
 }
 #model-loading-overlay.visible { opacity: 1; pointer-events: auto; }
 
@@ -88,16 +88,22 @@
   padding: var(--space-2) 10px;
   cursor: pointer;
   font-size: var(--font-base);
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
   white-space: nowrap;
 }
 #toolbar button:hover {
   background: var(--bg-button-hover);
   color: var(--fg-primary);
   border-color: var(--accent);
+  transform: translateY(-1px);
 }
 #toolbar button:active {
   background: var(--bg-button-active);
+  transform: translateY(0) scale(0.97);
+  transition-duration: 60ms;
 }
 #toolbar button:disabled {
   opacity: 0.4;
@@ -243,13 +249,15 @@
   width: 4px;
   cursor: col-resize;
   background: var(--border-subtle);
-  transition: background var(--motion-fast);
+  transition: background var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-bounce);
   position: relative;
   z-index: 5;
 }
 .inspector-resize:hover,
 .inspector-resize.dragging {
   background: var(--accent);
+  transform: scaleX(1.6);
 }
 
 /* ==================== Inspector Panel ==================== */
@@ -418,7 +426,10 @@
   color: var(--fg-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .pho:hover {
   background: var(--accent-soft);
@@ -517,7 +528,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
   flex-shrink: 0;
 }
 .btn-param-toggle:hover {
@@ -525,7 +539,7 @@
   color: var(--fg-primary);
   border-color: var(--accent);
 }
-.btn-param-toggle.collapsed { transform: rotate(180deg); }
+.btn-param-toggle.collapsed { transform: rotate(180deg); transition-timing-function: var(--ease-bounce); }
 
 .param-mode-select {
   background: var(--bg-elevated);
@@ -565,7 +579,10 @@
   clip-path: var(--clip-button, none);
   color: var(--fg-muted);
   cursor: pointer;
-  transition: all var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .param-lane-tab:hover {
   background: var(--bg-button-hover);
@@ -628,7 +645,7 @@
   z-index: 10000;
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--motion-base) ease;
+  transition: opacity var(--motion-base) var(--ease-emphasized);
 }
 .shortcuts-overlay.visible {
   opacity: 1;
@@ -667,7 +684,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .btn-close-shortcuts:hover {
   color: var(--fg-primary);
@@ -767,7 +787,10 @@
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .pitch-ctx-preset:hover {
   background: var(--accent-softer);
@@ -795,7 +818,10 @@
   cursor: pointer;
   text-align: left;
   color: var(--fg-primary);
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .pitch-ctx-action:hover {
   background: var(--bg-button-hover);
@@ -844,10 +870,23 @@
   cursor: pointer;
   text-align: left;
   color: var(--fg-primary);
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .kanji-ctx-action:hover {
   background: var(--bg-button-hover);
   border-color: var(--accent-soft);
   color: var(--accent-fg);
+}
+
+/* ==================== Reduced motion ==================== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

@@ -107,6 +107,16 @@ export const TOKEN_CATALOG = {
     '--motion-base':  { layer: 'global', group: 'motion', type: 'motion', default: '0.2s',  label: '动效 中' },
     '--motion-slow':  { layer: 'global', group: 'motion', type: 'motion', default: '0.3s',  label: '动效 慢' },
 
+    // ==================== Easing curves (non-linear animation tokens) ====================
+    // standard: Material-style symmetric curve for most state transitions
+    // emphasized: expo-out deceleration for entrances / dialog opens
+    // emphasized-in: acceleration for exits
+    // bounce: subtle overshoot for playful micro-interactions (checkbox, chevron)
+    '--ease-standard':   { layer: 'global', group: 'motion', type: 'easing', default: 'cubic-bezier(0.4, 0, 0.2, 1)',     label: '缓动 标准' },
+    '--ease-emphasized': { layer: 'global', group: 'motion', type: 'easing', default: 'cubic-bezier(0.16, 1, 0.3, 1)',     label: '缓动 强调' },
+    '--ease-emphasized-in': { layer: 'global', group: 'motion', type: 'easing', default: 'cubic-bezier(0.4, 0, 1, 1)',     label: '缓动 进入' },
+    '--ease-bounce':     { layer: 'global', group: 'motion', type: 'easing', default: 'cubic-bezier(0.34, 1.56, 0.64, 1)', label: '缓动 弹跳' },
+
     // ==================== Shadows (string tokens) ====================
     '--shadow-sm': { layer: 'global', group: 'shadow', type: 'shadow', default: '0 1px 3px rgba(0, 0, 0, 0.2)', label: '阴影 小' },
     '--shadow-md': { layer: 'global', group: 'shadow', type: 'shadow', default: '0 2px 8px rgba(0, 0, 0, 0.25)', label: '阴影 中' },
@@ -239,11 +249,12 @@ export const TOKEN_NAMES = Object.keys(TOKEN_CATALOG);
 export const REQUIRED_TOKENS_FOR_BUILTIN = [
     // Global color scales
     ...Object.keys(TOKEN_CATALOG).filter(k => k.startsWith('--color-')),
-    // Spacing / radius / font / motion
+    // Spacing / radius / font / motion / easing
     ...Object.keys(TOKEN_CATALOG).filter(k => k.startsWith('--space-')),
     ...Object.keys(TOKEN_CATALOG).filter(k => k.startsWith('--radius-')),
     ...Object.keys(TOKEN_CATALOG).filter(k => k.startsWith('--font-')),
     ...Object.keys(TOKEN_CATALOG).filter(k => k.startsWith('--motion-')),
+    ...Object.keys(TOKEN_CATALOG).filter(k => k.startsWith('--ease-')),
     // Aliases
     '--bg-app', '--bg-panel', '--bg-elevated', '--bg-input',
     '--fg-primary', '--fg-secondary', '--fg-muted',

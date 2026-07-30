@@ -469,33 +469,60 @@ dom.fragmentCanvas.addEventListener('contextmenu', (e) => {
   }
 });
 
-// Scroll events
+// Wheel events: rAF-coalesced to avoid layout thrash on high-frequency trackpad scroll.
+// The latest wheel event is captured and processed inside a single rAF callback;
+// subsequent events before the frame fires just overwrite the pending state.
+let _wheelRaf = 0;
+let _pendingWheelEvent = null;
+let _pendingWheelTarget = null;
+
+function _processPendingWheel() {
+  _wheelRaf = 0;
+  const e = _pendingWheelEvent;
+  const target = _pendingWheelTarget;
+  _pendingWheelEvent = null;
+  _pendingWheelTarget = null;
+  if (!e) return;
+
+  if (target === dom.fragmentContainer) {
+    if (e.ctrlKey || e.metaKey) {
+      const containerRect = dom.fragmentContainer.getBoundingClientRect();
+      const mouseXInContainer = e.clientX - containerRect.left;
+      const beatWidth = getBeatWidth();
+      const mouseBeats = (mouseXInContainer + state.fragmentScrollX) / beatWidth;
+
+      const delta = e.deltaY > 0 ? 0.85 : 1.18;
+      state.fragmentZoomX = Math.max(0.25, Math.min(4, state.fragmentZoomX * delta));
+
+      const newBeatWidth = getBeatWidth();
+      state.fragmentScrollX = mouseBeats * newBeatWidth - mouseXInContainer;
+      renderFragmentTimeline();
+    } else if (e.shiftKey) {
+      state.fragmentScrollX += e.deltaY;
+    } else {
+      state.fragmentScrollY += e.deltaY;
+    }
+    syncFragmentScroll();
+  } else if (target === dom.singerListEl) {
+    state.fragmentScrollY += e.deltaY;
+    syncFragmentScroll();
+  }
+}
+
 dom.fragmentContainer.addEventListener('wheel', (e) => {
   e.preventDefault();
-  if (e.ctrlKey || e.metaKey) {
-    const containerRect = dom.fragmentContainer.getBoundingClientRect();
-    const mouseXInContainer = e.clientX - containerRect.left;
-    const beatWidth = getBeatWidth();
-    const mouseBeats = (mouseXInContainer + state.fragmentScrollX) / beatWidth;
-
-    const delta = e.deltaY > 0 ? 0.85 : 1.18;
-    state.fragmentZoomX = Math.max(0.25, Math.min(4, state.fragmentZoomX * delta));
-
-    const newBeatWidth = getBeatWidth();
-    state.fragmentScrollX = mouseBeats * newBeatWidth - mouseXInContainer;
-    renderFragmentTimeline();
-  } else if (e.shiftKey) {
-    state.fragmentScrollX += e.deltaY;
-  } else {
-    state.fragmentScrollY += e.deltaY;
-  }
-  syncFragmentScroll();
+  _pendingWheelEvent = e;
+  _pendingWheelTarget = dom.fragmentContainer;
+  if (_wheelRaf) return;
+  _wheelRaf = requestAnimationFrame(_processPendingWheel);
 }, { passive: false });
 
 dom.singerListEl.addEventListener('wheel', (e) => {
   e.preventDefault();
-  state.fragmentScrollY += e.deltaY;
-  syncFragmentScroll();
+  _pendingWheelEvent = e;
+  _pendingWheelTarget = dom.singerListEl;
+  if (_wheelRaf) return;
+  _wheelRaf = requestAnimationFrame(_processPendingWheel);
 }, { passive: false });
 
 // Keyboard shortcuts

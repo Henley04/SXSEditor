@@ -55,10 +55,15 @@
   padding: var(--space-2) var(--space-5);
   cursor: pointer;
   font-size: var(--font-base);
-  transition: all var(--motion-fast) cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard);
   white-space: nowrap;
   position: relative;
   overflow: hidden;
+  will-change: transform;
 }
 
 #toolbar button:hover {
@@ -74,6 +79,7 @@
   transform: translateY(0) scale(0.97);
   box-shadow: none;
   transition-duration: 0.06s;
+  transition-timing-function: var(--ease-standard);
 }
 
 #toolbar button:disabled {
@@ -90,7 +96,8 @@
   padding: var(--space-1) var(--space-3);
   text-align: center;
   font-size: var(--font-base);
-  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+  transition: border-color var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 #toolbar input[type="number"]:focus {
@@ -183,7 +190,11 @@
   align-items: center;
   justify-content: center;
   padding: 0;
-  transition: all var(--motion-fast) cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-bounce),
+              box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 #btn-add-singer:hover {
@@ -216,7 +227,8 @@
   padding: var(--space-8) 10px;
   cursor: pointer;
   color: var(--fg-disabled);
-  transition: background-color var(--motion-fast), color var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard);
 }
 
 .singer-item-empty:hover {
@@ -233,7 +245,9 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  transition: border-color var(--motion-fast), background-color var(--motion-fast), transform var(--motion-fast);
+  transition: border-color var(--motion-fast) var(--ease-standard),
+              background-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-bounce);
 }
 
 .singer-item-empty:hover .singer-avatar-empty {
@@ -247,7 +261,7 @@
   font-weight: 300;
   line-height: 1;
   color: var(--fg-disabled);
-  transition: color var(--motion-fast);
+  transition: color var(--motion-fast) var(--ease-standard);
 }
 
 .singer-item-empty:hover .singer-avatar-placeholder {
@@ -273,13 +287,21 @@
   height: 80px;
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
-  transition: background-color var(--motion-fast), transform var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-emphasized),
+              border-color var(--motion-fast) var(--ease-standard);
   flex-shrink: 0;
 }
 
 .singer-item:hover {
   background: var(--bg-header-end);
   transform: translateX(2px);
+}
+
+.singer-item:active {
+  transform: translateX(0) scale(0.995);
+  transition-duration: 0.06s;
+  transition-timing-function: var(--ease-standard);
 }
 
 .singer-item.active {
@@ -367,7 +389,8 @@
   padding: 1px 6px;
   cursor: pointer;
   white-space: nowrap;
-  transition: all var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard);
 }
 
 .btn-relocate-singer:hover {
@@ -393,7 +416,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--motion-fast) cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-bounce),
+              box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .btn-fragment-add:hover {
@@ -422,7 +449,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--motion-fast) cubic-bezier(0.4, 0, 0.2, 1);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-bounce),
+              box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 .btn-singer-delete:hover {
@@ -472,16 +503,19 @@
   border-radius: var(--radius-md);
   padding: var(--space-1) var(--space-4);
   letter-spacing: 0.5px;
-  transition: background var(--motion-slow), border-color var(--motion-slow), color var(--motion-slow);
+  transition: background var(--motion-slow) var(--ease-emphasized),
+              border-color var(--motion-slow) var(--ease-emphasized),
+              color var(--motion-slow) var(--ease-emphasized);
 }
 
 #bpm-display-badge.bpm-flash {
-  animation: bpmFlash 0.6s ease;
+  animation: bpmFlash 0.6s var(--ease-emphasized);
 }
 
 @keyframes bpmFlash {
-  0% { background: var(--accent-glow-strong); border-color: var(--accent); color: var(--fg-on-accent); }
-  100% { background: var(--accent-soft); border-color: var(--accent-line-strong); color: var(--fg-bpm); }
+  0% { background: var(--accent-glow-strong); border-color: var(--accent); color: var(--fg-on-accent); transform: scale(1.08); }
+  60% { transform: scale(1); }
+  100% { background: var(--accent-soft); border-color: var(--accent-line-strong); color: var(--fg-bpm); transform: scale(1); }
 }
 
 #fragment-canvas-container {
