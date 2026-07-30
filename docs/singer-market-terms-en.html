@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Singer Market — Terms of Use (English) — SXSEditor</title>
+  <meta name="description" content="SXSEditor Singer Market — Disclaimer, Terms of Use and Uploader Authorization. The English version is the legally controlling version." />
+  <link rel="icon" href="images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <style>
+    /* Standalone legal-document layout (no sidebar) */
+    .legal-layout {
+      max-width: 1400px; margin: 0 auto; padding: 2rem 1.5rem 4rem;
+      display: grid; grid-template-columns: minmax(0, 1fr) 14rem; gap: 2rem;
+    }
+    .legal-layout .docs-toc { position: sticky; top: 5rem; align-self: start; max-height: calc(100vh - 6rem); overflow-y: auto; }
+    .legal-prose { max-width: 56rem; }
+    .legal-meta {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+      padding: 0.75rem 1rem; border: 1px solid var(--border);
+      border-radius: 0.625rem; background: var(--bg-secondary); margin-bottom: 1.5rem;
+      font-size: 0.82rem; color: var(--text-secondary);
+    }
+    .legal-meta strong { color: var(--text-primary); }
+    .legal-meta .sep { opacity: 0.4; margin: 0 0.25rem; }
+    .lang-toggle-row {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+      margin-bottom: 1.25rem;
+    }
+    .lang-toggle-row .lang-pill {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      padding: 0.4rem 0.85rem; border-radius: 999px;
+      border: 1px solid var(--border); background: var(--bg-primary);
+      font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+      transition: all 0.2s;
+    }
+    .lang-toggle-row .lang-pill.active {
+      background: var(--accent); color: #fff; border-color: var(--accent);
+    }
+    .lang-toggle-row .lang-pill:hover:not(.active) {
+      border-color: var(--accent); color: var(--accent);
+    }
+    .legal-prose .legal-banner {
+      border-left: 4px solid var(--warning); background: rgba(245,158,11,0.08);
+      padding: 1rem 1.25rem; border-radius: 0 0.625rem 0.625rem 0;
+      margin: 1rem 0 2rem; color: var(--text-secondary);
+    }
+    .legal-prose .legal-banner strong { color: var(--text-primary); }
+    .legal-prose h1 { font-size: 2rem; font-weight: 800; margin: 0 0 0.5rem; letter-spacing: -0.02em; }
+    .legal-prose h2 { font-size: 1.4rem; font-weight: 700; margin: 2.25rem 0 0.85rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+    .legal-prose h3 { font-size: 1.1rem; font-weight: 700; margin: 1.5rem 0 0.5rem; color: var(--text-primary); }
+    .legal-prose p { margin: 0 0 0.85rem; color: var(--text-secondary); line-height: 1.75; }
+    .legal-prose p strong, .legal-prose li strong { color: var(--text-primary); }
+    .legal-prose ul, .legal-prose ol { margin: 0 0 0.85rem; padding-left: 1.5rem; color: var(--text-secondary); }
+    .legal-prose li { margin: 0.3rem 0; line-height: 1.7; }
+    .legal-prose a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+    .legal-prose a:hover { border-bottom-color: var(--accent); }
+    .legal-prose .section-num { color: var(--accent); font-weight: 700; margin-right: 0.4rem; }
+    .legal-prose .quote-block {
+      border-left: 3px solid var(--accent); padding: 0.75rem 1.1rem;
+      margin: 1rem 0; background: var(--bg-secondary); border-radius: 0 0.5rem 0.5rem 0;
+      color: var(--text-secondary); font-style: italic;
+    }
+    .legal-prose .info-table {
+      width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem;
+      font-size: 0.875rem; border: 1px solid var(--border); border-radius: 0.5rem; overflow: hidden;
+    }
+    .legal-prose .info-table th, .legal-prose .info-table td {
+      padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top;
+    }
+    .legal-prose .info-table th { background: var(--bg-tertiary); font-weight: 600; color: var(--text-primary); width: 28%; }
+    .legal-prose .info-table td { color: var(--text-secondary); }
+    .legal-prose .info-table tr:last-child td, .legal-prose .info-table tr:last-child th { border-bottom: none; }
+    .legal-prose .info-table a { word-break: break-all; }
+    .legal-prose hr.section-divider { border: none; border-top: 2px dashed var(--border); margin: 2.5rem 0; }
+    .legal-prose .caps { text-transform: uppercase; font-weight: 600; letter-spacing: 0.02em; color: var(--text-primary); }
+    .legal-back-link {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      font-size: 0.85rem; color: var(--text-tertiary); margin-bottom: 1rem;
+    }
+    .legal-back-link:hover { color: var(--accent); }
+    .legal-back-link svg { width: 14px; height: 14px; }
+    @media (max-width: 1024px) {
+      .legal-layout { grid-template-columns: 1fr; }
+      .legal-layout .docs-toc { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="index.html">
+        <img src="images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="dev/build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="legal-layout">
+    <main class="legal-prose prose">
+      <a class="legal-back-link" href="user/singer-market.html">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        Back to Singer Market Guide
+      </a>
+
+      <div class="lang-toggle-row">
+        <a class="lang-pill active" href="singer-market-terms-en.html">English (Controlling)</a>
+        <a class="lang-pill" href="singer-market-terms-zh.html">中文（仅供参考）</a>
+      </div>
+
+      <h1>SXSEditor Singer Market</h1>
+      <p style="font-size: 1.05rem; color: var(--text-primary); font-weight: 600; margin-bottom: 1.5rem;">
+        Disclaimer, Terms of Use and Uploader Authorization
+      </p>
+
+      <div class="legal-meta">
+        <span><strong>Effective Date:</strong> 2026-07-30</span>
+        <span class="sep">·</span>
+        <span><strong>Version:</strong> 1.0</span>
+        <span class="sep">·</span>
+        <span><strong>Operator:</strong> SXSEditor Development Team and Singer Market Operations</span>
+      </div>
+
+      <div class="legal-banner">
+        <strong>IMPORTANT:</strong> THE ENGLISH VERSION IS THE LEGALLY CONTROLLING VERSION. THE CHINESE VERSION IS PROVIDED FOR CONVENIENCE ONLY. By accessing, downloading, uploading, browsing, or otherwise using the Singer Market, you acknowledge that you have read and accepted this document. If you do not agree, do not use the Singer Market.
+      </div>
+
+      <table class="info-table">
+        <tbody>
+          <tr>
+            <th>Effective Date</th>
+            <td>2026-07-30</td>
+          </tr>
+          <tr>
+            <th>Operator</th>
+            <td>SXSEditor Development Team and Singer Market Operations, unless a separate legal entity is identified in the service.</td>
+          </tr>
+          <tr>
+            <th>Contact</th>
+            <td>
+              GitHub Issue: <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener">https://github.com/Henley04/SXSEditor/issues</a><br />
+              Email: <a href="mailto:15240287482@163.com">15240287482@163.com</a>
+            </td>
+          </tr>
+          <tr>
+            <th>Version</th>
+            <td>1.0</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p style="font-size: 0.8rem; color: var(--text-tertiary); font-style: italic; margin-top: -0.5rem;">
+        Template notice: This document is a general drafting template, not legal advice. Local counsel should review operator identity, governing law, consumer law, privacy, notice-and-takedown, and liability provisions before publication.
+      </p>
+
+      <hr class="section-divider" />
+
+      <h2 id="scope"><span class="section-num">1.</span> Scope and Definitions</h2>
+
+      <p><strong>1.1</strong> This Disclaimer, Terms of Use and Uploader Authorization (the "Terms") applies to the SXSEditor Singer Market, including its website, repository, interfaces, listings, metadata, downloads, community features, mirrors, and related services (collectively, the "Market").</p>
+
+      <p><strong>1.2</strong> "Singer File" means any voicebank, singer model, configuration, parameter, recording, sample, script, executable, archive, preset, artwork, text, metadata, documentation, link, or other material uploaded, listed, linked, distributed, or made available through the Market.</p>
+
+      <p><strong>1.3</strong> "Operator" means the SXSEditor development team and the persons or entities operating or maintaining the Market. "Uploader" means any person or entity that submits, uploads, links, publishes, or otherwise makes a Singer File available. "User" means any person who accesses or uses the Market or any Singer File.</p>
+
+      <p><strong>1.4</strong> These Terms supplement any separate open-source license, file-specific license, privacy notice, contributor terms, or mandatory rules that apply. If a Singer File includes its own license, the User and Uploader remain responsible for complying with it.</p>
+
+      <h2 id="platform-role"><span class="section-num">2.</span> Platform Role; No Endorsement or Pre-Screening</h2>
+
+      <p><strong>2.1</strong> The Market is a technical hosting, indexing, linking, discovery, and distribution venue. Unless expressly stated in a signed writing, the Operator is not the author, publisher, seller, licensor, agent, employer, partner, joint venturer, representative, or legal guarantor of any Uploader or Singer File.</p>
+
+      <p><strong>2.2</strong> Singer Files are provided by independent Uploaders. Listing, indexing, visibility, popularity, moderation status, download count, or continued availability does not constitute approval, endorsement, certification, verification, sponsorship, recommendation, or a representation of legality, safety, quality, accuracy, compatibility, or fitness.</p>
+
+      <p><strong>2.3</strong> The Operator has no general obligation to monitor, inspect, test, scan, review, preserve, back up, investigate, or pre-approve Singer Files, except to the extent required by applicable law or expressly undertaken by the Operator.</p>
+
+      <h2 id="uploader-auth"><span class="section-num">3.</span> Uploader Authorization, Representations and Responsibility</h2>
+
+      <p><strong>3.1</strong> By submitting a Singer File, the Uploader authorizes the Operator, on a worldwide, non-exclusive, royalty-free basis, to host, cache, reproduce, technically modify solely for formatting, compression, security, compatibility, indexing or delivery, display, index, transmit, distribute, and make the Singer File available for operation, promotion, security, backup, moderation, and improvement of the Market. This authorization continues while the Singer File is available and for reasonable backup, evidentiary, legal-compliance, and system-integrity periods afterward.</p>
+
+      <p><strong>3.2</strong> The Uploader represents and warrants that the Uploader has all rights, licenses, permissions, consents, releases, and lawful bases required to upload and authorize use of the Singer File; that the Singer File and its intended distribution do not infringe copyright, neighboring rights, trademark, patent, trade secret, database right, publicity right, privacy right, personality right, moral right, contractual restriction, confidentiality duty, or any other right; and that all notices, attributions, source disclosures, and license obligations have been satisfied.</p>
+
+      <p><strong>3.3</strong> The Uploader is solely responsible for the Singer File, its legality, provenance, chain of title, licenses, permissions, security, accuracy, metadata, claims, statements, updates, support, and consequences. The Uploader must not upload unlawful, infringing, malicious, deceptive, corrupted, privacy-invasive, unauthorized, or technically harmful material.</p>
+
+      <p><strong>3.4</strong> The authorization granted to the Operator does not transfer ownership of the Singer File and does not cause the Operator to assume the Uploader's liabilities. The Uploader remains responsible even if the Operator assists with formatting, publication, categorization, mirroring, moderation, or removal.</p>
+
+      <h2 id="no-warranties"><span class="section-num">4.</span> No Warranties</h2>
+
+      <p><span class="caps">4.1</span> To the fullest extent permitted by applicable law, the Market and all Singer Files are provided "as is," "as available," "with all faults," and without warranties, conditions, guarantees, or representations of any kind, whether express, implied, statutory, or otherwise.</p>
+
+      <p><span class="caps">4.2</span> Without limiting Section 4.1, the Operator disclaims all warranties or conditions of merchantability, satisfactory quality, fitness for a particular purpose, title, non-infringement, quiet enjoyment, accuracy, completeness, authenticity, originality, legality, security, reliability, availability, compatibility, performance, results, and freedom from defects, errors, viruses, malware, trojans, ransomware, spyware, harmful code, corruption, or data loss.</p>
+
+      <p><strong>4.3</strong> The Operator does not warrant that any Singer File will download, install, load, open, compile, render, synthesize, play, train, convert, update, remain available, remain compatible with SXSEditor or any hardware, operating system, plug-in, model, framework, or third-party service, or achieve any particular artistic, technical, commercial, or legal result.</p>
+
+      <p><strong>4.4</strong> The Operator does not warrant that a Singer File is copyright-cleared, properly licensed, non-infringing, authentic, attributable to the stated creator, free of third-party content, or lawful in any jurisdiction. License labels and uploader statements are supplied for information only and may be incomplete, inaccurate, expired, revocable, or unauthorized.</p>
+
+      <p><strong>4.5</strong> No oral or written information, moderation action, automated scan, badge, label, response, or assistance creates a warranty unless expressly stated in a signed writing by an authorized representative of the Operator.</p>
+
+      <h2 id="security"><span class="section-num">5.</span> Security, Downloads and User Safeguards</h2>
+
+      <p><strong>5.1</strong> Users download, install, execute, open, import, train, convert, modify, distribute, or otherwise use Singer Files entirely at their own risk. Automated scanning, if any, cannot detect every threat and does not constitute a guarantee.</p>
+
+      <p><strong>5.2</strong> Users are responsible for independent security review, malware scanning, rights clearance, license review, sandboxing, backups, access controls, system updates, compatibility testing, and professional advice before using any Singer File. Users should not execute untrusted code or grant unnecessary system permissions.</p>
+
+      <p><strong>5.3</strong> The Operator is not responsible for compromised accounts, malicious links, third-party repositories, mirrors, external websites, altered copies, supply-chain attacks, dependency risks, or content obtained outside the Operator's direct control.</p>
+
+      <h2 id="availability"><span class="section-num">6.</span> Availability, Modification and Removal</h2>
+
+      <p><strong>6.1</strong> The Market or any Singer File may be unavailable, delayed, interrupted, changed, suspended, rate-limited, migrated, deprecated, deleted, or discontinued at any time, with or without notice, for any reason, including maintenance, security, legal risk, storage limits, technical failure, uploader action, or operational discretion.</p>
+
+      <p><strong>6.2</strong> The Operator has no obligation to retain, restore, archive, back up, update, support, re-host, or continue distributing any Singer File. Users and Uploaders must maintain their own lawful backups.</p>
+
+      <p><strong>6.3</strong> The Operator may refuse, restrict, disable, delist, quarantine, or remove content or accounts, preserve relevant evidence, and cooperate with competent authorities or service providers where the Operator reasonably considers it necessary for safety, compliance, rights protection, platform integrity, or risk management, subject to applicable law.</p>
+
+      <h2 id="ip"><span class="section-num">7.</span> Intellectual Property and Other Rights</h2>
+
+      <p><strong>7.1</strong> All rights in Singer Files remain with their respective rights holders, subject to applicable licenses and the authorization in Section 3. The Market name, software, interface, and Operator-provided materials remain subject to their respective rights and licenses.</p>
+
+      <p><strong>7.2</strong> Users may use each Singer File only within the permissions actually granted by the relevant rights holder and applicable law. Availability on the Market does not place a Singer File in the public domain and does not grant permission for commercial use, model training, redistribution, adaptation, impersonation, or use of a person's voice, likeness, name, or identity unless such permission is validly granted.</p>
+
+      <p><strong>7.3</strong> Disputes concerning ownership, authorship, licensing, attribution, payment, royalties, consent, or permitted use are principally between the Uploader, User, and relevant rights holders. The Operator does not adjudicate private rights except as required by law and may take interim action without determining ultimate liability.</p>
+
+      <h2 id="conduct"><span class="section-num">8.</span> User Conduct and Compliance</h2>
+
+      <p><strong>8.1</strong> Each User and Uploader must comply with applicable laws, sanctions, export controls, privacy and data-protection rules, intellectual-property laws, consumer-protection rules, contractual obligations, and file-specific licenses.</p>
+
+      <p><strong>8.2</strong> The Market must not be used to facilitate infringement, fraud, harassment, impersonation, malware distribution, unauthorized surveillance, circumvention of access controls, unlawful data collection, or any other unlawful or rights-violating activity.</p>
+
+      <p><strong>8.3</strong> Users are solely responsible for determining whether access to or use of the Market or a Singer File is lawful in their location and context.</p>
+
+      <h2 id="liability"><span class="section-num">9.</span> Limitation of Liability</h2>
+
+      <p><span class="caps">9.1</span> To the fullest extent permitted by applicable law, the Operator and its developers, maintainers, contributors, moderators, hosting providers, affiliates, representatives, and service providers shall not be liable for any indirect, incidental, special, exemplary, punitive, reliance, or consequential damages; loss of profits, revenue, business, opportunity, goodwill, reputation, data, content, voice material, models, or use; business interruption; device or system damage; security incidents; malware; third-party claims; or costs of substitute services, arising from or related to the Market or any Singer File, under any theory of liability, even if advised of the possibility.</p>
+
+      <p><span class="caps">9.2</span> To the fullest extent permitted by applicable law, the Operator's total aggregate liability for all claims arising out of or relating to the Market or these Terms shall not exceed the greater of (a) the amount, if any, paid by the claimant directly to the Operator for use of the Market during the twelve months before the event giving rise to liability, or (b) USD 10.</p>
+
+      <p><strong>9.3</strong> The exclusions and cap apply to contract, tort, negligence, strict liability, statute, restitution, misrepresentation, and any other theory, and apply even if a remedy fails of its essential purpose. They do not exclude or limit liability that cannot lawfully be excluded or limited, including any liability for fraud, willful misconduct, gross negligence, death or personal injury where prohibited, or mandatory consumer rights.</p>
+
+      <p><strong>9.4</strong> Where applicable law does not permit a particular exclusion, disclaimer, or limitation, it applies only to the maximum extent permitted, and the remaining provisions remain effective.</p>
+
+      <h2 id="indemnity"><span class="section-num">10.</span> Indemnity by Uploaders and Users</h2>
+
+      <p><strong>10.1</strong> To the fullest extent permitted by law, each Uploader and, where applicable, each User shall defend, indemnify, and hold harmless the Operator and its developers, maintainers, contributors, moderators, hosting providers, affiliates, representatives, and service providers from claims, demands, proceedings, losses, liabilities, damages, judgments, settlements, penalties, fines, and reasonable legal and investigation costs arising from or related to: (a) that person's Singer File or use of the Market; (b) breach of these Terms; (c) infringement or violation of third-party rights; (d) unlawful, deceptive, malicious, or negligent conduct; or (e) taxes, royalties, payments, releases, permissions, or licenses owed by that person.</p>
+
+      <p><strong>10.2</strong> The Operator may control the defense and settlement of an indemnified matter, and the indemnifying person shall reasonably cooperate. No settlement admitting fault or imposing non-monetary obligations on the Operator may be entered without the Operator's prior written consent. This Section does not apply to the extent prohibited by mandatory law.</p>
+
+      <h2 id="takedown"><span class="section-num">11.</span> Reporting, Notice and Takedown Requests</h2>
+
+      <p><strong>11.1</strong> A person who believes content is unlawful or infringes rights may request review by: (a) opening an issue at the official GitHub issue tracker at <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener">https://github.com/Henley04/SXSEditor/issues</a>; or (b) emailing <a href="mailto:15240287482@163.com">15240287482@163.com</a>.</p>
+
+      <p><strong>11.2</strong> A notice should include: the reporter's full name and reliable contact details; identification and location of the material; the legal right or rule allegedly violated; a clear explanation and supporting evidence; the requested action; a good-faith statement that the information is accurate; and, where relevant, proof of authorization to act for the rights holder. The Operator may request further information, identity verification, translations, or legally required declarations.</p>
+
+      <p><strong>11.3</strong> Do not place confidential, personal, or sensitive evidence in a public GitHub issue. Use email for non-public material and provide only what is necessary.</p>
+
+      <p><strong>11.4</strong> <strong>Response timing:</strong> The Operator will use commercially reasonable efforts to acknowledge a sufficiently complete notice within 30 business days and to take any action required by applicable law within the period prescribed by that law. Where no mandatory deadline applies, substantive review or action may take up to 90 calendar days after receipt of a complete notice, and may take longer where reasonably necessary because of incomplete information, complexity, volume, translation, technical investigation, counter-notice, rights-holder consultation, emergencies, force majeure, or legal process. Silence, delay, acknowledgment, or interim removal does not constitute admission, waiver, endorsement, or a final legal determination.</p>
+
+      <p><strong>11.5</strong> The Operator may remove or restrict material before, during, or after review; restore it; refer the matter to the Uploader, host, repository provider, or authority; or decline action where the notice is unsupported, abusive, fraudulent, outside scope, or legally insufficient. The Operator may forward a notice and contact details to the Uploader or relevant service provider where lawful and reasonably necessary.</p>
+
+      <p><strong>11.6</strong> Knowingly false, misleading, abusive, or bad-faith notices or counter-notices may result in restriction of access and may create legal liability. Reporters and Uploaders should obtain legal advice where appropriate.</p>
+
+      <h2 id="privacy"><span class="section-num">12.</span> Privacy and Communications</h2>
+
+      <p><strong>12.1</strong> Reports, uploads, account information, logs, and communications may be processed, retained, and disclosed as reasonably necessary to operate, secure, moderate, and improve the Market; respond to notices; establish, exercise, or defend legal claims; comply with law; and cooperate with hosting providers or competent authorities, subject to applicable privacy law and any published privacy notice.</p>
+
+      <p><strong>12.2</strong> Electronic notices sent to the contact details provided by a User or Uploader may be treated as received when sent, except where applicable law requires otherwise.</p>
+
+      <h2 id="changes"><span class="section-num">13.</span> Changes to the Market and These Terms</h2>
+
+      <p><strong>13.1</strong> The Operator may update these Terms prospectively for legal, security, technical, or operational reasons. The updated version becomes effective on the date stated in it or as otherwise required by applicable law. Continued use after effectiveness constitutes acceptance where legally permitted.</p>
+
+      <p><strong>13.2</strong> Material changes may be announced through the Market, repository, release notes, or other reasonable channel. Users should review the current version before use.</p>
+
+      <h2 id="governing-law"><span class="section-num">14.</span> Governing Law and Disputes</h2>
+
+      <p><strong>14.1</strong> These Terms and disputes relating to them shall be governed by the law specified in the Market's legal notice or, if no law is specified, the law of the place where the Operator's responsible legal entity is established, excluding conflict-of-law rules, provided that mandatory protections of the User's jurisdiction remain unaffected.</p>
+
+      <p><strong>14.2</strong> The courts specified in the Market's legal notice or, if none, the competent courts at the Operator's principal place of establishment shall have non-exclusive jurisdiction, except where mandatory law provides otherwise.</p>
+
+      <p><strong>14.3</strong> Before filing a claim, the parties should attempt in good faith to resolve it through written notice and at least 30 days for response, unless urgent relief or a statutory deadline requires earlier action.</p>
+
+      <h2 id="general"><span class="section-num">15.</span> General</h2>
+
+      <p><strong>15.1</strong> If any provision is invalid, illegal, or unenforceable, it shall be enforced to the maximum lawful extent and severed or modified as minimally necessary, without affecting the remainder.</p>
+
+      <p><strong>15.2</strong> Failure to enforce a provision is not a waiver. The Operator may assign or transfer these Terms in connection with a restructuring, transfer of operations, or legal succession. A User or Uploader may not assign obligations without consent where consent is legally permitted to be required.</p>
+
+      <p><strong>15.3</strong> These Terms, together with incorporated notices and file-specific licenses, constitute the entire agreement concerning their subject matter and supersede prior statements on that subject, except for fraud or terms that cannot lawfully be excluded.</p>
+
+      <p><strong>15.4</strong> Headings are for convenience. "Including" means "including without limitation." Singular includes plural. Clauses intended by their nature to survive, including rights, licenses, disclaimers, liability limitations, indemnities, evidence preservation, and dispute provisions, survive termination.</p>
+
+      <p><strong>15.5</strong> <strong>Language priority:</strong> This English version is the original and legally controlling version. The Chinese translation is provided solely for convenience. If there is any inconsistency, ambiguity, or difference in interpretation, the English version prevails to the fullest extent permitted by applicable law.</p>
+
+      <hr class="section-divider" />
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p><strong>Need to report an issue?</strong> Open an issue at <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener">github.com/Henley04/SXSEditor/issues</a> or email <a href="mailto:15240287482@163.com">15240287482@163.com</a>. For non-public or sensitive evidence, please use email rather than a public issue.</p>
+        </div>
+      </div>
+
+      <p style="margin-top: 1.5rem; font-size: 0.8rem; color: var(--text-tertiary);">
+        For a Chinese translation of these Terms (provided for convenience only), see the <a href="singer-market-terms-zh.html">Chinese version</a>. For end-user guidance on the Singer Market, see the <a href="user/singer-market.html">Singer Market User Guide</a>.
+      </p>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="user/faq.html" data-i18n="footer.help">Help & FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="js/i18n.js"></script>
+  <script src="js/layout.js"></script>
+</body>
+</html>
