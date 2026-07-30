@@ -223,6 +223,31 @@ class AudioSegmentation {
     }
 
     /**
+     * 计算单个 segment 的分片级缓存键。
+     *
+     * 长音频多 segment 合成时，编辑某个音符只会影响包含该音符的 segment，
+     * 其余 segment 的输入完全相同 → 音频也相同，可直接复用缓存避免重算
+     * diffusion+vocoder。
+     *
+     * 键的构成：
+     *   - 复用 computeSynthCacheKey 作为基础（覆盖 segment 自身 notes/bpm/f0/ref/步数等）
+     *   - segStartBeat：pitchCurveF0 是绝对时间序列，segment 通过 pitchCurveOffsetSec
+     *     =(segStartBeat/bpm)*60 索引它；相对 notes 相同但 segStartBeat 不同的 segment
+     *     会产生不同 f0，必须区分。
+     *   - segF0Shift：多 segment 路径按 segment 中位数独立计算 f0Shift（B2），是实际
+     *     用于该 segment 的偏移量，直接决定输出。
+     *   - ptFrameCount：prompt mel 帧数（来自参考音频或零填充），影响 diffusion
+     *     conditioning，必须纳入。
+     *
+     * 未纳入但由缓存清空覆盖的因素：模型版本（clearSynthCache 在切换语言/模型时调用）、
+     * useStaticShapes（模型级配置，切换时清缓存）。
+     */
+    computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
+        const base = this.computeSynthCacheKey(segNotes, bpm, options);
+        return `${base}_sb${segStartBeat}_fs${segF0Shift}_pt${ptFrameCount || 0}`;
+    }
+
+    /**
      * Compute median of an array
      */
     median(arr) {

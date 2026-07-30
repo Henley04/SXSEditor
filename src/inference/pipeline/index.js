@@ -91,6 +91,13 @@ class OnnxSVSPipeline {
         this._synthCacheMaxEntries = 4;          // 最大缓存条目数
         this._synthCacheMaxBytes = 200 * 1024 * 1024; // 最大缓存字节数（200MB ≈ 4 分钟音频 × 4 条）
         this._synthCacheBytes = 0;               // 当前缓存占用字节数
+        // 分片级 LRU 缓存：长音频多 segment 合成时，未改动 segment 直接复用缓存音频，
+        // 只对改动 segment 重算 diffusion+vocoder。与 _synthCacheMap 独立（粒度更细），
+        // 在 _synthCacheMap MISS 后才查询，命中即跳过该 segment 的推理。
+        this._segCacheMap = null;                // Map<key, {audio, size}>，按插入顺序天然 LRU
+        this._segCacheMaxEntries = 32;           // 单 segment ≤30s≈2.88MB，32 条 ≈ 92MB
+        this._segCacheMaxBytes = 300 * 1024 * 1024; // 最大缓存字节数（300MB）
+        this._segCacheBytes = 0;                 // 当前分片缓存占用字节数
         this._initPromise = null;
         // 合成串行化锁：防止连续两次 synthesize() 调用并发。
         // 场景：合成 A 完成 → _recreateHeavySessionsAfterSynthesis() 释放 diffStep/vocoder
@@ -525,6 +532,7 @@ class OnnxSVSPipeline {
     _buildVocalSegments(notes, bpm) { return this._audioSegmentation.buildVocalSegments(notes, bpm); }
     _hashArray(arr) { return this._audioSegmentation.hashArray(arr); }
     _computeSynthCacheKey(notes, bpm, options) { return this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this)); }
+    _computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) { return this._audioSegmentation.computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount); }
     _median(arr) { return this._audioSegmentation.median(arr); }
 
     /**
@@ -631,6 +639,10 @@ class OnnxSVSPipeline {
         this._synthCache = null;
         this._synthCacheMap = null;
         this._synthCacheBytes = 0;
+        // 同步清空分片级缓存：切换语言/模型后单 segment 的 cond/diff_step/preflow 输出
+        // 也会变化，旧分片缓存不再适用，必须一并清空。
+        this._segCacheMap = null;
+        this._segCacheBytes = 0;
     }
 
     /**
@@ -686,6 +698,52 @@ class OnnxSVSPipeline {
         this._synthCacheMap.delete(key);
         this._synthCacheMap.set(key, entry);
         this._synthCache = { key, audio: entry.audio };
+        return entry.audio;
+    }
+
+    /**
+     * 分片级 LRU 写入：与 _synthCachePut 同构，但容量上限更大（segment 粒度更细）。
+     * 仅缓存单 segment 的原始音频（crossfade 混合前），混合后的最终音频仍由
+     * _synthCachePut 在外层缓存。
+     * @param {string} key - _computeSegmentCacheKey 计算的分片键
+     * @param {Float32Array} audio - 该 segment 的原始音频（vocoder 输出）
+     */
+    _segCachePut(key, audio) {
+        const MAX_SAMPLES = SAMPLE_RATE * 120; // 单条上限 2 分钟（单 segment 实际 ≤30s）
+        if (!audio || audio.length === 0 || audio.length > MAX_SAMPLES) return;
+
+        if (!this._segCacheMap) this._segCacheMap = new Map();
+        const map = this._segCacheMap;
+
+        if (map.has(key)) {
+            const old = map.get(key);
+            this._segCacheBytes -= old.size;
+            map.delete(key);
+        }
+
+        const size = audio.byteLength;
+        map.set(key, { audio, size });
+        this._segCacheBytes += size;
+
+        while ((map.size > this._segCacheMaxEntries) ||
+               (this._segCacheBytes > this._segCacheMaxBytes && map.size > 1)) {
+            const oldestKey = map.keys().next().value;
+            const oldest = map.get(oldestKey);
+            this._segCacheBytes -= oldest.size;
+            map.delete(oldestKey);
+        }
+    }
+
+    /**
+     * 分片级 LRU 读取：命中时提升到最新位置并返回 audio；未命中返回 null。
+     * @param {string} key
+     * @returns {Float32Array|null}
+     */
+    _segCacheGet(key) {
+        if (!this._segCacheMap || !this._segCacheMap.has(key)) return null;
+        const entry = this._segCacheMap.get(key);
+        this._segCacheMap.delete(key);
+        this._segCacheMap.set(key, entry);
         return entry.audio;
     }
 
@@ -2689,6 +2747,33 @@ class OnnxSVSPipeline {
             console.log(`[OnnxSVSPipeline] Segment 0 leading rest prepended: ${firstSeg.notes[0].duration.toFixed(2)} beats`);
         }
 
+        // 分片级缓存预计算：长音频编辑时，未改动 segment 的输入（notes/bpm/f0/ref/segF0Shift）
+        // 与上次完全相同 → 音频相同，可直接复用缓存跳过 diffusion+vocoder，只重算改动 segment。
+        // 此处在前置休止符补齐之后计算键，确保键反映 segment 实际使用的 notes。
+        // segF0Shift 与循环内 _computeSegF0Shift 调用使用相同入参，结果一致。
+        //
+        // 适用范围与优雅降级（结果始终正确，仅命中率下降）：
+        //   - 最有效：pitch-only 编辑且 autoShift 关（或全局中位数稳定）→ 仅改动 segment 失效。
+        //   - autoShift 开启时，编辑触及全局中位数会使 globalTargetMedian 漂移 → 所有 segment
+        //     的 segF0Shift 变化 → _fs 后缀变化 → 全部分片失效（此时输出确实不同，失效正确）。
+        //   - 自定义音高曲线（pitchCurveF0 非空）随音符 start/duration 变化 → f0Hash 变化 →
+        //     全部分片失效。这两种场景下退化为整曲重算，行为与未引入分片缓存时一致。
+        const segCacheKeys = new Array(segments.length);
+        const segCachedAudios = new Array(segments.length);
+        let segCacheHits = 0;
+        for (let i = 0; i < segments.length; i++) {
+            const s = segments[i];
+            const sF0Shift = this._computeSegF0Shift(f0Shift, globalTargetMedian, s.notes);
+            const sKey = this._computeSegmentCacheKey(s.notes, bpm, options, s.startBeat, sF0Shift, ptFrameCount);
+            segCacheKeys[i] = sKey;
+            const hit = this._segCacheGet(sKey);
+            segCachedAudios[i] = hit;
+            if (hit) segCacheHits++;
+        }
+        if (segCacheHits > 0) {
+            console.log(`[OnnxSVSPipeline] Segment cache: ${segCacheHits}/${segments.length} hits, skipping synthesis for unchanged segments`);
+        }
+
         while (segIdx < segments.length) {
             // 段间 GPU 排空：让事件循环处理 GC 并给 DML 50ms 时间回收上一段的
             // 中间张量（mel/f0/waveform/transformer 注意力），降低长音频多段合成时
@@ -2698,8 +2783,10 @@ class OnnxSVSPipeline {
                 await gpuDrain();
             }
 
-            if (useBatch && segIdx + 1 < segments.length) {
+            if (useBatch && segIdx + 1 < segments.length && !segCachedAudios[segIdx] && !segCachedAudios[segIdx + 1]) {
                 // Pair two segments for batch=4 diffusion
+                // 仅当两个 segment 均未命中分片缓存时才走 batch 路径；任一命中则落到
+                // 下面的单 segment 路径（命中段直接复用缓存，未命中段单独推理）。
                 const segA = segments[segIdx];
                 const segB = segments[segIdx + 1];
                 const pairProgressStart = 10 + segIdx * progressPerSegment;
@@ -2718,6 +2805,10 @@ class OnnxSVSPipeline {
                     onProgress, pairProgressStart, pairProgressRange,
                     segA.startBeat, segB.startBeat
                 );
+
+                // 分片缓存写入：batch 合成的两段都是 miss（见上方条件），结果存入分片缓存
+                if (pairResult[0].audio.length > 0) this._segCachePut(segCacheKeys[segIdx], pairResult[0].audio);
+                if (pairResult[1].audio.length > 0) this._segCachePut(segCacheKeys[segIdx + 1], pairResult[1].audio);
 
                 // Write both segments' audio to finalAudio
                 for (let si = 0; si < 2; si++) {
@@ -2764,13 +2855,29 @@ class OnnxSVSPipeline {
             // Per-segment f0Shift (B2): 该 segment 独立计算偏移
             const segF0Shift = this._computeSegF0Shift(f0Shift, globalTargetMedian, seg.notes);
 
-            const segResult = await this._synthesizeSegment(
-                seg.notes, bpm, f0Envelope, pitchCurveF0, segF0Shift,
-                ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
-                npuDiffBatchSize, npuVocoderBatchSize,
-                onProgress, segProgressStart, segProgressRange,
-                null, seg.startBeat
-            );
+            // 分片缓存命中：直接复用上次该 segment 的音频，跳过 diffusion+vocoder。
+            // segCachedAudios[segIdx] 在循环前已查表（含 LRU 提升），此处直接取用。
+            let segResult;
+            const cachedSegAudio = segCachedAudios[segIdx];
+            if (cachedSegAudio) {
+                console.log(`[OnnxSVSPipeline] >>> SEGMENT CACHE HIT <<< seg=${segIdx} startBeat=${seg.startBeat.toFixed(2)} | skipping diffusion+vocoder for this segment`);
+                onProgress(Math.round(segProgressStart + segProgressRange));
+                // 下游只消费 segResult.audio（写入 finalAudio），无需 frames；
+                // 真实 mel 帧数在 _synthesizeSegment 内部使用，缓存命中路径不涉及。
+                segResult = { audio: cachedSegAudio };
+            } else {
+                segResult = await this._synthesizeSegment(
+                    seg.notes, bpm, f0Envelope, pitchCurveF0, segF0Shift,
+                    ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
+                    npuDiffBatchSize, npuVocoderBatchSize,
+                    onProgress, segProgressStart, segProgressRange,
+                    null, seg.startBeat
+                );
+                // 分片缓存写入：miss 后重算的结果存入，供后续未改动场景复用
+                if (segResult.audio.length > 0) {
+                    this._segCachePut(segCacheKeys[segIdx], segResult.audio);
+                }
+            }
 
             if (segResult.audio.length === 0) continue;
 
@@ -3139,6 +3246,8 @@ class OnnxSVSPipeline {
         this._synthCache = null;
         this._synthCacheMap = null;
         this._synthCacheBytes = 0;
+        this._segCacheMap = null;
+        this._segCacheBytes = 0;
         this._currentF0Hz = null;
         console.log('[OnnxSVSPipeline] ONNX Runtime sessions released');
     }

@@ -229,6 +229,55 @@ describe('inference/pipeline/audioSegmentation', () => {
     });
   });
 
+  describe('computeSegmentCacheKey', () => {
+    it('should produce a string key extending the synth cache key', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      const key = seg.computeSegmentCacheKey(notes, 120, {}, 0, 0, 50);
+      expect(key).to.be.a('string');
+      expect(key.length).to.be.greaterThan(0);
+      // 应包含 segStartBeat / segF0Shift / ptFrameCount 后缀
+      expect(key).to.contain('_sb0_fs0_pt50');
+    });
+
+    it('should be deterministic for identical inputs', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      expect(seg.computeSegmentCacheKey(notes, 120, {}, 4, 2, 50))
+        .to.equal(seg.computeSegmentCacheKey(notes, 120, {}, 4, 2, 50));
+    });
+
+    it('should differ when segStartBeat changes (pitchCurveF0 is absolute-time indexed)', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      expect(seg.computeSegmentCacheKey(notes, 120, {}, 0, 0, 50))
+        .to.not.equal(seg.computeSegmentCacheKey(notes, 120, {}, 16, 0, 50));
+    });
+
+    it('should differ when segF0Shift changes (per-segment f0Shift B2)', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      expect(seg.computeSegmentCacheKey(notes, 120, {}, 0, 0, 50))
+        .to.not.equal(seg.computeSegmentCacheKey(notes, 120, {}, 0, 3, 50));
+    });
+
+    it('should differ when ptFrameCount changes', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      expect(seg.computeSegmentCacheKey(notes, 120, {}, 0, 0, 50))
+        .to.not.equal(seg.computeSegmentCacheKey(notes, 120, {}, 0, 0, 20));
+    });
+
+    it('should differ when segment notes change (regression: editing one segment must not hit another segment cache)', () => {
+      const n1 = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      const n2 = [{ lyric: 'a', pitch: 64, start: 0, duration: 1 }];
+      expect(seg.computeSegmentCacheKey(n1, 120, {}, 0, 0, 50))
+        .to.not.equal(seg.computeSegmentCacheKey(n2, 120, {}, 0, 0, 50));
+    });
+
+    it('should share the base with computeSynthCacheKey (segment key = base + suffix)', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      const base = seg.computeSynthCacheKey(notes, 120, { nSteps: 32, cfg: 3.0 });
+      const segKey = seg.computeSegmentCacheKey(notes, 120, { nSteps: 32, cfg: 3.0 }, 8, -2, 30);
+      expect(segKey.startsWith(base)).to.equal(true);
+    });
+  });
+
   describe('median', () => {
     it('should return 0 for null/empty', () => {
       expect(seg.median(null)).to.equal(0);
