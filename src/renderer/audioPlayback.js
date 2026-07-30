@@ -169,6 +169,9 @@ export async function playAll() {
             diffStepChunk: true,
             diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
             diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
+            cfgScheduleMode: inferenceOpts.cfgScheduleMode,
+            cfgStrengthStart: inferenceOpts.cfgStrengthStart,
+            cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
           },
         });
       }
@@ -398,6 +401,9 @@ export async function playAll() {
             diffStepChunk: false,
             diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
             diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
+            cfgScheduleMode: inferenceOpts.cfgScheduleMode,
+            cfgStrengthStart: inferenceOpts.cfgStrengthStart,
+            cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
           },
         });
 
@@ -506,6 +512,10 @@ export function getPreviewInferenceOptions() {
     diffStepChunk: state.audioSettings?.previewDiffStepChunkEnabled === true,
     diffStepChunkFrames: state.audioSettings?.previewDiffStepChunkFrames ?? 500,
     diffStepOverlapFrames: state.audioSettings?.previewDiffStepOverlapFrames ?? 50,
+    // Task 11: CFG schedule (preview mirrors). Falls back to top-level keys.
+    cfgScheduleMode: state.audioSettings?.previewCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'linear',
+    cfgStrengthStart: state.audioSettings?.previewCfgStrengthStart ?? state.audioSettings?.cfgStrengthStart ?? null,
+    cfgScheduleKeyframes: state.audioSettings?.previewCfgScheduleKeyframes ?? state.audioSettings?.cfgScheduleKeyframes ?? null,
   };
 }
 
@@ -517,6 +527,10 @@ export function getExportInferenceOptions() {
     sampler: state.audioSettings?.exportSampler ?? 'stork2',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
+    // Task 11: CFG schedule (export mirrors). Falls back to top-level keys.
+    cfgScheduleMode: state.audioSettings?.exportCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'linear',
+    cfgStrengthStart: state.audioSettings?.exportCfgStrengthStart ?? state.audioSettings?.cfgStrengthStart ?? null,
+    cfgScheduleKeyframes: state.audioSettings?.exportCfgScheduleKeyframes ?? state.audioSettings?.cfgScheduleKeyframes ?? null,
   };
 }
 
@@ -1071,6 +1085,9 @@ export async function runExportJob(opts) {
           cfg,
           cfgRescale,
           sampler,
+          cfgScheduleMode: opts.cfgScheduleMode,
+          cfgStrengthStart: opts.cfgStrengthStart,
+          cfgScheduleKeyframes: opts.cfgScheduleKeyframes,
         },
       });
 

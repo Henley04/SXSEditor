@@ -3,6 +3,7 @@ const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16 } = require('./utils');
 const { createSampler } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
+const { resolveCfgAtStep } = require('./cfgSchedule');
 
 /**
  * Read diagnosticMode flag lazily from settings. Returns false if settings
@@ -15,6 +16,22 @@ function _readDiagnosticMode() {
     try {
         const { loadSettings } = require('../../main/settings');
         return loadSettings().diagnosticMode === true;
+    } catch (_) {
+        return false;
+    }
+}
+
+/**
+ * Read enableSDEditRepair flag lazily from settings. Returns false if settings
+ * cannot be loaded (e.g. running outside Electron main process, in tests).
+ * When false, runDiffusionLoop skips the SDEdit repair code path entirely
+ * (zero overhead, no behavior change vs. pre-Task-17).
+ * @returns {boolean}
+ */
+function _readSDEditRepair() {
+    try {
+        const { loadSettings } = require('../../main/settings');
+        return loadSettings().enableSDEditRepair === true;
     } catch (_) {
         return false;
     }
@@ -193,7 +210,7 @@ class Diffusion {
      *
      * @param {string} [samplerName='euler'] - 求解器名称，见 samplers/index.js
      */
-    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = 'euler') {
+    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = 'euler', cfgScheduleOpts = null) {
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
@@ -433,6 +450,12 @@ class Diffusion {
         //   Pass 1: 计算 cfgVal → cfgPredBuf，同时 Welford 累加 posMean/posM2 + cfgAdjMean/cfgAdjM2
         //   Pass 2: 用 Welford 最终值算 std/rescale，写入 vBuf
         // 数值与原 three-pass 实现在 1e-7 内一致（Bessel 校正 N-1 分母）。
+        //
+        // Task 11: 当 cfgScheduleOpts 提供（非 null）时，按 currentStep 调用
+        // resolveCfgAtStep 取有效 CFG 值替代固定 cfgStrength。constant 模式
+        // 直接返回 cfgStrength（字节级一致，无浮点误差）；linear/cosine/custom
+        // 按 step 动态调整。cfgScheduleOpts 为 null 时行为与改造前完全一致。
+        let currentStep = 0;
         const combine = (condPred, uncondPred) => {
             const v = buffers.vBuf;
             if (!useCfg) {
@@ -440,6 +463,10 @@ class Diffusion {
                 v.set(condPred);
                 return v;
             }
+            // Task 11: resolve effective CFG for this step (constant = cfgStrength, byte-identical)
+            const effectiveCfg = cfgScheduleOpts
+                ? resolveCfgAtStep({ ...cfgScheduleOpts, cfgStrength, step: currentStep, totalSteps })
+                : cfgStrength;
             // Pass 1: cfgVal → cfgPredBuf, Welford accumulate posMean/posM2 + cfgAdjMean/cfgAdjM2
             let posMean = 0, posM2 = 0;
             let cfgAdjMean = 0, cfgAdjM2 = 0;
@@ -447,7 +474,7 @@ class Diffusion {
             for (let i = 0; i < targetLen; i++) {
                 const condVal = condPred[i];
                 const uncondVal = uncondPred[i];
-                const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
+                const cfgVal = condVal + effectiveCfg * (condVal - uncondVal);
                 cfgPredBuf[i] = cfgVal;
                 n++;
                 // Welford for posMean/posM2 (on condVal)
@@ -474,6 +501,7 @@ class Diffusion {
         try {
             let totalNFE = 0;
             for (let step = 0; step < totalSteps; step++) {
+                currentStep = step;
                 const { nfe } = await sampler.step({
                     evalDiffStep, combine, step, totalSteps,
                     xtData: xt.data, buffers,
@@ -496,6 +524,18 @@ class Diffusion {
                     // 会阻塞主线程，需要 setImmediate yield。
                     await new Promise(r => setImmediate(r));
                 }
+            }
+            // Task 17: SDEdit local repair (default false via settings). When
+            // enabled, detect mel frames with NaN or energy > median × 5 and
+            // re-denoise those regions with shallow noise (t=0.3) + 5 STORK-2
+            // steps, blending repaired frames with original via Hann crossfade.
+            // When disabled (default), this is a no-op (zero overhead).
+            if (_readSDEditRepair()) {
+                await this._sdeditRepair({
+                    sessions, xt, totalFrames, ptMelData, ptFrameCount,
+                    combinedCond, cfgStrength, cfgRescale, isFP16, useStaticShapes,
+                    evalDiffStep, combine, buffers, diagnosticMode,
+                });
             }
             // 诊断：检测扩散输出是否包含 NaN/Inf + 统计输出分布（gated by diagnosticMode）
             // NaN/Inf 致命错误 console.error 始终输出（always-on），不受 diagnosticMode 影响。
@@ -530,6 +570,157 @@ class Diffusion {
         } finally {
             // Task 6: dispose all pre-allocated tensors on exit (success or exception)
             _disposeAllTensors();
+        }
+    }
+
+    /**
+     * Task 17: SDEdit 局部修复。
+     *
+     * 在 runDiffusionLoop 主循环结束后调用（仅当 settings.enableSDEditRepair=true）。
+     * 检测 mel 局部异常帧（NaN/Inf 或帧能量 > 中位数 ×5），对每个异常区间：
+     *   1. 保存原始 mel（用于边界交叉淡入淡出）
+     *   2. 加浅噪声重噪到 t=0.3 水平：xt = 0.7*x0 + 0.3*noise
+     *   3. 用 STORK-2 求解器运行 5 步重采样
+     *   4. 仅更新异常区间帧，边界用 Hann 窗交叉淡入淡出平滑过渡
+     *
+     * 复用 runDiffusionLoop 闭包内的 evalDiffStep / combine / buffers，无需重建张量。
+     * 默认 false 时此方法不被调用（零开销）。
+     *
+     * @param {Object} ctx - runDiffusionLoop 内部闭包与参数
+     * @private
+     */
+    async _sdeditRepair(ctx) {
+        const { xt, totalFrames, evalDiffStep, combine, buffers, diagnosticMode } = ctx;
+        const REPAIR_STEPS = 5;
+        const REPAIR_T0 = 0.3;            // shallow noise level
+        const ENERGY_SPIKE_FACTOR = 5.0;  // frame energy > median × 5 = anomaly
+        const CROSSFADE_PAD = 3;          // frames to pad each side for Hann blend
+
+        const xtData = xt.data;
+        const targetLen = totalFrames * MEL_DIM;
+
+        // 1. 计算每帧能量，标记 NaN/Inf 帧
+        const frameEnergy = new Float32Array(totalFrames);
+        for (let f = 0; f < totalFrames; f++) {
+            let sum = 0;
+            let frameBad = false;
+            const base = f * MEL_DIM;
+            for (let d = 0; d < MEL_DIM; d++) {
+                const v = xtData[base + d];
+                if (!Number.isFinite(v)) { frameBad = true; break; }
+                sum += v * v;
+            }
+            frameEnergy[f] = frameBad ? Infinity : sum;
+        }
+
+        // 2. 计算中位数能量（排除异常帧）
+        const validEnergies = [];
+        for (let f = 0; f < totalFrames; f++) {
+            if (Number.isFinite(frameEnergy[f])) validEnergies.push(frameEnergy[f]);
+        }
+        if (validEnergies.length === 0) return; // 全部 NaN，无法修复
+        validEnergies.sort((a, b) => a - b);
+        const median = validEnergies[Math.floor(validEnergies.length / 2)];
+
+        // 3. 标记异常帧
+        const threshold = median * ENERGY_SPIKE_FACTOR;
+        const isAnomalous = new Uint8Array(totalFrames);
+        let anomalyCount = 0;
+        for (let f = 0; f < totalFrames; f++) {
+            if (!Number.isFinite(frameEnergy[f]) || frameEnergy[f] > threshold) {
+                isAnomalous[f] = 1;
+                anomalyCount++;
+            }
+        }
+        if (anomalyCount === 0) return; // 无异常，跳过修复
+
+        if (diagnosticMode) {
+            console.log(`[DiffusionDiag] SDEdit repair: ${anomalyCount}/${totalFrames} anomalous frames, median=${median.toFixed(4)}, threshold=${threshold.toFixed(4)}`);
+        }
+
+        // 4. 将连续异常帧分组成区间（含 CROSSFADE_PAD 帧边距用于 Hann 混合）
+        const regions = [];
+        let regionStart = -1;
+        for (let f = 0; f <= totalFrames; f++) {
+            if (f < totalFrames && isAnomalous[f]) {
+                if (regionStart < 0) regionStart = f;
+            } else if (regionStart >= 0) {
+                const coreEnd = f;
+                const paddedStart = Math.max(0, regionStart - CROSSFADE_PAD);
+                const paddedEnd = Math.min(totalFrames, coreEnd + CROSSFADE_PAD);
+                regions.push({ start: paddedStart, end: paddedEnd, coreStart: regionStart, coreEnd });
+                regionStart = -1;
+            }
+        }
+        if (regions.length === 0) return;
+
+        // 5. 对每个区间：保存原始 mel → 加浅噪声 → 5 步 STORK-2 重采样 → Hann 混合
+        const repairSampler = createSampler('stork2');
+        const originalBuf = new Float32Array(targetLen);
+
+        for (const region of regions) {
+            const { start, end, coreStart, coreEnd } = region;
+
+            // 保存原始 mel（含边距），用于后续 Hann 混合。
+            // NaN/Inf 帧归零保存，否则 Hann 混合时 (1-weight)*NaN = NaN 会传播。
+            const regionBytes = (end - start) * MEL_DIM;
+            const regionOffset = start * MEL_DIM;
+            for (let i = regionOffset; i < regionOffset + regionBytes; i++) {
+                originalBuf[i] = Number.isFinite(xtData[i]) ? xtData[i] : 0;
+            }
+
+            // 加浅噪声到 t=0.3 水平：xt = (1-t)*x0 + t*noise = 0.7*x0 + 0.3*noise
+            // NaN/Inf 帧需先归零（否则 0.7*NaN = NaN 会传播），用 0 作为 x0 重噪。
+            const sqrtOneMinusT = Math.sqrt(1 - REPAIR_T0);
+            const sqrtT = Math.sqrt(REPAIR_T0);
+            for (let i = regionOffset; i < regionOffset + regionBytes; i++) {
+                const x0 = Number.isFinite(xtData[i]) ? xtData[i] : 0;
+                const noise = Math.random() * 2 - 1;
+                xtData[i] = sqrtOneMinusT * x0 + sqrtT * noise;
+            }
+
+            // 5 步 STORK-2 重采样：仅更新区间内帧
+            for (let step = 0; step < REPAIR_STEPS; step++) {
+                await repairSampler.step({
+                    evalDiffStep, combine, step, totalSteps: REPAIR_STEPS,
+                    xtData: xt.data, buffers,
+                });
+                const delta = buffers.deltaBuf;
+                // 仅对区间内帧累加 delta（区间外帧保持不变）
+                for (let f = start; f < end; f++) {
+                    const base = f * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        xtData[base + d] += delta[base + d];
+                    }
+                }
+            }
+
+            // Hann 窗交叉淡入淡出：核心区用修复后值，边距区平滑过渡到原始值
+            for (let f = start; f < end; f++) {
+                let weight; // 1 = 修复后, 0 = 原始
+                if (f >= coreStart && f < coreEnd) {
+                    weight = 1.0;
+                } else if (f < coreStart) {
+                    const t = (f - start) / Math.max(1, coreStart - start);
+                    weight = 0.5 * (1 - Math.cos(Math.PI * t));
+                } else {
+                    const t = (f - coreEnd) / Math.max(1, end - coreEnd);
+                    weight = 0.5 * (1 + Math.cos(Math.PI * t));
+                }
+                const base = f * MEL_DIM;
+                for (let d = 0; d < MEL_DIM; d++) {
+                    const idx = base + d;
+                    xtData[idx] = weight * xtData[idx] + (1 - weight) * originalBuf[idx];
+                }
+            }
+        }
+
+        if (diagnosticMode) {
+            let postNaN = 0;
+            for (let i = 0; i < targetLen; i++) {
+                if (Number.isNaN(xtData[i])) postNaN++;
+            }
+            console.log(`[DiffusionDiag] SDEdit repair complete: ${regions.length} regions, post-repair NaN=${postNaN}`);
         }
     }
 
@@ -670,7 +861,7 @@ class Diffusion {
      * @returns {Promise<{newCommitted: number}>} 本块完成后新确定的帧数（不含重叠区，末尾块为 chunkEnd）
      */
     async _runSingleDiffusionChunk(ctx, spec, onProgress, progressStart, progressRange) {
-        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap } = ctx;
+        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, cfgScheduleOpts } = ctx;
         const { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast } = spec;
         const xtOut = xt.data;
 
@@ -697,7 +888,7 @@ class Diffusion {
         await this.runDiffusionLoop(
             sessions, subXt, currentChunkFrames, ptMelData, ptFrameCount,
             chunkCond, totalSteps, cfgStrength, cfgRescale, isFP16,
-            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName
+            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName, cfgScheduleOpts
         );
 
         // 4. WSOLA mel 域交叉淡入淡出写回（取代对称 Hann 加权混合）
@@ -734,7 +925,7 @@ class Diffusion {
         return { newCommitted };
     }
 
-    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames, onChunkMel = null, samplerName = 'euler', pitchCurveF0 = null) {
+    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames, onChunkMel = null, samplerName = 'euler', pitchCurveF0 = null, cfgScheduleOpts = null) {
         // Task 15: compute per-frame F0 slope from pitchCurveF0 for F0-aware
         // chunk boundary selection. f0Slope[i] = f0[i+1] - f0[i], with 0 at the
         // last index. When pitchCurveF0 is null/undefined or too short, f0Slope
@@ -752,14 +943,14 @@ class Diffusion {
         const plan = this._planChunks(totalFrames, chunkFrames, overlapFrames, f0Slope);
         if (!plan) {
             // 无需分块，直接整段推理
-            return this.runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, samplerName);
+            return this.runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, samplerName, cfgScheduleOpts);
         }
 
         const { specs, overlap, fadeWindow } = plan;
         const totalChunks = specs.length;
         console.log(`[DiffusionChunk] Chunked diffusion: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, chunkFrames=${chunkFrames}, overlap=${overlap}, steps=${totalSteps}, chunks=${totalChunks}, sampler=${samplerName}`);
 
-        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, fadeWindow, samplerName };
+        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, fadeWindow, samplerName, cfgScheduleOpts };
         const progressPerChunk = progressRange / totalChunks;
         let committedFrames = 0;
 

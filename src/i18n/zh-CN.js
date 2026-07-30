@@ -95,6 +95,32 @@ export default {
       noFragments: '当前没有分片，无法导出',
       noNotes: '当前分片没有音符，无法导出',
       precisionChanged: '精度已变更，将重置推理管线（首次合成会稍慢）',
+      // Task 11: CFG 强度曲线调度
+      cfgScheduleMode: 'CFG 强度曲线调度',
+      cfgScheduleModeHint: '在扩散步数间动态调整 CFG 强度。Constant = 固定值（旧行为）；Linear 从 start 线性升至 end；Cosine 平滑缓入缓出；Custom 使用关键帧插值。',
+      cfgScheduleConstant: 'Constant（固定值）',
+      cfgScheduleLinear: 'Linear（start → end）',
+      cfgScheduleCosine: 'Cosine（平滑缓动）',
+      cfgScheduleCustom: 'Custom（关键帧）',
+      cfgStrengthStart: '起始 CFG 强度',
+      cfgStrengthStartHint: '第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。',
+      cfgStrengthStartPlaceholder: '自动（cfgStrength × 0.5）',
+      cfgScheduleKeyframes: '调度关键帧',
+      cfgScheduleKeyframesHint: '逗号分隔的 step:value 对，例如 "0:1.5,16:3.0,32:3.0"。关键帧间线性插值。仅 Custom 模式生效。',
+      // Task 5: Vocoder overlap
+      vocoderOverlapFrames: 'Vocoder 重叠帧数',
+      // Task 10: Loudnorm
+      enableLoudnormFinal: 'EBU R128 响度归一化',
+      enableLoudnormFinalHint: '对最终输出应用 2-pass EBU R128 响度归一化（目标 −14 LUFS）及 true-peak 限制（−1 dBTP）。',
+      // Task 16: 抗混叠
+      enableAntiAliasing: '降采样抗混叠',
+      enableAntiAliasingHint: '降采样前先做低通滤波以减少高频混叠。略增 CPU 开销。',
+      // Task 17: SDEdit 局部修复
+      enableSDEditRepair: 'SDEdit 局部修复',
+      enableSDEditRepairHint: '扩散后检测 mel 局部异常（NaN / 能量突变）并以浅噪声注入局部重采样。默认关闭，仅在排查伪影时启用。',
+      // Task 2: 诊断模式
+      diagnosticMode: '诊断模式',
+      diagnosticModeHint: '在控制台输出详细的 [DiffusionDiag] / [VocoderDiag] 统计。NaN/Inf 致命错误无论此设置如何都会上报。',
     },
     synthesisFailed: '合成失败',
     // W24: parameterized variants for t('key') + ': ' + value concatenation.

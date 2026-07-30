@@ -119,6 +119,44 @@ function loadSettings() {
     _settingsCache.enableSDEditRepair = false;
   }
 
+  // ===== Task 11: CFG 强度曲线调度 =====
+  // 在 diffusion 采样循环中按 step 动态调整 CFG 引导强度。
+  // mode: 'constant'（固定，与改造前字节一致）| 'linear'（线性）| 'cosine'（余弦）| 'custom'（关键帧）
+  // cfgStrengthStart: null 时回退到 cfgStrength * 0.5（linear/cosine 从 0.5×cfg 上升到 cfg）
+  // cfgScheduleKeyframes: null 或 [{step, value}, ...]（custom 模式分段线性插值）
+  // 默认 'linear'：早期低 CFG 稳定结构，后期高 CFG 锐化细节。
+  // 顶层键为通用默认；preview*/export* 镜像键分别覆盖预览/导出路径。
+  const _validScheduleModes = ['constant', 'linear', 'cosine', 'custom'];
+  if (!_validScheduleModes.includes(_settingsCache.cfgScheduleMode)) {
+    _settingsCache.cfgScheduleMode = 'linear';
+  }
+  if (_settingsCache.cfgStrengthStart !== null && !Number.isFinite(_settingsCache.cfgStrengthStart)) {
+    _settingsCache.cfgStrengthStart = null;
+  }
+  if (_settingsCache.cfgScheduleKeyframes !== null && !Array.isArray(_settingsCache.cfgScheduleKeyframes)) {
+    _settingsCache.cfgScheduleKeyframes = null;
+  }
+  // 预览镜像键
+  if (!_validScheduleModes.includes(_settingsCache.previewCfgScheduleMode)) {
+    _settingsCache.previewCfgScheduleMode = 'linear';
+  }
+  if (_settingsCache.previewCfgStrengthStart !== null && !Number.isFinite(_settingsCache.previewCfgStrengthStart)) {
+    _settingsCache.previewCfgStrengthStart = null;
+  }
+  if (_settingsCache.previewCfgScheduleKeyframes !== null && !Array.isArray(_settingsCache.previewCfgScheduleKeyframes)) {
+    _settingsCache.previewCfgScheduleKeyframes = null;
+  }
+  // 导出镜像键
+  if (!_validScheduleModes.includes(_settingsCache.exportCfgScheduleMode)) {
+    _settingsCache.exportCfgScheduleMode = 'linear';
+  }
+  if (_settingsCache.exportCfgStrengthStart !== null && !Number.isFinite(_settingsCache.exportCfgStrengthStart)) {
+    _settingsCache.exportCfgStrengthStart = null;
+  }
+  if (_settingsCache.exportCfgScheduleKeyframes !== null && !Array.isArray(_settingsCache.exportCfgScheduleKeyframes)) {
+    _settingsCache.exportCfgScheduleKeyframes = null;
+  }
+
   // ===== 预览 diffStep 分块推理设置 =====
   // 预览时将 diffStep 的目标帧分块推理（每块独立运行完整扩散循环，再交叉淡入淡出拼接）。
   // 注意力复杂度 O(n²)，分块可显著加速长片段预览，代价是块边界可能产生轻微伪影。
@@ -304,6 +342,16 @@ const ALLOWED_SETTINGS_KEYS = [
   'vocoderOverlapFrames',
   'enableLoudnormFinal',
   'enableAntiAliasing',
+  'enableSDEditRepair',
+  'cfgScheduleMode',
+  'cfgStrengthStart',
+  'cfgScheduleKeyframes',
+  'previewCfgScheduleMode',
+  'previewCfgStrengthStart',
+  'previewCfgScheduleKeyframes',
+  'exportCfgScheduleMode',
+  'exportCfgStrengthStart',
+  'exportCfgScheduleKeyframes',
   'inferenceProvider',
   'ortEnableMemPattern',
   'ortForceMemPatternOnDml',

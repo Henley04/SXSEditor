@@ -95,6 +95,32 @@ export default {
       noFragments: 'No fragments to export',
       noNotes: 'No notes in fragments to export',
       precisionChanged: 'Precision changed — inference pipeline will be reset (first synthesis may be slower)',
+      // Task 11: CFG strength schedule
+      cfgScheduleMode: 'CFG Strength Schedule',
+      cfgScheduleModeHint: 'Adjusts CFG strength across diffusion steps. Constant = fixed value (legacy behavior); Linear ramps from start to end; Cosine eases in/out smoothly; Custom uses keyframe interpolation.',
+      cfgScheduleConstant: 'Constant (fixed)',
+      cfgScheduleLinear: 'Linear (start → end)',
+      cfgScheduleCosine: 'Cosine (smooth ease)',
+      cfgScheduleCustom: 'Custom (keyframes)',
+      cfgStrengthStart: 'CFG Strength Start',
+      cfgStrengthStartHint: 'Starting CFG strength at step 0. Falls back to cfgStrength × 0.5 when empty. Ignored in Constant mode.',
+      cfgStrengthStartPlaceholder: 'auto (cfgStrength × 0.5)',
+      cfgScheduleKeyframes: 'Schedule Keyframes',
+      cfgScheduleKeyframesHint: 'Comma-separated step:value pairs, e.g. "0:1.5,16:3.0,32:3.0". Linearly interpolated between keyframes. Only used in Custom mode.',
+      // Task 5: Vocoder overlap
+      vocoderOverlapFrames: 'Vocoder Overlap (frames)',
+      // Task 10: Loudnorm
+      enableLoudnormFinal: 'EBU R128 Loudness Normalization',
+      enableLoudnormFinalHint: 'Apply 2-pass EBU R128 loudness normalization (target −14 LUFS) with true-peak limiting (−1 dBTP) on final output.',
+      // Task 16: Anti-aliasing
+      enableAntiAliasing: 'Anti-aliasing on downsample',
+      enableAntiAliasingHint: 'Apply low-pass filter before downsampling to reduce high-frequency aliasing. Increases CPU usage slightly.',
+      // Task 17: SDEdit repair
+      enableSDEditRepair: 'SDEdit Local Repair',
+      enableSDEditRepairHint: 'Detect mel anomalies (NaN / energy spikes) after diffusion and locally re-sample with shallow noise injection. Disabled by default; enable only for diagnosing artifacts.',
+      // Task 2: Diagnostic mode
+      diagnosticMode: 'Diagnostic Mode',
+      diagnosticModeHint: 'Print detailed [DiffusionDiag] / [VocoderDiag] statistics to console. NaN/Inf fatal errors are always reported regardless of this setting.',
     },
     synthesisFailed: 'Synthesis failed',
     // W24: parameterized variants for t('key') + ': ' + value concatenation.

@@ -1851,15 +1851,17 @@ class OnnxSVSPipeline {
         // boundary selection. Set by _synthesizeSegment / synthesizeMultiStreaming
         // / _synthesizeImpl from sequences.f0Hz. null = no F0 info → fallback.
         const pitchCurveF0 = this._currentPitchCurveF0 || null;
+        // Task 11: CFG schedule opts (set by synthesize / synthesizeMultiStreaming)
+        const cfgScheduleOpts = this._currentCfgScheduleOpts || null;
         console.log(`[OnnxSVSPipeline] Diffusion start: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, totalSteps=${totalSteps}, sampler=${samplerName}, isFP16=${this.isFP16}, diffStepIsFP16=${this.diffStepIsFP16}, ep=${this.sessionEPs.diffStep || 'unknown'}`);
         console.log(`[OnnxSVSPipeline] Session diffStep: type=${this.sessions.diffStep?.constructor?.name}, ep=${this.sessionEPs.diffStep}`);
         // 分块扩散推理（仅预览路径启用，useStaticShapes 路径跳过）
         const chunkOpts = this._currentDiffStepChunkOpts;
         if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > chunkOpts.chunkFrames) {
             console.log(`[OnnxSVSPipeline] Using chunked diffusion: chunkFrames=${chunkOpts.chunkFrames}, overlapFrames=${chunkOpts.overlapFrames}, streaming=${!!onChunkMel}`);
-            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0);
+            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts);
         }
-        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName);
+        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName, cfgScheduleOpts);
     }
 
     async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0) {
@@ -2168,6 +2170,12 @@ class OnnxSVSPipeline {
         };
         // 求解器名称（取首片段配置，多片段必须一致）
         this._currentSamplerName = firstOpts.sampler || 'euler';
+        // Task 11: CFG 强度曲线调度（取首片段配置，多片段必须一致）
+        this._currentCfgScheduleOpts = {
+            mode: firstOpts.cfgScheduleMode || 'linear',
+            cfgStrengthStart: firstOpts.cfgStrengthStart ?? null,
+            cfgScheduleKeyframes: firstOpts.cfgScheduleKeyframes ?? null,
+        };
 
         console.log(`[OnnxSVSPipeline] synthesizeMultiStreaming: ${fragments.length} fragments, chunkEnabled=${chunkEnabled}, chunkFrames=${chunkFrames}`);
 
@@ -2511,6 +2519,12 @@ class OnnxSVSPipeline {
 
         // 求解器名称（透传到 _runDiffusionLoop → diffusion.js）
         this._currentSamplerName = options.sampler || 'euler';
+        // Task 11: CFG 强度曲线调度（透传到 _runDiffusionLoop → diffusion.js）
+        this._currentCfgScheduleOpts = {
+            mode: options.cfgScheduleMode || 'linear',
+            cfgStrengthStart: options.cfgStrengthStart ?? null,
+            cfgScheduleKeyframes: options.cfgScheduleKeyframes ?? null,
+        };
 
         // diffStep 分块推理选项（仅预览路径传入，导出不传 → 默认关闭）
         this._currentDiffStepChunkOpts = {
