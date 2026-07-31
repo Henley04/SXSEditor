@@ -308,9 +308,7 @@ export default {
     noteCtxClear: 'Clear Effects',
     noteCtxKanji: 'Kanji Settings',
     noteCtxTargetSingle: '1 note selected',
-    noteCtxTargetMulti: '{count} notes selected',
-    noteCtxVibratoOn: 'Vibrato enabled',
-    noteCtxVibratoOff: 'Vibrato disabled'
+    noteCtxTargetMulti: '{count} notes selected'
   },
   singerCreator: {
     title: 'Singer Creator',

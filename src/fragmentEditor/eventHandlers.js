@@ -880,7 +880,11 @@ function hideNoteContextMenu() {
     menu.style.display = 'none';
     menu.setAttribute('aria-hidden', 'true');
   }
-  // 提交未保存的 history entry（input→change 模式：change 事件触发提交）
+  // 兜底：若用户拖动滑块后（input 事件已改值但 change 事件尚未触发）直接点击
+  // 菜单外关闭，主动提交一次 history entry，避免改动丢失 undo 入口。
+  if (_noteCtxSnapshotBefore) {
+    _commitCtxHistory();
+  }
   _noteCtxState = null;
   _noteCtxSnapshotBefore = null;
   render();

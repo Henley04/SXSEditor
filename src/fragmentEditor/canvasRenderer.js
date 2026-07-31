@@ -790,15 +790,6 @@ export function computeVibratoOffset(note, time) {
   return depthInMidi * Math.sin(2 * Math.PI * v.rate * vibTimeSec) * env;
 }
 
-/** 是否有任何激活 note 启用了颤音（用于决定是否生成 pitchCurveF0）。 */
-export function hasAnyVibratoEnabled() {
-  const notes = getNotes();
-  for (let i = 0; i < notes.length; i++) {
-    if (notes[i].vibrato && notes[i].vibrato.enabled) return true;
-  }
-  return false;
-}
-
 export function getSortedAnchorPoints() {
   const pitchCurve = getPitchCurve();
   if (getSortedAnchorPointsCacheVersion() !== getPitchCurveVersion()) {

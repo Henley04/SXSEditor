@@ -308,9 +308,7 @@ export default {
     noteCtxClear: '清除效果',
     noteCtxKanji: '汉字设置',
     noteCtxTargetSingle: '已选 1 个音符',
-    noteCtxTargetMulti: '已选 {count} 个音符',
-    noteCtxVibratoOn: '颤音已开启',
-    noteCtxVibratoOff: '颤音已关闭'
+    noteCtxTargetMulti: '已选 {count} 个音符'
   },
   singerCreator: {
     title: '歌手创建',
