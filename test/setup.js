@@ -7,9 +7,11 @@ const { JSDOM } = require('jsdom');
 
 const dom = new JSDOM('<!DOCTYPE html><html><body></body></html>', {
   pretendToBeVisual: true,
+  url: 'http://localhost',
 });
 global.window = dom.window;
 global.document = dom.window.document;
+global.localStorage = dom.window.localStorage;
 global.HTMLCanvasElement = dom.window.HTMLCanvasElement;
 Object.defineProperty(global, 'navigator', {
   value: dom.window.navigator,
@@ -52,6 +54,21 @@ HTMLCanvasElement.prototype.getContext = function() {
 };
 
 const sinon = require('sinon');
+
+// Polyfill CustomEvent for JSDOM
+if (typeof global.CustomEvent === 'undefined') {
+  global.CustomEvent = class CustomEvent extends Event {
+    constructor(type, options = {}) {
+      super(type, options);
+      this.detail = options.detail || null;
+    }
+  };
+}
+
+// Register SVGElement global for JSDOM
+if (typeof global.SVGElement === 'undefined') {
+  global.SVGElement = dom.window.SVGElement;
+}
 
 // Mocha root hook 插件，提供 sinon sandbox 自动清理
 let _sinonSandbox;

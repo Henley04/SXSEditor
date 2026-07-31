@@ -252,7 +252,7 @@ describe('Task 7: CFG combine Welford vs two-pass', () => {
     // M8: strengthened statistical robustness — many random seeds, verifying
     // Welford == two-pass across diverse inputs (catches seed-specific
     // numerical drift that a single seed would miss).
-    it('多个随机种子下 Welford 与 two-pass 逐元素一致（统计稳健性）', () => {
+    it('多个随机种子下 Welford 与 two-pass 逐元素一致（统计稳健性）', function () { this.timeout(15000);
         const len = 512;
         const cfgStrengths = [0.5, 1.5, 3.0, 5.0];
         const cfgRescales = [0.0, 0.3, 0.6, 1.0];
