@@ -72,6 +72,33 @@
       </div>
 
       <h2>
+        <span data-lang="en">v1.0.9</span>
+        <span data-lang="zh">v1.0.9</span>
+      </h2>
+
+      <h3>
+        <span data-lang="en">New Features</span>
+        <span data-lang="zh">新功能</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en"><strong>Note context menu with vibrato &amp; fade</strong> — right-click a note in the Fragment Editor (MIDI or Pitch mode) to open a new note context menu for fine-tuning per-note <strong>vibrato</strong> and <strong>fade in / fade out</strong>. The menu acts on the right-clicked note, or on the entire selection when the note is part of a multi-note selection.</span><span data-lang="zh"><strong>音符右键菜单：颤音与渐强渐弱</strong>——在分片编辑器中右键音符（MIDI 或 Pitch 模式）即可打开新的音符右键菜单，逐音符微调<strong>颤音</strong>与<strong>渐入 / 渐出</strong>。菜单作用于被右键的音符；若该音符已在多选集合中，则作用于全部选中音符。</span></li>
+        <li><span data-lang="en"><strong>Fine-tunable vibrato</strong> — vibrato parameters support fine control: <em>Depth</em> (0–200¢), <em>Rate</em> (2–10 Hz), <em>Start point</em> (0–80%), <em>Length</em> (20–100%), and <em>Fade-in ramp</em> (0–100%). One-click presets (<em>Soft</em> / <em>Medium</em> / <em>Strong</em>) and a <em>Clear Effects</em> button are included. Vibrato is layered additively over the existing pitch curve, so it is fully compatible with anchor points and brush strokes.</span><span data-lang="zh"><strong>可微调的颤音</strong>——颤音参数支持精细控制：<em>幅度</em>（0–200¢）、<em>频率</em>（2–10 Hz）、<em>起始点</em>（0–80%）、<em>长度</em>（20–100%）、<em>渐入比例</em>（0–100%）。提供一键预设（<em>柔和</em> / <em>中等</em> / <em>强烈</em>）与<em>清除效果</em>按钮。颤音以叠加方式作用于已有音高曲线之上，与锚点、画笔笔触完全兼容。</span></li>
+        <li><span data-lang="en"><strong>Per-note fade in / fade out</strong> — apply per-note volume fades (0–500 ms each) that take effect in both real-time preview and WAV export, as a post-processing gain on the synthesized audio. One-click presets (<em>Fade In</em> / <em>Fade Out</em> / <em>Both</em>) are included.</span><span data-lang="zh"><strong>逐音符渐入 / 渐出</strong>——可对单个音符施加音量渐变（各 0–500 ms），实时预览与 WAV 导出均生效，作为后处理增益叠加在合成音频之上。提供一键预设（<em>渐强</em> / <em>渐弱</em> / <em>渐入渐出</em>）。</span></li>
+        <li><span data-lang="en"><strong>Visual effect indicators on notes</strong> — notes with vibrato enabled show a small sine-wave marker at the top-left; notes with fade in/out show semi-transparent triangles at the corresponding edge, sized proportionally to the fade duration. The pitch curve in Pitch mode also renders the actual vibrato oscillation.</span><span data-lang="zh"><strong>音符效果视觉指示</strong>——启用颤音的音符左上角会显示小正弦波标记；启用渐入 / 渐出的音符在对应边缘绘制半透明三角形，宽度按渐变时长比例缩放。Pitch 模式下的音高曲线也会渲染实际颤音振荡。</span></li>
+        <li><span data-lang="en"><strong>Full undo/redo &amp; backward compatibility</strong> — all vibrato and fade adjustments support undo/redo; slider drags commit one history entry on release. Old projects without vibrato/fade fields are auto-normalized on load.</span><span data-lang="zh"><strong>完整撤销 / 重做与向后兼容</strong>——所有颤音与渐变调整均支持撤销 / 重做；滑块拖动在松开时提交一条历史记录。不含颤音 / 渐变字段的旧项目在加载时自动补全默认值。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Documentation</span>
+        <span data-lang="zh">文档</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en">Added a new <em>Note Effects: Vibrato &amp; Fade</em> section to the Fragment Editor guide, documenting the right-click note menu, all vibrato/fade parameters, presets, visual indicators, and compatibility with pitch curves.</span><span data-lang="zh">分片编辑器指南新增<em>音符效果：颤音与渐强渐弱</em>章节，文档化右键音符菜单、所有颤音 / 渐变参数、预设、视觉指示以及与音高曲线的兼容性。</span></li>
+        <li><span data-lang="en">Corrected the Kanji Settings access path: right-clicking a note body now opens the note context menu; the Kanji Settings menu is reached by right-clicking the group bracket/label, or via the <em>Kanji Settings</em> button inside the note menu (shown for kana-in-group notes and single ungrouped kanji notes).</span><span data-lang="zh">更正汉字设置入口：右键音符本体现打开音符右键菜单；汉字设置菜单通过右键分组连接线 / 标签进入，或在音符菜单内点击<em>汉字设置</em>按钮进入（对分组内假名音符与单个未分组汉字音符均显示）。</span></li>
+        <li><span data-lang="en">Documented the <em>Auto Shift</em> checkbox in the Fragment Editor toolbar.</span><span data-lang="zh">补充文档化分片编辑器工具栏中的 <em>Auto Shift</em> 复选框。</span></li>
+      </ul>
+
+      <h2>
         <span data-lang="en">v1.0.8</span>
         <span data-lang="zh">v1.0.8</span>
       </h2>

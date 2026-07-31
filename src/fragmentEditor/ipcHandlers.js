@@ -110,7 +110,13 @@ async function handleFragmentData(data) {
   setCurrentFragment(data.fragment);
   setCurrentProject(data.project);
   document.getElementById('fragment-name').textContent = data.fragment.name || t('fragment.fragment');
-  setNotes(data.fragment.notes || []);
+  // 规范化 notes：为旧项目的 note 补全 vibrato/fadeIn/fadeOut 字段。
+  // vibrato 在首次启用时由 ensureVibrato() 补全，这里只确保 fadeIn/fadeOut 有默认值。
+  setNotes((data.fragment.notes || []).map(n => ({
+    ...n,
+    fadeIn: typeof n.fadeIn === 'number' ? n.fadeIn : 0,
+    fadeOut: typeof n.fadeOut === 'number' ? n.fadeOut : 0,
+  })));
   setEnvelopes(data.fragment.envelopes || {
     volume: { keyframes: [{ time: 0, value: 1, smoothness: 0 }] },
     pan: { keyframes: [{ time: 0, value: 0, smoothness: 0 }] },
