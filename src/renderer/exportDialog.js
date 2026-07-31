@@ -70,7 +70,14 @@ export async function openExportDialog() {
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
       exportCfgRescale: settings.exportCfgRescale ?? 0.75,
-      exportSampler: settings.exportSampler || 'euler',
+      exportSampler: settings.exportSampler || 'stork2',
+      // P1: CFG 强度调度（低→高）。默认 cosine：早期低引导、后期高引导，减少伪影。
+      exportCfgScheduleMode: ['fixed', 'linear', 'cosine'].includes(settings.exportCfgScheduleMode)
+        ? settings.exportCfgScheduleMode : 'cosine',
+      exportCfgScheduleStartStrength: Number.isFinite(settings.exportCfgScheduleStartStrength)
+        ? settings.exportCfgScheduleStartStrength : 1.0,
+      exportCfgScheduleEndStrength: Number.isFinite(settings.exportCfgScheduleEndStrength)
+        ? settings.exportCfgScheduleEndStrength : (settings.exportCfgStrength ?? 3.0),
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
       sifiganPrecision: settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32',
@@ -247,10 +254,11 @@ function buildParamsSection(form) {
   const samplerSelect = document.createElement('select');
   // 求解器选项（与 src/inference/pipeline/samplers/index.js SOLVERS 对齐）
   const samplerOptions = [
+    { value: 'stork2', labelKey: 'main.exportDialog.samplerStork2' },
     { value: 'euler', labelKey: 'main.exportDialog.samplerEuler' },
     { value: 'heun', labelKey: 'main.exportDialog.samplerHeun' },
+    { value: 'midpoint', labelKey: 'main.exportDialog.samplerMidpoint' },
     { value: 'extrap', labelKey: 'main.exportDialog.samplerExtrap' },
-    { value: 'stork2', labelKey: 'main.exportDialog.samplerStork2' },
   ];
   for (const opt of samplerOptions) {
     const o = document.createElement('option');
@@ -290,6 +298,51 @@ function buildParamsSection(form) {
     format: (v) => parseFloat(v).toFixed(2),
     onChange: (v) => { form.exportCfgRescale = v; },
   }));
+
+  // P1: CFG 强度调度模式（低→高）
+  const cfgScheduleField = buildSelectField({
+    labelKey: 'main.exportDialog.cfgScheduleMode',
+    hintKey: 'main.exportDialog.cfgScheduleModeHint',
+    value: form.exportCfgScheduleMode,
+    options: [
+      { value: 'fixed', labelKey: 'main.exportDialog.cfgScheduleModeFixed' },
+      { value: 'linear', labelKey: 'main.exportDialog.cfgScheduleModeLinear' },
+      { value: 'cosine', labelKey: 'main.exportDialog.cfgScheduleModeCosine' },
+    ],
+    onChange: (v) => {
+      form.exportCfgScheduleMode = v;
+      // 显示/隐藏 start/end 强度滑块
+      const show = (v === 'linear' || v === 'cosine');
+      const startField = document.getElementById('cfgScheduleStartField');
+      const endField = document.getElementById('cfgScheduleEndField');
+      if (startField) startField.classList.toggle('hidden', !show);
+      if (endField) endField.classList.toggle('hidden', !show);
+    },
+  });
+  section.appendChild(cfgScheduleField);
+
+  // P1: CFG 调度起始/结束强度（仅 linear/cosine 显示）
+  const schedStartField = buildRangeField({
+    labelKey: 'main.exportDialog.cfgScheduleStartStrength',
+    min: 0, max: 10, step: 0.1,
+    value: form.exportCfgScheduleStartStrength,
+    format: (v) => parseFloat(v).toFixed(2),
+    onChange: (v) => { form.exportCfgScheduleStartStrength = v; },
+  });
+  schedStartField.id = 'cfgScheduleStartField';
+  schedStartField.classList.toggle('hidden', form.exportCfgScheduleMode === 'fixed');
+  section.appendChild(schedStartField);
+
+  const schedEndField = buildRangeField({
+    labelKey: 'main.exportDialog.cfgScheduleEndStrength',
+    min: 0, max: 10, step: 0.1,
+    value: form.exportCfgScheduleEndStrength,
+    format: (v) => parseFloat(v).toFixed(2),
+    onChange: (v) => { form.exportCfgScheduleEndStrength = v; },
+  });
+  schedEndField.id = 'cfgScheduleEndField';
+  schedEndField.classList.toggle('hidden', form.exportCfgScheduleMode === 'fixed');
+  section.appendChild(schedEndField);
 
   // Auto Shift 复选框
   section.appendChild(buildCheckboxField({
@@ -539,6 +592,40 @@ function buildRangeField(opts) {
   return field;
 }
 
+/**
+ * P1: 构建下拉选择字段（用于 CFG 调度模式选择）。
+ */
+function buildSelectField(opts) {
+  const field = document.createElement('div');
+  field.className = 'export-dialog-field';
+
+  const label = document.createElement('div');
+  label.className = 'export-dialog-field-label';
+  label.textContent = t(opts.labelKey);
+  field.appendChild(label);
+
+  if (opts.hintKey) {
+    const hint = document.createElement('div');
+    hint.className = 'export-dialog-field-hint';
+    hint.textContent = t(opts.hintKey);
+    field.appendChild(hint);
+  }
+
+  const select = document.createElement('select');
+  for (const o of opts.options) {
+    const opt = document.createElement('option');
+    opt.value = o.value;
+    opt.textContent = t(o.labelKey);
+    select.appendChild(opt);
+  }
+  select.value = opts.value;
+  select.addEventListener('change', () => {
+    opts.onChange(select.value);
+  });
+  field.appendChild(select);
+  return field;
+}
+
 function buildCheckboxField(opts) {
   const label = document.createElement('label');
   label.className = 'export-dialog-checkbox';
@@ -591,6 +678,10 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     exportCfgStrength: form.exportCfgStrength,
     exportCfgRescale: form.exportCfgRescale,
     exportSampler: form.exportSampler,
+    // P1: CFG 强度调度
+    exportCfgScheduleMode: form.exportCfgScheduleMode,
+    exportCfgScheduleStartStrength: form.exportCfgScheduleStartStrength,
+    exportCfgScheduleEndStrength: form.exportCfgScheduleEndStrength,
     vocoderType: form.vocoderType,
     sifiganPrecision: form.sifiganPrecision,
     vocoderChunkMode: form.vocoderChunkMode,
@@ -693,6 +784,14 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
       cfg: form.exportCfgStrength,
       cfgRescale: form.exportCfgRescale,
       sampler: form.exportSampler,
+      // P1: CFG 强度调度（低→高）。pipeline 侧 mode='fixed'/null 退回常量行为。
+      cfgSchedule: (form.exportCfgScheduleMode && form.exportCfgScheduleMode !== 'fixed')
+        ? {
+            mode: form.exportCfgScheduleMode,
+            startStrength: form.exportCfgScheduleStartStrength,
+            endStrength: form.exportCfgScheduleEndStrength,
+          }
+        : null,
       autoShift: form.autoShift,
       onFragmentProgress: (p) => {
         setStatus('progressSynthesizing', { progress: p });
@@ -708,10 +807,21 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setStatus('progressEncoding');
     setProgress(95);
 
+    // P1 / Q0-3: EBU R128 响度归一化 + true-peak 限制器（导出路径末端）。
+    // 在 WAV 编码前应用，确保输出响度一致（-14 LUFS）且 true-peak ≤ -1 dBTP，
+    // 防止后续有损编码（MP3/AAC）削波。用户可在设置中关闭。
+    let finalAudio = mixedAudio;
+    if (settings.exportLoudnessNormalize !== false) {
+      const { loudnessNormalizeAndLimit } = require('../audio/loudnessNormalize.js');
+      const targetLufs = Number.isFinite(settings.exportLoudnessTargetLufs) ? settings.exportLoudnessTargetLufs : -14.0;
+      const tpCeiling = Number.isFinite(settings.exportTruePeakCeilingDb) ? settings.exportTruePeakCeilingDb : -1.0;
+      finalAudio = loudnessNormalizeAndLimit(mixedAudio, SAMPLE_RATE, targetLufs, tpCeiling);
+    }
+
     // 编码 WAV
     // B2: wavEncoder.js is now CommonJS — use require instead of dynamic import.
     const { encodeWav } = require('../audio/wavEncoder.js');
-    const wavData = encodeWav(mixedAudio, SAMPLE_RATE);
+    const wavData = encodeWav(finalAudio, SAMPLE_RATE);
 
     setStatus('progressSaving');
     setProgress(98);

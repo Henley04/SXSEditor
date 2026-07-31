@@ -74,14 +74,66 @@ function loadSettings() {
     _settingsCache.releaseDmlVramAfterSynthesis = false;
   }
 
-  // Vocoder 推理前是否临时释放 diffStep session（默认开启，仅 DML 后端有效）
+  // Vocoder 推理前是否临时释放 diffStep session（默认关闭，仅 DML 后端有效）
   // diffStep 模型权重 + 32 步 diffusion 激活工作区（~2GB）在 vocoder 推理期间仍占用显存，
   // 与 vocoder 激活叠加易触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR (屏幕全黑)。
   // 开启后：diffusion 完成 → 释放 diffStep → vocoder 推理 → 重载 diffStep。
   // 代价：每次 vocoder 推理后需重载 diffStep（~1-3秒），多 segment 合成会显著变慢。
+  //
+  // P0-3: 默认改为 false（之前为 true）。绝大多数显存充裕的设备无需释放，开启反而
+  // 给多段合成带来 1-3s/段 的重载税。改为"OOM 后动态启用"：当 vocoder 推理捕获到
+  // isVramOOMError 时，OnnxSVSPipeline 设置 _diffStepReleaseForcedByOom 标志，
+  // 后续 segment 的 _maybeUnloadDiffStepBeforeVocoder 会据此强制释放一次。
   // WebNN 路径无需此优化（diffStep 在渲染进程，vocoder 在主进程 DML，互不抢占显存）。
   if (typeof _settingsCache.releaseDiffStepBeforeVocoder !== 'boolean') {
-    _settingsCache.releaseDiffStepBeforeVocoder = true;
+    _settingsCache.releaseDiffStepBeforeVocoder = false;
+  }
+
+  // P0-2: 诊断模式开关（默认关闭）。开启后 diffusion / vocoder 的逐 chunk / 逐步
+  // NaN/Inf/min/max/mean/std 日志恢复输出，用于排查音质问题；生产路径下关闭以避免
+  // 长音频每 chunk ~5ms JS 开销 + 控制台 I/O。
+  if (typeof _settingsCache.diagnosticMode !== 'boolean') {
+    _settingsCache.diagnosticMode = false;
+  }
+
+  // P1: CFG 强度调度（低→高）。inference-only，零训练。
+  // A-CFG (NeurIPS 2025, arXiv:2507.08965) 与 dynamic CFG 文献表明：扩散早期用低引导
+  // （让模型自由探索），后期用高引导（锁定条件），可减少过曝光 / 过 articulation 伪影。
+  // mode: 'fixed'（常量，旧逻辑）| 'linear'（线性低→高）| 'cosine'（余弦低→高，过渡更平滑）
+  // startStrength/endStrength 仅在 linear/cosine 下生效。
+  // 默认 cosine：startStrength=1.0（早期几乎无引导，避免伪影），endStrength 与 cfgStrength
+  // 一致（后期完整引导）。用户可改为 fixed 退回常量行为。
+  function _defaultCfgSchedule(prefix) {
+    const mode = _settingsCache[`${prefix}CfgScheduleMode`];
+    if (typeof mode !== 'string' || !['fixed', 'linear', 'cosine'].includes(mode)) {
+      _settingsCache[`${prefix}CfgScheduleMode`] = 'cosine';
+    }
+    if (typeof _settingsCache[`${prefix}CfgScheduleStartStrength`] !== 'number' ||
+        !Number.isFinite(_settingsCache[`${prefix}CfgScheduleStartStrength`])) {
+      _settingsCache[`${prefix}CfgScheduleStartStrength`] = 1.0;
+    }
+    if (typeof _settingsCache[`${prefix}CfgScheduleEndStrength`] !== 'number' ||
+        !Number.isFinite(_settingsCache[`${prefix}CfgScheduleEndStrength`])) {
+      _settingsCache[`${prefix}CfgScheduleEndStrength`] = 3.0;
+    }
+  }
+  _defaultCfgSchedule('preview');
+  _defaultCfgSchedule('export');
+
+  // P1 / Q0-3: EBU R128 响度归一化 + true-peak 限制器（仅导出路径）。
+  // 默认开启：导出 WAV 后续若被有损编码（MP3/AAC）会削波，peak 归一化不足以防削波；
+  // EBU R128 loudnorm (-14 LUFS) + true-peak limiter (-1 dBTP) 保证输出合规且防削波。
+  // 用户可关闭以保留原始峰值归一化行为。
+  if (typeof _settingsCache.exportLoudnessNormalize !== 'boolean') {
+    _settingsCache.exportLoudnessNormalize = true;
+  }
+  if (typeof _settingsCache.exportLoudnessTargetLufs !== 'number' ||
+      !Number.isFinite(_settingsCache.exportLoudnessTargetLufs)) {
+    _settingsCache.exportLoudnessTargetLufs = -14.0;
+  }
+  if (typeof _settingsCache.exportTruePeakCeilingDb !== 'number' ||
+      !Number.isFinite(_settingsCache.exportTruePeakCeilingDb)) {
+    _settingsCache.exportTruePeakCeilingDb = -1.0;
   }
 
   // ===== 预览 diffStep 分块推理设置 =====
@@ -255,8 +307,11 @@ function invalidateSettingsCache() {
 const ALLOWED_SETTINGS_KEYS = [
   'deviceId', 'modelDir', 'modelPrecision', 'midiExtractTool', 'useRosvot',
   'previewDiffSteps', 'previewCfgStrength', 'previewCfgRescale', 'previewSampler',
+  'previewCfgScheduleMode', 'previewCfgScheduleStartStrength', 'previewCfgScheduleEndStrength',
   'previewDiffStepChunkEnabled', 'previewDiffStepChunkFrames', 'previewDiffStepOverlapFrames',
   'exportDiffSteps', 'exportCfgStrength', 'exportCfgRescale', 'exportSampler',
+  'exportCfgScheduleMode', 'exportCfgScheduleStartStrength', 'exportCfgScheduleEndStrength',
+  'exportLoudnessNormalize', 'exportLoudnessTargetLufs', 'exportTruePeakCeilingDb',
   'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth',
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
@@ -265,6 +320,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'vocoderChunkMode', 'vocoderChunkFrames',
   'releaseDmlVramAfterSynthesis',
   'releaseDiffStepBeforeVocoder',
+  'diagnosticMode',
   'inferenceProvider',
   'ortEnableMemPattern',
   'ortForceMemPatternOnDml',

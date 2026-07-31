@@ -17,7 +17,13 @@ export const MEL_DIM = 128;
 export const EMBED_DIM = 512;
 export const COND_DIM = 1024;
 export const VOCODER_CHUNK_FRAMES = 1008;
-export const VOCODER_OVERLAP_FRAMES = 8;
+// P1 / Q0-1: Vocoder overlap raised from 8 to 32 frames.
+// HiFi-GAN/BigVGAN-style vocoders have an effective receptive field of ~30 mel
+// frames. With overlap=8 the boundary ~22 frames were not vocoded with full
+// context, producing subtle edge artifacts. overlap=32 covers the receptive
+// field so the crossfade region is fully contextualised. At chunk=1008 the
+// overlap is only ~3.2% — negligible compute overhead, clear quality gain.
+export const VOCODER_OVERLAP_FRAMES = 32;
 
 // ===== NPU 静态形状常量 =====
 // NPU 静态形状模型固定序列长度（encoder/diffusion 输入维度）

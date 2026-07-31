@@ -346,8 +346,17 @@ async function cmdSynth(opts) {
     log(`dtype        : Float32Array`);
 
     if (opts.out) {
+      // P1 / Q0-3: EBU R128 响度归一化 + true-peak 限制器（导出末端）。
+      const cliSettings = (typeof loadSettings === 'function') ? loadSettings() : {};
+      let finalAudio = audio;
+      if (cliSettings.exportLoudnessNormalize !== false) {
+        const { loudnessNormalizeAndLimit } = require('../audio/loudnessNormalize');
+        const targetLufs = Number.isFinite(cliSettings.exportLoudnessTargetLufs) ? cliSettings.exportLoudnessTargetLufs : -14.0;
+        const tpCeiling = Number.isFinite(cliSettings.exportTruePeakCeilingDb) ? cliSettings.exportTruePeakCeilingDb : -1.0;
+        finalAudio = loudnessNormalizeAndLimit(audio, SAMPLE_RATE, targetLufs, tpCeiling);
+      }
       const { encodeWav } = require('../audio/wavEncoder');
-      const wavBuf = encodeWav(audio, SAMPLE_RATE);
+      const wavBuf = encodeWav(finalAudio, SAMPLE_RATE);
       fs.writeFileSync(opts.out, wavBuf);
       log(`\nWAV written: ${opts.out} (${fmtBytes(wavBuf.length)})`);
     }

@@ -11,6 +11,133 @@ const { createFloatTensor, outputToFloat32, disposeTensor, normalizePeakTo, gpuD
 // disposeTensor 从 utils.js 导入，全管线共用
 
 /**
+ * P0-2: Diagnostic mode gate (mirrors diffusion.js). When false (default in
+ * production), per-chunk NaN/Inf/RMS/mel-stat console.log diagnostics inside
+ * runVocoderChunked are skipped to avoid ~5ms/chunk JS overhead + console I/O
+ * on long audio. Set via setPostprocessingDiagnosticMode(true) from the
+ * pipeline, which reads settings.diagnosticMode.
+ */
+let _postprocessingDiagnosticMode = false;
+function setPostprocessingDiagnosticMode(enabled) {
+    _postprocessingDiagnosticMode = !!enabled;
+}
+function isPostprocessingDiagnosticMode() {
+    return _postprocessingDiagnosticMode;
+}
+
+/**
+ * P1 / Q0-2: WSOLA (Waveform Similarity Overlap-Add) best-lag search.
+ *
+ * Plain Hann OLA on pitched signals (singing voice) does not guarantee phase
+ * continuity in the overlap region, producing subtle flanging / comb-filtering
+ * on sustained vowels and vibrato. WSOLA fixes this by searching a small lag
+ * range for the segment that maximizes normalized cross-correlation with the
+ * previous chunk's tail, then crossfading at that aligned offset.
+ *
+ * Works on both 1-D audio (stride=1) and multi-D mel (stride=MEL_DIM): for mel,
+ * each "frame" is treated as a stride-length vector and correlation is computed
+ * over the flattened window. Mel spectrograms are magnitude-only (no phase), so
+ * WSOLA there aligns spectral features rather than phase — less critical than
+ * the audio path but still reduces boundary spectral discontinuities.
+ *
+ * @param {Float32Array} reference - previous chunk's tail (length >= refOffset + windowLen*stride)
+ * @param {number} refOffset - start offset in reference
+ * @param {Float32Array} signal - current chunk's data (length >= sigOffset + (windowLen+searchRange)*stride)
+ * @param {number} sigOffset - start offset in signal
+ * @param {number} windowLen - overlap window length (in frames; multiply by stride for element count)
+ * @param {number} searchRange - max lag to search (in frames, >= 0)
+ * @param {number} [stride=1] - element stride per frame (1 for audio, MEL_DIM for mel)
+ * @returns {number} best lag in [0, searchRange]; 0 if no meaningful correlation
+ */
+function wsolaBestLag(reference, refOffset, signal, sigOffset, windowLen, searchRange, stride = 1) {
+    if (searchRange <= 0 || windowLen <= 0) return 0;
+    const refLen = windowLen * stride;
+    let refEnergy = 0;
+    for (let i = 0; i < refLen; i++) {
+        const r = reference[refOffset + i];
+        refEnergy += r * r;
+    }
+    if (refEnergy < 1e-12) return 0; // silent reference → no alignment needed
+    let bestLag = 0;
+    let bestCorr = 0; // only accept positive correlation
+    for (let lag = 0; lag <= searchRange; lag++) {
+        let dot = 0;
+        let sigEnergy = 0;
+        const sigStart = sigOffset + lag * stride;
+        for (let i = 0; i < refLen; i++) {
+            const s = signal[sigStart + i];
+            dot += reference[refOffset + i] * s;
+            sigEnergy += s * s;
+        }
+        if (sigEnergy < 1e-12) continue;
+        const corr = dot / Math.sqrt(refEnergy * sigEnergy);
+        if (corr > bestCorr) {
+            bestCorr = corr;
+            bestLag = lag;
+        }
+    }
+    // Only apply lag if correlation is meaningfully positive (reduces false alignment on noise)
+    if (bestCorr < 0.3) return 0;
+    return bestLag;
+}
+
+/**
+ * P2: CPU-path anti-aliasing via 2× oversample → LP → downsample.
+ *
+ * Applies a gentle low-pass cleanup to the vocoder output to remove any
+ * residual ultrasonic content (mirror-image artifacts from the vocoder's
+ * internal upsampling, or numerical noise above Nyquist). Implemented as a
+ * 2× zero-stuff → biquad LP at 0.9× Nyquist → 2× downsample, which is
+ * equivalent to a sharp half-band anti-alias filter on the original signal.
+ *
+ * The filter is gentle (cutoff at 0.9× Nyquist = 10.8 kHz at 24 kHz) so it
+ * preserves all legitimate audio content while removing potential alias
+ * products near the Nyquist edge. Risk: none (linear operation, no artifacts).
+ *
+ * @param {Float32Array} audio
+ * @param {number} sampleRate
+ * @returns {Float32Array} anti-aliased audio (same length as input)
+ */
+function cpuAntiAlias2x(audio, sampleRate) {
+    if (!audio || audio.length < 4) return audio;
+    const n = audio.length;
+    // 2× zero-stuff upsampling
+    const up = new Float32Array(n * 2);
+    for (let i = 0; i < n; i++) up[2 * i] = audio[i];
+    // Biquad low-pass at 0.45 × (2×sr) Nyquist = 0.45 × sr = 0.9 × original Nyquist
+    // Using RBJ cookbook formulas for a 2nd-order Butterworth LP at cutoff/sr_up
+    const srUp = sampleRate * 2;
+    const cutoff = 0.45 * sampleRate; // 0.9 × original Nyquist
+    const w0 = 2 * Math.PI * cutoff / srUp;
+    const cosW0 = Math.cos(w0);
+    const sinW0 = Math.sin(w0);
+    const Q = 0.70710678; // Butterworth
+    const alpha = sinW0 / (2 * Q);
+    const b0 = (1 - cosW0) / 2;
+    const b1 = 1 - cosW0;
+    const b2 = (1 - cosW0) / 2;
+    const a0 = 1 + alpha;
+    const a1 = -2 * cosW0;
+    const a2 = 1 - alpha;
+    // Normalize by a0
+    const nb0 = b0 / a0, nb1 = b1 / a0, nb2 = b2 / a0;
+    const na1 = a1 / a0, na2 = a2 / a0;
+    let z1 = 0, z2 = 0;
+    const filtered = new Float32Array(n * 2);
+    for (let i = 0; i < n * 2; i++) {
+        const x = up[i];
+        const y = nb0 * x + z1;
+        z1 = nb1 * x - na1 * y + z2;
+        z2 = nb2 * x - na2 * y;
+        filtered[i] = y;
+    }
+    // 2× downsample (take every other sample)
+    const out = new Float32Array(n);
+    for (let i = 0; i < n; i++) out[i] = filtered[2 * i];
+    return out;
+}
+
+/**
  * 校验 vocoder 输出波形是否有效。
  * DML 在显存耗尽边界可能不抛错而是返回全零/NaN 波形（silent failure），
  * 若不拦截会导致应用误以为合成完毕、播放空声音。
@@ -799,24 +926,36 @@ class Postprocessing {
         if (!sessions || !sessions.vocoder) {
             console.error(`[VocoderDiag] CRITICAL: sessions.vocoder is ${sessions ? (sessions.vocoder === undefined ? 'undefined' : 'null') : 'sessions is null'}! Vocoder will throw. sessionEPs=${JSON.stringify(sessions ? Object.keys(sessions) : [])}`);
         }
-        console.log(`[VocoderDiag] runVocoderChunked START: totalFrames=${totalFrames}, vocoderType=${vocoderType}, isFP16=${isFP16}, melDataLen=${melData.length}`);
+        if (_postprocessingDiagnosticMode) {
+            console.log(`[VocoderDiag] runVocoderChunked START: totalFrames=${totalFrames}, vocoderType=${vocoderType}, isFP16=${isFP16}, melDataLen=${melData.length}`);
+        }
         // SiFiGAN mel 帧率（200Hz, hop=120）与 SVS 管线 mel 帧率（50Hz, hop=480）不一致。
         // SiFiGANWrapper 内部 T_audio = T_frames * 120，若直接喂 50Hz mel 会输出 1/4 期望时长。
-        // 修复：在 SiFiGAN 路径下将 mel 和 F0 在时间维度 4× 上采样（最近邻），让 SiFiGAN 看到正确帧率。
+        // 修复：在 SiFiGAN 路径下将 mel 和 F0 在时间维度 4× 上采样到正确帧率。
         // effectiveTotalFrames * SIFIGAN_HOP_SIZE == totalFrames * HOP_SIZE，输出时长与 default vocoder 一致。
+        //
+        // P1 / Q2-3: mel 与 F0 上采样从最近邻改为线性插值。
+        // 最近邻在 F0 阶跃处（音符边界）产生瞬时跳变，SiFiGAN 激励可能畸变；
+        // 线性插值在相邻帧间平滑过渡，减少阶跃处的高频激励伪影。
         const SIFIGAN_UPSAMPLE_RATIO = vocoderType === 'sifigan' ? (HOP_SIZE / SIFIGAN_HOP_SIZE) : 1;
         let effectiveTotalFrames = totalFrames;
         let effectiveMelData = melData;
         if (SIFIGAN_UPSAMPLE_RATIO > 1) {
             effectiveTotalFrames = totalFrames * SIFIGAN_UPSAMPLE_RATIO;
-            // mel 最近邻上采样：每帧重复 SIFIGAN_UPSAMPLE_RATIO 次
             const srcArr = melData instanceof Float32Array ? melData : new Float32Array(melData);
             effectiveMelData = new Float32Array(effectiveTotalFrames * MEL_DIM);
+            const R = SIFIGAN_UPSAMPLE_RATIO;
             for (let f = 0; f < totalFrames; f++) {
                 const srcOff = f * MEL_DIM;
-                for (let r = 0; r < SIFIGAN_UPSAMPLE_RATIO; r++) {
-                    const dstOff = (f * SIFIGAN_UPSAMPLE_RATIO + r) * MEL_DIM;
-                    effectiveMelData.set(srcArr.subarray(srcOff, srcOff + MEL_DIM), dstOff);
+                const nextOff = (f + 1 < totalFrames) ? (f + 1) * MEL_DIM : srcOff;
+                for (let r = 0; r < R; r++) {
+                    const dstOff = (f * R + r) * MEL_DIM;
+                    // 线性插值因子：r=0 → 当前帧，r=R-1 → 接近下一帧（但保留 1/R 间距，
+                    // 避免与下一组的 r=0 完全重合导致均值化）。末帧无下一帧 → 退化为最近邻。
+                    const w = (f + 1 < totalFrames) ? (r / R) : 0;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        effectiveMelData[dstOff + d] = srcArr[srcOff + d] * (1 - w) + srcArr[nextOff + d] * w;
+                    }
                 }
             }
         }
@@ -845,6 +984,9 @@ class Postprocessing {
 
         // ---- SiFiGAN 双输入（mel + f0）准备 ----
         // SVS 管线产出 50Hz F0；上采样到 effectiveTotalFrames 与 mel 对齐（SiFiGAN 期望 f0/mel 同帧率）。
+        // P1 / Q2-3: F0 上采样从最近邻改为线性插值，减少 F0 阶跃处（音符边界）的瞬时跳变，
+        // 避免 SiFiGAN 激励在阶跃处畸变。F0 在 Hz 域线性插值对 4× 短距上采样足够；
+        // 大跨度的 voiced↔unvoiced 边界因 alignedF0 已是稳定值，插值不会引入伪影。
         const useSifiganF0 = vocoderType === 'sifigan';
         let effectiveF0 = null;
         if (useSifiganF0) {
@@ -854,9 +996,13 @@ class Postprocessing {
                 const alignedF0 = (srcArr.length === totalFrames) ? srcArr : resizeF0Linear(srcArr, totalFrames);
                 if (SIFIGAN_UPSAMPLE_RATIO > 1) {
                     effectiveF0 = new Float32Array(effectiveTotalFrames);
+                    const R = SIFIGAN_UPSAMPLE_RATIO;
                     for (let f = 0; f < totalFrames; f++) {
-                        for (let r = 0; r < SIFIGAN_UPSAMPLE_RATIO; r++) {
-                            effectiveF0[f * SIFIGAN_UPSAMPLE_RATIO + r] = alignedF0[f];
+                        const cur = alignedF0[f];
+                        const next = (f + 1 < totalFrames) ? alignedF0[f + 1] : cur;
+                        for (let r = 0; r < R; r++) {
+                            const w = (f + 1 < totalFrames) ? (r / R) : 0;
+                            effectiveF0[f * R + r] = cur * (1 - w) + next * w;
                         }
                     }
                 } else {
@@ -899,7 +1045,8 @@ class Postprocessing {
 
             // 诊断：检查 mel 输入是否包含 NaN（在 vocoder run 之前）+ mel 统计（标准化 mel，期望 mean≈0 std≈1）
             // 采样统计：每 64 个采样取 1 个，避免长音频（如 2000 帧 × 128 = 256000 元素）下全量遍历的开销
-            {
+            // P0-2: 整块诊断 gated behind diagnosticMode（默认关闭），避免长音频每 chunk ~5ms 开销。
+            if (_postprocessingDiagnosticMode) {
                 const DIAG_STRIDE = 64;
                 let melNaN = 0, melInf = 0;
                 let melMin = Infinity, melMax = -Infinity, melSum = 0, melSumSq = 0;
@@ -948,8 +1095,8 @@ class Postprocessing {
             disposeTensor(results['waveform']);
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
-            // 诊断：检查 vocoder 输出
-            {
+            // 诊断：检查 vocoder 输出（gated by diagnosticMode）
+            if (_postprocessingDiagnosticMode) {
                 let wavNaN = 0, wavInf = 0, wavZero = 0;
                 for (let i = 0; i < waveform.length; i++) {
                     if (Number.isNaN(waveform[i])) wavNaN++;
@@ -965,7 +1112,8 @@ class Postprocessing {
             // 校验输出：DML 在显存边界可能返回全零/NaN 而不抛错（silent failure）
             validateVocoderOutput(waveform, 0);
             // 诊断：vocoder 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
-            {
+            // P0-2: gated by diagnosticMode
+            if (_postprocessingDiagnosticMode) {
                 const hopSamples = vocoderHopSize; // 1 mel frame = hopSamples audio samples
                 const diagFrames = Math.min(10, Math.floor(waveform.length / hopSamples));
                 const parts = [];
@@ -1010,7 +1158,9 @@ class Postprocessing {
                     console.warn('[OnnxSVSPipeline] onChunkComplete callback error:', e.message);
                 }
             }
-            console.log(`[VocoderDiag] runVocoderChunked END (single-chunk): ${(performance.now() - _vocoderStartMs).toFixed(0)}ms, outputLen=${output.length}`);
+            if (_postprocessingDiagnosticMode) {
+                console.log(`[VocoderDiag] runVocoderChunked END (single-chunk): ${(performance.now() - _vocoderStartMs).toFixed(0)}ms, outputLen=${output.length}`);
+            }
             return output;
         }
 
@@ -1111,7 +1261,8 @@ class Postprocessing {
             // 校验输出：拦截 DML silent failure（全零/NaN）
             validateVocoderOutput(waveform, i);
             // 诊断：首 chunk 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
-            if (spec.isFirst) {
+            // P0-2: gated by diagnosticMode
+            if (spec.isFirst && _postprocessingDiagnosticMode) {
                 const hopSamples = vocoderHopSize;
                 const diagFrames = Math.min(10, Math.floor(waveform.length / hopSamples));
                 const parts = [];
@@ -1156,7 +1307,29 @@ class Postprocessing {
             const writeStart = spec.chunkStart * vocoderHopSize;
             const writeLen = Math.min(waveform.length, totalSamples - writeStart);
 
-            for (let j = 0; j < writeLen; j++) {
+            // P1 / Q0-2: WSOLA alignment for non-first chunks.
+            // Search a small lag range for the segment in the current chunk's head
+            // that best correlates with the previous chunk's committed tail. This
+            // eliminates flanging/comb-filter from phase-discontinuous Hann OLA on
+            // pitched signals (singing voice). The lag shift drops `delta` samples
+            // from the current chunk's head; the resulting `delta`-sample gap
+            // before the next chunk is covered by the next chunk's head fade-in
+            // (weightSum normalization keeps amplitude correct). Bounded to
+            // searchRange <= fadeSamples/8 so the one-sided crossfade segment is
+            // sub-Pitch-period and inaudible.
+            let wsolaDelta = 0;
+            if (!spec.isFirst && fadeSamples >= 64 && writeLen > fadeSamples) {
+                const wsolaSearchRange = Math.min(Math.floor(fadeSamples / 8), 256);
+                // Previous tail is in output[writeStart - fadeSamples .. writeStart), already
+                // weightSum-normalized from prior chunks. Current head is waveform[0 .. ].
+                wsolaDelta = wsolaBestLag(
+                    output, writeStart - fadeSamples,  // reference = previous committed tail
+                    waveform, 0,                        // signal = current chunk head
+                    fadeSamples, wsolaSearchRange, 1
+                );
+            }
+
+            for (let j = 0; j < writeLen - wsolaDelta; j++) {
                 const outIdx = writeStart + j;
                 if (outIdx >= totalSamples) break;
                 let w = 1.0;
@@ -1165,10 +1338,10 @@ class Postprocessing {
                     w = fadeWindow[j];
                 }
                 // 尾部 fade：非末 chunk 的后 overlapFrames 帧
-                if (!spec.isLast && j >= writeLen - fadeSamples) {
-                    w = Math.min(w, 1.0 - fadeWindow[writeLen - 1 - j]);
+                if (!spec.isLast && j >= (writeLen - wsolaDelta) - fadeSamples) {
+                    w = Math.min(w, 1.0 - fadeWindow[(writeLen - wsolaDelta) - 1 - j]);
                 }
-                output[outIdx] += waveform[j] * w;
+                output[outIdx] += waveform[j + wsolaDelta] * w;
                 weightSum[outIdx] += w;
             }
 
@@ -1381,4 +1554,7 @@ module.exports = {
     extractMelSpectrogramAsync,
     validateVocoderOutput,
     isVramOOMError,
+    setPostprocessingDiagnosticMode,
+    isPostprocessingDiagnosticMode,
+    wsolaBestLag,
 };

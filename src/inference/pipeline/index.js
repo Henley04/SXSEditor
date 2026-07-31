@@ -9,8 +9,8 @@ const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBes
 const { buildSessionOptions } = require('../shared/ortOptions');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
-const { Diffusion } = require('./diffusion');
-const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram } = require('./postprocessing');
+const { Diffusion, setDiagnosticMode: setDiffusionDiagnosticMode, isDiagnosticMode: isDiffusionDiagnosticMode, noteOomEvent } = require('./diffusion');
+const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram, setPostprocessingDiagnosticMode } = require('./postprocessing');
 const { AudioSegmentation } = require('./audioSegmentation');
 const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain, gpuDrainLong } = require('./utils');
 const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
@@ -114,6 +114,15 @@ class OnnxSVSPipeline {
         this._diffusion = new Diffusion();
         this._postprocessing = new Postprocessing();
         this._audioSegmentation = new AudioSegmentation();
+
+        // P0-3: 动态 diffStep 释放标志。默认 false；当 vocoder 推理捕获 isVramOOMError
+        // 时置 true，后续 segment 的 _maybeUnloadDiffStepBeforeVocoder 据此强制释放。
+        // 用户显式开启 releaseDiffStepBeforeVocoder 时无需此标志。
+        this._diffStepReleaseForcedByOom = false;
+        // P1: 当前合成的 CFG 调度配置（由 _synthesizeImpl / synthesizeMultiStreaming 写入）
+        this._currentCfgSchedule = null;
+        // Q2-2: 当前合成的 F0 序列（50Hz），供分块扩散做 F0 感知边界规划
+        this._currentF0ForChunking = null;
     }
 
     /**
@@ -1633,6 +1642,18 @@ class OnnxSVSPipeline {
                 this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
                 this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames
             );
+        } catch (err) {
+            // P0-3: 捕获 vocoder OOM → 设置动态释放标志，后续 segment 会在 vocoder 前
+            // 释放 diffStep。同时通知 diffusion 模块加长下一次 gpuDrain（adaptiveGpuDrain）。
+            try {
+                const { isVramOOMError } = require('./postprocessing');
+                if (isVramOOMError(err)) {
+                    console.warn('[OnnxSVSPipeline] Vocoder OOM detected; enabling dynamic diffStep release before next vocoder inference.');
+                    this._diffStepReleaseForcedByOom = true;
+                    try { noteOomEvent(); } catch (_) {}
+                }
+            } catch (_) {}
+            throw err;
         } finally {
             // Vocoder 推理完成（或抛错）后立即重载 diffStep，保持 session 状态一致：
             // - 多 segment 合成的下一段需要 diffStep
@@ -1684,9 +1705,17 @@ class OnnxSVSPipeline {
         try {
             const { loadSettings } = require('../../main/settings');
             const settings = loadSettings();
-            if (settings.releaseDiffStepBeforeVocoder !== true) {
-                console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings.releaseDiffStepBeforeVocoder=${settings.releaseDiffStepBeforeVocoder})`);
+            // P0-3: 默认关闭，改为 OOM 后动态启用。
+            // 当 settings.releaseDiffStepBeforeVocoder=true（用户显式开启）或
+            // this._diffStepReleaseForcedByOom=true（vocoder 曾捕获 OOM）时释放。
+            const userEnabled = settings.releaseDiffStepBeforeVocoder === true;
+            const oomForced = this._diffStepReleaseForcedByOom === true;
+            if (!userEnabled && !oomForced) {
+                console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings.releaseDiffStepBeforeVocoder=${settings.releaseDiffStepBeforeVocoder}, oomForced=${oomForced})`);
                 return false;
+            }
+            if (oomForced && !userEnabled) {
+                console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: OOM-forced release active (previous vocoder OOM detected), releasing diffStep before vocoder.');
             }
         } catch (e) {
             console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings load failed: ${e.message})`);
@@ -1747,17 +1776,98 @@ class OnnxSVSPipeline {
         }
     }
 
+    /**
+     * P1: 归一化 CFG 调度配置。接受用户/UI 传入的 cfgSchedule 对象，校验并填充默认值。
+     *
+     * 支持的 mode（inference-only，零训练）：
+     *   - 'fixed'   : 常量 cfgStrength（旧逻辑）
+     *   - 'linear'  : 线性低→高 ramp
+     *   - 'cosine'  : 余弦低→高 ramp（默认，过渡更平滑）
+     *
+     * 低→高调度（A-CFG, NeurIPS 2025, arXiv:2507.08965 / dynamic CFG）：
+     * 早期低引导让模型自由探索，后期高引导锁定条件，减少过曝光 / 过 articulation 伪影。
+     *
+     * 默认 cosine：startStrength=1.0（早期弱引导），endStrength=cfgStrength（后期完整引导）。
+     * 当 cfgSchedule 缺省或 mode='fixed' 时返回 null（diffusion.js 退回常量行为）。
+     *
+     * @param {*} raw - 用户/UI 传入的 cfgSchedule（可能为 null/undefined/对象）
+     * @param {number} cfgStrength - 当前生效的常量 CFG 强度，用于填充 endStrength 默认
+     * @returns {{mode: string, startStrength: number, endStrength: number}|null}
+     */
+    _normalizeCfgSchedule(raw, cfgStrength) {
+        if (!raw || typeof raw !== 'object') return null;
+        let mode = String(raw.mode || 'fixed').toLowerCase();
+        if (!['fixed', 'linear', 'cosine'].includes(mode)) mode = 'fixed';
+        if (mode === 'fixed') return null; // fixed 等价于旧常量行为，无需传 schedule
+        let startStrength = Number(raw.startStrength);
+        let endStrength = Number(raw.endStrength);
+        if (!Number.isFinite(startStrength) || startStrength < 0) startStrength = 1.0;
+        if (!Number.isFinite(endStrength) || endStrength < 0) endStrength = Number.isFinite(cfgStrength) ? cfgStrength : 3.0;
+        // 上限保护：CFG 强度过高（>10）会严重过曝光，限制在合理范围。
+        startStrength = Math.min(startStrength, 10);
+        endStrength = Math.min(endStrength, 10);
+        return { mode, startStrength, endStrength };
+    }
+
+    /**
+     * P0-2: 同步诊断模式开关到 diffusion 模块。
+     * 从 settings.diagnosticMode 读取，调用 setDiffusionDiagnosticMode +
+     * setPostprocessingDiagnosticMode。每次合成前调用，确保运行中改设置后下次合成生效。
+     */
+    _applyDiagnosticMode() {
+        let enabled = false;
+        try {
+            const { loadSettings } = require('../../main/settings');
+            const settings = loadSettings();
+            enabled = settings.diagnosticMode === true;
+        } catch (_) {
+            enabled = false;
+        }
+        try {
+            setDiffusionDiagnosticMode(enabled);
+        } catch (_) {}
+        try {
+            setPostprocessingDiagnosticMode(enabled);
+        } catch (_) {}
+    }
+
+    /**
+     * P1: cfgRescale 范围校验。
+     * 论文与 SVS 社区共识：CFG rescale 甜区 0.5-0.7。0.75 偏高，部分歌手会产生过
+     * articulation。这里做软校验：超出 [0, 1] 钳制；超出 [0.3, 0.9] 仅 warning，
+     * 不强制改值（保留用户控制权）。返回校验后的值。
+     * @param {number} raw
+     * @returns {number}
+     */
+    _validateCfgRescale(raw) {
+        let v = Number(raw);
+        if (!Number.isFinite(v)) return CFG_RESCALE;
+        if (v < 0) v = 0;
+        if (v > 1) v = 1;
+        if (v > 0.85) {
+            console.warn(`[OnnxSVSPipeline] cfgRescale=${v} is very high (sweet spot 0.5-0.7 for SVS); high values may cause over-articulation / harshness.`);
+        } else if (v < 0.3 && v > 0) {
+            console.warn(`[OnnxSVSPipeline] cfgRescale=${v} is very low; CFG rescale may be ineffective and produce unstable output.`);
+        }
+        return v;
+    }
+
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null) {
-        const samplerName = this._currentSamplerName || 'euler';
+        const samplerName = this._currentSamplerName || 'stork2';
         console.log(`[OnnxSVSPipeline] Diffusion start: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, totalSteps=${totalSteps}, sampler=${samplerName}, isFP16=${this.isFP16}, diffStepIsFP16=${this.diffStepIsFP16}, ep=${this.sessionEPs.diffStep || 'unknown'}`);
         console.log(`[OnnxSVSPipeline] Session diffStep: type=${this.sessions.diffStep?.constructor?.name}, ep=${this.sessionEPs.diffStep}`);
+        // P1: CFG 强度调度（低→高）。由 _synthesizeImpl 从 options.cfgSchedule 写入。
+        // null/'fixed' 时退回常量 cfgStrength（旧逻辑）。
+        const cfgSchedule = this._currentCfgSchedule || null;
+        // Q2-2: F0 感知分块边界。仅分块路径消费；整段路径忽略。
+        const f0Data = this._currentF0ForChunking || null;
         // 分块扩散推理（仅预览路径启用，useStaticShapes 路径跳过）
         const chunkOpts = this._currentDiffStepChunkOpts;
         if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > chunkOpts.chunkFrames) {
             console.log(`[OnnxSVSPipeline] Using chunked diffusion: chunkFrames=${chunkOpts.chunkFrames}, overlapFrames=${chunkOpts.overlapFrames}, streaming=${!!onChunkMel}`);
-            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName);
+            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, cfgSchedule, f0Data);
         }
-        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName);
+        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName, cfgSchedule, f0Data);
     }
 
     async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0) {
@@ -2031,7 +2141,7 @@ class OnnxSVSPipeline {
         const overlapFrames = firstOpts.diffStepOverlapFrames !== undefined ? firstOpts.diffStepOverlapFrames : 50;
         const totalSteps = firstOpts.nSteps || DEFAULT_DIFF_STEPS;
         const cfgStrength = firstOpts.cfg !== undefined ? firstOpts.cfg : CFG_STRENGTH;
-        const cfgRescale = firstOpts.cfgRescale !== undefined ? firstOpts.cfgRescale : CFG_RESCALE;
+        const cfgRescale = this._validateCfgRescale(firstOpts.cfgRescale !== undefined ? firstOpts.cfgRescale : CFG_RESCALE);
         if (fragments.length > 1) {
             for (let fi = 1; fi < fragments.length; fi++) {
                 const o = fragments[fi].options || {};
@@ -2051,7 +2161,14 @@ class OnnxSVSPipeline {
             overlapFrames,
         };
         // 求解器名称（取首片段配置，多片段必须一致）
-        this._currentSamplerName = firstOpts.sampler || 'euler';
+        // P0-4: 默认采样器从 euler 改为 stork2（1 NFE 二阶稳定，对 FM 适用）。
+        this._currentSamplerName = firstOpts.sampler || 'stork2';
+        // P1: CFG 强度调度（低→高）。取首片段配置，多片段必须一致。
+        this._currentCfgSchedule = this._normalizeCfgSchedule(firstOpts.cfgSchedule, cfgStrength);
+        // Q2-2: F0 感知分块边界。多片段路径下取首片段 pitchCurveF0；分块内每段会重新规划。
+        this._currentF0ForChunking = firstOpts.pitchCurveF0 || null;
+        // P0-2: 诊断模式同步
+        this._applyDiagnosticMode();
 
         console.log(`[OnnxSVSPipeline] synthesizeMultiStreaming: ${fragments.length} fragments, chunkEnabled=${chunkEnabled}, chunkFrames=${chunkFrames}`);
 
@@ -2371,7 +2488,7 @@ class OnnxSVSPipeline {
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
         const totalSteps = options.nSteps || DEFAULT_DIFF_STEPS;
         const cfgStrength = options.cfg !== undefined ? options.cfg : CFG_STRENGTH;
-        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : CFG_RESCALE;
+        const cfgRescale = this._validateCfgRescale(options.cfgRescale !== undefined ? options.cfgRescale : CFG_RESCALE);
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
         const npuDiffBatchSize = options.npuDiffBatchSize || 4;
@@ -2379,7 +2496,22 @@ class OnnxSVSPipeline {
         const onChunkAudio = options.onChunkAudio || null;
 
         // 求解器名称（透传到 _runDiffusionLoop → diffusion.js）
-        this._currentSamplerName = options.sampler || 'euler';
+        // P0-4: 默认采样器从 euler 改为 stork2（1 NFE 二阶稳定，对 FM 适用）。
+        this._currentSamplerName = options.sampler || 'stork2';
+
+        // P1: CFG 强度调度（低→高）。options.cfgSchedule 形如
+        //   { mode: 'fixed'|'linear'|'cosine', startStrength, endStrength }
+        // null/'fixed'/缺省 → 退回常量 cfgStrength（旧逻辑）。
+        // 由 _runDiffusionLoop 透传到 diffusion.runDiffusionLoop[Chunked]。
+        this._currentCfgSchedule = this._normalizeCfgSchedule(options.cfgSchedule, cfgStrength);
+
+        // Q2-2: F0 序列（50Hz），供 _planChunks 做 F0 感知分块边界（RDSinger）。
+        // 仅分块预览路径消费；整段路径忽略。pitchCurveF0 是绝对时间 F0 曲线。
+        this._currentF0ForChunking = pitchCurveF0 || null;
+
+        // P0-2: 诊断模式开关（默认关闭）。开启后 diffusion / vocoder 逐 chunk/逐步
+        // 统计日志恢复输出。每次合成前根据 settings 同步，避免运行中改设置不生效。
+        this._applyDiagnosticMode();
 
         // diffStep 分块推理选项（仅预览路径传入，导出不传 → 默认关闭）
         this._currentDiffStepChunkOpts = {

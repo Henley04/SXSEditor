@@ -178,6 +178,14 @@ class AudioSegmentation {
         // singerId 必须纳入缓存键：分片移动到不同歌手时，即使参考音频内容相同（或均为空），
         // 也必须触发重新合成，否则会命中旧缓存返回上一个歌手的音频。
         const singerId = options.singerId || null;
+        // P1: CFG 调度（低→高）影响每步实际生效的 CFG 强度，进而影响合成结果，
+        // 必须纳入缓存键，否则改 schedule 会命中旧缓存。
+        const cfgSchedule = options.cfgSchedule || null;
+        const cfgScheduleKey = cfgSchedule
+            ? `sch_${cfgSchedule.mode}_${cfgSchedule.startStrength}_${cfgSchedule.endStrength}`
+            : 'sch_none';
+        // P0-4: 采样器影响扩散轨迹，必须纳入缓存键
+        const samplerName = options.sampler || 'stork2';
 
         let notesHash = 0;
         for (let i = 0; i < notes.length; i++) {
@@ -207,19 +215,27 @@ class AudioSegmentation {
 
         const f0Hash = this.hashArray(pitchCurveF0);
 
+        // P2-3: refHash 改用 FNV-1a 全长采样。
+        // 旧实现仅扫前 4000 字节 + 多项式哈希，长参考音频易碰撞（不同录音前 4KB 相同即误命中）。
+        // 改用与 hashArray 相同的 FNV-1a 32-bit，按步长采样覆盖全长，雪崩效应更好。
         let refHash = 0;
         if (refAudioWavBuffer) {
             const buf = refAudioWavBuffer instanceof ArrayBuffer ? new Uint8Array(refAudioWavBuffer) :
                         Buffer.isBuffer(refAudioWavBuffer) ? refAudioWavBuffer : null;
             if (buf) {
-                refHash = buf.length;
-                for (let i = 0; i < Math.min(buf.length, 4000); i += Math.max(1, Math.floor(buf.length / 2000))) {
-                    refHash = ((refHash << 5) - refHash + buf[i]) | 0;
+                let h = 0x811c9dc5; // FNV-1a offset basis
+                const step = Math.max(1, Math.floor(buf.length / 2000));
+                for (let i = 0; i < buf.length; i += step) {
+                    h ^= buf[i];
+                    h = Math.imul(h, 0x01000193); // FNV-1a prime
                 }
+                h ^= buf.length;
+                h = Math.imul(h, 0x01000193);
+                refHash = h | 0;
             }
         }
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_${samplerName}_${cfgScheduleKey}`;
     }
 
     /**

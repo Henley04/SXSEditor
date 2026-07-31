@@ -166,6 +166,9 @@ export async function playAll() {
             nSteps: inferenceOpts.nSteps,
             cfg: inferenceOpts.cfg,
             cfgRescale: inferenceOpts.cfgRescale,
+            sampler: inferenceOpts.sampler,
+            // P1: CFG 强度调度（低→高）
+            cfgSchedule: inferenceOpts.cfgSchedule,
             diffStepChunk: true,
             diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
             diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
@@ -395,6 +398,9 @@ export async function playAll() {
             nSteps: inferenceOpts.nSteps,
             cfg: inferenceOpts.cfg,
             cfgRescale: inferenceOpts.cfgRescale,
+            sampler: inferenceOpts.sampler,
+            // P1: CFG 强度调度（低→高）
+            cfgSchedule: inferenceOpts.cfgSchedule,
             diffStepChunk: false,
             diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
             diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
@@ -500,12 +506,14 @@ export function getPreviewInferenceOptions() {
     nSteps: state.audioSettings?.previewDiffSteps ?? 16,
     cfg: state.audioSettings?.previewCfgStrength ?? 3.0,
     cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.75,
-    sampler: state.audioSettings?.previewSampler ?? 'euler',
+    sampler: state.audioSettings?.previewSampler ?? 'stork2',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     diffStepChunk: state.audioSettings?.previewDiffStepChunkEnabled === true,
     diffStepChunkFrames: state.audioSettings?.previewDiffStepChunkFrames ?? 500,
     diffStepOverlapFrames: state.audioSettings?.previewDiffStepOverlapFrames ?? 50,
+    // P1: CFG 强度调度（低→高）。pipeline 侧 mode='fixed'/null 退回常量行为。
+    cfgSchedule: buildCfgSchedule(state.audioSettings, 'preview'),
   };
 }
 
@@ -514,10 +522,29 @@ export function getExportInferenceOptions() {
     nSteps: state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.exportCfgStrength ?? 3.0,
     cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.75,
-    sampler: state.audioSettings?.exportSampler ?? 'euler',
+    sampler: state.audioSettings?.exportSampler ?? 'stork2',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
+    cfgSchedule: buildCfgSchedule(state.audioSettings, 'export'),
   };
+}
+
+/**
+ * P1: 从 settings 构建 cfgSchedule 对象，传给 pipeline._normalizeCfgSchedule。
+ * 缺省或 mode='fixed' 时返回 null（pipeline 退回常量 cfgStrength 行为）。
+ * 默认 mode='cosine'：A-CFG / dynamic CFG 文献表明早期低引导、后期高引导可减少伪影。
+ */
+function buildCfgSchedule(settings, prefix) {
+  if (!settings) return null;
+  const mode = settings[`${prefix}CfgScheduleMode`];
+  if (!mode || mode === 'fixed') return null;
+  if (!['linear', 'cosine'].includes(mode)) return null;
+  const cfgStrength = settings[`${prefix}CfgStrength`] ?? 3.0;
+  const startStrength = Number.isFinite(settings[`${prefix}CfgScheduleStartStrength`])
+    ? settings[`${prefix}CfgScheduleStartStrength`] : 1.0;
+  const endStrength = Number.isFinite(settings[`${prefix}CfgScheduleEndStrength`])
+    ? settings[`${prefix}CfgScheduleEndStrength`] : cfgStrength;
+  return { mode, startStrength, endStrength };
 }
 
 export function applyAudioSettings() {
@@ -966,6 +993,7 @@ export async function exportAll() {
  * @param {number} opts.nSteps - 扩散步数
  * @param {number} opts.cfg - CFG 引导强度
  * @param {number} opts.cfgRescale - CFG Rescale 系数
+ * @param {Object} [opts.cfgSchedule] - CFG 强度调度 {mode, startStrength, endStrength}
  * @param {boolean} opts.autoShift - 是否启用 Auto Shift
  * @param {Function} [opts.onFragmentProgress] - 单分片推理进度回调 (progress: 0-100)
  * @param {Function} [opts.onOverallProgress] - 总体进度回调 (progress: 0-100)
@@ -978,6 +1006,7 @@ export async function runExportJob(opts) {
     cfg,
     cfgRescale,
     sampler,
+    cfgSchedule,
     autoShift,
     onFragmentProgress,
     onOverallProgress,
@@ -1071,6 +1100,8 @@ export async function runExportJob(opts) {
           cfg,
           cfgRescale,
           sampler,
+          // P1: CFG 强度调度（低→高）
+          cfgSchedule,
         },
       });
 

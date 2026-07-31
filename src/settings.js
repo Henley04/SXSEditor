@@ -30,6 +30,14 @@ const previewCfgStrengthSlider = document.getElementById('previewCfgStrength');
 const previewCfgStrengthValue = document.getElementById('previewCfgStrengthValue');
 const previewCfgRescaleSlider = document.getElementById('previewCfgRescale');
 const previewCfgRescaleValue = document.getElementById('previewCfgRescaleValue');
+// P1: CFG 强度调度（低→高）UI 引用
+const previewCfgScheduleModeSelect = document.getElementById('previewCfgScheduleMode');
+const previewCfgScheduleCurveGroup = document.getElementById('previewCfgScheduleCurveGroup');
+const previewCfgScheduleEndGroup = document.getElementById('previewCfgScheduleEndGroup');
+const previewCfgScheduleStartStrengthSlider = document.getElementById('previewCfgScheduleStartStrength');
+const previewCfgScheduleStartStrengthValue = document.getElementById('previewCfgScheduleStartStrengthValue');
+const previewCfgScheduleEndStrengthSlider = document.getElementById('previewCfgScheduleEndStrength');
+const previewCfgScheduleEndStrengthValue = document.getElementById('previewCfgScheduleEndStrengthValue');
 const previewDiffStepChunkEnabledCheckbox = document.getElementById('previewDiffStepChunkEnabled');
 const previewDiffStepChunkGroup = document.getElementById('previewDiffStepChunkGroup');
 const previewDiffStepChunkFramesSlider = document.getElementById('previewDiffStepChunkFrames');
@@ -43,6 +51,14 @@ const exportCfgStrengthSlider = document.getElementById('exportCfgStrength');
 const exportCfgStrengthValue = document.getElementById('exportCfgStrengthValue');
 const exportCfgRescaleSlider = document.getElementById('exportCfgRescale');
 const exportCfgRescaleValue = document.getElementById('exportCfgRescaleValue');
+// P1: CFG 强度调度（低→高）UI 引用（导出）
+const exportCfgScheduleModeSelect = document.getElementById('exportCfgScheduleMode');
+const exportCfgScheduleCurveGroup = document.getElementById('exportCfgScheduleCurveGroup');
+const exportCfgScheduleEndGroup = document.getElementById('exportCfgScheduleEndGroup');
+const exportCfgScheduleStartStrengthSlider = document.getElementById('exportCfgScheduleStartStrength');
+const exportCfgScheduleStartStrengthValue = document.getElementById('exportCfgScheduleStartStrengthValue');
+const exportCfgScheduleEndStrengthSlider = document.getElementById('exportCfgScheduleEndStrength');
+const exportCfgScheduleEndStrengthValue = document.getElementById('exportCfgScheduleEndStrengthValue');
 const audioOutputModeSelect = document.getElementById('audioOutputMode');
 const audioOutputDeviceSelect = document.getElementById('audioOutputDevice');
 const audioSampleRateSelect = document.getElementById('audioSampleRate');
@@ -140,7 +156,7 @@ function applySavedSettingsToUI(currentSetting) {
     const pSteps = currentSetting.previewDiffSteps ?? 16;
     const pCfg = currentSetting.previewCfgStrength ?? 3.0;
     const pRescale = currentSetting.previewCfgRescale ?? 0.75;
-    const pSampler = currentSetting.previewSampler || 'euler';
+    const pSampler = currentSetting.previewSampler || 'stork2';
     previewDiffStepsSlider.value = pSteps;
     previewDiffStepsValue.textContent = pSteps;
     if (previewSamplerSelect) previewSamplerSelect.value = pSampler;
@@ -148,6 +164,20 @@ function applySavedSettingsToUI(currentSetting) {
     previewCfgStrengthValue.textContent = parseFloat(pCfg).toFixed(1);
     previewCfgRescaleSlider.value = pRescale;
     previewCfgRescaleValue.textContent = parseFloat(pRescale).toFixed(2);
+
+    // P1: CFG 强度调度（低→高）—— 预览
+    const pSchedMode = ['fixed', 'linear', 'cosine'].includes(currentSetting.previewCfgScheduleMode)
+        ? currentSetting.previewCfgScheduleMode : 'cosine';
+    const pSchedStart = Number.isFinite(currentSetting.previewCfgScheduleStartStrength)
+        ? currentSetting.previewCfgScheduleStartStrength : 1.0;
+    const pSchedEnd = Number.isFinite(currentSetting.previewCfgScheduleEndStrength)
+        ? currentSetting.previewCfgScheduleEndStrength : pCfg;
+    if (previewCfgScheduleModeSelect) previewCfgScheduleModeSelect.value = pSchedMode;
+    if (previewCfgScheduleStartStrengthSlider) previewCfgScheduleStartStrengthSlider.value = pSchedStart;
+    if (previewCfgScheduleStartStrengthValue) previewCfgScheduleStartStrengthValue.textContent = parseFloat(pSchedStart).toFixed(2);
+    if (previewCfgScheduleEndStrengthSlider) previewCfgScheduleEndStrengthSlider.value = pSchedEnd;
+    if (previewCfgScheduleEndStrengthValue) previewCfgScheduleEndStrengthValue.textContent = parseFloat(pSchedEnd).toFixed(2);
+    updateCfgScheduleVisibility('preview', pSchedMode);
 
     // diffStep 分块推理设置
     const pChunkEnabled = currentSetting.previewDiffStepChunkEnabled === true;
@@ -163,7 +193,7 @@ function applySavedSettingsToUI(currentSetting) {
     const eSteps = currentSetting.exportDiffSteps ?? 32;
     const eCfg = currentSetting.exportCfgStrength ?? 3.0;
     const eRescale = currentSetting.exportCfgRescale ?? 0.75;
-    const eSampler = currentSetting.exportSampler || 'euler';
+    const eSampler = currentSetting.exportSampler || 'stork2';
     exportDiffStepsSlider.value = eSteps;
     exportDiffStepsValue.textContent = eSteps;
     if (exportSamplerSelect) exportSamplerSelect.value = eSampler;
@@ -171,6 +201,20 @@ function applySavedSettingsToUI(currentSetting) {
     exportCfgStrengthValue.textContent = parseFloat(eCfg).toFixed(1);
     exportCfgRescaleSlider.value = eRescale;
     exportCfgRescaleValue.textContent = parseFloat(eRescale).toFixed(2);
+
+    // P1: CFG 强度调度（低→高）—— 导出
+    const eSchedMode = ['fixed', 'linear', 'cosine'].includes(currentSetting.exportCfgScheduleMode)
+        ? currentSetting.exportCfgScheduleMode : 'cosine';
+    const eSchedStart = Number.isFinite(currentSetting.exportCfgScheduleStartStrength)
+        ? currentSetting.exportCfgScheduleStartStrength : 1.0;
+    const eSchedEnd = Number.isFinite(currentSetting.exportCfgScheduleEndStrength)
+        ? currentSetting.exportCfgScheduleEndStrength : eCfg;
+    if (exportCfgScheduleModeSelect) exportCfgScheduleModeSelect.value = eSchedMode;
+    if (exportCfgScheduleStartStrengthSlider) exportCfgScheduleStartStrengthSlider.value = eSchedStart;
+    if (exportCfgScheduleStartStrengthValue) exportCfgScheduleStartStrengthValue.textContent = parseFloat(eSchedStart).toFixed(2);
+    if (exportCfgScheduleEndStrengthSlider) exportCfgScheduleEndStrengthSlider.value = eSchedEnd;
+    if (exportCfgScheduleEndStrengthValue) exportCfgScheduleEndStrengthValue.textContent = parseFloat(eSchedEnd).toFixed(2);
+    updateCfgScheduleVisibility('export', eSchedMode);
 
     // Audio settings
     if (currentSetting.audioOutputMode) audioOutputModeSelect.value = currentSetting.audioOutputMode;
@@ -474,6 +518,18 @@ function updateVocoderTypeUI(fileStatus) {
 function updateSifiganPrecisionVisibility(vocoderType) {
     if (!sifiganPrecisionGroup) return;
     sifiganPrecisionGroup.classList.toggle('hidden', vocoderType !== 'sifigan');
+}
+
+/**
+ * P1: 根据 CFG 调度模式显示/隐藏 start/end 强度滑块。
+ * 'fixed' 模式下隐藏（用上方常量 cfgStrength），'linear'/'cosine' 模式下显示。
+ */
+function updateCfgScheduleVisibility(prefix, mode) {
+    const curveGroup = (prefix === 'preview') ? previewCfgScheduleCurveGroup : exportCfgScheduleCurveGroup;
+    const endGroup = (prefix === 'preview') ? previewCfgScheduleEndGroup : exportCfgScheduleEndGroup;
+    const show = (mode === 'linear' || mode === 'cosine');
+    if (curveGroup) curveGroup.classList.toggle('hidden', !show);
+    if (endGroup) endGroup.classList.toggle('hidden', !show);
 }
 
 const PRECISION_LABELS = {
@@ -1020,14 +1076,21 @@ function collectSettings() {
         previewDiffSteps: parseInt(previewDiffStepsSlider.value),
         previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
         previewCfgRescale: parseFloat(previewCfgRescaleSlider.value),
-        previewSampler: previewSamplerSelect ? previewSamplerSelect.value : 'euler',
+        previewSampler: previewSamplerSelect ? previewSamplerSelect.value : 'stork2',
         previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : false,
         previewDiffStepChunkFrames: previewDiffStepChunkFramesSlider ? parseInt(previewDiffStepChunkFramesSlider.value) : 500,
         previewDiffStepOverlapFrames: previewDiffStepOverlapFramesSlider ? parseInt(previewDiffStepOverlapFramesSlider.value) : 50,
         exportDiffSteps: parseInt(exportDiffStepsSlider.value),
         exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
         exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
-        exportSampler: exportSamplerSelect ? exportSamplerSelect.value : 'euler',
+        exportSampler: exportSamplerSelect ? exportSamplerSelect.value : 'stork2',
+        // P1: CFG 强度调度（低→高）
+        previewCfgScheduleMode: previewCfgScheduleModeSelect ? previewCfgScheduleModeSelect.value : 'cosine',
+        previewCfgScheduleStartStrength: previewCfgScheduleStartStrengthSlider ? parseFloat(previewCfgScheduleStartStrengthSlider.value) : 1.0,
+        previewCfgScheduleEndStrength: previewCfgScheduleEndStrengthSlider ? parseFloat(previewCfgScheduleEndStrengthSlider.value) : 3.0,
+        exportCfgScheduleMode: exportCfgScheduleModeSelect ? exportCfgScheduleModeSelect.value : 'cosine',
+        exportCfgScheduleStartStrength: exportCfgScheduleStartStrengthSlider ? parseFloat(exportCfgScheduleStartStrengthSlider.value) : 1.0,
+        exportCfgScheduleEndStrength: exportCfgScheduleEndStrengthSlider ? parseFloat(exportCfgScheduleEndStrengthSlider.value) : 3.0,
         audioOutputMode: audioOutputModeSelect.value,
         audioOutputDevice: parseInt(audioOutputDeviceSelect.value),
         audioSampleRate: parseInt(audioSampleRateSelect.value),
@@ -1150,6 +1213,25 @@ previewCfgRescaleSlider.addEventListener('input', () => {
     previewCfgRescaleValue.textContent = parseFloat(previewCfgRescaleSlider.value).toFixed(2);
     applySettingsDebounced();
 });
+// P1: CFG 强度调度 —— 预览
+if (previewCfgScheduleModeSelect) {
+    previewCfgScheduleModeSelect.addEventListener('change', () => {
+        updateCfgScheduleVisibility('preview', previewCfgScheduleModeSelect.value);
+        applySettings();
+    });
+}
+if (previewCfgScheduleStartStrengthSlider) {
+    previewCfgScheduleStartStrengthSlider.addEventListener('input', () => {
+        previewCfgScheduleStartStrengthValue.textContent = parseFloat(previewCfgScheduleStartStrengthSlider.value).toFixed(2);
+        applySettingsDebounced();
+    });
+}
+if (previewCfgScheduleEndStrengthSlider) {
+    previewCfgScheduleEndStrengthSlider.addEventListener('input', () => {
+        previewCfgScheduleEndStrengthValue.textContent = parseFloat(previewCfgScheduleEndStrengthSlider.value).toFixed(2);
+        applySettingsDebounced();
+    });
+}
 // diffStep 分块推理设置
 if (previewDiffStepChunkEnabledCheckbox) {
     previewDiffStepChunkEnabledCheckbox.addEventListener('change', () => {
@@ -1181,6 +1263,25 @@ exportCfgRescaleSlider.addEventListener('input', () => {
     exportCfgRescaleValue.textContent = parseFloat(exportCfgRescaleSlider.value).toFixed(2);
     applySettingsDebounced();
 });
+// P1: CFG 强度调度 —— 导出
+if (exportCfgScheduleModeSelect) {
+    exportCfgScheduleModeSelect.addEventListener('change', () => {
+        updateCfgScheduleVisibility('export', exportCfgScheduleModeSelect.value);
+        applySettings();
+    });
+}
+if (exportCfgScheduleStartStrengthSlider) {
+    exportCfgScheduleStartStrengthSlider.addEventListener('input', () => {
+        exportCfgScheduleStartStrengthValue.textContent = parseFloat(exportCfgScheduleStartStrengthSlider.value).toFixed(2);
+        applySettingsDebounced();
+    });
+}
+if (exportCfgScheduleEndStrengthSlider) {
+    exportCfgScheduleEndStrengthSlider.addEventListener('input', () => {
+        exportCfgScheduleEndStrengthValue.textContent = parseFloat(exportCfgScheduleEndStrengthSlider.value).toFixed(2);
+        applySettingsDebounced();
+    });
+}
 
 // Language, precision, MIDI tool
 languageSelect.addEventListener('change', () => applySettings({ reloadLocale: true }));

@@ -162,12 +162,13 @@
                 <div class="setting-group">
                     <label for="previewSampler"><span data-i18n="settings.sampler">求解器</span></label>
                     <select id="previewSampler">
-                        <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，默认）</option>
+                        <option value="stork2" data-i18n="settings.samplerStork2">STORK-2（1 倍推理，论文原版，默认）</option>
+                        <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，低 NFE 兜底）</option>
                         <option value="heun" data-i18n="settings.samplerHeun">Heun（二阶，2 倍推理）</option>
+                        <option value="midpoint" data-i18n="settings.samplerMidpoint">Midpoint（二阶中点，2 倍推理）</option>
                         <option value="extrap" data-i18n="settings.samplerExtrap">Extrapolated Euler（1 倍推理）</option>
-                        <option value="stork2" data-i18n="settings.samplerStork2">STORK-2（1 倍推理，论文原版）</option>
                     </select>
-                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）；STORK-2 为论文原版 RKC 递推 + virtual NFE（每步 1 次推理 + 8 个 sub-stage）。分块预览时 Extrapolated Euler 与 STORK-2 均优势减弱。</p>
+                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。STORK-2 为默认（1 NFE 二阶稳定，对 FM 适用）；Euler 为低 NFE 兜底；Heun 为二阶改进欧拉（每步 2 次推理）；Midpoint 为二阶显式中点（每步 2 次推理，对 FM 直线轨迹更贴合）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）。分块预览时 Extrapolated Euler 与 STORK-2 均优势减弱。</p>
                 </div>
                 <div class="setting-group">
                     <label for="previewCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
@@ -178,6 +179,25 @@
                     <label for="previewCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
                     <input type="range" id="previewCfgRescale" min="0" max="1" value="0.75" step="0.05">
                     <p class="hint" data-i18n="settings.cfgRescaleHint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。推荐 0.5~0.9。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="previewCfgScheduleMode"><span data-i18n="settings.cfgScheduleMode">CFG 强度调度模式</span></label>
+                    <select id="previewCfgScheduleMode">
+                        <option value="fixed" data-i18n="settings.cfgScheduleModeFixed">固定值（常量）</option>
+                        <option value="linear" data-i18n="settings.cfgScheduleModeLinear">线性低→高</option>
+                        <option value="cosine" data-i18n="settings.cfgScheduleModeCosine">余弦低→高（推荐）</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.cfgScheduleModeHint">扩散早期用低引导（让模型自由探索），后期用高引导（锁定条件），可减少过曝光 / 过 articulation 伪影。余弦模式过渡更平滑（默认）。</p>
+                </div>
+                <div class="setting-group hidden" id="previewCfgScheduleCurveGroup">
+                    <label for="previewCfgScheduleStartStrength"><span data-i18n="settings.cfgScheduleStartStrength">起始强度（早期）</span> <span id="previewCfgScheduleStartStrengthValue" class="volume-display">1.0</span></label>
+                    <input type="range" id="previewCfgScheduleStartStrength" min="0" max="10" value="1.0" step="0.1">
+                    <p class="hint" data-i18n="settings.cfgScheduleStartStrengthHint">扩散第一步的 CFG 强度。低值（如 1.0）让早期生成更自由，减少伪影。</p>
+                </div>
+                <div class="setting-group hidden" id="previewCfgScheduleEndGroup">
+                    <label for="previewCfgScheduleEndStrength"><span data-i18n="settings.cfgScheduleEndStrength">结束强度（后期）</span> <span id="previewCfgScheduleEndStrengthValue" class="volume-display">3.0</span></label>
+                    <input type="range" id="previewCfgScheduleEndStrength" min="0" max="10" value="3.0" step="0.1">
+                    <p class="hint" data-i18n="settings.cfgScheduleEndStrengthHint">扩散最后一步的 CFG 强度。通常与上方 CFG 引导强度一致，确保最终贴合条件。</p>
                 </div>
                 <div class="setting-group">
                     <label class="device-mode-radio">
@@ -212,12 +232,13 @@
                 <div class="setting-group">
                     <label for="exportSampler"><span data-i18n="settings.sampler">求解器</span></label>
                     <select id="exportSampler">
-                        <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，默认）</option>
+                        <option value="stork2" data-i18n="settings.samplerStork2">STORK-2（1 倍推理，论文原版，默认）</option>
+                        <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，低 NFE 兜底）</option>
                         <option value="heun" data-i18n="settings.samplerHeun">Heun（二阶，2 倍推理）</option>
+                        <option value="midpoint" data-i18n="settings.samplerMidpoint">Midpoint（二阶中点，2 倍推理）</option>
                         <option value="extrap" data-i18n="settings.samplerExtrap">Extrapolated Euler（1 倍推理）</option>
-                        <option value="stork2" data-i18n="settings.samplerStork2">STORK-2（1 倍推理，论文原版）</option>
                     </select>
-                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）；STORK-2 为论文原版 RKC 递推 + virtual NFE（每步 1 次推理 + 8 个 sub-stage）。分块预览时 Extrapolated Euler 与 STORK-2 均优势减弱。</p>
+                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。STORK-2 为默认（1 NFE 二阶稳定，对 FM 适用）；Euler 为低 NFE 兜底；Heun 为二阶改进欧拉（每步 2 次推理）；Midpoint 为二阶显式中点（每步 2 次推理，对 FM 直线轨迹更贴合）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）。分块预览时 Extrapolated Euler 与 STORK-2 均优势减弱。</p>
                 </div>
                 <div class="setting-group">
                     <label for="exportCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
@@ -228,6 +249,25 @@
                     <label for="exportCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
                     <input type="range" id="exportCfgRescale" min="0" max="1" value="0.75" step="0.05">
                     <p class="hint" data-i18n="settings.exportCfgRescaleHint">导出时的 CFG Rescale 系数。</p>
+                </div>
+                <div class="setting-group">
+                    <label for="exportCfgScheduleMode"><span data-i18n="settings.cfgScheduleMode">CFG 强度调度模式</span></label>
+                    <select id="exportCfgScheduleMode">
+                        <option value="fixed" data-i18n="settings.cfgScheduleModeFixed">固定值（常量）</option>
+                        <option value="linear" data-i18n="settings.cfgScheduleModeLinear">线性低→高</option>
+                        <option value="cosine" data-i18n="settings.cfgScheduleModeCosine">余弦低→高（推荐）</option>
+                    </select>
+                    <p class="hint" data-i18n="settings.cfgScheduleModeHint">扩散早期用低引导（让模型自由探索），后期用高引导（锁定条件），可减少过曝光 / 过 articulation 伪影。余弦模式过渡更平滑（默认）。</p>
+                </div>
+                <div class="setting-group hidden" id="exportCfgScheduleCurveGroup">
+                    <label for="exportCfgScheduleStartStrength"><span data-i18n="settings.cfgScheduleStartStrength">起始强度（早期）</span> <span id="exportCfgScheduleStartStrengthValue" class="volume-display">1.0</span></label>
+                    <input type="range" id="exportCfgScheduleStartStrength" min="0" max="10" value="1.0" step="0.1">
+                    <p class="hint" data-i18n="settings.cfgScheduleStartStrengthHint">扩散第一步的 CFG 强度。低值（如 1.0）让早期生成更自由，减少伪影。</p>
+                </div>
+                <div class="setting-group hidden" id="exportCfgScheduleEndGroup">
+                    <label for="exportCfgScheduleEndStrength"><span data-i18n="settings.cfgScheduleEndStrength">结束强度（后期）</span> <span id="exportCfgScheduleEndStrengthValue" class="volume-display">3.0</span></label>
+                    <input type="range" id="exportCfgScheduleEndStrength" min="0" max="10" value="3.0" step="0.1">
+                    <p class="hint" data-i18n="settings.cfgScheduleEndStrengthHint">扩散最后一步的 CFG 强度。通常与上方 CFG 引导强度一致，确保最终贴合条件。</p>
                 </div>
             </div>
 

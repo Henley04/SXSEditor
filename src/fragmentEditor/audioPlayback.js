@@ -716,7 +716,22 @@ export async function exportFragment() {
     const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
     const envelopes = getEnvelopes();
     const stereoData = applyEnvelopesToAudio(paddedAudio, getSampleRate(), bpm, envelopes.volume, envelopes.pan);
-    const wavData = encodeWav(stereoData, getSampleRate(), 2);
+    // P1 / Q0-3: EBU R128 响度归一化 + true-peak 限制器（导出末端）。
+    let finalStereoData = stereoData;
+    const fragSettings = getFragmentAudioSettings();
+    if (fragSettings && fragSettings.exportLoudnessNormalize !== false) {
+      const { loudnessNormalizeAndLimit } = require('../audio/loudnessNormalize.js');
+      const targetLufs = Number.isFinite(fragSettings.exportLoudnessTargetLufs) ? fragSettings.exportLoudnessTargetLufs : -14.0;
+      const tpCeiling = Number.isFinite(fragSettings.exportTruePeakCeilingDb) ? fragSettings.exportTruePeakCeilingDb : -1.0;
+      // Stereo: normalize each channel, then limit the max channel true-peak.
+      const sr = getSampleRate();
+      const leftCh = loudnessNormalizeAndLimit(stereoData.subarray(0, stereoData.length / 2), sr, targetLufs, tpCeiling);
+      const rightCh = loudnessNormalizeAndLimit(stereoData.subarray(stereoData.length / 2), sr, targetLufs, tpCeiling);
+      finalStereoData = new Float32Array(stereoData.length);
+      finalStereoData.set(leftCh, 0);
+      finalStereoData.set(rightCh, stereoData.length / 2);
+    }
+    const wavData = encodeWav(finalStereoData, getSampleRate(), 2);
     const result = await window.electronAPI.showSaveDialog({
       filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
     });

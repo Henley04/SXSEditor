@@ -1,6 +1,7 @@
 const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrain } = require('./utils');
 const { createSampler } = require('./samplers');
+const { wsolaBestLag } = require('./postprocessing');
 
 /**
  * Diagnostic mode gate. When false (default in production), all per-chunk /
@@ -724,29 +725,47 @@ class Diffusion {
             chunkOnProgress, progressStart, progressRange, useStaticShapes, samplerName, cfgSchedule, f0Data
         );
 
-        // 4. Hann 交叉淡入淡出写回
+        // 4. Hann 交叉淡入淡出写回（P1/Q0-2: WSOLA 对齐后交叉淡入淡出）
         if (isFirst) {
             // 首 chunk：无前序数据，直接整段 memcpy
             xtOut.set(subXt.data.subarray(0, currentChunkFrames * MEL_DIM), chunkStart * MEL_DIM);
         } else {
             // 重叠区：逐帧加权混合
             const ov = overlap;
-            for (let f = 0; f < ov && f < currentChunkFrames; f++) {
+            // P1 / Q0-2: WSOLA mel-domain alignment. Mel spectrograms are magnitude-only
+            // (no phase), so WSOLA here aligns spectral features rather than phase — less
+            // critical than the audio path but still reduces boundary spectral jumps.
+            // Search a small frame lag (<=2 frames) for the best spectral correlation
+            // between the previous chunk's committed tail and the current chunk's head.
+            // The lag drops `delta` frames from the current chunk's head; the resulting
+            // `delta`-frame gap at the chunk tail is covered by the next chunk's overlap
+            // (delta << overlap, so the stale frames are crossfaded away).
+            let wsolaDelta = 0;
+            if (ov >= 8 && currentChunkFrames > ov + 2) {
+                const wsolaSearchRange = Math.min(Math.floor(ov / 8), 2);
+                wsolaDelta = wsolaBestLag(
+                    xtOut, chunkStart * MEL_DIM,       // reference = previous committed tail
+                    subXt.data, 0,                      // signal = current chunk head
+                    ov, wsolaSearchRange, MEL_DIM
+                );
+            }
+            const effOv = ov; // overlap window length (frames) stays the same
+            for (let f = 0; f < effOv && f + wsolaDelta < currentChunkFrames; f++) {
                 const dstOffset = (chunkStart + f) * MEL_DIM;
-                const srcOffset = f * MEL_DIM;
+                const srcOffset = (f + wsolaDelta) * MEL_DIM;
                 const w = fadeWindow[f];
                 const invW = 1 - w;
                 for (let d = 0; d < MEL_DIM; d++) {
                     xtOut[dstOffset + d] = xtOut[dstOffset + d] * invW + subXt.data[srcOffset + d] * w;
                 }
             }
-            // 非重叠区：用 TypedArray.set 走 memcpy
-            const nonOverlapStart = ov * MEL_DIM;
-            const nonOverlapLen = (currentChunkFrames - ov) * MEL_DIM;
+            // 非重叠区：用 TypedArray.set 走 memcpy（跳过 wsolaDelta 帧对齐偏移）
+            const nonOverlapStart = (effOv + wsolaDelta) * MEL_DIM;
+            const nonOverlapLen = (currentChunkFrames - effOv - wsolaDelta) * MEL_DIM;
             if (nonOverlapLen > 0) {
                 xtOut.set(
                     subXt.data.subarray(nonOverlapStart, nonOverlapStart + nonOverlapLen),
-                    (chunkStart + ov) * MEL_DIM
+                    (chunkStart + effOv) * MEL_DIM
                 );
             }
         }

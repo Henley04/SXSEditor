@@ -19,6 +19,7 @@ const EulerSolver = require('./euler');
 const HeunSolver = require('./heun');
 const ExtrapSolver = require('./extrap');
 const Stork2Solver = require('./stork2');
+const MidpointSolver = require('./midpoint');
 
 // 求解器注册表：value -> {label, labelKey, descKey, create()}
 const SOLVERS = {
@@ -46,9 +47,22 @@ const SOLVERS = {
         descKey: 'main.exportDialog.samplerStork2Desc',
         create: () => new Stork2Solver(8),
     },
+    midpoint: {
+        label: 'Midpoint',
+        labelKey: 'main.exportDialog.samplerMidpoint',
+        descKey: 'main.exportDialog.samplerMidpointDesc',
+        create: () => new MidpointSolver(),
+    },
 };
 
-const DEFAULT_SOLVER = 'euler';
+// P0-4: STORK-2 is the default solver.
+// STORK-2 (arXiv:2505.24210) is a 1-NFE second-order stiff ODE solver that is
+// structure-agnostic — applicable to flow matching (FM) models (which our
+// diffStep is), unlike DPM-Solver++/UniPC that require the semi-linear DM ODE
+// structure. It is more stable than Euler for the same NFE and is more robust
+// on vibrato / pitch-glissando transitions. Euler is retained as a low-NFE
+// fallback; Heun and Extrap remain available as opt-in options.
+const DEFAULT_SOLVER = 'stork2';
 const VALID_SOLVERS = Object.keys(SOLVERS);
 
 // 旧名称兼容映射（用户已保存的 settings 可能含 'stork'）
@@ -82,6 +96,7 @@ module.exports = {
     HeunSolver,
     ExtrapSolver,
     Stork2Solver,
+    MidpointSolver,
     SOLVERS,
     DEFAULT_SOLVER,
     VALID_SOLVERS,
