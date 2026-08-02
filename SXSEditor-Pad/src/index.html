@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="touch-action" content="manipulation">
+  <meta http-equiv="X-UA-Compatible" content="ie=edge">
+  <title>SXSEditor-Pad</title>
+  <link rel="stylesheet" href="./index.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Toolbar -->
+    <div id="toolbar">
+      <div class="toolbar-group">
+        <button id="btn-play" class="toolbar-btn toolbar-btn-primary" data-i18n="toolbar.play" data-icon="play" aria-label="播放">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21"/></svg>
+        </button>
+        <button id="btn-pause" class="toolbar-btn" data-i18n="toolbar.pause" data-icon="pause" aria-label="暂停">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+        </button>
+        <button id="btn-stop" class="toolbar-btn" data-i18n="toolbar.stop" data-icon="stop" aria-label="停止">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+        </button>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <div class="toolbar-group">
+        <span id="time-display" class="time-display">00:00.000</span>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <div class="toolbar-group">
+        <label class="toolbar-label" for="bpm-input">BPM</label>
+        <input id="bpm-input" type="number" class="toolbar-input toolbar-input-narrow" value="120" min="1" max="999" aria-label="BPM 值">
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <div class="toolbar-group">
+        <label class="toolbar-label" for="time-sig-num">拍号</label>
+        <input id="time-sig-num" type="number" class="toolbar-input toolbar-input-tiny" value="4" min="1" max="32" aria-label="拍号分子">
+        <span class="toolbar-label">/</span>
+        <input id="time-sig-den" type="number" class="toolbar-input toolbar-input-tiny" value="4" min="1" max="32" aria-label="拍号分母">
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <div class="toolbar-group">
+        <label class="toolbar-checkbox-label">
+          <input id="auto-shift-check" type="checkbox" class="toolbar-checkbox" checked aria-label="自动移调">
+          <span class="checkbox-custom"></span>
+          <span class="checkbox-text">Auto Shift</span>
+        </label>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <div class="toolbar-group toolbar-group-right">
+        <button id="btn-load" class="toolbar-btn" data-i18n="toolbar.load" data-icon="load" aria-label="加载音频">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        </button>
+        <button id="btn-export" class="toolbar-btn" data-i18n="toolbar.export" data-icon="export" aria-label="导出音频">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <div class="toolbar-group">
+        <button id="btn-audio-to-midi" class="toolbar-btn" data-i18n="toolbar.audioToMidi" data-icon="audio-to-midi" aria-label="音频转 MIDI">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+        </button>
+        <button id="btn-import-midi" class="toolbar-btn" data-i18n="toolbar.importMidi" data-icon="import-midi" aria-label="导入 MIDI">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+        </button>
+      </div>
+
+      <div class="toolbar-divider"></div>
+
+      <div class="toolbar-group">
+        <button id="btn-open-singer-market" class="toolbar-btn" data-i18n="toolbar.singerMarket" data-icon="singer-market" aria-label="歌手市场">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+        </button>
+      </div>
+
+      <div class="toolbar-spacer"></div>
+
+      <div class="toolbar-group">
+        <span id="version-display" class="version-badge">v-</span>
+      </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="main-content">
+      <!-- Singer Panel -->
+      <div id="singer-panel">
+        <div class="panel-header">
+          <span class="panel-title" data-i18n="singer.title">歌手</span>
+        </div>
+        <div id="singer-list" class="singer-list">
+          <!-- Singer items will be dynamically rendered -->
+        </div>
+      </div>
+
+      <!-- Fragment Timeline -->
+      <div id="fragment-timeline">
+        <div class="panel-header">
+          <span class="panel-title" data-i18n="timeline.title">片段时间线</span>
+        </div>
+        <div id="canvas-container" class="canvas-container">
+          <canvas id="fragment-canvas"></canvas>
+          <canvas id="fragment-playhead-canvas"></canvas>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="./themes/themeBootstrap.js"></script>
+  <script type="module" src="./renderer/index.js" defer></script>
+</body>
+</html>
