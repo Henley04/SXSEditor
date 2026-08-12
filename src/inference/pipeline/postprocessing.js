@@ -52,35 +52,6 @@ function _readEnableAntiAliasing() {
 }
 
 /**
- * 1st-order Butterworth low-pass filter (bilinear-transformed IIR).
- *
- * Applied before decimation in resampleLinear when enableAntiAliasing is on,
- * to attenuate content above the destination Nyquist (dstSr/2) that the
- * finite-width sinc kernel only partially rejects. Complementary to the
- * existing Kaiser-windowed sinc interpolation — together they provide
- * steeper stopband rejection than either alone.
- *
- * @param {Float32Array} samples - input audio
- * @param {number} srcSr - source sample rate
- * @param {number} cutoffFreq - cutoff frequency (Hz), typically dstSr/2
- * @returns {Float32Array} filtered copy
- */
-function _butterworthLp1(samples, srcSr, cutoffFreq) {
-    // Bilinear transform of 1st-order Butterworth H(s) = 1/(s/ωc + 1).
-    const K = Math.tan(Math.PI * cutoffFreq / srcSr);
-    const b0 = K / (1 + K);
-    const a1 = (K - 1) / (1 + K);
-    const out = new Float32Array(samples.length);
-    let y1 = 0;
-    for (let i = 0; i < samples.length; i++) {
-        const y0 = b0 * samples[i] + b0 * (i > 0 ? samples[i - 1] : samples[i]) - a1 * y1;
-        out[i] = y0;
-        y1 = y0;
-    }
-    return out;
-}
-
-/**
  * 2nd-order Butterworth low-pass filter (biquad, bilinear-transformed IIR).
  *
  * Provides steeper stopband rejection (−12 dB/oct vs −6 dB/oct for 1st-order)

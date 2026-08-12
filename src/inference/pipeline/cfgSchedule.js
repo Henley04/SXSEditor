@@ -143,7 +143,7 @@ function interpolateKeyframes(keyframes, step, start, end, totalSteps) {
  * 在 CFG 合并后，对 cfgVal 施加动态阈值截断：
  *   1. 计算 cfgPredBuf 的绝对值分位数 p_dyn（默认 99.5%）。
  *   2. 阈值 t_dyn = max(|mean|, p_dyn)。
- *   3. 超过阈值的值被截断到 ±t_dyn，然后线性映射回 ±t_dyn 范围内。
+ *   3. 超过阈值的值被硬截断到 ±t_dyn（保留符号，幅值限制在阈值内）。
  *
  * 这防止极端 CFG 增强值（在条件和无条件预测差异极大时出现）导致
  * 过曝光/过饱和伪影，同时保留非极端值的动态范围。
@@ -188,13 +188,12 @@ function applyDynamicThreshold(cfgPredBuf, targetLen, melDim, percentile) {
         // Partial selection 找分位数
         const threshold = Math.max(mean, _partialSelect(absVals, percentile));
 
-        // 截断 + 线性映射：超过 ±threshold 的值压缩到 ±threshold
+        // 硬截断：超过 ±threshold 的值压缩到 ±threshold（保留符号）
         if (threshold < 1e-8) continue; // 全零帧跳过
         for (let d = 0; d < melDim; d++) {
             const val = cfgPredBuf[frameOff + d];
             const absVal = Math.abs(val);
             if (absVal > threshold) {
-                // 线性映射：保持符号，截断到 threshold
                 cfgPredBuf[frameOff + d] = Math.sign(val) * threshold;
             }
         }

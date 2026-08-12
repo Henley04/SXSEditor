@@ -306,6 +306,9 @@ export async function runDiffusionLoop({
         }
         // Dynamic thresholding (arXiv:2507.08965): clip extreme CFG values
         // per-frame before rescale. Aligned with DML path.
+        // NOTE: Welford cfgAdjM2 above was accumulated on pre-threshold cfgVal,
+        // so cfgAdjStd is slightly inflated. This makes rescale conservative
+        // (under-amplification), which is safer than over-amplification.
         if (dynamicThresholdOpts && dynamicThresholdOpts.percentile > 0) {
             applyDynamicThreshold(cfgPredBuf, targetLen, MEL_DIM, dynamicThresholdOpts.percentile);
         }

@@ -156,6 +156,7 @@ class RmvpePitchDetector {
     const feeds = { audio: inputTensor };
     let outputs;
 
+    let inputTensorDisposed = false;
     try {
       outputs = await this.session.run(feeds);
     } catch (runErr) {
@@ -165,6 +166,7 @@ class RmvpePitchDetector {
       if (this.usingDML) {
         console.warn('[RmvpePitchDetector] DML inference failed, falling back to CPU:', runErr.message);
         try { if (typeof inputTensor.dispose === 'function') inputTensor.dispose(); } catch (_) {}
+        inputTensorDisposed = true;
         await this._rebuildAsCpu();
         // Rebuild input tensor (previous one may have been disposed or bound to DML context)
         const retryTensor = createFloatTensor('float32', resampledAudio, [1, resampledAudio.length]);
@@ -172,12 +174,16 @@ class RmvpePitchDetector {
         try { if (typeof retryTensor.dispose === 'function') retryTensor.dispose(); } catch (_) {}
       } else {
         try { if (typeof inputTensor.dispose === 'function') inputTensor.dispose(); } catch (_) {}
+        inputTensorDisposed = true;
         throw runErr;
       }
     }
 
     // 释放输入张量（性能审查 #3 中优先级：RMVPE 输入泄漏）
-    try { if (typeof inputTensor.dispose === 'function') inputTensor.dispose(); } catch (_) {}
+    // 跳过已在 catch 块中释放的情况，避免双重释放
+    if (!inputTensorDisposed) {
+      try { if (typeof inputTensor.dispose === 'function') inputTensor.dispose(); } catch (_) {}
+    }
 
     const pitchOutput = Object.values(outputs)[0];
     const pitchData = outputToFloat32(pitchOutput);

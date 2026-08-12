@@ -5,6 +5,7 @@ const {
   MEL_DIM,
   COND_DIM,
   HOP_SIZE,
+  SAMPLE_RATE,
   VOCODER_CHUNK_FRAMES,
   NPU_STATIC_SEQ_LEN,
 } = require('../src/inference/pipeline/constants');

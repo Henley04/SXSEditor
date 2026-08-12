@@ -54,6 +54,10 @@ function isValidSettingValue(key, value) {
       return value >= 1 && value <= 4096;
     case 'modelPrecision':
       return VALID_MODEL_PRECISIONS.includes(value);
+    case 'previewDynamicThresholdPercentile':
+    case 'exportDynamicThresholdPercentile':
+      if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+      return value >= 0.9 && value <= 0.999;
     default:
       if (BOOLEAN_SETTING_KEYS.has(key)) {
         return typeof value === 'boolean';
