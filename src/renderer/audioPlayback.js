@@ -172,6 +172,8 @@ export async function playAll() {
             cfgScheduleMode: inferenceOpts.cfgScheduleMode,
             cfgStrengthStart: inferenceOpts.cfgStrengthStart,
             cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
+            dynamicThresholdEnabled: inferenceOpts.dynamicThresholdEnabled,
+            dynamicThresholdPercentile: inferenceOpts.dynamicThresholdPercentile,
           },
         });
       }
@@ -404,6 +406,8 @@ export async function playAll() {
             cfgScheduleMode: inferenceOpts.cfgScheduleMode,
             cfgStrengthStart: inferenceOpts.cfgStrengthStart,
             cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
+            dynamicThresholdEnabled: inferenceOpts.dynamicThresholdEnabled,
+            dynamicThresholdPercentile: inferenceOpts.dynamicThresholdPercentile,
           },
         });
 
@@ -516,6 +520,9 @@ export function getPreviewInferenceOptions() {
     cfgScheduleMode: state.audioSettings?.previewCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'linear',
     cfgStrengthStart: state.audioSettings?.previewCfgStrengthStart ?? state.audioSettings?.cfgStrengthStart ?? null,
     cfgScheduleKeyframes: state.audioSettings?.previewCfgScheduleKeyframes ?? state.audioSettings?.cfgScheduleKeyframes ?? null,
+    // Dynamic thresholding (preview path)
+    dynamicThresholdEnabled: state.audioSettings?.previewDynamicThresholdEnabled === true,
+    dynamicThresholdPercentile: Number.isFinite(state.audioSettings?.previewDynamicThresholdPercentile) ? state.audioSettings.previewDynamicThresholdPercentile : 0.995,
   };
 }
 
@@ -531,6 +538,9 @@ export function getExportInferenceOptions() {
     cfgScheduleMode: state.audioSettings?.exportCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'linear',
     cfgStrengthStart: state.audioSettings?.exportCfgStrengthStart ?? state.audioSettings?.cfgStrengthStart ?? null,
     cfgScheduleKeyframes: state.audioSettings?.exportCfgScheduleKeyframes ?? state.audioSettings?.cfgScheduleKeyframes ?? null,
+    // Dynamic thresholding (export path)
+    dynamicThresholdEnabled: state.audioSettings?.exportDynamicThresholdEnabled === true,
+    dynamicThresholdPercentile: Number.isFinite(state.audioSettings?.exportDynamicThresholdPercentile) ? state.audioSettings.exportDynamicThresholdPercentile : 0.995,
   };
 }
 
@@ -993,6 +1003,11 @@ export async function runExportJob(opts) {
     cfgRescale,
     sampler,
     autoShift,
+    cfgScheduleMode,
+    cfgStrengthStart,
+    cfgScheduleKeyframes,
+    dynamicThresholdEnabled,
+    dynamicThresholdPercentile,
     onFragmentProgress,
     onOverallProgress,
     onStatus,
@@ -1088,6 +1103,8 @@ export async function runExportJob(opts) {
           cfgScheduleMode: opts.cfgScheduleMode,
           cfgStrengthStart: opts.cfgStrengthStart,
           cfgScheduleKeyframes: opts.cfgScheduleKeyframes,
+          dynamicThresholdEnabled: opts.dynamicThresholdEnabled,
+          dynamicThresholdPercentile: opts.dynamicThresholdPercentile,
         },
       });
 

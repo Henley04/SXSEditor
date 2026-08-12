@@ -7,7 +7,7 @@ import { getOrt } from './ortSetup.js';
 import { runSession } from './sessionManager.js';
 import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom, padToLength, disposeTensor } from './utils.js';
 import { createSampler } from '../pipeline/samplers/index.js';
-import { resolveCfgAtStep } from '../pipeline/cfgSchedule.js';
+import { resolveCfgAtStep, applyDynamicThreshold } from '../pipeline/cfgSchedule.js';
 
 /**
  * 单片段扩散采样循环
@@ -29,6 +29,7 @@ export async function runDiffusionLoop({
     useStaticShapes = false,
     samplerName = 'euler',
     cfgScheduleOpts = null,
+    dynamicThresholdOpts = null,
 }) {
     const ort = getOrt();
 
@@ -303,6 +304,11 @@ export async function runDiffusionLoop({
             cfgAdjMean += cfgDelta / n;
             cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
         }
+        // Dynamic thresholding (arXiv:2507.08965): clip extreme CFG values
+        // per-frame before rescale. Aligned with DML path.
+        if (dynamicThresholdOpts && dynamicThresholdOpts.percentile > 0) {
+            applyDynamicThreshold(cfgPredBuf, targetLen, MEL_DIM, dynamicThresholdOpts.percentile);
+        }
         // Pass 2: std/rescale + write vBuf (Bessel correction N-1 denominator)
         const posStd = Math.sqrt(Math.max(0, posM2) / Math.max(1, n - 1));
         const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjM2) / Math.max(1, n - 1));
@@ -390,6 +396,7 @@ export async function runBatchDiffusionLoop({
     useStaticShapes = false,
     samplerName = 'euler',
     cfgScheduleOpts = null,
+    dynamicThresholdOpts = null,
 }) {
     // 非 Euler 求解器：退化为两次单段调用，保证正确性
     if (samplerName !== 'euler') {
@@ -410,6 +417,7 @@ export async function runBatchDiffusionLoop({
                 useStaticShapes,
                 samplerName,
                 cfgScheduleOpts,
+                dynamicThresholdOpts,
             });
             results.push({ xtData: r.xtData, totalFrames: r.totalFrames });
         }
@@ -580,6 +588,11 @@ export async function runBatchDiffusionLoop({
                         cfgAdjMean += cfgDelta / n;
                         cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
                     }
+                }
+                // Dynamic thresholding (arXiv:2507.08965): clip extreme CFG values
+                // per-frame before rescale. Aligned with DML path.
+                if (dynamicThresholdOpts && dynamicThresholdOpts.percentile > 0) {
+                    applyDynamicThreshold(cfgPredBuf, s.totalFrames * MEL_DIM, MEL_DIM, dynamicThresholdOpts.percentile);
                 }
                 const posStd = Math.sqrt(Math.max(0, posM2) / Math.max(1, n - 1));
                 const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjM2) / Math.max(1, n - 1));

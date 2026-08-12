@@ -114,6 +114,37 @@ function buildAppMenu() {
       label: t('menu.help'),
       submenu: [
         {
+          label: t('menu.website'),
+          click: () => {
+            try {
+              require('electron').shell.openExternal('https://henley04.github.io/SXSEditor/');
+            } catch (err) {
+              console.warn('[Menu] Open website failed:', err.message);
+            }
+          },
+        },
+        {
+          label: t('menu.userDocs'),
+          click: () => {
+            try {
+              require('electron').shell.openExternal('https://henley04.github.io/SXSEditor/user/quick-start.html');
+            } catch (err) {
+              console.warn('[Menu] Open user docs failed:', err.message);
+            }
+          },
+        },
+        {
+          label: t('menu.devDocs'),
+          click: () => {
+            try {
+              require('electron').shell.openExternal('https://henley04.github.io/SXSEditor/dev/build.html');
+            } catch (err) {
+              console.warn('[Menu] Open dev docs failed:', err.message);
+            }
+          },
+        },
+        { type: 'separator' },
+        {
           label: t('menu.openLogDir'),
           click: () => {
             try {

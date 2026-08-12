@@ -106,13 +106,13 @@ describe('Diffusion.runDiffusionLoopChunked - 分块扩散推理测试', () => {
     expect(nanCount).to.equal(0);
   });
 
-  it('CFG > 0 时每个 step 产生 1 次推理（cond/uncond batch 合并）', async () => {
+  it('CFG > 0 时每 step 2 次推理（batch=1 分离 cond/uncond 调用）', async () => {
     const totalFrames = 250;
     const ptFrameCount = 10;
     const chunkFrames = 100;
     const overlapFrames = 20;
     const totalSteps = 2;
-    const cfgStrength = 3.0; // CFG on → batch merge: 1 run/step (was 2)
+    const cfgStrength = 3.0; // CFG on → batch=1 model: 2 separate runs/step
 
     const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
     const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
@@ -125,8 +125,8 @@ describe('Diffusion.runDiffusionLoopChunked - 分块扩散推理测试', () => {
     );
 
     // chunk 0: [0,100), chunk 1: [80,180), chunk 2: [160,250) → 3 chunks
-    // Task 1 batch merge: 3 chunks × 2 steps × 1 run (batch=2) = 6 runs
-    expect(runCalls).to.have.lengthOf(6);
+    // batch=1 model: 3 chunks × 2 steps × 2 runs (cond + uncond) = 12 runs
+    expect(runCalls).to.have.lengthOf(12);
     expect(xt.data.length).to.equal(totalFrames * MEL_DIM);
   });
 

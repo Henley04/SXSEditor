@@ -28,6 +28,12 @@ const BOOLEAN_SETTING_KEYS = new Set([
   'ortEnableCpuMemArena',
   'autoCheckUpdates',
   'dontRemindAppUpdates',
+  'enableLoudnormFinal',
+  'enableAntiAliasing',
+  'enableSDEditRepair',
+  'diagnosticMode',
+  'previewDynamicThresholdEnabled',
+  'exportDynamicThresholdEnabled',
 ]);
 
 function isValidSettingValue(key, value) {

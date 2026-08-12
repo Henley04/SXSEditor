@@ -86,6 +86,12 @@ export async function openExportDialog() {
       previewCfgScheduleMode: settings.previewCfgScheduleMode || settings.cfgScheduleMode || 'linear',
       previewCfgStrengthStart: Number.isFinite(settings.previewCfgStrengthStart) ? settings.previewCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
       previewCfgScheduleKeyframes: Array.isArray(settings.previewCfgScheduleKeyframes) ? settings.previewCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
+      // Dynamic thresholding (export path)
+      exportDynamicThresholdEnabled: settings.exportDynamicThresholdEnabled === true,
+      exportDynamicThresholdPercentile: Number.isFinite(settings.exportDynamicThresholdPercentile) ? settings.exportDynamicThresholdPercentile : 0.995,
+      // Dynamic thresholding (preview path)
+      previewDynamicThresholdEnabled: settings.previewDynamicThresholdEnabled === true,
+      previewDynamicThresholdPercentile: Number.isFinite(settings.previewDynamicThresholdPercentile) ? settings.previewDynamicThresholdPercentile : 0.995,
       vocoderOverlapFrames: Number.isFinite(settings.vocoderOverlapFrames) ? settings.vocoderOverlapFrames : 32,
       diagnosticMode: settings.diagnosticMode === true,
       enableLoudnormFinal: settings.enableLoudnormFinal !== false,
@@ -312,6 +318,11 @@ function buildParamsSection(form) {
   // playback uses the same configurable schedule instead of always 'linear'.
   section.appendChild(buildCfgScheduleField(form, 'preview'));
 
+  // Dynamic thresholding (export path)
+  section.appendChild(buildDynamicThresholdField(form, 'export'));
+  // Dynamic thresholding (preview path)
+  section.appendChild(buildDynamicThresholdField(form, 'preview'));
+
   // Auto Shift 复选框
   section.appendChild(buildCheckboxField({
     labelKey: 'main.exportDialog.autoShift',
@@ -448,6 +459,69 @@ function buildCfgScheduleField(form, scope) {
   updateVisibility();
 
   return scheduleField;
+}
+
+// ==================== Dynamic thresholding field (export + preview) ====================
+
+function buildDynamicThresholdField(form, scope) {
+  const isPreview = scope === 'preview';
+  const i18nKey = (base) => isPreview
+    ? `main.exportDialog.preview${base.charAt(0).toUpperCase()}${base.slice(1)}`
+    : `main.exportDialog.${base}`;
+  const formEnabled = `${scope}DynamicThresholdEnabled`;
+  const formPercentile = `${scope}DynamicThresholdPercentile`;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'export-dialog-field';
+
+  // Checkbox
+  const checkboxField = buildCheckboxField({
+    labelKey: i18nKey('dynamicThresholdEnabled'),
+    descKey: i18nKey('dynamicThresholdEnabledHint'),
+    checked: form[formEnabled],
+    onChange: (v) => {
+      form[formEnabled] = v;
+      percentileGroup.hidden = !v;
+    },
+  });
+  wrapper.appendChild(checkboxField);
+
+  // Percentile slider (hidden when disabled)
+  const percentileGroup = document.createElement('div');
+  percentileGroup.className = 'export-dialog-field';
+  percentileGroup.hidden = !form[formEnabled];
+
+  const pctLabel = document.createElement('div');
+  pctLabel.className = 'export-dialog-field-label';
+  const pctLabelText = document.createElement('span');
+  pctLabelText.textContent = t(i18nKey('dynamicThresholdPercentile'));
+  const pctValueBox = document.createElement('span');
+  pctValueBox.className = 'export-dialog-field-value';
+  pctValueBox.textContent = parseFloat(form[formPercentile]).toFixed(3);
+  pctLabel.appendChild(pctLabelText);
+  pctLabel.appendChild(pctValueBox);
+  percentileGroup.appendChild(pctLabel);
+
+  const pctHint = document.createElement('div');
+  pctHint.className = 'export-dialog-field-hint';
+  pctHint.textContent = t(i18nKey('dynamicThresholdPercentileHint'));
+  percentileGroup.appendChild(pctHint);
+
+  const pctSlider = document.createElement('input');
+  pctSlider.type = 'range';
+  pctSlider.min = '0.900';
+  pctSlider.max = '0.999';
+  pctSlider.step = '0.001';
+  pctSlider.value = form[formPercentile];
+  pctSlider.addEventListener('input', () => {
+    const v = parseFloat(pctSlider.value);
+    pctValueBox.textContent = v.toFixed(3);
+    form[formPercentile] = v;
+  });
+  percentileGroup.appendChild(pctSlider);
+  wrapper.appendChild(percentileGroup);
+
+  return wrapper;
 }
 
 function buildAdvancedSection(form, settings) {
@@ -919,6 +993,9 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
       cfgScheduleMode: form.exportCfgScheduleMode,
       cfgStrengthStart: form.exportCfgStrengthStart,
       cfgScheduleKeyframes: form.exportCfgScheduleKeyframes,
+      // Dynamic thresholding (export path)
+      dynamicThresholdEnabled: form.exportDynamicThresholdEnabled,
+      dynamicThresholdPercentile: form.exportDynamicThresholdPercentile,
       onFragmentProgress: (p) => {
         setStatus('progressSynthesizing', { progress: p });
       },

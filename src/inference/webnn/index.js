@@ -57,6 +57,8 @@ async function _runSynthesisUnlocked(params) {
         skipVocoder = false,
         promptSeq = null,
         sampler = 'euler',
+        cfgScheduleOpts = null,
+        dynamicThresholdOpts = null,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
@@ -102,6 +104,8 @@ async function _runSynthesisUnlocked(params) {
         npuDiffBatchSize,
         useStaticShapes,
         samplerName: sampler,
+        cfgScheduleOpts,
+        dynamicThresholdOpts,
     });
 
     // ===== Stage 3: Vocoder =====
@@ -170,6 +174,8 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
     const vocoderChunkFrames = paramsArray[0].vocoderChunkFrames || 0;
     const skipVocoder = paramsArray[0].skipVocoder || false;
     const sampler = paramsArray[0].sampler || 'euler';
+    const cfgScheduleOpts = paramsArray[0].cfgScheduleOpts || null;
+    const dynamicThresholdOpts = paramsArray[0].dynamicThresholdOpts || null;
 
     // ===== Stage 1: Encode both segments in parallel =====
     if (onProgress) onProgress(10);
@@ -300,7 +306,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
     // ===== Stage 2: Batched Diffusion Loop (batch=4) =====
     if (onProgress) onProgress(30);
     const totalSteps = segData[0].totalSteps;
-    const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType: diffFloatType, useStaticShapes, samplerName: sampler });
+    const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType: diffFloatType, useStaticShapes, samplerName: sampler, cfgScheduleOpts, dynamicThresholdOpts });
 
     // ===== Stage 3: Vocoder per segment =====
     // skipVocoder 模式：返回 mel 给主进程，vocoder 由主进程 DML 执行（支持 SiFiGAN 双输入）

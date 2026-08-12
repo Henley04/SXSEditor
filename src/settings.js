@@ -41,6 +41,35 @@ const exportCfgStrengthSlider = document.getElementById('exportCfgStrength');
 const exportCfgStrengthValue = document.getElementById('exportCfgStrengthValue');
 const exportCfgRescaleSlider = document.getElementById('exportCfgRescale');
 const exportCfgRescaleValue = document.getElementById('exportCfgRescaleValue');
+// CFG schedule (preview)
+const previewCfgScheduleModeSelect = document.getElementById('previewCfgScheduleMode');
+const previewCfgStrengthStartInput = document.getElementById('previewCfgStrengthStart');
+const previewCfgStrengthStartGroup = document.getElementById('previewCfgStrengthStartGroup');
+const previewCfgScheduleKeyframesInput = document.getElementById('previewCfgScheduleKeyframes');
+const previewCfgScheduleKeyframesGroup = document.getElementById('previewCfgScheduleKeyframesGroup');
+// CFG schedule (export)
+const exportCfgScheduleModeSelect = document.getElementById('exportCfgScheduleMode');
+const exportCfgStrengthStartInput = document.getElementById('exportCfgStrengthStart');
+const exportCfgStrengthStartGroup = document.getElementById('exportCfgStrengthStartGroup');
+const exportCfgScheduleKeyframesInput = document.getElementById('exportCfgScheduleKeyframes');
+const exportCfgScheduleKeyframesGroup = document.getElementById('exportCfgScheduleKeyframesGroup');
+// Dynamic threshold (preview)
+const previewDynamicThresholdEnabledCheckbox = document.getElementById('previewDynamicThresholdEnabled');
+const previewDynamicThresholdPercentileSlider = document.getElementById('previewDynamicThresholdPercentile');
+const previewDynamicThresholdPercentileValue = document.getElementById('previewDynamicThresholdPercentileValue');
+const previewDynamicThresholdPercentileGroup = document.getElementById('previewDynamicThresholdPercentileGroup');
+// Dynamic threshold (export)
+const exportDynamicThresholdEnabledCheckbox = document.getElementById('exportDynamicThresholdEnabled');
+const exportDynamicThresholdPercentileSlider = document.getElementById('exportDynamicThresholdPercentile');
+const exportDynamicThresholdPercentileValue = document.getElementById('exportDynamicThresholdPercentileValue');
+const exportDynamicThresholdPercentileGroup = document.getElementById('exportDynamicThresholdPercentileGroup');
+// Post-processing
+const vocoderOverlapFramesSlider = document.getElementById('vocoderOverlapFrames');
+const vocoderOverlapFramesValue = document.getElementById('vocoderOverlapFramesValue');
+const enableLoudnormFinalCheckbox = document.getElementById('enableLoudnormFinal');
+const enableAntiAliasingCheckbox = document.getElementById('enableAntiAliasing');
+const enableSDEditRepairCheckbox = document.getElementById('enableSDEditRepair');
+const diagnosticModeCheckbox = document.getElementById('diagnosticMode');
 const audioOutputModeSelect = document.getElementById('audioOutputMode');
 const audioOutputDeviceSelect = document.getElementById('audioOutputDevice');
 const audioSampleRateSelect = document.getElementById('audioSampleRate');
@@ -115,6 +144,43 @@ let cachedDevices = [];
 let cachedWebnnInfo = null;
 
 /**
+ * Toggle visibility of CFG schedule start-strength and keyframe fields based on mode.
+ * - constant: hide both start and keyframes
+ * - linear/cosine: show start, hide keyframes
+ * - custom: show both start and keyframes
+ */
+function updateCfgScheduleVisibility(scope, mode) {
+    const startGroup = scope === 'preview' ? previewCfgStrengthStartGroup : exportCfgStrengthStartGroup;
+    const kfGroup = scope === 'preview' ? previewCfgScheduleKeyframesGroup : exportCfgScheduleKeyframesGroup;
+    if (startGroup) startGroup.classList.toggle('hidden', mode === 'constant');
+    if (kfGroup) kfGroup.classList.toggle('hidden', mode !== 'custom');
+}
+
+/**
+ * Toggle visibility of dynamic threshold percentile slider based on checkbox state.
+ */
+function updateDynamicThresholdVisibility(scope) {
+    const checkbox = scope === 'preview' ? previewDynamicThresholdEnabledCheckbox : exportDynamicThresholdEnabledCheckbox;
+    const group = scope === 'preview' ? previewDynamicThresholdPercentileGroup : exportDynamicThresholdPercentileGroup;
+    if (group) group.classList.toggle('hidden', !checkbox || !checkbox.checked);
+}
+
+/**
+ * Parse keyframe text "0:1.5,16:3.0,31:3.0" into [{step, value}, ...].
+ * Returns null if input is empty or no valid pairs found.
+ */
+function parseKeyframes(text) {
+    const trimmed = (text || '').trim();
+    if (!trimmed) return null;
+    const parsed = [];
+    for (const part of trimmed.split(',')) {
+        const [s, v] = part.split(':').map(x => parseFloat(x.trim()));
+        if (Number.isFinite(s) && Number.isFinite(v)) parsed.push({ step: s, value: v });
+    }
+    return parsed.length > 0 ? parsed : null;
+}
+
+/**
  * 立即应用已保存的设置到 UI（在硬件检测完成前显示正确的值）
  */
 function applySavedSettingsToUI(currentSetting) {
@@ -146,6 +212,31 @@ function applySavedSettingsToUI(currentSetting) {
     previewCfgRescaleSlider.value = pRescale;
     previewCfgRescaleValue.textContent = parseFloat(pRescale).toFixed(2);
 
+    // CFG schedule (preview)
+    const pSchedMode = currentSetting.previewCfgScheduleMode || currentSetting.cfgScheduleMode || 'linear';
+    if (previewCfgScheduleModeSelect) previewCfgScheduleModeSelect.value = pSchedMode;
+    const pSchedStart = Number.isFinite(currentSetting.previewCfgStrengthStart)
+        ? currentSetting.previewCfgStrengthStart
+        : (Number.isFinite(currentSetting.cfgStrengthStart) ? currentSetting.cfgStrengthStart : null);
+    if (previewCfgStrengthStartInput) previewCfgStrengthStartInput.value = pSchedStart !== null ? pSchedStart : '';
+    const pKf = Array.isArray(currentSetting.previewCfgScheduleKeyframes)
+        ? currentSetting.previewCfgScheduleKeyframes
+        : (Array.isArray(currentSetting.cfgScheduleKeyframes) ? currentSetting.cfgScheduleKeyframes : null);
+    if (previewCfgScheduleKeyframesInput) {
+        previewCfgScheduleKeyframesInput.value = (pKf && pKf.length > 0)
+            ? pKf.map(kf => `${kf.step}:${kf.value}`).join(',') : '';
+    }
+    updateCfgScheduleVisibility('preview', pSchedMode);
+
+    // Dynamic threshold (preview)
+    const pDtEnabled = currentSetting.previewDynamicThresholdEnabled === true;
+    const pDtPercentile = Number.isFinite(currentSetting.previewDynamicThresholdPercentile)
+        ? currentSetting.previewDynamicThresholdPercentile : 0.995;
+    if (previewDynamicThresholdEnabledCheckbox) previewDynamicThresholdEnabledCheckbox.checked = pDtEnabled;
+    if (previewDynamicThresholdPercentileSlider) previewDynamicThresholdPercentileSlider.value = pDtPercentile;
+    if (previewDynamicThresholdPercentileValue) previewDynamicThresholdPercentileValue.textContent = parseFloat(pDtPercentile).toFixed(3);
+    updateDynamicThresholdVisibility('preview');
+
     // diffStep 分块推理设置
     const pChunkEnabled = currentSetting.previewDiffStepChunkEnabled === true;
     const pChunkFrames = currentSetting.previewDiffStepChunkFrames ?? 500;
@@ -168,6 +259,40 @@ function applySavedSettingsToUI(currentSetting) {
     exportCfgStrengthValue.textContent = parseFloat(eCfg).toFixed(1);
     exportCfgRescaleSlider.value = eRescale;
     exportCfgRescaleValue.textContent = parseFloat(eRescale).toFixed(2);
+
+    // CFG schedule (export)
+    const eSchedMode = currentSetting.exportCfgScheduleMode || currentSetting.cfgScheduleMode || 'linear';
+    if (exportCfgScheduleModeSelect) exportCfgScheduleModeSelect.value = eSchedMode;
+    const eSchedStart = Number.isFinite(currentSetting.exportCfgStrengthStart)
+        ? currentSetting.exportCfgStrengthStart
+        : (Number.isFinite(currentSetting.cfgStrengthStart) ? currentSetting.cfgStrengthStart : null);
+    if (exportCfgStrengthStartInput) exportCfgStrengthStartInput.value = eSchedStart !== null ? eSchedStart : '';
+    const eKf = Array.isArray(currentSetting.exportCfgScheduleKeyframes)
+        ? currentSetting.exportCfgScheduleKeyframes
+        : (Array.isArray(currentSetting.cfgScheduleKeyframes) ? currentSetting.cfgScheduleKeyframes : null);
+    if (exportCfgScheduleKeyframesInput) {
+        exportCfgScheduleKeyframesInput.value = (eKf && eKf.length > 0)
+            ? eKf.map(kf => `${kf.step}:${kf.value}`).join(',') : '';
+    }
+    updateCfgScheduleVisibility('export', eSchedMode);
+
+    // Dynamic threshold (export)
+    const eDtEnabled = currentSetting.exportDynamicThresholdEnabled === true;
+    const eDtPercentile = Number.isFinite(currentSetting.exportDynamicThresholdPercentile)
+        ? currentSetting.exportDynamicThresholdPercentile : 0.995;
+    if (exportDynamicThresholdEnabledCheckbox) exportDynamicThresholdEnabledCheckbox.checked = eDtEnabled;
+    if (exportDynamicThresholdPercentileSlider) exportDynamicThresholdPercentileSlider.value = eDtPercentile;
+    if (exportDynamicThresholdPercentileValue) exportDynamicThresholdPercentileValue.textContent = parseFloat(eDtPercentile).toFixed(3);
+    updateDynamicThresholdVisibility('export');
+
+    // Post-processing
+    const vocOverlap = Number.isFinite(currentSetting.vocoderOverlapFrames) ? currentSetting.vocoderOverlapFrames : 32;
+    if (vocoderOverlapFramesSlider) vocoderOverlapFramesSlider.value = vocOverlap;
+    if (vocoderOverlapFramesValue) vocoderOverlapFramesValue.textContent = vocOverlap;
+    if (enableLoudnormFinalCheckbox) enableLoudnormFinalCheckbox.checked = currentSetting.enableLoudnormFinal !== false;
+    if (enableAntiAliasingCheckbox) enableAntiAliasingCheckbox.checked = currentSetting.enableAntiAliasing === true;
+    if (enableSDEditRepairCheckbox) enableSDEditRepairCheckbox.checked = currentSetting.enableSDEditRepair === true;
+    if (diagnosticModeCheckbox) diagnosticModeCheckbox.checked = currentSetting.diagnosticMode === true;
 
     // Audio settings
     if (currentSetting.audioOutputMode) audioOutputModeSelect.value = currentSetting.audioOutputMode;
@@ -1016,6 +1141,14 @@ function collectSettings() {
         previewCfgStrength: parseFloat(previewCfgStrengthSlider.value),
         previewCfgRescale: parseFloat(previewCfgRescaleSlider.value),
         previewSampler: previewSamplerSelect ? previewSamplerSelect.value : 'euler',
+        previewCfgScheduleMode: previewCfgScheduleModeSelect ? previewCfgScheduleModeSelect.value : 'linear',
+        previewCfgStrengthStart: previewCfgStrengthStartInput ? (() => {
+            const v = parseFloat(previewCfgStrengthStartInput.value);
+            return Number.isFinite(v) ? Math.max(0, Math.min(10, v)) : null;
+        })() : null,
+        previewCfgScheduleKeyframes: previewCfgScheduleKeyframesInput ? parseKeyframes(previewCfgScheduleKeyframesInput.value) : null,
+        previewDynamicThresholdEnabled: previewDynamicThresholdEnabledCheckbox ? previewDynamicThresholdEnabledCheckbox.checked : false,
+        previewDynamicThresholdPercentile: previewDynamicThresholdPercentileSlider ? parseFloat(previewDynamicThresholdPercentileSlider.value) : 0.995,
         previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : false,
         previewDiffStepChunkFrames: previewDiffStepChunkFramesSlider ? parseInt(previewDiffStepChunkFramesSlider.value) : 500,
         previewDiffStepOverlapFrames: previewDiffStepOverlapFramesSlider ? parseInt(previewDiffStepOverlapFramesSlider.value) : 50,
@@ -1023,6 +1156,14 @@ function collectSettings() {
         exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
         exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
         exportSampler: exportSamplerSelect ? exportSamplerSelect.value : 'euler',
+        exportCfgScheduleMode: exportCfgScheduleModeSelect ? exportCfgScheduleModeSelect.value : 'linear',
+        exportCfgStrengthStart: exportCfgStrengthStartInput ? (() => {
+            const v = parseFloat(exportCfgStrengthStartInput.value);
+            return Number.isFinite(v) ? Math.max(0, Math.min(10, v)) : null;
+        })() : null,
+        exportCfgScheduleKeyframes: exportCfgScheduleKeyframesInput ? parseKeyframes(exportCfgScheduleKeyframesInput.value) : null,
+        exportDynamicThresholdEnabled: exportDynamicThresholdEnabledCheckbox ? exportDynamicThresholdEnabledCheckbox.checked : false,
+        exportDynamicThresholdPercentile: exportDynamicThresholdPercentileSlider ? parseFloat(exportDynamicThresholdPercentileSlider.value) : 0.995,
         audioOutputMode: audioOutputModeSelect.value,
         audioOutputDevice: parseInt(audioOutputDeviceSelect.value),
         audioSampleRate: parseInt(audioSampleRateSelect.value),
@@ -1043,6 +1184,11 @@ function collectSettings() {
             return r ? r.value : 'smart';
         })(),
         vocoderChunkFrames: parseInt(vocoderChunkFramesSlider.value),
+        vocoderOverlapFrames: vocoderOverlapFramesSlider ? parseInt(vocoderOverlapFramesSlider.value) : 32,
+        enableLoudnormFinal: enableLoudnormFinalCheckbox ? enableLoudnormFinalCheckbox.checked : true,
+        enableAntiAliasing: enableAntiAliasingCheckbox ? enableAntiAliasingCheckbox.checked : false,
+        enableSDEditRepair: enableSDEditRepairCheckbox ? enableSDEditRepairCheckbox.checked : false,
+        diagnosticMode: diagnosticModeCheckbox ? diagnosticModeCheckbox.checked : false,
         releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
         releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : true,
         // ORT 高级设置
@@ -1176,6 +1322,86 @@ exportCfgRescaleSlider.addEventListener('input', () => {
     exportCfgRescaleValue.textContent = parseFloat(exportCfgRescaleSlider.value).toFixed(2);
     applySettingsDebounced();
 });
+
+// CFG schedule (preview)
+if (previewCfgScheduleModeSelect) {
+    previewCfgScheduleModeSelect.addEventListener('change', () => {
+        updateCfgScheduleVisibility('preview', previewCfgScheduleModeSelect.value);
+        applySettings();
+    });
+}
+if (previewCfgStrengthStartInput) {
+    previewCfgStrengthStartInput.addEventListener('input', () => applySettingsDebounced());
+}
+if (previewCfgScheduleKeyframesInput) {
+    previewCfgScheduleKeyframesInput.addEventListener('input', () => applySettingsDebounced());
+}
+
+// Dynamic threshold (preview)
+if (previewDynamicThresholdEnabledCheckbox) {
+    previewDynamicThresholdEnabledCheckbox.addEventListener('change', () => {
+        updateDynamicThresholdVisibility('preview');
+        applySettings();
+    });
+}
+if (previewDynamicThresholdPercentileSlider) {
+    previewDynamicThresholdPercentileSlider.addEventListener('input', () => {
+        if (previewDynamicThresholdPercentileValue) {
+            previewDynamicThresholdPercentileValue.textContent = parseFloat(previewDynamicThresholdPercentileSlider.value).toFixed(3);
+        }
+        applySettingsDebounced();
+    });
+}
+
+// CFG schedule (export)
+if (exportCfgScheduleModeSelect) {
+    exportCfgScheduleModeSelect.addEventListener('change', () => {
+        updateCfgScheduleVisibility('export', exportCfgScheduleModeSelect.value);
+        applySettings();
+    });
+}
+if (exportCfgStrengthStartInput) {
+    exportCfgStrengthStartInput.addEventListener('input', () => applySettingsDebounced());
+}
+if (exportCfgScheduleKeyframesInput) {
+    exportCfgScheduleKeyframesInput.addEventListener('input', () => applySettingsDebounced());
+}
+
+// Dynamic threshold (export)
+if (exportDynamicThresholdEnabledCheckbox) {
+    exportDynamicThresholdEnabledCheckbox.addEventListener('change', () => {
+        updateDynamicThresholdVisibility('export');
+        applySettings();
+    });
+}
+if (exportDynamicThresholdPercentileSlider) {
+    exportDynamicThresholdPercentileSlider.addEventListener('input', () => {
+        if (exportDynamicThresholdPercentileValue) {
+            exportDynamicThresholdPercentileValue.textContent = parseFloat(exportDynamicThresholdPercentileSlider.value).toFixed(3);
+        }
+        applySettingsDebounced();
+    });
+}
+
+// Post-processing
+if (vocoderOverlapFramesSlider) {
+    vocoderOverlapFramesSlider.addEventListener('input', () => {
+        if (vocoderOverlapFramesValue) vocoderOverlapFramesValue.textContent = vocoderOverlapFramesSlider.value;
+        applySettingsDebounced();
+    });
+}
+if (enableLoudnormFinalCheckbox) {
+    enableLoudnormFinalCheckbox.addEventListener('change', () => applySettings());
+}
+if (enableAntiAliasingCheckbox) {
+    enableAntiAliasingCheckbox.addEventListener('change', () => applySettings());
+}
+if (enableSDEditRepairCheckbox) {
+    enableSDEditRepairCheckbox.addEventListener('change', () => applySettings());
+}
+if (diagnosticModeCheckbox) {
+    diagnosticModeCheckbox.addEventListener('change', () => applySettings());
+}
 
 // Language, precision, MIDI tool
 languageSelect.addEventListener('change', () => applySettings({ reloadLocale: true }));

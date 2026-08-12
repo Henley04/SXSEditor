@@ -820,19 +820,23 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       // verify they are forwarded to runDiffusionLoopChunked.
       const pitchCurveF0 = new Float32Array(100).fill(440);
       const cfgScheduleOpts = { mode: 'linear', cfgStrengthStart: 1.0 };
+      const dynamicThresholdOpts = { enabled: true, percentile: 0.995 };
       pipeline._currentPitchCurveF0 = pitchCurveF0;
       pipeline._currentCfgScheduleOpts = cfgScheduleOpts;
+      pipeline._currentDynamicThresholdOpts = dynamicThresholdOpts;
       await pipeline._runDiffusionLoop(xt, 100, ptMelData, 10, combinedCond, 1, 0, 0.75, () => {}, 0, 100, onChunkMel);
       expect(stub.calledOnce).to.equal(true);
-      // 末尾参数顺序：[..., onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts]
-      // （Task 11/15 新增 pitchCurveF0 与 cfgScheduleOpts 两个尾部参数）
+      // 末尾参数顺序：[..., onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts]
+      // （Task 11/15 新增 pitchCurveF0 与 cfgScheduleOpts，动态阈值新增 dynamicThresholdOpts）
       const callArgs = stub.firstCall.args;
-      expect(callArgs[callArgs.length - 4]).to.equal(onChunkMel);
-      // 倒数第三个为 samplerName，默认 'stork2'（M6 changed DEFAULT_SOLVER euler→stork2）
-      expect(callArgs[callArgs.length - 3]).to.equal('stork2');
+      expect(callArgs[callArgs.length - 5]).to.equal(onChunkMel);
+      // 倒数第四个为 samplerName，默认 'stork2'（M6 changed DEFAULT_SOLVER euler→stork2）
+      expect(callArgs[callArgs.length - 4]).to.equal('stork2');
       // M10: pitchCurveF0 与 cfgScheduleOpts 透传
-      expect(callArgs[callArgs.length - 2]).to.equal(pitchCurveF0);
-      expect(callArgs[callArgs.length - 1]).to.equal(cfgScheduleOpts);
+      expect(callArgs[callArgs.length - 3]).to.equal(pitchCurveF0);
+      expect(callArgs[callArgs.length - 2]).to.equal(cfgScheduleOpts);
+      // Dynamic thresholding opts forwarded
+      expect(callArgs[callArgs.length - 1]).to.equal(dynamicThresholdOpts);
     });
   });
 
@@ -1198,7 +1202,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       expect(result.newCommitted).to.equal(250); // isLast → chunkEnd
     });
 
-    it('CFG > 0 时每 step 调用 1 次 diffStep.run（cond/uncond batch 合并）', async () => {
+    it('CFG > 0 时每 step 调用 2 次 diffStep.run（batch=1 分离 cond/uncond）', async () => {
       const totalFrames = 200;
       const ptFrameCount = 10;
 
@@ -1221,8 +1225,8 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       };
       const spec = { chunkStart: 0, chunkEnd: 100, currentChunkFrames: 100, isFirst: true, isLast: false };
       await diffusion._runSingleDiffusionChunk(ctx, spec, () => {}, 0, 50);
-      // Task 1 batch merge: 2 steps × 1 run (batch=2) = 2 runs
-      expect(runCalls.length).to.equal(2);
+      // batch=1 model: 2 steps × 2 runs (cond + uncond) = 4 runs
+      expect(runCalls.length).to.equal(4);
     });
 
     it('输出无 NaN/Inf（数值稳定性）', async () => {

@@ -157,6 +157,24 @@ function loadSettings() {
     _settingsCache.exportCfgScheduleKeyframes = null;
   }
 
+  // ===== Dynamic Thresholding (arXiv:2507.08965) =====
+  // Per-frame percentile clipping of CFG-predicted mel before rescale.
+  // Prevents over-exposure artifacts at high CFG strengths.
+  // previewDynamicThresholdEnabled / exportDynamicThresholdEnabled: boolean (default false)
+  // previewDynamicThresholdPercentile / exportDynamicThresholdPercentile: 0.9–0.999 (default 0.995)
+  if (typeof _settingsCache.previewDynamicThresholdPercentile !== 'number' ||
+      !Number.isFinite(_settingsCache.previewDynamicThresholdPercentile) ||
+      _settingsCache.previewDynamicThresholdPercentile < 0.9 ||
+      _settingsCache.previewDynamicThresholdPercentile > 0.999) {
+    _settingsCache.previewDynamicThresholdPercentile = 0.995;
+  }
+  if (typeof _settingsCache.exportDynamicThresholdPercentile !== 'number' ||
+      !Number.isFinite(_settingsCache.exportDynamicThresholdPercentile) ||
+      _settingsCache.exportDynamicThresholdPercentile < 0.9 ||
+      _settingsCache.exportDynamicThresholdPercentile > 0.999) {
+    _settingsCache.exportDynamicThresholdPercentile = 0.995;
+  }
+
   // ===== 预览 diffStep 分块推理设置 =====
   // 预览时将 diffStep 的目标帧分块推理（每块独立运行完整扩散循环，再交叉淡入淡出拼接）。
   // 注意力复杂度 O(n²)，分块可显著加速长片段预览，代价是块边界可能产生轻微伪影。
@@ -352,6 +370,10 @@ const ALLOWED_SETTINGS_KEYS = [
   'exportCfgScheduleMode',
   'exportCfgStrengthStart',
   'exportCfgScheduleKeyframes',
+  'previewDynamicThresholdEnabled',
+  'previewDynamicThresholdPercentile',
+  'exportDynamicThresholdEnabled',
+  'exportDynamicThresholdPercentile',
   'inferenceProvider',
   'ortEnableMemPattern',
   'ortForceMemPatternOnDml',

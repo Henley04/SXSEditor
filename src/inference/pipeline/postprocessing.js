@@ -81,6 +81,111 @@ function _butterworthLp1(samples, srcSr, cutoffFreq) {
 }
 
 /**
+ * 2nd-order Butterworth low-pass filter (biquad, bilinear-transformed IIR).
+ *
+ * Provides steeper stopband rejection (−12 dB/oct vs −6 dB/oct for 1st-order)
+ * when operating at the 2× oversampled rate. Used in the 2× oversampling
+ * anti-aliasing pipeline.
+ *
+ * @param {Float32Array} samples - input audio
+ * @param {number} srcSr - source sample rate (the 2× oversampled rate)
+ * @param {number} cutoffFreq - cutoff frequency (Hz), typically dstSr/2
+ * @returns {Float32Array} filtered copy
+ */
+function _butterworthLp2(samples, srcSr, cutoffFreq) {
+    // Bilinear transform of 2nd-order Butterworth H(s) = 1/(s²/ωc² + √2·s/ωc + 1).
+    // Q = 1/√2 for Butterworth maximally-flat response.
+    const omega = 2 * Math.PI * cutoffFreq / srcSr;
+    const cosOmega = Math.cos(omega);
+    const sinOmega = Math.sin(omega);
+    const Q = 1 / Math.SQRT2; // 0.7071 — Butterworth
+    const alpha = sinOmega / (2 * Q);
+
+    // Biquad coefficients (cookbook / RBJ)
+    const b0 = (1 - cosOmega) / 2;
+    const b1 = 1 - cosOmega;
+    const b2 = (1 - cosOmega) / 2;
+    const a0 = 1 + alpha;
+    const a1 = -2 * cosOmega;
+    const a2 = 1 - alpha;
+
+    // Normalize by a0
+    const nb0 = b0 / a0;
+    const nb1 = b1 / a0;
+    const nb2 = b2 / a0;
+    const na1 = a1 / a0;
+    const na2 = a2 / a0;
+
+    const out = new Float32Array(samples.length);
+    let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+    for (let i = 0; i < samples.length; i++) {
+        const x0 = samples[i];
+        const y0 = nb0 * x0 + nb1 * x1 + nb2 * x2 - na1 * y1 - na2 * y2;
+        out[i] = y0;
+        x2 = x1;
+        x1 = x0;
+        y2 = y1;
+        y1 = y0;
+    }
+    return out;
+}
+
+/**
+ * 2× oversampling anti-aliasing pipeline for decimation.
+ *
+ * Complete pipeline: 2× upsample (zero-stuff) → anti-image LP (Butterworth 2nd-order
+ * at srcSr/2) → anti-alias LP (Butterworth 2nd-order at dstSr/2) → decimate by 2
+ * (discard every other sample).
+ *
+ * The 2× oversampled rate doubles the filter's Nyquist, widening the transition
+ * band relative to the target cutoff. This lets the 2nd-order Butterworth achieve
+ * far better stopband attenuation than the 1st-order filter operating directly at
+ * srcSr, without in-phase distortion from an overly steep IIR near the Nyquist.
+ *
+ * After oversampling LP, the signal is at 2×srcSr with images removed. We then
+ * apply the anti-alias LP at dstSr/2 (also at 2×srcSr clock) and decimate by 2
+ * to return to srcSr, ready for the Kaiser sinc resampler.
+ *
+ * @param {Float32Array} samples - input audio at srcSr
+ * @param {number} srcSr - source sample rate
+ * @param {number} dstSr - destination sample rate
+ * @returns {Float32Array} anti-aliased input, same length as original, at srcSr
+ */
+function _oversample2xAntiAlias(samples, srcSr, dstSr) {
+    const N = samples.length;
+    if (N === 0) return samples;
+
+    // Step 1: 2× upsample via zero-stuffing
+    // Insert zeros between samples: [s0, 0, s1, 0, s2, 0, ...]
+    // The spectral effect is: original spectrum replicated at multiples of srcSr.
+    const upN = N * 2;
+    const upsampled = new Float32Array(upN);
+    for (let i = 0; i < N; i++) {
+        upsampled[i * 2] = samples[i];
+        // odd indices remain 0 (zero-stuffing)
+    }
+
+    // Step 2: Anti-image LP at srcSr/2 (remove zero-stuffing images)
+    // Operating at 2×srcSr clock, cutoff = srcSr/2 (= original Nyquist).
+    // This restores the original signal shape by removing the spectral replicas
+    // created by zero-stuffing, while preserving all original content ≤ srcSr/2.
+    const antiImaged = _butterworthLp2(upsampled, 2 * srcSr, srcSr / 2);
+
+    // Step 3: Anti-alias LP at dstSr/2 (attenuate content above destination Nyquist)
+    // Still operating at 2×srcSr clock. The wider Nyquist (srcSr vs srcSr/2 in
+    // the non-oversampled case) gives the 2nd-order filter a gentler transition
+    // band and much better stopband attenuation near dstSr/2.
+    const antiAliased = _butterworthLp2(antiImaged, 2 * srcSr, dstSr / 2);
+
+    // Step 4: Decimate by 2 (discard every other sample) → back to srcSr
+    const out = new Float32Array(N);
+    for (let i = 0; i < N; i++) {
+        out[i] = antiAliased[i * 2];
+    }
+    return out;
+}
+
+/**
  * Post-processing: mel transform, vocoder, audio generation
  * Also includes audio utility functions (parseWavBuffer, resampleLinear, mel spectrogram, etc.)
  */
@@ -263,11 +368,14 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     const newLength = Math.floor(audioFloat.length / ratio);
     if (newLength <= 0) return new Float32Array(0);
 
-    // 抗混叠：降采样时（srcSr > dstSr）可选 Butterworth 1st-order LP 预滤波
-    // （截止 dstSr/2），减少 sinc 有限核残留的高频镜像。受 enableAntiAliasing
-    // 设置控制（默认 false — 不改变默认输出特征）。
+    // 抗混叠：降采样时（srcSr > dstSr）使用 2× 过采样管线
+    // 2× upsample (zero-stuff) → anti-image LP (Butterworth 2nd-order, srcSr/2)
+    // → anti-alias LP (Butterworth 2nd-order, dstSr/2) → decimate by 2
+    // 完整管线在 2×srcSr 时钟下运行，比旧 1st-order LP 在 srcSr 时钟下
+    // 有更宽的过渡带和更陡的阻带衰减（−12 dB/oct vs −6 dB/oct）。
+    // 受 enableAntiAliasing 设置控制（默认 false — 不改变默认输出特征）。
     const input = (srcSampleRate > dstSampleRate && _readEnableAntiAliasing())
-        ? _butterworthLp1(audioFloat, srcSampleRate, dstSampleRate / 2)
+        ? _oversample2xAntiAlias(audioFloat, srcSampleRate, dstSampleRate)
         : audioFloat;
 
     // 窗口化 sinc 插值 (Kaiser 窗, β=5)
@@ -323,8 +431,9 @@ async function resampleLinearAsync(audioFloat, srcSampleRate, dstSampleRate) {
     if (newLength <= 0) return new Float32Array(0);
 
     // 抗混叠：与 resampleLinear 同步实现（详见上方注释）。
+    // 2× 过采样完整管线：upsample → anti-image LP → anti-alias LP → decimate
     const input = (srcSampleRate > dstSampleRate && _readEnableAntiAliasing())
-        ? _butterworthLp1(audioFloat, srcSampleRate, dstSampleRate / 2)
+        ? _oversample2xAntiAlias(audioFloat, srcSampleRate, dstSampleRate)
         : audioFloat;
 
     const kaiserBeta = 5.0;

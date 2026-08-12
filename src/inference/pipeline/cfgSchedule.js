@@ -137,9 +137,119 @@ function interpolateKeyframes(keyframes, step, start, end, totalSteps) {
     return end;
 }
 
+/**
+ * Dynamic Thresholding for CFG (arXiv:2507.08965).
+ *
+ * 在 CFG 合并后，对 cfgVal 施加动态阈值截断：
+ *   1. 计算 cfgPredBuf 的绝对值分位数 p_dyn（默认 99.5%）。
+ *   2. 阈值 t_dyn = max(|mean|, p_dyn)。
+ *   3. 超过阈值的值被截断到 ±t_dyn，然后线性映射回 ±t_dyn 范围内。
+ *
+ * 这防止极端 CFG 增强值（在条件和无条件预测差异极大时出现）导致
+ * 过曝光/过饱和伪影，同时保留非极端值的动态范围。
+ *
+ * 与 cfgRescale 的区别：cfgRescale 通过方差匹配全局缩放；
+ * dynamic threshold 通过分位数截断局部极端值。两者可叠加使用。
+ *
+ * 采用 partial selection 算法（O(n) 平均），避免全排序的 O(n log n) 开销。
+ * 在 mel 维度上操作（128 维），而非全帧合并，以保持时间局部性。
+ *
+ * @param {Float32Array} cfgPredBuf - CFG 调整后的预测值缓冲区
+ * @param {number} targetLen - targetLen = totalFrames * MEL_DIM
+ * @param {number} melDim - mel 维度（128）
+ * @param {number} percentile - 分位数（0-1，默认 0.995 = 99.5%）
+ * @returns {void} 原地修改 cfgPredBuf
+ */
+function applyDynamicThreshold(cfgPredBuf, targetLen, melDim, percentile) {
+    if (percentile <= 0 || percentile >= 1) return; // 无效分位数则跳过
+
+    // 逐帧处理：每帧 melDim 个元素独立计算分位数
+    const numFrames = Math.floor(targetLen / melDim);
+    if (numFrames === 0) return;
+
+    // 临时缓冲区用于 partial selection
+    const absVals = new Float32Array(melDim);
+
+    for (let f = 0; f < numFrames; f++) {
+        const frameOff = f * melDim;
+
+        // 收集当前帧的绝对值
+        for (let d = 0; d < melDim; d++) {
+            absVals[d] = Math.abs(cfgPredBuf[frameOff + d]);
+        }
+
+        // 计算均值
+        let sum = 0;
+        for (let d = 0; d < melDim; d++) {
+            sum += absVals[d];
+        }
+        const mean = sum / melDim;
+
+        // Partial selection 找分位数
+        const threshold = Math.max(mean, _partialSelect(absVals, percentile));
+
+        // 截断 + 线性映射：超过 ±threshold 的值压缩到 ±threshold
+        if (threshold < 1e-8) continue; // 全零帧跳过
+        for (let d = 0; d < melDim; d++) {
+            const val = cfgPredBuf[frameOff + d];
+            const absVal = Math.abs(val);
+            if (absVal > threshold) {
+                // 线性映射：保持符号，截断到 threshold
+                cfgPredBuf[frameOff + d] = Math.sign(val) * threshold;
+            }
+        }
+    }
+}
+
+/**
+ * Partial selection (quickselect) 找到数组中第 k 小的元素。
+ * 平均 O(n)，最坏 O(n²)（对 melDim=128 可忽略）。
+ * 原地修改输入数组（partial sort 副作用）。
+ *
+ * @param {Float32Array} arr - 输入数组（会被部分重排）
+ * @param {number} percentile - 0-1 范围
+ * @returns {number} 分位数对应的值
+ */
+function _partialSelect(arr, percentile) {
+    const n = arr.length;
+    if (n === 0) return 0;
+    if (n === 1) return arr[0];
+
+    const k = Math.min(n - 1, Math.max(0, Math.floor(percentile * n)));
+    return _quickselect(arr, 0, n - 1, k);
+}
+
+function _quickselect(arr, lo, hi, k) {
+    while (lo < hi) {
+        // Partition (Lomuto scheme)
+        const pivot = arr[hi];
+        let i = lo;
+        for (let j = lo; j < hi; j++) {
+            if (arr[j] <= pivot) {
+                const tmp = arr[i];
+                arr[i] = arr[j];
+                arr[j] = tmp;
+                i++;
+            }
+        }
+        const tmp = arr[i];
+        arr[i] = arr[hi];
+        arr[hi] = tmp;
+
+        if (i === k) return arr[k];
+        if (i < k) {
+            lo = i + 1;
+        } else {
+            hi = i - 1;
+        }
+    }
+    return arr[k];
+}
+
 module.exports = {
     resolveCfgAtStep,
     resolveScheduleMode,
+    applyDynamicThreshold,
     VALID_MODES,
     DEFAULT_MODE,
 };

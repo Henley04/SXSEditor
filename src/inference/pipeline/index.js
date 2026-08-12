@@ -1854,15 +1854,16 @@ class OnnxSVSPipeline {
         const pitchCurveF0 = this._currentPitchCurveF0 || null;
         // Task 11: CFG schedule opts (set by synthesize / synthesizeMultiStreaming)
         const cfgScheduleOpts = this._currentCfgScheduleOpts || null;
+        const dynamicThresholdOpts = this._currentDynamicThresholdOpts || null;
         console.log(`[OnnxSVSPipeline] Diffusion start: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, totalSteps=${totalSteps}, sampler=${samplerName}, isFP16=${this.isFP16}, diffStepIsFP16=${this.diffStepIsFP16}, ep=${this.sessionEPs.diffStep || 'unknown'}`);
         console.log(`[OnnxSVSPipeline] Session diffStep: type=${this.sessions.diffStep?.constructor?.name}, ep=${this.sessionEPs.diffStep}`);
         // 分块扩散推理（仅预览路径启用，useStaticShapes 路径跳过）
         const chunkOpts = this._currentDiffStepChunkOpts;
         if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > chunkOpts.chunkFrames) {
             console.log(`[OnnxSVSPipeline] Using chunked diffusion: chunkFrames=${chunkOpts.chunkFrames}, overlapFrames=${chunkOpts.overlapFrames}, streaming=${!!onChunkMel}`);
-            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts);
+            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts);
         }
-        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName, cfgScheduleOpts);
+        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName, cfgScheduleOpts, dynamicThresholdOpts);
     }
 
     async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0) {
@@ -2002,6 +2003,7 @@ class OnnxSVSPipeline {
             useStaticShapes: this.useStaticShapes,
             vocoderChunkFrames: this._resolveVocoderChunkFrames(),
             cfgScheduleOpts: this._currentCfgScheduleOpts || null,
+            dynamicThresholdOpts: this._currentDynamicThresholdOpts || null,
             skipVocoder: true,
         };
         return requestSynthesis(wc, fullParams, onProgress);
@@ -2042,6 +2044,7 @@ class OnnxSVSPipeline {
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
+                dynamicThresholdOpts: this._currentDynamicThresholdOpts,
             },
             {
                 sequences: seqB, tokenCount: seqB.tokenCount, totalFrames: framesB,
@@ -2049,6 +2052,7 @@ class OnnxSVSPipeline {
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
                 cfgScheduleOpts: this._currentCfgScheduleOpts,
+                dynamicThresholdOpts: this._currentDynamicThresholdOpts,
             },
         ], webnnOnProgress);
         const ms = performance.now() - t0;
@@ -2181,6 +2185,10 @@ class OnnxSVSPipeline {
             cfgStrengthStart: firstOpts.cfgStrengthStart ?? null,
             keyframes: firstOpts.cfgScheduleKeyframes ?? null,
         };
+        // Dynamic thresholding (arXiv:2507.08965): per-frame percentile clipping
+        this._currentDynamicThresholdOpts = firstOpts.dynamicThresholdEnabled
+            ? { enabled: true, percentile: firstOpts.dynamicThresholdPercentile ?? 0.995 }
+            : null;
 
         console.log(`[OnnxSVSPipeline] synthesizeMultiStreaming: ${fragments.length} fragments, chunkEnabled=${chunkEnabled}, chunkFrames=${chunkFrames}`);
 
@@ -2529,8 +2537,11 @@ class OnnxSVSPipeline {
             cfgStrengthStart: options.cfgStrengthStart ?? null,
             keyframes: options.cfgScheduleKeyframes ?? null,
         };
-
-        // diffStep 分块推理选项（仅预览路径传入，导出不传 → 默认关闭）
+        // Dynamic thresholding (arXiv:2507.08965): per-frame percentile clipping
+        // of CFG-predicted mel before rescale. Prevents over-exposure at high CFG.
+        this._currentDynamicThresholdOpts = options.dynamicThresholdEnabled
+            ? { enabled: true, percentile: options.dynamicThresholdPercentile ?? 0.995 }
+            : null;
         this._currentDiffStepChunkOpts = {
             enabled: options.diffStepChunk === true && !this.useStaticShapes,
             chunkFrames: options.diffStepChunkFrames || 500,
