@@ -202,7 +202,7 @@ function applySavedSettingsToUI(currentSetting) {
     // Diffusion sliders
     const pSteps = currentSetting.previewDiffSteps ?? 16;
     const pCfg = currentSetting.previewCfgStrength ?? 3.0;
-    const pRescale = currentSetting.previewCfgRescale ?? 0.75;
+    const pRescale = currentSetting.previewCfgRescale ?? 0.7;
     const pSampler = currentSetting.previewSampler || 'euler';
     previewDiffStepsSlider.value = pSteps;
     previewDiffStepsValue.textContent = pSteps;
@@ -250,7 +250,7 @@ function applySavedSettingsToUI(currentSetting) {
 
     const eSteps = currentSetting.exportDiffSteps ?? 32;
     const eCfg = currentSetting.exportCfgStrength ?? 3.0;
-    const eRescale = currentSetting.exportCfgRescale ?? 0.75;
+    const eRescale = currentSetting.exportCfgRescale ?? 0.7;
     const eSampler = currentSetting.exportSampler || 'euler';
     exportDiffStepsSlider.value = eSteps;
     exportDiffStepsValue.textContent = eSteps;
@@ -340,7 +340,7 @@ function applySavedSettingsToUI(currentSetting) {
     updateVocoderChunkModeUI(vocoderChunkMode);
 
     // Vocoder chunk frames (manual mode)
-    const vcFrames = Number.isFinite(currentSetting.vocoderChunkFrames) ? currentSetting.vocoderChunkFrames : 1008;
+    const vcFrames = Number.isFinite(currentSetting.vocoderChunkFrames) ? currentSetting.vocoderChunkFrames : 1024;
     vocoderChunkFramesSlider.value = vcFrames;
     vocoderChunkFramesValue.textContent = vcFrames;
 
@@ -1473,7 +1473,7 @@ vocoderChunkModeRadios.forEach(radio => {
 vocoderChunkFramesSlider.addEventListener('input', () => {
     // 强制对齐到 8 的倍数（与 VOCODER_OVERLAP_FRAMES 兼容）
     let v = parseInt(vocoderChunkFramesSlider.value);
-    if (!Number.isFinite(v)) v = 1008;
+    if (!Number.isFinite(v)) v = 1024;
     v = Math.round(v / 8) * 8;
     if (v != vocoderChunkFramesSlider.value) {
         vocoderChunkFramesSlider.value = v;

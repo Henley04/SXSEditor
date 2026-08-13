@@ -6,6 +6,51 @@ const { setLocale } = require('./locale');
 const DEFAULT_THEME = 'acg';
 const DEFAULT_THEME_PER_WINDOW = {};
 
+
+const ENUM_SETTINGS = {
+  deviceMode: ['smart', 'manual', 'advanced'],
+  inferenceProvider: ['ortnode', 'ortweb'],
+  modelPrecision: ['fp32', 'fp16', 'int8', 'int8-npu'],
+  midiExtractTool: ['basicpitch', 'rmvpe'],
+  audioOutputMode: ['shared', 'exclusive'],
+  audioBitDepth: ['float32', 'int32', 'int24', 'int16'],
+  vocoderType: ['default', 'sifigan'],
+  sifiganPrecision: ['fp32', 'fp16'],
+  japaneseVocalization: ['hybrid', 'en-phonemes', 'jp-lora'],
+  vocoderChunkMode: ['smart', 'manual'],
+  ortGraphOptLevel: ['disabled', 'basic', 'extended', 'all'],
+  ortExecutionMode: ['sequential', 'parallel'],
+  ortLogSeverityLevel: ['verbose', 'info', 'warning', 'error', 'fatal'],
+  updateChannel: ['nightly', 'release'],
+};
+
+const NUMERIC_SETTINGS = {
+  previewDiffSteps: [4, 64, 16], previewCfgStrength: [0, 10, 3], previewCfgRescale: [0, 1, 0.75],
+  previewDiffStepChunkFrames: [100, 2000, 500], previewDiffStepOverlapFrames: [0, 200, 50],
+  exportDiffSteps: [4, 64, 32], exportCfgStrength: [0, 10, 3], exportCfgRescale: [0, 1, 0.75],
+  audioSampleRate: [8000, 192000, 24000], audioBufferSize: [64, 4096, 1024], audioVolume: [0, 1, 1],
+  vocoderChunkFrames: [256, 4096, 1024], ortIntraOpNumThreads: [0, 64, 0], ortInterOpNumThreads: [0, 64, 0],
+  npuDiffBatchSize: [1, 4, 1], npuVocoderBatchSize: [1, 4, 1],
+};
+
+/** Normalize persisted and IPC-provided settings at the trust boundary. */
+function normalizeSettings(settings) {
+  const out = { ...(settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {}) };
+  for (const [key, allowed] of Object.entries(ENUM_SETTINGS)) {
+    if (out[key] !== undefined && !allowed.includes(out[key])) delete out[key];
+  }
+  for (const [key, [min, max, fallback]] of Object.entries(NUMERIC_SETTINGS)) {
+    if (out[key] === undefined) continue;
+    const n = Number(out[key]);
+    out[key] = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+  }
+  if (out.audioSampleRate !== undefined && ![22050, 24000, 44100, 48000, 96000, 192000].includes(out.audioSampleRate)) out.audioSampleRate = 24000;
+  if (out.audioBufferSize !== undefined && ![64, 128, 256, 512, 1024, 2048, 4096].includes(out.audioBufferSize)) out.audioBufferSize = 1024;
+  if (out.preferredDeviceId !== undefined && out.preferredDeviceId !== null && out.preferredDeviceId !== 'npu' && out.preferredDeviceId !== 'webnn-gpu' && !Number.isInteger(out.preferredDeviceId)) delete out.preferredDeviceId;
+  if (out.modelDeviceMapping !== undefined && (typeof out.modelDeviceMapping !== 'object' || out.modelDeviceMapping === null || Array.isArray(out.modelDeviceMapping))) out.modelDeviceMapping = {};
+  return out;
+}
+
 let _settingsCache = null;
 let cachedDMLDevices = null;
 
@@ -66,7 +111,7 @@ function loadSettings() {
     _settingsCache.vocoderChunkMode = 'smart';
   }
   if (typeof _settingsCache.vocoderChunkFrames !== 'number' || !Number.isFinite(_settingsCache.vocoderChunkFrames) || _settingsCache.vocoderChunkFrames <= 0) {
-    _settingsCache.vocoderChunkFrames = 1008;
+    _settingsCache.vocoderChunkFrames = 1024;
   }
 
   // 合成完成后是否释放并重建重型 DML session，强制回收 DirectML 内存池（默认关闭，仅 DML 后端有效）
@@ -74,16 +119,16 @@ function loadSettings() {
     _settingsCache.releaseDmlVramAfterSynthesis = false;
   }
 
-  // Vocoder 推理前是否临时释放 diffStep session（默认关闭，仅 DML 后端有效）
+  // Vocoder 推理前是否临时释放 diffStep session（默认开启，仅 DML 后端有效）
   // diffStep 模型权重 + 32 步 diffusion 激活工作区（~2GB）在 vocoder 推理期间仍占用显存，
   // 与 vocoder 激活叠加易触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR (屏幕全黑)。
   // 开启后：diffusion 完成 → 释放 diffStep → vocoder 推理 → 重载 diffStep。
-  // 代价：每次 vocoder 推理后需重载 diffStep（~1-3秒），多 segment 合成会显著变慢。
-  // 默认 false：pipeline/index.js 在 vocoder 捕获 isVramOOMError 后会动态启用一次
-  // （仅下一个 segment），完成后自动恢复用户设置，避免对所有用户加 1-3s/段的时间税。
+  // 代价：每次 vocoder 推理后需重载 diffStep（~1-3秒），多 segment 合成会变慢。
+  // 默认 true：避免低显存显卡 TDR 黑屏比节省几秒更重要；pipeline/index.js 在 vocoder
+  // 捕获 isVramOOMError 后也会动态启用（仅下一个 segment），完成后自动恢复用户设置。
   // WebNN 路径无需此优化（diffStep 在渲染进程，vocoder 在主进程 DML，互不抢占显存）。
   if (typeof _settingsCache.releaseDiffStepBeforeVocoder !== 'boolean') {
-    _settingsCache.releaseDiffStepBeforeVocoder = false;
+    _settingsCache.releaseDiffStepBeforeVocoder = true;
   }
 
   // 诊断模式（默认关闭）。开启后输出 [DiffusionDiag] / [VocoderDiag] 统计/采样日志，
@@ -303,6 +348,7 @@ function loadSettings() {
     _settingsCache.lastUpdateCheckTime = null;
   }
 
+  _settingsCache = normalizeSettings(_settingsCache);
   return _settingsCache;
 }
 
@@ -411,6 +457,7 @@ module.exports = {
   getSettingsFilePath,
   ALLOWED_SETTINGS_KEYS,
   updateLocaleSetting,
+  normalizeSettings,
   DEFAULT_THEME,
   DEFAULT_THEME_PER_WINDOW,
 };

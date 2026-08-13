@@ -524,6 +524,7 @@ async function playFragmentExclusive() {
     const options = {
       deviceId: settings?.audioOutputDevice ?? -1,
       sampleRate: settings?.audioSampleRate ?? getSampleRate(),
+      sourceSampleRate: getSampleRate(),
       channels: 1,
       bitDepth: settings?.audioBitDepth ?? 'float32',
       bufferSize: settings?.audioBufferSize ?? 1024,

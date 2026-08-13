@@ -499,14 +499,17 @@ export function renderSingerList() {
       input.className = 'singer-track-name-input';
       input.value = singer.trackName;
       input.style.cssText = `
-        background: #14141f;
-        color: #e0e0f0;
-        border: 1px solid #5b8def;
+        background: var(--bg-input);
+        color: var(--fg-primary);
+        border: 1px solid var(--accent);
         border-radius: 3px;
         padding: 2px 4px;
         font-size: 12px;
         font-weight: 600;
         width: 100%;
+        outline: none;
+        box-shadow: 0 0 0 2px var(--accent-soft);
+        transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
       `;
       infoDiv.appendChild(input);
 

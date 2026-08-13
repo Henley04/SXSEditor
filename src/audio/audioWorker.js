@@ -35,27 +35,24 @@ let _audioData = null;
 let _sampleRate = 24000;
 let _duration = 0;
 let _positionInterval = null;
-// W3: Idempotency guard for 'ended' notifications (interval + Speaker finish/close).
-let _endedSent = false;
 
-// W2: Wrap process.send so we never throw ERR_IPC_CHANNEL_CLOSED when the
-// parent has already disconnected the IPC channel (e.g. during SIGTERM shutdown).
-function _safeSend(msg) {
-  try {
-    if (process.connected) {
-      process.send(msg);
-    }
-  } catch (_) {}
-}
-
-// W3: Fire 'ended' to parent with idempotency guard. Used by the Speaker
-// finish/close listeners and the interval fallback.
-function _notifyEnded() {
-  if (_endedSent) return;
-  _endedSent = true;
-  _isPlaying = false;
-  _stopPositionTracking();
-  _safeSend({ type: 'ended' });
+function resampleLinear(audio, sourceRate, targetRate) {
+  if (sourceRate === targetRate) return audio;
+  if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) {
+    throw new RangeError('sourceRate and targetRate must be positive finite numbers');
+  }
+  if (audio.length === 0) return new Float32Array(0);
+  const outputLength = Math.max(1, Math.round(audio.length * targetRate / sourceRate));
+  const output = new Float32Array(outputLength);
+  const scale = sourceRate / targetRate;
+  for (let i = 0; i < outputLength; i++) {
+    const src = Math.min(audio.length - 1, i * scale);
+    const left = Math.floor(src);
+    const right = Math.min(left + 1, audio.length - 1);
+    const frac = src - left;
+    output[i] = audio[left] + (audio[right] - audio[left]) * frac;
+  }
+  return output;
 }
 
 function handleGetDevices() {
@@ -83,6 +80,7 @@ function handleStart(audioData, options) {
 
   const {
     sampleRate = 24000,
+    sourceSampleRate = 24000,
     channels = 1,
     bitDepth = 'float32',
     volume = 1.0,
@@ -90,12 +88,14 @@ function handleStart(audioData, options) {
   } = options || {};
   // 注意：decibri 忽略 bufferSize 与 exclusiveMode（始终共享模式）。
 
+  const sourceDuration = audioData.length / sourceSampleRate;
+  audioData = resampleLinear(audioData, sourceSampleRate, sampleRate);
   _sampleRate = sampleRate;
   const dtype = resolveDtype(bitDepth); // int24/int32/未知 → float32
   const startSample = Math.floor(offset * sampleRate);
 
   _audioData = audioData;
-  _duration = audioData.length / _sampleRate;
+  _duration = sourceDuration;
   _playbackOffset = offset;
 
   const speakerOptions = buildSpeakerOptions({

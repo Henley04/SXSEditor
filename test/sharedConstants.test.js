@@ -31,8 +31,8 @@ describe('inference/shared/constants', () => {
     expect(constants.COND_DIM).to.equal(1024);
   });
 
-  it('should export VOCODER_CHUNK_FRAMES = 1008', () => {
-    expect(constants.VOCODER_CHUNK_FRAMES).to.equal(1008);
+  it('should export VOCODER_CHUNK_FRAMES = 1024', () => {
+    expect(constants.VOCODER_CHUNK_FRAMES).to.equal(1024);
   });
 
   it('should export VOCODER_OVERLAP_FRAMES = 32', () => {

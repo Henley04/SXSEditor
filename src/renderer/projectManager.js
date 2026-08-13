@@ -333,7 +333,7 @@ export function showSaveProjectOptionsDialog() {
       gap: 8px;
       cursor: pointer;
       font-size: 13px;
-      color: #c8c8dc;
+      color: var(--fg-secondary);
     `;
     const embedCheckbox = document.createElement('input');
     embedCheckbox.type = 'checkbox';

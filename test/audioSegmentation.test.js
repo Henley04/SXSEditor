@@ -60,6 +60,11 @@ describe('inference/pipeline/audioSegmentation', () => {
       expect(out.length).to.equal(1);
     });
 
+    it('should reject invalid BPM instead of entering a non-progressing loop', () => {
+      expect(() => seg.buildVocalSegments([{ start: 0, duration: 40, lyric: 'a' }], 0)).to.throw(RangeError);
+      expect(() => seg.buildVocalSegments([{ start: 0, duration: 40, lyric: 'a' }], NaN)).to.throw(RangeError);
+    });
+
     it('should return single segment when total duration <= threshold', () => {
       const notes = [{ start: 0, duration: 4, lyric: 'a' }];
       const out = seg.buildVocalSegments(notes, 120);
@@ -118,6 +123,17 @@ describe('inference/pipeline/audioSegmentation', () => {
 
     it('should differ for arrays differing only in length', () => {
       expect(seg.hashArray([1, 2, 3])).to.not.equal(seg.hashArray([1, 2, 3, 0]));
+    });
+
+    it('should preserve fractional curve edits in the cache hash', () => {
+      expect(seg.hashArray([0.10, 0.20])).to.not.equal(seg.hashArray([0.10, 0.21]));
+    });
+
+    it('should include the final element when sampling long arrays', () => {
+      const a = new Float32Array(5001);
+      const b = new Float32Array(5001);
+      b[b.length - 1] = 0.25;
+      expect(seg.hashArray(a)).to.not.equal(seg.hashArray(b));
     });
 
     it('should handle empty array', () => {

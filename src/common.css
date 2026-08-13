@@ -234,6 +234,83 @@ input[type="checkbox"]:disabled {
   cursor: not-allowed;
 }
 
+/* ==================== 自定义单选按钮（带动画） ==================== */
+/* 替换原生 radio 外观，与 checkbox 风格保持一致 */
+
+input[type="radio"] {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg-input);
+  cursor: pointer;
+  flex-shrink: 0;
+  position: relative;
+  vertical-align: middle;
+  transition:
+    background var(--motion-fast) var(--ease-standard),
+    border-color var(--motion-fast) var(--ease-standard),
+    box-shadow var(--motion-fast) var(--ease-standard),
+    transform 0.12s var(--ease-standard);
+}
+
+/* 内圆点：用伪元素绘制，通过 scale 做弹跳动画 */
+input[type="radio"]::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fg-on-accent);
+  transform: translate(-50%, -50%) scale(0);
+  opacity: 0;
+  transition:
+    transform var(--motion-base) var(--ease-bounce),
+    opacity var(--motion-fast) var(--ease-standard);
+}
+
+input[type="radio"]:hover:not(:disabled):not(:checked) {
+  border-color: var(--accent);
+  background: var(--accent-softer);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+input[type="radio"]:active:not(:disabled) {
+  transform: scale(0.88);
+}
+
+input[type="radio"]:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 1px 4px var(--accent-glow, var(--accent-soft));
+}
+
+input[type="radio"]:checked::after {
+  transform: translate(-50%, -50%) scale(1);
+  opacity: 1;
+}
+
+input[type="radio"]:checked:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+input[type="radio"]:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+input[type="radio"]:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* 兼容已有容器：保留 accent-color 回退（appearance:none 下无效，仅作向后兼容） */
 
 /* Card-like panels get subtle hover lift */

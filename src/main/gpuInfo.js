@@ -101,14 +101,9 @@ const VRAM_TIERS_GB = [2, 3, 4, 6, 8, 10, 12, 16, 20, 24];
  *
  * default vocoder 与 SiFiGAN 使用各自独立的分档表：
  *   - default vocoder 模型体积大（fp16: 519MB）、激活工作区大，采用更保守的档位
- *     （8GB fp16 → 约 2.5GB 预算 → 640 帧 ≈ 12.8s）
+ *     （8GB fp16 → 约 2.5GB 预算 → 1024 帧 ≈ 20.5s）
  *   - SiFiGAN 模型体积小（fp16: 23MB），虽有 4× mel 上采样但整体资源占用远低于 default，
- *     采用更宽松的档位（8GB fp16 → 约 2.85GB 预算 → 1008 帧 ≈ 20.2s）
- *
- * 旧版错误地将 SiFiGAN user-visible 帧数除以 4（基于"4× 上采样 = 4× 资源"假设），
- * 实测 SiFiGAN 资源占用远低于 default vocoder，无需缩减。
- *
- * 所有返回值对齐到 8 的倍数（与 VOCODER_OVERLAP_FRAMES 兼容）。
+ *     采用更宽松的档位（8GB fp16 → 约 2.85GB 预算 → 1280 帧 ≈ 25.6s）
  */
 function computeVocoderChunkFramesFromVRAM(vramBytes, precision = DEFAULT_RESIDENT_PRECISION, vocoderType = 'default') {
   const isSifigan = vocoderType === 'sifigan';
@@ -130,28 +125,28 @@ function computeVocoderChunkFramesFromVRAM(vramBytes, precision = DEFAULT_RESIDE
   const availGb = availableBytes / (1024 * 1024 * 1024);
   let frames;
   // 分档基于"可用预算"（已扣除常驻权重 + diff_step 激活 + OS 占用 + 安全系数）。
-  // default vocoder：保守档位，8GB fp16（预算≈2.5GB）→ 640 帧 ≈ 12.8s
-  //   各档位整体上调一级以减少分片拼接开销，同时保持 OOM 余量。
+  // 8GB 为基准点：default→1024帧(≈20.5s)，SiFiGAN→1280帧(≈25.6s)。
+  // 更小显存按比例缩减，更大显存按比例增加。
   if (!isSifigan) {
-    if (availGb < 0.5) frames = 384;       // 极紧张：~7.7s
-    else if (availGb < 1.0) frames = 448;   // 紧张：~9.0s
-    else if (availGb < 1.5) frames = 512;   // 一般偏紧：~10.2s
-    else if (availGb < 2.0) frames = 536;   // 一般：~10.7s
-    else if (availGb < 3.0) frames = 640;   // 8GB fp16 落点：~12.8s
-    else if (availGb < 4.0) frames = 768;   // 宽裕：~15.4s
-    else if (availGb < 5.0) frames = 1008;  // 很宽裕：~20.2s
-    else frames = 2048;                      // 极宽裕：~40.9s
-  } else {
-    // SiFiGAN：宽松档位，模型仅 23MB（fp16），激活工作区远小于 default vocoder
-    //   8GB fp16（预算≈2.85GB）→ 1008 帧 ≈ 20.2s
-    //   旧版错误地除以 4（仅 192 帧 ≈ 3.8s），导致分片过多、拼接开销大
-    if (availGb < 0.5) frames = 384;        // 极紧张
-    else if (availGb < 1.0) frames = 512;    // 紧张：~10.2s
-    else if (availGb < 2.0) frames = 768;    // 一般：~15.4s
-    else if (availGb < 3.0) frames = 1008;   // 8GB fp16 落点：~20.2s
+    if (availGb < 0.5) frames = 512;        // 极紧张：~10.2s
+    else if (availGb < 1.0) frames = 640;    // 紧张：~12.8s
+    else if (availGb < 1.5) frames = 768;    // 一般偏紧：~15.4s
+    else if (availGb < 2.0) frames = 896;    // 一般：~17.9s
+    else if (availGb < 3.0) frames = 1024;   // 8GB fp16 落点：~20.5s
     else if (availGb < 4.0) frames = 1280;   // 宽裕：~25.6s
     else if (availGb < 5.0) frames = 1536;   // 很宽裕：~30.7s
     else frames = 2048;                       // 极宽裕：~40.9s
+  } else {
+    // SiFiGAN：宽松档位，模型仅 23MB（fp16），激活工作区远小于 default vocoder
+    //   8GB fp16（预算≈2.85GB）→ 1280 帧 ≈ 25.6s
+    //   旧版错误地除以 4（仅 192 帧 ≈ 3.8s），导致分片过多、拼接开销大
+    if (availGb < 0.5) frames = 512;         // 极紧张
+    else if (availGb < 1.0) frames = 768;     // 紧张：~15.4s
+    else if (availGb < 2.0) frames = 1024;    // 一般：~20.5s
+    else if (availGb < 3.0) frames = 1280;    // 8GB fp16 落点：~25.6s
+    else if (availGb < 4.0) frames = 1536;    // 宽裕：~30.7s
+    else if (availGb < 5.0) frames = 1792;    // 很宽裕：~35.8s
+    else frames = 2048;                        // 极宽裕：~40.9s
   }
   frames = Math.max(MIN_VOCODER_CHUNK_FRAMES, Math.min(MAX_VOCODER_CHUNK_FRAMES, frames));
   frames = Math.round(frames / 8) * 8;

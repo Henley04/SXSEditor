@@ -6,9 +6,13 @@ const _IS_TEST_ENV = process.env.CI === 'true' ||
 
 // Set log level BEFORE requiring onnxruntime-node!
 // (ORT initializes once when module is loaded, must set logLevel first)
-if (!_IS_TEST_ENV) {
+const _ORT_DEBUG_ENABLED = !_IS_TEST_ENV && process.env.SXSEDITOR_ORT_DEBUG === '1';
+if (_ORT_DEBUG_ENABLED) {
     process.env.ORT_DML_DEBUG = '1';
-    process.env.ORT_LOGGING_LEVEL = '0'; // 0=VERBOSE, 1=INFO, 2=WARNING, 3=ERROR, 4=FATAL
+    process.env.ORT_LOGGING_LEVEL = '0';
+} else {
+    process.env.ORT_DML_DEBUG = '0';
+    process.env.ORT_LOGGING_LEVEL = '2';
 }
 
 const path = require('node:path');
@@ -16,8 +20,8 @@ const fs = require('node:fs');
 const ort = require('onnxruntime-node');
 // Set logLevel on the real module (ort.env is from the external onnxruntime-node's onnxruntime-common)
 if (!_IS_TEST_ENV) {
-    ort.env.logLevel = 'verbose';
-    ort.env.debug = true;
+    ort.env.logLevel = _ORT_DEBUG_ENABLED ? 'verbose' : 'warning';
+    ort.env.debug = _ORT_DEBUG_ENABLED;
 }
 const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
@@ -48,8 +52,8 @@ globalThis._flushOrtDebugLogs = flushOrtDebugLogs;
 // Skipped in test/CI to avoid capturing test console.error/warn output and
 // to prevent the periodic flush timer from polluting test output.
 let ortDebugBuffer = '';
-if (!_IS_TEST_ENV) {
-    console.log('[OnnxSVSPipeline] ONNX Runtime debug logging enabled (verbose, ORT_LOGGING_LEVEL=0, ORT_DML_DEBUG=1)');
+if (_ORT_DEBUG_ENABLED) {
+    console.log('[OnnxSVSPipeline] ONNX Runtime debug logging enabled by SXSEDITOR_ORT_DEBUG=1');
 
     // (ORT logs go to native stderr, not to Node.js console.log)
     const iconv = require('iconv-lite');

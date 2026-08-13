@@ -38,7 +38,16 @@ class AudioSegmentation {
     buildVocalSegments(notes, bpm) {
         if (!notes || notes.length === 0) return [{ notes, startBeat: 0, endBeat: 0 }];
 
+        if (!Number.isFinite(bpm) || bpm <= 0) {
+            throw new RangeError('bpm must be a positive finite number');
+        }
+
         const sorted = [...notes].sort((a, b) => a.start - b.start);
+        for (const note of sorted) {
+            if (!Number.isFinite(note.start) || !Number.isFinite(note.duration) || note.duration <= 0) {
+                throw new RangeError('notes must have finite start and positive duration');
+            }
+        }
         const totalBeats = sorted[sorted.length - 1].start + sorted[sorted.length - 1].duration;
         const totalSec = (totalBeats / bpm) * 60;
 
@@ -137,24 +146,28 @@ class AudioSegmentation {
      */
     hashArray(arr) {
         if (!arr) return 0;
-        // FNV-1a 32-bit 参数
         let h = 0x811c9dc5;
+        const bytes = new Uint8Array(8);
+        const view = new DataView(bytes.buffer);
+        const hashValue = (value) => {
+            // Preserve fractional edits. The old bitwise coercion collapsed every
+            // value in (-1, 1) to zero, causing stale synthesis-cache hits for F0 curves.
+            view.setFloat64(0, Number.isFinite(Number(value)) ? Number(value) : 0, true);
+            for (let j = 0; j < bytes.length; j++) {
+                h ^= bytes[j];
+                h = Math.imul(h, 0x01000193);
+            }
+        };
+
         const step = Math.max(1, Math.floor(arr.length / 2000));
+        let lastHashed = -1;
         for (let i = 0; i < arr.length; i += step) {
-            // FNV-1a: 逐字节 XOR + 乘素数（用整数近似，避免精度损失）
-            const v = (arr[i] | 0) | 0;
-            h ^= v & 0xff;
-            h = Math.imul(h, 0x01000193);
-            h ^= (v >>> 8) & 0xff;
-            h = Math.imul(h, 0x01000193);
-            h ^= (v >>> 16) & 0xff;
-            h = Math.imul(h, 0x01000193);
-            h ^= (v >>> 24) & 0xff;
-            h = Math.imul(h, 0x01000193);
+            hashValue(arr[i]);
+            lastHashed = i;
         }
-        // 加上长度以区分前缀相同的数组
-        h ^= arr.length;
-        h = Math.imul(h, 0x01000193);
+        // Sampling must include the tail, where editor curves commonly receive a final keyframe.
+        if (arr.length > 0 && lastHashed !== arr.length - 1) hashValue(arr[arr.length - 1]);
+        hashValue(arr.length);
         return h | 0;
     }
 
@@ -167,7 +180,7 @@ class AudioSegmentation {
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
         const totalSteps = options.nSteps || 32;
         const cfgStrength = options.cfg !== undefined ? options.cfg : 3.0;
-        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.75;
+        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.7;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
         const language = options.language || null;

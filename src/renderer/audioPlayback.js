@@ -509,8 +509,8 @@ export function getPreviewInferenceOptions() {
   return {
     nSteps: state.audioSettings?.previewDiffSteps ?? 16,
     cfg: state.audioSettings?.previewCfgStrength ?? 3.0,
-    cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.6,
-    sampler: state.audioSettings?.previewSampler ?? 'stork2',
+    cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.7,
+    sampler: state.audioSettings?.previewSampler ?? 'euler',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     diffStepChunk: state.audioSettings?.previewDiffStepChunkEnabled === true,
@@ -530,8 +530,8 @@ export function getExportInferenceOptions() {
   return {
     nSteps: state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.exportCfgStrength ?? 3.0,
-    cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.6,
-    sampler: state.audioSettings?.exportSampler ?? 'stork2',
+    cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.7,
+    sampler: state.audioSettings?.exportSampler ?? 'euler',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     // Task 11: CFG schedule (export mirrors). Falls back to top-level keys.
@@ -633,6 +633,7 @@ export async function startExclusivePlayback(offset) {
     const options = {
       deviceId: state.audioSettings?.audioOutputDevice ?? -1,
       sampleRate: state.audioSettings?.audioSampleRate ?? SAMPLE_RATE,
+      sourceSampleRate: SAMPLE_RATE,
       channels: 1,
       bitDepth: state.audioSettings?.audioBitDepth ?? 'float32',
       bufferSize: state.audioSettings?.audioBufferSize ?? 1024,

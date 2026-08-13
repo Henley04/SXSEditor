@@ -157,81 +157,90 @@
             <!-- Preview Inference Params -->
             <div class="settings-section hidden" id="section-preview-params">
                 <p class="section-desc" data-i18n="settings.previewInferenceParamsDesc">编辑器中播放预览时使用的推理参数，可适当降低质量以换取更快的响应速度。</p>
-                <div class="setting-group">
-                    <label for="previewDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="previewDiffStepsValue" class="volume-display">16</span></label>
-                    <input type="range" id="previewDiffSteps" min="4" max="64" value="16" step="4">
-                    <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
-                </div>
-                <div class="setting-group">
-                    <label for="previewSampler"><span data-i18n="settings.sampler">求解器</span></label>
-                    <select id="previewSampler">
-                        <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，默认）</option>
-                        <option value="heun" data-i18n="settings.samplerHeun">Heun（二阶，2 倍推理）</option>
-                        <option value="extrap" data-i18n="settings.samplerExtrap">Extrapolated Euler（1 倍推理）</option>
-                        <option value="stork2" data-i18n="settings.samplerStork2">STORK-2（1 倍推理，论文原版）</option>
-                    </select>
-                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）；STORK-2 为论文原版 RKC 递推 + virtual NFE（每步 1 次推理 + 8 个 sub-stage）。分块预览时 Extrapolated Euler 与 STORK-2 均优势减弱。</p>
-                </div>
-                <div class="setting-group">
-                    <label for="previewCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
-                    <input type="range" id="previewCfgStrength" min="0" max="10" value="3.0" step="0.5">
-                    <p class="hint" data-i18n="settings.cfgStrengthHint">无分类器引导强度。值越大贴合条件，但可能过度强化。设为 0 可跳过无条件预测。推荐 1.0~5.0。</p>
-                </div>
-                <div class="setting-group">
-                    <label for="previewCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="previewCfgRescaleValue" class="volume-display">0.75</span></label>
-                    <input type="range" id="previewCfgRescale" min="0" max="1" value="0.75" step="0.05">
-                    <p class="hint" data-i18n="settings.cfgRescaleHint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。推荐 0.5~0.9。</p>
-                </div>
-                <div class="setting-group">
-                    <label for="previewCfgScheduleMode"><span data-i18n="settings.cfgScheduleMode">CFG 强度曲线调度</span></label>
-                    <select id="previewCfgScheduleMode">
-                        <option value="constant" data-i18n="settings.cfgScheduleConstant">Constant（固定值）</option>
-                        <option value="linear" data-i18n="settings.cfgScheduleLinear">Linear（start → end）</option>
-                        <option value="cosine" data-i18n="settings.cfgScheduleCosine">Cosine（平滑缓动）</option>
-                        <option value="custom" data-i18n="settings.cfgScheduleCustom">Custom（关键帧）</option>
-                    </select>
-                    <p class="hint" data-i18n="settings.cfgScheduleModeHint">在扩散步数间动态调整 CFG 强度。</p>
-                </div>
-                <div class="setting-group" id="previewCfgStrengthStartGroup">
-                    <label for="previewCfgStrengthStart"><span data-i18n="settings.cfgStrengthStart">起始 CFG 强度</span></label>
-                    <input type="number" id="previewCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动">
-                    <p class="hint" data-i18n="settings.cfgStrengthStartHint">第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。</p>
-                </div>
-                <div class="setting-group hidden" id="previewCfgScheduleKeyframesGroup">
-                    <label for="previewCfgScheduleKeyframes"><span data-i18n="settings.cfgScheduleKeyframes">调度关键帧</span></label>
-                    <input type="text" id="previewCfgScheduleKeyframes" placeholder="0:1.5,16:3.0,31:3.0">
-                    <p class="hint" data-i18n="settings.cfgScheduleKeyframesHint">逗号分隔的 step:value 对。</p>
-                </div>
-                <div class="setting-group">
-                    <label class="device-mode-radio">
-                        <input type="checkbox" id="previewDynamicThresholdEnabled">
-                        <span class="radio-label" data-i18n="settings.dynamicThresholdEnabled">动态阈值截断</span>
-                        <span class="radio-desc" data-i18n="settings.dynamicThresholdEnabledHint">在 CFG 合并后对 mel 逐帧分位数截断，抑制高 CFG 强度下的过度曝光伪影。</span>
-                    </label>
-                </div>
-                <div class="setting-group hidden" id="previewDynamicThresholdPercentileGroup">
-                    <label for="previewDynamicThresholdPercentile"><span data-i18n="settings.dynamicThresholdPercentile">截断分位数</span> <span id="previewDynamicThresholdPercentileValue" class="volume-display">0.995</span></label>
-                    <input type="range" id="previewDynamicThresholdPercentile" min="0.900" max="0.999" value="0.995" step="0.001">
-                    <p class="hint" data-i18n="settings.dynamicThresholdPercentileHint">值越低截断越激进（更多极端值被压缩）。推荐 0.99~0.998。</p>
-                </div>
-                <div class="setting-group">
-                    <label class="device-mode-radio">
-                        <input type="checkbox" id="previewDiffStepChunkEnabled">
-                        <span class="radio-label" data-i18n="settings.previewDiffStepChunkEnabled">预览时启用 diffStep 分块推理</span>
-                        <span class="radio-desc" data-i18n="settings.previewDiffStepChunkEnabledDesc">将目标帧分块独立推理再交叉淡入淡出拼接，利用注意力 O(n²) 特性加速长片段预览。仅影响预览，导出始终整段推理。</span>
-                    </label>
-                    <p class="hint" data-i18n="settings.previewDiffStepChunkHint">分块可显著加速长片段预览（片段越长加速越明显），代价是块边界处可能产生轻微伪影。短片段（短于分块大小）不会分块。</p>
-                </div>
-                <div class="setting-group hidden" id="previewDiffStepChunkGroup">
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupBasic">基础参数</p>
                     <div class="setting-group">
-                        <label for="previewDiffStepChunkFrames"><span data-i18n="settings.previewDiffStepChunkFrames">分块大小（帧）</span> <span id="previewDiffStepChunkFramesValue" class="volume-display">500</span></label>
-                        <input type="range" id="previewDiffStepChunkFrames" min="100" max="2000" value="500" step="50">
-                        <p class="hint" data-i18n="settings.previewDiffStepChunkFramesHint">每个分块的目标帧数（1 帧 = 20ms 音频）。值越小加速越明显但边界伪影增多；值越大质量越好但加速减弱。推荐 300~800。</p>
+                        <label for="previewDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="previewDiffStepsValue" class="volume-display">16</span></label>
+                        <input type="range" id="previewDiffSteps" min="4" max="64" value="16" step="4">
+                        <p class="hint" data-i18n="settings.previewDiffStepsHint">扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。</p>
                     </div>
                     <div class="setting-group">
-                        <label for="previewDiffStepOverlapFrames"><span data-i18n="settings.previewDiffStepOverlapFrames">分块重叠（帧）</span> <span id="previewDiffStepOverlapFramesValue" class="volume-display">50</span></label>
-                        <input type="range" id="previewDiffStepOverlapFrames" min="0" max="200" value="50" step="10">
-                        <p class="hint" data-i18n="settings.previewDiffStepOverlapFramesHint">相邻分块间的重叠帧数，用 Hann 窗交叉淡入淡出消除拼接痕迹。值越大边界越平滑但计算量增加。推荐 30~100。设为 0 则不重叠（不推荐）。</p>
+                        <label for="previewSampler"><span data-i18n="settings.sampler">求解器</span></label>
+                        <select id="previewSampler">
+                            <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，默认）</option>
+                            <option value="heun" data-i18n="settings.samplerHeun">Heun（二阶，2 倍推理）</option>
+                            <option value="extrap" data-i18n="settings.samplerExtrap">Extrapolated Euler（1 倍推理）</option>
+                            <option value="stork2" data-i18n="settings.samplerStork2">STORK-2（1 倍推理，论文原版）</option>
+                        </select>
+                        <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）；STORK-2 为论文原版 RKC 递推 + virtual NFE（每步 1 次推理 + 8 个 sub-stage）。分块预览时 Extrapolated Euler 与 STORK-2 均优势减弱。</p>
+                    </div>
+                    <div class="setting-group">
+                        <label for="previewCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="previewCfgStrengthValue" class="volume-display">3.0</span></label>
+                        <input type="range" id="previewCfgStrength" min="0" max="10" value="3.0" step="0.5">
+                        <p class="hint" data-i18n="settings.cfgStrengthHint">无分类器引导强度。值越大贴合条件，但可能过度强化。设为 0 可跳过无条件预测。推荐 1.0~5.0。</p>
+                    </div>
+                    <div class="setting-group">
+                        <label for="previewCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="previewCfgRescaleValue" class="volume-display">0.70</span></label>
+                        <input type="range" id="previewCfgRescale" min="0" max="1" value="0.70" step="0.05">
+                        <p class="hint" data-i18n="settings.cfgRescaleHint">CFG 结果的重缩放系数，用于缓解过度引导造成的伪影。推荐 0.5~0.9。</p>
+                    </div>
+                </div>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupCfgSchedule">CFG 强度曲线</p>
+                    <div class="setting-group">
+                        <label for="previewCfgScheduleMode"><span data-i18n="settings.cfgScheduleMode">调度模式</span></label>
+                        <select id="previewCfgScheduleMode">
+                            <option value="constant" data-i18n="settings.cfgScheduleConstant">Constant（固定值）</option>
+                            <option value="linear" data-i18n="settings.cfgScheduleLinear">Linear（start → end）</option>
+                            <option value="cosine" data-i18n="settings.cfgScheduleCosine">Cosine（平滑缓动）</option>
+                            <option value="custom" data-i18n="settings.cfgScheduleCustom">Custom（关键帧）</option>
+                        </select>
+                        <p class="hint" data-i18n="settings.cfgScheduleModeHint">在扩散步数间动态调整 CFG 强度。Constant = 固定值；Linear 从 start 线性升至 end；Cosine 平滑缓入缓出；Custom 使用关键帧插值。</p>
+                    </div>
+                    <div class="setting-group" id="previewCfgStrengthStartGroup">
+                        <label for="previewCfgStrengthStart"><span data-i18n="settings.cfgStrengthStart">起始 CFG 强度</span></label>
+                        <input type="number" id="previewCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动">
+                        <p class="hint" data-i18n="settings.cfgStrengthStartHint">第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。</p>
+                    </div>
+                    <div class="setting-group hidden" id="previewCfgScheduleKeyframesGroup">
+                        <label for="previewCfgScheduleKeyframes"><span data-i18n="settings.cfgScheduleKeyframes">调度关键帧</span></label>
+                        <input type="text" id="previewCfgScheduleKeyframes" placeholder="0:1.5,16:3.0,31:3.0">
+                        <p class="hint" data-i18n="settings.cfgScheduleKeyframesHint">逗号分隔的 step:value 对。</p>
+                    </div>
+                </div>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupAdvanced">高级选项</p>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="previewDynamicThresholdEnabled">
+                            <span class="radio-label" data-i18n="settings.dynamicThresholdEnabled">动态阈值截断</span>
+                            <span class="radio-desc" data-i18n="settings.dynamicThresholdEnabledHint">在 CFG 合并后对 mel 逐帧分位数截断，抑制高 CFG 强度下的过度曝光伪影。</span>
+                        </label>
+                    </div>
+                    <div class="setting-group hidden" id="previewDynamicThresholdPercentileGroup">
+                        <label for="previewDynamicThresholdPercentile"><span data-i18n="settings.dynamicThresholdPercentile">截断分位数</span> <span id="previewDynamicThresholdPercentileValue" class="volume-display">0.995</span></label>
+                        <input type="range" id="previewDynamicThresholdPercentile" min="0.900" max="0.999" value="0.995" step="0.001">
+                        <p class="hint" data-i18n="settings.dynamicThresholdPercentileHint">值越低截断越激进（更多极端值被压缩）。推荐 0.99~0.998。</p>
+                    </div>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="previewDiffStepChunkEnabled">
+                            <span class="radio-label" data-i18n="settings.previewDiffStepChunkEnabled">预览时启用 diffStep 分块推理</span>
+                            <span class="radio-desc" data-i18n="settings.previewDiffStepChunkEnabledDesc">将目标帧分块独立推理再交叉淡入淡出拼接，利用注意力 O(n²) 特性加速长片段预览。仅影响预览，导出始终整段推理。</span>
+                        </label>
+                        <p class="hint" data-i18n="settings.previewDiffStepChunkHint">分块可显著加速长片段预览（片段越长加速越明显），代价是块边界处可能产生轻微伪影。短片段（短于分块大小）不会分块。</p>
+                    </div>
+                    <div class="setting-group hidden" id="previewDiffStepChunkGroup">
+                        <div class="setting-group">
+                            <label for="previewDiffStepChunkFrames"><span data-i18n="settings.previewDiffStepChunkFrames">分块大小（帧）</span> <span id="previewDiffStepChunkFramesValue" class="volume-display">500</span></label>
+                            <input type="range" id="previewDiffStepChunkFrames" min="100" max="2000" value="500" step="50">
+                            <p class="hint" data-i18n="settings.previewDiffStepChunkFramesHint">每个分块的目标帧数（1 帧 = 20ms 音频）。值越小加速越明显但边界伪影增多；值越大质量越好但加速减弱。推荐 300~800。</p>
+                        </div>
+                        <div class="setting-group">
+                            <label for="previewDiffStepOverlapFrames"><span data-i18n="settings.previewDiffStepOverlapFrames">分块重叠（帧）</span> <span id="previewDiffStepOverlapFramesValue" class="volume-display">50</span></label>
+                            <input type="range" id="previewDiffStepOverlapFrames" min="0" max="200" value="50" step="10">
+                            <p class="hint" data-i18n="settings.previewDiffStepOverlapFramesHint">相邻分块间的重叠帧数，用 Hann 窗交叉淡入淡出消除拼接痕迹。值越大边界越平滑但计算量增加。推荐 30~100。设为 0 则不重叠（不推荐）。</p>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -239,100 +248,118 @@
             <!-- Export Inference Params -->
             <div class="settings-section hidden" id="section-export-params">
                 <p class="section-desc" data-i18n="settings.exportInferenceParamsDesc">导出 WAV 文件时使用的推理参数，默认使用更高质量的设置以获得最佳音质。</p>
-                <div class="setting-group">
-                    <label for="exportDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="exportDiffStepsValue" class="volume-display">32</span></label>
-                    <input type="range" id="exportDiffSteps" min="4" max="64" value="32" step="4">
-                    <p class="hint" data-i18n="settings.exportDiffStepsHint">导出时的扩散步数。更多步数 = 更高质量。推荐导出使用 32 步。</p>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupBasic">基础参数</p>
+                    <div class="setting-group">
+                        <label for="exportDiffSteps"><span data-i18n="settings.diffSteps">扩散步数</span> <span id="exportDiffStepsValue" class="volume-display">32</span></label>
+                        <input type="range" id="exportDiffSteps" min="4" max="64" value="32" step="4">
+                        <p class="hint" data-i18n="settings.exportDiffStepsHint">导出时的扩散步数。更多步数 = 更高质量。推荐导出使用 32 步。</p>
+                    </div>
+                    <div class="setting-group">
+                        <label for="exportSampler"><span data-i18n="settings.sampler">求解器</span></label>
+                        <select id="exportSampler">
+                            <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，默认）</option>
+                            <option value="heun" data-i18n="settings.samplerHeun">Heun（二阶，2 倍推理）</option>
+                            <option value="extrap" data-i18n="settings.samplerExtrap">Extrapolated Euler（1 倍推理）</option>
+                            <option value="stork2" data-i18n="settings.samplerStork2">STORK-2（1 倍推理，论文原版）</option>
+                        </select>
+                        <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）；STORK-2 为论文原版 RKC 递推 + virtual NFE（每步 1 次推理 + 8 个 sub-stage）。分块预览时 Extrapolated Euler 与 STORK-2 均优势减弱。</p>
+                    </div>
+                    <div class="setting-group">
+                        <label for="exportCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
+                        <input type="range" id="exportCfgStrength" min="0" max="10" value="3.0" step="0.5">
+                        <p class="hint" data-i18n="settings.exportCfgStrengthHint">导出时的 CFG 强度。导出时建议保持较高值以确保音质。</p>
+                    </div>
+                    <div class="setting-group">
+                        <label for="exportCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="exportCfgRescaleValue" class="volume-display">0.70</span></label>
+                        <input type="range" id="exportCfgRescale" min="0" max="1" value="0.70" step="0.05">
+                        <p class="hint" data-i18n="settings.exportCfgRescaleHint">导出时的 CFG Rescale 系数。与预览参数说明相同。</p>
+                    </div>
                 </div>
-                <div class="setting-group">
-                    <label for="exportSampler"><span data-i18n="settings.sampler">求解器</span></label>
-                    <select id="exportSampler">
-                        <option value="euler" data-i18n="settings.samplerEuler">Euler（一阶，默认）</option>
-                        <option value="heun" data-i18n="settings.samplerHeun">Heun（二阶，2 倍推理）</option>
-                        <option value="extrap" data-i18n="settings.samplerExtrap">Extrapolated Euler（1 倍推理）</option>
-                        <option value="stork2" data-i18n="settings.samplerStork2">STORK-2（1 倍推理，论文原版）</option>
-                    </select>
-                    <p class="hint" data-i18n="settings.samplerHint">扩散采样求解器。Euler 为默认基线；Heun 为二阶改进欧拉（每步 2 次推理）；Extrapolated Euler 为受 STORK 启发的速度外推法（每步 1 次推理）；STORK-2 为论文原版 RKC 递推 + virtual NFE（每步 1 次推理 + 8 个 sub-stage）。分块预览时 Extrapolated Euler 与 STORK-2 均优势减弱。</p>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupCfgSchedule">CFG 强度曲线</p>
+                    <div class="setting-group">
+                        <label for="exportCfgScheduleMode"><span data-i18n="settings.cfgScheduleMode">调度模式</span></label>
+                        <select id="exportCfgScheduleMode">
+                            <option value="constant" data-i18n="settings.cfgScheduleConstant">Constant（固定值）</option>
+                            <option value="linear" data-i18n="settings.cfgScheduleLinear">Linear（start → end）</option>
+                            <option value="cosine" data-i18n="settings.cfgScheduleCosine">Cosine（平滑缓动）</option>
+                            <option value="custom" data-i18n="settings.cfgScheduleCustom">Custom（关键帧）</option>
+                        </select>
+                        <p class="hint" data-i18n="settings.cfgScheduleModeHint">在扩散步数间动态调整 CFG 强度。Constant = 固定值；Linear 从 start 线性升至 end；Cosine 平滑缓入缓出；Custom 使用关键帧插值。</p>
+                    </div>
+                    <div class="setting-group" id="exportCfgStrengthStartGroup">
+                        <label for="exportCfgStrengthStart"><span data-i18n="settings.cfgStrengthStart">起始 CFG 强度</span></label>
+                        <input type="number" id="exportCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动">
+                        <p class="hint" data-i18n="settings.cfgStrengthStartHint">第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。Constant 模式下忽略。</p>
+                    </div>
+                    <div class="setting-group hidden" id="exportCfgScheduleKeyframesGroup">
+                        <label for="exportCfgScheduleKeyframes"><span data-i18n="settings.cfgScheduleKeyframes">调度关键帧</span></label>
+                        <input type="text" id="exportCfgScheduleKeyframes" placeholder="0:1.5,16:3.0,31:3.0">
+                        <p class="hint" data-i18n="settings.cfgScheduleKeyframesHint">逗号分隔的 step:value 对。</p>
+                    </div>
                 </div>
-                <div class="setting-group">
-                    <label for="exportCfgStrength"><span data-i18n="settings.cfgStrength">CFG 引导强度</span> <span id="exportCfgStrengthValue" class="volume-display">3.0</span></label>
-                    <input type="range" id="exportCfgStrength" min="0" max="10" value="3.0" step="0.5">
-                    <p class="hint" data-i18n="settings.exportCfgStrengthHint">导出时的 CFG 强度。导出时建议保持较高值以确保音质。</p>
-                </div>
-                <div class="setting-group">
-                    <label for="exportCfgRescale"><span data-i18n="settings.cfgRescale">CFG Rescale 系数</span> <span id="exportCfgRescaleValue" class="volume-display">0.75</span></label>
-                    <input type="range" id="exportCfgRescale" min="0" max="1" value="0.75" step="0.05">
-                    <p class="hint" data-i18n="settings.exportCfgRescaleHint">导出时的 CFG Rescale 系数。</p>
-                </div>
-                <div class="setting-group">
-                    <label for="exportCfgScheduleMode"><span data-i18n="settings.cfgScheduleMode">CFG 强度曲线调度</span></label>
-                    <select id="exportCfgScheduleMode">
-                        <option value="constant" data-i18n="settings.cfgScheduleConstant">Constant（固定值）</option>
-                        <option value="linear" data-i18n="settings.cfgScheduleLinear">Linear（start → end）</option>
-                        <option value="cosine" data-i18n="settings.cfgScheduleCosine">Cosine（平滑缓动）</option>
-                        <option value="custom" data-i18n="settings.cfgScheduleCustom">Custom（关键帧）</option>
-                    </select>
-                    <p class="hint" data-i18n="settings.cfgScheduleModeHint">在扩散步数间动态调整 CFG 强度。</p>
-                </div>
-                <div class="setting-group" id="exportCfgStrengthStartGroup">
-                    <label for="exportCfgStrengthStart"><span data-i18n="settings.cfgStrengthStart">起始 CFG 强度</span></label>
-                    <input type="number" id="exportCfgStrengthStart" min="0" max="10" step="0.1" placeholder="自动">
-                    <p class="hint" data-i18n="settings.cfgStrengthStartHint">第 0 步的 CFG 强度。为空时回退到 cfgStrength × 0.5。</p>
-                </div>
-                <div class="setting-group hidden" id="exportCfgScheduleKeyframesGroup">
-                    <label for="exportCfgScheduleKeyframes"><span data-i18n="settings.cfgScheduleKeyframes">调度关键帧</span></label>
-                    <input type="text" id="exportCfgScheduleKeyframes" placeholder="0:1.5,16:3.0,31:3.0">
-                    <p class="hint" data-i18n="settings.cfgScheduleKeyframesHint">逗号分隔的 step:value 对。</p>
-                </div>
-                <div class="setting-group">
-                    <label class="device-mode-radio">
-                        <input type="checkbox" id="exportDynamicThresholdEnabled">
-                        <span class="radio-label" data-i18n="settings.dynamicThresholdEnabled">动态阈值截断</span>
-                        <span class="radio-desc" data-i18n="settings.dynamicThresholdEnabledHint">在 CFG 合并后对 mel 逐帧分位数截断，抑制高 CFG 强度下的过度曝光伪影。</span>
-                    </label>
-                </div>
-                <div class="setting-group hidden" id="exportDynamicThresholdPercentileGroup">
-                    <label for="exportDynamicThresholdPercentile"><span data-i18n="settings.dynamicThresholdPercentile">截断分位数</span> <span id="exportDynamicThresholdPercentileValue" class="volume-display">0.995</span></label>
-                    <input type="range" id="exportDynamicThresholdPercentile" min="0.900" max="0.999" value="0.995" step="0.001">
-                    <p class="hint" data-i18n="settings.dynamicThresholdPercentileHint">值越低截断越激进（更多极端值被压缩）。推荐 0.99~0.998。</p>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupAdvanced">高级选项</p>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="exportDynamicThresholdEnabled">
+                            <span class="radio-label" data-i18n="settings.dynamicThresholdEnabled">动态阈值截断</span>
+                            <span class="radio-desc" data-i18n="settings.dynamicThresholdEnabledHint">在 CFG 合并后对 mel 逐帧分位数截断，抑制高 CFG 强度下的过度曝光伪影。</span>
+                        </label>
+                    </div>
+                    <div class="setting-group hidden" id="exportDynamicThresholdPercentileGroup">
+                        <label for="exportDynamicThresholdPercentile"><span data-i18n="settings.dynamicThresholdPercentile">截断分位数</span> <span id="exportDynamicThresholdPercentileValue" class="volume-display">0.995</span></label>
+                        <input type="range" id="exportDynamicThresholdPercentile" min="0.900" max="0.999" value="0.995" step="0.001">
+                        <p class="hint" data-i18n="settings.dynamicThresholdPercentileHint">值越低截断越激进（更多极端值被压缩）。推荐 0.99~0.998。</p>
+                    </div>
                 </div>
             </div>
 
             <!-- Post-Processing -->
             <div class="settings-section hidden" id="section-post-processing">
                 <p class="section-desc" data-i18n="settings.postProcessingDesc">导出时对合成音频的后处理。预览不应用这些设置。</p>
-                <div class="setting-group">
-                    <label for="vocoderOverlapFrames"><span data-i18n="settings.vocoderOverlapFrames">Vocoder 重叠帧数</span> <span id="vocoderOverlapFramesValue" class="volume-display">32</span></label>
-                    <input type="range" id="vocoderOverlapFrames" min="8" max="96" value="32" step="8">
-                    <p class="hint" data-i18n="settings.vocoderOverlapFramesHint">相邻 vocoder 分片间的重叠帧数。</p>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupVocoder">Vocoder 拼接</p>
+                    <div class="setting-group">
+                        <label for="vocoderOverlapFrames"><span data-i18n="settings.vocoderOverlapFrames">Vocoder 重叠帧数</span> <span id="vocoderOverlapFramesValue" class="volume-display">32</span></label>
+                        <input type="range" id="vocoderOverlapFrames" min="8" max="96" value="32" step="8">
+                        <p class="hint" data-i18n="settings.vocoderOverlapFramesHint">相邻 vocoder 分片间的重叠帧数。</p>
+                    </div>
                 </div>
-                <div class="setting-group">
-                    <label class="device-mode-radio">
-                        <input type="checkbox" id="enableLoudnormFinal" checked>
-                        <span class="radio-label" data-i18n="settings.enableLoudnormFinal">EBU R128 响度归一化</span>
-                        <span class="radio-desc" data-i18n="settings.enableLoudnormFinalHint">对最终输出应用 2-pass EBU R128 响度归一化及 true-peak 限制。</span>
-                    </label>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupPostProc">音频后处理</p>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="enableLoudnormFinal" checked>
+                            <span class="radio-label" data-i18n="settings.enableLoudnormFinal">EBU R128 响度归一化</span>
+                            <span class="radio-desc" data-i18n="settings.enableLoudnormFinalHint">对最终输出应用 2-pass EBU R128 响度归一化及 true-peak 限制。</span>
+                        </label>
+                    </div>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="enableAntiAliasing">
+                            <span class="radio-label" data-i18n="settings.enableAntiAliasing">2× 过采样抗混叠</span>
+                            <span class="radio-desc" data-i18n="settings.enableAntiAliasingHint">降采样前执行 2× 过采样→低通滤波→降采样完整管线，减少高频混叠。</span>
+                        </label>
+                    </div>
                 </div>
-                <div class="setting-group">
-                    <label class="device-mode-radio">
-                        <input type="checkbox" id="enableAntiAliasing">
-                        <span class="radio-label" data-i18n="settings.enableAntiAliasing">2× 过采样抗混叠</span>
-                        <span class="radio-desc" data-i18n="settings.enableAntiAliasingHint">降采样前执行 2× 过采样→低通滤波→降采样完整管线，减少高频混叠。</span>
-                    </label>
-                </div>
-                <div class="setting-group">
-                    <label class="device-mode-radio">
-                        <input type="checkbox" id="enableSDEditRepair">
-                        <span class="radio-label" data-i18n="settings.enableSDEditRepair">SDEdit 局部修复</span>
-                        <span class="radio-desc" data-i18n="settings.enableSDEditRepairHint">扩散后检测 mel 局部异常并以浅噪声注入局部重采样。默认关闭。</span>
-                    </label>
-                </div>
-                <div class="setting-group">
-                    <label class="device-mode-radio">
-                        <input type="checkbox" id="diagnosticMode">
-                        <span class="radio-label" data-i18n="settings.diagnosticMode">诊断模式</span>
-                        <span class="radio-desc" data-i18n="settings.diagnosticModeHint">在控制台输出详细的推理统计。</span>
-                    </label>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupRepair">修复与诊断</p>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="enableSDEditRepair">
+                            <span class="radio-label" data-i18n="settings.enableSDEditRepair">SDEdit 局部修复</span>
+                            <span class="radio-desc" data-i18n="settings.enableSDEditRepairHint">扩散后检测 mel 局部异常并以浅噪声注入局部重采样。默认关闭。</span>
+                        </label>
+                    </div>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="diagnosticMode">
+                            <span class="radio-label" data-i18n="settings.diagnosticMode">诊断模式</span>
+                            <span class="radio-desc" data-i18n="settings.diagnosticModeHint">在控制台输出详细的推理统计。</span>
+                        </label>
+                    </div>
                 </div>
             </div>
 
@@ -345,7 +372,7 @@
                         <label class="device-mode-radio">
                             <input type="radio" name="vocoderChunkMode" value="smart" checked>
                             <span class="radio-label" data-i18n="settings.vocoderChunkSmart">智能分配</span>
-                            <span class="radio-desc" data-i18n="settings.vocoderChunkSmartDesc">依据显存大小自动选择最合适的分片长度（&lt;2GB→512, &lt;4GB→768, &lt;8GB→1008, ≥8GB→1536）</span>
+                            <span class="radio-desc" data-i18n="settings.vocoderChunkSmartDesc">依据显存大小、模型精度和 vocoder 类型自动选择分片长度（&lt;2GB→512, &lt;4GB→768, 8GB→1024, ≥12GB→1536）</span>
                         </label>
                         <label class="device-mode-radio">
                             <input type="radio" name="vocoderChunkMode" value="manual">
@@ -355,9 +382,9 @@
                     </div>
                 </div>
                 <div class="setting-group hidden" id="vocoderChunkManualGroup">
-                    <label for="vocoderChunkFrames"><span data-i18n="settings.vocoderChunkFrames">分片长度（帧）</span> <span id="vocoderChunkFramesValue" class="volume-display">1008</span></label>
-                    <input type="range" id="vocoderChunkFrames" min="256" max="2048" value="1008" step="8">
-                    <p class="hint" data-i18n="settings.vocoderChunkFramesHint">分片长度必须是 8 的倍数。值越大显存占用越高但拼接次数越少；值越小越省显存但拼接开销增加。默认 1008 帧（约 20 秒音频）。</p>
+                    <label for="vocoderChunkFrames"><span data-i18n="settings.vocoderChunkFrames">分片长度（帧）</span> <span id="vocoderChunkFramesValue" class="volume-display">1024</span></label>
+                    <input type="range" id="vocoderChunkFrames" min="256" max="2048" value="1024" step="8">
+                    <p class="hint" data-i18n="settings.vocoderChunkFramesHint">分片长度必须是 8 的倍数。值越大显存占用越高但拼接次数越少；值越小越省显存但拼接开销增加。默认 1024 帧（约 20.5 秒音频）。</p>
                 </div>
                 <div class="setting-group" id="vocoderChunkSmartInfo">
                     <div class="info-box">
@@ -487,9 +514,9 @@
                     <label for="audioOutputMode" data-i18n="settings.outputMode">输出模式</label>
                     <select id="audioOutputMode">
                         <option value="shared" data-i18n="settings.sharedMode">共享模式 (WASAPI Shared)</option>
-                        <option value="exclusive" data-i18n="settings.exclusiveMode">独占模式 (WASAPI Exclusive)</option>
+                        <option value="exclusive" data-i18n="settings.exclusiveMode">原生低延迟模式 (decibri)</option>
                     </select>
-                    <p class="hint" data-i18n="settings.exclusiveModeHint">独占模式绕过 Windows 音频混音器，可获得更低延迟和更高音质。</p>
+                    <p class="hint" data-i18n="settings.exclusiveModeHint">使用原生音频子进程播放。当前后端为共享模式，不提供真正的 WASAPI 独占或 bit-perfect 输出。</p>
                 </div>
                 <div class="setting-group">
                     <label for="audioOutputDevice" data-i18n="settings.outputDevice">输出设备</label>
@@ -508,7 +535,7 @@
                         <option value="96000">96000 Hz (高品质)</option>
                         <option value="192000">192000 Hz (录音棚)</option>
                     </select>
-                    <p class="hint" data-i18n="settings.sampleRateHint">输出采样率。独占模式下需设备支持所选采样率。</p>
+                    <p class="hint" data-i18n="settings.sampleRateHint">原生播放设备格式。24kHz 模型音频会在播放前重采样；更高数值不会增加模型带宽。</p>
                 </div>
                 <div class="setting-group">
                     <label for="audioBitDepth" data-i18n="settings.bitDepth">位深度</label>
@@ -518,7 +545,7 @@
                         <option value="int24">24-bit Integer</option>
                         <option value="int16">16-bit Integer (CD 品质)</option>
                     </select>
-                    <p class="hint" data-i18n="settings.bitDepthHint">独占模式下的输出位深度。32-bit Float 提供最高精度动态范围。</p>
+                    <p class="hint" data-i18n="settings.bitDepthHint">原生播放格式。当前后端支持 float32/int16，int24/int32 会降级为 float32。</p>
                 </div>
                 <div class="setting-group">
                     <label for="audioBufferSize" data-i18n="settings.bufferSize">缓冲区大小</label>
@@ -678,7 +705,7 @@
                         <span class="radio-label" data-i18n="settings.releaseDiffStepBeforeVocoder">Vocoder 推理前释放 diffStep</span>
                         <span class="radio-desc" data-i18n="settings.releaseDiffStepBeforeVocoderDesc">仅 DML 后端生效，默认开启</span>
                     </label>
-                    <p class="hint" data-i18n="settings.releaseDiffStepBeforeVocoderHint">diffusion 完成后释放 diffStep session，让 vocoder 推理独占显存（腾出 ~3-4GB），避免 0x887A0006/TDR 黑屏。代价：每次 vocoder 后需重载 diffStep（~1-3秒），多段合成会变慢。SiFiGAN/低显存显卡强烈建议开启。</p>
+                    <p class="hint" data-i18n="settings.releaseDiffStepBeforeVocoderHint">diffusion 完成后释放 diffStep session，让 vocoder 推理独占显存（腾出约 3-4GB），避免 0x887A0006/TDR 黑屏。代价：每次 vocoder 后需重载 diffStep（约 1-3 秒），多段合成会变慢。低显存显卡强烈建议保持开启。</p>
                 </div>
                 <div class="setting-group">
                     <button class="btn-open-model-download" id="openModelDownloadBtn" data-i18n="settings.openModelDownload">打开模型下载</button>

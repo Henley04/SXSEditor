@@ -225,12 +225,24 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
     width: 100%;
     padding: 8px;
     background: var(--bg-input);
-    border: 1px solid var(--border-default);
-    border-radius: 4px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
     color: var(--fg-primary);
     margin-bottom: 12px;
     box-sizing: border-box;
+    font-size: var(--font-md);
+    transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
   `;
+
+  input.addEventListener('focus', () => {
+    input.style.borderColor = 'var(--accent)';
+    input.style.boxShadow = '0 0 0 3px var(--accent-soft)';
+  });
+
+  input.addEventListener('blur', () => {
+    input.style.borderColor = 'var(--border-strong)';
+    input.style.boxShadow = 'none';
+  });
   dialog.appendChild(input);
 
   const btnRow = document.createElement('div');
@@ -242,10 +254,25 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
     padding: 6px 16px;
     background: var(--bg-button);
     border: 1px solid var(--button-secondary-border);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     color: var(--fg-primary);
     cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
   `;
+
+  cancelBtn.addEventListener('mouseenter', () => {
+    cancelBtn.style.background = 'var(--bg-button-hover)';
+    cancelBtn.style.borderColor = 'var(--accent-glow)';
+    cancelBtn.style.transform = 'translateY(-1px)';
+  });
+  cancelBtn.addEventListener('mouseleave', () => {
+    cancelBtn.style.background = 'var(--bg-button)';
+    cancelBtn.style.borderColor = 'var(--button-secondary-border)';
+    cancelBtn.style.transform = '';
+  });
+  cancelBtn.addEventListener('mousedown', () => {
+    cancelBtn.style.transform = 'translateY(0) scale(0.97)';
+  });
   cancelBtn.textContent = t('common.cancel');
 
   const okBtn = document.createElement('button');
@@ -254,10 +281,25 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
     padding: 6px 16px;
     background: var(--bg-button-primary);
     border: none;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     color: var(--fg-on-accent);
     cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
   `;
+
+  okBtn.addEventListener('mouseenter', () => {
+    okBtn.style.background = 'var(--bg-button-primary-hover)';
+    okBtn.style.transform = 'translateY(-1px)';
+    okBtn.style.boxShadow = '0 2px 8px var(--accent-glow)';
+  });
+  okBtn.addEventListener('mouseleave', () => {
+    okBtn.style.background = 'var(--bg-button-primary)';
+    okBtn.style.transform = '';
+    okBtn.style.boxShadow = '';
+  });
+  okBtn.addEventListener('mousedown', () => {
+    okBtn.style.transform = 'translateY(0) scale(0.97)';
+  });
   okBtn.textContent = t('common.confirm');
 
   btnRow.appendChild(cancelBtn);

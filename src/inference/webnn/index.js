@@ -296,7 +296,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
             totalFramesWithPrompt: ptFrameCount + totalFrames,
             totalSteps: params.totalSteps || 32,
             cfgStrength: params.cfgStrength ?? 3.0,
-            cfgRescale: params.cfgRescale ?? 0.75,
+            cfgRescale: params.cfgRescale ?? 0.7,
             npuVocoderBatchSize: params.npuVocoderBatchSize || 1,
         });
     }

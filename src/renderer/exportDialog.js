@@ -69,13 +69,13 @@ export async function openExportDialog() {
       modelPrecision: settings.modelPrecision || 'fp32',
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
-      exportCfgRescale: settings.exportCfgRescale ?? 0.6,
-      exportSampler: settings.exportSampler || 'stork2',
+      exportCfgRescale: settings.exportCfgRescale ?? 0.7,
+      exportSampler: settings.exportSampler || 'euler',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
       sifiganPrecision: settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32',
       vocoderChunkMode: settings.vocoderChunkMode === 'manual' ? 'manual' : 'smart',
-      vocoderChunkFrames: Number.isFinite(settings.vocoderChunkFrames) ? settings.vocoderChunkFrames : 1008,
+      vocoderChunkFrames: Number.isFinite(settings.vocoderChunkFrames) ? settings.vocoderChunkFrames : 1024,
       releaseDmlVramAfterSynthesis: settings.releaseDmlVramAfterSynthesis === true,
       releaseDiffStepBeforeVocoder: settings.releaseDiffStepBeforeVocoder === true,
       // Task 11/17/18: new settings keys
@@ -616,9 +616,9 @@ function buildAdvancedSection(form, settings) {
   chunkModeField.appendChild(chunkModeLabel);
 
   const chunkModeRow = document.createElement('div');
-  chunkModeRow.style.cssText = 'display: flex; gap: 12px;';
+  chunkModeRow.className = 'chunk-mode-row';
   const smartLabel = document.createElement('label');
-  smartLabel.style.cssText = 'display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: var(--font-md); color: var(--fg-secondary);';
+  smartLabel.className = 'chunk-mode-label';
   const smartRadio = document.createElement('input');
   smartRadio.type = 'radio';
   smartRadio.name = 'export-chunk-mode';
@@ -628,7 +628,7 @@ function buildAdvancedSection(form, settings) {
   smartLabel.appendChild(document.createTextNode(t('main.exportDialog.vocoderChunkSmart')));
 
   const manualLabel = document.createElement('label');
-  manualLabel.style.cssText = 'display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: var(--font-md); color: var(--fg-secondary);';
+  manualLabel.className = 'chunk-mode-label';
   const manualRadio = document.createElement('input');
   manualRadio.type = 'radio';
   manualRadio.name = 'export-chunk-mode';

@@ -26,7 +26,7 @@ export function createDialog(options) {
   overlay.style.cssText = `
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(10,10,20,0.8);
+    background: var(--overlay-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -94,33 +94,62 @@ export function createDialog(options) {
       padding: 6px 16px;
       background: var(--bg-button-primary);
       border: none;
-      border-radius: 4px;
+      border-radius: var(--radius-md);
       color: var(--fg-on-accent);
       cursor: pointer;
+      transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
     `,
     default: `
       padding: 6px 16px;
       background: var(--bg-button);
       border: 1px solid var(--button-secondary-border);
-      border-radius: 4px;
+      border-radius: var(--radius-md);
       color: var(--fg-primary);
       cursor: pointer;
+      transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
     `,
     danger: `
       padding: 6px 16px;
       background: var(--bg-button-danger);
       border: none;
-      border-radius: 4px;
+      border-radius: var(--radius-md);
       color: var(--fg-on-accent);
       cursor: pointer;
+      transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
     `,
     success: `
       padding: 6px 16px;
       background: var(--bg-button-success);
       border: none;
-      border-radius: 4px;
-      color: var(--fg-on-accent);
+      border-radius: var(--radius-md);
+      color: var(--fg-on-success);
       cursor: pointer;
+      transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
+    `,
+  };
+
+  // Button hover/active style mapping
+  const buttonHoverStyles = {
+    primary: `
+      background: var(--bg-button-primary-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px var(--accent-glow);
+    `,
+    default: `
+      background: var(--bg-button-hover);
+      border-color: var(--accent-glow);
+      color: var(--fg-primary);
+      transform: translateY(-1px);
+    `,
+    danger: `
+      background: var(--bg-button-danger-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px var(--danger-glow);
+    `,
+    success: `
+      background: var(--bg-button-success-hover);
+      transform: translateY(-1px);
+      box-shadow: 0 2px 8px var(--success-glow);
     `,
   };
 
@@ -129,6 +158,18 @@ export function createDialog(options) {
     const btn = document.createElement('button');
     btn.textContent = btnConfig.text;
     btn.style.cssText = buttonStyles[btnConfig.type] || buttonStyles.default;
+
+    btn.addEventListener('mouseenter', () => {
+      btn.style.cssText = (buttonStyles[btnConfig.type] || buttonStyles.default) + (buttonHoverStyles[btnConfig.type] || buttonHoverStyles.default);
+    });
+
+    btn.addEventListener('mouseleave', () => {
+      btn.style.cssText = buttonStyles[btnConfig.type] || buttonStyles.default;
+    });
+
+    btn.addEventListener('mousedown', () => {
+      btn.style.transform = 'translateY(0) scale(0.97)';
+    });
 
     btn.addEventListener('click', () => {
       if (btnConfig.onClick) {
@@ -170,13 +211,25 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
   input.style.cssText = `
     width: 100%;
     padding: 8px;
-    background: #14141f;
-    border: 1px solid #3a3a52;
-    border-radius: 4px;
-    color: #e0e0f0;
+    background: var(--bg-input);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
+    color: var(--fg-primary);
     margin-bottom: 12px;
     box-sizing: border-box;
+    font-size: var(--font-md);
+    transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
   `;
+
+  input.addEventListener('focus', () => {
+    input.style.borderColor = 'var(--accent)';
+    input.style.boxShadow = '0 0 0 3px var(--accent-soft)';
+  });
+
+  input.addEventListener('blur', () => {
+    input.style.borderColor = 'var(--border-strong)';
+    input.style.boxShadow = 'none';
+  });
 
   const contentWrapper = document.createElement('div');
   contentWrapper.appendChild(input);
@@ -267,8 +320,8 @@ export function showSingerValidationReport(validation) {
         },
       ],
       styles: {
-        titleColor: validation.valid ? '#fbbf24' : '#f87171',
-        dialogBorder: validation.valid ? '#fbbf24' : '#f87171',
+        titleColor: validation.valid ? 'var(--warning)' : 'var(--danger)',
+        dialogBorder: validation.valid ? 'var(--warning)' : 'var(--danger)',
       },
     });
   });
@@ -282,14 +335,14 @@ export function showAudioToMidiDialog() {
     const extractPitchBtn = document.createElement('button');
     extractPitchBtn.style.cssText = `
       padding: 12px 16px;
-      background: linear-gradient(180deg, #5b8def, #4a7de0);
+      background: var(--bg-button-primary);
       border: none;
-      border-radius: 4px;
-      color: #ffffff;
+      border-radius: var(--radius-md);
+      color: var(--fg-on-accent);
       cursor: pointer;
       font-size: 14px;
       text-align: left;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+      transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
     `;
     const extractPitchLabel = document.createElement('div');
     extractPitchLabel.style.cssText = 'font-weight: 600; margin-bottom: 4px;';
@@ -303,14 +356,14 @@ export function showAudioToMidiDialog() {
     const onlyMidiBtn = document.createElement('button');
     onlyMidiBtn.style.cssText = `
       padding: 12px 16px;
-      background: linear-gradient(180deg, #4ade80, #3ac870);
+      background: var(--bg-button-success);
       border: none;
-      border-radius: 4px;
-      color: #ffffff;
+      border-radius: var(--radius-md);
+      color: var(--fg-on-success);
       cursor: pointer;
       font-size: 14px;
       text-align: left;
-      text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+      transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
     `;
     const onlyMidiLabel = document.createElement('div');
     onlyMidiLabel.style.cssText = 'font-weight: 600; margin-bottom: 4px;';
@@ -323,6 +376,34 @@ export function showAudioToMidiDialog() {
 
     btnContainer.appendChild(extractPitchBtn);
     btnContainer.appendChild(onlyMidiBtn);
+
+    extractPitchBtn.addEventListener('mouseenter', () => {
+      extractPitchBtn.style.background = 'var(--bg-button-primary-hover)';
+      extractPitchBtn.style.transform = 'translateY(-1px)';
+      extractPitchBtn.style.boxShadow = '0 2px 12px var(--accent-glow)';
+    });
+    extractPitchBtn.addEventListener('mouseleave', () => {
+      extractPitchBtn.style.background = 'var(--bg-button-primary)';
+      extractPitchBtn.style.transform = '';
+      extractPitchBtn.style.boxShadow = '';
+    });
+    extractPitchBtn.addEventListener('mousedown', () => {
+      extractPitchBtn.style.transform = 'translateY(0) scale(0.97)';
+    });
+
+    onlyMidiBtn.addEventListener('mouseenter', () => {
+      onlyMidiBtn.style.background = 'var(--bg-button-success-hover)';
+      onlyMidiBtn.style.transform = 'translateY(-1px)';
+      onlyMidiBtn.style.boxShadow = '0 2px 12px var(--success-glow)';
+    });
+    onlyMidiBtn.addEventListener('mouseleave', () => {
+      onlyMidiBtn.style.background = 'var(--bg-button-success)';
+      onlyMidiBtn.style.transform = '';
+      onlyMidiBtn.style.boxShadow = '';
+    });
+    onlyMidiBtn.addEventListener('mousedown', () => {
+      onlyMidiBtn.style.transform = 'translateY(0) scale(0.97)';
+    });
 
     const dialog = createDialog({
       title: t('main.audioToMidiTitle'),
@@ -357,21 +438,21 @@ export function showLoadingOverlay(message) {
   overlay.style.cssText = `
     position: fixed;
     top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(10,10,20,0.9);
+    background: var(--overlay-scrim);
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     z-index: 10001;
-    color: #e0e0f0;
+    color: var(--fg-primary);
   `;
 
   const spinner = document.createElement('div');
   spinner.style.cssText = `
     width: 40px;
     height: 40px;
-    border: 3px solid #3a3a52;
-    border-top-color: #5b8def;
+    border: 3px solid var(--border-strong);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 1s linear infinite;
     margin-bottom: 16px;
@@ -381,7 +462,7 @@ export function showLoadingOverlay(message) {
   style.textContent = `@keyframes spin { to { transform: rotate(360deg); } }`;
 
   const msgEl = document.createElement('div');
-  msgEl.style.cssText = 'font-size: 14px;';
+  msgEl.style.cssText = 'font-size: 14px; color: var(--fg-secondary);';
   msgEl.textContent = message;
 
   overlay.appendChild(style);

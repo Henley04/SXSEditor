@@ -108,6 +108,30 @@ body {
     margin-bottom: 0;
 }
 
+/* ==================== Settings Subgroups ==================== */
+
+.settings-subgroup {
+    margin-bottom: 24px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.settings-subgroup:last-child {
+    border-bottom: none;
+    margin-bottom: 0;
+}
+
+.subgroup-label {
+    font-size: var(--font-base);
+    font-weight: 600;
+    color: var(--fg-muted);
+    margin: 0 0 14px;
+    padding-bottom: 6px;
+    border-bottom: 2px solid var(--accent-soft);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
 .setting-group label {
     display: flex;
     align-items: center;
@@ -155,6 +179,45 @@ body {
     opacity: 0.5;
     cursor: not-allowed;
     background-color: var(--bg-panel);
+}
+
+.setting-group input[type="text"],
+.setting-group input[type="number"] {
+    width: 100%;
+    padding: var(--space-4) var(--space-5);
+    font-size: var(--font-md);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-lg);
+    background: var(--bg-elevated);
+    color: var(--fg-primary);
+    outline: none;
+    box-sizing: border-box;
+    transition: border-color var(--motion-base), box-shadow var(--motion-base), background-color var(--motion-base);
+}
+
+.setting-group input[type="number"] {
+    -moz-appearance: textfield;
+}
+
+.setting-group input[type="number"]::-webkit-inner-spin-button,
+.setting-group input[type="number"]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.setting-group input[type="text"]:hover,
+.setting-group input[type="number"]:hover {
+    border-color: var(--button-secondary-border);
+}
+
+.setting-group input[type="text"]:focus,
+.setting-group input[type="number"]:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.setting-group input[type="text"]::placeholder {
+    color: var(--fg-disabled);
 }
 
 .hint {
@@ -602,7 +665,6 @@ body {
 
 .device-mode-radio input[type="radio"] {
     margin-top: 3px;
-    accent-color: var(--accent);
     cursor: pointer;
     flex-shrink: 0;
 }

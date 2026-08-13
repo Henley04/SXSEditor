@@ -216,7 +216,6 @@ html, body {
 
 .radio-label input[type="radio"] {
   cursor: pointer;
-  accent-color: var(--accent);
 }
 
 .avatar-preview {

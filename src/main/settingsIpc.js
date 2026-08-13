@@ -1,5 +1,5 @@
 const { ipcMain } = require('electron');
-const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting } = require('./settings');
+const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, normalizeSettings } = require('./settings');
 const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectNPUCached, getVocoderChunkFramesInfo, getVocoderChunkFramesTable } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
 const { enumerateDMLDevices } = require('../inference/pipeline');
@@ -158,7 +158,7 @@ function registerSettingsIpc() {
       return getVocoderChunkFramesInfo(settings.modelPrecision, vocoderType);
     } catch (err) {
       console.error('[Main] Failed to get vocoder chunk frames info:', err);
-      return { gpuPhase: 'none', smartFrames: 1008, bestVramBytes: 0, bestGpuName: null };
+      return { gpuPhase: 'none', smartFrames: 1024, bestVramBytes: 0, bestGpuName: null };
     }
   });
 
@@ -246,7 +246,7 @@ function registerSettingsIpc() {
       }
       filtered[key] = settings[key];
     }
-    const merged = { ...current, ...filtered };
+    const merged = normalizeSettings({ ...current, ...filtered });
     // W7: saveSettingsFile now returns { success, error? }; propagate a
     // write failure to the renderer instead of reporting a false success.
     const saveResult = await saveSettingsFile(merged);
