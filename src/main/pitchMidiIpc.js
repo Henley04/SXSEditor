@@ -5,6 +5,7 @@ const { Worker } = require('node:worker_threads');
 const { RmvpePitchDetector } = require('../inference/rmvpePitchDetector');
 const { BasicPitchDetector } = require('../inference/basicPitch');
 const { RosvotDetector } = require('../inference/rosvotDetector');
+const { FcpePitchDetector } = require('../inference/fcpePitchDetector');
 const { parseMidiFile, parseMidiFileMultiTrack, parseMidiProjectInfo } = require('../inference/midiParser');
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
@@ -60,9 +61,20 @@ const rosvotLazy = createLazyInitializer(async () => {
   return detector;
 });
 
+const fcpeLazy = createLazyInitializer(async () => {
+  const modelPath = getBaseModelDir();
+  const settings = loadSettings();
+  const deviceId = settings.deviceId ?? undefined;
+  console.log(`[Main] Initialize FcpePitchDetector, model path: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}`);
+  const detector = new FcpePitchDetector(modelPath, { deviceId });
+  await detector.init();
+  return detector;
+});
+
 function getRmvpeDetector() { return rmvpeLazy.getInstance(); }
 function getBasicPitchDetector() { return basicPitchLazy.getInstance(); }
 function getRosvotDetector() { return rosvotLazy.getInstance(); }
+function getFcpeDetector() { return fcpeLazy.getInstance(); }
 
 function resetRmvpe() {
   const inst = rmvpeLazy.getInstance();
@@ -78,6 +90,11 @@ function resetRosvot() {
   const inst = rosvotLazy.getInstance();
   if (inst) { try { inst.dispose(); } catch (_) {} }
   rosvotLazy.reset();
+}
+function resetFcpe() {
+  const inst = fcpeLazy.getInstance();
+  if (inst) { try { inst.dispose(); } catch (_) {} }
+  fcpeLazy.reset();
 }
 
 // ==================== RMVPE worker_thread (offload F0 extraction) ====================
@@ -312,6 +329,18 @@ function registerPitchMidiIpc() {
     }
   });
 
+  ipcMain.handle('extractMidi:fcpe', async (event, { audioData, sampleRate, bpm }) => {
+    try {
+      const detector = await fcpeLazy.get();
+      const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
+      const notes = detector.f0ToNotes(f0Array, bpm || 120);
+      return { success: true, f0Array, notes };
+    } catch (err) {
+      console.error('[Main] FCPE extraction failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
   ipcMain.handle('midi:import', async () => {
     try {
       const { dialog } = require('electron');
@@ -380,10 +409,13 @@ module.exports = {
   getRmvpeDetector,
   getBasicPitchDetector,
   getRosvotDetector,
+  getFcpeDetector,
   resetRmvpe,
   resetBasicPitch,
   resetRosvot,
+  resetFcpe,
   rmvpeLazy,
   basicPitchLazy,
   rosvotLazy,
+  fcpeLazy,
 };

@@ -1859,7 +1859,10 @@ class OnnxSVSPipeline {
         console.log(`[OnnxSVSPipeline] Session diffStep: type=${this.sessions.diffStep?.constructor?.name}, ep=${this.sessionEPs.diffStep}`);
         // 分块扩散推理（仅预览路径启用，useStaticShapes 路径跳过）
         const chunkOpts = this._currentDiffStepChunkOpts;
-        if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > chunkOpts.chunkFrames) {
+        // 与 _planChunks 的 safeChunk = Math.max(50, chunkFrames) 保持一致，
+        // 避免进入 runDiffusionLoopChunked 后 _planChunks 返回 null 再回退。
+        const _safeChunk = Math.max(50, Math.floor(chunkOpts?.chunkFrames || 0));
+        if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > _safeChunk) {
             console.log(`[OnnxSVSPipeline] Using chunked diffusion: chunkFrames=${chunkOpts.chunkFrames}, overlapFrames=${chunkOpts.overlapFrames}, streaming=${!!onChunkMel}`);
             return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts);
         }
@@ -2738,8 +2741,15 @@ class OnnxSVSPipeline {
 
             // 检测是否走分块流式路径（diffusion chunk + 即时 vocoder）
             const chunkOpts = this._currentDiffStepChunkOpts;
+            // _planChunks 内部用 safeChunk = Math.max(50, chunkFrames)，当 safeChunk >=
+            // totalFrames 时返回 null（回退到整段 runDiffusionLoop，不触发 onChunkMel）。
+            // 若此处仅检查 totalFrames > chunkFrames，当 chunkFrames < 50 且
+            // chunkFrames < totalFrames <= 50 时会进入流式路径但 _planChunks 返回 null，
+            // 导致 segmentAudios 为空、audioData 全零（静音）。因此条件必须与
+            // _planChunks 的 safeChunk 逻辑一致。
+            const safeChunkFrames = Math.max(50, Math.floor(chunkOpts?.chunkFrames || 0));
             const useStreamingChunked = chunkOpts && chunkOpts.enabled && !this.useStaticShapes
-                && chunkOpts.chunkFrames > 0 && totalFrames > chunkOpts.chunkFrames
+                && chunkOpts.chunkFrames > 0 && totalFrames > safeChunkFrames
                 && singleSegOnChunk; // 流式推送可用时才走此路径
 
             if (useStreamingChunked) {

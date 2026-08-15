@@ -4,7 +4,7 @@ import {
   HEADER_HEIGHT,
 } from './constants.js';
 import { t } from '../i18n/index.js';
-import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty } from './projectManager.js';
+import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty, addAccompanimentFromFile } from './projectManager.js';
 import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
@@ -202,6 +202,13 @@ dom.btnExport.addEventListener('click', async () => {
 dom.btnAddSinger.addEventListener('click', () => {
   showSingerSelectDialog(null);
 });
+
+// Import accompaniment audio file
+if (dom.btnImportAccompaniment) {
+  dom.btnImportAccompaniment.addEventListener('click', () => {
+    addAccompanimentFromFile();
+  });
+}
 
 // Open the Singer Market window (browse / upload / download community singers)
 dom.btnOpenSingerMarket.addEventListener('click', () => {

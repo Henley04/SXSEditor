@@ -11,7 +11,7 @@ const ENUM_SETTINGS = {
   deviceMode: ['smart', 'manual', 'advanced'],
   inferenceProvider: ['ortnode', 'ortweb'],
   modelPrecision: ['fp32', 'fp16', 'int8', 'int8-npu'],
-  midiExtractTool: ['basicpitch', 'rmvpe'],
+  midiExtractTool: ['fcpe', 'basicpitch', 'rmvpe'],
   audioOutputMode: ['shared', 'exclusive'],
   audioBitDepth: ['float32', 'int32', 'int24', 'int16'],
   vocoderType: ['default', 'sifigan'],

@@ -36,6 +36,7 @@ function createSinger(data = {}) {
   const id = data.id ?? generateId();
   return {
     id,
+    type: data.type ?? 'singer', // 'singer' | 'accompaniment'
     trackName: data.trackName ?? `轨道 ${id}`,
     singerName: data.singerName ?? `歌手 ${id}`,
     avatarPath: data.avatarPath ?? null,
@@ -44,6 +45,13 @@ function createSinger(data = {}) {
     color: data.color ?? TRACK_COLORS[_hashCode(String(id)) % TRACK_COLORS.length],
     singerFilePath: data.singerFilePath ?? null,
     singerFileMissing: data.singerFileMissing ?? false,
+    // Accompaniment track fields (only used when type === 'accompaniment')
+    audioFilePath: data.audioFilePath ?? null,
+    audioFileMissing: data.audioFileMissing ?? false,
+    audioFileName: data.audioFileName ?? null,
+    audioDuration: data.audioDuration ?? null,
+    embeddedAudioData: data.embeddedAudioData ?? null,
+    accompanimentStartTime: data.accompanimentStartTime ?? 0,
   };
 }
 

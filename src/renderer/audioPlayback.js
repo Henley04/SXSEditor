@@ -6,6 +6,51 @@ import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './timelineRenderer.js';
 
+// ==================== Accompaniment helpers ====================
+
+/**
+ * Get all accompaniment tracks that have loaded audio buffers.
+ * @returns {Array} Singer objects with type === 'accompaniment' and audioBuffer set
+ */
+function getAccompanimentTracks() {
+  return trackManager.getSingers().filter(s => s.type === 'accompaniment' && s.audioBuffer);
+}
+
+/**
+ * Calculate the maximum end sample across all accompaniment tracks.
+ * @param {number} bpm - Project BPM
+ * @returns {number} Maximum end sample position
+ */
+function getAccompanimentMaxEndSample(bpm) {
+  let maxEndSample = 0;
+  for (const track of getAccompanimentTracks()) {
+    const startSample = Math.round((track.accompanimentStartTime || 0) / bpm * 60 * SAMPLE_RATE);
+    const endSample = startSample + track.audioBuffer.length;
+    if (endSample > maxEndSample) maxEndSample = endSample;
+  }
+  return maxEndSample;
+}
+
+/**
+ * Mix accompaniment audio into an existing mixedAudio Float32Array.
+ * The array is NOT resized — caller must ensure it is large enough
+ * (use getAccompanimentMaxEndSample to calculate required size).
+ * @param {Float32Array} mixedAudio - Target array (modified in-place)
+ * @param {number} bpm - Project BPM
+ */
+function mixAccompanimentIntoArray(mixedAudio, bpm) {
+  for (const track of getAccompanimentTracks()) {
+    const startSample = Math.round((track.accompanimentStartTime || 0) / bpm * 60 * SAMPLE_RATE);
+    const accAudio = track.audioBuffer;
+    for (let i = 0; i < accAudio.length; i++) {
+      const targetIndex = startSample + i;
+      if (targetIndex < mixedAudio.length) {
+        mixedAudio[targetIndex] += accAudio[i];
+      }
+    }
+  }
+}
+
 // visibilitychange handler: pause rAF-driven UI updates when tab hidden
 // (audio playback continues via WebAudio/WASAPI in background).
 // Registered once per module; update fns stored for resume.
@@ -105,15 +150,30 @@ export async function playAll() {
     singers.forEach(s => singerMap.set(s.id, s));
 
     // 收集所有有 notes 的 fragments，按 startTime 排序后逐个合成。
-    // 复用分片编辑器的逻辑：每个 fragment 用相对 notes（clippedNotes）
-    // + 该 fragment 自己的 pitchCurve（buildFragmentPitchCurveF0），
-    // 确保与分片编辑器播放结果完全一致。
+    // 排除伴奏轨道的分片（伴奏轨道不应有分片，但防御性过滤）。
     const allFragments = fragments
-      .filter(f => f.notes && f.notes.length > 0)
+      .filter(f => f.notes && f.notes.length > 0 && singerMap.get(f.singerId)?.type !== 'accompaniment')
       .sort((a, b) => a.startTime - b.startTime);
 
-    if (allFragments.length === 0) {
+    const accTracks = getAccompanimentTracks();
+
+    if (allFragments.length === 0 && accTracks.length === 0) {
       showAlertDialog(t('main.noFragmentsToPlay'));
+      return;
+    }
+
+    // 仅有伴奏轨道无分片音符：直接播放伴奏，跳过推理
+    if (allFragments.length === 0 && accTracks.length > 0) {
+      const accMaxSamples = getAccompanimentMaxEndSample(state.project.bpm);
+      const mixedAudio = new Float32Array(accMaxSamples);
+      mixAccompanimentIntoArray(mixedAudio, state.project.bpm);
+      state.currentAudioData = mixedAudio;
+      state.currentAudioBuffer = null;
+      dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+      if (state.playbackPauseOffset > 0) {
+        drawPausedPlayheadAt(state.playbackPauseOffset);
+      }
+      await startAudioPlayback(state.playbackPauseOffset);
       return;
     }
 
@@ -234,6 +294,21 @@ export async function playAll() {
               state.playbackPauseOffset = 0;
               state.isPlaying = true;
               startPlayheadAnimation();
+
+              // Schedule accompaniment tracks as independent BufferSources
+              // alongside the streaming vocal chunks. They connect to the same
+              // gainNode and are cleaned up via state.streamingSources.
+              for (const accTrack of accTracks) {
+                const accBuffer = ctx.createBuffer(1, accTrack.audioBuffer.length, SAMPLE_RATE);
+                accBuffer.getChannelData(0).set(accTrack.audioBuffer);
+                const accSource = ctx.createBufferSource();
+                accSource.buffer = accBuffer;
+                accSource.connect(state.gainNode);
+                const accStartSec = (accTrack.accompanimentStartTime || 0) / state.project.bpm * 60;
+                const accScheduleTime = state.playbackStartTime + accStartSec;
+                accSource.start(Math.max(accScheduleTime, ctx.currentTime + 0.01));
+                state.streamingSources.push(accSource);
+              }
             }
 
             // 更新 buffer 前沿（已收到音频的最远全局位置）
@@ -324,11 +399,13 @@ export async function playAll() {
         _streamingInferenceDone = true;
 
         // 若合成返回时正在等待推理（最后一批 chunk 已收到但 playhead 仍冻结），
-        // 恢复播放：调整 playbackStartTime 使 playhead 从 buffer 前沿继续。
+        // 恢复播放：只需重启 rAF 即可。不重置 playbackStartTime——
+        // underrun 冻结只取消了 rAF，未改变 playbackStartTime（recovery 1 已在
+        // chunk 到达时设为正确值）。重置 playbackStartTime 会使 elapsed 跳到
+        // buffer 末尾，与仍在播放的 source 时间基准脱节，导致 playhead 越过
+        // 正在播放的音频提前结束或进入静音区。
         if (_streamingWaitingForInference && streamingStarted) {
           _streamingWaitingForInference = false;
-          const ctx = getAudioContext();
-          state.playbackStartTime = ctx.currentTime - _streamingBufferEndSec;
           startPlayheadAnimation();
         }
 
@@ -434,7 +511,10 @@ export async function playAll() {
       }
 
       const maxEndBeat = globalLastEnd;
-      const totalSamples = Math.ceil(((maxEndBeat / state.project.bpm) * 60) * SAMPLE_RATE);
+      const vocalTotalSamples = Math.ceil(((maxEndBeat / state.project.bpm) * 60) * SAMPLE_RATE);
+      // Account for accompaniment tracks that may extend beyond vocal fragments
+      const accMaxSamples = getAccompanimentMaxEndSample(state.project.bpm);
+      const totalSamples = Math.max(vocalTotalSamples, accMaxSamples);
       const mixedAudio = new Float32Array(totalSamples);
 
       for (const result of audioResults) {
@@ -447,6 +527,9 @@ export async function playAll() {
           }
         }
       }
+
+      // Mix accompaniment audio into the combined output
+      mixAccompanimentIntoArray(mixedAudio, state.project.bpm);
 
       state.currentAudioData = mixedAudio;
 
@@ -947,6 +1030,30 @@ export function startPlayheadAnimation() {
       }
     }
 
+    // 流式播放兜底停止：推理已完成且 playhead 越过 buffer 前沿后，
+    // 说明所有已调度的 source 已播完（或 onended 清理未触发）。
+    // 此时无音频可播，必须停止 rAF，否则 playhead 持续在静音区前进。
+    // 0.5s 容差防止 chunk 边界抖动导致误停。
+    if (_streamingInferenceDone && elapsed >= _streamingBufferEndSec + 0.5) {
+      if (!state.streamingFinished) {
+        state.streamingFinished = true;
+        state.isPlaying = false;
+        state.playbackPauseOffset = 0;
+        _streamingActive = false;
+        for (const src of (state.streamingSources || [])) {
+          if (!src) continue;
+          try { src.onended = null; src.stop(); } catch (_) {}
+        }
+        state.streamingSources = [];
+        stopPlayheadAnimation();
+        dom.timeDisplay.textContent = formatTime(0);
+        dom.btnPlay.textContent = t('main.play');
+        dom.btnPlay.disabled = false;
+        clearPlayheadLine();
+      }
+      return;
+    }
+
     if (state.currentAudioBuffer) {
       const duration = state.currentAudioBuffer.duration;
       if (elapsed >= duration) {
@@ -1015,7 +1122,8 @@ export async function runExportJob(opts) {
   } = opts;
 
   const fragments = trackManager.getFragments();
-  if (fragments.length === 0) {
+  const accTracks = getAccompanimentTracks();
+  if (fragments.length === 0 && accTracks.length === 0) {
     throw new Error(t('main.exportDialog.noFragments'));
   }
 
@@ -1028,11 +1136,19 @@ export async function runExportJob(opts) {
   // + 该 fragment 自己的 pitchCurve（buildFragmentPitchCurveF0），
   // 确保与分片编辑器播放/导出结果完全一致。
   const allFragments = fragments
-    .filter(f => f.notes && f.notes.length > 0)
+    .filter(f => {
+      // Exclude fragments belonging to accompaniment tracks (no SVS synthesis)
+      const singer = singerMap.get(f.singerId);
+      if (singer && singer.type === 'accompaniment') return false;
+      return f.notes && f.notes.length > 0;
+    })
     .sort((a, b) => a.startTime - b.startTime);
 
   if (allFragments.length === 0) {
-    throw new Error(t('main.exportDialog.noNotes'));
+    // Allow export if there are accompaniment tracks (audio-only export)
+    if (getAccompanimentTracks().length === 0) {
+      throw new Error(t('main.exportDialog.noNotes'));
+    }
   }
 
   if (onStatus) onStatus('progressPreparing');
@@ -1143,7 +1259,8 @@ export async function runExportJob(opts) {
 
   if (onStatus) onStatus('progressEncoding');
 
-  const totalSamples = Math.ceil(maxDuration * SAMPLE_RATE);
+  const accMaxSamples = getAccompanimentMaxEndSample(state.project.bpm);
+  const totalSamples = Math.max(Math.ceil(maxDuration * SAMPLE_RATE), accMaxSamples);
   const mixedAudio = new Float32Array(totalSamples);
 
   for (const result of audioResults) {
@@ -1157,6 +1274,9 @@ export async function runExportJob(opts) {
       }
     }
   }
+
+  // Mix accompaniment audio into the exported output
+  mixAccompanimentIntoArray(mixedAudio, state.project.bpm);
 
   if (onOverallProgress) onOverallProgress(100);
 

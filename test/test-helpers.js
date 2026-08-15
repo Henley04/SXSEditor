@@ -11,6 +11,7 @@ function mockElectronAPI() {
   return {
     extractF0: sinon.stub().resolves({ success: true, f0Array: [], notes: [] }),
     extractF0BasicPitch: sinon.stub().resolves({ success: true, f0Array: [], notes: [] }),
+    extractMidiFcpe: sinon.stub().resolves({ success: true, f0Array: [], notes: [] }),
     sendPreprocessData: sinon.stub().resolves({ success: true }),
     onLoadPreprocessData: sinon.stub(),
     dialog: {

@@ -8,11 +8,21 @@ import {
 import { t } from '../i18n/index.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 import { showConfirmDialog } from '../alertDialog.js';
-import { loadSingerFile, showSingerSelectDialog, markDirty } from './projectManager.js';
+import { loadSingerFile, showSingerSelectDialog, markDirty, loadAccompanimentFile } from './projectManager.js';
 import { createIcon } from '../icons/iconHelper.js';
 
 export function getBeatWidth() {
   return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX;
+}
+
+/**
+ * Format duration in seconds to mm:ss.s format for accompaniment display.
+ */
+function formatAccompanimentDuration(seconds) {
+  if (!seconds || seconds <= 0) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
 // Offscreen canvas cache for static grid/background
@@ -193,7 +203,97 @@ export function renderFragmentTimeline() {
     // 跳过整行不在可视区域的 singer
     if (y + SINGER_ROW_HEIGHT < _viewTop || y > _viewBottom) return;
 
+    const isAccompaniment = singer.type === 'accompaniment';
     const singerFragments = fragments.filter(f => f.singerId === singer.id);
+
+    // For accompaniment tracks, render the audio as a continuous waveform block
+    if (isAccompaniment) {
+      const accStartBeat = singer.accompanimentStartTime || 0;
+      const accDuration = singer.audioDuration || 0;
+      const accDurationBeats = (accDuration / 60) * state.project.bpm;
+      const accX = accStartBeat * beatWidth;
+      const accWidth = Math.max(2, accDurationBeats * beatWidth);
+
+      // Skip if not visible
+      if (accX + accWidth < _viewLeft || accX > _viewRight) {
+        // Still show empty state if no audio
+      } else {
+        const fragY = y + 4;
+        const radius = 6;
+
+        // Rounded rect fill with accompaniment color
+        ctx.fillStyle = (singer.color || c.accent) + '99';
+        ctx.beginPath();
+        ctx.roundRect(accX, fragY, accWidth, FRAGMENT_HEIGHT, radius);
+        ctx.fill();
+
+        // Rounded rect stroke
+        ctx.strokeStyle = singer.color || c.accent;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(accX, fragY, accWidth, FRAGMENT_HEIGHT, radius);
+        ctx.stroke();
+
+        // Draw waveform-like pattern if audioBuffer is available
+        if (singer.audioBuffer && singer.audioBuffer.length > 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(accX, fragY, accWidth, FRAGMENT_HEIGHT, radius);
+          ctx.clip();
+
+          const buf = singer.audioBuffer;
+          const samplesPerPixel = Math.max(1, Math.floor(buf.length / accWidth));
+          const midY = fragY + FRAGMENT_HEIGHT / 2;
+          const maxAmp = FRAGMENT_HEIGHT / 2 - 4;
+
+          ctx.strokeStyle = c.fragmentText || '#fff';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          for (let px = 0; px < accWidth; px++) {
+            const sampleStart = Math.floor(px * samplesPerPixel);
+            const sampleEnd = Math.min(sampleStart + samplesPerPixel, buf.length);
+            let peak = 0;
+            for (let s = sampleStart; s < sampleEnd; s++) {
+              const v = Math.abs(buf[s]);
+              if (v > peak) peak = v;
+            }
+            const barH = peak * maxAmp;
+            ctx.moveTo(accX + px, midY - barH);
+            ctx.lineTo(accX + px, midY + barH);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Label
+        const labelInsetX = 6;
+        const labelClipRect = { x: accX, y: fragY, w: accWidth, h: FRAGMENT_HEIGHT };
+        const labelMaxWidth = Math.max(0, accWidth - labelInsetX * 2);
+
+        ctx.fillStyle = c.fragmentText;
+        ctx.font = '11px sans-serif';
+        drawClippedText(
+          ctx,
+          singer.audioFileName || t('main.accompanimentTrack'),
+          accX + labelInsetX,
+          y + 16,
+          labelMaxWidth,
+          labelClipRect,
+        );
+
+        ctx.fillStyle = c.fgMuted;
+        ctx.font = '10px sans-serif';
+        drawClippedText(
+          ctx,
+          formatAccompanimentDuration(accDuration),
+          accX + labelInsetX,
+          y + 36,
+          labelMaxWidth,
+          labelClipRect,
+        );
+      }
+    }
+
     singerFragments.forEach(fragment => {
       const fragX = fragment.startTime * beatWidth;
       const fragWidth = fragment.duration * beatWidth;
@@ -436,7 +536,9 @@ export function renderSingerList() {
   const currentIds = singers.map(s => s.id).join(',');
   const currentNames = singers.map(s => s.trackName).join(',');
   const currentMissing = singers.map(s => s.singerFileMissing ? '1' : '0').join(',');
-  const cacheKey = `${currentIds}|${currentNames}|${currentMissing}|${state.editingTrackNameId}`;
+  const currentAudioMissing = singers.map(s => s.audioFileMissing ? '1' : '0').join(',');
+  const currentTypes = singers.map(s => s.type || 'singer').join(',');
+  const cacheKey = `${currentIds}|${currentNames}|${currentMissing}|${currentAudioMissing}|${currentTypes}|${state.editingTrackNameId}`;
   if (renderSingerList._cacheKey === cacheKey && dom.singerListEl.childElementCount > 0) return;
   renderSingerList._cacheKey = cacheKey;
 
@@ -472,8 +574,9 @@ export function renderSingerList() {
   }
 
   singers.forEach(singer => {
+    const isAccompaniment = singer.type === 'accompaniment';
     const item = document.createElement('div');
-    item.className = 'singer-item';
+    item.className = isAccompaniment ? 'singer-item accompaniment-item' : 'singer-item';
     item.setAttribute('role', 'listitem');
     item.dataset.singerId = singer.id;
 
@@ -481,14 +584,15 @@ export function renderSingerList() {
 
     const avatarDiv = document.createElement('div');
     avatarDiv.className = 'singer-avatar';
-    if (singer.avatarPath && (singer.avatarPath.startsWith('data:image/') || /^[a-zA-Z]:\\|^\//.test(singer.avatarPath))) {
+    if (!isAccompaniment && singer.avatarPath && (singer.avatarPath.startsWith('data:image/') || /^[a-zA-Z]:\\|^\//.test(singer.avatarPath))) {
       const img = document.createElement('img');
       img.src = singer.avatarPath;
       img.alt = singer.singerName || '';
       avatarDiv.appendChild(img);
     } else {
-      const micIcon = createIcon('microphone', { size: 22 });
-      if (micIcon) avatarDiv.appendChild(micIcon);
+      const iconName = isAccompaniment ? 'music' : 'microphone';
+      const icon = createIcon(iconName, { size: 22 });
+      if (icon) avatarDiv.appendChild(icon);
     }
 
     const infoDiv = document.createElement('div');
@@ -560,10 +664,54 @@ export function renderSingerList() {
 
       const singerNameDiv = document.createElement('div');
       singerNameDiv.className = 'singer-singer-name';
-      singerNameDiv.textContent = singer.singerName;
+      if (isAccompaniment) {
+        // Show audio file name and duration for accompaniment tracks
+        const fileName = singer.audioFileName || t('main.accompanimentTrack');
+        const duration = singer.audioDuration ? ` (${formatAccompanimentDuration(singer.audioDuration)})` : '';
+        singerNameDiv.textContent = fileName + duration;
+      } else {
+        singerNameDiv.textContent = singer.singerName;
+      }
       infoDiv.appendChild(singerNameDiv);
 
-      if (singer.singerFileMissing) {
+      if (isAccompaniment) {
+        if (singer.audioFileMissing) {
+          const warningDiv = document.createElement('div');
+          warningDiv.className = 'singer-file-missing-warning';
+          warningDiv.textContent = t('main.audioFileNotFound');
+          infoDiv.appendChild(warningDiv);
+
+          const relocateBtn = document.createElement('button');
+          relocateBtn.className = 'btn-relocate-singer';
+          relocateBtn.textContent = t('main.relocate');
+          relocateBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            try {
+              const result = await window.electronAPI.showOpenDialog({
+                title: t('main.relocateAudioFile'),
+                filters: [
+                  { name: 'Audio', extensions: ['wav', 'mp3', 'flac', 'ogg', 'm4a', 'aac'] },
+                ],
+                properties: ['openFile'],
+              });
+              if (!result.canceled && result.filePaths.length > 0) {
+                const filePath = result.filePaths[0];
+                const buffer = await window.electronAPI.readFileBuffer(filePath);
+                await loadAccompanimentFile(singer.id, buffer, filePath);
+                refreshAll();
+              }
+            } catch (_err) {
+              // Relocation failed silently
+            }
+          });
+          infoDiv.appendChild(relocateBtn);
+        } else {
+          const configDiv = document.createElement('div');
+          configDiv.className = 'singer-config';
+          configDiv.textContent = t('main.accompanimentLabel');
+          infoDiv.appendChild(configDiv);
+        }
+      } else if (singer.singerFileMissing) {
         const warningDiv = document.createElement('div');
         warningDiv.className = 'singer-file-missing-warning';
         warningDiv.textContent = t('main.singerFileNotFound');
@@ -608,12 +756,15 @@ export function renderSingerList() {
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'singer-item-actions';
 
-    const addBtn = document.createElement('button');
-    addBtn.className = 'btn-fragment-add';
-    addBtn.title = t('main.addFragment');
-    addBtn.dataset.singerId = singer.id;
-    addBtn.textContent = '+';
-    actionsDiv.appendChild(addBtn);
+    // Accompaniment tracks don't have fragments (no SVS synthesis)
+    if (!isAccompaniment) {
+      const addBtn = document.createElement('button');
+      addBtn.className = 'btn-fragment-add';
+      addBtn.title = t('main.addFragment');
+      addBtn.dataset.singerId = singer.id;
+      addBtn.textContent = '+';
+      actionsDiv.appendChild(addBtn);
+    }
 
     if (singers.length > 1) {
       const delBtn = document.createElement('button');
@@ -646,29 +797,34 @@ export function renderSingerList() {
       state.selectedSingerId = singer.id;
     });
 
-    addBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const singerId = addBtn.dataset.singerId;
-      const fragments = trackManager.getFragments();
-      const lastFragment = fragments.filter(f => f.singerId === singerId).pop();
-      const startTime = lastFragment ? lastFragment.startTime + lastFragment.duration : 0;
-      const newFragment = trackManager.addFragment({ singerId, startTime, duration: 4 });
-      const newFragmentId = newFragment.id;
-      history.push({
-        undo() {
-          trackManager.removeFragment(newFragmentId);
-          refreshAll();
-        },
-        redo() {
-          const singer = trackManager.getSinger(singerId);
-          const color = singer ? singer.color : getCanvasColors().accent;
-          const _frag = trackManager.addFragment({ singerId, startTime, duration: 4, color });
+    if (!isAccompaniment) {
+      const addBtn = item.querySelector('.btn-fragment-add');
+      if (addBtn) {
+        addBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const singerId = addBtn.dataset.singerId;
+          const fragments = trackManager.getFragments();
+          const lastFragment = fragments.filter(f => f.singerId === singerId).pop();
+          const startTime = lastFragment ? lastFragment.startTime + lastFragment.duration : 0;
+          const newFragment = trackManager.addFragment({ singerId, startTime, duration: 4 });
+          const newFragmentId = newFragment.id;
+          history.push({
+            undo() {
+              trackManager.removeFragment(newFragmentId);
+              refreshAll();
+            },
+            redo() {
+              const singer = trackManager.getSinger(singerId);
+              const color = singer ? singer.color : getCanvasColors().accent;
+              const _frag = trackManager.addFragment({ singerId, startTime, duration: 4, color });
+              renderFragmentTimeline();
+            }
+          });
+          markDirty();
           renderFragmentTimeline();
-        }
-      });
-      markDirty();
-      renderFragmentTimeline();
-    });
+        });
+      }
+    }
 
     if (singers.length > 1) {
       const delBtn = item.querySelector('.btn-singer-delete');

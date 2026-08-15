@@ -317,7 +317,7 @@ function applySavedSettingsToUI(currentSetting) {
         const tool = currentSetting.midiExtractTool === 'rosvot' ? 'rmvpe' : currentSetting.midiExtractTool;
         midiExtractToolSelect.value = tool;
     } else {
-        midiExtractToolSelect.value = 'basicpitch';
+        midiExtractToolSelect.value = 'fcpe';
     }
 
     // Vocoder type (main process may have overridden 'sifigan' -> 'default' at startup)

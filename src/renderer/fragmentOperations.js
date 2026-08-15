@@ -126,7 +126,7 @@ export async function handleAudioToMidi() {
 
     try {
       const settings = await window.electronAPI.getSettings();
-      const midiTool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'basicpitch';
+      const midiTool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'fcpe';
 
       if (midiTool === 'rmvpe') {
         // RMVPE: extract F0 + f0ToNotes for MIDI
@@ -150,6 +150,29 @@ export async function handleAudioToMidi() {
 
         if (extractPitch) {
           f0Data = rmvpeResult.f0Array;
+        }
+      } else if (midiTool === 'fcpe') {
+        // FCPE: extract F0 + f0ToNotes for MIDI
+        const fcpeResult = await window.electronAPI.extractMidiFcpe({
+          audioData,
+          sampleRate,
+          bpm,
+        });
+
+        if (!fcpeResult.success) {
+          throw new Error(fcpeResult.error || 'FCPE failed');
+        }
+
+        midiNotes = (fcpeResult.notes || []).map((n, i) => ({
+          id: n.id ?? (Date.now() + i),
+          pitch: n.pitch ?? 60,
+          start: n.start ?? 0,
+          duration: n.duration ?? 0.25,
+          lyric: n.lyric || 'la',
+        }));
+
+        if (extractPitch) {
+          f0Data = fcpeResult.f0Array;
         }
       } else {
         // Basic Pitch: extract MIDI + F0

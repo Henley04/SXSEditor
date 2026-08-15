@@ -118,6 +118,26 @@ const MODEL_GROUPS = [
     ],
   },
   {
+    id: 'fcpe',
+    name: 'FCPE 音高检测',
+    nameEn: 'FCPE Pitch Detection',
+    description: '基于 FCPE (Fully Convolutional Pitch Estimator) 的 F0 基频提取，用于音频转 MIDI',
+    descriptionEn: 'FCPE (Fully Convolutional Pitch Estimator) based F0 extraction for audio-to-MIDI',
+    required: false,
+    pipelineRef: 'fcpeDetector',
+    models: [
+      {
+        id: 'fcpeModel',
+        name: 'FCPE 模型',
+        nameEn: 'FCPE Model',
+        description: '从音频中提取 F0 基频曲线并转换为 MIDI 音符',
+        descriptionEn: 'Extract F0 fundamental frequency curve from audio and convert to MIDI notes',
+        files: ['preprocess/fcpe_model.onnx'],
+        sessionKey: 'fcpe',
+      },
+    ],
+  },
+  {
     id: 'rmvpe',
     name: 'RMVPE 音高检测',
     nameEn: 'RMVPE Pitch Detection',

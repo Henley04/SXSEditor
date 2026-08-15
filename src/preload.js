@@ -144,6 +144,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   extractF0: (data) => ipcRenderer.invoke('extractF0:onnx', data),
   extractMidiRosvot: (data) => ipcRenderer.invoke('extractMidi:rosvot', data),
   extractF0BasicPitch: (data) => ipcRenderer.invoke('extractF0:basicPitch', data),
+  extractMidiFcpe: (data) => ipcRenderer.invoke('extractMidi:fcpe', data),
   importMidi: () => ipcRenderer.invoke('midi:import'),
   importMidiMultiTrack: () => ipcRenderer.invoke('midi:importMultiTrack'),
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),

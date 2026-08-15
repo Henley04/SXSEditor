@@ -45,8 +45,13 @@
       <div id="main-content">
         <div id="singer-panel">
           <div id="singer-panel-header">
-            <span data-i18n="main.singer">歌手</span>
-            <button id="btn-add-singer" aria-label="添加">+</button>
+            <span data-i18n="main.tracks">轨道</span>
+            <div class="singer-panel-actions">
+              <button id="btn-add-singer" aria-label="添加歌手" data-i18n-title="main.addSinger">+</button>
+              <button id="btn-import-accompaniment" class="btn-import-accompaniment" aria-label="导入伴奏" data-i18n-title="main.importAccompaniment">
+                <span data-icon="music" data-icon-class="icon--sm"></span>
+              </button>
+            </div>
           </div>
           <div id="singer-list" role="list"></div>
         </div>
