@@ -28,6 +28,89 @@
         </div>
       </div>
       <div id="main-content">
+        <div id="extract-panel">
+          <div id="extract-panel-header">
+            <span class="section-title" data-i18n="preprocess.extractPanel">提取参数</span>
+            <span id="extract-status" class="extract-status"></span>
+            <div class="extract-panel-actions">
+              <button id="btn-audition" class="btn-toolbar" data-i18n="preprocess.auditionSynth" data-icon="music">播放合成音</button>
+              <button id="btn-toggle-panel" class="btn-toolbar btn-small" data-i18n="preprocess.collapsePanel" data-icon="chevron-up">收起</button>
+            </div>
+          </div>
+          <div id="extract-panel-body">
+            <div class="extract-row">
+              <div class="extract-field">
+                <label for="preset-select" data-i18n="preprocess.presetLabel">预设方案</label>
+                <select id="preset-select">
+                  <option value="popMale" data-i18n="preprocess.preset.popMale">流行男声</option>
+                  <option value="folkFemale" data-i18n="preprocess.preset.folkFemale">民族女声</option>
+                  <option value="traditional" data-i18n="preprocess.preset.traditional">戏曲/滑音多</option>
+                  <option value="childHigh" data-i18n="preprocess.preset.childHigh">儿童/高音域</option>
+                  <option value="custom" data-i18n="preprocess.preset.custom">自定义</option>
+                </select>
+              </div>
+              <div class="extract-field">
+                <label for="threshold-select" data-i18n="preprocess.thresholdLabel">静音阈值</label>
+                <select id="threshold-select">
+                  <option value="low" data-i18n="preprocess.thresholdLow">低 (0.003)</option>
+                  <option value="mid" data-i18n="preprocess.thresholdMid">中 (0.006)</option>
+                  <option value="high" data-i18n="preprocess.thresholdHigh">高 (0.01)</option>
+                </select>
+              </div>
+              <div class="extract-field">
+                <label for="smoothing-select" data-i18n="preprocess.smoothingLabel">平滑度</label>
+                <select id="smoothing-select">
+                  <option value="low" data-i18n="preprocess.smoothingLow">低</option>
+                  <option value="medium" data-i18n="preprocess.smoothingMedium">中</option>
+                  <option value="high" data-i18n="preprocess.smoothingHigh">高</option>
+                </select>
+              </div>
+              <div class="extract-field">
+                <label for="quantization-select" data-i18n="preprocess.quantizationLabel">音高量化</label>
+                <select id="quantization-select">
+                  <option value="strict" data-i18n="preprocess.quantizationStrict">严格量化</option>
+                  <option value="pitchbend" data-i18n="preprocess.quantizationPitchbend">保留滑音 (Pitch Bend)</option>
+                </select>
+              </div>
+            </div>
+            <div class="extract-row">
+              <div class="extract-field">
+                <label for="range-auto" class="inline-label">
+                  <input type="checkbox" id="range-auto" />
+                  <span data-i18n="preprocess.autoRange">自动适配音域</span>
+                </label>
+              </div>
+              <div class="extract-field">
+                <label for="f0-min" data-i18n="preprocess.f0MinLabel">F0 下限 (Hz)</label>
+                <input type="number" id="f0-min" min="20" max="2000" step="1" />
+              </div>
+              <div class="extract-field">
+                <label for="f0-max" data-i18n="preprocess.f0MaxLabel">F0 上限 (Hz)</label>
+                <input type="number" id="f0-max" min="20" max="2000" step="1" />
+              </div>
+              <div class="extract-field">
+                <label for="min-note" data-i18n="preprocess.minNoteLabel">最短音符 (秒)</label>
+                <input type="number" id="min-note" min="0.01" max="1" step="0.01" />
+              </div>
+              <div class="extract-field">
+                <label for="bpm-auto" class="inline-label">
+                  <input type="checkbox" id="bpm-auto" />
+                  <span data-i18n="preprocess.autoBpm">自动检测 BPM</span>
+                </label>
+              </div>
+              <div class="extract-field">
+                <label for="bpm-input" data-i18n="preprocess.bpmLabel">BPM</label>
+                <input type="number" id="bpm-input" min="40" max="240" step="1" />
+              </div>
+              <div class="extract-field">
+                <label for="normalize-check" class="inline-label">
+                  <input type="checkbox" id="normalize-check" />
+                  <span data-i18n="preprocess.normalizeLabel">响度归一化</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
         <div id="waveform-section">
           <div id="waveform-header">
             <span class="section-title" data-i18n="preprocess.wavWaveform">WAV 波形</span>

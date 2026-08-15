@@ -356,6 +356,10 @@ class FcpePitchDetector {
     };
   }
 
+  getDeviceInfo() {
+    return this.usingDML ? 'DML' : 'CPU';
+  }
+
   dispose() {
     if (this.session) {
       try {

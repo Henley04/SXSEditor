@@ -6,6 +6,7 @@ const { RmvpePitchDetector } = require('../inference/rmvpePitchDetector');
 const { BasicPitchDetector } = require('../inference/basicPitch');
 const { RosvotDetector } = require('../inference/rosvotDetector');
 const { FcpePitchDetector } = require('../inference/fcpePitchDetector');
+const pp = require('../inference/pitchPostprocess');
 const { parseMidiFile, parseMidiFileMultiTrack, parseMidiProjectInfo } = require('../inference/midiParser');
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
@@ -329,12 +330,73 @@ function registerPitchMidiIpc() {
     }
   });
 
-  ipcMain.handle('extractMidi:fcpe', async (event, { audioData, sampleRate, bpm }) => {
+  ipcMain.handle('extractMidi:fcpe', async (event, { audioData, sampleRate, bpm, options }) => {
     try {
       const detector = await fcpeLazy.get();
-      const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
-      const notes = detector.f0ToNotes(f0Array, bpm || 120);
-      return { success: true, f0Array, notes };
+      const audio = new Float32Array(audioData);
+      const sr = sampleRate || 44100;
+      const opts = options || {};
+      const bpmVal = opts.bpm || bpm || 120;
+
+      // 1. 响度归一化到 -3 ~ -6dBFS（弱信号会导致 FCPE 漏判音高）
+      const workAudio = opts.normalize === false ? audio : pp.normalizeToTargetDb(audio, -4.5);
+
+      // 2. 提取 F0（内部重采样到 16kHz）
+      let f0Array = await detector.extractF0(workAudio, sr);
+
+      // 3. 自动适配音域（快速扫描后取分位数区间）
+      let f0Min = opts.f0Min || 80;
+      let f0Max = opts.f0Max || 880;
+      if (opts.f0RangeAuto) {
+        const stats = pp.f0RangeStats(f0Array);
+        const range = pp.autoRangeFromStats(stats);
+        f0Min = range.f0Min;
+        f0Max = range.f0Max;
+      }
+
+      // 4. 静音门限（按帧 RMS，threshold 预设 0.003/0.006/0.01）
+      if (opts.thresholdEnabled !== false && opts.threshold > 0) {
+        const frameDur = f0Array.length > 1 ? f0Array[1].time - f0Array[0].time : 0.02;
+        const rms = pp.computeFrameRms(workAudio, sr, frameDur);
+        f0Array = pp.gateByThreshold(f0Array, rms, opts.threshold);
+      }
+
+      // 5. F0 量程门限
+      f0Array = pp.gateByRange(f0Array, f0Min, f0Max);
+
+      // 6. 中值平滑（消除跳变噪音）
+      const win = pp.smoothingWindow(opts.smoothing || 'medium');
+      f0Array = pp.medianFilterF0(f0Array, win);
+
+      // 7. 有效人声/静音段检测（提示 UVR 分离质量）
+      const endSec = f0Array.length > 0 ? f0Array[f0Array.length - 1].time : 0;
+      const quality = pp.detectVoiceQuality(f0Array, endSec);
+      const warnings = quality.warnings;
+
+      // 8. 自动 BPM 检测
+      let useBpm = bpmVal;
+      if (opts.autoBpm) {
+        useBpm = pp.detectBpm(workAudio, sr, bpmVal);
+      }
+
+      // 9. 音符切分 + 量化（严格 / 保留滑音 Pitch Bend）
+      const { notes, pitchBends } = pp.segmentNotes(f0Array, {
+        quantization: opts.quantization || 'strict',
+        minNoteDuration: opts.minNoteDuration || 0.05,
+        bpm: useBpm,
+      });
+
+      return {
+        success: true,
+        f0Array,
+        notes,
+        pitchBends,
+        warnings,
+        f0Min,
+        f0Max,
+        device: detector.getDeviceInfo(),
+        bpm: useBpm,
+      };
     } catch (err) {
       console.error('[Main] FCPE extraction failed:', err);
       return { success: false, error: err.message };
