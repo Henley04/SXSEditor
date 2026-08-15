@@ -348,12 +348,34 @@ export function showLoading(text = t('preprocess.processing')) {
   textEl.textContent = text;
   content.appendChild(textEl);
 
+  // 进度条 + 剩余时间（后处理/提取的实时反馈）
+  const progressWrap = document.createElement('div');
+  progressWrap.className = 'loading-progress-wrap';
+  const bar = document.createElement('div');
+  bar.className = 'loading-progress-bar';
+  const fill = document.createElement('div');
+  fill.className = 'loading-progress-fill';
+  bar.appendChild(fill);
+  const etaEl = document.createElement('div');
+  etaEl.className = 'loading-eta';
+  etaEl.textContent = '';
+  progressWrap.appendChild(bar);
+  progressWrap.appendChild(etaEl);
+  content.appendChild(progressWrap);
+
   overlay.appendChild(content);
   document.body.appendChild(overlay);
-  return overlay;
+
+  const setProgress = (pct, etaText) => {
+    const p = Math.max(0, Math.min(100, pct));
+    fill.style.width = `${p}%`;
+    if (etaText) etaEl.textContent = etaText;
+  };
+  return { overlay, setProgress };
 }
 
-export function hideLoading(overlay) {
+export function hideLoading(handle) {
+  const overlay = handle && handle.overlay ? handle.overlay : handle;
   if (overlay && overlay.parentNode) {
     overlay.remove();
   }

@@ -285,3 +285,132 @@ html, body {
   color: var(--fg-secondary);
   font-weight: 500;
 }
+
+.loading-progress-wrap {
+  margin-top: 14px;
+  min-width: 260px;
+  text-align: left;
+}
+
+.loading-progress-bar {
+  height: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+}
+
+.loading-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%);
+  border-radius: var(--radius-full);
+  transition: width var(--motion-fast) var(--ease-standard);
+}
+
+.loading-eta {
+  margin-top: 6px;
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+}
+
+/* ==================== 提取参数面板 ==================== */
+#extract-panel {
+  flex: 0 0 auto;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+#extract-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-5);
+  min-height: 32px;
+}
+
+.extract-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.btn-toolbar.btn-small {
+  padding: var(--space-1) 8px;
+  font-size: var(--font-sm);
+}
+
+.extract-status {
+  flex: 1;
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#extract-panel-body {
+  padding: var(--space-2) var(--space-5) var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+#extract-panel.collapsed #extract-panel-body {
+  display: none;
+}
+
+.extract-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+}
+
+.extract-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 120px;
+}
+
+.extract-field label {
+  font-size: var(--font-sm);
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+.extract-field label.inline-label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding-top: 2px;
+  cursor: pointer;
+}
+
+.extract-field select,
+.extract-field input[type="number"] {
+  background: var(--bg-input);
+  color: var(--fg-primary);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-1) 8px;
+  font-size: var(--font-sm);
+  min-height: 26px;
+}
+
+.extract-field select:focus,
+.extract-field input[type="number"]:focus {
+  border-color: var(--accent);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.extract-field input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}

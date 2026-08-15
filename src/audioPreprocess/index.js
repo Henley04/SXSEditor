@@ -6,9 +6,14 @@ import { hydrateIcons } from '../icons/iconHelper.js';
 import { initDomRefs, state } from './state.js';
 import { setupEventHandlers } from './eventHandlers.js';
 import { setupIpcHandlers } from './ipcHandlers.js';
+import { initPanel } from './panel.js';
+import { stopSynth } from './synthPreview.js';
 
 // Initialize DOM references
 initDomRefs();
+
+// 初始化提取参数面板
+initPanel();
 
 // Setup event handlers
 setupEventHandlers();
@@ -46,4 +51,5 @@ window.addEventListener('beforeunload', () => {
     state.audioContext = null;
   }
   if (state.pianoRoll && state.pianoRoll.destroy) state.pianoRoll.destroy();
+  stopSynth();
 });
