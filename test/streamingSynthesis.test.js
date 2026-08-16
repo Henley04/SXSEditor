@@ -333,6 +333,56 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       });
     });
 
+    describe('长片段 (>30s) 回归测试', () => {
+      // Bug: synthesizeMultiStreaming 调用 _buildVocalSegments 后仅取 segments[0]，
+      // 当 fragment 音符跨度 > 30s（LONG_AUDIO_THRESHOLD_SEC）时，后续 segment 的音符
+      // 被丢弃，导致播放到 ~30s 后全部静音。修复后直接使用 filledNotes。
+      it('单分片 >30s 无分块 → 音频覆盖完整时长，30s 后非静音', async () => {
+        // 20 notes × 4 beats = 80 beats @ 120 BPM = 40 seconds (> 30s threshold)
+        const out = await pipeline.synthesizeMultiStreaming(
+          [{ notes: makeNotes(20), startTimeBeat: 0, durationBeats: 80, options: { diffStepChunk: false } }],
+          120,
+          {}
+        );
+        // totalMixedSamples = ceil(80/120*60*24000) = 960000
+        expect(out.length).to.equal(960000);
+        // 30s mark = 720000 samples; audio beyond must be non-zero
+        const sampleAt30s = out[720000];
+        expect(sampleAt30s).to.not.equal(0);
+        // Also check a sample near the end (39s = 936000)
+        expect(out[936000]).to.not.equal(0);
+      });
+
+      it('单分片 >30s 分块 (diffStepChunk=true) → 音频覆盖完整时长，30s 后非静音', async () => {
+        pipeline = buildMockPipeline();
+        installRecordingSessions(pipeline);
+        const onChunkAudio = sinon.spy();
+        await pipeline.synthesizeMultiStreaming(
+          [{ notes: makeNotes(20), startTimeBeat: 0, durationBeats: 80, options: { diffStepChunk: true, diffStepChunkFrames: 500, diffStepOverlapFrames: 50 } }],
+          120,
+          { onChunkAudio }
+        );
+        // onChunkAudio should cover audio beyond 30s
+        const maxSampleEnd = Math.max(...onChunkAudio.getCalls().map(c => c.args[0].sampleEnd));
+        expect(maxSampleEnd).to.be.greaterThan(720000); // > 30s mark
+      });
+
+      it('单分片 >30s → onChunkAudio 最后一次 isLast=true 覆盖完整音频', async () => {
+        pipeline = buildMockPipeline();
+        installRecordingSessions(pipeline);
+        const onChunkAudio = sinon.spy();
+        await pipeline.synthesizeMultiStreaming(
+          [{ notes: makeNotes(20), startTimeBeat: 0, durationBeats: 80, options: { diffStepChunk: true, diffStepChunkFrames: 500, diffStepOverlapFrames: 50 } }],
+          120,
+          { onChunkAudio }
+        );
+        const lastCall = onChunkAudio.lastCall.args[0];
+        expect(lastCall.isLast).to.equal(true);
+        // isLast chunk should cover audio beyond 30s
+        expect(lastCall.sampleEnd).to.be.greaterThan(720000);
+      });
+    });
+
     describe('多分片流式合成', () => {
       it('2 个分片无分块 → 音频按 startTimeBeat 正确放置', async () => {
         // frag0: startTimeBeat=0, 4 beats, totalFrames=100, samples=48000

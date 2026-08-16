@@ -2280,10 +2280,12 @@ class OnnxSVSPipeline {
                 }
             }
 
-            // 构建 sequences
-            const segments = this._buildVocalSegments(filledNotes, bpm);
-            const seg = segments[0];
-            const segNotes = seg.notes || filledNotes;
+            // 不调用 _buildVocalSegments 取 segments[0]：多分片流式路径中每个 fragment
+            // 已是独立单元，若 fragment 音符跨度 > 30s（LONG_AUDIO_THRESHOLD_SEC），
+            // _buildVocalSegments 会拆分为多段但此处仅取第一段，导致后续段落的音符被
+            // 丢弃——表现为"播放到某个时间点后后续全部没声音"。直接使用 filledNotes，
+            // 由 chunkPlan 的分块机制处理长片段的扩散推理，MAX_SAFE_FRAMES 仍作为安全上限。
+            const segNotes = filledNotes;
             const pitchCurveOffsetSec = 0;
             const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, pitchCurveOffsetSec);
             let totalFrames = sequences.f0Ids.length;
