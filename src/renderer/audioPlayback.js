@@ -13,7 +13,7 @@ import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './tim
  * @returns {Array} Singer objects with type === 'accompaniment' and audioBuffer set
  */
 function getAccompanimentTracks() {
-  return trackManager.getSingers().filter(s => s.type === 'accompaniment' && s.audioBuffer);
+  return trackManager.getSingers().filter(s => s.type === 'accompaniment' && (s.audioChannels?.length || s.audioBuffer));
 }
 
 /**
@@ -25,7 +25,7 @@ function getAccompanimentMaxEndSample(bpm) {
   let maxEndSample = 0;
   for (const track of getAccompanimentTracks()) {
     const startSample = Math.round((track.accompanimentStartTime || 0) / bpm * 60 * SAMPLE_RATE);
-    const endSample = startSample + track.audioBuffer.length;
+    const endSample = startSample + (track.audioChannels?.[0]?.length || track.audioBuffer.length);
     if (endSample > maxEndSample) maxEndSample = endSample;
   }
   return maxEndSample;
@@ -49,6 +49,35 @@ function mixAccompanimentIntoArray(mixedAudio, bpm) {
       }
     }
   }
+}
+
+function _interpolateVolumeEnvelope(envelope, beat) {
+  const kfs = envelope?.keyframes;
+  if (!kfs || kfs.length === 0) return 1;
+  if (kfs.length === 1 || beat <= kfs[0].time) return kfs[0].value;
+  if (beat >= kfs[kfs.length - 1].time) return kfs[kfs.length - 1].value;
+  let lo = 0, hi = kfs.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >>> 1;
+    if (kfs[mid].time <= beat) lo = mid; else hi = mid;
+  }
+  const span = kfs[hi].time - kfs[lo].time;
+  const t = span > 0 ? (beat - kfs[lo].time) / span : 0;
+  const smoothness = (kfs[lo].smoothness || 0) / 100;
+  const smooth = t + ((t * t * (3 - 2 * t)) - t) * smoothness;
+  return kfs[lo].value + smooth * (kfs[hi].value - kfs[lo].value);
+}
+
+function _applyFragmentVolumeEnvelope(audio, fragment, bpm) {
+  const envelope = fragment?.envelopes?.volume;
+  if (!envelope?.keyframes?.length) return audio;
+  const out = new Float32Array(audio.length);
+  const beatInc = bpm / (60 * SAMPLE_RATE);
+  let beat = 0;
+  for (let i = 0; i < audio.length; i++, beat += beatInc) {
+    out[i] = audio[i] * _interpolateVolumeEnvelope(envelope, beat);
+  }
+  return out;
 }
 
 // visibilitychange handler: pause rAF-driven UI updates when tab hidden
@@ -184,6 +213,7 @@ export async function playAll() {
       const mixedAudio = new Float32Array(accMaxSamples);
       mixAccompanimentIntoArray(mixedAudio, state.project.bpm);
       state.currentAudioData = mixedAudio;
+      state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
       state.currentAudioBuffer = null;
       dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
       if (state.playbackPauseOffset > 0) {
@@ -319,14 +349,24 @@ export async function playAll() {
               // 避免伴奏长于人声时人声一结束就提前终止播放并孤立伴奏 source，
               // 导致伴奏无法被暂停/停止。
               for (const accTrack of accTracks) {
-                const accBuffer = ctx.createBuffer(1, accTrack.audioBuffer.length, SAMPLE_RATE);
-                accBuffer.getChannelData(0).set(accTrack.audioBuffer);
+                const accChannels = accTrack.audioChannels?.length ? accTrack.audioChannels : [accTrack.audioBuffer];
+                const accBuffer = ctx.createBuffer(accChannels.length, accChannels[0].length, SAMPLE_RATE);
+                for (let ch = 0; ch < accChannels.length; ch++) accBuffer.getChannelData(ch).set(accChannels[ch]);
                 const accSource = ctx.createBufferSource();
                 accSource.buffer = accBuffer;
                 accSource.connect(state.gainNode);
                 const accStartSec = (accTrack.accompanimentStartTime || 0) / state.project.bpm * 60;
                 const accScheduleTime = state.playbackStartTime + accStartSec;
-                accSource.start(Math.max(accScheduleTime, ctx.currentTime + 0.01));
+                const safeNow = ctx.currentTime + 0.01;
+                if (accScheduleTime < safeNow) {
+                  // The first MIDI chunk may begin after timeline zero. Start the
+                  // accompaniment at the matching offset, not from its head.
+                  const offset = Math.max(0, safeNow - accScheduleTime);
+                  if (offset >= accBuffer.duration) continue;
+                  accSource.start(safeNow, offset);
+                } else {
+                  accSource.start(accScheduleTime);
+                }
                 const accEndSec = accStartSec + accTrack.audioBuffer.length / SAMPLE_RATE;
                 if (accEndSec > _streamingAccEndSec) _streamingAccEndSec = accEndSec;
                 _streamingActiveSourceCount++;
@@ -524,8 +564,9 @@ export async function playAll() {
         const requiredLength = Math.max(expectedSamples, firstNoteOffsetSample + audioData.length);
         const paddedAudio = new Float32Array(requiredLength);
         paddedAudio.set(audioData, firstNoteOffsetSample);
+        const envelopedAudio = _applyFragmentVolumeEnvelope(paddedAudio, fragment, state.project.bpm);
         audioResults.push({
-          audioData: paddedAudio,
+          audioData: envelopedAudio,
           startTimeBeat: fragment.startTime,
         });
 
@@ -554,10 +595,8 @@ export async function playAll() {
         }
       }
 
-      // Mix accompaniment audio into the combined output
-      mixAccompanimentIntoArray(mixedAudio, state.project.bpm);
-
       state.currentAudioData = mixedAudio;
+      state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
 
       // 不重置 playbackPauseOffset：若用户在合成前已通过拖拽 playhead 设置了起始位置，
       // 则从该位置开始播放。stopPlayback / 自然结束时已重置为 0。
@@ -685,13 +724,29 @@ export async function startAudioPlayback(offset) {
   }
 }
 
+function _buildPlaybackChannels(vocalMono, bpm) {
+  const tracks = getAccompanimentTracks();
+  const maxChannels = Math.max(2, ...tracks.map(t => t.audioChannels?.length || 1));
+  const result = Array.from({ length: maxChannels }, () => new Float32Array(vocalMono.length));
+  for (let ch = 0; ch < maxChannels; ch++) result[ch].set(vocalMono);
+  for (const track of tracks) {
+    const src = track.audioChannels?.length ? track.audioChannels : [track.audioBuffer];
+    const start = Math.round((track.accompanimentStartTime || 0) / bpm * 60 * SAMPLE_RATE);
+    for (let ch = 0; ch < maxChannels; ch++) {
+      const input = src[Math.min(ch, src.length - 1)];
+      for (let i = 0; i < input.length && start + i < result[ch].length; i++) result[ch][start + i] += input[i];
+    }
+  }
+  return result;
+}
+
 export function startSharedPlayback(offset) {
   stopAudioSource();
 
   const context = getAudioContext();
-  const audioBuffer = context.createBuffer(1, state.currentAudioData.length, SAMPLE_RATE);
-  const channelData = audioBuffer.getChannelData(0);
-  channelData.set(state.currentAudioData);
+  const channels = state.currentAudioChannels?.length ? state.currentAudioChannels : [state.currentAudioData];
+  const audioBuffer = context.createBuffer(channels.length, channels[0].length, SAMPLE_RATE);
+  for (let ch = 0; ch < channels.length; ch++) audioBuffer.getChannelData(ch).set(channels[ch]);
 
   state.currentAudioBuffer = audioBuffer;
 
@@ -1306,13 +1361,17 @@ export async function runExportJob(opts) {
     }
   }
 
-  // Mix accompaniment audio into the exported output
-  mixAccompanimentIntoArray(mixedAudio, state.project.bpm);
+  const mixedChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
+  const interleaved = new Float32Array(totalSamples * mixedChannels.length);
+  for (let i = 0; i < totalSamples; i++) {
+    for (let ch = 0; ch < mixedChannels.length; ch++) interleaved[i * mixedChannels.length + ch] = mixedChannels[ch][i];
+  }
 
   if (onOverallProgress) onOverallProgress(100);
 
   return {
-    mixedAudio,
+    mixedAudio: interleaved,
+    numChannels: mixedChannels.length,
     maxDuration,
     fragmentCount: audioResults.length,
   };

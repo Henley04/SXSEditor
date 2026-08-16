@@ -7,11 +7,13 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   if (!fragment || !fragment.pitchCurve || !fragment.pitchCurve.enabled) return null;
   const pc = fragment.pitchCurve;
   const hasCustom = pc.anchorPoints.length > 0 || pc.brushSegments.length > 0;
-  if (!hasCustom) return null;
   if (!clippedNotes || clippedNotes.length === 0) return null;
+  const sortedNotes = clippedNotes.slice().sort((a, b) => a.start - b.start || b.duration - a.duration);
+  const hasVibrato = sortedNotes.some(n => n.vibrato && n.vibrato.enabled);
+  if (!hasCustom && !hasVibrato) return null;
 
   const fragDuration = fragment.duration || Infinity;
-  const lastNote = clippedNotes[clippedNotes.length - 1];
+  const lastNote = sortedNotes[sortedNotes.length - 1];
   const totalBeats = Math.min(lastNote.start + lastNote.duration, fragDuration);
   const totalSeconds = (totalBeats / bpm) * 60;
   const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / SVS_HOP_SIZE);
@@ -22,7 +24,7 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   // 预生成 autoPoints（与分片编辑器 generateAutoPitchPoints 一致），基于 clippedNotes
   // 起始点和末端都标记 breakAfter: true，note 内部不做线性插值，避免强制拟合 Midi 音高平线。
   const autoPoints = [];
-  for (const note of clippedNotes) {
+  for (const note of sortedNotes) {
     autoPoints.push({ time: note.start, pitch: note.pitch, breakAfter: true });
     autoPoints.push({ time: note.start + note.duration, pitch: note.pitch, breakAfter: true });
   }
@@ -31,12 +33,16 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   for (let i = 0; i < totalFrames; i++) {
     const frameTimeSec = (i * SVS_HOP_SIZE) / SAMPLE_RATE;
     const frameBeat = (frameTimeSec / 60) * bpm;
-    const inNote = clippedNotes.some(n => frameBeat >= n.start && frameBeat < n.start + n.duration);
-    if (!inNote) {
+    const note = _findNoteAtBeat(sortedNotes, frameBeat);
+    if (!note) {
       f0Array[i] = 0;
       continue;
     }
-    const pitch = _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, frameBeat);
+    let pitch = _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, frameBeat);
+    if (note.vibrato && note.vibrato.enabled) {
+      if (pitch === null) pitch = note.pitch;
+      pitch += _computeVibratoOffset(note, frameBeat, bpm);
+    }
     if (pitch !== null && pitch > 0) {
       f0Array[i] = 440 * Math.pow(2, (pitch - 69) / 12);
     } else {
@@ -44,6 +50,31 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
     }
   }
   return f0Array;
+}
+
+function _findNoteAtBeat(notes, beat) {
+  let lo = 0;
+  let hi = notes.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1;
+    const note = notes[mid];
+    if (beat < note.start) hi = mid - 1;
+    else if (beat >= note.start + note.duration) lo = mid + 1;
+    else return note;
+  }
+  return null;
+}
+
+function _computeVibratoOffset(note, beat, bpm) {
+  const v = note.vibrato;
+  if (!v || !v.enabled || note.duration <= 0) return 0;
+  const start = note.start + v.start * note.duration;
+  const length = v.length * note.duration;
+  if (length <= 0 || beat < start || beat > start + length) return 0;
+  const pos = (beat - start) / length;
+  const env = v.fadeIn > 0 && pos < v.fadeIn ? pos / v.fadeIn : 1;
+  const seconds = ((beat - start) / bpm) * 60;
+  return (v.depth / 100) * Math.sin(2 * Math.PI * v.rate * seconds) * env;
 }
 
 // 等价于分片编辑器 getPitchAtTime，但不依赖全局 state
