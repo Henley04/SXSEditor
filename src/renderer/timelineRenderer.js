@@ -458,6 +458,25 @@ export function drawPlayheadLine(elapsedSeconds, options = {}) {
   const w = dom.fragmentPlayheadCanvas.width / dpr;
   const h = dom.fragmentPlayheadCanvas.height / dpr;
 
+  // 播放中自动跟随滚动：playhead canvas 只覆盖可视区域，
+  // 若播放头越过视口右缘（或回退到左缘）时不滚动，播放头会直接从画面消失。
+  // 在约 75% 视口宽度处开始跟随，保持播放头始终可见。
+  // 暂停/拖拽态（isPaused）不触发，避免打断用户手动滚动。
+  if (state.isPlaying && options.isPaused !== true) {
+    const viewportW = dom.fragmentContainer?.clientWidth || w;
+    if (viewportW > 0) {
+      const rawX = playbackTimeToX(elapsedSeconds);
+      const followX = viewportW * 0.75;
+      if (rawX - state.fragmentScrollX > followX) {
+        state.fragmentScrollX = rawX - followX;
+        syncFragmentScroll();
+      } else if (rawX - state.fragmentScrollX < 0) {
+        state.fragmentScrollX = rawX;
+        syncFragmentScroll();
+      }
+    }
+  }
+
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
