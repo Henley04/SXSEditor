@@ -205,8 +205,9 @@ dom.btnAddSinger.addEventListener('click', () => {
 
 // Import accompaniment audio file
 if (dom.btnImportAccompaniment) {
-  dom.btnImportAccompaniment.addEventListener('click', () => {
-    addAccompanimentFromFile();
+  dom.btnImportAccompaniment.addEventListener('click', async () => {
+    await addAccompanimentFromFile();
+    refreshAll();
   });
 }
 
