@@ -21,12 +21,25 @@ const state = require('../src/fragmentEditor/state');
 
 const {
   setNotes,
+  getNotes,
   setPitchCurve,
   invalidatePitchCurveCache,
   bumpNotesVersion,
 } = state;
 
 // ---- 线性参考实现（改写前的原逻辑，O(n) 线性扫描）----
+// 注意：v3 补丁在 brush 与 auto-pitch 之间增加了 _findActiveNoteAtTime 回退，
+// 即当锚点/笔刷均未覆盖该时间点时，先尝试用激活音符的 pitch 作为 basePitch。
+// 此处线性参考需包含相同回退，否则等价性比对会误报。
+function _findActiveNoteAtTime(time) {
+  const notes = getNotes();
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    if (time >= n.start && time < n.start + n.duration) return n;
+  }
+  return null;
+}
+
 function linearRef(pitchCurve, sortedAnchors, autoPoints, time) {
   if (!pitchCurve.enabled) return null;
   let basePitch = null;
@@ -66,6 +79,11 @@ function linearRef(pitchCurve, sortedAnchors, autoPoints, time) {
         break;
       }
     }
+  }
+
+  if (basePitch === null) {
+    const activeNote = _findActiveNoteAtTime(time);
+    if (activeNote) basePitch = activeNote.pitch;
   }
 
   if (basePitch === null) {

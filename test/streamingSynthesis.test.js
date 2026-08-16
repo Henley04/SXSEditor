@@ -1694,23 +1694,21 @@ describe('分片级缓存 (Segment-level cache) - 未改动 segment 不再推理
       expect(spy.callCount).to.equal(segments.length);
     });
 
-    // 优雅降级场景：autoShift 开启时，编辑触及全局中位数的音符会使
-    // globalTargetMedian 漂移 → 所有 segment 的 segF0Shift 变化 → _fs 后缀变化
-    // → 全部分片失效。此时输出确实不同（f0Shift 真的变了），失效是正确的，
-    // 优化退化为整曲重算。对比：同样的单音符编辑在 autoShift 关闭时只重算 1 个
-    // segment（见上方的"改动单个 segment 内的音符"用例）。
-    it('autoShift 开启且编辑触及全局中位数：globalTargetMedian 漂移 → 全部分片失效，优雅降级为整曲重算', async () => {
+    // v3 行为变更：perSegAutoShift 已禁用（perSegAutoShift=false），globalTargetMedian
+    // 始终为 null，_computeSegF0Shift 返回全局 f0Shift 不再随段中位数变化。
+    // 因此编辑单个音符的 pitch 只使该音符所在 segment 失效，其余 segment 命中缓存。
+    // 这保证了同一 MIDI 音符在不同推理分段中绝对音高一致。
+    it('autoShift 开启但 perSegAutoShift 已禁用：编辑单音符 pitch 仅失效所在 segment', async () => {
       const pipeline = buildMockPipeline();
       installRecordingSessions(pipeline);
       const spy = sinon.spy(pipeline, '_synthesizeSegment');
 
       // 40 音符 @ bpm=60（1 拍=1s）→ 40s 多 segment。
-      // 21 个 pitch 58 + 19 个 pitch 62：排序后 index19=index20=58 → 全局中位数=58。
       const notesA = [];
       for (let i = 0; i < 40; i++) {
         notesA.push({ pitch: i < 21 ? 58 : 62, start: i, duration: 1, lyric: 'la' });
       }
-      // 首次合成：autoShift 开启，填充分片缓存（keys 基于 globalTargetMedian=58）
+      // 首次合成：autoShift 开启，填充分片缓存
       await pipeline.synthesize(notesA, 60, { nSteps: 1, cfg: 0, autoShift: true });
       const segCount = pipeline._buildVocalSegments(pipeline._fillNoteGaps(notesA), 60).length;
       expect(segCount).to.be.greaterThan(1);
@@ -1718,9 +1716,6 @@ describe('分片级缓存 (Segment-level cache) - 未改动 segment 不再推理
       spy.resetHistory();
 
       // 编辑：把一个 pitch 58 的音符改成 80。
-      // 新分布 20×58, 19×62, 1×80 → 排序后 index19=58, index20=62 → 全局中位数=60（漂移 +2）。
-      // 每个 segment 的 segF0Shift 因此变化（segMedian=58 的段 0→2；segMedian=62 的段 -4→-2），
-      // _fs 后缀变化 → 即使该 segment 音符未改也失效。
       const notesB = notesA.map(n => ({ ...n }));
       notesB[0].pitch = 80;
 
@@ -1731,9 +1726,9 @@ describe('分片级缓存 (Segment-level cache) - 未改动 segment 不再推理
 
       await pipeline.synthesize(notesB, 60, { nSteps: 1, cfg: 0, autoShift: true });
 
-      // 全部分片失效（seg0 因 notes 变化 + segF0Shift 漂移；其余 segment 仅因 segF0Shift 漂移）
-      // → 退化为整曲重算，行为与未引入分片缓存时一致（结果仍正确）
-      expect(spy.callCount).to.equal(segCount);
+      // perSegAutoShift=false → globalTargetMedian=null → segF0Shift 不随段变化
+      // → 仅 notesB[0] 所在 segment 的 cache key 变化，其余 segment 命中缓存
+      expect(spy.callCount).to.equal(1);
     });
   });
 });
