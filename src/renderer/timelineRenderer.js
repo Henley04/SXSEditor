@@ -7,6 +7,7 @@ import {
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
+import { computeLuminance } from '../themes/colorUtils.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { loadSingerFile, showSingerSelectDialog, markDirty, loadAccompanimentFile } from './projectManager.js';
 import { createIcon } from '../icons/iconHelper.js';
@@ -336,6 +337,14 @@ export function renderFragmentTimeline() {
         if (minPitch > maxPitch) { minPitch = 60; maxPitch = 72; }
         const pitchRange = Math.max(maxPitch - minPitch + 1, 6);
 
+        // 音符条颜色必须与分片底色（fragment.color）保持对比度。
+        // 否则分片被拖到颜色相近（如蓝色系）的歌手上、换色后，
+        // 固定蓝色音符条会与底色融为一体而“消失”。按底色的亮度
+        // 在浅色/深色音符条之间切换，保证任意歌手颜色下都可辨认。
+        const noteFill = computeLuminance(fragment.color) < 0.55
+          ? 'rgba(255, 255, 255, 0.5)'
+          : 'rgba(15, 15, 28, 0.45)';
+
         for (const note of fragment.notes) {
           if (note.start >= fragDuration) continue;
           const noteEnd = Math.min(note.start + note.duration, fragDuration);
@@ -345,7 +354,7 @@ export function renderFragmentTimeline() {
           const noteH = Math.max(2, midiAreaHeight / pitchRange);
           const noteY = midiAreaTop + pitchOffset * midiAreaHeight;
 
-          ctx.fillStyle = c.selectionBg;
+          ctx.fillStyle = noteFill;
           ctx.fillRect(noteX, noteY, noteW, noteH);
         }
         ctx.restore();
