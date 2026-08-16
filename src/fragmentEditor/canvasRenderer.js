@@ -391,7 +391,7 @@ export function getClippedNotes() {
   const currentFragment = getCurrentFragment();
   const notes = getNotes();
   // 过滤掉未激活的重叠 note：同一时间点只有第一个 note 参与合成
-  const inactiveIds = getInactiveNoteIds(notes);
+  const inactiveIds = getCachedInactiveNoteIds(notes);
   const activeNotes = inactiveIds.size > 0 ? notes.filter(n => !inactiveIds.has(n.id)) : notes;
   if (!currentFragment || !currentFragment.duration) return activeNotes;
   const fragDuration = currentFragment.duration;
@@ -587,6 +587,14 @@ export function getInactiveNoteIds(notes) {
 let _inactiveCache = { notesRef: null, version: -1, result: null };
 let _oobCache = { notesRef: null, version: -1, result: null };
 
+// generateAutoPitchPoints / 激活 note 排序数组的缓存。
+// 这两个派生量在 renderPitchCurve 的采样循环里会被 getPitchAtTime 高频调用：
+// 未缓存时每次都要跑 O(n²) getInactiveNoteIds + O(n log n) sort，长分段下
+// steps(可达数万) × n² 直接卡死主线程。用 notesRef + notesVersion 作键，
+// 与 getCachedInactiveNoteIds 同样的失效约定（notes 变化时 bumpNotesVersion）。
+let _autoPitchPointsCache = { notesRef: null, version: -1, result: null };
+let _activeSortedNotesCache = { notesRef: null, version: -1, result: null };
+
 export function getCachedInactiveNoteIds(notes) {
   const v = getNotesVersion();
   if (_inactiveCache.notesRef !== notes || _inactiveCache.version !== v) {
@@ -606,6 +614,8 @@ export function getCachedOutOfPitchRangeNotes(notes) {
 export function invalidateNoteAnalysisCache() {
   _inactiveCache = { notesRef: null, version: -1, result: null };
   _oobCache = { notesRef: null, version: -1, result: null };
+  _autoPitchPointsCache = { notesRef: null, version: -1, result: null };
+  _activeSortedNotesCache = { notesRef: null, version: -1, result: null };
 }
 
 // 各语言模型的训练音高范围（MIDI 半音）。与 index.js 的 _clampAutoShift /
@@ -684,8 +694,14 @@ export function clampNotePosition(noteId, pitch, start, duration) {
 export function generateAutoPitchPoints() {
   const notes = getNotes();
   if (notes.length === 0) return [];
+  // 缓存命中：该函数在 renderPitchCurve 采样循环中被 getPitchAtTime 高频调用，
+  // 未缓存时每次都重新执行 O(n²) inactive 检测 + O(n log n) 排序，是长分段卡死的主因。
+  const v = getNotesVersion();
+  if (_autoPitchPointsCache.notesRef === notes && _autoPitchPointsCache.version === v) {
+    return _autoPitchPointsCache.result;
+  }
   // 未激活的重叠 note 不作为音高曲线锚点
-  const inactiveIds = getInactiveNoteIds(notes);
+  const inactiveIds = getCachedInactiveNoteIds(notes);
   const activeNotes = inactiveIds.size > 0 ? notes.filter(n => !inactiveIds.has(n.id)) : notes;
   const sortedNotes = [...activeNotes].sort((a, b) => a.start - b.start);
   const points = [];
@@ -696,6 +712,8 @@ export function generateAutoPitchPoints() {
     points.push({ time: note.start, pitch: note.pitch, breakAfter: true });
     points.push({ time: note.start + note.duration, pitch: note.pitch, breakAfter: true });
   }
+  // 返回值仅被只读消费（drawAutoPoints / getPitchAtTime 查找），可安全缓存同一引用。
+  _autoPitchPointsCache = { notesRef: notes, version: v, result: points };
   return points;
 }
 
@@ -741,16 +759,31 @@ export function ensureVibrato(note) {
   return note.vibrato;
 }
 
-/** 查找包含给定 beat 时间且处于激活状态的 note（用于颤音叠加）。 */
-function _findActiveNoteAtTime(time) {
+/**
+ * 返回激活 note 的排序数组（按 start 升序，相同 start 取较长者）。
+ * 缓存以避免 _findActiveNoteAtTime 在采样循环里每次重新 filter+sort。
+ * 注意：排序规则与 generateAutoPitchPoints 不同（后者仅按 start），故独立缓存。
+ */
+function _getActiveSortedNotes() {
   const notes = getNotes();
-  if (notes.length === 0) return null;
-  const inactiveIds = getInactiveNoteIds(notes);
-  // 按 start 升序，相同 start 取较长者（与 generateAutoPitchPoints 一致）
+  if (notes.length === 0) return notes;
+  const v = getNotesVersion();
+  if (_activeSortedNotesCache.notesRef === notes && _activeSortedNotesCache.version === v) {
+    return _activeSortedNotesCache.result;
+  }
+  const inactiveIds = getCachedInactiveNoteIds(notes);
   const sorted = inactiveIds.size > 0
     ? notes.filter(n => !inactiveIds.has(n.id))
     : notes.slice();
   sorted.sort((a, b) => a.start - b.start || b.duration - a.duration);
+  _activeSortedNotesCache = { notesRef: notes, version: v, result: sorted };
+  return sorted;
+}
+
+/** 查找包含给定 beat 时间且处于激活状态的 note（用于颤音叠加）。 */
+function _findActiveNoteAtTime(time) {
+  const sorted = _getActiveSortedNotes();
+  if (sorted.length === 0) return null;
   for (let i = 0; i < sorted.length; i++) {
     const n = sorted[i];
     if (time >= n.start && time < n.start + n.duration) return n;
@@ -795,6 +828,28 @@ export function getSortedAnchorPoints() {
   return getSortedAnchorPointsCache();
 }
 
+/**
+ * 在按 time 升序排列的点数组中，二分查找包含 time 的区间左端索引。
+ * 语义等价于线性 `for(i) if (time>=pts[i].time && time<=pts[i+1].time) return i`：
+ * 返回第一个满足该条件的 i；不在 [pts[0].time, pts[last].time] 范围或长度<2 时返回 -1。
+ * 将原 O(n) 线性扫描降为 O(log n)，在 renderPitchCurve 的采样循环（长分段可达数万步）
+ * 中显著降低单次开销。重复 time 时与线性取同一区间（首个包含 time 的区间）。
+ */
+function _bisectSegmentIndex(pts, time) {
+  const n = pts.length;
+  if (n < 2) return -1;
+  if (time < pts[0].time || time > pts[n - 1].time) return -1;
+  // 第一个 pts[j].time >= time（必然存在，因 time <= pts[last].time）
+  let lo = 0, hi = n - 1, j = n;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (pts[mid].time >= time) { j = mid; hi = mid - 1; }
+    else lo = mid + 1;
+  }
+  // j === 0 表示 time === pts[0].time，线性会匹配区间 [0,1]（t=0），这里返回 0
+  return j === 0 ? 0 : j - 1;
+}
+
 export function getPitchAtTime(time) {
   const pitchCurve = getPitchCurve();
   if (!pitchCurve.enabled) return null;
@@ -803,20 +858,16 @@ export function getPitchAtTime(time) {
 
   if (pitchCurve.anchorPoints.length > 0) {
     const sorted = getSortedAnchorPoints();
-    if (time < sorted[0].time || time > sorted[sorted.length - 1].time) {
-      // outside anchor range, fall through to brush/auto
-    } else {
-      for (let i = 0; i < sorted.length - 1; i++) {
-        if (time >= sorted[i].time && time <= sorted[i + 1].time) {
-          const t = (sorted[i + 1].time - sorted[i].time) > 0
-            ? (time - sorted[i].time) / (sorted[i + 1].time - sorted[i].time)
-            : 0;
-          const smoothness = (sorted[i].smoothness || 0) / 100;
-          const smoothStepT = t * t * (3 - 2 * t);
-          const smoothT = t + (smoothStepT - t) * smoothness;
-          basePitch = sorted[i].pitch + smoothT * (sorted[i + 1].pitch - sorted[i].pitch);
-          break;
-        }
+    if (!(time < sorted[0].time || time > sorted[sorted.length - 1].time)) {
+      const i = _bisectSegmentIndex(sorted, time);
+      if (i >= 0) {
+        const t = (sorted[i + 1].time - sorted[i].time) > 0
+          ? (time - sorted[i].time) / (sorted[i + 1].time - sorted[i].time)
+          : 0;
+        const smoothness = (sorted[i].smoothness || 0) / 100;
+        const smoothStepT = t * t * (3 - 2 * t);
+        const smoothT = t + (smoothStepT - t) * smoothness;
+        basePitch = sorted[i].pitch + smoothT * (sorted[i + 1].pitch - sorted[i].pitch);
       }
       if (basePitch === null) basePitch = sorted[sorted.length - 1].pitch;
     }
@@ -825,15 +876,14 @@ export function getPitchAtTime(time) {
   if (basePitch === null) {
     for (const seg of pitchCurve.brushSegments) {
       if (seg.points.length < 2) continue;
-      if (time >= seg.points[0].time && time <= seg.points[seg.points.length - 1].time) {
-        for (let i = 0; i < seg.points.length - 1; i++) {
-          if (time >= seg.points[i].time && time <= seg.points[i + 1].time) {
-            const t = (seg.points[i + 1].time - seg.points[i].time) > 0
-              ? (time - seg.points[i].time) / (seg.points[i + 1].time - seg.points[i].time)
-              : 0;
-            basePitch = seg.points[i].pitch + t * (seg.points[i + 1].pitch - seg.points[i].pitch);
-            break;
-          }
+      const pts = seg.points;
+      if (time >= pts[0].time && time <= pts[pts.length - 1].time) {
+        const i = _bisectSegmentIndex(pts, time);
+        if (i >= 0) {
+          const t = (pts[i + 1].time - pts[i].time) > 0
+            ? (time - pts[i].time) / (pts[i + 1].time - pts[i].time)
+            : 0;
+          basePitch = pts[i].pitch + t * (pts[i + 1].pitch - pts[i].pitch);
         }
         break;
       }
@@ -843,15 +893,12 @@ export function getPitchAtTime(time) {
   if (basePitch === null) {
     const autoPoints = generateAutoPitchPoints();
     if (autoPoints.length > 0) {
-      for (let i = 0; i < autoPoints.length - 1; i++) {
-        if (time >= autoPoints[i].time && time <= autoPoints[i + 1].time) {
-          if (autoPoints[i].breakAfter) break;
-          const t = (autoPoints[i + 1].time - autoPoints[i].time) > 0
-            ? (time - autoPoints[i].time) / (autoPoints[i + 1].time - autoPoints[i].time)
-            : 0;
-          basePitch = autoPoints[i].pitch + t * (autoPoints[i + 1].pitch - autoPoints[i].pitch);
-          break;
-        }
+      const i = _bisectSegmentIndex(autoPoints, time);
+      if (i >= 0 && !autoPoints[i].breakAfter) {
+        const t = (autoPoints[i + 1].time - autoPoints[i].time) > 0
+          ? (time - autoPoints[i].time) / (autoPoints[i + 1].time - autoPoints[i].time)
+          : 0;
+        basePitch = autoPoints[i].pitch + t * (autoPoints[i + 1].pitch - autoPoints[i].pitch);
       }
     }
   }
@@ -1361,7 +1408,7 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
   const selectedNoteIds = getSelectedNoteIds();
   const selectedPhonemeNoteId = getSelectedPhonemeNoteId();
   const selectedPhonemeIndex = getSelectedPhonemeIndex();
-  const inactiveNoteIds = getInactiveNoteIds(notes);
+  const inactiveNoteIds = getCachedInactiveNoteIds(notes);
 
   const visibleNotes = notes.filter(note => {
     // 未激活的重叠 note 不显示音素
@@ -1532,7 +1579,7 @@ function renderPitchCurve(c) {
   const endBeat = xToTime(w);
   const allNotes = getNotes();
   // 未激活的重叠 note 不在音高曲线中绘制锚点
-  const inactiveNoteIds = getInactiveNoteIds(allNotes);
+  const inactiveNoteIds = getCachedInactiveNoteIds(allNotes);
   const notes = inactiveNoteIds.size > 0 ? allNotes.filter(n => !inactiveNoteIds.has(n.id)) : allNotes;
   const selectedAnchorIndices = getSelectedAnchorIndices();
   const pitchDragAnchorIdx = getPitchDragAnchorIdx();

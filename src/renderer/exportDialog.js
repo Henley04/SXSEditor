@@ -72,6 +72,7 @@ export async function openExportDialog() {
       exportCfgRescale: settings.exportCfgRescale ?? 0.7,
       exportSampler: settings.exportSampler || 'euler',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
+      smartSegmentation: settings.smartSegmentation !== false,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
       sifiganPrecision: settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32',
       vocoderChunkMode: settings.vocoderChunkMode === 'manual' ? 'manual' : 'smart',
@@ -332,6 +333,16 @@ function buildParamsSection(form) {
       form.autoShift = v;
       // 同步到工具栏复选框，保持一致
       if (dom.autoShiftCheck) dom.autoShiftCheck.checked = v;
+    },
+  }));
+
+  // Smart Segmentation 复选框（智能分段推理）
+  section.appendChild(buildCheckboxField({
+    labelKey: 'main.exportDialog.smartSegmentation',
+    descKey: 'main.exportDialog.smartSegmentationHint',
+    checked: form.smartSegmentation,
+    onChange: (v) => {
+      form.smartSegmentation = v;
     },
   }));
 
@@ -892,6 +903,7 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     enableLoudnormFinal: form.enableLoudnormFinal,
     enableAntiAliasing: form.enableAntiAliasing,
     enableSDEditRepair: form.enableSDEditRepair,
+    smartSegmentation: form.smartSegmentation,
   };
 
   // 禁用开始按钮，显示保存中状态
@@ -989,6 +1001,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
       cfgRescale: form.exportCfgRescale,
       sampler: form.exportSampler,
       autoShift: form.autoShift,
+      smartSegmentation: form.smartSegmentation,
       // Task 11: CFG schedule opts
       cfgScheduleMode: form.exportCfgScheduleMode,
       cfgStrengthStart: form.exportCfgStrengthStart,

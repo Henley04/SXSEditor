@@ -5,7 +5,8 @@ const { getModelDir } = require('./modelDir');
 const { checkJpModelsExist } = require('../modelManager');
 const { t } = require('./locale');
 const { createLazyInitializer } = require('./lazyInitializer');
-const { getRmvpeDetector } = require('./pitchMidiIpc');
+const { getRmvpeDetector, getBaseModelDir } = require('./pitchMidiIpc');
+const { SvsWorkerClient } = require('./svsWorkerClient');
 const { detectJapaneseNotes: _detectJapaneseNotes, detectEnglishNotes: _detectEnglishNotes, resolveLanguage: _resolveLanguage } = require('./languageDetection');
 
 let currentLanguage = null; // Track current pipeline language
@@ -35,7 +36,7 @@ function _createPipeline(languageOverride) {
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
   console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}, jpVocal=${japaneseVocalization}`);
 
-  const pipeline = new OnnxSVSPipeline(modelPath, {
+  const pipelineOptions = {
     deviceId,
     deviceMode,
     preferredDeviceType,
@@ -44,8 +45,16 @@ function _createPipeline(languageOverride) {
     languageOverride,
     inferenceProvider,
     japaneseVocalization,
-  });
-  return pipeline;
+  };
+
+  // onnxruntime-node session.run() blocks the thread that invokes it. Keep the
+  // ORT Node pipeline in a worker so Electron's main-process message pump stays
+  // responsive. ORT Web/WebNN remains in-process because it is coordinated
+  // with the renderer and does not execute native ORT Node runs here.
+  if (inferenceProvider !== 'ortweb') {
+    return new SvsWorkerClient({ modelDir: modelPath, baseModelDir: getBaseModelDir(), pipelineOptions, language: languageOverride });
+  }
+  return new OnnxSVSPipeline(modelPath, pipelineOptions);
 }
 
 const svsPipelineLazy = createLazyInitializer(async () => {
@@ -61,7 +70,7 @@ function getSvsPipeline() {
 function resetSvsPipeline() {
   const inst = svsPipelineLazy.getInstance();
   if (inst) {
-    try { inst.dispose(); } catch (_) {}
+    try { Promise.resolve(inst.dispose()).catch(() => {}); } catch (_) {}
   }
   svsPipelineLazy.reset();
   currentLanguage = null;
@@ -217,11 +226,11 @@ function registerSvsIpc() {
           } catch (_) {}
         },
       };
-      // 注入 RMVPE F0 提取器
+      // 注入 RMVPE F0 提取器（所有匹配的 fragment 都需要注入，
+      // 否则后续 fragment 在 pipeline 中回退到自相关 F0，导致 autoShift 值不一致）
       for (const frag of fragments) {
         if (frag.options && frag.options.autoShift && frag.options.refAudioWavBuffer) {
           frag.options.refF0Extractor = _makeRmvpeExtractor();
-          break;
         }
       }
       return await _withSynthMutex(() => pipeline.synthesizeMultiStreaming(fragments, bpm, opts));
@@ -317,6 +326,9 @@ function registerSvsIpc() {
         await svsPipelineLazy.get();
       }
       const p = svsPipelineLazy.getInstance();
+      if (typeof p.resolvePhonemes === 'function') {
+        return await p.resolvePhonemes(lyrics, currentLanguage);
+      }
       return lyrics.map(lyric => p.resolveLyricToPhonemes(lyric));
     } catch (err) {
       console.error('[Main] Phoneme resolution failed:', err);

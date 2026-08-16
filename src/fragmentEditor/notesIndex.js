@@ -46,6 +46,10 @@ export function createNotesIndex(notes) {
     // search the start index instead of scanning from 0.
     maxDuration: 0,
     maxDurationVersion: -1,
+    // Tracks notes.length at last sort. When external code mutates the array
+    // via splice/push (changing length without changing the reference),
+    // ensureSorted detects the mismatch and invalidates cached indices.
+    notesLength: 0,
     version: 0,
   };
   ensureSorted(idx);
@@ -74,6 +78,12 @@ export function markDirty(idx) {
  * callers do not need to call markDirty() after every such mutation.
  */
 export function ensureSorted(idx) {
+  // Detect array length changes (splice/push) that the sort-order check
+  // below would miss. A length mismatch means indices stored in pitchIndex
+  // are stale and must be rebuilt.
+  if (idx.sorted && idx.notes.length !== idx.notesLength) {
+    idx.sorted = false;
+  }
   if (idx.sorted) {
     // Verify still sorted — handles external in-place mutations.
     for (let i = 1; i < idx.notes.length; i++) {
@@ -89,6 +99,7 @@ export function ensureSorted(idx) {
   }
   idx.notes.sort(compareNotes);
   idx.sorted = true;
+  idx.notesLength = idx.notes.length;
   idx.pitchIndex = null;
   idx.pitchIndexVersion = -1;
   idx.maxDuration = 0;
@@ -216,7 +227,9 @@ export function hasOverlapAtPitch(idx, excludeIds, pitch, tStart, tEnd) {
   let hi = arr.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (notes[arr[mid]].start < tEnd - EPS) lo = mid + 1;
+    const n = notes[arr[mid]];
+    if (!n) { lo = mid + 1; continue; } // defensive: stale index
+    if (n.start < tEnd - EPS) lo = mid + 1;
     else hi = mid;
   }
   // Scan backwards from lo-1 while note.start >= tStart - safety. Since all
@@ -227,6 +240,7 @@ export function hasOverlapAtPitch(idx, excludeIds, pitch, tStart, tEnd) {
   // starting in [tStart - maxDur, tEnd).
   for (let i = lo - 1; i >= 0; i--) {
     const n = notes[arr[i]];
+    if (!n) continue; // defensive: stale index
     if (n.start < tStart - EPS && n.start + n.duration <= tStart + EPS) break;
     if (excludeIds && excludeIds.has(n.id)) continue;
     const nEnd = n.start + n.duration;
@@ -267,7 +281,9 @@ export function clampPosition(idx, excludeId, pitch, start, duration) {
     let hi = arr.length;
     while (lo < hi) {
       const mid = (lo + hi) >>> 1;
-      if (notes[arr[mid]].start < tEnd - EPS) lo = mid + 1;
+      const n = notes[arr[mid]];
+      if (!n) { lo = mid + 1; continue; } // defensive: stale index
+      if (n.start < tEnd - EPS) lo = mid + 1;
       else hi = mid;
     }
     let changed = false;
@@ -275,6 +291,7 @@ export function clampPosition(idx, excludeId, pitch, start, duration) {
     // (i.e., their end > cur).
     for (let i = lo - 1; i >= 0; i--) {
       const n = notes[arr[i]];
+      if (!n) continue; // defensive: stale index
       if (n.start + n.duration <= cur + EPS) break; // safely before cur
       if (n.id === excludeId) continue;
       const nEnd = n.start + n.duration;
@@ -386,16 +403,20 @@ export function findNoteAtBeat(idx, xTime, pitch, resizeBeats) {
   let hi = arr.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (notes[arr[mid]].start <= xTime + EPS) lo = mid + 1;
+    const n = notes[arr[mid]];
+    if (!n) { lo = mid + 1; continue; } // defensive: stale index
+    if (n.start <= xTime + EPS) lo = mid + 1;
     else hi = mid;
   }
   // Candidate 1: note at arr[lo-1] whose [start, end) contains xTime.
   if (lo > 0) {
     const n = notes[arr[lo - 1]];
-    const nEnd = n.start + n.duration;
-    if (xTime >= n.start - EPS && xTime < nEnd - EPS) {
-      const onResize = (nEnd - xTime) <= resizeBeats + EPS;
-      return { note: n, onResizeEdge: onResize };
+    if (n) {
+      const nEnd = n.start + n.duration;
+      if (xTime >= n.start - EPS && xTime < nEnd - EPS) {
+        const onResize = (nEnd - xTime) <= resizeBeats + EPS;
+        return { note: n, onResizeEdge: onResize };
+      }
     }
   }
   // Candidate 2: note at arr[lo] whose start == xTime (boundary click on
@@ -403,7 +424,7 @@ export function findNoteAtBeat(idx, xTime, pitch, resizeBeats) {
   // gap before this note OR exactly at the previous note's end.
   if (lo < arr.length) {
     const n = notes[arr[lo]];
-    if (Math.abs(n.start - xTime) <= EPS && xTime < n.start + n.duration - EPS) {
+    if (n && Math.abs(n.start - xTime) <= EPS && xTime < n.start + n.duration - EPS) {
       const onResize = (n.start + n.duration - xTime) <= resizeBeats + EPS;
       return { note: n, onResizeEdge: onResize };
     }
@@ -448,11 +469,14 @@ export function findAdjacentBoundary(idx, excludeIds, pitch, t, maxBeats) {
   let hi = arr.length;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    if (notes[arr[mid]].start < lowerBound) lo = mid + 1;
+    const n = notes[arr[mid]];
+    if (!n) { lo = mid + 1; continue; } // defensive: stale index
+    if (n.start < lowerBound) lo = mid + 1;
     else hi = mid;
   }
   for (let i = lo; i < arr.length; i++) {
     const n = notes[arr[i]];
+    if (!n) continue; // defensive: stale index
     if (n.start > t + maxBeats + EPS) break;
     if (excludeIds && excludeIds.has(n.id)) continue;
     const nEnd = n.start + n.duration;
@@ -517,6 +541,7 @@ export function computeMultiDragResult(idx, selectedIds, newPositions) {
     const obstacles = [];
     for (const oi of obstacleArr) {
       const n = idx.notes[oi];
+      if (!n) continue; // defensive: stale index
       if (selectedIds.has(n.id)) continue;
       obstacles.push({ start: n.start, end: n.start + n.duration });
     }

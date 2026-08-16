@@ -77,6 +77,8 @@ export default {
       samplerStork2Desc: 'Faithful implementation of STORK-2 (Tan et al., ICLR 2026, arXiv:2505.24210). Uses Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE — only 1 model inference per step despite 8 sub-stages. Designed for stiff ODEs with extended stability region (~2s²=128x). Tradeoff: higher per-step algebraic cost (8 full-array passes) than Euler; chunked inference resets cross-step velocity history at boundaries.',
       autoShift: 'Auto Shift (automatic pitch shift)',
       autoShiftHint: 'Automatically adjust pitch shift based on reference audio',
+      smartSegmentation: 'Smart Segmentation',
+      smartSegmentationHint: 'Automatically split sub-segments at MIDI rests and force-split at large pitch changes, applying per-segment autoShift for better long-project synthesis quality',
       vocoderType: 'Vocoder Type',
       vocoderTypeDefault: 'Default Vocoder',
       vocoderTypeSifigan: 'SiFiGAN',

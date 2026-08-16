@@ -50,6 +50,26 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/utils/deviceClassifier.js'),
         },
         {
+          from: path.resolve(__dirname, 'src/main'),
+          to: path.resolve(__dirname, '.webpack/main/main'),
+        },
+        {
+          from: path.resolve(__dirname, 'src/utils'),
+          to: path.resolve(__dirname, '.webpack/main/utils'),
+          globOptions: { ignore: ['**/gpuWorker.js', '**/deviceClassifier.js'] },
+        },
+        {
+          from: path.resolve(__dirname, 'src/inference'),
+          to: path.resolve(__dirname, '.webpack/main/inference'),
+          globOptions: {
+            ignore: ['**/pitchWorker.js', '**/svsWorker.js', '**/rmvpePitchDetector.js', '**/pipeline/float16Patch.js', '**/pipeline/jpKanjiDict.json'],
+          },
+        },
+        {
+          from: path.resolve(__dirname, 'src/inference/svsWorker.js'),
+          to: path.resolve(__dirname, '.webpack/main/inference/svsWorker.js'),
+        },
+        {
           from: path.resolve(__dirname, 'src/inference/pitchWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/inference/pitchWorker.js'),
         },

@@ -659,6 +659,178 @@ class OnnxSVSPipeline {
         }
         return finalShift;
     }
+
+    /**
+     * 将音符按自然边界（rest、gap、大音高变化）切分为子段，用于局部 autoShift。
+     * 每个子段独立计算 f0Shift，使各段的中位数都向参考中位数靠拢。
+     * @param {Array} notes - 已 fillNoteGaps 的音符数组（已排序）
+     * @param {number} bpm
+     * @returns {Array<{startBeat, endBeat, notes}>} 子段数组
+     */
+    _buildAutoShiftSegments(notes, bpm) {
+        if (!notes || notes.length <= 1) {
+            const endBeat = notes && notes.length === 1 ? notes[0].start + notes[0].duration : 0;
+            return [{ startBeat: 0, endBeat, notes: notes || [] }];
+        }
+
+        const PITCH_CHANGE_THRESHOLD = 7; // 半音，超过则强制分段
+        const MIN_SEGMENT_SEC = 4;
+        const minSegmentBeats = (MIN_SEGMENT_SEC / 60) * bpm;
+
+        const totalBeats = notes[notes.length - 1].start + notes[notes.length - 1].duration;
+
+        // 收集候选切分点
+        const splitPoints = [0];
+        for (let i = 0; i < notes.length - 1; i++) {
+            const note = notes[i];
+            const next = notes[i + 1];
+            const noteEnd = note.start + note.duration;
+
+            // 1. rest note 中点切分（休止符持续时间 > 0.5 拍）
+            if ((!note.lyric || note.lyric.trim().length === 0) && note.duration > 0.5) {
+                splitPoints.push(note.start + note.duration / 2);
+                continue;
+            }
+
+            // 2. 音符间隔切分（gap > 0.05 拍）
+            const gap = next.start - noteEnd;
+            if (gap > 0.05) {
+                splitPoints.push(noteEnd + gap / 2);
+                continue;
+            }
+
+            // 3. 大音高变化处强制分段
+            if (note.pitch >= 1 && next.pitch >= 1 && Math.abs(next.pitch - note.pitch) >= PITCH_CHANGE_THRESHOLD) {
+                splitPoints.push(noteEnd);
+            }
+        }
+        splitPoints.push(totalBeats);
+        splitPoints.sort((a, b) => a - b);
+
+        // 去重
+        const unique = [];
+        for (const p of splitPoints) {
+            if (unique.length === 0 || Math.abs(p - unique[unique.length - 1]) > 0.01) {
+                unique.push(p);
+            }
+        }
+
+        // 构建 segments，遵守最小长度
+        const segments = [];
+        let segStart = 0;
+        for (let i = 1; i < unique.length; i++) {
+            const segEnd = unique[i];
+            if (segEnd - segStart >= minSegmentBeats || i === unique.length - 1) {
+                segments.push({ startBeat: segStart, endBeat: segEnd });
+                segStart = segEnd;
+            }
+            // else: 不推进 segStart，合并到下一段
+        }
+        // 兜底：如果没有任何 segment（全被合并逻辑跳过）
+        if (segments.length === 0) {
+            segments.push({ startBeat: 0, endBeat: totalBeats });
+        }
+
+        // 分配音符到子段
+        for (const seg of segments) {
+            seg.notes = notes.filter(n => n.start >= seg.startBeat - 0.01 && n.start < seg.endBeat - 0.01);
+        }
+
+        return segments;
+    }
+
+    /**
+     * 对已构建的 sequences 施加局部 autoShift。
+     * 按 segShifts 中各子段的 f0Shift 分别偏移对应帧范围的 f0Hz 和 notePitchSeq。
+     * 边界处使用短窗口线性渐变，避免 f0 跳变产生可听 artifact。
+     *
+     * @param {Object} sequences - notesToSequences 返回值（f0Shift=0 构建）
+     * @param {Array<{startBeat, endBeat, f0Shift}>} segShifts - 各子段的 shift
+     * @param {number} bpm
+     */
+    _applyLocalF0Shifts(sequences, segShifts, bpm) {
+        const { f0Hz, notePitchSeq, mel2token } = sequences;
+        if (!segShifts || segShifts.length === 0) return;
+
+        // 如果只有一个子段或所有子段 shift 相同，退化为全局 shift
+        if (segShifts.length === 1) {
+            const shift = segShifts[0].f0Shift;
+            if (shift !== 0) {
+                const factor = Math.pow(2, shift / 12);
+                for (let i = 0; i < f0Hz.length; i++) {
+                    if (f0Hz[i] > 0) f0Hz[i] *= factor;
+                }
+                sequences.f0Ids = this._preprocessing.quantizeF0(f0Hz, 0);
+                for (let t = 0; t < notePitchSeq.length; t++) {
+                    if (notePitchSeq[t] > 0) {
+                        notePitchSeq[t] = Math.max(0, Math.min(255, notePitchSeq[t] + shift));
+                    }
+                }
+            }
+            return;
+        }
+
+        const framesPerBeat = (60 / bpm) * (SAMPLE_RATE / HOP_SIZE);
+        const FADE_FRAMES = Math.max(2, Math.floor(0.15 * SAMPLE_RATE / HOP_SIZE)); // ~0.15s 渐变
+
+        // 1. 构建逐帧 shift 数组
+        const frameShifts = new Float32Array(f0Hz.length);
+        for (let i = 0; i < segShifts.length; i++) {
+            const seg = segShifts[i];
+            const startFrame = Math.max(0, Math.floor(seg.startBeat * framesPerBeat));
+            const endFrame = Math.min(f0Hz.length, Math.floor(seg.endBeat * framesPerBeat));
+            for (let f = startFrame; f < endFrame; f++) {
+                frameShifts[f] = seg.f0Shift;
+            }
+        }
+
+        // 2. 在子段边界做线性渐变
+        for (let i = 1; i < segShifts.length; i++) {
+            const boundaryFrame = Math.floor(segShifts[i].startBeat * framesPerBeat);
+            const prevShift = segShifts[i - 1].f0Shift;
+            const nextShift = segShifts[i].f0Shift;
+            if (prevShift === nextShift) continue;
+            const fadeStart = Math.max(0, boundaryFrame - FADE_FRAMES);
+            const fadeEnd = Math.min(f0Hz.length, boundaryFrame + FADE_FRAMES);
+            const fadeLen = fadeEnd - fadeStart;
+            for (let f = fadeStart; f < fadeEnd; f++) {
+                const t = (f - fadeStart) / fadeLen;
+                frameShifts[f] = prevShift * (1 - t) + nextShift * t;
+            }
+        }
+
+        // 3. 应用逐帧 shift 到 f0Hz
+        for (let i = 0; i < f0Hz.length; i++) {
+            if (f0Hz[i] > 0 && frameShifts[i] !== 0) {
+                f0Hz[i] *= Math.pow(2, frameShifts[i] / 12);
+            }
+        }
+
+        // 4. 重新量化 f0Ids
+        sequences.f0Ids = this._preprocessing.quantizeF0(f0Hz, 0);
+
+        // 5. 应用逐 token shift 到 notePitchSeq
+        // 用 mel2token 将帧的 shift 映射到 token，每个 token 取其对应帧的平均 shift
+        if (mel2token && notePitchSeq) {
+            const tokenShiftSum = new Float64Array(notePitchSeq.length);
+            const tokenShiftCount = new Int32Array(notePitchSeq.length);
+            for (let f = 0; f < mel2token.length && f < frameShifts.length; f++) {
+                const tok = mel2token[f];
+                if (tok > 0 && tok < notePitchSeq.length) {
+                    tokenShiftSum[tok] += frameShifts[f];
+                    tokenShiftCount[tok]++;
+                }
+            }
+            for (let t = 0; t < notePitchSeq.length; t++) {
+                if (notePitchSeq[t] > 0 && tokenShiftCount[t] > 0) {
+                    const avgShift = Math.round(tokenShiftSum[t] / tokenShiftCount[t]);
+                    if (avgShift !== 0) {
+                        notePitchSeq[t] = Math.max(0, Math.min(255, notePitchSeq[t] + avgShift));
+                    }
+                }
+            }
+        }
+    }
     clearSynthCache() {
         // LRU 缓存：清空所有条目
         this._synthCache = null;
@@ -2206,7 +2378,7 @@ class OnnxSVSPipeline {
                 continue;
             }
 
-            // autoShift F0 计算（简化版，复用 _synthesizeImpl 的逻辑）
+            // autoShift F0 计算 —— 局部 autoShift：按子段独立计算 f0Shift
             const autoShift = fragOpts.autoShift || false;
             const pitchShift = fragOpts.pitchShift || 0;
             const refAudioWavBuffer = fragOpts.refAudioWavBuffer || null;
@@ -2219,47 +2391,95 @@ class OnnxSVSPipeline {
             }
 
             let f0Shift = 0;
+            let localSegShifts = null; // 非空时用 _applyLocalF0Shifts 代替全局 f0Shift
+
             if (autoShift && pitchShift === 0) {
-                const targetF0 = this.buildF0FrameSequence(filledNotes, bpm, f0Envelope, pitchCurveF0);
-                const targetNonZero = [];
-                for (let i = 0; i < targetF0.length; i++) {
-                    if (targetF0[i] > 0) targetNonZero.push(targetF0[i]);
-                }
-                let refF0 = null;
+                // 提取参考 F0（所有子段共用）
+                let refMedian = null;
+                let refMedianPitch = null;
                 if (refAudioWavBuffer) {
+                    let refF0 = null;
                     try {
                         refF0 = await this._extractRefF0WithFallback(refAudioWavBuffer, fragOpts.refF0Extractor || null);
                     } catch (e) {
                         console.warn(`[MultiStream] Fragment ${fi} ref F0 extraction failed:`, e.message);
                     }
-                }
-                if (refF0 && refF0.length > 0) {
-                    const refNonZero = [];
-                    for (let i = 0; i < refF0.length; i++) {
-                        if (refF0[i] > 0) refNonZero.push(refF0[i]);
-                    }
-                    if (refNonZero.length > 0 && targetNonZero.length > 0) {
-                        const refMedian = this._median(refNonZero);
-                        const targetMedian = this._median(targetNonZero);
-                        f0Shift = Math.round(Math.log2(refMedian / targetMedian) * 1200 / 100);
-                    } else if (targetNotePitches.length > 0) {
-                        const refNotePitches = await this._extractRefNotePitchesAsync(refAudioWavBuffer);
-                        if (refNotePitches && refNotePitches.length > 0) {
-                            f0Shift = Math.round(this._median(refNotePitches) - this._median(targetNotePitches));
+                    if (refF0 && refF0.length > 0) {
+                        const refNonZero = [];
+                        for (let i = 0; i < refF0.length; i++) {
+                            if (refF0[i] > 0) refNonZero.push(refF0[i]);
+                        }
+                        if (refNonZero.length > 0) {
+                            refMedian = this._median(refNonZero);
                         }
                     }
-                } else if (targetNotePitches.length > 0) {
-                    const refNotePitches = fragOpts.refNotePitches || fragOpts.refMidiNotes || null;
-                    if (refNotePitches && refNotePitches.length > 0) {
-                        f0Shift = Math.round(this._median(refNotePitches) - this._median(targetNotePitches));
+                    if (refMedian === null && targetNotePitches.length > 0) {
+                        const refNotePitches = await this._extractRefNotePitchesAsync(refAudioWavBuffer);
+                        if (refNotePitches && refNotePitches.length > 0) {
+                            refMedianPitch = this._median(refNotePitches);
+                        }
                     }
                 }
-                const clampedShift = this._clampAutoShift(f0Shift, targetNotePitches);
-                if (clampedShift !== f0Shift) f0Shift = clampedShift;
+                if (refMedian === null && refMedianPitch === null && targetNotePitches.length > 0) {
+                    const refNotePitches = fragOpts.refNotePitches || fragOpts.refMidiNotes || null;
+                    if (refNotePitches && refNotePitches.length > 0) {
+                        refMedianPitch = this._median(refNotePitches);
+                    }
+                }
+
+                if (refMedian !== null || refMedianPitch !== null) {
+                    // 构建子段并计算局部 autoShift
+                    const segs = this._buildAutoShiftSegments(filledNotes, bpm);
+                    if (segs.length > 1) {
+                        localSegShifts = [];
+                        for (const seg of segs) {
+                            const segPitches = seg.notes.filter(n => n.pitch >= 1).map(n => n.pitch);
+                            let segShift = 0;
+                            if (refMedian !== null) {
+                                const segTargetF0 = this.buildF0FrameSequence(seg.notes, bpm, f0Envelope, pitchCurveF0);
+                                const segNonZero = [];
+                                for (let i = 0; i < segTargetF0.length; i++) {
+                                    if (segTargetF0[i] > 0) segNonZero.push(segTargetF0[i]);
+                                }
+                                if (segNonZero.length > 0) {
+                                    const segTargetMedian = this._median(segNonZero);
+                                    segShift = Math.round(Math.log2(refMedian / segTargetMedian) * 1200 / 100);
+                                }
+                            } else if (refMedianPitch !== null && segPitches.length > 0) {
+                                segShift = Math.round(refMedianPitch - this._median(segPitches));
+                            }
+                            segShift = this._clampAutoShift(segShift, segPitches);
+                            if (this.languageOverride === 'ja' && segPitches.length > 0) {
+                                segShift = this._clampJpPitchRange(segShift, segPitches);
+                            }
+                            localSegShifts.push({
+                                startBeat: seg.startBeat,
+                                endBeat: seg.endBeat,
+                                f0Shift: segShift,
+                            });
+                        }
+                        f0Shift = localSegShifts[0].f0Shift; // 用于日志和缓存 key
+                        console.log(`[MultiStream] Fragment ${fi}: local autoShift, ${localSegShifts.length} segments, shifts=[${localSegShifts.map(s => s.f0Shift).join(', ')}]`);
+                    } else {
+                        // 单子段：退化为全局 autoShift
+                        const targetF0 = this.buildF0FrameSequence(filledNotes, bpm, f0Envelope, pitchCurveF0);
+                        const targetNonZero = [];
+                        for (let i = 0; i < targetF0.length; i++) {
+                            if (targetF0[i] > 0) targetNonZero.push(targetF0[i]);
+                        }
+                        if (refMedian !== null && targetNonZero.length > 0) {
+                            const targetMedian = this._median(targetNonZero);
+                            f0Shift = Math.round(Math.log2(refMedian / targetMedian) * 1200 / 100);
+                        } else if (refMedianPitch !== null && targetNotePitches.length > 0) {
+                            f0Shift = Math.round(refMedianPitch - this._median(targetNotePitches));
+                        }
+                        f0Shift = this._clampAutoShift(f0Shift, targetNotePitches);
+                    }
+                }
             } else {
                 f0Shift = pitchShift;
             }
-            if (this.languageOverride === 'ja' && targetNotePitches.length > 0) {
+            if (this.languageOverride === 'ja' && targetNotePitches.length > 0 && localSegShifts === null) {
                 f0Shift = this._clampJpPitchRange(f0Shift, targetNotePitches);
             }
 
@@ -2287,7 +2507,12 @@ class OnnxSVSPipeline {
             // 由 chunkPlan 的分块机制处理长片段的扩散推理，MAX_SAFE_FRAMES 仍作为安全上限。
             const segNotes = filledNotes;
             const pitchCurveOffsetSec = 0;
-            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, pitchCurveOffsetSec);
+            // 局部 autoShift: 先用 f0Shift=0 构建 sequences，再施加逐帧 shift
+            const effectiveF0Shift = localSegShifts ? 0 : f0Shift;
+            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, effectiveF0Shift, pitchCurveOffsetSec);
+            if (localSegShifts) {
+                this._applyLocalF0Shifts(sequences, localSegShifts, bpm);
+            }
             let totalFrames = sequences.f0Ids.length;
             if (totalFrames === 0) {
                 console.log(`[MultiStream] Fragment ${fi}: 0 frames, skipping`);
@@ -2535,6 +2760,7 @@ class OnnxSVSPipeline {
         const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : CFG_RESCALE;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
+        const smartSegmentation = options.smartSegmentation || false;
         const npuDiffBatchSize = options.npuDiffBatchSize || 4;
         const npuVocoderBatchSize = options.npuVocoderBatchSize || 2;
         const onChunkAudio = options.onChunkAudio || null;
@@ -2649,6 +2875,67 @@ class OnnxSVSPipeline {
             }
         }
 
+        // 局部 autoShift（smartSegmentation）：在单段路径中按子段独立计算 f0Shift
+        // 使各段中位数都向参考中位数靠拢，而非全局单一偏移。
+        let localSegShifts = null;
+        if (smartSegmentation && autoShift && pitchShift === 0 && refAudioWavBuffer) {
+            let refMedian = null;
+            let refMedianPitch = null;
+            try {
+                const refF0 = await this._extractRefF0WithFallback(refAudioWavBuffer, options.refF0Extractor || null);
+                if (refF0 && refF0.length > 0) {
+                    const refNonZero = [];
+                    for (let i = 0; i < refF0.length; i++) {
+                        if (refF0[i] > 0) refNonZero.push(refF0[i]);
+                    }
+                    if (refNonZero.length > 0) refMedian = this._median(refNonZero);
+                }
+            } catch (_) {}
+            if (refMedian === null && targetNotePitches.length > 0) {
+                try {
+                    const refNotePitches = await this._extractRefNotePitchesAsync(refAudioWavBuffer);
+                    if (refNotePitches && refNotePitches.length > 0) {
+                        refMedianPitch = this._median(refNotePitches);
+                    }
+                } catch (_) {}
+                if (refMedianPitch === null) {
+                    const refNotePitches = options.refNotePitches || null;
+                    if (refNotePitches && refNotePitches.length > 0) {
+                        refMedianPitch = this._median(refNotePitches);
+                    }
+                }
+            }
+
+            if (refMedian !== null || refMedianPitch !== null) {
+                const segs = this._buildAutoShiftSegments(filledNotes, bpm);
+                if (segs.length > 1) {
+                    localSegShifts = [];
+                    for (const seg of segs) {
+                        const segPitches = seg.notes.filter(n => n.pitch >= 1).map(n => n.pitch);
+                        let segShift = 0;
+                        if (refMedian !== null) {
+                            const segTargetF0 = this.buildF0FrameSequence(seg.notes, bpm, f0Envelope, pitchCurveF0);
+                            const segNonZero = [];
+                            for (let i = 0; i < segTargetF0.length; i++) {
+                                if (segTargetF0[i] > 0) segNonZero.push(segTargetF0[i]);
+                            }
+                            if (segNonZero.length > 0) {
+                                segShift = Math.round(Math.log2(refMedian / this._median(segNonZero)) * 1200 / 100);
+                            }
+                        } else if (refMedianPitch !== null && segPitches.length > 0) {
+                            segShift = Math.round(refMedianPitch - this._median(segPitches));
+                        }
+                        segShift = this._clampAutoShift(segShift, segPitches);
+                        if (this.languageOverride === 'ja' && segPitches.length > 0) {
+                            segShift = this._clampJpPitchRange(segShift, segPitches);
+                        }
+                        localSegShifts.push({ startBeat: seg.startBeat, endBeat: seg.endBeat, f0Shift: segShift });
+                    }
+                    console.log(`[OnnxSVSPipeline] smartSegmentation: ${localSegShifts.length} segments, shifts=[${localSegShifts.map(s => s.f0Shift).join(', ')}]`);
+                }
+            }
+        }
+
         let ptMelData = null;
         let ptFrameCount = 0;
 
@@ -2698,7 +2985,11 @@ class OnnxSVSPipeline {
                 console.log(`[OnnxSVSPipeline] Single-note context padding: +${restFrames} rest frames before/after`);
             }
 
-            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, pitchCurveOffsetSec);
+            const effectiveF0Shift = localSegShifts ? 0 : f0Shift;
+            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, effectiveF0Shift, pitchCurveOffsetSec);
+            if (localSegShifts) {
+                this._applyLocalF0Shifts(sequences, localSegShifts, bpm);
+            }
             let totalFrames = sequences.f0Ids.length;
 
             if (totalFrames === 0) {

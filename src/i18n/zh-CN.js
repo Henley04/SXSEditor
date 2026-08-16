@@ -77,6 +77,8 @@ export default {
       samplerStork2Desc: 'STORK-2 论文原版实现（Tan et al., ICLR 2026, arXiv:2505.24210）。使用 Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE —— 尽管 8 个 sub-stage，每步仅 1 次模型推理。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍。代价：每步代数运算开销高于 Euler（8 趟全数组遍历）；分块推理在块边界重置跨步速度历史。',
       autoShift: 'Auto Shift（自动音高偏移）',
       autoShiftHint: '根据参考音频自动调整音高偏移',
+      smartSegmentation: '智能分段推理',
+      smartSegmentationHint: '在 MIDI 间隔处自动切分子段，音高变化剧烈处强行分段并施加局部 autoShift，每段独立计算音高偏移以提升长项目合成质量',
       vocoderType: 'Vocoder 类型',
       vocoderTypeDefault: '默认 Vocoder',
       vocoderTypeSifigan: 'SiFiGAN',

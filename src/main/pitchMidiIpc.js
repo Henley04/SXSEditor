@@ -185,7 +185,7 @@ function createPitchWorker() {
           for (let i = 0; i < n; i++) {
             f0Array[i] = { time: msg.times[i], f0: msg.f0[i], confidence: 0 };
           }
-          pending.resolve(f0Array);
+          pending.resolve(msg.notes ? { f0Array, notes: msg.notes } : f0Array);
         } else {
           const err = new Error(msg.error);
           if (msg.code) err.code = msg.code;
@@ -254,6 +254,15 @@ async function extractF0ViaWorker(audioData, sampleRate) {
   });
 }
 
+async function extractMidiViaWorker(audioData, sampleRate, bpm, useRosvot, rosvotAvailable) {
+  const worker = await ensurePitchWorker();
+  const id = ++pitchRequestId;
+  return new Promise((resolve, reject) => {
+    pitchPendingRequests.set(id, { resolve, reject });
+    worker.postMessage({ type: 'extract-midi', id, audioData, sampleRate, bpm, useRosvot, rosvotAvailable });
+  });
+}
+
 function registerPitchMidiIpc() {
   ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate }) => {
     try {
@@ -274,48 +283,33 @@ function registerPitchMidiIpc() {
 
   ipcMain.handle('extractMidi:rosvot', async (event, { audioData, sampleRate, bpm }) => {
     try {
-      const detector = await rmvpeLazy.get();
-      const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
-
-      let notes;
       const settings = loadSettings();
       const useRosvot = settings?.useRosvot === true;
-
-      if (useRosvot) {
-        const modelPath = getBaseModelDir();
-        const rosvotModelPath = path.join(modelPath, 'preprocess', 'rosvot_model.onnx');
-
-        if (fs.existsSync(rosvotModelPath)) {
+      const rosvotModelPath = path.join(getBaseModelDir(), 'preprocess', 'rosvot_model.onnx');
+      const result = await extractMidiViaWorker(
+        audioData, sampleRate || 44100, bpm || 120, useRosvot, fs.existsSync(rosvotModelPath)
+      );
+      return { success: true, f0Array: result.f0Array, notes: result.notes };
+    } catch (workerErr) {
+      // Compatibility fallback. It preserves behavior on platforms/builds where
+      // worker_threads or a native addon cannot be initialized.
+      console.warn('[Main] pitchWorker MIDI path unavailable, falling back to sync:', workerErr.message);
+      try {
+        const detector = await rmvpeLazy.get();
+        const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
+        let notes = detector.f0ToNotes(f0Array, bpm || 120);
+        if (loadSettings()?.useRosvot === true) {
           try {
             const rosvot = await rosvotLazy.get();
-            notes = await rosvot.extractNotes(
-              new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120
-            );
-            console.log(`[Main] RosVot extracted ${notes.length} notes`);
-
-            const validNotes = notes.filter(n => n.pitch > 0);
-            if (validNotes.length === 0) {
-              console.log('[Main] RosVot extracted no valid notes, falling back to f0ToNotes');
-              notes = detector.f0ToNotes(f0Array, bpm || 120);
-            }
-          } catch (rosvotErr) {
-            console.warn('[Main] RosVot model inference failed, falling back to f0ToNotes:', rosvotErr.message);
-            resetRosvot();
-            notes = detector.f0ToNotes(f0Array, bpm || 120);
-          }
-        } else {
-          console.log('[Main] RosVot model does not exist, using f0ToNotes fallback');
-          notes = detector.f0ToNotes(f0Array, bpm || 120);
+            const candidate = await rosvot.extractNotes(new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120);
+            if (candidate.some(n => n.pitch > 0)) notes = candidate;
+          } catch (_) { resetRosvot(); }
         }
-      } else {
-        console.log('[Main] Using f0ToNotes to extract MIDI notes from F0 curve');
-        notes = detector.f0ToNotes(f0Array, bpm || 120);
+        return { success: true, f0Array, notes };
+      } catch (err) {
+        console.error('[Main] MIDI extraction failed:', err);
+        return { success: false, error: err.message };
       }
-
-      return { success: true, f0Array, notes };
-    } catch (err) {
-      console.error('[Main] MIDI extraction failed:', err);
-      return { success: false, error: err.message };
     }
   });
 
@@ -472,6 +466,7 @@ module.exports = {
   getBasicPitchDetector,
   getRosvotDetector,
   getFcpeDetector,
+  getBaseModelDir,
   resetRmvpe,
   resetBasicPitch,
   resetRosvot,
