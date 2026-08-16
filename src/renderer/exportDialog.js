@@ -995,7 +995,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setProgress(0);
     setStatus('progressPreparing');
 
-    const { mixedAudio, numChannels, maxDuration, fragmentCount } = await runExportJob({
+    const { mixedAudio, maxDuration, fragmentCount } = await runExportJob({
       nSteps: form.exportDiffSteps,
       cfg: form.exportCfgStrength,
       cfgRescale: form.exportCfgRescale,
@@ -1026,7 +1026,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     // 编码 WAV
     // B2: wavEncoder.js is now CommonJS — use require instead of dynamic import.
     const { encodeWav } = require('../audio/wavEncoder.js');
-    const wavData = encodeWav(mixedAudio, SAMPLE_RATE, numChannels || 1);
+    const wavData = encodeWav(mixedAudio, SAMPLE_RATE);
 
     setStatus('progressSaving');
     setProgress(98);

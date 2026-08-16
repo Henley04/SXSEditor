@@ -954,11 +954,6 @@ export async function playFragment() {
         diffStepChunk: previewOpts.diffStepChunk,
         diffStepChunkFrames: previewOpts.diffStepChunkFrames,
         diffStepOverlapFrames: previewOpts.diffStepOverlapFrames,
-        cfgScheduleMode: previewOpts.cfgScheduleMode,
-        cfgStrengthStart: previewOpts.cfgStrengthStart,
-        cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
-        dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
-        dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
       },
     });
     setFragmentAudioData(padAudioToFragmentDuration(audioData));

@@ -330,46 +330,44 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
   const beatWidth = getBeatWidth();
   const dx = (x - state.dragState.startX) / beatWidth;
 
-  let pendingUpdate = null;
   if (state.dragState.type === 'move') {
     const newStart = Math.max(0, state.dragState.originalStart + dx);
-    pendingUpdate = { startTime: Math.round(newStart * 4) / 4 };
+    const updateData = { startTime: Math.round(newStart * 4) / 4 };
 
+    // Check if mouse moved to another singer track row
     const singers = trackManager.getSingers();
     for (let i = 0; i < singers.length; i++) {
       const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
       if (y >= singerY && y < singerY + SINGER_ROW_HEIGHT) {
         const targetSingerId = singers[i].id;
         if (targetSingerId !== state.dragState.fragment.singerId) {
-          pendingUpdate.singerId = targetSingerId;
-          pendingUpdate.color = singers[i].color;
+          updateData.singerId = targetSingerId;
+          updateData.color = singers[i].color;
         }
         break;
       }
     }
+
+    trackManager.updateFragment(state.dragState.fragment.id, updateData);
   } else if (state.dragState.type === 'resize-right') {
     const newDuration = Math.max(0.25, state.dragState.originalDuration + dx);
-    pendingUpdate = { duration: Math.round(newDuration * 4) / 4 };
+    trackManager.updateFragment(state.dragState.fragment.id, { duration: Math.round(newDuration * 4) / 4 });
   } else if (state.dragState.type === 'resize-left') {
     const originalEnd = state.dragState.originalStart + state.dragState.originalDuration;
     const newStart = state.dragState.originalStart + dx;
     const alignedStart = Math.max(0, Math.round(newStart * 4) / 4);
     const newDuration = originalEnd - alignedStart;
-    if (newDuration >= 0.25) pendingUpdate = { startTime: alignedStart, duration: newDuration };
+    if (alignedStart >= 0 && newDuration >= 0.25) {
+      trackManager.updateFragment(state.dragState.fragment.id, {
+        startTime: alignedStart,
+        duration: newDuration,
+      });
+    }
   }
-
-  // Coalesce high-frequency mousemove events. Applying track updates only once
-  // per animation frame keeps long-fragment drags responsive and avoids IPC spam.
-  if (pendingUpdate) state.dragState.pendingUpdate = pendingUpdate;
 
   if (!state.renderPending) {
     state.renderPending = true;
     requestAnimationFrame(() => {
-      if (state.dragState?.pendingUpdate) {
-        const update = state.dragState.pendingUpdate;
-        state.dragState.pendingUpdate = null;
-        trackManager.updateFragment(state.dragState.fragment.id, update);
-      }
       renderFragmentTimeline();
       if (window.electronAPI?.updateFragmentBounds && state.dragState) {
         const frag = state.dragState.fragment;

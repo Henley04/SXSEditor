@@ -20,7 +20,6 @@ export const state = {
   isSynthesizing: false,
   playheadRaf: null,
   currentAudioData: null,
-  currentAudioChannels: null,
   gainNode: null,
   useExclusiveMode: false,
   exclusivePlaybackRaf: null,

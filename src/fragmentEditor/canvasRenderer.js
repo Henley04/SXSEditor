@@ -891,11 +891,6 @@ export function getPitchAtTime(time) {
   }
 
   if (basePitch === null) {
-    const activeNote = _findActiveNoteAtTime(time);
-    if (activeNote) basePitch = activeNote.pitch;
-  }
-
-  if (basePitch === null) {
     const autoPoints = generateAutoPitchPoints();
     if (autoPoints.length > 0) {
       const i = _bisectSegmentIndex(autoPoints, time);
