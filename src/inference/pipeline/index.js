@@ -2405,6 +2405,11 @@ class OnnxSVSPipeline {
                     isFP16: this.diffStepIsFP16,
                     useStaticShapes: this.useStaticShapes,
                     overlap: p.chunkPlan.overlap,
+                    // 透传用户选择的推理参数，否则 _runSingleDiffusionChunk → runDiffusionLoop
+                    // 会 fallback 到默认值，导致多分片与单片段输出不一致
+                    samplerName: this._currentSamplerName,
+                    cfgScheduleOpts: this._currentCfgScheduleOpts,
+                    dynamicThresholdOpts: this._currentDynamicThresholdOpts,
                 };
                 const { newCommitted } = await this._diffusion._runSingleDiffusionChunk(
                     ctx, gc.spec, onProgress,
