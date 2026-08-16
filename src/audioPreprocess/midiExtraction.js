@@ -3,8 +3,8 @@ import { BPM } from './constants.js';
 import { t } from '../i18n/index.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { buildSingerFields, showLoading, hideLoading, updateMidiInfo } from './uiControls.js';
-import { collectOptions, resolveOptions, setStatus } from './panel.js';
-import { saveOptions } from './extractionOptions.js';
+import { collectOptions, setStatus } from './panel.js';
+import { saveOptions, resolveOptions } from './extractionOptions.js';
 
 const STAGES = [
   { key: 'analyze', pct: 8 },
