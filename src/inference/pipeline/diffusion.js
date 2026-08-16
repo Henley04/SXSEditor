@@ -1138,23 +1138,30 @@ class Diffusion {
                     const melLen = melEnd - melStart;
                     const melData = new Float32Array(melLen * MEL_DIM);
                     melData.set(xt.data.subarray(melStart * MEL_DIM, melEnd * MEL_DIM));
-                    try {
-                        await onChunkMel({
-                            chunkIndex: ci,
-                            frameStart: melStart,
-                            frameEnd: melEnd,
-                            melData,
-                            isLast: spec.isLast,
-                        });
-                    } catch (cbErr) {
-                        console.error(`[DiffusionChunk] onChunkMel callback error (chunk ${ci}): ${cbErr.message}`);
-                    }
+                    // onChunkMel 负责 vocoder 推理 + 音频写入 + 流式推送，失败时不能静默吞掉，
+                    // 否则 committedFrames 仍前进但对应区域保持零值 → 从失败点开始静音。
+                    await onChunkMel({
+                        chunkIndex: ci,
+                        frameStart: melStart,
+                        frameEnd: melEnd,
+                        melData,
+                        isLast: spec.isLast,
+                    });
                     committedFrames = newCommitted;
                 }
             }
         } catch (err) {
             console.error(`[DiffusionChunk] Chunked diffusion failed: ${err.message}`);
             throw err;
+        }
+
+        // 完整性检查：所有 chunk 完成后 committedFrames 必须等于 totalFrames，
+        // 否则说明分块规划或提交逻辑有回归，不应悄悄返回带零值的音频。
+        if (onChunkMel && committedFrames !== totalFrames) {
+            throw new Error(
+                `Chunked diffusion consumer incomplete: ` +
+                `committed ${committedFrames}/${totalFrames} frames`
+            );
         }
 
         console.log(`[DiffusionChunk] Chunked diffusion complete: ${totalChunks} chunks, ${totalFrames} frames`);
