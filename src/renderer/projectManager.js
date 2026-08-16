@@ -182,24 +182,20 @@ export async function addSingerFromFile(buffer, filePath) {
  * @param {ArrayBuffer} buffer - Raw audio file data
  * @returns {Promise<{audioData: Float32Array, duration: number}>}
  */
-async function decodeAudioToMono(buffer) {
-  const ac = new AudioContext({ sampleRate: SAMPLE_RATE });
+async function decodeAudioPreserveChannels(buffer) {
+  const ac = new AudioContext();
   try {
-    const audioBuffer = await ac.decodeAudioData(buffer.slice(0));
-    // Downmix to mono: average all channels
-    const numChannels = audioBuffer.numberOfChannels;
-    const channel0 = audioBuffer.getChannelData(0);
-    if (numChannels === 1) {
-      return { audioData: new Float32Array(channel0), duration: audioBuffer.duration };
+    const decoded = await ac.decodeAudioData(buffer.slice(0));
+    const audioChannels = new Array(decoded.numberOfChannels);
+    for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+      audioChannels[ch] = new Float32Array(decoded.getChannelData(ch));
     }
-    const mono = new Float32Array(channel0.length);
-    for (let ch = 0; ch < numChannels; ch++) {
-      const data = audioBuffer.getChannelData(ch);
-      for (let i = 0; i < data.length; i++) {
-        mono[i] += data[i] / numChannels;
-      }
-    }
-    return { audioData: mono, duration: audioBuffer.duration };
+    return {
+      audioChannels,
+      numberOfChannels: decoded.numberOfChannels,
+      sampleRate: decoded.sampleRate,
+      duration: decoded.duration,
+    };
   } finally {
     ac.close();
   }
@@ -215,9 +211,12 @@ async function applyAccompanimentDataToSinger(singer, audioData) {
   try {
     // Decode base64 WAV to Float32Array
     const wavBuffer = base64ToArrayBuffer(audioData.wavBase64);
-    const { audioData: monoData } = await decodeAudioToMono(wavBuffer);
-    singer.audioBuffer = monoData;
-    singer.audioDuration = audioData.audioDuration || (monoData.length / SAMPLE_RATE);
+    const decoded = await decodeAudioPreserveChannels(wavBuffer);
+    singer.audioChannels = decoded.audioChannels;
+    singer.analysisMono = null;
+    singer.audioBuffer = decoded.audioChannels[0]; // compatibility: waveform display only
+    singer.audioSampleRate = decoded.sampleRate;
+    singer.audioDuration = audioData.audioDuration || decoded.duration;
   } catch (e) {
     console.error('Failed to decode embedded accompaniment audio:', e);
   }
@@ -248,7 +247,7 @@ export async function addAccompanimentFromFile() {
 
     let audioData;
     try {
-      audioData = await decodeAudioToMono(buffer);
+      audioData = await decodeAudioPreserveChannels(buffer);
     } catch (decodeErr) {
       console.error('Accompaniment audio decode failed:', decodeErr);
       showAlertDialog(t('main.accompanimentDecodeFailedDetail', { detail: decodeErr.message }));
@@ -266,8 +265,12 @@ export async function addAccompanimentFromFile() {
       audioFileMissing: false,
       audioFileName: fileName,
       audioDuration: audioData.duration,
+    numberOfChannels: audioData.numberOfChannels,
+    audioSampleRate: audioData.sampleRate,
     });
-    singer.audioBuffer = audioData.audioData;
+    singer.audioChannels = audioData.audioChannels;
+    singer.analysisMono = null;
+    singer.audioBuffer = audioData.audioChannels[0];
 
     state.selectedSingerId = singer.id;
     // refreshAll will be called by the caller
@@ -286,7 +289,7 @@ export async function addAccompanimentFromFile() {
 export async function loadAccompanimentFile(singerId, buffer, filePath) {
   let audioData;
   try {
-    audioData = await decodeAudioToMono(buffer);
+    audioData = await decodeAudioPreserveChannels(buffer);
   } catch (decodeErr) {
     console.error('Accompaniment audio decode failed:', decodeErr);
     showAlertDialog(t('main.accompanimentDecodeFailedDetail', { detail: decodeErr.message }));
@@ -299,10 +302,14 @@ export async function loadAccompanimentFile(singerId, buffer, filePath) {
     audioFileMissing: false,
     audioFileName: fileName,
     audioDuration: audioData.duration,
+    numberOfChannels: audioData.numberOfChannels,
+    audioSampleRate: audioData.sampleRate,
   });
   const singer = trackManager.getSinger(singerId);
   if (singer) {
-    singer.audioBuffer = audioData.audioData;
+    singer.audioChannels = audioData.audioChannels;
+    singer.analysisMono = null;
+    singer.audioBuffer = audioData.audioChannels[0];
   }
 }
 
@@ -372,7 +379,13 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
         let wavBase64 = null;
         try {
           const { encodeWav } = require('../audio/wavEncoder.js');
-          const wavBytes = encodeWav(singer.audioBuffer, SAMPLE_RATE);
+          const channels = singer.audioChannels?.length ? singer.audioChannels : [singer.audioBuffer];
+          const frames = channels[0].length;
+          const interleaved = new Float32Array(frames * channels.length);
+          for (let i = 0; i < frames; i++) {
+            for (let ch = 0; ch < channels.length; ch++) interleaved[i * channels.length + ch] = channels[ch][i] || 0;
+          }
+          const wavBytes = encodeWav(interleaved, singer.audioSampleRate || SAMPLE_RATE, channels.length);
           const blob = new Blob([wavBytes]);
           wavBase64 = await new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -397,6 +410,8 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
       }
       // Clear runtime audioBuffer from serialization
       delete singerObj.audioBuffer;
+      delete singerObj.audioChannels;
+      delete singerObj.analysisMono;
       return singerObj;
     }
     // Singer track: existing embed logic
@@ -436,6 +451,8 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
     }
     // Clear runtime audioBuffer from serialization
     delete singerObj.audioBuffer;
+      delete singerObj.audioChannels;
+      delete singerObj.analysisMono;
     return singerObj;
   }));
 
@@ -728,9 +745,12 @@ export async function loadProject() {
                 } else {
                   try {
                     const buffer = await window.electronAPI.readFileBuffer(s.audioFilePath);
-                    const { audioData } = await decodeAudioToMono(buffer);
-                    singer.audioBuffer = audioData;
-                    singer.audioDuration = audioData.length / SAMPLE_RATE;
+                    const decoded = await decodeAudioPreserveChannels(buffer);
+                    singer.audioChannels = decoded.audioChannels;
+                    singer.analysisMono = null;
+                    singer.audioBuffer = decoded.audioChannels[0];
+                    singer.audioSampleRate = decoded.sampleRate;
+                    singer.audioDuration = decoded.duration;
                     singer.audioFileMissing = false;
                   } catch (_err) {
                     singer.audioFileMissing = true;

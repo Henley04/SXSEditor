@@ -2878,7 +2878,7 @@ class OnnxSVSPipeline {
         // 局部 autoShift（smartSegmentation）：在单段路径中按子段独立计算 f0Shift
         // 使各段中位数都向参考中位数靠拢，而非全局单一偏移。
         let localSegShifts = null;
-        if (smartSegmentation && autoShift && pitchShift === 0 && refAudioWavBuffer) {
+        if (false && smartSegmentation && autoShift && pitchShift === 0 && refAudioWavBuffer) {
             let refMedian = null;
             let refMedianPitch = null;
             try {
@@ -3205,7 +3205,7 @@ class OnnxSVSPipeline {
         // 中位数都向参考中位数靠拢。调整量上限 ±5 半音，避免段边界处 f0Shift 跳变过大
         // （相邻段最大差 10 半音，由 SEGMENT_OVERLAP_SEC crossfade 平滑过渡）。
         // 仅在 autoShift 启用且多 segment 时生效；pitchShift 模式（用户指定固定偏移）不改。
-        const perSegAutoShift = autoShift && pitchShift === 0 && segments.length > 1;
+        const perSegAutoShift = false; // Preserve absolute MIDI pitch: autoShift is global, never segment-dependent.
         const globalNotePitches = perSegAutoShift
             ? filledNotes.filter(n => n.pitch >= 1).map(n => n.pitch)
             : [];

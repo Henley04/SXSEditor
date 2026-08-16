@@ -518,3 +518,6 @@
   transform: none;
   box-shadow: none;
 }
+
+.accompaniment-volume-control { display:flex; align-items:center; gap:6px; font-size:11px; }
+.accompaniment-volume-control input[type="range"] { width:90px; }

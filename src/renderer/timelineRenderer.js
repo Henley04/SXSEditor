@@ -458,24 +458,8 @@ export function drawPlayheadLine(elapsedSeconds, options = {}) {
   const w = dom.fragmentPlayheadCanvas.width / dpr;
   const h = dom.fragmentPlayheadCanvas.height / dpr;
 
-  // 播放中自动跟随滚动：playhead canvas 只覆盖可视区域，
-  // 若播放头越过视口右缘（或回退到左缘）时不滚动，播放头会直接从画面消失。
-  // 在约 75% 视口宽度处开始跟随，保持播放头始终可见。
-  // 暂停/拖拽态（isPaused）不触发，避免打断用户手动滚动。
-  if (state.isPlaying && options.isPaused !== true) {
-    const viewportW = dom.fragmentContainer?.clientWidth || w;
-    if (viewportW > 0) {
-      const rawX = playbackTimeToX(elapsedSeconds);
-      const followX = viewportW * 0.75;
-      if (rawX - state.fragmentScrollX > followX) {
-        state.fragmentScrollX = rawX - followX;
-        syncFragmentScroll();
-      } else if (rawX - state.fragmentScrollX < 0) {
-        state.fragmentScrollX = rawX;
-        syncFragmentScroll();
-      }
-    }
-  }
+  // The playhead is positioned solely by timeline time. Playback must not
+  // mutate scrollX, otherwise the indicator appears pinned to the viewport.
 
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
@@ -738,6 +722,27 @@ export function renderSingerList() {
           configDiv.className = 'singer-config';
           configDiv.textContent = t('main.accompanimentLabel');
           infoDiv.appendChild(configDiv);
+
+          const volumeWrap = document.createElement('label');
+          volumeWrap.className = 'accompaniment-volume-control';
+          const volumeText = document.createElement('span');
+          const currentVolume = Number.isFinite(singer.accompanimentVolume) ? singer.accompanimentVolume : 1;
+          volumeText.textContent = `Vol ${Math.round(currentVolume * 100)}%`;
+          const volumeInput = document.createElement('input');
+          volumeInput.type = 'range';
+          volumeInput.min = '0';
+          volumeInput.max = '2';
+          volumeInput.step = '0.01';
+          volumeInput.value = String(currentVolume);
+          volumeInput.addEventListener('input', (e) => {
+            e.stopPropagation();
+            const value = Math.max(0, Math.min(2, Number(volumeInput.value)));
+            singer.accompanimentVolume = value;
+            volumeText.textContent = `Vol ${Math.round(value * 100)}%`;
+          });
+          volumeInput.addEventListener('click', e => e.stopPropagation());
+          volumeWrap.append(volumeText, volumeInput);
+          infoDiv.appendChild(volumeWrap);
         }
       } else if (singer.singerFileMissing) {
         const warningDiv = document.createElement('div');

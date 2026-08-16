@@ -52,6 +52,9 @@ function createSinger(data = {}) {
     audioDuration: data.audioDuration ?? null,
     embeddedAudioData: data.embeddedAudioData ?? null,
     accompanimentStartTime: data.accompanimentStartTime ?? 0,
+    accompanimentVolume: data.accompanimentVolume ?? 1,
+    audioSampleRate: data.audioSampleRate ?? null,
+    numberOfChannels: data.numberOfChannels ?? 1,
   };
 }
 
