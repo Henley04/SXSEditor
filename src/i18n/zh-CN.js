@@ -429,7 +429,7 @@ export default {
     initFailed: '初始化失败',
     consoleStarted: '音频预处理页面已启动',
     dragToSeek: '拖动以跳转播放进度',
-    extractPanel: '提取参数',
+    extractPanel: '提取参数 (FCPE)',
     auditionSynth: '播放合成音',
     stopAudition: '停止合成音',
     collapsePanel: '收起',
@@ -479,7 +479,8 @@ export default {
     qualityWarnTitle: '提取质量提示',
     deviceLabel: '设备',
     levelStatus: '电平',
-    levelWarnTitle: '电平警告'
+    levelWarnTitle: '电平警告',
+    fcpeParamsDisabled: '当前 MIDI 提取工具为 {tool}，FCPE 参数不生效。如需使用 FCPE 参数，请在设置中切换 MIDI 提取工具为 FCPE。'
   },
   settings: {
     title: '设置',
@@ -684,6 +685,8 @@ export default {
     midiExtractToolRmvpe: 'RMVPE (F0转音符, 实验性)',
     midiExtractToolBasicpitch: 'Basic Pitch',
     midiExtractToolHint: '选择音频转MIDI时使用的提取工具。FCPE 基于 FCPE (Fully Convolutional Pitch Estimator) 提取 F0 基频并转为 MIDI 音符，速度快、精度高，适合大多数场景；Basic Pitch 基于神经网络，提取效果稳定；RMVPE 基于音高检测将F0转为音符，为实验性功能，提取结果可能不理想。',
+    fcpeParamsTitle: 'FCPE 提取参数',
+    fcpeParamsHint: '这些参数仅在 MIDI 提取工具选择 FCPE 时生效。Basic Pitch 和 RMVPE 使用各自的参数。',
     smartMode: '智能模式',
     manualMode: '手动指定',
     advancedMode: '高级设置',

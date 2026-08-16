@@ -13,7 +13,7 @@ import { stopSynth } from './synthPreview.js';
 initDomRefs();
 
 // 初始化提取参数面板
-initPanel();
+initPanel().catch(err => console.error('[AudioPreprocess] initPanel failed:', err));
 
 // Setup event handlers
 setupEventHandlers();

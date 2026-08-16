@@ -76,6 +76,7 @@ const dom = {
   bpmAuto: null,
   bpmInput: null,
   normalizeCheck: null,
+  fcpeParamsNotice: null,
 };
 
 export function initDomRefs() {
@@ -112,6 +113,7 @@ export function initDomRefs() {
   dom.bpmAuto = document.getElementById('bpm-auto');
   dom.bpmInput = document.getElementById('bpm-input');
   dom.normalizeCheck = document.getElementById('normalize-check');
+  dom.fcpeParamsNotice = document.getElementById('fcpe-params-notice');
 }
 
 export { state, dom };

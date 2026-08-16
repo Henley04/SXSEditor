@@ -81,6 +81,15 @@ const exclusiveInfoDiv = document.getElementById('exclusiveInfo');
 const languageSelect = document.getElementById('languageSelect');
 const modelPrecisionSelect = document.getElementById('modelPrecision');
 const midiExtractToolSelect = document.getElementById('midiExtractTool');
+const fcpeParamsGroup = document.getElementById('fcpeParamsGroup');
+const fcpeThresholdSelect = document.getElementById('fcpeThreshold');
+const fcpeSmoothingSelect = document.getElementById('fcpeSmoothing');
+const fcpeQuantizationSelect = document.getElementById('fcpeQuantization');
+const fcpeF0RangeAutoCheckbox = document.getElementById('fcpeF0RangeAuto');
+const fcpeF0MinInput = document.getElementById('fcpeF0Min');
+const fcpeF0MaxInput = document.getElementById('fcpeF0Max');
+const fcpeMinNoteDurationInput = document.getElementById('fcpeMinNoteDuration');
+const fcpeNormalizeCheckbox = document.getElementById('fcpeNormalize');
 const openModelDownloadBtn = document.getElementById('openModelDownloadBtn');
 const openModelDownloadBtnTop = document.getElementById('openModelDownloadBtnTop');
 
@@ -319,6 +328,17 @@ function applySavedSettingsToUI(currentSetting) {
     } else {
         midiExtractToolSelect.value = 'fcpe';
     }
+
+    // FCPE parameters
+    fcpeThresholdSelect.value = currentSetting.fcpeThreshold || 'mid';
+    fcpeSmoothingSelect.value = currentSetting.fcpeSmoothing || 'medium';
+    fcpeQuantizationSelect.value = currentSetting.fcpeQuantization || 'strict';
+    fcpeF0RangeAutoCheckbox.checked = currentSetting.fcpeF0RangeAuto !== false;
+    fcpeF0MinInput.value = currentSetting.fcpeF0Min ?? 80;
+    fcpeF0MaxInput.value = currentSetting.fcpeF0Max ?? 880;
+    fcpeMinNoteDurationInput.value = currentSetting.fcpeMinNoteDuration ?? 0.05;
+    fcpeNormalizeCheckbox.checked = currentSetting.fcpeNormalize !== false;
+    updateFcpeParamsVisibility(midiExtractToolSelect.value);
 
     // Vocoder type (main process may have overridden 'sifigan' -> 'default' at startup)
     vocoderTypeSelect.value = currentSetting.vocoderType === 'sifigan' ? 'sifigan' : 'default';
@@ -596,6 +616,11 @@ function updateVocoderTypeUI(fileStatus) {
 function updateSifiganPrecisionVisibility(vocoderType) {
     if (!sifiganPrecisionGroup) return;
     sifiganPrecisionGroup.classList.toggle('hidden', vocoderType !== 'sifigan');
+}
+
+function updateFcpeParamsVisibility(tool) {
+    if (!fcpeParamsGroup) return;
+    fcpeParamsGroup.style.display = tool === 'fcpe' ? '' : 'none';
 }
 
 const PRECISION_LABELS = {
@@ -1173,6 +1198,16 @@ function collectSettings() {
         locale: languageSelect.value,
         modelPrecision: modelPrecisionSelect.value,
         midiExtractTool: midiExtractToolSelect.value,
+        fcpeThreshold: fcpeThresholdSelect ? fcpeThresholdSelect.value : 'mid',
+        fcpeSmoothing: fcpeSmoothingSelect ? fcpeSmoothingSelect.value : 'medium',
+        fcpeQuantization: fcpeQuantizationSelect ? fcpeQuantizationSelect.value : 'strict',
+        fcpeF0Min: fcpeF0MinInput ? Number(fcpeF0MinInput.value) || 80 : 80,
+        fcpeF0Max: fcpeF0MaxInput ? Number(fcpeF0MaxInput.value) || 880 : 880,
+        fcpeF0RangeAuto: fcpeF0RangeAutoCheckbox ? fcpeF0RangeAutoCheckbox.checked : true,
+        fcpeMinNoteDuration: fcpeMinNoteDurationInput ? Number(fcpeMinNoteDurationInput.value) || 0.05 : 0.05,
+        fcpeAutoBpm: false,
+        fcpeBpm: 120,
+        fcpeNormalize: fcpeNormalizeCheckbox ? fcpeNormalizeCheckbox.checked : true,
         vocoderType: vocoderTypeSelect.value,
         sifiganPrecision: sifiganPrecisionSelect.value === 'fp16' ? 'fp16' : 'fp32',
         japaneseVocalization: (() => {
@@ -1522,7 +1557,18 @@ if (ortLogSeverityLevelSelect) {
     ortLogSeverityLevelSelect.addEventListener('change', () => applySettings());
 }
 
-midiExtractToolSelect.addEventListener('change', () => applySettings());
+midiExtractToolSelect.addEventListener('change', () => {
+    updateFcpeParamsVisibility(midiExtractToolSelect.value);
+    applySettings();
+});
+if (fcpeThresholdSelect) fcpeThresholdSelect.addEventListener('change', () => applySettings());
+if (fcpeSmoothingSelect) fcpeSmoothingSelect.addEventListener('change', () => applySettings());
+if (fcpeQuantizationSelect) fcpeQuantizationSelect.addEventListener('change', () => applySettings());
+if (fcpeF0RangeAutoCheckbox) fcpeF0RangeAutoCheckbox.addEventListener('change', () => applySettings());
+if (fcpeF0MinInput) fcpeF0MinInput.addEventListener('change', () => applySettings());
+if (fcpeF0MaxInput) fcpeF0MaxInput.addEventListener('change', () => applySettings());
+if (fcpeMinNoteDurationInput) fcpeMinNoteDurationInput.addEventListener('change', () => applySettings());
+if (fcpeNormalizeCheckbox) fcpeNormalizeCheckbox.addEventListener('change', () => applySettings());
 
 async function _openModelDownloadWindow() {
     const precision = modelPrecisionSelect.value;

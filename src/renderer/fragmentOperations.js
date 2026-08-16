@@ -153,10 +153,23 @@ export async function handleAudioToMidi() {
         }
       } else if (midiTool === 'fcpe') {
         // FCPE: extract F0 + f0ToNotes for MIDI
+        // 从全局设置读取 FCPE 参数，与设置页保持一致
+        const fcpeOpts = settings ? {
+          threshold: { low: 0.003, mid: 0.006, high: 0.01 }[settings.fcpeThreshold] || 0.006,
+          thresholdEnabled: true,
+          f0Min: settings.fcpeF0Min ?? 80,
+          f0Max: settings.fcpeF0Max ?? 880,
+          f0RangeAuto: settings.fcpeF0RangeAuto !== false,
+          smoothing: settings.fcpeSmoothing || 'medium',
+          quantization: settings.fcpeQuantization || 'strict',
+          minNoteDuration: settings.fcpeMinNoteDuration ?? 0.05,
+          normalize: settings.fcpeNormalize !== false,
+        } : undefined;
         const fcpeResult = await window.electronAPI.extractMidiFcpe({
           audioData,
           sampleRate,
           bpm,
+          options: fcpeOpts,
         });
 
         if (!fcpeResult.success) {

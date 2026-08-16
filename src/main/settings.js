@@ -22,6 +22,9 @@ const ENUM_SETTINGS = {
   ortExecutionMode: ['sequential', 'parallel'],
   ortLogSeverityLevel: ['verbose', 'info', 'warning', 'error', 'fatal'],
   updateChannel: ['nightly', 'release'],
+  fcpeThreshold: ['low', 'mid', 'high'],
+  fcpeSmoothing: ['low', 'medium', 'high'],
+  fcpeQuantization: ['strict', 'pitchbend'],
 };
 
 const NUMERIC_SETTINGS = {
@@ -31,6 +34,8 @@ const NUMERIC_SETTINGS = {
   audioSampleRate: [8000, 192000, 24000], audioBufferSize: [64, 4096, 1024], audioVolume: [0, 1, 1],
   vocoderChunkFrames: [256, 4096, 1024], ortIntraOpNumThreads: [0, 64, 0], ortInterOpNumThreads: [0, 64, 0],
   npuDiffBatchSize: [1, 4, 1], npuVocoderBatchSize: [1, 4, 1],
+  fcpeF0Min: [20, 2000, 80], fcpeF0Max: [20, 2000, 880],
+  fcpeMinNoteDuration: [0.01, 1, 0.05], fcpeBpm: [40, 240, 120],
 };
 
 /** Normalize persisted and IPC-provided settings at the trust boundary. */
@@ -436,6 +441,10 @@ const ALLOWED_SETTINGS_KEYS = [
   'skippedAppVersion',
   'dontRemindAppUpdates',
   'lastUpdateCheckTime',
+  // FCPE MIDI extraction parameters (global, used by all FCPE call sites)
+  'fcpeThreshold', 'fcpeSmoothing', 'fcpeQuantization',
+  'fcpeF0Min', 'fcpeF0Max', 'fcpeF0RangeAuto',
+  'fcpeMinNoteDuration', 'fcpeAutoBpm', 'fcpeBpm', 'fcpeNormalize',
 ];
 
 async function updateLocaleSetting(locale) {

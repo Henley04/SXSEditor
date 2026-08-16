@@ -3,6 +3,24 @@ import { getOptions, saveOptions, applyPreset, resolveOptions } from './extracti
 import { t } from '../i18n/index.js';
 import { toggleSynth } from './synthPreview.js';
 
+/** 根据 MIDI 提取工具显示/隐藏 FCPE 参数面板 */
+export async function updateFcpePanelVisibility() {
+  if (!dom.extractPanelBody) return;
+  const settings = await window.electronAPI.getSettings();
+  const tool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'fcpe';
+  const isFcpe = tool === 'fcpe';
+  dom.extractPanelBody.style.display = isFcpe ? '' : 'none';
+  if (dom.fcpeParamsNotice) {
+    if (!isFcpe) {
+      const toolName = tool === 'rmvpe' ? 'RMVPE' : 'Basic Pitch';
+      dom.fcpeParamsNotice.textContent = t('preprocess.fcpeParamsDisabled', { tool: toolName });
+      dom.fcpeParamsNotice.style.display = '';
+    } else {
+      dom.fcpeParamsNotice.style.display = 'none';
+    }
+  }
+}
+
 /** 把 DOM 控件值收集为 options 对象 */
 export function collectOptions() {
   const opts = getOptions();
@@ -56,8 +74,9 @@ function bindControls() {
 }
 
 /** 初始化参数面板：载入已保存选项 */
-export function initPanel() {
+export async function initPanel() {
   if (!dom.presetSelect) return;
+  await updateFcpePanelVisibility();
   const opts = getOptions();
   dom.presetSelect.value = opts.preset;
   dom.thresholdSelect.value = opts.threshold;

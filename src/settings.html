@@ -590,6 +590,66 @@
                     </select>
                     <p class="hint" data-i18n="settings.midiExtractToolHint">选择音频转MIDI时使用的提取工具。</p>
                 </div>
+                <!-- FCPE Parameters (shown only when FCPE is selected) -->
+                <div class="setting-group" id="fcpeParamsGroup" style="display:none;">
+                    <div class="setting-group-header">
+                        <span data-i18n="settings.fcpeParamsTitle">FCPE 提取参数</span>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-field">
+                            <label for="fcpeThreshold" data-i18n="preprocess.thresholdLabel" title="静音阈值：按帧 RMS 判断该帧是否为静音，低于阈值的帧 F0 会被清零。低=0.003（保留更多弱信号），中=0.006，高=0.01（过滤更多噪声）。">静音阈值</label>
+                            <select id="fcpeThreshold">
+                                <option value="low" data-i18n="preprocess.thresholdLow">低 (0.003)</option>
+                                <option value="mid" data-i18n="preprocess.thresholdMid">中 (0.006)</option>
+                                <option value="high" data-i18n="preprocess.thresholdHigh">高 (0.01)</option>
+                            </select>
+                        </div>
+                        <div class="setting-field">
+                            <label for="fcpeSmoothing" data-i18n="preprocess.smoothingLabel" title="F0 平滑度：对提取的 F0 曲线进行中值滤波，消除跳变噪音。低=窗口3（保留更多细节），中=窗口5，高=窗口7（更平滑但可能丢失颤音）。">平滑度</label>
+                            <select id="fcpeSmoothing">
+                                <option value="low" data-i18n="preprocess.smoothingLow">低</option>
+                                <option value="medium" data-i18n="preprocess.smoothingMedium">中</option>
+                                <option value="high" data-i18n="preprocess.smoothingHigh">高</option>
+                            </select>
+                        </div>
+                        <div class="setting-field">
+                            <label for="fcpeQuantization" data-i18n="preprocess.quantizationLabel" title="音高量化：严格量化将 F0 直接转为最接近的 MIDI 音符；保留滑音会额外输出 Pitch Bend 信息，适合戏曲、民乐等滑音多的场景。">音高量化</label>
+                            <select id="fcpeQuantization">
+                                <option value="strict" data-i18n="preprocess.quantizationStrict">严格量化</option>
+                                <option value="pitchbend" data-i18n="preprocess.quantizationPitchbend">保留滑音 (Pitch Bend)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-field">
+                            <label class="inline-label">
+                                <input type="checkbox" id="fcpeF0RangeAuto" />
+                                <span data-i18n="preprocess.autoRange" title="自动适配音域：扫描 F0 分位数自动确定 F0 上下限，无需手动设置。取消勾选可手动指定音域范围。">自动适配音域</span>
+                            </label>
+                        </div>
+                        <div class="setting-field">
+                            <label for="fcpeF0Min" data-i18n="preprocess.f0MinLabel" title="F0 下限：仅保留高于此频率的 F0（Hz）。男声典型 80Hz，女声典型 196Hz。设过低会保留低频噪声。">F0 下限 (Hz)</label>
+                            <input type="number" id="fcpeF0Min" min="20" max="2000" step="1" />
+                        </div>
+                        <div class="setting-field">
+                            <label for="fcpeF0Max" data-i18n="preprocess.f0MaxLabel" title="F0 上限：仅保留低于此频率的 F0（Hz）。设过高可能保留高频泛音。典型值 880Hz（A5）。">F0 上限 (Hz)</label>
+                            <input type="number" id="fcpeF0Max" min="20" max="2000" step="1" />
+                        </div>
+                        <div class="setting-field">
+                            <label for="fcpeMinNoteDuration" data-i18n="preprocess.minNoteLabel" title="最短音符时长（秒）：短于此值的音符将被丢弃，用于过滤噪声产生的碎片音符。典型值 0.05 秒。">最短音符 (秒)</label>
+                            <input type="number" id="fcpeMinNoteDuration" min="0.01" max="1" step="0.01" />
+                        </div>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-field">
+                            <label class="inline-label">
+                                <input type="checkbox" id="fcpeNormalize" />
+                                <span data-i18n="preprocess.normalizeLabel" title="响度归一化：将音频电平归一化到 -4.5 dBFS，避免弱信号导致 FCPE 漏判音高。建议保持开启。">响度归一化</span>
+                            </label>
+                        </div>
+                    </div>
+                    <p class="hint" data-i18n="settings.fcpeParamsHint">这些参数仅在 MIDI 提取工具选择 FCPE 时生效。Basic Pitch 和 RMVPE 使用各自的参数。</p>
+                </div>
             </div>
 
             <!-- Model Management -->

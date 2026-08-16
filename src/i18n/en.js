@@ -429,7 +429,7 @@ export default {
     initFailed: 'Initialization failed',
     consoleStarted: 'Audio preprocessing page started',
     dragToSeek: 'Drag to seek',
-    extractPanel: 'Extraction Parameters',
+    extractPanel: 'Extraction Parameters (FCPE)',
     auditionSynth: 'Play Synth',
     stopAudition: 'Stop Synth',
     collapsePanel: 'Collapse',
@@ -479,7 +479,8 @@ export default {
     qualityWarnTitle: 'Extraction Quality Notice',
     deviceLabel: 'Device',
     levelStatus: 'Level',
-    levelWarnTitle: 'Level Warning'
+    levelWarnTitle: 'Level Warning',
+    fcpeParamsDisabled: 'Current MIDI extraction tool is {tool}. FCPE parameters are not active. To use FCPE parameters, switch the MIDI extraction tool to FCPE in Settings.'
   },
   settings: {
     title: 'Settings',
@@ -684,6 +685,8 @@ export default {
     midiExtractToolRmvpe: 'RMVPE (F0 to Notes, Experimental)',
     midiExtractToolBasicpitch: 'Basic Pitch',
     midiExtractToolHint: 'Select the tool used for audio-to-MIDI extraction. FCPE (Fully Convolutional Pitch Estimator) extracts F0 and converts to MIDI notes with high speed and accuracy, suitable for most scenarios; Basic Pitch is neural network-based with stable results; RMVPE converts F0 pitch to notes and is an experimental feature with potentially suboptimal results.',
+    fcpeParamsTitle: 'FCPE Extraction Parameters',
+    fcpeParamsHint: 'These parameters only take effect when the MIDI extraction tool is set to FCPE. Basic Pitch and RMVPE use their own parameters.',
     smartMode: 'Smart Mode',
     manualMode: 'Manual',
     advancedMode: 'Advanced',
