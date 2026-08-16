@@ -94,11 +94,27 @@ function _onBeforeUnloadForVisibility() {
 let _streamingActive = false;
 let _streamingFirstChunkOffsetSec = 0;  // First chunk's global position (for coordinate conversion)
 let _streamingBufferEndSec = 0;         // Furthest chunk end in playhead seconds
+let _streamingAccEndSec = 0;            // Furthest accompaniment end in playhead seconds
 let _streamingInferenceDone = false;    // synthesizeMultiStreaming returned
 let _streamingWaitingForInference = false;
 let _streamingWaitStartCtxTime = 0;
 let _streamingIsLastReceived = false;   // isLast chunk has been received
 let _streamingActiveSourceCount = 0;    // Currently-playing source count
+
+// 流式播放自然完成：所有已调度 source（人声 chunk + 伴奏）均已结束。
+// 提取为独立函数供人声 chunk 与伴奏 source 的 onended 共用，避免重复逻辑。
+function _finishStreamingPlayback() {
+  state.streamingFinished = true;
+  state.isPlaying = false;
+  state.playbackPauseOffset = 0;
+  state.streamingSources = [];
+  _streamingActive = false;
+  stopPlayheadAnimation();
+  dom.timeDisplay.textContent = formatTime(0);
+  clearPlayheadLine();
+  dom.btnPlay.textContent = t('main.play');
+  dom.btnPlay.disabled = false;
+}
 
 function _ensureVisibilityHandler() {
   if (_visibilityHandlerRegistered) return;
@@ -255,6 +271,7 @@ export async function playAll() {
       _streamingActive = false;
       _streamingFirstChunkOffsetSec = 0;
       _streamingBufferEndSec = 0;
+      _streamingAccEndSec = 0;
       _streamingInferenceDone = false;
       _streamingWaitingForInference = false;
       _streamingWaitStartCtxTime = 0;
@@ -298,6 +315,9 @@ export async function playAll() {
               // Schedule accompaniment tracks as independent BufferSources
               // alongside the streaming vocal chunks. They connect to the same
               // gainNode and are cleaned up via state.streamingSources.
+              // 伴奏也计入活跃 source 计数与播放前沿：完成判定需等待伴奏结束，
+              // 避免伴奏长于人声时人声一结束就提前终止播放并孤立伴奏 source，
+              // 导致伴奏无法被暂停/停止。
               for (const accTrack of accTracks) {
                 const accBuffer = ctx.createBuffer(1, accTrack.audioBuffer.length, SAMPLE_RATE);
                 accBuffer.getChannelData(0).set(accTrack.audioBuffer);
@@ -307,7 +327,22 @@ export async function playAll() {
                 const accStartSec = (accTrack.accompanimentStartTime || 0) / state.project.bpm * 60;
                 const accScheduleTime = state.playbackStartTime + accStartSec;
                 accSource.start(Math.max(accScheduleTime, ctx.currentTime + 0.01));
+                const accEndSec = accStartSec + accTrack.audioBuffer.length / SAMPLE_RATE;
+                if (accEndSec > _streamingAccEndSec) _streamingAccEndSec = accEndSec;
+                _streamingActiveSourceCount++;
+                const accSourceIdx = state.streamingSources.length;
                 state.streamingSources.push(accSource);
+                accSource.onended = () => {
+                  _streamingActiveSourceCount--;
+                  if (state.streamingSources[accSourceIdx] === accSource) {
+                    state.streamingSources[accSourceIdx] = null;
+                  }
+                  if (_streamingIsLastReceived &&
+                      _streamingActiveSourceCount === 0 &&
+                      !state.streamingFinished) {
+                    _finishStreamingPlayback();
+                  }
+                };
               }
             }
 
@@ -365,16 +400,7 @@ export async function playAll() {
               if (_streamingIsLastReceived &&
                   _streamingActiveSourceCount === 0 &&
                   !state.streamingFinished) {
-                state.streamingFinished = true;
-                state.isPlaying = false;
-                state.playbackPauseOffset = 0;
-                state.streamingSources = [];
-                _streamingActive = false;
-                stopPlayheadAnimation();
-                dom.timeDisplay.textContent = formatTime(0);
-                clearPlayheadLine();
-                dom.btnPlay.textContent = t('main.play');
-                dom.btnPlay.disabled = false;
+                _finishStreamingPlayback();
               }
             };
           } catch (e) {
@@ -1030,11 +1056,14 @@ export function startPlayheadAnimation() {
       }
     }
 
-    // 流式播放兜底停止：推理已完成且 playhead 越过 buffer 前沿后，
+    // 流式播放兜底停止：推理已完成且 playhead 越过播放前沿后，
     // 说明所有已调度的 source 已播完（或 onended 清理未触发）。
     // 此时无音频可播，必须停止 rAF，否则 playhead 持续在静音区前进。
     // 0.5s 容差防止 chunk 边界抖动导致误停。
-    if (_streamingInferenceDone && elapsed >= _streamingBufferEndSec + 0.5) {
+    // 播放前沿取 {人声 chunk 前沿, 伴奏结束位置} 的最大值，避免伴奏长于
+    // 人声时在人声结束后就提前停止（会截断仍在播放的伴奏）。
+    const totalFrontierSec = Math.max(_streamingBufferEndSec, _streamingAccEndSec);
+    if (_streamingInferenceDone && elapsed >= totalFrontierSec + 0.5) {
       if (!state.streamingFinished) {
         state.streamingFinished = true;
         state.isPlaying = false;
