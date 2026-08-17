@@ -703,6 +703,13 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       expect(rOverride).to.match(/1$/);
       expect(r1).to.match(/3$/);
     });
+    it('should map neutral tone 0 to vocabulary tone 5', () => {
+      for (const lyric of ['着', '吧', '吗', '呢', '啊', '么']) {
+        const phoneme = tpEn.resolveLyricToPhonemes(lyric)[0].name;
+        expect(phoneme).to.match(/5$/);
+        expect(tpEn.phone2idx[phoneme], `${lyric} -> ${phoneme}`).to.not.be.undefined;
+      }
+    });
   });
 
   describe('_englishG2p', () => {

@@ -1,6 +1,5 @@
 const { Midi } = require('@tonejs/midi');
-
-const SILENCE_THRESHOLD_SEC = 0.2;
+const { decodeMidiText } = require('../utils/textEncoding');
 
 function _readUint16(view, offset) {
   return (view.getUint8(offset) << 8) | view.getUint8(offset + 1);
@@ -99,9 +98,7 @@ function _extractRawLyrics(buffer) {
         const dataStart = p;
         p += ml;
         if (metaType === 0x05 && p <= trackEnd) {
-          const text = new TextDecoder('utf-8').decode(
-            new Uint8Array(buffer, dataStart, ml),
-          );
+          const text = decodeMidiText(new Uint8Array(buffer, dataStart, ml));
           trackLyrics.push({ ticks: tick, text });
         }
       } else if (status === 0xf0 || status === 0xf7) {
@@ -152,7 +149,7 @@ function _extractRawLyrics(buffer) {
  * Apply SVS-specific post-processing to a single track's raw notes:
  *   - trim overlapping notes (monophonic timeline)
  *   - attach lyrics (from the track or shared header) by tick proximity
- *   - insert SP (rest) notes for gaps > 0.2s
+ *   - preserve blank MIDI intervals without creating visible pitch-0 notes
  *   - classify noteType: 1 = SP, 2 = normal, 3 = slur ('-')
  *
  * Output note shape:
@@ -253,26 +250,11 @@ function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds, seco
       text = lyric;
     }
 
-    if (startS - prevEndS > SILENCE_THRESHOLD_SEC) {
-      const spStartTick = secondsToTicks(prevEndS);
-      const spStartBeat = spStartTick / ticksPerBeat;
-      const spEndTick = secondsToTicks(startS);
-      const spDurBeats = (spEndTick - spStartTick) / ticksPerBeat;
-      result.push({
-        pitch: 0,
-        start: spStartBeat,
-        duration: spDurBeats,
-        lyric: '',
-        noteType: 1,
-      });
-    } else {
-      // Small gap: extend the previous note to fill it so the timeline is
-      // contiguous (matches original parser behavior).
-      if (result.length > 0) {
-        const lastResult = result[result.length - 1];
-        lastResult.duration = n.startTicks / ticksPerBeat - lastResult.start;
-      }
-    }
+    // Keep MIDI silence as an actual empty interval. Older code inserted a
+    // synthetic pitch=0 note for long gaps (rendered as C-1) and extended the
+    // preceding note across short gaps. Both alter the imported score and can
+    // pollute F0/autoShift statistics. The synthesis pipeline already fills
+    // gaps internally when it needs a contiguous conditioning sequence.
 
     const startBeat = n.startTicks / ticksPerBeat;
     const durBeats = n.durationTicks / ticksPerBeat;

@@ -2,6 +2,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pinyin } = require('pinyin-pro');
 const durationStats = require('./durationStats');
+const { repairMojibake } = require('../../utils/textEncoding');
 
 // Japanese hiragana/katakana → phoneme mapping
 const JP_HIRAGANA_MAP = {
@@ -542,7 +543,7 @@ class TextProcessing {
         if (!lyric || lyric.trim().length === 0) {
             return this.phone2idx['<SP>'] || 1;
         }
-        const trimmed = lyric.trim();
+        const trimmed = repairMojibake(lyric.trim());
 
         // Ensure vocabulary is loaded (lazy reload if empty)
         if (this._vocabSize === 0) {
@@ -585,9 +586,15 @@ class TextProcessing {
         try {
             const py = pinyin(char, { toneType: 'num', type: 'array' });
             if (py && py.length > 0 && py[0]) {
-                let syllable = py[0];
+                let syllable = py[0].toLowerCase().replace(/ü/g, 'v');
                 if (overrideTone) {
-                    syllable = syllable.replace(/\d$/, overrideTone);
+                    syllable = syllable.replace(/\d?$/, overrideTone);
+                } else if (/0$/.test(syllable)) {
+                    // pinyin-pro uses tone 0 for neutral tone; the model
+                    // vocabulary follows the standard pinyin convention 5.
+                    syllable = syllable.replace(/0$/, '5');
+                } else if (!/[1-5]$/.test(syllable)) {
+                    syllable += '5';
                 }
                 return 'zh_' + syllable;
             }
@@ -599,7 +606,7 @@ class TextProcessing {
 
     resolveLyricToPhonemes(lyric) {
         if (!lyric || lyric.trim().length === 0) return [{ name: '<SP>', display: 'SP' }];
-        let trimmed = lyric.trim();
+        let trimmed = repairMojibake(lyric.trim());
         if (trimmed === '<SP>' || trimmed === '<AP>') return [{ name: '<SP>', display: 'SP' }];
 
         // Handle <jp> prefix: force Japanese G2P for kanji etc.

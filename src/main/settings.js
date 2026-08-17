@@ -124,16 +124,15 @@ function loadSettings() {
     _settingsCache.releaseDmlVramAfterSynthesis = false;
   }
 
-  // Vocoder 推理前是否临时释放 diffStep session（默认开启，仅 DML 后端有效）
+  // Vocoder 推理前是否临时释放 diffStep session（默认关闭，仅 DML 后端有效）
   // diffStep 模型权重 + 32 步 diffusion 激活工作区（~2GB）在 vocoder 推理期间仍占用显存，
   // 与 vocoder 激活叠加易触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR (屏幕全黑)。
   // 开启后：diffusion 完成 → 释放 diffStep → vocoder 推理 → 重载 diffStep。
   // 代价：每次 vocoder 推理后需重载 diffStep（~1-3秒），多 segment 合成会变慢。
-  // 默认 true：避免低显存显卡 TDR 黑屏比节省几秒更重要；pipeline/index.js 在 vocoder
-  // 捕获 isVramOOMError 后也会动态启用（仅下一个 segment），完成后自动恢复用户设置。
+  // 默认 false：尊重用户显式选择。只有用户开启时，OOM 路径才允许释放并重试。
   // WebNN 路径无需此优化（diffStep 在渲染进程，vocoder 在主进程 DML，互不抢占显存）。
   if (typeof _settingsCache.releaseDiffStepBeforeVocoder !== 'boolean') {
-    _settingsCache.releaseDiffStepBeforeVocoder = true;
+    _settingsCache.releaseDiffStepBeforeVocoder = false;
   }
 
   // 诊断模式（默认关闭）。开启后输出 [DiffusionDiag] / [VocoderDiag] 统计/采样日志，

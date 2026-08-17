@@ -375,7 +375,7 @@ function applySavedSettingsToUI(currentSetting) {
     }
     // Vocoder 推理前释放 diffStep（默认开启，仅 DML 后端有效）
     if (releaseDiffStepBeforeVocoderCheckbox) {
-        releaseDiffStepBeforeVocoderCheckbox.checked = currentSetting.releaseDiffStepBeforeVocoder !== false;
+        releaseDiffStepBeforeVocoderCheckbox.checked = currentSetting.releaseDiffStepBeforeVocoder === true;
     }
 
     // ORT 高级设置
@@ -1225,7 +1225,7 @@ function collectSettings() {
         enableSDEditRepair: enableSDEditRepairCheckbox ? enableSDEditRepairCheckbox.checked : false,
         diagnosticMode: diagnosticModeCheckbox ? diagnosticModeCheckbox.checked : false,
         releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
-        releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : true,
+        releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : false,
         // ORT 高级设置
         ortEnableMemPattern: ortEnableMemPatternCheckbox ? ortEnableMemPatternCheckbox.checked : true,
         ortEnableCpuMemArena: ortEnableCpuMemArenaCheckbox ? ortEnableCpuMemArenaCheckbox.checked : true,

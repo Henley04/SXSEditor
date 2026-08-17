@@ -639,7 +639,7 @@ export default {
     releaseDmlVramAfterSynthesisDesc: 'Only affects DML backend; off by default',
     releaseDmlVramAfterSynthesisHint: 'Reload diffStep and vocoder after each synthesis to force DirectML to reclaim transient tensor memory pools, reducing OOM on consecutive syntheses. Adds a short wait after each synthesis.',
     releaseDiffStepBeforeVocoder: 'Release diffStep before vocoder inference',
-    releaseDiffStepBeforeVocoderDesc: 'Only affects DML backend; on by default',
+    releaseDiffStepBeforeVocoderDesc: 'Only affects DML backend; off by default',
     releaseDiffStepBeforeVocoderHint: 'Release diffStep session after diffusion completes so vocoder inference gets full VRAM (~3-4GB freed), preventing 0x887A0006/TDR black screen. Cost: diffStep must be reloaded after each vocoder pass (~1-3s), slowing multi-segment synthesis. Strongly recommended to keep enabled for low-VRAM GPUs.',
 
     // ORT advanced settings section

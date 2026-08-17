@@ -762,9 +762,9 @@
                 </div>
                 <div class="setting-group">
                     <label class="device-mode-radio">
-                        <input type="checkbox" id="releaseDiffStepBeforeVocoder" checked>
+                        <input type="checkbox" id="releaseDiffStepBeforeVocoder">
                         <span class="radio-label" data-i18n="settings.releaseDiffStepBeforeVocoder">Vocoder 推理前释放 diffStep</span>
-                        <span class="radio-desc" data-i18n="settings.releaseDiffStepBeforeVocoderDesc">仅 DML 后端生效，默认开启</span>
+                        <span class="radio-desc" data-i18n="settings.releaseDiffStepBeforeVocoderDesc">仅 DML 后端生效，默认关闭</span>
                     </label>
                     <p class="hint" data-i18n="settings.releaseDiffStepBeforeVocoderHint">diffusion 完成后释放 diffStep session，让 vocoder 推理独占显存（腾出约 3-4GB），避免 0x887A0006/TDR 黑屏。代价：每次 vocoder 后需重载 diffStep（约 1-3 秒），多段合成会变慢。低显存显卡强烈建议保持开启。</p>
                 </div>

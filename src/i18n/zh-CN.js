@@ -639,7 +639,7 @@ export default {
     releaseDmlVramAfterSynthesisDesc: '仅 DML 后端生效，默认关闭',
     releaseDmlVramAfterSynthesisHint: '每次合成完成后重新加载 diffStep 和 vocoder，强制 DirectML 回收中间张量内存池，缓解连续合成 OOM。开启后会增加一点合成后的等待时间。',
     releaseDiffStepBeforeVocoder: 'Vocoder 推理前释放 diffStep',
-    releaseDiffStepBeforeVocoderDesc: '仅 DML 后端生效，默认开启',
+    releaseDiffStepBeforeVocoderDesc: '仅 DML 后端生效，默认关闭',
     releaseDiffStepBeforeVocoderHint: 'diffusion 完成后释放 diffStep session，让 vocoder 推理独占显存（腾出约 3-4GB），避免 0x887A0006/TDR 黑屏。代价：每次 vocoder 后需重载 diffStep（约 1-3 秒），多段合成会变慢。低显存显卡强烈建议保持开启。',
 
     // ORT advanced settings section

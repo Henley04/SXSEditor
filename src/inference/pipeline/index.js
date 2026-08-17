@@ -1838,7 +1838,7 @@ class OnnxSVSPipeline {
             // retry the segment with diffStep released first. After the retry
             // (success or another failure), the finally block clears the flag
             // so behavior reverts to the user setting for the next segment.
-            if (isVramOOMError(err) && !releasedDiffStep && !_dynamicReleaseDiffStepNextSegment) {
+            if (isVramOOMError(err) && !releasedDiffStep && !_dynamicReleaseDiffStepNextSegment && this._isDiffStepReleaseEnabled()) {
                 console.warn(`[OnnxSVSPipeline] Vocoder OOM caught, retrying segment with diffStep released first: ${err.message}`);
                 _dynamicReleaseDiffStepNextSegment = true;
                 // 标记 OOM 使下一次自适应 gpuDrain 延长到 200ms（让 DML 资源池恢复），
@@ -1906,14 +1906,20 @@ class OnnxSVSPipeline {
      * 目的：腾出 diffStep 模型权重 + diffusion 32 步激活工作区（合计 ~3-4GB）的显存，
      * 避免 vocoder 推理时显存叠加触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR。
      *
-     * 触发条件（任一即可）：
-     *   1) 用户设置 releaseDiffStepBeforeVocoder === true（持久化偏好）
-     *   2) 模块级 _dynamicReleaseDiffStepNextSegment === true
-     *      （由上一次 vocoder 抛 isVramOOMError 设置，仅下一段生效，调用方负责在
-     *      segment 完成后清除此标志以恢复用户默认行为）
+     * 仅当用户设置 releaseDiffStepBeforeVocoder === true 时允许释放。
+     * OOM 重试标志只决定是否立即重试，不得绕过用户关闭的设置。
      *
      * @returns {boolean} true 表示已释放（调用方需在 vocoder 完成后调用 _reloadDiffStepAfterVocoder）
      */
+    _isDiffStepReleaseEnabled() {
+        try {
+            const { loadSettings } = require('../../main/settings');
+            return loadSettings().releaseDiffStepBeforeVocoder === true;
+        } catch (_) {
+            return false;
+        }
+    }
+
     _maybeUnloadDiffStepBeforeVocoder() {
         if (this.useWebNN) {
             console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (useWebNN=true)');
@@ -1928,23 +1934,13 @@ class OnnxSVSPipeline {
             return false; // CPU 后端无需释放
         }
 
-        // Dynamic OOM-triggered release takes priority over the user setting.
-        // The caller (_runVocoderChunked) is responsible for clearing the
-        // dynamic flag after the segment completes so behavior reverts.
+        // The user setting is authoritative, including the OOM retry path.
+        if (!this._isDiffStepReleaseEnabled()) {
+            console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (disabled by user)');
+            return false;
+        }
         if (_dynamicReleaseDiffStepNextSegment) {
-            console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: dynamic release triggered by prior OOM');
-        } else {
-            try {
-                const { loadSettings } = require('../../main/settings');
-                const settings = loadSettings();
-                if (settings.releaseDiffStepBeforeVocoder !== true) {
-                    console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings.releaseDiffStepBeforeVocoder=${settings.releaseDiffStepBeforeVocoder})`);
-                    return false;
-                }
-            } catch (e) {
-                console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings load failed: ${e.message})`);
-                return false;
-            }
+            console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: OOM retry release');
         }
 
         console.log('[OnnxSVSPipeline] Temporarily releasing diffStep session before vocoder inference to free VRAM...');
@@ -1969,7 +1965,7 @@ class OnnxSVSPipeline {
         if (this.sessions.diffStep) return; // 已重载或并发已加载
         console.log('[OnnxSVSPipeline] Reloading diffStep session after vocoder inference...');
         try {
-            const result = await this.loadModel('diffStep');
+            const result = await this.loadModel('diffStep', { runValidation: false });
             if (result.success) {
                 console.log(`[OnnxSVSPipeline] diffStep reloaded [${result.ep || 'unknown'}]`);
             } else {
@@ -2428,53 +2424,25 @@ class OnnxSVSPipeline {
                 }
 
                 if (refMedian !== null || refMedianPitch !== null) {
-                    // 构建子段并计算局部 autoShift
-                    const segs = this._buildAutoShiftSegments(filledNotes, bpm);
-                    if (segs.length > 1) {
-                        localSegShifts = [];
-                        for (const seg of segs) {
-                            const segPitches = seg.notes.filter(n => n.pitch >= 1).map(n => n.pitch);
-                            let segShift = 0;
-                            if (refMedian !== null) {
-                                const segTargetF0 = this.buildF0FrameSequence(seg.notes, bpm, f0Envelope, pitchCurveF0);
-                                const segNonZero = [];
-                                for (let i = 0; i < segTargetF0.length; i++) {
-                                    if (segTargetF0[i] > 0) segNonZero.push(segTargetF0[i]);
-                                }
-                                if (segNonZero.length > 0) {
-                                    const segTargetMedian = this._median(segNonZero);
-                                    segShift = Math.round(Math.log2(refMedian / segTargetMedian) * 1200 / 100);
-                                }
-                            } else if (refMedianPitch !== null && segPitches.length > 0) {
-                                segShift = Math.round(refMedianPitch - this._median(segPitches));
-                            }
-                            segShift = this._clampAutoShift(segShift, segPitches);
-                            if (this.languageOverride === 'ja' && segPitches.length > 0) {
-                                segShift = this._clampJpPitchRange(segShift, segPitches);
-                            }
-                            localSegShifts.push({
-                                startBeat: seg.startBeat,
-                                endBeat: seg.endBeat,
-                                f0Shift: segShift,
-                            });
-                        }
-                        f0Shift = localSegShifts[0].f0Shift; // 用于日志和缓存 key
-                        console.log(`[MultiStream] Fragment ${fi}: local autoShift, ${localSegShifts.length} segments, shifts=[${localSegShifts.map(s => s.f0Shift).join(', ')}]`);
-                    } else {
-                        // 单子段：退化为全局 autoShift
-                        const targetF0 = this.buildF0FrameSequence(filledNotes, bpm, f0Envelope, pitchCurveF0);
-                        const targetNonZero = [];
-                        for (let i = 0; i < targetF0.length; i++) {
-                            if (targetF0[i] > 0) targetNonZero.push(targetF0[i]);
-                        }
-                        if (refMedian !== null && targetNonZero.length > 0) {
-                            const targetMedian = this._median(targetNonZero);
-                            f0Shift = Math.round(Math.log2(refMedian / targetMedian) * 1200 / 100);
-                        } else if (refMedianPitch !== null && targetNotePitches.length > 0) {
-                            f0Shift = Math.round(refMedianPitch - this._median(targetNotePitches));
-                        }
-                        f0Shift = this._clampAutoShift(f0Shift, targetNotePitches);
+                    // Use one shift for the whole fragment. Reusing the same
+                    // short reference median for every local musical phrase
+                    // can make adjacent phrases alternate between +12/-12,
+                    // which destroys absolute MIDI pitch and weakens speaker
+                    // conditioning. Smart segmentation still controls
+                    // diffusion chunk boundaries, but never retunes phrases.
+                    const targetF0 = this.buildF0FrameSequence(filledNotes, bpm, f0Envelope, pitchCurveF0);
+                    const targetNonZero = [];
+                    for (let i = 0; i < targetF0.length; i++) {
+                        if (targetF0[i] > 0) targetNonZero.push(targetF0[i]);
                     }
+                    if (refMedian !== null && targetNonZero.length > 0) {
+                        const targetMedian = this._median(targetNonZero);
+                        f0Shift = Math.round(Math.log2(refMedian / targetMedian) * 1200 / 100);
+                    } else if (refMedianPitch !== null && targetNotePitches.length > 0) {
+                        f0Shift = Math.round(refMedianPitch - this._median(targetNotePitches));
+                    }
+                    f0Shift = this._clampAutoShift(f0Shift, targetNotePitches);
+                    console.log(`[MultiStream] Fragment ${fi}: global autoShift=${f0Shift}`);
                 }
             } else {
                 f0Shift = pitchShift;
@@ -3482,7 +3450,7 @@ class OnnxSVSPipeline {
     /**
      * 加载指定Model
      */
-    async loadModel(sessionKey) {
+    async loadModel(sessionKey, options = {}) {
         if (this.sessions[sessionKey]) {
             return { success: true, alreadyLoaded: true };
         }
@@ -3567,7 +3535,7 @@ class OnnxSVSPipeline {
         const sifiganDummy = isSifigan ? this._getSifiganDummyInputs() : null;
         try {
             const { session, ep } = await createSessionWithValidation(
-                modelPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes, sifiganDummy
+                modelPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes, sifiganDummy, options.runValidation !== false
             );
             this.sessions[sessionKey] = session;
             this.sessionEPs[sessionKey] = ep;
@@ -3580,7 +3548,7 @@ class OnnxSVSPipeline {
                 console.warn(`[OnnxSVSPipeline] ${resolvedFile} NPU load failed, trying fallback: ${err.message.substring(0, 80)}`);
                 try {
                     const { session, ep } = await createSessionWithValidation(
-                        fallbackPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false, sifiganDummy
+                        fallbackPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false, sifiganDummy, options.runValidation !== false
                     );
                     this.sessions[sessionKey] = session;
                     this.sessionEPs[sessionKey] = ep;
@@ -3606,7 +3574,7 @@ class OnnxSVSPipeline {
                 if (fp32Exists) {
                     try {
                         const { session, ep } = await createSessionWithValidation(
-                            fp32Path, sessionKey, this.gpuDeviceName, this.dmlDeviceId, false, this.useStaticShapes, sifiganDummy
+                            fp32Path, sessionKey, this.gpuDeviceName, this.dmlDeviceId, false, this.useStaticShapes, sifiganDummy, options.runValidation !== false
                         );
                         this.sessions[sessionKey] = session;
                         this.sessionEPs[sessionKey] = ep;

@@ -486,8 +486,15 @@ async function detectBestDevice(modelDir, npuAvailable = false) {
     };
 }
 
-async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null) {
+const _validatedSessionModels = new Set();
+
+async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {
     const modelName = path.basename(modelPath);
+    // Validation/warmup is a once-per-process action for each concrete model
+    // file. Session recreation after VRAM release, language swaps, or model
+    // offloading must not run an extra dummy inference.
+    const validationKey = `${path.resolve(modelPath)}::${sessionKey}`;
+    runValidation = runValidation && !_validatedSessionModels.has(validationKey);
     // overrideDummyInputs: 调用方可传入自定义 dummy 输入（如 SiFiGAN 双输入 mel+f0），为 null 时走原有查找逻辑
     const dummyInputs = overrideDummyInputs || (useStaticShapes
         ? DUMMY_TEST_INPUTS_NPU[sessionKey]
@@ -560,10 +567,15 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         });
         console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify(sessionOptions));
         dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
-        console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
-        await _runWithPrecisionFallback(dmlSession, 'DML');
-        console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
-        return { session: dmlSession, ep: 'dml', warmedUp: true };
+        if (runValidation) {
+            console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
+            await _runWithPrecisionFallback(dmlSession, 'DML');
+            _validatedSessionModels.add(validationKey);
+            console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
+        } else {
+            console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (reload, validation skipped)`);
+        }
+        return { session: dmlSession, ep: 'dml', warmedUp: runValidation };
     } catch (dmlErr) {
         if (dmlSession) {
             try { dmlSession.release(); } catch (e) {
@@ -587,13 +599,16 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             try {
                 const dmlModelSession = await ort.InferenceSession.create(dmlModelPath,
                     buildSessionOptions({ executionProviders: ['cpu'] }));
-                try {
-                    await _runWithPrecisionFallback(dmlModelSession, 'DML-optimized');
-                } catch (runErr) {
-                    try { dmlModelSession.release(); } catch (_) {}
-                    throw runErr;
+                if (runValidation) {
+                    try {
+                        await _runWithPrecisionFallback(dmlModelSession, 'DML-optimized');
+                    } catch (runErr) {
+                        try { dmlModelSession.release(); } catch (_) {}
+                        throw runErr;
+                    }
+                    _validatedSessionModels.add(validationKey);
                 }
-                return { session: dmlModelSession, ep: 'cpu', warmedUp: true };
+                return { session: dmlModelSession, ep: 'cpu', warmedUp: runValidation };
             } catch (dmlModelErr) {
                 console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} DML-optimized model load failed: ${dmlModelErr.message.substring(0, 60).split('\n')[0]}`);
             }
@@ -602,6 +617,10 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
 
     const cpuSession = await ort.InferenceSession.create(modelPath,
         buildSessionOptions({ executionProviders: ['cpu'] }));
+    if (!runValidation) {
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (reload, validation skipped)`);
+        return { session: cpuSession, ep: 'cpu', warmedUp: false };
+    }
     try {
         await _runWithPrecisionFallback(cpuSession, 'CPU');
     } catch (runErr) {
@@ -624,6 +643,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         try { cpuSession.release(); } catch (_) {}
         throw runErr;
     }
+    _validatedSessionModels.add(validationKey);
     console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (inference verified)`);
     return { session: cpuSession, ep: 'cpu', warmedUp: true };
 }

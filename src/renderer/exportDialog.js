@@ -1009,11 +1009,13 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
       // Dynamic thresholding (export path)
       dynamicThresholdEnabled: form.exportDynamicThresholdEnabled,
       dynamicThresholdPercentile: form.exportDynamicThresholdPercentile,
-      onFragmentProgress: (p) => {
-        setStatus('progressSynthesizing', { progress: p });
-      },
+      // Keep the status percentage and progress bar on the same
+      // whole-export scale. Per-fragment progress resets to 0 for every
+      // fragment and previously made the two percentages disagree.
+      onFragmentProgress: () => {},
       onOverallProgress: (pct) => {
         setProgress(pct);
+        setStatus('progressSynthesizing', { progress: pct });
       },
       onStatus: (statusKey) => {
         setStatus(statusKey);

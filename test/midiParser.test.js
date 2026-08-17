@@ -158,7 +158,7 @@ describe('MIDI Parser', () => {
     expect(result[1].lyric).to.equal('b');
   });
 
-  it('should insert SP notes for gaps > 0.2s', () => {
+  it('should preserve MIDI gaps without creating visible C-1 notes', () => {
     const tempo = 500000;
     const ticksPerBeat = 480;
     const gapTicks = Math.ceil(0.3 / (tempo / 1000000) * ticksPerBeat);
@@ -175,8 +175,9 @@ describe('MIDI Parser', () => {
     });
 
     const result = parseMidiFile(buffer);
-    const spNotes = result.filter(n => n.pitch === 0);
-    expect(spNotes.length).to.be.at.least(1);
+    expect(result.map(n => n.pitch)).to.deep.equal([60, 62]);
+    expect(result[0].duration).to.equal(1);
+    expect(result[1].start).to.be.greaterThan(result[0].start + result[0].duration);
   });
 
   it('should determine note_type correctly', () => {

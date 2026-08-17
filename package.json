@@ -74,7 +74,8 @@
     "onnxruntime-node": "^1.27.0",
     "onnxruntime-web": "^1.27.0",
     "pinyin-pro": "^3.28.1",
-    "systeminformation": "^5.31.9"
+    "systeminformation": "^5.31.9",
+    "iconv-lite": "^0.4.24"
   },
   "optionalDependencies": {
     "nan": "^2.27.0"
