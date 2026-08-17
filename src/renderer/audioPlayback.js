@@ -174,6 +174,7 @@ export async function playAll() {
   // 使后续进度回调失效（进度百分比偶发不显示的根因之一）。
   if (state.isSynthesizing) return;
   state.isSynthesizing = true;
+  state.synthesisCancelled = false;
   dom.btnPlay.disabled = true;
   dom.btnPlay.textContent = t('main.synthesizing');
 
@@ -338,9 +339,10 @@ export async function playAll() {
             if (!streamingStarted) {
               streamingStarted = true;
               _streamingFirstChunkOffsetSec = chunkStartSec;
-              state.playbackStartTime = ctx.currentTime + 0.05 - chunkStartSec;
+              state.playbackStartTime = ctx.currentTime + 0.05;
               state.playbackPauseOffset = 0;
               state.isPlaying = true;
+              if (dom.btnPause) dom.btnPause.textContent = t('main.pause');
               startPlayheadAnimation();
 
               // Schedule accompaniment tracks as independent BufferSources
@@ -944,6 +946,7 @@ export function pausePlayback() {
     }
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
+    if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
     return;
   }
 
@@ -959,6 +962,7 @@ export function pausePlayback() {
     }
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
+    if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
   } else {
     if (!state.currentAudioSource) return;
     const context = getAudioContext();
@@ -969,10 +973,15 @@ export function pausePlayback() {
     // stopAudioSource 已 cancel rAF，但不会清除画布；这里手动绘制暂停态播放头
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
+    if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
   }
 }
 
 export function stopPlayback() {
+  if (state.isSynthesizing) {
+    state.synthesisCancelled = true;
+    window.electronAPI.cancelSVSSynthesis().catch(() => {});
+  }
   // 停止流式播放
   if (state.streamingSources && state.streamingSources.length > 0) {
     state.streamingFinished = true;
@@ -994,6 +1003,7 @@ export function stopPlayback() {
   state.currentAudioData = null;
   state.currentAudioBuffer = null;
   dom.timeDisplay.textContent = formatTime(0);
+  if (dom.btnPause) dom.btnPause.textContent = t('main.pause');
 }
 
 /**

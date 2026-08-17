@@ -30,8 +30,8 @@ const ENUM_SETTINGS = {
 const NUMERIC_SETTINGS = {
   previewDiffSteps: [4, 64, 16], previewCfgStrength: [0, 10, 3], previewCfgRescale: [0, 1, 0.75],
   previewDiffStepChunkFrames: [100, 2000, 500], previewDiffStepOverlapFrames: [0, 200, 50],
-  exportDiffSteps: [4, 64, 32], exportCfgStrength: [0, 10, 3], exportCfgRescale: [0, 1, 0.75],
-  audioSampleRate: [8000, 192000, 24000], audioBufferSize: [64, 4096, 1024], audioVolume: [0, 1, 1],
+  exportDiffSteps: [4, 64, 32], exportCfgStrength: [0, 10, 3], exportCfgRescale: [0, 1, 0.75], exportSampleRate: [24000, 96000, 48000],
+  audioSampleRate: [8000, 192000, 48000], audioBufferSize: [64, 4096, 1024], audioVolume: [0, 1, 1],
   vocoderChunkFrames: [256, 4096, 1024], ortIntraOpNumThreads: [0, 64, 0], ortInterOpNumThreads: [0, 64, 0],
   npuDiffBatchSize: [1, 4, 1], npuVocoderBatchSize: [1, 4, 1],
   fcpeF0Min: [20, 2000, 80], fcpeF0Max: [20, 2000, 880],
@@ -49,7 +49,8 @@ function normalizeSettings(settings) {
     const n = Number(out[key]);
     out[key] = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
   }
-  if (out.audioSampleRate !== undefined && ![22050, 24000, 44100, 48000, 96000, 192000].includes(out.audioSampleRate)) out.audioSampleRate = 24000;
+  if (out.audioSampleRate !== undefined && ![22050, 24000, 44100, 48000, 96000, 192000].includes(out.audioSampleRate)) out.audioSampleRate = 48000;
+  if (out.exportSampleRate !== undefined && ![24000, 44100, 48000, 96000].includes(out.exportSampleRate)) out.exportSampleRate = 48000;
   if (out.audioBufferSize !== undefined && ![64, 128, 256, 512, 1024, 2048, 4096].includes(out.audioBufferSize)) out.audioBufferSize = 1024;
   if (out.preferredDeviceId !== undefined && out.preferredDeviceId !== null && out.preferredDeviceId !== 'npu' && out.preferredDeviceId !== 'webnn-gpu' && !Number.isInteger(out.preferredDeviceId)) delete out.preferredDeviceId;
   if (out.modelDeviceMapping !== undefined && (typeof out.modelDeviceMapping !== 'object' || out.modelDeviceMapping === null || Array.isArray(out.modelDeviceMapping))) out.modelDeviceMapping = {};
@@ -80,6 +81,9 @@ function loadSettings() {
     console.warn('[Main] Failed to load settings, using defaults:', err.message);
     _settingsCache = {};
   }
+  if (!Number.isFinite(_settingsCache.audioSampleRate)) _settingsCache.audioSampleRate = 48000;
+  if (![24000, 44100, 48000, 96000].includes(_settingsCache.exportSampleRate)) _settingsCache.exportSampleRate = 48000;
+
   // Merge defaults for theme fields
   if (typeof _settingsCache.theme !== 'string') {
     _settingsCache.theme = DEFAULT_THEME;
@@ -398,7 +402,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'previewDiffSteps', 'previewCfgStrength', 'previewCfgRescale', 'previewSampler',
   'previewDiffStepChunkEnabled', 'previewDiffStepChunkFrames', 'previewDiffStepOverlapFrames',
   'exportDiffSteps', 'exportCfgStrength', 'exportCfgRescale', 'exportSampler',
-  'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth',
+  'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth', 'exportSampleRate',
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',

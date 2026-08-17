@@ -10,6 +10,7 @@ export default {
   main: {
     play: 'Play',
     pause: 'Pause',
+    continue: 'Continue',
     stop: 'Stop',
     save: 'Save',
     load: 'Load',
@@ -89,6 +90,9 @@ export default {
       vocoderChunkFrames: 'Chunk length (frames)',
       releaseDmlVram: 'Release DirectML VRAM after synthesis',
       releaseDiffStep: 'Release diffStep before vocoder inference',
+      sampleRate: 'Export Sample Rate',
+      sampleRateHint: 'Final resampling rate used for the exported WAV. Defaults to 48 kHz and can be selected per export.',
+      sampleRateDefault: 'Default',
       outputSection: 'Export Location',
       outputHint: 'Choose the WAV file save path',
       browse: 'Browse...',

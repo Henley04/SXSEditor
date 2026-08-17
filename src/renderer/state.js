@@ -18,6 +18,7 @@ export const state = {
   playbackPauseOffset: 0,
   isPlaying: false,
   isSynthesizing: false,
+  synthesisCancelled: false,
   playheadRaf: null,
   currentAudioData: null,
   currentAudioChannels: null,

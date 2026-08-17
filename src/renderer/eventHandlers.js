@@ -176,9 +176,12 @@ dom.btnPlay.addEventListener('click', async () => {
   }
 });
 
-dom.btnPause.addEventListener('click', () => {
+dom.btnPause.addEventListener('click', async () => {
   if (state.isPlaying) {
     pausePlayback();
+  } else if (state.currentAudioData && state.currentAudioData.length > 0) {
+    await startAudioPlayback(state.playbackPauseOffset || 0);
+    dom.btnPause.textContent = t('main.pause');
   }
 });
 

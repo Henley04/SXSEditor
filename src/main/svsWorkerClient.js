@@ -107,6 +107,19 @@ class SvsWorkerClient {
   clearSynthCache() { return this._call('clearSynthCache'); }
   isModelLoaded(key) { return this.loadedModels.has(key); }
   getHardwareInfo() { return this.hardwareInfo; }
+  async cancelActiveSynthesis() {
+    if (!this.worker) return;
+    const err = new Error('Synthesis cancelled');
+    err.code = 'SYNTHESIS_CANCELLED';
+    for (const { reject } of this.pending.values()) reject(err);
+    this.pending.clear();
+    const worker = this.worker;
+    this.worker = null;
+    this.readyPromise = null;
+    this.initialized = false;
+    try { await worker.terminate(); } catch (_) {}
+  }
+
   async dispose() {
     if (!this.worker) return;
     try { await this._call('dispose'); } catch (_) {}

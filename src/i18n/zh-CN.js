@@ -10,6 +10,7 @@ export default {
   main: {
     play: '播放',
     pause: '暂停',
+    continue: '继续',
     stop: '停止',
     save: '保存',
     load: '加载',
@@ -89,6 +90,9 @@ export default {
       vocoderChunkFrames: '分片长度（帧）',
       releaseDmlVram: '合成后释放 DirectML 显存',
       releaseDiffStep: 'Vocoder 推理前释放 diffStep',
+      sampleRate: '导出采样率',
+      sampleRateHint: 'WAV 导出前的最终重采样率。默认 48 kHz，可按项目需要手动选择。',
+      sampleRateDefault: '默认',
       outputSection: '导出位置',
       outputHint: '选择 WAV 文件保存路径',
       browse: '浏览...',

@@ -20,6 +20,26 @@ import { createIcon } from '../icons/iconHelper.js';
 
 // ==================== 常量 ====================
 
+function resampleForExport(interleaved, sourceRate, targetRate, channels) {
+  if (sourceRate === targetRate) return interleaved;
+  const sourceFrames = Math.floor(interleaved.length / channels);
+  const targetFrames = Math.max(1, Math.round(sourceFrames * targetRate / sourceRate));
+  const output = new Float32Array(targetFrames * channels);
+  for (let frame = 0; frame < targetFrames; frame++) {
+    const sourcePosition = frame * sourceRate / targetRate;
+    const left = Math.min(sourceFrames - 1, Math.floor(sourcePosition));
+    const right = Math.min(sourceFrames - 1, left + 1);
+    const mix = sourcePosition - left;
+    for (let channel = 0; channel < channels; channel++) {
+      const a = interleaved[left * channels + channel];
+      const b = interleaved[right * channels + channel];
+      output[frame * channels + channel] = a + (b - a) * mix;
+    }
+  }
+  return output;
+}
+
+
 const PRECISION_OPTIONS = [
   { value: 'fp16', nameKey: 'main.exportDialog.precisionFp16Name', descKey: 'main.exportDialog.precisionFp16Desc' },
   { value: 'fp32', nameKey: 'main.exportDialog.precisionFp32Name', descKey: 'main.exportDialog.precisionFp32Desc' },
@@ -72,7 +92,7 @@ export async function openExportDialog() {
       exportCfgRescale: settings.exportCfgRescale ?? 0.7,
       exportSampler: settings.exportSampler || 'euler',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
-      smartSegmentation: settings.smartSegmentation !== false,
+      outputSampleRate: [24000, 44100, 48000, 96000].includes(settings.exportSampleRate) ? settings.exportSampleRate : 48000,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
       sifiganPrecision: settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32',
       vocoderChunkMode: settings.vocoderChunkMode === 'manual' ? 'manual' : 'smart',
@@ -336,15 +356,29 @@ function buildParamsSection(form) {
     },
   }));
 
-  // Smart Segmentation 复选框（智能分段推理）
-  section.appendChild(buildCheckboxField({
-    labelKey: 'main.exportDialog.smartSegmentation',
-    descKey: 'main.exportDialog.smartSegmentationHint',
-    checked: form.smartSegmentation,
-    onChange: (v) => {
-      form.smartSegmentation = v;
-    },
-  }));
+
+
+  const sampleRateField = document.createElement('div');
+  sampleRateField.className = 'export-dialog-field';
+  const sampleRateLabel = document.createElement('div');
+  sampleRateLabel.className = 'export-dialog-field-label';
+  sampleRateLabel.textContent = t('main.exportDialog.sampleRate');
+  sampleRateField.appendChild(sampleRateLabel);
+  const sampleRateHint = document.createElement('div');
+  sampleRateHint.className = 'export-dialog-field-hint';
+  sampleRateHint.textContent = t('main.exportDialog.sampleRateHint');
+  sampleRateField.appendChild(sampleRateHint);
+  const sampleRateSelect = document.createElement('select');
+  for (const rate of [24000, 44100, 48000, 96000]) {
+    const option = document.createElement('option');
+    option.value = String(rate);
+    option.textContent = `${rate} Hz${rate === 48000 ? ` (${t('main.exportDialog.sampleRateDefault')})` : ''}`;
+    sampleRateSelect.appendChild(option);
+  }
+  sampleRateSelect.value = String(form.outputSampleRate);
+  sampleRateSelect.addEventListener('change', () => { form.outputSampleRate = Number(sampleRateSelect.value); });
+  sampleRateField.appendChild(sampleRateSelect);
+  section.appendChild(sampleRateField);
 
   return section;
 }
@@ -903,7 +937,7 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     enableLoudnormFinal: form.enableLoudnormFinal,
     enableAntiAliasing: form.enableAntiAliasing,
     enableSDEditRepair: form.enableSDEditRepair,
-    smartSegmentation: form.smartSegmentation,
+    exportSampleRate: form.outputSampleRate,
   };
 
   // 禁用开始按钮，显示保存中状态
@@ -1001,7 +1035,6 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
       cfgRescale: form.exportCfgRescale,
       sampler: form.exportSampler,
       autoShift: form.autoShift,
-      smartSegmentation: form.smartSegmentation,
       // Task 11: CFG schedule opts
       cfgScheduleMode: form.exportCfgScheduleMode,
       cfgStrengthStart: form.exportCfgStrengthStart,
@@ -1028,7 +1061,8 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     // 编码 WAV
     // B2: wavEncoder.js is now CommonJS — use require instead of dynamic import.
     const { encodeWav } = require('../audio/wavEncoder.js');
-    const wavData = encodeWav(mixedAudio, SAMPLE_RATE, numChannels || 1);
+    const outputAudio = resampleForExport(mixedAudio, SAMPLE_RATE, form.outputSampleRate, numChannels || 1);
+    const wavData = encodeWav(outputAudio, form.outputSampleRate, numChannels || 1);
 
     setStatus('progressSaving');
     setProgress(98);

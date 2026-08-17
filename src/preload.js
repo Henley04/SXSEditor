@@ -109,6 +109,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   initSVSPipeline: () => ipcRenderer.invoke('svs:init'),
   synthesizeSVS: (data) => ipcRenderer.invoke('svs:synthesize', data),
   synthesizeMultiStreaming: (data) => ipcRenderer.invoke('svs:synthesizeMultiStreaming', data),
+  cancelSVSSynthesis: () => ipcRenderer.invoke('svs:cancel'),
   disposeSVSPipeline: () => ipcRenderer.invoke('svs:dispose'),
   onSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);

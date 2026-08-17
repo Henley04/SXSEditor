@@ -240,6 +240,18 @@ function registerSvsIpc() {
     }
   });
 
+  ipcMain.handle('svs:cancel', async () => {
+    const pipeline = svsPipelineLazy.getInstance();
+    if (pipeline && typeof pipeline.cancelActiveSynthesis === 'function') {
+      await pipeline.cancelActiveSynthesis();
+      svsPipelineLazy.reset();
+      currentLanguage = null;
+      return { success: true };
+    }
+    resetSvsPipeline();
+    return { success: true };
+  });
+
   ipcMain.handle('svs:dispose', async () => {
     resetSvsPipeline();
     return { success: true };

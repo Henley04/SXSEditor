@@ -26,6 +26,7 @@ function _validateMidiBuffer(buffer) {
  * Returns:
  *   {
  *     byChannel: Map<channel, Array<{ticks, text}>>,
+ *     byTrack: Map<trackIndex, Array<{ticks, text}>>,
  *     global: Array<{ticks, text}>   // lyrics from tracks with no notes
  *   }
  */
@@ -33,6 +34,7 @@ function _extractRawLyrics(buffer) {
   const view = new DataView(buffer);
   const numTracks = _readUint16(view, 10);
   const byChannel = new Map();
+  const byTrack = new Map();
   const global = [];
   let off = 14;
 
@@ -129,6 +131,7 @@ function _extractRawLyrics(buffer) {
     }
 
     if (trackLyrics.length > 0) {
+      byTrack.set(t, trackLyrics.slice());
       if (trackHasNotes && trackChannel >= 0) {
         if (!byChannel.has(trackChannel)) byChannel.set(trackChannel, []);
         byChannel.get(trackChannel).push(...trackLyrics);
@@ -142,7 +145,7 @@ function _extractRawLyrics(buffer) {
     off = trackEnd;
   }
 
-  return { byChannel, global };
+  return { byChannel, byTrack, global };
 }
 
 /**
@@ -286,7 +289,7 @@ function parseMidiFile(buffer) {
   const ticksPerBeat = midi.header.ppq;
 
   const rawNotes = [];
-  for (const track of midi.tracks) {
+  for (const [trackIndex, track] of midi.tracks.entries()) {
     if (track.instrument.percussion) continue;
     for (const note of track.notes) {
       rawNotes.push({
@@ -352,7 +355,7 @@ function parseMidiFileMultiTrack(buffer) {
   // own lyrics. Use tonejs header lyrics only as a fallback when raw
   // extraction finds nothing (avoids duplicating lyrics that tonejs already
   // hoisted from track 0 to the header).
-  const { byChannel: rawByChannel, global: rawGlobal } = _extractRawLyrics(buffer);
+  const { byChannel: rawByChannel, byTrack: rawByTrack, global: rawGlobal } = _extractRawLyrics(buffer);
   const hasRawLyrics = rawGlobal.length > 0
     || [...rawByChannel.values()].some((v) => v.length > 0);
   const headerLyrics = hasRawLyrics
@@ -363,7 +366,7 @@ function parseMidiFileMultiTrack(buffer) {
   const globalLyrics = [...rawGlobal, ...headerLyrics];
 
   const result = [];
-  for (const track of midi.tracks) {
+  for (const [trackIndex, track] of midi.tracks.entries()) {
     if (track.instrument.percussion) continue;
     if (track.notes.length === 0) continue;
 
@@ -377,10 +380,13 @@ function parseMidiFileMultiTrack(buffer) {
 
     // Prefer lyrics extracted from this track's channel; fall back to global
     // lyrics (header / tempo track) when the channel has none.
+    const exactTrackLyrics = rawByTrack.get(trackIndex);
     const channelLyrics = rawByChannel.get(track.channel);
-    const trackLyrics = channelLyrics && channelLyrics.length > 0
-      ? channelLyrics
-      : globalLyrics;
+    const trackLyrics = exactTrackLyrics && exactTrackLyrics.length > 0
+      ? exactTrackLyrics
+      : channelLyrics && channelLyrics.length > 0
+        ? channelLyrics
+        : globalLyrics;
 
     const notes = _processTrackNotes(
       rawNotes,
