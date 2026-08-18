@@ -9,6 +9,21 @@ let pipeline = null;
 let rmvpe = null;
 let currentLanguage = workerData.language || null;
 let queue = Promise.resolve();
+// 协作式取消：记录每个合成请求对应的 AbortController，取消时 abort 而非杀线程。
+// 合成结束（成功/失败）都会删除自身 id，避免 Map 累积泄漏。
+const activeControllers = new Map();
+
+function abortRequest(requestId) {
+  if (requestId != null) {
+    const c = activeControllers.get(requestId);
+    if (c) { c.abort(); return true; }
+  }
+  // 未提供有效 id 时回退到最近一次请求，保证取消总能命中活跃合成。
+  const entries = Array.from(activeControllers.entries());
+  if (entries.length === 0) return false;
+  activeControllers.get(entries[entries.length - 1][0]).abort();
+  return true;
+}
 
 function serializeError(err) {
   return { message: err?.message || String(err), code: err?.code, stack: err?.stack };
@@ -78,18 +93,36 @@ async function handle(msg) {
     case 'synthesize': {
       const p = await ensurePipeline(args.language);
       const options = attachCallbacks(id, args.options);
-      if (options.autoShift && options.refAudioWavBuffer) options.refF0Extractor = await getRefF0Extractor();
-      return p.synthesize(args.notes, args.bpm, options);
+      const controller = new AbortController();
+      activeControllers.set(id, controller);
+      options.abortSignal = controller.signal;
+      try {
+        if (options.autoShift && options.refAudioWavBuffer) options.refF0Extractor = await getRefF0Extractor();
+        return await p.synthesize(args.notes, args.bpm, options);
+      } finally {
+        activeControllers.delete(id);
+      }
     }
     case 'synthesizeMultiStreaming': {
       const p = await ensurePipeline(args.language);
       const options = attachCallbacks(id, args.options);
-      for (const fragment of args.fragments || []) {
-        if (fragment.options?.autoShift && fragment.options?.refAudioWavBuffer) {
-          fragment.options = { ...fragment.options, refF0Extractor: await getRefF0Extractor() };
+      const controller = new AbortController();
+      activeControllers.set(id, controller);
+      options.abortSignal = controller.signal;
+      try {
+        for (const fragment of args.fragments || []) {
+          if (fragment.options?.autoShift && fragment.options?.refAudioWavBuffer) {
+            fragment.options = { ...fragment.options, refF0Extractor: await getRefF0Extractor() };
+          }
         }
+        return await p.synthesizeMultiStreaming(args.fragments, args.bpm, options);
+      } finally {
+        activeControllers.delete(id);
       }
-      return p.synthesizeMultiStreaming(args.fragments, args.bpm, options);
+    }
+    case 'cancel': {
+      abortRequest(args.requestId);
+      return { success: true };
     }
     case 'resolvePhonemes': {
       const p = await ensurePipeline(args.language);
@@ -119,6 +152,13 @@ async function handle(msg) {
 }
 
 parentPort.on('message', msg => {
+  // 协作式取消：cancel 必须绕过串行合成队列立即执行，否则它会排在
+  // 正在运行的合成之后，永远无法中断当前推理。
+  if (msg.command === 'cancel') {
+    abortRequest(msg.args?.requestId);
+    parentPort.postMessage({ type: 'result', id: msg.id, result: { success: true }, state: snapshot() });
+    return;
+  }
   queue = queue.then(async () => {
     try {
       const result = await handle(msg);

@@ -1,6 +1,6 @@
 const ort = require('onnxruntime-node');
 const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
-const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16 } = require('./utils');
+const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16, throwIfCancelled } = require('./utils');
 const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
@@ -322,7 +322,7 @@ class Diffusion {
      *
      * @param {string} [samplerName='euler'] - 求解器名称，见 samplers/index.js
      */
-    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null) {
+    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null) {
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
@@ -671,6 +671,9 @@ class Diffusion {
         try {
             let totalNFE = 0;
             for (let step = 0; step < totalSteps; step++) {
+                // 协作式取消检查点：每步推理前检查，因 session.run 是异步的，
+                // 事件循环能在 await 期间处理 cancel 消息，这里即可及时抛出。
+                throwIfCancelled(abortSignal);
                 currentStep = step;
                 const { nfe } = await sampler.step({
                     evalDiffStep, combine, step, totalSteps,
@@ -1028,9 +1031,12 @@ class Diffusion {
      * @returns {Promise<{newCommitted: number}>} 本块完成后新确定的帧数（不含重叠区，末尾块为 chunkEnd）
      */
     async _runSingleDiffusionChunk(ctx, spec, onProgress, progressStart, progressRange) {
-        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, cfgScheduleOpts, dynamicThresholdOpts } = ctx;
+        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, cfgScheduleOpts, dynamicThresholdOpts, abortSignal } = ctx;
         const { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast } = spec;
         const xtOut = xt.data;
+
+        // 协作式取消检查点：进入分块体前检查（runDiffusionLoop 内部每步也会检查）。
+        throwIfCancelled(abortSignal);
 
         // 1. 提取当前块的噪声
         const chunkNoise = new Float32Array(currentChunkFrames * MEL_DIM);
@@ -1055,7 +1061,7 @@ class Diffusion {
         await this.runDiffusionLoop(
             sessions, subXt, currentChunkFrames, ptMelData, ptFrameCount,
             chunkCond, totalSteps, cfgStrength, cfgRescale, isFP16,
-            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName, cfgScheduleOpts, dynamicThresholdOpts
+            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal
         );
 
         // 4. WSOLA mel 域交叉淡入淡出写回（取代对称 Hann 加权混合）
@@ -1092,7 +1098,7 @@ class Diffusion {
         return { newCommitted };
     }
 
-    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames, onChunkMel = null, samplerName = DEFAULT_SOLVER, pitchCurveF0 = null, cfgScheduleOpts = null, dynamicThresholdOpts = null) {
+    async runDiffusionLoopChunked(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, chunkFrames, overlapFrames, onChunkMel = null, samplerName = DEFAULT_SOLVER, pitchCurveF0 = null, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null) {
         // Task 15: compute per-frame F0 slope from pitchCurveF0 for F0-aware
         // chunk boundary selection. f0Slope[i] = f0[i+1] - f0[i], with 0 at the
         // last index. When pitchCurveF0 is null/undefined or too short, f0Slope
@@ -1110,19 +1116,21 @@ class Diffusion {
         const plan = this._planChunks(totalFrames, chunkFrames, overlapFrames, f0Slope);
         if (!plan) {
             // 无需分块，直接整段推理
-            return this.runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, samplerName, cfgScheduleOpts, dynamicThresholdOpts);
+            return this.runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal);
         }
 
         const { specs, overlap } = plan;
         const totalChunks = specs.length;
         console.log(`[DiffusionChunk] Chunked diffusion: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, chunkFrames=${chunkFrames}, overlap=${overlap}, steps=${totalSteps}, chunks=${totalChunks}, sampler=${samplerName}`);
 
-        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, samplerName, cfgScheduleOpts, dynamicThresholdOpts };
+        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal };
         const progressPerChunk = progressRange / totalChunks;
         let committedFrames = 0;
 
         try {
             for (let ci = 0; ci < totalChunks; ci++) {
+                // 协作式取消检查点：块间检查，取消后立即退出分块循环。
+                throwIfCancelled(abortSignal);
                 const spec = specs[ci];
                 console.log(`[DiffusionChunk] chunk ${ci}/${totalChunks}: frames[${spec.chunkStart},${spec.chunkEnd})=${spec.currentChunkFrames}frames`);
 

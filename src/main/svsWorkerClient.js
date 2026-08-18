@@ -17,6 +17,7 @@ class SvsWorkerClient {
     this.readyPromise = null;
     this.nextId = 0;
     this.pending = new Map();
+    this.activeSynthId = null;
     this.initialized = false;
     this.sessionEPs = {};
     this.loadedModels = new Set();
@@ -74,6 +75,10 @@ class SvsWorkerClient {
   async _call(command, args = {}, callbacks = {}) {
     await this._ensureWorker();
     const id = ++this.nextId;
+    // 记录合成类命令的请求 ID，用于协同式取消
+    if (command === 'synthesize' || command === 'synthesizeMultiStreaming') {
+      this.activeSynthId = id;
+    }
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, ...callbacks });
       this.worker.postMessage({ id, command, args });
@@ -109,15 +114,19 @@ class SvsWorkerClient {
   getHardwareInfo() { return this.hardwareInfo; }
   async cancelActiveSynthesis() {
     if (!this.worker) return;
+    const targetId = this.activeSynthId;
+    this.activeSynthId = null;
     const err = new Error('Synthesis cancelled');
     err.code = 'SYNTHESIS_CANCELLED';
     for (const { reject } of this.pending.values()) reject(err);
     this.pending.clear();
-    const worker = this.worker;
-    this.worker = null;
-    this.readyPromise = null;
-    this.initialized = false;
-    try { await worker.terminate(); } catch (_) {}
+    // 协作式取消：向 worker 发送 cancel 命令，让它通过 abort 信号的检查点
+    //（diffusion 每步/每块之间）安全退出并抛出 SYNTHESIS_CANCELLED。
+    // worker 线程保持存活，避免 worker.terminate() 强杀 GPU 推理导致 D3D device
+    // hung → 主进程原生崩溃。
+    try {
+      this.worker.postMessage({ id: `cancel-${targetId ?? Date.now()}`, command: 'cancel', args: { requestId: targetId ?? undefined } });
+    } catch (_) {}
   }
 
   async dispose() {

@@ -243,9 +243,10 @@ function registerSvsIpc() {
   ipcMain.handle('svs:cancel', async () => {
     const pipeline = svsPipelineLazy.getInstance();
     if (pipeline && typeof pipeline.cancelActiveSynthesis === 'function') {
+      // 协作式取消：只通知 worker 在安全点退出推理，worker 线程保持存活。
+      // 不再调用 svsPipelineLazy.reset()（旧逻辑会在 terminate 后重建 worker），
+      // 否则会 dispose()→terminate() 打断尚未安全退出的推理，重新引入 GPU 崩溃。
       await pipeline.cancelActiveSynthesis();
-      svsPipelineLazy.reset();
-      currentLanguage = null;
       return { success: true };
     }
     resetSvsPipeline();

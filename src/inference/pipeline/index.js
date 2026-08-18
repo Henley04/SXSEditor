@@ -13,7 +13,7 @@ const { Diffusion } = require('./diffusion');
 const { DEFAULT_SOLVER } = require('./samplers');
 const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram, isVramOOMError } = require('./postprocessing');
 const { AudioSegmentation } = require('./audioSegmentation');
-const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain, gpuDrainLong, markGpuOom } = require('./utils');
+const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain, gpuDrainLong, markGpuOom, throwIfCancelled, cancelledError } = require('./utils');
 const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
 const { getEffectiveVocoderChunkFrames } = require('../../main/gpuInfo');
 
@@ -2014,7 +2014,8 @@ class OnnxSVSPipeline {
         }
     }
 
-    async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null) {
+    async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null, abortSignal = null) {
+        throwIfCancelled(abortSignal);
         const samplerName = this._currentSamplerName || DEFAULT_SOLVER;
         // Task 15: pass per-frame F0 curve to chunked diffusion for F0-aware
         // boundary selection. Set by _synthesizeSegment / synthesizeMultiStreaming
@@ -2032,12 +2033,13 @@ class OnnxSVSPipeline {
         const _safeChunk = Math.max(50, Math.floor(chunkOpts?.chunkFrames || 0));
         if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > _safeChunk) {
             console.log(`[OnnxSVSPipeline] Using chunked diffusion: chunkFrames=${chunkOpts.chunkFrames}, overlapFrames=${chunkOpts.overlapFrames}, streaming=${!!onChunkMel}`);
-            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts);
+            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts, abortSignal);
         }
-        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName, cfgScheduleOpts, dynamicThresholdOpts);
+        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal);
     }
 
-    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0) {
+    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0, abortSignal = null) {
+        throwIfCancelled(abortSignal);
         // 多 segment 路径：segmentNotes.start 是相对 segStart，需要传 segStartBeat
         // 让 notesToSequences 正确索引绝对时间的 pitchCurveF0，否则 f0 错位 → 电流声。
         const pitchCurveOffsetSec = (segStartBeat / bpm) * 60;
@@ -2112,7 +2114,7 @@ class OnnxSVSPipeline {
         // selection. Slice to totalFrames to match the segment's frame range.
         this._currentPitchCurveF0 = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
 
-        await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange);
+        await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, null, abortSignal);
 
         // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
         // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
@@ -2185,7 +2187,8 @@ class OnnxSVSPipeline {
      * @param {number} f0ShiftA - segment A 的 f0Shift（per-segment，B2）
      * @param {number} f0ShiftB - segment B 的 f0Shift（per-segment，B2）
      */
-    async _synthesizeSegmentPair(segANotes, segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, segAStartBeat = 0, segBStartBeat = 0) {
+    async _synthesizeSegmentPair(segANotes, segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, segAStartBeat = 0, segBStartBeat = 0, abortSignal = null) {
+        throwIfCancelled(abortSignal);
         // 多 segment 路径：传 segStartBeat 让 notesToSequences 正确索引绝对 pitchCurveF0
         const offsetA = (segAStartBeat / bpm) * 60;
         const offsetB = (segBStartBeat / bpm) * 60;
@@ -2196,8 +2199,8 @@ class OnnxSVSPipeline {
         const framesB = seqB.f0Ids.length;
 
         if (framesA === 0 && framesB === 0) return [{ audio: [], frames: 0 }, { audio: [], frames: 0 }];
-        if (framesA === 0) return [{ audio: [], frames: 0 }, await this._synthesizeSegment(segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segBStartBeat)];
-        if (framesB === 0) return [await this._synthesizeSegment(segANotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segAStartBeat), { audio: [], frames: 0 }];
+        if (framesA === 0) return [{ audio: [], frames: 0 }, await this._synthesizeSegment(segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segBStartBeat, abortSignal)];
+        if (framesB === 0) return [await this._synthesizeSegment(segANotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segAStartBeat, abortSignal), { audio: [], frames: 0 }];
 
         console.log(`[OnnxSVSPipeline] Batch synthesis: segA=${framesA}frames, segB=${framesB}frames`);
 
@@ -2315,6 +2318,8 @@ class OnnxSVSPipeline {
         this._currentPitchCurveF0 = null;
         const onProgress = options.onProgress || (() => {});
         const onChunkAudio = options.onChunkAudio || null;
+        const abortSignal = options.abortSignal || null;
+        throwIfCancelled(abortSignal);
 
         if (!fragments || fragments.length === 0) {
             return new Float32Array(0);
@@ -2366,6 +2371,7 @@ class OnnxSVSPipeline {
         // ===== Phase 1: 逐分片准备 =====
         const prepared = [];
         for (let fi = 0; fi < fragments.length; fi++) {
+            throwIfCancelled(abortSignal);
             const frag = fragments[fi];
             const fragOpts = frag.options || {};
             const filledNotes = this._fillNoteGaps(frag.notes);
@@ -2585,6 +2591,7 @@ class OnnxSVSPipeline {
         for (let gi = 0; gi < globalChunks.length; gi++) {
             const gc = globalChunks[gi];
             const p = prepared[gc.prepIdx];
+            throwIfCancelled(abortSignal);
 
             if (gc.isChunked) {
                 // 分块路径：执行单个 diffusion chunk
@@ -2603,6 +2610,7 @@ class OnnxSVSPipeline {
                     samplerName: this._currentSamplerName,
                     cfgScheduleOpts: this._currentCfgScheduleOpts,
                     dynamicThresholdOpts: this._currentDynamicThresholdOpts,
+                    abortSignal,
                 };
                 const { newCommitted } = await this._diffusion._runSingleDiffusionChunk(
                     ctx, gc.spec, onProgress,
@@ -2656,7 +2664,7 @@ class OnnxSVSPipeline {
                 // 无分块路径：整段 diffusion + vocoder
                 // Task 15: set per-fragment F0 curve for F0-aware chunked diffusion.
                 this._currentPitchCurveF0 = p.f0Hz || null;
-                await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk);
+                await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk, null, abortSignal);
                 await gpuDrain();
                 const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
                 // 同分块路径：segAudio[0] 对应 filledNotes[0].start，需加 firstNoteOffsetSample
@@ -2720,6 +2728,8 @@ class OnnxSVSPipeline {
         // Task 15: reset per-frame F0 curve for F0-aware chunked diffusion.
         this._currentPitchCurveF0 = null;
         const onProgress = options.onProgress || (() => {});
+        const abortSignal = options.abortSignal || null;
+        throwIfCancelled(abortSignal);
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
@@ -3044,7 +3054,7 @@ class OnnxSVSPipeline {
                     segmentAudios.push({ frameStart, audio: segAudio });
                 };
 
-                await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, onChunkMel);
+                await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, onChunkMel, abortSignal);
 
                 // 拼接各段音频为完整 audioData（用于缓存和返回）
                 let audioData = new Float32Array(totalSamplesEst);
@@ -3076,7 +3086,7 @@ class OnnxSVSPipeline {
             }
 
             // ===== 常规路径：整段 diffusion → 整段 vocoder =====
-            await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50);
+            await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, null, abortSignal);
 
             // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
             // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
@@ -3250,7 +3260,7 @@ class OnnxSVSPipeline {
                     ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
                     npuDiffBatchSize, npuVocoderBatchSize,
                     onProgress, pairProgressStart, pairProgressRange,
-                    segA.startBeat, segB.startBeat
+                    segA.startBeat, segB.startBeat, abortSignal
                 );
 
                 // 分片缓存写入：batch 合成的两段都是 miss（见上方条件），结果存入分片缓存
@@ -3318,7 +3328,7 @@ class OnnxSVSPipeline {
                     ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
                     npuDiffBatchSize, npuVocoderBatchSize,
                     onProgress, segProgressStart, segProgressRange,
-                    null, seg.startBeat
+                    null, seg.startBeat, abortSignal
                 );
                 // 分片缓存写入：miss 后重算的结果存入，供后续未改动场景复用
                 if (segResult.audio.length > 0) {

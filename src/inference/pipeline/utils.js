@@ -243,6 +243,29 @@ async function gpuDrainAdaptive() {
 }
 
 /**
+ * Build a cancellation error with a stable code, so callers / IPC can detect
+ * that the failure was an intentional cooperative cancel rather than a real bug.
+ * @param {string} [message='Synthesis cancelled']
+ */
+function cancelledError(message = 'Synthesis cancelled') {
+    const err = new Error(message);
+    err.code = 'SYNTHESIS_CANCELLED';
+    return err;
+}
+
+/**
+ * Throw a cancellation error if the given AbortSignal has been aborted.
+ * Used as the collaborative-safe-point gate inside diffusion loops / synthesis
+ * phases. This lets the worker exit gracefully instead of being force-killed
+ * (worker.terminate()), which avoided a native D3D device crash on Windows.
+ * @param {AbortSignal|null|undefined} signal
+ * @param {string} [message='Synthesis cancelled']
+ */
+function throwIfCancelled(signal, message = 'Synthesis cancelled') {
+    if (signal && signal.aborted) throw cancelledError(message);
+}
+
+/**
  * Normalize audio array peak to a threshold (default 0.95).
  * @param {Float32Array} arr
  * @param {number} [len] - number of samples to process (defaults to arr.length)
@@ -274,4 +297,6 @@ module.exports = {
     gpuDrainLong,
     gpuDrainAdaptive,
     markGpuOom,
+    cancelledError,
+    throwIfCancelled,
 };

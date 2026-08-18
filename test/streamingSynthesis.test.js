@@ -872,22 +872,25 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       const pitchCurveF0 = new Float32Array(100).fill(440);
       const cfgScheduleOpts = { mode: 'linear', cfgStrengthStart: 1.0 };
       const dynamicThresholdOpts = { enabled: true, percentile: 0.995 };
+      const abortSignal = new AbortController().signal;
       pipeline._currentPitchCurveF0 = pitchCurveF0;
       pipeline._currentCfgScheduleOpts = cfgScheduleOpts;
       pipeline._currentDynamicThresholdOpts = dynamicThresholdOpts;
-      await pipeline._runDiffusionLoop(xt, 100, ptMelData, 10, combinedCond, 1, 0, 0.75, () => {}, 0, 100, onChunkMel);
+      await pipeline._runDiffusionLoop(xt, 100, ptMelData, 10, combinedCond, 1, 0, 0.75, () => {}, 0, 100, onChunkMel, abortSignal);
       expect(stub.calledOnce).to.equal(true);
-      // 末尾参数顺序：[..., onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts]
-      // （Task 11/15 新增 pitchCurveF0 与 cfgScheduleOpts，动态阈值新增 dynamicThresholdOpts）
+      // 末尾参数顺序：[..., onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts, abortSignal]
+      // （Task 11/15 新增 pitchCurveF0 与 cfgScheduleOpts，动态阈值新增 dynamicThresholdOpts，协作式取消新增 abortSignal）
       const callArgs = stub.firstCall.args;
-      expect(callArgs[callArgs.length - 5]).to.equal(onChunkMel);
-      // 倒数第四个为 samplerName，默认 'stork2'（M6 changed DEFAULT_SOLVER euler→stork2）
-      expect(callArgs[callArgs.length - 4]).to.equal('stork2');
+      expect(callArgs[callArgs.length - 6]).to.equal(onChunkMel);
+      // 倒数第五个为 samplerName，默认 'stork2'（M6 changed DEFAULT_SOLVER euler→stork2）
+      expect(callArgs[callArgs.length - 5]).to.equal('stork2');
       // M10: pitchCurveF0 与 cfgScheduleOpts 透传
-      expect(callArgs[callArgs.length - 3]).to.equal(pitchCurveF0);
-      expect(callArgs[callArgs.length - 2]).to.equal(cfgScheduleOpts);
+      expect(callArgs[callArgs.length - 4]).to.equal(pitchCurveF0);
+      expect(callArgs[callArgs.length - 3]).to.equal(cfgScheduleOpts);
       // Dynamic thresholding opts forwarded
-      expect(callArgs[callArgs.length - 1]).to.equal(dynamicThresholdOpts);
+      expect(callArgs[callArgs.length - 2]).to.equal(dynamicThresholdOpts);
+      // 协作式取消 abortSignal 透传至 runDiffusionLoopChunked
+      expect(callArgs[callArgs.length - 1]).to.equal(abortSignal);
     });
   });
 
