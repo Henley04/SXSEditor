@@ -17,9 +17,15 @@ Supports:
   - Conv1d (per-output-channel int8)
 """
 
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+# Activation quantization clip ratio (scale = clip_ratio * amax / 127).
+# Tuning this down reduces error from outlier-dominated per-tensor scales;
+# set via env SXS_ACT_CLIP for experiments (0,1].
+ACT_CLIP = float(os.environ.get('SXS_ACT_CLIP', '1.0'))
 
 
 # ============================================================
@@ -155,15 +161,21 @@ class W8A8Linear(nn.Module):
         super().__init__()
         assert weight.dim() == 2
         self.group_size = group_size
-        w_int8, scale = quantize_weight_symmetric(weight.detach().float(), group_size)
-        self.register_buffer('weight_int8', w_int8)   # [N, K] int8
-        self.register_buffer('scale', scale)           # [N, 1] or [N, G] fp32
         self.out_features, self.in_features = weight.shape
+        w = weight.detach().float()
+        # AWQ equivalent transform: W' = W / s, X' = X * s. The weight MUST be
+        # divided by s before int8 quantization, otherwise the input scaling at
+        # runtime has no matching weight scaling (inconsistent transform).
         if awq_scale is not None:
             assert awq_scale.numel() == self.in_features
+            s = awq_scale.detach().float().reshape(1, -1)  # [1, K] -> divide along input channels
+            w = w / s
             self.register_buffer('awq_scale', awq_scale.detach().float().reshape(1, -1))
         else:
             self.awq_scale = None
+        w_int8, scale = quantize_weight_symmetric(w, group_size)
+        self.register_buffer('weight_int8', w_int8)   # [N, K] int8
+        self.register_buffer('scale', scale)           # [N, 1] or [N, G] fp32
         if bias is not None:
             self.register_buffer('bias', bias.detach().float())
         else:
@@ -174,7 +186,7 @@ class W8A8Linear(nn.Module):
         if self.awq_scale is not None:
             x = x * self.awq_scale
         if self.group_size <= 0:
-            x_int8, x_scale = quantize_activation_per_token(x)   # int8 activations
+            x_int8, x_scale = quantize_activation_per_token(x, ACT_CLIP)   # int8 activations
             # int32 accumulation
             y_int32 = int8_gemm(x_int8, self.weight_int8.t())    # [*, N] int32
             y = y_int32.float()
@@ -186,7 +198,7 @@ class W8A8Linear(nn.Module):
             G = K // gs
             xg = x.reshape(*x.shape[:-1], G, gs)
             x_amax = xg.abs().amax(dim=-1, keepdim=True).clamp(min=1e-8)
-            x_scale = x_amax / 127.0                              # [*, G, 1]
+            x_scale = (x_amax * ACT_CLIP) / 127.0                              # [*, G, 1]
             x_int = torch.clamp(torch.round(xg / x_scale), -128, 127).to(torch.int8)
             # weight int8 stored as [N, K], scale [N, G]
             wg = self.weight_int8.reshape(self.out_features, G, gs)
@@ -221,6 +233,12 @@ class W8A8Conv1d(nn.Module):
         super().__init__()
         w = weight.detach().float()
         # [out, in/groups, k]
+        # AWQ equivalent transform: W'[o,c,k] = W[o,c,k] / s[c], X'[b,c,l] = X[b,c,l]*s[c].
+        # The weight MUST be divided by s before int8 quantization (same rule as Linear).
+        if awq_scale is not None:
+            assert awq_scale.numel() == w.shape[1] * groups
+            s = awq_scale.detach().float().reshape(1, -1, 1)
+            w = w / s
         scale = w.abs().amax(dim=(1, 2), keepdim=True).clamp(min=1e-8) / 127.0
         w_int8 = torch.clamp(torch.round(w / scale), -128, 127).to(torch.int8)
         self.register_buffer('weight_int8', w_int8)
@@ -250,7 +268,7 @@ class W8A8Conv1d(nn.Module):
         # int32 conv accumulation can be dequantized with a single post-multiply.
         # Per-position scaling is mathematically invalid for kernel>1 (output L
         # mixes input positions with different scales) and would destroy quality.
-        x_int8, x_scale = quantize_activation_per_tensor(x)
+        x_int8, x_scale = quantize_activation_per_tensor(x, ACT_CLIP)
         # int32 convolution accumulation
         y_int32 = int8_conv1d(
             x_int8, self.weight_int8,
@@ -304,86 +322,96 @@ def quantize_model_qdit(model, group_size=0, quant_conv=True):
 #
 # Per the AWQ paper: instead of quantizing W directly, apply an equivalent
 # transform W' = W / s, X' = X * s, where s is chosen so the most salient
-# input channels are protected. The reconstruction error of the quantization
-# is measured on real calibration activations (weighted by channel magnitude)
-# and the best s is picked via a coarse grid search on the power alpha.
+# input channels are protected. s is picked by a grid search over the power
+# alpha (s = act_amp**alpha) that minimizes the REAL output error
+# ||X @ W^T - X @ (s * quant(W/s))^T||^2 measured on calibration activations
+# (this is exactly the llm-awq objective, not a weight-space heuristic).
 # The resulting W' is then quantized to int8 per-output-channel, and at
-# runtime the input is scaled by s before the (dynamic per-token) activation
-# quantization. This is the genuine AWQ algorithm, not fake quantization.
+# runtime the input is scaled by s before the (dynamic) activation
+# quantization. Weights stay int8 - genuine AWQ, not fake quantization.
 # ============================================================
 
-def _weighted_quant_error(w, wmax, act_amp):
-    """Mean squared reconstruction error of per-channel int8 quant, weighted
-    by activation importance per input channel.
-
-    w: [N, K], wmax: [N, 1] (per output channel max abs of w), act_amp: [K]
-    """
-    scale = wmax / 127.0
-    wq = torch.clamp(torch.round(w / scale), -128, 127) * scale
-    err = ((w - wq) ** 2 * act_amp.unsqueeze(0)).mean()
-    return err
-
-
 @torch.no_grad()
-def compute_awq_scale(weight, act_abs_max, n_grid=20, alpha_min=0.0, alpha_max=1.0):
-    """Compute per-input-channel AWQ scaling vector s.
+def compute_awq_scale(weight, act_sample, n_grid=20, alpha_min=0.0, alpha_max=1.0):
+    """llm-awq style per-input-channel scale for an nn.Linear.
 
     Args:
-        weight: [N, K] fp32 weight (or [out, in/groups, k] flattened as [N, K])
-        act_abs_max: [K] per-input-channel activation abs max from calibration
+        weight: [N, K] fp32 weight
+        act_sample: [T, K] fp32 calibration activation rows
     Returns:
         s: [K] fp32 per-input-channel scaling (X' = X * s, W' = W / s)
     """
-    assert weight.dim() == 2
-    N, K = weight.shape
-    act_amp = act_abs_max.reshape(-1).float().clamp(min=1e-8)
-    assert act_amp.numel() == K
-    # AWQ: s = (act_amp)^alpha with grid search. Pick the alpha minimizing the
-    # weighted reconstruction error of quantize(W / s) * s.
+    w = weight.detach().float()
+    N, K = w.shape
+    x = act_sample.detach().float().reshape(-1, K)
+    if x.shape[0] > 8192:
+        x = x[:8192]
+    act_amp = x.abs().amax(dim=0).clamp(min=1e-8)  # [K]
+    y_ref = x @ w.t()  # [T, N]
     alphas = torch.linspace(alpha_min, alpha_max, n_grid).tolist()
     best_err = None
     best_s = None
     for alpha in alphas:
-        # s per input channel: amplify channels with high activation
-        s = act_amp ** alpha  # [K], alpha=0 -> s=1 (plain per-channel quant)
-        w_scaled = weight / s.unsqueeze(0)  # [N, K]
-        # per-output-channel max of scaled weight
+        s = act_amp ** alpha  # [K]; alpha=0 -> s=1 (plain per-channel quant)
+        w_scaled = w / s.unsqueeze(0)                      # W' = W / s
         ws_max = w_scaled.abs().amax(dim=-1, keepdim=True).clamp(min=1e-8)
-        err = _weighted_quant_error(w_scaled, ws_max, act_amp)
-        if best_err is None or err.item() < best_err:
-            best_err = err.item()
+        w_quant = torch.clamp(torch.round(w_scaled / (ws_max / 127.0)), -128, 127)
+        w_eff = s.unsqueeze(0) * (w_quant * (ws_max / 127.0))  # effective W: s * quant(W/s)
+        err = ((x @ w_eff.t() - y_ref) ** 2).mean().item()
+        if best_err is None or err < best_err:
+            best_err = err
             best_s = s
     return best_s
 
 
 @torch.no_grad()
-def compute_awq_scale_conv(weight, act_abs_max, n_grid=20, alpha_min=0.0, alpha_max=1.0):
-    """AWQ scaling for a Conv1d weight.
+def compute_awq_scale_conv(weight, act_sample, stride=1, padding=0, dilation=1,
+                           groups=1, n_grid=24, alpha_min=-1.0, alpha_max=1.0):
+    """llm-awq style per-input-channel scale for a Conv1d, measured on the REAL
+    runtime objective (including dynamic per-tensor activation quantization).
 
-    weight: [out, in_c, k] fp32
-    act_abs_max: [in_c] per-input-channel activation abs max
-    Returns: s: [in_c] fp32 (applied as X' = X * s along input channels)
+    The search picks s[c] minimizing
+        || conv(quant_act(x*s), quant_w(w/s)) - conv(x, w) ||^2
+    where quant_act is the exact dynamic per-tensor int8 quantization used by
+    W8A8Conv1d and quant_w is per-output-channel int8. Because activations are
+    quantized per-tensor (constant scale over all channels), scaling each input
+    channel by s[c] equalizes their ranges so the per-tensor scale is not
+    dominated by outliers -> uniform quantization SNR.
+
+    Args:
+        weight: [out, in, k] fp32
+        act_sample: [B, C, L] or [C, L] fp32 calibration activation
+    Returns:
+        s: [in] fp32 per-input-channel scaling (X' = X * s, W' = W / s)
     """
-    out, in_c, k = weight.shape
-    act_amp = act_abs_max.reshape(-1).float().clamp(min=1e-8)
-    assert act_amp.numel() == in_c
-    w2d = weight.reshape(out, in_c * k)
-    # per-input-channel weight column pattern: for each in channel c there are k
-    # columns (the kernel). Build a mask to weight the error by act_amp[c].
-    act_w = act_amp.unsqueeze(1).expand(-1, k).reshape(-1)  # [in_c*k]
+    w = weight.detach().float()
+    out, in_c, k = w.shape
+    x = act_sample.detach().float()
+    if x.dim() == 2:
+        x = x.unsqueeze(0)  # [1, C, L]
+    x = x[:, :in_c * groups, :]
+    if x.shape[-1] > 2048:
+        x = x[..., :2048]
+    act_amp = x.abs().amax(dim=(0, 2)).clamp(min=1e-8)  # [in_c]
+    y_ref = F.conv1d(x, w, None, stride, padding, dilation, groups)
     alphas = torch.linspace(alpha_min, alpha_max, n_grid).tolist()
     best_err = None
     best_s = None
     for alpha in alphas:
-        s = act_amp ** alpha  # [in_c]
-        # W'[o, c, k] = W[o, c, k] / s[c]
-        w_scaled = w2d / s.unsqueeze(1).expand(-1, k).reshape(1, -1)
-        ws_max = w_scaled.abs().amax(dim=-1, keepdim=True).clamp(min=1e-8)
-        scale = ws_max / 127.0
-        wq = torch.clamp(torch.round(w_scaled / scale), -128, 127) * scale
-        err = ((w_scaled - wq) ** 2 * act_w.unsqueeze(0)).mean()
-        if best_err is None or err.item() < best_err:
-            best_err = err.item()
+        s = act_amp ** alpha  # [in_c]; alpha<0 equalizes activation channel ranges
+        # activation quantization exactly as W8A8Conv1d.forward does
+        xs = x * s.reshape(1, -1, 1)
+        xs_scale = xs.abs().amax().clamp(min=1e-8) / 127.0
+        xq = torch.clamp(torch.round(xs / xs_scale), -128, 127)
+        # weight quantization exactly as W8A8Conv1d does
+        w_scaled = w / s.reshape(1, -1, 1)                  # W' = W / s
+        ws_max = w_scaled.abs().amax(dim=(1, 2), keepdim=True).clamp(min=1e-8)
+        wq = torch.clamp(torch.round(w_scaled / (ws_max / 127.0)), -128, 127)
+        y_quant = F.conv1d(xq, wq, None, stride, padding, dilation, groups).float() \
+            * (xs_scale * (ws_max / 127.0))
+        err = ((y_quant - y_ref) ** 2).mean().item()
+        if best_err is None or err < best_err:
+            best_err = err
             best_s = s
     return best_s
 
@@ -391,16 +419,18 @@ def compute_awq_scale_conv(weight, act_abs_max, n_grid=20, alpha_min=0.0, alpha_
 def replace_linear_awq(module, act_stats, name=''):
     """Replace nn.Linear / nn.Conv1d in `module` with AWQ W8A8 versions.
 
-    act_stats: dict of {module_path: torch.Tensor [in_channels]} per-input-
-    channel activation abs max collected during calibration (paths relative
-    to `module`).
+    act_stats: dict of {module_path: calibration activation sample}
+        - Linear path -> [T, K] tensor
+        - Conv1d path  -> [B, C, L] or [C, L] tensor
+      (paths relative to `module`; produced by collect_activation_stats)
+    Consumed entries are popped to free memory as quantization proceeds.
     """
     for child_name, child in list(module.named_children()):
         path = f'{name}.{child_name}' if name else child_name
         if isinstance(child, nn.Linear):
             awq_scale = None
             if path in act_stats:
-                awq_scale = compute_awq_scale(child.weight.data, act_stats[path])
+                awq_scale = compute_awq_scale(child.weight.data, act_stats.pop(path))
             setattr(module, child_name, W8A8Linear(
                 child.weight.data, child.bias.data if child.bias is not None else None,
                 group_size=0, awq_scale=awq_scale))
@@ -409,7 +439,12 @@ def replace_linear_awq(module, act_stats, name=''):
             # depthwise conv (groups == in_channels): skip AWQ (no shared input
             # channel dimension to scale), keep plain per-output-channel int8.
             if path in act_stats and child.groups == 1:
-                awq_scale = compute_awq_scale_conv(child.weight.data, act_stats[path])
+                awq_scale = compute_awq_scale_conv(
+                    child.weight.data, act_stats.pop(path),
+                    child.stride[0], child.padding[0], child.dilation[0], child.groups,
+                )
+            else:
+                act_stats.pop(path, None)
             setattr(module, child_name, W8A8Conv1d(
                 child.weight.data,
                 child.bias.data if child.bias is not None else None,
@@ -420,36 +455,38 @@ def replace_linear_awq(module, act_stats, name=''):
     return module
 
 
-def collect_activation_stats(model, sample_inputs, module_names):
-    """Collect per-input-channel activation abs max for the given module paths.
+def collect_activation_stats(model, sample_inputs, module_names, max_rows=512):
+    """Collect one calibration activation sample per module path.
 
     model: torch module (vocoder) that we will run with a forward pass
     sample_inputs: list of input tensors (e.g. [B, C, L] mels)
     module_names: set of dotted paths to hook (relative to `model`).
 
-    Returns dict {path: Tensor [in_channels]} of abs-max per input channel.
+    Returns dict {path: Tensor}:
+        - Linear path -> [T, K] activation rows (rows capped at max_rows)
+        - Conv1d path -> [C, L'] activation (channels x capped length)
     """
     stats = {}
     hooks = []
 
     def make_hook(path, is_conv):
         def hook(module, inp, out):
-            x = inp[0]
-            if x.dim() == 2:            # [*, K]
-                xr = x.reshape(-1, x.shape[-1])
-                cur = xr.abs().amax(dim=0)  # [K]
-            elif x.dim() == 3 and is_conv:   # conv: [B, C, L]
-                xr = x.reshape(x.shape[0], x.shape[1], -1)
-                cur = xr.abs().amax(dim=(0, 2))  # [C]
-            elif x.dim() == 3:          # linear: [B, T, C] -> channels along last dim
-                xr = x.reshape(-1, x.shape[-1])
-                cur = xr.abs().amax(dim=0)  # [C]
+            x = inp[0].detach().float()
+            if is_conv:                      # [B, C, L]
+                cur = x[0, :, :max_rows]     # [C, L']
+            elif x.dim() == 3:               # [B, T, K]
+                cur = x.reshape(-1, x.shape[-1])[:max_rows]
+            elif x.dim() == 2:               # [T, K]
+                cur = x.reshape(-1, x.shape[-1])[:max_rows]
             else:
                 return
             if path not in stats:
                 stats[path] = cur.clone()
             else:
-                stats[path] = torch.maximum(stats[path], cur)
+                if is_conv:
+                    stats[path] = torch.cat([stats[path], cur], dim=1)[:, :max_rows]
+                else:
+                    stats[path] = torch.cat([stats[path], cur], dim=0)[:max_rows]
         return hook
 
     for name, module in model.named_modules():
