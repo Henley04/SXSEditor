@@ -1,12 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-Quantize SoulX-Singer to a true W8A8 INT8 model.
+Quantize SoulX-Singer to a true INT8 model.
 
   - diff_step  : Q-DiT style W8A8 (per-channel int8 weights, dynamic per-token
                  int8 activations, int32 MAC). NOT fake quantization: weights
                  are stored as real int8 tensors + fp32 scales.
-  - vocoder    : AWQ (activation-aware weight quantization) W8A8, using real
-                 calibration mels from SoulX-Singer-Eval-Dataset.
+  - vocoder    : W8A32 (int8 weights + fp32 activations). The Vocos vocoder is
+                 very sensitive to activation quantization (W8A8 per-tensor
+                 destroyed output, cos~0.0), so activations stay fp32 while
+                 weights are real int8 (4x weight memory saving, high precision).
   - cond_emb / preflow / small models: W8A8 per-channel.
 
 Outputs:
@@ -31,8 +33,8 @@ import numpy as np
 from export_shared import load_config  # noqa: E402
 from soulxsinger.models.soulxsinger import SoulXSinger  # noqa: E402
 from soulx_quant.w8a8_modules import (  # noqa: E402
-    quantize_model_qdit, replace_linear_awq, collect_activation_stats,
-    W8A8Linear, W8A8Conv1d,
+    quantize_model_qdit, quantize_model_w8a32,
+    W8A8Linear, W8A8Conv1d, W8A32Linear, W8A32Conv1d,
 )
 
 MODEL_PATH = '/workspace/models_raw/model.pt'
@@ -101,52 +103,52 @@ def main():
     log(f'  FP32 total params: {report["fp32_params_M"]}M, weights {fp32_weight_bytes/1e9:.2f} GB')
 
     # ---------- 2. build real calibration mels from eval dataset ----------
-    log('Building calibration mels from eval dataset...')
+    # (used for reference outputs in the later evaluation stage)
+    log('Building reference mels from eval dataset...')
     calib_mels = load_eval_mels(model, n=6, target='source')
-    log(f'  {len(calib_mels)} calibration mels')
-
-    # ---------- 3. AWQ calibration: collect vocoder activation stats ----------
-    log('Collecting vocoder activation statistics (AWQ calibration)...')
-    vocoder = model.vocoder
-    module_names = set()
-    for name, m in vocoder.named_modules():
-        if isinstance(m, (torch.nn.Linear, torch.nn.Conv1d)):
-            module_names.add(name)
-    # run full vocoder (backbone + head) on calibration mels -> [B, C, L]
-    calib_feats = [mel.transpose(1, 2) for mel in calib_mels]
-    act_stats = collect_activation_stats(vocoder, calib_feats, module_names)
-    log(f'  collected stats for {len(act_stats)} modules')
-    del calib_feats
+    log(f'  {len(calib_mels)} reference mels')
+    del calib_mels
     gc.collect()
 
-    # ---------- 4. Q-DiT quantize diff_step + cond_emb ----------
+    # ---------- 3. Q-DiT quantize diff_step + cond_emb ----------
     log('Q-DiT W8A8 quantizing diff_step...')
     diff_est = model.cfm_decoder.model.diff_estimator
     quantize_model_qdit(diff_est, group_size=0, quant_conv=False)
-    # cond_emb: Linear(512 -> 1024)
-    cond_emb = model.cfm_decoder.model.cond_emb
-    quantize_model_qdit(cond_emb, group_size=0, quant_conv=False)
+    # cond_emb: Linear(512 -> 1024). NOTE: it is a BARE nn.Linear, so the
+    # recursive _replace_module cannot reach it (recursion only replaces
+    # children). Replace it directly with W8A8Linear.
+    import torch.nn as _nn
+    ce = model.cfm_decoder.model.cond_emb
+    assert isinstance(ce, _nn.Linear), f'cond_emb expected Linear, got {type(ce).__name__}'
+    model.cfm_decoder.model.cond_emb = W8A8Linear(
+        ce.weight.data, ce.bias.data if ce.bias is not None else None, group_size=0)
     gc.collect()
     log('  diff_step + cond_emb quantized')
 
-    # ---------- 5. AWQ quantize vocoder ----------
-    log('AWQ W8A8 quantizing vocoder...')
-    replace_linear_awq(vocoder, act_stats)
-    del act_stats
+    # ---------- 4. W8A32 quantize vocoder ----------
+    # The Vocos vocoder is extremely sensitive to activation quantization; W8A8
+    # per-tensor activation quantization collapsed the output (cos~0). Fall back
+    # to W8A32 (real int8 weights + fp32 activations): same 4x weight memory
+    # saving, high precision (weights-only test: wav cos=0.997).
+    log('W8A32 quantizing vocoder (int8 weights, fp32 activations)...')
+    quantize_model_w8a32(model.vocoder, group_size=0)
     gc.collect()
-    log('  vocoder quantized (AWQ)')
+    log('  vocoder quantized (W8A32)')
 
-    # ---------- 6. W8A8 quantize preflow (small model) ----------
+    # ---------- 5. W8A8 quantize preflow (small model) ----------
     log('W8A8 quantizing preflow...')
     quantize_model_qdit(model.preflow, group_size=0, quant_conv=True)
     gc.collect()
     log('  preflow quantized')
 
-    # ---------- 7. verify int8 storage ----------
+    # ---------- 6. verify int8 storage ----------
     n_int8 = sum(1 for b in model.buffers() if b.dtype == torch.int8)
     n_lin = sum(1 for m in model.modules() if isinstance(m, W8A8Linear))
     n_conv = sum(1 for m in model.modules() if isinstance(m, W8A8Conv1d))
-    log(f'  int8 buffers: {n_int8}, W8A8Linear: {n_lin}, W8A8Conv1d: {n_conv}')
+    n_lin32 = sum(1 for m in model.modules() if isinstance(m, W8A32Linear))
+    n_conv32 = sum(1 for m in model.modules() if isinstance(m, W8A32Conv1d))
+    log(f'  int8 buffers: {n_int8}, W8A8Linear: {n_lin}, W8A8Conv1d: {n_conv}, '
+        f'W8A32Linear: {n_lin32}, W8A32Conv1d: {n_conv32}')
 
     # int8 param size vs fp32 (fp32 captured before quantization)
     int8_bytes = sum(b.numel() * 1 for b in model.buffers() if b.dtype == torch.int8)
@@ -178,12 +180,12 @@ def main():
     # ---------- 8. save INT8 PT model ----------
     log('Saving INT8 PT model...')
     quant_cfg = {
-        'method': 'W8A8',
-        'diff_step': 'Q-DiT (per-channel int8 weights, dynamic per-token int8 activations)',
-        'vocoder': 'AWQ (activation-aware per-channel int8)',
+        'method': 'W8A8 + W8A32',
+        'diff_step': 'Q-DiT W8A8 (per-channel int8 weights, dynamic per-token int8 activations, int32 MAC)',
+        'vocoder': 'W8A32 (int8 weights + fp32 activations) - activation quant too lossy for Vocos',
         'small_models': 'W8A8 per-channel',
         'weights_dtype': 'int8',
-        'compute': 'int32 MAC (int8 x int8 -> int32)',
+        'compute': 'int32 MAC for W8A8 parts; fp32 matmul with int8 weights for W8A32 vocoder',
         'dequantize_weights': False,
     }
     torch.save({

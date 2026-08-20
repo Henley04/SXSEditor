@@ -318,6 +318,125 @@ def quantize_model_qdit(model, group_size=0, quant_conv=True):
 
 
 # ============================================================
+# W8A32 (int8 weights, fp32 activations) - fallback for the vocoder
+# ============================================================
+
+class DequantizeLinearOp(torch.autograd.Function):
+    """DequantizeLinear(int8 weight, scale_1d, axis=0) -> fp32. ONNX: DequantizeLinear node.
+
+    Weight is kept int8 in the exported graph; the scale multiply happens as an
+    explicit fp32 op so the on-disk model stores real int8 weights (no fp32
+    weight reconstruction stored), and the runtime can fuse with hardware.
+
+    `scale_1d` must be a 1-D tensor of size == dim of `axis` (0): for a [N, K]
+    weight that is the per-output-channel scale [N]. ONNX Runtime rejects a 2-D
+    scale, so we always pass a 1-D scale and set axis=0.
+    """
+
+    @staticmethod
+    def forward(ctx, w_int8, scale_1d):
+        # scale_1d: [d]; broadcast along the leading dim (axis=0)
+        shape = [scale_1d.shape[0]] + [1] * (w_int8.dim() - 1)
+        return w_int8.float() * scale_1d.reshape(shape)
+
+    @staticmethod
+    def symbolic(g, w_int8, scale_1d):
+        return g.op('DequantizeLinear', w_int8, scale_1d, axis_i=0)
+
+
+class W8A32Linear(nn.Module):
+    """Weights-only int8 (W8A32) linear: int8 weight + fp32 scale, fp32 activations.
+
+    Keeps the weight on disk / in memory as a REAL int8 tensor (+ fp32 scale).
+    At runtime the weight is dequantized to fp32 for the matmul (activations
+    stay fp32). This is the standard weights-only INT8 scheme, used here as a
+    high-precision fallback for the vocoder where W8A8 activation quantization
+    was too lossy.
+    """
+
+    def __init__(self, weight, bias=None, group_size=0):
+        super().__init__()
+        assert weight.dim() == 2
+        self.group_size = group_size
+        self.out_features, self.in_features = weight.shape
+        w = weight.detach().float()
+        w_int8, scale = quantize_weight_symmetric(w, group_size)
+        self.register_buffer('weight_int8', w_int8)   # [N, K] int8
+        self.register_buffer('scale', scale)           # [N, 1] or [N, G] fp32
+        if bias is not None:
+            self.register_buffer('bias', bias.detach().float())
+        else:
+            self.bias = None
+
+    def forward(self, x):
+        if self.group_size <= 0:
+            w = DequantizeLinearOp.apply(self.weight_int8, self.scale.reshape(-1))
+            y = torch.nn.functional.linear(x, w)
+        else:
+            K = self.in_features
+            gs = self.group_size
+            G = K // gs
+            w = DequantizeLinearOp.apply(self.weight_int8, self.scale.reshape(-1))  # [N, K]
+            y = torch.nn.functional.linear(x, w)
+        if self.bias is not None:
+            y = y + self.bias
+        return y
+
+    def extra_repr(self):
+        return f'in={self.in_features}, out={self.out_features}, group={self.group_size}, w8a32=True'
+
+
+class W8A32Conv1d(nn.Module):
+    """Weights-only int8 (W8A32) 1D convolution."""
+
+    def __init__(self, weight, bias=None, stride=1, padding=0, dilation=1, groups=1):
+        super().__init__()
+        w = weight.detach().float()
+        scale = w.abs().amax(dim=(1, 2), keepdim=True).clamp(min=1e-8) / 127.0
+        w_int8 = torch.clamp(torch.round(w / scale), -128, 127).to(torch.int8)
+        self.register_buffer('weight_int8', w_int8)
+        self.register_buffer('scale', scale.reshape(-1))  # [out]
+        if bias is not None:
+            self.register_buffer('bias', bias.detach().float())
+        else:
+            self.bias = None
+        self.out_channels = w.shape[0]
+        self.in_channels = w.shape[1] * groups
+        self.kernel_size = w.shape[2]
+        self.stride = stride
+        self.padding = padding
+        self.dilation = dilation
+        self.groups = groups
+
+    def forward(self, x):
+        w = DequantizeLinearOp.apply(self.weight_int8, self.scale)
+        y = torch.nn.functional.conv1d(x, w, self.bias, self.stride, self.padding, self.dilation, self.groups)
+        return y
+
+
+def _replace_w8a32(module, name='', group_size=0):
+    """Recursively replace nn.Linear / nn.Conv1d with W8A32 versions."""
+    for child_name, child in list(module.named_children()):
+        if isinstance(child, nn.Linear):
+            setattr(module, child_name, W8A32Linear(
+                child.weight.data, child.bias.data if child.bias is not None else None,
+                group_size=group_size))
+        elif isinstance(child, nn.Conv1d):
+            setattr(module, child_name, W8A32Conv1d(
+                child.weight.data,
+                child.bias.data if child.bias is not None else None,
+                child.stride[0], child.padding[0], child.dilation[0], child.groups))
+        else:
+            _replace_w8a32(child, name + '.' + child_name, group_size)
+    return module
+
+
+def quantize_model_w8a32(model, group_size=0):
+    """Replace all Linear/Conv1d modules with W8A32 (int8 weights, fp32 activations)."""
+    return _replace_w8a32(model, '', group_size=group_size)
+
+
+# ============================================================
 # AWQ (Activation-aware Weight Quantization) support
 #
 # Per the AWQ paper: instead of quantizing W directly, apply an equivalent
