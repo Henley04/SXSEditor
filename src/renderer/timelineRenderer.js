@@ -26,13 +26,8 @@ function formatAccompanimentDuration(seconds) {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-// Offscreen canvas cache for static grid/background
-let _gridCache = null;
-let _gridCacheKey = '';
-
-export function invalidateGridCache() {
-  _gridCacheKey = '';
-}
+// Grid is rendered directly into the viewport-sized canvas.
+export function invalidateGridCache() {}
 
 function _ensureCanvasSize(canvas, cssW, cssH, dpr) {
   const pixelW = Math.floor(cssW * dpr);
@@ -84,7 +79,14 @@ export function syncFragmentScroll() {
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
   const beatWidth = getBeatWidth();
-  const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
+  const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
+  const accompanimentMaxBeat = singers.reduce((max, singer) => {
+    if (singer.type !== 'accompaniment' || !singer.audioDuration) return max;
+    const endBeat = (singer.accompanimentStartTime || 0)
+      + singer.audioDuration / 60 * state.project.bpm;
+    return Math.max(max, endBeat);
+  }, 0);
+  const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
   const totalBeats = Math.max(64, Math.ceil((maxBeat + 64) / 64) * 64);
   const canvasWidth = totalBeats * beatWidth;
   const canvasHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
@@ -97,7 +99,9 @@ export function syncFragmentScroll() {
   // fragment canvas 应用 translate 变换以实现滚动；
   // playhead canvas 不再应用 translate，改为固定覆盖可视区域，
   // 绘制时由 drawPlayheadLine 自行减去 scrollX（避免大 canvas clearRect 卡顿）。
-  dom.fragmentCanvas.style.transform = `translate(${-state.fragmentScrollX}px, ${-state.fragmentScrollY}px)`;
+  // Canvas is viewport-sized. Scrolling is applied to the drawing transform,
+  // never by moving or enlarging the backing store.
+  dom.fragmentCanvas.style.transform = 'none';
   dom.singerListEl.scrollTop = state.fragmentScrollY;
 }
 
@@ -108,97 +112,80 @@ export function renderFragmentTimeline() {
   const dpr = window.devicePixelRatio || 1;
 
   const beatWidth = getBeatWidth();
-  const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
-  // grid cache 步长加大到 64 拍：拖拽分片时 maxBeat 变化不再频繁触发 totalBeats 跨步，
-  // 避免 grid cache 反复失效重建（O(canvasW*canvasH) 的重绘）。
+  const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
+  const accompanimentMaxBeat = singers.reduce((max, singer) => {
+    if (singer.type !== 'accompaniment' || !singer.audioDuration) return max;
+    const endBeat = (singer.accompanimentStartTime || 0)
+      + singer.audioDuration / 60 * state.project.bpm;
+    return Math.max(max, endBeat);
+  }, 0);
+  const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
   const totalBeats = Math.max(64, Math.ceil((maxBeat + 64) / 64) * 64);
-  const canvasWidth = totalBeats * beatWidth;
+  const virtualWidth = totalBeats * beatWidth;
   const contentHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
-  const containerHeight = dom.fragmentContainer.clientHeight || contentHeight;
-  const canvasHeight = Math.max(contentHeight, containerHeight);
+  const viewportWidth = Math.max(1, dom.fragmentContainer.clientWidth || 1);
+  const viewportHeight = Math.max(1, dom.fragmentContainer.clientHeight || contentHeight || 1);
 
-  _ensureCanvasSize(dom.fragmentCanvas, canvasWidth, canvasHeight, dpr);
-  // playhead canvas 只覆盖可视区域（container 大小），不再随 fragment canvas 一起放大。
-  // 这样拖拽进度条时 clearRect 只需清除 container 大小的区域，
-  // 而不是整个 canvasWidth*canvasHeight（分片变长时可达数万 px）。
-  const playheadW = dom.fragmentContainer.clientWidth || canvasWidth;
-  const playheadH = containerHeight;
-  _ensureCanvasSize(dom.fragmentPlayheadCanvas, playheadW, playheadH, dpr);
+  // Keep the backing stores bounded by the viewport. Long MIDI projects only
+  // increase virtualWidth, not canvas.width, avoiding Chromium's canvas limit.
+  _ensureCanvasSize(dom.fragmentCanvas, viewportWidth, viewportHeight, dpr);
+  _ensureCanvasSize(dom.fragmentPlayheadCanvas, viewportWidth, viewportHeight, dpr);
 
+  state.fragmentScrollX = Math.max(0, Math.min(state.fragmentScrollX, virtualWidth - viewportWidth));
+  state.fragmentScrollY = Math.max(0, Math.min(state.fragmentScrollY, contentHeight - viewportHeight));
   syncFragmentScroll();
 
+  // Clear in device-independent viewport coordinates, then translate the
+  // world timeline into the viewport. Existing fragment drawing remains in
+  // world coordinates and is clipped by the viewport backing store.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, viewportWidth, viewportHeight);
+  ctx.translate(-state.fragmentScrollX, -state.fragmentScrollY);
 
   const c = getCanvasColors();
   const beatsPerMeasure = state.project.timeSignature ? state.project.timeSignature[0] : 4;
+  const _viewLeft = state.fragmentScrollX;
+  const _viewRight = state.fragmentScrollX + viewportWidth;
+  const _viewTop = state.fragmentScrollY;
+  const _viewBottom = state.fragmentScrollY + viewportHeight;
 
-  // Build grid cache key from structural inputs
-  const gridCacheKey = `${totalBeats}|${beatWidth}|${canvasHeight}|${singers.length}|${beatsPerMeasure}|${c.bgApp}|${c.gridLineMeasure}|${c.gridLineMajor}|${c.borderSubtle}|${c.bgElevated}|${c.timeText}`;
-
-  if (_gridCache && _gridCacheKey === gridCacheKey) {
-    // Use cached grid layer.
-    // 必须显式指定 dw/dh=canvasWidth/canvasHeight：_gridCache 的 intrinsic 尺寸是
-    // canvasWidth*dpr × canvasHeight*dpr（设备像素），而 ctx 已应用 dpr 变换，
-    // 若省略 dw/dh 会按 intrinsic 尺寸绘制，导致整个网格被放大 dpr 倍。
-    ctx.drawImage(_gridCache, 0, 0, canvasWidth, canvasHeight);
-  } else {
-    // Draw static grid background
-    ctx.fillStyle = c.bgApp;
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= totalBeats; i++) {
-      const x = i * beatWidth;
-      const isMeasureLine = (i % beatsPerMeasure === 0);
-      ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
-      ctx.beginPath();
-      ctx.moveTo(x, HEADER_HEIGHT);
-      ctx.lineTo(x, canvasHeight);
-      ctx.stroke();
-
-      if (isMeasureLine) {
-        const measureNum = Math.floor(i / beatsPerMeasure) + 1;
-        ctx.fillStyle = c.timeText;
-        ctx.font = '10px sans-serif';
-        ctx.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
-      }
+  // Draw only the visible grid. A full-width offscreen cache would recreate
+  // the same oversized-canvas failure as the main canvas.
+  ctx.fillStyle = c.bgApp;
+  ctx.fillRect(_viewLeft, _viewTop, viewportWidth, viewportHeight);
+  ctx.lineWidth = 1;
+  const firstBeat = Math.max(0, Math.floor(_viewLeft / beatWidth));
+  const lastBeat = Math.min(totalBeats, Math.ceil(_viewRight / beatWidth));
+  for (let i = firstBeat; i <= lastBeat; i++) {
+    const x = i * beatWidth;
+    const isMeasureLine = (i % beatsPerMeasure === 0);
+    ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
+    ctx.beginPath();
+    ctx.moveTo(x, _viewTop);
+    ctx.lineTo(x, _viewBottom);
+    ctx.stroke();
+    if (isMeasureLine && HEADER_HEIGHT >= _viewTop) {
+      const measureNum = Math.floor(i / beatsPerMeasure) + 1;
+      ctx.fillStyle = c.timeText;
+      ctx.font = '10px sans-serif';
+      ctx.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
     }
-
-    singers.forEach((singer, index) => {
-      const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
-
-      ctx.fillStyle = c.bgElevated;
-      ctx.fillRect(0, y, canvasWidth, SINGER_ROW_HEIGHT - 2);
-
-      ctx.strokeStyle = c.borderSubtle;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, y + SINGER_ROW_HEIGHT - 2);
-      ctx.lineTo(canvasWidth, y + SINGER_ROW_HEIGHT - 2);
-      ctx.stroke();
-    });
-
-    // Cache the grid layer to offscreen canvas
-    const pixelW = Math.floor(canvasWidth * dpr);
-    const pixelH = Math.floor(canvasHeight * dpr);
-    if (!_gridCache || _gridCache.width !== pixelW || _gridCache.height !== pixelH) {
-      _gridCache = document.createElement('canvas');
-      _gridCache.width = pixelW;
-      _gridCache.height = pixelH;
-    }
-    const gridCtx = _gridCache.getContext('2d');
-    gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    gridCtx.drawImage(dom.fragmentCanvas, 0, 0, canvasWidth, canvasHeight);
-    _gridCacheKey = gridCacheKey;
   }
 
-  // Draw dynamic content (fragments) on top of cached grid
-  // 预计算可视区域范围，跳过不可见分片的绘制（拖拽时若有大量分片在可视区域外可显著提速）。
-  const _viewLeft = state.fragmentScrollX;
-  const _viewRight = state.fragmentScrollX + (dom.fragmentContainer.clientWidth || canvasWidth);
-  const _viewTop = state.fragmentScrollY;
-  const _viewBottom = state.fragmentScrollY + (dom.fragmentContainer.clientHeight || canvasHeight);
+  singers.forEach((singer, index) => {
+    const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+    if (y + SINGER_ROW_HEIGHT < _viewTop || y > _viewBottom) return;
+    ctx.fillStyle = c.bgElevated;
+    ctx.fillRect(_viewLeft, y, viewportWidth, SINGER_ROW_HEIGHT - 2);
+    ctx.strokeStyle = c.borderSubtle;
+    ctx.beginPath();
+    ctx.moveTo(_viewLeft, y + SINGER_ROW_HEIGHT - 2);
+    ctx.lineTo(_viewRight, y + SINGER_ROW_HEIGHT - 2);
+    ctx.stroke();
+  });
 
+  // Draw dynamic content (fragments) on top of cached grid
+  // Visible bounds were computed above; skip offscreen dynamic content.
   singers.forEach((singer, index) => {
     const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
     // 跳过整行不在可视区域的 singer

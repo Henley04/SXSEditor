@@ -22,6 +22,8 @@ class SvsWorkerClient {
     this.sessionEPs = {};
     this.loadedModels = new Set();
     this.hardwareInfo = null;
+    this.diffStepIsQDIT = false;
+    this.diffStepLegacyInt8Incompatible = false;
   }
 
   _applyState(state) {
@@ -30,6 +32,8 @@ class SvsWorkerClient {
     this.sessionEPs = state.sessionEPs || {};
     this.loadedModels = new Set(state.loadedModels || []);
     this.hardwareInfo = state.hardwareInfo || null;
+    this.diffStepIsQDIT = !!state.diffStepIsQDIT;
+    this.diffStepLegacyInt8Incompatible = !!state.diffStepLegacyInt8Incompatible;
   }
 
   async _ensureWorker() {

@@ -15,6 +15,9 @@ export default {
     save: '保存',
     load: '加载',
     export: '导出',
+    exportLrc: '导出LRC',
+    lrcNoLyrics: '当前项目没有可导出的歌词',
+    lrcExportFailed: 'LRC 导出失败：{detail}',
     singer: '歌手',
     tracks: '轨道',
     addSinger: '添加歌手',
@@ -44,6 +47,7 @@ export default {
     waitingForInference: '等待推理...',
     exportingProgress: '导出中 {progress}%',
     noFragmentsToPlay: '当前没有分片，无法播放',
+    diffStepLegacyInt8Incompatible: '检测到不兼容的 INT8 旧版 diff_step 模型。当前 INT8 精度已改用 QDIT 量化模型，请更新模型后再使用 INT8 精度。',
     exportFailed: '导出失败',
     exportDialog: {
       title: '导出音频',

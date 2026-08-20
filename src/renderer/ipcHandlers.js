@@ -1,7 +1,16 @@
 import { state, trackManager } from './state.js';
-import { initI18n, applyLocale, getLocale } from '../i18n/index.js';
+import { initI18n, applyLocale, getLocale, tOr } from '../i18n/index.js';
 import { markDirty, autoSaveProject, saveProject, showSaveBeforeCloseDialog } from './projectManager.js';
 import { refreshAll } from './timelineRenderer.js';
+import { showAlertDialog } from '../alertDialog.js';
+
+// int8 旧版 diff_step 模型不兼容弹窗（主进程在 svs:init 时检测并推送一次）
+if (window.electronAPI?.onSVSDiffStepIncompatible) {
+  const cleanup = window.electronAPI.onSVSDiffStepIncompatible(() => {
+    showAlertDialog(tOr('main.diffStepLegacyInt8Incompatible', 'An incompatible legacy INT8 diff_step model was detected. Please update the model.'));
+  });
+  if (cleanup) state._ipcCleanups.push(cleanup);
+}
 
 // Singer created IPC handler
 if (window.electronAPI?.onSingerCreated) {

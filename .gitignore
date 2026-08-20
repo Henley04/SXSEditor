@@ -180,5 +180,8 @@ __pycache__/
 # Web design draft templates (not part of shipped site)
 draft/
 
+# Local backup directory (manual backups before edits)
+.backup/
+
 # Exported audio files
 *.wav

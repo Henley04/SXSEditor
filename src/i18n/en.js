@@ -15,6 +15,9 @@ export default {
     save: 'Save',
     load: 'Load',
     export: 'Export',
+    exportLrc: 'Export LRC',
+    lrcNoLyrics: 'The project has no lyrics to export',
+    lrcExportFailed: 'LRC export failed: {detail}',
     singer: 'Singer',
     tracks: 'Tracks',
     addSinger: 'Add Singer',
@@ -44,6 +47,7 @@ export default {
     waitingForInference: 'Waiting for inference...',
     exportingProgress: 'Exporting {progress}%',
     noFragmentsToPlay: 'No fragments to play',
+    diffStepLegacyInt8Incompatible: 'An incompatible legacy INT8 diff_step model was detected. INT8 precision now uses the QDIT-quantized model — please update the model before using INT8 precision.',
     exportFailed: 'Export failed',
     exportDialog: {
       title: 'Export Audio',

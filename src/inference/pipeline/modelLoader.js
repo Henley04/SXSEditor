@@ -166,6 +166,62 @@ const DUMMY_TEST_INPUTS_NPU = {
     melTransform: { audio: new ort.Tensor('float32', new Float32Array(SAMPLE_RATE), [1, SAMPLE_RATE]) },
 };
 
+// QDIT 量化 diff_step（int8 新模型）签名：动态形状，输入名 x/diffusion_step/x_mask，mask 为 bool。
+// 验证 dummy 不单独维护，createSessionWithValidation 通过 _rebuildDummyForSession 依据会话实际
+// 输入签名动态生成（同时兼容 legacy 的 xt_input/t/cond/xt_mask）。
+
+/**
+ * 依据模型实际输入签名重建 dummy feeds，兼容 legacy（xt_input/t/cond/xt_mask float）
+ * 与 QDIT（x/diffusion_step/cond/x_mask bool）两种 diff_step 签名，以及静态/动态形状。
+ * 形状为符号维度（如 "seq"）时按 3 填充。用于 sessionKey==='diffStep' 的加载验证，
+ * 保证 dummy 与真实输入一一对应，避免 "invalid dimensions" / "is missing in 'feeds'"。
+ * @param {Object} session - 已创建的 InferenceSession
+ * @param {Object} baseDummy - 原精度对应的 dummy（无匹配输入时兜底）
+ * @returns {Object} feeds
+ */
+function _rebuildDummyForSession(session, baseDummy) {
+    try {
+        const meta = session.inputMetadata;
+        if (!Array.isArray(meta) || meta.length === 0) return baseDummy;
+        const feeds = {};
+        let matched = 0;
+        for (const m of meta) {
+            const name = m.name;
+            const type = String(m.type || '');
+            const shape = Array.isArray(m.shape) ? m.shape : [];
+            const isBool = type.includes('bool');
+            const isFp16 = type.includes('16') && !isBool;
+            // 符号维度按 3 填充；缺 shape 时回退 [1, 3, 128]
+            let count = 1;
+            for (const s of shape) count *= (typeof s === 'number' ? s : 3);
+            if (shape.length === 0) count = 3 * (name === 'cond' ? COND_DIM : (name === 'diffusion_step' || name === 't' ? 1 : MEL_DIM));
+            const dataType = isBool ? 'bool' : (isFp16 ? 'float16' : 'float32');
+            if (name === 'x' || name === 'xt_input') {
+                const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
+                feeds[name] = new ort.Tensor(dataType, data, shape);
+                matched++;
+            } else if (name === 'diffusion_step' || name === 't') {
+                const val = isFp16 ? float32ToF16Buffer(new Float32Array([0.5])) : new Float32Array([0.5]);
+                feeds[name] = new ort.Tensor(dataType, val, [1]);
+                matched++;
+            } else if (name === 'cond') {
+                const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
+                feeds[name] = new ort.Tensor(dataType, data, shape);
+                matched++;
+            } else if (name === 'x_mask' || name === 'xt_mask') {
+                const data = isBool ? new Uint8Array(count).fill(1)
+                    : (isFp16 ? float32ToF16Buffer(new Float32Array(count).fill(1)) : new Float32Array(count).fill(1));
+                feeds[name] = new ort.Tensor(dataType, data, shape);
+                matched++;
+            }
+        }
+        return matched > 0 ? feeds : baseDummy;
+    } catch (e) {
+        console.warn('[OnnxSVSPipeline] dummy rebuild failed, using base dummy:', e.message);
+        return baseDummy;
+    }
+}
+
 /** @deprecated Using classifyDevice 替代 */
 function isDiscreteGPUByName(name) {
     const dt = classifyDevice(name, 0, undefined);
@@ -539,8 +595,14 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         return null;
     };
     const _runWithPrecisionFallback = async (session, label) => {
+        // diff_step：依据实际加载会话的输入签名重建 dummy（QDIT 的 x/diffusion_step/x_mask
+        // bool 与 legacy 的 xt_input/t/cond/xt_mask 均正确匹配），避免 "invalid dimensions" /
+        // "is missing in 'feeds'" 导致的误判验证失败。
+        const feeds = sessionKey === 'diffStep'
+            ? _rebuildDummyForSession(session, dummyInputs)
+            : dummyInputs;
         try {
-            await session.run(dummyInputs);
+            await session.run(feeds);
         } catch (err) {
             if (_isTypeMismatchErr(err)) {
                 const alt = _getAlternateDummy();

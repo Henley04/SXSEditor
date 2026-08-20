@@ -57,6 +57,7 @@ export const dom = {
   autoShiftCheck: document.getElementById('auto-shift-check'),
   btnLoad: document.getElementById('btn-load'),
   btnExport: document.getElementById('btn-export'),
+  btnExportLrc: document.getElementById('btn-export-lrc'),
   btnAudioToMidi: document.getElementById('btn-audio-to-midi'),
   btnImportMidi: document.getElementById('btn-import-midi'),
   btnAddSinger: document.getElementById('btn-add-singer'),

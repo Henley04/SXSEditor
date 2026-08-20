@@ -36,6 +36,9 @@ function snapshot() {
     hardwareInfo: pipeline?.initialized && typeof pipeline.getHardwareInfo === 'function'
       ? pipeline.getHardwareInfo() : null,
     loadedModels: pipeline?.sessions ? Object.keys(pipeline.sessions) : [],
+    // diff_step 模型签名标志：QDIT 新模型 / int8 旧模型不兼容
+    diffStepIsQDIT: !!pipeline?.diffStepIsQDIT,
+    diffStepLegacyInt8Incompatible: !!pipeline?.diffStepLegacyInt8Incompatible,
   };
 }
 

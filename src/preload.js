@@ -121,6 +121,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('svs:chunk-audio', handler);
     return () => ipcRenderer.removeListener('svs:chunk-audio', handler);
   },
+  onSVSDiffStepIncompatible: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('svs:model-incompatible', handler);
+    return () => ipcRenderer.removeListener('svs:model-incompatible', handler);
+  },
   getFragmentSVSSampleRate: () => ipcRenderer.invoke('fragment-svs:getSampleRate'),
   initFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:init'),
   synthesizeFragmentSVS: async (data) => {

@@ -123,10 +123,12 @@ const BASE_SVS_MODEL_FILES = new Set([
   'mel_transform.onnx',
 ]);
 
-// diff_step 有 _dml 与非 _dml 两种导出变体（后者为 JP v1/v2 旧包回退用）
+// diff_step 有 _dml 与非 _dml 两种导出变体（后者为 JP v1/v2 旧包回退用），
+// 以及 int8 目录下 QDIT 量化的新模型 diffstep.onnx（cond=1024 + bool mask）。
 const DIFF_STEP_MODEL_FILES = new Set([
   'diff_step_dml.onnx',
   'diff_step.onnx',
+  'diffstep.onnx',
 ]);
 
 // vocoder 有 _dml 与非 _dml 两种导出变体（后者为 DML 不兼容时的回退）

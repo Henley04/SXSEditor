@@ -6,6 +6,51 @@ const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
 
 /**
+ * 解析 diff_step 会话的输入/输出名与 mask 元素类型，兼容两种签名：
+ * - legacy（根目录 FP32 / fp16）：xt_input / t / cond / xt_mask(float) → flow_pred
+ * - QDIT（int8 新模型）：       x / diffusion_step / cond / x_mask(bool) → flow_pred
+ * 旧 int8 静态模型输出名为 output。
+ * @param {Object} session - sessions.diffStep
+ * @returns {{xtInput:string, tInput:string, maskInput:string, maskType:string, outName:string, isQdit:boolean}}
+ */
+function _resolveDiffStepIO(session) {
+    const names = (session && Array.isArray(session.inputNames)) ? session.inputNames : [];
+    const has = (n) => names.indexOf(n) !== -1;
+    const xtInput = has('x') ? 'x' : 'xt_input';
+    const tInput = has('diffusion_step') ? 'diffusion_step' : 't';
+    const maskInput = has('x_mask') ? 'x_mask' : 'xt_mask';
+    let maskType = 'float32';
+    try {
+        const meta = session.inputMetadata;
+        if (Array.isArray(meta)) {
+            const m = meta.find(mi => mi && mi.name === maskInput);
+            const t = m ? String(m.type || '') : '';
+            if (t.includes('bool')) maskType = 'bool';
+            else if (t.includes('16')) maskType = 'float16';
+            else maskType = 'float32';
+        }
+    } catch (_) { /* metadata 读取失败时按 legacy float32 处理 */ }
+    const outNames = (session && Array.isArray(session.outputNames)) ? session.outputNames : [];
+    const outName = outNames.indexOf('flow_pred') !== -1 ? 'flow_pred' : (outNames[0] || 'flow_pred');
+    return { xtInput, tInput, maskInput, maskType, outName, isQdit: has('x') && has('diffusion_step') };
+}
+
+/**
+ * 依据 mask 输入元素类型创建 mask 张量：QDIT 用 bool（Uint8Array 0/1），legacy 用 float。
+ * @param {Object} io - _resolveDiffStepIO 的返回值
+ * @param {string} floatType - 'float16' | 'float32'（仅对非 bool 的 legacy mask 生效）
+ * @param {Float32Array} maskData - 0/1 mask 数据
+ * @param {number[]} dims
+ */
+function _createMaskTensor(io, floatType, maskData, dims) {
+    if (io.maskType === 'bool') {
+        return new ort.Tensor('bool', new Uint8Array(maskData), dims);
+    }
+    const type = io.maskType === 'float16' ? 'float16' : floatType;
+    return createFloatTensor(type, maskData, dims);
+}
+
+/**
  * Read diagnosticMode flag lazily from settings. Returns false if settings
  * cannot be loaded (e.g. running outside Electron main process, in tests).
  * Used to gate [DiffusionDiag] statistical console.log blocks; NaN/Inf fatal
@@ -54,6 +99,7 @@ class Diffusion {
     async runDiffStep(sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, isFP16, useStaticShapes = false) {
         const floatType = isFP16 ? 'float16' : 'float32';
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
+        const io = _resolveDiffStepIO(sessions.diffStep);
 
         const padFloat = (src, len) => {
             if (src.length >= len) return src;
@@ -69,15 +115,15 @@ class Diffusion {
         const xtTensor = createFloatTensor(floatType, xtPadded, [1, seqLen, MEL_DIM]);
         const tTensor = createFloatTensor(floatType, new Float32Array([tVal]), [1]);
         const condTensor = createFloatTensor(floatType, condPadded, [1, seqLen, COND_DIM]);
-        const maskTensor = createFloatTensor(floatType, maskPadded, [1, seqLen]);
+        const maskTensor = _createMaskTensor(io, floatType, maskPadded, [1, seqLen]);
 
         let results;
         try {
             results = await sessions.diffStep.run({
-                xt_input: xtTensor,
-                t: tTensor,
+                [io.xtInput]: xtTensor,
+                [io.tInput]: tTensor,
                 cond: condTensor,
-                xt_mask: maskTensor,
+                [io.maskInput]: maskTensor,
             });
         } catch (err) {
             // 推理失败也要释放输入张量
@@ -88,7 +134,7 @@ class Diffusion {
             throw err;
         }
 
-        const pred = outputToFloat32(results['flow_pred']);
+        const pred = outputToFloat32(results[io.outName]);
 
         // 诊断：检查第一个 step 的输出（gated by diagnosticMode；NaN/Inf 致命错误见下方 always-on console.error）
         if (tVal < 0.1 && _readDiagnosticMode()) {
@@ -102,7 +148,7 @@ class Diffusion {
             console.log(`[DiffusionDiag] Step t=${tVal.toFixed(4)}: xt=[${xtTensor.type} ${xtTensor.dims}], cond=[${condTensor.type} ${condTensor.dims}], flow_pred NaN=${predNaN}, Inf=${predInf - predNaN}, mean=${predMean.toFixed(6)}`);
         }
         // 立即释放输出张量和所有输入张量：outputToFloat32 已拷贝数据到独立 Float32Array
-        disposeTensor(results['flow_pred']);
+        disposeTensor(results[io.outName]);
         disposeTensor(xtTensor);
         disposeTensor(tTensor);
         disposeTensor(condTensor);
@@ -135,6 +181,7 @@ class Diffusion {
     async _runDiffStepWithCachedTensors(sessions, xtInputData, tVal, condTensor, maskTensor, totalFramesWithPrompt, isFP16, useStaticShapes = false) {
         const floatType = isFP16 ? 'float16' : 'float32';
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
+        const io = _resolveDiffStepIO(sessions.diffStep);
 
         const padFloat = (src, len) => {
             if (src.length >= len) return src;
@@ -173,10 +220,10 @@ class Diffusion {
         let results;
         try {
             results = await sessions.diffStep.run({
-                xt_input: xtTensor,
-                t: tTensor,
+                [io.xtInput]: xtTensor,
+                [io.tInput]: tTensor,
                 cond: condTensor,
-                xt_mask: maskTensor,
+                [io.maskInput]: maskTensor,
             });
         } catch (err) {
             disposeTensor(xtTensor);
@@ -184,8 +231,8 @@ class Diffusion {
             throw err;
         }
 
-        const pred = outputToFloat32(results['flow_pred']);
-        disposeTensor(results['flow_pred']);
+        const pred = outputToFloat32(results[io.outName]);
+        disposeTensor(results[io.outName]);
         disposeTensor(xtTensor);
         disposeTensor(tTensor);
         // 注意：condTensor/maskTensor 由调用方在 loop 结束时释放，此处不释放
@@ -229,6 +276,7 @@ class Diffusion {
         xtInputTensor, tTensorBuf, tTensor,
         condTensorConst, condMaskTensorConst,
         ptFrameCount, totalFrames, seqLen, targetLen) {
+        const io = _resolveDiffStepIO(sessions.diffStep);
 
         // === Cond branch: xt = [ptMelData | xtData], cond = combinedCond ===
         xtInputBuf.set(xtData, ptFrameCount * MEL_DIM);
@@ -241,12 +289,12 @@ class Diffusion {
         }
 
         const condResults = await sessions.diffStep.run({
-            xt_input: xtInputTensor,
-            t: tTensor,
+            [io.xtInput]: xtInputTensor,
+            [io.tInput]: tTensor,
             cond: condTensorConst,
-            xt_mask: condMaskTensorConst,
+            [io.maskInput]: condMaskTensorConst,
         });
-        const condPredRaw = condResults['flow_pred'];
+        const condPredRaw = condResults[io.outName];
         const condPredFull = outputToFloat32(condPredRaw);
         disposeTensor(condPredRaw);
 
@@ -277,18 +325,18 @@ class Diffusion {
         const uncondMaskData = new Float32Array(seqLen); // zeros
         for (let i = 0; i < totalFrames; i++) uncondMaskData[i] = 1;
         const uncondCondTensor = createFloatTensor(floatType, uncondCondData, [1, seqLen, COND_DIM]);
-        const uncondMaskTensor = createFloatTensor(floatType, uncondMaskData, [1, seqLen]);
+        const uncondMaskTensor = _createMaskTensor(io, floatType, uncondMaskData, [1, seqLen]);
 
         // Reuse tTensor (same t value), just ensure t buffer has correct value
         // (already set above for cond branch; t is the same for uncond)
 
         const uncondResults = await sessions.diffStep.run({
-            xt_input: uncondXtTensor,
-            t: tTensor,
+            [io.xtInput]: uncondXtTensor,
+            [io.tInput]: tTensor,
             cond: uncondCondTensor,
-            xt_mask: uncondMaskTensor,
+            [io.maskInput]: uncondMaskTensor,
         });
-        const uncondPredRaw = uncondResults['flow_pred'];
+        const uncondPredRaw = uncondResults[io.outName];
         const uncondPredFull = outputToFloat32(uncondPredRaw);
         disposeTensor(uncondPredRaw);
         disposeTensor(uncondXtTensor);
@@ -331,6 +379,8 @@ class Diffusion {
         // No-CFG path uses batch=1 (cond only).
         const diffBatch = useCfg ? 2 : 1;
         const diagnosticMode = _readDiagnosticMode();
+        // 解析 diff_step 会话的输入/输出名与 mask 元素类型（legacy 与 QDIT 兼容）
+        const io = _resolveDiffStepIO(sessions.diffStep);
 
         // Pre-check: if the model's xt_input batch dimension is fixed to 1 (all
         // current diff_step exports have batch=1), skip batch merge entirely to
@@ -341,7 +391,7 @@ class Diffusion {
             try {
                 const inputMeta = sessions.diffStep.inputMetadata;
                 if (Array.isArray(inputMeta)) {
-                    const xtMeta = inputMeta.find(m => m.name === 'xt_input');
+                    const xtMeta = inputMeta.find(m => m.name === io.xtInput);
                     if (xtMeta) {
                         const shape = xtMeta.shape || xtMeta.dims;
                         if (shape && shape[0] === 1) {
@@ -394,7 +444,7 @@ class Diffusion {
         // ===== Task 6: pre-allocate per-step tensors once, reuse .data =====
         // No-CFG (batch=1) path tensors
         const condTensorConst = createFloatTensor(floatType, condPadded, [1, seqLen, COND_DIM]);
-        const condMaskTensorConst = createFloatTensor(floatType, condMaskPadded, [1, seqLen]);
+        const condMaskTensorConst = _createMaskTensor(io, floatType, condMaskPadded, [1, seqLen]);
         let xtInputTensor, tTensorBuf, tTensor;
         if (floatType === 'float16') {
             xtInputTensor = new ort.Tensor('float16', new Uint16Array(seqLen * MEL_DIM), [1, seqLen, MEL_DIM]);
@@ -428,7 +478,7 @@ class Diffusion {
             // (positions seqLen+totalFrames .. 2*seqLen-1 remain 0, padding)
 
             cfgCondTensor = createFloatTensor(floatType, cfgCondBuf, [diffBatch, seqLen, COND_DIM]);
-            cfgMaskTensor = createFloatTensor(floatType, cfgMaskBuf, [diffBatch, seqLen]);
+            cfgMaskTensor = _createMaskTensor(io, floatType, cfgMaskBuf, [diffBatch, seqLen]);
 
             if (floatType === 'float16') {
                 cfgXtTensor = new ort.Tensor('float16', new Uint16Array(diffBatch * seqLen * MEL_DIM), [diffBatch, seqLen, MEL_DIM]);
@@ -523,10 +573,10 @@ class Diffusion {
                 let batchResults;
                 try {
                     batchResults = await sessions.diffStep.run({
-                        xt_input: cfgXtTensor,
-                        t: cfgTTensor,
+                        [io.xtInput]: cfgXtTensor,
+                        [io.tInput]: cfgTTensor,
                         cond: cfgCondTensor,
-                        xt_mask: cfgMaskTensor,
+                        [io.maskInput]: cfgMaskTensor,
                     });
                 } catch (err) {
                     // Model rejects batch>1 (e.g. static-shape variant with batch dim = 1).
@@ -542,7 +592,7 @@ class Diffusion {
                     }
                     throw err;
                 }
-                const batchPredRaw = batchResults['flow_pred'];
+                const batchPredRaw = batchResults[io.outName];
                 const batchPred = outputToFloat32(batchPredRaw);
                 // outputToFloat32 returns a fresh Float32Array; safe to dispose source now
                 disposeTensor(batchPredRaw);
@@ -577,15 +627,15 @@ class Diffusion {
             let results;
             try {
                 results = await sessions.diffStep.run({
-                    xt_input: xtInputTensor,
-                    t: tTensor,
+                    [io.xtInput]: xtInputTensor,
+                    [io.tInput]: tTensor,
                     cond: condTensorConst,
-                    xt_mask: condMaskTensorConst,
+                    [io.maskInput]: condMaskTensorConst,
                 });
             } catch (err) {
                 throw err;
             }
-            const predRaw = results['flow_pred'];
+            const predRaw = results[io.outName];
             const pred = outputToFloat32(predRaw);
             disposeTensor(predRaw);
 

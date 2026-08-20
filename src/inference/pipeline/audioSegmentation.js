@@ -37,7 +37,6 @@ class AudioSegmentation {
      */
     buildVocalSegments(notes, bpm) {
         if (!notes || notes.length === 0) return [{ notes, startBeat: 0, endBeat: 0 }];
-
         if (!Number.isFinite(bpm) || bpm <= 0) {
             throw new RangeError('bpm must be a positive finite number');
         }
@@ -48,93 +47,152 @@ class AudioSegmentation {
                 throw new RangeError('notes must have finite start and positive duration');
             }
         }
-        const totalBeats = sorted[sorted.length - 1].start + sorted[sorted.length - 1].duration;
-        const totalSec = (totalBeats / bpm) * 60;
 
-        if (totalSec <= LONG_AUDIO_THRESHOLD_SEC) {
-            return [{ notes, startBeat: 0, endBeat: totalBeats }];
+        const secondsPerBeat = 60 / bpm;
+        // Conservative scheduling: only gaps >= 1.5 seconds are removed from
+        // model input. Keep 150 ms of rest context on both sides so consonant
+        // releases and the following attack still see an <SP>-like boundary.
+        const LONG_REST_SEC = 1.5;
+        const REST_CONTEXT_SEC = 0.15;
+        const longRestBeats = LONG_REST_SEC / secondsPerBeat;
+        const restContextBeats = REST_CONTEXT_SEC / secondsPerBeat;
+        const isRest = (note) => {
+            const lyric = String(note.lyric || '').trim();
+            const continuation = note.noteType === 3 || note.isSlur || note.isContinuation;
+            return note.pitch <= 0 || note.noteType === 1
+                || lyric === '<SP>' || lyric === '<AP>'
+                || (lyric === '' && !continuation);
+        };
+
+        const timelineEnd = sorted[sorted.length - 1].start + sorted[sorted.length - 1].duration;
+        const timelineSec = timelineEnd * secondsPerBeat;
+        const hasLongRest = sorted.some(note => isRest(note) && note.duration >= longRestBeats);
+        // Preserve the established short-clip path exactly when there is no
+        // expensive long rest to remove.
+        if (!hasLongRest && timelineSec <= LONG_AUDIO_THRESHOLD_SEC) {
+            return [{ notes, startBeat: 0, endBeat: timelineEnd }];
         }
 
-        console.log(`[OnnxSVSPipeline] Long audio detected: ${totalSec.toFixed(1)}s > ${LONG_AUDIO_THRESHOLD_SEC}s, using segmented synthesis`);
+        // Split the score into active inference regions. The central part of a
+        // long rest is intentionally absent, so diffusion and Vocos never run
+        // for it. Short rests stay in-region as model timing context.
+        const regions = [];
+        let current = [];
+        let pendingHeadRest = null;
+        let skippedLongRest = false;
+        const flush = () => {
+            if (current.some(n => !isRest(n))) regions.push(current);
+            current = [];
+        };
+        for (const note of sorted) {
+            if (isRest(note) && note.duration >= longRestBeats) {
+                skippedLongRest = true;
+                const pad = Math.min(restContextBeats, note.duration / 3);
+                if (pad > 0) current.push({ ...note, duration: pad });
+                flush();
+                pendingHeadRest = pad > 0
+                    ? { ...note, start: note.start + note.duration - pad, duration: pad }
+                    : null;
+                continue;
+            }
+            if (pendingHeadRest) {
+                current.push(pendingHeadRest);
+                pendingHeadRest = null;
+            }
+            current.push(note);
+        }
+        flush();
+
+        if (regions.length === 0) return [];
 
         const overlapBeats = (SEGMENT_OVERLAP_SEC / 60) * bpm;
         const minBeats = (SEGMENT_MIN_SEC / 60) * bpm;
         const maxBeats = (SEGMENT_MAX_SEC / 60) * bpm;
-
-        const restBoundaries = [0];
-        for (let i = 0; i < sorted.length; i++) {
-            const note = sorted[i];
-            if (note.lyric && note.lyric.trim().length === 0) {
-                const midBeat = note.start + note.duration / 2;
-                restBoundaries.push(midBeat);
-            }
-            if (i > 0) {
-                const prevEnd = sorted[i - 1].start + sorted[i - 1].duration;
-                const gap = note.start - prevEnd;
-                if (gap > 0.05) {
-                    restBoundaries.push(prevEnd + gap / 2);
-                }
-            }
-        }
-        restBoundaries.push(totalBeats);
-        restBoundaries.sort((a, b) => a - b);
-
         const segments = [];
-        let segStart = 0;
 
-        while (segStart < totalBeats - 0.01) {
-            let segEnd = segStart + maxBeats;
-            let reachedEnd = false;
-
-            if (segEnd >= totalBeats - 0.01) {
-                segEnd = totalBeats;
-                reachedEnd = true;
-            } else {
-                let bestBoundary = segEnd;
-                let bestDist = Infinity;
-                for (const b of restBoundaries) {
-                    if (b <= segStart + minBeats) continue;
-                    if (b >= segStart + maxBeats + overlapBeats) break;
-                    const dist = Math.abs(b - (segStart + (maxBeats + minBeats) / 2));
-                    if (dist < bestDist) {
-                        bestDist = dist;
-                        bestBoundary = b;
-                    }
-                }
-                segEnd = bestBoundary;
-            }
-
-            const segNotes = sorted.filter(n => {
-                const noteEnd = n.start + n.duration;
-                return n.start < segEnd && noteEnd > segStart;
-            }).map(n => {
-                const clippedStart = Math.max(n.start, segStart);
-                const clippedEnd = Math.min(n.start + n.duration, segEnd);
-                return {
-                    ...n,
-                    start: clippedStart - segStart,
-                    duration: Math.max(0.01, clippedEnd - clippedStart),
-                };
-            });
-
-            if (segNotes.length > 0) {
+        const segmentRegion = (regionNotes) => {
+            const regionStart = regionNotes[0].start;
+            const regionEnd = regionNotes[regionNotes.length - 1].start
+                + regionNotes[regionNotes.length - 1].duration;
+            const regionSec = (regionEnd - regionStart) * secondsPerBeat;
+            if (regionSec <= LONG_AUDIO_THRESHOLD_SEC) {
+                const preserveLegacySingle = regions.length === 1 && !skippedLongRest;
                 segments.push({
-                    notes: segNotes,
-                    startBeat: segStart,
-                    endBeat: segEnd,
+                    notes: preserveLegacySingle
+                        ? regionNotes
+                        : regionNotes.map(n => ({ ...n, start: n.start - regionStart })),
+                    startBeat: preserveLegacySingle ? 0 : regionStart,
+                    endBeat: regionEnd,
                 });
+                return;
             }
 
-            // 当末段被夹到 totalBeats 时必须立即终止循环，否则下一轮
-            // segStart = totalBeats - overlapBeats 仍 < totalBeats - 0.01，
-            // 会无限重复处理最后一段并把 segment 对象不断 push 进数组，
-            // 最终耗尽内存（OOM）。overlap 仅用于中间段的衔接，末段无后继。
-            if (reachedEnd) break;
+            const restBoundaries = [regionStart];
+            const noteEndBoundaries = [];
+            for (const note of regionNotes) {
+                if (isRest(note)) restBoundaries.push(note.start + note.duration / 2);
+                else noteEndBoundaries.push(note.start + note.duration);
+            }
+            restBoundaries.push(regionEnd);
+            restBoundaries.sort((a, b) => a - b);
+            noteEndBoundaries.sort((a, b) => a - b);
 
-            segStart = segEnd - overlapBeats;
-            if (segStart >= totalBeats - 0.01) break;
+            let segStart = regionStart;
+            while (segStart < regionEnd - 0.01) {
+                let segEnd = segStart + maxBeats;
+                let reachedEnd = false;
+                if (segEnd >= regionEnd - 0.01) {
+                    segEnd = regionEnd;
+                    reachedEnd = true;
+                } else {
+                    const target = segStart + (maxBeats + minBeats) / 2;
+                    const upper = Math.min(regionEnd, segStart + maxBeats + overlapBeats);
+                    const pickNearest = (candidates) => {
+                        let best = null;
+                        let distance = Infinity;
+                        for (const boundary of candidates) {
+                            if (boundary <= segStart + minBeats) continue;
+                            if (boundary >= upper) break;
+                            const candidateDistance = Math.abs(boundary - target);
+                            if (candidateDistance < distance) {
+                                best = boundary;
+                                distance = candidateDistance;
+                            }
+                        }
+                        return best;
+                    };
+                    segEnd = pickNearest(restBoundaries)
+                        ?? pickNearest(noteEndBoundaries)
+                        ?? segEnd;
+                }
+
+                const segNotes = regionNotes.filter(n => {
+                    const noteEnd = n.start + n.duration;
+                    return n.start < segEnd && noteEnd > segStart;
+                }).map(n => {
+                    const clippedStart = Math.max(n.start, segStart);
+                    const clippedEnd = Math.min(n.start + n.duration, segEnd);
+                    return {
+                        ...n,
+                        start: clippedStart - segStart,
+                        duration: Math.max(0.01, clippedEnd - clippedStart),
+                    };
+                });
+                if (segNotes.some(n => !isRest(n))) {
+                    segments.push({ notes: segNotes, startBeat: segStart, endBeat: segEnd });
+                }
+                if (reachedEnd) break;
+                const nextStart = segEnd - overlapBeats;
+                if (nextStart <= segStart + 0.01) break;
+                segStart = nextStart;
+            }
+        };
+
+        for (const region of regions) segmentRegion(region);
+        const totalSec = (sorted[sorted.length - 1].start + sorted[sorted.length - 1].duration) * secondsPerBeat;
+        if (segments.length > 1 || regions.length > 1) {
+            console.log(`[OnnxSVSPipeline] Scheduled ${segments.length} inference segments across ${regions.length} active regions (${totalSec.toFixed(1)}s timeline); long rests skipped`);
         }
-
         return segments;
     }
 

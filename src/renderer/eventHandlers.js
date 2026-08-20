@@ -10,6 +10,7 @@ import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
+import { exportProjectLrc } from './lrcExport.js';
 
 // Click-vs-drag tracking for fragment selection
 let _clickStartPos = null;
@@ -73,18 +74,17 @@ function _getCurrentPlayheadX() {
 
 /**
  * 把鼠标事件的 clientX 转换为 fragment canvas 内部 X 坐标。
- * 因为 fragment-canvas 自身有 translate(-scrollX, -scrollY) 变换，
- * getBoundingClientRect() 已反映了变换后的位置，所以 clientX-rect.left
- * 直接就是 canvas 内部坐标。
+ * Canvas is viewport-sized, so convert viewport coordinates back to the
+ * virtual timeline by adding the current scroll offset.
  */
 function _mouseToCanvasX(e) {
   const rect = dom.fragmentCanvas.getBoundingClientRect();
-  return e.clientX - rect.left;
+  return e.clientX - rect.left + state.fragmentScrollX;
 }
 
 function _mouseToCanvasY(e) {
   const rect = dom.fragmentCanvas.getBoundingClientRect();
-  return e.clientY - rect.top;
+  return e.clientY - rect.top + state.fragmentScrollY;
 }
 
 /**
@@ -201,6 +201,10 @@ dom.btnExport.addEventListener('click', async () => {
   await exportAll();
 });
 
+if (dom.btnExportLrc) {
+  dom.btnExportLrc.addEventListener('click', exportProjectLrc);
+}
+
 // Add singer
 dom.btnAddSinger.addEventListener('click', () => {
   showSingerSelectDialog(null);
@@ -267,7 +271,19 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
     const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
 
     if (y >= singerY && y < singerY + SINGER_ROW_HEIGHT) {
-      const singerId = singers[i].id;
+      const singer = singers[i];
+      const singerId = singer.id;
+      if (singer.type === 'accompaniment' && singer.audioDuration > 0) {
+        const accStart = singer.accompanimentStartTime || 0;
+        const accDurationBeats = singer.audioDuration / 60 * state.project.bpm;
+        const accX = accStart * beatWidth;
+        const accWidth = Math.max(2, accDurationBeats * beatWidth);
+        if (x >= accX && x <= accX + accWidth) {
+          state.dragState = { type: 'move-accompaniment', singer, startX: x, originalStart: accStart };
+          state.fragmentDragSnapshot = { startTime: accStart };
+          return;
+        }
+      }
       const singerFragments = fragments.filter(f => f.singerId === singerId);
 
       for (const fragment of singerFragments) {
@@ -328,14 +344,16 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
     return;
   }
 
-  const rect = dom.fragmentCanvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  const x = _mouseToCanvasX(e);
+  const y = _mouseToCanvasY(e);
   const beatWidth = getBeatWidth();
   const dx = (x - state.dragState.startX) / beatWidth;
 
   let pendingUpdate = null;
-  if (state.dragState.type === 'move') {
+  if (state.dragState.type === 'move-accompaniment') {
+    const newStart = Math.max(0, state.dragState.originalStart + dx);
+    pendingUpdate = { accompanimentStartTime: Math.round(newStart * 4) / 4 };
+  } else if (state.dragState.type === 'move') {
     const newStart = Math.max(0, state.dragState.originalStart + dx);
     pendingUpdate = { startTime: Math.round(newStart * 4) / 4 };
 
@@ -372,10 +390,14 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
       if (state.dragState?.pendingUpdate) {
         const update = state.dragState.pendingUpdate;
         state.dragState.pendingUpdate = null;
-        trackManager.updateFragment(state.dragState.fragment.id, update);
+        if (state.dragState.type === 'move-accompaniment') {
+          trackManager.updateSinger(state.dragState.singer.id, update);
+        } else {
+          trackManager.updateFragment(state.dragState.fragment.id, update);
+        }
       }
       renderFragmentTimeline();
-      if (window.electronAPI?.updateFragmentBounds && state.dragState) {
+      if (window.electronAPI?.updateFragmentBounds && state.dragState?.fragment) {
         const frag = state.dragState.fragment;
         window.electronAPI.updateFragmentBounds(frag.id, {
           startTime: frag.startTime,
@@ -391,6 +413,25 @@ dom.fragmentCanvas.addEventListener('mouseup', (e) => {
   // 结束 playhead 拖拽：若拖拽前正在播放，从新位置恢复播放
   if (_isPlayheadDragging) {
     _endPlayheadDrag();
+    return;
+  }
+
+  if (state.dragState?.type === 'move-accompaniment') {
+    const singer = state.dragState.singer;
+    const oldStart = state.fragmentDragSnapshot?.startTime ?? 0;
+    const newStart = singer.accompanimentStartTime || 0;
+    if (oldStart !== newStart) {
+      const singerId = singer.id;
+      history.push({
+        undo() { trackManager.updateSinger(singerId, { accompanimentStartTime: oldStart }); renderFragmentTimeline(); markDirty(); },
+        redo() { trackManager.updateSinger(singerId, { accompanimentStartTime: newStart }); renderFragmentTimeline(); markDirty(); },
+      });
+      markDirty();
+    }
+    state.dragState = null;
+    state.fragmentDragSnapshot = null;
+    _clickStartPos = null;
+    renderFragmentTimeline();
     return;
   }
 
@@ -413,6 +454,11 @@ dom.fragmentCanvas.addEventListener('mouseup', (e) => {
   finishDrag();
 });
 dom.fragmentCanvas.addEventListener('mouseleave', () => {
+  if (state.dragState?.type === 'move-accompaniment') {
+    markDirty();
+    state.dragState = null;
+    state.fragmentDragSnapshot = null;
+  }
   _clickStartPos = null;
   _endPlayheadDrag();
   finishDrag();
@@ -514,9 +560,11 @@ function _processPendingWheel() {
       state.fragmentScrollY += e.deltaY;
     }
     syncFragmentScroll();
+    renderFragmentTimeline();
   } else if (target === dom.singerListEl) {
     state.fragmentScrollY += e.deltaY;
     syncFragmentScroll();
+    renderFragmentTimeline();
   }
 }
 

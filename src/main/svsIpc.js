@@ -11,6 +11,10 @@ const { detectJapaneseNotes: _detectJapaneseNotes, detectEnglishNotes: _detectEn
 
 let currentLanguage = null; // Track current pipeline language
 
+// diff_step 旧 int8 模型不兼容弹窗只提示一次（跨窗口去重：主窗口先 init 后，
+// 分片窗口再 init 时不再重复弹窗）。
+let _diffStepIncompatibleNotified = false;
+
 // 合成级互斥锁：DML 后端下同一个 GPU 设备上的多个 InferenceSession 不支持并发 session.run()，
 // 否则命令流交叉提交会导致 887A0005 (GPU device hung)。
 // 此锁确保同一时刻只有一个合成请求在执行，防止 playAll/exportAll/fragment 合成并发。
@@ -131,9 +135,29 @@ function _makeRmvpeExtractor() {
 }
 
 function registerSvsIpc() {
-  ipcMain.handle('svs:init', async () => {
+  // 当 int8 目录下检测到旧版 diff_step 模型（cond≠1024）时，向触发初始化的窗口推送提示事件。
+  // 由渲染进程用自身 i18n 渲染弹窗文案（主/渲染进程双语字典各自维护）。
+  // 仅首次触发初始化的窗口收到事件（_diffStepIncompatibleNotified 全局去重）。
+  function notifyDiffStepIncompatible(win) {
+    if (_diffStepIncompatibleNotified) return;
+    _diffStepIncompatibleNotified = true;
+    try {
+      if (win && !win.isDestroyed()) {
+        win.send('svs:model-incompatible');
+      }
+    } catch (_) {}
+  }
+
+  function getDiffStepIncompatible() {
+    const pipeline = svsPipelineLazy.getInstance();
+    return !!(pipeline && pipeline.diffStepLegacyInt8Incompatible === true);
+  }
+
+  ipcMain.handle('svs:init', async (event) => {
     await svsPipelineLazy.get();
-    return { success: true };
+    const incompatible = getDiffStepIncompatible();
+    if (incompatible) notifyDiffStepIncompatible(event.sender);
+    return { success: true, diffStepLegacyInt8Incompatible: incompatible };
   });
 
   ipcMain.handle('svs:synthesize', async (event, { notes, bpm, options }) => {
@@ -262,9 +286,11 @@ function registerSvsIpc() {
     return SAMPLE_RATE;
   });
 
-  ipcMain.handle('fragment-svs:init', async () => {
+  ipcMain.handle('fragment-svs:init', async (event) => {
     await svsPipelineLazy.get();
-    return { success: true };
+    const incompatible = getDiffStepIncompatible();
+    if (incompatible) notifyDiffStepIncompatible(event.sender);
+    return { success: true, diffStepLegacyInt8Incompatible: incompatible };
   });
 
   ipcMain.handle('fragment-svs:synthesize', async (event, { notes, bpm, options }) => {

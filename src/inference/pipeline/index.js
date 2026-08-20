@@ -95,6 +95,10 @@ class OnnxSVSPipeline {
         this.isFP16 = false; // 基础模型精度（历史字段名，等同 baseModelsIsFP16）
         this.diffStepIsFP16 = false; // diff_step 独立精度（可能与 isFP16 不同，如 W16A32 回退到 FP32 时）
         this.vocoderIsFP16 = false; // vocoder 独立精度（由 vocoder 文件类型/大小检测，与 isFP16 解耦）
+        // QDIT 量化 diff_step（int8 新模型）签名标志：x/diffusion_step/x_mask(bool)。
+        // 供 svsWorker snapshot / 渲染进程弹窗提示使用。
+        this.diffStepIsQDIT = false; // 当前 diff_step 是否为 QDIT 新模型
+        this.diffStepLegacyInt8Incompatible = false; // int8 目录下检测到旧模型（cond≠1024）时置 true
         this.gpuDeviceName = '';
         this.dmlDeviceId = undefined;
         this.initialized = false;
@@ -279,25 +283,18 @@ class OnnxSVSPipeline {
             delete this.sessions[key];
             delete this.sessionEPs[key];
 
-            // Resolve actual file to load (handle diff_step_dml → diff_step fallback)
+            // Resolve actual file to load (int8 优先 QDIT diffstep.onnx，
+            // 其余处理 diff_step_dml → diff_step fallback)
             let resolvedFile = file;
             if (file === 'diff_step_dml.onnx') {
-                const dmlPath = this._getModelPath('diff_step_dml.onnx');
-                let dmlExists = false;
-                try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
-                if (!dmlExists) {
-                    // JP 目录缺少 diff_step_dml.onnx，回退到 base 目录的 diff_step.onnx
-                    // （适用于 v1/v2 未导出 diff_step 的旧 JP 模型包）
-                    resolvedFile = 'diff_step.onnx';
-                    console.warn('[OnnxSVSPipeline] JP diff_step_dml.onnx not found, falling back to base diff_step.onnx');
-                } else {
-                    console.log(`[OnnxSVSPipeline] Loading diff_step from: ${dmlPath}, isFP16=${this.isFP16}, dmlDeviceId=${this.dmlDeviceId}`);
-                    // Check file size for diagnostic
-                    try {
-                        const stat = await fs.promises.stat(dmlPath);
-                        console.log(`[OnnxSVSPipeline] diff_step_dml.onnx file size: ${(stat.size / 1024 / 1024).toFixed(1)} MB`);
-                    } catch (_) {}
-                }
+                resolvedFile = await this._resolveDiffStepFile();
+                const dmlPath = this._getModelPath(resolvedFile);
+                console.log(`[OnnxSVSPipeline] Loading diff_step from: ${dmlPath}, isFP16=${this.isFP16}, dmlDeviceId=${this.dmlDeviceId}`);
+                // Check file size for diagnostic
+                try {
+                    const stat = await fs.promises.stat(dmlPath);
+                    console.log(`[OnnxSVSPipeline] ${resolvedFile} file size: ${(stat.size / 1024 / 1024).toFixed(1)} MB`);
+                } catch (_) {}
             }
 
             // Load new model from the updated path
@@ -559,6 +556,45 @@ class OnnxSVSPipeline {
     _computeSynthCacheKey(notes, bpm, options) { return this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this)); }
     _computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) { return this._audioSegmentation.computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount); }
     _median(arr) { return this._audioSegmentation.median(arr); }
+
+    /**
+     * Diffusion can produce non-zero rest mel even with pitch/F0=0. Vocos then
+     * turns that mel into hiss or breath-like noise. Enforce score silence on
+     * the final waveform, after vocoder normalization, with short edge fades.
+     */
+    _silenceNonVocalRegions(audio, notes, bpm, bufferStartBeat = 0) {
+        if (!audio || audio.length === 0 || !notes || notes.length === 0) return audio;
+        const secondsPerBeat = 60 / bpm;
+        const mergeGapSamples = Math.round(0.04 * SAMPLE_RATE);
+        const fadeSamples = Math.max(1, Math.round(0.015 * SAMPLE_RATE));
+        const intervals = [];
+        for (const note of notes) {
+            const lyric = String(note.lyric || '').trim();
+            const isRest = note.pitch <= 0 || note.noteType === 1
+                || lyric === '<SP>' || lyric === '<AP>';
+            if (isRest) continue;
+            const start = Math.max(0, Math.round((note.start - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE));
+            const end = Math.min(audio.length, Math.round((note.start + note.duration - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE));
+            if (end <= start) continue;
+            const prev = intervals[intervals.length - 1];
+            if (prev && start - prev.end <= mergeGapSamples) prev.end = Math.max(prev.end, end);
+            else intervals.push({ start, end });
+        }
+        let cursor = 0;
+        for (const interval of intervals) {
+            audio.fill(0, cursor, interval.start);
+            const fade = Math.min(fadeSamples, Math.floor((interval.end - interval.start) / 2));
+            for (let i = 0; i < fade; i++) {
+                const gainIn = (i + 1) / fade;
+                const gainOut = (fade - i) / fade;
+                audio[interval.start + i] *= gainIn;
+                audio[interval.end - fade + i] *= gainOut;
+            }
+            cursor = interval.end;
+        }
+        audio.fill(0, cursor);
+        return audio;
+    }
 
     /**
      * 限制 autoShift 的 f0Shift 范围，防止偏移后音高超出模型/vocoder 训练分布。
@@ -1087,6 +1123,39 @@ class OnnxSVSPipeline {
     }
 
     /**
+     * 解析 diff_step 实际要加载的模型文件名。
+     *
+     * int8 / int8-npu 精度优先使用 QDIT 量化新模型 diffstep.onnx
+     * （cond=1024 + bool mask 签名）。若不存在则回退旧命名
+     * diff_step_dml.onnx → diff_step.onnx；此时若加载的是旧 int8 模型
+     * （cond=512），由 _detectDiffStepPrecision 检测并置
+     * diffStepLegacyInt8Incompatible 标志提示用户更新。
+     *
+     * 其他精度保持原逻辑：diff_step_dml.onnx → diff_step.onnx。
+     * 文件存在性通过 _getModelPath 检查，以兼容 JP 语言目录。
+     * @returns {Promise<string>} 解析后的 diff_step 文件名
+     */
+    async _resolveDiffStepFile() {
+        const isInt8 = this._modelPrecision === 'int8' || this._modelPrecision === 'int8-npu';
+        if (isInt8) {
+            const qditPath = this._getModelPath('diffstep.onnx');
+            let qditExists = false;
+            try { await fs.promises.access(qditPath); qditExists = true; } catch (_) {}
+            if (qditExists) {
+                console.log('[OnnxSVSPipeline] int8: using QDIT diffstep.onnx');
+                return 'diffstep.onnx';
+            }
+            console.warn('[OnnxSVSPipeline] int8: diffstep.onnx (QDIT) not found, falling back to diff_step_dml.onnx / diff_step.onnx');
+        }
+        const dmlPath = this._getModelPath('diff_step_dml.onnx');
+        let dmlExists = false;
+        try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
+        if (dmlExists) return 'diff_step_dml.onnx';
+        console.warn('[OnnxSVSPipeline] diff_step_dml.onnx not found, using diff_step.onnx');
+        return 'diff_step.onnx';
+    }
+
+    /**
      * 解析模型文件路径：DML 变体检查 + SiFiGAN 三级回退 + 文件存在性校验
      * 设置 this.vocoderType / this.sifiganStatsPath / this._resolvedVocoderFile
      * @returns {Promise<{resolvedModelFiles: string[], modelStats: Array}>}
@@ -1110,13 +1179,11 @@ class OnnxSVSPipeline {
         this.vocoderType = vocoderType;
         this.sifiganPrecision = sifiganPrecision;
 
-        // 检查 diff_step_dml 是否存在（仅 init 阶段需要，vocoder swap 不会触及）
-        const dmlExists = await (dmlIdx >= 0
-            ? fs.promises.access(path.join(this.modelDir, 'diff_step_dml.onnx')).then(() => true, () => false)
-            : Promise.resolve(true));
-        if (dmlIdx >= 0 && !dmlExists) {
-            resolvedModelFiles[dmlIdx] = 'diff_step.onnx';
-            console.log('[OnnxSVSPipeline] diff_step_dml.onnx not found, using diff_step.onnx');
+        // 解析 diff_step 实际文件：int8/int8-npu 优先 QDIT 新模型 diffstep.onnx，
+        // 其余按旧逻辑 diff_step_dml.onnx → diff_step.onnx 回退（仅 init 阶段需要，
+        // vocoder swap 不会触及）
+        if (dmlIdx >= 0) {
+            resolvedModelFiles[dmlIdx] = await this._resolveDiffStepFile();
         }
 
         // 解析 vocoder 文件（四级回退逻辑由 _resolveVocoderFile 集中处理）
@@ -1749,30 +1816,62 @@ class OnnxSVSPipeline {
      *
      * 读取 sessions.diffStep.inputMetadata 的 xt_input 类型来设置 diffStepIsFP16。
      * 失败时回退到基础模型精度（this.isFP16）作为兜底。
+     *
+     * 同时识别 QDIT 量化新模型签名（x/diffusion_step/x_mask bool）：
+     * - diffStepIsQDIT = true（int8 新模型，pipeline 已按新签名适配）
+     * - diffStepLegacyInt8Incompatible = true（int8 目录下检测到旧版模型：legacy 签名
+     *   且 cond 维度 ≠ 1024，即旧 int8 的 512 维 cond，与管线 1024 维 cond 不匹配）。
+     *   该标志由 svsWorker snapshot 转发到渲染进程，提示用户更新模型。
      */
     _detectDiffStepPrecision() {
         try {
             const session = this.sessions.diffStep;
             if (!session) {
                 this.diffStepIsFP16 = this.isFP16;
+                this.diffStepIsQDIT = false;
+                this.diffStepLegacyInt8Incompatible = false;
                 return;
             }
             const meta = session.inputMetadata || [];
-            // inputMetadata 是数组：[{name, type, ...}, ...]
-            let xtInputType = null;
+            // inputMetadata 是数组：[{name, type, shape, ...}, ...]
+            const has = (n) => meta.some(m => m && m.name === n);
+            // QDIT 新模型：x / diffusion_step / x_mask(bool)
+            this.diffStepIsQDIT = has('x') && has('diffusion_step') && has('x_mask');
+
+            let dataInputType = null;
             for (const m of meta) {
-                if (m.name === 'xt_input') { xtInputType = m.type; break; }
+                if (m.name === 'x' || m.name === 'xt_input') { dataInputType = m.type; break; }
             }
-            if (xtInputType) {
-                this.diffStepIsFP16 = xtInputType === 'float16';
-                console.log(`[OnnxSVSPipeline] diff_step precision: ${xtInputType} (diffStepIsFP16=${this.diffStepIsFP16})`);
+            if (dataInputType) {
+                this.diffStepIsFP16 = dataInputType === 'float16';
+                console.log(`[OnnxSVSPipeline] diff_step precision: ${dataInputType} (diffStepIsFP16=${this.diffStepIsFP16}, QDIT=${this.diffStepIsQDIT})`);
             } else {
-                console.warn('[OnnxSVSPipeline] diff_step xt_input metadata not found, defaulting to global isFP16');
+                console.warn('[OnnxSVSPipeline] diff_step x/xt_input metadata not found, defaulting to global isFP16');
                 this.diffStepIsFP16 = this.isFP16;
+            }
+
+            // 旧 int8 模型检测：legacy 签名 + cond 维度 ≠ COND_DIM(1024)（旧 int8 为 512）。
+            // 仅当精度为 int8 / int8-npu 时置不兼容标志，避免误伤 fp32/fp16 目录下的合法 legacy 模型。
+            let legacyInt8 = false;
+            let condDim = null;
+            if (!this.diffStepIsQDIT && (this._modelPrecision === 'int8' || this._modelPrecision === 'int8-npu')) {
+                for (const m of meta) {
+                    if (m.name === 'cond' && Array.isArray(m.shape) && m.shape.length > 0) {
+                        condDim = m.shape[m.shape.length - 1];
+                        break;
+                    }
+                }
+                legacyInt8 = typeof condDim === 'number' && condDim !== COND_DIM;
+            }
+            this.diffStepLegacyInt8Incompatible = legacyInt8;
+            if (legacyInt8) {
+                console.warn(`[OnnxSVSPipeline] diff_step legacy int8 model detected (cond=${condDim}, expected ${COND_DIM}) — INCOMPATIBLE, please update the model`);
             }
         } catch (e) {
             console.warn('[OnnxSVSPipeline] diff_step precision detection failed:', e.message);
             this.diffStepIsFP16 = this.isFP16;
+            this.diffStepIsQDIT = false;
+            this.diffStepLegacyInt8Incompatible = false;
         }
     }
 
@@ -2935,6 +3034,10 @@ class OnnxSVSPipeline {
         }
 
         const segments = this._buildVocalSegments(filledNotes, bpm);
+        if (segments.length === 0) {
+            onProgress(100);
+            return new Float32Array(0);
+        }
 
         if (segments.length === 1) {
             const seg = segments[0];
@@ -3076,6 +3179,7 @@ class OnnxSVSPipeline {
                     const endSample = Math.min(startSample + validSamples, audioData.length);
                     audioData = audioData.subarray(startSample, endSample);
                 }
+                this._silenceNonVocalRegions(audioData, filledNotes, bpm, filledNotes[0]?.start || 0);
                 const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
                 if (audioData.length <= MAX_CACHE_SAMPLES) {
                     this._synthCachePut(cacheKey, audioData);
@@ -3134,6 +3238,7 @@ class OnnxSVSPipeline {
                 audioData = audioData.subarray(startSample, endSample);
             }
 
+            this._silenceNonVocalRegions(audioData, filledNotes, bpm, filledNotes[0]?.start || 0);
             const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120; // 2 分钟
             if (audioData.length <= MAX_CACHE_SAMPLES) {
                 this._synthCachePut(cacheKey, audioData);
@@ -3385,6 +3490,7 @@ class OnnxSVSPipeline {
         const audioData = firstNoteStartSample > 0
             ? finalAudio.subarray(firstNoteStartSample)
             : finalAudio;
+        this._silenceNonVocalRegions(audioData, filledNotes, bpm, filledNotes[0]?.start || 0);
         const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
         if (audioData.length <= MAX_CACHE_SAMPLES) {
             this._synthCachePut(cacheKey, audioData);
@@ -3484,13 +3590,8 @@ class OnnxSVSPipeline {
 
         let resolvedFile = modelFile;
         if (modelFile === 'diff_step_dml.onnx') {
-            // 在 JP 模式下检查 jpModelDir，否则检查 modelDir
-            const dmlPath = this._getModelPath('diff_step_dml.onnx');
-            let dmlExists = false;
-            try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
-            if (!dmlExists) {
-                resolvedFile = 'diff_step.onnx';
-            }
+            // int8 优先 QDIT diffstep.onnx；其余检查 _dml 变体，缺失回退 diff_step.onnx
+            resolvedFile = await this._resolveDiffStepFile();
         }
         if (modelFile === 'vocoder_dml.onnx') {
             const vocDmlPath = path.join(this.modelDir, 'vocoder_dml.onnx');

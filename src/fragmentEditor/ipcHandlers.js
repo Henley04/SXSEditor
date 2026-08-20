@@ -1,4 +1,4 @@
-import { t } from '../i18n/index.js';
+import { t, tOr } from '../i18n/index.js';
 import {
   getFragmentIsSynthesizing,
   getFragmentIsExporting,
@@ -35,9 +35,18 @@ import { PARAM_MODES } from './constants.js';
 import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
 import { updateParamModeButtons } from './uiControls.js';
 import { autoDetectKanjiGroups, cleanupKanjiGroups } from './kanjiGroupUtils.js';
+import { showAlertDialog } from '../alertDialog.js';
 
 export function setupIpcHandlers() {
   const _ipcCleanups = getIpcCleanups();
+
+  // int8 旧版 diff_step 模型不兼容弹窗（主进程在 fragment-svs:init 时检测并推送一次）
+  if (window.electronAPI?.onSVSDiffStepIncompatible) {
+    const cleanupIncompatible = window.electronAPI.onSVSDiffStepIncompatible(() => {
+      showAlertDialog(tOr('main.diffStepLegacyInt8Incompatible', 'An incompatible legacy INT8 diff_step model was detected. Please update the model.'));
+    });
+    if (cleanupIncompatible) _ipcCleanups.push(cleanupIncompatible);
+  }
 
   const cleanupProgress = window.electronAPI.onFragmentSVSProgress((progress) => {
     // 区分播放预览和导出：各自只更新对应的按钮，避免互相覆盖。
