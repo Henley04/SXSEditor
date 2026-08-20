@@ -96,6 +96,12 @@ A trim dialog opens automatically. Use it to select a 30-second segment of the a
 - Good articulation
 - 10–30 seconds of continuous singing
 
+### What is the Singer Market?
+
+The Singer Market is a built-in feature that lets you browse and download community-created singers without leaving the app. Instead of creating a singer from your own reference audio, you can pick from a library of pre-made voice profiles shared by other users.
+
+Open it by clicking the **+** button in the singer panel and choosing **Open Singer Market**. Downloaded singers are loaded into your project immediately and ready to use.
+
 ---
 
 ## Fragment Editing
@@ -177,11 +183,11 @@ DirectML supports NVIDIA, AMD, and Intel GPUs (both discrete and integrated). NP
 
 ### What is the output sample rate?
 
-Synthesis runs at 24kHz internally. Output sample rate is configurable in Settings (22050 to 192000 Hz). In exclusive mode, the device must support the selected rate.
+Synthesis runs at 24kHz internally (the SVS model's native rate). The default output sample rate is **48 kHz** (changed from 24 kHz in earlier versions), with 2× oversampling anti-aliasing for improved quality. Output sample rate is configurable in Settings (22050 to 192000 Hz). In exclusive mode, the device must support the selected rate.
 
 ### What format is the exported WAV?
 
-24kHz, 16-bit PCM WAV by default. The output sample rate setting may affect this.
+48 kHz, 16-bit PCM WAV by default. Export sample rate is selectable: 24/44.1/48/96 kHz. The SVS model runs at 24 kHz internally and the output is resampled with 2× oversampling anti-aliasing.
 
 ---
 
@@ -193,7 +199,8 @@ A feature that converts an existing audio file into MIDI notes. It extracts note
 
 ### Which extraction tool should I use?
 
-- **Basic Pitch** (recommended): Neural network-based, stable results for most scenarios.
+- **FCPE** (recommended): ONNX-based, fast and accurate. Features a configurable post-processing pipeline for note onset/offset detection and pitch quantization.
+- **Basic Pitch**: Neural network-based (TensorFlow.js), stable results for most scenarios.
 - **RMVPE**: Converts F0 pitch curve to notes. Experimental, results may be suboptimal.
 
 Change this in Settings > Audio > MIDI Extraction Tool.
@@ -201,6 +208,39 @@ Change this in Settings > Audio > MIDI Extraction Tool.
 ### Can I extract a pitch curve too?
 
 Yes. When using Audio to MIDI, choose "Extract Pitch (RMVPE)" to also extract an F0 pitch curve that is applied to the fragment.
+
+---
+
+## New Features
+
+### Can I add background music to my project?
+
+Yes. You can add **accompaniment tracks** alongside vocal fragments. Import WAV, MP3, FLAC, OGG, M4A, or AAC files as accompaniment clips on the timeline. Each accompaniment track has its own volume control, and clips can be dragged to reposition them. Accompaniment audio is mixed with synthesized vocals during both playback and export.
+
+### Can I export lyrics?
+
+Yes. Use **File > Export LRC** to export the project's lyrics as a timed `.lrc` file. Each lyric line includes a timestamp tag corresponding to when it is sung in the project. The LRC file can be used alongside the exported WAV for karaoke-style lyric display in compatible music players.
+
+### What are diffusion samplers and which should I use?
+
+The diffusion model iteratively denoises a mel spectrogram by solving an ODE. The **sampler** is the numerical solver that determines how each step combines model evaluations. Four samplers are available:
+
+| Sampler | Speed | Quality | Notes |
+|---------|-------|---------|-------|
+| **Euler** (default) | Fastest | Baseline | Most predictable; best for chunked previews |
+| **Heun** | 2× slower | Higher accuracy | Second-order trapezoidal rule |
+| **Extrapolated Euler** | Same as Euler | Heuristic improvement | Reuses previous step's velocity; benefit is strongest with smooth velocity fields |
+| **STORK-2** | Same as Euler | Designed for stiff ODEs | Paper-faithful (ICLR 2026); higher per-step algebraic cost |
+
+For most users, **Euler** is the best choice for preview (fast) and **Heun** or **STORK-2** for export (higher quality). Samplers can be configured independently for preview and export in Settings.
+
+### What is Dynamic Thresholding?
+
+Dynamic Thresholding is a per-frame percentile clipping technique (arXiv:2507.08965) that suppresses outlier mel bins during diffusion sampling, reducing artifacts without sacrificing detail. The percentile is adjustable (0.9–0.999); higher values preserve more detail, lower values are more aggressive at suppressing artifacts.
+
+### Why was the default sample rate changed to 48 kHz?
+
+The SVS model runs at 24 kHz internally. Previously, the output was also 24 kHz, which limited high-frequency fidelity. The default is now 48 kHz with 2× oversampling anti-aliasing, which significantly improves output quality. The export sample rate is selectable (24/44.1/48/96 kHz) if you need a different rate.
 
 ---
 

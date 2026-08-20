@@ -88,6 +88,7 @@
 │  main_window          (src/renderer/)        Multi-track timeline, project management    │
 │  fragment_editor      (src/fragmentEditor/)  Piano-roll editor, SVS preview              │
 │  singer_creator       (src/singerCreator.js) Singer creation wizard                      │
+│  singer_market        (src/singerMarket.js)  Singer marketplace UI                       │
 │  audio_preprocess     (src/audioPreprocess/) F0 / MIDI extraction UI                     │
 │  settings             (src/settings.js)      Device, inference, audio config             │
 │  model_download       (src/modelDownload.js) Chunked parallel download from ModelScope   │
@@ -201,7 +202,7 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
           </tr>
           <tr>
             <td><span data-lang="en">SVS</span><span data-lang="zh">SVS</span></td>
-            <td><code>svs:init</code>, <code>svs:synthesize</code>, <code>fragment-svs:synthesize</code></td>
+            <td><code>svs:init</code>, <code>svs:synthesize</code>, <code>svs:cancel</code>, <code>fragment-svs:synthesize</code></td>
             <td><code>main/svsIpc.js</code></td>
           </tr>
           <tr>
@@ -243,6 +244,21 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
             <td><span data-lang="en">Locale</span><span data-lang="zh">语言</span></td>
             <td><code>save-locale</code>, <code>get-locale</code>, <code>locale-changed</code></td>
             <td><code>main.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Singer Market</span><span data-lang="zh">歌手市场</span></td>
+            <td><code>singer-market:fetch</code>, <code>singer-market:download</code></td>
+            <td><code>main/singerMarketIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Accompaniment</span><span data-lang="zh">伴奏</span></td>
+            <td><code>accompaniment:import</code>, <code>accompaniment:export-mix</code></td>
+            <td><code>main/audioIpc.js</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Lyrics / LRC</span><span data-lang="zh">歌词 / LRC</span></td>
+            <td><code>lrc:export</code></td>
+            <td><code>main/svsIpc.js</code></td>
           </tr>
         </tbody>
       </table>
@@ -297,6 +313,11 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
             <td><span data-lang="en">Custom-singer creation wizard from reference WAV.</span><span data-lang="zh">从参考 WAV 创建自定义歌手的向导。</span></td>
           </tr>
           <tr>
+            <td><code>singer_market_window</code></td>
+            <td><code>src/singerMarket.js</code></td>
+            <td><span data-lang="en">Browse, download, and share community-created singers via a marketplace UI.</span><span data-lang="zh">通过市场界面浏览、下载和分享社区创建的歌手。</span></td>
+          </tr>
+          <tr>
             <td><code>audio_preprocess_window</code></td>
             <td><code>src/audioPreprocess/index.js</code></td>
             <td><span data-lang="en">F0 (RMVPE) and MIDI (Basic Pitch) extraction UI.</span><span data-lang="zh">F0（RMVPE）与 MIDI（Basic Pitch）提取界面。</span></td>
@@ -344,6 +365,27 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
           <p data-lang="zh">CLI 调试模式（<code>--cli</code>）在任何窗口创建之前拦截启动流程。它调用 <code>app.whenReady()</code>，执行请求的命令，并通过 <code>app.exit(code)</code> 退出——见 <a href="testing-cli.html">测试与命令行</a>。</p>
         </div>
       </div>
+
+      <h2>
+        <span data-lang="en">New Modules (post-v1.0.8)</span>
+        <span data-lang="zh">新模块（v1.0.8 之后）</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong><code>src/inference/fcpeDetector.js</code></strong> — FCPE (Fast Context-Free Pitch Estimator) ONNX-based F0 extraction. Now the default MIDI extraction tool, replacing Basic Pitch.</span><span data-lang="zh"><strong><code>src/inference/fcpeDetector.js</code></strong>— 基于 ONNX 的 FCPE（Fast Context-Free Pitch Estimator）F0 提取。现为默认 MIDI 提取工具，替代 Basic Pitch。</span></li>
+        <li><span data-lang="en"><strong><code>src/audio/lrcExport.js</code></strong> — LRC lyrics file export module. Exports project lyrics as a timed <code>.lrc</code> file synchronized with note timings.</span><span data-lang="zh"><strong><code>src/audio/lrcExport.js</code></strong>— LRC 歌词文件导出模块。将项目歌词导出为与音符时间同步的 <code>.lrc</code> 文件。</span></li>
+        <li><span data-lang="en"><strong><code>src/editor/accompanimentTrack.js</code></strong> — Accompaniment track management: import audio files, multi-channel support, per-track volume control, and drag-to-move positioning on the timeline.</span><span data-lang="zh"><strong><code>src/editor/accompanimentTrack.js</code></strong>— 伴奏轨道管理：导入音频文件、多通道支持、逐轨音量控制，以及时间线上的拖拽移动定位。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Behavior Changes (post-v1.0.8)</span>
+        <span data-lang="zh">行为变更（v1.0.8 之后）</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>Audio sample rate</strong> — the default playback sample rate changed from 24 kHz to 48 kHz. Export sample rate is now user-selectable (24 / 44.1 / 48 / 96 kHz).</span><span data-lang="zh"><strong>音频采样率</strong>— 默认播放采样率从 24 kHz 改为 48 kHz。导出采样率现可选（24 / 44.1 / 48 / 96 kHz）。</span></li>
+        <li><span data-lang="en"><strong>Synthesis cancellation</strong> — replaces <code>worker.terminate()</code> with cooperative <code>AbortController</code>-based cancellation. GPU inference exits at safe checkpoints between diffusion steps.</span><span data-lang="zh"><strong>合成取消</strong>— 用基于 <code>AbortController</code> 的协作式取消替代 <code>worker.terminate()</code>。GPU 推理在扩散步之间的安全检查点退出。</span></li>
+        <li><span data-lang="en"><strong>Timeline canvas</strong> — now uses a viewport-sized backing store with scroll transform instead of a single oversized canvas, reducing memory usage for long projects.</span><span data-lang="zh"><strong>时间线画布</strong>— 改用视口大小的 backing store 配合滚动变换，替代单个超大画布，降低长项目的内存占用。</span></li>
+        <li><span data-lang="en"><strong>autoShift granularity</strong> — per-segment autoShift was replaced with per-fragment global autoShift to prevent pitch discontinuities at segment boundaries.</span><span data-lang="zh"><strong>autoShift 粒度</strong>— 逐段 autoShift 被替换为逐分片全局 autoShift，以防止分段边界处的音高不连续。</span></li>
+      </ul>
 
       <nav class="doc-pager">
         <a href="build.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Build from Source</span><span data-lang="zh">从源码构建</span></div></div></a>

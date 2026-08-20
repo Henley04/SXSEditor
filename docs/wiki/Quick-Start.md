@@ -91,7 +91,7 @@ Preprocessing extracts the musical information (pitch, notes, timing) from your 
 
 #### Extracting MIDI Notes
 
-1. Click **Extract MIDI** (Basic Pitch is the recommended tool).
+1. Click **Extract MIDI** (FCPE is the recommended tool).
 2. Wait for extraction. Notes appear on the MIDI editor canvas.
 
 #### Editing MIDI Notes and Lyrics
@@ -207,7 +207,7 @@ Back in the main window:
 1. Click **📤 Export** in the main window toolbar.
 2. The entire project is synthesized at export quality (using "Export Inference Parameters" from Settings — more diffusion steps = higher quality).
 3. Choose a save location for the WAV file.
-4. The exported file is 24kHz 16-bit PCM WAV.
+4. The exported file is 48kHz 16-bit PCM WAV by default. Export sample rate is selectable: 24/44.1/48/96 kHz.
 
 ---
 
@@ -221,6 +221,7 @@ Back in the main window:
 
 ## What's Next?
 
-- **[User Guide](User-Guide)** — Detailed documentation of every feature
+- **[User Guide](User-Guide)** — Detailed documentation of every feature, including accompaniment tracks, Singer Market, and LRC lyrics export
 - **[FAQ](FAQ)** — Common questions and troubleshooting
+- **Singer Market** — Browse and download community-created singers directly in the app
 - **Settings** — Adjust inference hardware, audio output, themes, and more

@@ -99,8 +99,22 @@
         <li><span data-lang="en"><strong>Piano roll</strong> (center): The main editing canvas.</span><span data-lang="zh"><strong>钢琴卷帘</strong>（中部）：主编辑画布。</span></li>
         <li><span data-lang="en"><strong>Inspector</strong> (right): Shows properties of the selected note or singer info.</span><span data-lang="zh"><strong>检查器</strong>（右侧）：显示选中音符的属性或歌手信息。</span></li>
         <li><span data-lang="en"><strong>Parameter panel</strong> (bottom): VOL, PAN, Phoneme, and (future) Timbre lanes.</span><span data-lang="zh"><strong>参数面板</strong>（底部）：VOL、PAN、Phoneme 及（未来）Timbre 轨道。</span></li>
-        <li><span data-lang="en"><strong>Status bar</strong> (bottom): Shows pipeline status, sample rate (24000 Hz), hop size (480), and auto-sync indicator.</span><span data-lang="zh"><strong>状态栏</strong>（底部）：显示管线状态、采样率（24000 Hz）、hop size（480）和自动同步指示。</span></li>
+        <li><span data-lang="en"><strong>Status bar</strong> (bottom): Shows pipeline status, sample rate (48000 Hz playback / 24000 Hz model), hop size (480), and auto-sync indicator.</span><span data-lang="zh"><strong>状态栏</strong>（底部）：显示管线状态、采样率（48000 Hz 播放 / 24000 Hz 模型）、hop size（480）和自动同步指示。</span></li>
       </ul>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Synthesis Cancellation</strong> — a cancel button appears during synthesis. Cancellation is <em>cooperative</em>: it exits GPU inference at safe checkpoints between diffusion steps, preventing the D3D device-hung crash that occurred with the old force-terminate approach.</p>
+          <p data-lang="zh"><strong>取消合成</strong>——合成过程中会出现取消按钮。取消为<em>协作式</em>：在扩散步之间的安全检查点退出 GPU 推理，避免了旧的强制终止方式导致的 D3D 设备挂起崩溃。</p>
+        </div>
+      </div>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Viewport-sized canvas</strong> — the timeline canvas now uses a viewport-sized backing store with scroll transform, fixing the Chromium canvas size limit that caused rendering issues on long MIDI projects. This allows smooth scrolling and rendering regardless of project length.</p>
+          <p data-lang="zh"><strong>视口尺寸画布</strong>——时间线画布现在使用视口尺寸的后备存储加滚动变换，修复了 Chromium 画布尺寸限制导致长 MIDI 项目渲染异常的问题。无论项目长度如何，都能流畅滚动和渲染。</p>
+        </div>
+      </div>
 
       <h2>
         <span data-lang="en">MIDI Editing</span>
@@ -349,6 +363,8 @@
         <div class="callout-body">
           <p data-lang="en"><strong>Compatibility with pitch curves</strong> — vibrato is an additive pitch modulation layered on top of the pitch curve, so it works alongside anchor points and brush strokes. If a note has no custom pitch curve, vibrato modulates around the note's base MIDI pitch (and the note will be treated as having a customized pitch curve so that F0 data is generated for synthesis). Enabling, disabling, or changing vibrato on a note automatically invalidates the synthesis cache for that fragment, so the next preview reflects the new vibrato.</p>
           <p data-lang="zh"><strong>与音高曲线的兼容性</strong>——颤音是叠加在音高曲线之上的音高调制，因此可与锚点、画笔笔触共存。若音符没有自定义音高曲线，颤音会围绕音符的基础 MIDI 音高振荡（该音符会被视为已自定义音高曲线，从而为其生成 F0 数据用于合成）。启用、关闭或修改音符颤音会自动使该分片的合成缓存失效，下一次预览将反映新的颤音。</p>
+          <p data-lang="en"><strong>Backward compatibility</strong> — old projects created before vibrato/fade support are automatically normalized on load. Any pre-existing pitch curve data is preserved; vibrato and fade parameters default to disabled (no effect) unless explicitly set.</p>
+          <p data-lang="zh"><strong>向后兼容</strong>——在支持颤音/渐变之前创建的旧项目在加载时会自动归一化。已有的音高曲线数据会被保留；颤音和渐变参数默认为禁用（无效果），除非显式设置。</p>
         </div>
       </div>
 
@@ -429,10 +445,17 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en"><strong>Auto Shift</strong> — the checkbox next to Import MIDI enables <em>Auto Shift</em> for synthesis. When enabled (and a reference audio is loaded for the fragment), SXSEditor analyzes the reference audio's F0 and shifts the synthesized pitch to better match it. This is useful when a song's melody exceeds the model's comfortable range and you want the output to follow the reference singer's actual pitch. See <a href="synthesis-export.html">Synthesis &amp; Export</a> for details.</p>
-          <p data-lang="zh"><strong>Auto Shift</strong>——Import MIDI 旁边的复选框用于在合成时启用<em>自动移调</em>。启用后（且分片已加载参考音频），SXSEditor 会分析参考音频的 F0 并平移合成音高以更好地贴合参考歌手。当歌曲旋律超出模型舒适音域、希望输出跟随参考歌手实际音高时很有用。详见<a href="synthesis-export.html">合成与导出</a>。</p>
+          <p data-lang="en"><strong>Auto Shift</strong> — the checkbox in the toolbar controls <em>global pitch shifting</em> per fragment. When enabled (and a reference audio is loaded for the fragment), SXSEditor analyzes the reference audio's F0 and shifts the synthesized pitch to better match it. This is useful when a song's melody exceeds the model's comfortable range and you want the output to follow the reference singer's actual pitch. <strong>Note:</strong> per-segment autoShift was removed to prevent pitch discontinuities across inference chunks — the toolbar checkbox now applies a consistent shift across the entire fragment. See <a href="synthesis-export.html">Synthesis &amp; Export</a> for details.</p>
+          <p data-lang="zh"><strong>Auto Shift</strong>——工具栏中的复选框控制每个分片的<em>全局移调</em>。启用后（且分片已加载参考音频），SXSEditor 会分析参考音频的 F0 并平移合成音高以更好地贴合参考歌手。当歌曲旋律超出模型舒适音域、希望输出跟随参考歌手实际音高时很有用。<strong>注意：</strong>已移除逐段 autoShift 以防止推理块间的音高不连续——工具栏复选框现在对整个分片施加一致的移调。详见<a href="synthesis-export.html">合成与导出</a>。</p>
         </div>
       </div>
+
+      <h2>
+        <span data-lang="en">Accompaniment Tracks</span>
+        <span data-lang="zh">伴奏音轨</span>
+      </h2>
+      <p data-lang="en">Accompaniment audio can be imported as tracks alongside vocal fragments in the main window. Supported formats: <strong>WAV, MP3, FLAC, OGG, M4A, AAC</strong>. Multi-channel audio is supported. Each accompaniment track has per-track volume control in the track manager. Clips can be dragged to reposition on the timeline. Accompaniment audio is mixed into the final WAV export.</p>
+      <p data-lang="zh">伴奏音频可以在主窗口中作为音轨与人声片段一起导入。支持格式：<strong>WAV、MP3、FLAC、OGG、M4A、AAC</strong>。支持多声道音频。每个伴奏音轨在轨道管理器中有逐轨音量控制。片段可拖动以在时间线上重新定位。伴奏音频会混入最终 WAV 导出。</p>
 
       <h2>
         <span data-lang="en">Keyboard Shortcuts</span>

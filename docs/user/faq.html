@@ -357,15 +357,15 @@
         <span data-lang="en">What is the output sample rate?</span>
         <span data-lang="zh">输出采样率是多少？</span>
       </h3>
-      <p data-lang="en">Synthesis runs at 24kHz internally. Output sample rate is configurable in Settings (22050 to 192000 Hz). In exclusive mode, the device must support the selected rate.</p>
-      <p data-lang="zh">合成内部以 24kHz 运行。输出采样率可在设置中配置（22050 到 192000 Hz）。独占模式下设备必须支持所选采样率。</p>
+      <p data-lang="en">Synthesis runs at 24 kHz internally (model rate). The default playback sample rate is now 48 kHz. Export sample rate is selectable (24 / 44.1 / 48 / 96 kHz) with linear upsampling from the model rate. In exclusive mode, the device must support the selected rate.</p>
+      <p data-lang="zh">合成内部以 24kHz（模型速率）运行。默认播放采样率现为 48kHz。导出采样率可选（24 / 44.1 / 48 / 96 kHz），从模型采样率线性上采样。独占模式下设备必须支持所选采样率。</p>
 
       <h3>
         <span data-lang="en">What format is the exported WAV?</span>
         <span data-lang="zh">导出的 WAV 是什么格式？</span>
       </h3>
-      <p data-lang="en">24kHz, 16-bit PCM WAV by default. The output sample rate setting may affect this.</p>
-      <p data-lang="zh">默认为 24kHz、16-bit PCM WAV。输出采样率设置可能会影响此格式。</p>
+      <p data-lang="en">48 kHz, 16-bit PCM WAV by default (the model runs at 24 kHz internally, with linear upsampling to the selected export rate). Export sample rate is selectable: 24 / 44.1 / 48 / 96 kHz.</p>
+      <p data-lang="zh">默认为 48kHz、16-bit PCM WAV（模型内部以 24kHz 运行，线性上采样到所选导出采样率）。导出采样率可选：24 / 44.1 / 48 / 96 kHz。</p>
 
       <h2>
         <span data-lang="en">Audio to MIDI</span>
@@ -384,7 +384,8 @@
         <span data-lang="zh">应该使用哪个提取工具？</span>
       </h3>
       <ul>
-        <li><span data-lang="en"><strong>Basic Pitch</strong> (recommended): Neural network-based, stable results for most scenarios.</span><span data-lang="zh"><strong>Basic Pitch</strong>（推荐）：基于神经网络，大多数场景结果稳定。</span></li>
+        <li><span data-lang="en"><strong>FCPE</strong> (default, recommended): ONNX-based pitch detector with a configurable post-processing pipeline (loudness normalization, silence gating, median smoothing, note quantization). Best extraction quality.</span><span data-lang="zh"><strong>FCPE</strong>（默认，推荐）：基于 ONNX 的音高检测器，配有可配置的后处理流水线（响度归一化、静音门控、中值平滑、音符量化）。提取质量最佳。</span></li>
+        <li><span data-lang="en"><strong>Basic Pitch</strong>: Neural network-based, stable results for most scenarios.</span><span data-lang="zh"><strong>Basic Pitch</strong>：基于神经网络，大多数场景结果稳定。</span></li>
         <li><span data-lang="en"><strong>RMVPE</strong>: Converts F0 pitch curve to notes. Experimental, results may be suboptimal.</span><span data-lang="zh"><strong>RMVPE</strong>：将 F0 音高曲线转为音符。实验性，结果可能不理想。</span></li>
       </ul>
       <p data-lang="en">Change this in Settings &gt; Audio &gt; MIDI Extraction Tool.</p>

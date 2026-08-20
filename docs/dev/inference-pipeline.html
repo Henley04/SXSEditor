@@ -110,7 +110,7 @@
         ▼
 ┌─ Stage 5: Diffusion (diffusion.js) ────────────────────────┐
 │  Iterative denoising, DEFAULT_DIFF_STEPS=32                │
-│  CFG: strength=3.0, rescale=0.75                           │
+│  CFG: schedule-based (constant/linear/cosine/custom)       │
 │  Per-step: cond + uncond branches, flow_pred output        │
 │  NPU static shapes: pad to NPU_STATIC_SEQ_LEN=2048         │
 └────────────────────────────────────────────────────────────┘
@@ -118,14 +118,14 @@
         ▼
 ┌─ Stage 6: Vocoder / Postprocessing (postprocessing.js) ────┐
 │  Mel (MEL_DIM=128) → waveform at SAMPLE_RATE=24000         │
-│  Chunked vocoding: VOCODER_CHUNK_FRAMES=1008, overlap=8    │
+│  Chunked vocoding: VOCODER_CHUNK_FRAMES=1008, overlap=32   │
 │  Default vocoder: vocoder_dml.onnx (Vocos, DirectML)       │
 │  Optional: SiFiGAN (SIFIGAN_HOP_SIZE=120, 200Hz mel)       │
 │  Output validation: reject all-zero / NaN waveforms (OOM)  │
 └────────────────────────────────────────────────────────────┘
         │
         ▼
-Float32Array PCM audio (24kHz mono)</code></pre>
+Float32Array PCM audio (24kHz model rate, output upsampled to 48kHz)</code></pre>
 
       <h2>
         <span data-lang="en">Stage 1 — Text Processing</span>
@@ -238,13 +238,28 @@ Float32Array PCM audio (24kHz mono)</code></pre>
       <p data-lang="zh"><code>diffusion.js</code> 使用 <code>diff_step_dml.onnx</code> 实现迭代去噪循环。每步接收 <code>xt_input</code>（当前带噪 mel）、<code>t</code>（时间步）、<code>cond</code>（条件）、<code>xt_mask</code>，输出 <code>flow_pred</code> 用于更新 <code>xt</code>。循环通过可插拔的 <strong>求解器</strong> 接口驱动（见下方 <a href="#samplers-module">求解器模块</a>）。</p>
       <ul>
         <li><span data-lang="en"><strong>Default steps</strong>: <code>DEFAULT_DIFF_STEPS=32</code>. The CLI <code>synth</code> command uses 4 steps by default for quick smoke tests.</span><span data-lang="zh"><strong>默认步数</strong>：<code>DEFAULT_DIFF_STEPS=32</code>。CLI <code>synth</code> 命令默认使用 4 步以快速冒烟测试。</span></li>
-        <li><span data-lang="en"><strong>Classifier-Free Guidance</strong>: <code>CFG_STRENGTH=3.0</code>, <code>CFG_RESCALE=0.75</code>. Each step runs a conditional and an unconditional branch; the <code>combine()</code> callback (shared by both inference paths) merges them into a single velocity vector and applies the two-pass variance + rescale.</span><span data-lang="zh"><strong>无分类器引导</strong>：<code>CFG_STRENGTH=3.0</code>、<code>CFG_RESCALE=0.75</code>。每步运行条件分支与无条件分支各一次；<code>combine()</code> 回调（两条推理路径共用）将二者合并为单一速度向量，并执行两遍方差 + rescale。</span></li>
+        <li><span data-lang="en"><strong>Classifier-Free Guidance</strong>: <code>CFG_STRENGTH=3.0</code>, <code>CFG_RESCALE=0.75</code>. Each step runs a conditional and an unconditional branch; the <code>combine()</code> callback (shared by both inference paths) merges them into a single velocity vector. A single-pass Welford online variance algorithm replaces the former three-pass CFG combine. CFG strength now supports per-step scheduling (see <a href="#cfg-schedule">CFG Schedule</a> below).</span><span data-lang="zh"><strong>无分类器引导</strong>：<code>CFG_STRENGTH=3.0</code>、<code>CFG_RESCALE=0.75</code>。每步运行条件分支与无条件分支各一次；<code>combine()</code> 回调（两条推理路径共用）将二者合并为单一速度向量。单遍 Welford 在线方差算法替代了之前的三遍 CFG 合并。CFG 强度现支持逐步调度（见下方 <a href="#cfg-schedule">CFG 调度</a>）。</span></li>
         <li><span data-lang="en"><strong>Sampler selection</strong>: <code>runDiffusionLoop</code> / <code>runDiffusionLoopChunked</code> take a <code>samplerName</code> arg (<code>'euler'</code> | <code>'heun'</code> | <code>'extrap'</code> | <code>'stork2'</code>, default <code>'euler'</code>). The batch path (<code>runBatchDiffusionLoop</code>) keeps the <code>batch=4</code> optimization for Euler and falls back to sequential single-segment calls for non-Euler samplers.</span><span data-lang="zh"><strong>求解器选择</strong>：<code>runDiffusionLoop</code> / <code>runDiffusionLoopChunked</code> 接收 <code>samplerName</code> 参数（<code>'euler'</code> | <code>'heun'</code> | <code>'extrap'</code> | <code>'stork2'</code>，默认 <code>'euler'</code>）。批量路径（<code>runBatchDiffusionLoop</code>）对 Euler 保留 <code>batch=4</code> 优化，非 Euler 求解器回退为顺序单段调用。</span></li>
         <li><span data-lang="en"><strong>Tensor lifecycle</strong>: input/output tensors are disposed immediately after each step to prevent GPU VRAM accumulation (32 steps × 2 branches × 5 tensors = 320 tensors per synthesis).</span><span data-lang="zh"><strong>张量生命周期</strong>：每步推理后立即释放输入/输出张量，避免 GPU 显存累积（32 步 × 2 分支 × 5 张量 = 每次合成 320 个张量）。</span></li>
         <li><span data-lang="en"><strong>Cached tensors &amp; shared buffers</strong>: <code>_runDiffStepWithCachedTensors</code> reuses <code>cond</code> / <code>mask</code> across steps (they don't change) to avoid 64× redundant FP16 conversion. The sampler is given a pre-allocated <code>buffers</code> object (<code>vBuf</code> / <code>deltaBuf</code> / <code>v1Buf</code> / <code>xPredBuf</code>) that is reused across all steps, eliminating per-step <code>Float32Array</code> allocations.</span><span data-lang="zh"><strong>缓存张量与共享缓冲</strong>：<code>_runDiffStepWithCachedTensors</code> 跨步复用 <code>cond</code> / <code>mask</code>（它们不变），避免 64 倍冗余的 FP16 转换。求解器获预分配的 <code>buffers</code> 对象（<code>vBuf</code> / <code>deltaBuf</code> / <code>v1Buf</code> / <code>xPredBuf</code>），跨所有步复用，消除每步 <code>Float32Array</code> 分配。</span></li>
         <li><span data-lang="en"><strong>NFE accounting</strong>: both paths track <code>totalNFE</code> (number of function evaluations) and log it, making the cost difference between Euler (1 NFE/step), Heun (2 NFE/step), and Extrap/STORK-2 (1 NFE/step) visible.</span><span data-lang="zh"><strong>NFE 统计</strong>：两条路径均跟踪 <code>totalNFE</code>（模型评估次数）并打印日志，使 Euler（每步 1 次）、Heun（每步 2 次）、Extrap/STORK-2（每步 1 次）的开销差异可见。</span></li>
         <li><span data-lang="en"><strong>NPU static shapes</strong>: when <code>modelPrecision='int8-npu'</code>, inputs are padded to <code>NPU_STATIC_SEQ_LEN=2048</code> and the output is sliced back to the real frame count.</span><span data-lang="zh"><strong>NPU 静态形状</strong>：当 <code>modelPrecision='int8-npu'</code> 时，输入被填充到 <code>NPU_STATIC_SEQ_LEN=2048</code>，输出再切片回真实帧数。</span></li>
+        <li><span data-lang="en"><strong>QDIT int8 diff_step</strong>: the pipeline now supports QDIT-quantized int8 <code>diff_step</code> models with a new ONNX signature: <code>x</code> (audio latent), <code>diffusion_step</code> (scalar), <code>x_mask</code> (bool mask). Legacy int8 models (without the <code>diffusion_step</code> input) are auto-detected at load time, and a user prompt suggests switching to the QDIT version for better quality.</span><span data-lang="zh"><strong>QDIT int8 diff_step</strong>：管线现支持 QDIT 量化的 int8 <code>diff_step</code> 模型，采用新的 ONNX 签名：<code>x</code>（音频隐变量）、<code>diffusion_step</code>（标量）、<code>x_mask</code>（布尔掩码）。加载时自动检测旧版 int8 模型（缺少 <code>diffusion_step</code> 输入），并提示用户切换到 QDIT 版本以获得更好质量。</span></li>
       </ul>
+
+      <h3>
+        <span data-lang="en">Dynamic Thresholding</span>
+        <span data-lang="zh">动态阈值</span>
+      </h3>
+      <p data-lang="en">Per-frame quickselect percentile clipping (arXiv:2507.08965) is applied after CFG combine. The percentile is configurable (0.9–0.999). This technique clips extreme values in the diffusion output to a percentile band and then linearly remaps the clipped values back, preventing rare outlier frames from dominating the audio. It is integrated into both the DML (<code>nativeSvsPipeline.js</code>) and WebNN diffusion paths.</p>
+      <p data-lang="zh">在 CFG 合并之后，应用逐帧 quickselect 百分位裁剪（arXiv:2507.08965）。百分位可配置（0.9–0.999）。该技术将扩散输出中的极值裁剪到百分位区间内，再将裁剪后的值线性重映射回去，防止罕见的离群帧主导音频。已集成到 DML（<code>nativeSvsPipeline.js</code>）与 WebNN 两条扩散路径中。</p>
+
+      <h3 id="cfg-schedule">
+        <span data-lang="en">CFG Schedule</span>
+        <span data-lang="zh">CFG 调度</span>
+      </h3>
+      <p data-lang="en">Classifier-Free Guidance now supports configurable schedule modes: <strong>constant</strong>, <strong>linear</strong>, <strong>cosine</strong>, and <strong>custom</strong>. This replaces the fixed CFG strength with a per-step schedule, allowing stronger guidance early in the diffusion process and gentler guidance near the end. The three-pass CFG combine (conditional + unconditional + variance) has been replaced by a single-pass Welford online variance algorithm, reducing computation per step.</p>
+      <p data-lang="zh">无分类器引导现支持可配置的调度模式：<strong>恒定</strong>、<strong>线性</strong>、<strong>余弦</strong>与<strong>自定义</strong>。这用逐步调度替代了固定 CFG 强度，允许在扩散过程初期使用更强引导、末期使用更柔和引导。三遍 CFG 合并（条件 + 无条件 + 方差）已被单遍 Welford 在线方差算法替代，减少了每步计算量。</p>
 
       <h2 id="samplers-module">
         <span data-lang="en">Samplers Module</span>
@@ -309,15 +324,18 @@ Float32Array PCM audio (24kHz mono)</code></pre>
         <span data-lang="en">Stage 6 — Vocoder &amp; Postprocessing</span>
         <span data-lang="zh">第 6 阶段 — 声码器与后处理</span>
       </h2>
-      <p data-lang="en"><code>postprocessing.js</code> converts the mel spectrogram (<code>MEL_DIM=128</code>) into a PCM waveform at <code>SAMPLE_RATE=24000</code>. Because vocoding is the most VRAM-hungry stage, it runs in chunks:</p>
-      <p data-lang="zh"><code>postprocessing.js</code> 将 mel 频谱（<code>MEL_DIM=128</code>）转换为 <code>SAMPLE_RATE=24000</code> 的 PCM 波形。由于声码器是最耗显存的阶段，因此采用分块运行：</p>
+      <p data-lang="en"><code>postprocessing.js</code> converts the mel spectrogram (<code>MEL_DIM=128</code>) into a PCM waveform at the model rate <code>SAMPLE_RATE=24000</code>, which is then resampled to the target output rate (default 48 kHz). Because vocoding is the most VRAM-hungry stage, it runs in chunks:</p>
+      <p data-lang="zh"><code>postprocessing.js</code> 将 mel 频谱（<code>MEL_DIM=128</code>）转换为模型速率 <code>SAMPLE_RATE=24000</code> 的 PCM 波形，随后重采样到目标输出速率（默认 48 kHz）。由于声码器是最耗显存的阶段，因此采用分块运行：</p>
       <ul>
-        <li><span data-lang="en"><strong>Chunk size</strong>: <code>VOCODER_CHUNK_FRAMES=1008</code> mel frames per chunk, <code>VOCODER_OVERLAP_FRAMES=8</code> frames of cross-fade overlap.</span><span data-lang="zh"><strong>分块大小</strong>：每块 <code>VOCODER_CHUNK_FRAMES=1008</code> 个 mel 帧，<code>VOCODER_OVERLAP_FRAMES=8</code> 帧交叉淡入淡出重叠。</span></li>
+        <li><span data-lang="en"><strong>Chunk size</strong>: <code>VOCODER_CHUNK_FRAMES=1008</code> mel frames per chunk, <code>VOCODER_OVERLAP_FRAMES=32</code> frames of cross-fade overlap (user-adjustable 8–96).</span><span data-lang="zh"><strong>分块大小</strong>：每块 <code>VOCODER_CHUNK_FRAMES=1008</code> 个 mel 帧，<code>VOCODER_OVERLAP_FRAMES=32</code> 帧交叉淡入淡出重叠（用户可调 8–96）。</span></li>
         <li><span data-lang="en"><strong>Smart chunk sizing</strong>: the actual chunk size is auto-derived from VRAM budget = (VRAM − resident weights − diff_step activations ~2GB − OS reserve ~1GB) × 0.7 safety factor. Manual override is available in Settings.</span><span data-lang="zh"><strong>智能分块</strong>：实际分块大小由显存预算自动推导 =（VRAM − 常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB）× 0.7 安全系数。可在设置中手动覆盖。</span></li>
         <li><span data-lang="en"><strong>Default vocoder</strong>: <code>vocoder_dml.onnx</code> (Vocos, DirectML-optimized).</span><span data-lang="zh"><strong>默认声码器</strong>：<code>vocoder_dml.onnx</code>（Vocos，DirectML 优化版）。</span></li>
         <li><span data-lang="en"><strong>Optional SiFiGAN</strong>: <code>sifigan_vocoder_dml_fp16.onnx</code> or <code>sifigan_vocoder_dml.onnx</code> (ICASSP 2023). Uses <code>SIFIGAN_HOP_SIZE=120</code> (200 Hz mel frame rate, 4× upsampling to 24 kHz). Auto-falls back to the default vocoder on load failure.</span><span data-lang="zh"><strong>可选 SiFiGAN</strong>：<code>sifigan_vocoder_dml_fp16.onnx</code> 或 <code>sifigan_vocoder_dml.onnx</code>（ICASSP 2023）。使用 <code>SIFIGAN_HOP_SIZE=120</code>（200Hz mel 帧率，4× 上采样到 24kHz）。加载失败时自动回退到默认声码器。</span></li>
         <li><span data-lang="en"><strong>Output validation</strong>: <code>validateVocoderOutput</code> samples the waveform and throws a clear OOM error if it's all-zero or NaN — DirectML can fail silently on VRAM exhaustion.</span><span data-lang="zh"><strong>输出校验</strong>：<code>validateVocoderOutput</code> 对波形抽样，若全零或含 NaN 则抛出明确的 OOM 错误——DirectML 在显存耗尽时可能静默失败。</span></li>
         <li><span data-lang="en"><strong>Minimal swap</strong>: switching vocoder (default ↔ SiFiGAN) only reloads the vocoder session; encoders/diffusion stay loaded (<code>swapVocoder</code>).</span><span data-lang="zh"><strong>最小化切换</strong>：切换声码器（默认 ↔ SiFiGAN）仅重载声码器会话，编码器/扩散保持已加载状态（<code>swapVocoder</code>）。</span></li>
+        <li><span data-lang="en"><strong>2× oversampling anti-aliasing</strong>: replaces the previous 1st-order Butterworth low-pass with a full 2× oversampling pipeline: zero-stuff → 2nd-order Butterworth anti-image LP → anti-alias LP → decimate. This improves audio quality during resampling from the 24 kHz model rate to the target output rate.</span><span data-lang="zh"><strong>2× 过采样抗混叠</strong>：用完整的 2× 过采样管线替代之前的一阶 Butterworth 低通：零填充 → 二阶 Butterworth 抗镜像低通 → 抗混叠低通 → 抽取。在从 24kHz 模型速率重采样到目标输出速率时提升音质。</span></li>
+        <li><span data-lang="en"><strong>WSOLA crossfade</strong>: replaces Hann overlap-add with WSOLA (Waveform Similarity Overlap-Add) crossfade at vocoder and diffusion chunk boundaries, producing smoother audio transitions.</span><span data-lang="zh"><strong>WSOLA 交叉淡入淡出</strong>：在声码器与扩散分块边界用 WSOLA（波形相似性重叠相加）交叉淡入淡出替代 Hann 重叠相加，产生更平滑的音频过渡。</span></li>
+        <li><span data-lang="en"><strong>EBU R128 loudness normalization</strong>: applies EBU R128 loudnorm (−14 LUFS) and a true-peak limiter (−1 dBTP) to the synthesis output, ensuring consistent loudness across different projects and singers.</span><span data-lang="zh"><strong>EBU R128 响度归一化</strong>：对合成输出应用 EBU R128 响度归一化（−14 LUFS）与真峰值限制器（−1 dBTP），确保不同项目与歌手之间的响度一致。</span></li>
       </ul>
 
       <h2>
@@ -336,9 +354,9 @@ Float32Array PCM audio (24kHz mono)</code></pre>
         <tbody>
           <tr>
             <td><code>SAMPLE_RATE</code></td>
-            <td>24000</td>
+            <td>24000 <span data-lang="en">(model rate)</span><span data-lang="zh">（模型速率）</span></td>
             <td>shared/constants.js</td>
-            <td><span data-lang="en">Output audio sample rate (Hz)</span><span data-lang="zh">输出音频采样率（Hz）</span></td>
+            <td><span data-lang="en">Model internal sample rate (Hz). Default output/playback rate is now 48000 Hz.</span><span data-lang="zh">模型内部采样率（Hz）。默认输出/播放采样率现为 48000 Hz。</span></td>
           </tr>
           <tr>
             <td><code>HOP_SIZE</code></td>
@@ -378,9 +396,9 @@ Float32Array PCM audio (24kHz mono)</code></pre>
           </tr>
           <tr>
             <td><code>VOCODER_OVERLAP_FRAMES</code></td>
-            <td>8</td>
+            <td>32 <span data-lang="en">(user-adjustable 8–96)</span><span data-lang="zh">（用户可调 8–96）</span></td>
             <td>shared/constants.js</td>
-            <td><span data-lang="en">Cross-fade overlap frames</span><span data-lang="zh">交叉淡入淡出重叠帧数</span></td>
+            <td><span data-lang="en">Cross-fade overlap frames (was 8)</span><span data-lang="zh">交叉淡入淡出重叠帧数（原为 8）</span></td>
           </tr>
           <tr>
             <td><code>NPU_STATIC_SEQ_LEN</code></td>
@@ -442,6 +460,24 @@ Float32Array PCM audio (24kHz mono)</code></pre>
             <td>pipeline/constants.js</td>
             <td><span data-lang="en">Hard cap on mel frames per synthesis</span><span data-lang="zh">每次合成 mel 帧数硬上限</span></td>
           </tr>
+          <tr>
+            <td><code>SILENCE_THRESHOLD_SEC</code></td>
+            <td>1.5</td>
+            <td>pipeline/constants.js</td>
+            <td><span data-lang="en">Silence detection threshold (was 20s/8s/20s multi-tier)</span><span data-lang="zh">静音检测阈值（原为 20s/8s/20s 多级）</span></td>
+          </tr>
+          <tr>
+            <td><code>LONG_REST_SPLIT_SEC</code></td>
+            <td>1.5</td>
+            <td>pipeline/constants.js</td>
+            <td><span data-lang="en">Rest notes ≥ this duration trigger segment splitting</span><span data-lang="zh">休止音符达到此时长即触发分段切分</span></td>
+          </tr>
+          <tr>
+            <td><code>DEFAULT_OUTPUT_SAMPLE_RATE</code></td>
+            <td>48000</td>
+            <td>shared/constants.js</td>
+            <td><span data-lang="en">Default audio output / playback sample rate (Hz). Export rate is user-selectable: 24 / 44.1 / 48 / 96 kHz.</span><span data-lang="zh">默认音频输出/播放采样率（Hz）。导出速率可选：24 / 44.1 / 48 / 96 kHz。</span></td>
+          </tr>
         </tbody>
       </table>
 
@@ -453,6 +489,8 @@ Float32Array PCM audio (24kHz mono)</code></pre>
       <p data-lang="zh"><code>audioSegmentation.js</code> 将长人声（&gt; <code>LONG_AUDIO_THRESHOLD_SEC=30s</code>）切分为 <code>SEGMENT_MIN_SEC=15s</code>–<code>SEGMENT_MAX_SEC=30s</code> 的分段，重叠 <code>SEGMENT_OVERLAP_SEC=2s</code>。分段边界选择在休止音符中点，以最小化拼接瑕疵。</p>
       <p data-lang="en"><code>fillNoteGaps</code> also inserts rest notes between non-adjacent notes so the diffusion model has silent reference frames.</p>
       <p data-lang="zh"><code>fillNoteGaps</code> 还会在不相邻的音符之间插入休止符，让扩散模型拥有静音参考帧。</p>
+      <p data-lang="en">The segment silence detection threshold has been unified to <code>SILENCE_THRESHOLD_SEC=1.5s</code> (previously a multi-tier 20s/8s/20s scheme). Rest notes ≥ <code>LONG_REST_SPLIT_SEC=1.5s</code> now trigger segment splitting, ensuring diffusion chunks are bounded by natural pauses.</p>
+      <p data-lang="zh">分段静音检测阈值已统一为 <code>SILENCE_THRESHOLD_SEC=1.5s</code>（此前为 20s/8s/20s 多级方案）。休止音符 ≥ <code>LONG_REST_SPLIT_SEC=1.5s</code> 时触发分段切分，确保扩散分块以自然停顿为边界。</p>
 
       <h2>
         <span data-lang="en">Float16 Patch</span>
@@ -486,8 +524,8 @@ Float32Array PCM audio (24kHz mono)</code></pre>
         <span data-lang="en">Synthesis Cache</span>
         <span data-lang="zh">合成缓存</span>
       </h2>
-      <p data-lang="en">The pipeline keeps an LRU cache of recent synthesis results (<code>_synthCacheMaxEntries=4</code>, <code>_synthCacheMaxBytes=200MB</code>). Cache keys are derived from notes, bpm, and option fields. Switching vocoder type, SiFiGAN precision, or language invalidates the cache. A hit returns the cached audio without re-running the vocoder.</p>
-      <p data-lang="zh">管线维护一个 LRU 合成结果缓存（<code>_synthCacheMaxEntries=4</code>、<code>_synthCacheMaxBytes=200MB</code>）。缓存键由音符、bpm 与选项字段派生。切换声码器类型、SiFiGAN 精度或语言会使缓存失效。命中时直接返回缓存的音频，不再运行声码器。</p>
+      <p data-lang="en">The pipeline keeps a segment-level LRU cache of recent synthesis results (<code>_synthCacheMaxEntries=32</code>, <code>_synthCacheMaxBytes=300MB</code>). Cache keys are derived from an FNV-1a hash of segment content (notes, bpm, and option fields). Switching vocoder type, SiFiGAN precision, or language invalidates the cache. During iterative editing, unchanged segments return cached audio without re-running the vocoder — only modified segments are re-synthesized.</p>
+      <p data-lang="zh">管线维护一个分段级 LRU 合成结果缓存（<code>_synthCacheMaxEntries=32</code>、<code>_synthCacheMaxBytes=300MB</code>）。缓存键由分段内容（音符、bpm 与选项字段）的 FNV-1a 哈希派生。切换声码器类型、SiFiGAN 精度或语言会使缓存失效。迭代编辑时，未修改的分段直接返回缓存音频，不再运行声码器——仅修改过的分段会被重新合成。</p>
 
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
@@ -496,6 +534,13 @@ Float32Array PCM audio (24kHz mono)</code></pre>
           <p data-lang="zh">并发的 <code>synthesize()</code> 调用通过 <code>_synthPromise</code> 串行化。这避免了一种重载竞态：合成 A 仍在重建重量级会话（<code>diff_step</code> 846MB / <code>vocoder</code>）时合成 B 启动，导致显存翻倍并触发 OOM。</p>
         </div>
       </div>
+
+      <h2>
+        <span data-lang="en">Cooperative Synthesis Cancellation</span>
+        <span data-lang="zh">协作式合成取消</span>
+      </h2>
+      <p data-lang="en">Synthesis cancellation now uses <code>AbortController</code>-based cooperative cancellation instead of <code>worker.terminate()</code>. The GPU inference loop checks the abort signal at safe checkpoints between diffusion steps and exits cleanly, releasing tensor resources in an orderly fashion. The cancel command bypasses the serial worker queue for immediate response — the user does not have to wait for the current step to finish before cancellation takes effect.</p>
+      <p data-lang="zh">合成取消现使用基于 <code>AbortController</code> 的协作式取消，而非 <code>worker.terminate()</code>。GPU 推理循环在扩散步之间的安全检查点检查中止信号并干净退出，有序释放张量资源。取消命令绕过串行 worker 队列以实现即时响应——用户无需等待当前步骤完成即可生效。</p>
 
       <h2>
         <span data-lang="en">Pipeline API Surface</span>
@@ -517,10 +562,13 @@ await pipeline.swapSifiganPrecision('fp16');
 const audio = await pipeline.synthesize(notes, bpm, {
   nSteps,               // default 32
   cfg, cfgRescale,      // default 3.0 / 0.75
+  cfgSchedule,          // 'constant' | 'linear' | 'cosine' | 'custom'
   sampler,              // 'euler' (default) | 'heun' | 'extrap' | 'stork2'
   autoShift, pitchShift,
   f0Envelope, pitchCurveF0,
   refAudioWavBuffer,    // reference audio for prompt mel + autoShift
+  outputSampleRate,     // 24000 | 44100 | 48000 (default) | 96000
+  signal,               // AbortSignal for cooperative cancellation
   onProgress,           // 0..100
   onChunkAudio,         // streaming vocoder chunks
 });

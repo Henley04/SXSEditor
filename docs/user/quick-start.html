@@ -203,7 +203,7 @@
         <li><span data-lang="en">In the dialog, click <strong>Open Singer Creator</strong>.</span><span data-lang="zh">在弹出的对话框中，点击 <strong>Open Singer Creator</strong>。</span></li>
         <li><span data-lang="en">Enter a <strong>Singer Name</strong> (e.g., "MyVoice") and choose an avatar color.</span><span data-lang="zh">输入 <strong>Singer Name</strong>（如 "MyVoice"），并选择头像颜色。</span></li>
         <li><span data-lang="en">Upload a <strong>pure vocal</strong> WAV file (max 30 seconds). If your file exceeds 30 seconds, a trim dialog opens — drag the selection to choose a 30-second clip, then click <strong>Confirm Trim</strong>.</span><span data-lang="zh">上传 <strong>纯人声</strong> WAV 文件（最长 30 秒）。如果文件超过 30 秒，会自动弹出裁剪对话框——拖动选区选择 30 秒片段，然后点击 <strong>Confirm Trim</strong>。</span></li>
-        <li><span data-lang="en">Click <strong>Start Audio Preprocessing</strong>, extract F0 and MIDI, then <strong>type the lyrics for each note</strong>. Click <strong>Save</strong>.</span><span data-lang="zh">点击 <strong>Start Audio Preprocessing</strong>，提取 F0 和 MIDI，然后<strong>为每个音符填写歌词</strong>。点击 <strong>Save</strong>。</span></li>
+        <li><span data-lang="en">Click <strong>Start Audio Preprocessing</strong>, extract F0 and MIDI, then <strong>type the lyrics for each note</strong>. Click <strong>Save</strong>. MIDI extraction uses <strong>FCPE</strong> by default — the new recommended tool for fast, accurate F0-to-note conversion. See <a href="settings.html">Settings</a> to switch tools or adjust FCPE parameters.</span><span data-lang="zh">点击 <strong>Start Audio Preprocessing</strong>，提取 F0 和 MIDI，然后<strong>为每个音符填写歌词</strong>。点击 <strong>Save</strong>。MIDI 提取默认使用 <strong>FCPE</strong>——新的推荐工具，可快速、准确地将 F0 转换为音符。可在<a href="settings.html">设置</a>中切换工具或调整 FCPE 参数。</span></li>
         <li><span data-lang="en">Click <strong>Create &amp; Save</strong> (✓). Choose a save location. The singer is saved as a <code>.sxssinger</code> file.</span><span data-lang="zh">点击 <strong>Create &amp; Save</strong>（✓）。选择保存位置。歌手以 <code>.sxssinger</code> 文件保存。</span></li>
       </ol>
       <div class="callout warn">
@@ -222,6 +222,13 @@
       </h2>
       <p data-lang="en">A <strong>fragment</strong> is a segment of music assigned to a singer. It contains MIDI notes, lyrics, and optional pitch curves.</p>
       <p data-lang="zh"><strong>片段</strong> 是分配给某个歌手的一段音乐。它包含 MIDI 音符、歌词和可选的音高曲线。</p>
+      <div class="callout tip">
+        <div class="callout-icon">💡</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Accompaniment tracks</strong> — you can also import accompaniment audio (WAV/MP3/FLAC/OGG/M4A/AAC) as separate tracks alongside vocal fragments. Each accompaniment track has per-track volume control and clips can be dragged to reposition. Accompaniment is mixed into the final export.</p>
+          <p data-lang="zh"><strong>伴奏音轨</strong>——你还可以将伴奏音频（WAV/MP3/FLAC/OGG/M4A/AAC）作为独立音轨与人声片段一起导入。每个伴奏音轨有逐轨音量控制，片段可拖动重新定位。伴奏会混入最终导出。</p>
+        </div>
+      </div>
       <ol>
         <li><span data-lang="en">In the main window, find your singer in the left panel.</span><span data-lang="zh">在主窗口左侧面板找到你的歌手。</span></li>
         <li><span data-lang="en">Click the <strong>+</strong> button on the singer's row. A new fragment appears on the timeline (right side).</span><span data-lang="zh">点击该歌手行的 <strong>+</strong> 按钮。时间线（右侧）上会出现一个新片段。</span></li>
@@ -275,7 +282,7 @@
         <li><span data-lang="en">Click <strong>📤 Export</strong> in the main window toolbar.</span><span data-lang="zh">在主窗口工具栏点击 <strong>📤 Export</strong>。</span></li>
         <li><span data-lang="en">The entire project is synthesized at export quality (uses "Export Inference Parameters" — more diffusion steps for higher quality).</span><span data-lang="zh">整个项目以导出质量合成（使用"导出推理参数"——更多扩散步数以获得更高音质）。</span></li>
         <li><span data-lang="en">Choose a save location for the WAV file.</span><span data-lang="zh">选择 WAV 文件的保存位置。</span></li>
-        <li><span data-lang="en">The exported file is <strong>24kHz, 16-bit PCM WAV</strong>.</span><span data-lang="zh">导出文件为 <strong>24kHz、16-bit PCM WAV</strong>。</span></li>
+        <li><span data-lang="en">The exported file is <strong>48 kHz, 16-bit PCM WAV</strong> by default (the model operates internally at 24 kHz and the output is linearly upsampled). Export sample rate is selectable: 24 / 44.1 / 48 / 96 kHz.</span><span data-lang="zh">导出文件默认为 <strong>48 kHz、16-bit PCM WAV</strong>（模型内部以 24 kHz 运行，输出经线性上采样）。导出采样率可选：24 / 44.1 / 48 / 96 kHz。</span></li>
       </ol>
       <p data-lang="en">For details on synthesis parameters and export options, see <a href="synthesis-export.html">Synthesis &amp; Export</a>.</p>
       <p data-lang="zh">合成参数和导出选项详情请见 <a href="synthesis-export.html">合成与导出</a>。</p>
@@ -295,6 +302,7 @@
       </h2>
       <ul>
         <li><span data-lang="en"><a href="singer-creation.html">Singer Creation</a> — Full singer creation workflow and preprocessing</span><span data-lang="zh"><a href="singer-creation.html">创建歌手</a> — 完整歌手创建流程与预处理</span></li>
+        <li><span data-lang="en"><a href="singer-market.html">Singer Market</a> — Browse and download community-shared singers</span><span data-lang="zh"><a href="singer-market.html">歌手市场</a> — 浏览和下载社区共享的歌手</span></li>
         <li><span data-lang="en"><a href="fragment-editor.html">Fragment Editor</a> — Detailed piano-roll editing reference</span><span data-lang="zh"><a href="fragment-editor.html">片段编辑器</a> — 详细的钢琴卷帘编辑参考</span></li>
         <li><span data-lang="en"><a href="settings.html">Settings</a> — Configure inference hardware, audio output, themes</span><span data-lang="zh"><a href="settings.html">设置</a> — 配置推理硬件、音频输出、主题</span></li>
         <li><span data-lang="en"><a href="faq.html">FAQ &amp; Troubleshooting</a> — Common questions and fixes</span><span data-lang="zh"><a href="faq.html">常见问题与故障排查</a> — 常见问题与修复方法</span></li>

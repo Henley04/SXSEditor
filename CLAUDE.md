@@ -7,14 +7,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 SXSEditor is an Electron desktop application for AI-powered singing voice synthesis (SVS). It combines a visual piano-roll editor with a neural SVS pipeline based on the SoulX-Singer acoustic model, running through ONNX Runtime with DirectML GPU acceleration.
 
 - **Languages supported**: Chinese (Mandarin) and English singing synthesis
-- **Audio**: 24kHz sample rate, 480 hop size, 128 mel bins
+- **Audio**: 24kHz model rate (48kHz default playback/export), 480 hop size, 128 mel bins
 - **Tech stack**: Electron + Electron Forge, Webpack, ONNX Runtime Node, Vanilla JS + HTML5 Canvas
 
 ## Common Commands
 
 ```bash
 npm start                     # Run in development mode
-npm test                      # Run full test suite (Mocha + Chai + Sinon, 225+ tests)
+npm test                      # Run full test suite (Mocha + Chai + Sinon, 1500+ tests)
 npm run test:watch            # Watch mode for tests
 npm run test:coverage         # Tests with NYC coverage
 npm run package               # Package for current platform
@@ -38,6 +38,7 @@ The app uses `contextIsolation: true` and `sandbox: true`. All IPC goes through 
 - **Main window** (`renderer.js`) — multi-track timeline, project management
 - **Fragment editor** (`fragmentEditor.js`) — piano-roll editor for individual fragments
 - **Singer creator** (`singerCreator.js`) — create custom singers from reference audio
+- **Singer market** (`singerMarket.js`) — browse, download, and share community-created singers
 - **Audio preprocess** (`audioPreprocess.js`) — F0 extraction and MIDI extraction from audio
 - **Settings** (`settings.js`) — device selection, diffusion parameters, audio config
 - **Model download** (`modelDownload.js`) — download missing ONNX models from ModelScope
@@ -49,6 +50,7 @@ The app uses `contextIsolation: true` and `sandbox: true`. All IPC goes through 
 
 Other inference modules:
 - `rmvpePitchDetector.js` — RMVPE-based F0 extraction (ONNX)
+- `fcpeDetector.js` — FCPE pitch detector (ONNX), default MIDI extraction tool
 - `basicPitch.js` — Basic Pitch note detection (TensorFlow.js)
 - `rosvotDetector.js` — ROSVOT voice onset detection (ONNX)
 - `midiParser.js` — Standard MIDI file parsing
@@ -63,6 +65,8 @@ Other inference modules:
 ### Audio (`src/audio/`)
 
 - `audioOutputManager.js` — WASAPI audio output via decibri (optional native module)
+- `wavEncoder.js` — WAV file encoding (default 48kHz, selectable 24/44.1/48/96 kHz)
+- `lrcExport.js` — LRC lyrics file export module
 - GPU info via `systeminformation` (replaced `@oxmc/node-gpuinfo`)
 - `wavEncoder.js` — WAV file encoding (24kHz)
 - `audioWorker.js` — Audio processing worker thread

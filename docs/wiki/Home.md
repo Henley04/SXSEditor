@@ -29,6 +29,25 @@ You write notes on a piano roll, type lyrics, and SXSEditor generates a singing 
 
 ---
 
+## What's New
+
+Highlights since v1.0.8:
+
+- **FCPE Pitch Detector** — ONNX-based, now the default MIDI extraction tool with a configurable post-processing pipeline
+- **Accompaniment Tracks** — Import WAV/MP3/FLAC/OGG/M4A/AAC as accompaniment alongside vocal fragments
+- **Switchable Diffusion Samplers** — Euler, Heun, Extrapolated Euler, STORK-2 (ICLR 2026)
+- **Dynamic Thresholding** — Per-frame percentile clipping (arXiv:2507.08965) for improved audio quality
+- **Singer Market** — Browse and download community-created singers directly in the app
+- **Note Context Menu** — Right-click notes for vibrato and fade in/out controls
+- **48 kHz Default Playback** — Up from 24 kHz; export selectable at 24/44.1/48/96 kHz
+- **LRC Lyrics Export** — Export project lyrics as a timed `.lrc` file
+- **EBU R128 Loudness Normalization** — −14 LUFS target with true-peak limiter (−1 dBTP)
+- **App size reduced ~527 MB (32%)** — ort-web dedup, source map pruning, locale pruning
+
+See the [User Guide](User-Guide) for full details on all features.
+
+---
+
 ## System Requirements
 
 | Requirement | Minimum | Recommended |
@@ -36,7 +55,7 @@ You write notes on a piano roll, type lyrics, and SXSEditor generates a singing 
 | OS | Windows 10 64-bit | Windows 11 |
 | RAM | 8 GB | 16 GB |
 | GPU | None (CPU fallback) | Discrete GPU with 4GB+ VRAM (NVIDIA/AMD/Intel) |
-| Storage | 2 GB app + 2 GB models | SSD with 10+ GB free |
+| Storage | 1.5 GB app + 2 GB models | SSD with 10+ GB free |
 | CPU | Any modern multi-core | Recent Intel/AMD with 6+ cores |
 
 ---
