@@ -71,6 +71,13 @@ function _timeoutResult(channel, ms) {
  * 判断缓存是否已过期（失败或成功结果超过各自 TTL 则允许重新检测）。
  * W12: 成功结果也应用 TTL，防止 NPU 运行中变为不可用时仍返回陈旧的成功缓存。
  */
+function _isTransientDetectionFailure(result) {
+  const details = String(result && result.details || '').toLowerCase();
+  return details.includes('no renderer window')
+    || details.includes('detection timeout')
+    || details.includes('module not available');
+}
+
 function _isCacheExpired() {
   if (!_npuDetectionCache) return true;
   const isFailure = !_npuDetectionCache.npuAvailable && !_npuDetectionCache.gpuAvailable;
@@ -112,9 +119,12 @@ function registerWebnnIpc() {
 
       ipcMain.handleOnce(responseChannel, async (_, result) => {
         clearTimeout(timeout);
-        _npuDetectionCache = result;
-        // W12: 成功结果记录 success 时间戳，失败记录 failure 时间戳
-        if (!result.npuAvailable && !result.gpuAvailable) {
+        _npuDetectionCache = _isTransientDetectionFailure(result) ? null : result;
+        // Startup/IPC races are not hardware verdicts and must be retried.
+        if (!_npuDetectionCache) {
+          _npuFailureTime = 0;
+          _npuSuccessTime = 0;
+        } else if (!result.npuAvailable && !result.gpuAvailable) {
           _npuFailureTime = Date.now();
           _npuSuccessTime = 0;
         } else {
@@ -357,9 +367,12 @@ async function detectNPUAvailability() {
     });
 
     // Cache all results (including failures) to avoid repeated slow detection
-    _npuDetectionCache = result;
-    // W12: 成功结果记录 success 时间戳，失败记录 failure 时间戳
-    if (!result.npuAvailable && !result.gpuAvailable) {
+    _npuDetectionCache = _isTransientDetectionFailure(result) ? null : result;
+    // Do not cache renderer startup races as a five-minute hardware failure.
+    if (!_npuDetectionCache) {
+      _npuFailureTime = 0;
+      _npuSuccessTime = 0;
+    } else if (!result.npuAvailable && !result.gpuAvailable) {
       _npuFailureTime = Date.now();
       _npuSuccessTime = 0;
     } else {

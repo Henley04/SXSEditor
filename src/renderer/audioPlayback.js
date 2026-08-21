@@ -130,6 +130,30 @@ let _streamingWaitingForInference = false;
 let _streamingWaitStartCtxTime = 0;
 let _streamingIsLastReceived = false;   // isLast chunk has been received
 let _streamingActiveSourceCount = 0;    // Currently-playing source count
+let _streamingContextSuspendedForInference = false;
+
+async function _pauseStreamingForInference(ctx) {
+  if (_streamingContextSuspendedForInference) return;
+  _streamingContextSuspendedForInference = true;
+  // All streaming vocal and accompaniment BufferSources share this context.
+  // Suspending it freezes every source and AudioContext.currentTime together,
+  // so accompaniment cannot run ahead while the next vocal chunk is inferred.
+  if (ctx && ctx.state === 'running') {
+    try { await ctx.suspend(); } catch (err) {
+      console.warn('[Audio] Failed to suspend context while waiting for inference:', err.message);
+    }
+  }
+}
+
+async function _resumeStreamingAfterInference(ctx) {
+  if (!_streamingContextSuspendedForInference) return;
+  _streamingContextSuspendedForInference = false;
+  if (ctx && ctx.state === 'suspended') {
+    try { await ctx.resume(); } catch (err) {
+      console.warn('[Audio] Failed to resume context after inference:', err.message);
+    }
+  }
+}
 
 // 流式播放自然完成：所有已调度 source（人声 chunk + 伴奏）均已结束。
 // 提取为独立函数供人声 chunk 与伴奏 source 的 onended 共用，避免重复逻辑。
@@ -139,6 +163,7 @@ function _finishStreamingPlayback() {
   state.playbackPauseOffset = 0;
   state.streamingSources = [];
   _streamingActive = false;
+  _streamingContextSuspendedForInference = false;
   stopPlayheadAnimation();
   dom.timeDisplay.textContent = formatTime(0);
   clearPlayheadLine();
@@ -309,6 +334,7 @@ export async function playAll() {
       _streamingWaitStartCtxTime = 0;
       _streamingIsLastReceived = false;
       _streamingActiveSourceCount = 0;
+      _streamingContextSuspendedForInference = false;
 
       if (canStreamPlayback) {
         _streamingActive = true;
@@ -404,6 +430,7 @@ export async function playAll() {
             if (prelimScheduleTime < minTime && !_streamingInferenceDone && !_streamingWaitingForInference) {
               _streamingWaitingForInference = true;
               _streamingWaitStartCtxTime = ctx.currentTime;
+              await _pauseStreamingForInference(ctx);
               if (state.playheadRaf) {
                 cancelAnimationFrame(state.playheadRaf);
                 state.playheadRaf = null;
@@ -416,7 +443,9 @@ export async function playAll() {
             // 并重启 rAF 动画。
             if (_streamingWaitingForInference) {
               _streamingWaitingForInference = false;
-              state.playbackStartTime = (ctx.currentTime + 0.05) - chunkStartSec;
+              await _resumeStreamingAfterInference(ctx);
+              // AudioContext.currentTime was frozen together with every source,
+              // so the original playbackStartTime remains the valid shared clock.
               startPlayheadAnimation();
             }
 
@@ -477,6 +506,7 @@ export async function playAll() {
         // 正在播放的音频提前结束或进入静音区。
         if (_streamingWaitingForInference && streamingStarted) {
           _streamingWaitingForInference = false;
+          await _resumeStreamingAfterInference(state.audioContext);
           startPlayheadAnimation();
         }
 
@@ -978,6 +1008,10 @@ export function pausePlayback() {
 }
 
 export function stopPlayback() {
+  if (_streamingContextSuspendedForInference && state.audioContext?.state === 'suspended') {
+    state.audioContext.resume().catch(() => {});
+  }
+  _streamingContextSuspendedForInference = false;
   if (state.isSynthesizing) {
     state.synthesisCancelled = true;
     window.electronAPI.cancelSVSSynthesis().catch(() => {});
@@ -1121,7 +1155,8 @@ export function startPlayheadAnimation() {
       if (elapsed >= _streamingBufferEndSec) {
         _streamingWaitingForInference = true;
         _streamingWaitStartCtxTime = context.currentTime;
-        // 冻结 playhead 在 buffer 前沿
+        void _pauseStreamingForInference(context);
+        // 冻结 playhead、伴奏与所有已调度 source 在同一 AudioContext 时间点
         if (state.playheadRaf) {
           cancelAnimationFrame(state.playheadRaf);
           state.playheadRaf = null;

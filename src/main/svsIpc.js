@@ -26,7 +26,7 @@ function _withSynthMutex(fn) {
   return prev.then(fn).finally(release);
 }
 
-function _createPipeline(languageOverride) {
+async function _createPipeline(languageOverride) {
   const modelPath = getModelDir();
   const settings = loadSettings();
   const deviceMode = settings.deviceMode || 'smart';
@@ -51,18 +51,32 @@ function _createPipeline(languageOverride) {
     japaneseVocalization,
   };
 
-  // onnxruntime-node session.run() blocks the thread that invokes it. Keep the
-  // ORT Node pipeline in a worker so Electron's main-process message pump stays
-  // responsive. ORT Web/WebNN remains in-process because it is coordinated
-  // with the renderer and does not execute native ORT Node runs here.
-  if (inferenceProvider !== 'ortweb') {
+  // WebNN contexts exist only in Chromium renderer processes. A Node
+  // worker_threads worker cannot access navigator.ml and must not own a
+  // pipeline that may select NPU/WebNN-GPU. Keep pure ORT Node CPU/DML in the
+  // worker, but retain WebNN-capable smart/explicit configurations in-process
+  // so the existing main -> renderer WebNN bridge remains reachable.
+  const explicitWebNN = deviceId === 'npu' || deviceId === 'webnn-gpu'
+    || preferredDeviceType === 'npu' || preferredDeviceType === 'webnn-gpu';
+  let webnnAvailable = explicitWebNN;
+  if (!explicitWebNN && deviceMode === 'smart') {
+    try {
+      const { detectNPUAvailability } = require('./webnnIpc');
+      const detected = await detectNPUAvailability();
+      webnnAvailable = !!(detected.npuAvailable || detected.gpuAvailable);
+    } catch (err) {
+      console.warn('[Main] WebNN preflight failed; using ORT Node worker:', err.message);
+    }
+  }
+  const keepRendererBridge = inferenceProvider === 'ortweb' || explicitWebNN || webnnAvailable;
+  if (!keepRendererBridge) {
     return new SvsWorkerClient({ modelDir: modelPath, baseModelDir: getBaseModelDir(), pipelineOptions, language: languageOverride });
   }
   return new OnnxSVSPipeline(modelPath, pipelineOptions);
 }
 
 const svsPipelineLazy = createLazyInitializer(async () => {
-  const pipeline = _createPipeline(currentLanguage);
+  const pipeline = await _createPipeline(currentLanguage);
   await pipeline.init();
   return pipeline;
 });

@@ -825,7 +825,7 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
 
     it('should clamp positive shift when max pitch would exceed upper bound', () => {
       // pitch 80 + shift 12 → 92 > 88, max allowed up = 88 - 80 = 8
-      expect(pipeline._clampAutoShift(12, [80])).to.equal(8);
+      expect(pipeline._clampAutoShift(12, [80])).to.equal(5);
     });
 
     it('should clamp negative shift when min pitch would fall below lower bound', () => {
@@ -833,10 +833,10 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       expect(pipeline._clampAutoShift(-5, [30])).to.equal(-2);
     });
 
-    it('should cap absolute shift to 12 semitones even when range allows more', () => {
-      // pitch 50, range allows ±38, but abs cap is 12
-      expect(pipeline._clampAutoShift(20, [50])).to.equal(12);
-      expect(pipeline._clampAutoShift(-20, [50])).to.equal(-12);
+    it('should cap absolute automatic shift to 5 semitones even when range allows more', () => {
+      // pitch 50 has ample range, but automatic timbre matching is capped at ±5
+      expect(pipeline._clampAutoShift(20, [50])).to.equal(5);
+      expect(pipeline._clampAutoShift(-20, [50])).to.equal(-5);
     });
 
     it('should handle wide pitch range within a fragment (root cause of garbled pronunciation)', () => {
@@ -845,7 +845,7 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       // 即使 autoShift 想偏移 +12，也只能 +4
       expect(pipeline._clampAutoShift(12, [48, 60, 72, 84])).to.equal(4);
       // min pitch 48, max allowed down = 28 - 48 = -20, but abs cap is -12
-      expect(pipeline._clampAutoShift(-20, [48, 60, 72, 84])).to.equal(-12);
+      expect(pipeline._clampAutoShift(-20, [48, 60, 72, 84])).to.equal(-5);
     });
 
     it('should return unchanged for empty or null pitch array', () => {
@@ -862,7 +862,7 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       expect(pipeline._clampAutoShift(1, [84])).to.equal(0);
       // 恢复 default 后上限回到 88
       pipeline.vocoderType = 'default';
-      expect(pipeline._clampAutoShift(12, [80])).to.equal(8);
+      expect(pipeline._clampAutoShift(12, [80])).to.equal(5);
     });
   });
 
@@ -884,14 +884,14 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       // global median 60 (C4), seg median 48 (C3), adj = 60-48 = 12, capped to +5
       // global f0Shift 3 + 5 = 8, clamped by _clampAutoShift (pitch 48 → 53, within range)
       const segNotes = [{ pitch: 48, start: 0, duration: 1 }];
-      expect(pipeline._computeSegF0Shift(3, 60, segNotes)).to.equal(8);
+      expect(pipeline._computeSegF0Shift(3, 60, segNotes)).to.equal(5);
     });
 
     it('should shift down for high segment (segment median above global)', () => {
       // global median 60, seg median 72 (C5), adj = 60-72 = -12, capped to -5
       // global f0Shift -2 + (-5) = -7, clamped by _clampAutoShift (pitch 72 → 65, within range)
       const segNotes = [{ pitch: 72, start: 0, duration: 1 }];
-      expect(pipeline._computeSegF0Shift(-2, 60, segNotes)).to.equal(-7);
+      expect(pipeline._computeSegF0Shift(-2, 60, segNotes)).to.equal(-5);
     });
 
     it('should cap adjustment to ±5 semitones', () => {

@@ -230,26 +230,10 @@ export function initPianoRoll() {
         this.dragStartY = y;
         this._dragMoved = false;
       } else {
-        // Preserve the original interaction: a single click on true empty
-        // space creates a note. The rectangle hit-test above prevents a visual
-        // hit on an existing note from falling through to this branch.
-        const beats = this._snapBeats(this._xToTime(x));
-        const pitch = Math.max(0, Math.min(127, this._yToPitch(y)));
-        const newNote = {
-          id: Date.now() + Math.random(),
-          pitch,
-          start: Math.max(0, beats),
-          duration: 0.25,
-          lyric: 'la',
-        };
-        this.notes.push(newNote);
-        this.selectedNoteId = newNote.id;
-        this.dragMode = 'resize';
-        this.dragStartX = x;
-        this.dragStartY = y;
-        this.dragNoteStart = { start: newNote.start, pitch: newNote.pitch, duration: newNote.duration };
-        this._dragMoved = false;
-        updateMidiInfo();
+        // Empty-space single click only clears/selects. Creating on mousedown
+        // made a near-miss below an existing note immediately add a note.
+        this.selectedNoteId = null;
+        this.dragMode = null;
       }
 
       this._staticCacheDirty = true;
@@ -331,6 +315,20 @@ export function initPianoRoll() {
       if (hit) {
         const note = hit.note;
         startInlineEdit(this, note, hit);
+      } else {
+        const beats = this._snapBeats(this._xToTime(x));
+        const newNote = {
+          id: Date.now() + Math.random(),
+          pitch: Math.max(0, Math.min(127, this._yToPitch(y))),
+          start: Math.max(0, beats),
+          duration: Math.max(this.snapGrid, 0.25),
+          lyric: 'la',
+        };
+        this.notes.push(newNote);
+        this.selectedNoteId = newNote.id;
+        this._staticCacheDirty = true;
+        this.render();
+        updateMidiInfo();
       }
     },
 
