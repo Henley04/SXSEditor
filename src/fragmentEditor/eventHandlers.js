@@ -1610,6 +1610,20 @@ function handleParamEnvelopeMouseDown(pos) {
   scheduleAutoSave();
 }
 
+function lyricEditorValue(note) {
+  return (note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || '');
+}
+
+function applyLyricEditorValue(note, value) {
+  const text = String(value || '').trim();
+  const continuation = text === '-';
+  note.lyric = continuation ? '' : value;
+  note.isContinuation = continuation;
+  note.isSlur = continuation;
+  note.noteType = continuation ? 3 : (text ? 2 : 1);
+  note.phonemeAdjustments = null;
+}
+
 function startInlineEdit(note, hit) {
   const activeInlineInput = getActiveInlineInput();
   if (activeInlineInput) {
@@ -1620,7 +1634,7 @@ function startInlineEdit(note, hit) {
 
   setActiveInlineEditNote(note);
   setLyricEditNoteId(note.id);
-  setLyricEditOldValue(note.lyric || '');
+  setLyricEditOldValue(lyricEditorValue(note));
 
   const container = canvas.parentElement;
   const containerRect = container.getBoundingClientRect();
@@ -1637,7 +1651,7 @@ function startInlineEdit(note, hit) {
   const input = document.createElement('input');
   input.type = 'text';
   input.maxLength = 256;
-  input.value = note.lyric || '';
+  input.value = lyricEditorValue(note);
   input.style.cssText = `
     position: absolute;
     left: ${inputX}px;
@@ -1681,52 +1695,47 @@ function startInlineEdit(note, hit) {
         // Capture old lyrics BEFORE modifying any notes
         const notes = getNotes();
         const noteIdx = notes.findIndex(n => n.id === noteId);
-        const oldLyrics = [{ id: noteId, lyric: oldLyric }];
+        const oldLyrics = [{ id: noteId, lyric: oldLyric, isContinuation: note.isContinuation, isSlur: note.isSlur, noteType: note.noteType }];
         if (tokens.length > 1 && noteIdx !== -1) {
           for (let t = 1; t < tokens.length; t++) {
             const nextIdx = noteIdx + t;
             if (nextIdx < notes.length) {
-              oldLyrics.push({ id: notes[nextIdx].id, lyric: notes[nextIdx].lyric });
+              oldLyrics.push({ id: notes[nextIdx].id, lyric: lyricEditorValue(notes[nextIdx]), isContinuation: notes[nextIdx].isContinuation, isSlur: notes[nextIdx].isSlur, noteType: notes[nextIdx].noteType });
             }
           }
         }
 
         if (tokens.length <= 1) {
-          note.lyric = newLyric;
-          note.phonemeAdjustments = null;
+          applyLyricEditorValue(note, newLyric);
         } else {
           if (noteIdx !== -1) {
-            note.lyric = tokens[0];
-            note.phonemeAdjustments = null;
+            applyLyricEditorValue(note, tokens[0]);
             for (let t = 1; t < tokens.length; t++) {
               const nextIdx = noteIdx + t;
               if (nextIdx < notes.length) {
-                notes[nextIdx].lyric = tokens[t];
-                notes[nextIdx].phonemeAdjustments = null;
+                applyLyricEditorValue(notes[nextIdx], tokens[t]);
               }
             }
           } else {
-            note.lyric = newLyric;
-            note.phonemeAdjustments = null;
+            applyLyricEditorValue(note, newLyric);
           }
         }
 
         history.push({
           undo() {
-            for (const { id, lyric } of oldLyrics) {
-              const n = notes.find(nn => nn.id === id);
-              if (n) { n.lyric = lyric; n.phonemeAdjustments = null; }
+            for (const old of oldLyrics) {
+              const n = notes.find(nn => nn.id === old.id);
+              if (n) { n.lyric = old.lyric === '-' ? '' : old.lyric; n.isContinuation = !!old.isContinuation; n.isSlur = !!old.isSlur; n.noteType = old.noteType; n.phonemeAdjustments = null; }
             }
           },
           redo() {
             const n = notes.find(nn => nn.id === noteId);
-            if (n) { n.lyric = newLyric; n.phonemeAdjustments = null; }
+            if (n) applyLyricEditorValue(n, newLyric);
             if (tokens.length > 1 && noteIdx !== -1) {
               for (let t = 1; t < tokens.length; t++) {
                 const nextIdx = noteIdx + t;
                 if (nextIdx < notes.length) {
-                  notes[nextIdx].lyric = tokens[t];
-                  notes[nextIdx].phonemeAdjustments = null;
+                  applyLyricEditorValue(notes[nextIdx], tokens[t]);
                 }
               }
             }

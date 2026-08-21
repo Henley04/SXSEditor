@@ -87,7 +87,7 @@ export function syncFragmentScroll() {
     return Math.max(max, endBeat);
   }, 0);
   const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
-  const totalBeats = Math.max(64, Math.ceil((maxBeat + 64) / 64) * 64);
+  const totalBeats = Math.max(64, Math.ceil((maxBeat + 256) / 64) * 64);
   const canvasWidth = totalBeats * beatWidth;
   const canvasHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
   const containerW = dom.fragmentContainer.clientWidth;
@@ -120,7 +120,7 @@ export function renderFragmentTimeline() {
     return Math.max(max, endBeat);
   }, 0);
   const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
-  const totalBeats = Math.max(64, Math.ceil((maxBeat + 64) / 64) * 64);
+  const totalBeats = Math.max(64, Math.ceil((maxBeat + 256) / 64) * 64);
   const virtualWidth = totalBeats * beatWidth;
   const contentHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
   const viewportWidth = Math.max(1, dom.fragmentContainer.clientWidth || 1);

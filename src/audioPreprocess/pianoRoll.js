@@ -193,35 +193,22 @@ export function initPianoRoll() {
     },
 
     _findNoteAt(x, y) {
-      // Half-open interval [start, start+duration) to eliminate boundary
-      // ambiguity between adjacent notes. Iterate last-first so the most
-      // recently added note wins on shared boundaries (matches old behavior
-      // for the rare case of true overlap). Resize-edge flag is computed
-      // from a zoom-aware hot zone instead of a fixed 6px.
-      //
-      // No adjacent-pitch fallback: clicking in the empty space of a pitch
-      // row must not snap to a note in the row above/below. This keeps the
-      // hit-test consistent with the fragmentEditor pianoRoll, whose
-      // findNoteAtBeat uses exact pitch match only.
-      const resizeBeats = this._resizeHotZoneBeats();
-      const xTime = this._xToTime(x);
-      const pitch = this._yToPitch(y);
-      // Iterate from last to first to preserve historical "newest wins"
-      // tie-break for genuinely overlapping notes at the same pitch.
+      // Hit-test the exact rectangles users see. Converting y back to a rounded
+      // MIDI pitch made the top/bottom pixels of a drawn note resolve to the
+      // adjacent pitch row after zoom/DPR rounding, so a visible hit was treated
+      // as empty space and the legacy create-note path fired below the note.
+      const verticalTolerancePx = 2;
+      const resizeHotZonePx = Math.max(4, Math.min(12, this.snapGrid * BEAT_WIDTH * this.zoomX / 2));
       for (let i = this.notes.length - 1; i >= 0; i--) {
         const note = this.notes[i];
-        if (note.pitch !== pitch) continue;
-        const nEnd = note.start + note.duration;
-        // Half-open: click exactly at start is inside; click exactly at end
-        // is NOT inside (belongs to next note or empty space).
-        if (xTime >= note.start && xTime < nEnd) {
-          const rx = Math.round(this._timeToX(note.start));
-          const ry = Math.round(this._pitchToY(note.pitch));
-          const rw = Math.round(note.duration * BEAT_WIDTH * this.zoomX);
-          const rh = Math.round(NOTE_HEIGHT * this.zoomY);
-          const onResizeEdge = (nEnd - xTime) <= resizeBeats + 1e-9;
-          return { note, nx: rx, ny: ry, nw: rw, nh: rh, onResizeEdge };
-        }
+        const nx = this._timeToX(note.start);
+        const ny = this._pitchToY(note.pitch);
+        const nw = Math.max(1, note.duration * BEAT_WIDTH * this.zoomX);
+        const nh = Math.max(1, NOTE_HEIGHT * this.zoomY);
+        if (x < nx || x > nx + nw) continue;
+        if (y < ny - verticalTolerancePx || y > ny + nh + verticalTolerancePx) continue;
+        const onResizeEdge = x >= nx + nw - resizeHotZonePx;
+        return { note, nx, ny, nw, nh, onResizeEdge };
       }
       return null;
     },
@@ -235,22 +222,22 @@ export function initPianoRoll() {
       const hit = this._findNoteAt(x, y);
       if (hit) {
         this.selectedNoteId = hit.note.id;
-        if (hit.onResizeEdge) {
-          this.dragMode = 'resize';
-        } else {
-          this.dragMode = 'move';
-          this.dragNoteStart = { start: hit.note.start, pitch: hit.note.pitch, duration: hit.note.duration };
-        }
+        // Always capture an immutable drag snapshot. Resize previously reused
+        // the snapshot from the last operation, causing occasional length jumps.
+        this.dragNoteStart = { start: hit.note.start, pitch: hit.note.pitch, duration: hit.note.duration };
+        this.dragMode = hit.onResizeEdge ? 'resize' : 'move';
         this.dragStartX = x;
         this.dragStartY = y;
         this._dragMoved = false;
       } else {
+        // Preserve the original interaction: a single click on true empty
+        // space creates a note. The rectangle hit-test above prevents a visual
+        // hit on an existing note from falling through to this branch.
         const beats = this._snapBeats(this._xToTime(x));
-        const pitch = this._yToPitch(y);
-        const clampedPitch = Math.max(0, Math.min(127, pitch));
+        const pitch = Math.max(0, Math.min(127, this._yToPitch(y)));
         const newNote = {
           id: Date.now() + Math.random(),
-          pitch: clampedPitch,
+          pitch,
           start: Math.max(0, beats),
           duration: 0.25,
           lyric: 'la',
@@ -264,6 +251,7 @@ export function initPianoRoll() {
         this._dragMoved = false;
         updateMidiInfo();
       }
+
       this._staticCacheDirty = true;
       this.render();
     },
@@ -724,14 +712,14 @@ export function initPianoRoll() {
           ctx.font = '10px sans-serif';
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
-          const displayText = note.lyric || midiToNoteName(note.pitch);
+          const displayText = (note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || midiToNoteName(note.pitch));
           ctx.fillText(displayText, x + 4, y + h / 2);
         } else if (w > 8) {
           ctx.fillStyle = c.noteText;
           ctx.font = '8px sans-serif';
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
-          const displayText = note.lyric || midiToNoteName(note.pitch);
+          const displayText = (note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || midiToNoteName(note.pitch));
           ctx.fillText(displayText, x + 2, y + h / 2);
         }
 

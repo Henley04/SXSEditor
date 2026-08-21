@@ -2020,7 +2020,7 @@ function _doRenderImpl(w, h) {
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText(note.lyric || '', x + 3, y + nh / 2);
+      ctx.fillText((note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || ''), x + 3, y + nh / 2);
     }
 
     ctx.fillStyle = c.selectionBg;

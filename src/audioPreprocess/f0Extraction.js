@@ -25,7 +25,18 @@ export async function extractF0AndPitch() {
       throw new Error(result.error || 'RMVPE inference failed');
     }
 
-    state.f0Data = result.f0Array;
+    const extracted = result.f0Array || [];
+    if (extracted.length > 1 && state.wavDuration > 0) {
+      const step = Math.max(1e-6, extracted[1].time - extracted[0].time);
+      const detectedDuration = extracted[extracted.length - 1].time + step;
+      const scale = detectedDuration > 0 ? state.wavDuration / detectedDuration : 1;
+      state.f0Data = extracted.map(frame => ({
+        ...frame,
+        time: Math.max(0, frame.time * scale),
+      }));
+    } else {
+      state.f0Data = extracted;
+    }
 
     if (state.pianoRoll) {
       state.pianoRoll.f0Data = state.f0Data;
@@ -49,6 +60,9 @@ export async function extractF0AndPitch() {
     };
 
     updateMidiInfo();
+    // Keep the busy overlay until the new F0 cache and both canvases have
+    // actually painted. Awaiting IPC only means inference data arrived.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     showAlertDialog(t('preprocess.f0ExtractionComplete'));
   } catch (err) {
     console.error('Extraction failed:', err);

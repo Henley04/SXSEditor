@@ -627,7 +627,10 @@ class OnnxSVSPipeline {
         const maxAllowedUp = MAX_EFFECTIVE_PITCH - maxPitch;
         const maxAllowedDown = MIN_EFFECTIVE_PITCH - minPitch; // 负值
         const clampedShift = Math.max(maxAllowedDown, Math.min(maxAllowedUp, f0Shift));
-        return Math.max(-12, Math.min(12, clampedShift));
+        // A full-octave timbre remap often moves the score outside the reference
+        // singer's trained register. Keep automatic matching conservative; manual
+        // pitchShift remains available for intentional larger transposition.
+        return Math.max(-5, Math.min(5, clampedShift));
     }
 
     /**

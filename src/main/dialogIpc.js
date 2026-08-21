@@ -119,7 +119,9 @@ function registerDialogIpc() {
       if (!isPathAllowed(resolved)) {
         return { success: false, error: t('error.pathNotAllowed') };
       }
-      shell.showItemInFolder(resolved);
+      const fs = require('node:fs');
+      if (fs.existsSync(resolved)) shell.showItemInFolder(resolved);
+      else await shell.openPath(path.dirname(resolved));
       return { success: true };
     } catch (err) {
       console.error('[Main] showItemInFolder failed:', err.message);

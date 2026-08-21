@@ -109,8 +109,8 @@ html, body {
 
 /* ==================== 波形区域 ==================== */
 #waveform-section {
-  flex: 0 0 25%;
-  min-height: 120px;
+  flex: 0 0 18%;
+  min-height: 90px;
   background: var(--bg-panel);
   display: flex;
   flex-direction: column;

@@ -264,6 +264,8 @@ export function setupEventHandlers() {
         state.pianoRoll.scrollX += ev.deltaY;
         state.pianoRoll.scrollX = Math.max(0, Math.min(getMaxScrollX(), state.pianoRoll.scrollX));
         state.waveformScrollX = state.pianoRoll.scrollX;
+        state.waveformZoomX = state.pianoRoll.zoomX;
+        state.pianoRoll._staticCacheDirty = true;
         state.pianoRoll.render();
       } else {
         state.pianoRoll.scrollY += ev.deltaY;
@@ -286,7 +288,7 @@ export function setupEventHandlers() {
     const mainRect = dom.mainContent.getBoundingClientRect();
     const relY = e.clientY - mainRect.top;
     const pct = (relY / mainRect.height) * 100;
-    const clamped = Math.max(10, Math.min(60, pct));
+    const clamped = Math.max(8, Math.min(45, pct));
     dom.waveformSection.style.flex = `0 0 ${clamped}%`;
     drawWaveformWithPlayhead(state.pianoRoll ? state.pianoRoll.getCurrentTime() : 0);
     if (state.pianoRoll) state.pianoRoll._resize();

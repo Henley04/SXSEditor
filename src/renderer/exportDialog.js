@@ -896,10 +896,19 @@ function buildCheckboxField(opts) {
 // ==================== 开始导出 ====================
 
 async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
-  // 校验输出路径
-  if (!form.outputPath || !form.outputPath.trim()) {
-    showAlertDialog(t('main.exportDialog.selectPathFirst'));
-    return;
+  // A bare default filename resolves against Electron's process working
+  // directory, which differs between development and packaged builds. Require
+  // an absolute path before starting the expensive synthesis job.
+  const candidate = (form.outputPath || '').trim();
+  const isAbsolute = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(candidate);
+  if (!isAbsolute) {
+    const result = await window.electronAPI.showSaveDialog({
+      title: t('main.exportDialog.title'),
+      defaultPath: candidate || undefined,
+      filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
+    });
+    if (result.canceled || !result.filePath) return;
+    form.outputPath = result.filePath;
   }
   const trimmedPath = form.outputPath.trim();
   if (!trimmedPath.toLowerCase().endsWith('.wav')) {
@@ -1068,7 +1077,8 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setProgress(98);
 
     // 保存文件
-    await window.electronAPI.saveFile(form.outputPath, wavData);
+    const saveResult = await window.electronAPI.saveFile(form.outputPath, wavData);
+    if (saveResult && saveResult.success === false) throw new Error(saveResult.error || 'Failed to save export');
 
     setProgress(100);
     setStatus('progressDone');
@@ -1141,8 +1151,9 @@ function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, f
   openFolderBtn.textContent = t('main.exportDialog.openFolder');
   openFolderBtn.addEventListener('click', async () => {
     try {
-      await window.electronAPI.showItemInFolder(outputPath);
-    } catch (_) {}
+      const result = await window.electronAPI.showItemInFolder(outputPath);
+      if (result && result.success === false) throw new Error(result.error || 'Unable to open export folder');
+    } catch (err) { console.warn('[ExportDialog] Open folder failed:', err.message); }
   });
   footer.appendChild(openFolderBtn);
 

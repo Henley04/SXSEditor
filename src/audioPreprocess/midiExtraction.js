@@ -148,6 +148,24 @@ export async function extractF0BasicPitch() {
       throw new Error(result.error || 'MIDI extraction failed');
     }
 
+    // Detector frame counts may be based on resampled/padded model input. Map
+    // the returned timeline back to the decoded WAV duration once, then use the
+    // same scale for F0 and notes so waveform, preview curve and MIDI agree.
+    let timeScale = 1;
+    if (result.f0Array && result.f0Array.length > 1 && state.wavDuration > 0) {
+      const step = Math.max(1e-6, result.f0Array[1].time - result.f0Array[0].time);
+      const detectorDuration = result.f0Array[result.f0Array.length - 1].time + step;
+      if (detectorDuration > 0) timeScale = state.wavDuration / detectorDuration;
+      result.f0Array = result.f0Array.map(frame => ({ ...frame, time: Math.max(0, frame.time * timeScale) }));
+    }
+    if (result.notes && Math.abs(timeScale - 1) > 1e-6) {
+      result.notes = result.notes.map(note => ({
+        ...note,
+        start: Math.max(0, (note.start || 0) * timeScale),
+        duration: Math.max(0.01, (note.duration || 0.01) * timeScale),
+      }));
+    }
+
     if (midiTool === 'fcpe') {
       // 设备/速度提示
       const deviceTag = result.device === 'DML' ? 'DML (GPU)' : 'CPU';
@@ -164,13 +182,24 @@ export async function extractF0BasicPitch() {
       showQualityWarnings(result.warnings);
     }
 
-    const notes = (result.notes || []).map((n, i) => ({
-      id: n.id ?? (Date.now() + i),
-      pitch: n.pitch ?? 60,
-      start: n.start ?? 0,
-      duration: n.duration ?? 0.25,
-      lyric: n.lyric || n.text || 'la',
-    }));
+    const rawNotes = result.notes || [];
+    const notes = rawNotes.map((n, i) => {
+      const previous = i > 0 ? rawNotes[i - 1] : null;
+      const gap = previous ? (n.start ?? 0) - ((previous.start ?? 0) + (previous.duration ?? 0)) : Infinity;
+      // FCPE may split one sustained syllable at a stable pitch transition.
+      // Mark only practically gapless follow-up notes as slurs; users enter the
+      // lyric on the first note and continuation notes use '-'.
+      const continuation = midiTool === 'fcpe' && previous && gap <= 0.03;
+      return {
+        id: n.id ?? (Date.now() + i),
+        pitch: n.pitch ?? 60,
+        start: n.start ?? 0,
+        duration: n.duration ?? 0.25,
+        lyric: n.lyric || n.text || (continuation ? '' : 'la'),
+        noteType: continuation ? 3 : (n.noteType ?? 2),
+        isContinuation: continuation,
+      };
+    });
 
     if (result.f0Array && result.f0Array.length > 0) {
       state.f0Data = result.f0Array;
