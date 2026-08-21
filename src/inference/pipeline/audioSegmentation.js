@@ -1,4 +1,4 @@
-const { SAMPLE_RATE, HOP_SIZE, LONG_AUDIO_THRESHOLD_SEC, SEGMENT_MIN_SEC, SEGMENT_MAX_SEC, SEGMENT_OVERLAP_SEC } = require('./constants');
+const { LONG_AUDIO_THRESHOLD_SEC, SEGMENT_MIN_SEC, SEGMENT_MAX_SEC, SEGMENT_OVERLAP_SEC } = require('./constants');
 
 /**
  * Long audio segmentation and stitching logic
@@ -37,95 +37,162 @@ class AudioSegmentation {
      */
     buildVocalSegments(notes, bpm) {
         if (!notes || notes.length === 0) return [{ notes, startBeat: 0, endBeat: 0 }];
-
-        const sorted = [...notes].sort((a, b) => a.start - b.start);
-        const totalBeats = sorted[sorted.length - 1].start + sorted[sorted.length - 1].duration;
-        const totalSec = (totalBeats / bpm) * 60;
-
-        if (totalSec <= LONG_AUDIO_THRESHOLD_SEC) {
-            return [{ notes, startBeat: 0, endBeat: totalBeats }];
+        if (!Number.isFinite(bpm) || bpm <= 0) {
+            throw new RangeError('bpm must be a positive finite number');
         }
 
-        console.log(`[OnnxSVSPipeline] Long audio detected: ${totalSec.toFixed(1)}s > ${LONG_AUDIO_THRESHOLD_SEC}s, using segmented synthesis`);
+        const sorted = [...notes].sort((a, b) => a.start - b.start);
+        for (const note of sorted) {
+            if (!Number.isFinite(note.start) || !Number.isFinite(note.duration) || note.duration <= 0) {
+                throw new RangeError('notes must have finite start and positive duration');
+            }
+        }
+
+        const secondsPerBeat = 60 / bpm;
+        // Conservative scheduling: only gaps >= 1.5 seconds are removed from
+        // model input. Keep 150 ms of rest context on both sides so consonant
+        // releases and the following attack still see an <SP>-like boundary.
+        const LONG_REST_SEC = 1.5;
+        const REST_CONTEXT_SEC = 0.15;
+        const longRestBeats = LONG_REST_SEC / secondsPerBeat;
+        const restContextBeats = REST_CONTEXT_SEC / secondsPerBeat;
+        const isRest = (note) => {
+            const lyric = String(note.lyric || '').trim();
+            const continuation = note.noteType === 3 || note.isSlur || note.isContinuation;
+            return note.pitch <= 0 || note.noteType === 1
+                || lyric === '<SP>' || lyric === '<AP>'
+                || (lyric === '' && !continuation);
+        };
+
+        const timelineEnd = sorted[sorted.length - 1].start + sorted[sorted.length - 1].duration;
+        const timelineSec = timelineEnd * secondsPerBeat;
+        const hasLongRest = sorted.some(note => isRest(note) && note.duration >= longRestBeats);
+        // Preserve the established short-clip path exactly when there is no
+        // expensive long rest to remove.
+        if (!hasLongRest && timelineSec <= LONG_AUDIO_THRESHOLD_SEC) {
+            return [{ notes, startBeat: 0, endBeat: timelineEnd }];
+        }
+
+        // Split the score into active inference regions. The central part of a
+        // long rest is intentionally absent, so diffusion and Vocos never run
+        // for it. Short rests stay in-region as model timing context.
+        const regions = [];
+        let current = [];
+        let pendingHeadRest = null;
+        let skippedLongRest = false;
+        const flush = () => {
+            if (current.some(n => !isRest(n))) regions.push(current);
+            current = [];
+        };
+        for (const note of sorted) {
+            if (isRest(note) && note.duration >= longRestBeats) {
+                skippedLongRest = true;
+                const pad = Math.min(restContextBeats, note.duration / 3);
+                if (pad > 0) current.push({ ...note, duration: pad });
+                flush();
+                pendingHeadRest = pad > 0
+                    ? { ...note, start: note.start + note.duration - pad, duration: pad }
+                    : null;
+                continue;
+            }
+            if (pendingHeadRest) {
+                current.push(pendingHeadRest);
+                pendingHeadRest = null;
+            }
+            current.push(note);
+        }
+        flush();
+
+        if (regions.length === 0) return [];
 
         const overlapBeats = (SEGMENT_OVERLAP_SEC / 60) * bpm;
         const minBeats = (SEGMENT_MIN_SEC / 60) * bpm;
         const maxBeats = (SEGMENT_MAX_SEC / 60) * bpm;
-
-        const restBoundaries = [0];
-        for (let i = 0; i < sorted.length; i++) {
-            const note = sorted[i];
-            if (note.lyric && note.lyric.trim().length === 0) {
-                const midBeat = note.start + note.duration / 2;
-                restBoundaries.push(midBeat);
-            }
-            if (i > 0) {
-                const prevEnd = sorted[i - 1].start + sorted[i - 1].duration;
-                const gap = note.start - prevEnd;
-                if (gap > 0.05) {
-                    restBoundaries.push(prevEnd + gap / 2);
-                }
-            }
-        }
-        restBoundaries.push(totalBeats);
-        restBoundaries.sort((a, b) => a - b);
-
         const segments = [];
-        let segStart = 0;
 
-        while (segStart < totalBeats - 0.01) {
-            let segEnd = segStart + maxBeats;
-            let reachedEnd = false;
-
-            if (segEnd >= totalBeats - 0.01) {
-                segEnd = totalBeats;
-                reachedEnd = true;
-            } else {
-                let bestBoundary = segEnd;
-                let bestDist = Infinity;
-                for (const b of restBoundaries) {
-                    if (b <= segStart + minBeats) continue;
-                    if (b >= segStart + maxBeats + overlapBeats) break;
-                    const dist = Math.abs(b - (segStart + (maxBeats + minBeats) / 2));
-                    if (dist < bestDist) {
-                        bestDist = dist;
-                        bestBoundary = b;
-                    }
-                }
-                segEnd = bestBoundary;
-            }
-
-            const segNotes = sorted.filter(n => {
-                const noteEnd = n.start + n.duration;
-                return n.start < segEnd && noteEnd > segStart;
-            }).map(n => {
-                const clippedStart = Math.max(n.start, segStart);
-                const clippedEnd = Math.min(n.start + n.duration, segEnd);
-                return {
-                    ...n,
-                    start: clippedStart - segStart,
-                    duration: Math.max(0.01, clippedEnd - clippedStart),
-                };
-            });
-
-            if (segNotes.length > 0) {
+        const segmentRegion = (regionNotes) => {
+            const regionStart = regionNotes[0].start;
+            const regionEnd = regionNotes[regionNotes.length - 1].start
+                + regionNotes[regionNotes.length - 1].duration;
+            const regionSec = (regionEnd - regionStart) * secondsPerBeat;
+            if (regionSec <= LONG_AUDIO_THRESHOLD_SEC) {
+                const preserveLegacySingle = regions.length === 1 && !skippedLongRest;
                 segments.push({
-                    notes: segNotes,
-                    startBeat: segStart,
-                    endBeat: segEnd,
+                    notes: preserveLegacySingle
+                        ? regionNotes
+                        : regionNotes.map(n => ({ ...n, start: n.start - regionStart })),
+                    startBeat: preserveLegacySingle ? 0 : regionStart,
+                    endBeat: regionEnd,
                 });
+                return;
             }
 
-            // 当末段被夹到 totalBeats 时必须立即终止循环，否则下一轮
-            // segStart = totalBeats - overlapBeats 仍 < totalBeats - 0.01，
-            // 会无限重复处理最后一段并把 segment 对象不断 push 进数组，
-            // 最终耗尽内存（OOM）。overlap 仅用于中间段的衔接，末段无后继。
-            if (reachedEnd) break;
+            const restBoundaries = [regionStart];
+            const noteEndBoundaries = [];
+            for (const note of regionNotes) {
+                if (isRest(note)) restBoundaries.push(note.start + note.duration / 2);
+                else noteEndBoundaries.push(note.start + note.duration);
+            }
+            restBoundaries.push(regionEnd);
+            restBoundaries.sort((a, b) => a - b);
+            noteEndBoundaries.sort((a, b) => a - b);
 
-            segStart = segEnd - overlapBeats;
-            if (segStart >= totalBeats - 0.01) break;
+            let segStart = regionStart;
+            while (segStart < regionEnd - 0.01) {
+                let segEnd = segStart + maxBeats;
+                let reachedEnd = false;
+                if (segEnd >= regionEnd - 0.01) {
+                    segEnd = regionEnd;
+                    reachedEnd = true;
+                } else {
+                    const target = segStart + (maxBeats + minBeats) / 2;
+                    const upper = Math.min(regionEnd, segStart + maxBeats + overlapBeats);
+                    const pickNearest = (candidates) => {
+                        let best = null;
+                        let distance = Infinity;
+                        for (const boundary of candidates) {
+                            if (boundary <= segStart + minBeats) continue;
+                            if (boundary >= upper) break;
+                            const candidateDistance = Math.abs(boundary - target);
+                            if (candidateDistance < distance) {
+                                best = boundary;
+                                distance = candidateDistance;
+                            }
+                        }
+                        return best;
+                    };
+                    segEnd = pickNearest(restBoundaries)
+                        ?? pickNearest(noteEndBoundaries)
+                        ?? segEnd;
+                }
+
+                const segNotes = regionNotes.filter(n => {
+                    const noteEnd = n.start + n.duration;
+                    return n.start < segEnd && noteEnd > segStart;
+                }).map(n => {
+                    const clippedStart = Math.max(n.start, segStart);
+                    const clippedEnd = Math.min(n.start + n.duration, segEnd);
+                    return {
+                        ...n,
+                        start: clippedStart - segStart,
+                        duration: Math.max(0.01, clippedEnd - clippedStart),
+                    };
+                });
+                if (segNotes.some(n => !isRest(n))) {
+                    segments.push({ notes: segNotes, startBeat: segStart, endBeat: segEnd });
+                }
+                if (reachedEnd) break;
+                const nextStart = segEnd - overlapBeats;
+                if (nextStart <= segStart + 0.01) break;
+                segStart = nextStart;
+            }
+        };
+
+        for (const region of regions) segmentRegion(region);
+        const totalSec = (sorted[sorted.length - 1].start + sorted[sorted.length - 1].duration) * secondsPerBeat;
+        if (segments.length > 1 || regions.length > 1) {
+            console.log(`[OnnxSVSPipeline] Scheduled ${segments.length} inference segments across ${regions.length} active regions (${totalSec.toFixed(1)}s timeline); long rests skipped`);
         }
-
         return segments;
     }
 
@@ -137,37 +204,41 @@ class AudioSegmentation {
      */
     hashArray(arr) {
         if (!arr) return 0;
-        // FNV-1a 32-bit 参数
         let h = 0x811c9dc5;
+        const bytes = new Uint8Array(8);
+        const view = new DataView(bytes.buffer);
+        const hashValue = (value) => {
+            // Preserve fractional edits. The old bitwise coercion collapsed every
+            // value in (-1, 1) to zero, causing stale synthesis-cache hits for F0 curves.
+            view.setFloat64(0, Number.isFinite(Number(value)) ? Number(value) : 0, true);
+            for (let j = 0; j < bytes.length; j++) {
+                h ^= bytes[j];
+                h = Math.imul(h, 0x01000193);
+            }
+        };
+
         const step = Math.max(1, Math.floor(arr.length / 2000));
+        let lastHashed = -1;
         for (let i = 0; i < arr.length; i += step) {
-            // FNV-1a: 逐字节 XOR + 乘素数（用整数近似，避免精度损失）
-            const v = (arr[i] | 0) | 0;
-            h ^= v & 0xff;
-            h = Math.imul(h, 0x01000193);
-            h ^= (v >>> 8) & 0xff;
-            h = Math.imul(h, 0x01000193);
-            h ^= (v >>> 16) & 0xff;
-            h = Math.imul(h, 0x01000193);
-            h ^= (v >>> 24) & 0xff;
-            h = Math.imul(h, 0x01000193);
+            hashValue(arr[i]);
+            lastHashed = i;
         }
-        // 加上长度以区分前缀相同的数组
-        h ^= arr.length;
-        h = Math.imul(h, 0x01000193);
+        // Sampling must include the tail, where editor curves commonly receive a final keyframe.
+        if (arr.length > 0 && lastHashed !== arr.length - 1) hashValue(arr[arr.length - 1]);
+        hashValue(arr.length);
         return h | 0;
     }
 
     /**
      * Compute synthesis cache key
      */
-    computeSynthCacheKey(notes, bpm, options, interpolateEnvelope) {
+    computeSynthCacheKey(notes, bpm, options, _interpolateEnvelope) {
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
         const totalSteps = options.nSteps || 32;
-        const cfgStrength = options.cfg || 3.0;
-        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.75;
+        const cfgStrength = options.cfg !== undefined ? options.cfg : 3.0;
+        const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : 0.7;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
         const language = options.language || null;
@@ -207,19 +278,57 @@ class AudioSegmentation {
 
         const f0Hash = this.hashArray(pitchCurveF0);
 
+        // Task 14: refHash uses FNV-1a over the full buffer via the existing
+        // `hashArray` helper, replacing the old "first 4000 bytes with stride"
+        // polynomial scan. `hashArray` already strides long arrays for cost
+        // control but covers the full length (so two buffers sharing only the
+        // first 4000 bytes produce different hashes — eliminating false cache
+        // hits on long reference audio). It also folds in `arr.length`, so
+        // length-differing prefixes never collide.
+        // `hashArray` accepts any array-like (ArrayBuffer, Uint8Array / TypedArray,
+        // Buffer, plain array); normalize the input accordingly.
         let refHash = 0;
         if (refAudioWavBuffer) {
-            const buf = refAudioWavBuffer instanceof ArrayBuffer ? new Uint8Array(refAudioWavBuffer) :
-                        Buffer.isBuffer(refAudioWavBuffer) ? refAudioWavBuffer : null;
+            let buf = null;
+            if (refAudioWavBuffer instanceof ArrayBuffer) {
+                buf = new Uint8Array(refAudioWavBuffer);
+            } else if (ArrayBuffer.isView(refAudioWavBuffer)) {
+                // Covers Uint8Array / Uint8ClampedArray / Buffer / Int16Array / etc.
+                buf = refAudioWavBuffer;
+            } else if (Array.isArray(refAudioWavBuffer)) {
+                buf = refAudioWavBuffer;
+            }
             if (buf) {
-                refHash = buf.length;
-                for (let i = 0; i < Math.min(buf.length, 4000); i += Math.max(1, Math.floor(buf.length / 2000))) {
-                    refHash = ((refHash << 5) - refHash + buf[i]) | 0;
-                }
+                refHash = this.hashArray(buf);
             }
         }
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}`;
+    }
+
+    /**
+     * 计算单个 segment 的分片级缓存键。
+     *
+     * 长音频多 segment 合成时，编辑某个音符只会影响包含该音符的 segment，
+     * 其余 segment 的输入完全相同 → 音频也相同，可直接复用缓存避免重算
+     * diffusion+vocoder。
+     *
+     * 键的构成：
+     *   - 复用 computeSynthCacheKey 作为基础（覆盖 segment 自身 notes/bpm/f0/ref/步数等）
+     *   - segStartBeat：pitchCurveF0 是绝对时间序列，segment 通过 pitchCurveOffsetSec
+     *     =(segStartBeat/bpm)*60 索引它；相对 notes 相同但 segStartBeat 不同的 segment
+     *     会产生不同 f0，必须区分。
+     *   - segF0Shift：多 segment 路径按 segment 中位数独立计算 f0Shift（B2），是实际
+     *     用于该 segment 的偏移量，直接决定输出。
+     *   - ptFrameCount：prompt mel 帧数（来自参考音频或零填充），影响 diffusion
+     *     conditioning，必须纳入。
+     *
+     * 未纳入但由缓存清空覆盖的因素：模型版本（clearSynthCache 在切换语言/模型时调用）、
+     * useStaticShapes（模型级配置，切换时清缓存）。
+     */
+    computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
+        const base = this.computeSynthCacheKey(segNotes, bpm, options);
+        return `${base}_sb${segStartBeat}_fs${segF0Shift}_pt${ptFrameCount || 0}`;
     }
 
     /**

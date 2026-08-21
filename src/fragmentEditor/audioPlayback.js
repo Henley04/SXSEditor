@@ -1,9 +1,10 @@
-import { encodeWav, applyEnvelopesToAudio } from '../audio/wavEncoder.js';
+// B2: wavEncoder.js is now CommonJS — use require instead of ESM import.
+const { encodeWav, applyEnvelopesToAudio } = require('../audio/wavEncoder.js');
 import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
 import { initPipeline, getFragmentPreviewInferenceOptions, getFragmentExportInferenceOptions } from './pipeline.js';
 import {
-  getSampleRate, setSampleRate,
+  getSampleRate,
   getFragmentAudioContext, setFragmentAudioContext,
   getFragmentAudioSource, setFragmentAudioSource,
   getFragmentAudioData, setFragmentAudioData,
@@ -25,32 +26,211 @@ import {
   getCurrentProject,
   getCurrentFragment,
   getEnvelopes,
-  getNotes,
-  getSelectedNoteIds,
-  getSelectedAnchorIndices,
-  getPitchCurve,
-  getDragMode, setDragMode,
-  getPitchCurveSnapshotBeforeDrag, setPitchCurveSnapshotBeforeDrag,
-  getEnvelopeSnapshotBeforeDrag, setEnvelopeSnapshotBeforeDrag,
-  getPhonemeDragState,
-  getParamEnvelopeDrag, setParamEnvelopeDrag,
-  getPitchDragAnchorIdx, setPitchDragAnchorIdx,
-  getPitchDragAnchorStarts,
-  getIsBrushDrawing, setIsBrushDrawing,
-  getCurrentBrushStroke, setCurrentBrushStroke,
-  getDragNoteStarts,
-  getDragOperation, setDragOperation,
 } from './state.js';
 import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
-import { updateFragmentPlayButton, updateParamModeButtons } from './uiControls.js';
+import { updateFragmentPlayButton } from './uiControls.js';
+
+/**
+ * 构建导出用的 per-note 渐入/渐出列表（与 wavEncoder.applyEnvelopesToAudio 对接）。
+ * 跳过 fadeIn=0 且 fadeOut=0 的 note，节省计算。
+ * 时间单位：start/duration 用 beats，fadeIn/fadeOut 用秒。
+ */
+function _buildNoteFadesForExport() {
+  const notes = getClippedNotes();
+  const out = [];
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    const fadeInSec = (n.fadeIn && n.fadeIn > 0) ? n.fadeIn / 1000 : 0;
+    const fadeOutSec = (n.fadeOut && n.fadeOut > 0) ? n.fadeOut / 1000 : 0;
+    if (fadeInSec <= 0 && fadeOutSec <= 0) continue;
+    out.push({
+      startBeat: n.start,
+      durationBeats: n.duration,
+      fadeInSec,
+      fadeOutSec,
+    });
+  }
+  return out;
+}
+
+/**
+ * 计算实时播放时 per-note 渐入/渐出的 WebAudio 自动化调度参数。
+ * 返回 [{ atSec, rampEndSec, fromGain, toGain }] 列表，由调用方 setValueAtTime /
+ * linearRampToValueAtTime 应用到 fadeGainNode。
+ * 仅包含 fadeIn>0 或 fadeOut>0 的 note。
+ *
+ * 重要：fadeOut 后增益会停留在 0，导致后续无 fadeIn 的音符静音。
+ * 调用方 _scheduleFadeAutomation 会在每个 fadeOut ramp 结束后插入恢复事件
+ * (setValueAtTime(1, rampEndSec)) 把增益拉回 1。
+ */
+function _buildNoteFadesForRealtime(bpm) {
+  const notes = getClippedNotes();
+  const out = [];
+  const secondsPerBeat = 60 / bpm;
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    const noteStartSec = n.start * secondsPerBeat;
+    const noteEndSec = noteStartSec + n.duration * secondsPerBeat;
+    if (n.fadeIn && n.fadeIn > 0) {
+      const fadeInSec = n.fadeIn / 1000;
+      out.push({
+        atSec: noteStartSec,
+        rampEndSec: noteStartSec + fadeInSec,
+        fromGain: 0,
+        toGain: 1,
+      });
+    }
+    if (n.fadeOut && n.fadeOut > 0) {
+      const fadeOutSec = n.fadeOut / 1000;
+      out.push({
+        atSec: Math.max(noteStartSec, noteEndSec - fadeOutSec),
+        rampEndSec: noteEndSec,
+        fromGain: 1,
+        toGain: 0,
+      });
+    }
+  }
+  return out;
+}
+
+/**
+ * 将 fade 事件调度到 fadeGainNode 上。
+ *
+ * 修复 fadeOut 静音 bug：fadeOut ramp 把增益降到 0 后，如果后续音符没有 fadeIn，
+ * 增益会一直保持 0，导致后续音符完全静音。解决方案是在每个 fadeOut ramp 结束后
+ * 立即调度 setValueAtTime(1, rampEndSec) 把增益恢复为 1。
+ *
+ * 事件顺序保证：WebAudio 同一时刻的事件按调度顺序处理。fadeOut 的 restore 事件
+ * 在 fadeOut ramp 之后调度，若下一个 fadeIn 的 setValueAtTime(0, noteStartSec)
+ * 在 restore 之后调度且 noteStartSec === rampEndSec，则 gain 最终为 0（fadeIn 正确）。
+ * 若后续无 fadeIn，gain 保持 1（正确）。
+ *
+ * 注意：重叠音符场景下，单增益节点无法同时表达多个音符的独立 fade。
+ * 导出路径 (wavEncoder) 对重叠音符的 fade gain 做乘积，实时路径用单增益曲线，
+ * 两者行为在重叠时不同。非重叠 SVS 场景（正常情况）两者一致。
+ */
+function _scheduleFadeAutomation(fadeGainNode, ctx, fades, startOffset) {
+  if (!fades || fades.length === 0) return;
+  const now = ctx.currentTime;
+  fadeGainNode.gain.setValueAtTime(1, now);
+  // 按 atSec 排序，确保 restore 事件与后续 fadeIn 事件的调度顺序正确
+  const sorted = [...fades].sort((a, b) => a.atSec - b.atSec);
+  for (let i = 0; i < sorted.length; i++) {
+    const f = sorted[i];
+    // 仅调度 startOffset 之后的事件；起播位置之前的自动化直接跳过
+    if (f.rampEndSec <= startOffset) continue;
+    const atSec = Math.max(f.atSec, startOffset);
+    const fromGain = f.atSec <= startOffset
+      // 起播位置落在 fade 内：估算起播点处的 gain
+      ? (f.toGain - f.fromGain) * Math.max(0, Math.min(1, (startOffset - f.atSec) / Math.max(0.0001, f.rampEndSec - f.atSec))) + f.fromGain
+      : f.fromGain;
+    fadeGainNode.gain.setValueAtTime(fromGain, now + (atSec - startOffset));
+    fadeGainNode.gain.linearRampToValueAtTime(f.toGain, now + (f.rampEndSec - startOffset));
+    // fadeOut 结束后恢复增益为 1，防止后续音符静音
+    if (f.toGain === 0) {
+      fadeGainNode.gain.setValueAtTime(1, now + (f.rampEndSec - startOffset));
+    }
+  }
+}
+
+/**
+ * 对单声道音频就地应用 per-note fade（用于独占模式，该模式不经 WebAudio 图）。
+ * 逻辑与 wavEncoder.applyEnvelopesToAudio 的 fade 部分一致：每个音符在自己的
+ * 采样区间内施加 fadeIn/fadeOut 包络，区间外保持 1。重叠音符的 gain 做乘积。
+ * 返回新的 Float32Array（不修改输入）。
+ */
+function _applyFadesToMonoAudio(audioData, bpm) {
+  const notes = getClippedNotes();
+  const fades = [];
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    const fadeInSec = (n.fadeIn && n.fadeIn > 0) ? n.fadeIn / 1000 : 0;
+    const fadeOutSec = (n.fadeOut && n.fadeOut > 0) ? n.fadeOut / 1000 : 0;
+    if (fadeInSec <= 0 && fadeOutSec <= 0) continue;
+    fades.push({
+      startBeat: n.start,
+      durationBeats: n.duration,
+      fadeInSec,
+      fadeOutSec,
+    });
+  }
+  if (fades.length === 0) return audioData;
+
+  const sampleRate = getSampleRate();
+  const numSamples = audioData.length;
+  const out = new Float32Array(numSamples);
+  out.set(audioData);
+  const secondsPerBeat = 60 / bpm;
+  for (let f = 0; f < fades.length; f++) {
+    const nf = fades[f];
+    const noteStartSec = nf.startBeat * secondsPerBeat;
+    const noteDurSec = nf.durationBeats * secondsPerBeat;
+    const noteEndSec = noteStartSec + noteDurSec;
+    const startSample = Math.max(0, Math.floor(noteStartSec * sampleRate));
+    const endSample = Math.min(numSamples, Math.ceil(noteEndSec * sampleRate));
+    const fadeInSamples = Math.max(1, Math.floor(nf.fadeInSec * sampleRate));
+    const fadeOutSamples = Math.max(1, Math.floor(nf.fadeOutSec * sampleRate));
+    for (let i = startSample; i < endSample; i++) {
+      let g = 1;
+      if (nf.fadeInSec > 0 && i < startSample + fadeInSamples) {
+        g = (i - startSample) / fadeInSamples;
+      }
+      if (nf.fadeOutSec > 0 && i > endSample - fadeOutSamples) {
+        const fo = Math.max(0, (endSample - i) / fadeOutSamples);
+        if (fo < g) g = fo;
+      }
+      if (g < 0) g = 0;
+      if (g > 1) g = 1;
+      out[i] *= g;
+    }
+  }
+  return out;
+}
 
 // 流式播放状态（vocoder chunk 边合成边播放）
 // streamingSources: 已调度的 AudioBufferSourceNode 列表（按顺序）
 // streamingCleanup: chunk 监听器 cleanup 函数
+// streamingFadeGainNode: 流式播放共享的 fade 增益节点，所有 chunk source 经它
+//   连接到 master gain。首个 chunk 到达时创建并调度 fade 自动化，使流式播放
+//   也应用 per-note fade（与 playFragmentShared 一致）。
 let streamingSources = [];
 let streamingCleanup = null;
 let streamingNextStart = 0;
 let streamingFinished = false;
+let streamingFadeGainNode = null;
+
+// Buffer underrun protection (ported from renderer/audioPlayback.js).
+// When inference is slower than realtime playback, the playhead catches up
+// to the furthest received audio. Without protection, the playhead keeps
+// advancing through silence and/or chunks are scheduled at wrong times.
+// These variables track the buffer frontier and waiting state to pause
+// the playhead until the next chunk arrives, then auto-resume.
+let _streamingStarted = false;            // true after first chunk initializes playback
+let _streamingBufferEndSec = 0;          // Furthest chunk end in playhead seconds
+let _streamingInferenceDone = false;     // synthesizeFragmentSVS IPC returned
+let _streamingWaitingForInference = false;
+let _streamingIsLastReceived = false;    // isLast chunk has been received
+let _streamingActiveSourceCount = 0;     // Currently-playing source count
+let _streamingFirstChunkAudioOffset = 0; // playStartPosition > firstNoteStartSec 时需跳过的前导音频秒数
+
+/**
+ * 检查流式播放是否已完成（isLast 已收到且无活跃 source）。
+ * 用于 onended 回调和跳过整个 chunk（无 source 创建）两种场景。
+ */
+function _checkStreamingComplete() {
+  if (_streamingIsLastReceived &&
+      _streamingActiveSourceCount <= 0 &&
+      !streamingFinished) {
+    streamingFinished = true;
+    setFragmentIsPlaying(false);
+    const raf = getFragmentPlayheadRaf();
+    if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+    setFragmentCurrentTime(0);
+    setFragmentPlayStartPosition(0);
+    updateFragmentPlayButton();
+    render();
+  }
+}
 
 // visibilitychange handler: pause rAF-driven UI updates when tab hidden
 // (audio playback continues via WebAudio/WASAPI in background).
@@ -89,6 +269,13 @@ function stopStreamingPlayback() {
   // 排队的 onChunkAudio 回调（IPC 监听器虽已移除，但已派发的回调仍可能到达）。
   // playFragment 开头会显式重置为 false 启动新一轮流式合成。
   streamingFinished = true;
+  _streamingStarted = false;
+  _streamingBufferEndSec = 0;
+  _streamingInferenceDone = false;
+  _streamingWaitingForInference = false;
+  _streamingIsLastReceived = false;
+  _streamingActiveSourceCount = 0;
+  _streamingFirstChunkAudioOffset = 0;
   for (const src of streamingSources) {
     if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
     try { src.onended = null; src.stop(); } catch (_) {}
@@ -97,6 +284,11 @@ function stopStreamingPlayback() {
   if (streamingCleanup) {
     try { streamingCleanup(); } catch (_) {}
     streamingCleanup = null;
+  }
+  // 断开并释放流式 fade 增益节点
+  if (streamingFadeGainNode) {
+    try { streamingFadeGainNode.disconnect(); } catch (_) {}
+    streamingFadeGainNode = null;
   }
 }
 
@@ -121,7 +313,7 @@ export async function loadFragmentAudioSettings() {
     const settings = await window.electronAPI.getSettings();
     setFragmentAudioSettings(settings);
     setFragmentUseExclusiveMode(settings?.audioOutputMode === 'exclusive');
-  } catch (e) {
+  } catch (_e) {
     setFragmentAudioSettings({});
   }
 }
@@ -156,7 +348,7 @@ export function stopFragmentPlayback() {
     try {
       source.onended = null;
       source.stop();
-    } catch (e) {}
+    } catch (_e) {}
     setFragmentAudioSource(null);
   }
   stopFragmentExclusivePlayback();
@@ -179,7 +371,7 @@ export async function seekFragmentPlayback(newStartTime) {
   stopStreamingPlayback();
   const source = getFragmentAudioSource();
   if (source) {
-    try { source.onended = null; source.stop(); } catch (e) {}
+    try { source.onended = null; source.stop(); } catch (_e) {}
     setFragmentAudioSource(null);
   }
   stopFragmentExclusivePlayback();
@@ -223,13 +415,32 @@ export function updateFragmentPlayhead() {
   const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
   setFragmentCurrentTime(getFragmentPlaybackOffset() + elapsed);
 
+  // Buffer underrun detection: when the playhead reaches the furthest
+  // received audio position (_streamingBufferEndSec) and inference is not
+  // yet complete, freeze the playhead and show "waiting for inference".
+  // This prevents the playhead from advancing through silence when chunks
+  // arrive slower than realtime playback. When the next chunk arrives, the
+  // chunk callback will reset _streamingWaitingForInference and resume.
+  if (_streamingStarted && !_streamingInferenceDone && !_streamingWaitingForInference) {
+    if (getFragmentCurrentTime() >= _streamingBufferEndSec) {
+      _streamingWaitingForInference = true;
+      // Freeze playhead at buffer frontier (not at elapsed which has
+      // already advanced past the received audio into silence)
+      setFragmentCurrentTime(_streamingBufferEndSec);
+      const raf = getFragmentPlayheadRaf();
+      if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+      render();
+      return;
+    }
+  }
+
   // 流式播放期间跳过 duration 检查：
   // setFragmentAudioData 在 synthesizeFragmentSVS 返回后才更新，流式期间
   // getFragmentAudioData 返回上一次合成的旧 audioData，旧 duration 可能短于
   // 当前流式时长，导致 currentTime >= duration 误判并提前 stopFragmentPlayback。
-  // 流式结束由末 chunk source.onended 触发，不依赖此处的 duration 检查。
+  // 流式结束由 source.onended 计数判定触发，不依赖此处的 duration 检查。
   const audioData = getFragmentAudioData();
-  if (audioData && streamingSources.length === 0) {
+  if (audioData && !_streamingStarted) {
     const duration = audioData.length / getSampleRate();
     if (getFragmentCurrentTime() >= duration) {
       stopFragmentPlayback();
@@ -253,6 +464,7 @@ async function playFragmentShared() {
   source.buffer = audioBuffer;
 
   const envGainNode = ctx.createGain();
+  const fadeGainNode = ctx.createGain();
   const panNode = ctx.createStereoPanner();
 
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
@@ -284,6 +496,15 @@ async function playFragmentShared() {
     }
   }
 
+  // Per-note 渐入/渐出（与导出时 wavEncoder.applyEnvelopesToAudio 一致）：
+  // fadeGainNode 接在 envGainNode 之后、panNode 之前，作为片段级音量包络之外的
+  // per-note amplitude 调制。仅当某 note 启用 fade 时才调度自动化，否则保持 1。
+  // _scheduleFadeAutomation 会在每个 fadeOut 后恢复增益为 1，防止后续音符静音。
+  const fades = _buildNoteFadesForRealtime(bpm);
+  if (fades.length > 0) {
+    _scheduleFadeAutomation(fadeGainNode, ctx, fades, startOffset);
+  }
+
   if (panEnv && panEnv.keyframes && panEnv.keyframes.length > 0) {
     const now = ctx.currentTime;
     const sortedKfs = [...panEnv.keyframes].sort((a, b) => a.time - b.time);
@@ -304,7 +525,7 @@ async function playFragmentShared() {
   }
 
   const gainNode = getFragmentGainNode();
-  source.connect(envGainNode).connect(panNode).connect(gainNode);
+  source.connect(envGainNode).connect(fadeGainNode).connect(panNode).connect(gainNode);
   source.onended = () => {
     setFragmentIsPlaying(false);
     const raf = getFragmentPlayheadRaf();
@@ -351,13 +572,18 @@ async function playFragmentExclusive() {
 
   try {
     const settings = getFragmentAudioSettings();
-    const audioData = getFragmentAudioData();
-    const audioDuration = audioData.length / getSampleRate();
+    const rawAudioData = getFragmentAudioData();
+    const audioDuration = rawAudioData.length / getSampleRate();
     // 播放起始位置（秒），由用户拖拽 playhead 设置
     const startOffset = Math.min(getFragmentPlayStartPosition(), audioDuration - 0.01);
+    // 独占模式不经 WebAudio 图，无法用 gain 自动化应用 per-note fade。
+    // 在传入 audioPlay 前对音频数据预乘 fade gain（与导出路径逻辑一致）。
+    const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
+    const audioData = _applyFadesToMonoAudio(rawAudioData, bpm);
     const options = {
       deviceId: settings?.audioOutputDevice ?? -1,
       sampleRate: settings?.audioSampleRate ?? getSampleRate(),
+      sourceSampleRate: getSampleRate(),
       channels: 1,
       bitDepth: settings?.audioBitDepth ?? 'float32',
       bufferSize: settings?.audioBufferSize ?? 1024,
@@ -492,6 +718,10 @@ function _computeFragmentAudioSignature() {
         }
       }
     }
+    // 颤音字段进入签名：颤音改变 F0，必须重新合成
+    if (n.vibrato && n.vibrato.enabled) {
+      s += `|vib:${n.vibrato.enabled ? 1 : 0}:${n.vibrato.depth}:${n.vibrato.rate}:${n.vibrato.start}:${n.vibrato.length}:${n.vibrato.fadeIn}`;
+    }
     for (let j = 0; j < s.length; j++) {
       notesHash = ((notesHash << 5) - notesHash + s.charCodeAt(j)) | 0;
     }
@@ -511,7 +741,7 @@ function _computeFragmentAudioSignature() {
     ? (refAudioWavBuffer.byteLength || refAudioWavBuffer.length || 0)
     : 0;
 
-  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}`;
+  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}`;
 }
 
 export async function playFragment() {
@@ -525,6 +755,13 @@ export async function playFragment() {
   streamingFinished = false;
   streamingSources = [];
   streamingNextStart = 0;
+  _streamingStarted = false;
+  _streamingBufferEndSec = 0;
+  _streamingInferenceDone = false;
+  _streamingWaitingForInference = false;
+  _streamingIsLastReceived = false;
+  _streamingActiveSourceCount = 0;
+  _streamingFirstChunkAudioOffset = 0;
 
   try {
     if (!getPipelineInitialized()) {
@@ -559,65 +796,139 @@ export async function playFragment() {
         if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
         if (streamingFinished) return;
         const ctx = await getFragmentAudioContextInternal();
-        const audioBuffer = ctx.createBuffer(1, chunkInfo.audio.length, getSampleRate());
-        audioBuffer.getChannelData(0).set(chunkInfo.audio);
-        const source = ctx.createBufferSource();
-        source.buffer = audioBuffer;
-        const gainNode = getFragmentGainNode();
-        if (gainNode) source.connect(gainNode);
-        else source.connect(ctx.destination);
+        if (streamingFinished) return; // re-check after async: may have been stopped
 
-        // 第一个 chunk 立即播放，后续 chunk 接续前一个结束时间
-        // chunk 的音频对应 audioData[0..]，即 filledNotes[0].start 起点的音频
-        // （pipeline 已在 _synthesizeImpl 末尾截掉前导休止符）。playhead 需要从
-        // firstNoteStartSec 开始，使 currentTime 与 canvas 中 note.start 的 beat
-        // 坐标对齐，避免"歌声比 MIDI 更早出现"的偏移。
-        if (streamingSources.length === 0) {
-          streamingNextStart = ctx.currentTime + 0.05; // 50ms 延迟避免调度抖动
+        // 第一个 chunk 初始化播放：计算首音符偏移和播放起始位置
+        // chunk 音频从 filledNotes[0].start（首音符起点）开始，pipeline 已截掉前导休止符。
+        // 需要让播放头从 playStartPosition 开始移动，而非直接跳到 firstNoteStartSec。
+        if (!_streamingStarted) {
+          _streamingStarted = true;
           const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
           const clippedNotes = getClippedNotes();
           const firstNoteStartSec = clippedNotes.length > 0
             ? (clippedNotes[0].start / bpm) * 60
             : 0;
+          const playStartPosition = getFragmentPlayStartPosition();
+
+          // chunk 音频从 firstNoteStartSec 开始，播放头从 playStartPosition 开始：
+          // - playStartPosition < firstNoteStartSec：延迟 chunk 播放，让播放头先走完
+          //   前导静音段，到达 firstNoteStartSec 时音频正好开始。
+          // - playStartPosition > firstNoteStartSec：跳过 chunk 内前导音频（下方处理）。
+          let chunkDelaySec = 0;
+          if (playStartPosition < firstNoteStartSec) {
+            chunkDelaySec = firstNoteStartSec - playStartPosition;
+          } else if (playStartPosition > firstNoteStartSec) {
+            _streamingFirstChunkAudioOffset = playStartPosition - firstNoteStartSec;
+          }
+          streamingNextStart = ctx.currentTime + 0.05 + chunkDelaySec;
+
+          // per-note fade：atSec 是相对 fragment 起点的绝对时间，
+          // startOffset 传 playStartPosition 使起播位置之前的 fade 事件被跳过。
+          const fades = _buildNoteFadesForRealtime(bpm);
+          if (fades.length > 0) {
+            streamingFadeGainNode = ctx.createGain();
+            const masterGain = getFragmentGainNode();
+            if (masterGain) streamingFadeGainNode.connect(masterGain);
+            else streamingFadeGainNode.connect(ctx.destination);
+            _scheduleFadeAutomation(streamingFadeGainNode, ctx, fades, playStartPosition);
+          }
           setFragmentIsPlaying(true);
           setFragmentPlaybackStartTime(ctx.currentTime + 0.05);
-          setFragmentPlaybackOffset(firstNoteStartSec);
-          setFragmentCurrentTime(firstNoteStartSec);
+          setFragmentPlaybackOffset(playStartPosition);
+          setFragmentCurrentTime(playStartPosition);
           updateFragmentPlayButton();
-          // 启动 playhead rAF 动画循环：与主页面 startPlayheadAnimation、
-          // playFragmentShared 末尾的 updateFragmentPlayhead 调用对齐。
-          // 缺失此调用会导致流式播放期间音频正常播放但 playhead 不移动、
-          // 画布不重绘，用户感知为“流式播放未生效”。
+          // 启动 playhead rAF 动画循环
           updateFragmentPlayhead();
         }
-        source.start(streamingNextStart);
-        streamingNextStart += chunkInfo.audio.length / getSampleRate();
 
-        // source.onended：非末 chunk 从 streamingSources 移除并释放引用，
-        // 末 chunk 标记流式结束并更新 UI。
-        // 长流式合成（如 100 个 chunk）时中间 chunk 的 AudioBuffer 内存能及时回收。
+        // 处理 playStartPosition > firstNoteStartSec：跳过 chunk 前导音频
+        let chunkAudio = chunkInfo.audio;
+        if (_streamingFirstChunkAudioOffset > 0) {
+          const skipSec = Math.min(_streamingFirstChunkAudioOffset, chunkAudio.length / getSampleRate());
+          const skipSamples = Math.floor(skipSec * getSampleRate());
+          if (skipSamples >= chunkAudio.length) {
+            // 整个 chunk 都在跳过范围内：不创建 source，减少剩余偏移后跳过此 chunk
+            _streamingFirstChunkAudioOffset -= chunkAudio.length / getSampleRate();
+            // 仍需处理 isLast 标记
+            if (chunkInfo.isLast) {
+              _streamingIsLastReceived = true;
+              _checkStreamingComplete();
+            }
+            return;
+          }
+          chunkAudio = chunkAudio.subarray(skipSamples);
+          _streamingFirstChunkAudioOffset = 0;
+        }
+
+        const audioBuffer = ctx.createBuffer(1, chunkAudio.length, getSampleRate());
+        audioBuffer.getChannelData(0).set(chunkAudio);
+        const source = ctx.createBufferSource();
+        source.buffer = audioBuffer;
+        const effectiveChunkDuration = chunkAudio.length / getSampleRate();
+
+        // Buffer underrun protection: if the previous chunk's scheduled end
+        // has already passed (inference was slower than realtime playback),
+        // clamp streamingNextStart to currentTime + 0.05 to avoid scheduling
+        // this chunk in the past (which Web Audio clamps to currentTime,
+        // causing overlapping playback). Also reset the playhead time base
+        // so the playhead jumps to the current chunk's position.
+        if (streamingNextStart < ctx.currentTime + 0.01) {
+          // Adjust playbackStartTime so the playhead aligns with this chunk's
+          // start position (streamingNextStart relative to fragment playback).
+          const offsetFromPlayStart = streamingNextStart - getFragmentPlaybackStartTime();
+          setFragmentPlaybackStartTime(ctx.currentTime + 0.05 - offsetFromPlayStart);
+          streamingNextStart = ctx.currentTime + 0.05;
+          // Resume playhead animation if it was frozen by underrun detection
+          if (_streamingWaitingForInference) {
+            _streamingWaitingForInference = false;
+            updateFragmentPlayhead();
+          }
+        }
+
+        // Resume playhead if it was frozen by underrun detection but this
+        // chunk's scheduled time is still in the future (no clamping needed).
+        if (_streamingWaitingForInference) {
+          _streamingWaitingForInference = false;
+          setFragmentPlaybackStartTime(ctx.currentTime - _streamingBufferEndSec + getFragmentPlaybackOffset());
+          updateFragmentPlayhead();
+        }
+
+        // Update buffer frontier (furthest audio end in playhead seconds)
+        const chunkEndSec = (getFragmentPlaybackOffset() + (streamingNextStart - getFragmentPlaybackStartTime())) + effectiveChunkDuration;
+        if (chunkEndSec > _streamingBufferEndSec) {
+          _streamingBufferEndSec = chunkEndSec;
+        }
+
+        // chunk source 经 streamingFadeGainNode（如有）连接到 master gain，
+        // 使流式播放也应用 per-note fade。无 fade 时直接连 master gain。
+        if (streamingFadeGainNode) {
+          source.connect(streamingFadeGainNode);
+        } else {
+          const gainNode = getFragmentGainNode();
+          if (gainNode) source.connect(gainNode);
+          else source.connect(ctx.destination);
+        }
+        source.start(streamingNextStart);
+        streamingNextStart += effectiveChunkDuration;
+
+        // Unified onended: decrement active source count and release reference.
+        // When isLast has been received AND all sources have ended, mark
+        // streaming complete. This is more robust than relying solely on the
+        // isLast chunk's onended — if a non-last chunk (longer audio) is still
+        // playing when the isLast chunk ends, we correctly wait for it.
+        _streamingActiveSourceCount++;
+        if (chunkInfo.isLast) {
+          _streamingIsLastReceived = true;
+        }
         const sourceIdx = streamingSources.length;
         streamingSources.push(source);
-        if (chunkInfo.isLast) {
-          source.onended = () => {
-            if (!streamingFinished) {
-              streamingFinished = true;
-              setFragmentIsPlaying(false);
-              const raf = getFragmentPlayheadRaf();
-              if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
-              setFragmentCurrentTime(0);
-              setFragmentPlayStartPosition(0);
-              updateFragmentPlayButton();
-              render();
-            }
-          };
-        } else {
-          source.onended = () => {
-            if (streamingSources[sourceIdx] === source) {
-              streamingSources[sourceIdx] = null;
-            }
-          };
-        }
+        source.onended = () => {
+          _streamingActiveSourceCount--;
+          if (streamingSources[sourceIdx] === source) {
+            streamingSources[sourceIdx] = null;
+          }
+          _checkStreamingComplete();
+        };
       } catch (e) {
         console.warn('[FragmentAudio] Streaming chunk playback failed:', e.message);
       }
@@ -643,22 +954,44 @@ export async function playFragment() {
         diffStepChunk: previewOpts.diffStepChunk,
         diffStepChunkFrames: previewOpts.diffStepChunkFrames,
         diffStepOverlapFrames: previewOpts.diffStepOverlapFrames,
+        cfgScheduleMode: previewOpts.cfgScheduleMode,
+        cfgStrengthStart: previewOpts.cfgStrengthStart,
+        cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
+        dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
+        dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
       },
     });
     setFragmentAudioData(padAudioToFragmentDuration(audioData));
     // 合成成功后更新签名，后续播放可复用此缓存
     setFragmentAudioDataSignature(currentSignature);
 
-    // 合成完成：缓存完整 audioData 用于后续播放/导出
-    // 流式播放不中断，让它播完已调度的 chunk
-    // 移除 chunk 监听（避免内存泄漏），但保留已调度的 source 继续播放
+    // 标记推理完成：后续不再触发 buffer underrun 等待
+    _streamingInferenceDone = true;
+
+    // 若合成返回时正在等待推理（最后一批 chunk 已收到但 playhead 仍冻结），
+    // 恢复播放：调整 playbackStartTime 使 playhead 从 buffer 前沿继续。
+    if (_streamingWaitingForInference && _streamingStarted) {
+      _streamingWaitingForInference = false;
+      const ctx = getFragmentAudioContext();
+      if (ctx) {
+        setFragmentPlaybackStartTime(ctx.currentTime - _streamingBufferEndSec + getFragmentPlaybackOffset());
+        updateFragmentPlayhead();
+      }
+    }
+
+    // 移除 chunk 监听（避免内存泄漏），但保留已调度的 source 继续播放。
+    // 注意：必须在 _streamingInferenceDone 设置之后移除，否则 underrun 检测
+    // 仍会等待（推理未完成标记）。
     if (streamingCleanup) {
       try { streamingCleanup(); } catch (_) {}
       streamingCleanup = null;
     }
 
-    // 如果流式播放未启动（如缓存命中或单 chunk 未触发回调），回退到整段播放
-    if (streamingSources.length === 0) {
+    // 如果流式播放从未启动（如缓存命中或单 chunk 未触发回调），回退到整段播放。
+    // 使用 _streamingStarted 而非 streamingSources.length 判断，避免异步竞态：
+    // chunk 回调可能还在 await getFragmentAudioContextInternal() 中尚未 push source，
+    // 但 _streamingStarted 已在第一个 chunk 到达时设置为 true。
+    if (!_streamingStarted) {
       setFragmentUseExclusiveMode(getFragmentAudioSettings()?.audioOutputMode === 'exclusive');
       if (getFragmentUseExclusiveMode()) {
         await playFragmentExclusive();
@@ -668,7 +1001,8 @@ export async function playFragment() {
     }
   } catch (error) {
     console.error(t('fragment.synthesisFailed') + ':', error);
-    showAlertDialog(t('fragment.synthesisFailed') + ': ' + error.message);
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('fragment.synthesisFailedDetail', { detail: error.message }));
     stopStreamingPlayback();
   } finally {
     setFragmentIsSynthesizing(false);
@@ -713,7 +1047,8 @@ export async function exportFragment() {
     const paddedAudio = padAudioToFragmentDuration(audioData);
     const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
     const envelopes = getEnvelopes();
-    const stereoData = applyEnvelopesToAudio(paddedAudio, getSampleRate(), bpm, envelopes.volume, envelopes.pan);
+    const noteFades = _buildNoteFadesForExport();
+    const stereoData = applyEnvelopesToAudio(paddedAudio, getSampleRate(), bpm, envelopes.volume, envelopes.pan, noteFades);
     const wavData = encodeWav(stereoData, getSampleRate(), 2);
     const result = await window.electronAPI.showSaveDialog({
       filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
@@ -723,7 +1058,8 @@ export async function exportFragment() {
     }
   } catch (error) {
     console.error(t('fragment.exportFailed') + ':', error);
-    showAlertDialog(t('fragment.exportFailed') + ': ' + error.message);
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('fragment.exportFailedDetail', { detail: error.message }));
   } finally {
     setFragmentIsExporting(false);
     btnExportFragment.disabled = false;

@@ -1,5 +1,42 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Forward renderer errors to the main process for centralized logging.
+// Runs in the preload's isolated world, but DOM event listeners added via
+// window.addEventListener still catch errors thrown from the main world
+// (with contextIsolation: true). This catches window.onerror,
+// unhandledrejection, and console.error — the most common sources of silent
+// renderer failures — and persists them to the same log file used by the
+// main process. This runs before contextBridge.exposeInMainWorld so it
+// applies to every renderer (main, fragment, settings, modelDownload,
+// resourceManager, singerCreator, audioPreprocess, splash,
+// updateNotification) without any per-window setup.
+(function attachRendererErrorForwarding() {
+  try {
+    const fmt = (e) => {
+      if (e instanceof Error) return e.stack || e.message;
+      if (typeof e === 'object' && e !== null) {
+        try { return JSON.stringify(e); } catch { return String(e); }
+      }
+      return String(e);
+    };
+    const fwd = (level, message) => {
+      try { ipcRenderer.send('crash:log', { level, source: 'renderer', message }); } catch (_) {}
+    };
+    window.addEventListener('error', (event) => {
+      const where = `${event.filename || ''}:${event.lineno || 0}:${event.colno || 0}`;
+      fwd('ERROR', `[window.onerror] ${event.message || ''} @ ${where}` + (event.error ? '\n' + fmt(event.error) : ''));
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+      fwd('ERROR', `[unhandledrejection] ${fmt(event.reason)}`);
+    });
+    const origConsoleError = console.error.bind(console);
+    console.error = (...args) => {
+      try { fwd('ERROR', args.map(fmt).join(' ')); } catch (_) {}
+      try { origConsoleError(...args); } catch (_) {}
+    };
+  } catch (_) {}
+})();
+
 let _webnnReadModelFileReqId = 0;
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -39,6 +76,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('projectSettingsChanged', handler);
   },
   openSingerCreator: () => ipcRenderer.invoke('openSingerCreator'),
+  openSingerMarket: () => ipcRenderer.invoke('openSingerMarket'),
   saveSingerFile: (singerData) => ipcRenderer.invoke('saveSingerFile', singerData),
   onSingerCreatorSaveRequest: (callback) => {
     const handler = () => callback();
@@ -71,6 +109,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   initSVSPipeline: () => ipcRenderer.invoke('svs:init'),
   synthesizeSVS: (data) => ipcRenderer.invoke('svs:synthesize', data),
   synthesizeMultiStreaming: (data) => ipcRenderer.invoke('svs:synthesizeMultiStreaming', data),
+  cancelSVSSynthesis: () => ipcRenderer.invoke('svs:cancel'),
   disposeSVSPipeline: () => ipcRenderer.invoke('svs:dispose'),
   onSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);
@@ -81,6 +120,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('svs:chunk-audio', handler);
     return () => ipcRenderer.removeListener('svs:chunk-audio', handler);
+  },
+  onSVSDiffStepIncompatible: (callback) => {
+    const handler = (event, data) => callback(data);
+    ipcRenderer.on('svs:model-incompatible', handler);
+    return () => ipcRenderer.removeListener('svs:model-incompatible', handler);
   },
   getFragmentSVSSampleRate: () => ipcRenderer.invoke('fragment-svs:getSampleRate'),
   initFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:init'),
@@ -106,6 +150,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   extractF0: (data) => ipcRenderer.invoke('extractF0:onnx', data),
   extractMidiRosvot: (data) => ipcRenderer.invoke('extractMidi:rosvot', data),
   extractF0BasicPitch: (data) => ipcRenderer.invoke('extractF0:basicPitch', data),
+  extractMidiFcpe: (data) => ipcRenderer.invoke('extractMidi:fcpe', data),
   importMidi: () => ipcRenderer.invoke('midi:import'),
   importMidiMultiTrack: () => ipcRenderer.invoke('midi:importMultiTrack'),
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),
@@ -389,5 +434,35 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.on('update:notification-show', handler);
       return () => ipcRenderer.removeListener('update:notification-show', handler);
     },
+  },
+
+  // ==================== Singer Market API ====================
+  // Proxy to the Cloudflare Workers backend. The Bearer token never
+  // leaves the main process; the renderer only sees the high-level
+  // { success, data, error } results.
+  singerMarket: {
+    login: (username, password) => ipcRenderer.invoke('singer-market:login', { username, password }),
+    register: (username, password) => ipcRenderer.invoke('singer-market:register', { username, password }),
+    logout: () => ipcRenderer.invoke('singer-market:logout'),
+    me: () => ipcRenderer.invoke('singer-market:me'),
+    list: (params) => ipcRenderer.invoke('singer-market:list', params),
+    fileDetail: (fileId) => ipcRenderer.invoke('singer-market:file-detail', fileId),
+    tags: (params) => ipcRenderer.invoke('singer-market:tags', params),
+    upload: (payload) => ipcRenderer.invoke('singer-market:upload', payload),
+    download: (fileId) => ipcRenderer.invoke('singer-market:download', fileId),
+    pickFile: () => ipcRenderer.invoke('singer-market:pick-file'),
+    pickSavePath: (suggestedName) => ipcRenderer.invoke('singer-market:pick-save-path', suggestedName),
+  },
+
+  // ==================== Crash Reporting API ====================
+  // Used by settings/help UI to surface log/dump file locations so users can
+  // attach them when filing issues. Log forwarding (window.onerror /
+  // unhandledrejection / console.error) is wired up automatically at the top
+  // of this file — renderers do not need to call into this API to report errors.
+  crashReportAPI: {
+    getReportInfo: () => ipcRenderer.invoke('crash:getReportInfo'),
+    openLogDir: () => ipcRenderer.invoke('crash:openLogDir'),
+    openDumpDir: () => ipcRenderer.invoke('crash:openDumpDir'),
+    log: (level, message) => ipcRenderer.send('crash:log', { level, source: 'renderer', message }),
   },
 });

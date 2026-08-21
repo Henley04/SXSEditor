@@ -56,6 +56,7 @@ const IPC_CHANNELS = {
   EXTRACT_F0_ONNX: 'extractF0:onnx',
   EXTRACT_MIDI_ROSVOT: 'extractMidi:rosvot',
   EXTRACT_F0_BASIC_PITCH: 'extractF0:basicPitch',
+  EXTRACT_MIDI_FCPE: 'extractMidi:fcpe',
   MIDI_IMPORT: 'midi:import',
   MIDI_IMPORT_MULTI_TRACK: 'midi:importMultiTrack',
 

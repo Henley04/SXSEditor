@@ -5,10 +5,15 @@ const { getModelDir } = require('./modelDir');
 const { checkJpModelsExist } = require('../modelManager');
 const { t } = require('./locale');
 const { createLazyInitializer } = require('./lazyInitializer');
-const { getRmvpeDetector } = require('./pitchMidiIpc');
+const { getRmvpeDetector, getBaseModelDir } = require('./pitchMidiIpc');
+const { SvsWorkerClient } = require('./svsWorkerClient');
 const { detectJapaneseNotes: _detectJapaneseNotes, detectEnglishNotes: _detectEnglishNotes, resolveLanguage: _resolveLanguage } = require('./languageDetection');
 
 let currentLanguage = null; // Track current pipeline language
+
+// diff_step 旧 int8 模型不兼容弹窗只提示一次（跨窗口去重：主窗口先 init 后，
+// 分片窗口再 init 时不再重复弹窗）。
+let _diffStepIncompatibleNotified = false;
 
 // 合成级互斥锁：DML 后端下同一个 GPU 设备上的多个 InferenceSession 不支持并发 session.run()，
 // 否则命令流交叉提交会导致 887A0005 (GPU device hung)。
@@ -21,7 +26,7 @@ function _withSynthMutex(fn) {
   return prev.then(fn).finally(release);
 }
 
-function _createPipeline(languageOverride) {
+async function _createPipeline(languageOverride) {
   const modelPath = getModelDir();
   const settings = loadSettings();
   const deviceMode = settings.deviceMode || 'smart';
@@ -35,7 +40,7 @@ function _createPipeline(languageOverride) {
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
   console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}, jpVocal=${japaneseVocalization}`);
 
-  const pipeline = new OnnxSVSPipeline(modelPath, {
+  const pipelineOptions = {
     deviceId,
     deviceMode,
     preferredDeviceType,
@@ -44,12 +49,34 @@ function _createPipeline(languageOverride) {
     languageOverride,
     inferenceProvider,
     japaneseVocalization,
-  });
-  return pipeline;
+  };
+
+  // WebNN contexts exist only in Chromium renderer processes. A Node
+  // worker_threads worker cannot access navigator.ml and must not own a
+  // pipeline that may select NPU/WebNN-GPU. Keep pure ORT Node CPU/DML in the
+  // worker, but retain WebNN-capable smart/explicit configurations in-process
+  // so the existing main -> renderer WebNN bridge remains reachable.
+  const explicitWebNN = deviceId === 'npu' || deviceId === 'webnn-gpu'
+    || preferredDeviceType === 'npu' || preferredDeviceType === 'webnn-gpu';
+  let webnnAvailable = explicitWebNN;
+  if (!explicitWebNN && deviceMode === 'smart') {
+    try {
+      const { detectNPUAvailability } = require('./webnnIpc');
+      const detected = await detectNPUAvailability();
+      webnnAvailable = !!(detected.npuAvailable || detected.gpuAvailable);
+    } catch (err) {
+      console.warn('[Main] WebNN preflight failed; using ORT Node worker:', err.message);
+    }
+  }
+  const keepRendererBridge = inferenceProvider === 'ortweb' || explicitWebNN || webnnAvailable;
+  if (!keepRendererBridge) {
+    return new SvsWorkerClient({ modelDir: modelPath, baseModelDir: getBaseModelDir(), pipelineOptions, language: languageOverride });
+  }
+  return new OnnxSVSPipeline(modelPath, pipelineOptions);
 }
 
 const svsPipelineLazy = createLazyInitializer(async () => {
-  const pipeline = _createPipeline(currentLanguage);
+  const pipeline = await _createPipeline(currentLanguage);
   await pipeline.init();
   return pipeline;
 });
@@ -61,7 +88,7 @@ function getSvsPipeline() {
 function resetSvsPipeline() {
   const inst = svsPipelineLazy.getInstance();
   if (inst) {
-    try { inst.dispose(); } catch (_) {}
+    try { Promise.resolve(inst.dispose()).catch(() => {}); } catch (_) {}
   }
   svsPipelineLazy.reset();
   currentLanguage = null;
@@ -122,9 +149,29 @@ function _makeRmvpeExtractor() {
 }
 
 function registerSvsIpc() {
-  ipcMain.handle('svs:init', async () => {
+  // 当 int8 目录下检测到旧版 diff_step 模型（cond≠1024）时，向触发初始化的窗口推送提示事件。
+  // 由渲染进程用自身 i18n 渲染弹窗文案（主/渲染进程双语字典各自维护）。
+  // 仅首次触发初始化的窗口收到事件（_diffStepIncompatibleNotified 全局去重）。
+  function notifyDiffStepIncompatible(win) {
+    if (_diffStepIncompatibleNotified) return;
+    _diffStepIncompatibleNotified = true;
+    try {
+      if (win && !win.isDestroyed()) {
+        win.send('svs:model-incompatible');
+      }
+    } catch (_) {}
+  }
+
+  function getDiffStepIncompatible() {
+    const pipeline = svsPipelineLazy.getInstance();
+    return !!(pipeline && pipeline.diffStepLegacyInt8Incompatible === true);
+  }
+
+  ipcMain.handle('svs:init', async (event) => {
     await svsPipelineLazy.get();
-    return { success: true };
+    const incompatible = getDiffStepIncompatible();
+    if (incompatible) notifyDiffStepIncompatible(event.sender);
+    return { success: true, diffStepLegacyInt8Incompatible: incompatible };
   });
 
   ipcMain.handle('svs:synthesize', async (event, { notes, bpm, options }) => {
@@ -142,7 +189,8 @@ function registerSvsIpc() {
       const precision = settings.modelPrecision || 'fp32';
       const modelDir = getModelDir();
       if (!checkJpModelsExist(modelDir, precision)) {
-        return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
+        // W19: use i18n key instead of hardcoded Chinese error message.
+        return { error: 'JP_MODELS_MISSING', message: t('error.jpModelNotDownloaded') };
       }
     }
 
@@ -189,7 +237,8 @@ function registerSvsIpc() {
       const precision = settings.modelPrecision || 'fp32';
       const modelDir = getModelDir();
       if (!checkJpModelsExist(modelDir, precision)) {
-        return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
+        // W19: use i18n key instead of hardcoded Chinese error message.
+        return { error: 'JP_MODELS_MISSING', message: t('error.jpModelNotDownloaded') };
       }
     }
 
@@ -215,11 +264,11 @@ function registerSvsIpc() {
           } catch (_) {}
         },
       };
-      // 注入 RMVPE F0 提取器
+      // 注入 RMVPE F0 提取器（所有匹配的 fragment 都需要注入，
+      // 否则后续 fragment 在 pipeline 中回退到自相关 F0，导致 autoShift 值不一致）
       for (const frag of fragments) {
         if (frag.options && frag.options.autoShift && frag.options.refAudioWavBuffer) {
           frag.options.refF0Extractor = _makeRmvpeExtractor();
-          break;
         }
       }
       return await _withSynthMutex(() => pipeline.synthesizeMultiStreaming(fragments, bpm, opts));
@@ -227,6 +276,19 @@ function registerSvsIpc() {
       console.error('[Main] svs:synthesizeMultiStreaming failed:', err.message);
       throw err;
     }
+  });
+
+  ipcMain.handle('svs:cancel', async () => {
+    const pipeline = svsPipelineLazy.getInstance();
+    if (pipeline && typeof pipeline.cancelActiveSynthesis === 'function') {
+      // 协作式取消：只通知 worker 在安全点退出推理，worker 线程保持存活。
+      // 不再调用 svsPipelineLazy.reset()（旧逻辑会在 terminate 后重建 worker），
+      // 否则会 dispose()→terminate() 打断尚未安全退出的推理，重新引入 GPU 崩溃。
+      await pipeline.cancelActiveSynthesis();
+      return { success: true };
+    }
+    resetSvsPipeline();
+    return { success: true };
   });
 
   ipcMain.handle('svs:dispose', async () => {
@@ -238,9 +300,11 @@ function registerSvsIpc() {
     return SAMPLE_RATE;
   });
 
-  ipcMain.handle('fragment-svs:init', async () => {
+  ipcMain.handle('fragment-svs:init', async (event) => {
     await svsPipelineLazy.get();
-    return { success: true };
+    const incompatible = getDiffStepIncompatible();
+    if (incompatible) notifyDiffStepIncompatible(event.sender);
+    return { success: true, diffStepLegacyInt8Incompatible: incompatible };
   });
 
   ipcMain.handle('fragment-svs:synthesize', async (event, { notes, bpm, options }) => {
@@ -258,7 +322,8 @@ function registerSvsIpc() {
       const precision = settings.modelPrecision || 'fp32';
       const modelDir = getModelDir();
       if (!checkJpModelsExist(modelDir, precision)) {
-        return { error: 'JP_MODELS_MISSING', message: '日语模型未下载。请在模型下载页面下载日语模型。' };
+        // W19: use i18n key instead of hardcoded Chinese error message.
+        return { error: 'JP_MODELS_MISSING', message: t('error.jpModelNotDownloaded') };
       }
     }
 
@@ -314,6 +379,9 @@ function registerSvsIpc() {
         await svsPipelineLazy.get();
       }
       const p = svsPipelineLazy.getInstance();
+      if (typeof p.resolvePhonemes === 'function') {
+        return await p.resolvePhonemes(lyrics, currentLanguage);
+      }
       return lyrics.map(lyric => p.resolveLyricToPhonemes(lyric));
     } catch (err) {
       console.error('[Main] Phoneme resolution failed:', err);

@@ -26,13 +26,15 @@ for (const stream of [process.stdout, process.stderr]) {
   }
 }
 
-// Catch unhandled errors to prevent silent crashes
-process.on('uncaughtException', (err) => {
-  try { process.stderr.write(`[FATAL] ${err.stack || err}\n`); } catch (_) {}
-});
-process.on('unhandledRejection', (reason) => {
-  try { process.stderr.write(`[UNHANDLED REJECTION] ${reason}\n`); } catch (_) {}
-});
+// Initialize comprehensive crash/error logging as early as possible.
+// crashReporter.start() and app.setPath('crashDumps', ...) MUST run before
+// app.ready to capture renderer native crashes. This module also installs
+// uncaughtException / unhandledRejection handlers (replacing the previous
+// stderr-only ones), patches console.log/warn/error to mirror output into a
+// per-session log file under appData/logs, rotates logs (keep 10) and dump
+// files (keep 3), and records dump file info in the log so users know which
+// files to attach when reporting issues.
+require('./main/crashReporter').init();
 
 // 启用 WebNN API，使渲染进程可通过 onnxruntime-web WebNN EP Using NPU 推理
 app.commandLine.appendSwitch('enable-features', 'WebMachineLearningNeuralNetwork');
@@ -105,15 +107,15 @@ const {
 } = require('./main/splashManager');
 
 // ---- Light module placeholders (assigned in STEP 1.5 inside app.whenReady) ----
-let createWindow, getMainWindow, buildAppMenu, registerWindowIpc;
-let loadMainLocale, t;
+let createWindow, registerWindowIpc;
+let loadMainLocale;
 let loadSettings, saveSettingsFile, setSettingsCachedDMLDevices;
-let authorizePath, isPathAllowed;
 let getModelDir;
 let classifyDeviceFromName, startGPUPreload, ensureGPUInfo, detectAllHardware;
 let checkAndDownloadModels, registerModelDownloadIpc;
 let registerThemeIpc;
 let registerSingerIpc;
+let registerSingerMarketIpc;
 let registerAudioIpc;
 let registerDialogIpc;
 let registerWebnnIpc;
@@ -219,13 +221,10 @@ app.whenReady().then(() => {
   // ========================================================================
   ({
     createWindow,
-    getMainWindow,
-    buildAppMenu,
     registerWindowIpc,
   } = require('./main/windowManager'));
-  ({ loadMainLocale, t } = require('./main/locale'));
+  ({ loadMainLocale } = require('./main/locale'));
   ({ loadSettings, saveSettingsFile, setCachedDMLDevices: setSettingsCachedDMLDevices } = require('./main/settings'));
-  ({ authorizePath, isPathAllowed } = require('./main/security'));
   ({ getModelDir } = require('./main/modelDir'));
   ({
     classifyDeviceFromName,
@@ -235,6 +234,7 @@ app.whenReady().then(() => {
   } = require('./main/gpuInfo'));
   ({ registerThemeIpc } = require('./main/themeIpc'));
   ({ registerSingerIpc } = require('./main/singerIpc'));
+  ({ registerSingerMarketIpc } = require('./main/singerMarketIpc'));
   ({ registerDialogIpc } = require('./main/dialogIpc'));
   ({ registerWebnnIpc } = require('./main/webnnIpc'));
   // audioIpc, modelDownload, updateIpc are deferred to STEP 4 because they
@@ -253,6 +253,7 @@ app.whenReady().then(() => {
   registerDialogIpc();
   registerThemeIpc();
   registerSingerIpc();
+  registerSingerMarketIpc();
   registerWebnnIpc();
   registerSplashIpc();
 
@@ -299,7 +300,9 @@ app.whenReady().then(() => {
     const modelPath = decodeURIComponent(url.pathname);
     const modelDir = getModelDir();
     const resolvedPath = path.resolve(modelDir, modelPath.replace(/^\/+/, ''));
-    if (!resolvedPath.startsWith(path.resolve(modelDir))) {
+    // Use path.sep to avoid prefix confusion (e.g. /home/user vs /home/userevil).
+    const allowedRoot = path.resolve(modelDir);
+    if (resolvedPath !== allowedRoot && !resolvedPath.startsWith(allowedRoot + path.sep)) {
       return new Response('Forbidden', { status: 403 });
     }
     if (!resolvedPath.endsWith('.onnx') && !resolvedPath.endsWith('.onnx.data')) {
@@ -450,8 +453,7 @@ app.whenReady().then(() => {
     // child_process/url; updateChecker → same as modelManager) on the
     // critical path before createWindow(). The renderer does not call
     // audio:*/model:download:*/update:* IPC at startup.
-    ({ registerAudioIpc, resetAudioManagers: _resetAudio } = require('./main/audioIpc'));
-    resetAudioManagers = _resetAudio;
+    ({ registerAudioIpc, resetAudioManagers } = require('./main/audioIpc'));
     ({ checkAndDownloadModels, registerModelDownloadIpc } = require('./main/modelDownload'));
     ({ registerUpdateIpc, cleanupInstallerTempFiles } = require('./main/updateIpc'));
 
@@ -595,19 +597,44 @@ app.on('window-all-closed', () => {
   }
 });
 
-app.on('before-quit', () => {
-  resetSvsPipeline();
-  resetRmvpe();
-  resetBasicPitch();
-  resetRosvot();
-  resetAudioManagers();
-  const { getFragmentWindows } = require('./main/windowManager');
-  const fragmentWindows = getFragmentWindows();
-  for (const id in fragmentWindows) {
-    if (fragmentWindows[id] && !fragmentWindows[id].isDestroyed()) {
-      fragmentWindows[id].destroy();
+// W1: before-quit cleanup must run asynchronously. resetAudioManagers() →
+// AudioOutputManager.destroy() → worker.kill() sends a signal that terminates
+// the native audio worker asynchronously; if the app exits immediately the
+// OS reclaims device handles lazily. We prevent the default quit, run the
+// cleanup, and give it a bounded grace period (1500ms) so a hung worker
+// cannot block exit forever, then force-exit. A guard prevents re-entry
+// when before-quit fires multiple times.
+let _isQuitting = false;
+app.on('before-quit', (event) => {
+  if (_isQuitting) return;
+  _isQuitting = true;
+  event.preventDefault();
+  const cleanup = async () => {
+    try {
+      resetSvsPipeline();
+      resetRmvpe();
+      resetBasicPitch();
+      resetRosvot();
+      resetAudioManagers();
+      const { getFragmentWindows } = require('./main/windowManager');
+      const fragmentWindows = getFragmentWindows();
+      for (const id in fragmentWindows) {
+        if (fragmentWindows[id] && !fragmentWindows[id].isDestroyed()) {
+          fragmentWindows[id].destroy();
+        }
+      }
+    } catch (err) {
+      console.warn('[Main] before-quit cleanup error:', err.message);
     }
-  }
+  };
+  // Race the cleanup against a bounded timeout so a hung worker does not
+  // keep the app alive indefinitely.
+  Promise.race([
+    cleanup(),
+    new Promise(resolve => setTimeout(resolve, 1500)),
+  ]).then(() => {
+    app.exit(0);
+  });
 });
 
 // Light IPC handlers used to be registered here at top-level, but they

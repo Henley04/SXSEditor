@@ -6,9 +6,13 @@ const _IS_TEST_ENV = process.env.CI === 'true' ||
 
 // Set log level BEFORE requiring onnxruntime-node!
 // (ORT initializes once when module is loaded, must set logLevel first)
-if (!_IS_TEST_ENV) {
+const _ORT_DEBUG_ENABLED = !_IS_TEST_ENV && process.env.SXSEDITOR_ORT_DEBUG === '1';
+if (_ORT_DEBUG_ENABLED) {
     process.env.ORT_DML_DEBUG = '1';
-    process.env.ORT_LOGGING_LEVEL = '0'; // 0=VERBOSE, 1=INFO, 2=WARNING, 3=ERROR, 4=FATAL
+    process.env.ORT_LOGGING_LEVEL = '0';
+} else {
+    process.env.ORT_DML_DEBUG = '0';
+    process.env.ORT_LOGGING_LEVEL = '2';
 }
 
 const path = require('node:path');
@@ -16,13 +20,13 @@ const fs = require('node:fs');
 const ort = require('onnxruntime-node');
 // Set logLevel on the real module (ort.env is from the external onnxruntime-node's onnxruntime-common)
 if (!_IS_TEST_ENV) {
-    ort.env.logLevel = 'verbose';
-    ort.env.debug = true;
+    ort.env.logLevel = _ORT_DEBUG_ENABLED ? 'verbose' : 'warning';
+    ort.env.debug = _ORT_DEBUG_ENABLED;
 }
 const { getGraphicsCached } = require('../../utils/gpuCache');
 const { ensureGPUInfo } = require('../../main/gpuInfo');
 const { classifyDevice } = require('../../utils/deviceClassifier');
-const { EMBED_DIM, MEL_DIM, COND_DIM, HOP_SIZE, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, ONNX_MODEL_FILES, NPU_STATIC_SEQ_LEN, IPC_TIMEOUT_INFERENCE } = require('./constants');
+const { EMBED_DIM, MEL_DIM, COND_DIM, SAMPLE_RATE, MODEL_SIZES, MODEL_GROUPS, NPU_STATIC_SEQ_LEN } = require('./constants');
 const { buildSessionOptions } = require('../shared/ortOptions');
 const { float32ToF16Buffer } = require('./utils');
 const { requestInference } = require('./webnnIpc');
@@ -48,8 +52,8 @@ globalThis._flushOrtDebugLogs = flushOrtDebugLogs;
 // Skipped in test/CI to avoid capturing test console.error/warn output and
 // to prevent the periodic flush timer from polluting test output.
 let ortDebugBuffer = '';
-if (!_IS_TEST_ENV) {
-    console.log('[OnnxSVSPipeline] ONNX Runtime debug logging enabled (verbose, ORT_LOGGING_LEVEL=0, ORT_DML_DEBUG=1)');
+if (_ORT_DEBUG_ENABLED) {
+    console.log('[OnnxSVSPipeline] ONNX Runtime debug logging enabled by SXSEDITOR_ORT_DEBUG=1');
 
     // (ORT logs go to native stderr, not to Node.js console.log)
     const iconv = require('iconv-lite');
@@ -161,6 +165,62 @@ const DUMMY_TEST_INPUTS_NPU = {
     vocoder: { mel: new ort.Tensor('float32', new Float32Array(NPU_STATIC_SEQ_LEN * MEL_DIM), [1, NPU_STATIC_SEQ_LEN, MEL_DIM]) },
     melTransform: { audio: new ort.Tensor('float32', new Float32Array(SAMPLE_RATE), [1, SAMPLE_RATE]) },
 };
+
+// QDIT 量化 diff_step（int8 新模型）签名：动态形状，输入名 x/diffusion_step/x_mask，mask 为 bool。
+// 验证 dummy 不单独维护，createSessionWithValidation 通过 _rebuildDummyForSession 依据会话实际
+// 输入签名动态生成（同时兼容 legacy 的 xt_input/t/cond/xt_mask）。
+
+/**
+ * 依据模型实际输入签名重建 dummy feeds，兼容 legacy（xt_input/t/cond/xt_mask float）
+ * 与 QDIT（x/diffusion_step/cond/x_mask bool）两种 diff_step 签名，以及静态/动态形状。
+ * 形状为符号维度（如 "seq"）时按 3 填充。用于 sessionKey==='diffStep' 的加载验证，
+ * 保证 dummy 与真实输入一一对应，避免 "invalid dimensions" / "is missing in 'feeds'"。
+ * @param {Object} session - 已创建的 InferenceSession
+ * @param {Object} baseDummy - 原精度对应的 dummy（无匹配输入时兜底）
+ * @returns {Object} feeds
+ */
+function _rebuildDummyForSession(session, baseDummy) {
+    try {
+        const meta = session.inputMetadata;
+        if (!Array.isArray(meta) || meta.length === 0) return baseDummy;
+        const feeds = {};
+        let matched = 0;
+        for (const m of meta) {
+            const name = m.name;
+            const type = String(m.type || '');
+            const shape = Array.isArray(m.shape) ? m.shape : [];
+            const isBool = type.includes('bool');
+            const isFp16 = type.includes('16') && !isBool;
+            // 符号维度按 3 填充；缺 shape 时回退 [1, 3, 128]
+            let count = 1;
+            for (const s of shape) count *= (typeof s === 'number' ? s : 3);
+            if (shape.length === 0) count = 3 * (name === 'cond' ? COND_DIM : (name === 'diffusion_step' || name === 't' ? 1 : MEL_DIM));
+            const dataType = isBool ? 'bool' : (isFp16 ? 'float16' : 'float32');
+            if (name === 'x' || name === 'xt_input') {
+                const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
+                feeds[name] = new ort.Tensor(dataType, data, shape);
+                matched++;
+            } else if (name === 'diffusion_step' || name === 't') {
+                const val = isFp16 ? float32ToF16Buffer(new Float32Array([0.5])) : new Float32Array([0.5]);
+                feeds[name] = new ort.Tensor(dataType, val, [1]);
+                matched++;
+            } else if (name === 'cond') {
+                const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
+                feeds[name] = new ort.Tensor(dataType, data, shape);
+                matched++;
+            } else if (name === 'x_mask' || name === 'xt_mask') {
+                const data = isBool ? new Uint8Array(count).fill(1)
+                    : (isFp16 ? float32ToF16Buffer(new Float32Array(count).fill(1)) : new Float32Array(count).fill(1));
+                feeds[name] = new ort.Tensor(dataType, data, shape);
+                matched++;
+            }
+        }
+        return matched > 0 ? feeds : baseDummy;
+    } catch (e) {
+        console.warn('[OnnxSVSPipeline] dummy rebuild failed, using base dummy:', e.message);
+        return baseDummy;
+    }
+}
 
 /** @deprecated Using classifyDevice 替代 */
 function isDiscreteGPUByName(name) {
@@ -403,7 +463,7 @@ function selectBestDevice(devices, npuAvailable = false) {
  * @returns {Object} modelDeviceMapping — { modelGroup: { deviceType, deviceId, process } }
  */
 function buildModelDeviceMapping(devices, npuAvailable = false) {
-    const best = selectBestDevice(devices, npuAvailable);
+    const _best = selectBestDevice(devices, npuAvailable);
     const hasDiscreteGPU = devices.some(d => d.deviceType === 'discrete-gpu' && d.dxgiAdapterNumber !== undefined);
     const discreteGPU = devices.find(d => d.deviceType === 'discrete-gpu' && d.dxgiAdapterNumber !== undefined);
     const integratedGPU = devices.find(d => d.deviceType === 'integrated-gpu' && d.dxgiAdapterNumber !== undefined);
@@ -482,8 +542,15 @@ async function detectBestDevice(modelDir, npuAvailable = false) {
     };
 }
 
-async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null) {
+const _validatedSessionModels = new Set();
+
+async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {
     const modelName = path.basename(modelPath);
+    // Validation/warmup is a once-per-process action for each concrete model
+    // file. Session recreation after VRAM release, language swaps, or model
+    // offloading must not run an extra dummy inference.
+    const validationKey = `${path.resolve(modelPath)}::${sessionKey}`;
+    runValidation = runValidation && !_validatedSessionModels.has(validationKey);
     // overrideDummyInputs: 调用方可传入自定义 dummy 输入（如 SiFiGAN 双输入 mel+f0），为 null 时走原有查找逻辑
     const dummyInputs = overrideDummyInputs || (useStaticShapes
         ? DUMMY_TEST_INPUTS_NPU[sessionKey]
@@ -528,8 +595,14 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         return null;
     };
     const _runWithPrecisionFallback = async (session, label) => {
+        // diff_step：依据实际加载会话的输入签名重建 dummy（QDIT 的 x/diffusion_step/x_mask
+        // bool 与 legacy 的 xt_input/t/cond/xt_mask 均正确匹配），避免 "invalid dimensions" /
+        // "is missing in 'feeds'" 导致的误判验证失败。
+        const feeds = sessionKey === 'diffStep'
+            ? _rebuildDummyForSession(session, dummyInputs)
+            : dummyInputs;
         try {
-            await session.run(dummyInputs);
+            await session.run(feeds);
         } catch (err) {
             if (_isTypeMismatchErr(err)) {
                 const alt = _getAlternateDummy();
@@ -556,10 +629,15 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         });
         console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify(sessionOptions));
         dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
-        console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
-        await _runWithPrecisionFallback(dmlSession, 'DML');
-        console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
-        return { session: dmlSession, ep: 'dml', warmedUp: true };
+        if (runValidation) {
+            console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
+            await _runWithPrecisionFallback(dmlSession, 'DML');
+            _validatedSessionModels.add(validationKey);
+            console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
+        } else {
+            console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (reload, validation skipped)`);
+        }
+        return { session: dmlSession, ep: 'dml', warmedUp: runValidation };
     } catch (dmlErr) {
         if (dmlSession) {
             try { dmlSession.release(); } catch (e) {
@@ -583,13 +661,16 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             try {
                 const dmlModelSession = await ort.InferenceSession.create(dmlModelPath,
                     buildSessionOptions({ executionProviders: ['cpu'] }));
-                try {
-                    await _runWithPrecisionFallback(dmlModelSession, 'DML-optimized');
-                } catch (runErr) {
-                    try { dmlModelSession.release(); } catch (_) {}
-                    throw runErr;
+                if (runValidation) {
+                    try {
+                        await _runWithPrecisionFallback(dmlModelSession, 'DML-optimized');
+                    } catch (runErr) {
+                        try { dmlModelSession.release(); } catch (_) {}
+                        throw runErr;
+                    }
+                    _validatedSessionModels.add(validationKey);
                 }
-                return { session: dmlModelSession, ep: 'cpu', warmedUp: true };
+                return { session: dmlModelSession, ep: 'cpu', warmedUp: runValidation };
             } catch (dmlModelErr) {
                 console.log(`[OnnxSVSPipeline] ${path.basename(dmlModelPath)} DML-optimized model load failed: ${dmlModelErr.message.substring(0, 60).split('\n')[0]}`);
             }
@@ -598,6 +679,10 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
 
     const cpuSession = await ort.InferenceSession.create(modelPath,
         buildSessionOptions({ executionProviders: ['cpu'] }));
+    if (!runValidation) {
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (reload, validation skipped)`);
+        return { session: cpuSession, ep: 'cpu', warmedUp: false };
+    }
     try {
         await _runWithPrecisionFallback(cpuSession, 'CPU');
     } catch (runErr) {
@@ -620,6 +705,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         try { cpuSession.release(); } catch (_) {}
         throw runErr;
     }
+    _validatedSessionModels.add(validationKey);
     console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (inference verified)`);
     return { session: cpuSession, ep: 'cpu', warmedUp: true };
 }
@@ -633,8 +719,6 @@ class WebNNSessionProxy {
     }
 
     async run(feeds) {
-        const { ipcMain } = require('electron');
-
         const wc = getMainWindowWebContents();
         if (!wc) throw new Error('No renderer window for WebNN inference');
 

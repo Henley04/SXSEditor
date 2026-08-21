@@ -18,7 +18,7 @@
   z-index: 9999;
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--motion-slow) ease;
+  transition: opacity var(--motion-slow) var(--ease-emphasized);
 }
 #model-loading-overlay.visible { opacity: 1; pointer-events: auto; }
 
@@ -88,16 +88,22 @@
   padding: var(--space-2) 10px;
   cursor: pointer;
   font-size: var(--font-base);
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
   white-space: nowrap;
 }
 #toolbar button:hover {
   background: var(--bg-button-hover);
   color: var(--fg-primary);
   border-color: var(--accent);
+  transform: translateY(-1px);
 }
 #toolbar button:active {
   background: var(--bg-button-active);
+  transform: translateY(0) scale(0.97);
+  transition-duration: 60ms;
 }
 #toolbar button:disabled {
   opacity: 0.4;
@@ -243,13 +249,15 @@
   width: 4px;
   cursor: col-resize;
   background: var(--border-subtle);
-  transition: background var(--motion-fast);
+  transition: background var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-bounce);
   position: relative;
   z-index: 5;
 }
 .inspector-resize:hover,
 .inspector-resize.dragging {
   background: var(--accent);
+  transform: scaleX(1.6);
 }
 
 /* ==================== Inspector Panel ==================== */
@@ -418,7 +426,10 @@
   color: var(--fg-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .pho:hover {
   background: var(--accent-soft);
@@ -517,7 +528,10 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
   flex-shrink: 0;
 }
 .btn-param-toggle:hover {
@@ -525,7 +539,7 @@
   color: var(--fg-primary);
   border-color: var(--accent);
 }
-.btn-param-toggle.collapsed { transform: rotate(180deg); }
+.btn-param-toggle.collapsed { transform: rotate(180deg); transition-timing-function: var(--ease-bounce); }
 
 .param-mode-select {
   background: var(--bg-elevated);
@@ -565,7 +579,10 @@
   clip-path: var(--clip-button, none);
   color: var(--fg-muted);
   cursor: pointer;
-  transition: all var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .param-lane-tab:hover {
   background: var(--bg-button-hover);
@@ -628,7 +645,7 @@
   z-index: 10000;
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--motion-base) ease;
+  transition: opacity var(--motion-base) var(--ease-emphasized);
 }
 .shortcuts-overlay.visible {
   opacity: 1;
@@ -667,7 +684,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--motion-fast);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .btn-close-shortcuts:hover {
   color: var(--fg-primary);
@@ -767,7 +787,10 @@
   border: 1px solid var(--border-default);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .pitch-ctx-preset:hover {
   background: var(--accent-softer);
@@ -795,7 +818,10 @@
   cursor: pointer;
   text-align: left;
   color: var(--fg-primary);
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .pitch-ctx-action:hover {
   background: var(--bg-button-hover);
@@ -844,10 +870,212 @@
   cursor: pointer;
   text-align: left;
   color: var(--fg-primary);
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
 }
 .kanji-ctx-action:hover {
   background: var(--bg-button-hover);
   border-color: var(--accent-soft);
   color: var(--accent-fg);
+}
+
+/* ==================== Note Context Menu (Vibrato + Fade) ==================== */
+.note-ctx-menu {
+  position: fixed;
+  z-index: 10000;
+  min-width: 260px;
+  max-width: 300px;
+  padding: 8px 10px 6px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 20px var(--shadow-color-mid), 0 2px 6px rgba(0,0,0,0.18);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--font-sm);
+  color: var(--fg-primary);
+  user-select: none;
+}
+
+.note-ctx-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  padding: 2px 0;
+}
+
+.note-ctx-params {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.note-ctx-params[hidden] {
+  display: none;
+}
+
+.note-ctx-param {
+  display: grid;
+  grid-template-columns: 48px 1fr 42px;
+  align-items: center;
+  gap: 8px;
+}
+
+.note-ctx-label {
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+.note-ctx-slider {
+  width: 100%;
+  margin: 0;
+}
+
+.note-ctx-value {
+  text-align: right;
+  color: var(--accent-fg);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--font-xs);
+  min-width: 38px;
+}
+
+.note-ctx-presets {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.note-ctx-preset {
+  padding: 4px 6px;
+  font-size: var(--font-xs);
+  color: var(--fg-primary);
+  background: var(--bg-button);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard);
+}
+.note-ctx-preset:hover {
+  background: var(--accent-softer);
+  border-color: var(--accent-soft);
+  color: var(--accent-fg);
+}
+
+.note-ctx-divider {
+  height: 1px;
+  background: var(--border-default);
+  margin: 4px -2px 2px;
+}
+
+.note-ctx-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.note-ctx-footer-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.note-ctx-target {
+  font-size: var(--font-xs);
+  color: var(--fg-muted);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.note-ctx-action {
+  padding: 4px 8px;
+  font-size: var(--font-xs);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--fg-primary);
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard);
+  white-space: nowrap;
+}
+.note-ctx-action:hover {
+  background: var(--bg-button-hover);
+}
+.note-ctx-danger {
+  color: var(--danger);
+}
+.note-ctx-danger:hover {
+  background: var(--danger-softer, rgba(220, 60, 60, 0.12));
+  border-color: var(--danger);
+}
+
+/* Toggle switch (compact, accessible) */
+.note-ctx-toggle {
+  position: relative;
+  display: inline-flex;
+  cursor: pointer;
+  margin: 0;
+}
+.note-ctx-toggle input {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.note-ctx-toggle-track {
+  display: inline-block;
+  width: 28px;
+  height: 16px;
+  background: var(--bg-button-hover);
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  position: relative;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard);
+}
+.note-ctx-toggle-thumb {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 12px;
+  height: 12px;
+  background: var(--fg-primary);
+  border-radius: 50%;
+  transition: transform var(--motion-fast) var(--ease-standard),
+              background-color var(--motion-fast) var(--ease-standard);
+}
+.note-ctx-toggle input:checked + .note-ctx-toggle-track {
+  background: var(--accent);
+  border-color: var(--accent-hover);
+}
+.note-ctx-toggle input:checked + .note-ctx-toggle-track .note-ctx-toggle-thumb {
+  transform: translateX(12px);
+  background: var(--fg-on-accent);
+}
+.note-ctx-toggle input:focus-visible + .note-ctx-toggle-track {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ==================== Reduced motion ==================== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

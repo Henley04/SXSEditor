@@ -75,34 +75,42 @@ export async function runSegmentedVocoder({ xtData, totalFrames, floatType, npuV
         const prepMs = performance.now() - tVocPrep;
 
         const tVocInfer = performance.now();
-        const vocoderResults = await runSession('vocoder', { mel: melTensor });
-        const inferMs = performance.now() - tVocInfer;
+        // W17: ensure per-chunk vocoder input/output tensors are disposed even if
+        // inference or post-processing throws (was leaking on exception).
+        let vocoderResults = null;
+        try {
+            vocoderResults = await runSession('vocoder', { mel: melTensor });
+            const inferMs = performance.now() - tVocInfer;
 
-        const tVocPost = performance.now();
-        const waveformRaw = vocoderResults['waveform'];
-        const waveform = outputToFloat32(waveformRaw);
-        const chunkSamples = chunkFrames * HOP_SIZE;
-        const startSample = offset * HOP_SIZE;
+            const tVocPost = performance.now();
+            const waveformRaw = vocoderResults['waveform'];
+            const waveform = outputToFloat32(waveformRaw);
+            const chunkSamples = chunkFrames * HOP_SIZE;
+            const startSample = offset * HOP_SIZE;
 
-        for (let i = 0; i < chunkSamples; i++) {
-            const idx = startSample + i;
-            if (idx < totalSamples) {
-                let w = 1.0;
-                if (!isFirst && i < fadeSamples) w = fadeWindow[i];
-                if (!isLast && i >= chunkSamples - fadeSamples) w = fadeWindow[chunkSamples - 1 - i];
-                output[idx] += waveform[i] * w;
-                weightSum[idx] += w;
+            for (let i = 0; i < chunkSamples; i++) {
+                const idx = startSample + i;
+                if (idx < totalSamples) {
+                    let w = 1.0;
+                    if (!isFirst && i < fadeSamples) w = fadeWindow[i];
+                    if (!isLast && i >= chunkSamples - fadeSamples) w = fadeWindow[chunkSamples - 1 - i];
+                    output[idx] += waveform[i] * w;
+                    weightSum[idx] += w;
+                }
+            }
+            const postMs = performance.now() - tVocPost;
+            vocPrepTotal += prepMs;
+            vocInferTotal += inferMs;
+            vocPostTotal += postMs;
+            vocChunkCount++;
+            console.log(`[WebNN]   vocoder chunk #${chunkIndex} [${offset}-${end}/${totalFrames}]: prep=${prepMs.toFixed(1)} infer=${inferMs.toFixed(1)} post=${postMs.toFixed(1)}${isLast ? ' (last)' : ''}`);
+        } finally {
+            // 释放该 chunk 的输入和输出张量（waveform 已在 crossfade 中被读取完毕）
+            disposeTensor(melTensor);
+            if (vocoderResults && vocoderResults['waveform']) {
+                disposeTensor(vocoderResults['waveform']);
             }
         }
-        // 释放该 chunk 的输入和输出张量（waveform 已在 crossfade 中被读取完毕）
-        disposeTensor(melTensor);
-        disposeTensor(waveformRaw);
-        const postMs = performance.now() - tVocPost;
-        vocPrepTotal += prepMs;
-        vocInferTotal += inferMs;
-        vocPostTotal += postMs;
-        vocChunkCount++;
-        console.log(`[WebNN]   vocoder chunk #${chunkIndex} [${offset}-${end}/${totalFrames}]: prep=${prepMs.toFixed(1)} infer=${inferMs.toFixed(1)} post=${postMs.toFixed(1)}${isLast ? ' (last)' : ''}`);
 
         // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，已归一化）
         if (onChunkComplete) {

@@ -20,7 +20,6 @@ const ort = require('onnxruntime-node');
 
 const {
   SAMPLE_RATE,
-  HOP_SIZE,
   MEL_DIM,
   EMBED_DIM,
   COND_DIM,
@@ -510,7 +509,7 @@ describe('ONNX Model Loading and Validation (JS端)', function () {
       try {
         const mod = require('../src/inference/pipeline/modelLoader');
         DUMMY_TEST_INPUTS_FP32 = mod.DUMMY_TEST_INPUTS_FP32;
-      } catch (e) {
+      } catch (_e) {
         // electron 不可用时跳过此 describe
         DUMMY_TEST_INPUTS_FP32 = null;
       }

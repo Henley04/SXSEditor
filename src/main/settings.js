@@ -1,10 +1,61 @@
 const { app } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
-const { getLocale, setLocale } = require('./locale');
+const { setLocale } = require('./locale');
 
 const DEFAULT_THEME = 'acg';
 const DEFAULT_THEME_PER_WINDOW = {};
+
+
+const ENUM_SETTINGS = {
+  deviceMode: ['smart', 'manual', 'advanced'],
+  inferenceProvider: ['ortnode', 'ortweb'],
+  modelPrecision: ['fp32', 'fp16', 'int8', 'int8-npu'],
+  midiExtractTool: ['fcpe', 'basicpitch', 'rmvpe'],
+  audioOutputMode: ['shared', 'exclusive'],
+  audioBitDepth: ['float32', 'int32', 'int24', 'int16'],
+  vocoderType: ['default', 'sifigan'],
+  sifiganPrecision: ['fp32', 'fp16'],
+  japaneseVocalization: ['hybrid', 'en-phonemes', 'jp-lora'],
+  vocoderChunkMode: ['smart', 'manual'],
+  ortGraphOptLevel: ['disabled', 'basic', 'extended', 'all'],
+  ortExecutionMode: ['sequential', 'parallel'],
+  ortLogSeverityLevel: ['verbose', 'info', 'warning', 'error', 'fatal'],
+  updateChannel: ['nightly', 'release'],
+  fcpeThreshold: ['low', 'mid', 'high'],
+  fcpeSmoothing: ['low', 'medium', 'high'],
+  fcpeQuantization: ['strict', 'pitchbend'],
+};
+
+const NUMERIC_SETTINGS = {
+  previewDiffSteps: [4, 64, 16], previewCfgStrength: [0, 10, 3], previewCfgRescale: [0, 1, 0.75],
+  previewDiffStepChunkFrames: [100, 2000, 500], previewDiffStepOverlapFrames: [0, 200, 50],
+  exportDiffSteps: [4, 64, 32], exportCfgStrength: [0, 10, 3], exportCfgRescale: [0, 1, 0.75], exportSampleRate: [24000, 96000, 48000],
+  audioSampleRate: [8000, 192000, 48000], audioBufferSize: [64, 4096, 1024], audioVolume: [0, 1, 1],
+  vocoderChunkFrames: [256, 4096, 1024], ortIntraOpNumThreads: [0, 64, 0], ortInterOpNumThreads: [0, 64, 0],
+  npuDiffBatchSize: [1, 4, 1], npuVocoderBatchSize: [1, 4, 1],
+  fcpeF0Min: [20, 2000, 80], fcpeF0Max: [20, 2000, 880],
+  fcpeMinNoteDuration: [0.01, 1, 0.05], fcpeBpm: [40, 240, 120],
+};
+
+/** Normalize persisted and IPC-provided settings at the trust boundary. */
+function normalizeSettings(settings) {
+  const out = { ...(settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {}) };
+  for (const [key, allowed] of Object.entries(ENUM_SETTINGS)) {
+    if (out[key] !== undefined && !allowed.includes(out[key])) delete out[key];
+  }
+  for (const [key, [min, max, fallback]] of Object.entries(NUMERIC_SETTINGS)) {
+    if (out[key] === undefined) continue;
+    const n = Number(out[key]);
+    out[key] = Number.isFinite(n) ? Math.min(max, Math.max(min, n)) : fallback;
+  }
+  if (out.audioSampleRate !== undefined && ![22050, 24000, 44100, 48000, 96000, 192000].includes(out.audioSampleRate)) out.audioSampleRate = 48000;
+  if (out.exportSampleRate !== undefined && ![24000, 44100, 48000, 96000].includes(out.exportSampleRate)) out.exportSampleRate = 48000;
+  if (out.audioBufferSize !== undefined && ![64, 128, 256, 512, 1024, 2048, 4096].includes(out.audioBufferSize)) out.audioBufferSize = 1024;
+  if (out.preferredDeviceId !== undefined && out.preferredDeviceId !== null && out.preferredDeviceId !== 'npu' && out.preferredDeviceId !== 'webnn-gpu' && !Number.isInteger(out.preferredDeviceId)) delete out.preferredDeviceId;
+  if (out.modelDeviceMapping !== undefined && (typeof out.modelDeviceMapping !== 'object' || out.modelDeviceMapping === null || Array.isArray(out.modelDeviceMapping))) out.modelDeviceMapping = {};
+  return out;
+}
 
 let _settingsCache = null;
 let cachedDMLDevices = null;
@@ -30,6 +81,9 @@ function loadSettings() {
     console.warn('[Main] Failed to load settings, using defaults:', err.message);
     _settingsCache = {};
   }
+  if (!Number.isFinite(_settingsCache.audioSampleRate)) _settingsCache.audioSampleRate = 48000;
+  if (![24000, 44100, 48000, 96000].includes(_settingsCache.exportSampleRate)) _settingsCache.exportSampleRate = 48000;
+
   // Merge defaults for theme fields
   if (typeof _settingsCache.theme !== 'string') {
     _settingsCache.theme = DEFAULT_THEME;
@@ -66,7 +120,7 @@ function loadSettings() {
     _settingsCache.vocoderChunkMode = 'smart';
   }
   if (typeof _settingsCache.vocoderChunkFrames !== 'number' || !Number.isFinite(_settingsCache.vocoderChunkFrames) || _settingsCache.vocoderChunkFrames <= 0) {
-    _settingsCache.vocoderChunkFrames = 1008;
+    _settingsCache.vocoderChunkFrames = 1024;
   }
 
   // 合成完成后是否释放并重建重型 DML session，强制回收 DirectML 内存池（默认关闭，仅 DML 后端有效）
@@ -74,14 +128,104 @@ function loadSettings() {
     _settingsCache.releaseDmlVramAfterSynthesis = false;
   }
 
-  // Vocoder 推理前是否临时释放 diffStep session（默认开启，仅 DML 后端有效）
+  // Vocoder 推理前是否临时释放 diffStep session（默认关闭，仅 DML 后端有效）
   // diffStep 模型权重 + 32 步 diffusion 激活工作区（~2GB）在 vocoder 推理期间仍占用显存，
   // 与 vocoder 激活叠加易触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR (屏幕全黑)。
   // 开启后：diffusion 完成 → 释放 diffStep → vocoder 推理 → 重载 diffStep。
-  // 代价：每次 vocoder 推理后需重载 diffStep（~1-3秒），多 segment 合成会显著变慢。
+  // 代价：每次 vocoder 推理后需重载 diffStep（~1-3秒），多 segment 合成会变慢。
+  // 默认 false：尊重用户显式选择。只有用户开启时，OOM 路径才允许释放并重试。
   // WebNN 路径无需此优化（diffStep 在渲染进程，vocoder 在主进程 DML，互不抢占显存）。
   if (typeof _settingsCache.releaseDiffStepBeforeVocoder !== 'boolean') {
-    _settingsCache.releaseDiffStepBeforeVocoder = true;
+    _settingsCache.releaseDiffStepBeforeVocoder = false;
+  }
+
+  // 诊断模式（默认关闭）。开启后输出 [DiffusionDiag] / [VocoderDiag] 统计/采样日志，
+  // 用于排查 NaN/Inf / silent failure 等推理问题。NaN/Inf 致命错误（console.error）
+  // 始终输出，不受此开关影响。
+  if (typeof _settingsCache.diagnosticMode !== 'boolean') {
+    _settingsCache.diagnosticMode = false;
+  }
+
+  // Vocoder 分块间重叠帧数（默认 32，范围 8-96）。重叠越大边界越平滑但计算量增加。
+  // 与 shared/constants.js 的 VOCODER_OVERLAP_FRAMES 常量对齐（32 帧 ≈ 640ms 感受野）。
+  // 用户可在 settings.json 覆盖；运行时由 pipeline/index.js 透传到 runVocoderChunked。
+  if (!Number.isFinite(_settingsCache.vocoderOverlapFrames) ||
+      _settingsCache.vocoderOverlapFrames < 8 || _settingsCache.vocoderOverlapFrames > 96) {
+    _settingsCache.vocoderOverlapFrames = 32;
+  }
+
+  // 末端 EBU R128 响度归一化（−14 LUFS）+ true-peak 限制器（−1 dBTP）。
+  // 默认开启，符合流媒体分发标准；关闭时仅保留旧的 normalizePeakTo(0.95) 行为。
+  if (typeof _settingsCache.enableLoudnormFinal !== 'boolean') {
+    _settingsCache.enableLoudnormFinal = true;
+  }
+
+  // resampleLinear 降采样前的 Butterworth 1st-order IIR 抗混叠低通滤波（截止 = dstSr/2）。
+  // 默认关闭以保持默认输出特征不变；开启后可减少降采样混叠（以少量 CPU 开销为代价）。
+  if (typeof _settingsCache.enableAntiAliasing !== 'boolean') {
+    _settingsCache.enableAntiAliasing = false;
+  }
+
+  // SDEdit 局部修复（默认关闭）。检测 diffusion 输出 mel 局部 NaN/能量突变后用浅噪声重噪
+  // + 少步重采样修复（STORK-2 5 步，仅更新异常帧）。默认 false 时不执行任何修复代码路径。
+  if (typeof _settingsCache.enableSDEditRepair !== 'boolean') {
+    _settingsCache.enableSDEditRepair = false;
+  }
+
+  // ===== Task 11: CFG 强度曲线调度 =====
+  // 在 diffusion 采样循环中按 step 动态调整 CFG 引导强度。
+  // mode: 'constant'（固定，与改造前字节一致）| 'linear'（线性）| 'cosine'（余弦）| 'custom'（关键帧）
+  // cfgStrengthStart: null 时回退到 cfgStrength * 0.5（linear/cosine 从 0.5×cfg 上升到 cfg）
+  // cfgScheduleKeyframes: null 或 [{step, value}, ...]（custom 模式分段线性插值）
+  // 默认 'linear'：早期低 CFG 稳定结构，后期高 CFG 锐化细节。
+  // 顶层键为通用默认；preview*/export* 镜像键分别覆盖预览/导出路径。
+  const _validScheduleModes = ['constant', 'linear', 'cosine', 'custom'];
+  if (!_validScheduleModes.includes(_settingsCache.cfgScheduleMode)) {
+    _settingsCache.cfgScheduleMode = 'linear';
+  }
+  if (_settingsCache.cfgStrengthStart !== null && !Number.isFinite(_settingsCache.cfgStrengthStart)) {
+    _settingsCache.cfgStrengthStart = null;
+  }
+  if (_settingsCache.cfgScheduleKeyframes !== null && !Array.isArray(_settingsCache.cfgScheduleKeyframes)) {
+    _settingsCache.cfgScheduleKeyframes = null;
+  }
+  // 预览镜像键
+  if (!_validScheduleModes.includes(_settingsCache.previewCfgScheduleMode)) {
+    _settingsCache.previewCfgScheduleMode = 'linear';
+  }
+  if (_settingsCache.previewCfgStrengthStart !== null && !Number.isFinite(_settingsCache.previewCfgStrengthStart)) {
+    _settingsCache.previewCfgStrengthStart = null;
+  }
+  if (_settingsCache.previewCfgScheduleKeyframes !== null && !Array.isArray(_settingsCache.previewCfgScheduleKeyframes)) {
+    _settingsCache.previewCfgScheduleKeyframes = null;
+  }
+  // 导出镜像键
+  if (!_validScheduleModes.includes(_settingsCache.exportCfgScheduleMode)) {
+    _settingsCache.exportCfgScheduleMode = 'linear';
+  }
+  if (_settingsCache.exportCfgStrengthStart !== null && !Number.isFinite(_settingsCache.exportCfgStrengthStart)) {
+    _settingsCache.exportCfgStrengthStart = null;
+  }
+  if (_settingsCache.exportCfgScheduleKeyframes !== null && !Array.isArray(_settingsCache.exportCfgScheduleKeyframes)) {
+    _settingsCache.exportCfgScheduleKeyframes = null;
+  }
+
+  // ===== Dynamic Thresholding (arXiv:2507.08965) =====
+  // Per-frame percentile clipping of CFG-predicted mel before rescale.
+  // Prevents over-exposure artifacts at high CFG strengths.
+  // previewDynamicThresholdEnabled / exportDynamicThresholdEnabled: boolean (default false)
+  // previewDynamicThresholdPercentile / exportDynamicThresholdPercentile: 0.9–0.999 (default 0.995)
+  if (typeof _settingsCache.previewDynamicThresholdPercentile !== 'number' ||
+      !Number.isFinite(_settingsCache.previewDynamicThresholdPercentile) ||
+      _settingsCache.previewDynamicThresholdPercentile < 0.9 ||
+      _settingsCache.previewDynamicThresholdPercentile > 0.999) {
+    _settingsCache.previewDynamicThresholdPercentile = 0.995;
+  }
+  if (typeof _settingsCache.exportDynamicThresholdPercentile !== 'number' ||
+      !Number.isFinite(_settingsCache.exportDynamicThresholdPercentile) ||
+      _settingsCache.exportDynamicThresholdPercentile < 0.9 ||
+      _settingsCache.exportDynamicThresholdPercentile > 0.999) {
+    _settingsCache.exportDynamicThresholdPercentile = 0.995;
   }
 
   // ===== 预览 diffStep 分块推理设置 =====
@@ -212,16 +356,40 @@ function loadSettings() {
     _settingsCache.lastUpdateCheckTime = null;
   }
 
+  _settingsCache = normalizeSettings(_settingsCache);
   return _settingsCache;
 }
 
+// W7: Atomic settings write. Writes to settings.json.tmp then renames it
+// (atomic on the same filesystem) to settings.json, so a crash mid-write
+// cannot leave a truncated/invalid JSON file that would lose all settings
+// on next launch. On failure the cache is invalidated and an error result
+// is returned so callers do not report a false success.
 async function saveSettingsFile(settings) {
+  const filePath = getSettingsFilePath();
+  const tmpPath = `${filePath}.tmp`;
   try {
-    const filePath = getSettingsFilePath();
-    await fs.promises.writeFile(filePath, JSON.stringify(settings, null, 2), 'utf-8');
+    const data = JSON.stringify(settings, null, 2);
+    await fs.promises.writeFile(tmpPath, data, 'utf-8');
+    try {
+      await fs.promises.rename(tmpPath, filePath);
+    } catch (renameErr) {
+      // On Windows, rename may fail if the target exists; fall back to a
+      // synchronous rename which POSIX-overwrites the target.
+      try {
+        fs.renameSync(tmpPath, filePath);
+      } catch (_) {
+        throw renameErr;
+      }
+    }
     _settingsCache = null;
+    return { success: true };
   } catch (err) {
     console.error('[Main] Failed to save settings:', err);
+    // Clean up the leftover temp file if it still exists.
+    try { await fs.promises.unlink(tmpPath); } catch (_) {}
+    invalidateSettingsCache();
+    return { success: false, error: err.message };
   }
 }
 
@@ -231,10 +399,10 @@ function invalidateSettingsCache() {
 
 const ALLOWED_SETTINGS_KEYS = [
   'deviceId', 'modelDir', 'modelPrecision', 'midiExtractTool', 'useRosvot',
-  'previewDiffSteps', 'previewCfgStrength', 'previewCfgRescale',
+  'previewDiffSteps', 'previewCfgStrength', 'previewCfgRescale', 'previewSampler',
   'previewDiffStepChunkEnabled', 'previewDiffStepChunkFrames', 'previewDiffStepOverlapFrames',
-  'exportDiffSteps', 'exportCfgStrength', 'exportCfgRescale',
-  'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth',
+  'exportDiffSteps', 'exportCfgStrength', 'exportCfgRescale', 'exportSampler',
+  'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth', 'exportSampleRate',
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
@@ -242,6 +410,24 @@ const ALLOWED_SETTINGS_KEYS = [
   'vocoderChunkMode', 'vocoderChunkFrames',
   'releaseDmlVramAfterSynthesis',
   'releaseDiffStepBeforeVocoder',
+  'diagnosticMode',
+  'vocoderOverlapFrames',
+  'enableLoudnormFinal',
+  'enableAntiAliasing',
+  'enableSDEditRepair',
+  'cfgScheduleMode',
+  'cfgStrengthStart',
+  'cfgScheduleKeyframes',
+  'previewCfgScheduleMode',
+  'previewCfgStrengthStart',
+  'previewCfgScheduleKeyframes',
+  'exportCfgScheduleMode',
+  'exportCfgStrengthStart',
+  'exportCfgScheduleKeyframes',
+  'previewDynamicThresholdEnabled',
+  'previewDynamicThresholdPercentile',
+  'exportDynamicThresholdEnabled',
+  'exportDynamicThresholdPercentile',
   'inferenceProvider',
   'ortEnableMemPattern',
   'ortForceMemPatternOnDml',
@@ -258,6 +444,10 @@ const ALLOWED_SETTINGS_KEYS = [
   'skippedAppVersion',
   'dontRemindAppUpdates',
   'lastUpdateCheckTime',
+  // FCPE MIDI extraction parameters (global, used by all FCPE call sites)
+  'fcpeThreshold', 'fcpeSmoothing', 'fcpeQuantization',
+  'fcpeF0Min', 'fcpeF0Max', 'fcpeF0RangeAuto',
+  'fcpeMinNoteDuration', 'fcpeAutoBpm', 'fcpeBpm', 'fcpeNormalize',
 ];
 
 async function updateLocaleSetting(locale) {
@@ -279,6 +469,7 @@ module.exports = {
   getSettingsFilePath,
   ALLOWED_SETTINGS_KEYS,
   updateLocaleSetting,
+  normalizeSettings,
   DEFAULT_THEME,
   DEFAULT_THEME_PER_WINDOW,
 };

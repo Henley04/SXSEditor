@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>歌手市场 — 使用条款（中文参考版） — SXSEditor</title>
+  <meta name="description" content="SXSEditor 歌手市场 — 免责声明、使用条款及上传者授权。中文版本仅为阅读便利而提供，英文版本为具有法律效力并优先适用的版本。" />
+  <link rel="icon" href="images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <style>
+    /* Standalone legal-document layout (no sidebar) */
+    body { font-family: 'Inter', 'Noto Sans SC', system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; }
+    .legal-layout {
+      max-width: 1400px; margin: 0 auto; padding: 2rem 1.5rem 4rem;
+      display: grid; grid-template-columns: minmax(0, 1fr) 14rem; gap: 2rem;
+    }
+    .legal-layout .docs-toc { position: sticky; top: 5rem; align-self: start; max-height: calc(100vh - 6rem); overflow-y: auto; }
+    .legal-prose { max-width: 56rem; }
+    .legal-meta {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+      padding: 0.75rem 1rem; border: 1px solid var(--border);
+      border-radius: 0.625rem; background: var(--bg-secondary); margin-bottom: 1.5rem;
+      font-size: 0.82rem; color: var(--text-secondary);
+    }
+    .legal-meta strong { color: var(--text-primary); }
+    .legal-meta .sep { opacity: 0.4; margin: 0 0.25rem; }
+    .lang-toggle-row {
+      display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
+      margin-bottom: 1.25rem;
+    }
+    .lang-toggle-row .lang-pill {
+      display: inline-flex; align-items: center; gap: 0.35rem;
+      padding: 0.4rem 0.85rem; border-radius: 999px;
+      border: 1px solid var(--border); background: var(--bg-primary);
+      font-size: 0.8rem; font-weight: 600; color: var(--text-secondary);
+      transition: all 0.2s;
+    }
+    .lang-toggle-row .lang-pill.active {
+      background: var(--accent); color: #fff; border-color: var(--accent);
+    }
+    .lang-toggle-row .lang-pill:hover:not(.active) {
+      border-color: var(--accent); color: var(--accent);
+    }
+    .legal-prose .legal-banner {
+      border-left: 4px solid var(--warning); background: rgba(245,158,11,0.08);
+      padding: 1rem 1.25rem; border-radius: 0 0.625rem 0.625rem 0;
+      margin: 1rem 0 2rem; color: var(--text-secondary);
+    }
+    .legal-prose .legal-banner strong { color: var(--text-primary); }
+    .legal-prose h1 { font-size: 2rem; font-weight: 800; margin: 0 0 0.5rem; letter-spacing: -0.02em; }
+    .legal-prose h2 { font-size: 1.4rem; font-weight: 700; margin: 2.25rem 0 0.85rem; padding-bottom: 0.4rem; border-bottom: 1px solid var(--border); }
+    .legal-prose h3 { font-size: 1.1rem; font-weight: 700; margin: 1.5rem 0 0.5rem; color: var(--text-primary); }
+    .legal-prose p { margin: 0 0 0.85rem; color: var(--text-secondary); line-height: 1.85; }
+    .legal-prose p strong, .legal-prose li strong { color: var(--text-primary); }
+    .legal-prose ul, .legal-prose ol { margin: 0 0 0.85rem; padding-left: 1.5rem; color: var(--text-secondary); }
+    .legal-prose li { margin: 0.3rem 0; line-height: 1.8; }
+    .legal-prose a { color: var(--accent); text-decoration: none; border-bottom: 1px solid transparent; }
+    .legal-prose a:hover { border-bottom-color: var(--accent); }
+    .legal-prose .section-num { color: var(--accent); font-weight: 700; margin-right: 0.4rem; }
+    .legal-prose .info-table {
+      width: 100%; border-collapse: collapse; margin: 1rem 0 1.5rem;
+      font-size: 0.875rem; border: 1px solid var(--border); border-radius: 0.5rem; overflow: hidden;
+    }
+    .legal-prose .info-table th, .legal-prose .info-table td {
+      padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top;
+    }
+    .legal-prose .info-table th { background: var(--bg-tertiary); font-weight: 600; color: var(--text-primary); width: 28%; }
+    .legal-prose .info-table td { color: var(--text-secondary); }
+    .legal-prose .info-table tr:last-child td, .legal-prose .info-table tr:last-child th { border-bottom: none; }
+    .legal-prose .info-table a { word-break: break-all; }
+    .legal-prose hr.section-divider { border: none; border-top: 2px dashed var(--border); margin: 2.5rem 0; }
+    .legal-back-link {
+      display: inline-flex; align-items: center; gap: 0.4rem;
+      font-size: 0.85rem; color: var(--text-tertiary); margin-bottom: 1rem;
+    }
+    .legal-back-link:hover { color: var(--accent); }
+    .legal-back-link svg { width: 14px; height: 14px; }
+    @media (max-width: 1024px) {
+      .legal-layout { grid-template-columns: 1fr; }
+      .legal-layout .docs-toc { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="index.html">
+        <img src="images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="dev/build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="切换主题">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="打开菜单">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="legal-layout">
+    <main class="legal-prose prose">
+      <a class="legal-back-link" href="user/singer-market.html">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        返回歌手市场使用指南
+      </a>
+
+      <div class="lang-toggle-row">
+        <a class="lang-pill" href="singer-market-terms-en.html">English (Controlling)</a>
+        <a class="lang-pill active" href="singer-market-terms-zh.html">中文（仅供参考）</a>
+      </div>
+
+      <h1>SXSEditor 歌手市场</h1>
+      <p style="font-size: 1.05rem; color: var(--text-primary); font-weight: 600; margin-bottom: 1.5rem;">
+        免责声明、使用条款及上传者授权
+      </p>
+
+      <div class="legal-meta">
+        <span><strong>生效日期：</strong>2026-07-30</span>
+        <span class="sep">·</span>
+        <span><strong>版本：</strong>1.0</span>
+        <span class="sep">·</span>
+        <span><strong>运营方：</strong>SXSEditor 开发团队及歌手市场运营组</span>
+      </div>
+
+      <div class="legal-banner">
+        <strong>重要提示：</strong>英文版本为具有法律效力并优先适用的版本；中文版本仅为阅读便利而提供。访问、下载、上传、浏览或以其他方式使用歌手市场，即表示你已阅读并接受本文件。如不同意，请勿使用歌手市场。
+      </div>
+
+      <table class="info-table">
+        <tbody>
+          <tr>
+            <th>生效日期</th>
+            <td>2026-07-30</td>
+          </tr>
+          <tr>
+            <th>运营主体</th>
+            <td>SXSEditor 开发团队及歌手市场运营组，除非服务中另行指明独立法律实体。</td>
+          </tr>
+          <tr>
+            <th>联系方式</th>
+            <td>
+              GitHub Issue：<a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener">https://github.com/Henley04/SXSEditor/issues</a><br />
+              邮箱：<a href="mailto:15240287482@163.com">15240287482@163.com</a>
+            </td>
+          </tr>
+          <tr>
+            <th>版本</th>
+            <td>1.0</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <hr class="section-divider" />
+
+      <div class="legal-banner" style="border-left-color: var(--accent); background: var(--accent-soft);">
+        <strong>语言优先：</strong>英文版本为原始且具有法律效力的控制版本。中文翻译仅为阅读便利而提供。如中英文版本存在任何不一致、歧义或解释差异，应在适用法律允许的最大范围内以<a href="singer-market-terms-en.html">英文版本</a>为准。
+      </div>
+
+      <h2 id="scope"><span class="section-num">1.</span> 适用范围与定义</h2>
+
+      <p><strong>1.1</strong> 本《免责声明、使用条款及上传者授权》（"本条款"）适用于 SXSEditor 歌手市场，包括其网站、代码仓库、界面、列表、元数据、下载、社区功能、镜像及相关服务（统称"市场"）。</p>
+
+      <p><strong>1.2</strong> "歌手文件"是指通过市场上传、列出、链接、分发或提供的任何声库、歌手模型、配置、参数、录音、样本、脚本、可执行文件、压缩包、预设、图像、文本、元数据、文档、链接或其他材料。</p>
+
+      <p><strong>1.3</strong> "运营方"是指 SXSEditor 开发团队以及运营或维护市场的个人或实体。"上传者"是指提交、上传、链接、发布或以其他方式提供歌手文件的个人或实体。"用户"是指访问或使用市场或歌手文件的任何人。</p>
+
+      <p><strong>1.4</strong> 本条款补充适用的开源许可证、文件专用许可证、隐私声明、贡献者条款及强制性法律规则。歌手文件附带独立许可证的，用户与上传者仍须自行遵守。</p>
+
+      <h2 id="platform-role"><span class="section-num">2.</span> 平台角色；不构成认可或预审</h2>
+
+      <p><strong>2.1</strong> 市场仅作为技术托管、索引、链接、发现及分发平台。除非经授权代表书面签署明确约定，运营方并非任何上传者或歌手文件的作者、出版者、销售者、许可方、代理人、雇主、合伙人、共同经营者、代表或法律保证人。</p>
+
+      <p><strong>2.2</strong> 歌手文件由独立上传者提供。文件被列出、索引、展示、获得下载量、被持续保留或通过审核，均不构成批准、背书、认证、核验、赞助、推荐，亦不构成对合法性、安全性、质量、准确性、兼容性或适用性的陈述。</p>
+
+      <p><strong>2.3</strong> 除适用法律要求或运营方明确承诺外，运营方无一般义务监控、检查、测试、扫描、审查、保存、备份、调查或预先批准歌手文件。</p>
+
+      <h2 id="uploader-auth"><span class="section-num">3.</span> 上传者授权、陈述与责任</h2>
+
+      <p><strong>3.1</strong> 上传歌手文件即表示上传者在全球范围内、以非独占及免许可费方式授权运营方，为市场运营、推广、安全、备份、审核及改进之目的，对歌手文件进行托管、缓存、复制、展示、索引、传输、分发及提供，并仅为格式、压缩、安全、兼容、索引或交付而进行技术性修改。该授权在文件可用期间持续有效，并在此后为合理备份、证据保全、法律合规及系统完整性所需期间内继续有效。</p>
+
+      <p><strong>3.2</strong> 上传者陈述并保证其已取得上传及授权使用歌手文件所需的一切权利、许可、权限、同意、豁免及合法依据；歌手文件及其预期分发不侵犯著作权、邻接权、商标权、专利权、商业秘密、数据库权、公开权、隐私权、人格权、精神权利、合同限制、保密义务或任何其他权利；并已履行全部通知、署名、来源披露及许可证义务。</p>
+
+      <p><strong>3.3</strong> 上传者对歌手文件及其合法性、来源、权利链、许可、权限、安全、准确性、元数据、主张、说明、更新、支持及后果承担全部责任。上传者不得上传违法、侵权、恶意、欺骗、损坏、侵犯隐私、未经授权或具有技术危害的材料。</p>
+
+      <p><strong>3.4</strong> 向运营方授予授权不转移歌手文件所有权，也不使运营方承接上传者责任。即使运营方协助格式处理、发布、分类、镜像、审核或删除，上传者仍承担责任。</p>
+
+      <h2 id="no-warranties"><span class="section-num">4.</span> 不作任何保证</h2>
+
+      <p><strong>4.1</strong> 在适用法律允许的最大范围内，市场及全部歌手文件均按"现状""可获得状态"及"包含全部瑕疵"的基础提供，不附带任何明示、默示、法定或其他形式的保证、条件、担保或陈述。</p>
+
+      <p><strong>4.2</strong> 在不限制第 4.1 条的前提下，运营方明确排除关于适销性、满意质量、特定用途适用性、权属、不侵权、安宁使用、准确性、完整性、真实性、原创性、合法性、安全性、可靠性、可用性、兼容性、性能、结果，以及不存在缺陷、错误、病毒、恶意软件、木马、勒索软件、间谍软件、有害代码、文件损坏或数据丢失的任何保证或条件。</p>
+
+      <p><strong>4.3</strong> 运营方不保证任何歌手文件能够下载、安装、加载、打开、编译、渲染、合成、播放、训练、转换、更新或持续可用；不保证与 SXSEditor、任何硬件、操作系统、插件、模型、框架或第三方服务兼容；也不保证实现任何特定艺术、技术、商业或法律结果。</p>
+
+      <p><strong>4.4</strong> 运营方不保证歌手文件已完成版权清理、获得适当许可、不侵权、真实、确由标示创作者提供、不包含第三方内容或在任何司法辖区合法。许可证标签及上传者声明仅供参考，可能不完整、不准确、已过期、可撤销或未经授权。</p>
+
+      <p><strong>4.5</strong> 除非运营方授权代表签署书面文件，任何口头或书面信息、审核行为、自动扫描、徽章、标签、回复或协助均不产生保证。</p>
+
+      <h2 id="security"><span class="section-num">5.</span> 安全、下载及用户防护</h2>
+
+      <p><strong>5.1</strong> 用户自行承担下载、安装、执行、打开、导入、训练、转换、修改、分发或以其他方式使用歌手文件的全部风险。即便存在自动扫描，也无法发现全部威胁，且不构成保证。</p>
+
+      <p><strong>5.2</strong> 用户应在使用前自行进行安全审查、恶意软件扫描、权利核验、许可证审查、沙箱隔离、备份、访问控制、系统更新、兼容性测试并获取专业意见。用户不应执行不可信代码或授予不必要的系统权限。</p>
+
+      <p><strong>5.3</strong> 运营方不对账户被入侵、恶意链接、第三方仓库、镜像、外部网站、篡改副本、供应链攻击、依赖风险或运营方直接控制范围之外取得的内容负责。</p>
+
+      <h2 id="availability"><span class="section-num">6.</span> 可用性、变更与删除</h2>
+
+      <p><strong>6.1</strong> 市场或任何歌手文件可因维护、安全、法律风险、存储限制、技术故障、上传者行为或运营决定等原因，随时在有通知或无通知的情况下不可用、延迟、中断、变更、暂停、限流、迁移、弃用、删除或停止。</p>
+
+      <p><strong>6.2</strong> 运营方无义务保留、恢复、归档、备份、更新、支持、重新托管或继续分发任何歌手文件。用户和上传者应自行保存合法备份。</p>
+
+      <p><strong>6.3</strong> 在遵守适用法律的前提下，如运营方合理认为安全、合规、权利保护、平台完整性或风险管理所需，可拒绝、限制、停用、下架、隔离或删除内容或账户，保存相关证据，并与主管机关或服务提供商合作。</p>
+
+      <h2 id="ip"><span class="section-num">7.</span> 知识产权及其他权利</h2>
+
+      <p><strong>7.1</strong> 歌手文件的权利仍归相应权利人所有，但受适用许可证及第 3 条授权约束。市场名称、软件、界面及运营方提供材料受其各自权利和许可证保护。</p>
+
+      <p><strong>7.2</strong> 用户只能在相关权利人实际授予的权限及适用法律范围内使用歌手文件。文件在市场可用，不意味着其进入公有领域，也不当然授予商业使用、模型训练、再分发、改编、冒充他人，或使用他人声音、肖像、姓名或身份的权限。</p>
+
+      <p><strong>7.3</strong> 有关所有权、作者身份、许可、署名、付款、版税、同意或允许用途的争议，原则上由上传者、用户及相关权利人处理。除法律要求外，运营方不裁决私人权利，并可在不确定最终责任的情况下采取临时措施。</p>
+
+      <h2 id="conduct"><span class="section-num">8.</span> 用户行为与合规</h2>
+
+      <p><strong>8.1</strong> 每位用户及上传者必须遵守适用法律、制裁与出口管制、隐私与数据保护规则、知识产权法、消费者保护规则、合同义务及文件专用许可证。</p>
+
+      <p><strong>8.2</strong> 不得利用市场实施或协助侵权、欺诈、骚扰、冒充、传播恶意软件、未经授权的监控、规避访问控制、非法收集数据或其他违法、侵害权利的行为。</p>
+
+      <p><strong>8.3</strong> 用户应自行判断其所在地及具体情境下访问或使用市场或歌手文件是否合法。</p>
+
+      <h2 id="liability"><span class="section-num">9.</span> 责任限制</h2>
+
+      <p><strong>9.1</strong> 在适用法律允许的最大范围内，运营方及其开发者、维护者、贡献者、审核人员、托管服务商、关联方、代表及服务提供商不对任何间接、附带、特殊、示范性、惩罚性、信赖性或后果性损害负责；亦不对利润、收入、业务、机会、商誉、声誉、数据、内容、声音材料、模型或使用的损失，业务中断，设备或系统损坏，安全事件，恶意软件，第三方索赔或替代服务成本负责，无论基于何种责任理论，即使已被告知发生可能性。</p>
+
+      <p><strong>9.2</strong> 在适用法律允许的最大范围内，运营方就因市场或本条款产生或相关的全部索赔承担的累计责任总额，不超过以下两者中较高者：(a) 索赔人在导致责任事件发生前十二个月内就使用市场直接向运营方实际支付的金额；或 (b) 10 美元。</p>
+
+      <p><strong>9.3</strong> 上述排除及责任上限适用于合同、侵权、过失、严格责任、成文法、返还、不实陈述及其他理论，即使救济未能实现其基本目的。但其不排除或限制依法不得排除或限制的责任，包括欺诈、故意不当行为、重大过失，以及法律禁止排除的死亡或人身伤害责任和强制性消费者权利。</p>
+
+      <p><strong>9.4</strong> 如适用法律不允许某项排除、免责声明或限制，则该项仅在法律允许的最大范围内适用，其他条款继续有效。</p>
+
+      <h2 id="indemnity"><span class="section-num">10.</span> 上传者及用户赔偿</h2>
+
+      <p><strong>10.1</strong> 在法律允许的最大范围内，每位上传者以及在适用情况下的每位用户，应就以下事项产生或相关的索赔、要求、程序、损失、责任、损害、判决、和解、处罚、罚款及合理法律与调查费用，为运营方及其开发者、维护者、贡献者、审核人员、托管服务商、关联方、代表及服务提供商进行抗辩、赔偿并使其免受损害：(a) 该方的歌手文件或市场使用；(b) 违反本条款；(c) 侵犯第三方权利；(d) 违法、欺骗、恶意或过失行为；或 (e) 该方应承担的税费、版税、付款、豁免、许可或授权。</p>
+
+      <p><strong>10.2</strong> 运营方可控制受赔偿事项的抗辩与和解，赔偿义务人应合理配合。未经运营方事先书面同意，不得达成承认运营方过错或向其施加非金钱义务的和解。本条在强制性法律禁止的范围内不适用。</p>
+
+      <h2 id="takedown"><span class="section-num">11.</span> 举报、通知与删除请求</h2>
+
+      <p><strong>11.1</strong> 认为内容违法或侵权的人可通过以下方式请求审查：(a) 在官方 GitHub Issue 跟踪器提交 Issue：<a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener">https://github.com/Henley04/SXSEditor/issues</a>；或 (b) 发送邮件至 <a href="mailto:15240287482@163.com">15240287482@163.com</a>。</p>
+
+      <p><strong>11.2</strong> 通知应包括：举报人全名及可靠联系方式；相关材料的明确标识及位置；涉嫌违反的法律权利或规则；清晰说明及支持证据；请求采取的措施；关于信息准确性的善意声明；如适用，还应提供代表权利人行事的授权证明。运营方可要求补充信息、身份核验、翻译或法律规定的声明。</p>
+
+      <p><strong>11.3</strong> 请勿在公开 GitHub Issue 中提交机密、个人或敏感证据。非公开材料应通过电子邮件发送，且仅提供必要内容。</p>
+
+      <p><strong>11.4</strong> <strong>回复时间：</strong>运营方将尽商业上合理努力，在收到内容充分完整的通知后 30 个工作日内确认收悉，并在适用法律规定的期限内采取法律要求的行动。如无强制期限，实质审查或行动可在收到完整通知后 90 个自然日内完成；如因信息不完整、事项复杂、数量较多、翻译、技术调查、反通知、权利人沟通、紧急情况、不可抗力或法律程序而合理需要，可延长。未回复、延迟、确认收悉或临时删除均不构成承认、弃权、背书或最终法律判断。</p>
+
+      <p><strong>11.5</strong> 运营方可在审查前、审查中或审查后删除或限制材料，恢复材料，将事项转交上传者、托管方、仓库服务商或主管机关；如通知缺乏依据、具有滥用或欺诈性质、超出范围或不符合法律要求，也可不采取行动。在合法且合理必要的情况下，运营方可将通知及联系方式转交上传者或相关服务提供商。</p>
+
+      <p><strong>11.6</strong> 明知虚假、误导、滥用或恶意的通知或反通知可能导致访问受限并产生法律责任。举报人及上传者应在适当情况下寻求法律意见。</p>
+
+      <h2 id="privacy"><span class="section-num">12.</span> 隐私与通信</h2>
+
+      <p><strong>12.1</strong> 在遵守适用隐私法及已发布隐私声明的前提下，为运营、保护、审核及改进市场，处理通知，建立、行使或抗辩法律请求，遵守法律以及配合托管服务商或主管机关之合理需要，举报、上传、账户信息、日志及通信可被处理、保留与披露。</p>
+
+      <p><strong>12.2</strong> 发送至用户或上传者所提供联系方式的电子通知，可在发送时视为送达，但适用法律另有规定的除外。</p>
+
+      <h2 id="changes"><span class="section-num">13.</span> 市场及条款变更</h2>
+
+      <p><strong>13.1</strong> 运营方可因法律、安全、技术或运营原因对本条款作前瞻性更新。更新版本自其中标示日期或适用法律要求的其他时间生效。在法律允许的情况下，生效后继续使用即视为接受。</p>
+
+      <p><strong>13.2</strong> 重大变更可通过市场、代码仓库、发行说明或其他合理渠道公布。用户应在使用前查看当前版本。</p>
+
+      <h2 id="governing-law"><span class="section-num">14.</span> 适用法律与争议</h2>
+
+      <p><strong>14.1</strong> 本条款及相关争议适用市场法律声明中指定的法律；如未指定，则适用运营方责任法律实体设立地法律，但不适用其冲突法规则，同时不影响用户所在地依法强制适用的保护。</p>
+
+      <p><strong>14.2</strong> 市场法律声明指定的法院，或未指定时运营方主要设立地有管辖权的法院，具有非专属管辖权，但强制性法律另有规定的除外。</p>
+
+      <p><strong>14.3</strong> 提起索赔前，各方应尝试通过书面通知善意解决，并至少给予 30 日回复时间，但紧急救济或法定期限要求提前行动的除外。</p>
+
+      <h2 id="general"><span class="section-num">15.</span> 一般条款</h2>
+
+      <p><strong>15.1</strong> 如任何条款无效、违法或不可执行，应在法律允许的最大范围内执行，并仅作必要的最小限度分割或修改，不影响其余条款。</p>
+
+      <p><strong>15.2</strong> 未执行某项条款不构成弃权。运营方可在重组、运营转移或法律承继时转让本条款。在法律允许要求同意的情况下，用户或上传者未经同意不得转让其义务。</p>
+
+      <p><strong>15.3</strong> 本条款连同纳入的通知及文件专用许可证，构成关于其标的事项的完整协议，并取代此前相关说明，但欺诈或依法不得排除的条款除外。</p>
+
+      <p><strong>15.4</strong> 标题仅为便利。"包括"意为"包括但不限于"。单数包括复数。依其性质应继续有效的条款，包括权利、许可、免责声明、责任限制、赔偿、证据保全及争议条款，在终止后继续有效。</p>
+
+      <p><strong>15.5</strong> <strong>语言优先：</strong>英文版本为原始且具有法律效力的控制版本。中文翻译仅为便利而提供。如发生任何不一致、歧义或解释差异，应在适用法律允许的最大范围内以英文版本为准。</p>
+
+      <hr class="section-divider" />
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p><strong>需要举报问题？</strong>请在 <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener">github.com/Henley04/SXSEditor/issues</a> 提交 Issue，或发送邮件至 <a href="mailto:15240287482@163.com">15240287482@163.com</a>。非公开或敏感证据请通过邮件发送，而非公开 Issue。</p>
+        </div>
+      </div>
+
+      <p style="margin-top: 1.5rem; font-size: 0.8rem; color: var(--text-tertiary);">
+        本中文版本仅供阅读便利。具有法律效力并优先适用的版本请见 <a href="singer-market-terms-en.html">英文版本</a>。歌手市场的最终用户使用说明请见 <a href="user/singer-market.html">歌手市场用户指南</a>。
+      </p>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title">本页内容</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="user/faq.html" data-i18n="footer.help">Help & FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="返回顶部">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="js/i18n.js"></script>
+  <script src="js/layout.js"></script>
+</body>
+</html>

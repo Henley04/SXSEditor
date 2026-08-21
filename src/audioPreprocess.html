@@ -28,6 +28,90 @@
         </div>
       </div>
       <div id="main-content">
+        <div id="extract-panel">
+          <div id="extract-panel-header">
+            <span class="section-title" data-i18n="preprocess.extractPanel">提取参数</span>
+            <span id="extract-status" class="extract-status"></span>
+            <div class="extract-panel-actions">
+              <button id="btn-audition" class="btn-toolbar" data-i18n="preprocess.auditionSynth" data-icon="music">播放合成音</button>
+              <button id="btn-toggle-panel" class="btn-toolbar btn-small" data-i18n="preprocess.collapsePanel" data-icon="chevron-up">收起</button>
+            </div>
+          </div>
+          <div id="extract-panel-body">
+            <div id="fcpe-params-notice" class="extract-notice" style="display:none;"></div>
+            <div class="extract-row">
+              <div class="extract-field">
+                <label for="preset-select" data-i18n="preprocess.presetLabel" title="预设方案：根据人声类型快速设置参数组合。流行男声(80-440Hz)、民族女声(196-1050Hz)、戏曲/滑音多(98-1100Hz)、儿童/高音域(262-1200Hz)、自定义。">预设方案</label>
+                <select id="preset-select">
+                  <option value="popMale" data-i18n="preprocess.preset.popMale">流行男声</option>
+                  <option value="folkFemale" data-i18n="preprocess.preset.folkFemale">民族女声</option>
+                  <option value="traditional" data-i18n="preprocess.preset.traditional">戏曲/滑音多</option>
+                  <option value="childHigh" data-i18n="preprocess.preset.childHigh">儿童/高音域</option>
+                  <option value="custom" data-i18n="preprocess.preset.custom">自定义</option>
+                </select>
+              </div>
+              <div class="extract-field">
+                <label for="threshold-select" data-i18n="preprocess.thresholdLabel" title="静音阈值：按帧 RMS 判断该帧是否为静音，低于阈值的帧 F0 会被清零。低=0.003（保留更多弱信号），中=0.006，高=0.01（过滤更多噪声）。仅在 FCPE 模式下生效。">静音阈值 (FCPE)</label>
+                <select id="threshold-select">
+                  <option value="low" data-i18n="preprocess.thresholdLow">低 (0.003)</option>
+                  <option value="mid" data-i18n="preprocess.thresholdMid">中 (0.006)</option>
+                  <option value="high" data-i18n="preprocess.thresholdHigh">高 (0.01)</option>
+                </select>
+              </div>
+              <div class="extract-field">
+                <label for="smoothing-select" data-i18n="preprocess.smoothingLabel" title="F0 平滑度：对提取的 F0 曲线进行中值滤波，消除跳变噪音。低=窗口3（保留更多细节），中=窗口5，高=窗口7（更平滑但可能丢失颤音）。仅在 FCPE 模式下生效。">平滑度 (FCPE)</label>
+                <select id="smoothing-select">
+                  <option value="low" data-i18n="preprocess.smoothingLow">低</option>
+                  <option value="medium" data-i18n="preprocess.smoothingMedium">中</option>
+                  <option value="high" data-i18n="preprocess.smoothingHigh">高</option>
+                </select>
+              </div>
+              <div class="extract-field">
+                <label for="quantization-select" data-i18n="preprocess.quantizationLabel" title="音高量化：严格量化将 F0 直接转为最接近的 MIDI 音符；保留滑音会额外输出 Pitch Bend 信息，适合戏曲、民乐等滑音多的场景。仅在 FCPE 模式下生效。">音高量化 (FCPE)</label>
+                <select id="quantization-select">
+                  <option value="strict" data-i18n="preprocess.quantizationStrict">严格量化</option>
+                  <option value="pitchbend" data-i18n="preprocess.quantizationPitchbend">保留滑音 (Pitch Bend)</option>
+                </select>
+              </div>
+            </div>
+            <div class="extract-row">
+              <div class="extract-field">
+                <label for="range-auto" class="inline-label" title="自动适配音域：扫描 F0 分位数自动确定 F0 上下限，无需手动设置。取消勾选可手动指定音域范围。仅在 FCPE 模式下生效。">
+                  <input type="checkbox" id="range-auto" />
+                  <span data-i18n="preprocess.autoRange">自动适配音域 (FCPE)</span>
+                </label>
+              </div>
+              <div class="extract-field">
+                <label for="f0-min" data-i18n="preprocess.f0MinLabel" title="F0 下限：仅保留高于此频率的 F0（Hz）。男声典型 80Hz，女声典型 196Hz。设过低会保留低频噪声。仅在 FCPE 模式下生效。">F0 下限 (Hz) (FCPE)</label>
+                <input type="number" id="f0-min" min="20" max="2000" step="1" />
+              </div>
+              <div class="extract-field">
+                <label for="f0-max" data-i18n="preprocess.f0MaxLabel" title="F0 上限：仅保留低于此频率的 F0（Hz）。设过高可能保留高频泛音。典型值 880Hz（A5）。仅在 FCPE 模式下生效。">F0 上限 (Hz) (FCPE)</label>
+                <input type="number" id="f0-max" min="20" max="2000" step="1" />
+              </div>
+              <div class="extract-field">
+                <label for="min-note" data-i18n="preprocess.minNoteLabel" title="最短音符时长（秒）：短于此值的音符将被丢弃，用于过滤噪声产生的碎片音符。典型值 0.05 秒。仅在 FCPE 模式下生效。">最短音符 (秒) (FCPE)</label>
+                <input type="number" id="min-note" min="0.01" max="1" step="0.01" />
+              </div>
+              <div class="extract-field">
+                <label for="bpm-auto" class="inline-label" title="自动检测 BPM：从音频节奏估算 BPM。取消勾选可手动输入。仅在 FCPE 模式下生效。">
+                  <input type="checkbox" id="bpm-auto" />
+                  <span data-i18n="preprocess.autoBpm">自动检测 BPM (FCPE)</span>
+                </label>
+              </div>
+              <div class="extract-field">
+                <label for="bpm-input" data-i18n="preprocess.bpmLabel" title="BPM：每分钟节拍数，用于音符量化。仅在 FCPE 模式下生效。">BPM (FCPE)</label>
+                <input type="number" id="bpm-input" min="40" max="240" step="1" />
+              </div>
+              <div class="extract-field">
+                <label for="normalize-check" class="inline-label" title="响度归一化：将音频电平归一化到 -4.5 dBFS，避免弱信号导致 FCPE 漏判音高。建议保持开启。仅在 FCPE 模式下生效。">
+                  <input type="checkbox" id="normalize-check" />
+                  <span data-i18n="preprocess.normalizeLabel">响度归一化 (FCPE)</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
         <div id="waveform-section">
           <div id="waveform-header">
             <span class="section-title" data-i18n="preprocess.wavWaveform">WAV 波形</span>

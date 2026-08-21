@@ -4,7 +4,7 @@
 
 import { ensureOrt, getOrt } from './ortSetup.js';
 import { WEBNN_EP_TIMEOUT, WEBNN_VOCODER_TIMEOUT } from './constants.js';
-import { extractRelativePath, batchFloat32ToFloat16, disposeTensor } from './utils.js';
+import { batchFloat32ToFloat16, disposeTensor } from './utils.js';
 
 // 会话管理
 const sessions = new Map(); // modelId -> { session, status, ep, lastAccess }
@@ -58,14 +58,21 @@ async function readModelFiles(modelPath) {
  * @param {string} [modelUrl] - 模型 URL（未使用，保留兼容性）
  * @returns {{ success: boolean, ep: string, error?: string }}
  */
-export async function loadModel(modelId, modelPath, options = { deviceType: 'npu' }, modelUrl = null) {
+export async function loadModel(modelId, modelPath, options = { deviceType: 'npu' }, _modelUrl = null) {
     await ensureOrt();
     const ort = getOrt();
 
     if (sessions.has(modelId)) {
         const existing = sessions.get(modelId);
-        existing.lastAccess = Date.now();
-        return { success: true, ep: existing.ep, warning: 'Model already loaded' };
+        // S9: a previously-failed load leaves an 'error' entry in the map.
+        // Treat that as "not loaded" so the caller can retry instead of
+        // getting a false "Model already loaded" success.
+        if (existing.status === 'loaded') {
+            existing.lastAccess = Date.now();
+            return { success: true, ep: existing.ep, warning: 'Model already loaded' };
+        }
+        // Stale error entry — remove it and re-attempt the load below.
+        sessions.delete(modelId);
     }
 
     // LRU 淘汰：达到上限时释放最久未访问的会话，避免 sessions Map 无限增长
@@ -156,20 +163,25 @@ export async function loadModel(modelId, modelPath, options = { deviceType: 'npu
         const epLabel = typeof ep === 'string' ? ep : `webnn-${ep.deviceType}`;
         const t0 = Date.now();
         let timeoutId;
+        // S10: track the in-flight create promise so that if the timeout fires,
+        // we can still release the orphan session if it eventually resolves.
+        // Declared outside the try block so the catch block can attach a
+        // release handler. Without this, NPU compilation that succeeds after
+        // the timeout would leak NPU memory/compiled artifacts permanently.
+        let createPromise = null;
         try {
             console.log(`[WebNN] Trying ${modelId} with EP: ${epLabel}...`);
 
-            // Wrap InferenceSession.create with a per-EP timeout to avoid hanging forever.
+            createPromise = ort.InferenceSession.create(modelBuffer, {
+                ...sessionOptions,
+                executionProviders: [ep],
+            });
+            const timeoutPromise = new Promise((_, reject) => {
+                timeoutId = setTimeout(() => reject(new Error(`EP ${epLabel} timed out after ${epTimeout / 1000}s`)), epTimeout);
+            });
+
             // clearTimeout 在成功和失败路径上都调用，避免计时器泄漏导致 event loop 不退出。
-            const session = await Promise.race([
-                ort.InferenceSession.create(modelBuffer, {
-                    ...sessionOptions,
-                    executionProviders: [ep],
-                }),
-                new Promise((_, reject) => {
-                    timeoutId = setTimeout(() => reject(new Error(`EP ${epLabel} timed out after ${epTimeout / 1000}s`)), epTimeout);
-                }),
-            ]);
+            const session = await Promise.race([createPromise, timeoutPromise]);
             clearTimeout(timeoutId);
             const ms = Date.now() - t0;
             sessions.set(modelId, { session, status: 'loaded', ep: epLabel, lastAccess: Date.now(), warmedUp: false });
@@ -183,6 +195,16 @@ export async function loadModel(modelId, modelPath, options = { deviceType: 'npu
             const ms = Date.now() - t0;
             console.warn(`[WebNN] Failed ${modelId} with EP ${epLabel} after ${ms}ms: ${e.message}`);
             lastError = e;
+            // S10: If create eventually resolves after a timeout, release the
+            // orphan session to prevent NPU memory/compiled-artifact leak.
+            // The promise is intentionally not awaited here — we want the
+            // error path to continue to the next EP immediately.
+            if (createPromise) {
+                createPromise.then((session) => {
+                    try { session.release(); } catch (_) {}
+                    console.warn(`[WebNN] Released orphan session for ${modelId} (EP ${epLabel}) that resolved after timeout`);
+                }).catch(() => { /* create error already reported as lastError */ });
+            }
         }
     }
 
@@ -235,14 +257,28 @@ async function _warmupSession(modelId) {
 
 /**
  * 卸载模型
+ *
+ * S8: must be synchronized with respect to in-flight runs. session.release()
+ * called while session.run() is executing would free WASM/NPU resources
+ * underneath the running inference → use-after-free (WASM stack corruption
+ * or NPU driver error). We acquire the run lock so any pending run completes
+ * before release. unloadModel never calls session.run itself, so there is no
+ * reentrancy concern.
+ *
  * @param {string} modelId - 模型标识符
  */
 export async function unloadModel(modelId) {
     const entry = sessions.get(modelId);
     if (entry && entry.session) {
-        try {
-            entry.session.release();
-        } catch (_) {}
+        // S8: wait for any in-flight run to finish before releasing the
+        // underlying session. withRunLock is non-reentrant and we don't call
+        // session.run() here, so this is safe.
+        await withRunLock(() => {
+            try {
+                entry.session.release();
+            } catch (_) {}
+            return Promise.resolve();
+        });
     }
     sessions.delete(modelId);
     console.log(`[WebNN] Model ${modelId} unloaded`);
@@ -263,22 +299,56 @@ export async function unloadModel(modelId) {
 // 包裹整体，确保内部多个 runSession 调用都在同一持锁期间顺序执行。
 let _runLock = Promise.resolve();
 
+// W15: default lock timeout. The IPC layer has its own ~600s timeout that
+// returns an error to the caller, but the lock here would otherwise stay
+// held forever if the underlying NPU inference hangs. Bounding the lock at
+// 30 minutes prevents permanent deadlock of all subsequent runs while being
+// well above any legitimate synthesis duration.
+const RUN_LOCK_DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
+
 /**
  * 在全局互斥锁保护下执行任意异步任务（粗粒度，用于合成函数级串行）。
  * 不可重入：task 内部禁止再次调用 withRunLock，否则死锁。
+ *
+ * W15: an optional timeout bounds how long the lock can be held. If the task
+ * hasn't completed by then, the lock is released (so subsequent runs aren't
+ * permanently blocked) and the task is rejected with a timeout error. The
+ * task itself is NOT cancelled — ORT doesn't support cancelling in-flight
+ * session.run() — but it will no longer hold the lock when it eventually
+ * resolves/rejects.
+ *
  * @param {() => Promise<T>} task
+ * @param {{ timeoutMs?: number }} [options]
  * @returns {Promise<T>}
  * @template T
  */
-export async function withRunLock(task) {
+export async function withRunLock(task, options = {}) {
+    const timeoutMs = options.timeoutMs ?? RUN_LOCK_DEFAULT_TIMEOUT_MS;
     const prev = _runLock;
     let release;
     _runLock = new Promise((r) => { release = r; });
     await prev;
+    // Acquired. Arm a timeout that releases the lock and rejects the task so
+    // a hung NPU inference can't permanently block every subsequent caller.
+    let timer;
+    const timeoutP = new Promise((_, reject) => {
+        timer = setTimeout(() => {
+            // Release the lock so other callers can proceed; this caller gets
+            // a timeout error. The underlying session.run() may still resolve
+            // later, but its result is discarded.
+            try { release(); } catch (_) {}
+            reject(new Error(`withRunLock timed out after ${timeoutMs / 1000}s`));
+        }, timeoutMs);
+    });
+    // Wrap task so a synchronous throw becomes a rejection, and so that an
+    // eventual rejection after timeout-win doesn't surface as unhandled.
+    const taskP = Promise.resolve().then(task);
+    taskP.catch(() => {}); // suppress unhandled rejection if timeout wins
     try {
-        return await task();
+        return await Promise.race([taskP, timeoutP]);
     } finally {
-        release();
+        clearTimeout(timer);
+        try { release(); } catch (_) {}
     }
 }
 

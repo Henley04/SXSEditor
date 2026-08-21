@@ -1,5 +1,4 @@
 const { expect } = require('chai');
-const sinon = require('sinon');
 const path = require('node:path');
 
 describe('Security Module', function () {
@@ -91,6 +90,14 @@ describe('Security Module', function () {
 
     it('should reject arbitrary paths', function () {
       const filePath = 'D:\\SomeRandomPath\\file.txt';
+      expect(isPathAllowed(filePath)).to.be.false;
+    });
+
+    it('should reject sibling-prefix confusion (home=/Users/test vs /Users/testevil)', function () {
+      // Without a separator after the allowed prefix, a path like
+      // C:\Users\testevil would be wrongly allowed because it startsWith
+      // the home dir C:\Users\test.
+      const filePath = 'C:\\Users\\testevil\\steal.txt';
       expect(isPathAllowed(filePath)).to.be.false;
     });
   });

@@ -1,7 +1,7 @@
 const { expect } = require('chai');
 const { TextProcessing } = require('../src/inference/pipeline/textProcessing');
 const { Preprocessing } = require('../src/inference/pipeline/preprocessing');
-const { F0_BIN, F0_MIN, SAMPLE_RATE, HOP_SIZE } = require('../src/inference/pipeline/constants');
+const { F0_BIN, F0_MIN } = require('../src/inference/pipeline/constants');
 
 describe('inference/pipeline/preprocessing', () => {
   let tp, prep;

@@ -11,24 +11,21 @@ export function buildSingerFields(notes) {
   const textParts = [];
   const phonemeParts = [];
   const noteTypeParts = [];
-  for (let i = 0; i < mergedNotes.length; i++) {
-    const n = mergedNotes[i];
+  for (const n of mergedNotes) {
     const lyric = n.lyric || '';
-    const hasLyric = lyric.trim().length > 0;
-    const isSlur = n.isSlur || n.isContinuation;
-    if (hasLyric) {
+    const isSlur = n.isSlur || n.isContinuation || n.noteType === 3;
+    if (isSlur) {
+      textParts.push('-');
+      phonemeParts.push('-');
+      noteTypeParts.push('3');
+    } else if (lyric.trim()) {
       textParts.push(lyric);
       phonemeParts.push(lyric);
+      noteTypeParts.push('2');
     } else {
       textParts.push('<SP>');
       phonemeParts.push('<SP>');
-    }
-    if (!hasLyric) {
       noteTypeParts.push('1');
-    } else if (isSlur) {
-      noteTypeParts.push('3');
-    } else {
-      noteTypeParts.push('2');
     }
   }
   return {
@@ -43,6 +40,20 @@ export function updateMidiInfo() {
     const noteCount = state.pianoRoll.notes.length;
     dom.midiInfoEl.textContent = noteCount > 0 ? t('preprocess.noteCount', { count: noteCount }) : t('preprocess.waitingForExtraction');
   }
+}
+
+function lyricEditorValue(note) {
+  return (note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || '');
+}
+
+function applyLyricEditorValue(note, value) {
+  const text = String(value || '').trim();
+  const continuation = text === '-';
+  note.lyric = continuation ? '' : value;
+  note.isContinuation = continuation;
+  note.isSlur = continuation;
+  note.noteType = continuation ? 3 : (text ? 2 : 1);
+  note.phonemeAdjustments = null;
 }
 
 export function startInlineEdit(roll, note, hit) {
@@ -68,7 +79,7 @@ export function startInlineEdit(roll, note, hit) {
 
   const input = document.createElement('input');
   input.type = 'text';
-  input.value = note.lyric || '';
+  input.value = lyricEditorValue(note);
   input.style.cssText = `
     position: absolute;
     left: ${inputX}px;
@@ -107,19 +118,19 @@ export function startInlineEdit(roll, note, hit) {
       if (newLyric !== note.lyric) {
         const tokens = tokenizeLyric(newLyric);
         if (tokens.length <= 1) {
-          note.lyric = newLyric;
+          applyLyricEditorValue(note, newLyric);
         } else {
           const noteIdx = roll.notes.findIndex(n => n.id === note.id);
           if (noteIdx !== -1) {
-            note.lyric = tokens[0];
+            applyLyricEditorValue(note, tokens[0]);
             const laterNotes = roll.notes.filter(n => n.start > note.start);
             laterNotes.sort((a, b) => a.start - b.start);
             for (let t = 1; t < tokens.length && t - 1 < laterNotes.length; t++) {
-              laterNotes[t - 1].lyric = tokens[t];
+              applyLyricEditorValue(laterNotes[t - 1], tokens[t]);
             }
             updateMidiInfo();
           } else {
-            note.lyric = newLyric;
+            applyLyricEditorValue(note, newLyric);
           }
         }
       }
@@ -225,12 +236,24 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
     width: 100%;
     padding: 8px;
     background: var(--bg-input);
-    border: 1px solid var(--border-default);
-    border-radius: 4px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-md);
     color: var(--fg-primary);
     margin-bottom: 12px;
     box-sizing: border-box;
+    font-size: var(--font-md);
+    transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
   `;
+
+  input.addEventListener('focus', () => {
+    input.style.borderColor = 'var(--accent)';
+    input.style.boxShadow = '0 0 0 3px var(--accent-soft)';
+  });
+
+  input.addEventListener('blur', () => {
+    input.style.borderColor = 'var(--border-strong)';
+    input.style.boxShadow = 'none';
+  });
   dialog.appendChild(input);
 
   const btnRow = document.createElement('div');
@@ -242,10 +265,25 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
     padding: 6px 16px;
     background: var(--bg-button);
     border: 1px solid var(--button-secondary-border);
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     color: var(--fg-primary);
     cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
   `;
+
+  cancelBtn.addEventListener('mouseenter', () => {
+    cancelBtn.style.background = 'var(--bg-button-hover)';
+    cancelBtn.style.borderColor = 'var(--accent-glow)';
+    cancelBtn.style.transform = 'translateY(-1px)';
+  });
+  cancelBtn.addEventListener('mouseleave', () => {
+    cancelBtn.style.background = 'var(--bg-button)';
+    cancelBtn.style.borderColor = 'var(--button-secondary-border)';
+    cancelBtn.style.transform = '';
+  });
+  cancelBtn.addEventListener('mousedown', () => {
+    cancelBtn.style.transform = 'translateY(0) scale(0.97)';
+  });
   cancelBtn.textContent = t('common.cancel');
 
   const okBtn = document.createElement('button');
@@ -254,10 +292,25 @@ export function showPromptDialog(title, defaultValue, onConfirm) {
     padding: 6px 16px;
     background: var(--bg-button-primary);
     border: none;
-    border-radius: 4px;
+    border-radius: var(--radius-md);
     color: var(--fg-on-accent);
     cursor: pointer;
+    transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
   `;
+
+  okBtn.addEventListener('mouseenter', () => {
+    okBtn.style.background = 'var(--bg-button-primary-hover)';
+    okBtn.style.transform = 'translateY(-1px)';
+    okBtn.style.boxShadow = '0 2px 8px var(--accent-glow)';
+  });
+  okBtn.addEventListener('mouseleave', () => {
+    okBtn.style.background = 'var(--bg-button-primary)';
+    okBtn.style.transform = '';
+    okBtn.style.boxShadow = '';
+  });
+  okBtn.addEventListener('mousedown', () => {
+    okBtn.style.transform = 'translateY(0) scale(0.97)';
+  });
   okBtn.textContent = t('common.confirm');
 
   btnRow.appendChild(cancelBtn);
@@ -306,12 +359,34 @@ export function showLoading(text = t('preprocess.processing')) {
   textEl.textContent = text;
   content.appendChild(textEl);
 
+  // 进度条 + 剩余时间（后处理/提取的实时反馈）
+  const progressWrap = document.createElement('div');
+  progressWrap.className = 'loading-progress-wrap';
+  const bar = document.createElement('div');
+  bar.className = 'loading-progress-bar';
+  const fill = document.createElement('div');
+  fill.className = 'loading-progress-fill';
+  bar.appendChild(fill);
+  const etaEl = document.createElement('div');
+  etaEl.className = 'loading-eta';
+  etaEl.textContent = '';
+  progressWrap.appendChild(bar);
+  progressWrap.appendChild(etaEl);
+  content.appendChild(progressWrap);
+
   overlay.appendChild(content);
   document.body.appendChild(overlay);
-  return overlay;
+
+  const setProgress = (pct, etaText) => {
+    const p = Math.max(0, Math.min(100, pct));
+    fill.style.width = `${p}%`;
+    if (etaText) etaEl.textContent = etaText;
+  };
+  return { overlay, setProgress };
 }
 
-export function hideLoading(overlay) {
+export function hideLoading(handle) {
+  const overlay = handle && handle.overlay ? handle.overlay : handle;
   if (overlay && overlay.parentNode) {
     overlay.remove();
   }

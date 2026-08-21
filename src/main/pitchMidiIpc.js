@@ -5,6 +5,8 @@ const { Worker } = require('node:worker_threads');
 const { RmvpePitchDetector } = require('../inference/rmvpePitchDetector');
 const { BasicPitchDetector } = require('../inference/basicPitch');
 const { RosvotDetector } = require('../inference/rosvotDetector');
+const { FcpePitchDetector } = require('../inference/fcpePitchDetector');
+const pp = require('../inference/pitchPostprocess');
 const { parseMidiFile, parseMidiFileMultiTrack, parseMidiProjectInfo } = require('../inference/midiParser');
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
@@ -60,9 +62,20 @@ const rosvotLazy = createLazyInitializer(async () => {
   return detector;
 });
 
+const fcpeLazy = createLazyInitializer(async () => {
+  const modelPath = getBaseModelDir();
+  const settings = loadSettings();
+  const deviceId = settings.deviceId ?? undefined;
+  console.log(`[Main] Initialize FcpePitchDetector, model path: ${modelPath}, deviceId: ${deviceId !== undefined ? deviceId : 'auto'}`);
+  const detector = new FcpePitchDetector(modelPath, { deviceId });
+  await detector.init();
+  return detector;
+});
+
 function getRmvpeDetector() { return rmvpeLazy.getInstance(); }
 function getBasicPitchDetector() { return basicPitchLazy.getInstance(); }
 function getRosvotDetector() { return rosvotLazy.getInstance(); }
+function getFcpeDetector() { return fcpeLazy.getInstance(); }
 
 function resetRmvpe() {
   const inst = rmvpeLazy.getInstance();
@@ -78,6 +91,11 @@ function resetRosvot() {
   const inst = rosvotLazy.getInstance();
   if (inst) { try { inst.dispose(); } catch (_) {} }
   rosvotLazy.reset();
+}
+function resetFcpe() {
+  const inst = fcpeLazy.getInstance();
+  if (inst) { try { inst.dispose(); } catch (_) {} }
+  fcpeLazy.reset();
 }
 
 // ==================== RMVPE worker_thread (offload F0 extraction) ====================
@@ -167,7 +185,7 @@ function createPitchWorker() {
           for (let i = 0; i < n; i++) {
             f0Array[i] = { time: msg.times[i], f0: msg.f0[i], confidence: 0 };
           }
-          pending.resolve(f0Array);
+          pending.resolve(msg.notes ? { f0Array, notes: msg.notes } : f0Array);
         } else {
           const err = new Error(msg.error);
           if (msg.code) err.code = msg.code;
@@ -236,6 +254,15 @@ async function extractF0ViaWorker(audioData, sampleRate) {
   });
 }
 
+async function extractMidiViaWorker(audioData, sampleRate, bpm, useRosvot, rosvotAvailable) {
+  const worker = await ensurePitchWorker();
+  const id = ++pitchRequestId;
+  return new Promise((resolve, reject) => {
+    pitchPendingRequests.set(id, { resolve, reject });
+    worker.postMessage({ type: 'extract-midi', id, audioData, sampleRate, bpm, useRosvot, rosvotAvailable });
+  });
+}
+
 function registerPitchMidiIpc() {
   ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate }) => {
     try {
@@ -256,48 +283,33 @@ function registerPitchMidiIpc() {
 
   ipcMain.handle('extractMidi:rosvot', async (event, { audioData, sampleRate, bpm }) => {
     try {
-      const detector = await rmvpeLazy.get();
-      const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
-
-      let notes;
       const settings = loadSettings();
       const useRosvot = settings?.useRosvot === true;
-
-      if (useRosvot) {
-        const modelPath = getBaseModelDir();
-        const rosvotModelPath = path.join(modelPath, 'preprocess', 'rosvot_model.onnx');
-
-        if (fs.existsSync(rosvotModelPath)) {
+      const rosvotModelPath = path.join(getBaseModelDir(), 'preprocess', 'rosvot_model.onnx');
+      const result = await extractMidiViaWorker(
+        audioData, sampleRate || 44100, bpm || 120, useRosvot, fs.existsSync(rosvotModelPath)
+      );
+      return { success: true, f0Array: result.f0Array, notes: result.notes };
+    } catch (workerErr) {
+      // Compatibility fallback. It preserves behavior on platforms/builds where
+      // worker_threads or a native addon cannot be initialized.
+      console.warn('[Main] pitchWorker MIDI path unavailable, falling back to sync:', workerErr.message);
+      try {
+        const detector = await rmvpeLazy.get();
+        const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
+        let notes = detector.f0ToNotes(f0Array, bpm || 120);
+        if (loadSettings()?.useRosvot === true) {
           try {
             const rosvot = await rosvotLazy.get();
-            notes = await rosvot.extractNotes(
-              new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120
-            );
-            console.log(`[Main] RosVot extracted ${notes.length} notes`);
-
-            const validNotes = notes.filter(n => n.pitch > 0);
-            if (validNotes.length === 0) {
-              console.log('[Main] RosVot extracted no valid notes, falling back to f0ToNotes');
-              notes = detector.f0ToNotes(f0Array, bpm || 120);
-            }
-          } catch (rosvotErr) {
-            console.warn('[Main] RosVot model inference failed, falling back to f0ToNotes:', rosvotErr.message);
-            resetRosvot();
-            notes = detector.f0ToNotes(f0Array, bpm || 120);
-          }
-        } else {
-          console.log('[Main] RosVot model does not exist, using f0ToNotes fallback');
-          notes = detector.f0ToNotes(f0Array, bpm || 120);
+            const candidate = await rosvot.extractNotes(new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120);
+            if (candidate.some(n => n.pitch > 0)) notes = candidate;
+          } catch (_) { resetRosvot(); }
         }
-      } else {
-        console.log('[Main] Using f0ToNotes to extract MIDI notes from F0 curve');
-        notes = detector.f0ToNotes(f0Array, bpm || 120);
+        return { success: true, f0Array, notes };
+      } catch (err) {
+        console.error('[Main] MIDI extraction failed:', err);
+        return { success: false, error: err.message };
       }
-
-      return { success: true, f0Array, notes };
-    } catch (err) {
-      console.error('[Main] MIDI extraction failed:', err);
-      return { success: false, error: err.message };
     }
   });
 
@@ -308,6 +320,79 @@ function registerPitchMidiIpc() {
       return { success: true, f0Array: result.f0Array, notes: result.notes };
     } catch (err) {
       console.error('[Main] Basic Pitch extraction failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle('extractMidi:fcpe', async (event, { audioData, sampleRate, bpm, options }) => {
+    try {
+      const detector = await fcpeLazy.get();
+      const audio = new Float32Array(audioData);
+      const sr = sampleRate || 44100;
+      const opts = options || {};
+      const bpmVal = opts.bpm || bpm || 120;
+
+      // 1. 响度归一化到 -3 ~ -6dBFS（弱信号会导致 FCPE 漏判音高）
+      const workAudio = opts.normalize === false ? audio : pp.normalizeToTargetDb(audio, -4.5);
+
+      // 2. 提取 F0（内部重采样到 16kHz）
+      let f0Array = await detector.extractF0(workAudio, sr);
+
+      // 3. 自动适配音域（快速扫描后取分位数区间）
+      let f0Min = opts.f0Min || 80;
+      let f0Max = opts.f0Max || 880;
+      if (opts.f0RangeAuto) {
+        const stats = pp.f0RangeStats(f0Array);
+        const range = pp.autoRangeFromStats(stats);
+        f0Min = range.f0Min;
+        f0Max = range.f0Max;
+      }
+
+      // 4. 静音门限（按帧 RMS，threshold 预设 0.003/0.006/0.01）
+      if (opts.thresholdEnabled !== false && opts.threshold > 0) {
+        const frameDur = f0Array.length > 1 ? f0Array[1].time - f0Array[0].time : 0.02;
+        const rms = pp.computeFrameRms(workAudio, sr, frameDur);
+        f0Array = pp.gateByThreshold(f0Array, rms, opts.threshold);
+      }
+
+      // 5. F0 量程门限
+      f0Array = pp.gateByRange(f0Array, f0Min, f0Max);
+
+      // 6. 中值平滑（消除跳变噪音）
+      const win = pp.smoothingWindow(opts.smoothing || 'medium');
+      f0Array = pp.medianFilterF0(f0Array, win);
+
+      // 7. 有效人声/静音段检测（提示 UVR 分离质量）
+      const endSec = f0Array.length > 0 ? f0Array[f0Array.length - 1].time : 0;
+      const quality = pp.detectVoiceQuality(f0Array, endSec);
+      const warnings = quality.warnings;
+
+      // 8. 自动 BPM 检测
+      let useBpm = bpmVal;
+      if (opts.autoBpm) {
+        useBpm = pp.detectBpm(workAudio, sr, bpmVal);
+      }
+
+      // 9. 音符切分 + 量化（严格 / 保留滑音 Pitch Bend）
+      const { notes, pitchBends } = pp.segmentNotes(f0Array, {
+        quantization: opts.quantization || 'strict',
+        minNoteDuration: opts.minNoteDuration || 0.05,
+        bpm: useBpm,
+      });
+
+      return {
+        success: true,
+        f0Array,
+        notes,
+        pitchBends,
+        warnings,
+        f0Min,
+        f0Max,
+        device: detector.getDeviceInfo(),
+        bpm: useBpm,
+      };
+    } catch (err) {
+      console.error('[Main] FCPE extraction failed:', err);
       return { success: false, error: err.message };
     }
   });
@@ -380,10 +465,14 @@ module.exports = {
   getRmvpeDetector,
   getBasicPitchDetector,
   getRosvotDetector,
+  getFcpeDetector,
+  getBaseModelDir,
   resetRmvpe,
   resetBasicPitch,
   resetRosvot,
+  resetFcpe,
   rmvpeLazy,
   basicPitchLazy,
   rosvotLazy,
+  fcpeLazy,
 };

@@ -16,8 +16,8 @@ export const SIFIGAN_HOP_SIZE = 120;
 export const MEL_DIM = 128;
 export const EMBED_DIM = 512;
 export const COND_DIM = 1024;
-export const VOCODER_CHUNK_FRAMES = 1008;
-export const VOCODER_OVERLAP_FRAMES = 8;
+export const VOCODER_CHUNK_FRAMES = 1024;
+export const VOCODER_OVERLAP_FRAMES = 32;
 
 // ===== NPU 静态形状常量 =====
 // NPU 静态形状模型固定序列长度（encoder/diffusion 输入维度）

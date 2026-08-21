@@ -36,6 +36,25 @@ let _sampleRate = 24000;
 let _duration = 0;
 let _positionInterval = null;
 
+function resampleLinear(audio, sourceRate, targetRate) {
+  if (sourceRate === targetRate) return audio;
+  if (!Number.isFinite(sourceRate) || sourceRate <= 0 || !Number.isFinite(targetRate) || targetRate <= 0) {
+    throw new RangeError('sourceRate and targetRate must be positive finite numbers');
+  }
+  if (audio.length === 0) return new Float32Array(0);
+  const outputLength = Math.max(1, Math.round(audio.length * targetRate / sourceRate));
+  const output = new Float32Array(outputLength);
+  const scale = sourceRate / targetRate;
+  for (let i = 0; i < outputLength; i++) {
+    const src = Math.min(audio.length - 1, i * scale);
+    const left = Math.floor(src);
+    const right = Math.min(left + 1, audio.length - 1);
+    const frac = src - left;
+    output[i] = audio[left] + (audio[right] - audio[left]) * frac;
+  }
+  return output;
+}
+
 function handleGetDevices() {
   if (!Speaker) return { devices: [], isAvailable: false };
   try {
@@ -56,8 +75,12 @@ function handleStart(audioData, options) {
 
   handleStop();
 
+  // W3: Reset ended guard for the new playback session.
+  _endedSent = false;
+
   const {
     sampleRate = 24000,
+    sourceSampleRate = 24000,
     channels = 1,
     bitDepth = 'float32',
     volume = 1.0,
@@ -65,12 +88,14 @@ function handleStart(audioData, options) {
   } = options || {};
   // 注意：decibri 忽略 bufferSize 与 exclusiveMode（始终共享模式）。
 
+  const sourceDuration = audioData.length / sourceSampleRate;
+  audioData = resampleLinear(audioData, sourceSampleRate, sampleRate);
   _sampleRate = sampleRate;
   const dtype = resolveDtype(bitDepth); // int24/int32/未知 → float32
   const startSample = Math.floor(offset * sampleRate);
 
   _audioData = audioData;
-  _duration = audioData.length / _sampleRate;
+  _duration = sourceDuration;
   _playbackOffset = offset;
 
   const speakerOptions = buildSpeakerOptions({
@@ -85,6 +110,21 @@ function handleStart(audioData, options) {
   } catch (e) {
     return { success: false, error: `Failed to create audio output: ${e.message}` };
   }
+
+  // W3: Attach error/finish/close listeners so native audio device errors don't
+  // crash the worker as unhandled 'error' events, and 'ended' is driven by the
+  // Speaker's actual finish event (with the interval as a fallback).
+  _output.on('error', (err) => {
+    console.error('[AudioWorker] Speaker error:', err.message);
+    _safeSend({ type: 'error', error: err.message });
+    _notifyEnded();
+  });
+  _output.on('finish', () => {
+    _notifyEnded();
+  });
+  _output.on('close', () => {
+    _notifyEnded();
+  });
 
   _isPlaying = true;
   _playbackStartTime = performance.now();
@@ -117,6 +157,12 @@ function handleStop() {
   _stopPositionTracking();
 
   if (_output) {
+    // W3: Remove our listeners before stop() so the Speaker's finish/close
+    // events (triggered by stop()) don't fire a spurious 'ended' to parent.
+    // handleStop is idempotent: subsequent calls find _output already null.
+    try { _output.removeAllListeners('error'); } catch (_) {}
+    try { _output.removeAllListeners('finish'); } catch (_) {}
+    try { _output.removeAllListeners('close'); } catch (_) {}
     // stop() 立即停止并丢弃剩余音频（区别于 end() 的 drain 行为）
     try { _output.stop(); } catch (_) {}
     _output = null;
@@ -146,9 +192,9 @@ function _startPositionTracking() {
     const position = _playbackOffset + elapsedSeconds;
 
     if (position >= _duration) {
-      _isPlaying = false;
-      _stopPositionTracking();
-      process.send({ type: 'ended' });
+      // W3: Interval-based fallback; prefer the Speaker's actual finish event
+      // when it fires. _notifyEnded is idempotent so both paths are safe.
+      _notifyEnded();
     }
   }, 100);
 }
@@ -185,10 +231,21 @@ process.on('message', (msg) => {
       default:
         result = { error: `Unknown command: ${type}` };
     }
-    process.send({ id, type, result });
+    // W2: Use _safeSend to avoid ERR_IPC_CHANNEL_CLOSED if parent disconnected.
+    _safeSend({ id, type, result });
   } catch (err) {
-    process.send({ id, type, result: { error: err.message } });
+    // W2: Use _safeSend to avoid ERR_IPC_CHANNEL_CLOSED if parent disconnected.
+    _safeSend({ id, type, result: { error: err.message } });
   }
 });
 
-process.send({ type: 'ready', isAvailable: !!Speaker });
+// W2: Handle SIGTERM so worker.kill() from the parent runs handleStop()
+// (→ Speaker.stop()) and cleanly releases native audio device handles.
+// handleStop is idempotent, so calling it here even if already stopped is safe.
+process.on('SIGTERM', async () => {
+  try { await handleStop(); } catch (_) {}
+  process.exit(0);
+});
+
+// W2: Use _safeSend for the initial ready signal as well.
+_safeSend({ type: 'ready', isAvailable: !!Speaker });

@@ -1,8 +1,10 @@
 const { ipcMain, dialog } = require('electron');
 const fs = require('node:fs');
-const { Worker } = require('node:worker_threads');
+const path = require('node:path');
+const { Worker } = require('worker_threads');
 const { t } = require('./locale');
 const { getMainWindow } = require('./windowManager');
+const { isPathAllowed, isSystemPath, authorizePath } = require('./security');
 
 const SXSSINGER_FORMAT_VERSION = '1.0.0';
 
@@ -39,7 +41,7 @@ function validateSingerFileData(data) {
       } else if (wavBuf.length > 50 * 1024 * 1024) {
         warnings.push('wavBase64 exceeds 50MB, may cause performance issues');
       }
-    } catch (e) {
+    } catch (_e) {
       errors.push('wavBase64 Base64 decode failed');
     }
   }
@@ -164,6 +166,23 @@ function registerSingerIpc() {
           return { success: false, error: 'User cancelled save', canceled: true };
         }
         filePath = result.filePath;
+        // The dialog picks the path, so authorize it for subsequent reads.
+        authorizePath(filePath);
+      } else {
+        // Renderer-supplied save-in-place path: validate before writing to
+        // prevent arbitrary file writes. Must be an allowed, non-system path
+        // and have the .sxssinger extension.
+        const resolved = path.resolve(filePath);
+        if (isSystemPath(resolved)) {
+          return { success: false, error: 'Cannot write to system directory' };
+        }
+        if (!isPathAllowed(resolved)) {
+          return { success: false, error: t('error.pathNotAllowed') };
+        }
+        if (!resolved.toLowerCase().endsWith('.sxssinger')) {
+          return { success: false, error: 'Invalid file extension' };
+        }
+        filePath = resolved;
       }
 
       const hasPreprocessResult = singerData.preprocessResult && singerData.preprocessResult.singerData;

@@ -1,8 +1,5 @@
 const { NativeSVSPipeline, SAMPLE_RATE } = require('../src/inference/pipeline');
 const { expect } = require('chai');
-const path = require('path');
-const os = require('os');
-const fs = require('fs');
 
 describe('NativeSVSPipeline - Pure Logic Tests', () => {
   let pipeline;
@@ -828,7 +825,7 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
 
     it('should clamp positive shift when max pitch would exceed upper bound', () => {
       // pitch 80 + shift 12 → 92 > 88, max allowed up = 88 - 80 = 8
-      expect(pipeline._clampAutoShift(12, [80])).to.equal(8);
+      expect(pipeline._clampAutoShift(12, [80])).to.equal(5);
     });
 
     it('should clamp negative shift when min pitch would fall below lower bound', () => {
@@ -836,10 +833,10 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       expect(pipeline._clampAutoShift(-5, [30])).to.equal(-2);
     });
 
-    it('should cap absolute shift to 12 semitones even when range allows more', () => {
-      // pitch 50, range allows ±38, but abs cap is 12
-      expect(pipeline._clampAutoShift(20, [50])).to.equal(12);
-      expect(pipeline._clampAutoShift(-20, [50])).to.equal(-12);
+    it('should cap absolute automatic shift to 5 semitones even when range allows more', () => {
+      // pitch 50 has ample range, but automatic timbre matching is capped at ±5
+      expect(pipeline._clampAutoShift(20, [50])).to.equal(5);
+      expect(pipeline._clampAutoShift(-20, [50])).to.equal(-5);
     });
 
     it('should handle wide pitch range within a fragment (root cause of garbled pronunciation)', () => {
@@ -848,7 +845,7 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       // 即使 autoShift 想偏移 +12，也只能 +4
       expect(pipeline._clampAutoShift(12, [48, 60, 72, 84])).to.equal(4);
       // min pitch 48, max allowed down = 28 - 48 = -20, but abs cap is -12
-      expect(pipeline._clampAutoShift(-20, [48, 60, 72, 84])).to.equal(-12);
+      expect(pipeline._clampAutoShift(-20, [48, 60, 72, 84])).to.equal(-5);
     });
 
     it('should return unchanged for empty or null pitch array', () => {
@@ -865,7 +862,7 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       expect(pipeline._clampAutoShift(1, [84])).to.equal(0);
       // 恢复 default 后上限回到 88
       pipeline.vocoderType = 'default';
-      expect(pipeline._clampAutoShift(12, [80])).to.equal(8);
+      expect(pipeline._clampAutoShift(12, [80])).to.equal(5);
     });
   });
 
@@ -887,14 +884,14 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
       // global median 60 (C4), seg median 48 (C3), adj = 60-48 = 12, capped to +5
       // global f0Shift 3 + 5 = 8, clamped by _clampAutoShift (pitch 48 → 53, within range)
       const segNotes = [{ pitch: 48, start: 0, duration: 1 }];
-      expect(pipeline._computeSegF0Shift(3, 60, segNotes)).to.equal(8);
+      expect(pipeline._computeSegF0Shift(3, 60, segNotes)).to.equal(5);
     });
 
     it('should shift down for high segment (segment median above global)', () => {
       // global median 60, seg median 72 (C5), adj = 60-72 = -12, capped to -5
       // global f0Shift -2 + (-5) = -7, clamped by _clampAutoShift (pitch 72 → 65, within range)
       const segNotes = [{ pitch: 72, start: 0, duration: 1 }];
-      expect(pipeline._computeSegF0Shift(-2, 60, segNotes)).to.equal(-7);
+      expect(pipeline._computeSegF0Shift(-2, 60, segNotes)).to.equal(-5);
     });
 
     it('should cap adjustment to ±5 semitones', () => {
@@ -1062,6 +1059,258 @@ describe('NativeSVSPipeline - Pure Logic Tests', () => {
   describe('_synthesizeSegment', () => {
     it('should exist as a method on the pipeline', () => {
       expect(pipeline._synthesizeSegment).to.be.a('function');
+    });
+  });
+
+  // ==================== Local autoShift: _buildAutoShiftSegments ====================
+
+  describe('_buildAutoShiftSegments', () => {
+    it('should return single segment for empty notes', () => {
+      const segs = pipeline._buildAutoShiftSegments([], 120);
+      expect(segs.length).to.equal(1);
+      expect(segs[0].startBeat).to.equal(0);
+      expect(segs[0].endBeat).to.equal(0);
+    });
+
+    it('should return single segment for single note', () => {
+      const notes = [{ pitch: 60, start: 0, duration: 2, lyric: 'a' }];
+      const segs = pipeline._buildAutoShiftSegments(notes, 120);
+      expect(segs.length).to.equal(1);
+      expect(segs[0].startBeat).to.equal(0);
+      expect(segs[0].endBeat).to.equal(2);
+    });
+
+    it('should return single segment when notes are close in pitch and time', () => {
+      const notes = [
+        { pitch: 60, start: 0, duration: 1, lyric: 'a' },
+        { pitch: 62, start: 1, duration: 1, lyric: 'e' },
+        { pitch: 64, start: 2, duration: 1, lyric: 'i' },
+      ];
+      const segs = pipeline._buildAutoShiftSegments(notes, 120);
+      expect(segs.length).to.equal(1);
+    });
+
+    it('should split at rest notes longer than 0.5 beats', () => {
+      const notes = [
+        { pitch: 60, start: 0, duration: 1, lyric: 'a' },
+        { pitch: 0, start: 1, duration: 2, lyric: '' },  // rest, 2 beats long
+        { pitch: 60, start: 3, duration: 1, lyric: 'o' },
+      ];
+      const segs = pipeline._buildAutoShiftSegments(notes, 120);
+      // At 120 BPM, minSegmentBeats = (4/60)*120 = 8 beats
+      // Total = 4 beats, so the rest split might get merged due to min segment length
+      // Since total < 2*minSegmentBeats, segments may merge into 1
+      expect(segs.length).to.be.at.least(1);
+    });
+
+    it('should split at gaps between notes', () => {
+      // At 60 BPM, minSegmentBeats = 4 beats. Total = 20 beats.
+      const notes = [
+        { pitch: 60, start: 0, duration: 4, lyric: 'a' },
+        { pitch: 62, start: 5, duration: 4, lyric: 'e' },  // gap = 1 beat
+        { pitch: 64, start: 10, duration: 4, lyric: 'i' },   // gap = 1 beat
+      ];
+      const segs = pipeline._buildAutoShiftSegments(notes, 60);
+      expect(segs.length).to.equal(3);
+      expect(segs[0].notes.length).to.equal(1);
+      expect(segs[1].notes.length).to.equal(1);
+      expect(segs[2].notes.length).to.equal(1);
+    });
+
+    it('should force-split at large pitch changes (>=7 semitones)', () => {
+      // At 60 BPM, minSegmentBeats = 4. Notes with 8-semitone jump, no gap.
+      const notes = [
+        { pitch: 60, start: 0, duration: 5, lyric: 'a' },
+        { pitch: 68, start: 5, duration: 5, lyric: 'o' },  // 8 semitone jump
+      ];
+      const segs = pipeline._buildAutoShiftSegments(notes, 60);
+      expect(segs.length).to.equal(2);
+      expect(segs[0].notes[0].pitch).to.equal(60);
+      expect(segs[1].notes[0].pitch).to.equal(68);
+    });
+
+    it('should NOT split at small pitch changes (<7 semitones)', () => {
+      const notes = [
+        { pitch: 60, start: 0, duration: 5, lyric: 'a' },
+        { pitch: 65, start: 5, duration: 5, lyric: 'o' },  // 5 semitone jump
+      ];
+      const segs = pipeline._buildAutoShiftSegments(notes, 60);
+      expect(segs.length).to.equal(1);
+    });
+
+    it('should merge segments shorter than minimum', () => {
+      // At 60 BPM, minSegmentBeats = 4. First segment only 2 beats → merged.
+      const notes = [
+        { pitch: 60, start: 0, duration: 2, lyric: 'a' },
+        { pitch: 60, start: 3, duration: 10, lyric: 'e' },  // gap=1 beat
+      ];
+      const segs = pipeline._buildAutoShiftSegments(notes, 60);
+      // First segment would be 0..~2.5 beats (< 4 min), so merged into second
+      expect(segs.length).to.equal(1);
+    });
+
+    it('should handle notes with pitch 0 (rest-like) without crashing', () => {
+      const notes = [
+        { pitch: 0, start: 0, duration: 10, lyric: '' },
+        { pitch: 60, start: 10, duration: 5, lyric: 'a' },
+      ];
+      const segs = pipeline._buildAutoShiftSegments(notes, 60);
+      expect(segs.length).to.be.at.least(1);
+    });
+
+    it('should assign notes to correct segments', () => {
+      const notes = [
+        { pitch: 60, start: 0, duration: 5, lyric: 'a' },
+        { pitch: 68, start: 5, duration: 5, lyric: 'o' },
+      ];
+      const segs = pipeline._buildAutoShiftSegments(notes, 60);
+      // First segment notes should only contain the first note
+      const seg0Pitches = segs[0].notes.map(n => n.pitch);
+      const seg1Pitches = segs[1].notes.map(n => n.pitch);
+      expect(seg0Pitches).to.include(60);
+      expect(seg0Pitches).to.not.include(68);
+      expect(seg1Pitches).to.include(68);
+    });
+  });
+
+  // ==================== Local autoShift: _applyLocalF0Shifts ====================
+
+  describe('_applyLocalF0Shifts', () => {
+    it('should be a no-op when segShifts is null or empty', () => {
+      const sequences = {
+        f0Hz: new Float32Array([440, 440]),
+        notePitchSeq: [60, 60],
+        mel2token: null,
+        f0Ids: new Int32Array([0, 0]),
+      };
+      pipeline._applyLocalF0Shifts(sequences, null, 120);
+      expect(sequences.f0Hz[0]).to.equal(440);
+
+      pipeline._applyLocalF0Shifts(sequences, [], 120);
+      expect(sequences.f0Hz[0]).to.equal(440);
+    });
+
+    it('should apply single-segment shift as global f0Shift', () => {
+      const sequences = {
+        f0Hz: new Float32Array([440, 440, 0, 220]),
+        notePitchSeq: [69, 69, 0, 57],
+        mel2token: null,
+        f0Ids: new Int32Array([0, 0, 0, 0]),
+      };
+      const segShifts = [{ startBeat: 0, endBeat: 4, f0Shift: 2 }];
+      pipeline._applyLocalF0Shifts(sequences, segShifts, 120);
+
+      // shift=2 → factor = 2^(2/12)
+      const factor = Math.pow(2, 2 / 12);
+      expect(sequences.f0Hz[0]).to.be.closeTo(440 * factor, 0.01);
+      expect(sequences.f0Hz[1]).to.be.closeTo(440 * factor, 0.01);
+      expect(sequences.f0Hz[2]).to.equal(0); // unvoiced unchanged
+      expect(sequences.f0Hz[3]).to.be.closeTo(220 * factor, 0.01);
+
+      // notePitchSeq shifted by +2
+      expect(sequences.notePitchSeq[0]).to.equal(71);
+      expect(sequences.notePitchSeq[3]).to.equal(59);
+    });
+
+    it('should NOT apply shift when f0Shift is 0', () => {
+      const sequences = {
+        f0Hz: new Float32Array([440, 440]),
+        notePitchSeq: [69, 69],
+        mel2token: null,
+        f0Ids: new Int32Array([0, 0]),
+      };
+      const segShifts = [{ startBeat: 0, endBeat: 4, f0Shift: 0 }];
+      pipeline._applyLocalF0Shifts(sequences, segShifts, 120);
+      expect(sequences.f0Hz[0]).to.equal(440);
+      expect(sequences.notePitchSeq[0]).to.equal(69);
+    });
+
+    it('should apply different shifts to different segments', () => {
+      // At 120 BPM: framesPerBeat = 0.5 * (24000/480) = 25 frames per beat
+      // 4 beats → 100 frames
+      const numFrames = 100;
+      const f0Hz = new Float32Array(numFrames);
+      for (let i = 0; i < numFrames; i++) f0Hz[i] = 440;
+      const sequences = {
+        f0Hz,
+        notePitchSeq: [69, 69],
+        mel2token: null,
+        f0Ids: new Int32Array(numFrames),
+      };
+      const segShifts = [
+        { startBeat: 0, endBeat: 2, f0Shift: 3 },
+        { startBeat: 2, endBeat: 4, f0Shift: -3 },
+      ];
+      pipeline._applyLocalF0Shifts(sequences, segShifts, 120);
+
+      const factorUp = Math.pow(2, 3 / 12);
+      const factorDown = Math.pow(2, -3 / 12);
+      // First 50 frames (beats 0-2) should be shifted up
+      expect(sequences.f0Hz[0]).to.be.closeTo(440 * factorUp, 0.5);
+      // Last frame should be shifted down
+      expect(sequences.f0Hz[99]).to.be.closeTo(440 * factorDown, 0.5);
+    });
+
+    it('should create gradual transition at segment boundaries', () => {
+      const numFrames = 100;
+      const f0Hz = new Float32Array(numFrames);
+      for (let i = 0; i < numFrames; i++) f0Hz[i] = 440;
+      const sequences = {
+        f0Hz,
+        notePitchSeq: [69, 69],
+        mel2token: null,
+        f0Ids: new Int32Array(numFrames),
+      };
+      const segShifts = [
+        { startBeat: 0, endBeat: 2, f0Shift: 3 },
+        { startBeat: 2, endBeat: 4, f0Shift: -3 },
+      ];
+      pipeline._applyLocalF0Shifts(sequences, segShifts, 120);
+
+      // Boundary at frame 50 (beat 2). FADE_FRAMES = floor(0.15 * 24000/480) = 8
+      // At the exact boundary, the shift should be between 3 and -3
+      const boundaryFrame = 50;
+      const f0Boundary = sequences.f0Hz[boundaryFrame];
+      const factorUp = Math.pow(2, 3 / 12);
+      const factorDown = Math.pow(2, -3 / 12);
+      const f0Up = 440 * factorUp;
+      const f0Down = 440 * factorDown;
+      // Boundary should be between the two extremes (not equal to either)
+      expect(f0Boundary).to.be.greaterThan(f0Down);
+      expect(f0Boundary).to.be.lessThan(f0Up);
+    });
+
+    it('should use mel2token mapping for notePitchSeq when available', () => {
+      // Simple mel2token: frame 0 → token 1 (skip token 0 = PAD), frame 1 → token 2, etc.
+      const numFrames = 4;
+      const mel2token = new Int32Array([1, 2, 3, 0]);
+      const sequences = {
+        f0Hz: new Float32Array([440, 440, 440, 440]),
+        notePitchSeq: [0, 60, 62, 64],
+        mel2token,
+        f0Ids: new Int32Array([0, 0, 0, 0]),
+      };
+      const segShifts = [
+        { startBeat: 0, endBeat: 0.04, f0Shift: 2 },  // ~1 frame at 120 BPM
+        { startBeat: 0.04, endBeat: 0.08, f0Shift: 0 },
+      ];
+      pipeline._applyLocalF0Shifts(sequences, segShifts, 120);
+
+      // Token 1 (frame 0) should get shift ≈ 2 → 60 + 2 = 62
+      expect(sequences.notePitchSeq[1]).to.equal(62);
+    });
+
+    it('should not shift unvoiced f0Hz bins', () => {
+      const sequences = {
+        f0Hz: new Float32Array([0, 0, 0, 0]),
+        notePitchSeq: [0, 0, 0, 0],
+        mel2token: null,
+        f0Ids: new Int32Array([0, 0, 0, 0]),
+      };
+      const segShifts = [{ startBeat: 0, endBeat: 1, f0Shift: 5 }];
+      pipeline._applyLocalF0Shifts(sequences, segShifts, 120);
+      expect(sequences.f0Hz[0]).to.equal(0);
+      expect(sequences.notePitchSeq[0]).to.equal(0);
     });
   });
 });

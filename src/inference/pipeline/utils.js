@@ -122,6 +122,50 @@ if (typeof Float16Array !== 'undefined') {
     };
 }
 
+// Float32 → Float16 single-element conversion (returns Uint16 bit pattern).
+// Used for scalar values (e.g. t tensor with batch=1/2). Allocates no buffer.
+function float32ToFloat16(value) {
+    const buf = new ArrayBuffer(4);
+    const f32 = new Float32Array(buf);
+    const u32 = new Uint32Array(buf);
+    f32[0] = value;
+    const x = u32[0];
+    const sign = (x >> 16) & 0x8000;
+    const exponent = ((x >> 23) & 0xff) - 127;
+    const mantissa = x & 0x7fffff;
+    if (exponent >= 16) return sign | 0x7c00;
+    if (exponent >= -14) return sign | ((exponent + 15) << 10) | (mantissa >> 13);
+    if (exponent >= -24) return sign | ((mantissa | 0x800000) >> (-exponent - 2));
+    return sign;
+}
+
+// Batch Float32 → Float16 in-place conversion into an existing Uint16Array
+// buffer. Avoids per-step allocation in the diffusion loop where the target
+// tensor's .data buffer is pre-allocated once and reused across steps.
+// Mirrors webnn/utils.js batchFloat32ToFloat16 for parity between paths.
+function batchFloat32ToFloat16(f32Src, u16Dst, len) {
+    len = len || f32Src.length;
+    const buf = new ArrayBuffer(4);
+    const f32 = new Float32Array(buf);
+    const u32 = new Uint32Array(buf);
+    for (let i = 0; i < len; i++) {
+        f32[0] = f32Src[i];
+        const x = u32[0];
+        const sign = (x >> 16) & 0x8000;
+        const exponent = ((x >> 23) & 0xff) - 127;
+        const mantissa = x & 0x7fffff;
+        if (exponent >= 16) {
+            u16Dst[i] = sign | 0x7c00;
+        } else if (exponent >= -14) {
+            u16Dst[i] = sign | ((exponent + 15) << 10) | (mantissa >> 13);
+        } else if (exponent >= -24) {
+            u16Dst[i] = sign | ((mantissa | 0x800000) >> (-exponent - 2));
+        } else {
+            u16Dst[i] = sign;
+        }
+    }
+}
+
 // 根据Model精度创建浮点张量
 function createFloatTensor(type, f32Data, dims) {
     if (type === 'float16') {
@@ -178,6 +222,49 @@ async function gpuDrainLong() {
     }
 }
 
+// 自适应 GPU 排空：正常情况下跳过 50ms 等待，仅 setImmediate yield 让事件循环跑一轮
+// （DML 在无压力时不需要额外回收时间，跳过可节省每步/chunk 50ms 的累积开销）。
+// 当 markGpuOom() 被调用（vocoder/diffusion 捕获 OOM）后，下一次 gpuDrainAdaptive() 等待
+// 200ms 让 DML 资源池从 OOM 中恢复，然后自动清除标志恢复正常（无 OOM 压力）模式。
+// 既有 gpuDrain()（固定 50ms）与 gpuDrainLong()（~800ms 分轮）保留不变，供 diffStep 释放等
+// 长排空路径继续使用。
+let _oomFlag = false;
+const GPU_DRAIN_ADAPTIVE_LONG_MS = 200;
+function markGpuOom() {
+    _oomFlag = true;
+}
+async function gpuDrainAdaptive() {
+    if (_oomFlag) {
+        await new Promise(resolve => setTimeout(resolve, GPU_DRAIN_ADAPTIVE_LONG_MS));
+        _oomFlag = false;
+    } else {
+        await new Promise(resolve => setImmediate(resolve));
+    }
+}
+
+/**
+ * Build a cancellation error with a stable code, so callers / IPC can detect
+ * that the failure was an intentional cooperative cancel rather than a real bug.
+ * @param {string} [message='Synthesis cancelled']
+ */
+function cancelledError(message = 'Synthesis cancelled') {
+    const err = new Error(message);
+    err.code = 'SYNTHESIS_CANCELLED';
+    return err;
+}
+
+/**
+ * Throw a cancellation error if the given AbortSignal has been aborted.
+ * Used as the collaborative-safe-point gate inside diffusion loops / synthesis
+ * phases. This lets the worker exit gracefully instead of being force-killed
+ * (worker.terminate()), which avoided a native D3D device crash on Windows.
+ * @param {AbortSignal|null|undefined} signal
+ * @param {string} [message='Synthesis cancelled']
+ */
+function throwIfCancelled(signal, message = 'Synthesis cancelled') {
+    if (signal && signal.aborted) throw cancelledError(message);
+}
+
 /**
  * Normalize audio array peak to a threshold (default 0.95).
  * @param {Float32Array} arr
@@ -200,10 +287,16 @@ function normalizePeakTo(arr, len, threshold = 0.95) {
 module.exports = {
     float32ToF16Buffer,
     f16BufferToFloat32,
+    float32ToFloat16,
+    batchFloat32ToFloat16,
     createFloatTensor,
     outputToFloat32,
     disposeTensor,
     normalizePeakTo,
     gpuDrain,
     gpuDrainLong,
+    gpuDrainAdaptive,
+    markGpuOom,
+    cancelledError,
+    throwIfCancelled,
 };

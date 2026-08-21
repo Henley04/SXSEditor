@@ -176,10 +176,24 @@
             <td><span data-lang="en">0.25 MB</span><span data-lang="zh">0.25 MB</span></td>
             <td><span data-lang="en">&lt;10 MB → NPU preferred (frees GPU VRAM), else CPU</span><span data-lang="zh">&lt;10 MB → 优先 NPU（释放 GPU 显存），否则 CPU</span></td>
           </tr>
+          <tr>
+            <td><code>fcpe</code></td>
+            <td><span data-lang="en">FCPE pitch detector</span><span data-lang="zh">FCPE 音高检测器</span></td>
+            <td><span data-lang="en">small</span><span data-lang="zh">较小</span></td>
+            <td><span data-lang="en">Auto-downloaded from ModelScope. Default MIDI extraction tool (replaces Basic Pitch).</span><span data-lang="zh">从 ModelScope 自动下载。默认 MIDI 提取工具（替代 Basic Pitch）。</span></td>
+          </tr>
+          <tr>
+            <td><code>rosvot</code></td>
+            <td><span data-lang="en">ROSVOT voice onset detector</span><span data-lang="zh">ROSVOT 声音起始检测器</span></td>
+            <td><span data-lang="en">small</span><span data-lang="zh">较小</span></td>
+            <td><span data-lang="en">Used for audio segmentation and note onset detection.</span><span data-lang="zh">用于音频分段与音符起始检测。</span></td>
+          </tr>
         </tbody>
       </table>
       <p data-lang="en">Device selection priority (in <code>selectBestDevice</code>): <code>discrete-gpu &gt; npu &gt; integrated-gpu &gt; cpu</code>, weighted by VRAM within each tier.</p>
       <p data-lang="zh">设备选择优先级（<code>selectBestDevice</code>）：<code>独显 &gt; NPU &gt; 核显 &gt; CPU</code>，同级内按显存加权。</p>
+      <p data-lang="en"><code>src/modelRegistry.js</code> now includes FCPE and ROSVOT model group definitions alongside the existing SVS pipeline, RMVPE, and Basic Pitch groups. Each group declares its model files, ModelScope repository, and download metadata, enabling the download manager to handle all model types uniformly.</p>
+      <p data-lang="zh"><code>src/modelRegistry.js</code> 现包含 FCPE 与 ROSVOT 模型分组定义，与现有的 SVS 管线、RMVPE 和 Basic Pitch 分组并列。每个分组声明其模型文件、ModelScope 仓库与下载元数据，使下载管理器能统一处理所有模型类型。</p>
 
       <h2>
         <span data-lang="en">Precision Variants</span>
@@ -231,6 +245,14 @@
         <div class="callout-body">
           <p data-lang="en"><strong>W16A32 fallback</strong>: if the FP16 <code>diff_step_dml.onnx</code> fails to load (some GPUs have incomplete FP16 kernel support), the pipeline automatically reloads it from the FP32 base directory while keeping all other models in FP16. This combines FP16 memory savings with FP32 numerical stability for the diffusion step. Watch the console for <code>"FP16 diff_step failed, falling back to FP32 (W16A32)"</code>.</p>
           <p data-lang="zh"><strong>W16A32 回退</strong>：若 FP16 的 <code>diff_step_dml.onnx</code> 加载失败（部分 GPU 的 FP16 算子支持不完整），管线会自动从 FP32 基础目录重新加载它，其余模型保持 FP16。这结合了 FP16 的显存节省与扩散步的 FP32 数值稳定性。注意控制台输出 <code>"FP16 diff_step failed, falling back to FP32 (W16A32)"</code>。</p>
+        </div>
+      </div>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>QDIT int8 diff_step</strong>: QDIT-quantized int8 <code>diff_step</code> models use a new ONNX signature with <code>x</code> (audio latent), <code>diffusion_step</code> (scalar), and <code>x_mask</code> (bool) inputs. Legacy int8 models (lacking the <code>diffusion_step</code> input) are auto-detected at load time, and a user prompt suggests switching to the QDIT version for better quality.</p>
+          <p data-lang="zh"><strong>QDIT int8 diff_step</strong>：QDIT 量化的 int8 <code>diff_step</code> 模型采用新的 ONNX 签名，包含 <code>x</code>（音频隐变量）、<code>diffusion_step</code>（标量）与 <code>x_mask</code>（布尔）输入。加载时自动检测旧版 int8 模型（缺少 <code>diffusion_step</code> 输入），并提示用户切换到 QDIT 版本以获得更好质量。</p>
         </div>
       </div>
 
@@ -383,8 +405,8 @@ await pipeline.swapSifiganPrecision('fp16');
 
 // swap language models (JP) without reloading the vocoder
 await pipeline.swapLanguageModels('ja');</code></pre>
-      <p data-lang="en">Switching vocoder type, SiFiGAN precision, or language invalidates the synthesis cache (4 entries / 200 MB LRU), so the next <code>synthesize()</code> re-runs the vocoder.</p>
-      <p data-lang="zh">切换声码器类型、SiFiGAN 精度或语言都会使合成缓存（4 条 / 200MB LRU）失效，因此下一次 <code>synthesize()</code> 会重新运行声码器。</p>
+      <p data-lang="en">Switching vocoder type, SiFiGAN precision, or language invalidates the synthesis cache (32 entries / 300 MB LRU), so the next <code>synthesize()</code> re-runs the vocoder.</p>
+      <p data-lang="zh">切换声码器类型、SiFiGAN 精度或语言都会使合成缓存（32 条 / 300MB LRU）失效，因此下一次 <code>synthesize()</code> 会重新运行声码器。</p>
 
       <h2>
         <span data-lang="en">Device Enumeration</span>
@@ -392,6 +414,18 @@ await pipeline.swapLanguageModels('ja');</code></pre>
       </h2>
       <p data-lang="en"><code>enumerateDMLDevices</code> first tries <code>systeminformation</code> (cached via <code>gpuCache.js</code>); if it returns nothing, it falls back to creating a probe DML session on <code>note_text_encoder.onnx</code> and parsing ORT verbose stderr for <code>Discovered OrtHardwareDevice</code> lines. Each device is classified by <code>classifyDevice</code> (in <code>utils/deviceClassifier.js</code>) into <code>discrete-gpu</code>, <code>integrated-gpu</code>, <code>npu</code>, or <code>cpu</code>.</p>
       <p data-lang="zh"><code>enumerateDMLDevices</code> 优先使用 <code>systeminformation</code>（经 <code>gpuCache.js</code> 缓存）；若无结果，回退到在 <code>note_text_encoder.onnx</code> 上创建探测 DML 会话，并解析 ORT verbose stderr 中的 <code>Discovered OrtHardwareDevice</code> 行。每个设备由 <code>classifyDevice</code>（位于 <code>utils/deviceClassifier.js</code>）分类为 <code>discrete-gpu</code>、<code>integrated-gpu</code>、<code>npu</code> 或 <code>cpu</code>。</p>
+
+      <h2>
+        <span data-lang="en">Packaged App Size Optimization</span>
+        <span data-lang="zh">打包体积优化</span>
+      </h2>
+      <p data-lang="en">The packaged app size was reduced by approximately <strong>527 MB (32%)</strong> through three measures:</p>
+      <p data-lang="zh">打包应用体积通过三项措施减少了约 <strong>527 MB（32%）</strong>：</p>
+      <ul>
+        <li><span data-lang="en"><strong>onnxruntime-web deduplication</strong> — <code>onnxruntime-web</code> files are now copied only to the main window (the sole window that hosts WebNN sessions), eliminating ~538 MB of redundant copies across 7 windows.</span><span data-lang="zh"><strong>onnxruntime-web 去重</strong>— <code>onnxruntime-web</code> 文件现仅复制到主窗口（唯一承载 WebNN 会话的窗口），消除了跨 7 个窗口的约 538 MB 冗余副本。</span></li>
+        <li><span data-lang="en"><strong>Source maps disabled in production</strong> — <code>devtool: false</code> in the production webpack config removes all <code>.map</code> files from the ASAR archive.</span><span data-lang="zh"><strong>生产环境禁用 source map</strong>— 生产 webpack 配置中设置 <code>devtool: false</code>，从 ASAR 包中移除所有 <code>.map</code> 文件。</span></li>
+        <li><span data-lang="en"><strong>Chromium locale pruning</strong> — only <code>zh-CN</code>, <code>zh-TW</code>, <code>en-US</code>, and <code>en-GB</code> locale <code>.pak</code> files are retained; all other Chromium locales are stripped from the packaged build.</span><span data-lang="zh"><strong>Chromium 语言包裁剪</strong>— 仅保留 <code>zh-CN</code>、<code>zh-TW</code>、<code>en-US</code> 与 <code>en-GB</code> 语言 <code>.pak</code> 文件；打包构建中移除所有其他 Chromium 语言包。</span></li>
+      </ul>
 
       <nav class="doc-pager">
         <a href="inference-pipeline.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Inference Pipeline</span><span data-lang="zh">推理管线</span></div></div></a>

@@ -3,18 +3,20 @@ import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, F0_CURVE_AREA_
 import { t } from '../i18n/index.js';
 import { debounce } from '../utils/debounce.js';
 import { midiToNoteName } from '../utils/midiUtils.js';
-import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
+import { getCanvasColors } from '../themes/canvasTheme.js';
 import { drawWaveformWithPlayhead, getMaxScrollX, getMaxScrollY, updateScrollbars } from './canvasRenderer.js';
 import { updateMidiInfo, startInlineEdit, updateInlineInputPosition } from './uiControls.js';
 
 // visibilitychange handler: pause rAF-driven playback UI updates when tab hidden.
 // Registered once per module; resumes _tickPlayback when visible again.
 let _visibilityHandlerRegistered = false;
+// W22: store the handler reference so destroy() can remove it.
+let _visibilityChangeHandler = null;
 
 function _ensureVisibilityHandler() {
   if (_visibilityHandlerRegistered) return;
   _visibilityHandlerRegistered = true;
-  document.addEventListener('visibilitychange', () => {
+  _visibilityChangeHandler = () => {
     const pr = state.pianoRoll;
     if (!pr) return;
     if (document.hidden) {
@@ -27,7 +29,8 @@ function _ensureVisibilityHandler() {
         pr._tickPlayback();
       }
     }
-  });
+  };
+  document.addEventListener('visibilitychange', _visibilityChangeHandler);
 }
 
 export function initPianoRoll() {
@@ -54,6 +57,9 @@ export function initPianoRoll() {
     hoverNoteId: null,
     bpm: BPM,
     projectSettings: { bpm: BPM, timeSignature: [4, 4] },
+    // Snap grid in beats per cell. Default 1/16 (sixteenth note) matches the
+    // historical behavior. Mutators below read this so the grid is configurable.
+    snapGrid: 1 / 16,
     dpr: window.devicePixelRatio || 1,
 
     _staticCache: null,
@@ -88,9 +94,31 @@ export function initPianoRoll() {
     },
 
     destroy() {
+      // W22: cancel any pending playback rAF so no frame fires after destroy.
+      if (this.playbackRaf) {
+        cancelAnimationFrame(this.playbackRaf);
+        this.playbackRaf = null;
+      }
+      // Cancel any pending wheel rAF so no frame fires after destroy.
+      if (this._wheelRaf) {
+        cancelAnimationFrame(this._wheelRaf);
+        this._wheelRaf = 0;
+      }
+      this._pendingWheel = null;
       window.removeEventListener('resize', this._boundResize);
       document.removeEventListener('mouseup', this._boundMouseUp);
       document.removeEventListener('keydown', this._boundKeyDown);
+      // W22: release offscreen static cache canvas + its context so they can be GC'd.
+      this._staticCache = null;
+      this.ctx = null;
+      // W22: remove the module-level visibilitychange listener so a destroyed
+      // instance doesn't receive callbacks, and reset the flag so a new
+      // instance can register again.
+      if (_visibilityHandlerRegistered && _visibilityChangeHandler) {
+        document.removeEventListener('visibilitychange', _visibilityChangeHandler);
+        _visibilityHandlerRegistered = false;
+        _visibilityChangeHandler = null;
+      }
     },
 
     _resize() {
@@ -129,7 +157,6 @@ export function initPianoRoll() {
     _pitchToY(pitch) {
       const maxPitch = 127;
       const pianoAreaTop = HEADER_HEIGHT + F0_CURVE_AREA_HEIGHT;
-      const pianoAreaBottom = this.height;
       return pianoAreaTop + (maxPitch - pitch) * NOTE_HEIGHT * this.zoomY - this.scrollY;
     },
 
@@ -143,26 +170,47 @@ export function initPianoRoll() {
     },
 
     _snapBeats(beats) {
-      const grid = 1 / 16;
+      const grid = this.snapGrid;
       return Math.round(beats / grid) * grid;
     },
 
-    _findNoteAt(x, y) {
-      for (let i = this.notes.length - 1; i >= 0; i--) {
-        const note = this.notes[i];
-        const rx = Math.round(this._timeToX(note.start));
-        const ry = Math.round(this._pitchToY(note.pitch));
-        const rw = Math.round(note.duration * BEAT_WIDTH * this.zoomX);
-        const rh = Math.round(NOTE_HEIGHT * this.zoomY);
-        if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) {
-          return { note, nx: rx, ny: ry, nw: rw, nh: rh };
-        }
-      }
-      return null;
+    /**
+     * Half-width of the trailing resize hot zone in BEATS.
+     *
+     * targetPx = clamp(halfGridPx, 4, 12) where halfGridPx = (snapGrid *
+     * pxPerBeat) / 2. Scaling with the snap grid makes the clamp actually
+     * reachable: fine grids shrink the hot zone toward 4px, coarse grids
+     * grow it toward 12px. Returns beats so the hot zone scales naturally
+     * with zoom level.
+     */
+    _resizeHotZoneBeats() {
+      const pxPerBeat = BEAT_WIDTH * this.zoomX;
+      if (pxPerBeat <= 0) return 0.06;
+      const gridPx = this.snapGrid * pxPerBeat;
+      const targetPx = gridPx / 2;
+      const clampedPx = Math.max(4, Math.min(12, targetPx));
+      return clampedPx / pxPerBeat;
     },
 
-    _isResizeEdge(x, nx, nw) {
-      return x >= nx + nw - 6 && x <= nx + nw;
+    _findNoteAt(x, y) {
+      // Hit-test the exact rectangles users see. Converting y back to a rounded
+      // MIDI pitch made the top/bottom pixels of a drawn note resolve to the
+      // adjacent pitch row after zoom/DPR rounding, so a visible hit was treated
+      // as empty space and the legacy create-note path fired below the note.
+      const verticalTolerancePx = 2;
+      const resizeHotZonePx = Math.max(4, Math.min(12, this.snapGrid * BEAT_WIDTH * this.zoomX / 2));
+      for (let i = this.notes.length - 1; i >= 0; i--) {
+        const note = this.notes[i];
+        const nx = this._timeToX(note.start);
+        const ny = this._pitchToY(note.pitch);
+        const nw = Math.max(1, note.duration * BEAT_WIDTH * this.zoomX);
+        const nh = Math.max(1, NOTE_HEIGHT * this.zoomY);
+        if (x < nx || x > nx + nw) continue;
+        if (y < ny - verticalTolerancePx || y > ny + nh + verticalTolerancePx) continue;
+        const onResizeEdge = x >= nx + nw - resizeHotZonePx;
+        return { note, nx, ny, nw, nh, onResizeEdge };
+      }
+      return null;
     },
 
     _onMouseDown(e) {
@@ -174,35 +222,20 @@ export function initPianoRoll() {
       const hit = this._findNoteAt(x, y);
       if (hit) {
         this.selectedNoteId = hit.note.id;
-        if (this._isResizeEdge(x, hit.nx, hit.nw)) {
-          this.dragMode = 'resize';
-        } else {
-          this.dragMode = 'move';
-          this.dragNoteStart = { start: hit.note.start, pitch: hit.note.pitch, duration: hit.note.duration };
-        }
+        // Always capture an immutable drag snapshot. Resize previously reused
+        // the snapshot from the last operation, causing occasional length jumps.
+        this.dragNoteStart = { start: hit.note.start, pitch: hit.note.pitch, duration: hit.note.duration };
+        this.dragMode = hit.onResizeEdge ? 'resize' : 'move';
         this.dragStartX = x;
         this.dragStartY = y;
         this._dragMoved = false;
       } else {
-        const beats = this._snapBeats(this._xToTime(x));
-        const pitch = this._yToPitch(y);
-        const clampedPitch = Math.max(0, Math.min(127, pitch));
-        const newNote = {
-          id: Date.now() + Math.random(),
-          pitch: clampedPitch,
-          start: Math.max(0, beats),
-          duration: 0.25,
-          lyric: 'la',
-        };
-        this.notes.push(newNote);
-        this.selectedNoteId = newNote.id;
-        this.dragMode = 'resize';
-        this.dragStartX = x;
-        this.dragStartY = y;
-        this.dragNoteStart = { start: newNote.start, pitch: newNote.pitch, duration: newNote.duration };
-        this._dragMoved = false;
-        updateMidiInfo();
+        // Empty-space single click only clears/selects. Creating on mousedown
+        // made a near-miss below an existing note immediately add a note.
+        this.selectedNoteId = null;
+        this.dragMode = null;
       }
+
       this._staticCacheDirty = true;
       this.render();
     },
@@ -214,7 +247,7 @@ export function initPianoRoll() {
         const hit = this._findNoteAt(x, y);
         if (hit) {
           this.hoverNoteId = hit.note.id;
-          this.canvas.style.cursor = this._isResizeEdge(x, hit.nx, hit.nw) ? 'ew-resize' : 'move';
+          this.canvas.style.cursor = hit.onResizeEdge ? 'ew-resize' : 'move';
         } else {
           this.hoverNoteId = null;
           this.canvas.style.cursor = 'default';
@@ -243,7 +276,9 @@ export function initPianoRoll() {
       } else if (this.dragMode === 'resize') {
         const dxBeats = (x - this.dragStartX) / (BEAT_WIDTH * this.zoomX);
         let newDuration = this.dragNoteStart.duration + dxBeats;
-        newDuration = Math.max(1 / 16, this._snapBeats(newDuration));
+        // Resize minimum = one snap grid cell so the result always lands on
+        // a grid line.
+        newDuration = Math.max(this.snapGrid, this._snapBeats(newDuration));
         note.duration = newDuration;
       }
       this._staticCacheDirty = true;
@@ -280,33 +315,60 @@ export function initPianoRoll() {
       if (hit) {
         const note = hit.note;
         startInlineEdit(this, note, hit);
+      } else {
+        const beats = this._snapBeats(this._xToTime(x));
+        const newNote = {
+          id: Date.now() + Math.random(),
+          pitch: Math.max(0, Math.min(127, this._yToPitch(y))),
+          start: Math.max(0, beats),
+          duration: Math.max(this.snapGrid, 0.25),
+          lyric: 'la',
+        };
+        this.notes.push(newNote);
+        this.selectedNoteId = newNote.id;
+        this._staticCacheDirty = true;
+        this.render();
+        updateMidiInfo();
       }
     },
 
     _onWheel(e) {
       e.preventDefault();
-      const pos = this._getMousePos(e);
-      if (e.ctrlKey || e.metaKey) {
-        const oldZoomX = this.zoomX;
-        const delta = e.deltaY > 0 ? 0.9 : 1.1;
-        this.zoomX = Math.max(0.05, Math.min(4, this.zoomX * delta));
-        const mouseBeats = (pos.x + this.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
-        this.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * this.zoomX - pos.x;
-        this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
-        state.waveformZoomX = this.zoomX;
-        state.waveformScrollX = this.scrollX;
-        drawWaveformWithPlayhead(this.getCurrentTime());
-      } else if (e.shiftKey) {
-        this.scrollX += e.deltaY;
-        this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
-        state.waveformScrollX = this.scrollX;
-        drawWaveformWithPlayhead(this.getCurrentTime());
-      } else {
-        this.scrollY += e.deltaY;
-        this.scrollY = Math.max(0, Math.min(getMaxScrollY(), this.scrollY));
-      }
-      this._staticCacheDirty = true;
-      this.render();
+      // rAF-coalesce wheel events: trackpads fire many events per frame, and
+      // re-rendering the piano roll on every event causes jank. Capture the
+      // latest event and process it inside a single rAF callback; subsequent
+      // events before the frame fires just overwrite the pending state.
+      this._pendingWheel = e;
+      if (this._wheelRaf) return;
+      this._wheelRaf = requestAnimationFrame(() => {
+        this._wheelRaf = 0;
+        const ev = this._pendingWheel;
+        this._pendingWheel = null;
+        if (!ev) return;
+
+        const pos = this._getMousePos(ev);
+        if (ev.ctrlKey || ev.metaKey) {
+          const oldZoomX = this.zoomX;
+          const delta = ev.deltaY > 0 ? 0.9 : 1.1;
+          this.zoomX = Math.max(0.05, Math.min(4, this.zoomX * delta));
+          const mouseBeats = (pos.x + this.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
+          this.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * this.zoomX - pos.x;
+          this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
+          state.waveformZoomX = this.zoomX;
+          state.waveformScrollX = this.scrollX;
+          drawWaveformWithPlayhead(this.getCurrentTime());
+        } else if (ev.shiftKey) {
+          this.scrollX += ev.deltaY;
+          this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
+          state.waveformScrollX = this.scrollX;
+          drawWaveformWithPlayhead(this.getCurrentTime());
+        } else {
+          this.scrollY += ev.deltaY;
+          this.scrollY = Math.max(0, Math.min(getMaxScrollY(), this.scrollY));
+        }
+        this._staticCacheDirty = true;
+        this.render();
+      });
     },
 
     _secondsToBeats(seconds) {
@@ -507,7 +569,6 @@ export function initPianoRoll() {
       ctx.beginPath();
 
       let isFirst = true;
-      let lastVisibleX = -1;
       for (const frame of this.f0Data) {
         if (frame.f0 <= 0) {
           if (!isFirst) {
@@ -537,7 +598,6 @@ export function initPianoRoll() {
         } else {
           ctx.lineTo(x, y);
         }
-        lastVisibleX = x;
       }
 
       ctx.stroke();
@@ -650,14 +710,14 @@ export function initPianoRoll() {
           ctx.font = '10px sans-serif';
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
-          const displayText = note.lyric || midiToNoteName(note.pitch);
+          const displayText = (note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || midiToNoteName(note.pitch));
           ctx.fillText(displayText, x + 4, y + h / 2);
         } else if (w > 8) {
           ctx.fillStyle = c.noteText;
           ctx.font = '8px sans-serif';
           ctx.textAlign = 'left';
           ctx.textBaseline = 'middle';
-          const displayText = note.lyric || midiToNoteName(note.pitch);
+          const displayText = (note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || midiToNoteName(note.pitch));
           ctx.fillText(displayText, x + 2, y + h / 2);
         }
 

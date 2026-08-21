@@ -25,12 +25,13 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
           cache: npm
 
       - run: npm ci
 
-      - run: npm test
+      - name: Run tests (skip network & model loading/inference)
+        run: npm run test:ci
 
   build-and-release:
     name: Build and Release (${{ github.ref_name }})
@@ -45,7 +46,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 22
           cache: npm
 
       - name: Determine version and tag
@@ -71,26 +72,33 @@ jobs:
             fi
             IFS='.' read -r MAJOR MINOR PATCH <<< "$LAST_VERSION"
             NEW_VERSION="${MAJOR}.${MINOR}.$((PATCH + 1))"
+            BUILD_VERSION="$NEW_VERSION"
             TAG="$NEW_VERSION"
             PRERELEASE="false"
             IS_RELEASE="true"
             MAKE_LATEST="true"
           else
+            # Display version stays descriptive for the release name/body;
+            # BUILD_VERSION must be numeric (X.Y.Z.W) because Windows resedit
+            # (@electron/packager) requires integer version components.
             NEW_VERSION="nightly_${DATE}_${SHORT_SHA}"
+            BUILD_VERSION="1.0.0.${{ github.run_number }}"
             TAG="nightly"
             PRERELEASE="true"
             IS_RELEASE="false"
             MAKE_LATEST="false"
           fi
-          # Write version to package.json (NOT committed; only for this build)
-          node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$NEW_VERSION"
+          # Write BUILD_VERSION to package.json (NOT committed; only for this build).
+          # resedit rejects non-integer components like "nightly_20260630_abc1234".
+          node -e "const fs=require('fs'); const p=require('./package.json'); p.version=process.argv[1]; fs.writeFileSync('./package.json', JSON.stringify(p,null,2)+'\n')" "$BUILD_VERSION"
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "build_version=$BUILD_VERSION" >> $GITHUB_OUTPUT
           echo "tag=$TAG" >> $GITHUB_OUTPUT
           echo "prerelease=$PRERELEASE" >> $GITHUB_OUTPUT
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
           echo "make_latest=$MAKE_LATEST" >> $GITHUB_OUTPUT
-          echo "[ci] branch=$BRANCH version=$NEW_VERSION tag=$TAG prerelease=$PRERELEASE make_latest=$MAKE_LATEST"
+          echo "[ci] branch=$BRANCH version=$NEW_VERSION build_version=$BUILD_VERSION tag=$TAG prerelease=$PRERELEASE make_latest=$MAKE_LATEST"
 
       - name: Install dependencies
         run: npm ci
@@ -105,7 +113,6 @@ jobs:
           $electronVersion = "42.4.1"
           $cacheDir = "$env:LOCALAPPDATA\electron\Cache"
           $zipName = "electron-v$electronVersion-win32-x64.zip"
-          $zipPath = Join-Path $cacheDir $zipName
 
           Write-Host "=== Checking Electron binary ==="
           if (-not (Test-Path $electronExe)) {
@@ -126,21 +133,25 @@ jobs:
 
           Write-Host "=== Checking Electron zip cache (needed by electron-packager) ==="
           Write-Host "Cache dir: $cacheDir"
+          # @electron/get stores zips under Cache/<hash>/<zipName>, so search recursively.
+          $existingZip = $null
           if (Test-Path $cacheDir) {
+            $existingZip = Get-ChildItem $cacheDir -Recurse -Filter $zipName -File -ErrorAction SilentlyContinue | Select-Object -First 1
             Get-ChildItem $cacheDir -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
           } else {
             Write-Host "Cache dir does not exist"
           }
 
-          if (-not (Test-Path $zipPath)) {
+          if (-not $existingZip) {
             Write-Host "Electron zip not in cache, downloading via @electron/get..."
-            node -e "const get = require('@electron/get'); get.downloadArtifact({ version: '42.4.1', platform: 'win32', arch: 'x64', artifactName: 'electron' }).then(p => console.log('cached at:', p)).catch(e => { console.error(e); process.exit(1); })"
+            $downloadResult = node -e "const get = require('@electron/get'); get.downloadArtifact({ version: '$electronVersion', platform: 'win32', arch: 'x64', artifactName: 'electron' }).then(p => console.log(p)).catch(e => { console.error(e); process.exit(1); })"
+            Write-Host "cached at: $downloadResult"
             if (Test-Path $cacheDir) {
               Write-Host "=== Cache contents after download ==="
               Get-ChildItem $cacheDir -Recurse | Select-Object FullName, Length | Format-Table -AutoSize
             }
           } else {
-            Write-Host "Electron zip already cached: $zipPath"
+            Write-Host "Electron zip already cached: $($existingZip.FullName) ($($existingZip.Length) bytes)"
           }
 
       - name: Verify environment before build
@@ -229,7 +240,8 @@ jobs:
       - name: Compile installer with Inno Setup
         shell: pwsh
         run: |
-          $version = "${{ steps.version.outputs.version }}"
+          # Inno Setup / Windows expects a numeric X.Y.Z[.W] version.
+          $version = "${{ steps.version.outputs.build_version }}"
           $iscc = Get-Command iscc -ErrorAction SilentlyContinue
           if (-not $iscc) {
             $isccPath = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
@@ -270,10 +282,9 @@ jobs:
             Download `sxsinstaller_x64_no_models.exe` below and run it.
             ONNX models are auto-downloaded on first launch.
 
-            ### Direct download (always points to latest)
+            ### Direct download
 
-            - GitHub: https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe
-            - GitCode mirror: https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe
+            - GitHub: ${{ steps.version.outputs.is_release == 'true' && 'https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe' || format('https://github.com/Henley04/SXSEditor/releases/download/{0}/sxsinstaller_x64_no_models.exe', steps.version.outputs.tag) }}
           prerelease: ${{ steps.version.outputs.prerelease == 'true' }}
           make_latest: ${{ steps.version.outputs.make_latest }}
           files: inno/${{ env.INSTALLER_NAME }}

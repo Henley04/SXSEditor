@@ -16,7 +16,8 @@
           title: { en: 'Getting Started', zh: '快速上手' },
           items: [
             { href: 'quick-start.html', title: { en: 'Quick Start', zh: '快速开始' } },
-            { href: 'singer-creation.html', title: { en: 'Singer Creation', zh: '创建歌手' } }
+            { href: 'singer-creation.html', title: { en: 'Singer Creation', zh: '创建歌手' } },
+            { href: 'singer-market.html', title: { en: 'Singer Market', zh: '歌手市场' } }
           ]
         },
         {
@@ -59,7 +60,8 @@
           title: { en: 'Extending', zh: '扩展开发' },
           items: [
             { href: 'themes.html', title: { en: 'Themes & UI', zh: '主题与界面' } },
-            { href: 'testing-cli.html', title: { en: 'Testing & CLI', zh: '测试与命令行' } }
+            { href: 'testing-cli.html', title: { en: 'Testing & CLI', zh: '测试与命令行' } },
+            { href: 'singer-market.html', title: { en: 'Singer Market', zh: '歌手市场' } }
           ]
         }
       ]

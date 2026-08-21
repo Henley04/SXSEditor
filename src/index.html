@@ -27,11 +27,16 @@
         <div class="toolbar-group">
           <button id="btn-load" data-i18n="main.load" data-icon="folder-open">加载</button>
           <button id="btn-export" data-i18n="main.export" data-icon="upload">导出</button>
+          <button id="btn-export-lrc" data-i18n="main.exportLrc" data-icon="file-text">导出LRC</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
           <button id="btn-audio-to-midi" data-i18n="main.audioToMidi" data-icon="music">音频转MIDI</button>
           <button id="btn-import-midi" data-i18n="main.importMidi" data-icon="file-music">导入MIDI</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+          <button id="btn-open-singer-market" data-i18n="main.openSingerMarket" data-icon="market">歌手市场</button>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
@@ -41,8 +46,13 @@
       <div id="main-content">
         <div id="singer-panel">
           <div id="singer-panel-header">
-            <span data-i18n="main.singer">歌手</span>
-            <button id="btn-add-singer" aria-label="添加">+</button>
+            <span data-i18n="main.tracks">轨道</span>
+            <div class="singer-panel-actions">
+              <button id="btn-add-singer" aria-label="添加歌手" data-i18n-title="main.addSinger">+</button>
+              <button id="btn-import-accompaniment" class="btn-import-accompaniment" aria-label="导入伴奏" data-i18n-title="main.importAccompaniment">
+                <span data-icon="music" data-icon-class="icon--sm"></span>
+              </button>
+            </div>
           </div>
           <div id="singer-list" role="list"></div>
         </div>

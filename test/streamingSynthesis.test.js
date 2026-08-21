@@ -1,16 +1,12 @@
 const { expect } = require('chai');
 const sinon = require('sinon');
-const { OnnxSVSPipeline, SAMPLE_RATE } = require('../src/inference/pipeline');
+const { OnnxSVSPipeline } = require('../src/inference/pipeline');
 const {
   MEL_DIM,
   COND_DIM,
   HOP_SIZE,
+  SAMPLE_RATE,
   VOCODER_CHUNK_FRAMES,
-  VOCODER_OVERLAP_FRAMES,
-  DEFAULT_DIFF_STEPS,
-  CFG_STRENGTH,
-  CFG_RESCALE,
-  MAX_SAFE_FRAMES,
   NPU_STATIC_SEQ_LEN,
 } = require('../src/inference/pipeline/constants');
 
@@ -337,6 +333,56 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       });
     });
 
+    describe('长片段 (>30s) 回归测试', () => {
+      // Bug: synthesizeMultiStreaming 调用 _buildVocalSegments 后仅取 segments[0]，
+      // 当 fragment 音符跨度 > 30s（LONG_AUDIO_THRESHOLD_SEC）时，后续 segment 的音符
+      // 被丢弃，导致播放到 ~30s 后全部静音。修复后直接使用 filledNotes。
+      it('单分片 >30s 无分块 → 音频覆盖完整时长，30s 后非静音', async () => {
+        // 20 notes × 4 beats = 80 beats @ 120 BPM = 40 seconds (> 30s threshold)
+        const out = await pipeline.synthesizeMultiStreaming(
+          [{ notes: makeNotes(20), startTimeBeat: 0, durationBeats: 80, options: { diffStepChunk: false } }],
+          120,
+          {}
+        );
+        // totalMixedSamples = ceil(80/120*60*24000) = 960000
+        expect(out.length).to.equal(960000);
+        // 30s mark = 720000 samples; audio beyond must be non-zero
+        const sampleAt30s = out[720000];
+        expect(sampleAt30s).to.not.equal(0);
+        // Also check a sample near the end (39s = 936000)
+        expect(out[936000]).to.not.equal(0);
+      });
+
+      it('单分片 >30s 分块 (diffStepChunk=true) → 音频覆盖完整时长，30s 后非静音', async () => {
+        pipeline = buildMockPipeline();
+        installRecordingSessions(pipeline);
+        const onChunkAudio = sinon.spy();
+        await pipeline.synthesizeMultiStreaming(
+          [{ notes: makeNotes(20), startTimeBeat: 0, durationBeats: 80, options: { diffStepChunk: true, diffStepChunkFrames: 500, diffStepOverlapFrames: 50 } }],
+          120,
+          { onChunkAudio }
+        );
+        // onChunkAudio should cover audio beyond 30s
+        const maxSampleEnd = Math.max(...onChunkAudio.getCalls().map(c => c.args[0].sampleEnd));
+        expect(maxSampleEnd).to.be.greaterThan(720000); // > 30s mark
+      });
+
+      it('单分片 >30s → onChunkAudio 最后一次 isLast=true 覆盖完整音频', async () => {
+        pipeline = buildMockPipeline();
+        installRecordingSessions(pipeline);
+        const onChunkAudio = sinon.spy();
+        await pipeline.synthesizeMultiStreaming(
+          [{ notes: makeNotes(20), startTimeBeat: 0, durationBeats: 80, options: { diffStepChunk: true, diffStepChunkFrames: 500, diffStepOverlapFrames: 50 } }],
+          120,
+          { onChunkAudio }
+        );
+        const lastCall = onChunkAudio.lastCall.args[0];
+        expect(lastCall.isLast).to.equal(true);
+        // isLast chunk should cover audio beyond 30s
+        expect(lastCall.sampleEnd).to.be.greaterThan(720000);
+      });
+    });
+
     describe('多分片流式合成', () => {
       it('2 个分片无分块 → 音频按 startTimeBeat 正确放置', async () => {
         // frag0: startTimeBeat=0, 4 beats, totalFrames=100, samples=48000
@@ -514,7 +560,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
           diffStepOverlapFrames: 5,
           onChunkAudio,
           nSteps: 1, // 减少测试时间
-          cfg: 0,    // 注意：cfg=0 因 || 运算符回退到 CFG_STRENGTH=3.0
+          cfg: 0,    // cfg=0 跳过无条件预测，仅 cond 分支
         }
       );
       // 流式路径输出长度 = totalFrames * HOP_SIZE = 200 * 480 = 96000
@@ -547,7 +593,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       // 不传 onChunkAudio，即使 diffStepChunk=true，也不进入流式分块路径（singleSegOnChunk=null）。
       // 注意：常规路径仍会通过 _runDiffusionLoop 内部的 chunkOpts 检查进入 diffusion 分块
       // （runDiffusionLoopChunked），只是不流式推送 vocoder。diffStep.run 调用次数
-      // = chunks × nSteps × 2（cond + uncond，因 cfg=0 || CFG_STRENGTH=3.0）
+      // = chunks × nSteps × 1（仅 cond 分支，cfg=0）
       const out = await pipeline.synthesize(
         makeNotes(1),
         120,
@@ -593,7 +639,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       const onChunkAudio = sinon.spy();
       // 单音符 context padding 后 totalFrames=150（+25 前后 rest），chunkFrames=200
       // → 150 <= 200，不进入 diffusion 分块，走 runDiffusionLoop 整段
-      // nSteps=2, cfgStrength=3.0（cfg=0 || CFG_STRENGTH）→ 2 steps × 2 分支 (cond+uncond) = 4 runs
+      // nSteps=2, cfg=0 → 仅 cond 分支 → 2 steps × 1 run = 2 runs
       await pipeline.synthesize(
         makeNotes(1),
         120,
@@ -606,8 +652,8 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
           cfg: 0,
         }
       );
-      // 不分块：2 steps × 2 分支 = 4 runs
-      expect(diffRecord.length).to.equal(4);
+      // 不分块：2 steps × 1 分支 (cond only) = 2 runs
+      expect(diffRecord.length).to.equal(2);
     });
 
     it('流式分块路径：audioData 长度 = totalFrames * HOP_SIZE', async () => {
@@ -808,7 +854,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       expect(stubLoop.calledOnce).to.equal(true);
     });
 
-    it('onChunkMel 透传给 runDiffusionLoopChunked', async () => {
+    it('onChunkMel / samplerName / pitchCurveF0 / cfgScheduleOpts 透传给 runDiffusionLoopChunked', async () => {
       pipeline = buildMockPipeline();
       installRecordingSessions(pipeline);
       const stub = sinon.spy(pipeline._diffusion, 'runDiffusionLoopChunked');
@@ -821,11 +867,30 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         overlapFrames: 5,
       };
       const onChunkMel = sinon.spy();
-      await pipeline._runDiffusionLoop(xt, 100, ptMelData, 10, combinedCond, 1, 0, 0.75, () => {}, 0, 100, onChunkMel);
+      // M10: set pitchCurveF0 / cfgScheduleOpts on the pipeline so we can
+      // verify they are forwarded to runDiffusionLoopChunked.
+      const pitchCurveF0 = new Float32Array(100).fill(440);
+      const cfgScheduleOpts = { mode: 'linear', cfgStrengthStart: 1.0 };
+      const dynamicThresholdOpts = { enabled: true, percentile: 0.995 };
+      const abortSignal = new AbortController().signal;
+      pipeline._currentPitchCurveF0 = pitchCurveF0;
+      pipeline._currentCfgScheduleOpts = cfgScheduleOpts;
+      pipeline._currentDynamicThresholdOpts = dynamicThresholdOpts;
+      await pipeline._runDiffusionLoop(xt, 100, ptMelData, 10, combinedCond, 1, 0, 0.75, () => {}, 0, 100, onChunkMel, abortSignal);
       expect(stub.calledOnce).to.equal(true);
-      // 最后一个参数应为 onChunkMel
+      // 末尾参数顺序：[..., onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts, abortSignal]
+      // （Task 11/15 新增 pitchCurveF0 与 cfgScheduleOpts，动态阈值新增 dynamicThresholdOpts，协作式取消新增 abortSignal）
       const callArgs = stub.firstCall.args;
-      expect(callArgs[callArgs.length - 1]).to.equal(onChunkMel);
+      expect(callArgs[callArgs.length - 6]).to.equal(onChunkMel);
+      // 倒数第五个为 samplerName，默认 'stork2'（M6 changed DEFAULT_SOLVER euler→stork2）
+      expect(callArgs[callArgs.length - 5]).to.equal('stork2');
+      // M10: pitchCurveF0 与 cfgScheduleOpts 透传
+      expect(callArgs[callArgs.length - 4]).to.equal(pitchCurveF0);
+      expect(callArgs[callArgs.length - 3]).to.equal(cfgScheduleOpts);
+      // Dynamic thresholding opts forwarded
+      expect(callArgs[callArgs.length - 2]).to.equal(dynamicThresholdOpts);
+      // 协作式取消 abortSignal 透传至 runDiffusionLoopChunked
+      expect(callArgs[callArgs.length - 1]).to.equal(abortSignal);
     });
   });
 
@@ -999,12 +1064,13 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       expect(plan.specs.length).to.equal(3);
     });
 
-    it('overlapFrames=0 → overlap=0，fadeWindow 为空数组', () => {
+    it('overlapFrames=0 → overlap=0，无交叉淡入淡出（2 chunks）', () => {
       // totalFrames=200, chunkFrames=100, overlap=0
       // 步长 = 100，2 chunks
+      // N2: the per-chunk Hann fade window was removed as dead code (WSOLA
+      // replaced Hann OLA); _planChunks now returns { specs, overlap } only.
       const plan = diffusion._planChunks(200, 100, 0);
       expect(plan.overlap).to.equal(0);
-      expect(plan.fadeWindow.length).to.equal(0);
       expect(plan.specs.length).to.equal(2);
     });
 
@@ -1032,24 +1098,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       expect(plan.specs[n - 1].isLast).to.equal(true);
       for (let i = 0; i < n - 1; i++) {
         expect(plan.specs[i].isLast).to.equal(false);
-      }
-    });
-
-    it('Hann 窗满足 w[i] + w[N-1-i] = 1（对称归一化）', () => {
-      const plan = diffusion._planChunks(250, 100, 20);
-      const w = plan.fadeWindow;
-      const N = w.length;
-      for (let i = 0; i < N; i++) {
-        const sum = w[i] + w[N - 1 - i];
-        expect(sum).to.be.closeTo(1.0, 1e-6);
-      }
-    });
-
-    it('Hann 窗值在 [0, 1] 区间内', () => {
-      const plan = diffusion._planChunks(250, 100, 20);
-      for (let i = 0; i < plan.fadeWindow.length; i++) {
-        expect(plan.fadeWindow[i]).to.be.at.least(0);
-        expect(plan.fadeWindow[i]).to.be.at.most(1);
       }
     });
 
@@ -1099,10 +1147,11 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
             { name: 'xt_mask', type: 'float32', shape: [1, -1] },
           ],
           async run(inputs) {
+            const batch = inputs.xt_input.dims[0];
             const seqLen = inputs.xt_input.dims[1];
             runCalls.push({ seqLen, tVal: inputs.t.data[0] });
-            const data = new Float32Array(seqLen * MEL_DIM).fill(fillValue);
-            return { flow_pred: { type: 'float32', data, dims: [1, seqLen, MEL_DIM], dispose() {} } };
+            const data = new Float32Array(batch * seqLen * MEL_DIM).fill(fillValue);
+            return { flow_pred: { type: 'float32', data, dims: [batch, seqLen, MEL_DIM], dispose() {} } };
           },
         },
       };
@@ -1111,13 +1160,12 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
     it('首 chunk：直接整段 memcpy 写回（无交叉淡入淡出）', async () => {
       const totalFrames = 200;
       const ptFrameCount = 10;
-      const chunkFrames = 100;
+      const _chunkFrames = 100;
       const overlap = 20;
 
       const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
       const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
       const combinedCond = new Float32Array((ptFrameCount + totalFrames) * COND_DIM).fill(0.1);
-      const fadeWindow = new Float32Array(overlap).fill(0.5);
 
       const ctx = {
         sessions: makeSessions(),
@@ -1131,7 +1179,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap,
-        fadeWindow,
       };
       const spec = { chunkStart: 0, chunkEnd: 100, currentChunkFrames: 100, isFirst: true, isLast: false };
       const result = await diffusion._runSingleDiffusionChunk(ctx, spec, () => {}, 0, 50);
@@ -1143,7 +1190,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
     it('非首 chunk：重叠区逐帧加权混合', async () => {
       const totalFrames = 200;
       const ptFrameCount = 10;
-      const chunkFrames = 100;
+      const _chunkFrames = 100;
       const overlap = 20;
 
       const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
@@ -1153,10 +1200,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       }
       const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
       const combinedCond = new Float32Array((ptFrameCount + totalFrames) * COND_DIM).fill(0.1);
-      const fadeWindow = new Float32Array(overlap);
-      for (let i = 0; i < overlap; i++) {
-        fadeWindow[i] = 0.5 * (1 - Math.cos(Math.PI * (i + 1) / (overlap + 1)));
-      }
 
       const ctx = {
         sessions: makeSessions(0.5),
@@ -1170,7 +1213,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap,
-        fadeWindow,
       };
       const spec = { chunkStart: 80, chunkEnd: 180, currentChunkFrames: 100, isFirst: false, isLast: false };
       const result = await diffusion._runSingleDiffusionChunk(ctx, spec, () => {}, 0, 50);
@@ -1188,13 +1230,12 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
     it('末 chunk：newCommitted = chunkEnd（不扣 overlap）', async () => {
       const totalFrames = 250;
       const ptFrameCount = 10;
-      const chunkFrames = 100;
+      const _chunkFrames = 100;
       const overlap = 20;
 
       const xt = diffusion.randomNoise(totalFrames, MEL_DIM);
       const ptMelData = new Float32Array(ptFrameCount * MEL_DIM).fill(0.1);
       const combinedCond = new Float32Array((ptFrameCount + totalFrames) * COND_DIM).fill(0.1);
-      const fadeWindow = new Float32Array(overlap).fill(0.5);
 
       const ctx = {
         sessions: makeSessions(),
@@ -1208,7 +1249,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap,
-        fadeWindow,
       };
       // 末 chunk: [160, 250), 90 帧
       const spec = { chunkStart: 160, chunkEnd: 250, currentChunkFrames: 90, isFirst: false, isLast: true };
@@ -1216,7 +1256,7 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       expect(result.newCommitted).to.equal(250); // isLast → chunkEnd
     });
 
-    it('CFG > 0 时每 step 调用 2 次 diffStep.run（cond + uncond）', async () => {
+    it('CFG > 0 时每 step 调用 2 次 diffStep.run（batch=1 分离 cond/uncond）', async () => {
       const totalFrames = 200;
       const ptFrameCount = 10;
 
@@ -1236,11 +1276,10 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap: 20,
-        fadeWindow: new Float32Array(20).fill(0.5),
       };
       const spec = { chunkStart: 0, chunkEnd: 100, currentChunkFrames: 100, isFirst: true, isLast: false };
       await diffusion._runSingleDiffusionChunk(ctx, spec, () => {}, 0, 50);
-      // 2 steps × 2 runs (cfg>0) = 4 runs
+      // batch=1 model: 2 steps × 2 runs (cond + uncond) = 4 runs
       expect(runCalls.length).to.equal(4);
     });
 
@@ -1264,7 +1303,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap: 20,
-        fadeWindow: new Float32Array(20).fill(0.5),
       };
       const spec = { chunkStart: 0, chunkEnd: 100, currentChunkFrames: 100, isFirst: true, isLast: false };
       await diffusion._runSingleDiffusionChunk(ctx, spec, () => {}, 0, 50);
@@ -1298,7 +1336,6 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         isFP16: false,
         useStaticShapes: false,
         overlap: 20,
-        fadeWindow: new Float32Array(20).fill(0.5),
       };
       const spec = { chunkStart: 0, chunkEnd: 100, currentChunkFrames: 100, isFirst: true, isLast: false };
       const onProgress = sinon.spy();
@@ -1510,6 +1547,191 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       for (const rec of diffRecord) {
         expect(rec.seqLen).to.equal(NPU_STATIC_SEQ_LEN);
       }
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 分片级缓存 (Segment-level cache)
+//
+// 验证长音频多 segment 合成时，编辑某个音符只会重算包含该音符的 segment，
+// 其余 segment 直接复用缓存音频，跳过 diffusion+vocoder。
+// 测试通过 sinon.spy(pipeline, '_synthesizeSegment') 统计实际推理的 segment 数：
+//   - 命中分片缓存 → 不调用 _synthesizeSegment
+//   - 未命中 → 调用 _synthesizeSegment 并把结果写入分片缓存
+// ---------------------------------------------------------------------------
+
+describe('分片级缓存 (Segment-level cache) - 未改动 segment 不再推理', () => {
+  // 长音频 notes：N 个 1 拍音符 @ bpm=60 → N 秒（>30s 触发多 segment 路径）
+  function makeLongNotes(count, basePitch = 60) {
+    const notes = [];
+    for (let i = 0; i < count; i++) {
+      notes.push({ pitch: basePitch + (i % 12), start: i, duration: 1, lyric: 'la' });
+    }
+    return notes;
+  }
+
+  describe('LRU 基础 (_segCachePut / _segCacheGet / clearSynthCache)', () => {
+    it('未写入时 _segCacheGet 返回 null', () => {
+      const pipeline = buildMockPipeline();
+      expect(pipeline._segCacheGet('nope')).to.be.null;
+    });
+
+    it('写入后可读取，clearSynthCache 同时清空分片缓存', () => {
+      const pipeline = buildMockPipeline();
+      const audio = new Float32Array(100).fill(0.5);
+      pipeline._segCachePut('k1', audio);
+      expect(pipeline._segCacheGet('k1')).to.equal(audio);
+      expect(pipeline._segCacheMap.size).to.equal(1);
+      pipeline.clearSynthCache();
+      expect(pipeline._segCacheMap).to.be.null;
+      expect(pipeline._segCacheBytes).to.equal(0);
+      expect(pipeline._segCacheGet('k1')).to.be.null;
+    });
+
+    it('dispose 清空分片缓存', () => {
+      const pipeline = buildMockPipeline();
+      pipeline._segCachePut('k1', new Float32Array(100));
+      expect(pipeline._segCacheMap).to.not.be.null;
+      pipeline.dispose();
+      expect(pipeline._segCacheMap).to.be.null;
+      expect(pipeline._segCacheBytes).to.equal(0);
+    });
+
+    it('空音频与超长音频不缓存', () => {
+      const pipeline = buildMockPipeline();
+      pipeline._segCachePut('empty', new Float32Array(0));
+      pipeline._segCachePut('huge', new Float32Array(SAMPLE_RATE * 121));
+      expect(pipeline._segCacheMap).to.be.null;
+    });
+
+    it('LRU 淘汰最旧条目', () => {
+      const pipeline = buildMockPipeline();
+      pipeline._segCacheMaxEntries = 2;
+      pipeline._segCachePut('a', new Float32Array(10).fill(1));
+      pipeline._segCachePut('b', new Float32Array(10).fill(2));
+      pipeline._segCachePut('c', new Float32Array(10).fill(3)); // 淘汰 a
+      expect(pipeline._segCacheGet('a')).to.be.null;
+      expect(pipeline._segCacheGet('b')).to.not.be.null;
+      expect(pipeline._segCacheGet('c')).to.not.be.null;
+    });
+  });
+
+  describe('多 segment 合成路径', () => {
+    it('首次合成长音频：每个 segment 都推理并写入分片缓存', async () => {
+      const pipeline = buildMockPipeline();
+      installRecordingSessions(pipeline);
+      const spy = sinon.spy(pipeline, '_synthesizeSegment');
+      const notes = makeLongNotes(40); // 40s @ bpm=60 → 多 segment
+      const segments = pipeline._buildVocalSegments(pipeline._fillNoteGaps(notes), 60);
+      expect(segments.length).to.be.greaterThan(1);
+
+      await pipeline.synthesize(notes, 60, { nSteps: 1, cfg: 0 });
+
+      // 每个 segment 都未命中分片缓存 → 全部走 _synthesizeSegment
+      expect(spy.callCount).to.equal(segments.length);
+      // 全部 segment 已写入分片缓存（不同 segStartBeat → 不同 key）
+      expect(pipeline._segCacheMap.size).to.equal(segments.length);
+    });
+
+    it('改动单个 segment 内的音符：只重算该 segment，其余命中分片缓存', async () => {
+      const pipeline = buildMockPipeline();
+      installRecordingSessions(pipeline);
+      const notesA = makeLongNotes(40);
+      // 首次合成填充分片缓存
+      await pipeline.synthesize(notesA, 60, { nSteps: 1, cfg: 0 });
+      expect(pipeline._segCacheMap.size).to.be.greaterThan(0);
+
+      // 改动 beat 2 的音符音高：仅落在 seg[0]（beats 0~30）内，
+      // 不影响 segment 边界（pitch 不参与 buildVocalSegments），其余 segment 输入不变。
+      const notesB = notesA.map(n => ({ ...n }));
+      notesB[2].pitch = 80;
+
+      // 仅清空整曲缓存（_synthCacheMap），保留分片缓存，强制进入 segment 循环
+      pipeline._synthCache = null;
+      pipeline._synthCacheMap = null;
+      pipeline._synthCacheBytes = 0;
+
+      const spy = sinon.spy(pipeline, '_synthesizeSegment');
+      await pipeline.synthesize(notesB, 60, { nSteps: 1, cfg: 0 });
+
+      // 只有包含 beat 2 的 seg[0] 未命中 → 仅推理 1 次；seg[1] 命中缓存
+      expect(spy.callCount).to.equal(1);
+    });
+
+    it('未改动整曲（仅清空整曲缓存）：全部 segment 命中，不调用 _synthesizeSegment', async () => {
+      const pipeline = buildMockPipeline();
+      installRecordingSessions(pipeline);
+      const notes = makeLongNotes(40);
+      await pipeline.synthesize(notes, 60, { nSteps: 1, cfg: 0 });
+
+      // 清空整曲缓存，保留分片缓存 → 强制进入 segment 循环
+      pipeline._synthCache = null;
+      pipeline._synthCacheMap = null;
+      pipeline._synthCacheBytes = 0;
+
+      const spy = sinon.spy(pipeline, '_synthesizeSegment');
+      const out = await pipeline.synthesize(notes, 60, { nSteps: 1, cfg: 0 });
+
+      // 全部分片命中 → 不推理
+      expect(spy.callCount).to.equal(0);
+      expect(out.length).to.be.greaterThan(0);
+    });
+
+    it('clearSynthCache 后重新合成：全部 segment 重新推理', async () => {
+      const pipeline = buildMockPipeline();
+      installRecordingSessions(pipeline);
+      const notes = makeLongNotes(40);
+      await pipeline.synthesize(notes, 60, { nSteps: 1, cfg: 0 });
+      expect(pipeline._segCacheMap.size).to.be.greaterThan(0);
+
+      // 清空所有缓存（整曲 + 分片）
+      pipeline.clearSynthCache();
+      expect(pipeline._segCacheMap).to.be.null;
+
+      const segments = pipeline._buildVocalSegments(pipeline._fillNoteGaps(notes), 60);
+      const spy = sinon.spy(pipeline, '_synthesizeSegment');
+      await pipeline.synthesize(notes, 60, { nSteps: 1, cfg: 0 });
+
+      // 无分片缓存命中 → 每个 segment 都重新推理
+      expect(spy.callCount).to.equal(segments.length);
+    });
+
+    // v3 行为变更：perSegAutoShift 已禁用（perSegAutoShift=false），globalTargetMedian
+    // 始终为 null，_computeSegF0Shift 返回全局 f0Shift 不再随段中位数变化。
+    // 因此编辑单个音符的 pitch 只使该音符所在 segment 失效，其余 segment 命中缓存。
+    // 这保证了同一 MIDI 音符在不同推理分段中绝对音高一致。
+    it('autoShift 开启但 perSegAutoShift 已禁用：编辑单音符 pitch 仅失效所在 segment', async () => {
+      const pipeline = buildMockPipeline();
+      installRecordingSessions(pipeline);
+      const spy = sinon.spy(pipeline, '_synthesizeSegment');
+
+      // 40 音符 @ bpm=60（1 拍=1s）→ 40s 多 segment。
+      const notesA = [];
+      for (let i = 0; i < 40; i++) {
+        notesA.push({ pitch: i < 21 ? 58 : 62, start: i, duration: 1, lyric: 'la' });
+      }
+      // 首次合成：autoShift 开启，填充分片缓存
+      await pipeline.synthesize(notesA, 60, { nSteps: 1, cfg: 0, autoShift: true });
+      const segCount = pipeline._buildVocalSegments(pipeline._fillNoteGaps(notesA), 60).length;
+      expect(segCount).to.be.greaterThan(1);
+      expect(pipeline._segCacheMap.size).to.equal(segCount);
+      spy.resetHistory();
+
+      // 编辑：把一个 pitch 58 的音符改成 80。
+      const notesB = notesA.map(n => ({ ...n }));
+      notesB[0].pitch = 80;
+
+      // 清空整曲缓存保留分片缓存，强制进入 segment 循环
+      pipeline._synthCache = null;
+      pipeline._synthCacheMap = null;
+      pipeline._synthCacheBytes = 0;
+
+      await pipeline.synthesize(notesB, 60, { nSteps: 1, cfg: 0, autoShift: true });
+
+      // perSegAutoShift=false → globalTargetMedian=null → segF0Shift 不随段变化
+      // → 仅 notesB[0] 所在 segment 的 cache key 变化，其余 segment 命中缓存
+      expect(spy.callCount).to.equal(1);
     });
   });
 });

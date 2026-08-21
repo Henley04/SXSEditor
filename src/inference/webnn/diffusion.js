@@ -5,11 +5,14 @@
 import { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } from './constants.js';
 import { getOrt } from './ortSetup.js';
 import { runSession } from './sessionManager.js';
-import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom, padToLength, trimOutputToLength, disposeTensor } from './utils.js';
+import { createFloatTensor, outputToFloat32, float32ToFloat16, batchFloat32ToFloat16, gaussianRandom, padToLength, disposeTensor } from './utils.js';
+import { createSampler } from '../pipeline/samplers/index.js';
+import { resolveCfgAtStep, applyDynamicThreshold } from '../pipeline/cfgSchedule.js';
 
 /**
  * 单片段扩散采样循环
  * @param {Object} params
+ * @param {string} [params.samplerName='euler'] - 求解器名称
  * @returns {{ xtData: Float32Array, totalFrames: number, diffTotalMs: number, diffInferTotal: number }}
  */
 export async function runDiffusionLoop({
@@ -24,6 +27,9 @@ export async function runDiffusionLoop({
     floatType,
     npuDiffBatchSize = 4,
     useStaticShapes = false,
+    samplerName = 'euler',
+    cfgScheduleOpts = null,
+    dynamicThresholdOpts = null,
 }) {
     const ort = getOrt();
 
@@ -38,7 +44,6 @@ export async function runDiffusionLoop({
     const frameMask = new Float32Array(totalFramesWithPrompt).fill(1);
     const xtInputBuf = new Float32Array(totalFramesWithPrompt * MEL_DIM);
     const cfgPredBuf = new Float32Array(totalFrames * MEL_DIM);
-    const dt = 1.0 / totalSteps;
 
     // prompt frames don't change, copy once
     if (ptMelData) {
@@ -111,6 +116,20 @@ export async function runDiffusionLoop({
         tTensor = new ort.Tensor('float32', tTensorBuf, [1]);
     }
 
+    // S11: dispose every pre-allocated tensor on exit (success or exception).
+    // Previously the dispose calls lived after the loop, so a runSession throw
+    // mid-loop would skip them and leak NPU memory across syntheses.
+    const _disposeAllTensors = () => {
+        disposeTensor(condTensorConst);
+        disposeTensor(frameMaskTensorConst);
+        disposeTensor(cfgCondTensor);
+        disposeTensor(cfgMaskTensor);
+        disposeTensor(cfgXtTensor);
+        disposeTensor(cfgTTensor);
+        disposeTensor(xtInputTensor);
+        disposeTensor(tTensor);
+    };
+
     // Diffusion step timing stats
     let diffInferMin = Infinity, diffInferMax = 0, diffInferTotal = 0;
     let diffPrepMin = Infinity, diffPrepMax = 0, diffPrepTotal = 0;
@@ -118,20 +137,35 @@ export async function runDiffusionLoop({
 
     const tDiff0 = performance.now();
 
-    for (let step = 0; step < totalSteps; step++) {
-        const tVal = (step + 0.5) / totalSteps;
+    // ===== 求解器抽象 =====
+    // 与 ORT/DML 路径 (pipeline/diffusion.js) 对齐：
+    //   evalDiffStep(t, xtOverride?): 执行 cond + (可选)uncond 推理，返回独立副本
+    //   combine(condPred, uncondPred): CFG + Rescale 合并，写入 vBuf（复用）
+    //   sampler.step 将 delta 写入 deltaBuf（复用），返回 { nfe }
+    const sampler = createSampler(samplerName);
+    const useCfg = cfgStrength > 0;
 
-        // Update xt input buffer (only the non-prompt part changes)
-        const tPrep0 = performance.now();
+    // 预分配复用缓冲区（跨步复用，0 per-step 分配）
+    const _targetLen = totalFrames * MEL_DIM;
+    const buffers = {
+        vBuf: new Float32Array(_targetLen),
+        deltaBuf: new Float32Array(_targetLen),
+        v1Buf: new Float32Array(_targetLen),
+        xPredBuf: new Float32Array(_targetLen),
+    };
+
+    // evalDiffStep: 执行 cond + (可选)uncond 推理
+    // xtOverride 可选：用于多步评估求解器（如 Heun）的预测子步骤
+    const evalDiffStep = async (t, xtOverride) => {
+        const xtData = xtOverride || xt.data;
+        // 更新 xtInputBuf 的 target 段
         for (let f = 0; f < totalFrames; f++) {
             for (let d = 0; d < MEL_DIM; d++) {
-                xtInputBuf[(ptFrameCount + f) * MEL_DIM + d] = xt.data[f * MEL_DIM + d];
+                xtInputBuf[(ptFrameCount + f) * MEL_DIM + d] = xtData[f * MEL_DIM + d];
             }
         }
 
-        const tStep = performance.now();
-
-        if (cfgStrength > 0) {
+        if (useCfg) {
             // === CFG batch: conditional + unconditional in one call ===
             const tPrep = performance.now();
             cfgBatchBuf.fill(0);
@@ -140,108 +174,64 @@ export async function runDiffusionLoop({
                 if (r % 2 === 0) {
                     cfgBatchBuf.set(xtInputBuf, rowOff);
                 } else {
-                    // unconditional: xt at position 0 (no prompt offset),
-                    // matching DML path and official reverse_diffusion
+                    // unconditional: xt at position 0 (no prompt offset)
                     for (let f = 0; f < totalFrames; f++) {
                         for (let d = 0; d < MEL_DIM; d++) {
-                            cfgBatchBuf[rowOff + f * MEL_DIM + d] = xt.data[f * MEL_DIM + d];
+                            cfgBatchBuf[rowOff + f * MEL_DIM + d] = xtData[f * MEL_DIM + d];
                         }
                     }
                 }
             }
-
             if (floatType === 'float16') {
                 batchFloat32ToFloat16(cfgBatchBuf, cfgXtTensor.data, cfgBatchBuf.length);
-                for (let r = 0; r < diffBatch; r++) cfgTBuf[r] = float32ToFloat16(tVal);
+                for (let r = 0; r < diffBatch; r++) cfgTBuf[r] = float32ToFloat16(t);
             } else {
-                cfgTBuf.fill(tVal);
+                cfgTBuf.fill(t);
             }
             const prepMs = performance.now() - tPrep;
 
-            // NPU inference
             const tInfer = performance.now();
             const batchResults = await runSession('diffStep', {
                 xt_input: cfgXtTensor, t: cfgTTensor, cond: cfgCondTensor, xt_mask: cfgMaskTensor,
             });
             const batchPredRaw = batchResults['flow_pred'];
-            // outputToFloat32 对 float16 输出会新建独立 Float32Array；对 float32 输出返回底层视图。
-            // 为安全释放张量，float32 路径下用 .slice() 取独立副本，确保 dispose 后 batchPred 仍可用。
             const batchPred = outputToFloat32(batchPredRaw);
             const batchPredSafe = batchPredRaw.type === 'float32' ? batchPred.slice() : batchPred;
-            // 立即释放输出张量，防止 64 步累积导致 NPU 显存耗尽
             disposeTensor(batchPredRaw);
             const inferMs = performance.now() - tInfer;
 
-            // CFG post-processing: merged into 2 passes instead of 3
-            // Pass 1: compute CFG values + accumulate means
-            const tCfg = performance.now();
-            const targetLen = totalFrames * MEL_DIM;
-            let posSum = 0, cfgAdjSum = 0;
+            // 统计：prep/infer 在此累加（与原实现一致）
+            diffPrepMin = Math.min(diffPrepMin, prepMs);
+            diffPrepMax = Math.max(diffPrepMax, prepMs);
+            diffPrepTotal += prepMs;
+            diffInferMin = Math.min(diffInferMin, inferMs);
+            diffInferMax = Math.max(diffInferMax, inferMs);
+            diffInferTotal += inferMs;
+
+            // 提取 cond 段（target 部分）和 uncond 段（target 部分）为独立副本
+            const condPred = new Float32Array(totalFrames * MEL_DIM);
+            const uncondPred = new Float32Array(totalFrames * MEL_DIM);
             for (let f = 0; f < totalFrames; f++) {
                 const condSrc = (ptFrameCount + f) * MEL_DIM;
                 const uncondSrc = (diffSeqLen + f) * MEL_DIM;
                 const flatBase = f * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
-                    const condVal = batchPredSafe[condSrc + d];
-                    const uncondVal = batchPredSafe[uncondSrc + d];
-                    posSum += condVal;
-                    const cfgVal = condVal + cfgStrength * (condVal - uncondVal);
-                    cfgPredBuf[flatBase + d] = cfgVal;
-                    cfgAdjSum += cfgVal;
+                    condPred[flatBase + d] = batchPredSafe[condSrc + d];
+                    uncondPred[flatBase + d] = batchPredSafe[uncondSrc + d];
                 }
             }
-            const posMean = posSum / targetLen;
-            const cfgAdjMean = cfgAdjSum / targetLen;
-            // Pass 2: compute variance + apply rescale + update xt (merged)
-            // Rescale 公式与 DML 路径 (pipeline/diffusion.js) 保持一致：
-            //   rescaledVal = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal
-            // 其中 rescale = posStd / cfgAdjStd。原 WebNN 单段路径漏掉 (1-cfgRescale)*cfgVal 项，
-            // 导致默认 cfgRescale=0.75 时流量预测被错误缩放 25%。
-            let posVarSum = 0, cfgAdjVarSum = 0;
-            for (let i = 0; i < targetLen; i++) {
-                const pv = batchPredSafe[ptFrameCount * MEL_DIM + i] - posMean;
-                posVarSum += pv * pv;
-                const cd = cfgPredBuf[i] - cfgAdjMean;
-                cfgAdjVarSum += cd * cd;
-            }
-            // 对齐官方 PyTorch torch.std() (unbiased, N-1) 和 DML 路径：
-            // 分母用 N-1（贝塞尔修正），epsilon 仅在分母除零保护（不在 sqrt 内）。
-            const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
-            const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
-            const rescale = posStd / (cfgAdjStd + 1e-8);
-            for (let i = 0; i < targetLen; i++) {
-                const cfgVal = cfgPredBuf[i];
-                const rescaledVal = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
-                xt.data[i] += dt * rescaledVal;
-            }
-            const cfgMs = performance.now() - tCfg;
-
-            // Track stats
-            const prepTotalMs = prepMs + (tPrep - tPrep0);
-            diffPrepMin = Math.min(diffPrepMin, prepTotalMs);
-            diffPrepMax = Math.max(diffPrepMax, prepTotalMs);
-            diffPrepTotal += prepTotalMs;
-            diffInferMin = Math.min(diffInferMin, inferMs);
-            diffInferMax = Math.max(diffInferMax, inferMs);
-            diffInferTotal += inferMs;
-            diffCfgMin = Math.min(diffCfgMin, cfgMs);
-            diffCfgMax = Math.max(diffCfgMax, cfgMs);
-            diffCfgTotal += cfgMs;
-
-            if (step === 0 || step === totalSteps - 1) {
-                console.log(`[WebNN] diffStep batch=${diffBatch} [${step}/${totalSteps}]: total=${(performance.now() - tStep).toFixed(0)}ms (prep=${prepMs.toFixed(1)} + infer=${inferMs.toFixed(1)} + cfg=${cfgMs.toFixed(1)})`);
-            }
+            return { condPred, uncondPred };
         } else {
             // === No CFG: single batch=1 call ===
             const tPrep = performance.now();
             if (floatType === 'float16') {
                 batchFloat32ToFloat16(xtInputBuf, xtInputTensor.data, xtInputBuf.length);
-                tTensorBuf[0] = float32ToFloat16(tVal);
+                tTensorBuf[0] = float32ToFloat16(t);
             } else {
                 const noCfgData = xtInputTensor.data;
                 noCfgData.fill(0);
                 noCfgData.set(xtInputBuf);
-                tTensorBuf[0] = tVal;
+                tTensorBuf[0] = t;
             }
             const prepMs = performance.now() - tPrep;
 
@@ -250,45 +240,129 @@ export async function runDiffusionLoop({
                 xt_input: xtInputTensor, t: tTensor, cond: condTensorConst, xt_mask: frameMaskTensorConst,
             });
             const predRaw = predResults['flow_pred'];
-            // 同 CFG 路径：float32 输出取独立副本后再释放张量
             const predData = outputToFloat32(predRaw);
             const predDataSafe = predRaw.type === 'float32' ? predData.slice() : predData;
             disposeTensor(predRaw);
             const inferMs = performance.now() - tInfer;
 
-            const prepTotalMs = prepMs + (tPrep - tPrep0);
-            diffPrepMin = Math.min(diffPrepMin, prepTotalMs);
-            diffPrepMax = Math.max(diffPrepMax, prepTotalMs);
-            diffPrepTotal += prepTotalMs;
+            diffPrepMin = Math.min(diffPrepMin, prepMs);
+            diffPrepMax = Math.max(diffPrepMax, prepMs);
+            diffPrepTotal += prepMs;
             diffInferMin = Math.min(diffInferMin, inferMs);
             diffInferMax = Math.max(diffInferMax, inferMs);
             diffInferTotal += inferMs;
 
-            if (step === 0 || step === totalSteps - 1) {
-                console.log(`[WebNN] diffStep batch=1 [${step}/${totalSteps}]: total=${(performance.now() - tStep).toFixed(0)}ms (prep=${prepMs.toFixed(1)} + infer=${inferMs.toFixed(1)})`);
-            }
-
+            // 提取 target 段为独立副本
+            const condPred = new Float32Array(totalFrames * MEL_DIM);
             for (let f = 0; f < totalFrames; f++) {
                 const tgtOffset = (ptFrameCount + f) * MEL_DIM;
                 for (let d = 0; d < MEL_DIM; d++) {
-                    xt.data[f * MEL_DIM + d] += dt * predDataSafe[tgtOffset + d];
+                    condPred[f * MEL_DIM + d] = predDataSafe[tgtOffset + d];
                 }
             }
+            return { condPred, uncondPred: null };
         }
+    };
+
+    // Task 11 / M1: track current step for CFG schedule resolution (aligned with
+    // pipeline/diffusion.js). constant mode returns cfgStrength byte-identically;
+    // linear/cosine/custom adjust CFG per step. cfgScheduleOpts null = legacy fixed CFG.
+    let currentStep = 0;
+
+    // combine: CFG + Rescale 合并，写入 vBuf（复用），返回 vBuf 引用
+    // 无 CFG 时直接拷贝 condPred 到 vBuf（condPred 已是 target 段）。
+    // 有 CFG 时 single-pass Welford 在线方差（Task 7.2 — 与 ORT 路径对齐）：
+    //   Pass 1: cfgVal → cfgPredBuf，Welford 累加 posMean/posM2 + cfgAdjMean/cfgAdjM2
+    //   Pass 2: 用 Welford 最终值算 std/rescale → vBuf
+    const combineRaw = (condPred, uncondPred) => {
+        const v = buffers.vBuf;
+        if (!useCfg) {
+            v.set(condPred); // condPred 已是 target 段
+            return v;
+        }
+        const targetLen = totalFrames * MEL_DIM;
+        // Task 11 / M1: resolve effective CFG for this step once (constant = cfgStrength,
+        // byte-identical; linear/cosine/custom adjust per step). Aligned with DML path.
+        const effectiveCfg = cfgScheduleOpts
+            ? resolveCfgAtStep({ ...cfgScheduleOpts, cfgStrength, step: currentStep, totalSteps })
+            : cfgStrength;
+        // Single-pass Welford online variance (Task 7.2 — aligned with pipeline/diffusion.js)
+        // Pass 1: cfgVal → cfgPredBuf, Welford accumulate posMean/posM2 + cfgAdjMean/cfgAdjM2
+        let posMean = 0, posM2 = 0;
+        let cfgAdjMean = 0, cfgAdjM2 = 0;
+        let n = 0;
+        for (let i = 0; i < targetLen; i++) {
+            const condVal = condPred[i];
+            const uncondVal = uncondPred[i];
+            const cfgVal = condVal + effectiveCfg * (condVal - uncondVal);
+            cfgPredBuf[i] = cfgVal;
+            n++;
+            const posDelta = condVal - posMean;
+            posMean += posDelta / n;
+            posM2 += posDelta * (condVal - posMean);
+            const cfgDelta = cfgVal - cfgAdjMean;
+            cfgAdjMean += cfgDelta / n;
+            cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
+        }
+        // Dynamic thresholding (arXiv:2507.08965): clip extreme CFG values
+        // per-frame before rescale. Aligned with DML path.
+        // NOTE: Welford cfgAdjM2 above was accumulated on pre-threshold cfgVal,
+        // so cfgAdjStd is slightly inflated. This makes rescale conservative
+        // (under-amplification), which is safer than over-amplification.
+        if (dynamicThresholdOpts && dynamicThresholdOpts.percentile > 0) {
+            applyDynamicThreshold(cfgPredBuf, targetLen, MEL_DIM, dynamicThresholdOpts.percentile);
+        }
+        // Pass 2: std/rescale + write vBuf (Bessel correction N-1 denominator)
+        const posStd = Math.sqrt(Math.max(0, posM2) / Math.max(1, n - 1));
+        const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjM2) / Math.max(1, n - 1));
+        const rescale = posStd / (cfgAdjStd + 1e-8);
+        for (let i = 0; i < targetLen; i++) {
+            const cfgVal = cfgPredBuf[i];
+            v[i] = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
+        }
+        return v;
+    };
+
+    // 计时包装：combine 调用前后累加 diffCfg 统计
+    const combine = (condPred, uncondPred) => {
+        const tCfg = performance.now();
+        const result = combineRaw(condPred, uncondPred);
+        const cfgMs = performance.now() - tCfg;
+        diffCfgMin = Math.min(diffCfgMin, cfgMs);
+        diffCfgMax = Math.max(diffCfgMax, cfgMs);
+        diffCfgTotal += cfgMs;
+        return result;
+    };
+
+    let totalNFE = 0;
+    try {
+        for (let step = 0; step < totalSteps; step++) {
+            currentStep = step;
+            const tStep = performance.now();
+            const { nfe } = await sampler.step({
+                evalDiffStep, combine, step, totalSteps,
+                xtData: xt.data, buffers,
+            });
+            totalNFE += nfe;
+            // 累加 deltaBuf 到 xt.data
+            const delta = buffers.deltaBuf;
+            for (let i = 0; i < delta.length; i++) {
+                xt.data[i] += delta[i];
+            }
+
+            if (step === 0 || step === totalSteps - 1) {
+                console.log(`[WebNN] diffStep batch=${diffBatch} sampler=${samplerName} [${step}/${totalSteps}]: total=${(performance.now() - tStep).toFixed(0)}ms nfe=${nfe}`);
+            }
+        }
+    } finally {
+        // S11: always release pre-allocated tensors, even if runSession throws
+        // mid-loop. Without this, an exception would leak 8 tensors' worth of
+        // NPU memory per synthesis.
+        _disposeAllTensors();
     }
 
-    // 循环结束：释放所有在循环外预分配的常量/复用张量，防止跨合成累积
-    disposeTensor(condTensorConst);
-    disposeTensor(frameMaskTensorConst);
-    disposeTensor(cfgCondTensor);
-    disposeTensor(cfgMaskTensor);
-    disposeTensor(cfgXtTensor);
-    disposeTensor(cfgTTensor);
-    disposeTensor(xtInputTensor);
-    disposeTensor(tTensor);
-
     const diffTotalMs = performance.now() - tDiff0;
-    console.log(`[WebNN] Diffusion total: ${diffTotalMs.toFixed(0)}ms (${totalSteps} steps, batch=${diffBatch})`);
+    console.log(`[WebNN] Diffusion total: ${diffTotalMs.toFixed(0)}ms (${totalSteps} steps, ${totalNFE} NFE, batch=${diffBatch})`);
     console.log(`[WebNN]   prep  — min=${diffPrepMin.toFixed(1)} max=${diffPrepMax.toFixed(1)} avg=${(diffPrepTotal / totalSteps).toFixed(1)} total=${diffPrepTotal.toFixed(0)}ms`);
     console.log(`[WebNN]   infer — min=${diffInferMin.toFixed(1)} max=${diffInferMax.toFixed(1)} avg=${(diffInferTotal / totalSteps).toFixed(1)} total=${diffInferTotal.toFixed(0)}ms`);
     if (cfgStrength > 0) {
@@ -302,12 +376,20 @@ export async function runDiffusionLoop({
         totalFrames,
         diffTotalMs,
         diffInferTotal,
+        totalNFE,
     };
 }
 
 /**
  * 批量扩散采样循环（2 个片段，batch=4）
+ *
+ * 注意：批量路径的 batch=4 优化与多步评估求解器（Heun/Extrap）的 per-segment
+ * evalDiffStep 抽象不兼容。Phase 1 策略：
+ *   - Euler 求解器：走原 batch=4 优化路径
+ *   - 非 Euler 求解器：退化为两次独立 runDiffusionLoop 调用（牺牲 batch 优化，保证正确性）
+ *
  * @param {Object} params
+ * @param {string} [params.samplerName='euler'] - 求解器名称
  * @returns {Array<{ xtData: Float32Array, totalFrames: number }>}
  */
 export async function runBatchDiffusionLoop({
@@ -315,12 +397,39 @@ export async function runBatchDiffusionLoop({
     totalSteps,
     floatType,
     useStaticShapes = false,
+    samplerName = 'euler',
+    cfgScheduleOpts = null,
+    dynamicThresholdOpts = null,
 }) {
+    // 非 Euler 求解器：退化为两次单段调用，保证正确性
+    if (samplerName !== 'euler') {
+        console.warn(`[WebNN] runBatchDiffusionLoop: sampler=${samplerName} not supported in batch path, fallback to sequential single-segment calls`);
+        const results = [];
+        for (const s of segData) {
+            const r = await runDiffusionLoop({
+                combinedCond: s.combinedCond,
+                totalFrames: s.totalFrames,
+                totalFramesWithPrompt: s.totalFramesWithPrompt,
+                ptFrameCount: s.ptFrameCount,
+                ptMelData: s.ptMelData,
+                totalSteps,
+                cfgStrength: s.cfgStrength,
+                cfgRescale: s.cfgRescale,
+                floatType,
+                npuDiffBatchSize: 2,
+                useStaticShapes,
+                samplerName,
+                cfgScheduleOpts,
+                dynamicThresholdOpts,
+            });
+            results.push({ xtData: r.xtData, totalFrames: r.totalFrames });
+        }
+        return results;
+    }
     const ort = getOrt();
     const diffBatch = 4; // 2 segments × 2 CFG
 
     const maxTotalFramesWithPrompt = Math.max(...segData.map(s => s.totalFramesWithPrompt));
-    const maxTotalFrames = Math.max(...segData.map(s => s.totalFrames));
     const batchDiffSeqLen = useStaticShapes ? Math.max(maxTotalFramesWithPrompt, NPU_STATIC_SEQ_LEN) : maxTotalFramesWithPrompt;
 
     // Initialize xt for both segments
@@ -388,122 +497,134 @@ export async function runBatchDiffusionLoop({
 
     const tDiff0 = performance.now();
 
-    for (let step = 0; step < totalSteps; step++) {
-        const tVal = (step + 0.5) / totalSteps;
-        const tStepPrep = performance.now();
-        cfgBatchBuf.fill(0);
+    // S11: dispose all pre-allocated tensors on exit (success or exception).
+    const _disposeBatchTensors = () => {
+        disposeTensor(cfgXtTensor);
+        disposeTensor(cfgTTensor);
+        disposeTensor(cfgCondTensor);
+        disposeTensor(cfgMaskTensor);
+    };
 
-        for (let si = 0; si < 2; si++) {
-            const s = segData[si];
-            const xt = xts[si];
-            const xtInputBuf = xtInputBufs[si];
-            const condRow = si * 2;
-            const uncondRow = si * 2 + 1;
-            const condRowOff = condRow * batchDiffSeqLen * MEL_DIM;
-            const uncondRowOff = uncondRow * batchDiffSeqLen * MEL_DIM;
+    try {
+        for (let step = 0; step < totalSteps; step++) {
+            const tVal = (step + 0.5) / totalSteps;
+            const tStepPrep = performance.now();
+            cfgBatchBuf.fill(0);
 
-            for (let f = 0; f < s.totalFrames; f++) {
-                for (let d = 0; d < MEL_DIM; d++) {
-                    xtInputBuf[(s.ptFrameCount + f) * MEL_DIM + d] = xt[f * MEL_DIM + d];
+            for (let si = 0; si < 2; si++) {
+                const s = segData[si];
+                const xt = xts[si];
+                const xtInputBuf = xtInputBufs[si];
+                const condRow = si * 2;
+                const uncondRow = si * 2 + 1;
+                const condRowOff = condRow * batchDiffSeqLen * MEL_DIM;
+                const uncondRowOff = uncondRow * batchDiffSeqLen * MEL_DIM;
+
+                for (let f = 0; f < s.totalFrames; f++) {
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        xtInputBuf[(s.ptFrameCount + f) * MEL_DIM + d] = xt[f * MEL_DIM + d];
+                    }
+                }
+                cfgBatchBuf.set(xtInputBuf, condRowOff);
+                // unconditional: xt at position 0 (no prompt offset),
+                // matching DML path and official reverse_diffusion
+                for (let f = 0; f < s.totalFrames; f++) {
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        cfgBatchBuf[uncondRowOff + f * MEL_DIM + d] = xt[f * MEL_DIM + d];
+                    }
                 }
             }
-            cfgBatchBuf.set(xtInputBuf, condRowOff);
-            // unconditional: xt at position 0 (no prompt offset),
-            // matching DML path and official reverse_diffusion
-            for (let f = 0; f < s.totalFrames; f++) {
-                for (let d = 0; d < MEL_DIM; d++) {
-                    cfgBatchBuf[uncondRowOff + f * MEL_DIM + d] = xt[f * MEL_DIM + d];
+
+            if (floatType === 'float16') {
+                batchFloat32ToFloat16(cfgBatchBuf, cfgXtTensor.data, cfgBatchBuf.length);
+                for (let r = 0; r < diffBatch; r++) cfgTBuf[r] = float32ToFloat16(tVal);
+            } else {
+                cfgTBuf.fill(tVal);
+            }
+
+            const prepMs = performance.now() - tStepPrep;
+
+            const tStepInfer = performance.now();
+            const batchResults = await runSession('diffStep', {
+                xt_input: cfgXtTensor, t: cfgTTensor, cond: cfgCondTensor, xt_mask: cfgMaskTensor,
+            });
+            const batchPredRaw = batchResults['flow_pred'];
+            // 同单段路径：取独立副本后立即释放张量，防止 32 步 × batch=4 累积
+            const batchPred = outputToFloat32(batchPredRaw);
+            const batchPredSafe = batchPredRaw.type === 'float32' ? batchPred.slice() : batchPred;
+            disposeTensor(batchPredRaw);
+            const inferMs = performance.now() - tStepInfer;
+
+            const tStepCfg = performance.now();
+            // Task 11 / M1: resolve effective CFG for this step once (constant = cfgStrength0,
+            // byte-identical; linear/cosine/custom adjust per step). Aligned with DML path.
+            const effectiveCfg = cfgScheduleOpts
+                ? resolveCfgAtStep({ ...cfgScheduleOpts, cfgStrength: cfgStrength0, step, totalSteps })
+                : cfgStrength0;
+            // Apply CFG per segment
+            for (let si = 0; si < 2; si++) {
+                const s = segData[si];
+                const xt = xts[si];
+                const cfgPredBuf = cfgPredBufs[si];
+                const condRow = si * 2;
+                const uncondRow = si * 2 + 1;
+                const condRowOff = condRow * batchDiffSeqLen * MEL_DIM;
+                const uncondRowOff = uncondRow * batchDiffSeqLen * MEL_DIM;
+
+                // Single-pass Welford online variance (Task 7.2 — aligned with pipeline/diffusion.js)
+                let posMean = 0, posM2 = 0;
+                let cfgAdjMean = 0, cfgAdjM2 = 0;
+                let n = 0;
+                for (let f = 0; f < s.totalFrames; f++) {
+                    const condSrc = condRowOff + (s.ptFrameCount + f) * MEL_DIM;
+                    const uncondSrc = uncondRowOff + f * MEL_DIM;
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const condVal = batchPredSafe[condSrc + d];
+                        const uncondVal = batchPredSafe[uncondSrc + d];
+                        const cfgVal = condVal + effectiveCfg * (condVal - uncondVal);
+                        cfgPredBuf[f * MEL_DIM + d] = cfgVal;
+                        n++;
+                        const posDelta = condVal - posMean;
+                        posMean += posDelta / n;
+                        posM2 += posDelta * (condVal - posMean);
+                        const cfgDelta = cfgVal - cfgAdjMean;
+                        cfgAdjMean += cfgDelta / n;
+                        cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
+                    }
                 }
+                // Dynamic thresholding (arXiv:2507.08965): clip extreme CFG values
+                // per-frame before rescale. Aligned with DML path.
+                if (dynamicThresholdOpts && dynamicThresholdOpts.percentile > 0) {
+                    applyDynamicThreshold(cfgPredBuf, s.totalFrames * MEL_DIM, MEL_DIM, dynamicThresholdOpts.percentile);
+                }
+                const posStd = Math.sqrt(Math.max(0, posM2) / Math.max(1, n - 1));
+                const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjM2) / Math.max(1, n - 1));
+                const rescale = posStd / (cfgAdjStd + 1e-8);
+
+                for (let f = 0; f < s.totalFrames; f++) {
+                    for (let d = 0; d < MEL_DIM; d++) {
+                        const cfgVal = cfgPredBuf[f * MEL_DIM + d];
+                        const rescaledVal = cfgRescale0 * (cfgVal * rescale) + (1 - cfgRescale0) * cfgVal;
+                        xt[f * MEL_DIM + d] += rescaledVal * dt;
+                    }
+                }
+            }
+            const cfgMs = performance.now() - tStepCfg;
+
+            bDiffPrepTotal += prepMs;
+            bDiffInferTotal += inferMs;
+            bDiffInferMin = Math.min(bDiffInferMin, inferMs);
+            bDiffInferMax = Math.max(bDiffInferMax, inferMs);
+            bDiffCfgTotal += cfgMs;
+
+            if (step === 0 || step === totalSteps - 1) {
+                console.log(`[WebNN]   batch diffStep [${step}/${totalSteps}]: prep=${prepMs.toFixed(1)} infer=${inferMs.toFixed(1)} cfg=${cfgMs.toFixed(1)}`);
             }
         }
-
-        if (floatType === 'float16') {
-            batchFloat32ToFloat16(cfgBatchBuf, cfgXtTensor.data, cfgBatchBuf.length);
-            for (let r = 0; r < diffBatch; r++) cfgTBuf[r] = float32ToFloat16(tVal);
-        } else {
-            cfgTBuf.fill(tVal);
-        }
-
-        const prepMs = performance.now() - tStepPrep;
-
-        const tStepInfer = performance.now();
-        const batchResults = await runSession('diffStep', {
-            xt_input: cfgXtTensor, t: cfgTTensor, cond: cfgCondTensor, xt_mask: cfgMaskTensor,
-        });
-        const batchPredRaw = batchResults['flow_pred'];
-        // 同单段路径：取独立副本后立即释放张量，防止 32 步 × batch=4 累积
-        const batchPred = outputToFloat32(batchPredRaw);
-        const batchPredSafe = batchPredRaw.type === 'float32' ? batchPred.slice() : batchPred;
-        disposeTensor(batchPredRaw);
-        const inferMs = performance.now() - tStepInfer;
-
-        const tStepCfg = performance.now();
-        // Apply CFG per segment
-        for (let si = 0; si < 2; si++) {
-            const s = segData[si];
-            const xt = xts[si];
-            const cfgPredBuf = cfgPredBufs[si];
-            const condRow = si * 2;
-            const uncondRow = si * 2 + 1;
-            const condRowOff = condRow * batchDiffSeqLen * MEL_DIM;
-            const uncondRowOff = uncondRow * batchDiffSeqLen * MEL_DIM;
-            const targetLen = s.totalFrames * MEL_DIM;
-
-            let posSum = 0, cfgAdjSum = 0;
-            for (let f = 0; f < s.totalFrames; f++) {
-                const condSrc = condRowOff + (s.ptFrameCount + f) * MEL_DIM;
-                const uncondSrc = uncondRowOff + f * MEL_DIM;
-                for (let d = 0; d < MEL_DIM; d++) {
-                    const condVal = batchPredSafe[condSrc + d];
-                    const uncondVal = batchPredSafe[uncondSrc + d];
-                    posSum += condVal;
-                    const cfgVal = condVal + cfgStrength0 * (condVal - uncondVal);
-                    cfgPredBuf[f * MEL_DIM + d] = cfgVal;
-                    cfgAdjSum += cfgVal;
-                }
-            }
-            const posMean = posSum / targetLen;
-            const cfgAdjMean = cfgAdjSum / targetLen;
-            let posVarSum = 0, cfgAdjVarSum = 0;
-            for (let f = 0; f < s.totalFrames; f++) {
-                const condSrc = condRowOff + (s.ptFrameCount + f) * MEL_DIM;
-                for (let d = 0; d < MEL_DIM; d++) {
-                    const pv = batchPredSafe[condSrc + d] - posMean;
-                    posVarSum += pv * pv;
-                    const cd = cfgPredBuf[f * MEL_DIM + d] - cfgAdjMean;
-                    cfgAdjVarSum += cd * cd;
-                }
-            }
-            const posStd = Math.sqrt(Math.max(0, posVarSum) / Math.max(1, targetLen - 1));
-            const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjVarSum) / Math.max(1, targetLen - 1));
-            const rescale = posStd / (cfgAdjStd + 1e-8);
-
-            for (let f = 0; f < s.totalFrames; f++) {
-                for (let d = 0; d < MEL_DIM; d++) {
-                    const cfgVal = cfgPredBuf[f * MEL_DIM + d];
-                    const rescaledVal = cfgRescale0 * (cfgVal * rescale) + (1 - cfgRescale0) * cfgVal;
-                    xt[f * MEL_DIM + d] += rescaledVal * dt;
-                }
-            }
-        }
-        const cfgMs = performance.now() - tStepCfg;
-
-        bDiffPrepTotal += prepMs;
-        bDiffInferTotal += inferMs;
-        bDiffInferMin = Math.min(bDiffInferMin, inferMs);
-        bDiffInferMax = Math.max(bDiffInferMax, inferMs);
-        bDiffCfgTotal += cfgMs;
-
-        if (step === 0 || step === totalSteps - 1) {
-            console.log(`[WebNN]   batch diffStep [${step}/${totalSteps}]: prep=${prepMs.toFixed(1)} infer=${inferMs.toFixed(1)} cfg=${cfgMs.toFixed(1)}`);
-        }
+    } finally {
+        // S11: always release pre-allocated tensors, even on exception.
+        _disposeBatchTensors();
     }
-
-    // 循环结束：释放所有预分配的复用张量
-    disposeTensor(cfgXtTensor);
-    disposeTensor(cfgTTensor);
-    disposeTensor(cfgCondTensor);
-    disposeTensor(cfgMaskTensor);
 
     const batchDiffMs = performance.now() - tDiff0;
     console.log(`[WebNN] Batch diffusion (2 segs, batch=4): ${batchDiffMs.toFixed(0)}ms (${totalSteps} steps)`);

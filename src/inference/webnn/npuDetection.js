@@ -8,11 +8,17 @@ import { ensureOrt } from './ortSetup.js';
 
 // 缓存检测结果（包含 benchmark）
 let _detectionCache = null;
+// W12: 缓存时间戳，成功结果超过 CACHE_TTL_MS 后也需重新检测
+let _cacheTime = 0;
+const CACHE_TTL_MS = 5 * 60 * 1000; // W12: 5 分钟后重新检测（与主进程一致）
 
-// NPU 静态形状限制（与 constants.js 中保持一致）
-const BENCH_DIM = 8;
+// W13: benchmark 维度需反映真实模型工作负载。过小的 [1,8]×[8,8] matmul 会让
+// NPU 的固定调度/上传开销主导，导致可用 NPU 被误判为 npuSlow 而回退到 WASM。
+// 256 足够大以摊薄 NPU 启动开销，又能保持 benchmark 轻量。
+const BENCH_DIM = 256;
 const BENCH_RUNS = 5;
-const NPU_SLOW_THRESHOLD = 1.5;
+// W13: 阈值放宽到 2.0× — 更大 matmul 下 NPU 若仍 >2× 慢于 CPU 才视为不可用
+const NPU_SLOW_THRESHOLD = 2.0;
 
 /**
  * 在指定设备上运行小型 matmul benchmark，测量推理延迟
@@ -68,8 +74,13 @@ async function benchmarkDevice(deviceType) {
  * @returns {{ webnnAvailable: boolean, npuAvailable: boolean, gpuAvailable: boolean, details: string, npuInferenceMs?: number, cpuInferenceMs?: number, npuSlow?: boolean }}
  */
 export async function detectNPU() {
-    // 返回缓存结果（benchmark 较重，避免重复执行）
-    if (_detectionCache) return _detectionCache;
+    // W12: 成功结果也带 TTL，超过 CACHE_TTL_MS 后重新检测
+    // （NPU 可能在运行中变为不可用，陈旧的成功缓存应自动过期）
+    if (_detectionCache) {
+        if (Date.now() - _cacheTime <= CACHE_TTL_MS) return _detectionCache;
+        _detectionCache = null;
+        _cacheTime = 0;
+    }
 
     await ensureOrt();
 
@@ -82,6 +93,7 @@ export async function detectNPU() {
             details: 'navigator.ml API not available (WebNN not enabled or unsupported Chromium version)',
         };
         _detectionCache = result;
+        _cacheTime = Date.now();
         return result;
     }
 
@@ -133,7 +145,7 @@ export async function detectNPU() {
         } else if (cpuBench.error) {
             details += `CPU benchmark failed (${cpuBench.error}); `;
         } else if (npuBench.inferenceMs > 0 && cpuBench.inferenceMs > 0) {
-            // NPU 延迟 > 1.5× CPU 延迟 → 标记为慢，不推荐使用
+            // W13: NPU 延迟 > 2.0× CPU 延迟 → 标记为慢，不推荐使用
             if (npuBench.inferenceMs > cpuBench.inferenceMs * NPU_SLOW_THRESHOLD) {
                 result.npuSlow = true;
                 result.npuAvailable = false;
@@ -147,5 +159,23 @@ export async function detectNPU() {
     }
 
     _detectionCache = result;
+    _cacheTime = Date.now(); // W12: 记录缓存时间，供 success-TTL 判断
     return result;
+}
+
+/**
+ * W12: 清除本地检测缓存（_detectionCache）。供主进程通过 IPC 通知触发，
+ * 或外部需要强制重新检测时调用。主进程 clearNPUFailureCache() 后会通过
+ * 'webnn:clearNpuCache' 通知渲染端；若 preload 未暴露相应桥接，则依赖
+ * detectNPU() 内的 success-TTL 自动过期，调用本函数始终安全。
+ */
+export function clearCache() {
+    _detectionCache = null;
+    _cacheTime = 0;
+}
+
+// W12: 监听主进程的缓存清除通知。仅在 preload 暴露了相应桥接时注册，
+// 避免在不支持该桥接的环境（如测试 jsdom）中报错。
+if (typeof window !== 'undefined' && window.electronAPI && typeof window.electronAPI.onClearNpuCache === 'function') {
+    window.electronAPI.onClearNpuCache(() => clearCache());
 }

@@ -1,5 +1,5 @@
 import {
-  getSampleRate, setSampleRate,
+  setSampleRate,
   getPipelineInitialized, setPipelineInitialized,
   getPipelineInitPromise, setPipelineInitPromise,
   getFragmentAudioSettings,
@@ -36,7 +36,8 @@ export function getFragmentPreviewInferenceOptions() {
   return {
     nSteps: settings?.previewDiffSteps ?? 16,
     cfg: settings?.previewCfgStrength ?? 3.0,
-    cfgRescale: settings?.previewCfgRescale ?? 0.75,
+    cfgRescale: settings?.previewCfgRescale ?? 0.7,
+    sampler: settings?.previewSampler ?? 'euler',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     diffStepChunk: settings?.previewDiffStepChunkEnabled === true,
@@ -50,7 +51,8 @@ export function getFragmentExportInferenceOptions() {
   return {
     nSteps: settings?.exportDiffSteps ?? 32,
     cfg: settings?.exportCfgStrength ?? 3.0,
-    cfgRescale: settings?.exportCfgRescale ?? 0.75,
+    cfgRescale: settings?.exportCfgRescale ?? 0.7,
+    sampler: settings?.exportSampler ?? 'euler',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
   };

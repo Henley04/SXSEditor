@@ -6,6 +6,7 @@ import {
 } from './constants.js';
 import {
   getNotes, setNotes,
+  getSnapGrid,
   getSelectedNoteIds, setSelectedNoteIds,
   getSelectedAnchorIndices, setSelectedAnchorIndices,
   getDragMode, setDragMode,
@@ -39,6 +40,10 @@ import {
   getSelectedPhonemeNoteId, setSelectedPhonemeNoteId,
   getSelectedPhonemeIndex, setSelectedPhonemeIndex,
   getHoveredNoteId, setHoveredNoteId,
+  setActiveNoteId,
+  setActiveAnchorIdx,
+  setActivePhonemeKey,
+  bumpNotesVersion,
   getParamEnvelopeDrag, setParamEnvelopeDrag,
   getActiveInlineInput, setActiveInlineInput,
   getActiveInlineEditNote, setActiveInlineEditNote,
@@ -72,7 +77,10 @@ import {
   getPhonemeAdjustments, getPhonemeStartX, normalizePhonemeRatios,
   tokenizeLyric, resolvePhonemesFromPipeline,
   render, resizeCanvases,
+  _getCanvasRendererNotesIndex,
+  ensureVibrato, DEFAULT_VIBRATO, computeVibratoOffset,
 } from './canvasRenderer.js';
+import { computeMultiDragResult, findAdjacentBoundary } from './notesIndex.js';
 import {
   autoDetectKanjiGroups, cleanupKanjiGroups,
   findGroupByNoteId, splitKanjiNoteToKana, mergeKanaGroupToKanji,
@@ -86,8 +94,21 @@ const history = new HistoryManager();
 
 export { history };
 
+// 缓存 canvas 的 bounding rect，避免每个 mousemove 事件都触发 layout read。
+// 在 scroll/resize/drag 结束时通过 _invalidateCanvasRect() 失效。
+let _canvasRectCache = null;
+function _getCanvasRect() {
+  if (!_canvasRectCache) {
+    _canvasRectCache = canvas.getBoundingClientRect();
+  }
+  return _canvasRectCache;
+}
+function _invalidateCanvasRect() {
+  _canvasRectCache = null;
+}
+
 function getMousePos(e) {
-  const rect = canvas.getBoundingClientRect();
+  const rect = _getCanvasRect();
   return { x: e.clientX - rect.left, y: e.clientY - rect.top };
 }
 
@@ -129,22 +150,34 @@ function applyNoteDrag(pos) {
       if (p.rawStart < minRawStart) minRawStart = p.rawStart;
     }
     const shift = minRawStart < 0 ? -minRawStart : 0;
-    // 3. 计算最终新位置（已保证 >= 0）并检测与非选中 notes 的重叠
-    //    分组假名不受重叠限制，允许自由移动（重叠警告仍由 getInactiveNoteIds 渲染）
-    let blocked = false;
-    const planned = [];
+    // 3. 计算最终新位置（已保证 >= 0）并检测与非选中 notes 的重叠。
+    //    分组假名不受重叠限制，允许自由移动（重叠警告仍由 getInactiveNoteIds 渲染）。
+    //    批量化：用 computeMultiDragResult 一次性算所有非 grouped 选中 notes 与
+    //    障碍的重叠情况，O((k+n) log k) 而非 O(k·log n)。
+    const nonGroupedSelected = new Set();
+    const newPositions = new Map();
     for (const p of rawPlanned) {
       const newStart = p.rawStart + shift;
       const isGroupedKana = findGroupByNoteId(p.note.id, getKanjiGroups()) !== null;
-      if (!isGroupedKana && hasNoteOverlapMulti(selectedNoteIds, p.newPitch, newStart, newStart + p.duration)) {
-        blocked = true;
-        break;
+      if (!isGroupedKana) {
+        nonGroupedSelected.add(p.note.id);
+        newPositions.set(p.note.id, {
+          start: newStart,
+          pitch: p.newPitch,
+          duration: p.duration,
+        });
       }
-      planned.push({ note: p.note, newStart, newPitch: p.newPitch });
+    }
+    let blocked = false;
+    if (nonGroupedSelected.size > 0) {
+      const idx = _getCanvasRendererNotesIndex();
+      const r = computeMultiDragResult(idx, nonGroupedSelected, newPositions);
+      blocked = r.blocked;
     }
     if (!blocked) {
-      for (const p of planned) {
-        p.note.start = p.newStart;
+      for (const p of rawPlanned) {
+        const newStart = p.rawStart + shift;
+        p.note.start = newStart;
         p.note.pitch = p.newPitch;
       }
     }
@@ -167,6 +200,19 @@ function applyNoteDrag(pos) {
       note.start = newStart;
       note.pitch = newPitch;
     } else {
+      // Magnetic boundary snap: if newStart is within 4px of an adjacent
+      // note's start or end at this pitch, snap to that boundary. Lets the
+      // user feel when notes "click" together; bypasses grid snap.
+      const idx = _getCanvasRendererNotesIndex();
+      const pxPerBeat = BEAT_WIDTH * getZoomX();
+      if (pxPerBeat > 0) {
+        const snapBeatsWindow = 4 / pxPerBeat;
+        const excludeSet = new Set([note.id]);
+        const snappedStart = findAdjacentBoundary(idx, excludeSet, newPitch, newStart, snapBeatsWindow);
+        if (snappedStart !== newStart && snappedStart >= 0) {
+          newStart = snappedStart;
+        }
+      }
       newStart = clampNotePosition(note.id, newPitch, newStart, note.duration);
       if (!hasNoteOverlap(note.id, newPitch, newStart, newStart + note.duration)) {
         note.start = newStart;
@@ -175,9 +221,28 @@ function applyNoteDrag(pos) {
     }
   } else if (dragMode === 'resize') {
     const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
-    const newDuration = Math.max(1 / 16, snapBeats(getDragNoteStart().duration + dxBeats));
+    // Resize minimum = one snap grid cell, so the result always lands on a
+    // grid line and stays >= the smallest editable unit.
+    const minDuration = getSnapGrid();
+    let newDuration = Math.max(minDuration, snapBeats(getDragNoteStart().duration + dxBeats));
     const isGroupedKana = findGroupByNoteId(note.id, getKanjiGroups()) !== null;
     if (isGroupedKana || !hasNoteOverlap(note.id, note.pitch, note.start, note.start + newDuration)) {
+      // Magnetic snap for resize: snap the trailing edge to the nearest
+      // adjacent note boundary at this pitch (start or end of neighbor).
+      const idx = _getCanvasRendererNotesIndex();
+      const pxPerBeat = BEAT_WIDTH * getZoomX();
+      if (pxPerBeat > 0) {
+        const snapBeatsWindow = 4 / pxPerBeat;
+        const excludeSet = new Set([note.id]);
+        const proposedEnd = note.start + newDuration;
+        const snappedEnd = findAdjacentBoundary(idx, excludeSet, note.pitch, proposedEnd, snapBeatsWindow);
+        if (snappedEnd !== proposedEnd && snappedEnd > note.start) {
+          const snappedDur = snappedEnd - note.start;
+          if (snappedDur >= minDuration && !hasNoteOverlap(note.id, note.pitch, note.start, snappedEnd)) {
+            newDuration = snappedDur;
+          }
+        }
+      }
       note.duration = newDuration;
     }
   }
@@ -658,9 +723,386 @@ function _setupKanjiContextMenuListeners() {
   });
 }
 
+// ==================== Note Context Menu (Vibrato + Fade) ====================
+// _noteCtxState tracks the current note context menu target.
+// null = no menu open; otherwise { noteIds: number[] } — the selected notes
+// whose vibrato/fade parameters the menu is editing.
+let _noteCtxState = null;
+// 拖动滑块前的快照（用于 undo/redo）。结构：Map<noteId, {vibrato, fadeIn, fadeOut}>
+let _noteCtxSnapshotBefore = null;
+
+const VIBRATO_PRESETS = {
+  'vibrato-soft':   { enabled: true, depth: 50,  rate: 5.0, start: 0.25, length: 0.7,  fadeIn: 0.4 },
+  'vibrato-medium': { enabled: true, depth: 80,  rate: 5.5, start: 0.2,  length: 0.8,  fadeIn: 0.3 },
+  'vibrato-strong': { enabled: true, depth: 130, rate: 6.5, start: 0.15, length: 0.85, fadeIn: 0.2 },
+};
+
+const FADE_PRESETS = {
+  'fade-in':   { fadeIn: 80,  fadeOut: 0 },
+  'fade-out':  { fadeIn: 0,   fadeOut: 80 },
+  'fade-both': { fadeIn: 80,  fadeOut: 120 },
+};
+
+function _snapshotNoteEffects(noteIds) {
+  const snap = new Map();
+  const notes = getNotes();
+  for (const id of noteIds) {
+    const n = notes.find(nn => nn.id === id);
+    if (!n) continue;
+    snap.set(id, {
+      vibrato: n.vibrato ? deepClone(n.vibrato) : null,
+      fadeIn: n.fadeIn ?? 0,
+      fadeOut: n.fadeOut ?? 0,
+    });
+  }
+  return snap;
+}
+
+function _restoreNoteEffects(snap) {
+  const notes = getNotes();
+  for (const [id, val] of snap) {
+    const n = notes.find(nn => nn.id === id);
+    if (!n) continue;
+    if (val.vibrato) {
+      n.vibrato = deepClone(val.vibrato);
+    } else {
+      delete n.vibrato;
+    }
+    n.fadeIn = val.fadeIn;
+    n.fadeOut = val.fadeOut;
+  }
+}
+
+function _getCtxNoteIds() {
+  if (!_noteCtxState || !_noteCtxState.noteIds || _noteCtxState.noteIds.length === 0) return [];
+  return _noteCtxState.noteIds;
+}
+
+function _firstCtxNote() {
+  const ids = _getCtxNoteIds();
+  if (ids.length === 0) return null;
+  return getNotes().find(n => n.id === ids[0]) || null;
+}
+
+function _syncNoteCtxMenuFromNotes() {
+  const note = _firstCtxNote();
+  if (!note) return;
+
+  // Vibrato params
+  ensureVibrato(note);
+  const v = note.vibrato;
+  const toggle = document.getElementById('note-ctx-vibrato-toggle');
+  const params = document.getElementById('note-ctx-vibrato-params');
+  if (toggle) toggle.checked = !!v.enabled;
+  if (params) params.hidden = !v.enabled;
+
+  const setSlider = (id, valueId, value, formatter) => {
+    const s = document.getElementById(id);
+    const lbl = document.getElementById(valueId);
+    if (s) s.value = String(value);
+    if (lbl) lbl.textContent = formatter(value);
+  };
+  setSlider('note-ctx-vibrato-depth', 'note-ctx-vibrato-depth-value', v.depth, x => `${x}¢`);
+  setSlider('note-ctx-vibrato-rate', 'note-ctx-vibrato-rate-value', v.rate, x => `${(+x).toFixed(1)}Hz`);
+  setSlider('note-ctx-vibrato-start', 'note-ctx-vibrato-start-value', v.start * 100, x => `${Math.round(x)}%`);
+  setSlider('note-ctx-vibrato-length', 'note-ctx-vibrato-length-value', v.length * 100, x => `${Math.round(x)}%`);
+  setSlider('note-ctx-vibrato-fadein', 'note-ctx-vibrato-fadein-value', v.fadeIn * 100, x => `${Math.round(x)}%`);
+
+  // Fade params
+  setSlider('note-ctx-fade-in', 'note-ctx-fade-in-value', note.fadeIn ?? 0, x => `${Math.round(x)}ms`);
+  setSlider('note-ctx-fade-out', 'note-ctx-fade-out-value', note.fadeOut ?? 0, x => `${Math.round(x)}ms`);
+
+  // Target info
+  const info = document.getElementById('note-ctx-target-info');
+  if (info) {
+    const count = _getCtxNoteIds().length;
+    info.textContent = count === 1
+      ? (window.i18n?.t?.('fragment.noteCtxTargetSingle') ?? '1 note selected')
+      : (window.i18n?.t?.('fragment.noteCtxTargetMulti', { count }) ?? `${count} notes selected`);
+  }
+}
+
+function showNoteContextMenu(x, y, noteId) {
+  const menu = document.getElementById('note-context-menu');
+  if (!menu) return;
+  const selectedNoteIds = getSelectedNoteIds();
+  // 如果右键的 note 已在选中集合中，菜单作用于全部选中；否则只作用于该 note
+  let noteIds;
+  if (selectedNoteIds.has(noteId)) {
+    noteIds = [...selectedNoteIds];
+  } else {
+    selectedNoteIds.clear();
+    selectedNoteIds.add(noteId);
+    noteIds = [noteId];
+  }
+  _noteCtxState = { noteIds };
+  _noteCtxSnapshotBefore = null;
+
+  _syncNoteCtxMenuFromNotes();
+
+  // 显隐"汉字设置"按钮：仅当右键单个 note 且该 note 是汉字/假名分组时才显示。
+  // 多选时不显示（汉字操作是单 note 行为）。
+  const kanjiBtn = document.getElementById('note-ctx-kanji');
+  if (kanjiBtn) {
+    let showKanji = false;
+    if (noteIds.length === 1) {
+      const note = getNotes().find(n => n.id === noteIds[0]);
+      if (note) {
+        const group = findGroupByNoteId(note.id, getKanjiGroups());
+        if (group || isSingleKanji(note.lyric)) {
+          showKanji = true;
+        }
+      }
+    }
+    kanjiBtn.style.display = showKanji ? '' : 'none';
+  }
+
+  // 计算菜单位置，避免溢出窗口
+  menu.style.visibility = 'hidden';
+  menu.style.display = 'flex';
+  const measured = menu.getBoundingClientRect();
+  const w = measured.width;
+  const h = measured.height;
+  menu.style.visibility = '';
+  let mx = x;
+  let my = y;
+  if (mx + w > window.innerWidth - 4) mx = Math.max(4, window.innerWidth - w - 4);
+  if (my + h > window.innerHeight - 4) my = Math.max(4, window.innerHeight - h - 4);
+  menu.style.left = `${mx}px`;
+  menu.style.top = `${my}px`;
+  menu.setAttribute('aria-hidden', 'false');
+  render();
+}
+
+function hideNoteContextMenu() {
+  const menu = document.getElementById('note-context-menu');
+  if (menu) {
+    menu.style.display = 'none';
+    menu.setAttribute('aria-hidden', 'true');
+  }
+  // 兜底：若用户拖动滑块后（input 事件已改值但 change 事件尚未触发）直接点击
+  // 菜单外关闭，主动提交一次 history entry，避免改动丢失 undo 入口。
+  if (_noteCtxSnapshotBefore) {
+    _commitCtxHistory();
+  }
+  _noteCtxState = null;
+  _noteCtxSnapshotBefore = null;
+  render();
+}
+
+/**
+ * 对所有目标 note 应用变化。commitHistory=true 时推入一次 undo/redo entry。
+ * modifier(note) 在每个 note 上原地修改 vibrato/fadeIn/fadeOut。
+ */
+function _applyToCtxNotes(modifier, commitHistory) {
+  const ids = _getCtxNoteIds();
+  if (ids.length === 0) return;
+  const notes = getNotes();
+  if (commitHistory) {
+    _noteCtxSnapshotBefore = _snapshotNoteEffects(ids);
+  }
+  for (const id of ids) {
+    const n = notes.find(nn => nn.id === id);
+    if (!n) continue;
+    modifier(n);
+  }
+  // 同步缓存：颤音影响 F0，需要重算 pitchCurve cache
+  invalidatePitchCurveCache();
+  _syncNoteCtxMenuFromNotes();
+  render();
+  scheduleAutoSave();
+  if (commitHistory && _noteCtxSnapshotBefore) {
+    const before = _noteCtxSnapshotBefore;
+    const after = _snapshotNoteEffects(ids);
+    history.push({
+      undo() { _restoreNoteEffects(before); invalidatePitchCurveCache(); render(); scheduleAutoSave(); },
+      redo() { _restoreNoteEffects(after); invalidatePitchCurveCache(); render(); scheduleAutoSave(); },
+    });
+    _noteCtxSnapshotBefore = _snapshotNoteEffects(ids);
+  }
+}
+
+function _ensureCtxSnapshot() {
+  if (!_noteCtxSnapshotBefore) {
+    _noteCtxSnapshotBefore = _snapshotNoteEffects(_getCtxNoteIds());
+  }
+}
+
+function _commitCtxHistory() {
+  if (!_noteCtxSnapshotBefore) return;
+  const before = _noteCtxSnapshotBefore;
+  const after = _snapshotNoteEffects(_getCtxNoteIds());
+  history.push({
+    undo() { _restoreNoteEffects(before); invalidatePitchCurveCache(); render(); scheduleAutoSave(); },
+    redo() { _restoreNoteEffects(after); invalidatePitchCurveCache(); render(); scheduleAutoSave(); },
+  });
+  _noteCtxSnapshotBefore = _snapshotNoteEffects(_getCtxNoteIds());
+}
+
+function _setupNoteContextMenuListeners() {
+  const menu = document.getElementById('note-context-menu');
+  if (!menu) return;
+
+  // ---- Vibrato toggle ----
+  const toggle = document.getElementById('note-ctx-vibrato-toggle');
+  if (toggle) {
+    toggle.addEventListener('change', () => {
+      const enabled = toggle.checked;
+      _applyToCtxNotes((n) => {
+        ensureVibrato(n);
+        n.vibrato.enabled = enabled;
+      }, true);
+    });
+  }
+
+  // ---- Vibrato sliders (input=live, change=commit history) ----
+  const vibSliders = [
+    { id: 'note-ctx-vibrato-depth', valId: 'note-ctx-vibrato-depth-value',
+      get: v => v.depth, set: (v, x) => { v.depth = Math.max(0, Math.min(200, x)); },
+      fromSlider: x => parseInt(x, 10), format: x => `${x}¢` },
+    { id: 'note-ctx-vibrato-rate', valId: 'note-ctx-vibrato-rate-value',
+      get: v => v.rate, set: (v, x) => { v.rate = Math.max(2, Math.min(10, x)); },
+      fromSlider: x => parseFloat(x), format: x => `${(+x).toFixed(1)}Hz` },
+    { id: 'note-ctx-vibrato-start', valId: 'note-ctx-vibrato-start-value',
+      get: v => v.start * 100, set: (v, x) => { v.start = Math.max(0, Math.min(0.8, x / 100)); },
+      fromSlider: x => parseInt(x, 10), format: x => `${Math.round(x)}%` },
+    { id: 'note-ctx-vibrato-length', valId: 'note-ctx-vibrato-length-value',
+      get: v => v.length * 100, set: (v, x) => { v.length = Math.max(0.2, Math.min(1, x / 100)); },
+      fromSlider: x => parseInt(x, 10), format: x => `${Math.round(x)}%` },
+    { id: 'note-ctx-vibrato-fadein', valId: 'note-ctx-vibrato-fadein-value',
+      get: v => v.fadeIn * 100, set: (v, x) => { v.fadeIn = Math.max(0, Math.min(1, x / 100)); },
+      fromSlider: x => parseInt(x, 10), format: x => `${Math.round(x)}%` },
+  ];
+  for (const spec of vibSliders) {
+    const slider = document.getElementById(spec.id);
+    const lbl = document.getElementById(spec.valId);
+    if (!slider) continue;
+    slider.addEventListener('input', () => {
+      const x = spec.fromSlider(slider.value);
+      if (lbl) lbl.textContent = spec.format(x);
+      _ensureCtxSnapshot();
+      _applyToCtxNotes((n) => {
+        ensureVibrato(n);
+        spec.set(n.vibrato, x);
+      }, false);
+    });
+    slider.addEventListener('change', () => {
+      _commitCtxHistory();
+    });
+  }
+
+  // ---- Fade sliders ----
+  const fadeSliders = [
+    { id: 'note-ctx-fade-in', valId: 'note-ctx-fade-in-value',
+      set: (n, x) => { n.fadeIn = Math.max(0, Math.min(500, x)); },
+      fromSlider: x => parseInt(x, 10), format: x => `${Math.round(x)}ms` },
+    { id: 'note-ctx-fade-out', valId: 'note-ctx-fade-out-value',
+      set: (n, x) => { n.fadeOut = Math.max(0, Math.min(500, x)); },
+      fromSlider: x => parseInt(x, 10), format: x => `${Math.round(x)}ms` },
+  ];
+  for (const spec of fadeSliders) {
+    const slider = document.getElementById(spec.id);
+    const lbl = document.getElementById(spec.valId);
+    if (!slider) continue;
+    slider.addEventListener('input', () => {
+      const x = spec.fromSlider(slider.value);
+      if (lbl) lbl.textContent = spec.format(x);
+      _ensureCtxSnapshot();
+      _applyToCtxNotes((n) => { spec.set(n, x); }, false);
+    });
+    slider.addEventListener('change', () => {
+      _commitCtxHistory();
+    });
+  }
+
+  // ---- Vibrato presets ----
+  const vibPresets = menu.querySelectorAll('.note-ctx-preset[data-preset^="vibrato-"]');
+  vibPresets.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-preset');
+      const preset = VIBRATO_PRESETS[key];
+      if (!preset) return;
+      _applyToCtxNotes((n) => {
+        ensureVibrato(n);
+        Object.assign(n.vibrato, deepClone(preset));
+      }, true);
+    });
+  });
+
+  // ---- Fade presets ----
+  const fadePresetBtns = menu.querySelectorAll('.note-ctx-preset[data-preset^="fade-"]');
+  fadePresetBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.getAttribute('data-preset');
+      const preset = FADE_PRESETS[key];
+      if (!preset) return;
+      _applyToCtxNotes((n) => {
+        n.fadeIn = preset.fadeIn;
+        n.fadeOut = preset.fadeOut;
+      }, true);
+    });
+  });
+
+  // ---- Clear button ----
+  const clearBtn = document.getElementById('note-ctx-clear');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      _applyToCtxNotes((n) => {
+        ensureVibrato(n);
+        n.vibrato.enabled = false;
+        n.fadeIn = 0;
+        n.fadeOut = 0;
+      }, true);
+      hideNoteContextMenu();
+    });
+  }
+
+  // ---- Kanji settings button (single kanji/kana note) ----
+  // 打开已有的 kanji context menu 复用其逻辑（设为中文 / 设为日语）。
+  const kanjiBtn = document.getElementById('note-ctx-kanji');
+  if (kanjiBtn) {
+    kanjiBtn.addEventListener('click', () => {
+      const ids = _getCtxNoteIds();
+      if (ids.length !== 1) return;
+      const note = getNotes().find(n => n.id === ids[0]);
+      if (!note) return;
+      const group = findGroupByNoteId(note.id, getKanjiGroups());
+      // 关闭 note 菜单，再打开 kanji 菜单（避免两个菜单重叠）
+      const rect = menu.getBoundingClientRect();
+      hideNoteContextMenu();
+      if (group) {
+        showKanjiContextMenu(rect.left, rect.top, group.id, note.id, null);
+      } else if (isSingleKanji(note.lyric)) {
+        showKanjiContextMenu(rect.left, rect.top, null, null, note.id);
+      }
+    });
+  }
+
+  // Click outside closes
+  document.addEventListener('mousedown', (e) => {
+    if (!_noteCtxState) return;
+    if (menu.contains(e.target)) return;
+    hideNoteContextMenu();
+  }, true);
+
+  menu.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && _noteCtxState) {
+      hideNoteContextMenu();
+    }
+  });
+
+  window.addEventListener('blur', () => {
+    if (_noteCtxState) hideNoteContextMenu();
+  });
+}
+
 function finalizeDragOperation() {
   const dragOperation = getDragOperation();
   if (!dragOperation) return;
+  // 拖拽可能就地修改了 notes（move/resize/add/delete），失效 inactive/oob 缓存
+  bumpNotesVersion();
 
   switch (dragOperation.type) {
     case 'noteAdd': {
@@ -905,6 +1347,7 @@ function handlePitchMouseDown(e, pos) {
         }
       }
       setPitchDragAnchorIdx(anchorIdx);
+      setActiveAnchorIdx(anchorIdx); // 按压反馈
       setPitchDragStartTime(pitchCurve.anchorPoints[anchorIdx].time);
       setPitchDragStartValue(pitchCurve.anchorPoints[anchorIdx].pitch);
       getPitchDragAnchorStarts().clear();
@@ -930,6 +1373,7 @@ function handlePitchMouseDown(e, pos) {
       });
       invalidatePitchCurveCache();
       setPitchDragAnchorIdx(pitchCurve.anchorPoints.length - 1);
+      setActiveAnchorIdx(getPitchDragAnchorIdx()); // 按压反馈
       selectedAnchorIndices.add(getPitchDragAnchorIdx());
       setPitchDragStartTime(time);
       setPitchDragStartValue(clampedPitch);
@@ -1166,6 +1610,20 @@ function handleParamEnvelopeMouseDown(pos) {
   scheduleAutoSave();
 }
 
+function lyricEditorValue(note) {
+  return (note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || '');
+}
+
+function applyLyricEditorValue(note, value) {
+  const text = String(value || '').trim();
+  const continuation = text === '-';
+  note.lyric = continuation ? '' : value;
+  note.isContinuation = continuation;
+  note.isSlur = continuation;
+  note.noteType = continuation ? 3 : (text ? 2 : 1);
+  note.phonemeAdjustments = null;
+}
+
 function startInlineEdit(note, hit) {
   const activeInlineInput = getActiveInlineInput();
   if (activeInlineInput) {
@@ -1176,7 +1634,7 @@ function startInlineEdit(note, hit) {
 
   setActiveInlineEditNote(note);
   setLyricEditNoteId(note.id);
-  setLyricEditOldValue(note.lyric || '');
+  setLyricEditOldValue(lyricEditorValue(note));
 
   const container = canvas.parentElement;
   const containerRect = container.getBoundingClientRect();
@@ -1193,7 +1651,7 @@ function startInlineEdit(note, hit) {
   const input = document.createElement('input');
   input.type = 'text';
   input.maxLength = 256;
-  input.value = note.lyric || '';
+  input.value = lyricEditorValue(note);
   input.style.cssText = `
     position: absolute;
     left: ${inputX}px;
@@ -1237,52 +1695,47 @@ function startInlineEdit(note, hit) {
         // Capture old lyrics BEFORE modifying any notes
         const notes = getNotes();
         const noteIdx = notes.findIndex(n => n.id === noteId);
-        const oldLyrics = [{ id: noteId, lyric: oldLyric }];
+        const oldLyrics = [{ id: noteId, lyric: oldLyric, isContinuation: note.isContinuation, isSlur: note.isSlur, noteType: note.noteType }];
         if (tokens.length > 1 && noteIdx !== -1) {
           for (let t = 1; t < tokens.length; t++) {
             const nextIdx = noteIdx + t;
             if (nextIdx < notes.length) {
-              oldLyrics.push({ id: notes[nextIdx].id, lyric: notes[nextIdx].lyric });
+              oldLyrics.push({ id: notes[nextIdx].id, lyric: lyricEditorValue(notes[nextIdx]), isContinuation: notes[nextIdx].isContinuation, isSlur: notes[nextIdx].isSlur, noteType: notes[nextIdx].noteType });
             }
           }
         }
 
         if (tokens.length <= 1) {
-          note.lyric = newLyric;
-          note.phonemeAdjustments = null;
+          applyLyricEditorValue(note, newLyric);
         } else {
           if (noteIdx !== -1) {
-            note.lyric = tokens[0];
-            note.phonemeAdjustments = null;
+            applyLyricEditorValue(note, tokens[0]);
             for (let t = 1; t < tokens.length; t++) {
               const nextIdx = noteIdx + t;
               if (nextIdx < notes.length) {
-                notes[nextIdx].lyric = tokens[t];
-                notes[nextIdx].phonemeAdjustments = null;
+                applyLyricEditorValue(notes[nextIdx], tokens[t]);
               }
             }
           } else {
-            note.lyric = newLyric;
-            note.phonemeAdjustments = null;
+            applyLyricEditorValue(note, newLyric);
           }
         }
 
         history.push({
           undo() {
-            for (const { id, lyric } of oldLyrics) {
-              const n = notes.find(nn => nn.id === id);
-              if (n) { n.lyric = lyric; n.phonemeAdjustments = null; }
+            for (const old of oldLyrics) {
+              const n = notes.find(nn => nn.id === old.id);
+              if (n) { n.lyric = old.lyric === '-' ? '' : old.lyric; n.isContinuation = !!old.isContinuation; n.isSlur = !!old.isSlur; n.noteType = old.noteType; n.phonemeAdjustments = null; }
             }
           },
           redo() {
             const n = notes.find(nn => nn.id === noteId);
-            if (n) { n.lyric = newLyric; n.phonemeAdjustments = null; }
+            if (n) applyLyricEditorValue(n, newLyric);
             if (tokens.length > 1 && noteIdx !== -1) {
               for (let t = 1; t < tokens.length; t++) {
                 const nextIdx = noteIdx + t;
                 if (nextIdx < notes.length) {
-                  notes[nextIdx].lyric = tokens[t];
-                  notes[nextIdx].phonemeAdjustments = null;
+                  applyLyricEditorValue(notes[nextIdx], tokens[t]);
                 }
               }
             }
@@ -1348,6 +1801,9 @@ function startInlineEdit(note, hit) {
 
 export function setupEventListeners() {
   canvas.addEventListener('mousedown', (e) => {
+    // mousedown 前布局可能已变化（inspector resize / param panel toggle / window resize），
+    // 失效 rect 缓存以确保本次拖拽使用最新的 canvas 位置。
+    _invalidateCanvasRect();
     const pos = getMousePos(e);
 
     if (e.button === 1) {
@@ -1391,6 +1847,7 @@ export function setupEventListeners() {
     // 鼠标松开时若未发生明显位移则触发 context menu。
     if (e.button === 2) {
       hidePitchContextMenu();
+      hideNoteContextMenu();
       const currentParamMode = getCurrentParamMode();
       const pitchCurve = getPitchCurve();
       if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
@@ -1417,6 +1874,7 @@ export function setupEventListeners() {
           setDragStartX(pos.x);
           setDragStartY(pos.y);
           setDragMode('pitch-smoothness');
+          setActiveAnchorIdx(anchorIdx); // 按压反馈
           setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
           render();
           return;
@@ -1424,31 +1882,26 @@ export function setupEventListeners() {
       }
       // Kanji group right-click: check bracket/label hit, then kana note in group,
       // then single kanji note (not in group).
-      const currentParamMode2 = getCurrentParamMode();
-      if (currentParamMode2 !== 'Pitch') {
-        // 1. Check if right-clicking on a kanji group bracket/label
-        const groupHit = findKanjiGroupAt(pos.x, pos.y);
-        if (groupHit) {
-          e.preventDefault();
-          showKanjiContextMenu(e.clientX, e.clientY, groupHit.group.id, null, null);
-          return;
-        }
-        // 2. Check if right-clicking a note that belongs to a kanji group
-        const noteHit = findNoteAt(pos.x, pos.y);
-        if (noteHit) {
-          const group = findGroupByNoteId(noteHit.note.id, getKanjiGroups());
-          if (group) {
-            e.preventDefault();
-            showKanjiContextMenu(e.clientX, e.clientY, group.id, noteHit.note.id, null);
-            return;
-          }
-          // 3. Check if right-clicking a single kanji note (not in a group)
-          if (isSingleKanji(noteHit.note.lyric)) {
-            e.preventDefault();
-            showKanjiContextMenu(e.clientX, e.clientY, null, null, noteHit.note.id);
-            return;
-          }
-        }
+      // Pitch 模式下若未命中锚点，也允许右键 note 打开 note 菜单（颤音/渐强渐弱），
+      // 因为颤音会直观反映在音高曲线上，用户在 Pitch 模式下调整更顺手。
+      // 1. Check if right-clicking on a kanji group bracket/label
+      const groupHit = findKanjiGroupAt(pos.x, pos.y);
+      if (groupHit) {
+        e.preventDefault();
+        showKanjiContextMenu(e.clientX, e.clientY, groupHit.group.id, null, null);
+        return;
+      }
+      // 2. Check if right-clicking a note — show the note context menu
+      //    (vibrato + fade). Bracket/label hits are handled above, so any
+      //    note-body right-click opens the note menu regardless of kanji
+      //    status. The kanji menu (Set as Chinese/Japanese) is still
+      //    reachable by right-clicking the group bracket/label, or via the
+      //    "Kanji Settings" button inside the note menu for single kanji notes.
+      const noteHit = findNoteAt(pos.x, pos.y);
+      if (noteHit) {
+        e.preventDefault();
+        showNoteContextMenu(e.clientX, e.clientY, noteHit.note.id);
+        return;
       }
       // 其他情况交由 contextmenu 事件处理（保留默认右键菜单或自定义菜单）。
       return;
@@ -1484,6 +1937,8 @@ export function setupEventListeners() {
     const selectedNoteIds = getSelectedNoteIds();
 
     if (hit) {
+      // 记录鼠标按住的 note，用于绘制按压反馈（阴影 + 轻微放大）
+      setActiveNoteId(hit.note.id);
       if (e.ctrlKey || e.metaKey) {
         if (selectedNoteIds.has(hit.note.id)) {
           selectedNoteIds.delete(hit.note.id);
@@ -1499,7 +1954,7 @@ export function setupEventListeners() {
         }
       }
 
-      if (pos.x >= hit.nx + hit.nw - 6) {
+      if (hit.onResizeEdge) {
         setDragMode('resize');
         setDragOperation({ type: 'noteResize', noteId: hit.note.id, oldDuration: hit.note.duration });
       } else {
@@ -1545,8 +2000,10 @@ export function setupEventListeners() {
         lyric: 'la',
       };
       getNotes().push(newNote);
+      bumpNotesVersion(); // 新增 note，失效 inactive/oob 缓存
       selectedNoteIds.clear();
       selectedNoteIds.add(newNote.id);
+      setActiveNoteId(newNote.id); // 按住新建 note 时也显示按压反馈
       setDragMode('resize');
       setDragStartX(pos.x);
       setDragStartMouseTime(xToTime(pos.x));
@@ -1702,6 +2159,11 @@ export function setupEventListeners() {
   });
 
   canvas.addEventListener('mouseup', (e) => {
+    // 清除鼠标按压反馈状态（无论后续分支是否 early return，按压都已结束）
+    setActiveNoteId(null);
+    setActiveAnchorIdx(-1);
+    setActivePhonemeKey(null);
+
     if (getIsBoxSelecting()) {
       setIsBoxSelecting(false);
       finalizeBoxSelection();
@@ -1814,6 +2276,10 @@ export function setupEventListeners() {
   });
 
   canvas.addEventListener('mouseleave', () => {
+    // 清除按压反馈状态
+    setActiveNoteId(null);
+    setActiveAnchorIdx(-1);
+    setActivePhonemeKey(null);
     if (getIsBoxSelecting()) {
       setIsBoxSelecting(false);
       finalizeBoxSelection();
@@ -1875,6 +2341,7 @@ export function setupEventListeners() {
       e.preventDefault();
       if (history.canUndo()) {
         history.undo();
+        bumpNotesVersion(); // undo 就地改了 notes，失效 inactive/oob 缓存
         render();
         scheduleAutoSave();
       }
@@ -1885,6 +2352,7 @@ export function setupEventListeners() {
       e.preventDefault();
       if (history.canRedo()) {
         history.redo();
+        bumpNotesVersion(); // redo 就地改了 notes，失效 inactive/oob 缓存
         render();
         scheduleAutoSave();
       }
@@ -2228,41 +2696,55 @@ export function setupEventListeners() {
     }
   });
 
+  // rAF 合并 wheel 事件：trackpad 缩放/滚动会每秒触发数十次 wheel，
+  // 每次都同步 render() 会掉帧。这里将同一帧内的多次 wheel 合并为一次 render。
+  let _wheelRaf = 0;
+  let _pendingWheel = null;
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    const isZoom = e.ctrlKey || e.metaKey;
+    // 缓存最后一次 wheel 的鼠标位置（zoom 需要用）
+    _pendingWheel = e;
+    if (_wheelRaf) return;
+    _wheelRaf = requestAnimationFrame(() => {
+      _wheelRaf = 0;
+      const ev = _pendingWheel;
+      _pendingWheel = null;
+      if (!ev) return;
+      const isZoom = ev.ctrlKey || ev.metaKey;
 
-    if (isZoom) {
-      const oldZoomX = getZoomX();
-      const delta = e.deltaY > 0 ? 0.9 : 1.1;
-      const newZoomX = Math.max(0.25, Math.min(4, oldZoomX * delta));
-      setZoomX(newZoomX);
+      if (isZoom) {
+        const oldZoomX = getZoomX();
+        const delta = ev.deltaY > 0 ? 0.9 : 1.1;
+        const newZoomX = Math.max(0.25, Math.min(4, oldZoomX * delta));
+        setZoomX(newZoomX);
 
-      const pos = getMousePos(e);
-      // Compute mouseBeats using OLD zoom/scroll (the actual beat under cursor before zoom),
-      // then set scroll so the same beat stays under the cursor after zoom.
-      // NOTE: Must use oldZoomX here — xToTime() would use the already-updated newZoomX,
-      // giving a wrong beat and causing the note to "disconnect" from the mouse.
-      const oldScrollX = getScrollX();
-      const mouseBeats = (pos.x + oldScrollX) / (BEAT_WIDTH * oldZoomX);
-      const newScrollX = mouseBeats * BEAT_WIDTH * newZoomX - pos.x;
-      setScrollX(Math.max(0, newScrollX));
+        const pos = getMousePos(ev);
+        // Compute mouseBeats using OLD zoom/scroll (the actual beat under cursor before zoom),
+        // then set scroll so the same beat stays under the cursor after zoom.
+        // NOTE: Must use oldZoomX here — xToTime() would use the already-updated newZoomX,
+        // giving a wrong beat and causing the note to "disconnect" from the mouse.
+        const oldScrollX = getScrollX();
+        const mouseBeats = (pos.x + oldScrollX) / (BEAT_WIDTH * oldZoomX);
+        const newScrollX = mouseBeats * BEAT_WIDTH * newZoomX - pos.x;
+        setScrollX(Math.max(0, newScrollX));
 
-      // No special drag handling needed: since mouseBeats is preserved across the zoom,
-      // dxBeats (xToTime(pos) - dragStartMouseTime) stays the same, and the note
-      // naturally remains anchored to the mouse on the next mousemove.
-    } else if (e.shiftKey) {
-      setScrollX(getScrollX() + e.deltaY);
-      setScrollX(Math.max(0, getScrollX()));
-    } else {
-      setScrollY(getScrollY() + e.deltaY);
-      const maxScrollY = Math.max(0, 128 * NOTE_HEIGHT + HEADER_HEIGHT + PARAM_CURVE_HEIGHT - canvas.parentElement.clientHeight);
-      setScrollY(Math.max(0, Math.min(maxScrollY, getScrollY())));
-    }
+        // No special drag handling needed: since mouseBeats is preserved across the zoom,
+        // dxBeats (xToTime(pos) - dragStartMouseTime) stays the same, and the note
+        // naturally remains anchored to the mouse on the next mousemove.
+      } else if (ev.shiftKey) {
+        setScrollX(getScrollX() + ev.deltaY);
+        setScrollX(Math.max(0, getScrollX()));
+      } else {
+        setScrollY(getScrollY() + ev.deltaY);
+        const maxScrollY = Math.max(0, 128 * NOTE_HEIGHT + HEADER_HEIGHT + PARAM_CURVE_HEIGHT - canvas.parentElement.clientHeight);
+        setScrollY(Math.max(0, Math.min(maxScrollY, getScrollY())));
+      }
 
-    render();
+      render();
+    });
   }, { passive: false });
 
   _setupPitchContextMenuListeners();
   _setupKanjiContextMenuListeners();
+  _setupNoteContextMenuListeners();
 }

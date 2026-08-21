@@ -4,12 +4,13 @@ import {
   HEADER_HEIGHT,
 } from './constants.js';
 import { t } from '../i18n/index.js';
-import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty } from './projectManager.js';
+import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty, addAccompanimentFromFile } from './projectManager.js';
 import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
 import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
+import { exportProjectLrc } from './lrcExport.js';
 
 // Click-vs-drag tracking for fragment selection
 let _clickStartPos = null;
@@ -73,18 +74,17 @@ function _getCurrentPlayheadX() {
 
 /**
  * 把鼠标事件的 clientX 转换为 fragment canvas 内部 X 坐标。
- * 因为 fragment-canvas 自身有 translate(-scrollX, -scrollY) 变换，
- * getBoundingClientRect() 已反映了变换后的位置，所以 clientX-rect.left
- * 直接就是 canvas 内部坐标。
+ * Canvas is viewport-sized, so convert viewport coordinates back to the
+ * virtual timeline by adding the current scroll offset.
  */
 function _mouseToCanvasX(e) {
   const rect = dom.fragmentCanvas.getBoundingClientRect();
-  return e.clientX - rect.left;
+  return e.clientX - rect.left + state.fragmentScrollX;
 }
 
 function _mouseToCanvasY(e) {
   const rect = dom.fragmentCanvas.getBoundingClientRect();
-  return e.clientY - rect.top;
+  return e.clientY - rect.top + state.fragmentScrollY;
 }
 
 /**
@@ -176,9 +176,12 @@ dom.btnPlay.addEventListener('click', async () => {
   }
 });
 
-dom.btnPause.addEventListener('click', () => {
+dom.btnPause.addEventListener('click', async () => {
   if (state.isPlaying) {
     pausePlayback();
+  } else if (state.currentAudioData && state.currentAudioData.length > 0) {
+    await startAudioPlayback(state.playbackPauseOffset || 0);
+    dom.btnPause.textContent = t('main.pause');
   }
 });
 
@@ -198,9 +201,28 @@ dom.btnExport.addEventListener('click', async () => {
   await exportAll();
 });
 
+if (dom.btnExportLrc) {
+  dom.btnExportLrc.addEventListener('click', exportProjectLrc);
+}
+
 // Add singer
 dom.btnAddSinger.addEventListener('click', () => {
   showSingerSelectDialog(null);
+});
+
+// Import accompaniment audio file
+if (dom.btnImportAccompaniment) {
+  dom.btnImportAccompaniment.addEventListener('click', async () => {
+    await addAccompanimentFromFile();
+    refreshAll();
+  });
+}
+
+// Open the Singer Market window (browse / upload / download community singers)
+dom.btnOpenSingerMarket.addEventListener('click', () => {
+  if (window.electronAPI?.openSingerMarket) {
+    window.electronAPI.openSingerMarket();
+  }
 });
 
 // Audio to MIDI
@@ -226,7 +248,6 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
   // 优先级高于分片拖拽，避免 playhead 卡在分片边缘时无法拖动
   // 拖拽期间只更新视觉（不重启 source），mouseup 时若之前在播放则恢复播放。
   if (e.button === 0) {
-    const canvasH = dom.fragmentCanvas.clientHeight;
     const playheadX = _getCurrentPlayheadX();
     const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
       && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
@@ -250,7 +271,19 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
     const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
 
     if (y >= singerY && y < singerY + SINGER_ROW_HEIGHT) {
-      const singerId = singers[i].id;
+      const singer = singers[i];
+      const singerId = singer.id;
+      if (singer.type === 'accompaniment' && singer.audioDuration > 0) {
+        const accStart = singer.accompanimentStartTime || 0;
+        const accDurationBeats = singer.audioDuration / 60 * state.project.bpm;
+        const accX = accStart * beatWidth;
+        const accWidth = Math.max(2, accDurationBeats * beatWidth);
+        if (x >= accX && x <= accX + accWidth) {
+          state.dragState = { type: 'move-accompaniment', singer, startX: x, originalStart: accStart };
+          state.fragmentDragSnapshot = { startTime: accStart };
+          return;
+        }
+      }
       const singerFragments = fragments.filter(f => f.singerId === singerId);
 
       for (const fragment of singerFragments) {
@@ -295,7 +328,6 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
     const rect = dom.fragmentCanvas.getBoundingClientRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
-    const canvasH = dom.fragmentCanvas.clientHeight;
     const playheadX = _getCurrentPlayheadX();
     const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
       && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
@@ -312,52 +344,60 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
     return;
   }
 
-  const rect = dom.fragmentCanvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  const x = _mouseToCanvasX(e);
+  const y = _mouseToCanvasY(e);
   const beatWidth = getBeatWidth();
   const dx = (x - state.dragState.startX) / beatWidth;
 
-  if (state.dragState.type === 'move') {
+  let pendingUpdate = null;
+  if (state.dragState.type === 'move-accompaniment') {
     const newStart = Math.max(0, state.dragState.originalStart + dx);
-    const updateData = { startTime: Math.round(newStart * 4) / 4 };
+    pendingUpdate = { accompanimentStartTime: Math.round(newStart * 4) / 4 };
+  } else if (state.dragState.type === 'move') {
+    const newStart = Math.max(0, state.dragState.originalStart + dx);
+    pendingUpdate = { startTime: Math.round(newStart * 4) / 4 };
 
-    // Check if mouse moved to another singer track row
     const singers = trackManager.getSingers();
     for (let i = 0; i < singers.length; i++) {
       const singerY = i * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
       if (y >= singerY && y < singerY + SINGER_ROW_HEIGHT) {
         const targetSingerId = singers[i].id;
         if (targetSingerId !== state.dragState.fragment.singerId) {
-          updateData.singerId = targetSingerId;
-          updateData.color = singers[i].color;
+          pendingUpdate.singerId = targetSingerId;
+          pendingUpdate.color = singers[i].color;
         }
         break;
       }
     }
-
-    trackManager.updateFragment(state.dragState.fragment.id, updateData);
   } else if (state.dragState.type === 'resize-right') {
     const newDuration = Math.max(0.25, state.dragState.originalDuration + dx);
-    trackManager.updateFragment(state.dragState.fragment.id, { duration: Math.round(newDuration * 4) / 4 });
+    pendingUpdate = { duration: Math.round(newDuration * 4) / 4 };
   } else if (state.dragState.type === 'resize-left') {
     const originalEnd = state.dragState.originalStart + state.dragState.originalDuration;
     const newStart = state.dragState.originalStart + dx;
     const alignedStart = Math.max(0, Math.round(newStart * 4) / 4);
     const newDuration = originalEnd - alignedStart;
-    if (alignedStart >= 0 && newDuration >= 0.25) {
-      trackManager.updateFragment(state.dragState.fragment.id, {
-        startTime: alignedStart,
-        duration: newDuration,
-      });
-    }
+    if (newDuration >= 0.25) pendingUpdate = { startTime: alignedStart, duration: newDuration };
   }
+
+  // Coalesce high-frequency mousemove events. Applying track updates only once
+  // per animation frame keeps long-fragment drags responsive and avoids IPC spam.
+  if (pendingUpdate) state.dragState.pendingUpdate = pendingUpdate;
 
   if (!state.renderPending) {
     state.renderPending = true;
     requestAnimationFrame(() => {
+      if (state.dragState?.pendingUpdate) {
+        const update = state.dragState.pendingUpdate;
+        state.dragState.pendingUpdate = null;
+        if (state.dragState.type === 'move-accompaniment') {
+          trackManager.updateSinger(state.dragState.singer.id, update);
+        } else {
+          trackManager.updateFragment(state.dragState.fragment.id, update);
+        }
+      }
       renderFragmentTimeline();
-      if (window.electronAPI?.updateFragmentBounds && state.dragState) {
+      if (window.electronAPI?.updateFragmentBounds && state.dragState?.fragment) {
         const frag = state.dragState.fragment;
         window.electronAPI.updateFragmentBounds(frag.id, {
           startTime: frag.startTime,
@@ -373,6 +413,25 @@ dom.fragmentCanvas.addEventListener('mouseup', (e) => {
   // 结束 playhead 拖拽：若拖拽前正在播放，从新位置恢复播放
   if (_isPlayheadDragging) {
     _endPlayheadDrag();
+    return;
+  }
+
+  if (state.dragState?.type === 'move-accompaniment') {
+    const singer = state.dragState.singer;
+    const oldStart = state.fragmentDragSnapshot?.startTime ?? 0;
+    const newStart = singer.accompanimentStartTime || 0;
+    if (oldStart !== newStart) {
+      const singerId = singer.id;
+      history.push({
+        undo() { trackManager.updateSinger(singerId, { accompanimentStartTime: oldStart }); renderFragmentTimeline(); markDirty(); },
+        redo() { trackManager.updateSinger(singerId, { accompanimentStartTime: newStart }); renderFragmentTimeline(); markDirty(); },
+      });
+      markDirty();
+    }
+    state.dragState = null;
+    state.fragmentDragSnapshot = null;
+    _clickStartPos = null;
+    renderFragmentTimeline();
     return;
   }
 
@@ -395,6 +454,11 @@ dom.fragmentCanvas.addEventListener('mouseup', (e) => {
   finishDrag();
 });
 dom.fragmentCanvas.addEventListener('mouseleave', () => {
+  if (state.dragState?.type === 'move-accompaniment') {
+    markDirty();
+    state.dragState = null;
+    state.fragmentDragSnapshot = null;
+  }
   _clickStartPos = null;
   _endPlayheadDrag();
   finishDrag();
@@ -462,33 +526,62 @@ dom.fragmentCanvas.addEventListener('contextmenu', (e) => {
   }
 });
 
-// Scroll events
+// Wheel events: rAF-coalesced to avoid layout thrash on high-frequency trackpad scroll.
+// The latest wheel event is captured and processed inside a single rAF callback;
+// subsequent events before the frame fires just overwrite the pending state.
+let _wheelRaf = 0;
+let _pendingWheelEvent = null;
+let _pendingWheelTarget = null;
+
+function _processPendingWheel() {
+  _wheelRaf = 0;
+  const e = _pendingWheelEvent;
+  const target = _pendingWheelTarget;
+  _pendingWheelEvent = null;
+  _pendingWheelTarget = null;
+  if (!e) return;
+
+  if (target === dom.fragmentContainer) {
+    if (e.ctrlKey || e.metaKey) {
+      const containerRect = dom.fragmentContainer.getBoundingClientRect();
+      const mouseXInContainer = e.clientX - containerRect.left;
+      const beatWidth = getBeatWidth();
+      const mouseBeats = (mouseXInContainer + state.fragmentScrollX) / beatWidth;
+
+      const delta = e.deltaY > 0 ? 0.85 : 1.18;
+      state.fragmentZoomX = Math.max(0.25, Math.min(4, state.fragmentZoomX * delta));
+
+      const newBeatWidth = getBeatWidth();
+      state.fragmentScrollX = mouseBeats * newBeatWidth - mouseXInContainer;
+      renderFragmentTimeline();
+    } else if (e.shiftKey) {
+      state.fragmentScrollX += e.deltaY;
+    } else {
+      state.fragmentScrollY += e.deltaY;
+    }
+    syncFragmentScroll();
+    renderFragmentTimeline();
+  } else if (target === dom.singerListEl) {
+    state.fragmentScrollY += e.deltaY;
+    syncFragmentScroll();
+    renderFragmentTimeline();
+  }
+}
+
 dom.fragmentContainer.addEventListener('wheel', (e) => {
   e.preventDefault();
-  if (e.ctrlKey || e.metaKey) {
-    const containerRect = dom.fragmentContainer.getBoundingClientRect();
-    const mouseXInContainer = e.clientX - containerRect.left;
-    const beatWidth = getBeatWidth();
-    const mouseBeats = (mouseXInContainer + state.fragmentScrollX) / beatWidth;
-
-    const delta = e.deltaY > 0 ? 0.85 : 1.18;
-    state.fragmentZoomX = Math.max(0.25, Math.min(4, state.fragmentZoomX * delta));
-
-    const newBeatWidth = getBeatWidth();
-    state.fragmentScrollX = mouseBeats * newBeatWidth - mouseXInContainer;
-    renderFragmentTimeline();
-  } else if (e.shiftKey) {
-    state.fragmentScrollX += e.deltaY;
-  } else {
-    state.fragmentScrollY += e.deltaY;
-  }
-  syncFragmentScroll();
+  _pendingWheelEvent = e;
+  _pendingWheelTarget = dom.fragmentContainer;
+  if (_wheelRaf) return;
+  _wheelRaf = requestAnimationFrame(_processPendingWheel);
 }, { passive: false });
 
 dom.singerListEl.addEventListener('wheel', (e) => {
   e.preventDefault();
-  state.fragmentScrollY += e.deltaY;
-  syncFragmentScroll();
+  _pendingWheelEvent = e;
+  _pendingWheelTarget = dom.singerListEl;
+  if (_wheelRaf) return;
+  _wheelRaf = requestAnimationFrame(_processPendingWheel);
 }, { passive: false });
 
 // Keyboard shortcuts

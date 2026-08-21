@@ -22,12 +22,44 @@ module.exports = {
       if (!skipOnnxModels) {
         keepList.push('onnx_models');
       }
-      const keep = keepList.some(prefix => 
+      const keep = keepList.some(prefix =>
         normalized === prefix || normalized.startsWith(prefix + '/')
       );
       return !keep;
     },
     icon: './assets/SXS',
+    // Keep only Chromium locales that match the app's supported UI languages
+    // (src/i18n ships 'zh-CN' and 'en'). All other *.pak locale files would
+    // otherwise account for ~45 MB of dead bytes in out/SXSEditor-win32-x64/locales.
+    // Electron falls back to en-US.pak if the OS locale is missing, so keeping
+    // zh-CN + en-US (+ their regional variants) is sufficient.
+    // Note: electron-packager's `locales` option is not honored by every
+    // @electron-forge/plugin-webpack version, so we additionally prune the
+    // leftovers via `afterExtract` below.
+    locales: ['zh-CN', 'zh-TW', 'en-US', 'en-GB'],
+    // Prune Chromium locale .pak files that the app does not ship translations
+    // for (src/i18n only carries 'zh-CN' and 'en'). Each .pak is ~0.8-1 MB and
+    // there are 50+ of them, so this saves ~40 MB.
+    afterExtract: [
+      (buildPath, electronVersion, platform, arch, callback) => {
+        try {
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const keep = new Set(['zh-CN.pak', 'zh-TW.pak', 'en-US.pak', 'en-GB.pak']);
+          const localesDir = path.join(buildPath, 'locales');
+          if (fs.existsSync(localesDir)) {
+            for (const file of fs.readdirSync(localesDir)) {
+              if (file.endsWith('.pak') && !keep.has(file)) {
+                fs.unlinkSync(path.join(localesDir, file));
+              }
+            }
+          }
+          callback();
+        } catch (err) {
+          callback(err);
+        }
+      },
+    ],
   },
   rebuildConfig: {},
   makers: [
@@ -80,6 +112,14 @@ module.exports = {
               html: './src/singerCreator.html',
               js: './src/singerCreator.js',
               name: 'singer_creator_window',
+              preload: {
+                js: './src/preload.js',
+              },
+            },
+            {
+              html: './src/singerMarket.html',
+              js: './src/singerMarket.js',
+              name: 'singer_market_window',
               preload: {
                 js: './src/preload.js',
               },

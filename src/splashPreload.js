@@ -10,6 +10,30 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+// Forward splash renderer errors to main process for centralized logging.
+// The splash window is minimal but still can throw errors during early
+// startup; without this they would be silent.
+(function attachSplashErrorForwarding() {
+  try {
+    const fwd = (level, message) => {
+      try { ipcRenderer.send('crash:log', { level, source: 'splash', message }); } catch (_) {}
+    };
+    const fmt = (e) => {
+      if (e instanceof Error) return e.stack || e.message;
+      if (typeof e === 'object' && e !== null) {
+        try { return JSON.stringify(e); } catch { return String(e); }
+      }
+      return String(e);
+    };
+    window.addEventListener('error', (event) => {
+      fwd('ERROR', `[splash:onerror] ${event.message || ''} @ ${event.filename || ''}:${event.lineno || 0}:${event.colno || 0}` + (event.error ? '\n' + fmt(event.error) : ''));
+    });
+    window.addEventListener('unhandledrejection', (event) => {
+      fwd('ERROR', `[splash:unhandledrejection] ${fmt(event.reason)}`);
+    });
+  } catch (_) {}
+})();
+
 contextBridge.exposeInMainWorld('splashAPI', {
   getBuildInfo: () => ipcRenderer.invoke('splash:getBuildInfo'),
 });

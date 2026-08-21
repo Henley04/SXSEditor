@@ -4,7 +4,82 @@ import { t } from '../i18n/index.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
-import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine, playbackTimeToX, PLAYHEAD_HIT_WIDTH } from './timelineRenderer.js';
+import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './timelineRenderer.js';
+
+// ==================== Accompaniment helpers ====================
+
+/**
+ * Get all accompaniment tracks that have loaded audio buffers.
+ * @returns {Array} Singer objects with type === 'accompaniment' and audioBuffer set
+ */
+function getAccompanimentTracks() {
+  return trackManager.getSingers().filter(s => s.type === 'accompaniment' && (s.audioChannels?.length || s.audioBuffer));
+}
+
+/**
+ * Calculate the maximum end sample across all accompaniment tracks.
+ * @param {number} bpm - Project BPM
+ * @returns {number} Maximum end sample position
+ */
+function getAccompanimentMaxEndSample(bpm) {
+  let maxEndSample = 0;
+  for (const track of getAccompanimentTracks()) {
+    const startSample = Math.round((track.accompanimentStartTime || 0) / bpm * 60 * SAMPLE_RATE);
+    const sourceLength = track.audioChannels?.[0]?.length || track.audioBuffer.length;
+    const endSample = startSample + Math.ceil(sourceLength * SAMPLE_RATE / (track.audioSampleRate || SAMPLE_RATE));
+    if (endSample > maxEndSample) maxEndSample = endSample;
+  }
+  return maxEndSample;
+}
+
+/**
+ * Mix accompaniment audio into an existing mixedAudio Float32Array.
+ * The array is NOT resized — caller must ensure it is large enough
+ * (use getAccompanimentMaxEndSample to calculate required size).
+ * @param {Float32Array} mixedAudio - Target array (modified in-place)
+ * @param {number} bpm - Project BPM
+ */
+function mixAccompanimentIntoArray(mixedAudio, bpm) {
+  for (const track of getAccompanimentTracks()) {
+    const startSample = Math.round((track.accompanimentStartTime || 0) / bpm * 60 * SAMPLE_RATE);
+    const accAudio = track.audioBuffer;
+    for (let i = 0; i < accAudio.length; i++) {
+      const targetIndex = startSample + i;
+      if (targetIndex < mixedAudio.length) {
+        mixedAudio[targetIndex] += accAudio[i];
+      }
+    }
+  }
+}
+
+function _interpolateVolumeEnvelope(envelope, beat) {
+  const kfs = envelope?.keyframes;
+  if (!kfs || kfs.length === 0) return 1;
+  if (kfs.length === 1 || beat <= kfs[0].time) return kfs[0].value;
+  if (beat >= kfs[kfs.length - 1].time) return kfs[kfs.length - 1].value;
+  let lo = 0, hi = kfs.length - 1;
+  while (lo < hi - 1) {
+    const mid = (lo + hi) >>> 1;
+    if (kfs[mid].time <= beat) lo = mid; else hi = mid;
+  }
+  const span = kfs[hi].time - kfs[lo].time;
+  const t = span > 0 ? (beat - kfs[lo].time) / span : 0;
+  const smoothness = (kfs[lo].smoothness || 0) / 100;
+  const smooth = t + ((t * t * (3 - 2 * t)) - t) * smoothness;
+  return kfs[lo].value + smooth * (kfs[hi].value - kfs[lo].value);
+}
+
+function _applyFragmentVolumeEnvelope(audio, fragment, bpm) {
+  const envelope = fragment?.envelopes?.volume;
+  if (!envelope?.keyframes?.length) return audio;
+  const out = new Float32Array(audio.length);
+  const beatInc = bpm / (60 * SAMPLE_RATE);
+  let beat = 0;
+  for (let i = 0; i < audio.length; i++, beat += beatInc) {
+    out[i] = audio[i] * _interpolateVolumeEnvelope(envelope, beat);
+  }
+  return out;
+}
 
 // visibilitychange handler: pause rAF-driven UI updates when tab hidden
 // (audio playback continues via WebAudio/WASAPI in background).
@@ -12,6 +87,32 @@ import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine, playbackTime
 let _visibilityHandlerRegistered = false;
 let _exclusiveUpdateFn = null;
 let _sharedUpdateFn = null;
+
+function _onVisibilityChange() {
+  if (document.hidden) {
+    if (state.exclusivePlaybackRaf) {
+      cancelAnimationFrame(state.exclusivePlaybackRaf);
+      state.exclusivePlaybackRaf = null;
+    }
+    if (state.playheadRaf) {
+      cancelAnimationFrame(state.playheadRaf);
+      state.playheadRaf = null;
+    }
+  } else {
+    if (state.isPlaying && state.useExclusiveMode && _exclusiveUpdateFn && !state.exclusivePlaybackRaf) {
+      state.exclusivePlaybackRaf = requestAnimationFrame(_exclusiveUpdateFn);
+    } else if (state.isPlaying && !state.useExclusiveMode && _sharedUpdateFn && !state.playheadRaf) {
+      state.playheadRaf = requestAnimationFrame(_sharedUpdateFn);
+    }
+  }
+}
+
+function _onBeforeUnloadForVisibility() {
+  if (_visibilityHandlerRegistered) {
+    document.removeEventListener('visibilitychange', _onVisibilityChange);
+    _visibilityHandlerRegistered = false;
+  }
+}
 
 // Streaming playback state (main page Play All with diffStepChunk).
 // Buffer-based waiting: when playback catches up to the inference frontier
@@ -23,33 +124,58 @@ let _sharedUpdateFn = null;
 let _streamingActive = false;
 let _streamingFirstChunkOffsetSec = 0;  // First chunk's global position (for coordinate conversion)
 let _streamingBufferEndSec = 0;         // Furthest chunk end in playhead seconds
+let _streamingAccEndSec = 0;            // Furthest accompaniment end in playhead seconds
 let _streamingInferenceDone = false;    // synthesizeMultiStreaming returned
 let _streamingWaitingForInference = false;
 let _streamingWaitStartCtxTime = 0;
 let _streamingIsLastReceived = false;   // isLast chunk has been received
 let _streamingActiveSourceCount = 0;    // Currently-playing source count
+let _streamingContextSuspendedForInference = false;
+
+async function _pauseStreamingForInference(ctx) {
+  if (_streamingContextSuspendedForInference) return;
+  _streamingContextSuspendedForInference = true;
+  // All streaming vocal and accompaniment BufferSources share this context.
+  // Suspending it freezes every source and AudioContext.currentTime together,
+  // so accompaniment cannot run ahead while the next vocal chunk is inferred.
+  if (ctx && ctx.state === 'running') {
+    try { await ctx.suspend(); } catch (err) {
+      console.warn('[Audio] Failed to suspend context while waiting for inference:', err.message);
+    }
+  }
+}
+
+async function _resumeStreamingAfterInference(ctx) {
+  if (!_streamingContextSuspendedForInference) return;
+  _streamingContextSuspendedForInference = false;
+  if (ctx && ctx.state === 'suspended') {
+    try { await ctx.resume(); } catch (err) {
+      console.warn('[Audio] Failed to resume context after inference:', err.message);
+    }
+  }
+}
+
+// 流式播放自然完成：所有已调度 source（人声 chunk + 伴奏）均已结束。
+// 提取为独立函数供人声 chunk 与伴奏 source 的 onended 共用，避免重复逻辑。
+function _finishStreamingPlayback() {
+  state.streamingFinished = true;
+  state.isPlaying = false;
+  state.playbackPauseOffset = 0;
+  state.streamingSources = [];
+  _streamingActive = false;
+  _streamingContextSuspendedForInference = false;
+  stopPlayheadAnimation();
+  dom.timeDisplay.textContent = formatTime(0);
+  clearPlayheadLine();
+  dom.btnPlay.textContent = t('main.play');
+  dom.btnPlay.disabled = false;
+}
 
 function _ensureVisibilityHandler() {
   if (_visibilityHandlerRegistered) return;
   _visibilityHandlerRegistered = true;
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-      if (state.exclusivePlaybackRaf) {
-        cancelAnimationFrame(state.exclusivePlaybackRaf);
-        state.exclusivePlaybackRaf = null;
-      }
-      if (state.playheadRaf) {
-        cancelAnimationFrame(state.playheadRaf);
-        state.playheadRaf = null;
-      }
-    } else {
-      if (state.isPlaying && state.useExclusiveMode && _exclusiveUpdateFn && !state.exclusivePlaybackRaf) {
-        state.exclusivePlaybackRaf = requestAnimationFrame(_exclusiveUpdateFn);
-      } else if (state.isPlaying && !state.useExclusiveMode && _sharedUpdateFn && !state.playheadRaf) {
-        state.playheadRaf = requestAnimationFrame(_sharedUpdateFn);
-      }
-    }
-  });
+  document.addEventListener('visibilitychange', _onVisibilityChange);
+  window.addEventListener('beforeunload', _onBeforeUnloadForVisibility, { once: true });
 }
 
 export async function ensurePipelineInitialized() {
@@ -73,6 +199,7 @@ export async function playAll() {
   // 使后续进度回调失效（进度百分比偶发不显示的根因之一）。
   if (state.isSynthesizing) return;
   state.isSynthesizing = true;
+  state.synthesisCancelled = false;
   dom.btnPlay.disabled = true;
   dom.btnPlay.textContent = t('main.synthesizing');
 
@@ -95,15 +222,31 @@ export async function playAll() {
     singers.forEach(s => singerMap.set(s.id, s));
 
     // 收集所有有 notes 的 fragments，按 startTime 排序后逐个合成。
-    // 复用分片编辑器的逻辑：每个 fragment 用相对 notes（clippedNotes）
-    // + 该 fragment 自己的 pitchCurve（buildFragmentPitchCurveF0），
-    // 确保与分片编辑器播放结果完全一致。
+    // 排除伴奏轨道的分片（伴奏轨道不应有分片，但防御性过滤）。
     const allFragments = fragments
-      .filter(f => f.notes && f.notes.length > 0)
+      .filter(f => f.notes && f.notes.length > 0 && singerMap.get(f.singerId)?.type !== 'accompaniment')
       .sort((a, b) => a.startTime - b.startTime);
 
-    if (allFragments.length === 0) {
+    const accTracks = getAccompanimentTracks();
+
+    if (allFragments.length === 0 && accTracks.length === 0) {
       showAlertDialog(t('main.noFragmentsToPlay'));
+      return;
+    }
+
+    // 仅有伴奏轨道无分片音符：直接播放伴奏，跳过推理
+    if (allFragments.length === 0 && accTracks.length > 0) {
+      const accMaxSamples = getAccompanimentMaxEndSample(state.project.bpm);
+      const mixedAudio = new Float32Array(accMaxSamples);
+      mixAccompanimentIntoArray(mixedAudio, state.project.bpm);
+      state.currentAudioData = mixedAudio;
+      state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
+      state.currentAudioBuffer = null;
+      dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
+      if (state.playbackPauseOffset > 0) {
+        drawPausedPlayheadAt(state.playbackPauseOffset);
+      }
+      await startAudioPlayback(state.playbackPauseOffset);
       return;
     }
 
@@ -159,6 +302,11 @@ export async function playAll() {
             diffStepChunk: true,
             diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
             diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
+            cfgScheduleMode: inferenceOpts.cfgScheduleMode,
+            cfgStrengthStart: inferenceOpts.cfgStrengthStart,
+            cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
+            dynamicThresholdEnabled: inferenceOpts.dynamicThresholdEnabled,
+            dynamicThresholdPercentile: inferenceOpts.dynamicThresholdPercentile,
           },
         });
       }
@@ -180,11 +328,13 @@ export async function playAll() {
       _streamingActive = false;
       _streamingFirstChunkOffsetSec = 0;
       _streamingBufferEndSec = 0;
+      _streamingAccEndSec = 0;
       _streamingInferenceDone = false;
       _streamingWaitingForInference = false;
       _streamingWaitStartCtxTime = 0;
       _streamingIsLastReceived = false;
       _streamingActiveSourceCount = 0;
+      _streamingContextSuspendedForInference = false;
 
       if (canStreamPlayback) {
         _streamingActive = true;
@@ -215,10 +365,56 @@ export async function playAll() {
             if (!streamingStarted) {
               streamingStarted = true;
               _streamingFirstChunkOffsetSec = chunkStartSec;
-              state.playbackStartTime = ctx.currentTime + 0.05 - chunkStartSec;
+              state.playbackStartTime = ctx.currentTime + 0.05;
               state.playbackPauseOffset = 0;
               state.isPlaying = true;
+              if (dom.btnPause) dom.btnPause.textContent = t('main.pause');
               startPlayheadAnimation();
+
+              // Schedule accompaniment tracks as independent BufferSources
+              // alongside the streaming vocal chunks. They connect to the same
+              // gainNode and are cleaned up via state.streamingSources.
+              // 伴奏也计入活跃 source 计数与播放前沿：完成判定需等待伴奏结束，
+              // 避免伴奏长于人声时人声一结束就提前终止播放并孤立伴奏 source，
+              // 导致伴奏无法被暂停/停止。
+              for (const accTrack of accTracks) {
+                const accChannels = accTrack.audioChannels?.length ? accTrack.audioChannels : [accTrack.audioBuffer];
+                const accBuffer = ctx.createBuffer(accChannels.length, accChannels[0].length, accTrack.audioSampleRate || SAMPLE_RATE);
+                for (let ch = 0; ch < accChannels.length; ch++) accBuffer.getChannelData(ch).set(accChannels[ch]);
+                const accSource = ctx.createBufferSource();
+                accSource.buffer = accBuffer;
+                const accGain = ctx.createGain();
+                accGain.gain.value = Number.isFinite(accTrack.accompanimentVolume) ? accTrack.accompanimentVolume : 1;
+                accSource.connect(accGain).connect(state.gainNode);
+                const accStartSec = (accTrack.accompanimentStartTime || 0) / state.project.bpm * 60;
+                const accScheduleTime = state.playbackStartTime + accStartSec;
+                const safeNow = ctx.currentTime + 0.01;
+                if (accScheduleTime < safeNow) {
+                  // The first MIDI chunk may begin after timeline zero. Start the
+                  // accompaniment at the matching offset, not from its head.
+                  const offset = Math.max(0, safeNow - accScheduleTime);
+                  if (offset >= accBuffer.duration) continue;
+                  accSource.start(safeNow, offset);
+                } else {
+                  accSource.start(accScheduleTime);
+                }
+                const accEndSec = accStartSec + accTrack.audioBuffer.length / SAMPLE_RATE;
+                if (accEndSec > _streamingAccEndSec) _streamingAccEndSec = accEndSec;
+                _streamingActiveSourceCount++;
+                const accSourceIdx = state.streamingSources.length;
+                state.streamingSources.push(accSource);
+                accSource.onended = () => {
+                  _streamingActiveSourceCount--;
+                  if (state.streamingSources[accSourceIdx] === accSource) {
+                    state.streamingSources[accSourceIdx] = null;
+                  }
+                  if (_streamingIsLastReceived &&
+                      _streamingActiveSourceCount === 0 &&
+                      !state.streamingFinished) {
+                    _finishStreamingPlayback();
+                  }
+                };
+              }
             }
 
             // 更新 buffer 前沿（已收到音频的最远全局位置）
@@ -234,6 +430,7 @@ export async function playAll() {
             if (prelimScheduleTime < minTime && !_streamingInferenceDone && !_streamingWaitingForInference) {
               _streamingWaitingForInference = true;
               _streamingWaitStartCtxTime = ctx.currentTime;
+              await _pauseStreamingForInference(ctx);
               if (state.playheadRaf) {
                 cancelAnimationFrame(state.playheadRaf);
                 state.playheadRaf = null;
@@ -246,7 +443,9 @@ export async function playAll() {
             // 并重启 rAF 动画。
             if (_streamingWaitingForInference) {
               _streamingWaitingForInference = false;
-              state.playbackStartTime = (ctx.currentTime + 0.05) - chunkStartSec;
+              await _resumeStreamingAfterInference(ctx);
+              // AudioContext.currentTime was frozen together with every source,
+              // so the original playbackStartTime remains the valid shared clock.
               startPlayheadAnimation();
             }
 
@@ -275,16 +474,7 @@ export async function playAll() {
               if (_streamingIsLastReceived &&
                   _streamingActiveSourceCount === 0 &&
                   !state.streamingFinished) {
-                state.streamingFinished = true;
-                state.isPlaying = false;
-                state.playbackPauseOffset = 0;
-                state.streamingSources = [];
-                _streamingActive = false;
-                stopPlayheadAnimation();
-                dom.timeDisplay.textContent = formatTime(0);
-                clearPlayheadLine();
-                dom.btnPlay.textContent = t('main.play');
-                dom.btnPlay.disabled = false;
+                _finishStreamingPlayback();
               }
             };
           } catch (e) {
@@ -309,11 +499,14 @@ export async function playAll() {
         _streamingInferenceDone = true;
 
         // 若合成返回时正在等待推理（最后一批 chunk 已收到但 playhead 仍冻结），
-        // 恢复播放：调整 playbackStartTime 使 playhead 从 buffer 前沿继续。
+        // 恢复播放：只需重启 rAF 即可。不重置 playbackStartTime——
+        // underrun 冻结只取消了 rAF，未改变 playbackStartTime（recovery 1 已在
+        // chunk 到达时设为正确值）。重置 playbackStartTime 会使 elapsed 跳到
+        // buffer 末尾，与仍在播放的 source 时间基准脱节，导致 playhead 越过
+        // 正在播放的音频提前结束或进入静音区。
         if (_streamingWaitingForInference && streamingStarted) {
           _streamingWaitingForInference = false;
-          const ctx = getAudioContext();
-          state.playbackStartTime = ctx.currentTime - _streamingBufferEndSec;
+          await _resumeStreamingAfterInference(state.audioContext);
           startPlayheadAnimation();
         }
 
@@ -388,6 +581,11 @@ export async function playAll() {
             diffStepChunk: false,
             diffStepChunkFrames: inferenceOpts.diffStepChunkFrames,
             diffStepOverlapFrames: inferenceOpts.diffStepOverlapFrames,
+            cfgScheduleMode: inferenceOpts.cfgScheduleMode,
+            cfgStrengthStart: inferenceOpts.cfgStrengthStart,
+            cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
+            dynamicThresholdEnabled: inferenceOpts.dynamicThresholdEnabled,
+            dynamicThresholdPercentile: inferenceOpts.dynamicThresholdPercentile,
           },
         });
 
@@ -401,19 +599,24 @@ export async function playAll() {
         const requiredLength = Math.max(expectedSamples, firstNoteOffsetSample + audioData.length);
         const paddedAudio = new Float32Array(requiredLength);
         paddedAudio.set(audioData, firstNoteOffsetSample);
+        const envelopedAudio = _applyFragmentVolumeEnvelope(paddedAudio, fragment, state.project.bpm);
         audioResults.push({
-          audioData: paddedAudio,
+          audioData: envelopedAudio,
           startTimeBeat: fragment.startTime,
         });
 
         completedFrags++;
         const overallProgress = (completedFrags / totalFrags) * 100;
         const currentSeconds = (overallProgress / 100) * totalSeconds;
-        dom.timeDisplay.textContent = t('main.synthesizingShort') + ': ' + formatTime(currentSeconds) + ' / ' + formatTime(totalSeconds);
+        // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+        dom.timeDisplay.textContent = t('main.synthesizingProgressTime', { current: formatTime(currentSeconds), total: formatTime(totalSeconds) });
       }
 
       const maxEndBeat = globalLastEnd;
-      const totalSamples = Math.ceil(((maxEndBeat / state.project.bpm) * 60) * SAMPLE_RATE);
+      const vocalTotalSamples = Math.ceil(((maxEndBeat / state.project.bpm) * 60) * SAMPLE_RATE);
+      // Account for accompaniment tracks that may extend beyond vocal fragments
+      const accMaxSamples = getAccompanimentMaxEndSample(state.project.bpm);
+      const totalSamples = Math.max(vocalTotalSamples, accMaxSamples);
       const mixedAudio = new Float32Array(totalSamples);
 
       for (const result of audioResults) {
@@ -428,6 +631,7 @@ export async function playAll() {
       }
 
       state.currentAudioData = mixedAudio;
+      state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
 
       // 不重置 playbackPauseOffset：若用户在合成前已通过拖拽 playhead 设置了起始位置，
       // 则从该位置开始播放。stopPlayback / 自然结束时已重置为 0。
@@ -440,7 +644,8 @@ export async function playAll() {
 
   } catch (error) {
     console.error('Synthesis failed:', error);
-    showAlertDialog(t('main.synthesisFailed') + ': ' + error.message);
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('main.synthesisFailedDetail', { detail: error.message }));
     dom.timeDisplay.textContent = formatTime(0);
   } finally {
     state.isSynthesizing = false;
@@ -478,21 +683,29 @@ export async function loadAudioSettings() {
   try {
     state.audioSettings = await window.electronAPI.getSettings();
     state.useExclusiveMode = state.audioSettings?.audioOutputMode === 'exclusive';
-  } catch (e) {
+  } catch (_e) {
     state.audioSettings = {};
   }
 }
 
 export function getPreviewInferenceOptions() {
   return {
-    nSteps: state.audioSettings?.previewDiffSteps ?? 16,
+    nSteps: state.audioSettings?.previewDiffSteps ?? state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.previewCfgStrength ?? 3.0,
-    cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.75,
+    cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.7,
+    sampler: state.audioSettings?.previewSampler ?? state.audioSettings?.exportSampler ?? 'stork2',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     diffStepChunk: state.audioSettings?.previewDiffStepChunkEnabled === true,
     diffStepChunkFrames: state.audioSettings?.previewDiffStepChunkFrames ?? 500,
     diffStepOverlapFrames: state.audioSettings?.previewDiffStepOverlapFrames ?? 50,
+    // Task 11: CFG schedule (preview mirrors). Falls back to top-level keys.
+    cfgScheduleMode: state.audioSettings?.previewCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'linear',
+    cfgStrengthStart: state.audioSettings?.previewCfgStrengthStart ?? state.audioSettings?.cfgStrengthStart ?? null,
+    cfgScheduleKeyframes: state.audioSettings?.previewCfgScheduleKeyframes ?? state.audioSettings?.cfgScheduleKeyframes ?? null,
+    // Dynamic thresholding (preview path)
+    dynamicThresholdEnabled: state.audioSettings?.previewDynamicThresholdEnabled === true,
+    dynamicThresholdPercentile: Number.isFinite(state.audioSettings?.previewDynamicThresholdPercentile) ? state.audioSettings.previewDynamicThresholdPercentile : 0.995,
   };
 }
 
@@ -500,9 +713,17 @@ export function getExportInferenceOptions() {
   return {
     nSteps: state.audioSettings?.exportDiffSteps ?? 32,
     cfg: state.audioSettings?.exportCfgStrength ?? 3.0,
-    cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.75,
+    cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.7,
+    sampler: state.audioSettings?.exportSampler ?? 'euler',
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
+    // Task 11: CFG schedule (export mirrors). Falls back to top-level keys.
+    cfgScheduleMode: state.audioSettings?.exportCfgScheduleMode ?? state.audioSettings?.cfgScheduleMode ?? 'linear',
+    cfgStrengthStart: state.audioSettings?.exportCfgStrengthStart ?? state.audioSettings?.cfgStrengthStart ?? null,
+    cfgScheduleKeyframes: state.audioSettings?.exportCfgScheduleKeyframes ?? state.audioSettings?.cfgScheduleKeyframes ?? null,
+    // Dynamic thresholding (export path)
+    dynamicThresholdEnabled: state.audioSettings?.exportDynamicThresholdEnabled === true,
+    dynamicThresholdPercentile: Number.isFinite(state.audioSettings?.exportDynamicThresholdPercentile) ? state.audioSettings.exportDynamicThresholdPercentile : 0.995,
   };
 }
 
@@ -516,7 +737,7 @@ export function applyAudioSettings() {
   if (state.audioContext && state.audioSettings.audioOutputDevice !== undefined && state.audioSettings.audioOutputDevice !== -1) {
     const sinkId = String(state.audioSettings.audioOutputDevice);
     if (state.audioContext.setSinkId && typeof state.audioContext.setSinkId === 'function') {
-      state.audioContext.setSinkId(sinkId).catch(err => {
+      state.audioContext.setSinkId(sinkId).catch(_err => {
       // TODO: translate garbled log
       });
     }
@@ -538,13 +759,38 @@ export async function startAudioPlayback(offset) {
   }
 }
 
+function _buildPlaybackChannels(vocalMono, bpm) {
+  const tracks = getAccompanimentTracks();
+  const maxChannels = Math.max(2, ...tracks.map(t => t.audioChannels?.length || 1));
+  const result = Array.from({ length: maxChannels }, () => new Float32Array(vocalMono.length));
+  for (let ch = 0; ch < maxChannels; ch++) result[ch].set(vocalMono);
+  for (const track of tracks) {
+    const src = track.audioChannels?.length ? track.audioChannels : [track.audioBuffer];
+    const start = Math.round((track.accompanimentStartTime || 0) / bpm * 60 * SAMPLE_RATE);
+    for (let ch = 0; ch < maxChannels; ch++) {
+      const input = src[Math.min(ch, src.length - 1)];
+      const srcRate = track.audioSampleRate || SAMPLE_RATE;
+      const gain = Number.isFinite(track.accompanimentVolume) ? track.accompanimentVolume : 1;
+      const outputLength = Math.ceil(input.length * SAMPLE_RATE / srcRate);
+      for (let i = 0; i < outputLength && start + i < result[ch].length; i++) {
+        const pos = i * srcRate / SAMPLE_RATE;
+        const i0 = Math.floor(pos);
+        const i1 = Math.min(input.length - 1, i0 + 1);
+        const frac = pos - i0;
+        result[ch][start + i] += (input[i0] + (input[i1] - input[i0]) * frac) * gain;
+      }
+    }
+  }
+  return result;
+}
+
 export function startSharedPlayback(offset) {
   stopAudioSource();
 
   const context = getAudioContext();
-  const audioBuffer = context.createBuffer(1, state.currentAudioData.length, SAMPLE_RATE);
-  const channelData = audioBuffer.getChannelData(0);
-  channelData.set(state.currentAudioData);
+  const channels = state.currentAudioChannels?.length ? state.currentAudioChannels : [state.currentAudioData];
+  const audioBuffer = context.createBuffer(channels.length, channels[0].length, SAMPLE_RATE);
+  for (let ch = 0; ch < channels.length; ch++) audioBuffer.getChannelData(ch).set(channels[ch]);
 
   state.currentAudioBuffer = audioBuffer;
 
@@ -595,6 +841,7 @@ export async function startExclusivePlayback(offset) {
     const options = {
       deviceId: state.audioSettings?.audioOutputDevice ?? -1,
       sampleRate: state.audioSettings?.audioSampleRate ?? SAMPLE_RATE,
+      sourceSampleRate: SAMPLE_RATE,
       channels: 1,
       bitDepth: state.audioSettings?.audioBitDepth ?? 'float32',
       bufferSize: state.audioSettings?.audioBufferSize ?? 1024,
@@ -643,7 +890,7 @@ export async function startExclusivePlayback(offset) {
     });
 
     startExclusivePlayheadAnimation(removeEndedListener, playbackStartWallTime);
-  } catch (err) {
+  } catch (_err) {
       // TODO: translate garbled log
     state.useExclusiveMode = false;
     startSharedPlayback(offset);
@@ -727,8 +974,9 @@ export function pausePlayback() {
       cancelAnimationFrame(state.playheadRaf);
       state.playheadRaf = null;
     }
-    dom.timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
+    dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
+    if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
     return;
   }
 
@@ -742,8 +990,9 @@ export function pausePlayback() {
       cancelAnimationFrame(state.exclusivePlaybackRaf);
       state.exclusivePlaybackRaf = null;
     }
-    dom.timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
+    dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
+    if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
   } else {
     if (!state.currentAudioSource) return;
     const context = getAudioContext();
@@ -752,12 +1001,21 @@ export function pausePlayback() {
     stopAudioSource();
     state.isPlaying = false;
     // stopAudioSource 已 cancel rAF，但不会清除画布；这里手动绘制暂停态播放头
-    dom.timeDisplay.textContent = t('main.paused') + ': ' + formatTime(elapsed);
+    dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
+    if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
   }
 }
 
 export function stopPlayback() {
+  if (_streamingContextSuspendedForInference && state.audioContext?.state === 'suspended') {
+    state.audioContext.resume().catch(() => {});
+  }
+  _streamingContextSuspendedForInference = false;
+  if (state.isSynthesizing) {
+    state.synthesisCancelled = true;
+    window.electronAPI.cancelSVSSynthesis().catch(() => {});
+  }
   // 停止流式播放
   if (state.streamingSources && state.streamingSources.length > 0) {
     state.streamingFinished = true;
@@ -779,6 +1037,7 @@ export function stopPlayback() {
   state.currentAudioData = null;
   state.currentAudioBuffer = null;
   dom.timeDisplay.textContent = formatTime(0);
+  if (dom.btnPause) dom.btnPause.textContent = t('main.pause');
 }
 
 /**
@@ -869,7 +1128,7 @@ export function stopAudioSource() {
     try {
       state.currentAudioSource.onended = null;
       state.currentAudioSource.stop();
-    } catch (e) {
+    } catch (_e) {
     }
     state.currentAudioSource = null;
   }
@@ -896,7 +1155,8 @@ export function startPlayheadAnimation() {
       if (elapsed >= _streamingBufferEndSec) {
         _streamingWaitingForInference = true;
         _streamingWaitStartCtxTime = context.currentTime;
-        // 冻结 playhead 在 buffer 前沿
+        void _pauseStreamingForInference(context);
+        // 冻结 playhead、伴奏与所有已调度 source 在同一 AudioContext 时间点
         if (state.playheadRaf) {
           cancelAnimationFrame(state.playheadRaf);
           state.playheadRaf = null;
@@ -906,6 +1166,33 @@ export function startPlayheadAnimation() {
         dom.btnPlay.textContent = t('main.waitingForInference');
         return;
       }
+    }
+
+    // 流式播放兜底停止：推理已完成且 playhead 越过播放前沿后，
+    // 说明所有已调度的 source 已播完（或 onended 清理未触发）。
+    // 此时无音频可播，必须停止 rAF，否则 playhead 持续在静音区前进。
+    // 0.5s 容差防止 chunk 边界抖动导致误停。
+    // 播放前沿取 {人声 chunk 前沿, 伴奏结束位置} 的最大值，避免伴奏长于
+    // 人声时在人声结束后就提前停止（会截断仍在播放的伴奏）。
+    const totalFrontierSec = Math.max(_streamingBufferEndSec, _streamingAccEndSec);
+    if (_streamingInferenceDone && elapsed >= totalFrontierSec + 0.5) {
+      if (!state.streamingFinished) {
+        state.streamingFinished = true;
+        state.isPlaying = false;
+        state.playbackPauseOffset = 0;
+        _streamingActive = false;
+        for (const src of (state.streamingSources || [])) {
+          if (!src) continue;
+          try { src.onended = null; src.stop(); } catch (_) {}
+        }
+        state.streamingSources = [];
+        stopPlayheadAnimation();
+        dom.timeDisplay.textContent = formatTime(0);
+        dom.btnPlay.textContent = t('main.play');
+        dom.btnPlay.disabled = false;
+        clearPlayheadLine();
+      }
+      return;
     }
 
     if (state.currentAudioBuffer) {
@@ -963,14 +1250,22 @@ export async function runExportJob(opts) {
     nSteps,
     cfg,
     cfgRescale,
+    sampler,
     autoShift,
+    smartSegmentation,
+    cfgScheduleMode,
+    cfgStrengthStart,
+    cfgScheduleKeyframes,
+    dynamicThresholdEnabled,
+    dynamicThresholdPercentile,
     onFragmentProgress,
     onOverallProgress,
     onStatus,
   } = opts;
 
   const fragments = trackManager.getFragments();
-  if (fragments.length === 0) {
+  const accTracks = getAccompanimentTracks();
+  if (fragments.length === 0 && accTracks.length === 0) {
     throw new Error(t('main.exportDialog.noFragments'));
   }
 
@@ -983,11 +1278,19 @@ export async function runExportJob(opts) {
   // + 该 fragment 自己的 pitchCurve（buildFragmentPitchCurveF0），
   // 确保与分片编辑器播放/导出结果完全一致。
   const allFragments = fragments
-    .filter(f => f.notes && f.notes.length > 0)
+    .filter(f => {
+      // Exclude fragments belonging to accompaniment tracks (no SVS synthesis)
+      const singer = singerMap.get(f.singerId);
+      if (singer && singer.type === 'accompaniment') return false;
+      return f.notes && f.notes.length > 0;
+    })
     .sort((a, b) => a.startTime - b.startTime);
 
   if (allFragments.length === 0) {
-    throw new Error(t('main.exportDialog.noNotes'));
+    // Allow export if there are accompaniment tracks (audio-only export)
+    if (getAccompanimentTracks().length === 0) {
+      throw new Error(t('main.exportDialog.noNotes'));
+    }
   }
 
   if (onStatus) onStatus('progressPreparing');
@@ -1052,9 +1355,16 @@ export async function runExportJob(opts) {
           singerId: singer?.id || null,
           pitchCurveF0,
           autoShift,
+          smartSegmentation,
           nSteps,
           cfg,
           cfgRescale,
+          sampler,
+          cfgScheduleMode: opts.cfgScheduleMode,
+          cfgStrengthStart: opts.cfgStrengthStart,
+          cfgScheduleKeyframes: opts.cfgScheduleKeyframes,
+          dynamicThresholdEnabled: opts.dynamicThresholdEnabled,
+          dynamicThresholdPercentile: opts.dynamicThresholdPercentile,
         },
       });
 
@@ -1092,7 +1402,8 @@ export async function runExportJob(opts) {
 
   if (onStatus) onStatus('progressEncoding');
 
-  const totalSamples = Math.ceil(maxDuration * SAMPLE_RATE);
+  const accMaxSamples = getAccompanimentMaxEndSample(state.project.bpm);
+  const totalSamples = Math.max(Math.ceil(maxDuration * SAMPLE_RATE), accMaxSamples);
   const mixedAudio = new Float32Array(totalSamples);
 
   for (const result of audioResults) {
@@ -1107,10 +1418,17 @@ export async function runExportJob(opts) {
     }
   }
 
+  const mixedChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
+  const interleaved = new Float32Array(totalSamples * mixedChannels.length);
+  for (let i = 0; i < totalSamples; i++) {
+    for (let ch = 0; ch < mixedChannels.length; ch++) interleaved[i * mixedChannels.length + ch] = mixedChannels[ch][i];
+  }
+
   if (onOverallProgress) onOverallProgress(100);
 
   return {
-    mixedAudio,
+    mixedAudio: interleaved,
+    numChannels: mixedChannels.length,
     maxDuration,
     fragmentCount: audioResults.length,
   };

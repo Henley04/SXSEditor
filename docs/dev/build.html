@@ -297,13 +297,14 @@ npm run test:watch        # Watch mode</code></pre>
 │   │   ├── pipeline/          # Main SVS pipeline (OnnxSVSPipeline)
 │   │   ├── webnn/             # WebNN NPU pipeline
 │   │   ├── rmvpePitchDetector.js
+│   │   ├── fcpeDetector.js    # FCPE pitch detector (default MIDI extraction)
 │   │   ├── basicPitch.js
 │   │   └── phone_set.json     # Phoneme vocabulary (2820 entries)
-│   ├── audio/                 # AudioOutputManager (WASAPI), wavEncoder
+│   ├── audio/                 # AudioOutputManager (WASAPI), wavEncoder, lrcExport
 │   ├── themes/                # Theme system (builtins, manager, tokens)
 │   ├── i18n/                  # Internationalization (en, zh-CN)
 │   └── utils/                 # Shared utilities
-├── test/                      # Test suite (~33 files, 900+ cases)
+├── test/                      # Test suite (~61 files, 1500+ cases)
 ├── forge.config.js            # Electron Forge config (packaging, makers)
 ├── webpack.*.config.js        # Webpack configs (main + renderer)
 └── package.json</code></pre>

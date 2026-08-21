@@ -203,6 +203,12 @@
             <td><span data-lang="en">0–1 / step 0.05</span><span data-lang="zh">0–1 / 步进 0.05</span></td>
             <td><span data-lang="en">Mitigates over-guidance artifacts. Recommended 0.5–0.9.</span><span data-lang="zh">缓解过度引导伪影。推荐 0.5–0.9。</span></td>
           </tr>
+          <tr>
+            <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
+            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
+            <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
+            <td><span data-lang="en">Diffusion sampling solver. See <a href="#diffusion-sampler">Diffusion Sampler</a> below.</span><span data-lang="zh">扩散采样求解器。见下方 <a href="#diffusion-sampler">扩散求解器</a>。</span></td>
+          </tr>
         </tbody>
       </table>
 
@@ -240,8 +246,59 @@
             <td><span data-lang="en">0–1 / step 0.05</span><span data-lang="zh">0–1 / 步进 0.05</span></td>
             <td><span data-lang="en">Same as preview.</span><span data-lang="zh">同预览。</span></td>
           </tr>
+          <tr>
+            <td><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></td>
+            <td><span data-lang="en">Euler</span><span data-lang="zh">Euler</span></td>
+            <td><span data-lang="en">Euler / Heun / Extrapolated Euler / STORK-2</span><span data-lang="zh">Euler / Heun / Extrapolated Euler / STORK-2</span></td>
+            <td><span data-lang="en">Diffusion sampling solver. See <a href="#diffusion-sampler">Diffusion Sampler</a> below. The export dialog also lets you override this per export.</span><span data-lang="zh">扩散采样求解器。见下方 <a href="#diffusion-sampler">扩散求解器</a>。导出对话框也支持每次导出单独覆盖。</span></td>
+          </tr>
         </tbody>
       </table>
+
+      <h3 id="diffusion-sampler">
+        <span data-lang="en">Diffusion Sampler</span>
+        <span data-lang="zh">扩散求解器</span>
+      </h3>
+      <p data-lang="en">The diffusion model iteratively denoises a mel spectrogram by integrating the flow-matching velocity field ODE. The <strong>sampler</strong> decides how each denoising step combines model evaluations into the state update. SXSEditor exposes four samplers, selectable independently for preview and export:</p>
+      <p data-lang="zh">扩散模型通过积分 flow-matching 速度场 ODE 迭代去噪 mel 频谱。<strong>求解器</strong>决定每个去噪步如何将模型推理组合为状态更新。SXSEditor 提供四种求解器，预览与导出可独立选择：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Sampler</span><span data-lang="zh">求解器</span></th>
+            <th><span data-lang="en">NFE / step</span><span data-lang="zh">每步推理次数</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en"><strong>Euler</strong> (default)</span><span data-lang="zh"><strong>Euler</strong>（默认）</span></td>
+            <td><span data-lang="en">1</span><span data-lang="zh">1</span></td>
+            <td><span data-lang="en">First-order explicit Euler, midpoint time evaluation. The original baseline implementation; fastest and most predictable.</span><span data-lang="zh">一阶显式欧拉法，中点时间评估。原始基线实现，最快且最稳定。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Heun</strong></span><span data-lang="zh"><strong>Heun</strong></span></td>
+            <td><span data-lang="en">2</span><span data-lang="zh">2</span></td>
+            <td><span data-lang="en">Second-order improved Euler (trapezoidal rule). Higher accuracy at the cost of roughly 2× inference time. Falls back to Euler on the final step to avoid evaluating <code>t &gt; 1</code>.</span><span data-lang="zh">二阶改进欧拉（梯形公式）。精度更高，代价是推理时间约 2 倍。末步退化为 Euler 以避免 <code>t &gt; 1</code> 越界。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Extrapolated Euler</strong></span><span data-lang="zh"><strong>Extrapolated Euler</strong></span></td>
+            <td><span data-lang="en">1</span><span data-lang="zh">1</span></td>
+            <td><span data-lang="en">Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity to linearly extrapolate the next velocity — 1 inference/step. Not the full stabilized Runge-Kutta formulation; benefit is heuristic and strongest when the velocity field changes smoothly. Includes numerical-stability guards (amplitude / sign-flip / NaN) that fall back to Euler when extrapolation is unsafe.</span><span data-lang="zh">受 STORK（ICLR 2026）启发的速度外推启发式。复用上一步速度线性外推下一步速度——每步 1 次推理。并非论文完整的 stabilized Runge-Kutta 格式；收益为启发式，速度场缓变时效果最佳。含数值稳定性保护（幅度 / 符号翻转 / NaN），外推不安全时退化为 Euler。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>STORK-2</strong></span><span data-lang="zh"><strong>STORK-2</strong></span></td>
+            <td><span data-lang="en">1</span><span data-lang="zh">1</span></td>
+            <td><span data-lang="en">Paper-faithful implementation of STORK-2 (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE — only 1 model inference per step despite the 8 sub-stages. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost (8 full-array passes) than Euler.</span><span data-lang="zh">STORK-2 论文原版实现（Tan et al., ICLR 2026, arXiv:2505.24210）。Runge-Kutta-Gegenbauer 二阶递推 + 8 个 sub-stage + Taylor 展开 virtual NFE——尽管 8 个 sub-stage，每步仅 1 次模型推理。专为刚性 ODE 设计，稳定性域扩展约 2s²=128 倍。代价：每步代数运算开销高于 Euler（8 趟全数组遍历）。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Both Extrapolated Euler and STORK-2 keep cross-step velocity history. In <strong>chunked preview inference</strong> (long fragments split into chunks), this history resets at every chunk boundary, which reduces their advantage — for chunked previews, Euler or Heun is usually the safer choice. The sampler setting is stored in <code>previewSampler</code> / <code>exportSampler</code>; the legacy value <code>stork</code> is silently mapped to <code>extrap</code> for backward compatibility.</p>
+          <p data-lang="zh">Extrapolated Euler 与 STORK-2 都需要跨步速度历史。在<strong>分块预览推理</strong>（长片段被切成多块）时，每块边界都会重置历史，使其优势减弱——分块预览通常 Euler 或 Heun 更稳妥。求解器设置存储于 <code>previewSampler</code> / <code>exportSampler</code>；旧值 <code>stork</code> 会被静默映射为 <code>extrap</code> 以保持向后兼容。</p>
+        </div>
+      </div>
 
       <h3>
         <span data-lang="en">Vocoder Chunk Settings</span>
@@ -272,6 +329,90 @@
       </table>
       <p data-lang="en">Smart mode calculates VRAM budget = (VRAM − resident weights − diff_step activations ~2GB − OS reserve ~1GB) × 0.7 safety factor. The settings page shows a VRAM reference table (2/3/4/6/8/10/12/16/20/24GB) computed with the current precision and vocoder type, with the current GPU's tier highlighted.</p>
       <p data-lang="zh">智能模式计算显存预算 =（VRAM − 常驻权重 − diff_step 激活 ~2GB − OS 占用 ~1GB）× 0.7 安全系数。设置页提供显存对照表（2/3/4/6/8/10/12/16/20/24GB），按当前精度与 vocoder 类型实时计算，当前显卡对应行高亮。</p>
+
+      <h3>
+        <span data-lang="en">Dynamic Thresholding</span>
+        <span data-lang="zh">动态阈值</span>
+      </h3>
+      <p data-lang="en">Dynamic thresholding clips extreme values in the diffusion latent space at a specified percentile, reducing artifacts from over-sharp predictions. Available for both preview and export.</p>
+      <p data-lang="zh">动态阈值按指定百分位裁剪扩散潜空间中的极端值，减少过度尖锐预测导致的伪影。预览和导出均可用。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Option</span><span data-lang="zh">选项</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+            <th><span data-lang="en">Default</span><span data-lang="zh">默认</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Enable Dynamic Thresholding</span><span data-lang="zh">启用动态阈值</span></td>
+            <td><span data-lang="en">Toggle dynamic thresholding on/off for the diffusion pass.</span><span data-lang="zh">为扩散过程开启/关闭动态阈值。</span></td>
+            <td><span data-lang="en">Off</span><span data-lang="zh">关闭</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Percentile</span><span data-lang="zh">百分位</span></td>
+            <td><span data-lang="en">Slider 0.9–0.999. Higher values clip more aggressively.</span><span data-lang="zh">滑块 0.9–0.999。值越高裁剪越激进。</span></td>
+            <td><span data-lang="en">0.999</span><span data-lang="zh">0.999</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>
+        <span data-lang="en">CFG Schedule</span>
+        <span data-lang="zh">CFG 调度</span>
+      </h3>
+      <p data-lang="en">The CFG schedule controls how CFG strength varies across diffusion steps. Available for both preview and export.</p>
+      <p data-lang="zh">CFG 调度控制 CFG 强度在扩散步间的变化方式。预览和导出均可用。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Mode</span><span data-lang="zh">模式</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en"><strong>Constant</strong> (default)</span><span data-lang="zh"><strong>恒定</strong>（默认）</span></td>
+            <td><span data-lang="en">Same CFG strength throughout all diffusion steps.</span><span data-lang="zh">所有扩散步使用相同的 CFG 强度。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Linear</strong></span><span data-lang="zh"><strong>线性</strong></span></td>
+            <td><span data-lang="en">CFG strength ramps from high to low across steps.</span><span data-lang="zh">CFG 强度从高到低线性渐变。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Cosine</strong></span><span data-lang="zh"><strong>余弦</strong></span></td>
+            <td><span data-lang="en">CFG strength follows a smooth cosine curve across steps.</span><span data-lang="zh">CFG 强度按平滑余弦曲线变化。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Custom</strong></span><span data-lang="zh"><strong>自定义</strong></span></td>
+            <td><span data-lang="en">User-defined per-step CFG values.</span><span data-lang="zh">用户逐步指定 CFG 值。</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>
+        <span data-lang="en">Vocoder Overlap Frames</span>
+        <span data-lang="zh">Vocoder 重叠帧数</span>
+      </h3>
+      <p data-lang="en">Controls the number of overlap frames used when stitching vocoder chunks. More overlap = smoother transitions but slightly longer processing; less overlap = faster but may introduce stitch artifacts.</p>
+      <p data-lang="zh">控制拼接 vocoder 分片时使用的重叠帧数。重叠越多 = 过渡越平滑但处理时间略增；重叠越少 = 更快但可能引入拼接伪影。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Option</span><span data-lang="zh">选项</span></th>
+            <th><span data-lang="en">Range</span><span data-lang="zh">范围</span></th>
+            <th><span data-lang="en">Default</span><span data-lang="zh">默认</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Vocoder Overlap Frames</span><span data-lang="zh">Vocoder 重叠帧数</span></td>
+            <td><span data-lang="en">8–96 (must be a multiple of 8)</span><span data-lang="zh">8–96（必须是 8 的倍数）</span></td>
+            <td><span data-lang="en">32</span><span data-lang="zh">32</span></td>
+          </tr>
+        </tbody>
+      </table>
 
       <h3>
         <span data-lang="en">Japanese Vocalization</span>
@@ -338,8 +479,13 @@
           </tr>
           <tr>
             <td><span data-lang="en">Sample Rate</span><span data-lang="zh">采样率</span></td>
-            <td><span data-lang="en">22050, 24000 (native), 44100 (CD), 48000 (standard), 96000 (high), 192000 (studio) Hz</span><span data-lang="zh">22050、24000（原生）、44100（CD）、48000（标准）、96000（高）、192000（录音棚）Hz</span></td>
-            <td><span data-lang="en">22050 (first option)</span><span data-lang="zh">22050（首项）</span></td>
+            <td><span data-lang="en">22050, 24000 (native), 44100 (CD), 48000 (standard), 96000 (high), 192000 (studio) Hz. The default is now 48000 Hz (was 24000 Hz); the model still operates internally at 24 kHz and the output is linearly upsampled.</span><span data-lang="zh">22050、24000（原生）、44100（CD）、48000（标准）、96000（高）、192000（录音棚）Hz。默认现在为 48000 Hz（原为 24000 Hz）；模型仍以 24 kHz 内部运行，输出经线性上采样。</span></td>
+            <td><span data-lang="en">48000 Hz</span><span data-lang="zh">48000 Hz</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Export Sample Rate</span><span data-lang="zh">导出采样率</span></td>
+            <td><span data-lang="en">24000, 44100, 48000, 96000 Hz. Selectable per export. Linear upsampling from the 24 kHz model rate.</span><span data-lang="zh">24000、44100、48000、96000 Hz。每次导出可选。从 24 kHz 模型率线性上采样。</span></td>
+            <td><span data-lang="en">48000 Hz</span><span data-lang="zh">48000 Hz</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Bit Depth</span><span data-lang="zh">位深度</span></td>
@@ -365,6 +511,13 @@
           <p data-lang="zh">独占模式下，如果设备不支持所选采样率/位深度，SXSEditor 会自动回退到共享模式。独占模式推荐缓冲区大小：256 或更低。</p>
         </div>
       </div>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Accompaniment tracks</strong> — per-track volume control is available for accompaniment tracks in the track manager. Accompaniment audio (WAV/MP3/FLAC/OGG/M4A/AAC) can be imported alongside vocal fragments and is mixed into the final export.</p>
+          <p data-lang="zh"><strong>伴奏音轨</strong>——轨道管理器中支持伴奏音轨的逐轨音量控制。伴奏音频（WAV/MP3/FLAC/OGG/M4A/AAC）可与人声片段一起导入，并混入最终导出。</p>
+        </div>
+      </div>
 
       <h3>
         <span data-lang="en">MIDI Extraction Tool</span>
@@ -381,8 +534,56 @@
         <tbody>
           <tr>
             <td><span data-lang="en">MIDI Extract Tool</span><span data-lang="zh">MIDI 提取工具</span></td>
-            <td><span data-lang="en"><strong>Basic Pitch</strong> (recommended, neural network-based, stable) / <strong>RMVPE</strong> (F0-to-notes conversion, experimental, may produce suboptimal results)</span><span data-lang="zh"><strong>Basic Pitch</strong>（推荐，神经网络，稳定）/ <strong>RMVPE</strong>（F0 转音符，实验性，结果可能不理想）</span></td>
-            <td><span data-lang="en">Basic Pitch</span><span data-lang="zh">Basic Pitch</span></td>
+            <td><span data-lang="en"><strong>FCPE</strong> (default, recommended, ONNX-based F0 extraction) / <strong>Basic Pitch</strong> (neural network-based, stable) / <strong>RMVPE</strong> (F0-to-notes conversion, experimental, may produce suboptimal results)</span><span data-lang="zh"><strong>FCPE</strong>（默认，推荐，基于 ONNX 的 F0 提取）/ <strong>Basic Pitch</strong>（神经网络，稳定）/ <strong>RMVPE</strong>（F0 转音符，实验性，结果可能不理想）</span></td>
+            <td><span data-lang="en">FCPE</span><span data-lang="zh">FCPE</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>
+        <span data-lang="en">FCPE Pitch Detector Settings</span>
+        <span data-lang="zh">FCPE 音高检测器设置</span>
+      </h3>
+      <p data-lang="en">FCPE (Fast Context-Free Pitch Estimator) is now the default MIDI extraction tool. When FCPE is selected as the MIDI extraction tool, a dedicated settings group is shown (auto-hidden for other tools). The following global parameters control FCPE behavior:</p>
+      <p data-lang="zh">FCPE（Fast Context-Free Pitch Estimator）现在是默认的 MIDI 提取工具。当选择 FCPE 作为 MIDI 提取工具时，会显示专用设置组（选择其他工具时自动隐藏）。以下全局参数控制 FCPE 行为：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Option</span><span data-lang="zh">选项</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+            <th><span data-lang="en">Default</span><span data-lang="zh">默认</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Threshold</span><span data-lang="zh">阈值</span></td>
+            <td><span data-lang="en">Confidence threshold for pitch detection. Higher values reject uncertain F0 estimates.</span><span data-lang="zh">音高检测的置信度阈值。值越高，不确定的 F0 估计会被拒绝。</span></td>
+            <td><span data-lang="en">0.03</span><span data-lang="zh">0.03</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Smoothing</span><span data-lang="zh">平滑</span></td>
+            <td><span data-lang="en">Applies a smoothing filter to the extracted F0 curve before note conversion.</span><span data-lang="zh">在转换为音符前对提取的 F0 曲线施加平滑滤波。</span></td>
+            <td><span data-lang="en">Off</span><span data-lang="zh">关闭</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Quantization Mode</span><span data-lang="zh">量化模式</span></td>
+            <td><span data-lang="en"><strong>Strict</strong> (snap each note to the nearest semitone) or <strong>Pitch-Bend Preserving</strong> (keep F0 bend data as pitch curve instead of quantizing).</span><span data-lang="zh"><strong>严格</strong>（将每个音符吸附到最近的半音）或 <strong>保留弯音</strong>（保留 F0 弯音数据作为音高曲线而不量化）。</span></td>
+            <td><span data-lang="en">Strict</span><span data-lang="zh">严格</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">F0 Range</span><span data-lang="zh">F0 范围</span></td>
+            <td><span data-lang="en">Minimum and maximum F0 frequency for detection (Hz).</span><span data-lang="zh">检测的最小和最大 F0 频率（Hz）。</span></td>
+            <td><span data-lang="en">50–1100 Hz</span><span data-lang="zh">50–1100 Hz</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Minimum Note Duration</span><span data-lang="zh">最短音符时长</span></td>
+            <td><span data-lang="en">Shortest note length to emit (ms). Shorter F0 segments are merged into neighbors.</span><span data-lang="zh">输出的最短音符长度（ms）。更短的 F0 片段会被合并到相邻音符。</span></td>
+            <td><span data-lang="en">100 ms</span><span data-lang="zh">100 ms</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Normalization</span><span data-lang="zh">归一化</span></td>
+            <td><span data-lang="en">Enable/disable F0 normalization before note conversion.</span><span data-lang="zh">在转换为音符前启用/禁用 F0 归一化。</span></td>
+            <td><span data-lang="en">Off</span><span data-lang="zh">关闭</span></td>
           </tr>
         </tbody>
       </table>
@@ -429,6 +630,13 @@
       </table>
       <p data-lang="en">Different precisions are stored independently and coexist — each has its own subdirectory. Switching does not require re-downloading. The model status list shows ✅ Ready (all files present) or ❌ N files missing for each precision.</p>
       <p data-lang="zh">不同精度独立存储且可共存——每种精度有独立子目录。切换无需重新下载。模型状态列表为每种精度显示 ✅ Ready（所有文件就绪）或 ❌ N files missing（缺失 N 个文件）。</p>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>QDIT int8 detection</strong> — when using int8 precision, the app automatically detects whether the <code>diff_step</code> model is a legacy int8 model or a QDIT-quantized model. If a legacy int8 model is detected, a prompt suggests switching to QDIT for better quality. QDIT models use a new ONNX signature with improved quantization-aware inference.</p>
+          <p data-lang="zh"><strong>QDIT int8 检测</strong>——使用 int8 精度时，应用会自动检测 <code>diff_step</code> 模型是旧版 int8 还是 QDIT 量化模型。如果检测到旧版 int8 模型，会提示切换到 QDIT 以获得更好音质。QDIT 模型使用新的 ONNX 签名，具有改进的量化感知推理。</p>
+        </div>
+      </div>
 
       <h3>
         <span data-lang="en">Vocoder Type</span>

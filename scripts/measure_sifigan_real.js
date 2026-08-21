@@ -30,7 +30,7 @@ function sampleVRAM(label) {
         const out = execSync('nvidia-smi --query-gpu=memory.used,memory.total --format=csv,noheader,nounits', { encoding: 'utf8' }).trim();
         const [usedMB, totalMB] = out.split(',').map(s => parseInt(s.trim(), 10));
         return { label, usedMB, totalMB };
-    } catch (e) {
+    } catch (_e) {
         return { label, usedMB: -1, totalMB: -1 };
     }
 }

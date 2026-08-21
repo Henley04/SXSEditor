@@ -264,11 +264,13 @@ async function performSave(isSaveAs = false) {
     } else if (result && result.canceled) {
       // User cancelled the Save As dialog — do nothing.
     } else {
-      showAlertDialog(t('singerCreator.createFailed') + ': ' + (result && result.error ? result.error : ''));
+      // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+      showAlertDialog(t('singerCreator.createFailedDetail', { detail: (result && result.error ? result.error : '') }));
     }
   } catch (err) {
     console.error(t('singerCreator.saveFailed'), err);
-    showAlertDialog(t('singerCreator.createFailed') + ': ' + (err && err.message ? err.message : ''));
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('singerCreator.createFailedDetail', { detail: (err && err.message ? err.message : '') }));
   } finally {
     isSaving = false;
   }
@@ -346,7 +348,8 @@ async function handleWavFile(file) {
     updatePreview();
   } catch (err) {
     console.error(t('singerCreator.wavParseError'), err);
-    showAlertDialog(t('singerCreator.wavParseFailed') + ': ' + err.message);
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('singerCreator.wavParseFailedDetail', { detail: err.message }));
     wavFileBuffer = null;
     wavAudioBuffer = null;
     wavFileName = '';
@@ -486,7 +489,7 @@ function pausePreviewPlayback() {
     try {
       previewAudioSource.onended = null;
       previewAudioSource.stop();
-    } catch (e) {}
+    } catch (_e) {}
     previewAudioSource = null;
   }
 
@@ -528,7 +531,7 @@ function stopPreviewPlayback() {
     try {
       previewAudioSource.onended = null;
       previewAudioSource.stop();
-    } catch (e) {}
+    } catch (_e) {}
     previewAudioSource = null;
   }
   if (previewAudioContext && previewAudioContext.state !== 'closed') {
@@ -951,7 +954,7 @@ btnTrimPreview.addEventListener('click', async () => {
 
 function stopTrimPreview() {
   if (trimPreviewSource) {
-    try { trimPreviewSource.onended = null; trimPreviewSource.stop(); } catch (e) {}
+    try { trimPreviewSource.onended = null; trimPreviewSource.stop(); } catch (_e) {}
     trimPreviewSource = null;
   }
   if (trimPreviewContext && trimPreviewContext.state !== 'closed') {
@@ -1011,7 +1014,8 @@ btnTrimConfirm.addEventListener('click', () => {
     updatePreview();
   } catch (err) {
     console.error('Trim encode failed:', err);
-    showAlertDialog(t('singerCreator.wavTrimEncodeFailed') + ': ' + err.message);
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('singerCreator.wavTrimEncodeFailedDetail', { detail: err.message }));
   }
 });
 

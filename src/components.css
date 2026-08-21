@@ -55,8 +55,8 @@
   }
   to {
     opacity: 0;
-    transform: translateY(8px) scale(0.98);
-    filter: blur(3px);
+    transform: translateY(6px) scale(0.985);
+    filter: blur(2px);
   }
 }
 
@@ -151,7 +151,11 @@
   padding: var(--space-2) 10px;
   cursor: pointer;
   font-size: var(--font-base);
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard);
   white-space: nowrap;
   position: relative;
   overflow: hidden;
@@ -170,6 +174,7 @@
   transform: translateY(0) scale(0.97);
   box-shadow: none;
   transition-duration: 0.06s;
+  transition-timing-function: var(--ease-standard);
 }
 
 #toolbar button:disabled {
@@ -227,7 +232,8 @@
   padding: var(--space-1) var(--space-3);
   text-align: center;
   font-size: var(--font-base);
-  transition: border-color var(--motion-fast), box-shadow var(--motion-fast);
+  transition: border-color var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard);
 }
 
 #toolbar input[type="number"]:focus {
@@ -256,9 +262,9 @@
   z-index: 9999;
   opacity: 0;
   pointer-events: none;
-  transition: opacity var(--motion-slow) ease;
+  transition: opacity var(--motion-slow) var(--ease-standard);
   backdrop-filter: blur(4px);
-  animation: overlay-fade-in var(--motion-slow) ease;
+  animation: overlay-fade-in var(--motion-slow) var(--ease-standard);
 }
 
 .loading-overlay.visible {
@@ -271,7 +277,7 @@
   flex-direction: column;
   align-items: center;
   gap: var(--space-6);
-  animation: dialog-enter 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: dialog-enter 0.35s var(--ease-emphasized);
 }
 
 .loading-spinner {
@@ -300,7 +306,7 @@
   align-items: center;
   justify-content: center;
   z-index: 10000;
-  animation: overlay-fade-in var(--motion-base) ease;
+  animation: overlay-fade-in var(--motion-base) var(--ease-standard);
   backdrop-filter: blur(4px);
 }
 
@@ -314,7 +320,7 @@
   max-height: 90vh;
   overflow-y: auto;
   box-shadow: var(--shadow-xl), 0 0 40px var(--accent-softer);
-  animation: dialog-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: dialog-enter 0.3s var(--ease-emphasized);
 }
 
 .modal-title {
@@ -347,7 +353,7 @@
   font-size: var(--font-base);
   z-index: 10000;
   max-width: 80%;
-  animation: toast-enter 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  animation: toast-enter 0.3s var(--ease-emphasized);
 }
 
 .toast-success {
@@ -376,7 +382,8 @@
   font-size: var(--font-base);
   line-height: 1.6;
   margin-top: 10px;
-  transition: border-color var(--motion-base), box-shadow var(--motion-base);
+  transition: border-color var(--motion-base) var(--ease-standard),
+              box-shadow var(--motion-base) var(--ease-standard);
 }
 
 .info-box:hover {
@@ -425,7 +432,9 @@
   border-radius: var(--radius-md);
   color: var(--fg-primary);
   font-size: var(--font-md);
-  transition: border-color var(--motion-fast), box-shadow var(--motion-fast), background var(--motion-fast);
+  transition: border-color var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard),
+              background var(--motion-fast) var(--ease-standard);
 }
 
 .form-group input[type="text"]:focus {
@@ -449,7 +458,11 @@
   border-radius: var(--radius-md);
   clip-path: var(--clip-button, none);
   cursor: pointer;
-  transition: all var(--motion-fast) ease;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard),
+              box-shadow var(--motion-fast) var(--ease-standard);
   position: relative;
   overflow: hidden;
 }
@@ -465,6 +478,7 @@
   transform: translateY(0) scale(0.97);
   box-shadow: none;
   transition-duration: 0.06s;
+  transition-timing-function: var(--ease-standard);
 }
 
 .btn-small.btn-danger {
@@ -504,3 +518,6 @@
   transform: none;
   box-shadow: none;
 }
+
+.accompaniment-volume-control { display:flex; align-items:center; gap:6px; font-size:11px; }
+.accompaniment-volume-control input[type="range"] { width:90px; }

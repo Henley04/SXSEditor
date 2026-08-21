@@ -1,15 +1,8 @@
-import { t } from '../i18n/index.js';
+import { t, tOr } from '../i18n/index.js';
 import {
   getFragmentIsSynthesizing,
   getFragmentIsExporting,
-  getFragmentIsPlaying,
-  getFragmentAudioSettings,
-  getFragmentAudioData,
-  getFragmentAudioContext, setFragmentAudioContext,
-  getFragmentGainNode, setFragmentGainNode,
-  getCurrentParamMode,
   getPitchCurve,
-  getAutoSaveTimer, setAutoSaveTimer,
   getNotes,
   getSelectedNoteIds,
   getSelectedAnchorIndices,
@@ -18,19 +11,16 @@ import {
   getPendingBoundsUpdate, setPendingBoundsUpdate,
   getCurrentFragment,
   getCurrentProject,
-  getEnvelopes,
-  getScrollY, setScrollY,
-  getWavFileBuffer, setWavFileBuffer,
-  getPitchCurveSnapshotBeforeDrag, setPitchCurveSnapshotBeforeDrag,
-  getEnvelopeSnapshotBeforeDrag, setEnvelopeSnapshotBeforeDrag,
-  getDragOperation, setDragOperation,
-  getDragMode, setDragMode,
-  getLyricEditOldValue, setLyricEditOldValue,
-  getLyricEditNoteId, setLyricEditNoteId,
-  getNextNoteId, setNextNoteId,
+  setScrollY,
+  setWavFileBuffer,
+  setPitchCurveSnapshotBeforeDrag,
+  setEnvelopeSnapshotBeforeDrag,
+  setDragOperation,
+  setDragMode,
+  setLyricEditOldValue,
+  setLyricEditNoteId,
+  setNextNoteId,
   getPhonemeCache,
-  setSelectedNoteIds,
-  setSelectedAnchorIndices,
   setCurrentParamMode,
   setNotes,
   setEnvelopes,
@@ -42,16 +32,21 @@ import {
   getKanjiGroups, setKanjiGroups,
 } from './state.js';
 import { PARAM_MODES } from './constants.js';
-import { initPipeline } from './pipeline.js';
-import { stopFragmentPlayback, loadFragmentAudioSettings } from './audioPlayback.js';
 import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
-import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { updateParamModeButtons } from './uiControls.js';
-import { HistoryManager } from '../editor/historyManager.js';
 import { autoDetectKanjiGroups, cleanupKanjiGroups } from './kanjiGroupUtils.js';
+import { showAlertDialog } from '../alertDialog.js';
 
 export function setupIpcHandlers() {
   const _ipcCleanups = getIpcCleanups();
+
+  // int8 旧版 diff_step 模型不兼容弹窗（主进程在 fragment-svs:init 时检测并推送一次）
+  if (window.electronAPI?.onSVSDiffStepIncompatible) {
+    const cleanupIncompatible = window.electronAPI.onSVSDiffStepIncompatible(() => {
+      showAlertDialog(tOr('main.diffStepLegacyInt8Incompatible', 'An incompatible legacy INT8 diff_step model was detected. Please update the model.'));
+    });
+    if (cleanupIncompatible) _ipcCleanups.push(cleanupIncompatible);
+  }
 
   const cleanupProgress = window.electronAPI.onFragmentSVSProgress((progress) => {
     // 区分播放预览和导出：各自只更新对应的按钮，避免互相覆盖。
@@ -110,7 +105,13 @@ async function handleFragmentData(data) {
   setCurrentFragment(data.fragment);
   setCurrentProject(data.project);
   document.getElementById('fragment-name').textContent = data.fragment.name || t('fragment.fragment');
-  setNotes(data.fragment.notes || []);
+  // 规范化 notes：为旧项目的 note 补全 vibrato/fadeIn/fadeOut 字段。
+  // vibrato 在首次启用时由 ensureVibrato() 补全，这里只确保 fadeIn/fadeOut 有默认值。
+  setNotes((data.fragment.notes || []).map(n => ({
+    ...n,
+    fadeIn: typeof n.fadeIn === 'number' ? n.fadeIn : 0,
+    fadeOut: typeof n.fadeOut === 'number' ? n.fadeOut : 0,
+  })));
   setEnvelopes(data.fragment.envelopes || {
     volume: { keyframes: [{ time: 0, value: 1, smoothness: 0 }] },
     pan: { keyframes: [{ time: 0, value: 0, smoothness: 0 }] },

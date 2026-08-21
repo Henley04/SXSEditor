@@ -1,16 +1,16 @@
 {
   "name": "sxseditor",
   "productName": "SXSEditor",
-  "version": "1.0.3",
+  "version": "1.0.0",
   "description": "SoulX Singer Editor - AI歌声合成工作台",
   "main": ".webpack/main",
   "private": true,
   "scripts": {
     "start": "electron-forge start",
     "prepackage": "node scripts/generate-build-info.js",
-    "package": "electron-forge package",
+    "package": "cross-env NODE_ENV=production electron-forge package",
     "prepackage:lite": "node scripts/generate-build-info.js",
-    "package:lite": "cross-env SKIP_ONNX_MODELS=1 electron-forge package",
+    "package:lite": "cross-env SKIP_ONNX_MODELS=1 NODE_ENV=production electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint src test scripts *.config.js --ext .js",
@@ -74,7 +74,8 @@
     "onnxruntime-node": "^1.27.0",
     "onnxruntime-web": "^1.27.0",
     "pinyin-pro": "^3.28.1",
-    "systeminformation": "^5.31.9"
+    "systeminformation": "^5.31.9",
+    "iconv-lite": "^0.4.24"
   },
   "optionalDependencies": {
     "nan": "^2.27.0"

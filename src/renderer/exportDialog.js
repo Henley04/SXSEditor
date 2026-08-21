@@ -20,6 +20,26 @@ import { createIcon } from '../icons/iconHelper.js';
 
 // ==================== 常量 ====================
 
+function resampleForExport(interleaved, sourceRate, targetRate, channels) {
+  if (sourceRate === targetRate) return interleaved;
+  const sourceFrames = Math.floor(interleaved.length / channels);
+  const targetFrames = Math.max(1, Math.round(sourceFrames * targetRate / sourceRate));
+  const output = new Float32Array(targetFrames * channels);
+  for (let frame = 0; frame < targetFrames; frame++) {
+    const sourcePosition = frame * sourceRate / targetRate;
+    const left = Math.min(sourceFrames - 1, Math.floor(sourcePosition));
+    const right = Math.min(sourceFrames - 1, left + 1);
+    const mix = sourcePosition - left;
+    for (let channel = 0; channel < channels; channel++) {
+      const a = interleaved[left * channels + channel];
+      const b = interleaved[right * channels + channel];
+      output[frame * channels + channel] = a + (b - a) * mix;
+    }
+  }
+  return output;
+}
+
+
 const PRECISION_OPTIONS = [
   { value: 'fp16', nameKey: 'main.exportDialog.precisionFp16Name', descKey: 'main.exportDialog.precisionFp16Desc' },
   { value: 'fp32', nameKey: 'main.exportDialog.precisionFp32Name', descKey: 'main.exportDialog.precisionFp32Desc' },
@@ -69,14 +89,35 @@ export async function openExportDialog() {
       modelPrecision: settings.modelPrecision || 'fp32',
       exportDiffSteps: settings.exportDiffSteps ?? 32,
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
-      exportCfgRescale: settings.exportCfgRescale ?? 0.75,
+      exportCfgRescale: settings.exportCfgRescale ?? 0.7,
+      exportSampler: settings.exportSampler || 'euler',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
+      outputSampleRate: [24000, 44100, 48000, 96000].includes(settings.exportSampleRate) ? settings.exportSampleRate : 48000,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
       sifiganPrecision: settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32',
       vocoderChunkMode: settings.vocoderChunkMode === 'manual' ? 'manual' : 'smart',
-      vocoderChunkFrames: Number.isFinite(settings.vocoderChunkFrames) ? settings.vocoderChunkFrames : 1008,
+      vocoderChunkFrames: Number.isFinite(settings.vocoderChunkFrames) ? settings.vocoderChunkFrames : 1024,
       releaseDmlVramAfterSynthesis: settings.releaseDmlVramAfterSynthesis === true,
-      releaseDiffStepBeforeVocoder: settings.releaseDiffStepBeforeVocoder !== false,
+      releaseDiffStepBeforeVocoder: settings.releaseDiffStepBeforeVocoder === true,
+      // Task 11/17/18: new settings keys
+      exportCfgScheduleMode: settings.exportCfgScheduleMode || settings.cfgScheduleMode || 'linear',
+      exportCfgStrengthStart: Number.isFinite(settings.exportCfgStrengthStart) ? settings.exportCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
+      exportCfgScheduleKeyframes: Array.isArray(settings.exportCfgScheduleKeyframes) ? settings.exportCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
+      // M5: preview CFG schedule mirrors (fall back to top-level cfg* keys)
+      previewCfgScheduleMode: settings.previewCfgScheduleMode || settings.cfgScheduleMode || 'linear',
+      previewCfgStrengthStart: Number.isFinite(settings.previewCfgStrengthStart) ? settings.previewCfgStrengthStart : (Number.isFinite(settings.cfgStrengthStart) ? settings.cfgStrengthStart : null),
+      previewCfgScheduleKeyframes: Array.isArray(settings.previewCfgScheduleKeyframes) ? settings.previewCfgScheduleKeyframes : (Array.isArray(settings.cfgScheduleKeyframes) ? settings.cfgScheduleKeyframes : null),
+      // Dynamic thresholding (export path)
+      exportDynamicThresholdEnabled: settings.exportDynamicThresholdEnabled === true,
+      exportDynamicThresholdPercentile: Number.isFinite(settings.exportDynamicThresholdPercentile) ? settings.exportDynamicThresholdPercentile : 0.995,
+      // Dynamic thresholding (preview path)
+      previewDynamicThresholdEnabled: settings.previewDynamicThresholdEnabled === true,
+      previewDynamicThresholdPercentile: Number.isFinite(settings.previewDynamicThresholdPercentile) ? settings.previewDynamicThresholdPercentile : 0.995,
+      vocoderOverlapFrames: Number.isFinite(settings.vocoderOverlapFrames) ? settings.vocoderOverlapFrames : 32,
+      diagnosticMode: settings.diagnosticMode === true,
+      enableLoudnormFinal: settings.enableLoudnormFinal !== false,
+      enableAntiAliasing: settings.enableAntiAliasing === true,
+      enableSDEditRepair: settings.enableSDEditRepair === true,
       outputPath: '',
     };
 
@@ -232,6 +273,38 @@ function buildParamsSection(form) {
   section.className = 'export-dialog-section';
   section.appendChild(buildSectionTitle('main.exportDialog.paramsSection'));
 
+  // 求解器（扩散采样器）
+  const samplerField = document.createElement('div');
+  samplerField.className = 'export-dialog-field';
+  const samplerLabel = document.createElement('div');
+  samplerLabel.className = 'export-dialog-field-label';
+  samplerLabel.textContent = t('main.exportDialog.sampler');
+  samplerField.appendChild(samplerLabel);
+  const samplerHint = document.createElement('div');
+  samplerHint.className = 'export-dialog-field-hint';
+  samplerHint.textContent = t('main.exportDialog.samplerHint');
+  samplerField.appendChild(samplerHint);
+  const samplerSelect = document.createElement('select');
+  // 求解器选项（与 src/inference/pipeline/samplers/index.js SOLVERS 对齐）
+  const samplerOptions = [
+    { value: 'euler', labelKey: 'main.exportDialog.samplerEuler' },
+    { value: 'heun', labelKey: 'main.exportDialog.samplerHeun' },
+    { value: 'extrap', labelKey: 'main.exportDialog.samplerExtrap' },
+    { value: 'stork2', labelKey: 'main.exportDialog.samplerStork2' },
+  ];
+  for (const opt of samplerOptions) {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = t(opt.labelKey);
+    samplerSelect.appendChild(o);
+  }
+  samplerSelect.value = form.exportSampler;
+  samplerSelect.addEventListener('change', () => {
+    form.exportSampler = samplerSelect.value;
+  });
+  samplerField.appendChild(samplerSelect);
+  section.appendChild(samplerField);
+
   // 扩散步数
   section.appendChild(buildRangeField({
     labelKey: 'main.exportDialog.diffSteps',
@@ -256,7 +329,20 @@ function buildParamsSection(form) {
     value: form.exportCfgRescale,
     format: (v) => parseFloat(v).toFixed(2),
     onChange: (v) => { form.exportCfgRescale = v; },
+    warning: (v) => (v < 0.5 || v > 0.7) ? t('main.exportDialog.cfgRescaleRangeWarn') : '',
   }));
+
+  // Task 11: CFG strength schedule (export path)
+  section.appendChild(buildCfgScheduleField(form, 'export'));
+
+  // M5: CFG strength schedule (preview path) — mirrors export so preview
+  // playback uses the same configurable schedule instead of always 'linear'.
+  section.appendChild(buildCfgScheduleField(form, 'preview'));
+
+  // Dynamic thresholding (export path)
+  section.appendChild(buildDynamicThresholdField(form, 'export'));
+  // Dynamic thresholding (preview path)
+  section.appendChild(buildDynamicThresholdField(form, 'preview'));
 
   // Auto Shift 复选框
   section.appendChild(buildCheckboxField({
@@ -270,7 +356,217 @@ function buildParamsSection(form) {
     },
   }));
 
+
+
+  const sampleRateField = document.createElement('div');
+  sampleRateField.className = 'export-dialog-field';
+  const sampleRateLabel = document.createElement('div');
+  sampleRateLabel.className = 'export-dialog-field-label';
+  sampleRateLabel.textContent = t('main.exportDialog.sampleRate');
+  sampleRateField.appendChild(sampleRateLabel);
+  const sampleRateHint = document.createElement('div');
+  sampleRateHint.className = 'export-dialog-field-hint';
+  sampleRateHint.textContent = t('main.exportDialog.sampleRateHint');
+  sampleRateField.appendChild(sampleRateHint);
+  const sampleRateSelect = document.createElement('select');
+  for (const rate of [24000, 44100, 48000, 96000]) {
+    const option = document.createElement('option');
+    option.value = String(rate);
+    option.textContent = `${rate} Hz${rate === 48000 ? ` (${t('main.exportDialog.sampleRateDefault')})` : ''}`;
+    sampleRateSelect.appendChild(option);
+  }
+  sampleRateSelect.value = String(form.outputSampleRate);
+  sampleRateSelect.addEventListener('change', () => { form.outputSampleRate = Number(sampleRateSelect.value); });
+  sampleRateField.appendChild(sampleRateSelect);
+  section.appendChild(sampleRateField);
+
   return section;
+}
+
+// ==================== CFG schedule field (export + preview) ====================
+
+// M5: Builds a CFG strength schedule field for either the export or preview
+// path. Mirrors the previous inline export schedule UI; preview uses the
+// previewCfgSchedule* i18n keys and form fields so preview playback is
+// configurable instead of always falling back to 'linear'.
+function buildCfgScheduleField(form, scope) {
+  const isPreview = scope === 'preview';
+  // Export uses unprefixed cfgSchedule* keys; preview uses previewCfgSchedule*.
+  const i18nKey = (base) => isPreview
+    ? `main.exportDialog.preview${base.charAt(0).toUpperCase()}${base.slice(1)}`
+    : `main.exportDialog.${base}`;
+  const formMode = `${scope}CfgScheduleMode`;
+  const formStart = `${scope}CfgStrengthStart`;
+  const formKf = `${scope}CfgScheduleKeyframes`;
+
+  const scheduleField = document.createElement('div');
+  scheduleField.className = 'export-dialog-field';
+  const scheduleLabel = document.createElement('div');
+  scheduleLabel.className = 'export-dialog-field-label';
+  scheduleLabel.textContent = t(i18nKey('cfgScheduleMode'));
+  scheduleField.appendChild(scheduleLabel);
+  const scheduleHint = document.createElement('div');
+  scheduleHint.className = 'export-dialog-field-hint';
+  scheduleHint.textContent = t(i18nKey('cfgScheduleModeHint'));
+  scheduleField.appendChild(scheduleHint);
+  const scheduleSelect = document.createElement('select');
+  // Option labels (Constant/Linear/Cosine/Custom) are shared between scopes.
+  const scheduleOptions = [
+    { value: 'constant', labelKey: 'main.exportDialog.cfgScheduleConstant' },
+    { value: 'linear', labelKey: 'main.exportDialog.cfgScheduleLinear' },
+    { value: 'cosine', labelKey: 'main.exportDialog.cfgScheduleCosine' },
+    { value: 'custom', labelKey: 'main.exportDialog.cfgScheduleCustom' },
+  ];
+  for (const opt of scheduleOptions) {
+    const o = document.createElement('option');
+    o.value = opt.value;
+    o.textContent = t(opt.labelKey);
+    scheduleSelect.appendChild(o);
+  }
+  scheduleSelect.value = form[formMode];
+  scheduleField.appendChild(scheduleSelect);
+
+  // cfgStrengthStart input (hidden in constant mode)
+  const startField = document.createElement('div');
+  startField.className = 'export-dialog-field';
+  startField.dataset.cfgStartField = 'true';
+  const startLabel = document.createElement('div');
+  startLabel.className = 'export-dialog-field-label';
+  startLabel.textContent = t(i18nKey('cfgStrengthStart'));
+  startField.appendChild(startLabel);
+  const startHint = document.createElement('div');
+  startHint.className = 'export-dialog-field-hint';
+  startHint.textContent = t(i18nKey('cfgStrengthStartHint'));
+  startField.appendChild(startHint);
+  const startInput = document.createElement('input');
+  startInput.type = 'number';
+  startInput.min = '0';
+  startInput.max = '10';
+  startInput.step = '0.1';
+  startInput.value = form[formStart] ?? '';
+  startInput.placeholder = t(i18nKey('cfgStrengthStartPlaceholder'));
+  // M12: clamp parsed value to [0, 10] to prevent negative/out-of-range CFG
+  // (negative CFG is undefined behavior in SVS).
+  startInput.addEventListener('input', () => {
+    let v = parseFloat(startInput.value);
+    if (Number.isFinite(v)) {
+      v = Math.max(0, Math.min(10, v));  // clamp to [0, 10]
+    } else {
+      v = null;
+    }
+    form[formStart] = v;
+  });
+  startField.appendChild(startInput);
+  scheduleField.appendChild(startField);
+
+  // custom keyframe editor (only visible in custom mode)
+  const keyframeField = document.createElement('div');
+  keyframeField.className = 'export-dialog-field';
+  keyframeField.dataset.cfgKeyframeField = 'true';
+  const kfLabel = document.createElement('div');
+  kfLabel.className = 'export-dialog-field-label';
+  kfLabel.textContent = t(i18nKey('cfgScheduleKeyframes'));
+  keyframeField.appendChild(kfLabel);
+  const kfHint = document.createElement('div');
+  kfHint.className = 'export-dialog-field-hint';
+  kfHint.textContent = t(i18nKey('cfgScheduleKeyframesHint'));
+  keyframeField.appendChild(kfHint);
+  const kfInput = document.createElement('input');
+  kfInput.type = 'text';
+  kfInput.placeholder = t(i18nKey('cfgScheduleKeyframesPlaceholder'));
+  // Render existing keyframes as text
+  if (Array.isArray(form[formKf]) && form[formKf].length > 0) {
+    kfInput.value = form[formKf].map(kf => `${kf.step}:${kf.value}`).join(',');
+  }
+  kfInput.addEventListener('input', () => {
+    const text = kfInput.value.trim();
+    if (!text) { form[formKf] = null; return; }
+    const parsed = [];
+    for (const part of text.split(',')) {
+      const [s, v] = part.split(':').map(x => parseFloat(x.trim()));
+      if (Number.isFinite(s) && Number.isFinite(v)) parsed.push({ step: s, value: v });
+    }
+    form[formKf] = parsed.length > 0 ? parsed : null;
+  });
+  keyframeField.appendChild(kfInput);
+  scheduleField.appendChild(keyframeField);
+
+  // Toggle start/keyframe visibility on mode change
+  const updateVisibility = () => {
+    const mode = scheduleSelect.value;
+    startField.hidden = (mode === 'constant');
+    keyframeField.hidden = (mode !== 'custom');
+  };
+  scheduleSelect.addEventListener('change', () => {
+    form[formMode] = scheduleSelect.value;
+    updateVisibility();
+  });
+  updateVisibility();
+
+  return scheduleField;
+}
+
+// ==================== Dynamic thresholding field (export + preview) ====================
+
+function buildDynamicThresholdField(form, scope) {
+  const isPreview = scope === 'preview';
+  const i18nKey = (base) => isPreview
+    ? `main.exportDialog.preview${base.charAt(0).toUpperCase()}${base.slice(1)}`
+    : `main.exportDialog.${base}`;
+  const formEnabled = `${scope}DynamicThresholdEnabled`;
+  const formPercentile = `${scope}DynamicThresholdPercentile`;
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'export-dialog-field';
+
+  // Checkbox
+  const checkboxField = buildCheckboxField({
+    labelKey: i18nKey('dynamicThresholdEnabled'),
+    descKey: i18nKey('dynamicThresholdEnabledHint'),
+    checked: form[formEnabled],
+    onChange: (v) => {
+      form[formEnabled] = v;
+      percentileGroup.hidden = !v;
+    },
+  });
+  wrapper.appendChild(checkboxField);
+
+  // Percentile slider (hidden when disabled)
+  const percentileGroup = document.createElement('div');
+  percentileGroup.className = 'export-dialog-field';
+  percentileGroup.hidden = !form[formEnabled];
+
+  const pctLabel = document.createElement('div');
+  pctLabel.className = 'export-dialog-field-label';
+  const pctLabelText = document.createElement('span');
+  pctLabelText.textContent = t(i18nKey('dynamicThresholdPercentile'));
+  const pctValueBox = document.createElement('span');
+  pctValueBox.className = 'export-dialog-field-value';
+  pctValueBox.textContent = parseFloat(form[formPercentile]).toFixed(3);
+  pctLabel.appendChild(pctLabelText);
+  pctLabel.appendChild(pctValueBox);
+  percentileGroup.appendChild(pctLabel);
+
+  const pctHint = document.createElement('div');
+  pctHint.className = 'export-dialog-field-hint';
+  pctHint.textContent = t(i18nKey('dynamicThresholdPercentileHint'));
+  percentileGroup.appendChild(pctHint);
+
+  const pctSlider = document.createElement('input');
+  pctSlider.type = 'range';
+  pctSlider.min = '0.900';
+  pctSlider.max = '0.999';
+  pctSlider.step = '0.001';
+  pctSlider.value = form[formPercentile];
+  pctSlider.addEventListener('input', () => {
+    const v = parseFloat(pctSlider.value);
+    pctValueBox.textContent = v.toFixed(3);
+    form[formPercentile] = v;
+  });
+  percentileGroup.appendChild(pctSlider);
+  wrapper.appendChild(percentileGroup);
+
+  return wrapper;
 }
 
 function buildAdvancedSection(form, settings) {
@@ -365,9 +661,9 @@ function buildAdvancedSection(form, settings) {
   chunkModeField.appendChild(chunkModeLabel);
 
   const chunkModeRow = document.createElement('div');
-  chunkModeRow.style.cssText = 'display: flex; gap: 12px;';
+  chunkModeRow.className = 'chunk-mode-row';
   const smartLabel = document.createElement('label');
-  smartLabel.style.cssText = 'display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: var(--font-md); color: var(--fg-secondary);';
+  smartLabel.className = 'chunk-mode-label';
   const smartRadio = document.createElement('input');
   smartRadio.type = 'radio';
   smartRadio.name = 'export-chunk-mode';
@@ -377,7 +673,7 @@ function buildAdvancedSection(form, settings) {
   smartLabel.appendChild(document.createTextNode(t('main.exportDialog.vocoderChunkSmart')));
 
   const manualLabel = document.createElement('label');
-  manualLabel.style.cssText = 'display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: var(--font-md); color: var(--fg-secondary);';
+  manualLabel.className = 'chunk-mode-label';
   const manualRadio = document.createElement('input');
   manualRadio.type = 'radio';
   manualRadio.name = 'export-chunk-mode';
@@ -418,6 +714,46 @@ function buildAdvancedSection(form, settings) {
     labelKey: 'main.exportDialog.releaseDiffStep',
     checked: form.releaseDiffStepBeforeVocoder,
     onChange: (v) => { form.releaseDiffStepBeforeVocoder = v; },
+  }));
+
+  // Task 5: Vocoder overlap frames (8-96, default 32)
+  content.appendChild(buildRangeField({
+    labelKey: 'main.exportDialog.vocoderOverlapFrames',
+    min: 8, max: 96, step: 4,
+    value: form.vocoderOverlapFrames,
+    onChange: (v) => { form.vocoderOverlapFrames = v; },
+  }));
+
+  // Task 10: Loudnorm toggle (default on)
+  content.appendChild(buildCheckboxField({
+    labelKey: 'main.exportDialog.enableLoudnormFinal',
+    descKey: 'main.exportDialog.enableLoudnormFinalHint',
+    checked: form.enableLoudnormFinal,
+    onChange: (v) => { form.enableLoudnormFinal = v; },
+  }));
+
+  // Task 16: Anti-aliasing toggle (default off)
+  content.appendChild(buildCheckboxField({
+    labelKey: 'main.exportDialog.enableAntiAliasing',
+    descKey: 'main.exportDialog.enableAntiAliasingHint',
+    checked: form.enableAntiAliasing,
+    onChange: (v) => { form.enableAntiAliasing = v; },
+  }));
+
+  // Task 17: SDEdit repair toggle (default off)
+  content.appendChild(buildCheckboxField({
+    labelKey: 'main.exportDialog.enableSDEditRepair',
+    descKey: 'main.exportDialog.enableSDEditRepairHint',
+    checked: form.enableSDEditRepair,
+    onChange: (v) => { form.enableSDEditRepair = v; },
+  }));
+
+  // Task 2: Diagnostic mode toggle (default off)
+  content.appendChild(buildCheckboxField({
+    labelKey: 'main.exportDialog.diagnosticMode',
+    descKey: 'main.exportDialog.diagnosticModeHint',
+    checked: form.diagnosticMode,
+    onChange: (v) => { form.diagnosticMode = v; },
   }));
 
   updateSifiganPrecisionVisibility(content, form);
@@ -495,14 +831,38 @@ function buildRangeField(opts) {
   slider.max = opts.max;
   slider.step = opts.step;
   slider.value = opts.value;
+
+  // Optional warning hint element. When `opts.warning(v)` returns a non-empty
+  // string, the hint is shown below the slider; the value is still applied
+  // (no clamping/blocking).
+  let warnEl = null;
+  const updateWarning = (v) => {
+    if (typeof opts.warning !== 'function') return;
+    const msg = opts.warning(v);
+    if (msg) {
+      if (!warnEl) {
+        warnEl = document.createElement('div');
+        warnEl.className = 'export-dialog-field-hint export-dialog-field-warn';
+        field.appendChild(warnEl);
+      }
+      warnEl.textContent = msg;
+      warnEl.hidden = false;
+    } else if (warnEl) {
+      warnEl.hidden = true;
+    }
+  };
+
   slider.addEventListener('input', () => {
     const v = parseFloat(slider.value);
     valueBox.textContent = opts.format ? opts.format(v) : v;
     opts.onChange(v);
+    updateWarning(v);
   });
 
   field.appendChild(label);
   field.appendChild(slider);
+  // Initialize warning visibility for the starting value.
+  updateWarning(parseFloat(slider.value));
   return field;
 }
 
@@ -536,10 +896,19 @@ function buildCheckboxField(opts) {
 // ==================== 开始导出 ====================
 
 async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
-  // 校验输出路径
-  if (!form.outputPath || !form.outputPath.trim()) {
-    showAlertDialog(t('main.exportDialog.selectPathFirst'));
-    return;
+  // A bare default filename resolves against Electron's process working
+  // directory, which differs between development and packaged builds. Require
+  // an absolute path before starting the expensive synthesis job.
+  const candidate = (form.outputPath || '').trim();
+  const isAbsolute = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/.test(candidate);
+  if (!isAbsolute) {
+    const result = await window.electronAPI.showSaveDialog({
+      title: t('main.exportDialog.title'),
+      defaultPath: candidate || undefined,
+      filters: [{ name: 'WAV Audio', extensions: ['wav'] }],
+    });
+    if (result.canceled || !result.filePath) return;
+    form.outputPath = result.filePath;
   }
   const trimmedPath = form.outputPath.trim();
   if (!trimmedPath.toLowerCase().endsWith('.wav')) {
@@ -557,12 +926,27 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     exportDiffSteps: form.exportDiffSteps,
     exportCfgStrength: form.exportCfgStrength,
     exportCfgRescale: form.exportCfgRescale,
+    exportSampler: form.exportSampler,
     vocoderType: form.vocoderType,
     sifiganPrecision: form.sifiganPrecision,
     vocoderChunkMode: form.vocoderChunkMode,
     vocoderChunkFrames: form.vocoderChunkFrames,
     releaseDmlVramAfterSynthesis: form.releaseDmlVramAfterSynthesis,
     releaseDiffStepBeforeVocoder: form.releaseDiffStepBeforeVocoder,
+    // Task 11/17/18: new settings keys
+    exportCfgScheduleMode: form.exportCfgScheduleMode,
+    exportCfgStrengthStart: form.exportCfgStrengthStart,
+    exportCfgScheduleKeyframes: form.exportCfgScheduleKeyframes,
+    // M5: preview CFG schedule mirrors
+    previewCfgScheduleMode: form.previewCfgScheduleMode,
+    previewCfgStrengthStart: form.previewCfgStrengthStart,
+    previewCfgScheduleKeyframes: form.previewCfgScheduleKeyframes,
+    vocoderOverlapFrames: form.vocoderOverlapFrames,
+    diagnosticMode: form.diagnosticMode,
+    enableLoudnormFinal: form.enableLoudnormFinal,
+    enableAntiAliasing: form.enableAntiAliasing,
+    enableSDEditRepair: form.enableSDEditRepair,
+    exportSampleRate: form.outputSampleRate,
   };
 
   // 禁用开始按钮，显示保存中状态
@@ -654,16 +1038,26 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setProgress(0);
     setStatus('progressPreparing');
 
-    const { mixedAudio, maxDuration, fragmentCount } = await runExportJob({
+    const { mixedAudio, numChannels, maxDuration, fragmentCount } = await runExportJob({
       nSteps: form.exportDiffSteps,
       cfg: form.exportCfgStrength,
       cfgRescale: form.exportCfgRescale,
+      sampler: form.exportSampler,
       autoShift: form.autoShift,
-      onFragmentProgress: (p) => {
-        setStatus('progressSynthesizing', { progress: p });
-      },
+      // Task 11: CFG schedule opts
+      cfgScheduleMode: form.exportCfgScheduleMode,
+      cfgStrengthStart: form.exportCfgStrengthStart,
+      cfgScheduleKeyframes: form.exportCfgScheduleKeyframes,
+      // Dynamic thresholding (export path)
+      dynamicThresholdEnabled: form.exportDynamicThresholdEnabled,
+      dynamicThresholdPercentile: form.exportDynamicThresholdPercentile,
+      // Keep the status percentage and progress bar on the same
+      // whole-export scale. Per-fragment progress resets to 0 for every
+      // fragment and previously made the two percentages disagree.
+      onFragmentProgress: () => {},
       onOverallProgress: (pct) => {
         setProgress(pct);
+        setStatus('progressSynthesizing', { progress: pct });
       },
       onStatus: (statusKey) => {
         setStatus(statusKey);
@@ -674,14 +1068,17 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     setProgress(95);
 
     // 编码 WAV
-    const { encodeWav } = await import('../audio/wavEncoder.js');
-    const wavData = encodeWav(mixedAudio, SAMPLE_RATE);
+    // B2: wavEncoder.js is now CommonJS — use require instead of dynamic import.
+    const { encodeWav } = require('../audio/wavEncoder.js');
+    const outputAudio = resampleForExport(mixedAudio, SAMPLE_RATE, form.outputSampleRate, numChannels || 1);
+    const wavData = encodeWav(outputAudio, form.outputSampleRate, numChannels || 1);
 
     setStatus('progressSaving');
     setProgress(98);
 
     // 保存文件
-    await window.electronAPI.saveFile(form.outputPath, wavData);
+    const saveResult = await window.electronAPI.saveFile(form.outputPath, wavData);
+    if (saveResult && saveResult.success === false) throw new Error(saveResult.error || 'Failed to save export');
 
     setProgress(100);
     setStatus('progressDone');
@@ -754,8 +1151,9 @@ function showSuccessView(body, footer, outputPath, maxDuration, fragmentCount, f
   openFolderBtn.textContent = t('main.exportDialog.openFolder');
   openFolderBtn.addEventListener('click', async () => {
     try {
-      await window.electronAPI.showItemInFolder(outputPath);
-    } catch (_) {}
+      const result = await window.electronAPI.showItemInFolder(outputPath);
+      if (result && result.success === false) throw new Error(result.error || 'Unable to open export folder');
+    } catch (err) { console.warn('[ExportDialog] Open folder failed:', err.message); }
   });
   footer.appendChild(openFolderBtn);
 

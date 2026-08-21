@@ -1,5 +1,5 @@
 import { state, dom, trackManager, history } from './state.js';
-import { SXSSINGER_CURRENT_VERSION } from './constants.js';
+import { SXSSINGER_CURRENT_VERSION, SAMPLE_RATE } from './constants.js';
 import { t } from '../i18n/index.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { createDialog, showSingerValidationReport } from './uiControls.js';
@@ -108,7 +108,7 @@ export async function loadSingerFile(singerId, buffer, filePath) {
   try {
     const text = new TextDecoder().decode(buffer);
     singerData = JSON.parse(text);
-  } catch (e) {
+  } catch (_e) {
     await showSingerValidationReport({
       valid: false,
       errors: [t('main.singerJsonParseFailed')],
@@ -146,7 +146,7 @@ export async function addSingerFromFile(buffer, filePath) {
   try {
     const text = new TextDecoder().decode(buffer);
     singerData = JSON.parse(text);
-  } catch (e) {
+  } catch (_e) {
     await showSingerValidationReport({
       valid: false,
       errors: [t('main.singerJsonParseFailed')],
@@ -173,6 +173,143 @@ export async function addSingerFromFile(buffer, filePath) {
     await applySingerDataToSinger(singer, singerData);
     state.selectedSingerId = singer.id;
     // refreshAll will be called by the caller
+  }
+}
+
+/**
+ * Decode an audio file ArrayBuffer into a mono Float32Array at SAMPLE_RATE.
+ * Supports wav/mp3/flac/ogg/aac/m4a via WebAudio decodeAudioData.
+ * @param {ArrayBuffer} buffer - Raw audio file data
+ * @returns {Promise<{audioData: Float32Array, duration: number}>}
+ */
+async function decodeAudioPreserveChannels(buffer) {
+  const ac = new AudioContext();
+  try {
+    const decoded = await ac.decodeAudioData(buffer.slice(0));
+    const audioChannels = new Array(decoded.numberOfChannels);
+    for (let ch = 0; ch < decoded.numberOfChannels; ch++) {
+      audioChannels[ch] = new Float32Array(decoded.getChannelData(ch));
+    }
+    return {
+      audioChannels,
+      numberOfChannels: decoded.numberOfChannels,
+      sampleRate: decoded.sampleRate,
+      duration: decoded.duration,
+    };
+  } finally {
+    ac.close();
+  }
+}
+
+/**
+ * Apply embedded accompaniment audio data to a singer.
+ * @param {object} singer - Target singer object
+ * @param {object} audioData - { wavBase64, audioFileName, audioDuration }
+ */
+async function applyAccompanimentDataToSinger(singer, audioData) {
+  if (!audioData || !audioData.wavBase64) return;
+  try {
+    // Decode base64 WAV to Float32Array
+    const wavBuffer = base64ToArrayBuffer(audioData.wavBase64);
+    const decoded = await decodeAudioPreserveChannels(wavBuffer);
+    singer.audioChannels = decoded.audioChannels;
+    singer.analysisMono = null;
+    singer.audioBuffer = decoded.audioChannels[0]; // compatibility: waveform display only
+    singer.audioSampleRate = decoded.sampleRate;
+    singer.audioDuration = audioData.audioDuration || decoded.duration;
+  } catch (e) {
+    console.error('Failed to decode embedded accompaniment audio:', e);
+  }
+}
+
+/**
+ * Import an audio file as an accompaniment track.
+ * Shows a file dialog, decodes the audio, and creates a new accompaniment singer.
+ */
+export async function addAccompanimentFromFile() {
+  try {
+    const result = await window.electronAPI.showOpenDialog({
+      title: t('main.importAccompaniment'),
+      filters: [
+        { name: 'Audio Files', extensions: ['wav', 'mp3', 'flac', 'ogg', 'aac', 'm4a'] },
+        { name: 'WAV Files', extensions: ['wav'] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+      properties: ['openFile'],
+    });
+
+    if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+      return;
+    }
+
+    const filePath = result.filePaths[0];
+    const buffer = await window.electronAPI.readFileBuffer(filePath);
+
+    let audioData;
+    try {
+      audioData = await decodeAudioPreserveChannels(buffer);
+    } catch (decodeErr) {
+      console.error('Accompaniment audio decode failed:', decodeErr);
+      showAlertDialog(t('main.accompanimentDecodeFailedDetail', { detail: decodeErr.message }));
+      return;
+    }
+
+    // Extract file name from path
+    const fileName = filePath.split(/[\\/]/).pop() || 'accompaniment';
+
+    const singer = trackManager.addSinger({
+      type: 'accompaniment',
+      trackName: fileName,
+      singerName: fileName,
+      audioFilePath: filePath,
+      audioFileMissing: false,
+      audioFileName: fileName,
+      audioDuration: audioData.duration,
+    numberOfChannels: audioData.numberOfChannels,
+    audioSampleRate: audioData.sampleRate,
+    });
+    singer.audioChannels = audioData.audioChannels;
+    singer.analysisMono = null;
+    singer.audioBuffer = audioData.audioChannels[0];
+
+    state.selectedSingerId = singer.id;
+    // refreshAll will be called by the caller
+  } catch (err) {
+    console.error('Import accompaniment failed:', err);
+    showAlertDialog(t('main.accompanimentImportFailedDetail', { detail: err.message }));
+  }
+}
+
+/**
+ * Reload accompaniment audio from a new file path (for relocating missing files).
+ * @param {string} singerId - Target singer ID
+ * @param {ArrayBuffer} buffer - Raw audio file data
+ * @param {string} filePath - New file path
+ */
+export async function loadAccompanimentFile(singerId, buffer, filePath) {
+  let audioData;
+  try {
+    audioData = await decodeAudioPreserveChannels(buffer);
+  } catch (decodeErr) {
+    console.error('Accompaniment audio decode failed:', decodeErr);
+    showAlertDialog(t('main.accompanimentDecodeFailedDetail', { detail: decodeErr.message }));
+    return;
+  }
+
+  const fileName = filePath.split(/[\\/]/).pop() || 'accompaniment';
+  trackManager.updateSinger(singerId, {
+    audioFilePath: filePath,
+    audioFileMissing: false,
+    audioFileName: fileName,
+    audioDuration: audioData.duration,
+    numberOfChannels: audioData.numberOfChannels,
+    audioSampleRate: audioData.sampleRate,
+  });
+  const singer = trackManager.getSinger(singerId);
+  if (singer) {
+    singer.audioChannels = audioData.audioChannels;
+    singer.analysisMono = null;
+    singer.audioBuffer = audioData.audioChannels[0];
   }
 }
 
@@ -233,9 +370,51 @@ export function showSingerSelectDialog(singerId) {
   });
 }
 
-export async function serializeProject(embedSingerFiles = false) {
+export async function serializeProject(embedSingerFiles = false, embedAccompanimentAudio = false) {
   const singers = await Promise.all(trackManager.getSingers().map(async (singer) => {
     const singerObj = { ...singer };
+    if (singer.type === 'accompaniment') {
+      // Accompaniment track: optionally embed audio as base64 WAV
+      if (embedAccompanimentAudio && singer.audioBuffer) {
+        let wavBase64 = null;
+        try {
+          const { encodeWav } = require('../audio/wavEncoder.js');
+          const channels = singer.audioChannels?.length ? singer.audioChannels : [singer.audioBuffer];
+          const frames = channels[0].length;
+          const interleaved = new Float32Array(frames * channels.length);
+          for (let i = 0; i < frames; i++) {
+            for (let ch = 0; ch < channels.length; ch++) interleaved[i * channels.length + ch] = channels[ch][i] || 0;
+          }
+          const wavBytes = encodeWav(interleaved, singer.audioSampleRate || SAMPLE_RATE, channels.length);
+          const blob = new Blob([wavBytes]);
+          wavBase64 = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              const result = reader.result;
+              const base64 = result.substring(result.indexOf(',') + 1);
+              resolve(base64);
+            };
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        } catch (e) {
+          console.error('Failed to encode accompaniment audio:', e);
+        }
+        singerObj.embeddedAudioData = {
+          wavBase64,
+          audioFileName: singer.audioFileName || 'accompaniment.wav',
+          audioDuration: singer.audioDuration || null,
+        };
+      } else {
+        singerObj.embeddedAudioData = null;
+      }
+      // Clear runtime audioBuffer from serialization
+      delete singerObj.audioBuffer;
+      delete singerObj.audioChannels;
+      delete singerObj.analysisMono;
+      return singerObj;
+    }
+    // Singer track: existing embed logic
     if (embedSingerFiles && singer.wavBuffer) {
       let wavBase64 = null;
       try {
@@ -270,6 +449,10 @@ export async function serializeProject(embedSingerFiles = false) {
     } else {
       singerObj.embeddedSingerData = null;
     }
+    // Clear runtime audioBuffer from serialization
+    delete singerObj.audioBuffer;
+      delete singerObj.audioChannels;
+      delete singerObj.analysisMono;
     return singerObj;
   }));
 
@@ -316,7 +499,7 @@ export async function autoSaveProject() {
     await window.electronAPI.saveFile(state.currentProjectFilePath, data);
     markClean();
     console.log('Project auto-saved to', state.currentProjectFilePath);
-  } catch (err) {
+  } catch (_err) {
       // TODO: translate garbled log
   }
 }
@@ -333,7 +516,7 @@ export function showSaveProjectOptionsDialog() {
       gap: 8px;
       cursor: pointer;
       font-size: 13px;
-      color: #c8c8dc;
+      color: var(--fg-secondary);
     `;
     const embedCheckbox = document.createElement('input');
     embedCheckbox.type = 'checkbox';
@@ -349,28 +532,84 @@ export function showSaveProjectOptionsDialog() {
     embedDesc.textContent = t('main.embedSingerFilesDesc');
     optionsContainer.appendChild(embedDesc);
 
-    createDialog({
-      title: t('main.saveProjectOptions'),
-      contentElement: optionsContainer,
-      buttons: [
-        {
-          text: t('common.cancel'),
-          type: 'default',
-          onClick: () => resolve(null),
+    // Accompaniment embed option
+    const hasAccompaniment = trackManager.getSingers().some(s => s.type === 'accompaniment');
+    if (hasAccompaniment) {
+      const accSeparator = document.createElement('div');
+      accSeparator.style.cssText = 'height: 1px; background: var(--border-subtle); margin: 4px 0;';
+      optionsContainer.appendChild(accSeparator);
+
+      const accEmbedOption = document.createElement('label');
+      accEmbedOption.style.cssText = `
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        cursor: pointer;
+        font-size: 13px;
+        color: var(--fg-secondary);
+      `;
+      const accEmbedCheckbox = document.createElement('input');
+      accEmbedCheckbox.type = 'checkbox';
+      accEmbedCheckbox.checked = false;
+      const accEmbedLabel = document.createElement('span');
+      accEmbedLabel.textContent = t('main.embedAccompanimentAudio');
+      accEmbedOption.appendChild(accEmbedCheckbox);
+      accEmbedOption.appendChild(accEmbedLabel);
+      optionsContainer.appendChild(accEmbedOption);
+
+      const accEmbedDesc = document.createElement('div');
+      accEmbedDesc.style.cssText = 'font-size: 11px; color: var(--fg-muted); margin-top: -8px; padding-left: 24px;';
+      accEmbedDesc.textContent = t('main.embedAccompanimentAudioDesc');
+      optionsContainer.appendChild(accEmbedDesc);
+
+      createDialog({
+        title: t('main.saveProjectOptions'),
+        contentElement: optionsContainer,
+        buttons: [
+          {
+            text: t('common.cancel'),
+            type: 'default',
+            onClick: () => resolve(null),
+          },
+          {
+            text: t('common.save'),
+            type: 'primary',
+            onClick: () =>
+              resolve({
+                embedSingerFiles: embedCheckbox.checked,
+                embedAccompanimentAudio: accEmbedCheckbox.checked,
+              }),
+          },
+        ],
+        styles: {
+          buttonMarginTop: '0',
         },
-        {
-          text: t('common.save'),
-          type: 'primary',
-          onClick: () =>
-            resolve({
-              embedSingerFiles: embedCheckbox.checked,
-            }),
+      });
+    } else {
+      createDialog({
+        title: t('main.saveProjectOptions'),
+        contentElement: optionsContainer,
+        buttons: [
+          {
+            text: t('common.cancel'),
+            type: 'default',
+            onClick: () => resolve(null),
+          },
+          {
+            text: t('common.save'),
+            type: 'primary',
+            onClick: () =>
+              resolve({
+                embedSingerFiles: embedCheckbox.checked,
+                embedAccompanimentAudio: false,
+              }),
+          },
+        ],
+        styles: {
+          buttonMarginTop: '0',
         },
-      ],
-      styles: {
-        buttonMarginTop: '0',
-      },
-    });
+      });
+    }
   });
 }
 
@@ -435,7 +674,7 @@ export async function saveProjectAs() {
         defaultPath: state.currentProjectFilePath || undefined,
       });
       if (!result.canceled && result.filePath) {
-        const data = await serializeProject(saveOptions.embedSingerFiles);
+        const data = await serializeProject(saveOptions.embedSingerFiles, saveOptions.embedAccompanimentAudio);
         await window.electronAPI.saveFile(result.filePath, data);
         state.currentProjectFilePath = result.filePath;
         markClean();
@@ -494,6 +733,33 @@ export async function loadProject() {
           trackManager.singers.length = 0;
           for (const s of obj.singers) {
             const singer = trackManager.addSinger(s);
+            // Accompaniment track: load from embedded data or file path
+            if (singer.type === 'accompaniment') {
+              if (s.embeddedAudioData) {
+                await applyAccompanimentDataToSinger(singer, s.embeddedAudioData);
+              } else if (s.audioFilePath) {
+                await window.electronAPI.authorizePath(s.audioFilePath);
+                const exists = await window.electronAPI.fileExists(s.audioFilePath);
+                if (!exists) {
+                  singer.audioFileMissing = true;
+                } else {
+                  try {
+                    const buffer = await window.electronAPI.readFileBuffer(s.audioFilePath);
+                    const decoded = await decodeAudioPreserveChannels(buffer);
+                    singer.audioChannels = decoded.audioChannels;
+                    singer.analysisMono = null;
+                    singer.audioBuffer = decoded.audioChannels[0];
+                    singer.audioSampleRate = decoded.sampleRate;
+                    singer.audioDuration = decoded.duration;
+                    singer.audioFileMissing = false;
+                  } catch (_err) {
+                    singer.audioFileMissing = true;
+                  }
+                }
+              }
+              continue;
+            }
+            // Singer track: existing load logic
             if (s.embeddedSingerData) {
               await applySingerDataToSinger(singer, s.embeddedSingerData);
               if (s.embeddedSingerData.wavDuration) {
@@ -521,7 +787,7 @@ export async function loadProject() {
                     }
                     singer.singerFileMissing = false;
                   }
-                } catch (err) {
+                } catch (_err) {
       // TODO: translate garbled log
                   singer.singerFileMissing = true;
                 }

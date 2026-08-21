@@ -31,6 +31,11 @@ let currentFragment = null;
 let currentProject = null;
 let currentParamMode = PARAM_MODES.MIDI;
 let notes = [];
+// Snap grid for the fragmentEditor piano roll, in beats per grid cell.
+// 1/4 = quarter note, 1/8 = eighth, 1/16 = sixteenth, 1/32 = thirty-second.
+// Default is 1/16 (finer than the historical hard-coded 1/4) so resize/move
+// snap matches audioPreprocess pianoRoll and respects user-selected grid.
+let snapGrid = 1 / 16;
 let kanjiGroups = [];
 let envelopes = {
   volume: { keyframes: [{ time: 0, value: 1, smoothness: 0 }] },
@@ -93,6 +98,16 @@ let selectedPhonemeNoteId = null;
 let selectedPhonemeIndex = -1;
 
 let hoveredNoteId = null;
+
+// 鼠标按住某个音符/锚点时的"激活"状态，用于绘制按压实时反馈（阴影 + 轻微放大）。
+// 与 hoveredNoteId 区别：activeNoteId 仅在 mousedown 期间有效，mouseup 立即清除。
+let activeNoteId = null;
+let activeAnchorIdx = -1;
+let activePhonemeKey = null; // `${noteId}:${phonemeIndex}` for phoneme boundary/volume drags
+
+// notes 版本号：每当 notes 数组替换或其中元素 start/duration/pitch 发生变化时自增，
+// 用于缓存失效（getInactiveNoteIds / getOutOfPitchRangeNotes 等）。
+let notesVersion = 0;
 
 let paramEnvelopeDrag = null;
 
@@ -183,7 +198,16 @@ export function getCurrentParamMode() { return currentParamMode; }
 export function setCurrentParamMode(v) { currentParamMode = v; }
 
 export function getNotes() { return notes; }
-export function setNotes(v) { notes = v; }
+export function setNotes(v) {
+    notes = v;
+    notesVersion++;
+}
+
+export function getNotesVersion() { return notesVersion; }
+export function bumpNotesVersion() { notesVersion++; }
+
+export function getSnapGrid() { return snapGrid; }
+export function setSnapGrid(v) { snapGrid = v; }
 
 export function getKanjiGroups() { return kanjiGroups; }
 export function setKanjiGroups(v) { kanjiGroups = v; }
@@ -313,6 +337,15 @@ export function setSelectedPhonemeIndex(v) { selectedPhonemeIndex = v; }
 
 export function getHoveredNoteId() { return hoveredNoteId; }
 export function setHoveredNoteId(v) { hoveredNoteId = v; }
+
+export function getActiveNoteId() { return activeNoteId; }
+export function setActiveNoteId(v) { activeNoteId = v; }
+
+export function getActiveAnchorIdx() { return activeAnchorIdx; }
+export function setActiveAnchorIdx(v) { activeAnchorIdx = v; }
+
+export function getActivePhonemeKey() { return activePhonemeKey; }
+export function setActivePhonemeKey(v) { activePhonemeKey = v; }
 
 export function getParamEnvelopeDrag() { return paramEnvelopeDrag; }
 export function setParamEnvelopeDrag(v) { paramEnvelopeDrag = v; }

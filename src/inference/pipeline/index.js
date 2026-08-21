@@ -10,11 +10,28 @@ const { buildSessionOptions } = require('../shared/ortOptions');
 const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
-const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram } = require('./postprocessing');
+const { DEFAULT_SOLVER } = require('./samplers');
+const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram, isVramOOMError } = require('./postprocessing');
 const { AudioSegmentation } = require('./audioSegmentation');
-const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain, gpuDrainLong } = require('./utils');
+const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain, gpuDrainLong, markGpuOom, throwIfCancelled, cancelledError } = require('./utils');
 const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
 const { getEffectiveVocoderChunkFrames } = require('../../main/gpuInfo');
+
+/**
+ * Read diagnosticMode flag lazily from settings. Returns false if settings
+ * cannot be loaded (e.g. running outside Electron main process, in tests).
+ * Used to gate [DiffusionDiag] / [VocoderDiag] statistical console.log
+ * blocks; NaN/Inf fatal console.error is always-on regardless of this flag.
+ * @returns {boolean}
+ */
+function _readDiagnosticMode() {
+    try {
+        const { loadSettings } = require('../../main/settings');
+        return loadSettings().diagnosticMode === true;
+    } catch (_) {
+        return false;
+    }
+}
 
 // Mel frame rate (Hz) = sample_rate / hop_size; used for chunk time calculation
 const MEL_FRAME_RATE = SAMPLE_RATE / HOP_SIZE;
@@ -47,6 +64,14 @@ const SESSION_KEYS = [
     'f0Encoder', 'preflow', 'condEmb', 'diffStep', 'vocoder', 'melTransform',
 ];
 
+// Module-level dynamic release flag for diffStep-before-vocoder.
+// Set to true when a vocoder inference throws isVramOOMError; the next
+// _maybeUnloadDiffStepBeforeVocoder call will then return true (release)
+// regardless of the user setting, and the flag is cleared after that
+// segment completes. This avoids imposing the 1-3s/segment reload tax on
+// all users while still recovering from rare OOM events.
+let _dynamicReleaseDiffStepNextSegment = false;
+
 class OnnxSVSPipeline {
     constructor(modelDir, options = {}) {
         this.baseModelDir = modelDir; // Base dir before precision subdir (for shared models)
@@ -70,6 +95,10 @@ class OnnxSVSPipeline {
         this.isFP16 = false; // 基础模型精度（历史字段名，等同 baseModelsIsFP16）
         this.diffStepIsFP16 = false; // diff_step 独立精度（可能与 isFP16 不同，如 W16A32 回退到 FP32 时）
         this.vocoderIsFP16 = false; // vocoder 独立精度（由 vocoder 文件类型/大小检测，与 isFP16 解耦）
+        // QDIT 量化 diff_step（int8 新模型）签名标志：x/diffusion_step/x_mask(bool)。
+        // 供 svsWorker snapshot / 渲染进程弹窗提示使用。
+        this.diffStepIsQDIT = false; // 当前 diff_step 是否为 QDIT 新模型
+        this.diffStepLegacyInt8Incompatible = false; // int8 目录下检测到旧模型（cond≠1024）时置 true
         this.gpuDeviceName = '';
         this.dmlDeviceId = undefined;
         this.initialized = false;
@@ -91,6 +120,13 @@ class OnnxSVSPipeline {
         this._synthCacheMaxEntries = 4;          // 最大缓存条目数
         this._synthCacheMaxBytes = 200 * 1024 * 1024; // 最大缓存字节数（200MB ≈ 4 分钟音频 × 4 条）
         this._synthCacheBytes = 0;               // 当前缓存占用字节数
+        // 分片级 LRU 缓存：长音频多 segment 合成时，未改动 segment 直接复用缓存音频，
+        // 只对改动 segment 重算 diffusion+vocoder。与 _synthCacheMap 独立（粒度更细），
+        // 在 _synthCacheMap MISS 后才查询，命中即跳过该 segment 的推理。
+        this._segCacheMap = null;                // Map<key, {audio, size}>，按插入顺序天然 LRU
+        this._segCacheMaxEntries = 32;           // 单 segment ≤30s≈2.88MB，32 条 ≈ 92MB
+        this._segCacheMaxBytes = 300 * 1024 * 1024; // 最大缓存字节数（300MB）
+        this._segCacheBytes = 0;                 // 当前分片缓存占用字节数
         this._initPromise = null;
         // 合成串行化锁：防止连续两次 synthesize() 调用并发。
         // 场景：合成 A 完成 → _recreateHeavySessionsAfterSynthesis() 释放 diffStep/vocoder
@@ -247,25 +283,18 @@ class OnnxSVSPipeline {
             delete this.sessions[key];
             delete this.sessionEPs[key];
 
-            // Resolve actual file to load (handle diff_step_dml → diff_step fallback)
+            // Resolve actual file to load (int8 优先 QDIT diffstep.onnx，
+            // 其余处理 diff_step_dml → diff_step fallback)
             let resolvedFile = file;
             if (file === 'diff_step_dml.onnx') {
-                const dmlPath = this._getModelPath('diff_step_dml.onnx');
-                let dmlExists = false;
-                try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
-                if (!dmlExists) {
-                    // JP 目录缺少 diff_step_dml.onnx，回退到 base 目录的 diff_step.onnx
-                    // （适用于 v1/v2 未导出 diff_step 的旧 JP 模型包）
-                    resolvedFile = 'diff_step.onnx';
-                    console.warn('[OnnxSVSPipeline] JP diff_step_dml.onnx not found, falling back to base diff_step.onnx');
-                } else {
-                    console.log(`[OnnxSVSPipeline] Loading diff_step from: ${dmlPath}, isFP16=${this.isFP16}, dmlDeviceId=${this.dmlDeviceId}`);
-                    // Check file size for diagnostic
-                    try {
-                        const stat = await fs.promises.stat(dmlPath);
-                        console.log(`[OnnxSVSPipeline] diff_step_dml.onnx file size: ${(stat.size / 1024 / 1024).toFixed(1)} MB`);
-                    } catch (_) {}
-                }
+                resolvedFile = await this._resolveDiffStepFile();
+                const dmlPath = this._getModelPath(resolvedFile);
+                console.log(`[OnnxSVSPipeline] Loading diff_step from: ${dmlPath}, isFP16=${this.isFP16}, dmlDeviceId=${this.dmlDeviceId}`);
+                // Check file size for diagnostic
+                try {
+                    const stat = await fs.promises.stat(dmlPath);
+                    console.log(`[OnnxSVSPipeline] ${resolvedFile} file size: ${(stat.size / 1024 / 1024).toFixed(1)} MB`);
+                } catch (_) {}
             }
 
             // Load new model from the updated path
@@ -525,7 +554,47 @@ class OnnxSVSPipeline {
     _buildVocalSegments(notes, bpm) { return this._audioSegmentation.buildVocalSegments(notes, bpm); }
     _hashArray(arr) { return this._audioSegmentation.hashArray(arr); }
     _computeSynthCacheKey(notes, bpm, options) { return this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this)); }
+    _computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) { return this._audioSegmentation.computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount); }
     _median(arr) { return this._audioSegmentation.median(arr); }
+
+    /**
+     * Diffusion can produce non-zero rest mel even with pitch/F0=0. Vocos then
+     * turns that mel into hiss or breath-like noise. Enforce score silence on
+     * the final waveform, after vocoder normalization, with short edge fades.
+     */
+    _silenceNonVocalRegions(audio, notes, bpm, bufferStartBeat = 0) {
+        if (!audio || audio.length === 0 || !notes || notes.length === 0) return audio;
+        const secondsPerBeat = 60 / bpm;
+        const mergeGapSamples = Math.round(0.04 * SAMPLE_RATE);
+        const fadeSamples = Math.max(1, Math.round(0.015 * SAMPLE_RATE));
+        const intervals = [];
+        for (const note of notes) {
+            const lyric = String(note.lyric || '').trim();
+            const isRest = note.pitch <= 0 || note.noteType === 1
+                || lyric === '<SP>' || lyric === '<AP>';
+            if (isRest) continue;
+            const start = Math.max(0, Math.round((note.start - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE));
+            const end = Math.min(audio.length, Math.round((note.start + note.duration - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE));
+            if (end <= start) continue;
+            const prev = intervals[intervals.length - 1];
+            if (prev && start - prev.end <= mergeGapSamples) prev.end = Math.max(prev.end, end);
+            else intervals.push({ start, end });
+        }
+        let cursor = 0;
+        for (const interval of intervals) {
+            audio.fill(0, cursor, interval.start);
+            const fade = Math.min(fadeSamples, Math.floor((interval.end - interval.start) / 2));
+            for (let i = 0; i < fade; i++) {
+                const gainIn = (i + 1) / fade;
+                const gainOut = (fade - i) / fade;
+                audio[interval.start + i] *= gainIn;
+                audio[interval.end - fade + i] *= gainOut;
+            }
+            cursor = interval.end;
+        }
+        audio.fill(0, cursor);
+        return audio;
+    }
 
     /**
      * 限制 autoShift 的 f0Shift 范围，防止偏移后音高超出模型/vocoder 训练分布。
@@ -558,7 +627,10 @@ class OnnxSVSPipeline {
         const maxAllowedUp = MAX_EFFECTIVE_PITCH - maxPitch;
         const maxAllowedDown = MIN_EFFECTIVE_PITCH - minPitch; // 负值
         const clampedShift = Math.max(maxAllowedDown, Math.min(maxAllowedUp, f0Shift));
-        return Math.max(-12, Math.min(12, clampedShift));
+        // A full-octave timbre remap often moves the score outside the reference
+        // singer's trained register. Keep automatic matching conservative; manual
+        // pitchShift remains available for intentional larger transposition.
+        return Math.max(-5, Math.min(5, clampedShift));
     }
 
     /**
@@ -626,11 +698,187 @@ class OnnxSVSPipeline {
         }
         return finalShift;
     }
+
+    /**
+     * 将音符按自然边界（rest、gap、大音高变化）切分为子段，用于局部 autoShift。
+     * 每个子段独立计算 f0Shift，使各段的中位数都向参考中位数靠拢。
+     * @param {Array} notes - 已 fillNoteGaps 的音符数组（已排序）
+     * @param {number} bpm
+     * @returns {Array<{startBeat, endBeat, notes}>} 子段数组
+     */
+    _buildAutoShiftSegments(notes, bpm) {
+        if (!notes || notes.length <= 1) {
+            const endBeat = notes && notes.length === 1 ? notes[0].start + notes[0].duration : 0;
+            return [{ startBeat: 0, endBeat, notes: notes || [] }];
+        }
+
+        const PITCH_CHANGE_THRESHOLD = 7; // 半音，超过则强制分段
+        const MIN_SEGMENT_SEC = 4;
+        const minSegmentBeats = (MIN_SEGMENT_SEC / 60) * bpm;
+
+        const totalBeats = notes[notes.length - 1].start + notes[notes.length - 1].duration;
+
+        // 收集候选切分点
+        const splitPoints = [0];
+        for (let i = 0; i < notes.length - 1; i++) {
+            const note = notes[i];
+            const next = notes[i + 1];
+            const noteEnd = note.start + note.duration;
+
+            // 1. rest note 中点切分（休止符持续时间 > 0.5 拍）
+            if ((!note.lyric || note.lyric.trim().length === 0) && note.duration > 0.5) {
+                splitPoints.push(note.start + note.duration / 2);
+                continue;
+            }
+
+            // 2. 音符间隔切分（gap > 0.05 拍）
+            const gap = next.start - noteEnd;
+            if (gap > 0.05) {
+                splitPoints.push(noteEnd + gap / 2);
+                continue;
+            }
+
+            // 3. 大音高变化处强制分段
+            if (note.pitch >= 1 && next.pitch >= 1 && Math.abs(next.pitch - note.pitch) >= PITCH_CHANGE_THRESHOLD) {
+                splitPoints.push(noteEnd);
+            }
+        }
+        splitPoints.push(totalBeats);
+        splitPoints.sort((a, b) => a - b);
+
+        // 去重
+        const unique = [];
+        for (const p of splitPoints) {
+            if (unique.length === 0 || Math.abs(p - unique[unique.length - 1]) > 0.01) {
+                unique.push(p);
+            }
+        }
+
+        // 构建 segments，遵守最小长度
+        const segments = [];
+        let segStart = 0;
+        for (let i = 1; i < unique.length; i++) {
+            const segEnd = unique[i];
+            if (segEnd - segStart >= minSegmentBeats || i === unique.length - 1) {
+                segments.push({ startBeat: segStart, endBeat: segEnd });
+                segStart = segEnd;
+            }
+            // else: 不推进 segStart，合并到下一段
+        }
+        // 兜底：如果没有任何 segment（全被合并逻辑跳过）
+        if (segments.length === 0) {
+            segments.push({ startBeat: 0, endBeat: totalBeats });
+        }
+
+        // 分配音符到子段
+        for (const seg of segments) {
+            seg.notes = notes.filter(n => n.start >= seg.startBeat - 0.01 && n.start < seg.endBeat - 0.01);
+        }
+
+        return segments;
+    }
+
+    /**
+     * 对已构建的 sequences 施加局部 autoShift。
+     * 按 segShifts 中各子段的 f0Shift 分别偏移对应帧范围的 f0Hz 和 notePitchSeq。
+     * 边界处使用短窗口线性渐变，避免 f0 跳变产生可听 artifact。
+     *
+     * @param {Object} sequences - notesToSequences 返回值（f0Shift=0 构建）
+     * @param {Array<{startBeat, endBeat, f0Shift}>} segShifts - 各子段的 shift
+     * @param {number} bpm
+     */
+    _applyLocalF0Shifts(sequences, segShifts, bpm) {
+        const { f0Hz, notePitchSeq, mel2token } = sequences;
+        if (!segShifts || segShifts.length === 0) return;
+
+        // 如果只有一个子段或所有子段 shift 相同，退化为全局 shift
+        if (segShifts.length === 1) {
+            const shift = segShifts[0].f0Shift;
+            if (shift !== 0) {
+                const factor = Math.pow(2, shift / 12);
+                for (let i = 0; i < f0Hz.length; i++) {
+                    if (f0Hz[i] > 0) f0Hz[i] *= factor;
+                }
+                sequences.f0Ids = this._preprocessing.quantizeF0(f0Hz, 0);
+                for (let t = 0; t < notePitchSeq.length; t++) {
+                    if (notePitchSeq[t] > 0) {
+                        notePitchSeq[t] = Math.max(0, Math.min(255, notePitchSeq[t] + shift));
+                    }
+                }
+            }
+            return;
+        }
+
+        const framesPerBeat = (60 / bpm) * (SAMPLE_RATE / HOP_SIZE);
+        const FADE_FRAMES = Math.max(2, Math.floor(0.15 * SAMPLE_RATE / HOP_SIZE)); // ~0.15s 渐变
+
+        // 1. 构建逐帧 shift 数组
+        const frameShifts = new Float32Array(f0Hz.length);
+        for (let i = 0; i < segShifts.length; i++) {
+            const seg = segShifts[i];
+            const startFrame = Math.max(0, Math.floor(seg.startBeat * framesPerBeat));
+            const endFrame = Math.min(f0Hz.length, Math.floor(seg.endBeat * framesPerBeat));
+            for (let f = startFrame; f < endFrame; f++) {
+                frameShifts[f] = seg.f0Shift;
+            }
+        }
+
+        // 2. 在子段边界做线性渐变
+        for (let i = 1; i < segShifts.length; i++) {
+            const boundaryFrame = Math.floor(segShifts[i].startBeat * framesPerBeat);
+            const prevShift = segShifts[i - 1].f0Shift;
+            const nextShift = segShifts[i].f0Shift;
+            if (prevShift === nextShift) continue;
+            const fadeStart = Math.max(0, boundaryFrame - FADE_FRAMES);
+            const fadeEnd = Math.min(f0Hz.length, boundaryFrame + FADE_FRAMES);
+            const fadeLen = fadeEnd - fadeStart;
+            for (let f = fadeStart; f < fadeEnd; f++) {
+                const t = (f - fadeStart) / fadeLen;
+                frameShifts[f] = prevShift * (1 - t) + nextShift * t;
+            }
+        }
+
+        // 3. 应用逐帧 shift 到 f0Hz
+        for (let i = 0; i < f0Hz.length; i++) {
+            if (f0Hz[i] > 0 && frameShifts[i] !== 0) {
+                f0Hz[i] *= Math.pow(2, frameShifts[i] / 12);
+            }
+        }
+
+        // 4. 重新量化 f0Ids
+        sequences.f0Ids = this._preprocessing.quantizeF0(f0Hz, 0);
+
+        // 5. 应用逐 token shift 到 notePitchSeq
+        // 用 mel2token 将帧的 shift 映射到 token，每个 token 取其对应帧的平均 shift
+        if (mel2token && notePitchSeq) {
+            const tokenShiftSum = new Float64Array(notePitchSeq.length);
+            const tokenShiftCount = new Int32Array(notePitchSeq.length);
+            for (let f = 0; f < mel2token.length && f < frameShifts.length; f++) {
+                const tok = mel2token[f];
+                if (tok > 0 && tok < notePitchSeq.length) {
+                    tokenShiftSum[tok] += frameShifts[f];
+                    tokenShiftCount[tok]++;
+                }
+            }
+            for (let t = 0; t < notePitchSeq.length; t++) {
+                if (notePitchSeq[t] > 0 && tokenShiftCount[t] > 0) {
+                    const avgShift = Math.round(tokenShiftSum[t] / tokenShiftCount[t]);
+                    if (avgShift !== 0) {
+                        notePitchSeq[t] = Math.max(0, Math.min(255, notePitchSeq[t] + avgShift));
+                    }
+                }
+            }
+        }
+    }
     clearSynthCache() {
         // LRU 缓存：清空所有条目
         this._synthCache = null;
         this._synthCacheMap = null;
         this._synthCacheBytes = 0;
+        // 同步清空分片级缓存：切换语言/模型后单 segment 的 cond/diff_step/preflow 输出
+        // 也会变化，旧分片缓存不再适用，必须一并清空。
+        this._segCacheMap = null;
+        this._segCacheBytes = 0;
     }
 
     /**
@@ -686,6 +934,52 @@ class OnnxSVSPipeline {
         this._synthCacheMap.delete(key);
         this._synthCacheMap.set(key, entry);
         this._synthCache = { key, audio: entry.audio };
+        return entry.audio;
+    }
+
+    /**
+     * 分片级 LRU 写入：与 _synthCachePut 同构，但容量上限更大（segment 粒度更细）。
+     * 仅缓存单 segment 的原始音频（crossfade 混合前），混合后的最终音频仍由
+     * _synthCachePut 在外层缓存。
+     * @param {string} key - _computeSegmentCacheKey 计算的分片键
+     * @param {Float32Array} audio - 该 segment 的原始音频（vocoder 输出）
+     */
+    _segCachePut(key, audio) {
+        const MAX_SAMPLES = SAMPLE_RATE * 120; // 单条上限 2 分钟（单 segment 实际 ≤30s）
+        if (!audio || audio.length === 0 || audio.length > MAX_SAMPLES) return;
+
+        if (!this._segCacheMap) this._segCacheMap = new Map();
+        const map = this._segCacheMap;
+
+        if (map.has(key)) {
+            const old = map.get(key);
+            this._segCacheBytes -= old.size;
+            map.delete(key);
+        }
+
+        const size = audio.byteLength;
+        map.set(key, { audio, size });
+        this._segCacheBytes += size;
+
+        while ((map.size > this._segCacheMaxEntries) ||
+               (this._segCacheBytes > this._segCacheMaxBytes && map.size > 1)) {
+            const oldestKey = map.keys().next().value;
+            const oldest = map.get(oldestKey);
+            this._segCacheBytes -= oldest.size;
+            map.delete(oldestKey);
+        }
+    }
+
+    /**
+     * 分片级 LRU 读取：命中时提升到最新位置并返回 audio；未命中返回 null。
+     * @param {string} key
+     * @returns {Float32Array|null}
+     */
+    _segCacheGet(key) {
+        if (!this._segCacheMap || !this._segCacheMap.has(key)) return null;
+        const entry = this._segCacheMap.get(key);
+        this._segCacheMap.delete(key);
+        this._segCacheMap.set(key, entry);
         return entry.audio;
     }
 
@@ -832,6 +1126,39 @@ class OnnxSVSPipeline {
     }
 
     /**
+     * 解析 diff_step 实际要加载的模型文件名。
+     *
+     * int8 / int8-npu 精度优先使用 QDIT 量化新模型 diffstep.onnx
+     * （cond=1024 + bool mask 签名）。若不存在则回退旧命名
+     * diff_step_dml.onnx → diff_step.onnx；此时若加载的是旧 int8 模型
+     * （cond=512），由 _detectDiffStepPrecision 检测并置
+     * diffStepLegacyInt8Incompatible 标志提示用户更新。
+     *
+     * 其他精度保持原逻辑：diff_step_dml.onnx → diff_step.onnx。
+     * 文件存在性通过 _getModelPath 检查，以兼容 JP 语言目录。
+     * @returns {Promise<string>} 解析后的 diff_step 文件名
+     */
+    async _resolveDiffStepFile() {
+        const isInt8 = this._modelPrecision === 'int8' || this._modelPrecision === 'int8-npu';
+        if (isInt8) {
+            const qditPath = this._getModelPath('diffstep.onnx');
+            let qditExists = false;
+            try { await fs.promises.access(qditPath); qditExists = true; } catch (_) {}
+            if (qditExists) {
+                console.log('[OnnxSVSPipeline] int8: using QDIT diffstep.onnx');
+                return 'diffstep.onnx';
+            }
+            console.warn('[OnnxSVSPipeline] int8: diffstep.onnx (QDIT) not found, falling back to diff_step_dml.onnx / diff_step.onnx');
+        }
+        const dmlPath = this._getModelPath('diff_step_dml.onnx');
+        let dmlExists = false;
+        try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
+        if (dmlExists) return 'diff_step_dml.onnx';
+        console.warn('[OnnxSVSPipeline] diff_step_dml.onnx not found, using diff_step.onnx');
+        return 'diff_step.onnx';
+    }
+
+    /**
      * 解析模型文件路径：DML 变体检查 + SiFiGAN 三级回退 + 文件存在性校验
      * 设置 this.vocoderType / this.sifiganStatsPath / this._resolvedVocoderFile
      * @returns {Promise<{resolvedModelFiles: string[], modelStats: Array}>}
@@ -855,13 +1182,11 @@ class OnnxSVSPipeline {
         this.vocoderType = vocoderType;
         this.sifiganPrecision = sifiganPrecision;
 
-        // 检查 diff_step_dml 是否存在（仅 init 阶段需要，vocoder swap 不会触及）
-        const dmlExists = await (dmlIdx >= 0
-            ? fs.promises.access(path.join(this.modelDir, 'diff_step_dml.onnx')).then(() => true, () => false)
-            : Promise.resolve(true));
-        if (dmlIdx >= 0 && !dmlExists) {
-            resolvedModelFiles[dmlIdx] = 'diff_step.onnx';
-            console.log('[OnnxSVSPipeline] diff_step_dml.onnx not found, using diff_step.onnx');
+        // 解析 diff_step 实际文件：int8/int8-npu 优先 QDIT 新模型 diffstep.onnx，
+        // 其余按旧逻辑 diff_step_dml.onnx → diff_step.onnx 回退（仅 init 阶段需要，
+        // vocoder swap 不会触及）
+        if (dmlIdx >= 0) {
+            resolvedModelFiles[dmlIdx] = await this._resolveDiffStepFile();
         }
 
         // 解析 vocoder 文件（四级回退逻辑由 _resolveVocoderFile 集中处理）
@@ -1494,30 +1819,62 @@ class OnnxSVSPipeline {
      *
      * 读取 sessions.diffStep.inputMetadata 的 xt_input 类型来设置 diffStepIsFP16。
      * 失败时回退到基础模型精度（this.isFP16）作为兜底。
+     *
+     * 同时识别 QDIT 量化新模型签名（x/diffusion_step/x_mask bool）：
+     * - diffStepIsQDIT = true（int8 新模型，pipeline 已按新签名适配）
+     * - diffStepLegacyInt8Incompatible = true（int8 目录下检测到旧版模型：legacy 签名
+     *   且 cond 维度 ≠ 1024，即旧 int8 的 512 维 cond，与管线 1024 维 cond 不匹配）。
+     *   该标志由 svsWorker snapshot 转发到渲染进程，提示用户更新模型。
      */
     _detectDiffStepPrecision() {
         try {
             const session = this.sessions.diffStep;
             if (!session) {
                 this.diffStepIsFP16 = this.isFP16;
+                this.diffStepIsQDIT = false;
+                this.diffStepLegacyInt8Incompatible = false;
                 return;
             }
             const meta = session.inputMetadata || [];
-            // inputMetadata 是数组：[{name, type, ...}, ...]
-            let xtInputType = null;
+            // inputMetadata 是数组：[{name, type, shape, ...}, ...]
+            const has = (n) => meta.some(m => m && m.name === n);
+            // QDIT 新模型：x / diffusion_step / x_mask(bool)
+            this.diffStepIsQDIT = has('x') && has('diffusion_step') && has('x_mask');
+
+            let dataInputType = null;
             for (const m of meta) {
-                if (m.name === 'xt_input') { xtInputType = m.type; break; }
+                if (m.name === 'x' || m.name === 'xt_input') { dataInputType = m.type; break; }
             }
-            if (xtInputType) {
-                this.diffStepIsFP16 = xtInputType === 'float16';
-                console.log(`[OnnxSVSPipeline] diff_step precision: ${xtInputType} (diffStepIsFP16=${this.diffStepIsFP16})`);
+            if (dataInputType) {
+                this.diffStepIsFP16 = dataInputType === 'float16';
+                console.log(`[OnnxSVSPipeline] diff_step precision: ${dataInputType} (diffStepIsFP16=${this.diffStepIsFP16}, QDIT=${this.diffStepIsQDIT})`);
             } else {
-                console.warn('[OnnxSVSPipeline] diff_step xt_input metadata not found, defaulting to global isFP16');
+                console.warn('[OnnxSVSPipeline] diff_step x/xt_input metadata not found, defaulting to global isFP16');
                 this.diffStepIsFP16 = this.isFP16;
+            }
+
+            // 旧 int8 模型检测：legacy 签名 + cond 维度 ≠ COND_DIM(1024)（旧 int8 为 512）。
+            // 仅当精度为 int8 / int8-npu 时置不兼容标志，避免误伤 fp32/fp16 目录下的合法 legacy 模型。
+            let legacyInt8 = false;
+            let condDim = null;
+            if (!this.diffStepIsQDIT && (this._modelPrecision === 'int8' || this._modelPrecision === 'int8-npu')) {
+                for (const m of meta) {
+                    if (m.name === 'cond' && Array.isArray(m.shape) && m.shape.length > 0) {
+                        condDim = m.shape[m.shape.length - 1];
+                        break;
+                    }
+                }
+                legacyInt8 = typeof condDim === 'number' && condDim !== COND_DIM;
+            }
+            this.diffStepLegacyInt8Incompatible = legacyInt8;
+            if (legacyInt8) {
+                console.warn(`[OnnxSVSPipeline] diff_step legacy int8 model detected (cond=${condDim}, expected ${COND_DIM}) — INCOMPATIBLE, please update the model`);
             }
         } catch (e) {
             console.warn('[OnnxSVSPipeline] diff_step precision detection failed:', e.message);
             this.diffStepIsFP16 = this.isFP16;
+            this.diffStepIsQDIT = false;
+            this.diffStepLegacyInt8Incompatible = false;
         }
     }
 
@@ -1537,6 +1894,7 @@ class OnnxSVSPipeline {
         // Vocoder is loaded via DML (dynamic shapes), never use static shape padding
         // SiFiGAN 双输入：传入 vocoderType、F0 序列、stats 缺失标志；default vocoder 仅用 mel
         const chunkFrames = this._resolveVocoderChunkFrames();
+        const overlapFramesOverride = this._resolveVocoderOverlapFrames();
         console.log(`[OnnxSVSPipeline] Vocoder EP: ${this.sessionEPs.vocoder || 'unknown'}, vocoderIsFP16=${this.vocoderIsFP16}, isFP16=${this.isFP16}, vocoderType=${this.vocoderType}, resolvedFile=${this._resolvedVocoderFile}`);
         if (this.sessionEPs.vocoder !== 'dml') {
             console.warn(`[OnnxSVSPipeline] WARNING: Vocoder is NOT on DML (EP=${this.sessionEPs.vocoder}), will be slow and may explain low GPU usage!`);
@@ -1555,7 +1913,8 @@ class OnnxSVSPipeline {
         }
 
         // 临时释放 diffStep session，让 vocoder 推理独占 GPU 显存。
-        // 触发条件：DML 后端 + 用户开启 releaseDiffStepBeforeVocoder + diffStep 当前已加载。
+        // 触发条件：DML 后端 + (用户开启 releaseDiffStepBeforeVocoder || 上一次 vocoder
+        //   抛 isVramOOMError 设置的 _dynamicReleaseDiffStepNextSegment) + diffStep 当前已加载。
         // 不释放 vocoder（马上要用），不释放 encoders（体积小）。
         // WebNN 路径跳过（diffStep 在渲染进程，与主进程 vocoder 互不抢占显存）。
         const releasedDiffStep = this._maybeUnloadDiffStepBeforeVocoder();
@@ -1573,8 +1932,46 @@ class OnnxSVSPipeline {
         try {
             return await this._postprocessing.runVocoderChunked(
                 this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
-                this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames
+                this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
             );
+        } catch (err) {
+            // Dynamic OOM recovery: if this is the first OOM in this segment
+            // and we did NOT already release diffStep, set the dynamic flag and
+            // retry the segment with diffStep released first. After the retry
+            // (success or another failure), the finally block clears the flag
+            // so behavior reverts to the user setting for the next segment.
+            if (isVramOOMError(err) && !releasedDiffStep && !_dynamicReleaseDiffStepNextSegment && this._isDiffStepReleaseEnabled()) {
+                console.warn(`[OnnxSVSPipeline] Vocoder OOM caught, retrying segment with diffStep released first: ${err.message}`);
+                _dynamicReleaseDiffStepNextSegment = true;
+                // 标记 OOM 使下一次自适应 gpuDrain 延长到 200ms（让 DML 资源池恢复），
+                // 标志在 gpuDrainAdaptive 内部消费后自动清除。
+                markGpuOom();
+                // Declare outside try so the finally block can observe it.
+                let releasedRetry = false;
+                try {
+                    releasedRetry = this._maybeUnloadDiffStepBeforeVocoder();
+                    if (releasedRetry) {
+                        console.log('[OnnxSVSPipeline] Waiting for DML to reclaim diffStep VRAM before vocoder retry...');
+                        const r0 = performance.now();
+                        await gpuDrainLong();
+                        console.log(`[OnnxSVSPipeline] DML drain complete (${(performance.now() - r0).toFixed(0)}ms), starting vocoder retry`);
+                    }
+                    return await this._postprocessing.runVocoderChunked(
+                        this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
+                        this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
+                    );
+                } finally {
+                    if (releasedRetry) {
+                        await this._reloadDiffStepAfterVocoder();
+                    }
+                    _dynamicReleaseDiffStepNextSegment = false;
+                }
+            }
+            // Either not an OOM, or already retried: rethrow to caller.
+            // If the retry above also threw, we reach here without clearing the
+            // dynamic flag — clear it now so the next segment starts clean.
+            _dynamicReleaseDiffStepNextSegment = false;
+            throw err;
         } finally {
             // Vocoder 推理完成（或抛错）后立即重载 diffStep，保持 session 状态一致：
             // - 多 segment 合成的下一段需要 diffStep
@@ -1584,6 +1981,9 @@ class OnnxSVSPipeline {
             if (releasedDiffStep) {
                 await this._reloadDiffStepAfterVocoder();
             }
+            // Always clear the dynamic flag at the end of a segment (success or
+            // failure) so the next segment reverts to the user setting.
+            _dynamicReleaseDiffStepNextSegment = false;
         }
     }
 
@@ -1596,9 +1996,10 @@ class OnnxSVSPipeline {
      */
     async _runVocoderChunkedForSegment(melData, segFrames, f0Override, onChunkComplete) {
         const chunkFrames = this._resolveVocoderChunkFrames();
+        const overlapFramesOverride = this._resolveVocoderOverlapFrames();
         return this._postprocessing.runVocoderChunked(
             this.sessions, melData, segFrames, this.vocoderIsFP16 ?? this.isFP16, false,
-            this.vocoderType, f0Override, this.sifiganStatsMissing, onChunkComplete, chunkFrames
+            this.vocoderType, f0Override, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
         );
     }
 
@@ -1607,8 +2008,20 @@ class OnnxSVSPipeline {
      * 目的：腾出 diffStep 模型权重 + diffusion 32 步激活工作区（合计 ~3-4GB）的显存，
      * 避免 vocoder 推理时显存叠加触发 DXGI_ERROR_DEVICE_REMOVED (0x887A0006) / TDR。
      *
+     * 仅当用户设置 releaseDiffStepBeforeVocoder === true 时允许释放。
+     * OOM 重试标志只决定是否立即重试，不得绕过用户关闭的设置。
+     *
      * @returns {boolean} true 表示已释放（调用方需在 vocoder 完成后调用 _reloadDiffStepAfterVocoder）
      */
+    _isDiffStepReleaseEnabled() {
+        try {
+            const { loadSettings } = require('../../main/settings');
+            return loadSettings().releaseDiffStepBeforeVocoder === true;
+        } catch (_) {
+            return false;
+        }
+    }
+
     _maybeUnloadDiffStepBeforeVocoder() {
         if (this.useWebNN) {
             console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (useWebNN=true)');
@@ -1623,16 +2036,13 @@ class OnnxSVSPipeline {
             return false; // CPU 后端无需释放
         }
 
-        try {
-            const { loadSettings } = require('../../main/settings');
-            const settings = loadSettings();
-            if (settings.releaseDiffStepBeforeVocoder !== true) {
-                console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings.releaseDiffStepBeforeVocoder=${settings.releaseDiffStepBeforeVocoder})`);
-                return false;
-            }
-        } catch (e) {
-            console.log(`[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (settings load failed: ${e.message})`);
+        // The user setting is authoritative, including the OOM retry path.
+        if (!this._isDiffStepReleaseEnabled()) {
+            console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: skip (disabled by user)');
             return false;
+        }
+        if (_dynamicReleaseDiffStepNextSegment) {
+            console.log('[OnnxSVSPipeline] _maybeUnloadDiffStepBeforeVocoder: OOM retry release');
         }
 
         console.log('[OnnxSVSPipeline] Temporarily releasing diffStep session before vocoder inference to free VRAM...');
@@ -1657,7 +2067,7 @@ class OnnxSVSPipeline {
         if (this.sessions.diffStep) return; // 已重载或并发已加载
         console.log('[OnnxSVSPipeline] Reloading diffStep session after vocoder inference...');
         try {
-            const result = await this.loadModel('diffStep');
+            const result = await this.loadModel('diffStep', { runValidation: false });
             if (result.success) {
                 console.log(`[OnnxSVSPipeline] diffStep reloaded [${result.ep || 'unknown'}]`);
             } else {
@@ -1689,19 +2099,49 @@ class OnnxSVSPipeline {
         }
     }
 
-    async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null) {
-        console.log(`[OnnxSVSPipeline] Diffusion start: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, totalSteps=${totalSteps}, isFP16=${this.isFP16}, diffStepIsFP16=${this.diffStepIsFP16}, ep=${this.sessionEPs.diffStep || 'unknown'}`);
+    /**
+     * 读取用户配置的 vocoder 分块重叠帧数（settings.vocoderOverlapFrames，默认 32，范围 8-96）。
+     * 返回 0 表示回退到 VOCODER_OVERLAP_FRAMES 常量（32），由 runVocoderChunked 内部处理。
+     * 在测试环境（无 Electron settings）下返回 0，保持与既有测试一致的默认行为。
+     * @returns {number}
+     */
+    _resolveVocoderOverlapFrames() {
+        try {
+            const { loadSettings } = require('../../main/settings');
+            const settings = loadSettings();
+            const v = settings.vocoderOverlapFrames;
+            return (Number.isFinite(v) && v >= 8 && v <= 96) ? Math.floor(v) : 0;
+        } catch (e) {
+            return 0;
+        }
+    }
+
+    async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null, abortSignal = null) {
+        throwIfCancelled(abortSignal);
+        const samplerName = this._currentSamplerName || DEFAULT_SOLVER;
+        // Task 15: pass per-frame F0 curve to chunked diffusion for F0-aware
+        // boundary selection. Set by _synthesizeSegment / synthesizeMultiStreaming
+        // / _synthesizeImpl from sequences.f0Hz. null = no F0 info → fallback.
+        const pitchCurveF0 = this._currentPitchCurveF0 || null;
+        // Task 11: CFG schedule opts (set by synthesize / synthesizeMultiStreaming)
+        const cfgScheduleOpts = this._currentCfgScheduleOpts || null;
+        const dynamicThresholdOpts = this._currentDynamicThresholdOpts || null;
+        console.log(`[OnnxSVSPipeline] Diffusion start: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, totalSteps=${totalSteps}, sampler=${samplerName}, isFP16=${this.isFP16}, diffStepIsFP16=${this.diffStepIsFP16}, ep=${this.sessionEPs.diffStep || 'unknown'}`);
         console.log(`[OnnxSVSPipeline] Session diffStep: type=${this.sessions.diffStep?.constructor?.name}, ep=${this.sessionEPs.diffStep}`);
         // 分块扩散推理（仅预览路径启用，useStaticShapes 路径跳过）
         const chunkOpts = this._currentDiffStepChunkOpts;
-        if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > chunkOpts.chunkFrames) {
+        // 与 _planChunks 的 safeChunk = Math.max(50, chunkFrames) 保持一致，
+        // 避免进入 runDiffusionLoopChunked 后 _planChunks 返回 null 再回退。
+        const _safeChunk = Math.max(50, Math.floor(chunkOpts?.chunkFrames || 0));
+        if (chunkOpts && chunkOpts.enabled && !this.useStaticShapes && chunkOpts.chunkFrames > 0 && totalFrames > _safeChunk) {
             console.log(`[OnnxSVSPipeline] Using chunked diffusion: chunkFrames=${chunkOpts.chunkFrames}, overlapFrames=${chunkOpts.overlapFrames}, streaming=${!!onChunkMel}`);
-            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel);
+            return this._diffusion.runDiffusionLoopChunked(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, chunkOpts.chunkFrames, chunkOpts.overlapFrames, onChunkMel, samplerName, pitchCurveF0, cfgScheduleOpts, dynamicThresholdOpts, abortSignal);
         }
-        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes);
+        return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal);
     }
 
-    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0) {
+    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0, abortSignal = null) {
+        throwIfCancelled(abortSignal);
         // 多 segment 路径：segmentNotes.start 是相对 segStart，需要传 segStartBeat
         // 让 notesToSequences 正确索引绝对时间的 pitchCurveF0，否则 f0 错位 → 电流声。
         const pitchCurveOffsetSec = (segStartBeat / bpm) * 60;
@@ -1747,6 +2187,7 @@ class OnnxSVSPipeline {
                 ptMelData, ptFrameCount,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
+                cfgScheduleOpts: this._currentCfgScheduleOpts,
             }, webnnOnProgress);
             // Forward WebNN warnings (e.g. NPU static shape truncation)
             if (result.warnings && result.warnings.length > 0) {
@@ -1771,26 +2212,38 @@ class OnnxSVSPipeline {
 
         const xt = this.randomNoise(totalFrames, MEL_DIM);
 
-        await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange);
+        // Task 15: per-frame F0 curve for F0-aware chunked diffusion boundary
+        // selection. Slice to totalFrames to match the segment's frame range.
+        this._currentPitchCurveF0 = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
+
+        await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, null, abortSignal);
 
         // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
+        // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
         {
-            let xtNaN = 0, xtInf = 0, xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
             const xtLen = xt.data.length;
+            let xtNaN = 0, xtInf = 0;
             for (let i = 0; i < xtLen; i++) {
                 const v = xt.data[i];
                 if (Number.isNaN(v)) { xtNaN++; continue; }
-                if (!Number.isFinite(v)) { xtInf++; continue; }
-                if (v < xtMin) xtMin = v;
-                if (v > xtMax) xtMax = v;
-                xtSum += v;
-                xtSumSq += v * v;
+                if (!Number.isFinite(v)) { xtInf++; }
             }
-            const xtMean = xtSum / xtLen;
-            const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
-            console.log(`[DiffusionDiag] OUTPUT xt (vocoder input): frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
             if (xtNaN > 0 || xtInf > 0) {
                 console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! This will cause vocoder explosion!`);
+            }
+            if (_readDiagnosticMode()) {
+                let xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
+                for (let i = 0; i < xtLen; i++) {
+                    const v = xt.data[i];
+                    if (Number.isNaN(v) || !Number.isFinite(v)) continue;
+                    if (v < xtMin) xtMin = v;
+                    if (v > xtMax) xtMax = v;
+                    xtSum += v;
+                    xtSumSq += v * v;
+                }
+                const xtMean = xtSum / xtLen;
+                const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
+                console.log(`[DiffusionDiag] OUTPUT xt (vocoder input): frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
             }
         }
 
@@ -1824,6 +2277,8 @@ class OnnxSVSPipeline {
             vocoderIsFP16: this.vocoderIsFP16 ?? this.isFP16,
             useStaticShapes: this.useStaticShapes,
             vocoderChunkFrames: this._resolveVocoderChunkFrames(),
+            cfgScheduleOpts: this._currentCfgScheduleOpts || null,
+            dynamicThresholdOpts: this._currentDynamicThresholdOpts || null,
             skipVocoder: true,
         };
         return requestSynthesis(wc, fullParams, onProgress);
@@ -1834,7 +2289,8 @@ class OnnxSVSPipeline {
      * @param {number} f0ShiftA - segment A 的 f0Shift（per-segment，B2）
      * @param {number} f0ShiftB - segment B 的 f0Shift（per-segment，B2）
      */
-    async _synthesizeSegmentPair(segANotes, segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, segAStartBeat = 0, segBStartBeat = 0) {
+    async _synthesizeSegmentPair(segANotes, segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, segAStartBeat = 0, segBStartBeat = 0, abortSignal = null) {
+        throwIfCancelled(abortSignal);
         // 多 segment 路径：传 segStartBeat 让 notesToSequences 正确索引绝对 pitchCurveF0
         const offsetA = (segAStartBeat / bpm) * 60;
         const offsetB = (segBStartBeat / bpm) * 60;
@@ -1845,8 +2301,8 @@ class OnnxSVSPipeline {
         const framesB = seqB.f0Ids.length;
 
         if (framesA === 0 && framesB === 0) return [{ audio: [], frames: 0 }, { audio: [], frames: 0 }];
-        if (framesA === 0) return [{ audio: [], frames: 0 }, await this._synthesizeSegment(segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segBStartBeat)];
-        if (framesB === 0) return [await this._synthesizeSegment(segANotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segAStartBeat), { audio: [], frames: 0 }];
+        if (framesA === 0) return [{ audio: [], frames: 0 }, await this._synthesizeSegment(segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segBStartBeat, abortSignal)];
+        if (framesB === 0) return [await this._synthesizeSegment(segANotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segAStartBeat, abortSignal), { audio: [], frames: 0 }];
 
         console.log(`[OnnxSVSPipeline] Batch synthesis: segA=${framesA}frames, segB=${framesB}frames`);
 
@@ -1863,12 +2319,16 @@ class OnnxSVSPipeline {
                 ptMelData, ptFrameCount,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
+                cfgScheduleOpts: this._currentCfgScheduleOpts,
+                dynamicThresholdOpts: this._currentDynamicThresholdOpts,
             },
             {
                 sequences: seqB, tokenCount: seqB.tokenCount, totalFrames: framesB,
                 ptMelData, ptFrameCount,
                 totalSteps, cfgStrength, cfgRescale,
                 npuDiffBatchSize, npuVocoderBatchSize,
+                cfgScheduleOpts: this._currentCfgScheduleOpts,
+                dynamicThresholdOpts: this._currentDynamicThresholdOpts,
             },
         ], webnnOnProgress);
         const ms = performance.now() - t0;
@@ -1956,8 +2416,12 @@ class OnnxSVSPipeline {
         }
         await this.ensureAllModelsLoaded();
         this._currentF0Hz = null;
+        // Task 15: reset per-frame F0 curve for F0-aware chunked diffusion.
+        this._currentPitchCurveF0 = null;
         const onProgress = options.onProgress || (() => {});
         const onChunkAudio = options.onChunkAudio || null;
+        const abortSignal = options.abortSignal || null;
+        throwIfCancelled(abortSignal);
 
         if (!fragments || fragments.length === 0) {
             return new Float32Array(0);
@@ -1971,7 +2435,7 @@ class OnnxSVSPipeline {
         const chunkFrames = firstOpts.diffStepChunkFrames || 500;
         const overlapFrames = firstOpts.diffStepOverlapFrames !== undefined ? firstOpts.diffStepOverlapFrames : 50;
         const totalSteps = firstOpts.nSteps || DEFAULT_DIFF_STEPS;
-        const cfgStrength = firstOpts.cfg || CFG_STRENGTH;
+        const cfgStrength = firstOpts.cfg !== undefined ? firstOpts.cfg : CFG_STRENGTH;
         const cfgRescale = firstOpts.cfgRescale !== undefined ? firstOpts.cfgRescale : CFG_RESCALE;
         if (fragments.length > 1) {
             for (let fi = 1; fi < fragments.length; fi++) {
@@ -1991,12 +2455,25 @@ class OnnxSVSPipeline {
             chunkFrames,
             overlapFrames,
         };
+        // 求解器名称（取首片段配置，多片段必须一致）
+        this._currentSamplerName = firstOpts.sampler || DEFAULT_SOLVER;
+        // Task 11: CFG 强度曲线调度（取首片段配置，多片段必须一致）
+        this._currentCfgScheduleOpts = {
+            mode: firstOpts.cfgScheduleMode || 'linear',
+            cfgStrengthStart: firstOpts.cfgStrengthStart ?? null,
+            keyframes: firstOpts.cfgScheduleKeyframes ?? null,
+        };
+        // Dynamic thresholding (arXiv:2507.08965): per-frame percentile clipping
+        this._currentDynamicThresholdOpts = firstOpts.dynamicThresholdEnabled
+            ? { enabled: true, percentile: firstOpts.dynamicThresholdPercentile ?? 0.995 }
+            : null;
 
         console.log(`[OnnxSVSPipeline] synthesizeMultiStreaming: ${fragments.length} fragments, chunkEnabled=${chunkEnabled}, chunkFrames=${chunkFrames}`);
 
         // ===== Phase 1: 逐分片准备 =====
         const prepared = [];
         for (let fi = 0; fi < fragments.length; fi++) {
+            throwIfCancelled(abortSignal);
             const frag = fragments[fi];
             const fragOpts = frag.options || {};
             const filledNotes = this._fillNoteGaps(frag.notes);
@@ -2005,7 +2482,7 @@ class OnnxSVSPipeline {
                 continue;
             }
 
-            // autoShift F0 计算（简化版，复用 _synthesizeImpl 的逻辑）
+            // autoShift F0 计算 —— 局部 autoShift：按子段独立计算 f0Shift
             const autoShift = fragOpts.autoShift || false;
             const pitchShift = fragOpts.pitchShift || 0;
             const refAudioWavBuffer = fragOpts.refAudioWavBuffer || null;
@@ -2018,47 +2495,67 @@ class OnnxSVSPipeline {
             }
 
             let f0Shift = 0;
+            let localSegShifts = null; // 非空时用 _applyLocalF0Shifts 代替全局 f0Shift
+
             if (autoShift && pitchShift === 0) {
-                const targetF0 = this.buildF0FrameSequence(filledNotes, bpm, f0Envelope, pitchCurveF0);
-                const targetNonZero = [];
-                for (let i = 0; i < targetF0.length; i++) {
-                    if (targetF0[i] > 0) targetNonZero.push(targetF0[i]);
-                }
-                let refF0 = null;
+                // 提取参考 F0（所有子段共用）
+                let refMedian = null;
+                let refMedianPitch = null;
                 if (refAudioWavBuffer) {
+                    let refF0 = null;
                     try {
                         refF0 = await this._extractRefF0WithFallback(refAudioWavBuffer, fragOpts.refF0Extractor || null);
                     } catch (e) {
                         console.warn(`[MultiStream] Fragment ${fi} ref F0 extraction failed:`, e.message);
                     }
-                }
-                if (refF0 && refF0.length > 0) {
-                    const refNonZero = [];
-                    for (let i = 0; i < refF0.length; i++) {
-                        if (refF0[i] > 0) refNonZero.push(refF0[i]);
-                    }
-                    if (refNonZero.length > 0 && targetNonZero.length > 0) {
-                        const refMedian = this._median(refNonZero);
-                        const targetMedian = this._median(targetNonZero);
-                        f0Shift = Math.round(Math.log2(refMedian / targetMedian) * 1200 / 100);
-                    } else if (targetNotePitches.length > 0) {
-                        const refNotePitches = await this._extractRefNotePitchesAsync(refAudioWavBuffer);
-                        if (refNotePitches && refNotePitches.length > 0) {
-                            f0Shift = Math.round(this._median(refNotePitches) - this._median(targetNotePitches));
+                    if (refF0 && refF0.length > 0) {
+                        const refNonZero = [];
+                        for (let i = 0; i < refF0.length; i++) {
+                            if (refF0[i] > 0) refNonZero.push(refF0[i]);
+                        }
+                        if (refNonZero.length > 0) {
+                            refMedian = this._median(refNonZero);
                         }
                     }
-                } else if (targetNotePitches.length > 0) {
-                    const refNotePitches = fragOpts.refNotePitches || fragOpts.refMidiNotes || null;
-                    if (refNotePitches && refNotePitches.length > 0) {
-                        f0Shift = Math.round(this._median(refNotePitches) - this._median(targetNotePitches));
+                    if (refMedian === null && targetNotePitches.length > 0) {
+                        const refNotePitches = await this._extractRefNotePitchesAsync(refAudioWavBuffer);
+                        if (refNotePitches && refNotePitches.length > 0) {
+                            refMedianPitch = this._median(refNotePitches);
+                        }
                     }
                 }
-                const clampedShift = this._clampAutoShift(f0Shift, targetNotePitches);
-                if (clampedShift !== f0Shift) f0Shift = clampedShift;
+                if (refMedian === null && refMedianPitch === null && targetNotePitches.length > 0) {
+                    const refNotePitches = fragOpts.refNotePitches || fragOpts.refMidiNotes || null;
+                    if (refNotePitches && refNotePitches.length > 0) {
+                        refMedianPitch = this._median(refNotePitches);
+                    }
+                }
+
+                if (refMedian !== null || refMedianPitch !== null) {
+                    // Use one shift for the whole fragment. Reusing the same
+                    // short reference median for every local musical phrase
+                    // can make adjacent phrases alternate between +12/-12,
+                    // which destroys absolute MIDI pitch and weakens speaker
+                    // conditioning. Smart segmentation still controls
+                    // diffusion chunk boundaries, but never retunes phrases.
+                    const targetF0 = this.buildF0FrameSequence(filledNotes, bpm, f0Envelope, pitchCurveF0);
+                    const targetNonZero = [];
+                    for (let i = 0; i < targetF0.length; i++) {
+                        if (targetF0[i] > 0) targetNonZero.push(targetF0[i]);
+                    }
+                    if (refMedian !== null && targetNonZero.length > 0) {
+                        const targetMedian = this._median(targetNonZero);
+                        f0Shift = Math.round(Math.log2(refMedian / targetMedian) * 1200 / 100);
+                    } else if (refMedianPitch !== null && targetNotePitches.length > 0) {
+                        f0Shift = Math.round(refMedianPitch - this._median(targetNotePitches));
+                    }
+                    f0Shift = this._clampAutoShift(f0Shift, targetNotePitches);
+                    console.log(`[MultiStream] Fragment ${fi}: global autoShift=${f0Shift}`);
+                }
             } else {
                 f0Shift = pitchShift;
             }
-            if (this.languageOverride === 'ja' && targetNotePitches.length > 0) {
+            if (this.languageOverride === 'ja' && targetNotePitches.length > 0 && localSegShifts === null) {
                 f0Shift = this._clampJpPitchRange(f0Shift, targetNotePitches);
             }
 
@@ -2079,12 +2576,19 @@ class OnnxSVSPipeline {
                 }
             }
 
-            // 构建 sequences
-            const segments = this._buildVocalSegments(filledNotes, bpm);
-            const seg = segments[0];
-            const segNotes = seg.notes || filledNotes;
+            // 不调用 _buildVocalSegments 取 segments[0]：多分片流式路径中每个 fragment
+            // 已是独立单元，若 fragment 音符跨度 > 30s（LONG_AUDIO_THRESHOLD_SEC），
+            // _buildVocalSegments 会拆分为多段但此处仅取第一段，导致后续段落的音符被
+            // 丢弃——表现为"播放到某个时间点后后续全部没声音"。直接使用 filledNotes，
+            // 由 chunkPlan 的分块机制处理长片段的扩散推理，MAX_SAFE_FRAMES 仍作为安全上限。
+            const segNotes = filledNotes;
             const pitchCurveOffsetSec = 0;
-            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, pitchCurveOffsetSec);
+            // 局部 autoShift: 先用 f0Shift=0 构建 sequences，再施加逐帧 shift
+            const effectiveF0Shift = localSegShifts ? 0 : f0Shift;
+            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, effectiveF0Shift, pitchCurveOffsetSec);
+            if (localSegShifts) {
+                this._applyLocalF0Shifts(sequences, localSegShifts, bpm);
+            }
             let totalFrames = sequences.f0Ids.length;
             if (totalFrames === 0) {
                 console.log(`[MultiStream] Fragment ${fi}: 0 frames, skipping`);
@@ -2111,7 +2615,18 @@ class OnnxSVSPipeline {
             // 分块规划
             let chunkPlan = null;
             if (chunkEnabled) {
-                chunkPlan = this._diffusion._planChunks(totalFrames, chunkFrames, overlapFrames);
+                // Task 15: compute per-frame F0 slope for F0-aware chunk boundary
+                // selection (avoids splitting at F0 discontinuities). Matches the
+                // f0Slope computation in runDiffusionLoopChunked.
+                let f0Slope = null;
+                if (f0Hz && f0Hz.length >= 2) {
+                    f0Slope = new Float32Array(f0Hz.length);
+                    for (let i = 0; i < f0Hz.length - 1; i++) {
+                        f0Slope[i] = f0Hz[i + 1] - f0Hz[i];
+                    }
+                    f0Slope[f0Hz.length - 1] = 0;
+                }
+                chunkPlan = this._diffusion._planChunks(totalFrames, chunkFrames, overlapFrames, f0Slope);
             }
 
             // filledNotes[0].start is the first note's start beat within the fragment.
@@ -2178,6 +2693,7 @@ class OnnxSVSPipeline {
         for (let gi = 0; gi < globalChunks.length; gi++) {
             const gc = globalChunks[gi];
             const p = prepared[gc.prepIdx];
+            throwIfCancelled(abortSignal);
 
             if (gc.isChunked) {
                 // 分块路径：执行单个 diffusion chunk
@@ -2191,7 +2707,12 @@ class OnnxSVSPipeline {
                     isFP16: this.diffStepIsFP16,
                     useStaticShapes: this.useStaticShapes,
                     overlap: p.chunkPlan.overlap,
-                    fadeWindow: p.chunkPlan.fadeWindow,
+                    // 透传用户选择的推理参数，否则 _runSingleDiffusionChunk → runDiffusionLoop
+                    // 会 fallback 到默认值，导致多分片与单片段输出不一致
+                    samplerName: this._currentSamplerName,
+                    cfgScheduleOpts: this._currentCfgScheduleOpts,
+                    dynamicThresholdOpts: this._currentDynamicThresholdOpts,
+                    abortSignal,
                 };
                 const { newCommitted } = await this._diffusion._runSingleDiffusionChunk(
                     ctx, gc.spec, onProgress,
@@ -2243,7 +2764,9 @@ class OnnxSVSPipeline {
                 }
             } else {
                 // 无分块路径：整段 diffusion + vocoder
-                await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk);
+                // Task 15: set per-fragment F0 curve for F0-aware chunked diffusion.
+                this._currentPitchCurveF0 = p.f0Hz || null;
+                await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk, null, abortSignal);
                 await gpuDrain();
                 const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
                 // 同分块路径：segAudio[0] 对应 filledNotes[0].start，需加 firstNoteOffsetSample
@@ -2304,20 +2827,37 @@ class OnnxSVSPipeline {
         await this.ensureAllModelsLoaded();
         // Reset per-call F0 cache so a stale F0 from a previous synthesis cannot leak into SiFiGAN vocoder input
         this._currentF0Hz = null;
+        // Task 15: reset per-frame F0 curve for F0-aware chunked diffusion.
+        this._currentPitchCurveF0 = null;
         const onProgress = options.onProgress || (() => {});
+        const abortSignal = options.abortSignal || null;
+        throwIfCancelled(abortSignal);
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
         const totalSteps = options.nSteps || DEFAULT_DIFF_STEPS;
-        const cfgStrength = options.cfg || CFG_STRENGTH;
+        const cfgStrength = options.cfg !== undefined ? options.cfg : CFG_STRENGTH;
         const cfgRescale = options.cfgRescale !== undefined ? options.cfgRescale : CFG_RESCALE;
         const autoShift = options.autoShift || false;
         const pitchShift = options.pitchShift || 0;
+        const smartSegmentation = options.smartSegmentation || false;
         const npuDiffBatchSize = options.npuDiffBatchSize || 4;
         const npuVocoderBatchSize = options.npuVocoderBatchSize || 2;
         const onChunkAudio = options.onChunkAudio || null;
 
-        // diffStep 分块推理选项（仅预览路径传入，导出不传 → 默认关闭）
+        // 求解器名称（透传到 _runDiffusionLoop → diffusion.js）
+        this._currentSamplerName = options.sampler || DEFAULT_SOLVER;
+        // Task 11: CFG 强度曲线调度（透传到 _runDiffusionLoop → diffusion.js）
+        this._currentCfgScheduleOpts = {
+            mode: options.cfgScheduleMode || 'linear',
+            cfgStrengthStart: options.cfgStrengthStart ?? null,
+            keyframes: options.cfgScheduleKeyframes ?? null,
+        };
+        // Dynamic thresholding (arXiv:2507.08965): per-frame percentile clipping
+        // of CFG-predicted mel before rescale. Prevents over-exposure at high CFG.
+        this._currentDynamicThresholdOpts = options.dynamicThresholdEnabled
+            ? { enabled: true, percentile: options.dynamicThresholdPercentile ?? 0.995 }
+            : null;
         this._currentDiffStepChunkOpts = {
             enabled: options.diffStepChunk === true && !this.useStaticShapes,
             chunkFrames: options.diffStepChunkFrames || 500,
@@ -2415,6 +2955,67 @@ class OnnxSVSPipeline {
             }
         }
 
+        // 局部 autoShift（smartSegmentation）：在单段路径中按子段独立计算 f0Shift
+        // 使各段中位数都向参考中位数靠拢，而非全局单一偏移。
+        let localSegShifts = null;
+        if (false && smartSegmentation && autoShift && pitchShift === 0 && refAudioWavBuffer) {
+            let refMedian = null;
+            let refMedianPitch = null;
+            try {
+                const refF0 = await this._extractRefF0WithFallback(refAudioWavBuffer, options.refF0Extractor || null);
+                if (refF0 && refF0.length > 0) {
+                    const refNonZero = [];
+                    for (let i = 0; i < refF0.length; i++) {
+                        if (refF0[i] > 0) refNonZero.push(refF0[i]);
+                    }
+                    if (refNonZero.length > 0) refMedian = this._median(refNonZero);
+                }
+            } catch (_) {}
+            if (refMedian === null && targetNotePitches.length > 0) {
+                try {
+                    const refNotePitches = await this._extractRefNotePitchesAsync(refAudioWavBuffer);
+                    if (refNotePitches && refNotePitches.length > 0) {
+                        refMedianPitch = this._median(refNotePitches);
+                    }
+                } catch (_) {}
+                if (refMedianPitch === null) {
+                    const refNotePitches = options.refNotePitches || null;
+                    if (refNotePitches && refNotePitches.length > 0) {
+                        refMedianPitch = this._median(refNotePitches);
+                    }
+                }
+            }
+
+            if (refMedian !== null || refMedianPitch !== null) {
+                const segs = this._buildAutoShiftSegments(filledNotes, bpm);
+                if (segs.length > 1) {
+                    localSegShifts = [];
+                    for (const seg of segs) {
+                        const segPitches = seg.notes.filter(n => n.pitch >= 1).map(n => n.pitch);
+                        let segShift = 0;
+                        if (refMedian !== null) {
+                            const segTargetF0 = this.buildF0FrameSequence(seg.notes, bpm, f0Envelope, pitchCurveF0);
+                            const segNonZero = [];
+                            for (let i = 0; i < segTargetF0.length; i++) {
+                                if (segTargetF0[i] > 0) segNonZero.push(segTargetF0[i]);
+                            }
+                            if (segNonZero.length > 0) {
+                                segShift = Math.round(Math.log2(refMedian / this._median(segNonZero)) * 1200 / 100);
+                            }
+                        } else if (refMedianPitch !== null && segPitches.length > 0) {
+                            segShift = Math.round(refMedianPitch - this._median(segPitches));
+                        }
+                        segShift = this._clampAutoShift(segShift, segPitches);
+                        if (this.languageOverride === 'ja' && segPitches.length > 0) {
+                            segShift = this._clampJpPitchRange(segShift, segPitches);
+                        }
+                        localSegShifts.push({ startBeat: seg.startBeat, endBeat: seg.endBeat, f0Shift: segShift });
+                    }
+                    console.log(`[OnnxSVSPipeline] smartSegmentation: ${localSegShifts.length} segments, shifts=[${localSegShifts.map(s => s.f0Shift).join(', ')}]`);
+                }
+            }
+        }
+
         let ptMelData = null;
         let ptFrameCount = 0;
 
@@ -2436,6 +3037,10 @@ class OnnxSVSPipeline {
         }
 
         const segments = this._buildVocalSegments(filledNotes, bpm);
+        if (segments.length === 0) {
+            onProgress(100);
+            return new Float32Array(0);
+        }
 
         if (segments.length === 1) {
             const seg = segments[0];
@@ -2464,7 +3069,11 @@ class OnnxSVSPipeline {
                 console.log(`[OnnxSVSPipeline] Single-note context padding: +${restFrames} rest frames before/after`);
             }
 
-            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, pitchCurveOffsetSec);
+            const effectiveF0Shift = localSegShifts ? 0 : f0Shift;
+            const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, effectiveF0Shift, pitchCurveOffsetSec);
+            if (localSegShifts) {
+                this._applyLocalF0Shifts(sequences, localSegShifts, bpm);
+            }
             let totalFrames = sequences.f0Ids.length;
 
             if (totalFrames === 0) {
@@ -2506,13 +3115,23 @@ class OnnxSVSPipeline {
 
             // 提前设置 F0（分块流式路径在 diffusion 期间就需要 F0 片段）
             this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
+            // Task 15: same per-frame F0 curve drives F0-aware chunked diffusion
+            // boundary selection in _runDiffusionLoop → runDiffusionLoopChunked.
+            this._currentPitchCurveF0 = this._currentF0Hz;
             // 单 segment 路径流式推送：仅在没有 contextPadding 截取时启用，避免 totalSamples 不一致
             const singleSegOnChunk = onChunkAudio && !contextPadding ? onChunkAudio : null;
 
             // 检测是否走分块流式路径（diffusion chunk + 即时 vocoder）
             const chunkOpts = this._currentDiffStepChunkOpts;
+            // _planChunks 内部用 safeChunk = Math.max(50, chunkFrames)，当 safeChunk >=
+            // totalFrames 时返回 null（回退到整段 runDiffusionLoop，不触发 onChunkMel）。
+            // 若此处仅检查 totalFrames > chunkFrames，当 chunkFrames < 50 且
+            // chunkFrames < totalFrames <= 50 时会进入流式路径但 _planChunks 返回 null，
+            // 导致 segmentAudios 为空、audioData 全零（静音）。因此条件必须与
+            // _planChunks 的 safeChunk 逻辑一致。
+            const safeChunkFrames = Math.max(50, Math.floor(chunkOpts?.chunkFrames || 0));
             const useStreamingChunked = chunkOpts && chunkOpts.enabled && !this.useStaticShapes
-                && chunkOpts.chunkFrames > 0 && totalFrames > chunkOpts.chunkFrames
+                && chunkOpts.chunkFrames > 0 && totalFrames > safeChunkFrames
                 && singleSegOnChunk; // 流式推送可用时才走此路径
 
             if (useStreamingChunked) {
@@ -2541,7 +3160,7 @@ class OnnxSVSPipeline {
                     segmentAudios.push({ frameStart, audio: segAudio });
                 };
 
-                await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, onChunkMel);
+                await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, onChunkMel, abortSignal);
 
                 // 拼接各段音频为完整 audioData（用于缓存和返回）
                 let audioData = new Float32Array(totalSamplesEst);
@@ -2563,6 +3182,7 @@ class OnnxSVSPipeline {
                     const endSample = Math.min(startSample + validSamples, audioData.length);
                     audioData = audioData.subarray(startSample, endSample);
                 }
+                this._silenceNonVocalRegions(audioData, filledNotes, bpm, filledNotes[0]?.start || 0);
                 const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
                 if (audioData.length <= MAX_CACHE_SAMPLES) {
                     this._synthCachePut(cacheKey, audioData);
@@ -2573,26 +3193,34 @@ class OnnxSVSPipeline {
             }
 
             // ===== 常规路径：整段 diffusion → 整段 vocoder =====
-            await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50);
+            await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, null, abortSignal);
 
             // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
+            // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
             {
-                let xtNaN = 0, xtInf = 0, xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
                 const xtLen = xt.data.length;
+                let xtNaN = 0, xtInf = 0;
                 for (let i = 0; i < xtLen; i++) {
                     const v = xt.data[i];
                     if (Number.isNaN(v)) { xtNaN++; continue; }
-                    if (!Number.isFinite(v)) { xtInf++; continue; }
-                    if (v < xtMin) xtMin = v;
-                    if (v > xtMax) xtMax = v;
-                    xtSum += v;
-                    xtSumSq += v * v;
+                    if (!Number.isFinite(v)) { xtInf++; }
                 }
-                const xtMean = xtSum / xtLen;
-                const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
-                console.log(`[DiffusionDiag] OUTPUT xt (vocoder input): frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
                 if (xtNaN > 0 || xtInf > 0) {
                     console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! This will cause vocoder explosion!`);
+                }
+                if (_readDiagnosticMode()) {
+                    let xtMin = Infinity, xtMax = -Infinity, xtSum = 0, xtSumSq = 0;
+                    for (let i = 0; i < xtLen; i++) {
+                        const v = xt.data[i];
+                        if (Number.isNaN(v) || !Number.isFinite(v)) continue;
+                        if (v < xtMin) xtMin = v;
+                        if (v > xtMax) xtMax = v;
+                        xtSum += v;
+                        xtSumSq += v * v;
+                    }
+                    const xtMean = xtSum / xtLen;
+                    const xtStd = Math.sqrt(Math.max(0, xtSumSq / xtLen - xtMean * xtMean));
+                    console.log(`[DiffusionDiag] OUTPUT xt (vocoder input): frames=${totalFrames}, len=${xtLen}, NaN=${xtNaN}, Inf=${xtInf}, min=${xtMin.toFixed(6)}, max=${xtMax.toFixed(6)}, mean=${xtMean.toFixed(6)}, std=${xtStd.toFixed(6)}`);
                 }
             }
 
@@ -2613,6 +3241,7 @@ class OnnxSVSPipeline {
                 audioData = audioData.subarray(startSample, endSample);
             }
 
+            this._silenceNonVocalRegions(audioData, filledNotes, bpm, filledNotes[0]?.start || 0);
             const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120; // 2 分钟
             if (audioData.length <= MAX_CACHE_SAMPLES) {
                 this._synthCachePut(cacheKey, audioData);
@@ -2662,7 +3291,7 @@ class OnnxSVSPipeline {
         // 中位数都向参考中位数靠拢。调整量上限 ±5 半音，避免段边界处 f0Shift 跳变过大
         // （相邻段最大差 10 半音，由 SEGMENT_OVERLAP_SEC crossfade 平滑过渡）。
         // 仅在 autoShift 启用且多 segment 时生效；pitchShift 模式（用户指定固定偏移）不改。
-        const perSegAutoShift = autoShift && pitchShift === 0 && segments.length > 1;
+        const perSegAutoShift = false; // Preserve absolute MIDI pitch: autoShift is global, never segment-dependent.
         const globalNotePitches = perSegAutoShift
             ? filledNotes.filter(n => n.pitch >= 1).map(n => n.pitch)
             : [];
@@ -2683,6 +3312,33 @@ class OnnxSVSPipeline {
             console.log(`[OnnxSVSPipeline] Segment 0 leading rest prepended: ${firstSeg.notes[0].duration.toFixed(2)} beats`);
         }
 
+        // 分片级缓存预计算：长音频编辑时，未改动 segment 的输入（notes/bpm/f0/ref/segF0Shift）
+        // 与上次完全相同 → 音频相同，可直接复用缓存跳过 diffusion+vocoder，只重算改动 segment。
+        // 此处在前置休止符补齐之后计算键，确保键反映 segment 实际使用的 notes。
+        // segF0Shift 与循环内 _computeSegF0Shift 调用使用相同入参，结果一致。
+        //
+        // 适用范围与优雅降级（结果始终正确，仅命中率下降）：
+        //   - 最有效：pitch-only 编辑且 autoShift 关（或全局中位数稳定）→ 仅改动 segment 失效。
+        //   - autoShift 开启时，编辑触及全局中位数会使 globalTargetMedian 漂移 → 所有 segment
+        //     的 segF0Shift 变化 → _fs 后缀变化 → 全部分片失效（此时输出确实不同，失效正确）。
+        //   - 自定义音高曲线（pitchCurveF0 非空）随音符 start/duration 变化 → f0Hash 变化 →
+        //     全部分片失效。这两种场景下退化为整曲重算，行为与未引入分片缓存时一致。
+        const segCacheKeys = new Array(segments.length);
+        const segCachedAudios = new Array(segments.length);
+        let segCacheHits = 0;
+        for (let i = 0; i < segments.length; i++) {
+            const s = segments[i];
+            const sF0Shift = this._computeSegF0Shift(f0Shift, globalTargetMedian, s.notes);
+            const sKey = this._computeSegmentCacheKey(s.notes, bpm, options, s.startBeat, sF0Shift, ptFrameCount);
+            segCacheKeys[i] = sKey;
+            const hit = this._segCacheGet(sKey);
+            segCachedAudios[i] = hit;
+            if (hit) segCacheHits++;
+        }
+        if (segCacheHits > 0) {
+            console.log(`[OnnxSVSPipeline] Segment cache: ${segCacheHits}/${segments.length} hits, skipping synthesis for unchanged segments`);
+        }
+
         while (segIdx < segments.length) {
             // 段间 GPU 排空：让事件循环处理 GC 并给 DML 50ms 时间回收上一段的
             // 中间张量（mel/f0/waveform/transformer 注意力），降低长音频多段合成时
@@ -2692,8 +3348,10 @@ class OnnxSVSPipeline {
                 await gpuDrain();
             }
 
-            if (useBatch && segIdx + 1 < segments.length) {
+            if (useBatch && segIdx + 1 < segments.length && !segCachedAudios[segIdx] && !segCachedAudios[segIdx + 1]) {
                 // Pair two segments for batch=4 diffusion
+                // 仅当两个 segment 均未命中分片缓存时才走 batch 路径；任一命中则落到
+                // 下面的单 segment 路径（命中段直接复用缓存，未命中段单独推理）。
                 const segA = segments[segIdx];
                 const segB = segments[segIdx + 1];
                 const pairProgressStart = 10 + segIdx * progressPerSegment;
@@ -2710,8 +3368,12 @@ class OnnxSVSPipeline {
                     ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
                     npuDiffBatchSize, npuVocoderBatchSize,
                     onProgress, pairProgressStart, pairProgressRange,
-                    segA.startBeat, segB.startBeat
+                    segA.startBeat, segB.startBeat, abortSignal
                 );
+
+                // 分片缓存写入：batch 合成的两段都是 miss（见上方条件），结果存入分片缓存
+                if (pairResult[0].audio.length > 0) this._segCachePut(segCacheKeys[segIdx], pairResult[0].audio);
+                if (pairResult[1].audio.length > 0) this._segCachePut(segCacheKeys[segIdx + 1], pairResult[1].audio);
 
                 // Write both segments' audio to finalAudio
                 for (let si = 0; si < 2; si++) {
@@ -2758,13 +3420,29 @@ class OnnxSVSPipeline {
             // Per-segment f0Shift (B2): 该 segment 独立计算偏移
             const segF0Shift = this._computeSegF0Shift(f0Shift, globalTargetMedian, seg.notes);
 
-            const segResult = await this._synthesizeSegment(
-                seg.notes, bpm, f0Envelope, pitchCurveF0, segF0Shift,
-                ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
-                npuDiffBatchSize, npuVocoderBatchSize,
-                onProgress, segProgressStart, segProgressRange,
-                null, seg.startBeat
-            );
+            // 分片缓存命中：直接复用上次该 segment 的音频，跳过 diffusion+vocoder。
+            // segCachedAudios[segIdx] 在循环前已查表（含 LRU 提升），此处直接取用。
+            let segResult;
+            const cachedSegAudio = segCachedAudios[segIdx];
+            if (cachedSegAudio) {
+                console.log(`[OnnxSVSPipeline] >>> SEGMENT CACHE HIT <<< seg=${segIdx} startBeat=${seg.startBeat.toFixed(2)} | skipping diffusion+vocoder for this segment`);
+                onProgress(Math.round(segProgressStart + segProgressRange));
+                // 下游只消费 segResult.audio（写入 finalAudio），无需 frames；
+                // 真实 mel 帧数在 _synthesizeSegment 内部使用，缓存命中路径不涉及。
+                segResult = { audio: cachedSegAudio };
+            } else {
+                segResult = await this._synthesizeSegment(
+                    seg.notes, bpm, f0Envelope, pitchCurveF0, segF0Shift,
+                    ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
+                    npuDiffBatchSize, npuVocoderBatchSize,
+                    onProgress, segProgressStart, segProgressRange,
+                    null, seg.startBeat, abortSignal
+                );
+                // 分片缓存写入：miss 后重算的结果存入，供后续未改动场景复用
+                if (segResult.audio.length > 0) {
+                    this._segCachePut(segCacheKeys[segIdx], segResult.audio);
+                }
+            }
 
             if (segResult.audio.length === 0) continue;
 
@@ -2815,6 +3493,7 @@ class OnnxSVSPipeline {
         const audioData = firstNoteStartSample > 0
             ? finalAudio.subarray(firstNoteStartSample)
             : finalAudio;
+        this._silenceNonVocalRegions(audioData, filledNotes, bpm, filledNotes[0]?.start || 0);
         const MAX_CACHE_SAMPLES = SAMPLE_RATE * 120;
         if (audioData.length <= MAX_CACHE_SAMPLES) {
             this._synthCachePut(cacheKey, audioData);
@@ -2890,7 +3569,7 @@ class OnnxSVSPipeline {
     /**
      * 加载指定Model
      */
-    async loadModel(sessionKey) {
+    async loadModel(sessionKey, options = {}) {
         if (this.sessions[sessionKey]) {
             return { success: true, alreadyLoaded: true };
         }
@@ -2914,13 +3593,8 @@ class OnnxSVSPipeline {
 
         let resolvedFile = modelFile;
         if (modelFile === 'diff_step_dml.onnx') {
-            // 在 JP 模式下检查 jpModelDir，否则检查 modelDir
-            const dmlPath = this._getModelPath('diff_step_dml.onnx');
-            let dmlExists = false;
-            try { await fs.promises.access(dmlPath); dmlExists = true; } catch (_) {}
-            if (!dmlExists) {
-                resolvedFile = 'diff_step.onnx';
-            }
+            // int8 优先 QDIT diffstep.onnx；其余检查 _dml 变体，缺失回退 diff_step.onnx
+            resolvedFile = await this._resolveDiffStepFile();
         }
         if (modelFile === 'vocoder_dml.onnx') {
             const vocDmlPath = path.join(this.modelDir, 'vocoder_dml.onnx');
@@ -2975,7 +3649,7 @@ class OnnxSVSPipeline {
         const sifiganDummy = isSifigan ? this._getSifiganDummyInputs() : null;
         try {
             const { session, ep } = await createSessionWithValidation(
-                modelPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes, sifiganDummy
+                modelPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, this.useStaticShapes, sifiganDummy, options.runValidation !== false
             );
             this.sessions[sessionKey] = session;
             this.sessionEPs[sessionKey] = ep;
@@ -2988,7 +3662,7 @@ class OnnxSVSPipeline {
                 console.warn(`[OnnxSVSPipeline] ${resolvedFile} NPU load failed, trying fallback: ${err.message.substring(0, 80)}`);
                 try {
                     const { session, ep } = await createSessionWithValidation(
-                        fallbackPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false, sifiganDummy
+                        fallbackPath, sessionKey, this.gpuDeviceName, this.dmlDeviceId, this.isFP16, false, sifiganDummy, options.runValidation !== false
                     );
                     this.sessions[sessionKey] = session;
                     this.sessionEPs[sessionKey] = ep;
@@ -3014,7 +3688,7 @@ class OnnxSVSPipeline {
                 if (fp32Exists) {
                     try {
                         const { session, ep } = await createSessionWithValidation(
-                            fp32Path, sessionKey, this.gpuDeviceName, this.dmlDeviceId, false, this.useStaticShapes, sifiganDummy
+                            fp32Path, sessionKey, this.gpuDeviceName, this.dmlDeviceId, false, this.useStaticShapes, sifiganDummy, options.runValidation !== false
                         );
                         this.sessions[sessionKey] = session;
                         this.sessionEPs[sessionKey] = ep;
@@ -3133,6 +3807,8 @@ class OnnxSVSPipeline {
         this._synthCache = null;
         this._synthCacheMap = null;
         this._synthCacheBytes = 0;
+        this._segCacheMap = null;
+        this._segCacheBytes = 0;
         this._currentF0Hz = null;
         console.log('[OnnxSVSPipeline] ONNX Runtime sessions released');
     }

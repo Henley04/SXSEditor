@@ -26,6 +26,17 @@ const state = {
   activeInlineEditNote: null,
 
   isResizing: false,
+
+  // 提取参数（由 extractionOptions 管理）
+  extractOptions: null,
+
+  // 合成音试听
+  synthPlaying: false,
+  synthSources: [],
+  synthContext: null,
+
+  // 电平/削波检测结果（加载时计算）
+  levelInfo: null,
 };
 
 // DOM element references (populated in initDomRefs)
@@ -48,6 +59,24 @@ const dom = {
   hscrollThumb: null,
   vscroll: null,
   vscrollThumb: null,
+  // 提取参数面板
+  extractPanel: null,
+  extractPanelBody: null,
+  extractStatus: null,
+  btnAudition: null,
+  btnTogglePanel: null,
+  presetSelect: null,
+  thresholdSelect: null,
+  smoothingSelect: null,
+  quantizationSelect: null,
+  rangeAuto: null,
+  f0Min: null,
+  f0Max: null,
+  minNote: null,
+  bpmAuto: null,
+  bpmInput: null,
+  normalizeCheck: null,
+  fcpeParamsNotice: null,
 };
 
 export function initDomRefs() {
@@ -68,6 +97,23 @@ export function initDomRefs() {
   dom.hscrollThumb = document.getElementById('midi-hscroll-thumb');
   dom.vscroll = document.getElementById('midi-vscroll');
   dom.vscrollThumb = document.getElementById('midi-vscroll-thumb');
+  dom.extractPanel = document.getElementById('extract-panel');
+  dom.extractPanelBody = document.getElementById('extract-panel-body');
+  dom.extractStatus = document.getElementById('extract-status');
+  dom.btnAudition = document.getElementById('btn-audition');
+  dom.btnTogglePanel = document.getElementById('btn-toggle-panel');
+  dom.presetSelect = document.getElementById('preset-select');
+  dom.thresholdSelect = document.getElementById('threshold-select');
+  dom.smoothingSelect = document.getElementById('smoothing-select');
+  dom.quantizationSelect = document.getElementById('quantization-select');
+  dom.rangeAuto = document.getElementById('range-auto');
+  dom.f0Min = document.getElementById('f0-min');
+  dom.f0Max = document.getElementById('f0-max');
+  dom.minNote = document.getElementById('min-note');
+  dom.bpmAuto = document.getElementById('bpm-auto');
+  dom.bpmInput = document.getElementById('bpm-input');
+  dom.normalizeCheck = document.getElementById('normalize-check');
+  dom.fcpeParamsNotice = document.getElementById('fcpe-params-notice');
 }
 
 export { state, dom };

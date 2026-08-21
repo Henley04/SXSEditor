@@ -60,6 +60,11 @@ describe('inference/pipeline/audioSegmentation', () => {
       expect(out.length).to.equal(1);
     });
 
+    it('should reject invalid BPM instead of entering a non-progressing loop', () => {
+      expect(() => seg.buildVocalSegments([{ start: 0, duration: 40, lyric: 'a' }], 0)).to.throw(RangeError);
+      expect(() => seg.buildVocalSegments([{ start: 0, duration: 40, lyric: 'a' }], NaN)).to.throw(RangeError);
+    });
+
     it('should return single segment when total duration <= threshold', () => {
       const notes = [{ start: 0, duration: 4, lyric: 'a' }];
       const out = seg.buildVocalSegments(notes, 120);
@@ -118,6 +123,17 @@ describe('inference/pipeline/audioSegmentation', () => {
 
     it('should differ for arrays differing only in length', () => {
       expect(seg.hashArray([1, 2, 3])).to.not.equal(seg.hashArray([1, 2, 3, 0]));
+    });
+
+    it('should preserve fractional curve edits in the cache hash', () => {
+      expect(seg.hashArray([0.10, 0.20])).to.not.equal(seg.hashArray([0.10, 0.21]));
+    });
+
+    it('should include the final element when sampling long arrays', () => {
+      const a = new Float32Array(5001);
+      const b = new Float32Array(5001);
+      b[b.length - 1] = 0.25;
+      expect(seg.hashArray(a)).to.not.equal(seg.hashArray(b));
     });
 
     it('should handle empty array', () => {
@@ -226,6 +242,96 @@ describe('inference/pipeline/audioSegmentation', () => {
       expect(noChunk).to.not.equal(chunkOn);
       expect(chunkOn).to.not.equal(chunkDifferentSize);
       expect(chunkOn).to.not.equal(chunkDifferentOverlap);
+    });
+
+    // Task 14: refHash FNV-1a full-length — two buffers sharing the first 4000
+    // bytes (old scan window) but differing later must produce different cache
+    // keys. The old "first 4000 bytes with stride" scan would miss the
+    // difference and cause a false cache hit on long reference audio.
+    it('should differ for ref buffers sharing first 4000 bytes but differing later (Task 14)', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      // Build two 10000-byte buffers that are identical in the first 4000 bytes
+      // (covers the old scan window entirely) but differ in bytes 4000..10000.
+      const len = 10000;
+      const bufA = new Uint8Array(len);
+      const bufB = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        // Same low-byte pattern across both buffers for the first 4000 bytes
+        const v = (i * 7) & 0xff;
+        bufA[i] = v;
+        bufB[i] = v;
+      }
+      // Diverge only after the old 4000-byte scan window
+      for (let i = 4000; i < len; i++) {
+        bufA[i] = (i * 3) & 0xff;
+        bufB[i] = (i * 5) & 0xff;
+      }
+      const keyA = seg.computeSynthCacheKey(notes, 120, { refAudioWavBuffer: bufA });
+      const keyB = seg.computeSynthCacheKey(notes, 120, { refAudioWavBuffer: bufB });
+      expect(keyA).to.not.equal(keyB);
+    });
+
+    it('should produce identical cache key for identical ref buffers (Task 14 determinism)', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      const len = 8000;
+      const bufA = new Uint8Array(len);
+      const bufB = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
+        bufA[i] = (i * 13) & 0xff;
+        bufB[i] = (i * 13) & 0xff;
+      }
+      const keyA = seg.computeSynthCacheKey(notes, 120, { refAudioWavBuffer: bufA });
+      const keyB = seg.computeSynthCacheKey(notes, 120, { refAudioWavBuffer: bufB });
+      expect(keyA).to.equal(keyB);
+    });
+  });
+
+  describe('computeSegmentCacheKey', () => {
+    it('should produce a string key extending the synth cache key', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      const key = seg.computeSegmentCacheKey(notes, 120, {}, 0, 0, 50);
+      expect(key).to.be.a('string');
+      expect(key.length).to.be.greaterThan(0);
+      // 应包含 segStartBeat / segF0Shift / ptFrameCount 后缀
+      expect(key).to.contain('_sb0_fs0_pt50');
+    });
+
+    it('should be deterministic for identical inputs', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      expect(seg.computeSegmentCacheKey(notes, 120, {}, 4, 2, 50))
+        .to.equal(seg.computeSegmentCacheKey(notes, 120, {}, 4, 2, 50));
+    });
+
+    it('should differ when segStartBeat changes (pitchCurveF0 is absolute-time indexed)', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      expect(seg.computeSegmentCacheKey(notes, 120, {}, 0, 0, 50))
+        .to.not.equal(seg.computeSegmentCacheKey(notes, 120, {}, 16, 0, 50));
+    });
+
+    it('should differ when segF0Shift changes (per-segment f0Shift B2)', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      expect(seg.computeSegmentCacheKey(notes, 120, {}, 0, 0, 50))
+        .to.not.equal(seg.computeSegmentCacheKey(notes, 120, {}, 0, 3, 50));
+    });
+
+    it('should differ when ptFrameCount changes', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      expect(seg.computeSegmentCacheKey(notes, 120, {}, 0, 0, 50))
+        .to.not.equal(seg.computeSegmentCacheKey(notes, 120, {}, 0, 0, 20));
+    });
+
+    it('should differ when segment notes change (regression: editing one segment must not hit another segment cache)', () => {
+      const n1 = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      const n2 = [{ lyric: 'a', pitch: 64, start: 0, duration: 1 }];
+      expect(seg.computeSegmentCacheKey(n1, 120, {}, 0, 0, 50))
+        .to.not.equal(seg.computeSegmentCacheKey(n2, 120, {}, 0, 0, 50));
+    });
+
+    it('should share the base with computeSynthCacheKey (segment key = base + suffix)', () => {
+      const notes = [{ lyric: 'a', pitch: 60, start: 0, duration: 1 }];
+      const base = seg.computeSynthCacheKey(notes, 120, { nSteps: 32, cfg: 3.0 });
+      const segKey = seg.computeSegmentCacheKey(notes, 120, { nSteps: 32, cfg: 3.0 }, 8, -2, 30);
+      expect(segKey.startsWith(base)).to.equal(true);
     });
   });
 

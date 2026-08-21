@@ -6,7 +6,6 @@ const fs = require('fs');
 const {
   MODEL_FILE_MANIFEST,
   PRECISION_SUBDIR_MAP,
-  PRECISION_SUBDIR_PRECESIONS,
   getLocalFilePath,
   getManifestForPrecision,
   isSvsModelFile,
@@ -209,8 +208,8 @@ describe('Model Path Consistency (using actual modelManager functions)', () => {
 });
 
 describe('Pipeline Constants Consistency', () => {
-  it('VOCODER_CHUNK_FRAMES should be 1008', () => {
-    expect(VOCODER_CHUNK_FRAMES).to.equal(1008);
+  it('VOCODER_CHUNK_FRAMES should be 1024', () => {
+    expect(VOCODER_CHUNK_FRAMES).to.equal(1024);
   });
 
   it('NPU_VOCODER_SEQ_LEN should be 500', () => {

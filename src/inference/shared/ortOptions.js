@@ -27,7 +27,7 @@ function _getSettings() {
     try {
         const { loadSettings } = require('../../main/settings');
         return loadSettings();
-    } catch (err) {
+    } catch (_err) {
         // settings 模块不可用时退化为空对象，让所有选项走 ORT 默认值
         return {};
     }

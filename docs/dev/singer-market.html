@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Singer Market — SXSEditor Developer Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="../user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="dev"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="build.html" data-i18n="sidebar.dev">Developer Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Singer Market</span><span data-lang="zh">歌手市场</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Singer Market</span>
+        <span data-lang="zh">歌手市场</span>
+      </h1>
+
+      <p data-lang="en">The <strong>Singer Market</strong> is a self-hosted file-sharing backend (project name <code>singer-files</code>) plus an in-app Electron window that proxies to it. The backend is a single Cloudflare Worker backed by D1 (metadata), KV (rate-limit + token cache), and Backblaze B2 (object storage). The frontend is <code>src/singerMarket.js</code> + <code>src/singerMarket.html</code>; all HTTP is funneled through <code>src/main/singerMarketIpc.js</code> in the Electron main process.</p>
+      <p data-lang="zh"><strong>歌手市场</strong> 由自托管的文件分享后端（项目名 <code>singer-files</code>）和应用内 Electron 窗口共同组成。后端是单个 Cloudflare Worker，由 D1（元数据）、KV（限流 + 令牌缓存）和 Backblaze B2（对象存储）支撑。前端为 <code>src/singerMarket.js</code> + <code>src/singerMarket.html</code>；所有 HTTP 流量都经由 Electron 主进程中的 <code>src/main/singerMarketIpc.js</code> 转发。</p>
+
+      <p data-lang="en">For end-user usage, see the <a href="../user/singer-market.html">User Guide — Singer Market</a>. This page covers the architecture, the IPC proxy contract, the REST API the proxy calls, and how to self-host or extend the backend.</p>
+      <p data-lang="zh">面向最终用户的使用说明见 <a href="../user/singer-market.html">用户指南 — 歌手市场</a>。本页涵盖架构、IPC 代理契约、代理所调用的 REST API，以及如何自托管或扩展后端。</p>
+
+      <h2>
+        <span data-lang="en">Architecture at a Glance</span>
+        <span data-lang="zh">架构概览</span>
+      </h2>
+      <pre><code>┌────────────────────────────────────────────────────────────────┐
+│  SXSEditor (Electron)                                          │
+│                                                                │
+│  singerMarket window (renderer)  ◄──►  singerMarketIpc (main)  │
+│  src/singerMarket.js + .html         src/main/singerMarketIpc.js│
+│  - toolbar / grid / dialogs          - token persistence        │
+│  - window.electronAPI.singerMarket.* - multipart builder        │
+│  - never touches the network         - Bearer header injection  │
+│                                      - native file pickers      │
+└────────────────────────────────┬───────────────────────────────┘
+                                 │ HTTPS (Node https module)
+                                 ▼
+┌────────────────────────────────────────────────────────────────┐
+│  Cloudflare Worker (singer-files)                              │
+│  https://singer-files.&lt;acct&gt;.workers.dev                       │
+│  - router.js      - lib/auth.js (sessions + API keys + rate)   │
+│  - lib/b2.js      - lib/storage.js (B2 adapter)                │
+│  - lib/db.js      - lib/quota.js (circuit breaker)             │
+│  - handlers/*     - ui_user.js / ui_admin.js (inline SPAs)     │
+└──────────────┬─────────────────────┬───────────────────┬────────┘
+               │                     │                   │
+               ▼                     ▼                   ▼
+        ┌────────────┐         ┌──────────┐        ┌──────────┐
+        │ Backblaze  │         │  D1 DB   │        │   KV     │
+        │  B2 bucket │         │singer_   │        │ rate-    │
+        │singer-files│         │  files   │        │ limit +  │
+        │  (blobs)   │         │ (8 tables)│       │ B2 cache │
+        └────────────┘         └──────────┘        └──────────┘</code></pre>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Layer</span><span data-lang="zh">层</span></th>
+            <th><span data-lang="en">Tech</span><span data-lang="zh">技术</span></th>
+            <th><span data-lang="en">Holds</span><span data-lang="zh">承载内容</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Edge compute</span><span data-lang="zh">边缘计算</span></td>
+            <td><span data-lang="en">Cloudflare Workers</span><span data-lang="zh">Cloudflare Workers</span></td>
+            <td><span data-lang="en">Routing, auth, rate limit, business logic, inline SPAs.</span><span data-lang="zh">路由、鉴权、限流、业务逻辑、内嵌 SPA。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Blob storage</span><span data-lang="zh">对象存储</span></td>
+            <td><span data-lang="en">Backblaze B2 (<code>singer-files</code> bucket)</span><span data-lang="zh">Backblaze B2（<code>singer-files</code> 桶）</span></td>
+            <td><span data-lang="en">Raw file bytes (auto-created on first upload).</span><span data-lang="zh">原始文件字节（首次上传时自动建桶）。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Metadata DB</span><span data-lang="zh">元数据数据库</span></td>
+            <td><span data-lang="en">Cloudflare D1 (SQLite)</span><span data-lang="zh">Cloudflare D1（SQLite）</span></td>
+            <td><span data-lang="en">8 tables: files, tags, file_tags, users, sessions, api_keys, audit_log, schema_meta.</span><span data-lang="zh">8 张表：files、tags、file_tags、users、sessions、api_keys、audit_log、schema_meta。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Rate limit + cache</span><span data-lang="zh">限流与缓存</span></td>
+            <td><span data-lang="en">Cloudflare KV (<code>SINGER_FILES_KV</code>)</span><span data-lang="zh">Cloudflare KV（<code>SINGER_FILES_KV</code>）</span></td>
+            <td><span data-lang="en">Per-IP-per-minute counters; cached B2 auth/upload tokens.</span><span data-lang="zh">每 IP 每分钟计数器；B2 鉴权/上传令牌缓存。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">In-app client</span><span data-lang="zh">应用内客户端</span></td>
+            <td><span data-lang="en">Electron window + main-process IPC proxy</span><span data-lang="zh">Electron 窗口 + 主进程 IPC 代理</span></td>
+            <td><span data-lang="en">UI; token persistence; multipart building; native file pickers.</span><span data-lang="zh">UI；令牌持久化；multipart 构造；原生文件选择。</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Why B2 over R2?</strong> B2's free tier gives 10 GB storage + 1 GB/day download, and through the Cloudflare Bandwidth Alliance the B2 → Workers egress leg is free. Workers → user egress is the only metered leg. The Worker streams uploads/downloads through itself so it can enforce auth, audit, and <code>Content-Disposition</code>.</p>
+          <p data-lang="zh"><strong>为何选 B2 而非 R2？</strong>B2 免费层提供 10 GB 存储 + 每天 1 GB 下载，且通过 Cloudflare Bandwidth Alliance，B2 → Workers 的出口流量免费。只有 Workers → 用户这一段才计费。Worker 把上传/下载都流经自身，以便实施鉴权、审计与 <code>Content-Disposition</code>。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">The Electron IPC Proxy</span>
+        <span data-lang="zh">Electron IPC 代理</span>
+      </h2>
+      <p data-lang="en">All HTTP traffic from the Singer Market window goes through <a href="https://github.com/Henley04/SXSEditor/blob/main/src/main/singerMarketIpc.js" target="_blank" rel="noopener"><code>src/main/singerMarketIpc.js</code></a> rather than <code>fetch</code> in the renderer. This is deliberate:</p>
+      <p data-lang="zh">歌手市场窗口的所有 HTTP 流量都经由 <a href="https://github.com/Henley04/SXSEditor/blob/main/src/main/singerMarketIpc.js" target="_blank" rel="noopener"><code>src/main/singerMarketIpc.js</code></a>，而非渲染进程中的 <code>fetch</code>。这是有意为之：</p>
+      <ol>
+        <li><span data-lang="en"><strong>CSP stays tight</strong> — the renderer CSP keeps <code>connect-src 'self'</code>; no need to widen it to the Worker URL.</span><span data-lang="zh"><strong>保持 CSP 严格</strong>— 渲染进程 CSP 仍为 <code>connect-src 'self'</code>，无需放宽到 Worker URL。</span></li>
+        <li><span data-lang="en"><strong>Token never enters renderer JS</strong> — the Bearer token is held by the main process; the renderer only sees success/error + parsed JSON.</span><span data-lang="zh"><strong>令牌不进入渲染进程 JS</strong>— Bearer 令牌由主进程持有；渲染进程只能看到成功/失败与解析后的 JSON。</span></li>
+        <li><span data-lang="en"><strong>Streaming uploads</strong> — large <code>.sxssinger</code> files are read with <code>fs.promises.readFile</code> in the main process and sent as a multipart body, so the renderer never holds the full buffer.</span><span data-lang="zh"><strong>流式上传</strong>— 大型 <code>.sxssinger</code> 文件由主进程用 <code>fs.promises.readFile</code> 读取并以 multipart body 发送，渲染进程无需持有完整 buffer。</span></li>
+      </ol>
+
+      <h3><span data-lang="en">IPC channels</span><span data-lang="zh">IPC 通道</span></h3>
+      <p data-lang="en">All channels are prefixed <code>singer-market:</code> and exposed on <code>window.electronAPI.singerMarket</code> via the preload bridge. Every handler resolves to <code>{ success: boolean, ...payload }</code> or <code>{ success: false, error: string }</code>.</p>
+      <p data-lang="zh">所有通道都以 <code>singer-market:</code> 为前缀，并通过 preload 桥接暴露在 <code>window.electronAPI.singerMarket</code> 上。每个处理器返回 <code>{ success: boolean, ...payload }</code> 或 <code>{ success: false, error: string }</code>。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">IPC channel</span><span data-lang="zh">IPC 通道</span></th>
+            <th><span data-lang="en">Backend call</span><span data-lang="zh">后端调用</span></th>
+            <th><span data-lang="en">Notes</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>singer-market:register</code></td>
+            <td><code>POST /api/auth/register</code></td>
+            <td><span data-lang="en">Auto-logs-in; persists token + user.</span><span data-lang="zh">自动登录；持久化令牌与用户信息。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:login</code></td>
+            <td><code>POST /api/auth/login</code></td>
+            <td><span data-lang="en">Persists <code>{ token, user }</code> to <code>userData/singer-market-token.json</code>.</span><span data-lang="zh">将 <code>{ token, user }</code> 持久化到 <code>userData/singer-market-token.json</code>。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:logout</code></td>
+            <td><code>POST /api/auth/logout</code></td>
+            <td><span data-lang="en">Best-effort server revoke; local session file is always deleted.</span><span data-lang="zh">尽力撤销服务端会话；本地会话文件总会被删除。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:me</code></td>
+            <td><code>GET /api/auth/me</code></td>
+            <td><span data-lang="en">Refreshes cached user; clears session on 401.</span><span data-lang="zh">刷新缓存的用户信息；401 时清除会话。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:list</code></td>
+            <td><code>GET /api/files?visibility=public&amp;...</code></td>
+            <td><span data-lang="en">Forces <code>visibility=public</code>; passes <code>page</code>, <code>limit</code>, <code>q</code>, <code>tags</code>, <code>tag_mode</code>.</span><span data-lang="zh">强制 <code>visibility=public</code>；透传 <code>page</code>、<code>limit</code>、<code>q</code>、<code>tags</code>、<code>tag_mode</code>。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:file-detail</code></td>
+            <td><code>GET /api/files/:id</code></td>
+            <td><span data-lang="en">Adds auth header so private files owned by the user are visible.</span><span data-lang="zh">附带鉴权头，使本人私有的文件可见。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:tags</code></td>
+            <td><code>GET /api/tags?...</code></td>
+            <td><span data-lang="en">Forwards <code>q</code>, <code>suggest</code>, <code>exact</code>, <code>limit</code>.</span><span data-lang="zh">透传 <code>q</code>、<code>suggest</code>、<code>exact</code>、<code>limit</code>。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:upload</code></td>
+            <td><code>POST /api/files</code> (multipart)</td>
+            <td><span data-lang="en">Reads file from disk in main process; builds multipart with <code>buildMultipart()</code>; requires auth.</span><span data-lang="zh">在主进程从磁盘读取文件；用 <code>buildMultipart()</code> 构造 multipart；需鉴权。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:download</code></td>
+            <td><code>GET /api/files/:id/download</code></td>
+            <td><span data-lang="en">Binary response (<code>encoding: null</code>); returns <code>{ buffer, filename, contentType }</code>.</span><span data-lang="zh">二进制响应（<code>encoding: null</code>）；返回 <code>{ buffer, filename, contentType }</code>。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:pick-file</code></td>
+            <td><span data-lang="en">— (native dialog)</span><span data-lang="zh">—（原生对话框）</span></td>
+            <td><span data-lang="en"><code>dialog.showOpenDialog</code> filtered to <code>.sxssinger</code>; authorizes path via <code>security.authorizePath</code>.</span><span data-lang="zh"><code>dialog.showOpenDialog</code> 限定 <code>.sxssinger</code>；通过 <code>security.authorizePath</code> 授权路径。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:pick-save-path</code></td>
+            <td><span data-lang="en">— (native dialog)</span><span data-lang="zh">—（原生对话框）</span></td>
+            <td><span data-lang="en"><code>dialog.showSaveDialog</code> with the original filename as default; authorizes path.</span><span data-lang="zh"><code>dialog.showSaveDialog</code>，默认文件名为原文件名；授权路径。</span></td>
+          </tr>
+          <tr>
+            <td><code>singer-market:health</code></td>
+            <td><code>GET /health</code></td>
+            <td><span data-lang="en">Liveness probe (db / b2 / kv binding status).</span><span data-lang="zh">存活探针（db / b2 / kv 绑定状态）。</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3><span data-lang="en">Session persistence</span><span data-lang="zh">会话持久化</span></h3>
+      <p data-lang="en">The proxy persists the session to <code>userData/singer-market-token.json</code> with mode <code>0o600</code> on POSIX (mode is ignored on Windows). The file shape is <code>{ token: "sfu_...", user: { id, username, is_admin } }</code>. The token format <code>sfu_</code> denotes a user session token (vs <code>sf_</code> for admin API keys).</p>
+      <p data-lang="zh">代理将会话持久化到 <code>userData/singer-market-token.json</code>，POSIX 上权限为 <code>0o600</code>（Windows 忽略权限）。文件结构为 <code>{ token: "sfu_...", user: { id, username, is_admin } }</code>。<code>sfu_</code> 前缀表示用户会话令牌（区别于 <code>sf_</code> 管理员 API key）。</p>
+      <pre><code>// singerMarketIpc.js — token persistence helpers
+function loadSession()   { /* read userData/singer-market-token.json */ }
+function saveSession(s)  { /* write with mode 0o600 */ }
+function clearSession()  { /* unlink the file */ }
+function getToken()      { return loadSession()?.token ?? null; }
+function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</code></pre>
+
+      <h3><span data-lang="en">Multipart builder</span><span data-lang="zh">Multipart 构造</span></h3>
+      <p data-lang="en"><code>buildMultipart(fields, file)</code> constructs a <code>multipart/form-data</code> body as a single <code>Buffer</code>, using a randomly-generated boundary. The <code>file</code> argument is <code>{ filename, data: Buffer, contentType? }</code>. This is intentionally dependency-free — the Worker accepts standard multipart, so we don't pull in <code>form-data</code>.</p>
+      <p data-lang="zh"><code>buildMultipart(fields, file)</code> 将 <code>multipart/form-data</code> body 构造为单个 <code>Buffer</code>，使用随机生成的 boundary。<code>file</code> 参数为 <code>{ filename, data: Buffer, contentType? }</code>。这里刻意不引入依赖——Worker 接受标准 multipart，因此无需引入 <code>form-data</code>。</p>
+
+      <h2>
+        <span data-lang="en">Backend REST API</span>
+        <span data-lang="zh">后端 REST API</span>
+      </h2>
+      <p data-lang="en">Base URL: <code>https://singer-files.&lt;acct&gt;.workers.dev</code>. The Worker exposes three credential kinds, tried in order: user session token (<code>sfu_…</code>), admin API key (<code>sf_…</code>), bootstrap admin key (the <code>ADMIN_BOOTSTRAP_API_KEY</code> secret). All are sent as <code>Authorization: Bearer &lt;token&gt;</code>.</p>
+      <p data-lang="zh">Base URL：<code>https://singer-files.&lt;acct&gt;.workers.dev</code>。Worker 接受三类凭据，按顺序尝试：用户会话令牌（<code>sfu_…</code>）、管理员 API key（<code>sf_…</code>）、引导管理员 key（<code>ADMIN_BOOTSTRAP_API_KEY</code> secret）。均以 <code>Authorization: Bearer &lt;token&gt;</code> 发送。</p>
+
+      <h3><span data-lang="en">Endpoints used by the in-app client</span><span data-lang="zh">应用内客户端使用的端点</span></h3>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Method &amp; path</span><span data-lang="zh">方法与路径</span></th>
+            <th><span data-lang="en">Auth</span><span data-lang="zh">鉴权</span></th>
+            <th><span data-lang="en">Purpose</span><span data-lang="zh">用途</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>POST /api/auth/register</code></td>
+            <td><span data-lang="en">none (rate-limited)</span><span data-lang="zh">无（限流）</span></td>
+            <td><span data-lang="en">Create user; auto-login; returns <code>{ user, token, expires_at }</code>.</span><span data-lang="zh">创建用户；自动登录；返回 <code>{ user, token, expires_at }</code>。</span></td>
+          </tr>
+          <tr>
+            <td><code>POST /api/auth/login</code></td>
+            <td><span data-lang="en">none (rate-limited)</span><span data-lang="zh">无（限流）</span></td>
+            <td><span data-lang="en">Login; returns <code>{ user, token, expires_at, token_type: "Bearer" }</code>.</span><span data-lang="zh">登录；返回 <code>{ user, token, expires_at, token_type: "Bearer" }</code>。</span></td>
+          </tr>
+          <tr>
+            <td><code>POST /api/auth/logout</code></td>
+            <td><span data-lang="en">user</span><span data-lang="zh">user</span></td>
+            <td><span data-lang="en">Revoke current session. Idempotent.</span><span data-lang="zh">撤销当前会话。幂等。</span></td>
+          </tr>
+          <tr>
+            <td><code>GET /api/auth/me</code></td>
+            <td><span data-lang="en">user</span><span data-lang="zh">user</span></td>
+            <td><span data-lang="en">Current user + session expiry.</span><span data-lang="zh">当前用户与会话过期时间。</span></td>
+          </tr>
+          <tr>
+            <td><code>GET /api/files</code></td>
+            <td><span data-lang="en">optional</span><span data-lang="zh">可选</span></td>
+            <td><span data-lang="en">List files. Query: <code>page</code>, <code>size</code>, <code>q</code>, <code>tags</code> (csv), <code>tag_mode</code> (<code>and</code>|<code>or</code>), <code>visibility</code>, <code>mine=1</code>, <code>sort</code>, <code>order</code>.</span><span data-lang="zh">列出文件。查询参数：<code>page</code>、<code>size</code>、<code>q</code>、<code>tags</code>（逗号分隔）、<code>tag_mode</code>（<code>and</code>|<code>or</code>）、<code>visibility</code>、<code>mine=1</code>、<code>sort</code>、<code>order</code>。</span></td>
+          </tr>
+          <tr>
+            <td><code>GET /api/files/:id</code></td>
+            <td><span data-lang="en">optional</span><span data-lang="zh">可选</span></td>
+            <td><span data-lang="en">File metadata (by id or slug). Private files require owner/admin auth.</span><span data-lang="zh">文件元数据（按 id 或 slug）。私有文件需 owner/admin 鉴权。</span></td>
+          </tr>
+          <tr>
+            <td><code>POST /api/files</code></td>
+            <td><span data-lang="en">user (or write key)</span><span data-lang="zh">user（或 write key）</span></td>
+            <td><span data-lang="en">Upload. Multipart (<code>file</code>, <code>description</code>, <code>tags</code>, <code>visibility</code>, ...) or raw body with <code>?filename=</code>.</span><span data-lang="zh">上传。Multipart（<code>file</code>、<code>description</code>、<code>tags</code>、<code>visibility</code> 等）或带 <code>?filename=</code> 的原始 body。</span></td>
+          </tr>
+          <tr>
+            <td><code>GET /api/files/:id/download</code></td>
+            <td><span data-lang="en">optional</span><span data-lang="zh">可选</span></td>
+            <td><span data-lang="en">Stream file bytes. <code>?inline=1</code> renders in-browser. Sets <code>Content-Disposition</code>.</span><span data-lang="zh">流式返回文件字节。<code>?inline=1</code> 浏览器内渲染。设置 <code>Content-Disposition</code>。</span></td>
+          </tr>
+          <tr>
+            <td><code>GET /api/tags</code></td>
+            <td><span data-lang="en">optional</span><span data-lang="zh">可选</span></td>
+            <td><span data-lang="en">Tag list / fuzzy search / autocomplete (<code>?suggest=1</code>) / exact check.</span><span data-lang="zh">标签列表 / 模糊搜索 / 自动补全（<code>?suggest=1</code>）/ 精确存在性检查。</span></td>
+          </tr>
+          <tr>
+            <td><code>GET /health</code></td>
+            <td><span data-lang="en">none</span><span data-lang="zh">无</span></td>
+            <td><span data-lang="en">Liveness; reports binding status (db / b2 / kv).</span><span data-lang="zh">存活探针；上报绑定状态（db / b2 / kv）。</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3><span data-lang="en">Other endpoints (admin / API-only)</span><span data-lang="zh">其他端点（管理员 / 仅 API）</span></h3>
+      <p data-lang="en">These are not currently invoked by the in-app window but exist on the backend for admin operations and API-only clients:</p>
+      <p data-lang="zh">应用内窗口当前不调用这些端点，但后端提供它们用于管理员操作与仅 API 客户端：</p>
+      <ul>
+        <li data-lang="en"><code>GET /api/auth/sessions</code>, <code>DELETE /api/auth/sessions/:prefix</code> — list / revoke the caller's sessions.</li>
+        <li data-lang="zh"><code>GET /api/auth/sessions</code>、<code>DELETE /api/auth/sessions/:prefix</code>— 列出 / 撤销调用者的会话。</li>
+        <li data-lang="en"><code>PATCH /api/files/:id</code>, <code>DELETE /api/files/:id</code> — update metadata / soft-delete (owner or admin).</li>
+        <li data-lang="zh"><code>PATCH /api/files/:id</code>、<code>DELETE /api/files/:id</code>— 更新元数据 / 软删除（owner 或 admin）。</li>
+        <li data-lang="en"><code>POST/PUT/DELETE /api/files/:id/tags</code> — add / replace / remove tags.</li>
+        <li data-lang="zh"><code>POST/PUT/DELETE /api/files/:id/tags</code>— 添加 / 替换 / 移除标签。</li>
+        <li data-lang="en"><code>GET /api/tags/:name/files</code> — files for a given tag.</li>
+        <li data-lang="zh"><code>GET /api/tags/:name/files</code>— 指定标签下的文件。</li>
+        <li data-lang="en"><code>POST /api/bulk/delete</code>, <code>/api/bulk/tag</code>, <code>/api/bulk/untag</code> — owner-scoped bulk ops (max 100 ids).</li>
+        <li data-lang="zh"><code>POST /api/bulk/delete</code>、<code>/api/bulk/tag</code>、<code>/api/bulk/untag</code>— owner 范围的批量操作（最多 100 个 id）。</li>
+        <li data-lang="en"><code>GET/POST /api/users</code>, <code>GET/PATCH/DELETE /api/users/:id</code> — user CRUD (admin).</li>
+        <li data-lang="zh"><code>GET/POST /api/users</code>、<code>GET/PATCH/DELETE /api/users/:id</code>— 用户 CRUD（admin）。</li>
+        <li data-lang="en"><code>GET/POST /api/keys</code>, <code>GET/DELETE /api/keys/:id</code> — API key management (admin).</li>
+        <li data-lang="zh"><code>GET/POST /api/keys</code>、<code>GET/DELETE /api/keys/:id</code>— API key 管理（admin）。</li>
+        <li data-lang="en"><code>GET /api/admin/usage</code> — quota + circuit-breaker dashboard (admin).</li>
+        <li data-lang="zh"><code>GET /api/admin/usage</code>— 配额 + 熔断器仪表盘（admin）。</li>
+        <li data-lang="en"><code>GET /api/audit</code> — audit log (admin).</li>
+        <li data-lang="zh"><code>GET /api/audit</code>— 审计日志（admin）。</li>
+        <li data-lang="en"><code>GET /f/:slug</code> — short URL download (same as <code>/api/files/:id/download</code> by slug).</li>
+        <li data-lang="zh"><code>GET /f/:slug</code>— 短链下载（按 slug 等同于 <code>/api/files/:id/download</code>）。</li>
+      </ul>
+      <p data-lang="en">Errors are JSON: <code>{ "error": { "code", "message", "required_scope"? } }</code>. Common <code>code</code>s map to <code>bad_request</code> (400), <code>unauthorized</code> (401), <code>forbidden</code> (403), <code>not_found</code> (404), <code>payload_too_large</code> (413), <code>too_many_requests</code> (429), <code>quota_exceeded</code> (429/503), <code>internal_error</code> (500).</p>
+      <p data-lang="zh">错误为 JSON：<code>{ "error": { "code", "message", "required_scope"? } }</code>。常见 <code>code</code> 对应：<code>bad_request</code> (400)、<code>unauthorized</code> (401)、<code>forbidden</code> (403)、<code>not_found</code> (404)、<code>payload_too_large</code> (413)、<code>too_many_requests</code> (429)、<code>quota_exceeded</code> (429/503)、<code>internal_error</code> (500)。</p>
+
+      <h2>
+        <span data-lang="en">Authentication &amp; Permission Model</span>
+        <span data-lang="zh">鉴权与权限模型</span>
+      </h2>
+      <p data-lang="en">Principals, in priority order:</p>
+      <p data-lang="zh">主体（按优先级排序）：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Principal</span><span data-lang="zh">主体</span></th>
+            <th><span data-lang="en">Can do</span><span data-lang="zh">可执行操作</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Anonymous</span><span data-lang="zh">匿名</span></td>
+            <td><span data-lang="en">Read public files &amp; lists (when <code>ALLOW_PUBLIC_READ=true</code>). Upload only if <code>ALLOW_ANONYMOUS_UPLOAD=true</code> (off by default).</span><span data-lang="zh">读取公开文件与列表（<code>ALLOW_PUBLIC_READ=true</code> 时）。仅当 <code>ALLOW_ANONYMOUS_UPLOAD=true</code>（默认关闭）时可上传。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Logged-in user</span><span data-lang="zh">登录用户</span></td>
+            <td><span data-lang="en">Read everything. Upload. Manage <strong>own</strong> files only (metadata, tags, delete). Cannot see other users' private files.</span><span data-lang="zh">读取全部内容。上传。仅管理<strong>自己</strong>的文件（元数据、标签、删除）。无法查看他人私有文件。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Admin user</span><span data-lang="zh">管理员用户</span></td>
+            <td><span data-lang="en">Everything a user can do, plus manage <strong>all</strong> files, users, API keys, audit log, quota dashboard.</span><span data-lang="zh">用户能做的全部，外加管理<strong>所有</strong>文件、用户、API key、审计日志、配额仪表盘。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">API key (read / write / admin)</span><span data-lang="zh">API key（read / write / admin）</span></td>
+            <td><span data-lang="en"><code>read</code>: read all files (incl. private). <code>write</code>: + upload/update/delete on all files (global writer). <code>admin</code>: + manage keys &amp; audit log.</span><span data-lang="zh"><code>read</code>：读取所有文件（含私有）。<code>write</code>：+ 对所有文件上传/更新/删除（全局写者）。<code>admin</code>：+ 管理 key 与审计日志。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">Every file records <code>user_id</code> (FK to <code>users.id</code>, <code>ON DELETE SET NULL</code>) and <code>uploaded_by</code> (label like <code>user:alice</code>, <code>key:abc123</code>, or <code>anonymous</code>). Modify/delete (<code>PATCH</code>/<code>DELETE</code>, tag ops) requires: owner match, OR admin, OR write-scoped API key. Public files are <strong>read-only to everyone except the owner/admin</strong>.</p>
+      <p data-lang="zh">每个文件记录 <code>user_id</code>（外键到 <code>users.id</code>，<code>ON DELETE SET NULL</code>）与 <code>uploaded_by</code>（标签如 <code>user:alice</code>、<code>key:abc123</code> 或 <code>anonymous</code>）。修改/删除（<code>PATCH</code>/<code>DELETE</code>、标签操作）需满足：owner 匹配，或 admin，或 write 范围 API key。公开文件对除 owner/admin 外的所有人<strong>只读</strong>。</p>
+
+      <h2>
+        <span data-lang="en">Data Model</span>
+        <span data-lang="zh">数据模型</span>
+      </h2>
+      <p data-lang="en">D1 schema (8 tables). Migrations live in <code>migrations/</code> on the <code>singer-files</code> backend repo:</p>
+      <p data-lang="zh">D1 schema（8 张表）。迁移脚本位于 <code>singer-files</code> 后端仓库的 <code>migrations/</code>：</p>
+      <pre><code>files          id, slug, original_name, storage_key, mime_type, size,
+               sha256, description, visibility, uploaded_by,
+               user_id (FK→users.id, ON DELETE SET NULL),
+               created_at, updated_at, expires_at, download_count,
+               is_deleted, meta (JSON)
+
+tags           id, name (case-insensitive unique), created_at
+file_tags      file_id, tag_id  (many-to-many)
+users          id, username (unique, case-insensitive),
+               password_hash (pbkdf2:sha256:...), display_name,
+               is_admin, is_active, created_at, last_login_at
+sessions       token (PK, 'sfu_<32>'), user_id (FK→users.id, CASCADE),
+               created_at, expires_at, last_used_at, user_agent, ip
+api_keys       id, key_hash (SHA-256), key_prefix, label, scopes,
+               uploaded_by, created_at, last_used_at, is_active
+audit_log      id, action, resource_type, resource_id, actor, ip,
+               user_agent, details (JSON), created_at
+schema_meta    key, value  (version tracking)</code></pre>
+      <p data-lang="en">B2 storage layout: each file is stored at <code>&lt;file-uuid&gt;/&lt;sanitized-filename&gt;</code> in the <code>singer-files</code> bucket. B2 object <code>X-Bz-Info-*</code> metadata carries <code>original_name</code>, <code>uploaded_by</code>, <code>uploaded_at</code>; <code>Content-Type</code> carries the declared MIME. The bucket is created as <code>allPublic</code>, but downloads go through the Worker so it can enforce auth, audit, and content-disposition.</p>
+      <p data-lang="zh">B2 存储布局：每个文件存于 <code>singer-files</code> 桶的 <code>&lt;file-uuid&gt;/&lt;sanitized-filename&gt;</code> 路径。B2 对象的 <code>X-Bz-Info-*</code> 元数据携带 <code>original_name</code>、<code>uploaded_by</code>、<code>uploaded_at</code>；<code>Content-Type</code> 携带声明的 MIME。桶以 <code>allPublic</code> 创建，但下载仍走 Worker，以便实施鉴权、审计与 content-disposition。</p>
+
+      <h2>
+        <span data-lang="en">Rate Limiting &amp; Circuit Breaker</span>
+        <span data-lang="zh">速率限制与熔断器</span>
+      </h2>
+      <p data-lang="en">Per-IP-per-minute counters in KV, keyed <code>rl:&lt;bucket&gt;:&lt;ip&gt;:&lt;minute&gt;</code>:</p>
+      <p data-lang="zh">KV 中按 IP 每分钟计数，键为 <code>rl:&lt;bucket&gt;:&lt;ip&gt;:&lt;minute&gt;</code>：</p>
+      <ul>
+        <li data-lang="en"><strong>Read</strong> (<code>RATE_LIMIT_READ</code>, default 600/min) — all GET endpoints.</li>
+        <li data-lang="zh"><strong>读</strong>（<code>RATE_LIMIT_READ</code>，默认 600/分钟）— 所有 GET 端点。</li>
+        <li data-lang="en"><strong>Write</strong> (<code>RATE_LIMIT_WRITE</code>, default 120/min) — all POST/PUT/PATCH/DELETE.</li>
+        <li data-lang="zh"><strong>写</strong>（<code>RATE_LIMIT_WRITE</code>，默认 120/分钟）— 所有 POST/PUT/PATCH/DELETE。</li>
+        <li data-lang="en"><strong>Auth</strong> (<code>RATE_LIMIT_AUTH</code>, default 60/min) — login/register attempts.</li>
+        <li data-lang="zh"><strong>登录</strong>（<code>RATE_LIMIT_AUTH</code>，默认 60/分钟）— 登录/注册尝试。</li>
+      </ul>
+      <p data-lang="en">KV is eventually consistent across edges, so the limiter is best-effort; if KV is unavailable it fails open. Over-limit responses are <code>429 too_many_requests</code> with a <code>Retry-After</code> header.</p>
+      <p data-lang="zh">KV 在各边缘节点间为最终一致，因此限流为尽力而为；KV 不可用时失败开放（请求仍放行）。超限响应为 <code>429 too_many_requests</code> 并带 <code>Retry-After</code> 头。</p>
+
+      <p data-lang="en">On top of rate limiting, a daily <strong>circuit breaker</strong> refuses new write operations when any counter hits its cap. Counters reset at UTC midnight.</p>
+      <p data-lang="zh">在限流之上还有每日 <strong>熔断器</strong>，当任一计数器达到上限时拒绝新的写操作。计数器在 UTC 午夜重置。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Check</span><span data-lang="zh">检查项</span></th>
+            <th><span data-lang="en">Default cap</span><span data-lang="zh">默认上限</span></th>
+            <th><span data-lang="en">Tripped behavior</span><span data-lang="zh">触发后行为</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>storage</code></td>
+            <td><span data-lang="en">9.8 GB (<code>CB_STORAGE_LIMIT_BYTES</code>)</span><span data-lang="zh">9.8 GB（<code>CB_STORAGE_LIMIT_BYTES</code>）</span></td>
+            <td><span data-lang="en">New upload would exceed → <code>503 quota_exceeded</code> (<code>storage_limit</code>).</span><span data-lang="zh">新上传会超限 → <code>503 quota_exceeded</code>（<code>storage_limit</code>）。</span></td>
+          </tr>
+          <tr>
+            <td><code>class_a</code></td>
+            <td><span data-lang="en">2,450 / day (<code>CB_CLASS_A_LIMIT</code>)</span><span data-lang="zh">每天 2,450（<code>CB_CLASS_A_LIMIT</code>）</span></td>
+            <td><span data-lang="en">B2 Class A transactions (uploads + deletes) → <code>429</code> (<code>class_a_limit</code>).</span><span data-lang="zh">B2 Class A 事务（上传 + 删除）→ <code>429</code>（<code>class_a_limit</code>）。</span></td>
+          </tr>
+          <tr>
+            <td><code>d1_writes</code></td>
+            <td><span data-lang="en">95,000 / day (<code>CB_D1_WRITES_LIMIT</code>)</span><span data-lang="zh">每天 95,000（<code>CB_D1_WRITES_LIMIT</code>）</span></td>
+            <td><span data-lang="en">D1 write operations → <code>429</code> (<code>d1_writes_limit</code>).</span><span data-lang="zh">D1 写操作 → <code>429</code>（<code>d1_writes_limit</code>）。</span></td>
+          </tr>
+          <tr>
+            <td><code>workers_req</code></td>
+            <td><span data-lang="en">95,000 / day (<code>CB_WORKERS_REQ_LIMIT</code>)</span><span data-lang="zh">每天 95,000（<code>CB_WORKERS_REQ_LIMIT</code>）</span></td>
+            <td><span data-lang="en">All Worker invocations → <code>429</code> (<code>workers_req_limit</code>); service effectively offline.</span><span data-lang="zh">所有 Worker 调用 → <code>429</code>（<code>workers_req_limit</code>）；服务事实上离线。</span></td>
+          </tr>
+          <tr>
+            <td><code>class_b</code></td>
+            <td><span data-lang="en">2,450 / day (<code>CB_CLASS_B_LIMIT</code>)</span><span data-lang="zh">每天 2,450（<code>CB_CLASS_B_LIMIT</code>）</span></td>
+            <td><span data-lang="en">B2 Class B transactions (downloads + lists). Informational; not used to block reads.</span><span data-lang="zh">B2 Class B 事务（下载 + 列表）。仅信息展示，不阻断读。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">Set any cap to <code>0</code> to disable that check. The full state is exposed at <code>GET /api/admin/usage</code> under <code>circuit_breaker</code>.</p>
+      <p data-lang="zh">将任一上限设为 <code>0</code> 即可禁用该项检查。完整状态在 <code>GET /api/admin/usage</code> 的 <code>circuit_breaker</code> 字段中暴露。</p>
+
+      <h2>
+        <span data-lang="en">Configuration Reference</span>
+        <span data-lang="zh">配置参考</span>
+      </h2>
+      <p data-lang="en">Non-secret config lives in <code>wrangler.toml</code> under <code>[vars]</code>; secrets are set via <code>npx wrangler secret put NAME</code>. Key knobs:</p>
+      <p data-lang="zh">非敏感配置位于 <code>wrangler.toml</code> 的 <code>[vars]</code>；secret 通过 <code>npx wrangler secret put NAME</code> 设置。关键项：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Variable</span><span data-lang="zh">变量</span></th>
+            <th><span data-lang="en">Default</span><span data-lang="zh">默认</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>ALLOW_PUBLIC_READ</code></td>
+            <td><code>true</code></td>
+            <td><span data-lang="en">Anonymous can read public files &amp; lists.</span><span data-lang="zh">匿名可读公开文件与列表。</span></td>
+          </tr>
+          <tr>
+            <td><code>ALLOW_USER_REGISTRATION</code></td>
+            <td><code>true</code></td>
+            <td><span data-lang="en">Self-register at <code>/api/auth/register</code>. Set <code>false</code> to require admin-created accounts.</span><span data-lang="zh">允许在 <code>/api/auth/register</code> 自助注册。设 <code>false</code> 则需管理员创建账号。</span></td>
+          </tr>
+          <tr>
+            <td><code>ALLOW_ANONYMOUS_UPLOAD</code></td>
+            <td><code>false</code></td>
+            <td><span data-lang="en">Anonymous uploads without login. Off by default — uploads must be owned.</span><span data-lang="zh">允许匿名上传。默认关闭 — 上传必须归属某用户。</span></td>
+          </tr>
+          <tr>
+            <td><code>MAX_UPLOAD_BYTES</code></td>
+            <td><code>104857600</code> (100 MB)</td>
+            <td><span data-lang="en">Hard upload size cap (Workers free-tier ceiling).</span><span data-lang="zh">上传大小硬上限（Workers 免费层上限）。</span></td>
+          </tr>
+          <tr>
+            <td><code>ALLOWED_MIMES</code></td>
+            <td><code>*</code></td>
+            <td><span data-lang="en">Comma-separated allow-list, or <code>*</code> for any.</span><span data-lang="zh">逗号分隔的白名单，或 <code>*</code> 表示任意。</span></td>
+          </tr>
+          <tr>
+            <td><code>DEFAULT_VISIBILITY</code></td>
+            <td><code>public</code></td>
+            <td><span data-lang="en">Default visibility for new uploads (<code>public</code> / <code>private</code>).</span><span data-lang="zh">新上传的默认可见性（<code>public</code> / <code>private</code>）。</span></td>
+          </tr>
+          <tr>
+            <td><code>SESSION_TTL_HOURS</code></td>
+            <td><code>720</code> (30 days)</td>
+            <td><span data-lang="en">User login session lifetime.</span><span data-lang="zh">用户登录会话生命周期。</span></td>
+          </tr>
+          <tr>
+            <td><code>CB_*</code></td>
+            <td><span data-lang="en">see table above</span><span data-lang="zh">见上表</span></td>
+            <td><span data-lang="en">Circuit-breaker caps. <code>0</code> disables a check.</span><span data-lang="zh">熔断器上限。<code>0</code> 禁用该项检查。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">Secrets: <code>B2_KEY_ID</code>, <code>B2_APP_KEY</code>, <code>B2_BUCKET_NAME</code>, <code>ADMIN_BOOTSTRAP_API_KEY</code> (delete after creating a permanent admin user).</p>
+      <p data-lang="zh">Secret：<code>B2_KEY_ID</code>、<code>B2_APP_KEY</code>、<code>B2_BUCKET_NAME</code>、<code>ADMIN_BOOTSTRAP_API_KEY</code>（创建永久管理员账号后应删除）。</p>
+
+      <h2>
+        <span data-lang="en">Self-Hosting</span>
+        <span data-lang="zh">自托管</span>
+      </h2>
+      <p data-lang="en">The <code>singer-files</code> backend is its own repository (not part of the SXSEditor repo). To run your own instance:</p>
+      <p data-lang="zh"><code>singer-files</code> 后端是独立仓库（不属于 SXSEditor 仓库）。自托管步骤：</p>
+      <ol>
+        <li><span data-lang="en"><strong>Cloudflare credentials</strong> — create an API token with Workers Scripts / D1 / KV Storage Edit permissions. Export <code>CLOUDFLARE_API_TOKEN</code> and <code>CLOUDFLARE_ACCOUNT_ID</code>.</span><span data-lang="zh"><strong>Cloudflare 凭据</strong>— 创建带 Workers Scripts / D1 / KV Storage Edit 权限的 API token。导出 <code>CLOUDFLARE_API_TOKEN</code> 与 <code>CLOUDFLARE_ACCOUNT_ID</code>。</span></li>
+        <li><span data-lang="en"><strong>B2 application key</strong> — at Backblaze, create a key with <code>readFiles</code>, <code>writeFiles</code>, <code>deleteFiles</code>, <code>listBuckets</code>, <code>listFiles</code>, <code>readBuckets</code>, <code>writeBuckets</code>. Copy the <code>keyID</code> and <code>applicationKey</code> (shown once).</span><span data-lang="zh"><strong>B2 application key</strong>— 在 Backblaze 创建含 <code>readFiles</code>、<code>writeFiles</code>、<code>deleteFiles</code>、<code>listBuckets</code>、<code>listFiles</code>、<code>readBuckets</code>、<code>writeBuckets</code> 的 key。复制 <code>keyID</code> 与 <code>applicationKey</code>（仅显示一次）。</span></li>
+        <li><span data-lang="en"><strong>Run setup</strong> — <code>npm install &amp;&amp; npm run setup</code>. The script creates the D1 DB + KV namespaces (idempotent), patches <code>wrangler.toml</code>, applies migrations, stores the B2 secrets and generates a bootstrap admin key (<code>sf_…</code>).</span><span data-lang="zh"><strong>执行 setup</strong>— <code>npm install &amp;&amp; npm run setup</code>。脚本会创建 D1 数据库 + KV 命名空间（幂等）、回写 <code>wrangler.toml</code>、应用迁移、存储 B2 secret 并生成引导管理员 key（<code>sf_…</code>）。</span></li>
+        <li><span data-lang="en"><strong>Deploy</strong> — <code>npm run deploy</code>. The B2 bucket is auto-created on the first upload.</span><span data-lang="zh"><strong>部署</strong>— <code>npm run deploy</code>。B2 桶在首次上传时自动创建。</span></li>
+        <li><span data-lang="en"><strong>Create a permanent admin</strong> — open <code>/admin</code>, paste the bootstrap key, create an admin user. Then <code>npx wrangler secret delete ADMIN_BOOTSTRAP_API_KEY</code>.</span><span data-lang="zh"><strong>创建永久管理员</strong>— 打开 <code>/admin</code>，粘贴引导 key，创建管理员账号。然后 <code>npx wrangler secret delete ADMIN_BOOTSTRAP_API_KEY</code>。</span></li>
+      </ol>
+
+      <h3><span data-lang="en">Pointing the SXSEditor client at your instance</span><span data-lang="zh">让 SXSEditor 客户端指向你的实例</span></h3>
+      <p data-lang="en">The in-app client hard-codes the backend URL in <code>src/main/singerMarketIpc.js</code>:</p>
+      <p data-lang="zh">应用内客户端在后端 URL 在 <code>src/main/singerMarketIpc.js</code> 中硬编码：</p>
+      <pre><code>const API_BASE = 'https://singer-files.15240287482.workers.dev';</code></pre>
+      <p data-lang="en">To use your own backend, fork the SXSEditor repo, change this constant, rebuild (<code>npm run package</code>), and distribute the resulting build. There is no UI setting for this — it's a build-time constant by design (it keeps the default UX zero-config for end users).</p>
+      <p data-lang="zh">若要使用自己的后端，请 fork SXSEditor 仓库，修改此常量，重新打包（<code>npm run package</code>），分发构建产物。此处没有 UI 设置——刻意做成构建时常量，让默认 UX 对终端用户零配置。</p>
+
+      <h2>
+        <span data-lang="en">Failure Modes</span>
+        <span data-lang="zh">故障模式</span>
+      </h2>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Scenario</span><span data-lang="zh">场景</span></th>
+            <th><span data-lang="en">Behavior</span><span data-lang="zh">行为</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">B2 not configured</span><span data-lang="zh">B2 未配置</span></td>
+            <td><span data-lang="en"><code>/health</code> → <code>degraded</code>. Upload/download → <code>503 service_unavailable</code>. Other endpoints work.</span><span data-lang="zh"><code>/health</code> → <code>degraded</code>。上传/下载 → <code>503 service_unavailable</code>。其他端点正常。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">B2 bucket missing</span><span data-lang="zh">B2 桶缺失</span></td>
+            <td><span data-lang="en">Auto-created as <code>allPublic</code> on first upload. No manual step.</span><span data-lang="zh">首次上传时自动创建为 <code>allPublic</code>。无需手动操作。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">B2 object missing (manually deleted)</span><span data-lang="zh">B2 对象缺失（被手动删除）</span></td>
+            <td><span data-lang="en">Download → <code>404</code> with audit-log entry <code>file.missing_blob</code>.</span><span data-lang="zh">下载 → <code>404</code>，审计日志记录 <code>file.missing_blob</code>。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">B2 auth token expired (24h)</span><span data-lang="zh">B2 鉴权令牌过期（24 小时）</span></td>
+            <td><span data-lang="en">Auto-refreshed from KV; on a 401, retried once.</span><span data-lang="zh">从 KV 自动刷新；遇 401 时重试一次。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">D1 unavailable</span><span data-lang="zh">D1 不可用</span></td>
+            <td><span data-lang="en">All DB-backed endpoints → <code>500</code>. <code>/health</code> → <code>unhealthy</code>.</span><span data-lang="zh">所有依赖 DB 的端点 → <code>500</code>。<code>/health</code> → <code>unhealthy</code>。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">KV unavailable</span><span data-lang="zh">KV 不可用</span></td>
+            <td><span data-lang="en">Rate limiting is skipped (fail-open). B2 tokens re-fetched per call (slower, still correct).</span><span data-lang="zh">限流跳过（失败开放）。B2 令牌每次调用重新获取（更慢但仍然正确）。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Invalid/expired session token</span><span data-lang="zh">无效/过期会话令牌</span></td>
+            <td><span data-lang="en"><code>401 unauthorized</code>. The IPC proxy clears the local session on 401 from <code>/api/auth/me</code>.</span><span data-lang="zh"><code>401 unauthorized</code>。IPC 代理在 <code>/api/auth/me</code> 返回 401 时清除本地会话。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Valid token, wrong owner</span><span data-lang="zh">令牌有效但非 owner</span></td>
+            <td><span data-lang="en"><code>403 forbidden</code> with <code>required_scope: admin</code> or <code>owner</code>.</span><span data-lang="zh"><code>403 forbidden</code>，附 <code>required_scope: admin</code> 或 <code>owner</code>。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">DB write fails after B2 upload</span><span data-lang="zh">B2 上传后 DB 写入失败</span></td>
+            <td><span data-lang="en">B2 object is asynchronously deleted (rollback).</span><span data-lang="zh">B2 对象被异步删除（回滚）。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Last-admin demotion/deletion</span><span data-lang="zh">降级/删除最后一位管理员</span></td>
+            <td><span data-lang="en"><code>409 conflict</code> — cannot demote or delete the last remaining admin.</span><span data-lang="zh"><code>409 conflict</code>— 不能降级或删除最后一位管理员。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Password change</span><span data-lang="zh">修改密码</span></td>
+            <td><span data-lang="en">All the user's sessions are revoked; they must re-login.</span><span data-lang="zh">该用户所有会话被撤销；需重新登录。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">All write operations emit audit-log entries (<code>file.upload</code>, <code>file.update</code>, <code>file.delete</code>, <code>file.tag</code>, <code>file.download</code>, <code>api_key.create</code>, <code>api_key.revoke</code>, <code>user.create</code>, <code>user.update</code>, <code>user.delete</code>, <code>user.login</code>, <code>user.logout</code>, <code>session.revoke</code>, <code>bulk.delete</code>, <code>bulk.tag</code>, <code>bulk.untag</code>).</p>
+      <p data-lang="zh">所有写操作都会写审计日志（<code>file.upload</code>、<code>file.update</code>、<code>file.delete</code>、<code>file.tag</code>、<code>file.download</code>、<code>api_key.create</code>、<code>api_key.revoke</code>、<code>user.create</code>、<code>user.update</code>、<code>user.delete</code>、<code>user.login</code>、<code>user.logout</code>、<code>session.revoke</code>、<code>bulk.delete</code>、<code>bulk.tag</code>、<code>bulk.untag</code>）。</p>
+
+      <h2>
+        <span data-lang="en">Testing the IPC Proxy</span>
+        <span data-lang="zh">测试 IPC 代理</span>
+      </h2>
+      <p data-lang="en">The proxy is unit-tested in <a href="https://github.com/Henley04/SXSEditor/blob/main/test/singerMarketIpc.test.js" target="_blank" rel="noopener"><code>test/singerMarketIpc.test.js</code></a>. The module exports <code>_internal</code> for white-box testing:</p>
+      <p data-lang="zh">代理的单测在 <a href="https://github.com/Henley04/SXSEditor/blob/main/test/singerMarketIpc.test.js" target="_blank" rel="noopener"><code>test/singerMarketIpc.test.js</code></a>。模块导出 <code>_internal</code> 供白盒测试：</p>
+      <pre><code>module.exports = {
+  registerSingerMarketIpc,
+  _internal: { request, buildMultipart, withAuth,
+               loadSession, saveSession, clearSession },
+};</code></pre>
+      <p data-lang="en">Run the Singer Market tests in isolation:</p>
+      <p data-lang="zh">单独运行歌手市场测试：</p>
+      <pre><code>npx mocha --require ./test/setup.js "test/singerMarketIpc.test.js" --timeout 30000</code></pre>
+      <p data-lang="en">See <a href="testing-cli.html">Testing &amp; CLI</a> for the overall test framework layout.</p>
+      <p data-lang="zh">整体测试框架布局见 <a href="testing-cli.html">测试与命令行</a>。</p>
+
+      <h2>
+        <span data-lang="en">Extending the Market Window</span>
+        <span data-lang="zh">扩展市场窗口</span>
+      </h2>
+      <p data-lang="en">Common extension points:</p>
+      <p data-lang="zh">常见扩展点：</p>
+      <ul>
+        <li data-lang="en"><strong>Add a new backend call</strong> — add an <code>ipcMain.handle('singer-market:&lt;name&gt;', ...)</code> in <code>singerMarketIpc.js</code>, expose it in <code>preload.js</code> under <code>singerMarket</code>, then call <code>window.electronAPI.singerMarket.&lt;name&gt;(...)</code> from <code>singerMarket.js</code>.</li>
+        <li data-lang="zh"><strong>新增后端调用</strong>— 在 <code>singerMarketIpc.js</code> 添加 <code>ipcMain.handle('singer-market:&lt;name&gt;', ...)</code>，在 <code>preload.js</code> 的 <code>singerMarket</code> 下暴露，再在 <code>singerMarket.js</code> 调用 <code>window.electronAPI.singerMarket.&lt;name&gt;(...)</code>。</li>
+        <li data-lang="en"><strong>Owner edit/delete in-window</strong> — the backend already supports <code>PATCH /api/files/:id</code> and <code>DELETE /api/files/:id</code> for owners. Add IPC handlers + UI buttons that surface them only when <code>state.user.id === singer.user_id</code>.</li>
+        <li data-lang="zh"><strong>在窗口内 owner 编辑/删除</strong>— 后端已支持 owner 调用 <code>PATCH /api/files/:id</code> 与 <code>DELETE /api/files/:id</code>。新增 IPC 处理器 + UI 按钮，仅在 <code>state.user.id === singer.user_id</code> 时显示。</li>
+        <li data-lang="en"><strong>Tag autocomplete on upload</strong> — the backend exposes <code>GET /api/tags?suggest=1&amp;q=...</code>. Wire the upload dialog's tag input to it for GitHub-style suggestions.</li>
+        <li data-lang="zh"><strong>上传时标签自动补全</strong>— 后端已提供 <code>GET /api/tags?suggest=1&amp;q=...</code>。将上传对话框的标签输入接入即可获得 GitHub 风格建议。</li>
+        <li data-lang="en"><strong>Switch backend</strong> — change <code>API_BASE</code> in <code>singerMarketIpc.js</code> and rebuild. No other code change required.</li>
+        <li data-lang="zh"><strong>切换后端</strong>— 修改 <code>singerMarketIpc.js</code> 的 <code>API_BASE</code> 并重新打包。无需其他改动。</li>
+      </ul>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">When adding new IPC channels, also add a unit test in <code>test/singerMarketIpc.test.js</code> and update <code>src/preload.js</code>. The preload bridge is the security boundary — never bypass it by giving the renderer direct access to <code>ipcRenderer</code>.</p>
+          <p data-lang="zh">新增 IPC 通道时，请在 <code>test/singerMarketIpc.test.js</code> 添加单测，并更新 <code>src/preload.js</code>。preload 桥接是安全边界——切勿让渲染进程直接访问 <code>ipcRenderer</code>。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Free-Tier Budget</span>
+        <span data-lang="zh">免费层预算</span>
+      </h2>
+      <p data-lang="en">Default circuit-breaker caps are intentionally 2–5% below the real free-tier limits to absorb KV's eventual-consistency under-counting:</p>
+      <p data-lang="zh">默认熔断上限刻意比真实免费层限制低 2–5%，以吸收 KV 最终一致导致的少计：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Resource</span><span data-lang="zh">资源</span></th>
+            <th><span data-lang="en">Free-tier limit</span><span data-lang="zh">免费层限制</span></th>
+            <th><span data-lang="en">Circuit-breaker default</span><span data-lang="zh">熔断默认</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Worker requests</span><span data-lang="zh">Worker 请求</span></td>
+            <td><span data-lang="en">100,000 / day</span><span data-lang="zh">每天 100,000</span></td>
+            <td><code>CB_WORKERS_REQ_LIMIT=95000</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Worker request body</span><span data-lang="zh">Worker 请求体</span></td>
+            <td><span data-lang="en">100 MB</span><span data-lang="zh">100 MB</span></td>
+            <td><code>MAX_UPLOAD_BYTES=104857600</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">B2 storage</span><span data-lang="zh">B2 存储</span></td>
+            <td><span data-lang="en">10 GB</span><span data-lang="zh">10 GB</span></td>
+            <td><code>CB_STORAGE_LIMIT_BYTES=10522669875</code> (~9.8 GB)</td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">B2 Class A transactions</span><span data-lang="zh">B2 Class A 事务</span></td>
+            <td><span data-lang="en">2,500 / day</span><span data-lang="zh">每天 2,500</span></td>
+            <td><code>CB_CLASS_A_LIMIT=2450</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">B2 Class B transactions</span><span data-lang="zh">B2 Class B 事务</span></td>
+            <td><span data-lang="en">2,500 / day</span><span data-lang="zh">每天 2,500</span></td>
+            <td><code>CB_CLASS_B_LIMIT=2450</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">D1 writes</span><span data-lang="zh">D1 写入</span></td>
+            <td><span data-lang="en">100,000 / day</span><span data-lang="zh">每天 100,000</span></td>
+            <td><code>CB_D1_WRITES_LIMIT=95000</code></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">D1 reads</span><span data-lang="zh">D1 读取</span></td>
+            <td><span data-lang="en">5,000,000 / day</span><span data-lang="zh">每天 5,000,000</span></td>
+            <td><span data-lang="en">—</span><span data-lang="zh">—</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">KV reads / writes</span><span data-lang="zh">KV 读 / 写</span></td>
+            <td><span data-lang="en">100,000 / 1,000 per day</span><span data-lang="zh">每天 100,000 / 1,000</span></td>
+            <td><span data-lang="en">— (if KV writes bottleneck, disable the counters via <code>CB_*_LIMIT=0</code>)</span><span data-lang="zh">—（若 KV 写入成为瓶颈，通过 <code>CB_*_LIMIT=0</code> 禁用计数器）</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <p data-lang="en">If you outgrow the free tier, upgrade to Workers Paid ($5/month) and/or B2 paid tier — no code changes required.</p>
+      <p data-lang="zh">若超出免费层，升级到 Workers Paid（$5/月）和/或 B2 付费层即可——无需改代码。</p>
+
+      <nav class="doc-pager">
+        <a href="testing-cli.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Testing &amp; CLI</span><span data-lang="zh">测试与命令行</span></div></div></a>
+        <a href="../user/faq.html" class="next"><div class="pager-card"><div class="pager-label" data-i18n="pager.next">Next</div><div class="pager-title"><span data-lang="en">FAQ &amp; Troubleshooting</span><span data-lang="zh">常见问题与故障排查</span></div></div></a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="../user/faq.html" data-i18n="footer.help">Help & FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

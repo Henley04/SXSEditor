@@ -18,9 +18,18 @@ const WINDOW_NAMES = [
 ];
 
 // Windows that need onnxruntime-web wasm/JS files copied alongside.
-// The splash window does not run inference, so it is excluded to keep
-// its bundle small.
-const ONNX_WINDOW_NAMES = WINDOW_NAMES.filter((n) => n !== 'splash_window');
+//
+// Only `main_window` actually loads onnxruntime-web: it is the sole renderer
+// that imports `src/inference/webnn/index.js` (see src/renderer/ipcHandlers.js).
+// All other windows either have no inference (settings, model_download,
+// resource_manager, update_notification, splash) or delegate inference to the
+// main process via IPC (fragment_editor, singer_creator, audio_preprocess).
+//
+// Copying the ort UMD + 4 wasm variants (~76.84 MB) to every non-splash window
+// used to cost ~538 MB of duplicated bytes inside app.asar. Restricting the
+// copy to `main_window` keeps the same runtime behaviour while shaving that
+// duplication.
+const ONNX_WINDOW_NAMES = ['main_window'];
 
 rules.push({
   test: /\.css$/,
@@ -64,6 +73,10 @@ const onnxruntimeWasmPatterns = ONNX_WINDOW_NAMES.flatMap((name) => [
 
 module.exports = {
   // Put your normal webpack config below here
+  // Disable source maps in production builds to shrink app.asar (~21 MB of
+  // *.map files used to ship inside the packaged app). Dev mode (`npm start`)
+  // keeps source maps because NODE_ENV is not set there.
+  devtool: process.env.NODE_ENV === 'production' ? false : undefined,
   module: {
     rules,
   },

@@ -99,8 +99,22 @@
         <li><span data-lang="en"><strong>Piano roll</strong> (center): The main editing canvas.</span><span data-lang="zh"><strong>钢琴卷帘</strong>（中部）：主编辑画布。</span></li>
         <li><span data-lang="en"><strong>Inspector</strong> (right): Shows properties of the selected note or singer info.</span><span data-lang="zh"><strong>检查器</strong>（右侧）：显示选中音符的属性或歌手信息。</span></li>
         <li><span data-lang="en"><strong>Parameter panel</strong> (bottom): VOL, PAN, Phoneme, and (future) Timbre lanes.</span><span data-lang="zh"><strong>参数面板</strong>（底部）：VOL、PAN、Phoneme 及（未来）Timbre 轨道。</span></li>
-        <li><span data-lang="en"><strong>Status bar</strong> (bottom): Shows pipeline status, sample rate (24000 Hz), hop size (480), and auto-sync indicator.</span><span data-lang="zh"><strong>状态栏</strong>（底部）：显示管线状态、采样率（24000 Hz）、hop size（480）和自动同步指示。</span></li>
+        <li><span data-lang="en"><strong>Status bar</strong> (bottom): Shows pipeline status, sample rate (48000 Hz playback / 24000 Hz model), hop size (480), and auto-sync indicator.</span><span data-lang="zh"><strong>状态栏</strong>（底部）：显示管线状态、采样率（48000 Hz 播放 / 24000 Hz 模型）、hop size（480）和自动同步指示。</span></li>
       </ul>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Synthesis Cancellation</strong> — a cancel button appears during synthesis. Cancellation is <em>cooperative</em>: it exits GPU inference at safe checkpoints between diffusion steps, preventing the D3D device-hung crash that occurred with the old force-terminate approach.</p>
+          <p data-lang="zh"><strong>取消合成</strong>——合成过程中会出现取消按钮。取消为<em>协作式</em>：在扩散步之间的安全检查点退出 GPU 推理，避免了旧的强制终止方式导致的 D3D 设备挂起崩溃。</p>
+        </div>
+      </div>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Viewport-sized canvas</strong> — the timeline canvas now uses a viewport-sized backing store with scroll transform, fixing the Chromium canvas size limit that caused rendering issues on long MIDI projects. This allows smooth scrolling and rendering regardless of project length.</p>
+          <p data-lang="zh"><strong>视口尺寸画布</strong>——时间线画布现在使用视口尺寸的后备存储加滚动变换，修复了 Chromium 画布尺寸限制导致长 MIDI 项目渲染异常的问题。无论项目长度如何，都能流畅滚动和渲染。</p>
+        </div>
+      </div>
 
       <h2>
         <span data-lang="en">MIDI Editing</span>
@@ -195,7 +209,7 @@
         <span data-lang="zh">连音（延续）音符</span>
       </h3>
       <p data-lang="en">A <strong>slur</strong> note continues the previous note's sound without re-attacking. To create a slur, add a note with an empty lyric (or a dash <code>-</code>). It will be treated as a continuation of the previous note's phoneme.</p>
-      <p data-lang="zh"><strong>连音</strong>音符延续前一个音符的声音而不重新起音。创建连音的方法是：添加一个空歌词（或破折号 <code>-</code>）的音符。它会被视为前一个音符音素的延续。</p>
+      <p data-lang="zh"><strong>连音</strong>音符延续前一个音符的发音而不重新起音。双击后续音符并输入半角连字符 <code>-</code>，编辑器会把它保存为内部连音状态；音符上仍显示 <code>-</code>，但该字符不会作为歌词送入模型。不要用空歌词表示连音，空歌词表示休止。</p>
 
       <h3>
         <span data-lang="en">Kanji / Kana Auto-Grouping</span>
@@ -208,7 +222,7 @@
         <li><span data-lang="en"><strong>Strict ordering</strong> — the converted kana keep their dictionary order. You cannot insert other MIDI notes inside a group's time span.</span><span data-lang="zh"><strong>严格顺序</strong>——转换后的假名保持字典顺序。分组时间范围内不允许插入其他 MIDI 音符。</span></li>
         <li><span data-lang="en"><strong>Movement</strong> — kana notes can be moved in pitch and time, but they cannot be deleted individually.</span><span data-lang="zh"><strong>移动</strong>——假名音符允许音高与左右移动，但不允许单独删除。</span></li>
         <li><span data-lang="en"><strong>Whole-group deletion</strong> — deleting any kana in a group removes the entire group (all kana in that kanji).</span><span data-lang="zh"><strong>整组删除</strong>——删除分组内任一假名即删除整个分组（该汉字的所有假名）。</span></li>
-        <li><span data-lang="en"><strong>Right-click toggle</strong> — right-click the bracket, the kanji label, or any kana inside the group to open the <em>Kanji Settings</em> menu. Choose <strong>Set as Chinese</strong> to merge the whole group back into a single kanji note (length = total group span, pitch = right-clicked note's pitch); choose <strong>Set as Japanese</strong> to split it again.</span><span data-lang="zh"><strong>右键切换</strong>——右键点击连接线、汉字标签或分组内任一假名，可打开<em>汉字设置</em>菜单。选择<strong>设为中文</strong>可将整个合并回单个汉字音符（长度 = 分组总跨度，音高 = 右键音符的音高）；选择<strong>设为日语</strong>可再次切分。</span></li>
+        <li><span data-lang="en"><strong>Right-click toggle</strong> — right-click the bracket or the kanji label to open the <em>Kanji Settings</em> menu directly. Choose <strong>Set as Chinese</strong> to merge the whole group back into a single kanji note (length = total group span, pitch = right-clicked note's pitch); choose <strong>Set as Japanese</strong> to split it again. Right-clicking a note body (a kana inside a group, or a single ungrouped kanji) opens the <a href="#note-effects-vibrato-fade">note context menu</a>, which contains a <strong>Kanji Settings</strong> button that opens the same Kanji Settings menu — so the Chinese/Japanese toggle remains reachable from any kanji/kana note.</span><span data-lang="zh"><strong>右键切换</strong>——右键点击连接线或汉字标签可直接打开<em>汉字设置</em>菜单。选择<strong>设为中文</strong>可将整个合并回单个汉字音符（长度 = 分组总跨度，音高 = 右键音符的音高）；选择<strong>设为日语</strong>可再次切分。右键音符本体（分组内的假名，或单个未分组汉字）会打开<a href="#note-effects-vibrato-fade">音符右键菜单</a>，其中包含<strong>汉字设置</strong>按钮，点击可打开同样的汉字设置菜单——因此从任意汉字 / 假名音符仍可进入中 / 日切换。</span></li>
         <li><span data-lang="en"><strong>Manual override persists</strong> — once you manually set a kanji to Chinese, it will not be auto-split again even if the fragment still contains kana.</span><span data-lang="zh"><strong>手动覆盖持久化</strong>——一旦手动将某汉字设为中文，即使分片仍含假名，也不会再被自动切分。</span></li>
       </ul>
 
@@ -216,8 +230,8 @@
         <span data-lang="en">Pitch Curves</span>
         <span data-lang="zh">音高曲线</span>
       </h2>
-      <p data-lang="en">Pitch curves add vibrato, pitch slides, and other expressive effects on top of the base MIDI pitch. The final pitch is: <strong>MIDI note pitch + pitch curve offset</strong>.</p>
-      <p data-lang="zh">音高曲线在基础 MIDI 音高之上添加颤音、滑音等表现性效果。最终音高为：<strong>MIDI 音符音高 + 音高曲线偏移</strong>。</p>
+      <p data-lang="en">Pitch curves add pitch slides and other expressive effects on top of the base MIDI pitch. The final pitch is: <strong>MIDI note pitch + pitch curve offset</strong>. For per-note vibrato, see <a href="#note-effects-vibrato-fade">Note Effects: Vibrato &amp; Fade</a>.</p>
+      <p data-lang="zh">音高曲线在基础 MIDI 音高之上添加滑音等表现性效果。最终音高为：<strong>MIDI 音符音高 + 音高曲线偏移</strong>。逐音符颤音请见<a href="#note-effects-vibrato-fade">音符效果：颤音与渐强渐弱</a>。</p>
       <p data-lang="en">Switch to Pitch mode by pressing <kbd class="kbd">2</kbd> or clicking the <strong>Pitch</strong> button in the toolbar.</p>
       <p data-lang="zh">按 <kbd class="kbd">2</kbd> 或点击工具栏的 <strong>Pitch</strong> 按钮切换到音高模式。</p>
       <h3>
@@ -246,6 +260,113 @@
       </h3>
       <p data-lang="en">Click <strong>↺ Reset</strong> to clear all pitch curve modifications and return to the auto-generated curve based on MIDI notes.</p>
       <p data-lang="zh">点击 <strong>↺ Reset</strong> 可清除所有音高曲线修改，回到基于 MIDI 音符的自动生成曲线。</p>
+
+      <h2 id="note-effects-vibrato-fade">
+        <span data-lang="en">Note Effects: Vibrato &amp; Fade</span>
+        <span data-lang="zh">音符效果：颤音与渐强渐弱</span>
+      </h2>
+      <p data-lang="en"><strong>Right-click a note</strong> (in MIDI or Pitch mode) to open the <em>Note Context Menu</em>, where you can fine-tune per-note vibrato and fade in/out. The menu acts on the right-clicked note, or on the entire selection if the right-clicked note is already part of a multi-note selection — making it easy to apply the same effect to a group of notes at once.</p>
+      <p data-lang="zh"><strong>右键点击音符</strong>（MIDI 或 Pitch 模式下）可打开<em>音符右键菜单</em>，在其中可逐音符微调颤音与渐入/渐出。菜单作用于被右键的音符；若该音符已在多选集合中，则作用于全部选中音符——便于一次给一组音符套用相同效果。</p>
+
+      <h3>
+        <span data-lang="en">Vibrato</span>
+        <span data-lang="zh">颤音</span>
+      </h3>
+      <p data-lang="en">Vibrato adds a sinusoidal pitch modulation on top of the note's base pitch. It is layered over any existing pitch curve (anchor points / brush strokes), so slides and manual pitch edits are preserved — the vibrato simply oscillates around the curve's current value.</p>
+      <p data-lang="zh">颤音在音符基础音高之上叠加正弦调制。它会叠加在任何已有的音高曲线（锚点 / 画笔笔触）之上，因此滑音与手动音高编辑都会保留——颤音只是围绕曲线当前值上下振荡。</p>
+      <p data-lang="en">Toggle the switch at the top of the menu to enable/disable vibrato, then fine-tune the following parameters:</p>
+      <p data-lang="zh">在菜单顶部切换开关以启用 / 关闭颤音，然后微调以下参数：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Range</span><span data-lang="zh">范围</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en"><strong>Depth</strong></span><span data-lang="zh"><strong>幅度</strong></span></td>
+            <td>0–200¢</td>
+            <td><span data-lang="en">Modulation amplitude in cents. 100¢ = one semitone.</span><span data-lang="zh">调制幅度，单位为音分。100¢ = 一个半音。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Rate</strong></span><span data-lang="zh"><strong>频率</strong></span></td>
+            <td>2.0–10.0 Hz</td>
+            <td><span data-lang="en">Oscillation frequency. Typical vocal vibrato is around 5–6 Hz.</span><span data-lang="zh">振荡频率。典型人声颤音约 5–6 Hz。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Start</strong></span><span data-lang="zh"><strong>起始点</strong></span></td>
+            <td>0–80%</td>
+            <td><span data-lang="en">Where vibrato begins within the note (0% = from the very start, 80% = near the end).</span><span data-lang="zh">颤音在音符内开始的相对位置（0% = 从音符最开头，80% = 接近末尾）。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Length</strong></span><span data-lang="zh"><strong>长度</strong></span></td>
+            <td>20–100%</td>
+            <td><span data-lang="en">How long the vibrato lasts, as a fraction of the remaining note after the start point.</span><span data-lang="zh">颤音持续的长度，占起始点之后音符剩余时长的比例。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Fade In</strong></span><span data-lang="zh"><strong>渐入</strong></span></td>
+            <td>0–100%</td>
+            <td><span data-lang="en">Vibrato amplitude fade-in ramp (0% = full depth immediately, 100% = linear ramp across the whole vibrato region). Prevents abrupt pitch jumps at the vibrato onset.</span><span data-lang="zh">颤音幅度的渐入比例（0% = 一开始即满幅度，100% = 整个颤音区间线性渐入）。避免颤音起始处出现突兀的音高跳变。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <ul>
+        <li><span data-lang="en"><strong>Presets</strong> — <em>Soft</em> / <em>Medium</em> / <em>Strong</em> apply common vibrato profiles in one click.</span><span data-lang="zh"><strong>预设</strong>——<em>柔和</em> / <em>中等</em> / <em>强烈</em>一键套用常用颤音参数组合。</span></li>
+        <li><span data-lang="en"><strong>Visual feedback</strong> — a small sine-wave marker is drawn at the top-left of notes with vibrato enabled, and the pitch curve in Pitch mode shows the actual oscillation.</span><span data-lang="zh"><strong>视觉反馈</strong>——启用颤音的音符左上角会绘制一个小正弦波标记，Pitch 模式下的音高曲线会显示实际振荡。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Fade In / Fade Out</span>
+        <span data-lang="zh">渐强 / 渐弱</span>
+      </h3>
+      <p data-lang="en">Fade applies a per-note volume envelope: <strong>Fade In</strong> ramps the note's volume from 0 → 1 over the given duration at the note's start; <strong>Fade Out</strong> ramps 1 → 0 at the note's end. This is applied as a post-processing gain on top of the synthesized audio, in both real-time preview and WAV export.</p>
+      <p data-lang="zh">渐入渐出对单个音符施加音量包络：<strong>渐强</strong>在音符起始处将音量从 0 → 1 渐变；<strong>渐弱</strong>在音符末尾将音量从 1 → 0 渐变。该效果作为后处理增益叠加在合成音频之上，实时预览与 WAV 导出均生效。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Range</span><span data-lang="zh">范围</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en"><strong>Fade In</strong></span><span data-lang="zh"><strong>渐强</strong></span></td>
+            <td>0–500 ms</td>
+            <td><span data-lang="en">Fade-in duration at the note's start. 0 = no fade-in.</span><span data-lang="zh">音符起始处的渐入时长。0 = 无渐入。</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en"><strong>Fade Out</strong></span><span data-lang="zh"><strong>渐弱</strong></span></td>
+            <td>0–500 ms</td>
+            <td><span data-lang="en">Fade-out duration at the note's end. 0 = no fade-out.</span><span data-lang="zh">音符末尾的渐出时长。0 = 无渐出。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <ul>
+        <li><span data-lang="en"><strong>Presets</strong> — <em>Fade In</em> / <em>Fade Out</em> / <em>Both</em> apply common fade profiles in one click.</span><span data-lang="zh"><strong>预设</strong>——<em>渐强</em> / <em>渐弱</em> / <em>渐入渐出</em>一键套用常用渐变组合。</span></li>
+        <li><span data-lang="en"><strong>Visual feedback</strong> — a semi-transparent triangle is drawn at the left edge (fade in) and/or right edge (fade out) of the note, sized proportionally to the fade duration.</span><span data-lang="zh"><strong>视觉反馈</strong>——音符左边缘（渐入）和 / 或右边缘（渐出）会绘制半透明三角形，宽度按渐变时长比例缩放。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Other Menu Actions</span>
+        <span data-lang="zh">其他菜单操作</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en"><strong>Clear Effects</strong> — disables vibrato and resets both fade durations to 0 for all targeted notes.</span><span data-lang="zh"><strong>清除效果</strong>——对所有目标音符关闭颤音，并将两个渐变时长重置为 0。</span></li>
+        <li><span data-lang="en"><strong>Kanji Settings</strong> — appears only when a single kanji / kana-group note is right-clicked; opens the Kanji Settings menu (same as right-clicking the group bracket).</span><span data-lang="zh"><strong>汉字设置</strong>——仅在右键单个汉字 / 假名分组音符时出现；打开汉字设置菜单（与右键分组连接线效果相同）。</span></li>
+        <li><span data-lang="en"><strong>Undo / Redo</strong> — all vibrato and fade adjustments support full undo/redo. Slider drags commit one history entry when you release the slider (the <em>change</em> event), while live dragging updates the preview without spamming history.</span><span data-lang="zh"><strong>撤销 / 重做</strong>——所有颤音与渐变调整均支持完整撤销 / 重做。拖动滑块时实时预览不入历史，松开滑块（<em>change</em> 事件）时提交一条历史记录。</span></li>
+      </ul>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Compatibility with pitch curves</strong> — vibrato is an additive pitch modulation layered on top of the pitch curve, so it works alongside anchor points and brush strokes. If a note has no custom pitch curve, vibrato modulates around the note's base MIDI pitch (and the note will be treated as having a customized pitch curve so that F0 data is generated for synthesis). Enabling, disabling, or changing vibrato on a note automatically invalidates the synthesis cache for that fragment, so the next preview reflects the new vibrato.</p>
+          <p data-lang="zh"><strong>与音高曲线的兼容性</strong>——颤音是叠加在音高曲线之上的音高调制，因此可与锚点、画笔笔触共存。若音符没有自定义音高曲线，颤音会围绕音符的基础 MIDI 音高振荡（该音符会被视为已自定义音高曲线，从而为其生成 F0 数据用于合成）。启用、关闭或修改音符颤音会自动使该分片的合成缓存失效，下一次预览将反映新的颤音。</p>
+          <p data-lang="en"><strong>Backward compatibility</strong> — old projects created before vibrato/fade support are automatically normalized on load. Any pre-existing pitch curve data is preserved; vibrato and fade parameters default to disabled (no effect) unless explicitly set.</p>
+          <p data-lang="zh"><strong>向后兼容</strong>——在支持颤音/渐变之前创建的旧项目在加载时会自动归一化。已有的音高曲线数据会被保留；颤音和渐变参数默认为禁用（无效果），除非显式设置。</p>
+        </div>
+      </div>
 
       <h2>
         <span data-lang="en">Volume and Pan Envelopes</span>
@@ -321,6 +442,20 @@
         <li><span data-lang="en">Lyrics from MIDI are preserved if present.</span><span data-lang="zh">MIDI 中的歌词（如有）会被保留。</span></li>
         <li><span data-lang="en">Note timing is converted to the project's BPM.</span><span data-lang="zh">音符时序会转换为项目的 BPM。</span></li>
       </ul>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Auto Shift</strong> — the checkbox in the toolbar controls <em>global pitch shifting</em> per fragment. When enabled (and a reference audio is loaded for the fragment), SXSEditor analyzes the reference audio's F0 and shifts the synthesized pitch to better match it. This is useful when a song's melody exceeds the model's comfortable range and you want the output to follow the reference singer's actual pitch. <strong>Note:</strong> per-segment autoShift was removed to prevent pitch discontinuities across inference chunks — the toolbar checkbox now applies a consistent shift across the entire fragment. See <a href="synthesis-export.html">Synthesis &amp; Export</a> for details.</p>
+          <p data-lang="zh"><strong>Auto Shift</strong>——工具栏中的复选框控制每个分片的<em>全局移调</em>。启用后（且分片已加载参考音频），SXSEditor 会分析参考音频的 F0 并平移合成音高以更好地贴合参考歌手。当歌曲旋律超出模型舒适音域、希望输出跟随参考歌手实际音高时很有用。<strong>注意：</strong>已移除逐段 autoShift 以防止推理块间的音高不连续——工具栏复选框现在对整个分片施加一致的移调。详见<a href="synthesis-export.html">合成与导出</a>。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Accompaniment Tracks</span>
+        <span data-lang="zh">伴奏音轨</span>
+      </h2>
+      <p data-lang="en">Accompaniment audio can be imported as tracks alongside vocal fragments in the main window. Supported formats: <strong>WAV, MP3, FLAC, OGG, M4A, AAC</strong>. Multi-channel audio is supported. Each accompaniment track has per-track volume control in the track manager. Clips can be dragged to reposition on the timeline. Accompaniment audio is mixed into the final WAV export.</p>
+      <p data-lang="zh">伴奏音频可以在主窗口中作为音轨与人声片段一起导入。支持格式：<strong>WAV、MP3、FLAC、OGG、M4A、AAC</strong>。支持多声道音频。每个伴奏音轨在轨道管理器中有逐轨音量控制。片段可拖动以在时间线上重新定位。伴奏音频会混入最终 WAV 导出。</p>
 
       <h2>
         <span data-lang="en">Keyboard Shortcuts</span>
@@ -394,7 +529,8 @@
           <tr><td><kbd class="kbd">Delete</kbd></td><td><span data-lang="en">Delete selected notes</span><span data-lang="zh">删除选中音符</span></td></tr>
           <tr><td><kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">D</kbd></td><td><span data-lang="en">Duplicate selected notes</span><span data-lang="zh">复制选中音符</span></td></tr>
           <tr><td><span data-lang="en">Double-click</span><span data-lang="zh">双击</span></td><td><span data-lang="en">Edit note lyric</span><span data-lang="zh">编辑音符歌词</span></td></tr>
-          <tr><td><span data-lang="en">Right-click kanji / kana group</span><span data-lang="zh">右键汉字 / 假名分组</span></td><td><span data-lang="en">Open Kanji Settings menu (toggle Chinese / Japanese)</span><span data-lang="zh">打开汉字设置菜单（切换中文 / 日语）</span></td></tr>
+          <tr><td><span data-lang="en">Right-click note</span><span data-lang="zh">右键音符</span></td><td><span data-lang="en">Open Note Context Menu (vibrato &amp; fade in/out)</span><span data-lang="zh">打开音符右键菜单（颤音与渐入 / 渐出）</span></td></tr>
+          <tr><td><span data-lang="en">Right-click kanji group bracket / label</span><span data-lang="zh">右键汉字分组连接线 / 标签</span></td><td><span data-lang="en">Open Kanji Settings menu (toggle Chinese / Japanese)</span><span data-lang="zh">打开汉字设置菜单（切换中文 / 日语）</span></td></tr>
         </tbody>
       </table>
 

@@ -3,12 +3,32 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
-const { isPathAllowed } = require('./security');
+const { isPathAllowed, isSystemPath } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, getOptimalConcurrency, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, getLocalModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getLatestTag, getRemoteFileSizeByUrl } = require('../modelManager');
-const { createModelDownloadWindow, getModelDownloadWindow, setModelDownloadWindow, getMainWindow } = require('./windowManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getLatestTag, getRemoteFileSizeByUrl } = require('../modelManager');
+const { createModelDownloadWindow, getModelDownloadWindow, getMainWindow } = require('./windowManager');
 
-let downloadAbortController = null;
+// W5: Per-download-key AbortController map. Replaces the single shared
+// `downloadAbortController` global so concurrent downloads (main/JP/SiFiGAN)
+// each keep their own cancel ability instead of overwriting one variable
+// (which made the prior download uncancellable).
+const downloadAbortControllers = new Map();
+
+// W5: Per-destination-path mutex (Promise-chain). Serializes concurrent
+// downloads to the same file path so two flows cannot interleave bytes
+// into the same destination file.
+const _downloadPathMutexes = new Map();
+function withDownloadPathMutex(destPath, task) {
+  const prev = _downloadPathMutexes.get(destPath) || Promise.resolve();
+  // Run task after the previous holder releases, regardless of whether it
+  // resolved or rejected (a failed download must not block later ones).
+  const next = prev.then(() => task(), () => task());
+  // Keep the chain alive as an always-resolving promise so a rejection in
+  // task does not break subsequent waiters. `next` still reflects task's
+  // actual result for the caller.
+  _downloadPathMutexes.set(destPath, next.then(() => {}, () => {}));
+  return next;
+}
 
 // ===== SiFiGAN helpers =====
 // SiFiGAN is an optional model group stored at the root of onnx_models/
@@ -31,8 +51,6 @@ const SIFIGAN_ALL_FILES = [
   'sifigan_vocoder_dml.onnx.data',
   'sifigan_stats.joblib',
 ];
-// 兼容旧引用 (SIFIGAN_FILES 仍指向完整列表, 用于 deleteSifiganFiles)
-const SIFIGAN_FILES = SIFIGAN_ALL_FILES;
 
 // SiFiGAN 安装判定: stats 文件 + (FP16 变体完整 OR FP32 变体完整)
 function _checkFileExists(modelDir, fileName) {
@@ -93,10 +111,14 @@ function deleteSifiganFiles(modelDir) {
 }
 
 async function startModelDownload(modelDir, missingFiles, precision, revision) {
-  downloadAbortController = new AbortController();
+  // W5: key the controller by download type so a concurrent JP/SiFiGAN
+  // download does not overwrite this one's cancel handle.
+  const downloadKey = 'main';
+  const downloadAbortController = new AbortController();
+  downloadAbortControllers.set(downloadKey, downloadAbortController);
   const abortSignal = downloadAbortController.signal;
   const currentPrecision = precision || DEFAULT_PRECISION;
-  const modelDownloadWindow = getModelDownloadWindow();
+  const _modelDownloadWindow = getModelDownloadWindow();
 
   try {
     await downloadMissingFiles(modelDir, missingFiles, {
@@ -147,7 +169,7 @@ async function startModelDownload(modelDir, missingFiles, precision, revision) {
       }
     }
   } finally {
-    downloadAbortController = null;
+    downloadAbortControllers.delete(downloadKey);
   }
 }
 
@@ -167,7 +189,7 @@ async function checkAndDownloadModels() {
   const modelDir = getModelDir();
   const precision = loadSettings().modelPrecision || DEFAULT_PRECISION;
   console.log('[Main] Check model files, dir:', modelDir, 'precision:', precision);
-  const { missing, existing } = await checkMissingFilesAsync(modelDir, precision);
+  const { missing } = await checkMissingFilesAsync(modelDir, precision);
 
   if (missing.length === 0) {
     console.log('[Main] All model files ready');
@@ -305,10 +327,21 @@ function registerModelDownloadIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('model-download:cancel', async () => {
-    if (downloadAbortController) {
-      downloadAbortController.abort();
-      downloadAbortController = null;
+  // W5: cancel a specific in-flight download by key (e.g. 'main' | 'jp' |
+  // 'sifigan'), or — for backwards compatibility — abort all in-flight
+  // downloads when no key is provided.
+  ipcMain.handle('model-download:cancel', async (event, key) => {
+    if (key) {
+      const controller = downloadAbortControllers.get(key);
+      if (controller) {
+        controller.abort();
+        downloadAbortControllers.delete(key);
+      }
+    } else {
+      for (const controller of downloadAbortControllers.values()) {
+        controller.abort();
+      }
+      downloadAbortControllers.clear();
     }
     return { success: true };
   });
@@ -334,6 +367,20 @@ function registerModelDownloadIpc() {
     }
 
     let downloadDir = result.filePaths[0];
+
+    // W11: reject system directories (e.g. C:\Windows) and unwritable paths
+    // before persisting the choice, so model files are never written into a
+    // system directory or a location the user cannot write to.
+    const resolvedDir = path.resolve(downloadDir);
+    if (isSystemPath(resolvedDir)) {
+      return { success: false, error: 'Cannot use system directory for model storage' };
+    }
+    try {
+      fs.accessSync(resolvedDir, fs.constants.W_OK);
+    } catch (_) {
+      return { success: false, error: 'Selected directory is not writable' };
+    }
+
     if (!downloadDir.endsWith(path.sep)) {
       downloadDir = downloadDir + path.sep;
     }
@@ -423,14 +470,17 @@ function registerModelDownloadIpc() {
       return { success: false, error: `JP models not available for precision: ${currentPrecision}` };
     }
 
-    downloadAbortController = new AbortController();
+    // W5: per-key AbortController so a concurrent main/SiFiGAN download
+    // cannot overwrite this download's cancel handle.
+    const jpDownloadKey = 'jp';
+    const downloadAbortController = new AbortController();
+    downloadAbortControllers.set(jpDownloadKey, downloadAbortController);
     const abortSignal = downloadAbortController.signal;
-    const modelDownloadWindow = getModelDownloadWindow();
+    const _modelDownloadWindow = getModelDownloadWindow();
 
     try {
-      const { downloadMissingFiles } = require('../modelManager');
       // Download JP files to the JP subdirectory
-      const jpMissingFiles = missing.map(f => ({
+      const _jpMissingFiles = missing.map(f => ({
         ...f,
         _jpFilePath: getJpLocalFilePath(modelDir, f.filePath, currentPrecision),
       }));
@@ -442,7 +492,9 @@ function registerModelDownloadIpc() {
         if (!url) continue;
 
         const { downloadFileWithRetry } = require('../modelManager');
-        await downloadFileWithRetry(url, destPath, { abortSignal });
+        // W5: serialize on the destination path so a concurrent download to
+        // the same file cannot interleave bytes.
+        await withDownloadPathMutex(destPath, () => downloadFileWithRetry(url, destPath, { abortSignal }));
 
         const win = getModelDownloadWindow();
         if (win && !win.isDestroyed()) {
@@ -470,7 +522,7 @@ function registerModelDownloadIpc() {
         }
       }
     } finally {
-      downloadAbortController = null;
+      downloadAbortControllers.delete(jpDownloadKey);
     }
 
     return { success: true };
@@ -557,7 +609,11 @@ function registerModelDownloadIpc() {
       return { status: 'installed', allExist: true, files: existingFiles };
     }
 
-    downloadAbortController = new AbortController();
+    // W5: per-key AbortController so a concurrent main/JP download cannot
+    // overwrite this download's cancel handle.
+    const sifiganDownloadKey = 'sifigan';
+    const downloadAbortController = new AbortController();
+    downloadAbortControllers.set(sifiganDownloadKey, downloadAbortController);
     const abortSignal = downloadAbortController.signal;
     const win = getModelDownloadWindow();
 
@@ -602,7 +658,9 @@ function registerModelDownloadIpc() {
 
         // Use chunked download for large files, single-threaded for small
         if (remoteSize >= MIN_FILE_SIZE_FOR_CHUNKING) {
-          await downloadFileChunked(url, destPath, remoteSize, {
+          // W5: serialize on the destination path so a concurrent download
+          // to the same file cannot interleave bytes.
+          await withDownloadPathMutex(destPath, () => downloadFileChunked(url, destPath, remoteSize, {
             abortSignal,
             onProgress: (downloaded, total) => {
               if (win && !win.isDestroyed()) {
@@ -617,9 +675,11 @@ function registerModelDownloadIpc() {
                 });
               }
             },
-          });
+          }));
         } else {
-          await downloadFileWithRetry(url, destPath, {
+          // W5: serialize on the destination path so a concurrent download
+          // to the same file cannot interleave bytes.
+          await withDownloadPathMutex(destPath, () => downloadFileWithRetry(url, destPath, {
             abortSignal,
             onProgress: (downloaded, total) => {
               if (win && !win.isDestroyed()) {
@@ -634,7 +694,7 @@ function registerModelDownloadIpc() {
                 });
               }
             },
-          });
+          }));
         }
 
         cumulativeDownloaded += remoteSize;
@@ -679,7 +739,7 @@ function registerModelDownloadIpc() {
         files: errFiles,
       };
     } finally {
-      downloadAbortController = null;
+      downloadAbortControllers.delete(sifiganDownloadKey);
     }
   });
 
@@ -832,7 +892,7 @@ function registerModelDownloadIpc() {
 
   // Update JP models: delete and re-download
   ipcMain.handle('model-download:update-jp', async (event, precision, revision) => {
-    const { getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS, JP_MODEL_FILE_MANIFEST } = require('../modelManager');
+    const { getJpLocalFilePath, JP_MODEL_IDS, JP_MODEL_FILE_MANIFEST } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     // If no revision (tag) specified or 'latest' requested, fetch the latest JP tag from ModelScope

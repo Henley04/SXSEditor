@@ -7,21 +7,27 @@ import {
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
+import { computeLuminance } from '../themes/colorUtils.js';
 import { showConfirmDialog } from '../alertDialog.js';
-import { loadSingerFile, showSingerSelectDialog, markDirty } from './projectManager.js';
+import { loadSingerFile, showSingerSelectDialog, markDirty, loadAccompanimentFile } from './projectManager.js';
 import { createIcon } from '../icons/iconHelper.js';
 
 export function getBeatWidth() {
   return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX;
 }
 
-// Offscreen canvas cache for static grid/background
-let _gridCache = null;
-let _gridCacheKey = '';
-
-export function invalidateGridCache() {
-  _gridCacheKey = '';
+/**
+ * Format duration in seconds to mm:ss.s format for accompaniment display.
+ */
+function formatAccompanimentDuration(seconds) {
+  if (!seconds || seconds <= 0) return '0:00';
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
+
+// Grid is rendered directly into the viewport-sized canvas.
+export function invalidateGridCache() {}
 
 function _ensureCanvasSize(canvas, cssW, cssH, dpr) {
   const pixelW = Math.floor(cssW * dpr);
@@ -73,8 +79,15 @@ export function syncFragmentScroll() {
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
   const beatWidth = getBeatWidth();
-  const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
-  const totalBeats = Math.max(64, Math.ceil((maxBeat + 64) / 64) * 64);
+  const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
+  const accompanimentMaxBeat = singers.reduce((max, singer) => {
+    if (singer.type !== 'accompaniment' || !singer.audioDuration) return max;
+    const endBeat = (singer.accompanimentStartTime || 0)
+      + singer.audioDuration / 60 * state.project.bpm;
+    return Math.max(max, endBeat);
+  }, 0);
+  const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
+  const totalBeats = Math.max(64, Math.ceil((maxBeat + 256) / 64) * 64);
   const canvasWidth = totalBeats * beatWidth;
   const canvasHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
   const containerW = dom.fragmentContainer.clientWidth;
@@ -86,7 +99,9 @@ export function syncFragmentScroll() {
   // fragment canvas 应用 translate 变换以实现滚动；
   // playhead canvas 不再应用 translate，改为固定覆盖可视区域，
   // 绘制时由 drawPlayheadLine 自行减去 scrollX（避免大 canvas clearRect 卡顿）。
-  dom.fragmentCanvas.style.transform = `translate(${-state.fragmentScrollX}px, ${-state.fragmentScrollY}px)`;
+  // Canvas is viewport-sized. Scrolling is applied to the drawing transform,
+  // never by moving or enlarging the backing store.
+  dom.fragmentCanvas.style.transform = 'none';
   dom.singerListEl.scrollTop = state.fragmentScrollY;
 }
 
@@ -97,103 +112,176 @@ export function renderFragmentTimeline() {
   const dpr = window.devicePixelRatio || 1;
 
   const beatWidth = getBeatWidth();
-  const maxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
-  // grid cache 步长加大到 64 拍：拖拽分片时 maxBeat 变化不再频繁触发 totalBeats 跨步，
-  // 避免 grid cache 反复失效重建（O(canvasW*canvasH) 的重绘）。
-  const totalBeats = Math.max(64, Math.ceil((maxBeat + 64) / 64) * 64);
-  const canvasWidth = totalBeats * beatWidth;
+  const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
+  const accompanimentMaxBeat = singers.reduce((max, singer) => {
+    if (singer.type !== 'accompaniment' || !singer.audioDuration) return max;
+    const endBeat = (singer.accompanimentStartTime || 0)
+      + singer.audioDuration / 60 * state.project.bpm;
+    return Math.max(max, endBeat);
+  }, 0);
+  const maxBeat = Math.max(fragmentMaxBeat, accompanimentMaxBeat);
+  const totalBeats = Math.max(64, Math.ceil((maxBeat + 256) / 64) * 64);
+  const virtualWidth = totalBeats * beatWidth;
   const contentHeight = singers.length * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
-  const containerHeight = dom.fragmentContainer.clientHeight || contentHeight;
-  const canvasHeight = Math.max(contentHeight, containerHeight);
+  const viewportWidth = Math.max(1, dom.fragmentContainer.clientWidth || 1);
+  const viewportHeight = Math.max(1, dom.fragmentContainer.clientHeight || contentHeight || 1);
 
-  _ensureCanvasSize(dom.fragmentCanvas, canvasWidth, canvasHeight, dpr);
-  // playhead canvas 只覆盖可视区域（container 大小），不再随 fragment canvas 一起放大。
-  // 这样拖拽进度条时 clearRect 只需清除 container 大小的区域，
-  // 而不是整个 canvasWidth*canvasHeight（分片变长时可达数万 px）。
-  const playheadW = dom.fragmentContainer.clientWidth || canvasWidth;
-  const playheadH = containerHeight;
-  _ensureCanvasSize(dom.fragmentPlayheadCanvas, playheadW, playheadH, dpr);
+  // Keep the backing stores bounded by the viewport. Long MIDI projects only
+  // increase virtualWidth, not canvas.width, avoiding Chromium's canvas limit.
+  _ensureCanvasSize(dom.fragmentCanvas, viewportWidth, viewportHeight, dpr);
+  _ensureCanvasSize(dom.fragmentPlayheadCanvas, viewportWidth, viewportHeight, dpr);
 
+  state.fragmentScrollX = Math.max(0, Math.min(state.fragmentScrollX, virtualWidth - viewportWidth));
+  state.fragmentScrollY = Math.max(0, Math.min(state.fragmentScrollY, contentHeight - viewportHeight));
   syncFragmentScroll();
 
+  // Clear in device-independent viewport coordinates, then translate the
+  // world timeline into the viewport. Existing fragment drawing remains in
+  // world coordinates and is clipped by the viewport backing store.
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, viewportWidth, viewportHeight);
+  ctx.translate(-state.fragmentScrollX, -state.fragmentScrollY);
 
   const c = getCanvasColors();
   const beatsPerMeasure = state.project.timeSignature ? state.project.timeSignature[0] : 4;
+  const _viewLeft = state.fragmentScrollX;
+  const _viewRight = state.fragmentScrollX + viewportWidth;
+  const _viewTop = state.fragmentScrollY;
+  const _viewBottom = state.fragmentScrollY + viewportHeight;
 
-  // Build grid cache key from structural inputs
-  const gridCacheKey = `${totalBeats}|${beatWidth}|${canvasHeight}|${singers.length}|${beatsPerMeasure}|${c.bgApp}|${c.gridLineMeasure}|${c.gridLineMajor}|${c.borderSubtle}|${c.bgElevated}|${c.timeText}`;
-
-  if (_gridCache && _gridCacheKey === gridCacheKey) {
-    // Use cached grid layer.
-    // 必须显式指定 dw/dh=canvasWidth/canvasHeight：_gridCache 的 intrinsic 尺寸是
-    // canvasWidth*dpr × canvasHeight*dpr（设备像素），而 ctx 已应用 dpr 变换，
-    // 若省略 dw/dh 会按 intrinsic 尺寸绘制，导致整个网格被放大 dpr 倍。
-    ctx.drawImage(_gridCache, 0, 0, canvasWidth, canvasHeight);
-  } else {
-    // Draw static grid background
-    ctx.fillStyle = c.bgApp;
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
-
-    ctx.lineWidth = 1;
-    for (let i = 0; i <= totalBeats; i++) {
-      const x = i * beatWidth;
-      const isMeasureLine = (i % beatsPerMeasure === 0);
-      ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
-      ctx.beginPath();
-      ctx.moveTo(x, HEADER_HEIGHT);
-      ctx.lineTo(x, canvasHeight);
-      ctx.stroke();
-
-      if (isMeasureLine) {
-        const measureNum = Math.floor(i / beatsPerMeasure) + 1;
-        ctx.fillStyle = c.timeText;
-        ctx.font = '10px sans-serif';
-        ctx.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
-      }
+  // Draw only the visible grid. A full-width offscreen cache would recreate
+  // the same oversized-canvas failure as the main canvas.
+  ctx.fillStyle = c.bgApp;
+  ctx.fillRect(_viewLeft, _viewTop, viewportWidth, viewportHeight);
+  ctx.lineWidth = 1;
+  const firstBeat = Math.max(0, Math.floor(_viewLeft / beatWidth));
+  const lastBeat = Math.min(totalBeats, Math.ceil(_viewRight / beatWidth));
+  for (let i = firstBeat; i <= lastBeat; i++) {
+    const x = i * beatWidth;
+    const isMeasureLine = (i % beatsPerMeasure === 0);
+    ctx.strokeStyle = isMeasureLine ? c.gridLineMeasure : c.gridLineMajor;
+    ctx.beginPath();
+    ctx.moveTo(x, _viewTop);
+    ctx.lineTo(x, _viewBottom);
+    ctx.stroke();
+    if (isMeasureLine && HEADER_HEIGHT >= _viewTop) {
+      const measureNum = Math.floor(i / beatsPerMeasure) + 1;
+      ctx.fillStyle = c.timeText;
+      ctx.font = '10px sans-serif';
+      ctx.fillText(String(measureNum), x + 2, HEADER_HEIGHT - 4);
     }
-
-    singers.forEach((singer, index) => {
-      const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
-
-      ctx.fillStyle = c.bgElevated;
-      ctx.fillRect(0, y, canvasWidth, SINGER_ROW_HEIGHT - 2);
-
-      ctx.strokeStyle = c.borderSubtle;
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, y + SINGER_ROW_HEIGHT - 2);
-      ctx.lineTo(canvasWidth, y + SINGER_ROW_HEIGHT - 2);
-      ctx.stroke();
-    });
-
-    // Cache the grid layer to offscreen canvas
-    const pixelW = Math.floor(canvasWidth * dpr);
-    const pixelH = Math.floor(canvasHeight * dpr);
-    if (!_gridCache || _gridCache.width !== pixelW || _gridCache.height !== pixelH) {
-      _gridCache = document.createElement('canvas');
-      _gridCache.width = pixelW;
-      _gridCache.height = pixelH;
-    }
-    const gridCtx = _gridCache.getContext('2d');
-    gridCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    gridCtx.drawImage(dom.fragmentCanvas, 0, 0, canvasWidth, canvasHeight);
-    _gridCacheKey = gridCacheKey;
   }
 
-  // Draw dynamic content (fragments) on top of cached grid
-  // 预计算可视区域范围，跳过不可见分片的绘制（拖拽时若有大量分片在可视区域外可显著提速）。
-  const _viewLeft = state.fragmentScrollX;
-  const _viewRight = state.fragmentScrollX + (dom.fragmentContainer.clientWidth || canvasWidth);
-  const _viewTop = state.fragmentScrollY;
-  const _viewBottom = state.fragmentScrollY + (dom.fragmentContainer.clientHeight || canvasHeight);
+  singers.forEach((singer, index) => {
+    const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
+    if (y + SINGER_ROW_HEIGHT < _viewTop || y > _viewBottom) return;
+    ctx.fillStyle = c.bgElevated;
+    ctx.fillRect(_viewLeft, y, viewportWidth, SINGER_ROW_HEIGHT - 2);
+    ctx.strokeStyle = c.borderSubtle;
+    ctx.beginPath();
+    ctx.moveTo(_viewLeft, y + SINGER_ROW_HEIGHT - 2);
+    ctx.lineTo(_viewRight, y + SINGER_ROW_HEIGHT - 2);
+    ctx.stroke();
+  });
 
+  // Draw dynamic content (fragments) on top of cached grid
+  // Visible bounds were computed above; skip offscreen dynamic content.
   singers.forEach((singer, index) => {
     const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
     // 跳过整行不在可视区域的 singer
     if (y + SINGER_ROW_HEIGHT < _viewTop || y > _viewBottom) return;
 
+    const isAccompaniment = singer.type === 'accompaniment';
     const singerFragments = fragments.filter(f => f.singerId === singer.id);
+
+    // For accompaniment tracks, render the audio as a continuous waveform block
+    if (isAccompaniment) {
+      const accStartBeat = singer.accompanimentStartTime || 0;
+      const accDuration = singer.audioDuration || 0;
+      const accDurationBeats = (accDuration / 60) * state.project.bpm;
+      const accX = accStartBeat * beatWidth;
+      const accWidth = Math.max(2, accDurationBeats * beatWidth);
+
+      // Skip if not visible
+      if (accX + accWidth < _viewLeft || accX > _viewRight) {
+        // Still show empty state if no audio
+      } else {
+        const fragY = y + 4;
+        const radius = 6;
+
+        // Rounded rect fill with accompaniment color
+        ctx.fillStyle = (singer.color || c.accent) + '99';
+        ctx.beginPath();
+        ctx.roundRect(accX, fragY, accWidth, FRAGMENT_HEIGHT, radius);
+        ctx.fill();
+
+        // Rounded rect stroke
+        ctx.strokeStyle = singer.color || c.accent;
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.roundRect(accX, fragY, accWidth, FRAGMENT_HEIGHT, radius);
+        ctx.stroke();
+
+        // Draw waveform-like pattern if audioBuffer is available
+        if (singer.audioBuffer && singer.audioBuffer.length > 0) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(accX, fragY, accWidth, FRAGMENT_HEIGHT, radius);
+          ctx.clip();
+
+          const buf = singer.audioBuffer;
+          const samplesPerPixel = Math.max(1, Math.floor(buf.length / accWidth));
+          const midY = fragY + FRAGMENT_HEIGHT / 2;
+          const maxAmp = FRAGMENT_HEIGHT / 2 - 4;
+
+          ctx.strokeStyle = c.fragmentText || '#fff';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          for (let px = 0; px < accWidth; px++) {
+            const sampleStart = Math.floor(px * samplesPerPixel);
+            const sampleEnd = Math.min(sampleStart + samplesPerPixel, buf.length);
+            let peak = 0;
+            for (let s = sampleStart; s < sampleEnd; s++) {
+              const v = Math.abs(buf[s]);
+              if (v > peak) peak = v;
+            }
+            const barH = peak * maxAmp;
+            ctx.moveTo(accX + px, midY - barH);
+            ctx.lineTo(accX + px, midY + barH);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
+
+        // Label
+        const labelInsetX = 6;
+        const labelClipRect = { x: accX, y: fragY, w: accWidth, h: FRAGMENT_HEIGHT };
+        const labelMaxWidth = Math.max(0, accWidth - labelInsetX * 2);
+
+        ctx.fillStyle = c.fragmentText;
+        ctx.font = '11px sans-serif';
+        drawClippedText(
+          ctx,
+          singer.audioFileName || t('main.accompanimentTrack'),
+          accX + labelInsetX,
+          y + 16,
+          labelMaxWidth,
+          labelClipRect,
+        );
+
+        ctx.fillStyle = c.fgMuted;
+        ctx.font = '10px sans-serif';
+        drawClippedText(
+          ctx,
+          formatAccompanimentDuration(accDuration),
+          accX + labelInsetX,
+          y + 36,
+          labelMaxWidth,
+          labelClipRect,
+        );
+      }
+    }
+
     singerFragments.forEach(fragment => {
       const fragX = fragment.startTime * beatWidth;
       const fragWidth = fragment.duration * beatWidth;
@@ -236,6 +324,14 @@ export function renderFragmentTimeline() {
         if (minPitch > maxPitch) { minPitch = 60; maxPitch = 72; }
         const pitchRange = Math.max(maxPitch - minPitch + 1, 6);
 
+        // 音符条颜色必须与分片底色（fragment.color）保持对比度。
+        // 否则分片被拖到颜色相近（如蓝色系）的歌手上、换色后，
+        // 固定蓝色音符条会与底色融为一体而“消失”。按底色的亮度
+        // 在浅色/深色音符条之间切换，保证任意歌手颜色下都可辨认。
+        const noteFill = computeLuminance(fragment.color) < 0.55
+          ? 'rgba(255, 255, 255, 0.5)'
+          : 'rgba(15, 15, 28, 0.45)';
+
         for (const note of fragment.notes) {
           if (note.start >= fragDuration) continue;
           const noteEnd = Math.min(note.start + note.duration, fragDuration);
@@ -245,7 +341,7 @@ export function renderFragmentTimeline() {
           const noteH = Math.max(2, midiAreaHeight / pitchRange);
           const noteY = midiAreaTop + pitchOffset * midiAreaHeight;
 
-          ctx.fillStyle = c.selectionBg;
+          ctx.fillStyle = noteFill;
           ctx.fillRect(noteX, noteY, noteW, noteH);
         }
         ctx.restore();
@@ -349,6 +445,9 @@ export function drawPlayheadLine(elapsedSeconds, options = {}) {
   const w = dom.fragmentPlayheadCanvas.width / dpr;
   const h = dom.fragmentPlayheadCanvas.height / dpr;
 
+  // The playhead is positioned solely by timeline time. Playback must not
+  // mutate scrollX, otherwise the indicator appears pinned to the viewport.
+
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
@@ -436,7 +535,9 @@ export function renderSingerList() {
   const currentIds = singers.map(s => s.id).join(',');
   const currentNames = singers.map(s => s.trackName).join(',');
   const currentMissing = singers.map(s => s.singerFileMissing ? '1' : '0').join(',');
-  const cacheKey = `${currentIds}|${currentNames}|${currentMissing}|${state.editingTrackNameId}`;
+  const currentAudioMissing = singers.map(s => s.audioFileMissing ? '1' : '0').join(',');
+  const currentTypes = singers.map(s => s.type || 'singer').join(',');
+  const cacheKey = `${currentIds}|${currentNames}|${currentMissing}|${currentAudioMissing}|${currentTypes}|${state.editingTrackNameId}`;
   if (renderSingerList._cacheKey === cacheKey && dom.singerListEl.childElementCount > 0) return;
   renderSingerList._cacheKey = cacheKey;
 
@@ -472,8 +573,9 @@ export function renderSingerList() {
   }
 
   singers.forEach(singer => {
+    const isAccompaniment = singer.type === 'accompaniment';
     const item = document.createElement('div');
-    item.className = 'singer-item';
+    item.className = isAccompaniment ? 'singer-item accompaniment-item' : 'singer-item';
     item.setAttribute('role', 'listitem');
     item.dataset.singerId = singer.id;
 
@@ -481,14 +583,15 @@ export function renderSingerList() {
 
     const avatarDiv = document.createElement('div');
     avatarDiv.className = 'singer-avatar';
-    if (singer.avatarPath && (singer.avatarPath.startsWith('data:image/') || /^[a-zA-Z]:\\|^\//.test(singer.avatarPath))) {
+    if (!isAccompaniment && singer.avatarPath && (singer.avatarPath.startsWith('data:image/') || /^[a-zA-Z]:\\|^\//.test(singer.avatarPath))) {
       const img = document.createElement('img');
       img.src = singer.avatarPath;
       img.alt = singer.singerName || '';
       avatarDiv.appendChild(img);
     } else {
-      const micIcon = createIcon('microphone', { size: 22 });
-      if (micIcon) avatarDiv.appendChild(micIcon);
+      const iconName = isAccompaniment ? 'music' : 'microphone';
+      const icon = createIcon(iconName, { size: 22 });
+      if (icon) avatarDiv.appendChild(icon);
     }
 
     const infoDiv = document.createElement('div');
@@ -499,14 +602,17 @@ export function renderSingerList() {
       input.className = 'singer-track-name-input';
       input.value = singer.trackName;
       input.style.cssText = `
-        background: #14141f;
-        color: #e0e0f0;
-        border: 1px solid #5b8def;
+        background: var(--bg-input);
+        color: var(--fg-primary);
+        border: 1px solid var(--accent);
         border-radius: 3px;
         padding: 2px 4px;
         font-size: 12px;
         font-weight: 600;
         width: 100%;
+        outline: none;
+        box-shadow: 0 0 0 2px var(--accent-soft);
+        transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
       `;
       infoDiv.appendChild(input);
 
@@ -557,10 +663,75 @@ export function renderSingerList() {
 
       const singerNameDiv = document.createElement('div');
       singerNameDiv.className = 'singer-singer-name';
-      singerNameDiv.textContent = singer.singerName;
+      if (isAccompaniment) {
+        // Show audio file name and duration for accompaniment tracks
+        const fileName = singer.audioFileName || t('main.accompanimentTrack');
+        const duration = singer.audioDuration ? ` (${formatAccompanimentDuration(singer.audioDuration)})` : '';
+        singerNameDiv.textContent = fileName + duration;
+      } else {
+        singerNameDiv.textContent = singer.singerName;
+      }
       infoDiv.appendChild(singerNameDiv);
 
-      if (singer.singerFileMissing) {
+      if (isAccompaniment) {
+        if (singer.audioFileMissing) {
+          const warningDiv = document.createElement('div');
+          warningDiv.className = 'singer-file-missing-warning';
+          warningDiv.textContent = t('main.audioFileNotFound');
+          infoDiv.appendChild(warningDiv);
+
+          const relocateBtn = document.createElement('button');
+          relocateBtn.className = 'btn-relocate-singer';
+          relocateBtn.textContent = t('main.relocate');
+          relocateBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            try {
+              const result = await window.electronAPI.showOpenDialog({
+                title: t('main.relocateAudioFile'),
+                filters: [
+                  { name: 'Audio', extensions: ['wav', 'mp3', 'flac', 'ogg', 'm4a', 'aac'] },
+                ],
+                properties: ['openFile'],
+              });
+              if (!result.canceled && result.filePaths.length > 0) {
+                const filePath = result.filePaths[0];
+                const buffer = await window.electronAPI.readFileBuffer(filePath);
+                await loadAccompanimentFile(singer.id, buffer, filePath);
+                refreshAll();
+              }
+            } catch (_err) {
+              // Relocation failed silently
+            }
+          });
+          infoDiv.appendChild(relocateBtn);
+        } else {
+          const configDiv = document.createElement('div');
+          configDiv.className = 'singer-config';
+          configDiv.textContent = t('main.accompanimentLabel');
+          infoDiv.appendChild(configDiv);
+
+          const volumeWrap = document.createElement('label');
+          volumeWrap.className = 'accompaniment-volume-control';
+          const volumeText = document.createElement('span');
+          const currentVolume = Number.isFinite(singer.accompanimentVolume) ? singer.accompanimentVolume : 1;
+          volumeText.textContent = `Vol ${Math.round(currentVolume * 100)}%`;
+          const volumeInput = document.createElement('input');
+          volumeInput.type = 'range';
+          volumeInput.min = '0';
+          volumeInput.max = '2';
+          volumeInput.step = '0.01';
+          volumeInput.value = String(currentVolume);
+          volumeInput.addEventListener('input', (e) => {
+            e.stopPropagation();
+            const value = Math.max(0, Math.min(2, Number(volumeInput.value)));
+            singer.accompanimentVolume = value;
+            volumeText.textContent = `Vol ${Math.round(value * 100)}%`;
+          });
+          volumeInput.addEventListener('click', e => e.stopPropagation());
+          volumeWrap.append(volumeText, volumeInput);
+          infoDiv.appendChild(volumeWrap);
+        }
+      } else if (singer.singerFileMissing) {
         const warningDiv = document.createElement('div');
         warningDiv.className = 'singer-file-missing-warning';
         warningDiv.textContent = t('main.singerFileNotFound');
@@ -583,7 +754,7 @@ export function renderSingerList() {
               await loadSingerFile(singer.id, buffer, filePath);
               refreshAll();
             }
-          } catch (err) {
+          } catch (_err) {
       // TODO: translate garbled log
           }
         });
@@ -605,12 +776,15 @@ export function renderSingerList() {
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'singer-item-actions';
 
-    const addBtn = document.createElement('button');
-    addBtn.className = 'btn-fragment-add';
-    addBtn.title = t('main.addFragment');
-    addBtn.dataset.singerId = singer.id;
-    addBtn.textContent = '+';
-    actionsDiv.appendChild(addBtn);
+    // Accompaniment tracks don't have fragments (no SVS synthesis)
+    if (!isAccompaniment) {
+      const addBtn = document.createElement('button');
+      addBtn.className = 'btn-fragment-add';
+      addBtn.title = t('main.addFragment');
+      addBtn.dataset.singerId = singer.id;
+      addBtn.textContent = '+';
+      actionsDiv.appendChild(addBtn);
+    }
 
     if (singers.length > 1) {
       const delBtn = document.createElement('button');
@@ -643,29 +817,34 @@ export function renderSingerList() {
       state.selectedSingerId = singer.id;
     });
 
-    addBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const singerId = addBtn.dataset.singerId;
-      const fragments = trackManager.getFragments();
-      const lastFragment = fragments.filter(f => f.singerId === singerId).pop();
-      const startTime = lastFragment ? lastFragment.startTime + lastFragment.duration : 0;
-      const newFragment = trackManager.addFragment({ singerId, startTime, duration: 4 });
-      const newFragmentId = newFragment.id;
-      history.push({
-        undo() {
-          trackManager.removeFragment(newFragmentId);
-          refreshAll();
-        },
-        redo() {
-          const singer = trackManager.getSinger(singerId);
-          const color = singer ? singer.color : getCanvasColors().accent;
-          const frag = trackManager.addFragment({ singerId, startTime, duration: 4, color });
+    if (!isAccompaniment) {
+      const addBtn = item.querySelector('.btn-fragment-add');
+      if (addBtn) {
+        addBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const singerId = addBtn.dataset.singerId;
+          const fragments = trackManager.getFragments();
+          const lastFragment = fragments.filter(f => f.singerId === singerId).pop();
+          const startTime = lastFragment ? lastFragment.startTime + lastFragment.duration : 0;
+          const newFragment = trackManager.addFragment({ singerId, startTime, duration: 4 });
+          const newFragmentId = newFragment.id;
+          history.push({
+            undo() {
+              trackManager.removeFragment(newFragmentId);
+              refreshAll();
+            },
+            redo() {
+              const singer = trackManager.getSinger(singerId);
+              const color = singer ? singer.color : getCanvasColors().accent;
+              const _frag = trackManager.addFragment({ singerId, startTime, duration: 4, color });
+              renderFragmentTimeline();
+            }
+          });
+          markDirty();
           renderFragmentTimeline();
-        }
-      });
-      markDirty();
-      renderFragmentTimeline();
-    });
+        });
+      }
+    }
 
     if (singers.length > 1) {
       const delBtn = item.querySelector('.btn-singer-delete');
@@ -680,7 +859,7 @@ export function renderSingerList() {
             trackManager.removeSinger(singerId);
             history.push({
               undo() {
-                const restoredSinger = trackManager.addSinger(singerClone);
+                const _restoredSinger = trackManager.addSinger(singerClone);
                 for (const fc of fragmentsClone) {
                   trackManager.addFragment(fc);
                 }

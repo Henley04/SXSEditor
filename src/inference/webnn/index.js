@@ -6,7 +6,7 @@
  * 推理输入/输出通过 IPC 与主进程协调。
  */
 
-import { detectNPU } from './npuDetection.js';
+import { detectNPU, clearCache } from './npuDetection.js';
 import { loadModel, unloadModel, runInference, getStatus, runSession, withRunLock } from './sessionManager.js';
 import { runEncoderStage } from './preprocessing.js';
 import { runDiffusionLoop, runBatchDiffusionLoop } from './diffusion.js';
@@ -56,6 +56,9 @@ async function _runSynthesisUnlocked(params) {
         onChunkComplete = null,
         skipVocoder = false,
         promptSeq = null,
+        sampler = 'euler',
+        cfgScheduleOpts = null,
+        dynamicThresholdOpts = null,
     } = params;
 
     const floatType = isFP16 ? 'float16' : 'float32';
@@ -100,6 +103,9 @@ async function _runSynthesisUnlocked(params) {
         floatType: diffFloatType,
         npuDiffBatchSize,
         useStaticShapes,
+        samplerName: sampler,
+        cfgScheduleOpts,
+        dynamicThresholdOpts,
     });
 
     // ===== Stage 3: Vocoder =====
@@ -125,7 +131,7 @@ async function _runSynthesisUnlocked(params) {
     });
 
     const synthTotalMs = performance.now() - tEnc0;
-    const encMs = diffResult.diffTotalMs > 0 ? tEnc0 : 0; // placeholder, encMs computed from tDiff0 - tEnc0
+    // B10: removed dead `encMs` placeholder (was computed but never used)
     const diffMs = diffResult.diffTotalMs;
     const vocMs = vocTotalMs;
     console.log(`[WebNN] ===== Synthesis Summary =====`);
@@ -167,6 +173,9 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
     const useStaticShapes = paramsArray[0].useStaticShapes || false;
     const vocoderChunkFrames = paramsArray[0].vocoderChunkFrames || 0;
     const skipVocoder = paramsArray[0].skipVocoder || false;
+    const sampler = paramsArray[0].sampler || 'euler';
+    const cfgScheduleOpts = paramsArray[0].cfgScheduleOpts || null;
+    const dynamicThresholdOpts = paramsArray[0].dynamicThresholdOpts || null;
 
     // ===== Stage 1: Encode both segments in parallel =====
     if (onProgress) onProgress(10);
@@ -287,7 +296,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
             totalFramesWithPrompt: ptFrameCount + totalFrames,
             totalSteps: params.totalSteps || 32,
             cfgStrength: params.cfgStrength ?? 3.0,
-            cfgRescale: params.cfgRescale ?? 0.75,
+            cfgRescale: params.cfgRescale ?? 0.7,
             npuVocoderBatchSize: params.npuVocoderBatchSize || 1,
         });
     }
@@ -297,7 +306,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
     // ===== Stage 2: Batched Diffusion Loop (batch=4) =====
     if (onProgress) onProgress(30);
     const totalSteps = segData[0].totalSteps;
-    const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType: diffFloatType, useStaticShapes });
+    const xts = await runBatchDiffusionLoop({ segData, totalSteps, floatType: diffFloatType, useStaticShapes, samplerName: sampler, cfgScheduleOpts, dynamicThresholdOpts });
 
     // ===== Stage 3: Vocoder per segment =====
     // skipVocoder 模式：返回 mel 给主进程，vocoder 由主进程 DML 执行（支持 SiFiGAN 双输入）
@@ -360,6 +369,7 @@ async function _runSynthesisBatchUnlocked(paramsArray) {
 // 导出接口供 IPC 调用（保持与原始模块相同的 API）
 export {
     detectNPU,
+    clearCache, // W12: 暴露缓存清除入口，供需要强制重新检测时调用
     loadModel,
     unloadModel,
     runInference,

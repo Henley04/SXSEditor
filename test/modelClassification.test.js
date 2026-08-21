@@ -1,5 +1,4 @@
 const { expect } = require('chai');
-const path = require('path');
 
 const {
   MODEL_FILE_MANIFEST,
@@ -61,10 +60,12 @@ describe('SVS Model Classification (base vs diffusion)', () => {
   });
 
   describe('DIFF_STEP_MODEL_FILES set', () => {
-    it('should contain both diff_step variants', () => {
-      expect(DIFF_STEP_MODEL_FILES.size).to.equal(2);
+    it('should contain all diff_step variants', () => {
+      expect(DIFF_STEP_MODEL_FILES.size).to.equal(3);
       expect(DIFF_STEP_MODEL_FILES.has('diff_step_dml.onnx')).to.be.true;
       expect(DIFF_STEP_MODEL_FILES.has('diff_step.onnx')).to.be.true;
+      // int8 目录下 QDIT 量化的新模型
+      expect(DIFF_STEP_MODEL_FILES.has('diffstep.onnx')).to.be.true;
     });
 
     it('should NOT include base models or vocoder', () => {

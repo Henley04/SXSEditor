@@ -3,10 +3,10 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { getModelGroups } = require('../modelRegistry');
 const { getModelDir } = require('./modelDir');
-const { ensureGPUInfo, queryGPUVRAMUsage, detectNPUCached, getGPUPhase } = require('./gpuInfo');
+const { ensureGPUInfo, queryGPUVRAMUsage, detectNPUCached } = require('./gpuInfo');
 const { enumerateDMLDevices } = require('../inference/pipeline');
 const { getSvsPipeline } = require('./svsIpc');
-const { getRmvpeDetector, getBasicPitchDetector, getRosvotDetector, rmvpeLazy, basicPitchLazy, rosvotLazy } = require('./pitchMidiIpc');
+const { getRmvpeDetector, getBasicPitchDetector, getRosvotDetector, getFcpeDetector, rmvpeLazy, basicPitchLazy, rosvotLazy, fcpeLazy } = require('./pitchMidiIpc');
 const { openResourceManagerWindow } = require('./windowManager');
 const { getCachedDMLDevices, setCachedDMLDevices } = require('./settingsIpc');
 
@@ -80,6 +80,9 @@ async function loadSingleModel(groupId, modelId) {
   } else if (groupId === 'rosvot') {
     await rosvotLazy.get();
     return { success: true };
+  } else if (groupId === 'fcpe') {
+    await fcpeLazy.get();
+    return { success: true };
   }
   return { success: false, error: `Unknown group: ${groupId}` };
 }
@@ -108,6 +111,11 @@ async function unloadSingleModel(groupId, modelId) {
     if (d) { try { d.dispose(); } catch (_) {} }
     rosvotLazy.reset();
     return { success: true };
+  } else if (groupId === 'fcpe') {
+    const d = getFcpeDetector();
+    if (d) { try { d.dispose(); } catch (_) {} }
+    fcpeLazy.reset();
+    return { success: true };
   }
   return { success: false, error: `Unknown group: ${groupId}` };
 }
@@ -116,6 +124,7 @@ function cleanupOnLoadFailure(groupId) {
   if (groupId === 'rmvpe') { const d = getRmvpeDetector(); if (d) { try { d.dispose(); } catch (_) {} } rmvpeLazy.reset(); }
   if (groupId === 'basicPitch') { const d = getBasicPitchDetector(); if (d) { try { d.dispose(); } catch (_) {} } basicPitchLazy.reset(); }
   if (groupId === 'rosvot') { const d = getRosvotDetector(); if (d) { try { d.dispose(); } catch (_) {} } rosvotLazy.reset(); }
+  if (groupId === 'fcpe') { const d = getFcpeDetector(); if (d) { try { d.dispose(); } catch (_) {} } fcpeLazy.reset(); }
 }
 
 function registerResourceManagerIpc() {
@@ -217,6 +226,10 @@ function registerResourceManagerIpc() {
           ep = 'tfjs';
         } else if (group.id === 'rosvot') {
           const d = getRosvotDetector();
+          loaded = !!(d && d.initialized);
+          ep = d ? (d.usingDML ? 'dml' : 'cpu') : null;
+        } else if (group.id === 'fcpe') {
+          const d = getFcpeDetector();
           loaded = !!(d && d.initialized);
           ep = d ? (d.usingDML ? 'dml' : 'cpu') : null;
         }

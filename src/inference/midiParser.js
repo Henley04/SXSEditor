@@ -1,6 +1,5 @@
 const { Midi } = require('@tonejs/midi');
-
-const SILENCE_THRESHOLD_SEC = 0.2;
+const { decodeMidiText } = require('../utils/textEncoding');
 
 function _readUint16(view, offset) {
   return (view.getUint8(offset) << 8) | view.getUint8(offset + 1);
@@ -27,6 +26,7 @@ function _validateMidiBuffer(buffer) {
  * Returns:
  *   {
  *     byChannel: Map<channel, Array<{ticks, text}>>,
+ *     byTrack: Map<trackIndex, Array<{ticks, text}>>,
  *     global: Array<{ticks, text}>   // lyrics from tracks with no notes
  *   }
  */
@@ -34,6 +34,7 @@ function _extractRawLyrics(buffer) {
   const view = new DataView(buffer);
   const numTracks = _readUint16(view, 10);
   const byChannel = new Map();
+  const byTrack = new Map();
   const global = [];
   let off = 14;
 
@@ -99,9 +100,7 @@ function _extractRawLyrics(buffer) {
         const dataStart = p;
         p += ml;
         if (metaType === 0x05 && p <= trackEnd) {
-          const text = new TextDecoder('utf-8').decode(
-            new Uint8Array(buffer, dataStart, ml),
-          );
+          const text = decodeMidiText(new Uint8Array(buffer, dataStart, ml));
           trackLyrics.push({ ticks: tick, text });
         }
       } else if (status === 0xf0 || status === 0xf7) {
@@ -132,6 +131,7 @@ function _extractRawLyrics(buffer) {
     }
 
     if (trackLyrics.length > 0) {
+      byTrack.set(t, trackLyrics.slice());
       if (trackHasNotes && trackChannel >= 0) {
         if (!byChannel.has(trackChannel)) byChannel.set(trackChannel, []);
         byChannel.get(trackChannel).push(...trackLyrics);
@@ -145,14 +145,14 @@ function _extractRawLyrics(buffer) {
     off = trackEnd;
   }
 
-  return { byChannel, global };
+  return { byChannel, byTrack, global };
 }
 
 /**
  * Apply SVS-specific post-processing to a single track's raw notes:
  *   - trim overlapping notes (monophonic timeline)
  *   - attach lyrics (from the track or shared header) by tick proximity
- *   - insert SP (rest) notes for gaps > 0.2s
+ *   - preserve blank MIDI intervals without creating visible pitch-0 notes
  *   - classify noteType: 1 = SP, 2 = normal, 3 = slur ('-')
  *
  * Output note shape:
@@ -253,26 +253,11 @@ function _processTrackNotes(rawNotes, lyrics, ticksPerBeat, ticksToSeconds, seco
       text = lyric;
     }
 
-    if (startS - prevEndS > SILENCE_THRESHOLD_SEC) {
-      const spStartTick = secondsToTicks(prevEndS);
-      const spStartBeat = spStartTick / ticksPerBeat;
-      const spEndTick = secondsToTicks(startS);
-      const spDurBeats = (spEndTick - spStartTick) / ticksPerBeat;
-      result.push({
-        pitch: 0,
-        start: spStartBeat,
-        duration: spDurBeats,
-        lyric: '',
-        noteType: 1,
-      });
-    } else {
-      // Small gap: extend the previous note to fill it so the timeline is
-      // contiguous (matches original parser behavior).
-      if (result.length > 0) {
-        const lastResult = result[result.length - 1];
-        lastResult.duration = n.startTicks / ticksPerBeat - lastResult.start;
-      }
-    }
+    // Keep MIDI silence as an actual empty interval. Older code inserted a
+    // synthetic pitch=0 note for long gaps (rendered as C-1) and extended the
+    // preceding note across short gaps. Both alter the imported score and can
+    // pollute F0/autoShift statistics. The synthesis pipeline already fills
+    // gaps internally when it needs a contiguous conditioning sequence.
 
     const startBeat = n.startTicks / ticksPerBeat;
     const durBeats = n.durationTicks / ticksPerBeat;
@@ -304,7 +289,7 @@ function parseMidiFile(buffer) {
   const ticksPerBeat = midi.header.ppq;
 
   const rawNotes = [];
-  for (const track of midi.tracks) {
+  for (const [trackIndex, track] of midi.tracks.entries()) {
     if (track.instrument.percussion) continue;
     for (const note of track.notes) {
       rawNotes.push({
@@ -370,7 +355,7 @@ function parseMidiFileMultiTrack(buffer) {
   // own lyrics. Use tonejs header lyrics only as a fallback when raw
   // extraction finds nothing (avoids duplicating lyrics that tonejs already
   // hoisted from track 0 to the header).
-  const { byChannel: rawByChannel, global: rawGlobal } = _extractRawLyrics(buffer);
+  const { byChannel: rawByChannel, byTrack: rawByTrack, global: rawGlobal } = _extractRawLyrics(buffer);
   const hasRawLyrics = rawGlobal.length > 0
     || [...rawByChannel.values()].some((v) => v.length > 0);
   const headerLyrics = hasRawLyrics
@@ -381,7 +366,7 @@ function parseMidiFileMultiTrack(buffer) {
   const globalLyrics = [...rawGlobal, ...headerLyrics];
 
   const result = [];
-  for (const track of midi.tracks) {
+  for (const [trackIndex, track] of midi.tracks.entries()) {
     if (track.instrument.percussion) continue;
     if (track.notes.length === 0) continue;
 
@@ -395,10 +380,13 @@ function parseMidiFileMultiTrack(buffer) {
 
     // Prefer lyrics extracted from this track's channel; fall back to global
     // lyrics (header / tempo track) when the channel has none.
+    const exactTrackLyrics = rawByTrack.get(trackIndex);
     const channelLyrics = rawByChannel.get(track.channel);
-    const trackLyrics = channelLyrics && channelLyrics.length > 0
-      ? channelLyrics
-      : globalLyrics;
+    const trackLyrics = exactTrackLyrics && exactTrackLyrics.length > 0
+      ? exactTrackLyrics
+      : channelLyrics && channelLyrics.length > 0
+        ? channelLyrics
+        : globalLyrics;
 
     const notes = _processTrackNotes(
       rawNotes,

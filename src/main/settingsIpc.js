@@ -1,11 +1,70 @@
-const { ipcMain, dialog } = require('electron');
-const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, invalidateSettingsCache } = require('./settings');
-const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectAllHardware, detectNPUCached, invalidateNPUCache, getVocoderChunkFramesInfo, getVocoderChunkFramesTable } = require('./gpuInfo');
+const { ipcMain } = require('electron');
+const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, normalizeSettings } = require('./settings');
+const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectNPUCached, getVocoderChunkFramesInfo, getVocoderChunkFramesTable } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
 const { enumerateDMLDevices } = require('../inference/pipeline');
 const { getSvsPipeline, resetSvsPipeline } = require('./svsIpc');
 const { resetRmvpe, resetBasicPitch, resetRosvot } = require('./pitchMidiIpc');
+const { isSystemPath } = require('./security');
 const { t } = require('./locale');
+
+// W10: Semantic value validation for known setting keys.
+// The whitelist (ALLOWED_SETTINGS_KEYS) only filters by key name; these
+// validators constrain values so a bad modelDir (system path), an out-of-range
+// vocoderChunkFrames, an unknown modelPrecision, or a malformed theme id
+// cannot be persisted. Invalid values are skipped with a warning rather
+// than failing the whole save, to avoid breaking existing saves.
+const VALID_MODEL_PRECISIONS = ['fp32', 'fp16', 'int8', 'int8-npu'];
+// Theme ids are kebab-case (matches src/themes/themeValidator.js ID_RE).
+// Built-in + user themes both follow this format.
+const THEME_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+const BOOLEAN_SETTING_KEYS = new Set([
+  'useRosvot',
+  'previewDiffStepChunkEnabled',
+  'releaseDmlVramAfterSynthesis',
+  'releaseDiffStepBeforeVocoder',
+  'ortEnableMemPattern',
+  'ortForceMemPatternOnDml',
+  'ortEnableCpuMemArena',
+  'autoCheckUpdates',
+  'dontRemindAppUpdates',
+  'enableLoudnormFinal',
+  'enableAntiAliasing',
+  'enableSDEditRepair',
+  'diagnosticMode',
+  'previewDynamicThresholdEnabled',
+  'exportDynamicThresholdEnabled',
+]);
+
+function isValidSettingValue(key, value) {
+  switch (key) {
+    case 'modelDir':
+      // Allow empty string (clears the custom dir); otherwise must be a
+      // non-system path string.
+      if (typeof value !== 'string') return false;
+      if (value.length === 0) return true;
+      return !isSystemPath(value);
+    case 'theme':
+      if (typeof value !== 'string') return false;
+      if (value.length === 0 || value.length > 200) return false;
+      return THEME_ID_RE.test(value);
+    case 'vocoderChunkFrames':
+      if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+      if (!Number.isInteger(value)) return false;
+      return value >= 1 && value <= 4096;
+    case 'modelPrecision':
+      return VALID_MODEL_PRECISIONS.includes(value);
+    case 'previewDynamicThresholdPercentile':
+    case 'exportDynamicThresholdPercentile':
+      if (typeof value !== 'number' || !Number.isFinite(value)) return false;
+      return value >= 0.9 && value <= 0.999;
+    default:
+      if (BOOLEAN_SETTING_KEYS.has(key)) {
+        return typeof value === 'boolean';
+      }
+      return true; // unvalidated keys pass through
+  }
+}
 
 let cachedDMLDevices = null;
 
@@ -99,7 +158,7 @@ function registerSettingsIpc() {
       return getVocoderChunkFramesInfo(settings.modelPrecision, vocoderType);
     } catch (err) {
       console.error('[Main] Failed to get vocoder chunk frames info:', err);
-      return { gpuPhase: 'none', smartFrames: 1008, bestVramBytes: 0, bestGpuName: null };
+      return { gpuPhase: 'none', smartFrames: 1024, bestVramBytes: 0, bestGpuName: null };
     }
   });
 
@@ -178,10 +237,22 @@ function registerSettingsIpc() {
     const current = loadSettings();
     const filtered = {};
     for (const key of ALLOWED_SETTINGS_KEYS) {
-      if (settings[key] !== undefined) filtered[key] = settings[key];
+      if (settings[key] === undefined) continue;
+      // W10: validate the value for known keys; skip invalid ones with a
+      // warning instead of failing the whole save.
+      if (!isValidSettingValue(key, settings[key])) {
+        console.warn(`[Main] Invalid value for setting "${key}", skipping`);
+        continue;
+      }
+      filtered[key] = settings[key];
     }
-    const merged = { ...current, ...filtered };
-    await saveSettingsFile(merged);
+    const merged = normalizeSettings({ ...current, ...filtered });
+    // W7: saveSettingsFile now returns { success, error? }; propagate a
+    // write failure to the renderer instead of reporting a false success.
+    const saveResult = await saveSettingsFile(merged);
+    if (!saveResult.success) {
+      return saveResult;
+    }
 
     if (settings.locale) {
       await updateLocaleSetting(settings.locale);

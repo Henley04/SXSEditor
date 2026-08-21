@@ -107,7 +107,8 @@ export async function handleAudioToMidi() {
       audioBuffer = await ac.decodeAudioData(buffer.slice(0));
     } catch (decodeErr) {
       console.error('Audio decode failed:', decodeErr);
-      showAlertDialog(t('main.audioToMidiDecodeFailed') + ': ' + decodeErr.message);
+      // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+      showAlertDialog(t('main.audioToMidiDecodeFailedDetail', { detail: decodeErr.message }));
       return;
     } finally {
       ac.close();
@@ -125,7 +126,7 @@ export async function handleAudioToMidi() {
 
     try {
       const settings = await window.electronAPI.getSettings();
-      const midiTool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'basicpitch';
+      const midiTool = (settings?.midiExtractTool === 'rosvot' ? 'rmvpe' : settings?.midiExtractTool) || 'fcpe';
 
       if (midiTool === 'rmvpe') {
         // RMVPE: extract F0 + f0ToNotes for MIDI
@@ -149,6 +150,42 @@ export async function handleAudioToMidi() {
 
         if (extractPitch) {
           f0Data = rmvpeResult.f0Array;
+        }
+      } else if (midiTool === 'fcpe') {
+        // FCPE: extract F0 + f0ToNotes for MIDI
+        // 从全局设置读取 FCPE 参数，与设置页保持一致
+        const fcpeOpts = settings ? {
+          threshold: { low: 0.003, mid: 0.006, high: 0.01 }[settings.fcpeThreshold] || 0.006,
+          thresholdEnabled: true,
+          f0Min: settings.fcpeF0Min ?? 80,
+          f0Max: settings.fcpeF0Max ?? 880,
+          f0RangeAuto: settings.fcpeF0RangeAuto !== false,
+          smoothing: settings.fcpeSmoothing || 'medium',
+          quantization: settings.fcpeQuantization || 'strict',
+          minNoteDuration: settings.fcpeMinNoteDuration ?? 0.05,
+          normalize: settings.fcpeNormalize !== false,
+        } : undefined;
+        const fcpeResult = await window.electronAPI.extractMidiFcpe({
+          audioData,
+          sampleRate,
+          bpm,
+          options: fcpeOpts,
+        });
+
+        if (!fcpeResult.success) {
+          throw new Error(fcpeResult.error || 'FCPE failed');
+        }
+
+        midiNotes = (fcpeResult.notes || []).map((n, i) => ({
+          id: n.id ?? (Date.now() + i),
+          pitch: n.pitch ?? 60,
+          start: n.start ?? 0,
+          duration: n.duration ?? 0.25,
+          lyric: n.lyric || 'la',
+        }));
+
+        if (extractPitch) {
+          f0Data = fcpeResult.f0Array;
         }
       } else {
         // Basic Pitch: extract MIDI + F0
@@ -188,14 +225,16 @@ export async function handleAudioToMidi() {
     } catch (err) {
       hideLoadingOverlay(loading);
       console.error('Audio to MIDI failed:', err);
-      showAlertDialog(t('main.audioToMidiFailed') + ': ' + err.message);
+      // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+      showAlertDialog(t('main.audioToMidiFailedDetail', { detail: err.message }));
       return;
     }
 
     hideLoadingOverlay(loading);
 
     if (midiNotes.length === 0) {
-      showAlertDialog(t('main.audioToMidiFailed') + ': no notes extracted');
+      // W24: use a dedicated localized key instead of t(key) + ': <literal>'.
+      showAlertDialog(t('main.audioToMidiNoNotesExtracted'));
       return;
     }
 
@@ -251,14 +290,17 @@ export async function handleImportMidi() {
     const result = await window.electronAPI.importMidiMultiTrack();
     if (!result.success) {
       if (!result.canceled) {
-        showAlertDialog(t('main.midiImportFailed') + ': ' + (result.error || t('main.audioToMidiFailed')));
+        // W24: use t(key, params); t('main.audioToMidiFailed') stays as the
+        // fallback detail (its key is unchanged, so it resolves cleanly).
+        showAlertDialog(t('main.midiImportFailedDetail', { detail: result.error || t('main.audioToMidiFailed') }));
       }
       return;
     }
 
     const tracks = result.tracks || [];
     if (tracks.length === 0) {
-      showAlertDialog(t('main.midiImportFailed') + ': no notes found');
+      // W24: use a dedicated localized key instead of t(key) + ': <literal>'.
+      showAlertDialog(t('main.midiImportNoNotesFound'));
       return;
     }
 
@@ -339,12 +381,14 @@ export async function handleImportMidi() {
       }
     }
 
+    // W24: use t(key, params) instead of String.replace('{count}', ...) to bypass i18n.
     const msg = createdSingers.length === 1
       ? t('main.midiImportCompleteSingle')
-      : t('main.midiImportCompleteMulti').replace('{count}', createdSingers.length);
+      : t('main.midiImportCompleteMulti', { count: createdSingers.length });
     showAlertDialog(msg);
   } catch (err) {
     console.error('MIDI import process error:', err);
-    showAlertDialog(t('main.midiImportFailed') + ': ' + err.message);
+    // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
+    showAlertDialog(t('main.midiImportFailedDetail', { detail: err.message }));
   }
 }

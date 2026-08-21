@@ -86,7 +86,7 @@ export function pausePlayback() {
     try {
       state.audioSource.onended = null;
       state.audioSource.stop();
-    } catch (e) {}
+    } catch (_e) {}
     state.audioSource = null;
   }
 
@@ -115,7 +115,7 @@ export function stopPlayback() {
     try {
       state.audioSource.onended = null;
       state.audioSource.stop();
-    } catch (e) {}
+    } catch (_e) {}
     state.audioSource = null;
   }
   stopPlaybackRaf();
@@ -142,7 +142,7 @@ export function seekPlayback(newOffset) {
     try {
       state.audioSource.onended = null;
       state.audioSource.stop();
-    } catch (e) {}
+    } catch (_e) {}
     state.audioSource = null;
   }
 

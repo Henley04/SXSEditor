@@ -19,6 +19,8 @@ const COLOR_VALUE_RE = /^(#[0-9a-fA-F]{3,8}|rgba?\([^)]+\)|hsla?\([^)]+\)|transp
 const SIZE_VALUE_RE = /^(0|[1-9][0-9]*(\.[0-9]+)?(px|rem|em|%|vh|vw|s|ms))$/;
 // CSS shadow is a free-form CSS shadow value. We just check it's a string.
 const SHADOW_VALUE_RE = /^.+$/;
+// CSS easing/timing-function: named, cubic-bezier(...), steps(...)
+const EASING_VALUE_RE = /^(linear|ease|ease-in|ease-out|ease-in-out|step-start|step-end|cubic-bezier\([^)]+\)|steps\([^)]+\))$/;
 
 const MAX_EXTENDS_DEPTH = 3;
 
@@ -42,6 +44,11 @@ function isValidSizeValue(v) {
     return SIZE_VALUE_RE.test(v.trim());
 }
 
+function isValidEasingValue(v) {
+    if (typeof v !== 'string') return false;
+    return EASING_VALUE_RE.test(v.trim());
+}
+
 function isValidTokenValue(meta, v) {
     if (typeof v !== 'string') return false;
     if (!meta) {
@@ -52,18 +59,11 @@ function isValidTokenValue(meta, v) {
         case 'color':   return isValidColorValue(v);
         case 'size':    return isValidSizeValue(v);
         case 'motion':  return isValidSizeValue(v);
+        case 'easing':  return isValidEasingValue(v);
         case 'shadow':  return SHADOW_VALUE_RE.test(v);
         case 'string':  return v.length > 0;
         default:        return v.length > 0;
     }
-}
-
-function looksLikeColor(v) {
-    return typeof v === 'string' && (v.startsWith('#') || v.startsWith('rgb') || v.startsWith('hsl'));
-}
-
-function looksLikeSize(v) {
-    return typeof v === 'string' && /^-?[0-9.]/.test(v);
 }
 
 /**
@@ -123,7 +123,7 @@ export function validate(theme, opts = {}) {
             let meta = null;
             try {
                 // Lazy import to avoid circular dep
-                // eslint-disable-next-line global-require
+                 
                 const { TOKEN_CATALOG } = require('./tokenCatalog.js');
                 meta = TOKEN_CATALOG[name];
             } catch (_) {
@@ -187,7 +187,7 @@ export function validate(theme, opts = {}) {
  * Normalize a theme object: add -- prefix where missing, ensure version,
  * and compute isDark from --bg-app if not provided.
  */
-export function normalize(theme, opts = {}) {
+export function normalize(theme, _opts = {}) {
     const out = { ...theme };
     if (!out.version) out.version = '1.0.0';
     if (out.isDark === undefined) {

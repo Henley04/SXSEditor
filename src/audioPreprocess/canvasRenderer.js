@@ -1,7 +1,6 @@
 import { state, dom } from './state.js';
 import { PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, BPM, HEADER_HEIGHT, F0_CURVE_AREA_HEIGHT } from './constants.js';
-import { t } from '../i18n/index.js';
-import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
+import { getCanvasColors } from '../themes/canvasTheme.js';
 
 // Offscreen canvas cache for waveform (static layer, no playhead)
 let _waveformCacheCanvas = null;
@@ -186,7 +185,6 @@ export function invalidateWaveformCache() {
 
 export function syncWaveformZoomToPianoRoll() {
   if (!state.pianoRoll) return;
-  const beatPerPixel = 1 / (BEAT_WIDTH * state.waveformZoomX);
   state.pianoRoll.zoomX = state.waveformZoomX;
   state.pianoRoll.scrollX = state.waveformScrollX;
   state.pianoRoll.render();

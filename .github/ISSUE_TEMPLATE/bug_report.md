@@ -27,7 +27,21 @@ If applicable, add screenshots to help explain your problem.
  - Version [e.g. 22]
  - Hardware(optional): [e.g. NVIDIA RTX 5060 laptop]
 
+**Crash logs and dump files (IMPORTANT — please attach)**
+SXSEditor automatically records crash logs and minidumps. If the app crashed, froze, or you saw an unexpected error, please attach these files — they make diagnosis much faster.
+
+How to find them:
+- In the app: open the **Help** menu → **Open Logs Folder** / **Open Crash Dumps Folder**.
+- Manually: navigate to `%APPDATA%\SXSEditor\` (Windows).
+  - `logs\` — session log files (`sxseditor-YYYYMMDD-HHmmss-<pid>.log`). The newest file matches the session that crashed. Only the 10 most recent are kept.
+  - `dumps\` — crash minidumps (`*.dmp`). Only the 3 most recent are kept. The log file from the crashing session lists the dump file name and path near the FATAL line.
+
+Please attach:
+1. The most recent `.dmp` file(s) from `dumps\`
+2. The `.log` file from the crashing session
+
+If you did not encounter a crash, you can leave this blank.
+
 **Additional context**
 Add any other context about the problem here.
-**Log(Optional)**
-Open the sxseditor.exe with powershell/cmd to get log. It's OK to leave blank if you are not sure how to get it.
+

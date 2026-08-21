@@ -6,25 +6,28 @@ Complete documentation of all SXSEditor features.
 
 1. [Main Window](#main-window)
 2. [Singer Management](#singer-management)
-3. [Singer Creator](#singer-creator)
-4. [Audio Preprocessing](#audio-preprocessing)
-5. [Fragment Timeline](#fragment-timeline)
-6. [Fragment Editor (Piano Roll)](#fragment-editor-piano-roll)
-7. [MIDI Editing](#midi-editing)
-8. [Lyrics and Phonemes](#lyrics-and-phonemes)
-9. [Pitch Curves](#pitch-curves)
-10. [Volume and Pan Envelopes](#volume-and-pan-envelopes)
-11. [Synthesis and Playback](#synthesis-and-playback)
-12. [Export](#export)
-13. [Audio to MIDI](#audio-to-midi)
-14. [MIDI Import](#midi-import)
-15. [Settings](#settings)
-16. [Model Download](#model-download)
-17. [Resource Manager](#resource-manager)
-18. [Themes](#themes)
-19. [Project Files](#project-files)
-20. [Keyboard Shortcuts](#keyboard-shortcuts)
-21. [Uninstall](#uninstall)
+3. [Singer Market](#singer-market)
+4. [Singer Creator](#singer-creator)
+5. [Audio Preprocessing](#audio-preprocessing)
+6. [Fragment Timeline](#fragment-timeline)
+7. [Accompaniment Tracks](#accompaniment-tracks)
+8. [Fragment Editor (Piano Roll)](#fragment-editor-piano-roll)
+9. [MIDI Editing](#midi-editing)
+10. [Note Context Menu](#note-context-menu)
+11. [Lyrics and Phonemes](#lyrics-and-phonemes)
+12. [Pitch Curves](#pitch-curves)
+13. [Volume and Pan Envelopes](#volume-and-pan-envelopes)
+14. [Synthesis and Playback](#synthesis-and-playback)
+15. [Export](#export)
+16. [Audio to MIDI](#audio-to-midi)
+17. [MIDI Import](#midi-import)
+18. [Settings](#settings)
+19. [Model Download](#model-download)
+20. [Resource Manager](#resource-manager)
+21. [Themes](#themes)
+22. [Project Files](#project-files)
+23. [Keyboard Shortcuts](#keyboard-shortcuts)
+24. [Uninstall](#uninstall)
 
 ---
 
@@ -74,6 +77,7 @@ Click the **+** button in the singer panel header. A dialog offers:
 
 - **Open Singer Creator**: Create a new singer from scratch.
 - **Open Existing Singer File**: Load a `.sxssinger` file from disk.
+- **Open Singer Market**: Browse and download community-created singers (see [Singer Market](#singer-market)).
 
 ### Singer Status Indicators
 
@@ -92,6 +96,33 @@ When loading a `.sxssinger` file, SXSEditor validates:
 - Data integrity (MIDI notes, F0 data)
 
 Validation errors are shown in a report dialog. Warnings indicate non-critical issues (e.g., missing optional fields, version mismatch).
+
+---
+
+## Singer Market
+
+The Singer Market lets you browse and download community-created singers without leaving the app. Instead of creating a singer from your own reference audio, you can pick from a library of pre-made voices shared by other users.
+
+### Opening the Singer Market
+
+Open it from the singer panel — click the **+** button and choose **Open Singer Market** (in addition to the Singer Creator and existing file options).
+
+### Browsing Singers
+
+The Singer Market window displays available singers with:
+- Singer name and avatar
+- Description and tags
+- Download status
+
+### Downloading a Singer
+
+1. Click **Download** on a singer card.
+2. The singer file (`.sxssinger`) is downloaded and automatically loaded into your project.
+3. The singer appears in the singer panel and is ready to use immediately.
+
+### Sharing Your Own Singers
+
+Singers you create in the Singer Creator can be shared to the Singer Market, allowing other users to discover and use your voice profiles.
 
 ---
 
@@ -181,7 +212,7 @@ Click **RMVPE Extract F0**:
 ### Step 2: Extract MIDI Notes
 
 Click **Extract MIDI**:
-- Uses Basic Pitch (recommended) to detect note boundaries and pitches.
+- Uses FCPE (recommended, ONNX-based) to detect note boundaries and pitches. Alternatively, Basic Pitch (TensorFlow.js) or RMVPE can be selected in Settings.
 - Extracted notes appear on the MIDI canvas.
 - Note count is displayed.
 
@@ -257,6 +288,32 @@ Each fragment stores:
 - MIDI notes with lyrics
 - Pitch curve (optional)
 - Volume and pan envelopes
+
+---
+
+## Accompaniment Tracks
+
+In addition to vocal fragments, you can add accompaniment tracks to play backing music alongside your synthesized vocals.
+
+### Adding an Accompaniment Track
+
+1. Click the **+** button in the singer panel (or use the track menu) and choose **Add Accompaniment Track**.
+2. An import dialog opens. Select an audio file.
+
+### Supported Audio Formats
+
+WAV, MP3, FLAC, OGG, M4A, AAC.
+
+### Working with Accompaniment Tracks
+
+- **Drag to move**: Reposition the accompaniment clip on the timeline, just like vocal fragments.
+- **Per-track volume**: Each accompaniment track has its own volume control. Adjust it in the track header or inspector.
+- **Multi-channel**: Multiple accompaniment tracks can coexist with vocal tracks on the same timeline.
+- **Resizing**: Drag the edges of an accompaniment clip to trim it.
+
+### Playback and Export
+
+Accompaniment tracks play alongside vocal fragments during both preview and export. When exporting, accompaniment audio is mixed with the synthesized vocals into the final WAV file.
 
 ---
 
@@ -363,6 +420,27 @@ The bottom panel has tabs for different parameter lanes:
 - **Double-click** a note to edit its lyric inline.
 - Type the lyric and press **Enter** to confirm, or **Escape** to cancel.
 - You can also edit lyrics in the Inspector panel's lyric field.
+
+---
+
+## Note Context Menu
+
+Right-click a note (or a selection of notes) in the Fragment Editor to open the context menu, which provides quick access to expressive controls:
+
+### Vibrato
+
+- Apply a vibrato effect to the selected note(s). The vibrato is rendered as a periodic pitch oscillation on the pitch curve.
+- Adjustable parameters include vibrato rate (speed) and depth (amplitude).
+
+### Fade In / Fade Out
+
+- Apply gradual volume fades to the beginning (fade in) or end (fade out) of the selected note(s).
+- These fades are applied as envelope points on the volume envelope, so they remain editable after creation.
+
+### Other Context Menu Options
+
+- **Reset modifications**: Clear vibrato and fade adjustments for the selected note(s).
+- Standard operations (copy, paste, delete, duplicate) are also available from the context menu.
 
 ---
 
@@ -483,18 +561,31 @@ When you press Play, SXSEditor:
 | Diffusion Steps | 16 (default) | 32 (default) |
 | CFG Strength | 3.0 | 3.0 |
 | CFG Rescale | 0.75 | 0.75 |
+| Sampler | Euler (default) | Euler (default) |
 
-Preview uses fewer steps for faster response. Export uses more steps for higher quality. Both are configurable in Settings.
+Preview uses fewer steps for faster response. Export uses more steps for higher quality. Both are configurable in Settings. The Sampler (diffusion ODE solver) is also configurable per path — see [Diffusion Sampler](#diffusion-sampler).
 
 ### Playback Controls
 
 - **▶ Play**: Start synthesis and playback. On first play, the SVS pipeline initializes (loads models into GPU).
 - **⏸ Pause**: Pause playback. Resume from the paused position.
-- **⏹ Stop**: Stop playback and reset to the beginning.
+- **⏹ Stop**: Stop playback and reset to the beginning. Stopping during synthesis uses cooperative cancellation (AbortController-based) — the pipeline checks for abort signals between steps and shuts down cleanly, without forcefully terminating the worker thread.
 
 ### Fragment-Level Playback
 
 In the Fragment Editor, **▶ Play** synthesizes and plays only the current fragment. This is useful for quick previews while editing.
+
+### Synthesis Cache
+
+SXSEditor maintains a segment-level LRU cache (32 entries, up to 300 MB) for synthesis results. When you replay a fragment whose notes, lyrics, pitch curve, and singer data have not changed, the cached audio is reused instantly — no re-synthesis is needed. Editing any parameter that affects the output invalidates the relevant cache entries.
+
+### Audio Quality Enhancements
+
+The synthesis output benefits from several post-processing improvements:
+
+- **EBU R128 loudness normalization**: The final mix is normalized to −14 LUFS with a true-peak limiter at −1 dBTP, ensuring consistent loudness across projects.
+- **WSOLA crossfade**: At chunk boundaries (where long audio is split for processing), WSOLA (Waveform Similarity Overlap-Add) crossfading replaces the previous Hann overlap-add, producing smoother transitions.
+- **2× oversampling anti-aliasing**: A full oversampling pipeline is applied during resampling for better high-frequency fidelity.
 
 ---
 
@@ -503,18 +594,20 @@ In the Fragment Editor, **▶ Play** synthesizes and plays only the current frag
 ### Exporting a Fragment
 
 In the Fragment Editor, click **💿 Export**:
-1. The fragment is synthesized using export-quality parameters.
-2. A file save dialog appears.
-3. Choose a location and filename.
-4. The WAV file is saved (24kHz, 16-bit PCM).
+1. The **Export dialog** opens, pre-filled with the export-quality parameters from Settings. You can override them for this export only: **Sampler**, Diffusion Steps, CFG Strength, CFG Rescale, Auto Shift, plus advanced options (the global Settings values are not changed).
+2. After confirming, the fragment is synthesized using the chosen parameters.
+3. A file save dialog appears.
+4. Choose a location and filename.
+5. The WAV file is saved (48kHz by default, 16-bit PCM). Export sample rate is selectable: 24/44.1/48/96 kHz.
 
 ### Exporting the Entire Project
 
 In the main window, click **📤 Export**:
-1. All fragments are synthesized sequentially.
-2. Fragments are mixed together according to their timeline positions.
-3. A file save dialog appears.
-4. The mixed WAV file is saved.
+1. The **Export dialog** opens (same options as single-fragment export: Sampler, Diffusion Steps, CFG, Auto Shift, advanced).
+2. All fragments are synthesized sequentially using the chosen parameters.
+3. Fragments are mixed together according to their timeline positions.
+4. A file save dialog appears.
+5. The mixed WAV file is saved.
 
 ### Export Progress
 
@@ -522,6 +615,17 @@ During export, a progress indicator shows:
 - Current fragment being processed.
 - Overall progress percentage.
 - Status messages (preparing, synthesizing, encoding WAV, saving).
+
+### LRC Lyrics Export
+
+You can export the project's lyrics as a timed `.lrc` file, which is a standard format supported by most music players and karaoke software.
+
+1. Use **File > Export LRC** (or the export menu option).
+2. The lyrics from all fragments are compiled with their timing information.
+3. Each line in the `.lrc` file includes a timestamp tag (e.g., `[00:12.34]`) corresponding to when that lyric is sung in the project.
+4. Choose a save location for the `.lrc` file.
+
+The LRC file can be used alongside the exported WAV file for karaoke-style lyric display.
 
 ---
 
@@ -544,8 +648,9 @@ WAV, MP3, FLAC, OGG, AAC, M4A.
 
 1. Select an audio file.
 2. The system decodes the audio.
-3. Based on your Settings, either **Basic Pitch** or **RMVPE** is used for extraction:
-   - **Basic Pitch** (recommended): Neural network-based, stable results.
+3. Based on your Settings, one of the following extraction tools is used:
+   - **FCPE** (recommended): ONNX-based, fast and accurate. Features a configurable post-processing pipeline.
+   - **Basic Pitch**: Neural network-based (TensorFlow.js), stable results.
    - **RMVPE**: Converts F0 pitch curve to notes. Experimental, results may vary.
 4. A new singer track and fragment are created with the extracted notes.
 5. If you chose "Extract Pitch", the F0 curve is also applied as a pitch curve.
@@ -572,7 +677,7 @@ Import a standard MIDI file into the Fragment Editor.
 
 - Standard MIDI files (format 0, 1, 2) are supported, including SMPTE time division.
 - Multi-track MIDI files: all non-drum tracks are merged onto a single timeline. Drum tracks (MIDI channel 10) are automatically filtered out.
-- Lyrics from MIDI (meta event 0x05) are preserved if present.
+- Lyrics from MIDI (meta event 0x05) are preserved if present. Encoding is auto-detected (BOM/UTF-8/legacy charset) for correct display of non-ASCII lyrics.
 - Note timing is converted to the project's BPM.
 
 ---
@@ -620,6 +725,7 @@ Used when playing back in the editor (fast preview):
 | Diffusion Steps | 16 | 4–64 | Fewer steps = faster, lower quality |
 | CFG Strength | 3.0 | 0–10 | Higher = more aligned with conditions. 0 = skip unconditional prediction (2x speed) |
 | CFG Rescale | 0.75 | 0–1 | Mitigates over-guidance artifacts |
+| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver. See [Diffusion Sampler](#diffusion-sampler) below. |
 
 #### Export Inference Parameters
 
@@ -630,6 +736,20 @@ Used when exporting WAV files (high quality):
 | Diffusion Steps | 32 | 4–64 | More steps = higher quality |
 | CFG Strength | 3.0 | 0–10 | Same as preview |
 | CFG Rescale | 0.75 | 0–1 | Same as preview |
+| Sampler | Euler | Euler / Heun / Extrapolated Euler / STORK-2 | Diffusion sampling solver. The export dialog also lets you override this per export. |
+
+#### Diffusion Sampler
+
+The diffusion model iteratively denoises a mel spectrogram by integrating the flow-matching velocity-field ODE. The **sampler** is the ODE solver that decides how each denoising step combines model evaluations (NFE = number of function evaluations) into the state update. Four samplers are available, selectable independently for preview and export:
+
+| Sampler | NFE / step | Description |
+|---------|------------|-------------|
+| **Euler** (default) | 1 | First-order explicit Euler, midpoint time evaluation. The original baseline; fastest and most predictable. |
+| **Heun** | 2 | Second-order improved Euler (trapezoidal rule). Higher accuracy, roughly 2× inference time. Falls back to Euler on the final step to avoid evaluating `t > 1`. |
+| **Extrapolated Euler** | 1 | Velocity-extrapolation heuristic inspired by STORK (ICLR 2026). Reuses the previous step's velocity for linear extrapolation. Not the full stabilized RK formulation; benefit is heuristic and strongest when the velocity field changes smoothly. Falls back to Euler when extrapolation is unsafe (amplitude / sign-flip / NaN guards). |
+| **STORK-2** | 1 | Paper-faithful Stabilized Taylor Orthogonal Runge-Kutta (Tan et al., ICLR 2026, arXiv:2505.24210). Runge-Kutta-Gegenbauer 2nd-order recurrence with 8 sub-stages and Taylor-expansion virtual NFE. Designed for stiff ODEs with an extended stability region (~2s² = 128×). Tradeoff: higher per-step algebraic cost than Euler. |
+
+> **Note**: Extrapolated Euler and STORK-2 carry cross-step velocity state. In **chunked preview inference** (long fragments split into chunks), this state resets at every chunk boundary, reducing their benefit — for chunked previews, Euler or Heun is usually the safer choice. The sampler setting is stored in `previewSampler` / `exportSampler`; the legacy value `stork` is silently mapped to `extrap` for backward compatibility.
 
 #### NPU Inference Settings
 
@@ -642,6 +762,37 @@ Only relevant when using NPU (WebNN) for inference:
 
 These settings only affect the NPU path. DirectML and CPU paths are unaffected.
 
+#### Dynamic Thresholding
+
+Per-frame percentile clipping (arXiv:2507.08965) that suppresses outlier mel bins during diffusion sampling, reducing artifacts without sacrificing detail.
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| Percentile | 0.999 | 0.9–0.999 | Higher = less clipping (more detail preserved). Lower = more aggressive artifact suppression. |
+
+When enabled, each diffusion step clips mel bins that exceed the specified percentile threshold before the next step. This is applied independently for both preview and export paths.
+
+#### CFG Schedule
+
+Controls how the CFG (Classifier-Free Guidance) strength varies across diffusion steps, instead of using a constant value:
+
+| Mode | Description |
+|------|-------------|
+| **Constant** (default) | CFG strength stays the same for all steps. Equivalent to the previous behavior. |
+| **Linear** | CFG strength ramps linearly from an initial value to the target value across steps. |
+| **Cosine** | CFG strength follows a cosine schedule, smoothing the transition. |
+| **Custom** | Define a custom schedule via keyframes. |
+
+The schedule mode can be set independently for preview and export.
+
+#### Vocoder Overlap Frames
+
+Controls the number of overlapping frames used at vocoder chunk boundaries for smooth crossfading:
+
+| Parameter | Default | Range | Description |
+|-----------|---------|-------|-------------|
+| Overlap Frames | 32 | 8–96 | More frames = smoother transitions but slightly slower. Previous default was 8. |
+
 ### Audio
 
 #### Output Mode
@@ -653,7 +804,8 @@ These settings only affect the NPU path. DirectML and CPU paths are unaffected.
 - Exclusive mode only supports WASAPI devices.
 
 #### Sample Rate
-Options: 22050, 24000 (native), 44100, 48000, 96000, 192000 Hz.
+Options: 22050, 24000 (native), 44100, 48000 (default), 96000, 192000 Hz.
+- The default is 48 kHz (changed from 24 kHz in earlier versions). The SVS model runs at 24 kHz internally and the output is resampled to the selected rate with 2× oversampling anti-aliasing for improved quality.
 - In exclusive mode, the device must support the selected rate or it falls back to shared mode.
 
 #### Bit Depth
@@ -670,7 +822,8 @@ Slider from 0% to 100%.
 
 ### Audio: MIDI Extraction Tool
 
-- **Basic Pitch** (recommended): Neural network-based MIDI extraction.
+- **FCPE** (recommended): ONNX-based MIDI extraction with a configurable post-processing pipeline. Fast and accurate.
+- **Basic Pitch**: Neural network-based MIDI extraction (TensorFlow.js).
 - **RMVPE (experimental)**: F0-to-notes conversion. May produce suboptimal results.
 
 ### Model
@@ -722,7 +875,8 @@ The Model Download window handles downloading ONNX model files from ModelScope.
 |-------|----------|-------------|
 | SVS Synthesis Pipeline | Yes | Core models for singing synthesis (9 models) |
 | RMVPE Pitch Detection | No | F0 extraction for audio preprocessing |
-| Basic Pitch MIDI Extraction | No | MIDI note extraction from audio |
+| FCPE MIDI Extraction | No | ONNX-based MIDI note extraction (recommended) |
+| Basic Pitch MIDI Extraction | No | MIDI note extraction from audio (TensorFlow.js) |
 | RosVot MIDI Recognition | No | (Currently disabled) Advanced MIDI extraction |
 | SVS Japanese Models | No | Japanese-specific encoder and preflow models |
 
