@@ -20,6 +20,7 @@ import {
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { render, resizeCanvases, resolvePhonemesFromPipeline, clonePitchCurveState, applyPitchCurveSnapshot, genNoteId } from './canvasRenderer.js';
 import { playFragment, stopFragmentPlayback, exportFragment } from './audioPlayback.js';
+import { exportFragmentMidi } from './midiExport.js';
 
 const history = new HistoryManager();
 
@@ -209,6 +210,7 @@ export function setupUiControls() {
 
   const btnPlayFragment = document.getElementById('btn-play-fragment');
   const btnExportFragment = document.getElementById('btn-export-fragment');
+  const btnExportFragmentMidi = document.getElementById('btn-export-fragment-midi');
 
   btnPlayFragment.addEventListener('click', async () => {
     if (getNotes().length === 0) {
@@ -235,6 +237,10 @@ export function setupUiControls() {
     }
     await exportFragment();
   });
+
+  if (btnExportFragmentMidi) {
+    btnExportFragmentMidi.addEventListener('click', exportFragmentMidi);
+  }
 
   document.getElementById('btn-import-midi').addEventListener('click', async () => {
     try {
