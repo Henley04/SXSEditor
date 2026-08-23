@@ -105,6 +105,11 @@ const IPC_CHANNELS = {
   MODEL_DOWNLOAD_LIST_VERSIONS: 'model-download:list-versions',
   MODEL_DOWNLOAD_LIST_JP_VERSIONS: 'model-download:list-jp-versions',
   MODEL_DOWNLOAD_LIST_SIFIGAN_VERSIONS: 'model-download:list-sifigan-versions',
+  MODEL_DOWNLOAD_CHECK_FCPE: 'model-download:check-fcpe',
+  MODEL_DOWNLOAD_START_FCPE: 'model-download:start-fcpe',
+  MODEL_DOWNLOAD_UNLOAD_FCPE: 'model-download:unload-fcpe',
+  MODEL_DOWNLOAD_CHECK_FCPE_VERSION: 'model-download:check-fcpe-version',
+  MODEL_DOWNLOAD_UPDATE_FCPE: 'model-download:update-fcpe',
   MODEL_DOWNLOAD_OPEN_EXTERNAL: 'model-download:open-external',
   MODEL_DOWNLOAD_REVISION: 'model-download:revision',
 

@@ -393,7 +393,11 @@ function registerPitchMidiIpc() {
       };
     } catch (err) {
       console.error('[Main] FCPE extraction failed:', err);
-      return { success: false, error: err.message };
+      return {
+        success: false,
+        code: err.code === 'MODEL_NOT_FOUND' ? 'MODEL_NOT_FOUND' : undefined,
+        error: err.message,
+      };
     }
   });
 

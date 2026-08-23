@@ -5,7 +5,7 @@ const { t } = require('./locale');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed, isSystemPath } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
-const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, downloadFileWithRetry, downloadFileChunked, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getLatestTag, getRemoteFileSizeByUrl } = require('../modelManager');
+const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, getFcpeFileDownloadUrl, getFcpeLocalFilePath, downloadFileWithRetry, downloadFileChunked, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getFcpeRevision, getLatestTag, getRemoteFileSizeByUrl, saveFcpeVersion, checkFcpeVersion } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, getMainWindow } = require('./windowManager');
 
 // W5: Per-download-key AbortController map. Replaces the single shared
@@ -107,6 +107,56 @@ function deleteSifiganFiles(modelDir) {
       if (err.code !== 'ENOENT') errors.push({ fileName, message: err.message });
     }
   }
+  return { deleted, errors };
+}
+
+// ===== FCPE helpers =====
+// FCPE is an optional pitch-detection model stored at onnx_models/preprocess/.
+// The remote repo (MODEL_IDS.fcpe) hosts fcpe_model.onnx at its root; we
+// place it at preprocess/fcpe_model.onnx (same dir as rmvpe/rosvot).
+const FCPE_DOWNLOAD_FILES = [
+  'fcpe_model.onnx',
+];
+
+function checkFcpeFilesExist(modelDir) {
+  const result = {};
+  for (const fileName of FCPE_DOWNLOAD_FILES) {
+    const fullPath = getFcpeLocalFilePath(modelDir, fileName);
+    let exists = false;
+    let size = 0;
+    try {
+      const stats = fs.statSync(fullPath);
+      if (stats.size > 0) {
+        exists = true;
+        size = stats.size;
+      }
+    } catch (_) {}
+    result[fileName] = { exists, size, fullPath, local: true };
+  }
+  // FCPE 视为已安装: preprocess/fcpe_model.onnx 存在且非空
+  const allExist = result['fcpe_model.onnx'] && result['fcpe_model.onnx'].exists;
+  return { allExist, files: result };
+}
+
+function deleteFcpeFiles(modelDir) {
+  const deleted = [];
+  const errors = [];
+  for (const fileName of FCPE_DOWNLOAD_FILES) {
+    // 只删除该模型文件，避免误删 preprocess/ 下的 rmvpe/rosvot 等共享模型
+    const fullPath = getFcpeLocalFilePath(modelDir, fileName);
+    if (!fullPath) continue;
+    try {
+      fs.unlinkSync(fullPath);
+      deleted.push(fileName);
+    } catch (err) {
+      if (err.code !== 'ENOENT') errors.push({ fileName, message: err.message });
+    }
+  }
+  // 删除 FCPE 版本文件
+  try {
+    const { getFcpeVersionPath } = require('../modelManager');
+    fs.unlinkSync(getFcpeVersionPath(modelDir));
+  } catch (_) {}
   return { deleted, errors };
 }
 
@@ -795,6 +845,236 @@ function registerModelDownloadIpc() {
     };
   });
 
+  // ===== FCPE (optional pitch detector) IPC handlers =====
+  // FCPE is an optional shared model. Download maps the repo-root file
+  // fcpe_model.onnx to preprocess/fcpe_model.onnx under onnx_models/.
+
+  // Returns: { status: 'installed' | 'not_downloaded' | 'download_url_not_configured',
+  //            files: { ... }, allExist: boolean }
+  ipcMain.handle('model-download:check-fcpe', async () => {
+    const modelDir = getModelDir();
+    const { allExist, files } = checkFcpeFilesExist(modelDir);
+    const fcpeId = MODEL_IDS.fcpe || '';
+    let status;
+    if (allExist) {
+      status = 'installed';
+    } else if (!fcpeId) {
+      status = 'download_url_not_configured';
+    } else {
+      status = 'not_downloaded';
+    }
+    return {
+      status,
+      allExist,
+      files,
+      modelId: fcpeId,
+      message: status === 'download_url_not_configured'
+        ? t('modelDownload.fcpeUrlNotConfigured')
+        : '',
+    };
+  });
+
+  // Start FCPE download. Downloads fcpe_model.onnx from MODEL_IDS.fcpe and
+  // places it at preprocess/fcpe_model.onnx. Uses chunked download for the
+  // ~47MB file.
+  ipcMain.handle('model-download:start-fcpe', async (event, revision) => {
+    const fcpeId = MODEL_IDS.fcpe || '';
+    // If no revision resolved, fall back to the latest tag or 'master'
+    // (the FCPE repo currently has no tags — master is used).
+    let currentRevision = revision;
+    if (!currentRevision || currentRevision === 'latest') {
+      if (fcpeId) {
+        try {
+          currentRevision = await getFcpeRevision();
+        } catch (err) {
+          return { status: 'download_url_not_configured', message: `Failed to fetch FCPE revision: ${err.message}` };
+        }
+      }
+    }
+    if (!fcpeId) {
+      const modelDir = getModelDir();
+      const { allExist, files } = checkFcpeFilesExist(modelDir);
+      return {
+        status: 'download_url_not_configured',
+        message: t('modelDownload.fcpeUrlNotConfigured'),
+        allExist,
+        files,
+      };
+    }
+    if (!currentRevision) {
+      return { status: 'download_url_not_configured', message: 'No FCPE revision available for download' };
+    }
+
+    const modelDir = getModelDir();
+    const { allExist, files: existingFiles } = checkFcpeFilesExist(modelDir);
+    if (allExist) {
+      return { status: 'installed', allExist, files: existingFiles };
+    }
+
+    // Build the list of missing files to download.
+    const missingFiles = FCPE_DOWNLOAD_FILES.filter(name => !existingFiles[name] || !existingFiles[name].exists)
+      .map(name => ({ remote: name, local: getFcpeLocalFilePath(modelDir, name) }))
+      .filter(f => !!f.local);
+    if (missingFiles.length === 0) {
+      return { status: 'installed', allExist: true, files: existingFiles };
+    }
+
+    const fcpeDownloadKey = 'fcpe';
+    const downloadAbortController = new AbortController();
+    downloadAbortControllers.set(fcpeDownloadKey, downloadAbortController);
+    const abortSignal = downloadAbortController.signal;
+    const win = getModelDownloadWindow();
+
+    try {
+      // Fetch all remote file sizes in parallel using Range requests
+      const fileUrls = missingFiles.map(f => getFcpeFileDownloadUrl(f.remote, currentRevision));
+      const sizeResults = await Promise.all(
+        fileUrls.map(url => url ? getRemoteFileSizeByUrl(url) : Promise.resolve(0))
+      );
+      const fileSizes = {};
+      let overallTotal = 0;
+      for (let i = 0; i < missingFiles.length; i++) {
+        fileSizes[missingFiles[i].remote] = sizeResults[i];
+        overallTotal += sizeResults[i];
+      }
+      let cumulativeDownloaded = 0;
+
+      for (let i = 0; i < missingFiles.length; i++) {
+        if (abortSignal.aborted) throw new Error('Download cancelled');
+
+        const { remote, local } = missingFiles[i];
+        const destPath = local;
+        const url = getFcpeFileDownloadUrl(remote, currentRevision);
+        if (!url) {
+          throw new Error(`Failed to build download URL for ${remote}`);
+        }
+
+        // Ensure parent directory exists
+        fs.mkdirSync(path.dirname(destPath), { recursive: true });
+
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('model-download:file-start', {
+            filePath: remote,
+            fileIndex: i,
+            totalFiles: missingFiles.length,
+          });
+        }
+
+        const remoteSize = fileSizes[remote] || 0;
+        const fileBaseDownloaded = cumulativeDownloaded;
+
+        // Use chunked download for the ~47MB file
+        if (remoteSize >= MIN_FILE_SIZE_FOR_CHUNKING) {
+          await withDownloadPathMutex(destPath, () => downloadFileChunked(url, destPath, remoteSize, {
+            abortSignal,
+            onProgress: (downloaded, total) => {
+              if (win && !win.isDestroyed()) {
+                win.webContents.send('model-download:progress', {
+                  currentFile: remote,
+                  fileIndex: i,
+                  totalFiles: missingFiles.length,
+                  bytesDownloaded: downloaded,
+                  bytesTotal: total,
+                  overallDownloaded: fileBaseDownloaded + downloaded,
+                  overallTotal: overallTotal,
+                });
+              }
+            },
+          }));
+        } else {
+          await withDownloadPathMutex(destPath, () => downloadFileWithRetry(url, destPath, {
+            abortSignal,
+            onProgress: (downloaded, total) => {
+              if (win && !win.isDestroyed()) {
+                win.webContents.send('model-download:progress', {
+                  currentFile: remote,
+                  fileIndex: i,
+                  totalFiles: missingFiles.length,
+                  bytesDownloaded: downloaded,
+                  bytesTotal: total,
+                  overallDownloaded: fileBaseDownloaded + downloaded,
+                  overallTotal: overallTotal,
+                });
+              }
+            },
+          }));
+        }
+
+        cumulativeDownloaded += remoteSize;
+
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('model-download:file-complete', {
+            filePath: remote,
+            fileIndex: i,
+            totalFiles: missingFiles.length,
+          });
+        }
+      }
+
+      // All downloads complete — re-check files
+      const { allExist: nowExists, files: finalFiles } = checkFcpeFilesExist(modelDir);
+      if (nowExists) {
+        saveFcpeVersion(modelDir, currentRevision);
+      }
+      if (win && !win.isDestroyed()) {
+        win.webContents.send('model-download:complete');
+      }
+      console.log('[Main] FCPE model download complete');
+      return {
+        status: nowExists ? 'installed' : 'not_downloaded',
+        allExist: nowExists,
+        files: finalFiles,
+      };
+    } catch (err) {
+      if (err.message === 'Download cancelled') {
+        console.log('[Main] FCPE model download cancelled');
+      } else {
+        console.error('[Main] FCPE model download failed:', err);
+        if (win && !win.isDestroyed()) {
+          win.webContents.send('model-download:error', { message: err.message });
+        }
+      }
+      const { allExist: errExists, files: errFiles } = checkFcpeFilesExist(modelDir);
+      return {
+        status: errExists ? 'installed' : 'not_downloaded',
+        allExist: errExists,
+        files: errFiles,
+      };
+    } finally {
+      downloadAbortControllers.delete(fcpeDownloadKey);
+    }
+  });
+
+  // Unload FCPE: delete the model file + version file, and release any loaded
+  // FCPE InferenceSession via the pipeline.
+  ipcMain.handle('model-download:unload-fcpe', async () => {
+    const modelDir = getModelDir();
+    const result = deleteFcpeFiles(modelDir);
+
+    // Release the loaded FCPE detector (managed via pitchMidiIpc's lazy
+    // initializer, not the SVS pipeline session). On next load this ensures
+    // a fresh session is created against the (now deleted) model.
+    try {
+      const { getFcpeDetector, fcpeLazy } = require('./pitchMidiIpc');
+      const d = getFcpeDetector();
+      if (d) { try { d.dispose(); } catch (_) {} }
+      fcpeLazy.reset();
+    } catch (err) {
+      console.warn('[Main] Failed to release FCPE detector:', err.message);
+    }
+
+    // Re-check files after deletion to return fresh state
+    const { allExist, files } = checkFcpeFilesExist(modelDir);
+    return {
+      success: true,
+      deleted: result.deleted,
+      errors: result.errors,
+      status: allExist ? 'installed' : 'not_downloaded',
+      allExist,
+      files,
+    };
+  });
+
   // ===== Model version management IPC handlers =====
 
   // Check model version for a given precision (or all precisions)
@@ -818,17 +1098,24 @@ function registerModelDownloadIpc() {
     return await checkSifiganVersion(modelDir);
   });
 
-  // Check versions for all model groups at once (main + jp + sifigan)
-  // Returns { main, jp, sifigan } where each is the version check result
+  // Check FCPE model version
+  ipcMain.handle('model-download:check-fcpe-version', async () => {
+    const modelDir = getModelDir();
+    return await checkFcpeVersion(modelDir);
+  });
+
+  // Check versions for all model groups at once (main + jp + sifigan + fcpe)
+  // Returns { main, jp, sifigan, fcpe } where each is the version check result
   ipcMain.handle('model-download:check-all-versions', async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
-    const [main, jp, sifigan] = await Promise.all([
+    const [main, jp, sifigan, fcpe] = await Promise.all([
       checkModelVersion(modelDir, currentPrecision),
       checkJpModelVersion(modelDir, currentPrecision),
       checkSifiganVersion(modelDir),
+      checkFcpeVersion(modelDir),
     ]);
-    return { main, jp, sifigan };
+    return { main, jp, sifigan, fcpe };
   });
 
   // Update models: delete existing files for the precision and re-download
@@ -985,6 +1272,39 @@ function registerModelDownloadIpc() {
     // by calling the handler directly is not possible (it's registered as
     // an ipcMain.handle), so we return a signal for the renderer to call
     // model-download:start-sifigan instead.
+    return { status: 'needs_download', allExist: false, files: existingFiles };
+  });
+
+  // Update FCPE: delete and re-download
+  ipcMain.handle('model-download:update-fcpe', async (event, revision) => {
+    const modelDir = getModelDir();
+    const fcpeId = MODEL_IDS.fcpe || '';
+    if (!fcpeId) {
+      return { status: 'download_url_not_configured', message: t('modelDownload.fcpeUrlNotConfigured') };
+    }
+    // Resolve revision (no tags → 'master' branch)
+    let currentRevision = revision;
+    if (!currentRevision || currentRevision === 'latest') {
+      try {
+        currentRevision = await getFcpeRevision();
+      } catch (err) {
+        return { status: 'download_url_not_configured', message: `Failed to fetch FCPE revision: ${err.message}` };
+      }
+    }
+    if (!currentRevision) {
+      return { status: 'download_url_not_configured', message: 'No FCPE revision available for download' };
+    }
+
+    // Delete existing FCPE files + version file
+    deleteFcpeFiles(modelDir);
+
+    const { allExist, files: existingFiles } = checkFcpeFilesExist(modelDir);
+    if (allExist) {
+      saveFcpeVersion(modelDir, currentRevision);
+      return { status: 'installed', allExist, files: existingFiles };
+    }
+
+    // Signal the renderer to call model-download:start-fcpe
     return { status: 'needs_download', allExist: false, files: existingFiles };
   });
 }

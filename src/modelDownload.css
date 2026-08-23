@@ -817,6 +817,7 @@ body {
 }
 
 .model-card-status .btn-update-sifigan,
+.model-card-status .btn-update-fcpe,
 .model-card-status .btn-update-optional {
   margin-left: auto;
   padding: var(--space-1) var(--space-3);
@@ -830,6 +831,7 @@ body {
 }
 
 .model-card-status .btn-update-sifigan:hover,
+.model-card-status .btn-update-fcpe:hover,
 .model-card-status .btn-update-optional:hover {
   background: var(--warning, #f0ad4e);
   color: var(--bg-panel, #fff);

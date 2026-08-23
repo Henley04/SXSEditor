@@ -29,6 +29,11 @@
       <span class="overview-label" data-i18n="modelDownload.sifiganModel">SiFiGAN</span>
       <span class="overview-status" id="overviewSifiganStatus">-</span>
     </div>
+    <div class="overview-card" id="overviewFcpe">
+      <span class="overview-dot" id="overviewFcpeDot"></span>
+      <span class="overview-label" data-i18n="modelDownload.fcpeModel">FCPE</span>
+      <span class="overview-status" id="overviewFcpeStatus">-</span>
+    </div>
   </div>
 
   <!-- 下载位置 -->
@@ -206,6 +211,44 @@
           <div class="progress-bar-fill" id="sifiganProgressBar"></div>
         </div>
         <span class="progress-text" id="sifiganProgressText"></span>
+      </div>
+    </div>
+
+    <!-- FCPE 模型卡片 -->
+    <div class="model-card fcpe-card" id="fcpeCard" data-group-id="fcpe">
+      <div class="model-card-header">
+        <div class="model-card-title">
+          <span class="model-card-name" data-i18n="modelDownload.fcpeTitle">FCPE 音高检测（可选）</span>
+          <span class="model-card-badge optional" data-i18n="modelDownload.optionalBadge">可选</span>
+        </div>
+        <div class="model-card-actions">
+          <button class="btn-card btn-download" id="fcpeDownloadBtn" data-i18n="modelDownload.download">下载</button>
+          <button class="btn-card btn-unload" id="fcpeUnloadBtn" style="display:none;" data-i18n="modelDownload.unload">卸载</button>
+        </div>
+      </div>
+      <p class="model-card-desc" data-i18n="modelDownload.fcpeDesc">基于 Fully Convolutional Pitch Estimator 的 F0 基频提取，用于音频转 MIDI</p>
+
+      <div class="model-card-files">
+        <div class="model-card-file">
+          <span class="model-card-file-name">preprocess/fcpe_model.onnx</span>
+          <span class="model-card-file-size">~48 MB</span>
+        </div>
+      </div>
+
+      <div class="model-card-status" id="fcpeStatus">
+        <span class="status-indicator" id="fcpeStatusIndicator"></span>
+        <span class="status-text" id="fcpeStatusText" data-i18n="modelDownload.checking">检测中...</span>
+        <span class="status-version" id="fcpeVersionText"></span>
+        <button class="btn-card btn-update-fcpe" id="fcpeUpdateBtn" style="display:none;" data-i18n="modelDownload.update">更新</button>
+      </div>
+
+      <div class="model-card-tooltip" id="fcpeTooltip" style="display:none;" role="tooltip"></div>
+
+      <div class="model-card-progress" id="fcpeProgress" style="display:none;">
+        <div class="progress-bar-bg" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+          <div class="progress-bar-fill" id="fcpeProgressBar"></div>
+        </div>
+        <span class="progress-text" id="fcpeProgressText"></span>
       </div>
     </div>
   </div>

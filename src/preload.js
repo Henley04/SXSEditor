@@ -237,14 +237,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   modelDownloadCheckSifigan: () => ipcRenderer.invoke('model-download:check-sifigan'),
   modelDownloadStartSifigan: (revision) => ipcRenderer.invoke('model-download:start-sifigan', revision),
   modelDownloadUnloadSifigan: () => ipcRenderer.invoke('model-download:unload-sifigan'),
+  // FCPE (optional pitch detector) download/unload
+  modelDownloadCheckFcpe: () => ipcRenderer.invoke('model-download:check-fcpe'),
+  modelDownloadStartFcpe: (revision) => ipcRenderer.invoke('model-download:start-fcpe', revision),
+  modelDownloadUnloadFcpe: () => ipcRenderer.invoke('model-download:unload-fcpe'),
   // Model version management
   modelDownloadCheckVersion: (precision) => ipcRenderer.invoke('model-download:check-version', precision),
   modelDownloadCheckJpVersion: (precision) => ipcRenderer.invoke('model-download:check-jp-version', precision),
   modelDownloadCheckSifiganVersion: () => ipcRenderer.invoke('model-download:check-sifigan-version'),
+  modelDownloadCheckFcpeVersion: () => ipcRenderer.invoke('model-download:check-fcpe-version'),
   modelDownloadCheckAllVersions: (precision) => ipcRenderer.invoke('model-download:check-all-versions', precision),
   modelDownloadUpdate: (precision, revision) => ipcRenderer.invoke('model-download:update', precision, revision),
   modelDownloadUpdateJp: (precision, revision) => ipcRenderer.invoke('model-download:update-jp', precision, revision),
   modelDownloadUpdateSifigan: (revision) => ipcRenderer.invoke('model-download:update-sifigan', revision),
+  modelDownloadUpdateFcpe: (revision) => ipcRenderer.invoke('model-download:update-fcpe', revision),
   // Version listing (fetch available branches from ModelScope)
   modelDownloadListVersions: (precision) => ipcRenderer.invoke('model-download:list-versions', precision),
   modelDownloadListJpVersions: (precision) => ipcRenderer.invoke('model-download:list-jp-versions', precision),
