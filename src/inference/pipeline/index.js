@@ -107,7 +107,9 @@ class OnnxSVSPipeline {
         this.inferenceProvider = options.inferenceProvider || 'ortnode';
         this.webnnDeviceType = null; // 'npu' | 'gpu'，仅当 useWebNN 时有效
         this.useWebNN = false;
-        this.useStaticShapes = options.modelPrecision === 'int8-npu';
+        // int8 与 int8-npu 均为静态形状模型：QDIT 量化版本维度固定为 NPU_STATIC_SEQ_LEN，
+        // 因此分段长度必须固定（禁用动态分块与动态序列），否则 diffstep 会因输入维度不匹配报错。
+        this.useStaticShapes = options.modelPrecision === 'int8' || options.modelPrecision === 'int8-npu';
         this.vocoderType = 'default';            // 'default' | 'sifigan'，_doInit 中从 settings 读取覆盖
         this.sifiganPrecision = 'fp32';          // 'fp32' | 'fp16'，仅 vocoderType='sifigan' 时生效，控制加载哪个 onnx 变体
         this.sifiganStatsMissing = false;        // SiFiGAN stats 文件缺失标志（运行时兜底归一化用）
