@@ -321,6 +321,7 @@ def quantize_onnx_int8(onnx_dir, calib_feeds_diffstep):
     from onnxruntime.quantization import (
         QuantType,
         QuantFormat,
+        CalibrationMethod,
         CalibrationDataReader,
         quantize,
         quantize_dynamic,
@@ -333,9 +334,30 @@ def quantize_onnx_int8(onnx_dir, calib_feeds_diffstep):
     if ds_path.exists():
         print("\n  [bridge] ORT W8A8 static quantization: diffstep.onnx")
 
+        # Calibration sequence-length / sample cap. ORT's static-quant calibrator runs
+        # the FP32 model on CPU; long sequences (>=1024) make the MatMul activation
+        # arena run out of memory ("bad allocation"). 512 frames keeps the calibrated
+        # range statistically representative at a fraction of the CPU memory. This must
+        # match quantize_diffstep_dml.MAX_CALIB_SEQ so both diffstep quant variants agree.
+        MAX_ORT_CALIB_SEQ = 512
+        MAX_ORT_CALIB_SAMPLES = 16
+
         class CalibReader(CalibrationDataReader):
             def __init__(self, feeds):
-                self.feeds = feeds
+                feeds = list(feeds)[:MAX_ORT_CALIB_SAMPLES]
+                capped = []
+                for f in feeds:
+                    nf = {}
+                    for k, v in f.items():
+                        v = np.asarray(v)
+                        # diffusion_step is a 1D scalar; everything else has a time dim.
+                        if v.ndim == 3 and v.shape[1] > MAX_ORT_CALIB_SEQ:
+                            v = v[:, :MAX_ORT_CALIB_SEQ, :]
+                        elif v.ndim == 2 and k not in ("t", "diffusion_step") and v.shape[1] > MAX_ORT_CALIB_SEQ:
+                            v = v[:, :MAX_ORT_CALIB_SEQ]
+                        nf[k] = v
+                    capped.append(nf)
+                self.feeds = capped
                 self.idx = 0
 
             def get_next(self):
@@ -352,8 +374,13 @@ def quantize_onnx_int8(onnx_dir, calib_feeds_diffstep):
         try:
             from onnxruntime.quantization import StaticQuantConfig
 
+            # Percentile 99.999 activation calibration: robust to outliers vs MinMax,
+            # and per-channel symmetric QInt8 QDQ keeps INT8 dot-product tensor cores
+            # enabled on the DirectML EP. 'CalibPercentile' is forwarded by quantize()
+            # -> quantize_static() -> create_calibrator() to PercentileCalibrater.
             config = StaticQuantConfig(
                 calibration_data_reader=reader,
+                calibrate_method=CalibrationMethod.Percentile,
                 quant_format=QuantFormat.QDQ,
                 per_channel=True,
                 reduce_range=False,
@@ -364,7 +391,12 @@ def quantize_onnx_int8(onnx_dir, calib_feeds_diffstep):
                     "ActivationSymmetric": False,
                     "WeightSymmetric": True,
                     "QuantizeBias": False,
-                    "AddQDQPairToWeight": True,
+                    # Store only int8 weights (drop FP32 originals) to keep the model compact
+                    # and let DML lower weights to INT8 GEMM tensor cores instead of moving FP32.
+                    "AddQDQPairToWeight": False,
+                    # Percentile 99.999: use the 99.999th percentile of activation
+                    # magnitudes as the clipping range instead of the observed max.
+                    "CalibPercentile": 99.999,
                 },
             )
             quantize(str(ds_path), int8_path, quant_config=config)

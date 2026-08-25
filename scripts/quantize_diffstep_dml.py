@@ -34,12 +34,19 @@ INPUT_MAP = {
 }
 
 
+# Calibration sequence-length cap. The FP32 DML diff_step is dynamo-exported with a
+# symbolic 'seq_len' dim, so we calibrate on a shorter representative sequence to keep
+# calibration-time attention allocations small (seq 2048 blows up ORT's CPU arena).
+MAX_CALIB_SEQ = 512
+
+
 class NpzCalibrationReader(CalibrationDataReader):
     """Read calibration data from NPZ file."""
 
-    def __init__(self, calib_path, num_samples=8):
+    def __init__(self, calib_path, num_samples=8, max_seq=MAX_CALIB_SEQ):
         self.data = np.load(calib_path, allow_pickle=True)
         self.num_samples = num_samples
+        self.max_seq = max_seq
         self.sample_idx = 0
         self._current = None
         self._next_sample()
@@ -58,6 +65,11 @@ class NpzCalibrationReader(CalibrationDataReader):
                 # Ensure float32
                 if arr.dtype != np.float32:
                     arr = arr.astype(np.float32)
+                # Truncate the time dim (axis -2 for [B, T, C], axis -1 for [B, T])
+                if model_name in ("xt_input", "cond"):
+                    arr = arr[:, : self.max_seq, :]
+                elif model_name == "xt_mask":
+                    arr = arr[:, : self.max_seq]
                 self._current[model_name] = arr
 
         self.sample_idx += 1
@@ -97,15 +109,18 @@ def main():
     gc.collect()
 
     print(
-        f"\n[3/5] Running static quantization (QOperator, W8A8, per-channel)...",
+        f"\n[3/5] Running static quantization (QDQ, W8A8, per-channel)...",
         flush=True,
     )
     t0 = time.time()
 
     config = StaticQuantConfig(
         calibration_data_reader=reader,
-        calibrate_method=CalibrationMethod.MinMax,
-        quant_format=QuantFormat.QOperator,
+        calibrate_method=CalibrationMethod.Percentile,
+        # QDQ (QuantizeLinear/DequantizeLinear) is required for DirectML to lower the
+        # model to INT8 tensor-core dot products. QOperator (QLinearMatMul) stays slow on
+        # DML because it is not fused into INT8 GEMM tensor-core ops.
+        quant_format=QuantFormat.QDQ,
         activation_type=QuantType.QUInt8,
         weight_type=QuantType.QInt8,
         per_channel=True,
@@ -115,6 +130,15 @@ def main():
         extra_options={
             "WeightSymmetric": True,
             "ActivationSymmetric": False,
+            # Keep ONLY int8 weights (drop the FP32 originals). AddQDQPairToWeight=True
+            # copies every weight to int8 but ALSO retains the FP32 copy, roughly doubling
+            # model size (2114MB vs 1688MB FP32) and flooding DML with FP32 data so INT8
+            # tensor cores never actually dominate. With False, DQ feeds a compact int8
+            # weight + scale/zp, so DML lowers MatMul to INT8 GEMM tensor cores.
+            "AddQDQPairToWeight": False,
+            # Percentile 99.999: robust-to-outlier activation range (instead of MinMax
+            # observed extremes) keeps INT8 activation ranges tight on DML tensor cores.
+            "CalibPercentile": 99.999,
         },
     )
 
