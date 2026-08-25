@@ -196,7 +196,7 @@ function _rebuildDummyForSession(session, baseDummy) {
             for (const s of shape) count *= (typeof s === 'number' ? s : 3);
             if (shape.length === 0) count = 3 * (name === 'cond' ? COND_DIM : (name === 'diffusion_step' || name === 't' ? 1 : MEL_DIM));
             const dataType = isBool ? 'bool' : (isFp16 ? 'float16' : 'float32');
-            if (name === 'x' || name === 'xt_input') {
+            if (name === 'x' || name === 'xt_input' || name === 'acoustic_features') {
                 const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
                 feeds[name] = new ort.Tensor(dataType, data, shape);
                 matched++;
@@ -204,11 +204,11 @@ function _rebuildDummyForSession(session, baseDummy) {
                 const val = isFp16 ? float32ToF16Buffer(new Float32Array([0.5])) : new Float32Array([0.5]);
                 feeds[name] = new ort.Tensor(dataType, val, [1]);
                 matched++;
-            } else if (name === 'cond') {
+            } else if (name === 'cond' || name === 'conditioning') {
                 const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
                 feeds[name] = new ort.Tensor(dataType, data, shape);
                 matched++;
-            } else if (name === 'x_mask' || name === 'xt_mask') {
+            } else if (name === 'x_mask' || name === 'xt_mask' || name === 'attention_mask') {
                 const data = isBool ? new Uint8Array(count).fill(1)
                     : (isFp16 ? float32ToF16Buffer(new Float32Array(count).fill(1)) : new Float32Array(count).fill(1));
                 feeds[name] = new ort.Tensor(dataType, data, shape);
@@ -563,18 +563,6 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         return { session, ep: 'cpu', warmedUp: false };
     }
 
-    // NPU 静态形状模型直接创建 CPU 会话（跳过 DML 验证，NPU 模型不适合 DML）
-    if (useStaticShapes) {
-        // NPU 模型已离线优化（onnxsim），跳过运行时图优化以加速加载
-        const session = await ort.InferenceSession.create(modelPath, buildSessionOptions({
-            executionProviders: ['cpu'],
-            graphOptimizationLevel: 'basic', // 显式 override：NPU 模型已离线优化
-        }));
-        // 跳过推理验证 — NPU 模型已通过离线验证，且大模型（如 diff_step 423MB）的验证耗时过长
-        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (NPU static shapes, opt=basic)`);
-        return { session, ep: 'cpu', warmedUp: false };
-    }
-
     // === FP16/FP32 类型不匹配自动重试 ===
     // 背景：dummy 输入精度由 isFP16（preflow probe）决定，但单个模型（diffStep/vocoder）
     // 可能与 preflow 精度不一致——例如 W16A32 diff_step 回退到 FP32，或 _dml.onnx 变体为 FP32。
@@ -615,6 +603,47 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             throw err;
         }
     };
+
+    // === NPU 静态形状模型：优先使用 DML（GPU），失败自动回退 CPU ===
+    // 静态形状（seq=2048）模型是离线优化产物，运行时图优化固定为 basic 以加快加载。
+    // 该分支仅影响主进程加载器；WebNN/NPU 路径（渲染进程 onnxruntime-web）不经过此处，
+    // 因此不影响 NPU 模型在 NPU 上的正常运行。
+    if (useStaticShapes) {
+        // NPU 模型已离线优化（onnxsim），运行时图优化用 basic（显式 override）
+        const _staticShapeOpts = (executionProviders) => buildSessionOptions({
+            executionProviders,
+            graphOptimizationLevel: 'basic',
+        });
+        let npuDmlSession = null;
+        try {
+            const dmlOpts = typeof dmlDeviceId === 'number'
+                ? { name: 'dml', deviceId: dmlDeviceId }
+                : 'dml';
+            npuDmlSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts([dmlOpts, 'cpu']));
+            if (runValidation) {
+                await _runWithPrecisionFallback(npuDmlSession, 'DML-NPU');
+                _validatedSessionModels.add(validationKey);
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, inference verified)`);
+            } else {
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation skipped)`);
+            }
+            return { session: npuDmlSession, ep: 'dml', warmedUp: runValidation };
+        } catch (dmlErr) {
+            if (npuDmlSession) {
+                try { npuDmlSession.release(); } catch (e) {
+                    console.warn(`[OnnxSVSPipeline] Failed to release NPU DML session (${modelName}):`, e.message);
+                }
+            }
+            const reason = (dmlErr.message.includes('Reshape') || dmlErr.message.includes('E_INVALIDARG'))
+                ? 'DML 不支持该静态形状算子'
+                : dmlErr.message.substring(0, 60).split('\n')[0];
+            console.warn(`[OnnxSVSPipeline] ${modelName} NPU static shapes DML load failed (${reason}), falling back to CPU...`);
+        }
+        // DML 不适用或失败 → 回退 CPU（保持原有行为：跳过推导验证以加快大模型加载）
+        const cpuSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts(['cpu']));
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (NPU static shapes, opt=basic)`);
+        return { session: cpuSession, ep: 'cpu', warmedUp: false };
+    }
 
     let dmlSession = null;
     try {
