@@ -616,30 +616,38 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             executionProviders,
             graphOptimizationLevel: 'basic',
         });
+        // 已知 DML 上输出错误/静音的静态形状模型：dummy 验证只能判断“不崩溃”，
+        // 检测不出“输出是否正确”。diff_step 在 DML 上返回静音，故强制走 CPU。
+        const STATIC_SHAPE_DML_EXCLUDE = new Set(['diffStep']);
+        const tryDml = !STATIC_SHAPE_DML_EXCLUDE.has(sessionKey);
         let npuDmlSession = null;
-        try {
-            const dmlOpts = typeof dmlDeviceId === 'number'
-                ? { name: 'dml', deviceId: dmlDeviceId }
-                : 'dml';
-            npuDmlSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts([dmlOpts, 'cpu']));
-            if (runValidation) {
-                await _runWithPrecisionFallback(npuDmlSession, 'DML-NPU');
-                _validatedSessionModels.add(validationKey);
-                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, inference verified)`);
-            } else {
-                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation skipped)`);
-            }
-            return { session: npuDmlSession, ep: 'dml', warmedUp: runValidation };
-        } catch (dmlErr) {
-            if (npuDmlSession) {
-                try { npuDmlSession.release(); } catch (e) {
-                    console.warn(`[OnnxSVSPipeline] Failed to release NPU DML session (${modelName}):`, e.message);
+        if (tryDml) {
+            try {
+                const dmlOpts = typeof dmlDeviceId === 'number'
+                    ? { name: 'dml', deviceId: dmlDeviceId }
+                    : 'dml';
+                npuDmlSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts([dmlOpts, 'cpu']));
+                if (runValidation) {
+                    await _runWithPrecisionFallback(npuDmlSession, 'DML-NPU');
+                    _validatedSessionModels.add(validationKey);
+                    console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, inference verified)`);
+                } else {
+                    console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation skipped)`);
                 }
+                return { session: npuDmlSession, ep: 'dml', warmedUp: runValidation };
+            } catch (dmlErr) {
+                if (npuDmlSession) {
+                    try { npuDmlSession.release(); } catch (e) {
+                        console.warn(`[OnnxSVSPipeline] Failed to release NPU DML session (${modelName}):`, e.message);
+                    }
+                }
+                const reason = (dmlErr.message.includes('Reshape') || dmlErr.message.includes('E_INVALIDARG'))
+                    ? 'DML 不支持该静态形状算子'
+                    : dmlErr.message.substring(0, 60).split('\n')[0];
+                console.warn(`[OnnxSVSPipeline] ${modelName} NPU static shapes DML load failed (${reason}), falling back to CPU...`);
             }
-            const reason = (dmlErr.message.includes('Reshape') || dmlErr.message.includes('E_INVALIDARG'))
-                ? 'DML 不支持该静态形状算子'
-                : dmlErr.message.substring(0, 60).split('\n')[0];
-            console.warn(`[OnnxSVSPipeline] ${modelName} NPU static shapes DML load failed (${reason}), falling back to CPU...`);
+        } else {
+            console.warn(`[OnnxSVSPipeline] ${modelName} excluded from DML (NPU static shapes): known incorrect/silent output on DML, using CPU`);
         }
         // DML 不适用或失败 → 回退 CPU（保持原有行为：跳过推导验证以加快大模型加载）
         const cpuSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts(['cpu']));
