@@ -11,6 +11,7 @@ const { TextProcessing } = require('./textProcessing');
 const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
 const { DEFAULT_SOLVER } = require('./samplers');
+const { wsolaCrossfadeMel } = require('./wsola');
 const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram, isVramOOMError } = require('./postprocessing');
 const { AudioSegmentation } = require('./audioSegmentation');
 const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrain, gpuDrainLong, markGpuOom, throwIfCancelled, cancelledError } = require('./utils');
@@ -2151,6 +2152,140 @@ class OnnxSVSPipeline {
         return { totalFrames, ptFrameCount, ptMelData };
     }
 
+    /**
+     * INT8 静态形状（useStaticShapes）模型专用：长片段分段合成。
+     *
+     * 静态形状模型的 encoder（noteText/Pitch/Type/f0/preflow/condEmb）与 diffstep
+     * 输入维度全部固定为 NPU_STATIC_SEQ_LEN=2048。当目标帧数 + prompt 帧数超过 2048 时，
+     * encoder 单次前向只能产出前 2048 帧的有效 cond，其余帧为 pad 零 → 下游 diffstep/vocoder
+     * 得到不完整的 mel，表现为"杂音/静音"。此前通过 _clampStaticShapeFrames 直接把长片段
+     * 截断到 2048-ptFrameCount 帧，导致长片段内容被丢弃。
+     *
+     * 本方法将目标帧按 (NPU_STATIC_SEQ_LEN - ptFrameCount) 切段，对每一段独立执行
+     * encoder（按 mel2token 切片对应 token 区间，重新编号）→ diffstep，逐段拼接出
+     * 完整的 mel 输出。vocoder 在调用方对整段拼接后的 mel 一次执行。
+     *
+     * @param {Object} sequences - 完整序列 { noteTextSeq, notePitchSeq, noteTypeSeq, f0Ids, mel2token, ... }
+     * @param {number} totalFrames - 目标帧数（不含 prompt）
+     * @param {Float32Array} ptMelData - prompt mel
+     * @param {number} ptFrameCount - prompt 帧数
+     * @param {number} totalSteps
+     * @param {number} cfgStrength
+     * @param {number} cfgRescale
+     * @param {Function} onProgress
+     * @param {number} progressStart
+     * @param {number} progressRange
+     * @param {AbortSignal} abortSignal
+     * @param {string} tag - 日志前缀
+     * @returns {Promise<Float32Array|null>} 完整 mel（totalFrames*MEL_DIM）；若无需分段返回 null
+     */
+    async _synthesizeStaticShapeSegments(sequences, totalFrames, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, abortSignal = null, tag = '') {
+        // 每窗口(段)目标帧上限：prompt(每窗口复用) + 目标帧 <= NPU_STATIC_SEQ_LEN
+        const winCap = NPU_STATIC_SEQ_LEN - ptFrameCount;
+        if (winCap <= 0) {
+            throw new Error(`${tag} static-shape chunking failed: no room for target (ptFrameCount=${ptFrameCount} >= NPU_STATIC_SEQ_LEN)`);
+        }
+        if (winCap < 50) {
+            console.warn(`${tag} static-shape winCap(${winCap}) < 50, clamping prompt for segmentation`);
+            const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, tag);
+            ptFrameCount = clamped.ptFrameCount;
+            ptMelData = clamped.ptMelData;
+        }
+        if (totalFrames <= winCap) return null; // 单窗口即可容纳，回退到常规整段路径
+
+        // 相邻窗口之间的重叠帧数（与 diffstep chunk 路径一致，用于共享噪声 + WSOLA
+        // 交叉淡入淡出消除边界不连贯）。默认 50 帧（1s @50Hz）。
+        const overlap = Math.max(1, Math.min(winCap - 1, Math.floor(
+            (this._currentDiffStepChunkOpts && this._currentDiffStepChunkOpts.overlapFrames) || 50
+        )));
+        const advance = winCap - overlap; // 每次窗口起点前进帧数
+        if (advance <= 0) throw new Error(`${tag} static-shape overlap(${overlap}) >= winCap(${winCap})`);
+
+        // 窗口规划：每窗口覆盖 [ws, ws+winCap)，相邻窗口重叠 overlap 帧
+        const wins = [];
+        for (let ws = 0; ws < totalFrames; ws += advance) {
+            const segStart = ws;
+            const segEnd = Math.min(totalFrames, segStart + winCap);
+            wins.push({ segStart, segEnd, segFrames: segEnd - segStart });
+            if (segEnd >= totalFrames) break;
+        }
+        const numSegs = wins.length;
+        console.log(`${tag} Static-shape segmented synthesis: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, winCap=${winCap}, overlap=${overlap}, segments=${numSegs}`);
+
+        const melOut = new Float32Array(totalFrames * MEL_DIM);
+        const mel2tokenFull = sequences.mel2token;
+        const noteTextSeq = sequences.noteTextSeq;
+        const notePitchSeq = sequences.notePitchSeq;
+        const noteTypeSeq = sequences.noteTypeSeq;
+        const f0IdsFull = sequences.f0Ids;
+        const samplerName = this._currentSamplerName || DEFAULT_SOLVER;
+        const cfgScheduleOpts = this._currentCfgScheduleOpts || null;
+        const dynamicThresholdOpts = this._currentDynamicThresholdOpts || null;
+        const perSeg = (progressRange || 0) / numSegs;
+
+        // 单一全局噪声场：所有窗口从同一个噪声张量切片取噪 → 相邻窗口的重叠区共享
+        // 相同的初始噪声，再由 WSOLA 交叉淡化拼合，从根本上保证长片段拼接连贯（否则各窗口
+        // 独立取噪会在边界产生相位不连续 → DML vocoder 放大为可听杂音）。
+        const noiseFull = this.randomNoise(totalFrames, MEL_DIM);
+
+        for (let w = 0; w < numSegs; w++) {
+            throwIfCancelled(abortSignal);
+            const { segStart, segEnd, segFrames } = wins[w];
+
+            // 该窗口覆盖的 token 区间（mel2token 为 [0, tokenCount-1] 的绝对 token 下标）
+            const tokenLo = Math.max(0, mel2tokenFull[segStart] | 0);
+            const tokenHi = Math.max(tokenLo, (mel2tokenFull[segEnd - 1] | 0));
+            const subTokenCount = tokenHi - tokenLo + 1;
+
+            const subSequences = {
+                noteTextSeq: noteTextSeq.subarray(tokenLo, tokenLo + subTokenCount),
+                notePitchSeq: notePitchSeq.subarray(tokenLo, tokenLo + subTokenCount),
+                noteTypeSeq: noteTypeSeq.subarray(tokenLo, tokenLo + subTokenCount),
+                f0Ids: f0IdsFull.subarray(segStart, segEnd),
+                mel2token: Int32Array.from(mel2tokenFull.subarray(segStart, segEnd), (v) => (v | 0) - tokenLo),
+                tokenCount: subTokenCount,
+            };
+
+            // 窗口内 encoder：只对该窗口 token/帧范围编码，输出该窗口 cond（含复用的 prompt 头）
+            const segCond = await this._runEncoder(subSequences, subTokenCount, segFrames, ptFrameCount);
+            await gpuDrain();
+
+            // 从全局噪声场提取本窗口噪声（复制），保持与相邻窗口重叠区一致
+            const chunkNoise = new Float32Array(segFrames * MEL_DIM);
+            chunkNoise.set(noiseFull.subarray(segStart * MEL_DIM, segEnd * MEL_DIM));
+            const subXt = { data: chunkNoise, dims: [1, segFrames, MEL_DIM] };
+
+            await this._diffusion.runDiffusionLoop(
+                this.sessions, subXt, segFrames, ptMelData, ptFrameCount, segCond,
+                totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16,
+                onProgress, progressStart + w * perSeg, perSeg, this.useStaticShapes,
+                samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal
+            );
+
+            // 提交到 melOut：首窗口整段 memcpy，后续窗口对重叠区做 WSOLA 交叉淡入淡出。
+            if (w === 0) {
+                melOut.set(subXt.data, 0);
+            } else {
+                const realOv = Math.min(overlap, segFrames);
+                if (realOv > 0) {
+                    const prevTailMel = melOut.subarray(segStart * MEL_DIM, (segStart + realOv) * MEL_DIM);
+                    const currHeadMel = subXt.data.subarray(0, realOv * MEL_DIM);
+                    const xf = wsolaCrossfadeMel(prevTailMel, currHeadMel, realOv, MEL_DIM);
+                    melOut.set(xf, segStart * MEL_DIM);
+                }
+                // 非重叠区 memcpy
+                const nonOvLen = (segFrames - realOv) * MEL_DIM;
+                if (nonOvLen > 0) {
+                    melOut.set(subXt.data.subarray(realOv * MEL_DIM, realOv * MEL_DIM + nonOvLen), (segStart + realOv) * MEL_DIM);
+                }
+            }
+            await gpuDrain();
+        }
+
+        console.log(`${tag} Static-shape segmented synthesis complete: ${numSegs} segments, ${totalFrames} frames`);
+        return melOut;
+    }
+
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null, abortSignal = null) {
         throwIfCancelled(abortSignal);
         const samplerName = this._currentSamplerName || DEFAULT_SOLVER;
@@ -2200,7 +2335,11 @@ class OnnxSVSPipeline {
         // NPU 静态形状模型限制：ptFrameCount+totalFrames 不得超过 NPU_STATIC_SEQ_LEN。
         // 大 ref prompt（>50 帧）时按 Math.min(ptFrameCount,50) 预留 target 会不足预留，
         // 导致 diffstep 拼接 offset overflow；统一用实际 ptFrameCount 预留 target 帧。
-        if (this.useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
+        // 启用 INT8 静态形状分段合成时不做整段钳制（避免长片段被丢弃到 2048 帧），
+        // 由 _synthesizeStaticShapeSegments 逐段处理 2048 限制。
+        const _staticSegChunkEnabled = this.useStaticShapes &&
+            (this._currentDiffStepChunkOpts && this._currentDiffStepChunkOpts.enabled === true);
+        if (this.useStaticShapes && !_staticSegChunkEnabled && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
             const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Segment]');
             totalFrames = clamped.totalFrames;
             ptFrameCount = clamped.ptFrameCount;
@@ -2239,18 +2378,34 @@ class OnnxSVSPipeline {
 
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
 
-        const combinedCond = await this._runEncoder(sequences, tokenCount, totalFrames, ptFrameCount);
+        // INT8 静态形状 + 分段合成：逐段 encoder+diffstep 直接产出整段 mel，不整段编码。
+        let xt;
+        if (_staticSegChunkEnabled) {
+            const segMel = await this._synthesizeStaticShapeSegments(
+                sequences, totalFrames, ptMelData, ptFrameCount,
+                totalSteps, cfgStrength, cfgRescale,
+                onProgress, progressStart, progressRange, abortSignal, '[Segment]'
+            );
+            if (segMel) {
+                xt = { data: segMel, dims: [1, totalFrames, MEL_DIM] };
+                // Task 15: per-frame F0 curve for vocoder boundary selection
+                this._currentPitchCurveF0 = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
+            }
+        }
+        if (!xt) {
+            const combinedCond = await this._runEncoder(sequences, tokenCount, totalFrames, ptFrameCount);
 
-        // GPU 排空点 1：encoder（6 次推理）→ diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
-        await gpuDrain();
+            // GPU 排空点 1：encoder（6 次推理）→ diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
+            await gpuDrain();
 
-        const xt = this.randomNoise(totalFrames, MEL_DIM);
+            xt = this.randomNoise(totalFrames, MEL_DIM);
 
-        // Task 15: per-frame F0 curve for F0-aware chunked diffusion boundary
-        // selection. Slice to totalFrames to match the segment's frame range.
-        this._currentPitchCurveF0 = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
+            // Task 15: per-frame F0 curve for F0-aware chunked diffusion boundary
+            // selection. Slice to totalFrames to match the segment's frame range.
+            this._currentPitchCurveF0 = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
 
-        await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, null, abortSignal);
+            await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, null, abortSignal);
+        }
 
         // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
         // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
@@ -2465,7 +2620,7 @@ class OnnxSVSPipeline {
         // 校验所有 fragment 的 chunk 选项一致：若不一致，静默回退到第一个 fragment 的选项
         // 并记录 warning，避免后续 fragment 的差异化配置被无声忽略。
         const firstOpts = fragments[0].options || {};
-        const chunkEnabled = firstOpts.diffStepChunk === true && !this.useStaticShapes;
+        const chunkEnabled = firstOpts.diffStepChunk === true;
         const chunkFrames = firstOpts.diffStepChunkFrames || 500;
         const overlapFrames = firstOpts.diffStepOverlapFrames !== undefined ? firstOpts.diffStepOverlapFrames : 50;
         const totalSteps = firstOpts.nSteps || DEFAULT_DIFF_STEPS;
@@ -2646,25 +2801,38 @@ class OnnxSVSPipeline {
             // 长片段触发 "Tensor's size(2048) does not match data length(N)"；
             // 大 ref prompt（>50 帧）时若按 Math.min(ptFrameCount,50) 预留 target，
             // 会不足预留导致拼接溢出。因此统一放在 prompt 注入之后，
-            // 用实际 ptFrameCount 预留 target 帧。
-            if (this.useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
+            // 用实际 ptFrameCount 预留 target 帧。启用静态形状分段合成时跳过整段钳制，
+            // 由 _synthesizeStaticShapeSegments 逐段承载 2048 限制。
+            if (this.useStaticShapes && !chunkEnabled && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
                 const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[MultiStream]');
                 totalFrames = clamped.totalFrames;
                 ptFrameCount = clamped.ptFrameCount;
                 ptMelData = clamped.ptMelData;
             }
 
-            // Encoder
-            const combinedCond = await this._runEncoder(sequences, sequences.tokenCount, totalFrames, ptFrameCount);
-            await gpuDrain();
-
-            // 初始化噪声
-            const xt = this.randomNoise(totalFrames, MEL_DIM);
+            // Encoder（动态形状整段编码；静态形状分段合成时逐段编码后直接产出整段 mel）
+            let combinedCond = null;
+            let xt;
+            let segmentedMel = null;
+            if (this.useStaticShapes && chunkEnabled) {
+                segmentedMel = await this._synthesizeStaticShapeSegments(
+                    sequences, totalFrames, ptMelData, ptFrameCount,
+                    totalSteps, cfgStrength, cfgRescale,
+                    () => {}, 0, 0, abortSignal, '[MultiStream]'
+                );
+            }
+            if (segmentedMel) {
+                xt = { data: segmentedMel, dims: [1, totalFrames, MEL_DIM] };
+            } else {
+                combinedCond = await this._runEncoder(sequences, sequences.tokenCount, totalFrames, ptFrameCount);
+                await gpuDrain();
+                xt = this.randomNoise(totalFrames, MEL_DIM);
+            }
             const f0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
 
-            // 分块规划
+            // 分块规划（仅动态形状使用 mel 域分块；静态形状由分段合成处理 2048 限制）
             let chunkPlan = null;
-            if (chunkEnabled) {
+            if (chunkEnabled && !this.useStaticShapes) {
                 // Task 15: compute per-frame F0 slope for F0-aware chunk boundary
                 // selection (avoids splitting at F0 discontinuities). Matches the
                 // f0Slope computation in runDiffusionLoopChunked.
@@ -2696,6 +2864,7 @@ class OnnxSVSPipeline {
                 bpm,
                 xt,
                 combinedCond,
+                segmentedMel,
                 ptMelData,
                 ptFrameCount,
                 totalFrames,
@@ -2816,8 +2985,11 @@ class OnnxSVSPipeline {
                 // 无分块路径：整段 diffusion + vocoder
                 // Task 15: set per-fragment F0 curve for F0-aware chunked diffusion.
                 this._currentPitchCurveF0 = p.f0Hz || null;
-                await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk, null, abortSignal);
-                await gpuDrain();
+                // 静态形状分段合成：p.xt.data 已是逐段拼接好的完整 mel，无需再扩散。
+                if (!p.segmentedMel) {
+                    await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk, null, abortSignal);
+                    await gpuDrain();
+                }
                 const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
                 // 同分块路径：segAudio[0] 对应 filledNotes[0].start，需加 firstNoteOffsetSample
                 const firstNoteOffsetSample = Math.floor((p.firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE);
@@ -2909,7 +3081,7 @@ class OnnxSVSPipeline {
             ? { enabled: true, percentile: options.dynamicThresholdPercentile ?? 0.995 }
             : null;
         this._currentDiffStepChunkOpts = {
-            enabled: options.diffStepChunk === true && !this.useStaticShapes,
+            enabled: options.diffStepChunk === true,
             chunkFrames: options.diffStepChunkFrames || 500,
             overlapFrames: options.diffStepOverlapFrames !== undefined ? options.diffStepOverlapFrames : 50,
         };
@@ -3145,7 +3317,10 @@ class OnnxSVSPipeline {
             // NPU 静态形状模型限制：ptFrameCount+totalFrames 不得超过 NPU_STATIC_SEQ_LEN。
             // 大 ref prompt（>50 帧）时按 Math.min(ptFrameCount,50) 预留 target 会不足预留，
             // 导致 diffstep 拼接 offset overflow；统一用实际 ptFrameCount 预留 target 帧。
-            if (this.useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
+            // 启用静态形状分段合成时跳过整段钳制，由 _synthesizeStaticShapeSegments 逐段承载限制。
+            const _staticSegEnabled = this.useStaticShapes &&
+                (this._currentDiffStepChunkOpts && this._currentDiffStepChunkOpts.enabled === true);
+            if (this.useStaticShapes && !_staticSegEnabled && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
                 const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Synthesis]');
                 totalFrames = clamped.totalFrames;
                 ptFrameCount = clamped.ptFrameCount;
@@ -3157,10 +3332,25 @@ class OnnxSVSPipeline {
             currentProgress = 30;
             onProgress(currentProgress);
 
-            const combinedCond = await this._runEncoder(sequences, sequences.tokenCount, totalFrames, ptFrameCount);
-            // GPU 排空点：encoder→diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
-            await gpuDrain();
-            const xt = this.randomNoise(totalFrames, MEL_DIM);
+            // INT8 静态形状 + 分段合成：逐段 encoder+diffstep 直接产出整段 mel
+            let segMel = null;
+            if (_staticSegEnabled) {
+                segMel = await this._synthesizeStaticShapeSegments(
+                    sequences, totalFrames, ptMelData, ptFrameCount,
+                    totalSteps, cfgStrength, cfgRescale,
+                    (p) => onProgress(Math.round(40 + p * 0.5)), 40, 50, abortSignal, '[Synthesis]'
+                );
+            }
+            let combinedCond = null;
+            let xt;
+            if (segMel) {
+                xt = { data: segMel, dims: [1, totalFrames, MEL_DIM] };
+            } else {
+                combinedCond = await this._runEncoder(sequences, sequences.tokenCount, totalFrames, ptFrameCount);
+                // GPU 排空点：encoder→diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
+                await gpuDrain();
+                xt = this.randomNoise(totalFrames, MEL_DIM);
+            }
 
             // 提前设置 F0（分块流式路径在 diffusion 期间就需要 F0 片段）
             this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
@@ -3242,7 +3432,10 @@ class OnnxSVSPipeline {
             }
 
             // ===== 常规路径：整段 diffusion → 整段 vocoder =====
-            await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, null, abortSignal);
+            // 静态形状分段合成：xt.data 已是完整 mel，跳过 diffusion。
+            if (!segMel) {
+                await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, null, abortSignal);
+            }
 
             // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
             // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制

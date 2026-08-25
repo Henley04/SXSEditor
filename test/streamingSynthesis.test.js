@@ -633,6 +633,62 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       expect(out.length).to.be.greaterThan(0);
     });
 
+    it('useStaticShapes=true + 长片段(>2048帧) + diffStepChunk=true → 走静态形状分段合成，输出完整长度不被截断', async () => {
+      pipeline = buildMockPipeline({ modelPrecision: 'int8-npu' });
+      expect(pipeline.useStaticShapes).to.equal(true);
+      const { diffRecord } = installRecordingSessions(pipeline);
+      // 21 音符 × 4 拍 = 84 拍 @120bpm = 42s → ~2100 帧 > NPU_STATIC_SEQ_LEN(2048)
+      const out = await pipeline.synthesize(
+        makeNotes(21),
+        120,
+        {
+          diffStepChunk: true,
+          diffStepChunkFrames: 2048,
+          diffStepOverlapFrames: 50,
+          nSteps: 1,
+          cfg: 0,
+        }
+      );
+      // 分段合成：winCap=2048(无 prompt), advance=2048-50=1998 → 2 个窗口重叠拼接。
+      // 输出必须覆盖完整时长（>2048 帧），而非被 _clampStaticShapeFrames 截断到 2048 帧。
+      expect(out.length).to.be.greaterThan(NPU_STATIC_SEQ_LEN * HOP_SIZE);
+      // nSteps=1 + cfg=0（仅 cond 分支）→ 每个窗口 1 次 diffstep 推理，2 窗口 >= 2 次
+      expect(diffRecord.length).to.be.at.least(2);
+    });
+
+    it('useStaticShapes=true + 长片段(>2048帧) → 各窗口 diffstep 输入序列长度固定为 NPU_STATIC_SEQ_LEN', async () => {
+      pipeline = buildMockPipeline({ modelPrecision: 'int8-npu' });
+      installRecordingSessions(pipeline);
+      // 记录每次 diffstep 推理的输入序列长度（最后一个输入 dim 应为 2048，静态形状）
+      let seqLens = [];
+      const origRun = pipeline.sessions.diffStep.run.bind(pipeline.sessions.diffStep);
+      pipeline.sessions.diffStep.run = async (feeds) => {
+        for (const key of Object.keys(feeds)) {
+          // diffstep 输入张量形状为 [1, seqLen, MEL_DIM]，序列长度是第 2 维
+          if (/xt|acoustic|input/i.test(key) && feeds[key].dims && feeds[key].dims.length === 3) {
+            seqLens.push(feeds[key].dims[1]);
+          }
+        }
+        return origRun(feeds);
+      };
+      await pipeline.synthesize(
+        makeNotes(21),
+        120,
+        {
+          diffStepChunk: true,
+          diffStepChunkFrames: 2048,
+          diffStepOverlapFrames: 50,
+          nSteps: 1,
+          cfg: 0,
+        }
+      );
+      // 静态形状模型要求输入固定为 2048
+      expect(seqLens.length).to.be.greaterThan(0);
+      for (const len of seqLens) {
+        expect(len).to.equal(NPU_STATIC_SEQ_LEN);
+      }
+    });
+
     it('totalFrames <= chunkFrames → 不分块（走常规路径）', async () => {
       pipeline = buildMockPipeline();
       const { diffRecord } = installRecordingSessions(pipeline);
