@@ -191,14 +191,16 @@ function _rebuildDummyForSession(session, baseDummy) {
             const shape = Array.isArray(m.shape) ? m.shape : [];
             const isBool = type.includes('bool');
             const isFp16 = type.includes('16') && !isBool;
+            // 符号/负维度（如 'batch'、'seq'、-1）替换为 3，生成合法整数 dims 供 Tensor 使用
+            const numDims = shape.map(s => (typeof s === 'number' && s > 0) ? s : 3);
             // 符号维度按 3 填充；缺 shape 时回退 [1, 3, 128]
             let count = 1;
-            for (const s of shape) count *= (typeof s === 'number' ? s : 3);
+            for (const s of numDims) count *= s;
             if (shape.length === 0) count = 3 * (name === 'cond' ? COND_DIM : (name === 'diffusion_step' || name === 't' ? 1 : MEL_DIM));
             const dataType = isBool ? 'bool' : (isFp16 ? 'float16' : 'float32');
             if (name === 'x' || name === 'xt_input' || name === 'acoustic_features') {
                 const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
-                feeds[name] = new ort.Tensor(dataType, data, shape);
+                feeds[name] = new ort.Tensor(dataType, data, numDims);
                 matched++;
             } else if (name === 'diffusion_step' || name === 't') {
                 const val = isFp16 ? float32ToF16Buffer(new Float32Array([0.5])) : new Float32Array([0.5]);
@@ -206,12 +208,12 @@ function _rebuildDummyForSession(session, baseDummy) {
                 matched++;
             } else if (name === 'cond' || name === 'conditioning') {
                 const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
-                feeds[name] = new ort.Tensor(dataType, data, shape);
+                feeds[name] = new ort.Tensor(dataType, data, numDims);
                 matched++;
             } else if (name === 'x_mask' || name === 'xt_mask' || name === 'attention_mask') {
                 const data = isBool ? new Uint8Array(count).fill(1)
                     : (isFp16 ? float32ToF16Buffer(new Float32Array(count).fill(1)) : new Float32Array(count).fill(1));
-                feeds[name] = new ort.Tensor(dataType, data, shape);
+                feeds[name] = new ort.Tensor(dataType, data, numDims);
                 matched++;
             }
         }
