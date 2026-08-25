@@ -7,18 +7,20 @@ const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
 
 /**
  * 解析 diff_step 会话的输入/输出名与 mask 元素类型，兼容两种签名：
- * - legacy（根目录 FP32 / fp16）：xt_input / t / cond / xt_mask(float) → flow_pred
+ * - legacy（根目录 FP32 / fp16 / int8 optimized_npu）：xt_input / t / cond / xt_mask(float) → flow_pred
  * - QDIT（int8 新模型）：       x / diffusion_step / cond / x_mask(bool) → flow_pred
+ * - renames（int8 静态重命名模型）：acoustic_features / diffusion_step / conditioning / attention_mask(bool) → output
  * 旧 int8 静态模型输出名为 output。
  * @param {Object} session - sessions.diffStep
- * @returns {{xtInput:string, tInput:string, maskInput:string, maskType:string, outName:string, isQdit:boolean}}
+ * @returns {{xtInput:string, tInput:string, condInput:string, maskInput:string, maskType:string, outName:string, isQdit:boolean}}
  */
 function _resolveDiffStepIO(session) {
     const names = (session && Array.isArray(session.inputNames)) ? session.inputNames : [];
     const has = (n) => names.indexOf(n) !== -1;
-    const xtInput = has('x') ? 'x' : 'xt_input';
+    const xtInput = has('x') ? 'x' : (has('acoustic_features') ? 'acoustic_features' : 'xt_input');
     const tInput = has('diffusion_step') ? 'diffusion_step' : 't';
-    const maskInput = has('x_mask') ? 'x_mask' : 'xt_mask';
+    const condInput = has('conditioning') ? 'conditioning' : 'cond';
+    const maskInput = has('x_mask') ? 'x_mask' : (has('attention_mask') ? 'attention_mask' : 'xt_mask');
     let maskType = 'float32';
     try {
         const meta = session.inputMetadata;
@@ -32,7 +34,7 @@ function _resolveDiffStepIO(session) {
     } catch (_) { /* metadata 读取失败时按 legacy float32 处理 */ }
     const outNames = (session && Array.isArray(session.outputNames)) ? session.outputNames : [];
     const outName = outNames.indexOf('flow_pred') !== -1 ? 'flow_pred' : (outNames[0] || 'flow_pred');
-    return { xtInput, tInput, maskInput, maskType, outName, isQdit: has('x') && has('diffusion_step') };
+    return { xtInput, tInput, condInput, maskInput, maskType, outName, isQdit: has('x') && has('diffusion_step') };
 }
 
 /**
@@ -102,7 +104,8 @@ class Diffusion {
         const io = _resolveDiffStepIO(sessions.diffStep);
 
         const padFloat = (src, len) => {
-            if (src.length >= len) return src;
+            if (src.length === len) return src;
+            if (src.length > len) return src.subarray(0, len);
             const padded = new Float32Array(len);
             padded.set(src);
             return padded;
@@ -122,7 +125,7 @@ class Diffusion {
             results = await sessions.diffStep.run({
                 [io.xtInput]: xtTensor,
                 [io.tInput]: tTensor,
-                cond: condTensor,
+                [io.condInput]: condTensor,
                 [io.maskInput]: maskTensor,
             });
         } catch (err) {
@@ -184,7 +187,8 @@ class Diffusion {
         const io = _resolveDiffStepIO(sessions.diffStep);
 
         const padFloat = (src, len) => {
-            if (src.length >= len) return src;
+            if (src.length === len) return src;
+            if (src.length > len) return src.subarray(0, len);
             const padded = new Float32Array(len);
             padded.set(src);
             return padded;
@@ -222,7 +226,7 @@ class Diffusion {
             results = await sessions.diffStep.run({
                 [io.xtInput]: xtTensor,
                 [io.tInput]: tTensor,
-                cond: condTensor,
+                [io.condInput]: condTensor,
                 [io.maskInput]: maskTensor,
             });
         } catch (err) {
@@ -291,7 +295,7 @@ class Diffusion {
         const condResults = await sessions.diffStep.run({
             [io.xtInput]: xtInputTensor,
             [io.tInput]: tTensor,
-            cond: condTensorConst,
+            [io.condInput]: condTensorConst,
             [io.maskInput]: condMaskTensorConst,
         });
         const condPredRaw = condResults[io.outName];
@@ -333,7 +337,7 @@ class Diffusion {
         const uncondResults = await sessions.diffStep.run({
             [io.xtInput]: uncondXtTensor,
             [io.tInput]: tTensor,
-            cond: uncondCondTensor,
+            [io.condInput]: uncondCondTensor,
             [io.maskInput]: uncondMaskTensor,
         });
         const uncondPredRaw = uncondResults[io.outName];
@@ -424,7 +428,8 @@ class Diffusion {
         }
 
         const padFloat = (src, len) => {
-            if (src.length >= len) return src;
+            if (src.length === len) return src;
+            if (src.length > len) return src.subarray(0, len);
             const padded = new Float32Array(len);
             padded.set(src);
             return padded;
@@ -575,7 +580,7 @@ class Diffusion {
                     batchResults = await sessions.diffStep.run({
                         [io.xtInput]: cfgXtTensor,
                         [io.tInput]: cfgTTensor,
-                        cond: cfgCondTensor,
+                        [io.condInput]: cfgCondTensor,
                         [io.maskInput]: cfgMaskTensor,
                     });
                 } catch (err) {
@@ -629,7 +634,7 @@ class Diffusion {
                 results = await sessions.diffStep.run({
                     [io.xtInput]: xtInputTensor,
                     [io.tInput]: tTensor,
-                    cond: condTensorConst,
+                    [io.condInput]: condTensorConst,
                     [io.maskInput]: condMaskTensorConst,
                 });
             } catch (err) {

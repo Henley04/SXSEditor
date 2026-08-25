@@ -793,7 +793,8 @@ class Preprocessing {
         const encF0Len = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFrames;
 
         const padInt64 = (src, len) => {
-            if (src.length >= len) return src;
+            if (src.length === len) return src;
+            if (src.length > len) return src.subarray(0, len);
             const padded = new BigInt64Array(len);
             padded.set(src);
             return padded;
@@ -817,19 +818,32 @@ class Preprocessing {
             sessions.f0Encoder.run({ input_ids: f0Input }),
         ]);
 
-        const textEmb = useStaticShapes ? outputToFloat32(textResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(textResults['embeddings']);
-        const pitchEmb = useStaticShapes ? outputToFloat32(pitchResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(pitchResults['embeddings']);
-        const typeEmb = useStaticShapes ? outputToFloat32(typeResults['embeddings']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(typeResults['embeddings']);
-        const f0Emb = useStaticShapes ? outputToFloat32(f0Results['embeddings']).subarray(0, totalFrames * EMBED_DIM) : outputToFloat32(f0Results['embeddings']);
+        // 输出名自适应：optimized_npu 输出 'embeddings'，plain int8 量化模型输出重命名为
+        // 'output'。按候选顺序取第一个存在的 key，避免硬编码只匹配一种命名。
+        const pickOutput = (res, keys) => {
+            if (!res) return undefined;
+            const cands = keys || ['embeddings', 'output'];
+            for (const k of cands) if (res[k]) return res[k];
+            const ks = Object.keys(res);
+            return ks.length ? res[ks[0]] : undefined;
+        };
+        const textOut = pickOutput(textResults);
+        const pitchOut = pickOutput(pitchResults);
+        const typeOut = pickOutput(typeResults);
+        const f0Out = pickOutput(f0Results);
+        const textEmb = useStaticShapes ? outputToFloat32(textOut).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(textOut);
+        const pitchEmb = useStaticShapes ? outputToFloat32(pitchOut).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(pitchOut);
+        const typeEmb = useStaticShapes ? outputToFloat32(typeOut).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(typeOut);
+        const f0Emb = useStaticShapes ? outputToFloat32(f0Out).subarray(0, totalFrames * EMBED_DIM) : outputToFloat32(f0Out);
         // 释放 4 个 encoder 的输入和输出张量（outputToFloat32 已拷贝数据）
         disposeTensor(textInput);
         disposeTensor(pitchInput);
         disposeTensor(typeInput);
         disposeTensor(f0Input);
-        disposeTensor(textResults['embeddings']);
-        disposeTensor(pitchResults['embeddings']);
-        disposeTensor(typeResults['embeddings']);
-        disposeTensor(f0Results['embeddings']);
+        disposeTensor(textOut);
+        disposeTensor(pitchOut);
+        disposeTensor(typeOut);
+        disposeTensor(f0Out);
 
         const tokenEmb = new Float32Array(tokenCount * EMBED_DIM);
         for (let t = 0; t < tokenCount; t++) {
@@ -844,10 +858,11 @@ class Preprocessing {
         const preflowTokenEmb = useStaticShapes ? (() => { const p = new Float32Array(preflowSeqLen * EMBED_DIM); p.set(tokenEmb); return p; })() : tokenEmb;
         const featuresTensor = createFloatTensor(floatType, preflowTokenEmb, [1, preflowSeqLen, EMBED_DIM]);
         const preflowResults = await sessions.preflow.run({ features: featuresTensor });
-        const processedTokenEmb = useStaticShapes ? outputToFloat32(preflowResults['processed_features']).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(preflowResults['processed_features']);
+        const preflowOut = pickOutput(preflowResults, ['processed_features', 'output']);
+        const processedTokenEmb = useStaticShapes ? outputToFloat32(preflowOut).subarray(0, tokenCount * EMBED_DIM) : outputToFloat32(preflowOut);
         // 释放 preflow 输入和输出张量
         disposeTensor(featuresTensor);
-        disposeTensor(preflowResults['processed_features']);
+        disposeTensor(preflowOut);
 
         // 长片段时在 preflow → expandedEmb 之间 yield 一次，避免连续 CPU 循环阻塞主线程
         if (totalFrames > 256) {
@@ -891,10 +906,11 @@ class Preprocessing {
         const paddedCondCode = useStaticShapes ? (() => { const p = new Float32Array(condSeqLen * EMBED_DIM); p.set(condCodeData); return p; })() : condCodeData;
         const condCodeTensor = createFloatTensor(floatType, paddedCondCode, [1, condSeqLen, EMBED_DIM]);
         const condEmbResults = await sessions.condEmb.run({ cond_code: condCodeTensor });
-        const cond = useStaticShapes ? outputToFloat32(condEmbResults['cond_embedding']).subarray(0, totalCondFrames * COND_DIM) : outputToFloat32(condEmbResults['cond_embedding']);
+        const condOut = pickOutput(condEmbResults, ['cond_embedding', 'output']);
+        const cond = useStaticShapes ? outputToFloat32(condOut).subarray(0, totalCondFrames * COND_DIM) : outputToFloat32(condOut);
         // 释放 condEmb 输入和输出张量
         disposeTensor(condCodeTensor);
-        disposeTensor(condEmbResults['cond_embedding']);
+        disposeTensor(condOut);
 
         return cond;
     }

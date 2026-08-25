@@ -1015,7 +1015,8 @@ class Postprocessing {
         const yieldToEventLoop = () => new Promise(resolve => setImmediate(resolve));
 
         const padFloat = (src, len) => {
-            if (src.length >= len) return src;
+            if (src.length === len) return src;
+            if (src.length > len) return src.subarray(0, len);
             const padded = new Float32Array(len);
             padded.set(src);
             return padded;

@@ -2118,6 +2118,39 @@ class OnnxSVSPipeline {
         }
     }
 
+    /**
+     * NPU 静态形状模型（int8/int8-npu）逐段长度钳制。
+     * 模型输入维度固定为 NPU_STATIC_SEQ_LEN，要求 ptFrameCount + totalFrames <= 2048，
+     * 否则 encoder/diffstep 拼接溢出（RangeError: offset is out of bounds）或张量 size 不匹配
+     * （Tensor's size(2048) does not match data length(N)）。
+     * 策略：先截断 ref prompt（保留要合成的目标音频），再把 target 截到 2048 - ptFrameCount。
+     * @param {Object} sequences - { f0Ids, mel2token }（会被原位截断）
+     * @param {number} ptFrameCount ref prompt 帧数（可能被截短）
+     * @param {Float32Array|null} ptMelData ref prompt mel（可能被截短）
+     * @param {number} totalFrames 目标帧数（会被截短）
+     * @param {string} tag 日志前缀
+     * @returns {{totalFrames:number, ptFrameCount:number, ptMelData:Float32Array|null}}
+     */
+    _clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, tag = '') {
+        const minTarget = 50; // 至少保留 50 帧目标，避免全空
+        if (ptFrameCount > NPU_STATIC_SEQ_LEN - minTarget) {
+            const newPt = Math.max(0, NPU_STATIC_SEQ_LEN - minTarget);
+            if (ptMelData && ptMelData.length > newPt * MEL_DIM) {
+                console.warn(`${tag} NPU prompt limit: ${ptFrameCount} -> ${newPt}, trimming ref`);
+                ptMelData = ptMelData.subarray(0, newPt * MEL_DIM);
+                ptFrameCount = newPt;
+            }
+        }
+        const maxFrames = NPU_STATIC_SEQ_LEN - ptFrameCount;
+        if (totalFrames > maxFrames) {
+            console.warn(`${tag} NPU frame limit: ${totalFrames} > ${maxFrames}, truncating`);
+            sequences.f0Ids = sequences.f0Ids.subarray(0, maxFrames);
+            sequences.mel2token = sequences.mel2token.subarray(0, maxFrames);
+            totalFrames = maxFrames;
+        }
+        return { totalFrames, ptFrameCount, ptMelData };
+    }
+
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null, abortSignal = null) {
         throwIfCancelled(abortSignal);
         const samplerName = this._currentSamplerName || DEFAULT_SOLVER;
@@ -2164,15 +2197,14 @@ class OnnxSVSPipeline {
 
         console.log(`[OnnxSVSPipeline] Segmented synthesis: frames=${totalFrames}, tokens=${tokenCount}, steps=${totalSteps}`);
 
-        // NPU 静态形状模型限制：totalFramesWithPrompt 不能超过 NPU_STATIC_SEQ_LEN
+        // NPU 静态形状模型限制：ptFrameCount+totalFrames 不得超过 NPU_STATIC_SEQ_LEN。
+        // 大 ref prompt（>50 帧）时按 Math.min(ptFrameCount,50) 预留 target 会不足预留，
+        // 导致 diffstep 拼接 offset overflow；统一用实际 ptFrameCount 预留 target 帧。
         if (this.useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
-            const maxFrames = NPU_STATIC_SEQ_LEN - Math.min(ptFrameCount, 50);
-            if (totalFrames > maxFrames) {
-                console.warn(`[OnnxSVSPipeline] NPU frame limit: ${totalFrames} > ${maxFrames}, truncating`);
-                sequences.f0Ids = sequences.f0Ids.subarray(0, maxFrames);
-                sequences.mel2token = sequences.mel2token.subarray(0, maxFrames);
-                totalFrames = maxFrames;
-            }
+            const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Segment]');
+            totalFrames = clamped.totalFrames;
+            ptFrameCount = clamped.ptFrameCount;
+            ptMelData = clamped.ptMelData;
         }
 
         // WebNN: encoder+diffusion in renderer, vocoder in main process (DML)
@@ -2601,9 +2633,25 @@ class OnnxSVSPipeline {
                 sequences.mel2token = sequences.mel2token.subarray(0, MAX_SAFE_FRAMES);
                 totalFrames = MAX_SAFE_FRAMES;
             }
+            // 无 ref prompt 时生成合成 prompt 帧（prompt 提高音色/音高稳定性）。
+            // 必须先确定 ptFrameCount，再钳制目标帧数，保证 ptFrameCount+totalFrames
+            // 恒 <= NPU_STATIC_SEQ_LEN，否则 diffstep 的 xtInputBuf.set 与
+            // xtInputTensor.data.set 会因 offset out of bounds 抛 RangeError。
             if (!ptMelData || ptFrameCount === 0) {
                 ptFrameCount = Math.min(50, Math.max(10, Math.floor(totalFrames * 0.1)));
                 ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
+            }
+            // NPU 静态形状模型（int8/int8-npu）限制：totalFramesWithPrompt 不能超过
+            // NPU_STATIC_SEQ_LEN，否则 encoder/diffstep 固定 [1,2048] 输入维度不匹配。
+            // 长片段触发 "Tensor's size(2048) does not match data length(N)"；
+            // 大 ref prompt（>50 帧）时若按 Math.min(ptFrameCount,50) 预留 target，
+            // 会不足预留导致拼接溢出。因此统一放在 prompt 注入之后，
+            // 用实际 ptFrameCount 预留 target 帧。
+            if (this.useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
+                const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[MultiStream]');
+                totalFrames = clamped.totalFrames;
+                ptFrameCount = clamped.ptFrameCount;
+                ptMelData = clamped.ptMelData;
             }
 
             // Encoder
@@ -3094,15 +3142,14 @@ class OnnxSVSPipeline {
                 ptMelData = new Float32Array(ptFrameCount * MEL_DIM);
             }
 
-            // NPU 静态形状模型限制
+            // NPU 静态形状模型限制：ptFrameCount+totalFrames 不得超过 NPU_STATIC_SEQ_LEN。
+            // 大 ref prompt（>50 帧）时按 Math.min(ptFrameCount,50) 预留 target 会不足预留，
+            // 导致 diffstep 拼接 offset overflow；统一用实际 ptFrameCount 预留 target 帧。
             if (this.useStaticShapes && ptFrameCount + totalFrames > NPU_STATIC_SEQ_LEN) {
-                const maxFrames = NPU_STATIC_SEQ_LEN - Math.min(ptFrameCount, 50);
-                if (totalFrames > maxFrames) {
-                    console.warn(`[OnnxSVSPipeline] NPU frame limit: ${totalFrames} > ${maxFrames}, truncating`);
-                    sequences.f0Ids = sequences.f0Ids.subarray(0, maxFrames);
-                    sequences.mel2token = sequences.mel2token.subarray(0, maxFrames);
-                    totalFrames = maxFrames;
-                }
+                const clamped = this._clampStaticShapeFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Synthesis]');
+                totalFrames = clamped.totalFrames;
+                ptFrameCount = clamped.ptFrameCount;
+                ptMelData = clamped.ptMelData;
             }
 
             console.log(`[OnnxSVSPipeline] Synthesis params: frames=${totalFrames}, tokens=${sequences.tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
