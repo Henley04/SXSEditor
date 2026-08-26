@@ -617,9 +617,11 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             graphOptimizationLevel: 'basic',
         });
         // 已知 DML 上输出错误/静音的静态形状模型：dummy 验证只能判断“不崩溃”，
-        // 检测不出“输出是否正确”。diff_step 在 DML 上返回静音，故强制走 CPU。
-        const STATIC_SHAPE_DML_EXCLUDE = new Set(['diffStep']);
-        const tryDml = !STATIC_SHAPE_DML_EXCLUDE.has(sessionKey);
+        // 检测不出“输出是否正确”。diff_step 曾在旧驱动/ORT 组合上返回静音；
+        // 现模型（FP16 权重版）已在真实校准数据上实测 DML 输出与 CPU 一致
+        // （fp16-vs-cpu cos≈0.99996，fp32-vs-cpu cos=1.0）且约 2.3x 提速，
+        // 故放开 diffStep 走 DML 优先，失败仍自动回退 CPU。
+        const tryDml = true;
         let npuDmlSession = null;
         if (tryDml) {
             try {
@@ -646,8 +648,6 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                     : dmlErr.message.substring(0, 60).split('\n')[0];
                 console.warn(`[OnnxSVSPipeline] ${modelName} NPU static shapes DML load failed (${reason}), falling back to CPU...`);
             }
-        } else {
-            console.warn(`[OnnxSVSPipeline] ${modelName} excluded from DML (NPU static shapes): known incorrect/silent output on DML, using CPU`);
         }
         // DML 不适用或失败 → 回退 CPU（保持原有行为：跳过推导验证以加快大模型加载）
         const cpuSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts(['cpu']));

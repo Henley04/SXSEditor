@@ -191,3 +191,57 @@ python scripts\validate_int8_real_data.py --qmodels int8_output\onnx\diffstep_w8
 - [ ] 应用内真实合成（含长音频/引用音频）通过，无杂音
 - [ ] 现有测试套件通过
 - [ ] 英文 commit message，git 提交并推送远程
+---
+
+## 9. Final results (2026-08-26)
+
+Decision changed by measurement: W8A32 was built and is accuracy-perfect but does
+NOT accelerate on DirectML (no mixed int8-weight x fp32-activation GEMM operator in
+DML; DequantizeLinear cannot fuse into MatMul there). FP16 full-graph conversion is
+the winner for real DML speedup.
+
+Measured on real calib data (8 samples, seq 2048, DmlExecutionProvider):
+
+| model | cos | SNR dB | mean ms | speedup | size |
+|---|---|---|---|---|---|
+| fp32 (baseline) | 1.00000 | inf | 410 | 1.00x | 1688 MB |
+| w8a32 (int8 weights + DQ) | 0.99988 | 38.11 | 436 | 0.94x (SLOWER) | 424 MB |
+| **fp16 (deployed)** | **0.99761** | **27.31** | **181** | **2.26x** | **844 MB** |
+
+Absolute correctness cross-check (DML vs CPU ground truth):
+- fp32 on DML vs CPU: cos 1.00000 / SNR 113.75 dB (old "silent output" issue gone)
+- fp16 on DML vs CPU: cos 0.99996 / SNR 40.47 dB
+
+DML limitations (why INT8 did not win):
+1. DirectML has QUANTIZED_LINEAR_MATMUL (int8 x int8 only) - no mixed precision GEMM,
+   so weight-only INT8 (W8A32) dequantizes at runtime: reads 422 MB int8, writes
+   1.7 GB fp32, then runs FP32 GEMM -> net slower than plain FP32.
+2. Full W8A8 via QLinearMatMul would use DP4A but forces per-tensor activation
+   quantization -> measured cos ~0.77 (precision cliff), fails acceptance.
+3. ORT CPU folds weight DQ into FP32 weights (constant folding) -> no CPU speedup
+   either; W8A32 value is size-only.
+4. FP16 GEMM is natively accelerated by DML (~2.3x here) with near-lossless accuracy.
+
+Deployment:
+- onnx_models/int8/diff_step_dml.onnx (+ .onnx.data, 885 MB) = FP16 compute, FP32 IO
+  (keep_io_types). Pipeline detects float32 xt_input -> diffStepIsFP16=false ->
+  existing FP32 feeding path unchanged.
+- modelLoader.js: STATIC_SHAPE_DML_EXCLUDE removed; diffStep now goes DML-first with
+  automatic CPU fallback in static-shape mode. NPU/WebNN paths untouched.
+- fix_int8_resolve_neg1.py NOT needed: current graph runs correctly on DML as-is.
+
+Scripts:
+- scripts/build_w8a32_diffstep.py   v2: pre-quantized int8 initializers + DQ only;
+  fixes per-axis scale length bug (reduce all axes EXCEPT the quantization axis)
+- scripts/make_fp16_diffstep.py     manual whole-graph FP16 conversion (onnxconverter_common
+  1.16 breaks on dynamo _to_copy nodes); clamps out-of-range constants (mask -FLT_MAX)
+- scripts/bench_diffstep_realdata.py unified accuracy+latency bench on real calib data
+- scripts/_crosscheck_dml_cpu.py    DML-vs-CPU absolute correctness check
+
+Check list status:
+- [x] diffstep_w8a32.onnx generated (424 MB) - kept as size-optimized fallback, NOT deployed (slower on DML)
+- [x] CPU/DML real-data accuracy: fp16 cos 0.99761 >= 0.95, SNR 27.31 dB >= 7
+- [x] Replaced onnx_models/int8/diff_step_dml.onnx
+- [x] modelLoader.js diffStep DML-first with CPU fallback; NPU path unaffected
+- [ ] In-app synthesis check (long audio + reference audio) - requires GUI run
+- [x] Test suite passes (1664 tests)
