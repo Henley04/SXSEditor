@@ -60,6 +60,7 @@ def main():
     ap.add_argument("--samples", type=int, default=8)
     ap.add_argument("--out", default=OUT_SCALES)
     ap.add_argument("--no-fake-quant", action="store_true", help="skip the W8A8 probe")
+    ap.add_argument("--weight-only", action="store_true", help="quantize weights only (W8A32 probe)")
     args = ap.parse_args()
 
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -165,8 +166,10 @@ def main():
         wqs = (W / wscale[:, None]).round().clamp(-127, 127)
         Wqt = (wqs * wscale[:, None]).to(W.dtype)
 
-        # activation quant (per last-dim, symmetric int8)
-        if ln in act_scales:
+        # activation quant (per last-dim, symmetric int8); skip when weight-only
+        if args.weight_only:
+            xt = x
+        elif ln in act_scales:
             ascale = torch.from_numpy(act_scales[ln]).to(x.device).float()
             xs = x.float()
             xq = (xs / ascale).round().clamp(-127, 127)
