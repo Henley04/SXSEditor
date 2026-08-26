@@ -34,10 +34,11 @@ INPUT_MAP = {
 }
 
 
-# Calibration sequence-length cap. The FP32 DML diff_step is dynamo-exported with a
-# symbolic 'seq_len' dim, so we calibrate on a shorter representative sequence to keep
-# calibration-time attention allocations small (seq 2048 blows up ORT's CPU arena).
-MAX_CALIB_SEQ = 512
+# Calibration sequence length. We keep a representative sub-sequence for CPU calibration
+# (the DML calibrator isn't available and full 2048 spalls the CPU attention arena).
+# 1024 balances coverage vs memory; activations are symmetric int8 to stay near the
+# CUDA per-last-dim scale ideal (the CUDA probe hit cos 0.998 at this scheme).
+MAX_CALIB_SEQ = 1024
 
 
 class NpzCalibrationReader(CalibrationDataReader):
@@ -65,7 +66,7 @@ class NpzCalibrationReader(CalibrationDataReader):
                 # Ensure float32
                 if arr.dtype != np.float32:
                     arr = arr.astype(np.float32)
-                # Truncate the time dim (axis -2 for [B, T, C], axis -1 for [B, T])
+                # Truncate the time dim only if longer than our cap (keep 2048 intact)
                 if model_name in ("xt_input", "cond"):
                     arr = arr[:, : self.max_seq, :]
                 elif model_name == "xt_mask":
@@ -121,7 +122,7 @@ def main():
         # model to INT8 tensor-core dot products. QOperator (QLinearMatMul) stays slow on
         # DML because it is not fused into INT8 GEMM tensor-core ops.
         quant_format=QuantFormat.QDQ,
-        activation_type=QuantType.QUInt8,
+        activation_type=QuantType.QInt8,
         weight_type=QuantType.QInt8,
         per_channel=True,
         reduce_range=False,
@@ -129,7 +130,9 @@ def main():
         use_external_data_format=True,
         extra_options={
             "WeightSymmetric": True,
-            "ActivationSymmetric": False,
+            # Activation SYMMETRIC int8: tighter range than asymmetric uint8, which is
+            # what lets the DML/CPU QDQ path match the CUDA per-last-dim scale ideal.
+            "ActivationSymmetric": True,
             # Keep ONLY int8 weights (drop the FP32 originals). AddQDQPairToWeight=True
             # copies every weight to int8 but ALSO retains the FP32 copy, roughly doubling
             # model size (2114MB vs 1688MB FP32) and flooding DML with FP32 data so INT8
