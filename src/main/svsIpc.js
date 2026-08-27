@@ -19,11 +19,35 @@ let _diffStepIncompatibleNotified = false;
 // 否则命令流交叉提交会导致 887A0005 (GPU device hung)。
 // 此锁确保同一时刻只有一个合成请求在执行，防止 playAll/exportAll/fragment 合成并发。
 let _synthMutex = Promise.resolve();
-function _withSynthMutex(fn) {
+// 在飞合成计数：resetSvsPipeline 在合成进行中会 dispose 正在使用的 session，
+// 导致 "Session already disposed" 崩溃；忙时改为延迟到空闲后执行。
+let _synthBusy = 0;
+let _pendingPipelineReset = false;
+// 当前持有 mutex 的可取消管线引用：svs:cancel 在 lazy 实例尚未注册
+// （pipeline 异步初始化窗口）或已被延迟重置清空时仍能命中正确的 worker。
+let _activeCancellable = null;
+function _withSynthMutex(fn, cancellable) {
   const prev = _synthMutex;
   let release;
+  _synthBusy++;
   _synthMutex = new Promise((r) => { release = r; });
-  return prev.then(fn).finally(release);
+  const p = prev.then(async () => {
+    if (cancellable) _activeCancellable = cancellable;
+    try {
+      return await fn();
+    } finally {
+      if (cancellable && _activeCancellable === cancellable) _activeCancellable = null;
+    }
+  }).finally(() => {
+    _synthBusy--;
+    if (_synthBusy === 0 && _pendingPipelineReset) {
+      _pendingPipelineReset = false;
+      console.log('[Main] Executing deferred pipeline reset (synthesis idle)');
+      try { resetSvsPipeline(); } catch (_) {}
+    }
+    release();
+  });
+  return p;
 }
 
 async function _createPipeline(languageOverride) {
@@ -36,6 +60,7 @@ async function _createPipeline(languageOverride) {
   const modelPrecision = settings.modelPrecision || 'fp32';
   const inferenceProvider = settings.inferenceProvider || 'ortnode';
   const japaneseVocalization = settings.japaneseVocalization || 'hybrid';
+  console.log(`[Main] Pipeline settings: winmlEnabled=${settings.winmlEnabled === true} deviceMode=${deviceMode} inferenceProvider=${inferenceProvider}`);
 
   const langTag = languageOverride ? `, language=${languageOverride}` : '';
   console.log(`[Main] Initializing SVS Pipeline, model path: ${modelPath}, precision: ${modelPrecision}${langTag}, jpVocal=${japaneseVocalization}`);
@@ -69,8 +94,36 @@ async function _createPipeline(languageOverride) {
     }
   }
   const keepRendererBridge = inferenceProvider === 'ortweb' || explicitWebNN || webnnAvailable;
-  if (!keepRendererBridge) {
-    return new SvsWorkerClient({ modelDir: modelPath, baseModelDir: getBaseModelDir(), pipelineOptions, language: languageOverride });
+  // Windows ML 开启时强制 worker 路径（inferenceProvider=ortnode 场景）：
+  // WinML vendor-EP 由主进程解析 libraryPath 后经 workerData 注入，
+  // 该链路已端到端验证；in-process 分支的 bundled catalog 存在未定差异。
+  const winmlWorkerMode = settings.winmlEnabled === true && inferenceProvider === 'ortnode';
+  if (!keepRendererBridge || winmlWorkerMode) {
+    // WinML vendor-EP 开关注入：worker_threads 里 require('electron') 不可用
+    // （退化为路径字符串），worker 内的 settings 模块与 dynwinrt/catalog 均
+    // 不可靠。因此由主进程在此解析就绪的 EP libraryPath，经 workerData 下发；
+    // svsWorker 启动时挂到 globalThis，winmlProvider 直接 registerEp。
+    let winmlEps;
+    let winmlEnabled = false;
+    if (settings.winmlEnabled === true) {
+      try {
+        winmlEps = await require('../inference/winml/winmlProvider').getReadyEpLibraries();
+        winmlEnabled = true;
+        console.log(`[Main] WinML enabled: resolved ${winmlEps ? winmlEps.length : 0} ready EP(s)${winmlEps && winmlEps.length ? ' -> ' + winmlEps.map((e) => e.name).join(', ') : ''}`);
+      } catch (err) {
+        console.warn('[Main] WinML EP resolution failed; worker will use DML/CPU:', err.message);
+        winmlEps = [];
+      }
+    }
+    return new SvsWorkerClient({
+      modelDir: modelPath,
+      baseModelDir: getBaseModelDir(),
+      pipelineOptions,
+      language: languageOverride,
+      winmlEnabled,
+      ...(winmlEps ? { winmlEps } : {}),
+      ...(settings.winmlBootstrapDllPath ? { winmlBootstrapDllPath: settings.winmlBootstrapDllPath } : {}),
+    });
   }
   return new OnnxSVSPipeline(modelPath, pipelineOptions);
 }
@@ -86,6 +139,15 @@ function getSvsPipeline() {
 }
 
 function resetSvsPipeline() {
+  // 合成进行中立即 dispose 会杀掉在用的 session（"Session already disposed"），
+  // 推迟到 _withSynthMutex 的空闲钩子执行。
+  if (_synthBusy > 0) {
+    if (!_pendingPipelineReset) {
+      console.log('[Main] Synthesis in progress; deferring pipeline reset until idle');
+    }
+    _pendingPipelineReset = true;
+    return;
+  }
   const inst = svsPipelineLazy.getInstance();
   if (inst) {
     try { Promise.resolve(inst.dispose()).catch(() => {}); } catch (_) {}
@@ -215,7 +277,7 @@ function registerSvsIpc() {
       if (opts.autoShift && opts.refAudioWavBuffer) {
         opts.refF0Extractor = _makeRmvpeExtractor();
       }
-      return await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts));
+      return await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts), pipeline);
     } catch (err) {
       console.error('[Main] svs:synthesize failed:', err.message);
       throw err;
@@ -271,7 +333,7 @@ function registerSvsIpc() {
           frag.options.refF0Extractor = _makeRmvpeExtractor();
         }
       }
-      return await _withSynthMutex(() => pipeline.synthesizeMultiStreaming(fragments, bpm, opts));
+      return await _withSynthMutex(() => pipeline.synthesizeMultiStreaming(fragments, bpm, opts), pipeline);
     } catch (err) {
       console.error('[Main] svs:synthesizeMultiStreaming failed:', err.message);
       throw err;
@@ -279,15 +341,21 @@ function registerSvsIpc() {
   });
 
   ipcMain.handle('svs:cancel', async () => {
-    const pipeline = svsPipelineLazy.getInstance();
-    if (pipeline && typeof pipeline.cancelActiveSynthesis === 'function') {
+    // 优先命中当前持有 mutex 的实例（覆盖 lazy 实例尚未注册的初始化窗口，
+    // 以及延迟重置清空 getInstance() 后仍在收尾的场景）。
+    const target = _activeCancellable || svsPipelineLazy.getInstance();
+    console.log(`[Main] svs:cancel active=${!!_activeCancellable} lazyInstance=${!!svsPipelineLazy.getInstance()} busy=${_synthBusy}`);
+    if (target && typeof target.cancelActiveSynthesis === 'function') {
       // 协作式取消：只通知 worker 在安全点退出推理，worker 线程保持存活。
       // 不再调用 svsPipelineLazy.reset()（旧逻辑会在 terminate 后重建 worker），
       // 否则会 dispose()→terminate() 打断尚未安全退出的推理，重新引入 GPU 崩溃。
-      await pipeline.cancelActiveSynthesis();
+      await target.cancelActiveSynthesis();
       return { success: true };
     }
-    resetSvsPipeline();
+    // 没有可取消对象且不在合成中：保持旧行为（清理残留状态）。
+    if (_synthBusy === 0) {
+      resetSvsPipeline();
+    }
     return { success: true };
   });
 
@@ -361,7 +429,7 @@ function registerSvsIpc() {
       opts.refF0Extractor = _makeRmvpeExtractor();
     }
     try {
-      const data = await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts));
+      const data = await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts), pipeline);
       return { data };
     } catch (err) {
       return { error: err.message };

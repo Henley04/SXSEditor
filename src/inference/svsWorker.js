@@ -2,6 +2,20 @@ const { parentPort, workerData } = require('node:worker_threads');
 
 try { require('./pipeline/float16Patch'); } catch (_) {}
 
+// Windows ML 快照注入：worker_threads 里 require('electron') 不可用（退化为
+// 路径字符串），settings 模块与 dynwinrt/catalog 在 worker 内都不可靠。
+// 主进程在 spawn 时经 workerData 显式下发开关与已就绪的 EP libraryPath 列表，
+// 这里在任何 pipeline/winml 模块加载之前挂到 globalThis。
+if (workerData && typeof workerData.winmlEnabled === 'boolean') {
+    globalThis.__SXS_SETTINGS_SNAPSHOT__ = {
+        winmlEnabled: workerData.winmlEnabled,
+        ...(workerData.winmlBootstrapDllPath ? { winmlBootstrapDllPath: workerData.winmlBootstrapDllPath } : {}),
+    };
+    if (Array.isArray(workerData.winmlEps)) {
+        globalThis.__SXS_WINML_EPS__ = workerData.winmlEps;
+    }
+}
+
 const { OnnxSVSPipeline } = require('./pipeline');
 const { RmvpePitchDetector } = require('./rmvpePitchDetector');
 

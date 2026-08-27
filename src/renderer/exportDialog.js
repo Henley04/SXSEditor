@@ -1011,8 +1011,25 @@ function showProgressView(panel, body, footer, form, precisionChanged, fullClean
   progressBar.appendChild(progressFill);
   progressView.appendChild(progressBar);
 
+  const timeEl = document.createElement('div');
+  timeEl.className = 'export-dialog-field-hint';
+  timeEl.style.textAlign = 'center';
+  timeEl.style.marginTop = '8px';
+  timeEl.textContent = t('main.exportDialog.elapsed', { time: '0.0s' }) || '已用时 0.0s';
+  progressView.appendChild(timeEl);
+
   // 调整 panel 高度以适应进度视图
   panel.style.maxHeight = '90vh';
+
+  const t0 = performance.now();
+  let timerId = setInterval(() => {
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    timeEl.textContent = (t('main.exportDialog.elapsed', { time: elapsed + 's' }) || `已用时 ${elapsed}s`);
+  }, 200);
+  const stopTimer = () => { if (timerId) { clearInterval(timerId); timerId = null; } };
+  // 清理时需停表，避免泄漏
+  const _origRemove = progressView.remove.bind(progressView);
+  progressView._stopElapsedTimer = stopTimer;
 
   const setProgress = (pct) => {
     const clamped = Math.max(0, Math.min(100, pct));
@@ -1021,12 +1038,15 @@ function showProgressView(panel, body, footer, form, precisionChanged, fullClean
   };
 
   const setStatus = (statusKey, params) => {
+    const elapsed = ((performance.now() - t0) / 1000).toFixed(1);
+    const suffix = ` · ${elapsed}s`;
     if (statusKey === 'progressSynthesizing') {
       const p = params?.progress ?? 0;
-      statusBar.textContent = t('main.exportDialog.progressSynthesizing', { progress: Math.round(p) });
+      statusBar.textContent = t('main.exportDialog.progressSynthesizing', { progress: Math.round(p) }) + suffix;
     } else {
-      statusBar.textContent = t('main.exportDialog.' + statusKey, params);
+      statusBar.textContent = t('main.exportDialog.' + statusKey, params) + suffix;
     }
+    if (statusKey === 'progressDone' || statusKey === 'progressFailed') stopTimer();
   };
 
   // 启动导出任务

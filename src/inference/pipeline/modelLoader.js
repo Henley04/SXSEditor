@@ -546,6 +546,13 @@ async function detectBestDevice(modelDir, npuAvailable = false) {
 
 const _validatedSessionModels = new Set();
 
+// Windows ML vendor-EP 适配范围（按项目决策：只做主模型，小检测器不适配）
+// - preflow：小收益，已验证 TRTRTX 2.30 稳定
+// - diffStep：暂不走 WinML — TRTRTX 2.30 对 846MB diff_step 产出异常 mel 导致全电流声（待 TRT 引擎参数调优后再启用）
+// - vocoder：暂不走 WinML — TRTRTX 2.30 对 995MB float32 vocoder 通道产出全零，保持 DML
+// - FCPE/RMVPE/ROSVOT/melTransform 等：保持原有 DML/CPU 链路
+const WINML_ELIGIBLE_KEYS = new Set(['preflow']);
+
 async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {
     const modelName = path.basename(modelPath);
     // Validation/warmup is a once-per-process action for each concrete model
@@ -605,6 +612,39 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             throw err;
         }
     };
+
+    // === Windows ML vendor EP 尝试（opt-in 实验特性；仅主模型） ===
+    // 在装有可兼容 vendor EP（NvTensorRtRtx / OpenVINO，未来 QNN/MIGraphX）的
+    // 设备上优先走 Windows ML 插件 EP，实测 diff_step/vocoder 相比 DirectML
+    // 有 ~4.5x 提速。任何失败都静默回落到下方原有 DML/CPU 链路。
+    if (WINML_ELIGIBLE_KEYS.has(sessionKey)) {
+        try {
+            const winmlProvider = require('../winml/winmlProvider');
+            if (winmlProvider.isWinmlEnabled()) {
+                const winmlRes = await winmlProvider.tryCreateWinMLSession(modelPath, useStaticShapes);
+                if (winmlRes && winmlRes.session) {
+                    const wsession = winmlRes.session;
+                    try {
+                        if (runValidation) {
+                            const feeds = sessionKey === 'diffStep'
+                                ? _rebuildDummyForSession(wsession, dummyInputs)
+                                : (overrideDummyInputs || dummyInputs);
+                            await wsession.run(feeds);
+                            _validatedSessionModels.add(validationKey);
+                            console.log(`[OnnxSVSPipeline] ${modelName} loaded [${winmlRes.ep}]${gpuTag} (inference verified)`);
+                        } else {
+                            console.log(`[OnnxSVSPipeline] ${modelName} loaded [${winmlRes.ep}]${gpuTag} (reload, validation skipped)`);
+                        }
+                        return { session: wsession, ep: winmlRes.ep, warmedUp: runValidation };
+                    } catch (werr) {
+                        const wr = (werr.message || '').split('\n')[0].slice(0, 80);
+                        console.warn(`[OnnxSVSPipeline] ${modelName} WinML warmup failed (${wr}), falling back to DML/CPU`);
+                        try { wsession.release(); } catch (_) {}
+                    }
+                }
+            }
+        } catch (_e) { /* WinML 栈不可用：继续原有链路 */ }
+    }
 
     // === NPU 静态形状模型：优先使用 DML（GPU），失败自动回退 CPU ===
     // 静态形状（seq=2048）模型是离线优化产物，运行时图优化固定为 basic 以加快加载。

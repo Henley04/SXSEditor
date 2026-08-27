@@ -365,7 +365,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       console.error('[Preload] Blocked unauthorized webnnRespond channel:', responseChannel);
       return;
     }
-    ipcRenderer.invoke(responseChannel, result);
+    // Main process listens with ipcMain.on (not handle), so use send only.
+    // Using invoke here triggers "No handler registered" in main and an
+    // uncaught rejection overlay in the renderer.
+    try {
+      ipcRenderer.send(responseChannel, result);
+    } catch (_) {}
   },
   // Security: whitelist allowed WebNN progress channels
   webnnProgress: (progressChannel, data) => {

@@ -36,6 +36,7 @@ Commands:
   version         Print build info
   info            Print app/runtime/path info
   gpu             Detect GPU / DirectML devices
+  winml           Detect Windows ML plugin EPs (experimental)
   models          List onnx_models and mark missing required models
   settings        Dump current settings.json
   init-pipeline   Initialize SVS pipeline (verifies all models load)
@@ -160,8 +161,55 @@ async function cmdGpu() {
   return 0;
 }
 
-function cmdModels() {
-  const { getModelDir } = require('./modelDir');
+// Windows ML 插件 EP 诊断（fail-soft：任何失败只打印警告，不影响退出码）
+async function cmdWinml() {
+  section('Windows ML');
+  const winmlCatalog = require('../inference/winml/winmlCatalog');
+  const ortBridge = require('../inference/winml/ortBridge');
+
+  log(`platformSupported: ${winmlCatalog.isPlatformSupported()}`);
+  const settings = (() => {
+    try { return require('./settings').loadSettings() || {}; } catch (_) { return {}; }
+  })();
+  log(`enabled(settings.winmlEnabled): ${settings.winmlEnabled === true}`);
+
+  if (!winmlCatalog.isPlatformSupported()) {
+    log('WinML vendor EPs require Windows 11 24H2+ (build 26100+) on x64/arm64.');
+    return 0;
+  }
+
+  const bootstrap = winmlCatalog.locateBootstrapDll(settings.winmlBootstrapDllPath);
+  log(`bootstrapDll: ${bootstrap || 'NOT FOUND (catalog disabled)'}`);
+
+  const providers = await winmlCatalog.listCompatibleProviders();
+  log(`compatible EPs: ${providers.length}`);
+  for (const p of providers) {
+    log(`  - ${p.name} readyState=${p.readyState}`);
+    const r = await winmlCatalog.ensureProviderReady(p.name).catch((e) => ({ ok: false, diagnostic: e.message }));
+    if (r.ok && r.libraryPath) {
+      try {
+        const ok = await ortBridge.ensureBridgeInit();
+        if (ok) {
+          ortBridge.registerEp(p.name, r.libraryPath);
+          log(`    registered <- ${r.libraryPath}`);
+        }
+      } catch (e) {
+        logErr(`    register failed: ${e.message.split('\n')[0]}`);
+      }
+    } else if (r.diagnostic) {
+      logErr(`    ensureReady failed: ${String(r.diagnostic).split('\n')[0].slice(0, 100)}`);
+    }
+  }
+
+  const devices = ortBridge.listDevices();
+  log(`EP devices in bridge env: ${devices.length}`);
+  for (const d of devices) {
+    log(`  - [${d.index}] ${d.epName} type=${d.deviceType} vendor=${d.vendor || '?'}`);
+  }
+  return 0;
+}
+
+function cmdModels() {  const { getModelDir } = require('./modelDir');
   const modelDir = getModelDir();
   section('Models');
   log(`modelDir: ${modelDir}`);
@@ -407,6 +455,7 @@ async function runCli(argv) {
       case 'version': return cmdVersion();
       case 'info': return cmdInfo();
       case 'gpu': return await cmdGpu();
+      case 'winml': return await cmdWinml();
       case 'models': return cmdModels();
       case 'settings': return cmdSettings();
       case 'init-pipeline': return await cmdInitPipeline();

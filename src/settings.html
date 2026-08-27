@@ -441,6 +441,14 @@
                 </div>
 
                 <div class="setting-group">
+                    <label class="checkbox-label" for="winmlEnabled">
+                        <input type="checkbox" id="winmlEnabled">
+                        <span data-i18n="settings.winmlEnabled">Windows ML 加速（实验性）</span>
+                    </label>
+                    <p class="hint" data-i18n="settings.winmlEnabledHint">在兼容设备上通过 Windows ML 插件执行提供者加速主模型（diff_step / vocoder / preflow）：NVIDIA RTX → TensorRT-RTX，Intel/AMD → OpenVINO/MIGraphX，高通 NPU → QNN。首次使用会按需下载对应 EP 运行库（需 Windows 11 24H2+）。失败自动回落 DirectML/CPU。</p>
+                </div>
+
+                <div class="setting-group">
                     <label for="ortGraphOptLevel" data-i18n="settings.ortGraphOptLevel">图优化级别 (graphOptimizationLevel)</label>
                     <select id="ortGraphOptLevel">
                         <option value="disabled" data-i18n="settings.ortGraphOptDisabled">禁用 (disabled)</option>

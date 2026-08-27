@@ -19,7 +19,8 @@
     "test:coverage": "nyc --reporter=text --reporter=html npm test",
     "test:watch": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --watch",
     "cli": "electron-forge start -- --cli",
-    "cli:help": "electron-forge start -- --cli help"
+    "cli:help": "electron-forge start -- --cli help",
+    "build:native": "cd native/ort-bridge && npx node-gyp rebuild"
   },
   "keywords": [
     "electron",
@@ -67,15 +68,16 @@
     "webpack-cli": "^7.0.3"
   },
   "dependencies": {
+    "@microsoft/dynwinrt": "^0.1.0-preview.19",
     "@tensorflow/tfjs": "^4.22.0",
     "@tensorflow/tfjs-backend-wasm": "^4.22.0",
     "@tonejs/midi": "^2.0.28",
     "decibri": "^5.0.0",
+    "iconv-lite": "^0.4.24",
     "onnxruntime-node": "^1.27.0",
     "onnxruntime-web": "^1.27.0",
     "pinyin-pro": "^3.28.1",
-    "systeminformation": "^5.31.9",
-    "iconv-lite": "^0.4.24"
+    "systeminformation": "^5.31.9"
   },
   "optionalDependencies": {
     "nan": "^2.27.0"

@@ -258,6 +258,10 @@ function _ensureVisibilityHandler() {
       if (getFragmentIsPlaying() && getFragmentUseExclusiveMode() && _exclusiveUpdateFn && !getFragmentExclusiveRaf()) {
         setFragmentExclusiveRaf(requestAnimationFrame(_exclusiveUpdateFn));
       } else if (getFragmentIsPlaying() && !getFragmentUseExclusiveMode() && _sharedUpdateFn && !getFragmentPlayheadRaf()) {
+        // 等待推理（underrun 冻结）期间不重启 rAF：underrun 分支已取消循环，
+        // 若在此复活，tick 会把 currentTime 推进到已收音频前沿之外的静音区，
+        // 使播放头与人声脱节；等待结束由 chunk 回调重启动画。
+        if (_streamingWaitingForInference) return;
         setFragmentPlayheadRaf(requestAnimationFrame(_sharedUpdateFn));
       }
     }

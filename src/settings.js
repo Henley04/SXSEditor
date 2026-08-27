@@ -122,6 +122,7 @@ const releaseDiffStepBeforeVocoderCheckbox = document.getElementById('releaseDif
 // ORT advanced settings
 const ortEnableMemPatternCheckbox = document.getElementById('ortEnableMemPattern');
 const ortEnableCpuMemArenaCheckbox = document.getElementById('ortEnableCpuMemArena');
+const winmlEnabledCheckbox = document.getElementById('winmlEnabled');
 const ortGraphOptLevelSelect = document.getElementById('ortGraphOptLevel');
 const ortExecutionModeSelect = document.getElementById('ortExecutionMode');
 const ortForceMemPatternOnDmlCheckbox = document.getElementById('ortForceMemPatternOnDml');
@@ -384,6 +385,9 @@ function applySavedSettingsToUI(currentSetting) {
     }
     if (ortEnableCpuMemArenaCheckbox) {
         ortEnableCpuMemArenaCheckbox.checked = currentSetting.ortEnableCpuMemArena !== false;
+    }
+    if (winmlEnabledCheckbox) {
+        winmlEnabledCheckbox.checked = currentSetting.winmlEnabled === true;
     }
     if (ortGraphOptLevelSelect) {
         const lvl = ['disabled', 'basic', 'extended', 'all'].includes(currentSetting.ortGraphOptLevel)
@@ -1229,6 +1233,7 @@ function collectSettings() {
         // ORT 高级设置
         ortEnableMemPattern: ortEnableMemPatternCheckbox ? ortEnableMemPatternCheckbox.checked : true,
         ortEnableCpuMemArena: ortEnableCpuMemArenaCheckbox ? ortEnableCpuMemArenaCheckbox.checked : true,
+        winmlEnabled: winmlEnabledCheckbox ? winmlEnabledCheckbox.checked : false,
         ortGraphOptLevel: ortGraphOptLevelSelect ? ortGraphOptLevelSelect.value : 'all',
         ortExecutionMode: ortExecutionModeSelect ? ortExecutionModeSelect.value : 'sequential',
         ortForceMemPatternOnDml: ortForceMemPatternOnDmlCheckbox ? ortForceMemPatternOnDmlCheckbox.checked : false,
@@ -1269,6 +1274,15 @@ if (inferenceProviderSelect) {
         updateInferenceProviderHint(inferenceProviderSelect.value);
         await applySettings();
         await loadDevices();
+    });
+}
+
+// Windows ML vendor EP 开关：勾选即保存。
+// 主进程在 settings:saveSettings 中检测到 winmlEnabled 变化会重置 pipeline，
+// 下一次合成时 diffStep/vocoder/preflow 才会尝试 WinML 插件 EP 链路。
+if (winmlEnabledCheckbox) {
+    winmlEnabledCheckbox.addEventListener('change', () => {
+        applySettings();
     });
 }
 

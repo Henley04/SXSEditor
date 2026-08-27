@@ -278,6 +278,9 @@ function registerSettingsIpc() {
         'ortEnableMemPattern', 'ortForceMemPatternOnDml', 'ortEnableCpuMemArena',
         'ortGraphOptLevel', 'ortExecutionMode',
         'ortIntraOpNumThreads', 'ortInterOpNumThreads', 'ortLogSeverityLevel',
+        // Windows ML vendor EP 开关影响 diffStep/vocoder/preflow 会话创建路径，
+        // 切换后必须重建 pipeline（重建时 createSessionWithValidation 才会尝试 WinML 链）
+        'winmlEnabled',
     ];
     const needsPipelineReset = RESET_TRIGGER_KEYS.some(key => {
       // modelDeviceMapping 是对象，需深比较；其他字段为标量，直接比较
@@ -293,6 +296,16 @@ function registerSettingsIpc() {
       resetRmvpe();
       resetBasicPitch();
       resetRosvot();
+      // Windows ML 开启时后台预热：立即解析/下载兼容 EP 的 MSIX 运行库，
+      // 下一次合成 spawn worker 时 getReadyEpLibraries() 即可拿到就绪列表。
+      if (merged.winmlEnabled === true && current.winmlEnabled !== true) {
+        try {
+          require('../inference/winml/winmlProvider')
+            .getReadyEpLibraries()
+            .then((eps) => console.log(`[Main] WinML EPs ready: ${eps.map((e) => e.name).join(', ') || '(none)'}`))
+            .catch((err) => console.warn('[Main] WinML EP warmup failed:', err.message));
+        } catch (_) { /* best effort */ }
+      }
     } else if (vocoderTypeChanged) {
       // 增量切换 vocoder：仅重载 vocoder session，主模型保持不变
       const newVocoderType = merged.vocoderType === 'sifigan' ? 'sifigan' : 'default';

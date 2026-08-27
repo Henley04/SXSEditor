@@ -1,0 +1,11 @@
+{
+  "name": "sxs-ort-bridge",
+  "version": "0.1.0",
+  "description": "NAPI bridge exposing ONNX Runtime plugin execution-provider APIs to JavaScript (Windows ML vendor EPs)",
+  "license": "MIT",
+  "private": true,
+  "main": "index.js",
+  "os": ["win32"],
+  "cpu": ["x64", "arm64"],
+  "gypfile": true
+}

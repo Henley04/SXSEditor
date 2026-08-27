@@ -1,0 +1,74 @@
+{
+  "name": "@winapp/bindings",
+  "type": "commonjs",
+  "sideEffects": false,
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.mjs",
+      "require": "./index.js"
+    },
+    "./proxy": {
+      "types": "./index.d.ts",
+      "require": "./index.proxy.js"
+    },
+    "./CatalogModelInfo": {
+      "types": "./CatalogModelInfo.d.ts",
+      "default": "./CatalogModelInfo.js"
+    },
+    "./CatalogModelInstance": {
+      "types": "./CatalogModelInstance.d.ts",
+      "default": "./CatalogModelInstance.js"
+    },
+    "./CatalogModelInstanceResult": {
+      "types": "./CatalogModelInstanceResult.d.ts",
+      "default": "./CatalogModelInstanceResult.js"
+    },
+    "./CatalogModelInstanceStatus": {
+      "types": "./CatalogModelInstanceStatus.d.ts",
+      "default": "./CatalogModelInstanceStatus.js"
+    },
+    "./CatalogModelStatus": {
+      "types": "./CatalogModelStatus.d.ts",
+      "default": "./CatalogModelStatus.js"
+    },
+    "./ExecutionProvider": {
+      "types": "./ExecutionProvider.d.ts",
+      "default": "./ExecutionProvider.js"
+    },
+    "./ExecutionProviderCatalog": {
+      "types": "./ExecutionProviderCatalog.d.ts",
+      "default": "./ExecutionProviderCatalog.js"
+    },
+    "./ExecutionProviderCertification": {
+      "types": "./ExecutionProviderCertification.d.ts",
+      "default": "./ExecutionProviderCertification.js"
+    },
+    "./ExecutionProviderReadyResult": {
+      "types": "./ExecutionProviderReadyResult.d.ts",
+      "default": "./ExecutionProviderReadyResult.js"
+    },
+    "./ExecutionProviderReadyResultState": {
+      "types": "./ExecutionProviderReadyResultState.d.ts",
+      "default": "./ExecutionProviderReadyResultState.js"
+    },
+    "./ExecutionProviderReadyState": {
+      "types": "./ExecutionProviderReadyState.d.ts",
+      "default": "./ExecutionProviderReadyState.js"
+    },
+    "./ModelCatalog": {
+      "types": "./ModelCatalog.d.ts",
+      "default": "./ModelCatalog.js"
+    },
+    "./ModelCatalogSource": {
+      "types": "./ModelCatalogSource.d.ts",
+      "default": "./ModelCatalogSource.js"
+    },
+    "./lifetime": {
+      "types": "./lifetime.d.ts",
+      "default": "./lifetime.js"
+    }
+  }
+}

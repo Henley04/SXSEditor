@@ -10,8 +10,7 @@ const DEFAULT_THEME_PER_WINDOW = {};
 const ENUM_SETTINGS = {
   deviceMode: ['smart', 'manual', 'advanced'],
   inferenceProvider: ['ortnode', 'ortweb'],
-  modelPrecision: ['fp32', 'fp16', 'int8', 'int8-npu'],
-  midiExtractTool: ['fcpe', 'basicpitch', 'rmvpe'],
+  modelPrecision: ['fp32', 'fp16', 'int8', 'int8-npu'],  midiExtractTool: ['fcpe', 'basicpitch', 'rmvpe'],
   audioOutputMode: ['shared', 'exclusive'],
   audioBitDepth: ['float32', 'int32', 'int24', 'int16'],
   vocoderType: ['default', 'sifigan'],
@@ -270,6 +269,20 @@ function loadSettings() {
     _settingsCache.ortEnableCpuMemArena = true;
   }
 
+  // Windows ML vendor EP（实验特性，默认关闭）。
+  // 开启后主模型（diff_step/vocoder/preflow）在兼容设备上优先尝试
+  // TensorRT-RTX / OpenVINO 插件 EP，失败自动回落 DML/CPU。
+  // 详见 src/inference/winml/winmlProvider.js
+  if (typeof _settingsCache.winmlEnabled !== 'boolean') {
+    _settingsCache.winmlEnabled = false;
+  }
+
+  // 可选：手动指定 Microsoft.WindowsAppRuntime.Bootstrap.dll 路径。
+  if (_settingsCache.winmlBootstrapDllPath !== undefined &&
+      (typeof _settingsCache.winmlBootstrapDllPath !== 'string' || !_settingsCache.winmlBootstrapDllPath)) {
+    delete _settingsCache.winmlBootstrapDllPath;
+  }
+
   // 图优化级别: 'disabled' | 'basic' | 'extended' | 'all'（默认 'all'）
   if (!['disabled', 'basic', 'extended', 'all'].includes(_settingsCache.ortGraphOptLevel)) {
     _settingsCache.ortGraphOptLevel = 'all';
@@ -432,6 +445,8 @@ const ALLOWED_SETTINGS_KEYS = [
   'ortEnableMemPattern',
   'ortForceMemPatternOnDml',
   'ortEnableCpuMemArena',
+  'winmlEnabled',
+  'winmlBootstrapDllPath',
   'ortGraphOptLevel',
   'ortExecutionMode',
   'ortIntraOpNumThreads',

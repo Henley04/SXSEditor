@@ -101,7 +101,10 @@ function _onVisibilityChange() {
   } else {
     if (state.isPlaying && state.useExclusiveMode && _exclusiveUpdateFn && !state.exclusivePlaybackRaf) {
       state.exclusivePlaybackRaf = requestAnimationFrame(_exclusiveUpdateFn);
-    } else if (state.isPlaying && !state.useExclusiveMode && _sharedUpdateFn && !state.playheadRaf) {
+    } else if (state.isPlaying && !state.useExclusiveMode && _sharedUpdateFn && !state.playheadRaf && !_streamingWaitingForInference) {
+      // 等待推理期间不重启 rAF：underrun 冻结时 playheadRaf 已被取消，
+      // 若此处复活循环，其 getAudioContext() 调用会在挂起的 context 上
+      // 触发意外 resume，导致伴奏在人声等待缺口中继续播放。
       state.playheadRaf = requestAnimationFrame(_sharedUpdateFn);
     }
   }
@@ -131,6 +134,7 @@ let _streamingWaitStartCtxTime = 0;
 let _streamingIsLastReceived = false;   // isLast chunk has been received
 let _streamingActiveSourceCount = 0;    // Currently-playing source count
 let _streamingContextSuspendedForInference = false;
+let _streamingSuspendInFlight = null;   // 尚未生效的 ctx.suspend() promise
 
 async function _pauseStreamingForInference(ctx) {
   if (_streamingContextSuspendedForInference) return;
@@ -139,19 +143,47 @@ async function _pauseStreamingForInference(ctx) {
   // Suspending it freezes every source and AudioContext.currentTime together,
   // so accompaniment cannot run ahead while the next vocal chunk is inferred.
   if (ctx && ctx.state === 'running') {
-    try { await ctx.suspend(); } catch (err) {
+    const p = ctx.suspend().catch(err => {
       console.warn('[Audio] Failed to suspend context while waiting for inference:', err.message);
+    });
+    _streamingSuspendInFlight = p;
+    try { await p; } finally {
+      if (_streamingSuspendInFlight === p) _streamingSuspendInFlight = null;
     }
   }
 }
 
 async function _resumeStreamingAfterInference(ctx) {
   if (!_streamingContextSuspendedForInference) return;
+  // 与未生效的 suspend 串行化：若 suspend 还在途就提前 resume，
+  // resume 会被跳过（state 仍为 running），随后 suspend 生效将所有
+  // source 冻结且无人再恢复——表现为"卡在等待推理"或伴奏时钟错位。
+  if (_streamingSuspendInFlight) {
+    try { await _streamingSuspendInFlight; } catch (_) {}
+  }
   _streamingContextSuspendedForInference = false;
   if (ctx && ctx.state === 'suspended') {
     try { await ctx.resume(); } catch (err) {
       console.warn('[Audio] Failed to resume context after inference:', err.message);
     }
+  }
+}
+
+/**
+ * 中止推理等待（用户暂停/拖拽/停止时调用）：
+ * 清除冻结标记并恢复共享 AudioContext，避免挂起状态泄漏到后续
+ * 非流式播放（否则 getAudioContext 会因冻结标记拒绝 resume，播放无声）。
+ * 必须先等在途 suspend 落地再 resume，顺序与 _resumeStreamingAfterInference 一致。
+ */
+async function _abortStreamingWait(ctx) {
+  _streamingWaitingForInference = false;
+  if (!_streamingContextSuspendedForInference) return;
+  _streamingContextSuspendedForInference = false;
+  const inflight = _streamingSuspendInFlight;
+  _streamingSuspendInFlight = null;
+  if (inflight) { try { await inflight; } catch (_) {} }
+  if (ctx && ctx.state === 'suspended') {
+    try { await ctx.resume(); } catch (_) {}
   }
 }
 
@@ -671,7 +703,11 @@ export function getAudioContext() {
     state.gainNode.connect(state.audioContext.destination);
     applyAudioSettings();
   }
-  if (state.audioContext.state === 'suspended') {
+  // 流式推理等待期间 context 是被 _pauseStreamingForInference 有意挂起的，
+  // 此处绝不能自动 resume——否则任何在等待窗口内调用本函数的代码
+  // （如 visibilitychange 恢复的 rAF tick）都会解冻伴奏，使其在人声
+  // 缺口期间继续播放，造成人声/伴奏永久错位。
+  if (state.audioContext.state === 'suspended' && !_streamingContextSuspendedForInference) {
     state.audioContext.resume().catch(err => {
       console.warn('[Audio] AudioContext resume failed:', err);
     });
@@ -974,6 +1010,9 @@ export function pausePlayback() {
       cancelAnimationFrame(state.playheadRaf);
       state.playheadRaf = null;
     }
+    // 用户在"等待推理"冻结期间暂停：解除 context 冻结标记并恢复，
+    // 否则挂起状态泄漏，后续非流式播放会因 getAudioContext 拒绝 resume 而无声。
+    void _abortStreamingWait(state.audioContext);
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
     if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
@@ -1008,10 +1047,10 @@ export function pausePlayback() {
 }
 
 export function stopPlayback() {
-  if (_streamingContextSuspendedForInference && state.audioContext?.state === 'suspended') {
-    state.audioContext.resume().catch(() => {});
+  // 解除推理等待冻结（等待在途 suspend 落地后再 resume，避免冻结泄漏）
+  if (_streamingContextSuspendedForInference || _streamingSuspendInFlight) {
+    void _abortStreamingWait(state.audioContext);
   }
-  _streamingContextSuspendedForInference = false;
   if (state.isSynthesizing) {
     state.synthesisCancelled = true;
     window.electronAPI.cancelSVSSynthesis().catch(() => {});
@@ -1065,6 +1104,8 @@ export async function seekPlayback(newOffset) {
       cancelAnimationFrame(state.playheadRaf);
       state.playheadRaf = null;
     }
+    // 流式中拖拽 playhead：解除推理等待的 context 冻结（同 pausePlayback）
+    void _abortStreamingWait(state.audioContext);
     state.playbackPauseOffset = Math.max(0, newOffset);
     drawPausedPlayheadAt(state.playbackPauseOffset);
     dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);

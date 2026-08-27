@@ -119,6 +119,7 @@ class SvsWorkerClient {
   async cancelActiveSynthesis() {
     if (!this.worker) return;
     const targetId = this.activeSynthId;
+    console.log(`[SvsWorkerClient] cancelActiveSynthesis: targetId=${targetId} pending=${this.pending.size}`);
     this.activeSynthId = null;
     const err = new Error('Synthesis cancelled');
     err.code = 'SYNTHESIS_CANCELLED';

@@ -375,6 +375,7 @@ class Diffusion {
      * @param {string} [samplerName='euler'] - 求解器名称，见 samplers/index.js
      */
     async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null) {
+        const _diffT0 = performance.now();
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
@@ -798,6 +799,10 @@ class Diffusion {
         } finally {
             // Task 6: dispose all pre-allocated tensors on exit (success or exception)
             _disposeAllTensors();
+            const _elapsed = performance.now() - _diffT0;
+            const _audioSec = totalFrames * 480 / 24000;
+            const _rtf = _audioSec / (_elapsed / 1000);
+            console.log(`[Diffusion] runDiffusionLoop done: frames=${totalFrames}, steps=${totalSteps}, sampler=${samplerName}, ${_elapsed.toFixed(0)}ms, ${_rtf.toFixed(2)}x RTF, ${(totalFrames / (_elapsed/1000)).toFixed(0)} frames/s, isFP16=${isFP16}`);
         }
     }
 
@@ -1177,6 +1182,7 @@ class Diffusion {
         const { specs, overlap } = plan;
         const totalChunks = specs.length;
         console.log(`[DiffusionChunk] Chunked diffusion: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, chunkFrames=${chunkFrames}, overlap=${overlap}, steps=${totalSteps}, chunks=${totalChunks}, sampler=${samplerName}`);
+        const _chunkedT0 = performance.now();
 
         const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal };
         const progressPerChunk = progressRange / totalChunks;
@@ -1227,7 +1233,9 @@ class Diffusion {
             );
         }
 
-        console.log(`[DiffusionChunk] Chunked diffusion complete: ${totalChunks} chunks, ${totalFrames} frames`);
+        const _elapsed = performance.now() - _chunkedT0;
+        const _rtf = (totalFrames * 480 / 24000) / (_elapsed / 1000);
+        console.log(`[DiffusionChunk] Chunked diffusion complete: ${totalChunks} chunks, ${totalFrames} frames, ${_elapsed.toFixed(0)}ms, ${_rtf.toFixed(2)}x RTF, ${(totalFrames / (_elapsed/1000)).toFixed(0)} frames/s`);
     }
 
     /**
