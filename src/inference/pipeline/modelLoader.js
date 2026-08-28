@@ -215,6 +215,15 @@ function _rebuildDummyForSession(session, baseDummy) {
                     : (isFp16 ? float32ToF16Buffer(new Float32Array(count).fill(1)) : new Float32Array(count).fill(1));
                 feeds[name] = new ort.Tensor(dataType, data, numDims);
                 matched++;
+            } else if (name === 'waveform' || name === 'audio') {
+                // mel_transform: symbolic num_samples collapsed to 3 by generic map → force SAMPLE_RATE
+                // Respect original rank: 2D [1,24000] or 3D [1,1,24000]
+                const rank = shape.length;
+                const dims = rank === 3 ? [1, 1, SAMPLE_RATE] : [1, SAMPLE_RATE];
+                const count = dims.reduce((a,b)=>a*b,1);
+                const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
+                feeds[name] = new ort.Tensor(dataType, data, dims);
+                matched++;
             }
         }
         return matched > 0 ? feeds : baseDummy;
@@ -551,7 +560,13 @@ const _validatedSessionModels = new Set();
 // - diffStep：暂不走 WinML — TRTRTX 2.30 对 846MB diff_step 产出异常 mel 导致全电流声（待 TRT 引擎参数调优后再启用）
 // - vocoder：暂不走 WinML — TRTRTX 2.30 对 995MB float32 vocoder 通道产出全零，保持 DML
 // - FCPE/RMVPE/ROSVOT/melTransform 等：保持原有 DML/CPU 链路
-const WINML_ELIGIBLE_KEYS = new Set(['preflow']);
+// 新路径 onnx_models/trt_fp16/ 经 Olive TRTRTX FP16 高精度量化后，diffStep/vocoder 将恢复 TRTRTX：
+//   设置环境变量 SXS_WINML_ALL_TRTRTX=1 或复制 trt_fp16/*.onnx 到 fp16/ 后，
+//   下述集合将自动扩展为全部非 preprocess 模型（由 scripts/olive_trt_fp16/enable_trt_all.ps1 写入）。
+const _WINML_ALL_KEYS = ['diffStep','vocoder','preflow','note_text_encoder','note_pitch_encoder','note_type_encoder','f0_encoder','cond_emb','mel_transform'];
+const WINML_ELIGIBLE_KEYS = new Set(
+  process.env.SXS_WINML_ALL_TRTRTX === '1' ? _WINML_ALL_KEYS : ['diffStep','preflow']
+);
 
 async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {
     const modelName = path.basename(modelPath);
@@ -592,10 +607,9 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         return null;
     };
     const _runWithPrecisionFallback = async (session, label) => {
-        // diff_step：依据实际加载会话的输入签名重建 dummy（QDIT 的 x/diffusion_step/x_mask
-        // bool 与 legacy 的 xt_input/t/cond/xt_mask 均正确匹配），避免 "invalid dimensions" /
-        // "is missing in 'feeds'" 导致的误判验证失败。
-        const feeds = sessionKey === 'diffStep'
+        // diff_step/mel_transform：依据实际会话签名重建 dummy，避免
+        // "invalid dimensions" / "is missing in 'feeds'"（如 mel_transform audio vs waveform 命名差异）
+        const feeds = (sessionKey === 'diffStep' || sessionKey === 'melTransform')
             ? _rebuildDummyForSession(session, dummyInputs)
             : dummyInputs;
         try {

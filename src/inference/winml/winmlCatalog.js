@@ -284,6 +284,13 @@ async function listCompatibleProviders() {
 
 /** Ensure a specific provider wrapper instance is ready (downloads if needed). */
 async function ensureEntryReady(entry, onProgress) {
+    // Already Ready (0) — calling EnsureReadyAsync again triggers WebNN host FATAL
+    // "[OpenVINOExecutionProvider] is already in ready state before EnsureReadyAsync()"
+    // seen after TRT optimization (5 providers) with WinML.
+    if (entry.readyState === 0) {
+        const lib = entry.inst.libraryPath;
+        if (lib) return { ok: true, libraryPath: lib };
+    }
     const op = entry.inst.ensureReadyAsync();
     if (onProgress && op && typeof op.progress === 'function') {
         try {
@@ -317,6 +324,7 @@ async function ensureProviderReady(providerName, onProgress) {
     if (!provider) return { ok: false, libraryPath: null };
 
     try {
+        if (provider.readyState === 0 && provider.libraryPath) return { ok: true, libraryPath: provider.libraryPath };
         const op = provider.ensureReadyAsync();
         if (onProgress && op && typeof op.progress === 'function') {
             try {

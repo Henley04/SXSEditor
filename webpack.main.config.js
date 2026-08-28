@@ -13,6 +13,10 @@ module.exports = {
     'onnxruntime-node': 'commonjs onnxruntime-node',
     '@tensorflow/tfjs-backend-wasm': 'commonjs @tensorflow/tfjs-backend-wasm',
     'systeminformation': 'commonjs systeminformation',
+    // Native-backed modules must stay outside the bundle so their .node
+    // binaries load from node_modules (kept + asar-unpacked by forge).
+    'sxs-ort-bridge': 'commonjs sxs-ort-bridge',
+    '@microsoft/dynwinrt': 'commonjs @microsoft/dynwinrt',
   },
   plugins: [
     new CopyPlugin({
@@ -89,6 +93,22 @@ module.exports = {
           from: path.resolve(__dirname, 'native/build/Release/executorch_runtime.node'),
           to: path.resolve(__dirname, '.webpack/main/native/executorch_runtime.node'),
           noErrorOnMissing: true,
+        },
+        {
+          // sxs-ort-bridge 预构建二进制：随 bundle 拷贝到固定位置，
+          // 避免 file: 依赖在 forge 打包 prune 后内容丢失的问题
+          from: path.resolve(__dirname, 'native/ort-bridge/build/Release/ort_bridge.node'),
+          to: path.resolve(__dirname, '.webpack/main/native/ort_bridge.node'),
+          noErrorOnMissing: true,
+        },
+        {
+          from: path.resolve(__dirname, 'native/ort-bridge/prebuilt/win32-x64/ort_bridge.node'),
+          to: path.resolve(__dirname, '.webpack/main/native/ort_bridge_prebuilt.node'),
+          noErrorOnMissing: true,
+        },
+        {
+          from: path.resolve(__dirname, 'src/inference/pipeline/jpKanjiDict.json'),
+          to: path.resolve(__dirname, '.webpack/main/inference/pipeline/jpKanjiDict.json'),
         },
         {
           from: path.resolve(__dirname, 'assets/SXS.png'),
