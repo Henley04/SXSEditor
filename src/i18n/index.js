@@ -108,7 +108,22 @@ function applyLocale() {
     elements.forEach(el => {
         const key = el.getAttribute('data-i18n');
         if (key) {
-            el.textContent = t(key);
+            const value = t(key);
+            const target = el.querySelector(':scope > [data-i18n-text]');
+            if (target) {
+                target.textContent = value;
+            } else if (el.children.length === 0) {
+                el.textContent = value;
+            } else {
+                // Never replace textContent on a container: doing so destroys
+                // inputs, SVG icons and event handlers nested below it.
+                let textNode = Array.from(el.childNodes).find(n => n.nodeType === Node.TEXT_NODE);
+                if (!textNode) {
+                    textNode = document.createTextNode('');
+                    el.insertBefore(textNode, el.firstChild);
+                }
+                textNode.nodeValue = value;
+            }
         }
     });
 

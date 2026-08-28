@@ -69,16 +69,24 @@ function setCachedDMLDevices(devices) {
 
 function loadSettings() {
   if (_settingsCache) return _settingsCache;
-  try {
-    const filePath = getSettingsFilePath();
-    if (fs.existsSync(filePath)) {
-      _settingsCache = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    } else {
+  // worker_threads: require('electron') returns a path string, not an app
+  // object with getPath(). If the main process already injected a settings
+  // snapshot via workerData, use it directly to avoid the crash.
+  const snapshot = globalThis.__SXS_SETTINGS_SNAPSHOT__;
+  if (snapshot && typeof snapshot === 'object' && Object.keys(snapshot).length > 0) {
+    _settingsCache = { ...snapshot };
+  } else {
+    try {
+      const filePath = getSettingsFilePath();
+      if (fs.existsSync(filePath)) {
+        _settingsCache = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      } else {
+        _settingsCache = {};
+      }
+    } catch (err) {
+      console.warn('[Main] Failed to load settings, using defaults:', err.message);
       _settingsCache = {};
     }
-  } catch (err) {
-    console.warn('[Main] Failed to load settings, using defaults:', err.message);
-    _settingsCache = {};
   }
   if (!Number.isFinite(_settingsCache.audioSampleRate)) _settingsCache.audioSampleRate = 48000;
   if (![24000, 44100, 48000, 96000].includes(_settingsCache.exportSampleRate)) _settingsCache.exportSampleRate = 48000;

@@ -792,8 +792,8 @@ function registerWindowIpc() {
   ipcMain.handle('reload-main-window', async () => {
     buildAppMenu();
     if (mainWindow && !mainWindow.isDestroyed()) {
+      // Apply locale in place. Reloading destroys the unsaved in-memory project.
       mainWindow.webContents.send('locale-changed');
-      mainWindow.reload();
     }
   });
 }

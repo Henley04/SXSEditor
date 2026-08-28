@@ -5,6 +5,10 @@ const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
 
+// One fallback notice per loaded diffStep session, not once per streaming chunk.
+// WeakSet follows session lifetime without retaining disposed sessions.
+const _fixedBatchCfgLoggedSessions = new WeakSet();
+
 /**
  * 解析 diff_step 会话的输入/输出名与 mask 元素类型，兼容两种签名：
  * - legacy（根目录 FP32 / fp16 / int8 optimized_npu）：xt_input / t / cond / xt_mask(float) → flow_pred
@@ -315,13 +319,7 @@ class Diffusion {
         // === Uncond branch: xt = xtData (target only), cond = zeros, mask = ones for target ===
         const uncondXtData = new Float32Array(seqLen * MEL_DIM);
         // Place target xt at position 0 (no prompt prefix)
-        for (let f = 0; f < totalFrames; f++) {
-            const srcOff = f * MEL_DIM;
-            const dstOff = f * MEL_DIM;
-            for (let d = 0; d < MEL_DIM; d++) {
-                uncondXtData[dstOff + d] = xtData[srcOff + d];
-            }
-        }
+        uncondXtData.set(xtData.subarray(0, totalFrames * MEL_DIM));
         const uncondXtTensor = createFloatTensor(floatType, uncondXtData, [1, seqLen, MEL_DIM]);
 
         // Uncond cond = zeros, mask = ones for target only
@@ -374,7 +372,7 @@ class Diffusion {
      *
      * @param {string} [samplerName='euler'] - 求解器名称，见 samplers/index.js
      */
-    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null) {
+    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null, suppressDoneLog = false) {
         const _diffT0 = performance.now();
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
@@ -401,7 +399,10 @@ class Diffusion {
                         const shape = xtMeta.shape || xtMeta.dims;
                         if (shape && shape[0] === 1) {
                             batchMergeDisabled = true;
-                            console.log('[Diffusion] diff_step batch dim = 1, using separate cond/uncond calls (batch merge disabled)');
+                            if (!_fixedBatchCfgLoggedSessions.has(sessions.diffStep)) {
+                                _fixedBatchCfgLoggedSessions.add(sessions.diffStep);
+                                console.log('[Diffusion][CFG] mode=separate reason=fixed-batch-1');
+                            }
                         }
                     }
                 }
@@ -557,13 +558,7 @@ class Diffusion {
                 cfgBatchBuf.fill(0);
                 cfgBatchBuf.set(xtInputBuf, 0);  // row 0: full xt (prompt + target)
                 const row1Off = seqLen * MEL_DIM;
-                for (let f = 0; f < totalFrames; f++) {
-                    const srcOff = f * MEL_DIM;
-                    const dstOff = row1Off + f * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        cfgBatchBuf[dstOff + d] = xtData[srcOff + d];
-                    }
-                }
+                cfgBatchBuf.set(xtData.subarray(0, totalFrames * MEL_DIM), row1Off);
                 // Write t into pre-allocated t buffer
                 if (floatType === 'float16') {
                     batchFloat32ToFloat16(cfgBatchBuf, cfgXtTensor.data, cfgBatchBuf.length);
@@ -588,7 +583,10 @@ class Diffusion {
                     // Model rejects batch>1 (e.g. static-shape variant with batch dim = 1).
                     // Fall back to separate cond/uncond calls for this and all future steps.
                     if (err.message && err.message.includes('invalid dimensions')) {
-                        console.warn('[Diffusion] Model rejected batch>1 (batch merge disabled), falling back to separate calls:', err.message.split('\n')[0]);
+                        if (!_fixedBatchCfgLoggedSessions.has(sessions.diffStep)) {
+                            _fixedBatchCfgLoggedSessions.add(sessions.diffStep);
+                            console.warn(`[Diffusion][CFG] mode=separate reason=batch-rejected error=${err.message.split('\n')[0]}`);
+                        }
                         batchMergeDisabled = true;
                         return await this._evalDiffStepSeparate(
                             sessions, xtInputBuf, xtData, t, floatType,
@@ -802,7 +800,9 @@ class Diffusion {
             const _elapsed = performance.now() - _diffT0;
             const _audioSec = totalFrames * 480 / 24000;
             const _rtf = _audioSec / (_elapsed / 1000);
-            console.log(`[Diffusion] runDiffusionLoop done: frames=${totalFrames}, steps=${totalSteps}, sampler=${samplerName}, ${_elapsed.toFixed(0)}ms, ${_rtf.toFixed(2)}x RTF, ${(totalFrames / (_elapsed/1000)).toFixed(0)} frames/s, isFP16=${isFP16}`);
+            if (!suppressDoneLog || diagnosticMode) {
+                console.log(`[Diffusion] runDiffusionLoop done: frames=${totalFrames}, steps=${totalSteps}, sampler=${samplerName}, ${_elapsed.toFixed(0)}ms, ${_rtf.toFixed(2)}x RTF, ${(totalFrames / (_elapsed/1000)).toFixed(0)} frames/s, isFP16=${isFP16}`);
+            }
         }
     }
 
@@ -1091,7 +1091,7 @@ class Diffusion {
      * @returns {Promise<{newCommitted: number}>} 本块完成后新确定的帧数（不含重叠区，末尾块为 chunkEnd）
      */
     async _runSingleDiffusionChunk(ctx, spec, onProgress, progressStart, progressRange) {
-        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, cfgScheduleOpts, dynamicThresholdOpts, abortSignal } = ctx;
+        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog } = ctx;
         const { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast } = spec;
         const xtOut = xt.data;
 
@@ -1121,7 +1121,7 @@ class Diffusion {
         await this.runDiffusionLoop(
             sessions, subXt, currentChunkFrames, ptMelData, ptFrameCount,
             chunkCond, totalSteps, cfgStrength, cfgRescale, isFP16,
-            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal
+            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog
         );
 
         // 4. WSOLA mel 域交叉淡入淡出写回（取代对称 Hann 加权混合）
@@ -1184,7 +1184,7 @@ class Diffusion {
         console.log(`[DiffusionChunk] Chunked diffusion: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, chunkFrames=${chunkFrames}, overlap=${overlap}, steps=${totalSteps}, chunks=${totalChunks}, sampler=${samplerName}`);
         const _chunkedT0 = performance.now();
 
-        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal };
+        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog: true };
         const progressPerChunk = progressRange / totalChunks;
         let committedFrames = 0;
 

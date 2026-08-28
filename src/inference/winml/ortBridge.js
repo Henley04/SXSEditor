@@ -36,6 +36,58 @@ function _loadOrt() {
 
 let _addon = null;
 let _initPromise = null;
+let _nextSessionTraceId = 1;
+
+function _traceEnabled() {
+    if (process.env.SXS_WINML_TRACE === '1' || process.env.SXSEDITOR_ORT_DEBUG === '1') return true;
+    const snapshot = globalThis.__SXS_SETTINGS_SNAPSHOT__;
+    return !!(snapshot && snapshot.diagnosticMode === true);
+}
+
+function _fmtDims(dims) {
+    return `[${Array.from(dims || [], Number).join('x')}]`;
+}
+
+function _fp16ToNumber(bits) {
+    const sign = (bits & 0x8000) ? -1 : 1;
+    const exp = (bits >>> 10) & 0x1f;
+    const frac = bits & 0x3ff;
+    if (exp === 0) return sign * Math.pow(2, -14) * (frac / 1024);
+    if (exp === 31) return frac ? NaN : sign * Infinity;
+    return sign * Math.pow(2, exp - 15) * (1 + frac / 1024);
+}
+
+function _finiteStats(data, type = 'float32') {
+    if (!data || typeof data.length !== 'number') return 'n/a';
+    const n = data.length;
+    if (!n) return 'n=0';
+    // Full finite scan is intentional in trace mode: silent NaN/Inf corruption
+    // is the failure mode being diagnosed. Numeric moments use bounded sampling
+    // to keep logging practical for multi-million-element tensors.
+    let nan = 0, inf = 0, zero = 0;
+    for (let i = 0; i < n; i++) {
+        const v = type === 'float16' ? _fp16ToNumber(data[i]) : Number(data[i]);
+        if (Number.isNaN(v)) nan++;
+        else if (!Number.isFinite(v)) inf++;
+        else if (v === 0) zero++;
+    }
+    const step = Math.max(1, Math.floor(n / 4096));
+    let min = Infinity, max = -Infinity, sum = 0, sum2 = 0, count = 0;
+    for (let i = 0; i < n; i += step) {
+        const v = type === 'float16' ? _fp16ToNumber(data[i]) : Number(data[i]);
+        if (!Number.isFinite(v)) continue;
+        min = Math.min(min, v); max = Math.max(max, v);
+        sum += v; sum2 += v * v; count++;
+    }
+    const mean = count ? sum / count : NaN;
+    const rms = count ? Math.sqrt(sum2 / count) : NaN;
+    const f = (v) => Number.isFinite(v) ? v.toExponential(3) : String(v);
+    return `n=${n} min=${f(min)} max=${f(max)} mean=${f(mean)} rms=${f(rms)} zero=${zero} nan=${nan} inf=${inf}`;
+}
+
+function _tensorSummary(name, tensor) {
+    return `${name}:${tensor.type}${_fmtDims(tensor.dims)}{${_finiteStats(tensor.data, tensor.type)}}`;
+}
 
 /** asar 内路径换算到 unpacked（.node 二进制必须从真实文件系统加载）。 */
 function _asarUnpackedVariant(p) {
@@ -102,7 +154,7 @@ async function ensureBridgeInit() {
                 if (!dllPath) throw new Error('onnxruntime.dll not found under node_modules');
                 const info = _addon.init(dllPath);
                 if (!info || !info.apiVersion) throw new Error('bridge init returned no apiVersion');
-                console.log(`[WinML] ort-bridge loaded from ${loaded.path} (api v${info.apiVersion})`);
+                console.log(`[WinML][bridge] ready api=${info.apiVersion} addon=${path.basename(loaded.path)} source=${_sourceLabel(loaded.path)} ort=${path.basename(dllPath)} arch=${process.arch} native=${info.buildTag || 'legacy'}`);
                 return true;
             } catch (e) {
                 _addon = null;
@@ -146,6 +198,17 @@ function candidatePaths() {
         dir = path.join(dir, '..');
     }
     return list;
+}
+
+/** Derive a short source label from the loaded addon path for log clarity. */
+function _sourceLabel(p) {
+    if (!p || p === 'mock') return 'mock';
+    const norm = p.replace(/\\/g, '/');
+    if (norm.includes('.webpack/')) return 'webpack';
+    if (norm.includes('/build/Release/')) return 'build';
+    if (norm.includes('/prebuilt/')) return 'prebuilt';
+    if (norm.includes('node_modules')) return 'node_modules';
+    return 'other';
 }
 
 function loadAddon() {
@@ -276,9 +339,14 @@ class WinMLSession {
      * @param {bigint|number} id session id from addon.createSession
      * @param {{inputs:Array,outputs:Array}} info from addon.sessionInfo
      */
-    constructor(addon, id, info) {
+    constructor(addon, id, info, context = {}) {
         this._addon = addon;
         this._id = id;
+        this._traceId = _nextSessionTraceId++;
+        this._modelPath = context.modelPath || '';
+        this._epName = context.epName || 'unknown';
+        this._runCount = 0;
+        this._logScope = String(this._epName).includes('NvTensorRTRTX') ? 'TRTRTX' : 'WinML';
         this.inputNames = info.inputs.map((i) => i.name);
         this.outputNames = info.outputs.map((o) => o.name);
         this.inputMetadata = info.inputs.map((i) => ({
@@ -297,17 +365,29 @@ class WinMLSession {
     }
 
     async run(feeds) {
+        const run = ++this._runCount;
+        const trace = _traceEnabled();
+        const started = performance.now();
         const desc = {};
-        for (const [name, t] of Object.entries(feeds)) {
-            desc[name] = _descriptorFromTensor(t);
+        for (const [name, tensor] of Object.entries(feeds)) desc[name] = _descriptorFromTensor(tensor);
+        if (trace) {
+            console.log(`[${this._logScope}][run:${this._traceId}.${run}][in] ep=${this._epName} model=${path.basename(this._modelPath)} ${Object.entries(feeds).map(([n, x]) => _tensorSummary(n, x)).join(' | ')}`);
         }
-        const out = this._addon.run(this._id, desc);
-        const res = {};
-        for (const [k, v] of Object.entries(out)) {
-            const t = _tensorFromDescriptor(v);
-            if (t) res[k] = t;
+        try {
+            const out = this._addon.run(this._id, desc);
+            const res = {};
+            for (const [k, v] of Object.entries(out)) {
+                const tensor = _tensorFromDescriptor(v);
+                if (tensor) res[k] = tensor;
+            }
+            if (trace) {
+                console.log(`[${this._logScope}][run:${this._traceId}.${run}][out] ms=${(performance.now() - started).toFixed(1)} ${Object.entries(res).map(([n, x]) => _tensorSummary(n, x)).join(' | ')}`);
+            }
+            return res;
+        } catch (error) {
+            console.error(`[${this._logScope}][run:${this._traceId}.${run}][fail] ms=${(performance.now() - started).toFixed(1)} ep=${this._epName} model=${path.basename(this._modelPath)} error=${String(error.message || error).split('\n')[0]}`);
+            throw error;
         }
-        return res;
     }
 
     release() {
@@ -318,16 +398,100 @@ class WinMLSession {
 }
 
 /**
+ * Build provider-specific options for TensorRT-RTX EP.
+ *
+ * Supports three modes via env vars:
+ *  - SXS_TRTRTX_NO_PROFILE=1  → skip profile shapes (diagnostic only, adds dump)
+ *  - SXS_TRTRTX_OPT_SEQ / SXS_TRTRTX_MAX_SEQ → override profile sequence lengths
+ *  - SXS_WINML_TRACE=1 → auto-add nv_detailed_build_log + nv_dump_subgraphs
+ */
+function _tensorRtRtxOptions(modelPath) {
+    const name = path.basename(modelPath || '').toLowerCase();
+    const noProfile = process.env.SXS_TRTRTX_NO_PROFILE === '1';
+    const maxSeq = Math.max(2048, Number.parseInt(process.env.SXS_TRTRTX_MAX_SEQ || '4096', 10) || 4096);
+    const optSeq = Math.min(maxSeq, Math.max(1, Number.parseInt(process.env.SXS_TRTRTX_OPT_SEQ || '1950', 10) || 1950));
+    const options = {};
+
+    if (!noProfile) {
+        if (name.includes('diff_step')) {
+            options.nv_profile_min_shapes = 'xt_input:1x1x128;t:1;cond:1x1x1024;xt_mask:1x1';
+            options.nv_profile_opt_shapes = `xt_input:1x${optSeq}x128;t:1;cond:1x${optSeq}x1024;xt_mask:1x${optSeq}`;
+            options.nv_profile_max_shapes = `xt_input:1x${maxSeq}x128;t:1;cond:1x${maxSeq}x1024;xt_mask:1x${maxSeq}`;
+        } else if (name.includes('preflow')) {
+            options.nv_profile_min_shapes = 'features:1x1x512';
+            options.nv_profile_opt_shapes = `features:1x${Math.min(optSeq, 1500)}x512`;
+            options.nv_profile_max_shapes = `features:1x${maxSeq}x512`;
+        }
+    }
+
+    if (_traceEnabled()) {
+        options.nv_detailed_build_log = '1';
+        // nv_dump_subgraphs exports the TRT-assigned subgraphs so we can verify
+        // which nodes TRT took over and whether outputs originate from TRT or CPU.
+        options.nv_dump_subgraphs = '1';
+    }
+    return options;
+}
+
+/**
+ * Validate that a TRT session produces non-zero, finite output for non-zero input.
+ * Returns normally if output is valid; throws if output is all-zero, NaN, or Inf.
+ * This catches TRT compilation bugs that silently produce zero output without
+ * ORT reporting an error — the exact failure mode diagnosed in the all-zero bug.
+ *
+ * @param {Object} outputs - session.run() return value {name: {type, data, dims}}
+ * @throws {Error} with descriptive message on validation failure
+ */
+function validateTRTOutput(outputs) {
+    for (const [name, tensor] of Object.entries(outputs)) {
+        const data = tensor.data;
+        if (!data || typeof data.length !== 'number' || data.length === 0) continue;
+        const n = data.length;
+        const isFp16 = tensor.type === 'float16';
+        let zero = 0, nan = 0, inf = 0;
+        for (let i = 0; i < n; i++) {
+            const v = isFp16 ? _fp16ToNumber(data[i]) : Number(data[i]);
+            if (Number.isNaN(v)) nan++;
+            else if (!Number.isFinite(v)) inf++;
+            else if (v === 0) zero++;
+        }
+        if (nan > 0 || inf > 0) {
+            throw new Error(`TRT output '${name}' non-finite: nan=${nan} inf=${inf} n=${n}`);
+        }
+        if (zero === n) {
+            throw new Error(`TRT output '${name}' entirely zero: zero=${zero}/${n}`);
+        }
+        // Numerically silent: rms so low it's effectively zero
+        let sum2 = 0, count = 0;
+        const step = Math.max(1, Math.floor(n / 4096));
+        for (let i = 0; i < n; i += step) {
+            const v = isFp16 ? _fp16ToNumber(data[i]) : Number(data[i]);
+            if (Number.isFinite(v)) { sum2 += v * v; count++; }
+        }
+        const rms = count ? Math.sqrt(sum2 / count) : 0;
+        if (rms < 1e-8) {
+            throw new Error(`TRT output '${name}' numerically silent: rms=${rms.toExponential(3)}`);
+        }
+    }
+}
+
+/**
  * Create a WinML-backed session for a model using the given EP device indices.
  * @param {string} modelPath absolute .onnx path
  * @param {number[]} deviceIndices indices within listDevices()
  * @returns {Promise<WinMLSession>}
  */
-async function createSessionWithEps(modelPath, deviceIndices) {
+async function createSessionWithEps(modelPath, deviceIndices, epName = 'unknown') {
     const ok = await ensureBridgeInit();
     if (!ok) throw new Error(getInitFailureReason() || '[WinML] bridge unavailable');
     const addon = getAddon();
-    const id = addon.createSession(modelPath, deviceIndices || []);
+    const providerOptions = String(epName).includes('NvTensorRTRTX')
+        ? _tensorRtRtxOptions(modelPath)
+        : {};
+    if (_traceEnabled() && Object.keys(providerOptions).length) {
+        console.log(`[TRTRTX][profile] model=${path.basename(modelPath)} ${Object.entries(providerOptions).map(([k, v]) => `${k}=${v}`).join(' ')}`);
+    }
+    const id = addon.createSession(modelPath, deviceIndices || [], providerOptions);
     let info;
     try {
         info = addon.sessionInfo(id);
@@ -335,7 +499,14 @@ async function createSessionWithEps(modelPath, deviceIndices) {
         addon.releaseSession(id);
         throw e;
     }
-    return new WinMLSession(addon, id, info);
+    const session = new WinMLSession(addon, id, info, { modelPath, epName });
+    if (_traceEnabled()) {
+        const stat = fs.statSync(modelPath);
+        const inputs = info.inputs.map(x => `${x.name}:${x.type}${_fmtDims(x.dims)}`).join(',');
+        const outputs = info.outputs.map(x => `${x.name}:${x.type}${_fmtDims(x.dims)}`).join(',');
+        console.log(`[${session._logScope}][session:${session._traceId}] created ep=${epName} devices=${(deviceIndices || []).join(',')} model=${path.basename(modelPath)} bytes=${stat.size} inputs=${inputs} outputs=${outputs}`);
+    }
+    return session;
 }
 
 function disposeAllSessions() {
@@ -353,8 +524,9 @@ module.exports = {
     listDevices,
     pickDeviceIndices,
     createSessionWithEps,
+    validateTRTOutput,
     disposeAllSessions,
     resolveOrtDllPath,
     // exposed for tests
-    __test: { _tensorFromDescriptor, _descriptorFromTensor, TYPED_ARRAY_BY_TYPE },
+    __test: { _tensorFromDescriptor, _descriptorFromTensor, TYPED_ARRAY_BY_TYPE, _finiteStats, _fmtDims, _fp16ToNumber, _tensorRtRtxOptions, validateTRTOutput },
 };

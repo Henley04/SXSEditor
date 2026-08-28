@@ -14,6 +14,7 @@ export default {
     stop: 'Stop',
     save: 'Save',
     load: 'Load',
+    unsavedChangesConfirm: 'This project has unsaved changes. Loading another project will discard them. Continue?',
     export: 'Export',
     exportMidi: 'Export MIDI',
     noNotesToExportMidi: 'The fragment has no MIDI notes to export',

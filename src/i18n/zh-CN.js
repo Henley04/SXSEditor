@@ -14,6 +14,7 @@ export default {
     stop: '停止',
     save: '保存',
     load: '加载',
+    unsavedChangesConfirm: '当前工程有未保存的修改。继续加载将丢失这些修改，是否继续？',
     export: '导出',
     exportMidi: '导出MIDI',
     noNotesToExportMidi: '当前分片没有可导出的 MIDI 音符',

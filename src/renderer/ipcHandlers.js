@@ -75,8 +75,10 @@ document.addEventListener('localeChanged', () => {
 
 // Locale changed IPC handler
 if (window.electronAPI?.onLocaleChanged) {
-  const cleanup = window.electronAPI.onLocaleChanged(() => {
-    location.reload();
+  const cleanup = window.electronAPI.onLocaleChanged(async () => {
+    await initI18n();
+    applyLocale();
+    document.documentElement.lang = getLocale();
   });
   if (cleanup) state._ipcCleanups.push(cleanup);
 }

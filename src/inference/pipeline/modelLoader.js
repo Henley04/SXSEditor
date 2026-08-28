@@ -179,12 +179,20 @@ const DUMMY_TEST_INPUTS_NPU = {
  * @param {Object} baseDummy - 原精度对应的 dummy（无匹配输入时兜底）
  * @returns {Object} feeds
  */
-function _rebuildDummyForSession(session, baseDummy) {
+function _rebuildDummyForSession(session, baseDummy, nonZero = false) {
     try {
         const meta = session.inputMetadata;
         if (!Array.isArray(meta) || meta.length === 0) return baseDummy;
         const feeds = {};
         let matched = 0;
+        // Fill float arrays with a deterministic non-zero pattern when nonZero=true.
+        // All-zero warmup can legitimately produce all-zero output for some networks,
+        // making it impossible to detect TRT compilation bugs that also produce zeros.
+        const _fillFloat = (count, isFp16) => {
+            const f32 = new Float32Array(count);
+            if (nonZero) for (let i = 0; i < count; i++) f32[i] = 0.1 * ((i % 100) + 1);
+            return isFp16 ? float32ToF16Buffer(f32) : f32;
+        };
         for (const m of meta) {
             const name = m.name;
             const type = String(m.type || '');
@@ -198,8 +206,8 @@ function _rebuildDummyForSession(session, baseDummy) {
             for (const s of numDims) count *= s;
             if (shape.length === 0) count = 3 * (name === 'cond' ? COND_DIM : (name === 'diffusion_step' || name === 't' ? 1 : MEL_DIM));
             const dataType = isBool ? 'bool' : (isFp16 ? 'float16' : 'float32');
-            if (name === 'x' || name === 'xt_input' || name === 'acoustic_features') {
-                const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
+            if (name === 'x' || name === 'xt_input' || name === 'acoustic_features' || name === 'features' || name === 'mel' || name === 'mel_input') {
+                const data = _fillFloat(count, isFp16);
                 feeds[name] = new ort.Tensor(dataType, data, numDims);
                 matched++;
             } else if (name === 'diffusion_step' || name === 't') {
@@ -207,7 +215,7 @@ function _rebuildDummyForSession(session, baseDummy) {
                 feeds[name] = new ort.Tensor(dataType, val, [1]);
                 matched++;
             } else if (name === 'cond' || name === 'conditioning') {
-                const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
+                const data = _fillFloat(count, isFp16);
                 feeds[name] = new ort.Tensor(dataType, data, numDims);
                 matched++;
             } else if (name === 'x_mask' || name === 'xt_mask' || name === 'attention_mask') {
@@ -221,7 +229,7 @@ function _rebuildDummyForSession(session, baseDummy) {
                 const rank = shape.length;
                 const dims = rank === 3 ? [1, 1, SAMPLE_RATE] : [1, SAMPLE_RATE];
                 const count = dims.reduce((a,b)=>a*b,1);
-                const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
+                const data = _fillFloat(count, isFp16);
                 feeds[name] = new ort.Tensor(dataType, data, dims);
                 matched++;
             }
@@ -638,21 +646,35 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                 const winmlRes = await winmlProvider.tryCreateWinMLSession(modelPath, useStaticShapes);
                 if (winmlRes && winmlRes.session) {
                     const wsession = winmlRes.session;
+                    const isTRT = String(winmlRes.ep).includes('NvTensorRTRTX');
                     try {
                         if (runValidation) {
-                            const feeds = sessionKey === 'diffStep'
-                                ? _rebuildDummyForSession(wsession, dummyInputs)
+                            // For TRT sessions, use non-zero dummy inputs. All-zero
+                            // warmup can legitimately produce all-zero output for some
+                            // networks, making it impossible to detect TRT compilation
+                            // bugs. NonZero=true fills float arrays with a deterministic
+                            // pattern so any all-zero TRT output is a clear red flag.
+                            const feeds = (sessionKey === 'diffStep' || isTRT || sessionKey === 'preflow')
+                                ? _rebuildDummyForSession(wsession, dummyInputs, isTRT)
                                 : (overrideDummyInputs || dummyInputs);
-                            await wsession.run(feeds);
+                            const outputs = await wsession.run(feeds);
+                            if (isTRT) {
+                                // Capability detection: reject all-zero / non-finite TRT
+                                // output. This catches TRT engine compilation bugs that
+                                // silently produce zeros without ORT reporting an error.
+                                // On failure, throws → caught below → falls through to DML.
+                                const { validateTRTOutput } = require('../winml/ortBridge');
+                                validateTRTOutput(outputs);
+                            }
                             _validatedSessionModels.add(validationKey);
-                            console.log(`[OnnxSVSPipeline] ${modelName} loaded [${winmlRes.ep}]${gpuTag} (inference verified)`);
+                            console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=ok${isTRT ? ' (non-zero TRT output verified)' : ''}`);
                         } else {
-                            console.log(`[OnnxSVSPipeline] ${modelName} loaded [${winmlRes.ep}]${gpuTag} (reload, validation skipped)`);
+                            console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=skip reason=reload`);
                         }
                         return { session: wsession, ep: winmlRes.ep, warmedUp: runValidation };
                     } catch (werr) {
-                        const wr = (werr.message || '').split('\n')[0].slice(0, 80);
-                        console.warn(`[OnnxSVSPipeline] ${modelName} WinML warmup failed (${wr}), falling back to DML/CPU`);
+                        const wr = (werr.message || '').split('\n')[0].slice(0, 120);
+                        console.warn(`[Model][fallback] name=${modelName} from=winml to=dml/cpu stage=warmup error=${wr}`);
                         try { wsession.release(); } catch (_) {}
                     }
                 }

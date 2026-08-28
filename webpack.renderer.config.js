@@ -45,7 +45,7 @@ rules.push({
   use: {
     loader: 'babel-loader',
     options: {
-      presets: ['@babel/preset-env'],
+      presets: [['@babel/preset-env', { targets: { electron: '42' }, modules: false, bugfixes: true }]],
     },
   },
 });

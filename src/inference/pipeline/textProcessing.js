@@ -695,10 +695,11 @@ class TextProcessing {
      * @returns {Array<{name:string, display:string, weight?:number}>} 英语音素对象数组
      */
     _japaneseToEnglishPhonemes(text) {
-        // hybrid 模式：优先用假名→粤语映射（仅当整段歌词都是可映射假名时）
+        // hybrid 模式：逐 mora 选择 yue 音节或 ARPAbet 回退。未覆盖的
+        // 单个假名不再迫使整段歌词放弃已经可用的 yue 映射。
         if (this.japaneseVocalization === 'hybrid') {
             const yueResult = this._japaneseKanaToYuePhonemes(text);
-            if (yueResult) return this._attachJapaneseWeights(yueResult, null, true);
+            if (yueResult) return yueResult;
         }
 
         const jpPhonemeStr = this._japaneseG2p(text);
@@ -734,55 +735,85 @@ class TextProcessing {
     }
 
     /**
-     * 尝试把日文歌词（假名）逐假名映射为粤语音节级音素（yue_ 前缀）。
+     * 将纯假名歌词逐 mora 转换为混合 yue/ARPAbet 音素。
      *
-     * 仅当歌词完全由"在 JpKanaToYueSyllableMap 中"的假名组成时返回数组；
-     * 一旦遇到任何未覆盖的字符（汉字、字母、が/ざ/だ/ば行、拗音、促音、
-     * ん 等），立即返回 null，让上层走 ARPAbet 回退。
+     * 有可靠粤语近似的假名使用 yue_ 音节；缺少映射的单个假名、浊音、
+     * 拗音、促音和拨音仅对当前 mora 回退到 ARPAbet，不再触发整词回退。
+     * 汉字或非假名仍返回 null，由上层完整的 _japaneseG2p 负责词典读音。
      *
-     * 长音符号（ー / 〜）被跳过，与 _japaneseG2p 行为一致。
+     * 長音符号 ー 延长紧邻 mora 的韵核。对于 yue_ 辅音音节，追加对应
+     * 的 ARPAbet 元音，而不是复制整个 yue_ 音节；纯元音 yue_ 音节可以
+     * 直接重复。若前一 mora 是拨音 ん，则重复 en_N。〜 仅作样式符号忽略。
      *
-     * @param {string} text - 日文歌词（仅假名）
-     * @returns {Array<{name:string, display:string}>|null} yue_ 音素对象数组，或 null
+     * @param {string} text - 日文纯假名歌词
+     * @returns {Array<{name:string, display:string, weight?:number}>|null}
      */
     _japaneseKanaToYuePhonemes(text) {
         if (!text || text.length === 0) return null;
         const result = [];
+        let lastExtension = null;
         let i = 0;
+
+        const appendArpabetForJp = (jpString, display) => {
+            const jpPhones = jpString.split(' ').filter(Boolean);
+            for (const jpPhone of jpPhones) {
+                const mapped = this._japanesePhoneToEnglishPhonemes(jpPhone);
+                for (const phone of mapped) result.push({ ...phone, display });
+            }
+            const lastJp = jpPhones[jpPhones.length - 1];
+            if (lastJp === 'n') {
+                lastExtension = { name: 'en_N', display: 'ー', weight: JP_MORA_WEIGHTS.n };
+            } else if (['a', 'i', 'u', 'e', 'o'].includes(lastJp)) {
+                const vowel = this._japanesePhoneToEnglishPhonemes(lastJp).slice(-1)[0];
+                lastExtension = vowel ? { ...vowel, display: 'ー' } : null;
+            } else {
+                lastExtension = null;
+            }
+        };
+
         while (i < text.length) {
             const ch = text[i];
-            // 長音 (ー): repeat the last emitted yue syllable to double its
-            // duration, matching Japanese long-vowel timing. 〜 (wave dash)
-            // is stylistic and skipped.
             if (ch === 'ー') {
-                if (result.length > 0) {
-                    const last = result[result.length - 1];
-                    result.push({ name: last.name, display: ch });
-                }
+                if (lastExtension) result.push({ ...lastExtension, display: ch });
                 i++;
                 continue;
             }
             if (ch === '〜') { i++; continue; }
 
-            // 先尝试拗音两字符（如 きゃ）—— 这些都不在粤语映射表里，
-            // 一旦遇到就返回 null 让 ARPAbet 处理
+            let unit = ch;
+            let jp = null;
             if (i + 1 < text.length) {
                 const combo = ch + text[i + 1];
-                if (JP_HIRAGANA_MAP[combo] || JP_KATAKANA_MAP[combo]) {
-                    // 拗音存在但粤语映射表未覆盖 → 回退 ARPAbet
-                    return null;
-                }
+                jp = JP_HIRAGANA_MAP[combo] || JP_KATAKANA_MAP[combo] || null;
+                if (jp) unit = combo;
             }
 
-            // 单字符假名
-            const yueName = JpKanaToYueSyllableMap[ch] || JpKataKanaToYueSyllableMap[ch];
+            const yueName = unit.length === 1
+                ? (JpKanaToYueSyllableMap[unit] || JpKataKanaToYueSyllableMap[unit])
+                : null;
             if (yueName) {
-                result.push({ name: yueName, display: ch });
+                result.push({ name: yueName, display: unit, weight: 1.0 });
+                const jpString = JP_HIRAGANA_MAP[unit] || JP_KATAKANA_MAP[unit];
+                const lastJp = jpString ? jpString.split(' ').pop() : null;
+                // Pure-vowel yue tokens already contain no onset and are safe to repeat.
+                if (['あ', 'お', 'を', 'ア', 'オ', 'ヲ'].includes(unit)) {
+                    lastExtension = { name: yueName, display: 'ー', weight: 1.0 };
+                } else if (lastJp) {
+                    const vowel = this._japanesePhoneToEnglishPhonemes(lastJp).slice(-1)[0];
+                    lastExtension = vowel ? { ...vowel, display: 'ー' } : null;
+                }
                 i++;
                 continue;
             }
 
-            // 该字符不是可映射的假名（汉字、字母、未覆盖假名等）→ 回退 ARPAbet
+            jp = jp || JP_HIRAGANA_MAP[unit] || JP_KATAKANA_MAP[unit];
+            if (jp) {
+                appendArpabetForJp(jp, unit);
+                i += unit.length;
+                continue;
+            }
+
+            // Preserve dictionary-based handling for kanji and reject arbitrary text.
             return null;
         }
         return result.length > 0 ? result : null;
@@ -916,12 +947,8 @@ class TextProcessing {
             // 長音 (ー): repeat the last emitted vowel to double its duration.
             // 〜 (wave dash) is a stylistic mark, not phonetic — skip it.
             if (ch === 'ー') {
-                for (let k = result.length - 1; k >= 0; k--) {
-                    if (JP_VOWELS.has(result[k])) {
-                        result.push(result[k]);
-                        break;
-                    }
-                }
+                const previous = result[result.length - 1];
+                if (JP_VOWELS.has(previous) || previous === 'n') result.push(previous);
                 i++;
                 continue;
             }

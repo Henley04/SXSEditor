@@ -30,6 +30,18 @@ jobs:
 
       - run: npm ci
 
+      - name: Build native ORT bridge for Electron
+        run: npm run build:native
+
+      - name: Sync fresh build to prebuilt directory
+        shell: pwsh
+        run: |
+          Copy-Item -Force "native\ort-bridge\build\Release\ort_bridge.node" "native\ort-bridge\prebuilt\win32-x64\ort_bridge.node"
+          $bytes = [System.IO.File]::ReadAllBytes("native\ort-bridge\prebuilt\win32-x64\ort_bridge.node")
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if (-not $text.Contains("d2h-copy-v2")) { throw "prebuilt addon missing d2h-copy-v2 marker" }
+          Write-Host "prebuilt synced and verified"
+
       - name: Run tests (skip network & model loading/inference)
         run: npm run test:ci
 
@@ -105,6 +117,18 @@ jobs:
         env:
           # Ensure Electron binary downloads even if postinstall was silently skipped
           ELECTRON_SKIP_BINARY_DOWNLOAD: '0'
+
+      - name: Build native ORT bridge for Electron
+        run: npm run build:native
+
+      - name: Sync fresh build to prebuilt directory
+        shell: pwsh
+        run: |
+          Copy-Item -Force "native\ort-bridge\build\Release\ort_bridge.node" "native\ort-bridge\prebuilt\win32-x64\ort_bridge.node"
+          $bytes = [System.IO.File]::ReadAllBytes("native\ort-bridge\prebuilt\win32-x64\ort_bridge.node")
+          $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+          if (-not $text.Contains("d2h-copy-v2")) { throw "prebuilt addon missing d2h-copy-v2 marker" }
+          Write-Host "prebuilt synced and verified"
 
       - name: Ensure Electron binary and zip cache
         shell: pwsh
@@ -196,6 +220,22 @@ jobs:
               Write-Host "out/ STILL does not exist!"
               Write-Host "=== Searching for SXSEditor.exe in workspace ==="
               Get-ChildItem -Path "." -Filter "SXSEditor.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object FullName, Length | Format-Table -AutoSize
+            }
+          }
+
+      - name: Verify packaged native ORT bridge
+        shell: pwsh
+        run: |
+          $addons = Get-ChildItem -Path ".webpack", "out" -Filter "ort_bridge*.node" -Recurse -ErrorAction SilentlyContinue
+          if (-not $addons) { throw "Packaged application does not contain ort_bridge.node" }
+          foreach ($addon in $addons) {
+            Write-Host "Native addon: $($addon.FullName) ($($addon.Length) bytes)"
+            $bytes = [System.IO.File]::ReadAllBytes($addon.FullName)
+            $text = [System.Text.Encoding]::ASCII.GetString($bytes)
+            if ($text.Contains("d2h-copy-v2")) {
+              Write-Host "  OK: contains d2h-copy-v2" -ForegroundColor Green
+            } else {
+              Write-Host "  WARNING: missing d2h-copy-v2 (legacy addon)" -ForegroundColor Yellow
             }
           }
 

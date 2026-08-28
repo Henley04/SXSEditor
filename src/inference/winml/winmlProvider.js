@@ -25,6 +25,8 @@ let registrationAttempted = false;
 let _lastAttemptAt = 0;
 const RETRY_COOLDOWN_MS = 15000;
 let _registeringPromise = null;
+let _readyEpLibrariesPromise = null;
+let _readyEpLibrariesCache = null;
 
 function _getSettings() {
     // worker_threads 场景：svsWorker 启动时把主进程下发的开关快照挂到
@@ -53,7 +55,7 @@ function isWinmlEnabled() {
  * 在 worker_threads 里不可用（dynwinrt/COM 依赖主进程环境）——
  * worker 应改用 __SXS_WINML_EPS__ 快照。
  */
-async function getReadyEpLibraries() {
+async function _resolveReadyEpLibraries() {
     if (!isWinmlEnabled()) {
         console.log('[WinML] getReadyEpLibraries: gate closed');
         return [];
@@ -128,6 +130,31 @@ async function getReadyEpLibraries() {
         out.push(best);
     }
     return out;
+}
+
+/**
+ * Resolve provider packages once per process. ExecutionProviderCatalog is not
+ * re-entrant: two concurrent EnsureReadyAsync calls for the same provider can
+ * race after the first call changes readyState and Chromium terminates the
+ * process with a WebNN FATAL. Settings warmup and first synthesis commonly
+ * overlap, so all callers must share this single flight.
+ */
+async function getReadyEpLibraries() {
+    if (_readyEpLibrariesCache) return _readyEpLibrariesCache.map(e => ({ ...e }));
+    if (_readyEpLibrariesPromise) {
+        console.log('[WinML][ready] join=in-flight');
+        return _readyEpLibrariesPromise;
+    }
+    const started = Date.now();
+    console.log('[WinML][ready] start');
+    _readyEpLibrariesPromise = _resolveReadyEpLibraries()
+        .then((eps) => {
+            _readyEpLibrariesCache = eps.map(e => ({ ...e }));
+            console.log(`[WinML][ready] done ms=${Date.now() - started} eps=${eps.map(e => e.name).join(',') || 'none'}`);
+            return _readyEpLibrariesCache.map(e => ({ ...e }));
+        })
+        .finally(() => { _readyEpLibrariesPromise = null; });
+    return _readyEpLibrariesPromise;
 }
 
 /** 从 MSIX libraryPath 提取数字版本串用于比较（如 ...EP.2_2.30.49.0_x64 -> 2.30.49.0）。 */
@@ -305,7 +332,7 @@ async function ensureEpsRegistered(epNames) {
     }
     registrationAttempted = true;
     _lastAttemptAt = now;
-    console.log(`[WinML] ensureEpsRegistered: registering ${missing.join(', ')} (snapshot=${snapshotEps ? 'yes' : 'no'})`);
+    console.log(`[WinML][register] requested=${missing.join(',')} source=${snapshotEps ? 'worker-snapshot' : 'catalog'}`);
 
     _registeringPromise = (async () => {
         try {
@@ -345,7 +372,7 @@ async function ensureEpsRegistered(epNames) {
                 try {
                     ortBridge.registerEp(best.name, best.libraryPath);
                     registeredEps.add(best.name);
-                    console.log(`[WinML] registered ${best.name} <- ${best.libraryPath.split('\\').pop()}`);
+                    console.log(`[WinML][register] ep=${best.name} dll=${best.libraryPath.split('\\').pop()} version=${_msixVersionOf(best.libraryPath)} status=ok`);
                 } catch (e) {
                     const m = (e.message || '').toLowerCase();
                     if (m.includes('already registered')) {
@@ -435,7 +462,7 @@ async function getWinmlCandidates(useStaticShapes) {
         const auto = devices.filter((d) => d.epName.endsWith('.AUTO')).map((d) => d.index);
         if (auto.length) chain.push({ epName: 'OpenVINO.AUTO', indices: auto });
     }
-    console.log(`[WinML] candidates for ${useStaticShapes ? 'static' : 'dynamic'}: ${chain.map(c=>c.epName).join(', ') || '(none)'} devices=${devices.map(d=>d.epName+':'+d.deviceType).join(';')}`);
+    console.log(`[WinML][select] shape=${useStaticShapes ? 'static' : 'dynamic'} chain=${chain.map(c => `${c.epName}@${c.indices.join(',')}`).join('>') || 'none'} devices=${devices.map(d => `${d.index}:${d.epName}/${d.deviceType}`).join(',') || 'none'}`);
     return chain;
 }
 
@@ -449,15 +476,69 @@ async function tryCreateWinMLSession(modelPath, useStaticShapes) {
     const modelName = path.basename(modelPath);
     for (const cand of candidates) {
         try {
-            const session = await ortBridge.createSessionWithEps(modelPath, cand.indices);
-            console.log(`[WinML] ${modelName} session created on ${cand.epName}`);
+            const session = await ortBridge.createSessionWithEps(modelPath, cand.indices, cand.epName);
+            console.log(`[WinML][session] model=${modelName} ep=${cand.epName} devices=${cand.indices.join(',')} status=created`);
             return { session, ep: `winml:${cand.epName}` };
         } catch (e) {
             const reason = (e.message || '').split('\n')[0].slice(0, 90);
-            console.warn(`[WinML] ${modelName} failed on ${cand.epName}: ${reason}`);
+            console.warn(`[WinML][session] model=${modelName} ep=${cand.epName} devices=${cand.indices.join(',')} status=failed error=${reason}`);
         }
     }
     return null;
+}
+
+/**
+ * Clear TensorRT-RTX engine cache files.
+ *
+ * TRT caches compiled engines to disk. When the ONNX model or provider options
+ * change (e.g. profile shapes), stale cached engines can be reused, producing
+ * incorrect results or enqueue failures. This function scans common cache
+ * locations and removes TRT-related cache files.
+ *
+ * @returns {number} count of removed files
+ */
+function clearTRTEngineCache() {
+    const os = require('node:os');
+    const crypto = require('node:crypto');
+    let removed = 0;
+    // TRT-RTX EP stores cache in subdirectories of these roots:
+    //  - %LOCALAPPDATA% (most common on Windows)
+    //  - %USERPROFILE%\.cache
+    //  - Model directory itself (next to .onnx files)
+    const roots = [];
+    if (process.env.LOCALAPPDATA) roots.push(process.env.LOCALAPPDATA);
+    if (process.env.APPDATA) roots.push(process.env.APPDATA);
+    roots.push(path.join(os.homedir(), '.cache'));
+    roots.push(path.join(os.tmpdir()));
+
+    for (const root of roots) {
+        let entries;
+        try { entries = fs.readdirSync(root); } catch (_) { continue; }
+        for (const entry of entries) {
+            const lower = entry.toLowerCase();
+            // TRT cache dirs typically contain "tensorrt", "trt", "onnxruntime" in their name
+            const isTrtCache = lower.includes('tensorrt') || lower.includes('trt_cache') ||
+                (lower.includes('onnxruntime') && lower.includes('trt'));
+            if (!isTrtCache) continue;
+            const fullPath = path.join(root, entry);
+            try {
+                const stat = fs.statSync(fullPath);
+                if (stat.isDirectory()) {
+                    fs.rmSync(fullPath, { recursive: true, force: true });
+                    removed++;
+                    console.log(`[WinML][TRT-cache] removed dir: ${fullPath}`);
+                } else {
+                    fs.unlinkSync(fullPath);
+                    removed++;
+                    console.log(`[WinML][TRT-cache] removed file: ${fullPath}`);
+                }
+            } catch (_) { /* permission or in-use */ }
+        }
+    }
+    if (removed > 0) {
+        console.log(`[WinML][TRT-cache] cleared ${removed} cache entr${removed === 1 ? 'y' : 'ies'}`);
+    }
+    return removed;
 }
 
 /** Test/diagnostic reset. */
@@ -466,6 +547,8 @@ function __resetForTest() {
     registrationAttempted = false;
     _lastAttemptAt = 0;
     _emptyReasonLogged = false;
+    _readyEpLibrariesPromise = null;
+    _readyEpLibrariesCache = null;
 }
 
 module.exports = {
@@ -474,6 +557,7 @@ module.exports = {
     getReadyEpLibraries,
     getWinmlCandidates,
     tryCreateWinMLSession,
+    clearTRTEngineCache,
     listCompatibleProviders: (...a) => winmlCatalog.listCompatibleProviders(...a),
     __resetForTest,
 };

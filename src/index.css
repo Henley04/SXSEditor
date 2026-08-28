@@ -645,3 +645,98 @@
   outline-offset: 1px;
   border-radius: 6px;
 }
+
+
+/* Responsive toolbar -------------------------------------------------------
+   Condense progressively instead of allowing controls to overflow off-screen.
+   Text remains available through the button title/accessible name; only the
+   lowest-priority visible labels are hidden at very narrow widths. */
+#toolbar {
+  overflow: hidden;
+}
+
+#toolbar button > .icon {
+  flex: 0 0 auto;
+}
+
+@media (max-width: 1500px) {
+  #toolbar {
+    padding-inline: 8px;
+    gap: 2px;
+  }
+  .toolbar-group { gap: 4px; }
+  .toolbar-divider { margin-inline: 5px; }
+  #toolbar button {
+    padding: 6px 10px;
+    font-size: var(--font-sm);
+  }
+  #toolbar button > .icon {
+    width: 14px;
+    height: 14px;
+    margin-right: 4px;
+  }
+  #toolbar label { gap: 4px; font-size: var(--font-sm); }
+  #toolbar input[type="number"] { width: 44px; padding-inline: 4px; }
+  #time-display { min-width: 88px; padding-inline: 6px; font-size: var(--font-base); }
+}
+
+@media (max-width: 1180px) {
+  #toolbar {
+    height: 40px;
+    min-height: 40px;
+    padding-inline: 5px;
+  }
+  .toolbar-divider { margin-inline: 2px; height: 18px; }
+  .toolbar-group { gap: 2px; }
+  #toolbar button { padding: 5px 7px; }
+  #toolbar button > .icon {
+    width: 12px;
+    height: 12px;
+    margin-right: 2px;
+  }
+  #toolbar input[type="number"] { width: 38px; }
+  #bpm-input { width: 44px; }
+  #time-display { min-width: 78px; letter-spacing: 0; }
+}
+
+@media (max-width: 980px) {
+  /* Keep transport and project actions identifiable; collapse verbose labels. */
+  #btn-export-lrc,
+  #btn-audio-to-midi,
+  #btn-import-midi,
+  #btn-open-singer-market {
+    width: 28px;
+    min-width: 28px;
+    padding-inline: 7px;
+    font-size: 0;
+  }
+  #btn-export-lrc > .icon,
+  #btn-audio-to-midi > .icon,
+  #btn-import-midi > .icon,
+  #btn-open-singer-market > .icon {
+    width: 14px;
+    height: 14px;
+    margin-right: 0;
+  }
+  #toolbar label { gap: 2px; }
+  #toolbar .version-badge { display: none; }
+  #toolbar .toolbar-group:has(.version-badge),
+  #toolbar .toolbar-divider:has(+ .toolbar-group .version-badge) { display: none; }
+}
+
+@media (max-width: 760px) {
+  #toolbar button {
+    width: 27px;
+    min-width: 27px;
+    padding-inline: 6px;
+    font-size: 0;
+  }
+  #toolbar button > .icon {
+    width: 13px;
+    height: 13px;
+    margin-right: 0;
+  }
+  #toolbar label { font-size: 0; }
+  #toolbar label > input { font-size: var(--font-sm); }
+  #time-display { min-width: 70px; font-size: var(--font-sm); }
+}

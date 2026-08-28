@@ -302,7 +302,7 @@ function registerSettingsIpc() {
         try {
           require('../inference/winml/winmlProvider')
             .getReadyEpLibraries()
-            .then((eps) => console.log(`[Main] WinML EPs ready: ${eps.map((e) => e.name).join(', ') || '(none)'}`))
+            .then((eps) => console.log(`[Main][WinML] warmup=done eps=${eps.map((e) => e.name).join(',') || 'none'}`))
             .catch((err) => console.warn('[Main] WinML EP warmup failed:', err.message));
         } catch (_) { /* best effort */ }
       }

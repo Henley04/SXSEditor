@@ -6,11 +6,15 @@ try { require('./pipeline/float16Patch'); } catch (_) {}
 // 路径字符串），settings 模块与 dynwinrt/catalog 在 worker 内都不可靠。
 // 主进程在 spawn 时经 workerData 显式下发开关与已就绪的 EP libraryPath 列表，
 // 这里在任何 pipeline/winml 模块加载之前挂到 globalThis。
-if (workerData && typeof workerData.winmlEnabled === 'boolean') {
-    globalThis.__SXS_SETTINGS_SNAPSHOT__ = {
-        winmlEnabled: workerData.winmlEnabled,
+if (workerData && typeof workerData === 'object') {
+    const snapshot = {
+        ...(workerData.settingsSnapshot || {}),
+        ...(typeof workerData.winmlEnabled === 'boolean' ? { winmlEnabled: workerData.winmlEnabled } : {}),
         ...(workerData.winmlBootstrapDllPath ? { winmlBootstrapDllPath: workerData.winmlBootstrapDllPath } : {}),
     };
+    if (Object.keys(snapshot).length > 0) {
+        globalThis.__SXS_SETTINGS_SNAPSHOT__ = snapshot;
+    }
     if (Array.isArray(workerData.winmlEps)) {
         globalThis.__SXS_WINML_EPS__ = workerData.winmlEps;
     }

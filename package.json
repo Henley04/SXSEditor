@@ -20,7 +20,7 @@
     "test:watch": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --watch",
     "cli": "electron-forge start -- --cli",
     "cli:help": "electron-forge start -- --cli help",
-    "build:native": "cd native/ort-bridge && npx node-gyp rebuild"
+    "build:native": "node scripts/build-native-electron.js"
   },
   "keywords": [
     "electron",

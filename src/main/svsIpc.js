@@ -123,6 +123,7 @@ async function _createPipeline(languageOverride) {
       winmlEnabled,
       ...(winmlEps ? { winmlEps } : {}),
       ...(settings.winmlBootstrapDllPath ? { winmlBootstrapDllPath: settings.winmlBootstrapDllPath } : {}),
+      settingsSnapshot: settings,
     });
   }
   return new OnnxSVSPipeline(modelPath, pipelineOptions);
@@ -267,11 +268,15 @@ function registerSvsIpc() {
       // 进度回调：推送 'svs:progress' 到主窗口，与 fragment-svs:progress 对齐。
       // 之前主页面合成无进度推送，导致推理预览百分比不显示。
       const win = event.sender;
+      let lastProgressSentAt = 0;
+      let lastProgressValue = -1;
       opts.onProgress = (progress) => {
+        const now = Date.now();
+        if (progress < 100 && now - lastProgressSentAt < 100 && Math.abs(progress - lastProgressValue) < 2) return;
+        lastProgressSentAt = now;
+        lastProgressValue = progress;
         try {
-          if (win && !win.isDestroyed()) {
-            win.send('svs:progress', { progress });
-          }
+          if (win && !win.isDestroyed()) win.send('svs:progress', { progress });
         } catch (_) {}
       };
       if (opts.autoShift && opts.refAudioWavBuffer) {

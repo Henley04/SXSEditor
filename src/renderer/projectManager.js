@@ -1,7 +1,7 @@
 import { state, dom, trackManager, history } from './state.js';
 import { SXSSINGER_CURRENT_VERSION, SAMPLE_RATE } from './constants.js';
 import { t } from '../i18n/index.js';
-import { showAlertDialog } from '../alertDialog.js';
+import { showAlertDialog, showConfirmDialog } from '../alertDialog.js';
 import { createDialog, showSingerValidationReport } from './uiControls.js';
 
 export function markDirty() {
@@ -467,7 +467,8 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
   }, null, 2);
 }
 
-export function updateProjectSettings() {
+export function updateProjectSettings(options = {}) {
+  const markProjectDirty = options.markDirty !== false;
   const bpm = parseInt(dom.bpmInput.value, 10) || 120;
   const num = parseInt(dom.timeSigNum.value, 10) || 4;
   const den = parseInt(dom.timeSigDen.value, 10) || 4;
@@ -485,7 +486,7 @@ export function updateProjectSettings() {
       dom.bpmDisplayBadge.classList.add('bpm-flash');
     }
   }
-  markDirty();
+  if (markProjectDirty) markDirty();
   // refreshAll will be called by the caller
   if (window.electronAPI?.updateProjectSettings) {
     window.electronAPI.updateProjectSettings({ bpm: state.project.bpm, timeSignature: state.project.timeSignature });
@@ -691,6 +692,10 @@ export async function saveProjectAs() {
 }
 
 export async function loadProject() {
+  if (state.isDirty) {
+    const discard = await showConfirmDialog(t('main.unsavedChangesConfirm') || 'Unsaved changes will be lost. Continue?');
+    if (!discard) return { loaded: false, canceled: true };
+  }
   if (window.electronAPI?.showOpenDialog) {
     try {
       const result = await window.electronAPI.showOpenDialog({

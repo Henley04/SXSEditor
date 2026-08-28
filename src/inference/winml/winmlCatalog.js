@@ -21,6 +21,7 @@ const path = require('node:path');
 const MIN_BUILD = 26100; // Windows 11 24H2 — downloadable EPs requirement
 
 let _bootstrapDllPath = null;
+const _entryReadyPromises = new WeakMap();
 let _catalog = null;
 let _catalogPromise = null;
 
@@ -284,25 +285,48 @@ async function listCompatibleProviders() {
 
 /** Ensure a specific provider wrapper instance is ready (downloads if needed). */
 async function ensureEntryReady(entry, onProgress) {
-    // Already Ready (0) — calling EnsureReadyAsync again triggers WebNN host FATAL
-    // "[OpenVINOExecutionProvider] is already in ready state before EnsureReadyAsync()"
-    // seen after TRT optimization (5 providers) with WinML.
-    if (entry.readyState === 0) {
-        const lib = entry.inst.libraryPath;
-        if (lib) return { ok: true, libraryPath: lib };
+    const inst = entry && entry.inst;
+    if (!inst) return { ok: false, libraryPath: null };
+
+    // Read the live WinRT property, not the stale snapshot captured by
+    // listAllProviderEntries(). Another caller may have completed between
+    // enumeration and this function.
+    const liveState = Number(inst.readyState);
+    if (liveState === 0 && inst.libraryPath) {
+        return { ok: true, libraryPath: inst.libraryPath };
     }
-    const op = entry.inst.ensureReadyAsync();
-    if (onProgress && op && typeof op.progress === 'function') {
-        try {
-            op.progress((v) => {
-                const frac = v <= 1 ? Number(v) : Number(v) / 100;
-                if (Number.isFinite(frac)) onProgress(Math.max(0, Math.min(1, frac)));
-            });
-        } catch (_) { /* progress unsupported when nothing to download */ }
+
+    const inFlight = _entryReadyPromises.get(inst);
+    if (inFlight) return inFlight;
+
+    const promise = (async () => {
+        // Final check immediately before EnsureReadyAsync. Calling it in Ready
+        // state is a process-fatal contract violation in Chromium WebNN.
+        if (Number(inst.readyState) === 0) {
+            return inst.libraryPath
+                ? { ok: true, libraryPath: inst.libraryPath }
+                : { ok: false, libraryPath: null };
+        }
+        const op = inst.ensureReadyAsync();
+        if (onProgress && op && typeof op.progress === 'function') {
+            try {
+                op.progress((v) => {
+                    const frac = v <= 1 ? Number(v) : Number(v) / 100;
+                    if (Number.isFinite(frac)) onProgress(Math.max(0, Math.min(1, frac)));
+                });
+            } catch (_) { /* progress unsupported */ }
+        }
+        await op;
+        return inst.libraryPath
+            ? { ok: true, libraryPath: inst.libraryPath }
+            : { ok: false, libraryPath: null };
+    })();
+    _entryReadyPromises.set(inst, promise);
+    try {
+        return await promise;
+    } finally {
+        _entryReadyPromises.delete(inst);
     }
-    await op;
-    const lib = entry.inst.libraryPath;
-    return lib ? { ok: true, libraryPath: lib } : { ok: false, libraryPath: null };
 }
 
 /**

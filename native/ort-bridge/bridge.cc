@@ -146,8 +146,11 @@ napi_value Init(napi_env env, napi_callback_info info) {
         napi_value obj, ver;
         CHECK_NAPI(napi_create_object(env, &obj));
         CHECK_NAPI(napi_create_uint32(env, g_apiVersion, &ver));
-        CHECK_NAPI(napi_set_named_property(env, obj, "apiVersion", ver));
-        return obj;
+    CHECK_NAPI(napi_set_named_property(env, obj, "apiVersion", ver));
+    napi_value buildTag;
+    CHECK_NAPI(napi_create_string_utf8(env, "d2h-copy-v2", NAPI_AUTO_LENGTH, &buildTag));
+    CHECK_NAPI(napi_set_named_property(env, obj, "buildTag", buildTag));
+    return obj;
     }
 
     std::wstring dll = Utf8ToWide(ToUtf8(env, argv[0]));
@@ -259,7 +262,7 @@ napi_value ListDevices(napi_env env, napi_callback_info info) {
 // ---------------- createSession(modelPath, deviceIndices[]) -> bigint id ----------------
 napi_value CreateSession(napi_env env, napi_callback_info info) {
     if (!g_initialized) { napi_throw_error(env, nullptr, "[sxs-ort-bridge] not initialized"); return nullptr; }
-    size_t argc = 2; napi_value argv[2];
+    size_t argc = 3; napi_value argv[3];
     CHECK_NAPI(napi_get_cb_info(env, info, &argc, argv, nullptr, nullptr));
 
     std::wstring model = Utf8ToWide(ToUtf8(env, argv[0]));
@@ -279,9 +282,44 @@ napi_value CreateSession(napi_env env, napi_callback_info info) {
     OrtSessionOptions* so = nullptr;
     CHECK_ORT(g_ort->CreateSessionOptions(&so));
     g_ort->SetSessionGraphOptimizationLevel(so, ORT_ENABLE_ALL);
+
+    // Optional provider options passed by JS. Dynamic TensorRT-RTX models need
+    // explicit min/opt/max profiles. Without them the first 3-frame warmup can
+    // become the effective profile and later real sequence lengths may execute
+    // as an all-zero engine without reporting an ORT error.
+    std::vector<std::string> optionKeys;
+    std::vector<std::string> optionValues;
+    std::vector<const char*> optionKeyPtrs;
+    std::vector<const char*> optionValuePtrs;
+    if (argc >= 3) {
+        napi_valuetype optionsType = napi_undefined;
+        CHECK_NAPI(napi_typeof(env, argv[2], &optionsType));
+        if (optionsType == napi_object) {
+            napi_value keys;
+            CHECK_NAPI(napi_get_property_names(env, argv[2], &keys));
+            uint32_t keyCount = 0;
+            CHECK_NAPI(napi_get_array_length(env, keys, &keyCount));
+            optionKeys.reserve(keyCount);
+            optionValues.reserve(keyCount);
+            for (uint32_t i = 0; i < keyCount; i++) {
+                napi_value key, value;
+                CHECK_NAPI(napi_get_element(env, keys, i, &key));
+                CHECK_NAPI(napi_get_property(env, argv[2], key, &value));
+                optionKeys.push_back(ToUtf8(env, key));
+                optionValues.push_back(ToUtf8(env, value));
+            }
+            for (size_t i = 0; i < optionKeys.size(); i++) {
+                optionKeyPtrs.push_back(optionKeys[i].c_str());
+                optionValuePtrs.push_back(optionValues[i].c_str());
+            }
+        }
+    }
     if (!sel.empty()) {
         OrtStatus* st = g_ort->SessionOptionsAppendExecutionProvider_V2(
-            so, g_env, sel.data(), sel.size(), nullptr, nullptr, 0);
+            so, g_env, sel.data(), sel.size(),
+            optionKeyPtrs.empty() ? nullptr : optionKeyPtrs.data(),
+            optionValuePtrs.empty() ? nullptr : optionValuePtrs.data(),
+            optionKeyPtrs.size());
         if (st) {
             g_ort->ReleaseSessionOptions(so);
             std::string m = OrtMsg(st); g_ort->ReleaseStatus(st);
@@ -507,6 +545,11 @@ napi_value Run(napi_env env, napi_callback_info info) {
         return nullptr;
     }
 
+    // Separate CPU memory descriptor for explicit EP device-to-host copies.
+    // The feed descriptor above has already been released after Run().
+    OrtMemoryInfo* outputMi = nullptr;
+    CHECK_ORT(g_ort->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &outputMi));
+
     napi_value resObj;
     CHECK_NAPI(napi_create_object(env, &resObj));
     for (size_t i = 0; i < outCount; i++) {
@@ -532,11 +575,45 @@ napi_value Run(napi_env env, napi_callback_info info) {
         g_ort->ReleaseTensorTypeAndShapeInfo(tsi);
 
         size_t bytes = total * ElemSize(et);
-        void* src = nullptr;
-        if (g_ort->GetTensorMutableData(outputs[i], &src) != nullptr || !src) src = nullptr;
         void* copy = malloc(bytes ? bytes : 1);
-        if (src) memcpy(copy, src, bytes);
-        else memset(copy, 0, bytes);
+        if (!copy) {
+            g_ort->ReleaseValue(outputs[i]);
+            g_ort->ReleaseMemoryInfo(outputMi);
+            napi_throw_error(env, nullptr, "[sxs-ort-bridge] output allocation failed");
+            return nullptr;
+        }
+
+        // Vendor EP outputs may live in device memory. GetTensorMutableData can
+        // return an EP pointer that is not CPU-readable, or fail entirely. The
+        // previous code silently replaced that case with zeros, which made every
+        // TRT-RTX result appear successful while diff_step/preflow returned an
+        // all-zero tensor. Bind a CPU tensor and ask ORT's registered EP data
+        // transfer implementation to perform the device-to-host copy instead.
+        OrtValue* cpuOutput = nullptr;
+        OrtStatus* createCpuSt = g_ort->CreateTensorWithDataAsOrtValue(
+            outputMi, copy, bytes, dims.data(), rank, et, &cpuOutput);
+        if (createCpuSt) {
+            std::string m = OrtMsg(createCpuSt);
+            g_ort->ReleaseStatus(createCpuSt);
+            free(copy);
+            g_ort->ReleaseValue(outputs[i]);
+            g_ort->ReleaseMemoryInfo(outputMi);
+            napi_throw_error(env, nullptr, ("[sxs-ort-bridge] create CPU output failed: " + m).c_str());
+            return nullptr;
+        }
+        const OrtValue* copySrc[] = { outputs[i] };
+        OrtValue* copyDst[] = { cpuOutput };
+        OrtStatus* copySt = g_ort->CopyTensors(g_env, copySrc, copyDst, nullptr, 1);
+        g_ort->ReleaseValue(cpuOutput);
+        if (copySt) {
+            std::string m = OrtMsg(copySt);
+            g_ort->ReleaseStatus(copySt);
+            free(copy);
+            g_ort->ReleaseValue(outputs[i]);
+            g_ort->ReleaseMemoryInfo(outputMi);
+            napi_throw_error(env, nullptr, ("[sxs-ort-bridge] device-to-host output copy failed: " + m).c_str());
+            return nullptr;
+        }
 
         napi_value ab, oo, tv, da;
         if (napi_create_external_arraybuffer(env, copy, bytes,
@@ -560,6 +637,7 @@ napi_value Run(napi_env env, napi_callback_info info) {
         CHECK_NAPI(napi_set_named_property(env, resObj, outNames[i].c_str(), oo));
         g_ort->ReleaseValue(outputs[i]);
     }
+    g_ort->ReleaseMemoryInfo(outputMi);
     return resObj;
 }
 
