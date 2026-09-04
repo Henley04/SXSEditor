@@ -19,10 +19,22 @@ describe('inference/pipeline/audioSegmentation', () => {
       ];
       const out = seg.fillNoteGaps(notes);
       expect(out.length).to.equal(3);
-      expect(out[1].lyric).to.equal('');
+      expect(out[1].lyric).to.equal('<SP>');
       expect(out[1].pitch).to.equal(0);
+      expect(out[1].noteType).to.equal(1);
+      expect(out[1].isGeneratedRest).to.equal(true);
       expect(out[1].start).to.equal(1);
       expect(out[1].duration).to.be.closeTo(1, 1e-6);
+    });
+
+    it('should preserve a long gap as timeline rest', () => {
+      const notes = [
+        { start: 0, duration: 1, lyric: 'a' },
+        { start: 9, duration: 1, lyric: 'b' },
+      ];
+      const out = seg.fillNoteGaps(notes);
+      expect(out.length).to.equal(3);
+      expect(out[1]).to.include({ lyric: '<SP>', pitch: 0, start: 1, duration: 8 });
     });
 
     it('should NOT insert rest for tiny gap (<=0.01)', () => {

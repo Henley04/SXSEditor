@@ -9,7 +9,11 @@
     <div class="settings-layout">
         <!-- ==================== Sidebar ==================== -->
         <nav class="settings-sidebar">
-            <div class="sidebar-nav">
+            <div class="settings-search-wrap">
+                    <input id="settingsSearch" type="search" placeholder="搜索设置" aria-label="搜索设置">
+                    <div id="settingsSearchEmpty" class="settings-search-empty hidden">没有匹配的设置</div>
+                </div>
+                <div class="sidebar-nav">
                 <div class="sidebar-category" data-i18n="settings.catGeneral">通用</div>
                 <div class="sidebar-item active" data-target="section-language">
                     <span data-i18n="settings.language">语言</span>
@@ -97,8 +101,8 @@
                 <div class="setting-group">
                     <label for="inferenceProvider" data-i18n="settings.inferenceProvider">推理提供者</label>
                     <select id="inferenceProvider">
-                        <option value="ortnode" data-i18n="settings.inferenceProviderOrtnode">ORTNODE (DirectML/CPU)</option>
-                        <option value="ortweb" data-i18n="settings.inferenceProviderOrtweb">ORTWEB (WebNN)</option>
+                        <option value="ortnode" data-i18n="settings.inferenceProviderOrtnode">本机 ORT（DirectML / Windows ML / CPU）</option>
+                        <option value="ortweb" data-i18n="settings.inferenceProviderOrtweb">浏览器 ORT（WebNN，NPU 优先）</option>
                     </select>
                     <p class="hint" id="inferenceProviderHint" data-i18n="settings.inferenceProviderHintOrtnode">使用 onnxruntime-node 在主进程运行 DirectML/CPU 推理。</p>
                 </div>

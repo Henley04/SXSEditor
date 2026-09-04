@@ -202,9 +202,8 @@ function disposeTensor(tensor) {
 // 在阶段切换或连续推理间插入 50ms 等待，让 DML 内部资源池有机会回收上阶段的 GPU 缓冲区，
 // 防止累积导致 887A0005/887A0006 (GPU device hung/removed)。
 // 50ms 是经验值：太短（<10ms）DML 来不及回收，太长（>100ms）影响合成速度。
-const GPU_DRAIN_MS = 50;
 function gpuDrain() {
-    return new Promise(resolve => setTimeout(resolve, GPU_DRAIN_MS));
+    return new Promise(resolve => setImmediate(resolve));
 }
 
 // 大模型 session.release() 后的长排空：DML 后端 session.release() 是同步 API，
@@ -214,12 +213,10 @@ function gpuDrain() {
 //
 // 策略：总等待时间分多次 setTimeout（让事件循环处理 GC + DML 内部回收回调），
 // 比单次长 sleep 更有效——每次 setTimeout 回调间 V8 GC 能跑一轮，DML 也能处理一批 pending 释放。
-const GPU_DRAIN_LONG_MS = 200;       // 单次轮询间隔
-const GPU_DRAIN_LONG_ROUNDS = 4;     // 轮询次数（总等待 ~800ms）
 async function gpuDrainLong() {
-    for (let i = 0; i < GPU_DRAIN_LONG_ROUNDS; i++) {
-        await new Promise(resolve => setTimeout(resolve, GPU_DRAIN_LONG_MS));
-    }
+    // Never impose wall-clock sleeps. Session release and ORT synchronization
+    // are responsible for resource ordering; this only yields one event turn.
+    await new Promise(resolve => setImmediate(resolve));
 }
 
 // 自适应 GPU 排空：正常情况下跳过 50ms 等待，仅 setImmediate yield 让事件循环跑一轮
@@ -234,12 +231,8 @@ function markGpuOom() {
     _oomFlag = true;
 }
 async function gpuDrainAdaptive() {
-    if (_oomFlag) {
-        await new Promise(resolve => setTimeout(resolve, GPU_DRAIN_ADAPTIVE_LONG_MS));
-        _oomFlag = false;
-    } else {
-        await new Promise(resolve => setImmediate(resolve));
-    }
+    if (_oomFlag) _oomFlag = false;
+    await new Promise(resolve => setImmediate(resolve));
 }
 
 /**

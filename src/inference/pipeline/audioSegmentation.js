@@ -18,9 +18,15 @@ class AudioSegmentation {
             const note = sorted[i];
             const gap = note.start - currentTime;
             if (gap > 0.01) {
+                // Preserve the complete score timeline. Long rests must remain
+                // represented here so sequence duration and following note
+                // positions are not compressed. buildVocalSegments() is the
+                // layer responsible for excluding long rests from inference.
                 result.push({
-                    lyric: '',
+                    lyric: '<SP>',
                     pitch: 0,
+                    noteType: 1,
+                    isGeneratedRest: true,
                     start: currentTime,
                     duration: gap,
                 });

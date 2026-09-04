@@ -130,6 +130,12 @@ class OnnxSVSPipeline {
         this._segCacheMaxEntries = 32;           // 单 segment ≤30s≈2.88MB，32 条 ≈ 92MB
         this._segCacheMaxBytes = 300 * 1024 * 1024; // 最大缓存字节数（300MB）
         this._segCacheBytes = 0;                 // 当前分片缓存占用字节数
+        // Streaming chunk cache. Entries are committed immediately after each
+        // diffusion+vocoder chunk, so cancellation does not discard completed work.
+        this._chunkCacheMap = null;              // Map<key, {audio, mel, ranges, size}>
+        this._chunkCacheMaxEntries = 128;
+        this._chunkCacheMaxBytes = 384 * 1024 * 1024;
+        this._chunkCacheBytes = 0;
         this._initPromise = null;
         // 合成串行化锁：防止连续两次 synthesize() 调用并发。
         // 场景：合成 A 完成 → _recreateHeavySessionsAfterSynthesis() 释放 diffStep/vocoder
@@ -882,6 +888,42 @@ class OnnxSVSPipeline {
         // 也会变化，旧分片缓存不再适用，必须一并清空。
         this._segCacheMap = null;
         this._segCacheBytes = 0;
+        this._chunkCacheMap = null;
+        this._chunkCacheBytes = 0;
+    }
+
+    _chunkCacheGet(key) {
+        if (!this._chunkCacheMap || !this._chunkCacheMap.has(key)) return null;
+        const entry = this._chunkCacheMap.get(key);
+        this._chunkCacheMap.delete(key);
+        this._chunkCacheMap.set(key, entry);
+        return entry;
+    }
+
+    _chunkCachePut(key, entry) {
+        if (!entry || !entry.audio || !entry.mel) return;
+        if (!this._chunkCacheMap) this._chunkCacheMap = new Map();
+        const map = this._chunkCacheMap;
+        if (map.has(key)) {
+            this._chunkCacheBytes -= map.get(key).size;
+            map.delete(key);
+        }
+        // Cache owns its buffers. This prevents later xt/audio reuse from
+        // mutating a completed chunk after cancellation.
+        const stored = {
+            ...entry,
+            audio: entry.audio.slice(),
+            mel: entry.mel.slice(),
+        };
+        stored.size = stored.audio.byteLength + stored.mel.byteLength;
+        map.set(key, stored);
+        this._chunkCacheBytes += stored.size;
+        while (map.size > this._chunkCacheMaxEntries ||
+               (this._chunkCacheBytes > this._chunkCacheMaxBytes && map.size > 1)) {
+            const oldestKey = map.keys().next().value;
+            this._chunkCacheBytes -= map.get(oldestKey).size;
+            map.delete(oldestKey);
+        }
     }
 
     /**
@@ -2662,17 +2704,40 @@ class OnnxSVSPipeline {
 
         console.log(`[OnnxSVSPipeline] synthesizeMultiStreaming: ${fragments.length} fragments, chunkEnabled=${chunkEnabled}, chunkFrames=${chunkFrames}`);
 
-        // ===== Phase 1: 逐分片准备 =====
-        const prepared = [];
-        for (let fi = 0; fi < fragments.length; fi++) {
-            throwIfCancelled(abortSignal);
-            const frag = fragments[fi];
-            const fragOpts = frag.options || {};
-            const filledNotes = this._fillNoteGaps(frag.notes);
-            if (filledNotes.length === 0) {
-                console.log(`[MultiStream] Fragment ${fi}: empty notes, skipping`);
-                continue;
+        // ===== Phase 1: split each track fragment into inference-only vocal regions =====
+        // Keep the project/MIDI timeline intact, but never feed the centre of a
+        // long rest to the model. Every region retains absolute note positions
+        // within its source fragment, so Phase 4 naturally leaves the omitted
+        // span as digital zero when mixing.
+        const inferenceRegions = [];
+        for (let sourceFragIdx = 0; sourceFragIdx < fragments.length; sourceFragIdx++) {
+            const sourceFrag = fragments[sourceFragIdx];
+            const timelineNotes = this._fillNoteGaps(sourceFrag.notes);
+            if (!timelineNotes || timelineNotes.length === 0) continue;
+            const regions = this._buildVocalSegments(timelineNotes, bpm);
+            for (let regionIdx = 0; regionIdx < regions.length; regionIdx++) {
+                const region = regions[regionIdx];
+                if (!region.notes || region.notes.length === 0) continue;
+                inferenceRegions.push({
+                    ...sourceFrag,
+                    notes: region.notes,
+                    sourceFragIdx,
+                    regionIdx,
+                    regionStartBeat: region.startBeat,
+                    regionEndBeat: region.endBeat,
+                });
             }
+        }
+
+        const prepared = [];
+        for (let fi = 0; fi < inferenceRegions.length; fi++) {
+            throwIfCancelled(abortSignal);
+            const frag = inferenceRegions[fi];
+            const fragOpts = frag.options || {};
+            // Region notes already include short <SP> rests and the small edge
+            // context retained by buildVocalSegments(). Do not fill gaps again,
+            // or the deliberately omitted long-rest centre would be reinserted.
+            const filledNotes = frag.notes;
 
             // autoShift F0 计算 —— 局部 autoShift：按子段独立计算 f0Shift
             const autoShift = fragOpts.autoShift || false;
@@ -2860,7 +2925,10 @@ class OnnxSVSPipeline {
             const firstNoteStartBeat = filledNotes[0].start;
 
             prepared.push({
-                fragIdx: fi,
+                fragIdx: frag.sourceFragIdx,
+                regionIdx: frag.regionIdx,
+                regionStartBeat: frag.regionStartBeat,
+                regionEndBeat: frag.regionEndBeat,
                 startTimeBeat: frag.startTimeBeat,
                 durationBeats: frag.durationBeats,
                 firstNoteStartBeat,
@@ -2874,10 +2942,18 @@ class OnnxSVSPipeline {
                 f0Hz,
                 sequences,
                 chunkPlan,
+                // Cache is scoped to the inference region, not the original
+                // fragment. Editing a different region will not invalidate this
+                // one, while boundary/context changes produce a different key.
+                cacheBaseKey: [
+                    this._computeSynthCacheKey(filledNotes, bpm, fragOpts),
+                    frag.sourceFragIdx, frag.regionIdx,
+                    frag.regionStartBeat, frag.regionEndBeat,
+                ].join('|'),
                 committedFrames: 0,
                 segAudio: new Float32Array(totalFrames * HOP_SIZE),
             });
-            console.log(`[MultiStream] Fragment ${fi} prepared: ${totalFrames} frames, startTime=${frag.startTimeBeat}beat, firstNoteStart=${firstNoteStartBeat}beat, chunks=${chunkPlan ? chunkPlan.specs.length : 0}`);
+            console.log(`[MultiStream] Fragment ${frag.sourceFragIdx} region ${frag.regionIdx} prepared: ${totalFrames} frames, startTime=${frag.startTimeBeat}beat, firstNoteStart=${firstNoteStartBeat}beat, chunks=${chunkPlan ? chunkPlan.specs.length : 0}`);
         }
 
         if (prepared.length === 0) {
@@ -2923,7 +2999,46 @@ class OnnxSVSPipeline {
             throwIfCancelled(abortSignal);
 
             if (gc.isChunked) {
-                // 分块路径：执行单个 diffusion chunk
+                const expectedCommitted = gc.spec.isLast
+                    ? gc.spec.chunkEnd
+                    : Math.max(0, gc.spec.chunkEnd - p.chunkPlan.overlap);
+                const expectedMelStart = p.committedFrames;
+                const chunkCacheKey = [
+                    'stream-v1', p.cacheBaseKey, gc.chunkIdx,
+                    gc.spec.chunkStart, gc.spec.chunkEnd,
+                    expectedMelStart, expectedCommitted,
+                    totalSteps, cfgStrength, cfgRescale,
+                    this._currentSamplerName || '',
+                    JSON.stringify(this._currentCfgScheduleOpts || {}),
+                    JSON.stringify(this._currentDynamicThresholdOpts || {}),
+                    this.modelPrecision || '', this.vocoderType || '',
+                ].join('|');
+                const cachedChunk = this._chunkCacheGet(chunkCacheKey);
+                if (cachedChunk && cachedChunk.melStart === expectedMelStart &&
+                    cachedChunk.melEnd === expectedCommitted) {
+                    p.xt.data.set(cachedChunk.mel, cachedChunk.xtStart * MEL_DIM);
+                    const segSampleOffset = cachedChunk.melStart * HOP_SIZE;
+                    p.segAudio.set(cachedChunk.audio, segSampleOffset);
+                    p.committedFrames = cachedChunk.melEnd;
+                    if (onChunkAudio) {
+                        const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
+                        const firstNoteOffsetSample = Math.floor((p.firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE);
+                        onChunkAudio({
+                            chunkIndex: gi,
+                            sampleOffset: fragStartSample + firstNoteOffsetSample + segSampleOffset,
+                            sampleEnd: fragStartSample + firstNoteOffsetSample + segSampleOffset + cachedChunk.audio.length,
+                            audio: cachedChunk.audio,
+                            totalSamples: totalMixedSamples,
+                            isLast: gi === globalChunks.length - 1,
+                            cached: true,
+                        });
+                    }
+                    onProgress(Math.min(100, (gi + 1) * progressPerChunk));
+                    console.log(`[MultiStream][chunk-cache] hit fragment=${p.fragIdx} region=${p.regionIdx} chunk=${gc.chunkIdx}`);
+                    continue;
+                }
+
+                // 分块路径：执行 single diffusion chunk
                 const ctx = {
                     sessions: this.sessions,
                     xt: p.xt,
@@ -2990,6 +3105,19 @@ class OnnxSVSPipeline {
                     const copyLen = Math.min(segAudio.length, p.segAudio.length - segSampleOffset);
                     p.segAudio.set(segAudio.subarray(0, copyLen), segSampleOffset);
 
+                    // Commit before the next cancellation check. Store the full
+                    // generated mel chunk, including overlap needed by the next
+                    // chunk, plus only the newly committed vocoder audio.
+                    const xtStart = gc.spec.chunkStart;
+                    const xtEnd = gc.spec.chunkEnd;
+                    this._chunkCachePut(chunkCacheKey, {
+                        melStart,
+                        melEnd: newCommitted,
+                        xtStart,
+                        xtEnd,
+                        mel: p.xt.data.slice(xtStart * MEL_DIM, xtEnd * MEL_DIM),
+                        audio: segAudio.subarray(0, copyLen),
+                    });
                     p.committedFrames = newCommitted;
                 }
             } else {

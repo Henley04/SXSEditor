@@ -745,7 +745,7 @@ class Diffusion {
                 // GPU 排空：每 8 步用 setTimeout(20) 代替 setImmediate，给 DML 后端 20ms 时间
                 // 回收内部 GPU 资源池中的 transformer 注意力中间张量。
                 if (step % 8 === 7) {
-                    await new Promise(r => setTimeout(r, 20));
+                    await new Promise(r => setImmediate(r));
                 } else if (totalFrames > 256) {
                     // 长片段每步 yield：combine 的全数组遍历（256k+ 迭代）
                     // 会阻塞主线程，需要 setImmediate yield。

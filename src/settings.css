@@ -1444,3 +1444,11 @@ body {
   margin-left: var(--space-3);
   vertical-align: middle;
 }
+
+
+/* Settings search */
+.settings-search-wrap { padding: 12px; position: sticky; top: 0; z-index: 4; background: var(--bg-secondary); }
+#settingsSearch { width: 100%; min-height: 36px; border-radius: 8px; padding: 7px 10px; border: 1px solid var(--border-color); background: var(--bg-primary); color: var(--text-primary); }
+#settingsSearch:focus { outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); border-color: var(--accent); }
+.settings-search-empty { margin-top: 8px; color: var(--text-secondary); font-size: var(--font-sm); }
+.search-hidden { display: none !important; }

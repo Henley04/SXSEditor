@@ -320,7 +320,7 @@ async function enumerateDMLDevicesInProcess(modelDir) {
             session.release();
         } catch (_) {}
 
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setImmediate(r));
     } finally {
         process.stderr.write = origWrite;
         ort.env.logLevel = 'warning';

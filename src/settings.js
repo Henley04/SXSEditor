@@ -2383,3 +2383,59 @@ ${result.report.dumpDir}`;
     }
   });
 }
+
+
+// Settings information architecture and search.
+// Windows ML is a hardware/backend selector, not an ORT graph-tuning option.
+(function initializeSettingsSearchAndLayout() {
+  const init = () => {
+    const hardwareSection = document.getElementById('section-inference');
+    const winmlToggle = document.getElementById('winmlEnabled');
+    const winmlGroup = winmlToggle && winmlToggle.closest('.setting-group');
+    if (hardwareSection && winmlGroup) {
+      const providerGroup = document.getElementById('inferenceProvider')?.closest('.setting-group');
+      if (providerGroup && providerGroup.nextSibling) {
+        hardwareSection.insertBefore(winmlGroup, providerGroup.nextSibling);
+      } else {
+        hardwareSection.prepend(winmlGroup);
+      }
+    }
+
+    const input = document.getElementById('settingsSearch');
+    const empty = document.getElementById('settingsSearchEmpty');
+    if (!input) return;
+    const sections = Array.from(document.querySelectorAll('.settings-section'));
+    const navItems = Array.from(document.querySelectorAll('.sidebar-item[data-target]'));
+    const normalize = value => String(value || '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
+    const apply = () => {
+      const query = normalize(input.value);
+      if (!query) {
+        document.querySelectorAll('.setting-group.search-hidden').forEach(el => el.classList.remove('search-hidden'));
+        navItems.forEach(el => el.classList.remove('search-hidden'));
+        if (empty) empty.classList.add('hidden');
+        return;
+      }
+      let total = 0;
+      for (const section of sections) {
+        let sectionMatches = 0;
+        for (const group of section.querySelectorAll('.setting-group')) {
+          const match = normalize(group.textContent).includes(query);
+          group.classList.toggle('search-hidden', !match);
+          if (match) sectionMatches++;
+        }
+        total += sectionMatches;
+        const nav = navItems.find(el => el.dataset.target === section.id);
+        if (nav) nav.classList.toggle('search-hidden', sectionMatches === 0);
+      }
+      if (empty) empty.classList.toggle('hidden', total !== 0);
+      const firstNav = navItems.find(el => !el.classList.contains('search-hidden'));
+      if (firstNav) firstNav.click();
+    };
+    input.addEventListener('input', apply);
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { input.value = ''; apply(); input.blur(); }
+    });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
+  else init();
+})();
