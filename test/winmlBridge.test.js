@@ -104,20 +104,42 @@ describe('winml ortBridge', () => {
             expect(stats).to.include('inf=1');
         });
 
-        it('_tensorRtRtxOptions generates diff_step profile with env-overridable seq lens', () => {
+        it('_tensorRtRtxOptions defaults to no profile (opt-in only)', () => {
             const { _tensorRtRtxOptions } = ortBridge.__test;
             const opts = _tensorRtRtxOptions('C:/models/diff_step_dml.onnx');
-            expect(opts.nv_profile_min_shapes).to.equal('xt_input:1x1x128;t:1;cond:1x1x1024;xt_mask:1x1');
-            expect(opts.nv_profile_opt_shapes).to.include('xt_input:1x1950x128');
-            expect(opts.nv_profile_max_shapes).to.include('xt_input:1x4096x128');
+            expect(opts.nv_profile_min_shapes).to.be.undefined;
+            expect(opts.nv_profile_opt_shapes).to.be.undefined;
+            expect(opts.nv_profile_max_shapes).to.be.undefined;
         });
 
-        it('_tensorRtRtxOptions generates preflow profile', () => {
+        it('_tensorRtRtxOptions generates diff_step profile with SXS_TRTRTX_EXPLICIT_PROFILE=1', () => {
             const { _tensorRtRtxOptions } = ortBridge.__test;
-            const opts = _tensorRtRtxOptions('C:/models/preflow.onnx');
-            expect(opts.nv_profile_min_shapes).to.equal('features:1x1x512');
-            expect(opts.nv_profile_opt_shapes).to.include('features:1x1500x512');
-            expect(opts.nv_profile_max_shapes).to.include('features:1x4096x512');
+            const saved = process.env.SXS_TRTRTX_EXPLICIT_PROFILE;
+            process.env.SXS_TRTRTX_EXPLICIT_PROFILE = '1';
+            try {
+                const opts = _tensorRtRtxOptions('C:/models/diff_step_dml.onnx');
+                expect(opts.nv_profile_min_shapes).to.equal('xt_input:1x1x128;t:1;cond:1x1x1024;xt_mask:1x1');
+                expect(opts.nv_profile_opt_shapes).to.include('xt_input:1x1950x128');
+                expect(opts.nv_profile_max_shapes).to.include('xt_input:1x4096x128');
+            } finally {
+                if (saved === undefined) delete process.env.SXS_TRTRTX_EXPLICIT_PROFILE;
+                else process.env.SXS_TRTRTX_EXPLICIT_PROFILE = saved;
+            }
+        });
+
+        it('_tensorRtRtxOptions generates preflow profile with SXS_TRTRTX_EXPLICIT_PROFILE=1', () => {
+            const { _tensorRtRtxOptions } = ortBridge.__test;
+            const saved = process.env.SXS_TRTRTX_EXPLICIT_PROFILE;
+            process.env.SXS_TRTRTX_EXPLICIT_PROFILE = '1';
+            try {
+                const opts = _tensorRtRtxOptions('C:/models/preflow.onnx');
+                expect(opts.nv_profile_min_shapes).to.equal('features:1x1x512');
+                expect(opts.nv_profile_opt_shapes).to.include('features:1x1500x512');
+                expect(opts.nv_profile_max_shapes).to.include('features:1x4096x512');
+            } finally {
+                if (saved === undefined) delete process.env.SXS_TRTRTX_EXPLICIT_PROFILE;
+                else process.env.SXS_TRTRTX_EXPLICIT_PROFILE = saved;
+            }
         });
 
         it('_tensorRtRtxOptions returns empty for non-TRT models', () => {
@@ -126,27 +148,14 @@ describe('winml ortBridge', () => {
             expect(Object.keys(opts)).to.deep.equal([]);
         });
 
-        it('_tensorRtRtxOptions respects SXS_TRTRTX_NO_PROFILE=1', () => {
-            const { _tensorRtRtxOptions } = ortBridge.__test;
-            const saved = process.env.SXS_TRTRTX_NO_PROFILE;
-            process.env.SXS_TRTRTX_NO_PROFILE = '1';
-            try {
-                const opts = _tensorRtRtxOptions('C:/models/diff_step_dml.onnx');
-                expect(opts.nv_profile_min_shapes).to.be.undefined;
-                expect(opts.nv_profile_opt_shapes).to.be.undefined;
-                expect(opts.nv_profile_max_shapes).to.be.undefined;
-            } finally {
-                if (saved === undefined) delete process.env.SXS_TRTRTX_NO_PROFILE;
-                else process.env.SXS_TRTRTX_NO_PROFILE = saved;
-            }
-        });
-
-        it('_tensorRtRtxOptions respects custom env seq lens', () => {
+        it('_tensorRtRtxOptions respects custom env seq lens with explicit profile', () => {
             const { _tensorRtRtxOptions } = ortBridge.__test;
             const savedOpt = process.env.SXS_TRTRTX_OPT_SEQ;
             const savedMax = process.env.SXS_TRTRTX_MAX_SEQ;
+            const savedExp = process.env.SXS_TRTRTX_EXPLICIT_PROFILE;
             process.env.SXS_TRTRTX_OPT_SEQ = '2048';
             process.env.SXS_TRTRTX_MAX_SEQ = '8192';
+            process.env.SXS_TRTRTX_EXPLICIT_PROFILE = '1';
             try {
                 const opts = _tensorRtRtxOptions('C:/models/diff_step_dml.onnx');
                 expect(opts.nv_profile_opt_shapes).to.include('xt_input:1x2048x128');
@@ -156,6 +165,8 @@ describe('winml ortBridge', () => {
                 else process.env.SXS_TRTRTX_OPT_SEQ = savedOpt;
                 if (savedMax === undefined) delete process.env.SXS_TRTRTX_MAX_SEQ;
                 else process.env.SXS_TRTRTX_MAX_SEQ = savedMax;
+                if (savedExp === undefined) delete process.env.SXS_TRTRTX_EXPLICIT_PROFILE;
+                else process.env.SXS_TRTRTX_EXPLICIT_PROFILE = savedExp;
             }
         });
 

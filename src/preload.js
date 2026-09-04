@@ -164,6 +164,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   getSettings: () => ipcRenderer.invoke('settings:getSettings'),
   saveSettings: (settings) => ipcRenderer.invoke('settings:saveSettings', settings),
   checkModels: () => ipcRenderer.invoke('settings:check-models'),
+  runTrtRtxDiagnostic: () => ipcRenderer.invoke('settings:run-trtrtx-diagnostic'),
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
   getAudioDevices: () => ipcRenderer.invoke('audio:getDevices'),
   audioPlay: (audioData, options) => ipcRenderer.invoke('audio:play', { audioData, options }),

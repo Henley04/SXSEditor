@@ -401,18 +401,21 @@ class WinMLSession {
  * Build provider-specific options for TensorRT-RTX EP.
  *
  * Supports three modes via env vars:
- *  - SXS_TRTRTX_NO_PROFILE=1  → skip profile shapes (diagnostic only, adds dump)
- *  - SXS_TRTRTX_OPT_SEQ / SXS_TRTRTX_MAX_SEQ → override profile sequence lengths
+ *  - SXS_TRTRTX_EXPLICIT_PROFILE=1 → opt in to experimental explicit profiles
+ *  - SXS_TRTRTX_OPT_SEQ / SXS_TRTRTX_MAX_SEQ → override opt-in profile lengths
  *  - SXS_WINML_TRACE=1 → auto-add nv_detailed_build_log + nv_dump_subgraphs
  */
 function _tensorRtRtxOptions(modelPath) {
     const name = path.basename(modelPath || '').toLowerCase();
-    const noProfile = process.env.SXS_TRTRTX_NO_PROFILE === '1';
+    const useExplicitProfile = process.env.SXS_TRTRTX_EXPLICIT_PROFILE === '1';
     const maxSeq = Math.max(2048, Number.parseInt(process.env.SXS_TRTRTX_MAX_SEQ || '4096', 10) || 4096);
     const optSeq = Math.min(maxSeq, Math.max(1, Number.parseInt(process.env.SXS_TRTRTX_OPT_SEQ || '1950', 10) || 1950));
     const options = {};
 
-    if (!noProfile) {
+    // Do not force profiles by default. These optimized models run with EP-inferred
+    // shapes, while an incompatible explicit profile causes execution-context
+    // enqueue failures. Keep profiles behind an explicit diagnostic opt-in.
+    if (useExplicitProfile) {
         if (name.includes('diff_step')) {
             options.nv_profile_min_shapes = 'xt_input:1x1x128;t:1;cond:1x1x1024;xt_mask:1x1';
             options.nv_profile_opt_shapes = `xt_input:1x${optSeq}x128;t:1;cond:1x${optSeq}x1024;xt_mask:1x${optSeq}`;
@@ -442,10 +445,21 @@ function _tensorRtRtxOptions(modelPath) {
  * @param {Object} outputs - session.run() return value {name: {type, data, dims}}
  * @throws {Error} with descriptive message on validation failure
  */
-function validateTRTOutput(outputs) {
-    for (const [name, tensor] of Object.entries(outputs)) {
+function validateTRTOutput(outputs, expectedNames = []) {
+    const entries = Object.entries(outputs || {});
+    if (entries.length === 0) throw new Error('TRT returned no outputs');
+    for (const expected of expectedNames) {
+        if (!Object.prototype.hasOwnProperty.call(outputs, expected)) {
+            throw new Error(`TRT missing expected output '${expected}'`);
+        }
+    }
+    let validated = 0;
+    for (const [name, tensor] of entries) {
         const data = tensor.data;
-        if (!data || typeof data.length !== 'number' || data.length === 0) continue;
+        if (!data || typeof data.length !== 'number' || data.length === 0) {
+            throw new Error(`TRT output '${name}' is missing or empty`);
+        }
+        validated++;
         const n = data.length;
         const isFp16 = tensor.type === 'float16';
         let zero = 0, nan = 0, inf = 0;
@@ -473,6 +487,7 @@ function validateTRTOutput(outputs) {
             throw new Error(`TRT output '${name}' numerically silent: rms=${rms.toExponential(3)}`);
         }
     }
+    if (validated === 0) throw new Error('TRT produced no valid tensor outputs');
 }
 
 /**

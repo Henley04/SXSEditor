@@ -235,7 +235,7 @@ jobs:
             if ($text.Contains("d2h-copy-v2")) {
               Write-Host "  OK: contains d2h-copy-v2" -ForegroundColor Green
             } else {
-              Write-Host "  WARNING: missing d2h-copy-v2 (legacy addon)" -ForegroundColor Yellow
+              throw "Packaged addon is legacy: $($addon.FullName)"
             }
           }
 

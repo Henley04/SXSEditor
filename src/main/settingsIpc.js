@@ -1,4 +1,4 @@
-const { ipcMain } = require('electron');
+const { ipcMain, shell } = require('electron');
 const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, normalizeSettings } = require('./settings');
 const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectNPUCached, getVocoderChunkFramesInfo, getVocoderChunkFramesTable } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
@@ -362,6 +362,114 @@ function registerSettingsIpc() {
 
   ipcMain.handle('get-locale', async () => {
     return require('./locale').getLocale();
+  });
+
+  ipcMain.handle('settings:run-trtrtx-diagnostic', async () => {
+    try {
+      const settings = loadSettings();
+      const hw = await ensureGPUInfo().catch(() => null);
+      // Resolve EP packages in the Electron main process, where WinRT/package
+      // identity is available. The diagnostic child runs as plain Node and
+      // must receive the same snapshots as the normal SVS worker.
+      const winmlProvider = require('../inference/winml/winmlProvider');
+      const winmlEps = await winmlProvider.getReadyEpLibraries();
+      const payload = {
+        modelDir: getModelDir(), precision: settings.modelPrecision || 'fp16',
+        dmlDeviceId: Number(settings.preferredDeviceId) || 0,
+        gpu: hw?.bestGPU?.name || hw?.gpuName || null,
+        settingsSnapshot: {
+          ...settings,
+          winmlEnabled: true,
+          diagnosticMode: true,
+        },
+        winmlEps,
+      };
+      const fs = require('node:fs');
+      const diagnosticRoot = require('node:path').join(payload.modelDir, 'diagnostics');
+      payload.dumpDir = require('node:path').join(
+        diagnosticRoot,
+        `trtrtx-${new Date().toISOString().replace(/[:.]/g, '-')}`
+      );
+      fs.mkdirSync(payload.dumpDir, { recursive: true });
+      const { fork } = require('node:child_process');
+      const path = require('node:path');
+      // settingsIpc is compiled into .webpack/main/index.js. At runtime
+      // __dirname already points to .webpack/main, so moving to ".." produced
+      // the invalid .webpack/inference/winml path seen in the crash log.
+      const runnerCandidates = [
+        path.join(__dirname, 'inference', 'winml', 'trtDiagnosticRunner.js'),
+        path.resolve(process.cwd(), '.webpack', 'main', 'inference', 'winml', 'trtDiagnosticRunner.js'),
+        path.resolve(process.cwd(), 'src', 'inference', 'winml', 'trtDiagnosticRunner.js'),
+      ];
+      const runner = runnerCandidates.find(candidate => fs.existsSync(candidate));
+      if (!runner) {
+        throw new Error(`TensorRT-RTX diagnostic runner was not packaged. Tried: ${runnerCandidates.join(', ')}`);
+      }
+      // Vendor EP failures may terminate the process without throwing. A real
+      // child process isolates Electron from native TRT/driver crashes. A
+      // worker_thread is insufficient because it shares the same process.
+      const report = await new Promise((resolve, reject) => {
+        const child = fork(runner, [], {
+          env: {
+            ...process.env,
+            ELECTRON_RUN_AS_NODE: '1',
+            SXS_TRT_DIAGNOSTIC_PAYLOAD: JSON.stringify(payload),
+            SXS_WINML_TRACE: '1',
+            SXS_TRTRTX_NO_PROFILE: '1',
+          },
+          stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+        });
+        let settled = false;
+        child.stdout?.on('data', chunk => process.stdout.write(`[TRTRTX-DIAG] ${chunk}`));
+        child.stderr?.on('data', chunk => process.stderr.write(`[TRTRTX-DIAG] ${chunk}`));
+        child.on('message', message => {
+          if (settled) return;
+          if (message?.type === 'result') {
+            if (!message.report || typeof message.report !== 'object') {
+              settled = true;
+              reject(new Error('TensorRT-RTX diagnostic returned an invalid report'));
+              return;
+            }
+            settled = true;
+            resolve(message.report);
+          } else if (message?.type === 'error') {
+            settled = true;
+            reject(new Error(message.error));
+          }
+        });
+        child.on('error', error => {
+          if (!settled) { settled = true; reject(error); }
+        });
+        child.on('exit', (code, signal) => {
+          if (!settled) {
+            settled = true;
+            // Native access violations cannot be caught in JS. Recover the
+            // latest atomic checkpoint so the application still opens a useful
+            // report instead of losing all completed probes.
+            const partialPath = require('node:path').join(payload.dumpDir, 'report.partial.json');
+            try {
+              const partial = JSON.parse(fs.readFileSync(partialPath, 'utf8'));
+              if (!partial || typeof partial !== 'object') throw new Error('invalid partial report');
+              partial.summary = `NATIVE_CRASH code=${code} signal=${signal || 'none'}`;
+              partial.nativeCrash = { code, signal: signal || null };
+              fs.writeFileSync(require('node:path').join(payload.dumpDir, 'report.json'), JSON.stringify(partial, null, 2));
+              fs.writeFileSync(require('node:path').join(payload.dumpDir, 'report.txt'),
+                `summary=${partial.summary}\ndumpDir=${payload.dumpDir}\nSee report.partial.json for completed checks.`);
+              resolve(partial);
+            } catch (_) {
+              reject(new Error(
+                `TensorRT-RTX diagnostic process exited unexpectedly: code=${code} signal=${signal || 'none'}`
+              ));
+            }
+          }
+        });
+      });
+      await shell.openPath(report.dumpDir);
+      return { success: true, report };
+    } catch (err) {
+      console.error('[TRTRTX][diagnostic] failed:', err);
+      return { success: false, error: err.message || String(err) };
+    }
   });
 
   ipcMain.handle('settings:check-models', async () => {

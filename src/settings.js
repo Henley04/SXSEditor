@@ -123,6 +123,8 @@ const releaseDiffStepBeforeVocoderCheckbox = document.getElementById('releaseDif
 const ortEnableMemPatternCheckbox = document.getElementById('ortEnableMemPattern');
 const ortEnableCpuMemArenaCheckbox = document.getElementById('ortEnableCpuMemArena');
 const winmlEnabledCheckbox = document.getElementById('winmlEnabled');
+const runTrtRtxDiagnosticButton = document.getElementById('runTrtRtxDiagnostic');
+const trtRtxDiagnosticStatus = document.getElementById('trtRtxDiagnosticStatus');
 const ortGraphOptLevelSelect = document.getElementById('ortGraphOptLevel');
 const ortExecutionModeSelect = document.getElementById('ortExecutionMode');
 const ortForceMemPatternOnDmlCheckbox = document.getElementById('ortForceMemPatternOnDml');
@@ -2359,3 +2361,25 @@ document.querySelectorAll('.sidebar-item').forEach(item => {
         if (section) section.classList.remove('hidden');
     });
 });
+
+
+if (runTrtRtxDiagnosticButton) {
+  runTrtRtxDiagnosticButton.addEventListener('click', async () => {
+    runTrtRtxDiagnosticButton.disabled = true;
+    const oldText = runTrtRtxDiagnosticButton.textContent;
+    runTrtRtxDiagnosticButton.textContent = t('settings.trtRtxDiagnosticRunning');
+    if (trtRtxDiagnosticStatus) trtRtxDiagnosticStatus.textContent = t('settings.trtRtxDiagnosticRunningHint');
+    try {
+      const result = await window.electronAPI.runTrtRtxDiagnostic();
+      if (!result?.success) throw new Error(result?.error || 'Diagnostic failed');
+      const summary = result.report?.summary || 'UNKNOWN';
+      if (trtRtxDiagnosticStatus) trtRtxDiagnosticStatus.textContent = `${t('settings.trtRtxDiagnosticDone')} ${summary}
+${result.report.dumpDir}`;
+    } catch (error) {
+      if (trtRtxDiagnosticStatus) trtRtxDiagnosticStatus.textContent = `${t('settings.trtRtxDiagnosticFailed')} ${error.message}`;
+    } finally {
+      runTrtRtxDiagnosticButton.disabled = false;
+      runTrtRtxDiagnosticButton.textContent = oldText;
+    }
+  });
+}

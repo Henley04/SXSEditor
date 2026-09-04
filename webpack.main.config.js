@@ -90,6 +90,18 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/inference/pipeline/float16Patch.js'),
         },
         {
+          // These files run in an isolated child process and therefore cannot
+          // be hidden inside main/index.js. Preserve their relative directory
+          // layout so trtDiagnosticRunner can require trtDiagnostic and the
+          // existing inference modules beside it.
+          from: path.resolve(__dirname, 'src/inference/winml/trtDiagnosticRunner.js'),
+          to: path.resolve(__dirname, '.webpack/main/inference/winml/trtDiagnosticRunner.js'),
+        },
+        {
+          from: path.resolve(__dirname, 'src/inference/winml/trtDiagnostic.js'),
+          to: path.resolve(__dirname, '.webpack/main/inference/winml/trtDiagnostic.js'),
+        },
+        {
           from: path.resolve(__dirname, 'native/build/Release/executorch_runtime.node'),
           to: path.resolve(__dirname, '.webpack/main/native/executorch_runtime.node'),
           noErrorOnMissing: true,

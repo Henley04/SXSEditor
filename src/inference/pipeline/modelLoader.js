@@ -179,7 +179,7 @@ const DUMMY_TEST_INPUTS_NPU = {
  * @param {Object} baseDummy - 原精度对应的 dummy（无匹配输入时兜底）
  * @returns {Object} feeds
  */
-function _rebuildDummyForSession(session, baseDummy, nonZero = false) {
+function _rebuildDummyForSession(session, baseDummy, nonZero = false, dynamicSeqLen = 3) {
     try {
         const meta = session.inputMetadata;
         if (!Array.isArray(meta) || meta.length === 0) return baseDummy;
@@ -200,7 +200,12 @@ function _rebuildDummyForSession(session, baseDummy, nonZero = false) {
             const isBool = type.includes('bool');
             const isFp16 = type.includes('16') && !isBool;
             // 符号/负维度（如 'batch'、'seq'、-1）替换为 3，生成合法整数 dims 供 Tensor 使用
-            const numDims = shape.map(s => (typeof s === 'number' && s > 0) ? s : 3);
+            const numDims = shape.map((s, index) => {
+                if (typeof s === 'number' && s > 0) return s;
+                // Batch stays 1. Other dynamic dimensions use a representative
+                // length for TRT capability validation rather than the old 3.
+                return index === 0 ? 1 : dynamicSeqLen;
+            });
             // 符号维度按 3 填充；缺 shape 时回退 [1, 3, 128]
             let count = 1;
             for (const s of numDims) count *= s;
@@ -647,15 +652,18 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                 if (winmlRes && winmlRes.session) {
                     const wsession = winmlRes.session;
                     const isTRT = String(winmlRes.ep).includes('NvTensorRTRTX');
+                    // Every newly created TRT session must validate itself. A model-level
+                    // process cache cannot prove that a recreated engine is healthy.
+                    const shouldValidate = isTRT || runValidation;
                     try {
-                        if (runValidation) {
+                        if (shouldValidate) {
                             // For TRT sessions, use non-zero dummy inputs. All-zero
                             // warmup can legitimately produce all-zero output for some
                             // networks, making it impossible to detect TRT compilation
                             // bugs. NonZero=true fills float arrays with a deterministic
                             // pattern so any all-zero TRT output is a clear red flag.
                             const feeds = (sessionKey === 'diffStep' || isTRT || sessionKey === 'preflow')
-                                ? _rebuildDummyForSession(wsession, dummyInputs, isTRT)
+                                ? _rebuildDummyForSession(wsession, dummyInputs, isTRT, isTRT ? 512 : 3)
                                 : (overrideDummyInputs || dummyInputs);
                             const outputs = await wsession.run(feeds);
                             if (isTRT) {
@@ -664,14 +672,17 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                                 // silently produce zeros without ORT reporting an error.
                                 // On failure, throws → caught below → falls through to DML.
                                 const { validateTRTOutput } = require('../winml/ortBridge');
-                                validateTRTOutput(outputs);
+                                const expected = sessionKey === 'diffStep'
+                                    ? ['flow_pred']
+                                    : (sessionKey === 'preflow' ? ['processed_features'] : []);
+                                validateTRTOutput(outputs, expected);
                             }
                             _validatedSessionModels.add(validationKey);
                             console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=ok${isTRT ? ' (non-zero TRT output verified)' : ''}`);
                         } else {
                             console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=skip reason=reload`);
                         }
-                        return { session: wsession, ep: winmlRes.ep, warmedUp: runValidation };
+                        return { session: wsession, ep: winmlRes.ep, warmedUp: shouldValidate };
                     } catch (werr) {
                         const wr = (werr.message || '').split('\n')[0].slice(0, 120);
                         console.warn(`[Model][fallback] name=${modelName} from=winml to=dml/cpu stage=warmup error=${wr}`);
