@@ -148,7 +148,7 @@ napi_value Init(napi_env env, napi_callback_info info) {
         CHECK_NAPI(napi_create_uint32(env, g_apiVersion, &ver));
     CHECK_NAPI(napi_set_named_property(env, obj, "apiVersion", ver));
     napi_value buildTag;
-    CHECK_NAPI(napi_create_string_utf8(env, "d2h-copy-v2", NAPI_AUTO_LENGTH, &buildTag));
+    CHECK_NAPI(napi_create_string_utf8(env, "d2h-copy-v3", NAPI_AUTO_LENGTH, &buildTag));
     CHECK_NAPI(napi_set_named_property(env, obj, "buildTag", buildTag));
     return obj;
     }
@@ -185,6 +185,11 @@ napi_value Init(napi_env env, napi_callback_info info) {
     CHECK_NAPI(napi_create_object(env, &obj));
     CHECK_NAPI(napi_create_uint32(env, g_apiVersion, &ver));
     CHECK_NAPI(napi_set_named_property(env, obj, "apiVersion", ver));
+    // Return the build tag on first init too. A corrected source tree may still
+    // load an older prebuilt binary, so the runtime log must be authoritative.
+    napi_value buildTag;
+    CHECK_NAPI(napi_create_string_utf8(env, "d2h-copy-v3", NAPI_AUTO_LENGTH, &buildTag));
+    CHECK_NAPI(napi_set_named_property(env, obj, "buildTag", buildTag));
     return obj;
 }
 
@@ -618,10 +623,18 @@ napi_value Run(napi_env env, napi_callback_info info) {
         napi_value ab, oo, tv, da;
         if (napi_create_external_arraybuffer(env, copy, bytes,
                 [](napi_env, void* p, void*) { free(p); }, nullptr, &ab) != napi_ok) {
-            free(copy);
+            // A regular ArrayBuffer starts zeroed. Copy the completed D2H result
+            // before freeing it, otherwise this fallback silently turns every
+            // successful vendor-EP output into an all-zero tensor.
+            void* jsCopy = nullptr;
             ab = nullptr;
-            napi_create_arraybuffer(env, bytes, &copy, &ab);
-            // extremely unlikely; skip content on failure
+            napi_status allocStatus = napi_create_arraybuffer(env, bytes, &jsCopy, &ab);
+            if (allocStatus != napi_ok) {
+                free(copy);
+                CHECK_NAPI(allocStatus);
+            }
+            if (bytes > 0) memcpy(jsCopy, copy, bytes);
+            free(copy);
         }
         CHECK_NAPI(napi_create_object(env, &oo));
         CHECK_NAPI(napi_create_string_utf8(env, NameFromType(et), NAPI_AUTO_LENGTH, &tv));

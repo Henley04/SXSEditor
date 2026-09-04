@@ -104,7 +104,7 @@ describe('winml ortBridge', () => {
             expect(stats).to.include('inf=1');
         });
 
-        it('_tensorRtRtxOptions defaults to no profile (opt-in only)', () => {
+        it('_tensorRtRtxOptions defaults to no explicit profile', () => {
             const { _tensorRtRtxOptions } = ortBridge.__test;
             const opts = _tensorRtRtxOptions('C:/models/diff_step_dml.onnx');
             expect(opts.nv_profile_min_shapes).to.be.undefined;
@@ -127,7 +127,7 @@ describe('winml ortBridge', () => {
             }
         });
 
-        it('_tensorRtRtxOptions generates preflow profile with SXS_TRTRTX_EXPLICIT_PROFILE=1', () => {
+        it('_tensorRtRtxOptions generates a preflow profile by default', () => {
             const { _tensorRtRtxOptions } = ortBridge.__test;
             const saved = process.env.SXS_TRTRTX_EXPLICIT_PROFILE;
             process.env.SXS_TRTRTX_EXPLICIT_PROFILE = '1';
@@ -148,7 +148,7 @@ describe('winml ortBridge', () => {
             expect(Object.keys(opts)).to.deep.equal([]);
         });
 
-        it('_tensorRtRtxOptions respects custom env seq lens with explicit profile', () => {
+        it('_tensorRtRtxOptions respects custom env seq lens', () => {
             const { _tensorRtRtxOptions } = ortBridge.__test;
             const savedOpt = process.env.SXS_TRTRTX_OPT_SEQ;
             const savedMax = process.env.SXS_TRTRTX_MAX_SEQ;

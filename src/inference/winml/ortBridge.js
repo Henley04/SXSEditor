@@ -412,9 +412,10 @@ function _tensorRtRtxOptions(modelPath) {
     const optSeq = Math.min(maxSeq, Math.max(1, Number.parseInt(process.env.SXS_TRTRTX_OPT_SEQ || '1950', 10) || 1950));
     const options = {};
 
-    // Do not force profiles by default. These optimized models run with EP-inferred
-    // shapes, while an incompatible explicit profile causes execution-context
-    // enqueue failures. Keep profiles behind an explicit diagnostic opt-in.
+    // TRT-RTX EP 2.30 can create an engine with these explicit profiles but
+    // fail later with execution-context enqueue errors on real dynamic inputs.
+    // Keep profiles opt-in until the provider accepts the complete model-specific
+    // profile contract. The native D2H/ArrayBuffer fix remains enabled.
     if (useExplicitProfile) {
         if (name.includes('diff_step')) {
             options.nv_profile_min_shapes = 'xt_input:1x1x128;t:1;cond:1x1x1024;xt_mask:1x1';
