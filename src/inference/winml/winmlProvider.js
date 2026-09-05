@@ -9,6 +9,14 @@
  *       ... -> OpenVINO (NPU) / OpenVINO.AUTO
  *   - small detectors (FCPE/RMVPE/ROSVOT) are intentionally NOT adapted.
  *
+ * Single EP spanning multiple hardware (e.g. OpenVINO exposes one
+ * OpenVINOExecutionProvider EP whose device entries cover NPU/CPU/GPU): those
+ * devices all share the same epName, so the JS chain hands ALL of that EP's
+ * device indices to one session (createSessionWithEps) and ORT/WinML picks the
+ * device internally — we do not pin a deviceType from JS for the grouped
+ * candidate. A separate `.AUTO` variant (epName ending in `.AUTO`) and the
+ * explicit NPU entry are appended only for static-shape int8 models.
+ *
  * All failures degrade to null so callers fall back to the existing chains.
  */
 
@@ -42,7 +50,9 @@ function _getSettings() {
     }
 }
 
-/** User opt-in gate (experimental feature). */
+/** Gate for the WinML branch. On by default with backend auto/winml; closed
+ * (returns false) when the user opts into DML (nativeInferenceBackend==='dml')
+ * or the platform is unsupported. */
 function isWinmlEnabled() {
     if (!winmlCatalog.isPlatformSupported()) return false;
     const s = _getSettings();
@@ -57,7 +67,7 @@ function isWinmlEnabled() {
  */
 async function _resolveReadyEpLibraries() {
     if (!isWinmlEnabled()) {
-        console.log('[WinML] getReadyEpLibraries: gate closed');
+        console.log('[WinML] getReadyEpLibraries: gate closed (winmlEnabled=false / backend=dml / platform unsupported)');
         return [];
     }
     const s = _getSettings();
@@ -418,7 +428,7 @@ async function getWinmlCandidates(useStaticShapes) {
     if (!isWinmlEnabled()) {
         if (!_emptyReasonLogged) {
             _emptyReasonLogged = true;
-            console.log(`[WinML] gate closed (enabled=false or platform unsupported); platform=${process.platform}/${process.arch}, snapshot=${JSON.stringify(globalThis.__SXS_SETTINGS_SNAPSHOT__ || null)}`);
+            console.log(`[WinML] gate closed (winmlEnabled=false or platform unsupported); platform=${process.platform}/${process.arch}, snapshot=${JSON.stringify(globalThis.__SXS_SETTINGS_SNAPSHOT__ || null)}`);
         }
         return [];
     }
@@ -440,6 +450,11 @@ async function getWinmlCandidates(useStaticShapes) {
     }
 
     const devices = ortBridge.listDevices();
+    const indexTypeOf = (idx) => {
+        const d = devices.find((x) => x.index === idx);
+        return d ? (d.deviceType || '?') : '?';
+    };
+    const fmtCandidate = (c) => `${c.epName}@${c.indices.map((i) => `${i}:${indexTypeOf(i)}`).join(',')}`;
     const byName = (name, deviceType) => devices
         .filter((d) => d.epName === name && (!deviceType || d.deviceType === deviceType))
         .map((d) => d.index);
@@ -463,7 +478,17 @@ async function getWinmlCandidates(useStaticShapes) {
         const auto = devices.filter((d) => d.epName.endsWith('.AUTO')).map((d) => d.index);
         if (auto.length) chain.push({ epName: 'OpenVINO.AUTO', indices: auto });
     }
-    console.log(`[WinML][select] shape=${useStaticShapes ? 'static' : 'dynamic'} chain=${chain.map(c => `${c.epName}@${c.indices.join(',')}`).join('>') || 'none'} devices=${devices.map(d => `${d.index}:${d.epName}/${d.deviceType}`).join(',') || 'none'}`);
+    // Log the resolved chain with per-index hardware so a single EP that spans
+    // multiple hardware (e.g. OpenVINO NPU/CPU/GPU) is unambiguous in the console.
+    console.log(`[WinML][select] shape=${useStaticShapes ? 'static' : 'dynamic'} chain=${chain.map(fmtCandidate).join('>') || 'none'} devices=${devices.map((d) => `${d.index}:${d.epName}/${d.deviceType || '?'}`).join(',') || 'none'}`);
+    // Explain single-EP multi-hardware grouping: all indices of that EP ride in
+    // one session, and ORT/WinML picks the actual device internally at creation.
+    for (const c of chain) {
+        const types = [...new Set(c.indices.map(indexTypeOf).filter((t) => t !== '?'))];
+        if (types.length > 1) {
+            console.log(`[WinML][select] ${c.epName} spans ${types.length} hardware (${types.join('/')}); passing all ${c.indices.length} device indices to one session — device is chosen by ORT/WinML at session creation`);
+        }
+    }
     return chain;
 }
 
