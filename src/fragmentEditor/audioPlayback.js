@@ -409,6 +409,48 @@ function stopFragmentExclusivePlayback() {
   window.electronAPI.audioStop().catch(() => {});
 }
 
+/**
+ * Buffer underrun detection: when the playhead reaches the furthest received
+ * audio position (_streamingBufferEndSec) and inference is not yet complete,
+ * freeze the playhead and show "waiting for inference". Prevents the playhead
+ * from advancing through silence when chunks arrive slower than realtime.
+ * The next chunk callback resets _streamingWaitingForInference and resumes.
+ * Returns true when the wait state was entered (caller must stop its own loop).
+ */
+function _checkFragmentStreamingUnderrun() {
+  if (!_streamingStarted || _streamingInferenceDone || _streamingWaitingForInference) return false;
+  if (!getFragmentIsPlaying()) return false;
+  const ctx = getFragmentAudioContext();
+  if (!ctx) return false;
+  const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
+  const curTime = getFragmentPlaybackOffset() + elapsed;
+  if (curTime < _streamingBufferEndSec) return false;
+  _streamingWaitingForInference = true;
+  // Freeze playhead at buffer frontier (not at elapsed which has already
+  // advanced past the received audio into silence).
+  setFragmentCurrentTime(_streamingBufferEndSec);
+  const raf = getFragmentPlayheadRaf();
+  if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+  render();
+  return true;
+}
+
+// 后台 watchdog：rAF 在窗口最小化/标签隐藏时会被挂起，导致 buffer underrun
+// 检测失效（音频仍经 WebAudio 后台播放）。用 setTimeout 兜底，使等待推理
+// 在最小化时同样生效。自动重排并在流式结束后自动停止。
+let _fragmentStreamingWatchdogTimer = null;
+function _ensureFragmentStreamingWatchdog() {
+  if (_fragmentStreamingWatchdogTimer) return;
+  let stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    if (!_streamingStarted || streamingFinished) { _fragmentStreamingWatchdogTimer = null; stopped = true; return; }
+    try { _checkFragmentStreamingUnderrun(); } catch (_) {}
+    _fragmentStreamingWatchdogTimer = setTimeout(tick, 250);
+  };
+  _fragmentStreamingWatchdogTimer = setTimeout(tick, 250);
+}
+
 export function updateFragmentPlayhead() {
   _ensureVisibilityHandler();
   _sharedUpdateFn = updateFragmentPlayhead;
@@ -419,24 +461,9 @@ export function updateFragmentPlayhead() {
   const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
   setFragmentCurrentTime(getFragmentPlaybackOffset() + elapsed);
 
-  // Buffer underrun detection: when the playhead reaches the furthest
-  // received audio position (_streamingBufferEndSec) and inference is not
-  // yet complete, freeze the playhead and show "waiting for inference".
-  // This prevents the playhead from advancing through silence when chunks
-  // arrive slower than realtime playback. When the next chunk arrives, the
-  // chunk callback will reset _streamingWaitingForInference and resume.
-  if (_streamingStarted && !_streamingInferenceDone && !_streamingWaitingForInference) {
-    if (getFragmentCurrentTime() >= _streamingBufferEndSec) {
-      _streamingWaitingForInference = true;
-      // Freeze playhead at buffer frontier (not at elapsed which has
-      // already advanced past the received audio into silence)
-      setFragmentCurrentTime(_streamingBufferEndSec);
-      const raf = getFragmentPlayheadRaf();
-      if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
-      render();
-      return;
-    }
-  }
+  // Buffer underrun detection (see _checkFragmentStreamingUnderrun).
+  // 窗口最小化时 rAF 会被挂起，由 _ensureFragmentStreamingWatchdog 兜底检测。
+  if (_checkFragmentStreamingUnderrun()) return;
 
   // 流式播放期间跳过 duration 检查：
   // setFragmentAudioData 在 synthesizeFragmentSVS 返回后才更新，流式期间
@@ -843,6 +870,9 @@ export async function playFragment() {
           updateFragmentPlayButton();
           // 启动 playhead rAF 动画循环
           updateFragmentPlayhead();
+          // 启动后台 watchdog：窗口最小化时 rAF 挂起，需用定时器兜底
+          // 检测 buffer underrun，保证等待推理在后台同样生效。
+          _ensureFragmentStreamingWatchdog();
         }
 
         // 处理 playStartPosition > firstNoteStartSec：跳过 chunk 前导音频

@@ -187,6 +187,52 @@ async function _abortStreamingWait(ctx) {
   }
 }
 
+/**
+ * 检测流式播放 buffer underrun：当 playhead 到达已收到音频的最远位置
+ * （buffer 前沿）且推理尚未完成时，进入"等待推理"状态。
+ * - 冻结共享 AudioContext（暂停所有 source 与伴奏，避免伴奏跑过人声缺口）
+ * - 取消 playhead rAF（后续由下一 chunk 回调或 watchdog 恢复）
+ * 返回 true 表示已进入等待状态，调用方需在本次循环中返回停止。
+ */
+function _enterStreamingWaitIfUnderrun(ctx, elapsed) {
+  if (!_streamingActive || _streamingInferenceDone || _streamingWaitingForInference) return false;
+  if (elapsed < _streamingBufferEndSec) return false;
+  _streamingWaitingForInference = true;
+  _streamingWaitStartCtxTime = ctx.currentTime;
+  void _pauseStreamingForInference(ctx);
+  if (state.playheadRaf) {
+    cancelAnimationFrame(state.playheadRaf);
+    state.playheadRaf = null;
+  }
+  dom.timeDisplay.textContent = t('main.waitingForInference');
+  drawPlayheadLine(_streamingBufferEndSec);
+  dom.btnPlay.textContent = t('main.waitingForInference');
+  return true;
+}
+
+// 后台 watchdog：rAF 在窗口最小化/标签隐藏时会被挂起，导致 buffer underrun
+// 检测失效（音频仍经 WebAudio 后台播放）。用 setTimeout 兜底，使等待推理
+// 在最小化时同样生效。自动重排并在流式结束后自动停止。
+let _streamingWatchdogTimer = null;
+function _ensureStreamingWatchdog() {
+  if (_streamingWatchdogTimer) return;
+  let stopped = false;
+  const tick = () => {
+    if (stopped) return;
+    if (!_streamingActive) { _streamingWatchdogTimer = null; stopped = true; return; }
+    try {
+      const ctx = state.audioContext;
+      if (ctx && ctx.state !== 'closed' && state.isPlaying &&
+          !_streamingInferenceDone && !_streamingWaitingForInference) {
+        const elapsed = ctx.currentTime - state.playbackStartTime;
+        _enterStreamingWaitIfUnderrun(ctx, elapsed);
+      }
+    } catch (_) {}
+    _streamingWatchdogTimer = setTimeout(tick, 250);
+  };
+  _streamingWatchdogTimer = setTimeout(tick, 250);
+}
+
 // 流式播放自然完成：所有已调度 source（人声 chunk + 伴奏）均已结束。
 // 提取为独立函数供人声 chunk 与伴奏 source 的 onended 共用，避免重复逻辑。
 function _finishStreamingPlayback() {
@@ -370,6 +416,9 @@ export async function playAll() {
 
       if (canStreamPlayback) {
         _streamingActive = true;
+        // 启动后台 watchdog：窗口最小化时 rAF 挂起，需用定时器兜底
+        // 检测 buffer underrun，保证等待推理在后台同样生效。
+        _ensureStreamingWatchdog();
         streamingChunkCleanup = window.electronAPI.onSVSChunkAudio(async (chunkInfo) => {
           try {
             if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
@@ -1200,22 +1249,8 @@ export function startPlayheadAnimation() {
     // 当 playhead 到达已收到音频的最远位置（buffer 前沿）且推理尚未完成时，
     // 暂停 playhead 并显示"等待推理"，直到下一个 chunk 到达后自动恢复。
     // 这解决了"分段1播完但分段2未推理完"时 playhead 继续前进穿过静音区的问题。
-    if (_streamingActive && !_streamingInferenceDone && !_streamingWaitingForInference) {
-      if (elapsed >= _streamingBufferEndSec) {
-        _streamingWaitingForInference = true;
-        _streamingWaitStartCtxTime = context.currentTime;
-        void _pauseStreamingForInference(context);
-        // 冻结 playhead、伴奏与所有已调度 source 在同一 AudioContext 时间点
-        if (state.playheadRaf) {
-          cancelAnimationFrame(state.playheadRaf);
-          state.playheadRaf = null;
-        }
-        dom.timeDisplay.textContent = t('main.waitingForInference');
-        drawPlayheadLine(_streamingBufferEndSec);
-        dom.btnPlay.textContent = t('main.waitingForInference');
-        return;
-      }
-    }
+    // 窗口最小化时 rAF 会被挂起，由 _ensureStreamingWatchdog 兜底检测。
+    if (_enterStreamingWaitIfUnderrun(context, elapsed)) return;
 
     // 流式播放兜底停止：推理已完成且 playhead 越过播放前沿后，
     // 说明所有已调度的 source 已播完（或 onended 清理未触发）。
