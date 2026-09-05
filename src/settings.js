@@ -14,6 +14,9 @@ import {
 
 const inferenceProviderSelect = document.getElementById('inferenceProvider');
 const inferenceProviderHint = document.getElementById('inferenceProviderHint');
+const nativeBackendGroup = document.getElementById('nativeBackendGroup');
+const nativeInferenceBackendSelect = document.getElementById('nativeInferenceBackend');
+const nativeBackendHint = document.getElementById('nativeBackendHint');
 const inferenceDeviceSelect = document.getElementById('inferenceDevice');
 const webnnStatusValue = document.getElementById('webnnStatusValue');
 const npuStatusValue = document.getElementById('npuStatusValue');
@@ -122,9 +125,6 @@ const releaseDiffStepBeforeVocoderCheckbox = document.getElementById('releaseDif
 // ORT advanced settings
 const ortEnableMemPatternCheckbox = document.getElementById('ortEnableMemPattern');
 const ortEnableCpuMemArenaCheckbox = document.getElementById('ortEnableCpuMemArena');
-const winmlEnabledCheckbox = document.getElementById('winmlEnabled');
-const runTrtRtxDiagnosticButton = document.getElementById('runTrtRtxDiagnostic');
-const trtRtxDiagnosticStatus = document.getElementById('trtRtxDiagnosticStatus');
 const ortGraphOptLevelSelect = document.getElementById('ortGraphOptLevel');
 const ortExecutionModeSelect = document.getElementById('ortExecutionMode');
 const ortForceMemPatternOnDmlCheckbox = document.getElementById('ortForceMemPatternOnDml');
@@ -203,6 +203,8 @@ function applySavedSettingsToUI(currentSetting) {
     if (inferenceProviderSelect) {
         inferenceProviderSelect.value = inferenceProvider;
         updateInferenceProviderHint(inferenceProvider);
+        if (nativeInferenceBackendSelect) nativeInferenceBackendSelect.value = currentSetting.nativeInferenceBackend || 'auto';
+        updateNativeBackendUI(inferenceProvider, nativeInferenceBackendSelect?.value || 'auto');
     }
 
     // Device mode
@@ -388,9 +390,6 @@ function applySavedSettingsToUI(currentSetting) {
     if (ortEnableCpuMemArenaCheckbox) {
         ortEnableCpuMemArenaCheckbox.checked = currentSetting.ortEnableCpuMemArena !== false;
     }
-    if (winmlEnabledCheckbox) {
-        winmlEnabledCheckbox.checked = currentSetting.winmlEnabled === true;
-    }
     if (ortGraphOptLevelSelect) {
         const lvl = ['disabled', 'basic', 'extended', 'all'].includes(currentSetting.ortGraphOptLevel)
             ? currentSetting.ortGraphOptLevel : 'all';
@@ -457,6 +456,26 @@ function updateInferenceProviderHint(provider) {
     } else {
         inferenceProviderHint.textContent = t('settings.inferenceProviderHintOrtnode');
     }
+}
+
+function updateNativeBackendUI(provider, backend) {
+    if (nativeBackendGroup) nativeBackendGroup.classList.toggle('hidden', provider === 'ortweb');
+    const advancedRadio = document.querySelector('input[name="deviceMode"][value="advanced"]');
+    const winmlOnly = provider === 'ortnode' && backend !== 'dml';
+    if (advancedRadio) {
+        advancedRadio.disabled = winmlOnly;
+        advancedRadio.closest('.device-mode-radio')?.classList.toggle('hidden', winmlOnly);
+        if (winmlOnly && advancedRadio.checked) {
+            const smart = document.querySelector('input[name="deviceMode"][value="smart"]');
+            if (smart) smart.checked = true;
+            updateDeviceModeUI('smart');
+        }
+    }
+    if (!nativeBackendHint) return;
+    const key = backend === 'winml' ? 'settings.nativeBackendWinmlHint'
+        : backend === 'dml' ? 'settings.nativeBackendDmlHint'
+        : 'settings.nativeBackendAutoHint';
+    nativeBackendHint.textContent = t(key);
 }
 
 function updateDeviceModeUI(mode) {
@@ -820,7 +839,26 @@ async function loadDevices() {
         const provider = currentSetting?.inferenceProvider || 'ortnode';
 
         // 再获取设备列表（硬件检测可能较慢）
-        const allDevices = await window.electronAPI.getDMLDevices();
+        const backend = nativeInferenceBackendSelect?.value || currentSetting?.nativeInferenceBackend || 'auto';
+        let allDevices = [];
+        let winmlProviders = [];
+        if (provider === 'ortweb') {
+            // Deprecated WebNN is probed only when explicitly selected. Do not enumerate DML/WinML.
+            const result = await window.electronAPI.webnnDetectNPU();
+            if (result?.npuAvailable) allDevices.push({ name: 'NPU (WebNN)', deviceType: 'npu', source: 'webnn' });
+            if (result?.gpuAvailable) allDevices.push({ name: t('settings.webnnGpuDevice'), deviceType: 'webnn-gpu', source: 'webnn' });
+        } else if (backend === 'winml') {
+            // Windows ML Catalog is authoritative. Do not invoke DML, PowerShell GPU or systeminformation discovery.
+            winmlProviders = await window.electronAPI.getWinmlProviders();
+        } else if (backend === 'dml') {
+            allDevices = await window.electronAPI.getDMLDevices({ includeWebnn: false, enrich: false });
+        } else {
+            // Automatic mode starts with Windows ML only. DML is a runtime fallback, not a confusing parallel choice.
+            winmlProviders = await window.electronAPI.getWinmlProviders();
+            if (!winmlProviders.length) {
+                allDevices = await window.electronAPI.getDMLDevices({ includeWebnn: false, enrich: false });
+            }
+        }
         const hasNpu = allDevices.some(d => d.deviceType === 'npu');
         const hasWebnnGpu = allDevices.some(d => d.deviceType === 'webnn-gpu');
         cachedWebnnInfo = {
@@ -833,7 +871,9 @@ async function loadDevices() {
         const devices = provider === 'ortweb'
             ? allDevices.filter(d => d.deviceType === 'npu' || d.deviceType === 'webnn-gpu')
             : allDevices.filter(d => d.deviceType !== 'npu' && d.deviceType !== 'webnn-gpu');
-        cachedDevices = devices;
+        cachedDevices = winmlProviders.length
+            ? winmlProviders.map(ep => ({ name: ep.name, deviceType: 'winml', epName: ep.name, source: 'winml' }))
+            : devices;
 
         // 获取当前硬件信息（可能为 null 如果管道未初始化）
         const hardwareInfo = await window.electronAPI.getCurrentHardware();
@@ -868,40 +908,49 @@ async function loadDevices() {
         }
 
         inferenceDeviceSelect.innerHTML = '';
-
-        const discreteGPUs = devices.filter(d => d.deviceType === 'discrete-gpu' || d.isDiscrete);
-        const autoLabel = provider === 'ortnode' && discreteGPUs.length > 0
-            ? t('settings.autoSelectPreferDiscrete', { name: discreteGPUs[0].name })
-            : t('settings.autoSelect');
-        const autoOption = document.createElement('option');
-        autoOption.value = 'auto';
-        autoOption.textContent = autoLabel;
-        inferenceDeviceSelect.appendChild(autoOption);
-
-        for (const d of devices) {
+        const addOption = (parent, value, label, deviceType = '') => {
             const option = document.createElement('option');
-            if (d.deviceType === 'npu') {
-                option.value = 'npu';
-            } else if (d.deviceType === 'webnn-gpu') {
-                option.value = 'webnn-gpu';
-            } else {
-                option.value = String(d.dxgiAdapterNumber);
+            option.value = value;
+            option.textContent = label;
+            if (deviceType) option.dataset.deviceType = deviceType;
+            parent.appendChild(option);
+        };
+        addOption(inferenceDeviceSelect, 'auto', t('settings.autoSelect'));
+        if (provider === 'ortweb') {
+            for (const d of devices) {
+                const value = d.deviceType === 'npu' ? 'npu' : 'webnn-gpu';
+                addOption(inferenceDeviceSelect, value, getDeviceOptionText(d), d.deviceType);
             }
-            option.textContent = getDeviceOptionText(d);
-            option.dataset.deviceType = d.deviceType || (d.isDiscrete ? 'discrete-gpu' : 'integrated-gpu');
-            inferenceDeviceSelect.appendChild(option);
+        } else if (backend === 'winml') {
+            for (const ep of winmlProviders) {
+                const state = Number(ep.readyState) === 0 ? t('settings.winmlReady') : t('settings.winmlOnDemand');
+                addOption(inferenceDeviceSelect, `winml:${ep.name}`, `Windows ML · ${ep.name} · ${state}`, 'winml');
+            }
+        } else if (backend === 'dml') {
+            for (const d of devices) addOption(inferenceDeviceSelect, String(d.dxgiAdapterNumber), `DirectML · ${getDeviceOptionText(d)}`, d.deviceType);
+        } else {
+            if (winmlProviders.length) {
+                for (const ep of winmlProviders) {
+                    const state = Number(ep.readyState) === 0 ? t('settings.winmlReady') : t('settings.winmlOnDemand');
+                    addOption(inferenceDeviceSelect, `winml:${ep.name}`, `Windows ML · ${ep.name} · ${state}`, 'winml');
+                }
+            } else {
+                for (const d of devices) addOption(inferenceDeviceSelect, String(d.dxgiAdapterNumber), `DirectML · ${getDeviceOptionText(d)}`, d.deviceType);
+            }
         }
 
         // Restore device selection from settings（若当前 provider 下不可用则回退 auto）
         const preferredId = currentSetting?.preferredDeviceId ?? currentSetting?.deviceId ?? null;
-        const desiredValue = preferredId !== null ? String(preferredId) : 'auto';
+        const desiredValue = currentSetting?.winmlPreferredEp
+            ? `winml:${currentSetting.winmlPreferredEp}`
+            : (preferredId !== null ? String(preferredId) : 'auto');
         const validValues = new Set(Array.from(inferenceDeviceSelect.options).map(o => o.value));
         inferenceDeviceSelect.value = validValues.has(desiredValue) ? desiredValue : 'auto';
 
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
 
-        // Load audio device list (needs hardware detection for device enumeration)
-        await loadAudioDevices();
+        // Audio discovery is independent and must not block inference hardware.
+        loadAudioDevices().catch(() => {});
     } catch (err) {
         console.error('Failed to load device list:', err);
         inferenceDeviceSelect.textContent = '';
@@ -1135,7 +1184,7 @@ function collectSettings() {
     let preferredDeviceType;
     if (deviceMode === 'manual') {
         const inferenceValue = inferenceDeviceSelect.value;
-        preferredDeviceId = inferenceValue === 'auto'
+        preferredDeviceId = inferenceValue === 'auto' || inferenceValue.startsWith('winml:')
             ? null
             : (inferenceValue === 'npu' || inferenceValue === 'webnn-gpu' ? inferenceValue : parseInt(inferenceValue));
         preferredDeviceType = null;
@@ -1164,6 +1213,9 @@ function collectSettings() {
     return {
         deviceMode,
         inferenceProvider,
+        nativeInferenceBackend: nativeInferenceBackendSelect?.value || 'auto',
+        winmlEnabled: inferenceProvider === 'ortnode' && (nativeInferenceBackendSelect?.value || 'auto') !== 'dml',
+        winmlPreferredEp: inferenceDeviceSelect?.value?.startsWith('winml:') ? inferenceDeviceSelect.value.slice(6) : '',
         preferredDeviceId,
         preferredDeviceType,
         modelDeviceMapping,
@@ -1235,7 +1287,7 @@ function collectSettings() {
         // ORT 高级设置
         ortEnableMemPattern: ortEnableMemPatternCheckbox ? ortEnableMemPatternCheckbox.checked : true,
         ortEnableCpuMemArena: ortEnableCpuMemArenaCheckbox ? ortEnableCpuMemArenaCheckbox.checked : true,
-        winmlEnabled: winmlEnabledCheckbox ? winmlEnabledCheckbox.checked : false,
+
         ortGraphOptLevel: ortGraphOptLevelSelect ? ortGraphOptLevelSelect.value : 'all',
         ortExecutionMode: ortExecutionModeSelect ? ortExecutionModeSelect.value : 'sequential',
         ortForceMemPatternOnDml: ortForceMemPatternOnDmlCheckbox ? ortForceMemPatternOnDmlCheckbox.checked : false,
@@ -1274,17 +1326,17 @@ function applySettingsDebounced() {
 if (inferenceProviderSelect) {
     inferenceProviderSelect.addEventListener('change', async () => {
         updateInferenceProviderHint(inferenceProviderSelect.value);
+        updateNativeBackendUI(inferenceProviderSelect.value, nativeInferenceBackendSelect?.value || 'auto');
         await applySettings();
         await loadDevices();
     });
 }
 
-// Windows ML vendor EP 开关：勾选即保存。
-// 主进程在 settings:saveSettings 中检测到 winmlEnabled 变化会重置 pipeline，
-// 下一次合成时 diffStep/vocoder/preflow 才会尝试 WinML 插件 EP 链路。
-if (winmlEnabledCheckbox) {
-    winmlEnabledCheckbox.addEventListener('change', () => {
-        applySettings();
+if (nativeInferenceBackendSelect) {
+    nativeInferenceBackendSelect.addEventListener('change', async () => {
+        updateNativeBackendUI(inferenceProviderSelect?.value || 'ortnode', nativeInferenceBackendSelect.value);
+        await applySettings();
+        await loadDevices();
     });
 }
 
@@ -2363,44 +2415,12 @@ document.querySelectorAll('.sidebar-item').forEach(item => {
 });
 
 
-if (runTrtRtxDiagnosticButton) {
-  runTrtRtxDiagnosticButton.addEventListener('click', async () => {
-    runTrtRtxDiagnosticButton.disabled = true;
-    const oldText = runTrtRtxDiagnosticButton.textContent;
-    runTrtRtxDiagnosticButton.textContent = t('settings.trtRtxDiagnosticRunning');
-    if (trtRtxDiagnosticStatus) trtRtxDiagnosticStatus.textContent = t('settings.trtRtxDiagnosticRunningHint');
-    try {
-      const result = await window.electronAPI.runTrtRtxDiagnostic();
-      if (!result?.success) throw new Error(result?.error || 'Diagnostic failed');
-      const summary = result.report?.summary || 'UNKNOWN';
-      if (trtRtxDiagnosticStatus) trtRtxDiagnosticStatus.textContent = `${t('settings.trtRtxDiagnosticDone')} ${summary}
-${result.report.dumpDir}`;
-    } catch (error) {
-      if (trtRtxDiagnosticStatus) trtRtxDiagnosticStatus.textContent = `${t('settings.trtRtxDiagnosticFailed')} ${error.message}`;
-    } finally {
-      runTrtRtxDiagnosticButton.disabled = false;
-      runTrtRtxDiagnosticButton.textContent = oldText;
-    }
-  });
-}
 
 
 // Settings information architecture and search.
 // Windows ML is a hardware/backend selector, not an ORT graph-tuning option.
 (function initializeSettingsSearchAndLayout() {
   const init = () => {
-    const hardwareSection = document.getElementById('section-inference');
-    const winmlToggle = document.getElementById('winmlEnabled');
-    const winmlGroup = winmlToggle && winmlToggle.closest('.setting-group');
-    if (hardwareSection && winmlGroup) {
-      const providerGroup = document.getElementById('inferenceProvider')?.closest('.setting-group');
-      if (providerGroup && providerGroup.nextSibling) {
-        hardwareSection.insertBefore(winmlGroup, providerGroup.nextSibling);
-      } else {
-        hardwareSection.prepend(winmlGroup);
-      }
-    }
-
     const input = document.getElementById('settingsSearch');
     const empty = document.getElementById('settingsSearchEmpty');
     if (!input) return;

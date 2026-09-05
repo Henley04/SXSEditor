@@ -424,10 +424,9 @@ async function getWinmlCandidates(useStaticShapes) {
     }
     // Main models target GPU EPs: NvTensorRTRTX 2.x (ORT 1.27 ABI) is
     // preferred when loadable (canLoadLibrary gates 1.8); OpenVINO is fallback.
-    const preferred = [
-        'NvTensorRTRTXExecutionProvider',
-        'OpenVINOExecutionProvider',
-    ];
+    const selectedEp = String((globalThis.__SXS_SETTINGS_SNAPSHOT__ || {}).winmlPreferredEp || '').trim();
+    const preferred = [selectedEp, 'NvTensorRTRTXExecutionProvider', 'OpenVINOExecutionProvider']
+        .filter((name, index, all) => name && all.indexOf(name) === index);
     if (useStaticShapes) {
         preferred.push('OpenVINOExecutionProvider.AUTO');
     }
@@ -447,11 +446,13 @@ async function getWinmlCandidates(useStaticShapes) {
     const byNameAny = (name) => devices.filter((d) => d.epName === name).map((d) => d.index);
 
     const chain = [];
+    const selectedIndices = selectedEp ? byNameAny(selectedEp) : [];
+    if (selectedIndices.length) chain.push({ epName: selectedEp, indices: selectedIndices });
     // GPU priority: NvTensorRTRTX 2.x first (when registered), OpenVINO fallback.
     const trt = byName('NvTensorRTRTXExecutionProvider', 'gpu');
-    if (trt.length) chain.push({ epName: 'NvTensorRTRTXExecutionProvider', indices: trt });
+    if (trt.length && !chain.some(c => c.epName === 'NvTensorRTRTXExecutionProvider')) chain.push({ epName: 'NvTensorRTRTXExecutionProvider', indices: trt });
     const ovAny = byNameAny('OpenVINOExecutionProvider');
-    if (ovAny.length) chain.push({ epName: 'OpenVINOExecutionProvider', indices: ovAny });
+    if (ovAny.length && !chain.some(c => c.epName === 'OpenVINOExecutionProvider')) chain.push({ epName: 'OpenVINOExecutionProvider', indices: ovAny });
     else {
         const ovGpu = byName('OpenVINOExecutionProvider', 'gpu');
         if (ovGpu.length) chain.push({ epName: 'OpenVINOExecutionProvider(gpu)', indices: ovGpu });

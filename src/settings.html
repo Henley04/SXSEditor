@@ -24,7 +24,7 @@
 
                 <div class="sidebar-category" data-i18n="settings.catInference">推理</div>
                 <div class="sidebar-item" data-target="section-inference">
-                    <span data-i18n="settings.inferenceHardware">硬件设备</span>
+                    <span data-i18n="settings.inferenceHardware">推理与硬件</span>
                 </div>
                 <div class="sidebar-item" data-target="section-preview-params">
                     <span data-i18n="settings.previewInferenceParams">预览推理参数</span>
@@ -99,12 +99,21 @@
             <!-- Inference Hardware -->
             <div class="settings-section hidden" id="section-inference">
                 <div class="setting-group">
-                    <label for="inferenceProvider" data-i18n="settings.inferenceProvider">推理提供者</label>
+                    <label for="inferenceProvider" data-i18n="settings.inferenceProvider">推理系统</label>
                     <select id="inferenceProvider">
-                        <option value="ortnode" data-i18n="settings.inferenceProviderOrtnode">本机 ORT（DirectML / Windows ML / CPU）</option>
-                        <option value="ortweb" data-i18n="settings.inferenceProviderOrtweb">浏览器 ORT（WebNN，NPU 优先）</option>
+                        <option value="ortnode" data-i18n="settings.inferenceProviderOrtnode">本机推理</option>
+                        <option value="ortweb" data-i18n="settings.inferenceProviderOrtweb">WebNN（已弃用）</option>
                     </select>
-                    <p class="hint" id="inferenceProviderHint" data-i18n="settings.inferenceProviderHintOrtnode">使用 onnxruntime-node 在主进程运行 DirectML/CPU 推理。</p>
+                    <p class="hint" id="inferenceProviderHint" data-i18n="settings.inferenceProviderHintOrtnode">使用本机推理运行时。推荐 Windows ML，若不可用则回退 DirectML/CPU。</p>
+                </div>
+                <div class="setting-group" id="nativeBackendGroup">
+                    <label for="nativeInferenceBackend" data-i18n="settings.nativeInferenceBackend">本机执行后端</label>
+                    <select id="nativeInferenceBackend">
+                        <option value="auto" data-i18n="settings.nativeBackendAuto">自动（Windows ML 优先）</option>
+                        <option value="winml" data-i18n="settings.nativeBackendWinml">Windows ML</option>
+                        <option value="dml" data-i18n="settings.nativeBackendDml">DirectML</option>
+                    </select>
+                    <p class="hint" id="nativeBackendHint" data-i18n="settings.nativeBackendAutoHint">优先使用 Windows ML 可用 EP，失败时自动回退到 DirectML。</p>
                 </div>
                 <div class="setting-group hardware-info">
                     <label data-i18n="settings.currentHardware">当前运行硬件</label>
@@ -442,18 +451,6 @@
                         <span data-i18n="settings.ortEnableCpuMemArena">启用 CPU 内存池 (enableCpuMemArena)</span>
                     </label>
                     <p class="hint" data-i18n="settings.ortEnableCpuMemArenaHint">CPU 路径上的内存池分配器，复用已释放的内存块避免频繁分配。CPU 推理时建议开启；纯 GPU 推理时无影响。</p>
-                </div>
-
-                <div class="setting-group">
-                    <label class="checkbox-label" for="winmlEnabled">
-                        <input type="checkbox" id="winmlEnabled">
-                        <span data-i18n="settings.winmlEnabled">Windows ML 加速（实验性）</span>
-                    </label>
-                    <p class="hint" data-i18n="settings.winmlEnabledHint">在兼容设备上通过 Windows ML 插件执行提供者加速主模型（diff_step / vocoder / preflow）：NVIDIA RTX → TensorRT-RTX，Intel/AMD → OpenVINO/MIGraphX，高通 NPU → QNN。首次使用会按需下载对应 EP 运行库（需 Windows 11 24H2+）。失败自动回落 DirectML/CPU。</p>
-                    <div class="setting-actions">
-                        <button type="button" id="runTrtRtxDiagnostic" data-i18n="settings.runTrtRtxDiagnostic">一键 Dump 与分析 TensorRT-RTX</button>
-                    </div>
-                    <p class="hint" id="trtRtxDiagnosticStatus" data-i18n="settings.runTrtRtxDiagnosticHint">自动执行 Identity 输入探针、CPU/DML/TRT 三路对照、输出误差分析和子图收集。</p>
                 </div>
 
                 <div class="setting-group">

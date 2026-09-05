@@ -66,6 +66,7 @@ const IPC_CHANNELS = {
 
   // ==================== Settings ====================
   SETTINGS_GET_DML_DEVICES: 'settings:getDMLDevices',
+  SETTINGS_GET_WINML_PROVIDERS: 'settings:getWinmlProviders',
   SETTINGS_GET_HARDWARE_STATUS: 'settings:getHardwareStatus',
   SETTINGS_GET_CURRENT_HARDWARE: 'settings:getCurrentHardware',
   SETTINGS_GET: 'settings:getSettings',

@@ -253,6 +253,12 @@ function loadSettings() {
   if (_settingsCache.inferenceProvider !== 'ortweb' && _settingsCache.inferenceProvider !== 'ortnode') {
     _settingsCache.inferenceProvider = 'ortnode';
   }
+  if (!['auto', 'winml', 'dml'].includes(_settingsCache.nativeInferenceBackend)) {
+    _settingsCache.nativeInferenceBackend = 'auto';
+  }
+  if (typeof _settingsCache.winmlPreferredEp !== 'string') {
+    _settingsCache.winmlPreferredEp = '';
+  }
 
   // ===== ONNX Runtime session 选项 =====
   // 这些选项在模型加载时（InferenceSession.create）生效，修改后需要重置 pipeline。
@@ -450,6 +456,8 @@ const ALLOWED_SETTINGS_KEYS = [
   'exportDynamicThresholdEnabled',
   'exportDynamicThresholdPercentile',
   'inferenceProvider',
+  'nativeInferenceBackend',
+  'winmlPreferredEp',
   'ortEnableMemPattern',
   'ortForceMemPatternOnDml',
   'ortEnableCpuMemArena',

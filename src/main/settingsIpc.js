@@ -89,47 +89,42 @@ function registerSettingsIpc() {
     };
   });
 
-  ipcMain.handle('settings:getDMLDevices', async () => {
+  ipcMain.handle('settings:getDMLDevices', async (_event, options = {}) => {
     try {
-      // 并行获取 GPU 信息和 NPU 检测
-      const [controllers, npuResult] = await Promise.all([
-        ensureGPUInfo(),
-        detectNPUCached(),
-      ]);
-
+      const includeWebnn = options.includeWebnn === true;
+      const enrich = options.enrich === true;
+      // Settings discovery must be fast. DML adapter enumeration is authoritative;
+      // systeminformation/PowerShell is optional metadata enrichment only.
+      let controllers = [];
+      if (enrich) controllers = await ensureGPUInfo();
       if (!cachedDMLDevices || cachedDMLDevices.length === 0) {
-        const modelDir = getModelDir();
-        cachedDMLDevices = await enumerateDMLDevices(modelDir, controllers);
+        cachedDMLDevices = await enumerateDMLDevices(getModelDir(), controllers);
       }
-
       const devices = [...cachedDMLDevices];
+      if (!includeWebnn) return devices;
+
+      const npuResult = await detectNPUCached();
       if (npuResult.npuAvailable && !devices.some(d => d.deviceType === 'npu')) {
-        devices.push({
-          name: 'NPU (WebNN)',
-          deviceType: 'npu',
-          isDiscrete: false,
-          vramBytes: 0,
-          vram: '0 MB',
-          vendor: '',
-          dxgiAdapterNumber: undefined,
-          source: 'webnn',
-        });
+        devices.push({ name: 'NPU (WebNN)', deviceType: 'npu', isDiscrete: false,
+          vramBytes: 0, vram: '0 MB', vendor: '', source: 'webnn' });
       }
       if (npuResult.gpuAvailable && !devices.some(d => d.deviceType === 'webnn-gpu')) {
-        devices.push({
-          name: t('settings.webnnGpuDevice'),
-          deviceType: 'webnn-gpu',
-          isDiscrete: false,
-          vramBytes: 0,
-          vram: '0 MB',
-          vendor: '',
-          dxgiAdapterNumber: undefined,
-          source: 'webnn',
-        });
+        devices.push({ name: t('settings.webnnGpuDevice'), deviceType: 'webnn-gpu', isDiscrete: false,
+          vramBytes: 0, vram: '0 MB', vendor: '', source: 'webnn' });
       }
       return devices;
     } catch (err) {
       console.error('[Main] DML device enumeration failed:', err);
+      return [];
+    }
+  });
+
+  ipcMain.handle('settings:getWinmlProviders', async () => {
+    if (process.platform !== 'win32') return [];
+    try {
+      return await require('../inference/winml/winmlProvider').listCompatibleProviders();
+    } catch (err) {
+      console.warn('[Main] Windows ML provider discovery failed:', err.message);
       return [];
     }
   });

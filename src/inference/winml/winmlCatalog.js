@@ -221,37 +221,12 @@ function _scanFilesystemHints() {
     const winApps = 'C:\\Program Files\\WindowsApps';
     let dirs = null;
     try { dirs = fs.readdirSync(winApps); } catch (e) {
-        if (!_fsHintsCacheLogged) console.warn(`[WinML] WindowsApps readdir failed (${e.code || e.message}); trying PowerShell fallback`);
-        // Fallback: query AppX packages via PowerShell (works without direct FS ACL)
-        try {
-            const { execSync } = require('node:child_process');
-            const ps = `powershell -NoProfile -Command "Get-AppxPackage -Name '*WinML*' | Select-Object -ExpandProperty InstallLocation"`;
-            const raw = execSync(ps, { encoding: 'utf8', timeout: 8000, windowsHide: true });
-            const lines = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-            for (const loc of lines) {
-                const lower = loc.toLowerCase();
-                for (const [epName, keywords] of Object.entries(patterns)) {
-                    if (!keywords.some((k) => lower.includes(k))) continue;
-                    const epDir = path.join(loc, 'ExecutionProvider');
-                    let files;
-                    try { files = fs.readdirSync(epDir); } catch { continue; }
-                    for (const f of files) {
-                        if (f.toLowerCase().endsWith('.dll') && f.toLowerCase().includes('onnxruntime_providers')) {
-                            out.push({ name: epName, libraryPathHint: path.join(epDir, f) });
-                        }
-                    }
-                }
-            }
-            if (out.length && !_fsHintsCacheLogged) console.log(`[WinML] filesystem hints via PowerShell: ${out.map(o => o.libraryPathHint.split('\\').slice(-3).join('/')).join(', ')}`);
-            _fsHintsCache = out;
-            _fsHintsCacheLogged = true;
-            return out;
-        } catch (pe) {
-            console.warn(`[WinML] PowerShell fallback failed: ${pe.message?.slice(0,120)}`);
-            _fsHintsCache = out;
-            _fsHintsCacheLogged = true;
-            return out;
-        }
+        // ExecutionProviderCatalog is authoritative. Never block startup with
+        // synchronous PowerShell/Get-AppxPackage for optional filesystem hints.
+        if (!_fsHintsCacheLogged) console.warn(`[WinML] WindowsApps readdir unavailable (${e.code || e.message}); optional hints skipped`);
+        _fsHintsCache = out;
+        _fsHintsCacheLogged = true;
+        return out;
     }
     for (const dir of dirs) {
         const lower = dir.toLowerCase();

@@ -1452,3 +1452,13 @@ body {
 #settingsSearch:focus { outline: 2px solid color-mix(in srgb, var(--accent) 35%, transparent); border-color: var(--accent); }
 .settings-search-empty { margin-top: 8px; color: var(--text-secondary); font-size: var(--font-sm); }
 .search-hidden { display: none !important; }
+
+
+/* Native inference hierarchy */
+#section-inference { max-width: 760px; }
+#section-inference .setting-group { min-width: 0; }
+#nativeBackendGroup.hidden { display: none; }
+#runTrtRtxDiagnostic, #trtRtxDiagnosticStatus { display: none !important; }
+#inferenceDevice option { color: var(--fg-primary); }
+
+#section-inference .device-mode-radio.hidden { display: none !important; }

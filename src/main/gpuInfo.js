@@ -20,6 +20,8 @@ const VRAM_USAGE_TTL = 3000;
 
 // NPU 检测缓存
 let _npuCache = null;
+let _npuCacheTime = 0;
+const NPU_CACHE_TTL_MS = 30 * 1000;
 let _npuPending = null;
 
 // ===== Vocoder 分片长度（依据显存智能分配） =====
@@ -398,14 +400,20 @@ async function detectAllHardware() {
  * NPU 检测（带缓存）
  */
 async function detectNPUCached() {
-  if (_npuCache) return _npuCache;
+  if (_npuCache && Date.now() - _npuCacheTime < NPU_CACHE_TTL_MS) return _npuCache;
+  _npuCache = null;
   if (_npuPending) return _npuPending;
 
   _npuPending = (async () => {
     try {
       const { detectNPUAvailability } = require('./webnnIpc');
       const result = await detectNPUAvailability();
-      _npuCache = result;
+      const details = String(result?.details || '').toLowerCase();
+      const transient = details.includes('no renderer') || details.includes('timeout') || details.includes('module not available');
+      if (!transient) {
+        _npuCache = result;
+        _npuCacheTime = Date.now();
+      }
       return result;
     } catch (e) {
       return { npuAvailable: false, details: e.message };
