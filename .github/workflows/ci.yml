@@ -39,7 +39,7 @@ jobs:
           Copy-Item -Force "native\ort-bridge\build\Release\ort_bridge.node" "native\ort-bridge\prebuilt\win32-x64\ort_bridge.node"
           $bytes = [System.IO.File]::ReadAllBytes("native\ort-bridge\prebuilt\win32-x64\ort_bridge.node")
           $text = [System.Text.Encoding]::ASCII.GetString($bytes)
-          if (-not $text.Contains("d2h-copy-v2")) { throw "prebuilt addon missing d2h-copy-v2 marker" }
+          if (-not $text.Contains("d2h-copy-v3")) { throw "prebuilt addon missing d2h-copy-v3 marker" }
           Write-Host "prebuilt synced and verified"
 
       - name: Run tests (skip network & model loading/inference)
@@ -127,7 +127,7 @@ jobs:
           Copy-Item -Force "native\ort-bridge\build\Release\ort_bridge.node" "native\ort-bridge\prebuilt\win32-x64\ort_bridge.node"
           $bytes = [System.IO.File]::ReadAllBytes("native\ort-bridge\prebuilt\win32-x64\ort_bridge.node")
           $text = [System.Text.Encoding]::ASCII.GetString($bytes)
-          if (-not $text.Contains("d2h-copy-v2")) { throw "prebuilt addon missing d2h-copy-v2 marker" }
+          if (-not $text.Contains("d2h-copy-v3")) { throw "prebuilt addon missing d2h-copy-v3 marker" }
           Write-Host "prebuilt synced and verified"
 
       - name: Ensure Electron binary and zip cache
@@ -232,8 +232,8 @@ jobs:
             Write-Host "Native addon: $($addon.FullName) ($($addon.Length) bytes)"
             $bytes = [System.IO.File]::ReadAllBytes($addon.FullName)
             $text = [System.Text.Encoding]::ASCII.GetString($bytes)
-            if ($text.Contains("d2h-copy-v2")) {
-              Write-Host "  OK: contains d2h-copy-v2" -ForegroundColor Green
+            if ($text.Contains("d2h-copy-v3")) {
+              Write-Host "  OK: contains d2h-copy-v3" -ForegroundColor Green
             } else {
               throw "Packaged addon is legacy: $($addon.FullName)"
             }
