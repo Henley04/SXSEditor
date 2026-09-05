@@ -72,6 +72,41 @@
       </div>
 
       <h2>
+        <span data-lang="en">v2.0.2</span>
+        <span data-lang="zh">v2.0.2</span>
+      </h2>
+
+      <h3>
+        <span data-lang="en">New Features</span>
+        <span data-lang="zh">新功能</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en"><strong>WindowsML TensorRT-RTX EP</strong> — FP16 models can now run on NVIDIA GPUs via the Windows ML <code>NvTensorRTRTXExecutionProvider</code> (TensorRT through the WinML runtime, ORT 1.27 + TensorRT-RTX). <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code> load on <code>[winml:NvTensor]</code> with DML / CPU automatic fallback. Measured on an <strong>NVIDIA GeForce RTX 5060 Laptop (8 GB)</strong>: ~<strong>4.9×</strong> for <code>diff_step</code>, ~<strong>4.4×</strong> for <code>vocoder</code>, and ~<strong>4×</strong> end-to-end FP16 speedup vs the DML FP32 baseline. TensorRT-RTX ships <strong>opt-in</strong> with a one-click diagnostic and optional TRT dynamic profile generation.</span><span data-lang="zh"><strong>WindowsML TensorRT-RTX 执行提供器</strong>——FP16 模型现可通过 Windows ML 的 <code>NvTensorRTRTXExecutionProvider</code>（基于 WinML 运行时封装 TensorRT，ORT 1.27 + TensorRT-RTX）在 NVIDIA GPU 上运行。<code>preflow</code> / <code>diff_step</code> / <code>vocoder</code> 在 <code>[winml:NvTensor]</code> 后端加载，并自动以 DML / CPU 回退。在 <strong>NVIDIA GeForce RTX 5060 Laptop（8 GB）</strong>上测得：<code>diff_step</code> 约 <strong>4.9×</strong>、<code>vocoder</code> 约 <strong>4.4×</strong>，端到端 FP16 较 DML FP32 基线约<strong>快 4 倍</strong>。TensorRT-RTX 为<strong>可选开启</strong>，附带一键诊断与可选的 TRT 动态 profile 生成。</span></li>
+        <li><span data-lang="en"><strong>Native inference backend selector</strong> — the old WAML checkbox is replaced by a single durable backend selector (TensorRT-RTX / DML / WebNN / CPU) that serves multiple hardware paths with automatic fallback.</span><span data-lang="zh"><strong>原生推理后端选择器</strong>——旧的 WinML 开关被统一的后端选择器（TensorRT-RTX / DML / WebNN / CPU）取代，一条路径即可服务多种硬件并自动回退。</span></li>
+        <li><span data-lang="en"><strong>Streaming chunk-resume cache</strong> — long streams resume from cached chunks, so scrubbing back and replaying a section avoids re-running inference.</span><span data-lang="zh"><strong>流式 chunk 续播缓存</strong>——长流可从已缓存 chunk 续播，回拉重放某段时无需重新推理。</span></li>
+        <li><span data-lang="en"><strong>MIDI timeline gap preservation</strong> — gap regions on the timeline are now preserved in streaming synthesis rather than being collapsed.</span><span data-lang="zh"><strong>保留 MIDI 时间线间隔</strong>——流式合成现在保留时间线上的间隔区域，而非将其折叠。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Performance</span>
+        <span data-lang="zh">性能优化</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en"><strong>GPU drain delay removal</strong> — fixed per-chunk GPU drain waits are removed; waits are only applied after an out-of-memory event, cutting idle time in the diffusion loop.</span><span data-lang="zh"><strong>移除 GPU 排空延迟</strong>——移除每 chunk 固定的 GPU 排空等待；仅在显存不足后才施加等待，减少扩散循环中的空闲开销。</span></li>
+        <li><span data-lang="en"><strong>Vocal region splitting</strong> — non-vocal regions (incl. long rests ≥ 1.5 s) are split out of model input via reworked audio segmentation, eliminating rest hiss and reducing wasted inference.</span><span data-lang="zh"><strong>人声区域切分</strong>——非人声区域（含 ≥ 1.5 秒长休止）通过重构的音频分割从模型输入中切分出去，消除休止噪声并减少无谓推理。</span></li>
+      </ul>
+
+      <h3>
+        <span data-lang="en">Bug Fixes</span>
+        <span data-lang="zh">缺陷修复</span>
+      </h3>
+      <ul>
+        <li><span data-lang="en">Fixed <strong>vendor-EP all-zero output</strong> — device-to-host copies for vendor execution providers now use a robust ArrayBuffer copy path (<code>d2h-copy-v3</code> native bridge marker), with application-level zero-output protection as a safety net.</span><span data-lang="zh">修复<strong>第三方 EP 全零输出</strong>——第三方执行提供器的设备到主机复制现改用稳健的 ArrayBuffer 复制路径（<code>d2h-copy-v3</code> 原生桥接标记），并以应用级全零输出保护作为安全兜底。</span></li>
+        <li><span data-lang="en">Fixed <strong>long-rest regions piling voices on top of each other</strong> in streaming synthesis — absolute note starts are now preserved so regions after a long rest no longer overlap.</span><span data-lang="zh">修复<strong>流式合成中长休止区域人声重叠</strong>——现保持绝对音符起点，长休止后的各区域不再互相叠加。</span></li>
+        <li><span data-lang="en">Fixed <strong>settings UI failing to initialize</strong> when the backend selector replaced the old WinML checkbox.</span><span data-lang="zh">修复<strong>设置 UI 未初始化</strong>的问题——旧 WinML 复选框替换为后端选择器后页面无法正常初始化。</span></li>
+      </ul>
+
+      <h2>
         <span data-lang="en">v2.0.0</span>
         <span data-lang="zh">v2.0.0</span>
       </h2>
