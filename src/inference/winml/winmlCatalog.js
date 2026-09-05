@@ -250,12 +250,31 @@ function _scanFilesystemHints() {
 }
 
 /**
- * List EPs compatible with this hardware.
+ * EP display/selection priority for the settings device list. TRT-RTX is the
+ * preferred GPU EP on this stack, so it must rank above OpenVINO. Providers not
+ * listed here keep their catalog order and sink below the known ones.
+ */
+const EP_PRIORITY = [
+    'NvTensorRTRTXExecutionProvider',
+    'OpenVINOExecutionProvider',
+    'QNNExecutionProvider',
+    'MIGraphXExecutionProvider',
+    'VitisAIExecutionProvider',
+];
+
+/**
+ * List EPs compatible with this hardware, ordered so that higher-priority EPs
+ * (e.g. NvTensorRTRTX above OpenVINO) appear first in the device dropdown.
  * @returns {Promise<Array<{name:string, readyState:number}>>}
  */
 async function listCompatibleProviders() {
     const entries = await listCompatibleProviderEntries();
-    return entries.map(({ name, readyState }) => ({ name, readyState }));
+    const mapped = entries.map(({ name, readyState }) => ({ name, readyState }));
+    const rank = (name) => {
+        const idx = EP_PRIORITY.indexOf(name);
+        return idx === -1 ? EP_PRIORITY.length : idx;
+    };
+    return mapped.sort((a, b) => rank(a.name) - rank(b.name));
 }
 
 /** Ensure a specific provider wrapper instance is ready (downloads if needed). */
