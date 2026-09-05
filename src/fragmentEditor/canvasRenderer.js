@@ -1081,7 +1081,8 @@ export function resolvePhonemes(lyric) {
   const phonemeCache = getPhonemeCache();
   if (!lyric || lyric.trim().length === 0) return [{ name: '<SP>', display: 'SP' }];
   const trimmed = lyric.trim();
-  if (trimmed === '<SP>' || trimmed === '<AP>') return [{ name: '<SP>', display: 'SP' }];
+  if (trimmed === '<SP>') return [{ name: '<SP>', display: 'SP' }];
+  if (trimmed === '<AP>') return [{ name: '<AP>', display: 'AP' }];
   if (phonemeCache.has(trimmed)) return phonemeCache.get(trimmed);
   return [{ name: trimmed, display: trimmed }];
 }

@@ -57,10 +57,11 @@ describe('inference/pipeline/textProcessing - G2P', () => {
       expect(out[0].name).to.equal('<SP>');
     });
 
-    it('should resolve <AP> literal to <SP>', () => {
+    it('should preserve <AP> as audible aspiration', () => {
       const out = tpEn.resolveLyricToPhonemes('<AP>');
       expect(out).to.have.lengthOf(1);
-      expect(out[0].name).to.equal('<SP>');
+      expect(out[0].name).to.equal('<AP>');
+      expect(out[0].display).to.equal('AP');
     });
 
     it('should resolve en_ prefixed dashed lyric into multiple phonemes', () => {

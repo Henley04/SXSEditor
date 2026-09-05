@@ -430,7 +430,7 @@ export async function playAll() {
                 } else {
                   accSource.start(accScheduleTime);
                 }
-                const accEndSec = accStartSec + accTrack.audioBuffer.length / SAMPLE_RATE;
+                const accEndSec = accStartSec + accBuffer.duration;
                 if (accEndSec > _streamingAccEndSec) _streamingAccEndSec = accEndSec;
                 _streamingActiveSourceCount++;
                 const accSourceIdx = state.streamingSources.length;
@@ -521,10 +521,18 @@ export async function playAll() {
           bpm: state.project.bpm,
         });
 
+        // The main process may replay a cached stream much faster than realtime.
+        // Let queued svs:chunk-audio IPC messages run before removing the listener.
+        await new Promise(resolve => setTimeout(resolve, 0));
         // 合成完成：移除 chunk 监听器
         if (streamingChunkCleanup) { try { streamingChunkCleanup(); } catch (_) {} streamingChunkCleanup = null; }
 
         state.currentAudioData = mixedAudio;
+        // Always rebuild the complete playback mix. On cache-fast replays the IPC
+        // result can arrive before all chunk events are rendered; this provides a
+        // correct accompaniment-inclusive fallback and fixes silent accompaniment
+        // on the second play.
+        state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
         state.currentAudioBuffer = null; // 流式播放无整段 buffer，置空避免 playhead 动画误判
 
         // 标记推理完成：后续不再触发 buffer underrun 等待

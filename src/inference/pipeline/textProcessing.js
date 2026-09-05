@@ -607,7 +607,8 @@ class TextProcessing {
     resolveLyricToPhonemes(lyric) {
         if (!lyric || lyric.trim().length === 0) return [{ name: '<SP>', display: 'SP' }];
         let trimmed = repairMojibake(lyric.trim());
-        if (trimmed === '<SP>' || trimmed === '<AP>') return [{ name: '<SP>', display: 'SP' }];
+        if (trimmed === '<SP>') return [{ name: '<SP>', display: 'SP' }];
+        if (trimmed === '<AP>') return [{ name: '<AP>', display: 'AP' }];
 
         // Handle <jp> prefix: force Japanese G2P for kanji etc.
         let forceJp = false;
@@ -854,7 +855,7 @@ class TextProcessing {
         if (!phonemes || phonemes.length === 0) return phonemes;
         const stats = durationStats.loadDurationStatsSync();
         if (!stats || !stats.unigram) return phonemes;
-        const SPECIAL = new Set(['<SEP>', '<BOW>', '<EOW>', '<PAD>', '<SP>']);
+        const SPECIAL = new Set(['<SEP>', '<BOW>', '<EOW>', '<PAD>', '<SP>', '<AP>']);
         for (let i = 0; i < phonemes.length; i++) {
             const name = phonemes[i].name || '';
             if (!name.startsWith('en_') || SPECIAL.has(name)) {
@@ -891,7 +892,7 @@ class TextProcessing {
      */
     _attachJapaneseWeights(phonemes, jpSources, isYue) {
         if (!phonemes || phonemes.length === 0) return phonemes;
-        const SPECIAL = new Set(['<SEP>', '<BOW>', '<EOW>', '<PAD>', '<SP>']);
+        const SPECIAL = new Set(['<SEP>', '<BOW>', '<EOW>', '<PAD>', '<SP>', '<AP>']);
 
         if (isYue || !jpSources) {
             // yue_ syllable path: each syllable = 1 mora, equal weight.

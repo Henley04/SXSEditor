@@ -53,8 +53,10 @@ class AudioSegmentation {
     _isRestNote(note) {
         const lyric = String(note.lyric || '').trim();
         const continuation = note.noteType === 3 || note.isSlur || note.isContinuation;
+        // <AP> is an audible aspiration token in phone_set.json, not a rest.
+        if (lyric === '<AP>') return false;
         return note.pitch <= 0 || note.noteType === 1
-            || lyric === '<SP>' || lyric === '<AP>'
+            || lyric === '<SP>'
             || (lyric === '' && !continuation);
     }
 

@@ -136,6 +136,10 @@ class OnnxSVSPipeline {
         this._chunkCacheMaxEntries = 128;
         this._chunkCacheMaxBytes = 384 * 1024 * 1024;
         this._chunkCacheBytes = 0;
+        // One-entry whole-stream cache: avoids repeating region preparation, encoders,
+        // diffusion and vocoder work on immediate replay. Chunk copies are retained so
+        // cached playback preserves the same streaming timing/event contract.
+        this._multiStreamResultCache = null;
         this._initPromise = null;
         // 合成串行化锁：防止连续两次 synthesize() 调用并发。
         // 场景：合成 A 完成 → _recreateHeavySessionsAfterSynthesis() 释放 diffStep/vocoder
@@ -580,25 +584,30 @@ class OnnxSVSPipeline {
         const intervals = [];
         for (const note of notes) {
             const lyric = String(note.lyric || '').trim();
-            const isRest = note.pitch <= 0 || note.noteType === 1
-                || lyric === '<SP>' || lyric === '<AP>';
+            // <AP> is audible aspiration even when its score pitch is zero.
+            const isRest = lyric !== '<AP>' && (note.pitch <= 0 || note.noteType === 1
+                || lyric === '<SP>');
             if (isRest) continue;
-            const start = Math.max(0, Math.round((note.start - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE));
-            const end = Math.min(audio.length, Math.round((note.start + note.duration - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE));
+            const rawStart = Math.round((note.start - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE);
+            const rawEnd = Math.round((note.start + note.duration - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE);
+            const start = Math.max(0, rawStart);
+            const end = Math.min(audio.length, rawEnd);
             if (end <= start) continue;
             const prev = intervals[intervals.length - 1];
-            if (prev && start - prev.end <= mergeGapSamples) prev.end = Math.max(prev.end, end);
-            else intervals.push({ start, end });
+            if (prev && start - prev.end <= mergeGapSamples) {
+                prev.end = Math.max(prev.end, end);
+                prev.fadeOut = prev.fadeOut || rawEnd < audio.length;
+            } else {
+                intervals.push({ start, end, fadeIn: rawStart > 0, fadeOut: rawEnd < audio.length });
+            }
         }
         let cursor = 0;
         for (const interval of intervals) {
             audio.fill(0, cursor, interval.start);
             const fade = Math.min(fadeSamples, Math.floor((interval.end - interval.start) / 2));
             for (let i = 0; i < fade; i++) {
-                const gainIn = (i + 1) / fade;
-                const gainOut = (fade - i) / fade;
-                audio[interval.start + i] *= gainIn;
-                audio[interval.end - fade + i] *= gainOut;
+                if (interval.fadeIn) audio[interval.start + i] *= (i + 1) / fade;
+                if (interval.fadeOut) audio[interval.end - fade + i] *= (fade - i) / fade;
             }
             cursor = interval.end;
         }
@@ -891,6 +900,7 @@ class OnnxSVSPipeline {
         this._segCacheBytes = 0;
         this._chunkCacheMap = null;
         this._chunkCacheBytes = 0;
+        this._multiStreamResultCache = null;
     }
 
     _chunkCacheGet(key) {
@@ -2705,6 +2715,32 @@ class OnnxSVSPipeline {
 
         console.log(`[OnnxSVSPipeline] synthesizeMultiStreaming: ${fragments.length} fragments, chunkEnabled=${chunkEnabled}, chunkFrames=${chunkFrames}`);
 
+        const multiStreamCacheKey = [
+            'multi-stream-v2', bpm, totalSteps, cfgStrength, cfgRescale,
+            chunkEnabled, chunkFrames, overlapFrames,
+            this._currentSamplerName || '',
+            JSON.stringify(this._currentCfgScheduleOpts || {}),
+            JSON.stringify(this._currentDynamicThresholdOpts || {}),
+            this.modelPrecision || '', this.vocoderType || '', this.languageOverride || '',
+            ...fragments.map((frag, idx) => [
+                idx, frag.startTimeBeat, frag.durationBeats,
+                this._computeSynthCacheKey(frag.notes || [], bpm, frag.options || {}),
+            ].join(':')),
+        ].join('|');
+        const fullCached = this._multiStreamResultCache;
+        if (fullCached && fullCached.key === multiStreamCacheKey) {
+            console.log(`[MultiStream][result-cache] hit chunks=${fullCached.chunks.length}`);
+            for (const chunk of fullCached.chunks) {
+                throwIfCancelled(abortSignal);
+                if (onChunkAudio) onChunkAudio({ ...chunk, audio: chunk.audio.slice(), cached: true });
+                // Yield so Electron can deliver chunk events before the invoke reply.
+                await new Promise(resolve => setImmediate(resolve));
+            }
+            onProgress(100);
+            return fullCached.audio.slice();
+        }
+        const emittedChunks = [];
+
         // ===== Phase 1: split each track fragment into inference-only vocal regions =====
         // Keep the project/MIDI timeline intact, but never feed the centre of a
         // long rest to the model. Every region retains absolute note positions
@@ -2964,6 +3000,7 @@ class OnnxSVSPipeline {
                     frag.regionStartBeat, frag.regionEndBeat,
                 ].join('|'),
                 committedFrames: 0,
+                filledNotes,
                 segAudio: new Float32Array(totalFrames * HOP_SIZE),
             });
             console.log(`[MultiStream] Fragment ${frag.sourceFragIdx} region ${frag.regionIdx} prepared: ${totalFrames} frames, startTime=${frag.startTimeBeat}beat, firstNoteStart=${firstNoteStartBeat}beat, chunks=${chunkPlan ? chunkPlan.specs.length : 0}`);
@@ -3002,6 +3039,17 @@ class OnnxSVSPipeline {
         // still logs every chunk via the suppressDoneLog=false override.
         this._suppressChunkDiffLog = globalChunks.length > 1;
 
+        const emitPreparedChunk = (p, chunkInfo) => {
+            if (!onChunkAudio || !chunkInfo || !chunkInfo.audio) return;
+            const audio = chunkInfo.audio.slice();
+            const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
+            const relativeStartBeat = ((chunkInfo.sampleOffset - fragStartSample) / SAMPLE_RATE) * (bpm / 60);
+            this._silenceNonVocalRegions(audio, p.filledNotes, bpm, relativeStartBeat);
+            const safeChunk = { ...chunkInfo, audio };
+            emittedChunks.push({ ...safeChunk, audio: audio.slice() });
+            onChunkAudio(safeChunk);
+        };
+
         // ===== Phase 3: 按时间顺序执行 =====
         const totalGlobalChunks = globalChunks.length;
         const progressPerChunk = 100 / totalGlobalChunks;
@@ -3036,7 +3084,7 @@ class OnnxSVSPipeline {
                     if (onChunkAudio) {
                         const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
                         const firstNoteOffsetSample = Math.floor((p.firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE);
-                        onChunkAudio({
+                        emitPreparedChunk(p, {
                             chunkIndex: gi,
                             sampleOffset: fragStartSample + firstNoteOffsetSample + segSampleOffset,
                             sampleEnd: fragStartSample + firstNoteOffsetSample + segSampleOffset + cachedChunk.audio.length,
@@ -3099,7 +3147,7 @@ class OnnxSVSPipeline {
                     // 这样大 chunkFrames 下 vocoder 内部分片时也能流式播放，避免等到整个 diffusion chunk 完成。
                     const vocoderOnChunk = onChunkAudio ? (chunkInfo) => {
                         try {
-                            onChunkAudio({
+                            emitPreparedChunk(p, {
                                 chunkIndex: gi,
                                 sampleOffset: fragStartSample + firstNoteOffsetSample + segSampleOffset + chunkInfo.sampleOffset,
                                 sampleEnd: fragStartSample + firstNoteOffsetSample + segSampleOffset + chunkInfo.sampleEnd,
@@ -3148,7 +3196,7 @@ class OnnxSVSPipeline {
                 const isLastGlobalChunk = gi === globalChunks.length - 1;
                 const vocoderOnChunk = onChunkAudio ? (chunkInfo) => {
                     try {
-                        onChunkAudio({
+                        emitPreparedChunk(p, {
                             chunkIndex: gi,
                             sampleOffset: fragStartSample + firstNoteOffsetSample + chunkInfo.sampleOffset,
                             sampleEnd: fragStartSample + firstNoteOffsetSample + chunkInfo.sampleEnd,
@@ -3173,6 +3221,9 @@ class OnnxSVSPipeline {
         // ===== Phase 4: 混合所有分片音频 =====
         const mixedAudio = new Float32Array(totalMixedSamples);
         for (const p of prepared) {
+            // Enforce score silence in the stored waveform too. Streaming callbacks
+            // are masked independently above because they are emitted before this phase.
+            this._silenceNonVocalRegions(p.segAudio, p.filledNotes, bpm, p.firstNoteStartBeat);
             // segAudio[0] 对应 filledNotes[0].start，需加 firstNoteOffsetSample
             // 使音频放置在正确的绝对工程位置 (fragment.startTime + firstNote.start)
             const firstNoteOffsetSample = Math.floor((p.firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE);
@@ -3188,6 +3239,11 @@ class OnnxSVSPipeline {
         // Int16 转换时会严重削波。统一归一化到 0.95 防止削波。
         normalizePeakTo(mixedAudio, totalMixedSamples);
 
+        this._multiStreamResultCache = {
+            key: multiStreamCacheKey,
+            audio: mixedAudio.slice(),
+            chunks: emittedChunks.map(chunk => ({ ...chunk, audio: chunk.audio.slice() })),
+        };
         console.log(`[MultiStream] Complete: ${prepared.length} fragments, ${globalChunks.length} chunks, ${totalMixedSamples} samples`);
         onProgress(100);
         await this._recreateHeavySessionsAfterSynthesis();

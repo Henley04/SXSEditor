@@ -32,23 +32,24 @@ describe('mergePhoneme', () => {
     expect(result[1].lyric).to.equal('a');
   });
 
-  it('should replace <AP> with <SP>', () => {
+  it('should preserve <AP> as an audible aspiration note', () => {
     const notes = [
       { pitch: 0, start: 0, duration: 0.5, lyric: '<AP>' },
     ];
     const result = mergePhoneme(notes);
     expect(result.length).to.equal(1);
-    expect(result[0].lyric).to.equal('');
+    expect(result[0].lyric).to.equal('<AP>');
   });
 
-  it('should merge consecutive <AP> notes with same pitch', () => {
+  it('should NOT merge consecutive <AP> notes as silence', () => {
     const notes = [
       { pitch: 0, start: 0, duration: 0.25, lyric: '<AP>' },
       { pitch: 0, start: 0.25, duration: 0.25, lyric: '<AP>' },
     ];
     const result = mergePhoneme(notes);
-    expect(result.length).to.equal(1);
-    expect(result[0].duration).to.equal(0.5);
+    expect(result.length).to.equal(2);
+    expect(result[0].lyric).to.equal('<AP>');
+    expect(result[1].lyric).to.equal('<AP>');
   });
 
   it('should NOT merge consecutive SP notes with different pitch values', () => {
