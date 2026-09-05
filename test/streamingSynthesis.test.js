@@ -383,6 +383,90 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
       });
     });
 
+    describe('长休止分段回归测试', () => {
+      // Bug (aab3fbe): Phase 1 使用 buildVocalSegments() 拆分长休止，但其
+      // region 的 note start 被 rebase 到 region 原点，而流式路径所有偏移
+      // 计算均为 fragment.startTimeBeat + firstNoteStartBeat（假设绝对
+      // start）。rebase 后 firstNoteStartBeat≈0 → 所有 region 全部堆叠到
+      // fragment 开头，表现为"所有声音一起提前播放、严重重叠"。
+      // 修复：改用 splitLongRestRegions()（保留绝对 start，不做 >20s 重叠切分）。
+      const samplesPerBeat = (60 / 120) * 24000; // bpm=120 → 12000 samples/beat
+
+      // 音符 A(beat 0-1)，8 拍长休止（4s > 1.5s），音符 B(beat 9-10)
+      function makeLongRestNotes() {
+        return [
+          { pitch: 60, start: 0, duration: 1, lyric: 'la' },
+          { pitch: 62, start: 9, duration: 1, lyric: 'la' },
+        ];
+      }
+
+      it('长休止后段音频写入原始绝对位置，而非分片开头', async () => {
+        const out = await pipeline.synthesizeMultiStreaming(
+          [{ notes: makeLongRestNotes(), startTimeBeat: 0, durationBeats: 10, options: { diffStepChunk: false } }],
+          120,
+          {}
+        );
+        // maxEndBeat = 10 → totalMixedSamples = ceil(10 * 12000) = 120000
+        expect(out.length).to.equal(120000);
+        // Region 0（音符 A）在分片开头有音频
+        expect(out[100]).to.not.equal(0);
+        // 长休止中央（beat 4.5 → sample 54000）必须是未写入的数字零
+        expect(out[Math.round(4.5 * samplesPerBeat)]).to.equal(0);
+        // 音符 B（beat 9-10）区域必须有音频：修复前 region 1 被堆到
+        // 分片开头，beat 9 之后全为零
+        expect(out[Math.round(9.5 * samplesPerBeat)]).to.not.equal(0);
+      });
+
+      it('长休止前段不因后段存在而被推移（前段仍在分片开头）', async () => {
+        const out = await pipeline.synthesizeMultiStreaming(
+          [{ notes: makeLongRestNotes(), startTimeBeat: 0, durationBeats: 10, options: { diffStepChunk: false } }],
+          120,
+          {}
+        );
+        // 音符 A 结束（beat 1）+ 150ms 尾部上下文（0.3 beat）→ region 0
+        // 音频覆盖到 ~beat 1.3；beat 2 起进入被排除的长休止
+        expect(out[Math.round(1.2 * samplesPerBeat)]).to.not.equal(0);
+        expect(out[Math.round(2 * samplesPerBeat)]).to.equal(0);
+      });
+
+      it('分块路径：长休止后 region 的 chunk sampleOffset 位于其绝对位置', async () => {
+        pipeline = buildMockPipeline();
+        installRecordingSessions(pipeline);
+        const onChunkAudio = sinon.spy();
+        await pipeline.synthesizeMultiStreaming(
+          [{ notes: makeLongRestNotes(), startTimeBeat: 0, durationBeats: 10, options: { diffStepChunk: true, diffStepChunkFrames: 30, diffStepOverlapFrames: 5 } }],
+          120,
+          { onChunkAudio }
+        );
+        // 修复前：两个 region 的 chunk offset 都从 0 开始（全部提前）。
+        // 修复后：region 1 的 chunk 起点位于头部上下文休止处
+        //（beat 9 - 0.3 → sample ~104400）。
+        const offsets = onChunkAudio.getCalls().map(c => c.args[0].sampleOffset);
+        expect(offsets.length).to.be.greaterThan(0);
+        const maxOffset = Math.max(...offsets);
+        expect(maxOffset).to.be.at.least(Math.round(8.5 * samplesPerBeat)); // ≥ beat 8.5
+        // 所有 chunk 不越过片段末尾
+        const maxEnd = Math.max(...onChunkAudio.getCalls().map(c => c.args[0].sampleEnd));
+        expect(maxEnd).to.be.at.most(Math.ceil(10 * samplesPerBeat) + HOP_SIZE);
+      });
+
+      it('长休止后段音频与多分片 startTimeBeat 正确叠加（绝对位置）', async () => {
+        // fragment 从 beat 20 开始：region 1 应位于
+        // 20 + 8.7（头部上下文）之后，而非 beat 20 开头
+        const out = await pipeline.synthesizeMultiStreaming(
+          [{ notes: makeLongRestNotes(), startTimeBeat: 20, durationBeats: 10, options: { diffStepChunk: false } }],
+          120,
+          {}
+        );
+        const noteBStart = Math.round((20 + 9.5) * samplesPerBeat);
+        expect(out[noteBStart]).to.not.equal(0);
+        // 长休止中央（beat 20 + 4.5）为数字零
+        expect(out[Math.round((20 + 4.5) * samplesPerBeat)]).to.equal(0);
+        // 音符 A 在 beat 20 开头
+        expect(out[Math.round((20 + 0.5) * samplesPerBeat)]).to.not.equal(0);
+      });
+    });
+
     describe('多分片流式合成', () => {
       it('2 个分片无分块 → 音频按 startTimeBeat 正确放置', async () => {
         // frag0: startTimeBeat=0, 4 beats, totalFrames=100, samples=48000

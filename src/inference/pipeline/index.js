@@ -561,6 +561,7 @@ class OnnxSVSPipeline {
     // Delegate audio segmentation methods
     _fillNoteGaps(notes) { return this._audioSegmentation.fillNoteGaps(notes); }
     _buildVocalSegments(notes, bpm) { return this._audioSegmentation.buildVocalSegments(notes, bpm); }
+    _splitLongRestRegions(notes, bpm) { return this._audioSegmentation.splitLongRestRegions(notes, bpm); }
     _hashArray(arr) { return this._audioSegmentation.hashArray(arr); }
     _computeSynthCacheKey(notes, bpm, options) { return this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this)); }
     _computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) { return this._audioSegmentation.computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount); }
@@ -2709,12 +2710,22 @@ class OnnxSVSPipeline {
         // long rest to the model. Every region retains absolute note positions
         // within its source fragment, so Phase 4 naturally leaves the omitted
         // span as digital zero when mixing.
+        //
+        // NOTE: this must be _splitLongRestRegions(), NOT _buildVocalSegments().
+        // buildVocalSegments re-bases note starts to the region origin and also
+        // splits >20s audio into 2s-overlapping segments. The streaming path
+        // below places every chunk at (fragment.startTimeBeat +
+        // firstNoteStartBeat) with pitchCurveOffsetSec=0 and mixes with plain
+        // addition — all of which assume absolute note starts and
+        // non-overlapping regions. Rebased/overlapping regions made every
+        // region mix at the fragment start (all voices piled up early, severe
+        // overlap) and double-mixed the 2s overlaps.
         const inferenceRegions = [];
         for (let sourceFragIdx = 0; sourceFragIdx < fragments.length; sourceFragIdx++) {
             const sourceFrag = fragments[sourceFragIdx];
             const timelineNotes = this._fillNoteGaps(sourceFrag.notes);
             if (!timelineNotes || timelineNotes.length === 0) continue;
-            const regions = this._buildVocalSegments(timelineNotes, bpm);
+            const regions = this._splitLongRestRegions(timelineNotes, bpm);
             for (let regionIdx = 0; regionIdx < regions.length; regionIdx++) {
                 const region = regions[regionIdx];
                 if (!region.notes || region.notes.length === 0) continue;
@@ -2735,8 +2746,10 @@ class OnnxSVSPipeline {
             const frag = inferenceRegions[fi];
             const fragOpts = frag.options || {};
             // Region notes already include short <SP> rests and the small edge
-            // context retained by buildVocalSegments(). Do not fill gaps again,
-            // or the deliberately omitted long-rest centre would be reinserted.
+            // context retained by splitLongRestRegions(). Do not fill gaps
+            // again, or the deliberately omitted long-rest centre would be
+            // reinserted. Note starts stay absolute (fragment-relative), so
+            // firstNoteStartBeat below and pitchCurveOffsetSec=0 remain valid.
             const filledNotes = frag.notes;
 
             // autoShift F0 计算 —— 局部 autoShift：按子段独立计算 f0Shift

@@ -1,5 +1,12 @@
 const { LONG_AUDIO_THRESHOLD_SEC, SEGMENT_MIN_SEC, SEGMENT_MAX_SEC, SEGMENT_OVERLAP_SEC } = require('./constants');
 
+// Only rests >= 1.5 seconds are excluded from inference; 150 ms of rest
+// context is kept on both sides of the split so consonant releases and the
+// following attack still see an <SP>-like boundary. Shared by
+// buildVocalSegments() and splitLongRestRegions().
+const LONG_REST_SEC = 1.5;
+const REST_CONTEXT_SEC = 0.15;
+
 /**
  * Long audio segmentation and stitching logic
  */
@@ -39,6 +46,101 @@ class AudioSegmentation {
     }
 
     /**
+     * Shared rest-note predicate (rest = excluded from vocal content).
+     * slur/continuation notes (noteType 3) are NOT rests even when their
+     * lyric is empty.
+     */
+    _isRestNote(note) {
+        const lyric = String(note.lyric || '').trim();
+        const continuation = note.noteType === 3 || note.isSlur || note.isContinuation;
+        return note.pitch <= 0 || note.noteType === 1
+            || lyric === '<SP>' || lyric === '<AP>'
+            || (lyric === '' && !continuation);
+    }
+
+    /**
+     * Split the gap-filled score timeline into inference regions at long
+     * rests, keeping absolute note starts.
+     *
+     * Companion of buildVocalSegments() for the streaming multi-fragment
+     * path (synthesizeMultiStreaming). Two deliberate differences:
+     *
+     * 1. NO re-basing: region notes keep their absolute starts within the
+     *    source fragment. The streaming mixer places chunk audio at
+     *    (fragment.startTimeBeat + firstNoteStartBeat) and indexes the
+     *    absolute-time pitchCurveF0 with offset 0 — both assume absolute
+     *    starts. Rebased regions made every region mix at the fragment
+     *    start, piling all voices onto each other (severe misalignment).
+     *
+     * 2. NO >SEGMENT_MAX_SEC overlap split: the streaming path chunks long
+     *    sequences itself via its diffusion chunkPlan and mixes with plain
+     *    addition (no crossfade), so overlapping segments would be
+     *    double-mixed. Only the central part of a >= LONG_REST_SEC rest is
+     *    removed from inference; up to REST_CONTEXT_SEC of rest context is
+     *    kept on both region edges, and regions never overlap in time.
+     *
+     * @param {Array} notes - gap-filled notes (fillNoteGaps output)
+     * @param {number} bpm
+     * @returns {Array<{notes, startBeat, endBeat}>} regions; startBeat/endBeat
+     *   are the absolute (fragment-relative) bounds, used for cache identity.
+     */
+    splitLongRestRegions(notes, bpm) {
+        if (!notes || notes.length === 0) return [];
+        if (!Number.isFinite(bpm) || bpm <= 0) {
+            throw new RangeError('bpm must be a positive finite number');
+        }
+        const secondsPerBeat = 60 / bpm;
+        const longRestBeats = LONG_REST_SEC / secondsPerBeat;
+        const restContextBeats = REST_CONTEXT_SEC / secondsPerBeat;
+        const isRest = (note) => this._isRestNote(note);
+
+        const sorted = [...notes].sort((a, b) => a.start - b.start);
+        for (const note of sorted) {
+            if (!Number.isFinite(note.start) || !Number.isFinite(note.duration) || note.duration <= 0) {
+                throw new RangeError('notes must have finite start and positive duration');
+            }
+        }
+
+        const hasLongRest = sorted.some(note => isRest(note) && note.duration >= longRestBeats);
+        if (!hasLongRest) {
+            const end = sorted[sorted.length - 1].start + sorted[sorted.length - 1].duration;
+            return [{ notes: sorted, startBeat: 0, endBeat: end }];
+        }
+
+        const regions = [];
+        let current = [];
+        let pendingHeadRest = null;
+        const flush = () => {
+            if (current.some(n => !isRest(n))) {
+                regions.push({
+                    notes: current,
+                    startBeat: current[0].start,
+                    endBeat: current[current.length - 1].start + current[current.length - 1].duration,
+                });
+            }
+            current = [];
+        };
+        for (const note of sorted) {
+            if (isRest(note) && note.duration >= longRestBeats) {
+                const pad = Math.min(restContextBeats, note.duration / 3);
+                if (pad > 0) current.push({ ...note, duration: pad });
+                flush();
+                pendingHeadRest = pad > 0
+                    ? { ...note, start: note.start + note.duration - pad, duration: pad }
+                    : null;
+                continue;
+            }
+            if (pendingHeadRest) {
+                current.push(pendingHeadRest);
+                pendingHeadRest = null;
+            }
+            current.push(note);
+        }
+        flush();
+        return regions;
+    }
+
+    /**
      * Build vocal segments for long audio
      */
     buildVocalSegments(notes, bpm) {
@@ -58,17 +160,9 @@ class AudioSegmentation {
         // Conservative scheduling: only gaps >= 1.5 seconds are removed from
         // model input. Keep 150 ms of rest context on both sides so consonant
         // releases and the following attack still see an <SP>-like boundary.
-        const LONG_REST_SEC = 1.5;
-        const REST_CONTEXT_SEC = 0.15;
         const longRestBeats = LONG_REST_SEC / secondsPerBeat;
         const restContextBeats = REST_CONTEXT_SEC / secondsPerBeat;
-        const isRest = (note) => {
-            const lyric = String(note.lyric || '').trim();
-            const continuation = note.noteType === 3 || note.isSlur || note.isContinuation;
-            return note.pitch <= 0 || note.noteType === 1
-                || lyric === '<SP>' || lyric === '<AP>'
-                || (lyric === '' && !continuation);
-        };
+        const isRest = (note) => this._isRestNote(note);
 
         const timelineEnd = sorted[sorted.length - 1].start + sorted[sorted.length - 1].duration;
         const timelineSec = timelineEnd * secondsPerBeat;
