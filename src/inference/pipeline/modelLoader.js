@@ -568,18 +568,16 @@ async function detectBestDevice(modelDir, npuAvailable = false) {
 
 const _validatedSessionModels = new Set();
 
-// Windows ML vendor-EP 适配范围（按项目决策：只做主模型，小检测器不适配）
-// - preflow：小收益，已验证 TRTRTX 2.30 稳定
-// - diffStep：暂不走 WinML — TRTRTX 2.30 对 846MB diff_step 产出异常 mel 导致全电流声（待 TRT 引擎参数调优后再启用）
-// - vocoder：暂不走 WinML — TRTRTX 2.30 对 995MB float32 vocoder 通道产出全零，保持 DML
-// - FCPE/RMVPE/ROSVOT/melTransform 等：保持原有 DML/CPU 链路
-// 新路径 onnx_models/trt_fp16/ 经 Olive TRTRTX FP16 高精度量化后，diffStep/vocoder 将恢复 TRTRTX：
-//   设置环境变量 SXS_WINML_ALL_TRTRTX=1 或复制 trt_fp16/*.onnx 到 fp16/ 后，
-//   下述集合将自动扩展为全部非 preprocess 模型（由 scripts/olive_trt_fp16/enable_trt_all.ps1 写入）。
-const _WINML_ALL_KEYS = ['diffStep','vocoder','preflow','note_text_encoder','note_pitch_encoder','note_type_encoder','f0_encoder','cond_emb','mel_transform'];
-const WINML_ELIGIBLE_KEYS = new Set(
-  process.env.SXS_WINML_ALL_TRTRTX === '1' ? _WINML_ALL_KEYS : ['diffStep','preflow']
-);
+// Windows ML vendor-EP 适配范围（按项目决策：不再限制模型种类）。
+// 所有经过 createSessionWithValidation 的 ONNX 模型（SVS 管线各模块、SiFiGAN 等）
+// 均允许尝试 Windows ML 插件 EP（NvTensorRtRtx / OpenVINO，未来 QNN/MIGraphX）：
+// 加载成功即优先用 TRT RTX EP / 其他 WinML EP；任何创建或推理失败（含 TRT 校验
+// 不通过、dummy 形状不匹配）都会静默回落到下方原有 DML/CPU 链路。
+// 小检测器（FCPE/RMVPE/ROSVOT）无 dummy 输入，在本函数开头即返回 CPU，不进该路径。
+const WINML_ELIGIBLE_KEYS = new Set([
+  'noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder', 'f0Encoder',
+  'preflow', 'condEmb', 'diffStep', 'vocoder', 'melTransform', 'sifigan',
+]);
 
 async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {
     const modelName = path.basename(modelPath);
@@ -640,7 +638,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         }
     };
 
-    // === Windows ML vendor EP 尝试（opt-in 实验特性；仅主模型） ===
+    // === Windows ML vendor EP 尝试（不限模型种类） ===
     // 在装有可兼容 vendor EP（NvTensorRtRtx / OpenVINO，未来 QNN/MIGraphX）的
     // 设备上优先走 Windows ML 插件 EP，实测 diff_step/vocoder 相比 DirectML
     // 有 ~4.5x 提速。任何失败都静默回落到下方原有 DML/CPU 链路。
