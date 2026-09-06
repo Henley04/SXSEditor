@@ -424,7 +424,7 @@ async function ensureEpsRegistered(epNames) {
  * @returns {Promise<Array<{epName:string, indices:number[]}>>}
  */
 let _emptyReasonLogged = false;
-async function getWinmlCandidates(useStaticShapes) {
+async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
     if (!isWinmlEnabled()) {
         if (!_emptyReasonLogged) {
             _emptyReasonLogged = true;
@@ -432,8 +432,7 @@ async function getWinmlCandidates(useStaticShapes) {
         }
         return [];
     }
-    // Main models target GPU EPs: NvTensorRTRTX 2.x (ORT 1.27 ABI) is
-    // preferred when loadable (canLoadLibrary gates 1.8); OpenVINO is fallback.
+    // 智能模式(未手动指定 EP)：自动优先 NV(TRT-RTX GPU)；手动指定则尊重用户、置于最先尝试。
     const selectedEp = String((globalThis.__SXS_SETTINGS_SNAPSHOT__ || {}).winmlPreferredEp || '').trim();
     const preferred = [selectedEp, 'NvTensorRTRTXExecutionProvider', 'OpenVINOExecutionProvider']
         .filter((name, index, all) => name && all.indexOf(name) === index);
@@ -461,22 +460,30 @@ async function getWinmlCandidates(useStaticShapes) {
     const byNameAny = (name) => devices.filter((d) => d.epName === name).map((d) => d.index);
 
     const chain = [];
-    const selectedIndices = selectedEp ? byNameAny(selectedEp) : [];
-    if (selectedIndices.length) chain.push({ epName: selectedEp, indices: selectedIndices });
-    // GPU priority: NvTensorRTRTX 2.x first (when registered), OpenVINO fallback.
-    const trt = byName('NvTensorRTRTXExecutionProvider', 'gpu');
-    if (trt.length && !chain.some(c => c.epName === 'NvTensorRTRTXExecutionProvider')) chain.push({ epName: 'NvTensorRTRTXExecutionProvider', indices: trt });
-    const ovAny = byNameAny('OpenVINOExecutionProvider');
-    if (ovAny.length && !chain.some(c => c.epName === 'OpenVINOExecutionProvider')) chain.push({ epName: 'OpenVINOExecutionProvider', indices: ovAny });
-    else {
-        const ovGpu = byName('OpenVINOExecutionProvider', 'gpu');
-        if (ovGpu.length) chain.push({ epName: 'OpenVINOExecutionProvider(gpu)', indices: ovGpu });
+    const pushIfMissing = (c) => { if (!chain.some((x) => x.epName === c.epName)) chain.push(c); };
+    // 1) 用户手动指定的 EP 最先尝试（尊重选择）
+    if (selectedEp) {
+        const selIndices = byNameAny(selectedEp);
+        if (selIndices.length) chain.push({ epName: selectedEp, indices: selIndices });
     }
-    if (useStaticShapes) {
-        const npu = byName('OpenVINOExecutionProvider', 'npu');
-        if (npu.length && !chain.some(c => c.indices.includes(npu[0]))) chain.push({ epName: 'OpenVINOExecutionProvider(npu)', indices: npu });
-        const auto = devices.filter((d) => d.epName.endsWith('.AUTO')).map((d) => d.index);
-        if (auto.length) chain.push({ epName: 'OpenVINO.AUTO', indices: auto });
+    // 2) NV(TRT-RTX GPU) 始终最高优先 —— 智能模式默认选择，NV > ALL OTHER EP
+    const trt = byName('NvTensorRTRTXExecutionProvider', 'gpu');
+    if (trt.length) pushIfMissing({ epName: 'NvTensorRTRTXExecutionProvider', indices: trt });
+    // 3) 其他 WinML EP(OpenVINO 等)：仅当被允许(diffstep/vocoder)或用户显式指定才纳入
+    const openvinoAllowed = allowOpenVINO || selectedEp === 'OpenVINOExecutionProvider';
+    if (openvinoAllowed) {
+        const ovAny = byNameAny('OpenVINOExecutionProvider');
+        if (ovAny.length) pushIfMissing({ epName: 'OpenVINOExecutionProvider', indices: ovAny });
+        else {
+            const ovGpu = byName('OpenVINOExecutionProvider', 'gpu');
+            if (ovGpu.length) pushIfMissing({ epName: 'OpenVINOExecutionProvider(gpu)', indices: ovGpu });
+        }
+        if (useStaticShapes) {
+            const npu = byName('OpenVINOExecutionProvider', 'npu');
+            if (npu.length && !chain.some((c) => c.indices.includes(npu[0]))) pushIfMissing({ epName: 'OpenVINOExecutionProvider(npu)', indices: npu });
+            const auto = devices.filter((d) => d.epName.endsWith('.AUTO')).map((d) => d.index);
+            if (auto.length) pushIfMissing({ epName: 'OpenVINO.AUTO', indices: auto });
+        }
     }
     // Log the resolved chain with per-index hardware so a single EP that spans
     // multiple hardware (e.g. OpenVINO NPU/CPU/GPU) is unambiguous in the console.
@@ -496,8 +503,8 @@ async function getWinmlCandidates(useStaticShapes) {
  * Try creating a WinML-backed session walking the candidate chain.
  * @returns {Promise<{session:object, ep:string}|null>}
  */
-async function tryCreateWinMLSession(modelPath, useStaticShapes) {
-    const candidates = await getWinmlCandidates(useStaticShapes);
+async function tryCreateWinMLSession(modelPath, useStaticShapes, allowOpenVINO = false) {
+    const candidates = await getWinmlCandidates(useStaticShapes, allowOpenVINO);
     if (!candidates.length) return null;
     const modelName = path.basename(modelPath);
     for (const cand of candidates) {

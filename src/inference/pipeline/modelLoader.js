@@ -636,17 +636,19 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             }
             throw err;
         }
-    };
+    });
 
-    // === Windows ML vendor EP 尝试（不限模型种类） ===
-    // 在装有可兼容 vendor EP（NvTensorRtRtx / OpenVINO，未来 QNN/MIGraphX）的
-    // 设备上优先走 Windows ML 插件 EP，实测 diff_step/vocoder 相比 DirectML
-    // 有 ~4.5x 提速。任何失败都静默回落到下方原有 DML/CPU 链路。
-    if (WINML_ELIGIBLE_KEYS.has(sessionKey)) {
+    // === Windows ML vendor EP 尝试 ===
+    // NV(TRT-RTX) 最高优先；winmlPreferredEp 为空(智能模式)时自动优先 NV，手动指定则尊重用户选择。
+    // OpenVINO 属“其他 EP”，仅 diffstep/vocoder 允许尝试；其余 WinML 模型只走 NV，
+    // NV 不可用/失败时，diffstep/vocoder 回退 DML，其余直接回退 CPU。
+    const winmlEligible = WINML_ELIGIBLE_KEYS.has(sessionKey);
+    const isDiffStepOrVocoder = sessionKey === 'diffStep' || sessionKey === 'vocoder';
+    if (winmlEligible) {
         try {
             const winmlProvider = require('../winml/winmlProvider');
             if (winmlProvider.isWinmlEnabled()) {
-                const winmlRes = await winmlProvider.tryCreateWinMLSession(modelPath, useStaticShapes);
+                const winmlRes = await winmlProvider.tryCreateWinMLSession(modelPath, useStaticShapes, isDiffStepOrVocoder);
                 if (winmlRes && winmlRes.session) {
                     const wsession = winmlRes.session;
                     const isTRT = String(winmlRes.ep).includes('NvTensorRTRTX');
@@ -740,40 +742,43 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         return { session: cpuSession, ep: 'cpu', warmedUp: false };
     }
 
+    // 回退策略：diffstep/vocoder 走 DML；其余 WinML 模型(DML 无加速收益)直接回退 CPU。
     let dmlSession = null;
-    try {
-        const dmlOpts = typeof dmlDeviceId === 'number'
-            ? { name: 'dml', deviceId: dmlDeviceId }
-            : 'dml';
-        // ORT session 选项由 buildSessionOptions() 依据用户设置生成。
-        // 默认策略：DML 路径 enableMemPattern=false（防止 DirectML 过度预分配 GPU 内存池）；
-        // 用户可在设置中开启 ortForceMemPatternOnDml 显式启用。
-        const sessionOptions = buildSessionOptions({
-            executionProviders: [dmlOpts, 'cpu'],
-        });
-        console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify(sessionOptions));
-        dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
-        if (runValidation) {
-            console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
-            await _runWithPrecisionFallback(dmlSession, 'DML');
-            _validatedSessionModels.add(validationKey);
-            console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
-        } else {
-            console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (reload, validation skipped)`);
-        }
-        return { session: dmlSession, ep: 'dml', warmedUp: runValidation };
-    } catch (dmlErr) {
-        if (dmlSession) {
-            try { dmlSession.release(); } catch (e) {
-                console.warn(`[OnnxSVSPipeline] Failed to release DML session (${modelName}):`, e.message);
+    if (!(winmlEligible && !isDiffStepOrVocoder)) {
+        try {
+            const dmlOpts = typeof dmlDeviceId === 'number'
+                ? { name: 'dml', deviceId: dmlDeviceId }
+                : 'dml';
+            // ORT session 选项由 buildSessionOptions() 依据用户设置生成。
+            // 默认策略：DML 路径 enableMemPattern=false（防止 DirectML 过度预分配 GPU 内存池）；
+            // 用户可在设置中开启 ortForceMemPatternOnDml 显式启用。
+            const sessionOptions = buildSessionOptions({
+                executionProviders: [dmlOpts, 'cpu'],
+            });
+            console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify(sessionOptions));
+            dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
+            if (runValidation) {
+                console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
+                await _runWithPrecisionFallback(dmlSession, 'DML');
+                _validatedSessionModels.add(validationKey);
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
+            } else {
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (reload, validation skipped)`);
             }
+            return { session: dmlSession, ep: 'dml', warmedUp: runValidation };
+        } catch (dmlErr) {
+            if (dmlSession) {
+                try { dmlSession.release(); } catch (e) {
+                    console.warn(`[OnnxSVSPipeline] Failed to release DML session (${modelName}):`, e.message);
+                }
+            }
+            const reason = dmlErr.message.includes('Reshape')
+                ? 'DML 不支持动态 Reshape (89个节点)'
+                : dmlErr.message.includes('ConvTranspose')
+                ? 'DML 不支持大 stride ConvTranspose (stride=480)'
+                : `DML 推理验证失败 (${dmlErr.message.substring(0, 60).split('\n')[0]})`;
+            console.log(`[OnnxSVSPipeline] ${modelName} DML load failed, reason: ${reason}`);
         }
-        const reason = dmlErr.message.includes('Reshape')
-            ? 'DML 不支持动态 Reshape (89个节点)'
-            : dmlErr.message.includes('ConvTranspose')
-            ? 'DML 不支持大 stride ConvTranspose (stride=480)'
-            : `DML 推理验证失败 (${dmlErr.message.substring(0, 60).split('\n')[0]})`;
-        console.log(`[OnnxSVSPipeline] ${modelName} DML load failed, reason: ${reason}`);
     }
 
     // DML不available，尝试UsingDML优化版本Model（在CPU上运行）
