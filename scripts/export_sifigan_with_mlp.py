@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""用训练好的 MLP mel_proj 重新导出 SiFiGAN ONNX 模型。
+r"""用训练好的 MLP mel_proj 重新导出 SiFiGAN ONNX 模型。
 
 复用 export_sifigan_vocoder.py 的 SiFiGAN Generator 加载逻辑，
 但用 MelProjMLP (128->256->256->43) 替换原线性 mel_proj。

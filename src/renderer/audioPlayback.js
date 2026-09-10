@@ -5,6 +5,7 @@ import { showAlertDialog } from '../alertDialog.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './timelineRenderer.js';
+import { StreamingScheduler } from '../shared/streamingScheduler.js';
 
 // ==================== Accompaniment helpers ====================
 
@@ -101,7 +102,7 @@ function _onVisibilityChange() {
   } else {
     if (state.isPlaying && state.useExclusiveMode && _exclusiveUpdateFn && !state.exclusivePlaybackRaf) {
       state.exclusivePlaybackRaf = requestAnimationFrame(_exclusiveUpdateFn);
-    } else if (state.isPlaying && !state.useExclusiveMode && _sharedUpdateFn && !state.playheadRaf && !_streamingWaitingForInference) {
+    } else if (state.isPlaying && !state.useExclusiveMode && _sharedUpdateFn && !state.playheadRaf && !(_scheduler && _scheduler.isWaiting)) {
       // 等待推理期间不重启 rAF：underrun 冻结时 playheadRaf 已被取消，
       // 若此处复活循环，其 getAudioContext() 调用会在挂起的 context 上
       // 触发意外 resume，导致伴奏在人声等待缺口中继续播放。
@@ -118,119 +119,44 @@ function _onBeforeUnloadForVisibility() {
 }
 
 // Streaming playback state (main page Play All with diffStepChunk).
-// Buffer-based waiting: when playback catches up to the inference frontier
-// (all received audio has been played), pause the playhead and show
-// "waiting for inference" until the next chunk arrives, then auto-resume.
-// This fixes playback incompleteness when inference is slower than realtime
-// (late-arriving chunks were previously scheduled at wrong times) and
-// implements the segment-boundary waiting behavior.
+// Shared infrastructure (AudioContext suspend/resume, watchdog, underrun detection,
+// source counting) is handled by StreamingScheduler (src/shared/streamingScheduler.js).
+// Renderer-specific state:
 let _streamingActive = false;
 let _streamingFirstChunkOffsetSec = 0;  // First chunk's global position (for coordinate conversion)
-let _streamingBufferEndSec = 0;         // Furthest chunk end in playhead seconds
 let _streamingAccEndSec = 0;            // Furthest accompaniment end in playhead seconds
-let _streamingInferenceDone = false;    // synthesizeMultiStreaming returned
-let _streamingWaitingForInference = false;
-let _streamingWaitStartCtxTime = 0;
-let _streamingIsLastReceived = false;   // isLast chunk has been received
-let _streamingActiveSourceCount = 0;    // Currently-playing source count
-let _streamingContextSuspendedForInference = false;
-let _streamingSuspendInFlight = null;   // 尚未生效的 ctx.suspend() promise
 
-async function _pauseStreamingForInference(ctx) {
-  if (_streamingContextSuspendedForInference) return;
-  _streamingContextSuspendedForInference = true;
-  // All streaming vocal and accompaniment BufferSources share this context.
-  // Suspending it freezes every source and AudioContext.currentTime together,
-  // so accompaniment cannot run ahead while the next vocal chunk is inferred.
-  if (ctx && ctx.state === 'running') {
-    const p = ctx.suspend().catch(err => {
-      console.warn('[Audio] Failed to suspend context while waiting for inference:', err.message);
-    });
-    _streamingSuspendInFlight = p;
-    try { await p; } finally {
-      if (_streamingSuspendInFlight === p) _streamingSuspendInFlight = null;
-    }
-  }
-}
+let _scheduler = null;
 
-async function _resumeStreamingAfterInference(ctx) {
-  if (!_streamingContextSuspendedForInference) return;
-  // 与未生效的 suspend 串行化：若 suspend 还在途就提前 resume，
-  // resume 会被跳过（state 仍为 running），随后 suspend 生效将所有
-  // source 冻结且无人再恢复——表现为"卡在等待推理"或伴奏时钟错位。
-  if (_streamingSuspendInFlight) {
-    try { await _streamingSuspendInFlight; } catch (_) {}
-  }
-  _streamingContextSuspendedForInference = false;
-  if (ctx && ctx.state === 'suspended') {
-    try { await ctx.resume(); } catch (err) {
-      console.warn('[Audio] Failed to resume context after inference:', err.message);
-    }
-  }
-}
-
-/**
- * 中止推理等待（用户暂停/拖拽/停止时调用）：
- * 清除冻结标记并恢复共享 AudioContext，避免挂起状态泄漏到后续
- * 非流式播放（否则 getAudioContext 会因冻结标记拒绝 resume，播放无声）。
- * 必须先等在途 suspend 落地再 resume，顺序与 _resumeStreamingAfterInference 一致。
- */
-async function _abortStreamingWait(ctx) {
-  _streamingWaitingForInference = false;
-  if (!_streamingContextSuspendedForInference) return;
-  _streamingContextSuspendedForInference = false;
-  const inflight = _streamingSuspendInFlight;
-  _streamingSuspendInFlight = null;
-  if (inflight) { try { await inflight; } catch (_) {} }
-  if (ctx && ctx.state === 'suspended') {
-    try { await ctx.resume(); } catch (_) {}
-  }
+function _createScheduler() {
+  _scheduler = new StreamingScheduler({
+    getCtx: () => state.audioContext,
+    getElapsed: () => {
+      const ctx = state.audioContext;
+      return ctx ? ctx.currentTime - state.playbackStartTime : 0;
+    },
+    onFinish: _finishStreamingPlayback,
+  });
 }
 
 /**
  * 检测流式播放 buffer underrun：当 playhead 到达已收到音频的最远位置
  * （buffer 前沿）且推理尚未完成时，进入"等待推理"状态。
- * - 冻结共享 AudioContext（暂停所有 source 与伴奏，避免伴奏跑过人声缺口）
- * - 取消 playhead rAF（后续由下一 chunk 回调或 watchdog 恢复）
+ * 冻结共享 AudioContext（暂停所有 source 与伴奏，避免伴奏跑过人声缺口），
+ * 取消 playhead rAF（后续由下一 chunk 回调或 watchdog 恢复）。
  * 返回 true 表示已进入等待状态，调用方需在本次循环中返回停止。
  */
 function _enterStreamingWaitIfUnderrun(ctx, elapsed) {
-  if (!_streamingActive || _streamingInferenceDone || _streamingWaitingForInference) return false;
-  if (elapsed < _streamingBufferEndSec) return false;
-  _streamingWaitingForInference = true;
-  _streamingWaitStartCtxTime = ctx.currentTime;
-  void _pauseStreamingForInference(ctx);
-  if (state.playheadRaf) {
-    cancelAnimationFrame(state.playheadRaf);
-    state.playheadRaf = null;
-  }
-  dom.timeDisplay.textContent = t('main.waitingForInference');
-  drawPlayheadLine(_streamingBufferEndSec);
-  dom.btnPlay.textContent = t('main.waitingForInference');
-  return true;
-}
-
-// 后台 watchdog：rAF 在窗口最小化/标签隐藏时会被挂起，导致 buffer underrun
-// 检测失效（音频仍经 WebAudio 后台播放）。用 setTimeout 兜底，使等待推理
-// 在最小化时同样生效。自动重排并在流式结束后自动停止。
-let _streamingWatchdogTimer = null;
-function _ensureStreamingWatchdog() {
-  if (_streamingWatchdogTimer) return;
-  let stopped = false;
-  const tick = () => {
-    if (stopped) return;
-    if (!_streamingActive) { _streamingWatchdogTimer = null; stopped = true; return; }
-    try {
-      const ctx = state.audioContext;
-      if (ctx && ctx.state !== 'closed' && state.isPlaying &&
-          !_streamingInferenceDone && !_streamingWaitingForInference) {
-        const elapsed = ctx.currentTime - state.playbackStartTime;
-        _enterStreamingWaitIfUnderrun(ctx, elapsed);
-      }
-    } catch (_) {}
-    _streamingWatchdogTimer = setTimeout(tick, 250);
-  };
-  _streamingWatchdogTimer = setTimeout(tick, 250);
+  if (!_streamingActive || !_scheduler) return false;
+  return _scheduler.checkUnderrun(elapsed, () => {
+    if (state.playheadRaf) {
+      cancelAnimationFrame(state.playheadRaf);
+      state.playheadRaf = null;
+    }
+    dom.timeDisplay.textContent = t('main.waitingForInference');
+    drawPlayheadLine(_scheduler.bufferEndSec);
+    dom.btnPlay.textContent = t('main.waitingForInference');
+  });
 }
 
 // 流式播放自然完成：所有已调度 source（人声 chunk + 伴奏）均已结束。
@@ -241,7 +167,7 @@ function _finishStreamingPlayback() {
   state.playbackPauseOffset = 0;
   state.streamingSources = [];
   _streamingActive = false;
-  _streamingContextSuspendedForInference = false;
+  if (_scheduler) _scheduler.deactivate();
   stopPlayheadAnimation();
   dom.timeDisplay.textContent = formatTime(0);
   clearPlayheadLine();
@@ -402,23 +328,17 @@ export async function playAll() {
       state.streamingSources = [];
       state.streamingFinished = false;
 
-      // 重置 buffer-based 等待机制状态
+      // 重置 streaming scheduler 状态
       _streamingActive = false;
       _streamingFirstChunkOffsetSec = 0;
-      _streamingBufferEndSec = 0;
       _streamingAccEndSec = 0;
-      _streamingInferenceDone = false;
-      _streamingWaitingForInference = false;
-      _streamingWaitStartCtxTime = 0;
-      _streamingIsLastReceived = false;
-      _streamingActiveSourceCount = 0;
-      _streamingContextSuspendedForInference = false;
+      _createScheduler();
 
       if (canStreamPlayback) {
         _streamingActive = true;
         // 启动后台 watchdog：窗口最小化时 rAF 挂起，需用定时器兜底
         // 检测 buffer underrun，保证等待推理在后台同样生效。
-        _ensureStreamingWatchdog();
+        _scheduler.activate();
         streamingChunkCleanup = window.electronAPI.onSVSChunkAudio(async (chunkInfo) => {
           try {
             if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
@@ -481,26 +401,21 @@ export async function playAll() {
                 }
                 const accEndSec = accStartSec + accBuffer.duration;
                 if (accEndSec > _streamingAccEndSec) _streamingAccEndSec = accEndSec;
-                _streamingActiveSourceCount++;
+                _scheduler.addSource();
                 const accSourceIdx = state.streamingSources.length;
                 state.streamingSources.push(accSource);
                 accSource.onended = () => {
-                  _streamingActiveSourceCount--;
+                  _scheduler.sourceEnded();
                   if (state.streamingSources[accSourceIdx] === accSource) {
                     state.streamingSources[accSourceIdx] = null;
-                  }
-                  if (_streamingIsLastReceived &&
-                      _streamingActiveSourceCount === 0 &&
-                      !state.streamingFinished) {
-                    _finishStreamingPlayback();
                   }
                 };
               }
             }
 
             // 更新 buffer 前沿（已收到音频的最远全局位置）
-            if (chunkEndSec > _streamingBufferEndSec) {
-              _streamingBufferEndSec = chunkEndSec;
+            if (chunkEndSec > _scheduler.bufferEndSec) {
+              _scheduler.bufferEndSec = chunkEndSec;
             }
 
             // 检测 chunk 是否到达过晚（调度时间已过去）。
@@ -508,23 +423,22 @@ export async function playAll() {
             // 若到达过晚且推理未完成，进入等待状态，由下方恢复逻辑重新调度。
             const prelimScheduleTime = state.playbackStartTime + chunkStartSec;
             const minTime = ctx.currentTime + 0.01;
-            if (prelimScheduleTime < minTime && !_streamingInferenceDone && !_streamingWaitingForInference) {
-              _streamingWaitingForInference = true;
-              _streamingWaitStartCtxTime = ctx.currentTime;
-              await _pauseStreamingForInference(ctx);
-              if (state.playheadRaf) {
-                cancelAnimationFrame(state.playheadRaf);
-                state.playheadRaf = null;
-              }
-              dom.btnPlay.textContent = t('main.waitingForInference');
+            if (prelimScheduleTime < minTime && !_scheduler.inferenceDone && !_scheduler.isWaiting) {
+              // 进入等待状态：scheduler 内部 suspend AudioContext
+              _scheduler.checkUnderrun(Infinity, () => {
+                if (state.playheadRaf) {
+                  cancelAnimationFrame(state.playheadRaf);
+                  state.playheadRaf = null;
+                }
+                dom.btnPlay.textContent = t('main.waitingForInference');
+              });
             }
 
             // 如果正在等待推理，恢复播放：调整 playbackStartTime 使 chunk
             // 在 currentTime+0.05 发声（此时 playhead 位于 chunkStartSec 全局位置），
             // 并重启 rAF 动画。
-            if (_streamingWaitingForInference) {
-              _streamingWaitingForInference = false;
-              await _resumeStreamingAfterInference(ctx);
+            if (_scheduler.isWaiting) {
+              await _scheduler.resumeFromWait();
               // AudioContext.currentTime was frozen together with every source,
               // so the original playbackStartTime remains the valid shared clock.
               startPlayheadAnimation();
@@ -540,22 +454,17 @@ export async function playAll() {
             // 当 isLast 已收到且所有 source 均结束时标记流式完成。
             // 这比仅依赖 isLast chunk 的 onended 更健壮——
             // 若非末 chunk 因音频更长而晚于 isLast chunk 结束，也能正确等待。
-            _streamingActiveSourceCount++;
+            _scheduler.addSource();
             if (chunkInfo.isLast) {
-              _streamingIsLastReceived = true;
+              _scheduler.markLastReceived();
             }
 
             const sourceIdx = state.streamingSources.length;
             state.streamingSources.push(source);
             source.onended = () => {
-              _streamingActiveSourceCount--;
+              _scheduler.sourceEnded();
               if (state.streamingSources[sourceIdx] === source) {
                 state.streamingSources[sourceIdx] = null;
-              }
-              if (_streamingIsLastReceived &&
-                  _streamingActiveSourceCount === 0 &&
-                  !state.streamingFinished) {
-                _finishStreamingPlayback();
               }
             };
           } catch (e) {
@@ -585,7 +494,7 @@ export async function playAll() {
         state.currentAudioBuffer = null; // 流式播放无整段 buffer，置空避免 playhead 动画误判
 
         // 标记推理完成：后续不再触发 buffer underrun 等待
-        _streamingInferenceDone = true;
+        await _scheduler.setInferenceDone();
 
         // 若合成返回时正在等待推理（最后一批 chunk 已收到但 playhead 仍冻结），
         // 恢复播放：只需重启 rAF 即可。不重置 playbackStartTime——
@@ -593,9 +502,8 @@ export async function playAll() {
         // chunk 到达时设为正确值）。重置 playbackStartTime 会使 elapsed 跳到
         // buffer 末尾，与仍在播放的 source 时间基准脱节，导致 playhead 越过
         // 正在播放的音频提前结束或进入静音区。
-        if (_streamingWaitingForInference && streamingStarted) {
-          _streamingWaitingForInference = false;
-          await _resumeStreamingAfterInference(state.audioContext);
+        if (streamingStarted) {
+          // setInferenceDone already called resumeFromWait if waiting
           startPlayheadAnimation();
         }
 
@@ -616,7 +524,7 @@ export async function playAll() {
         // 停止已调度的流式 source
         state.streamingFinished = true;
         _streamingActive = false;
-        _streamingWaitingForInference = false;
+        if (_scheduler) _scheduler.deactivate();
         for (const src of state.streamingSources) {
           if (!src) continue;
           try { src.onended = null; src.stop(); } catch (_) {}
@@ -740,7 +648,7 @@ export async function playAll() {
     state.isSynthesizing = false;
     // 流式播放仍在进行时：若正在等待推理显示"等待推理..."，否则显示"播放"。
     // 流式播放未启动或已结束时：显示"播放"。
-    if (_streamingActive && state.isPlaying && _streamingWaitingForInference) {
+    if (_streamingActive && state.isPlaying && _scheduler && _scheduler.isWaiting) {
       dom.btnPlay.textContent = t('main.waitingForInference');
     } else {
       dom.btnPlay.textContent = t('main.play');
@@ -764,7 +672,7 @@ export function getAudioContext() {
   // 此处绝不能自动 resume——否则任何在等待窗口内调用本函数的代码
   // （如 visibilitychange 恢复的 rAF tick）都会解冻伴奏，使其在人声
   // 缺口期间继续播放，造成人声/伴奏永久错位。
-  if (state.audioContext.state === 'suspended' && !_streamingContextSuspendedForInference) {
+  if (state.audioContext.state === 'suspended' && !(_scheduler && _scheduler._contextSuspended)) {
     state.audioContext.resume().catch(err => {
       console.warn('[Audio] AudioContext resume failed:', err);
     });
@@ -830,8 +738,8 @@ export function applyAudioSettings() {
   if (state.audioContext && state.audioSettings.audioOutputDevice !== undefined && state.audioSettings.audioOutputDevice !== -1) {
     const sinkId = String(state.audioSettings.audioOutputDevice);
     if (state.audioContext.setSinkId && typeof state.audioContext.setSinkId === 'function') {
-      state.audioContext.setSinkId(sinkId).catch(_err => {
-      // TODO: translate garbled log
+      state.audioContext.setSinkId(sinkId).catch((err) => {
+        console.warn('Unable to switch the audio output device:', err);
       });
     }
   }
@@ -983,8 +891,8 @@ export async function startExclusivePlayback(offset) {
     });
 
     startExclusivePlayheadAnimation(removeEndedListener, playbackStartWallTime);
-  } catch (_err) {
-      // TODO: translate garbled log
+  } catch (err) {
+    console.warn('Exclusive audio playback failed; using shared playback:', err);
     state.useExclusiveMode = false;
     startSharedPlayback(offset);
   }
@@ -1056,20 +964,17 @@ export function pausePlayback() {
     state.playbackPauseOffset = Math.max(0, elapsed);
     state.streamingFinished = true;
     _streamingActive = false;
-    _streamingWaitingForInference = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
       try { src.onended = null; src.stop(); } catch (_) {}
     }
     state.streamingSources = [];
     state.isPlaying = false;
+    if (_scheduler) _scheduler.deactivate();
     if (state.playheadRaf) {
       cancelAnimationFrame(state.playheadRaf);
       state.playheadRaf = null;
     }
-    // 用户在"等待推理"冻结期间暂停：解除 context 冻结标记并恢复，
-    // 否则挂起状态泄漏，后续非流式播放会因 getAudioContext 拒绝 resume 而无声。
-    void _abortStreamingWait(state.audioContext);
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
     if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
@@ -1105,9 +1010,7 @@ export function pausePlayback() {
 
 export function stopPlayback() {
   // 解除推理等待冻结（等待在途 suspend 落地后再 resume，避免冻结泄漏）
-  if (_streamingContextSuspendedForInference || _streamingSuspendInFlight) {
-    void _abortStreamingWait(state.audioContext);
-  }
+  if (_scheduler) _scheduler.deactivate();
   if (state.isSynthesizing) {
     state.synthesisCancelled = true;
     window.electronAPI.cancelSVSSynthesis().catch(() => {});
@@ -1116,13 +1019,13 @@ export function stopPlayback() {
   if (state.streamingSources && state.streamingSources.length > 0) {
     state.streamingFinished = true;
     _streamingActive = false;
-    _streamingWaitingForInference = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
       try { src.onended = null; src.stop(); } catch (_) {}
     }
     state.streamingSources = [];
   }
+  if (_scheduler) _scheduler.deactivate();
   if (state.useExclusiveMode) {
     stopExclusivePlayback();
   }
@@ -1150,19 +1053,17 @@ export async function seekPlayback(newOffset) {
   if (state.streamingSources && state.streamingSources.length > 0) {
     state.streamingFinished = true;
     _streamingActive = false;
-    _streamingWaitingForInference = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
       try { src.onended = null; src.stop(); } catch (_) {}
     }
     state.streamingSources = [];
     state.isPlaying = false;
+    if (_scheduler) _scheduler.deactivate();
     if (state.playheadRaf) {
       cancelAnimationFrame(state.playheadRaf);
       state.playheadRaf = null;
     }
-    // 流式中拖拽 playhead：解除推理等待的 context 冻结（同 pausePlayback）
-    void _abortStreamingWait(state.audioContext);
     state.playbackPauseOffset = Math.max(0, newOffset);
     drawPausedPlayheadAt(state.playbackPauseOffset);
     dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
@@ -1258,8 +1159,8 @@ export function startPlayheadAnimation() {
     // 0.5s 容差防止 chunk 边界抖动导致误停。
     // 播放前沿取 {人声 chunk 前沿, 伴奏结束位置} 的最大值，避免伴奏长于
     // 人声时在人声结束后就提前停止（会截断仍在播放的伴奏）。
-    const totalFrontierSec = Math.max(_streamingBufferEndSec, _streamingAccEndSec);
-    if (_streamingInferenceDone && elapsed >= totalFrontierSec + 0.5) {
+    const totalFrontierSec = Math.max(_scheduler.bufferEndSec, _streamingAccEndSec);
+    if (_scheduler.inferenceDone && elapsed >= totalFrontierSec + 0.5) {
       if (!state.streamingFinished) {
         state.streamingFinished = true;
         state.isPlaying = false;

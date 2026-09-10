@@ -636,7 +636,7 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
             }
             throw err;
         }
-    });
+    };
 
     // === Windows ML vendor EP 尝试 ===
     // NV(TRT-RTX) 最高优先；winmlPreferredEp 为空(智能模式)时自动优先 NV，手动指定则尊重用户选择。

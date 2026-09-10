@@ -754,8 +754,8 @@ export function renderSingerList() {
               await loadSingerFile(singer.id, buffer, filePath);
               refreshAll();
             }
-          } catch (_err) {
-      // TODO: translate garbled log
+          } catch (err) {
+            console.warn('Unable to relocate the singer file:', err);
           }
         });
         infoDiv.appendChild(relocateBtn);

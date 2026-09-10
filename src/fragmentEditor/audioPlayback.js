@@ -3,6 +3,7 @@ const { encodeWav, applyEnvelopesToAudio } = require('../audio/wavEncoder.js');
 import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
 import { initPipeline, getFragmentPreviewInferenceOptions, getFragmentExportInferenceOptions } from './pipeline.js';
+import { StreamingScheduler } from '../shared/streamingScheduler.js';
 import {
   getSampleRate,
   getFragmentAudioContext, setFragmentAudioContext,
@@ -199,37 +200,36 @@ let streamingNextStart = 0;
 let streamingFinished = false;
 let streamingFadeGainNode = null;
 
-// Buffer underrun protection (ported from renderer/audioPlayback.js).
-// When inference is slower than realtime playback, the playhead catches up
-// to the furthest received audio. Without protection, the playhead keeps
-// advancing through silence and/or chunks are scheduled at wrong times.
-// These variables track the buffer frontier and waiting state to pause
-// the playhead until the next chunk arrives, then auto-resume.
+// Buffer underrun protection: shared infrastructure (AudioContext suspend/resume,
+// watchdog, underrun detection, source counting) via StreamingScheduler.
 let _streamingStarted = false;            // true after first chunk initializes playback
-let _streamingBufferEndSec = 0;          // Furthest chunk end in playhead seconds
-let _streamingInferenceDone = false;     // synthesizeFragmentSVS IPC returned
-let _streamingWaitingForInference = false;
-let _streamingIsLastReceived = false;    // isLast chunk has been received
-let _streamingActiveSourceCount = 0;     // Currently-playing source count
 let _streamingFirstChunkAudioOffset = 0; // playStartPosition > firstNoteStartSec 时需跳过的前导音频秒数
+let _scheduler = null;
 
-/**
- * 检查流式播放是否已完成（isLast 已收到且无活跃 source）。
- * 用于 onended 回调和跳过整个 chunk（无 source 创建）两种场景。
- */
-function _checkStreamingComplete() {
-  if (_streamingIsLastReceived &&
-      _streamingActiveSourceCount <= 0 &&
-      !streamingFinished) {
-    streamingFinished = true;
-    setFragmentIsPlaying(false);
-    const raf = getFragmentPlayheadRaf();
-    if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
-    setFragmentCurrentTime(0);
-    setFragmentPlayStartPosition(0);
-    updateFragmentPlayButton();
-    render();
-  }
+function _createFragmentScheduler() {
+  _scheduler = new StreamingScheduler({
+    getCtx: () => getFragmentAudioContext(),
+    getElapsed: () => {
+      const ctx = getFragmentAudioContext();
+      return ctx ? ctx.currentTime - getFragmentPlaybackStartTime() : 0;
+    },
+    onWaitStateChange: (isWaiting) => {
+      // Fragment editor: freezing/ thawing handled by rAF loop check
+    },
+    onFinish: _onFragmentStreamingFinished,
+  });
+}
+
+function _onFragmentStreamingFinished() {
+  streamingFinished = true;
+  streamingSources = [];
+  setFragmentIsPlaying(false);
+  const raf = getFragmentPlayheadRaf();
+  if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+  setFragmentCurrentTime(0);
+  setFragmentPlayStartPosition(0);
+  updateFragmentPlayButton();
+  render();
 }
 
 // visibilitychange handler: pause rAF-driven UI updates when tab hidden
@@ -261,7 +261,7 @@ function _ensureVisibilityHandler() {
         // 等待推理（underrun 冻结）期间不重启 rAF：underrun 分支已取消循环，
         // 若在此复活，tick 会把 currentTime 推进到已收音频前沿之外的静音区，
         // 使播放头与人声脱节；等待结束由 chunk 回调重启动画。
-        if (_streamingWaitingForInference) return;
+        if (_scheduler && _scheduler.isWaiting) return;
         setFragmentPlayheadRaf(requestAnimationFrame(_sharedUpdateFn));
       }
     }
@@ -274,11 +274,6 @@ function stopStreamingPlayback() {
   // playFragment 开头会显式重置为 false 启动新一轮流式合成。
   streamingFinished = true;
   _streamingStarted = false;
-  _streamingBufferEndSec = 0;
-  _streamingInferenceDone = false;
-  _streamingWaitingForInference = false;
-  _streamingIsLastReceived = false;
-  _streamingActiveSourceCount = 0;
   _streamingFirstChunkAudioOffset = 0;
   for (const src of streamingSources) {
     if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
@@ -294,6 +289,8 @@ function stopStreamingPlayback() {
     try { streamingFadeGainNode.disconnect(); } catch (_) {}
     streamingFadeGainNode = null;
   }
+  // 停止 scheduler：解除 AudioContext 冻结 + 取消 watchdog
+  if (_scheduler) _scheduler.deactivate();
 }
 
 export async function getFragmentAudioContextInternal() {
@@ -411,44 +408,25 @@ function stopFragmentExclusivePlayback() {
 
 /**
  * Buffer underrun detection: when the playhead reaches the furthest received
- * audio position (_streamingBufferEndSec) and inference is not yet complete,
- * freeze the playhead and show "waiting for inference". Prevents the playhead
- * from advancing through silence when chunks arrive slower than realtime.
- * The next chunk callback resets _streamingWaitingForInference and resumes.
+ * audio position and inference is not yet complete, freeze the playhead.
+ * Uses StreamingScheduler for AudioContext suspend/resume and state tracking.
  * Returns true when the wait state was entered (caller must stop its own loop).
  */
 function _checkFragmentStreamingUnderrun() {
-  if (!_streamingStarted || _streamingInferenceDone || _streamingWaitingForInference) return false;
+  if (!_streamingStarted || !_scheduler) return false;
   if (!getFragmentIsPlaying()) return false;
   const ctx = getFragmentAudioContext();
   if (!ctx) return false;
   const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
   const curTime = getFragmentPlaybackOffset() + elapsed;
-  if (curTime < _streamingBufferEndSec) return false;
-  _streamingWaitingForInference = true;
-  // Freeze playhead at buffer frontier (not at elapsed which has already
-  // advanced past the received audio into silence).
-  setFragmentCurrentTime(_streamingBufferEndSec);
-  const raf = getFragmentPlayheadRaf();
-  if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
-  render();
-  return true;
-}
-
-// 后台 watchdog：rAF 在窗口最小化/标签隐藏时会被挂起，导致 buffer underrun
-// 检测失效（音频仍经 WebAudio 后台播放）。用 setTimeout 兜底，使等待推理
-// 在最小化时同样生效。自动重排并在流式结束后自动停止。
-let _fragmentStreamingWatchdogTimer = null;
-function _ensureFragmentStreamingWatchdog() {
-  if (_fragmentStreamingWatchdogTimer) return;
-  let stopped = false;
-  const tick = () => {
-    if (stopped) return;
-    if (!_streamingStarted || streamingFinished) { _fragmentStreamingWatchdogTimer = null; stopped = true; return; }
-    try { _checkFragmentStreamingUnderrun(); } catch (_) {}
-    _fragmentStreamingWatchdogTimer = setTimeout(tick, 250);
-  };
-  _fragmentStreamingWatchdogTimer = setTimeout(tick, 250);
+  return _scheduler.checkUnderrun(curTime, () => {
+    // Freeze playhead at buffer frontier (not at elapsed which has already
+    // advanced past the received audio into silence).
+    setFragmentCurrentTime(_scheduler.bufferEndSec);
+    const raf = getFragmentPlayheadRaf();
+    if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+    render();
+  });
 }
 
 export function updateFragmentPlayhead() {
@@ -462,7 +440,7 @@ export function updateFragmentPlayhead() {
   setFragmentCurrentTime(getFragmentPlaybackOffset() + elapsed);
 
   // Buffer underrun detection (see _checkFragmentStreamingUnderrun).
-  // 窗口最小化时 rAF 会被挂起，由 _ensureFragmentStreamingWatchdog 兜底检测。
+  // 窗口最小化时 rAF 会被挂起，由 StreamingScheduler.watchdog 兜底检测。
   if (_checkFragmentStreamingUnderrun()) return;
 
   // 流式播放期间跳过 duration 检查：
@@ -787,12 +765,8 @@ export async function playFragment() {
   streamingSources = [];
   streamingNextStart = 0;
   _streamingStarted = false;
-  _streamingBufferEndSec = 0;
-  _streamingInferenceDone = false;
-  _streamingWaitingForInference = false;
-  _streamingIsLastReceived = false;
-  _streamingActiveSourceCount = 0;
   _streamingFirstChunkAudioOffset = 0;
+  _createFragmentScheduler();
 
   try {
     if (!getPipelineInitialized()) {
@@ -872,7 +846,7 @@ export async function playFragment() {
           updateFragmentPlayhead();
           // 启动后台 watchdog：窗口最小化时 rAF 挂起，需用定时器兜底
           // 检测 buffer underrun，保证等待推理在后台同样生效。
-          _ensureFragmentStreamingWatchdog();
+          _scheduler.activate();
         }
 
         // 处理 playStartPosition > firstNoteStartSec：跳过 chunk 前导音频
@@ -884,9 +858,8 @@ export async function playFragment() {
             // 整个 chunk 都在跳过范围内：不创建 source，减少剩余偏移后跳过此 chunk
             _streamingFirstChunkAudioOffset -= chunkAudio.length / getSampleRate();
             // 仍需处理 isLast 标记
-            if (chunkInfo.isLast) {
-              _streamingIsLastReceived = true;
-              _checkStreamingComplete();
+            if (chunkInfo.isLast && _scheduler) {
+              _scheduler.markLastReceived();
             }
             return;
           }
@@ -900,38 +873,30 @@ export async function playFragment() {
         source.buffer = audioBuffer;
         const effectiveChunkDuration = chunkAudio.length / getSampleRate();
 
-        // Buffer underrun protection: if the previous chunk's scheduled end
-        // has already passed (inference was slower than realtime playback),
-        // clamp streamingNextStart to currentTime + 0.05 to avoid scheduling
-        // this chunk in the past (which Web Audio clamps to currentTime,
-        // causing overlapping playback). Also reset the playhead time base
-        // so the playhead jumps to the current chunk's position.
-        if (streamingNextStart < ctx.currentTime + 0.01) {
-          // Adjust playbackStartTime so the playhead aligns with this chunk's
-          // start position (streamingNextStart relative to fragment playback).
-          const offsetFromPlayStart = streamingNextStart - getFragmentPlaybackStartTime();
-          setFragmentPlaybackStartTime(ctx.currentTime + 0.05 - offsetFromPlayStart);
-          streamingNextStart = ctx.currentTime + 0.05;
-          // Resume playhead animation if it was frozen by underrun detection
-          if (_streamingWaitingForInference) {
-            _streamingWaitingForInference = false;
-            updateFragmentPlayhead();
+        // Buffer underrun recovery: if the previous chunk's scheduled end has
+        // already passed (inference slower than realtime), clamp to now.
+        // If still waiting for inference (chunk arrived ahead of the clamp
+        // threshold), reset the time base to align with buffer frontier.
+        // Both cases are merged into a single recovery path to avoid
+        // duplicate playbackStartTime recalculation causing playhead jitter.
+        if (streamingNextStart < ctx.currentTime + 0.01 || (_scheduler && _scheduler.isWaiting)) {
+          await _scheduler.resumeFromWait();
+          if (streamingNextStart < ctx.currentTime + 0.01) {
+            // Late chunk: clamp scheduling time to now, adjust time base.
+            const offsetFromPlayStart = streamingNextStart - getFragmentPlaybackStartTime();
+            setFragmentPlaybackStartTime(ctx.currentTime + 0.05 - offsetFromPlayStart);
+            streamingNextStart = ctx.currentTime + 0.05;
+          } else {
+            // Chunk arrived while waiting (schedule time still future):
+            // reset time base to align playhead with buffer frontier.
+            setFragmentPlaybackStartTime(ctx.currentTime - _scheduler.bufferEndSec + getFragmentPlaybackOffset());
           }
-        }
-
-        // Resume playhead if it was frozen by underrun detection but this
-        // chunk's scheduled time is still in the future (no clamping needed).
-        if (_streamingWaitingForInference) {
-          _streamingWaitingForInference = false;
-          setFragmentPlaybackStartTime(ctx.currentTime - _streamingBufferEndSec + getFragmentPlaybackOffset());
           updateFragmentPlayhead();
         }
 
         // Update buffer frontier (furthest audio end in playhead seconds)
         const chunkEndSec = (getFragmentPlaybackOffset() + (streamingNextStart - getFragmentPlaybackStartTime())) + effectiveChunkDuration;
-        if (chunkEndSec > _streamingBufferEndSec) {
-          _streamingBufferEndSec = chunkEndSec;
-        }
+        if (_scheduler) _scheduler.updateBufferFrontier(chunkEndSec);
 
         // chunk source 经 streamingFadeGainNode（如有）连接到 master gain，
         // 使流式播放也应用 per-note fade。无 fade 时直接连 master gain。
@@ -950,18 +915,17 @@ export async function playFragment() {
         // streaming complete. This is more robust than relying solely on the
         // isLast chunk's onended — if a non-last chunk (longer audio) is still
         // playing when the isLast chunk ends, we correctly wait for it.
-        _streamingActiveSourceCount++;
-        if (chunkInfo.isLast) {
-          _streamingIsLastReceived = true;
+        if (_scheduler) _scheduler.addSource();
+        if (chunkInfo.isLast && _scheduler) {
+          _scheduler.markLastReceived();
         }
         const sourceIdx = streamingSources.length;
         streamingSources.push(source);
         source.onended = () => {
-          _streamingActiveSourceCount--;
+          if (_scheduler) _scheduler.sourceEnded();
           if (streamingSources[sourceIdx] === source) {
             streamingSources[sourceIdx] = null;
           }
-          _checkStreamingComplete();
         };
       } catch (e) {
         console.warn('[FragmentAudio] Streaming chunk playback failed:', e.message);
@@ -1000,21 +964,21 @@ export async function playFragment() {
     setFragmentAudioDataSignature(currentSignature);
 
     // 标记推理完成：后续不再触发 buffer underrun 等待
-    _streamingInferenceDone = true;
+    if (_scheduler) await _scheduler.setInferenceDone();
 
     // 若合成返回时正在等待推理（最后一批 chunk 已收到但 playhead 仍冻结），
-    // 恢复播放：调整 playbackStartTime 使 playhead 从 buffer 前沿继续。
-    if (_streamingWaitingForInference && _streamingStarted) {
-      _streamingWaitingForInference = false;
+    // 恢复播放：setInferenceDone 已解冻 AudioContext，调整 playbackStartTime
+    // 使 playhead 从 buffer 前沿继续。
+    if (_streamingStarted) {
       const ctx = getFragmentAudioContext();
-      if (ctx) {
-        setFragmentPlaybackStartTime(ctx.currentTime - _streamingBufferEndSec + getFragmentPlaybackOffset());
+      if (ctx && _scheduler) {
+        setFragmentPlaybackStartTime(ctx.currentTime - _scheduler.bufferEndSec + getFragmentPlaybackOffset());
         updateFragmentPlayhead();
       }
     }
 
     // 移除 chunk 监听（避免内存泄漏），但保留已调度的 source 继续播放。
-    // 注意：必须在 _streamingInferenceDone 设置之后移除，否则 underrun 检测
+    // 注意：必须在 inferenceDone 设置之后移除，否则 underrun 检测
     // 仍会等待（推理未完成标记）。
     if (streamingCleanup) {
       try { streamingCleanup(); } catch (_) {}

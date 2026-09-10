@@ -256,6 +256,8 @@ app.whenReady().then(() => {
   registerSingerMarketIpc();
   registerWebnnIpc();
   registerSplashIpc();
+  const { registerMcpReplyIpc, startMcpBridge } = require('./main/mcpBridge');
+  registerMcpReplyIpc(ipcMain);
 
   // Register app:getVersion early — the renderer calls it immediately at
   // did-finish-load (src/renderer/index.js:30) to populate the version badge.
@@ -266,6 +268,9 @@ app.whenReady().then(() => {
   // deps, so registering it here eliminates the 200-500ms "v-" flicker
   // in the version badge that was introduced by the STEP 4 deferral.
   ipcMain.handle('app:getVersion', async () => app.getVersion());
+  let resolveHeavyIpcReady;
+  const heavyIpcReady = new Promise(resolve => { resolveHeavyIpcReady = resolve; });
+  ipcMain.handle('app:waitForHeavyIpc', () => heavyIpcReady);
 
   // ========================================================================
   // STEP 2: Fast setup (registrations only, no heavy I/O).
@@ -325,6 +330,7 @@ app.whenReady().then(() => {
   // is blocked by synchronous require() calls below.
   // ========================================================================
   const mainWindow = createWindow({ show: false });
+  startMcpBridge().catch(err => console.error('[MCP] start failed:', err));
 
   // Helper: reveal the main window (and close the splash if any). In
   // dev mode this runs immediately after did-finish-load; in packaged
@@ -467,6 +473,7 @@ app.whenReady().then(() => {
     registerAudioIpc();
     registerModelDownloadIpc();
     registerUpdateIpc();
+    resolveHeavyIpcReady({ success: true });
 
     // 后台执行一次性硬件检测和设备校验（原位于 did-finish-load 回调，
     // 移到此处因为它依赖 enumerateDMLDevices / setCachedDMLDevices 等
@@ -616,6 +623,7 @@ app.on('before-quit', (event) => {
       resetBasicPitch();
       resetRosvot();
       resetAudioManagers();
+      require('./main/mcpBridge').stopMcpBridge();
       const { getFragmentWindows } = require('./main/windowManager');
       const fragmentWindows = getFragmentWindows();
       for (const id in fragmentWindows) {

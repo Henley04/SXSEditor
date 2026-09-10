@@ -20,7 +20,8 @@
     "test:watch": "mocha --require ./test/setup.js \"test/**/*.test.js\" --timeout 30000 --watch",
     "cli": "electron-forge start -- --cli",
     "cli:help": "electron-forge start -- --cli help",
-    "build:native": "node scripts/build-native-electron.js"
+    "build:native": "node scripts/build-native-electron.js",
+    "mcp": "node scripts/sxseditor-mcp.js"
   },
   "keywords": [
     "electron",

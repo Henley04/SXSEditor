@@ -204,14 +204,15 @@ function attachRendererErrorHandler(webContents) {
     });
   } catch (_) {}
   try {
-    webContents.on('console-message', (event, level, message, line, sourceId) => {
+    webContents.on('console-message', (_event, details) => {
+      const { level, message, lineNumber, sourceId } = details;
       // Electron console-message levels: 0=verbose, 1=info, 2=warning, 3=error.
       // Only persist warnings and errors to keep log size manageable.
       if (level >= 2) {
         const levels = ['LOG', 'INFO', 'WARN', 'ERROR'];
         const lv = levels[level] || 'LOG';
         const label = getRendererLabel(webContents);
-        writeLog(lv, `[Renderer:${label}] ${message} (${sourceId}:${line})`);
+        writeLog(lv, `[Renderer:${label}] ${message} (${sourceId}:${lineNumber})`);
       }
     });
   } catch (_) {}

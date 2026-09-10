@@ -1,4 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
+let heavyIpcReadyPromise;
+async function invokeHeavy(channel,...args){if(!heavyIpcReadyPromise)heavyIpcReadyPromise=ipcRenderer.invoke('app:waitForHeavyIpc');const result=await heavyIpcReadyPromise;if(!result?.success)throw new Error(result?.error||'Deferred IPC initialization failed');return ipcRenderer.invoke(channel,...args);}
 
 // Forward renderer errors to the main process for centralized logging.
 // Runs in the preload's isolated world, but DOM event listeners added via
@@ -40,6 +42,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 let _webnnReadModelFileReqId = 0;
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  onMcpAutomationRequest: callback => { const h=(_e,m)=>callback(m); ipcRenderer.on('mcp:automation-request',h); return ()=>ipcRenderer.removeListener('mcp:automation-request',h); },
+  sendMcpAutomationResponse: message => ipcRenderer.send('mcp:automation-response',message),
   showSaveDialog: (options) => ipcRenderer.invoke('dialog:showSaveDialog', options),
   showOpenDialog: (options) => ipcRenderer.invoke('dialog:showOpenDialog', options),
   saveFile: (filePath, data) => ipcRenderer.invoke('file:saveFile', filePath, data),
@@ -106,11 +110,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('loadPreprocessData', handler);
   },
   getModelDir: () => ipcRenderer.invoke('getModelDir'),
-  initSVSPipeline: () => ipcRenderer.invoke('svs:init'),
-  synthesizeSVS: (data) => ipcRenderer.invoke('svs:synthesize', data),
-  synthesizeMultiStreaming: (data) => ipcRenderer.invoke('svs:synthesizeMultiStreaming', data),
-  cancelSVSSynthesis: () => ipcRenderer.invoke('svs:cancel'),
-  disposeSVSPipeline: () => ipcRenderer.invoke('svs:dispose'),
+  initSVSPipeline: () => invokeHeavy('svs:init'),
+  synthesizeSVS: (data) => invokeHeavy('svs:synthesize', data),
+  synthesizeMultiStreaming: (data) => invokeHeavy('svs:synthesizeMultiStreaming', data),
+  cancelSVSSynthesis: () => invokeHeavy('svs:cancel'),
+  disposeSVSPipeline: () => invokeHeavy('svs:dispose'),
   onSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);
     ipcRenderer.on('svs:progress', handler);
@@ -126,17 +130,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('svs:model-incompatible', handler);
     return () => ipcRenderer.removeListener('svs:model-incompatible', handler);
   },
-  getFragmentSVSSampleRate: () => ipcRenderer.invoke('fragment-svs:getSampleRate'),
-  initFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:init'),
+  getFragmentSVSSampleRate: () => invokeHeavy('fragment-svs:getSampleRate'),
+  initFragmentSVSPipeline: () => invokeHeavy('fragment-svs:init'),
   synthesizeFragmentSVS: async (data) => {
-    const result = await ipcRenderer.invoke('fragment-svs:synthesize', data);
+    const result = await invokeHeavy('fragment-svs:synthesize', data);
     if (result.error) {
       throw new Error(result.error);
     }
     return result.data;
   },
-  resolvePhonemes: (lyrics) => ipcRenderer.invoke('fragment-svs:resolvePhonemes', { lyrics }),
-  disposeFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:dispose'),
+  resolvePhonemes: (lyrics) => invokeHeavy('fragment-svs:resolvePhonemes', { lyrics }),
+  disposeFragmentSVSPipeline: () => invokeHeavy('fragment-svs:dispose'),
   onFragmentSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);
     ipcRenderer.on('fragment-svs:progress', handler);
@@ -147,31 +151,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('fragment-svs:chunk-audio', handler);
     return () => ipcRenderer.removeListener('fragment-svs:chunk-audio', handler);
   },
-  extractF0: (data) => ipcRenderer.invoke('extractF0:onnx', data),
-  extractMidiRosvot: (data) => ipcRenderer.invoke('extractMidi:rosvot', data),
-  extractF0BasicPitch: (data) => ipcRenderer.invoke('extractF0:basicPitch', data),
-  extractMidiFcpe: (data) => ipcRenderer.invoke('extractMidi:fcpe', data),
+  extractF0: (data) => invokeHeavy('extractF0:onnx', data),
+  extractMidiRosvot: (data) => invokeHeavy('extractMidi:rosvot', data),
+  extractF0BasicPitch: (data) => invokeHeavy('extractF0:basicPitch', data),
+  extractMidiFcpe: (data) => invokeHeavy('extractMidi:fcpe', data),
   importMidi: () => ipcRenderer.invoke('midi:import'),
   importMidiMultiTrack: () => ipcRenderer.invoke('midi:importMultiTrack'),
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),
   getDirName: (filePath) => ipcRenderer.invoke('getDirName', filePath),
   showItemInFolder: (filePath) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
-  getDMLDevices: (options = {}) => ipcRenderer.invoke('settings:getDMLDevices', options),
-  getWinmlProviders: () => ipcRenderer.invoke('settings:getWinmlProviders'),
-  getHardwareStatus: () => ipcRenderer.invoke('settings:getHardwareStatus'),
-  getCurrentHardware: () => ipcRenderer.invoke('settings:getCurrentHardware'),
-  getVocoderChunkFramesInfo: () => ipcRenderer.invoke('settings:getVocoderChunkFramesInfo'),
-  getVocoderChunkFramesTable: () => ipcRenderer.invoke('settings:getVocoderChunkFramesTable'),
-  getSettings: () => ipcRenderer.invoke('settings:getSettings'),
-  saveSettings: (settings) => ipcRenderer.invoke('settings:saveSettings', settings),
-  checkModels: () => ipcRenderer.invoke('settings:check-models'),
-  runTrtRtxDiagnostic: () => ipcRenderer.invoke('settings:run-trtrtx-diagnostic'),
+  getDMLDevices: (options = {}) => invokeHeavy('settings:getDMLDevices', options),
+  getWinmlProviders: () => invokeHeavy('settings:getWinmlProviders'),
+  getHardwareStatus: () => invokeHeavy('settings:getHardwareStatus'),
+  getCurrentHardware: () => invokeHeavy('settings:getCurrentHardware'),
+  getVocoderChunkFramesInfo: () => invokeHeavy('settings:getVocoderChunkFramesInfo'),
+  getVocoderChunkFramesTable: () => invokeHeavy('settings:getVocoderChunkFramesTable'),
+  getSettings: () => invokeHeavy('settings:getSettings'),
+  saveSettings: (settings) => invokeHeavy('settings:saveSettings', settings),
+  checkModels: () => invokeHeavy('settings:check-models'),
+  runTrtRtxDiagnostic: () => invokeHeavy('settings:run-trtrtx-diagnostic'),
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
-  getAudioDevices: () => ipcRenderer.invoke('audio:getDevices'),
-  audioPlay: (audioData, options) => ipcRenderer.invoke('audio:play', { audioData, options }),
-  audioStop: () => ipcRenderer.invoke('audio:stop'),
-  audioGetPosition: () => ipcRenderer.invoke('audio:getPosition'),
-  audioIsAvailable: () => ipcRenderer.invoke('audio:isAvailable'),
+  getAudioDevices: () => invokeHeavy('audio:getDevices'),
+  audioPlay: (audioData, options) => invokeHeavy('audio:play', { audioData, options }),
+  audioStop: () => invokeHeavy('audio:stop'),
+  audioGetPosition: () => invokeHeavy('audio:getPosition'),
+  audioIsAvailable: () => invokeHeavy('audio:isAvailable'),
   onAudioEnded: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('audio:ended', handler);

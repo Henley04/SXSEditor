@@ -500,8 +500,8 @@ export async function autoSaveProject() {
     await window.electronAPI.saveFile(state.currentProjectFilePath, data);
     markClean();
     console.log('Project auto-saved to', state.currentProjectFilePath);
-  } catch (_err) {
-      // TODO: translate garbled log
+  } catch (err) {
+    console.warn('Project auto-save failed:', err);
   }
 }
 
@@ -792,8 +792,8 @@ export async function loadProject() {
                     }
                     singer.singerFileMissing = false;
                   }
-                } catch (_err) {
-      // TODO: translate garbled log
+                } catch (err) {
+                  console.warn('Unable to restore singer file:', err);
                   singer.singerFileMissing = true;
                 }
               }
@@ -817,7 +817,5 @@ export async function loadProject() {
       console.error('Load failed', err);
       showAlertDialog(t('main.projectLoadFailed') + ': ' + (err.message || ''));
     }
-  } else {
-      // TODO: translate garbled log
   }
 }

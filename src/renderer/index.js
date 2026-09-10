@@ -7,6 +7,8 @@ import './state.js';
 // Import all modules to register event handlers and IPC handlers
 import './eventHandlers.js';
 import './ipcHandlers.js';
+import { registerMcpAutomation } from './mcpAutomation.js';
+registerMcpAutomation();
 
 // Import and run initialization
 import { updateProjectSettings } from './projectManager.js';
