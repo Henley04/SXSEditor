@@ -471,14 +471,25 @@ async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
     if (trt.length) pushIfMissing({ epName: 'NvTensorRTRTXExecutionProvider', indices: trt });
     // 3) 其他 WinML EP(OpenVINO 等)：仅当被允许(diffstep/vocoder)或用户显式指定才纳入
     const openvinoAllowed = allowOpenVINO || selectedEp === 'OpenVINOExecutionProvider';
+    // Gate the OpenVINO NPU device on app-confirmed NPU availability. If an Intel NPU
+    // driver is installed (with its openvino_intel_npu_compiler.dll) but NPU hardware is
+    // not usable, letting ORT create an OpenVINO NPU session makes that compiler dereference
+    // a null pointer (access violation reading 0x20) and hard-crash the process. The
+    // __SXS_NPU_AVAILABLE__ flag is written by main after detectAllHardware(); when unset we
+    // treat the NPU as unavailable (conservative).
+    const npuAvailable = globalThis.__SXS_NPU_AVAILABLE__ === true;
+    const dropNpu = (indices) => indices.filter((i) => {
+        const d = devices.find((x) => x.index === i);
+        return !d || d.deviceType !== 'npu';
+    });
     if (openvinoAllowed) {
-        const ovAny = byNameAny('OpenVINOExecutionProvider');
+        const ovAny = dropNpu(byNameAny('OpenVINOExecutionProvider'));
         if (ovAny.length) pushIfMissing({ epName: 'OpenVINOExecutionProvider', indices: ovAny });
         else {
             const ovGpu = byName('OpenVINOExecutionProvider', 'gpu');
             if (ovGpu.length) pushIfMissing({ epName: 'OpenVINOExecutionProvider(gpu)', indices: ovGpu });
         }
-        if (useStaticShapes) {
+        if (useStaticShapes && npuAvailable) {
             const npu = byName('OpenVINOExecutionProvider', 'npu');
             if (npu.length && !chain.some((c) => c.indices.includes(npu[0]))) pushIfMissing({ epName: 'OpenVINOExecutionProvider(npu)', indices: npu });
             const auto = devices.filter((d) => d.epName.endsWith('.AUTO')).map((d) => d.index);

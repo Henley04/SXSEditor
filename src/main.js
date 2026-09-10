@@ -486,6 +486,12 @@ app.whenReady().then(() => {
         // 等待 NPU 检测完成（需要渲染进程处理 WebNN IPC）
         const { npuAvailable } = await detectAllHardware();
         console.log(`[Main] Hardware detection complete: NPU ${npuAvailable ? 'available' : 'not available'}`);
+        // Gate: expose the OpenVINO NPU device to ORT only when the app detected a usable NPU.
+        // If an Intel NPU driver is installed (its compiler openvino_intel_npu_compiler.dll exists)
+        // but NPU hardware is unavailable, ORT creating an OpenVINO NPU session makes that compiler
+        // dereference a null pointer (access violation reading 0x20) and hard-crash the whole app.
+        // Written here, after hardware detection finishes and before the pipeline loads models.
+        globalThis.__SXS_NPU_AVAILABLE__ = !!npuAvailable;
 
         // DML 设备枚举（一次性，结果缓存复用，运行时不再重复探测）
         const controllers = await ensureGPUInfo();
