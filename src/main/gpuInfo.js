@@ -1,5 +1,6 @@
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
+const { execFile } = require('node:child_process');
 const { VOCODER_CHUNK_FRAMES } = require('../inference/shared/constants.js');
 const { classifyDevice } = require('../utils/deviceClassifier');
 
@@ -410,11 +411,24 @@ async function detectNPUCached() {
       const result = await detectNPUAvailability();
       const details = String(result?.details || '').toLowerCase();
       const transient = details.includes('no renderer') || details.includes('timeout') || details.includes('module not available');
+      const npuByWebnn = !!result.npuAvailable;
+      const final = { ...result, npuAvailable: npuByWebnn };
+      // WebNN 不可用（Electron 中 navigator.ml 常缺失）不代表无 NPU 硬件：
+      // 回退到系统级 PnP 检测（Intel AI Boost / ComputeAccelerator 类设备），
+      // 使 __SXS_NPU_AVAILABLE__ 与设置界面正确反映真实硬件。
+      if (!npuByWebnn) {
+        const pnp = await detectNPUByPnp();
+        if (pnp) {
+          final.npuAvailable = true;
+          const base = String(result?.details || '').trim();
+          final.details = (base ? base + '; ' : '') + 'NPU hardware present (PnP), WebNN unavailable';
+        }
+      }
       if (!transient) {
-        _npuCache = result;
+        _npuCache = final;
         _npuCacheTime = Date.now();
       }
-      return result;
+      return final;
     } catch (e) {
       return { npuAvailable: false, details: e.message };
     } finally {
@@ -423,6 +437,31 @@ async function detectNPUCached() {
   })();
 
   return _npuPending;
+}
+
+let _pnpNpuCache = null;
+let _pnpNpuTime = 0;
+const PNP_NPU_TTL_MS = 5 * 60 * 1000; // 5 分钟
+
+/**
+ * 系统级 NPU 硬件检测：枚举当前存在的 PnP 设备，匹配 Intel AI Boost /
+ * ComputeAccelerator 类。不依赖 WebNN（Electron 中 navigator.ml 常缺失）。
+ * @returns {Promise<boolean>}
+ */
+async function detectNPUByPnp() {
+  if (_pnpNpuCache !== null && Date.now() - _pnpNpuTime < PNP_NPU_TTL_MS) return _pnpNpuCache;
+  return new Promise((resolve) => {
+    const ps = 'Get-PnpDevice -PresentOnly | Where-Object { $_.Class -eq "ComputeAccelerator" -or $_.FriendlyName -match "NPU|AI Boost" } | Measure-Object | Select-Object -ExpandProperty Count';
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+      { timeout: 8000, windowsHide: true, maxBuffer: 64 * 1024 },
+      (err, stdout) => {
+        const ok = !err && /^\s*[1-9]\d*\s*$/.test(String(stdout || '').trim());
+        _pnpNpuCache = ok;
+        _pnpNpuTime = Date.now();
+        if (ok) console.log('[Main] NPU detected via PnP (ComputeAccelerator / AI Boost present)');
+        resolve(ok);
+      });
+  });
 }
 
 /**
@@ -486,6 +525,7 @@ module.exports = {
   getGPUPhase,
   detectAllHardware,
   detectNPUCached,
+  detectNPUByPnp,
   invalidateGPUCache,
   invalidateNPUCache,
   queryGPUVRAMUsage,

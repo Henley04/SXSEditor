@@ -17,6 +17,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFile } = require('node:child_process');
 
 const MIN_BUILD = 26100; // Windows 11 24H2 — downloadable EPs requirement
 
@@ -196,7 +197,7 @@ async function listAllProviderEntries() {
     const base = await listCompatibleProviderEntries();
     // Merge filesystem scan for NvTensor 2.x that may not yet appear in catalog
     // (no elevation required to read libraryPathHint; caller validates via ensureEntryReady/canLoadLibrary)
-    const extra = _scanFilesystemHints();
+    const extra = await _scanFilesystemHints();
     if (extra.length && !_listAllLogged) { console.log(`[WinML] listAll: catalog=${base.length} + fsHints=${extra.length}`); _listAllLogged = true; }
     for (const h of extra) {
         // Only add if not already represented by a catalog instance with same path
@@ -208,8 +209,14 @@ async function listAllProviderEntries() {
 
 let _fsHintsCache = null;
 let _fsHintsCacheLogged = false;
-function _scanFilesystemHints() {
-    if (_fsHintsCache) return _fsHintsCache;
+let _fsHintsPromise = null;
+
+/**
+ * 同步扫描 WindowsApps 目录下的 WinML EP 包。普通权限下 readdir 常因
+ * WindowsApps ACL 返回 EPERM —— 此时返回 null（而非空数组），由调用方
+ * 走 Get-AppxPackage 回填路径。
+ */
+function _scanFilesystemHintsSync() {
     const out = [];
     const patterns = {
         'NvTensorRTRTXExecutionProvider': ['trt-rtx', 'nv_tensorrt', 'tensorrt_rtx', 'nvidia'],
@@ -220,13 +227,8 @@ function _scanFilesystemHints() {
     };
     const winApps = 'C:\\Program Files\\WindowsApps';
     let dirs = null;
-    try { dirs = fs.readdirSync(winApps); } catch (e) {
-        // ExecutionProviderCatalog is authoritative. Never block startup with
-        // synchronous PowerShell/Get-AppxPackage for optional filesystem hints.
-        if (!_fsHintsCacheLogged) console.warn(`[WinML] WindowsApps readdir unavailable (${e.code || e.message}); optional hints skipped`);
-        _fsHintsCache = out;
-        _fsHintsCacheLogged = true;
-        return out;
+    try { dirs = fs.readdirSync(winApps); } catch {
+        return null;
     }
     for (const dir of dirs) {
         const lower = dir.toLowerCase();
@@ -243,10 +245,77 @@ function _scanFilesystemHints() {
             }
         }
     }
-    if (out.length && !_fsHintsCacheLogged) console.log(`[WinML] filesystem hints: ${out.map(o => o.libraryPathHint.split('\\').slice(-3).join('/')).join(', ')}`);
-    _fsHintsCache = out;
-    _fsHintsCacheLogged = true;
     return out;
+}
+
+/** 包名 → EP 名映射（Get-AppxPackage Name 形如 ...WinML.NVIDIA.TRT-RTX.EP.2）。 */
+function _epNameFromPackage(pkgName) {
+    const n = String(pkgName || '').toLowerCase();
+    if (n.includes('nvidia') && (n.includes('trt') || n.includes('tensorrt'))) return 'NvTensorRTRTXExecutionProvider';
+    if (n.includes('openvino')) return 'OpenVINOExecutionProvider';
+    if (n.includes('qnn')) return 'QNNExecutionProvider';
+    if (n.includes('migraphx')) return 'MIGraphXExecutionProvider';
+    if (n.includes('vitis')) return 'VitisAIExecutionProvider';
+    return null;
+}
+
+/**
+ * 通过 Get-AppxPackage 枚举已安装的 WinML EP 包并返回 provider DLL 路径。
+ * 走 AppX 注册信息，无需读取 WindowsApps 目录（普通权限 readdir 会 EPERM）。
+ */
+function _scanFilesystemHintsViaAppx() {
+    return new Promise((resolve) => {
+        const ps = 'Get-AppxPackage -Name "MicrosoftCorporationII.WinML*" | ForEach-Object { $_.Name + "|" + $_.InstallLocation }';
+        execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
+            { timeout: 8000, windowsHide: true, maxBuffer: 2 * 1024 * 1024 },
+            (err, stdout) => {
+                const out = [];
+                if (err) { resolve(out); return; }
+                for (const line of String(stdout || '').split(/\r?\n/)) {
+                    const bar = line.indexOf('|');
+                    if (bar <= 0) continue;
+                    const pkg = line.slice(0, bar).trim();
+                    const loc = line.slice(bar + 1).trim();
+                    const epName = _epNameFromPackage(pkg);
+                    if (!epName || !loc) continue;
+                    const epDir = path.join(loc, 'ExecutionProvider');
+                    let files;
+                    try { files = fs.readdirSync(epDir); } catch { continue; }
+                    for (const f of files) {
+                        const fl = f.toLowerCase();
+                        if (fl.endsWith('.dll') && fl.includes('onnxruntime_providers')) {
+                            out.push({ name: epName, libraryPathHint: path.join(epDir, f) });
+                        }
+                    }
+                }
+                resolve(out);
+            });
+    });
+}
+
+async function _scanFilesystemHints() {
+    if (_fsHintsCache) return _fsHintsCache;
+    // 快速路径：直接 readdir WindowsApps（普通权限下常 EPERM，返回 null 走回退）
+    const direct = _scanFilesystemHintsSync();
+    if (direct !== null) {
+        _fsHintsCache = direct;
+        if (direct.length && !_fsHintsCacheLogged) console.log(`[WinML] filesystem hints: ${direct.map((o) => o.libraryPathHint.split('\\').slice(-3).join('/')).join(', ')}`);
+        _fsHintsCacheLogged = true;
+        return direct;
+    }
+    if (_fsHintsPromise) return _fsHintsPromise;
+    _fsHintsPromise = (async () => {
+        const viaAppx = await _scanFilesystemHintsViaAppx();
+        _fsHintsCache = viaAppx;
+        if (viaAppx.length && !_fsHintsCacheLogged) {
+            console.log(`[WinML] filesystem hints (appx): ${viaAppx.map((o) => o.libraryPathHint.split('\\').slice(-3).join('/')).join(', ')}`);
+        } else if (!viaAppx.length && !_fsHintsCacheLogged) {
+            console.warn('[WinML] WindowsApps readdir unavailable and Get-AppxPackage returned no WinML packages; optional hints skipped');
+        }
+        _fsHintsCacheLogged = true;
+        return viaAppx;
+    })();
+    try { return await _fsHintsPromise; } finally { _fsHintsPromise = null; }
 }
 
 /**

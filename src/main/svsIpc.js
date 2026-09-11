@@ -121,6 +121,9 @@ async function _createPipeline(languageOverride) {
       pipelineOptions,
       language: languageOverride,
       winmlEnabled,
+      // 主进程硬件检测结果（WebNN + PnP 回退），供 worker 内 winmlProvider 使用
+      npuAvailable: globalThis.__SXS_NPU_AVAILABLE__ === true,
+      openvinoNpuSafe: globalThis.__SXS_OPENVINO_NPU_SAFE__ === true,
       ...(winmlEps ? { winmlEps } : {}),
       ...(settings.winmlBootstrapDllPath ? { winmlBootstrapDllPath: settings.winmlBootstrapDllPath } : {}),
       settingsSnapshot: settings,

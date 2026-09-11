@@ -483,7 +483,7 @@ app.whenReady().then(() => {
       try {
         // 启动一次性 GPU 信息加载（worker 两阶段：WMI 快速 → systeminformation 完整）
         startGPUPreload();
-        // 等待 NPU 检测完成（需要渲染进程处理 WebNN IPC）
+        // 等待 NPU 检测完成（WebNN 优先，失败时回退 PnP 系统级检测）
         const { npuAvailable } = await detectAllHardware();
         console.log(`[Main] Hardware detection complete: NPU ${npuAvailable ? 'available' : 'not available'}`);
         // Gate: expose the OpenVINO NPU device to ORT only when the app detected a usable NPU.
@@ -492,6 +492,11 @@ app.whenReady().then(() => {
         // dereference a null pointer (access violation reading 0x20) and hard-crash the whole app.
         // Written here, after hardware detection finishes and before the pipeline loads models.
         globalThis.__SXS_NPU_AVAILABLE__ = !!npuAvailable;
+        // OpenVINO NPU 推理仍需版本匹配（WinML EP 包 openvino 运行时 vs 驱动 NPU
+        // compiler 版本），版本错配时创建 OpenVINO NPU 会话会让编译器空指针崩溃
+        // （minidump: openvino_intel_npu_compiler.dll 0xC0000005 读 0x0）。
+        // 默认关闭，避免检测修复后反而触发崩溃；待版本匹配后再放开。
+        globalThis.__SXS_OPENVINO_NPU_SAFE__ = false;
 
         // DML 设备枚举（一次性，结果缓存复用，运行时不再重复探测）
         const controllers = await ensureGPUInfo();

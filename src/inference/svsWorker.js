@@ -18,6 +18,12 @@ if (workerData && typeof workerData === 'object') {
     if (Array.isArray(workerData.winmlEps)) {
         globalThis.__SXS_WINML_EPS__ = workerData.winmlEps;
     }
+    if (typeof workerData.npuAvailable === 'boolean') {
+        globalThis.__SXS_NPU_AVAILABLE__ = workerData.npuAvailable;
+    }
+    if (typeof workerData.openvinoNpuSafe === 'boolean') {
+        globalThis.__SXS_OPENVINO_NPU_SAFE__ = workerData.openvinoNpuSafe;
+    }
 }
 
 const { OnnxSVSPipeline } = require('./pipeline');

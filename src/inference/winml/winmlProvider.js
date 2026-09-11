@@ -477,7 +477,13 @@ async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
     // a null pointer (access violation reading 0x20) and hard-crash the process. The
     // __SXS_NPU_AVAILABLE__ flag is written by main after detectAllHardware(); when unset we
     // treat the NPU as unavailable (conservative).
+    // OpenVINO NPU 设备仅在 NPU 硬件确认可用 且 OpenVINO NPU 推理被显式放行
+    // （__SXS_OPENVINO_NPU_SAFE__）时才暴露。即使 PnP 检测到 NPU 硬件，EP 包
+    // openvino 运行时与驱动 NPU compiler 版本错配时创建 NPU 会话仍会让编译器
+    // 空指针崩溃（minidump: openvino_intel_npu_compiler.dll 0xC0000005 读 0x0），
+    // 因此默认保守关闭，由 main 在版本匹配验证通过后放开。
     const npuAvailable = globalThis.__SXS_NPU_AVAILABLE__ === true;
+    const openvinoNpuSafe = globalThis.__SXS_OPENVINO_NPU_SAFE__ === true;
     const dropNpu = (indices) => indices.filter((i) => {
         const d = devices.find((x) => x.index === i);
         return !d || d.deviceType !== 'npu';
@@ -489,7 +495,7 @@ async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
             const ovGpu = byName('OpenVINOExecutionProvider', 'gpu');
             if (ovGpu.length) pushIfMissing({ epName: 'OpenVINOExecutionProvider(gpu)', indices: ovGpu });
         }
-        if (useStaticShapes && npuAvailable) {
+        if (useStaticShapes && npuAvailable && openvinoNpuSafe) {
             const npu = byName('OpenVINOExecutionProvider', 'npu');
             if (npu.length && !chain.some((c) => c.indices.includes(npu[0]))) pushIfMissing({ epName: 'OpenVINOExecutionProvider(npu)', indices: npu });
             const auto = devices.filter((d) => d.epName.endsWith('.AUTO')).map((d) => d.index);
