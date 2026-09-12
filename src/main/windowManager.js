@@ -21,6 +21,54 @@ let isDirty = false;
 let closePending = false;
 
 function getMainWindow() { return mainWindow; }
+
+/**
+ * 通知某个窗口的渲染进程"内容区尺寸可能已变化，请重新布局"。
+ *
+ * 用于修复：停靠式 DevTools 打开后再关闭，BrowserWindow 的 bounds 不变、
+ * window 'resize' 也不一定触发，页面 canvas 仍按旧尺寸绘制，表现为
+ * "开发者工具关闭后页面没有自动刷新，必须手动操作一下才正常"。
+ *
+ * DevTools 关闭后 Chromium 需要若干帧才把新尺寸应用到宿主视图，所以这里
+ * 发送多次（0 / 60 / 200ms），由渲染进程自行去重。
+ *
+ * @param {import('electron').BrowserWindow} win
+ */
+function notifyRelayout(win) {
+  if (!win || win.isDestroyed()) return;
+  const send = () => {
+    try {
+      if (!win.isDestroyed()) win.webContents.send('app:relayout');
+    } catch (_) {}
+  };
+  send();
+  setTimeout(send, 60);
+  setTimeout(send, 200);
+}
+
+/**
+ * 给窗口挂上"尺寸/DevTools 变化 → 通知渲染进程重排"的监听。
+ *
+ * 必须在窗口创建后尽早调用，否则会漏掉 devtools-opened/closed。
+ *
+ * @param {import('electron').BrowserWindow} win
+ */
+function attachRelayoutListeners(win) {
+  if (!win || win.isDestroyed()) return;
+  const wc = win.webContents;
+  try {
+    wc.on('devtools-opened', () => notifyRelayout(win));
+    wc.on('devtools-closed', () => notifyRelayout(win));
+  } catch (_) {}
+  try {
+    win.on('resize', () => notifyRelayout(win));
+    win.on('enter-full-screen', () => notifyRelayout(win));
+    win.on('leave-full-screen', () => notifyRelayout(win));
+    win.on('maximize', () => notifyRelayout(win));
+    win.on('unmaximize', () => notifyRelayout(win));
+  } catch (_) {}
+}
+
 function getSettingsWindow() { return settingsWindow; }
 function getResourceManagerWindow() { return resourceManagerWindow; }
 function getModelDownloadWindow() { return modelDownloadWindow; }
@@ -214,6 +262,7 @@ function createWindow(opts = {}) {
   });
 
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+  attachRelayoutListeners(mainWindow);
   mainWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
@@ -451,6 +500,7 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   });
 
   fragmentWindow.loadURL(`${FRAGMENT_EDITOR_WINDOW_WEBPACK_ENTRY}#fragmentId=${encodeURIComponent(fragment.id)}`);
+  attachRelayoutListeners(fragmentWindow);
   fragmentWindow.once('ready-to-show', () => { fragmentWindow.show(); });
   fragmentWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   fragmentWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -801,6 +851,8 @@ function registerWindowIpc() {
 module.exports = {
   createWindow,
   openSettingsWindow,
+  notifyRelayout,
+  attachRelayoutListeners,
   openResourceManagerWindow,
   createModelDownloadWindow,
   setModelDownloadWindow,

@@ -75,11 +75,47 @@ export function dpr() {
  * _renderInFlight > 0 时使用缓存值，否则回退到实时 DOM 读取（用于渲染外的 hit-test 等）。
  */
 let _cachedParentHeight = 0;
+let _cachedParentWidth = 0;
 let _renderInFlight = 0;
+// 布局缓存是否有效。仅在容器尺寸可能变化的入口（resizeCanvases / 重布局）
+// 失效，其余时间复用缓存值，避免 hit-test（mousemove 高频路径）反复触发
+// 同步 layout 读取。
+let _layoutCacheValid = false;
 
 function _getParentHeight() {
-  if (_renderInFlight > 0 && _cachedParentHeight > 0) return _cachedParentHeight;
-  return canvas.parentElement.clientHeight;
+  if (_layoutCacheValid && _cachedParentHeight > 0) return _cachedParentHeight;
+  _cachedParentHeight = canvas.parentElement.clientHeight;
+  _layoutCacheValid = true;
+  return _cachedParentHeight;
+}
+
+/**
+ * 失效 parent clientHeight 缓存。容器尺寸可能变化时必须调用
+ * （窗口/面板/检查器拖宽、DevTools 开关、主题切换等）。
+ */
+export function invalidateLayoutCache() {
+  _layoutCacheValid = false;
+  _cachedParentHeight = 0;
+  _cachedParentWidth = 0;
+}
+
+/**
+ * 供渲染期内的子绘制函数（renderPitchCurve / renderPianoKeys …）读取视口宽度，
+ * 命中缓存时完全不触发同步 layout。
+ */
+function _getParentWidth() {
+  if (_layoutCacheValid && _cachedParentWidth > 0) return _cachedParentWidth;
+  const w = canvas.parentElement.clientWidth;
+  _cachedParentWidth = w;
+  return w;
+}
+
+/**
+ * 供渲染循环之外的热路径（wheel / drag）读取容器高度，
+ * 命中缓存时完全不触发同步 layout。
+ */
+export function getParentHeightCached() {
+  return _getParentHeight();
 }
 
 export function timeToX(beats) {
@@ -105,7 +141,13 @@ export function yToPitch(y) {
   if (y >= pianoAreaBottom) return 0;
   if (y <= pianoAreaTop) return 127;
   const maxPitch = 127;
-  return Math.round(maxPitch - (y + getScrollY() - pianoAreaTop) / NOTE_HEIGHT);
+  // 必须与 note 的实际绘制矩形对齐：note 画在 [Y0, Y0 + NOTE_HEIGHT)，
+  // 其中 Y0 = pitchToY(pitch)。此处连续值为 pitch - t（t∈[0,1)），
+  // 用 ceil 才能让整个像素行都命中该 note；原先的 Math.round 把命中区
+  // 整体上移了半行，导致"点击位置与预期位置不一致"（点下半行会选中/新建
+  // 到下一格的音高）。
+  const p = Math.ceil(maxPitch - (y + getScrollY() - pianoAreaTop) / NOTE_HEIGHT);
+  return p < 0 ? 0 : (p > 127 ? 127 : p);
 }
 
 export function yToPitchContinuous(y) {
@@ -161,6 +203,13 @@ export function _getCanvasRendererNotesIndex() {
 export function _resetNotesIndex() {
   _notesIdx = null;
 }
+
+// ---- 缓存：id -> note ----
+// 实现已抽到 ./noteLookup.js（仅依赖 state.js），供 canvasRenderer /
+// eventHandlers / kanjiGroupUtils 共用，避免彼此循环依赖。
+import { getNoteById, getNoteMap } from './noteLookup.js';
+
+export { getNoteById, getNoteMap };
 
 /**
  * Half-width of the trailing resize hot zone, expressed in BEATS (not pixels).
@@ -242,22 +291,30 @@ export function findPlayheadAt(x, y, h) {
 export function findKanjiGroupAt(x, y) {
   const groups = getKanjiGroups();
   if (!groups || groups.length === 0) return null;
-  const notes = getNotes();
   const zoomX = getZoomX();
   const scrollX = getScrollX();
   const beatToPixel = BEAT_WIDTH * zoomX;
 
   for (const group of groups) {
-    const groupNotes = group.noteIds
-      .map(id => notes.find(n => n.id === id))
-      .filter(Boolean);
+    const groupNotes = [];
+    for (const id of group.noteIds) {
+      const n = getNoteById(id);
+      if (n) groupNotes.push(n);
+    }
     if (groupNotes.length === 0) continue;
-    const sorted = [...groupNotes].sort((a, b) => a.start - b.start);
-    const first = sorted[0];
-    const last = sorted[sorted.length - 1];
-    const x1 = first.start * beatToPixel - scrollX;
-    const x2 = (last.start + last.duration) * beatToPixel - scrollX;
-    const yMin = Math.min(...groupNotes.map(n => pitchToY(n.pitch)));
+    // 单次遍历求出时间跨度与最高音（等价于先排序再取首尾，但避免排序与多次遍历）
+    let minStart = Infinity;
+    let maxEnd = -Infinity;
+    let yMin = Infinity;
+    for (const n of groupNotes) {
+      if (n.start < minStart) minStart = n.start;
+      const end = n.start + n.duration;
+      if (end > maxEnd) maxEnd = end;
+      const y = pitchToY(n.pitch);
+      if (y < yMin) yMin = y;
+    }
+    const x1 = minStart * beatToPixel - scrollX;
+    const x2 = maxEnd * beatToPixel - scrollX;
     const lineY = yMin - 10;
     // Hit area: 6px tall band around the line + kanji label area
     const labelW = 20;
@@ -284,27 +341,37 @@ export function findKanjiGroupAt(x, y) {
 function _drawKanjiGroups(ctx, c) {
   const groups = getKanjiGroups();
   if (!groups || groups.length === 0) return;
-  const notes = getNotes();
   const zoomX = getZoomX();
   const scrollX = getScrollX();
   const beatToPixel = BEAT_WIDTH * zoomX;
 
   ctx.save();
+  const canvasW = canvas.width;
   for (const group of groups) {
-    const groupNotes = group.noteIds
-      .map(id => notes.find(n => n.id === id))
-      .filter(Boolean);
+    // 复用 O(1) 的 id -> note 索引，避免每次绘制做 O(n) 线性查找
+    const groupNotes = [];
+    for (const id of group.noteIds) {
+      const n = getNoteById(id);
+      if (n) groupNotes.push(n);
+    }
     if (groupNotes.length < 2) continue;  // Single-note groups don't need a bracket
-    const sorted = [...groupNotes].sort((a, b) => a.start - b.start);
-    const first = sorted[0];
-    const last = sorted[sorted.length - 1];
-    const x1 = first.start * beatToPixel - scrollX;
-    const x2 = (last.start + last.duration) * beatToPixel - scrollX;
-    const yMin = Math.min(...groupNotes.map(n => pitchToY(n.pitch)));
+    // 单次遍历求 min(start) / max(end) / min(y)，替代 sort + Math.min(...map)
+    let minStart = Infinity;
+    let maxEnd = -Infinity;
+    let yMin = Infinity;
+    for (const n of groupNotes) {
+      if (n.start < minStart) minStart = n.start;
+      const end = n.start + n.duration;
+      if (end > maxEnd) maxEnd = end;
+      const y = pitchToY(n.pitch);
+      if (y < yMin) yMin = y;
+    }
+    const x1 = minStart * beatToPixel - scrollX;
+    const x2 = maxEnd * beatToPixel - scrollX;
     const lineY = yMin - 10;
 
     // Skip if entirely off-screen
-    if (x2 < 0 || x1 > canvas.width) continue;
+    if (x2 < 0 || x1 > canvasW) continue;
 
     // Draw bracket: horizontal line with small vertical ticks at each end
     ctx.strokeStyle = c.accent;
@@ -780,15 +847,73 @@ function _getActiveSortedNotes() {
   return sorted;
 }
 
-/** 查找包含给定 beat 时间且处于激活状态的 note（用于颤音叠加）。 */
+/** 查找包含给定 beat 时间且处于激活状态的 note（用于颤音叠加）。
+ *  激活 notes 两两不重叠（getInactiveNoteIds 的构造保证），且已按 start
+ *  升序排列，因此可以二分查找，取代原先的 O(n) 线性扫描 —— 该函数在
+ *  renderPitchCurve 的采样循环里每步调用两次，长分段下是主要瓶颈。 */
 function _findActiveNoteAtTime(time) {
   const sorted = _getActiveSortedNotes();
   if (sorted.length === 0) return null;
-  for (let i = 0; i < sorted.length; i++) {
-    const n = sorted[i];
-    if (time >= n.start && time < n.start + n.duration) return n;
+  let lo = 0;
+  let hi = sorted.length - 1;
+  let idx = -1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (sorted[mid].start <= time) { idx = mid; lo = mid + 1; }
+    else hi = mid - 1;
   }
-  return null;
+  if (idx < 0) return null;
+  const n = sorted[idx];
+  return time < n.start + n.duration ? n : null;
+}
+
+// 未激活 note 的时间区间（排序后）缓存，用于锚点可见性判断的二分查找，
+// 替代原先 O(anchors × notes) 的双重循环。
+let _inactiveIntervalsCache = { notesRef: null, version: -1, result: null };
+
+function _getInactiveIntervals(notes, inactiveNoteIds) {
+  const v = getNotesVersion();
+  if (_inactiveIntervalsCache.notesRef === notes && _inactiveIntervalsCache.version === v) {
+    return _inactiveIntervalsCache.result;
+  }
+  const intervals = [];
+  if (inactiveNoteIds && inactiveNoteIds.size > 0) {
+    for (let i = 0; i < notes.length; i++) {
+      const n = notes[i];
+      if (inactiveNoteIds.has(n.id)) intervals.push({ start: n.start, end: n.start + n.duration });
+    }
+  }
+  // 合并重叠区间 → 得到一组互不相交的升序区间，二分查找即可精确判定。
+  intervals.sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (let i = 0; i < intervals.length; i++) {
+    const iv = intervals[i];
+    const last = merged[merged.length - 1];
+    if (last && iv.start <= last.end) {
+      if (iv.end > last.end) last.end = iv.end;
+    } else {
+      merged.push({ start: iv.start, end: iv.end });
+    }
+  }
+  _inactiveIntervalsCache = { notesRef: notes, version: v, result: merged };
+  return merged;
+}
+
+/** 判断 beat 时间是否落在某个未激活 note 的时段内。O(log n)。 */
+function _isTimeInInactive(intervals, time) {
+  if (!intervals || intervals.length === 0) return false;
+  let lo = 0;
+  let hi = intervals.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (intervals[mid].start <= time) {
+      if (time < intervals[mid].end) return true;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return false;
 }
 
 /**
@@ -1119,6 +1244,7 @@ export async function resolvePhonemesFromPipeline() {
         }
       }
       trimPhonemeCache();
+      invalidatePhonemeAdjustmentsCache();
       if (changed) render();
     }
   } catch (err) {
@@ -1151,15 +1277,56 @@ export async function resolvePhonemesFromPipeline() {
  * @param {string} phonemeName - Full phoneme name (e.g., 'en_AA1', 'jp_a', 'yue_gaa1')
  * @returns {Array<{t:number, v:number}>} Volume envelope keyframes
  */
+// 音素类别表提升为模块常量：原先每次调用 getVolumeEnvelopeForPhoneme 都要
+// 新建 6 个 Set（每个 Set 还要插入十几个字符串），而该函数在音素面板渲染时
+// 对每个音素每帧调用一次 —— 长分段下是几十万次无谓分配。
+const ARPABET_VOWELS = new Set([
+  'AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'EH', 'ER', 'EY',
+  'IH', 'IY', 'OW', 'OY', 'UH', 'UW',
+]);
+const ARPABET_STOPS = new Set(['P', 'B', 'T', 'D', 'K', 'G']);
+const ARPABET_FRICATIVES = new Set(['S', 'Z', 'SH', 'ZH', 'F', 'V', 'TH', 'DH', 'HH']);
+const ARPABET_AFFRICATES = new Set(['CH', 'JH']);
+const ARPABET_NASALS = new Set(['M', 'N', 'NG']);
+const ARPABET_APPROXIMANTS = new Set(['L', 'R', 'W', 'Y']);
+
+// 包络模板表（只读）。返回值每次都要复制一份，因为调用方会原地修改
+// volumePoints 里的 v（音素音量拖拽），共享同一数组会串改。
+const ENVELOPE_TEMPLATES = {
+  default: [{ t: 0, v: 0.3 }, { t: 0.1, v: 1.0 }, { t: 0.85, v: 1.0 }, { t: 1.0, v: 0.3 }],
+  vowel: [{ t: 0, v: 0.4 }, { t: 0.15, v: 1.0 }, { t: 0.8, v: 1.0 }, { t: 1.0, v: 0.4 }],
+  stop: [{ t: 0, v: 0.0 }, { t: 0.05, v: 1.0 }, { t: 0.3, v: 0.5 }, { t: 1.0, v: 0.3 }],
+  fricative: [{ t: 0, v: 0.2 }, { t: 0.2, v: 1.0 }, { t: 0.8, v: 1.0 }, { t: 1.0, v: 0.3 }],
+  affricate: [{ t: 0, v: 0.0 }, { t: 0.05, v: 1.0 }, { t: 0.7, v: 1.0 }, { t: 1.0, v: 0.3 }],
+  nasal: [{ t: 0, v: 0.2 }, { t: 0.2, v: 0.9 }, { t: 0.8, v: 0.9 }, { t: 1.0, v: 0.3 }],
+  approximant: [{ t: 0, v: 0.3 }, { t: 0.15, v: 0.95 }, { t: 0.85, v: 0.95 }, { t: 1.0, v: 0.3 }],
+};
+
+// 按音素名缓存最终包络数组（只读模板），复制成本远低于重新分类。
+const _envelopeCache = new Map();
+
+function _cloneEnvelope(tpl) {
+  const out = new Array(tpl.length);
+  for (let i = 0; i < tpl.length; i++) out[i] = { t: tpl[i].t, v: tpl[i].v };
+  return out;
+}
+
+function _resolveEnvelopeTemplate(base) {
+  const stressless = base.replace(/[012]$/, '');
+  if (ARPABET_VOWELS.has(stressless)) return ENVELOPE_TEMPLATES.vowel;
+  if (ARPABET_STOPS.has(base)) return ENVELOPE_TEMPLATES.stop;
+  if (ARPABET_FRICATIVES.has(base)) return ENVELOPE_TEMPLATES.fricative;
+  if (ARPABET_AFFRICATES.has(base)) return ENVELOPE_TEMPLATES.affricate;
+  if (ARPABET_NASALS.has(base)) return ENVELOPE_TEMPLATES.nasal;
+  if (ARPABET_APPROXIMANTS.has(base)) return ENVELOPE_TEMPLATES.approximant;
+  return ENVELOPE_TEMPLATES.default;
+}
+
 export function getVolumeEnvelopeForPhoneme(phonemeName) {
-  // Default envelope — generic fade in/out with sustained peak
-  const DEFAULT = [
-    { t: 0, v: 0.3 },
-    { t: 0.1, v: 1.0 },
-    { t: 0.85, v: 1.0 },
-    { t: 1.0, v: 0.3 },
-  ];
-  if (!phonemeName) return DEFAULT;
+  if (!phonemeName) return _cloneEnvelope(ENVELOPE_TEMPLATES.default);
+
+  let tpl = _envelopeCache.get(phonemeName);
+  if (tpl) return _cloneEnvelope(tpl);
 
   // Extract base phoneme (strip language prefix)
   let base = phonemeName;
@@ -1167,86 +1334,43 @@ export function getVolumeEnvelopeForPhoneme(phonemeName) {
     base = base.slice(3);
   } else {
     // zh_, yue_, jp_ phonemes and special tokens use the default envelope
-    return DEFAULT;
+    tpl = ENVELOPE_TEMPLATES.default;
+    _envelopeCache.set(phonemeName, tpl);
+    return _cloneEnvelope(tpl);
   }
 
-  // Strip stress digit from vowels for class lookup
-  const stressless = base.replace(/[012]$/, '');
+  tpl = _resolveEnvelopeTemplate(base);
+  _envelopeCache.set(phonemeName, tpl);
+  return _cloneEnvelope(tpl);
+}
 
-  // ARPAbet vowel bases
-  const VOWELS = new Set([
-    'AA', 'AE', 'AH', 'AO', 'AW', 'AY', 'EH', 'ER', 'EY',
-    'IH', 'IY', 'OW', 'OY', 'UH', 'UW',
-  ]);
-  // Stop consonants — burst release
-  const STOPS = new Set(['P', 'B', 'T', 'D', 'K', 'G']);
-  // Fricatives — sustained noise
-  const FRICATIVES = new Set(['S', 'Z', 'SH', 'ZH', 'F', 'V', 'TH', 'DH', 'HH']);
-  // Affricates — stop + fricative
-  const AFFRICATES = new Set(['CH', 'JH']);
-  // Nasals — sustained murmur
-  const NASALS = new Set(['M', 'N', 'NG']);
-  // Approximants — smooth glide
-  const APPROXIMANTS = new Set(['L', 'R', 'W', 'Y']);
+// getPhonemeAdjustments 的备忘录：音素面板每帧对每个可见 note 调用一次，
+// 未自定义时要重建 weights 数组 + reduce + 逐音素生成包络。用 note 对象
+// 作 WeakMap 键 + 轻量签名（歌词 / 已保存 adjustments 的长度与首音素）做
+// 失效判断，把每帧重复计算降到近乎零。
+const _phonemeAdjCache = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+let _phonemeAdjEpoch = 0;
 
-  if (VOWELS.has(stressless)) {
-    // Vowels: smooth fade in/out, sustained peak at 1.0
-    return [
-      { t: 0, v: 0.4 },
-      { t: 0.15, v: 1.0 },
-      { t: 0.8, v: 1.0 },
-      { t: 1.0, v: 0.4 },
-    ];
-  }
-  if (STOPS.has(base)) {
-    // Stops: sharp attack (burst), quick decay to low level
-    return [
-      { t: 0, v: 0.0 },
-      { t: 0.05, v: 1.0 },
-      { t: 0.3, v: 0.5 },
-      { t: 1.0, v: 0.3 },
-    ];
-  }
-  if (FRICATIVES.has(base)) {
-    // Fricatives: gradual airflow buildup, sustained noise
-    return [
-      { t: 0, v: 0.2 },
-      { t: 0.2, v: 1.0 },
-      { t: 0.8, v: 1.0 },
-      { t: 1.0, v: 0.3 },
-    ];
-  }
-  if (AFFRICATES.has(base)) {
-    // Affricates: stop burst + fricative sustain
-    return [
-      { t: 0, v: 0.0 },
-      { t: 0.05, v: 1.0 },
-      { t: 0.7, v: 1.0 },
-      { t: 1.0, v: 0.3 },
-    ];
-  }
-  if (NASALS.has(base)) {
-    // Nasals: soft attack, sustained murmur (lower peak), soft release
-    return [
-      { t: 0, v: 0.2 },
-      { t: 0.2, v: 0.9 },
-      { t: 0.8, v: 0.9 },
-      { t: 1.0, v: 0.3 },
-    ];
-  }
-  if (APPROXIMANTS.has(base)) {
-    // Approximants: smooth, sustained, no sharp transients
-    return [
-      { t: 0, v: 0.3 },
-      { t: 0.15, v: 0.95 },
-      { t: 0.85, v: 0.95 },
-      { t: 1.0, v: 0.3 },
-    ];
-  }
-  return DEFAULT;
+/** 音素解析结果变化后调用（resolvePhonemesFromPipeline 完成时）。 */
+export function invalidatePhonemeAdjustmentsCache() {
+  _phonemeAdjEpoch++;
 }
 
 export function getPhonemeAdjustments(note) {
+  const adj = note.phonemeAdjustments;
+  const sig = (note.lyric || '') + '|' +
+    (adj && adj.length ? adj.length + ':' + (adj[0].name || '') : '-') + '|' + _phonemeAdjEpoch;
+  if (_phonemeAdjCache) {
+    const hit = _phonemeAdjCache.get(note);
+    if (hit && hit.sig === sig) return hit.value;
+  }
+
+  const value = _computePhonemeAdjustments(note);
+  if (_phonemeAdjCache) _phonemeAdjCache.set(note, { sig, value });
+  return value;
+}
+
+function _computePhonemeAdjustments(note) {
   const phonemes = resolvePhonemes(note.lyric);
   // resolvePhonemes 缓存未命中时返回 fallback [{name: lyric, display: lyric}]（单一音素）。
   // 日语等"一字符多音素"歌词（如"か"→jp_k,jp_a）在异步解析完成前会拿到 fallback，
@@ -1353,6 +1477,9 @@ export function resizeCanvases() {
   pianoKeysCtx.setTransform(dpr(), 0, 0, dpr(), 0, 0);
   ctx.setTransform(dpr(), 0, 0, dpr(), 0, 0);
 
+  // 容器尺寸已变化：失效 parent 高度缓存与 canvas rect 缓存，
+  // 否则 hit-test / wheel 仍按旧尺寸计算，出现点击与绘制错位。
+  invalidateLayoutCache();
   _staticCacheDirty = true;
   render();
 }
@@ -1446,6 +1573,8 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
       const adj = adjustments[i];
       const phWidth = noteWidth * adj.durationRatio;
       const phEnd = x + phWidth;
+      // 视口裁剪：完全在可视区外的音素不必采样包络。
+      if (phEnd < 0 || x > w) { x = phEnd; continue; }
       const color = PHONEME_COLORS[i % PHONEME_COLORS.length];
       const isPhSelected = selectedPhonemeNoteId === note.id && selectedPhonemeIndex === i;
       const pts = adj.volumePoints || [{ t: 0, v: 1 }, { t: 1, v: 1 }];
@@ -1461,11 +1590,19 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
         ctx.strokeRect(x + 1, barTop, phWidth - 2, barHeight);
       }
 
+      // 音量包络：只采样一次并复用同一条 path 做 fill + stroke。
+      // 原先填充和描边各采样 51 个点（每点一次 getVolumeAtTime），等于把
+      // 包络算了两边 —— 长分段 + 多音素时是音素面板最大的热点。
+      // 采样数按像素宽度自适应：窄音素用少量点即可，视觉无差异。
+      const steps = phWidth < 24 ? 8 : (phWidth < 64 ? 20 : 40);
+      const innerW = phWidth - 2;
+      const innerX = x + 1;
       ctx.beginPath();
-      ctx.moveTo(x + 1, barBottom);
-      for (let s = 0; s <= 1; s += 0.02) {
-        const px = x + 1 + s * (phWidth - 2);
-        const v = getVolumeAtTime(pts, s);
+      ctx.moveTo(innerX, barBottom);
+      for (let s = 0; s <= steps; s++) {
+        const r = s / steps;
+        const px = innerX + r * innerW;
+        const v = getVolumeAtTime(pts, r);
         const py = barBottom - barHeight * Math.max(0, Math.min(1, v));
         ctx.lineTo(px, py);
       }
@@ -1475,15 +1612,6 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
       ctx.globalAlpha = isPhSelected ? 0.6 : 0.35;
       ctx.fill();
       ctx.globalAlpha = 1.0;
-
-      ctx.beginPath();
-      for (let s = 0; s <= 1; s += 0.02) {
-        const px = x + 1 + s * (phWidth - 2);
-        const v = getVolumeAtTime(pts, s);
-        const py = barBottom - barHeight * Math.max(0, Math.min(1, v));
-        if (s === 0) ctx.moveTo(px, py);
-        else ctx.lineTo(px, py);
-      }
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;
       ctx.stroke();
@@ -1545,7 +1673,8 @@ function renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c) {
 }
 
 function renderPianoKeys(c) {
-  const h = pianoKeysCanvas.parentElement.clientHeight;
+  // 用缓存高度，避免每帧额外一次同步 layout 读取
+  const h = _getParentHeight();
   const w = PIANO_KEY_WIDTH;
   pianoKeysCtx.clearRect(0, 0, w, h);
   pianoKeysCtx.fillStyle = c.bgPanel;
@@ -1580,7 +1709,8 @@ function renderPitchCurve(c) {
   const pitchCurve = getPitchCurve();
   if (!pitchCurve.enabled) return;
 
-  const w = canvas.parentElement.clientWidth;
+  // 用缓存宽度，避免每帧额外一次同步 layout 读取
+  const w = _getParentWidth();
   const startBeat = xToTime(0);
   const endBeat = xToTime(w);
   const allNotes = getNotes();
@@ -1593,20 +1723,36 @@ function renderPitchCurve(c) {
 
   const hasCustom = isPitchCurveCustomized();
   const autoPoints = generateAutoPitchPoints();
+  // 未激活区间的合并列表（用于锚点可见性判断），每帧只算一次。
+  const inactiveIntervals = inactiveNoteIds.size > 0
+    ? _getInactiveIntervals(allNotes, inactiveNoteIds)
+    : null;
 
   function drawAutoPoints(style, lineW, dash) {
     if (autoPoints.length === 0) return;
+    // autoPoints 按 time 升序，二分定位第一个进入视口的点，避免每帧
+    // 全量遍历整个分段的锚点（长分段下可达数万个点）。
+    let si = 0;
+    {
+      let lo = 0;
+      let hi = autoPoints.length;
+      const from = startBeat - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (autoPoints[mid].time < from) lo = mid + 1;
+        else hi = mid;
+      }
+      si = lo;
+    }
     ctx.strokeStyle = style;
     ctx.lineWidth = lineW;
     ctx.setLineDash(dash);
     ctx.beginPath();
     let drawing = false;
-    for (let i = 0; i < autoPoints.length; i++) {
+    for (let i = si; i < autoPoints.length; i++) {
       const pt = autoPoints[i];
-      if (pt.time < startBeat - 1 || pt.time > endBeat + 1) {
-        if (drawing && pt.breakAfter) drawing = false;
-        continue;
-      }
+      if (pt.time > endBeat + 1) break;
+      if (pt.time < startBeat - 1) continue;
       const px = timeToX(pt.time);
       const py = pitchToY(pt.pitch);
       if (!drawing) { ctx.moveTo(px, py); drawing = true; }
@@ -1693,17 +1839,9 @@ function renderPitchCurve(c) {
 
     for (let i = 0; i < pitchCurve.anchorPoints.length; i++) {
       const ap = pitchCurve.anchorPoints[i];
-      // 落在未激活 note 时段内的锚点不显示
-      if (inactiveNoteIds.size > 0) {
-        let inInactive = false;
-        for (const n of allNotes) {
-          if (inactiveNoteIds.has(n.id) && ap.time >= n.start && ap.time < n.start + n.duration) {
-            inInactive = true;
-            break;
-          }
-        }
-        if (inInactive) continue;
-      }
+      // 落在未激活 note 时段内的锚点不显示（O(log n) 二分，替代原先
+      // 对每个锚点遍历全部 notes 的 O(anchors × notes) 检查）。
+      if (inactiveIntervals && _isTimeInInactive(inactiveIntervals, ap.time)) continue;
       const px = timeToX(ap.time);
       const py = pitchToY(ap.pitch);
       const isSelected = selectedAnchorIndices.has(i) || i === pitchDragAnchorIdx;
@@ -1859,11 +1997,21 @@ export function invalidateStaticCache() {
   _staticCacheDirty = true;
 }
 
+// 音符绘制按样式分组的复用缓冲（8 种组合：警告 × 选中 × 音高模式）。
+// 每帧只做 length = 0 复用，避免长分段下每帧分配上千个临时对象。
+const _NOTE_STYLE_GROUPS = 8;
+const _noteGroups = [];
+for (let i = 0; i < _NOTE_STYLE_GROUPS; i++) _noteGroups.push([]);
+// 拖拽期间会跳过 inactive 检测，复用同一个空 Set，避免每帧新建
+const EMPTY_NOTE_ID_SET = new Set();
+
 function _doRender() {
   const w = canvas.parentElement.clientWidth;
   const h = canvas.parentElement.clientHeight;
-  // 缓存 clientHeight 供本帧所有 helper 复用，避免 O(N) 次 layout 读取（性能审查 #1）
+  // 缓存 clientHeight/Width 供本帧所有 helper 复用，避免 O(N) 次 layout 读取（性能审查 #1）
   _cachedParentHeight = h;
+  _cachedParentWidth = w;
+  _layoutCacheValid = true;
   _renderInFlight++;
   try {
     _doRenderImpl(w, h);
@@ -1952,7 +2100,7 @@ function _doRenderImpl(w, h) {
   // 拖拽中跳过无效 note 检测（O(n²)），保持帧率不因碰撞检测而掉帧
   const isDragging = getDragMode() !== null;
   // 使用缓存版本（基于 notesVersion 失效），避免每帧 O(n²) 重算
-  const inactiveNoteIds = isDragging ? new Set() : getCachedInactiveNoteIds(notes);
+  const inactiveNoteIds = isDragging ? EMPTY_NOTE_ID_SET : getCachedInactiveNoteIds(notes);
   // 按语言模型检测音高范围外 note（基础模型 [28,88] / 日语模型 [48,84]）
   const { outOfRangeIds: oobNoteIds, range: pitchRange } = getCachedOutOfPitchRangeNotes(notes);
   // 鼠标按住的 note（mousedown 期间），用于绘制按压反馈
@@ -1978,6 +2126,17 @@ function _doRenderImpl(w, h) {
     visibleNotes = notesInRange(idx, viewStartBeat, viewEndBeat);
   }
 
+  // ---------------------------------------------------------------------
+  // 音符主体绘制：按样式分组批处理。
+  // 绝大多数音符样式完全一致（未选中 / 无警告 / 非音高模式），原先每个音符
+  // 都要设置 4 次 canvas 状态（fillStyle / globalAlpha / strokeStyle /
+  // lineWidth），长分段下这是 O(N) 的状态切换 + O(N) 次 fill/stroke 调用。
+  // 这里把同组音符合并进一条 path，每组只做 1 次 fill + 1 次 stroke。
+  // 鼠标按住的 note 需要 scale + 阴影，最多一个，单独走原路径。
+  // ---------------------------------------------------------------------
+  for (let gi = 0; gi < _NOTE_STYLE_GROUPS; gi++) _noteGroups[gi].length = 0;
+  let activeNote = null;
+
   for (const note of visibleNotes) {
     const x = note.start * beatToPixel - scrollX;
     const y = pitchToY(note.pitch);
@@ -1987,33 +2146,89 @@ function _doRenderImpl(w, h) {
 
     const isSelected = selectedNoteIds.has(note.id);
     const isActive = note.id === activeNoteId; // 鼠标按住此 note
-    const isPitchMode = currentParamMode === 'Pitch';
     const isInactive = inactiveNoteIds.has(note.id);
     // 音高范围外 note 用灰色（参考重叠 note 的视觉提示）。
     // 注意：oob note 仍参与合成（JP 会自动移调，base 可能影响质量），只是视觉上标注警告。
     const isOob = oobNoteIds.has(note.id);
     const isWarned = isInactive || isOob;
 
-    // 鼠标按住反馈：轻微放大 + 发光阴影，让用户清楚知道"按下了哪个分片音符"。
-    // 使用 save/translate/scale 包裹整条 note 绘制，确保 fill+stroke+text+handle
-    // 一起缩放，视觉一致。
     if (isActive) {
-      ctx.save();
-      ctx.shadowColor = c.accent;
-      ctx.shadowBlur = 12;
-      const cx = x + nw / 2;
-      const cy = y + nh / 2;
-      ctx.translate(cx, cy);
-      ctx.scale(1.04, 1.04);
-      ctx.translate(-cx, -cy);
+      activeNote = { note, x, y, nw, nh, isSelected, isWarned };
+      continue;
+    }
+    const key = (isWarned ? 1 : 0) | (isSelected ? 2 : 0) | (currentParamMode === 'Pitch' ? 4 : 0);
+    _noteGroups[key].push(note, x, y, nw);
+  }
+
+  for (let key = 0; key < _NOTE_STYLE_GROUPS; key++) {
+    const g = _noteGroups[key];
+    if (g.length === 0) continue;
+    const warned = (key & 1) !== 0;
+    const selected = (key & 2) !== 0;
+    const pitchMode = (key & 4) !== 0;
+
+    ctx.fillStyle = warned ? c.fgDisabled : c.accent;
+    ctx.globalAlpha = selected ? 1.0 : (pitchMode ? 0.4 : 0.8);
+    ctx.beginPath();
+    for (let i = 0; i < g.length; i += 4) ctx.rect(g[i + 1], g[i + 2], g[i + 3], NOTE_HEIGHT);
+    ctx.fill();
+    ctx.globalAlpha = 1.0;
+    ctx.strokeStyle = selected ? c.noteSelectedBg : c.noteBorder;
+    ctx.lineWidth = selected ? 2 : 1;
+    ctx.stroke();
+
+    // 右侧拖拽把手：整组同色，同样合并为一条 path
+    ctx.fillStyle = c.selectionBg;
+    ctx.beginPath();
+    for (let i = 0; i < g.length; i += 4) {
+      ctx.rect(g[i + 1] + g[i + 3] - 3, g[i + 2] + 2, 2, NOTE_HEIGHT - 4);
+    }
+    ctx.fill();
+
+    // 歌词文本
+    ctx.fillStyle = c.noteText;
+    ctx.font = '11px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    for (let i = 0; i < g.length; i += 4) {
+      if (g[i + 3] <= 16) continue;
+      const note = g[i];
+      ctx.fillText((note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || ''), g[i + 1] + 3, g[i + 2] + NOTE_HEIGHT / 2);
     }
 
+    // 警告 note 右上角标注感叹号（重叠未激活 / 音高超范围）
+    if (warned) {
+      ctx.fillStyle = c.warning;
+      ctx.font = 'bold 12px sans-serif';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'top';
+      for (let i = 0; i < g.length; i += 4) ctx.fillText('!', g[i + 1] + g[i + 3] - 4, g[i + 2] + 1);
+    }
+
+    // 颤音 / 渐入渐出视觉指示
+    for (let i = 0; i < g.length; i += 4) {
+      _drawNoteEffectIndicators(ctx, c, g[i], g[i + 1], g[i + 2], g[i + 3], NOTE_HEIGHT);
+    }
+  }
+
+  // 鼠标按住的 note 最后绘制（带放大 + 发光），保证它在最上层可见
+  if (activeNote) {
+    const { note, x, y, nw, nh, isSelected, isWarned } = activeNote;
+    ctx.save();
+    ctx.shadowColor = c.accent;
+    ctx.shadowBlur = 12;
+    const cx = x + nw / 2;
+    const cy = y + nh / 2;
+    ctx.translate(cx, cy);
+    ctx.scale(1.04, 1.04);
+    ctx.translate(-cx, -cy);
+
     ctx.fillStyle = isWarned ? c.fgDisabled : c.accent;
-    ctx.globalAlpha = isSelected ? 1.0 : (isPitchMode ? 0.4 : (isActive ? 0.95 : 0.8));
+    ctx.globalAlpha = isSelected ? 1.0 : (currentParamMode === 'Pitch' ? 0.4 : 0.95);
     ctx.fillRect(x, y, nw, nh);
     ctx.globalAlpha = 1.0;
-    ctx.strokeStyle = isSelected ? c.noteSelectedBg : (isActive ? c.accent : c.noteBorder);
-    ctx.lineWidth = isSelected ? 2 : (isActive ? 2 : 1);
+    ctx.strokeStyle = isSelected ? c.noteSelectedBg : c.accent;
+    ctx.lineWidth = 2;
     ctx.strokeRect(x, y, nw, nh);
 
     if (nw > 16) {
@@ -2023,11 +2238,8 @@ function _doRenderImpl(w, h) {
       ctx.textBaseline = 'middle';
       ctx.fillText((note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || ''), x + 3, y + nh / 2);
     }
-
     ctx.fillStyle = c.selectionBg;
     ctx.fillRect(x + nw - 3, y + 2, 2, nh - 4);
-
-    // 警告 note 右上角标注感叹号（重叠未激活 / 音高超范围）
     if (isWarned) {
       ctx.fillStyle = c.warning;
       ctx.font = 'bold 12px sans-serif';
@@ -2035,19 +2247,20 @@ function _doRenderImpl(w, h) {
       ctx.textBaseline = 'top';
       ctx.fillText('!', x + nw - 4, y + 1);
     }
-
     // 颤音 / 渐入渐出视觉指示（在 note 本体之上叠加，便于一眼看出哪些 note 启用了效果）
     _drawNoteEffectIndicators(ctx, c, note, x, y, nw, nh);
-
-    if (isActive) {
-      ctx.restore();
-    }
+    ctx.restore();
   }
+
+  // 分组绘制会把 textAlign/textBaseline 留在最后一组的取值上，
+  // 这里显式复位，避免影响后续（pitch 曲线 / 参数面板）的文本绘制。
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
 
   // 鼠标悬停在警告 note 上时显示提示（重叠未激活 / 音高超范围）
   const hoveredId = getHoveredNoteId();
   if (hoveredId !== null && (inactiveNoteIds.has(hoveredId) || oobNoteIds.has(hoveredId))) {
-    const hoveredNote = notes.find(n => n.id === hoveredId);
+    const hoveredNote = getNoteById(hoveredId);
     if (hoveredNote) {
       const hx = timeToX(hoveredNote.start);
       const hy = pitchToY(hoveredNote.pitch);

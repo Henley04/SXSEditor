@@ -574,9 +574,16 @@ const _validatedSessionModels = new Set();
 // 加载成功即优先用 TRT RTX EP / 其他 WinML EP；任何创建或推理失败（含 TRT 校验
 // 不通过、dummy 形状不匹配）都会静默回落到下方原有 DML/CPU 链路。
 // 小检测器（FCPE/RMVPE/ROSVOT）无 dummy 输入，在本函数开头即返回 CPU，不进该路径。
+//
+// mel_transform 显式排除：其输入 waveform 的长度等于参考音频重采样后的采样点数，
+// 长度完全不可预测。TRT-RTX 引擎没有对应的 shape profile 时，加载期校验（dummy
+// 取 SAMPLE_RATE）能通过，真实推理却在
+//   NvTensorRTRTX EP failed to call nvinfer1::IExecutionContext::setInputShape() for input 'waveform'
+// 处必失败，然后每合成一个 fragment 都要白跑一次 GPU 再回落 JS FFT。交给
+// DML/CPU（原生支持动态形状）成本更低且结果一致。
 const WINML_ELIGIBLE_KEYS = new Set([
   'noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder', 'f0Encoder',
-  'preflow', 'condEmb', 'diffStep', 'vocoder', 'melTransform', 'sifigan',
+  'preflow', 'condEmb', 'diffStep', 'vocoder', 'sifigan',
 ]);
 
 async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {

@@ -788,6 +788,12 @@ class Diffusion {
                 if (xtNaN > 0 || xtInf > 0) {
                     console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! NaN=${xtNaN}, Inf=${xtInf - xtNaN}, total=${xtLen}, frames=${totalFrames}, mean=${xtMean.toFixed(6)}`);
 
+                    // diff_step 跑在 vendor EP（TRT-RTX）上时，同一批输入形状会稳定
+                    // 产出非法值（引擎 profile 不匹配/编译缺陷）。把该模型拉黑：
+                    // 之后重建会话会直接落到 DML/CPU，而不是再次得到同样的 NaN。
+                    this._blacklistDiffStepOnVendorEp(sessions,
+                        `diffusion produced NaN=${xtNaN} Inf=${xtInf} frames=${totalFrames}`);
+
                     // Dump ORT native debug logs from stderr capture
                     if (typeof globalThis._flushOrtDebugLogs === 'function') {
                         globalThis._flushOrtDebugLogs();
@@ -803,6 +809,29 @@ class Diffusion {
             if (!suppressDoneLog || diagnosticMode) {
                 console.log(`[Diffusion] runDiffusionLoop done: frames=${totalFrames}, steps=${totalSteps}, sampler=${samplerName}, ${_elapsed.toFixed(0)}ms, ${_rtf.toFixed(2)}x RTF, ${(totalFrames / (_elapsed/1000)).toFixed(0)} frames/s, isFP16=${isFP16}`);
             }
+        }
+    }
+
+    /**
+     * 当扩散输出非法值且 diff_step 运行在 Windows ML vendor EP（TensorRT-RTX）上时，
+     * 把该模型加入运行期黑名单。后续会话创建会跳过 vendor EP，改走 DML/CPU，
+     * 避免用户重复触发同一个坏引擎（表现为"每次合成都是 NaN 音频"）。
+     *
+     * 诊断性副作用必须永不影响主流程：任何异常都吞掉。
+     *
+     * @param {Object} sessions
+     * @param {string} reason
+     * @private
+     */
+    _blacklistDiffStepOnVendorEp(sessions, reason) {
+        try {
+            const ds = sessions && sessions.diffStep;
+            // WinMLSession 标记 provider='windowsml'；ORT 原生会话没有该字段
+            if (!ds || ds.provider !== 'windowsml' || !ds.modelPath) return false;
+            const { reportRuntimeFailure } = require('../winml/winmlProvider');
+            return reportRuntimeFailure(ds.modelPath, reason);
+        } catch (_) {
+            return false;
         }
     }
 

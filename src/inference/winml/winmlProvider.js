@@ -28,6 +28,46 @@ const path = require('node:path');
 const ortBridge = require('./ortBridge');
 const winmlCatalog = require('./winmlCatalog');
 
+// Models that already failed at RUNTIME on a WinML vendor EP, keyed by model
+// file name. Creation can succeed (the validation dummy usually has a length
+// inside the compiled profile) while real inputs fail, e.g.
+//   mel_transform (arbitrary reference-audio sample counts)
+//     → NvTensorRTRTX EP failed to call ...setInputShape() for input 'waveform'
+//   vocoder / diff_step fed with an out-of-profile shape or non-finite data
+//     → NvTensorRTRTX EP execution context enqueue failed.
+// Recreating the same engine reproduces the failure, so once a model lands here
+// it is pinned to the DML/CPU fallback chain for the rest of the process.
+const _runtimeBlockedModels = new Set();
+
+function _blockedKey(modelPath) {
+    return path.basename(String(modelPath || '')).toLowerCase();
+}
+
+/**
+ * Pin a model to the non-WinML fallback chain after a runtime failure.
+ * @param {string} modelPath - path or file name of the failing model
+ * @param {string} [message] - original error message (for logging)
+ * @returns {boolean} true when the model is now blocked
+ */
+function reportRuntimeFailure(modelPath, message) {
+    const key = _blockedKey(modelPath);
+    if (!key) return false;
+    if (!_runtimeBlockedModels.has(key)) {
+        console.warn(`[WinML][runtime] model=${key} pinned to DML/CPU after runtime failure: ${String(message || '').split('\n')[0].slice(0, 140)}`);
+    }
+    _runtimeBlockedModels.add(key);
+    return true;
+}
+
+/**
+ * Whether the given model must skip the WinML chain (see reportRuntimeFailure).
+ * @param {string} modelPath
+ * @returns {boolean}
+ */
+function isRuntimeBlocked(modelPath) {
+    return _runtimeBlockedModels.has(_blockedKey(modelPath));
+}
+
 const registeredEps = new Set();
 let registrationAttempted = false;
 let _lastAttemptAt = 0;
@@ -521,9 +561,14 @@ async function getWinmlCandidates(useStaticShapes, allowOpenVINO = false) {
  * @returns {Promise<{session:object, ep:string}|null>}
  */
 async function tryCreateWinMLSession(modelPath, useStaticShapes, allowOpenVINO = false) {
+    const modelName = path.basename(modelPath);
+    // Do not rebuild an engine that already proved unusable at runtime.
+    if (isRuntimeBlocked(modelPath)) {
+        console.log(`[WinML][session] model=${modelName} status=skipped reason=runtime-failure-blocklist`);
+        return null;
+    }
     const candidates = await getWinmlCandidates(useStaticShapes, allowOpenVINO);
     if (!candidates.length) return null;
-    const modelName = path.basename(modelPath);
     for (const cand of candidates) {
         try {
             const session = await ortBridge.createSessionWithEps(modelPath, cand.indices, cand.epName);
@@ -594,6 +639,7 @@ function clearTRTEngineCache() {
 /** Test/diagnostic reset. */
 function __resetForTest() {
     registeredEps.clear();
+    _runtimeBlockedModels.clear();
     registrationAttempted = false;
     _lastAttemptAt = 0;
     _emptyReasonLogged = false;
@@ -607,6 +653,8 @@ module.exports = {
     getReadyEpLibraries,
     getWinmlCandidates,
     tryCreateWinMLSession,
+    reportRuntimeFailure,
+    isRuntimeBlocked,
     clearTRTEngineCache,
     listCompatibleProviders: (...a) => winmlCatalog.listCompatibleProviders(...a),
     __resetForTest,

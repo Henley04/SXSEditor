@@ -50,6 +50,12 @@ app.commandLine.appendSwitch('disable-features', [
   'Extensions',
   'AutofillServerCommunication',
   'CertificateVerifier',
+  // Windows 原生窗口遮挡探测会在启动时同步枚举顶层窗口，冷启动常见 50-150ms
+  // 卡顿。SXSEditor 不做遮挡优化，直接关掉。
+  'CalculateNativeWinOcclusion',
+  // 站点隔离/进程外 iframe 相关后台服务，本应用所有内容均为本地同源。
+  'IsolateOrigins',
+  'site-per-process',
 ].join(','));
 // Disable background throttling & renderer backgrounding so audio playback
 // keeps running smoothly when the window is occluded/minimized. Audio
@@ -285,8 +291,19 @@ app.whenReady().then(() => {
   const contentSecurityPolicy = `default-src 'self'; script-src ${cspScriptSrc}; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src ${cspConnectSrc}; font-src 'self' data:; worker-src 'self' blob:; child-src 'self' blob:;`;
 
   // Content Security Policy: restrict resource loading to self-origin
+  //
+  // 只对文档请求（mainFrame/subframe document）注入响应头。
+  // 之前对 *所有* 请求都走 onHeadersReceived 回调并对每个响应对象做展开拷贝，
+  // 窗口首屏要加载几十个资源（JS/CSS/字体/图标），回调与对象分配本身就有
+  // 可观开销，且会阻塞每个子资源的提交。CSP / COOP / COEP 只需要挂在文档
+  // 响应上：子资源继承文档的 CSP，跨源隔离也只看文档。收窄后首屏更快。
   const { session } = require('electron');
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    const type = details.resourceType;
+    if (type !== 'mainFrame' && type !== 'subFrame') {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
     callback({
       responseHeaders: {
         ...details.responseHeaders,
@@ -335,7 +352,10 @@ app.whenReady().then(() => {
   // Helper: reveal the main window (and close the splash if any). In
   // dev mode this runs immediately after did-finish-load; in packaged
   // mode it waits for the splash's minimum visible duration.
+  let _revealed = false;
   const revealMainWindow = () => {
+    if (_revealed) return;
+    _revealed = true;
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.show();
       mainWindow.focus();
@@ -358,6 +378,10 @@ app.whenReady().then(() => {
   // INTO Step 4's setImmediate block, because it depends on
   // enumerateDMLDevices / setCachedDMLDevices / getCachedDMLDevices, which
   // are assigned by Step 4's heavy require() calls.
+  // ready-to-show 表示首帧已经绘制完成，通常不晚于 did-finish-load。
+  // 两个信号谁先到就先用谁，避免为了等 load 事件多空转一帧。
+  mainWindow.once('ready-to-show', () => { revealMainWindow(); });
+
   mainWindow.webContents.once('did-finish-load', () => {
     // 1. 立即显示主窗口（不等待 GPU/NPU 检测）
     // In dev mode: reveal the main window immediately.

@@ -37,6 +37,9 @@ const IPC_CHANNELS = {
   CLOSE_CONFIRMED: 'close-confirmed',
   CLOSE_CONFIRM: 'close-confirm',
   RELOAD_MAIN_WINDOW: 'reload-main-window',
+  // 主进程 → 渲染进程：内容区尺寸可能已变化，请重新布局/重绘。
+  // 覆盖停靠式 DevTools 开关这类 window 'resize' 不触发的场景。
+  RELAYOUT: 'app:relayout',
 
   // ==================== SVS Pipeline ====================
   SVS_INIT: 'svs:init',

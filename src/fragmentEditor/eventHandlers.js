@@ -72,11 +72,13 @@ import {
   deepClone, clonePitchCurveState, applyPitchCurveSnapshot,
   cloneEnvelopeState, applyEnvelopeSnapshot,
   genNoteId, hasNoteOverlap, hasNoteOverlapMulti, clampNotePosition,
+  getNoteById,
   findAnchorPointAt,
   convertBrushStrokeToAnchorPoints,
   getPhonemeAdjustments, getPhonemeStartX, normalizePhonemeRatios,
   tokenizeLyric, resolvePhonemesFromPipeline,
   render, resizeCanvases,
+  getParentHeightCached,
   _getCanvasRendererNotesIndex,
   ensureVibrato, DEFAULT_VIBRATO, computeVibratoOffset,
 } from './canvasRenderer.js';
@@ -103,7 +105,7 @@ function _getCanvasRect() {
   }
   return _canvasRectCache;
 }
-function _invalidateCanvasRect() {
+export function _invalidateCanvasRect() {
   _canvasRectCache = null;
 }
 
@@ -112,20 +114,24 @@ function getMousePos(e) {
   return { x: e.clientX - rect.left, y: e.clientY - rect.top };
 }
 
+// 拖动期间复用的 exclude 集合，避免每次 mousemove 分配新 Set
+const _dragExcludeSet = new Set();
+
 function applyNoteDrag(pos) {
   const dragMode = getDragMode();
   if (dragMode !== 'move' && dragMode !== 'resize') return false;
 
   const selectedNoteIds = getSelectedNoteIds();
-  const notes = getNotes();
 
   if (dragMode === 'move' && selectedNoteIds.size > 1) {
     const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
     const dyPitch = Math.round(yToPitchContinuous(pos.y) - getDragStartMousePitch());
-    // 构建 O(1) note 查询表，避免每帧对每个选中 note 做 O(n) 数组扫描
+    // 构建 O(1) note 查询表。只遍历「选中的 id」而不是全部 notes：
+    // 选中数 k 通常远小于总音符数 n，且 getNoteById 命中缓存时是 O(1)。
     const noteMap = {};
-    for (const n of notes) {
-      if (selectedNoteIds.has(n.id)) noteMap[n.id] = n;
+    for (const id of selectedNoteIds) {
+      const n = getNoteById(id);
+      if (n) noteMap[id] = n;
     }
     // 1. 先计算所有选中 notes 的原始新位置（未截断到 0）
     const rawPlanned = [];
@@ -185,8 +191,17 @@ function applyNoteDrag(pos) {
     return true;
   }
 
-  const note = notes.find(n => n.id === [...selectedNoteIds][0]);
+  // 取第一个选中 id：避免 [...selectedNoteIds] 每次 mousemove 都复制整个 Set，
+  // 并用 getNoteById 的 O(1) 索引替代 O(n) 线性扫描。
+  let firstSelectedId = null;
+  for (const id of selectedNoteIds) { firstSelectedId = id; break; }
+  const note = firstSelectedId == null ? null : getNoteById(firstSelectedId);
   if (!note) return true;
+
+  // 复用的 exclude 集合：拖动是每帧热路径，避免每次 mousemove 新建 Set。
+  const excludeSet = _dragExcludeSet;
+  excludeSet.clear();
+  excludeSet.add(note.id);
 
   if (dragMode === 'move') {
     const dxBeats = xToTime(pos.x) - getDragStartMouseTime();
@@ -207,7 +222,6 @@ function applyNoteDrag(pos) {
       const pxPerBeat = BEAT_WIDTH * getZoomX();
       if (pxPerBeat > 0) {
         const snapBeatsWindow = 4 / pxPerBeat;
-        const excludeSet = new Set([note.id]);
         const snappedStart = findAdjacentBoundary(idx, excludeSet, newPitch, newStart, snapBeatsWindow);
         if (snappedStart !== newStart && snappedStart >= 0) {
           newStart = snappedStart;
@@ -233,7 +247,6 @@ function applyNoteDrag(pos) {
       const pxPerBeat = BEAT_WIDTH * getZoomX();
       if (pxPerBeat > 0) {
         const snapBeatsWindow = 4 / pxPerBeat;
-        const excludeSet = new Set([note.id]);
         const proposedEnd = note.start + newDuration;
         const snappedEnd = findAdjacentBoundary(idx, excludeSet, note.pitch, proposedEnd, snapBeatsWindow);
         if (snappedEnd !== proposedEnd && snappedEnd > note.start) {
@@ -631,7 +644,7 @@ function _applySetKanjiChinese(groupId, rightClickedNoteId) {
 function _applySetKanjiJapanese(noteId) {
   const notes = getNotes();
   const groups = getKanjiGroups();
-  const note = notes.find(n => n.id === noteId);
+  const note = getNoteById(noteId);
   if (!note) return;
 
   const result = splitKanjiNoteToKana(note, genNoteId);
@@ -745,9 +758,8 @@ const FADE_PRESETS = {
 
 function _snapshotNoteEffects(noteIds) {
   const snap = new Map();
-  const notes = getNotes();
   for (const id of noteIds) {
-    const n = notes.find(nn => nn.id === id);
+    const n = getNoteById(id);
     if (!n) continue;
     snap.set(id, {
       vibrato: n.vibrato ? deepClone(n.vibrato) : null,
@@ -759,9 +771,8 @@ function _snapshotNoteEffects(noteIds) {
 }
 
 function _restoreNoteEffects(snap) {
-  const notes = getNotes();
   for (const [id, val] of snap) {
-    const n = notes.find(nn => nn.id === id);
+    const n = getNoteById(id);
     if (!n) continue;
     if (val.vibrato) {
       n.vibrato = deepClone(val.vibrato);
@@ -781,7 +792,7 @@ function _getCtxNoteIds() {
 function _firstCtxNote() {
   const ids = _getCtxNoteIds();
   if (ids.length === 0) return null;
-  return getNotes().find(n => n.id === ids[0]) || null;
+  return getNoteById(ids[0]) || null;
 }
 
 function _syncNoteCtxMenuFromNotes() {
@@ -846,7 +857,7 @@ function showNoteContextMenu(x, y, noteId) {
   if (kanjiBtn) {
     let showKanji = false;
     if (noteIds.length === 1) {
-      const note = getNotes().find(n => n.id === noteIds[0]);
+      const note = getNoteById(noteIds[0]);
       if (note) {
         const group = findGroupByNoteId(note.id, getKanjiGroups());
         if (group || isSingleKanji(note.lyric)) {
@@ -897,12 +908,11 @@ function hideNoteContextMenu() {
 function _applyToCtxNotes(modifier, commitHistory) {
   const ids = _getCtxNoteIds();
   if (ids.length === 0) return;
-  const notes = getNotes();
   if (commitHistory) {
     _noteCtxSnapshotBefore = _snapshotNoteEffects(ids);
   }
   for (const id of ids) {
-    const n = notes.find(nn => nn.id === id);
+    const n = getNoteById(id);
     if (!n) continue;
     modifier(n);
   }
@@ -1064,7 +1074,7 @@ function _setupNoteContextMenuListeners() {
     kanjiBtn.addEventListener('click', () => {
       const ids = _getCtxNoteIds();
       if (ids.length !== 1) return;
-      const note = getNotes().find(n => n.id === ids[0]);
+      const note = getNoteById(ids[0]);
       if (!note) return;
       const group = findGroupByNoteId(note.id, getKanjiGroups());
       // 关闭 note 菜单，再打开 kanji 菜单（避免两个菜单重叠）
@@ -1107,7 +1117,7 @@ function finalizeDragOperation() {
   switch (dragOperation.type) {
     case 'noteAdd': {
       const notes = getNotes();
-      const note = notes.find(n => n.id === dragOperation.noteId);
+      const note = getNoteById(dragOperation.noteId);
       if (note) {
         const noteClone = { ...note };
         history.push({
@@ -1164,17 +1174,16 @@ function finalizeDragOperation() {
     case 'notesMove': {
       if (dragOperation.moveData && dragOperation.moveData.length > 0) {
         const moveData = dragOperation.moveData;
-        const notes = getNotes();
         history.push({
           undo() {
             for (const md of moveData) {
-              const n = notes.find(nn => nn.id === md.noteId);
+              const n = getNoteById(md.noteId);
               if (n) { n.start = md.oldStart; n.pitch = md.oldPitch; }
             }
           },
           redo() {
             for (const md of moveData) {
-              const n = notes.find(nn => nn.id === md.noteId);
+              const n = getNoteById(md.noteId);
               if (n) { n.start = md.newStart; n.pitch = md.newPitch; }
             }
           }
@@ -1183,8 +1192,7 @@ function finalizeDragOperation() {
       break;
     }
     case 'noteMove': {
-      const notes = getNotes();
-      const note = notes.find(n => n.id === dragOperation.noteId);
+      const note = getNoteById(dragOperation.noteId);
       if (note && (note.start !== dragOperation.oldStart || note.pitch !== dragOperation.oldPitch)) {
         const newStart = note.start;
         const newPitch = note.pitch;
@@ -1193,11 +1201,11 @@ function finalizeDragOperation() {
         const oldPitch = dragOperation.oldPitch;
         history.push({
           undo() {
-            const n = notes.find(nn => nn.id === noteId);
+            const n = getNoteById(noteId);
             if (n) { n.start = oldStart; n.pitch = oldPitch; }
           },
           redo() {
-            const n = notes.find(nn => nn.id === noteId);
+            const n = getNoteById(noteId);
             if (n) { n.start = newStart; n.pitch = newPitch; }
           }
         });
@@ -1205,19 +1213,18 @@ function finalizeDragOperation() {
       break;
     }
     case 'noteResize': {
-      const notes = getNotes();
-      const note = notes.find(n => n.id === dragOperation.noteId);
+      const note = getNoteById(dragOperation.noteId);
       if (note && note.duration !== dragOperation.oldDuration) {
         const newDuration = note.duration;
         const noteId = dragOperation.noteId;
         const oldDuration = dragOperation.oldDuration;
         history.push({
           undo() {
-            const n = notes.find(nn => nn.id === noteId);
+            const n = getNoteById(noteId);
             if (n) { n.duration = oldDuration; }
           },
           redo() {
-            const n = notes.find(nn => nn.id === noteId);
+            const n = getNoteById(noteId);
             if (n) { n.duration = newDuration; }
           }
         });
@@ -1510,8 +1517,7 @@ function handlePhonemeMouseMove(pos) {
   const phonemeDragState = getPhonemeDragState();
   if (!phonemeDragState) return;
 
-  const notes = getNotes();
-  const note = notes.find(n => n.id === phonemeDragState.noteId);
+  const note = getNoteById(phonemeDragState.noteId);
   if (!note) { setPhonemeDragState(null); return; }
 
   const adjustments = getPhonemeAdjustments(note);
@@ -1565,8 +1571,7 @@ function handlePhonemeMouseMove(pos) {
 function handlePhonemeMouseUp() {
   const phonemeDragState = getPhonemeDragState();
   if (phonemeDragState) {
-    const notes = getNotes();
-    const note = notes.find(n => n.id === phonemeDragState.noteId);
+    const note = getNoteById(phonemeDragState.noteId);
     if (note) {
       normalizePhonemeRatios(getPhonemeAdjustments(note));
       note.phonemeAdjustments = getPhonemeAdjustments(note);
@@ -1724,12 +1729,12 @@ function startInlineEdit(note, hit) {
         history.push({
           undo() {
             for (const old of oldLyrics) {
-              const n = notes.find(nn => nn.id === old.id);
+              const n = getNoteById(old.id);
               if (n) { n.lyric = old.lyric === '-' ? '' : old.lyric; n.isContinuation = !!old.isContinuation; n.isSlur = !!old.isSlur; n.noteType = old.noteType; n.phonemeAdjustments = null; }
             }
           },
           redo() {
-            const n = notes.find(nn => nn.id === noteId);
+            const n = getNoteById(noteId);
             if (n) applyLyricEditorValue(n, newLyric);
             if (tokens.length > 1 && noteIdx !== -1) {
               for (let t = 1; t < tokens.length; t++) {
@@ -1961,7 +1966,7 @@ export function setupEventListeners() {
         setDragMode('move');
         getDragNoteStarts().clear();
         for (const id of selectedNoteIds) {
-          const n = getNotes().find(nn => nn.id === id);
+          const n = getNoteById(id);
           if (n) getDragNoteStarts().set(id, { start: n.start, pitch: n.pitch, duration: n.duration });
         }
         setDragNoteStart({ start: hit.note.start, pitch: hit.note.pitch, duration: hit.note.duration });
@@ -2235,7 +2240,7 @@ export function setupEventListeners() {
     if (getDragMode() === 'move' && getSelectedNoteIds().size > 1 && getDragOperation() && getDragOperation().type === 'notesMove') {
       const moveData = [];
       for (const id of getSelectedNoteIds()) {
-        const note = getNotes().find(n => n.id === id);
+        const note = getNoteById(id);
         const start = getDragNoteStarts().get(id);
         if (note && start && (note.start !== start.start || note.pitch !== start.pitch)) {
           moveData.push({
@@ -2394,11 +2399,11 @@ export function setupEventListeners() {
       e.preventDefault();
       const currentParamMode = getCurrentParamMode();
       if (currentParamMode !== 'Pitch' && getSelectedNoteIds().size > 0) {
+        const notes = getNotes();
         const newIds = new Set();
         const oldNotes = [];
-        const notes = getNotes();
         for (const id of getSelectedNoteIds()) {
-          const note = notes.find(n => n.id === id);
+          const note = getNoteById(id);
           if (note) {
             oldNotes.push({ ...note });
           }
@@ -2413,7 +2418,7 @@ export function setupEventListeners() {
           newIds.add(newNote.id);
         }
         if (newIds.size > 0) {
-          const addedNotes = [...newIds].map(id => notes.find(n => n.id === id)).map(n => ({ ...n }));
+          const addedNotes = [...newIds].map(id => getNoteById(id)).map(n => ({ ...n }));
           history.push({
             undo() {
               for (const n of addedNotes) {
@@ -2644,14 +2649,13 @@ export function setupEventListeners() {
         const moveData = [];
         let blocked = false;
         const planned = [];
-        const notes = getNotes();
         // 多选时使用排除所有选中 notes 的重叠检测，避免相邻选中 notes 的"假重叠"
         // 导致键盘多选移动被错误 blocked（与鼠标多选拖动同一根因）。
         const checkOverlap = selectedNoteIds.size > 1
           ? (id, pitch, start, end) => hasNoteOverlapMulti(selectedNoteIds, pitch, start, end)
           : (id, pitch, start, end) => hasNoteOverlap(id, pitch, start, end);
         for (const id of selectedNoteIds) {
-          const note = notes.find(n => n.id === id);
+          const note = getNoteById(id);
           if (note) {
             let newPitch = note.pitch;
             let newStart = note.start;
@@ -2678,13 +2682,13 @@ export function setupEventListeners() {
         history.push({
           undo() {
             for (const md of moveData) {
-              const n = notes.find(nn => nn.id === md.noteId);
+              const n = getNoteById(md.noteId);
               if (n) { n.start = md.oldStart; n.pitch = md.oldPitch; }
             }
           },
           redo() {
             for (const md of moveData) {
-              const n = notes.find(nn => nn.id === md.noteId);
+              const n = getNoteById(md.noteId);
               if (n) { n.start = md.newStart; n.pitch = md.newPitch; }
             }
           }
@@ -2697,46 +2701,67 @@ export function setupEventListeners() {
   });
 
   // rAF 合并 wheel 事件：trackpad 缩放/滚动会每秒触发数十次 wheel，
-  // 每次都同步 render() 会掉帧。这里将同一帧内的多次 wheel 合并为一次 render。
+  // 每次都同步 render() 会掉帧。
+  // 关键：必须「累加」同一帧内的 delta 而不是只保留最后一个事件 —— 否则
+  // 一帧内到达的 3~5 次 wheel 有 2~4 次被丢弃，滚动距离被吃掉，手感发飘。
   let _wheelRaf = 0;
-  let _pendingWheel = null;
+  const _wheelAcc = { dx: 0, dy: 0, mouseX: 0, mouseY: 0, zoom: false, shift: false, has: false };
+  // 将不同 deltaMode 归一化到像素，避免行/页模式下滚动量失真
+  const _normalizeWheel = (ev, value) => {
+    if (ev.deltaMode === 1) return value * 16;   // DOM_DELTA_LINE
+    if (ev.deltaMode === 2) return value * 100;  // DOM_DELTA_PAGE
+    return value;
+  };
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
-    // 缓存最后一次 wheel 的鼠标位置（zoom 需要用）
-    _pendingWheel = e;
+    if (!_wheelAcc.has) {
+      _wheelAcc.has = true;
+      _wheelAcc.dx = 0;
+      _wheelAcc.dy = 0;
+      // 只在一段滚动的开始取一次鼠标位置，缩放锚点更稳定
+      const pos = getMousePos(e);
+      _wheelAcc.mouseX = pos.x;
+      _wheelAcc.mouseY = pos.y;
+      _wheelAcc.zoom = e.ctrlKey || e.metaKey;
+      _wheelAcc.shift = e.shiftKey;
+    }
+    _wheelAcc.dx += _normalizeWheel(e, e.deltaX);
+    _wheelAcc.dy += _normalizeWheel(e, e.deltaY);
     if (_wheelRaf) return;
     _wheelRaf = requestAnimationFrame(() => {
       _wheelRaf = 0;
-      const ev = _pendingWheel;
-      _pendingWheel = null;
-      if (!ev) return;
-      const isZoom = ev.ctrlKey || ev.metaKey;
+      if (!_wheelAcc.has) return;
+      const { dx, dy, mouseX, zoom, shift } = _wheelAcc;
+      _wheelAcc.has = false;
 
-      if (isZoom) {
+      if (zoom) {
         const oldZoomX = getZoomX();
-        const delta = ev.deltaY > 0 ? 0.9 : 1.1;
-        const newZoomX = Math.max(0.25, Math.min(4, oldZoomX * delta));
+        // 连续缩放：以 100px/notch 为基准做指数映射，小 delta（trackpad）
+        // 也能得到平滑且成比例的缩放，且多次事件不会互相抵消。
+        const newZoomX = Math.max(0.25, Math.min(4, oldZoomX * Math.pow(0.9, dy / 100)));
         setZoomX(newZoomX);
 
-        const pos = getMousePos(ev);
         // Compute mouseBeats using OLD zoom/scroll (the actual beat under cursor before zoom),
         // then set scroll so the same beat stays under the cursor after zoom.
         // NOTE: Must use oldZoomX here — xToTime() would use the already-updated newZoomX,
         // giving a wrong beat and causing the note to "disconnect" from the mouse.
         const oldScrollX = getScrollX();
-        const mouseBeats = (pos.x + oldScrollX) / (BEAT_WIDTH * oldZoomX);
-        const newScrollX = mouseBeats * BEAT_WIDTH * newZoomX - pos.x;
+        const mouseBeats = (mouseX + oldScrollX) / (BEAT_WIDTH * oldZoomX);
+        const newScrollX = mouseBeats * BEAT_WIDTH * newZoomX - mouseX;
         setScrollX(Math.max(0, newScrollX));
 
         // No special drag handling needed: since mouseBeats is preserved across the zoom,
         // dxBeats (xToTime(pos) - dragStartMouseTime) stays the same, and the note
         // naturally remains anchored to the mouse on the next mousemove.
-      } else if (ev.shiftKey) {
-        setScrollX(getScrollX() + ev.deltaY);
-        setScrollX(Math.max(0, getScrollX()));
+      } else if (shift) {
+        // Shift + 滚轮 = 水平滚动（支持 deltaX 与 shift+deltaY）
+        const delta = dx !== 0 ? dx : dy;
+        setScrollX(Math.max(0, getScrollX() + delta));
       } else {
-        setScrollY(getScrollY() + ev.deltaY);
-        const maxScrollY = Math.max(0, 128 * NOTE_HEIGHT + HEADER_HEIGHT + PARAM_CURVE_HEIGHT - canvas.parentElement.clientHeight);
+        setScrollY(getScrollY() + dy);
+        // parentElement.clientHeight 是同步 layout 读取，改用渲染层缓存高度
+        const parentH = getParentHeightCached();
+        const maxScrollY = Math.max(0, 128 * NOTE_HEIGHT + HEADER_HEIGHT + PARAM_CURVE_HEIGHT - parentH);
         setScrollY(Math.max(0, Math.min(maxScrollY, getScrollY())));
       }
 

@@ -886,6 +886,87 @@ function resizeF0Linear(src, targetLen) {
     return out;
 }
 
+// ---- mel_transform 会话级状态 ----
+// 同一个 inference session 上一次推理失败后（典型：TRT-RTX 的 setInputShape 不支持
+// 本次参考音频长度），该会话在本进程内被视为不可用，后续直接回落 JS FFT 提取。
+// 用 WeakSet 保存 session 对象，会话被释放后条目自动回收。
+const _melTransformBroken = new WeakSet();
+let _melTransformLastError = '';
+
+/**
+ * 读取 mel_transform 输入张量声明的 rank（2D [1, n] 或 3D [1, 1, n]）。
+ * 读取失败时按最常见的 2D 处理。
+ * @param {Object} session
+ * @param {string} inputName
+ * @returns {number} 2 或 3
+ */
+function _melTransformInputRank(session, inputName) {
+    try {
+        const meta = session.inputMetadata;
+        if (Array.isArray(meta)) {
+            const hit = meta.find((m) => m.name === inputName);
+            const shape = hit && (hit.shape || hit.dims);
+            if (Array.isArray(shape) && shape.length === 3) return 3;
+        }
+    } catch (_) { /* metadata unavailable → default 2D */ }
+    return 2;
+}
+
+/**
+ * 统计数组中的 NaN / Inf 数量。
+ * @param {Float32Array} arr
+ * @returns {{nan: number, inf: number}}
+ */
+function _countNonFinite(arr) {
+    let nan = 0;
+    let inf = 0;
+    for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (Number.isNaN(v)) nan++;
+        else if (!Number.isFinite(v)) inf++;
+    }
+    return { nan, inf };
+}
+
+/**
+ * vocoder 输入的有限性守卫。
+ *
+ * NaN/Inf mel 进入 GPU 后不会报出有意义的错误：DirectML / TensorRT-RTX 常表现为
+ * "execution context enqueue failed"，把真正的根因（上游 diffusion 产出非法值）
+ * 掩盖成一句无法定位的话。因此在送进 EP 之前统一拦截：
+ *   - 大面积损坏（≥50%）：直接抛出可读错误（新的扩散结果不可能有一半是 NaN）；
+ *   - 零星损坏：就地补 0（标准化 mel 的均值≈0，0 是最中性的修复值）并警告，
+ *     合成继续，听感只损失极少量分量。
+ *
+ * 注意：修复必须写进副本，不能污染上游 xt.data（多分片流式路径会复用同一份 mel，
+ * 且该 mel 还要参与 chunk 边界的 WSOLA 交叉淡入淡出）。
+ *
+ * @param {Float32Array} melData
+ * @param {number} effectiveTotalFrames
+ * @param {string} vocoderType
+ * @returns {Float32Array} 保证全为有限值的 mel
+ */
+function guardMelFinite(melData, effectiveTotalFrames, vocoderType) {
+    const src = melData instanceof Float32Array ? melData : new Float32Array(melData);
+    const total = src.length;
+    if (total === 0) return src;
+    const { nan, inf } = _countNonFinite(src);
+    if (nan === 0 && inf === 0) return src;
+    if ((nan + inf) / total >= 0.5) {
+        throw new Error(
+            `Vocoder input mel is non-finite (NaN=${nan}, Inf=${inf}, total=${total}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}): ` +
+            'upstream diffusion returned NaN/Inf. Usually a vendor-EP (TensorRT-RTX) engine that cannot serve this input shape — ' +
+            'check [TRTRTX] session logs / try another inference device.'
+        );
+    }
+    const fixed = new Float32Array(src);
+    for (let i = 0; i < fixed.length; i++) {
+        if (!Number.isFinite(fixed[i])) fixed[i] = 0;
+    }
+    console.warn(`[VocoderDiag] MEL INPUT BEFORE VOCODER HAS NaN/Inf (NaN=${nan}, Inf=${inf}, total=${total}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}) — patched to 0 to keep synthesis usable`);
+    return fixed;
+}
+
 // ---- Post-processing class ----
 
 class Postprocessing {
@@ -919,20 +1000,48 @@ class Postprocessing {
      *   - int8/mel_transform.onnx:  input='waveform',   output='output'
      * 这里通过 session.inputNames / outputNames 动态取首个输入/输出名，避免硬编码导致
      * ROOT 模型运行时报 "input 'audio' is missing in 'feeds'"。
+     *
+     * 同样地，输入的 rank 也有 2D [1, n] 与 3D [1, 1, n] 两种导出形态；rank 不对时
+     * TRT-RTX/OpenVINO 引擎会在 IExecutionContext::setInputShape() 处拒绝，因此按
+     * session 元数据决定，而不是固定用 2D。
      */
     async extractRefMelOnnx(sessions, refAudioWavBuffer, isFP16, useStaticShapes = false) {
         const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(refAudioWavBuffer);
         const resampled = await resampleLinearAsync(audioFloat, srcSr, SAMPLE_RATE);
+        if (!resampled || resampled.length === 0) {
+            // 空参考音频：不要构造长度为 0 的张量（部分 EP 会直接报 invalid dimensions）
+            return { data: new Float32Array(0), frames: 0, melBands: MEL_DIM };
+        }
+        const melSession = sessions.melTransform;
+        // 此会话此前已经失败过一次（典型：TRT-RTX 引擎不接受本次参考音频的长度）。
+        // 同一个引擎重试必然再次失败，这里直接抛出，让调用方立刻回落到 JS FFT 提取，
+        // 避免多分片合成时每个 fragment 都白跑一次 GPU。
+        if (_melTransformBroken.has(melSession)) {
+            throw new Error(`mel_transform session previously failed ("${_melTransformLastError}"), skipping to JS fallback`);
+        }
         const floatType = isFP16 ? 'float16' : 'float32';
         // 动态获取输入/输出名（不同导出版本名称不同）
-        const melInputName = sessions.melTransform.inputNames[0];   // 'waveform' | 'audio'
-        const melOutputName = sessions.melTransform.outputNames[0]; // 'mel_spectrogram' | 'mel' | 'output'
+        const melInputName = melSession.inputNames[0];   // 'waveform' | 'audio'
+        const melOutputName = melSession.outputNames[0]; // 'mel_spectrogram' | 'mel' | 'output'
+        const inputRank = _melTransformInputRank(melSession, melInputName);
+        const buildWaveform = (data) => createFloatTensor(
+            floatType, data,
+            inputRank === 3 ? [1, 1, data.length] : [1, data.length]);
+        const runWithFailureMemory = async (waveform) => {
+            try {
+                return await melSession.run({ [melInputName]: waveform });
+            } catch (err) {
+                _melTransformBroken.add(melSession);
+                _melTransformLastError = String(err.message || err).split('\n')[0].slice(0, 120);
+                throw err;
+            }
+        };
         const NPU_STATIC_NUM_SAMPLES = 240000;
         if (useStaticShapes && resampled.length < NPU_STATIC_NUM_SAMPLES) {
             const padded = new Float32Array(NPU_STATIC_NUM_SAMPLES);
             padded.set(resampled);
-            const waveform = createFloatTensor(floatType, padded, [1, NPU_STATIC_NUM_SAMPLES]);
-            const results = await sessions.melTransform.run({ [melInputName]: waveform });
+            const waveform = buildWaveform(padded);
+            const results = await runWithFailureMemory(waveform);
             const melOutput = results[melOutputName];
             const melData = outputToFloat32(melOutput);
             const melDims = melOutput.dims; // 先取 dims 再 dispose，避免 use-after-free
@@ -945,8 +1054,8 @@ class Postprocessing {
             const trimmed = melData.subarray(0, frames * MEL_DIM);
             return { data: trimmed.slice(), frames, melBands: MEL_DIM };
         }
-        const waveform = createFloatTensor(floatType, resampled, [1, resampled.length]);
-        const results = await sessions.melTransform.run({ [melInputName]: waveform });
+        const waveform = buildWaveform(resampled);
+        const results = await runWithFailureMemory(waveform);
         const melOutput = results[melOutputName];
         const melData = outputToFloat32(melOutput);
         const melDims = melOutput.dims; // 先取 dims 再 dispose
@@ -992,6 +1101,9 @@ class Postprocessing {
                 }
             }
         }
+        // 有限性守卫（单 chunk / 多 chunk 两条路径共用）：NaN/Inf mel 送进 EP 只会得到
+        // "enqueue failed" 这类无法定位的报错，这里先拦截，详见 guardMelFinite 注释。
+        effectiveMelData = guardMelFinite(effectiveMelData, effectiveTotalFrames, vocoderType);
 
         // vocoder 期望标准化 mel (mean=0, std=1)，与官方 PyTorch soulxsinger.py 一致。
         // 之前的爆炸是 VocosFullWrapper._overlap_add 的 reshape 维度顺序 bug 导致的（已修复）。
@@ -1084,18 +1196,9 @@ class Postprocessing {
             const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, effectiveTotalFrames);
 
-            // 诊断：检查 mel 输入是否包含 NaN（在 vocoder run 之前）+ mel 统计（标准化 mel，期望 mean≈0 std≈1）
-            // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
-            // 全量扫描 NaN/Inf（采样检测可能漏掉 NaN 簇），always-on 以保证致命错误不被静默
+            // 诊断：mel 输入的分布统计（标准化 mel，期望 mean≈0 std≈1），受 diagnosticMode 控制。
+            // NaN/Inf 检查已统一前移到 guardMelFinite（覆盖单/多 chunk 两条路径），此处不再重复扫描。
             {
-                let melNaN = 0, melInf = 0;
-                for (let i = 0; i < paddedMel.length; i++) {
-                    if (Number.isNaN(paddedMel[i])) { melNaN++; }
-                    else if (!Number.isFinite(paddedMel[i])) { melInf++; }
-                }
-                if (melNaN > 0 || melInf > 0) {
-                    console.error(`[VocoderDiag] MEL INPUT BEFORE VOCODER HAS NaN/Inf! NaN=${melNaN}, Inf=${melInf - melNaN}, total=${paddedMel.length}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}`);
-                }
                 // 采样统计：每 64 个采样取 1 个，避免长音频（如 2000 帧 × 128 = 256000 元素）下全量遍历的开销
                 if (_readDiagnosticMode()) {
                     const DIAG_STRIDE = 64;
@@ -1112,7 +1215,7 @@ class Postprocessing {
                     }
                     const melMean = sampledCount > 0 ? melSum / sampledCount : 0;
                     const melStd = sampledCount > 0 ? Math.sqrt(Math.max(0, melSumSq / sampledCount - melMean * melMean)) : 0;
-                    console.log(`[VocoderDiag] single-chunk mel stats (sampled 1/${DIAG_STRIDE}): frames=${effectiveTotalFrames}, len=${paddedMel.length}, NaN=${melNaN}, Inf=${melInf}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
+                    console.log(`[VocoderDiag] single-chunk mel stats (sampled 1/${DIAG_STRIDE}): frames=${effectiveTotalFrames}, len=${paddedMel.length}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
                 }
             }
 
@@ -1622,4 +1725,6 @@ module.exports = {
     extractMelSpectrogramAsync,
     validateVocoderOutput,
     isVramOOMError,
+    guardMelFinite,
+    __test: { countNonFinite: _countNonFinite, melTransformInputRank: _melTransformInputRank },
 };

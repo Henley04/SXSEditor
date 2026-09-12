@@ -7,7 +7,7 @@ import {
 } from './constants.js';
 import { t } from '../i18n/index.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
-import { computeLuminance } from '../themes/colorUtils.js';
+import { computeLuminanceCached } from '../themes/colorUtils.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { loadSingerFile, showSingerSelectDialog, markDirty, loadAccompanimentFile } from './projectManager.js';
 import { createIcon } from '../icons/iconHelper.js';
@@ -28,6 +28,124 @@ function formatAccompanimentDuration(seconds) {
 
 // Grid is rendered directly into the viewport-sized canvas.
 export function invalidateGridCache() {}
+
+// ---------------------------------------------------------------------------
+// 渲染期复用缓存
+// ---------------------------------------------------------------------------
+
+// 分片底色 -> 音符条配色。computeLuminance 内部要做正则 + parseInt，
+// 每帧对每个分片重算会白白吃掉 CPU；颜色种类有限，缓存即可。
+const _noteFillCache = new Map();
+function _getNoteFillFor(color) {
+  let fill = _noteFillCache.get(color);
+  if (fill === undefined) {
+    fill = computeLuminanceCached(color) < 0.55
+      ? 'rgba(255, 255, 255, 0.5)'
+      : 'rgba(15, 15, 28, 0.45)';
+    if (_noteFillCache.size > 512) _noteFillCache.clear();
+    _noteFillCache.set(color, fill);
+  }
+  return fill;
+}
+
+// 分片音符数组的音高范围缓存。key 为 notes 数组本身（WeakMap 不阻止 GC），
+// value 记录 length 以便音符增删后自动失效。
+const _pitchRangeCache = new WeakMap();
+const EMPTY_FRAGMENTS = [];
+function _getFragmentPitchRange(notes, fragDuration) {
+  const hit = _pitchRangeCache.get(notes);
+  if (hit && hit.len === notes.length && hit.dur === fragDuration) return hit;
+  let minPitch = 127;
+  let maxPitch = 0;
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
+    if (n.start >= fragDuration) continue;
+    if (n.pitch < minPitch) minPitch = n.pitch;
+    if (n.pitch > maxPitch) maxPitch = n.pitch;
+  }
+  if (minPitch > maxPitch) { minPitch = 60; maxPitch = 72; }
+  const res = { minPitch, maxPitch, len: notes.length, dur: fragDuration };
+  _pitchRangeCache.set(notes, res);
+  return res;
+}
+
+/** 每帧构建一次 singerId -> fragments 索引，替代 singers.forEach 内的 O(N) filter。 */
+function _groupFragmentsBySinger(fragments) {
+  const map = new Map();
+  for (let i = 0; i < fragments.length; i++) {
+    const f = fragments[i];
+    let arr = map.get(f.singerId);
+    if (!arr) { arr = []; map.set(f.singerId, arr); }
+    arr.push(f);
+  }
+  return map;
+}
+
+// ---------------------------------------------------------------------------
+// 分片音符预览精灵缓存
+// 拖动分片时每帧都会重绘整条时间轴，而每个分片的音符条可能成百上千 ——
+// 直接逐条 fillRect 是拖动掉帧的主因。音符在「拖动/滚动」期间内容不变，
+// 只是整体平移，因此可以预渲染成离屏精灵，之后每帧只做一次 drawImage。
+// ---------------------------------------------------------------------------
+const NOTE_SPRITE_MIN_NOTES = 24;
+const NOTE_SPRITE_MAX_ENTRIES = 96;
+let _noteSpriteCache = new Map();
+
+/** 分片音符内容或主题变化后调用，强制重建精灵。 */
+export function invalidateFragmentNoteSprites() {
+  _noteSpriteCache.clear();
+}
+
+function _buildNoteSprite(fragment, cssW, fragDuration, dpr) {
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.floor(cssW * dpr));
+  cv.height = Math.max(1, Math.floor(FRAGMENT_HEIGHT * dpr));
+  const c2 = cv.getContext('2d');
+  if (!c2) return null;
+  c2.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c2.beginPath();
+  c2.roundRect(0, 0, cssW, FRAGMENT_HEIGHT, 6);
+  c2.clip();
+
+  const notes = fragment.notes;
+  const midiAreaTop = 22;
+  const midiAreaHeight = FRAGMENT_HEIGHT - 26;
+  const { minPitch, maxPitch } = _getFragmentPitchRange(notes, fragDuration);
+  const pitchRange = Math.max(maxPitch - minPitch + 1, 6);
+  const noteFill = _getNoteFillFor(fragment.color);
+  const noteH = Math.max(2, midiAreaHeight / pitchRange);
+  c2.fillStyle = noteFill;
+  for (let i = 0; i < notes.length; i++) {
+    const note = notes[i];
+    if (note.start >= fragDuration) continue;
+    const noteEnd = Math.min(note.start + note.duration, fragDuration);
+    const noteX = (note.start / fragDuration) * cssW;
+    const noteW = Math.max(1, ((noteEnd - note.start) / fragDuration) * cssW);
+    if (noteX + noteW < 0 || noteX > cssW) continue;
+    const noteY = midiAreaTop + ((maxPitch - note.pitch) / pitchRange) * midiAreaHeight;
+    c2.fillRect(noteX, noteY, noteW, noteH);
+  }
+  return cv;
+}
+
+function _getNoteSprite(fragment, fragWidth, fragDuration, dpr) {
+  const notes = fragment.notes;
+  if (!notes || notes.length < NOTE_SPRITE_MIN_NOTES) return null;
+  const cssW = Math.max(1, Math.round(fragWidth));
+  const hit = _noteSpriteCache.get(fragment.id);
+  if (hit && hit.w === cssW && hit.color === fragment.color
+      && hit.len === notes.length && hit.dur === fragDuration && hit.dpr === dpr) {
+    return hit.canvas;
+  }
+  const cv = _buildNoteSprite(fragment, cssW, fragDuration, dpr);
+  if (!cv) return null;
+  if (_noteSpriteCache.size >= NOTE_SPRITE_MAX_ENTRIES) _noteSpriteCache.clear();
+  _noteSpriteCache.set(fragment.id, {
+    canvas: cv, w: cssW, color: fragment.color,
+    len: notes.length, dur: fragDuration, dpr,
+  });
+  return cv;
+}
 
 function _ensureCanvasSize(canvas, cssW, cssH, dpr) {
   const pixelW = Math.floor(cssW * dpr);
@@ -186,13 +304,15 @@ export function renderFragmentTimeline() {
 
   // Draw dynamic content (fragments) on top of cached grid
   // Visible bounds were computed above; skip offscreen dynamic content.
+  // 每帧只做一次分组，避免 singers × fragments 的重复 filter（歌手轨道渲染热点）。
+  const fragmentsBySinger = _groupFragmentsBySinger(fragments);
   singers.forEach((singer, index) => {
     const y = index * SINGER_ROW_HEIGHT + HEADER_HEIGHT;
     // 跳过整行不在可视区域的 singer
     if (y + SINGER_ROW_HEIGHT < _viewTop || y > _viewBottom) return;
 
     const isAccompaniment = singer.type === 'accompaniment';
-    const singerFragments = fragments.filter(f => f.singerId === singer.id);
+    const singerFragments = fragmentsBySinger.get(singer.id) || EMPTY_FRAGMENTS;
 
     // For accompaniment tracks, render the audio as a continuous waveform block
     if (isAccompaniment) {
@@ -305,46 +425,46 @@ export function renderFragmentTimeline() {
 
       // MIDI note visualization
       if (fragment.notes && fragment.notes.length > 0) {
-        ctx.save();
-        ctx.beginPath();
-        ctx.roundRect(fragX, fragY, fragWidth, FRAGMENT_HEIGHT, radius);
-        ctx.clip();
+        // 音符较多时复用离屏精灵，拖动/滚动时每帧只做一次 drawImage
+        const sprite = _getNoteSprite(fragment, fragWidth, fragment.duration, dpr);
+        if (sprite) {
+          ctx.drawImage(sprite, fragX, fragY, fragWidth, FRAGMENT_HEIGHT);
+        } else {
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(fragX, fragY, fragWidth, FRAGMENT_HEIGHT, radius);
+          ctx.clip();
 
-        const midiAreaTop = fragY + 22;
-        const midiAreaHeight = FRAGMENT_HEIGHT - 26;
-        const fragDuration = fragment.duration;
+          const midiAreaTop = fragY + 22;
+          const midiAreaHeight = FRAGMENT_HEIGHT - 26;
+          const fragDuration = fragment.duration;
 
-        // Calculate pitch range
-        let minPitch = 127, maxPitch = 0;
-        for (const note of fragment.notes) {
-          if (note.start >= fragDuration) continue;
-          if (note.pitch < minPitch) minPitch = note.pitch;
-          if (note.pitch > maxPitch) maxPitch = note.pitch;
+          // Calculate pitch range（带缓存：音符未增删时直接复用上次结果）
+          const { minPitch, maxPitch } = _getFragmentPitchRange(fragment.notes, fragDuration);
+          const pitchRange = Math.max(maxPitch - minPitch + 1, 6);
+
+          // 音符条颜色必须与分片底色（fragment.color）保持对比度。
+          // 否则分片被拖到颜色相近（如蓝色系）的歌手上、换色后，
+          // 固定蓝色音符条会与底色融为一体而“消失”。按底色的亮度
+          // 在浅色/深色音符条之间切换，保证任意歌手颜色下都可辨认。
+          const noteFill = _getNoteFillFor(fragment.color);
+
+          for (const note of fragment.notes) {
+            if (note.start >= fragDuration) continue;
+            const noteEnd = Math.min(note.start + note.duration, fragDuration);
+            const noteX = fragX + (note.start / fragDuration) * fragWidth;
+            const noteW = Math.max(1, ((noteEnd - note.start) / fragDuration) * fragWidth);
+            // 视口剔除：超长分片里绝大多数音符在屏幕外，不必进 fillRect
+            if (noteX + noteW < _viewLeft || noteX > _viewRight) continue;
+            const pitchOffset = (maxPitch - note.pitch) / pitchRange;
+            const noteH = Math.max(2, midiAreaHeight / pitchRange);
+            const noteY = midiAreaTop + pitchOffset * midiAreaHeight;
+
+            ctx.fillStyle = noteFill;
+            ctx.fillRect(noteX, noteY, noteW, noteH);
+          }
+          ctx.restore();
         }
-        if (minPitch > maxPitch) { minPitch = 60; maxPitch = 72; }
-        const pitchRange = Math.max(maxPitch - minPitch + 1, 6);
-
-        // 音符条颜色必须与分片底色（fragment.color）保持对比度。
-        // 否则分片被拖到颜色相近（如蓝色系）的歌手上、换色后，
-        // 固定蓝色音符条会与底色融为一体而“消失”。按底色的亮度
-        // 在浅色/深色音符条之间切换，保证任意歌手颜色下都可辨认。
-        const noteFill = computeLuminance(fragment.color) < 0.55
-          ? 'rgba(255, 255, 255, 0.5)'
-          : 'rgba(15, 15, 28, 0.45)';
-
-        for (const note of fragment.notes) {
-          if (note.start >= fragDuration) continue;
-          const noteEnd = Math.min(note.start + note.duration, fragDuration);
-          const noteX = fragX + (note.start / fragDuration) * fragWidth;
-          const noteW = Math.max(1, ((noteEnd - note.start) / fragDuration) * fragWidth);
-          const pitchOffset = (maxPitch - note.pitch) / pitchRange;
-          const noteH = Math.max(2, midiAreaHeight / pitchRange);
-          const noteY = midiAreaTop + pitchOffset * midiAreaHeight;
-
-          ctx.fillStyle = noteFill;
-          ctx.fillRect(noteX, noteY, noteW, noteH);
-        }
-        ctx.restore();
       }
 
       // Fragment labels — clipped to the rounded rect with ellipsis
@@ -532,12 +652,14 @@ function commitTrackNameEdit(singer, newName) {
 
 export function renderSingerList() {
   const singers = trackManager.getSingers();
-  const currentIds = singers.map(s => s.id).join(',');
-  const currentNames = singers.map(s => s.trackName).join(',');
-  const currentMissing = singers.map(s => s.singerFileMissing ? '1' : '0').join(',');
-  const currentAudioMissing = singers.map(s => s.audioFileMissing ? '1' : '0').join(',');
-  const currentTypes = singers.map(s => s.type || 'singer').join(',');
-  const cacheKey = `${currentIds}|${currentNames}|${currentMissing}|${currentAudioMissing}|${currentTypes}|${state.editingTrackNameId}`;
+  // 单次遍历拼接缓存键：原先 5 次 map().join() 会产生 10 个临时数组与字符串，
+  // 歌手数量一多时 refreshAll 会有可感知的额外开销。
+  let key = String(state.editingTrackNameId || '');
+  for (let i = 0; i < singers.length; i++) {
+    const s = singers[i];
+    key += `|${s.id}~${s.trackName}~${s.singerFileMissing ? 1 : 0}${s.audioFileMissing ? 1 : 0}${s.type || 'singer'}`;
+  }
+  const cacheKey = key;
   if (renderSingerList._cacheKey === cacheKey && dom.singerListEl.childElementCount > 0) return;
   renderSingerList._cacheKey = cacheKey;
 
@@ -891,6 +1013,7 @@ if (typeof window !== 'undefined') {
   window.addEventListener('theme:changed', () => {
     invalidateCanvasThemeCache();
     invalidateGridCache();
+    invalidateFragmentNoteSprites();
     refreshAll();
   });
 }

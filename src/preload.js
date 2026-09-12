@@ -268,6 +268,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveLocale: (locale) => ipcRenderer.invoke('save-locale', locale),
   getLocale: () => ipcRenderer.invoke('get-locale'),
   reloadMainWindow: () => ipcRenderer.invoke('reload-main-window'),
+  // 布局尺寸变化通知（DevTools 打开/关闭、窗口 resize 等）。
+  // 停靠式 DevTools 关闭后 BrowserWindow 的 bounds 不变，window 'resize'
+  // 不一定触发，导致 canvas 仍按旧尺寸绘制 —— 需要主进程显式推送一次。
+  onRelayout: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('app:relayout', handler);
+    return () => ipcRenderer.removeListener('app:relayout', handler);
+  },
   onLocaleChanged: (callback) => {
     const handler = () => callback();
     ipcRenderer.on('locale-changed', handler);

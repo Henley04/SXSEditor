@@ -73,6 +73,19 @@ const SESSION_KEYS = [
 // all users while still recovering from rare OOM events.
 let _dynamicReleaseDiffStepNextSegment = false;
 
+/**
+ * 检测数组中是否存在 NaN / Inf（首次命中即返回，用于缓存写入前的快速校验）。
+ * @param {Float32Array} arr
+ * @returns {boolean}
+ */
+function _hasNonFinite(arr) {
+    if (!arr || typeof arr.length !== 'number') return true;
+    for (let i = 0; i < arr.length; i++) {
+        if (!Number.isFinite(arr[i])) return true;
+    }
+    return false;
+}
+
 class OnnxSVSPipeline {
     constructor(modelDir, options = {}) {
         this.baseModelDir = modelDir; // Base dir before precision subdir (for shared models)
@@ -913,6 +926,13 @@ class OnnxSVSPipeline {
 
     _chunkCachePut(key, entry) {
         if (!entry || !entry.audio || !entry.mel) return;
+        // 绝不缓存含 NaN/Inf 的结果：一次失败的 GPU 推理（如 TRT-RTX 引擎产出非法值）
+        // 会把损坏的 mel/audio 写进缓存，之后每次重放都直接命中这份数据 ——
+        // diffusion 甚至不会再跑，表现为"换个设备也还是坏音频"。
+        if (_hasNonFinite(entry.mel) || _hasNonFinite(entry.audio)) {
+            console.warn('[MultiStream][chunk-cache] rejected non-finite result (NaN/Inf) — not cached');
+            return;
+        }
         if (!this._chunkCacheMap) this._chunkCacheMap = new Map();
         const map = this._chunkCacheMap;
         if (map.has(key)) {
@@ -1985,11 +2005,12 @@ class OnnxSVSPipeline {
             console.log(`[OnnxSVSPipeline] DML drain complete (${(performance.now() - t0).toFixed(0)}ms), starting vocoder inference`);
         }
 
+        const runVocoder = () => this._postprocessing.runVocoderChunked(
+            this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
+            this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
+        );
         try {
-            return await this._postprocessing.runVocoderChunked(
-                this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
-                this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
-            );
+            return await runVocoder();
         } catch (err) {
             // Dynamic OOM recovery: if this is the first OOM in this segment
             // and we did NOT already release diffStep, set the dynamic flag and
@@ -2012,15 +2033,20 @@ class OnnxSVSPipeline {
                         await gpuDrainLong();
                         console.log(`[OnnxSVSPipeline] DML drain complete (${(performance.now() - r0).toFixed(0)}ms), starting vocoder retry`);
                     }
-                    return await this._postprocessing.runVocoderChunked(
-                        this.sessions, melData, totalFrames, this.vocoderIsFP16 ?? this.isFP16, false,
-                        this.vocoderType, this._currentF0Hz, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
-                    );
+                    return await runVocoder();
                 } finally {
                     if (releasedRetry) {
                         await this._reloadDiffStepAfterVocoder();
                     }
                     _dynamicReleaseDiffStepNextSegment = false;
+                }
+            }
+            // 非 OOM：vendor EP（TensorRT-RTX）引擎级失败时降级重建会话并重试一次。
+            try {
+                return await this._retryVocoderOnFallbackEp(err, runVocoder);
+            } catch (fallbackErr) {
+                if (fallbackErr !== err) {
+                    console.error(`[OnnxSVSPipeline] Vocoder fallback retry failed: ${fallbackErr.message}`);
                 }
             }
             // Either not an OOM, or already retried: rethrow to caller.
@@ -2053,10 +2079,55 @@ class OnnxSVSPipeline {
     async _runVocoderChunkedForSegment(melData, segFrames, f0Override, onChunkComplete) {
         const chunkFrames = this._resolveVocoderChunkFrames();
         const overlapFramesOverride = this._resolveVocoderOverlapFrames();
-        return this._postprocessing.runVocoderChunked(
+        const runVocoder = () => this._postprocessing.runVocoderChunked(
             this.sessions, melData, segFrames, this.vocoderIsFP16 ?? this.isFP16, false,
             this.vocoderType, f0Override, this.sifiganStatsMissing, onChunkComplete, chunkFrames, overlapFramesOverride
         );
+        try {
+            return await runVocoder();
+        } catch (err) {
+            try {
+                return await this._retryVocoderOnFallbackEp(err, runVocoder);
+            } catch (fallbackErr) {
+                if (fallbackErr !== err) {
+                    console.error(`[OnnxSVSPipeline] Segment vocoder fallback retry failed: ${fallbackErr.message}`);
+                }
+                throw err;
+            }
+        }
+    }
+
+    /**
+     * vendor EP（TensorRT-RTX）引擎级失败后的 vocoder 降级重试。
+     *
+     * 这类失败（见 ortBridge.isTrtEngineFailure）在同一个 session 上重试必然重复：
+     *   - setInputShape 失败：动态输入长度不在引擎 profile 内
+     *   - execution context enqueue failed：执行上下文已损坏/不接受该形状
+     * 处理：把该模型加入运行期黑名单 → 释放会话 → 用 DML/CPU 重建 → 用同一份 mel 重试一次。
+     * 不适用于 OOM / device removed（走各自的恢复路径），因此判定收紧到 vendor EP 专属错误。
+     *
+     * @param {Error} err - 原始错误
+     * @param {Function} runVocoder - 重新执行一次 vocoder 推理（内部读 this.sessions，因此能用到新会话）
+     * @returns {Promise<Float32Array>} 重试成功的音频
+     * @throws {Error} 不满足降级条件时抛出原始 err
+     */
+    async _retryVocoderOnFallbackEp(err, runVocoder) {
+        const currentEp = String(this.sessionEPs.vocoder || '');
+        if (!currentEp.startsWith('winml:')) throw err;
+        const { isTrtEngineFailure } = require('../winml/ortBridge');
+        if (!isTrtEngineFailure(err.message || '')) throw err;
+
+        console.warn(`[OnnxSVSPipeline] Vocoder vendor-EP failure (${currentEp}): ${String(err.message || '').split('\n')[0].slice(0, 160)}`);
+        const { reportRuntimeFailure } = require('../winml/winmlProvider');
+        reportRuntimeFailure(this._resolvedVocoderFile || 'vocoder_dml.onnx', err.message);
+
+        this.unloadModel('vocoder');
+        const reloaded = await this.loadModel('vocoder', { runValidation: false });
+        if (!reloaded || !reloaded.success) {
+            throw new Error(`vocoder reload after vendor-EP failure failed: ${(reloaded && reloaded.error) || 'unknown error'}`);
+        }
+        console.log(`[OnnxSVSPipeline] Vocoder rebuilt [${this.sessionEPs.vocoder}], retrying inference`);
+        return await runVocoder();
     }
 
     /**
@@ -3235,11 +3306,21 @@ class OnnxSVSPipeline {
                 }
             }
         }
+        // 上游出现异常时 numpy 不会在这里抛错：NaN 采样点会一路写进导出 WAV
+        // （表现为爆音/静音块）。只清洗有限性，再丢弃整 stream 的结果缓存，
+        // 保证"换设备重试"不会命中这份损坏结果。
+        let _badSamples = 0;
+        for (let i = 0; i < mixedAudio.length; i++) {
+            if (!Number.isFinite(mixedAudio[i])) { mixedAudio[i] = 0; _badSamples++; }
+        }
+        if (_badSamples > 0) {
+            console.error(`[MultiStream] mixed audio contained ${_badSamples} non-finite samples — zeroed and NOT cached`);
+        }
         // 多 fragment 叠加后峰值可能超过 1.0（如两个 0.95 峰值片段同时段叠加达 1.9），
         // Int16 转换时会严重削波。统一归一化到 0.95 防止削波。
         normalizePeakTo(mixedAudio, totalMixedSamples);
 
-        this._multiStreamResultCache = {
+        this._multiStreamResultCache = _badSamples > 0 ? null : {
             key: multiStreamCacheKey,
             audio: mixedAudio.slice(),
             chunks: emittedChunks.map(chunk => ({ ...chunk, audio: chunk.audio.slice() })),

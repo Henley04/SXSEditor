@@ -124,6 +124,8 @@ module.exports = [
         files: [
             'src/renderer/**/*.js',
             'src/fragmentEditor/**/*.js',
+            // 仅渲染进程引用的共享模块（使用 window/document/ResizeObserver 等浏览器全局）
+            'src/shared/autoRelayout.js',
             'src/audioPreprocess/**/*.js',
             'src/editor/**/*.js',
             'src/inference/webnn/**/*.js',

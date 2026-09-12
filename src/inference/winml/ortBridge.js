@@ -364,6 +364,11 @@ class WinMLSession {
         this.provider = 'windowsml';
     }
 
+    /** Absolute path of the model backing this session (`''` when unknown). */
+    get modelPath() {
+        return this._modelPath;
+    }
+
     async run(feeds) {
         const run = ++this._runCount;
         const trace = _traceEnabled();
@@ -492,6 +497,34 @@ function validateTRTOutput(outputs, expectedNames = []) {
 }
 
 /**
+ * Classify errors that mean "this TRT-RTX engine cannot serve the request".
+ *
+ * Two failures observed in the field:
+ *   - `NvTensorRTRTX EP failed to call nvinfer1::IExecutionContext::setInputShape() for input 'x'`
+ *     → the dynamic input length is outside the engine's compiled profile. The
+ *       engine was created successfully (validation dummy passed) but cannot be
+ *       re-shaped for real work.
+ *   - `NvTensorRTRTX EP execution context enqueue failed.`
+ *     → the execution context refused the launch (often because it was handed
+ *       non-finite input or a shape it was never built for).
+ *
+ * Both are deterministic per engine: retrying the same session always fails
+ * again, so callers must rebuild the model on another EP (DML/CPU) instead of
+ * retrying. Deliberately narrow — VRAM OOM and unrelated ORT errors must keep
+ * their own recovery paths.
+ *
+ * @param {string|Error} [message]
+ * @returns {boolean}
+ */
+function isTrtEngineFailure(message) {
+    const m = String((message && message.message) || message || '');
+    if (!m.includes('NvTensorRTRTX')) return false;
+    return m.includes('setInputShape') ||
+        m.includes('set_input_shape') ||
+        m.includes('execution context enqueue failed');
+}
+
+/**
  * Create a WinML-backed session for a model using the given EP device indices.
  * @param {string} modelPath absolute .onnx path
  * @param {number[]} deviceIndices indices within listDevices()
@@ -541,8 +574,9 @@ module.exports = {
     pickDeviceIndices,
     createSessionWithEps,
     validateTRTOutput,
+    isTrtEngineFailure,
     disposeAllSessions,
     resolveOrtDllPath,
     // exposed for tests
-    __test: { _tensorFromDescriptor, _descriptorFromTensor, TYPED_ARRAY_BY_TYPE, _finiteStats, _fmtDims, _fp16ToNumber, _tensorRtRtxOptions, validateTRTOutput },
+    __test: { _tensorFromDescriptor, _descriptorFromTensor, TYPED_ARRAY_BY_TYPE, _finiteStats, _fmtDims, _fp16ToNumber, _tensorRtRtxOptions, validateTRTOutput, isTrtEngineFailure },
 };
