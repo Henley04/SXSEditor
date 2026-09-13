@@ -31,7 +31,7 @@
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
   clip-path: var(--clip-panel, none);
-  box-shadow: 0 16px 48px var(--shadow-color-strong), 0 0 40px var(--accent-softer);
+  box-shadow: var(--shadow-xl);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -46,7 +46,7 @@
   gap: var(--space-2);
   padding: var(--space-6) var(--space-7) var(--space-5);
   border-bottom: 1px solid var(--border-default);
-  background: linear-gradient(180deg, var(--bg-panel) 0%, var(--bg-app) 100%);
+  background: var(--bg-panel);
   flex-shrink: 0;
 }
 
@@ -60,18 +60,9 @@
   gap: var(--space-3);
 }
 
-.export-dialog-header h3::before {
-  content: '';
-  width: 4px;
-  height: 20px;
-  background: linear-gradient(180deg, var(--accent), var(--accent-pressed));
-  border-radius: var(--radius-sm);
-}
-
 .export-dialog-subtitle {
   font-size: var(--font-sm);
   color: var(--fg-muted);
-  padding-left: 11px;
 }
 
 /* ==================== Body ==================== */
@@ -95,20 +86,11 @@
   font-size: var(--font-sm);
   font-weight: 600;
   color: var(--accent-fg);
-  text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0.4px;
   display: flex;
   align-items: center;
   gap: var(--space-3);
   margin: 0;
-}
-
-.export-dialog-section-title::before {
-  content: '';
-  width: 3px;
-  height: 12px;
-  background: linear-gradient(180deg, var(--accent-hover), var(--accent));
-  border-radius: var(--radius-sm);
 }
 
 /* ==================== Form controls ==================== */
@@ -144,9 +126,7 @@
 .export-dialog-field-hint {
   font-size: var(--font-sm);
   color: var(--fg-disabled);
-  line-height: 1.5;
-  padding-left: var(--space-2);
-  border-left: 2px solid var(--ink-soft);
+  line-height: 1.6;
 }
 
 .export-dialog select,
@@ -183,7 +163,7 @@
 }
 
 .export-dialog select {
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888a8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-image: var(--select-arrow);
   background-repeat: no-repeat;
   background-position: right 12px center;
 }
@@ -523,24 +503,11 @@
 
 .export-dialog-progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  background: var(--accent);
   border-radius: var(--radius-xl);
   transition: width 0.3s ease;
   width: 0%;
   position: relative;
-}
-
-.export-dialog-progress-bar-fill::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-  animation: export-dialog-progress-shimmer 1.6s infinite;
-}
-
-@keyframes export-dialog-progress-shimmer {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(100%); }
 }
 
 .export-dialog-progress-result {

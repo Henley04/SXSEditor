@@ -1,8 +1,10 @@
 const path = require('node:path');
 const { Worker } = require('node:worker_threads');
-const { execFile } = require('node:child_process');
 const { VOCODER_CHUNK_FRAMES } = require('../inference/shared/constants.js');
 const { classifyDevice } = require('../utils/deviceClassifier');
+// 系统级 NPU 硬件（PnP）检测。原先内联在本文件，现抽到独立模块以便
+// webnnIpc 复用（避免循环 require）。此处再导出以保持既有 API 兼容。
+const { detectNPUByPnp, invalidatePnpNpuCache } = require('./npuHardware');
 
 // Backward-compatible alias: gpuInfo historically exposed classifyDeviceFromName
 const classifyDeviceFromName = classifyDevice;
@@ -383,7 +385,7 @@ function getGPUPhase() {
 
 /**
  * 并行检测所有硬件（GPU + NPU）并返回结果
- * @returns {{ gpuControllers: Array, npuAvailable: boolean, npuDetails: string }}
+ * @returns {{ gpuControllers: Array, npuAvailable: boolean, webnnNpuAvailable: boolean, npuDetails: string }}
  */
 async function detectAllHardware() {
   const [gpuControllers, npuResult] = await Promise.all([
@@ -392,7 +394,11 @@ async function detectAllHardware() {
   ]);
   return {
     gpuControllers,
+    // npuAvailable: NPU 硬件是否存在（WebNN 探测或 PnP 回退）
     npuAvailable: npuResult.npuAvailable,
+    // webnnNpuAvailable: NPU 在 WebNN 路径下真正可用（决定是否暴露
+    // 'NPU (WebNN)' 设备选项，避免出现选了也跑不了的项）
+    webnnNpuAvailable: npuResult.webnnNpuAvailable,
     npuDetails: npuResult.details || '',
   };
 }
@@ -407,23 +413,19 @@ async function detectNPUCached() {
 
   _npuPending = (async () => {
     try {
+      // webnnIpc.detectNPUAvailability() 内部已包含 PnP 硬件回退与并发去重，
+      // 这里不再重复探测（旧实现会再跑一次 PowerShell，且两份缓存互相不一致）。
       const { detectNPUAvailability } = require('./webnnIpc');
       const result = await detectNPUAvailability();
       const details = String(result?.details || '').toLowerCase();
-      const transient = details.includes('no renderer') || details.includes('timeout') || details.includes('module not available');
-      const npuByWebnn = !!result.npuAvailable;
-      const final = { ...result, npuAvailable: npuByWebnn };
-      // WebNN 不可用（Electron 中 navigator.ml 常缺失）不代表无 NPU 硬件：
-      // 回退到系统级 PnP 检测（Intel AI Boost / ComputeAccelerator 类设备），
-      // 使 __SXS_NPU_AVAILABLE__ 与设置界面正确反映真实硬件。
-      if (!npuByWebnn) {
-        const pnp = await detectNPUByPnp();
-        if (pnp) {
-          final.npuAvailable = true;
-          const base = String(result?.details || '').trim();
-          final.details = (base ? base + '; ' : '') + 'NPU hardware present (PnP), WebNN unavailable';
-        }
-      }
+      const transient = details.includes('no renderer') || details.includes('module not available');
+      const final = {
+        webnnAvailable: !!result.webnnAvailable,
+        webnnNpuAvailable: !!result.webnnNpuAvailable,
+        npuAvailable: !!result.npuAvailable,
+        gpuAvailable: !!result.gpuAvailable,
+        details: result.details || '',
+      };
       if (!transient) {
         _npuCache = final;
         _npuCacheTime = Date.now();
@@ -437,31 +439,6 @@ async function detectNPUCached() {
   })();
 
   return _npuPending;
-}
-
-let _pnpNpuCache = null;
-let _pnpNpuTime = 0;
-const PNP_NPU_TTL_MS = 5 * 60 * 1000; // 5 分钟
-
-/**
- * 系统级 NPU 硬件检测：枚举当前存在的 PnP 设备，匹配 Intel AI Boost /
- * ComputeAccelerator 类。不依赖 WebNN（Electron 中 navigator.ml 常缺失）。
- * @returns {Promise<boolean>}
- */
-async function detectNPUByPnp() {
-  if (_pnpNpuCache !== null && Date.now() - _pnpNpuTime < PNP_NPU_TTL_MS) return _pnpNpuCache;
-  return new Promise((resolve) => {
-    const ps = 'Get-PnpDevice -PresentOnly | Where-Object { $_.Class -eq "ComputeAccelerator" -or $_.FriendlyName -match "NPU|AI Boost" } | Measure-Object | Select-Object -ExpandProperty Count';
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps],
-      { timeout: 8000, windowsHide: true, maxBuffer: 64 * 1024 },
-      (err, stdout) => {
-        const ok = !err && /^\s*[1-9]\d*\s*$/.test(String(stdout || '').trim());
-        _pnpNpuCache = ok;
-        _pnpNpuTime = Date.now();
-        if (ok) console.log('[Main] NPU detected via PnP (ComputeAccelerator / AI Boost present)');
-        resolve(ok);
-      });
-  });
 }
 
 /**
@@ -483,6 +460,7 @@ function invalidateGPUCache() {
 function invalidateNPUCache() {
   _npuCache = null;
   _npuPending = null;
+  invalidatePnpNpuCache();
 }
 
 async function queryGPUVRAMUsage() {

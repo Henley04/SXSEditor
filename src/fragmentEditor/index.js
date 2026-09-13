@@ -8,6 +8,7 @@ import { resizeCanvases } from './canvasRenderer.js';
 import { setupEventListeners, _invalidateCanvasRect } from './eventHandlers.js';
 import { setupIpcHandlers, loadFragmentFromHash } from './ipcHandlers.js';
 import { setupUiControls } from './uiControls.js';
+import { startAutoInferenceWatcher, stopAutoInferenceWatcher } from './autoInference.js';
 import { installAutoRelayout } from '../shared/autoRelayout.js';
 import {
   getAutoSaveTimer, setAutoSaveTimer,
@@ -142,6 +143,10 @@ setupUiControls();
 // Load fragment from hash if needed
 loadFragmentFromHash();
 
+// 编辑后自动实时推理监听（设置项 autoRealtimeInference，默认关闭）。
+// 放在 loadFragmentFromHash 之后：此时 currentFragment 已就绪，才能比对签名。
+startAutoInferenceWatcher();
+
 // Initialize i18n
 initI18n().then(() => {
   applyLocale();
@@ -153,6 +158,7 @@ console.log(t('fragment.consoleStarted'));
 
 // Handle beforeunload
 window.addEventListener('beforeunload', () => {
+  stopAutoInferenceWatcher();
   for (const cleanup of getIpcCleanups()) {
     try { cleanup(); } catch (_) {}
   }

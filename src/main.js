@@ -508,7 +508,7 @@ app.whenReady().then(() => {
         // 启动一次性 GPU 信息加载（worker 两阶段：WMI 快速 → systeminformation 完整）
         startGPUPreload();
         // 等待 NPU 检测完成（WebNN 优先，失败时回退 PnP 系统级检测）
-        const { npuAvailable } = await detectAllHardware();
+        const { npuAvailable, webnnNpuAvailable } = await detectAllHardware();
         console.log(`[Main] Hardware detection complete: NPU ${npuAvailable ? 'available' : 'not available'}`);
         // Gate: expose the OpenVINO NPU device to ORT only when the app detected a usable NPU.
         // If an Intel NPU driver is installed (its compiler openvino_intel_npu_compiler.dll exists)
@@ -548,7 +548,9 @@ app.whenReady().then(() => {
             }
           }
 
-          if (npuAvailable && !allDevices.some(d => d.deviceType === 'npu')) {
+          // 只有 WebNN 路径下真正可用的 NPU 才作为可选设备（npuAvailable 可能
+          // 仅来自 PnP 硬件回退，那不是 "NPU (WebNN)"）。
+          if (webnnNpuAvailable && !allDevices.some(d => d.deviceType === 'npu')) {
             allDevices.push({
               name: 'NPU (WebNN)',
               deviceType: 'npu',

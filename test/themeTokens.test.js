@@ -98,8 +98,12 @@ describe('themeTokens - 内置主题完整性', () => {
             expect(missing, `缺少 token：${missing.join(', ')}`).to.have.length(0);
         });
 
-        it('--bg-app 应为 #14141f（与重构前一致）', () => {
-            expect(theme.tokens['--bg-app']).to.equal('#14141f');
+        it('--bg-app 应为 #000000（暗色主题画布改为纯黑）', () => {
+            expect(theme.tokens['--bg-app']).to.equal('#000000');
+        });
+
+        it('--color-scheme 应为 dark（原生控件跟随暗色）', () => {
+            expect(theme.tokens['--color-scheme']).to.equal('dark');
         });
 
         it('--fg-primary 应为 #e0e0f0', () => {

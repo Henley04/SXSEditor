@@ -317,6 +317,8 @@ export default {
     noNotesToPlay: 'No notes in this fragment to play',
     noNotesToExport: 'No notes in this fragment to export',
     synthesizing: 'Synthesizing...',
+    // Background auto inference running (play button hint state, button stays enabled)
+    autoInferring: 'Inferring...',
     stop: 'Stop',
     exporting: 'Exporting...',
     midiImportFailed: 'MIDI import failed',
@@ -549,6 +551,11 @@ export default {
     previewDiffStepChunkEnabledDesc: 'Splits target frames into chunks, runs full diffusion loop per chunk independently, then crossfades. Leverages O(n²) attention for faster long-segment preview. Preview only; export always uses full-sequence inference.',
     previewDiffStepChunkHint: 'Chunking significantly speeds up long-segment preview (longer segments = more speedup), at the cost of minor artifacts at chunk boundaries. Short segments (shorter than chunk size) are not chunked.',
     previewDiffStepChunkFrames: 'Chunk Size (frames)',
+    // Auto realtime inference after edits (disabled by default)
+    autoRealtimeInference: 'Auto realtime inference after edits',
+    autoRealtimeInferenceDesc: 'In the fragment editor, automatically re-runs preview inference in the background after a change is detected. Reuses the existing segment cache so only modified segments are inferred; when several segments change at once, the one under the playback playhead is inferred first. Disabled by default.',
+    autoRealtimeInferenceWarn: '⚠ Warning: enabling this triggers a background inference run after every change. It may greatly reduce performance and noticeably increase power draw and heat (faster laptop battery drain, louder fans, hotter chassis), and may compete for VRAM with foreground playback causing stutter. Not recommended for low-VRAM, mobile or fanless passively cooled devices.',
+    autoRealtimeInferenceHint: 'Applies to the fragment editor only, and requires one manual playback first to establish the baseline audio; afterwards a background inference run is triggered roughly 1 second after you stop editing. The result is identical to a manual preview (same cache entry).',
     previewDiffStepChunkFramesHint: 'Target frames per chunk (1 frame = 20ms audio). Smaller values = more speedup but more boundary artifacts; larger values = better quality but less speedup. Recommended: 300~800.',
     previewDiffStepOverlapFrames: 'Chunk Overlap (frames)',
     previewDiffStepOverlapFramesHint: 'Overlap frames between adjacent chunks, crossfaded with a Hann window to eliminate stitching artifacts. Larger values = smoother boundaries but more compute. Recommended: 30~100. Set to 0 for no overlap (not recommended).',

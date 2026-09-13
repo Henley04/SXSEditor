@@ -88,7 +88,8 @@ async function _createPipeline(languageOverride) {
     try {
       const { detectNPUAvailability } = require('./webnnIpc');
       const detected = await detectNPUAvailability();
-      webnnAvailable = !!(detected.npuAvailable || detected.gpuAvailable);
+      // 只有 WebNN 路径下真正可用的 NPU/GPU 才值得保留渲染进程推理桥接。
+      webnnAvailable = !!(detected.webnnNpuAvailable || detected.gpuAvailable);
     } catch (err) {
       console.warn('[Main] WebNN preflight failed; using ORT Node worker:', err.message);
     }
@@ -424,14 +425,18 @@ function registerSvsIpc() {
         }
       } catch (_) {}
     };
-    // 流式 chunk 音频推送：vocoder 每完成一个 chunk 即推送到 fragment 窗口，实现边合成边播放
-    opts.onChunkAudio = (chunkInfo) => {
-      try {
-        if (!win.isDestroyed()) {
-          win.send('fragment-svs:chunk-audio', chunkInfo);
-        }
-      } catch (_) {}
-    };
+    // 流式 chunk 音频推送：vocoder 每完成一个 chunk 即推送到 fragment 窗口，实现边合成边播放。
+    // background=true（编辑后自动实时推理）时不需要边合成边播，跳过 chunk 推送以免
+    // 每帧 Float32Array 白白跨进程序列化；合成结果本身完全一致。
+    opts.onChunkAudio = opts.background === true
+      ? null
+      : (chunkInfo) => {
+        try {
+          if (!win.isDestroyed()) {
+            win.send('fragment-svs:chunk-audio', chunkInfo);
+          }
+        } catch (_) {}
+      };
     // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）
     if (opts.autoShift && opts.refAudioWavBuffer) {
       opts.refF0Extractor = _makeRmvpeExtractor();

@@ -37,6 +37,8 @@ const previewDiffStepChunkFramesSlider = document.getElementById('previewDiffSte
 const previewDiffStepChunkFramesValue = document.getElementById('previewDiffStepChunkFramesValue');
 const previewDiffStepOverlapFramesSlider = document.getElementById('previewDiffStepOverlapFrames');
 const previewDiffStepOverlapFramesValue = document.getElementById('previewDiffStepOverlapFramesValue');
+// 编辑后自动实时推理（后台重算预览音频，默认关闭）
+const autoRealtimeInferenceCheckbox = document.getElementById('autoRealtimeInference');
 const exportDiffStepsSlider = document.getElementById('exportDiffSteps');
 const exportDiffStepsValue = document.getElementById('exportDiffStepsValue');
 const exportSamplerSelect = document.getElementById('exportSampler');
@@ -261,6 +263,7 @@ function applySavedSettingsToUI(currentSetting) {
     if (previewDiffStepChunkFramesValue) previewDiffStepChunkFramesValue.textContent = pChunkFrames;
     if (previewDiffStepOverlapFramesSlider) previewDiffStepOverlapFramesSlider.value = pOverlapFrames;
     if (previewDiffStepOverlapFramesValue) previewDiffStepOverlapFramesValue.textContent = pOverlapFrames;
+    if (autoRealtimeInferenceCheckbox) autoRealtimeInferenceCheckbox.checked = currentSetting.autoRealtimeInference === true;
 
     const eSteps = currentSetting.exportDiffSteps ?? 32;
     const eCfg = currentSetting.exportCfgStrength ?? 3.0;
@@ -845,7 +848,7 @@ async function loadDevices() {
         if (provider === 'ortweb') {
             // Deprecated WebNN is probed only when explicitly selected. Do not enumerate DML/WinML.
             const result = await window.electronAPI.webnnDetectNPU();
-            if (result?.npuAvailable) allDevices.push({ name: 'NPU (WebNN)', deviceType: 'npu', source: 'webnn' });
+            if (result?.webnnNpuAvailable) allDevices.push({ name: 'NPU (WebNN)', deviceType: 'npu', source: 'webnn' });
             if (result?.gpuAvailable) allDevices.push({ name: t('settings.webnnGpuDevice'), deviceType: 'webnn-gpu', source: 'webnn' });
         } else if (backend === 'winml') {
             // Windows ML Catalog is authoritative. Do not invoke DML, PowerShell GPU or systeminformation discovery.
@@ -859,12 +862,18 @@ async function loadDevices() {
                 allDevices = await window.electronAPI.getDMLDevices({ includeWebnn: false, enrich: false });
             }
         }
-        const hasNpu = allDevices.some(d => d.deviceType === 'npu');
-        const hasWebnnGpu = allDevices.some(d => d.deviceType === 'webnn-gpu');
+        // WebNN / NPU / GPU 状态指示必须独立于推理提供者与设备枚举方式。
+        // 旧实现从 allDevices 反推，而 allDevices 只在 provider === 'ortweb'
+        // 时才包含 WebNN 设备，导致默认（ortnode）下即使机器有 NPU 也恒显示
+        // "NPU 不可用"。这里统一走主进程的检测结果（含 PnP 硬件回退）。
+        const npuProbe = await window.electronAPI.webnnDetectNPU().catch((err) => {
+            console.warn('[Settings] NPU detection failed:', err);
+            return null;
+        });
         cachedWebnnInfo = {
-            webnnAvailable: hasNpu || hasWebnnGpu,
-            npuAvailable: hasNpu,
-            gpuAvailable: hasWebnnGpu,
+            webnnAvailable: !!(npuProbe?.webnnAvailable ?? (allDevices.some(d => d.deviceType === 'npu' || d.deviceType === 'webnn-gpu'))),
+            npuAvailable: !!(npuProbe?.npuAvailable ?? allDevices.some(d => d.deviceType === 'npu')),
+            gpuAvailable: !!(npuProbe?.gpuAvailable ?? allDevices.some(d => d.deviceType === 'webnn-gpu')),
         };
 
         // 根据推理提供者过滤可选项：ORTNODE 仅显示本地 GPU/CPU；ORTWEB 仅显示 WebNN NPU/GPU
@@ -1235,6 +1244,7 @@ function collectSettings() {
         previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : false,
         previewDiffStepChunkFrames: previewDiffStepChunkFramesSlider ? parseInt(previewDiffStepChunkFramesSlider.value) : 500,
         previewDiffStepOverlapFrames: previewDiffStepOverlapFramesSlider ? parseInt(previewDiffStepOverlapFramesSlider.value) : 50,
+        autoRealtimeInference: autoRealtimeInferenceCheckbox ? autoRealtimeInferenceCheckbox.checked : false,
         exportDiffSteps: parseInt(exportDiffStepsSlider.value),
         exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
         exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
@@ -1400,6 +1410,9 @@ if (previewDiffStepChunkEnabledCheckbox) {
         if (previewDiffStepChunkGroup) previewDiffStepChunkGroup.classList.toggle('hidden', !previewDiffStepChunkEnabledCheckbox.checked);
         applySettings();
     });
+}
+if (autoRealtimeInferenceCheckbox) {
+    autoRealtimeInferenceCheckbox.addEventListener('change', () => applySettings());
 }
 if (previewDiffStepChunkFramesSlider) {
     previewDiffStepChunkFramesSlider.addEventListener('input', () => {

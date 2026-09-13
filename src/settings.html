@@ -243,6 +243,15 @@
                         </label>
                         <p class="hint" data-i18n="settings.previewDiffStepChunkHint">分块可显著加速长片段预览（片段越长加速越明显），代价是块边界处可能产生轻微伪影。短片段（短于分块大小）不会分块。</p>
                     </div>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="autoRealtimeInference">
+                            <span class="radio-label" data-i18n="settings.autoRealtimeInference">编辑后自动实时推理</span>
+                            <span class="radio-desc" data-i18n="settings.autoRealtimeInferenceDesc">在分片编辑器中检测到改动后，自动在后台重新推理预览音频。复用已有分段缓存，只对被改动的分段执行推理；同时被改动的多个分段按播放进度条位置优先推理。默认关闭。</span>
+                        </label>
+                        <p class="hint hint-warning" data-i18n="settings.autoRealtimeInferenceWarn">⚠ 警告：开启后每次改动都会在后台自动触发推理，可能大幅影响性能、显著增加功耗与发热（笔记本掉电加快、风扇转速升高、机身发烫），并可能与前台播放争抢显存导致播放卡顿。低显存、移动端或被动散热设备不建议开启。</p>
+                        <p class="hint" data-i18n="settings.autoRealtimeInferenceHint">仅作用于分片编辑器，且需要先手动播放一次建立基准音频；之后每次停止编辑约 1 秒触发一次后台推理。推理结果与手动预览完全一致（命中同一份缓存）。</p>
+                    </div>
                     <div class="setting-group hidden" id="previewDiffStepChunkGroup">
                         <div class="setting-group">
                             <label for="previewDiffStepChunkFrames"><span data-i18n="settings.previewDiffStepChunkFrames">分块大小（帧）</span> <span id="previewDiffStepChunkFramesValue" class="volume-display">500</span></label>

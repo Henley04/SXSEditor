@@ -365,6 +365,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('webnn:prefetch:request', handler);
     return () => ipcRenderer.removeListener('webnn:prefetch:request', handler);
   },
+  // 主进程 clearNPUFailureCache() 通过 'webnn:clearNpuCache' 通知渲染端清掉
+  // 本地检测结果缓存。此前 preload 未暴露该桥接，主进程清缓存后渲染端仍会
+  // 返回陈旧结果（要等 5 分钟 TTL 才恢复），表现为"换语言模型后 NPU 一直
+  // 检测不到"。
+  onClearNpuCache: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('webnn:clearNpuCache', handler);
+    return () => ipcRenderer.removeListener('webnn:clearNpuCache', handler);
+  },
   // Security: whitelist allowed WebNN response channels to prevent arbitrary IPC invocation
   webnnRespond: (responseChannel, result) => {
     const allowedPrefixes = [

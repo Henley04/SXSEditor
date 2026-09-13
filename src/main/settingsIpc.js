@@ -104,7 +104,10 @@ function registerSettingsIpc() {
       if (!includeWebnn) return devices;
 
       const npuResult = await detectNPUCached();
-      if (npuResult.npuAvailable && !devices.some(d => d.deviceType === 'npu')) {
+      // 只在 WebNN 路径下 NPU 真的可用时才列出 'NPU (WebNN)' 设备。
+      // npuAvailable 可能来自 PnP 硬件回退（WebNN 不可用），那种情况下给用户
+      // 一个选了也跑不了的 "NPU (WebNN)" 选项是误导。
+      if (npuResult.webnnNpuAvailable && !devices.some(d => d.deviceType === 'npu')) {
         devices.push({ name: 'NPU (WebNN)', deviceType: 'npu', isDiscrete: false,
           vramBytes: 0, vram: '0 MB', vendor: '', source: 'webnn' });
       }

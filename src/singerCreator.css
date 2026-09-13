@@ -11,31 +11,12 @@ html, body {
 }
 
 /* ==================== 工具栏 ==================== */
-#toolbar {
-  display: flex;
-  align-items: center;
-  height: 40px;
-  min-height: 40px;
-  padding: 0 var(--space-5);
-  background: linear-gradient(180deg, var(--bg-toolbar-start) 0%, var(--bg-toolbar-end) 100%);
-  color: var(--fg-primary);
-  border-bottom: 1px solid var(--border-subtle);
-  gap: var(--space-1);
-  box-shadow: 0 1px 3px var(--shadow-color-mid);
-}
+/* 工具栏容器与分隔线统一由 components.css 提供（扁平、无渐变、无重复定义） */
 
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 5px;
-}
-
-.toolbar-divider {
-  width: 1px;
-  height: 22px;
-  background: linear-gradient(180deg, transparent, var(--button-secondary-border), transparent);
-  margin: 0 var(--space-3);
-  flex-shrink: 0;
+  gap: var(--space-2);
 }
 
 .toolbar-spacer {
@@ -289,11 +270,18 @@ html, body {
   margin-top: var(--space-3);
 }
 
+/* 这里的 .info-box 是键值信息面板（非 callout），
+   需禁用共享样式的图标伪元素与着色，否则会破坏 .info-row 排版 */
 .info-box {
-  background: var(--bg-app);
+  display: block;
+  background: var(--surface-2);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-lg);
   padding: var(--space-5);
+}
+
+.info-box::before {
+  display: none;
 }
 
 .info-row {
@@ -450,7 +438,7 @@ html, body {
 }
 
 .status-badge.partial {
-  background: linear-gradient(135deg, var(--warning), var(--color-amber-500));
+  background: var(--warning);
   color: var(--fg-on-warning);
 }
 

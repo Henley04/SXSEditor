@@ -1156,7 +1156,10 @@ class OnnxSVSPipeline {
             try {
                 const { detectNPUAvailability } = require('../../main/webnnIpc');
                 const webnnResult = await detectNPUAvailability();
-                const npuAvailable = !!webnnResult.npuAvailable;
+                // 必须用 webnnNpuAvailable（WebNN 路径下真正可用），不能直接用
+                // npuAvailable：后者在 WebNN 不可用时会被 PnP 硬件回退置为 true，
+                // 那样会误入 WebNN 分支并在加载模型时才失败。
+                const npuAvailable = !!webnnResult.webnnNpuAvailable;
                 const gpuAvailable = !!webnnResult.gpuAvailable;
                 if (npuAvailable || gpuAvailable) {
                     let deviceType = null;
@@ -3356,6 +3359,10 @@ class OnnxSVSPipeline {
         const npuDiffBatchSize = options.npuDiffBatchSize || 4;
         const npuVocoderBatchSize = options.npuVocoderBatchSize || 2;
         const onChunkAudio = options.onChunkAudio || null;
+        // 优先推理时间点（秒，相对本次合成的 0 起点）——自动实时推理传入编辑器的
+        // 播放进度条位置。0 / 非法值 = 不指定，退化为"第一个改动位置"。
+        // 详见多 segment 区的 order 计算注释。
+        const priorityTimeSec = Number.isFinite(options.priorityTimeSec) ? options.priorityTimeSec : 0;
 
         // 求解器名称（透传到 _runDiffusionLoop → diffusion.js）
         this._currentSamplerName = options.sampler || DEFAULT_SOLVER;
@@ -3815,7 +3822,8 @@ class OnnxSVSPipeline {
 
         // WebNN batch=4: pair segments for simultaneous processing
         const useBatch = this.useWebNN && npuDiffBatchSize >= 4 && segments.length > 1;
-        let segIdx = 0;
+        // k = 遍历次序（0..order.length-1），由下方 order 映射回原始 segment 下标。
+        let k = 0;
 
         // Per-segment f0Shift (B2): autoShift 基于全局中位数计算单一 f0Shift，对"主歌低音+
         // 副歌高音"的宽音域片段，单一偏移使主歌偏低/副歌偏高，参考音色匹配度差。
@@ -3871,22 +3879,62 @@ class OnnxSVSPipeline {
             console.log(`[OnnxSVSPipeline] Segment cache: ${segCacheHits}/${segments.length} hits, skipping synthesis for unchanged segments`);
         }
 
-        while (segIdx < segments.length) {
+        // ===== 分段遍历顺序：优先推理变动处 =====
+        // 未命中分片缓存的 segment 即"被用户改动的分段"，也只有它们需要真正跑
+        // diffusion+vocoder。重排只改变这些重算分段的产出先后顺序，不改变合成结果：
+        // 每个 segment 独立写入 finalAudio 的绝对采样区间，并按 crossfade 权重累加到
+        // finalAudio / weightSum —— 逐样本加法满足交换律，且权重只依赖
+        // 相邻 segment 的边界（startBeat/endBeat），与遍历顺序无关。
+        //
+        // 优先级：
+        //   1) priorityTimeSec > 0（播放进度条位置）→ 取覆盖该时刻的 segment
+        //   2) 否则 → 取第一个未命中缓存的 segment，即时间轴上第一个改动位置
+        //
+        // order 保存的是 segments 的原始下标：batch 配对、crossfade、f0Shift、
+        // 缓存写入一律使用原下标，重排仅体现在遍历次序上。
+        const order = [];
+        let priorityIdx = -1;
+        if (priorityTimeSec > 0) {
+            for (let i = 0; i < segments.length; i++) {
+                if (priorityTimeSec < (segments[i].endBeat / bpm) * 60) { priorityIdx = i; break; }
+            }
+            if (priorityIdx < 0) priorityIdx = segments.length - 1;
+        } else {
+            for (let i = 0; i < segments.length; i++) {
+                if (!segCachedAudios[i]) { priorityIdx = i; break; }
+            }
+        }
+        const orderStart = (priorityIdx > 0 && priorityIdx < segments.length) ? priorityIdx : 0;
+        for (let i = orderStart; i < segments.length; i++) order.push(i);
+        for (let i = 0; i < orderStart; i++) order.push(i);
+        if (orderStart > 0) {
+            console.log(`[OnnxSVSPipeline] Prioritized segment order: start=${orderStart}` +
+                ` (${priorityTimeSec > 0 ? `playhead=${priorityTimeSec.toFixed(2)}s` : 'first dirty segment'})`);
+        }
+
+        while (k < order.length) {
             // 段间 GPU 排空：让事件循环处理 GC 并给 DML 50ms 时间回收上一段的
             // 中间张量（mel/f0/waveform/transformer 注意力），降低长音频多段合成时
             // VRAM 碎片累积导致的 OOM 风险。旧版 setImmediate(~1ms) 不够 DML 回收。
             // 首次迭代前 yield 无副作用（仅多一次事件循环调度）。
-            if (segIdx > 0) {
+            if (k > 0) {
                 await gpuDrainAdaptive();
             }
 
-            if (useBatch && segIdx + 1 < segments.length && !segCachedAudios[segIdx] && !segCachedAudios[segIdx + 1]) {
+            // 遍历次序 k 对应的原始 segment 下标
+            const segIdx = order[k];
+            const nextSegIdx = (k + 1 < order.length) ? order[k + 1] : -1;
+            // pair 合并推理要求两段原始相邻（shared crossfade 依赖 segIdx/segIdx+1），
+            // 重排后必须显式校验 nextSegIdx === segIdx + 1 才能成对。
+            const canPair = nextSegIdx === segIdx + 1;
+
+            if (useBatch && canPair && !segCachedAudios[segIdx] && !segCachedAudios[segIdx + 1]) {
                 // Pair two segments for batch=4 diffusion
                 // 仅当两个 segment 均未命中分片缓存时才走 batch 路径；任一命中则落到
                 // 下面的单 segment 路径（命中段直接复用缓存，未命中段单独推理）。
                 const segA = segments[segIdx];
                 const segB = segments[segIdx + 1];
-                const pairProgressStart = 10 + segIdx * progressPerSegment;
+                const pairProgressStart = 10 + k * progressPerSegment;
                 const pairProgressRange = progressPerSegment * 2 * 0.9;
 
                 onProgress(Math.round(pairProgressStart));
@@ -3935,14 +3983,15 @@ class OnnxSVSPipeline {
                 }
 
                 // GPU 排空点 3：多 segment 之间等待 DML 回收上段 vocoder 的 GPU 资源
-                if (segIdx < segments.length - 1) await gpuDrainAdaptive();
-                segIdx += 2;
+                if (k < order.length - 1) await gpuDrainAdaptive();
+                k += 2;
                 continue;
             }
 
             // Single segment (or last odd segment)
             const seg = segments[segIdx];
-            const segProgressStart = 10 + segIdx * progressPerSegment;
+            // 进度按遍历次序 k 计算：重排后 segIdx 不再单调，用它会导致进度回退。
+            const segProgressStart = 10 + k * progressPerSegment;
             const segProgressRange = progressPerSegment * 0.9;
             const vocoderProgressStart = segProgressStart + segProgressRange;
             const vocoderProgressRange = progressPerSegment * 0.1;
@@ -4005,8 +4054,8 @@ class OnnxSVSPipeline {
 
             onProgress(Math.round(vocoderProgressStart + vocoderProgressRange));
             // GPU 排空点 3：多 segment 之间等待 DML 回收上段 vocoder 的 GPU 资源
-            if (segIdx < segments.length - 1) await gpuDrainAdaptive();
-            segIdx++;
+            if (k < order.length - 1) await gpuDrainAdaptive();
+            k++;
         }
 
         for (let i = 0; i < totalSamples; i++) {

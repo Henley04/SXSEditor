@@ -423,9 +423,11 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
           120,
           {}
         );
-        // 音符 A 结束（beat 1）+ 150ms 尾部上下文（0.3 beat）→ region 0
-        // 音频覆盖到 ~beat 1.3；beat 2 起进入被排除的长休止
-        expect(out[Math.round(1.2 * samplesPerBeat)]).to.not.equal(0);
+        // 音符 A（beat 0-1）的音频仍在分片开头，未被后段推移
+        expect(out[Math.round(0.5 * samplesPerBeat)]).to.not.equal(0);
+        // Phase 4 会对每个 region 的波形强制谱面静音：音符 A 于 beat 1 结束后
+        // 立即归零（含 150ms 尾部上下文），beat 2 起进入被排除的长休止。
+        expect(out[Math.round(1.2 * samplesPerBeat)]).to.equal(0);
         expect(out[Math.round(2 * samplesPerBeat)]).to.equal(0);
       });
 

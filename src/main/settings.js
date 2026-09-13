@@ -249,6 +249,18 @@ function loadSettings() {
     _settingsCache.previewDiffStepOverlapFrames = 50;
   }
 
+  // 编辑后自动实时推理（默认关闭）。
+  // 开启后，分片编辑器检测到音符/音高曲线/包络等改动会在后台自动重新推理预览音频，
+  // 复用 OnnxSVSPipeline 的分片级缓存：未改动 segment 命中缓存直接复用，只有被改动
+  // 的 segment 才真正跑 diffusion+vocoder。
+  // 多个 segment 同时被改动时，按 options.priorityTimeSec（播放进度条位置，缺失则取
+  // 第一个失配即为改动的 segment）优先推理，使改动处尽快产出新音频。
+  // 代价：每次停止编辑都会触发一次后台推理，显著增加 GPU/CPU 占用与功耗发热，
+  // 且在推理期间会与前台播放争抢显存，因此默认 false。
+  if (typeof _settingsCache.autoRealtimeInference !== 'boolean') {
+    _settingsCache.autoRealtimeInference = false;
+  }
+
   // 推理提供者: 'ortnode' (默认, onnxruntime-node DirectML/CPU) | 'ortweb' (onnxruntime-web WebNN)
   if (_settingsCache.inferenceProvider !== 'ortweb' && _settingsCache.inferenceProvider !== 'ortnode') {
     _settingsCache.inferenceProvider = 'ortnode';
@@ -455,6 +467,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'previewDynamicThresholdPercentile',
   'exportDynamicThresholdEnabled',
   'exportDynamicThresholdPercentile',
+  'autoRealtimeInference',
   'inferenceProvider',
   'nativeInferenceBackend',
   'winmlPreferredEp',

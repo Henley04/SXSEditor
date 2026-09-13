@@ -317,6 +317,8 @@ export default {
     noNotesToPlay: '当前分片没有音符，无法播放',
     noNotesToExport: '当前分片没有音符，无法导出',
     synthesizing: '合成中...',
+    // 编辑后自动实时推理进行中（播放按钮的提示态，不禁用按钮）
+    autoInferring: '推理中...',
     stop: '停止',
     exporting: '导出中...',
     midiImportFailed: 'MIDI导入失败',
@@ -549,6 +551,11 @@ export default {
     previewDiffStepChunkEnabledDesc: '将目标帧分块独立推理再交叉淡入淡出拼接，利用注意力 O(n²) 特性加速长片段预览。仅影响预览，导出始终整段推理。',
     previewDiffStepChunkHint: '分块可显著加速长片段预览（片段越长加速越明显），代价是块边界处可能产生轻微伪影。短片段（短于分块大小）不会分块。',
     previewDiffStepChunkFrames: '分块大小（帧）',
+    // 编辑后自动实时推理（默认关闭）
+    autoRealtimeInference: '编辑后自动实时推理',
+    autoRealtimeInferenceDesc: '在分片编辑器中检测到改动后，自动在后台重新推理预览音频。复用已有分段缓存，只对被改动的分段执行推理；同时被改动的多个分段按播放进度条位置优先推理。默认关闭。',
+    autoRealtimeInferenceWarn: '⚠ 警告：开启此功能后，每次改动都会在后台自动触发推理，可能大幅影响性能，并显著增加功耗与发热（笔记本掉电加快、风扇噪音与机身温度升高），推理期间还可能与前台播放争抢显存导致卡顿。低显存设备、移动端或无风扇被动散热设备不建议开启。',
+    autoRealtimeInferenceHint: '仅作用于分片编辑器，且需要先手动播放一次建立基准音频；之后每次停止编辑约 1 秒触发一次后台推理。推理结果与手动预览完全一致（命中同一份缓存）。',
     previewDiffStepChunkFramesHint: '每个分块的目标帧数（1 帧 = 20ms 音频）。值越小加速越明显但边界伪影增多；值越大质量越好但加速减弱。推荐 300~800。',
     previewDiffStepOverlapFrames: '分块重叠（帧）',
     previewDiffStepOverlapFramesHint: '相邻分块间的重叠帧数，用 Hann 窗交叉淡入淡出消除拼接痕迹。值越大边界越平滑但计算量增加。推荐 30~100。设为 0 则不重叠（不推荐）。',

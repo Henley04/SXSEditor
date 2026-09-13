@@ -11,6 +11,7 @@ import {
   getFragmentAudioData, setFragmentAudioData,
   getFragmentIsPlaying, setFragmentIsPlaying,
   getFragmentIsSynthesizing, setFragmentIsSynthesizing,
+  getFragmentIsAutoInferring, setFragmentIsAutoInferring,
   getFragmentIsExporting, setFragmentIsExporting,
   getFragmentPlaybackStartTime, setFragmentPlaybackStartTime,
   getFragmentPlaybackOffset, setFragmentPlaybackOffset,
@@ -702,7 +703,7 @@ function padAudioToFragmentDuration(audioData) {
  * 用于判断 fragmentAudioData 是否可复用，避免重复 IPC 合成调用。
  * 注意：签名不包含 playStartPosition — 起始位置变化不影响音频内容。
  */
-function _computeFragmentAudioSignature() {
+export function computeFragmentAudioSignature() {
   const notes = getClippedNotes();
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
   const previewOpts = getFragmentPreviewInferenceOptions();
@@ -778,7 +779,7 @@ export async function playFragment() {
     // 缓存优化：计算当前合成输入签名，若与上次相同且已有 fragmentAudioData，
     // 直接复用缓存音频从 playStartPosition 开始播放，跳过 IPC 合成调用。
     // 这样即使起始位置不同，只要 notes/options 未变就能秒播。
-    const currentSignature = _computeFragmentAudioSignature();
+    const currentSignature = computeFragmentAudioSignature();
     const cachedAudio = getFragmentAudioData();
     const canReuseCache = cachedAudio && cachedAudio.length > 0 &&
                          getFragmentAudioDataSignature() === currentSignature;
@@ -1004,6 +1005,103 @@ export async function playFragment() {
     stopStreamingPlayback();
   } finally {
     setFragmentIsSynthesizing(false);
+    updateFragmentPlayButton();
+  }
+}
+
+/**
+ * 后台静默合成：只重算音频并写入 fragmentAudioData，不播放、不弹错误对话框。
+ * 供"编辑后自动实时推理"（设置项 autoRealtimeInference）使用。
+ *
+ * 与已有分段缓存的协同（关键）：
+ *   - 主进程 OnnxSVSPipeline 的多 segment 路径用 _computeSegmentCacheKey 为每个
+ *     segment 计算缓存键（notes/bpm/f0/ref/singerId/步数/segStartBeat/segF0Shift），
+ *     未改动的 segment 直接 _segCacheGet 命中、跳过 diffusion+vocoder。
+ *   - 因此这里刻意不调用任何清缓存操作；每次自动推理实际只会重算被用户改动的那几个
+ *     分段，其余分段零成本复用。
+ *   - options.priorityTimeSec 传入播放进度条位置，告诉主进程优先从哪个 segment 开始
+ *     推理（缺失时主进程退化为"第一个未命中缓存的分段"）。
+ *
+ * @param {{priorityTimeSec?: number}} [opts] priorityTimeSec：相对分片起点的秒数
+ * @returns {Promise<'ok'|'skip'|'error'>} ok = 完成了一次推理；skip = 主动放弃（前台忙 /
+ *          内容无变化 / 结果过期），可立即重试；error = 推理本身失败，需要冷却
+ */
+export async function synthesizeFragmentInBackground(opts = {}) {
+  // 与手动合成/播放/导出互斥：前台正在做事时不插队。
+  if (getFragmentIsPlaying() || getFragmentIsSynthesizing() || getFragmentIsExporting()) return 'skip';
+  // 已有后台任务在跑：本次改动会被它结束时再次检测到的新签名覆盖，直接跳过。
+  if (getFragmentIsAutoInferring()) return 'skip';
+
+  const notes = getClippedNotes();
+  if (!notes || notes.length === 0) return 'skip';
+
+  // 只有已经合成过（存在旧预览音频）时"改动"才有意义。首次预览仍由用户手动点击播放
+  // 触发，避免刚打开分片什么都没做就后台跑一整次推理。
+  if (getFragmentAudioDataSignature() === null) return 'skip';
+
+  const currentSignature = computeFragmentAudioSignature();
+  if (currentSignature === getFragmentAudioDataSignature()) return 'skip';
+
+  setFragmentIsAutoInferring(true);
+  updateFragmentPlayButton();
+  try {
+    if (!getPipelineInitialized()) {
+      await initPipeline();
+    }
+    await loadFragmentAudioSettings();
+
+    // 异步间隙里状态可能已变（用户按下播放 / 又开始导出 / 内容被再次修改）：
+    // 一律放弃本次后台推理，让下一次检测重新决策。
+    if (getFragmentIsPlaying() || getFragmentIsSynthesizing() || getFragmentIsExporting()) return 'skip';
+    if (computeFragmentAudioSignature() !== currentSignature) return 'skip';
+
+    const pitchCurveF0 = buildPitchCurveF0Data();
+    const previewOpts = getFragmentPreviewInferenceOptions();
+
+    const audioData = await window.electronAPI.synthesizeFragmentSVS({
+      notes,
+      bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
+      options: {
+        // 后台推理：主进程不下发流式 chunk，避免无意义的分片间 IPC 拷贝
+        background: true,
+        f0Envelope: null,
+        pitchCurveF0: pitchCurveF0 || null,
+        refAudioWavBuffer: getWavFileBuffer() || null,
+        singerId: getCurrentFragment()?.singerId || null,
+        autoShift: document.getElementById('autoShiftCheck').checked,
+        nSteps: previewOpts.nSteps,
+        cfg: previewOpts.cfg,
+        cfgRescale: previewOpts.cfgRescale,
+        diffStepChunk: previewOpts.diffStepChunk,
+        diffStepChunkFrames: previewOpts.diffStepChunkFrames,
+        diffStepOverlapFrames: previewOpts.diffStepOverlapFrames,
+        cfgScheduleMode: previewOpts.cfgScheduleMode,
+        cfgStrengthStart: previewOpts.cfgStrengthStart,
+        cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
+        dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
+        dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
+        // 优先推理：播放进度条所在分段（0 = 交给主进程按"第一个改动分段"决定）
+        priorityTimeSec: Number.isFinite(opts.priorityTimeSec) ? opts.priorityTimeSec : 0,
+      },
+    });
+
+    // 推理期间状态可能已变：
+    //   - 内容被再次改动 → 结果已过期，丢弃（稍后会再次触发）
+    //   - 用户手动播放已开始 → 交给 playFragment 自己写入，避免并发覆盖流式状态
+    if (computeFragmentAudioSignature() !== currentSignature) return 'skip';
+    if (getFragmentIsPlaying() || getFragmentIsSynthesizing()) return 'skip';
+
+    setFragmentAudioData(padAudioToFragmentDuration(audioData));
+    setFragmentAudioDataSignature(currentSignature);
+    console.log('[FragmentAudio] Background inference done (preview audio refreshed)');
+    return 'ok';
+  } catch (error) {
+    // 后台失败不打扰用户：失败可能是模型缺失、显存不足等，
+    // 下次手动播放会以正常路径报错提示。
+    console.warn('[FragmentAudio] Background inference failed:', error && error.message);
+    return 'error';
+  } finally {
+    setFragmentIsAutoInferring(false);
     updateFragmentPlayButton();
   }
 }

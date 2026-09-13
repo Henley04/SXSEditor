@@ -431,7 +431,7 @@ body {
 
 .progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-hover));
+  background: var(--accent);
   border-radius: var(--radius-md);
   transition: width var(--motion-slow) ease;
   width: 0%;

@@ -148,8 +148,8 @@ function registerResourceManagerIpc() {
         setCachedDMLDevices(devices);
       }
 
-      // Add NPU device if available via WebNN
-      if (npuResult.npuAvailable && !devices.some(d => d.deviceType === 'npu')) {
+      // Add NPU device only when it is actually usable through WebNN
+      if (npuResult.webnnNpuAvailable && !devices.some(d => d.deviceType === 'npu')) {
         devices = [...devices, {
           name: 'NPU (WebNN)',
           deviceType: 'npu',

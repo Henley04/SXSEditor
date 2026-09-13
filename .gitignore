@@ -212,3 +212,7 @@ _tmp_*.js
 
 # FCPE integration patch (WIP, not committed)
 fcpe_download_integration.patch
+
+# UI preview server runtime log
+preview-server.err
+

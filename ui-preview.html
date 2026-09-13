@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>SXSEditor · 组件样式总览</title>
+<link rel="stylesheet" href="./src/common.css">
+<link rel="stylesheet" href="./src/components.css">
+<link rel="stylesheet" href="./src/index.css">
+<style>
+  /* 预览页自身只用主题 token，不定义任何颜色 */
+  /* common.css 为了桌面端把 html/body 设为 overflow:hidden，预览页需要恢复滚动 */
+  html, body { overflow: auto !important; height: auto; min-height: 100%; }
+
+  .demo { padding: 20px 24px 96px; display: flex; flex-direction: column; gap: 14px; max-width: 960px; }
+  .demo h2 { margin: 18px 0 0; font-size: var(--font-xl); }
+  .note { font-size: var(--font-sm); color: var(--fg-muted); line-height: 1.6; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+  .scroll-demo { height: 96px; overflow-y: auto; padding-right: 4px; }
+  .scroll-demo p { margin: 0 0 var(--space-3); font-size: var(--font-sm); color: var(--fg-muted); }
+  .toast-demo { position: static; display: inline-flex; transform: none; animation: none; }
+
+  /* 主题切换条吸顶，随时可切换 */
+  .theme-bar {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    padding: 12px 0; margin-bottom: 4px;
+    background: var(--bg-app);
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .theme-bar button { font-size: var(--font-sm); }
+  .theme-bar button.active {
+    background: var(--bg-button-primary);
+    color: var(--fg-on-accent);
+    border-color: var(--accent-pressed);
+  }
+</style>
+</head>
+<body>
+<div class="demo">
+  <h2>组件样式总览</h2>
+  <div class="note">
+    本页不定义任何颜色，全部取自 <code>src/themes/builtins/*.theme.json</code>。点下面按钮切换 4 套主题对比。
+  </div>
+  <div class="theme-bar" id="themeBar"></div>
+
+  <!-- ============ 工具栏 ============ -->
+  <h2>工具栏</h2>
+  <div id="toolbar" style="border-radius: var(--radius-lg); overflow: hidden;">
+    <div class="toolbar-group">
+      <button>播放</button><button>暂停</button><button>停止</button>
+    </div>
+    <div class="toolbar-divider"></div>
+    <div class="toolbar-group">
+      <span id="time-display">00:00:000</span>
+    </div>
+    <div class="toolbar-divider"></div>
+    <div class="toolbar-group">
+      <label>BPM <input type="number" value="120" id="bpm-input"></label>
+      <label>拍号 <input type="number" value="4" style="width:48px" class="input--auto"> / <input type="number" value="4" style="width:48px" class="input--auto"></label>
+      <label><input type="checkbox" checked> Auto Shift</label>
+    </div>
+    <div class="toolbar-divider"></div>
+    <div class="toolbar-group">
+      <button class="btn-primary">导出</button>
+      <button class="btn-success">生成</button>
+      <button class="btn-danger">删除</button>
+    </div>
+    <div class="toolbar-spacer"></div>
+    <span class="version-badge">v1.0.0</span>
+  </div>
+
+  <!-- ============ 按钮 ============ -->
+  <h2>按钮</h2>
+  <div class="card">
+    <div class="row">
+      <button class="btn">Default</button>
+      <button class="btn btn--primary">Primary</button>
+      <button class="btn btn--success">Success</button>
+      <button class="btn btn--danger">Danger</button>
+      <button class="btn btn--ghost">Ghost</button>
+      <button class="btn" disabled>Disabled</button>
+    </div>
+    <div class="row">
+      <button class="btn btn--primary btn--sm">Small</button>
+      <button class="btn btn--primary">Medium</button>
+      <button class="btn btn--primary btn--lg">Large</button>
+      <button class="btn btn--icon" title="图标">+</button>
+      <button class="btn btn--icon btn--sm" title="小图标">−</button>
+      <button class="btn-small">btn-small</button>
+      <button class="btn-small btn-primary">btn-small primary</button>
+      <button class="btn-small btn-danger">btn-small danger</button>
+    </div>
+  </div>
+
+  <!-- ============ 表单控件 ============ -->
+  <h2>表单控件</h2>
+  <div class="card">
+    <div class="grid">
+      <div class="field">
+        <label class="field__label" for="f1">单行文本</label>
+        <input id="f1" type="text" placeholder="请输入…">
+        <span class="field__hint">hover 描边加深 / focus 主色描边 + 聚焦环</span>
+      </div>
+      <div class="field">
+        <label class="field__label" for="f2">数字</label>
+        <input id="f2" type="number" value="16" min="4" max="64" step="4">
+      </div>
+      <div class="field">
+        <label class="field__label" for="f3">下拉框（请展开看选项）</label>
+        <select id="f3">
+          <optgroup label="推荐">
+            <option>标准</option>
+            <option selected>高级</option>
+          </optgroup>
+          <optgroup label="其他">
+            <option>自定义</option>
+            <option disabled>不可用选项</option>
+          </optgroup>
+        </select>
+        <span class="field__hint">箭头 = --select-arrow；弹层明暗 = --color-scheme</span>
+      </div>
+      <div class="field">
+        <label class="field__label" for="f4">密码</label>
+        <input id="f4" type="password" value="secret">
+      </div>
+      <div class="field">
+        <label class="field__label" for="f5">禁用输入</label>
+        <input id="f5" type="text" value="不可编辑" disabled>
+      </div>
+      <div class="field">
+        <label class="field__label" for="f6">禁用下拉</label>
+        <select id="f6" disabled><option>禁用</option></select>
+      </div>
+    </div>
+    <div class="field">
+      <label class="field__label" for="f7">多行文本</label>
+      <textarea id="f7" placeholder="可纵向拖拽…"></textarea>
+    </div>
+    <div class="row">
+      <label>滑块 <input type="range" min="0" max="10" value="3" style="width:140px"></label>
+      <label>颜色 <input type="color" value="#5b8def" style="width:44px;height:28px" class="input--auto"></label>
+    </div>
+  </div>
+
+  <!-- ============ 开关 / 单选 / 复选 / 分段 ============ -->
+  <h2>选择控件</h2>
+  <div class="card">
+    <div class="row">
+      <label><input type="checkbox" checked> 复选框（选中）</label>
+      <label><input type="checkbox"> 复选框</label>
+      <label><input type="radio" name="r1" checked> 单选 A</label>
+      <label><input type="radio" name="r1"> 单选 B</label>
+      <label><input type="checkbox" class="switch" checked> 开关（开）</label>
+      <label><input type="checkbox" class="switch"> 开关（关）</label>
+      <label><input type="checkbox" disabled> 禁用复选</label>
+    </div>
+    <div class="segmented">
+      <button class="active">标准</button>
+      <button>高级</button>
+      <button>自定义</button>
+    </div>
+  </div>
+
+  <!-- ============ 信息框 ============ -->
+  <h2>信息框（SVG 线性图标）</h2>
+  <div class="card">
+    <div class="info-box"><strong>提示</strong>：默认信息框，用于一般说明文字。</div>
+    <div class="info-box info-box--success"><strong>成功</strong>：操作已完成，结果已保存。</div>
+    <div class="info-box info-box--warning"><strong>注意</strong>：该设置会在下次启动时生效。</div>
+    <div class="info-box info-box--danger"><strong>错误</strong>：无法连接到推理后端，请检查配置。</div>
+  </div>
+
+  <!-- ============ 歌手列表 ============ -->
+  <h2>列表项</h2>
+  <div class="card card--flush">
+    <div class="singer-item"><div class="singer-avatar">S</div><div class="singer-info"><div class="singer-track-name">主唱轨</div><div class="singer-singer-name">Singer A</div><div class="singer-config">fp16 · cpu</div></div><div class="singer-item-actions"><button class="btn-fragment-add">+</button><button class="btn-singer-delete">×</button></div></div>
+    <div class="singer-item active"><div class="singer-avatar">S</div><div class="singer-info"><div class="singer-track-name">选中轨</div><div class="singer-singer-name">Singer B</div></div></div>
+    <div class="singer-item accompaniment-item"><div class="singer-avatar">♪</div><div class="singer-info"><div class="singer-track-name">伴奏轨</div><div class="singer-singer-name">accompaniment.wav</div></div></div>
+    <div class="singer-item"><div class="singer-avatar">!</div><div class="singer-info"><div class="singer-track-name">缺失文件</div><div class="singer-file-missing-warning">文件已移动或删除</div><button class="btn-relocate-singer">重新定位</button></div></div>
+  </div>
+
+  <!-- ============ 设置页信息框（修复后） ============ -->
+  <h2>设置页信息框（已移除琥珀色左边条）</h2>
+  <div class="card">
+    <div class="note">对应 settings.html 的 #currentHardwareInfo / .precision-info-box，现在统一走共享扁平样式。</div>
+    <div class="field">
+      <label class="field__label">Current Hardware</label>
+      <div class="info-box"><span>Not initialized</span></div>
+    </div>
+    <div class="field">
+      <label class="field__label">precision-info-box</label>
+      <div class="precision-info-box"><strong>FP16</strong>：当前模型精度说明文字。</div>
+    </div>
+    <div class="field">
+      <label class="field__label">WebNN 状态条</label>
+      <div class="webnn-status-bar" style="position:static">
+        <span class="webnn-status-label">WebNN:</span>
+        <span class="webnn-status-value status-checking">Checking…</span>
+        <span class="webnn-status-separator">|</span>
+        <span class="webnn-status-label">NPU:</span>
+        <span class="webnn-status-value status-checking">Checking…</span>
+        <span class="webnn-status-separator">|</span>
+        <span class="webnn-status-label">GPU:</span>
+        <span class="webnn-status-value status-checking">Checking…</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ 徽章 / Chip ============ -->
+  <h2>徽章与 Chip</h2>
+  <div class="card">
+    <div class="row">
+      <span class="chip">默认</span>
+      <span class="chip chip--accent">强调</span>
+      <span class="chip chip--success">成功</span>
+      <span class="chip chip--warning">警告</span>
+      <span class="chip chip--danger">危险</span>
+      <span id="bpm-display-badge" style="position:static">120 BPM</span>
+      <span class="version-badge">v1.0.0</span>
+    </div>
+  </div>
+
+  <!-- ============ 进度 / 滚动条 / 菜单 / Toast ============ -->
+  <h2>反馈元素</h2>
+  <div class="card">
+    <div class="field">
+      <label class="field__label">进度条</label>
+      <div style="height:8px;background:var(--border-strong);border-radius:var(--radius-xl);overflow:hidden">
+        <div style="height:100%;width:62%;background:var(--accent);border-radius:var(--radius-xl)"></div>
+      </div>
+    </div>
+    <div class="field">
+      <label class="field__label">滚动条（8px，圆角滑块）</label>
+      <div class="scroll-demo">
+        <p>滚动区域 1</p><p>滚动区域 2</p><p>滚动区域 3</p><p>滚动区域 4</p>
+        <p>滚动区域 5</p><p>滚动区域 6</p><p>滚动区域 7</p><p>滚动区域 8</p>
+      </div>
+    </div>
+    <div class="row">
+      <div class="fragment-ctx-menu" style="position:static;box-shadow:var(--shadow-lg)">
+        <div class="fragment-ctx-item">重命名</div>
+        <div class="fragment-ctx-item">复制</div>
+        <div class="fragment-ctx-item fragment-ctx-danger">删除</div>
+      </div>
+      <span class="toast toast-demo">默认 Toast</span>
+      <span class="toast toast-success toast-demo">成功 Toast</span>
+      <span class="toast toast-error toast-demo">错误 Toast</span>
+      <span class="toast toast-info toast-demo">信息 Toast</span>
+    </div>
+    <div class="row">
+      <div class="loading-spinner" style="position:static"></div>
+      <span class="loading-text" style="animation:none;font-size:var(--font-base)">加载中…</span>
+    </div>
+  </div>
+
+  <!-- ============ 模态 ============ -->
+  <h2>模态对话框</h2>
+  <div class="modal-overlay" style="position:static;animation:none;backdrop-filter:none;padding:var(--space-6)">
+    <div class="modal-dialog" style="max-width:420px;animation:none">
+      <div class="modal-title">确认删除</div>
+      <div class="modal-hint">此操作不可撤销，确定要删除选中的分片吗？</div>
+      <div class="row" style="justify-content:flex-end">
+        <button class="btn btn--ghost">取消</button>
+        <button class="btn btn--danger">删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const THEMES = ['dark-aurora', 'midnight-amber', 'acg', 'light-paper'];
+let idx = 0;
+const styleEl = document.createElement('style');
+document.head.appendChild(styleEl);
+const bar = document.getElementById('themeBar');
+
+async function apply(i) {
+  idx = i;
+  const res = await fetch('./src/themes/builtins/' + THEMES[i] + '.theme.json');
+  const json = await res.json();
+  styleEl.textContent = ':root{' + Object.entries(json.tokens).map(([k, v]) => k + ':' + v + ';').join('') + '}';
+  [...bar.children].forEach((b, j) => b.classList.toggle('active', j === i));
+}
+
+THEMES.forEach((name, i) => {
+  const b = document.createElement('button');
+  b.className = 'btn btn--sm';
+  b.textContent = name;
+  b.addEventListener('click', () => apply(i));
+  bar.appendChild(b);
+});
+
+apply(0);
+</script>
+</body>
+</html>

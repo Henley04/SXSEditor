@@ -7,103 +7,14 @@
 }
 
 /* ==================== 工具栏 ==================== */
-#toolbar {
-  display: flex;
-  align-items: center;
-  height: 44px;
-  min-height: 44px;
-  padding: 0 12px;
-  background: linear-gradient(180deg, var(--bg-toolbar-start) 0%, var(--bg-toolbar-end) 100%);
-  color: var(--fg-primary);
-  border-bottom: 1px solid var(--border-subtle);
-  gap: var(--space-1);
-  box-shadow: var(--shadow-sm);
-  position: relative;
-  z-index: 10;
-}
-
-#toolbar::before {
-  content: "";
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: var(--toolbar-accent-line, 0);
-  background: var(--accent);
-}
-
-.toolbar-group {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.toolbar-divider {
-  width: 1px;
-  height: 22px;
-  background: linear-gradient(180deg, transparent, var(--border-default), transparent);
-  margin: 0 var(--space-3);
-  flex-shrink: 0;
-}
-
+/* 工具栏基础样式统一收敛到 components.css（跨页面共享），
+   此处仅保留主窗口专属覆盖，避免重复定义导致维护漂移。 */
 #toolbar button {
-  background: var(--bg-button);
-  color: var(--fg-muted);
-  border: 1px solid var(--button-secondary-border);
-  border-radius: var(--radius-md);
-  clip-path: var(--clip-button, none);
   padding: var(--space-2) var(--space-5);
-  cursor: pointer;
-  font-size: var(--font-base);
-  transition: background-color var(--motion-fast) var(--ease-standard),
-              border-color var(--motion-fast) var(--ease-standard),
-              color var(--motion-fast) var(--ease-standard),
-              transform var(--motion-fast) var(--ease-standard),
-              box-shadow var(--motion-fast) var(--ease-standard);
-  white-space: nowrap;
-  position: relative;
-  overflow: hidden;
-  will-change: transform;
 }
 
 #toolbar button:hover {
-  background: var(--bg-button-hover);
   color: var(--fg-toolbar-hover);
-  border-color: var(--accent);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 8px var(--accent-soft);
-}
-
-#toolbar button:active {
-  background: var(--bg-button-active);
-  transform: translateY(0) scale(0.97);
-  box-shadow: none;
-  transition-duration: 0.06s;
-  transition-timing-function: var(--ease-standard);
-}
-
-#toolbar button:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-#toolbar input[type="number"] {
-  width: 50px;
-  background: var(--bg-input);
-  color: var(--fg-primary);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  padding: var(--space-1) var(--space-3);
-  text-align: center;
-  font-size: var(--font-base);
-  transition: border-color var(--motion-fast) var(--ease-standard),
-              box-shadow var(--motion-fast) var(--ease-standard);
-}
-
-#toolbar input[type="number"]:focus {
-  outline: none;
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 #bpm-input {
@@ -119,14 +30,6 @@
   box-shadow: 0 0 0 2px var(--accent-line-strong);
 }
 
-#toolbar label {
-  font-size: var(--font-base);
-  color: var(--fg-muted);
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
 #time-display {
   font-variant-numeric: tabular-nums;
   font-size: var(--font-lg);
@@ -136,10 +39,9 @@
   padding: var(--space-2) 10px;
   border-radius: var(--radius-md);
   border: 1px solid var(--border-subtle);
-  min-width: 100px;
+  min-width: 104px;
   text-align: center;
   letter-spacing: 0.5px;
-  box-shadow: inset 0 1px 2px var(--shadow-color);
 }
 
 /* ==================== 主内容区 ==================== */
@@ -164,27 +66,28 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 36px;
-  min-height: 36px;
-  padding: 0 12px;
-  background: linear-gradient(180deg, var(--bg-header-start) 0%, var(--bg-header-end) 100%);
+  height: 40px;
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  background: var(--bg-header-start);
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--font-sm);
   font-weight: 600;
   color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.4px;
 }
 
-#btn-add-singer {
-  width: 24px;
-  height: 24px;
+/* 图标按钮：统一 28×28，扁平（无位移、无缩放、无发光） */
+#btn-add-singer,
+#btn-import-accompaniment {
+  width: 28px;
+  height: 28px;
   background: var(--bg-button);
   color: var(--fg-muted);
   border: 1px solid var(--button-secondary-border);
   border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 16px;
+  font-size: var(--font-lg);
   line-height: 1;
   display: flex;
   align-items: center;
@@ -192,64 +95,30 @@
   padding: 0;
   transition: background-color var(--motion-fast) var(--ease-standard),
               border-color var(--motion-fast) var(--ease-standard),
-              color var(--motion-fast) var(--ease-standard),
-              transform var(--motion-fast) var(--ease-bounce),
-              box-shadow var(--motion-fast) var(--ease-standard);
+              color var(--motion-fast) var(--ease-standard);
 }
 
-#btn-add-singer:hover {
+#btn-add-singer:hover,
+#btn-import-accompaniment:hover {
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
   border-color: var(--accent-hover);
-  transform: translateY(-1px) scale(1.08);
-  box-shadow: 0 2px 10px var(--accent-glow);
 }
 
-#btn-add-singer:active {
-  transform: translateY(0) scale(0.95);
-  transition-duration: 0.06s;
+#btn-add-singer:active,
+#btn-import-accompaniment:active {
+  background: var(--bg-button-active);
 }
 
 .singer-panel-actions {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: var(--space-2);
 }
 
-#btn-import-accompaniment {
-  width: 24px;
-  height: 24px;
-  background: var(--bg-button);
-  color: var(--fg-muted);
-  border: 1px solid var(--button-secondary-border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  transition: background-color var(--motion-fast) var(--ease-standard),
-              border-color var(--motion-fast) var(--ease-standard),
-              color var(--motion-fast) var(--ease-standard),
-              transform var(--motion-fast) var(--ease-bounce),
-              box-shadow var(--motion-fast) var(--ease-standard);
-}
-
-#btn-import-accompaniment:hover {
-  background: var(--bg-button-primary);
-  color: var(--fg-on-accent);
-  border-color: var(--accent-hover);
-  transform: translateY(-1px) scale(1.08);
-  box-shadow: 0 2px 10px var(--accent-glow);
-}
-
-#btn-import-accompaniment:active {
-  transform: translateY(0) scale(0.95);
-  transition-duration: 0.06s;
-}
-
+/* 用 inset 阴影做侧边强调，避免 border 导致的布局跳动 */
 .accompaniment-item {
-  border-left: 3px solid var(--accent) !important;
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 #singer-list {
@@ -295,7 +164,6 @@
 .singer-item-empty:hover .singer-avatar-empty {
   border-color: var(--accent);
   background: var(--accent-soft);
-  transform: scale(1.04);
 }
 
 .singer-avatar-placeholder {
@@ -325,31 +193,21 @@
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: 0 10px;
-  height: 80px;
+  padding: 0 var(--space-4);
+  height: 64px;
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
-  transition: background-color var(--motion-fast) var(--ease-standard),
-              transform var(--motion-fast) var(--ease-emphasized),
-              border-color var(--motion-fast) var(--ease-standard);
+  transition: background-color var(--motion-fast) var(--ease-standard);
   flex-shrink: 0;
 }
 
 .singer-item:hover {
-  background: var(--bg-header-end);
-  transform: translateX(2px);
-}
-
-.singer-item:active {
-  transform: translateX(0) scale(0.995);
-  transition-duration: 0.06s;
-  transition-timing-function: var(--ease-standard);
+  background: var(--surface-3);
 }
 
 .singer-item.active {
   background: var(--bg-singer-active);
-  border-left: 3px solid var(--accent);
-  padding-left: 7px;
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .singer-row-spacer {
@@ -369,7 +227,6 @@
   color: var(--fg-muted);
   flex-shrink: 0;
   overflow: hidden;
-  box-shadow: 0 1px 3px var(--shadow-color);
 }
 
 .singer-avatar img {
@@ -445,70 +302,44 @@
   flex-shrink: 0;
 }
 
-.btn-fragment-add {
-  width: 22px;
-  height: 22px;
+/* 行内图标按钮：统一 24×24，扁平（无位移、无缩放、无发光） */
+.btn-fragment-add,
+.btn-singer-delete {
+  width: 24px;
+  height: 24px;
   background: var(--bg-button);
   color: var(--fg-muted);
   border: 1px solid var(--button-secondary-border);
   border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--font-md);
   line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   transition: background-color var(--motion-fast) var(--ease-standard),
               border-color var(--motion-fast) var(--ease-standard),
-              color var(--motion-fast) var(--ease-standard),
-              transform var(--motion-fast) var(--ease-bounce),
-              box-shadow var(--motion-fast) var(--ease-standard);
+              color var(--motion-fast) var(--ease-standard);
 }
 
 .btn-fragment-add:hover {
   background: var(--bg-button-primary);
   color: var(--fg-on-accent);
   border-color: var(--accent-hover);
-  transform: translateY(-1px) scale(1.05);
-  box-shadow: 0 2px 8px var(--accent-glow);
 }
 
 .btn-fragment-add:active {
-  transform: translateY(0) scale(0.95);
-  transition-duration: 0.06s;
-}
-
-.btn-singer-delete {
-  width: 22px;
-  height: 22px;
-  background: var(--bg-button);
-  color: var(--fg-muted);
-  border: 1px solid var(--button-secondary-border);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  font-size: 14px;
-  line-height: 1;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: background-color var(--motion-fast) var(--ease-standard),
-              border-color var(--motion-fast) var(--ease-standard),
-              color var(--motion-fast) var(--ease-standard),
-              transform var(--motion-fast) var(--ease-bounce),
-              box-shadow var(--motion-fast) var(--ease-standard);
+  background: var(--bg-button-active);
 }
 
 .btn-singer-delete:hover {
   background: var(--bg-button-danger);
   color: var(--fg-on-accent);
   border-color: var(--danger);
-  transform: translateY(-1px) scale(1.05);
-  box-shadow: 0 2px 8px var(--danger-glow);
 }
 
 .btn-singer-delete:active {
-  transform: translateY(0) scale(0.95);
-  transition-duration: 0.06s;
+  background: var(--bg-button-danger-hover);
 }
 
 /* ==================== 分片时间轴 ==================== */
@@ -524,16 +355,15 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 36px;
-  min-height: 36px;
-  padding: 0 12px;
-  background: linear-gradient(180deg, var(--bg-header-start) 0%, var(--bg-header-end) 100%);
+  height: 40px;
+  min-height: 40px;
+  padding: 0 var(--space-4);
+  background: var(--bg-header-start);
   border-bottom: 1px solid var(--border-subtle);
   font-size: var(--font-sm);
   font-weight: 600;
   color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.4px;
 }
 
 #bpm-display-badge {
@@ -555,9 +385,8 @@
 }
 
 @keyframes bpmFlash {
-  0% { background: var(--accent-glow-strong); border-color: var(--accent); color: var(--fg-on-accent); transform: scale(1.08); }
-  60% { transform: scale(1); }
-  100% { background: var(--accent-soft); border-color: var(--accent-line-strong); color: var(--fg-bpm); transform: scale(1); }
+  0% { background: var(--accent-glow-strong); border-color: var(--accent); color: var(--fg-on-accent); }
+  100% { background: var(--accent-soft); border-color: var(--accent-line-strong); color: var(--fg-bpm); }
 }
 
 #fragment-canvas-container {
@@ -614,7 +443,7 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-lg);
   padding: var(--space-1) 0;
   min-width: 140px;
 }
@@ -632,11 +461,11 @@
 }
 
 .fragment-ctx-danger {
-  color: #f87171;
+  color: var(--danger);
 }
 
 .fragment-ctx-danger:hover {
-  background: rgba(248, 113, 113, 0.15);
+  background: var(--danger-soft);
 }
 
 /* Selected fragment highlight */
