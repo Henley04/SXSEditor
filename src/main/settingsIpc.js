@@ -31,6 +31,8 @@ const BOOLEAN_SETTING_KEYS = new Set([
   'enableLoudnormFinal',
   'enableAntiAliasing',
   'enableSDEditRepair',
+  'previewEnableQDrift',
+  'exportEnableQDrift',
   'diagnosticMode',
   'previewDynamicThresholdEnabled',
   'exportDynamicThresholdEnabled',

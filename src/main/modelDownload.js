@@ -2,6 +2,8 @@ const { ipcMain, dialog, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { t } = require('./locale');
+// 文档站点地址（更新说明等需要实时内容的入口仍指向线上）
+const { ONLINE_DOCS_BASE_URL } = require('./docs');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { isPathAllowed, isSystemPath } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
@@ -296,10 +298,12 @@ function getCustomModelDir() {
 }
 
 function registerModelDownloadIpc() {
-  // Open an external URL in the system default browser (for model-updates docs link)
+  // Open an external URL in the system default browser (for model-updates docs link).
+  // NOTE: this stays online on purpose — model/app update notes must reflect the
+  // newest published release, which the bundled docs snapshot cannot contain.
   ipcMain.handle('model-download:open-external', async (event, url) => {
     const ALLOWED_EXTERNAL_URLS = [
-      'https://henley04.github.io/SXSEditor/',
+      ONLINE_DOCS_BASE_URL,
     ];
     if (!url || typeof url !== 'string') return { success: false };
     const isAllowed = ALLOWED_EXTERNAL_URLS.some(prefix => url.startsWith(prefix));

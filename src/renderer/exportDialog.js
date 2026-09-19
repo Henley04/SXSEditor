@@ -13,6 +13,8 @@
 import '../exportDialog.css';
 import { t } from '../i18n/index.js';
 import { dom, trackManager } from './state.js';
+import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
+import { showConfirmDialog } from '../alertDialog.js';
 import { runExportJob } from './audioPlayback.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { SAMPLE_RATE } from './constants.js';
@@ -118,6 +120,7 @@ export async function openExportDialog() {
       enableLoudnormFinal: settings.enableLoudnormFinal !== false,
       enableAntiAliasing: settings.enableAntiAliasing === true,
       enableSDEditRepair: settings.enableSDEditRepair === true,
+      exportEnableQDrift: resolveQDriftDefault(settings, 'exportEnableQDrift'),
       outputPath: '',
     };
 
@@ -135,6 +138,10 @@ export async function openExportDialog() {
 }
 
 // ==================== 对话框构建 ====================
+
+// 导出任务是否正在运行。用于区分「还没开始导出」与「导出进行中」两种关窗语义：
+// 导出跑在主进程里，关掉窗口并不会中止它，所以必须明确告知用户。
+let _exportRunning = false;
 
 function buildDialog(form, settings, fullCleanup) {
   const overlay = document.createElement('div');
@@ -192,19 +199,29 @@ function buildDialog(form, settings, fullCleanup) {
   startBtn.addEventListener('click', () => onStartClick(form, settings, panel, body, footer, fullCleanup));
   footer.appendChild(startBtn);
 
+  // 关闭请求：导出进行中必须先确认，并明确告知"关窗不会取消导出"。
+  const requestClose = async () => {
+    if (!_exportRunning) {
+      fullCleanup();
+      return;
+    }
+    const ok = await showConfirmDialog(t('main.exportDialog.closeWhileExporting'));
+    if (ok) fullCleanup();
+  };
+
   // Esc 关闭
   const onKeyDown = (e) => {
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
-      fullCleanup();
+      requestClose();
     }
   };
   overlay.addEventListener('keydown', onKeyDown);
 
   // 点击遮罩关闭（仅点击遮罩自身，不点击面板）
   overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) fullCleanup();
+    if (e.target === overlay) requestClose();
   });
 
   // 自动聚焦开始按钮
@@ -247,6 +264,7 @@ function buildPrecisionSection(form) {
     radio.checked = form.modelPrecision === opt.value;
     radio.addEventListener('change', () => {
       form.modelPrecision = opt.value;
+      syncQDriftDefault(form, opt.value);
       grid.querySelectorAll('.export-dialog-precision-option').forEach(el => el.classList.remove('selected'));
       label.classList.add('selected');
     });
@@ -306,43 +324,89 @@ function buildParamsSection(form) {
   section.appendChild(samplerField);
 
   // 扩散步数
-  section.appendChild(buildRangeField({
+  const stepsField = buildRangeField({
     labelKey: 'main.exportDialog.diffSteps',
     min: 4, max: 64, step: 4,
     value: form.exportDiffSteps,
     onChange: (v) => { form.exportDiffSteps = v; },
-  }));
+  });
+  section.appendChild(stepsField);
 
   // CFG 强度
-  section.appendChild(buildRangeField({
+  const cfgField = buildRangeField({
     labelKey: 'main.exportDialog.cfgStrength',
     min: 0, max: 10, step: 0.5,
     value: form.exportCfgStrength,
     format: (v) => parseFloat(v).toFixed(1),
     onChange: (v) => { form.exportCfgStrength = v; },
-  }));
+  });
+  section.appendChild(cfgField);
 
   // CFG Rescale
-  section.appendChild(buildRangeField({
+  const rescaleField = buildRangeField({
     labelKey: 'main.exportDialog.cfgRescale',
     min: 0, max: 1, step: 0.05,
     value: form.exportCfgRescale,
     format: (v) => parseFloat(v).toFixed(2),
     onChange: (v) => { form.exportCfgRescale = v; },
     warning: (v) => (v < 0.5 || v > 0.7) ? t('main.exportDialog.cfgRescaleRangeWarn') : '',
-  }));
+  });
+  section.appendChild(rescaleField);
 
   // Task 11: CFG strength schedule (export path)
-  section.appendChild(buildCfgScheduleField(form, 'export'));
+  const scheduleField = buildCfgScheduleField(form, 'export');
+  section.appendChild(scheduleField);
 
   // M5: CFG strength schedule (preview path) — mirrors export so preview
   // playback uses the same configurable schedule instead of always 'linear'.
   section.appendChild(buildCfgScheduleField(form, 'preview'));
 
   // Dynamic thresholding (export path)
-  section.appendChild(buildDynamicThresholdField(form, 'export'));
+  const dtField = buildDynamicThresholdField(form, 'export');
+  section.appendChild(dtField);
   // Dynamic thresholding (preview path)
   section.appendChild(buildDynamicThresholdField(form, 'preview'));
+
+  // ===== Q-Drift 漂移校正 =====
+  // 放在推理参数区（而不是高级选项里）：它锁定的是本区这些参数本身。
+  const qdriftLockNote = document.createElement('div');
+  qdriftLockNote.className = 'export-dialog-field-hint';
+  qdriftLockNote.style.cssText = 'margin: 6px 0 0; color: var(--text-warning, #b26a00);';
+
+  const qdriftField = buildCheckboxField({
+    labelKey: 'main.exportDialog.enableQDrift',
+    descKey: 'main.exportDialog.enableQDriftHint',
+    checked: form.exportEnableQDrift,
+    onChange: (v) => {
+      form.exportEnableQDrift = v;
+      form._qdriftTouched = true;
+      applyQDriftLock();
+    },
+  });
+  form._qdriftField = qdriftField;
+
+  const qdriftWrap = document.createElement('div');
+  qdriftWrap.style.marginTop = '10px';
+  qdriftWrap.appendChild(qdriftField);
+  qdriftWrap.appendChild(qdriftLockNote);
+  section.appendChild(qdriftWrap);
+
+  // 勾选后这些参数不再由用户决定 —— 锁死并显式说明被强制成什么值，
+  // 避免"界面上看着是 STORK-2 / 64 步，实际跑的是 Euler / 32 步"。
+  const lockTargets = [samplerField, stepsField, cfgField, rescaleField, scheduleField, dtField];
+  function applyQDriftLock() {
+    const locked = form.exportEnableQDrift === true;
+    for (const field of lockTargets) {
+      const controls = field.querySelectorAll('input, select, textarea');
+      controls.forEach((c) => { c.disabled = locked; });
+      field.style.opacity = locked ? '0.5' : '';
+    }
+    qdriftLockNote.textContent = locked
+      ? t('main.exportDialog.qdriftLockNote')
+      : '';
+  }
+  form._applyQDriftLock = applyQDriftLock;
+  applyQDriftLock();
 
   // Auto Shift 复选框
   section.appendChild(buildCheckboxField({
@@ -866,6 +930,20 @@ function buildRangeField(opts) {
   return field;
 }
 
+/**
+ * Q-Drift 开关跟随模型精度：切到 FP16 时自动勾上，切走时自动取消。
+ * 用户手动拨动过之后（form._qdriftTouched）就不再自动改，尊重用户意图。
+ */
+function syncQDriftDefault(form, precision) {
+  if (form._qdriftTouched) return;
+  const next = precision === 'fp16';
+  if (form.exportEnableQDrift === next) return;
+  form.exportEnableQDrift = next;
+  const input = form._qdriftField && form._qdriftField.querySelector('input[type="checkbox"]');
+  if (input) input.checked = next;
+  if (typeof form._applyQDriftLock === 'function') form._applyQDriftLock();
+}
+
 function buildCheckboxField(opts) {
   const label = document.createElement('label');
   label.className = 'export-dialog-checkbox';
@@ -946,6 +1024,7 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     enableLoudnormFinal: form.enableLoudnormFinal,
     enableAntiAliasing: form.enableAntiAliasing,
     enableSDEditRepair: form.enableSDEditRepair,
+    exportEnableQDrift: form.exportEnableQDrift === true,
     exportSampleRate: form.outputSampleRate,
   };
 
@@ -1054,6 +1133,7 @@ function showProgressView(panel, body, footer, form, precisionChanged, fullClean
 }
 
 async function runExportTask(panel, body, footer, form, setProgress, setStatus, fullCleanup) {
+  _exportRunning = true;
   try {
     setProgress(0);
     setStatus('progressPreparing');
@@ -1063,6 +1143,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
       cfg: form.exportCfgStrength,
       cfgRescale: form.exportCfgRescale,
       sampler: form.exportSampler,
+      qdrift: form.exportEnableQDrift === true,
       autoShift: form.autoShift,
       // Task 11: CFG schedule opts
       cfgScheduleMode: form.exportCfgScheduleMode,
@@ -1124,6 +1205,8 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     console.error('[ExportDialog] Export failed:', err);
     setStatus('progressFailed');
     showFailureView(body, footer, err, fullCleanup);
+  } finally {
+    _exportRunning = false;
   }
 }
 

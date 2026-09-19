@@ -1,6 +1,8 @@
 const { BrowserWindow, dialog, ipcMain } = require('electron');
 const path = require('node:path');
 const { t } = require('./locale');
+// 文档入口：本地优先（随应用分发的 docs/），线上版本作为独立入口
+const { openDoc, openOnlineDoc, DOC_ENTRIES } = require('./docs');
 
 const isDev = !require('electron').app.isPackaged;
 
@@ -162,33 +164,41 @@ function buildAppMenu() {
       label: t('menu.help'),
       submenu: [
         {
+          // 项目主页：GitHub 仓库（文档站首页由下面的「在线文档」入口承担）
           label: t('menu.website'),
           click: () => {
             try {
-              require('electron').shell.openExternal('https://henley04.github.io/SXSEditor/');
+              require('electron').shell.openExternal('https://github.com/Henley04/SXSEditor/');
             } catch (err) {
               console.warn('[Menu] Open website failed:', err.message);
             }
           },
         },
         {
+          // 本地文档：随应用分发的 docs/user/quick-start.html，缺失时回退线上
           label: t('menu.userDocs'),
           click: () => {
-            try {
-              require('electron').shell.openExternal('https://henley04.github.io/SXSEditor/user/quick-start.html');
-            } catch (err) {
-              console.warn('[Menu] Open user docs failed:', err.message);
-            }
+            openDoc(DOC_ENTRIES.quickStart).catch((err) => {
+              console.warn('[Menu] Open user docs failed:', err && err.message);
+            });
           },
         },
         {
+          // 本地文档：随应用分发的 docs/dev/build.html，缺失时回退线上
           label: t('menu.devDocs'),
           click: () => {
-            try {
-              require('electron').shell.openExternal('https://henley04.github.io/SXSEditor/dev/build.html');
-            } catch (err) {
-              console.warn('[Menu] Open dev docs failed:', err.message);
-            }
+            openDoc(DOC_ENTRIES.devBuild).catch((err) => {
+              console.warn('[Menu] Open dev docs failed:', err && err.message);
+            });
+          },
+        },
+        {
+          // 线上版本单独入口：始终打开 GitHub Pages 上的最新版文档
+          label: t('menu.onlineDocs'),
+          click: () => {
+            openOnlineDoc('').catch((err) => {
+              console.warn('[Menu] Open online docs failed:', err && err.message);
+            });
           },
         },
         { type: 'separator' },

@@ -109,6 +109,7 @@ export default {
       cancel: 'Cancel',
       close: 'Close',
       progress: 'Progress',
+      closeWhileExporting: 'Export is still running. Closing this window will NOT cancel it — the export keeps running in the background and the file will still be written. Close the window anyway?',
       progressPreparing: 'Preparing...',
       progressSynthesizing: 'Synthesizing {progress}%',
       progressEncoding: 'Encoding WAV...',
@@ -165,6 +166,10 @@ export default {
       // Task 17: SDEdit repair
       enableSDEditRepair: 'SDEdit Local Repair',
       enableSDEditRepairHint: 'Detect mel anomalies (NaN / energy spikes) after diffusion and locally re-sample with shallow noise injection. Disabled by default; enable only for diagnosing artifacts.',
+      // Q-Drift drift correction
+      enableQDrift: 'Q-Drift Drift Correction',
+      qdriftLockNote: 'Locked to Euler @ 32 steps with CFG 3.0 / rescale 0.7. CFG scheduling and dynamic thresholding are disabled.',
+      enableQDriftHint: 'Apply per-channel drift correction (Q-Drift, arXiv:2603.18095) to the 32-step sampler of the FP16 diffusion model, compensating the multi-step accumulation of quantization error. Enabling it locks the sampler to Euler @ 32 steps with CFG 3.0 / rescale 0.7, and disables CFG scheduling, dynamic thresholding and SDEdit repair. FP16 model only; enabled by default on FP16 and follows the model precision switch.',
       // Task 2: Diagnostic mode
       diagnosticMode: 'Diagnostic Mode',
       diagnosticModeHint: 'Print detailed [DiffusionDiag] / [VocoderDiag] statistics to console. NaN/Inf fatal errors are always reported regardless of this setting.',
@@ -533,6 +538,8 @@ export default {
     subgroupAdvanced: 'Advanced',
     subgroupVocoder: 'Vocoder Stitching',
     subgroupPostProc: 'Audio Post-Processing',
+    subgroupSamplingCorrection: 'Sampling Correction',
+    qdriftLockNote: 'Locked to Euler @ 32 steps with CFG 3.0 / rescale 0.7. CFG scheduling, dynamic thresholding and SDEdit repair are disabled.',
     subgroupRepair: 'Repair & Diagnostics',
     diffSteps: 'Diffusion Steps',
     previewDiffStepsHint: 'Number of reverse sampling steps in the diffusion model. Fewer steps = faster inference but lower quality; more steps = better quality but slower. Recommended: 8~16 for preview.',
@@ -789,6 +796,8 @@ export default {
     enableAntiAliasingHint: 'Full 2× oversample → low-pass → decimate pipeline before downsampling to reduce high-frequency aliasing. Increases CPU usage slightly. Disabled by default.',
     enableSDEditRepair: 'SDEdit Local Repair',
     enableSDEditRepairHint: 'Detect mel anomalies (NaN / energy spikes) after diffusion and locally re-sample with shallow noise injection. Disabled by default; enable only for diagnosing artifacts.',
+    enableQDrift: 'Q-Drift Drift Correction',
+    enableQDriftHint: 'Apply per-channel drift correction (Q-Drift, arXiv:2603.18095) to the 32-step sampler of the FP16 diffusion model, compensating the multi-step accumulation of quantization error. Enabling it locks the sampler to Euler @ 32 steps with CFG 3.0 / rescale 0.7, and disables CFG scheduling, dynamic thresholding and SDEdit repair. FP16 model only; enabled by default on FP16 and follows the model precision switch.',
     diagnosticMode: 'Diagnostic Mode',
     diagnosticModeHint: 'Print detailed [DiffusionDiag] / [VocoderDiag] statistics to console. NaN/Inf fatal errors are always reported regardless of this setting.',
     theme: {

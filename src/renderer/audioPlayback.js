@@ -2,6 +2,7 @@ import { state, dom, trackManager } from './state.js';
 import { SAMPLE_RATE } from './constants.js';
 import { t } from '../i18n/index.js';
 import { showAlertDialog } from '../alertDialog.js';
+import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './timelineRenderer.js';
@@ -695,6 +696,8 @@ export function getPreviewInferenceOptions() {
     cfg: state.audioSettings?.previewCfgStrength ?? 3.0,
     cfgRescale: state.audioSettings?.previewCfgRescale ?? 0.7,
     sampler: state.audioSettings?.previewSampler ?? state.audioSettings?.exportSampler ?? 'stork2',
+    // Q-Drift 漂移校正（预览开关；未显式设置时按模型精度推断）
+    qdrift: resolveQDriftDefault(state.audioSettings, 'previewEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     diffStepChunk: state.audioSettings?.previewDiffStepChunkEnabled === true,
@@ -716,6 +719,8 @@ export function getExportInferenceOptions() {
     cfg: state.audioSettings?.exportCfgStrength ?? 3.0,
     cfgRescale: state.audioSettings?.exportCfgRescale ?? 0.7,
     sampler: state.audioSettings?.exportSampler ?? 'euler',
+    // Q-Drift 漂移校正（导出开关；未显式设置时按模型精度推断）
+    qdrift: resolveQDriftDefault(state.audioSettings, 'exportEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     // Task 11: CFG schedule (export mirrors). Falls back to top-level keys.

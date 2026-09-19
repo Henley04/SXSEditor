@@ -9,15 +9,28 @@ module.exports = {
   module: {
     rules: require('./webpack.rules'),
   },
-  externals: {
-    'onnxruntime-node': 'commonjs onnxruntime-node',
-    '@tensorflow/tfjs-backend-wasm': 'commonjs @tensorflow/tfjs-backend-wasm',
-    'systeminformation': 'commonjs systeminformation',
-    // Native-backed modules must stay outside the bundle so their .node
-    // binaries load from node_modules (kept + asar-unpacked by forge).
-    'sxs-ort-bridge': 'commonjs sxs-ort-bridge',
-    '@microsoft/dynwinrt': 'commonjs @microsoft/dynwinrt',
-  },
+  externals: [
+    {
+      'onnxruntime-node': 'commonjs onnxruntime-node',
+      // TensorFlow.js 是纯 JS（+ wasm 二进制），没有原生模块，不需要被
+      // webpack 打进主进程 bundle。保持 external 后：
+      //   - 主 bundle 体积显著下降，打包耗时/内存也更低；
+      //   - tfjs 与其子包（tfjs-core / converter / backend-cpu / webgl ...）
+      //     直接从 node_modules 运行时加载（node_modules 由 forge 保留）。
+      // 仅 basicPitch（BASIC-PITCH 转谱）会真正 require 它。
+      '@tensorflow/tfjs': 'commonjs @tensorflow/tfjs',
+      '@tensorflow/tfjs-backend-wasm': 'commonjs @tensorflow/tfjs-backend-wasm',
+      'systeminformation': 'commonjs systeminformation',
+      // Native-backed modules must stay outside the bundle so their .node
+      // binaries load from node_modules (kept + asar-unpacked by forge).
+      'sxs-ort-bridge': 'commonjs sxs-ort-bridge',
+      '@microsoft/dynwinrt': 'commonjs @microsoft/dynwinrt',
+    },
+    // 兜底：任何 @tensorflow/* 子包（tfjs-core、tfjs-converter 等）都不打包
+    ({ request }, callback) => (
+      /^@tensorflow\//.test(request) ? callback(null, `commonjs ${request}`) : callback()
+    ),
+  ],
   plugins: [
     new CopyPlugin({
       patterns: [

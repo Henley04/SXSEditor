@@ -109,6 +109,7 @@ export default {
       cancel: '取消',
       close: '关闭',
       progress: '进度',
+      closeWhileExporting: '导出正在进行中，关闭此窗口不会取消导出（导出会继续在后台完成并写入文件）。确定要关闭窗口吗？',
       progressPreparing: '准备中...',
       progressSynthesizing: '合成中 {progress}%',
       progressEncoding: '编码 WAV...',
@@ -165,6 +166,10 @@ export default {
       // Task 17: SDEdit 局部修复
       enableSDEditRepair: 'SDEdit 局部修复',
       enableSDEditRepairHint: '扩散后检测 mel 局部异常（NaN / 能量突变）并以浅噪声注入局部重采样。默认关闭，仅在排查伪影时启用。',
+      // Q-Drift 漂移校正
+      enableQDrift: 'Q-Drift 漂移校正',
+      qdriftLockNote: '已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，CFG 调度与动态阈值已关闭。',
+      enableQDriftHint: '对 FP16 扩散模型的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。开启后将强制锁定 Euler 求解器 + 32 步 + CFG 3.0 + rescale 0.7，并关闭 CFG 调度 / 动态阈值 / SDEdit 修复。仅对 FP16 模型生效；FP16 下默认开启，切换模型精度时会自动跟随。',
       // Task 2: 诊断模式
       diagnosticMode: '诊断模式',
       diagnosticModeHint: '在控制台输出详细的 [DiffusionDiag] / [VocoderDiag] 统计。NaN/Inf 致命错误无论此设置如何都会上报。',
@@ -533,6 +538,8 @@ export default {
     subgroupAdvanced: '高级选项',
     subgroupVocoder: 'Vocoder 拼接',
     subgroupPostProc: '音频后处理',
+    subgroupSamplingCorrection: '采样校正',
+    qdriftLockNote: '已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit 局部修复。',
     subgroupRepair: '修复与诊断',
     diffSteps: '扩散步数',
     previewDiffStepsHint: '扩散模型的反向采样步数。步数越少推理越快，但音质下降；步数越多音质越好，但推理越慢。推荐预览使用 8~16 步。',
@@ -789,6 +796,8 @@ export default {
     enableAntiAliasingHint: '降采样前执行 2× 过采样→低通滤波→降采样完整管线，减少高频混叠。略增 CPU 开销。默认关闭。',
     enableSDEditRepair: 'SDEdit 局部修复',
     enableSDEditRepairHint: '扩散后检测 mel 局部异常（NaN / 能量突变）并以浅噪声注入局部重采样。默认关闭，仅在排查伪影时启用。',
+    enableQDrift: 'Q-Drift 漂移校正',
+    enableQDriftHint: '对 FP16 扩散模型的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。开启后将强制锁定 Euler 求解器 + 32 步 + CFG 3.0 + rescale 0.7，并关闭 CFG 调度 / 动态阈值 / SDEdit 修复。仅对 FP16 模型生效；FP16 下默认开启，切换模型精度时会自动跟随。',
     diagnosticMode: '诊断模式',
     diagnosticModeHint: '在控制台输出详细的 [DiffusionDiag] / [VocoderDiag] 统计。NaN/Inf 致命错误无论此设置如何都会上报。',
     theme: {

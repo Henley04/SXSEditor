@@ -4,6 +4,7 @@ const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrainAdaptive, flo
 const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
+const { resolveQDrift, buildQDriftCtx, readQDriftEnabled } = require('./qdrift');
 
 // One fallback notice per loaded diffStep session, not once per streaming chunk.
 // WeakSet follows session lifetime without retaining disposed sessions.
@@ -92,6 +93,30 @@ function _readSDEditRepair() {
  * Diffusion sampling loop (the core synthesis algorithm)
  */
 class Diffusion {
+    constructor() {
+        // 当前 diffStep 会话的执行提供者，由管线在调用 runDiffusionLoop 前注入。
+        // Q-Drift 的校正因子是按 EP 实测的，需要它来做合约校验。
+        this._diffStepEp = null;
+        // Q-Drift 开关：预览 / 导出是两个独立设置，由管线按当前合成路径注入。
+        this._qdriftEnabled = false;
+    }
+
+    /**
+     * 注入当前 diffStep 的 EP（如 'dml'、'winml:NvTensorRTRTXExecutionProvider'、'cpu'）。
+     * @param {string|null} ep
+     */
+    setDiffStepEp(ep) {
+        this._diffStepEp = ep || null;
+    }
+
+    /**
+     * 注入本次合成是否启用 Q-Drift。
+     * @param {boolean} enabled
+     */
+    setQDriftEnabled(enabled) {
+        this._qdriftEnabled = enabled === true;
+    }
+
     /**
      * Run a single diffusion step (public API).
      *
@@ -377,7 +402,31 @@ class Diffusion {
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
+        // ---- Q-Drift：启用即强制锁定采样合约（Euler @ 32 / CFG 3.0 / rescale 0.7）----
+        // 校正因子 c 只在特定 σ 网格与速度场定义下有效；换步数、换求解器或叠加
+        // CFG 调度/动态阈值都会让 c 落到错误的分布上，而 |c| 极小导致听感无法察觉
+        // （静默降级）。所以这里直接覆盖参数并把被覆盖项打进日志。
+        const _qd = resolveQDrift({
+            enabled: this._qdriftEnabled,
+            isFP16,
+            samplerName, totalSteps, cfgStrength, cfgRescale,
+            cfgScheduleOpts, dynamicThresholdOpts,
+            diffStepEp: this._diffStepEp,
+        });
+        if (_qd.active) {
+            samplerName = _qd.params.samplerName;
+            totalSteps = _qd.params.totalSteps;
+            cfgStrength = _qd.params.cfgStrength;
+            cfgRescale = _qd.params.cfgRescale;
+            cfgScheduleOpts = _qd.params.cfgScheduleOpts;
+            dynamicThresholdOpts = _qd.params.dynamicThresholdOpts;
+            console.log(`[Q-Drift] 已启用（${_qd.correction.length} 个通道因子）。强制锁定：${_qd.notes.join('；')}`);
+        }
+        const qdriftCtx = buildQDriftCtx(_qd.active, _qd.correction);
+        // useCfg 必须在 Q-Drift 覆盖 cfgStrength 之后再判定：若用户原本关闭了 CFG，
+        // 合约仍要求 CFG=3.0，必须走 cond+uncond 双分支，否则速度场定义不一致。
         const useCfg = cfgStrength > 0;
+
         // Task 1: cond + uncond batched into a single [2, seqLen, MEL_DIM] call.
         // No-CFG path uses batch=1 (cond only).
         const diffBatch = useCfg ? 2 : 1;
@@ -731,7 +780,7 @@ class Diffusion {
                 currentStep = step;
                 const { nfe } = await sampler.step({
                     evalDiffStep, combine, step, totalSteps,
-                    xtData: xt.data, buffers,
+                    xtData: xt.data, buffers, qdrift: qdriftCtx,
                 });
                 totalNFE += nfe;
                 // 累加 deltaBuf 到 xt.data
@@ -757,7 +806,9 @@ class Diffusion {
             // re-denoise those regions with shallow noise (t=0.3) + 5 STORK-2
             // steps, blending repaired frames with original via Hann crossfade.
             // When disabled (default), this is a no-op (zero overhead).
-            if (_readSDEditRepair()) {
+            // Q-Drift 启用时跳过：修复循环会重新注入噪声并重采样局部区域，
+            // 破坏校正所依赖的速度场分布假设。
+            if (_readSDEditRepair() && !qdriftCtx.active) {
                 await this._sdeditRepair({
                     sessions, xt, totalFrames, ptMelData, ptFrameCount,
                     combinedCond, cfgStrength, cfgRescale, isFP16, useStaticShapes,

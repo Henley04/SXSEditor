@@ -258,6 +258,8 @@ async function exportFragmentTo(p) {
       cfg: o.cfg,
       cfgRescale: o.cfgRescale,
       sampler: o.sampler,
+      // Q-Drift：MCP 显式传 qdrift 时才启用（未传 = 关闭，避免自动化脚本静默改变采样合约）
+      qdrift: o.qdrift === true,
       cfgScheduleMode: o.cfgScheduleMode,
       cfgStrengthStart: o.cfgStrengthStart,
       cfgScheduleKeyframes: o.cfgScheduleKeyframes,

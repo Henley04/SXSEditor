@@ -265,6 +265,17 @@
                         </div>
                     </div>
                 </div>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupSamplingCorrection">采样校正</p>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="previewEnableQDrift">
+                            <span class="radio-label" data-i18n="settings.enableQDrift">Q-Drift 漂移校正</span>
+                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对 FP16 扩散模型的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。仅对 FP16 模型生效；FP16 下默认开启，切换模型精度时会自动跟随。</span>
+                        </label>
+                        <p class="hint hidden" id="previewQDriftLockNote" data-i18n="settings.qdriftLockNote">已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit 局部修复。</p>
+                    </div>
+                </div>
             </div>
 
             <!-- Export Inference Params -->
@@ -334,6 +345,17 @@
                         <label for="exportDynamicThresholdPercentile"><span data-i18n="settings.dynamicThresholdPercentile">截断分位数</span> <span id="exportDynamicThresholdPercentileValue" class="volume-display">0.995</span></label>
                         <input type="range" id="exportDynamicThresholdPercentile" min="0.900" max="0.999" value="0.995" step="0.001">
                         <p class="hint" data-i18n="settings.dynamicThresholdPercentileHint">值越低截断越激进（更多极端值被压缩）。推荐 0.99~0.998。</p>
+                    </div>
+                </div>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupSamplingCorrection">采样校正</p>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="exportEnableQDrift">
+                            <span class="radio-label" data-i18n="settings.enableQDrift">Q-Drift 漂移校正</span>
+                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对 FP16 扩散模型的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。仅对 FP16 模型生效；FP16 下默认开启，切换模型精度时会自动跟随。</span>
+                        </label>
+                        <p class="hint hidden" id="exportQDriftLockNote" data-i18n="settings.qdriftLockNote">已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit 局部修复。</p>
                     </div>
                 </div>
             </div>

@@ -2382,6 +2382,8 @@ class OnnxSVSPipeline {
             chunkNoise.set(noiseFull.subarray(segStart * MEL_DIM, segEnd * MEL_DIM));
             const subXt = { data: chunkNoise, dims: [1, segFrames, MEL_DIM] };
 
+            this._diffusion.setDiffStepEp(this.sessionEPs.diffStep || null);
+        this._diffusion.setQDriftEnabled(this._currentQDriftEnabled === true);
             await this._diffusion.runDiffusionLoop(
                 this.sessions, subXt, segFrames, ptMelData, ptFrameCount, segCond,
                 totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16,
@@ -2415,6 +2417,9 @@ class OnnxSVSPipeline {
 
     async _runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, onChunkMel = null, abortSignal = null) {
         throwIfCancelled(abortSignal);
+        // Q-Drift 的校正因子是按 EP 实测的：把当前 diffStep 的 EP 交给采样器做合约校验
+        this._diffusion.setDiffStepEp(this.sessionEPs.diffStep || null);
+        this._diffusion.setQDriftEnabled(this._currentQDriftEnabled === true);
         const samplerName = this._currentSamplerName || DEFAULT_SOLVER;
         // Task 15: pass per-frame F0 curve to chunked diffusion for F0-aware
         // boundary selection. Set by _synthesizeSegment / synthesizeMultiStreaming
@@ -2776,6 +2781,8 @@ class OnnxSVSPipeline {
         };
         // 求解器名称（取首片段配置，多片段必须一致）
         this._currentSamplerName = firstOpts.sampler || DEFAULT_SOLVER;
+        // Q-Drift 漂移校正开关（预览/导出各自独立，由调用方按路径传入）
+        this._currentQDriftEnabled = firstOpts.qdrift === true;
         // Task 11: CFG 强度曲线调度（取首片段配置，多片段必须一致）
         this._currentCfgScheduleOpts = {
             mode: firstOpts.cfgScheduleMode || 'linear',
@@ -3366,6 +3373,8 @@ class OnnxSVSPipeline {
 
         // 求解器名称（透传到 _runDiffusionLoop → diffusion.js）
         this._currentSamplerName = options.sampler || DEFAULT_SOLVER;
+        // Q-Drift 漂移校正开关（预览/导出各自独立，由调用方按路径传入）
+        this._currentQDriftEnabled = options.qdrift === true;
         // Task 11: CFG 强度曲线调度（透传到 _runDiffusionLoop → diffusion.js）
         this._currentCfgScheduleOpts = {
             mode: options.cfgScheduleMode || 'linear',

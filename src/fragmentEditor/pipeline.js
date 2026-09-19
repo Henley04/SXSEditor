@@ -4,6 +4,7 @@ import {
   getPipelineInitPromise, setPipelineInitPromise,
   getFragmentAudioSettings,
 } from './state.js';
+import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 
 export function initPipeline() {
   if (getPipelineInitialized()) return Promise.resolve();
@@ -38,6 +39,7 @@ export function getFragmentPreviewInferenceOptions() {
     cfg: settings?.previewCfgStrength ?? 3.0,
     cfgRescale: settings?.previewCfgRescale ?? 0.7,
     sampler: settings?.previewSampler ?? 'euler',
+    qdrift: resolveQDriftDefault(settings, 'previewEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
     diffStepChunk: settings?.previewDiffStepChunkEnabled === true,
@@ -53,6 +55,7 @@ export function getFragmentExportInferenceOptions() {
     cfg: settings?.exportCfgStrength ?? 3.0,
     cfgRescale: settings?.exportCfgRescale ?? 0.7,
     sampler: settings?.exportSampler ?? 'euler',
+    qdrift: resolveQDriftDefault(settings, 'exportEnableQDrift'),
     npuDiffBatchSize: 1,
     npuVocoderBatchSize: 1,
   };

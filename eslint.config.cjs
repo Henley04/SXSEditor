@@ -83,6 +83,7 @@ module.exports = [
             'src/audio/wavEncoder.js',
             'src/utils/escapeHtml.js',
             'src/utils/gpuCache.js',
+            'src/inference/pipeline/qdrift/defaults.js',
         ],
         languageOptions: {
             sourceType: 'commonjs',
@@ -145,6 +146,8 @@ module.exports = [
             'src/audio/wavEncoder.js',
             'src/utils/escapeHtml.js',
             'src/utils/gpuCache.js',
+            // Q-Drift 默认策略：ESM 纯函数，被主进程 CJS 与渲染层共用
+            'src/inference/pipeline/qdrift/defaults.js',
         ],
         languageOptions: {
             sourceType: 'module',

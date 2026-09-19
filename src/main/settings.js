@@ -179,6 +179,21 @@ function loadSettings() {
     _settingsCache.enableSDEditRepair = false;
   }
 
+  // ===== Q-Drift 推理期漂移校正（arXiv:2603.18095）=====
+  // 针对 FP16 DiT 多步量化误差累积的采样器侧校正。预览与导出各自一个开关，
+  // 与 preview*/export* 系列参数保持同样的镜像惯例。
+  //
+  // ★ 这里刻意 **不** 给默认值：未显式设置时由
+  //   src/inference/pipeline/qdrift/defaults.js 的 resolveQDriftDefault() 按
+  //   modelPrecision 推断（fp16 → 开，其余 → 关）。一旦在此处把它固化成布尔值，
+  //   用户之后切换模型精度时开关就会永远停在陈旧值上。
+  //
+  // 迁移：早期版本用过单键 enableQDrift，会把推断默认值写死成 false。检测到就丢弃，
+  // 让配置回到"未设置 = 跟随精度"的语义（该键只在开发期存在过，无用户数据价值）。
+  if (_settingsCache.enableQDrift !== undefined) {
+    delete _settingsCache.enableQDrift;
+  }
+
   // ===== Task 11: CFG 强度曲线调度 =====
   // 在 diffusion 采样循环中按 step 动态调整 CFG 引导强度。
   // mode: 'constant'（固定，与改造前字节一致）| 'linear'（线性）| 'cosine'（余弦）| 'custom'（关键帧）
@@ -454,6 +469,8 @@ const ALLOWED_SETTINGS_KEYS = [
   'enableLoudnormFinal',
   'enableAntiAliasing',
   'enableSDEditRepair',
+  'previewEnableQDrift',
+  'exportEnableQDrift',
   'cfgScheduleMode',
   'cfgStrengthStart',
   'cfgScheduleKeyframes',

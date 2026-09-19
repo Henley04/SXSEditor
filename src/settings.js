@@ -11,6 +11,7 @@ import {
     validate,
     normalize,
 } from './themes/index.js';
+import { resolveQDriftDefault } from './inference/pipeline/qdrift/defaults.js';
 
 const inferenceProviderSelect = document.getElementById('inferenceProvider');
 const inferenceProviderHint = document.getElementById('inferenceProviderHint');
@@ -74,6 +75,131 @@ const vocoderOverlapFramesValue = document.getElementById('vocoderOverlapFramesV
 const enableLoudnormFinalCheckbox = document.getElementById('enableLoudnormFinal');
 const enableAntiAliasingCheckbox = document.getElementById('enableAntiAliasing');
 const enableSDEditRepairCheckbox = document.getElementById('enableSDEditRepair');
+const previewEnableQDriftCheckbox = document.getElementById('previewEnableQDrift');
+const exportEnableQDriftCheckbox = document.getElementById('exportEnableQDrift');
+const previewQDriftLockNote = document.getElementById('previewQDriftLockNote');
+const exportQDriftLockNote = document.getElementById('exportQDriftLockNote');
+
+// ===== Q-Drift 漂移校正（预览 / 导出各一个开关）=====
+// 只在用户手动拨动过后才落盘：否则只要保存过一次 false，之后切到 FP16 就永远
+// 不会自动开启（"切了 FP16 却还是没勾上"）。
+const _qdriftTouched = { preview: false, export: false };
+
+// 开启 Q-Drift 后会被强制锁定的控件（预览 / 导出分别锁定各自那套参数）
+const QDRIFT_LOCKED_PREVIEW = [
+    previewDiffStepsSlider, previewSamplerSelect, previewCfgStrengthSlider, previewCfgRescaleSlider,
+    previewCfgScheduleModeSelect, previewCfgStrengthStartInput, previewCfgScheduleKeyframesInput,
+    previewDynamicThresholdEnabledCheckbox, previewDynamicThresholdPercentileSlider,
+];
+const QDRIFT_LOCKED_EXPORT = [
+    exportDiffStepsSlider, exportSamplerSelect, exportCfgStrengthSlider, exportCfgRescaleSlider,
+    exportCfgScheduleModeSelect, exportCfgStrengthStartInput, exportCfgScheduleKeyframesInput,
+    exportDynamicThresholdEnabledCheckbox, exportDynamicThresholdPercentileSlider,
+];
+// Q-Drift 合约值（必须与 src/inference/pipeline/qdrift/index.js 的 CONTRACT 一致）
+const QDRIFT_CONTRACT = { sampler: 'euler', steps: 32, cfg: 3.0, rescale: 0.7 };
+
+let _qdriftSnapshot = null;
+
+function _snapshotEls(els) {
+    const m = new Map();
+    for (const el of els) {
+        if (!el) continue;
+        m.set(el, el.type === 'checkbox' ? el.checked : el.value);
+    }
+    return m;
+}
+
+function _restoreEls(m) {
+    for (const [el, v] of m) {
+        if (!el) continue;
+        if (el.type === 'checkbox') el.checked = v;
+        else el.value = v;
+        el.dispatchEvent(new Event('input', { bubbles: false }));
+        el.dispatchEvent(new Event('change', { bubbles: false }));
+    }
+}
+
+function _setElsDisabled(els, disabled) {
+    for (const el of els) if (el) el.disabled = disabled;
+}
+
+function _applyContract(els, samplerEl, stepsEl, cfgEl, rescaleEl, checkboxEl) {
+    if (samplerEl) samplerEl.value = QDRIFT_CONTRACT.sampler;
+    if (stepsEl) stepsEl.value = String(QDRIFT_CONTRACT.steps);
+    if (cfgEl) cfgEl.value = String(QDRIFT_CONTRACT.cfg);
+    if (rescaleEl) rescaleEl.value = String(QDRIFT_CONTRACT.rescale);
+    if (checkboxEl) checkboxEl.checked = false;   // 动态阈值
+    for (const el of els) {
+        if (!el) continue;
+        el.dispatchEvent(new Event('input', { bubbles: false }));
+        el.dispatchEvent(new Event('change', { bubbles: false }));
+    }
+}
+
+/**
+ * 勾选 Q-Drift 后把受影响的采样参数置灰，并直接显示被强制的合约值。
+ * 目的：避免"界面上看着 STORK-2 / 64 步，实际跑的是 Euler / 32 步"。
+ */
+function updateQDriftLocks() {
+    const p = !!(previewEnableQDriftCheckbox && previewEnableQDriftCheckbox.checked);
+    const e = !!(exportEnableQDriftCheckbox && exportEnableQDriftCheckbox.checked);
+    const any = p || e;
+    const all = [...QDRIFT_LOCKED_PREVIEW, ...QDRIFT_LOCKED_EXPORT];
+
+    if (any && !_qdriftSnapshot) {
+        _qdriftSnapshot = _snapshotEls([...all, enableSDEditRepairCheckbox]);
+    }
+    if (p) {
+        _applyContract(QDRIFT_LOCKED_PREVIEW, previewSamplerSelect, previewDiffStepsSlider,
+            previewCfgStrengthSlider, previewCfgRescaleSlider, previewDynamicThresholdEnabledCheckbox);
+    }
+    if (e) {
+        _applyContract(QDRIFT_LOCKED_EXPORT, exportSamplerSelect, exportDiffStepsSlider,
+            exportCfgStrengthSlider, exportCfgRescaleSlider, exportDynamicThresholdEnabledCheckbox);
+    }
+    if (any && enableSDEditRepairCheckbox) enableSDEditRepairCheckbox.checked = false;
+    if (!any && _qdriftSnapshot) {
+        _restoreEls(_qdriftSnapshot);
+        _qdriftSnapshot = null;
+    }
+
+    _setElsDisabled(QDRIFT_LOCKED_PREVIEW, p);
+    _setElsDisabled(QDRIFT_LOCKED_EXPORT, e);
+    // SDEdit 局部修复是全局行为，任一侧开启 Q-Drift 都必须在运行时关掉
+    if (enableSDEditRepairCheckbox) enableSDEditRepairCheckbox.disabled = any;
+    if (previewQDriftLockNote) previewQDriftLockNote.classList.toggle('hidden', !p);
+    if (exportQDriftLockNote) exportQDriftLockNote.classList.toggle('hidden', !e);
+}
+
+/**
+ * 绑定 Q-Drift 相关监听。
+ * 必须延迟到所有控件引用声明之后再调用：modelPrecisionSelect 等 const 位于本文件更下方，
+ * 在模块求值阶段直接引用会踩 TDZ。
+ */
+function initQDriftListeners() {
+    if (previewEnableQDriftCheckbox) {
+        previewEnableQDriftCheckbox.addEventListener('change', () => {
+            _qdriftTouched.preview = true;
+            updateQDriftLocks();
+        });
+    }
+    if (exportEnableQDriftCheckbox) {
+        exportEnableQDriftCheckbox.addEventListener('change', () => {
+            _qdriftTouched.export = true;
+            updateQDriftLocks();
+        });
+    }
+    // 切换模型精度时同步默认勾选状态（用户手动改过之后不再自动改）
+    if (modelPrecisionSelect) {
+        modelPrecisionSelect.addEventListener('change', () => {
+            const want = modelPrecisionSelect.value === 'fp16';
+            if (!_qdriftTouched.preview && previewEnableQDriftCheckbox) previewEnableQDriftCheckbox.checked = want;
+            if (!_qdriftTouched.export && exportEnableQDriftCheckbox) exportEnableQDriftCheckbox.checked = want;
+            updateQDriftLocks();
+        });
+    }
+}
 const diagnosticModeCheckbox = document.getElementById('diagnosticMode');
 const audioOutputModeSelect = document.getElementById('audioOutputMode');
 const audioOutputDeviceSelect = document.getElementById('audioOutputDevice');
@@ -309,6 +435,13 @@ function applySavedSettingsToUI(currentSetting) {
     if (enableLoudnormFinalCheckbox) enableLoudnormFinalCheckbox.checked = currentSetting.enableLoudnormFinal !== false;
     if (enableAntiAliasingCheckbox) enableAntiAliasingCheckbox.checked = currentSetting.enableAntiAliasing === true;
     if (enableSDEditRepairCheckbox) enableSDEditRepairCheckbox.checked = currentSetting.enableSDEditRepair === true;
+    // Q-Drift：用户显式设置过就用设置值；否则按模型精度推断（只有 FP16 DiT 才有意义）
+    if (previewEnableQDriftCheckbox) previewEnableQDriftCheckbox.checked = resolveQDriftDefault(currentSetting, 'previewEnableQDrift');
+    if (exportEnableQDriftCheckbox) exportEnableQDriftCheckbox.checked = resolveQDriftDefault(currentSetting, 'exportEnableQDrift');
+    // 每次套用设置都重置"用户是否手动改过"，这样切精度仍会自动跟随
+    _qdriftTouched.preview = false;
+    _qdriftTouched.export = false;
+    updateQDriftLocks();
     if (diagnosticModeCheckbox) diagnosticModeCheckbox.checked = currentSetting.diagnosticMode === true;
 
     // Audio settings
@@ -1286,6 +1419,10 @@ function collectSettings() {
             const r = document.querySelector('input[name="vocoderChunkMode"]:checked');
             return r ? r.value : 'smart';
         })(),
+        ...(_qdriftTouched.preview && previewEnableQDriftCheckbox
+            ? { previewEnableQDrift: previewEnableQDriftCheckbox.checked } : {}),
+        ...(_qdriftTouched.export && exportEnableQDriftCheckbox
+            ? { exportEnableQDrift: exportEnableQDriftCheckbox.checked } : {}),
         vocoderChunkFrames: parseInt(vocoderChunkFramesSlider.value),
         vocoderOverlapFrames: vocoderOverlapFramesSlider ? parseInt(vocoderOverlapFramesSlider.value) : 32,
         enableLoudnormFinal: enableLoudnormFinalCheckbox ? enableLoudnormFinalCheckbox.checked : true,
@@ -2432,6 +2569,8 @@ document.querySelectorAll('.sidebar-item').forEach(item => {
 
 // Settings information architecture and search.
 // Windows ML is a hardware/backend selector, not an ORT graph-tuning option.
+initQDriftListeners();
+
 (function initializeSettingsSearchAndLayout() {
   const init = () => {
     const input = document.getElementById('settingsSearch');

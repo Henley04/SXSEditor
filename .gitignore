@@ -216,3 +216,17 @@ fcpe_download_integration.patch
 # UI preview server runtime log
 preview-server.err
 
+
+# Q-Drift: only the code, README and the calibration result are tracked.
+# The condition tensors come from modelscope.cn/models/syxppp/Qdrift and the
+# rest is derived (see qdrift/README.md for the reproduction steps).
+qdrift/conds_long/
+qdrift/conds_bin/
+qdrift/eval/mel/
+qdrift/eval/wav/
+qdrift/calib/qdrift_state.json
+_qdrift_pkg/
+
+# ...but keep the calibration result despite the global *.bin rule above.
+!qdrift/calib/qdrift_V.bin
+!qdrift/calib/qdrift_c.bin

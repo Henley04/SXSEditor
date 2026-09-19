@@ -2,6 +2,9 @@ const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 
 const skipOnnxModels = process.env.SKIP_ONNX_MODELS === '1';
+// docs/ 随应用分发（约 5.6 MB）。设置 SKIP_DOCS=1 可跳过，此时帮助菜单的
+// 文档入口会自动回退到线上文档站。
+const skipDocs = process.env.SKIP_DOCS === '1';
 
 module.exports = {
 
@@ -28,6 +31,11 @@ module.exports = {
       return !keep;
     },
     icon: './assets/SXS',
+    // Ship the documentation site (docs/) next to the app (resources/docs).
+    // It must live OUTSIDE app.asar: the docs are opened with the system
+    // default browser via file:// and a browser cannot read inside an asar.
+    // src/main/docs.js resolves this directory at runtime.
+    ...(skipDocs ? {} : { extraResource: ['docs'] }),
     // Keep only Chromium locales that match the app's supported UI languages
     // (src/i18n ships 'zh-CN' and 'en'). All other *.pak locale files would
     // otherwise account for ~45 MB of dead bytes in out/SXSEditor-win32-x64/locales.
