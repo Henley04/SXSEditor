@@ -32,7 +32,6 @@ class AudioOutputManager {
     this._isPlaying = false;
     this._duration = 0;
     this._lastPosition = 0;
-    this._positionInterval = null;
     this._playbackStartTime = 0;
     this._playbackOffset = 0;
     this._readyResolve = null;
@@ -42,6 +41,9 @@ class AudioOutputManager {
     this._workerCrashed = false;
     // S12: Guard against firing onEnded twice (interval + Speaker finish/crash).
     this._endedSent = false;
+    // Set when the worker announced its own idle auto-shutdown, so the
+    // following 'exit' event is not treated as an unexpected crash.
+    this._idleExitExpected = false;
   }
 
   _ensureWorker() {
@@ -73,6 +75,10 @@ class AudioOutputManager {
       this._readyResolve = resolve;
     });
 
+    // The previous worker (if any) is gone; reset the idle-expectation flag
+    // for this freshly forked process.
+    this._idleExitExpected = false;
+
     this._worker.on('message', (msg) => {
       if (msg.type === 'ready') {
         this._workerReady = true;
@@ -84,12 +90,19 @@ class AudioOutputManager {
         return;
       }
 
+      // Worker announced its own 30s idle auto-shutdown. The following 'exit'
+      // event is expected: keep the instance usable (it will re-fork on demand)
+      // and do not reject pending requests or fire onEnded.
+      if (msg.type === 'idle-shutdown') {
+        this._idleExitExpected = true;
+        return;
+      }
+
       if (msg.type === 'ended') {
         // S12: Guard against firing onEnded twice (e.g. interval + Speaker finish).
         if (this._endedSent) return;
         this._endedSent = true;
         this._isPlaying = false;
-        this._stopPositionTracking();
         if (this._onEndedCallback) {
           try { this._onEndedCallback(); } catch (_) {}
         }
@@ -125,6 +138,18 @@ class AudioOutputManager {
       this._workerReady = false;
       this._workerAvailable = false;
       this._worker = null;
+      // Expected idle auto-shutdown: just reset state so the next command
+      // re-forks on demand. This is not a crash — don't reject pending
+      // requests, fire onEnded, or mark the instance crashed.
+      if (this._idleExitExpected) {
+        this._idleExitExpected = false;
+        this._workerCrashed = false;
+        if (this._readyResolve) {
+          this._readyResolve(false);
+          this._readyResolve = null;
+        }
+        return;
+      }
       // S12: Mark crashed so _ensureWorker() won't fork zombies during polls.
       this._workerCrashed = true;
       this._handleWorkerDeath();
@@ -150,7 +175,6 @@ class AudioOutputManager {
   _handleWorkerDeath() {
     const wasPlaying = this._isPlaying;
     this._isPlaying = false;
-    this._stopPositionTracking();
     if (wasPlaying && !this._endedSent) {
       this._endedSent = true;
       if (this._onEndedCallback) {
@@ -186,28 +210,6 @@ class AudioOutputManager {
       // falls back to structured clone (full copy of large audio buffers).
       worker.send({ id, type, ...data }, undefined, transferList ? { transferList } : undefined);
     });
-  }
-
-  _startPositionTracking() {
-    this._stopPositionTracking();
-    this._positionInterval = setInterval(async () => {
-      if (!this._isPlaying) return;
-      try {
-        // B3: getPosition is a quick status command, use 2s timeout.
-        const result = await this._sendCommand('getPosition', {}, null, 2000);
-        if (result.position !== undefined) {
-          this._lastPosition = result.position;
-          this._duration = result.duration || 0;
-        }
-      } catch (_) {}
-    }, 200);
-  }
-
-  _stopPositionTracking() {
-    if (this._positionInterval) {
-      clearInterval(this._positionInterval);
-      this._positionInterval = null;
-    }
   }
 
   async isAvailable() {
@@ -263,7 +265,8 @@ class AudioOutputManager {
     if (result.success) {
       this._isPlaying = true;
       this._playbackStartTime = performance.now();
-      this._startPositionTracking();
+      // Playback end is driven by the worker's 'ended' IPC message (Speaker
+      // finish event + its own interval fallback); no parent-side polling.
     }
 
     return result;
@@ -272,7 +275,6 @@ class AudioOutputManager {
   async stop() {
     if (this._isPlaying) {
       this._isPlaying = false;
-      this._stopPositionTracking();
       try {
         await this._sendCommand('stop');
       } catch (_) {}
@@ -301,13 +303,15 @@ class AudioOutputManager {
 
   destroy() {
     this._isPlaying = false;
-    this._stopPositionTracking();
+    this._onEndedCallback = null;
     if (this._worker) {
+      try { this._worker.removeAllListeners(); } catch (_) {}
       try { this._worker.kill(); } catch (_) {}
       this._worker = null;
     }
     this._workerReady = false;
     this._workerAvailable = false;
+    this._idleExitExpected = false;
     this._rejectAllPending(new Error('AudioOutputManager destroyed'));
   }
 }
@@ -328,22 +332,17 @@ function _getDefaultInstance() {
   return _defaultInstance;
 }
 
-function _destroyDefaultInstance() {
-  if (_defaultInstance) {
-    _defaultInstance.destroy();
-    _defaultInstance = null;
-  }
-}
-
 AudioOutputManager.isAvailable = async function () {
   const now = Date.now();
   if (_cachedIsAvailable !== null && now - _cachedIsAvailableTime < CACHE_TTL) {
     return _cachedIsAvailable;
   }
+  // Keep the default instance around for reuse: the worker process forks once
+  // and exits itself after 30s idle, so repeated device polls no longer pay a
+  // fork per query. The lightweight manager object staying resident is fine.
   const result = await _getDefaultInstance().isAvailable();
   _cachedIsAvailable = result;
   _cachedIsAvailableTime = now;
-  _destroyDefaultInstance();
   return result;
 };
 
@@ -355,7 +354,6 @@ AudioOutputManager.getDevices = async function () {
   const result = await _getDefaultInstance().getDevices();
   _cachedDevices = result;
   _cachedDevicesTime = now;
-  _destroyDefaultInstance();
   return result;
 };
 
