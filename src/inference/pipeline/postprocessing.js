@@ -197,6 +197,40 @@ function validateVocoderOutput(waveform, chunkIndex) {
 }
 
 /**
+ * 从 session.run() 结果中解析 vocoder 波形张量。
+ *
+ * 不能硬编码 results['waveform']：vendor EP（WinML/TRT-RTX 桥）在动态形状
+ * 超出引擎 profile 时可能 Run() 不报错但丢失输出，直接下标访问会让下游
+ * outputToFloat32 抛出无法定位的 "Cannot read properties of undefined
+ * (reading 'type')"。WinMLSession.run 已对该情况抛出可识别的引擎级错误，
+ * 这里再为普通 onnxruntime-node 会话提供名称自适应 + 明确报错兜底。
+ *
+ * 解析顺序：规范名 'waveform' → 会话声明的首个输出名 → 结果中任意张量值。
+ *
+ * @param {Object<string,{type:string,data:ArrayLike}>|null|undefined} results
+ * @param {{outputNames?:string[]}|null|undefined} session
+ * @returns {{type:string,data:ArrayLike}}
+ * @throws {Error} 当 EP 未返回任何可用输出时（错误信息含实际 key 列表）
+ */
+function pickVocoderWaveform(results, session) {
+    if (results) {
+        if (results.waveform && results.waveform.data) return results.waveform;
+        const declaredName = session && Array.isArray(session.outputNames) ? session.outputNames[0] : null;
+        if (declaredName && results[declaredName] && results[declaredName].data) {
+            return results[declaredName];
+        }
+        for (const k of Object.keys(results)) {
+            if (results[k] && results[k].data) return results[k];
+        }
+    }
+    const declared = session && Array.isArray(session.outputNames) && session.outputNames.length
+        ? session.outputNames.join(',')
+        : 'n/a';
+    const gotKeys = results ? (Object.keys(results).join(',') || '(empty result)') : '(no result object)';
+    throw new Error(`Vocoder returned no usable waveform output (declared outputs: ${declared}; actual keys: ${gotKeys}). The execution provider dropped the output tensor.`);
+}
+
+/**
  * 判断错误是否为 GPU 显存耗尽相关（OOM / device removed）。
  * 用于在 catch 中区分可重试的显存错误与其他致命错误。
  * @param {Error} err
@@ -1267,9 +1301,18 @@ class Postprocessing {
                 throw runErr;
             }
             await yieldToEventLoop(); // Prevent UI freeze during DML inference
-            const waveform = outputToFloat32(results['waveform']);
+            let outTensor;
+            try {
+                outTensor = pickVocoderWaveform(results, sessions.vocoder);
+            } catch (pickErr) {
+                // EP 丢失输出时也要释放本 chunk 输入张量，避免泄漏
+                disposeTensor(melTensor);
+                if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
+                throw pickErr;
+            }
+            const waveform = outputToFloat32(outTensor);
             // 释放单 chunk 的输入和输出张量
-            disposeTensor(results['waveform']);
+            disposeTensor(outTensor);
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
             // 诊断：检查 vocoder 输出
@@ -1446,10 +1489,18 @@ class Postprocessing {
             }
             await yieldToEventLoop(); // Prevent UI freeze between vocoder chunks
 
-            const waveform = outputToFloat32(results['waveform']);
+            let outTensor;
+            try {
+                outTensor = pickVocoderWaveform(results, sessions.vocoder);
+            } catch (pickErr) {
+                // EP 丢失输出时也要释放本 chunk 输入张量，避免跨 chunk 泄漏
+                disposeTensor(melTensor);
+                if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
+                throw pickErr;
+            }
+            const waveform = outputToFloat32(outTensor);
             // 立即释放 ONNX 输出张量与输入张量：解除 JS 引用，让 V8 GC 回收 native 资源。
             // DML 后端 GPU 张量依赖 finalizer 异步释放，多个 chunk 累积会导致后续 chunk OOM。
-            const outTensor = results['waveform'];
             disposeTensor(outTensor);
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);

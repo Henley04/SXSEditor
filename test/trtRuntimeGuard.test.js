@@ -51,11 +51,21 @@ describe('TRT-RTX 运行期故障守卫', () => {
             expect(isTrtEngineFailure(msg)).to.equal(true);
         });
 
+        it('识别 Run 成功但输出被丢弃（missing-output，真实现场崩溃根因）', () => {
+            const msg = 'NvTensorRTRTXExecutionProvider returned incomplete outputs after Run ' +
+                '(missing=[waveform] undecodable=[none] got=[none]); model=vocoder_dml.onnx — ' +
+                'vendor EP dropped the output tensor; this is an NvTensorRTRTX missing-output engine-level failure';
+            expect(isTrtEngineFailure(msg)).to.equal(true);
+            expect(isTrtEngineFailure(new Error(msg))).to.equal(true);
+        });
+
         it('不吞掉其他错误（显存 OOM / DML device removed / 普通异常）', () => {
             expect(isTrtEngineFailure('Vocoder OOM on single-chunk inference: out of memory')).to.equal(false);
             expect(isTrtEngineFailure('DmlCommandRecorder Exception(1) 887a0006')).to.equal(false);
             expect(isTrtEngineFailure(new Error('boom'))).to.equal(false);
             expect(isTrtEngineFailure()).to.equal(false);
+            // 非 TRT EP 的输出缺失不算 TRT 引擎级失败
+            expect(isTrtEngineFailure('OpenVINOExecutionProvider returned incomplete outputs after Run')).to.equal(false);
         });
     });
 
@@ -146,6 +156,45 @@ describe('TRT-RTX 运行期故障守卫', () => {
             for (let i = 0; i < out.length; i += 1024) {
                 expect(Number.isFinite(out[i])).to.equal(true);
             }
+        });
+    });
+
+    describe('runVocoderChunked 输出解析（vendor EP 丢输出回归）', () => {
+        it('EP 返回空结果时抛出可读错误，而不是 undefined.type 崩溃', async () => {
+            const pp = new Postprocessing();
+            const sessions = {
+                vocoder: {
+                    outputNames: ['waveform'],
+                    async run() { return {}; },
+                },
+            };
+            const frames = 450;
+            const mel = new Float32Array(frames * MEL_DIM).fill(0.2);
+            let threw = null;
+            try {
+                await pp.runVocoderChunked(sessions, mel, frames, false, false, 'default', null, false);
+            } catch (e) { threw = e; }
+            expect(threw).to.be.instanceOf(Error);
+            expect(threw.message).to.include('waveform');
+            expect(threw.message).to.match(/actual keys/i);
+        });
+
+        it('输出名不是 waveform 时按会话声明的 outputNames 自适应解析', async () => {
+            const pp = new Postprocessing();
+            const sessions = {
+                vocoder: {
+                    outputNames: ['audio'],
+                    async run(inputs) {
+                        const vocSeqLen = inputs.mel.dims[1];
+                        const data = new Float32Array(vocSeqLen * HOP_SIZE).fill(0.4);
+                        return { audio: { type: 'float32', data } };
+                    },
+                },
+            };
+            const frames = 450;
+            const mel = new Float32Array(frames * MEL_DIM).fill(0.2);
+            const out = await pp.runVocoderChunked(sessions, mel, frames, false, false, 'default', null, false);
+            expect(out.length).to.equal(frames * HOP_SIZE);
         });
     });
 

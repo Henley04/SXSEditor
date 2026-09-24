@@ -226,6 +226,54 @@ describe('winml ortBridge', () => {
             session.release();
             expect(addonCalls.released).to.have.lengthOf(1);
         });
+
+        it('throws a named engine error when the native run drops every declared output', async () => {
+            // Reproduces the field bug: Run() returns OK but the graph output is
+            // missing (null OrtValue / unqueryable on a TRT dynamic-shape miss),
+            // previously surfacing far away as
+            // "Cannot read properties of undefined (reading 'type')".
+            const originalRun = fakeAddon.run;
+            fakeAddon.run = () => ({});
+            try {
+                const session = await ortBridge.createSessionWithEps(
+                    'C:/fake/vocoder_dml.onnx', [0], 'NvTensorRTRTXExecutionProvider');
+                let err = null;
+                try {
+                    await session.run({
+                        xt_input: { type: 'float16', data: new Uint16Array(3 * 128), dims: [1, 3, 128] },
+                    });
+                } catch (e) { err = e; }
+                expect(err).to.be.instanceOf(Error);
+                expect(err.message).to.include('NvTensorRTRTXExecutionProvider');
+                expect(err.message).to.include('returned incomplete outputs');
+                expect(err.message).to.include('flow_pred');
+                session.release();
+            } finally {
+                fakeAddon.run = originalRun;
+            }
+        });
+
+        it('throws when the native output uses an unsupported element type', async () => {
+            const originalRun = fakeAddon.run;
+            fakeAddon.run = () => ({
+                flow_pred: { type: 'complex128', data: new ArrayBuffer(64), dims: [1, 2] },
+            });
+            try {
+                const session = await ortBridge.createSessionWithEps('C:/fake/model.onnx', [0]);
+                let err = null;
+                try {
+                    await session.run({
+                        xt_input: { type: 'float16', data: new Uint16Array(3 * 128), dims: [1, 3, 128] },
+                    });
+                } catch (e) { err = e; }
+                expect(err).to.be.instanceOf(Error);
+                expect(err.message).to.include('undecodable');
+                expect(err.message).to.include('complex128');
+                session.release();
+            } finally {
+                fakeAddon.run = originalRun;
+            }
+        });
     });
 });
 

@@ -381,9 +381,41 @@ class WinMLSession {
         try {
             const out = this._addon.run(this._id, desc);
             const res = {};
+            // Outputs the native side could not describe (unsupported element
+            // type). Kept separately so missing-output diagnostics can name them.
+            const undecodable = [];
             for (const [k, v] of Object.entries(out)) {
                 const tensor = _tensorFromDescriptor(v);
-                if (tensor) res[k] = tensor;
+                if (tensor) {
+                    res[k] = tensor;
+                } else {
+                    undecodable.push(`${k}(type=${v && v.type})`);
+                }
+            }
+            // Verify every graph-declared output actually came back. The native
+            // bridge silently skips an output when Run() returns OK but the
+            // OrtValue is null or its type/shape cannot be queried; vendor EPs
+            // (observed with NvTensorRTRTX on dynamic input lengths outside the
+            // engine profile) can produce exactly that. Without this gate the
+            // pipeline later reads results['waveform'] === undefined and crashes
+            // far away with "Cannot read properties of undefined (reading 'type')",
+            // which neither names the cause nor triggers the DML fallback.
+            const missing = this.outputNames.filter((n) => !res[n]);
+            if (missing.length > 0 || undecodable.length > 0) {
+                const detail = `missing=[${missing.join(',') || 'none'}] ` +
+                    `undecodable=[${undecodable.join(',') || 'none'}] ` +
+                    `got=[${Object.keys(res).join(',') || 'none'}]`;
+                const epLabel = String(this._epName || 'unknown');
+                // Keep the exact "NvTensorRTRTX" + "returned incomplete outputs"
+                // tokens: isTrtEngineFailure() matches them to trigger the
+                // DML/CPU rebuild fallback for TRT sessions.
+                const trtNote = epLabel.includes('NvTensorRTRTX')
+                    ? 'this is an NvTensorRTRTX missing-output engine-level failure'
+                    : 'vendor EP dropped the output tensor';
+                throw new Error(
+                    `${epLabel} returned incomplete outputs after Run (${detail}); ` +
+                    `model=${path.basename(this._modelPath)} — ${trtNote}`
+                );
             }
             if (trace) {
                 console.log(`[${this._logScope}][run:${this._traceId}.${run}][out] ms=${(performance.now() - started).toFixed(1)} ${Object.entries(res).map(([n, x]) => _tensorSummary(n, x)).join(' | ')}`);
@@ -507,8 +539,12 @@ function validateTRTOutput(outputs, expectedNames = []) {
  *   - `NvTensorRTRTX EP execution context enqueue failed.`
  *     → the execution context refused the launch (often because it was handed
  *       non-finite input or a shape it was never built for).
+ *   - `NvTensorRTRTXExecutionProvider returned incomplete outputs after Run`
+ *     → Run() reported success but the declared graph output is missing/null
+ *       (observed on real dynamic input lengths outside the compiled profile,
+ *       while a shorter dummy validation passed). WinMLSession.run raises this.
  *
- * Both are deterministic per engine: retrying the same session always fails
+ * All are deterministic per engine: retrying the same session always fails
  * again, so callers must rebuild the model on another EP (DML/CPU) instead of
  * retrying. Deliberately narrow — VRAM OOM and unrelated ORT errors must keep
  * their own recovery paths.
@@ -521,7 +557,8 @@ function isTrtEngineFailure(message) {
     if (!m.includes('NvTensorRTRTX')) return false;
     return m.includes('setInputShape') ||
         m.includes('set_input_shape') ||
-        m.includes('execution context enqueue failed');
+        m.includes('execution context enqueue failed') ||
+        m.includes('returned incomplete outputs');
 }
 
 /**
