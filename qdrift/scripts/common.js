@@ -12,6 +12,26 @@ const ort = require('onnxruntime-node');
 
 const ROOT = path.resolve(__dirname, '..', '..');
 
+// Node.js v24+ 原生 Float16Array 会让 onnxruntime-common 把 float16 张量数据
+// 解释成 Float16Array，native binding 读到 0 长度（"not enough space"）。
+// 与 src/inference/pipeline/float16Patch.js 同一修复：强制映射回 Uint16Array。
+// 纯 Node 脚本（不经 webpack），直接用原生 require.cache。
+(function patchFloat16Mapping() {
+    if (typeof Float16Array === 'undefined') return;
+    try {
+        try { new ort.Tensor('float16', new Uint16Array(1), [1]); } catch (_) {}
+        try { require('onnxruntime-common'); } catch (_) {}
+        for (const [key, mod] of Object.entries(require.cache || {})) {
+            if (key.includes('onnxruntime-common') && key.includes('tensor-impl-type-mapping')) {
+                if (mod.exports && mod.exports.NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP) {
+                    mod.exports.NUMERIC_TENSOR_TYPE_TO_TYPEDARRAY_MAP.set('float16', Uint16Array);
+                }
+                break;
+            }
+        }
+    } catch (_) { /* 探测失败则保持默认行为 */ }
+})();
+
 // ---- 采样器合约（★ 与 src/inference/pipeline/constants.js 保持一致）----
 const N_STEPS = 32;
 const H = 1.0 / N_STEPS;
@@ -100,8 +120,13 @@ function asFloat32(data) {
  * 输入精度从会话元数据自动探测（fp16/ 下的图并非全是 fp16 I/O）。
  */
 function wrapDiffSession(sess, isFp16, tag) {
+    // 输出名自适应：FP32/FP16 图输出 flow_pred；INT8 QDQ 图导出时被 ORT 重命名
+    // 为 flow_pred.to_f32（插入 Q/DQ 后的 Decimalize 输出）。
+    const outName = (sess.outputNames || []).includes('flow_pred')
+        ? 'flow_pred'
+        : (sess.outputNames || [])[0];
     return {
-        sess, isFp16, tag,
+        sess, isFp16, tag, outName,
         async call(xt, t, cond, mask, seqLen) {
             const feeds = {};
             if (isFp16) {
@@ -116,7 +141,7 @@ function wrapDiffSession(sess, isFp16, tag) {
                 feeds.xt_mask = new ort.Tensor('float32', mask, [1, seqLen]);
             }
             const res = await sess.run(feeds);
-            return asFloat32(res.flow_pred.data);
+            return asFloat32(res[outName].data);
         },
     };
 }
@@ -163,13 +188,17 @@ function detectFloat16(sess, inputName) {
 async function makeVocoderSession(modelPath) {
     const sess = await ort.InferenceSession.create(modelPath, DML_OPTS);
     const isFp16 = detectFloat16(sess, 'mel');
-    console.log(`  vocoder ${path.basename(modelPath)}: mel 输入 = ${isFp16 ? 'float16' : 'float32'}`);
+    // 输出名自适应：FP32 声码器是 waveform；fp16/ 变体导出后被重命名为 output。
+    const outName = (sess.outputNames || []).includes('waveform')
+        ? 'waveform'
+        : (sess.outputNames || [])[0];
+    console.log(`  vocoder ${path.basename(modelPath)}: mel 输入 = ${isFp16 ? 'float16' : 'float32'}, 输出 = ${outName}`);
     return async function (mel, frames) {
         const feed = isFp16
             ? { mel: new ort.Tensor('float16', toF16(mel), [1, frames, MEL_DIM]) }
             : { mel: new ort.Tensor('float32', mel, [1, frames, MEL_DIM]) };
         const res = await sess.run(feed);
-        return asFloat32(res.waveform.data);
+        return asFloat32(res[outName].data);
     };
 }
 
@@ -239,17 +268,45 @@ async function runSampler(diff, prompt, cond, pl, tl, seed, correction, cfgAtSte
     return xt;
 }
 
-function loadItem(item) {
-    const dir = path.join(ROOT, 'qdrift', 'conds_bin');
-    const meta = JSON.parse(fs.readFileSync(path.join(dir, `${item}.json`), 'utf-8'));
-    const prompt = new Float32Array(fs.readFileSync(path.join(dir, `${item}_prompt.bin`)).buffer);
-    const cond = new Float32Array(fs.readFileSync(path.join(dir, `${item}_cond.bin`)).buffer);
-    return { ...meta, prompt, cond };
+/**
+ * 读取一条校准样本。dir 可为绝对路径或相对仓库根的目录
+ * （默认 qdrift/conds_bin；工程数据在 qdrift/conds_proj）。
+ */
+function loadItem(item, dir) {
+    const d = dir ? (path.isAbsolute(dir) ? dir : path.join(ROOT, dir))
+        : path.join(ROOT, 'qdrift', 'conds_bin');
+    const meta = JSON.parse(fs.readFileSync(path.join(d, `${item}.json`), 'utf-8'));
+    const prompt = new Float32Array(fs.readFileSync(path.join(d, `${item}_prompt.bin`)).buffer);
+    const cond = new Float32Array(fs.readFileSync(path.join(d, `${item}_cond.bin`)).buffer);
+    return { ...meta, prompt, cond, _dir: d };
+}
+
+/**
+ * 从多个数据目录读取 manifest 并合并（去重，后加载目录优先）。
+ * 每个条目附加 _dir，供 loadItem 定位 bin 文件。
+ * @param {string[]} dirs 相对仓库根或绝对的目录列表
+ * @param {string[]} [tags] item 名前缀过滤（'-' 之前的部分，如 nat / prj）
+ * @returns {Array<object>} manifest 条目数组
+ */
+function loadManifests(dirs, tags = null) {
+    const out = [];
+    const seen = new Set();
+    for (const rawDir of dirs) {
+        const dir = path.isAbsolute(rawDir) ? rawDir : path.join(ROOT, rawDir);
+        const manifest = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf-8'));
+        for (const m of manifest) {
+            if (tags && tags.length && !tags.some(t => m.item === t || m.item.startsWith(t + '_') || m.item.startsWith(t))) continue;
+            if (seen.has(m.item)) continue;
+            seen.add(m.item);
+            out.push({ ...m, _dir: dir });
+        }
+    }
+    return out;
 }
 
 module.exports = {
     ROOT, N_STEPS, H, CFG, RESCALE_CFG, MEL_DIM, COND_DIM, DML_OPTS,
     mulberry32, randn, toF16, f16ToF32, asFloat32, detectFloat16,
     wrapDiffSession, makeDiffSession, makeDiffSessionEps,
-    makeVocoderSession, cfgVelocity, runSampler, loadItem,
+    makeVocoderSession, cfgVelocity, runSampler, loadItem, loadManifests,
 };

@@ -169,7 +169,7 @@ export default {
       // Q-Drift 漂移校正
       enableQDrift: 'Q-Drift 漂移校正',
       qdriftLockNote: '已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，CFG 调度与动态阈值已关闭。',
-      enableQDriftHint: '对 FP16 扩散模型的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。开启后将强制锁定 Euler 求解器 + 32 步 + CFG 3.0 + rescale 0.7，并关闭 CFG 调度 / 动态阈值 / SDEdit 修复。仅对 FP16 模型生效；FP16 下默认开启，切换模型精度时会自动跟随。',
+      enableQDriftHint: '对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。开启后将强制锁定 Euler 求解器 + 32 步 + CFG 3.0 + rescale 0.7，并关闭 CFG 调度 / 动态阈值 / SDEdit 修复。FP16 下默认开启，INT8 下需手动开启，切换模型精度时会自动跟随。',
       // Task 2: 诊断模式
       diagnosticMode: '诊断模式',
       diagnosticModeHint: '在控制台输出详细的 [DiffusionDiag] / [VocoderDiag] 统计。NaN/Inf 致命错误无论此设置如何都会上报。',
@@ -797,7 +797,7 @@ export default {
     enableSDEditRepair: 'SDEdit 局部修复',
     enableSDEditRepairHint: '扩散后检测 mel 局部异常（NaN / 能量突变）并以浅噪声注入局部重采样。默认关闭，仅在排查伪影时启用。',
     enableQDrift: 'Q-Drift 漂移校正',
-    enableQDriftHint: '对 FP16 扩散模型的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。开启后将强制锁定 Euler 求解器 + 32 步 + CFG 3.0 + rescale 0.7，并关闭 CFG 调度 / 动态阈值 / SDEdit 修复。仅对 FP16 模型生效；FP16 下默认开启，切换模型精度时会自动跟随。',
+    enableQDriftHint: '对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。开启后将强制锁定 Euler 求解器 + 32 步 + CFG 3.0 + rescale 0.7，并关闭 CFG 调度 / 动态阈值 / SDEdit 修复。FP16 下默认开启，INT8 下需手动开启，切换模型精度时会自动跟随。',
     diagnosticMode: '诊断模式',
     diagnosticModeHint: '在控制台输出详细的 [DiffusionDiag] / [VocoderDiag] 统计。NaN/Inf 致命错误无论此设置如何都会上报。',
     theme: {

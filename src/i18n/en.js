@@ -169,7 +169,7 @@ export default {
       // Q-Drift drift correction
       enableQDrift: 'Q-Drift Drift Correction',
       qdriftLockNote: 'Locked to Euler @ 32 steps with CFG 3.0 / rescale 0.7. CFG scheduling and dynamic thresholding are disabled.',
-      enableQDriftHint: 'Apply per-channel drift correction (Q-Drift, arXiv:2603.18095) to the 32-step sampler of the FP16 diffusion model, compensating the multi-step accumulation of quantization error. Enabling it locks the sampler to Euler @ 32 steps with CFG 3.0 / rescale 0.7, and disables CFG scheduling, dynamic thresholding and SDEdit repair. FP16 model only; enabled by default on FP16 and follows the model precision switch.',
+      enableQDriftHint: 'Apply per-channel drift correction (Q-Drift, arXiv:2603.18095) to the 32-step sampler of a quantized diffusion model (FP16 / INT8), compensating the multi-step accumulation of quantization error. Enabling it locks the sampler to Euler @ 32 steps with CFG 3.0 / rescale 0.7, and disables CFG scheduling, dynamic thresholding and SDEdit repair. Enabled by default on FP16 and opt-in on INT8; follows the model precision switch.',
       // Task 2: Diagnostic mode
       diagnosticMode: 'Diagnostic Mode',
       diagnosticModeHint: 'Print detailed [DiffusionDiag] / [VocoderDiag] statistics to console. NaN/Inf fatal errors are always reported regardless of this setting.',
@@ -797,7 +797,7 @@ export default {
     enableSDEditRepair: 'SDEdit Local Repair',
     enableSDEditRepairHint: 'Detect mel anomalies (NaN / energy spikes) after diffusion and locally re-sample with shallow noise injection. Disabled by default; enable only for diagnosing artifacts.',
     enableQDrift: 'Q-Drift Drift Correction',
-    enableQDriftHint: 'Apply per-channel drift correction (Q-Drift, arXiv:2603.18095) to the 32-step sampler of the FP16 diffusion model, compensating the multi-step accumulation of quantization error. Enabling it locks the sampler to Euler @ 32 steps with CFG 3.0 / rescale 0.7, and disables CFG scheduling, dynamic thresholding and SDEdit repair. FP16 model only; enabled by default on FP16 and follows the model precision switch.',
+    enableQDriftHint: 'Apply per-channel drift correction (Q-Drift, arXiv:2603.18095) to the 32-step sampler of a quantized diffusion model (FP16 / INT8), compensating the multi-step accumulation of quantization error. Enabling it locks the sampler to Euler @ 32 steps with CFG 3.0 / rescale 0.7, and disables CFG scheduling, dynamic thresholding and SDEdit repair. Enabled by default on FP16 and opt-in on INT8; follows the model precision switch.',
     diagnosticMode: 'Diagnostic Mode',
     diagnosticModeHint: 'Print detailed [DiffusionDiag] / [VocoderDiag] statistics to console. NaN/Inf fatal errors are always reported regardless of this setting.',
     theme: {

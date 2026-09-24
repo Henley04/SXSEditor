@@ -2450,7 +2450,8 @@ class OnnxSVSPipeline {
             const subXt = { data: chunkNoise, dims: [1, segFrames, MEL_DIM] };
 
             this._diffusion.setDiffStepEp(this.sessionEPs.diffStep || null);
-        this._diffusion.setQDriftEnabled(this._currentQDriftEnabled === true);
+            this._diffusion.setDiffStepPrecision(this._modelPrecision || 'fp32');
+            this._diffusion.setQDriftEnabled(this._currentQDriftEnabled === true);
             await this._diffusion.runDiffusionLoop(
                 this.sessions, subXt, segFrames, ptMelData, ptFrameCount, segCond,
                 totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16,
@@ -2486,6 +2487,7 @@ class OnnxSVSPipeline {
         throwIfCancelled(abortSignal);
         // Q-Drift 的校正因子是按 EP 实测的：把当前 diffStep 的 EP 交给采样器做合约校验
         this._diffusion.setDiffStepEp(this.sessionEPs.diffStep || null);
+        this._diffusion.setDiffStepPrecision(this._modelPrecision || 'fp32');
         this._diffusion.setQDriftEnabled(this._currentQDriftEnabled === true);
         const samplerName = this._currentSamplerName || DEFAULT_SOLVER;
         // Task 15: pass per-frame F0 curve to chunked diffusion for F0-aware

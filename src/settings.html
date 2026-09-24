@@ -271,7 +271,7 @@
                         <label class="device-mode-radio">
                             <input type="checkbox" id="previewEnableQDrift">
                             <span class="radio-label" data-i18n="settings.enableQDrift">Q-Drift 漂移校正</span>
-                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对 FP16 扩散模型的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。仅对 FP16 模型生效；FP16 下默认开启，切换模型精度时会自动跟随。</span>
+                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。FP16 下默认开启，INT8 下需手动开启，切换模型精度时会自动跟随。</span>
                         </label>
                         <p class="hint hidden" id="previewQDriftLockNote" data-i18n="settings.qdriftLockNote">已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit 局部修复。</p>
                     </div>
@@ -353,7 +353,7 @@
                         <label class="device-mode-radio">
                             <input type="checkbox" id="exportEnableQDrift">
                             <span class="radio-label" data-i18n="settings.enableQDrift">Q-Drift 漂移校正</span>
-                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对 FP16 扩散模型的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。仅对 FP16 模型生效；FP16 下默认开启，切换模型精度时会自动跟随。</span>
+                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。FP16 下默认开启，INT8 下需手动开启，切换模型精度时会自动跟随。</span>
                         </label>
                         <p class="hint hidden" id="exportQDriftLockNote" data-i18n="settings.qdriftLockNote">已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit 局部修复。</p>
                     </div>

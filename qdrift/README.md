@@ -1,4 +1,8 @@
-# Q-Drift —— SoulX-Singer FP16 DiT 推理期漂移校正
+# Q-Drift —— SoulX-Singer 量化 DiT（FP16 / INT8）推理期漂移校正
+
+> 2026-09-24 起标定覆盖 **FP16 与 INT8 两种精度**，校准样本除 ModelScope 的 8 条
+> nat_*（中英）外，新增 30 条来自真实 `.sxsproj` 工程的条件（含《心做》xinzuo 全曲
+> 分段、洛天依 V2/V3/V4 三种歌手），每样本 3 个噪声种子，共 **38 × 3 = 114 条配对轨迹**。
 
 方法来源：*Q-Drift: Quantization-Aware Drift Correction for Diffusion Model Sampling*
 （Ryu, Salzmann, Javed, arXiv:2603.18095）。
@@ -39,33 +43,54 @@ DML 上的 FP16 量化误差是 CPU 的 **6.5–8 倍**。V 是方差统计量�
 ```
 qdrift/
   conds_long/    从 ModelScope 包下载的长序列条件张量（nat_000..007，8.82–13.54 s）
-  conds_bin/     导出为裸二进制 + manifest.json（Node 直接读）
-  calib/         qdrift_V.bin / qdrift_c.bin / qdrift_meta.json / qdrift_state.json（断点续跑）
-  eval/          mel/*.bin、wav/*.wav、report.json
+  conds_bin/     导出为裸二进制 + manifest.json（nat_*，中英文，Node 直接读，gitignored）
+  conds_proj/    真实 .sxsproj 工程导出的条件（prj_*，30 条，5.14–19.58 s，gitignored）
+  calib/         FP16 结果：qdrift_V.bin / _c.bin / _meta.json（state 不入库）
+  calib_int8/    INT8 结果：同名产物（state 不入库）
+  eval/          mel/*.bin、wav/*.wav、report_<precision>.json
   scripts/
     export_conds.py      .pt → 裸二进制
     probe_ep.py          CPU vs DML 的 Δv 量级与速度探测（Python，仅用于对比研究）
     common.js            共用：ONNX 后端 / cfgVelocity / runSampler（与 diffusion.js 数学等价）
-    calibrate_dml.js     ★ 长序列校准主程序（增量保存，可断点续跑）
-    gen_asset.js         校准产物 → src/inference/pipeline/qdrift/qdriftCorrection.js
-    eval_dml.js          ★ A/B/C/D 三方对比 + wav 导出 + 感知敏感指标
+    calibrate_dml.js     ★ 校准主程序（--precision fp16|int8，增量保存，可断点续跑）
+    gen_asset.js         校准产物 → qdriftCorrection.js / qdriftCorrectionInt8.js
+    eval_dml.js          ★ A/B/C/D 四方对比 + wav 导出 + cosine/SNR/包络指标
 ```
 
 ## 复现步骤
 
 ```bash
-# 1) 导出条件张量（只需一次）
+# 1a) ModelScope 条件张量（只需一次）
 py qdrift/scripts/export_conds.py
 
-# 2) 校准（8 条 × 2 seed = 16 条配对轨迹，DML 上约 5 分钟）
-node qdrift/scripts/calibrate_dml.js --items 8 --seeds 1234,7777
+# 1b) 从真实工程导出条件（--file 可重复；用 Electron CLI 跑完整 FP32 管线）
+npx electron . --cli qdrift-conds `
+  --file "D:\Document\waveform\cliper\已导出\xinzuo.sxsproj" `
+  --file D:/path/to/other.sxsproj --out qdrift/conds_proj
 
-# 3) 生成应用资产
-node qdrift/scripts/gen_asset.js
+# 2) 校准（38 条 × 3 seed = 114 轨迹；FP16 约 45 min，INT8 约 40 min，DML）
+node --expose-gc qdrift/scripts/calibrate_dml.js --precision fp16 `
+  --data-dirs qdrift/conds_bin,qdrift/conds_proj --tags nat,prj `
+  --seeds 1234,7777,20260924
+node --expose-gc qdrift/scripts/calibrate_dml.js --precision int8 `
+  --data-dirs qdrift/conds_bin,qdrift/conds_proj --tags nat,prj `
+  --seeds 1234,7777,20260924
 
-# 4) 三方对比 + wav
-node qdrift/scripts/eval_dml.js --items nat_000,nat_001,nat_002,nat_003 --seed 1234
+# 3) 生成应用资产（分别写入 qdriftCorrection.js / qdriftCorrectionInt8.js）
+node qdrift/scripts/gen_asset.js --precision fp16
+node qdrift/scripts/gen_asset.js --precision int8
+
+# 4) 四方对比 + wav（跨数据目录选 item；INT8 加 --precision int8）
+node qdrift/scripts/eval_dml.js --precision fp16 `
+  --data-dirs qdrift/conds_bin,qdrift/conds_proj `
+  --items nat_000,prj_xinzuo_f0_s00,prj_xinzuo_f0_s05,prj_lagtrain_f0_s01 --seed 1234
 ```
+
+**为什么校准比整首歌导出慢得多**：一条轨迹的 32 步里，每步都要跑 FP32 参考模型与
+量化模型各一次 CFG（cond + uncond，共 **4 次** DiT 推理；导出只需量化模型 2 次），
+xinzuo 的长参考音频还要把 1500 帧 prompt 拼进序列（单条最长 2471 帧）。全量是
+114 条独立轨迹，因此 FP16 约 45 min、INT8 约 40 min。state 每条轨迹落盘，中断后
+重跑同一命令即可续跑。
 
 ## 校准合约（★ 改动任何一项都必须重新校准）
 
@@ -76,8 +101,9 @@ node qdrift/scripts/eval_dml.js --items nat_000,nat_001,nat_002,nat_003 --seed 1
 | CFG / rescale | 3.0 / **0.7** |
 | σ 网格 | σ_i = (i + 0.5)/32 |
 | 执行提供者 | DmlExecutionProvider（onnxruntime-node） |
-| 目标 / 量化 | `onnx_models/diff_step_dml.onnx` / `onnx_models/fp16/diff_step_dml.onnx` |
-| 校正因子形状 | `c` = (32, 128)，逐 step、逐 mel 通道 |
+| 目标 | `onnx_models/diff_step_dml.onnx`（FP32） |
+| 量化 / 结果 | FP16：`onnx_models/fp16/diff_step_dml.onnx` → `calib/`；INT8：`onnx_models/int8/diff_step_dml.onnx`（QDQ 图，float32 I/O，输出 `flow_pred.to_f32`）→ `calib_int8/` |
+| 校正因子形状 | `c` = (32, 128)，逐 step、逐 mel 通道；两种精度各自一张表（Δv 量级差 2~3 个数量级） |
 
 换步数或换求解器 → σ 网格不重合、`1/(2σ)` 配平作废；叠加 CFG 调度 / 动态阈值 /
 SDEdit 修复 → 速度场 `v` 的分布改变，`c` 失效。由于 `|c|` 只有 1e-5 量级，**这些失效在
@@ -87,27 +113,31 @@ SDEdit 修复 → 速度场 `v` 的分布改变，`c` 失效。由于 `|c|` 只�
 
 | 文件 | 作用 |
 |---|---|
-| `src/inference/pipeline/qdrift/index.js` | 合约常量、校正表加载、`resolveQDrift()` 强制锁定 |
-| `src/inference/pipeline/qdrift/qdriftCorrection.js` | 自动生成的 c（base64），勿手改 |
-| `src/inference/pipeline/samplers/euler.js` | 逐通道 `(1 + c_i)` 缩放 |
-| `src/inference/pipeline/diffusion.js` | 参数覆盖、日志、关闭 SDEdit |
-| `src/main/settings.js` / `settingsIpc.js` | `enableQDrift` 设置项 |
-| `src/inference/pipeline/qdrift/defaults.js` | 默认值策略（FP16 → 默认启用），主进程与渲染层共用 |
-| `src/settings.html` / `src/settings.js` | 设置页「采样校正」开关 |
+| `src/inference/pipeline/qdrift/index.js` | 合约常量、按精度加载校正表、`resolveQDrift()` 强制锁定 |
+| `src/inference/pipeline/qdrift/qdriftCorrection.js` | FP16 的 c（base64，自动生成，勿手改） |
+| `src/inference/pipeline/qdrift/qdriftCorrectionInt8.js` | INT8 的 c（可选资产；缺失时运行时自动降级关闭，不报错） |
+| `src/inference/pipeline/samplers/euler.js` | 逐通道 `(1 + c_i)` 缩放（c 已按当前精度选表） |
+| `src/inference/pipeline/diffusion.js` | 注入 `diffStepPrecision`、参数覆盖、日志、关闭 SDEdit |
+| `src/inference/pipeline/index.js` | 合成前把 `_modelPrecision` 传给 diffusion（fp32/fp16/int8/int8-npu） |
+| `src/main/settings.js` / `settingsIpc.js` | `enableQDrift` 设置项（按精度分别记忆意愿） |
+| `src/inference/pipeline/qdrift/defaults.js` | 默认值策略（FP16 默认开、INT8 opt-in），主进程与渲染层共用 |
+| `src/settings.html` / `src/settings.js` | 设置页「采样校正」开关（FP16/INT8 可勾，其余置灰） |
 | `src/renderer/exportDialog.js` + i18n | 导出对话框开关与中英文案 |
 
 ### 默认值与开关语义
 
-- **未显式设置时跟随模型精度**：`modelPrecision === 'fp16'` → 开；其余（fp32 / int8 /
-  int8-npu）→ 关。刻意不在 settings 初始化时把默认值落盘成固定布尔值，这样用户之后
-  切换模型精度时开关会跟着变，不会停在陈旧值上。
+- **未显式设置时跟随模型精度**：`modelPrecision === 'fp16'` → 开；`'int8'` → 关
+  （opt-in，INT8 校正幅度大，需用户显式打开）；其余（fp32 / int8-npu）→ 关。
+  两种支持精度的用户意愿分别记忆，刻意不在 settings 初始化时把默认值落盘成固定布尔值，
+  这样切换模型精度时开关会跟着变，不会停在陈旧值上。
 - 用户手动拨动过之后（`enableQDrift` 变成显式 boolean）就完全以用户意图为准。
 - 导出对话框里切精度会同步勾选状态；用户手动改过之后不再自动改。
-- 只有 **FP16 DiT + DML / NvTensorRtRtx** 才真正生效；FP32 或 CPU/WebNN/OpenVINO
-  下自动跳过，并在日志写明原因。
+- 只有 **FP16 / INT8 DiT + DML / NvTensorRtRtx** 才真正生效；FP32、int8-npu
+  （WebNN 另一套模型）或 CPU/OpenVINO 下自动跳过，并在日志写明原因
+  （`disabled` / `precision-unsupported` / `correction-unavailable` / `ep-not-measured`）。
 
 开关打开后：求解器 → Euler、步数 → 32、CFG → 3.0、rescale → 0.7，
-CFG 调度 / 动态阈值 / SDEdit 修复全部关闭，且仅对 FP16 DiT 生效。
+CFG 调度 / 动态阈值 / SDEdit 修复全部关闭。
 
 ---
 
@@ -230,7 +260,33 @@ node qdrift/scripts/diagnose_fp16.js --items nat_000 --seed 1234
 # 产物：qdrift/diag/<item>__*.wav（可直接试听对比）+ summary.json
 ```
 
-## 评测结果（seed 1234，4 条：nat_000/001/002/003，9.56–13.54 s）
+## 评测结果：2026-09-24 全量重标定（FP16，38 样本 × 3 seed = 114 轨迹）
+
+校准数据：nat_*（8，中英文，ModelScope）+ prj_*（30，真实工程：xinzuo《心做》、
+lagtrain、ZhangXF、monitoring_explict、example；洛天依 V2/V3/V4，5.14–19.58 s）。
+FP16 校正因子逐步均值（0/8/16/24/31）：
+c = **7.20e-5 / 1.29e-5 / 8.32e-6 / 9.08e-6 / 2.75e-5**（单步缩放 ≤ 0.008%）。
+
+A/B/C/D 评测（seed 1234，constant CFG 3.0，B 与 C 仅差校正因子）：
+A=FP32 全套；B=FP16 DiT + FP16 vocoder；C=B + Q-Drift；D=C 的 mel + FP32 vocoder。
+
+| 样本 | cosine B→C | SNR(dB) B→C | 帧cos min B→C | 全局残差 B→C |
+|---|---|---|---|---|
+| nat_000 (EN 13.5s) | 0.99999 | 47.11 → **47.92** | 0.99909 → **0.99952** | 4.41e-3 → **4.02e-3** |
+| xinzuo s00 (19.4s, 1500 帧 prompt) | 0.99999 | 46.14 → **46.15** | 0.99978 → **0.99979** | 4.93e-3 → 4.93e-3 |
+| xinzuo s05 (19.6s) | 0.99999 | 48.32 → **48.56** | 0.99974 → **0.99987** | 3.84e-3 → **3.73e-3** |
+| lagtrain f0 s01 (14.3s) | 0.99999 | 49.18 → **49.23** | 0.99995 → 0.99991 | 3.47e-3 → **3.46e-3** |
+
+聚合硬指标（阈值 cosine ≥ 0.90、SNR ≥ 0 dB）：**B 与 C 全部 PASS**
+（cosine min 0.99999；SNR mean B 47.69 / C 47.96 dB）。
+
+音频域 20 ms 包络相关：0.993–0.9999，B/C 基本持平（±5e-4）；RMS 比 C 普遍更贴近 1.0
+（xinzuo s05：0.9979 → 0.9993）。结论与旧标定一致：**FP16 是温和量化，Q-Drift 的
+收益在 mel 边缘分布上方向正确但幅度很小**，硬指标本来就远超阈值；最终以
+`qdrift/eval/wav/fp16__*__{A,B,C,D}.wav` 试听为准。INT8 的 |Δv| 末步达 0.46
+（FP16 仅 0.04），校正空间大 2 个数量级，是 Q-Drift 的主要目标场景（标定待续跑）。
+
+## 评测结果：2026-09-20 首次标定（FP16，seed 1234，4 条：nat_000/001/002/003，9.56–13.54 s）
 
 复现：`node qdrift/scripts/eval_dml.js --items nat_000,nat_001,nat_002,nat_003 --seed 1234`
 

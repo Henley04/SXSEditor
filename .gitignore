@@ -222,11 +222,19 @@ preview-server.err
 # rest is derived (see qdrift/README.md for the reproduction steps).
 qdrift/conds_long/
 qdrift/conds_bin/
+qdrift/conds_proj/
 qdrift/eval/mel/
 qdrift/eval/wav/
+qdrift/diag/
 qdrift/calib/qdrift_state.json
+qdrift/calib_int8/qdrift_state.json
+qdrift/calib_fp16_run.log
+qdrift/calib_int8_run.log
+qdrift/eval_fp16_run.log
 _qdrift_pkg/
 
 # ...but keep the calibration result despite the global *.bin rule above.
 !qdrift/calib/qdrift_V.bin
 !qdrift/calib/qdrift_c.bin
+!qdrift/calib_int8/qdrift_V.bin
+!qdrift/calib_int8/qdrift_c.bin

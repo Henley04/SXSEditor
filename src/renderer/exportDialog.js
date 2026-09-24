@@ -120,10 +120,13 @@ export async function openExportDialog() {
       enableLoudnormFinal: settings.enableLoudnormFinal !== false,
       enableAntiAliasing: settings.enableAntiAliasing === true,
       enableSDEditRepair: settings.enableSDEditRepair === true,
-      // Q-Drift 仅对 FP16 模型生效。_qdriftFp16Pref 记住"FP16 下的用户意愿"
-      // （显式设置过用设置值，否则默认开启）；非 FP16 精度下开关置灰且不生效。
-      _qdriftFp16Pref: resolveQDriftDefault({ ...settings, modelPrecision: 'fp16' }, 'exportEnableQDrift'),
-      exportEnableQDrift: (settings.modelPrecision === 'fp16')
+      // Q-Drift 对 FP16 / INT8 量化模型生效。_qdriftPref 按精度分别记住用户意愿
+      //（显式设置过用设置值，否则 FP16 默认开、INT8 默认关）；其他精度下置灰且不生效。
+      _qdriftPref: {
+        fp16: resolveQDriftDefault({ ...settings, modelPrecision: 'fp16' }, 'exportEnableQDrift'),
+        int8: resolveQDriftDefault({ ...settings, modelPrecision: 'int8' }, 'exportEnableQDrift'),
+      },
+      exportEnableQDrift: (settings.modelPrecision === 'fp16' || settings.modelPrecision === 'int8')
         && resolveQDriftDefault(settings, 'exportEnableQDrift'),
       outputPath: '',
     };
@@ -383,17 +386,20 @@ function buildParamsSection(form) {
     checked: form.exportEnableQDrift,
     onChange: (v) => {
       form.exportEnableQDrift = v;
-      // 复选框在非 FP16 下置灰，change 只可能发生在 FP16，记录的是 FP16 意愿
-      form._qdriftFp16Pref = v;
+      // 复选框只在 fp16/int8 下可点，记录的是当前精度的意愿
+      if (form._qdriftPref && (form.modelPrecision === 'fp16' || form.modelPrecision === 'int8')) {
+        form._qdriftPref[form.modelPrecision] = v;
+      }
       form._qdriftTouched = true;
       applyQDriftLock();
     },
   });
   form._qdriftField = qdriftField;
-  // 打开对话框时若不是 FP16，Q-Drift 直接置灰（运行时也会被静默跳过）
+  // 打开对话框时若精度不受支持（非 FP16/INT8），Q-Drift 直接置灰（运行时也会被静默跳过）
+  const qdriftSupported = form.modelPrecision === 'fp16' || form.modelPrecision === 'int8';
   const qdriftInput = qdriftField.querySelector('input[type="checkbox"]');
-  if (qdriftInput) qdriftInput.disabled = form.modelPrecision !== 'fp16';
-  qdriftField.classList.toggle('export-dialog-checkbox-disabled', form.modelPrecision !== 'fp16');
+  if (qdriftInput) qdriftInput.disabled = !qdriftSupported;
+  qdriftField.classList.toggle('export-dialog-checkbox-disabled', !qdriftSupported);
 
   const qdriftWrap = document.createElement('div');
   qdriftWrap.style.marginTop = '10px';
@@ -943,21 +949,22 @@ function buildRangeField(opts) {
 /**
  * Q-Drift 开关跟随模型精度：
  *  - 切到 FP16：恢复 FP16 下的用户意愿（未手动改过则默认勾上）
- *  - 切到非 FP16：取消勾选并把开关置灰（Q-Drift 只对 FP16 模型有意义，
- *    运行时也会以 not-fp16 静默跳过，放开勾选只会误导用户锁定采样参数）
- * 用户手动拨动记录在 form._qdriftFp16Pref 中，切走再切回不会丢意图。
+ *  - 切到 INT8：恢复 INT8 下的用户意愿（默认不勾，opt-in）
+ *  - 切到其他精度：取消勾选并把开关置灰（运行时会以 precision-unsupported 静默跳过，
+ *    放开勾选只会误导用户锁定采样参数）
+ * 用户手动拨动按精度记录在 form._qdriftPref 中，切走再切回不会丢意图。
  */
 function syncQDriftDefault(form, precision) {
-  const fp16 = precision === 'fp16';
-  const next = fp16 && form._qdriftFp16Pref === true;
+  const supported = precision === 'fp16' || precision === 'int8';
+  const next = supported && form._qdriftPref[precision] === true;
   form.exportEnableQDrift = next;
   const field = form._qdriftField;
   const input = field && field.querySelector('input[type="checkbox"]');
   if (input) {
     input.checked = next;
-    input.disabled = !fp16;
+    input.disabled = !supported;
   }
-  if (field) field.classList.toggle('export-dialog-checkbox-disabled', !fp16);
+  if (field) field.classList.toggle('export-dialog-checkbox-disabled', !supported);
   if (typeof form._applyQDriftLock === 'function') form._applyQDriftLock();
 }
 

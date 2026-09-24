@@ -97,6 +97,9 @@ class Diffusion {
         // 当前 diffStep 会话的执行提供者，由管线在调用 runDiffusionLoop 前注入。
         // Q-Drift 的校正因子是按 EP 实测的，需要它来做合约校验。
         this._diffStepEp = null;
+        // 当前 diffStep 的量化精度类别（'fp32' | 'fp16' | 'int8' | 'int8-npu'）。
+        // Q-Drift 按精度选择各自的校正表（INT8 与 FP16 的 Δv 量级差 2~3 个数量级）。
+        this._diffStepPrecision = 'fp32';
         // Q-Drift 开关：预览 / 导出是两个独立设置，由管线按当前合成路径注入。
         this._qdriftEnabled = false;
         // 确定性噪声源。默认 null → 用 Math.random（线上行为不变）。
@@ -128,6 +131,14 @@ class Diffusion {
      */
     setDiffStepEp(ep) {
         this._diffStepEp = ep || null;
+    }
+
+    /**
+     * 注入当前 diffStep 的量化精度类别（'fp32' | 'fp16' | 'int8' | 'int8-npu'）。
+     * @param {string} precision
+     */
+    setDiffStepPrecision(precision) {
+        this._diffStepPrecision = precision || 'fp32';
     }
 
     /**
@@ -423,6 +434,7 @@ class Diffusion {
         const _qd = resolveQDrift({
             enabled: this._qdriftEnabled,
             isFP16,
+            diffStepPrecision: this._diffStepPrecision,
             samplerName, totalSteps, cfgStrength, cfgRescale,
             cfgScheduleOpts, dynamicThresholdOpts,
             diffStepEp: this._diffStepEp,
@@ -434,7 +446,7 @@ class Diffusion {
             cfgRescale = _qd.params.cfgRescale;
             cfgScheduleOpts = _qd.params.cfgScheduleOpts;
             dynamicThresholdOpts = _qd.params.dynamicThresholdOpts;
-            console.log(`[Q-Drift] 已启用（${_qd.correction.length} 个通道因子）。强制锁定：${_qd.notes.join('；')}`);
+            console.log(`[Q-Drift] 已启用（${_qd.precision}，${_qd.correction.length} 个通道因子）。强制锁定：${_qd.notes.join('；')}`);
         }
         const qdriftCtx = buildQDriftCtx(_qd.active, _qd.correction);
         // useCfg 必须在 Q-Drift 覆盖 cfgStrength 之后再判定：若用户原本关闭了 CFG，
