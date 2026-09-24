@@ -145,6 +145,14 @@ function float32ToFloat16(value) {
 // Mirrors webnn/utils.js batchFloat32ToFloat16 for parity between paths.
 function batchFloat32ToFloat16(f32Src, u16Dst, len) {
     len = len || f32Src.length;
+    // Native path (Node 24+, Chromium 130+): reinterpret the destination
+    // Uint16 storage as Float16Array and let TypedArray.set do a native
+    // round-to-even conversion (~2x faster than the scalar bit loop).
+    if (typeof Float16Array !== 'undefined') {
+        new Float16Array(u16Dst.buffer, u16Dst.byteOffset, len)
+            .set(f32Src.subarray(0, len));
+        return;
+    }
     const buf = new ArrayBuffer(4);
     const f32 = new Float32Array(buf);
     const u32 = new Uint32Array(buf);

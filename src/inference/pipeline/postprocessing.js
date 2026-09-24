@@ -333,6 +333,86 @@ function parseWavBuffer(buffer) {
     return { data: audioFloat, sampleRate };
 }
 
+// 窗口化 sinc 插值参数 (Kaiser 窗, β=5, ~12 零交叉)
+const RESAMPLE_KAISER_BETA = 5.0;
+const RESAMPLE_HALF_WIDTH = Math.ceil(12 * RESAMPLE_KAISER_BETA / 5);
+const RESAMPLE_YIELD_EVERY = 8192;
+
+// Kaiser 窗值查找表：window(|t|) = I0(β·sqrt(1-(t/(2HW+1))²)) / I0(β)。
+// β/HW 为固定常量，旧实现每个输出样本的 ~24 个抽头各调用一次
+// sqrt+bessel0（长参考音频整段重采样时的主要 CPU 开销）；表只构建一次，
+// 查表时线性插值，误差远低于 1e-6。抽头最远可达 |t| < HW+1，表覆盖该域。
+const KAISER_LUT_POINTS = 8192;
+let _kaiserWindowLut = null;
+
+function _getKaiserWindowLut() {
+    if (_kaiserWindowLut) return _kaiserWindowLut;
+    const beta = RESAMPLE_KAISER_BETA;
+    const halfWidth = RESAMPLE_HALF_WIDTH;
+    const xMax = halfWidth + 1; // outer fractional tap: center - floor(center-HW) < HW+1
+    const invWidth = 1 / (2 * halfWidth + 1);
+    const values = new Float32Array(KAISER_LUT_POINTS + 1);
+    const norm = bessel0(beta);
+    for (let k = 0; k <= KAISER_LUT_POINTS; k++) {
+        const t = (k / KAISER_LUT_POINTS) * xMax;
+        const kaiserArg = 1 - (t * invWidth) * (t * invWidth);
+        values[k] = kaiserArg >= 0 ? bessel0(beta * Math.sqrt(kaiserArg)) / norm : 0;
+    }
+    _kaiserWindowLut = { values, xMax, scale: KAISER_LUT_POINTS / xMax };
+    return _kaiserWindowLut;
+}
+
+// 同步/异步重采样共享的上下文与单样本核（消除两份重复实现）。
+function _createSincResampleState(input, srcSampleRate, dstSampleRate, ratio, newLength) {
+    const cutoff = (dstSampleRate < srcSampleRate ? 0.95 * dstSampleRate / srcSampleRate : 0.95) * 0.5;
+    const lut = _getKaiserWindowLut();
+    return {
+        input,
+        out: new Float32Array(newLength),
+        ratio,
+        halfWidth: RESAMPLE_HALF_WIDTH,
+        twoPiCutoff: 2 * Math.PI * cutoff,
+        invPi: 1 / Math.PI,
+        lutValues: lut.values,
+        lutScale: lut.scale,
+        lutPoints: KAISER_LUT_POINTS,
+    };
+}
+
+function _resampleOneSample(s, i) {
+    const center = (i + 0.5) * s.ratio;
+    const left = Math.max(0, Math.floor(center - s.halfWidth));
+    const right = Math.min(s.input.length - 1, Math.ceil(center + s.halfWidth));
+
+    let sum = 0;
+    let weightSum = 0;
+    for (let j = left; j <= right; j++) {
+        const t = center - j;
+        if (Math.abs(t) < 1e-7) {
+            sum += s.input[j];
+            weightSum += 1;
+        } else {
+            const sincVal = Math.sin(s.twoPiCutoff * t) * s.invPi / t;
+            // Linear-interpolated Kaiser window lookup (replaces per-tap
+            // sqrt + bessel0 rational/asymptotic evaluation).
+            const fi = Math.abs(t) * s.lutScale;
+            let windowVal;
+            if (fi >= s.lutPoints) {
+                windowVal = s.lutValues[s.lutPoints];
+            } else {
+                const i0 = fi | 0;
+                const frac = fi - i0;
+                const w0 = s.lutValues[i0];
+                windowVal = w0 + (s.lutValues[i0 + 1] - w0) * frac;
+            }
+            const w = sincVal * windowVal;
+            sum += s.input[j] * w;
+            weightSum += w;
+        }
+    }
+    return weightSum > 1e-8 ? sum / weightSum : 0;
+}
+
 function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     if (srcSampleRate === dstSampleRate) return audioFloat;
     const ratio = srcSampleRate / dstSampleRate;
@@ -349,52 +429,18 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
         ? _oversample2xAntiAlias(audioFloat, srcSampleRate, dstSampleRate)
         : audioFloat;
 
-    // 窗口化 sinc 插值 (Kaiser 窗, β=5)
-    const kaiserBeta = 5.0;
-    const halfWidth = Math.ceil(12 * kaiserBeta / 5); // ~12 零交叉
-    const cutoff = (dstSampleRate < srcSampleRate ? 0.95 * dstSampleRate / srcSampleRate : 0.95) * 0.5;
-
-    // Precompute constants outside the inner loop
-    const twoPiCutoff = 2 * Math.PI * cutoff;
-    const invPi = 1 / Math.PI;
-    const invWidth = 1 / (2 * halfWidth + 1);
-    const bessel0Beta = bessel0(kaiserBeta); // Normalization factor, computed once
-
-    const out = new Float32Array(newLength);
+    const s = _createSincResampleState(input, srcSampleRate, dstSampleRate, ratio, newLength);
     for (let i = 0; i < newLength; i++) {
-        const center = (i + 0.5) * ratio;
-        const left = Math.max(0, Math.floor(center - halfWidth));
-        const right = Math.min(input.length - 1, Math.ceil(center + halfWidth));
-
-        let sum = 0;
-        let weightSum = 0;
-        for (let j = left; j <= right; j++) {
-            const t = center - j;
-            if (Math.abs(t) < 1e-7) {
-                sum += input[j];
-                weightSum += 1;
-            } else {
-                const sincVal = Math.sin(twoPiCutoff * t) * invPi / t;
-                const kaiserArg = 1 - (t * invWidth) * (t * invWidth);
-                const windowVal = kaiserArg >= 0
-                    ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0Beta
-                    : 0;
-                const w = sincVal * windowVal;
-                sum += input[j] * w;
-                weightSum += w;
-            }
-        }
-        out[i] = weightSum > 1e-8 ? sum / weightSum : 0;
+        s.out[i] = _resampleOneSample(s, i);
     }
-    return out;
+    return s.out;
 }
 
 /**
  * 异步分块版 resampleLinear：每 RESAMPLE_YIELD_EVERY 个样本 setImmediate yield 一次，
  * 避免长音频（分钟级）同步阻塞主线程导致 UI 无响应。
- * 内部计算逻辑与 resampleLinear 完全一致，仅在外层循环插入 yield 点。
+ * 与 resampleLinear 共用同一套 LUT 与单样本核，仅在外层循环插入 yield 点。
  */
-const RESAMPLE_YIELD_EVERY = 8192;
 async function resampleLinearAsync(audioFloat, srcSampleRate, dstSampleRate) {
     if (srcSampleRate === dstSampleRate) return audioFloat;
     const ratio = srcSampleRate / dstSampleRate;
@@ -407,46 +453,16 @@ async function resampleLinearAsync(audioFloat, srcSampleRate, dstSampleRate) {
         ? _oversample2xAntiAlias(audioFloat, srcSampleRate, dstSampleRate)
         : audioFloat;
 
-    const kaiserBeta = 5.0;
-    const halfWidth = Math.ceil(12 * kaiserBeta / 5);
-    const cutoff = (dstSampleRate < srcSampleRate ? 0.95 * dstSampleRate / srcSampleRate : 0.95) * 0.5;
-    const twoPiCutoff = 2 * Math.PI * cutoff;
-    const invPi = 1 / Math.PI;
-    const invWidth = 1 / (2 * halfWidth + 1);
-    const bessel0Beta = bessel0(kaiserBeta);
-
-    const out = new Float32Array(newLength);
+    const s = _createSincResampleState(input, srcSampleRate, dstSampleRate, ratio, newLength);
     for (let i = 0; i < newLength; i++) {
-        const center = (i + 0.5) * ratio;
-        const left = Math.max(0, Math.floor(center - halfWidth));
-        const right = Math.min(input.length - 1, Math.ceil(center + halfWidth));
-
-        let sum = 0;
-        let weightSum = 0;
-        for (let j = left; j <= right; j++) {
-            const t = center - j;
-            if (Math.abs(t) < 1e-7) {
-                sum += input[j];
-                weightSum += 1;
-            } else {
-                const sincVal = Math.sin(twoPiCutoff * t) * invPi / t;
-                const kaiserArg = 1 - (t * invWidth) * (t * invWidth);
-                const windowVal = kaiserArg >= 0
-                    ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0Beta
-                    : 0;
-                const w = sincVal * windowVal;
-                sum += input[j] * w;
-                weightSum += w;
-            }
-        }
-        out[i] = weightSum > 1e-8 ? sum / weightSum : 0;
+        s.out[i] = _resampleOneSample(s, i);
 
         // 每 N 个样本 yield 一次，让事件循环处理 UI 响应
         if ((i & (RESAMPLE_YIELD_EVERY - 1)) === 0 && i > 0) {
             await new Promise(r => setImmediate(r));
         }
     }
-    return out;
+    return s.out;
 }
 
 // Kaiser 窗的零阶修正贝塞尔函数 I₀(x) 近似
@@ -674,11 +690,11 @@ function createMelFilterbank(numBands, fftSize, sampleRate, fmin, fmax) {
     return filterbank;
 }
 
-// Cached mel filterbank (only depends on sr, which is fixed at 24kHz)
-let _cachedMelFilterbank = null;
 let _cachedMelFilterbankSr = 0;
-// CSR representation of the cached mel filterbank (only non-zero entries per band).
+// CSR representation of the mel filterbank (only non-zero entries per band).
 // Reduces the inner mel loop from O(numFreqBins) to O(~triangle_width) per band.
+// The dense matrix (~480KB at NUM_MELS x N_FFT/2 bins) is released right after
+// the CSR is built — only the sparse representation is retained.
 let _cachedMelFilterbankCsr = null; // { values: Float32Array, colIdx: Int32Array, rowPtr: Int32Array }
 
 /**
@@ -752,11 +768,12 @@ function extractMelSpectrogram(audioFloat, sr) {
         }
     }
 
-    // Use cached mel filterbank + CSR (recompute only if sample rate changed)
-    if (!_cachedMelFilterbank || _cachedMelFilterbankSr !== sr) {
+    // Use cached mel filterbank CSR (recompute only if sample rate changed).
+    // The dense filterbank is dropped as soon as the CSR is built.
+    if (_cachedMelFilterbankSr !== sr || !_cachedMelFilterbankCsr) {
         const fmax = sr / 2;
-        _cachedMelFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
-        _cachedMelFilterbankCsr = buildMelFilterbankCsr(_cachedMelFilterbank, melBands, numFreqBins);
+        const denseFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
+        _cachedMelFilterbankCsr = buildMelFilterbankCsr(denseFilterbank, melBands, numFreqBins);
         _cachedMelFilterbankSr = sr;
     }
     const melCsr = _cachedMelFilterbankCsr;
@@ -827,10 +844,10 @@ async function extractMelSpectrogramAsync(audioFloat, sr) {
         }
     }
 
-    if (!_cachedMelFilterbank || _cachedMelFilterbankSr !== sr) {
+    if (_cachedMelFilterbankSr !== sr || !_cachedMelFilterbankCsr) {
         const fmax = sr / 2;
-        _cachedMelFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
-        _cachedMelFilterbankCsr = buildMelFilterbankCsr(_cachedMelFilterbank, melBands, numFreqBins);
+        const denseFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
+        _cachedMelFilterbankCsr = buildMelFilterbankCsr(denseFilterbank, melBands, numFreqBins);
         _cachedMelFilterbankSr = sr;
     }
     const melCsr = _cachedMelFilterbankCsr;
@@ -1350,7 +1367,12 @@ class Postprocessing {
         //   chunk N:   chunkStart=framePos-overlap,  chunkEnd=chunkStart+chunkSize, framePos→chunkEnd
         //   末尾 chunk（chunkEnd 被 effectiveTotalFrames 截断）：写入后显式 break，
         //     避免旧逻辑 framePos = chunkEnd - overlapFrames 反复回退导致死循环
-        const weightSum = new Float32Array(totalSamples);
+        // NOTE: the old Hann-OLA era kept a full-length weightSum[] array and
+        // divided the output by it at the end. Every write site assigned the
+        // exact constant 1 (WSOLA crossfade weights already sum to 1), so the
+        // array (up to ~77MB at the 40000-frame cap) and the final full-length
+        // pass were pure overhead. Committed regions are tracked via
+        // committedSamples instead.
 
         const fadeSamples = overlapFrames * vocoderHopSize;
         // WSOLA 分块交叉淡入淡出：取代旧的对称 Hann OLA 窗。
@@ -1399,11 +1421,14 @@ class Postprocessing {
         let committedSamples = 0;
         for (let i = 0; i < totalChunkCount; i++) {
             const spec = chunkSpecs[i];
-            // 流式创建当前 chunk 的输入张量（不预存到 chunkSpecs）
-            const chunkMel = new Float32Array(spec.currentChunkFrames * MEL_DIM);
-            chunkMel.set(effectiveMelData.subarray(spec.chunkStart * MEL_DIM, spec.chunkEnd * MEL_DIM));
+            // 流式创建当前 chunk 的输入张量（不预存到 chunkSpecs）。
+            // 直接在 effectiveMelData 上取视图：静态形状路径 padFloat 会复制到
+            // 定长缓冲；动态 float16 路径 createFloatTensor 内部转换时复制；
+            // 动态 float32 路径张量直接包装该视图（run 期间源数据不会被修改），
+            // 省去每 chunk 一次全长中间拷贝。
+            const melSub = effectiveMelData.subarray(spec.chunkStart * MEL_DIM, spec.chunkEnd * MEL_DIM);
             const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : spec.currentChunkFrames;
-            const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
+            const paddedChunk = useStaticShapes ? padFloat(melSub, vocSeqLen * MEL_DIM) : melSub;
             const melTensor = createFloatTensor(floatType, paddedChunk, [1, vocSeqLen, MEL_DIM]);
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, spec.chunkStart, spec.currentChunkFrames);
 
@@ -1498,29 +1523,29 @@ class Postprocessing {
             if (canWsola) {
                 const currChunkHead = waveform.subarray(0, overlapWriteLen);
                 const wsolaResult = wsolaCrossfade(prevChunkTail, currChunkHead, overlapWriteLen, SAMPLE_RATE);
-                for (let j = 0; j < overlapWriteLen; j++) {
-                    const outIdx = writeStart + j;
-                    if (outIdx >= totalSamples) break;
-                    output[outIdx] = wsolaResult[j]; // 覆盖前一 chunk 尾部
-                    weightSum[outIdx] = 1;
+                // 重叠区：逐样本生成的 WSOLA 结果，一次原生 memcpy 写回。
+                const overlapCopy = Math.min(overlapWriteLen, totalSamples - writeStart);
+                if (overlapCopy > 0) {
+                    output.set(wsolaResult.subarray(0, overlapCopy), writeStart);
                 }
-                for (let j = overlapWriteLen; j < writeLen; j++) {
-                    const outIdx = writeStart + j;
-                    if (outIdx >= totalSamples) break;
-                    output[outIdx] = waveform[j];
-                    weightSum[outIdx] = 1;
+                // 重叠区之后的稳定区：原生 memcpy（原为逐样本标量循环，
+                // 每 chunk 可达约 49 万次赋值）。
+                const stableStart = writeStart + overlapWriteLen;
+                const stableCopy = Math.min(writeLen - overlapWriteLen, totalSamples - stableStart);
+                if (stableCopy > 0) {
+                    output.set(waveform.subarray(overlapWriteLen, overlapWriteLen + stableCopy), stableStart);
                 }
             } else {
-                for (let j = 0; j < writeLen; j++) {
-                    const outIdx = writeStart + j;
-                    if (outIdx >= totalSamples) break;
-                    output[outIdx] = waveform[j];
-                    weightSum[outIdx] = 1;
+                const copyLen = Math.min(writeLen, totalSamples - writeStart);
+                if (copyLen > 0) {
+                    output.set(waveform.subarray(0, copyLen), writeStart);
                 }
             }
-            // 保存尾部供下个 chunk WSOLA 对齐（仅非末尾 chunk 且样本足够）
+            // 保存尾部供下个 chunk WSOLA 对齐（仅非末尾 chunk 且样本足够）。
+            // waveform 是本 chunk 独有的全新数组且之后只读，subarray 视图即可，
+            // 无需 slice 复制。
             if (!spec.isLast && fadeSamples > 0 && waveform.length >= fadeSamples) {
-                prevChunkTail = waveform.slice(waveform.length - fadeSamples);
+                prevChunkTail = waveform.subarray(waveform.length - fadeSamples);
             }
 
             // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，overlap crossfade 权重和为 1）
@@ -1549,12 +1574,6 @@ class Postprocessing {
                     }
                     committedSamples = stableEnd;
                 }
-            }
-        }
-
-        for (let i = 0; i < totalSamples; i++) {
-            if (weightSum[i] > 1e-8) {
-                output[i] /= weightSum[i];
             }
         }
 

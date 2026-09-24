@@ -33,6 +33,13 @@ export function float32ToFloat16(value) {
  */
 export function batchFloat32ToFloat16(f32Src, u16Dst, len) {
     len = len || f32Src.length;
+    // Native path (Chromium 130+): reinterpret Uint16 storage as Float16Array
+    // and let TypedArray.set perform the native round-to-even conversion.
+    if (typeof Float16Array !== 'undefined') {
+        new Float16Array(u16Dst.buffer, u16Dst.byteOffset, len)
+            .set(f32Src.subarray(0, len));
+        return;
+    }
     // 使用 4 字节共享 buffer，一次处理一个 float32 → uint16
     const buf = new ArrayBuffer(4);
     const f32 = new Float32Array(buf);
@@ -63,6 +70,12 @@ export function batchFloat32ToFloat16(f32Src, u16Dst, len) {
  */
 export function batchFloat16ToFloat32(u16Src, f32Dst, len) {
     len = len || u16Src.length;
+    // Native path (Chromium 130+): reinterpret Uint16 storage as Float16Array.
+    if (typeof Float16Array !== 'undefined') {
+        f32Dst.subarray(0, len).set(
+            new Float16Array(u16Src.buffer, u16Src.byteOffset, len));
+        return;
+    }
     const buf = new ArrayBuffer(4);
     const f32 = new Float32Array(buf);
     const u32 = new Uint32Array(buf);
