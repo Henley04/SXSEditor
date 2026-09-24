@@ -252,6 +252,21 @@
   flex-shrink: 0;
 }
 
+/* 非 FP16 精度下 Q-Drift 不适用：整项置灰且不可交互 */
+.export-dialog-checkbox.export-dialog-checkbox-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.export-dialog-checkbox.export-dialog-checkbox-disabled:hover {
+  border-color: var(--border-default);
+  background: var(--bg-elevated);
+}
+
+.export-dialog-checkbox.export-dialog-checkbox-disabled input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
 .export-dialog-checkbox-content {
   display: flex;
   flex-direction: column;

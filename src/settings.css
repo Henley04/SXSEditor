@@ -628,6 +628,17 @@ body {
     box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
+/* Q-Drift 等仅在特定模型精度下可用的选项：复选框置灰时整行弱化且不可点击 */
+.device-mode-radio:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.device-mode-radio:has(input:disabled):hover {
+    border-color: var(--border-strong);
+    background: var(--bg-elevated);
+}
+
 .device-mode-radio input[type="radio"] {
     margin-top: 3px;
     cursor: pointer;

@@ -85,6 +85,11 @@ const exportQDriftLockNote = document.getElementById('exportQDriftLockNote');
 // 不会自动开启（"切了 FP16 却还是没勾上"）。
 const _qdriftTouched = { preview: false, export: false };
 
+// Q-Drift 仅对 FP16 模型有意义：非 FP16 精度下复选框必须置灰且不勾选。
+// 这里单独记住"FP16 下的用户意愿"，切走 FP16 时临时取消勾选，切回时恢复，
+// 避免置灰期间的临时 false 被落盘成陈旧值。
+const _qdriftFp16Pref = { preview: true, export: true };
+
 // 开启 Q-Drift 后会被强制锁定的控件（预览 / 导出分别锁定各自那套参数）
 const QDRIFT_LOCKED_PREVIEW = [
     previewDiffStepsSlider, previewSamplerSelect, previewCfgStrengthSlider, previewCfgRescaleSlider,
@@ -140,10 +145,16 @@ function _applyContract(els, samplerEl, stepsEl, cfgEl, rescaleEl, checkboxEl) {
 /**
  * 勾选 Q-Drift 后把受影响的采样参数置灰，并直接显示被强制的合约值。
  * 目的：避免"界面上看着 STORK-2 / 64 步，实际跑的是 Euler / 32 步"。
+ *
+ * Q-Drift 仅对 FP16 DiT 生效：非 FP16 精度下复选框本身也要置灰，
+ * 否则用户能勾上并锁定一堆采样参数，运行时却被静默跳过（reason: not-fp16）。
  */
 function updateQDriftLocks() {
-    const p = !!(previewEnableQDriftCheckbox && previewEnableQDriftCheckbox.checked);
-    const e = !!(exportEnableQDriftCheckbox && exportEnableQDriftCheckbox.checked);
+    const fp16 = !!(modelPrecisionSelect && modelPrecisionSelect.value === 'fp16');
+    if (previewEnableQDriftCheckbox) previewEnableQDriftCheckbox.disabled = !fp16;
+    if (exportEnableQDriftCheckbox) exportEnableQDriftCheckbox.disabled = !fp16;
+    const p = fp16 && !!(previewEnableQDriftCheckbox && previewEnableQDriftCheckbox.checked);
+    const e = fp16 && !!(exportEnableQDriftCheckbox && exportEnableQDriftCheckbox.checked);
     const any = p || e;
     const all = [...QDRIFT_LOCKED_PREVIEW, ...QDRIFT_LOCKED_EXPORT];
 
@@ -181,21 +192,26 @@ function initQDriftListeners() {
     if (previewEnableQDriftCheckbox) {
         previewEnableQDriftCheckbox.addEventListener('change', () => {
             _qdriftTouched.preview = true;
+            // 复选框在非 FP16 下被置灰，change 只可能发生在 FP16
+            _qdriftFp16Pref.preview = previewEnableQDriftCheckbox.checked;
             updateQDriftLocks();
         });
     }
     if (exportEnableQDriftCheckbox) {
         exportEnableQDriftCheckbox.addEventListener('change', () => {
             _qdriftTouched.export = true;
+            _qdriftFp16Pref.export = exportEnableQDriftCheckbox.checked;
             updateQDriftLocks();
         });
     }
-    // 切换模型精度时同步默认勾选状态（用户手动改过之后不再自动改）
+    // 切换模型精度时同步可用性与勾选状态：
+    //  - 切到 FP16：恢复 FP16 下的用户意愿（未手动改过则默认开启）
+    //  - 切到非 FP16：临时取消勾选并置灰（意愿保留，切回时恢复）
     if (modelPrecisionSelect) {
         modelPrecisionSelect.addEventListener('change', () => {
-            const want = modelPrecisionSelect.value === 'fp16';
-            if (!_qdriftTouched.preview && previewEnableQDriftCheckbox) previewEnableQDriftCheckbox.checked = want;
-            if (!_qdriftTouched.export && exportEnableQDriftCheckbox) exportEnableQDriftCheckbox.checked = want;
+            const fp16 = modelPrecisionSelect.value === 'fp16';
+            if (previewEnableQDriftCheckbox) previewEnableQDriftCheckbox.checked = fp16 && _qdriftFp16Pref.preview;
+            if (exportEnableQDriftCheckbox) exportEnableQDriftCheckbox.checked = fp16 && _qdriftFp16Pref.export;
             updateQDriftLocks();
         });
     }
@@ -435,9 +451,13 @@ function applySavedSettingsToUI(currentSetting) {
     if (enableLoudnormFinalCheckbox) enableLoudnormFinalCheckbox.checked = currentSetting.enableLoudnormFinal !== false;
     if (enableAntiAliasingCheckbox) enableAntiAliasingCheckbox.checked = currentSetting.enableAntiAliasing === true;
     if (enableSDEditRepairCheckbox) enableSDEditRepairCheckbox.checked = currentSetting.enableSDEditRepair === true;
-    // Q-Drift：用户显式设置过就用设置值；否则按模型精度推断（只有 FP16 DiT 才有意义）
-    if (previewEnableQDriftCheckbox) previewEnableQDriftCheckbox.checked = resolveQDriftDefault(currentSetting, 'previewEnableQDrift');
-    if (exportEnableQDriftCheckbox) exportEnableQDriftCheckbox.checked = resolveQDriftDefault(currentSetting, 'exportEnableQDrift');
+    // Q-Drift：只对 FP16 模型生效。先记录"FP16 下的用户意愿"（显式设置过用设置值，
+    // 否则默认开启），当前精度非 FP16 时复选框不勾选并置灰。
+    _qdriftFp16Pref.preview = resolveQDriftDefault({ ...currentSetting, modelPrecision: 'fp16' }, 'previewEnableQDrift');
+    _qdriftFp16Pref.export = resolveQDriftDefault({ ...currentSetting, modelPrecision: 'fp16' }, 'exportEnableQDrift');
+    const initFp16 = (currentSetting.modelPrecision || modelPrecisionSelect.value) === 'fp16';
+    if (previewEnableQDriftCheckbox) previewEnableQDriftCheckbox.checked = initFp16 && _qdriftFp16Pref.preview;
+    if (exportEnableQDriftCheckbox) exportEnableQDriftCheckbox.checked = initFp16 && _qdriftFp16Pref.export;
     // 每次套用设置都重置"用户是否手动改过"，这样切精度仍会自动跟随
     _qdriftTouched.preview = false;
     _qdriftTouched.export = false;
@@ -461,6 +481,9 @@ function applySavedSettingsToUI(currentSetting) {
     } else {
         modelPrecisionSelect.value = 'fp32';
     }
+    // 精度下拉框此时才是保存值：重新同步 Q-Drift 的置灰/锁定状态
+    // （上方调用时下拉框可能还是 HTML 默认的 fp32）
+    updateQDriftLocks();
 
     // MIDI tool
     if (currentSetting.midiExtractTool) {
@@ -1419,10 +1442,10 @@ function collectSettings() {
             const r = document.querySelector('input[name="vocoderChunkMode"]:checked');
             return r ? r.value : 'smart';
         })(),
-        ...(_qdriftTouched.preview && previewEnableQDriftCheckbox
-            ? { previewEnableQDrift: previewEnableQDriftCheckbox.checked } : {}),
-        ...(_qdriftTouched.export && exportEnableQDriftCheckbox
-            ? { exportEnableQDrift: exportEnableQDriftCheckbox.checked } : {}),
+        ...(_qdriftTouched.preview
+            ? { previewEnableQDrift: _qdriftFp16Pref.preview } : {}),
+        ...(_qdriftTouched.export
+            ? { exportEnableQDrift: _qdriftFp16Pref.export } : {}),
         vocoderChunkFrames: parseInt(vocoderChunkFramesSlider.value),
         vocoderOverlapFrames: vocoderOverlapFramesSlider ? parseInt(vocoderOverlapFramesSlider.value) : 32,
         enableLoudnormFinal: enableLoudnormFinalCheckbox ? enableLoudnormFinalCheckbox.checked : true,
