@@ -32,6 +32,17 @@ import {
 import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
 import { updateFragmentPlayButton } from './uiControls.js';
 
+// 独占模式 onAudioEnded 退订函数的模块级持有。旧实现只在 rAF 闭包内能退订，
+// stop/pause/seek（均经 stopFragmentPlayback → stopFragmentExclusivePlayback）
+// cancel rAF 后监听器永远泄漏——每次播放累积一个 IPC 监听。
+let _fragmentRemoveEndedListener = null;
+function _detachFragmentEndedListener() {
+  if (_fragmentRemoveEndedListener) {
+    try { _fragmentRemoveEndedListener(); } catch (_) {}
+    _fragmentRemoveEndedListener = null;
+  }
+}
+
 /**
  * 构建导出用的 per-note 渐入/渐出列表（与 wavEncoder.applyEnvelopesToAudio 对接）。
  * 跳过 fadeIn=0 且 fadeOut=0 的 note，节省计算。
@@ -404,6 +415,9 @@ function stopFragmentExclusivePlayback() {
     cancelAnimationFrame(raf);
     setFragmentExclusiveRaf(null);
   }
+  // 在此统一退订 onAudioEnded：所有停止/暂停/跳转路径都经过本函数，
+  // rAF 已被 cancel，不能再依赖 rAF 闭包退订。
+  _detachFragmentEndedListener();
   window.electronAPI.audioStop().catch(() => {});
 }
 
@@ -537,6 +551,12 @@ async function playFragmentShared() {
   const gainNode = getFragmentGainNode();
   source.connect(envGainNode).connect(fadeGainNode).connect(panNode).connect(gainNode);
   source.onended = () => {
+    // 每次播放新建的中间节点在此断开，避免自然结束后 env/fade/pan 三个节点
+    // 仍挂在共享 gainNode 下随播放次数累积（stop() 路径会先置 onended=null，
+    // 节点随 source 一起释放）。
+    try { panNode.disconnect(); } catch (_) {}
+    try { fadeGainNode.disconnect(); } catch (_) {}
+    try { envGainNode.disconnect(); } catch (_) {}
     setFragmentIsPlaying(false);
     const raf = getFragmentPlayheadRaf();
     if (raf) {
@@ -616,7 +636,9 @@ async function playFragmentExclusive() {
     setFragmentPlaybackOffset(startOffset);
     setFragmentCurrentTime(startOffset);
 
-    const removeEndedListener = window.electronAPI.onAudioEnded(() => {
+    // 先退订上一轮可能泄漏的监听，再注册新监听并存入模块级持有。
+    _detachFragmentEndedListener();
+    _fragmentRemoveEndedListener = window.electronAPI.onAudioEnded(() => {
       setFragmentIsPlaying(false);
       const raf = getFragmentPlayheadRaf();
       if (raf) {
@@ -629,7 +651,7 @@ async function playFragmentExclusive() {
       render();
     });
 
-    updateFragmentExclusivePlayhead(removeEndedListener);
+    updateFragmentExclusivePlayhead(_detachFragmentEndedListener);
     updateFragmentPlayButton();
   } catch (err) {
     console.error('[FragmentAudio] 独占模式启动失败，回退到共享模式:', err);

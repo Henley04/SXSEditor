@@ -34,26 +34,6 @@ function getAccompanimentMaxEndSample(bpm) {
   return maxEndSample;
 }
 
-/**
- * Mix accompaniment audio into an existing mixedAudio Float32Array.
- * The array is NOT resized — caller must ensure it is large enough
- * (use getAccompanimentMaxEndSample to calculate required size).
- * @param {Float32Array} mixedAudio - Target array (modified in-place)
- * @param {number} bpm - Project BPM
- */
-function mixAccompanimentIntoArray(mixedAudio, bpm) {
-  for (const track of getAccompanimentTracks()) {
-    const startSample = Math.round((track.accompanimentStartTime || 0) / bpm * 60 * SAMPLE_RATE);
-    const accAudio = track.audioBuffer;
-    for (let i = 0; i < accAudio.length; i++) {
-      const targetIndex = startSample + i;
-      if (targetIndex < mixedAudio.length) {
-        mixedAudio[targetIndex] += accAudio[i];
-      }
-    }
-  }
-}
-
 function _interpolateVolumeEnvelope(envelope, beat) {
   const kfs = envelope?.keyframes;
   if (!kfs || kfs.length === 0) return 1;
@@ -89,6 +69,17 @@ function _applyFragmentVolumeEnvelope(audio, fragment, bpm) {
 let _visibilityHandlerRegistered = false;
 let _exclusiveUpdateFn = null;
 let _sharedUpdateFn = null;
+
+// 独占模式 onAudioEnded 退订函数的模块级持有。旧实现只在 rAF 闭包内拿到它，
+// stop/pause/seek 会先 cancel rAF，导致退订永不执行——每次播放泄漏一个
+// IPC 监听器。所有拆除路径都经过 stopExclusivePlayback()，在那里统一退订。
+let _exclusiveRemoveEndedListener = null;
+function _detachExclusiveEndedListener() {
+  if (_exclusiveRemoveEndedListener) {
+    try { _exclusiveRemoveEndedListener(); } catch (_) {}
+    _exclusiveRemoveEndedListener = null;
+  }
+}
 
 function _onVisibilityChange() {
   if (document.hidden) {
@@ -239,13 +230,16 @@ export async function playAll() {
       return;
     }
 
-    // 仅有伴奏轨道无分片音符：直接播放伴奏，跳过推理
+    // 仅有伴奏轨道无分片音符：直接播放伴奏，跳过推理。
+    // 传零"人声"底噪给 _buildPlaybackChannels，由它唯一负责混音
+    // （含重采样、声道映射、accompanimentVolume）。旧实现先用
+    // mixAccompanimentIntoArray 混一次（无重采样/无增益），随后
+    // _buildPlaybackChannels 又混一次，导致伴奏 +6dB 发虚。
     if (allFragments.length === 0 && accTracks.length > 0) {
       const accMaxSamples = getAccompanimentMaxEndSample(state.project.bpm);
-      const mixedAudio = new Float32Array(accMaxSamples);
-      mixAccompanimentIntoArray(mixedAudio, state.project.bpm);
-      state.currentAudioData = mixedAudio;
-      state.currentAudioChannels = _buildPlaybackChannels(mixedAudio, state.project.bpm);
+      const silentVocal = new Float32Array(accMaxSamples);
+      state.currentAudioData = silentVocal;
+      state.currentAudioChannels = _buildPlaybackChannels(silentVocal, state.project.bpm);
       state.currentAudioBuffer = null;
       dom.timeDisplay.textContent = formatTime(state.playbackPauseOffset);
       if (state.playbackPauseOffset > 0) {
@@ -873,7 +867,10 @@ export async function startExclusivePlayback(offset) {
     // 否则 playhead 会从拖拽位置跳回开头）
     const playbackStartWallTime = Date.now();
 
-    const removeEndedListener = window.electronAPI.onAudioEnded(() => {
+    // Drop any listener leaked by a previous interrupted session before
+    // registering the new one.
+    _detachExclusiveEndedListener();
+    _exclusiveRemoveEndedListener = window.electronAPI.onAudioEnded(() => {
       if (!state.isPlaying) return;
       const realElapsed = (Date.now() - playbackStartWallTime) / 1000;
       state.isPlaying = false;
@@ -895,7 +892,7 @@ export async function startExclusivePlayback(offset) {
       }
     });
 
-    startExclusivePlayheadAnimation(removeEndedListener, playbackStartWallTime);
+    startExclusivePlayheadAnimation(_detachExclusiveEndedListener, playbackStartWallTime);
   } catch (err) {
     console.warn('Exclusive audio playback failed; using shared playback:', err);
     state.useExclusiveMode = false;
@@ -952,6 +949,10 @@ export function stopExclusivePlayback() {
     cancelAnimationFrame(state.exclusivePlaybackRaf);
     state.exclusivePlaybackRaf = null;
   }
+  // Unsubscribe the onAudioEnded IPC listener here: stop/pause/seek all route
+  // through this function, whereas the rAF that used to own the unsubscribe
+  // has already been cancelled on those paths (listener leak).
+  _detachExclusiveEndedListener();
   window.electronAPI.audioStop().catch(err => {
     console.warn('[Audio] Failed to stop exclusive playback:', err);
   });
