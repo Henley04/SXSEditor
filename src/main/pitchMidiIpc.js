@@ -185,7 +185,20 @@ function createPitchWorker() {
           for (let i = 0; i < n; i++) {
             f0Array[i] = { time: msg.times[i], f0: msg.f0[i], confidence: 0 };
           }
-          pending.resolve(msg.notes ? { f0Array, notes: msg.notes } : f0Array);
+          if (msg.kind === 'fcpe') {
+            pending.resolve({
+              f0Array,
+              notes: msg.notes,
+              pitchBends: msg.pitchBends,
+              warnings: msg.warnings,
+              f0Min: msg.f0Min,
+              f0Max: msg.f0Max,
+              device: msg.device,
+              bpm: msg.bpm,
+            });
+          } else {
+            pending.resolve(msg.notes ? { f0Array, notes: msg.notes } : f0Array);
+          }
         } else {
           const err = new Error(msg.error);
           if (msg.code) err.code = msg.code;
@@ -263,6 +276,84 @@ async function extractMidiViaWorker(audioData, sampleRate, bpm, useRosvot, rosvo
   });
 }
 
+// FCPE（默认 MIDI 提取）走同一个 pitchWorker：FCPE 的 48k→16k Kaiser 重采样
+// 加全部后处理在主线程执行时会冻结所有窗口（5 分钟音频约 3.4s）。
+async function extractFcpeViaWorker(audioData, sampleRate, bpm, options) {
+  const worker = await ensurePitchWorker();
+  const id = ++pitchRequestId;
+  return new Promise((resolve, reject) => {
+    pitchPendingRequests.set(id, { resolve, reject });
+    worker.postMessage({ type: 'extract-fcpe', id, audioData, sampleRate, bpm, options });
+  });
+}
+
+// FCPE 9 步管线的主线程同步版本，作为 worker 不可用/崩溃时的 fallback；
+// 必须与 pitchWorker.js 的 runFcpeExtraction 保持逐行语义一致。
+async function runFcpePipeline(detector, audioData, sampleRate, bpm, options) {
+  const sr = sampleRate || 44100;
+  const opts = options || {};
+  const bpmVal = opts.bpm || bpm || 120;
+
+  // 1. 响度归一化到 -3 ~ -6dBFS（弱信号会导致 FCPE 漏判音高）
+  const workAudio = opts.normalize === false ? audioData : pp.normalizeToTargetDb(audioData, -4.5);
+
+  // 2. 提取 F0（内部重采样到 16kHz）
+  let f0Array = await detector.extractF0(workAudio, sr);
+
+  // 3. 自动适配音域（快速扫描后取分位数区间）
+  let f0Min = opts.f0Min || 80;
+  let f0Max = opts.f0Max || 880;
+  if (opts.f0RangeAuto) {
+    const stats = pp.f0RangeStats(f0Array);
+    const range = pp.autoRangeFromStats(stats);
+    f0Min = range.f0Min;
+    f0Max = range.f0Max;
+  }
+
+  // 4. 静音门限（按帧 RMS，threshold 预设 0.003/0.006/0.01）
+  if (opts.thresholdEnabled !== false && opts.threshold > 0) {
+    const frameDur = f0Array.length > 1 ? f0Array[1].time - f0Array[0].time : 0.02;
+    const rms = pp.computeFrameRms(workAudio, sr, frameDur);
+    f0Array = pp.gateByThreshold(f0Array, rms, opts.threshold);
+  }
+
+  // 5. F0 量程门限
+  f0Array = pp.gateByRange(f0Array, f0Min, f0Max);
+
+  // 6. 中值平滑（消除跳变噪音）
+  const win = pp.smoothingWindow(opts.smoothing || 'medium');
+  f0Array = pp.medianFilterF0(f0Array, win);
+
+  // 7. 有效人声/静音段检测（提示 UVR 分离质量）
+  const endSec = f0Array.length > 0 ? f0Array[f0Array.length - 1].time : 0;
+  const quality = pp.detectVoiceQuality(f0Array, endSec);
+  const warnings = quality.warnings;
+
+  // 8. 自动 BPM 检测
+  let useBpm = bpmVal;
+  if (opts.autoBpm) {
+    useBpm = pp.detectBpm(workAudio, sr, bpmVal);
+  }
+
+  // 9. 音符切分 + 量化（严格 / 保留滑音 Pitch Bend）
+  const { notes, pitchBends } = pp.segmentNotes(f0Array, {
+    quantization: opts.quantization || 'strict',
+    minNoteDuration: opts.minNoteDuration || 0.05,
+    bpm: useBpm,
+  });
+
+  return {
+    f0Array,
+    notes,
+    pitchBends,
+    warnings,
+    f0Min,
+    f0Max,
+    device: detector.getDeviceInfo(),
+    bpm: useBpm,
+  };
+}
+
 function registerPitchMidiIpc() {
   ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate }) => {
     try {
@@ -325,79 +416,28 @@ function registerPitchMidiIpc() {
   });
 
   ipcMain.handle('extractMidi:fcpe', async (event, { audioData, sampleRate, bpm, options }) => {
+    const sr = sampleRate || 44100;
+    // Worker 优先：重采样 + ONNX 推理 + 后处理全部离开主进程，不再冻结窗口；
+    // worker 不可用（spawn 失败/初始化冷却/崩溃）时回退到本进程同步执行，
+    // 功能不丢失（与 RMVPE 路径同一模式）。
     try {
-      const detector = await fcpeLazy.get();
-      const audio = new Float32Array(audioData);
-      const sr = sampleRate || 44100;
-      const opts = options || {};
-      const bpmVal = opts.bpm || bpm || 120;
-
-      // 1. 响度归一化到 -3 ~ -6dBFS（弱信号会导致 FCPE 漏判音高）
-      const workAudio = opts.normalize === false ? audio : pp.normalizeToTargetDb(audio, -4.5);
-
-      // 2. 提取 F0（内部重采样到 16kHz）
-      let f0Array = await detector.extractF0(workAudio, sr);
-
-      // 3. 自动适配音域（快速扫描后取分位数区间）
-      let f0Min = opts.f0Min || 80;
-      let f0Max = opts.f0Max || 880;
-      if (opts.f0RangeAuto) {
-        const stats = pp.f0RangeStats(f0Array);
-        const range = pp.autoRangeFromStats(stats);
-        f0Min = range.f0Min;
-        f0Max = range.f0Max;
+      const result = await extractFcpeViaWorker(audioData, sr, bpm, options);
+      return { success: true, ...result };
+    } catch (workerErr) {
+      console.warn('[Main] pitchWorker FCPE path unavailable, falling back to sync:', workerErr.message);
+      try {
+        const detector = await fcpeLazy.get();
+        const audio = new Float32Array(audioData);
+        const result = await runFcpePipeline(detector, audio, sr, bpm, options);
+        return { success: true, ...result };
+      } catch (err) {
+        console.error('[Main] FCPE extraction failed:', err);
+        return {
+          success: false,
+          code: err.code === 'MODEL_NOT_FOUND' ? 'MODEL_NOT_FOUND' : undefined,
+          error: err.message,
+        };
       }
-
-      // 4. 静音门限（按帧 RMS，threshold 预设 0.003/0.006/0.01）
-      if (opts.thresholdEnabled !== false && opts.threshold > 0) {
-        const frameDur = f0Array.length > 1 ? f0Array[1].time - f0Array[0].time : 0.02;
-        const rms = pp.computeFrameRms(workAudio, sr, frameDur);
-        f0Array = pp.gateByThreshold(f0Array, rms, opts.threshold);
-      }
-
-      // 5. F0 量程门限
-      f0Array = pp.gateByRange(f0Array, f0Min, f0Max);
-
-      // 6. 中值平滑（消除跳变噪音）
-      const win = pp.smoothingWindow(opts.smoothing || 'medium');
-      f0Array = pp.medianFilterF0(f0Array, win);
-
-      // 7. 有效人声/静音段检测（提示 UVR 分离质量）
-      const endSec = f0Array.length > 0 ? f0Array[f0Array.length - 1].time : 0;
-      const quality = pp.detectVoiceQuality(f0Array, endSec);
-      const warnings = quality.warnings;
-
-      // 8. 自动 BPM 检测
-      let useBpm = bpmVal;
-      if (opts.autoBpm) {
-        useBpm = pp.detectBpm(workAudio, sr, bpmVal);
-      }
-
-      // 9. 音符切分 + 量化（严格 / 保留滑音 Pitch Bend）
-      const { notes, pitchBends } = pp.segmentNotes(f0Array, {
-        quantization: opts.quantization || 'strict',
-        minNoteDuration: opts.minNoteDuration || 0.05,
-        bpm: useBpm,
-      });
-
-      return {
-        success: true,
-        f0Array,
-        notes,
-        pitchBends,
-        warnings,
-        f0Min,
-        f0Max,
-        device: detector.getDeviceInfo(),
-        bpm: useBpm,
-      };
-    } catch (err) {
-      console.error('[Main] FCPE extraction failed:', err);
-      return {
-        success: false,
-        code: err.code === 'MODEL_NOT_FOUND' ? 'MODEL_NOT_FOUND' : undefined,
-        error: err.message,
-      };
     }
   });
 
