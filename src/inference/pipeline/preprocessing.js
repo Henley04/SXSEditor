@@ -95,8 +95,11 @@ class Preprocessing {
             const freq = this.midiToFreq(effectivePitch);
             const startFrame = Math.floor(note.start * framesPerBeat);
             const endFrame = Math.min(totalFrames, Math.floor((note.start + note.duration) * framesPerBeat));
-            for (let i = startFrame; i < endFrame; i++) {
-                f0[i] = freq;
+            // TypedArray.fill 走原生填充；钳制起点兼容音符起点为负/越界的情况
+            // （旧标量循环对越界区间自然不迭代，fill 越界会抛 RangeError）。
+            const fillStart = Math.max(0, startFrame);
+            if (fillStart < endFrame) {
+                f0.fill(freq, fillStart, endFrame);
             }
         }
         return f0;
@@ -869,28 +872,28 @@ class Preprocessing {
             await new Promise(r => setImmediate(r));
         }
 
-        // 用 subarray.set 替代元素级循环，走 native memcpy（每帧 EMBED_DIM=512 维拷贝）
+        // mel2token 展开与 f0Emb 相加合并到同一个缓冲区：旧实现先分配
+        // expandedEmb 做 subarray.set（native memcpy），再分配 combinedFeatures
+        // 逐元素相加——一次全长分配（totalFrames×512×4B）+ 一遍全量遍历纯属
+        // 冗余（expandedEmb 再无其他消费者）。现在直接展开到 combinedFeatures，
+        // 然后就地加上 f0Emb。
         const mel2token = sequences.mel2token;
-        const expandedEmb = new Float32Array(totalFrames * EMBED_DIM);
+        const combinedFeatures = new Float32Array(totalFrames * EMBED_DIM);
         for (let f = 0; f < totalFrames; f++) {
             const tokenIdx = mel2token[f];
-            expandedEmb.set(
+            combinedFeatures.set(
                 processedTokenEmb.subarray(tokenIdx * EMBED_DIM, (tokenIdx + 1) * EMBED_DIM),
                 f * EMBED_DIM
             );
         }
 
-        // expandedEmb → combinedFeatures 之间 yield
+        // 展开 → f0 相加之间 yield
         if (totalFrames > 256) {
             await new Promise(r => setImmediate(r));
         }
 
-        const combinedFeatures = new Float32Array(totalFrames * EMBED_DIM);
-        for (let f = 0; f < totalFrames; f++) {
-            const fBase = f * EMBED_DIM;
-            for (let d = 0; d < EMBED_DIM; d++) {
-                combinedFeatures[fBase + d] = expandedEmb[fBase + d] + f0Emb[fBase + d];
-            }
+        for (let i = 0; i < combinedFeatures.length; i++) {
+            combinedFeatures[i] += f0Emb[i];
         }
 
         const totalCondFrames = ptFrameCount > 0 ? ptFrameCount + totalFrames : totalFrames;
