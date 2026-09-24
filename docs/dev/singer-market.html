@@ -66,8 +66,8 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en"><strong>Deployed version: <code>2.1.0</code></strong> (as of 2026-09-24). The live deployment is currently <strong>API-only</strong>: <code>GET /</code> and <code>GET /admin</code> are listed in the service index but actually return <code>404 not_found</code> — the inline SPAs are not being served. The only usable UI is the in-app Electron window. A machine-readable endpoint index is available at <code>GET /api</code>.</p>
-          <p data-lang="zh"><strong>线上版本：<code>2.1.0</code></strong>（截至 2026-09-24）。当前线上部署为<strong>仅 API</strong>：服务索引中列出了 <code>GET /</code> 与 <code>GET /admin</code>，但实际返回 <code>404 not_found</code>——内嵌 SPA 并未提供。唯一可用界面是应用内 Electron 窗口。机器可读的端点索引见 <code>GET /api</code>。</p>
+          <p data-lang="en"><strong>Deployed version: <code>2.2.0</code></strong> (as of 2026-09-24). The service serves an inline user SPA at <code>GET /</code> and an admin SPA at <code>GET /admin</code>, but <strong>only for browser navigations</strong> (<code>Accept: text/html</code> with <code>Sec-Fetch-Mode: navigate</code>); plain API clients (e.g. <code>curl</code>/<code>Invoke-RestMethod</code>) receive the <code>404 not_found</code> JSON envelope on those paths — that is content negotiation, not a missing page. The primary client remains the in-app Electron window. A machine-readable endpoint index is available at <code>GET /api</code>.</p>
+          <p data-lang="zh"><strong>线上版本：<code>2.2.0</code></strong>（截至 2026-09-24）。服务在 <code>GET /</code> 提供内嵌用户 SPA、在 <code>GET /admin</code> 提供管理 SPA，但<strong>仅对浏览器导航请求</strong>（<code>Accept: text/html</code> 且 <code>Sec-Fetch-Mode: navigate</code>）返回；普通 API 客户端（如 <code>curl</code>/<code>Invoke-RestMethod</code>）在这两个路径上收到 <code>404 not_found</code> JSON——这是内容协商，并非页面缺失。主要客户端仍是应用内 Electron 窗口。机器可读的端点索引见 <code>GET /api</code>。</p>
         </div>
       </div>
 
@@ -106,8 +106,8 @@
         │singer-files│         │  files   │        │ limit +  │
         │  (blobs)   │         │ (8 tables)│       │ B2 cache │
         └────────────┘         └──────────┘        └──────────┘</code></pre>
-      <p data-lang="en"><small><strong>Note (v2.1.0):</strong> the <code>ui_user.js</code> / <code>ui_admin.js</code> SPAs shown above are currently not served — <code>/</code> and <code>/admin</code> return 404.</small></p>
-      <p data-lang="zh"><small><strong>注意（v2.1.0）：</strong>上图中的 <code>ui_user.js</code> / <code>ui_admin.js</code> SPA 当前未提供——<code>/</code> 与 <code>/admin</code> 返回 404。</small></p>
+      <p data-lang="en"><small><strong>Note (v2.2.0):</strong> the <code>ui_user.js</code> / <code>ui_admin.js</code> SPAs are served at <code>/</code> and <code>/admin</code> for browser navigations only (HTML <code>Accept</code> + <code>Sec-Fetch-Mode: navigate</code>); non-browser requests get the 404 JSON envelope. Downloads are proxied through the Worker and the B2 bucket is <strong>allPrivate</strong>.</small></p>
+      <p data-lang="zh"><small><strong>注意（v2.2.0）：</strong><code>ui_user.js</code> / <code>ui_admin.js</code> SPA 在 <code>/</code> 与 <code>/admin</code> 上<strong>仅对浏览器导航请求</strong>提供（HTML <code>Accept</code> + <code>Sec-Fetch-Mode: navigate</code>）；非浏览器请求收到 404 JSON。下载经 Worker 代理，B2 桶为 <strong>allPrivate</strong>。</small></p>
 
       <table class="doc-table">
         <thead>
@@ -236,7 +236,7 @@
           <tr>
             <td><code>singer-market:health</code></td>
             <td><code>GET /health</code></td>
-            <td><span data-lang="en">Liveness probe (db / b2 / kv binding status).</span><span data-lang="zh">存活探针（db / b2 / kv 绑定状态）。</span></td>
+            <td><span data-lang="en">Liveness probe (db / kv / config, plus B2 credentials and a real bucket-existence probe, cached 60s).</span><span data-lang="zh">存活探针（db / kv / config，外加 B2 凭据与真实的桶存在性探测，结果缓存 60 秒）。</span></td>
           </tr>
         </tbody>
       </table>
@@ -295,7 +295,7 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
           <tr>
             <td><code>GET /api/files</code></td>
             <td><span data-lang="en">optional</span><span data-lang="zh">可选</span></td>
-            <td><span data-lang="en">List files. Query: <code>page</code>, <code>size</code>, <code>q</code>, <code>tags</code> (csv), <code>tag_mode</code> (<code>and</code>|<code>or</code>), <code>visibility</code>, <code>uploaded_by</code>, <code>mine=1</code>, <code>sort</code>, <code>order</code>. The page-size param is <code>size</code>; the IPC proxy sends it correctly since the client-fix. <code>mine=1</code> without a session → 400.</span><span data-lang="zh">列出文件。查询参数：<code>page</code>、<code>size</code>、<code>q</code>、<code>tags</code>（逗号分隔）、<code>tag_mode</code>（<code>and</code>|<code>or</code>）、<code>visibility</code>、<code>uploaded_by</code>、<code>mine=1</code>、<code>sort</code>、<code>order</code>。分页大小参数为 <code>size</code>；客户端修复后 IPC 代理已正确发送。无会话时使用 <code>mine=1</code> → 400。</span></td>
+            <td><span data-lang="en">List files. Query: <code>page</code>, <code>size</code>, <code>q</code>, <code>tags</code> (csv), <code>tag_mode</code> (<code>and</code>|<code>or</code>), <code>visibility</code>, <code>uploaded_by</code>, <code>mine=1</code>, <code>sort</code> (<code>created_at</code>|<code>size</code>|<code>name</code>|<code>downloads</code>|<code>updated_at</code>), <code>order</code> (<code>asc</code>|<code>desc</code>). The page-size param is <code>size</code>; the IPC proxy sends it correctly since the client-fix. <code>mine=1</code> without a session → 400; invalid <code>tag_mode</code>/<code>sort</code>/<code>order</code> → 400 (since v2.2.0).</span><span data-lang="zh">列出文件。查询参数：<code>page</code>、<code>size</code>、<code>q</code>、<code>tags</code>（逗号分隔）、<code>tag_mode</code>（<code>and</code>|<code>or</code>）、<code>visibility</code>、<code>uploaded_by</code>、<code>mine=1</code>、<code>sort</code>（<code>created_at</code>|<code>size</code>|<code>name</code>|<code>downloads</code>|<code>updated_at</code>）、<code>order</code>（<code>asc</code>|<code>desc</code>）。分页大小参数为 <code>size</code>；客户端修复后 IPC 代理已正确发送。无会话时使用 <code>mine=1</code> → 400；非法的 <code>tag_mode</code>/<code>sort</code>/<code>order</code> → 400（v2.2.0 起）。</span></td>
           </tr>
           <tr>
             <td><code>GET /api/files/:id</code></td>
@@ -305,7 +305,7 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
           <tr>
             <td><code>POST /api/files</code></td>
             <td><span data-lang="en">user (or write key)</span><span data-lang="zh">user（或 write key）</span></td>
-            <td><span data-lang="en">Upload. Multipart (<code>file</code>, <code>description</code>, <code>tags</code>, <code>visibility</code>, ...) or raw body with <code>?filename=</code>.</span><span data-lang="zh">上传。Multipart（<code>file</code>、<code>description</code>、<code>tags</code>、<code>visibility</code> 等）或带 <code>?filename=</code> 的原始 body。</span></td>
+            <td><span data-lang="en">Upload. Multipart (<code>file</code>, <code>description</code>, <code>tags</code>, <code>visibility</code>, <code>license</code> (alias of <code>license_key</code>), ...) or raw body with <code>?filename=</code>. A JSON/url-encoded body without any file → <strong>400 bad_request</strong> (since v2.2.0; previously it was stored as a junk file). The response now contains the computed <code>sha256</code> and the correct <code>is_owner</code>.</span><span data-lang="zh">上传。Multipart（<code>file</code>、<code>description</code>、<code>tags</code>、<code>visibility</code>、<code>license</code>（<code>license_key</code> 的别名）等）或带 <code>?filename=</code> 的原始 body。不带任何文件的 JSON/url-encoded body → <strong>400 bad_request</strong>（v2.2.0 起；此前会被当成垃圾文件存入）。响应现在包含计算出的 <code>sha256</code> 与正确的 <code>is_owner</code>。</span></td>
           </tr>
           <tr>
             <td><code>GET /api/files/:id/download</code></td>
@@ -315,12 +315,12 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
           <tr>
             <td><code>GET /api/tags</code></td>
             <td><span data-lang="en">optional</span><span data-lang="zh">可选</span></td>
-            <td><span data-lang="en">Tag list / fuzzy search / autocomplete (<code>?suggest=1</code>) / exact check.</span><span data-lang="zh">标签列表 / 模糊搜索 / 自动补全（<code>?suggest=1</code>）/ 精确存在性检查。</span></td>
+            <td><span data-lang="en">Tag list / fuzzy search / autocomplete (<code>?suggest=1</code>) / exact check. Exact forms: <code>?exact=&lt;name&gt;</code> or, since v2.2.0, <code>?exact=1&amp;name=&lt;name&gt;</code> (<code>q</code> also accepted as the name). In v2.1.0 the boolean form searched for a tag literally named "1".</span><span data-lang="zh">标签列表 / 模糊搜索 / 自动补全（<code>?suggest=1</code>）/ 精确存在性检查。精确形式：<code>?exact=&lt;名称&gt;</code>，v2.2.0 起也支持 <code>?exact=1&amp;name=&lt;名称&gt;</code>（名字也可用 <code>q</code>）。v2.1.0 中布尔形式会错误地去查找名为 "1" 的标签。</span></td>
           </tr>
           <tr>
             <td><code>GET /health</code></td>
             <td><span data-lang="en">none</span><span data-lang="zh">无</span></td>
-            <td><span data-lang="en">Liveness; reports binding status (db / b2 / kv).</span><span data-lang="zh">存活探针；上报绑定状态（db / b2 / kv）。</span></td>
+            <td><span data-lang="en">Liveness; reports <code>db</code>, <code>kv</code>, <code>config</code>, <code>b2_credentials</code>, <code>b2_bucket</code> (real B2 list-buckets probe, cached 60s in KV); <code>b2</code> = credentials AND bucket. Since v2.2.0.</span><span data-lang="zh">存活探针；上报 <code>db</code>、<code>kv</code>、<code>config</code>、<code>b2_credentials</code>、<code>b2_bucket</code>（真实 B2 list-buckets 探测，KV 缓存 60 秒）；<code>b2</code> = 凭据与桶皆就绪。v2.2.0 起。</span></td>
           </tr>
         </tbody>
       </table>
@@ -329,8 +329,8 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
       <ul>
         <li data-lang="en"><code>GET /api</code> — self-describing service index: auth instructions + full endpoint list (no auth).</li>
         <li data-lang="zh"><code>GET /api</code>— 自描述服务索引：鉴权说明 + 完整端点列表（无需鉴权）。</li>
-        <li data-lang="en"><code>GET /api/stats</code> — public aggregate stats: file counts (public/private/owned), total bytes, total downloads, top tags, storage readiness.</li>
-        <li data-lang="zh"><code>GET /api/stats</code>— 公开聚合统计：文件数（公开/私有/自有）、总字节、总下载量、热门标签、存储就绪状态。</li>
+        <li data-lang="en"><code>GET /api/stats</code> — public aggregate stats: file counts (public/private/owned), total bytes, total downloads, top tags, storage status (<code>{ backend, configured, ready }</code>; <code>ready</code> is a real bucket probe since v2.2.0).</li>
+        <li data-lang="zh"><code>GET /api/stats</code>— 公开聚合统计：文件数（公开/私有/自有）、总字节、总下载量、热门标签、存储状态（<code>{ backend, configured, ready }</code>；v2.2.0 起 <code>ready</code> 为真实探桶结果）。</li>
         <li data-lang="en"><code>GET /api/licenses</code> — license catalog: 13 preset licenses (All Rights Reserved default, CC0, CC BY family, MIT, Apache-2.0, GPL/AGPL, …) plus a <code>custom</code> license slot. Returns <code>{ items, total, default, custom_allowed, require_license, custom_key }</code>.</li>
         <li data-lang="zh"><code>GET /api/licenses</code>— 许可证目录：13 个预设许可证（默认为保留所有权利、CC0、CC BY 系列、MIT、Apache-2.0、GPL/AGPL 等）加一个 <code>custom</code> 自定义许可。返回 <code>{ items, total, default, custom_allowed, require_license, custom_key }</code>。</li>
         <li data-lang="en"><code>GET /robots.txt</code> — content-signals notice (search / ai-input / ai-train). Currently contains only the explanatory template, no actual crawler rules or signals.</li>
@@ -341,8 +341,8 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
       <ul>
         <li data-lang="en"><code>GET /api/auth/sessions</code>, <code>DELETE /api/auth/sessions/:prefix</code> — list the caller's sessions / revoke one by token prefix (<code>{ "revoked": true }</code>).</li>
         <li data-lang="zh"><code>GET /api/auth/sessions</code>、<code>DELETE /api/auth/sessions/:prefix</code>— 列出调用者会话 / 按令牌前缀撤销（<code>{ "revoked": true }</code>）。</li>
-        <li data-lang="en"><code>PATCH /api/files/:id</code>, <code>DELETE /api/files/:id</code> — update metadata / soft-delete (owner or admin). <strong>Caution (v2.1.0 bug):</strong> PATCH without a <code>tags</code> field clears all tags.</li>
-        <li data-lang="zh"><code>PATCH /api/files/:id</code>、<code>DELETE /api/files/:id</code>— 更新元数据 / 软删除（owner 或 admin）。<strong>注意（v2.1.0 bug）：</strong>不带 <code>tags</code> 字段的 PATCH 会清空全部标签。</li>
+        <li data-lang="en"><code>PATCH /api/files/:id</code>, <code>DELETE /api/files/:id</code> — update metadata / soft-delete (owner or admin). Since v2.2.0, PATCH without a <code>tags</code> field <strong>preserves</strong> existing tags; sending <code>tags</code> replaces the full set (an empty array clears them); <code>license</code> is accepted as an alias of <code>license_key</code>; the response carries the real final tag list.</li>
+        <li data-lang="zh"><code>PATCH /api/files/:id</code>、<code>DELETE /api/files/:id</code>— 更新元数据 / 软删除（owner 或 admin）。v2.2.0 起，不带 <code>tags</code> 字段的 PATCH 会<strong>保留</strong>现有标签；显式发送 <code>tags</code> 则整体替换（空数组即清空）；<code>license</code> 作为 <code>license_key</code> 的别名被接受；响应携带真实的最终标签列表。</li>
         <li data-lang="en"><code>POST/PUT/DELETE /api/files/:id/tags</code> — add / replace / remove tags. DELETE accepts <code>?tags=a,b</code> (or a JSON body).</li>
         <li data-lang="zh"><code>POST/PUT/DELETE /api/files/:id/tags</code>— 添加 / 替换 / 移除标签。DELETE 接受 <code>?tags=a,b</code>（或 JSON body）。</li>
         <li data-lang="en"><code>POST /api/files/:id/block-download</code> (<code>{ reason? }</code>), <code>DELETE /api/files/:id/block-download</code> — <strong>admin only</strong>: block / unblock downloads for a file. The file object surfaces <code>download_blocked</code>, <code>blocked_at</code>, <code>blocked_reason</code>, <code>download_allowed</code>.</li>
@@ -372,8 +372,8 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
         <li data-lang="en"><code>GET /api/audit</code> — audit log (supports paging).</li>
         <li data-lang="zh"><code>GET /api/audit</code>— 审计日志（支持分页）。</li>
       </ul>
-      <p data-lang="en">Errors are JSON: <code>{ "error": { "code", "message", "required_scope"? } }</code>. Common <code>code</code>s map to <code>bad_request</code> (400), <code>unauthorized</code> (401 — also used for private resources without credentials), <code>forbidden</code> (403 — authenticated but lacking scope), <code>not_found</code> (404), <code>conflict</code> (409 — duplicate username, last-admin protection), <code>payload_too_large</code> (413), <code>too_many_requests</code> (429), <code>quota_exceeded</code> (429/503), <code>internal_error</code> (500 — note: v2.1.0 leaks upstream B2 error text into <code>message</code>).</p>
-      <p data-lang="zh">错误为 JSON：<code>{ "error": { "code", "message", "required_scope"? } }</code>。常见 <code>code</code> 对应：<code>bad_request</code> (400)、<code>unauthorized</code> (401——无凭据访问私有资源时也用它)、<code>forbidden</code> (403——已鉴权但权限不足)、<code>not_found</code> (404)、<code>conflict</code> (409——用户名重复、最后一位管理员保护)、<code>payload_too_large</code> (413)、<code>too_many_requests</code> (429)、<code>quota_exceeded</code> (429/503)、<code>internal_error</code> (500——注意：v2.1.0 会把上游 B2 的错误原文泄露进 <code>message</code>)。</p>
+      <p data-lang="en">Errors are JSON: <code>{ "error": { "code", "message", "required_scope"? } }</code>. Common <code>code</code>s map to <code>bad_request</code> (400), <code>unauthorized</code> (401 — also used for private resources without credentials), <code>forbidden</code> (403 — authenticated but lacking scope), <code>not_found</code> (404), <code>conflict</code> (409 — duplicate username, last-admin protection), <code>payload_too_large</code> (413), <code>too_many_requests</code> (429), <code>quota_exceeded</code> (429/503), <code>bad_gateway</code> (502 — upstream B2 failure; since v2.2.0 the client only sees a generic <code>File storage backend error (&lt;scope&gt; &lt;status&gt;)</code> message — the full B2 error text is logged server-side and no longer leaked, as it was in v2.1.0), <code>internal_error</code> (500).</p>
+      <p data-lang="zh">错误为 JSON：<code>{ "error": { "code", "message", "required_scope"? } }</code>。常见 <code>code</code> 对应：<code>bad_request</code> (400)、<code>unauthorized</code> (401——无凭据访问私有资源时也用它)、<code>forbidden</code> (403——已鉴权但权限不足)、<code>not_found</code> (404)、<code>conflict</code> (409——用户名重复、最后一位管理员保护)、<code>payload_too_large</code> (413)、<code>too_many_requests</code> (429)、<code>quota_exceeded</code> (429/503)、<code>bad_gateway</code>（502——上游 B2 故障；v2.2.0 起客户端只看到通用的 <code>File storage backend error (&lt;scope&gt; &lt;status&gt;)</code> 消息——B2 完整错误仅在服务端日志记录，不再像 v2.1.0 那样外泄）、<code>internal_error</code> (500)。</p>
 
       <h2>
         <span data-lang="en">Authentication &amp; Permission Model</span>
@@ -437,12 +437,12 @@ api_keys       id, key_hash (SHA-256), key_prefix, label, scopes,
 audit_log      id, action, resource_type, resource_id, actor, ip,
                user_agent, details (JSON), created_at
 schema_meta    key, value  (version tracking)</code></pre>
-      <p data-lang="en">B2 storage layout: each file is stored at <code>&lt;file-uuid&gt;/&lt;sanitized-filename&gt;</code> in the <code>singer-files</code> bucket. B2 object <code>X-Bz-Info-*</code> metadata carries <code>original_name</code>, <code>uploaded_by</code>, <code>uploaded_at</code>; <code>Content-Type</code> carries the declared MIME. The worker's auto-create attempts an <code>allPublic</code> bucket, but on a Backblaze account with no payment history that call is rejected (401 <code>no_payment_history</code>); the live bucket was therefore created manually as <strong>allPrivate</strong>. This is safe because downloads always stream through the Worker (which holds an authorized B2 key) so it can still enforce auth, audit, and content-disposition.</p>
-      <p data-lang="zh">B2 存储布局：每个文件存于 <code>singer-files</code> 桶的 <code>&lt;file-uuid&gt;/&lt;sanitized-filename&gt;</code> 路径。B2 对象的 <code>X-Bz-Info-*</code> 元数据携带 <code>original_name</code>、<code>uploaded_by</code>、<code>uploaded_at</code>；<code>Content-Type</code> 携带声明的 MIME。Worker 的自动建桶尝试创建 <code>allPublic</code> 桶，但无付款历史的 Backblaze 账号会被拒绝（401 <code>no_payment_history</code>）；因此线上桶是手动创建的 <strong>allPrivate</strong>。这是安全的，因为下载始终经 Worker 流式中转（它持有已授权的 B2 key），仍可实施鉴权、审计与 content-disposition。</p>
+      <p data-lang="en">B2 storage layout: each file is stored at <code>&lt;file-uuid&gt;/&lt;sanitized-filename&gt;</code> in the <code>singer-files</code> bucket. B2 object <code>X-Bz-Info-*</code> metadata carries <code>original_name</code>, <code>uploaded_by</code>, <code>uploaded_at</code>; <code>Content-Type</code> carries the declared MIME. The bucket is <strong>allPrivate</strong>: downloads always stream through the Worker (which holds an authorized B2 key) via the B2 friendly URL <code>https://&lt;download-host&gt;/file/&lt;bucket&gt;/&lt;object-key&gt;</code>, so it can still enforce auth, audit, Range requests and content-disposition. Note: v2.1.0 called the obsolete <code>/b2api/v2/b2_download_file_by_name</code> path on the download host and every download failed with 500 — fixed in v2.2.0 (with one cached-token 401 retry). Since v2.2.0 the Worker also auto-creates the bucket as <code>allPrivate</code> (v2.1.0 attempted <code>allPublic</code>, which fails with 401 <code>no_payment_history</code> on accounts without payment history).</p>
+      <p data-lang="zh">B2 存储布局：每个文件存于 <code>singer-files</code> 桶的 <code>&lt;file-uuid&gt;/&lt;sanitized-filename&gt;</code> 路径。B2 对象的 <code>X-Bz-Info-*</code> 元数据携带 <code>original_name</code>、<code>uploaded_by</code>、<code>uploaded_at</code>；<code>Content-Type</code> 携带声明的 MIME。桶为 <strong>allPrivate</strong>：下载始终经 Worker 流式中转（它持有已授权的 B2 key），通过 B2 友好 URL <code>https://&lt;下载主机&gt;/file/&lt;桶名&gt;/&lt;对象键&gt;</code> 拉取，因此仍可实施鉴权、审计、Range 请求与 content-disposition。注意：v2.1.0 在下载主机上调用已废弃的 <code>/b2api/v2/b2_download_file_by_name</code> 路径，所有下载均 500 失败——v2.2.0 已修复（并对缓存令牌 401 重试一次）。v2.2.0 起 Worker 自动建桶也改为 <code>allPrivate</code>（v2.1.0 尝试建 <code>allPublic</code>，在无付款历史的账号上会以 401 <code>no_payment_history</code> 失败）。</p>
 
       <h2>
-        <span data-lang="en">API Response Shapes (v2.1.0, observed)</span>
-        <span data-lang="zh">API 响应结构（v2.1.0，实测）</span>
+        <span data-lang="en">API Response Shapes (v2.2.0, observed)</span>
+        <span data-lang="zh">API 响应结构（v2.2.0，实测）</span>
       </h2>
       <p data-lang="en">All timestamps are epoch <strong>milliseconds</strong>. List endpoints share one envelope:</p>
       <p data-lang="zh">所有时间戳均为 epoch <strong>毫秒</strong>。列表端点共用同一信封：</p>
@@ -452,7 +452,8 @@ schema_meta    key, value  (version tracking)</code></pre>
       <pre><code>// File object
 {
   "id": "uuid", "slug": "mw6evxj6yj", "name": "singer.sxssinger",
-  "mime_type": "application/octet-stream", "size": 76, "sha256": null,
+  "mime_type": "application/octet-stream", "size": 76,
+  "sha256": "746be7b3f4ee8343e8b954d8e254326e589e3adc658435586cc531b58a49cdb8",
   "description": "...", "visibility": "public | private",
   "uploaded_by": "user:alice | key:abc123 | anonymous",
   "user_id": "uuid", "is_owner": true,
@@ -492,22 +493,23 @@ schema_meta    key, value  (version tracking)</code></pre>
 { "items": [ { "created_at", "expires_at", "last_used_at",
                "user_agent", "ip", "token_preview" } ], "total": 1 }
 
-// GET /health
+// GET /health (v2.2.0)
 { "status": "ok | degraded | unhealthy", "service": "singer-files",
-  "version": "2.1.0", "time": 1790241645185,
-  "checks": { "db": true, "b2": true, "kv": true, "config": true },
+  "version": "2.2.0", "time": 1790251046243,
+  "checks": { "db": true, "b2": true, "b2_credentials": true,
+              "b2_bucket": true, "kv": true, "config": true },
   "schema": "migrated",
   "features": { "user_ban": true, "admin_file_delete": true,
                 "download_block": true, "licenses": true,
                 "custom_license": true },
-  "b2_required_action": null }
+  "b2_required_action": null }   // "missing_credentials" | "missing_bucket" | null
 
-// GET /api/stats
+// GET /api/stats (v2.2.0)
 { "files": { "file_count", "total_bytes", "total_downloads",
              "public_count", "private_count",
              "user_owned_count", "api_or_anon_count" },
   "tags": { "total": 10, "top": [ { "name", "file_count" } ] },
-  "storage": { "backend": "b2", "ready": true },
+  "storage": { "backend": "b2", "configured": true, "ready": true },
   "generated_at": 1790241793779 }
 
 // Bulk operation results
@@ -516,8 +518,8 @@ POST /api/bulk/delete → { "deleted": [ ... ], "not_found": [ ... ],
 POST /api/bulk/tag | untag → { "updated": [
   { "id": "&lt;id&gt;", "tags": [ ... ] },
   { "id": "&lt;id&gt;", "error": "not_found" } ] }</code></pre>
-      <p data-lang="en"><strong>CORS</strong> is open to all origins; preflight <code>OPTIONS</code> returns 204 and allows the <code>Authorization</code>, <code>Content-Type</code>, <code>Content-Disposition</code>, <code>X-Api-Key</code>, <code>X-Request-Id</code> headers. Besides the Bearer header, credentials are accepted via <code>X-Api-Key</code> or <code>?api_key=</code>.</p>
-      <p data-lang="zh"><strong>CORS</strong> 对所有来源开放；预检 <code>OPTIONS</code> 返回 204，允许 <code>Authorization</code>、<code>Content-Type</code>、<code>Content-Disposition</code>、<code>X-Api-Key</code>、<code>X-Request-Id</code> 头。除 Bearer 头外，也可通过 <code>X-Api-Key</code> 或 <code>?api_key=</code> 传递凭据。</p>
+      <p data-lang="en"><strong>CORS</strong> is open to all origins; preflight <code>OPTIONS</code> returns 204 and allows the <code>Authorization</code>, <code>Content-Type</code>, <code>Content-Disposition</code>, <code>X-Api-Key</code>, <code>X-Request-Id</code> headers. Besides the Bearer header, credentials are accepted via <code>X-Api-Key</code> or <code>?api_key=</code>. Since v2.2.0 every gated response (including auth/rate-limit rejections) carries <code>X-RateLimit-Limit</code>, <code>X-RateLimit-Remaining</code> and <code>X-RateLimit-Reset</code> (Unix seconds), and all three are listed in <code>Access-Control-Expose-Headers</code> — in v2.1.0 these headers were advertised but never actually sent.</p>
+      <p data-lang="zh"><strong>CORS</strong> 对所有来源开放；预检 <code>OPTIONS</code> 返回 204，允许 <code>Authorization</code>、<code>Content-Type</code>、<code>Content-Disposition</code>、<code>X-Api-Key</code>、<code>X-Request-Id</code> 头。除 Bearer 头外，也可通过 <code>X-Api-Key</code> 或 <code>?api_key=</code> 传递凭据。v2.2.0 起，每个经过 gate 的响应（含鉴权/限流拒绝）都带 <code>X-RateLimit-Limit</code>、<code>X-RateLimit-Remaining</code>、<code>X-RateLimit-Reset</code>（Unix 秒），三者均列入 <code>Access-Control-Expose-Headers</code>——v2.1.0 只声明了这些头却从未实际发送。</p>
 
       <h2>
         <span data-lang="en">Rate Limiting &amp; Circuit Breaker</span>
@@ -647,7 +649,7 @@ POST /api/bulk/tag | untag → { "updated": [
         <li><span data-lang="en"><strong>Cloudflare credentials</strong> — create an API token with Workers Scripts / D1 / KV Storage Edit permissions. Export <code>CLOUDFLARE_API_TOKEN</code> and <code>CLOUDFLARE_ACCOUNT_ID</code>.</span><span data-lang="zh"><strong>Cloudflare 凭据</strong>— 创建带 Workers Scripts / D1 / KV Storage Edit 权限的 API token。导出 <code>CLOUDFLARE_API_TOKEN</code> 与 <code>CLOUDFLARE_ACCOUNT_ID</code>。</span></li>
         <li><span data-lang="en"><strong>B2 application key</strong> — at Backblaze, create a key with <code>readFiles</code>, <code>writeFiles</code>, <code>deleteFiles</code>, <code>listBuckets</code>, <code>listFiles</code>, <code>readBuckets</code>, <code>writeBuckets</code>. Copy the <code>keyID</code> and <code>applicationKey</code> (shown once).</span><span data-lang="zh"><strong>B2 application key</strong>— 在 Backblaze 创建含 <code>readFiles</code>、<code>writeFiles</code>、<code>deleteFiles</code>、<code>listBuckets</code>、<code>listFiles</code>、<code>readBuckets</code>、<code>writeBuckets</code> 的 key。复制 <code>keyID</code> 与 <code>applicationKey</code>（仅显示一次）。</span></li>
         <li><span data-lang="en"><strong>Run setup</strong> — <code>npm install &amp;&amp; npm run setup</code>. The script creates the D1 DB + KV namespaces (idempotent), patches <code>wrangler.toml</code>, applies migrations, stores the B2 secrets and generates a bootstrap admin key (<code>sf_…</code>).</span><span data-lang="zh"><strong>执行 setup</strong>— <code>npm install &amp;&amp; npm run setup</code>。脚本会创建 D1 数据库 + KV 命名空间（幂等）、回写 <code>wrangler.toml</code>、应用迁移、存储 B2 secret 并生成引导管理员 key（<code>sf_…</code>）。</span></li>
-        <li><span data-lang="en"><strong>Deploy</strong> — <code>npm run deploy</code>. The B2 bucket is auto-created on the first upload.</span><span data-lang="zh"><strong>部署</strong>— <code>npm run deploy</code>。B2 桶在首次上传时自动创建。</span></li>
+        <li><span data-lang="en"><strong>Deploy</strong> — <code>npm run deploy</code>. The B2 bucket is auto-created as <code>allPrivate</code> on the first upload (v2.2.0+ behavior; all traffic streams through the Worker anyway).</span><span data-lang="zh"><strong>部署</strong>— <code>npm run deploy</code>。B2 桶在首次上传时自动创建为 <code>allPrivate</code>（v2.2.0 起的行为；反正所有流量都经 Worker 中转）。</span></li>
         <li><span data-lang="en"><strong>Create a permanent admin</strong> — open <code>/admin</code>, paste the bootstrap key, create an admin user. Then <code>npx wrangler secret delete ADMIN_BOOTSTRAP_API_KEY</code>.</span><span data-lang="zh"><strong>创建永久管理员</strong>— 打开 <code>/admin</code>，粘贴引导 key，创建管理员账号。然后 <code>npx wrangler secret delete ADMIN_BOOTSTRAP_API_KEY</code>。</span></li>
       </ol>
 
@@ -676,7 +678,7 @@ POST /api/bulk/tag | untag → { "updated": [
           </tr>
           <tr>
             <td><span data-lang="en">B2 bucket missing</span><span data-lang="zh">B2 桶缺失</span></td>
-            <td><span data-lang="en">Auto-created as <code>allPublic</code> on first upload. No manual step.</span><span data-lang="zh">首次上传时自动创建为 <code>allPublic</code>。无需手动操作。</span></td>
+            <td><span data-lang="en"><code>/health</code> → <code>degraded</code> with <code>b2_required_action: "missing_bucket"</code>. Auto-created as <code>allPrivate</code> on first upload (v2.2.0+; v2.1.0 attempted <code>allPublic</code>).</span><span data-lang="zh"><code>/health</code> → <code>degraded</code>，附 <code>b2_required_action: "missing_bucket"</code>。首次上传时自动创建为 <code>allPrivate</code>（v2.2.0 起；v2.1.0 尝试 <code>allPublic</code>）。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">B2 object missing (manually deleted)</span><span data-lang="zh">B2 对象缺失（被手动删除）</span></td>
@@ -720,37 +722,43 @@ POST /api/bulk/tag | untag → { "updated": [
       <p data-lang="zh">所有写操作都会写审计日志（<code>file.upload</code>、<code>file.update</code>、<code>file.delete</code>、<code>file.tag</code>、<code>file.download</code>、<code>api_key.create</code>、<code>api_key.revoke</code>、<code>user.create</code>、<code>user.update</code>、<code>user.delete</code>、<code>user.login</code>、<code>user.logout</code>、<code>session.revoke</code>、<code>bulk.delete</code>、<code>bulk.tag</code>、<code>bulk.untag</code>）。</p>
 
       <h2>
-        <span data-lang="en">Known Issues — v2.1.0 (observed 2026-09-24)</span>
-        <span data-lang="zh">已知问题 — v2.1.0（2026-09-24 实测）</span>
+        <span data-lang="en">v2.1.0 Issues — All Fixed in v2.2.0 (verified 2026-09-24)</span>
+        <span data-lang="zh">v2.1.0 问题 — 已在 v2.2.0 全部修复（2026-09-24 验证）</span>
       </h2>
+      <p data-lang="en">Every item below was observed against v2.1.0, fixed in the deployed v2.2.0 Worker, and confirmed with an end-to-end probe (register → upload → patch → tag checks → authenticated/anonymous/range download → short link → health/stats → cleanup). They are kept here as a changelog and regression reference.</p>
+      <p data-lang="zh">以下各项均在 v2.1.0 实测发现、已在部署的 v2.2.0 Worker 中修复，并通过端到端探测确认（注册 → 上传 → PATCH → 标签检查 → 鉴权/匿名/Range 下载 → 短链 → health/stats → 清理）。保留于此作为变更记录与回归参考。</p>
 
       <h3><span data-lang="en">Critical — core flow</span><span data-lang="zh">严重 — 核心流程</span></h3>
       <ol>
-        <li data-lang="en"><strong>Downloads are fully broken.</strong> Both <code>GET /api/files/:id/download</code> and <code>GET /f/:slug</code> (any visibility, any auth) return 500: <code>B2 download failed (400): path should be /file/&lt;bucket&gt;/&lt;filename&gt;</code> — the B2 download host is being called with the API path instead of <code>/file/&lt;bucket&gt;/&lt;object-key&gt;</code>.</li>
-        <li data-lang="zh"><strong>下载功能完全不可用。</strong><code>GET /api/files/:id/download</code> 与 <code>GET /f/:slug</code>（任何可见性、任何鉴权）均返回 500：<code>B2 download failed (400): path should be /file/&lt;bucket&gt;/&lt;filename&gt;</code>——请求 B2 下载主机时用了 API 路径，而非 <code>/file/&lt;bucket&gt;/&lt;object-key&gt;</code>。</li>
-        <li data-lang="en"><strong>(Mitigated during this review) Upload auto-create fails on fresh B2 accounts.</strong> The setup/upload path creates an <code>allPublic</code> bucket, rejected with 401 <code>no_payment_history</code>. Manual fix: pre-create an <code>allPrivate</code> bucket named <code>singer-files</code>. The setup script should create a private bucket (the Worker proxies all reads, so publicity is unnecessary).</li>
-        <li data-lang="zh"><strong>（本次审查已缓解）新 B2 账号自动建桶失败。</strong>setup/上传路径创建 <code>allPublic</code> 桶，被拒绝并返回 401 <code>no_payment_history</code>。手动修复：预先创建名为 <code>singer-files</code> 的 <code>allPrivate</code> 桶。setup 脚本应改为创建私有桶（所有读取都经 Worker 代理，无需公开）。</li>
-        <li data-lang="en"><strong>Health/stats are optimistic.</strong> <code>/health</code> reports <code>checks.b2:true</code> and <code>/api/stats</code> reports <code>storage.ready:true</code> even when no bucket exists — bucket existence is never probed.</li>
-        <li data-lang="zh"><strong>健康检查/统计过于乐观。</strong>即使桶不存在，<code>/health</code> 仍报 <code>checks.b2:true</code>，<code>/api/stats</code> 报 <code>storage.ready:true</code>——从不探测桶是否存在。</li>
+        <li data-lang="en"><strong>FIXED — Downloads.</strong> v2.1.0 called the obsolete <code>/b2api/v2/b2_download_file_by_name</code> API path on the B2 download host, so every download (any visibility, any auth) failed with 500 <code>path should be /file/&lt;bucket&gt;/&lt;filename&gt;</code>. v2.2.0 uses the friendly URL <code>/file/&lt;bucket&gt;/&lt;object-key&gt;</code>, retries once after clearing a stale cached B2 auth token on 401, maps 404 to <code>not_found</code>, and supports Range (<code>206</code>). Verified: owner download 200 with byte-identical content, short link <code>/f/:slug</code> 200 (also anonymous for public files), private file 401 anonymous / 200 owner, <code>Range: bytes=0-6</code> → 206.</li>
+        <li data-lang="zh"><strong>已修复 — 下载。</strong>v2.1.0 在 B2 下载主机上调用已废弃的 <code>/b2api/v2/b2_download_file_by_name</code> API 路径，导致所有下载（任何可见性、任何鉴权）均 500 失败：<code>path should be /file/&lt;bucket&gt;/&lt;filename&gt;</code>。v2.2.0 改用友好 URL <code>/file/&lt;桶名&gt;/&lt;对象键&gt;</code>，遇 401（缓存的 B2 令牌失效）清缓存后重试一次，404 映射为 <code>not_found</code>，并支持 Range（<code>206</code>）。已验证：owner 下载 200 且字节一致、短链 <code>/f/:slug</code> 200（公开文件匿名亦可）、私有文件匿名 401 / owner 200、<code>Range: bytes=0-6</code> → 206。</li>
+        <li data-lang="en"><strong>FIXED — Auto-create bucket type.</strong> v2.1.0 attempted an <code>allPublic</code> bucket (401 <code>no_payment_history</code> on accounts without payment history); v2.2.0 creates <code>allPrivate</code>. All reads stream through the Worker, so a private bucket is sufficient.</li>
+        <li data-lang="zh"><strong>已修复 — 自动建桶类型。</strong>v2.1.0 尝试建 <code>allPublic</code> 桶（无付款历史账号返回 401 <code>no_payment_history</code>）；v2.2.0 改为建 <code>allPrivate</code>。所有读取经 Worker 中转，私有桶足够。</li>
+        <li data-lang="en"><strong>FIXED — Health/stats now probe the bucket.</strong> <code>/health</code> adds <code>b2_credentials</code> and <code>b2_bucket</code> (a real <code>b2_list_buckets</code> call, result cached in KV for 60s), recomputes <code>b2</code> as credentials AND bucket, and sets <code>status</code> ok/degraded/unhealthy with a precise <code>b2_required_action</code>. <code>/api/stats</code> storage is now <code>{ backend, configured, ready }</code> with a real <code>ready</code>. Verified live: both true, status ok.</li>
+        <li data-lang="zh"><strong>已修复 — 健康检查/统计真实探桶。</strong><code>/health</code> 新增 <code>b2_credentials</code> 与 <code>b2_bucket</code>（真实调用 <code>b2_list_buckets</code>，结果在 KV 缓存 60 秒），<code>b2</code> 重算为凭据与桶皆真，并据 ok/degraded/unhealthy 重算 <code>status</code>，附精确的 <code>b2_required_action</code>。<code>/api/stats</code> 的 storage 现为 <code>{ backend, configured, ready }</code>，<code>ready</code> 为实测值。线上验证：两者皆 true、status ok。</li>
       </ol>
 
       <h3><span data-lang="en">Other backend bugs</span><span data-lang="zh">其他后端 bug</span></h3>
       <ol>
-        <li data-lang="en"><code>GET /api/tags?exact=1&amp;q=…</code> is broken — always returns <code>{"exists":false,"name":"1","id":null}</code>.</li>
-        <li data-lang="zh"><code>GET /api/tags?exact=1&amp;q=…</code> 已损坏——总是返回 <code>{"exists":false,"name":"1","id":null}</code>。</li>
-        <li data-lang="en"><strong>PATCH silently drops tags</strong> — a metadata PATCH without a <code>tags</code> field clears all tag associations (data loss for the owner).</li>
-        <li data-lang="zh"><strong>PATCH 静默丢标签</strong>——不带 <code>tags</code> 字段的元数据 PATCH 会清空全部标签关联（对 owner 造成数据丢失）。</li>
-        <li data-lang="en"><strong>Upload contract gaps</strong> — the multipart <code>license</code> field is ignored (the default All Rights Reserved is stored); the upload response shows <code>is_owner:false</code> (subsequent GETs correctly show <code>true</code>).</li>
-        <li data-lang="zh"><strong>上传契约缺口</strong>——multipart 的 <code>license</code> 字段被忽略（存储为默认的保留所有权利）；上传响应中 <code>is_owner:false</code>（后续 GET 正确显示 <code>true</code>）。</li>
-        <li data-lang="en"><code>GET /api/auth/me</code> returns <code>is_active:false</code> for a user that register/login report as active and whose session works — inconsistent serialization.</li>
-        <li data-lang="zh"><code>GET /api/auth/me</code> 对注册/登录均显示为 active 且会话正常的用户返回 <code>is_active:false</code>——序列化不一致。</li>
-        <li data-lang="en"><code>sha256</code> is never computed (always null); <code>last_login_at</code> is never updated; <code>download_count</code> cannot increment while downloads are broken.</li>
-        <li data-lang="zh"><code>sha256</code> 从不计算（恒为 null）；<code>last_login_at</code> 从不更新；下载不可用期间 <code>download_count</code> 无法增长。</li>
-        <li data-lang="en"><code>POST /api/files</code> with a JSON body (no multipart/raw file) → 500 instead of 400. Invalid <code>tag_mode</code>/<code>sort</code> values are silently ignored rather than rejected.</li>
-        <li data-lang="zh">对 JSON body（无 multipart/原始文件）调用 <code>POST /api/files</code> → 返回 500 而非 400。非法的 <code>tag_mode</code>/<code>sort</code> 值被静默忽略而非拒绝。</li>
-        <li data-lang="en"><code>X-RateLimit-*</code> headers are advertised via <code>Access-Control-Expose-Headers</code> but never sent. Upstream B2 error text is passed verbatim into user-facing <code>message</code> fields (internal detail leakage). The advertised <code>/</code> and <code>/admin</code> UIs return 404. <code>/robots.txt</code> contains only the explanatory template.</li>
-        <li data-lang="zh"><code>X-RateLimit-*</code> 头通过 <code>Access-Control-Expose-Headers</code> 声明但从不发送。上游 B2 的错误原文被原样透传进面向用户的 <code>message</code> 字段（内部细节泄露）。索引中宣称的 <code>/</code> 与 <code>/admin</code> 界面返回 404。<code>/robots.txt</code> 仅含解释性模板。</li>
+        <li data-lang="en"><strong>FIXED — Tag exact check.</strong> <code>?exact=1&amp;name=&lt;name&gt;</code> (and <code>q</code>) now works; the legacy direct form <code>?exact=&lt;name&gt;</code> stays supported. v2.1.0 searched for a tag literally named "1".</li>
+        <li data-lang="zh"><strong>已修复 — 标签精确检查。</strong><code>?exact=1&amp;name=&lt;名称&gt;</code>（及 <code>q</code>）现已可用；旧的直接形式 <code>?exact=&lt;名称&gt;</code> 仍兼容。v2.1.0 会去查找名为 "1" 的标签。</li>
+        <li data-lang="en"><strong>FIXED — PATCH tags.</strong> Omitting <code>tags</code> now preserves existing tags; sending the field replaces the set (empty array clears); tags may be a JSON array, comma string, or form field; the response returns the real final tags. Verified: omit → kept, replace → replaced, and audit records the change.</li>
+        <li data-lang="zh"><strong>已修复 — PATCH 标签。</strong>省略 <code>tags</code> 现在保留现有标签；发送该字段则整体替换（空数组清空）；tags 支持 JSON 数组、逗号字符串或表单字段；响应返回真实的最终标签。已验证：省略 → 保留，发送 → 替换，审计有记录。</li>
+        <li data-lang="en"><strong>FIXED — Upload contract.</strong> <code>license</code> is accepted as an alias of <code>license_key</code> on both upload and PATCH (verified <code>cc_by_4_0</code> stored correctly); the upload response now reports <code>is_owner:true</code>.</li>
+        <li data-lang="zh"><strong>已修复 — 上传契约。</strong>上传与 PATCH 均接受 <code>license</code> 作为 <code>license_key</code> 的别名（已验证 <code>cc_by_4_0</code> 正确存储）；上传响应现在正确返回 <code>is_owner:true</code>。</li>
+        <li data-lang="en"><strong>FIXED — <code>/api/auth/me</code> profile.</strong> The session lookup now maps <code>is_active</code>, ban fields, <code>created_at</code> and <code>last_login_at</code>; <code>me</code> returns <code>is_active:true</code> for active users.</li>
+        <li data-lang="zh"><strong>已修复 — <code>/api/auth/me</code> 资料。</strong>会话查询现在映射 <code>is_active</code>、封禁字段、<code>created_at</code> 与 <code>last_login_at</code>；active 用户的 <code>me</code> 返回 <code>is_active:true</code>。</li>
+        <li data-lang="en"><strong>FIXED — hashes and login timestamps.</strong> <code>sha256</code> is computed synchronously before the DB row is written (verified hash matches the uploaded bytes) and returned in the upload response; <code>last_login_at</code> is persisted before the login response and reflected by <code>/me</code>; <code>download_count</code> increments now that downloads work.</li>
+        <li data-lang="zh"><strong>已修复 — 哈希与登录时间戳。</strong><code>sha256</code> 在写库前同步计算（已验证哈希与上传字节一致）并在上传响应中返回；<code>last_login_at</code> 在登录响应前落库并体现在 <code>/me</code>；下载恢复后 <code>download_count</code> 可正常增长。</li>
+        <li data-lang="en"><strong>FIXED — Input validation.</strong> A JSON/url-encoded/multipart body with no actual file part → <code>400 bad_request</code> (v2.1.0 stored the JSON itself as a junk file); invalid <code>tag_mode</code>/<code>sort</code>/<code>order</code> → <code>400</code> instead of silent fallback.</li>
+        <li data-lang="zh"><strong>已修复 — 输入校验。</strong>不含真实文件 part 的 JSON/url-encoded/multipart body → <code>400 bad_request</code>（v2.1.0 会把 JSON 本体当垃圾文件存入）；非法 <code>tag_mode</code>/<code>sort</code>/<code>order</code> → <code>400</code>，不再静默回退。</li>
+        <li data-lang="en"><strong>FIXED — Rate-limit headers &amp; error sanitization.</strong> Every gated response now sends <code>X-RateLimit-Limit</code>/<code>-Remaining</code>/<code>-Reset</code> (including 401/403/429 rejections), all exposed via CORS. Upstream B2 errors are logged in full server-side but clients only receive <code>File storage backend error (&lt;scope&gt; &lt;status&gt;)</code> with code <code>bad_gateway</code> — no internal leakage. (<code>/robots.txt</code> still contains only the explanatory template; that is informational, not a bug.)</li>
+        <li data-lang="zh"><strong>已修复 — 限流响应头与错误脱敏。</strong>每个经 gate 的响应现在都发送 <code>X-RateLimit-Limit</code>/<code>-Remaining</code>/<code>-Reset</code>（含 401/403/429 拒绝），并全部通过 CORS 暴露。上游 B2 错误全文仅在服务端日志记录，客户端只收到 <code>File storage backend error (&lt;scope&gt; &lt;status&gt;)</code>、code 为 <code>bad_gateway</code>——不再泄露内部细节。（<code>/robots.txt</code> 仍仅含解释性模板；那是信息性内容，非 bug。）</li>
       </ol>
+
+      <h3><span data-lang="en">Earlier misreport corrected</span><span data-lang="zh">更正此前误判</span></h3>
+      <p data-lang="en">An earlier revision of this page claimed <code>/</code> and <code>/admin</code> returned 404 and had no web UI. That was wrong: the inline user/admin SPAs <em>are</em> served, but only to browser navigation requests (<code>Accept: text/html</code> + <code>Sec-Fetch-Mode: navigate</code>). Non-browser HTTP clients correctly receive the 404 JSON envelope on those two paths. Verified: both URLs return the full HTML UI to a browser-style request.</p>
+      <p data-lang="zh">本文档早先版本称 <code>/</code> 与 <code>/admin</code> 返回 404、没有网页端。该结论有误：内嵌用户/管理 SPA <em>确实存在</em>，但只对浏览器导航请求（<code>Accept: text/html</code> + <code>Sec-Fetch-Mode: navigate</code>）返回。非浏览器 HTTP 客户端在这两个路径上会收到 404 JSON，这是预期行为。已验证：浏览器式请求下两个 URL 均返回完整 HTML 界面。</p>
 
       <h3><span data-lang="en">Client / contract bugs (SXSEditor)</span><span data-lang="zh">客户端 / 契约 bug（SXSEditor）</span></h3>
       <ol>
