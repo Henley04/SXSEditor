@@ -329,7 +329,7 @@ class Diffusion {
     async _evalDiffStepSeparate(sessions, xtInputBuf, xtData, t, floatType,
         xtInputTensor, tTensorBuf, tTensor,
         condTensorConst, condMaskTensorConst,
-        ptFrameCount, totalFrames, seqLen, targetLen) {
+        ptFrameCount, totalFrames, seqLen, targetLen, reuseBufs = null) {
         const io = _resolveDiffStepIO(sessions.diffStep);
 
         // === Cond branch: xt = [ptMelData | xtData], cond = combinedCond ===
@@ -352,15 +352,13 @@ class Diffusion {
         const condPredFull = outputToFloat32(condPredRaw);
         disposeTensor(condPredRaw);
 
-        // Slice cond target segment (skip prompt prefix)
-        const condPred = new Float32Array(targetLen);
-        for (let f = 0; f < totalFrames; f++) {
-            const srcOff = (ptFrameCount + f) * MEL_DIM;
-            const dstBase = f * MEL_DIM;
-            for (let d = 0; d < MEL_DIM; d++) {
-                condPred[dstBase + d] = condPredFull[srcOff + d];
-            }
-        }
+        // Slice cond target segment (skip prompt prefix). The target frames
+        // are contiguous in the model output — one memcpy instead of a nested
+        // per-element loop. Reuse the loop-level buffer when provided.
+        const condPred = reuseBufs ? reuseBufs.condPredBuf : new Float32Array(targetLen);
+        condPred.set(condPredFull.subarray(
+            ptFrameCount * MEL_DIM,
+            (ptFrameCount + totalFrames) * MEL_DIM));
 
         // === Uncond branch: xt = xtData (target only), cond = zeros, mask = ones for target ===
         const uncondXtData = new Float32Array(seqLen * MEL_DIM);
@@ -391,15 +389,10 @@ class Diffusion {
         disposeTensor(uncondCondTensor);
         disposeTensor(uncondMaskTensor);
 
-        // Slice uncond target segment (starts at position 0, no prompt offset)
-        const uncondPred = new Float32Array(targetLen);
-        for (let f = 0; f < totalFrames; f++) {
-            const srcOff = f * MEL_DIM;
-            const dstBase = f * MEL_DIM;
-            for (let d = 0; d < MEL_DIM; d++) {
-                uncondPred[dstBase + d] = uncondPredFull[srcOff + d];
-            }
-        }
+        // Slice uncond target segment (starts at position 0, no prompt
+        // offset) — contiguous, single memcpy.
+        const uncondPred = reuseBufs ? reuseBufs.uncondPredBuf : new Float32Array(targetLen);
+        uncondPred.set(uncondPredFull.subarray(0, totalFrames * MEL_DIM));
 
         return { condPred, uncondPred };
     }
@@ -596,6 +589,11 @@ class Diffusion {
             deltaBuf: new Float32Array(targetLen),  // sampler delta 输出
             v1Buf: new Float32Array(targetLen),     // Heun 保存 v1
             xPredBuf: new Float32Array(targetLen),  // Heun 预测状态
+            // evalDiffStep 的切片输出：combine 同步消费后即可复用
+            // （所有 sampler 都不保留 condPred/uncondPred 引用），
+            // 替代原先每步 2 次 new Float32Array(targetLen)。
+            condPredBuf: new Float32Array(targetLen),
+            uncondPredBuf: new Float32Array(targetLen),
         };
 
         // evalDiffStep: 执行 cond + (可选)uncond 推理，返回 {condPred, uncondPred}
@@ -620,12 +618,14 @@ class Diffusion {
                         sessions, xtInputBuf, xtData, t, floatType,
                         xtInputTensor, tTensorBuf, tTensor,
                         condTensorConst, condMaskTensorConst,
-                        ptFrameCount, totalFrames, seqLen, targetLen);
+                        ptFrameCount, totalFrames, seqLen, targetLen, buffers);
                 }
 
                 // === Task 1: CFG batched call ===
-                // Fill cfgBatchBuf: row 0 = xtInputBuf (prompt+target), row 1 = target xt at pos 0
-                cfgBatchBuf.fill(0);
+                // Fill cfgBatchBuf: row 0 = xtInputBuf (prompt+target), row 1 = target xt at pos 0.
+                // 无需每步 fill(0) 清零整个 2×seqLen×128：cfgBatchBuf 在循环外分配时
+                // 即为零，padding 区（row0 的 totalFramesWithPrompt 之后、row1 的
+                // totalFrames 之后）从不被写入，始终保持零；每步只覆盖有效帧。
                 cfgBatchBuf.set(xtInputBuf, 0);  // row 0: full xt (prompt + target)
                 const row1Off = seqLen * MEL_DIM;
                 cfgBatchBuf.set(xtData.subarray(0, totalFrames * MEL_DIM), row1Off);
@@ -662,7 +662,7 @@ class Diffusion {
                             sessions, xtInputBuf, xtData, t, floatType,
                             xtInputTensor, tTensorBuf, tTensor,
                             condTensorConst, condMaskTensorConst,
-                            ptFrameCount, totalFrames, seqLen, targetLen);
+                            ptFrameCount, totalFrames, seqLen, targetLen, buffers);
                     }
                     throw err;
                 }
@@ -674,17 +674,15 @@ class Diffusion {
                 // Split batchPred [diffBatch, seqLen, MEL_DIM] into cond + uncond target slices.
                 // Row 0 (cond): target at positions ptFrameCount..ptFrameCount+totalFrames-1
                 // Row 1 (uncond): target at positions 0..totalFrames-1 (no prompt offset)
-                const condPred = new Float32Array(targetLen);
-                const uncondPred = new Float32Array(targetLen);
-                for (let f = 0; f < totalFrames; f++) {
-                    const condSrc = (ptFrameCount + f) * MEL_DIM;
-                    const uncondSrc = (seqLen + f) * MEL_DIM;
-                    const dstBase = f * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        condPred[dstBase + d] = batchPred[condSrc + d];
-                        uncondPred[dstBase + d] = batchPred[uncondSrc + d];
-                    }
-                }
+                // 两段在输出中各自连续，整块 memcpy 即可，写入跨步复用缓冲区。
+                const condPred = buffers.condPredBuf;
+                const uncondPred = buffers.uncondPredBuf;
+                condPred.set(batchPred.subarray(
+                    ptFrameCount * MEL_DIM,
+                    (ptFrameCount + totalFrames) * MEL_DIM));
+                uncondPred.set(batchPred.subarray(
+                    row1Off,
+                    row1Off + totalFrames * MEL_DIM));
                 return { condPred, uncondPred };
             }
 
@@ -713,15 +711,12 @@ class Diffusion {
             const pred = outputToFloat32(predRaw);
             disposeTensor(predRaw);
 
-            // Slice target segment (skip prompt prefix)
-            const condPred = new Float32Array(targetLen);
-            for (let f = 0; f < totalFrames; f++) {
-                const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                const dstBase = f * MEL_DIM;
-                for (let d = 0; d < MEL_DIM; d++) {
-                    condPred[dstBase + d] = pred[tgtOffset + d];
-                }
-            }
+            // Slice target segment (skip prompt prefix) — target frames are
+            // contiguous in the output; one memcpy into the reused buffer.
+            const condPred = buffers.condPredBuf;
+            condPred.set(pred.subarray(
+                ptFrameCount * MEL_DIM,
+                (ptFrameCount + totalFrames) * MEL_DIM));
             return { condPred, uncondPred: null };
         };
 
@@ -785,9 +780,18 @@ class Diffusion {
             const posStd = Math.sqrt(Math.max(0, posM2) / Math.max(1, n - 1));
             const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjM2) / Math.max(1, n - 1));
             const rescale = posStd / (cfgAdjStd + 1e-8);
+            // 精确恒等：v = cfgVal * (cfgRescale*rescale + 1 - cfgRescale)。
+            // cfgRescale===0（关闭 rescale）或 rescale===1（两分布标准差相同）
+            // 时 v≡cfgVal，直接整块拷贝，省掉第二遍 targetLen 次写入。
+            if (cfgRescale === 0 || rescale === 1) {
+                v.set(cfgPredBuf);
+                return v;
+            }
+            const blendA = cfgRescale * rescale;
+            const blendB = 1 - cfgRescale;
             for (let i = 0; i < targetLen; i++) {
                 const cfgVal = cfgPredBuf[i];
-                v[i] = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
+                v[i] = blendA * cfgVal + blendB * cfgVal;
             }
             return v;
         };
