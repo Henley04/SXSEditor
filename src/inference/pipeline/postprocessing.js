@@ -1120,7 +1120,24 @@ class Postprocessing {
         const totalSamples = effectiveTotalFrames * vocoderHopSize;
         const output = new Float32Array(totalSamples);
         const t0 = performance.now();
-        const floatType = isFP16 ? 'float16' : 'float32';
+        let floatType = isFP16 ? 'float16' : 'float32';
+        // 会话输入契约护栏：mel/f0 张量类型必须与会话声明一致，不能只信 isFP16 标志。
+        // W16A32（权重 FP16、输入/激活 FP32）等模型体积与真 FP16 模型相同，检测标志一旦
+        // 误判就会给 TRT-RTX 等严格 EP 喂错类型（DML 会隐式插 Cast 掩盖问题，TRT-RTX
+        // 直接报 "Unexpected input data type. Actual float16, expected float"）。
+        // inputMetadata 在 WinMLSession / onnxruntime-node 上均为数组 [{name,type,shape}]。
+        try {
+            const rawVocMeta = sessions.vocoder.inputMetadata;
+            const vocMeta = Array.isArray(rawVocMeta)
+                ? rawVocMeta
+                : (rawVocMeta && typeof rawVocMeta === 'object' ? Object.values(rawVocMeta) : []);
+            const melContract = vocMeta.find(m => m && m.name === 'mel') || vocMeta[0];
+            if (melContract && (melContract.type === 'float16' || melContract.type === 'float32')
+                && melContract.type !== floatType) {
+                console.warn(`[Vocoder] precision flag isFP16=${isFP16} (${floatType}) conflicts with session mel input ${melContract.type}; feeding ${melContract.type} to match model contract`);
+                floatType = melContract.type;
+            }
+        } catch (_) { /* 无元数据时沿用 isFP16 标志 */ }
 
         // Yield to event loop to keep window responsive during long DML inference
         // setImmediate 比 setTimeout(0) 快约 4 倍（Windows ~1ms vs ~4ms）

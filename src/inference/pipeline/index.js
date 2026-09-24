@@ -108,7 +108,8 @@ class OnnxSVSPipeline {
         // 保留以兼容外部引用（cli.js / webnn / tests 等）。
         this.isFP16 = false; // 基础模型精度（历史字段名，等同 baseModelsIsFP16）
         this.diffStepIsFP16 = false; // diff_step 独立精度（可能与 isFP16 不同，如 W16A32 回退到 FP32 时）
-        this.vocoderIsFP16 = false; // vocoder 独立精度（由 vocoder 文件类型/大小检测，与 isFP16 解耦）
+        this.vocoderIsFP16 = false; // vocoder 独立精度（由 vocoder 输入类型/文件标记检测，与 isFP16 解耦）
+        this.vocoderIsW16A32 = false; // vocoder 为 W16A32（权重 FP16 / 激活 FP32），mel 输入必须喂 float32
         // QDIT 量化 diff_step（int8 新模型）签名标志：x/diffusion_step/x_mask(bool)。
         // 供 svsWorker snapshot / 渲染进程弹窗提示使用。
         this.diffStepIsQDIT = false; // 当前 diff_step 是否为 QDIT 新模型
@@ -1797,17 +1798,59 @@ class OnnxSVSPipeline {
     }
 
     /**
+     * 检查 vocoder ONNX 文件的 W16A32 标记及其 external data 引用。
+     *
+     * 背景：W16A32 vocoder（权重 FP16 / 激活 FP32，Olive 优化产物）体积约 495 MB，
+     * 与"真 FP16 输入"模型按体积无法区分，但其 graph input `mel` 声明为 float32。
+     * 该模型的 external data 文件名固定为 vocoder_w16a32.onnx.data（导出工具命名）；
+     * 即使 graph 文件被改名为 vocoder_dml.onnx，proto 内部 initializer 的
+     * external_data.location 字符串仍保留 `w16a32` 标记，可直接从 graph 字节中识别。
+     *
+     * @param {string} modelPath vocoder .onnx 模型路径
+     * @returns {{w16a32:boolean, dataFiles:string[]}} dataFiles 为 proto 中引用的
+     *          external data 文件名（basename，去重）
+     */
+    _inspectVocoderModelFile(modelPath) {
+        const result = { w16a32: false, dataFiles: [] };
+        if (!modelPath) return result;
+        try {
+            const fs = require('node:fs');
+            if (/w16a32/i.test(path.basename(modelPath))) result.w16a32 = true;
+            const stat = fs.statSync(modelPath);
+            // external-data 格式的 graph 文件通常 < 1 MB（权重在 .data 中）；
+            // 16 MB 上限防御单文件打包模型，避免把 495MB 权重整体读进内存。
+            if (stat.isFile() && stat.size <= 16 * 1024 * 1024) {
+                const text = fs.readFileSync(modelPath).toString('latin1');
+                if (/w16a32/i.test(text)) result.w16a32 = true;
+                const matches = text.match(/[A-Za-z0-9_.\-]+\.onnx\.data/g);
+                if (matches) result.dataFiles = [...new Set(matches)];
+            }
+        } catch (_) { /* 文件不可读时退化为无标记 */ }
+        return result;
+    }
+
+    /**
      * 独立检测 vocoder 模型精度（与基础模型 isFP16 解耦）。
      *
-     * vocoder 的精度由文件名/输入类型/文件大小综合判定：
+     * vocoder 的精度判定优先级：
      *   - SiFiGAN: 按文件名（sifigan_vocoder_dml_fp16.onnx → FP16）
-     *   - 默认 vocoder: 优先用 mel 输入类型，否则按文件大小阈值推断
+     *   - 默认 vocoder: 以会话 inputMetadata 声明的 mel 输入类型为唯一权威依据
+     *     （WinMLSession 与 onnxruntime-node 均为数组形态 [{name,type,shape}]）
+     *   - 元数据缺失但探测到 W16A32 标记：固定喂 float32（激活 FP32）
+     *   - 最后才按文件大小阈值（含 proto 实际引用的 external .data）推断
      * 失败时回退到基础模型精度（this.isFP16）作为兜底。
      */
     async _detectVocoderPrecision(session, modelPath) {
         try {
-            const meta = session.inputMetadata || {};
-            const inputNames = session.inputNames || Object.keys(meta);
+            // inputMetadata 在 WinMLSession(ortBridge) 与 onnxruntime-node 原生会话上
+            // 均为数组 [{name,type,shape}]；兼容历史对象形态 {name: meta}。
+            const rawMeta = session.inputMetadata;
+            const meta = Array.isArray(rawMeta)
+                ? rawMeta
+                : (rawMeta && typeof rawMeta === 'object' ? Object.values(rawMeta) : []);
+            const inputNames = (Array.isArray(session.inputNames) && session.inputNames.length > 0)
+                ? session.inputNames
+                : meta.map(m => m && m.name).filter(Boolean);
             console.log(`[OnnxSVSPipeline] Vocoder inputs: [${inputNames.join(', ')}]`);
 
             // SiFiGAN has two inputs 'mel' and 'f0'; default vocoder only has 'mel'.
@@ -1820,39 +1863,55 @@ class OnnxSVSPipeline {
             // - sifigan_vocoder_dml.onnx / sifigan_vocoder.onnx / sifigan_vocoder_dml_mlp.onnx → FP32
             if (isSifigan) {
                 const vocFile = path.basename(modelPath);
+                this.vocoderIsW16A32 = false;
                 this.vocoderIsFP16 = vocFile === 'sifigan_vocoder_dml_fp16.onnx';
                 console.log(`[OnnxSVSPipeline] SiFiGAN precision by filename: ${vocFile} -> vocoderIsFP16=${this.vocoderIsFP16}`);
                 return;
             }
 
-            // Try to find 'mel' input metadata
-            let melType = null;
-            if (meta['mel'] && meta['mel'].type) {
-                melType = meta['mel'].type;
-            } else if (inputNames.length > 0 && meta[inputNames[0]] && meta[inputNames[0]].type) {
-                melType = meta[inputNames[0]].type;
-            }
+            // 默认 vocoder：以会话声明的 mel 输入类型为唯一权威依据。
+            // W16A32 / fp16 权重模型体积（~495MB）与真 FP16 模型相同，但输入是 float32；
+            // 旧实现把 inputMetadata 当对象按名索引（实为数组）导致恒为 undefined，
+            // 误退回文件大小启发式，给 TRT-RTX 等严格 EP 喂 float16 而报
+            // "Unexpected input data type. Actual float16, expected float"。
+            const fileInfo = this._inspectVocoderModelFile(modelPath);
+            this.vocoderIsW16A32 = fileInfo.w16a32;
+
+            const melMeta = meta.find(m => m && m.name === 'mel') || (meta.length > 0 ? meta[0] : null);
+            const melType = melMeta && typeof melMeta.type === 'string' ? melMeta.type : null;
 
             if (melType) {
                 this.vocoderIsFP16 = melType === 'float16';
-                console.log(`[OnnxSVSPipeline] Vocoder input type: ${melType} (vocoderIsFP16=${this.vocoderIsFP16})`);
+                const tag = fileInfo.w16a32 ? ' [W16A32: FP16 weights, FP32 activations]' : '';
+                console.log(`[OnnxSVSPipeline] Vocoder input type: ${melType} (vocoderIsFP16=${this.vocoderIsFP16})${tag}`);
                 return;
             }
 
-            // inputMetadata unavailable (DML) — detect from model file size (incl. external .data)
+            // 会话元数据不可用：W16A32 模型的 mel 输入固定为 float32，优先于文件大小启发式。
+            if (fileInfo.w16a32) {
+                this.vocoderIsFP16 = false;
+                console.log('[OnnxSVSPipeline] Vocoder W16A32 marker detected (no input metadata) -> feed float32 (vocoderIsFP16=false)');
+                return;
+            }
+
+            // inputMetadata unavailable — detect from model file size.
             // Default vocoder: FP16 ≈ 495 MB, FP32 ≈ 1004 MB → threshold 700 MB
-            // SiFiGAN: FP16 ≈ 23 MB (0.3 graph + 22.7 data), FP32 ≈ 48 MB (0.3 graph + 47.7 data) → threshold 35 MB
-            const sizeThresholdMB = isSifigan ? 35 : 700;
+            // 注意：external data 文件名以 proto 内 external_data.location 为准
+            //（W16A32 部署时 graph 改名 vocoder_dml.onnx 但 data 仍叫 vocoder_w16a32.onnx.data）。
+            const sizeThresholdMB = 700;
             if (modelPath) {
                 try {
                     const fs = require('node:fs');
-                    const stats = fs.statSync(modelPath);
-                    let totalBytes = stats.size;
-                    // 累加 external_data 文件大小 (SiFiGAN 使用 external_data 格式)
-                    try { totalBytes += fs.statSync(modelPath + '.data').size; } catch (_) {}
+                    let totalBytes = fs.statSync(modelPath).size;
+                    const dir = path.dirname(modelPath);
+                    const dataCandidates = new Set(fileInfo.dataFiles);
+                    dataCandidates.add(path.basename(modelPath) + '.data');
+                    for (const dataName of dataCandidates) {
+                        try { totalBytes += fs.statSync(path.join(dir, dataName)).size; } catch (_) {}
+                    }
                     const totalSizeMB = totalBytes / (1024 * 1024);
                     this.vocoderIsFP16 = totalSizeMB < sizeThresholdMB;
-                    console.log(`[OnnxSVSPipeline] Vocoder file size: ${totalSizeMB.toFixed(1)} MB (threshold=${sizeThresholdMB} MB, sifigan=${isSifigan}) -> vocoderIsFP16=${this.vocoderIsFP16}`);
+                    console.log(`[OnnxSVSPipeline] Vocoder file size: ${totalSizeMB.toFixed(1)} MB (threshold=${sizeThresholdMB} MB) -> vocoderIsFP16=${this.vocoderIsFP16}`);
                     return;
                 } catch (_) {}
             }
@@ -1887,9 +1946,11 @@ class OnnxSVSPipeline {
             } catch (_) {}
 
             console.warn('[OnnxSVSPipeline] All vocoder detection methods failed, defaulting to global precision');
+            this.vocoderIsW16A32 = false;
             this.vocoderIsFP16 = this.isFP16;
         } catch (e) {
             console.warn('[OnnxSVSPipeline] Vocoder precision detection failed:', e.message);
+            this.vocoderIsW16A32 = false;
             this.vocoderIsFP16 = this.isFP16;
         }
     }
