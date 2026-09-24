@@ -76,6 +76,29 @@ class SvsWorkerClient {
     await this.readyPromise;
   }
 
+  // 收集本次调用可移交的 ArrayBuffer（参考音频 WAV）。仅移交独占整个
+  // backing store 的视图/ArrayBuffer：Node Buffer 的小尺寸分配可能来自
+  // 共享内存池，移交会连带夺走整个池；IPC 反序列化得到的类型化数组始终
+  // 独占等长 buffer。这些载荷每次合成只消费一次，移交后不影响调用方重试
+  //（重试是一次新的 IPC 调用，渲染进程会重新克隆一份）。
+  _collectSynthTransfers(args) {
+    const list = [];
+    const add = (v) => {
+      if (!v) return;
+      if (v instanceof ArrayBuffer) {
+        list.push(v);
+      } else if (ArrayBuffer.isView(v) && v.buffer instanceof ArrayBuffer
+        && v.byteOffset === 0 && v.byteLength === v.buffer.byteLength) {
+        list.push(v.buffer);
+      }
+    };
+    add(args.options && args.options.refAudioWavBuffer);
+    for (const f of args.fragments || []) {
+      add(f.options && f.options.refAudioWavBuffer);
+    }
+    return list;
+  }
+
   async _call(command, args = {}, callbacks = {}) {
     await this._ensureWorker();
     const id = ++this.nextId;
@@ -85,7 +108,9 @@ class SvsWorkerClient {
     }
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject, ...callbacks });
-      this.worker.postMessage({ id, command, args });
+      const transferList = (command === 'synthesize' || command === 'synthesizeMultiStreaming')
+        ? this._collectSynthTransfers(args) : [];
+      this.worker.postMessage({ id, command, args }, transferList);
     });
   }
 

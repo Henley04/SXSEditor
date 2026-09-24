@@ -104,7 +104,24 @@ function attachCallbacks(id, options = {}) {
     opts.onProgress = progress => parentPort.postMessage({ type: 'event', id, event: 'progress', data: progress });
   }
   if (options.__chunkAudio) {
-    opts.onChunkAudio = data => parentPort.postMessage({ type: 'event', id, event: 'chunk-audio', data });
+    opts.onChunkAudio = data => {
+      const message = { type: 'event', id, event: 'chunk-audio', data };
+      // 零拷贝传输 chunk 音频：pipeline 所有发出点（postprocessing 的
+      // output.slice()、index.js 的 chunk.audio.slice()/cached 分支）给出的
+      // 都是独立副本，回调返回后不再复用，可直接移交 ArrayBuffer，省去每个
+      // 流式 chunk 的结构化克隆（整条链路原共 3 次拷贝）。
+      // 仅当视图独占整个 backing store 时才移交，避免误伤共享缓冲池。
+      const a = data && data.audio;
+      const ab = a instanceof ArrayBuffer ? a
+        : (ArrayBuffer.isView(a) && a.buffer instanceof ArrayBuffer
+          && a.byteOffset === 0 && a.byteLength === a.buffer.byteLength
+          ? a.buffer : null);
+      if (ab) {
+        parentPort.postMessage(message, [ab]);
+      } else {
+        parentPort.postMessage(message);
+      }
+    };
   }
   delete opts.__progress;
   delete opts.__chunkAudio;
@@ -178,6 +195,11 @@ async function handle(msg) {
   }
 }
 
+// 合成请求世代号：合成类命令入队时记录序号，轮到它执行时若已不是最新世代，
+// 直接跳过——快速多次触发时，排队中的陈旧请求不再完整占用一次 GPU 推理。
+// cancel 只能 abort 已开始（已有 AbortController）的请求，救不了纯排队请求。
+let latestSynthSeq = 0;
+
 parentPort.on('message', msg => {
   // 协作式取消：cancel 必须绕过串行合成队列立即执行，否则它会排在
   // 正在运行的合成之后，永远无法中断当前推理。
@@ -186,7 +208,20 @@ parentPort.on('message', msg => {
     parentPort.postMessage({ type: 'result', id: msg.id, result: { success: true }, state: snapshot() });
     return;
   }
+  const isSynthCommand = msg.command === 'synthesize'
+    || msg.command === 'synthesizeMultiStreaming';
+  const synthSeq = isSynthCommand ? ++latestSynthSeq : 0;
   queue = queue.then(async () => {
+    // 排队期间已有更新的合成请求入队：本请求已过期，跳过 GPU 执行。
+    if (isSynthCommand && synthSeq !== latestSynthSeq) {
+      parentPort.postMessage({
+        type: 'error',
+        id: msg.id,
+        error: { message: 'Synthesis superseded by a newer request', code: 'SVS_SUPERSEDED' },
+        state: snapshot(),
+      });
+      return;
+    }
     try {
       const result = await handle(msg);
       parentPort.postMessage({ type: 'result', id: msg.id, result, state: snapshot() });
