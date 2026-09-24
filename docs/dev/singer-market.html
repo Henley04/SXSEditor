@@ -63,6 +63,14 @@
       <p data-lang="en">The <strong>Singer Market</strong> is a self-hosted file-sharing backend (project name <code>singer-files</code>) plus an in-app Electron window that proxies to it. The backend is a single Cloudflare Worker backed by D1 (metadata), KV (rate-limit + token cache), and Backblaze B2 (object storage). The frontend is <code>src/singerMarket.js</code> + <code>src/singerMarket.html</code>; all HTTP is funneled through <code>src/main/singerMarketIpc.js</code> in the Electron main process.</p>
       <p data-lang="zh"><strong>歌手市场</strong> 由自托管的文件分享后端（项目名 <code>singer-files</code>）和应用内 Electron 窗口共同组成。后端是单个 Cloudflare Worker，由 D1（元数据）、KV（限流 + 令牌缓存）和 Backblaze B2（对象存储）支撑。前端为 <code>src/singerMarket.js</code> + <code>src/singerMarket.html</code>；所有 HTTP 流量都经由 Electron 主进程中的 <code>src/main/singerMarketIpc.js</code> 转发。</p>
 
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Deployed version: <code>2.1.0</code></strong> (as of 2026-09-24). The live deployment is currently <strong>API-only</strong>: <code>GET /</code> and <code>GET /admin</code> are listed in the service index but actually return <code>404 not_found</code> — the inline SPAs are not being served. The only usable UI is the in-app Electron window. A machine-readable endpoint index is available at <code>GET /api</code>.</p>
+          <p data-lang="zh"><strong>线上版本：<code>2.1.0</code></strong>（截至 2026-09-24）。当前线上部署为<strong>仅 API</strong>：服务索引中列出了 <code>GET /</code> 与 <code>GET /admin</code>，但实际返回 <code>404 not_found</code>——内嵌 SPA 并未提供。唯一可用界面是应用内 Electron 窗口。机器可读的端点索引见 <code>GET /api</code>。</p>
+        </div>
+      </div>
+
       <p data-lang="en">For end-user usage, see the <a href="../user/singer-market.html">User Guide — Singer Market</a>. This page covers the architecture, the IPC proxy contract, the REST API the proxy calls, and how to self-host or extend the backend.</p>
       <p data-lang="zh">面向最终用户的使用说明见 <a href="../user/singer-market.html">用户指南 — 歌手市场</a>。本页涵盖架构、IPC 代理契约、代理所调用的 REST API，以及如何自托管或扩展后端。</p>
 
@@ -98,6 +106,8 @@
         │singer-files│         │  files   │        │ limit +  │
         │  (blobs)   │         │ (8 tables)│       │ B2 cache │
         └────────────┘         └──────────┘        └──────────┘</code></pre>
+      <p data-lang="en"><small><strong>Note (v2.1.0):</strong> the <code>ui_user.js</code> / <code>ui_admin.js</code> SPAs shown above are currently not served — <code>/</code> and <code>/admin</code> return 404.</small></p>
+      <p data-lang="zh"><small><strong>注意（v2.1.0）：</strong>上图中的 <code>ui_user.js</code> / <code>ui_admin.js</code> SPA 当前未提供——<code>/</code> 与 <code>/admin</code> 返回 404。</small></p>
 
       <table class="doc-table">
         <thead>
@@ -265,12 +275,12 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
           <tr>
             <td><code>POST /api/auth/register</code></td>
             <td><span data-lang="en">none (rate-limited)</span><span data-lang="zh">无（限流）</span></td>
-            <td><span data-lang="en">Create user; auto-login; returns <code>{ user, token, expires_at }</code>.</span><span data-lang="zh">创建用户；自动登录；返回 <code>{ user, token, expires_at }</code>。</span></td>
+            <td><span data-lang="en">Create user; auto-login; <strong>201 Created</strong>; returns <code>{ user, token, expires_at, token_type: "Bearer" }</code>. Duplicate username → <strong>409 conflict</strong>.</span><span data-lang="zh">创建用户；自动登录；<strong>201 Created</strong>；返回 <code>{ user, token, expires_at, token_type: "Bearer" }</code>。用户名重复 → <strong>409 conflict</strong>。</span></td>
           </tr>
           <tr>
             <td><code>POST /api/auth/login</code></td>
             <td><span data-lang="en">none (rate-limited)</span><span data-lang="zh">无（限流）</span></td>
-            <td><span data-lang="en">Login; returns <code>{ user, token, expires_at, token_type: "Bearer" }</code>.</span><span data-lang="zh">登录；返回 <code>{ user, token, expires_at, token_type: "Bearer" }</code>。</span></td>
+            <td><span data-lang="en">Login (200); returns <code>{ user, token, expires_at, token_type: "Bearer" }</code>. Bad credentials → 401.</span><span data-lang="zh">登录（200）；返回 <code>{ user, token, expires_at, token_type: "Bearer" }</code>。凭据错误 → 401。</span></td>
           </tr>
           <tr>
             <td><code>POST /api/auth/logout</code></td>
@@ -285,7 +295,7 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
           <tr>
             <td><code>GET /api/files</code></td>
             <td><span data-lang="en">optional</span><span data-lang="zh">可选</span></td>
-            <td><span data-lang="en">List files. Query: <code>page</code>, <code>size</code>, <code>q</code>, <code>tags</code> (csv), <code>tag_mode</code> (<code>and</code>|<code>or</code>), <code>visibility</code>, <code>mine=1</code>, <code>sort</code>, <code>order</code>.</span><span data-lang="zh">列出文件。查询参数：<code>page</code>、<code>size</code>、<code>q</code>、<code>tags</code>（逗号分隔）、<code>tag_mode</code>（<code>and</code>|<code>or</code>）、<code>visibility</code>、<code>mine=1</code>、<code>sort</code>、<code>order</code>。</span></td>
+            <td><span data-lang="en">List files. Query: <code>page</code>, <code>size</code>, <code>q</code>, <code>tags</code> (csv), <code>tag_mode</code> (<code>and</code>|<code>or</code>), <code>visibility</code>, <code>uploaded_by</code>, <code>mine=1</code>, <code>sort</code>, <code>order</code>. <strong>Note:</strong> the page-size param is <code>size</code>; the current IPC proxy sends <code>limit</code>, which the backend ignores (size defaults to 50) — see Known Issues. <code>mine=1</code> without a session → 400.</span><span data-lang="zh">列出文件。查询参数：<code>page</code>、<code>size</code>、<code>q</code>、<code>tags</code>（逗号分隔）、<code>tag_mode</code>（<code>and</code>|<code>or</code>）、<code>visibility</code>、<code>uploaded_by</code>、<code>mine=1</code>、<code>sort</code>、<code>order</code>。<strong>注意：</strong>分页大小参数为 <code>size</code>；当前 IPC 代理发送的是 <code>limit</code>，后端忽略它（size 默认 50）——见“已知问题”。无会话时使用 <code>mine=1</code> → 400。</span></td>
           </tr>
           <tr>
             <td><code>GET /api/files/:id</code></td>
@@ -315,33 +325,55 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
         </tbody>
       </table>
 
-      <h3><span data-lang="en">Other endpoints (admin / API-only)</span><span data-lang="zh">其他端点（管理员 / 仅 API）</span></h3>
-      <p data-lang="en">These are not currently invoked by the in-app window but exist on the backend for admin operations and API-only clients:</p>
-      <p data-lang="zh">应用内窗口当前不调用这些端点，但后端提供它们用于管理员操作与仅 API 客户端：</p>
+      <h3><span data-lang="en">Service metadata endpoints</span><span data-lang="zh">服务元数据端点</span></h3>
       <ul>
-        <li data-lang="en"><code>GET /api/auth/sessions</code>, <code>DELETE /api/auth/sessions/:prefix</code> — list / revoke the caller's sessions.</li>
-        <li data-lang="zh"><code>GET /api/auth/sessions</code>、<code>DELETE /api/auth/sessions/:prefix</code>— 列出 / 撤销调用者的会话。</li>
-        <li data-lang="en"><code>PATCH /api/files/:id</code>, <code>DELETE /api/files/:id</code> — update metadata / soft-delete (owner or admin).</li>
-        <li data-lang="zh"><code>PATCH /api/files/:id</code>、<code>DELETE /api/files/:id</code>— 更新元数据 / 软删除（owner 或 admin）。</li>
-        <li data-lang="en"><code>POST/PUT/DELETE /api/files/:id/tags</code> — add / replace / remove tags.</li>
-        <li data-lang="zh"><code>POST/PUT/DELETE /api/files/:id/tags</code>— 添加 / 替换 / 移除标签。</li>
-        <li data-lang="en"><code>GET /api/tags/:name/files</code> — files for a given tag.</li>
-        <li data-lang="zh"><code>GET /api/tags/:name/files</code>— 指定标签下的文件。</li>
-        <li data-lang="en"><code>POST /api/bulk/delete</code>, <code>/api/bulk/tag</code>, <code>/api/bulk/untag</code> — owner-scoped bulk ops (max 100 ids).</li>
-        <li data-lang="zh"><code>POST /api/bulk/delete</code>、<code>/api/bulk/tag</code>、<code>/api/bulk/untag</code>— owner 范围的批量操作（最多 100 个 id）。</li>
-        <li data-lang="en"><code>GET/POST /api/users</code>, <code>GET/PATCH/DELETE /api/users/:id</code> — user CRUD (admin).</li>
-        <li data-lang="zh"><code>GET/POST /api/users</code>、<code>GET/PATCH/DELETE /api/users/:id</code>— 用户 CRUD（admin）。</li>
-        <li data-lang="en"><code>GET/POST /api/keys</code>, <code>GET/DELETE /api/keys/:id</code> — API key management (admin).</li>
-        <li data-lang="zh"><code>GET/POST /api/keys</code>、<code>GET/DELETE /api/keys/:id</code>— API key 管理（admin）。</li>
-        <li data-lang="en"><code>GET /api/admin/usage</code> — quota + circuit-breaker dashboard (admin).</li>
-        <li data-lang="zh"><code>GET /api/admin/usage</code>— 配额 + 熔断器仪表盘（admin）。</li>
-        <li data-lang="en"><code>GET /api/audit</code> — audit log (admin).</li>
-        <li data-lang="zh"><code>GET /api/audit</code>— 审计日志（admin）。</li>
-        <li data-lang="en"><code>GET /f/:slug</code> — short URL download (same as <code>/api/files/:id/download</code> by slug).</li>
-        <li data-lang="zh"><code>GET /f/:slug</code>— 短链下载（按 slug 等同于 <code>/api/files/:id/download</code>）。</li>
+        <li data-lang="en"><code>GET /api</code> — self-describing service index: auth instructions + full endpoint list (no auth).</li>
+        <li data-lang="zh"><code>GET /api</code>— 自描述服务索引：鉴权说明 + 完整端点列表（无需鉴权）。</li>
+        <li data-lang="en"><code>GET /api/stats</code> — public aggregate stats: file counts (public/private/owned), total bytes, total downloads, top tags, storage readiness.</li>
+        <li data-lang="zh"><code>GET /api/stats</code>— 公开聚合统计：文件数（公开/私有/自有）、总字节、总下载量、热门标签、存储就绪状态。</li>
+        <li data-lang="en"><code>GET /api/licenses</code> — license catalog: 13 preset licenses (All Rights Reserved default, CC0, CC BY family, MIT, Apache-2.0, GPL/AGPL, …) plus a <code>custom</code> license slot. Returns <code>{ items, total, default, custom_allowed, require_license, custom_key }</code>.</li>
+        <li data-lang="zh"><code>GET /api/licenses</code>— 许可证目录：13 个预设许可证（默认为保留所有权利、CC0、CC BY 系列、MIT、Apache-2.0、GPL/AGPL 等）加一个 <code>custom</code> 自定义许可。返回 <code>{ items, total, default, custom_allowed, require_license, custom_key }</code>。</li>
+        <li data-lang="en"><code>GET /robots.txt</code> — content-signals notice (search / ai-input / ai-train). Currently contains only the explanatory template, no actual crawler rules or signals.</li>
+        <li data-lang="zh"><code>GET /robots.txt</code>— 内容信号声明（search / ai-input / ai-train）。当前仅含解释性模板，没有实际爬虫规则或信号。</li>
       </ul>
-      <p data-lang="en">Errors are JSON: <code>{ "error": { "code", "message", "required_scope"? } }</code>. Common <code>code</code>s map to <code>bad_request</code> (400), <code>unauthorized</code> (401), <code>forbidden</code> (403), <code>not_found</code> (404), <code>payload_too_large</code> (413), <code>too_many_requests</code> (429), <code>quota_exceeded</code> (429/503), <code>internal_error</code> (500).</p>
-      <p data-lang="zh">错误为 JSON：<code>{ "error": { "code", "message", "required_scope"? } }</code>。常见 <code>code</code> 对应：<code>bad_request</code> (400)、<code>unauthorized</code> (401)、<code>forbidden</code> (403)、<code>not_found</code> (404)、<code>payload_too_large</code> (413)、<code>too_many_requests</code> (429)、<code>quota_exceeded</code> (429/503)、<code>internal_error</code> (500)。</p>
+
+      <h3><span data-lang="en">Session &amp; file management endpoints</span><span data-lang="zh">会话与文件管理端点</span></h3>
+      <ul>
+        <li data-lang="en"><code>GET /api/auth/sessions</code>, <code>DELETE /api/auth/sessions/:prefix</code> — list the caller's sessions / revoke one by token prefix (<code>{ "revoked": true }</code>).</li>
+        <li data-lang="zh"><code>GET /api/auth/sessions</code>、<code>DELETE /api/auth/sessions/:prefix</code>— 列出调用者会话 / 按令牌前缀撤销（<code>{ "revoked": true }</code>）。</li>
+        <li data-lang="en"><code>PATCH /api/files/:id</code>, <code>DELETE /api/files/:id</code> — update metadata / soft-delete (owner or admin). <strong>Caution (v2.1.0 bug):</strong> PATCH without a <code>tags</code> field clears all tags.</li>
+        <li data-lang="zh"><code>PATCH /api/files/:id</code>、<code>DELETE /api/files/:id</code>— 更新元数据 / 软删除（owner 或 admin）。<strong>注意（v2.1.0 bug）：</strong>不带 <code>tags</code> 字段的 PATCH 会清空全部标签。</li>
+        <li data-lang="en"><code>POST/PUT/DELETE /api/files/:id/tags</code> — add / replace / remove tags. DELETE accepts <code>?tags=a,b</code> (or a JSON body).</li>
+        <li data-lang="zh"><code>POST/PUT/DELETE /api/files/:id/tags</code>— 添加 / 替换 / 移除标签。DELETE 接受 <code>?tags=a,b</code>（或 JSON body）。</li>
+        <li data-lang="en"><code>POST /api/files/:id/block-download</code> (<code>{ reason? }</code>), <code>DELETE /api/files/:id/block-download</code> — <strong>admin only</strong>: block / unblock downloads for a file. The file object surfaces <code>download_blocked</code>, <code>blocked_at</code>, <code>blocked_reason</code>, <code>download_allowed</code>.</li>
+        <li data-lang="zh"><code>POST /api/files/:id/block-download</code>（<code>{ reason? }</code>）、<code>DELETE /api/files/:id/block-download</code>— <strong>仅管理员</strong>：封锁 / 解除文件下载。文件对象含 <code>download_blocked</code>、<code>blocked_at</code>、<code>blocked_reason</code>、<code>download_allowed</code> 字段。</li>
+        <li data-lang="en"><code>GET /api/tags/:name/files</code> — files for a given tag (nonexistent names return an empty 200 page).</li>
+        <li data-lang="zh"><code>GET /api/tags/:name/files</code>— 指定标签下的文件（不存在的名称返回空 200 页）。</li>
+        <li data-lang="en"><code>POST /api/bulk/delete</code>, <code>/api/bulk/tag</code>, <code>/api/bulk/untag</code> — owner-scoped bulk ops (max 100 ids). Partial results are reported per id: delete → <code>{ deleted, not_found, forbidden }</code>; tag/untag → <code>{ updated: [{ id, tags | error }] }</code>.</li>
+        <li data-lang="zh"><code>POST /api/bulk/delete</code>、<code>/api/bulk/tag</code>、<code>/api/bulk/untag</code>— owner 范围批量操作（最多 100 个 id）。逐 id 返回部分结果：delete → <code>{ deleted, not_found, forbidden }</code>；tag/untag → <code>{ updated: [{ id, tags | error }] }</code>。</li>
+        <li data-lang="en"><code>GET /f/:slug</code> — short URL download (same streaming semantics as <code>/api/files/:id/download</code> by slug).</li>
+        <li data-lang="zh"><code>GET /f/:slug</code>— 短链下载（按 slug 等同于 <code>/api/files/:id/download</code> 的流式语义）。</li>
+      </ul>
+
+      <h3><span data-lang="en">Admin endpoints (admin session or <code>admin</code>-scoped key)</span><span data-lang="zh">管理员端点（admin 会话或 <code>admin</code> 范围 key）</span></h3>
+      <ul>
+        <li data-lang="en"><code>GET /api/users</code>, <code>POST /api/users</code> — list / create users. Admin-created users work even when <code>ALLOW_USER_REGISTRATION=false</code>.</li>
+        <li data-lang="zh"><code>GET /api/users</code>、<code>POST /api/users</code>— 列出 / 创建用户。即使 <code>ALLOW_USER_REGISTRATION=false</code>，管理员仍可创建用户。</li>
+        <li data-lang="en"><code>GET/PATCH/DELETE /api/users/:id</code> — view / update (<code>is_admin</code>, <code>is_active</code>, <code>display_name</code>, <code>password</code>) / delete. DELETE with <code>?purge_files=1</code> also deletes the user's files. Last-admin protection → 409.</li>
+        <li data-lang="zh"><code>GET/PATCH/DELETE /api/users/:id</code>— 查看 / 更新（<code>is_admin</code>、<code>is_active</code>、<code>display_name</code>、<code>password</code>）/ 删除。DELETE 加 <code>?purge_files=1</code> 同时删除其文件。最后一位管理员保护 → 409。</li>
+        <li data-lang="en"><code>POST /api/users/:id/ban</code> (<code>{ reason }</code>), <code>POST /api/users/:id/unban</code> — ban kills all sessions and revokes the user's API keys; the user object surfaces <code>is_banned</code>, <code>banned_at</code>, <code>banned_reason</code>, <code>banned_by</code>.</li>
+        <li data-lang="zh"><code>POST /api/users/:id/ban</code>（<code>{ reason }</code>）、<code>POST /api/users/:id/unban</code>— 封禁会终止该用户所有会话并撤销其 API key；用户对象含 <code>is_banned</code>、<code>banned_at</code>、<code>banned_reason</code>、<code>banned_by</code> 字段。</li>
+        <li data-lang="en"><code>DELETE /api/users/:id/files</code> — delete every file owned by the user while keeping the account.</li>
+        <li data-lang="zh"><code>DELETE /api/users/:id/files</code>— 删除该用户的全部文件，但保留账号。</li>
+        <li data-lang="en"><code>GET/POST /api/keys</code>, <code>GET /api/keys/:id</code>, <code>DELETE /api/keys/:id</code> (<code>?hard=1</code> to fully delete) — API key management; the raw key is shown once at creation.</li>
+        <li data-lang="zh"><code>GET/POST /api/keys</code>、<code>GET /api/keys/:id</code>、<code>DELETE /api/keys/:id</code>（<code>?hard=1</code> 彻底删除）— API key 管理；原始 key 仅在创建时显示一次。</li>
+        <li data-lang="en"><code>GET /api/admin/usage</code> — quota + circuit-breaker dashboard (B2 storage, Workers, D1, KV usage).</li>
+        <li data-lang="zh"><code>GET /api/admin/usage</code>— 配额 + 熔断器仪表盘（B2 存储、Workers、D1、KV 用量）。</li>
+        <li data-lang="en"><code>GET /api/audit</code> — audit log (supports paging).</li>
+        <li data-lang="zh"><code>GET /api/audit</code>— 审计日志（支持分页）。</li>
+      </ul>
+      <p data-lang="en">Errors are JSON: <code>{ "error": { "code", "message", "required_scope"? } }</code>. Common <code>code</code>s map to <code>bad_request</code> (400), <code>unauthorized</code> (401 — also used for private resources without credentials), <code>forbidden</code> (403 — authenticated but lacking scope), <code>not_found</code> (404), <code>conflict</code> (409 — duplicate username, last-admin protection), <code>payload_too_large</code> (413), <code>too_many_requests</code> (429), <code>quota_exceeded</code> (429/503), <code>internal_error</code> (500 — note: v2.1.0 leaks upstream B2 error text into <code>message</code>).</p>
+      <p data-lang="zh">错误为 JSON：<code>{ "error": { "code", "message", "required_scope"? } }</code>。常见 <code>code</code> 对应：<code>bad_request</code> (400)、<code>unauthorized</code> (401——无凭据访问私有资源时也用它)、<code>forbidden</code> (403——已鉴权但权限不足)、<code>not_found</code> (404)、<code>conflict</code> (409——用户名重复、最后一位管理员保护)、<code>payload_too_large</code> (413)、<code>too_many_requests</code> (429)、<code>quota_exceeded</code> (429/503)、<code>internal_error</code> (500——注意：v2.1.0 会把上游 B2 的错误原文泄露进 <code>message</code>)。</p>
 
       <h2>
         <span data-lang="en">Authentication &amp; Permission Model</span>
@@ -388,13 +420,16 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
                sha256, description, visibility, uploaded_by,
                user_id (FK→users.id, ON DELETE SET NULL),
                created_at, updated_at, expires_at, download_count,
-               is_deleted, meta (JSON)
+               is_deleted, meta (JSON),
+               download_blocked, blocked_at, blocked_reason,
+               license (JSON: key,name,spdx,url,commercial_use,…)
 
 tags           id, name (case-insensitive unique), created_at
 file_tags      file_id, tag_id  (many-to-many)
 users          id, username (unique, case-insensitive),
                password_hash (pbkdf2:sha256:...), display_name,
-               is_admin, is_active, created_at, last_login_at
+               is_admin, is_active, created_at, last_login_at,
+               is_banned, banned_at, banned_reason, banned_by
 sessions       token (PK, 'sfu_<32>'), user_id (FK→users.id, CASCADE),
                created_at, expires_at, last_used_at, user_agent, ip
 api_keys       id, key_hash (SHA-256), key_prefix, label, scopes,
@@ -402,8 +437,87 @@ api_keys       id, key_hash (SHA-256), key_prefix, label, scopes,
 audit_log      id, action, resource_type, resource_id, actor, ip,
                user_agent, details (JSON), created_at
 schema_meta    key, value  (version tracking)</code></pre>
-      <p data-lang="en">B2 storage layout: each file is stored at <code>&lt;file-uuid&gt;/&lt;sanitized-filename&gt;</code> in the <code>singer-files</code> bucket. B2 object <code>X-Bz-Info-*</code> metadata carries <code>original_name</code>, <code>uploaded_by</code>, <code>uploaded_at</code>; <code>Content-Type</code> carries the declared MIME. The bucket is created as <code>allPublic</code>, but downloads go through the Worker so it can enforce auth, audit, and content-disposition.</p>
-      <p data-lang="zh">B2 存储布局：每个文件存于 <code>singer-files</code> 桶的 <code>&lt;file-uuid&gt;/&lt;sanitized-filename&gt;</code> 路径。B2 对象的 <code>X-Bz-Info-*</code> 元数据携带 <code>original_name</code>、<code>uploaded_by</code>、<code>uploaded_at</code>；<code>Content-Type</code> 携带声明的 MIME。桶以 <code>allPublic</code> 创建，但下载仍走 Worker，以便实施鉴权、审计与 content-disposition。</p>
+      <p data-lang="en">B2 storage layout: each file is stored at <code>&lt;file-uuid&gt;/&lt;sanitized-filename&gt;</code> in the <code>singer-files</code> bucket. B2 object <code>X-Bz-Info-*</code> metadata carries <code>original_name</code>, <code>uploaded_by</code>, <code>uploaded_at</code>; <code>Content-Type</code> carries the declared MIME. The worker's auto-create attempts an <code>allPublic</code> bucket, but on a Backblaze account with no payment history that call is rejected (401 <code>no_payment_history</code>); the live bucket was therefore created manually as <strong>allPrivate</strong>. This is safe because downloads always stream through the Worker (which holds an authorized B2 key) so it can still enforce auth, audit, and content-disposition.</p>
+      <p data-lang="zh">B2 存储布局：每个文件存于 <code>singer-files</code> 桶的 <code>&lt;file-uuid&gt;/&lt;sanitized-filename&gt;</code> 路径。B2 对象的 <code>X-Bz-Info-*</code> 元数据携带 <code>original_name</code>、<code>uploaded_by</code>、<code>uploaded_at</code>；<code>Content-Type</code> 携带声明的 MIME。Worker 的自动建桶尝试创建 <code>allPublic</code> 桶，但无付款历史的 Backblaze 账号会被拒绝（401 <code>no_payment_history</code>）；因此线上桶是手动创建的 <strong>allPrivate</strong>。这是安全的，因为下载始终经 Worker 流式中转（它持有已授权的 B2 key），仍可实施鉴权、审计与 content-disposition。</p>
+
+      <h2>
+        <span data-lang="en">API Response Shapes (v2.1.0, observed)</span>
+        <span data-lang="zh">API 响应结构（v2.1.0，实测）</span>
+      </h2>
+      <p data-lang="en">All timestamps are epoch <strong>milliseconds</strong>. List endpoints share one envelope:</p>
+      <p data-lang="zh">所有时间戳均为 epoch <strong>毫秒</strong>。列表端点共用同一信封：</p>
+      <pre><code>// List envelope
+{ "items": [ ... ], "page": 1, "size": 50,
+  "total": 0, "pages": 1, "has_more": false }</code></pre>
+      <pre><code>// File object
+{
+  "id": "uuid", "slug": "mw6evxj6yj", "name": "singer.sxssinger",
+  "mime_type": "application/octet-stream", "size": 76, "sha256": null,
+  "description": "...", "visibility": "public | private",
+  "uploaded_by": "user:alice | key:abc123 | anonymous",
+  "user_id": "uuid", "is_owner": true,
+  "created_at": 1790242649672, "updated_at": 1790242649672, "expires_at": null,
+  "download_count": 0,
+  "download_blocked": false, "blocked_at": null,
+  "blocked_reason": null, "download_allowed": true,
+  "license": {
+    "key": "cc_by_4_0", "name": "...", "spdx": "CC-BY-4.0",
+    "url": "https://...", "commercial_use": true,
+    "derivatives": true, "custom": false
+  },
+  "meta": {},
+  "tags": [ { "id": 1, "name": "vocal", "created_at": 1785259402000 } ],
+  "url": {
+    "self": "/api/files/&lt;id&gt;",
+    "download": "/api/files/&lt;id&gt;/download",
+    "short": "/f/&lt;slug&gt;"
+  }
+}</code></pre>
+      <pre><code>// Tag object (GET /api/tags)
+{ "id": 1, "name": "vocal", "file_count": 0, "exists": true }
+// suggest=1 also returns a ghost suggestion for the typed prefix:
+{ "id": null, "name": "vo", "file_count": 0, "exists": false }
+
+// User object
+{ "id": "uuid", "username": "alice", "display_name": "Alice",
+  "is_admin": false, "is_active": true,
+  "is_banned": false, "banned_at": null, "banned_reason": null, "banned_by": null,
+  "created_at": 1790242006634, "last_login_at": null }
+
+// GET /api/auth/me wraps user + session info
+{ "user": { ... },
+  "session": { "token_preview": "sfu_…d14a", "expires_at": 1792834006898 } }
+
+// GET /api/auth/sessions
+{ "items": [ { "created_at", "expires_at", "last_used_at",
+               "user_agent", "ip", "token_preview" } ], "total": 1 }
+
+// GET /health
+{ "status": "ok | degraded | unhealthy", "service": "singer-files",
+  "version": "2.1.0", "time": 1790241645185,
+  "checks": { "db": true, "b2": true, "kv": true, "config": true },
+  "schema": "migrated",
+  "features": { "user_ban": true, "admin_file_delete": true,
+                "download_block": true, "licenses": true,
+                "custom_license": true },
+  "b2_required_action": null }
+
+// GET /api/stats
+{ "files": { "file_count", "total_bytes", "total_downloads",
+             "public_count", "private_count",
+             "user_owned_count", "api_or_anon_count" },
+  "tags": { "total": 10, "top": [ { "name", "file_count" } ] },
+  "storage": { "backend": "b2", "ready": true },
+  "generated_at": 1790241793779 }
+
+// Bulk operation results
+POST /api/bulk/delete → { "deleted": [ ... ], "not_found": [ ... ],
+                          "forbidden": [ ... ] }
+POST /api/bulk/tag | untag → { "updated": [
+  { "id": "&lt;id&gt;", "tags": [ ... ] },
+  { "id": "&lt;id&gt;", "error": "not_found" } ] }</code></pre>
+      <p data-lang="en"><strong>CORS</strong> is open to all origins; preflight <code>OPTIONS</code> returns 204 and allows the <code>Authorization</code>, <code>Content-Type</code>, <code>Content-Disposition</code>, <code>X-Api-Key</code>, <code>X-Request-Id</code> headers. Besides the Bearer header, credentials are accepted via <code>X-Api-Key</code> or <code>?api_key=</code>.</p>
+      <p data-lang="zh"><strong>CORS</strong> 对所有来源开放；预检 <code>OPTIONS</code> 返回 204，允许 <code>Authorization</code>、<code>Content-Type</code>、<code>Content-Disposition</code>、<code>X-Api-Key</code>、<code>X-Request-Id</code> 头。除 Bearer 头外，也可通过 <code>X-Api-Key</code> 或 <code>?api_key=</code> 传递凭据。</p>
 
       <h2>
         <span data-lang="en">Rate Limiting &amp; Circuit Breaker</span>
@@ -604,6 +718,59 @@ schema_meta    key, value  (version tracking)</code></pre>
       </table>
       <p data-lang="en">All write operations emit audit-log entries (<code>file.upload</code>, <code>file.update</code>, <code>file.delete</code>, <code>file.tag</code>, <code>file.download</code>, <code>api_key.create</code>, <code>api_key.revoke</code>, <code>user.create</code>, <code>user.update</code>, <code>user.delete</code>, <code>user.login</code>, <code>user.logout</code>, <code>session.revoke</code>, <code>bulk.delete</code>, <code>bulk.tag</code>, <code>bulk.untag</code>).</p>
       <p data-lang="zh">所有写操作都会写审计日志（<code>file.upload</code>、<code>file.update</code>、<code>file.delete</code>、<code>file.tag</code>、<code>file.download</code>、<code>api_key.create</code>、<code>api_key.revoke</code>、<code>user.create</code>、<code>user.update</code>、<code>user.delete</code>、<code>user.login</code>、<code>user.logout</code>、<code>session.revoke</code>、<code>bulk.delete</code>、<code>bulk.tag</code>、<code>bulk.untag</code>）。</p>
+
+      <h2>
+        <span data-lang="en">Known Issues — v2.1.0 (observed 2026-09-24)</span>
+        <span data-lang="zh">已知问题 — v2.1.0（2026-09-24 实测）</span>
+      </h2>
+
+      <h3><span data-lang="en">Critical — core flow</span><span data-lang="zh">严重 — 核心流程</span></h3>
+      <ol>
+        <li data-lang="en"><strong>Downloads are fully broken.</strong> Both <code>GET /api/files/:id/download</code> and <code>GET /f/:slug</code> (any visibility, any auth) return 500: <code>B2 download failed (400): path should be /file/&lt;bucket&gt;/&lt;filename&gt;</code> — the B2 download host is being called with the API path instead of <code>/file/&lt;bucket&gt;/&lt;object-key&gt;</code>.</li>
+        <li data-lang="zh"><strong>下载功能完全不可用。</strong><code>GET /api/files/:id/download</code> 与 <code>GET /f/:slug</code>（任何可见性、任何鉴权）均返回 500：<code>B2 download failed (400): path should be /file/&lt;bucket&gt;/&lt;filename&gt;</code>——请求 B2 下载主机时用了 API 路径，而非 <code>/file/&lt;bucket&gt;/&lt;object-key&gt;</code>。</li>
+        <li data-lang="en"><strong>(Mitigated during this review) Upload auto-create fails on fresh B2 accounts.</strong> The setup/upload path creates an <code>allPublic</code> bucket, rejected with 401 <code>no_payment_history</code>. Manual fix: pre-create an <code>allPrivate</code> bucket named <code>singer-files</code>. The setup script should create a private bucket (the Worker proxies all reads, so publicity is unnecessary).</li>
+        <li data-lang="zh"><strong>（本次审查已缓解）新 B2 账号自动建桶失败。</strong>setup/上传路径创建 <code>allPublic</code> 桶，被拒绝并返回 401 <code>no_payment_history</code>。手动修复：预先创建名为 <code>singer-files</code> 的 <code>allPrivate</code> 桶。setup 脚本应改为创建私有桶（所有读取都经 Worker 代理，无需公开）。</li>
+        <li data-lang="en"><strong>Health/stats are optimistic.</strong> <code>/health</code> reports <code>checks.b2:true</code> and <code>/api/stats</code> reports <code>storage.ready:true</code> even when no bucket exists — bucket existence is never probed.</li>
+        <li data-lang="zh"><strong>健康检查/统计过于乐观。</strong>即使桶不存在，<code>/health</code> 仍报 <code>checks.b2:true</code>，<code>/api/stats</code> 报 <code>storage.ready:true</code>——从不探测桶是否存在。</li>
+      </ol>
+
+      <h3><span data-lang="en">Other backend bugs</span><span data-lang="zh">其他后端 bug</span></h3>
+      <ol>
+        <li data-lang="en"><code>GET /api/tags?exact=1&amp;q=…</code> is broken — always returns <code>{"exists":false,"name":"1","id":null}</code>.</li>
+        <li data-lang="zh"><code>GET /api/tags?exact=1&amp;q=…</code> 已损坏——总是返回 <code>{"exists":false,"name":"1","id":null}</code>。</li>
+        <li data-lang="en"><strong>PATCH silently drops tags</strong> — a metadata PATCH without a <code>tags</code> field clears all tag associations (data loss for the owner).</li>
+        <li data-lang="zh"><strong>PATCH 静默丢标签</strong>——不带 <code>tags</code> 字段的元数据 PATCH 会清空全部标签关联（对 owner 造成数据丢失）。</li>
+        <li data-lang="en"><strong>Upload contract gaps</strong> — the multipart <code>license</code> field is ignored (the default All Rights Reserved is stored); the upload response shows <code>is_owner:false</code> (subsequent GETs correctly show <code>true</code>).</li>
+        <li data-lang="zh"><strong>上传契约缺口</strong>——multipart 的 <code>license</code> 字段被忽略（存储为默认的保留所有权利）；上传响应中 <code>is_owner:false</code>（后续 GET 正确显示 <code>true</code>）。</li>
+        <li data-lang="en"><code>GET /api/auth/me</code> returns <code>is_active:false</code> for a user that register/login report as active and whose session works — inconsistent serialization.</li>
+        <li data-lang="zh"><code>GET /api/auth/me</code> 对注册/登录均显示为 active 且会话正常的用户返回 <code>is_active:false</code>——序列化不一致。</li>
+        <li data-lang="en"><code>sha256</code> is never computed (always null); <code>last_login_at</code> is never updated; <code>download_count</code> cannot increment while downloads are broken.</li>
+        <li data-lang="zh"><code>sha256</code> 从不计算（恒为 null）；<code>last_login_at</code> 从不更新；下载不可用期间 <code>download_count</code> 无法增长。</li>
+        <li data-lang="en"><code>POST /api/files</code> with a JSON body (no multipart/raw file) → 500 instead of 400. Invalid <code>tag_mode</code>/<code>sort</code> values are silently ignored rather than rejected.</li>
+        <li data-lang="zh">对 JSON body（无 multipart/原始文件）调用 <code>POST /api/files</code> → 返回 500 而非 400。非法的 <code>tag_mode</code>/<code>sort</code> 值被静默忽略而非拒绝。</li>
+        <li data-lang="en"><code>X-RateLimit-*</code> headers are advertised via <code>Access-Control-Expose-Headers</code> but never sent. Upstream B2 error text is passed verbatim into user-facing <code>message</code> fields (internal detail leakage). The advertised <code>/</code> and <code>/admin</code> UIs return 404. <code>/robots.txt</code> contains only the explanatory template.</li>
+        <li data-lang="zh"><code>X-RateLimit-*</code> 头通过 <code>Access-Control-Expose-Headers</code> 声明但从不发送。上游 B2 的错误原文被原样透传进面向用户的 <code>message</code> 字段（内部细节泄露）。索引中宣称的 <code>/</code> 与 <code>/admin</code> 界面返回 404。<code>/robots.txt</code> 仅含解释性模板。</li>
+      </ol>
+
+      <h3><span data-lang="en">Client / contract bugs (SXSEditor)</span><span data-lang="zh">客户端 / 契约 bug（SXSEditor）</span></h3>
+      <ol>
+        <li data-lang="en"><strong>Page-size parameter mismatch</strong> — the IPC proxy sends <code>limit</code>; the backend reads only <code>size</code>. The in-app page size (24) is ignored (backend always returns 50).</li>
+        <li data-lang="zh"><strong>分页大小参数不匹配</strong>——IPC 代理发送 <code>limit</code>；后端只读 <code>size</code>。应用内页大小（24）被忽略（后端总返回 50）。</li>
+        <li data-lang="en"><strong>Error rendering</strong> — the backend returns <code>{ "error": { "code", "message" } }</code>, but the proxy forwards <code>data.error</code> as the error string; dialogs render <code>[object Object]</code> instead of the message.</li>
+        <li data-lang="zh"><strong>错误渲染</strong>——后端返回 <code>{ "error": { "code", "message" } }</code>，但代理把 <code>data.error</code> 当错误字符串转发；对话框显示 <code>[object Object]</code> 而非错误消息。</li>
+      </ol>
+
+      <h3><span data-lang="en">Capability gaps (missing from API/UI)</span><span data-lang="zh">能力缺口（API/界面缺失项）</span></h3>
+      <ul>
+        <li data-lang="en">No self-service password change (<code>PATCH /api/users/:id</code> is admin-only) and no password-reset flow; no e-mail/ownership verification.</li>
+        <li data-lang="zh">无自助修改密码功能（<code>PATCH /api/users/:id</code> 仅限管理员），也无密码重置流程；无邮箱/归属验证。</li>
+        <li data-lang="en">No account self-deletion / personal-data export (relevant to GDPR/PIPL deletion rights).</li>
+        <li data-lang="zh">无账号自助注销 / 个人数据导出（关系到 GDPR/PIPL 的删除权）。</li>
+        <li data-lang="en">No in-API abuse/report endpoint (reporting relies on GitHub issues / e-mail per the Terms); no content-moderation queue.</li>
+        <li data-lang="zh">API 内无举报端点（按服务条款依赖 GitHub issue / 邮件举报）；无内容审核队列。</li>
+        <li data-lang="en">Owner edit/delete and bulk operations are not surfaced in the Electron window; tag autocomplete at upload is wired only on the backend. No machine-readable OpenAPI document (only the custom <code>GET /api</code> index).</li>
+        <li data-lang="zh">Electron 窗口未暴露 owner 编辑/删除与批量操作；上传时标签自动补全只在后端就绪。无机器可读的 OpenAPI 文档（仅有自定义的 <code>GET /api</code> 索引）。</li>
+      </ul>
 
       <h2>
         <span data-lang="en">Testing the IPC Proxy</span>
