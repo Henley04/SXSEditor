@@ -144,6 +144,22 @@ function tryParseJson(str) {
 }
 
 /**
+ * Extract a human-readable error message from a parsed API response.
+ * The backend's error envelope is `{ error: { code, message } }`; older
+ * endpoints may return a plain string. Falls back when nothing usable exists
+ * so callers never surface `[object Object]` to the user.
+ */
+function extractError(data, fallback) {
+  if (data && data.error != null) {
+    if (typeof data.error === 'string') return data.error;
+    if (typeof data.error === 'object' && typeof data.error.message === 'string') {
+      return data.error.message;
+    }
+  }
+  return fallback;
+}
+
+/**
  * Build a multipart/form-data body from fields and an optional file.
  * Returns { body: Buffer, contentType: string }.
  */
@@ -187,7 +203,7 @@ function registerSingerMarketIpc() {
         saveSession({ token: data.token, user: data.user });
         return { success: true, user: data.user };
       }
-      return { success: false, error: data.error || `Registration failed (HTTP ${res.status})` };
+      return { success: false, error: extractError(data, `Registration failed (HTTP ${res.status})`) };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -203,7 +219,7 @@ function registerSingerMarketIpc() {
         saveSession({ token: data.token, user: data.user });
         return { success: true, user: data.user };
       }
-      return { success: false, error: data.error || `Login failed (HTTP ${res.status})` };
+      return { success: false, error: extractError(data, `Login failed (HTTP ${res.status})`) };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -254,14 +270,15 @@ function registerSingerMarketIpc() {
       }
       if (params.q) query.set('q', params.q);
       if (params.page) query.set('page', String(params.page));
-      if (params.limit) query.set('limit', String(params.limit));
+      // Backend page-size parameter is `size` (the list envelope echoes it).
+      if (params.limit) query.set('size', String(params.limit));
 
       const res = await request('GET', `/api/files?${query.toString()}`);
       const data = tryParseJson(res.body) || {};
       if (res.status >= 200 && res.status < 300) {
         return { success: true, data };
       }
-      return { success: false, error: data.error || `List failed (HTTP ${res.status})` };
+      return { success: false, error: extractError(data, `List failed (HTTP ${res.status})`) };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -276,7 +293,7 @@ function registerSingerMarketIpc() {
       if (res.status >= 200 && res.status < 300) {
         return { success: true, data };
       }
-      return { success: false, error: data.error || `Fetch failed (HTTP ${res.status})` };
+      return { success: false, error: extractError(data, `Fetch failed (HTTP ${res.status})`) };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -296,7 +313,7 @@ function registerSingerMarketIpc() {
       if (res.status >= 200 && res.status < 300) {
         return { success: true, data };
       }
-      return { success: false, error: data.error || `Tags fetch failed (HTTP ${res.status})` };
+      return { success: false, error: extractError(data, `Tags fetch failed (HTTP ${res.status})`) };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -335,7 +352,7 @@ function registerSingerMarketIpc() {
       if (res.status >= 200 && res.status < 300) {
         return { success: true, data };
       }
-      return { success: false, error: data.error || `Upload failed (HTTP ${res.status})` };
+      return { success: false, error: extractError(data, `Upload failed (HTTP ${res.status})`) };
     } catch (err) {
       return { success: false, error: err.message };
     }
@@ -372,7 +389,7 @@ function registerSingerMarketIpc() {
       let errorMsg = `Download failed (HTTP ${res.status})`;
       try {
         const errBody = JSON.parse(res.body.toString('utf-8'));
-        if (errBody.error) errorMsg = errBody.error;
+        errorMsg = extractError(errBody, errorMsg);
       } catch (_) {}
       return { success: false, error: errorMsg };
     } catch (err) {
@@ -437,5 +454,5 @@ function registerSingerMarketIpc() {
 module.exports = {
   registerSingerMarketIpc,
   // Exported for testing
-  _internal: { request, buildMultipart, withAuth, loadSession, saveSession, clearSession },
+  _internal: { request, buildMultipart, withAuth, loadSession, saveSession, clearSession, extractError },
 };
