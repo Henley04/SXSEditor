@@ -201,7 +201,7 @@
           <tr>
             <td><code>singer-market:list</code></td>
             <td><code>GET /api/files?visibility=public&amp;...</code></td>
-            <td><span data-lang="en">Forces <code>visibility=public</code>; passes <code>page</code>, <code>limit</code>, <code>q</code>, <code>tags</code>, <code>tag_mode</code>.</span><span data-lang="zh">强制 <code>visibility=public</code>；透传 <code>page</code>、<code>limit</code>、<code>q</code>、<code>tags</code>、<code>tag_mode</code>。</span></td>
+            <td><span data-lang="en">Forces <code>visibility=public</code>; passes <code>page</code>, <code>size</code>, <code>q</code>, <code>tags</code>, <code>tag_mode</code>.</span><span data-lang="zh">强制 <code>visibility=public</code>；透传 <code>page</code>、<code>size</code>、<code>q</code>、<code>tags</code>、<code>tag_mode</code>。</span></td>
           </tr>
           <tr>
             <td><code>singer-market:file-detail</code></td>
@@ -295,7 +295,7 @@ function withAuth(h)     { /* injects Authorization: Bearer &lt;token&gt; */ }</
           <tr>
             <td><code>GET /api/files</code></td>
             <td><span data-lang="en">optional</span><span data-lang="zh">可选</span></td>
-            <td><span data-lang="en">List files. Query: <code>page</code>, <code>size</code>, <code>q</code>, <code>tags</code> (csv), <code>tag_mode</code> (<code>and</code>|<code>or</code>), <code>visibility</code>, <code>uploaded_by</code>, <code>mine=1</code>, <code>sort</code>, <code>order</code>. <strong>Note:</strong> the page-size param is <code>size</code>; the current IPC proxy sends <code>limit</code>, which the backend ignores (size defaults to 50) — see Known Issues. <code>mine=1</code> without a session → 400.</span><span data-lang="zh">列出文件。查询参数：<code>page</code>、<code>size</code>、<code>q</code>、<code>tags</code>（逗号分隔）、<code>tag_mode</code>（<code>and</code>|<code>or</code>）、<code>visibility</code>、<code>uploaded_by</code>、<code>mine=1</code>、<code>sort</code>、<code>order</code>。<strong>注意：</strong>分页大小参数为 <code>size</code>；当前 IPC 代理发送的是 <code>limit</code>，后端忽略它（size 默认 50）——见“已知问题”。无会话时使用 <code>mine=1</code> → 400。</span></td>
+            <td><span data-lang="en">List files. Query: <code>page</code>, <code>size</code>, <code>q</code>, <code>tags</code> (csv), <code>tag_mode</code> (<code>and</code>|<code>or</code>), <code>visibility</code>, <code>uploaded_by</code>, <code>mine=1</code>, <code>sort</code>, <code>order</code>. The page-size param is <code>size</code>; the IPC proxy sends it correctly since the client-fix. <code>mine=1</code> without a session → 400.</span><span data-lang="zh">列出文件。查询参数：<code>page</code>、<code>size</code>、<code>q</code>、<code>tags</code>（逗号分隔）、<code>tag_mode</code>（<code>and</code>|<code>or</code>）、<code>visibility</code>、<code>uploaded_by</code>、<code>mine=1</code>、<code>sort</code>、<code>order</code>。分页大小参数为 <code>size</code>；客户端修复后 IPC 代理已正确发送。无会话时使用 <code>mine=1</code> → 400。</span></td>
           </tr>
           <tr>
             <td><code>GET /api/files/:id</code></td>
@@ -754,10 +754,10 @@ POST /api/bulk/tag | untag → { "updated": [
 
       <h3><span data-lang="en">Client / contract bugs (SXSEditor)</span><span data-lang="zh">客户端 / 契约 bug（SXSEditor）</span></h3>
       <ol>
-        <li data-lang="en"><strong>Page-size parameter mismatch</strong> — the IPC proxy sends <code>limit</code>; the backend reads only <code>size</code>. The in-app page size (24) is ignored (backend always returns 50).</li>
-        <li data-lang="zh"><strong>分页大小参数不匹配</strong>——IPC 代理发送 <code>limit</code>；后端只读 <code>size</code>。应用内页大小（24）被忽略（后端总返回 50）。</li>
-        <li data-lang="en"><strong>Error rendering</strong> — the backend returns <code>{ "error": { "code", "message" } }</code>, but the proxy forwards <code>data.error</code> as the error string; dialogs render <code>[object Object]</code> instead of the message.</li>
-        <li data-lang="zh"><strong>错误渲染</strong>——后端返回 <code>{ "error": { "code", "message" } }</code>，但代理把 <code>data.error</code> 当错误字符串转发；对话框显示 <code>[object Object]</code> 而非错误消息。</li>
+        <li data-lang="en"><strong>FIXED:</strong> page-size parameter mismatch — the IPC proxy now sends <code>size</code> (was <code>limit</code>); the in-app page size is respected.</li>
+        <li data-lang="zh"><strong>已修复：</strong>分页大小参数不匹配——IPC 代理现在发送 <code>size</code>（原为 <code>limit</code>）；应用内页大小生效。</li>
+        <li data-lang="en"><strong>FIXED:</strong> error rendering — the proxy extracts <code>error.message</code> from the <code>{ "error": { "code", "message" } }</code> envelope, so dialogs show the real message instead of <code>[object Object]</code>.</li>
+        <li data-lang="zh"><strong>已修复：</strong>错误渲染——代理从 <code>{ "error": { "code", "message" } }</code> 信封中提取 <code>error.message</code>，对话框显示真实消息而非 <code>[object Object]</code>。</li>
       </ol>
 
       <h3><span data-lang="en">Capability gaps (missing from API/UI)</span><span data-lang="zh">能力缺口（API/界面缺失项）</span></h3>
