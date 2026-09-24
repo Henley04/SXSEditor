@@ -179,7 +179,8 @@ async function makeVocoderSession(modelPath) {
  *   rescale = std(cond)/std(cfgVal)
  *   v       = RESCALE_CFG*(cfgVal*rescale) + (1-RESCALE_CFG)*cfgVal
  */
-async function cfgVelocity(diff, xt, prompt, cond, pl, tl, tVal) {
+async function cfgVelocity(diff, xt, prompt, cond, pl, tl, tVal, cfgOverride) {
+    const cfgStrength = typeof cfgOverride === 'number' ? cfgOverride : CFG;
     const totalLen = pl + tl;
     const xtInput = new Float32Array(totalLen * MEL_DIM);
     xtInput.set(prompt, 0);
@@ -200,7 +201,7 @@ async function cfgVelocity(diff, xt, prompt, cond, pl, tl, tVal) {
     const cfgVal = new Float32Array(n);
     for (let i = 0; i < n; i++) {
         const c = flowPred[i];
-        const v = c + CFG * (c - uncond[i]);
+        const v = c + cfgStrength * (c - uncond[i]);
         cfgVal[i] = v;
         const d1 = c - posMean; posMean += d1 / (i + 1); posM2 += d1 * (c - posMean);
         const d2 = v - cfgMean; cfgMean += d2 / (i + 1); cfgM2 += d2 * (v - cfgMean);
@@ -217,11 +218,12 @@ async function cfgVelocity(diff, xt, prompt, cond, pl, tl, tVal) {
  * 32 步 Euler 采样。correction 非空时施加 Q-Drift 逐通道修正。
  * @returns {Float32Array} mel (frames*MEL_DIM)
  */
-async function runSampler(diff, prompt, cond, pl, tl, seed, correction) {
+async function runSampler(diff, prompt, cond, pl, tl, seed, correction, cfgAtStep) {
     const xt = randn(mulberry32(seed), tl * MEL_DIM);
     for (let i = 0; i < N_STEPS; i++) {
         const tVal = (i + 0.5) / N_STEPS;
-        const v = await cfgVelocity(diff, xt, prompt, cond, pl, tl, tVal);
+        const cfgI = typeof cfgAtStep === 'function' ? cfgAtStep(i) : undefined;
+        const v = await cfgVelocity(diff, xt, prompt, cond, pl, tl, tVal, cfgI);
         if (correction) {
             const base = i * MEL_DIM;
             for (let f = 0; f < tl; f++) {

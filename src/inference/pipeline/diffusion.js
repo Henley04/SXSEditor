@@ -99,6 +99,27 @@ class Diffusion {
         this._diffStepEp = null;
         // Q-Drift 开关：预览 / 导出是两个独立设置，由管线按当前合成路径注入。
         this._qdriftEnabled = false;
+        // 确定性噪声源。默认 null → 用 Math.random（线上行为不变）。
+        // 只有在做精度/EP 对比测量时才注入种子，否则两条路径的初始噪声不同，
+        // 测出来的差异会被「换种子」本身（实测 ~15 dB LSD）完全淹没。
+        this._rng = null;
+    }
+
+    /**
+     * 注入确定性噪声种子（仅用于测量对比；不设置则行为与线上一致）。
+     * @param {number|null} seed
+     */
+    setNoiseSeed(seed) {
+        const n = Number(seed);
+        if (!Number.isFinite(n)) { this._rng = null; return; }
+        let a = n >>> 0;
+        this._rng = () => {
+            a = (a + 0x6D2B79F5) >>> 0;
+            let t = a;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
     }
 
     /**
@@ -988,7 +1009,7 @@ class Diffusion {
             const sqrtT = Math.sqrt(REPAIR_T0);
             for (let i = regionOffset; i < regionOffset + regionBytes; i++) {
                 const x0 = Number.isFinite(xtData[i]) ? xtData[i] : 0;
-                const noise = Math.random() * 2 - 1;
+                const noise = (this._rng || Math.random)() * 2 - 1;
                 xtData[i] = sqrtOneMinusT * x0 + sqrtT * noise;
             }
 
@@ -1323,9 +1344,10 @@ class Diffusion {
      */
     randomNoise(frameLen, melDim) {
         const data = new Float32Array(frameLen * melDim);
+        const rand = this._rng || Math.random;
         for (let i = 0; i < data.length; i += 2) {
-            const u1 = Math.random();
-            const u2 = Math.random();
+            const u1 = rand();
+            const u2 = rand();
             const r = Math.sqrt(-2.0 * Math.log(u1 + 1e-10));
             const theta = 2.0 * Math.PI * u2;
             data[i] = r * Math.cos(theta);

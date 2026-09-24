@@ -567,6 +567,12 @@ class OnnxSVSPipeline {
     // Delegate diffusion methods
     randomNoise(frameLen, melDim) { return this._diffusion.randomNoise(frameLen, melDim); }
 
+    /**
+     * 注入确定性噪声种子（测量用）。不调用则线上行为不变。
+     * @param {number|null} seed
+     */
+    setNoiseSeed(seed) { this._diffusion.setNoiseSeed(seed); }
+
     // Delegate postprocessing methods
     _extractRefMel(refAudioWavBuffer) { return this._postprocessing.extractRefMel(refAudioWavBuffer); }
     _extractRefMelAsync(refAudioWavBuffer) { return this._postprocessing.extractRefMelAsync(refAudioWavBuffer); }
@@ -2702,6 +2708,8 @@ class OnnxSVSPipeline {
     }
 
     async synthesize(notes, bpm, options = {}) {
+        // 测量开关：固定初始噪声。不传 seed 时完全走原路径（Math.random）。
+        if (Number.isFinite(options.seed)) this._diffusion.setNoiseSeed(options.seed);
         // 串行化：防止并发 synthesize() 调用导致的 session 重建竞态（见 _synthPromise 注释）。
         // 复用 _initPromise 模式：await 上一条合成（含 _recreateHeavySessionsAfterSynthesis）
         // 完全结束后再启动本条。

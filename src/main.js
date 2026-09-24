@@ -73,6 +73,15 @@ if (require('electron-squirrel-startup')) {
 // 检测 --cli 标志，进入命令行调试模式（跳过 GUI/窗口/IPC 注册）。
 // agent 可通过 `electron . --cli <command>` 验证功能并查看日志。
 if (process.argv.includes('--cli')) {
+  // CLI 模式不创建任何窗口，但 Electron 默认仍会拉起 Chromium 的 GPU 进程。
+  // 在部分机器（尤其是混合显卡笔记本）上该进程会启动失败并反复重启，最终
+  // 触发 "GPU process isn't usable. Goodbye." 直接把整个进程杀掉——表现为
+  // 「命令一开始跑就退出，GPU 占用纹丝不动」。推理走的是主进程的
+  // onnxruntime (DML/WinML)，与 Chromium 的 GPU 进程无关，因此这里直接关掉。
+  app.disableHardwareAcceleration();
+  for (const sw of ['disable-gpu', 'disable-gpu-compositing', 'disable-software-rasterizer']) {
+    app.commandLine.appendSwitch(sw);
+  }
   // CLI 模式不获取单实例锁（agent 可能并行触发多个命令）
   const { runCli } = require('./main/cli');
   app.whenReady().then(async () => {
