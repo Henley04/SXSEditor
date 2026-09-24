@@ -1819,7 +1819,13 @@ function renderPitchCurve(c) {
   if (pitchCurve.anchorPoints.length > 0) {
     const sorted = getSortedAnchorPoints();
     const maxTime = Math.max(endBeat, sorted[sorted.length - 1].time) + 2;
-    const steps = Math.max(200, Math.floor((maxTime - startBeat) / PITCH_CURVE_SAMPLE_INTERVAL));
+    // 采样密度按视口像素自适应：固定 0.02 拍间隔在缩小到 100+ 拍视口时每帧
+    // 产生 5000+ 次 getPitchAtTime 二分求值（拖拽时逐帧执行）。每个线段超过
+    // 1 像素没有视觉收益，因此取 [200, 视口像素宽] 与细间隔密度的较小值：
+    // 放大保持原 0.02 拍精度，缩小则降到约每像素一个线段。
+    const beatRange = maxTime - startBeat;
+    const denseSteps = Math.floor(beatRange / PITCH_CURVE_SAMPLE_INTERVAL);
+    const steps = Math.min(Math.max(200, w), denseSteps);
 
     ctx.strokeStyle = c.pitchLine;
     ctx.lineWidth = 2;
