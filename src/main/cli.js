@@ -709,6 +709,18 @@ async function cmdQdriftConds(opts) {
     try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')); } catch (_) { manifest = []; }
   }
   const manifestByItem = new Map(manifest.map(m => [m.item, m]));
+  // Items belonging to a (project,fragment) re-exported in THIS invocation.
+  // Old segment picks for the same fragment (uniform sampling can choose
+  // different indices across runs) must be pruned from the manifest so
+  // calibration never loads stale tensors produced before an encoding fix.
+  const touchedItems = new Set();
+  const scopeKeys = new Set(jobs.map(j => `${path.basename(j.file)}#${j.fi}`));
+  const pruneManifest = (map) => Array.from(map.values())
+    .filter(m => {
+      const key = `${m.source_project}#${m.source_fragment}`;
+      return !scopeKeys.has(key) || touchedItems.has(m.item);
+    })
+    .sort((a, b) => a.item.localeCompare(b.item));
 
   // prompt mel 按歌手文件缓存（同一歌手的多个片段共用）
   const promptCache = new Map();
@@ -771,6 +783,7 @@ async function cmdQdriftConds(opts) {
         if (!force && fs.existsSync(jsonPath) && fs.existsSync(promptPath) && fs.existsSync(condPath)) {
           log(`  ${item}: cached (skip; --force to rebuild)`);
           skipped++;
+          touchedItems.add(item);
           continue;
         }
 
@@ -829,6 +842,7 @@ async function cmdQdriftConds(opts) {
         };
         fs.writeFileSync(jsonPath, JSON.stringify(meta, null, 2));
         manifestByItem.set(item, meta);
+        touchedItems.add(item);
         exported++;
         log(`  ${item}: tl=${tl} (${sec.toFixed(2)}s) pl=${pl} cond=${pl + tl} frames  [OK]`);
 
@@ -837,16 +851,16 @@ async function cmdQdriftConds(opts) {
       }
     }
 
-    const merged = Array.from(manifestByItem.values()).sort((a, b) => a.item.localeCompare(b.item));
+    const merged = pruneManifest(manifestByItem);
     fs.writeFileSync(manifestPath, JSON.stringify(merged, null, 2));
     log(`\n[OK] exported=${exported} cached=${skipped} total=${merged.length} -> ${outDir}`);
     log(`[OK] elapsed ${((Date.now() - tStart) / 1000).toFixed(1)}s`);
     try { pipeline.dispose(); } catch (_) {}
     return 0;
   } catch (e) {
-    // 出错也落盘已完成条目，便于断点续跑
+    // 出错也落盘已完成条目，便于断点续跑（同样修剪本次重导片段的陈旧条目）
     try {
-      const merged = Array.from(manifestByItem.values()).sort((a, b) => a.item.localeCompare(b.item));
+      const merged = pruneManifest(manifestByItem);
       fs.writeFileSync(manifestPath, JSON.stringify(merged, null, 2));
     } catch (_) {}
     logErr(`[FAIL] qdrift-conds: ${e.stack || e.message}`);
