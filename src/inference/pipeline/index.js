@@ -3633,6 +3633,15 @@ class OnnxSVSPipeline {
                     // JS fallback also failed, use zero prompt
                 }
             }
+            // Diagnostic cap (CLI --max-prompt-frames): keep the first N prompt
+            // frames, matching the qdrift-conds export convention. Used to
+            // isolate long-reference-prompt effects on long target sequences.
+            if (Number.isInteger(options.maxPromptFrames) && options.maxPromptFrames > 0
+                && ptFrameCount > options.maxPromptFrames) {
+                console.log(`[OnnxSVSPipeline] Reference mel capped: ${ptFrameCount} -> ${options.maxPromptFrames}frames (diagnostic)`);
+                ptMelData = ptMelData.subarray(0, options.maxPromptFrames * MEL_DIM);
+                ptFrameCount = options.maxPromptFrames;
+            }
         }
 
         const segments = this._buildVocalSegments(filledNotes, bpm);

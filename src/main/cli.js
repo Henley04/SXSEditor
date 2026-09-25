@@ -527,6 +527,10 @@ async function cmdSynthProject(opts) {
     globalThis.__SXS_SETTINGS_SNAPSHOT__.nativeInferenceBackend = 'winml';
     globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlPreferredEp = opts.winmlEp;
   }
+  if (opts.noWinml) {
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlEnabled = false;
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.nativeInferenceBackend = 'dml';
+  }
   log(`[ep] 请求: winmlEnabled=${settings.winmlEnabled === true} backend=${settings.nativeInferenceBackend || 'auto'} preferredEp=${opts.winmlEp || settings.winmlPreferredEp || '(智能) NV TRT-RTX 优先'}`);
 
   const pipeline = new OnnxSVSPipeline(modelDir, {
@@ -563,6 +567,7 @@ async function cmdSynthProject(opts) {
     }
     if (opts.qdrift === true) synthOpts.qdrift = true;
     if (opts.qdrift === false) synthOpts.qdrift = false;
+    if (Number.isInteger(opts.maxPromptFrames)) synthOpts.maxPromptFrames = opts.maxPromptFrames;
     if (Number.isInteger(opts.seed)) {
         synthOpts.seed = opts.seed;
         log(`seed       : ${opts.seed}（固定初始噪声，用于精度/EP 对比）`);
@@ -917,6 +922,8 @@ function parseArgs(argv) {
     if (a === '--no-qdrift') { opts.qdrift = false; continue; }
     if (a === '--seed') { opts.seed = parseInt(rest[++i], 10); continue; }
     if (a === '--winml-ep') { opts.winmlEp = rest[++i]; continue; }
+    if (a === '--no-winml') { opts.noWinml = true; continue; }
+    if (a === '--max-prompt-frames') { opts.maxPromptFrames = parseInt(rest[++i], 10); continue; }
     if (a === '--dry-run') { opts.dryRun = true; continue; }
     if (a === '--language') { opts.language = rest[++i]; continue; }
     if (a === '--notes') {
