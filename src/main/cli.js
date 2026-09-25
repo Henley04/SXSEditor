@@ -561,7 +561,8 @@ async function cmdSynthProject(opts) {
       synthOpts.cfgStrengthStart = null;
       synthOpts.cfgScheduleKeyframes = null;
     }
-    if (opts.qdrift) synthOpts.qdrift = true;
+    if (opts.qdrift === true) synthOpts.qdrift = true;
+    if (opts.qdrift === false) synthOpts.qdrift = false;
     if (Number.isInteger(opts.seed)) {
         synthOpts.seed = opts.seed;
         log(`seed       : ${opts.seed}（固定初始噪声，用于精度/EP 对比）`);
@@ -913,6 +914,7 @@ function parseArgs(argv) {
     if (a === '--cfg-rescale') { opts.cfgRescale = parseFloat(rest[++i]); continue; }
     if (a === '--cfg-schedule') { opts.cfgSchedule = rest[++i]; continue; }
     if (a === '--qdrift') { opts.qdrift = true; continue; }
+    if (a === '--no-qdrift') { opts.qdrift = false; continue; }
     if (a === '--seed') { opts.seed = parseInt(rest[++i], 10); continue; }
     if (a === '--winml-ep') { opts.winmlEp = rest[++i]; continue; }
     if (a === '--dry-run') { opts.dryRun = true; continue; }
