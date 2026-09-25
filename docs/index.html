@@ -213,14 +213,37 @@ html[data-theme="dark"] .f-ic.n{background:var(--blue-soft);color:var(--yellow)}
 .f-mini-stats b{display:block;font-family:var(--num);font-size:19px;font-weight:700;color:var(--blue)}
 .f-mini-stats span{font-size:11px;color:var(--ink2)}
 .f-roll{height:118px;margin-bottom:14px;position:relative}
-.lyr{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
-.lyr .w{text-align:center}
-.lyr .w b{display:block;font-family:var(--disp);font-size:22px;font-weight:400;padding:4px 12px;border:1.5px solid var(--line2);background:var(--panel2);animation:chipGlow 4s infinite}
-.lyr .w i{font-style:normal;font-family:var(--num);font-size:11px;font-weight:600;color:var(--ink2);letter-spacing:.05em}
-.lyr .w:nth-child(2) b{animation-delay:1s}
-.lyr .w:nth-child(3) b{animation-delay:2s}
-.lyr .w:nth-child(4) b{animation-delay:3s}
-@keyframes chipGlow{0%,18%,100%{background:var(--panel2);border-color:var(--line2);color:var(--ink)}8%{background:var(--yellow);border-color:var(--yellow2);color:var(--navy)}}
+/* 真实音素分配展示（随语言切换） */
+.alr{margin-bottom:14px;border:1.5px solid var(--line);background:var(--panel2);padding:12px}
+html[data-lang="en"] .alr-zh{display:none}
+html[data-lang="zh"] .alr-en{display:none}
+.alr-badge{display:inline-block;font-family:var(--num);font-weight:700;font-size:10px;letter-spacing:.14em;color:var(--blue);border:1.5px solid var(--line2);background:var(--panel);padding:2px 8px;margin-bottom:10px}
+.alr-cap{margin-top:10px;font-size:11px;line-height:1.5;color:var(--ink2)}
+/* 中文：汉字 → 自动声调拼音 → zh_ 音节音素 */
+.zh-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+.zh-cell{text-align:center;background:var(--panel);border:1.5px solid var(--line2);padding:7px 3px 6px}
+.zh-cell b{display:block;font-family:var(--disp);font-size:20px;font-weight:400;line-height:1.2}
+.zh-cell i{font-style:normal;font-family:var(--num);font-size:11px;font-weight:600;color:var(--ink2)}
+.zh-cell code{display:block;margin-top:5px;font-family:var(--num);font-size:10px;font-weight:700;color:var(--blue);background:var(--blue-soft);padding:2px 0;letter-spacing:.02em}
+.zh-cell code em{font-style:normal;color:var(--yellow2)}
+html[data-theme="dark"] .zh-cell code em{color:var(--yellow)}
+/* 英文：单词 → ARPAbet 音素 + 真实时长条 */
+.en-flow{display:flex;align-items:center;gap:10px}
+.en-word{font-family:var(--disp);font-size:21px;font-weight:400;flex-shrink:0;line-height:1}
+.en-arrow{color:var(--ink2);font-size:15px;flex-shrink:0}
+.en-phones{flex:1;display:grid;gap:5px;min-width:0}
+.en-ph{display:grid;grid-template-columns:56px 1fr 42px;align-items:center;gap:8px}
+.en-ph .phn{font-family:var(--num);font-weight:700;font-size:13.5px;color:var(--ink);text-align:right;line-height:1.05;white-space:nowrap}
+.en-ph .phn small{font-size:8.5px;font-weight:600;color:var(--ink2);margin-right:1px}
+.en-bar{height:8px;background:var(--line)}
+.en-bar i{display:block;height:100%;background:var(--blue);transform-origin:left;transform:scaleX(0)}
+.en-ph.vow .en-bar i{background:var(--yellow2)}
+.en-ph .ms{font-family:var(--num);font-weight:700;font-size:11px;color:var(--ink2);text-align:right}
+.f-card.in .en-bar i{animation:barGrow .9s cubic-bezier(.22,.9,.3,1) forwards}
+.f-card.in .en-ph:nth-child(2) .en-bar i{animation-delay:.12s}
+.f-card.in .en-ph:nth-child(3) .en-bar i{animation-delay:.24s}
+.f-card.in .en-ph:nth-child(4) .en-bar i{animation-delay:.36s}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 .faders{display:grid;gap:11px;margin-bottom:14px}
 .fader{position:relative;height:6px;background:var(--line);border-radius:0}
 .fader::before{content:"";position:absolute;left:0;top:0;bottom:0;background:var(--blue);width:40%}
@@ -502,7 +525,7 @@ html[data-theme="dark"] footer{background:#070B14}
         <span class="chip y"><span class="dotp"></span>VERSION 2.0.2「SoulX-Singer」</span>
         <span class="chip b">ONNX Runtime · DirectML</span>
       </div>
-      <h1 class="reveal" style="--d:.08s" data-i18n-html="hero.title">让每个音符，<br>都为你<em>歌唱</em>。</h1>
+      <h1 class="reveal" style="--d:.08s" data-i18n-html="hero.title">免费歌声合成，<br>打造属于你的<em>歌手</em>。</h1>
       <p class="hero-p reveal" style="--d:.16s" data-i18n-html="hero.desc"><b>SXSEditor</b> 是一款开源的 AI 歌声合成（SVS）桌面应用——基于 SoulX-Singer 神经模型 × ONNX Runtime 推理 × DirectML GPU 加速，从 MIDI 音符与歌词到完整歌声，一个软件走完全部流程。</p>
       <div class="hero-btns reveal" style="--d:.24s">
         <a class="btn" href="#download">
@@ -602,15 +625,32 @@ html[data-theme="dark"] footer{background:#070B14}
       <article class="f-card f-c reveal" style="--d:.14s">
         <span class="f-idx">03</span>
         <div class="f-ic c"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h13"/><circle cx="19" cy="16.5" r="2.4"/></svg></div>
-        <h3 data-i18n="feat.f3.h">多语种咬字对齐</h3>
-        <p data-i18n="feat.f3.p">输入歌词自动切分音节，中文拼音 / 英文音素 / 日文假名智能标注，逐字对齐到毫秒级。</p>
-        <div class="lyr">
-          <span class="w"><b data-i18n="feat.f3.l1">星</b><i>xīng</i></span>
-          <span class="w"><b data-i18n="feat.f3.l2">辉</b><i>huī</i></span>
-          <span class="w"><b data-i18n="feat.f3.l3">穹</b><i>qióng</i></span>
-          <span class="w"><b data-i18n="feat.f3.l4">响</b><i>xiǎng</i></span>
+        <h3 data-i18n="feat.f3.h">歌词自动音素化</h3>
+        <p data-i18n="feat.f3.p">歌词直接变音素：中文汉字自动生成带声调的 zh_ 音节音素（xīng → zh_xing1）；英文单词经 CMUdict 拆为 ARPAbet 音素，并按 MFA 对齐时长统计逐帧分配，短音符元音优先。</p>
+        <div class="alr alr-zh">
+          <span class="alr-badge" data-i18n="feat.f3.zhbadge">中文 · 自动声调</span>
+          <div class="zh-grid">
+            <div class="zh-cell"><b>星</b><i>xīng</i><code>zh_xing<em>1</em></code></div>
+            <div class="zh-cell"><b>辉</b><i>huī</i><code>zh_hui<em>1</em></code></div>
+            <div class="zh-cell"><b>穹</b><i>qióng</i><code>zh_qiong<em>2</em></code></div>
+            <div class="zh-cell"><b>响</b><i>xiǎng</i><code>zh_xiang<em>3</em></code></div>
+          </div>
+          <div class="alr-cap" data-i18n="feat.f3.zhcap">pinyin-pro 自动标注声调 · 轻声归 5 · 支持手动改调（如「星3」）</div>
         </div>
-        <div class="f-tags"><span class="tagc" data-i18n="feat.f3.t1">自动注音</span><span class="tagc" data-i18n="feat.f3.t2">汉字假名分组</span></div>
+        <div class="alr alr-en">
+          <span class="alr-badge" data-i18n="feat.f3.enbadge">ENGLISH · G2P + DURATION</span>
+          <div class="en-flow">
+            <span class="en-word">singer</span><span class="en-arrow">→</span>
+            <div class="en-phones">
+              <div class="en-ph cons"><span class="phn"><small>en_</small>S</span><span class="en-bar"><i style="width:100%"></i></span><span class="ms">110ms</span></div>
+              <div class="en-ph vow"><span class="phn"><small>en_</small>IH1</span><span class="en-bar"><i style="width:64%"></i></span><span class="ms">70ms</span></div>
+              <div class="en-ph cons"><span class="phn"><small>en_</small>NG</span><span class="en-bar"><i style="width:82%"></i></span><span class="ms">90ms</span></div>
+              <div class="en-ph vow"><span class="phn"><small>en_</small>ER0</span><span class="en-bar"><i style="width:82%"></i></span><span class="ms">90ms</span></div>
+            </div>
+          </div>
+          <div class="alr-cap" data-i18n="feat.f3.encap">CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first</div>
+        </div>
+        <div class="f-tags"><span class="tagc" data-i18n="feat.f3.t1">中文自动声调</span><span class="tagc" data-i18n="feat.f3.t2">英文音素时长分配</span></div>
       </article>
 
       <article class="f-card f-d reveal" style="--d:.1s">
@@ -989,7 +1029,7 @@ var I18N={
     "ticker.4":"✦ 三精度模型共存：<b>FP32 / FP16 / INT8</b> 自由切换",
     "ticker.5":"✦ 新增 SiFiGAN 声码器 · mel SNR 提升至 <b>83.54 dB</b>",
     "nav.home":"首页","nav.features":"核心功能","nav.workflow":"工作流","nav.news":"版本情报","nav.download":"下载","nav.docs":"文档中心","nav.downloadBtn":"立即下载",
-    "hero.title":"让每个音符，<br>都为你<em>歌唱</em>。",
+    "hero.title":"免费歌声合成，<br>打造属于你的<em>歌手</em>。",
     "hero.desc":"<b>SXSEditor</b> 是一款开源的 AI 歌声合成（SVS）桌面应用——基于 SoulX-Singer 神经模型 × ONNX Runtime 推理 × DirectML GPU 加速，从 MIDI 音符与歌词到完整歌声，一个软件走完全部流程。",
     "hero.dlBtn":"免费下载 v2.0.2",
     "hero.srcBtn":"查看源码",
@@ -1004,9 +1044,10 @@ var I18N={
     "feat.f1.s1":"GPU 加速比","feat.f1.s2":"mel SNR","feat.f1.s3":"量化精度",
     "feat.f2.h":"钢琴卷帘编辑器","feat.f2.p":"音符、歌词、音高曲线、音量/声像包络，以及音素级边界编辑。所画即所听，参数修改即时反馈。",
     "feat.f2.t1":"音高笔刷","feat.f2.t2":"MIDI 导入","feat.f2.t3":"音素边界",
-    "feat.f3.h":"多语种咬字对齐","feat.f3.p":"输入歌词自动切分音节，中文拼音 / 英文音素 / 日文假名智能标注，逐字对齐到毫秒级。",
-    "feat.f3.l1":"星","feat.f3.l2":"辉","feat.f3.l3":"穹","feat.f3.l4":"响",
-    "feat.f3.t1":"自动注音","feat.f3.t2":"汉字假名分组",
+    "feat.f3.h":"歌词自动音素化","feat.f3.p":"歌词直接变音素：中文汉字自动生成带声调的 zh_ 音节音素（xīng → zh_xing1）；英文单词经 CMUdict 拆为 ARPAbet 音素，并按 MFA 对齐时长统计逐帧分配，短音符元音优先。",
+    "feat.f3.zhbadge":"中文 · 自动声调","feat.f3.zhcap":"pinyin-pro 自动标注声调 · 轻声归 5 · 支持手动改调（如「星3」）",
+    "feat.f3.enbadge":"英文 · 词转音素 + 时长","feat.f3.encap":"CMUdict ARPAbet 音素 · MFA 对齐时长统计（中位数）· 20ms/帧 · 短音符元音优先",
+    "feat.f3.t1":"中文自动声调","feat.f3.t2":"英文音素时长分配",
     "feat.f4.h":"多精度模型共存","feat.f4.p":"FP32（推荐）/ FP16 / INT8 / INT8-NPU 多精度模型共存，切换无需重新下载。W16A32 量化在降低显存占用的同时接近 FP32 质量。",
     "feat.f5.h":"多后端推理","feat.f5.p":"单一二进制支持 DirectML GPU、WebNN NPU/GPU 与 CPU 回退，自动选择最优后端。",
     "feat.f6.h":"音频转 MIDI","feat.f6.p":"FCPE 音高检测器（默认）或 basic_pitch 将现有音频转换为 MIDI 音符，可选同时提取 F0 音高曲线。","feat.f6.t":"F0 / MIDI 自动提取",
@@ -1044,7 +1085,7 @@ var I18N={
     "ticker.4":"✦ Three precision tiers in one app: <b>FP32 / FP16 / INT8</b>",
     "ticker.5":"✦ SiFiGAN vocoder added · mel SNR up to <b>83.54 dB</b>",
     "nav.home":"Home","nav.features":"Features","nav.workflow":"Workflow","nav.news":"News","nav.download":"Download","nav.docs":"Docs","nav.downloadBtn":"Download Now",
-    "hero.title":"Let every note<br><em>sing</em> for you.",
+    "hero.title":"Free singing synthesis,<br>make your own <em>singer</em>.",
     "hero.desc":"<b>SXSEditor</b> is an open-source AI Singing Voice Synthesis (SVS) desktop app — built on the SoulX-Singer neural model × ONNX Runtime inference × DirectML GPU acceleration. From MIDI notes and lyrics to a complete vocal performance, the entire pipeline lives in one app.",
     "hero.dlBtn":"Download Free v2.0.2",
     "hero.srcBtn":"View Source",
@@ -1059,9 +1100,10 @@ var I18N={
     "feat.f1.s1":"GPU Speedup","feat.f1.s2":"mel SNR","feat.f1.s3":"Quantization",
     "feat.f2.h":"Piano-roll Editor","feat.f2.p":"Notes, lyrics, pitch curves, volume/pan envelopes, plus phoneme-level boundary editing. What you draw is what you hear — parameter changes are audible instantly.",
     "feat.f2.t1":"Pitch Brush","feat.f2.t2":"MIDI Import","feat.f2.t3":"Phoneme Bounds",
-    "feat.f3.h":"Multilingual Lyric Alignment","feat.f3.p":"Lyrics are auto-segmented into syllables; CN pinyin / EN phonemes / JP kana are labeled intelligently and aligned word-by-word to millisecond precision.",
-    "feat.f3.l1":"星","feat.f3.l2":"辉","feat.f3.l3":"穹","feat.f3.l4":"响",
-    "feat.f3.t1":"Auto Phonemize","feat.f3.t2":"Kanji-Kana Group",
+    "feat.f3.h":"Automatic Lyric Phonemization","feat.f3.p":"Lyrics become phonemes directly: Han characters auto-generate toned zh_ syllable tokens (xīng → zh_xing1); English words split into ARPAbet phonemes via CMUdict, with per-frame durations from MFA-aligned stats — vowel-first on short notes.",
+    "feat.f3.zhbadge":"CHINESE · AUTO TONE","feat.f3.zhcap":"pinyin-pro auto tone marks · neutral tone → 5 · manual override supported (e.g. xing3)",
+    "feat.f3.enbadge":"ENGLISH · G2P + DURATION","feat.f3.encap":"CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first",
+    "feat.f3.t1":"Auto CN tones","feat.f3.t2":"EN phoneme durations",
     "feat.f4.h":"Multi-Precision Models","feat.f4.p":"FP32 (recommended) / FP16 / INT8 / INT8-NPU coexist; switch without re-downloading. W16A32 quantization cuts VRAM usage while staying close to FP32 quality.",
     "feat.f5.h":"Multi-Backend Inference","feat.f5.p":"A single binary supports DirectML GPU, WebNN NPU/GPU, and CPU fallback — auto-picks the best backend.",
     "feat.f6.h":"Audio to MIDI","feat.f6.p":"FCPE pitch detector (default) or basic_pitch converts existing audio into MIDI notes, with optional F0 pitch curve extraction.","feat.f6.t":"F0 / MIDI Auto Extract",
