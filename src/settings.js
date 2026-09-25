@@ -2605,6 +2605,188 @@ document.querySelectorAll('.sidebar-item').forEach(item => {
     });
 });
 
+// ==================== About page: open source usage / papers / links ====================
+
+// 第三方组件，分三组：运行时库 / 开发与测试工具 / 模型与数据资源。
+// purpose 为 i18n key；许可证名称是各项目自声明的 SPDX 短名。
+const OPEN_SOURCE_GROUPS = [
+    {
+        label: 'aboutPage.ogRuntime',
+        items: [
+            { name: 'Electron', url: 'https://github.com/electron/electron', purpose: 'aboutPage.puElectron', license: 'MIT' },
+            { name: 'ONNX Runtime', url: 'https://github.com/microsoft/onnxruntime', purpose: 'aboutPage.puOnnx', license: 'MIT' },
+            { name: 'TensorFlow.js', url: 'https://github.com/tensorflow/tfjs', purpose: 'aboutPage.puTfjs', license: 'Apache-2.0' },
+            { name: '@tonejs/midi', url: 'https://github.com/Tonejs/Midi', purpose: 'aboutPage.puToneMidi', license: 'MIT' },
+            { name: 'decibri', url: 'https://github.com/decibri/decibri', purpose: 'aboutPage.puDecibri', license: 'Apache-2.0' },
+            { name: 'iconv-lite', url: 'https://github.com/ashtuchkin/iconv-lite', purpose: 'aboutPage.puIconv', license: 'MIT' },
+            { name: 'pinyin-pro', url: 'https://github.com/zh-lx/pinyin-pro', purpose: 'aboutPage.puPinyin', license: 'MIT' },
+            { name: 'systeminformation', url: 'https://github.com/sebhildebrandt/systeminformation', purpose: 'aboutPage.puSysinfo', license: 'MIT' },
+            { name: '@microsoft/dynwinrt', url: 'https://github.com/microsoft/dynwinrt', purpose: 'aboutPage.puDynwinrt', license: 'MIT' },
+        ],
+    },
+    {
+        label: 'aboutPage.ogDev',
+        items: [
+            { name: 'Webpack', url: 'https://github.com/webpack/webpack', purpose: 'aboutPage.puWebpack', license: 'MIT' },
+            { name: 'Electron Forge', url: 'https://github.com/electron/forge', purpose: 'aboutPage.puForge', license: 'MIT' },
+            { name: 'Babel', url: 'https://github.com/babel/babel', purpose: 'aboutPage.puBabel', license: 'MIT' },
+            { name: 'Mocha', url: 'https://github.com/mochajs/mocha', purpose: 'aboutPage.puMocha', license: 'MIT' },
+            { name: 'Chai', url: 'https://github.com/chaijs/chai', purpose: 'aboutPage.puChai', license: 'MIT' },
+            { name: 'Sinon', url: 'https://github.com/sinonjs/sinon', purpose: 'aboutPage.puSinon', license: 'MIT' },
+            { name: 'JSDOM', url: 'https://github.com/jsdom/jsdom', purpose: 'aboutPage.puJsdom', license: 'MIT' },
+            { name: 'ESLint', url: 'https://github.com/eslint/eslint', purpose: 'aboutPage.puEslint', license: 'MIT' },
+            { name: 'nyc (Istanbul)', url: 'https://github.com/istanbuljs/nyc', purpose: 'aboutPage.puNyc', license: 'ISC' },
+        ],
+    },
+    {
+        label: 'aboutPage.ogData',
+        items: [
+            { name: 'SoulX-Singer models & tokens', url: 'https://github.com/Soul-AILab/SoulX-Singer', purpose: 'aboutPage.puSoulModels', license: 'Apache-2.0' },
+            { name: 'CMU Pronouncing Dictionary', url: 'https://github.com/cmusphinx/cmudict', purpose: 'aboutPage.puCmudict', license: 'CMUdict (BSD-style)' },
+            { name: 'LJSpeech / MFA / FastSpeech2', url: 'https://github.com/ming024/FastSpeech2', purpose: 'aboutPage.puLj', license: 'Public Domain / MIT' },
+            { name: 'GTSinger dataset', url: 'https://github.com/AaronZ345/GTSinger', purpose: 'aboutPage.puGtData', license: 'CC BY-NC-SA 4.0' },
+        ],
+    },
+];
+
+function renderOpenSourceTable() {
+    const tbody = document.getElementById('openSourceTableBody');
+    if (!tbody) return;
+    tbody.textContent = '';
+    for (const group of OPEN_SOURCE_GROUPS) {
+        const headerRow = document.createElement('tr');
+        headerRow.className = 'about-group-row';
+        const headerCell = document.createElement('td');
+        headerCell.colSpan = 3;
+        headerCell.textContent = t(group.label);
+        headerRow.appendChild(headerCell);
+        tbody.appendChild(headerRow);
+
+        for (const item of group.items) {
+            const tr = document.createElement('tr');
+
+            const tdName = document.createElement('td');
+            if (item.url) {
+                const a = document.createElement('a');
+                a.href = '#';
+                a.dataset.external = item.url;
+                a.textContent = item.name;
+                tdName.appendChild(a);
+            } else {
+                tdName.textContent = item.name;
+            }
+            tr.appendChild(tdName);
+
+            const tdPurpose = document.createElement('td');
+            tdPurpose.textContent = t(item.purpose);
+            tr.appendChild(tdPurpose);
+
+            const tdLicense = document.createElement('td');
+            tdLicense.textContent = item.license;
+            tr.appendChild(tdLicense);
+
+            tbody.appendChild(tr);
+        }
+    }
+}
+
+// 本应用实际使用的论文与研究成果（arXiv 编号与代码注释中的引用一致）。
+const PAPER_GROUPS = [
+    {
+        label: 'aboutPage.pgCore',
+        items: [
+            { title: 'SoulX-Singer: Towards High-Quality Zero-Shot Singing Voice Synthesis', id: '2602.07803' },
+        ],
+    },
+    {
+        label: 'aboutPage.pgPitch',
+        items: [
+            { title: 'RMVPE: A Robust Model for Vocal Pitch Estimation in Polyphonic Music', id: '2306.15412' },
+            { title: 'FCPE: A Fast Context-based Pitch Estimation Model', id: '2509.15140' },
+            { title: 'A Lightweight Instrument-Agnostic Model for Polyphonic Note Transcription and Multipitch Estimation', id: '2203.09893' },
+            { title: 'Robust Singing Voice Transcription Serves Synthesis (ROSVOT)', id: '2405.09940' },
+        ],
+    },
+    {
+        label: 'aboutPage.pgVocoder',
+        items: [
+            { title: 'Source-Filter HiFi-GAN: Fast and Pitch Controllable High-Fidelity Neural Vocoder', id: '2210.15533' },
+        ],
+    },
+    {
+        label: 'aboutPage.pgAlgo',
+        items: [
+            { title: 'Classifier-Free Diffusion Guidance', id: '2207.12598' },
+            { title: 'Improving Classifier-Free Guidance in Masked Diffusion: Low-Dim Theoretical Insights with High-Dim Impact', id: '2507.08965' },
+            { title: 'STORK: Faster Diffusion and Flow Matching Sampling by Resolving Both Stiffness and Structure-Dependence', id: '2505.24210' },
+            { title: 'Q-Drift', id: '2603.18095' },
+            { title: 'RDSinger', id: '2410.21641' },
+            { title: 'FastSpeech 2: Fast and Robust Speech Synthesis', id: '2006.04558' },
+        ],
+    },
+    {
+        label: 'aboutPage.pgDataset',
+        items: [
+            { title: 'GTSinger: A Global Multi-Technique Singing Corpus with Realistic Music Scores for All Singing Tasks', id: '2409.13832' },
+        ],
+    },
+];
+
+function renderPapers() {
+    const container = document.getElementById('papersList');
+    if (!container) return;
+    container.textContent = '';
+    for (const group of PAPER_GROUPS) {
+        const sub = document.createElement('p');
+        sub.className = 'papers-subgroup';
+        sub.textContent = t(group.label);
+        container.appendChild(sub);
+
+        const ul = document.createElement('ul');
+        ul.className = 'papers-items';
+        for (const paper of group.items) {
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.href = '#';
+            a.dataset.external = `https://arxiv.org/abs/${paper.id}`;
+            a.textContent = paper.title;
+            li.appendChild(a);
+            const idSpan = document.createElement('span');
+            idSpan.className = 'paper-arxiv-id';
+            idSpan.textContent = `arXiv:${paper.id}`;
+            li.appendChild(idSpan);
+            ul.appendChild(li);
+        }
+        container.appendChild(ul);
+    }
+}
+
+// 外链点击统一委托：静态 HTML 与动态渲染的表格/列表都由此处理。
+document.addEventListener('click', (event) => {
+    const link = event.target.closest?.('[data-external]');
+    if (!link) return;
+    event.preventDefault();
+    const url = link.dataset.external;
+    if (window.electronAPI?.openExternal) {
+        window.electronAPI.openExternal(url).catch(err =>
+            console.error('Open external link failed:', err));
+    }
+});
+
+(async function initAboutPage() {
+    try {
+        if (window.electronAPI?.getAppVersion) {
+            const version = await window.electronAPI.getAppVersion();
+            const el = document.getElementById('aboutVersion');
+            if (el && version) el.textContent = version;
+        }
+    } catch (err) {
+        console.warn('Failed to populate about version:', err && err.message);
+    }
+    renderOpenSourceTable();
+    renderPapers();
+})();
+
 
 
 

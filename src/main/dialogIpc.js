@@ -128,6 +128,45 @@ function registerDialogIpc() {
       return { success: false, error: err.message };
     }
   });
+
+  // 在系统默认浏览器中打开外部链接（设置 → 关于页面中的 arXiv / 项目主页等）。
+  // 仅允许 https 且主机名命中白名单，防止被攻陷的渲染进程拉起任意 URI
+  // （file://、smb://、钓鱼站点等）。主机名按"边界匹配"，避免
+  // github.com.evil.com 之类的前缀绕过。
+  ipcMain.handle('shell:open-external', async (event, url) => {
+    const ALLOWED_HOSTS = [
+      'arxiv.org',
+      'github.com',
+      'huggingface.co',
+      'basicpitch.io',
+      'soul-ailab.github.io',
+      'rosvot.github.io',
+    ];
+    if (!url || typeof url !== 'string') {
+      return { success: false, error: 'Invalid URL' };
+    }
+    let parsed;
+    try {
+      parsed = new URL(url);
+    } catch (_) {
+      return { success: false, error: 'Invalid URL' };
+    }
+    if (parsed.protocol !== 'https:') {
+      return { success: false, error: 'Only https URLs are allowed' };
+    }
+    const host = parsed.hostname.toLowerCase();
+    const allowed = ALLOWED_HOSTS.some(domain => host === domain || host.endsWith('.' + domain));
+    if (!allowed) {
+      return { success: false, error: 'Host not allowed' };
+    }
+    try {
+      await shell.openExternal(url);
+      return { success: true };
+    } catch (err) {
+      console.error('[Main] openExternal failed:', err.message);
+      return { success: false, error: err.message };
+    }
+  });
 }
 
 module.exports = {

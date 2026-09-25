@@ -1437,3 +1437,80 @@ body {
 #inferenceDevice option { color: var(--fg-primary); }
 
 #section-inference .device-mode-radio.hidden { display: none !important; }
+
+/* ==================== About: license / open source / papers ==================== */
+#section-about { max-width: 860px; }
+
+.about-identity { margin-bottom: var(--space-4); }
+.about-app-name { font-size: 26px; font-weight: 700; color: var(--fg-primary); }
+.about-app-desc { margin-top: 4px; color: var(--fg-muted); font-size: var(--font-base); }
+.about-app-meta { margin-top: 6px; color: var(--fg-muted); font-size: var(--font-sm); }
+.about-links { margin-top: 8px; font-size: var(--font-sm); }
+
+#section-about a { color: var(--accent); text-decoration: none; }
+#section-about a:hover { text-decoration: underline; }
+
+details > summary { cursor: pointer; color: var(--accent); font-size: var(--font-sm); user-select: none; }
+.about-license-text {
+    margin-top: 10px;
+    padding: 12px 14px;
+    max-height: 320px;
+    overflow: auto;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    color: var(--fg-primary);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+}
+
+.about-table-wrap {
+    margin-top: 10px;
+    overflow-x: auto;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    background: var(--bg-elevated);
+}
+.about-table { width: 100%; border-collapse: collapse; font-size: var(--font-sm); }
+.about-table thead th {
+    padding: 10px 12px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--fg-muted);
+    border-bottom: 1px solid var(--border-default);
+    white-space: nowrap;
+}
+.about-table tbody td {
+    padding: 7px 12px;
+    color: var(--fg-primary);
+    border-bottom: 1px solid var(--border-subtle);
+}
+.about-table tbody tr:last-child td { border-bottom: none; }
+.about-table tbody tr:hover { background: var(--accent-softer); }
+.about-table tr.about-group-row td {
+    padding-top: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.papers-list { margin-top: 8px; }
+.papers-subgroup { margin: 14px 0 6px; font-weight: 600; color: var(--fg-primary); font-size: var(--font-sm); }
+.papers-items { list-style: none; margin: 0; padding: 0; }
+.papers-items li {
+    padding: 5px 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: baseline;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.paper-arxiv-id {
+    color: var(--fg-muted);
+    font-size: 12px;
+    font-family: var(--font-mono, monospace);
+}
+
+.about-special-thanks { border-left: 3px solid var(--accent); }

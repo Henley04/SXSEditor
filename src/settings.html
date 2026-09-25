@@ -59,6 +59,11 @@
                 <div class="sidebar-item" data-target="section-update">
                     <span data-i18n="update.section">更新</span>
                 </div>
+
+                <div class="sidebar-category" data-i18n="aboutPage.category">关于</div>
+                <div class="sidebar-item" data-target="section-about">
+                    <span data-i18n="aboutPage.title">授权与致谢</span>
+                </div>
             </div>
             <div class="sidebar-footer">
                 <span id="settings-version" class="sidebar-version">v-</span>
@@ -844,6 +849,98 @@
                 </div>
                 <div class="setting-group hidden" id="reEnableReminderGroup">
                     <button class="btn-open-model-download" id="reEnableReminderBtn" data-i18n="update.reEnableReminder">重新启用更新提醒</button>
+                </div>
+            </div>
+
+            <!-- About: license / open source usage / papers / acknowledgments -->
+            <div class="settings-section hidden" id="section-about">
+                <!-- App identity -->
+                <div class="setting-group about-identity">
+                    <div class="about-app-name">SXSEditor</div>
+                    <p class="about-app-desc" data-i18n="aboutPage.appDesc">基于 ONNX Runtime / DirectML 的 AI 歌声合成工作台</p>
+                    <p class="about-app-meta">
+                        <span id="aboutVersionLabel" data-i18n="about.version">版本</span>
+                        <span id="aboutVersion"></span>
+                        &nbsp;|&nbsp;
+                        <span>© 2026 Henley04</span>
+                    </p>
+                    <p class="about-links">
+                        <a href="#" data-external="https://github.com/Henley04/SXSEditor" data-i18n="aboutPage.website">项目主页（GitHub）</a>
+                    </p>
+                </div>
+
+                <!-- MIT License -->
+                <div class="setting-group">
+                    <label data-i18n="aboutPage.licenseTitle">许可证（MIT License）</label>
+                    <p class="hint" data-i18n="aboutPage.licenseHint">本应用以 MIT 许可证开源。完整许可证文本如下，并随源代码根目录的 LICENSE 文件分发。</p>
+                    <details>
+                        <summary data-i18n="aboutPage.showLicense">查看完整 MIT 许可证文本</summary>
+<pre class="about-license-text">MIT License
+
+Copyright (c) 2026 Henley04
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</pre>
+                    </details>
+                </div>
+
+                <!-- Open Source Usage -->
+                <div class="setting-group">
+                    <label>OPEN SOURCE USAGE</label>
+                    <p class="hint" data-i18n="aboutPage.openSourceHint">本应用使用了以下第三方开源软件、模型与数据资源，其版权归各自权利人所有，并遵循各自的开源许可协议。</p>
+                    <div class="about-table-wrap">
+                        <table class="about-table">
+                            <thead>
+                                <tr>
+                                    <th data-i18n="aboutPage.colComponent">组件</th>
+                                    <th data-i18n="aboutPage.colPurpose">用途</th>
+                                    <th data-i18n="aboutPage.colLicense">许可证</th>
+                                </tr>
+                            </thead>
+                            <tbody id="openSourceTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Papers -->
+                <div class="setting-group">
+                    <label data-i18n="aboutPage.papersTitle">论文与研究成果（arXiv）</label>
+                    <p class="hint" data-i18n="aboutPage.papersHint">本应用的模型与算法基于以下研究成果，谨向各位研究者致谢。点击链接可在浏览器中查看原文。</p>
+                    <div id="papersList" class="papers-list"></div>
+                </div>
+
+                <!-- Acknowledgments -->
+                <div class="setting-group">
+                    <label data-i18n="aboutPage.ackTitle">致谢（Acknowledgments）</label>
+
+                    <div class="info-box about-special-thanks">
+                        <strong data-i18n="aboutPage.specialThanks">特别致谢</strong>
+                        <p data-i18n="aboutPage.specialThanksBody">特别感谢基础模型 SoulX-Singer 的作者团队 Soul AI Lab（Jiale Qian、Hao Meng 等）开源高质量的歌声合成模型权重、代码与预训练资源，并以 Apache License 2.0 允许本项目在此基础上进行工程化再创作。没有 SoulX-Singer，就不会有 SXSEditor。</p>
+                        <p class="about-links">
+                            <a href="#" data-external="https://arxiv.org/abs/2602.07803" data-i18n="aboutPage.paperLink">论文（arXiv:2602.07803）</a>
+                            &nbsp;|&nbsp;
+                            <a href="#" data-external="https://github.com/Soul-AILab/SoulX-Singer">GitHub: Soul-AILab/SoulX-Singer</a>
+                            &nbsp;|&nbsp;
+                            <a href="#" data-external="https://soul-ailab.github.io/soulx-singer" data-i18n="aboutPage.demoLink">试听演示</a>
+                        </p>
+                    </div>
+
+                    <p class="hint" data-i18n="aboutPage.thanksOthers">同时感谢浙江大学 GTSinger 数据集团队、CMU Pronouncing Dictionary、LJSpeech / LibriVox 的贡献者，以及 ONNX Runtime、Electron 等开源社区；正是这些开放的研究与资源，让本项目成为可能。</p>
                 </div>
             </div>
 

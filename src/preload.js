@@ -160,6 +160,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),
   getDirName: (filePath) => ipcRenderer.invoke('getDirName', filePath),
   showItemInFolder: (filePath) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
+  // Open an allowed https URL (arXiv / GitHub etc.) in the system browser.
+  // Used by the Settings → About page (license / papers / acknowledgments).
+  openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
   getDMLDevices: (options = {}) => invokeHeavy('settings:getDMLDevices', options),
   getWinmlProviders: () => invokeHeavy('settings:getWinmlProviders'),
   getHardwareStatus: () => invokeHeavy('settings:getHardwareStatus'),
