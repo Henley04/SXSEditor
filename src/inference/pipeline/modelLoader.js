@@ -669,9 +669,13 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                             // networks, making it impossible to detect TRT compilation
                             // bugs. NonZero=true fills float arrays with a deterministic
                             // pattern so any all-zero TRT output is a clear red flag.
+                            // DIAGNOSTIC: SXS_TRTRTX_WARMUP_SEQ overrides the seq length
+                            // of the one-time TRT capability warmup (default 512).
+                            const trtWarmupSeq = Math.max(1, Number.parseInt(process.env.SXS_TRTRTX_WARMUP_SEQ || '512', 10) || 512);
                             const feeds = (sessionKey === 'diffStep' || isTRT || sessionKey === 'preflow')
-                                ? _rebuildDummyForSession(wsession, dummyInputs, isTRT, isTRT ? 512 : 3)
+                                ? _rebuildDummyForSession(wsession, dummyInputs, isTRT, isTRT ? trtWarmupSeq : 3)
                                 : (overrideDummyInputs || dummyInputs);
+                            if (isTRT) console.log(`[Model][trt-warmup] name=${modelName} seq=${trtWarmupSeq}`);
                             const outputs = await wsession.run(feeds);
                             if (isTRT) {
                                 // Capability detection: reject all-zero / non-finite TRT

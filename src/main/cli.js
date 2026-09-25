@@ -568,6 +568,11 @@ async function cmdSynthProject(opts) {
     if (opts.qdrift === true) synthOpts.qdrift = true;
     if (opts.qdrift === false) synthOpts.qdrift = false;
     if (Number.isInteger(opts.maxPromptFrames)) synthOpts.maxPromptFrames = opts.maxPromptFrames;
+    if (opts.diffStepChunk === true) {
+      synthOpts.diffStepChunk = true;
+      synthOpts.diffStepChunkFrames = opts.diffStepChunkFrames || 500;
+      log(`diffStep chunk: enabled, chunkFrames=${synthOpts.diffStepChunkFrames}`);
+    }
     if (Number.isInteger(opts.seed)) {
         synthOpts.seed = opts.seed;
         log(`seed       : ${opts.seed}（固定初始噪声，用于精度/EP 对比）`);
@@ -924,6 +929,12 @@ function parseArgs(argv) {
     if (a === '--winml-ep') { opts.winmlEp = rest[++i]; continue; }
     if (a === '--no-winml') { opts.noWinml = true; continue; }
     if (a === '--max-prompt-frames') { opts.maxPromptFrames = parseInt(rest[++i], 10); continue; }
+    if (a === '--diffstep-chunk') {
+      opts.diffStepChunk = true;
+      const v = parseInt(rest[i + 1], 10);
+      if (Number.isFinite(v)) { opts.diffStepChunkFrames = v; i++; }
+      continue;
+    }
     if (a === '--dry-run') { opts.dryRun = true; continue; }
     if (a === '--language') { opts.language = rest[++i]; continue; }
     if (a === '--notes') {
