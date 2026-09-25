@@ -48,6 +48,47 @@ class Preprocessing {
         return 440 * Math.pow(2, (pitch - 69) / 12);
     }
 
+    /**
+     * Rest predicate — MUST stay consistent with
+     * AudioSegmentation._isRestNote() and index.js _silenceNonVocalRegions().
+     *
+     * Rests are: explicit noteType 1, empty lyric (non-slur), the <SP>
+     * silence token, or any non-aspiration note with pitch <= 0 (the kind
+     * fillNoteGaps() synthesizes for timeline gaps).
+     * Slur/continuation notes are never rests even with an empty lyric, and
+     * <AP> is an audible aspiration token (kept voiced as a sung note).
+     */
+    isRestNote(note) {
+        if (!note) return false;
+        if (note.isSlur || note.isContinuation || note.noteType === 3) return false;
+        const lyric = String(note.lyric || '').trim();
+        // <AP> is an audible aspiration token, never a rest.
+        if (lyric === '<AP>') return false;
+        // A pitch <= 0 note is always a rest (fillNoteGaps synthesizes them
+        // with pitch 0). An explicit empty lyric is a rest too (piano-roll
+        // convention), but a note object without a lyric field is not
+        // considered resting solely because of the missing field.
+        const explicitEmpty = note.lyric !== undefined
+            && note.lyric !== null
+            && lyric.length === 0;
+        return note.noteType === 1
+            || lyric === '<SP>'
+            || explicitEmpty
+            || note.pitch <= 0;
+    }
+
+    /**
+     * Unvoiced predicate for F0 assignment. Rests carry no f0 at all;
+     * <AP> aspiration is audible but has no harmonic pitch, so its f0 must
+     * also be 0 (f0 bin 0 = unvoiced). Previously a pitch-0 <SP> gap note
+     * fell through to midiToFreq(0) ≈ 8.18 Hz → quantized f0 bin 1, which
+     * conditioned the model to voice a near-DC "sung" SP during rests.
+     */
+    isUnvoicedNote(note) {
+        if (this.isRestNote(note)) return true;
+        return String(note.lyric || '').trim() === '<AP>';
+    }
+
     interpolateEnvelope(envelope, beatTime) {
         const kfs = envelope.keyframes;
         const len = kfs.length;
@@ -74,18 +115,32 @@ class Preprocessing {
         const totalSeconds = (totalBeats / bpm) * 60;
         const totalFrames = Math.floor(totalSeconds * SAMPLE_RATE / HOP_SIZE);
 
+        // Precompute beat-to-frame conversion factor
+        const framesPerBeat = (60 / bpm) * (SAMPLE_RATE / HOP_SIZE);
+
         if (pitchCurveF0 && pitchCurveF0.length > 0) {
             const srcData = pitchCurveF0 instanceof Float32Array ? pitchCurveF0 : new Float32Array(pitchCurveF0);
             const f0 = new Float32Array(totalFrames);
             const copyLen = Math.min(srcData.length, totalFrames);
             f0.set(copyLen === srcData.length ? srcData : srcData.subarray(0, copyLen));
+            // Force rest / aspiration gaps to unvoiced even when the extracted
+            // curve carries interpolated f0 across a gap (used for autoShift
+            // median statistics — stray voiced values in rests skew it).
+            for (const note of notes) {
+                if (!this.isUnvoicedNote(note) && note.pitch > 0) continue;
+                const startFrame = Math.floor(note.start * framesPerBeat);
+                const endFrame = Math.min(totalFrames, Math.floor((note.start + note.duration) * framesPerBeat));
+                const fillStart = Math.max(0, startFrame);
+                if (fillStart < endFrame) f0.fill(0, fillStart, endFrame);
+            }
             return f0;
         }
-
-        // Precompute beat-to-frame conversion factor
-        const framesPerBeat = (60 / bpm) * (SAMPLE_RATE / HOP_SIZE);
         const f0 = new Float32Array(totalFrames); // auto-zeroed
         for (const note of notes) {
+            // Rest / aspiration frames stay 0 (unvoiced). Previously pitch-0
+            // rest notes were filled with midiToFreq(0) ≈ 8.18 Hz, which made
+            // downstream quantizeF0 emit voiced bin 1 during silence.
+            if (this.isUnvoicedNote(note) || !(note.pitch > 0)) continue;
             let effectivePitch = note.pitch;
             if (f0Envelope && f0Envelope.keyframes && f0Envelope.keyframes.length > 0) {
                 const noteCenterBeat = note.start + note.duration / 2;
@@ -167,7 +222,10 @@ class Preprocessing {
             // 为休止符（type 1），导致模型把连音当成静音处理。
             if (note.isSlur || note.isContinuation) {
                 noteType = 3;
-            } else if (lyric.trim().length === 0) {
+            } else if (this.isRestNote(note)) {
+                // 休止：空歌词、显式 <SP>、pitch<=0 或 noteType=1
+                // （fillNoteGaps 为音符间空隙合成的 <SP> 休止以前因歌词非空
+                // 被误判成 type 2 唱音，模型便在休止段“唱”出错误音素）。
                 noteType = 1;
             } else {
                 noteType = 2;
@@ -329,12 +387,18 @@ class Preprocessing {
             let frameOffset = 0;
             for (let i = 0; i < notes.length; i++) {
                 const note = notes[i];
-                const lyric = note.lyric || '';
                 const noteDurationSec = noteDurations[i];
                 const noteFrames = Math.round(noteDurationSec * SAMPLE_RATE / HOP_SIZE);
                 const noteStartSec = (note.start / bpm) * 60;
-                const noteFreq = lyric.trim().length === 0 ? 0 : this.midiToFreq(note.pitch);
+                // 休止/换气帧强制 f0=0（清音），即使音高曲线在空隙内带有
+                // 插值出的正值，否则模型会把休止段当成浊音唱出来。
+                const noteUnvoiced = this.isUnvoicedNote(note) || !(note.pitch > 0);
+                const noteFreq = noteUnvoiced ? 0 : this.midiToFreq(note.pitch);
                 for (let f = 0; f < noteFrames && frameOffset + f < totalFrames; f++) {
+                    if (noteUnvoiced) {
+                        f0Hz[frameOffset + f] = 0;
+                        continue;
+                    }
                     // 多 segment 路径：segmentNotes.start 是相对 segStart，需要加
                     // pitchCurveOffsetSec (= segStartBeat 对应秒数) 才能正确索引
                     // 绝对时间的 pitchCurveF0。否则 f0 严重错位 → vocoder mel/f0
@@ -353,14 +417,15 @@ class Preprocessing {
             let frameOffset = 0;
             for (let i = 0; i < notes.length; i++) {
                 const note = notes[i];
-                const lyric = note.lyric || '';
                 let effectivePitch = note.pitch;
                 if (f0Envelope && f0Envelope.keyframes && f0Envelope.keyframes.length > 0) {
                     const noteCenterBeat = note.start + note.duration / 2;
                     const semitoneShift = this.interpolateEnvelope(f0Envelope, noteCenterBeat);
                     effectivePitch = note.pitch + semitoneShift;
                 }
-                const freq = lyric.trim().length === 0 ? 0 : this.midiToFreq(effectivePitch);
+                // 休止（<SP>/空歌词/pitch<=0）与 <AP> 换气为清音，f0=0
+                const noteUnvoiced = this.isUnvoicedNote(note) || !(effectivePitch > 0);
+                const freq = noteUnvoiced ? 0 : this.midiToFreq(effectivePitch);
                 const noteFrames = Math.round(noteDurations[i] * SAMPLE_RATE / HOP_SIZE);
                 for (let f = 0; f < noteFrames && frameOffset + f < totalFrames; f++) {
                     f0Hz[frameOffset + f] = freq;
