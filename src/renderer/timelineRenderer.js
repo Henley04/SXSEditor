@@ -69,6 +69,65 @@ function _getFragmentPitchRange(notes, fragDuration) {
   return res;
 }
 
+// ---------------------------------------------------------------------------
+// 伴奏波形峰值缓存（金字塔）
+// ---------------------------------------------------------------------------
+// 之前绘制伴奏波形时对每个像素遍历其覆盖的全部 PCM 样本求峰值：一首 4 分钟
+// 48kHz 音频约 1150 万样本，拖动/滚动/缩放每帧全量重算，是最大的渲染热点。
+// 这里在首次绘制时按 WAVEFORM_BUCKET_SIZE 样本一桶预计算峰值，之后缩放级别
+// 较低（每像素覆盖 ≥ 一桶）时直接取桶；放大到每像素样本数少于桶大小时按像素
+// 直接扫描（本就便宜）。WeakMap 以 singer 对象为 key，轨道删除即随之回收；
+// audioBuffer 引用变化（重新加载音频）时自动失效重建。
+const WAVEFORM_BUCKET_SIZE = 512;
+const _waveformPeakCache = new WeakMap();
+
+function _getWaveformPeaks(singer) {
+  const buf = singer.audioBuffer;
+  if (!buf || buf.length === 0) return null;
+  let entry = _waveformPeakCache.get(singer);
+  if (entry && entry.buf === buf) return entry;
+  const bucketCount = Math.ceil(buf.length / WAVEFORM_BUCKET_SIZE);
+  const peaks = new Float32Array(bucketCount);
+  for (let b = 0; b < bucketCount; b++) {
+    const start = b * WAVEFORM_BUCKET_SIZE;
+    const end = Math.min(start + WAVEFORM_BUCKET_SIZE, buf.length);
+    let peak = 0;
+    for (let i = start; i < end; i++) {
+      const v = buf[i] < 0 ? -buf[i] : buf[i];
+      if (v > peak) peak = v;
+    }
+    peaks[b] = peak;
+  }
+  entry = { buf, bucketSize: WAVEFORM_BUCKET_SIZE, peaks };
+  _waveformPeakCache.set(singer, entry);
+  return entry;
+}
+
+/** 取 [sampleStart, sampleEnd) 范围峰值：整桶查表，首尾残桶直接扫描。 */
+function _peakInRange(entry, buf, sampleStart, sampleEnd) {
+  const { peaks, bucketSize } = entry;
+  let peak = 0;
+  const scan = (from, to) => {
+    for (let i = from; i < to; i++) {
+      const v = buf[i] < 0 ? -buf[i] : buf[i];
+      if (v > peak) peak = v;
+    }
+  };
+  if (sampleEnd <= sampleStart) return 0;
+  const firstBucket = Math.floor(sampleStart / bucketSize);
+  const lastBucket = Math.floor((sampleEnd - 1) / bucketSize);
+  if (firstBucket === lastBucket) {
+    scan(sampleStart, sampleEnd);
+    return peak;
+  }
+  scan(sampleStart, (firstBucket + 1) * bucketSize);
+  for (let b = firstBucket + 1; b < lastBucket; b++) {
+    if (peaks[b] > peak) peak = peaks[b];
+  }
+  scan(lastBucket * bucketSize, sampleEnd);
+  return peak;
+}
+
 /** 每帧构建一次 singerId -> fragments 索引，替代 singers.forEach 内的 O(N) filter。 */
 function _groupFragmentsBySinger(fragments) {
   const map = new Map();
@@ -162,6 +221,34 @@ function _ensureCanvasSize(canvas, cssW, cssH, dpr) {
   }
 }
 
+// 截断结果缓存：key 为 字体 + maxWidth + 文本。每个可见分片每帧调用 2 次
+// drawClippedText，文本超宽时二分查找要 ~log₂n 次 measureText；分片多且标签
+// 长时拖动会累积。截断结果只取决于 (文本, 字体, maxWidth)，缓存即可。
+const _textClipCache = new Map();
+
+function _getClippedDisplay(ctx, text, maxWidth) {
+  let display = text == null ? '' : String(text);
+  if (ctx.measureText(display).width <= maxWidth) return display;
+  const key = `${ctx.font}\u0000${maxWidth}\u0000${display}`;
+  let cached = _textClipCache.get(key);
+  if (cached === undefined) {
+    const ellipsis = '…';
+    let lo = 0, hi = display.length;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (ctx.measureText(display.slice(0, mid) + ellipsis).width <= maxWidth) {
+        lo = mid;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    cached = display.slice(0, lo) + ellipsis;
+    if (_textClipCache.size > 512) _textClipCache.clear();
+    _textClipCache.set(key, cached);
+  }
+  return cached;
+}
+
 /**
  * Draw text clipped to a rounded rectangle with horizontal ellipsis.
  * If the text is wider than maxWidth, it is truncated and ends with "…".
@@ -175,21 +262,7 @@ function drawClippedText(ctx, text, x, y, maxWidth, clipRect) {
     ctx.rect(cx, cy, cw, ch);
     ctx.clip();
   }
-  let display = text == null ? '' : String(text);
-  if (ctx.measureText(display).width > maxWidth) {
-    const ellipsis = '…';
-    let lo = 0, hi = display.length;
-    while (lo < hi) {
-      const mid = (lo + hi + 1) >> 1;
-      if (ctx.measureText(display.slice(0, mid) + ellipsis).width <= maxWidth) {
-        lo = mid;
-      } else {
-        hi = mid - 1;
-      }
-    }
-    display = display.slice(0, lo) + ellipsis;
-  }
-  ctx.fillText(display, x, y);
+  ctx.fillText(_getClippedDisplay(ctx, text, maxWidth), x, y);
   ctx.restore();
 }
 
@@ -354,16 +427,26 @@ export function renderFragmentTimeline() {
           const midY = fragY + FRAGMENT_HEIGHT / 2;
           const maxAmp = FRAGMENT_HEIGHT / 2 - 4;
 
+          // 放大状态下每像素只覆盖少量样本，直接扫描即可；缩小状态下使用
+          // 预计算的桶峰值，避免每帧全量遍历 PCM。
+          const useBuckets = samplesPerPixel > WAVEFORM_BUCKET_SIZE;
+          const peakEntry = useBuckets ? _getWaveformPeaks(singer) : null;
+
           ctx.strokeStyle = c.fragmentText || '#fff';
           ctx.lineWidth = 1;
           ctx.beginPath();
           for (let px = 0; px < accWidth; px++) {
             const sampleStart = Math.floor(px * samplesPerPixel);
             const sampleEnd = Math.min(sampleStart + samplesPerPixel, buf.length);
-            let peak = 0;
-            for (let s = sampleStart; s < sampleEnd; s++) {
-              const v = Math.abs(buf[s]);
-              if (v > peak) peak = v;
+            let peak;
+            if (peakEntry) {
+              peak = _peakInRange(peakEntry, buf, sampleStart, sampleEnd);
+            } else {
+              peak = 0;
+              for (let s = sampleStart; s < sampleEnd; s++) {
+                const v = Math.abs(buf[s]);
+                if (v > peak) peak = v;
+              }
             }
             const barH = peak * maxAmp;
             ctx.moveTo(accX + px, midY - barH);
@@ -657,7 +740,9 @@ export function renderSingerList() {
   let key = String(state.editingTrackNameId || '');
   for (let i = 0; i < singers.length; i++) {
     const s = singers[i];
-    key += `|${s.id}~${s.trackName}~${s.singerFileMissing ? 1 : 0}${s.audioFileMissing ? 1 : 0}${s.type || 'singer'}`;
+    // color/avatarPath 参与缓存键：换色或换头像后列表 UI 必须重建，
+    // 否则用户改完看不到变化（功能性 bug）。
+    key += `|${s.id}~${s.trackName}~${s.singerFileMissing ? 1 : 0}${s.audioFileMissing ? 1 : 0}${s.type || 'singer'}~${s.color || ''}~${s.avatarPath || ''}`;
   }
   const cacheKey = key;
   if (renderSingerList._cacheKey === cacheKey && dom.singerListEl.childElementCount > 0) return;

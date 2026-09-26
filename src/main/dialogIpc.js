@@ -36,16 +36,44 @@ function registerDialogIpc() {
     return result;
   });
 
+  // Atomic file save: write to a temp file in the same directory, then
+  // rename over the target. A crash/power loss mid-write can no longer leave
+  // a truncated .sxsproj. The previous version is kept as <file>.bak so the
+  // user always has one fallback copy.
   ipcMain.handle('file:saveFile', async (event, filePath, data) => {
     if (!isPathAllowed(filePath)) {
       return { success: false, error: t('error.pathNotAllowed') };
     }
+    const tmpPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+    const bakPath = `${filePath}.bak`;
     try {
-      await fs.promises.writeFile(filePath, data);
+      await fs.promises.writeFile(tmpPath, data);
+      // Move the current file to .bak (ENOENT on first save is fine), then
+      // atomically replace the target with the temp file. If the final
+      // rename fails, restore the backup so nothing is lost.
+      let hadOriginal = false;
+      try {
+        await fs.promises.rename(filePath, bakPath);
+        hadOriginal = true;
+      } catch (err) {
+        if (err.code !== 'ENOENT') throw err;
+      }
+      try {
+        await fs.promises.rename(tmpPath, filePath);
+      } catch (err) {
+        if (hadOriginal) {
+          try { await fs.promises.rename(bakPath, filePath); } catch (_) {}
+        }
+        throw err;
+      }
       return { success: true };
     } catch (err) {
       console.error('[Main] File save failed:', err.message);
       return { success: false, error: err.message };
+    } finally {
+      // Best-effort cleanup of a leftover temp file (rename already consumed
+      // it on success; this only fires on earlier failures).
+      fs.promises.unlink(tmpPath).catch(() => {});
     }
   });
 

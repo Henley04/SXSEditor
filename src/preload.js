@@ -487,6 +487,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     tags: (params) => ipcRenderer.invoke('singer-market:tags', params),
     upload: (payload) => ipcRenderer.invoke('singer-market:upload', payload),
     download: (fileId) => ipcRenderer.invoke('singer-market:download', fileId),
+    // Subscribe to download progress events from the main process.
+    // Returns an unsubscribe function.
+    onDownloadProgress: (callback) => {
+      const listener = (_event, data) => callback(data);
+      ipcRenderer.on('singer-market:download-progress', listener);
+      return () => ipcRenderer.removeListener('singer-market:download-progress', listener);
+    },
     pickFile: () => ipcRenderer.invoke('singer-market:pick-file'),
     pickSavePath: (suggestedName) => ipcRenderer.invoke('singer-market:pick-save-path', suggestedName),
   },

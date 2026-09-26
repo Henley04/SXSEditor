@@ -15,6 +15,7 @@ const WINDOW_NAMES = [
   'model_download_window',
   'resource_manager_window',
   'splash_window',
+  'singer_market_window',
 ];
 
 // Windows that need onnxruntime-web wasm/JS files copied alongside.

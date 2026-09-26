@@ -18,6 +18,13 @@ export function markClean() {
   }
 }
 
+// Undo/redo change in-memory content just like any edit, so they must mark
+// the project dirty too. Otherwise the main process sees a "clean" window
+// after Ctrl+Z/Ctrl+Y and closes it without prompting — silently losing the
+// (now disk-divergent) state. The hook covers every undo/redo call site,
+// including keyboard shortcuts and MCP automation.
+history.onMutation = markDirty;
+
 export function validateSingerData(singerData) {
   const errors = [];
   const warnings = [];
@@ -118,9 +125,13 @@ export async function loadSingerFile(singerId, buffer, filePath) {
   }
 
   const validation = validateSingerData(singerData);
-  if (validation.errors.length > 0 || validation.warnings.length > 0) {
+  // 与 loadProject 行为一致：warnings 只记录到 console（低版本歌手文件每次
+  // 打开都弹完整验证报告是体验噪音），仅 errors（不可用文件）才弹窗。
+  if (validation.errors.length > 0) {
     await showSingerValidationReport(validation);
     if (!validation.valid) return;
+  } else if (validation.warnings.length > 0) {
+    console.warn('Singer file validation warnings:', validation.warnings);
   }
 
   if (singerData) {
@@ -156,9 +167,12 @@ export async function addSingerFromFile(buffer, filePath) {
   }
 
   const validation = validateSingerData(singerData);
-  if (validation.errors.length > 0 || validation.warnings.length > 0) {
+  // 同 loadSingerFile：warnings 走 console，仅 errors 弹窗。
+  if (validation.errors.length > 0) {
     await showSingerValidationReport(validation);
     if (!validation.valid) return;
+  } else if (validation.warnings.length > 0) {
+    console.warn('Singer file validation warnings:', validation.warnings);
   }
 
   if (singerData) {
@@ -456,6 +470,9 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
     return singerObj;
   }));
 
+  // 嵌入模式包含大段 base64（无换行的长字符串），缩进只会白白增大体积、
+  // 拖慢 stringify，此时改为紧凑输出；普通工程保留 2 空格缩进便于 diff/手查。
+  const hasEmbeddedPayload = embedSingerFiles || embedAccompanimentAudio;
   return JSON.stringify({
     version: '1.1.0',
     project: {
@@ -464,7 +481,7 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
     },
     singers,
     fragments: trackManager.getFragments(),
-  }, null, 2);
+  }, null, hasEmbeddedPayload ? undefined : 2);
 }
 
 export function updateProjectSettings(options = {}) {
@@ -493,15 +510,29 @@ export function updateProjectSettings(options = {}) {
   }
 }
 
+let _lastAutoSaveAlertAt = 0;
+
 export async function autoSaveProject() {
   if (!state.currentProjectFilePath) return;
   try {
     const data = await serializeProject(false);
-    await window.electronAPI.saveFile(state.currentProjectFilePath, data);
+    await _enqueueProjectWrite(async () => {
+      const res = await window.electronAPI.saveFile(state.currentProjectFilePath, data);
+      _checkSaveResult(res);
+    });
     markClean();
     console.log('Project auto-saved to', state.currentProjectFilePath);
   } catch (err) {
     console.warn('Project auto-save failed:', err);
+    // 自动保存失败必须让用户感知，否则"已保存"的假象会在关闭时丢数据。
+    // 用节流弹窗提示（60s 内不重复轰炸），并保留 console 记录。
+    const now = Date.now();
+    if (now - _lastAutoSaveAlertAt > 60000) {
+      _lastAutoSaveAlertAt = now;
+      try {
+        showAlertDialog(t('main.autoSaveFailed', { error: err.message }));
+      } catch (_) {}
+    }
   }
 }
 
@@ -645,13 +676,34 @@ export function showSaveBeforeCloseDialog() {
   });
 }
 
+// 写盘互斥：自动保存（分片编辑 500ms 防抖）与手动保存可能几乎同时触发，
+// 并发写同一文件有交错/竞争风险。所有真实写盘都串行排队。
+let _projectWriteChain = Promise.resolve();
+function _enqueueProjectWrite(writeFn) {
+  const run = _projectWriteChain.then(writeFn, writeFn);
+  // 队列本身永不 reject，失败由 writeFn 内部处理/返回
+  _projectWriteChain = run.catch(() => {});
+  return run;
+}
+
+function _checkSaveResult(res) {
+  // file:saveFile 以 { success: false, error } 返回失败而非抛错，
+  // 这里统一转换为异常，避免保存失败仍 markClean。
+  if (res && res.success === false) {
+    throw new Error(res.error || 'Save failed');
+  }
+}
+
 export async function saveProject() {
   // Save in-place: if we already have a file path, write to it silently
   // without showing a dialog or the save-options popup.
   if (state.currentProjectFilePath) {
     try {
       const data = await serializeProject(false);
-      await window.electronAPI.saveFile(state.currentProjectFilePath, data);
+      await _enqueueProjectWrite(async () => {
+        const res = await window.electronAPI.saveFile(state.currentProjectFilePath, data);
+        _checkSaveResult(res);
+      });
       markClean();
       console.log('Project saved to', state.currentProjectFilePath);
       return { saved: true, canceled: false };
@@ -676,7 +728,10 @@ export async function saveProjectAs() {
       });
       if (!result.canceled && result.filePath) {
         const data = await serializeProject(saveOptions.embedSingerFiles, saveOptions.embedAccompanimentAudio);
-        await window.electronAPI.saveFile(result.filePath, data);
+        await _enqueueProjectWrite(async () => {
+          const res = await window.electronAPI.saveFile(result.filePath, data);
+          _checkSaveResult(res);
+        });
         state.currentProjectFilePath = result.filePath;
         markClean();
         console.log('Project saved to', result.filePath);
@@ -717,6 +772,14 @@ export async function loadProject() {
           if (projVersion[0] > currentVersion[0]) {
             showAlertDialog(t('main.projectVersionTooHigh', { version: obj.version }));
             return;
+          }
+          // major 相同、minor 更高：新版字段会被旧代码静默忽略，重新保存即
+          // 丢数据。必须让用户知情并确认，而不是无声加载。
+          if (projVersion[0] === currentVersion[0] && projVersion[1] > currentVersion[1]) {
+            const proceed = await showConfirmDialog(
+              t('main.projectMinorVersionTooHigh', { version: obj.version })
+            );
+            if (!proceed) return { loaded: false, canceled: true };
           }
           if (projVersion[0] < currentVersion[0] || projVersion[1] < currentVersion[1]) {
              console.warn(`Project file version(${obj.version}) is low, will try downgrade load`);

@@ -12,6 +12,11 @@ initI18n().then(() => {
 
 initWindowTheme();
 
+// Build marker: verify in the market window's DevTools console that the
+// running bundle includes the region-aware error state (vs. stale builds
+// that still show "No singers found" on network failures).
+console.log('[SingerMarket] UI build 2026-09-26.2 (region-aware error state)');
+
 // ==================== State ====================
 const state = {
   user: null,             // { id, username, is_admin } or null
@@ -24,6 +29,8 @@ const state = {
   totalCount: 0,
   totalPages: 1,
   loading: false,
+  loadError: null,        // last list-load failure message; null on success
+  loadErrorRegion: null,  // 'CN' when the failure is a region block (from main-process diagnostics)
   // Dialog state
   authMode: 'login',      // 'login' | 'register'
   uploadFile: null,       // { path, filename, singerName? } — populated when user picks a file
@@ -49,6 +56,10 @@ const dom = {
   singerGrid: document.getElementById('singer-grid'),
   emptyState: document.getElementById('empty-state'),
   loadingState: document.getElementById('loading-state'),
+  errorState: document.getElementById('error-state'),
+  errorStateTitle: document.getElementById('error-state-title'),
+  errorStateDetail: document.getElementById('error-state-detail'),
+  btnRetry: document.getElementById('btn-retry'),
 
   // Pagination
   pagination: document.getElementById('pagination'),
@@ -345,6 +356,7 @@ async function loadPopularTags() {
 // ==================== Singer list ====================
 async function loadSingers() {
   state.loading = true;
+  state.loadError = null;
   dom.loadingState.style.display = 'flex';
   dom.emptyState.style.display = 'none';
   try {
@@ -363,26 +375,48 @@ async function loadSingers() {
       state.singers = Array.isArray(data.items) ? data.items : [];
       state.totalCount = data.total || state.singers.length;
       state.totalPages = data.total_pages || Math.max(1, Math.ceil(state.totalCount / state.pageSize));
-      renderSingerGrid();
-      renderPagination();
     } else {
       state.singers = [];
-      renderSingerGrid();
-      renderPagination();
-      if (result.error) showToast(result.error, 'error');
+      state.totalPages = 1;
+      state.loadError = result.error || tOr('singerMarket.loadFailed', 'Unable to reach the singer market');
+      state.loadErrorRegion = result.region || null;
+      showToast(state.loadError.split('\n')[0], 'error');
     }
   } catch (err) {
     state.singers = [];
-    renderSingerGrid();
-    showToast(err.message, 'error');
+    state.totalPages = 1;
+    state.loadError = err.message || tOr('singerMarket.loadFailed', 'Unable to reach the singer market');
+    state.loadErrorRegion = null;
+    showToast(state.loadError, 'error');
   } finally {
     state.loading = false;
     dom.loadingState.style.display = 'none';
+    renderSingerGrid();
+    renderPagination();
   }
 }
 
 function renderSingerGrid() {
   dom.singerGrid.innerHTML = '';
+  if (state.loadError) {
+    // Network/service failure must be distinguishable from an empty result:
+    // show a dedicated error state with the reason and a retry button.
+    // Region-blocked (mainland China) failures lead with the region message
+    // and put the diagnostic details (attempts/timeouts/IPs) below it.
+    const msg = state.loadError;
+    const nl = msg.indexOf('\n');
+    if (state.loadErrorRegion === 'CN' && nl > 0) {
+      dom.errorStateTitle.textContent = msg.slice(0, nl);
+      dom.errorStateDetail.textContent = msg.slice(nl + 1).trim();
+    } else {
+      dom.errorStateTitle.textContent = tOr('singerMarket.loadFailed', 'Unable to reach the singer market');
+      dom.errorStateDetail.textContent = msg;
+    }
+    dom.errorState.style.display = '';
+    dom.singerGrid.appendChild(dom.errorState);
+    return;
+  }
+  dom.errorState.style.display = 'none';
   if (state.singers.length === 0) {
     dom.singerGrid.appendChild(dom.emptyState);
     dom.emptyState.style.display = '';
@@ -448,6 +482,11 @@ dom.btnNextPage.addEventListener('click', () => {
     state.page++;
     loadSingers();
   }
+});
+
+// Retry after a failed load (network unreachable / service error).
+dom.btnRetry.addEventListener('click', () => {
+  if (!state.loading) loadSingers();
 });
 
 // ==================== Refresh ====================
@@ -631,6 +670,16 @@ dom.btnDetailDownload.addEventListener('click', async () => {
   const suggestedName = singer.filename || `${(singer.description?.split('\n')[0] || 'singer').replace(/[^\w-]+/g, '_')}.sxssinger`;
 
   dom.btnDetailDownload.disabled = true;
+  const prevLabel = dom.btnDetailDownload.textContent;
+  // Live download progress (gracefully absent if the main process is older).
+  let offProgress = null;
+  if (window.electronAPI.singerMarket.onDownloadProgress) {
+    offProgress = window.electronAPI.singerMarket.onDownloadProgress((p) => {
+      if (!p || p.fileId !== singer.id || !p.total) return;
+      const pct = Math.min(100, Math.round((p.received / p.total) * 100));
+      dom.btnDetailDownload.textContent = `${tOr('singerMarket.downloading', 'Downloading…')} ${pct}%`;
+    });
+  }
   try {
     // Pick save path
     const pick = await window.electronAPI.singerMarket.pickSavePath(suggestedName);
@@ -663,6 +712,8 @@ dom.btnDetailDownload.addEventListener('click', async () => {
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
+    if (offProgress) offProgress();
+    dom.btnDetailDownload.textContent = prevLabel;
     dom.btnDetailDownload.disabled = false;
   }
 });

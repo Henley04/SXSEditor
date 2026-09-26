@@ -208,6 +208,8 @@ export default {
     singerF0Invalid: 'F0 data (f0Data) format is incorrect, will be ignored',
     singerInferenceDataInvalid: 'Singer inference data (singerData) format is incorrect, will be ignored',
     projectVersionTooHigh: 'Project file version ({version}) is too high, please upgrade SXSEditor',
+    projectMinorVersionTooHigh: 'This project was created by a newer version ({version}). Some newer data may not be recognized, and re-saving may lose it. Load anyway?',
+    autoSaveFailed: 'Project auto-save failed: {error}\n\nSave manually (Ctrl+S) as soon as possible to avoid losing changes.',
     projectLoadFailed: 'Project load failed',
     relocateSingerFile: 'Relocate Singer File',
     fragmentEditorNotImplemented: 'Fragment editor not implemented',
@@ -1152,6 +1154,9 @@ export default {
     visibilityLabel: 'Visibility',
     downloadFailed: 'Download failed',
     downloadSuccess: 'Downloaded to {path}',
+    downloading: 'Downloading…',
+    loadFailed: 'Unable to reach the singer market',
+    retry: 'Retry',
     saveFailed: 'Failed to save file',
     refreshed: 'Refreshed',
   }
