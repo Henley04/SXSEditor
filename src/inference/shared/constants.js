@@ -26,3 +26,10 @@ export const NPU_STATIC_SEQ_LEN = 2048;
 // Vocoder NPU 静态形状（独立于 encoder/diffusion 的 seq_len）
 // Vocoder ISTFT Conv 的 Pad 中间张量在 seq_len=2048 时超出 WebNN 2GB 限制
 export const NPU_VOCODER_SEQ_LEN = 500;
+
+// TensorRT-RTX (NvTensorRTRTXExecutionProvider) 默认全动态 profile 下，
+// diff_step 的 Myelin 融合内核在序列索引 >=2048 时输出错误（逐帧 TRT-vs-DML
+// 对照实证：seqLen<=2047 cos≈1.00000，seqLen>=2048 从第 2048 帧起 cos 塌缩
+// 到 0.97 并经 32 步扩散放大为尾部能量凹陷）。此为动态形状安全上限，
+// 仅约束 TRT-RTX 动态引擎路径；cond_emb/vocoder 不受此 bug 影响。
+export const TRT_RTX_MAX_DYNAMIC_SEQ_LEN = 2047;

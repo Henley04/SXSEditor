@@ -4,7 +4,7 @@ const fs = require('node:fs');
 // Side effect: apply float16 patch on module load
 require('./float16Patch');
 
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN } = require('./constants');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN, TRT_RTX_MAX_DYNAMIC_SEQ_LEN } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const { buildSessionOptions } = require('../shared/ortOptions');
 const { TextProcessing } = require('./textProcessing');
@@ -2347,6 +2347,59 @@ class OnnxSVSPipeline {
     }
 
     /**
+     * 判定当前 diffStep 是否运行在 TensorRT-RTX 动态形状引擎上（受 2048 边界 bug 影响）。
+     * 静态形状模型（int8/npu）与普通 DML/CPU 引擎不受此限制。
+     */
+    _isTrtRtxDynamicDiffStep() {
+        if (this.useStaticShapes) return false;
+        const ep = this.sessionEPs && this.sessionEPs.diffStep ? String(this.sessionEPs.diffStep) : '';
+        return ep.includes('NvTensorRTRTX');
+    }
+
+    /**
+     * TensorRT-RTX 全动态 profile 安全钳制（非分段规避）。
+     *
+     * 实测该 EP 的 diff_step Myelin 融合内核在序列索引 >=2048 时输出错误
+     * （TRT-vs-DML 同 feed 逐帧对照：seqLen<=2047 完全一致，>=2048 从第 2048
+     * 帧起 cos 塌缩，经 32 步扩散放大为尾部能量凹陷/静音）。
+     *
+     * 策略：优先截短 ref prompt，保持目标乐句整段连续去噪（不引入任何拼接
+     * 边界）。只有当目标帧本身已超过安全上限（>40.9s @50fps）时才截断目标。
+     *
+     * @returns {{totalFrames:number, ptFrameCount:number, ptMelData:Float32Array|null}}
+     */
+    _clampTrtRtxDynamicFrames(sequences, ptFrameCount, ptMelData, totalFrames, tag = '') {
+        const SAFE = TRT_RTX_MAX_DYNAMIC_SEQ_LEN;
+        if (!this._isTrtRtxDynamicDiffStep()) return { totalFrames, ptFrameCount, ptMelData };
+        if (ptFrameCount + totalFrames <= SAFE) return { totalFrames, ptFrameCount, ptMelData };
+
+        // 1) 先截 prompt：保留全部目标帧，参考 mel 缩短到 SAFE-totalFrames。
+        const ptBudget = SAFE - totalFrames;
+        if (ptBudget >= 0 && ptFrameCount > ptBudget) {
+            const newPt = Math.max(0, ptBudget);
+            if (ptMelData && ptMelData.length > newPt * MEL_DIM) {
+                console.warn(`${tag} TRT-RTX dynamic seq limit: prompt ${ptFrameCount} -> ${newPt} frames (keep ${totalFrames} target frames contiguous, seq<=${SAFE})`);
+                ptMelData = newPt > 0 ? ptMelData.subarray(0, newPt * MEL_DIM) : null;
+                ptFrameCount = newPt;
+            }
+        }
+
+        // 2) 目标帧本身已超上限（极长片段，>40.9s）：只能截断目标（此时应配合
+        //    分块/分段路径；此处仅作硬保护，防止静默产出错误尾部）。
+        if (totalFrames > SAFE) {
+            console.warn(`${tag} TRT-RTX dynamic target limit: ${totalFrames} > ${SAFE}, truncating target (consider chunked synthesis)`);
+            sequences.f0Ids = sequences.f0Ids.subarray(0, SAFE);
+            sequences.mel2token = sequences.mel2token.subarray(0, SAFE);
+            totalFrames = SAFE;
+            if (ptFrameCount > 0) {
+                ptMelData = ptMelData ? ptMelData.subarray(0, 0) : null;
+                ptFrameCount = 0;
+            }
+        }
+        return { totalFrames, ptFrameCount, ptMelData };
+    }
+
+    /**
      * INT8 静态形状（useStaticShapes）模型专用：长片段分段合成。
      *
      * 静态形状模型的 encoder（noteText/Pitch/Type/f0/preflow/condEmb）与 diffstep
@@ -3078,6 +3131,14 @@ class OnnxSVSPipeline {
                 ptFrameCount = clamped.ptFrameCount;
                 ptMelData = clamped.ptMelData;
             }
+            // TensorRT-RTX 动态引擎整段路径：钳到 prompt+target<=2047 规避 Myelin
+            // 序列索引 >=2048 输出错误。分块路径每块 diffstep 序列已足够短，无需钳制。
+            if (!this.useStaticShapes && !chunkEnabled) {
+                const trtClamped = this._clampTrtRtxDynamicFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[MultiStream]');
+                totalFrames = trtClamped.totalFrames;
+                ptFrameCount = trtClamped.ptFrameCount;
+                ptMelData = trtClamped.ptMelData;
+            }
 
             // Encoder（动态形状整段编码；静态形状分段合成时逐段编码后直接产出整段 mel）
             let combinedCond = null;
@@ -3711,6 +3772,15 @@ class OnnxSVSPipeline {
                 totalFrames = clamped.totalFrames;
                 ptFrameCount = clamped.ptFrameCount;
                 ptMelData = clamped.ptMelData;
+            }
+            // TensorRT-RTX 动态引擎：将 prompt+target 总长钳到 <=2047，规避
+            // Myelin 融合内核序列索引 >=2048 输出错误（优先只截 prompt，目标乐句
+            // 保持整段连续去噪，无拼接边界）。
+            if (!this.useStaticShapes) {
+                const trtClamped = this._clampTrtRtxDynamicFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Synthesis]');
+                totalFrames = trtClamped.totalFrames;
+                ptFrameCount = trtClamped.ptFrameCount;
+                ptMelData = trtClamped.ptMelData;
             }
 
             console.log(`[OnnxSVSPipeline] Synthesis params: frames=${totalFrames}, tokens=${sequences.tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
