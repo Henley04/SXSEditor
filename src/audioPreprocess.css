@@ -11,31 +11,12 @@ html, body {
 }
 
 /* ==================== 工具栏 ==================== */
-#toolbar {
-  display: flex;
-  align-items: center;
-  height: 40px;
-  min-height: 40px;
-  padding: 0 var(--space-5);
-  background: linear-gradient(180deg, var(--bg-toolbar-start) 0%, var(--bg-toolbar-end) 100%);
-  color: var(--fg-primary);
-  border-bottom: 1px solid var(--border-subtle);
-  gap: var(--space-1);
-  box-shadow: 0 1px 3px var(--shadow-color-mid);
-}
+/* 工具栏容器与分隔线统一由 components.css 提供（扁平、无渐变、无重复定义） */
 
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 5px;
-}
-
-.toolbar-divider {
-  width: 1px;
-  height: 22px;
-  background: linear-gradient(180deg, transparent, var(--button-secondary-border), transparent);
-  margin: 0 var(--space-3);
-  flex-shrink: 0;
+  gap: var(--space-2);
 }
 
 .btn-toolbar {
@@ -155,17 +136,16 @@ html, body {
   align-items: center;
   justify-content: space-between;
   padding: var(--space-3) var(--space-5);
-  background: linear-gradient(180deg, var(--bg-header-start) 0%, var(--bg-header-end) 100%);
+  background: var(--bg-header-start);
   border-bottom: 1px solid var(--border-subtle);
-  min-height: 30px;
+  min-height: 34px;
 }
 
 .section-title {
   font-size: var(--font-sm);
   font-weight: 600;
   color: var(--fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.4px;
 }
 
 .file-info {
@@ -254,7 +234,7 @@ html, body {
   left: 0;
   width: 100%;
   height: 100%;
-  background-color: rgba(10, 10, 20, 0.85);
+  background-color: var(--bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -262,12 +242,12 @@ html, body {
 }
 
 .loading-content {
-  background: linear-gradient(180deg, var(--bg-header-start) 0%, var(--bg-header-end) 100%);
+  background: var(--bg-panel);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-2xl);
-  padding: var(--space-8) 36px;
+  padding: var(--space-8) var(--space-9);
   text-align: center;
-  box-shadow: 0 12px 40px var(--shadow-color-strong);
+  box-shadow: var(--shadow-xl);
 }
 
 .loading-spinner {
@@ -303,7 +283,7 @@ html, body {
 .loading-progress-fill {
   height: 100%;
   width: 0%;
-  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%);
+  background: var(--accent);
   border-radius: var(--radius-full);
   transition: width var(--motion-fast) var(--ease-standard);
 }
@@ -364,10 +344,10 @@ html, body {
 
 .extract-notice {
   padding: var(--space-2) var(--space-3);
-  background: var(--bg-warning, #fef3cd);
-  border: 1px solid var(--border-warning, #ffc107);
-  border-radius: 4px;
-  color: var(--text-warning, #856404);
+  background: var(--warning-soft);
+  border: 1px solid var(--warning-line);
+  border-radius: var(--radius-md);
+  color: var(--fg-secondary);
   font-size: 13px;
 }
 

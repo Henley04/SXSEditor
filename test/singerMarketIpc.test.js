@@ -111,4 +111,26 @@ describe('singerMarketIpc', () => {
       expect(input).to.deep.equal({ 'X-Custom': 'value' });
     });
   });
+
+  describe('extractError', () => {
+    const { extractError } = singerMarketIpc._internal;
+
+    it('should pull message out of the { error: { code, message } } envelope', () => {
+      const result = extractError(
+        { error: { code: 'unauthorized', message: 'Invalid credentials' } },
+        'fallback'
+      );
+      expect(result).to.equal('Invalid credentials');
+    });
+
+    it('should accept a plain-string error field', () => {
+      expect(extractError({ error: 'boom' }, 'fallback')).to.equal('boom');
+    });
+
+    it('should return the fallback when no usable error exists', () => {
+      expect(extractError({}, 'fallback')).to.equal('fallback');
+      expect(extractError(null, 'fallback')).to.equal('fallback');
+      expect(extractError({ error: {} }, 'fallback')).to.equal('fallback');
+    });
+  });
 });

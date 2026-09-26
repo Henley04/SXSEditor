@@ -9,7 +9,11 @@
     <div class="settings-layout">
         <!-- ==================== Sidebar ==================== -->
         <nav class="settings-sidebar">
-            <div class="sidebar-nav">
+            <div class="settings-search-wrap">
+                    <input id="settingsSearch" type="search" placeholder="搜索设置" aria-label="搜索设置">
+                    <div id="settingsSearchEmpty" class="settings-search-empty hidden">没有匹配的设置</div>
+                </div>
+                <div class="sidebar-nav">
                 <div class="sidebar-category" data-i18n="settings.catGeneral">通用</div>
                 <div class="sidebar-item active" data-target="section-language">
                     <span data-i18n="settings.language">语言</span>
@@ -20,7 +24,7 @@
 
                 <div class="sidebar-category" data-i18n="settings.catInference">推理</div>
                 <div class="sidebar-item" data-target="section-inference">
-                    <span data-i18n="settings.inferenceHardware">硬件设备</span>
+                    <span data-i18n="settings.inferenceHardware">推理与硬件</span>
                 </div>
                 <div class="sidebar-item" data-target="section-preview-params">
                     <span data-i18n="settings.previewInferenceParams">预览推理参数</span>
@@ -54,6 +58,11 @@
                 <div class="sidebar-category" data-i18n="update.section">更新</div>
                 <div class="sidebar-item" data-target="section-update">
                     <span data-i18n="update.section">更新</span>
+                </div>
+
+                <div class="sidebar-category" data-i18n="aboutPage.category">关于</div>
+                <div class="sidebar-item" data-target="section-about">
+                    <span data-i18n="aboutPage.title">授权与致谢</span>
                 </div>
             </div>
             <div class="sidebar-footer">
@@ -95,12 +104,21 @@
             <!-- Inference Hardware -->
             <div class="settings-section hidden" id="section-inference">
                 <div class="setting-group">
-                    <label for="inferenceProvider" data-i18n="settings.inferenceProvider">推理提供者</label>
+                    <label for="inferenceProvider" data-i18n="settings.inferenceProvider">推理系统</label>
                     <select id="inferenceProvider">
-                        <option value="ortnode" data-i18n="settings.inferenceProviderOrtnode">ORTNODE (DirectML/CPU)</option>
-                        <option value="ortweb" data-i18n="settings.inferenceProviderOrtweb">ORTWEB (WebNN)</option>
+                        <option value="ortnode" data-i18n="settings.inferenceProviderOrtnode">本机推理</option>
+                        <option value="ortweb" data-i18n="settings.inferenceProviderOrtweb">WebNN（已弃用）</option>
                     </select>
-                    <p class="hint" id="inferenceProviderHint" data-i18n="settings.inferenceProviderHintOrtnode">使用 onnxruntime-node 在主进程运行 DirectML/CPU 推理。</p>
+                    <p class="hint" id="inferenceProviderHint" data-i18n="settings.inferenceProviderHintOrtnode">使用本机推理运行时。推荐 Windows ML，若不可用则回退 DirectML/CPU。</p>
+                </div>
+                <div class="setting-group" id="nativeBackendGroup">
+                    <label for="nativeInferenceBackend" data-i18n="settings.nativeInferenceBackend">本机执行后端</label>
+                    <select id="nativeInferenceBackend">
+                        <option value="auto" data-i18n="settings.nativeBackendAuto">自动（Windows ML 优先）</option>
+                        <option value="winml" data-i18n="settings.nativeBackendWinml">Windows ML</option>
+                        <option value="dml" data-i18n="settings.nativeBackendDml">DirectML</option>
+                    </select>
+                    <p class="hint" id="nativeBackendHint" data-i18n="settings.nativeBackendAutoHint">优先使用 Windows ML 可用 EP，失败时自动回退到 DirectML。</p>
                 </div>
                 <div class="setting-group hardware-info">
                     <label data-i18n="settings.currentHardware">当前运行硬件</label>
@@ -151,6 +169,18 @@
                     <label data-i18n="settings.advancedHardwareSettings">高级推理硬件设置</label>
                     <p class="hint" data-i18n="settings.selectDeviceForModelGroup">为模型组选择运行设备</p>
                     <div id="modelDeviceMapping" class="model-device-mapping"></div>
+                </div>
+                <div class="setting-group">
+                    <label class="device-mode-radio">
+                        <input type="checkbox" id="fixedNoiseSeedEnabled">
+                        <span class="radio-label" data-i18n="settings.fixedNoiseSeed">固定噪声种子（可复现合成）</span>
+                        <span class="radio-desc" data-i18n="settings.fixedNoiseSeedHint">开启后每次预览/导出使用同一种子初始化扩散噪声，同一项目多次合成结果完全一致，便于锁定满意的渲染与公平对比参数。关闭时每次合成随机。</span>
+                    </label>
+                    <div id="fixedNoiseSeedValueGroup" style="margin-top:8px;">
+                        <label for="fixedNoiseSeed"><span data-i18n="settings.fixedNoiseSeedValue">种子值</span></label>
+                        <input type="number" id="fixedNoiseSeed" min="0" max="4294967295" step="1" value="1234">
+                        <p class="hint" data-i18n="settings.fixedNoiseSeedValueHint">0 – 4294967295。不同种子产生不同的合法渲染（乐句响度有 ±3dB 级随机波动），可尝试多个种子挑选效果最好的一条。</p>
+                    </div>
                 </div>
             </div>
 
@@ -230,6 +260,15 @@
                         </label>
                         <p class="hint" data-i18n="settings.previewDiffStepChunkHint">分块可显著加速长片段预览（片段越长加速越明显），代价是块边界处可能产生轻微伪影。短片段（短于分块大小）不会分块。</p>
                     </div>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="autoRealtimeInference">
+                            <span class="radio-label" data-i18n="settings.autoRealtimeInference">编辑后自动实时推理</span>
+                            <span class="radio-desc" data-i18n="settings.autoRealtimeInferenceDesc">在分片编辑器中检测到改动后，自动在后台重新推理预览音频。复用已有分段缓存，只对被改动的分段执行推理；同时被改动的多个分段按播放进度条位置优先推理。默认关闭。</span>
+                        </label>
+                        <p class="hint hint-warning" data-i18n="settings.autoRealtimeInferenceWarn">⚠ 警告：开启后每次改动都会在后台自动触发推理，可能大幅影响性能、显著增加功耗与发热（笔记本掉电加快、风扇转速升高、机身发烫），并可能与前台播放争抢显存导致播放卡顿。低显存、移动端或被动散热设备不建议开启。</p>
+                        <p class="hint" data-i18n="settings.autoRealtimeInferenceHint">仅作用于分片编辑器，且需要先手动播放一次建立基准音频；之后每次停止编辑约 1 秒触发一次后台推理。推理结果与手动预览完全一致（命中同一份缓存）。</p>
+                    </div>
                     <div class="setting-group hidden" id="previewDiffStepChunkGroup">
                         <div class="setting-group">
                             <label for="previewDiffStepChunkFrames"><span data-i18n="settings.previewDiffStepChunkFrames">分块大小（帧）</span> <span id="previewDiffStepChunkFramesValue" class="volume-display">500</span></label>
@@ -241,6 +280,17 @@
                             <input type="range" id="previewDiffStepOverlapFrames" min="0" max="200" value="50" step="10">
                             <p class="hint" data-i18n="settings.previewDiffStepOverlapFramesHint">相邻分块间的重叠帧数，用 Hann 窗交叉淡入淡出消除拼接痕迹。值越大边界越平滑但计算量增加。推荐 30~100。设为 0 则不重叠（不推荐）。</p>
                         </div>
+                    </div>
+                </div>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupSamplingCorrection">采样校正</p>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="previewEnableQDrift">
+                            <span class="radio-label" data-i18n="settings.enableQDrift">Q-Drift 漂移校正</span>
+                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。FP16 下默认开启，INT8 下需手动开启，切换模型精度时会自动跟随。</span>
+                        </label>
+                        <p class="hint hidden" id="previewQDriftLockNote" data-i18n="settings.qdriftLockNote">已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit 局部修复。</p>
                     </div>
                 </div>
             </div>
@@ -312,6 +362,17 @@
                         <label for="exportDynamicThresholdPercentile"><span data-i18n="settings.dynamicThresholdPercentile">截断分位数</span> <span id="exportDynamicThresholdPercentileValue" class="volume-display">0.995</span></label>
                         <input type="range" id="exportDynamicThresholdPercentile" min="0.900" max="0.999" value="0.995" step="0.001">
                         <p class="hint" data-i18n="settings.dynamicThresholdPercentileHint">值越低截断越激进（更多极端值被压缩）。推荐 0.99~0.998。</p>
+                    </div>
+                </div>
+                <div class="settings-subgroup">
+                    <p class="subgroup-label" data-i18n="settings.subgroupSamplingCorrection">采样校正</p>
+                    <div class="setting-group">
+                        <label class="device-mode-radio">
+                            <input type="checkbox" id="exportEnableQDrift">
+                            <span class="radio-label" data-i18n="settings.enableQDrift">Q-Drift 漂移校正</span>
+                            <span class="radio-desc" data-i18n="settings.enableQDriftHint">对量化扩散模型（FP16 / INT8）的 32 步采样施加逐通道漂移校正（Q-Drift, arXiv:2603.18095），补偿量化误差的多步累积。FP16 下默认开启，INT8 下需手动开启，切换模型精度时会自动跟随。</span>
+                        </label>
+                        <p class="hint hidden" id="exportQDriftLockNote" data-i18n="settings.qdriftLockNote">已锁定：求解器 Euler、步数 32、CFG 3.0、rescale 0.7，并关闭 CFG 调度、动态阈值与 SDEdit 局部修复。</p>
                     </div>
                 </div>
             </div>
@@ -800,6 +861,98 @@
                 </div>
                 <div class="setting-group hidden" id="reEnableReminderGroup">
                     <button class="btn-open-model-download" id="reEnableReminderBtn" data-i18n="update.reEnableReminder">重新启用更新提醒</button>
+                </div>
+            </div>
+
+            <!-- About: license / open source usage / papers / acknowledgments -->
+            <div class="settings-section hidden" id="section-about">
+                <!-- App identity -->
+                <div class="setting-group about-identity">
+                    <div class="about-app-name">SXSEditor</div>
+                    <p class="about-app-desc" data-i18n="aboutPage.appDesc">基于 ONNX Runtime / DirectML 的 AI 歌声合成工作台</p>
+                    <p class="about-app-meta">
+                        <span id="aboutVersionLabel" data-i18n="about.version">版本</span>
+                        <span id="aboutVersion"></span>
+                        &nbsp;|&nbsp;
+                        <span>© 2026 Henley04</span>
+                    </p>
+                    <p class="about-links">
+                        <a href="#" data-external="https://github.com/Henley04/SXSEditor" data-i18n="aboutPage.website">项目主页（GitHub）</a>
+                    </p>
+                </div>
+
+                <!-- MIT License -->
+                <div class="setting-group">
+                    <label data-i18n="aboutPage.licenseTitle">许可证（MIT License）</label>
+                    <p class="hint" data-i18n="aboutPage.licenseHint">本应用以 MIT 许可证开源。完整许可证文本如下，并随源代码根目录的 LICENSE 文件分发。</p>
+                    <details>
+                        <summary data-i18n="aboutPage.showLicense">查看完整 MIT 许可证文本</summary>
+<pre class="about-license-text">MIT License
+
+Copyright (c) 2026 Henley04
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.</pre>
+                    </details>
+                </div>
+
+                <!-- Open Source Usage -->
+                <div class="setting-group">
+                    <label>OPEN SOURCE USAGE</label>
+                    <p class="hint" data-i18n="aboutPage.openSourceHint">本应用使用了以下第三方开源软件、模型与数据资源，其版权归各自权利人所有，并遵循各自的开源许可协议。</p>
+                    <div class="about-table-wrap">
+                        <table class="about-table">
+                            <thead>
+                                <tr>
+                                    <th data-i18n="aboutPage.colComponent">组件</th>
+                                    <th data-i18n="aboutPage.colPurpose">用途</th>
+                                    <th data-i18n="aboutPage.colLicense">许可证</th>
+                                </tr>
+                            </thead>
+                            <tbody id="openSourceTableBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Papers -->
+                <div class="setting-group">
+                    <label data-i18n="aboutPage.papersTitle">论文与研究成果（arXiv）</label>
+                    <p class="hint" data-i18n="aboutPage.papersHint">本应用的模型与算法基于以下研究成果，谨向各位研究者致谢。点击链接可在浏览器中查看原文。</p>
+                    <div id="papersList" class="papers-list"></div>
+                </div>
+
+                <!-- Acknowledgments -->
+                <div class="setting-group">
+                    <label data-i18n="aboutPage.ackTitle">致谢（Acknowledgments）</label>
+
+                    <div class="info-box about-special-thanks">
+                        <strong data-i18n="aboutPage.specialThanks">特别致谢</strong>
+                        <p data-i18n="aboutPage.specialThanksBody">特别感谢基础模型 SoulX-Singer 的作者团队 Soul AI Lab（Jiale Qian、Hao Meng 等）开源高质量的歌声合成模型权重、代码与预训练资源，并以 Apache License 2.0 允许本项目在此基础上进行工程化再创作。没有 SoulX-Singer，就不会有 SXSEditor。</p>
+                        <p class="about-links">
+                            <a href="#" data-external="https://arxiv.org/abs/2602.07803" data-i18n="aboutPage.paperLink">论文（arXiv:2602.07803）</a>
+                            &nbsp;|&nbsp;
+                            <a href="#" data-external="https://github.com/Soul-AILab/SoulX-Singer">GitHub: Soul-AILab/SoulX-Singer</a>
+                            &nbsp;|&nbsp;
+                            <a href="#" data-external="https://soul-ailab.github.io/soulx-singer" data-i18n="aboutPage.demoLink">试听演示</a>
+                        </p>
+                    </div>
+
+                    <p class="hint" data-i18n="aboutPage.thanksOthers">同时感谢浙江大学 GTSinger 数据集团队、CMU Pronouncing Dictionary、LJSpeech / LibriVox 的贡献者，以及 ONNX Runtime、Electron 等开源社区；正是这些开放的研究与资源，让本项目成为可能。</p>
                 </div>
             </div>
 

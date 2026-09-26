@@ -197,6 +197,40 @@ function validateVocoderOutput(waveform, chunkIndex) {
 }
 
 /**
+ * 从 session.run() 结果中解析 vocoder 波形张量。
+ *
+ * 不能硬编码 results['waveform']：vendor EP（WinML/TRT-RTX 桥）在动态形状
+ * 超出引擎 profile 时可能 Run() 不报错但丢失输出，直接下标访问会让下游
+ * outputToFloat32 抛出无法定位的 "Cannot read properties of undefined
+ * (reading 'type')"。WinMLSession.run 已对该情况抛出可识别的引擎级错误，
+ * 这里再为普通 onnxruntime-node 会话提供名称自适应 + 明确报错兜底。
+ *
+ * 解析顺序：规范名 'waveform' → 会话声明的首个输出名 → 结果中任意张量值。
+ *
+ * @param {Object<string,{type:string,data:ArrayLike}>|null|undefined} results
+ * @param {{outputNames?:string[]}|null|undefined} session
+ * @returns {{type:string,data:ArrayLike}}
+ * @throws {Error} 当 EP 未返回任何可用输出时（错误信息含实际 key 列表）
+ */
+function pickVocoderWaveform(results, session) {
+    if (results) {
+        if (results.waveform && results.waveform.data) return results.waveform;
+        const declaredName = session && Array.isArray(session.outputNames) ? session.outputNames[0] : null;
+        if (declaredName && results[declaredName] && results[declaredName].data) {
+            return results[declaredName];
+        }
+        for (const k of Object.keys(results)) {
+            if (results[k] && results[k].data) return results[k];
+        }
+    }
+    const declared = session && Array.isArray(session.outputNames) && session.outputNames.length
+        ? session.outputNames.join(',')
+        : 'n/a';
+    const gotKeys = results ? (Object.keys(results).join(',') || '(empty result)') : '(no result object)';
+    throw new Error(`Vocoder returned no usable waveform output (declared outputs: ${declared}; actual keys: ${gotKeys}). The execution provider dropped the output tensor.`);
+}
+
+/**
  * 判断错误是否为 GPU 显存耗尽相关（OOM / device removed）。
  * 用于在 catch 中区分可重试的显存错误与其他致命错误。
  * @param {Error} err
@@ -333,6 +367,86 @@ function parseWavBuffer(buffer) {
     return { data: audioFloat, sampleRate };
 }
 
+// 窗口化 sinc 插值参数 (Kaiser 窗, β=5, ~12 零交叉)
+const RESAMPLE_KAISER_BETA = 5.0;
+const RESAMPLE_HALF_WIDTH = Math.ceil(12 * RESAMPLE_KAISER_BETA / 5);
+const RESAMPLE_YIELD_EVERY = 8192;
+
+// Kaiser 窗值查找表：window(|t|) = I0(β·sqrt(1-(t/(2HW+1))²)) / I0(β)。
+// β/HW 为固定常量，旧实现每个输出样本的 ~24 个抽头各调用一次
+// sqrt+bessel0（长参考音频整段重采样时的主要 CPU 开销）；表只构建一次，
+// 查表时线性插值，误差远低于 1e-6。抽头最远可达 |t| < HW+1，表覆盖该域。
+const KAISER_LUT_POINTS = 8192;
+let _kaiserWindowLut = null;
+
+function _getKaiserWindowLut() {
+    if (_kaiserWindowLut) return _kaiserWindowLut;
+    const beta = RESAMPLE_KAISER_BETA;
+    const halfWidth = RESAMPLE_HALF_WIDTH;
+    const xMax = halfWidth + 1; // outer fractional tap: center - floor(center-HW) < HW+1
+    const invWidth = 1 / (2 * halfWidth + 1);
+    const values = new Float32Array(KAISER_LUT_POINTS + 1);
+    const norm = bessel0(beta);
+    for (let k = 0; k <= KAISER_LUT_POINTS; k++) {
+        const t = (k / KAISER_LUT_POINTS) * xMax;
+        const kaiserArg = 1 - (t * invWidth) * (t * invWidth);
+        values[k] = kaiserArg >= 0 ? bessel0(beta * Math.sqrt(kaiserArg)) / norm : 0;
+    }
+    _kaiserWindowLut = { values, xMax, scale: KAISER_LUT_POINTS / xMax };
+    return _kaiserWindowLut;
+}
+
+// 同步/异步重采样共享的上下文与单样本核（消除两份重复实现）。
+function _createSincResampleState(input, srcSampleRate, dstSampleRate, ratio, newLength) {
+    const cutoff = (dstSampleRate < srcSampleRate ? 0.95 * dstSampleRate / srcSampleRate : 0.95) * 0.5;
+    const lut = _getKaiserWindowLut();
+    return {
+        input,
+        out: new Float32Array(newLength),
+        ratio,
+        halfWidth: RESAMPLE_HALF_WIDTH,
+        twoPiCutoff: 2 * Math.PI * cutoff,
+        invPi: 1 / Math.PI,
+        lutValues: lut.values,
+        lutScale: lut.scale,
+        lutPoints: KAISER_LUT_POINTS,
+    };
+}
+
+function _resampleOneSample(s, i) {
+    const center = (i + 0.5) * s.ratio;
+    const left = Math.max(0, Math.floor(center - s.halfWidth));
+    const right = Math.min(s.input.length - 1, Math.ceil(center + s.halfWidth));
+
+    let sum = 0;
+    let weightSum = 0;
+    for (let j = left; j <= right; j++) {
+        const t = center - j;
+        if (Math.abs(t) < 1e-7) {
+            sum += s.input[j];
+            weightSum += 1;
+        } else {
+            const sincVal = Math.sin(s.twoPiCutoff * t) * s.invPi / t;
+            // Linear-interpolated Kaiser window lookup (replaces per-tap
+            // sqrt + bessel0 rational/asymptotic evaluation).
+            const fi = Math.abs(t) * s.lutScale;
+            let windowVal;
+            if (fi >= s.lutPoints) {
+                windowVal = s.lutValues[s.lutPoints];
+            } else {
+                const i0 = fi | 0;
+                const frac = fi - i0;
+                const w0 = s.lutValues[i0];
+                windowVal = w0 + (s.lutValues[i0 + 1] - w0) * frac;
+            }
+            const w = sincVal * windowVal;
+            sum += s.input[j] * w;
+            weightSum += w;
+        }
+    }
+    return weightSum > 1e-8 ? sum / weightSum : 0;
+}
+
 function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
     if (srcSampleRate === dstSampleRate) return audioFloat;
     const ratio = srcSampleRate / dstSampleRate;
@@ -349,52 +463,18 @@ function resampleLinear(audioFloat, srcSampleRate, dstSampleRate) {
         ? _oversample2xAntiAlias(audioFloat, srcSampleRate, dstSampleRate)
         : audioFloat;
 
-    // 窗口化 sinc 插值 (Kaiser 窗, β=5)
-    const kaiserBeta = 5.0;
-    const halfWidth = Math.ceil(12 * kaiserBeta / 5); // ~12 零交叉
-    const cutoff = (dstSampleRate < srcSampleRate ? 0.95 * dstSampleRate / srcSampleRate : 0.95) * 0.5;
-
-    // Precompute constants outside the inner loop
-    const twoPiCutoff = 2 * Math.PI * cutoff;
-    const invPi = 1 / Math.PI;
-    const invWidth = 1 / (2 * halfWidth + 1);
-    const bessel0Beta = bessel0(kaiserBeta); // Normalization factor, computed once
-
-    const out = new Float32Array(newLength);
+    const s = _createSincResampleState(input, srcSampleRate, dstSampleRate, ratio, newLength);
     for (let i = 0; i < newLength; i++) {
-        const center = (i + 0.5) * ratio;
-        const left = Math.max(0, Math.floor(center - halfWidth));
-        const right = Math.min(input.length - 1, Math.ceil(center + halfWidth));
-
-        let sum = 0;
-        let weightSum = 0;
-        for (let j = left; j <= right; j++) {
-            const t = center - j;
-            if (Math.abs(t) < 1e-7) {
-                sum += input[j];
-                weightSum += 1;
-            } else {
-                const sincVal = Math.sin(twoPiCutoff * t) * invPi / t;
-                const kaiserArg = 1 - (t * invWidth) * (t * invWidth);
-                const windowVal = kaiserArg >= 0
-                    ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0Beta
-                    : 0;
-                const w = sincVal * windowVal;
-                sum += input[j] * w;
-                weightSum += w;
-            }
-        }
-        out[i] = weightSum > 1e-8 ? sum / weightSum : 0;
+        s.out[i] = _resampleOneSample(s, i);
     }
-    return out;
+    return s.out;
 }
 
 /**
  * 异步分块版 resampleLinear：每 RESAMPLE_YIELD_EVERY 个样本 setImmediate yield 一次，
  * 避免长音频（分钟级）同步阻塞主线程导致 UI 无响应。
- * 内部计算逻辑与 resampleLinear 完全一致，仅在外层循环插入 yield 点。
+ * 与 resampleLinear 共用同一套 LUT 与单样本核，仅在外层循环插入 yield 点。
  */
-const RESAMPLE_YIELD_EVERY = 8192;
 async function resampleLinearAsync(audioFloat, srcSampleRate, dstSampleRate) {
     if (srcSampleRate === dstSampleRate) return audioFloat;
     const ratio = srcSampleRate / dstSampleRate;
@@ -407,46 +487,16 @@ async function resampleLinearAsync(audioFloat, srcSampleRate, dstSampleRate) {
         ? _oversample2xAntiAlias(audioFloat, srcSampleRate, dstSampleRate)
         : audioFloat;
 
-    const kaiserBeta = 5.0;
-    const halfWidth = Math.ceil(12 * kaiserBeta / 5);
-    const cutoff = (dstSampleRate < srcSampleRate ? 0.95 * dstSampleRate / srcSampleRate : 0.95) * 0.5;
-    const twoPiCutoff = 2 * Math.PI * cutoff;
-    const invPi = 1 / Math.PI;
-    const invWidth = 1 / (2 * halfWidth + 1);
-    const bessel0Beta = bessel0(kaiserBeta);
-
-    const out = new Float32Array(newLength);
+    const s = _createSincResampleState(input, srcSampleRate, dstSampleRate, ratio, newLength);
     for (let i = 0; i < newLength; i++) {
-        const center = (i + 0.5) * ratio;
-        const left = Math.max(0, Math.floor(center - halfWidth));
-        const right = Math.min(input.length - 1, Math.ceil(center + halfWidth));
-
-        let sum = 0;
-        let weightSum = 0;
-        for (let j = left; j <= right; j++) {
-            const t = center - j;
-            if (Math.abs(t) < 1e-7) {
-                sum += input[j];
-                weightSum += 1;
-            } else {
-                const sincVal = Math.sin(twoPiCutoff * t) * invPi / t;
-                const kaiserArg = 1 - (t * invWidth) * (t * invWidth);
-                const windowVal = kaiserArg >= 0
-                    ? bessel0(kaiserBeta * Math.sqrt(kaiserArg)) / bessel0Beta
-                    : 0;
-                const w = sincVal * windowVal;
-                sum += input[j] * w;
-                weightSum += w;
-            }
-        }
-        out[i] = weightSum > 1e-8 ? sum / weightSum : 0;
+        s.out[i] = _resampleOneSample(s, i);
 
         // 每 N 个样本 yield 一次，让事件循环处理 UI 响应
         if ((i & (RESAMPLE_YIELD_EVERY - 1)) === 0 && i > 0) {
             await new Promise(r => setImmediate(r));
         }
     }
-    return out;
+    return s.out;
 }
 
 // Kaiser 窗的零阶修正贝塞尔函数 I₀(x) 近似
@@ -674,11 +724,11 @@ function createMelFilterbank(numBands, fftSize, sampleRate, fmin, fmax) {
     return filterbank;
 }
 
-// Cached mel filterbank (only depends on sr, which is fixed at 24kHz)
-let _cachedMelFilterbank = null;
 let _cachedMelFilterbankSr = 0;
-// CSR representation of the cached mel filterbank (only non-zero entries per band).
+// CSR representation of the mel filterbank (only non-zero entries per band).
 // Reduces the inner mel loop from O(numFreqBins) to O(~triangle_width) per band.
+// The dense matrix (~480KB at NUM_MELS x N_FFT/2 bins) is released right after
+// the CSR is built — only the sparse representation is retained.
 let _cachedMelFilterbankCsr = null; // { values: Float32Array, colIdx: Int32Array, rowPtr: Int32Array }
 
 /**
@@ -752,11 +802,12 @@ function extractMelSpectrogram(audioFloat, sr) {
         }
     }
 
-    // Use cached mel filterbank + CSR (recompute only if sample rate changed)
-    if (!_cachedMelFilterbank || _cachedMelFilterbankSr !== sr) {
+    // Use cached mel filterbank CSR (recompute only if sample rate changed).
+    // The dense filterbank is dropped as soon as the CSR is built.
+    if (_cachedMelFilterbankSr !== sr || !_cachedMelFilterbankCsr) {
         const fmax = sr / 2;
-        _cachedMelFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
-        _cachedMelFilterbankCsr = buildMelFilterbankCsr(_cachedMelFilterbank, melBands, numFreqBins);
+        const denseFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
+        _cachedMelFilterbankCsr = buildMelFilterbankCsr(denseFilterbank, melBands, numFreqBins);
         _cachedMelFilterbankSr = sr;
     }
     const melCsr = _cachedMelFilterbankCsr;
@@ -827,10 +878,10 @@ async function extractMelSpectrogramAsync(audioFloat, sr) {
         }
     }
 
-    if (!_cachedMelFilterbank || _cachedMelFilterbankSr !== sr) {
+    if (_cachedMelFilterbankSr !== sr || !_cachedMelFilterbankCsr) {
         const fmax = sr / 2;
-        _cachedMelFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
-        _cachedMelFilterbankCsr = buildMelFilterbankCsr(_cachedMelFilterbank, melBands, numFreqBins);
+        const denseFilterbank = createMelFilterbank(melBands, N_FFT, sr, 0, Math.min(fmax, 12000));
+        _cachedMelFilterbankCsr = buildMelFilterbankCsr(denseFilterbank, melBands, numFreqBins);
         _cachedMelFilterbankSr = sr;
     }
     const melCsr = _cachedMelFilterbankCsr;
@@ -886,6 +937,87 @@ function resizeF0Linear(src, targetLen) {
     return out;
 }
 
+// ---- mel_transform 会话级状态 ----
+// 同一个 inference session 上一次推理失败后（典型：TRT-RTX 的 setInputShape 不支持
+// 本次参考音频长度），该会话在本进程内被视为不可用，后续直接回落 JS FFT 提取。
+// 用 WeakSet 保存 session 对象，会话被释放后条目自动回收。
+const _melTransformBroken = new WeakSet();
+let _melTransformLastError = '';
+
+/**
+ * 读取 mel_transform 输入张量声明的 rank（2D [1, n] 或 3D [1, 1, n]）。
+ * 读取失败时按最常见的 2D 处理。
+ * @param {Object} session
+ * @param {string} inputName
+ * @returns {number} 2 或 3
+ */
+function _melTransformInputRank(session, inputName) {
+    try {
+        const meta = session.inputMetadata;
+        if (Array.isArray(meta)) {
+            const hit = meta.find((m) => m.name === inputName);
+            const shape = hit && (hit.shape || hit.dims);
+            if (Array.isArray(shape) && shape.length === 3) return 3;
+        }
+    } catch (_) { /* metadata unavailable → default 2D */ }
+    return 2;
+}
+
+/**
+ * 统计数组中的 NaN / Inf 数量。
+ * @param {Float32Array} arr
+ * @returns {{nan: number, inf: number}}
+ */
+function _countNonFinite(arr) {
+    let nan = 0;
+    let inf = 0;
+    for (let i = 0; i < arr.length; i++) {
+        const v = arr[i];
+        if (Number.isNaN(v)) nan++;
+        else if (!Number.isFinite(v)) inf++;
+    }
+    return { nan, inf };
+}
+
+/**
+ * vocoder 输入的有限性守卫。
+ *
+ * NaN/Inf mel 进入 GPU 后不会报出有意义的错误：DirectML / TensorRT-RTX 常表现为
+ * "execution context enqueue failed"，把真正的根因（上游 diffusion 产出非法值）
+ * 掩盖成一句无法定位的话。因此在送进 EP 之前统一拦截：
+ *   - 大面积损坏（≥50%）：直接抛出可读错误（新的扩散结果不可能有一半是 NaN）；
+ *   - 零星损坏：就地补 0（标准化 mel 的均值≈0，0 是最中性的修复值）并警告，
+ *     合成继续，听感只损失极少量分量。
+ *
+ * 注意：修复必须写进副本，不能污染上游 xt.data（多分片流式路径会复用同一份 mel，
+ * 且该 mel 还要参与 chunk 边界的 WSOLA 交叉淡入淡出）。
+ *
+ * @param {Float32Array} melData
+ * @param {number} effectiveTotalFrames
+ * @param {string} vocoderType
+ * @returns {Float32Array} 保证全为有限值的 mel
+ */
+function guardMelFinite(melData, effectiveTotalFrames, vocoderType) {
+    const src = melData instanceof Float32Array ? melData : new Float32Array(melData);
+    const total = src.length;
+    if (total === 0) return src;
+    const { nan, inf } = _countNonFinite(src);
+    if (nan === 0 && inf === 0) return src;
+    if ((nan + inf) / total >= 0.5) {
+        throw new Error(
+            `Vocoder input mel is non-finite (NaN=${nan}, Inf=${inf}, total=${total}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}): ` +
+            'upstream diffusion returned NaN/Inf. Usually a vendor-EP (TensorRT-RTX) engine that cannot serve this input shape — ' +
+            'check [TRTRTX] session logs / try another inference device.'
+        );
+    }
+    const fixed = new Float32Array(src);
+    for (let i = 0; i < fixed.length; i++) {
+        if (!Number.isFinite(fixed[i])) fixed[i] = 0;
+    }
+    console.warn(`[VocoderDiag] MEL INPUT BEFORE VOCODER HAS NaN/Inf (NaN=${nan}, Inf=${inf}, total=${total}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}) — patched to 0 to keep synthesis usable`);
+    return fixed;
+}
+
 // ---- Post-processing class ----
 
 class Postprocessing {
@@ -919,20 +1051,48 @@ class Postprocessing {
      *   - int8/mel_transform.onnx:  input='waveform',   output='output'
      * 这里通过 session.inputNames / outputNames 动态取首个输入/输出名，避免硬编码导致
      * ROOT 模型运行时报 "input 'audio' is missing in 'feeds'"。
+     *
+     * 同样地，输入的 rank 也有 2D [1, n] 与 3D [1, 1, n] 两种导出形态；rank 不对时
+     * TRT-RTX/OpenVINO 引擎会在 IExecutionContext::setInputShape() 处拒绝，因此按
+     * session 元数据决定，而不是固定用 2D。
      */
     async extractRefMelOnnx(sessions, refAudioWavBuffer, isFP16, useStaticShapes = false) {
         const { data: audioFloat, sampleRate: srcSr } = parseWavBuffer(refAudioWavBuffer);
         const resampled = await resampleLinearAsync(audioFloat, srcSr, SAMPLE_RATE);
+        if (!resampled || resampled.length === 0) {
+            // 空参考音频：不要构造长度为 0 的张量（部分 EP 会直接报 invalid dimensions）
+            return { data: new Float32Array(0), frames: 0, melBands: MEL_DIM };
+        }
+        const melSession = sessions.melTransform;
+        // 此会话此前已经失败过一次（典型：TRT-RTX 引擎不接受本次参考音频的长度）。
+        // 同一个引擎重试必然再次失败，这里直接抛出，让调用方立刻回落到 JS FFT 提取，
+        // 避免多分片合成时每个 fragment 都白跑一次 GPU。
+        if (_melTransformBroken.has(melSession)) {
+            throw new Error(`mel_transform session previously failed ("${_melTransformLastError}"), skipping to JS fallback`);
+        }
         const floatType = isFP16 ? 'float16' : 'float32';
         // 动态获取输入/输出名（不同导出版本名称不同）
-        const melInputName = sessions.melTransform.inputNames[0];   // 'waveform' | 'audio'
-        const melOutputName = sessions.melTransform.outputNames[0]; // 'mel_spectrogram' | 'mel' | 'output'
+        const melInputName = melSession.inputNames[0];   // 'waveform' | 'audio'
+        const melOutputName = melSession.outputNames[0]; // 'mel_spectrogram' | 'mel' | 'output'
+        const inputRank = _melTransformInputRank(melSession, melInputName);
+        const buildWaveform = (data) => createFloatTensor(
+            floatType, data,
+            inputRank === 3 ? [1, 1, data.length] : [1, data.length]);
+        const runWithFailureMemory = async (waveform) => {
+            try {
+                return await melSession.run({ [melInputName]: waveform });
+            } catch (err) {
+                _melTransformBroken.add(melSession);
+                _melTransformLastError = String(err.message || err).split('\n')[0].slice(0, 120);
+                throw err;
+            }
+        };
         const NPU_STATIC_NUM_SAMPLES = 240000;
         if (useStaticShapes && resampled.length < NPU_STATIC_NUM_SAMPLES) {
             const padded = new Float32Array(NPU_STATIC_NUM_SAMPLES);
             padded.set(resampled);
-            const waveform = createFloatTensor(floatType, padded, [1, NPU_STATIC_NUM_SAMPLES]);
-            const results = await sessions.melTransform.run({ [melInputName]: waveform });
+            const waveform = buildWaveform(padded);
+            const results = await runWithFailureMemory(waveform);
             const melOutput = results[melOutputName];
             const melData = outputToFloat32(melOutput);
             const melDims = melOutput.dims; // 先取 dims 再 dispose，避免 use-after-free
@@ -945,8 +1105,8 @@ class Postprocessing {
             const trimmed = melData.subarray(0, frames * MEL_DIM);
             return { data: trimmed.slice(), frames, melBands: MEL_DIM };
         }
-        const waveform = createFloatTensor(floatType, resampled, [1, resampled.length]);
-        const results = await sessions.melTransform.run({ [melInputName]: waveform });
+        const waveform = buildWaveform(resampled);
+        const results = await runWithFailureMemory(waveform);
         const melOutput = results[melOutputName];
         const melData = outputToFloat32(melOutput);
         const melDims = melOutput.dims; // 先取 dims 再 dispose
@@ -992,6 +1152,9 @@ class Postprocessing {
                 }
             }
         }
+        // 有限性守卫（单 chunk / 多 chunk 两条路径共用）：NaN/Inf mel 送进 EP 只会得到
+        // "enqueue failed" 这类无法定位的报错，这里先拦截，详见 guardMelFinite 注释。
+        effectiveMelData = guardMelFinite(effectiveMelData, effectiveTotalFrames, vocoderType);
 
         // vocoder 期望标准化 mel (mean=0, std=1)，与官方 PyTorch soulxsinger.py 一致。
         // 之前的爆炸是 VocosFullWrapper._overlap_add 的 reshape 维度顺序 bug 导致的（已修复）。
@@ -1008,14 +1171,32 @@ class Postprocessing {
         const totalSamples = effectiveTotalFrames * vocoderHopSize;
         const output = new Float32Array(totalSamples);
         const t0 = performance.now();
-        const floatType = isFP16 ? 'float16' : 'float32';
+        let floatType = isFP16 ? 'float16' : 'float32';
+        // 会话输入契约护栏：mel/f0 张量类型必须与会话声明一致，不能只信 isFP16 标志。
+        // W16A32（权重 FP16、输入/激活 FP32）等模型体积与真 FP16 模型相同，检测标志一旦
+        // 误判就会给 TRT-RTX 等严格 EP 喂错类型（DML 会隐式插 Cast 掩盖问题，TRT-RTX
+        // 直接报 "Unexpected input data type. Actual float16, expected float"）。
+        // inputMetadata 在 WinMLSession / onnxruntime-node 上均为数组 [{name,type,shape}]。
+        try {
+            const rawVocMeta = sessions.vocoder.inputMetadata;
+            const vocMeta = Array.isArray(rawVocMeta)
+                ? rawVocMeta
+                : (rawVocMeta && typeof rawVocMeta === 'object' ? Object.values(rawVocMeta) : []);
+            const melContract = vocMeta.find(m => m && m.name === 'mel') || vocMeta[0];
+            if (melContract && (melContract.type === 'float16' || melContract.type === 'float32')
+                && melContract.type !== floatType) {
+                console.warn(`[Vocoder] precision flag isFP16=${isFP16} (${floatType}) conflicts with session mel input ${melContract.type}; feeding ${melContract.type} to match model contract`);
+                floatType = melContract.type;
+            }
+        } catch (_) { /* 无元数据时沿用 isFP16 标志 */ }
 
         // Yield to event loop to keep window responsive during long DML inference
         // setImmediate 比 setTimeout(0) 快约 4 倍（Windows ~1ms vs ~4ms）
         const yieldToEventLoop = () => new Promise(resolve => setImmediate(resolve));
 
         const padFloat = (src, len) => {
-            if (src.length >= len) return src;
+            if (src.length === len) return src;
+            if (src.length > len) return src.subarray(0, len);
             const padded = new Float32Array(len);
             padded.set(src);
             return padded;
@@ -1083,18 +1264,9 @@ class Postprocessing {
             const melTensor = createFloatTensor(floatType, paddedMel, [1, vocSeqLen, MEL_DIM]);
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, 0, effectiveTotalFrames);
 
-            // 诊断：检查 mel 输入是否包含 NaN（在 vocoder run 之前）+ mel 统计（标准化 mel，期望 mean≈0 std≈1）
-            // NaN/Inf 致命错误 console.error 始终输出；统计采样 console.log 受 diagnosticMode 控制
-            // 全量扫描 NaN/Inf（采样检测可能漏掉 NaN 簇），always-on 以保证致命错误不被静默
+            // 诊断：mel 输入的分布统计（标准化 mel，期望 mean≈0 std≈1），受 diagnosticMode 控制。
+            // NaN/Inf 检查已统一前移到 guardMelFinite（覆盖单/多 chunk 两条路径），此处不再重复扫描。
             {
-                let melNaN = 0, melInf = 0;
-                for (let i = 0; i < paddedMel.length; i++) {
-                    if (Number.isNaN(paddedMel[i])) { melNaN++; }
-                    else if (!Number.isFinite(paddedMel[i])) { melInf++; }
-                }
-                if (melNaN > 0 || melInf > 0) {
-                    console.error(`[VocoderDiag] MEL INPUT BEFORE VOCODER HAS NaN/Inf! NaN=${melNaN}, Inf=${melInf - melNaN}, total=${paddedMel.length}, frames=${effectiveTotalFrames}, vocoderType=${vocoderType}`);
-                }
                 // 采样统计：每 64 个采样取 1 个，避免长音频（如 2000 帧 × 128 = 256000 元素）下全量遍历的开销
                 if (_readDiagnosticMode()) {
                     const DIAG_STRIDE = 64;
@@ -1111,7 +1283,7 @@ class Postprocessing {
                     }
                     const melMean = sampledCount > 0 ? melSum / sampledCount : 0;
                     const melStd = sampledCount > 0 ? Math.sqrt(Math.max(0, melSumSq / sampledCount - melMean * melMean)) : 0;
-                    console.log(`[VocoderDiag] single-chunk mel stats (sampled 1/${DIAG_STRIDE}): frames=${effectiveTotalFrames}, len=${paddedMel.length}, NaN=${melNaN}, Inf=${melInf}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
+                    console.log(`[VocoderDiag] single-chunk mel stats (sampled 1/${DIAG_STRIDE}): frames=${effectiveTotalFrames}, len=${paddedMel.length}, min=${melMin.toFixed(6)}, max=${melMax.toFixed(6)}, mean=${melMean.toFixed(6)}, std=${melStd.toFixed(6)}`);
                 }
             }
 
@@ -1129,9 +1301,18 @@ class Postprocessing {
                 throw runErr;
             }
             await yieldToEventLoop(); // Prevent UI freeze during DML inference
-            const waveform = outputToFloat32(results['waveform']);
+            let outTensor;
+            try {
+                outTensor = pickVocoderWaveform(results, sessions.vocoder);
+            } catch (pickErr) {
+                // EP 丢失输出时也要释放本 chunk 输入张量，避免泄漏
+                disposeTensor(melTensor);
+                if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
+                throw pickErr;
+            }
+            const waveform = outputToFloat32(outTensor);
             // 释放单 chunk 的输入和输出张量
-            disposeTensor(results['waveform']);
+            disposeTensor(outTensor);
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
             // 诊断：检查 vocoder 输出
@@ -1229,7 +1410,12 @@ class Postprocessing {
         //   chunk N:   chunkStart=framePos-overlap,  chunkEnd=chunkStart+chunkSize, framePos→chunkEnd
         //   末尾 chunk（chunkEnd 被 effectiveTotalFrames 截断）：写入后显式 break，
         //     避免旧逻辑 framePos = chunkEnd - overlapFrames 反复回退导致死循环
-        const weightSum = new Float32Array(totalSamples);
+        // NOTE: the old Hann-OLA era kept a full-length weightSum[] array and
+        // divided the output by it at the end. Every write site assigned the
+        // exact constant 1 (WSOLA crossfade weights already sum to 1), so the
+        // array (up to ~77MB at the 40000-frame cap) and the final full-length
+        // pass were pure overhead. Committed regions are tracked via
+        // committedSamples instead.
 
         const fadeSamples = overlapFrames * vocoderHopSize;
         // WSOLA 分块交叉淡入淡出：取代旧的对称 Hann OLA 窗。
@@ -1278,11 +1464,14 @@ class Postprocessing {
         let committedSamples = 0;
         for (let i = 0; i < totalChunkCount; i++) {
             const spec = chunkSpecs[i];
-            // 流式创建当前 chunk 的输入张量（不预存到 chunkSpecs）
-            const chunkMel = new Float32Array(spec.currentChunkFrames * MEL_DIM);
-            chunkMel.set(effectiveMelData.subarray(spec.chunkStart * MEL_DIM, spec.chunkEnd * MEL_DIM));
+            // 流式创建当前 chunk 的输入张量（不预存到 chunkSpecs）。
+            // 直接在 effectiveMelData 上取视图：静态形状路径 padFloat 会复制到
+            // 定长缓冲；动态 float16 路径 createFloatTensor 内部转换时复制；
+            // 动态 float32 路径张量直接包装该视图（run 期间源数据不会被修改），
+            // 省去每 chunk 一次全长中间拷贝。
+            const melSub = effectiveMelData.subarray(spec.chunkStart * MEL_DIM, spec.chunkEnd * MEL_DIM);
             const vocSeqLen = useStaticShapes ? NPU_VOCODER_SEQ_LEN : spec.currentChunkFrames;
-            const paddedChunk = useStaticShapes ? padFloat(chunkMel, vocSeqLen * MEL_DIM) : chunkMel;
+            const paddedChunk = useStaticShapes ? padFloat(melSub, vocSeqLen * MEL_DIM) : melSub;
             const melTensor = createFloatTensor(floatType, paddedChunk, [1, vocSeqLen, MEL_DIM]);
             const vocoderInputs = buildVocoderInputs(melTensor, vocSeqLen, spec.chunkStart, spec.currentChunkFrames);
 
@@ -1300,10 +1489,18 @@ class Postprocessing {
             }
             await yieldToEventLoop(); // Prevent UI freeze between vocoder chunks
 
-            const waveform = outputToFloat32(results['waveform']);
+            let outTensor;
+            try {
+                outTensor = pickVocoderWaveform(results, sessions.vocoder);
+            } catch (pickErr) {
+                // EP 丢失输出时也要释放本 chunk 输入张量，避免跨 chunk 泄漏
+                disposeTensor(melTensor);
+                if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
+                throw pickErr;
+            }
+            const waveform = outputToFloat32(outTensor);
             // 立即释放 ONNX 输出张量与输入张量：解除 JS 引用，让 V8 GC 回收 native 资源。
             // DML 后端 GPU 张量依赖 finalizer 异步释放，多个 chunk 累积会导致后续 chunk OOM。
-            const outTensor = results['waveform'];
             disposeTensor(outTensor);
             disposeTensor(melTensor);
             if (vocoderInputs.f0) disposeTensor(vocoderInputs.f0);
@@ -1377,29 +1574,29 @@ class Postprocessing {
             if (canWsola) {
                 const currChunkHead = waveform.subarray(0, overlapWriteLen);
                 const wsolaResult = wsolaCrossfade(prevChunkTail, currChunkHead, overlapWriteLen, SAMPLE_RATE);
-                for (let j = 0; j < overlapWriteLen; j++) {
-                    const outIdx = writeStart + j;
-                    if (outIdx >= totalSamples) break;
-                    output[outIdx] = wsolaResult[j]; // 覆盖前一 chunk 尾部
-                    weightSum[outIdx] = 1;
+                // 重叠区：逐样本生成的 WSOLA 结果，一次原生 memcpy 写回。
+                const overlapCopy = Math.min(overlapWriteLen, totalSamples - writeStart);
+                if (overlapCopy > 0) {
+                    output.set(wsolaResult.subarray(0, overlapCopy), writeStart);
                 }
-                for (let j = overlapWriteLen; j < writeLen; j++) {
-                    const outIdx = writeStart + j;
-                    if (outIdx >= totalSamples) break;
-                    output[outIdx] = waveform[j];
-                    weightSum[outIdx] = 1;
+                // 重叠区之后的稳定区：原生 memcpy（原为逐样本标量循环，
+                // 每 chunk 可达约 49 万次赋值）。
+                const stableStart = writeStart + overlapWriteLen;
+                const stableCopy = Math.min(writeLen - overlapWriteLen, totalSamples - stableStart);
+                if (stableCopy > 0) {
+                    output.set(waveform.subarray(overlapWriteLen, overlapWriteLen + stableCopy), stableStart);
                 }
             } else {
-                for (let j = 0; j < writeLen; j++) {
-                    const outIdx = writeStart + j;
-                    if (outIdx >= totalSamples) break;
-                    output[outIdx] = waveform[j];
-                    weightSum[outIdx] = 1;
+                const copyLen = Math.min(writeLen, totalSamples - writeStart);
+                if (copyLen > 0) {
+                    output.set(waveform.subarray(0, copyLen), writeStart);
                 }
             }
-            // 保存尾部供下个 chunk WSOLA 对齐（仅非末尾 chunk 且样本足够）
+            // 保存尾部供下个 chunk WSOLA 对齐（仅非末尾 chunk 且样本足够）。
+            // waveform 是本 chunk 独有的全新数组且之后只读，subarray 视图即可，
+            // 无需 slice 复制。
             if (!spec.isLast && fadeSamples > 0 && waveform.length >= fadeSamples) {
-                prevChunkTail = waveform.slice(waveform.length - fadeSamples);
+                prevChunkTail = waveform.subarray(waveform.length - fadeSamples);
             }
 
             // 流式推送：推送 [committedSamples, stableEnd]（weightSum=1，overlap crossfade 权重和为 1）
@@ -1428,12 +1625,6 @@ class Postprocessing {
                     }
                     committedSamples = stableEnd;
                 }
-            }
-        }
-
-        for (let i = 0; i < totalSamples; i++) {
-            if (weightSum[i] > 1e-8) {
-                output[i] /= weightSum[i];
             }
         }
 
@@ -1621,4 +1812,6 @@ module.exports = {
     extractMelSpectrogramAsync,
     validateVocoderOutput,
     isVramOOMError,
+    guardMelFinite,
+    __test: { countNonFinite: _countNonFinite, melTransformInputRank: _melTransformInputRank },
 };

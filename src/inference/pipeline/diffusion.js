@@ -4,21 +4,28 @@ const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrainAdaptive, flo
 const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
+const { resolveQDrift, buildQDriftCtx, readQDriftEnabled } = require('./qdrift');
+
+// One fallback notice per loaded diffStep session, not once per streaming chunk.
+// WeakSet follows session lifetime without retaining disposed sessions.
+const _fixedBatchCfgLoggedSessions = new WeakSet();
 
 /**
  * 解析 diff_step 会话的输入/输出名与 mask 元素类型，兼容两种签名：
- * - legacy（根目录 FP32 / fp16）：xt_input / t / cond / xt_mask(float) → flow_pred
+ * - legacy（根目录 FP32 / fp16 / int8 optimized_npu）：xt_input / t / cond / xt_mask(float) → flow_pred
  * - QDIT（int8 新模型）：       x / diffusion_step / cond / x_mask(bool) → flow_pred
+ * - renames（int8 静态重命名模型）：acoustic_features / diffusion_step / conditioning / attention_mask(bool) → output
  * 旧 int8 静态模型输出名为 output。
  * @param {Object} session - sessions.diffStep
- * @returns {{xtInput:string, tInput:string, maskInput:string, maskType:string, outName:string, isQdit:boolean}}
+ * @returns {{xtInput:string, tInput:string, condInput:string, maskInput:string, maskType:string, outName:string, isQdit:boolean}}
  */
 function _resolveDiffStepIO(session) {
     const names = (session && Array.isArray(session.inputNames)) ? session.inputNames : [];
     const has = (n) => names.indexOf(n) !== -1;
-    const xtInput = has('x') ? 'x' : 'xt_input';
+    const xtInput = has('x') ? 'x' : (has('acoustic_features') ? 'acoustic_features' : 'xt_input');
     const tInput = has('diffusion_step') ? 'diffusion_step' : 't';
-    const maskInput = has('x_mask') ? 'x_mask' : 'xt_mask';
+    const condInput = has('conditioning') ? 'conditioning' : 'cond';
+    const maskInput = has('x_mask') ? 'x_mask' : (has('attention_mask') ? 'attention_mask' : 'xt_mask');
     let maskType = 'float32';
     try {
         const meta = session.inputMetadata;
@@ -32,7 +39,7 @@ function _resolveDiffStepIO(session) {
     } catch (_) { /* metadata 读取失败时按 legacy float32 处理 */ }
     const outNames = (session && Array.isArray(session.outputNames)) ? session.outputNames : [];
     const outName = outNames.indexOf('flow_pred') !== -1 ? 'flow_pred' : (outNames[0] || 'flow_pred');
-    return { xtInput, tInput, maskInput, maskType, outName, isQdit: has('x') && has('diffusion_step') };
+    return { xtInput, tInput, condInput, maskInput, maskType, outName, isQdit: has('x') && has('diffusion_step') };
 }
 
 /**
@@ -86,6 +93,62 @@ function _readSDEditRepair() {
  * Diffusion sampling loop (the core synthesis algorithm)
  */
 class Diffusion {
+    constructor() {
+        // 当前 diffStep 会话的执行提供者，由管线在调用 runDiffusionLoop 前注入。
+        // Q-Drift 的校正因子是按 EP 实测的，需要它来做合约校验。
+        this._diffStepEp = null;
+        // 当前 diffStep 的量化精度类别（'fp32' | 'fp16' | 'int8' | 'int8-npu'）。
+        // Q-Drift 按精度选择各自的校正表（INT8 与 FP16 的 Δv 量级差 2~3 个数量级）。
+        this._diffStepPrecision = 'fp32';
+        // Q-Drift 开关：预览 / 导出是两个独立设置，由管线按当前合成路径注入。
+        this._qdriftEnabled = false;
+        // 确定性噪声源。默认 null → 用 Math.random（线上行为不变）。
+        // 只有在做精度/EP 对比测量时才注入种子，否则两条路径的初始噪声不同，
+        // 测出来的差异会被「换种子」本身（实测 ~15 dB LSD）完全淹没。
+        this._rng = null;
+    }
+
+    /**
+     * 注入确定性噪声种子（仅用于测量对比；不设置则行为与线上一致）。
+     * @param {number|null} seed
+     */
+    setNoiseSeed(seed) {
+        const n = Number(seed);
+        if (!Number.isFinite(n)) { this._rng = null; return; }
+        let a = n >>> 0;
+        this._rng = () => {
+            a = (a + 0x6D2B79F5) >>> 0;
+            let t = a;
+            t = Math.imul(t ^ (t >>> 15), t | 1);
+            t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+    }
+
+    /**
+     * 注入当前 diffStep 的 EP（如 'dml'、'winml:NvTensorRTRTXExecutionProvider'、'cpu'）。
+     * @param {string|null} ep
+     */
+    setDiffStepEp(ep) {
+        this._diffStepEp = ep || null;
+    }
+
+    /**
+     * 注入当前 diffStep 的量化精度类别（'fp32' | 'fp16' | 'int8' | 'int8-npu'）。
+     * @param {string} precision
+     */
+    setDiffStepPrecision(precision) {
+        this._diffStepPrecision = precision || 'fp32';
+    }
+
+    /**
+     * 注入本次合成是否启用 Q-Drift。
+     * @param {boolean} enabled
+     */
+    setQDriftEnabled(enabled) {
+        this._qdriftEnabled = enabled === true;
+    }
+
     /**
      * Run a single diffusion step (public API).
      *
@@ -102,7 +165,8 @@ class Diffusion {
         const io = _resolveDiffStepIO(sessions.diffStep);
 
         const padFloat = (src, len) => {
-            if (src.length >= len) return src;
+            if (src.length === len) return src;
+            if (src.length > len) return src.subarray(0, len);
             const padded = new Float32Array(len);
             padded.set(src);
             return padded;
@@ -122,7 +186,7 @@ class Diffusion {
             results = await sessions.diffStep.run({
                 [io.xtInput]: xtTensor,
                 [io.tInput]: tTensor,
-                cond: condTensor,
+                [io.condInput]: condTensor,
                 [io.maskInput]: maskTensor,
             });
         } catch (err) {
@@ -184,7 +248,8 @@ class Diffusion {
         const io = _resolveDiffStepIO(sessions.diffStep);
 
         const padFloat = (src, len) => {
-            if (src.length >= len) return src;
+            if (src.length === len) return src;
+            if (src.length > len) return src.subarray(0, len);
             const padded = new Float32Array(len);
             padded.set(src);
             return padded;
@@ -222,7 +287,7 @@ class Diffusion {
             results = await sessions.diffStep.run({
                 [io.xtInput]: xtTensor,
                 [io.tInput]: tTensor,
-                cond: condTensor,
+                [io.condInput]: condTensor,
                 [io.maskInput]: maskTensor,
             });
         } catch (err) {
@@ -275,7 +340,7 @@ class Diffusion {
     async _evalDiffStepSeparate(sessions, xtInputBuf, xtData, t, floatType,
         xtInputTensor, tTensorBuf, tTensor,
         condTensorConst, condMaskTensorConst,
-        ptFrameCount, totalFrames, seqLen, targetLen) {
+        ptFrameCount, totalFrames, seqLen, targetLen, reuseBufs = null) {
         const io = _resolveDiffStepIO(sessions.diffStep);
 
         // === Cond branch: xt = [ptMelData | xtData], cond = combinedCond ===
@@ -291,33 +356,90 @@ class Diffusion {
         const condResults = await sessions.diffStep.run({
             [io.xtInput]: xtInputTensor,
             [io.tInput]: tTensor,
-            cond: condTensorConst,
+            [io.condInput]: condTensorConst,
             [io.maskInput]: condMaskTensorConst,
         });
         const condPredRaw = condResults[io.outName];
         const condPredFull = outputToFloat32(condPredRaw);
-        disposeTensor(condPredRaw);
 
-        // Slice cond target segment (skip prompt prefix)
-        const condPred = new Float32Array(targetLen);
-        for (let f = 0; f < totalFrames; f++) {
-            const srcOff = (ptFrameCount + f) * MEL_DIM;
-            const dstBase = f * MEL_DIM;
-            for (let d = 0; d < MEL_DIM; d++) {
-                condPred[dstBase + d] = condPredFull[srcOff + d];
+        // TEMP DIAGNOSTIC (SXS_DIAG_PROBE=1): compare EVERY graph output between
+        // TRT and the DML peer at the first diffusion step, slicing along every
+        // axis whose length equals seqLen. Locates the exact operator tensor at
+        // which frame index >=2048 diverges.
+        const __probe = sessions.diffStep && sessions.diffStep.__diagPeer;
+        if (__probe && t < 0.02) {
+            try {
+                const __pRes = await __probe.run({
+                    [io.xtInput]: xtInputTensor,
+                    [io.tInput]: tTensor,
+                    [io.condInput]: condTensorConst,
+                    [io.maskInput]: condMaskTensorConst,
+                });
+                for (const __name of Object.keys(condResults)) {
+                    const __tT = condResults[__name];
+                    const __dT = __pRes[__name];
+                    if (!__dT) { console.log(`[Probe] ${__name}: missing on DML peer`); continue; }
+                    const __ta = outputToFloat32(__tT);
+                    const __da = outputToFloat32(__dT);
+                    const __dims = (__tT.dims || []).map((x) => Number(x));
+                    if (__ta.length !== __da.length) {
+                        console.log(`[Probe] ${__name} dims=${JSON.stringify(__dims)} LENGTH MISMATCH trt=${__ta.length} dml=${__da.length}`);
+                        continue;
+                    }
+                    // compute strides
+                    const __strides = new Array(__dims.length);
+                    let __acc = 1;
+                    for (let __i = __dims.length - 1; __i >= 0; __i--) { __strides[__i] = __acc; __acc *= __dims[__i]; }
+                    for (let __ax = 0; __ax < __dims.length; __ax++) {
+                        if (__dims[__ax] !== seqLen) continue;
+                        const __sliceLen = __ta.length / __dims[__ax];
+                        const __cosAt = (idx) => {
+                            const __base = idx * __strides[__ax];
+                            let sa = 0, sb = 0, sab = 0;
+                            // iterate every other-axis combination touching this index
+                            const __outer = __strides[__ax];
+                            const __blockSpan = __strides[__ax] * __dims[__ax];
+                            for (let __blk = 0; __blk < __ta.length; __blk += __blockSpan) {
+                                for (let __j = 0; __j < __outer; __j++) {
+                                    const a = __ta[__blk + __base + __j];
+                                    const b = __da[__blk + __base + __j];
+                                    sa += a * a; sb += b * b; sab += a * b;
+                                }
+                            }
+                            return (sa > 0 && sb > 0) ? sab / Math.sqrt(sa * sb) : 1;
+                        };
+                        let __min = 1, __badPost = 0, __badPre = 0, __firstBad = -1, __run = 0;
+                        for (let __idx = 0; __idx < seqLen; __idx++) {
+                            const __c = __cosAt(__idx);
+                            if (__c < __min) __min = __c;
+                            if (__idx < 2048) { if (__c < 0.999) __badPre++; }
+                            else { if (__c < 0.999) __badPost++; }
+                            if (__c < 0.999) { __run++; if (__firstBad < 0 && __run >= 4) __firstBad = __idx - __run + 1; }
+                            else __run = 0;
+                        }
+                        console.log(`[Probe] ${__name} dims=${JSON.stringify(__dims)} axis=${__ax} firstBad=${__firstBad} minCos=${__min.toFixed(6)} badPre2048=${__badPre} badPost2048=${__badPost}/${Math.max(0, seqLen - 2048)}`);
+                    }
+                }
+                for (const k of Object.keys(__pRes)) { try { disposeTensor(__pRes[k]); } catch (_) {} }
+            } catch (e) {
+                console.warn('[Probe] failed:', (e.message || '').split('\n')[0]);
+                sessions.diffStep.__diagPeer = null;
             }
         }
+        disposeTensor(condPredRaw);
+
+        // Slice cond target segment (skip prompt prefix). The target frames
+        // are contiguous in the model output — one memcpy instead of a nested
+        // per-element loop. Reuse the loop-level buffer when provided.
+        const condPred = reuseBufs ? reuseBufs.condPredBuf : new Float32Array(targetLen);
+        condPred.set(condPredFull.subarray(
+            ptFrameCount * MEL_DIM,
+            (ptFrameCount + totalFrames) * MEL_DIM));
 
         // === Uncond branch: xt = xtData (target only), cond = zeros, mask = ones for target ===
         const uncondXtData = new Float32Array(seqLen * MEL_DIM);
         // Place target xt at position 0 (no prompt prefix)
-        for (let f = 0; f < totalFrames; f++) {
-            const srcOff = f * MEL_DIM;
-            const dstOff = f * MEL_DIM;
-            for (let d = 0; d < MEL_DIM; d++) {
-                uncondXtData[dstOff + d] = xtData[srcOff + d];
-            }
-        }
+        uncondXtData.set(xtData.subarray(0, totalFrames * MEL_DIM));
         const uncondXtTensor = createFloatTensor(floatType, uncondXtData, [1, seqLen, MEL_DIM]);
 
         // Uncond cond = zeros, mask = ones for target only
@@ -333,7 +455,7 @@ class Diffusion {
         const uncondResults = await sessions.diffStep.run({
             [io.xtInput]: uncondXtTensor,
             [io.tInput]: tTensor,
-            cond: uncondCondTensor,
+            [io.condInput]: uncondCondTensor,
             [io.maskInput]: uncondMaskTensor,
         });
         const uncondPredRaw = uncondResults[io.outName];
@@ -343,15 +465,10 @@ class Diffusion {
         disposeTensor(uncondCondTensor);
         disposeTensor(uncondMaskTensor);
 
-        // Slice uncond target segment (starts at position 0, no prompt offset)
-        const uncondPred = new Float32Array(targetLen);
-        for (let f = 0; f < totalFrames; f++) {
-            const srcOff = f * MEL_DIM;
-            const dstBase = f * MEL_DIM;
-            for (let d = 0; d < MEL_DIM; d++) {
-                uncondPred[dstBase + d] = uncondPredFull[srcOff + d];
-            }
-        }
+        // Slice uncond target segment (starts at position 0, no prompt
+        // offset) — contiguous, single memcpy.
+        const uncondPred = reuseBufs ? reuseBufs.uncondPredBuf : new Float32Array(targetLen);
+        uncondPred.set(uncondPredFull.subarray(0, totalFrames * MEL_DIM));
 
         return { condPred, uncondPred };
     }
@@ -370,11 +487,37 @@ class Diffusion {
      *
      * @param {string} [samplerName='euler'] - 求解器名称，见 samplers/index.js
      */
-    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null) {
+    async runDiffusionLoop(sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, onProgress, progressStart, progressRange, useStaticShapes = false, samplerName = DEFAULT_SOLVER, cfgScheduleOpts = null, dynamicThresholdOpts = null, abortSignal = null, suppressDoneLog = false) {
+        const _diffT0 = performance.now();
         const floatType = isFP16 ? 'float16' : 'float32';
         const totalFramesWithPrompt = ptFrameCount + totalFrames;
         const seqLen = useStaticShapes ? NPU_STATIC_SEQ_LEN : totalFramesWithPrompt;
+        // ---- Q-Drift：启用即强制锁定采样合约（Euler @ 32 / CFG 3.0 / rescale 0.7）----
+        // 校正因子 c 只在特定 σ 网格与速度场定义下有效；换步数、换求解器或叠加
+        // CFG 调度/动态阈值都会让 c 落到错误的分布上，而 |c| 极小导致听感无法察觉
+        // （静默降级）。所以这里直接覆盖参数并把被覆盖项打进日志。
+        const _qd = resolveQDrift({
+            enabled: this._qdriftEnabled,
+            isFP16,
+            diffStepPrecision: this._diffStepPrecision,
+            samplerName, totalSteps, cfgStrength, cfgRescale,
+            cfgScheduleOpts, dynamicThresholdOpts,
+            diffStepEp: this._diffStepEp,
+        });
+        if (_qd.active) {
+            samplerName = _qd.params.samplerName;
+            totalSteps = _qd.params.totalSteps;
+            cfgStrength = _qd.params.cfgStrength;
+            cfgRescale = _qd.params.cfgRescale;
+            cfgScheduleOpts = _qd.params.cfgScheduleOpts;
+            dynamicThresholdOpts = _qd.params.dynamicThresholdOpts;
+            console.log(`[Q-Drift] 已启用（${_qd.precision}，${_qd.correction.length} 个通道因子）。强制锁定：${_qd.notes.join('；')}`);
+        }
+        const qdriftCtx = buildQDriftCtx(_qd.active, _qd.correction);
+        // useCfg 必须在 Q-Drift 覆盖 cfgStrength 之后再判定：若用户原本关闭了 CFG，
+        // 合约仍要求 CFG=3.0，必须走 cond+uncond 双分支，否则速度场定义不一致。
         const useCfg = cfgStrength > 0;
+
         // Task 1: cond + uncond batched into a single [2, seqLen, MEL_DIM] call.
         // No-CFG path uses batch=1 (cond only).
         const diffBatch = useCfg ? 2 : 1;
@@ -396,7 +539,10 @@ class Diffusion {
                         const shape = xtMeta.shape || xtMeta.dims;
                         if (shape && shape[0] === 1) {
                             batchMergeDisabled = true;
-                            console.log('[Diffusion] diff_step batch dim = 1, using separate cond/uncond calls (batch merge disabled)');
+                            if (!_fixedBatchCfgLoggedSessions.has(sessions.diffStep)) {
+                                _fixedBatchCfgLoggedSessions.add(sessions.diffStep);
+                                console.log('[Diffusion][CFG] mode=separate reason=fixed-batch-1');
+                            }
                         }
                     }
                 }
@@ -424,7 +570,8 @@ class Diffusion {
         }
 
         const padFloat = (src, len) => {
-            if (src.length >= len) return src;
+            if (src.length === len) return src;
+            if (src.length > len) return src.subarray(0, len);
             const padded = new Float32Array(len);
             padded.set(src);
             return padded;
@@ -519,6 +666,11 @@ class Diffusion {
             deltaBuf: new Float32Array(targetLen),  // sampler delta 输出
             v1Buf: new Float32Array(targetLen),     // Heun 保存 v1
             xPredBuf: new Float32Array(targetLen),  // Heun 预测状态
+            // evalDiffStep 的切片输出：combine 同步消费后即可复用
+            // （所有 sampler 都不保留 condPred/uncondPred 引用），
+            // 替代原先每步 2 次 new Float32Array(targetLen)。
+            condPredBuf: new Float32Array(targetLen),
+            uncondPredBuf: new Float32Array(targetLen),
         };
 
         // evalDiffStep: 执行 cond + (可选)uncond 推理，返回 {condPred, uncondPred}
@@ -543,21 +695,17 @@ class Diffusion {
                         sessions, xtInputBuf, xtData, t, floatType,
                         xtInputTensor, tTensorBuf, tTensor,
                         condTensorConst, condMaskTensorConst,
-                        ptFrameCount, totalFrames, seqLen, targetLen);
+                        ptFrameCount, totalFrames, seqLen, targetLen, buffers);
                 }
 
                 // === Task 1: CFG batched call ===
-                // Fill cfgBatchBuf: row 0 = xtInputBuf (prompt+target), row 1 = target xt at pos 0
-                cfgBatchBuf.fill(0);
+                // Fill cfgBatchBuf: row 0 = xtInputBuf (prompt+target), row 1 = target xt at pos 0.
+                // 无需每步 fill(0) 清零整个 2×seqLen×128：cfgBatchBuf 在循环外分配时
+                // 即为零，padding 区（row0 的 totalFramesWithPrompt 之后、row1 的
+                // totalFrames 之后）从不被写入，始终保持零；每步只覆盖有效帧。
                 cfgBatchBuf.set(xtInputBuf, 0);  // row 0: full xt (prompt + target)
                 const row1Off = seqLen * MEL_DIM;
-                for (let f = 0; f < totalFrames; f++) {
-                    const srcOff = f * MEL_DIM;
-                    const dstOff = row1Off + f * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        cfgBatchBuf[dstOff + d] = xtData[srcOff + d];
-                    }
-                }
+                cfgBatchBuf.set(xtData.subarray(0, totalFrames * MEL_DIM), row1Off);
                 // Write t into pre-allocated t buffer
                 if (floatType === 'float16') {
                     batchFloat32ToFloat16(cfgBatchBuf, cfgXtTensor.data, cfgBatchBuf.length);
@@ -575,20 +723,23 @@ class Diffusion {
                     batchResults = await sessions.diffStep.run({
                         [io.xtInput]: cfgXtTensor,
                         [io.tInput]: cfgTTensor,
-                        cond: cfgCondTensor,
+                        [io.condInput]: cfgCondTensor,
                         [io.maskInput]: cfgMaskTensor,
                     });
                 } catch (err) {
                     // Model rejects batch>1 (e.g. static-shape variant with batch dim = 1).
                     // Fall back to separate cond/uncond calls for this and all future steps.
                     if (err.message && err.message.includes('invalid dimensions')) {
-                        console.warn('[Diffusion] Model rejected batch>1 (batch merge disabled), falling back to separate calls:', err.message.split('\n')[0]);
+                        if (!_fixedBatchCfgLoggedSessions.has(sessions.diffStep)) {
+                            _fixedBatchCfgLoggedSessions.add(sessions.diffStep);
+                            console.warn(`[Diffusion][CFG] mode=separate reason=batch-rejected error=${err.message.split('\n')[0]}`);
+                        }
                         batchMergeDisabled = true;
                         return await this._evalDiffStepSeparate(
                             sessions, xtInputBuf, xtData, t, floatType,
                             xtInputTensor, tTensorBuf, tTensor,
                             condTensorConst, condMaskTensorConst,
-                            ptFrameCount, totalFrames, seqLen, targetLen);
+                            ptFrameCount, totalFrames, seqLen, targetLen, buffers);
                     }
                     throw err;
                 }
@@ -600,17 +751,15 @@ class Diffusion {
                 // Split batchPred [diffBatch, seqLen, MEL_DIM] into cond + uncond target slices.
                 // Row 0 (cond): target at positions ptFrameCount..ptFrameCount+totalFrames-1
                 // Row 1 (uncond): target at positions 0..totalFrames-1 (no prompt offset)
-                const condPred = new Float32Array(targetLen);
-                const uncondPred = new Float32Array(targetLen);
-                for (let f = 0; f < totalFrames; f++) {
-                    const condSrc = (ptFrameCount + f) * MEL_DIM;
-                    const uncondSrc = (seqLen + f) * MEL_DIM;
-                    const dstBase = f * MEL_DIM;
-                    for (let d = 0; d < MEL_DIM; d++) {
-                        condPred[dstBase + d] = batchPred[condSrc + d];
-                        uncondPred[dstBase + d] = batchPred[uncondSrc + d];
-                    }
-                }
+                // 两段在输出中各自连续，整块 memcpy 即可，写入跨步复用缓冲区。
+                const condPred = buffers.condPredBuf;
+                const uncondPred = buffers.uncondPredBuf;
+                condPred.set(batchPred.subarray(
+                    ptFrameCount * MEL_DIM,
+                    (ptFrameCount + totalFrames) * MEL_DIM));
+                uncondPred.set(batchPred.subarray(
+                    row1Off,
+                    row1Off + totalFrames * MEL_DIM));
                 return { condPred, uncondPred };
             }
 
@@ -629,7 +778,7 @@ class Diffusion {
                 results = await sessions.diffStep.run({
                     [io.xtInput]: xtInputTensor,
                     [io.tInput]: tTensor,
-                    cond: condTensorConst,
+                    [io.condInput]: condTensorConst,
                     [io.maskInput]: condMaskTensorConst,
                 });
             } catch (err) {
@@ -639,15 +788,12 @@ class Diffusion {
             const pred = outputToFloat32(predRaw);
             disposeTensor(predRaw);
 
-            // Slice target segment (skip prompt prefix)
-            const condPred = new Float32Array(targetLen);
-            for (let f = 0; f < totalFrames; f++) {
-                const tgtOffset = (ptFrameCount + f) * MEL_DIM;
-                const dstBase = f * MEL_DIM;
-                for (let d = 0; d < MEL_DIM; d++) {
-                    condPred[dstBase + d] = pred[tgtOffset + d];
-                }
-            }
+            // Slice target segment (skip prompt prefix) — target frames are
+            // contiguous in the output; one memcpy into the reused buffer.
+            const condPred = buffers.condPredBuf;
+            condPred.set(pred.subarray(
+                ptFrameCount * MEL_DIM,
+                (ptFrameCount + totalFrames) * MEL_DIM));
             return { condPred, uncondPred: null };
         };
 
@@ -711,9 +857,18 @@ class Diffusion {
             const posStd = Math.sqrt(Math.max(0, posM2) / Math.max(1, n - 1));
             const cfgAdjStd = Math.sqrt(Math.max(0, cfgAdjM2) / Math.max(1, n - 1));
             const rescale = posStd / (cfgAdjStd + 1e-8);
+            // 精确恒等：v = cfgVal * (cfgRescale*rescale + 1 - cfgRescale)。
+            // cfgRescale===0（关闭 rescale）或 rescale===1（两分布标准差相同）
+            // 时 v≡cfgVal，直接整块拷贝，省掉第二遍 targetLen 次写入。
+            if (cfgRescale === 0 || rescale === 1) {
+                v.set(cfgPredBuf);
+                return v;
+            }
+            const blendA = cfgRescale * rescale;
+            const blendB = 1 - cfgRescale;
             for (let i = 0; i < targetLen; i++) {
                 const cfgVal = cfgPredBuf[i];
-                v[i] = cfgRescale * (cfgVal * rescale) + (1 - cfgRescale) * cfgVal;
+                v[i] = blendA * cfgVal + blendB * cfgVal;
             }
             return v;
         };
@@ -727,7 +882,7 @@ class Diffusion {
                 currentStep = step;
                 const { nfe } = await sampler.step({
                     evalDiffStep, combine, step, totalSteps,
-                    xtData: xt.data, buffers,
+                    xtData: xt.data, buffers, qdrift: qdriftCtx,
                 });
                 totalNFE += nfe;
                 // 累加 deltaBuf 到 xt.data
@@ -741,7 +896,7 @@ class Diffusion {
                 // GPU 排空：每 8 步用 setTimeout(20) 代替 setImmediate，给 DML 后端 20ms 时间
                 // 回收内部 GPU 资源池中的 transformer 注意力中间张量。
                 if (step % 8 === 7) {
-                    await new Promise(r => setTimeout(r, 20));
+                    await new Promise(r => setImmediate(r));
                 } else if (totalFrames > 256) {
                     // 长片段每步 yield：combine 的全数组遍历（256k+ 迭代）
                     // 会阻塞主线程，需要 setImmediate yield。
@@ -753,7 +908,9 @@ class Diffusion {
             // re-denoise those regions with shallow noise (t=0.3) + 5 STORK-2
             // steps, blending repaired frames with original via Hann crossfade.
             // When disabled (default), this is a no-op (zero overhead).
-            if (_readSDEditRepair()) {
+            // Q-Drift 启用时跳过：修复循环会重新注入噪声并重采样局部区域，
+            // 破坏校正所依赖的速度场分布假设。
+            if (_readSDEditRepair() && !qdriftCtx.active) {
                 await this._sdeditRepair({
                     sessions, xt, totalFrames, ptMelData, ptFrameCount,
                     combinedCond, cfgStrength, cfgRescale, isFP16, useStaticShapes,
@@ -784,6 +941,12 @@ class Diffusion {
                 if (xtNaN > 0 || xtInf > 0) {
                     console.error(`[DiffusionDiag] DIFFUSION OUTPUT HAS NaN/Inf! NaN=${xtNaN}, Inf=${xtInf - xtNaN}, total=${xtLen}, frames=${totalFrames}, mean=${xtMean.toFixed(6)}`);
 
+                    // diff_step 跑在 vendor EP（TRT-RTX）上时，同一批输入形状会稳定
+                    // 产出非法值（引擎 profile 不匹配/编译缺陷）。把该模型拉黑：
+                    // 之后重建会话会直接落到 DML/CPU，而不是再次得到同样的 NaN。
+                    this._blacklistDiffStepOnVendorEp(sessions,
+                        `diffusion produced NaN=${xtNaN} Inf=${xtInf} frames=${totalFrames}`);
+
                     // Dump ORT native debug logs from stderr capture
                     if (typeof globalThis._flushOrtDebugLogs === 'function') {
                         globalThis._flushOrtDebugLogs();
@@ -793,6 +956,35 @@ class Diffusion {
         } finally {
             // Task 6: dispose all pre-allocated tensors on exit (success or exception)
             _disposeAllTensors();
+            const _elapsed = performance.now() - _diffT0;
+            const _audioSec = totalFrames * 480 / 24000;
+            const _rtf = _audioSec / (_elapsed / 1000);
+            if (!suppressDoneLog || diagnosticMode) {
+                console.log(`[Diffusion] runDiffusionLoop done: frames=${totalFrames}, steps=${totalSteps}, sampler=${samplerName}, ${_elapsed.toFixed(0)}ms, ${_rtf.toFixed(2)}x RTF, ${(totalFrames / (_elapsed/1000)).toFixed(0)} frames/s, isFP16=${isFP16}`);
+            }
+        }
+    }
+
+    /**
+     * 当扩散输出非法值且 diff_step 运行在 Windows ML vendor EP（TensorRT-RTX）上时，
+     * 把该模型加入运行期黑名单。后续会话创建会跳过 vendor EP，改走 DML/CPU，
+     * 避免用户重复触发同一个坏引擎（表现为"每次合成都是 NaN 音频"）。
+     *
+     * 诊断性副作用必须永不影响主流程：任何异常都吞掉。
+     *
+     * @param {Object} sessions
+     * @param {string} reason
+     * @private
+     */
+    _blacklistDiffStepOnVendorEp(sessions, reason) {
+        try {
+            const ds = sessions && sessions.diffStep;
+            // WinMLSession 标记 provider='windowsml'；ORT 原生会话没有该字段
+            if (!ds || ds.provider !== 'windowsml' || !ds.modelPath) return false;
+            const { reportRuntimeFailure } = require('../winml/winmlProvider');
+            return reportRuntimeFailure(ds.modelPath, reason);
+        } catch (_) {
+            return false;
         }
     }
 
@@ -898,7 +1090,7 @@ class Diffusion {
             const sqrtT = Math.sqrt(REPAIR_T0);
             for (let i = regionOffset; i < regionOffset + regionBytes; i++) {
                 const x0 = Number.isFinite(xtData[i]) ? xtData[i] : 0;
-                const noise = Math.random() * 2 - 1;
+                const noise = (this._rng || Math.random)() * 2 - 1;
                 xtData[i] = sqrtOneMinusT * x0 + sqrtT * noise;
             }
 
@@ -1081,7 +1273,7 @@ class Diffusion {
      * @returns {Promise<{newCommitted: number}>} 本块完成后新确定的帧数（不含重叠区，末尾块为 chunkEnd）
      */
     async _runSingleDiffusionChunk(ctx, spec, onProgress, progressStart, progressRange) {
-        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, cfgScheduleOpts, dynamicThresholdOpts, abortSignal } = ctx;
+        const { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog } = ctx;
         const { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast } = spec;
         const xtOut = xt.data;
 
@@ -1111,7 +1303,7 @@ class Diffusion {
         await this.runDiffusionLoop(
             sessions, subXt, currentChunkFrames, ptMelData, ptFrameCount,
             chunkCond, totalSteps, cfgStrength, cfgRescale, isFP16,
-            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal
+            chunkOnProgress, progressStart, progressRange, useStaticShapes, ctx.samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog
         );
 
         // 4. WSOLA mel 域交叉淡入淡出写回（取代对称 Hann 加权混合）
@@ -1172,8 +1364,9 @@ class Diffusion {
         const { specs, overlap } = plan;
         const totalChunks = specs.length;
         console.log(`[DiffusionChunk] Chunked diffusion: totalFrames=${totalFrames}, ptFrameCount=${ptFrameCount}, chunkFrames=${chunkFrames}, overlap=${overlap}, steps=${totalSteps}, chunks=${totalChunks}, sampler=${samplerName}`);
+        const _chunkedT0 = performance.now();
 
-        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal };
+        const ctx = { sessions, xt, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, suppressDoneLog: true };
         const progressPerChunk = progressRange / totalChunks;
         let committedFrames = 0;
 
@@ -1222,7 +1415,9 @@ class Diffusion {
             );
         }
 
-        console.log(`[DiffusionChunk] Chunked diffusion complete: ${totalChunks} chunks, ${totalFrames} frames`);
+        const _elapsed = performance.now() - _chunkedT0;
+        const _rtf = (totalFrames * 480 / 24000) / (_elapsed / 1000);
+        console.log(`[DiffusionChunk] Chunked diffusion complete: ${totalChunks} chunks, ${totalFrames} frames, ${_elapsed.toFixed(0)}ms, ${_rtf.toFixed(2)}x RTF, ${(totalFrames / (_elapsed/1000)).toFixed(0)} frames/s`);
     }
 
     /**
@@ -1230,9 +1425,10 @@ class Diffusion {
      */
     randomNoise(frameLen, melDim) {
         const data = new Float32Array(frameLen * melDim);
+        const rand = this._rng || Math.random;
         for (let i = 0; i < data.length; i += 2) {
-            const u1 = Math.random();
-            const u2 = Math.random();
+            const u1 = rand();
+            const u2 = rand();
             const r = Math.sqrt(-2.0 * Math.log(u1 + 1e-10));
             const theta = 2.0 * Math.PI * u2;
             data[i] = r * Math.cos(theta);

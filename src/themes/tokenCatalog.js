@@ -84,23 +84,25 @@ export const TOKEN_CATALOG = {
     '--space-6':  { layer: 'global', group: 'space', type: 'size', default: '16px', label: '空间 6' },
     '--space-7':  { layer: 'global', group: 'space', type: 'size', default: '20px', label: '空间 7' },
     '--space-8':  { layer: 'global', group: 'space', type: 'size', default: '24px', label: '空间 8' },
+    '--space-9':  { layer: 'global', group: 'space', type: 'size', default: '32px', label: '空间 9' },
+    '--space-10': { layer: 'global', group: 'space', type: 'size', default: '40px', label: '空间 10' },
 
     // ==================== Radius scale ====================
-    '--radius-sm':   { layer: 'global', group: 'radius', type: 'size', default: '2px', label: '圆角 小' },
-    '--radius-md':   { layer: 'global', group: 'radius', type: 'size', default: '4px', label: '圆角 中' },
+    '--radius-sm':   { layer: 'global', group: 'radius', type: 'size', default: '4px', label: '圆角 小' },
+    '--radius-md':   { layer: 'global', group: 'radius', type: 'size', default: '6px', label: '圆角 中' },
     '--radius-lg':   { layer: 'global', group: 'radius', type: 'size', default: '8px', label: '圆角 大' },
-    '--radius-xl':   { layer: 'global', group: 'radius', type: 'size', default: '10px', label: '圆角 特大' },
-    '--radius-2xl':  { layer: 'global', group: 'radius', type: 'size', default: '12px', label: '圆角 超大' },
+    '--radius-xl':   { layer: 'global', group: 'radius', type: 'size', default: '12px', label: '圆角 特大' },
+    '--radius-2xl':  { layer: 'global', group: 'radius', type: 'size', default: '16px', label: '圆角 超大' },
     '--radius-full': { layer: 'global', group: 'radius', type: 'size', default: '9999px', label: '圆角 全圆' },
 
     // ==================== Font scale ====================
-    '--font-xs':   { layer: 'global', group: 'font', type: 'size', default: '10px', label: '字号 极小' },
-    '--font-sm':   { layer: 'global', group: 'font', type: 'size', default: '11px', label: '字号 小' },
-    '--font-base': { layer: 'global', group: 'font', type: 'size', default: '12px', label: '字号 基础' },
-    '--font-md':   { layer: 'global', group: 'font', type: 'size', default: '13px', label: '字号 中' },
-    '--font-lg':   { layer: 'global', group: 'font', type: 'size', default: '14px', label: '字号 大' },
+    '--font-xs':   { layer: 'global', group: 'font', type: 'size', default: '11px', label: '字号 极小' },
+    '--font-sm':   { layer: 'global', group: 'font', type: 'size', default: '12px', label: '字号 小' },
+    '--font-base': { layer: 'global', group: 'font', type: 'size', default: '13px', label: '字号 基础' },
+    '--font-md':   { layer: 'global', group: 'font', type: 'size', default: '14px', label: '字号 中' },
+    '--font-lg':   { layer: 'global', group: 'font', type: 'size', default: '15px', label: '字号 大' },
     '--font-xl':   { layer: 'global', group: 'font', type: 'size', default: '18px', label: '字号 特大' },
-    '--font-2xl':  { layer: 'global', group: 'font', type: 'size', default: '20px', label: '字号 超大' },
+    '--font-2xl':  { layer: 'global', group: 'font', type: 'size', default: '22px', label: '字号 超大' },
 
     // ==================== Motion scale ====================
     '--motion-fast':  { layer: 'global', group: 'motion', type: 'motion', default: '0.15s', label: '动效 快' },
@@ -129,6 +131,11 @@ export const TOKEN_CATALOG = {
     '--bg-elevated':    { layer: 'alias', group: 'bg', type: 'color', default: 'var(--color-ink-600)', label: '浮起背景' },
     '--bg-input':       { layer: 'alias', group: 'bg', type: 'color', default: 'var(--color-ink-800)', label: '输入框背景' },
     '--bg-overlay':     { layer: 'alias', group: 'bg', type: 'color', default: 'rgba(10, 10, 20, 0.7)', label: '遮罩背景' },
+    '--surface-1':      { layer: 'alias', group: 'bg', type: 'color', default: 'var(--color-ink-900)', label: '表面 1（应用底）' },
+    '--surface-2':      { layer: 'alias', group: 'bg', type: 'color', default: 'var(--color-ink-700)', label: '表面 2（面板）' },
+    '--surface-3':      { layer: 'alias', group: 'bg', type: 'color', default: 'var(--color-ink-600)', label: '表面 3（浮起/悬停）' },
+    '--border-hairline': { layer: 'alias', group: 'border', type: 'color', default: 'rgba(255, 255, 255, 0.06)', label: '发丝描边' },
+    '--color-scheme':    { layer: 'alias', group: 'bg', type: 'string', default: 'light dark', label: '原生控件配色（light/dark）' },
     '--bg-toolbar-start': { layer: 'alias', group: 'bg', type: 'color', default: 'var(--color-ink-200)', label: '工具栏渐变起' },
     '--bg-toolbar-end':   { layer: 'alias', group: 'bg', type: 'color', default: 'var(--color-ink-400)', label: '工具栏渐变末' },
     '--bg-header-start':  { layer: 'alias', group: 'bg', type: 'color', default: 'var(--color-ink-300)', label: '头部渐变起' },
@@ -222,6 +229,8 @@ export const TOKEN_CATALOG = {
     '--input-fg':         { layer: 'component', group: 'input', type: 'color', default: 'var(--fg-primary)', label: '输入框文字' },
     '--input-focus-ring': { layer: 'component', group: 'input', type: 'color', default: 'var(--focus-ring)', label: '输入框焦点环' },
     '--input-placeholder':{ layer: 'component', group: 'input', type: 'color', default: 'var(--color-gray-800)', label: '输入框占位文字' },
+
+    '--select-arrow': { layer: 'component', group: 'input', type: 'string', default: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888a8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E\")", label: '下拉箭头图标' },
 
     '--panel-bg':     { layer: 'component', group: 'panel', type: 'color', default: 'var(--bg-panel)', label: '面板背景' },
     '--panel-border': { layer: 'component', group: 'panel', type: 'color', default: 'var(--color-ink-300)', label: '面板边框' },

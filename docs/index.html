@@ -213,14 +213,37 @@ html[data-theme="dark"] .f-ic.n{background:var(--blue-soft);color:var(--yellow)}
 .f-mini-stats b{display:block;font-family:var(--num);font-size:19px;font-weight:700;color:var(--blue)}
 .f-mini-stats span{font-size:11px;color:var(--ink2)}
 .f-roll{height:118px;margin-bottom:14px;position:relative}
-.lyr{display:flex;gap:10px;margin-bottom:14px;flex-wrap:wrap}
-.lyr .w{text-align:center}
-.lyr .w b{display:block;font-family:var(--disp);font-size:22px;font-weight:400;padding:4px 12px;border:1.5px solid var(--line2);background:var(--panel2);animation:chipGlow 4s infinite}
-.lyr .w i{font-style:normal;font-family:var(--num);font-size:11px;font-weight:600;color:var(--ink2);letter-spacing:.05em}
-.lyr .w:nth-child(2) b{animation-delay:1s}
-.lyr .w:nth-child(3) b{animation-delay:2s}
-.lyr .w:nth-child(4) b{animation-delay:3s}
-@keyframes chipGlow{0%,18%,100%{background:var(--panel2);border-color:var(--line2);color:var(--ink)}8%{background:var(--yellow);border-color:var(--yellow2);color:var(--navy)}}
+/* 真实音素分配展示（随语言切换） */
+.alr{margin-bottom:14px;border:1.5px solid var(--line);background:var(--panel2);padding:12px}
+html[data-lang="en"] .alr-zh{display:none}
+html[data-lang="zh"] .alr-en{display:none}
+.alr-badge{display:inline-block;font-family:var(--num);font-weight:700;font-size:10px;letter-spacing:.14em;color:var(--blue);border:1.5px solid var(--line2);background:var(--panel);padding:2px 8px;margin-bottom:10px}
+.alr-cap{margin-top:10px;font-size:11px;line-height:1.5;color:var(--ink2)}
+/* 中文：汉字 → 自动声调拼音 → zh_ 音节音素 */
+.zh-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:7px}
+.zh-cell{text-align:center;background:var(--panel);border:1.5px solid var(--line2);padding:7px 3px 6px}
+.zh-cell b{display:block;font-family:var(--disp);font-size:20px;font-weight:400;line-height:1.2}
+.zh-cell i{font-style:normal;font-family:var(--num);font-size:11px;font-weight:600;color:var(--ink2)}
+.zh-cell code{display:block;margin-top:5px;font-family:var(--num);font-size:10px;font-weight:700;color:var(--blue);background:var(--blue-soft);padding:2px 0;letter-spacing:.02em}
+.zh-cell code em{font-style:normal;color:var(--yellow2)}
+html[data-theme="dark"] .zh-cell code em{color:var(--yellow)}
+/* 英文：单词 → ARPAbet 音素 + 真实时长条 */
+.en-flow{display:flex;align-items:center;gap:10px}
+.en-word{font-family:var(--disp);font-size:21px;font-weight:400;flex-shrink:0;line-height:1}
+.en-arrow{color:var(--ink2);font-size:15px;flex-shrink:0}
+.en-phones{flex:1;display:grid;gap:5px;min-width:0}
+.en-ph{display:grid;grid-template-columns:56px 1fr 42px;align-items:center;gap:8px}
+.en-ph .phn{font-family:var(--num);font-weight:700;font-size:13.5px;color:var(--ink);text-align:right;line-height:1.05;white-space:nowrap}
+.en-ph .phn small{font-size:8.5px;font-weight:600;color:var(--ink2);margin-right:1px}
+.en-bar{height:8px;background:var(--line)}
+.en-bar i{display:block;height:100%;background:var(--blue);transform-origin:left;transform:scaleX(0)}
+.en-ph.vow .en-bar i{background:var(--yellow2)}
+.en-ph .ms{font-family:var(--num);font-weight:700;font-size:11px;color:var(--ink2);text-align:right}
+.f-card.in .en-bar i{animation:barGrow .9s cubic-bezier(.22,.9,.3,1) forwards}
+.f-card.in .en-ph:nth-child(2) .en-bar i{animation-delay:.12s}
+.f-card.in .en-ph:nth-child(3) .en-bar i{animation-delay:.24s}
+.f-card.in .en-ph:nth-child(4) .en-bar i{animation-delay:.36s}
+@keyframes barGrow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
 .faders{display:grid;gap:11px;margin-bottom:14px}
 .fader{position:relative;height:6px;background:var(--line);border-radius:0}
 .fader::before{content:"";position:absolute;left:0;top:0;bottom:0;background:var(--blue);width:40%}
@@ -447,7 +470,7 @@ html[data-theme="dark"] footer{background:#070B14}
 <!-- 顶部公告滚动条 -->
 <div class="ticker" aria-label="公告栏">
   <div class="ticker-track" id="tickerTrack">
-    <span data-i18n-html="ticker.1">✦ SXSEditor <b>v2.0.0</b> 现已发布</span>
+    <span data-i18n-html="ticker.1">✦ SXSEditor <b>v2.0.2</b> 现已发布</span>
     <span data-i18n-html="ticker.2">✦ 日语实验性支持上线 · 汉字假名自动分组</span>
     <span data-i18n-html="ticker.3">✦ DirectML GPU 推理速度最高提升 <b>6 倍</b></span>
     <span data-i18n-html="ticker.4">✦ 三精度模型共存：<b>FP32 / FP16 / INT8</b> 自由切换</span>
@@ -499,15 +522,15 @@ html[data-theme="dark"] footer{background:#070B14}
   <div class="wrap hero-in">
     <div class="hero-copy">
       <div class="chips reveal">
-        <span class="chip y"><span class="dotp"></span>VERSION 2.0.0「SoulX-Singer」</span>
+        <span class="chip y"><span class="dotp"></span>VERSION 2.0.2「SoulX-Singer」</span>
         <span class="chip b">ONNX Runtime · DirectML</span>
       </div>
-      <h1 class="reveal" style="--d:.08s" data-i18n-html="hero.title">让每个音符，<br>都为你<em>歌唱</em>。</h1>
+      <h1 class="reveal" style="--d:.08s" data-i18n-html="hero.title">免费歌声合成，<br>打造属于你的<em>歌手</em>。</h1>
       <p class="hero-p reveal" style="--d:.16s" data-i18n-html="hero.desc"><b>SXSEditor</b> 是一款开源的 AI 歌声合成（SVS）桌面应用——基于 SoulX-Singer 神经模型 × ONNX Runtime 推理 × DirectML GPU 加速，从 MIDI 音符与歌词到完整歌声，一个软件走完全部流程。</p>
       <div class="hero-btns reveal" style="--d:.24s">
         <a class="btn" href="#download">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
-          <span data-i18n-html="hero.dlBtn">免费下载 v2.0.0</span>
+          <span data-i18n-html="hero.dlBtn">免费下载 v2.0.2</span>
         </a>
         <a class="btn ghost" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
@@ -530,7 +553,7 @@ html[data-theme="dark"] footer{background:#070B14}
       <span class="deco d-plus2"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"><path d="M12 4v16M4 12h16"/></svg></span>
 
       <div class="char-win">
-        <div class="char-head">SXSEditor // FRAGMENT EDITOR <span class="stars">v2.0.0</span></div>
+        <div class="char-head">SXSEditor // FRAGMENT EDITOR <span class="stars">v2.0.2</span></div>
         <div class="char-img">
           <img src="images/new_fragment.png" alt="SXSEditor 片段编辑器界面" width="460" height="515">
         </div>
@@ -602,15 +625,32 @@ html[data-theme="dark"] footer{background:#070B14}
       <article class="f-card f-c reveal" style="--d:.14s">
         <span class="f-idx">03</span>
         <div class="f-ic c"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 7h16M4 12h10M4 17h13"/><circle cx="19" cy="16.5" r="2.4"/></svg></div>
-        <h3 data-i18n="feat.f3.h">多语种咬字对齐</h3>
-        <p data-i18n="feat.f3.p">输入歌词自动切分音节，中文拼音 / 英文音素 / 日文假名智能标注，逐字对齐到毫秒级。</p>
-        <div class="lyr">
-          <span class="w"><b data-i18n="feat.f3.l1">星</b><i>xīng</i></span>
-          <span class="w"><b data-i18n="feat.f3.l2">辉</b><i>huī</i></span>
-          <span class="w"><b data-i18n="feat.f3.l3">穹</b><i>qióng</i></span>
-          <span class="w"><b data-i18n="feat.f3.l4">响</b><i>xiǎng</i></span>
+        <h3 data-i18n="feat.f3.h">歌词自动音素化</h3>
+        <p data-i18n="feat.f3.p">歌词直接变音素：中文汉字自动生成带声调的 zh_ 音节音素（xīng → zh_xing1）；英文单词经 CMUdict 拆为 ARPAbet 音素，并按 MFA 对齐时长统计逐帧分配，短音符元音优先。</p>
+        <div class="alr alr-zh">
+          <span class="alr-badge" data-i18n="feat.f3.zhbadge">中文 · 自动声调</span>
+          <div class="zh-grid">
+            <div class="zh-cell"><b>星</b><i>xīng</i><code>zh_xing<em>1</em></code></div>
+            <div class="zh-cell"><b>辉</b><i>huī</i><code>zh_hui<em>1</em></code></div>
+            <div class="zh-cell"><b>穹</b><i>qióng</i><code>zh_qiong<em>2</em></code></div>
+            <div class="zh-cell"><b>响</b><i>xiǎng</i><code>zh_xiang<em>3</em></code></div>
+          </div>
+          <div class="alr-cap" data-i18n="feat.f3.zhcap">pinyin-pro 自动标注声调 · 轻声归 5 · 支持手动改调（如「星3」）</div>
         </div>
-        <div class="f-tags"><span class="tagc" data-i18n="feat.f3.t1">自动注音</span><span class="tagc" data-i18n="feat.f3.t2">汉字假名分组</span></div>
+        <div class="alr alr-en">
+          <span class="alr-badge" data-i18n="feat.f3.enbadge">ENGLISH · G2P + DURATION</span>
+          <div class="en-flow">
+            <span class="en-word">singer</span><span class="en-arrow">→</span>
+            <div class="en-phones">
+              <div class="en-ph cons"><span class="phn"><small>en_</small>S</span><span class="en-bar"><i style="width:100%"></i></span><span class="ms">110ms</span></div>
+              <div class="en-ph vow"><span class="phn"><small>en_</small>IH1</span><span class="en-bar"><i style="width:64%"></i></span><span class="ms">70ms</span></div>
+              <div class="en-ph cons"><span class="phn"><small>en_</small>NG</span><span class="en-bar"><i style="width:82%"></i></span><span class="ms">90ms</span></div>
+              <div class="en-ph vow"><span class="phn"><small>en_</small>ER0</span><span class="en-bar"><i style="width:82%"></i></span><span class="ms">90ms</span></div>
+            </div>
+          </div>
+          <div class="alr-cap" data-i18n="feat.f3.encap">CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first</div>
+        </div>
+        <div class="f-tags"><span class="tagc" data-i18n="feat.f3.t1">中文自动声调</span><span class="tagc" data-i18n="feat.f3.t2">英文音素时长分配</span></div>
       </article>
 
       <article class="f-card f-d reveal" style="--d:.1s">
@@ -763,6 +803,7 @@ html[data-theme="dark"] footer{background:#070B14}
           <button class="nt" data-t="patch" data-i18n="news.tab.patch">更新</button>
         </div>
 <div class="n-list">
+          <a class="n-item" data-type="notice" href="user/performance-improvements.html"><span class="n-date"><b>09-05</b><i>2026</i></span><span class="n-tag t-notice" data-i18n="news.tag.notice">公告</span><span class="n-title" data-i18n="news.n9">性能与推理改进：WindowsML TensorRT-RTX · RTX 5060 Laptop FP16 推理约 4 倍加速</span><span class="n-arrow">→</span></a>
           <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>08-20</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n0">v2.0.0 发布：FCPE 音高检测 · 伴奏轨道 · 可切换扩散采样器 · 歌手市场</span><span class="n-arrow">→</span></a>
           <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>07-26</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n1">v1.0.8 发布：可拖拽播放头跳转 · diffStep 分块推理 · 日语发音优化</span><span class="n-arrow">→</span></a>
           <a class="n-item" data-type="patch" href="user/app-updates.html"><span class="n-date"><b>07-18</b><i>2026</i></span><span class="n-tag t-patch" data-i18n="news.tag.patch">更新</span><span class="n-title" data-i18n="news.n2">v1.0.6 发布：模型下载百分比溢出修复</span><span class="n-arrow">→</span></a>
@@ -780,7 +821,7 @@ html[data-theme="dark"] footer{background:#070B14}
           <div class="ev-sun"></div>
           <svg class="ev-wave" viewBox="0 0 400 56" preserveAspectRatio="none"><path d="M0 30 Q50 10 100 30 T200 30 T300 30 T400 30 V56 H0 Z" fill="#fff"/><path d="M0 44 Q50 26 100 44 T200 44 T300 44 T400 44 V56 H0 Z" fill="#fff" opacity=".7"/></svg>
           <span class="ev-tag">OPEN SOURCE 2026</span>
-          <h3 data-i18n-html="news.ev.title"> SXSEditor<br> v2.0.0 已发布</h3>
+          <h3 data-i18n-html="news.ev.title"> SXSEditor<br> v2.0.2 已发布</h3>
           <p class="ev-p" data-i18n="news.ev.desc">MIT 开源协议 · 个人创作永久免费 · 三语合成 · 多精度模型 · DirectML GPU 加速。立即下载体验。</p>
           <div class="cd" id="cd" aria-label="版本发布信息">
 <div><b class="num">2.0</b><span data-i18n="news.ev.maj">主版本</span></div>
@@ -813,7 +854,7 @@ html[data-theme="dark"] footer{background:#070B14}
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 5.5L10.5 4.4v7.1H3zM11.5 4.2L21 3v8.5h-9.5zM3 12.5h7.5v7.1L3 18.5zM11.5 12.5H21V21l-9.5-1.3z"/></svg>
           <span><b data-i18n="dl.win.os">Windows 版</b><i>STABLE RELEASE</i></span>
         </div>
-        <p class="dl-meta" data-i18n-html="dl.win.meta">最新版本 <b>v2.0.0</b> · 64 位安装包 · 模型按需下载</p>
+        <p class="dl-meta" data-i18n-html="dl.win.meta">最新版本 <b>v2.0.2</b> · 64 位安装包 · 模型按需下载</p>
         <p class="dl-req" data-i18n="dl.win.req">系统要求：Windows 10 / 11（64 位）· 8GB 内存 · 推荐 4GB+ VRAM 独立显卡</p>
         <a class="btn" href="https://github.com/Henley04/SXSEditor/releases/latest" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m0 0l-5-5m5 5l5-5M4 21h16"/></svg>
@@ -853,6 +894,18 @@ html[data-theme="dark"] footer{background:#070B14}
     <div class="changelog reveal">
       <h3 class="cl-h" data-i18n="dl.cl.title">更新日志</h3>
       <div class="acc open">
+        <button class="acc-h"><span class="v">v2.0.2</span> <span data-i18n="dl.cl.v202">WindowsML TensorRT-RTX · FP16 推理约 4 倍加速 · 后端选择器</span><span class="d">2026-09-05</span><span class="pm">+</span></button>
+        <div class="acc-b"><ul>
+          <li class="hot" data-i18n="dl.cl.v202.l1">WindowsML TensorRT-RTX 执行提供器——FP16 模型可通过 WinML 的 NvTensorRT EP 在 NVIDIA GPU 上运行，RTX 5060 Laptop 下 FP16 推理较 DML FP32 提升约 4 倍</li>
+          <li class="hot" data-i18n="dl.cl.v202.l2">原生推理后端选择器——以统一的后端选择（TensorRT-RTX / DML / WebNN / CPU）取代旧 WinML 复选框，自动回退</li>
+          <li class="hot" data-i18n="dl.cl.v202.l3">第三方 EP 全零输出保护——通过 D2H ArrayBuffer 复制回退（d2h-copy-v3 原生桥接）与应用级全零检测兜底</li>
+          <li class="hot" data-i18n="dl.cl.v202.l4">移除 GPU 排空延迟——仅在显存不足后施加等待，减少扩散循环空闲开销</li>
+          <li data-i18n="dl.cl.v202.l5">流式 chunk 续播缓存——回拉重放复用已缓存 chunk，避免重复推理</li>
+          <li data-i18n="dl.cl.v202.l6">保留 MIDI 时间线间隔——流式合成不再折叠轨道的间隔区域</li>
+          <li data-i18n="dl.cl.v202.l7">人声区域切分——非人声与长休止从模型输入中切分，消除休止噪声、避免长休止后人声重叠</li>
+        </ul></div>
+      </div>
+      <div class="acc">
         <button class="acc-h"><span class="v">v2.0.0</span> <span data-i18n="dl.cl.v200">FCPE 音高检测 · 伴奏轨道 · 扩散采样器 · 歌手市场</span><span class="d">2026-08-20</span><span class="pm">+</span></button>
         <div class="acc-b"><ul>
           <li class="hot" data-i18n="dl.cl.v200.l1">FCPE 音高检测器——新增基于 ONNX 的 FCPE 检测器作为默认 MIDI 提取工具，替代 Basic Pitch 成为推荐选项</li>
@@ -970,15 +1023,15 @@ var I18N={
   "zh":{
     "meta.title":"SXSEditor — AI 歌声合成工作台",
     "meta.desc":"SXSEditor：开源 AI 歌声合成（SVS）桌面应用。基于 SoulX-Singer 神经模型与 ONNX Runtime，支持 DirectML GPU、WebNN NPU 与 CPU 推理。从 MIDI 与歌词到完整歌声，一站完成。",
-    "ticker.1":"✦ SXSEditor <b>v2.0.0</b> 现已发布",
+    "ticker.1":"✦ SXSEditor <b>v2.0.2</b> 现已发布",
     "ticker.2":"✦ 日语实验性支持上线 · 汉字假名自动分组",
     "ticker.3":"✦ DirectML GPU 推理速度最高提升 <b>6 倍</b>",
     "ticker.4":"✦ 三精度模型共存：<b>FP32 / FP16 / INT8</b> 自由切换",
     "ticker.5":"✦ 新增 SiFiGAN 声码器 · mel SNR 提升至 <b>83.54 dB</b>",
     "nav.home":"首页","nav.features":"核心功能","nav.workflow":"工作流","nav.news":"版本情报","nav.download":"下载","nav.docs":"文档中心","nav.downloadBtn":"立即下载",
-    "hero.title":"让每个音符，<br>都为你<em>歌唱</em>。",
+    "hero.title":"免费歌声合成，<br>打造属于你的<em>歌手</em>。",
     "hero.desc":"<b>SXSEditor</b> 是一款开源的 AI 歌声合成（SVS）桌面应用——基于 SoulX-Singer 神经模型 × ONNX Runtime 推理 × DirectML GPU 加速，从 MIDI 音符与歌词到完整歌声，一个软件走完全部流程。",
-    "hero.dlBtn":"免费下载 v2.0.0",
+    "hero.dlBtn":"免费下载 v2.0.2",
     "hero.srcBtn":"查看源码",
     "hero.note":"支持 <i>Windows · macOS · Linux</i> ｜ MIT 开源协议 ｜ 三语合成：中 · 英 · 日",
     "stat.lang":"合成语言","stat.prec":"模型精度","stat.gpu":"GPU 加速比",
@@ -991,24 +1044,26 @@ var I18N={
     "feat.f1.s1":"GPU 加速比","feat.f1.s2":"mel SNR","feat.f1.s3":"量化精度",
     "feat.f2.h":"钢琴卷帘编辑器","feat.f2.p":"音符、歌词、音高曲线、音量/声像包络，以及音素级边界编辑。所画即所听，参数修改即时反馈。",
     "feat.f2.t1":"音高笔刷","feat.f2.t2":"MIDI 导入","feat.f2.t3":"音素边界",
-    "feat.f3.h":"多语种咬字对齐","feat.f3.p":"输入歌词自动切分音节，中文拼音 / 英文音素 / 日文假名智能标注，逐字对齐到毫秒级。",
-    "feat.f3.l1":"星","feat.f3.l2":"辉","feat.f3.l3":"穹","feat.f3.l4":"响",
-    "feat.f3.t1":"自动注音","feat.f3.t2":"汉字假名分组",
+    "feat.f3.h":"歌词自动音素化","feat.f3.p":"歌词直接变音素：中文汉字自动生成带声调的 zh_ 音节音素（xīng → zh_xing1）；英文单词经 CMUdict 拆为 ARPAbet 音素，并按 MFA 对齐时长统计逐帧分配，短音符元音优先。",
+    "feat.f3.zhbadge":"中文 · 自动声调","feat.f3.zhcap":"pinyin-pro 自动标注声调 · 轻声归 5 · 支持手动改调（如「星3」）",
+    "feat.f3.enbadge":"英文 · 词转音素 + 时长","feat.f3.encap":"CMUdict ARPAbet 音素 · MFA 对齐时长统计（中位数）· 20ms/帧 · 短音符元音优先",
+    "feat.f3.t1":"中文自动声调","feat.f3.t2":"英文音素时长分配",
     "feat.f4.h":"多精度模型共存","feat.f4.p":"FP32（推荐）/ FP16 / INT8 / INT8-NPU 多精度模型共存，切换无需重新下载。W16A32 量化在降低显存占用的同时接近 FP32 质量。",
     "feat.f5.h":"多后端推理","feat.f5.p":"单一二进制支持 DirectML GPU、WebNN NPU/GPU 与 CPU 回退，自动选择最优后端。",
     "feat.f6.h":"音频转 MIDI","feat.f6.p":"FCPE 音高检测器（默认）或 basic_pitch 将现有音频转换为 MIDI 音符，可选同时提取 F0 音高曲线。","feat.f6.t":"F0 / MIDI 自动提取",
     "news.title":"版本情报","news.sub":"应用公告 · 模型更新 · 缺陷修复",
     "news.tab.all":"全部","news.tab.notice":"公告","news.tab.event":"活动","news.tab.patch":"更新",
     "news.tag.patch":"更新","news.tag.notice":"公告","news.tag.event":"活动",
-    "news.n0":"v2.0.0 发布：FCPE 音高检测 · 伴奏轨道 · 可切换扩散采样器 · 歌手市场","news.n1":"v1.0.8 发布：可拖拽播放头跳转 · diffStep 分块推理 · 日语发音优化","news.n2":"v1.0.6 发布：模型下载百分比溢出修复","news.n3":"v1.0.5 发布：日语实验性支持 · 汉字假名分组","news.n4":"模型 v1：DirectML GPU 重优化，推理速度 6 倍提升","news.n5":"SiFiGAN 声码器选项上线 · mel SNR 提升至 83.54 dB","news.n6":"应用内更新检查器上线：应用与模型双通道检测","news.n7":"SXSEditor v1.0.0 正式开源 · MIT 协议发布","news.n8":"ONNX opset 升级到 20 · W16A32 量化精度方案落地",
-    "news.ev.title":" SXSEditor<br> v2.0.0 已发布","news.ev.desc":"MIT 开源协议 · 个人创作永久免费 · 三语合成 · 多精度模型 · DirectML GPU 加速。立即下载体验。",
+    "news.n0":"v2.0.0 发布：FCPE 音高检测 · 伴奏轨道 · 可切换扩散采样器 · 歌手市场","news.n1":"v1.0.8 发布：可拖拽播放头跳转 · diffStep 分块推理 · 日语发音优化","news.n2":"v1.0.6 发布：模型下载百分比溢出修复","news.n3":"v1.0.5 发布：日语实验性支持 · 汉字假名分组","news.n4":"模型 v1：DirectML GPU 重优化，推理速度 6 倍提升","news.n5":"SiFiGAN 声码器选项上线 · mel SNR 提升至 83.54 dB","news.n6":"应用内更新检查器上线：应用与模型双通道检测","news.n7":"SXSEditor v1.0.0 正式开源 · MIT 协议发布","news.n8":"ONNX opset 升级到 20 · W16A32 量化精度方案落地","news.n9":"性能与推理改进：WindowsML TensorRT-RTX · RTX 5060 Laptop FP16 推理约 4 倍加速",
+    "news.ev.title":" SXSEditor<br> v2.0.2 已发布","news.ev.desc":"MIT 开源协议 · 个人创作永久免费 · 三语合成 · 多精度模型 · DirectML GPU 加速。立即下载体验。",
     "news.ev.maj":"主版本","news.ev.min":"修订号","news.ev.lang":"语言","news.ev.lic":"协议","news.ev.btn":"立即下载体验","news.ev.mirror":"发行版已在 <b>GitHub</b> 发布 · 代码镜像同步至 <b>GitCode</b>",
     "dl.title":"获取 SXSEditor","dl.sub":"MIT 开源 · 个人创作永久免费 · 模型首次启动自动下载",
-    "dl.win.badge":"推荐平台","dl.win.os":"Windows 版","dl.win.meta":"最新版本 <b>v2.0.0</b> · 64 位安装包 · 模型按需下载","dl.win.req":"系统要求：Windows 10 / 11（64 位）· 8GB 内存 · 推荐 4GB+ VRAM 独立显卡","dl.win.btn":"前往 GitHub 最新发行版",
+    "dl.win.badge":"推荐平台","dl.win.os":"Windows 版","dl.win.meta":"最新版本 <b>v2.0.2</b> · 64 位安装包 · 模型按需下载","dl.win.req":"系统要求：Windows 10 / 11（64 位）· 8GB 内存 · 推荐 4GB+ VRAM 独立显卡","dl.win.btn":"前往 GitHub 最新发行版",
     "dl.mac.os":"GitCode 镜像","dl.mac.meta":"代码镜像 · <b>gitcode.com/qq_50331623/SXSEditor</b>","dl.mac.req":"GitCode 现仅同步源代码镜像，不再托管发行版安装包。安装包请通过 GitHub 最新发行版获取。","dl.mac.btn":"查看代码镜像",
     "dl.lnx.os":"源码构建","dl.lnx.meta":"仓库：<b>github.com/Henley04/SXSEditor</b>","dl.lnx.req":"macOS / Linux 用户请克隆仓库从源码构建。需 Node.js 与 Electron Forge。","dl.lnx.btn":"查看构建指南",
     "dl.foot.note":"历史版本与发布说明详见 GitHub Releases","dl.foot.link":"查看历史版本 →",
     "dl.cl.title":"更新日志",
+    "dl.cl.v202":"WindowsML TensorRT-RTX · FP16 推理约 4 倍加速 · 后端选择器","dl.cl.v202.l1":"WindowsML TensorRT-RTX 执行提供器——FP16 模型可通过 WinML 的 NvTensorRT EP 在 NVIDIA GPU 上运行，RTX 5060 Laptop 下 FP16 推理较 DML FP32 提升约 4 倍","dl.cl.v202.l2":"原生推理后端选择器——以统一的后端选择（TensorRT-RTX / DML / WebNN / CPU）取代旧 WinML 复选框，自动回退","dl.cl.v202.l3":"第三方 EP 全零输出保护——通过 D2H ArrayBuffer 复制回退（d2h-copy-v3 原生桥接）与应用级全零检测兜底","dl.cl.v202.l4":"移除 GPU 排空延迟——仅在显存不足后施加等待，减少扩散循环空闲开销","dl.cl.v202.l5":"流式 chunk 续播缓存——回拉重放复用已缓存 chunk，避免重复推理","dl.cl.v202.l6":"保留 MIDI 时间线间隔——流式合成不再折叠轨道的间隔区域","dl.cl.v202.l7":"人声区域切分——非人声与长休止从模型输入中切分，消除休止噪声、避免长休止后人声重叠",
     "dl.cl.v200":"FCPE 音高检测 · 伴奏轨道 · 扩散采样器 · 歌手市场","dl.cl.v200.l1":"FCPE 音高检测器——新增基于 ONNX 的 FCPE 检测器作为默认 MIDI 提取工具，替代 Basic Pitch 成为推荐选项","dl.cl.v200.l2":"伴奏轨道——可导入 WAV/MP3/FLAC 等音频作为伴奏轨道，支持多声道播放、逐轨道音量控制与时间线拖拽","dl.cl.v200.l3":"可切换扩散采样器——Euler / Heun / 外推 Euler / STORK-2（ICLR 2026）四种求解器，预览与导出可分别配置","dl.cl.v200.l4":"动态阈值——逐帧百分位裁剪（arXiv:2507.08965），集成到 DML 与 WebNN 双路径","dl.cl.v200.l5":"歌手市场——浏览并下载社区创建的歌手，含独立使用条款页面","dl.cl.v200.l6":"音符右键菜单：颤音与渐入渐出——逐音符微调颤音参数与音量渐变，含预设与视觉指示","dl.cl.v200.l7":"48kHz 默认播放与导出采样率选择——默认采样率从 24kHz 改为 48kHz，导出可选 24/44.1/48/96kHz","dl.cl.v200.l8":"段落级合成缓存——迭代编辑长曲目时跳过未变更段落的重新推理","dl.cl.v200.l9":"协作式合成取消——基于 AbortController 替代 worker.terminate()，修复 D3D 设备挂起崩溃","dl.cl.v200.l10":"EBU R128 响度归一化与 WSOLA 交叉淡变——统一响度并平滑 chunk 边界过渡","dl.cl.v200.l11":"打包体积减少约 527 MB（32%）——ort-web 去重、source map 裁剪、语言包裁剪","dl.cl.v200.l12":"DML CFG 批量合并——条件与非条件预测合并为单次 session.run，推理往返减半","dl.cl.v200.l13":"LRC 歌词导出 · QDIT int8 diff_step 模型支持 · 磁性边界吸附","dl.cl.v200.l14":"安全加固——模型文件路径校验、下载 URL 白名单、设置信任边界、前缀混淆防护","dl.cl.v200.l15":"修复：MIDI 歌词解码乱码 · cfg=0 未跳过无条件预测 · WebNN 张量泄漏 · 长分片卡顿等",
 "dl.cl.v108":"流式合成与播放头跳转","dl.cl.v108.l1":"可拖拽播放头跳转——主页面、音频预处理页面与分片编辑器的播放头现可拖拽到任意位置开始播放","dl.cl.v108.l2":"diffStep 分块推理加速预览——将扩散循环切分为多个 chunk，预览时按 chunk 流式推送音频，大幅缩短长分片的首音到达时间","dl.cl.v108.l3":"Play All 多分片时间顺序流式播放——多个分片作为一条连续时间线合成与播放，而非顺序逐个处理","dl.cl.v108.l4":"通过 onChunkMel 按 chunk 流式推送音频——实现真正的流式合成，无需等待整个扩散循环完成","dl.cl.v108.l5":"日语发音全面优化——默认日语发声方式改为「混合音素」，混合模式还新增粤语 yue_ 音素覆盖","dl.cl.v108.l6":"汉字字典扩展至全部 2136 个常用汉字——大幅降低日语歌词中出现未解析汉字的概率","dl.cl.v108.l7":"MIDI 导入 BPM / 拍号同步提示——导入 MIDI 时会询问是否从文件同步项目的 BPM 与拍号","dl.cl.v108.l8":"ORT session 选项开放为设置——进阶用户可调校执行提供器与线程数","dl.cl.v108.l9":"设置页模型状态总览——一目了然显示已安装精度与版本","dl.cl.v108.l10":"基础模型精度与扩散模型分离——单个基础精度可被多个扩散模型精度复用","dl.cl.v108.l11":"官网首页重建——基于新模板重建，支持中英双语并提供中文洛天依演示音频","dl.cl.v108.l12":"启动优化 v2——重型模块推迟到 splash 窗口绘制完成后再加载，禁用未使用的 Chromium 特性以加速冷启动","dl.cl.v108.l13":"修复歌声比 MIDI 音符更早出现——所有播放 / 导出路径现均与 MIDI 音符位置对齐","dl.cl.v108.l14":"修复分段流式播放不完整——新增「等待推理」UI 在缓冲前沿暂停播放头直到下一个 chunk 到达","dl.cl.v108.l15":"修复流式分块推理的多个问题——流式预览在分片边界处也能可靠工作","dl.cl.v108.l16":"修复播放头拖拽到末尾后跳回起点、流式 chunk 到达时播放头不动等问题","dl.cl.v108.l17":"修复 @tonejs/midi 丢弃轨道级歌词——此前 MIDI 导入时丢失的轨道级歌词现已恢复","dl.cl.v108.l18":"修复 FP16 / FP32 输入类型不匹配——推理管道在检测到不匹配时会自动用修正后的 dummy inputs 重试","dl.cl.v108.l19":"清除 git 历史中的 ModelScope 凭据——新增防护以防止未来再次泄漏",
     "dl.cl.v106":"稳定性更新","dl.cl.v106.l1":"修复模型下载百分比溢出——进度百分比现在限制在 [0, 100] 范围内","dl.cl.v106.l2":"修复远程文件大小检测不准确——改用 Range 请求通过 Content-Range 头返回正确文件大小","dl.cl.v106.l3":"修复 formatBytes 浮点精度误差导致的文件大小显示异常","dl.cl.v106.l4":"修复 SiFiGAN 下载进度每个文件重置为 0——进度现在在下载批次的所有文件中累计",
@@ -1024,15 +1079,15 @@ var I18N={
   "en":{
     "meta.title":"SXSEditor — AI Singing Synthesis Workbench",
     "meta.desc":"SXSEditor: open-source AI Singing Voice Synthesis (SVS) desktop app. Powered by the SoulX-Singer neural model and ONNX Runtime, supporting DirectML GPU, WebNN NPU and CPU inference. From MIDI and lyrics to full vocals — all in one place.",
-    "ticker.1":"✦ SXSEditor <b>v2.0.0</b> is now available",
+    "ticker.1":"✦ SXSEditor <b>v2.0.2</b> is now available",
     "ticker.2":"✦ Experimental Japanese support · auto kanji-kana grouping",
     "ticker.3":"✦ DirectML GPU inference up to <b>6x faster</b>",
     "ticker.4":"✦ Three precision tiers in one app: <b>FP32 / FP16 / INT8</b>",
     "ticker.5":"✦ SiFiGAN vocoder added · mel SNR up to <b>83.54 dB</b>",
     "nav.home":"Home","nav.features":"Features","nav.workflow":"Workflow","nav.news":"News","nav.download":"Download","nav.docs":"Docs","nav.downloadBtn":"Download Now",
-    "hero.title":"Let every note<br><em>sing</em> for you.",
+    "hero.title":"Free singing synthesis,<br>make your own <em>singer</em>.",
     "hero.desc":"<b>SXSEditor</b> is an open-source AI Singing Voice Synthesis (SVS) desktop app — built on the SoulX-Singer neural model × ONNX Runtime inference × DirectML GPU acceleration. From MIDI notes and lyrics to a complete vocal performance, the entire pipeline lives in one app.",
-    "hero.dlBtn":"Download Free v2.0.0",
+    "hero.dlBtn":"Download Free v2.0.2",
     "hero.srcBtn":"View Source",
     "hero.note":"Runs on <i>Windows · macOS · Linux</i> ｜ MIT licensed ｜ Trilingual synthesis: CN · EN · JP",
     "stat.lang":"Synth Languages","stat.prec":"Model Precisions","stat.gpu":"GPU Speedup",
@@ -1045,25 +1100,27 @@ var I18N={
     "feat.f1.s1":"GPU Speedup","feat.f1.s2":"mel SNR","feat.f1.s3":"Quantization",
     "feat.f2.h":"Piano-roll Editor","feat.f2.p":"Notes, lyrics, pitch curves, volume/pan envelopes, plus phoneme-level boundary editing. What you draw is what you hear — parameter changes are audible instantly.",
     "feat.f2.t1":"Pitch Brush","feat.f2.t2":"MIDI Import","feat.f2.t3":"Phoneme Bounds",
-    "feat.f3.h":"Multilingual Lyric Alignment","feat.f3.p":"Lyrics are auto-segmented into syllables; CN pinyin / EN phonemes / JP kana are labeled intelligently and aligned word-by-word to millisecond precision.",
-    "feat.f3.l1":"星","feat.f3.l2":"辉","feat.f3.l3":"穹","feat.f3.l4":"响",
-    "feat.f3.t1":"Auto Phonemize","feat.f3.t2":"Kanji-Kana Group",
+    "feat.f3.h":"Automatic Lyric Phonemization","feat.f3.p":"Lyrics become phonemes directly: Han characters auto-generate toned zh_ syllable tokens (xīng → zh_xing1); English words split into ARPAbet phonemes via CMUdict, with per-frame durations from MFA-aligned stats — vowel-first on short notes.",
+    "feat.f3.zhbadge":"CHINESE · AUTO TONE","feat.f3.zhcap":"pinyin-pro auto tone marks · neutral tone → 5 · manual override supported (e.g. xing3)",
+    "feat.f3.enbadge":"ENGLISH · G2P + DURATION","feat.f3.encap":"CMUdict ARPAbet · MFA-aligned duration stats (median) · 20ms/frame · vowel-first",
+    "feat.f3.t1":"Auto CN tones","feat.f3.t2":"EN phoneme durations",
     "feat.f4.h":"Multi-Precision Models","feat.f4.p":"FP32 (recommended) / FP16 / INT8 / INT8-NPU coexist; switch without re-downloading. W16A32 quantization cuts VRAM usage while staying close to FP32 quality.",
     "feat.f5.h":"Multi-Backend Inference","feat.f5.p":"A single binary supports DirectML GPU, WebNN NPU/GPU, and CPU fallback — auto-picks the best backend.",
     "feat.f6.h":"Audio to MIDI","feat.f6.p":"FCPE pitch detector (default) or basic_pitch converts existing audio into MIDI notes, with optional F0 pitch curve extraction.","feat.f6.t":"F0 / MIDI Auto Extract",
     "news.title":"Release Notes","news.sub":"Announcements · Model updates · Bug fixes",
     "news.tab.all":"All","news.tab.notice":"Notice","news.tab.event":"Event","news.tab.patch":"Patch",
     "news.tag.patch":"Patch","news.tag.notice":"Notice","news.tag.event":"Event",
-    "news.n0":"v2.0.0 released: FCPE pitch detector · accompaniment tracks · switchable diffusion samplers · Singer Market","news.n1":"v1.0.8 released: draggable playhead · diffStep chunked inference · Japanese pronunciation optimization","news.n2":"v1.0.6 released: model download percentage overflow fix","news.n3":"v1.0.5 released: experimental Japanese · kanji-kana grouping","news.n4":"Model v1: DirectML GPU re-optimized, 6x inference speedup","news.n5":"SiFiGAN vocoder option available · mel SNR up to 83.54 dB","news.n6":"In-app update checker launched: app + model dual-channel detection","news.n7":"SXSEditor v1.0.0 open-sourced · MIT license released","news.n8":"ONNX opset upgraded to 20 · W16A32 quantization lands",
-    "news.ev.title":" SXSEditor<br> v2.0.0 Released",
+    "news.n0":"v2.0.0 released: FCPE pitch detector · accompaniment tracks · switchable diffusion samplers · Singer Market","news.n1":"v1.0.8 released: draggable playhead · diffStep chunked inference · Japanese pronunciation optimization","news.n2":"v1.0.6 released: model download percentage overflow fix","news.n3":"v1.0.5 released: experimental Japanese · kanji-kana grouping","news.n4":"Model v1: DirectML GPU re-optimized, 6x inference speedup","news.n5":"SiFiGAN vocoder option available · mel SNR up to 83.54 dB","news.n6":"In-app update checker launched: app + model dual-channel detection","news.n7":"SXSEditor v1.0.0 open-sourced · MIT license released","news.n8":"ONNX opset upgraded to 20 · W16A32 quantization lands","news.n9":"Performance & inference improvements: WindowsML TensorRT-RTX · ~4x FP16 speedup on RTX 5060 Laptop",
+    "news.ev.title":" SXSEditor<br> v2.0.2 Released",
     "news.ev.desc":"MIT licensed · free for personal creative use forever · trilingual synthesis · multi-precision models · DirectML GPU acceleration. Download and try it now.",
     "news.ev.maj":"Major","news.ev.min":"Minor","news.ev.lang":"Langs","news.ev.lic":"License","news.ev.btn":"Download Now","news.ev.mirror":"Releases published on <b>GitHub</b> · code mirror synced to <b>GitCode</b>",
     "dl.title":"Get SXSEditor","dl.sub":"MIT open source · free for personal creative use forever · models auto-download on first launch",
-    "dl.win.badge":"Recommended","dl.win.os":"Windows","dl.win.meta":"Latest <b>v2.0.0</b> · 64-bit installer · models on demand","dl.win.req":"Requirements: Windows 10 / 11 (64-bit) · 8 GB RAM · 4 GB+ VRAM GPU recommended","dl.win.btn":"Go to GitHub Latest Release",
+    "dl.win.badge":"Recommended","dl.win.os":"Windows","dl.win.meta":"Latest <b>v2.0.2</b> · 64-bit installer · models on demand","dl.win.req":"Requirements: Windows 10 / 11 (64-bit) · 8 GB RAM · 4 GB+ VRAM GPU recommended","dl.win.btn":"Go to GitHub Latest Release",
     "dl.mac.os":"GitCode Mirror","dl.mac.meta":"Code mirror · <b>gitcode.com/qq_50331623/SXSEditor</b>","dl.mac.req":"GitCode now mirrors source code only and no longer hosts release installers. Please get the installer from the GitHub latest release.","dl.mac.btn":"View Code Mirror",
     "dl.lnx.os":"Build from Source","dl.lnx.meta":"Repo: <b>github.com/Henley04/SXSEditor</b>","dl.lnx.req":"macOS / Linux users please clone the repo and build from source. Requires Node.js and Electron Forge.","dl.lnx.btn":"Build Guide",
     "dl.foot.note":"See GitHub Releases for older versions and release notes","dl.foot.link":"View older releases →",
     "dl.cl.title":"Changelog",
+    "dl.cl.v202":"WindowsML TensorRT-RTX · ~4x FP16 speedup · backend selector","dl.cl.v202.l1":"WindowsML TensorRT-RTX EP — FP16 models can now run on NVIDIA GPUs via the WinML NvTensor RT EP; ~4x FP16 speedup over DML FP32 on RTX 5060 Laptop","dl.cl.v202.l2":"Native inference backend selector — a unified backend pick (TensorRT-RTX / DML / WebNN / CPU) replaces the old WinML checkbox with automatic fallback","dl.cl.v202.l3":"Vendor-EP zero-output protection — D2H ArrayBuffer copy fallback (d2h-copy-v3 native bridge) plus app-level all-zero detection","dl.cl.v202.l4":"Removed GPU drain delays — the drain wait is only applied after an out-of-memory event, cutting diffusion-loop idle time","dl.cl.v202.l5":"Streaming chunk-resume cache — replaying a scrubbed section reuses cached chunks instead of re-running inference","dl.cl.v202.l6":"MIDI timeline gap preservation — streaming synthesis no longer collapses gap regions","dl.cl.v202.l7":"Vocal region splitting — non-vocal regions and long rests are split out of model input, eliminating rest hiss and preventing voices from piling up after long rests",
     "dl.cl.v200":"FCPE Pitch Detector · Accompaniment Tracks · Diffusion Samplers · Singer Market","dl.cl.v200.l1":"FCPE pitch detector — new ONNX-based FCPE detector as the default MIDI extraction tool, replacing Basic Pitch as the recommended option","dl.cl.v200.l2":"Accompaniment tracks — import WAV/MP3/FLAC audio as accompaniment tracks with multi-channel playback, per-track volume, and timeline drag-to-move","dl.cl.v200.l3":"Switchable diffusion samplers — Euler / Heun / Extrapolated Euler / STORK-2 (ICLR 2026), configurable per-preview and per-export","dl.cl.v200.l4":"Dynamic Thresholding — per-frame percentile clipping (arXiv:2507.08965), integrated into both DML and WebNN paths","dl.cl.v200.l5":"Singer Market — browse and download community-created singers with dedicated terms-of-use page","dl.cl.v200.l6":"Note context menu: vibrato & fade in/out — per-note vibrato parameters and volume fades with presets and visual indicators","dl.cl.v200.l7":"48 kHz default playback & export sample rate selection — default changed from 24 kHz to 48 kHz; export selectable at 24/44.1/48/96 kHz","dl.cl.v200.l8":"Segment-level synth cache — skips re-inference for unchanged segments during iterative editing of long pieces","dl.cl.v200.l9":"Cooperative synthesis cancellation — AbortController replaces worker.terminate(), fixing D3D device-hung crash","dl.cl.v200.l10":"EBU R128 loudness normalization & WSOLA crossfade — consistent loudness and smoother chunk-boundary transitions","dl.cl.v200.l11":"Packaged app size reduced by ~527 MB (32%) — ort-web dedup, source map pruning, locale pak pruning","dl.cl.v200.l12":"DML CFG batch merge — cond/uncond predictions merged into a single session.run, halving inference round-trips","dl.cl.v200.l13":"LRC lyrics export · QDIT int8 diff_step model support · magnetic boundary snap","dl.cl.v200.l14":"Security hardening — model file path validation, download URL whitelist, settings trust boundary, prefix confusion prevention","dl.cl.v200.l15":"Fixes: MIDI lyric decoding mojibake · cfg=0 not skipping unconditional prediction · WebNN tensor leak · long-fragment freeze and more",
 "dl.cl.v108":"Streaming Synthesis & Playhead Seek","dl.cl.v108.l1":"Draggable playhead with seek — the playhead on the main page, audio preprocess page, and fragment editor can now be dragged to any position to start playback from there","dl.cl.v108.l2":"diffStep chunked inference for faster preview — splits the diffusion loop into chunks so audio can be streamed per chunk during preview, dramatically reducing time-to-first-audio for long fragments","dl.cl.v108.l3":"Time-ordered multi-fragment streaming for Play All — Play All now interleaves inference chunks across all fragments in global time order, so multiple fragments are synthesized and played back as one continuous timeline","dl.cl.v108.l4":"Per-chunk audio streaming via onChunkMel — the preview path now streams audio per diffusion chunk through a new onChunkMel callback, enabling true streaming synthesis","dl.cl.v108.l5":"Comprehensive Japanese pronunciation optimization — the default Japanese vocalization mode is now Hybrid Phonemes, and the hybrid mode now also covers Cantonese yue_ phonemes","dl.cl.v108.l6":"Expanded kanji dictionary to all 2136 Jōyō kanji — greatly reducing the chance of unresolved kanji in Japanese lyrics","dl.cl.v108.l7":"MIDI import BPM / time signature sync prompt — when importing a MIDI file, SXSEditor now asks whether to sync the project's BPM and time signature from the file","dl.cl.v108.l8":"ORT session options exposed as settings — advanced ONNX Runtime session options are now user-configurable in Settings","dl.cl.v108.l9":"Model status overview in Settings — a new model status overview section shows installed precisions and versions at a glance","dl.cl.v108.l10":"Base model precision separated from diffusion models — a single base precision can be reused across multiple diffusion model precisions","dl.cl.v108.l11":"Rebuilt landing page — the official website's landing page was rebuilt with a new template, bilingual CN/EN support, and a Chinese Luotianyi demo audio","dl.cl.v108.l12":"Startup optimization v2 — heavy modules are now deferred until after the splash window paints, and unused Chromium features are disabled for faster cold start","dl.cl.v108.l13":"Fixed vocal audio playing earlier than MIDI notes — all playback / export paths are now aligned with MIDI note positions","dl.cl.v108.l14":"Fixed segmented streaming playback incompleteness — a new waiting-for-inference UI now pauses the playhead at the buffer frontier until the next chunk arrives","dl.cl.v108.l15":"Fixed comprehensive chunked streaming inference issues — streaming preview is now reliable across fragment boundaries","dl.cl.v108.l16":"Fixed playhead jumping back to start after dragging near the end, and playhead not animating on streaming chunk arrival","dl.cl.v108.l17":"Fixed track-level lyrics dropped by @tonejs/midi — track-level lyrics that were previously lost during MIDI import are now restored","dl.cl.v108.l18":"Fixed FP16 / FP32 input type mismatch — the inference pipeline now auto-retries with corrected dummy inputs when an FP16 / FP32 input type mismatch is detected","dl.cl.v108.l19":"Scrubbed ModelScope credentials from git history — safeguards were added to prevent future leaks",
     "dl.cl.v106":"Stability Update","dl.cl.v106.l1":"Fixed model download percentage overflow — progress is now clamped to [0, 100]","dl.cl.v106.l2":"Fixed inaccurate remote file size detection — now uses Range request with Content-Range header to get the correct size","dl.cl.v106.l3":"Fixed formatBytes floating-point precision error causing wrong file size display","dl.cl.v106.l4":"Fixed SiFiGAN download progress resetting to 0 per file — progress now accumulates across all files in a batch",

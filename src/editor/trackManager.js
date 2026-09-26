@@ -91,6 +91,12 @@ class TrackManager {
     this.fragments = [];
     this.activeFragmentId = null;
     this.usedColorIndices = new Set();
+    // id -> 对象 的索引。拖拽、播放、渲染等热路径每帧都会按 id 查找，
+    // 原先的 Array.find 是 O(n)，这里降为 O(1)。
+    // 所有增删都走 addSinger/removeSinger/addFragment/removeFragment/clearAll，
+    // 索引可保证与数组同步。
+    this._singerIndex = new Map();
+    this._fragmentIndex = new Map();
   }
 
   _getNextColorIndex() {
@@ -107,6 +113,7 @@ class TrackManager {
       color: data.color ?? TRACK_COLORS[colorIdx],
     });
     this.singers.push(singer);
+    this._singerIndex.set(singer.id, singer);
     this.usedColorIndices.add(colorIdx);
     return singer;
   }
@@ -116,6 +123,7 @@ class TrackManager {
     const idx = this.singers.findIndex(s => s.id === singerId);
     if (idx === -1) return false;
     this.singers.splice(idx, 1);
+    this._singerIndex.delete(singerId);
     this.usedColorIndices.clear();
     this.singers.forEach(s => {
       const ci = TRACK_COLORS.indexOf(s.color);
@@ -125,7 +133,7 @@ class TrackManager {
   }
 
   getSinger(singerId) {
-    return this.singers.find(s => s.id === singerId) ?? null;
+    return this._singerIndex.get(singerId) ?? null;
   }
 
   updateSinger(singerId, data) {
@@ -145,6 +153,7 @@ class TrackManager {
     // 保留已存在的 color（如从 .sxsproj 加载时），否则使用歌手颜色
     const fragment = createFragment({ ...data, color: data.color ?? defaultColor });
     this.fragments.push(fragment);
+    this._fragmentIndex.set(fragment.id, fragment);
     return fragment;
   }
 
@@ -152,6 +161,7 @@ class TrackManager {
     const idx = this.fragments.findIndex(f => f.id === fragmentId);
     if (idx === -1) return false;
     this.fragments.splice(idx, 1);
+    this._fragmentIndex.delete(fragmentId);
     if (this.activeFragmentId === fragmentId) {
       this.activeFragmentId = this.fragments[0]?.id ?? null;
     }
@@ -159,15 +169,15 @@ class TrackManager {
   }
 
   getFragment(fragmentId) {
-    return this.fragments.find(f => f.id === fragmentId) ?? null;
+    return this._fragmentIndex.get(fragmentId) ?? null;
   }
 
   getActiveFragment() {
-    return this.fragments.find(f => f.id === this.activeFragmentId) ?? null;
+    return this._fragmentIndex.get(this.activeFragmentId) ?? null;
   }
 
   setActiveFragment(fragmentId) {
-    if (this.fragments.some(f => f.id === fragmentId)) {
+    if (this._fragmentIndex.has(fragmentId)) {
       this.activeFragmentId = fragmentId;
     }
   }
@@ -186,6 +196,8 @@ class TrackManager {
   clearAll() {
     this.singers.length = 0;
     this.fragments.length = 0;
+    this._singerIndex.clear();
+    this._fragmentIndex.clear();
     this.usedColorIndices.clear();
     this.activeFragmentId = null;
   }

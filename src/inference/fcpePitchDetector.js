@@ -6,21 +6,18 @@ const { buildSessionOptions } = require('./shared/ortOptions');
 // float16 patch 由 nativeSvsPipeline.js 统一执行，此处不再重复
 let _noteIdCounter = 0;
 
-// Float32 <-> Float16 转换工具
+// Float32 <-> Float16 转换工具（Float16Array 原生转换，TypedArray.set 走
+// native 路径而非逐元素 JS 赋值）
 function float32ToF16Buffer(f32Data) {
     const f16 = new Float16Array(f32Data.length);
-    for (let i = 0; i < f32Data.length; i++) {
-        f16[i] = f32Data[i];
-    }
+    f16.set(f32Data);
     return new Uint16Array(f16.buffer, f16.byteOffset, f16.length);
 }
 
 function f16BufferToFloat32(u16Data) {
     const f16 = new Float16Array(u16Data.buffer, u16Data.byteOffset, u16Data.length);
     const f32 = new Float32Array(f16.length);
-    for (let i = 0; i < f16.length; i++) {
-        f32[i] = f16[i];
-    }
+    f32.set(f16);
     return f32;
 }
 
@@ -200,10 +197,12 @@ class FcpePitchDetector {
       timeFrames = dims[1]; // [1, T, 1]
     }
 
-    const rawF0 = new Float32Array(timeFrames);
-    for (let t = 0; t < timeFrames; t++) {
-      rawF0[t] = pitchData[t];
-    }
+    // outputToFloat32 already returns an independent Float32Array (fresh copy
+    // on both the float16 and float32 paths), so no extra element-wise copy is
+    // needed — just guard against a trailing length mismatch with subarray.
+    const rawF0 = pitchData.length === timeFrames
+      ? pitchData
+      : pitchData.subarray(0, timeFrames);
 
     // Release output tensor (data already copied)
     try { if (typeof pitchOutput.dispose === 'function') pitchOutput.dispose(); } catch (_) {}

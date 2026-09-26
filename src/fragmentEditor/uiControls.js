@@ -6,6 +6,7 @@ import {
   getPitchCurve,
   getFragmentIsSynthesizing,
   getFragmentIsPlaying,
+  getFragmentIsAutoInferring,
   getAutoSaveTimer, setAutoSaveTimer,
   getNotes, setNotes,
   getSelectedNoteIds, setSelectedNoteIds,
@@ -96,6 +97,10 @@ export function updateFragmentPlayButton() {
     btnPlayFragment.disabled = true;
   } else if (getFragmentIsPlaying()) {
     btnPlayFragment.textContent = t('fragment.stop');
+    btnPlayFragment.disabled = false;
+  } else if (getFragmentIsAutoInferring()) {
+    // 后台自动推理进行中：仅提示，不禁用按钮——用户仍可随时手动播放或编辑。
+    btnPlayFragment.textContent = t('fragment.autoInferring');
     btnPlayFragment.disabled = false;
   } else {
     btnPlayFragment.textContent = t('fragment.play');

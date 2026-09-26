@@ -12,6 +12,11 @@ initI18n().then(() => {
 
 initWindowTheme();
 
+// Build marker: verify in the market window's DevTools console that the
+// running bundle includes the region-aware error state (vs. stale builds
+// that still show "No singers found" on network failures).
+console.log('[SingerMarket] UI build 2026-09-26.3 (detail loading state + tags/license fix)');
+
 // ==================== State ====================
 const state = {
   user: null,             // { id, username, is_admin } or null
@@ -24,10 +29,16 @@ const state = {
   totalCount: 0,
   totalPages: 1,
   loading: false,
+  loadError: null,        // last list-load failure message; null on success
+  loadErrorRegion: null,  // 'CN' when the failure is a region block (from main-process diagnostics)
   // Dialog state
   authMode: 'login',      // 'login' | 'register'
   uploadFile: null,       // { path, filename, singerName? } — populated when user picks a file
   detailSinger: null,     // singer currently shown in detail/download dialog
+  detailLoading: false,   // true while a file-detail request is in flight
+  detailSeq: 0,           // monotonically increasing; guards stale detail responses
+  licenseCatalog: null,   // cached /api/licenses payload { items, default, ... }
+  licenseCatalogLoading: false,
 };
 
 // ==================== DOM refs ====================
@@ -49,6 +60,10 @@ const dom = {
   singerGrid: document.getElementById('singer-grid'),
   emptyState: document.getElementById('empty-state'),
   loadingState: document.getElementById('loading-state'),
+  errorState: document.getElementById('error-state'),
+  errorStateTitle: document.getElementById('error-state-title'),
+  errorStateDetail: document.getElementById('error-state-detail'),
+  btnRetry: document.getElementById('btn-retry'),
 
   // Pagination
   pagination: document.getElementById('pagination'),
@@ -75,6 +90,7 @@ const dom = {
   uploadDescription: document.getElementById('upload-description'),
   uploadTags: document.getElementById('upload-tags'),
   uploadVisibility: document.getElementById('upload-visibility'),
+  uploadLicense: document.getElementById('upload-license'),
   btnUploadCancel: document.getElementById('btn-upload-cancel'),
   btnUploadSubmit: document.getElementById('btn-upload-submit'),
 
@@ -150,6 +166,85 @@ function formatDate(isoString) {
   }
 }
 
+// The backend returns tags as objects ({ id, name, created_at }) but older
+// shapes / upload echo paths may produce plain strings or { tag }. Normalize
+// everything to display strings so tags never render as "[object Object]".
+function normalizeTags(tags) {
+  if (!Array.isArray(tags)) return [];
+  return tags
+    .map((tag) => {
+      if (typeof tag === 'string') return tag.trim();
+      if (tag && typeof tag === 'object') {
+        const name = tag.name || tag.tag || tag.label;
+        return typeof name === 'string' ? name.trim() : '';
+      }
+      return '';
+    })
+    .filter(Boolean);
+}
+
+// Coerce any error payload into a displayable string — the IPC layer normally
+// guarantees a string, but a stale/older main process may hand back objects.
+function errorText(err, fallback) {
+  if (typeof err === 'string' && err) return err;
+  if (err && typeof err === 'object') {
+    if (typeof err.error === 'string' && err.error) return err.error;
+    if (err.error && typeof err.error.message === 'string') return err.error.message;
+  }
+  return fallback;
+}
+
+// ==================== License catalog ====================
+async function ensureLicenseCatalog() {
+  if (state.licenseCatalog || state.licenseCatalogLoading) return state.licenseCatalog;
+  state.licenseCatalogLoading = true;
+  try {
+    const result = await apiLicenses();
+    if (result.success && result.data && Array.isArray(result.data.items)) {
+      state.licenseCatalog = result.data;
+    }
+  } catch (_) {
+    // Non-fatal — the selector keeps its placeholder and upload proceeds
+    // without an explicit license (server applies its default).
+  } finally {
+    state.licenseCatalogLoading = false;
+  }
+  return state.licenseCatalog;
+}
+
+// Populate the upload dialog's license <select> from the catalog. Preset
+// licenses only; the "custom" slot (custom_allowed/custom_key) is omitted
+// because uploading arbitrary license text is not part of the client contract.
+function renderLicenseOptions() {
+  const select = dom.uploadLicense;
+  if (!select) return;
+  const catalog = state.licenseCatalog;
+  select.innerHTML = '';
+  if (!catalog || !Array.isArray(catalog.items)) {
+    select.innerHTML = `<option value="">${escapeHtml(tOr('singerMarket.licenseLoadFailed', 'License catalog unavailable'))}</option>`;
+    return;
+  }
+  const customKey = catalog.custom_key;
+  const presets = catalog.items.filter((item) => {
+    if (!item || !item.key) return false;
+    if (customKey && item.key === customKey) return false;
+    if (item.custom === true) return false;
+    return true;
+  });
+  for (const item of presets) {
+    const opt = document.createElement('option');
+    opt.value = item.key;
+    const spdx = item.spdx ? ` (${escapeHtml(item.spdx)})` : '';
+    opt.textContent = `${item.name || item.key}${spdx}`;
+    select.appendChild(opt);
+  }
+  // Preselect the server-declared default license.
+  if (catalog.default) {
+    select.value = catalog.default;
+    if (select.value !== catalog.default) select.selectedIndex = 0;
+  }
+}
+
 // ==================== API wrappers ====================
 async function apiLogin(username, password) {
   return window.electronAPI.singerMarket.login(username, password);
@@ -171,6 +266,9 @@ async function apiFileDetail(fileId) {
 }
 async function apiTags(params) {
   return window.electronAPI.singerMarket.tags(params);
+}
+async function apiLicenses() {
+  return window.electronAPI.singerMarket.licenses();
 }
 async function apiUpload(payload) {
   return window.electronAPI.singerMarket.upload(payload);
@@ -334,7 +432,7 @@ async function loadPopularTags() {
     const result = await apiTags({ limit: 30 });
     if (result.success && Array.isArray(result.data)) {
       // API may return either array of strings or array of { name, count }
-      state.tags = result.data.map((t) => (typeof t === 'string' ? t : (t.name || t.tag))).filter(Boolean);
+      state.tags = normalizeTags(result.data);
       renderTagSuggestions();
     }
   } catch (_) {
@@ -345,6 +443,7 @@ async function loadPopularTags() {
 // ==================== Singer list ====================
 async function loadSingers() {
   state.loading = true;
+  state.loadError = null;
   dom.loadingState.style.display = 'flex';
   dom.emptyState.style.display = 'none';
   try {
@@ -362,27 +461,52 @@ async function loadSingers() {
       const data = result.data;
       state.singers = Array.isArray(data.items) ? data.items : [];
       state.totalCount = data.total || state.singers.length;
-      state.totalPages = data.total_pages || Math.max(1, Math.ceil(state.totalCount / state.pageSize));
-      renderSingerGrid();
-      renderPagination();
+      // Backend envelope field is `pages` (list envelope: items/page/size/
+      // total/pages/has_more); `total_pages` kept as a defensive fallback.
+      state.totalPages = data.pages || data.total_pages
+        || Math.max(1, Math.ceil(state.totalCount / state.pageSize));
     } else {
       state.singers = [];
-      renderSingerGrid();
-      renderPagination();
-      if (result.error) showToast(result.error, 'error');
+      state.totalPages = 1;
+      state.loadError = errorText(result, tOr('singerMarket.loadFailed', 'Unable to reach the singer market'));
+      state.loadErrorRegion = result.region || null;
+      showToast(state.loadError.split('\n')[0], 'error');
     }
   } catch (err) {
     state.singers = [];
-    renderSingerGrid();
-    showToast(err.message, 'error');
+    state.totalPages = 1;
+    state.loadError = errorText(err, tOr('singerMarket.loadFailed', 'Unable to reach the singer market'));
+    state.loadErrorRegion = null;
+    showToast(state.loadError, 'error');
   } finally {
     state.loading = false;
     dom.loadingState.style.display = 'none';
+    renderSingerGrid();
+    renderPagination();
   }
 }
 
 function renderSingerGrid() {
   dom.singerGrid.innerHTML = '';
+  if (state.loadError) {
+    // Network/service failure must be distinguishable from an empty result:
+    // show a dedicated error state with the reason and a retry button.
+    // Region-blocked (mainland China) failures lead with the region message
+    // and put the diagnostic details (attempts/timeouts/IPs) below it.
+    const msg = state.loadError;
+    const nl = msg.indexOf('\n');
+    if (state.loadErrorRegion === 'CN' && nl > 0) {
+      dom.errorStateTitle.textContent = msg.slice(0, nl);
+      dom.errorStateDetail.textContent = msg.slice(nl + 1).trim();
+    } else {
+      dom.errorStateTitle.textContent = tOr('singerMarket.loadFailed', 'Unable to reach the singer market');
+      dom.errorStateDetail.textContent = msg;
+    }
+    dom.errorState.style.display = '';
+    dom.singerGrid.appendChild(dom.errorState);
+    return;
+  }
+  dom.errorState.style.display = 'none';
   if (state.singers.length === 0) {
     dom.singerGrid.appendChild(dom.emptyState);
     dom.emptyState.style.display = '';
@@ -398,10 +522,14 @@ function buildSingerCard(singer) {
   card.className = 'singer-card';
   card.addEventListener('click', () => openDetailDialog(singer));
 
-  // Try to derive singer name from metadata
-  const name = singer.filename?.replace(/\.sxssinger$/i, '') || singer.description?.split('\n')[0] || `Singer #${singer.id?.slice(0, 8)}`;
+  // Backend file objects expose the stored filename as `name` (`filename` is
+  // a legacy defensive fallback); strip the .sxssinger extension for display.
+  const name = singer.name?.replace(/\.sxssinger$/i, '')
+    || singer.filename?.replace(/\.sxssinger$/i, '')
+    || singer.description?.split('\n')[0]
+    || `Singer #${singer.id?.slice(0, 8)}`;
   const description = singer.description || '';
-  const tags = Array.isArray(singer.tags) ? singer.tags : [];
+  const tags = normalizeTags(singer.tags);
   const size = formatBytes(singer.size);
   const date = formatDate(singer.created_at || singer.uploaded_at);
 
@@ -450,6 +578,11 @@ dom.btnNextPage.addEventListener('click', () => {
   }
 });
 
+// Retry after a failed load (network unreachable / service error).
+dom.btnRetry.addEventListener('click', () => {
+  if (!state.loading) loadSingers();
+});
+
 // ==================== Refresh ====================
 dom.btnRefresh.addEventListener('click', async () => {
   dom.btnRefresh.disabled = true;
@@ -475,6 +608,10 @@ function openUploadDialog() {
   dom.uploadTags.value = '';
   dom.uploadVisibility.value = 'public';
   dom.uploadDialog.style.display = 'flex';
+  // License catalog: render from cache instantly; refresh in the background
+  // so a first-ever open also gets options without a restart.
+  renderLicenseOptions();
+  ensureLicenseCatalog().then(renderLicenseOptions);
 }
 
 function closeUploadDialog() {
@@ -544,6 +681,9 @@ dom.btnUploadSubmit.addEventListener('click', async () => {
       description: dom.uploadDescription.value.trim(),
       tags: dom.uploadTags.value.trim(),
       visibility: dom.uploadVisibility.value,
+      // License key from the catalog selector (e.g. "cc_by_4_0"); accepted
+      // server-side as an alias of license_key. Empty → server default.
+      license: dom.uploadLicense ? dom.uploadLicense.value : '',
     });
     if (result.success) {
       showToast(tOr('singerMarket.uploadSuccess', 'Upload successful'), 'success');
@@ -561,26 +701,42 @@ dom.btnUploadSubmit.addEventListener('click', async () => {
 });
 
 // ==================== Detail / download dialog ====================
-async function openDetailDialog(singer) {
-  state.detailSinger = singer;
-  // Try to fetch full detail (returns more metadata than the list view)
-  let detail = singer;
-  try {
-    const result = await apiFileDetail(singer.id);
-    if (result.success && result.data) detail = { ...singer, ...result.data };
-  } catch (_) {}
-
-  const name = detail.filename?.replace(/\.sxssinger$/i, '') || detail.description?.split('\n')[0] || `Singer #${detail.id?.slice(0, 8)}`;
+// The dialog opens IMMEDIATELY with whatever data the list view already has
+// (name/size/date/tags), showing an in-dialog loading row while the fuller
+// file-detail request is in flight. Without this, a slow network (up to the
+// 30s IPC ceiling) leaves the click seemingly dead and users re-click.
+function renderDetailBody(detail, { detailPending }) {
+  const name = detail.name?.replace(/\.sxssinger$/i, '')
+    || detail.filename?.replace(/\.sxssinger$/i, '')
+    || detail.description?.split('\n')[0]
+    || `Singer #${detail.id?.slice(0, 8)}`;
   dom.detailTitle.textContent = name;
 
   const description = detail.description || tOr('singerMarket.noDescription', 'No description');
-  const tags = Array.isArray(detail.tags) ? detail.tags : [];
+  const tags = normalizeTags(detail.tags);
   const size = formatBytes(detail.size);
   const date = formatDate(detail.created_at || detail.uploaded_at);
-  const owner = detail.owner || detail.user_id || '-';
+  // Backend exposes `uploaded_by` (e.g. "user:alice"); `owner` kept as a
+  // defensive fallback for older shapes.
+  const owner = detail.uploaded_by || detail.owner || detail.user_id || '-';
   const visibility = detail.visibility || 'public';
   const avatarColor = colorFromString(name);
   const initials = name.charAt(0).toUpperCase();
+
+  // License block — the backend stores a license object
+  // { key, name, spdx, url, commercial_use, derivatives, custom } on every
+  // file; null means the uploader left it at the server default or it predates
+  // license support.
+  const license = detail.license && typeof detail.license === 'object' ? detail.license : null;
+  const licenseHtml = license && (license.name || license.spdx || license.key)
+    ? `
+      <span class="detail-license-name">${escapeHtml(license.name || license.spdx || license.key)}${license.spdx && license.spdx !== (license.name || license.key) ? ` (${escapeHtml(license.spdx)})` : ''}</span>
+      <span class="detail-license-flag ${license.commercial_use === false ? 'no' : 'yes'}">${escapeHtml(license.commercial_use === false
+        ? tOr('singerMarket.licenseNoCommercial', 'No commercial use')
+        : tOr('singerMarket.licenseCommercial', 'Commercial use allowed'))}</span>
+      ${license.url ? `<a class="detail-license-link" href="${escapeHtml(license.url)}" target="_blank" rel="noopener">${escapeHtml(tOr('singerMarket.licenseView', 'View license'))}</a>` : ''}
+    `
+    : `<span class="detail-license-name">${escapeHtml(tOr('singerMarket.licenseUnspecified', 'Not specified'))}</span>`;
 
   dom.detailBody.innerHTML = `
     <div class="detail-header">
@@ -595,6 +751,16 @@ async function openDetailDialog(singer) {
         </div>
       </div>
     </div>
+    ${detailPending ? `
+      <div class="detail-loading-row">
+        <span class="spinner spinner--sm"></span>
+        <span>${escapeHtml(tOr('singerMarket.detailLoading', 'Loading details…'))}</span>
+      </div>
+    ` : ''}
+    <div>
+      <div class="detail-section-title">${tOr('singerMarket.license', 'License')}</div>
+      <div class="detail-license">${licenseHtml}</div>
+    </div>
     ${tags.length > 0 ? `
       <div>
         <div class="detail-section-title">${tOr('singerMarket.tags', 'Tags')}</div>
@@ -608,14 +774,55 @@ async function openDetailDialog(singer) {
       <div class="detail-description">${escapeHtml(description)}</div>
     </div>
   `;
+}
 
-  // Disclaimer link
+async function openDetailDialog(singer) {
+  // Ignore re-clicks on the same singer while its detail request is running —
+  // this is what made the unresponsive window feel like it needed more clicks.
+  if (state.detailLoading && state.detailSinger && state.detailSinger.id === singer.id
+      && dom.detailDialog.style.display !== 'none') {
+    return;
+  }
+
+  const seq = ++state.detailSeq;
+  state.detailSinger = singer;
+  state.detailLoading = true;
+
+  // Open right away with list-level data + a loading row.
+  renderDetailBody(singer, { detailPending: true });
   dom.disclaimerLink.href = DISCLAIMER_URL;
-
   dom.detailDialog.style.display = 'flex';
+
+  let detail = singer;
+  let ok = false;
+  try {
+    const result = await apiFileDetail(singer.id);
+    if (result.success && result.data) {
+      detail = { ...singer, ...result.data };
+      ok = true;
+    }
+  } catch (_) {}
+
+  // A newer open (different singer) superseded this request — drop it.
+  if (seq !== state.detailSeq) return;
+
+  state.detailLoading = false;
+  if (!ok && state.detailSinger && state.detailSinger.id === singer.id) {
+    // Detail fetch failed: keep the dialog usable with list-level data and
+    // tell the user why details are incomplete. Download still works (it
+    // operates on the id).
+    showToast(tOr('singerMarket.detailLoadFailed', 'Failed to load full details; showing basic info.'), 'error');
+  }
+  if (state.detailSinger && state.detailSinger.id === singer.id) {
+    renderDetailBody(detail, { detailPending: false });
+    dom.disclaimerLink.href = DISCLAIMER_URL;
+  }
 }
 
 function closeDetailDialog() {
+  // Invalidate any in-flight detail request for this dialog.
+  state.detailSeq++;
+  state.detailLoading = false;
   dom.detailDialog.style.display = 'none';
   state.detailSinger = null;
 }
@@ -628,9 +835,20 @@ dom.detailDialog.addEventListener('click', (e) => {
 dom.btnDetailDownload.addEventListener('click', async () => {
   if (!state.detailSinger) return;
   const singer = state.detailSinger;
-  const suggestedName = singer.filename || `${(singer.description?.split('\n')[0] || 'singer').replace(/[^\w-]+/g, '_')}.sxssinger`;
+  const suggestedName = singer.name || singer.filename
+    || `${(singer.description?.split('\n')[0] || 'singer').replace(/[^\w-]+/g, '_')}.sxssinger`;
 
   dom.btnDetailDownload.disabled = true;
+  const prevLabel = dom.btnDetailDownload.textContent;
+  // Live download progress (gracefully absent if the main process is older).
+  let offProgress = null;
+  if (window.electronAPI.singerMarket.onDownloadProgress) {
+    offProgress = window.electronAPI.singerMarket.onDownloadProgress((p) => {
+      if (!p || p.fileId !== singer.id || !p.total) return;
+      const pct = Math.min(100, Math.round((p.received / p.total) * 100));
+      dom.btnDetailDownload.textContent = `${tOr('singerMarket.downloading', 'Downloading…')} ${pct}%`;
+    });
+  }
   try {
     // Pick save path
     const pick = await window.electronAPI.singerMarket.pickSavePath(suggestedName);
@@ -663,6 +881,8 @@ dom.btnDetailDownload.addEventListener('click', async () => {
   } catch (err) {
     showToast(err.message, 'error');
   } finally {
+    if (offProgress) offProgress();
+    dom.btnDetailDownload.textContent = prevLabel;
     dom.btnDetailDownload.disabled = false;
   }
 });

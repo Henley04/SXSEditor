@@ -5,9 +5,11 @@ import { initWindowTheme } from '../themes/themeInit.js';
 import { hydrateIcons } from '../icons/iconHelper.js';
 import { initPipeline } from './pipeline.js';
 import { resizeCanvases } from './canvasRenderer.js';
-import { setupEventListeners } from './eventHandlers.js';
+import { setupEventListeners, _invalidateCanvasRect } from './eventHandlers.js';
 import { setupIpcHandlers, loadFragmentFromHash } from './ipcHandlers.js';
 import { setupUiControls } from './uiControls.js';
+import { startAutoInferenceWatcher, stopAutoInferenceWatcher } from './autoInference.js';
+import { installAutoRelayout } from '../shared/autoRelayout.js';
 import {
   getAutoSaveTimer, setAutoSaveTimer,
   getIpcCleanups,
@@ -23,8 +25,21 @@ initPipeline();
 // Apply saved theme
 initWindowTheme(getIpcCleanups());
 
-// Setup window resize
-window.addEventListener('resize', resizeCanvases);
+// Setup window resize + container-level auto relayout.
+// ResizeObserver 覆盖停靠式 DevTools 打开/关闭这类 window 'resize' 不触发的
+// 场景：此前 DevTools 关闭后 canvas 仍按旧尺寸绘制，必须手动交互才刷新。
+installAutoRelayout(
+  [
+    document.getElementById('piano-roll-container'),
+    document.getElementById('piano-keys-container'),
+  ],
+  () => {
+    // canvas 位置/尺寸已变，旧的 getBoundingClientRect 缓存必须失效，
+    // 否则 hit-test 会用旧坐标 → 点击位置与预期不符。
+    _invalidateCanvasRect();
+    resizeCanvases();
+  },
+);
 
 // Setup all event listeners
 setupEventListeners();
@@ -61,6 +76,18 @@ setupUiControls();
   const mainContent = document.getElementById('main-content');
   if (handle && mainContent) {
     let dragging = false, startX = 0, startCols = '';
+    // rAF 合并：mousemove 每帧可达数十次，同步改 gridTemplateColumns +
+    // 重算 canvas 会造成明显卡顿。同时此前完全不触发重绘，
+    // 拖完必须手动交互一次 canvas 才更新尺寸。
+    let rafId = 0;
+    const scheduleRelayout = () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(() => {
+        rafId = 0;
+        _invalidateCanvasRect();
+        resizeCanvases();
+      });
+    };
     handle.addEventListener('mousedown', (e) => {
       dragging = true;
       startX = e.clientX;
@@ -77,6 +104,7 @@ setupUiControls();
       const currentW = parseFloat(cols[3]) || 220;
       const newW = Math.max(160, Math.min(400, currentW + dx));
       mainContent.style.gridTemplateColumns = `80px 1fr 4px ${newW}px`;
+      scheduleRelayout();
     });
     document.addEventListener('mouseup', () => {
       if (!dragging) return;
@@ -84,6 +112,7 @@ setupUiControls();
       handle.classList.remove('dragging');
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+      scheduleRelayout();
     });
   }
 }
@@ -114,6 +143,10 @@ setupUiControls();
 // Load fragment from hash if needed
 loadFragmentFromHash();
 
+// 编辑后自动实时推理监听（设置项 autoRealtimeInference，默认关闭）。
+// 放在 loadFragmentFromHash 之后：此时 currentFragment 已就绪，才能比对签名。
+startAutoInferenceWatcher();
+
 // Initialize i18n
 initI18n().then(() => {
   applyLocale();
@@ -125,6 +158,7 @@ console.log(t('fragment.consoleStarted'));
 
 // Handle beforeunload
 window.addEventListener('beforeunload', () => {
+  stopAutoInferenceWatcher();
   for (const cleanup of getIpcCleanups()) {
     try { cleanup(); } catch (_) {}
   }

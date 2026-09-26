@@ -1,7 +1,7 @@
 import { state, trackManager } from './state.js';
 import { initI18n, applyLocale, getLocale, tOr } from '../i18n/index.js';
 import { markDirty, autoSaveProject, saveProject, showSaveBeforeCloseDialog } from './projectManager.js';
-import { refreshAll } from './timelineRenderer.js';
+import { refreshAll, invalidateFragmentNoteSprites } from './timelineRenderer.js';
 import { showAlertDialog } from '../alertDialog.js';
 
 // int8 旧版 diff_step 模型不兼容弹窗（主进程在 svs:init 时检测并推送一次）
@@ -56,6 +56,9 @@ if (window.electronAPI?.onFragmentSaved) {
       if (kanjiGroups) fragment.kanjiGroups = kanjiGroups;
       if (startTime !== undefined) fragment.startTime = startTime;
       if (duration !== undefined) fragment.duration = duration;
+      // 音符内容可能已变（增删改），分片预览精灵必须重建，否则拖到主窗口
+      // 仍显示旧音符。
+      invalidateFragmentNoteSprites();
     }
     refreshAll();
     autoSaveProject();
@@ -75,8 +78,10 @@ document.addEventListener('localeChanged', () => {
 
 // Locale changed IPC handler
 if (window.electronAPI?.onLocaleChanged) {
-  const cleanup = window.electronAPI.onLocaleChanged(() => {
-    location.reload();
+  const cleanup = window.electronAPI.onLocaleChanged(async () => {
+    await initI18n();
+    applyLocale();
+    document.documentElement.lang = getLocale();
   });
   if (cleanup) state._ipcCleanups.push(cleanup);
 }

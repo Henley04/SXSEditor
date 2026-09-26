@@ -1,0 +1,162 @@
+{
+  "seed": 1234,
+  "n_steps": 32,
+  "items": {
+    "nat_000": {
+      "seconds": 13.54,
+      "mel": {
+        "B_vs_A": {
+          "global_rel_res": 0.004408242083010751,
+          "frame_relres_p50": 0.003610760221274585,
+          "frame_relres_p99": 0.017984711220304973,
+          "frame_relres_max": 0.043167954706377146,
+          "local_to_global_ratio": 7.387394308800539,
+          "channel_mean_absdiff": 0.0004457340714149969,
+          "channel_std_absdiff": 0.00018751119231018168,
+          "channel_std_rel": 0.00026363876898432767
+        },
+        "C_vs_A": {
+          "global_rel_res": 0.003983960499115094,
+          "frame_relres_p50": 0.0036079310704754744,
+          "frame_relres_p99": 0.01643116701891885,
+          "frame_relres_max": 0.034111448085545476,
+          "local_to_global_ratio": 6.43907263786322,
+          "channel_mean_absdiff": 0.0002676596688161726,
+          "channel_std_absdiff": 0.00017404829107045203,
+          "channel_std_rel": 0.000244710071096638
+        }
+      },
+      "audio": {
+        "B_vs_A": {
+          "envelope_corr": 0.9995112327915714,
+          "rms_ratio": 0.9987873402756507
+        },
+        "C_vs_A": {
+          "envelope_corr": 0.9998309014357752,
+          "rms_ratio": 1.000043679777957
+        },
+        "D_vs_A": {
+          "envelope_corr": 0.9997667863005777,
+          "rms_ratio": 0.9999820790726076
+        }
+      }
+    },
+    "nat_001": {
+      "seconds": 10.7,
+      "mel": {
+        "B_vs_A": {
+          "global_rel_res": 0.003656834477046736,
+          "frame_relres_p50": 0.0035242379438597494,
+          "frame_relres_p99": 0.006632104185551986,
+          "frame_relres_max": 0.008614582707652108,
+          "local_to_global_ratio": 2.002955134209473,
+          "channel_mean_absdiff": 0.0004882141152545654,
+          "channel_std_absdiff": 0.00040507076044537767,
+          "channel_std_rel": 0.0007724700899597247
+        },
+        "C_vs_A": {
+          "global_rel_res": 0.003855407479695828,
+          "frame_relres_p50": 0.0035772015353260685,
+          "frame_relres_p99": 0.007689930105934268,
+          "frame_relres_max": 0.010289165028554186,
+          "local_to_global_ratio": 2.2826260852091287,
+          "channel_mean_absdiff": 0.0005605099162669209,
+          "channel_std_absdiff": 0.0003802147598266762,
+          "channel_std_rel": 0.0007250696875884052
+        }
+      },
+      "audio": {
+        "B_vs_A": {
+          "envelope_corr": 0.9999004332485831,
+          "rms_ratio": 0.9999139628607274
+        },
+        "C_vs_A": {
+          "envelope_corr": 0.9999393232607385,
+          "rms_ratio": 0.9993842781624348
+        },
+        "D_vs_A": {
+          "envelope_corr": 0.9999341220675044,
+          "rms_ratio": 1.0000171864930103
+        }
+      }
+    },
+    "nat_002": {
+      "seconds": 10.02,
+      "mel": {
+        "B_vs_A": {
+          "global_rel_res": 0.003692829956769681,
+          "frame_relres_p50": 0.0034270025797404663,
+          "frame_relres_p99": 0.00835879254091552,
+          "frame_relres_max": 0.010964210076157058,
+          "local_to_global_ratio": 2.572610471965737,
+          "channel_mean_absdiff": 0.0006257487220070043,
+          "channel_std_absdiff": 0.00047602338808704113,
+          "channel_std_rel": 0.0009026566100667409
+        },
+        "C_vs_A": {
+          "global_rel_res": 0.0036791515432855063,
+          "frame_relres_p50": 0.0034613288823249566,
+          "frame_relres_p99": 0.007872391308161036,
+          "frame_relres_max": 0.010704493971719357,
+          "local_to_global_ratio": 2.491000087610367,
+          "channel_mean_absdiff": 0.0005984109397525573,
+          "channel_std_absdiff": 0.0005085796224281801,
+          "channel_std_rel": 0.0009643911820696137
+        }
+      },
+      "audio": {
+        "B_vs_A": {
+          "envelope_corr": 0.9971133976193703,
+          "rms_ratio": 0.9948609798761154
+        },
+        "C_vs_A": {
+          "envelope_corr": 0.9999107020773892,
+          "rms_ratio": 0.9996655212354385
+        },
+        "D_vs_A": {
+          "envelope_corr": 0.9999031954919286,
+          "rms_ratio": 1.0003569405727373
+        }
+      }
+    },
+    "nat_003": {
+      "seconds": 9.56,
+      "mel": {
+        "B_vs_A": {
+          "global_rel_res": 0.003889075072485329,
+          "frame_relres_p50": 0.003547814445733947,
+          "frame_relres_p99": 0.008588717023336745,
+          "frame_relres_max": 0.017103317397997825,
+          "local_to_global_ratio": 3.2950916910423156,
+          "channel_mean_absdiff": 0.0004955708151161989,
+          "channel_std_absdiff": 0.0007532478906878666,
+          "channel_std_rel": 0.0012650310352721778
+        },
+        "C_vs_A": {
+          "global_rel_res": 0.0038752437867621593,
+          "frame_relres_p50": 0.0034600023213535902,
+          "frame_relres_p99": 0.00889839425139362,
+          "frame_relres_max": 0.012376337951771196,
+          "local_to_global_ratio": 2.818880313847061,
+          "channel_mean_absdiff": 0.0004455190290864852,
+          "channel_std_absdiff": 0.000729279000604181,
+          "channel_std_rel": 0.001224776837136687
+        }
+      },
+      "audio": {
+        "B_vs_A": {
+          "envelope_corr": 0.9982985683900909,
+          "rms_ratio": 1.0020401104669727
+        },
+        "C_vs_A": {
+          "envelope_corr": 0.9988390551733628,
+          "rms_ratio": 1.000406971507126
+        },
+        "D_vs_A": {
+          "envelope_corr": 0.998877326497553,
+          "rms_ratio": 1.0014895303477933
+        }
+      }
+    }
+  }
+}

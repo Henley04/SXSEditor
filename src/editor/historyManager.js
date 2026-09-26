@@ -3,6 +3,10 @@ export class HistoryManager {
     this.undoStack = [];
     this.redoStack = [];
     this.maxSize = maxSize;
+    // Optional callback fired after a successful undo/redo. The main window
+    // wires this to markDirty() so content changed via undo/redo can never
+    // be lost by closing a "clean-looking" window.
+    this.onMutation = null;
   }
 
   push(command) {
@@ -18,6 +22,9 @@ export class HistoryManager {
     if (command) {
       command.undo();
       this.redoStack.push(command);
+      if (this.onMutation) {
+        try { this.onMutation('undo'); } catch (_) {}
+      }
     }
     return command || null;
   }
@@ -27,6 +34,9 @@ export class HistoryManager {
     if (command) {
       command.redo();
       this.undoStack.push(command);
+      if (this.onMutation) {
+        try { this.onMutation('redo'); } catch (_) {}
+      }
     }
     return command || null;
   }

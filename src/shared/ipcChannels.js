@@ -37,6 +37,9 @@ const IPC_CHANNELS = {
   CLOSE_CONFIRMED: 'close-confirmed',
   CLOSE_CONFIRM: 'close-confirm',
   RELOAD_MAIN_WINDOW: 'reload-main-window',
+  // 主进程 → 渲染进程：内容区尺寸可能已变化，请重新布局/重绘。
+  // 覆盖停靠式 DevTools 开关这类 window 'resize' 不触发的场景。
+  RELAYOUT: 'app:relayout',
 
   // ==================== SVS Pipeline ====================
   SVS_INIT: 'svs:init',
@@ -66,6 +69,7 @@ const IPC_CHANNELS = {
 
   // ==================== Settings ====================
   SETTINGS_GET_DML_DEVICES: 'settings:getDMLDevices',
+  SETTINGS_GET_WINML_PROVIDERS: 'settings:getWinmlProviders',
   SETTINGS_GET_HARDWARE_STATUS: 'settings:getHardwareStatus',
   SETTINGS_GET_CURRENT_HARDWARE: 'settings:getCurrentHardware',
   SETTINGS_GET: 'settings:getSettings',
@@ -105,6 +109,11 @@ const IPC_CHANNELS = {
   MODEL_DOWNLOAD_LIST_VERSIONS: 'model-download:list-versions',
   MODEL_DOWNLOAD_LIST_JP_VERSIONS: 'model-download:list-jp-versions',
   MODEL_DOWNLOAD_LIST_SIFIGAN_VERSIONS: 'model-download:list-sifigan-versions',
+  MODEL_DOWNLOAD_CHECK_FCPE: 'model-download:check-fcpe',
+  MODEL_DOWNLOAD_START_FCPE: 'model-download:start-fcpe',
+  MODEL_DOWNLOAD_UNLOAD_FCPE: 'model-download:unload-fcpe',
+  MODEL_DOWNLOAD_CHECK_FCPE_VERSION: 'model-download:check-fcpe-version',
+  MODEL_DOWNLOAD_UPDATE_FCPE: 'model-download:update-fcpe',
   MODEL_DOWNLOAD_OPEN_EXTERNAL: 'model-download:open-external',
   MODEL_DOWNLOAD_REVISION: 'model-download:revision',
 

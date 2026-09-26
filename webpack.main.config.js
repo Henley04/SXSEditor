@@ -9,11 +9,28 @@ module.exports = {
   module: {
     rules: require('./webpack.rules'),
   },
-  externals: {
-    'onnxruntime-node': 'commonjs onnxruntime-node',
-    '@tensorflow/tfjs-backend-wasm': 'commonjs @tensorflow/tfjs-backend-wasm',
-    'systeminformation': 'commonjs systeminformation',
-  },
+  externals: [
+    {
+      'onnxruntime-node': 'commonjs onnxruntime-node',
+      // TensorFlow.js 是纯 JS（+ wasm 二进制），没有原生模块，不需要被
+      // webpack 打进主进程 bundle。保持 external 后：
+      //   - 主 bundle 体积显著下降，打包耗时/内存也更低；
+      //   - tfjs 与其子包（tfjs-core / converter / backend-cpu / webgl ...）
+      //     直接从 node_modules 运行时加载（node_modules 由 forge 保留）。
+      // 仅 basicPitch（BASIC-PITCH 转谱）会真正 require 它。
+      '@tensorflow/tfjs': 'commonjs @tensorflow/tfjs',
+      '@tensorflow/tfjs-backend-wasm': 'commonjs @tensorflow/tfjs-backend-wasm',
+      'systeminformation': 'commonjs systeminformation',
+      // Native-backed modules must stay outside the bundle so their .node
+      // binaries load from node_modules (kept + asar-unpacked by forge).
+      'sxs-ort-bridge': 'commonjs sxs-ort-bridge',
+      '@microsoft/dynwinrt': 'commonjs @microsoft/dynwinrt',
+    },
+    // 兜底：任何 @tensorflow/* 子包（tfjs-core、tfjs-converter 等）都不打包
+    ({ request }, callback) => (
+      /^@tensorflow\//.test(request) ? callback(null, `commonjs ${request}`) : callback()
+    ),
+  ],
   plugins: [
     new CopyPlugin({
       patterns: [
@@ -86,9 +103,37 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/inference/pipeline/float16Patch.js'),
         },
         {
+          // These files run in an isolated child process and therefore cannot
+          // be hidden inside main/index.js. Preserve their relative directory
+          // layout so trtDiagnosticRunner can require trtDiagnostic and the
+          // existing inference modules beside it.
+          from: path.resolve(__dirname, 'src/inference/winml/trtDiagnosticRunner.js'),
+          to: path.resolve(__dirname, '.webpack/main/inference/winml/trtDiagnosticRunner.js'),
+        },
+        {
+          from: path.resolve(__dirname, 'src/inference/winml/trtDiagnostic.js'),
+          to: path.resolve(__dirname, '.webpack/main/inference/winml/trtDiagnostic.js'),
+        },
+        {
           from: path.resolve(__dirname, 'native/build/Release/executorch_runtime.node'),
           to: path.resolve(__dirname, '.webpack/main/native/executorch_runtime.node'),
           noErrorOnMissing: true,
+        },
+        {
+          // sxs-ort-bridge 预构建二进制：随 bundle 拷贝到固定位置，
+          // 避免 file: 依赖在 forge 打包 prune 后内容丢失的问题
+          from: path.resolve(__dirname, 'native/ort-bridge/build/Release/ort_bridge.node'),
+          to: path.resolve(__dirname, '.webpack/main/native/ort_bridge.node'),
+          noErrorOnMissing: true,
+        },
+        {
+          from: path.resolve(__dirname, 'native/ort-bridge/prebuilt/win32-x64/ort_bridge.node'),
+          to: path.resolve(__dirname, '.webpack/main/native/ort_bridge_prebuilt.node'),
+          noErrorOnMissing: true,
+        },
+        {
+          from: path.resolve(__dirname, 'src/inference/pipeline/jpKanjiDict.json'),
+          to: path.resolve(__dirname, '.webpack/main/inference/pipeline/jpKanjiDict.json'),
         },
         {
           from: path.resolve(__dirname, 'assets/SXS.png'),

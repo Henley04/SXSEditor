@@ -91,13 +91,6 @@ body {
     display: none;
 }
 
-.section-desc {
-    font-size: var(--font-base);
-    color: var(--fg-muted);
-    margin: 0 0 20px;
-    line-height: 1.5;
-}
-
 /* ==================== Setting Groups ==================== */
 
 .setting-group {
@@ -160,7 +153,7 @@ body {
     box-sizing: border-box;
     transition: border-color var(--motion-base), box-shadow var(--motion-base), background-color var(--motion-base);
     appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888a8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+    background-image: var(--select-arrow);
     background-repeat: no-repeat;
     background-position: right 12px center;
 }
@@ -229,6 +222,12 @@ body {
     border-left: 2px solid var(--ink-soft);
 }
 
+/* 警告类提示：用于"开启后可能大幅影响性能/增加发热"等高代价选项 */
+.hint-warning {
+    color: var(--warning);
+    border-left-color: var(--warning);
+}
+
 .setting-group input[type="range"] {
     width: 100%;
     height: 6px;
@@ -287,33 +286,9 @@ body {
 }
 
 /* ==================== Info Boxes ==================== */
-
-.info-box {
-    background: var(--bg-elevated);
-    border: 1px solid var(--warning-line);
-    border-left: 4px solid var(--warning);
-    border-radius: var(--radius-lg);
-    padding: 14px;
-    font-size: var(--font-base);
-    line-height: 1.6;
-    margin-top: 10px;
-    transition: border-color var(--motion-base), box-shadow var(--motion-base);
-}
-
-.info-box:hover {
-    border-color: var(--accent-glow-strong);
-    box-shadow: 0 4px 16px var(--warning-glow);
-}
-
-.info-box strong {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    margin-bottom: var(--space-4);
-    color: var(--warning);
-    font-size: var(--font-md);
-}
-
+/* 信息框统一样式由 components.css §5 提供（扁平 callout + SVG 线性图标）。
+   此处不再覆盖配色与左侧粗条——之前强制琥珀色左边条会把所有说明信息
+   都渲染成警告样式，语义也不对。只保留设置页特有的列表排版。 */
 .info-box ul {
     margin: 0;
     padding-left: var(--space-7);
@@ -329,29 +304,19 @@ body {
 }
 
 .precision-info-box {
-    background: var(--bg-elevated);
+    background: var(--accent-soft);
     border: 1px solid var(--accent-line);
-    border-left: 4px solid var(--accent);
     border-radius: var(--radius-lg);
-    padding: 14px;
+    padding: var(--space-5) var(--space-6);
     font-size: var(--font-base);
-    line-height: 1.6;
-    margin-top: 10px;
-    transition: border-color var(--motion-base), box-shadow var(--motion-base);
-}
-
-.precision-info-box:hover {
-    border-color: var(--accent-glow-strong);
-    box-shadow: 0 4px 16px var(--accent-softer);
+    line-height: 1.65;
+    margin-top: var(--space-4);
+    color: var(--fg-secondary);
 }
 
 .precision-info-box strong {
-    display: flex;
-    align-items: center;
-    gap: var(--space-4);
-    margin-bottom: var(--space-4);
-    color: var(--accent);
-    font-size: var(--font-md);
+    color: var(--accent-fg);
+    font-weight: 600;
 }
 
 .precision-info-box ul {
@@ -663,6 +628,17 @@ body {
     box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
+/* Q-Drift 等仅在特定模型精度下可用的选项：复选框置灰时整行弱化且不可点击 */
+.device-mode-radio:has(input:disabled) {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.device-mode-radio:has(input:disabled):hover {
+    border-color: var(--border-strong);
+    background: var(--bg-elevated);
+}
+
 .device-mode-radio input[type="radio"] {
     margin-top: 3px;
     cursor: pointer;
@@ -774,7 +750,7 @@ body {
     outline: none;
     cursor: pointer;
     appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888a8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+    background-image: var(--select-arrow);
     background-repeat: no-repeat;
     background-position: right 8px center;
     transition: border-color var(--motion-base) var(--ease-standard),
@@ -1272,14 +1248,13 @@ body {
     margin-top: 12px;
 }
 
-/* 高风险标记：左侧黄色/红色边条 */
+/* 高风险标记：inset 侧边条，避免 border 引发布局位移 */
 .setting-group.setting-risk {
     position: relative;
     padding-left: 12px;
-    border-left: 3px solid var(--danger);
     background: var(--bg-elevated);
     border-radius: 0 var(--radius-md) var(--radius-md) 0;
-    margin-left: -3px;
+    box-shadow: inset 3px 0 0 var(--danger);
     margin-top: 12px;
 }
 
@@ -1444,3 +1419,98 @@ body {
   margin-left: var(--space-3);
   vertical-align: middle;
 }
+
+
+/* Settings search */
+.settings-search-wrap { padding: var(--space-5); position: sticky; top: 0; z-index: 4; background: var(--bg-panel); }
+#settingsSearch { width: 100%; min-height: 38px; border-radius: var(--radius-lg); padding: var(--space-3) var(--space-4); border: 1px solid var(--border-default); background: var(--bg-input); color: var(--fg-primary); }
+#settingsSearch:focus { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
+.settings-search-empty { margin-top: var(--space-3); color: var(--fg-muted); font-size: var(--font-sm); }
+.search-hidden { display: none !important; }
+
+
+/* Native inference hierarchy */
+#section-inference { max-width: 760px; }
+#section-inference .setting-group { min-width: 0; }
+#nativeBackendGroup.hidden { display: none; }
+#runTrtRtxDiagnostic, #trtRtxDiagnosticStatus { display: none !important; }
+#inferenceDevice option { color: var(--fg-primary); }
+
+#section-inference .device-mode-radio.hidden { display: none !important; }
+
+/* ==================== About: license / open source / papers ==================== */
+#section-about { max-width: 860px; }
+
+.about-identity { margin-bottom: var(--space-4); }
+.about-app-name { font-size: 26px; font-weight: 700; color: var(--fg-primary); }
+.about-app-desc { margin-top: 4px; color: var(--fg-muted); font-size: var(--font-base); }
+.about-app-meta { margin-top: 6px; color: var(--fg-muted); font-size: var(--font-sm); }
+.about-links { margin-top: 8px; font-size: var(--font-sm); }
+
+#section-about a { color: var(--accent); text-decoration: none; }
+#section-about a:hover { text-decoration: underline; }
+
+details > summary { cursor: pointer; color: var(--accent); font-size: var(--font-sm); user-select: none; }
+.about-license-text {
+    margin-top: 10px;
+    padding: 12px 14px;
+    max-height: 320px;
+    overflow: auto;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    color: var(--fg-primary);
+    font-family: var(--font-mono, monospace);
+    font-size: 12px;
+    line-height: 1.6;
+    white-space: pre-wrap;
+}
+
+.about-table-wrap {
+    margin-top: 10px;
+    overflow-x: auto;
+    border: 1px solid var(--border-default);
+    border-radius: var(--radius-lg);
+    background: var(--bg-elevated);
+}
+.about-table { width: 100%; border-collapse: collapse; font-size: var(--font-sm); }
+.about-table thead th {
+    padding: 10px 12px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--fg-muted);
+    border-bottom: 1px solid var(--border-default);
+    white-space: nowrap;
+}
+.about-table tbody td {
+    padding: 7px 12px;
+    color: var(--fg-primary);
+    border-bottom: 1px solid var(--border-subtle);
+}
+.about-table tbody tr:last-child td { border-bottom: none; }
+.about-table tbody tr:hover { background: var(--accent-softer); }
+.about-table tr.about-group-row td {
+    padding-top: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.papers-list { margin-top: 8px; }
+.papers-subgroup { margin: 14px 0 6px; font-weight: 600; color: var(--fg-primary); font-size: var(--font-sm); }
+.papers-items { list-style: none; margin: 0; padding: 0; }
+.papers-items li {
+    padding: 5px 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: baseline;
+    border-bottom: 1px solid var(--border-subtle);
+}
+.paper-arxiv-id {
+    color: var(--fg-muted);
+    font-size: 12px;
+    font-family: var(--font-mono, monospace);
+}
+
+.about-special-thanks { border-left: 3px solid var(--accent); }

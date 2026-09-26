@@ -1,14 +1,14 @@
 /**
  * mergePhoneme - 合并连续的 SP（静音）音符
  * 将连续的、相同音高的 SP 音符合并为一个，减少冗余音素。
- * <AP> 会被统一替换为 <SP>。
+ * <AP> 是可发声的吸气/气声标记，必须保留；仅 <SP> 表示数字静音。
  */
 
 function mergePhoneme(notes) {
   const merged = [];
   for (let i = 0; i < notes.length; i++) {
     const n = notes[i];
-    const lyric = (n.lyric || '').replace('<AP>', '<SP>');
+    const lyric = (n.lyric || '').trim();
     const isSP = !lyric.trim() || lyric === '<SP>';
     const hasLyric = lyric.trim().length > 0 && !isSP;
     const isSlur = n.isSlur || n.isContinuation;

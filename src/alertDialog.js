@@ -31,7 +31,7 @@ export function showAlertDialog(message, onClose) {
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 10000;
+    z-index: 10002;
     backdrop-filter: blur(4px);
     animation: sxs-overlay-in 0.25s ease;
   `;
@@ -138,7 +138,7 @@ export function showConfirmDialog(message) {
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 10000;
+      z-index: 10002;
       backdrop-filter: blur(4px);
       animation: sxs-overlay-in 0.25s ease;
     `;
@@ -283,7 +283,7 @@ export function showProjectInfoImportDialog(projectInfo, current) {
       display: flex;
       align-items: center;
       justify-content: center;
-      z-index: 10000;
+      z-index: 10002;
       backdrop-filter: blur(4px);
       animation: sxs-overlay-in 0.25s ease;
     `;

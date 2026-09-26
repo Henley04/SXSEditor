@@ -2,6 +2,9 @@ const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const { VOCODER_CHUNK_FRAMES } = require('../inference/shared/constants.js');
 const { classifyDevice } = require('../utils/deviceClassifier');
+// 系统级 NPU 硬件（PnP）检测。原先内联在本文件，现抽到独立模块以便
+// webnnIpc 复用（避免循环 require）。此处再导出以保持既有 API 兼容。
+const { detectNPUByPnp, invalidatePnpNpuCache } = require('./npuHardware');
 
 // Backward-compatible alias: gpuInfo historically exposed classifyDeviceFromName
 const classifyDeviceFromName = classifyDevice;
@@ -20,6 +23,8 @@ const VRAM_USAGE_TTL = 3000;
 
 // NPU 检测缓存
 let _npuCache = null;
+let _npuCacheTime = 0;
+const NPU_CACHE_TTL_MS = 30 * 1000;
 let _npuPending = null;
 
 // ===== Vocoder 分片长度（依据显存智能分配） =====
@@ -380,7 +385,7 @@ function getGPUPhase() {
 
 /**
  * 并行检测所有硬件（GPU + NPU）并返回结果
- * @returns {{ gpuControllers: Array, npuAvailable: boolean, npuDetails: string }}
+ * @returns {{ gpuControllers: Array, npuAvailable: boolean, webnnNpuAvailable: boolean, npuDetails: string }}
  */
 async function detectAllHardware() {
   const [gpuControllers, npuResult] = await Promise.all([
@@ -389,7 +394,11 @@ async function detectAllHardware() {
   ]);
   return {
     gpuControllers,
+    // npuAvailable: NPU 硬件是否存在（WebNN 探测或 PnP 回退）
     npuAvailable: npuResult.npuAvailable,
+    // webnnNpuAvailable: NPU 在 WebNN 路径下真正可用（决定是否暴露
+    // 'NPU (WebNN)' 设备选项，避免出现选了也跑不了的项）
+    webnnNpuAvailable: npuResult.webnnNpuAvailable,
     npuDetails: npuResult.details || '',
   };
 }
@@ -398,15 +407,30 @@ async function detectAllHardware() {
  * NPU 检测（带缓存）
  */
 async function detectNPUCached() {
-  if (_npuCache) return _npuCache;
+  if (_npuCache && Date.now() - _npuCacheTime < NPU_CACHE_TTL_MS) return _npuCache;
+  _npuCache = null;
   if (_npuPending) return _npuPending;
 
   _npuPending = (async () => {
     try {
+      // webnnIpc.detectNPUAvailability() 内部已包含 PnP 硬件回退与并发去重，
+      // 这里不再重复探测（旧实现会再跑一次 PowerShell，且两份缓存互相不一致）。
       const { detectNPUAvailability } = require('./webnnIpc');
       const result = await detectNPUAvailability();
-      _npuCache = result;
-      return result;
+      const details = String(result?.details || '').toLowerCase();
+      const transient = details.includes('no renderer') || details.includes('module not available');
+      const final = {
+        webnnAvailable: !!result.webnnAvailable,
+        webnnNpuAvailable: !!result.webnnNpuAvailable,
+        npuAvailable: !!result.npuAvailable,
+        gpuAvailable: !!result.gpuAvailable,
+        details: result.details || '',
+      };
+      if (!transient) {
+        _npuCache = final;
+        _npuCacheTime = Date.now();
+      }
+      return final;
     } catch (e) {
       return { npuAvailable: false, details: e.message };
     } finally {
@@ -436,6 +460,7 @@ function invalidateGPUCache() {
 function invalidateNPUCache() {
   _npuCache = null;
   _npuPending = null;
+  invalidatePnpNpuCache();
 }
 
 async function queryGPUVRAMUsage() {
@@ -478,6 +503,7 @@ module.exports = {
   getGPUPhase,
   detectAllHardware,
   detectNPUCached,
+  detectNPUByPnp,
   invalidateGPUCache,
   invalidateNPUCache,
   queryGPUVRAMUsage,

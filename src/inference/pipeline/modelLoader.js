@@ -179,39 +179,63 @@ const DUMMY_TEST_INPUTS_NPU = {
  * @param {Object} baseDummy - 原精度对应的 dummy（无匹配输入时兜底）
  * @returns {Object} feeds
  */
-function _rebuildDummyForSession(session, baseDummy) {
+function _rebuildDummyForSession(session, baseDummy, nonZero = false, dynamicSeqLen = 3) {
     try {
         const meta = session.inputMetadata;
         if (!Array.isArray(meta) || meta.length === 0) return baseDummy;
         const feeds = {};
         let matched = 0;
+        // Fill float arrays with a deterministic non-zero pattern when nonZero=true.
+        // All-zero warmup can legitimately produce all-zero output for some networks,
+        // making it impossible to detect TRT compilation bugs that also produce zeros.
+        const _fillFloat = (count, isFp16) => {
+            const f32 = new Float32Array(count);
+            if (nonZero) for (let i = 0; i < count; i++) f32[i] = 0.1 * ((i % 100) + 1);
+            return isFp16 ? float32ToF16Buffer(f32) : f32;
+        };
         for (const m of meta) {
             const name = m.name;
             const type = String(m.type || '');
             const shape = Array.isArray(m.shape) ? m.shape : [];
             const isBool = type.includes('bool');
             const isFp16 = type.includes('16') && !isBool;
+            // 符号/负维度（如 'batch'、'seq'、-1）替换为 3，生成合法整数 dims 供 Tensor 使用
+            const numDims = shape.map((s, index) => {
+                if (typeof s === 'number' && s > 0) return s;
+                // Batch stays 1. Other dynamic dimensions use a representative
+                // length for TRT capability validation rather than the old 3.
+                return index === 0 ? 1 : dynamicSeqLen;
+            });
             // 符号维度按 3 填充；缺 shape 时回退 [1, 3, 128]
             let count = 1;
-            for (const s of shape) count *= (typeof s === 'number' ? s : 3);
+            for (const s of numDims) count *= s;
             if (shape.length === 0) count = 3 * (name === 'cond' ? COND_DIM : (name === 'diffusion_step' || name === 't' ? 1 : MEL_DIM));
             const dataType = isBool ? 'bool' : (isFp16 ? 'float16' : 'float32');
-            if (name === 'x' || name === 'xt_input') {
-                const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
-                feeds[name] = new ort.Tensor(dataType, data, shape);
+            if (name === 'x' || name === 'xt_input' || name === 'acoustic_features' || name === 'features' || name === 'mel' || name === 'mel_input') {
+                const data = _fillFloat(count, isFp16);
+                feeds[name] = new ort.Tensor(dataType, data, numDims);
                 matched++;
             } else if (name === 'diffusion_step' || name === 't') {
                 const val = isFp16 ? float32ToF16Buffer(new Float32Array([0.5])) : new Float32Array([0.5]);
                 feeds[name] = new ort.Tensor(dataType, val, [1]);
                 matched++;
-            } else if (name === 'cond') {
-                const data = isFp16 ? float32ToF16Buffer(new Float32Array(count)) : new Float32Array(count);
-                feeds[name] = new ort.Tensor(dataType, data, shape);
+            } else if (name === 'cond' || name === 'conditioning') {
+                const data = _fillFloat(count, isFp16);
+                feeds[name] = new ort.Tensor(dataType, data, numDims);
                 matched++;
-            } else if (name === 'x_mask' || name === 'xt_mask') {
+            } else if (name === 'x_mask' || name === 'xt_mask' || name === 'attention_mask') {
                 const data = isBool ? new Uint8Array(count).fill(1)
                     : (isFp16 ? float32ToF16Buffer(new Float32Array(count).fill(1)) : new Float32Array(count).fill(1));
-                feeds[name] = new ort.Tensor(dataType, data, shape);
+                feeds[name] = new ort.Tensor(dataType, data, numDims);
+                matched++;
+            } else if (name === 'waveform' || name === 'audio') {
+                // mel_transform: symbolic num_samples collapsed to 3 by generic map → force SAMPLE_RATE
+                // Respect original rank: 2D [1,24000] or 3D [1,1,24000]
+                const rank = shape.length;
+                const dims = rank === 3 ? [1, 1, SAMPLE_RATE] : [1, SAMPLE_RATE];
+                const count = dims.reduce((a,b)=>a*b,1);
+                const data = _fillFloat(count, isFp16);
+                feeds[name] = new ort.Tensor(dataType, data, dims);
                 matched++;
             }
         }
@@ -296,7 +320,7 @@ async function enumerateDMLDevicesInProcess(modelDir) {
             session.release();
         } catch (_) {}
 
-        await new Promise(r => setTimeout(r, 500));
+        await new Promise(r => setImmediate(r));
     } finally {
         process.stderr.write = origWrite;
         ort.env.logLevel = 'warning';
@@ -544,6 +568,24 @@ async function detectBestDevice(modelDir, npuAvailable = false) {
 
 const _validatedSessionModels = new Set();
 
+// Windows ML vendor-EP 适配范围（按项目决策：不再限制模型种类）。
+// 所有经过 createSessionWithValidation 的 ONNX 模型（SVS 管线各模块、SiFiGAN 等）
+// 均允许尝试 Windows ML 插件 EP（NvTensorRtRtx / OpenVINO，未来 QNN/MIGraphX）：
+// 加载成功即优先用 TRT RTX EP / 其他 WinML EP；任何创建或推理失败（含 TRT 校验
+// 不通过、dummy 形状不匹配）都会静默回落到下方原有 DML/CPU 链路。
+// 小检测器（FCPE/RMVPE/ROSVOT）无 dummy 输入，在本函数开头即返回 CPU，不进该路径。
+//
+// mel_transform 显式排除：其输入 waveform 的长度等于参考音频重采样后的采样点数，
+// 长度完全不可预测。TRT-RTX 引擎没有对应的 shape profile 时，加载期校验（dummy
+// 取 SAMPLE_RATE）能通过，真实推理却在
+//   NvTensorRTRTX EP failed to call nvinfer1::IExecutionContext::setInputShape() for input 'waveform'
+// 处必失败，然后每合成一个 fragment 都要白跑一次 GPU 再回落 JS FFT。交给
+// DML/CPU（原生支持动态形状）成本更低且结果一致。
+const WINML_ELIGIBLE_KEYS = new Set([
+  'noteTextEncoder', 'notePitchEncoder', 'noteTypeEncoder', 'f0Encoder',
+  'preflow', 'condEmb', 'diffStep', 'vocoder', 'sifigan',
+]);
+
 async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName, dmlDeviceId, isFP16, useStaticShapes = false, overrideDummyInputs = null, runValidation = true) {
     const modelName = path.basename(modelPath);
     // Validation/warmup is a once-per-process action for each concrete model
@@ -560,18 +602,6 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
     if (!dummyInputs) {
         const session = await ort.InferenceSession.create(modelPath,
             buildSessionOptions({ executionProviders: ['cpu'] }));
-        return { session, ep: 'cpu', warmedUp: false };
-    }
-
-    // NPU 静态形状模型直接创建 CPU 会话（跳过 DML 验证，NPU 模型不适合 DML）
-    if (useStaticShapes) {
-        // NPU 模型已离线优化（onnxsim），跳过运行时图优化以加速加载
-        const session = await ort.InferenceSession.create(modelPath, buildSessionOptions({
-            executionProviders: ['cpu'],
-            graphOptimizationLevel: 'basic', // 显式 override：NPU 模型已离线优化
-        }));
-        // 跳过推理验证 — NPU 模型已通过离线验证，且大模型（如 diff_step 423MB）的验证耗时过长
-        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (NPU static shapes, opt=basic)`);
         return { session, ep: 'cpu', warmedUp: false };
     }
 
@@ -595,10 +625,9 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         return null;
     };
     const _runWithPrecisionFallback = async (session, label) => {
-        // diff_step：依据实际加载会话的输入签名重建 dummy（QDIT 的 x/diffusion_step/x_mask
-        // bool 与 legacy 的 xt_input/t/cond/xt_mask 均正确匹配），避免 "invalid dimensions" /
-        // "is missing in 'feeds'" 导致的误判验证失败。
-        const feeds = sessionKey === 'diffStep'
+        // diff_step/mel_transform：依据实际会话签名重建 dummy，避免
+        // "invalid dimensions" / "is missing in 'feeds'"（如 mel_transform audio vs waveform 命名差异）
+        const feeds = (sessionKey === 'diffStep' || sessionKey === 'melTransform')
             ? _rebuildDummyForSession(session, dummyInputs)
             : dummyInputs;
         try {
@@ -616,40 +645,166 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
         }
     };
 
-    let dmlSession = null;
-    try {
-        const dmlOpts = typeof dmlDeviceId === 'number'
-            ? { name: 'dml', deviceId: dmlDeviceId }
-            : 'dml';
-        // ORT session 选项由 buildSessionOptions() 依据用户设置生成。
-        // 默认策略：DML 路径 enableMemPattern=false（防止 DirectML 过度预分配 GPU 内存池）；
-        // 用户可在设置中开启 ortForceMemPatternOnDml 显式启用。
-        const sessionOptions = buildSessionOptions({
-            executionProviders: [dmlOpts, 'cpu'],
+    // === Windows ML vendor EP 尝试 ===
+    // NV(TRT-RTX) 最高优先；winmlPreferredEp 为空(智能模式)时自动优先 NV，手动指定则尊重用户选择。
+    // OpenVINO 属“其他 EP”，仅 diffstep/vocoder 允许尝试；其余 WinML 模型只走 NV，
+    // NV 不可用/失败时，diffstep/vocoder 回退 DML，其余直接回退 CPU。
+    const winmlEligible = WINML_ELIGIBLE_KEYS.has(sessionKey);
+    const isDiffStepOrVocoder = sessionKey === 'diffStep' || sessionKey === 'vocoder';
+    if (winmlEligible) {
+        try {
+            const winmlProvider = require('../winml/winmlProvider');
+            if (winmlProvider.isWinmlEnabled()) {
+                const winmlRes = await winmlProvider.tryCreateWinMLSession(modelPath, useStaticShapes, isDiffStepOrVocoder);
+                if (winmlRes && winmlRes.session) {
+                    const wsession = winmlRes.session;
+                    const isTRT = String(winmlRes.ep).includes('NvTensorRTRTX');
+                    // Every newly created TRT session must validate itself. A model-level
+                    // process cache cannot prove that a recreated engine is healthy.
+                    const shouldValidate = isTRT || runValidation;
+                    try {
+                        if (shouldValidate) {
+                            // For TRT sessions, use non-zero dummy inputs. All-zero
+                            // warmup can legitimately produce all-zero output for some
+                            // networks, making it impossible to detect TRT compilation
+                            // bugs. NonZero=true fills float arrays with a deterministic
+                            // pattern so any all-zero TRT output is a clear red flag.
+                            // DIAGNOSTIC: SXS_TRTRTX_WARMUP_SEQ overrides the seq length
+                            // of the one-time TRT capability warmup (default 512).
+                            const trtWarmupSeq = Math.max(1, Number.parseInt(process.env.SXS_TRTRTX_WARMUP_SEQ || '512', 10) || 512);
+                            const feeds = (sessionKey === 'diffStep' || isTRT || sessionKey === 'preflow')
+                                ? _rebuildDummyForSession(wsession, dummyInputs, isTRT, isTRT ? trtWarmupSeq : 3)
+                                : (overrideDummyInputs || dummyInputs);
+                            if (isTRT) console.log(`[Model][trt-warmup] name=${modelName} seq=${trtWarmupSeq}`);
+                            const outputs = await wsession.run(feeds);
+                            if (isTRT) {
+                                // Capability detection: reject all-zero / non-finite TRT
+                                // output. This catches TRT engine compilation bugs that
+                                // silently produce zeros without ORT reporting an error.
+                                // On failure, throws → caught below → falls through to DML.
+                                const { validateTRTOutput } = require('../winml/ortBridge');
+                                const expected = sessionKey === 'diffStep'
+                                    ? ['flow_pred']
+                                    : (sessionKey === 'preflow' ? ['processed_features'] : []);
+                                validateTRTOutput(outputs, expected);
+                            }
+                            _validatedSessionModels.add(validationKey);
+                            console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=ok${isTRT ? ' (non-zero TRT output verified)' : ''}`);
+                        } else {
+                            console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=skip reason=reload`);
+                        }
+                        // TEMP DIAGNOSTIC (SXS_DIAG_PROBE=1): DML peer for operator-level
+                        // TRT vs DML comparison on ALL graph outputs.
+                        if (process.env.SXS_DIAG_PROBE === '1' && sessionKey === 'diffStep') {
+                            try {
+                                const dmlEpOpt = typeof dmlDeviceId === 'number'
+                                    ? { name: 'dml', deviceId: dmlDeviceId }
+                                    : 'dml';
+                                const peer = await ort.InferenceSession.create(modelPath,
+                                    buildSessionOptions({ executionProviders: [dmlEpOpt, 'cpu'] }));
+                                wsession.__diagPeer = peer;
+                                console.log('[DIAG] DML peer attached to diffStep (all-output probe)');
+                            } catch (e) {
+                                console.warn('[DIAG] peer attach failed:', (e.message || '').split('\n')[0]);
+                            }
+                        }
+                        return { session: wsession, ep: winmlRes.ep, warmedUp: shouldValidate };
+                    } catch (werr) {
+                        const wr = (werr.message || '').split('\n')[0].slice(0, 120);
+                        console.warn(`[Model][fallback] name=${modelName} from=winml to=dml/cpu stage=warmup error=${wr}`);
+                        try { wsession.release(); } catch (_) {}
+                    }
+                }
+            }
+        } catch (_e) { /* WinML 栈不可用：继续原有链路 */ }
+    }
+
+    // === NPU 静态形状模型：优先使用 DML（GPU），失败自动回退 CPU ===
+    // 静态形状（seq=2048）模型是离线优化产物，运行时图优化固定为 basic 以加快加载。
+    // 该分支仅影响主进程加载器；WebNN/NPU 路径（渲染进程 onnxruntime-web）不经过此处，
+    // 因此不影响 NPU 模型在 NPU 上的正常运行。
+    if (useStaticShapes) {
+        // NPU 模型已离线优化（onnxsim），运行时图优化用 basic（显式 override）
+        const _staticShapeOpts = (executionProviders) => buildSessionOptions({
+            executionProviders,
+            graphOptimizationLevel: 'basic',
         });
-        console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify(sessionOptions));
-        dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
-        if (runValidation) {
-            console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
-            await _runWithPrecisionFallback(dmlSession, 'DML');
-            _validatedSessionModels.add(validationKey);
-            console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
-        } else {
-            console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (reload, validation skipped)`);
-        }
-        return { session: dmlSession, ep: 'dml', warmedUp: runValidation };
-    } catch (dmlErr) {
-        if (dmlSession) {
-            try { dmlSession.release(); } catch (e) {
-                console.warn(`[OnnxSVSPipeline] Failed to release DML session (${modelName}):`, e.message);
+        // 已知 DML 上输出错误/静音的静态形状模型：dummy 验证只能判断“不崩溃”，
+        // 检测不出“输出是否正确”。diff_step 曾在旧驱动/ORT 组合上返回静音；
+        // 现模型（FP16 权重版）已在真实校准数据上实测 DML 输出与 CPU 一致
+        // （fp16-vs-cpu cos≈0.99996，fp32-vs-cpu cos=1.0）且约 2.3x 提速，
+        // 故放开 diffStep 走 DML 优先，失败仍自动回退 CPU。
+        const tryDml = true;
+        let npuDmlSession = null;
+        if (tryDml) {
+            try {
+                const dmlOpts = typeof dmlDeviceId === 'number'
+                    ? { name: 'dml', deviceId: dmlDeviceId }
+                    : 'dml';
+                npuDmlSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts([dmlOpts, 'cpu']));
+                if (runValidation) {
+                    await _runWithPrecisionFallback(npuDmlSession, 'DML-NPU');
+                    _validatedSessionModels.add(validationKey);
+                    console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, inference verified)`);
+                } else {
+                    console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (NPU static shapes, opt=basic, validation skipped)`);
+                }
+                return { session: npuDmlSession, ep: 'dml', warmedUp: runValidation };
+            } catch (dmlErr) {
+                if (npuDmlSession) {
+                    try { npuDmlSession.release(); } catch (e) {
+                        console.warn(`[OnnxSVSPipeline] Failed to release NPU DML session (${modelName}):`, e.message);
+                    }
+                }
+                const reason = (dmlErr.message.includes('Reshape') || dmlErr.message.includes('E_INVALIDARG'))
+                    ? 'DML 不支持该静态形状算子'
+                    : dmlErr.message.substring(0, 60).split('\n')[0];
+                console.warn(`[OnnxSVSPipeline] ${modelName} NPU static shapes DML load failed (${reason}), falling back to CPU...`);
             }
         }
-        const reason = dmlErr.message.includes('Reshape')
-            ? 'DML 不支持动态 Reshape (89个节点)'
-            : dmlErr.message.includes('ConvTranspose')
-            ? 'DML 不支持大 stride ConvTranspose (stride=480)'
-            : `DML 推理验证失败 (${dmlErr.message.substring(0, 60).split('\n')[0]})`;
-        console.log(`[OnnxSVSPipeline] ${modelName} DML load failed, reason: ${reason}`);
+        // DML 不适用或失败 → 回退 CPU（保持原有行为：跳过推导验证以加快大模型加载）
+        const cpuSession = await ort.InferenceSession.create(modelPath, _staticShapeOpts(['cpu']));
+        console.log(`[OnnxSVSPipeline] ${modelName} loaded [CPU] (NPU static shapes, opt=basic)`);
+        return { session: cpuSession, ep: 'cpu', warmedUp: false };
+    }
+
+    // 回退策略：diffstep/vocoder 走 DML；其余 WinML 模型(DML 无加速收益)直接回退 CPU。
+    let dmlSession = null;
+    if (!(winmlEligible && !isDiffStepOrVocoder)) {
+        try {
+            const dmlOpts = typeof dmlDeviceId === 'number'
+                ? { name: 'dml', deviceId: dmlDeviceId }
+                : 'dml';
+            // ORT session 选项由 buildSessionOptions() 依据用户设置生成。
+            // 默认策略：DML 路径 enableMemPattern=false（防止 DirectML 过度预分配 GPU 内存池）；
+            // 用户可在设置中开启 ortForceMemPatternOnDml 显式启用。
+            const sessionOptions = buildSessionOptions({
+                executionProviders: [dmlOpts, 'cpu'],
+            });
+            console.log(`[OnnxSVSPipeline] Creating DML session for ${modelName} with options:`, JSON.stringify(sessionOptions));
+            dmlSession = await ort.InferenceSession.create(modelPath, sessionOptions);
+            if (runValidation) {
+                console.log(`[OnnxSVSPipeline] ${modelName} DML session created, running dummy inference...`);
+                await _runWithPrecisionFallback(dmlSession, 'DML');
+                _validatedSessionModels.add(validationKey);
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (inference verified)`);
+            } else {
+                console.log(`[OnnxSVSPipeline] ${modelName} loaded [DML]${gpuTag} (reload, validation skipped)`);
+            }
+            return { session: dmlSession, ep: 'dml', warmedUp: runValidation };
+        } catch (dmlErr) {
+            if (dmlSession) {
+                try { dmlSession.release(); } catch (e) {
+                    console.warn(`[OnnxSVSPipeline] Failed to release DML session (${modelName}):`, e.message);
+                }
+            }
+            const reason = dmlErr.message.includes('Reshape')
+                ? 'DML 不支持动态 Reshape (89个节点)'
+                : dmlErr.message.includes('ConvTranspose')
+                ? 'DML 不支持大 stride ConvTranspose (stride=480)'
+                : `DML 推理验证失败 (${dmlErr.message.substring(0, 60).split('\n')[0]})`;
+            console.log(`[OnnxSVSPipeline] ${modelName} DML load failed, reason: ${reason}`);
+        }
     }
 
     // DML不available，尝试UsingDML优化版本Model（在CPU上运行）

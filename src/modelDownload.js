@@ -369,7 +369,7 @@ window.electronAPI.onModelDownloadMissingFiles((files) => {
   // Skip main-model UI updates when an optional model (JP/SiFiGAN) is being
   // downloaded — those flows reuse the same IPC events but should not reset
   // the main model panel.
-  if (jpState.isDownloading || sifiganState.isDownloading) {
+  if (jpState.isDownloading || sifiganState.isDownloading || fcpeState.isDownloading) {
     return;
   }
   missingFiles.length = 0;
@@ -434,7 +434,7 @@ window.electronAPI.onModelDownloadProgress((data) => {
   // Skip main-model UI updates when an optional model (JP/SiFiGAN) is being
   // downloaded — those flows reuse the same IPC events but should not update
   // the main model progress bar / file list.
-  if (jpState.isDownloading || sifiganState.isDownloading) {
+  if (jpState.isDownloading || sifiganState.isDownloading || fcpeState.isDownloading) {
     return;
   }
   const state = fileStates[data.currentFile];
@@ -449,7 +449,7 @@ window.electronAPI.onModelDownloadProgress((data) => {
 
 window.electronAPI.onModelDownloadFileStart((data) => {
   // Skip for optional model downloads (JP/SiFiGAN)
-  if (jpState.isDownloading || sifiganState.isDownloading) {
+  if (jpState.isDownloading || sifiganState.isDownloading || fcpeState.isDownloading) {
     return;
   }
   fileStates[data.filePath] = { status: 'downloading', progress: 0, downloaded: 0, total: 0 };
@@ -467,7 +467,7 @@ window.electronAPI.onModelDownloadFileStart((data) => {
 
 window.electronAPI.onModelDownloadFileComplete((data) => {
   // Skip for optional model downloads (JP/SiFiGAN)
-  if (jpState.isDownloading || sifiganState.isDownloading) {
+  if (jpState.isDownloading || sifiganState.isDownloading || fcpeState.isDownloading) {
     return;
   }
   const state = fileStates[data.filePath];
@@ -486,11 +486,13 @@ window.electronAPI.onModelDownloadComplete(() => {
   // download. Otherwise, treat it as an optional model completion and
   // refresh all optional cards.
   if (!isDownloading) {
-    // Optional model (JP or SiFiGAN) completed — refresh both cards
+    // Optional model (JP, SiFiGAN or FCPE) completed — refresh all cards
     jpState.isDownloading = false;
     sifiganState.isDownloading = false;
+    fcpeState.isDownloading = false;
     refreshJpCard();
     refreshSifiganCard();
+    refreshFcpeCard();
     updateOverviewStatus();
     return;
   }
@@ -517,9 +519,11 @@ window.electronAPI.onModelDownloadError((data) => {
   if (!isDownloading) {
     jpState.isDownloading = false;
     sifiganState.isDownloading = false;
+    fcpeState.isDownloading = false;
     if (data && data.message) showJpTooltip(data.message);
     refreshJpCard();
     refreshSifiganCard();
+    refreshFcpeCard();
     updateOverviewStatus();
     return;
   }
@@ -893,6 +897,21 @@ function updateOverviewStatus() {
     sifiganText = t('modelDownload.overviewDownloading');
   }
   setOverviewCard('sifigan', sifiganDotState, sifiganText);
+
+  // FCPE
+  let fcpeDotState = 'checking';
+  let fcpeText = t('modelDownload.overviewChecking');
+  if (fcpeState.status === 'installed') {
+    fcpeDotState = 'installed';
+    fcpeText = t('modelDownload.overviewReady');
+  } else if (fcpeState.status === 'not_downloaded' || fcpeState.status === 'download_url_not_configured') {
+    fcpeDotState = 'missing';
+    fcpeText = t('modelDownload.overviewMissing');
+  } else if (fcpeState.status === 'downloading') {
+    fcpeDotState = 'checking';
+    fcpeText = t('modelDownload.overviewDownloading');
+  }
+  setOverviewCard('fcpe', fcpeDotState, fcpeText);
 }
 
 // ===== SiFiGAN card rendering & state management =====
@@ -1130,6 +1149,218 @@ document.getElementById('sifiganUpdateBtn').addEventListener('click', async () =
   }
 });
 
+// ===== FCPE card rendering & state management =====
+// FCPE is an optional pitch-detection model. Its download downloads
+// fcpe_model.onnx from the syxppp/FCPE ModelScope repo (master branch) to
+// preprocess/fcpe_model.onnx.
+
+const fcpeState = {
+  status: 'checking', // 'installed' | 'not_downloaded' | 'download_url_not_configured' | 'checking' | 'downloading'
+  files: null,
+  isDownloading: false,
+  versionInfo: null, // { updateAvailable, localVersion, latestVersion, hasModelFiles }
+};
+
+function setFcpeStatusText(text) {
+  const el = document.getElementById('fcpeStatusText');
+  if (el) el.textContent = text;
+}
+
+function setFcpeStatusIndicator(state) {
+  // state: 'installed' | 'not_downloaded' | 'warning' | 'checking' | 'downloading'
+  const el = document.getElementById('fcpeStatusIndicator');
+  if (!el) return;
+  el.className = 'status-indicator ' + state;
+}
+
+function showFcpeTooltip(message) {
+  const el = document.getElementById('fcpeTooltip');
+  if (!el) return;
+  if (message) {
+    el.textContent = message;
+    el.style.display = 'block';
+    el.classList.add('visible');
+  } else {
+    el.style.display = 'none';
+    el.classList.remove('visible');
+  }
+}
+
+function renderFcpeCard() {
+  const downloadBtn = document.getElementById('fcpeDownloadBtn');
+  const unloadBtn = document.getElementById('fcpeUnloadBtn');
+  const progress = document.getElementById('fcpeProgress');
+  const versionText = document.getElementById('fcpeVersionText');
+  const updateBtn = document.getElementById('fcpeUpdateBtn');
+  if (!downloadBtn || !unloadBtn) return;
+
+  // Reset visibility
+  progress.style.display = 'none';
+  if (versionText) versionText.textContent = '';
+  if (updateBtn) updateBtn.style.display = 'none';
+
+  switch (fcpeState.status) {
+    case 'installed': {
+      downloadBtn.style.display = 'none';
+      unloadBtn.style.display = 'inline-block';
+      unloadBtn.disabled = false;
+      downloadBtn.disabled = false;
+      setFcpeStatusIndicator('installed');
+      setFcpeStatusText(t('modelDownload.fcpeInstalled'));
+      showFcpeTooltip('');
+      if (fcpeState.versionInfo && versionText) {
+        const v = fcpeState.versionInfo;
+        const localStr = v.localVersion || t('modelDownload.legacyVersion');
+        versionText.textContent = t('modelDownload.versionDisplay', { local: localStr, latest: 'master' });
+        if (v.updateAvailable && updateBtn) {
+          updateBtn.style.display = 'inline-block';
+        }
+      }
+      break;
+    }
+    case 'not_downloaded': {
+      downloadBtn.style.display = 'inline-block';
+      unloadBtn.style.display = 'none';
+      downloadBtn.disabled = false;
+      setFcpeStatusIndicator('not_downloaded');
+      setFcpeStatusText(t('modelDownload.fcpeNotDownloaded'));
+      showFcpeTooltip('');
+      break;
+    }
+    case 'download_url_not_configured': {
+      downloadBtn.style.display = 'inline-block';
+      unloadBtn.style.display = 'none';
+      downloadBtn.disabled = true;
+      setFcpeStatusIndicator('warning');
+      setFcpeStatusText(t('modelDownload.fcpeUrlNotConfigured'));
+      showFcpeTooltip(t('modelDownload.fcpeUrlNotConfiguredTooltip'));
+      break;
+    }
+    case 'downloading': {
+      downloadBtn.style.display = 'inline-block';
+      downloadBtn.disabled = true;
+      unloadBtn.style.display = 'none';
+      progress.style.display = 'block';
+      setFcpeStatusIndicator('downloading');
+      break;
+    }
+    case 'checking':
+    default: {
+      downloadBtn.style.display = 'inline-block';
+      downloadBtn.disabled = true;
+      unloadBtn.style.display = 'none';
+      setFcpeStatusIndicator('checking');
+      setFcpeStatusText(t('modelDownload.checking'));
+      showFcpeTooltip('');
+      break;
+    }
+  }
+}
+
+async function refreshFcpeCard() {
+  fcpeState.status = 'checking';
+  renderFcpeCard();
+  try {
+    const result = await window.electronAPI.modelDownloadCheckFcpe();
+    fcpeState.status = result.status;
+    fcpeState.files = result.files;
+    if (result.allExist) {
+      try {
+        fcpeState.versionInfo = await window.electronAPI.modelDownloadCheckFcpeVersion();
+      } catch (_) {
+        fcpeState.versionInfo = null;
+      }
+    } else {
+      fcpeState.versionInfo = null;
+    }
+  } catch (err) {
+    console.error('[FCPE] status check failed:', err);
+    fcpeState.status = 'download_url_not_configured';
+  }
+  renderFcpeCard();
+  updateOverviewStatus();
+}
+
+document.getElementById('fcpeDownloadBtn').addEventListener('click', async () => {
+  if (fcpeState.isDownloading) return;
+  fcpeState.isDownloading = true;
+  fcpeState.status = 'downloading';
+  renderFcpeCard();
+  try {
+    const result = await window.electronAPI.modelDownloadStartFcpe();
+    if (result.status === 'download_url_not_configured') {
+      fcpeState.status = 'download_url_not_configured';
+      fcpeState.files = result.files;
+    } else if (result.status === 'installed') {
+      fcpeState.status = 'installed';
+      fcpeState.files = result.files;
+      try {
+        fcpeState.versionInfo = await window.electronAPI.modelDownloadCheckFcpeVersion();
+      } catch (_) { fcpeState.versionInfo = null; }
+    } else {
+      fcpeState.status = 'not_downloaded';
+      fcpeState.files = result.files;
+    }
+  } catch (err) {
+    console.error('[FCPE] download failed:', err);
+    fcpeState.status = 'download_url_not_configured';
+  } finally {
+    fcpeState.isDownloading = false;
+    renderFcpeCard();
+  }
+});
+
+document.getElementById('fcpeUnloadBtn').addEventListener('click', async () => {
+  if (fcpeState.isDownloading) return;
+  const confirmed = await showConfirmDialog(t('modelDownload.fcpeUnloadConfirmMessage'));
+  if (!confirmed) return;
+
+  fcpeState.isDownloading = true;
+  try {
+    const result = await window.electronAPI.modelDownloadUnloadFcpe();
+    fcpeState.status = result.status || 'not_downloaded';
+    fcpeState.files = result.files;
+    fcpeState.versionInfo = null;
+  } catch (err) {
+    console.error('[FCPE] unload failed:', err);
+  } finally {
+    fcpeState.isDownloading = false;
+    renderFcpeCard();
+  }
+});
+
+// FCPE 更新按钮：删除旧文件后重新下载
+document.getElementById('fcpeUpdateBtn').addEventListener('click', async () => {
+  if (fcpeState.isDownloading) return;
+  const confirmed = await showConfirmDialog(t('modelDownload.fcpeUpdateConfirmMessage'));
+  if (!confirmed) return;
+
+  fcpeState.isDownloading = true;
+  fcpeState.status = 'downloading';
+  renderFcpeCard();
+  try {
+    // 先删除旧文件，再触发下载
+    await window.electronAPI.modelDownloadUpdateFcpe();
+    const result = await window.electronAPI.modelDownloadStartFcpe();
+    if (result.status === 'installed') {
+      fcpeState.status = 'installed';
+      fcpeState.files = result.files;
+      try {
+        fcpeState.versionInfo = await window.electronAPI.modelDownloadCheckFcpeVersion();
+      } catch (_) { fcpeState.versionInfo = null; }
+    } else {
+      fcpeState.status = 'not_downloaded';
+      fcpeState.files = result.files;
+    }
+  } catch (err) {
+    console.error('[FCPE] update failed:', err);
+    fcpeState.status = 'download_url_not_configured';
+  } finally {
+    fcpeState.isDownloading = false;
+    renderFcpeCard();
+  }
+});
+
 // Version selector: update currentRevision when user picks a different version
 document.getElementById('versionSelect').addEventListener('change', (e) => {
   if (isDownloading) {
@@ -1162,6 +1393,8 @@ initI18n().then(async () => {
   ]);
   // Refresh SiFiGAN card once i18n is ready so status text is translated
   refreshSifiganCard();
+  // Refresh FCPE card once i18n is ready so status text is translated
+  refreshFcpeCard();
   // Refresh JP card after precision is known
   refreshJpCard();
   // 检查主模型版本信息

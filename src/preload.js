@@ -1,4 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
+let heavyIpcReadyPromise;
+async function invokeHeavy(channel,...args){if(!heavyIpcReadyPromise)heavyIpcReadyPromise=ipcRenderer.invoke('app:waitForHeavyIpc');const result=await heavyIpcReadyPromise;if(!result?.success)throw new Error(result?.error||'Deferred IPC initialization failed');return ipcRenderer.invoke(channel,...args);}
 
 // Forward renderer errors to the main process for centralized logging.
 // Runs in the preload's isolated world, but DOM event listeners added via
@@ -40,6 +42,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 let _webnnReadModelFileReqId = 0;
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  onMcpAutomationRequest: callback => { const h=(_e,m)=>callback(m); ipcRenderer.on('mcp:automation-request',h); return ()=>ipcRenderer.removeListener('mcp:automation-request',h); },
+  sendMcpAutomationResponse: message => ipcRenderer.send('mcp:automation-response',message),
   showSaveDialog: (options) => ipcRenderer.invoke('dialog:showSaveDialog', options),
   showOpenDialog: (options) => ipcRenderer.invoke('dialog:showOpenDialog', options),
   saveFile: (filePath, data) => ipcRenderer.invoke('file:saveFile', filePath, data),
@@ -106,11 +110,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     return () => ipcRenderer.removeListener('loadPreprocessData', handler);
   },
   getModelDir: () => ipcRenderer.invoke('getModelDir'),
-  initSVSPipeline: () => ipcRenderer.invoke('svs:init'),
-  synthesizeSVS: (data) => ipcRenderer.invoke('svs:synthesize', data),
-  synthesizeMultiStreaming: (data) => ipcRenderer.invoke('svs:synthesizeMultiStreaming', data),
-  cancelSVSSynthesis: () => ipcRenderer.invoke('svs:cancel'),
-  disposeSVSPipeline: () => ipcRenderer.invoke('svs:dispose'),
+  initSVSPipeline: () => invokeHeavy('svs:init'),
+  synthesizeSVS: (data) => invokeHeavy('svs:synthesize', data),
+  synthesizeMultiStreaming: (data) => invokeHeavy('svs:synthesizeMultiStreaming', data),
+  cancelSVSSynthesis: () => invokeHeavy('svs:cancel'),
+  disposeSVSPipeline: () => invokeHeavy('svs:dispose'),
   onSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);
     ipcRenderer.on('svs:progress', handler);
@@ -126,17 +130,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('svs:model-incompatible', handler);
     return () => ipcRenderer.removeListener('svs:model-incompatible', handler);
   },
-  getFragmentSVSSampleRate: () => ipcRenderer.invoke('fragment-svs:getSampleRate'),
-  initFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:init'),
+  getFragmentSVSSampleRate: () => invokeHeavy('fragment-svs:getSampleRate'),
+  initFragmentSVSPipeline: () => invokeHeavy('fragment-svs:init'),
   synthesizeFragmentSVS: async (data) => {
-    const result = await ipcRenderer.invoke('fragment-svs:synthesize', data);
+    const result = await invokeHeavy('fragment-svs:synthesize', data);
     if (result.error) {
       throw new Error(result.error);
     }
     return result.data;
   },
-  resolvePhonemes: (lyrics) => ipcRenderer.invoke('fragment-svs:resolvePhonemes', { lyrics }),
-  disposeFragmentSVSPipeline: () => ipcRenderer.invoke('fragment-svs:dispose'),
+  resolvePhonemes: (lyrics) => invokeHeavy('fragment-svs:resolvePhonemes', { lyrics }),
+  disposeFragmentSVSPipeline: () => invokeHeavy('fragment-svs:dispose'),
   onFragmentSVSProgress: (callback) => {
     const handler = (event, data) => callback(data.progress);
     ipcRenderer.on('fragment-svs:progress', handler);
@@ -147,29 +151,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('fragment-svs:chunk-audio', handler);
     return () => ipcRenderer.removeListener('fragment-svs:chunk-audio', handler);
   },
-  extractF0: (data) => ipcRenderer.invoke('extractF0:onnx', data),
-  extractMidiRosvot: (data) => ipcRenderer.invoke('extractMidi:rosvot', data),
-  extractF0BasicPitch: (data) => ipcRenderer.invoke('extractF0:basicPitch', data),
-  extractMidiFcpe: (data) => ipcRenderer.invoke('extractMidi:fcpe', data),
+  extractF0: (data) => invokeHeavy('extractF0:onnx', data),
+  extractMidiRosvot: (data) => invokeHeavy('extractMidi:rosvot', data),
+  extractF0BasicPitch: (data) => invokeHeavy('extractF0:basicPitch', data),
+  extractMidiFcpe: (data) => invokeHeavy('extractMidi:fcpe', data),
   importMidi: () => ipcRenderer.invoke('midi:import'),
   importMidiMultiTrack: () => ipcRenderer.invoke('midi:importMultiTrack'),
   resolvePath: (basePath, relativePath) => ipcRenderer.invoke('resolvePath', basePath, relativePath),
   getDirName: (filePath) => ipcRenderer.invoke('getDirName', filePath),
   showItemInFolder: (filePath) => ipcRenderer.invoke('shell:showItemInFolder', filePath),
-  getDMLDevices: () => ipcRenderer.invoke('settings:getDMLDevices'),
-  getHardwareStatus: () => ipcRenderer.invoke('settings:getHardwareStatus'),
-  getCurrentHardware: () => ipcRenderer.invoke('settings:getCurrentHardware'),
-  getVocoderChunkFramesInfo: () => ipcRenderer.invoke('settings:getVocoderChunkFramesInfo'),
-  getVocoderChunkFramesTable: () => ipcRenderer.invoke('settings:getVocoderChunkFramesTable'),
-  getSettings: () => ipcRenderer.invoke('settings:getSettings'),
-  saveSettings: (settings) => ipcRenderer.invoke('settings:saveSettings', settings),
-  checkModels: () => ipcRenderer.invoke('settings:check-models'),
+  // Open an allowed https URL (arXiv / GitHub etc.) in the system browser.
+  // Used by the Settings → About page (license / papers / acknowledgments).
+  openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
+  getDMLDevices: (options = {}) => invokeHeavy('settings:getDMLDevices', options),
+  getWinmlProviders: () => invokeHeavy('settings:getWinmlProviders'),
+  getHardwareStatus: () => invokeHeavy('settings:getHardwareStatus'),
+  getCurrentHardware: () => invokeHeavy('settings:getCurrentHardware'),
+  getVocoderChunkFramesInfo: () => invokeHeavy('settings:getVocoderChunkFramesInfo'),
+  getVocoderChunkFramesTable: () => invokeHeavy('settings:getVocoderChunkFramesTable'),
+  getSettings: () => invokeHeavy('settings:getSettings'),
+  saveSettings: (settings) => invokeHeavy('settings:saveSettings', settings),
+  checkModels: () => invokeHeavy('settings:check-models'),
+  runTrtRtxDiagnostic: () => invokeHeavy('settings:run-trtrtx-diagnostic'),
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
-  getAudioDevices: () => ipcRenderer.invoke('audio:getDevices'),
-  audioPlay: (audioData, options) => ipcRenderer.invoke('audio:play', { audioData, options }),
-  audioStop: () => ipcRenderer.invoke('audio:stop'),
-  audioGetPosition: () => ipcRenderer.invoke('audio:getPosition'),
-  audioIsAvailable: () => ipcRenderer.invoke('audio:isAvailable'),
+  getAudioDevices: () => invokeHeavy('audio:getDevices'),
+  audioPlay: (audioData, options) => invokeHeavy('audio:play', { audioData, options }),
+  audioStop: () => invokeHeavy('audio:stop'),
+  audioGetPosition: () => invokeHeavy('audio:getPosition'),
+  audioIsAvailable: () => invokeHeavy('audio:isAvailable'),
   onAudioEnded: (callback) => {
     const handler = (event, data) => callback(data);
     ipcRenderer.on('audio:ended', handler);
@@ -237,14 +246,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
   modelDownloadCheckSifigan: () => ipcRenderer.invoke('model-download:check-sifigan'),
   modelDownloadStartSifigan: (revision) => ipcRenderer.invoke('model-download:start-sifigan', revision),
   modelDownloadUnloadSifigan: () => ipcRenderer.invoke('model-download:unload-sifigan'),
+  // FCPE (optional pitch detector) download/unload
+  modelDownloadCheckFcpe: () => ipcRenderer.invoke('model-download:check-fcpe'),
+  modelDownloadStartFcpe: (revision) => ipcRenderer.invoke('model-download:start-fcpe', revision),
+  modelDownloadUnloadFcpe: () => ipcRenderer.invoke('model-download:unload-fcpe'),
   // Model version management
   modelDownloadCheckVersion: (precision) => ipcRenderer.invoke('model-download:check-version', precision),
   modelDownloadCheckJpVersion: (precision) => ipcRenderer.invoke('model-download:check-jp-version', precision),
   modelDownloadCheckSifiganVersion: () => ipcRenderer.invoke('model-download:check-sifigan-version'),
+  modelDownloadCheckFcpeVersion: () => ipcRenderer.invoke('model-download:check-fcpe-version'),
   modelDownloadCheckAllVersions: (precision) => ipcRenderer.invoke('model-download:check-all-versions', precision),
   modelDownloadUpdate: (precision, revision) => ipcRenderer.invoke('model-download:update', precision, revision),
   modelDownloadUpdateJp: (precision, revision) => ipcRenderer.invoke('model-download:update-jp', precision, revision),
   modelDownloadUpdateSifigan: (revision) => ipcRenderer.invoke('model-download:update-sifigan', revision),
+  modelDownloadUpdateFcpe: (revision) => ipcRenderer.invoke('model-download:update-fcpe', revision),
   // Version listing (fetch available branches from ModelScope)
   modelDownloadListVersions: (precision) => ipcRenderer.invoke('model-download:list-versions', precision),
   modelDownloadListJpVersions: (precision) => ipcRenderer.invoke('model-download:list-jp-versions', precision),
@@ -256,6 +271,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveLocale: (locale) => ipcRenderer.invoke('save-locale', locale),
   getLocale: () => ipcRenderer.invoke('get-locale'),
   reloadMainWindow: () => ipcRenderer.invoke('reload-main-window'),
+  // 布局尺寸变化通知（DevTools 打开/关闭、窗口 resize 等）。
+  // 停靠式 DevTools 关闭后 BrowserWindow 的 bounds 不变，window 'resize'
+  // 不一定触发，导致 canvas 仍按旧尺寸绘制 —— 需要主进程显式推送一次。
+  onRelayout: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('app:relayout', handler);
+    return () => ipcRenderer.removeListener('app:relayout', handler);
+  },
   onLocaleChanged: (callback) => {
     const handler = () => callback();
     ipcRenderer.on('locale-changed', handler);
@@ -266,6 +289,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const handler = () => callback();
     ipcRenderer.on('close-confirm', handler);
     return () => ipcRenderer.removeListener('close-confirm', handler);
+  },
+  // 模态设置窗口已打开（主进程 → 主窗口）：渲染层应暂停播放，
+  // 否则模态期间主窗口输入被禁用而音频继续，用户无法控制。
+  onSettingsWindowOpened: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('settings-window:opened', handler);
+    return () => ipcRenderer.removeListener('settings-window:opened', handler);
   },
   closeConfirmed: () => ipcRenderer.invoke('close-confirmed'),
   onMainMenuSaveRequest: (callback) => {
@@ -345,6 +375,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('webnn:prefetch:request', handler);
     return () => ipcRenderer.removeListener('webnn:prefetch:request', handler);
   },
+  // 主进程 clearNPUFailureCache() 通过 'webnn:clearNpuCache' 通知渲染端清掉
+  // 本地检测结果缓存。此前 preload 未暴露该桥接，主进程清缓存后渲染端仍会
+  // 返回陈旧结果（要等 5 分钟 TTL 才恢复），表现为"换语言模型后 NPU 一直
+  // 检测不到"。
+  onClearNpuCache: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('webnn:clearNpuCache', handler);
+    return () => ipcRenderer.removeListener('webnn:clearNpuCache', handler);
+  },
   // Security: whitelist allowed WebNN response channels to prevent arbitrary IPC invocation
   webnnRespond: (responseChannel, result) => {
     const allowedPrefixes = [
@@ -359,7 +398,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       console.error('[Preload] Blocked unauthorized webnnRespond channel:', responseChannel);
       return;
     }
-    ipcRenderer.invoke(responseChannel, result);
+    // Main process listens with ipcMain.on (not handle), so use send only.
+    // Using invoke here triggers "No handler registered" in main and an
+    // uncaught rejection overlay in the renderer.
+    try {
+      ipcRenderer.send(responseChannel, result);
+    } catch (_) {}
   },
   // Security: whitelist allowed WebNN progress channels
   webnnProgress: (progressChannel, data) => {
@@ -448,8 +492,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: (params) => ipcRenderer.invoke('singer-market:list', params),
     fileDetail: (fileId) => ipcRenderer.invoke('singer-market:file-detail', fileId),
     tags: (params) => ipcRenderer.invoke('singer-market:tags', params),
+    licenses: () => ipcRenderer.invoke('singer-market:licenses'),
     upload: (payload) => ipcRenderer.invoke('singer-market:upload', payload),
     download: (fileId) => ipcRenderer.invoke('singer-market:download', fileId),
+    // Subscribe to download progress events from the main process.
+    // Returns an unsubscribe function.
+    onDownloadProgress: (callback) => {
+      const listener = (_event, data) => callback(data);
+      ipcRenderer.on('singer-market:download-progress', listener);
+      return () => ipcRenderer.removeListener('singer-market:download-progress', listener);
+    },
     pickFile: () => ipcRenderer.invoke('singer-market:pick-file'),
     pickSavePath: (suggestedName) => ipcRenderer.invoke('singer-market:pick-save-path', suggestedName),
   },

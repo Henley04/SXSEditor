@@ -1,0 +1,7 @@
+{
+  "timestamp": "2026-08-28T01:56:05.757Z",
+  "seq": 256,
+  "runs": 2,
+  "results": [],
+  "note": "Copy trt_fp16/*.onnx to fp16/ for drop-in winml: isWinmlEnabled will pick TRT EP (preflow/diff_step/vocoder if eligible)"
+}

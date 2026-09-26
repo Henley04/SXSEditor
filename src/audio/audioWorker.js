@@ -35,6 +35,54 @@ let _audioData = null;
 let _sampleRate = 24000;
 let _duration = 0;
 let _positionInterval = null;
+// W2: Idempotent 'ended' guard (module-level declaration; previously this was
+// an undeclared implicit global).
+let _endedSent = false;
+
+// Idle auto-shutdown: lets the device-query path (AudioOutputManager default
+// instance) keep this process around for fast reuse while still freeing the
+// fork ~30s after the last command. Never fires during playback.
+let _idleTimer = null;
+const IDLE_TIMEOUT_MS = 30000;
+
+function _cancelIdleShutdown() {
+  if (_idleTimer) {
+    clearTimeout(_idleTimer);
+    _idleTimer = null;
+  }
+}
+
+function _scheduleIdleShutdown() {
+  _cancelIdleShutdown();
+  _idleTimer = setTimeout(() => {
+    // Don't exit while a stream is playing.
+    if (_isPlaying) return;
+    try { handleStop(); } catch (_) {}
+    _safeSend({ type: 'idle-shutdown' });
+    process.exit(0);
+  }, IDLE_TIMEOUT_MS);
+}
+
+// W2: process.send wrapper — avoids ERR_IPC_CHANNEL_CLOSED crashes when the
+// parent has already disconnected.
+function _safeSend(msg) {
+  try {
+    if (process.connected && typeof process.send === 'function') {
+      process.send(msg);
+    }
+  } catch (_) { /* channel closed */ }
+}
+
+// W3: Idempotently notify the parent that playback has ended. Safe to call
+// from both the Speaker finish event and the interval fallback.
+function _notifyEnded() {
+  if (_endedSent) return;
+  _endedSent = true;
+  _isPlaying = false;
+  _stopPositionTracking();
+  _safeSend({ type: 'ended' });
+  _scheduleIdleShutdown();
+}
 
 function resampleLinear(audio, sourceRate, targetRate) {
   if (sourceRate === targetRate) return audio;
@@ -208,6 +256,7 @@ function _stopPositionTracking() {
 
 process.on('message', (msg) => {
   const { id, type } = msg;
+  _cancelIdleShutdown();
 
   try {
     let result;
@@ -237,6 +286,10 @@ process.on('message', (msg) => {
     // W2: Use _safeSend to avoid ERR_IPC_CHANNEL_CLOSED if parent disconnected.
     _safeSend({ id, type, result: { error: err.message } });
   }
+
+  // Successful start keeps the process alive for the playback session;
+  // everything else (queries, stops, errors) rearms idle shutdown.
+  if (!_isPlaying) _scheduleIdleShutdown();
 });
 
 // W2: Handle SIGTERM so worker.kill() from the parent runs handleStop()
@@ -249,3 +302,6 @@ process.on('SIGTERM', async () => {
 
 // W2: Use _safeSend for the initial ready signal as well.
 _safeSend({ type: 'ready', isAvailable: !!Speaker });
+// Query-only sessions (device enumeration / availability check) auto-exit
+// when idle; playback commands cancel this timer for their duration.
+_scheduleIdleShutdown();

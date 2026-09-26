@@ -1,6 +1,8 @@
-const { BrowserWindow, dialog, ipcMain } = require('electron');
+const { BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const path = require('node:path');
 const { t } = require('./locale');
+// 文档入口：本地优先（随应用分发的 docs/），线上版本作为独立入口
+const { openDoc, openOnlineDoc, DOC_ENTRIES } = require('./docs');
 
 const isDev = !require('electron').app.isPackaged;
 
@@ -21,6 +23,54 @@ let isDirty = false;
 let closePending = false;
 
 function getMainWindow() { return mainWindow; }
+
+/**
+ * 通知某个窗口的渲染进程"内容区尺寸可能已变化，请重新布局"。
+ *
+ * 用于修复：停靠式 DevTools 打开后再关闭，BrowserWindow 的 bounds 不变、
+ * window 'resize' 也不一定触发，页面 canvas 仍按旧尺寸绘制，表现为
+ * "开发者工具关闭后页面没有自动刷新，必须手动操作一下才正常"。
+ *
+ * DevTools 关闭后 Chromium 需要若干帧才把新尺寸应用到宿主视图，所以这里
+ * 发送多次（0 / 60 / 200ms），由渲染进程自行去重。
+ *
+ * @param {import('electron').BrowserWindow} win
+ */
+function notifyRelayout(win) {
+  if (!win || win.isDestroyed()) return;
+  const send = () => {
+    try {
+      if (!win.isDestroyed()) win.webContents.send('app:relayout');
+    } catch (_) {}
+  };
+  send();
+  setTimeout(send, 60);
+  setTimeout(send, 200);
+}
+
+/**
+ * 给窗口挂上"尺寸/DevTools 变化 → 通知渲染进程重排"的监听。
+ *
+ * 必须在窗口创建后尽早调用，否则会漏掉 devtools-opened/closed。
+ *
+ * @param {import('electron').BrowserWindow} win
+ */
+function attachRelayoutListeners(win) {
+  if (!win || win.isDestroyed()) return;
+  const wc = win.webContents;
+  try {
+    wc.on('devtools-opened', () => notifyRelayout(win));
+    wc.on('devtools-closed', () => notifyRelayout(win));
+  } catch (_) {}
+  try {
+    win.on('resize', () => notifyRelayout(win));
+    win.on('enter-full-screen', () => notifyRelayout(win));
+    win.on('leave-full-screen', () => notifyRelayout(win));
+    win.on('maximize', () => notifyRelayout(win));
+    win.on('unmaximize', () => notifyRelayout(win));
+  } catch (_) {}
+}
+
 function getSettingsWindow() { return settingsWindow; }
 function getResourceManagerWindow() { return resourceManagerWindow; }
 function getModelDownloadWindow() { return modelDownloadWindow; }
@@ -114,33 +164,41 @@ function buildAppMenu() {
       label: t('menu.help'),
       submenu: [
         {
+          // 项目主页：GitHub 仓库（文档站首页由下面的「在线文档」入口承担）
           label: t('menu.website'),
           click: () => {
             try {
-              require('electron').shell.openExternal('https://henley04.github.io/SXSEditor/');
+              require('electron').shell.openExternal('https://github.com/Henley04/SXSEditor/');
             } catch (err) {
               console.warn('[Menu] Open website failed:', err.message);
             }
           },
         },
         {
+          // 本地文档：随应用分发的 docs/user/quick-start.html，缺失时回退线上
           label: t('menu.userDocs'),
           click: () => {
-            try {
-              require('electron').shell.openExternal('https://henley04.github.io/SXSEditor/user/quick-start.html');
-            } catch (err) {
-              console.warn('[Menu] Open user docs failed:', err.message);
-            }
+            openDoc(DOC_ENTRIES.quickStart).catch((err) => {
+              console.warn('[Menu] Open user docs failed:', err && err.message);
+            });
           },
         },
         {
+          // 本地文档：随应用分发的 docs/dev/build.html，缺失时回退线上
           label: t('menu.devDocs'),
           click: () => {
-            try {
-              require('electron').shell.openExternal('https://henley04.github.io/SXSEditor/dev/build.html');
-            } catch (err) {
-              console.warn('[Menu] Open dev docs failed:', err.message);
-            }
+            openDoc(DOC_ENTRIES.devBuild).catch((err) => {
+              console.warn('[Menu] Open dev docs failed:', err && err.message);
+            });
+          },
+        },
+        {
+          // 线上版本单独入口：始终打开 GitHub Pages 上的最新版文档
+          label: t('menu.onlineDocs'),
+          click: () => {
+            openOnlineDoc('').catch((err) => {
+              console.warn('[Menu] Open online docs failed:', err && err.message);
+            });
           },
         },
         { type: 'separator' },
@@ -214,6 +272,7 @@ function createWindow(opts = {}) {
   });
 
   mainWindow.loadURL(MAIN_WINDOW_WEBPACK_ENTRY);
+  attachRelayoutListeners(mainWindow);
   mainWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
@@ -240,6 +299,14 @@ function createWindow(opts = {}) {
 }
 
 function openSettingsWindow() {
+  // 模态设置窗口会禁用主窗口输入（用户点不了暂停/停止），但主窗口的
+  // WebAudio 播放、rAF、流式推理与 underrun 恢复全部继续在后台运行。
+  // 若不暂停，用户关闭设置后会面对"播放被无视继续跑"且播放头已推进到
+  // 未知位置（长间隔场景尤其明显）。打开设置即暂停：记录当前位置，
+  // 回到主窗口后可从暂停点手动继续。
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('settings-window:opened'); } catch (_) {}
+  }
   if (settingsWindow) {
     settingsWindow.focus();
     return;
@@ -451,6 +518,7 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   });
 
   fragmentWindow.loadURL(`${FRAGMENT_EDITOR_WINDOW_WEBPACK_ENTRY}#fragmentId=${encodeURIComponent(fragment.id)}`);
+  attachRelayoutListeners(fragmentWindow);
   fragmentWindow.once('ready-to-show', () => { fragmentWindow.show(); });
   fragmentWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   fragmentWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -609,7 +677,16 @@ function openSingerMarket() {
   singerMarketWindow.loadURL(SINGER_MARKET_WINDOW_WEBPACK_ENTRY);
   singerMarketWindow.once('ready-to-show', () => { singerMarketWindow.show(); });
   singerMarketWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
-  singerMarketWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // target="_blank" links in the market UI (terms-of-use disclaimer, license
+  // URLs, …) must open in the system browser. A blanket deny made those
+  // clicks silently no-op. Only http(s) is allowed through to openExternal;
+  // everything else stays denied.
+  singerMarketWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
 
   singerMarketWindow.on('closed', () => {
     singerMarketWindow = null;
@@ -792,8 +869,8 @@ function registerWindowIpc() {
   ipcMain.handle('reload-main-window', async () => {
     buildAppMenu();
     if (mainWindow && !mainWindow.isDestroyed()) {
+      // Apply locale in place. Reloading destroys the unsaved in-memory project.
       mainWindow.webContents.send('locale-changed');
-      mainWindow.reload();
     }
   });
 }
@@ -801,6 +878,8 @@ function registerWindowIpc() {
 module.exports = {
   createWindow,
   openSettingsWindow,
+  notifyRelayout,
+  attachRelayoutListeners,
   openResourceManagerWindow,
   createModelDownloadWindow,
   setModelDownloadWindow,

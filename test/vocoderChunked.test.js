@@ -182,4 +182,64 @@ describe('Postprocessing.runVocoderChunked - 分块循环终止回归测试', ()
     expect(thrownErr).to.not.be.null;
     expect(thrownErr.message).to.match(/nan/i);
   });
+
+  // ---- 会话输入契约护栏（W16A32 / TRT-RTX "Unexpected input data type" 回归）----
+  describe('session mel input contract guard', () => {
+    // 记录每次 run 收到的 mel 张量类型，返回非零波形通过全零校验。
+    function makeContractSessions(melContractType, melTypes) {
+      return {
+        vocoder: {
+          inputMetadata: [{ name: 'mel', type: melContractType, shape: [1, -1, MEL_DIM] }],
+          async run(inputs) {
+            melTypes.push(inputs.mel.type);
+            const vocSeqLen = inputs.mel.dims[1];
+            const data = new Float32Array(vocSeqLen * HOP_SIZE).fill(0.5);
+            return { waveform: { type: 'float32', data } };
+          },
+        },
+      };
+    }
+
+    it('isFP16=true 但会话声明 mel=float32（W16A32）时实际喂 float32', async () => {
+      const melTypes = [];
+      const totalFrames = 100; // 单 chunk 路径
+      const melData = new Float32Array(totalFrames * MEL_DIM);
+      await pp.runVocoderChunked(
+        makeContractSessions('float32', melTypes), melData, totalFrames, true, false, 'default', null, false
+      );
+      expect(melTypes.length).to.be.greaterThan(0);
+      expect(melTypes.every(t => t === 'float32')).to.equal(true);
+    });
+
+    it('isFP16=false 但会话声明 mel=float16 时实际喂 float16', async () => {
+      const melTypes = [];
+      const totalFrames = 100;
+      const melData = new Float32Array(totalFrames * MEL_DIM);
+      await pp.runVocoderChunked(
+        makeContractSessions('float16', melTypes), melData, totalFrames, false, false, 'default', null, false
+      );
+      expect(melTypes.length).to.be.greaterThan(0);
+      expect(melTypes.every(t => t === 'float16')).to.equal(true);
+    });
+
+    it('无 inputMetadata 时沿用 isFP16 标志（向后兼容）', async () => {
+      const melTypes = [];
+      const sessions = {
+        vocoder: {
+          async run(inputs) {
+            melTypes.push(inputs.mel.type);
+            const vocSeqLen = inputs.mel.dims[1];
+            const data = new Float32Array(vocSeqLen * HOP_SIZE).fill(0.5);
+            return { waveform: { type: 'float32', data } };
+          },
+        },
+      };
+      const totalFrames = 100;
+      const melData = new Float32Array(totalFrames * MEL_DIM);
+      await pp.runVocoderChunked(
+        sessions, melData, totalFrames, true, false, 'default', null, false
+      );
+      expect(melTypes.every(t => t === 'float16')).to.equal(true);
+    });
+  });
 });

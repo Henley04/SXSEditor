@@ -23,6 +23,28 @@ let _isPlayheadDragging = false;
 let _wasPlayingBeforeDrag = false;
 // Playhead tooltip 元素（懒创建）
 let _playheadTooltip = null;
+
+// fragmentContainer 的 bounding rect 缓存。mousemove / wheel 是高频路径，
+// 每次都 getBoundingClientRect() 会强制同步 layout（reflow），造成明显掉帧。
+// 仅在布局真正可能变化（resize / relayout / 面板折叠）时失效。
+let _fragmentCanvasRectCache = null;
+function _getFragmentCanvasRect() {
+  if (!_fragmentCanvasRectCache) {
+    _fragmentCanvasRectCache = dom.fragmentCanvas.getBoundingClientRect();
+  }
+  return _fragmentCanvasRectCache;
+}
+let _fragmentContainerRectCache = null;
+export function _getFragmentContainerRect() {
+  if (!_fragmentContainerRectCache) {
+    _fragmentContainerRectCache = dom.fragmentContainer.getBoundingClientRect();
+  }
+  return _fragmentContainerRectCache;
+}
+export function _invalidateContainerRect() {
+  _fragmentContainerRectCache = null;
+  _fragmentCanvasRectCache = null;
+}
 // rAF 节流：mousemove 触发频率高于刷新率，合并同一帧内的多次 playhead 视觉更新。
 // _playheadDragRaf 标记是否有 pending 的 rAF 回调；
 // _playheadDragPendingSeconds 记录最新一次 mousemove 计算出的秒数，供 rAF 回调读取。
@@ -78,12 +100,12 @@ function _getCurrentPlayheadX() {
  * virtual timeline by adding the current scroll offset.
  */
 function _mouseToCanvasX(e) {
-  const rect = dom.fragmentCanvas.getBoundingClientRect();
+  const rect = _getFragmentCanvasRect();
   return e.clientX - rect.left + state.fragmentScrollX;
 }
 
 function _mouseToCanvasY(e) {
-  const rect = dom.fragmentCanvas.getBoundingClientRect();
+  const rect = _getFragmentCanvasRect();
   return e.clientY - rect.top + state.fragmentScrollY;
 }
 
@@ -233,7 +255,7 @@ dom.btnImportMidi.addEventListener('click', handleImportMidi);
 
 // Fragment canvas mouse events
 dom.fragmentCanvas.addEventListener('mousedown', (e) => {
-  const rect = dom.fragmentCanvas.getBoundingClientRect();
+  const rect = _getFragmentCanvasRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
 
@@ -325,7 +347,7 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
 
   if (!state.dragState) {
     // 鼠标悬停在 playhead 上时：显示 ew-resize 光标 + 时间 tooltip
-    const rect = dom.fragmentCanvas.getBoundingClientRect();
+    const rect = _getFragmentCanvasRect();
     const x = e.clientX - rect.left;
     const y = e.clientY - rect.top;
     const playheadX = _getCurrentPlayheadX();
@@ -465,7 +487,7 @@ dom.fragmentCanvas.addEventListener('mouseleave', () => {
 });
 
 dom.fragmentCanvas.addEventListener('dblclick', (e) => {
-  const rect = dom.fragmentCanvas.getBoundingClientRect();
+  const rect = _getFragmentCanvasRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
 
@@ -494,7 +516,7 @@ dom.fragmentCanvas.addEventListener('dblclick', (e) => {
 
 dom.fragmentCanvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
-  const rect = dom.fragmentCanvas.getBoundingClientRect();
+  const rect = _getFragmentCanvasRect();
   const x = e.clientX - rect.left;
   const y = e.clientY - rect.top;
 
@@ -527,62 +549,71 @@ dom.fragmentCanvas.addEventListener('contextmenu', (e) => {
 });
 
 // Wheel events: rAF-coalesced to avoid layout thrash on high-frequency trackpad scroll.
-// The latest wheel event is captured and processed inside a single rAF callback;
-// subsequent events before the frame fires just overwrite the pending state.
+// 关键：同一帧内的多个 wheel 事件必须「累加」delta —— 若只保留最后一个，
+// 一帧内到达的 3~5 次事件会被丢掉 2~4 次，滚动距离被吃掉，手感发飘、不跟手。
+const _wheelAcc = { dx: 0, dy: 0, clientX: 0, zoom: false, shift: false, target: null, has: false };
 let _wheelRaf = 0;
-let _pendingWheelEvent = null;
-let _pendingWheelTarget = null;
+// 将不同 deltaMode 归一化到像素，避免行/页模式下滚动量失真
+function _normalizeWheel(e, value) {
+  if (e.deltaMode === 1) return value * 16;   // DOM_DELTA_LINE
+  if (e.deltaMode === 2) return value * 100;  // DOM_DELTA_PAGE
+  return value;
+}
 
 function _processPendingWheel() {
   _wheelRaf = 0;
-  const e = _pendingWheelEvent;
-  const target = _pendingWheelTarget;
-  _pendingWheelEvent = null;
-  _pendingWheelTarget = null;
-  if (!e) return;
+  if (!_wheelAcc.has) return;
+  const { dx, dy, clientX, zoom, shift, target } = _wheelAcc;
+  _wheelAcc.has = false;
 
   if (target === dom.fragmentContainer) {
-    if (e.ctrlKey || e.metaKey) {
-      const containerRect = dom.fragmentContainer.getBoundingClientRect();
-      const mouseXInContainer = e.clientX - containerRect.left;
+    if (zoom) {
+      const containerRect = _getFragmentContainerRect();
+      const mouseXInContainer = clientX - containerRect.left;
       const beatWidth = getBeatWidth();
       const mouseBeats = (mouseXInContainer + state.fragmentScrollX) / beatWidth;
 
-      const delta = e.deltaY > 0 ? 0.85 : 1.18;
-      state.fragmentZoomX = Math.max(0.25, Math.min(4, state.fragmentZoomX * delta));
+      // 指数映射：小 delta（触控板）也能得到平滑且成比例的缩放
+      const factor = Math.pow(0.85, dy / 100);
+      state.fragmentZoomX = Math.max(0.25, Math.min(4, state.fragmentZoomX * factor));
 
       const newBeatWidth = getBeatWidth();
       state.fragmentScrollX = mouseBeats * newBeatWidth - mouseXInContainer;
       renderFragmentTimeline();
-    } else if (e.shiftKey) {
-      state.fragmentScrollX += e.deltaY;
+    } else if (shift) {
+      state.fragmentScrollX += (dx !== 0 ? dx : dy);
     } else {
-      state.fragmentScrollY += e.deltaY;
+      state.fragmentScrollY += dy;
     }
     syncFragmentScroll();
     renderFragmentTimeline();
   } else if (target === dom.singerListEl) {
-    state.fragmentScrollY += e.deltaY;
+    state.fragmentScrollY += dy;
     syncFragmentScroll();
     renderFragmentTimeline();
   }
 }
 
-dom.fragmentContainer.addEventListener('wheel', (e) => {
+function _pushWheel(e, target) {
   e.preventDefault();
-  _pendingWheelEvent = e;
-  _pendingWheelTarget = dom.fragmentContainer;
+  if (!_wheelAcc.has) {
+    _wheelAcc.has = true;
+    _wheelAcc.dx = 0;
+    _wheelAcc.dy = 0;
+    _wheelAcc.clientX = e.clientX;
+    _wheelAcc.zoom = e.ctrlKey || e.metaKey;
+    _wheelAcc.shift = e.shiftKey;
+    _wheelAcc.target = target;
+  }
+  _wheelAcc.dx += _normalizeWheel(e, e.deltaX);
+  _wheelAcc.dy += _normalizeWheel(e, e.deltaY);
   if (_wheelRaf) return;
   _wheelRaf = requestAnimationFrame(_processPendingWheel);
-}, { passive: false });
+}
 
-dom.singerListEl.addEventListener('wheel', (e) => {
-  e.preventDefault();
-  _pendingWheelEvent = e;
-  _pendingWheelTarget = dom.singerListEl;
-  if (_wheelRaf) return;
-  _wheelRaf = requestAnimationFrame(_processPendingWheel);
-}, { passive: false });
+dom.fragmentContainer.addEventListener('wheel', (e) => _pushWheel(e, dom.fragmentContainer), { passive: false });
+
+dom.singerListEl.addEventListener('wheel', (e) => _pushWheel(e, dom.singerListEl), { passive: false });
 
 // Keyboard shortcuts
 document.addEventListener('keydown', (e) => {
@@ -632,6 +663,18 @@ if (window.electronAPI?.onMainMenuSaveRequest) {
 if (window.electronAPI?.onMainMenuSaveAsRequest) {
   const off2 = window.electronAPI.onMainMenuSaveAsRequest(() => { saveProjectAs(); });
   if (state._ipcCleanups) state._ipcCleanups.push(off2);
+}
+
+// 模态设置窗口打开时自动暂停播放：模态窗口会禁用主窗口输入（无法点击
+// 暂停/停止），但 WebAudio 播放、流式推理与 underrun 恢复仍在后台继续，
+// 表现为"播放时点设置，播放被无视且关掉设置后仍在自动播放"。
+// 暂停保留当前位置（playbackPauseOffset / 暂停态播放头），回到主窗口后
+// 可点击"继续"从暂停点恢复；后台流式合成不受影响，完成后可正常续播。
+if (window.electronAPI?.onSettingsWindowOpened) {
+  const offSettingsPause = window.electronAPI.onSettingsWindowOpened(() => {
+    if (state.isPlaying) pausePlayback();
+  });
+  if (state._ipcCleanups) state._ipcCleanups.push(offSettingsPause);
 }
 
 // ---- Fragment context menu ----

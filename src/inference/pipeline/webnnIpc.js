@@ -5,7 +5,15 @@
  * 成功 / 失败 / 超时三条路径上都正确清理 ipcMain 监听器，
  * 避免长时间运行时累积僵尸监听器导致的内存泄漏与 IPC 通道阻塞。
  */
-const { ipcMain } = require('electron');
+let ipcMain;
+try {
+  ({ ipcMain } = require('electron'));
+} catch (_) {
+  // Allow pipeline modules to be required inside worker_threads / packaged
+  // workers where the 'electron' module is unavailable or resolves to a
+  // path string. WebNN IPC is main-process only; callers handle null.
+  ipcMain = null;
+}
 const { IPC_TIMEOUT_INFERENCE, IPC_TIMEOUT_MODEL_LOAD, IPC_TIMEOUT_SYNTHESIS } = require('./constants');
 
 /**
@@ -44,9 +52,11 @@ function requestWebNNOnce({
 
         const cleanup = () => {
             clearTimeout(timeoutHandle);
-            ipcMain.removeListener(responseChannel, responseHandler);
-            if (onProgress) ipcMain.removeListener(progressChannel, progressHandler);
-            if (onChunkAudio) ipcMain.removeListener(chunkChannel, chunkHandler);
+            if (ipcMain) {
+                ipcMain.removeListener(responseChannel, responseHandler);
+                if (onProgress) ipcMain.removeListener(progressChannel, progressHandler);
+                if (onChunkAudio) ipcMain.removeListener(chunkChannel, chunkHandler);
+            }
         };
 
         const responseHandler = (_event, result) => {
@@ -86,6 +96,11 @@ function requestWebNNOnce({
             reject(new Error(timeoutMessage));
         }, timeoutMs);
 
+        if (!ipcMain) {
+            clearTimeout(timeoutHandle);
+            reject(new Error('WebNN IPC unavailable (ipcMain not available in this context)'));
+            return;
+        }
         // handleOnce 只触发一次；超时后若响应到达，cleanup 已移除监听器，无副作用
         ipcMain.handleOnce(responseChannel, responseHandler);
         if (onProgress) ipcMain.on(progressChannel, progressHandler);

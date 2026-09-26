@@ -11,7 +11,7 @@
 #model-loading-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: rgba(10, 10, 20, 0.85);
+  background-color: var(--bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -43,27 +43,7 @@
 }
 
 /* ==================== Toolbar ==================== */
-#toolbar {
-  display: flex;
-  align-items: center;
-  height: 44px;
-  min-height: 44px;
-  padding: 0 12px;
-  background: linear-gradient(180deg, var(--bg-toolbar-start) 0%, var(--bg-toolbar-end) 100%);
-  color: var(--fg-primary);
-  border-bottom: 1px solid var(--border-subtle);
-  gap: var(--space-1);
-  box-shadow: 0 1px 3px var(--shadow-color-mid);
-  position: relative;
-  z-index: 10;
-}
-#toolbar::before {
-  content: "";
-  position: absolute;
-  left: 0; top: 0; bottom: 0;
-  width: var(--toolbar-accent-line, 0);
-  background: var(--accent);
-}
+/* 工具栏容器与分隔线统一由 components.css 提供（扁平、无渐变、无重复定义） */
 
 .toolbar-group {
   display: flex;
@@ -71,13 +51,6 @@
   gap: var(--space-2);
 }
 .toolbar-spacer { flex: 1; }
-.toolbar-divider {
-  width: 1px;
-  height: 22px;
-  background: linear-gradient(180deg, transparent, var(--border-default), transparent);
-  margin: 0 var(--space-3);
-  flex-shrink: 0;
-}
 
 #toolbar button {
   background: var(--bg-button);
@@ -510,7 +483,7 @@
   height: 32px;
   padding: 0 var(--space-3);
   gap: var(--space-2);
-  background: linear-gradient(180deg, var(--bg-toolbar-start) 0%, var(--bg-toolbar-end) 100%);
+  background: var(--bg-toolbar-start);
   border-bottom: 1px solid var(--border-subtle);
 }
 
@@ -638,7 +611,7 @@
 .shortcuts-overlay {
   position: absolute;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: rgba(10, 10, 20, 0.85);
+  background-color: var(--bg-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -744,7 +717,7 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  box-shadow: 0 6px 20px var(--shadow-color-mid), 0 2px 6px rgba(0,0,0,0.18);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -844,7 +817,7 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  box-shadow: 0 6px 20px var(--shadow-color-mid), 0 2px 6px rgba(0,0,0,0.18);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   gap: 2px;
@@ -891,7 +864,7 @@
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
-  box-shadow: 0 6px 20px var(--shadow-color-mid), 0 2px 6px rgba(0,0,0,0.18);
+  box-shadow: var(--shadow-lg);
   display: flex;
   flex-direction: column;
   gap: 6px;

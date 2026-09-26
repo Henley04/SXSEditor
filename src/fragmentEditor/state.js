@@ -9,6 +9,9 @@ let fragmentAudioSource = null;
 let fragmentAudioData = null;
 let fragmentIsPlaying = false;
 let fragmentIsSynthesizing = false;
+// 后台自动推理进行中（编辑后自动实时推理）。与 fragmentIsSynthesizing 互斥概念：
+// 它不代表用户主动等待的结果，因此不会禁用播放按钮，也不参与 playFragment 的重入保护。
+let fragmentIsAutoInferring = false;
 let fragmentIsExporting = false;
 let fragmentPlaybackStartTime = 0;
 let fragmentPlaybackOffset = 0;
@@ -151,6 +154,9 @@ export function setFragmentIsPlaying(v) { fragmentIsPlaying = v; }
 
 export function getFragmentIsSynthesizing() { return fragmentIsSynthesizing; }
 export function setFragmentIsSynthesizing(v) { fragmentIsSynthesizing = v; }
+
+export function getFragmentIsAutoInferring() { return fragmentIsAutoInferring; }
+export function setFragmentIsAutoInferring(v) { fragmentIsAutoInferring = v; }
 
 export function getFragmentIsExporting() { return fragmentIsExporting; }
 export function setFragmentIsExporting(v) { fragmentIsExporting = v; }

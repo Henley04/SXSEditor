@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Performance &amp; Inference Improvements — SXSEditor Docs</title>
+  <meta name="description" content="SXSEditor 近期性能与推理改进：WindowsML TensorRT-RTX EP 在 RTX 5060 Laptop 下 FP16 推理提升约 4 倍，以及背后的推理管线优化。" />
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="../dev/build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.3 3.5 1 .1-.8.4-1.3.7-1.6-2.6-.3-5.3-1.3-5.3-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2a11.5 11.5 0 0 1 6 0C17.3 4.6 18.3 5 18.3 5c.6 1.6.2 2.8.1 3.1.8.8 1.2 1.8 1.2 3.1 0 4.5-2.7 5.5-5.3 5.8.4.4.8 1.1.8 2.2v3.3c0 .3.2.6.8.5 4.6-1.5 7.9-5.8 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="user"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="quick-start.html" data-i18n="sidebar.user">User Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Performance &amp; Inference Improvements</span><span data-lang="zh">性能与推理改进</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Performance &amp; Inference Improvements</span>
+        <span data-lang="zh">性能与推理改进</span>
+      </h1>
+
+      <p data-lang="en">Over the last few releases we reworked the SXSEditor inference stack to run faster on NVIDIA GPUs and to be more robust across hardware. This article summarizes what changed, with a focus on the <strong>WindowsML TensorRT-RTX</strong> execution provider and the ~<strong>4× FP16 inference speedup</strong> it delivers on an <strong>NVIDIA GeForce RTX 5060 Laptop</strong>.</p>
+      <p data-lang="zh">在最近几个版本中，我们重构了 SXSEditor 的推理栈，使其在 NVIDIA GPU 上运行更快、并在不同硬件上更加稳健。本文总结了这些改动，重点介绍 <strong>WindowsML TensorRT-RTX</strong> 执行提供器，以及它在 <strong>NVIDIA GeForce RTX 5060 Laptop</strong> 上带来的约 <strong>4 倍 FP16 推理加速</strong>。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Related reading: <a href="app-updates.html">Application Updates</a> (v2.0.2) · <a href="model-updates.html">Model Updates</a> · <a href="../dev/inference-pipeline.html">Inference Pipeline</a>.</p>
+          <p data-lang="zh">相关阅读：<a href="app-updates.html">应用更新</a>（v2.0.2）· <a href="model-updates.html">模型更新</a> · <a href="../dev/inference-pipeline.html">推理管线</a>。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">WindowsML TensorRT-RTX: ~4× FP16 speedup</span>
+        <span data-lang="zh">WindowsML TensorRT-RTX：约 4 倍 FP16 加速</span>
+      </h2>
+      <p data-lang="en">SXSEditor now ships FP16 ONNX models that can run on NVIDIA GPUs through the <strong>Windows ML (WinML)</strong> <code>NvTensorRTRTXExecutionProvider</code> (TensorRT via the MSIX WinML runtime, ORT 1.27 + TensorRT-RTX). When the TensorRT-RTX path is available and model files are present, <code>preflow</code>, <code>diff_step</code> and <code>vocoder</code> are loaded on the <code>[winml:NvTensor]</code> backend with <code>DML</code> (and <code>CPU</code>) as automatic fallbacks.</p>
+      <p data-lang="zh">SXSEditor 现在提供 FP16 ONNX 模型，可通过 <strong>Windows ML (WinML)</strong> 的 <code>NvTensorRTRTXExecutionProvider</code>（基于 MSIX WinML 运行时封装 TensorRT，ORT 1.27 + TensorRT-RTX）在 NVIDIA GPU 上运行。当 TensorRT-RTX 路径可用且模型文件存在时，<code>preflow</code>、<code>diff_step</code> 与 <code>vocoder</code> 会在 <code>[winml:NvTensor]</code> 后端加载，并自动以 <code>DML</code>（以及 <code>CPU</code>）作为回退。</p>
+
+      <p data-lang="en">We measured both model-level p50 latency and end-to-end synthesis on an <strong>NVIDIA GeForce RTX 5060 Laptop (8 GB), Windows 11 24H2</strong>. The TensorRT-RTX FP16 path is roughly <strong>4–5× faster</strong> than the DML FP32 baseline on individual models, and approx. <strong>4× faster</strong> end-to-end for a single 16-step segment.</p>
+      <p data-lang="zh">我们在 <strong>NVIDIA GeForce RTX 5060 Laptop（8 GB）、Windows 11 24H2</strong> 上测得了模型级 p50 延迟与端到端合成时间。TensorRT-RTX 的 FP16 路径在单个模型上比 DML FP32 基线快约 <strong>4–5 倍</strong>，对于单个 16 步乐段，端到端约<strong>快 4 倍</strong>。</p>
+
+      <table>
+        <thead>
+          <tr>
+            <th data-lang="en">Model (p50)</th><th data-lang="zh">模型（p50）</th>
+            <th data-lang="en">DML FP32</th><th data-lang="zh">DML FP32</th>
+            <th data-lang="en">TensorRT-RTX FP16</th><th data-lang="zh">TensorRT-RTX FP16</th>
+            <th data-lang="en">Speedup</th><th data-lang="zh">加速比</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td data-lang="en">diff_step (seq=512)</td><td data-lang="zh">diff_step（seq=512）</td>
+            <td>49 ms</td><td data-lang="zh">49 ms</td>
+            <td>10 ms</td><td data-lang="zh">10 ms</td>
+            <td>≈ 4.9×</td><td data-lang="zh">≈ 4.9×</td>
+          </tr>
+          <tr>
+            <td data-lang="en">vocoder (200 frames)</td><td data-lang="zh">vocoder（200 帧）</td>
+            <td>31 ms</td><td data-lang="zh">31 ms</td>
+            <td>7 ms</td><td data-lang="zh">7 ms</td>
+            <td>≈ 4.4×</td><td data-lang="zh">≈ 4.4×</td>
+          </tr>
+          <tr>
+            <td data-lang="en">End-to-end (971 frames, 16 steps)</td><td data-lang="zh">端到端（971 帧，16 步）</td>
+            <td>—</td><td data-lang="zh">—</td>
+            <td>≈ 4×</td><td data-lang="zh">≈ 4×</td>
+            <td>—</td><td data-lang="zh">—</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p data-lang="en">TensorRT-RTX is <strong>opt-in</strong>: the app exposes a <em>one-click TensorRT-RTX diagnostic</em> and keeps the TRT dynamic profile generation optional. Model files are drop-in compatible with the existing <code>fp16/</code> folder, so switching between DML and TensorRT-RTX requires no extra downloads.</p>
+      <p data-lang="zh">TensorRT-RTX 为<strong>可选开启</strong>：应用提供<em>一键 TensorRT-RTX 诊断</em>，并保持 TRT 动态 profile 生成可选。模型文件与现有 <code>fp16/</code> 目录直接兼容，因此在 DML 与 TensorRT-RTX 之间切换无需额外下载。</p>
+
+      <h2>
+        <span data-lang="en">Native backend selection</span>
+        <span data-lang="zh">原生后端选择</span>
+      </h2>
+      <p data-lang="en">The old WAML-enabled checkbox has been replaced by a <strong>native inference backend selector</strong> in Settings. A single execution provider now serves multiple hardware paths — you pick a preferred backend (e.g. <em>TensorRT-RTX</em>, <em>DML</em>, <em>WebNN NPU/GPU</em> or <em>CPU</em>) and SXSEditor falls back automatically when a path is unavailable. This removes a whole class of "model loaded on CPU" surprises and makes hardware switching explicit.</p>
+      <p data-lang="zh">设置中旧的 WinML 开关已被<strong>原生推理后端选择器</strong>取代。单一执行提供器现可服务多条硬件路径——你选择一个首选后端（如 <em>TensorRT-RTX</em>、<em>DML</em>、<em>WebNN NPU/GPU</em> 或 <em>CPU</em>），当某条路径不可用时 SXSEditor 会自动回退。这消除了一整类"模型意外跑到 CPU 上"的问题，也让硬件切换变得清晰。</p>
+
+      <h2>
+        <span data-lang="en">Robustness: zero-output protection &amp; D2H fallback</span>
+        <span data-lang="zh">稳健性：全零输出保护与 D2H 回退</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>Application-level zero-output protection</strong> — vendor execution providers occasionally return all-zero tensors. SXSEditor now detects all-zero outputs and falls back to a safe path instead of silently producing silence.</span><span data-lang="zh"><strong>应用级全零输出保护</strong>——第三方执行提供器偶尔会返回全零张量。SXSEditor 现在会检测全零输出并回退到安全路径，而不是静默产出静音。</span></li>
+        <li><span data-lang="en"><strong>D2H ArrayBuffer copy fallback</strong> — device-to-host copies for vendor EPs now use a robust ArrayBuffer copy path with a <code>d2h-copy-v3</code> marker in the native bridge, fixing all-zero outputs from vendor EPs and keeping TensorRT-RTX profiles opt-in.</span><span data-lang="zh"><strong>D2H ArrayBuffer 复制回退</strong>——第三方 EP 的设备到主机复制现改用稳健的 ArrayBuffer 复制路径，并在原生桥接模块中加入 <code>d2h-copy-v3</code> 标记，修复第三方 EP 的全零输出，同时保持 TensorRT-RTX profile 可选。</span></li>
+        <li><span data-lang="en"><strong>Native ORT bridge rebuild</strong> — the native addon is rebuilt for Electron on each release and verified at CI time to carry the D2H copy path, so packaged builds always ship the hardened bridge.</span><span data-lang="zh"><strong>原生 ORT 桥接模块重建</strong>——每次发布时都会为 Electron 重建原生插件，并在 CI 中校验其携带 D2H 复制路径，确保打包版本始终包含加固后的桥接模块。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Latency &amp; streaming improvements</span>
+        <span data-lang="zh">延迟与流式改进</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>GPU drain delay removal</strong> — the fixed per-chunk GPU drain waits are gone; waits are now applied only after an out-of-memory event, cutting idle time in the diffusion loop.</span><span data-lang="zh"><strong>移除 GPU 排空延迟</strong>——移除每 chunk 固定的 GPU 排空等待；仅在发生显存不足后才施加等待，减少扩散循环中的空闲时间。</span></li>
+        <li><span data-lang="en"><strong>Streaming chunk-resume cache</strong> — long streams resume from cached chunks, so scrubbing back and replaying a section avoids re-running inference.</span><span data-lang="zh"><strong>流式 chunk 续播缓存</strong>——长流可从已缓存 chunk 续播，回拉播放头重放某段时无需重新推理。</span></li>
+        <li><span data-lang="en"><strong>Vocal region splitting &amp; long-rest fix</strong> — non-vocal regions (incl. long rests ≥ 1.5 s) are split out of model input, and streaming synthesis keeps absolute note starts so voices no longer pile up after a long rest.</span><span data-lang="zh"><strong>人声区域切分与长休止修复</strong>——非人声区域（含 ≥ 1.5 秒的长休止）从模型输入中切分出去，流式合成保持绝对音符起点，长休止后的人声不再重叠堆叠。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">How to enable it</span>
+        <span data-lang="zh">如何启用</span>
+      </h2>
+      <ol>
+        <li data-lang="en">Install the latest <strong>v2.0.2</strong> build.</li>
+        <li data-lang="zh">安装最新的 <strong>v2.0.2</strong> 版本。</li>
+        <li data-lang="en">Open <em>Settings → Backend</em> and select <strong>TensorRT-RTX (NVIDIA)</strong> after running the built-in diagnostic.</li>
+        <li data-lang="zh">打开 <em>设置 → 后端</em>，运行内置诊断后选择 <strong>TensorRT-RTX (NVIDIA)</strong>。</li>
+        <li data-lang="en">Confirm the log shows <code>[winml:NvTensor]</code> for <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code>.</li>
+        <li data-lang="zh">确认日志中 <code>preflow</code> / <code>diff_step</code> / <code>vocoder</code> 显示 <code>[winml:NvTensor]</code>。</li>
+      </ol>
+
+      <nav class="doc-pager">
+        <a href="model-updates.html">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.prev">Previous</div>
+            <div class="pager-title"><span data-lang="en">Model Updates</span><span data-lang="zh">模型更新</span></div>
+          </div>
+        </a>
+        <a href="app-updates.html" class="next">
+          <div class="pager-card">
+            <div class="pager-label" data-i18n="pager.next">Next</div>
+            <div class="pager-title"><span data-lang="en">Application Updates</span><span data-lang="zh">应用更新</span></div>
+          </div>
+        </a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="faq.html" data-i18n="footer.help">Help &amp; FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

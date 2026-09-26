@@ -6,35 +6,16 @@
   height: 100%;
 }
 
-#toolbar {
-  display: flex;
-  align-items: center;
-  height: 44px;
-  min-height: 44px;
-  padding: 0 var(--space-5);
-  background: linear-gradient(180deg, var(--bg-toolbar-start) 0%, var(--bg-toolbar-end) 100%);
-  color: var(--fg-primary);
-  border-bottom: 1px solid var(--border-subtle);
-  gap: var(--space-1);
-  box-shadow: 0 1px 3px var(--shadow-color-mid);
-}
+/* 工具栏容器与分隔线统一由 components.css 提供（扁平、无渐变、无重复定义） */
 
 .toolbar-group {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
 }
 
 .toolbar-spacer {
   flex: 1;
-}
-
-.toolbar-divider {
-  width: 1px;
-  height: 22px;
-  background: linear-gradient(180deg, transparent, var(--button-secondary-border), transparent);
-  margin: 0 var(--space-3);
-  flex-shrink: 0;
 }
 
 #toolbar button {
@@ -202,11 +183,11 @@
 .filter-chip {
   display: inline-flex;
   align-items: center;
-  padding: 3px 6px 3px 9px;
+  padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
   background: var(--accent);
   color: var(--fg-on-accent);
-  border-radius: 12px;
-  font-size: 11px;
+  border-radius: var(--radius-full);
+  font-size: var(--font-xs);
   font-weight: 500;
 }
 
@@ -219,15 +200,15 @@
   margin-left: 3px;
   border-radius: 50%;
   cursor: pointer;
-  background: rgba(0, 0, 0, 0.15);
+  background: color-mix(in srgb, var(--fg-on-accent) 22%, transparent);
   border: none;
   color: inherit;
-  font-size: 12px;
+  font-size: var(--font-base);
   line-height: 1;
 }
 
 .filter-chip-remove:hover {
-  background: rgba(0, 0, 0, 0.3);
+  background: color-mix(in srgb, var(--fg-on-accent) 38%, transparent);
 }
 
 /* ==================== Main content ==================== */
@@ -366,6 +347,61 @@
 
 .empty-text {
   font-size: var(--font-md);
+}
+
+/* Network/service failure state — visually distinct from the "no results"
+   empty state so an unreachable backend is never mistaken for an empty one. */
+.error-state {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  text-align: center;
+  color: var(--fg-muted);
+}
+
+.error-state .empty-icon {
+  color: var(--warning, #e6a23c);
+  opacity: 0.8;
+}
+
+.error-state #error-state-title {
+  font-size: var(--font-md);
+  color: var(--fg-secondary);
+}
+
+.error-detail {
+  margin-top: var(--space-2, 8px);
+  font-size: 12px;
+  color: var(--fg-muted);
+  max-width: 560px;
+  word-break: break-word;
+  /* Diagnostics are multi-line (attempts/timeouts/IPs). */
+  white-space: pre-line;
+  text-align: left;
+  font-family: ui-monospace, Consolas, monospace;
+  line-height: 1.6;
+}
+
+.error-retry {
+  margin-top: var(--space-4, 16px);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  background: var(--bg-elevated, transparent);
+  color: var(--fg-primary, inherit);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.error-retry:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .loading-state {
@@ -554,7 +590,7 @@
   -webkit-appearance: none;
   padding-right: 32px;
   cursor: pointer;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%238888a8' d='M2 4l4 4 4-4'/%3E%3C/svg%3E");
+  background-image: var(--select-arrow);
   background-repeat: no-repeat;
   background-position: right 10px center;
 }
@@ -723,6 +759,65 @@
   text-transform: uppercase;
   letter-spacing: 1px;
   margin-bottom: 4px;
+}
+
+/* In-dialog detail loading row (shown while file-detail IPC is in flight) */
+.detail-loading-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+  padding: var(--space-2) 0;
+}
+
+.spinner--sm {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+  flex-shrink: 0;
+}
+
+/* License block in the detail dialog */
+.detail-license {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: var(--font-sm);
+  color: var(--fg-secondary);
+}
+
+.detail-license-name {
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+
+.detail-license-flag {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: var(--font-xs);
+  border: 1px solid var(--border-default);
+}
+
+.detail-license-flag.yes {
+  color: var(--fg-primary);
+  background: var(--bg-panel);
+}
+
+.detail-license-flag.no {
+  color: var(--fg-muted);
+  background: var(--bg-panel);
+  border-style: dashed;
+}
+
+.detail-license-link {
+  color: var(--accent-fg);
+  text-decoration: none;
+}
+
+.detail-license-link:hover {
+  text-decoration: underline;
 }
 
 /* ==================== Disclaimer box ==================== */

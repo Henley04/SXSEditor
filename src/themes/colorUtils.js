@@ -51,6 +51,22 @@ export function computeLuminance(colorValue) {
     return relativeLuminance(rgb.r, rgb.g, rgb.b);
 }
 
+/**
+ * 带缓存的 computeLuminance。
+ * 渲染热路径（分片音符条配色等）每帧会对同一批颜色反复求值，
+ * 而 parseHex 内部有正则与 parseInt，缓存后可直接命中。
+ */
+const _luminanceCache = new Map();
+export function computeLuminanceCached(colorValue) {
+  if (!colorValue || typeof colorValue !== 'string') return 0.5;
+  const hit = _luminanceCache.get(colorValue);
+  if (hit !== undefined) return hit;
+  const v = computeLuminance(colorValue);
+  if (_luminanceCache.size > 512) _luminanceCache.clear();
+  _luminanceCache.set(colorValue, v);
+  return v;
+}
+
 export function computeIsDark(tokens) {
     if (!tokens) return false;
     const v = tokens['--bg-app'];

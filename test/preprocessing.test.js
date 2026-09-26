@@ -113,12 +113,17 @@ describe('inference/pipeline/preprocessing', () => {
       expect(nonzero.length).to.be.greaterThan(0);
       nonzero.forEach(v => expect(v).to.be.closeTo(440, 0.5));
     });
-    it('should fill 0 for rest notes (empty lyric via pitch=0 → freq low)', () => {
-      // pitch 0 → freq ~8.18; rest notes typically pitch 0
-      const notes = [{ start: 0, duration: 1, pitch: 0 }];
+    it('should fill 0 for rest notes (pitch 0)', () => {
+      // Rest frames must be unvoiced f0=0, not midiToFreq(0) ≈ 8.18 Hz.
+      const notes = [{ start: 0, duration: 1, pitch: 0, lyric: '<SP>', noteType: 1 }];
       const out = prep.buildF0FrameSequence(notes, 120, null, null);
-      // pitch 0 still maps to a frequency; verify finite
-      out.forEach(v => expect(Number.isFinite(v)).to.be.true);
+      expect(out.length).to.be.greaterThan(0);
+      out.forEach(v => expect(v).to.equal(0));
+    });
+    it('should fill 0 for <AP> aspiration notes (unvoiced)', () => {
+      const notes = [{ start: 0, duration: 1, pitch: 0, lyric: '<AP>' }];
+      const out = prep.buildF0FrameSequence(notes, 120, null, null);
+      out.forEach(v => expect(v).to.equal(0));
     });
     it('should use pitchCurveF0 when provided (override)', () => {
       const notes = [{ start: 0, duration: 4, pitch: 60 }];
@@ -224,6 +229,55 @@ describe('inference/pipeline/preprocessing', () => {
       const notes = [{ start: 0, duration: 1, pitch: 0, lyric: '' }];
       const seq = prep.notesToSequences(notes, 120, null, null);
       expect(Array.from(seq.noteTypeSeq)).to.include(1);
+    });
+
+    it('encodes fillNoteGaps <SP> rest as noteType 1 with fully unvoiced f0', () => {
+      // Regression: gap-generated rests used lyric="<SP>" with pitch 0, but
+      // notesToSequences only treated empty lyrics as rests. They became
+      // type-2 sung notes with midiToFreq(0)≈8.18 Hz (f0 bin 1), so the
+      // model voiced a wrong phoneme during the rest.
+      const notes = [
+        { start: 0, duration: 1, pitch: 60, lyric: 'a' },
+        { start: 1, duration: 1, pitch: 0, lyric: '<SP>', noteType: 1, isGeneratedRest: true },
+        { start: 2, duration: 1, pitch: 62, lyric: 'b' },
+      ];
+      const seq = prep.notesToSequences(notes, 120, null, null);
+      const spId = tp.phone2idx['<SP>'];
+      expect(Array.from(seq.noteTextSeq)).to.include(spId);
+      // Every token belonging to the rest note must be noteType 1.
+      const types = Array.from(seq.noteTypeSeq);
+      const spIdx = seq.noteTextSeq.indexOf(spId);
+      expect(types[spIdx]).to.equal(1);
+      // Rest frames (middle third) must be f0 0 and f0 bin 0.
+      const framesPerNote = seq.f0Hz.length / 3;
+      for (let f = Math.floor(framesPerNote); f < Math.floor(2 * framesPerNote); f++) {
+        expect(seq.f0Hz[f]).to.equal(0);
+        expect(seq.f0Ids[f]).to.equal(0);
+      }
+    });
+
+    it('forces unvoiced f0 for <SP> rest even when pitchCurveF0 carries values across it', () => {
+      const notes = [
+        { start: 0, duration: 1, pitch: 60, lyric: 'a' },
+        { start: 1, duration: 1, pitch: 0, lyric: '<SP>', noteType: 1 },
+      ];
+      const curve = new Float32Array(200).fill(220); // nonzero even in the gap
+      const seq = prep.notesToSequences(notes, 120, null, curve);
+      const framesPerNote = seq.f0Hz.length / 2;
+      for (let f = Math.floor(framesPerNote); f < seq.f0Hz.length; f++) {
+        expect(seq.f0Hz[f]).to.equal(0);
+        expect(seq.f0Ids[f]).to.equal(0);
+      }
+    });
+
+    it('keeps <AP> as a sung-type note but with unvoiced f0', () => {
+      const notes = [{ start: 0, duration: 1, pitch: 0, lyric: '<AP>' }];
+      const seq = prep.notesToSequences(notes, 120, null, null);
+      const apId = tp.phone2idx['<AP>'];
+      expect(Array.from(seq.noteTextSeq)).to.include(apId);
+      expect(Array.from(seq.noteTypeSeq)).to.include(2);
+      for (const v of seq.f0Hz) expect(v).to.equal(0);
+      for (const v of seq.f0Ids) expect(v).to.equal(0);
     });
 
     it('should set noteType=3 for slur notes', () => {

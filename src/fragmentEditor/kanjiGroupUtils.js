@@ -17,6 +17,7 @@
  */
 
 import jpKanjiDictData from '../inference/pipeline/jpKanjiDict.json';
+import { getNoteById } from './noteLookup.js';
 
 // ---- Japanese hiragana → phoneme mapping (mirrors textProcessing.js) ----
 const JP_HIRAGANA_MAP = {
@@ -231,7 +232,8 @@ export function splitKanjiNoteToKana(note, genNoteId) {
  */
 export function mergeKanaGroupToKanji(group, notes, rightClickedNoteId, genNoteId) {
     const groupNotes = group.noteIds
-        .map(id => notes.find(n => n.id === id))
+        // O(1) 查表：原先对每个 id 做一次线性扫描，长分段下是 O(k·n)
+        .map(id => getNoteById(id))
         .filter(Boolean);
 
     if (groupNotes.length === 0) return null;
@@ -366,7 +368,7 @@ export function getAllGroupedNoteIds(kanjiGroups) {
 export function isTimeRangeWithinAnyGroup(start, end, notes, kanjiGroups) {
     for (const group of kanjiGroups) {
         const groupNotes = group.noteIds
-            .map(id => notes.find(n => n.id === id))
+            .map(id => getNoteById(id))
             .filter(Boolean);
         if (groupNotes.length === 0) continue;
         const sorted = [...groupNotes].sort((a, b) => a.start - b.start);

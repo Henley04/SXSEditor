@@ -15,6 +15,7 @@ const WINDOW_NAMES = [
   'model_download_window',
   'resource_manager_window',
   'splash_window',
+  'singer_market_window',
 ];
 
 // Windows that need onnxruntime-web wasm/JS files copied alongside.
@@ -45,7 +46,7 @@ rules.push({
   use: {
     loader: 'babel-loader',
     options: {
-      presets: ['@babel/preset-env'],
+      presets: [['@babel/preset-env', { targets: { electron: '42' }, modules: false, bugfixes: true }]],
     },
   },
 });

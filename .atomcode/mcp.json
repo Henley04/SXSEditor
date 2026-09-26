@@ -7,6 +7,10 @@
     "context7": {
       "command": "npx",
       "args": ["-y", "@anthropic/context7-mcp"]
+    },
+    "sxseditor": {
+      "command": "node",
+      "args": ["D:/Document/electron/SXSEditor/scripts/sxseditor-mcp.js"]
     }
   }
 }

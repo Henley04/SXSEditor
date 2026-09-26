@@ -1,4 +1,4 @@
-const { ipcMain } = require('electron');
+const { ipcMain, shell } = require('electron');
 const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, normalizeSettings } = require('./settings');
 const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectNPUCached, getVocoderChunkFramesInfo, getVocoderChunkFramesTable } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
@@ -31,6 +31,8 @@ const BOOLEAN_SETTING_KEYS = new Set([
   'enableLoudnormFinal',
   'enableAntiAliasing',
   'enableSDEditRepair',
+  'previewEnableQDrift',
+  'exportEnableQDrift',
   'diagnosticMode',
   'previewDynamicThresholdEnabled',
   'exportDynamicThresholdEnabled',
@@ -89,47 +91,45 @@ function registerSettingsIpc() {
     };
   });
 
-  ipcMain.handle('settings:getDMLDevices', async () => {
+  ipcMain.handle('settings:getDMLDevices', async (_event, options = {}) => {
     try {
-      // 并行获取 GPU 信息和 NPU 检测
-      const [controllers, npuResult] = await Promise.all([
-        ensureGPUInfo(),
-        detectNPUCached(),
-      ]);
-
+      const includeWebnn = options.includeWebnn === true;
+      const enrich = options.enrich === true;
+      // Settings discovery must be fast. DML adapter enumeration is authoritative;
+      // systeminformation/PowerShell is optional metadata enrichment only.
+      let controllers = [];
+      if (enrich) controllers = await ensureGPUInfo();
       if (!cachedDMLDevices || cachedDMLDevices.length === 0) {
-        const modelDir = getModelDir();
-        cachedDMLDevices = await enumerateDMLDevices(modelDir, controllers);
+        cachedDMLDevices = await enumerateDMLDevices(getModelDir(), controllers);
       }
-
       const devices = [...cachedDMLDevices];
-      if (npuResult.npuAvailable && !devices.some(d => d.deviceType === 'npu')) {
-        devices.push({
-          name: 'NPU (WebNN)',
-          deviceType: 'npu',
-          isDiscrete: false,
-          vramBytes: 0,
-          vram: '0 MB',
-          vendor: '',
-          dxgiAdapterNumber: undefined,
-          source: 'webnn',
-        });
+      if (!includeWebnn) return devices;
+
+      const npuResult = await detectNPUCached();
+      // 只在 WebNN 路径下 NPU 真的可用时才列出 'NPU (WebNN)' 设备。
+      // npuAvailable 可能来自 PnP 硬件回退（WebNN 不可用），那种情况下给用户
+      // 一个选了也跑不了的 "NPU (WebNN)" 选项是误导。
+      if (npuResult.webnnNpuAvailable && !devices.some(d => d.deviceType === 'npu')) {
+        devices.push({ name: 'NPU (WebNN)', deviceType: 'npu', isDiscrete: false,
+          vramBytes: 0, vram: '0 MB', vendor: '', source: 'webnn' });
       }
       if (npuResult.gpuAvailable && !devices.some(d => d.deviceType === 'webnn-gpu')) {
-        devices.push({
-          name: t('settings.webnnGpuDevice'),
-          deviceType: 'webnn-gpu',
-          isDiscrete: false,
-          vramBytes: 0,
-          vram: '0 MB',
-          vendor: '',
-          dxgiAdapterNumber: undefined,
-          source: 'webnn',
-        });
+        devices.push({ name: t('settings.webnnGpuDevice'), deviceType: 'webnn-gpu', isDiscrete: false,
+          vramBytes: 0, vram: '0 MB', vendor: '', source: 'webnn' });
       }
       return devices;
     } catch (err) {
       console.error('[Main] DML device enumeration failed:', err);
+      return [];
+    }
+  });
+
+  ipcMain.handle('settings:getWinmlProviders', async () => {
+    if (process.platform !== 'win32') return [];
+    try {
+      return await require('../inference/winml/winmlProvider').listCompatibleProviders();
+    } catch (err) {
+      console.warn('[Main] Windows ML provider discovery failed:', err.message);
       return [];
     }
   });
@@ -278,6 +278,9 @@ function registerSettingsIpc() {
         'ortEnableMemPattern', 'ortForceMemPatternOnDml', 'ortEnableCpuMemArena',
         'ortGraphOptLevel', 'ortExecutionMode',
         'ortIntraOpNumThreads', 'ortInterOpNumThreads', 'ortLogSeverityLevel',
+        // Windows ML vendor EP 开关影响 diffStep/vocoder/preflow 会话创建路径，
+        // 切换后必须重建 pipeline（重建时 createSessionWithValidation 才会尝试 WinML 链）
+        'winmlEnabled',
     ];
     const needsPipelineReset = RESET_TRIGGER_KEYS.some(key => {
       // modelDeviceMapping 是对象，需深比较；其他字段为标量，直接比较
@@ -293,6 +296,16 @@ function registerSettingsIpc() {
       resetRmvpe();
       resetBasicPitch();
       resetRosvot();
+      // Windows ML 开启时后台预热：立即解析/下载兼容 EP 的 MSIX 运行库，
+      // 下一次合成 spawn worker 时 getReadyEpLibraries() 即可拿到就绪列表。
+      if (merged.winmlEnabled === true && current.winmlEnabled !== true) {
+        try {
+          require('../inference/winml/winmlProvider')
+            .getReadyEpLibraries()
+            .then((eps) => console.log(`[Main][WinML] warmup=done eps=${eps.map((e) => e.name).join(',') || 'none'}`))
+            .catch((err) => console.warn('[Main] WinML EP warmup failed:', err.message));
+        } catch (_) { /* best effort */ }
+      }
     } else if (vocoderTypeChanged) {
       // 增量切换 vocoder：仅重载 vocoder session，主模型保持不变
       const newVocoderType = merged.vocoderType === 'sifigan' ? 'sifigan' : 'default';
@@ -349,6 +362,114 @@ function registerSettingsIpc() {
 
   ipcMain.handle('get-locale', async () => {
     return require('./locale').getLocale();
+  });
+
+  ipcMain.handle('settings:run-trtrtx-diagnostic', async () => {
+    try {
+      const settings = loadSettings();
+      const hw = await ensureGPUInfo().catch(() => null);
+      // Resolve EP packages in the Electron main process, where WinRT/package
+      // identity is available. The diagnostic child runs as plain Node and
+      // must receive the same snapshots as the normal SVS worker.
+      const winmlProvider = require('../inference/winml/winmlProvider');
+      const winmlEps = await winmlProvider.getReadyEpLibraries();
+      const payload = {
+        modelDir: getModelDir(), precision: settings.modelPrecision || 'fp16',
+        dmlDeviceId: Number(settings.preferredDeviceId) || 0,
+        gpu: hw?.bestGPU?.name || hw?.gpuName || null,
+        settingsSnapshot: {
+          ...settings,
+          winmlEnabled: true,
+          diagnosticMode: true,
+        },
+        winmlEps,
+      };
+      const fs = require('node:fs');
+      const diagnosticRoot = require('node:path').join(payload.modelDir, 'diagnostics');
+      payload.dumpDir = require('node:path').join(
+        diagnosticRoot,
+        `trtrtx-${new Date().toISOString().replace(/[:.]/g, '-')}`
+      );
+      fs.mkdirSync(payload.dumpDir, { recursive: true });
+      const { fork } = require('node:child_process');
+      const path = require('node:path');
+      // settingsIpc is compiled into .webpack/main/index.js. At runtime
+      // __dirname already points to .webpack/main, so moving to ".." produced
+      // the invalid .webpack/inference/winml path seen in the crash log.
+      const runnerCandidates = [
+        path.join(__dirname, 'inference', 'winml', 'trtDiagnosticRunner.js'),
+        path.resolve(process.cwd(), '.webpack', 'main', 'inference', 'winml', 'trtDiagnosticRunner.js'),
+        path.resolve(process.cwd(), 'src', 'inference', 'winml', 'trtDiagnosticRunner.js'),
+      ];
+      const runner = runnerCandidates.find(candidate => fs.existsSync(candidate));
+      if (!runner) {
+        throw new Error(`TensorRT-RTX diagnostic runner was not packaged. Tried: ${runnerCandidates.join(', ')}`);
+      }
+      // Vendor EP failures may terminate the process without throwing. A real
+      // child process isolates Electron from native TRT/driver crashes. A
+      // worker_thread is insufficient because it shares the same process.
+      const report = await new Promise((resolve, reject) => {
+        const child = fork(runner, [], {
+          env: {
+            ...process.env,
+            ELECTRON_RUN_AS_NODE: '1',
+            SXS_TRT_DIAGNOSTIC_PAYLOAD: JSON.stringify(payload),
+            SXS_WINML_TRACE: '1',
+            SXS_TRTRTX_NO_PROFILE: '1',
+          },
+          stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+        });
+        let settled = false;
+        child.stdout?.on('data', chunk => process.stdout.write(`[TRTRTX-DIAG] ${chunk}`));
+        child.stderr?.on('data', chunk => process.stderr.write(`[TRTRTX-DIAG] ${chunk}`));
+        child.on('message', message => {
+          if (settled) return;
+          if (message?.type === 'result') {
+            if (!message.report || typeof message.report !== 'object') {
+              settled = true;
+              reject(new Error('TensorRT-RTX diagnostic returned an invalid report'));
+              return;
+            }
+            settled = true;
+            resolve(message.report);
+          } else if (message?.type === 'error') {
+            settled = true;
+            reject(new Error(message.error));
+          }
+        });
+        child.on('error', error => {
+          if (!settled) { settled = true; reject(error); }
+        });
+        child.on('exit', (code, signal) => {
+          if (!settled) {
+            settled = true;
+            // Native access violations cannot be caught in JS. Recover the
+            // latest atomic checkpoint so the application still opens a useful
+            // report instead of losing all completed probes.
+            const partialPath = require('node:path').join(payload.dumpDir, 'report.partial.json');
+            try {
+              const partial = JSON.parse(fs.readFileSync(partialPath, 'utf8'));
+              if (!partial || typeof partial !== 'object') throw new Error('invalid partial report');
+              partial.summary = `NATIVE_CRASH code=${code} signal=${signal || 'none'}`;
+              partial.nativeCrash = { code, signal: signal || null };
+              fs.writeFileSync(require('node:path').join(payload.dumpDir, 'report.json'), JSON.stringify(partial, null, 2));
+              fs.writeFileSync(require('node:path').join(payload.dumpDir, 'report.txt'),
+                `summary=${partial.summary}\ndumpDir=${payload.dumpDir}\nSee report.partial.json for completed checks.`);
+              resolve(partial);
+            } catch (_) {
+              reject(new Error(
+                `TensorRT-RTX diagnostic process exited unexpectedly: code=${code} signal=${signal || 'none'}`
+              ));
+            }
+          }
+        });
+      });
+      await shell.openPath(report.dumpDir);
+      return { success: true, report };
+    } catch (err) {
+      console.error('[TRTRTX][diagnostic] failed:', err);
+      return { success: false, error: err.message || String(err) };
+    }
   });
 
   ipcMain.handle('settings:check-models', async () => {

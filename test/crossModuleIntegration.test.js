@@ -367,14 +367,18 @@ describe('Cross-Module Integration Tests', () => {
       expect(merged.length).to.equal(2);
     });
 
-    it('should normalize <AP> to <SP> and merge', () => {
+    it('should preserve <AP> as an audible note instead of merging it into silence', () => {
       const notes = [
         { lyric: '<AP>', pitch: 0, duration: 0.5, start: 0 },
         { lyric: '<AP>', pitch: 0, duration: 0.5, start: 0.5 },
       ];
       const merged = mergePhoneme(notes);
-      expect(merged.length).to.equal(1);
-      expect(merged[0].duration).to.equal(1);
+      // <AP> 是 phone_set.json 中可发声的吸气/气声标记，不是数字静音，
+      // 因此不会被归一成 <SP>，也不参与连续 SP 合并。
+      expect(merged.length).to.equal(2);
+      expect(merged[0].lyric).to.equal('<AP>');
+      expect(merged[1].lyric).to.equal('<AP>');
+      expect(merged[0].duration).to.equal(0.5);
     });
 
     it('should preserve slur flag on non-SP notes', () => {

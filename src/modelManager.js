@@ -14,6 +14,15 @@ const MODEL_IDS = {
   'int8-npu': 'syxppp/SoulX-Singer-onnx-directml-int8-dynamic',
   // SiFiGAN ONNX 模型仓库 (FP32 DML 兼容版 + stats)
   sifigan: 'syxppp/sifigan-onnx',
+  // FCPE ONNX 模型仓库 (Fully Convolutional Pitch Estimator, 音高 F0 提取)
+  fcpe: 'syxppp/FCPE',
+};
+
+// FCPE 文件的远程仓库路径 → 本地相对路径映射。
+// 仓库里 fcpe_model.onnx 位于根目录，但应用统一把该模型放到
+// onnx_models/preprocess/ 下（与 rmvpe 等共享预处理模型同目录）。
+const FCPE_REMOTE_TO_LOCAL = {
+  'fcpe_model.onnx': 'preprocess/fcpe_model.onnx',
 };
 
 // JP (Japanese) language-specific model repos
@@ -474,6 +483,22 @@ function getSifiganFileDownloadUrl(filePath, revision) {
   return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${encodeURIComponent(revision)}&FilePath=${encoded}`;
 }
 
+/**
+ * Get the download URL for a FCPE model file.
+ * FCPE files live in their own ModelScope repo (MODEL_IDS.fcpe).
+ * The remote repo path (e.g. 'fcpe_model.onnx') maps to a local relative
+ * path under onnx_models/ (e.g. 'preprocess/fcpe_model.onnx') — see
+ * FCPE_REMOTE_TO_LOCAL.
+ */
+function getFcpeFileDownloadUrl(filePath, revision) {
+  if (!revision) return null;
+  const modelId = MODEL_IDS.fcpe;
+  if (!modelId) return null;
+  if (!(filePath in FCPE_REMOTE_TO_LOCAL)) return null;
+  const encoded = encodeURIComponent(filePath);
+  return `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/repo?Revision=${encodeURIComponent(revision)}&FilePath=${encoded}`;
+}
+
 // ===== ModelScope tag (version) listing =====
 // ModelScope model repos are git-based. Downloads are tag-only — the default
 // branch ('master') is NOT used. Tags represent specific released versions
@@ -544,6 +569,29 @@ async function getJpModelTags(precision) {
  */
 async function getSifiganTags() {
   const modelId = MODEL_IDS.sifigan;
+  if (!modelId) return [];
+  const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
+  const data = await _fetchModelScopeJson(url);
+  return _extractTags(data);
+}
+
+/**
+ * Resolve the revision to use when downloading FCPE.
+ * The FCPE repo has no version tags — only the default 'master' branch — so
+ * this returns the latest tag if any tag exists, otherwise falls back to
+ * 'master' (which the download API accepts as a branch reference).
+ */
+async function getFcpeRevision() {
+  const tags = await getFcpeTags();
+  return getLatestTag(tags) || 'master';
+}
+
+/**
+ * Fetch available tags for the FCPE model from ModelScope.
+ * Currently the FCPE repo publishes no tags, so this typically returns [].
+ */
+async function getFcpeTags() {
+  const modelId = MODEL_IDS.fcpe;
   if (!modelId) return [];
   const url = `${MODELSCOPE_ENDPOINT}/api/v1/models/${modelId}/revisions`;
   const data = await _fetchModelScopeJson(url);
@@ -951,6 +999,83 @@ function saveSifiganVersion(modelDir, revision) {
     console.log(`[ModelManager] Saved SiFiGAN version ${revision} (revision: ${revision})`);
   } catch (err) {
     console.warn(`[ModelManager] Failed to save SiFiGAN version:`, err.message);
+  }
+}
+
+// ===== FCPE version management =====
+// FCPE is an optional shared model stored at onnx_models/preprocess/.
+// Its own ModelScope repo currently has no version tags — the download uses
+// the 'master' branch — so versioning here is informational only (records
+// the downloaded revision) and never flags an update (rolling branch).
+
+function getFcpeVersionPath(modelDir) {
+  return path.join(modelDir, 'fcpe_version.json');
+}
+
+function getFcpeLocalFilePath(modelDir, remotePath) {
+  const local = FCPE_REMOTE_TO_LOCAL[remotePath];
+  if (!local) return null;
+  return path.join(modelDir, local);
+}
+
+function getLocalFcpeVersion(modelDir) {
+  const versionPath = getFcpeVersionPath(modelDir);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.version || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function getLocalFcpeRevision(modelDir) {
+  const versionPath = getFcpeVersionPath(modelDir);
+  try {
+    const data = JSON.parse(fs.readFileSync(versionPath, 'utf-8'));
+    return data.revision || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+async function checkFcpeVersion(modelDir) {
+  const localVersion = getLocalFcpeVersion(modelDir);
+  const localRevision = getLocalFcpeRevision(modelDir);
+  // FCPE is installed when preprocess/fcpe_model.onnx exists (non-empty)
+  let hasModelFiles = false;
+  try {
+    const fullPath = path.join(modelDir, 'preprocess', 'fcpe_model.onnx');
+    hasModelFiles = fs.existsSync(fullPath) && fs.statSync(fullPath).size > 0;
+  } catch (_) {}
+
+  // FCPE has no version tags (rolling master branch) → no update detection.
+  return {
+    updateAvailable: false,
+    localVersion,
+    latestVersion: 'master',
+    hasModelFiles,
+    localRevision,
+    isLatestV0OrNull: true,
+  };
+}
+
+function saveFcpeVersion(modelDir, revision) {
+  if (!revision) {
+    console.warn(`[ModelManager] saveFcpeVersion: revision is required`);
+    return;
+  }
+  const versionPath = getFcpeVersionPath(modelDir);
+  try {
+    const data = {
+      version: revision,
+      revision,
+      model: 'fcpe',
+      updatedAt: new Date().toISOString(),
+    };
+    _atomicWriteJsonSync(versionPath, data);
+    console.log(`[ModelManager] Saved FCPE version (revision: ${revision})`);
+  } catch (err) {
+    console.warn(`[ModelManager] Failed to save FCPE version:`, err.message);
   }
 }
 
@@ -2104,6 +2229,7 @@ module.exports = {
   getFileDownloadUrl,
   getJpFileDownloadUrl,
   getSifiganFileDownloadUrl,
+  getFcpeFileDownloadUrl,
   getModelId,
   getJpModelId,
   getRemoteFileSize,
@@ -2128,10 +2254,14 @@ module.exports = {
   getModelTags,
   getJpModelTags,
   getSifiganTags,
+  getFcpeTags,
+  getFcpeRevision,
   // Version management
   getModelVersionPath,
   getJpModelVersionPath,
   getSifiganVersionPath,
+  getFcpeVersionPath,
+  getFcpeLocalFilePath,
   compareVersions,
   getLatestTag,
   getLocalModelVersion,
@@ -2146,4 +2276,8 @@ module.exports = {
   getLocalSifiganRevision,
   checkSifiganVersion,
   saveSifiganVersion,
+  getLocalFcpeVersion,
+  getLocalFcpeRevision,
+  checkFcpeVersion,
+  saveFcpeVersion,
 };

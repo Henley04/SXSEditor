@@ -145,6 +145,13 @@ export async function extractF0BasicPitch() {
     }
 
     if (!result.success) {
+      // FCPE model not downloaded yet — prompt the user and open the model
+      // download page so they can install the optional FCPE model.
+      if (result.code === 'MODEL_NOT_FOUND') {
+        showAlertDialog(t('preprocess.fcpeModelMissing'));
+        try { await window.electronAPI.updateAPI.openModelDownload(); } catch (_) {}
+        return;
+      }
       throw new Error(result.error || 'MIDI extraction failed');
     }
 

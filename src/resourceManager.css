@@ -137,17 +137,17 @@ body {
 .vram-bar-fill {
     height: 100%;
     border-radius: var(--radius-md);
-    background: linear-gradient(90deg, var(--color-green-600), var(--success));
+    background: var(--success);
     transition: width 0.5s ease;
     min-width: 0;
 }
 
 .vram-bar-fill.warning {
-    background: linear-gradient(90deg, var(--color-amber-400), var(--warning));
+    background: var(--warning);
 }
 
 .vram-bar-fill.critical {
-    background: linear-gradient(90deg, var(--color-red-500), var(--danger));
+    background: var(--danger);
 }
 
 .gpu-no-data {

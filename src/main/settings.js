@@ -10,8 +10,7 @@ const DEFAULT_THEME_PER_WINDOW = {};
 const ENUM_SETTINGS = {
   deviceMode: ['smart', 'manual', 'advanced'],
   inferenceProvider: ['ortnode', 'ortweb'],
-  modelPrecision: ['fp32', 'fp16', 'int8', 'int8-npu'],
-  midiExtractTool: ['fcpe', 'basicpitch', 'rmvpe'],
+  modelPrecision: ['fp32', 'fp16', 'int8', 'int8-npu'],  midiExtractTool: ['fcpe', 'basicpitch', 'rmvpe'],
   audioOutputMode: ['shared', 'exclusive'],
   audioBitDepth: ['float32', 'int32', 'int24', 'int16'],
   vocoderType: ['default', 'sifigan'],
@@ -51,6 +50,7 @@ function normalizeSettings(settings) {
   }
   if (out.audioSampleRate !== undefined && ![22050, 24000, 44100, 48000, 96000, 192000].includes(out.audioSampleRate)) out.audioSampleRate = 48000;
   if (out.exportSampleRate !== undefined && ![24000, 44100, 48000, 96000].includes(out.exportSampleRate)) out.exportSampleRate = 48000;
+  if (out.exportBitDepth !== undefined && ![16, 24, 32].includes(out.exportBitDepth)) out.exportBitDepth = 32;
   if (out.audioBufferSize !== undefined && ![64, 128, 256, 512, 1024, 2048, 4096].includes(out.audioBufferSize)) out.audioBufferSize = 1024;
   if (out.preferredDeviceId !== undefined && out.preferredDeviceId !== null && out.preferredDeviceId !== 'npu' && out.preferredDeviceId !== 'webnn-gpu' && !Number.isInteger(out.preferredDeviceId)) delete out.preferredDeviceId;
   if (out.modelDeviceMapping !== undefined && (typeof out.modelDeviceMapping !== 'object' || out.modelDeviceMapping === null || Array.isArray(out.modelDeviceMapping))) out.modelDeviceMapping = {};
@@ -70,19 +70,28 @@ function setCachedDMLDevices(devices) {
 
 function loadSettings() {
   if (_settingsCache) return _settingsCache;
-  try {
-    const filePath = getSettingsFilePath();
-    if (fs.existsSync(filePath)) {
-      _settingsCache = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-    } else {
+  // worker_threads: require('electron') returns a path string, not an app
+  // object with getPath(). If the main process already injected a settings
+  // snapshot via workerData, use it directly to avoid the crash.
+  const snapshot = globalThis.__SXS_SETTINGS_SNAPSHOT__;
+  if (snapshot && typeof snapshot === 'object' && Object.keys(snapshot).length > 0) {
+    _settingsCache = { ...snapshot };
+  } else {
+    try {
+      const filePath = getSettingsFilePath();
+      if (fs.existsSync(filePath)) {
+        _settingsCache = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+      } else {
+        _settingsCache = {};
+      }
+    } catch (err) {
+      console.warn('[Main] Failed to load settings, using defaults:', err.message);
       _settingsCache = {};
     }
-  } catch (err) {
-    console.warn('[Main] Failed to load settings, using defaults:', err.message);
-    _settingsCache = {};
   }
   if (!Number.isFinite(_settingsCache.audioSampleRate)) _settingsCache.audioSampleRate = 48000;
   if (![24000, 44100, 48000, 96000].includes(_settingsCache.exportSampleRate)) _settingsCache.exportSampleRate = 48000;
+  if (![16, 24, 32].includes(_settingsCache.exportBitDepth)) _settingsCache.exportBitDepth = 32;
 
   // Merge defaults for theme fields
   if (typeof _settingsCache.theme !== 'string') {
@@ -172,6 +181,34 @@ function loadSettings() {
     _settingsCache.enableSDEditRepair = false;
   }
 
+  // 固定噪声种子（可复现合成）。默认关闭 = 每次合成 Math.random（线上历史行为）。
+  // 开启后每次合成入口用同一种子重置噪声 RNG：同一项目多次预览/导出结果逐位一致，
+  // 便于对比参数效果与锁定满意的渲染（扩散固有乐句级响度波动 ±3dB 量级，见
+  // scripts/ab_seed_variance.js）。种子范围 [0, 0xFFFFFFFF]。
+  if (typeof _settingsCache.fixedNoiseSeedEnabled !== 'boolean') {
+    _settingsCache.fixedNoiseSeedEnabled = false;
+  }
+  if (!Number.isFinite(_settingsCache.fixedNoiseSeed)) {
+    _settingsCache.fixedNoiseSeed = 1234;
+  } else {
+    _settingsCache.fixedNoiseSeed = Math.max(0, Math.min(0xFFFFFFFF, Math.floor(_settingsCache.fixedNoiseSeed)));
+  }
+
+  // ===== Q-Drift 推理期漂移校正（arXiv:2603.18095）=====
+  // 针对 FP16 DiT 多步量化误差累积的采样器侧校正。预览与导出各自一个开关，
+  // 与 preview*/export* 系列参数保持同样的镜像惯例。
+  //
+  // ★ 这里刻意 **不** 给默认值：未显式设置时由
+  //   src/inference/pipeline/qdrift/defaults.js 的 resolveQDriftDefault() 按
+  //   modelPrecision 推断（fp16 → 开，其余 → 关）。一旦在此处把它固化成布尔值，
+  //   用户之后切换模型精度时开关就会永远停在陈旧值上。
+  //
+  // 迁移：早期版本用过单键 enableQDrift，会把推断默认值写死成 false。检测到就丢弃，
+  // 让配置回到"未设置 = 跟随精度"的语义（该键只在开发期存在过，无用户数据价值）。
+  if (_settingsCache.enableQDrift !== undefined) {
+    delete _settingsCache.enableQDrift;
+  }
+
   // ===== Task 11: CFG 强度曲线调度 =====
   // 在 diffusion 采样循环中按 step 动态调整 CFG 引导强度。
   // mode: 'constant'（固定，与改造前字节一致）| 'linear'（线性）| 'cosine'（余弦）| 'custom'（关键帧）
@@ -242,9 +279,27 @@ function loadSettings() {
     _settingsCache.previewDiffStepOverlapFrames = 50;
   }
 
+  // 编辑后自动实时推理（默认关闭）。
+  // 开启后，分片编辑器检测到音符/音高曲线/包络等改动会在后台自动重新推理预览音频，
+  // 复用 OnnxSVSPipeline 的分片级缓存：未改动 segment 命中缓存直接复用，只有被改动
+  // 的 segment 才真正跑 diffusion+vocoder。
+  // 多个 segment 同时被改动时，按 options.priorityTimeSec（播放进度条位置，缺失则取
+  // 第一个失配即为改动的 segment）优先推理，使改动处尽快产出新音频。
+  // 代价：每次停止编辑都会触发一次后台推理，显著增加 GPU/CPU 占用与功耗发热，
+  // 且在推理期间会与前台播放争抢显存，因此默认 false。
+  if (typeof _settingsCache.autoRealtimeInference !== 'boolean') {
+    _settingsCache.autoRealtimeInference = false;
+  }
+
   // 推理提供者: 'ortnode' (默认, onnxruntime-node DirectML/CPU) | 'ortweb' (onnxruntime-web WebNN)
   if (_settingsCache.inferenceProvider !== 'ortweb' && _settingsCache.inferenceProvider !== 'ortnode') {
     _settingsCache.inferenceProvider = 'ortnode';
+  }
+  if (!['auto', 'winml', 'dml'].includes(_settingsCache.nativeInferenceBackend)) {
+    _settingsCache.nativeInferenceBackend = 'auto';
+  }
+  if (typeof _settingsCache.winmlPreferredEp !== 'string') {
+    _settingsCache.winmlPreferredEp = '';
   }
 
   // ===== ONNX Runtime session 选项 =====
@@ -268,6 +323,20 @@ function loadSettings() {
   // 是否启用 CPU 内存池分配器（默认 true）
   if (typeof _settingsCache.ortEnableCpuMemArena !== 'boolean') {
     _settingsCache.ortEnableCpuMemArena = true;
+  }
+
+  // Windows ML vendor EP（实验特性，默认关闭）。
+  // 开启后主模型（diff_step/vocoder/preflow）在兼容设备上优先尝试
+  // TensorRT-RTX / OpenVINO 插件 EP，失败自动回落 DML/CPU。
+  // 详见 src/inference/winml/winmlProvider.js
+  if (typeof _settingsCache.winmlEnabled !== 'boolean') {
+    _settingsCache.winmlEnabled = false;
+  }
+
+  // 可选：手动指定 Microsoft.WindowsAppRuntime.Bootstrap.dll 路径。
+  if (_settingsCache.winmlBootstrapDllPath !== undefined &&
+      (typeof _settingsCache.winmlBootstrapDllPath !== 'string' || !_settingsCache.winmlBootstrapDllPath)) {
+    delete _settingsCache.winmlBootstrapDllPath;
   }
 
   // 图优化级别: 'disabled' | 'basic' | 'extended' | 'all'（默认 'all'）
@@ -402,7 +471,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'previewDiffSteps', 'previewCfgStrength', 'previewCfgRescale', 'previewSampler',
   'previewDiffStepChunkEnabled', 'previewDiffStepChunkFrames', 'previewDiffStepOverlapFrames',
   'exportDiffSteps', 'exportCfgStrength', 'exportCfgRescale', 'exportSampler',
-  'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth', 'exportSampleRate',
+  'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth', 'exportSampleRate', 'exportBitDepth',
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
@@ -415,6 +484,10 @@ const ALLOWED_SETTINGS_KEYS = [
   'enableLoudnormFinal',
   'enableAntiAliasing',
   'enableSDEditRepair',
+  'previewEnableQDrift',
+  'exportEnableQDrift',
+  'fixedNoiseSeedEnabled',
+  'fixedNoiseSeed',
   'cfgScheduleMode',
   'cfgStrengthStart',
   'cfgScheduleKeyframes',
@@ -428,10 +501,15 @@ const ALLOWED_SETTINGS_KEYS = [
   'previewDynamicThresholdPercentile',
   'exportDynamicThresholdEnabled',
   'exportDynamicThresholdPercentile',
+  'autoRealtimeInference',
   'inferenceProvider',
+  'nativeInferenceBackend',
+  'winmlPreferredEp',
   'ortEnableMemPattern',
   'ortForceMemPatternOnDml',
   'ortEnableCpuMemArena',
+  'winmlEnabled',
+  'winmlBootstrapDllPath',
   'ortGraphOptLevel',
   'ortExecutionMode',
   'ortIntraOpNumThreads',

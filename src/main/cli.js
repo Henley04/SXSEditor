@@ -36,6 +36,7 @@ Commands:
   version         Print build info
   info            Print app/runtime/path info
   gpu             Detect GPU / DirectML devices
+  winml           Detect Windows ML plugin EPs (experimental)
   models          List onnx_models and mark missing required models
   settings        Dump current settings.json
   init-pipeline   Initialize SVS pipeline (verifies all models load)
@@ -44,6 +45,39 @@ Commands:
                            --steps <N>        diffusion steps (default 4)
                            --notes <json>     notes JSON string
                            --bpm <N>          tempo (default 120)
+  synth-project   Synthesize a real .sxsproj window (with its singer reference)
+                  and print the execution provider actually used.
+                  Options: --file <project.sxsproj>   required
+                           --out <path.wav>          write WAV file
+                           --fragment <N>            fragment index (default 0)
+                           --from <sec> --to <sec>   time window (default 0..30s)
+                           --duration <sec>          alternative to --to
+                           --singer <x.sxssinger>    override fragment's singer
+                           --precision fp32|fp16|int8  override modelPrecision
+                           --steps <N>               diffusion steps
+                           --sampler <name> --cfg <n> --cfg-rescale <n>
+                           --cfg-schedule constant|linear|cosine
+                           --qdrift                  enable Q-Drift
+                           --seed <N>                fix initial noise (required
+                                                     for any precision comparison)
+                           --dry-run                 only print the parsed plan
+  qdrift-conds    Export calibration conditions (prompt mel + cond) from one or
+                  more .sxsproj projects for Q-Drift recalibration.
+                  Writes <item>_prompt.bin / <item>_cond.bin / <item>.json plus
+                  a manifest.json into --out (default qdrift/conds_proj).
+                  Options: --file <project.sxsproj>   repeatable (required)
+                           --fragment <N>             fragment index (-1 = all
+                                                      eligible fragments, default)
+                           --out <dir>                output directory
+                           --max-items-per-frag <N>   even-spread selection (default 8)
+                           --min-sec <s>              skip shorter items (default 5)
+                           --max-sec <s>              skip longer items (default 22)
+                           --max-prompt-frames <N>    cap prompt mel length (default 600,
+                                                      0 = keep full singer reference)
+                           --full-prompt-items <N>    keep uncapped prompt for the first
+                                                      N items (default 2)
+                           --force                    re-export items already on disk
+                           --dry-run                  only print the export plan
 
 Exit codes: 0=ok, 1=error, 2=bad args`;
 
@@ -160,8 +194,55 @@ async function cmdGpu() {
   return 0;
 }
 
-function cmdModels() {
-  const { getModelDir } = require('./modelDir');
+// Windows ML 插件 EP 诊断（fail-soft：任何失败只打印警告，不影响退出码）
+async function cmdWinml() {
+  section('Windows ML');
+  const winmlCatalog = require('../inference/winml/winmlCatalog');
+  const ortBridge = require('../inference/winml/ortBridge');
+
+  log(`platformSupported: ${winmlCatalog.isPlatformSupported()}`);
+  const settings = (() => {
+    try { return require('./settings').loadSettings() || {}; } catch (_) { return {}; }
+  })();
+  log(`enabled(settings.winmlEnabled): ${settings.winmlEnabled === true}`);
+
+  if (!winmlCatalog.isPlatformSupported()) {
+    log('WinML vendor EPs require Windows 11 24H2+ (build 26100+) on x64/arm64.');
+    return 0;
+  }
+
+  const bootstrap = winmlCatalog.locateBootstrapDll(settings.winmlBootstrapDllPath);
+  log(`bootstrapDll: ${bootstrap || 'NOT FOUND (catalog disabled)'}`);
+
+  const providers = await winmlCatalog.listCompatibleProviders();
+  log(`compatible EPs: ${providers.length}`);
+  for (const p of providers) {
+    log(`  - ${p.name} readyState=${p.readyState}`);
+    const r = await winmlCatalog.ensureProviderReady(p.name).catch((e) => ({ ok: false, diagnostic: e.message }));
+    if (r.ok && r.libraryPath) {
+      try {
+        const ok = await ortBridge.ensureBridgeInit();
+        if (ok) {
+          ortBridge.registerEp(p.name, r.libraryPath);
+          log(`    registered <- ${r.libraryPath}`);
+        }
+      } catch (e) {
+        logErr(`    register failed: ${e.message.split('\n')[0]}`);
+      }
+    } else if (r.diagnostic) {
+      logErr(`    ensureReady failed: ${String(r.diagnostic).split('\n')[0].slice(0, 100)}`);
+    }
+  }
+
+  const devices = ortBridge.listDevices();
+  log(`EP devices in bridge env: ${devices.length}`);
+  for (const d of devices) {
+    log(`  - [${d.index}] ${d.epName} type=${d.deviceType} vendor=${d.vendor || '?'}`);
+  }
+  return 0;
+}
+
+function cmdModels() {  const { getModelDir } = require('./modelDir');
   const modelDir = getModelDir();
   section('Models');
   log(`modelDir: ${modelDir}`);
@@ -361,6 +442,444 @@ async function cmdSynth(opts) {
   }
 }
 
+/**
+ * 用真实工程文件（.sxsproj）的一个时间窗做合成，并打印实际使用的执行提供者。
+ *
+ * 目的：在用户自己的歌曲内容上对比 FP32 / FP16（以及不同 EP）的输出差异，
+ * 而不是只用评测数据集的条件张量。工程文件自带歌手参考（.sxssinger 里的
+ * 参考音频 + f0 + midi），所以音色也是真实的。
+ *
+ * 与渲染进程 fragment-svs:synthesize 的差异（有意为之，避免把与精度无关的
+ * 后处理混进对比）：不做分片 / 流式 / loudnorm / 抗混叠，只取一个时间窗。
+ */
+async function cmdSynthProject(opts) {
+  section('Synth Project');
+  if (!opts.file) { logErr('--file <project.sxsproj> is required'); return 2; }
+  const { OnnxSVSPipeline, SAMPLE_RATE } = require('../inference/pipeline');
+  const { getModelDir } = require('./modelDir');
+  const { loadSettings } = require('./settings');
+
+  const settings = loadSettings();
+  const modelDir = getModelDir();
+  const precision = opts.precision || settings.modelPrecision || 'fp32';
+  const steps = opts.steps || 32;
+
+  const proj = JSON.parse(fs.readFileSync(opts.file, 'utf-8'));
+  const frags = proj.fragments || [];
+  const fragIdx = Number.isInteger(opts.fragment) ? opts.fragment : 0;
+  const frag = frags[fragIdx];
+  if (!frag) { logErr(`fragment ${fragIdx} not found (project has ${frags.length})`); return 2; }
+  const bpm = opts.bpm || (proj.project && proj.project.bpm) || 120;
+
+  // ---- 歌手参考（工程自带；缺失就退化为纯音符合成）----
+  const singerMeta = (proj.singers || []).find(s => s.id === frag.singerId) || null;
+  const singerPath = opts.singer || (singerMeta && singerMeta.singerFilePath) || null;
+  let refAudioWavBuffer = null, refF0Data = null, refMidiNotes = null;
+  let singerName = null, singerLanguage = null;
+  if (singerPath && fs.existsSync(singerPath)) {
+    const sj = JSON.parse(fs.readFileSync(singerPath, 'utf-8'));
+    singerName = sj.singerName || path.basename(singerPath);
+    singerLanguage = (sj.singerData && sj.singerData.language) || null;
+    if (sj.wavBase64) refAudioWavBuffer = Buffer.from(sj.wavBase64, 'base64');
+    refF0Data = Array.isArray(sj.f0Data) ? sj.f0Data : null;
+    refMidiNotes = Array.isArray(sj.midiNotes) ? sj.midiNotes : null;
+    log(`singer     : ${singerName} lang=${singerLanguage} ref=${refAudioWavBuffer ? fmtBytes(refAudioWavBuffer.length) : 'none'} f0=${refF0Data ? refF0Data.length : 0} midi=${refMidiNotes ? refMidiNotes.length : 0}`);
+  } else {
+    log(`singer     : none (${singerPath || 'no singerFilePath'}) → 无参考音色，只反映音符层面的误差`);
+  }
+
+  // ---- 时间窗切片 ----
+  // 注意：工程文件里 note.start / note.duration 的单位是「拍」(beat)，不是秒。
+  // 之前直接按秒过滤，--duration 30 其实只切到 30 拍（168bpm 下只有 10.7s）。
+  const secPerBeat = 60 / bpm;
+  const fromSec = Number.isFinite(opts.from) ? opts.from : 0;
+  const toSec = Number.isFinite(opts.to) ? opts.to
+    : fromSec + (Number.isFinite(opts.duration) ? opts.duration : 30);
+  const from = fromSec / secPerBeat;   // 秒 → 拍
+  const to = toSec / secPerBeat;       // 秒 → 拍
+  const allNotes = frag.notes || [];
+  const spanBeats = allNotes.length
+    ? Math.max(...allNotes.map(n => n.start + n.duration)) : 0;
+  const notes = allNotes
+    .filter(n => n.start < to && n.start + n.duration > from)
+    .map(n => {
+      const s = Math.max(n.start, from);
+      const e = Math.min(n.start + n.duration, to);
+      return { ...n, start: +(s - from).toFixed(4), duration: +(e - s).toFixed(4) };
+    })
+    .filter(n => n.duration > 0.02)
+    .sort((a, b) => a.start - b.start);
+
+  log(`project    : ${path.basename(opts.file)} fragment[${fragIdx}] ${frag.name || ''}`);
+  log(`window     : ${fromSec}s → ${toSec}s  (${(toSec - fromSec).toFixed(2)}s = ${(to - from).toFixed(2)} 拍 @${bpm}bpm)`);
+  log(`notes      : ${notes.length} / ${allNotes.length}（全曲 ${(spanBeats * secPerBeat).toFixed(1)}s = ${spanBeats.toFixed(1)} 拍）`);
+  log(`bpm        : ${bpm}`);
+  log(`precision  : ${precision}`);
+  log(`steps      : ${steps}  sampler=${opts.sampler || 'default'}  cfg=${Number.isFinite(opts.cfg) ? opts.cfg : 'default'}  rescale=${Number.isFinite(opts.cfgRescale) ? opts.cfgRescale : 'default'}  schedule=${opts.cfgSchedule || 'default'}  qdrift=${opts.qdrift === true}`);
+  if (opts.dryRun) { log('\n[dry-run] 未执行推理'); return 0; }
+
+  // WinML 的 EP 选择读的是 globalThis.__SXS_SETTINGS_SNAPSHOT__（应用里由 svsWorker 注入）。
+  // CLI 没有 worker，必须自己注入，否则 isWinmlEnabled() 看不到 winmlEnabled=true，
+  // 会静默退化成 DML——那样跑出来的就不是 WinML-TRT-RTX 的数字了。
+  globalThis.__SXS_SETTINGS_SNAPSHOT__ = { ...settings };
+  if (opts.winmlEp) {
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlEnabled = true;
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.nativeInferenceBackend = 'winml';
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlPreferredEp = opts.winmlEp;
+  }
+  if (opts.noWinml) {
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.winmlEnabled = false;
+    globalThis.__SXS_SETTINGS_SNAPSHOT__.nativeInferenceBackend = 'dml';
+  }
+  log(`[ep] 请求: winmlEnabled=${settings.winmlEnabled === true} backend=${settings.nativeInferenceBackend || 'auto'} preferredEp=${opts.winmlEp || settings.winmlPreferredEp || '(智能) NV TRT-RTX 优先'}`);
+
+  const pipeline = new OnnxSVSPipeline(modelDir, {
+    deviceId: settings.preferredDeviceId ?? settings.deviceId ?? undefined,
+    deviceMode: settings.deviceMode || 'smart',
+    preferredDeviceType: settings.preferredDeviceType || undefined,
+    modelDeviceMapping: settings.modelDeviceMapping || undefined,
+    modelPrecision: precision,
+    japaneseVocalization: settings.japaneseVocalization || 'hybrid',
+    inferenceProvider: settings.inferenceProvider || 'ortnode',
+  });
+
+  try {
+    const tInit = Date.now();
+    await pipeline.init();
+    let eps = pipeline.sessionEPs || {};
+    log(`[ep] diffStep=${eps.diffStep || '?'}  vocoder=${eps.vocoder || '?'}`);
+
+    const synthOpts = {
+      nSteps: steps,
+      refAudioWavBuffer,
+      refF0Data,
+      refMidiNotes,
+      singerId: frag.singerId || null,
+      onProgress: (p) => { if (p % 25 === 0) log(`[progress] ${p}%`); },
+    };
+    if (opts.sampler) synthOpts.sampler = opts.sampler;
+    if (Number.isFinite(opts.cfg)) synthOpts.cfg = opts.cfg;
+    if (Number.isFinite(opts.cfgRescale)) synthOpts.cfgRescale = opts.cfgRescale;
+    if (opts.cfgSchedule) {
+      synthOpts.cfgScheduleMode = opts.cfgSchedule;
+      synthOpts.cfgStrengthStart = null;
+      synthOpts.cfgScheduleKeyframes = null;
+    }
+    if (opts.qdrift === true) synthOpts.qdrift = true;
+    if (opts.qdrift === false) synthOpts.qdrift = false;
+    if (Number.isInteger(opts.maxPromptFrames)) synthOpts.maxPromptFrames = opts.maxPromptFrames;
+    if (opts.diffStepChunk === true) {
+      synthOpts.diffStepChunk = true;
+      synthOpts.diffStepChunkFrames = opts.diffStepChunkFrames || 500;
+      log(`diffStep chunk: enabled, chunkFrames=${synthOpts.diffStepChunkFrames}`);
+    }
+    if (Number.isInteger(opts.seed)) {
+        synthOpts.seed = opts.seed;
+        log(`seed       : ${opts.seed}（固定初始噪声，用于精度/EP 对比）`);
+    }
+
+    const tSynth = Date.now();
+    const audio = await pipeline.synthesize(notes, bpm, synthOpts);
+    const synthMs = Date.now() - tSynth;
+
+    let peak = 0, sum = 0;
+    for (let i = 0; i < audio.length; i++) {
+      const v = Math.abs(audio[i]);
+      if (v > peak) peak = v;
+      sum += audio[i];
+    }
+    const durationSec = audio.length / SAMPLE_RATE;
+    log(`\n[OK] ${synthMs}ms  samples=${audio.length}  ${durationSec.toFixed(3)}s @${SAMPLE_RATE}Hz  peak=${peak.toFixed(4)}  mean=${(sum / audio.length).toFixed(6)}`);
+    eps = pipeline.sessionEPs || {};
+    log(`[ep] 实际使用: diffStep=${eps.diffStep || '?'}  vocoder=${eps.vocoder || '?'}`);
+
+    if (opts.out) {
+      const { encodeWav } = require('../audio/wavEncoder');
+      const wavBuf = encodeWav(audio, SAMPLE_RATE);
+      fs.mkdirSync(path.dirname(opts.out), { recursive: true });
+      fs.writeFileSync(opts.out, wavBuf);
+      log(`WAV written: ${opts.out} (${fmtBytes(wavBuf.length)})`);
+    }
+    if (opts.outF32) {
+      // 测量链路必须用 float32：16bit 量化本底在 8-12kHz 就有 ~1-2 dB 的谱差异量级，
+      // 会把「FP16 相对 FP32」这种本来就小的差异淹掉。给人听的成品仍用 16bit。
+      fs.mkdirSync(path.dirname(opts.outF32), { recursive: true });
+      fs.writeFileSync(opts.outF32, encodeWavF32(audio, SAMPLE_RATE));
+      log(`WAV(f32) written: ${opts.outF32}`);
+    }
+
+    try { pipeline.dispose(); } catch (_) {}
+    return 0;
+  } catch (e) {
+    logErr(`[FAIL] synth-project failed: ${e.stack || e.message}`);
+    try { pipeline.dispose(); } catch (_) {}
+    return 1;
+  }
+}
+
+/** 32-bit float WAV 编码（测量用，避免 16bit 量化本底污染谱域对比） */
+function encodeWavF32(samples, sampleRate) {
+  const n = samples.length;
+  const dataBytes = n * 4;
+  const buf = Buffer.alloc(44 + dataBytes);
+  buf.write('RIFF', 0); buf.writeUInt32LE(36 + dataBytes, 4); buf.write('WAVE', 8);
+  buf.write('fmt ', 12); buf.writeUInt32LE(16, 16);
+  buf.writeUInt16LE(3, 20);              // WAVE_FORMAT_IEEE_FLOAT
+  buf.writeUInt16LE(1, 22);              // mono
+  buf.writeUInt32LE(sampleRate, 24);
+  buf.writeUInt32LE(sampleRate * 4, 28);
+  buf.writeUInt16LE(4, 32);
+  buf.writeUInt16LE(32, 34);
+  buf.write('data', 36); buf.writeUInt32LE(dataBytes, 40);
+  for (let i = 0; i < n; i++) buf.writeFloatLE(samples[i], 44 + i * 4);
+  return buf;
+}
+
+/**
+ * qdrift-conds：从真实 .sxsproj 工程导出 Q-Drift 校准条件张量。
+ *
+ * 产出与 qdrift/conds_bin/nat_* 完全一致的二进制格式（纯小端 Float32）：
+ *   <item>_prompt.bin : prompt mel，(prompt_len, 128)
+ *   <item>_cond.bin   : 条件，(prompt_len + target_len, 1024)
+ *   <item>.json       : 元数据（字段同 nat_*.json）
+ *   manifest.json     : 元数据数组
+ *
+ * 条件统一由 FP32 基线管线导出（FP16/INT8 标定共用同一条件，Δv 只来自
+ * diff_step 的量化差异），EP 固定 DML，与应用运行时一致。
+ */
+async function cmdQdriftConds(opts) {
+  section('Q-Drift Condition Export');
+  // parseArgs 把每次 --file 都累积进 opts.files（同时回填 opts.file 供单文件命令使用）
+  const files = Array.isArray(opts.files) ? Array.from(new Set(opts.files)) : [];
+  if (files.length === 0) { logErr('at least one --file <project.sxsproj> is required'); return 2; }
+
+  const repoRoot = path.resolve(__dirname, '..', '..');
+  const outDir = opts.out || path.join(repoRoot, 'qdrift', 'conds_proj');
+  const fragFilter = Number.isInteger(opts.fragment) ? opts.fragment : -1;
+  const maxItemsPerFrag = Number.isInteger(opts.maxItemsPerFrag) ? opts.maxItemsPerFrag : 8;
+  const minSec = Number.isFinite(opts.minSec) ? opts.minSec : 5;
+  const maxSec = Number.isFinite(opts.maxSec) ? opts.maxSec : 22;
+  const maxPromptFrames = Number.isInteger(opts.maxPromptFrames) ? opts.maxPromptFrames : 600;
+  const fullPromptBudget = Number.isInteger(opts.fullPromptItems) ? opts.fullPromptItems : 2;
+  const force = opts.force === true;
+
+  const { HOP_SIZE, MEL_DIM, COND_DIM, SAMPLE_RATE: PIPE_SR } = require('../inference/pipeline/constants');
+  const { OnnxSVSPipeline } = require('../inference/pipeline');
+  const { getModelDir } = require('./modelDir');
+  const { loadSettings } = require('./settings');
+  const settings = loadSettings();
+  const modelDir = getModelDir();
+
+  // ---- 解析每个工程的候选片段（不依赖模型，先把计划算出来）----
+  const jobs = [];
+  for (const file of files) {
+    if (!fs.existsSync(file)) { logErr(`[WARN] project not found: ${file}`); continue; }
+    const proj = JSON.parse(fs.readFileSync(file, 'utf-8'));
+    const bpm = (proj.project && proj.project.bpm) || 120;
+    const stem = path.basename(file, '.sxsproj').replace(/[^a-zA-Z0-9]+/g, '_').replace(/^_+|_+$/g, '').toLowerCase();
+    const frags = proj.fragments || [];
+    for (let fi = 0; fi < frags.length; fi++) {
+      if (fragFilter !== -1 && fi !== fragFilter) continue;
+      const frag = frags[fi];
+      const notes = (frag.notes || []).filter(n => n && n.lyric);
+      if (!notes.length) { log(`[skip] ${path.basename(file)} #${fi}: no lyric notes`); continue; }
+      const singerMeta = (proj.singers || []).find(s => s.id === frag.singerId) || null;
+      const singerPath = opts.singer || (singerMeta && singerMeta.singerFilePath) || null;
+      if (!singerPath || !fs.existsSync(singerPath)) {
+        log(`[skip] ${path.basename(file)} #${fi}: singer file unavailable (${singerPath || 'none'})`);
+        continue;
+      }
+      jobs.push({ file, stem, fi, bpm, frag, singerPath });
+    }
+  }
+  if (jobs.length === 0) { logErr('no eligible fragments (need lyric notes + resolvable singer file)'); return 2; }
+
+  if (opts.dryRun) {
+    section('Q-Drift Export Plan (dry-run)');
+    log(`out=${outDir}  promptCap=${maxPromptFrames} frames  fullPromptItems=${fullPromptBudget}  range=${minSec}-${maxSec}s  perFrag=${maxItemsPerFrag}`);
+    for (const j of jobs) log(`  ${path.basename(j.file)} fragment[${j.fi}] bpm=${j.bpm} singer=${path.basename(j.singerPath)} notes=${(j.frag.notes || []).length}`);
+    return 0;
+  }
+
+  // ---- 初始化 FP32 管线（只需 encoder/mel 侧；diffStep/vocoder 也会加载但不参与）----
+  globalThis.__SXS_SETTINGS_SNAPSHOT__ = { ...settings };
+  const pipeline = new OnnxSVSPipeline(modelDir, {
+    deviceId: settings.preferredDeviceId ?? settings.deviceId ?? undefined,
+    deviceMode: settings.deviceMode || 'smart',
+    preferredDeviceType: settings.preferredDeviceType || undefined,
+    modelDeviceMapping: settings.modelDeviceMapping || undefined,
+    modelPrecision: 'fp32',
+    japaneseVocalization: settings.japaneseVocalization || 'hybrid',
+    inferenceProvider: settings.inferenceProvider || 'ortnode',
+  });
+
+  fs.mkdirSync(outDir, { recursive: true });
+  const manifestPath = path.join(outDir, 'manifest.json');
+  let manifest = [];
+  if (fs.existsSync(manifestPath)) {
+    try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')); } catch (_) { manifest = []; }
+  }
+  const manifestByItem = new Map(manifest.map(m => [m.item, m]));
+  // Items belonging to a (project,fragment) re-exported in THIS invocation.
+  // Old segment picks for the same fragment (uniform sampling can choose
+  // different indices across runs) must be pruned from the manifest so
+  // calibration never loads stale tensors produced before an encoding fix.
+  const touchedItems = new Set();
+  const scopeKeys = new Set(jobs.map(j => `${path.basename(j.file)}#${j.fi}`));
+  const pruneManifest = (map) => Array.from(map.values())
+    .filter(m => {
+      const key = `${m.source_project}#${m.source_fragment}`;
+      return !scopeKeys.has(key) || touchedItems.has(m.item);
+    })
+    .sort((a, b) => a.item.localeCompare(b.item));
+
+  // prompt mel 按歌手文件缓存（同一歌手的多个片段共用）
+  const promptCache = new Map();
+  let fullPromptUsed = 0;
+  let exported = 0;
+  let skipped = 0;
+  const tStart = Date.now();
+
+  try {
+    await pipeline.init();
+
+    for (const job of jobs) {
+      const { file, stem, fi, bpm, frag, singerPath } = job;
+      const sj = JSON.parse(fs.readFileSync(singerPath, 'utf-8'));
+      const singerName = sj.singerName || path.basename(singerPath);
+      const langRaw = String((sj.singerData && sj.singerData.language) || '');
+      const language = /mandarin|中文|chinese|zh/i.test(langRaw) ? 'Chinese'
+        : /english|英语|en/i.test(langRaw) ? 'English' : langRaw || 'Unknown';
+      log(`\n[project] ${path.basename(file)} fragment[${fi}] bpm=${bpm} singer=${singerName} lang=${language}`);
+
+      // ---- 分段（与合成路径完全相同的 fillNoteGaps + buildVocalSegments）----
+      const filled = pipeline._fillNoteGaps(frag.notes || []);
+      const segments = pipeline._buildVocalSegments(filled, bpm);
+
+      // 先算出每个候选段的精确时长需要跑 encoder；这里用音符跨度做粗筛，
+      // 精确帧数在选定后再校验，避免对十几个段白跑编码。
+      const secOf = (seg) => {
+        const end = seg.notes.reduce((m, n) => Math.max(m, n.start + n.duration), 0);
+        return end * 60 / bpm;
+      };
+      const eligible = segments
+        .map((seg, k) => ({ seg, k, approxSec: secOf(seg) }))
+        .filter(x => x.seg.notes.some(n => n.lyric) && x.approxSec >= minSec && x.approxSec <= maxSec);
+      if (!eligible.length) { log(`  [skip] no segment within ${minSec}-${maxSec}s (segments=${segments.length})`); continue; }
+
+      // 均匀铺开选取，覆盖全曲时间线
+      const pickCount = Math.min(maxItemsPerFrag, eligible.length);
+      const chosen = [];
+      for (let j = 0; j < pickCount; j++) {
+        const idx = Math.floor((j + 0.5) * eligible.length / pickCount);
+        chosen.push(eligible[idx]);
+      }
+
+      // ---- 该歌手的 prompt mel（只提取一次）----
+      let cacheEntry = promptCache.get(singerPath);
+      if (!cacheEntry) {
+        const wavBuf = sj.wavBase64 ? Buffer.from(sj.wavBase64, 'base64') : null;
+        if (!wavBuf) throw new Error(`singer ${singerPath} has no wavBase64`);
+        const mel = await pipeline._extractRefMelOnnx(wavBuf);
+        cacheEntry = { data: mel.data, frames: mel.frames, name: singerName };
+        promptCache.set(singerPath, cacheEntry);
+        log(`  prompt mel: ${mel.frames} frames (${(mel.frames * HOP_SIZE / PIPE_SR).toFixed(1)}s) from ${path.basename(singerPath)}`);
+      }
+
+      for (const { seg, k, approxSec } of chosen) {
+        const item = `prj_${stem}_f${fi}_s${String(k).padStart(2, '0')}`;
+        const jsonPath = path.join(outDir, `${item}.json`);
+        const promptPath = path.join(outDir, `${item}_prompt.bin`);
+        const condPath = path.join(outDir, `${item}_cond.bin`);
+        if (!force && fs.existsSync(jsonPath) && fs.existsSync(promptPath) && fs.existsSync(condPath)) {
+          log(`  ${item}: cached (skip; --force to rebuild)`);
+          skipped++;
+          touchedItems.add(item);
+          continue;
+        }
+
+        // notesToSequences → 精确 target 帧数
+        const sequences = pipeline.notesToSequences(seg.notes, bpm, null, null, 0, 0);
+        const tl = sequences.f0Ids.length;
+        const sec = tl * HOP_SIZE / PIPE_SR;
+        if (sec < minSec || sec > maxSec + 2) {
+          log(`  ${item}: skip, exact duration ${sec.toFixed(2)}s out of range`);
+          continue;
+        }
+
+        // prompt 长度：默认截到 maxPromptFrames（与 nat_* 7~12s 区间对齐）；
+        // 前 fullPromptBudget 条保留完整 prompt，覆盖长参考上下文场景。
+        let pl = cacheEntry.frames;
+        let promptData = cacheEntry.data;
+        const fullPrompt = maxPromptFrames > 0 && pl > maxPromptFrames && fullPromptUsed < fullPromptBudget;
+        if (maxPromptFrames > 0 && pl > maxPromptFrames && !fullPrompt) {
+          pl = maxPromptFrames;
+          promptData = cacheEntry.data.subarray(0, pl * MEL_DIM);
+        }
+        if (fullPrompt) {
+          fullPromptUsed++;
+          log(`  ${item}: FULL prompt retained (${pl} frames, full-prompt budget ${fullPromptUsed}/${fullPromptBudget})`);
+        }
+
+        const cond = await pipeline._runEncoder(sequences, sequences.tokenCount, tl, pl);
+        const expectedCond = (pl + tl) * COND_DIM;
+        if (cond.length !== expectedCond) {
+          throw new Error(`${item}: cond length ${cond.length} != expected ${expectedCond} (pl=${pl}, tl=${tl})`);
+        }
+
+        fs.writeFileSync(promptPath, Buffer.from(promptData.buffer, promptData.byteOffset, pl * MEL_DIM * 4));
+        fs.writeFileSync(condPath, Buffer.from(cond.buffer, cond.byteOffset, cond.byteLength));
+        const meta = {
+          item,
+          index: `${path.basename(file)}#fragment${fi}#segment${k}`,
+          language,
+          prompt_len: pl,
+          target_len: tl,
+          seconds: +(sec).toFixed(3),
+          prompt_shape: [1, pl, MEL_DIM],
+          cond_shape: [1, pl + tl, COND_DIM],
+          concat: 1,
+          source_project: path.basename(file),
+          source_fragment: fi,
+          segment_index: k,
+          segment_start_beat: +seg.startBeat.toFixed(3),
+          segment_end_beat: +seg.endBeat.toFixed(3),
+          approximate_score_seconds: +approxSec.toFixed(2),
+          singer: cacheEntry.name,
+          singer_file: path.basename(singerPath),
+          full_prompt: fullPrompt,
+          prompt_capped: pl !== cacheEntry.frames,
+          bpm,
+        };
+        fs.writeFileSync(jsonPath, JSON.stringify(meta, null, 2));
+        manifestByItem.set(item, meta);
+        touchedItems.add(item);
+        exported++;
+        log(`  ${item}: tl=${tl} (${sec.toFixed(2)}s) pl=${pl} cond=${pl + tl} frames  [OK]`);
+
+        // 大数组即时释放，避免几十条样本累积导致堆膨胀
+        if (typeof global.gc === 'function') global.gc();
+      }
+    }
+
+    const merged = pruneManifest(manifestByItem);
+    fs.writeFileSync(manifestPath, JSON.stringify(merged, null, 2));
+    log(`\n[OK] exported=${exported} cached=${skipped} total=${merged.length} -> ${outDir}`);
+    log(`[OK] elapsed ${((Date.now() - tStart) / 1000).toFixed(1)}s`);
+    try { pipeline.dispose(); } catch (_) {}
+    return 0;
+  } catch (e) {
+    // 出错也落盘已完成条目，便于断点续跑（同样修剪本次重导片段的陈旧条目）
+    try {
+      const merged = pruneManifest(manifestByItem);
+      fs.writeFileSync(manifestPath, JSON.stringify(merged, null, 2));
+    } catch (_) {}
+    logErr(`[FAIL] qdrift-conds: ${e.stack || e.message}`);
+    try { pipeline.dispose(); } catch (_) {}
+    return 1;
+  }
+}
+
 // ---------- 参数解析 ----------
 
 function parseArgs(argv) {
@@ -375,8 +894,49 @@ function parseArgs(argv) {
   for (let i = 1; i < rest.length; i++) {
     const a = rest[i];
     if (a === '--out') { opts.out = rest[++i]; continue; }
+    if (a === '--out-f32') { opts.outF32 = rest[++i]; continue; }
     if (a === '--steps') { opts.steps = parseInt(rest[++i], 10); continue; }
     if (a === '--bpm') { opts.bpm = parseInt(rest[++i], 10); continue; }
+    // ---- synth-project / qdrift-conds：用真实工程做精度/EP 对比、条件导出 ----
+    if (a === '--file') {
+      const v = rest[++i];
+      // qdrift-conds 允许多次 --file；保留 opts.file 兼容 synth-project 的单文件语义
+      opts.file = v;
+      opts.files = opts.files || [];
+      opts.files.push(v);
+      continue;
+    }
+    if (a === '--fragment') { opts.fragment = parseInt(rest[++i], 10); continue; }
+    if (a === '--out-dir') { opts.out = rest[++i]; continue; }
+    if (a === '--max-items-per-frag') { opts.maxItemsPerFrag = parseInt(rest[++i], 10); continue; }
+    if (a === '--min-sec') { opts.minSec = parseFloat(rest[++i]); continue; }
+    if (a === '--max-sec') { opts.maxSec = parseFloat(rest[++i]); continue; }
+    if (a === '--max-prompt-frames') { opts.maxPromptFrames = parseInt(rest[++i], 10); continue; }
+    if (a === '--full-prompt-items') { opts.fullPromptItems = parseInt(rest[++i], 10); continue; }
+    if (a === '--force') { opts.force = true; continue; }
+    if (a === '--from') { opts.from = parseFloat(rest[++i]); continue; }
+    if (a === '--to') { opts.to = parseFloat(rest[++i]); continue; }
+    if (a === '--duration') { opts.duration = parseFloat(rest[++i]); continue; }
+    if (a === '--singer') { opts.singer = rest[++i]; continue; }
+    if (a === '--precision') { opts.precision = rest[++i]; continue; }
+    if (a === '--sampler') { opts.sampler = rest[++i]; continue; }
+    if (a === '--cfg') { opts.cfg = parseFloat(rest[++i]); continue; }
+    if (a === '--cfg-rescale') { opts.cfgRescale = parseFloat(rest[++i]); continue; }
+    if (a === '--cfg-schedule') { opts.cfgSchedule = rest[++i]; continue; }
+    if (a === '--qdrift') { opts.qdrift = true; continue; }
+    if (a === '--no-qdrift') { opts.qdrift = false; continue; }
+    if (a === '--seed') { opts.seed = parseInt(rest[++i], 10); continue; }
+    if (a === '--winml-ep') { opts.winmlEp = rest[++i]; continue; }
+    if (a === '--no-winml') { opts.noWinml = true; continue; }
+    if (a === '--max-prompt-frames') { opts.maxPromptFrames = parseInt(rest[++i], 10); continue; }
+    if (a === '--diffstep-chunk') {
+      opts.diffStepChunk = true;
+      const v = parseInt(rest[i + 1], 10);
+      if (Number.isFinite(v)) { opts.diffStepChunkFrames = v; i++; }
+      continue;
+    }
+    if (a === '--dry-run') { opts.dryRun = true; continue; }
+    if (a === '--language') { opts.language = rest[++i]; continue; }
     if (a === '--notes') {
       try { opts.notes = JSON.parse(rest[++i]); }
       catch (e) { throw new Error(`Invalid --notes JSON: ${e.message}`); }
@@ -407,10 +967,13 @@ async function runCli(argv) {
       case 'version': return cmdVersion();
       case 'info': return cmdInfo();
       case 'gpu': return await cmdGpu();
+      case 'winml': return await cmdWinml();
       case 'models': return cmdModels();
       case 'settings': return cmdSettings();
       case 'init-pipeline': return await cmdInitPipeline();
       case 'synth': return await cmdSynth(opts);
+      case 'synth-project': return await cmdSynthProject(opts);
+      case 'qdrift-conds': return await cmdQdriftConds(opts);
       default:
         logErr(`Unknown command: ${command}\n`);
         logErr(HELP_TEXT);

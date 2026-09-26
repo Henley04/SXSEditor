@@ -83,6 +83,7 @@ module.exports = [
             'src/audio/wavEncoder.js',
             'src/utils/escapeHtml.js',
             'src/utils/gpuCache.js',
+            'src/inference/pipeline/qdrift/defaults.js',
         ],
         languageOptions: {
             sourceType: 'commonjs',
@@ -116,6 +117,8 @@ module.exports = [
                 SPLASH_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
                 UPDATE_NOTIFICATION_WINDOW_WEBPACK_ENTRY: 'readonly',
                 UPDATE_NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
+                SINGER_MARKET_WINDOW_WEBPACK_ENTRY: 'readonly',
+                SINGER_MARKET_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
             },
         },
     },
@@ -124,6 +127,10 @@ module.exports = [
         files: [
             'src/renderer/**/*.js',
             'src/fragmentEditor/**/*.js',
+            // 仅渲染进程引用的共享模块（使用 window/document/ResizeObserver 等浏览器全局）
+            'src/shared/autoRelayout.js',
+            // 流式调度器：ESM，被渲染层 bundle（watchdog 用 setTimeout/console）
+            'src/shared/streamingScheduler.js',
             'src/audioPreprocess/**/*.js',
             'src/editor/**/*.js',
             'src/inference/webnn/**/*.js',
@@ -132,6 +139,7 @@ module.exports = [
             'src/i18n/**/*.js',
             'src/icons/**/*.js',
             'src/singerCreator.js',
+            'src/singerMarket.js',
             'src/settings.js',
             'src/modelDownload.js',
             'src/resourceManager.js',
@@ -143,6 +151,8 @@ module.exports = [
             'src/audio/wavEncoder.js',
             'src/utils/escapeHtml.js',
             'src/utils/gpuCache.js',
+            // Q-Drift 默认策略：ESM 纯函数，被主进程 CJS 与渲染层共用
+            'src/inference/pipeline/qdrift/defaults.js',
         ],
         languageOptions: {
             sourceType: 'module',

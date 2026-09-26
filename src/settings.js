@@ -11,9 +11,13 @@ import {
     validate,
     normalize,
 } from './themes/index.js';
+import { resolveQDriftDefault } from './inference/pipeline/qdrift/defaults.js';
 
 const inferenceProviderSelect = document.getElementById('inferenceProvider');
 const inferenceProviderHint = document.getElementById('inferenceProviderHint');
+const nativeBackendGroup = document.getElementById('nativeBackendGroup');
+const nativeInferenceBackendSelect = document.getElementById('nativeInferenceBackend');
+const nativeBackendHint = document.getElementById('nativeBackendHint');
 const inferenceDeviceSelect = document.getElementById('inferenceDevice');
 const webnnStatusValue = document.getElementById('webnnStatusValue');
 const npuStatusValue = document.getElementById('npuStatusValue');
@@ -34,6 +38,8 @@ const previewDiffStepChunkFramesSlider = document.getElementById('previewDiffSte
 const previewDiffStepChunkFramesValue = document.getElementById('previewDiffStepChunkFramesValue');
 const previewDiffStepOverlapFramesSlider = document.getElementById('previewDiffStepOverlapFrames');
 const previewDiffStepOverlapFramesValue = document.getElementById('previewDiffStepOverlapFramesValue');
+// 编辑后自动实时推理（后台重算预览音频，默认关闭）
+const autoRealtimeInferenceCheckbox = document.getElementById('autoRealtimeInference');
 const exportDiffStepsSlider = document.getElementById('exportDiffSteps');
 const exportDiffStepsValue = document.getElementById('exportDiffStepsValue');
 const exportSamplerSelect = document.getElementById('exportSampler');
@@ -69,6 +75,165 @@ const vocoderOverlapFramesValue = document.getElementById('vocoderOverlapFramesV
 const enableLoudnormFinalCheckbox = document.getElementById('enableLoudnormFinal');
 const enableAntiAliasingCheckbox = document.getElementById('enableAntiAliasing');
 const enableSDEditRepairCheckbox = document.getElementById('enableSDEditRepair');
+const fixedNoiseSeedEnabledCheckbox = document.getElementById('fixedNoiseSeedEnabled');
+const fixedNoiseSeedInput = document.getElementById('fixedNoiseSeed');
+const fixedNoiseSeedValueGroup = document.getElementById('fixedNoiseSeedValueGroup');
+const previewEnableQDriftCheckbox = document.getElementById('previewEnableQDrift');
+const exportEnableQDriftCheckbox = document.getElementById('exportEnableQDrift');
+const previewQDriftLockNote = document.getElementById('previewQDriftLockNote');
+const exportQDriftLockNote = document.getElementById('exportQDriftLockNote');
+
+// ===== Q-Drift 漂移校正（预览 / 导出各一个开关）=====
+// 只在用户手动拨动过后才落盘：否则只要保存过一次 false，之后切到 FP16 就永远
+// 不会自动开启（"切了 FP16 却还是没勾上"）。
+const _qdriftTouched = { preview: false, export: false };
+
+// Q-Drift 对 FP16 与 INT8 量化 DiT 有意义：其他精度下复选框必须置灰且不勾选。
+// 按精度分别记住用户意愿，切走时临时取消勾选，切回时恢复，
+// 避免置灰期间的临时 false 被落盘成陈旧值。
+// FP16 默认开启，INT8 校正表仍为 opt-in（默认关闭，等用户显式开启）。
+const _qdriftPref = {
+    preview: { fp16: true, int8: false },
+    export: { fp16: true, int8: false },
+};
+
+function _qdriftSupportedPrecision(v) {
+    return v === 'fp16' || v === 'int8';
+}
+
+// 开启 Q-Drift 后会被强制锁定的控件（预览 / 导出分别锁定各自那套参数）
+const QDRIFT_LOCKED_PREVIEW = [
+    previewDiffStepsSlider, previewSamplerSelect, previewCfgStrengthSlider, previewCfgRescaleSlider,
+    previewCfgScheduleModeSelect, previewCfgStrengthStartInput, previewCfgScheduleKeyframesInput,
+    previewDynamicThresholdEnabledCheckbox, previewDynamicThresholdPercentileSlider,
+];
+const QDRIFT_LOCKED_EXPORT = [
+    exportDiffStepsSlider, exportSamplerSelect, exportCfgStrengthSlider, exportCfgRescaleSlider,
+    exportCfgScheduleModeSelect, exportCfgStrengthStartInput, exportCfgScheduleKeyframesInput,
+    exportDynamicThresholdEnabledCheckbox, exportDynamicThresholdPercentileSlider,
+];
+// Q-Drift 合约值（必须与 src/inference/pipeline/qdrift/index.js 的 CONTRACT 一致）
+const QDRIFT_CONTRACT = { sampler: 'euler', steps: 32, cfg: 3.0, rescale: 0.7 };
+
+let _qdriftSnapshot = null;
+
+function _snapshotEls(els) {
+    const m = new Map();
+    for (const el of els) {
+        if (!el) continue;
+        m.set(el, el.type === 'checkbox' ? el.checked : el.value);
+    }
+    return m;
+}
+
+function _restoreEls(m) {
+    for (const [el, v] of m) {
+        if (!el) continue;
+        if (el.type === 'checkbox') el.checked = v;
+        else el.value = v;
+        el.dispatchEvent(new Event('input', { bubbles: false }));
+        el.dispatchEvent(new Event('change', { bubbles: false }));
+    }
+}
+
+function _setElsDisabled(els, disabled) {
+    for (const el of els) if (el) el.disabled = disabled;
+}
+
+function _applyContract(els, samplerEl, stepsEl, cfgEl, rescaleEl, checkboxEl) {
+    if (samplerEl) samplerEl.value = QDRIFT_CONTRACT.sampler;
+    if (stepsEl) stepsEl.value = String(QDRIFT_CONTRACT.steps);
+    if (cfgEl) cfgEl.value = String(QDRIFT_CONTRACT.cfg);
+    if (rescaleEl) rescaleEl.value = String(QDRIFT_CONTRACT.rescale);
+    if (checkboxEl) checkboxEl.checked = false;   // 动态阈值
+    for (const el of els) {
+        if (!el) continue;
+        el.dispatchEvent(new Event('input', { bubbles: false }));
+        el.dispatchEvent(new Event('change', { bubbles: false }));
+    }
+}
+
+/**
+ * 勾选 Q-Drift 后把受影响的采样参数置灰，并直接显示被强制的合约值。
+ * 目的：避免"界面上看着 STORK-2 / 64 步，实际跑的是 Euler / 32 步"。
+ *
+ * Q-Drift 仅对 FP16 / INT8 量化 DiT 生效：其他精度下复选框本身也要置灰，
+ * 否则用户能勾上并锁定一堆采样参数，运行时却被静默跳过（reason: precision-unsupported）。
+ */
+function updateQDriftLocks() {
+    const prec = modelPrecisionSelect ? modelPrecisionSelect.value : 'fp32';
+    const supported = _qdriftSupportedPrecision(prec);
+    if (previewEnableQDriftCheckbox) previewEnableQDriftCheckbox.disabled = !supported;
+    if (exportEnableQDriftCheckbox) exportEnableQDriftCheckbox.disabled = !supported;
+    const p = supported && !!(previewEnableQDriftCheckbox && previewEnableQDriftCheckbox.checked);
+    const e = supported && !!(exportEnableQDriftCheckbox && exportEnableQDriftCheckbox.checked);
+    const any = p || e;
+    const all = [...QDRIFT_LOCKED_PREVIEW, ...QDRIFT_LOCKED_EXPORT];
+
+    if (any && !_qdriftSnapshot) {
+        _qdriftSnapshot = _snapshotEls([...all, enableSDEditRepairCheckbox]);
+    }
+    if (p) {
+        _applyContract(QDRIFT_LOCKED_PREVIEW, previewSamplerSelect, previewDiffStepsSlider,
+            previewCfgStrengthSlider, previewCfgRescaleSlider, previewDynamicThresholdEnabledCheckbox);
+    }
+    if (e) {
+        _applyContract(QDRIFT_LOCKED_EXPORT, exportSamplerSelect, exportDiffStepsSlider,
+            exportCfgStrengthSlider, exportCfgRescaleSlider, exportDynamicThresholdEnabledCheckbox);
+    }
+    if (any && enableSDEditRepairCheckbox) enableSDEditRepairCheckbox.checked = false;
+    if (!any && _qdriftSnapshot) {
+        _restoreEls(_qdriftSnapshot);
+        _qdriftSnapshot = null;
+    }
+
+    _setElsDisabled(QDRIFT_LOCKED_PREVIEW, p);
+    _setElsDisabled(QDRIFT_LOCKED_EXPORT, e);
+    // SDEdit 局部修复是全局行为，任一侧开启 Q-Drift 都必须在运行时关掉
+    if (enableSDEditRepairCheckbox) enableSDEditRepairCheckbox.disabled = any;
+    if (previewQDriftLockNote) previewQDriftLockNote.classList.toggle('hidden', !p);
+    if (exportQDriftLockNote) exportQDriftLockNote.classList.toggle('hidden', !e);
+}
+
+/**
+ * 绑定 Q-Drift 相关监听。
+ * 必须延迟到所有控件引用声明之后再调用：modelPrecisionSelect 等 const 位于本文件更下方，
+ * 在模块求值阶段直接引用会踩 TDZ。
+ */
+function initQDriftListeners() {
+    if (previewEnableQDriftCheckbox) {
+        previewEnableQDriftCheckbox.addEventListener('change', () => {
+            _qdriftTouched.preview = true;
+            // 复选框在不支持的精度下被置灰，change 只可能发生在 fp16/int8
+            if (_qdriftSupportedPrecision(modelPrecisionSelect.value)) {
+                _qdriftPref.preview[modelPrecisionSelect.value] = previewEnableQDriftCheckbox.checked;
+            }
+            updateQDriftLocks();
+        });
+    }
+    if (exportEnableQDriftCheckbox) {
+        exportEnableQDriftCheckbox.addEventListener('change', () => {
+            _qdriftTouched.export = true;
+            if (_qdriftSupportedPrecision(modelPrecisionSelect.value)) {
+                _qdriftPref.export[modelPrecisionSelect.value] = exportEnableQDriftCheckbox.checked;
+            }
+            updateQDriftLocks();
+        });
+    }
+    // 切换模型精度时同步可用性与勾选状态：
+    //  - 切到 FP16：恢复 FP16 下的用户意愿（未手动改过则默认开启）
+    //  - 切到 INT8：恢复 INT8 下的用户意愿（默认关闭，需手动开启）
+    //  - 切到其他精度：临时取消勾选并置灰（意愿保留，切回时恢复）
+    if (modelPrecisionSelect) {
+        modelPrecisionSelect.addEventListener('change', () => {
+            const prec = modelPrecisionSelect.value;
+            const supported = _qdriftSupportedPrecision(prec);
+            if (previewEnableQDriftCheckbox) previewEnableQDriftCheckbox.checked = supported && _qdriftPref.preview[prec];
+            if (exportEnableQDriftCheckbox) exportEnableQDriftCheckbox.checked = supported && _qdriftPref.export[prec];
+            updateQDriftLocks();
+        });
+    }
+}
 const diagnosticModeCheckbox = document.getElementById('diagnosticMode');
 const audioOutputModeSelect = document.getElementById('audioOutputMode');
 const audioOutputDeviceSelect = document.getElementById('audioOutputDevice');
@@ -200,6 +365,8 @@ function applySavedSettingsToUI(currentSetting) {
     if (inferenceProviderSelect) {
         inferenceProviderSelect.value = inferenceProvider;
         updateInferenceProviderHint(inferenceProvider);
+        if (nativeInferenceBackendSelect) nativeInferenceBackendSelect.value = currentSetting.nativeInferenceBackend || 'auto';
+        updateNativeBackendUI(inferenceProvider, nativeInferenceBackendSelect?.value || 'auto');
     }
 
     // Device mode
@@ -256,6 +423,7 @@ function applySavedSettingsToUI(currentSetting) {
     if (previewDiffStepChunkFramesValue) previewDiffStepChunkFramesValue.textContent = pChunkFrames;
     if (previewDiffStepOverlapFramesSlider) previewDiffStepOverlapFramesSlider.value = pOverlapFrames;
     if (previewDiffStepOverlapFramesValue) previewDiffStepOverlapFramesValue.textContent = pOverlapFrames;
+    if (autoRealtimeInferenceCheckbox) autoRealtimeInferenceCheckbox.checked = currentSetting.autoRealtimeInference === true;
 
     const eSteps = currentSetting.exportDiffSteps ?? 32;
     const eCfg = currentSetting.exportCfgStrength ?? 3.0;
@@ -301,6 +469,28 @@ function applySavedSettingsToUI(currentSetting) {
     if (enableLoudnormFinalCheckbox) enableLoudnormFinalCheckbox.checked = currentSetting.enableLoudnormFinal !== false;
     if (enableAntiAliasingCheckbox) enableAntiAliasingCheckbox.checked = currentSetting.enableAntiAliasing === true;
     if (enableSDEditRepairCheckbox) enableSDEditRepairCheckbox.checked = currentSetting.enableSDEditRepair === true;
+    // 固定噪声种子（可复现合成）
+    if (fixedNoiseSeedEnabledCheckbox) fixedNoiseSeedEnabledCheckbox.checked = currentSetting.fixedNoiseSeedEnabled === true;
+    if (fixedNoiseSeedInput) {
+        fixedNoiseSeedInput.value = Number.isFinite(Number(currentSetting.fixedNoiseSeed))
+            ? Math.max(0, Math.min(0xFFFFFFFF, Math.floor(Number(currentSetting.fixedNoiseSeed))))
+            : 1234;
+    }
+    updateFixedNoiseSeedVisibility();
+    // Q-Drift：对 FP16 / INT8 量化模型生效。分别记录两种精度下的用户意愿
+    //（显式设置过用设置值，否则按默认：FP16 开、INT8 关），当前精度不支持时不勾选并置灰。
+    for (const prec of ['fp16', 'int8']) {
+        _qdriftPref.preview[prec] = resolveQDriftDefault({ ...currentSetting, modelPrecision: prec }, 'previewEnableQDrift');
+        _qdriftPref.export[prec] = resolveQDriftDefault({ ...currentSetting, modelPrecision: prec }, 'exportEnableQDrift');
+    }
+    const initPrec = currentSetting.modelPrecision || modelPrecisionSelect.value;
+    const initSupported = _qdriftSupportedPrecision(initPrec);
+    if (previewEnableQDriftCheckbox) previewEnableQDriftCheckbox.checked = initSupported && _qdriftPref.preview[initPrec];
+    if (exportEnableQDriftCheckbox) exportEnableQDriftCheckbox.checked = initSupported && _qdriftPref.export[initPrec];
+    // 每次套用设置都重置"用户是否手动改过"，这样切精度仍会自动跟随
+    _qdriftTouched.preview = false;
+    _qdriftTouched.export = false;
+    updateQDriftLocks();
     if (diagnosticModeCheckbox) diagnosticModeCheckbox.checked = currentSetting.diagnosticMode === true;
 
     // Audio settings
@@ -320,6 +510,9 @@ function applySavedSettingsToUI(currentSetting) {
     } else {
         modelPrecisionSelect.value = 'fp32';
     }
+    // 精度下拉框此时才是保存值：重新同步 Q-Drift 的置灰/锁定状态
+    // （上方调用时下拉框可能还是 HTML 默认的 fp32）
+    updateQDriftLocks();
 
     // MIDI tool
     if (currentSetting.midiExtractTool) {
@@ -451,6 +644,26 @@ function updateInferenceProviderHint(provider) {
     } else {
         inferenceProviderHint.textContent = t('settings.inferenceProviderHintOrtnode');
     }
+}
+
+function updateNativeBackendUI(provider, backend) {
+    if (nativeBackendGroup) nativeBackendGroup.classList.toggle('hidden', provider === 'ortweb');
+    const advancedRadio = document.querySelector('input[name="deviceMode"][value="advanced"]');
+    const winmlOnly = provider === 'ortnode' && backend !== 'dml';
+    if (advancedRadio) {
+        advancedRadio.disabled = winmlOnly;
+        advancedRadio.closest('.device-mode-radio')?.classList.toggle('hidden', winmlOnly);
+        if (winmlOnly && advancedRadio.checked) {
+            const smart = document.querySelector('input[name="deviceMode"][value="smart"]');
+            if (smart) smart.checked = true;
+            updateDeviceModeUI('smart');
+        }
+    }
+    if (!nativeBackendHint) return;
+    const key = backend === 'winml' ? 'settings.nativeBackendWinmlHint'
+        : backend === 'dml' ? 'settings.nativeBackendDmlHint'
+        : 'settings.nativeBackendAutoHint';
+    nativeBackendHint.textContent = t(key);
 }
 
 function updateDeviceModeUI(mode) {
@@ -814,20 +1027,47 @@ async function loadDevices() {
         const provider = currentSetting?.inferenceProvider || 'ortnode';
 
         // 再获取设备列表（硬件检测可能较慢）
-        const allDevices = await window.electronAPI.getDMLDevices();
-        const hasNpu = allDevices.some(d => d.deviceType === 'npu');
-        const hasWebnnGpu = allDevices.some(d => d.deviceType === 'webnn-gpu');
+        const backend = nativeInferenceBackendSelect?.value || currentSetting?.nativeInferenceBackend || 'auto';
+        let allDevices = [];
+        let winmlProviders = [];
+        if (provider === 'ortweb') {
+            // Deprecated WebNN is probed only when explicitly selected. Do not enumerate DML/WinML.
+            const result = await window.electronAPI.webnnDetectNPU();
+            if (result?.webnnNpuAvailable) allDevices.push({ name: 'NPU (WebNN)', deviceType: 'npu', source: 'webnn' });
+            if (result?.gpuAvailable) allDevices.push({ name: t('settings.webnnGpuDevice'), deviceType: 'webnn-gpu', source: 'webnn' });
+        } else if (backend === 'winml') {
+            // Windows ML Catalog is authoritative. Do not invoke DML, PowerShell GPU or systeminformation discovery.
+            winmlProviders = await window.electronAPI.getWinmlProviders();
+        } else if (backend === 'dml') {
+            allDevices = await window.electronAPI.getDMLDevices({ includeWebnn: false, enrich: false });
+        } else {
+            // Automatic mode starts with Windows ML only. DML is a runtime fallback, not a confusing parallel choice.
+            winmlProviders = await window.electronAPI.getWinmlProviders();
+            if (!winmlProviders.length) {
+                allDevices = await window.electronAPI.getDMLDevices({ includeWebnn: false, enrich: false });
+            }
+        }
+        // WebNN / NPU / GPU 状态指示必须独立于推理提供者与设备枚举方式。
+        // 旧实现从 allDevices 反推，而 allDevices 只在 provider === 'ortweb'
+        // 时才包含 WebNN 设备，导致默认（ortnode）下即使机器有 NPU 也恒显示
+        // "NPU 不可用"。这里统一走主进程的检测结果（含 PnP 硬件回退）。
+        const npuProbe = await window.electronAPI.webnnDetectNPU().catch((err) => {
+            console.warn('[Settings] NPU detection failed:', err);
+            return null;
+        });
         cachedWebnnInfo = {
-            webnnAvailable: hasNpu || hasWebnnGpu,
-            npuAvailable: hasNpu,
-            gpuAvailable: hasWebnnGpu,
+            webnnAvailable: !!(npuProbe?.webnnAvailable ?? (allDevices.some(d => d.deviceType === 'npu' || d.deviceType === 'webnn-gpu'))),
+            npuAvailable: !!(npuProbe?.npuAvailable ?? allDevices.some(d => d.deviceType === 'npu')),
+            gpuAvailable: !!(npuProbe?.gpuAvailable ?? allDevices.some(d => d.deviceType === 'webnn-gpu')),
         };
 
         // 根据推理提供者过滤可选项：ORTNODE 仅显示本地 GPU/CPU；ORTWEB 仅显示 WebNN NPU/GPU
         const devices = provider === 'ortweb'
             ? allDevices.filter(d => d.deviceType === 'npu' || d.deviceType === 'webnn-gpu')
             : allDevices.filter(d => d.deviceType !== 'npu' && d.deviceType !== 'webnn-gpu');
-        cachedDevices = devices;
+        cachedDevices = winmlProviders.length
+            ? winmlProviders.map(ep => ({ name: ep.name, deviceType: 'winml', epName: ep.name, source: 'winml' }))
+            : devices;
 
         // 获取当前硬件信息（可能为 null 如果管道未初始化）
         const hardwareInfo = await window.electronAPI.getCurrentHardware();
@@ -862,40 +1102,49 @@ async function loadDevices() {
         }
 
         inferenceDeviceSelect.innerHTML = '';
-
-        const discreteGPUs = devices.filter(d => d.deviceType === 'discrete-gpu' || d.isDiscrete);
-        const autoLabel = provider === 'ortnode' && discreteGPUs.length > 0
-            ? t('settings.autoSelectPreferDiscrete', { name: discreteGPUs[0].name })
-            : t('settings.autoSelect');
-        const autoOption = document.createElement('option');
-        autoOption.value = 'auto';
-        autoOption.textContent = autoLabel;
-        inferenceDeviceSelect.appendChild(autoOption);
-
-        for (const d of devices) {
+        const addOption = (parent, value, label, deviceType = '') => {
             const option = document.createElement('option');
-            if (d.deviceType === 'npu') {
-                option.value = 'npu';
-            } else if (d.deviceType === 'webnn-gpu') {
-                option.value = 'webnn-gpu';
-            } else {
-                option.value = String(d.dxgiAdapterNumber);
+            option.value = value;
+            option.textContent = label;
+            if (deviceType) option.dataset.deviceType = deviceType;
+            parent.appendChild(option);
+        };
+        addOption(inferenceDeviceSelect, 'auto', t('settings.autoSelect'));
+        if (provider === 'ortweb') {
+            for (const d of devices) {
+                const value = d.deviceType === 'npu' ? 'npu' : 'webnn-gpu';
+                addOption(inferenceDeviceSelect, value, getDeviceOptionText(d), d.deviceType);
             }
-            option.textContent = getDeviceOptionText(d);
-            option.dataset.deviceType = d.deviceType || (d.isDiscrete ? 'discrete-gpu' : 'integrated-gpu');
-            inferenceDeviceSelect.appendChild(option);
+        } else if (backend === 'winml') {
+            for (const ep of winmlProviders) {
+                const state = Number(ep.readyState) === 0 ? t('settings.winmlReady') : t('settings.winmlOnDemand');
+                addOption(inferenceDeviceSelect, `winml:${ep.name}`, `Windows ML · ${ep.name} · ${state}`, 'winml');
+            }
+        } else if (backend === 'dml') {
+            for (const d of devices) addOption(inferenceDeviceSelect, String(d.dxgiAdapterNumber), `DirectML · ${getDeviceOptionText(d)}`, d.deviceType);
+        } else {
+            if (winmlProviders.length) {
+                for (const ep of winmlProviders) {
+                    const state = Number(ep.readyState) === 0 ? t('settings.winmlReady') : t('settings.winmlOnDemand');
+                    addOption(inferenceDeviceSelect, `winml:${ep.name}`, `Windows ML · ${ep.name} · ${state}`, 'winml');
+                }
+            } else {
+                for (const d of devices) addOption(inferenceDeviceSelect, String(d.dxgiAdapterNumber), `DirectML · ${getDeviceOptionText(d)}`, d.deviceType);
+            }
         }
 
         // Restore device selection from settings（若当前 provider 下不可用则回退 auto）
         const preferredId = currentSetting?.preferredDeviceId ?? currentSetting?.deviceId ?? null;
-        const desiredValue = preferredId !== null ? String(preferredId) : 'auto';
+        const desiredValue = currentSetting?.winmlPreferredEp
+            ? `winml:${currentSetting.winmlPreferredEp}`
+            : (preferredId !== null ? String(preferredId) : 'auto');
         const validValues = new Set(Array.from(inferenceDeviceSelect.options).map(o => o.value));
         inferenceDeviceSelect.value = validValues.has(desiredValue) ? desiredValue : 'auto';
 
         updateCurrentHardwareDisplay(hardwareInfo, devices, currentSetting);
 
-        // Load audio device list (needs hardware detection for device enumeration)
-        await loadAudioDevices();
+        // Audio discovery is independent and must not block inference hardware.
+        loadAudioDevices().catch(() => {});
     } catch (err) {
         console.error('Failed to load device list:', err);
         inferenceDeviceSelect.textContent = '';
@@ -1129,7 +1378,7 @@ function collectSettings() {
     let preferredDeviceType;
     if (deviceMode === 'manual') {
         const inferenceValue = inferenceDeviceSelect.value;
-        preferredDeviceId = inferenceValue === 'auto'
+        preferredDeviceId = inferenceValue === 'auto' || inferenceValue.startsWith('winml:')
             ? null
             : (inferenceValue === 'npu' || inferenceValue === 'webnn-gpu' ? inferenceValue : parseInt(inferenceValue));
         preferredDeviceType = null;
@@ -1158,6 +1407,9 @@ function collectSettings() {
     return {
         deviceMode,
         inferenceProvider,
+        nativeInferenceBackend: nativeInferenceBackendSelect?.value || 'auto',
+        winmlEnabled: inferenceProvider === 'ortnode' && (nativeInferenceBackendSelect?.value || 'auto') !== 'dml',
+        winmlPreferredEp: inferenceDeviceSelect?.value?.startsWith('winml:') ? inferenceDeviceSelect.value.slice(6) : '',
         preferredDeviceId,
         preferredDeviceType,
         modelDeviceMapping,
@@ -1177,6 +1429,7 @@ function collectSettings() {
         previewDiffStepChunkEnabled: previewDiffStepChunkEnabledCheckbox ? previewDiffStepChunkEnabledCheckbox.checked : false,
         previewDiffStepChunkFrames: previewDiffStepChunkFramesSlider ? parseInt(previewDiffStepChunkFramesSlider.value) : 500,
         previewDiffStepOverlapFrames: previewDiffStepOverlapFramesSlider ? parseInt(previewDiffStepOverlapFramesSlider.value) : 50,
+        autoRealtimeInference: autoRealtimeInferenceCheckbox ? autoRealtimeInferenceCheckbox.checked : false,
         exportDiffSteps: parseInt(exportDiffStepsSlider.value),
         exportCfgStrength: parseFloat(exportCfgStrengthSlider.value),
         exportCfgRescale: parseFloat(exportCfgRescaleSlider.value),
@@ -1218,17 +1471,26 @@ function collectSettings() {
             const r = document.querySelector('input[name="vocoderChunkMode"]:checked');
             return r ? r.value : 'smart';
         })(),
+        ...(_qdriftTouched.preview && _qdriftSupportedPrecision(modelPrecisionSelect.value)
+            ? { previewEnableQDrift: _qdriftPref.preview[modelPrecisionSelect.value] } : {}),
+        ...(_qdriftTouched.export && _qdriftSupportedPrecision(modelPrecisionSelect.value)
+            ? { exportEnableQDrift: _qdriftPref.export[modelPrecisionSelect.value] } : {}),
         vocoderChunkFrames: parseInt(vocoderChunkFramesSlider.value),
         vocoderOverlapFrames: vocoderOverlapFramesSlider ? parseInt(vocoderOverlapFramesSlider.value) : 32,
         enableLoudnormFinal: enableLoudnormFinalCheckbox ? enableLoudnormFinalCheckbox.checked : true,
         enableAntiAliasing: enableAntiAliasingCheckbox ? enableAntiAliasingCheckbox.checked : false,
         enableSDEditRepair: enableSDEditRepairCheckbox ? enableSDEditRepairCheckbox.checked : false,
+        fixedNoiseSeedEnabled: fixedNoiseSeedEnabledCheckbox ? fixedNoiseSeedEnabledCheckbox.checked : false,
+        fixedNoiseSeed: fixedNoiseSeedInput
+            ? Math.max(0, Math.min(0xFFFFFFFF, Math.floor(Number(fixedNoiseSeedInput.value) || 0)))
+            : 1234,
         diagnosticMode: diagnosticModeCheckbox ? diagnosticModeCheckbox.checked : false,
         releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
         releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : false,
         // ORT 高级设置
         ortEnableMemPattern: ortEnableMemPatternCheckbox ? ortEnableMemPatternCheckbox.checked : true,
         ortEnableCpuMemArena: ortEnableCpuMemArenaCheckbox ? ortEnableCpuMemArenaCheckbox.checked : true,
+
         ortGraphOptLevel: ortGraphOptLevelSelect ? ortGraphOptLevelSelect.value : 'all',
         ortExecutionMode: ortExecutionModeSelect ? ortExecutionModeSelect.value : 'sequential',
         ortForceMemPatternOnDml: ortForceMemPatternOnDmlCheckbox ? ortForceMemPatternOnDmlCheckbox.checked : false,
@@ -1267,6 +1529,15 @@ function applySettingsDebounced() {
 if (inferenceProviderSelect) {
     inferenceProviderSelect.addEventListener('change', async () => {
         updateInferenceProviderHint(inferenceProviderSelect.value);
+        updateNativeBackendUI(inferenceProviderSelect.value, nativeInferenceBackendSelect?.value || 'auto');
+        await applySettings();
+        await loadDevices();
+    });
+}
+
+if (nativeInferenceBackendSelect) {
+    nativeInferenceBackendSelect.addEventListener('change', async () => {
+        updateNativeBackendUI(inferenceProviderSelect?.value || 'ortnode', nativeInferenceBackendSelect.value);
         await applySettings();
         await loadDevices();
     });
@@ -1332,6 +1603,9 @@ if (previewDiffStepChunkEnabledCheckbox) {
         if (previewDiffStepChunkGroup) previewDiffStepChunkGroup.classList.toggle('hidden', !previewDiffStepChunkEnabledCheckbox.checked);
         applySettings();
     });
+}
+if (autoRealtimeInferenceCheckbox) {
+    autoRealtimeInferenceCheckbox.addEventListener('change', () => applySettings());
 }
 if (previewDiffStepChunkFramesSlider) {
     previewDiffStepChunkFramesSlider.addEventListener('input', () => {
@@ -1433,6 +1707,21 @@ if (enableAntiAliasingCheckbox) {
 }
 if (enableSDEditRepairCheckbox) {
     enableSDEditRepairCheckbox.addEventListener('change', () => applySettings());
+}
+if (fixedNoiseSeedEnabledCheckbox) {
+    fixedNoiseSeedEnabledCheckbox.addEventListener('change', () => {
+        updateFixedNoiseSeedVisibility();
+        applySettings();
+    });
+}
+if (fixedNoiseSeedInput) {
+    fixedNoiseSeedInput.addEventListener('change', () => applySettingsDebounced());
+}
+
+function updateFixedNoiseSeedVisibility() {
+    if (fixedNoiseSeedValueGroup) {
+        fixedNoiseSeedValueGroup.classList.toggle('hidden', !(fixedNoiseSeedEnabledCheckbox && fixedNoiseSeedEnabledCheckbox.checked));
+    }
 }
 if (diagnosticModeCheckbox) {
     diagnosticModeCheckbox.addEventListener('change', () => applySettings());
@@ -2345,3 +2634,233 @@ document.querySelectorAll('.sidebar-item').forEach(item => {
         if (section) section.classList.remove('hidden');
     });
 });
+
+// ==================== About page: open source usage / papers / links ====================
+
+// 第三方组件，分三组：运行时库 / 开发与测试工具 / 模型与数据资源。
+// purpose 为 i18n key；许可证名称是各项目自声明的 SPDX 短名。
+const OPEN_SOURCE_GROUPS = [
+    {
+        label: 'aboutPage.ogRuntime',
+        items: [
+            { name: 'Electron', url: 'https://github.com/electron/electron', purpose: 'aboutPage.puElectron', license: 'MIT' },
+            { name: 'ONNX Runtime', url: 'https://github.com/microsoft/onnxruntime', purpose: 'aboutPage.puOnnx', license: 'MIT' },
+            { name: 'TensorFlow.js', url: 'https://github.com/tensorflow/tfjs', purpose: 'aboutPage.puTfjs', license: 'Apache-2.0' },
+            { name: '@tonejs/midi', url: 'https://github.com/Tonejs/Midi', purpose: 'aboutPage.puToneMidi', license: 'MIT' },
+            { name: 'decibri', url: 'https://github.com/decibri/decibri', purpose: 'aboutPage.puDecibri', license: 'Apache-2.0' },
+            { name: 'iconv-lite', url: 'https://github.com/ashtuchkin/iconv-lite', purpose: 'aboutPage.puIconv', license: 'MIT' },
+            { name: 'pinyin-pro', url: 'https://github.com/zh-lx/pinyin-pro', purpose: 'aboutPage.puPinyin', license: 'MIT' },
+            { name: 'systeminformation', url: 'https://github.com/sebhildebrandt/systeminformation', purpose: 'aboutPage.puSysinfo', license: 'MIT' },
+            { name: '@microsoft/dynwinrt', url: 'https://github.com/microsoft/dynwinrt', purpose: 'aboutPage.puDynwinrt', license: 'MIT' },
+        ],
+    },
+    {
+        label: 'aboutPage.ogDev',
+        items: [
+            { name: 'Webpack', url: 'https://github.com/webpack/webpack', purpose: 'aboutPage.puWebpack', license: 'MIT' },
+            { name: 'Electron Forge', url: 'https://github.com/electron/forge', purpose: 'aboutPage.puForge', license: 'MIT' },
+            { name: 'Babel', url: 'https://github.com/babel/babel', purpose: 'aboutPage.puBabel', license: 'MIT' },
+            { name: 'Mocha', url: 'https://github.com/mochajs/mocha', purpose: 'aboutPage.puMocha', license: 'MIT' },
+            { name: 'Chai', url: 'https://github.com/chaijs/chai', purpose: 'aboutPage.puChai', license: 'MIT' },
+            { name: 'Sinon', url: 'https://github.com/sinonjs/sinon', purpose: 'aboutPage.puSinon', license: 'MIT' },
+            { name: 'JSDOM', url: 'https://github.com/jsdom/jsdom', purpose: 'aboutPage.puJsdom', license: 'MIT' },
+            { name: 'ESLint', url: 'https://github.com/eslint/eslint', purpose: 'aboutPage.puEslint', license: 'MIT' },
+            { name: 'nyc (Istanbul)', url: 'https://github.com/istanbuljs/nyc', purpose: 'aboutPage.puNyc', license: 'ISC' },
+        ],
+    },
+    {
+        label: 'aboutPage.ogData',
+        items: [
+            { name: 'SoulX-Singer models & tokens', url: 'https://github.com/Soul-AILab/SoulX-Singer', purpose: 'aboutPage.puSoulModels', license: 'Apache-2.0' },
+            { name: 'CMU Pronouncing Dictionary', url: 'https://github.com/cmusphinx/cmudict', purpose: 'aboutPage.puCmudict', license: 'CMUdict (BSD-style)' },
+            { name: 'LJSpeech / MFA / FastSpeech2', url: 'https://github.com/ming024/FastSpeech2', purpose: 'aboutPage.puLj', license: 'Public Domain / MIT' },
+            { name: 'GTSinger dataset', url: 'https://github.com/AaronZ345/GTSinger', purpose: 'aboutPage.puGtData', license: 'CC BY-NC-SA 4.0' },
+        ],
+    },
+];
+
+function renderOpenSourceTable() {
+    const tbody = document.getElementById('openSourceTableBody');
+    if (!tbody) return;
+    tbody.textContent = '';
+    for (const group of OPEN_SOURCE_GROUPS) {
+        const headerRow = document.createElement('tr');
+        headerRow.className = 'about-group-row';
+        const headerCell = document.createElement('td');
+        headerCell.colSpan = 3;
+        headerCell.textContent = t(group.label);
+        headerRow.appendChild(headerCell);
+        tbody.appendChild(headerRow);
+
+        for (const item of group.items) {
+            const tr = document.createElement('tr');
+
+            const tdName = document.createElement('td');
+            if (item.url) {
+                const a = document.createElement('a');
+                a.href = '#';
+                a.dataset.external = item.url;
+                a.textContent = item.name;
+                tdName.appendChild(a);
+            } else {
+                tdName.textContent = item.name;
+            }
+            tr.appendChild(tdName);
+
+            const tdPurpose = document.createElement('td');
+            tdPurpose.textContent = t(item.purpose);
+            tr.appendChild(tdPurpose);
+
+            const tdLicense = document.createElement('td');
+            tdLicense.textContent = item.license;
+            tr.appendChild(tdLicense);
+
+            tbody.appendChild(tr);
+        }
+    }
+}
+
+// 本应用实际使用的论文与研究成果（arXiv 编号与代码注释中的引用一致）。
+const PAPER_GROUPS = [
+    {
+        label: 'aboutPage.pgCore',
+        items: [
+            { title: 'SoulX-Singer: Towards High-Quality Zero-Shot Singing Voice Synthesis', id: '2602.07803' },
+        ],
+    },
+    {
+        label: 'aboutPage.pgPitch',
+        items: [
+            { title: 'RMVPE: A Robust Model for Vocal Pitch Estimation in Polyphonic Music', id: '2306.15412' },
+            { title: 'FCPE: A Fast Context-based Pitch Estimation Model', id: '2509.15140' },
+            { title: 'A Lightweight Instrument-Agnostic Model for Polyphonic Note Transcription and Multipitch Estimation', id: '2203.09893' },
+            { title: 'Robust Singing Voice Transcription Serves Synthesis (ROSVOT)', id: '2405.09940' },
+        ],
+    },
+    {
+        label: 'aboutPage.pgVocoder',
+        items: [
+            { title: 'Source-Filter HiFi-GAN: Fast and Pitch Controllable High-Fidelity Neural Vocoder', id: '2210.15533' },
+        ],
+    },
+    {
+        label: 'aboutPage.pgAlgo',
+        items: [
+            { title: 'Classifier-Free Diffusion Guidance', id: '2207.12598' },
+            { title: 'Improving Classifier-Free Guidance in Masked Diffusion: Low-Dim Theoretical Insights with High-Dim Impact', id: '2507.08965' },
+            { title: 'STORK: Faster Diffusion and Flow Matching Sampling by Resolving Both Stiffness and Structure-Dependence', id: '2505.24210' },
+            { title: 'Q-Drift', id: '2603.18095' },
+            { title: 'RDSinger', id: '2410.21641' },
+            { title: 'FastSpeech 2: Fast and Robust Speech Synthesis', id: '2006.04558' },
+        ],
+    },
+    {
+        label: 'aboutPage.pgDataset',
+        items: [
+            { title: 'GTSinger: A Global Multi-Technique Singing Corpus with Realistic Music Scores for All Singing Tasks', id: '2409.13832' },
+        ],
+    },
+];
+
+function renderPapers() {
+    const container = document.getElementById('papersList');
+    if (!container) return;
+    container.textContent = '';
+    for (const group of PAPER_GROUPS) {
+        const sub = document.createElement('p');
+        sub.className = 'papers-subgroup';
+        sub.textContent = t(group.label);
+        container.appendChild(sub);
+
+        const ul = document.createElement('ul');
+        ul.className = 'papers-items';
+        for (const paper of group.items) {
+            const li = document.createElement('li');
+            const a = document.createElement('a');
+            a.href = '#';
+            a.dataset.external = `https://arxiv.org/abs/${paper.id}`;
+            a.textContent = paper.title;
+            li.appendChild(a);
+            const idSpan = document.createElement('span');
+            idSpan.className = 'paper-arxiv-id';
+            idSpan.textContent = `arXiv:${paper.id}`;
+            li.appendChild(idSpan);
+            ul.appendChild(li);
+        }
+        container.appendChild(ul);
+    }
+}
+
+// 外链点击统一委托：静态 HTML 与动态渲染的表格/列表都由此处理。
+document.addEventListener('click', (event) => {
+    const link = event.target.closest?.('[data-external]');
+    if (!link) return;
+    event.preventDefault();
+    const url = link.dataset.external;
+    if (window.electronAPI?.openExternal) {
+        window.electronAPI.openExternal(url).catch(err =>
+            console.error('Open external link failed:', err));
+    }
+});
+
+(async function initAboutPage() {
+    try {
+        if (window.electronAPI?.getAppVersion) {
+            const version = await window.electronAPI.getAppVersion();
+            const el = document.getElementById('aboutVersion');
+            if (el && version) el.textContent = version;
+        }
+    } catch (err) {
+        console.warn('Failed to populate about version:', err && err.message);
+    }
+    renderOpenSourceTable();
+    renderPapers();
+})();
+
+
+
+
+// Settings information architecture and search.
+// Windows ML is a hardware/backend selector, not an ORT graph-tuning option.
+initQDriftListeners();
+
+(function initializeSettingsSearchAndLayout() {
+  const init = () => {
+    const input = document.getElementById('settingsSearch');
+    const empty = document.getElementById('settingsSearchEmpty');
+    if (!input) return;
+    const sections = Array.from(document.querySelectorAll('.settings-section'));
+    const navItems = Array.from(document.querySelectorAll('.sidebar-item[data-target]'));
+    const normalize = value => String(value || '').toLocaleLowerCase().replace(/\s+/g, ' ').trim();
+    const apply = () => {
+      const query = normalize(input.value);
+      if (!query) {
+        document.querySelectorAll('.setting-group.search-hidden').forEach(el => el.classList.remove('search-hidden'));
+        navItems.forEach(el => el.classList.remove('search-hidden'));
+        if (empty) empty.classList.add('hidden');
+        return;
+      }
+      let total = 0;
+      for (const section of sections) {
+        let sectionMatches = 0;
+        for (const group of section.querySelectorAll('.setting-group')) {
+          const match = normalize(group.textContent).includes(query);
+          group.classList.toggle('search-hidden', !match);
+          if (match) sectionMatches++;
+        }
+        total += sectionMatches;
+        const nav = navItems.find(el => el.dataset.target === section.id);
+        if (nav) nav.classList.toggle('search-hidden', sectionMatches === 0);
+      }
+      if (empty) empty.classList.toggle('hidden', total !== 0);
+      const firstNav = navItems.find(el => !el.classList.contains('search-hidden'));
+      if (firstNav) firstNav.click();
+    };
+    input.addEventListener('input', apply);
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { input.value = ''; apply(); input.blur(); }
+    });
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init, { once: true });
+  else init();
+})();

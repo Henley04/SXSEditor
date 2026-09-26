@@ -588,10 +588,6 @@ function updatePreview() {
   }
 }
 
-// TODO: 如果未来需要从主进程通知预处理状态变化，应在 preload.js 中添加
-// onPreprocessStatus IPC 通道（类似 onPreprocessDataSaved），并在 main.js 中
-// 使用 webContents.send('preprocessStatus', status) 替代 executeJavaScript
-
 if (window.electronAPI && window.electronAPI.onPreprocessDataSaved) {
   preprocessDataSavedCleanup = window.electronAPI.onPreprocessDataSaved((result) => {
     // 只有当WAV文件存在时才接受预处理数据，防止清除WAV后预处理窗口仍回调覆盖状态

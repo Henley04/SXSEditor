@@ -47,6 +47,15 @@
             <div class="empty-icon" data-icon="microphone"></div>
             <div class="empty-text" data-i18n="singerMarket.emptyState">No singers found. Try adjusting your search or filters.</div>
           </div>
+          <div class="error-state" id="error-state" style="display:none;">
+            <div class="empty-icon icon icon--warning" data-icon="warning"></div>
+            <div class="empty-text" id="error-state-title">Unable to reach the singer market</div>
+            <div class="error-detail" id="error-state-detail"></div>
+            <button class="error-retry" id="btn-retry">
+              <span class="icon icon--sm" data-icon="refresh"></span>
+              <span data-i18n="singerMarket.retry">Retry</span>
+            </button>
+          </div>
         </div>
         <div id="loading-state" class="loading-state" style="display:none;">
           <div class="spinner"></div>
@@ -114,6 +123,12 @@
           <select id="upload-visibility">
             <option value="public" data-i18n="singerMarket.public">Public</option>
             <option value="private" data-i18n="singerMarket.private">Private</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="upload-license" data-i18n="singerMarket.license">License</label>
+          <select id="upload-license">
+            <option value="" data-i18n="singerMarket.licenseLoading">Loading licenses…</option>
           </select>
         </div>
         <div class="modal-actions">

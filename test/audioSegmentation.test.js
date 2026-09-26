@@ -19,10 +19,22 @@ describe('inference/pipeline/audioSegmentation', () => {
       ];
       const out = seg.fillNoteGaps(notes);
       expect(out.length).to.equal(3);
-      expect(out[1].lyric).to.equal('');
+      expect(out[1].lyric).to.equal('<SP>');
       expect(out[1].pitch).to.equal(0);
+      expect(out[1].noteType).to.equal(1);
+      expect(out[1].isGeneratedRest).to.equal(true);
       expect(out[1].start).to.equal(1);
       expect(out[1].duration).to.be.closeTo(1, 1e-6);
+    });
+
+    it('should preserve a long gap as timeline rest', () => {
+      const notes = [
+        { start: 0, duration: 1, lyric: 'a' },
+        { start: 9, duration: 1, lyric: 'b' },
+      ];
+      const out = seg.fillNoteGaps(notes);
+      expect(out.length).to.equal(3);
+      expect(out[1]).to.include({ lyric: '<SP>', pitch: 0, start: 1, duration: 8 });
     });
 
     it('should NOT insert rest for tiny gap (<=0.01)', () => {
@@ -104,6 +116,96 @@ describe('inference/pipeline/audioSegmentation', () => {
       for (let i = 22; i < 42; i++) notes.push({ start: i, duration: 1, lyric: 'a' });
       const out = seg.buildVocalSegments(notes, 60);
       expect(out.length).to.be.greaterThan(1);
+    });
+  });
+
+  describe('splitLongRestRegions', () => {
+    it('should return empty array for null/empty notes', () => {
+      expect(seg.splitLongRestRegions(null, 120)).to.deep.equal([]);
+      expect(seg.splitLongRestRegions([], 120)).to.deep.equal([]);
+    });
+
+    it('should reject invalid BPM', () => {
+      expect(() => seg.splitLongRestRegions([{ start: 0, duration: 4, lyric: 'a' }], 0)).to.throw(RangeError);
+      expect(() => seg.splitLongRestRegions([{ start: 0, duration: 4, lyric: 'a' }], NaN)).to.throw(RangeError);
+    });
+
+    it('should return a single region with absolute note starts when no long rest', () => {
+      const notes = [
+        { start: 2, duration: 1, lyric: 'a' },
+        { start: 3, duration: 0.5, lyric: '<SP>', pitch: 0 }, // 0.5s < 1.5s → short rest stays
+        { start: 3.5, duration: 1, lyric: 'b' },
+      ];
+      const out = seg.splitLongRestRegions(notes, 60);
+      expect(out.length).to.equal(1);
+      expect(out[0].notes.map(n => n.start)).to.deep.equal([2, 3, 3.5]);
+      expect(out[0].startBeat).to.equal(0);
+      expect(out[0].endBeat).to.equal(4.5);
+    });
+
+    it('should split at a long rest WITHOUT re-basing note starts', () => {
+      // bpm=60 → 1 beat = 1s; long rest >= 1.5 beats; context pad = 0.15 beats
+      const notes = [
+        { start: 0, duration: 1, lyric: 'a' },
+        { start: 1, duration: 4, lyric: '<SP>', pitch: 0 }, // 4s >= 1.5s → long rest
+        { start: 5, duration: 1, lyric: 'b' },
+      ];
+      const out = seg.splitLongRestRegions(notes, 60);
+      expect(out.length).to.equal(2);
+
+      // Region 0: note a + truncated tail context rest (0.15 beats)
+      expect(out[0].startBeat).to.equal(0);
+      expect(out[0].notes[0]).to.include({ start: 0, duration: 1 });
+      expect(out[0].notes[1]).to.include({ start: 1, duration: 0.15 });
+      expect(out[0].endBeat).to.be.closeTo(1.15, 1e-9);
+
+      // Region 1: head context rest (ends at long-rest end) + note b
+      expect(out[1].startBeat).to.be.closeTo(4.85, 1e-9);
+      expect(out[1].notes[0]).to.include({ start: 4.85, duration: 0.15 });
+      expect(out[1].notes[1]).to.include({ start: 5, duration: 1 });
+      expect(out[1].endBeat).to.equal(6);
+
+      // Absolute starts preserved (no rebase): first note start === startBeat
+      for (const r of out) {
+        expect(r.notes[0].start).to.equal(r.startBeat);
+      }
+      // Regions never overlap in time
+      expect(out[0].endBeat).to.be.at.most(out[1].startBeat);
+    });
+
+    it('should keep a >20s region as ONE region (no overlap split)', () => {
+      // 40s of continuous notes: buildVocalSegments would split this into
+      // 2s-overlapping segments, but the streaming path chunks it itself.
+      const notes = [];
+      for (let i = 0; i < 40; i++) notes.push({ start: i, duration: 1, lyric: 'a' });
+      const out = seg.splitLongRestRegions(notes, 60);
+      expect(out.length).to.equal(1);
+      expect(out[0].notes.length).to.equal(40);
+      expect(out[0].startBeat).to.equal(0);
+      expect(out[0].endBeat).to.equal(40);
+    });
+
+    it('should drop an all-rest timeline (no vocal content)', () => {
+      const notes = [
+        { start: 0, duration: 4, lyric: '<SP>', pitch: 0 },
+        { start: 4, duration: 4, lyric: '<SP>', pitch: 0 },
+      ];
+      const out = seg.splitLongRestRegions(notes, 60);
+      expect(out).to.deep.equal([]);
+    });
+
+    it('should treat a leading long rest as fragment-leading silence', () => {
+      // Long rest before the first vocal note: region starts at the head
+      // context rest, so firstNoteStartBeat keeps the leading silence offset.
+      const notes = [
+        { start: 0, duration: 4, lyric: '<SP>', pitch: 0 },
+        { start: 4, duration: 1, lyric: 'a' },
+      ];
+      const out = seg.splitLongRestRegions(notes, 60);
+      expect(out.length).to.equal(1);
+      expect(out[0].startBeat).to.be.closeTo(3.85, 1e-9);
+      expect(out[0].notes[0].start).to.be.closeTo(3.85, 1e-9);
+      expect(out[0].notes[1]).to.include({ start: 4, duration: 1 });
     });
   });
 
