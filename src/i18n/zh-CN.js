@@ -208,6 +208,8 @@ export default {
     singerF0Invalid: 'F0数据(f0Data)格式不正确，将被忽略',
     singerInferenceDataInvalid: '歌手推理数据(singerData)格式不正确，将被忽略',
     projectVersionTooHigh: '项目文件版本({version})过高，请升级SXSEditor',
+    projectMinorVersionTooHigh: '该工程由更高版本({version})创建，部分新数据可能无法识别，加载后再次保存可能丢失这些数据。仍要加载吗？',
+    autoSaveFailed: '工程自动保存失败：{error}\n\n请尽快手动保存（Ctrl+S），以免改动丢失。',
     projectLoadFailed: '项目加载失败',
     relocateSingerFile: '重新选定歌手文件',
     fragmentEditorNotImplemented: '分片编辑窗口功能待实现',
@@ -1152,6 +1154,9 @@ export default {
     visibilityLabel: '可见性',
     downloadFailed: '下载失败',
     downloadSuccess: '已下载到 {path}',
+    downloading: '下载中…',
+    loadFailed: '无法连接歌手市场服务',
+    retry: '重试',
     saveFailed: '保存文件失败',
     refreshed: '已刷新',
   }

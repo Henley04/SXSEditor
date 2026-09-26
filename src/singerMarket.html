@@ -47,6 +47,15 @@
             <div class="empty-icon" data-icon="microphone"></div>
             <div class="empty-text" data-i18n="singerMarket.emptyState">No singers found. Try adjusting your search or filters.</div>
           </div>
+          <div class="error-state" id="error-state" style="display:none;">
+            <div class="empty-icon icon icon--warning" data-icon="warning"></div>
+            <div class="empty-text" id="error-state-title">Unable to reach the singer market</div>
+            <div class="error-detail" id="error-state-detail"></div>
+            <button class="error-retry" id="btn-retry">
+              <span class="icon icon--sm" data-icon="refresh"></span>
+              <span data-i18n="singerMarket.retry">Retry</span>
+            </button>
+          </div>
         </div>
         <div id="loading-state" class="loading-state" style="display:none;">
           <div class="spinner"></div>

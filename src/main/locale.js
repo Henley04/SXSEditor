@@ -85,6 +85,17 @@ const mainLocales = {
     },
     singerMarket: {
       title: '歌手市场',
+      // 大陆网络下连接失败时给出的区域化提示 + 诊断信息
+      serviceUnavailableCN: '此服务未在你所在的区域提供，服务器不可用。',
+      diagApiAddress: '服务地址',
+      diagDns: 'DNS 解析',
+      diagSystem: '系统',
+      diagTimeout: '超时设置',
+      diagRegion: '出口网络',
+      diagAttempts: '连接尝试',
+      diagLastError: '最近错误',
+      diagFailed: '失败',
+      diagUnknown: '未知',
     },
   },
   'en': {
@@ -161,6 +172,17 @@ const mainLocales = {
     },
     singerMarket: {
       title: 'Singer Market',
+      // Region-specific message when a mainland-China network cannot reach the backend.
+      serviceUnavailableCN: 'This service is not available in your region. The server is unreachable.',
+      diagApiAddress: 'API address',
+      diagDns: 'DNS resolution',
+      diagSystem: 'system',
+      diagTimeout: 'Timeout settings',
+      diagRegion: 'Egress network',
+      diagAttempts: 'Connection attempts',
+      diagLastError: 'Last error',
+      diagFailed: 'failed',
+      diagUnknown: 'unknown',
     },
   },
 };
