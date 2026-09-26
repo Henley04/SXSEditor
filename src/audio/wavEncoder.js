@@ -24,13 +24,19 @@ const _PI4 = 0.7853981633974483;
  * @param {Float32Array} audioData 音频数据（单声道或交错立体声）
  * @param {number} sampleRate 采样率
  * @param {number} numChannels 声道数（1 或 2）
+ * @param {16|24|32} bitDepth 位深度：16/24 为整型 PCM，32 为 IEEE float（默认，向后兼容）
  * @returns {Uint8Array} WAV 文件数据
  */
-function _encodeWavBase(audioData, sampleRate, numChannels) {
-  const bitsPerSample = 32;
+function _encodeWavBase(audioData, sampleRate, numChannels, bitDepth = 32) {
+  // 非法值回退到 32-bit float（历史行为）
+  if (![16, 24, 32].includes(bitDepth)) bitDepth = 32;
+  const bytesPerSample = bitDepth / 8;
+  const bitsPerSample = bitDepth;
+  // WAV 格式码：1 = 整型 PCM，3 = IEEE float
+  const formatCode = bitDepth === 32 ? 3 : 1;
   const byteRate = (sampleRate * numChannels * bitsPerSample) / 8;
   const blockAlign = (numChannels * bitsPerSample) / 8;
-  const dataSize = audioData.length * 4;
+  const dataSize = audioData.length * bytesPerSample;
   const buffer = new ArrayBuffer(44 + dataSize);
   const view = new DataView(buffer);
 
@@ -45,7 +51,7 @@ function _encodeWavBase(audioData, sampleRate, numChannels) {
   writeString(8, 'WAVE');
   writeString(12, 'fmt ');
   view.setUint32(16, 16, true);
-  view.setUint16(20, 3, true);
+  view.setUint16(20, formatCode, true);
   view.setUint16(22, numChannels, true);
   view.setUint32(24, sampleRate, true);
   view.setUint32(28, byteRate, true);
@@ -54,8 +60,31 @@ function _encodeWavBase(audioData, sampleRate, numChannels) {
   writeString(36, 'data');
   view.setUint32(40, dataSize, true);
 
-  // 一次性 memcpy 替代逐样本 setFloat32（性能审查 §4 中优先级）
-  new Float32Array(buffer, 44, audioData.length).set(audioData);
+  if (bitDepth === 32) {
+    // 一次性 memcpy 替代逐样本 setFloat32（性能审查 §4 中优先级）
+    new Float32Array(buffer, 44, audioData.length).set(audioData);
+  } else {
+    // 16/24-bit：逐样本转换并做对称削波（clip 到 [-1, 1]）
+    const maxPositive = bitDepth === 16 ? 0x7FFF : 0x7FFFFF;
+    // 负向刻度比正向多 1（二进制补码不对称）：-1 映射到最小值
+    const maxNegative = bitDepth === 16 ? 0x8000 : 0x800000;
+    let offset = 44;
+    for (let i = 0; i < audioData.length; i++) {
+      let s = audioData[i];
+      if (s > 1) s = 1; else if (s < -1) s = -1;
+      const v = Math.round(s < 0 ? s * maxNegative : s * maxPositive);
+      if (bitDepth === 16) {
+        view.setInt16(offset, v, true);
+        offset += 2;
+      } else {
+        // 24-bit little-endian，逐字节写入（DataView 无 setInt24）
+        view.setUint8(offset, v & 0xFF);
+        view.setUint8(offset + 1, (v >> 8) & 0xFF);
+        view.setUint8(offset + 2, (v >> 16) & 0xFF);
+        offset += 3;
+      }
+    }
+  }
 
   return new Uint8Array(buffer);
 }
@@ -64,21 +93,22 @@ function _encodeWavBase(audioData, sampleRate, numChannels) {
  * 将 Float32Array 编码为 WAV 文件的 Uint8Array
  * @param {Float32Array} float32Array 单声道音频数据，范围 [-1, 1]
  * @param {number} sampleRate 采样率（如 24000）
+ * @param {number} numChannels 声道数（1 或 2）
+ * @param {16|24|32} bitDepth 位深度（默认 32 = IEEE float，与历史行为一致）
  * @returns {Uint8Array} WAV 文件数据
  */
-function encodeWav(float32Array, sampleRate, numChannels = 1) {
+function encodeWav(float32Array, sampleRate, numChannels = 1, bitDepth = 32) {
   // B4: stereo WAV requires interleaved L,R sample pairs, so the data length
-  // must be a multiple of 2 (blockAlign = numChannels * bitsPerSample/8 = 8).
-  // If an odd-length array is passed for stereo, pad with a single zero
-  // sample at the end so the WAV header (numChannels=2) matches the data
-  // length. Padding preserves all original audio data and is backwards-
-  // compatible.
+  // must be a multiple of numChannels (blockAlign). If the length is not a
+  // multiple (e.g. odd-length array for stereo), pad with zero samples at the
+  // end so the WAV header matches the data length. Padding preserves all
+  // original audio data and is backwards-compatible.
   if (numChannels === 2 && float32Array.length % 2 !== 0) {
     const padded = new Float32Array(float32Array.length + 1);
     padded.set(float32Array);
-    return _encodeWavBase(padded, sampleRate, 2);
+    return _encodeWavBase(padded, sampleRate, 2, bitDepth);
   }
-  return _encodeWavBase(float32Array, sampleRate, numChannels);
+  return _encodeWavBase(float32Array, sampleRate, numChannels, bitDepth);
 }
 
 function encodeWavStereo(interleavedStereo, sampleRate) {

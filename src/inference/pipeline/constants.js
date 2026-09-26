@@ -10,7 +10,7 @@ const {
     VOCODER_OVERLAP_FRAMES,
     NPU_STATIC_SEQ_LEN,
     NPU_VOCODER_SEQ_LEN,
-    TRT_RTX_MAX_DYNAMIC_SEQ_LEN,
+    DIFF_STEP_MAX_SEQ_LEN,
 } = require('../shared/constants.js');
 
 // pipeline 专属常量
@@ -134,7 +134,7 @@ module.exports = {
     VOCODER_OVERLAP_FRAMES,
     NPU_VOCODER_SEQ_LEN,
     NPU_STATIC_SEQ_LEN,
-    TRT_RTX_MAX_DYNAMIC_SEQ_LEN,
+    DIFF_STEP_MAX_SEQ_LEN,
     LONG_AUDIO_THRESHOLD_SEC,
     SEGMENT_MIN_SEC,
     SEGMENT_MAX_SEC,

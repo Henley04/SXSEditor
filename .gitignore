@@ -207,6 +207,25 @@ onnxruntime_profile__*.json
 # Temporary inspection scripts
 _tmp_*.js
 
+# WorkBuddy assistant workspace (local only)
+.workbuddy/
+
+# Local experiment artifacts (loudness / quantization A-B tests, W16A32 training)
+/ab_*.csv
+/ab_*.json
+/vocoder_W16A32.pt
+/w16a32_output/
+/ui-design-preview.html
+
+# Q-Drift throwaway inspection probes (topology / ext checks)
+qdrift/eval/check_ext*.py
+qdrift/eval/check_wav_energy.js
+qdrift/eval/inspect_*.py
+qdrift/eval/inspect_*.txt
+qdrift/eval/make_probe.py
+qdrift/eval/topo*.py
+qdrift/eval/topo*_out.txt
+
 # Temporary working directory
 .tmp/
 

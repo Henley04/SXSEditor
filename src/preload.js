@@ -290,6 +290,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('close-confirm', handler);
     return () => ipcRenderer.removeListener('close-confirm', handler);
   },
+  // 模态设置窗口已打开（主进程 → 主窗口）：渲染层应暂停播放，
+  // 否则模态期间主窗口输入被禁用而音频继续，用户无法控制。
+  onSettingsWindowOpened: (callback) => {
+    const handler = () => callback();
+    ipcRenderer.on('settings-window:opened', handler);
+    return () => ipcRenderer.removeListener('settings-window:opened', handler);
+  },
   closeConfirmed: () => ipcRenderer.invoke('close-confirmed'),
   onMainMenuSaveRequest: (callback) => {
     const handler = () => callback();
@@ -485,6 +492,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     list: (params) => ipcRenderer.invoke('singer-market:list', params),
     fileDetail: (fileId) => ipcRenderer.invoke('singer-market:file-detail', fileId),
     tags: (params) => ipcRenderer.invoke('singer-market:tags', params),
+    licenses: () => ipcRenderer.invoke('singer-market:licenses'),
     upload: (payload) => ipcRenderer.invoke('singer-market:upload', payload),
     download: (fileId) => ipcRenderer.invoke('singer-market:download', fileId),
     // Subscribe to download progress events from the main process.

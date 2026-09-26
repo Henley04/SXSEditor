@@ -170,6 +170,18 @@
                     <p class="hint" data-i18n="settings.selectDeviceForModelGroup">为模型组选择运行设备</p>
                     <div id="modelDeviceMapping" class="model-device-mapping"></div>
                 </div>
+                <div class="setting-group">
+                    <label class="device-mode-radio">
+                        <input type="checkbox" id="fixedNoiseSeedEnabled">
+                        <span class="radio-label" data-i18n="settings.fixedNoiseSeed">固定噪声种子（可复现合成）</span>
+                        <span class="radio-desc" data-i18n="settings.fixedNoiseSeedHint">开启后每次预览/导出使用同一种子初始化扩散噪声，同一项目多次合成结果完全一致，便于锁定满意的渲染与公平对比参数。关闭时每次合成随机。</span>
+                    </label>
+                    <div id="fixedNoiseSeedValueGroup" style="margin-top:8px;">
+                        <label for="fixedNoiseSeed"><span data-i18n="settings.fixedNoiseSeedValue">种子值</span></label>
+                        <input type="number" id="fixedNoiseSeed" min="0" max="4294967295" step="1" value="1234">
+                        <p class="hint" data-i18n="settings.fixedNoiseSeedValueHint">0 – 4294967295。不同种子产生不同的合法渲染（乐句响度有 ±3dB 级随机波动），可尝试多个种子挑选效果最好的一条。</p>
+                    </div>
+                </div>
             </div>
 
             <!-- Preview Inference Params -->

@@ -211,6 +211,13 @@ let streamingCleanup = null;
 let streamingNextStart = 0;
 let streamingFinished = false;
 let streamingFadeGainNode = null;
+// 用户主动停止标记：stopFragmentPlayback 置位后，playFragment 的"合成完成兜底播放"
+// 不再自动开播（否则点停止 → 合成完成 → 又自动开始播放）。
+let _streamingUserStopped = false;
+// 合成进行中用户拖拽播放头时记录的新位置：合成完成后由 playFragment 从该位置
+// 播放新音频。合成中不能用旧缓存音频重启播放（旧音频与新音符不匹配 → 错位/杂音，
+// 且会与合成完成后的兜底播放叠加成双路音频）。
+let _pendingSeekStartTime = null;
 
 // Buffer underrun protection: shared infrastructure (AudioContext suspend/resume,
 // watchdog, underrun detection, source counting) via StreamingScheduler.
@@ -354,6 +361,8 @@ async function applyFragmentAudioSettings() {
 }
 
 export function stopFragmentPlayback() {
+  // 用户主动停止：标记后合成完成时的兜底路径不会自动重新开播
+  _streamingUserStopped = true;
   // 清理流式播放（边合成边播的 chunk sources）
   stopStreamingPlayback();
   const source = getFragmentAudioSource();
@@ -380,6 +389,25 @@ export function stopFragmentPlayback() {
  * 需要先停止当前播放（source.stop / audioStop），再用现有 audioData 重启。
  */
 export async function seekFragmentPlayback(newStartTime) {
+  // 合成进行中的拖拽：不能用旧缓存音频重启播放。
+  // 流式合成期间 getFragmentAudioData 是上一次合成的旧音频，与新音符不匹配
+  // （拖拽后立刻听到旧音频 → 与画布音符错位），且稍后合成完成时的兜底播放会
+  // 与这里重启的播放叠加成双路音频（杂音/重叠）。改为只停止当前播放并记录
+  // 新位置，合成完成后由 playFragment 的 _pendingSeekStartTime 分支从新位置
+  // 播放新音频。
+  if (getFragmentIsSynthesizing()) {
+    stopFragmentPlayback();
+    // stopFragmentPlayback 会置 _streamingUserStopped（拦截合成完成兜底），
+    // 但 seek 语义仍期望合成完成后从新位置自动播放，这里复位该标记。
+    _streamingUserStopped = false;
+    // 丢弃后续 chunk：合成完成后统一从新位置整段播放，不再续播流式队列
+    streamingFinished = true;
+    setFragmentPlayStartPosition(newStartTime);
+    setFragmentCurrentTime(newStartTime);
+    _pendingSeekStartTime = newStartTime;
+    render();
+    return;
+  }
   // 停止当前播放（不重置 playStartPosition）
   stopStreamingPlayback();
   const source = getFragmentAudioSource();
@@ -789,6 +817,8 @@ export async function playFragment() {
   streamingNextStart = 0;
   _streamingStarted = false;
   _streamingFirstChunkAudioOffset = 0;
+  _streamingUserStopped = false;
+  _pendingSeekStartTime = null;
   _createFragmentScheduler();
 
   try {
@@ -986,15 +1016,37 @@ export async function playFragment() {
     // 合成成功后更新签名，后续播放可复用此缓存
     setFragmentAudioDataSignature(currentSignature);
 
+    // 合成期间用户拖拽了播放头（seekFragmentPlayback 的合成中分支）：
+    // 流式播放已停止、后续 chunk 已丢弃，这里直接从新位置开始播放新音频。
+    // 若拖拽后用户又点了停止（_streamingUserStopped），则不再自动播放。
+    if (_pendingSeekStartTime !== null && !_streamingUserStopped) {
+      const seekPos = _pendingSeekStartTime;
+      _pendingSeekStartTime = null;
+      if (_scheduler) await _scheduler.setInferenceDone();
+      if (streamingCleanup) {
+        try { streamingCleanup(); } catch (_) {}
+        streamingCleanup = null;
+      }
+      setFragmentPlayStartPosition(seekPos);
+      setFragmentUseExclusiveMode(getFragmentAudioSettings()?.audioOutputMode === 'exclusive');
+      if (getFragmentUseExclusiveMode()) {
+        await playFragmentExclusive();
+      } else {
+        await playFragmentShared();
+      }
+      return;
+    }
+
     // 标记推理完成：后续不再触发 buffer underrun 等待
     if (_scheduler) await _scheduler.setInferenceDone();
 
-    // 若合成返回时正在等待推理（最后一批 chunk 已收到但 playhead 仍冻结），
-    // 恢复播放：setInferenceDone 已解冻 AudioContext，调整 playbackStartTime
-    // 使 playhead 从 buffer 前沿继续。
-    if (_streamingStarted) {
+    // 仅当合成返回时正处于 underrun 冻结（最后一批 chunk 已收到但 playhead 仍冻结），
+    // 才重置时间基准使 playhead 从 buffer 前沿继续。
+    // 修复：旧逻辑无条件重置 playbackStartTime —— 当推理快于播放（buffer 前沿远超
+    // 播放头）时，会把播放头直接拉到前沿，造成播放头与声音脱节（声画错位）。
+    if (_streamingStarted && _scheduler && _scheduler.isWaiting) {
       const ctx = getFragmentAudioContext();
-      if (ctx && _scheduler) {
+      if (ctx) {
         setFragmentPlaybackStartTime(ctx.currentTime - _scheduler.bufferEndSec + getFragmentPlaybackOffset());
         updateFragmentPlayhead();
       }
@@ -1012,7 +1064,9 @@ export async function playFragment() {
     // 使用 _streamingStarted 而非 streamingSources.length 判断，避免异步竞态：
     // chunk 回调可能还在 await getFragmentAudioContextInternal() 中尚未 push source，
     // 但 _streamingStarted 已在第一个 chunk 到达时设置为 true。
-    if (!_streamingStarted) {
+    // 修复：用户已主动停止（_streamingUserStopped）或当前仍在播放时不再兜底开播，
+    // 避免"点停止 → 合成完成 → 又自动开始播放"与双路音频叠加（杂音/错位）。
+    if (!_streamingStarted && !_streamingUserStopped && !getFragmentIsPlaying()) {
       setFragmentUseExclusiveMode(getFragmentAudioSettings()?.audioOutputMode === 'exclusive');
       if (getFragmentUseExclusiveMode()) {
         await playFragmentExclusive();
@@ -1027,6 +1081,8 @@ export async function playFragment() {
     stopStreamingPlayback();
   } finally {
     setFragmentIsSynthesizing(false);
+    // 合成流程结束（成功或失败）后清除待跳转标记，避免残留影响下一次播放
+    _pendingSeekStartTime = null;
     updateFragmentPlayButton();
   }
 }

@@ -761,6 +761,65 @@
   margin-bottom: 4px;
 }
 
+/* In-dialog detail loading row (shown while file-detail IPC is in flight) */
+.detail-loading-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--fg-muted);
+  font-size: var(--font-sm);
+  padding: var(--space-2) 0;
+}
+
+.spinner--sm {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+  flex-shrink: 0;
+}
+
+/* License block in the detail dialog */
+.detail-license {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  font-size: var(--font-sm);
+  color: var(--fg-secondary);
+}
+
+.detail-license-name {
+  color: var(--fg-primary);
+  font-weight: 600;
+}
+
+.detail-license-flag {
+  padding: 2px 8px;
+  border-radius: var(--radius-sm, 4px);
+  font-size: var(--font-xs);
+  border: 1px solid var(--border-default);
+}
+
+.detail-license-flag.yes {
+  color: var(--fg-primary);
+  background: var(--bg-panel);
+}
+
+.detail-license-flag.no {
+  color: var(--fg-muted);
+  background: var(--bg-panel);
+  border-style: dashed;
+}
+
+.detail-license-link {
+  color: var(--accent-fg);
+  text-decoration: none;
+}
+
+.detail-license-link:hover {
+  text-decoration: underline;
+}
+
 /* ==================== Disclaimer box ==================== */
 .disclaimer-box {
   display: flex;

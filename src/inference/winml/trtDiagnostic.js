@@ -14,9 +14,13 @@ const { float32ToF16Buffer } = require('../pipeline/utils');
 const provider = require('./winmlProvider');
 const bridge = require('./ortBridge');
 
+// diffStep seqs：32/512 常规点；1950 靠近旧 2048 边界内；2100 跨过
+// 2048 边界 —— TRT-RTX Myelin fp32 位置 MatMul 量化 bug（rope 表烘焙
+// 修复前，位置 >=2049 帧相位出错）曾在此区间触发，保留用于检测将来
+// 重导出模型时是否回归未修复版本（正常时 trtVsDml cosine≈1）。
 const MODEL_SPECS = [
   { model: 'preflow', file: 'preflow.onnx', output: 'processed_features', seqs: [32, 512, 1435] },
-  { model: 'diffStep', file: 'diff_step_dml.onnx', output: 'flow_pred', seqs: [32, 512, 1950] },
+  { model: 'diffStep', file: 'diff_step_dml.onnx', output: 'flow_pred', seqs: [32, 512, 1950, 2100] },
 ];
 function makeData(n, salt) { const a = new Float32Array(n); for (let i=0;i<n;i++) a[i]=Math.sin((i+salt)*.017)*.7+Math.cos((i+salt)*.031)*.3; return a; }
 function f16Tensor(a,dims){

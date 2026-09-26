@@ -4,7 +4,7 @@ const fs = require('node:fs');
 // Side effect: apply float16 patch on module load
 require('./float16Patch');
 
-const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN, TRT_RTX_MAX_DYNAMIC_SEQ_LEN } = require('./constants');
+const { SAMPLE_RATE, HOP_SIZE, MEL_DIM, EMBED_DIM, COND_DIM, ONNX_MODEL_FILES, SIFIGAN_STATS_FILE, CFG_STRENGTH, CFG_RESCALE, DEFAULT_DIFF_STEPS, SEGMENT_OVERLAP_SEC, MAX_SAFE_FRAMES, NPU_STATIC_SEQ_LEN, DIFF_STEP_MAX_SEQ_LEN } = require('./constants');
 const { getMainWindowWebContents, classifyDevice, enumerateDMLDevices, detectBestGPU, createSessionWithValidation, WebNNSessionProxy, DUMMY_TEST_INPUTS_FP32, DUMMY_TEST_INPUTS_FP16 } = require('./modelLoader');
 const { buildSessionOptions } = require('../shared/ortOptions');
 const { TextProcessing } = require('./textProcessing');
@@ -1225,6 +1225,11 @@ class OnnxSVSPipeline {
      * @returns {Promise<string>} 解析后的 diff_step 文件名
      */
     async _resolveDiffStepFile() {
+        // TEMP DIAGNOSTIC: operator-level TRT probe variant
+        if (process.env.SXS_DIAG_DIFFSTEP_FILE) {
+            console.log(`[DIAG] diffStep file override: ${process.env.SXS_DIAG_DIFFSTEP_FILE}`);
+            return process.env.SXS_DIAG_DIFFSTEP_FILE;
+        }
         const isInt8 = this._modelPrecision === 'int8' || this._modelPrecision === 'int8-npu';
         if (isInt8) {
             const qditPath = this._getModelPath('diffstep.onnx');
@@ -2347,50 +2352,43 @@ class OnnxSVSPipeline {
     }
 
     /**
-     * 判定当前 diffStep 是否运行在 TensorRT-RTX 动态形状引擎上（受 2048 边界 bug 影响）。
-     * 静态形状模型（int8/npu）与普通 DML/CPU 引擎不受此限制。
-     */
-    _isTrtRtxDynamicDiffStep() {
-        if (this.useStaticShapes) return false;
-        const ep = this.sessionEPs && this.sessionEPs.diffStep ? String(this.sessionEPs.diffStep) : '';
-        return ep.includes('NvTensorRTRTX');
-    }
-
-    /**
-     * TensorRT-RTX 全动态 profile 安全钳制（非分段规避）。
+     * diff_step 序列长度硬性兜底（模型容量限制，非 bug 缓解）。
      *
-     * 实测该 EP 的 diff_step Myelin 融合内核在序列索引 >=2048 时输出错误
-     * （TRT-vs-DML 同 feed 逐帧对照：seqLen<=2047 完全一致，>=2048 从第 2048
-     * 帧起 cos 塌缩，经 32 步扩散放大为尾部能量凹陷/静音）。
+     * diff_step_dml.onnx（2026-09-26 起）将 RoPE 位置表烘焙为 [1,8192,64]
+     * 权重初始化器（rope_cos_table/rope_sin_table），seq > 8192 时 Slice 只能
+     * 取到 8192 行，与注意力 [1,seq,·,64] 广播失败 → ORT 硬错误。此钳制把
+     * 超长输入优雅截断。对所有 EP 生效（历史上 2047 上限是 TRT-RTX Myelin
+     * fp32 位置 MatMul 量化 bug 的缓解措施，已随 rope 表烘焙修复移除；
+     * 根因与修复详见 shared/constants.js 与 scripts/make_diff_step_rope_table.py）。
      *
      * 策略：优先截短 ref prompt，保持目标乐句整段连续去噪（不引入任何拼接
-     * 边界）。只有当目标帧本身已超过安全上限（>40.9s @50fps）时才截断目标。
+     * 边界）。只有当目标帧本身已超过上限（>163.8s @50fps）时才截断目标。
      *
      * @returns {{totalFrames:number, ptFrameCount:number, ptMelData:Float32Array|null}}
      */
-    _clampTrtRtxDynamicFrames(sequences, ptFrameCount, ptMelData, totalFrames, tag = '') {
-        const SAFE = TRT_RTX_MAX_DYNAMIC_SEQ_LEN;
-        if (!this._isTrtRtxDynamicDiffStep()) return { totalFrames, ptFrameCount, ptMelData };
-        if (ptFrameCount + totalFrames <= SAFE) return { totalFrames, ptFrameCount, ptMelData };
+    _clampDiffStepMaxFrames(sequences, ptFrameCount, ptMelData, totalFrames, tag = '') {
+        const MAX_SEQ = DIFF_STEP_MAX_SEQ_LEN;
+        if (process.env.SXS_DIAG_NO_TRTCLAMP === '1') return { totalFrames, ptFrameCount, ptMelData };
+        if (ptFrameCount + totalFrames <= MAX_SEQ) return { totalFrames, ptFrameCount, ptMelData };
 
-        // 1) 先截 prompt：保留全部目标帧，参考 mel 缩短到 SAFE-totalFrames。
-        const ptBudget = SAFE - totalFrames;
+        // 1) 先截 prompt：保留全部目标帧，参考 mel 缩短到 MAX_SEQ-totalFrames。
+        const ptBudget = MAX_SEQ - totalFrames;
         if (ptBudget >= 0 && ptFrameCount > ptBudget) {
             const newPt = Math.max(0, ptBudget);
             if (ptMelData && ptMelData.length > newPt * MEL_DIM) {
-                console.warn(`${tag} TRT-RTX dynamic seq limit: prompt ${ptFrameCount} -> ${newPt} frames (keep ${totalFrames} target frames contiguous, seq<=${SAFE})`);
+                console.warn(`${tag} diff_step seq limit: prompt ${ptFrameCount} -> ${newPt} frames (keep ${totalFrames} target frames contiguous, seq<=${MAX_SEQ})`);
                 ptMelData = newPt > 0 ? ptMelData.subarray(0, newPt * MEL_DIM) : null;
                 ptFrameCount = newPt;
             }
         }
 
-        // 2) 目标帧本身已超上限（极长片段，>40.9s）：只能截断目标（此时应配合
-        //    分块/分段路径；此处仅作硬保护，防止静默产出错误尾部）。
-        if (totalFrames > SAFE) {
-            console.warn(`${tag} TRT-RTX dynamic target limit: ${totalFrames} > ${SAFE}, truncating target (consider chunked synthesis)`);
-            sequences.f0Ids = sequences.f0Ids.subarray(0, SAFE);
-            sequences.mel2token = sequences.mel2token.subarray(0, SAFE);
-            totalFrames = SAFE;
+        // 2) 目标帧本身已超上限（极长片段，>163.8s）：只能截断目标（此时应配合
+        //    分块/分段路径；此处仅作硬保护，防止 ORT 广播错误中断合成）。
+        if (totalFrames > MAX_SEQ) {
+            console.warn(`${tag} diff_step seq limit: target ${totalFrames} > ${MAX_SEQ}, truncating target (consider chunked synthesis)`);
+            sequences.f0Ids = sequences.f0Ids.subarray(0, MAX_SEQ);
+            sequences.mel2token = sequences.mel2token.subarray(0, MAX_SEQ);
+            totalFrames = MAX_SEQ;
             if (ptFrameCount > 0) {
                 ptMelData = ptMelData ? ptMelData.subarray(0, 0) : null;
                 ptFrameCount = 0;
@@ -2473,6 +2471,7 @@ class OnnxSVSPipeline {
         // 单一全局噪声场：所有窗口从同一个噪声张量切片取噪 → 相邻窗口的重叠区共享
         // 相同的初始噪声，再由 WSOLA 交叉淡化拼合，从根本上保证长片段拼接连贯（否则各窗口
         // 独立取噪会在边界产生相位不连续 → DML vocoder 放大为可听杂音）。
+        // randomNoise 返回 { data: Float32Array, dims }，切片取 .data
         const noiseFull = this.randomNoise(totalFrames, MEL_DIM);
 
         for (let w = 0; w < numSegs; w++) {
@@ -2499,7 +2498,7 @@ class OnnxSVSPipeline {
 
             // 从全局噪声场提取本窗口噪声（复制），保持与相邻窗口重叠区一致
             const chunkNoise = new Float32Array(segFrames * MEL_DIM);
-            chunkNoise.set(noiseFull.subarray(segStart * MEL_DIM, segEnd * MEL_DIM));
+            chunkNoise.set(noiseFull.data.subarray(segStart * MEL_DIM, segEnd * MEL_DIM));
             const subXt = { data: chunkNoise, dims: [1, segFrames, MEL_DIM] };
 
             this._diffusion.setDiffStepEp(this.sessionEPs.diffStep || null);
@@ -2823,9 +2822,32 @@ class OnnxSVSPipeline {
         });
     }
 
+    /**
+     * 固定噪声种子（设置 fixedNoiseSeedEnabled / fixedNoiseSeed，默认关闭）。
+     * 在每次合成入口调用：开启时用同一种子重置噪声 RNG，使同一项目多次
+     * 预览/导出结果可复现（扩散固有乐句级响度波动 ±3dB 量级，种子固定后
+     * 用户能锁定满意渲染、公平对比参数效果）。关闭时恢复 Math.random。
+     * 显式 options.seed（测量用途）优先于本设置，由调用方保证顺序。
+     */
+    _applyFixedNoiseSeedSetting() {
+        try {
+            const { loadSettings } = require('../../main/settings');
+            const s = loadSettings();
+            if (s && s.fixedNoiseSeedEnabled === true && Number.isFinite(Number(s.fixedNoiseSeed))) {
+                this._diffusion.setNoiseSeed(Math.floor(Number(s.fixedNoiseSeed)) >>> 0);
+                return;
+            }
+        } catch (_) { /* 设置不可用时保持现状 */ }
+        this._diffusion.setNoiseSeed(null);
+    }
+
     async synthesize(notes, bpm, options = {}) {
         // 测量开关：固定初始噪声。不传 seed 时完全走原路径（Math.random）。
-        if (Number.isFinite(options.seed)) this._diffusion.setNoiseSeed(options.seed);
+        if (Number.isFinite(options.seed)) {
+            this._diffusion.setNoiseSeed(options.seed);
+        } else {
+            this._applyFixedNoiseSeedSetting();
+        }
         // 串行化：防止并发 synthesize() 调用导致的 session 重建竞态（见 _synthPromise 注释）。
         // 复用 _initPromise 模式：await 上一条合成（含 _recreateHeavySessionsAfterSynthesis）
         // 完全结束后再启动本条。
@@ -2863,6 +2885,14 @@ class OnnxSVSPipeline {
             await this.init();
         }
         await this.ensureAllModelsLoaded();
+        // 固定噪声种子：与 synthesize() 同样的语义（显式 options.seed 优先，
+        // 否则读设置）。每次合成入口重置 rng —— 同一合成的多个 region 连续推进
+        // rng 状态（各 region 初始噪声互不相同），跨合成重置保证可复现。
+        if (Number.isFinite(options.seed)) {
+            this._diffusion.setNoiseSeed(options.seed);
+        } else {
+            this._applyFixedNoiseSeedSetting();
+        }
         this._currentF0Hz = null;
         // Task 15: reset per-frame F0 curve for F0-aware chunked diffusion.
         this._currentPitchCurveF0 = null;
@@ -3131,13 +3161,13 @@ class OnnxSVSPipeline {
                 ptFrameCount = clamped.ptFrameCount;
                 ptMelData = clamped.ptMelData;
             }
-            // TensorRT-RTX 动态引擎整段路径：钳到 prompt+target<=2047 规避 Myelin
-            // 序列索引 >=2048 输出错误。分块路径每块 diffstep 序列已足够短，无需钳制。
+            // diff_step 模型容量兜底：整段路径钳到 prompt+target<=8192（烘焙
+            // rope 表行数）。分块路径每块 diffstep 序列已足够短，无需钳制。
             if (!this.useStaticShapes && !chunkEnabled) {
-                const trtClamped = this._clampTrtRtxDynamicFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[MultiStream]');
-                totalFrames = trtClamped.totalFrames;
-                ptFrameCount = trtClamped.ptFrameCount;
-                ptMelData = trtClamped.ptMelData;
+                const seqClamped = this._clampDiffStepMaxFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[MultiStream]');
+                totalFrames = seqClamped.totalFrames;
+                ptFrameCount = seqClamped.ptFrameCount;
+                ptMelData = seqClamped.ptMelData;
             }
 
             // Encoder（动态形状整段编码；静态形状分段合成时逐段编码后直接产出整段 mel）
@@ -3245,6 +3275,14 @@ class OnnxSVSPipeline {
         }
         globalChunks.sort((a, b) => a.globalTimeSec - b.globalTimeSec);
 
+        // 每个 region（prepared 条目）最后一个全局 chunk 的 gi：用于给该 region
+        // 的最后一个流式 chunk 打 streamLast 标记（渲染层 pacing 用它把该流
+        // 从 min-frontier 中退役；见 renderer/audioPlayback.js _streamingStreamEnds）。
+        const lastGiPerPrep = new Map();
+        for (let gi = 0; gi < globalChunks.length; gi++) {
+            lastGiPerPrep.set(globalChunks[gi].prepIdx, gi);
+        }
+
         console.log(`[MultiStream] Global chunk queue: ${globalChunks.length} chunks, time-ordered`);
 
         // Suppress per-chunk diffusion logs in normal mode; the final
@@ -3252,13 +3290,22 @@ class OnnxSVSPipeline {
         // still logs every chunk via the suppressDoneLog=false override.
         this._suppressChunkDiffLog = globalChunks.length > 1;
 
+        // 流清单：每个 region 的首 chunk 全局起始采样。随每个 chunk 事件下发，
+        // 渲染层据此把 pacing 时钟钉在"尚未开始交付的流"的起点之前——否则
+        // 新流的首 chunk 相对共享时钟必然迟到（被迫裁头=丢片段，或移位=错位）。
+        const streamManifest = prepared.map(p => ({
+            key: `${p.fragIdx}:${p.regionIdx}`,
+            firstStartSample: Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE) +
+                Math.floor((p.firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE),
+        }));
+
         const emitPreparedChunk = (p, chunkInfo) => {
             if (!onChunkAudio || !chunkInfo || !chunkInfo.audio) return;
             const audio = chunkInfo.audio.slice();
             const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
             const relativeStartBeat = ((chunkInfo.sampleOffset - fragStartSample) / SAMPLE_RATE) * (bpm / 60);
             this._silenceNonVocalRegions(audio, p.filledNotes, bpm, relativeStartBeat);
-            const safeChunk = { ...chunkInfo, audio };
+            const safeChunk = { ...chunkInfo, audio, streamManifest };
             emittedChunks.push({ ...safeChunk, audio: audio.slice() });
             onChunkAudio(safeChunk);
         };
@@ -3304,6 +3351,8 @@ class OnnxSVSPipeline {
                             audio: cachedChunk.audio,
                             totalSamples: totalMixedSamples,
                             isLast: gi === globalChunks.length - 1,
+                            streamKey: `${p.fragIdx}:${p.regionIdx}`,
+                            streamLast: gc.chunkIdx === p.chunkPlan.specs.length - 1,
                             cached: true,
                         });
                     }
@@ -3367,6 +3416,8 @@ class OnnxSVSPipeline {
                                 audio: chunkInfo.audio,
                                 totalSamples: totalMixedSamples,
                                 isLast: isLastGlobalChunk && chunkInfo.isLast,
+                                streamKey: `${p.fragIdx}:${p.regionIdx}`,
+                                streamLast: gi === lastGiPerPrep.get(gc.prepIdx) && chunkInfo.isLast,
                             });
                         } catch (e) {
                             console.warn(`[MultiStream] onChunkAudio error: ${e.message}`);
@@ -3416,6 +3467,8 @@ class OnnxSVSPipeline {
                             audio: chunkInfo.audio,
                             totalSamples: totalMixedSamples,
                             isLast: isLastGlobalChunk && chunkInfo.isLast,
+                            streamKey: `${p.fragIdx}:${p.regionIdx}`,
+                            streamLast: gi === lastGiPerPrep.get(gc.prepIdx) && chunkInfo.isLast,
                         });
                     } catch (e) {
                         console.warn(`[MultiStream] onChunkAudio error: ${e.message}`);
@@ -3773,14 +3826,14 @@ class OnnxSVSPipeline {
                 ptFrameCount = clamped.ptFrameCount;
                 ptMelData = clamped.ptMelData;
             }
-            // TensorRT-RTX 动态引擎：将 prompt+target 总长钳到 <=2047，规避
-            // Myelin 融合内核序列索引 >=2048 输出错误（优先只截 prompt，目标乐句
-            // 保持整段连续去噪，无拼接边界）。
+            // diff_step 模型容量兜底：prompt+target 总长 <=8192（烘焙 rope 表
+            // 行数，超限时 Slice 行数不足会广播失败）。优先只截 prompt，目标乐句
+            // 保持整段连续去噪，无拼接边界。
             if (!this.useStaticShapes) {
-                const trtClamped = this._clampTrtRtxDynamicFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Synthesis]');
-                totalFrames = trtClamped.totalFrames;
-                ptFrameCount = trtClamped.ptFrameCount;
-                ptMelData = trtClamped.ptMelData;
+                const seqClamped = this._clampDiffStepMaxFrames(sequences, ptFrameCount, ptMelData, totalFrames, '[Synthesis]');
+                totalFrames = seqClamped.totalFrames;
+                ptFrameCount = seqClamped.ptFrameCount;
+                ptMelData = seqClamped.ptMelData;
             }
 
             console.log(`[OnnxSVSPipeline] Synthesis params: frames=${totalFrames}, tokens=${sequences.tokenCount}, steps=${totalSteps}, cfg=${cfgStrength}, f0Shift=${f0Shift}`);
@@ -3840,8 +3893,16 @@ class OnnxSVSPipeline {
                     const segFrames = frameEnd - frameStart;
                     const segF0 = this._currentF0Hz ? this._currentF0Hz.subarray(frameStart, frameEnd) : null;
                     const sampleOffsetBase = frameStart * HOP_SIZE;
-                    // 包装流式回调：vocoder 内部 sampleOffset 是相对片段的，需加上片段在完整音频中的偏移
+                    // 流式 chunk 与整段结果听感一致：对每个推送的 chunk 应用非人声区域静音。
+                    // 旧版只对最终拼装的 audioData 静音（写入缓存），实时播放的 chunk 未静音，
+                    // rest 区域的扩散噪声会直接播出（杂音），且与缓存重播的听感不一致。
+                    // chunk 边界不会产生额外淡入淡出：跨边界音符的 rawStart<0 / rawEnd>len
+                    // 使 _silenceNonVocalRegions 的 fadeIn/fadeOut 判定为 false。
+                    const chunkBaseBeat = (filledNotes[0]?.start || 0);
                     const wrappedOnChunk = (info) => {
+                        const chunkStartBeat = chunkBaseBeat +
+                            ((info.sampleOffset + sampleOffsetBase) / SAMPLE_RATE) * (bpm / 60);
+                        this._silenceNonVocalRegions(info.audio, filledNotes, bpm, chunkStartBeat);
                         singleSegOnChunk({
                             chunkIndex: info.chunkIndex,
                             sampleOffset: info.sampleOffset + sampleOffsetBase,
@@ -3926,7 +3987,17 @@ class OnnxSVSPipeline {
             await gpuDrainAdaptive();
 
             onProgress(90);
-            let audioData = await this._runVocoderChunked(xt.data, totalFrames, singleSegOnChunk);
+            // 流式 chunk 与整段结果听感一致：对每个推送的 chunk 应用非人声区域静音
+            //（与上方分块流式路径、最终 audioData 的静音逻辑对齐）。chunk 是回调专属的
+            // 新切片，原地清零安全；跨 chunk 边界的音符不会产生额外淡入淡出。
+            const _chunkSilenceBaseBeat = filledNotes[0]?.start || 0;
+            const _silencingOnChunk = singleSegOnChunk ? (info) => {
+                const chunkStartBeat = _chunkSilenceBaseBeat +
+                    (info.sampleOffset / SAMPLE_RATE) * (bpm / 60);
+                this._silenceNonVocalRegions(info.audio, filledNotes, bpm, chunkStartBeat);
+                singleSegOnChunk(info);
+            } : null;
+            let audioData = await this._runVocoderChunked(xt.data, totalFrames, _silencingOnChunk);
 
             // 单 note 上下文 padding：截取有效音频（丢弃前后 rest padding）
             // 注意：外部 totalFrames 始终是 50Hz 帧数（SVS mel 帧率），

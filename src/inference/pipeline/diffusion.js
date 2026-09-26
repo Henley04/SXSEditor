@@ -361,6 +361,71 @@ class Diffusion {
         });
         const condPredRaw = condResults[io.outName];
         const condPredFull = outputToFloat32(condPredRaw);
+
+        // TEMP DIAGNOSTIC (SXS_DIAG_PROBE=1): compare EVERY graph output between
+        // TRT and the DML peer at the first diffusion step, slicing along every
+        // axis whose length equals seqLen. Locates the exact operator tensor at
+        // which frame index >=2048 diverges.
+        const __probe = sessions.diffStep && sessions.diffStep.__diagPeer;
+        if (__probe && t < 0.02) {
+            try {
+                const __pRes = await __probe.run({
+                    [io.xtInput]: xtInputTensor,
+                    [io.tInput]: tTensor,
+                    [io.condInput]: condTensorConst,
+                    [io.maskInput]: condMaskTensorConst,
+                });
+                for (const __name of Object.keys(condResults)) {
+                    const __tT = condResults[__name];
+                    const __dT = __pRes[__name];
+                    if (!__dT) { console.log(`[Probe] ${__name}: missing on DML peer`); continue; }
+                    const __ta = outputToFloat32(__tT);
+                    const __da = outputToFloat32(__dT);
+                    const __dims = (__tT.dims || []).map((x) => Number(x));
+                    if (__ta.length !== __da.length) {
+                        console.log(`[Probe] ${__name} dims=${JSON.stringify(__dims)} LENGTH MISMATCH trt=${__ta.length} dml=${__da.length}`);
+                        continue;
+                    }
+                    // compute strides
+                    const __strides = new Array(__dims.length);
+                    let __acc = 1;
+                    for (let __i = __dims.length - 1; __i >= 0; __i--) { __strides[__i] = __acc; __acc *= __dims[__i]; }
+                    for (let __ax = 0; __ax < __dims.length; __ax++) {
+                        if (__dims[__ax] !== seqLen) continue;
+                        const __sliceLen = __ta.length / __dims[__ax];
+                        const __cosAt = (idx) => {
+                            const __base = idx * __strides[__ax];
+                            let sa = 0, sb = 0, sab = 0;
+                            // iterate every other-axis combination touching this index
+                            const __outer = __strides[__ax];
+                            const __blockSpan = __strides[__ax] * __dims[__ax];
+                            for (let __blk = 0; __blk < __ta.length; __blk += __blockSpan) {
+                                for (let __j = 0; __j < __outer; __j++) {
+                                    const a = __ta[__blk + __base + __j];
+                                    const b = __da[__blk + __base + __j];
+                                    sa += a * a; sb += b * b; sab += a * b;
+                                }
+                            }
+                            return (sa > 0 && sb > 0) ? sab / Math.sqrt(sa * sb) : 1;
+                        };
+                        let __min = 1, __badPost = 0, __badPre = 0, __firstBad = -1, __run = 0;
+                        for (let __idx = 0; __idx < seqLen; __idx++) {
+                            const __c = __cosAt(__idx);
+                            if (__c < __min) __min = __c;
+                            if (__idx < 2048) { if (__c < 0.999) __badPre++; }
+                            else { if (__c < 0.999) __badPost++; }
+                            if (__c < 0.999) { __run++; if (__firstBad < 0 && __run >= 4) __firstBad = __idx - __run + 1; }
+                            else __run = 0;
+                        }
+                        console.log(`[Probe] ${__name} dims=${JSON.stringify(__dims)} axis=${__ax} firstBad=${__firstBad} minCos=${__min.toFixed(6)} badPre2048=${__badPre} badPost2048=${__badPost}/${Math.max(0, seqLen - 2048)}`);
+                    }
+                }
+                for (const k of Object.keys(__pRes)) { try { disposeTensor(__pRes[k]); } catch (_) {} }
+            } catch (e) {
+                console.warn('[Probe] failed:', (e.message || '').split('\n')[0]);
+                sessions.diffStep.__diagPeer = null;
+            }
+        }
         disposeTensor(condPredRaw);
 
         // Slice cond target segment (skip prompt prefix). The target frames

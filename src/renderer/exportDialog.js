@@ -95,6 +95,7 @@ export async function openExportDialog() {
       exportSampler: settings.exportSampler || 'euler',
       autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
       outputSampleRate: [24000, 44100, 48000, 96000].includes(settings.exportSampleRate) ? settings.exportSampleRate : 48000,
+      outputBitDepth: [16, 24, 32].includes(settings.exportBitDepth) ? settings.exportBitDepth : 32,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
       sifiganPrecision: settings.sifiganPrecision === 'fp16' ? 'fp16' : 'fp32',
       vocoderChunkMode: settings.vocoderChunkMode === 'manual' ? 'manual' : 'smart',
@@ -459,6 +460,34 @@ function buildParamsSection(form) {
   sampleRateSelect.addEventListener('change', () => { form.outputSampleRate = Number(sampleRateSelect.value); });
   sampleRateField.appendChild(sampleRateSelect);
   section.appendChild(sampleRateField);
+
+  // 导出位深度（决定 WAV 比特率：采样率 × 声道数 × 位深度）
+  const bitDepthField = document.createElement('div');
+  bitDepthField.className = 'export-dialog-field';
+  const bitDepthLabel = document.createElement('div');
+  bitDepthLabel.className = 'export-dialog-field-label';
+  bitDepthLabel.textContent = t('main.exportDialog.bitDepth');
+  bitDepthField.appendChild(bitDepthLabel);
+  const bitDepthHint = document.createElement('div');
+  bitDepthHint.className = 'export-dialog-field-hint';
+  bitDepthHint.textContent = t('main.exportDialog.bitDepthHint');
+  bitDepthField.appendChild(bitDepthHint);
+  const bitDepthSelect = document.createElement('select');
+  const bitDepthOptions = [
+    { value: 16, labelKey: 'main.exportDialog.bitDepth16' },
+    { value: 24, labelKey: 'main.exportDialog.bitDepth24' },
+    { value: 32, labelKey: 'main.exportDialog.bitDepth32' },
+  ];
+  for (const opt of bitDepthOptions) {
+    const option = document.createElement('option');
+    option.value = String(opt.value);
+    option.textContent = `${t(opt.labelKey)}${opt.value === 32 ? ` (${t('main.exportDialog.sampleRateDefault')})` : ''}`;
+    bitDepthSelect.appendChild(option);
+  }
+  bitDepthSelect.value = String(form.outputBitDepth);
+  bitDepthSelect.addEventListener('change', () => { form.outputBitDepth = Number(bitDepthSelect.value); });
+  bitDepthField.appendChild(bitDepthSelect);
+  section.appendChild(bitDepthField);
 
   return section;
 }
@@ -1050,6 +1079,7 @@ async function onStartClick(form, settings, panel, body, footer, fullCleanup) {
     enableSDEditRepair: form.enableSDEditRepair,
     exportEnableQDrift: form.exportEnableQDrift === true,
     exportSampleRate: form.outputSampleRate,
+    exportBitDepth: form.outputBitDepth,
   };
 
   // 禁用开始按钮，显示保存中状态
@@ -1196,7 +1226,7 @@ async function runExportTask(panel, body, footer, form, setProgress, setStatus, 
     // B2: wavEncoder.js is now CommonJS — use require instead of dynamic import.
     const { encodeWav } = require('../audio/wavEncoder.js');
     const outputAudio = resampleForExport(mixedAudio, SAMPLE_RATE, form.outputSampleRate, numChannels || 1);
-    const wavData = encodeWav(outputAudio, form.outputSampleRate, numChannels || 1);
+    const wavData = encodeWav(outputAudio, form.outputSampleRate, numChannels || 1, form.outputBitDepth);
 
     setStatus('progressSaving');
     setProgress(98);

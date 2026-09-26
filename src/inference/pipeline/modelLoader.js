@@ -693,6 +693,21 @@ async function createSessionWithValidation(modelPath, sessionKey, gpuDeviceName,
                         } else {
                             console.log(`[Model][load] name=${modelName} ep=${winmlRes.ep} device=${gpuDeviceName || 'auto'} validation=skip reason=reload`);
                         }
+                        // TEMP DIAGNOSTIC (SXS_DIAG_PROBE=1): DML peer for operator-level
+                        // TRT vs DML comparison on ALL graph outputs.
+                        if (process.env.SXS_DIAG_PROBE === '1' && sessionKey === 'diffStep') {
+                            try {
+                                const dmlEpOpt = typeof dmlDeviceId === 'number'
+                                    ? { name: 'dml', deviceId: dmlDeviceId }
+                                    : 'dml';
+                                const peer = await ort.InferenceSession.create(modelPath,
+                                    buildSessionOptions({ executionProviders: [dmlEpOpt, 'cpu'] }));
+                                wsession.__diagPeer = peer;
+                                console.log('[DIAG] DML peer attached to diffStep (all-output probe)');
+                            } catch (e) {
+                                console.warn('[DIAG] peer attach failed:', (e.message || '').split('\n')[0]);
+                            }
+                        }
                         return { session: wsession, ep: winmlRes.ep, warmedUp: shouldValidate };
                     } catch (werr) {
                         const wr = (werr.message || '').split('\n')[0].slice(0, 120);

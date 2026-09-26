@@ -117,6 +117,12 @@ function _onBeforeUnloadForVisibility() {
 let _streamingActive = false;
 let _streamingFirstChunkOffsetSec = 0;  // First chunk's global position (for coordinate conversion)
 let _streamingAccEndSec = 0;            // Furthest accompaniment end in playhead seconds
+// Per-stream delivered end (streamKey -> {end, done}). Multi-stream playback
+// (interleaved fragments / long-rest-split regions) paces the playhead by the
+// MINIMUM delivered end across active streams: the clock must never run past
+// a stream's undelivered range, or that stream's chunks arrive "late" and
+// force shifted playback (overlap/drift) or head-trimming (content loss).
+let _streamingStreamEnds = new Map();
 
 let _scheduler = null;
 
@@ -126,6 +132,37 @@ function _createScheduler() {
     getElapsed: () => {
       const ctx = state.audioContext;
       return ctx ? ctx.currentTime - state.playbackStartTime : 0;
+    },
+    // 统一的等待进入钩子（rAF / watchdog / chunk 迟到竞态三条路径共用）。
+    // watchdog 路径原本没有 onEnterWait，进入等待时 rAF 循环不会被取消，
+    // 恢复时 startPlayheadAnimation 会叠加启动第二个循环（重复绘制 +
+    // stopPlayheadAnimation 只能取消其中一个的泄漏）。
+    onWaitStateChange: (waiting) => {
+      if (!waiting) return;
+      if (state.playheadRaf) {
+        cancelAnimationFrame(state.playheadRaf);
+        state.playheadRaf = null;
+      }
+      dom.timeDisplay.textContent = t('main.waitingForInference');
+      dom.btnPlay.textContent = t('main.waitingForInference');
+      // watchdog 带 0.3s 提前量时冻结点在 buffer 前沿之前，
+      // 播放头画在当前（即将冻结的）位置而非前沿，避免恢复后回跳。
+      const waitCtx = state.audioContext;
+      const waitElapsed = waitCtx ? Math.max(0, waitCtx.currentTime - state.playbackStartTime) : 0;
+      drawPlayheadLine(waitElapsed);
+    },
+    // watchdog 兜底检测带 0.3s 提前量（>= 250ms tick 周期 + suspend 延迟），
+    // 使冻结发生在 buffer 前沿之前：恢复时晚到 chunk 的原始调度时间仍在
+    // 未来，按原位置无缝衔接，不产生错位/重叠（chunk 到达时若仍过冲，
+    // 由调度处的 lateSec 裁头逻辑兜底）。
+    watchdogMarginSec: 0.3,
+    // 多流 pacing：前沿取各活跃流已交付末端的最小值（见 _streamingStreamEnds）。
+    getPacingFrontier: () => {
+      let minEnd = Infinity;
+      for (const s of _streamingStreamEnds.values()) {
+        if (!s.done && s.end < minEnd) minEnd = s.end;
+      }
+      return minEnd;
     },
     onFinish: _finishStreamingPlayback,
   });
@@ -327,6 +364,7 @@ export async function playAll() {
       _streamingActive = false;
       _streamingFirstChunkOffsetSec = 0;
       _streamingAccEndSec = 0;
+      _streamingStreamEnds = new Map();
       _createScheduler();
 
       if (canStreamPlayback) {
@@ -348,6 +386,30 @@ export async function playAll() {
 
             const chunkStartSec = chunkInfo.sampleOffset / SAMPLE_RATE;
             const chunkEndSec = chunkInfo.sampleEnd / SAMPLE_RATE;
+
+            // 更新该流的已交付末端（pacing 前沿 = 各活跃流的 min，见 _createScheduler）。
+            // streamKey/streamLast/streamManifest 由主进程随 chunk 下发；旧版主进程
+            // 无此字段时全部落在 'default' 流上，等价于旧的 max-end 前沿行为。
+            if (Array.isArray(chunkInfo.streamManifest)) {
+              for (const m of chunkInfo.streamManifest) {
+                if (m && m.key != null && !_streamingStreamEnds.has(String(m.key))) {
+                  // 未开始交付的流：把 pacing 前沿钉在其首 chunk 起点之前，
+                  // 保证它的首 chunk 到达时永远"准时"（不裁头、不移位）。
+                  _streamingStreamEnds.set(String(m.key), {
+                    end: (m.firstStartSample || 0) / SAMPLE_RATE,
+                    done: false,
+                  });
+                }
+              }
+            }
+            const streamKey = chunkInfo.streamKey != null ? String(chunkInfo.streamKey) : 'default';
+            let streamState = _streamingStreamEnds.get(streamKey);
+            if (!streamState) {
+              streamState = { end: chunkStartSec, done: false };
+              _streamingStreamEnds.set(streamKey, streamState);
+            }
+            if (chunkEndSec > streamState.end) streamState.end = chunkEndSec;
+            if (chunkInfo.streamLast) streamState.done = true;
             // 所有计算使用全局秒（项目时间线上的绝对位置）：
             // playhead 在 drawPlayheadLine 中也以全局秒绘制，与 MIDI note 的
             // global beat 位置对齐。pipeline 已将 chunk 的 sampleOffset 调整为
@@ -429,39 +491,58 @@ export async function playAll() {
               });
             }
 
-            // 如果正在等待推理，恢复播放：调整 playbackStartTime 使 chunk
-            // 在 currentTime+0.05 发声（此时 playhead 位于 chunkStartSec 全局位置），
-            // 并重启 rAF 动画。
+            // 如果正在等待推理，恢复播放。AudioContext.currentTime 在 suspend
+            // 期间与所有 source 一起冻结，因此 playbackStartTime 仍是有效的
+            // 共享时钟基准（伴奏、先前 chunk、播放头都按它继续走）。
             if (_scheduler.isWaiting) {
               await _scheduler.resumeFromWait();
-              // AudioContext.currentTime was frozen together with every source,
-              // so the original playbackStartTime remains the valid shared clock.
               startPlayheadAnimation();
             }
 
             // 调度 chunk：在其全局位置发声。
             // scheduleTime = playbackStartTime + chunkStartSec
             // 这样多分片同时段的 chunk 会叠加播放（而非顺序播放）。
-            const scheduleTime = state.playbackStartTime + chunkStartSec;
-            source.start(Math.max(scheduleTime, minTime));
-
-            // 统一的 onended：递减活跃 source 计数，释放引用，
-            // 当 isLast 已收到且所有 source 均结束时标记流式完成。
-            // 这比仅依赖 isLast chunk 的 onended 更健壮——
-            // 若非末 chunk 因音频更长而晚于 isLast chunk 结束，也能正确等待。
-            _scheduler.addSource();
-            if (chunkInfo.isLast) {
-              _scheduler.markLastReceived();
-            }
-
-            const sourceIdx = state.streamingSources.length;
-            state.streamingSources.push(source);
-            source.onended = () => {
-              _scheduler.sourceEnded();
-              if (state.streamingSources[sourceIdx] === source) {
-                state.streamingSources[sourceIdx] = null;
+            //
+            // Underrun 恢复后 chunk 的原始调度时间可能已经过去（冻结点落在
+            // buffer 前沿之后）。此时不能只把开播时间钳到"现在"——那会让人声
+            // 整体晚于共享时钟 δ 秒，而后续 chunk 仍按原始时间轴位置调度，
+            // 与晚到 chunk 的尾部重叠 δ 秒（"等待推理后人声错位+重叠"的根因）。
+            // 正确做法：钳到当前时间的同时，按迟到量 δ 裁掉 chunk 头部内容
+            // （source.start(when, offset) 的 offset），使内容位置始终等于
+            // 共享时钟位置（与伴奏/播放头/先前 chunk 严格对齐），且 chunk
+            // 仍在原定结束时刻结束——与后续 chunk 无缝衔接、零重叠。
+            const chunkStartCtxTime = state.playbackStartTime + chunkStartSec;
+            const startCtxTime = Math.max(chunkStartCtxTime, ctx.currentTime + 0.01);
+            const lateSec = Math.max(0, startCtxTime - chunkStartCtxTime);
+            const chunkDurSec = audioBuffer.duration;
+            if (lateSec >= chunkDurSec) {
+              // 整个 chunk 已过期：内容无可播部分，丢弃（buffer 前沿已覆盖
+              // 其范围；播放头会经过一小段静音，直到下一个 chunk）。
+              try { source.disconnect(); } catch (_) {}
+              if (chunkInfo.isLast) {
+                _scheduler.markLastReceived();
               }
-            };
+            } else {
+              source.start(startCtxTime, lateSec);
+
+              // 统一的 onended：递减活跃 source 计数，释放引用，
+              // 当 isLast 已收到且所有 source 均结束时标记流式完成。
+              // 这比仅依赖 isLast chunk 的 onended 更健壮——
+              // 若非末 chunk 因音频更长而晚于 isLast chunk 结束，也能正确等待。
+              _scheduler.addSource();
+              if (chunkInfo.isLast) {
+                _scheduler.markLastReceived();
+              }
+
+              const sourceIdx = state.streamingSources.length;
+              state.streamingSources.push(source);
+              source.onended = () => {
+                _scheduler.sourceEnded();
+                if (state.streamingSources[sourceIdx] === source) {
+                  state.streamingSources[sourceIdx] = null;
+                }
+              };
+            }
           } catch (e) {
             console.warn('[Audio] Streaming chunk playback failed:', e.message);
           }
@@ -1144,6 +1225,10 @@ export function stopAudioSource() {
 }
 
 export function startPlayheadAnimation() {
+  // 幂等保护：已有 rAF 循环在跑时不叠加启动。双循环会导致播放头重复绘制，
+  // 且 stopPlayheadAnimation 只能取消 state.playheadRaf 存的最后一个 id，
+  // 另一个循环永久泄漏（等待推理恢复路径可能命中此竞态）。
+  if (state.playheadRaf) return;
   _ensureVisibilityHandler();
   function updatePlayhead() {
     _sharedUpdateFn = updatePlayhead;

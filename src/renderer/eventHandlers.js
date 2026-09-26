@@ -665,6 +665,18 @@ if (window.electronAPI?.onMainMenuSaveAsRequest) {
   if (state._ipcCleanups) state._ipcCleanups.push(off2);
 }
 
+// 模态设置窗口打开时自动暂停播放：模态窗口会禁用主窗口输入（无法点击
+// 暂停/停止），但 WebAudio 播放、流式推理与 underrun 恢复仍在后台继续，
+// 表现为"播放时点设置，播放被无视且关掉设置后仍在自动播放"。
+// 暂停保留当前位置（playbackPauseOffset / 暂停态播放头），回到主窗口后
+// 可点击"继续"从暂停点恢复；后台流式合成不受影响，完成后可正常续播。
+if (window.electronAPI?.onSettingsWindowOpened) {
+  const offSettingsPause = window.electronAPI.onSettingsWindowOpened(() => {
+    if (state.isPlaying) pausePlayback();
+  });
+  if (state._ipcCleanups) state._ipcCleanups.push(offSettingsPause);
+}
+
 // ---- Fragment context menu ----
 let _fragmentCtxMenu = null;
 

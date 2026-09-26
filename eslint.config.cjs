@@ -117,6 +117,8 @@ module.exports = [
                 SPLASH_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
                 UPDATE_NOTIFICATION_WINDOW_WEBPACK_ENTRY: 'readonly',
                 UPDATE_NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
+                SINGER_MARKET_WINDOW_WEBPACK_ENTRY: 'readonly',
+                SINGER_MARKET_WINDOW_PRELOAD_WEBPACK_ENTRY: 'readonly',
             },
         },
     },
@@ -127,6 +129,8 @@ module.exports = [
             'src/fragmentEditor/**/*.js',
             // 仅渲染进程引用的共享模块（使用 window/document/ResizeObserver 等浏览器全局）
             'src/shared/autoRelayout.js',
+            // 流式调度器：ESM，被渲染层 bundle（watchdog 用 setTimeout/console）
+            'src/shared/streamingScheduler.js',
             'src/audioPreprocess/**/*.js',
             'src/editor/**/*.js',
             'src/inference/webnn/**/*.js',
@@ -135,6 +139,7 @@ module.exports = [
             'src/i18n/**/*.js',
             'src/icons/**/*.js',
             'src/singerCreator.js',
+            'src/singerMarket.js',
             'src/settings.js',
             'src/modelDownload.js',
             'src/resourceManager.js',

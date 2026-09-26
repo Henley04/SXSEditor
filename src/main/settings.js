@@ -50,6 +50,7 @@ function normalizeSettings(settings) {
   }
   if (out.audioSampleRate !== undefined && ![22050, 24000, 44100, 48000, 96000, 192000].includes(out.audioSampleRate)) out.audioSampleRate = 48000;
   if (out.exportSampleRate !== undefined && ![24000, 44100, 48000, 96000].includes(out.exportSampleRate)) out.exportSampleRate = 48000;
+  if (out.exportBitDepth !== undefined && ![16, 24, 32].includes(out.exportBitDepth)) out.exportBitDepth = 32;
   if (out.audioBufferSize !== undefined && ![64, 128, 256, 512, 1024, 2048, 4096].includes(out.audioBufferSize)) out.audioBufferSize = 1024;
   if (out.preferredDeviceId !== undefined && out.preferredDeviceId !== null && out.preferredDeviceId !== 'npu' && out.preferredDeviceId !== 'webnn-gpu' && !Number.isInteger(out.preferredDeviceId)) delete out.preferredDeviceId;
   if (out.modelDeviceMapping !== undefined && (typeof out.modelDeviceMapping !== 'object' || out.modelDeviceMapping === null || Array.isArray(out.modelDeviceMapping))) out.modelDeviceMapping = {};
@@ -90,6 +91,7 @@ function loadSettings() {
   }
   if (!Number.isFinite(_settingsCache.audioSampleRate)) _settingsCache.audioSampleRate = 48000;
   if (![24000, 44100, 48000, 96000].includes(_settingsCache.exportSampleRate)) _settingsCache.exportSampleRate = 48000;
+  if (![16, 24, 32].includes(_settingsCache.exportBitDepth)) _settingsCache.exportBitDepth = 32;
 
   // Merge defaults for theme fields
   if (typeof _settingsCache.theme !== 'string') {
@@ -177,6 +179,19 @@ function loadSettings() {
   // + 少步重采样修复（STORK-2 5 步，仅更新异常帧）。默认 false 时不执行任何修复代码路径。
   if (typeof _settingsCache.enableSDEditRepair !== 'boolean') {
     _settingsCache.enableSDEditRepair = false;
+  }
+
+  // 固定噪声种子（可复现合成）。默认关闭 = 每次合成 Math.random（线上历史行为）。
+  // 开启后每次合成入口用同一种子重置噪声 RNG：同一项目多次预览/导出结果逐位一致，
+  // 便于对比参数效果与锁定满意的渲染（扩散固有乐句级响度波动 ±3dB 量级，见
+  // scripts/ab_seed_variance.js）。种子范围 [0, 0xFFFFFFFF]。
+  if (typeof _settingsCache.fixedNoiseSeedEnabled !== 'boolean') {
+    _settingsCache.fixedNoiseSeedEnabled = false;
+  }
+  if (!Number.isFinite(_settingsCache.fixedNoiseSeed)) {
+    _settingsCache.fixedNoiseSeed = 1234;
+  } else {
+    _settingsCache.fixedNoiseSeed = Math.max(0, Math.min(0xFFFFFFFF, Math.floor(_settingsCache.fixedNoiseSeed)));
   }
 
   // ===== Q-Drift 推理期漂移校正（arXiv:2603.18095）=====
@@ -456,7 +471,7 @@ const ALLOWED_SETTINGS_KEYS = [
   'previewDiffSteps', 'previewCfgStrength', 'previewCfgRescale', 'previewSampler',
   'previewDiffStepChunkEnabled', 'previewDiffStepChunkFrames', 'previewDiffStepOverlapFrames',
   'exportDiffSteps', 'exportCfgStrength', 'exportCfgRescale', 'exportSampler',
-  'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth', 'exportSampleRate',
+  'audioOutputMode', 'audioOutputDevice', 'audioSampleRate', 'audioBitDepth', 'exportSampleRate', 'exportBitDepth',
   'audioBufferSize', 'audioVolume', 'locale',
   'theme', 'themePerWindow',
   'deviceMode', 'preferredDeviceId', 'preferredDeviceType', 'modelDeviceMapping',
@@ -471,6 +486,8 @@ const ALLOWED_SETTINGS_KEYS = [
   'enableSDEditRepair',
   'previewEnableQDrift',
   'exportEnableQDrift',
+  'fixedNoiseSeedEnabled',
+  'fixedNoiseSeed',
   'cfgScheduleMode',
   'cfgStrengthStart',
   'cfgScheduleKeyframes',

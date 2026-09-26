@@ -1,4 +1,4 @@
-const { BrowserWindow, dialog, ipcMain } = require('electron');
+const { BrowserWindow, dialog, ipcMain, shell } = require('electron');
 const path = require('node:path');
 const { t } = require('./locale');
 // 文档入口：本地优先（随应用分发的 docs/），线上版本作为独立入口
@@ -299,6 +299,14 @@ function createWindow(opts = {}) {
 }
 
 function openSettingsWindow() {
+  // 模态设置窗口会禁用主窗口输入（用户点不了暂停/停止），但主窗口的
+  // WebAudio 播放、rAF、流式推理与 underrun 恢复全部继续在后台运行。
+  // 若不暂停，用户关闭设置后会面对"播放被无视继续跑"且播放头已推进到
+  // 未知位置（长间隔场景尤其明显）。打开设置即暂停：记录当前位置，
+  // 回到主窗口后可从暂停点手动继续。
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('settings-window:opened'); } catch (_) {}
+  }
   if (settingsWindow) {
     settingsWindow.focus();
     return;
@@ -669,7 +677,16 @@ function openSingerMarket() {
   singerMarketWindow.loadURL(SINGER_MARKET_WINDOW_WEBPACK_ENTRY);
   singerMarketWindow.once('ready-to-show', () => { singerMarketWindow.show(); });
   singerMarketWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
-  singerMarketWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  // target="_blank" links in the market UI (terms-of-use disclaimer, license
+  // URLs, …) must open in the system browser. A blanket deny made those
+  // clicks silently no-op. Only http(s) is allowed through to openExternal;
+  // everything else stays denied.
+  singerMarketWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:\/\//i.test(url)) {
+      shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
 
   singerMarketWindow.on('closed', () => {
     singerMarketWindow = null;

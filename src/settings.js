@@ -75,6 +75,9 @@ const vocoderOverlapFramesValue = document.getElementById('vocoderOverlapFramesV
 const enableLoudnormFinalCheckbox = document.getElementById('enableLoudnormFinal');
 const enableAntiAliasingCheckbox = document.getElementById('enableAntiAliasing');
 const enableSDEditRepairCheckbox = document.getElementById('enableSDEditRepair');
+const fixedNoiseSeedEnabledCheckbox = document.getElementById('fixedNoiseSeedEnabled');
+const fixedNoiseSeedInput = document.getElementById('fixedNoiseSeed');
+const fixedNoiseSeedValueGroup = document.getElementById('fixedNoiseSeedValueGroup');
 const previewEnableQDriftCheckbox = document.getElementById('previewEnableQDrift');
 const exportEnableQDriftCheckbox = document.getElementById('exportEnableQDrift');
 const previewQDriftLockNote = document.getElementById('previewQDriftLockNote');
@@ -466,6 +469,14 @@ function applySavedSettingsToUI(currentSetting) {
     if (enableLoudnormFinalCheckbox) enableLoudnormFinalCheckbox.checked = currentSetting.enableLoudnormFinal !== false;
     if (enableAntiAliasingCheckbox) enableAntiAliasingCheckbox.checked = currentSetting.enableAntiAliasing === true;
     if (enableSDEditRepairCheckbox) enableSDEditRepairCheckbox.checked = currentSetting.enableSDEditRepair === true;
+    // 固定噪声种子（可复现合成）
+    if (fixedNoiseSeedEnabledCheckbox) fixedNoiseSeedEnabledCheckbox.checked = currentSetting.fixedNoiseSeedEnabled === true;
+    if (fixedNoiseSeedInput) {
+        fixedNoiseSeedInput.value = Number.isFinite(Number(currentSetting.fixedNoiseSeed))
+            ? Math.max(0, Math.min(0xFFFFFFFF, Math.floor(Number(currentSetting.fixedNoiseSeed))))
+            : 1234;
+    }
+    updateFixedNoiseSeedVisibility();
     // Q-Drift：对 FP16 / INT8 量化模型生效。分别记录两种精度下的用户意愿
     //（显式设置过用设置值，否则按默认：FP16 开、INT8 关），当前精度不支持时不勾选并置灰。
     for (const prec of ['fp16', 'int8']) {
@@ -1469,6 +1480,10 @@ function collectSettings() {
         enableLoudnormFinal: enableLoudnormFinalCheckbox ? enableLoudnormFinalCheckbox.checked : true,
         enableAntiAliasing: enableAntiAliasingCheckbox ? enableAntiAliasingCheckbox.checked : false,
         enableSDEditRepair: enableSDEditRepairCheckbox ? enableSDEditRepairCheckbox.checked : false,
+        fixedNoiseSeedEnabled: fixedNoiseSeedEnabledCheckbox ? fixedNoiseSeedEnabledCheckbox.checked : false,
+        fixedNoiseSeed: fixedNoiseSeedInput
+            ? Math.max(0, Math.min(0xFFFFFFFF, Math.floor(Number(fixedNoiseSeedInput.value) || 0)))
+            : 1234,
         diagnosticMode: diagnosticModeCheckbox ? diagnosticModeCheckbox.checked : false,
         releaseDmlVramAfterSynthesis: releaseDmlVramAfterSynthesisCheckbox ? releaseDmlVramAfterSynthesisCheckbox.checked : false,
         releaseDiffStepBeforeVocoder: releaseDiffStepBeforeVocoderCheckbox ? releaseDiffStepBeforeVocoderCheckbox.checked : false,
@@ -1692,6 +1707,21 @@ if (enableAntiAliasingCheckbox) {
 }
 if (enableSDEditRepairCheckbox) {
     enableSDEditRepairCheckbox.addEventListener('change', () => applySettings());
+}
+if (fixedNoiseSeedEnabledCheckbox) {
+    fixedNoiseSeedEnabledCheckbox.addEventListener('change', () => {
+        updateFixedNoiseSeedVisibility();
+        applySettings();
+    });
+}
+if (fixedNoiseSeedInput) {
+    fixedNoiseSeedInput.addEventListener('change', () => applySettingsDebounced());
+}
+
+function updateFixedNoiseSeedVisibility() {
+    if (fixedNoiseSeedValueGroup) {
+        fixedNoiseSeedValueGroup.classList.toggle('hidden', !(fixedNoiseSeedEnabledCheckbox && fixedNoiseSeedEnabledCheckbox.checked));
+    }
 }
 if (diagnosticModeCheckbox) {
     diagnosticModeCheckbox.addEventListener('change', () => applySettings());

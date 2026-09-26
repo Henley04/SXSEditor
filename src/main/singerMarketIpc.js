@@ -600,7 +600,7 @@ async function errorPayload(err, diagProvider = diagnoseNetwork) {
 function registerSingerMarketIpc() {
   // Build marker: makes it instantly verifiable in the main-process log that
   // the running app includes the timeout/region-diagnostics code.
-  console.log('[SingerMarket] main build 2026-09-26.2 (timeouts + region diagnostics)');
+  console.log('[SingerMarket] main build 2026-09-26.3 (licenses API + upload license field)');
 
   // ----- Auth -----
   ipcMain.handle('singer-market:register', async (event, { username, password }) => {
@@ -729,6 +729,22 @@ function registerSingerMarketIpc() {
     }
   });
 
+  // ----- Licenses -----
+  // License catalog (13 presets + optional custom slot). Used by the upload
+  // dialog's license selector and shown as metadata on file detail views.
+  ipcMain.handle('singer-market:licenses', async () => {
+    try {
+      const res = await request('GET', '/api/licenses');
+      const data = tryParseJson(res.body) || {};
+      if (res.status >= 200 && res.status < 300) {
+        return { success: true, data };
+      }
+      return { success: false, error: extractError(data, `Licenses fetch failed (HTTP ${res.status})`) };
+    } catch (err) {
+      return await errorPayload(err);
+    }
+  });
+
   // ----- Upload -----
   // The file is streamed from disk between small multipart prefix/suffix
   // buffers, so even tens-of-MB .sxssinger files never double the memory.
@@ -738,7 +754,7 @@ function registerSingerMarketIpc() {
     }
     let fileStream = null;
     try {
-      const { filePath, description, tags, visibility } = payload;
+      const { filePath, description, tags, visibility, license } = payload;
       if (!filePath) return { success: false, error: 'Missing file path' };
 
       const fileStat = await fs.promises.stat(filePath);
@@ -748,6 +764,9 @@ function registerSingerMarketIpc() {
       if (description) fields.description = description;
       if (tags) fields.tags = tags;
       if (visibility) fields.visibility = visibility;
+      // `license` is accepted server-side as an alias of license_key
+      // (e.g. "cc_by_4_0"). See docs/dev/singer-market.html.
+      if (license) fields.license = license;
 
       const { prefix, suffix, contentType } = buildMultipartParts(fields, {
         filename,
