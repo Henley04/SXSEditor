@@ -236,7 +236,7 @@ For most users, **Euler** is the best choice for preview (fast) and **Heun** or 
 
 ### What is Dynamic Thresholding?
 
-Dynamic Thresholding is a per-frame percentile clipping technique (arXiv:2507.08965) that suppresses outlier mel bins during diffusion sampling, reducing artifacts without sacrificing detail. The percentile is adjustable (0.9–0.999); higher values preserve more detail, lower values are more aggressive at suppressing artifacts.
+Dynamic Thresholding is a per-frame percentile clipping technique (Imagen, arXiv:2205.11487) that suppresses outlier mel bins during diffusion sampling, reducing artifacts without sacrificing detail. The percentile is adjustable (0.9–0.999); higher values preserve more detail, lower values are more aggressive at suppressing artifacts.
 
 ### Why was the default sample rate changed to 48 kHz?
 

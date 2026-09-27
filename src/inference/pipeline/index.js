@@ -587,9 +587,26 @@ class OnnxSVSPipeline {
     _buildVocalSegments(notes, bpm) { return this._audioSegmentation.buildVocalSegments(notes, bpm); }
     _splitLongRestRegions(notes, bpm) { return this._audioSegmentation.splitLongRestRegions(notes, bpm); }
     _hashArray(arr) { return this._audioSegmentation.hashArray(arr); }
-    _computeSynthCacheKey(notes, bpm, options) { return this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this)); }
-    _computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) { return this._audioSegmentation.computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount); }
+    _computeSynthCacheKey(notes, bpm, options) {
+        const base = this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this));
+        // seed 与 qdrift 改变合成结果，但 audioSegmentation 不感知 pipeline 状态，
+        // 无法纳入 base 键 —— 在此统一追加，覆盖全曲/分段/chunk 各级缓存的派生键：
+        //   - seed：CLI --seed / 固定种子设置用于精度与 EP 的 A/B 对比，换 seed 后
+        //     初始噪声不同，缓存键不含 seed 会命中上一次的音频，对比结论失真。
+        //   - qdrift：Q-Drift 开启时强制改写 solver/steps/CFG/rescale 并关闭 CFG
+        //     调度、动态阈值、SDEdit，开关后必须失效旧缓存。
+        const seedPart = this._diffusion && this._diffusion.getNoiseSeed() != null
+            ? this._diffusion.getNoiseSeed()
+            : 'auto';
+        return `${base}_sd${seedPart}_qd${this._currentQDriftEnabled ? 1 : 0}`;
+    }
+    _computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
+        // 复用 _computeSynthCacheKey（已含 seed/qdrift 后缀）
+        const base = this._computeSynthCacheKey(segNotes, bpm, options);
+        return `${base}_sb${segStartBeat}_fs${segF0Shift}_pt${ptFrameCount || 0}`;
+    }
     _median(arr) { return this._audioSegmentation.median(arr); }
+    _isRestNote(note) { return this._audioSegmentation._isRestNote(note); }
 
     /**
      * Diffusion can produce non-zero rest mel even with pitch/F0=0. Vocos then
@@ -603,11 +620,11 @@ class OnnxSVSPipeline {
         const fadeSamples = Math.max(1, Math.round(0.015 * SAMPLE_RATE));
         const intervals = [];
         for (const note of notes) {
-            const lyric = String(note.lyric || '').trim();
-            // <AP> is audible aspiration even when its score pitch is zero.
-            const isRest = lyric !== '<AP>' && (note.pitch <= 0 || note.noteType === 1
-                || lyric === '<SP>');
-            if (isRest) continue;
+            // 统一使用与 region 切分（AudioSegmentation._isRestNote）相同的休止
+            // 判据 —— 旧内联判据把"空歌词的非延音音符"当非休止保留，而 region
+            // 切分阶段把它当休止排除：两侧结论相反会导致切分与静音阶段行为
+            // 不一致（切段排除了它、静音阶段又保留它，或反过来）。
+            if (this._isRestNote(note)) continue;
             const rawStart = Math.round((note.start - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE);
             const rawEnd = Math.round((note.start + note.duration - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE);
             const start = Math.max(0, rawStart);
@@ -2943,7 +2960,7 @@ class OnnxSVSPipeline {
             cfgStrengthStart: firstOpts.cfgStrengthStart ?? null,
             keyframes: firstOpts.cfgScheduleKeyframes ?? null,
         };
-        // Dynamic thresholding (arXiv:2507.08965): per-frame percentile clipping
+        // Dynamic thresholding (Imagen, arXiv:2205.11487): per-frame percentile clipping
         this._currentDynamicThresholdOpts = firstOpts.dynamicThresholdEnabled
             ? { enabled: true, percentile: firstOpts.dynamicThresholdPercentile ?? 0.995 }
             : null;
@@ -3485,6 +3502,18 @@ class OnnxSVSPipeline {
         }
 
         // ===== Phase 4: 混合所有分片音频 =====
+        // 完整性自检（与 runDiffusionLoopChunked 末尾的断言等价）：某个 region 若
+        // 因 chunkPlan 非单调 / vocoder 提前返回导致 committedFrames 未达
+        // totalFrames，对应区间会在 segAudio 里保持全零 → 静音，静默失败比报错
+        // 更难排查。混合前显式断言。
+        for (const p of prepared) {
+            if (p.committedFrames !== p.totalFrames) {
+                throw new Error(
+                    `Multi-stream synthesis incomplete: fragment=${p.fragIdx} region=${p.regionIdx} ` +
+                    `committed ${p.committedFrames}/${p.totalFrames} frames`
+                );
+            }
+        }
         const mixedAudio = new Float32Array(totalMixedSamples);
         for (const p of prepared) {
             // Enforce score silence in the stored waveform too. Streaming callbacks
@@ -3566,7 +3595,7 @@ class OnnxSVSPipeline {
             cfgStrengthStart: options.cfgStrengthStart ?? null,
             keyframes: options.cfgScheduleKeyframes ?? null,
         };
-        // Dynamic thresholding (arXiv:2507.08965): per-frame percentile clipping
+        // Dynamic thresholding (Imagen, arXiv:2205.11487): per-frame percentile clipping
         // of CFG-predicted mel before rescale. Prevents over-exposure at high CFG.
         this._currentDynamicThresholdOpts = options.dynamicThresholdEnabled
             ? { enabled: true, percentile: options.dynamicThresholdPercentile ?? 0.995 }

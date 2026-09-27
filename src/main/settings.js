@@ -247,7 +247,7 @@ function loadSettings() {
     _settingsCache.exportCfgScheduleKeyframes = null;
   }
 
-  // ===== Dynamic Thresholding (arXiv:2507.08965) =====
+  // ===== Dynamic Thresholding (Imagen, arXiv:2205.11487) =====
   // Per-frame percentile clipping of CFG-predicted mel before rescale.
   // Prevents over-exposure artifacts at high CFG strengths.
   // previewDynamicThresholdEnabled / exportDynamicThresholdEnabled: boolean (default false)

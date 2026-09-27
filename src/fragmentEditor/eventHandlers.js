@@ -99,6 +99,9 @@ export { history };
 // 缓存 canvas 的 bounding rect，避免每个 mousemove 事件都触发 layout read。
 // 在 scroll/resize/drag 结束时通过 _invalidateCanvasRect() 失效。
 let _canvasRectCache = null;
+// 播放头拖拽前的播放状态：mousedown 播放中 → 暂停并记住，mouseup/leave 一次性
+// seek 回新位置恢复播放（拖拽期间不反复 stop/restart 音频源）。
+let _wasPlayingBeforePlayheadDrag = false;
 function _getCanvasRect() {
   if (!_canvasRectCache) {
     _canvasRectCache = canvas.getBoundingClientRect();
@@ -1836,14 +1839,19 @@ export function setupEventListeners() {
         const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
         const newStartTime = Math.max(0, (beats / bpm) * 60);
         setFragmentPlayStartPosition(newStartTime);
-
+        // 无论是否播放中，统一进入 playhead 拖拽模式：
+        // 旧实现播放中走 seekFragmentPlayback 且不设 dragMode —— mousemove 的
+        // playhead 分支永不触发（按住拖动完全不跟手），且每次移动都完整
+        // stop/restart 音频源（爆音/卡顿）。现对齐主页面时间轴交互：
+        // mousedown 暂停并记住状态，拖拽期间只更新视觉，mouseup 一次性 seek。
+        setDragMode('playhead');
         if (getFragmentIsPlaying()) {
-          // 播放中拖拽 → 跳转到新位置
-          seekFragmentPlayback(newStartTime);
+          _wasPlayingBeforePlayheadDrag = true;
+          stopFragmentPlayback();
         } else {
-          setDragMode('playhead');
-          render();
+          _wasPlayingBeforePlayheadDrag = false;
         }
+        render();
         return;
       }
     }
@@ -2176,9 +2184,15 @@ export function setupEventListeners() {
       return;
     }
 
-    // 播放头拖拽结束
+    // 播放头拖拽结束：播放前处于播放态则从新位置恢复播放（一次性 seek，
+    // 拖拽期间音频源未被反复重启）。合成中 seek 走 pendingSeek 分支，
+    // 合成完成后从新位置自动播放。
     if (getDragMode() === 'playhead') {
       setDragMode(null);
+      if (_wasPlayingBeforePlayheadDrag) {
+        _wasPlayingBeforePlayheadDrag = false;
+        seekFragmentPlayback(getFragmentPlayStartPosition());
+      }
       render();
       return;
     }
@@ -2289,9 +2303,14 @@ export function setupEventListeners() {
       setIsBoxSelecting(false);
       finalizeBoxSelection();
     }
-    // 播放头拖拽中离开 canvas → 结束拖拽
+    // 播放头拖拽中离开 canvas → 结束拖拽；播放前处于播放态同样恢复播放，
+    // 否则音频停在暂停态且无提示（拖拽被 mouseleave 中断）。
     if (getDragMode() === 'playhead') {
       setDragMode(null);
+      if (_wasPlayingBeforePlayheadDrag) {
+        _wasPlayingBeforePlayheadDrag = false;
+        seekFragmentPlayback(getFragmentPlayStartPosition());
+      }
     }
     if (getDragMode() === 'pitch-brush' && getIsBrushDrawing() && getCurrentBrushStroke()) {
       if (getCurrentBrushStroke().points.length >= 2) {

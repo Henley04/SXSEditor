@@ -106,6 +106,9 @@ class Diffusion {
         // 只有在做精度/EP 对比测量时才注入种子，否则两条路径的初始噪声不同，
         // 测出来的差异会被「换种子」本身（实测 ~15 dB LSD）完全淹没。
         this._rng = null;
+        // 记录当前生效的种子（null = 随机），供合成缓存键纳入 seed 维度：
+        // 换 seed 后初始噪声不同，缓存键不含 seed 会命中上一次的音频。
+        this._noiseSeed = null;
     }
 
     /**
@@ -114,7 +117,8 @@ class Diffusion {
      */
     setNoiseSeed(seed) {
         const n = Number(seed);
-        if (!Number.isFinite(n)) { this._rng = null; return; }
+        if (!Number.isFinite(n)) { this._rng = null; this._noiseSeed = null; return; }
+        this._noiseSeed = n >>> 0;
         let a = n >>> 0;
         this._rng = () => {
             a = (a + 0x6D2B79F5) >>> 0;
@@ -123,6 +127,14 @@ class Diffusion {
             t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
             return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
         };
+    }
+
+    /**
+     * 当前生效的噪声种子（null = 随机 Math.random）。
+     * @returns {number|null}
+     */
+    getNoiseSeed() {
+        return this._noiseSeed;
     }
 
     /**
@@ -843,7 +855,7 @@ class Diffusion {
                 cfgAdjMean += cfgDelta / n;
                 cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
             }
-            // Dynamic thresholding (arXiv:2507.08965): clip extreme CFG values
+            // Dynamic thresholding (Imagen, arXiv:2205.11487): clip extreme CFG values
             // per-frame before rescale. Prevents over-exposure artifacts from
             // large cond-uncond divergence at high CFG strengths.
             // NOTE: Welford cfgAdjM2 above was accumulated on pre-threshold cfgVal,
@@ -1198,6 +1210,11 @@ class Diffusion {
         const safeChunk = Math.max(50, Math.floor(chunkFrames));
         let safeOverlap = Math.max(0, Math.floor(overlapFrames));
         if (safeOverlap >= safeChunk) safeOverlap = Math.floor(safeChunk / 2);
+        // 防死循环钳制：overlap ≥ 0.75×chunk 时，F0 边界搜索下界
+        // lo = chunkStart + max(0.75·chunk, chunk − overlap) ≤ framePos，
+        // 边界可被选为 framePos 本身 → 状态不变 → while 死循环挂死主进程。
+        // 将 overlap 压到 chunk 的 1/4 以下即可结构性地排除该区间。
+        if (safeOverlap * 4 >= safeChunk * 3) safeOverlap = Math.floor(safeChunk / 4);
         if (safeChunk >= totalFrames) return null;
         // safeOverlap === 0 时无交叉淡入淡出
         if (safeOverlap < 1) safeOverlap = 0;
@@ -1221,7 +1238,21 @@ class Diffusion {
         const specs = [];
         let framePos = 0;
         let chunkIdx = 0;
+        // 兜底：正常情况下每轮 framePos 严格前进。最小前进量：
+        //   非 F0 路径 = safeChunk - safeOverlap（固定步长）
+        //   F0 搜索路径 ≥ minBeats - safeOverlap（边界下界 chunkStart+minBeats）
+        // 超限说明规划异常，强制退出而不是挂死主进程。
+        const minAdvance = Math.max(1,
+            (canSearch
+                ? Math.max(Math.floor(safeChunk * 0.75), safeChunk - safeOverlap)
+                : safeChunk) - safeOverlap);
+        const maxIters = Math.ceil(totalFrames / minAdvance) + 8;
+        let iterCount = 0;
         while (framePos < totalFrames) {
+            if (++iterCount > maxIters) {
+                console.error(`[DiffusionChunk] _planChunks exceeded maxIters=${maxIters}, aborting plan (totalFrames=${totalFrames}, chunk=${safeChunk}, overlap=${safeOverlap})`);
+                break;
+            }
             const isFirst = chunkIdx === 0;
             const chunkStart = isFirst ? 0 : Math.max(0, framePos - safeOverlap);
             const defaultChunkEnd = Math.min(chunkStart + safeChunk, totalFrames);
@@ -1232,7 +1263,9 @@ class Diffusion {
             } else if (canSearch) {
                 // Task 15: search [chunkStart + minBeats, chunkStart + maxBeats]
                 // for the boundary with smallest |f0Slope[boundary]|.
-                const lo = Math.max(chunkStart + minBeats, chunkStart + 1);
+                // 结构保证：下界必须严格大于当前进度 framePos，否则边界可能
+                // 被选为 framePos 本身 → framePos 不前进 → while 死循环。
+                const lo = Math.max(chunkStart + minBeats, chunkStart + 1, framePos + 1);
                 const hi = Math.min(chunkStart + maxBeats, totalFrames - 1);
                 let bestBoundary = defaultChunkEnd;
                 let bestSlope = Infinity;
@@ -1244,7 +1277,8 @@ class Diffusion {
                         bestBoundary = b;
                     }
                 }
-                chunkEnd = bestBoundary;
+                // lo > hi（搜索区塌缩）时回退到默认边界，保证 chunkEnd > framePos。
+                chunkEnd = (lo <= hi) ? bestBoundary : defaultChunkEnd;
             } else {
                 chunkEnd = defaultChunkEnd;
             }

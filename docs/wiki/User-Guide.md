@@ -764,7 +764,7 @@ These settings only affect the NPU path. DirectML and CPU paths are unaffected.
 
 #### Dynamic Thresholding
 
-Per-frame percentile clipping (arXiv:2507.08965) that suppresses outlier mel bins during diffusion sampling, reducing artifacts without sacrificing detail.
+Per-frame percentile clipping (Imagen, arXiv:2205.11487) that suppresses outlier mel bins during diffusion sampling, reducing artifacts without sacrificing detail.
 
 | Parameter | Default | Range | Description |
 |-----------|---------|-------|-------------|

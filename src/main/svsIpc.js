@@ -418,7 +418,16 @@ function registerSvsIpc() {
     const win = event.sender;
     const opts = options || {};
     opts.language = language; // 用于缓存 key 区分（避免命中错误模型的结果）
+    // 进度推送节流：与 svs:synthesize 一致（100ms / 2% 变化阈值）。长合成时
+    // diffusion 每步都回调，无节流会形成 IPC 风暴（每秒数百次 win.send +
+    // Float32Array 之外的序列化开销），拖慢主进程与渲染进程。
+    let lastProgressSentAt = 0;
+    let lastProgressValue = -1;
     opts.onProgress = (progress) => {
+      const now = Date.now();
+      if (progress < 100 && now - lastProgressSentAt < 100 && Math.abs(progress - lastProgressValue) < 2) return;
+      lastProgressSentAt = now;
+      lastProgressValue = progress;
       try {
         if (!win.isDestroyed()) {
           win.send('fragment-svs:progress', { progress });

@@ -150,7 +150,7 @@ export default {
       previewCfgScheduleKeyframes: '调度关键帧（预览）',
       previewCfgScheduleKeyframesHint: '逗号分隔的 step:value 对，例如 "0:1.5,16:3.0,31:3.0"。关键帧间线性插值。仅 Custom 模式生效。',
       previewCfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
-      // Dynamic thresholding (arXiv:2507.08965)
+      // Dynamic thresholding (Imagen, arXiv:2205.11487)
       dynamicThresholdEnabled: '动态阈值截断',
       dynamicThresholdEnabledHint: '在 CFG 合并后对 mel 逐帧分位数截断，抑制高 CFG 强度下的过度曝光伪影。',
       dynamicThresholdPercentile: '截断分位数',
@@ -788,7 +788,7 @@ export default {
     cfgScheduleKeyframes: '调度关键帧',
     cfgScheduleKeyframesHint: '逗号分隔的 step:value 对，例如 "0:1.5,16:3.0,31:3.0"。关键帧间线性插值。仅 Custom 模式生效。',
     cfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
-    // Dynamic thresholding (arXiv:2507.08965)
+    // Dynamic thresholding (Imagen, arXiv:2205.11487)
     dynamicThresholdEnabled: '动态阈值截断',
     dynamicThresholdEnabledHint: '在 CFG 合并后对 mel 逐帧分位数截断，抑制高 CFG 强度下的过度曝光伪影。',
     dynamicThresholdPercentile: '截断分位数',

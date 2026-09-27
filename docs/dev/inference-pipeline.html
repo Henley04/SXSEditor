@@ -252,8 +252,8 @@ Float32Array PCM audio (24kHz model rate, output upsampled to 48kHz)</code></pre
         <span data-lang="en">Dynamic Thresholding</span>
         <span data-lang="zh">动态阈值</span>
       </h3>
-      <p data-lang="en">Per-frame quickselect percentile clipping (arXiv:2507.08965) is applied after CFG combine. The percentile is configurable (0.9–0.999). This technique clips extreme values in the diffusion output to a percentile band and then linearly remaps the clipped values back, preventing rare outlier frames from dominating the audio. It is integrated into both the DML (<code>nativeSvsPipeline.js</code>) and WebNN diffusion paths.</p>
-      <p data-lang="zh">在 CFG 合并之后，应用逐帧 quickselect 百分位裁剪（arXiv:2507.08965）。百分位可配置（0.9–0.999）。该技术将扩散输出中的极值裁剪到百分位区间内，再将裁剪后的值线性重映射回去，防止罕见的离群帧主导音频。已集成到 DML（<code>nativeSvsPipeline.js</code>）与 WebNN 两条扩散路径中。</p>
+      <p data-lang="en">Per-frame interpolated percentile clipping (Imagen, arXiv:2205.11487) is applied after CFG combine. The percentile is configurable (0.9–0.999). This technique clips extreme values in the diffusion output to a percentile band and then linearly remaps the clipped values back, preventing rare outlier frames from dominating the audio. It is integrated into both the DML (<code>nativeSvsPipeline.js</code>) and WebNN diffusion paths.</p>
+      <p data-lang="zh">在 CFG 合并之后，应用逐帧插值百分位裁剪（Imagen, arXiv:2205.11487）。百分位可配置（0.9–0.999）。该技术将扩散输出中的极值裁剪到百分位区间内，再将裁剪后的值线性重映射回去，防止罕见的离群帧主导音频。已集成到 DML（<code>nativeSvsPipeline.js</code>）与 WebNN 两条扩散路径中。</p>
 
       <h3 id="cfg-schedule">
         <span data-lang="en">CFG Schedule</span>

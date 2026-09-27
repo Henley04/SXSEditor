@@ -138,7 +138,8 @@ function interpolateKeyframes(keyframes, step, start, end, totalSteps) {
 }
 
 /**
- * Dynamic Thresholding for CFG (arXiv:2507.08965).
+ * Dynamic Thresholding for CFG (Imagen, arXiv:2205.11487, Saharia et al. 2022；
+ * 后被 SD 等各类 CFG 工作沿用)。
  *
  * 在 CFG 合并后，对 cfgVal 施加动态阈值截断：
  *   1. 计算 cfgPredBuf 的绝对值分位数 p_dyn（默认 99.5%）。
@@ -151,8 +152,11 @@ function interpolateKeyframes(keyframes, step, start, end, totalSteps) {
  * 与 cfgRescale 的区别：cfgRescale 通过方差匹配全局缩放；
  * dynamic threshold 通过分位数截断局部极端值。两者可叠加使用。
  *
- * 采用 partial selection 算法（O(n) 平均），避免全排序的 O(n log n) 开销。
- * 在 mel 维度上操作（128 维），而非全帧合并，以保持时间局部性。
+ * 分位数在 mel 维度上估计（128 维/帧，保持时间局部性），并使用
+ * 线性插值（percentile × (n-1)，取相邻两 rank 插值）而不是 floor 取整：
+ * floor(percentile × 128) 在 percentile ∈ [0.99219, 1.0) 时恒等于 127
+ * （帧内绝对值最大值的 rank），threshold = max(mean, 最大值) = 最大值，
+ * 截断分支永不触发 → 整个功能静默空转。插值使分位数在 128 个点之间连续。
  *
  * @param {Float32Array} cfgPredBuf - CFG 调整后的预测值缓冲区
  * @param {number} targetLen - targetLen = totalFrames * MEL_DIM
@@ -167,7 +171,7 @@ function applyDynamicThreshold(cfgPredBuf, targetLen, melDim, percentile) {
     const numFrames = Math.floor(targetLen / melDim);
     if (numFrames === 0) return;
 
-    // 临时缓冲区用于 partial selection
+    // 排序缓冲区用于插值分位数（n=128，排序开销可忽略）
     const absVals = new Float32Array(melDim);
 
     for (let f = 0; f < numFrames; f++) {
@@ -185,8 +189,8 @@ function applyDynamicThreshold(cfgPredBuf, targetLen, melDim, percentile) {
         }
         const mean = sum / melDim;
 
-        // Partial selection 找分位数
-        const threshold = Math.max(mean, _partialSelect(absVals, percentile));
+        // 线性插值分位数（见函数头注释：floor 取整在高分位区间是 no-op）
+        const threshold = Math.max(mean, _quantileInterpolated(absVals, percentile));
 
         // 硬截断：超过 ±threshold 的值压缩到 ±threshold（保留符号）
         if (threshold < 1e-8) continue; // 全零帧跳过
@@ -201,48 +205,26 @@ function applyDynamicThreshold(cfgPredBuf, targetLen, melDim, percentile) {
 }
 
 /**
- * Partial selection (quickselect) 找到数组中第 k 小的元素。
- * 平均 O(n)，最坏 O(n²)（对 melDim=128 可忽略）。
- * 原地修改输入数组（partial sort 副作用）。
+ * 线性插值分位数：rank = percentile × (n-1)，在相邻两个次序统计量之间
+ * 线性插值。排序副本（不改入参顺序——absVals 每帧重建，原地排序亦可，
+ * 但保持语义清晰：返回值基于排序结果）。
  *
- * @param {Float32Array} arr - 输入数组（会被部分重排）
+ * @param {Float32Array} arr - 输入数组（会被原地排序）
  * @param {number} percentile - 0-1 范围
- * @returns {number} 分位数对应的值
+ * @returns {number} 插值分位数
  */
-function _partialSelect(arr, percentile) {
+function _quantileInterpolated(arr, percentile) {
     const n = arr.length;
     if (n === 0) return 0;
     if (n === 1) return arr[0];
-
-    const k = Math.min(n - 1, Math.max(0, Math.floor(percentile * n)));
-    return _quickselect(arr, 0, n - 1, k);
-}
-
-function _quickselect(arr, lo, hi, k) {
-    while (lo < hi) {
-        // Partition (Lomuto scheme)
-        const pivot = arr[hi];
-        let i = lo;
-        for (let j = lo; j < hi; j++) {
-            if (arr[j] <= pivot) {
-                const tmp = arr[i];
-                arr[i] = arr[j];
-                arr[j] = tmp;
-                i++;
-            }
-        }
-        const tmp = arr[i];
-        arr[i] = arr[hi];
-        arr[hi] = tmp;
-
-        if (i === k) return arr[k];
-        if (i < k) {
-            lo = i + 1;
-        } else {
-            hi = i - 1;
-        }
-    }
-    return arr[k];
+    // Float32Array.prototype.sort 默认即数值升序
+    arr.sort();
+    const rank = percentile * (n - 1);
+    const lo = Math.floor(rank);
+    const hi = Math.ceil(rank);
+    if (lo === hi) return arr[lo];
+    const t = rank - lo;
+    return arr[lo] + (arr[hi] - arr[lo]) * t;
 }
 
 module.exports = {

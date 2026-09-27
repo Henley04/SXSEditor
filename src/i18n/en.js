@@ -150,7 +150,7 @@ export default {
       previewCfgScheduleKeyframes: 'Schedule Keyframes (Preview)',
       previewCfgScheduleKeyframesHint: 'Comma-separated step:value pairs, e.g. "0:1.5,16:3.0,31:3.0". Linearly interpolated between keyframes. Only used in Custom mode.',
       previewCfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
-      // Dynamic thresholding (arXiv:2507.08965)
+      // Dynamic thresholding (Imagen, arXiv:2205.11487)
       dynamicThresholdEnabled: 'Dynamic Thresholding',
       dynamicThresholdEnabledHint: 'Per-frame percentile clipping of CFG-predicted mel after CFG combine, suppressing over-exposure artifacts at high CFG strengths.',
       dynamicThresholdPercentile: 'Clipping Percentile',
@@ -788,7 +788,7 @@ export default {
     cfgScheduleKeyframes: 'Schedule Keyframes',
     cfgScheduleKeyframesHint: 'Comma-separated step:value pairs, e.g. "0:1.5,16:3.0,31:3.0". Linearly interpolated between keyframes. Only used in Custom mode.',
     cfgScheduleKeyframesPlaceholder: '0:1.5,16:3.0,31:3.0',
-    // Dynamic thresholding (arXiv:2507.08965)
+    // Dynamic thresholding (Imagen, arXiv:2205.11487)
     dynamicThresholdEnabled: 'Dynamic Thresholding',
     dynamicThresholdEnabledHint: 'Per-frame percentile clipping of CFG-predicted mel after CFG combine, suppressing over-exposure artifacts at high CFG strengths.',
     dynamicThresholdPercentile: 'Clipping Percentile',

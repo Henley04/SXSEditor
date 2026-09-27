@@ -255,9 +255,11 @@ dom.btnImportMidi.addEventListener('click', handleImportMidi);
 
 // Fragment canvas mouse events
 dom.fragmentCanvas.addEventListener('mousedown', (e) => {
+  // 统一使用虚拟时间轴坐标系：canvas 是视口尺寸、绘制时 ctx.translate(-scrollX, -scrollY)，
+  // 事件坐标必须加回滚动偏移，否则滚动后播放头/分片/伴奏的命中测试全部错位。
   const rect = _getFragmentCanvasRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  const x = e.clientX - rect.left + state.fragmentScrollX;
+  const y = e.clientY - rect.top + state.fragmentScrollY;
 
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
@@ -347,9 +349,9 @@ dom.fragmentCanvas.addEventListener('mousemove', (e) => {
 
   if (!state.dragState) {
     // 鼠标悬停在 playhead 上时：显示 ew-resize 光标 + 时间 tooltip
-    const rect = _getFragmentCanvasRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // 虚拟坐标系（与 mousedown/绘制侧一致），漏加 scrollX 会导致滚动后命中错位
+    const x = _mouseToCanvasX(e);
+    const y = _mouseToCanvasY(e);
     const playheadX = _getCurrentPlayheadX();
     const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
       && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
@@ -487,9 +489,9 @@ dom.fragmentCanvas.addEventListener('mouseleave', () => {
 });
 
 dom.fragmentCanvas.addEventListener('dblclick', (e) => {
-  const rect = _getFragmentCanvasRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  // 虚拟坐标系（与 mousedown/绘制侧一致）
+  const x = _mouseToCanvasX(e);
+  const y = _mouseToCanvasY(e);
 
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
@@ -516,9 +518,9 @@ dom.fragmentCanvas.addEventListener('dblclick', (e) => {
 
 dom.fragmentCanvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
-  const rect = _getFragmentCanvasRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  // 虚拟坐标系（与 mousedown/绘制侧一致）
+  const x = _mouseToCanvasX(e);
+  const y = _mouseToCanvasY(e);
 
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();

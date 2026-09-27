@@ -1261,6 +1261,47 @@ describe('分段流式推理 (Segmented Streaming Inference) - 全面测试', ()
         expect(spec.currentChunkFrames).to.equal(spec.chunkEnd - spec.chunkStart);
       }
     });
+
+    // 回归：overlap ∈ [0.75c, c) 时 F0 边界搜索下界 lo ≤ framePos，
+    // 边界可被选为 framePos 本身 → 状态不变 → while 死循环挂死主进程。
+    // 修复后：入口钳制 overlap < 0.75c + 搜索下界含 framePos+1 + 迭代上限兜底。
+    it('危险 overlap 区间 [0.75c, c) 不死循环，chunkStart 严格递增（回归）', () => {
+      // 旧代码死循环组合（settings.html 滑块可达）：chunk=100, overlap=80/90 等
+      const dangerous = [
+        [100, 80], [100, 90],
+        [150, 120], [150, 130], [150, 140],
+        [200, 150], [200, 160], [200, 170], [200, 180], [200, 190],
+        [250, 190], [250, 200],
+      ];
+      for (const [chunk, overlap] of dangerous) {
+        const f0Slope = new Float32Array(2000); // 全 0 斜率 → F0 搜索分支激活
+        const plan = diffusion._planChunks(2000, chunk, overlap, f0Slope);
+        expect(plan, `chunk=${chunk}, overlap=${overlap}`).to.not.be.null;
+        expect(plan.specs.length, `chunk=${chunk}, overlap=${overlap} spec count`).to.be.at.least(2);
+        for (let i = 0; i < plan.specs.length - 1; i++) {
+          expect(plan.specs[i + 1].chunkStart, `chunk=${chunk}, overlap=${overlap} spec[${i}]`).to.be.greaterThan(plan.specs[i].chunkStart);
+        }
+        // 规划必须完整覆盖全部帧（兜底上限不得提前截断）
+        expect(plan.specs[plan.specs.length - 1].chunkEnd, `chunk=${chunk}, overlap=${overlap} coverage`).to.equal(2000);
+        expect(plan.specs[plan.specs.length - 1].isLast).to.equal(true);
+      }
+    });
+
+    it('F0 搜索区塌缩时回退默认边界，不产生空 chunk', () => {
+      // 构造 canSearch=true 但搜索区塌缩的场景：f0Slope 全 0 时
+      // bestBoundary 取第一个候选（lo），修复后 lo 含 framePos+1，
+      // chunkEnd 必须 > framePos（否则死循环）。
+      const slope = new Float32Array(2000); // 全 0 斜率 → 首个候选即最优
+      const plan = diffusion._planChunks(2000, 100, 80, slope);
+      expect(plan).to.not.be.null;
+      for (let i = 0; i < plan.specs.length; i++) {
+        const spec = plan.specs[i];
+        expect(spec.currentChunkFrames).to.be.greaterThan(0);
+        if (i > 0) {
+          expect(spec.chunkEnd).to.be.greaterThan(plan.specs[i - 1].chunkEnd);
+        }
+      }
+    });
   });
 
   // -------------------------------------------------------------------------

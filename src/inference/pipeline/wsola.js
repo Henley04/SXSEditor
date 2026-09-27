@@ -201,20 +201,26 @@ function wsolaCrossfadeMel(prevTail, currHead, overlapFrames, melDim) {
 
     // Per-frame best alignment via cosine similarity.
     // Search window: ±O/4 frames (clamped to >=1).
+    // 单调约束加在对齐源帧索引 j = i + bestOff 上（j 序列单调非减）：
+    // 旧实现对每帧独立挑 bestOff，相邻帧挑到不同峰时 j 会回退/跳跃 →
+    // 重复或跳过若干帧 → 局部时间伸缩/压缩（±O/4 帧可达 ±240ms 的非单调
+    // warp），与文件头 wsolaCrossfade 的时域论证矛盾。j 非减允许 off 每帧
+    // 至多回退 1（边界处合法的整体相位校正仍可行），但杜绝来回跳跃。
     const searchFrames = Math.max(1, Math.floor(O / 4));
     const alignedCurr = new Float32Array(O * md);
 
+    let minJ = 0; // 上一帧已选的 j（单调下界）
     for (let i = 0; i < O; i++) {
         const refBase = (overlapStart + i) * md;
         let refNorm = 0;
         for (let d = 0; d < md; d++) refNorm += prevTail[refBase + d] * prevTail[refBase + d];
         refNorm = Math.sqrt(refNorm);
 
-        let bestOff = 0;
+        let bestJ = -1;
         let bestSim = -Infinity;
-        for (let off = -searchFrames; off <= searchFrames; off++) {
-            const j = i + off;
-            if (j < 0 || j >= O || j >= n2) continue;
+        for (let j = minJ; j < O && j < n2; j++) {
+            const off = j - i;
+            if (off < -searchFrames || off > searchFrames) continue;
             const candBase = j * md;
             let dot = 0;
             let candNorm = 0;
@@ -226,10 +232,13 @@ function wsolaCrossfadeMel(prevTail, currHead, overlapFrames, melDim) {
             const sim = (refNorm > 1e-8 && candNorm > 1e-8) ? dot / (refNorm * candNorm) : 0;
             if (sim > bestSim) {
                 bestSim = sim;
-                bestOff = off;
+                bestJ = j;
             }
         }
-        const srcBase = (i + bestOff) * md;
+        // 候选窗塌缩的兜底（理论上不可达：minJ 恒为合法帧索引）
+        if (bestJ < 0) bestJ = Math.min(minJ, O - 1, n2 - 1);
+        minJ = bestJ;
+        const srcBase = bestJ * md;
         for (let d = 0; d < md; d++) alignedCurr[i * md + d] = currHead[srcBase + d];
     }
 

@@ -117,11 +117,21 @@ const MEASURED_EP_PATTERNS = [/dml/i, /tensorrt/i];
 /**
  * 判断该 EP 上的 Δv 统计与本校准是否匹配。
  * @param {string|null|undefined} ep - sessionEPs.diffStep 之类的 EP 标识
- * @returns {boolean} 未知（null）时按匹配处理，避免在缺少信号时误关
+ * @returns {boolean} 仅实测过的 EP（DML / TensorRT 系）返回 true。
+ *   CPU / OpenVINO / WebNN 等未实测 EP 显式返回 false：CPU 走另一套 fp16
+ *   kernel，实测 |Δv| 只有 GPU 的 1/4 ~ 1/8，套用 GPU 的 c 属于超量校正。
+ *   EP 信号完全缺失（null）时保留放行但打警告 —— 正常路径 sessionEPs 都会
+ *   记录 EP，此处仅防御性兜底，避免信号缺失把 DML 上的校正也误关。
  */
 function isEpMeasured(ep) {
-    if (!ep) return true;
+    if (!ep) {
+        console.warn('[Q-Drift] diffStep EP 信号缺失，无法核验校准匹配性，按匹配处理（请检查 sessionEPs 记录）');
+        return true;
+    }
     const s = String(ep);
+    // 显式排除已知误差量级不符 / 未实测的 EP（注意不能用 /nv/i 宽匹配，
+    // "OpenVINO" 里含 "nv"）
+    if (/cpu|openvino|webnn/i.test(s)) return false;
     return MEASURED_EP_PATTERNS.some(re => re.test(s));
 }
 

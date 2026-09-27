@@ -316,7 +316,7 @@ Detection is based on input/output tensor names and graph structure. The diffusi
 
 ### Dynamic Thresholding
 
-Per-frame percentile clipping (arXiv:2507.08965) applied during diffusion sampling. After each diffusion step, mel bins that exceed the configured percentile threshold (default 0.999, range 0.9–0.999) are clipped to the threshold value. This suppresses outlier activations that cause artifacts, without sacrificing overall spectral detail.
+Per-frame percentile clipping (Imagen, arXiv:2205.11487) applied during diffusion sampling. After each diffusion step, mel bins that exceed the configured percentile threshold (default 0.995, range 0.9–0.999) are clipped to the threshold value. This suppresses outlier activations that cause artifacts, without sacrificing overall spectral detail.
 
 The thresholding is applied in `pipeline/diffusion.js` after the CFG combine step, before accumulating the delta onto `xt`. It can be toggled and configured independently for preview and export paths.
 

@@ -2747,7 +2747,7 @@ const PAPER_GROUPS = [
         label: 'aboutPage.pgAlgo',
         items: [
             { title: 'Classifier-Free Diffusion Guidance', id: '2207.12598' },
-            { title: 'Improving Classifier-Free Guidance in Masked Diffusion: Low-Dim Theoretical Insights with High-Dim Impact', id: '2507.08965' },
+            { title: 'Photorealistic Text-to-Image Diffusion Models with Deep Language Understanding (Imagen, Dynamic Thresholding)', id: '2205.11487' },
             { title: 'STORK: Faster Diffusion and Flow Matching Sampling by Resolving Both Stiffness and Structure-Dependence', id: '2505.24210' },
             { title: 'Q-Drift', id: '2603.18095' },
             { title: 'RDSinger', id: '2410.21641' },

@@ -277,8 +277,8 @@ export const PLAYHEAD_HIT_WIDTH = 10;
 
 export function findPlayheadAt(x, y, h) {
   const playheadX = getPlayheadX();
-  const timeToShow = getFragmentIsPlaying() ? getFragmentCurrentTime() : getFragmentPlayStartPosition();
-  if (timeToShow <= 0 && !getFragmentIsPlaying()) return false;
+  // 0 位置也允许命中：排除 timeToShow<=0 会让停在开头的播放头抓不住手柄，
+  // 只能点顶部标尺（getPlayheadX 在 0 处仍是合法命中区）。
   if (y < HEADER_HEIGHT - 8 || y > h) return false;
   return Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2;
 }
