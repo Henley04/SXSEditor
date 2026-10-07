@@ -1,6 +1,7 @@
 import { state, dom } from './state.js';
 import { getOptions, saveOptions, applyPreset, resolveOptions } from './extractionOptions.js';
 import { t } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import { toggleSynth } from './synthPreview.js';
 
 /** 根据 MIDI 提取工具显示/隐藏 FCPE 参数面板 */
@@ -69,7 +70,7 @@ function bindControls() {
 
   dom.btnTogglePanel.addEventListener('click', () => {
     const collapsed = dom.extractPanel.classList.toggle('collapsed');
-    dom.btnTogglePanel.textContent = t(collapsed ? 'preprocess.expandPanel' : 'preprocess.collapsePanel');
+    setLabel(dom.btnTogglePanel, t(collapsed ? 'preprocess.expandPanel' : 'preprocess.collapsePanel'), { icon: collapsed ? 'chevron-down' : 'chevron-up' });
   });
 }
 

@@ -1992,12 +1992,16 @@ if (reEnableReminderBtn) {
 
 initUpdateSection().catch(() => {});
 
+// 版本号的唯一真源是 package.json 的 version（git tag 经 scripts/check-version.js
+// 守卫对齐，打包时由 scripts/generate-build-info.js 写入 src/build-info.json）；
+// 这里经 app:getVersion（= app.getVersion()）读取。取不到时不要写死 'v1.0.0'，
+// 那会引入第三套来源；保留 HTML 里的 'v-' 占位即可。
 (async () => {
     try {
         const version = await window.electronAPI.getAppVersion();
-        document.getElementById('settings-version').textContent = `v${version}`;
-    } catch (_) {
-        document.getElementById('settings-version').textContent = 'v1.0.0';
+        if (version) document.getElementById('settings-version').textContent = `v${version}`;
+    } catch (err) {
+        console.warn('[Settings] 读取应用版本失败：', err && err.message ? err.message : err);
     }
 })();
 

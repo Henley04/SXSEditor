@@ -1,4 +1,4 @@
-const { ipcMain } = require('electron');
+const { safeHandle } = require('./ipcSafe');
 const path = require('node:path');
 const fs = require('node:fs');
 const { Worker } = require('node:worker_threads');
@@ -355,7 +355,7 @@ async function runFcpePipeline(detector, audioData, sampleRate, bpm, options) {
 }
 
 function registerPitchMidiIpc() {
-  ipcMain.handle('extractF0:onnx', async (event, { audioData, sampleRate }) => {
+  safeHandle('extractF0:onnx', async (event, { audioData, sampleRate }) => {
     try {
       try {
         const f0Array = await extractF0ViaWorker(audioData, sampleRate || 44100);
@@ -372,7 +372,7 @@ function registerPitchMidiIpc() {
     }
   });
 
-  ipcMain.handle('extractMidi:rosvot', async (event, { audioData, sampleRate, bpm }) => {
+  safeHandle('extractMidi:rosvot', async (event, { audioData, sampleRate, bpm }) => {
     try {
       const settings = loadSettings();
       const useRosvot = settings?.useRosvot === true;
@@ -404,7 +404,7 @@ function registerPitchMidiIpc() {
     }
   });
 
-  ipcMain.handle('extractF0:basicPitch', async (event, { audioData, sampleRate, bpm }) => {
+  safeHandle('extractF0:basicPitch', async (event, { audioData, sampleRate, bpm }) => {
     try {
       const detector = await basicPitchLazy.get();
       const result = await detector.extractF0AndNotes(new Float32Array(audioData), sampleRate || 44100, bpm || 120);
@@ -415,7 +415,7 @@ function registerPitchMidiIpc() {
     }
   });
 
-  ipcMain.handle('extractMidi:fcpe', async (event, { audioData, sampleRate, bpm, options }) => {
+  safeHandle('extractMidi:fcpe', async (event, { audioData, sampleRate, bpm, options }) => {
     const sr = sampleRate || 44100;
     // Worker 优先：重采样 + ONNX 推理 + 后处理全部离开主进程，不再冻结窗口；
     // worker 不可用（spawn 失败/初始化冷却/崩溃）时回退到本进程同步执行，
@@ -441,7 +441,7 @@ function registerPitchMidiIpc() {
     }
   });
 
-  ipcMain.handle('midi:import', async () => {
+  safeHandle('midi:import', async () => {
     try {
       const { dialog } = require('electron');
       const { t } = require('./locale');
@@ -467,7 +467,7 @@ function registerPitchMidiIpc() {
     }
   });
 
-  ipcMain.handle('midi:importMultiTrack', async () => {
+  safeHandle('midi:importMultiTrack', async () => {
     try {
       const { dialog } = require('electron');
       const { t } = require('./locale');

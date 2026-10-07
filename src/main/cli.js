@@ -13,11 +13,23 @@
  *   version         输出构建信息
  *   info            输出应用/运行时/路径信息
  *   gpu             执行 GPU/DML 设备检测
+ *   winml           检测 Windows ML 插件执行提供器（实验性）
  *   models          列出 onnx_models 目录，标记缺失的必需模型
  *   settings        输出当前 settings.json
  *   init-pipeline   初始化 SVS 管线（验证全部模型可加载），输出耗时
  *   synth           运行一次最小合成，输出音频统计（不写文件）
- *                   可选：--out <path.wav> 写入 WAV 文件
+ *                   可选：--out <path.wav> --steps <N> --notes <json> --bpm <N>
+ *   synth-project   合成真实 .sxsproj 工程的指定窗口，并输出实际使用的 EP
+ *                   可选：--file <project.sxsproj>（必需）--out <path.wav> --fragment <N>
+ *                         --from <sec> --to <sec> --duration <sec> --singer <x.sxssinger>
+ *                         --precision fp32|fp16|int8 --steps <N> --sampler <name>
+ *                         --cfg <n> --cfg-rescale <n>
+ *                         --cfg-schedule constant|linear|cosine --qdrift --seed <N> --dry-run
+ *   qdrift-conds    从一个或多个 .sxsproj 导出 Q-Drift 标定条件（prompt mel + cond），
+ *                   默认写入 qdrift/conds_proj
+ *                   可选：--file <project.sxsproj>（可重复，必需）--fragment <N> --out <dir>
+ *                         --max-items-per-frag <N> --min-sec <s> --max-sec <s>
+ *                         --max-prompt-frames <N> --full-prompt-items <N> --force --dry-run
  *
  * 退出码：0=成功，1=运行时错误，2=参数错误
  */

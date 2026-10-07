@@ -1,6 +1,7 @@
-const { ipcMain, BrowserWindow } = require('electron');
+const { BrowserWindow } = require('electron');
 const { AudioOutputManager } = require('../audio/audioOutputManager');
 const { getFragmentWindows } = require('./windowManager');
+const { safeHandle } = require('./ipcSafe');
 
 let _audioManager = null;
 let _fragmentAudioManager = null;
@@ -52,7 +53,7 @@ function resetAudioManagers() {
 }
 
 function registerAudioIpc() {
-  ipcMain.handle('audio:getDevices', async () => {
+  safeHandle('audio:getDevices', async () => {
     try {
       // S13: Use sequential awaits instead of Promise.all so the shared
       // _defaultInstance isn't destroyed mid-call by whichever resolves first.
@@ -65,7 +66,7 @@ function registerAudioIpc() {
     }
   });
 
-  ipcMain.handle('audio:play', async (event, { audioData, options }) => {
+  safeHandle('audio:play', async (event, { audioData, options }) => {
     try {
       const manager = _getAudioManagerForSender(event);
       // S13: Serialize concurrent play calls on the same instance.
@@ -91,7 +92,7 @@ function registerAudioIpc() {
     }
   });
 
-  ipcMain.handle('audio:stop', async (event) => {
+  safeHandle('audio:stop', async (event) => {
     try {
       const manager = _getAudioManagerForSender(event);
       await manager.stop();
@@ -102,7 +103,7 @@ function registerAudioIpc() {
     }
   });
 
-  ipcMain.handle('audio:getPosition', async (event) => {
+  safeHandle('audio:getPosition', async (event) => {
     try {
       const manager = _getAudioManagerForSender(event);
       if (manager.isPlaying()) {
@@ -114,7 +115,7 @@ function registerAudioIpc() {
     }
   });
 
-  ipcMain.handle('audio:isAvailable', async () => {
+  safeHandle('audio:isAvailable', async () => {
     const available = await AudioOutputManager.isAvailable();
     return { available };
   });

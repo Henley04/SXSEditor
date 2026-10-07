@@ -69,6 +69,57 @@ export function setIcon(el, iconName, opts = {}) {
 }
 
 /**
+ * Update an element's label text WITHOUT destroying its hydrated icon.
+ *
+ * Why this exists: `hydrateIcons()` prepends an `<svg class="icon">` child to
+ * every `[data-icon]` element. Assigning `el.textContent = ...` replaces *all*
+ * children, so any runtime relabel (play → "合成中 42%", pause → "继续",
+ * collapse → "展开", …) silently wiped the icon while leaving the text behind.
+ * This helper writes only the text node and keeps the SVG intact.
+ *
+ * @param {HTMLElement|null} el  Target element (null-safe).
+ * @param {string} text  New label. Non-strings are coerced; null/undefined → ''.
+ * @param {object} [opts]
+ * @param {string} [opts.icon]  Icon to show. When it differs from the current
+ *   `data-icon`, the SVG is swapped in place and `data-icon` is updated so a
+ *   later `hydrateIcons()` call stays consistent. Omit to keep the icon as is.
+ * @param {number} [opts.iconSize]
+ * @param {string} [opts.iconClass]
+ * @returns {void}
+ */
+export function setLabel(el, text, opts = {}) {
+    if (!el) return;
+    const str = text == null ? '' : String(text);
+
+    if (opts.icon && el.getAttribute('data-icon') !== opts.icon) {
+        el.setAttribute('data-icon', opts.icon);
+        setIcon(el, opts.icon, { size: opts.iconSize, className: opts.iconClass });
+    }
+
+    // Prefer an explicit text slot when present (same contract as applyLocale in
+    // src/i18n/index.js), otherwise reuse/first-create a bare text node.
+    const slot = el.querySelector(':scope > [data-i18n-text]');
+    if (slot) {
+        slot.textContent = str;
+        return;
+    }
+
+    let textNode = null;
+    for (const node of el.childNodes) {
+        if (node.nodeType === Node.TEXT_NODE) {
+            textNode = node;
+            break;
+        }
+    }
+    if (!textNode) {
+        // Append (not prepend) so the text always sits after the icon.
+        textNode = document.createTextNode('');
+        el.appendChild(textNode);
+    }
+    textNode.nodeValue = str;
+}
+
+/**
  * Hydrate every `[data-icon]` element in a root subtree by prepending an SVG.
  * Use in static HTML to avoid hard-coding SVG strings inline:
  *   <button id="btn-play" data-icon="play">Play</button>

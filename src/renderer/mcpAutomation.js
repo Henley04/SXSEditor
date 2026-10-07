@@ -50,9 +50,20 @@ function fragment(f) {
   };
 }
 
+// 授权一条路径：优先按"素材文件本身"授权（走 file:authorizePath 的文件分支，
+// 扩展名必须命中白名单），只有当路径没有扩展名时才退回按父目录授权。
+// 主进程已经收紧了目录分支（必须是登记的目录），而 MCP 的导入/导出目标都是
+// .sxsproj / .wav / .mid / .lrc / .sxssinger 这类白名单扩展名，走文件分支即可，
+// 因此收紧后这些调用点依然可用。
 async function authorize(path) {
-  const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-  const r = await window.electronAPI.authorizePath(i > 0 ? path.slice(0, i) : path);
+  const hasExtension = /\.[A-Za-z0-9]{1,12}$/.test(path);
+  const target = hasExtension
+    ? path
+    : (() => {
+        const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+        return i > 0 ? path.slice(0, i) : path;
+      })();
+  const r = await window.electronAPI.authorizePath(target);
   if (!r?.success) throw new Error(r?.error || 'Path not authorized');
 }
 
@@ -333,12 +344,21 @@ async function execute(m, p = {}) {
       refreshAll();
       return snapshot();
     case 'history.undo':
-      history.undo();
-      refreshAll();
+      // undo() 失败会把命令退回 undoStack 并重抛（见 historyManager.js）。
+      // 用 try/finally 保证 UI 一定刷新，同时让错误继续抛给 MCP 调用方 ——
+      // 调用方需要知道这一步没成功，而不是收到一个"看起来成功"的快照。
+      try {
+        history.undo();
+      } finally {
+        refreshAll();
+      }
       return { canUndo: history.canUndo(), canRedo: history.canRedo() };
     case 'history.redo':
-      history.redo();
-      refreshAll();
+      try {
+        history.redo();
+      } finally {
+        refreshAll();
+      }
       return { canUndo: history.canUndo(), canRedo: history.canRedo() };
     case 'fragment.open': {
       const f = trackManager.getFragment(p.fragmentId);

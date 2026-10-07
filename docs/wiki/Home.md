@@ -67,7 +67,7 @@ See the [User Guide](User-Guide) for full details on all features.
 - [GitHub Release (latest installer)](https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
 - [GitCode Mirror (China, latest installer)](https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
 
-macOS and Linux: build from source — see the [Developer Guide](Developer-Guide).
+macOS and Linux: build from source (CPU inference only — no DirectML/Windows ML; not covered by CI, no official binaries) — see the [Developer Guide](Developer-Guide).
 
 ---
 

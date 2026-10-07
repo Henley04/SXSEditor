@@ -29,6 +29,13 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
     autoPoints.push({ time: note.start + note.duration, pitch: note.pitch, breakAfter: true });
   }
 
+  // 上述 autoPoints 全部标记 breakAfter，而 _getPitchAtTimeForFragment 的 autoPoints
+  // 分支在 breakAfter 时直接 continue，永不 return ⇒ 该分支恒返回 null。
+  // 预先判定一次，避免每帧空跑 O(P) 次迭代。
+  // 等价性：只有下标 i < len-1 且 !breakAfter 的点才可能 return 非 null，
+  // 线性版本在所有点都 breakAfter 时同样恒返回 null，故短路不改变任何返回值。
+  const autoPointsUsable = autoPoints.some((p, i) => i < autoPoints.length - 1 && !p.breakAfter);
+
   const f0Array = new Float32Array(totalFrames);
   for (let i = 0; i < totalFrames; i++) {
     const frameTimeSec = (i * SVS_HOP_SIZE) / SAMPLE_RATE;
@@ -38,7 +45,7 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
       f0Array[i] = 0;
       continue;
     }
-    let pitch = _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, frameBeat);
+    let pitch = _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, frameBeat, autoPointsUsable);
     if (note.vibrato && note.vibrato.enabled) {
       if (pitch === null) pitch = note.pitch;
       pitch += _computeVibratoOffset(note, frameBeat, bpm);
@@ -50,6 +57,48 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
     }
   }
   return f0Array;
+}
+
+/**
+ * 在按 time 升序排列的点数组中，二分查找包含 time 的区间左端索引。
+ * 语义等价于线性 `for (i) if (time >= pts[i].time && time <= pts[i + 1].time) return i`：
+ * 返回第一个满足该条件的 i；长度 < 2 或 time 落在 [pts[0].time, pts[last].time] 之外时返回 -1。
+ * 等价性关键：取「首个 pts[j].time >= time」的 j 再减 1。对 i < j - 1 必有
+ * pts[i + 1].time <= pts[j - 1].time < time，故 [j-1, j] 正是线性扫描命中的第一个区间；
+ * 重复 time 时也一致（[0,1,1,2] 查 1：线性取 i=0，此处 j=1 返回 0）。
+ * 若改用常见的 lower-bound（最后一个 <= time）写法，重复 time 时结果会不同。
+ * 与 fragmentEditor/canvasRenderer.js 的 _bisectSegmentIndex 同构（此处刻意复制而非
+ * 跨模块 import，避免渲染层模块被拉进 f0 计算路径）。
+ *
+ * NaN 等价性：NaN（以及 ±Infinity）参与任何 <、>、>= 比较结果都是 false，于是
+ *   · 线性扫描：所有区间条件都不成立，循环走完自然返回 -1（不抛错）；
+ *   · 二分（不早退时）：范围检查同样失效，j 保持初值 n，最终返回 n - 1，
+ *     调用方再去取 pts[n] 就会 TypeError。
+ * 因此这里对非有限 time 显式返回 -1，并在循环后兜住 j === n（pts 里混入 NaN
+ * time 的唯一场景），保证新旧实现在 NaN 下都不抛错且返回同一个值。
+ */
+function _bisectSegmentIndex(pts, time) {
+  const n = pts.length;
+  if (n < 2) return -1;
+  if (!Number.isFinite(time)) return -1;
+  if (time < pts[0].time || time > pts[n - 1].time) return -1;
+  let lo = 0;
+  let hi = n - 1;
+  let j = n;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (pts[mid].time >= time) { j = mid; hi = mid - 1; }
+    else lo = mid + 1;
+  }
+  // j === n 只在 pts 内含 NaN time 时出现（所有 >= 比较都为 false），与线性
+  // 扫描一致返回 -1，避免调用方访问 pts[n] 越界。
+  if (j === n) return -1;
+  const i = j === 0 ? 0 : j - 1;
+  // 用线性扫描的同一个条件复检命中区间：pts 里混入 NaN time 时，二分仍能算出
+  // 一个下标（比较结果全为 false），但线性扫描不会命中任何区间。复检失败就
+  // 返回 -1，保证两者一致且调用方不会越界。
+  if (!(time >= pts[i].time && time <= pts[i + 1].time)) return -1;
+  return i;
 }
 
 function _findNoteAtBeat(notes, beat) {
@@ -78,23 +127,26 @@ function _computeVibratoOffset(note, beat, bpm) {
 }
 
 // 等价于分片编辑器 getPitchAtTime，但不依赖全局 state
-function _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, time) {
+function _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, time, autoPointsUsable) {
   if (!pc.enabled) return null;
 
   if (sortedAnchors.length > 0) {
     if (time < sortedAnchors[0].time || time > sortedAnchors[sortedAnchors.length - 1].time) {
       // outside anchor range, fall through to brush/auto
     } else {
-      for (let i = 0; i < sortedAnchors.length - 1; i++) {
-        if (time >= sortedAnchors[i].time && time <= sortedAnchors[i + 1].time) {
-          const t = (sortedAnchors[i + 1].time - sortedAnchors[i].time) > 0
-            ? (time - sortedAnchors[i].time) / (sortedAnchors[i + 1].time - sortedAnchors[i].time)
-            : 0;
-          const smoothness = (sortedAnchors[i].smoothness || 0) / 100;
-          const smoothStepT = t * t * (3 - 2 * t);
-          const smoothT = t + (smoothStepT - t) * smoothness;
-          return sortedAnchors[i].pitch + smoothT * (sortedAnchors[i + 1].pitch - sortedAnchors[i].pitch);
-        }
+      // 等价性：sortedAnchors 已按 time 升序（buildFragmentPitchCurveF0:22 显式 sort），
+      // _bisectSegmentIndex 与上面的线性扫描在区间内返回同一个 i（见其注释），
+      // 故 t / smoothness / 插值公式的输入逐位相同；未命中/长度不足时同样落到
+      // 下面的 return last.pitch（n===1 时线性循环不执行，二分返回 -1，行为一致）。
+      const i = _bisectSegmentIndex(sortedAnchors, time);
+      if (i >= 0) {
+        const t = (sortedAnchors[i + 1].time - sortedAnchors[i].time) > 0
+          ? (time - sortedAnchors[i].time) / (sortedAnchors[i + 1].time - sortedAnchors[i].time)
+          : 0;
+        const smoothness = (sortedAnchors[i].smoothness || 0) / 100;
+        const smoothStepT = t * t * (3 - 2 * t);
+        const smoothT = t + (smoothStepT - t) * smoothness;
+        return sortedAnchors[i].pitch + smoothT * (sortedAnchors[i + 1].pitch - sortedAnchors[i].pitch);
       }
       return sortedAnchors[sortedAnchors.length - 1].pitch;
     }
@@ -114,7 +166,7 @@ function _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, time) {
     }
   }
 
-  if (autoPoints.length === 0) return null;
+  if (!autoPointsUsable) return null;
   for (let i = 0; i < autoPoints.length - 1; i++) {
     if (time >= autoPoints[i].time && time <= autoPoints[i + 1].time) {
       if (autoPoints[i].breakAfter) continue;

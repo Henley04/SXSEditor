@@ -3,6 +3,9 @@ import { SXSSINGER_CURRENT_VERSION, SAMPLE_RATE } from './constants.js';
 import { t } from '../i18n/index.js';
 import { showAlertDialog, showConfirmDialog } from '../alertDialog.js';
 import { createDialog, showSingerValidationReport } from './uiControls.js';
+import { createPluginBackendSection } from './pluginTrackDialog.js';
+import { ensurePluginCatalog, findTrackKind } from './pluginBackend.js';
+import { isPluginTrack, getSingerBackend } from '../editor/trackManager.js';
 
 export function markDirty() {
   state.isDirty = true;
@@ -328,9 +331,22 @@ export async function loadAccompanimentFile(singerId, buffer, filePath) {
 }
 
 export function showSingerSelectDialog(singerId) {
+  // 插件后端分区：清单走异步 IPC，分区内部自带加载态与失败兜底，
+  // 因此这里不会阻塞对话框打开。
+  const pluginSection = createPluginBackendSection({
+    singerId,
+    onCreated: async () => {
+      markDirty();
+      // Dynamic import to avoid circular dependency with timelineRenderer
+      const { refreshAll } = await import('./timelineRenderer.js');
+      refreshAll();
+    },
+  });
+
   createDialog({
     title: t('main.selectSinger'),
     minWidth: 320,
+    contentElement: pluginSection,
     buttons: [
       {
         text: t('main.openSingerCreator'),
@@ -382,6 +398,28 @@ export function showSingerSelectDialog(singerId) {
       buttonAlign: 'stretch',
     },
   });
+}
+
+/**
+ * 加载后校验插件后端：插件 / 轨道种类已不存在（用户把插件删了）时只打
+ * `backendMissing` 标记，backend 字段本身原样保留 —— 装回插件即可恢复，
+ * 绝不在用户不知情的情况下把轨道静默降级成内置后端。
+ *
+ * 清单拉取失败（插件宿主没起来）时不误报缺失：保留现场，等后续渲染再判定。
+ */
+async function validatePluginBackends() {
+  const pluginTracks = trackManager.getSingers().filter(isPluginTrack);
+  if (pluginTracks.length === 0) return;
+  let catalog;
+  try {
+    catalog = await ensurePluginCatalog();
+  } catch (_err) {
+    return;
+  }
+  if (catalog && (catalog.failed || catalog.unavailable)) return;
+  for (const singer of pluginTracks) {
+    singer.backendMissing = !findTrackKind(singer.backend.pluginId, singer.backend.kindId);
+  }
 }
 
 export async function serializeProject(embedSingerFiles = false, embedAccompanimentAudio = false) {
@@ -463,6 +501,11 @@ export async function serializeProject(embedSingerFiles = false, embedAccompanim
     } else {
       singerObj.embeddedSingerData = null;
     }
+    // 后端信息原样带上：插件轨道靠 pluginId/kindId/voiceId/params 复现，
+    // 旧工程没有 backend 字段时补内置后端（{type:'sxs'}）。
+    singerObj.backend = getSingerBackend(singer);
+    // backendMissing 是加载期算出来的运行时标记，不落盘。
+    delete singerObj.backendMissing;
     // Clear runtime audioBuffer from serialization
     delete singerObj.audioBuffer;
       delete singerObj.audioChannels;
@@ -799,6 +842,10 @@ export async function loadProject() {
         }
         if (obj.singers) {
           trackManager.singers.length = 0;
+          // 先清后端缺失标记：下面的校验会按当前插件清单重新判定
+          for (const s of obj.singers) {
+            if (s && typeof s === 'object') delete s.backendMissing;
+          }
           for (const s of obj.singers) {
             const singer = trackManager.addSinger(s);
             // Accompaniment track: load from embedded data or file path
@@ -863,6 +910,8 @@ export async function loadProject() {
             }
           }
         }
+        // 插件后端存在性校验：插件被删掉时只标记，不阻断工程加载
+        await validatePluginBackends();
         if (obj.fragments) {
           trackManager.fragments.length = 0;
           // 使用 addFragment 规范化每个分片（补齐 envelopes/pitchCurve 等字段），

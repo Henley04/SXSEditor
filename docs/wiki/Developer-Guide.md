@@ -21,7 +21,8 @@ Build from source, understand the architecture, run tests, and contribute.
 
 - **Node.js** >= 18
 - **npm** >= 9
-- **Windows** (primary target; macOS/Linux supported via Electron Forge makers)
+- **Windows** (primary target; the only CI-verified platform with released binaries)
+- **macOS/Linux** (source build only: CPU inference, no DirectML/Windows ML, unverified — makers exist but are not exercised in CI)
 - **Git**
 - ONNX models are downloaded automatically on first launch, or can be placed manually in `onnx_models/`
 
@@ -464,9 +465,11 @@ npm run make            # Create distributables (.exe, .zip, .deb)
 ```
 
 The packaging uses Electron Forge with makers configured for:
-- **Windows**: Squirrel installer (.exe)
-- **macOS**: DMG (.dmg)
-- **Linux**: DEB (.deb) and RPM (.rpm)
+- **Windows**: Squirrel installer (.exe) — the only maker exercised by CI
+- **macOS**: ZIP archive (.zip) — untested, no CI coverage
+- **Linux**: DEB (.deb) and RPM (.rpm) — untested, no CI coverage
+
+On macOS/Linux only CPU inference is available (no DirectML/Windows ML), and no official binaries are published.
 
 ---
 

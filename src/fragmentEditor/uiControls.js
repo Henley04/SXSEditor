@@ -1,4 +1,5 @@
 import { t } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import { HistoryManager } from '../editor/historyManager.js';
 import { showAlertDialog } from '../alertDialog.js';
 import {
@@ -93,17 +94,17 @@ function updatePitchToolButtons() {
 export function updateFragmentPlayButton() {
   const btnPlayFragment = document.getElementById('btn-play-fragment');
   if (getFragmentIsSynthesizing()) {
-    btnPlayFragment.textContent = t('fragment.synthesizing');
+    setLabel(btnPlayFragment, t('fragment.synthesizing'), { icon: 'play' });
     btnPlayFragment.disabled = true;
   } else if (getFragmentIsPlaying()) {
-    btnPlayFragment.textContent = t('fragment.stop');
+    setLabel(btnPlayFragment, t('fragment.stop'), { icon: 'stop' });
     btnPlayFragment.disabled = false;
   } else if (getFragmentIsAutoInferring()) {
     // 后台自动推理进行中：仅提示，不禁用按钮——用户仍可随时手动播放或编辑。
-    btnPlayFragment.textContent = t('fragment.autoInferring');
+    setLabel(btnPlayFragment, t('fragment.autoInferring'), { icon: 'play' });
     btnPlayFragment.disabled = false;
   } else {
-    btnPlayFragment.textContent = t('fragment.play');
+    setLabel(btnPlayFragment, t('fragment.play'), { icon: 'play' });
     btnPlayFragment.disabled = false;
   }
 }

@@ -122,6 +122,23 @@ const IPC_CHANNELS = {
   GET_LOCALE: 'get-locale',
   LOCALE_CHANGED: 'locale-changed',
 
+  // ==================== Plugin Host (第三方歌声后端) ====================
+  PLUGIN_LIST: 'plugin:list',
+  PLUGIN_RELOAD: 'plugin:reload',
+  PLUGIN_GET_VOICES: 'plugin:getVoices',
+  PLUGIN_SYNTHESIZE: 'plugin:synthesize',
+  PLUGIN_GET_PLUGINS_DIR: 'plugin:getPluginsDir',
+  PLUGIN_OPEN_PLUGINS_FOLDER: 'plugin:openPluginsFolder',
+  PLUGIN_CANCEL_TICKET: 'plugin:cancelTicket',
+  // 主进程 → 渲染进程：插件阻滞播放的 ticket 生命周期（对应 host.blockPlayback）
+  PLUGIN_BLOCKING_START: 'plugin:blocking-start',
+  PLUGIN_BLOCKING_UPDATE: 'plugin:blocking-update',
+  PLUGIN_BLOCKING_END: 'plugin:blocking-end',
+  // 主进程 → 渲染进程：插件输出通道（进度 / 流式音频 / 诊断）
+  PLUGIN_PROGRESS: 'plugin:progress',
+  PLUGIN_AUDIO: 'plugin:audio',
+  PLUGIN_DIAGNOSTICS: 'plugin:diagnostics',
+
   // ==================== Resource Manager ====================
   RESMGR_OPEN: 'resmgr:open',
   RESMGR_GET_GPU_INFO: 'resmgr:getGPUInfo',

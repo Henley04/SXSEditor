@@ -1,0 +1,162 @@
+{
+  "id": "example-concat",
+  "name": "示例拼接后端",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "main": "index.js",
+  "description": "传统拼接/波形合成演示后端：按音符拼接正弦 / 三角 / 脉冲片段，可作为第三方插件模板。",
+  "author": "SXSEditor Dev",
+  "capabilities": {
+    "synthesize": true,
+    "blockPlayback": true,
+    "streaming": false,
+    "voices": true
+  },
+  "trackKinds": [
+    {
+      "id": "concat-basic",
+      "name": "拼接音源",
+      "description": "按音符拼接简单波形的演示轨道（复用内置 MIDI 编辑器）",
+      "editor": {
+        "mode": "midi",
+        "readOnly": false
+      },
+      "paramSchema": [
+        {
+          "key": "waveform",
+          "type": "enum",
+          "label": "波形",
+          "options": [
+            "sine",
+            "triangle",
+            "pulse"
+          ],
+          "default": "sine"
+        },
+        {
+          "key": "harmonics",
+          "type": "integer",
+          "label": "谐波数",
+          "min": 1,
+          "max": 8,
+          "default": 2
+        },
+        {
+          "key": "gain",
+          "type": "number",
+          "label": "增益",
+          "min": 0,
+          "max": 2,
+          "default": 0.6
+        },
+        {
+          "key": "attackSec",
+          "type": "number",
+          "label": "起音(秒)",
+          "min": 0,
+          "max": 0.5,
+          "default": 0.02
+        },
+        {
+          "key": "releaseSec",
+          "type": "number",
+          "label": "释音(秒)",
+          "min": 0,
+          "max": 1,
+          "default": 0.08
+        },
+        {
+          "key": "vibratoHz",
+          "type": "number",
+          "label": "颤音频率(Hz)",
+          "min": 0,
+          "max": 12,
+          "default": 0
+        }
+      ],
+      "defaults": {
+        "waveform": "sine",
+        "harmonics": 2,
+        "gain": 0.6,
+        "attackSec": 0.02,
+        "releaseSec": 0.08,
+        "vibratoHz": 0
+      }
+    },
+    {
+      "id": "concat-light",
+      "name": "拼接音源·精简",
+      "description": "只复用内置编辑器的钢琴卷帘、参数与包络面板（midi-partial 演示）",
+      "editor": {
+        "mode": "midi-partial",
+        "use": [
+          "pianoRoll",
+          "params",
+          "envelope"
+        ],
+        "readOnly": false
+      },
+      "paramSchema": [
+        {
+          "key": "waveform",
+          "type": "enum",
+          "label": "波形",
+          "options": [
+            "sine",
+            "triangle",
+            "pulse"
+          ],
+          "default": "sine"
+        },
+        {
+          "key": "harmonics",
+          "type": "integer",
+          "label": "谐波数",
+          "min": 1,
+          "max": 8,
+          "default": 2
+        },
+        {
+          "key": "gain",
+          "type": "number",
+          "label": "增益",
+          "min": 0,
+          "max": 2,
+          "default": 0.6
+        },
+        {
+          "key": "attackSec",
+          "type": "number",
+          "label": "起音(秒)",
+          "min": 0,
+          "max": 0.5,
+          "default": 0.02
+        },
+        {
+          "key": "releaseSec",
+          "type": "number",
+          "label": "释音(秒)",
+          "min": 0,
+          "max": 1,
+          "default": 0.08
+        },
+        {
+          "key": "vibratoHz",
+          "type": "number",
+          "label": "颤音频率(Hz)",
+          "min": 0,
+          "max": 12,
+          "default": 0
+        }
+      ],
+      "defaults": {
+        "waveform": "sine",
+        "harmonics": 2,
+        "gain": 0.6,
+        "attackSec": 0.02,
+        "releaseSec": 0.08,
+        "vibratoHz": 0
+      }
+    }
+  ]
+}

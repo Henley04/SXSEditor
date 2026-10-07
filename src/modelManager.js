@@ -26,7 +26,8 @@ const FCPE_REMOTE_TO_LOCAL = {
 };
 
 // JP (Japanese) language-specific model repos
-// These contain only the modified models (note_text_encoder, preflow)
+// These contain only the modified models: note_text_encoder, preflow,
+// cond_emb and (v3+) diff_step_dml —— 与 JP_MODEL_FILE_MANIFEST 的 4 项一一对应。
 const JP_MODEL_IDS = {
   fp16: 'syxppp/SoulX-Singer-onnx-fp16-lora-jp',
 };
@@ -77,6 +78,15 @@ function _atomicWriteJsonSync(filePath, data) {
   }
 }
 
+// 完整性元数据说明（_verifyFileIntegrity 会用到）：
+//   size   —— 可选。声明了就做 ±10% 的大小比对（清单里的数值多为四舍五入后的
+//             近似值）。未声明时，HTTP 下载路径会用下载前取得的远端
+//             Content-Length 精确兜底；两条都没有且也没有 sha256 时只会做
+//             "非空"检查，并显式告警（不再静默通过）。
+//   sha256 —— 可选。一旦填入即做全量哈希比对（无需改动调用点）。
+// 注意：同一 file 在不同 precision 下字节数不同，因此不要为 required 条目
+// 硬编码一个"猜"出来的 size；要么从 ModelScope 取真实值，要么留空交给
+// 远端 Content-Length 兜底。
 const MODEL_FILE_MANIFEST = [
   { filePath: 'note_text_encoder.onnx', required: true },
   { filePath: 'note_text_encoder.onnx.data', required: true },
@@ -1921,15 +1931,22 @@ async function getRemoteFileSize(filePath, precision, revision = 'master') {
 /**
  * S6: verify the integrity of a downloaded model file.
  *
- * - If the manifest entry declares a `size`, the local file size must match
- *   exactly. A mismatched size indicates corruption or MITM replacement.
+ * - If the manifest entry declares a `size`, the local file size must match it
+ *   within a 10% tolerance (manifest values are rounded approximations).
+ * - Otherwise, if the caller passes the remote Content-Length it downloaded
+ *   from (`expectedSize`), the local size must match it exactly. This is what
+ *   gives the multi-GB core ONNX files a real check while the manifest has no
+ *   published sizes.
  * - If the manifest entry declares a `sha256`, recompute and compare.
  *   (No hashes are currently published in MODEL_FILE_MANIFEST, but the
  *   plumbing is here so hashes can be added without touching call sites.)
+ * - If none of the above is available the file only gets the "non-empty"
+ *   check below. That is NOT a real integrity check, so it is logged as a
+ *   warning instead of passing silently.
  *
  * Returns { ok: boolean, error?: string }.
  */
-async function _verifyFileIntegrity(destPath, manifestEntry) {
+async function _verifyFileIntegrity(destPath, manifestEntry, expectedSize = 0) {
   if (!manifestEntry) return { ok: true };
   let stats;
   try {
@@ -1940,17 +1957,35 @@ async function _verifyFileIntegrity(destPath, manifestEntry) {
   if (stats.size === 0) {
     return { ok: false, error: 'empty_file' };
   }
-  if (typeof manifestEntry.size === 'number' && manifestEntry.size > 0) {
-    // Allow a 1% size tolerance for platforms where the manifest size was
+  const hasHash = typeof manifestEntry.sha256 === 'string' && manifestEntry.sha256.length === 64;
+  const declaredSize = (typeof manifestEntry.size === 'number' && manifestEntry.size > 0)
+    ? manifestEntry.size
+    : 0;
+  const remoteSize = (typeof expectedSize === 'number' && expectedSize > 0) ? expectedSize : 0;
+
+  if (declaredSize > 0) {
+    // Allow a 10% size tolerance for platforms where the manifest size was
     // rounded. A 5x size difference (the kind a MITM replacement produces)
     // still trips the check.
-    const expected = manifestEntry.size;
     const actual = stats.size;
-    if (actual < expected * 0.9 || actual > expected * 1.1) {
-      return { ok: false, error: `size_mismatch: expected ~${expected}, got ${actual}` };
+    if (actual < declaredSize * 0.9 || actual > declaredSize * 1.1) {
+      return { ok: false, error: `size_mismatch: expected ~${declaredSize}, got ${actual}` };
     }
+  } else if (remoteSize > 0) {
+    // 清单未声明 size：用下载前从远端取到的 Content-Length 精确比对。
+    // 否则一个被替换成任意非空内容的 vocoder_dml.onnx 也会通过校验并直接
+    // 喂给 ONNX Runtime。
+    if (stats.size !== remoteSize) {
+      return { ok: false, error: `size_mismatch: expected ${remoteSize}, got ${stats.size}` };
+    }
+  } else if (!hasHash) {
+    console.warn(
+      `[ModelManager] No integrity metadata for ${manifestEntry.filePath || destPath} ` +
+      `(${stats.size} bytes): only the non-empty check applies. ` +
+      'Declare `size` or `sha256` in MODEL_FILE_MANIFEST to get a real check.'
+    );
   }
-  if (typeof manifestEntry.sha256 === 'string' && manifestEntry.sha256.length === 64) {
+  if (hasHash) {
     try {
       const { createHash } = require('node:crypto');
       const hash = createHash('sha256');
@@ -2052,6 +2087,20 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
     console.log('[ModelManager] ModelScope CLI available, using CLI download');
     try {
       await downloadWithModelScopeCLI(modelDir, missingFiles, { abortSignal, precision, revision });
+      // CLI 下载此前完全不经过完整性校验（HTTP 才有）。这里与 HTTP 路径对齐：
+      // 校验失败时抛出，由下面的 catch 回退到 HTTP 重新下载，而不是把可疑文件
+      // 直接交给 ONNX Runtime。
+      const manifest = getManifestForPrecision(precision);
+      const cliIntegrityErrors = [];
+      for (const file of missingFiles) {
+        const localPath = getLocalFilePath(modelDir, file.filePath, precision);
+        const entry = manifest.find(e => e.filePath === file.filePath);
+        const integrity = await _verifyFileIntegrity(localPath, entry);
+        if (!integrity.ok) cliIntegrityErrors.push(`${file.filePath}: ${integrity.error}`);
+      }
+      if (cliIntegrityErrors.length > 0) {
+        throw new Error(`Integrity check failed after ModelScope CLI download: ${cliIntegrityErrors.join('; ')}`);
+      }
       console.log('[ModelManager] ModelScope CLI download complete');
       saveModelVersion(modelDir, precision, revision);
       return;
@@ -2171,7 +2220,9 @@ async function downloadMissingFiles(modelDir, missingFiles, options = {}) {
       const manifestEntry = getManifestForPrecision(precision).find(
         (e) => e.filePath === file.filePath
       );
-      const integrity = await _verifyFileIntegrity(destPath, manifestEntry);
+      // fileSizes[filePath] 是下载前从远端 Content-Length 取到的真实字节数；
+      // 清单里没有 size 的核心 ONNX（GB 级权重）靠它兜底精确比对。
+      const integrity = await _verifyFileIntegrity(destPath, manifestEntry, fileSizes[file.filePath]);
       if (!integrity.ok) {
         // Remove the bad file so the next run re-downloads instead of
         // trusting the corrupted local copy.

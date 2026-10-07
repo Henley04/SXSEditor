@@ -19,6 +19,7 @@ import { installAutoRelayout } from '../shared/autoRelayout.js';
 import { initWindowTheme } from '../themes/themeInit.js';
 import { hydrateIcons } from '../icons/iconHelper.js';
 import { initI18n, applyLocale, getLocale } from '../i18n/index.js';
+import { installPluginPlaybackBridge } from './pluginBlockingOverlay.js';
 
 // 首屏关键路径之外的工作（图标水合）延后到空闲帧执行，让主窗口更早呈现。
 // 首屏的 i18n 文本替换必须先跑，否则用户会先看到英文再闪成中文。
@@ -59,13 +60,28 @@ initWindowTheme(state._ipcCleanups).then(() => {
   refreshAll();
 });
 
-// Display app version
+// 插件播放侧接线：阻滞播放浮层 + progress / diagnostics 输出通道。
+// 浮层 DOM 是懒建的（没有插件阻滞事件时零开销），这里只订阅 IPC。
+// 句柄交给 state._ipcCleanups：eventHandlers.js 的 beforeunload 已统一回收，
+// 播放结束则由 stopPlayback() 调 clearPluginBlockingOverlay() 兜底。
+if (state._ipcCleanups) {
+  state._ipcCleanups.push(installPluginPlaybackBridge({
+    getTimeDisplay: () => dom.timeDisplay,
+  }));
+}
+
+// Display app version.
+// 版本号的唯一真源是 package.json 的 version（由 git tag 经 scripts/check-version.js
+// 守卫对齐，打包时再由 scripts/generate-build-info.js 写进 src/build-info.json），
+// 主进程 app:getVersion 直接返回 app.getVersion()（即 package.json version）。
+// 取不到时不要写死 'v1.0.0' —— 那是第三套来源，真源一变就永久失真；保留 HTML
+// 里的 'v-' 占位即可。
 (async () => {
   try {
     const version = await window.electronAPI.getAppVersion();
-    if (dom.versionDisplay) dom.versionDisplay.textContent = `v${version}`;
-  } catch (_) {
-    if (dom.versionDisplay) dom.versionDisplay.textContent = 'v1.0.0';
+    if (dom.versionDisplay && version) dom.versionDisplay.textContent = `v${version}`;
+  } catch (err) {
+    console.warn('[Renderer] 读取应用版本失败：', err && err.message ? err.message : err);
   }
 })();
 

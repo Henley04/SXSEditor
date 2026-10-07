@@ -268,18 +268,22 @@ class AudioSegmentation {
                         ?? segEnd;
                 }
 
-                const segNotes = regionNotes.filter(n => {
+                // 单趟循环替代 filter + map 两趟，少一次中间数组分配。
+                // 等价性：判定条件逐字相同、遍历顺序同为下标升序、map 保序，
+                // 故结果数组逐元素且顺序完全一致（下游依赖数组序，不重排）。
+                // noteEnd 提到局部变量只在判定与裁剪中各用一次，数值不变。
+                const segNotes = [];
+                for (const n of regionNotes) {
                     const noteEnd = n.start + n.duration;
-                    return n.start < segEnd && noteEnd > segStart;
-                }).map(n => {
+                    if (!(n.start < segEnd && noteEnd > segStart)) continue;
                     const clippedStart = Math.max(n.start, segStart);
-                    const clippedEnd = Math.min(n.start + n.duration, segEnd);
-                    return {
+                    const clippedEnd = Math.min(noteEnd, segEnd);
+                    segNotes.push({
                         ...n,
                         start: clippedStart - segStart,
                         duration: Math.max(0.01, clippedEnd - clippedStart),
-                    };
-                });
+                    });
+                }
                 if (segNotes.some(n => !isRest(n))) {
                     segments.push({ notes: segNotes, startBeat: segStart, endBeat: segEnd });
                 }

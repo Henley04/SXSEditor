@@ -1,4 +1,5 @@
 import { t, tOr } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import {
   getFragmentIsSynthesizing,
   getFragmentIsExporting,
@@ -27,6 +28,7 @@ import {
   setPitchCurve,
   setCurrentFragment,
   setCurrentProject,
+  setTrackBackend,
   invalidatePitchCurveCache,
   setFragmentDataReceived,
   getKanjiGroups, setKanjiGroups,
@@ -34,6 +36,7 @@ import {
 import { PARAM_MODES } from './constants.js';
 import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
 import { updateParamModeButtons } from './uiControls.js';
+import { normalizeTrackBackend } from './pluginEditorMode.js';
 import { autoDetectKanjiGroups, cleanupKanjiGroups } from './kanjiGroupUtils.js';
 import { showAlertDialog } from '../alertDialog.js';
 
@@ -54,10 +57,10 @@ export function setupIpcHandlers() {
     // 而导出时因 fragmentIsSynthesizing=false 两个按钮都不更新。
     if (getFragmentIsSynthesizing()) {
       const btnPlayFragment = document.getElementById('btn-play-fragment');
-      if (btnPlayFragment) btnPlayFragment.textContent = t('fragment.synthesizingProgress', { progress });
+      if (btnPlayFragment) setLabel(btnPlayFragment, t('fragment.synthesizingProgress', { progress }), { icon: 'play' });
     } else if (getFragmentIsExporting()) {
       const btnExportFragment = document.getElementById('btn-export-fragment');
-      if (btnExportFragment) btnExportFragment.textContent = t('fragment.exportingProgress', { progress });
+      if (btnExportFragment) setLabel(btnExportFragment, t('fragment.exportingProgress', { progress }), { icon: 'download' });
     }
   });
   if (cleanupProgress) _ipcCleanups.push(cleanupProgress);
@@ -104,6 +107,10 @@ async function handleFragmentData(data) {
 
   setCurrentFragment(data.fragment);
   setCurrentProject(data.project);
+  // 轨道后端（内置 {type:'sxs'} 或插件 {type:'plugin', pluginId, kindId}）。
+  // 走 getFragmentData 兜底路径时 payload 可能没有 backend 字段（老工程/旧主进程），
+  // 这里退化成内置后端而不是报错 —— 形态裁剪由 pluginEditorMode.js 负责。
+  setTrackBackend(normalizeTrackBackend(data.backend));
   document.getElementById('fragment-name').textContent = data.fragment.name || t('fragment.fragment');
   // 规范化 notes：为旧项目的 note 补全 vibrato/fadeIn/fadeOut 字段。
   // vibrato 在首次启用时由 ensureVibrato() 补全，这里只确保 fadeIn/fadeOut 有默认值。

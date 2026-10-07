@@ -32,6 +32,10 @@ let wavFileBuffer = null;
 
 let currentFragment = null;
 let currentProject = null;
+// 当前分片所属轨道的后端 {type:'sxs'} 或 {type:'plugin', pluginId, kindId, ...}。
+// 由 handleFragmentData() 从 loadFragment payload 的 backend 字段写入；
+// 为 null 表示分片数据还没到（此时一律按内置轨道处理）。
+let trackBackend = null;
 let currentParamMode = PARAM_MODES.MIDI;
 let notes = [];
 // Snap grid for the fragmentEditor piano roll, in beats per grid cell.
@@ -199,6 +203,9 @@ export function setCurrentFragment(v) { currentFragment = v; }
 
 export function getCurrentProject() { return currentProject; }
 export function setCurrentProject(v) { currentProject = v; }
+
+export function getTrackBackend() { return trackBackend; }
+export function setTrackBackend(v) { trackBackend = v; }
 
 export function getCurrentParamMode() { return currentParamMode; }
 export function setCurrentParamMode(v) { currentParamMode = v; }

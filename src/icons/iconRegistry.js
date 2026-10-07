@@ -55,6 +55,7 @@ export const ICON_REGISTRY = {
     'arrow-left': () => '<path d="M19 12H5"/><path d="M11 6l-6 6 6 6"/>',
     'arrow-right': () => '<path d="M5 12h14"/><path d="M13 6l6 6-6 6"/>',
     'chevron-up': () => '<path d="M6 15l6-6 6 6"/>',
+    'chevron-down': () => '<path d="M6 9l6 6 6-6"/>',
     'chevron-right': () => '<path d="M9 6l6 6-6 6"/>',
 
     // ===== Status / utility =====

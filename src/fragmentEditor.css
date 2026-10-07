@@ -1043,6 +1043,58 @@
   outline-offset: 2px;
 }
 
+/* ==================== 插件轨道形态（pluginEditorMode.js） ==================== */
+/* 未启用的面板只加 class（不从 DOM 移除），其它模块持有的节点引用不受影响。 */
+.plugin-panel-off {
+  display: none !important;
+}
+/* 主画布 + 左侧琴键整块关闭时，#main-content 少了两个 grid 子项，
+   inspector 会被自动排到第一列（80px）挤成一团 —— 这里显式锁列位。 */
+#app.plugin-no-pianoroll #main-content {
+  grid-template-columns: 0 0 4px 1fr;
+}
+#app.plugin-no-pianoroll #inspector-resize {
+  grid-column: 3;
+}
+#app.plugin-no-pianoroll #inspector {
+  grid-column: 4;
+}
+/* readOnly：面板保持可见但编辑入口被 pointer-events 挡住（画布 + 输入控件），
+   键盘类入口由 pluginEditorMode.js 的 capture 守卫拦截。 */
+#app.plugin-readonly #piano-roll,
+#app.plugin-readonly #piano-keys,
+#app.plugin-readonly #inspector input,
+#app.plugin-readonly #inspector select,
+#app.plugin-readonly #inspector textarea,
+#app.plugin-readonly #inspector .insp-slider {
+  pointer-events: none;
+}
+/* mode === 'plugin' 的占位面板（插件自定义面板尚未接入渲染） */
+.plugin-panel-placeholder {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-app);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 8px);
+  padding: var(--space-5, 16px);
+}
+.plugin-panel-head {
+  font-size: var(--font-lg, 15px);
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+.plugin-panel-body {
+  font-size: var(--font-base, 13px);
+  color: var(--fg-secondary);
+  line-height: 1.6;
+}
+.plugin-panel-desc {
+  margin-top: var(--space-2, 6px);
+  color: var(--fg-muted);
+}
+
 /* ==================== Reduced motion ==================== */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

@@ -670,9 +670,9 @@ class OnnxSVSPipeline {
         // 基础模型覆盖更广（28-88），但 JP 必须收紧到训练分布内。
         const isJp = this.languageOverride === 'ja';
         const MIN_EFFECTIVE_PITCH = isJp ? 48 : 28; // JP: C3 / base: ~E1
-        // SiFiGAN 对 f0 敏感（过高导致激励畸变→口齿不清，见 index.js:1574 注释），
-        // 上限收紧到 84（~C6），避免 autoShift 将高音推入 SiFiGAN 失真区。
-        // 默认 vocoder 上限 88（~E6）。JP 任何 vocoder 都用 84。
+        // SiFiGAN 对 f0 敏感（过高导致激励畸变→口齿不清，根因注释见 _synthesizeImpl()
+        // 中的 autoShift 钳制分支），上限收紧到 84（~C6），避免 autoShift 将高音推入
+        // SiFiGAN 失真区。默认 vocoder 上限 88（~E6）。JP 任何 vocoder 都用 84。
         const MAX_EFFECTIVE_PITCH = (isJp || this.vocoderType === 'sifigan') ? 84 : 88;
         let minPitch = targetNotePitches[0];
         let maxPitch = targetNotePitches[0];
@@ -3342,7 +3342,10 @@ class OnnxSVSPipeline {
                     : Math.max(0, gc.spec.chunkEnd - p.chunkPlan.overlap);
                 const expectedMelStart = p.committedFrames;
                 const chunkCacheKey = [
-                    'stream-v1', p.cacheBaseKey, gc.chunkIdx,
+                    // v2：分块扩散修复了 overlap 前缀的 t=0 边界条件（非首块重噪），
+                    // chunk 输出语义变了，旧缓存条目不能复用（否则旧结果被写回
+                    // p.xt.data，overlap 区依旧是上一块的干净 mel，修复被绕过）。
+                    'stream-v2', p.cacheBaseKey, gc.chunkIdx,
                     gc.spec.chunkStart, gc.spec.chunkEnd,
                     expectedMelStart, expectedCommitted,
                     totalSteps, cfgStrength, cfgRescale,
@@ -4060,7 +4063,8 @@ class OnnxSVSPipeline {
         const finalAudio = new Float32Array(totalSamples);
         const weightSum = new Float32Array(totalSamples);
 
-        // Prompt mel 帧数：与单 segment 路径 (index.js:1645) 保持一致，按总帧数 10% 计算，
+        // Prompt mel 帧数：与单 segment 路径（_synthesizeImpl 中 `segments.length === 1`
+        // 分支里的 ptFrameCount 计算）保持一致，按总帧数 10% 计算，
         // 上限 50 帧、下限 10 帧。旧版多 segment 路径恒为 10 帧，导致长音频（无 ref audio）
         // 扩散 conditioning 信号弱，音色稳定性与发音清晰度下降。
         if (!ptMelData || ptFrameCount === 0) {

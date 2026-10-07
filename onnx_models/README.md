@@ -85,7 +85,7 @@ SiFiGAN（Source-Filter HiFi-GAN）是 SVS 管线的可选替代声码器，与�
 | 文件 | 大小 | 说明 |
 |------|------|------|
 | `sifigan_vocoder_dml_fp16.onnx` | ~23 MB | FP16 量化版 ONNX 模型（含 `.data`，推荐） |
-| `sifigan_vocoder_dml.onnx` | ~48 MB | FP32 DML 优化版 ONNX 模型（含 `.data`） |
+| `sifigan_vocoder_dml.onnx` | ~45.8 MB | FP32 DML 优化版 ONNX 模型（含 `.data`，与下方压缩比一致） |
 | `sifigan_vocoder.onnx` | ~35 MB | FP32 未优化版 ONNX 模型（含 `.data`，CPU 兼容） |
 | `sifigan_stats.joblib` | ~2.5 KB | 特征归一化统计文件 |
 
@@ -117,7 +117,7 @@ python quantize_sifigan_fp16.py
 | 输入 | mel (128 维) | mel (128 维) + f0 (1 维) |
 | 音高可控 | 否 | 是 |
 | DirectML 支持 | 需 optimize_vocoder_dml.py | 需 optimize_sifigan_dml.py |
-| 模型大小 | 495 MB (FP16) | 611 MB (FP32) |
+| 模型大小 | 495 MB (FP16) | 45.8 MB (FP32) |
 | 训练数据 | SoulX-Singer 项目私有 | LibriTTS-R + NUS-48E 公开 |
 | 采样率 | 24 kHz | 24 kHz |
 | 推理速度 | 标准 | 相当或更快（source-filter 解耦） |

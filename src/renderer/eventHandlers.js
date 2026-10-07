@@ -4,6 +4,7 @@ import {
   HEADER_HEIGHT,
 } from './constants.js';
 import { t } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty, addAccompanimentFromFile } from './projectManager.js';
 import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
@@ -203,7 +204,7 @@ dom.btnPause.addEventListener('click', async () => {
     pausePlayback();
   } else if (state.currentAudioData && state.currentAudioData.length > 0) {
     await startAudioPlayback(state.playbackPauseOffset || 0);
-    dom.btnPause.textContent = t('main.pause');
+    setLabel(dom.btnPause, t('main.pause'), { icon: 'pause' });
   }
 });
 
@@ -624,8 +625,16 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
     e.preventDefault();
     if (history.canUndo()) {
-      history.undo();
-      refreshAll();
+      // undo() 失败时会把命令退回 undoStack 并重新抛错（见 historyManager.js），
+      // 用 try/finally 保证这一步无论成败都刷新 UI —— 部分回滚后的界面必须
+      // 反映真实状态，不能停在"看起来没反应"的旧画面上。
+      try {
+        history.undo();
+      } catch (err) {
+        console.error('[Renderer] Undo failed:', err && err.message ? err.message : err);
+      } finally {
+        refreshAll();
+      }
     }
     return;
   }
@@ -633,8 +642,14 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey) || (e.key === 'Z' && e.shiftKey))) {
     e.preventDefault();
     if (history.canRedo()) {
-      history.redo();
-      refreshAll();
+      // 同上：redo() 失败时命令退回 redoStack 并重抛，刷新放在 finally 里。
+      try {
+        history.redo();
+      } catch (err) {
+        console.error('[Renderer] Redo failed:', err && err.message ? err.message : err);
+      } finally {
+        refreshAll();
+      }
     }
     return;
   }

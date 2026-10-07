@@ -53,6 +53,37 @@ export default {
     noFragmentsToPlay: '当前没有分片，无法播放',
     diffStepLegacyInt8Incompatible: '检测到不兼容的 INT8 旧版 diff_step 模型。当前 INT8 精度已改用 QDIT 量化模型，请更新模型后再使用 INT8 精度。',
     exportFailed: '导出失败',
+    // 插件后端（第三方歌声后端）—— 由渲染进程的插件宿主提供数据
+    plugin: {
+      sectionTitle: '插件后端',
+      openFolder: '打开插件目录',
+      reload: '重新加载',
+      loading: '正在加载插件…',
+      loadFailed: '插件列表加载失败',
+      none: '未安装可建轨的插件后端',
+      reloadFailed: '插件重载失败：{detail}',
+      createTitle: '创建插件轨道',
+      create: '创建轨道',
+      voiceLabel: '音色',
+      voiceLoading: '正在加载音色…',
+      voiceLoadFailed: '音色列表加载失败',
+      voiceNone: '（插件未提供音色）',
+      voiceOf: '音色：{voice}',
+      paramsTitle: '插件参数',
+      paramsNone: '该插件未声明参数',
+      browse: '浏览…',
+      byPlugin: '{name} v{version}',
+      missingShort: '（插件缺失）',
+      missingDetail: '插件 {pluginId} 的轨道种类 {kindId} 不可用',
+      unknownKind: '未知轨道种类',
+      openFolderFailed: '打开插件目录失败：{detail}',
+      // 阻滞播放浮层与输出通道（pluginAPI.onBlocking* / onProgress / onDiagnostics）
+      blockingTitle: '插件正在处理',
+      blockingCancel: '取消',
+      blockingMore: '另有 {count} 个插件任务在进行',
+      synthesizingProgress: '插件合成中 {progress}%',
+      diagnosticsSummary: '插件诊断：{summary}'
+    },
     exportDialog: {
       title: '导出音频',
       subtitle: '配置导出参数并选择保存位置',
@@ -252,6 +283,10 @@ export default {
     discardCancel: '取消',
     dragToSeek: '拖动以跳转播放进度'
   },
+  fragmentEditor: {
+    // fragmentEditor.html 的文档标题（窗口标题由主进程 locale 的 fragment.title 提供）
+    title: '分片编辑器'
+  },
   fragment: {
     title: '分片编辑',
     loadingModel: '正在加载推理模型，请稍候...',
@@ -260,7 +295,15 @@ export default {
     fragment: '分片',
     play: '播放',
     export: '导出',
+    exportMidi: '导出MIDI',
     importMidi: '导入MIDI',
+    inspSinger: '歌手',
+    inspNote: '音符属性',
+    inspPhoneme: '音素',
+    statusReady: '就绪',
+    statusSampleRate: '采样率',
+    // 插件自定义了 trackKind.editor.panel 时的占位说明
+    pluginPanelPlaceholder: '该插件定义了自己的轨道面板，当前版本以只读方式呈现。',
     reset: '重置',
     resetToAutoCurve: '重置为MIDI自动曲线',
     pitchHint: '点击添加 · Shift+拖拽画笔 · 右键调节平滑 · 中键框选',
@@ -426,6 +469,8 @@ export default {
   },
   preprocess: {
     title: '音频预处理',
+    // audioPreprocess.html 的文档标题与工具栏页面标题（与 title 同义）
+    audioPreprocess: '音频预处理',
     play: '播放',
     pause: '暂停',
     rmvpeExtractF0: 'RMVPE提取F0',

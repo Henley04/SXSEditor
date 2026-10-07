@@ -506,6 +506,55 @@ contextBridge.exposeInMainWorld('electronAPI', {
     pickSavePath: (suggestedName) => ipcRenderer.invoke('singer-market:pick-save-path', suggestedName),
   },
 
+  // ==================== Plugin Host API（第三方歌声后端） ====================
+  // 插件跑在主进程内：options 以同一引用交给插件，因此这里不做任何结构化拷贝，
+  // 参数怎么传给内置 pipeline 的就怎么传给插件。
+  pluginAPI: {
+    // 列出已加载插件（含 trackKinds 与加载失败清单）
+    list: () => invokeHeavy('plugin:list'),
+    // 热重载：清 require 缓存 + dispose 旧实例后重新扫描
+    reload: () => invokeHeavy('plugin:reload'),
+    getVoices: (pluginId, kindId) => invokeHeavy('plugin:getVoices', { pluginId, kindId }),
+    // 单次合成：{kindId, pluginId, trackId, notes, bpm, options, params, voiceId, sampleRate}
+    synthesize: (request) => invokeHeavy('plugin:synthesize', request || {}),
+    getPluginsDir: () => invokeHeavy('plugin:getPluginsDir'),
+    openPluginsFolder: () => invokeHeavy('plugin:openPluginsFolder'),
+    // 请求取消一个 cancellable 的阻滞 ticket
+    cancelTicket: (ticketId) => invokeHeavy('plugin:cancelTicket', { ticketId }),
+    // 主进程 → 渲染进程：阻滞播放（插件在合成前/合成中阻塞 UI 并显示信息）
+    onBlockingStart: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('plugin:blocking-start', handler);
+      return () => ipcRenderer.removeListener('plugin:blocking-start', handler);
+    },
+    onBlockingUpdate: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('plugin:blocking-update', handler);
+      return () => ipcRenderer.removeListener('plugin:blocking-update', handler);
+    },
+    onBlockingEnd: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('plugin:blocking-end', handler);
+      return () => ipcRenderer.removeListener('plugin:blocking-end', handler);
+    },
+    // 主进程 → 渲染进程：插件输出通道
+    onProgress: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('plugin:progress', handler);
+      return () => ipcRenderer.removeListener('plugin:progress', handler);
+    },
+    onAudio: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('plugin:audio', handler);
+      return () => ipcRenderer.removeListener('plugin:audio', handler);
+    },
+    onDiagnostics: (callback) => {
+      const handler = (event, data) => callback(data);
+      ipcRenderer.on('plugin:diagnostics', handler);
+      return () => ipcRenderer.removeListener('plugin:diagnostics', handler);
+    },
+  },
+
   // ==================== Crash Reporting API ====================
   // Used by settings/help UI to surface log/dump file locations so users can
   // attach them when filing issues. Log forwarding (window.onerror /

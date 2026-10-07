@@ -23,6 +23,7 @@
 const { BrowserWindow, ipcMain, app } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { safeHandle } = require('./ipcSafe');
 
 let splashWindow = null;
 let splashReadyAt = 0; // ms timestamp when splash content first painted
@@ -61,7 +62,7 @@ function readBuildInfo() {
 }
 
 function registerSplashIpc() {
-  ipcMain.handle('splash:getBuildInfo', async () => readBuildInfo());
+  safeHandle('splash:getBuildInfo', async () => readBuildInfo());
 }
 
 function createSplashWindow() {
@@ -98,7 +99,12 @@ function createSplashWindow() {
       preload: SPLASH_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      // 安全加固：渲染进程开 OS 级沙箱。preload（src/preload.js）只 require
+      // electron 的 contextBridge / ipcRenderer，不使用任何 Node 内建模块，
+      // 因此在 sandbox:true 下仍可正常工作。此前为 false，意味着一旦渲染进程
+      // 被攻陷（Chromium 漏洞 / 依赖链 XSS / 市场窗口渲染的远端内容），缺少
+      // 第二层 OS 拦截。
+      sandbox: true,
       spellcheck: false,
     },
   });

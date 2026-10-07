@@ -1,4 +1,4 @@
-const { ipcMain, shell, app } = require('electron');
+const { shell, app } = require('electron');
 const https = require('node:https');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -7,6 +7,7 @@ const { spawn } = require('node:child_process');
 const { loadSettings, saveSettingsFile } = require('./settings');
 const { checkAllUpdates, recordCheckTime, shouldShowNotification } = require('./updateChecker');
 const { openUpdateNotificationWindow, getUpdateNotificationWindow } = require('./windowManager');
+const { safeHandle } = require('./ipcSafe');
 
 // In-app installer download state.
 // GitHub release assets redirect (302) to objects.githubusercontent.com, so we
@@ -159,7 +160,21 @@ function _downloadFile(url, destPath, abortController) {
         }
         total = parseInt(res.headers['content-length'] || '0', 10);
         received = 0;
-        writeStream = fs.createWriteStream(destPath);
+        // 安装器路径是可预测的（os.tmpdir()/sxseditor-update/
+        // sxsinstaller-<version>.exe），同用户进程可以在 cleanup 之后
+        // 抢先放一个符号链接，把数百 MB 的下载内容重定向到任意可写位置
+        // （例如 ~/.ssh/authorized_keys）。这里直接拒绝符号链接，并用
+        // O_EXCL（'wx'）打开，既不跟随也不继承别人的文件。
+        try {
+          const lst = fs.lstatSync(destPath);
+          if (lst.isSymbolicLink()) throw new Error('Installer path is a symlink');
+        } catch (e) {
+          if (!e || e.code !== 'ENOENT') {
+            if (!settled) { settled = true; cleanup(); reject(e); }
+            return;
+          }
+        }
+        writeStream = fs.createWriteStream(destPath, { flags: 'wx' });
 
         res.on('data', (chunk) => {
           received += chunk.length;
@@ -224,7 +239,7 @@ function _downloadFile(url, destPath, abortController) {
 }
 
 function registerUpdateIpc() {
-  ipcMain.handle('update:check-now', async () => {
+  safeHandle('update:check-now', async () => {
     const s = loadSettings();
     const channel = s.updateChannel || 'release';
     const result = await checkAllUpdates(channel);
@@ -236,7 +251,7 @@ function registerUpdateIpc() {
     return result;
   });
 
-  ipcMain.handle('update:get-status', async () => {
+  safeHandle('update:get-status', async () => {
     const s = loadSettings();
     return {
       updateChannel: s.updateChannel,
@@ -248,21 +263,21 @@ function registerUpdateIpc() {
     };
   });
 
-  ipcMain.handle('update:skip-version', async (event, version) => {
+  safeHandle('update:skip-version', async (event, version) => {
     const s = loadSettings();
     s.skippedAppVersion = (typeof version === 'string') ? version : null;
     await saveSettingsFile(s);
     return { success: true };
   });
 
-  ipcMain.handle('update:dont-remind', async () => {
+  safeHandle('update:dont-remind', async () => {
     const s = loadSettings();
     s.dontRemindAppUpdates = true;
     await saveSettingsFile(s);
     return { success: true };
   });
 
-  ipcMain.handle('update:open-download-page', async (event, url) => {
+  safeHandle('update:open-download-page', async (event, url) => {
     const ALLOWED = ['https://github.com/Henley04/SXSEditor/', 'https://henley04.github.io/SXSEditor/'];
     if (!url || typeof url !== 'string') return { success: false };
     const ok = ALLOWED.some((p) => url.startsWith(p));
@@ -275,7 +290,7 @@ function registerUpdateIpc() {
     }
   });
 
-  ipcMain.handle('update:open-model-download', async () => {
+  safeHandle('update:open-model-download', async () => {
     // Open the model download window so the user can update any model group
     // (main / JP / SiFiGAN). Passing an empty missing list lets the window
     // perform its own checks and display the current state of all groups.
@@ -292,7 +307,7 @@ function registerUpdateIpc() {
    * to the update notification window via 'update:download-progress'.
    * On success, 'update:download-complete' is emitted with the file path.
    */
-  ipcMain.handle('update:download-installer', async (event, payload) => {
+  safeHandle('update:download-installer', async (event, payload) => {
     if (currentDownload) {
       return { success: false, error: 'download_in_progress' };
     }
@@ -308,7 +323,9 @@ function registerUpdateIpc() {
     }
 
     try {
-      fs.mkdirSync(UPDATE_TMP_DIR, { recursive: true });
+      // mode 0o700：同用户的其它进程不应能在我们执行安装器之前读取或替换它。
+      // 目录名固定（os.tmpdir()/sxseditor-update），可预测，权限必须自己收紧。
+      fs.mkdirSync(UPDATE_TMP_DIR, { recursive: true, mode: 0o700 });
     } catch (e) {
       return { success: false, error: `mkdir_failed: ${e.message}` };
     }
@@ -338,7 +355,7 @@ function registerUpdateIpc() {
     }
   });
 
-  ipcMain.handle('update:cancel-download', async () => {
+  safeHandle('update:cancel-download', async () => {
     if (currentDownload) {
       try { currentDownload.abortController.abort(); } catch (_) {}
       return { success: true };
@@ -351,7 +368,7 @@ function registerUpdateIpc() {
    * The installer takes over the upgrade flow, including file replacement and
    * optionally relaunching the app via its [Run] section.
    */
-  ipcMain.handle('update:install-installer', async (event, payload) => {
+  safeHandle('update:install-installer', async (event, payload) => {
     const filePath = payload && typeof payload.filePath === 'string' ? payload.filePath : null;
     if (!filePath) {
       return { success: false, error: 'invalid_path' };

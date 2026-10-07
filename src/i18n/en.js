@@ -53,6 +53,39 @@ export default {
     noFragmentsToPlay: 'No fragments to play',
     diffStepLegacyInt8Incompatible: 'An incompatible legacy INT8 diff_step model was detected. INT8 precision now uses the QDIT-quantized model — please update the model before using INT8 precision.',
     exportFailed: 'Export failed',
+    // Plugin backends (third-party singing backends) — data comes from the
+    // renderer-side plugin host.
+    plugin: {
+      sectionTitle: 'Plugin Backends',
+      openFolder: 'Open Plugins Folder',
+      reload: 'Reload',
+      loading: 'Loading plugins…',
+      loadFailed: 'Failed to load the plugin list',
+      none: 'No plugin backend available',
+      reloadFailed: 'Failed to reload plugins: {detail}',
+      createTitle: 'Create Plugin Track',
+      create: 'Create Track',
+      voiceLabel: 'Voice',
+      voiceLoading: 'Loading voices…',
+      voiceLoadFailed: 'Failed to load voices',
+      voiceNone: '(No voices provided)',
+      voiceOf: 'Voice: {voice}',
+      paramsTitle: 'Plugin Parameters',
+      paramsNone: 'This plugin declares no parameters',
+      browse: 'Browse…',
+      byPlugin: '{name} v{version}',
+      missingShort: '(Plugin missing)',
+      missingDetail: 'Plugin {pluginId} or track kind {kindId} is unavailable',
+      unknownKind: 'Unknown track kind',
+      openFolderFailed: 'Failed to open the plugins folder: {detail}',
+      // Blocking-playback overlay and output channels
+      // (pluginAPI.onBlocking* / onProgress / onDiagnostics).
+      blockingTitle: 'Plugin is working',
+      blockingCancel: 'Cancel',
+      blockingMore: '{count} more plugin task(s) in progress',
+      synthesizingProgress: 'Plugin synthesis {progress}%',
+      diagnosticsSummary: 'Plugin diagnostics: {summary}'
+    },
     exportDialog: {
       title: 'Export Audio',
       subtitle: 'Configure export parameters and choose save location',
@@ -252,6 +285,11 @@ export default {
     discardCancel: 'Cancel',
     dragToSeek: 'Drag to seek'
   },
+  fragmentEditor: {
+    // Document title of fragmentEditor.html (the window title comes from
+    // fragment.title in the main-process locale instead).
+    title: 'Fragment Editor'
+  },
   fragment: {
     title: 'Fragment Editor',
     loadingModel: 'Loading inference model, please wait...',
@@ -260,7 +298,15 @@ export default {
     fragment: 'Fragment',
     play: 'Play',
     export: 'Export',
+    exportMidi: 'Export MIDI',
     importMidi: 'Import MIDI',
+    inspSinger: 'Singer',
+    inspNote: 'Note Properties',
+    inspPhoneme: 'Phoneme',
+    statusReady: 'Ready',
+    statusSampleRate: 'Sample Rate',
+    // Shown when a plugin declares its own trackKind.editor.panel
+    pluginPanelPlaceholder: 'This plugin defines its own track panel, which is rendered read-only in this version.',
     reset: 'Reset',
     resetToAutoCurve: 'Reset to MIDI auto curve',
     pitchHint: 'Click to add · Shift+drag brush · Right-click adjust smoothing · Middle-click box select',
@@ -426,6 +472,8 @@ export default {
   },
   preprocess: {
     title: 'Audio Preprocessing',
+    // Document title and toolbar page title of audioPreprocess.html (same wording as title).
+    audioPreprocess: 'Audio Preprocessing',
     play: 'Play',
     pause: 'Pause',
     rmvpeExtractF0: 'RMVPE Extract F0',

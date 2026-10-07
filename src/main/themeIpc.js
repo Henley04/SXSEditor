@@ -1,8 +1,9 @@
-const { ipcMain, dialog, app } = require('electron');
+const { dialog, app } = require('electron');
 const themeStorage = require('../themes/themeStorage');
 const BUILTIN_THEMES = require('../themes/builtins/index.js');
 const { loadSettings, saveSettingsFile, DEFAULT_THEME } = require('./settings');
 const { getAllWebContents } = require('./windowManager');
+const { safeHandle } = require('./ipcSafe');
 
 /**
  * Resolve extends chain into a flat token map (same logic as renderer flattenTheme).
@@ -84,15 +85,15 @@ function broadcastThemeListChanged() {
 }
 
 function registerThemeIpc() {
-  ipcMain.handle('theme:list', async () => {
+  safeHandle('theme:list', async () => {
     return listAllThemes();
   });
 
-  ipcMain.handle('theme:get', async (event, themeId) => {
+  safeHandle('theme:get', async (event, themeId) => {
     return resolveTheme(themeId);
   });
 
-  ipcMain.handle('theme:current', async (event, options) => {
+  safeHandle('theme:current', async (event, options) => {
     const settings = loadSettings();
     const win = options && options.scope;
     if (win && win !== 'global' && settings.themePerWindow && settings.themePerWindow[win]) {
@@ -101,7 +102,7 @@ function registerThemeIpc() {
     return { themeId: settings.theme, scope: 'global', globalId: settings.theme };
   });
 
-  ipcMain.handle('theme:apply', async (event, themeId, options) => {
+  safeHandle('theme:apply', async (event, themeId, options) => {
     if (!themeId || typeof themeId !== 'string') {
       return { success: false, error: 'themeId must be a string' };
     }
@@ -125,7 +126,7 @@ function registerThemeIpc() {
     return { success: true, themeId, scope };
   });
 
-  ipcMain.handle('theme:save', async (event, themeObj) => {
+  safeHandle('theme:save', async (event, themeObj) => {
     try {
       if (!themeObj || !themeStorage.isValidId(themeObj.id)) {
         return { success: false, error: 'invalid id' };
@@ -139,7 +140,7 @@ function registerThemeIpc() {
     }
   });
 
-  ipcMain.handle('theme:delete', async (event, themeId) => {
+  safeHandle('theme:delete', async (event, themeId) => {
     try {
       if (!themeId || !themeStorage.isValidId(themeId)) {
         return { success: false, error: 'invalid id' };
@@ -164,7 +165,7 @@ function registerThemeIpc() {
     }
   });
 
-  ipcMain.handle('theme:import', async (_event) => {
+  safeHandle('theme:import', async (_event) => {
     try {
       const result = await dialog.showOpenDialog({
         title: 'Import Theme',
@@ -187,7 +188,7 @@ function registerThemeIpc() {
     }
   });
 
-  ipcMain.handle('theme:export', async (event, themeId) => {
+  safeHandle('theme:export', async (event, themeId) => {
     try {
       if (!themeId || !themeStorage.isValidId(themeId)) {
         return { success: false, error: 'invalid id' };
@@ -217,7 +218,7 @@ function registerThemeIpc() {
     }
   });
 
-  ipcMain.handle('theme:reset', async () => {
+  safeHandle('theme:reset', async () => {
     const settings = loadSettings();
     settings.theme = DEFAULT_THEME;
     settings.themePerWindow = {};
@@ -226,7 +227,7 @@ function registerThemeIpc() {
     return { success: true, themeId: DEFAULT_THEME };
   });
 
-  ipcMain.handle('theme:bootstrap', async (_event) => {
+  safeHandle('theme:bootstrap', async (_event) => {
     const settings = loadSettings();
     const all = listAllThemes();
     return {

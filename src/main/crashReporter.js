@@ -20,6 +20,7 @@ const { app, crashReporter, ipcMain, shell, BrowserWindow } = require('electron'
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
+const { safeHandle } = require('./ipcSafe');
 
 const MAX_LOGS = 10;
 const MAX_DUMPS = 3;
@@ -228,7 +229,7 @@ function registerIpc() {
     } catch (_) {}
   });
 
-  ipcMain.handle('crash:getReportInfo', async () => ({
+  safeHandle('crash:getReportInfo', async () => ({
     logDir: LOG_DIR,
     dumpDir: DUMP_DIR,
     currentLog: currentLogFileName,
@@ -237,11 +238,11 @@ function registerIpc() {
     bootedAt,
   }));
 
-  ipcMain.handle('crash:openLogDir', async () => {
+  safeHandle('crash:openLogDir', async () => {
     try { shell.openPath(LOG_DIR); return true; } catch { return false; }
   });
 
-  ipcMain.handle('crash:openDumpDir', async () => {
+  safeHandle('crash:openDumpDir', async () => {
     try { shell.openPath(DUMP_DIR); return true; } catch { return false; }
   });
 }

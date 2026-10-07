@@ -13,7 +13,7 @@ Yes. SXSEditor is open-source under the MIT License.
 ### What platforms are supported?
 
 - **Windows**: Primary target with pre-built installers. Windows 10/11 64-bit required.
-- **macOS / Linux**: Can be built from source using Electron Forge. See the [Developer Guide](Developer-Guide).
+- **macOS / Linux**: Can be built from source using Electron Forge (CPU inference only; not covered by CI, no official binaries). See the [Developer Guide](Developer-Guide).
 
 ### What languages can it sing?
 

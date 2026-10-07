@@ -1,5 +1,7 @@
 const { app } = require('electron');
 const https = require('node:https');
+const fs = require('node:fs');
+const path = require('node:path');
 const { compareVersions, checkModelVersion, checkJpModelVersion, checkSifiganVersion } = require('../modelManager');
 const { getModelDir } = require('./modelDir');
 const { loadSettings, saveSettingsFile } = require('./settings');
@@ -89,9 +91,56 @@ function _fetchGithubJson(url) {
  * is kept as a fallback when the official site is unreachable or the version
  * is not yet documented there.
  */
+/**
+ * 容错读取构建元信息（buildTimestamp / version / buildDate ...）。
+ *
+ * 为什么不能用静态 require('../build-info.json')：
+ * src/build-info.json 是打包产物，由 scripts/generate-build-info.js 在
+ * prestart / prepackage 钩子里生成，且被 .gitignore 排除、已移出 git 跟踪。
+ * 因此干净克隆（或直接用 electron . 启动）时它可能不存在 —— 静态 require 会让
+ * webpack 在"解析模块"阶段就失败，`npm run make` / `npm start` 直接中断
+ * （CopyPlugin 的 noErrorOnMissing 只影响拷贝，不会替我们造出这个文件）。
+ *
+ * （在 (a) 给 start/make/package 补 pre 钩子 与 (b) 改成容错读取 之间选了 (b)：
+ * 钩子只能覆盖 npm scripts 入口，任何绕过 npm 的启动方式（electron .、
+ * forge 内部脚本、CI 直接调用 webpack）仍会踩到同一个坑；改成运行时容错读取后，
+ * 构建期不再依赖该文件存在，启动路径也就彻底不受影响。）
+ *
+ * 兜底：两个候选位置都读不到时返回 null，由调用方显式跳过依赖它的判断。
+ */
+function _readBuildInfo() {
+  const candidates = [
+    path.join(__dirname, 'build-info.json'),        // 打包后：webpack 复制到 main 目录
+    path.join(__dirname, '..', 'build-info.json'),  // 源码运行：src/build-info.json
+  ];
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(candidate, 'utf-8'));
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch (_) { /* 不存在或不是合法 JSON，试下一个候选 */ }
+  }
+  return null;
+}
+
+/**
+ * 取得"本地构建时间"：优先 build-info.json 的 buildTimestamp，缺失时退回
+ * package.json 的修改时间（版本真源文件的落盘时间）。两个都拿不到就返回 null，
+ * 调用方显式跳过 —— 绝不退化成"拿不到就当作很旧"，否则会误报永远有新版。
+ */
+function _resolveBuildTimestamp(buildInfo) {
+  if (buildInfo && typeof buildInfo.buildTimestamp === 'number' && isFinite(buildInfo.buildTimestamp)) {
+    return buildInfo.buildTimestamp;
+  }
+  try {
+    return fs.statSync(path.join(__dirname, '..', 'package.json')).mtimeMs;
+  } catch (_) {
+    return null;
+  }
+}
+
 async function checkAppUpdate(channel) {
   const currentVersion = app.getVersion();
-  const buildInfo = require('../build-info.json');
+  const buildInfo = _readBuildInfo();
 
   let updateAvailable = false;
   let latestVersion = null;
@@ -112,8 +161,10 @@ async function checkAppUpdate(channel) {
       // non-finite, `undefined + 60000 = NaN` and `publishedMs > NaN` is always
       // false, silently suppressing nightly update prompts. Bail out explicitly
       // so the invalid case is intentional rather than accidental NaN arithmetic.
-      const buildTimestamp = buildInfo.buildTimestamp;
-      if (typeof buildTimestamp === 'number' && isFinite(buildTimestamp) && publishedAt) {
+      // build-info.json 缺失时 _resolveBuildTimestamp 会退回 package.json 的
+      // mtime；连它都拿不到就显式跳过，不做时间比较。
+      const buildTimestamp = _resolveBuildTimestamp(buildInfo);
+      if (buildTimestamp !== null && publishedAt) {
         const publishedMs = Date.parse(publishedAt);
         if (!isNaN(publishedMs)) {
           updateAvailable = publishedMs > buildTimestamp + NIGHTLY_TOLERANCE_MS;

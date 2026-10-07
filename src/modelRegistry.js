@@ -203,8 +203,8 @@ const MODEL_GROUPS = [
     id: 'svs-jp',
     name: 'SVS 日语模型',
     nameEn: 'SVS Japanese Models',
-    description: '日语歌声合成专用模型（音素文本编码器 + 预流变换 + 条件嵌入），需配合基础 SVS 管线使用',
-    descriptionEn: 'Japanese singing synthesis models (text encoder + preflow + cond_emb), used with base SVS pipeline',
+    description: '日语歌声合成专用模型（音素文本编码器 + 预流变换 + 条件嵌入 + 扩散步），需配合基础 SVS 管线使用',
+    descriptionEn: 'Japanese singing synthesis models (text encoder + preflow + cond_emb + diffusion step), used with base SVS pipeline',
     required: false,
     language: 'ja',
     pipelineRef: 'svsPipeline',
@@ -235,6 +235,21 @@ const MODEL_GROUPS = [
         descriptionEn: 'Japanese fine-tuned condition embedding projection (512->1024), must be used with JP preflow',
         files: ['cond_emb.onnx', 'cond_emb.onnx.data'],
         sessionKey: 'condEmb',
+      },
+      {
+        // 第 4 个 JP 模型：与 modelManager.js 的 JP_MODEL_FILE_MANIFEST 对齐
+        // （那里 4 项全部 required，含 diff_step_dml.onnx），否则资源管理器会
+        // 少显示一项，看起来"日语模型已下载完整"却仍会抛 JP_MODELS_MISSING。
+        // 文件清单与基础 svs 组的 diffStep 一致（只有 .onnx，无 .onnx.data）；
+        // size / sha256 与其它 registry 条目一样不在此处声明（拿不到真值时
+        // 不要编造，完整性校验走 modelManager 的远端 Content-Length 兜底）。
+        id: 'diffStepJp',
+        name: '日语扩散步',
+        nameEn: 'JP Diffusion Step',
+        description: '日语微调的扩散模型单步推理（v3+ 已合并 DiffLlama LoRA 权重）',
+        descriptionEn: 'Japanese fine-tuned diffusion step (v3+ with merged DiffLlama LoRA weights)',
+        files: ['diff_step_dml.onnx'],
+        sessionKey: 'diffStep',
       },
     ],
   },

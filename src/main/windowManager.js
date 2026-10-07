@@ -1,10 +1,11 @@
-const { BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { BrowserWindow, dialog, shell } = require('electron');
 const path = require('node:path');
 const { t } = require('./locale');
 // 文档入口：本地优先（随应用分发的 docs/），线上版本作为独立入口
 const { openDoc, openOnlineDoc, DOC_ENTRIES } = require('./docs');
 
 const isDev = !require('electron').app.isPackaged;
+const { safeHandle } = require('./ipcSafe');
 
 let mainWindow = null;
 let settingsWindow = null;
@@ -266,7 +267,12 @@ function createWindow(opts = {}) {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      // 安全加固：渲染进程开 OS 级沙箱。preload（src/preload.js）只 require
+      // electron 的 contextBridge / ipcRenderer，不使用任何 Node 内建模块，
+      // 因此在 sandbox:true 下仍可正常工作。此前为 false，意味着一旦渲染进程
+      // 被攻陷（Chromium 漏洞 / 依赖链 XSS / 市场窗口渲染的远端内容），缺少
+      // 第二层 OS 拦截。
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -330,7 +336,7 @@ function openSettingsWindow() {
       preload: SETTINGS_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -366,7 +372,7 @@ function openResourceManagerWindow() {
       preload: RESOURCE_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -409,7 +415,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
       preload: MODEL_DOWNLOAD_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -467,7 +473,7 @@ function openUpdateNotificationWindow(data) {
       preload: UPDATE_NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -487,8 +493,10 @@ function openUpdateNotificationWindow(data) {
   });
 }
 
-function openFragmentEditor(fragment, project, wavBuffer) {
-  const sendData = { fragment, project, wavBuffer };
+function openFragmentEditor(fragment, project, wavBuffer, backend) {
+  // backend 缺省按内置后端：老工程 / 内置轨道没有这个字段。
+  const trackBackend = backend && typeof backend === 'object' ? backend : { type: 'sxs' };
+  const sendData = { fragment, project, wavBuffer, backend: trackBackend };
   if (fragmentWindows[fragment.id] && !fragmentWindows[fragment.id].isDestroyed()) {
     fragmentWindows[fragment.id].focus();
     fragmentWindows[fragment.id].webContents.send('loadFragment', sendData);
@@ -512,7 +520,7 @@ function openFragmentEditor(fragment, project, wavBuffer) {
       preload: FRAGMENT_EDITOR_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -633,7 +641,7 @@ function openSingerCreator() {
       preload: SINGER_CREATOR_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -649,6 +657,22 @@ function openSingerCreator() {
     singerCreatorWindow = null;
   });
 }
+
+// Singer Market 窗口允许交给系统浏览器打开的域名。
+// 原先这里只判断 scheme 就 openExternal，等于 market 页面里任何链接
+// （含服务端下发的 license URL、任何一处 DOM 注入）都能把用户送到任意
+// 站点。策略与 dialogIpc.js 的 'shell:open-external' 保持一致：只准 https，
+// 且主机按"边界匹配"命中白名单（github.com.evil.com 不算命中）。
+// 若后续市场新增 license 域名，往这里补一项即可。
+const SINGER_MARKET_EXTERNAL_HOSTS = [
+  'henley04.github.io',   // 使用条款 DISCLAIMER_URL
+  'github.com',
+  'github.io',
+  'huggingface.co',
+  'modelscope.cn',
+  'creativecommons.org',  // CC 系列 license 正文
+  'opensource.org',       // MIT / Apache 等 license 正文
+];
 
 function openSingerMarket() {
   if (singerMarketWindow) {
@@ -669,7 +693,7 @@ function openSingerMarket() {
       preload: SINGER_MARKET_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -679,11 +703,23 @@ function openSingerMarket() {
   singerMarketWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   // target="_blank" links in the market UI (terms-of-use disclaimer, license
   // URLs, …) must open in the system browser. A blanket deny made those
-  // clicks silently no-op. Only http(s) is allowed through to openExternal;
-  // everything else stays denied.
+  // clicks silently no-op. 但也不能对任意 http(s) 放行：这里改为只准 https
+  // 且主机命中 SINGER_MARKET_EXTERNAL_HOSTS，其余一律 deny 并记日志。
   singerMarketWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) {
+    let host = null;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'https:') host = parsed.hostname.toLowerCase();
+    } catch (_) {
+      // 不是合法 URL —— host 保持 null，走 deny 分支
+    }
+    const allowed = !!host && SINGER_MARKET_EXTERNAL_HOSTS.some(
+      domain => host === domain || host.endsWith('.' + domain)
+    );
+    if (allowed) {
       shell.openExternal(url);
+    } else {
+      console.warn('[Main] Blocked singer-market external URL:', url);
     }
     return { action: 'deny' };
   });
@@ -723,7 +759,7 @@ function openAudioPreprocess(data) {
       preload: AUDIO_PREPROCESS_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -765,15 +801,15 @@ function getAllWebContents() {
 }
 
 function registerWindowIpc() {
-  ipcMain.handle('openFragmentEditor', async (event, { fragment, project, wavBuffer }) => {
-    openFragmentEditor(fragment, project, wavBuffer);
+  safeHandle('openFragmentEditor', async (event, { fragment, project, wavBuffer, backend }) => {
+    openFragmentEditor(fragment, project, wavBuffer, backend);
   });
 
-  ipcMain.handle('getFragmentData', async (event, fragmentId) => {
+  safeHandle('getFragmentData', async (event, fragmentId) => {
     return pendingFragmentData[fragmentId] || null;
   });
 
-  ipcMain.handle('saveFragmentDataSync', async (event, fragmentId, data) => {
+  safeHandle('saveFragmentDataSync', async (event, fragmentId, data) => {
     try {
       if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
         fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
@@ -788,7 +824,7 @@ function registerWindowIpc() {
     }
   });
 
-  ipcMain.handle('saveFragmentData', async (event, fragmentId, data) => {
+  safeHandle('saveFragmentData', async (event, fragmentId, data) => {
     if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
       fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
     }
@@ -798,17 +834,17 @@ function registerWindowIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('fragment:close', async (event, fragmentId) => {
+  safeHandle('fragment:close', async (event, fragmentId) => {
     closeFragmentEditor(fragmentId);
     return { success: true };
   });
 
-  ipcMain.handle('fragment:closeAll', async () => {
+  safeHandle('fragment:closeAll', async () => {
     closeAllFragmentEditors();
     return { success: true };
   });
 
-  ipcMain.handle('updateFragmentBounds', async (event, fragmentId, data) => {
+  safeHandle('updateFragmentBounds', async (event, fragmentId, data) => {
     // 同步刷新 pendingFragmentData 快照里的边界，避免分片编辑器在 currentFragment
     // 就绪前收到 fragmentBoundsChanged 被守卫丢弃后，又用旧快照覆盖 currentFragment，
     // 导致主页面对分片长度/结尾的修改偶现不同步。
@@ -823,7 +859,7 @@ function registerWindowIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('updateProjectSettings', async (event, projectData) => {
+  safeHandle('updateProjectSettings', async (event, projectData) => {
     for (const id in fragmentWindows) {
       if (fragmentWindows[id] && !fragmentWindows[id].isDestroyed()) {
         fragmentWindows[id].webContents.send('projectSettingsChanged', projectData);
@@ -832,19 +868,19 @@ function registerWindowIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('openSingerCreator', async () => {
+  safeHandle('openSingerCreator', async () => {
     openSingerCreator();
   });
 
-  ipcMain.handle('openSingerMarket', async () => {
+  safeHandle('openSingerMarket', async () => {
     openSingerMarket();
   });
 
-  ipcMain.handle('openAudioPreprocess', async (event, data) => {
+  safeHandle('openAudioPreprocess', async (event, data) => {
     openAudioPreprocess(data);
   });
 
-  ipcMain.handle('sendPreprocessData', async (event, data) => {
+  safeHandle('sendPreprocessData', async (event, data) => {
     if (singerCreatorWindow && !singerCreatorWindow.isDestroyed()) {
       singerCreatorWindow.webContents.send('preprocessDataSaved', data);
     }
@@ -852,12 +888,12 @@ function registerWindowIpc() {
   });
 
 
-  ipcMain.handle('set-dirty', async (event, dirty) => {
+  safeHandle('set-dirty', async (event, dirty) => {
     isDirty = dirty;
     return { success: true };
   });
 
-  ipcMain.handle('close-confirmed', async () => {
+  safeHandle('close-confirmed', async () => {
     if (closePending && mainWindow && !mainWindow.isDestroyed()) {
       closePending = false;
       isDirty = false;
@@ -866,7 +902,7 @@ function registerWindowIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('reload-main-window', async () => {
+  safeHandle('reload-main-window', async () => {
     buildAppMenu();
     if (mainWindow && !mainWindow.isDestroyed()) {
       // Apply locale in place. Reloading destroys the unsaved in-memory project.

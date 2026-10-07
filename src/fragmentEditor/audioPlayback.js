@@ -2,6 +2,7 @@
 const { encodeWav, applyEnvelopesToAudio } = require('../audio/wavEncoder.js');
 import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import { initPipeline, getFragmentPreviewInferenceOptions, getFragmentExportInferenceOptions } from './pipeline.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
 import {
@@ -28,6 +29,7 @@ import {
   getCurrentProject,
   getCurrentFragment,
   getEnvelopes,
+  getTrackBackend,
 } from './state.js';
 import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
 import { updateFragmentPlayButton } from './uiControls.js';
@@ -41,6 +43,32 @@ function _detachFragmentEndedListener() {
     try { _fragmentRemoveEndedListener(); } catch (_) {}
     _fragmentRemoveEndedListener = null;
   }
+}
+
+/**
+ * 把当前分片的后端声明挂到合成 options 上（options.backend）。
+ *
+ * 约定见 src/main/svsIpc.js 的 _resolvePluginBackend()：只要 options.backend.type
+ * === 'plugin'，主进程就把这一个 options 引用整体交给插件，不再走内置 pipeline。
+ * 分片编辑器此前完全没接这条线 —— 插件轨道在这里的预览播放 / 后台推理 / 导出
+ * 会静默跑内置 SoulX-Singer，与轨道上显示的插件名不符。
+ *
+ * 两条纪律（与 src/renderer/audioPlayback.js 的 attachPluginBackend 保持一致）：
+ *   · 内置后端不留痕：{type:'sxs'} 时压根不写 backend 字段，内置链路零差异。
+ *   · 其余参数一个都不删：需求要求"给模型的参数都要能传给插件"，这里只追加。
+ *
+ * @param {object} options
+ * @returns {object} options 本身
+ */
+function attachPluginBackend(options) {
+  if (!options) return options;
+  const backend = getTrackBackend();
+  if (backend && backend.type === 'plugin') {
+    // 浅拷贝：主进程把同一个 options 引用交给插件，插件改写不能透回
+    // 模块级的 trackBackend（那是工程数据）。
+    options.backend = { ...backend };
+  }
+  return options;
 }
 
 /**
@@ -245,7 +273,7 @@ function _createFragmentScheduler() {
         const raf = getFragmentPlayheadRaf();
         if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
         const btn = document.getElementById('btn-play-fragment');
-        if (btn) btn.textContent = t('fragment.waitingForInference');
+        if (btn) setLabel(btn, t('fragment.waitingForInference'), { icon: 'stop' });
       } else {
         updateFragmentPlayButton();
       }
@@ -1060,7 +1088,7 @@ export async function playFragment() {
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes: getClippedNotes(),
       bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
-      options: {
+      options: attachPluginBackend({
         f0Envelope: null,
         pitchCurveF0: pitchCurveF0Serializable,
         refAudioWavBuffer: getWavFileBuffer() || null,
@@ -1077,7 +1105,7 @@ export async function playFragment() {
         cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
         dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
         dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
-      },
+      }),
     });
     setFragmentAudioData(padAudioToFragmentDuration(audioData));
     // 合成成功后更新签名，后续播放可复用此缓存
@@ -1214,7 +1242,7 @@ export async function synthesizeFragmentInBackground(opts = {}) {
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes,
       bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
-      options: {
+      options: attachPluginBackend({
         // 后台推理：主进程不下发流式 chunk，避免无意义的分片间 IPC 拷贝
         background: true,
         f0Envelope: null,
@@ -1235,7 +1263,7 @@ export async function synthesizeFragmentInBackground(opts = {}) {
         dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
         // 优先推理：播放进度条所在分段（0 = 交给主进程按"第一个改动分段"决定）
         priorityTimeSec: Number.isFinite(opts.priorityTimeSec) ? opts.priorityTimeSec : 0,
-      },
+      }),
     });
 
     // 推理期间状态可能已变：
@@ -1274,7 +1302,7 @@ export async function exportFragment() {
   const btnExportFragment = document.getElementById('btn-export-fragment');
   const originalText = btnExportFragment.textContent;
   btnExportFragment.disabled = true;
-  btnExportFragment.textContent = t('fragment.exporting');
+  setLabel(btnExportFragment, t('fragment.exporting'), { icon: 'download' });
   setFragmentIsExporting(true);
   try {
     if (!getPipelineInitialized()) {
@@ -1291,7 +1319,7 @@ export async function exportFragment() {
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes: getClippedNotes(),
       bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
-      options: {
+      options: attachPluginBackend({
         f0Envelope: null,
         pitchCurveF0: pitchCurveF0Serializable,
         refAudioWavBuffer: getWavFileBuffer() || null,
@@ -1300,7 +1328,7 @@ export async function exportFragment() {
         nSteps: exportOpts.nSteps,
         cfg: exportOpts.cfg,
         cfgRescale: exportOpts.cfgRescale,
-      },
+      }),
     });
     const paddedAudio = padAudioToFragmentDuration(audioData);
     const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
@@ -1321,6 +1349,6 @@ export async function exportFragment() {
   } finally {
     setFragmentIsExporting(false);
     btnExportFragment.disabled = false;
-    btnExportFragment.textContent = originalText;
+    setLabel(btnExportFragment, originalText, { icon: 'download' });
   }
 }

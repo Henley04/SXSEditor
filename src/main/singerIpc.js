@@ -1,4 +1,5 @@
-const { ipcMain, dialog } = require('electron');
+const { dialog } = require('electron');
+const { safeHandle } = require('./ipcSafe');
 const fs = require('node:fs');
 const path = require('node:path');
 const { Worker } = require('worker_threads');
@@ -149,7 +150,7 @@ function encodeSingerFileContentAsync(singerData, fields) {
 }
 
 function registerSingerIpc() {
-  ipcMain.handle('saveSingerFile', async (event, singerData) => {
+  safeHandle('saveSingerFile', async (event, singerData) => {
     try {
       // If filePath is provided, save directly to it (save-in-place).
       // Otherwise show a Save As dialog to pick a path.

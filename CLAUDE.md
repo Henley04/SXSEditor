@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SXSEditor is an Electron desktop application for AI-powered singing voice synthesis (SVS). It combines a visual piano-roll editor with a neural SVS pipeline based on the SoulX-Singer acoustic model, running through ONNX Runtime with DirectML GPU acceleration.
 
-- **Languages supported**: Chinese (Mandarin) and English singing synthesis
+- **Languages supported**: Chinese (Mandarin), English, and Japanese singing synthesis (Japanese requires the optional JP model pack: `note_text_encoder`, `preflow`, `cond_emb`, `diff_step_dml`)
 - **Audio**: 24kHz model rate (48kHz default playback/export), 480 hop size, 128 mel bins
 - **Tech stack**: Electron + Electron Forge, Webpack, ONNX Runtime Node, Vanilla JS + HTML5 Canvas
 
@@ -14,7 +14,7 @@ SXSEditor is an Electron desktop application for AI-powered singing voice synthe
 
 ```bash
 npm start                     # Run in development mode
-npm test                      # Run full test suite (Mocha + Chai + Sinon, 1500+ tests)
+npm test                      # Run full test suite (Mocha + Chai + Sinon, 1628 tests across 66 files)
 npm run test:watch            # Watch mode for tests
 npm run test:coverage         # Tests with NYC coverage
 npm run package               # Package for current platform

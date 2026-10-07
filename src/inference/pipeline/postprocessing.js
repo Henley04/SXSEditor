@@ -176,7 +176,50 @@ function _oversample2xAntiAlias(samples, srcSr, dstSr) {
  * @param {number} chunkIndex - chunk 索引（用于错误信息）
  * @throws {Error} 当波形为空、包含 NaN 或全零时
  */
-function validateVocoderOutput(waveform, chunkIndex) {
+/**
+ * mel 的「静音电平」阈值（归一化域）。
+ *
+ * mel_transform 会把能量 clamp 到 1e-5 再取 log，再按 (log_mel - MEL_MEAN)/√MEL_VAR
+ * 标准化（见 preprocessing / melSpec 标准化），所以休止帧的归一化 mel 恒等于
+ * (log(1e-5) - MEL_MEAN)/√MEL_VAR ≈ -2.31。这里在此之上留 0.5 的容差：
+ * 归一化值 -1.81 对应线性幅度约 4e-5（≈ -87 dB），仍远低于任何可听阈值。
+ * 因此「全部抽样点 ≤ 该阈值」等价于「这段 mel 没有可听能量」。
+ */
+const MEL_SILENCE_LEVEL = (Math.log(1e-5) - MEL_MEAN) / Math.sqrt(MEL_VAR) + 0.5;
+
+/**
+ * 判断一段 mel 是否「无能量」（休止 / 极静音），用于区分
+ *   (a) 合法的静音输出（输入 mel 本来就是休止，声码器输出全零是正确的）
+ *   (b) DML silent failure（显存耗尽返回全零）
+ * 送进声码器的是**标准化** mel（mean≈0, std≈1，见 effectiveMelData 注释），
+ * 静音帧不是一个接近 0 的值，而是贴近 mel 下限的常数（≈ -2.31），
+ * 所以判据是「全部抽样点都 ≤ MEL_SILENCE_LEVEL」而不是「≈ 0」。
+ *
+ * NaN/Inf 一律视为非静音（保守）：mel 里出现非有限值时保留原有的全零拦截，
+ * 让问题暴露在 NaN 校验而不是被静音分支放过去。
+ *
+ * @param {Float32Array|number[]} melData - 该 chunk 的 mel（frames*MEL_DIM 平铺，已标准化）
+ * @param {number} [threshold=MEL_SILENCE_LEVEL] - 归一化域的静音电平上界
+ * @returns {boolean} true = 该段 mel 无能量
+ */
+function isSilentMel(melData, threshold = MEL_SILENCE_LEVEL) {
+    if (!melData || melData.length === 0) return true;
+    const step = Math.max(1, Math.floor(melData.length / 1024));
+    for (let i = 0; i < melData.length; i += step) {
+        // !(v <= threshold)：NaN/Inf 落到这里为 true → 判定非静音
+        if (!(melData[i] <= threshold)) return false;
+    }
+    return true;
+}
+
+/**
+ * @param {Float32Array} waveform - vocoder 输出波形
+ * @param {number} chunkIndex - chunk 索引（用于错误信息）
+ * @param {{silentInputMel?: boolean}} [opts] - silentInputMel=true 表示本 chunk 的输入 mel
+ *   本身无能量（休止/极静音），此时全零输出是合法的，跳过全零拦截。
+ * @throws {Error} 当波形为空、包含 NaN 或（输入 mel 有能量时）全零时
+ */
+function validateVocoderOutput(waveform, chunkIndex, opts = null) {
     if (!waveform || waveform.length === 0) {
         throw new Error(`Vocoder chunk ${chunkIndex} returned empty waveform (length=0, likely GPU VRAM exhaustion)`);
     }
@@ -192,7 +235,16 @@ function validateVocoderOutput(waveform, chunkIndex) {
         sampledCount++;
     }
     if (sampledCount > 0 && nonZeroCount === 0) {
-        throw new Error(`Vocoder chunk ${chunkIndex} produced all-zero output (GPU VRAM exhaustion or device removed)`);
+        // 全零也可能是「本 chunk 的 mel 本来就是休止/极静音」的合法输出：fillNoteGaps
+        // 会插入 pitch<=0 的休止帧，量化声码器可能给出精确的 0。只有输入 mel 有能量时
+        // 才能判定为 DML silent failure，否则会误杀合法静音段（长休止工程直接合成失败）。
+        if (opts && opts.silentInputMel) {
+            if (_readDiagnosticMode()) {
+                console.log(`[Vocoder] chunk ${chunkIndex} all-zero output but input mel is silent — treating as valid silence`);
+            }
+            return;
+        }
+        throw new Error(`Vocoder chunk ${chunkIndex} produced all-zero output while input mel had energy (GPU VRAM exhaustion or device removed)`);
     }
 }
 
@@ -1336,7 +1388,7 @@ class Postprocessing {
                 }
             }
             // 校验输出：DML 在显存边界可能返回全零/NaN 而不抛错（silent failure）
-            validateVocoderOutput(waveform, 0);
+            validateVocoderOutput(waveform, 0, { silentInputMel: isSilentMel(effectiveMelData) });
             // 诊断：vocoder 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
             // 纯统计采样，受 diagnosticMode 控制
             if (_readDiagnosticMode()) {
@@ -1516,7 +1568,8 @@ class Postprocessing {
             }
 
             // 校验输出：拦截 DML silent failure（全零/NaN）
-            validateVocoderOutput(waveform, i);
+            // melSub 是本 chunk 的原始 mel（不含静态形状补零，补零会把「静音」判成有能量）。
+            validateVocoderOutput(waveform, i, { silentInputMel: isSilentMel(melSub) });
             // 诊断：首 chunk 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
             // 纯统计采样，受 diagnosticMode 控制
             if (spec.isFirst && _readDiagnosticMode()) {
@@ -1811,6 +1864,7 @@ module.exports = {
     extractMelSpectrogram,
     extractMelSpectrogramAsync,
     validateVocoderOutput,
+    isSilentMel,
     isVramOOMError,
     guardMelFinite,
     __test: { countNonFinite: _countNonFinite, melTransformInputRank: _melTransformInputRank },

@@ -3,7 +3,7 @@ import './singerCreator.css';
 import { t, initI18n, applyLocale, getLocale } from './i18n/index.js';
 import { initWindowTheme } from './themes/themeInit.js';
 import { showAlertDialog } from './alertDialog.js';
-import { createIcon, hydrateIcons } from './icons/iconHelper.js';
+import { createIcon, hydrateIcons, setLabel } from './icons/iconHelper.js';
 
 initI18n().then(() => {
   applyLocale();
@@ -465,7 +465,7 @@ async function playPreviewWav() {
       if (isPlayingPreview) {
         isPlayingPreview = false;
         previewPlayStartOffset = 0;
-        btnPlayPreview.textContent = t('singerCreator.preview');
+        setLabel(btnPlayPreview, t('singerCreator.preview'), { icon: 'play' });
         stopPreviewRaf();
         drawWaveform(0);
       }
@@ -474,7 +474,7 @@ async function playPreviewWav() {
     previewAudioSource = source;
     isPlayingPreview = true;
     previewPlayStartContextTime = scheduledStartTime + outputLatency;
-    btnPlayPreview.textContent = t('singerCreator.pausePreview');
+    setLabel(btnPlayPreview, t('singerCreator.pausePreview'), { icon: 'pause' });
     startPreviewPlaybackLoop();
   } catch (err) {
     console.error(t('singerCreator.previewPlayFailed'), err);
@@ -500,7 +500,7 @@ function pausePreviewPlayback() {
     previewPlayStartOffset = 0;
   }
 
-  btnPlayPreview.textContent = t('singerCreator.preview');
+  setLabel(btnPlayPreview, t('singerCreator.preview'), { icon: 'play' });
   stopPreviewRaf();
   drawWaveform(previewPlayStartOffset);
 }
@@ -540,7 +540,7 @@ function stopPreviewPlayback() {
   }
   isPlayingPreview = false;
   previewPlayStartOffset = 0;
-  btnPlayPreview.textContent = t('singerCreator.preview');
+  setLabel(btnPlayPreview, t('singerCreator.preview'), { icon: 'play' });
   if (wavAudioBuffer) {
     drawWaveform(0);
   }
@@ -937,12 +937,12 @@ btnTrimPreview.addEventListener('click', async () => {
     source.start();
     source.onended = () => {
       isTrimPreviewPlaying = false;
-      btnTrimPreview.textContent = t('singerCreator.wavTrimPreview');
+      setLabel(btnTrimPreview, t('singerCreator.wavTrimPreview'), { icon: 'play' });
     };
 
     trimPreviewSource = source;
     isTrimPreviewPlaying = true;
-    btnTrimPreview.textContent = t('singerCreator.wavTrimStopPreview');
+    setLabel(btnTrimPreview, t('singerCreator.wavTrimStopPreview'), { icon: 'stop' });
   } catch (err) {
     console.error('Trim preview failed:', err);
   }
@@ -958,7 +958,7 @@ function stopTrimPreview() {
     trimPreviewContext = null;
   }
   isTrimPreviewPlaying = false;
-  btnTrimPreview.textContent = t('singerCreator.wavTrimPreview');
+  setLabel(btnTrimPreview, t('singerCreator.wavTrimPreview'), { icon: 'play' });
 }
 
 // 确认截取

@@ -11,6 +11,8 @@ import { computeLuminanceCached } from '../themes/colorUtils.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { loadSingerFile, showSingerSelectDialog, markDirty, loadAccompanimentFile } from './projectManager.js';
 import { createIcon } from '../icons/iconHelper.js';
+import { describeTrackBackend, ensurePluginCatalog, hasPluginCatalog } from './pluginBackend.js';
+import { isPluginTrack } from '../editor/trackManager.js';
 
 export function getBeatWidth() {
   return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX;
@@ -434,8 +436,16 @@ export function renderFragmentTimeline() {
 
           ctx.strokeStyle = c.fragmentText || '#fff';
           ctx.lineWidth = 1;
+          // 只绘制视口内的像素列。等价性：每列是一条独立的竖线段
+          // (moveTo+lineTo)，横向无连续性，裁剪不会产生接缝；画布 backing store
+          // 恰为视口大小且已 clip 到 roundRect，[ _viewLeft, _viewRight ] 之外的列
+          // 本来就会被裁掉；samplesPerPixel 只依赖 buf.length/accWidth，不随循环
+          // 范围变化，故每一列的 sampleStart/sampleEnd 与旧代码完全相同。
+          // 左右各外扩 1px 是防御性的，覆盖 lineWidth=1 的半像素边与 dpr 缩放。
+          const pxStart = Math.max(0, Math.floor(_viewLeft - accX) - 1);
+          const pxEnd = Math.min(accWidth - 1, Math.ceil(_viewRight - accX) + 1);
           ctx.beginPath();
-          for (let px = 0; px < accWidth; px++) {
+          for (let px = pxStart; px <= pxEnd; px++) {
             const sampleStart = Math.floor(px * samplesPerPixel);
             const sampleEnd = Math.min(sampleStart + samplesPerPixel, buf.length);
             let peak;
@@ -733,16 +743,46 @@ function commitTrackNameEdit(singer, newName) {
   }
 }
 
+/**
+ * 把轨道后端标签写进歌手行：内置后端是既有的 'SXS INFERENCE' 品牌标识，
+ * 插件后端由插件自己声明名称（见 pluginBackend.describeTrackBackend）。
+ */
+function appendBackendConfig(infoDiv, singer) {
+  const desc = describeTrackBackend(singer);
+  const configDiv = document.createElement('div');
+  configDiv.className = 'singer-config';
+  configDiv.textContent = desc.label;
+  infoDiv.appendChild(configDiv);
+  if (desc.detail) {
+    const subDiv = document.createElement('div');
+    subDiv.className = 'singer-config';
+    subDiv.style.opacity = '0.72';
+    subDiv.textContent = desc.detail;
+    infoDiv.appendChild(subDiv);
+  }
+}
+
 export function renderSingerList() {
   const singers = trackManager.getSingers();
+
+  // 插件轨道的标签来自插件清单（异步 IPC）。清单未就绪时先用 kindId 顶着，
+  // 到达后靠缓存键变化触发一次重绘 —— 不能因为等 IPC 就阻塞列表渲染。
+  if (!hasPluginCatalog() && singers.some(isPluginTrack)) {
+    ensurePluginCatalog().then(() => renderSingerList()).catch(() => {});
+  }
+
   // 单次遍历拼接缓存键：原先 5 次 map().join() 会产生 10 个临时数组与字符串，
   // 歌手数量一多时 refreshAll 会有可感知的额外开销。
   let key = String(state.editingTrackNameId || '');
+  // 插件清单状态与后端信息进缓存键：清单异步到达/切换后端后标签必须重建
+  key += `|cat${hasPluginCatalog() ? 1 : 0}`;
   for (let i = 0; i < singers.length; i++) {
     const s = singers[i];
     // color/avatarPath 参与缓存键：换色或换头像后列表 UI 必须重建，
     // 否则用户改完看不到变化（功能性 bug）。
     key += `|${s.id}~${s.trackName}~${s.singerFileMissing ? 1 : 0}${s.audioFileMissing ? 1 : 0}${s.type || 'singer'}~${s.color || ''}~${s.avatarPath || ''}`;
+    const backend = s.backend;
+    key += `~${backend ? backend.type : 'sxs'}${backend && backend.pluginId ? backend.pluginId : ''}${backend && backend.kindId ? backend.kindId : ''}${backend && backend.voiceId ? backend.voiceId : ''}${s.backendMissing ? 1 : 0}`;
   }
   const cacheKey = key;
   if (renderSingerList._cacheKey === cacheKey && dom.singerListEl.childElementCount > 0) return;
@@ -834,10 +874,7 @@ export function renderSingerList() {
         warningDiv.textContent = t('main.singerFileNotFound');
         infoDiv.appendChild(warningDiv);
       } else {
-        const configDiv = document.createElement('div');
-        configDiv.className = 'singer-config';
-        configDiv.textContent = 'SXS INFERENCE';
-        infoDiv.appendChild(configDiv);
+        appendBackendConfig(infoDiv, singer);
       }
 
       input.addEventListener('keydown', (e) => {
@@ -967,10 +1004,7 @@ export function renderSingerList() {
         });
         infoDiv.appendChild(relocateBtn);
       } else {
-        const configDiv = document.createElement('div');
-        configDiv.className = 'singer-config';
-        configDiv.textContent = 'SXS INFERENCE';
-        infoDiv.appendChild(configDiv);
+        appendBackendConfig(infoDiv, singer);
       }
 
       trackNameDiv.addEventListener('dblclick', (e) => {

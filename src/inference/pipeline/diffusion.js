@@ -449,17 +449,46 @@ class Diffusion {
             (ptFrameCount + totalFrames) * MEL_DIM));
 
         // === Uncond branch: xt = xtData (target only), cond = zeros, mask = ones for target ===
-        const uncondXtData = new Float32Array(seqLen * MEL_DIM);
-        // Place target xt at position 0 (no prompt prefix)
+        //
+        // 跨步复用（reuseBufs 由 runDiffusionLoop 传入）：原本每步新建这三张张量，
+        // 分配量 ≈ seqLen*MEL_DIM*4 + seqLen*COND_DIM*4 字节（典型 ~6.5MB/步 × 32 步），
+        // 全部交给 GC/finalizer 回收。这里改为首次创建、之后只覆写内容。
+        //
+        // 注意三张张量的语义不同，不能一律「创建一次就不管」：
+        //   · uncondXtData 是**当前采样状态**（每步的 xt 都不同）→ 复用分配，
+        //     但每步都必须 .set() 重新写入；
+        //   · uncondCondData（全零）与 uncondMaskData（target 段置 1）只依赖
+        //     totalFrames/seqLen，在一次 runDiffusionLoop 内恒定 → 首次写入后不再改写。
+        let uncondXtData, uncondXtTensor, uncondCondTensor, uncondMaskTensor;
+        if (reuseBufs && reuseBufs.uncondXtTensor) {
+            uncondXtData = reuseBufs.uncondXtData;
+            uncondXtTensor = reuseBufs.uncondXtTensor;
+            uncondCondTensor = reuseBufs.uncondCondTensor;
+            uncondMaskTensor = reuseBufs.uncondMaskTensor;
+        } else {
+            uncondXtData = new Float32Array(seqLen * MEL_DIM);
+            // Uncond cond = zeros, mask = ones for target only
+            const uncondCondData = new Float32Array(seqLen * COND_DIM); // zeros
+            const uncondMaskData = new Float32Array(seqLen); // zeros
+            for (let i = 0; i < totalFrames; i++) uncondMaskData[i] = 1;
+            uncondXtTensor = createFloatTensor(floatType, uncondXtData, [1, seqLen, MEL_DIM]);
+            uncondCondTensor = createFloatTensor(floatType, uncondCondData, [1, seqLen, COND_DIM]);
+            uncondMaskTensor = _createMaskTensor(io, floatType, uncondMaskData, [1, seqLen]);
+            if (reuseBufs) {
+                reuseBufs.uncondXtData = uncondXtData;
+                reuseBufs.uncondXtTensor = uncondXtTensor;
+                reuseBufs.uncondCondTensor = uncondCondTensor;
+                reuseBufs.uncondMaskTensor = uncondMaskTensor;
+            }
+        }
+        // Place target xt at position 0 (no prompt prefix) — 每步覆写（采样状态在变）。
+        // 尾部 padding 区（totalFrames..seqLen）保持首次分配时的 0，与原先每步新建一致。
         uncondXtData.set(xtData.subarray(0, totalFrames * MEL_DIM));
-        const uncondXtTensor = createFloatTensor(floatType, uncondXtData, [1, seqLen, MEL_DIM]);
-
-        // Uncond cond = zeros, mask = ones for target only
-        const uncondCondData = new Float32Array(seqLen * COND_DIM); // zeros
-        const uncondMaskData = new Float32Array(seqLen); // zeros
-        for (let i = 0; i < totalFrames; i++) uncondMaskData[i] = 1;
-        const uncondCondTensor = createFloatTensor(floatType, uncondCondData, [1, seqLen, COND_DIM]);
-        const uncondMaskTensor = _createMaskTensor(io, floatType, uncondMaskData, [1, seqLen]);
+        if (floatType === 'float16') {
+            batchFloat32ToFloat16(uncondXtData, uncondXtTensor.data, uncondXtData.length);
+        } else {
+            uncondXtTensor.data.set(uncondXtData);
+        }
 
         // Reuse tTensor (same t value), just ensure t buffer has correct value
         // (already set above for cond branch; t is the same for uncond)
@@ -473,9 +502,8 @@ class Diffusion {
         const uncondPredRaw = uncondResults[io.outName];
         const uncondPredFull = outputToFloat32(uncondPredRaw);
         disposeTensor(uncondPredRaw);
-        disposeTensor(uncondXtTensor);
-        disposeTensor(uncondCondTensor);
-        disposeTensor(uncondMaskTensor);
+        // uncond 三张输入张量现在跨步复用，不能在步内 dispose ——
+        // 由 runDiffusionLoop 的 _disposeAllTensors 在循环结束时统一释放。
 
         // Slice uncond target segment (starts at position 0, no prompt
         // offset) — contiguous, single memcpy.
@@ -659,6 +687,11 @@ class Diffusion {
             if (cfgTTensor) disposeTensor(cfgTTensor);
             if (cfgCondTensor) disposeTensor(cfgCondTensor);
             if (cfgMaskTensor) disposeTensor(cfgMaskTensor);
+            // _evalDiffStepSeparate（CFG 分离分支，batch=1 回退路径）的 uncond 输入张量
+            // 挂在 buffers 上跨步复用，必须在这里释放，否则每次 runDiffusionLoop 泄漏 3 张。
+            if (buffers.uncondXtTensor) disposeTensor(buffers.uncondXtTensor);
+            if (buffers.uncondCondTensor) disposeTensor(buffers.uncondCondTensor);
+            if (buffers.uncondMaskTensor) disposeTensor(buffers.uncondMaskTensor);
         };
 
         const progressPerStep = progressRange / totalSteps;
@@ -1300,6 +1333,8 @@ class Diffusion {
      * @param {Object} ctx - 分块上下文（由调用方持有，跨块共享 xt.data 状态）
      *   { sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond,
      *     totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap }
+     *   chunkOverlapNoiseLevel?: number - 非首块 overlap 前缀的重噪强度 t0 ∈ [0,1]，
+     *     默认 0（纯高斯，与整段推理初值一致）；>0 时按 SDEdit 保留部分前块 mel。
      * @param {Object} spec - 分块规格 { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast }
      * @param {Function} onProgress
      * @param {number} progressStart
@@ -1317,6 +1352,39 @@ class Diffusion {
         // 1. 提取当前块的噪声
         const chunkNoise = new Float32Array(currentChunkFrames * MEL_DIM);
         chunkNoise.set(xtOut.subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM));
+        // --- 非首块 overlap 前缀重噪（F-04）---
+        // 为什么必须重噪：runDiffusionLoop 从 t=0 起积分（sampler 的 tVal=(step+0.5)/totalSteps，
+        // step 0 ≈ 0），rectified flow 的 t=0 边界条件是标准高斯噪声（整段推理的初值就是
+        // randomNoise()）。而非首块的 chunkStart 落在上一块已提交区域内（_planChunks:
+        // chunkStart = framePos - overlap），这块区域在上一块第 4 步写回时已经被替换成
+        // 「去噪完成 + WSOLA 交叉淡入淡出后的干净 mel」。把干净 mel 当 t=0 的输入是 OOD：
+        // 模型在噪声时刻收到干净信号，速度场预测失真。
+        //
+        // 更关键的是 CFG 双分支共用同一份 xt：evalDiffStep 里 cond 行
+        // `xtInputBuf.set(xtData, ptFrameCount*MEL_DIM)` 与 uncond 行
+        // `cfgBatchBuf.set(xtData.subarray(0, totalFrames*MEL_DIM), row1Off)` 都取自
+        // subXt.data，因此污染会同时进入两条分支，CFG 无法抑制反而放大偏差。
+        // 所以重噪必须作用在**共享来源** chunkNoise 上（这里做），而不是某一分支。
+        //
+        // 做法（SDEdit 式）：xt = √(1-t0)·eps + √t0·x_prev，eps 为本仓库 randomNoise()
+        // 生成的标准高斯（内部走 this._rng || Math.random，setNoiseSeed 的确定性仍然生效）。
+        // t0 = 0（默认）即纯高斯，与整段推理的初始条件完全一致；t0 ∈ (0,0.3] 时保留少量
+        // 前块信息以减小块间跳变，代价是仍轻微偏离 t=0 流形。
+        if (!isFirst) {
+            const renoiseOv = Math.min(overlap, currentChunkFrames);
+            if (renoiseOv > 0) {
+                const t0 = Number.isFinite(ctx.chunkOverlapNoiseLevel)
+                    ? Math.min(1, Math.max(0, ctx.chunkOverlapNoiseLevel))
+                    : 0;
+                const sqrtOneMinusT = Math.sqrt(1 - t0);
+                const sqrtT = Math.sqrt(t0);
+                const ovNoise = this.randomNoise(renoiseOv, MEL_DIM);
+                const ovEnd = renoiseOv * MEL_DIM;
+                for (let i = 0; i < ovEnd; i++) {
+                    chunkNoise[i] = sqrtOneMinusT * ovNoise.data[i] + sqrtT * chunkNoise[i];
+                }
+            }
+        }
         const subXt = { data: chunkNoise, dims: [1, currentChunkFrames, MEL_DIM] };
 
         // 2. 构建当前块的条件向量

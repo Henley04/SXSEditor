@@ -42,20 +42,28 @@ app.commandLine.appendSwitch('enable-features', 'WebMachineLearningNeuralNetwork
 // 禁用未使用的 Chromium 子系统以加速浏览器进程初始化。
 // 每个 disabled feature 都避免在启动时加载其服务实现，省 20-100ms。
 // 这些功能 SXSEditor 均不使用：内置翻译、Cast 发现、Dial 媒体路由、
-// 扩展系统、自动填充服务器通信、证书验证器后台任务。
+// 扩展系统、自动填充服务器通信、原生窗口遮挡探测、cross-origin 站点隔离。
+//
+// 已移除的两条（此前误以为生效）及其移除理由：
+//   · 'CertificateVerifier' —— 这不是有效的 feature 名（真正的名字是
+//     CertVerifierService），写在这里会被 Chromium 静默忽略。它的存在让人
+//     误读为"本应用关闭了证书校验"，而实际上我们从未关闭过。TLS 校验照常生效。
+//   · 'site-per-process' —— 它是命令行**开关**（--site-per-process），不是
+//     feature 名，写进 disable-features 同样不生效。本应用也不需要关闭站点
+//     隔离：所有窗口均为本地同源 + contextIsolation: true，且 10 个渲染进程
+//     已全部开启 OS 沙箱（见 windowManager.js / splashManager.js）。
 app.commandLine.appendSwitch('disable-features', [
   'Translate',
   'MediaRouter',
   'DialMediaRouteProvider',
   'Extensions',
   'AutofillServerCommunication',
-  'CertificateVerifier',
   // Windows 原生窗口遮挡探测会在启动时同步枚举顶层窗口，冷启动常见 50-150ms
   // 卡顿。SXSEditor 不做遮挡优化，直接关掉。
   'CalculateNativeWinOcclusion',
-  // 站点隔离/进程外 iframe 相关后台服务，本应用所有内容均为本地同源。
+  // 有效且保留：本应用不存在跨源 iframe，站点隔离带来的额外进程只有开销、
+  // 没有安全收益（所有页面本地同源，且渲染进程已开 OS 沙箱）。
   'IsolateOrigins',
-  'site-per-process',
 ].join(','));
 // Disable background throttling & renderer backgrounding so audio playback
 // keeps running smoothly when the window is occluded/minimized. Audio

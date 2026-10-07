@@ -9,6 +9,7 @@ import { setupEventListeners, _invalidateCanvasRect } from './eventHandlers.js';
 import { setupIpcHandlers, loadFragmentFromHash } from './ipcHandlers.js';
 import { setupUiControls } from './uiControls.js';
 import { startAutoInferenceWatcher, stopAutoInferenceWatcher } from './autoInference.js';
+import { applyPluginEditorLayout } from './pluginEditorMode.js';
 import { installAutoRelayout } from '../shared/autoRelayout.js';
 import {
   getAutoSaveTimer, setAutoSaveTimer,
@@ -142,6 +143,10 @@ setupUiControls();
 
 // Load fragment from hash if needed
 loadFragmentFromHash();
+
+// 插件轨道：按 trackKind.editor 裁剪内置编辑器形态。
+// 全程异步（等 IPC 里的 backend + 插件清单），不占窗口首帧；内置轨道直接跳过。
+applyPluginEditorLayout();
 
 // 编辑后自动实时推理监听（设置项 autoRealtimeInference，默认关闭）。
 // 放在 loadFragmentFromHash 之后：此时 currentFragment 已就绪，才能比对签名。
