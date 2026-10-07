@@ -54,17 +54,45 @@ rules.push({
 // onnxruntime-web 文件复制模式
 // 使用 globOptions 以正确处理 glob 模式
 const ortDistDir = path.resolve(__dirname, 'node_modules/onnxruntime-web/dist');
+//
+// P2：wasm 变体收窄。原先 `from: '*.wasm'` 会把 dist 下**全部** wasm 变体拷进每个
+// 渲染进程目录（jsep 26.8 MB + asyncify 24.3 MB + jspi 15.0 MB + 基础 13.5 MB
+// ≈ 80 MB，且对 ONNX_WINDOW_NAMES 里的每个窗口各拷一份）。
+//
+// 收窄依据（对本仓库实际安装的 onnxruntime-web@1.27.0 做过核查，不是推测）：
+//   · ort.all.min.js 里唯一硬编码的 loader 文件名是 "ort-wasm-simd-threaded.jsep.mjs"
+//     （`grep -o "ort-wasm[a-zA-Z0-9._-]*" dist/ort.all.min.js` 只命中
+//     ort-wasm-proxy-worker 与 ort-wasm-simd-threaded.jsep.mjs）；
+//   · 它对应的 .mjs 只引用 ort-wasm-simd-threaded.jsep.wasm；
+//   · 本应用在 src/inference/webnn/ortSetup.js 里设 ort.env.wasm.wasmPaths = './'，
+//     文件名由上面这个 loader 自己拼，不会去探测 asyncify / jspi 变体。
+// 因此 asyncify 与 jspi 两个实验性变体（合计 39.3 MB/窗口）是纯死重。
+// 保留 jsep（WebNN/WebGPU 路径实际使用）与基础变体（纯 CPU 兜底）。
+const ORT_WASM_VARIANTS = [
+  'ort-wasm-simd-threaded.jsep.wasm',
+  'ort-wasm-simd-threaded.wasm',
+];
+// 与 wasm 一一对应的 loader 脚本。注意 onnxruntime-web@1.27 的 dist 里
+// 只有 .mjs loader（没有同名 .js），这一点已用 fs.existsSync 逐个核过：
+//   ort-wasm-simd-threaded.jsep.mjs ✔   ort-wasm-simd-threaded.jsep.js ✘
+//   ort-wasm-simd-threaded.mjs     ✔   ort-wasm-simd-threaded.js     ✘
+// 所以这里只列 .mjs；写上 .js 会让 copy-webpack-plugin 报 ENOENT。
+const ORT_LOADER_VARIANTS = [
+  'ort-wasm-simd-threaded.jsep.mjs',
+  'ort-wasm-simd-threaded.mjs',
+];
+
 const onnxruntimeWasmPatterns = ONNX_WINDOW_NAMES.flatMap((name) => [
-  {
-    from: '*.wasm',
+  ...ORT_WASM_VARIANTS.map((file) => ({
+    from: file,
     to: path.resolve(__dirname, `.webpack/renderer/${name}/[name][ext]`),
     context: ortDistDir,
-  },
-  {
-    from: 'ort-wasm*.{js,mjs}',
+  })),
+  ...ORT_LOADER_VARIANTS.map((file) => ({
+    from: file,
     to: path.resolve(__dirname, `.webpack/renderer/${name}/[name][ext]`),
     context: ortDistDir,
-  },
+  })),
   // 复制包含 WebNN 的 onnxruntime-web UMD 包（通过 script 标签加载，绕过 webpack）
   {
     from: path.resolve(__dirname, 'node_modules/onnxruntime-web/dist/ort.all.min.js'),

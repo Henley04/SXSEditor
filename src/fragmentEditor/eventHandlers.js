@@ -2364,10 +2364,18 @@ export function setupEventListeners() {
     if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
       e.preventDefault();
       if (history.canUndo()) {
-        history.undo();
-        bumpNotesVersion(); // undo 就地改了 notes，失效 inactive/oob 缓存
-        render();
-        scheduleAutoSave();
+        // undo() 失败时会把命令退回 undoStack 并重新抛错（见 editor/historyManager.js）。
+        // 刷新放进 finally：命令可能已部分回滚，此时界面必须反映真实状态，
+        // 不能停在"看起来没反应"的旧画面上。错误本身就地记日志，不打断键盘事件流。
+        try {
+          history.undo();
+        } catch (err) {
+          console.error('[FragmentEditor] Undo failed:', err && err.message ? err.message : err);
+        } finally {
+          bumpNotesVersion(); // undo 就地改了 notes，失效 inactive/oob 缓存
+          render();
+          scheduleAutoSave();
+        }
       }
       return;
     }
@@ -2375,10 +2383,16 @@ export function setupEventListeners() {
     if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey) || (e.key === 'Z' && e.shiftKey))) {
       e.preventDefault();
       if (history.canRedo()) {
-        history.redo();
-        bumpNotesVersion(); // redo 就地改了 notes，失效 inactive/oob 缓存
-        render();
-        scheduleAutoSave();
+        // 同上：redo() 失败时命令退回 redoStack 并重抛，刷新放在 finally 里。
+        try {
+          history.redo();
+        } catch (err) {
+          console.error('[FragmentEditor] Redo failed:', err && err.message ? err.message : err);
+        } finally {
+          bumpNotesVersion(); // redo 就地改了 notes，失效 inactive/oob 缓存
+          render();
+          scheduleAutoSave();
+        }
       }
       return;
     }

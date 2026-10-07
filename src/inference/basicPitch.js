@@ -1,5 +1,18 @@
 const path = require('node:path');
-const tf = require('@tensorflow/tfjs');
+// P1：只加载实际用到的 tfjs 子包，替代 meta 包 `@tensorflow/tfjs`（142 MB，
+// 其中 dist 几乎全是 sourcemap），并顺带省掉运行时用不到的 layers(31 MB)、
+// data(4 MB)、backend-webgl(23 MB，Node 主进程无 WebGL)。
+// 基本面 tf API（tensor1d/concat1d/zeros/expandDims/slice/signal/setBackend…）
+// 全部来自 tfjs-core；tfjs-converter 提供 GraphModel 权重加载。
+//
+// 注意 loadGraphModel 必须从 tfjs-converter **单独解构**，不能指望
+// require('@tensorflow/tfjs-converter') 之后它会挂到 tf 命名空间上——
+// 实测 tf.loadGraphModel 仍是 undefined，meta 包那句 `const tf = require('@tensorflow/tfjs')`
+// 之所以能拿到它，是因为 meta 包自己做了 re-export。一旦换成子包就必须显式解构，
+// 否则 BASIC-PITCH 会在加载模型那一步直接抛 "tf.loadGraphModel is not a function"。
+const tf = require('@tensorflow/tfjs-core');
+const { loadGraphModel } = require('@tensorflow/tfjs-converter');
+require('@tensorflow/tfjs-backend-cpu');
 require('@tensorflow/tfjs-backend-wasm');
 const { resampleAudio } = require('../utils/resampleAudio');
 
@@ -514,7 +527,7 @@ class BasicPitchDetector {
 
     const baseUrl = await this._startLocalServer();
     try {
-      this.model = await tf.loadGraphModel(`${baseUrl}/model.json`);
+      this.model = await loadGraphModel(`${baseUrl}/model.json`);
       this.initialized = true;
       console.log('[BasicPitchDetector] model loaded successfully');
       return true;

@@ -12,13 +12,17 @@ module.exports = {
   externals: [
     {
       'onnxruntime-node': 'commonjs onnxruntime-node',
-      // TensorFlow.js 是纯 JS（+ wasm 二进制），没有原生模块，不需要被
-      // webpack 打进主进程 bundle。保持 external 后：
+      // TensorFlow.js 以按需子包形式引入（见 package.json 与 src/inference/basicPitch.js）：
+      // core 提供 tensor/signal 等基础 API，converter 提供 GraphModel 权重加载，
+      // backend-cpu / backend-wasm 提供 setBackend('cpu'|'wasm')。
+      // 它们都是纯 JS（+ wasm 二进制），没有原生模块，因此不需要被 webpack 打进主进程
+      // bundle。保持 external 后：
       //   - 主 bundle 体积显著下降，打包耗时/内存也更低；
-      //   - tfjs 与其子包（tfjs-core / converter / backend-cpu / webgl ...）
-      //     直接从 node_modules 运行时加载（node_modules 由 forge 保留）。
-      // 仅 basicPitch（BASIC-PITCH 转谱）会真正 require 它。
-      '@tensorflow/tfjs': 'commonjs @tensorflow/tfjs',
+      //   - tfjs 直接从 node_modules 运行时加载（node_modules 由 forge 保留）。
+      // 仅 basicPitch（BASIC-PITCH 转谱）会真正 require 它们。
+      '@tensorflow/tfjs-core': 'commonjs @tensorflow/tfjs-core',
+      '@tensorflow/tfjs-converter': 'commonjs @tensorflow/tfjs-converter',
+      '@tensorflow/tfjs-backend-cpu': 'commonjs @tensorflow/tfjs-backend-cpu',
       '@tensorflow/tfjs-backend-wasm': 'commonjs @tensorflow/tfjs-backend-wasm',
       'systeminformation': 'commonjs systeminformation',
       // Native-backed modules must stay outside the bundle so their .node
