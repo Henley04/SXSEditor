@@ -1,5 +1,10 @@
 # SXSEditor 歌声后端插件系统（主进程侧 · 契约 v1）
 
+> **面向读者**：本文是面向插件作者的**完整技术规格**，与网页版
+> [`plugins.html`](plugins.html)（导航 → 开发者指南 → 插件后端）内容同源。
+> 网页版是这个功能面向公众的正式文档入口；若只关心如何安装和使用插件，请看
+> 用户指南的「插件后端」页。
+>
 > 适用范围：`src/main/pluginHost.js`（宿主内核）、`src/main/pluginIpc.js`（IPC 层）、
 > `src/shared/pluginContract.js`（**契约唯一真源**，校验常量与纯函数）、
 > `plugins/example-concat/`（可直接运行的模板插件）。
