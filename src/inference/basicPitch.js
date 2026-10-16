@@ -1,4 +1,5 @@
 const path = require('node:path');
+const { requireSampleRate } = require('./shared/pitchF0Utils');
 // P1：只加载实际用到的 tfjs 子包，替代 meta 包 `@tensorflow/tfjs`（142 MB，
 // 其中 dist 几乎全是 sourcemap），并顺带省掉运行时用不到的 layers(31 MB)、
 // data(4 MB)、backend-webgl(23 MB，Node 主进程无 WebGL)。
@@ -572,13 +573,15 @@ class BasicPitchDetector {
     return resampled;
   }
 
-  async extractF0AndNotes(audioData, sampleRate = 44100, bpm = 120) {
+  async extractF0AndNotes(audioData, sampleRate, bpm = 120) {
     if (!this.initialized) {
       await this.init();
     }
+    // 2.3: 与 FCPE/RMVPE 一样移除 `= 44100` 兜底，漏传采样率直接报错。
+    const sr = requireSampleRate(sampleRate, 'BasicPitchDetector.extractF0AndNotes');
 
-    const resampledAudio = sampleRate !== BASIC_PITCH_SAMPLE_RATE
-      ? resampleAudio(audioData, sampleRate, BASIC_PITCH_SAMPLE_RATE)
+    const resampledAudio = sr !== BASIC_PITCH_SAMPLE_RATE
+      ? resampleAudio(audioData, sr, BASIC_PITCH_SAMPLE_RATE)
       : audioData;
 
     const wavSamples = tf.concat1d([

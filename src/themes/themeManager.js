@@ -32,6 +32,9 @@
 import { buildDefaultTokens } from './tokenCatalog.js';
 import { validate, normalize, ThemeValidationError } from './themeValidator.js';
 import { computeIsDark as computeIsDarkUtil } from './colorUtils.js';
+// 2.2: token 注入统一走 themeInit 的实现（旧的本文件版本不清旧变量、也不
+// 广播 theme:changed，切主题会残留脏 CSS 变量且 canvas 颜色缓存不失效）。
+import { injectTokens } from './themeInit.js';
 
 class ThemeNotFoundError extends Error {
     constructor(id) {
@@ -93,18 +96,6 @@ function flattenTheme(theme) {
         Object.assign(out, t.tokens || {});
     }
     return out;
-}
-
-function injectTokens(tokens) {
-    if (typeof document === 'undefined') return;
-    const root = document.documentElement;
-    for (const [k, v] of Object.entries(tokens)) {
-        try {
-            root.style.setProperty(k, v);
-        } catch (_e) {
-            // Skip invalid property names silently
-        }
-    }
 }
 
 // ==================== isDark computation ====================

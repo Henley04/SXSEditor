@@ -16,6 +16,9 @@ const WINDOW_NAMES = [
   'resource_manager_window',
   'splash_window',
   'singer_market_window',
+  // updateNotification.html 里同样有 <script src="./themes/themeBootstrap.js">，
+  // 原先漏在列表外 → 打包后该窗口 404，首屏防闪烁脚本不生效（审查项 U2）。
+  'update_notification_window',
 ];
 
 // Windows that need onnxruntime-web wasm/JS files copied alongside.
@@ -87,16 +90,19 @@ const onnxruntimeWasmPatterns = ONNX_WINDOW_NAMES.flatMap((name) => [
     from: file,
     to: path.resolve(__dirname, `.webpack/renderer/${name}/[name][ext]`),
     context: ortDistDir,
+      noErrorOnMissing: true,
   })),
   ...ORT_LOADER_VARIANTS.map((file) => ({
     from: file,
     to: path.resolve(__dirname, `.webpack/renderer/${name}/[name][ext]`),
     context: ortDistDir,
+      noErrorOnMissing: true,
   })),
   // 复制包含 WebNN 的 onnxruntime-web UMD 包（通过 script 标签加载，绕过 webpack）
   {
     from: path.resolve(__dirname, 'node_modules/onnxruntime-web/dist/ort.all.min.js'),
     to: path.resolve(__dirname, `.webpack/renderer/${name}/ort.all.min.js`),
+    noErrorOnMissing: true,
   },
 ]);
 
@@ -122,6 +128,7 @@ module.exports = {
         {
           from: path.resolve(__dirname, 'src/themes/themeBootstrap.js'),
           to: path.resolve(__dirname, `.webpack/renderer/${name}/themes/themeBootstrap.js`),
+          noErrorOnMissing: true,
         },
       ]).concat(onnxruntimeWasmPatterns).concat([
         // Splash window icon: the inline SVG in splash.html references
@@ -132,6 +139,7 @@ module.exports = {
         {
           from: path.resolve(__dirname, 'assets/SXS.png'),
           to: path.resolve(__dirname, '.webpack/renderer/splash_window/SXS.png'),
+          noErrorOnMissing: true,
         },
       ]),
     }),

@@ -2021,10 +2021,19 @@ loadVocoderChunkFramesTable();
 // until gpuPhase === 'full' (max 30s).
 (async () => {
     const deadline = Date.now() + 30000;
+    // 交互性：这段轮询最长 30 秒，此前界面上全程没有任何反馈 —— 用户看到的是
+    // 一片空白（或上一次的旧文案），只能干等。先给一个明确的"正在检测"，
+    // 超时也要说清楚发生了什么，而不是悄悄放弃。
+    if (vocoderChunkSmartText) {
+        vocoderChunkSmartText.textContent = t('settings.vocoderChunkDetecting');
+    }
     while (Date.now() < deadline) {
         await loadVocoderChunkFramesInfo();
         if (_vocoderChunkInfoLoaded) break;
         await new Promise(r => setTimeout(r, 2000));
+    }
+    if (!_vocoderChunkInfoLoaded && vocoderChunkSmartText) {
+        vocoderChunkSmartText.textContent = t('settings.vocoderChunkDetectTimeout');
     }
 })();
 

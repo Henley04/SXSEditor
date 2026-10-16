@@ -1,4 +1,3 @@
-const { app } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { setLocale } = require('./locale');
@@ -61,7 +60,8 @@ let _settingsCache = null;
 let cachedDMLDevices = null;
 
 function getSettingsFilePath() {
-  return path.join(app.getPath('userData'), 'settings.json');
+  // A6: 文件名由 ConfigStore 统一登记，主进程不再就地拼 userData 路径。
+  return require('./configStore').getConfigPath('settings');
 }
 
 function setCachedDMLDevices(devices) {
@@ -532,10 +532,8 @@ async function updateLocaleSetting(locale) {
   const mainLocales = require('./locale').getMainLocales();
   if (locale && mainLocales[locale]) {
     setLocale(locale);
-    try {
-      const configPath = path.join(app.getPath('userData'), 'sxseditor-locale.json');
-      await fs.promises.writeFile(configPath, JSON.stringify({ locale }), 'utf8');
-    } catch (_) {}
+    // A6: 与 settingsIpc.js:updateLocale 走同一个写入口（此前两处各拼一次路径）。
+    await require('./configStore').writeJsonConfig('locale', { locale });
   }
 }
 

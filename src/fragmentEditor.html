@@ -55,12 +55,17 @@
       <div id="main-content">
         <div id="left-sidebar">
           <div id="piano-keys-container">
-            <canvas id="piano-keys" role="img" aria-label="钢琴键盘"></canvas>
+            <canvas id="piano-keys" role="presentation" aria-hidden="true" aria-label="钢琴键盘"></canvas>
           </div>
         </div>
         <div id="right-content">
           <div id="piano-roll-container">
-            <canvas id="piano-roll" role="img" aria-label="钢琴卷帘编辑器"></canvas>
+            <!-- a11y(U3)：钢琴卷帘是可交互画布（选音符、拖拽、缩放），role="img" 会
+                 让读屏把它当成静态图片。改为 role="application" + tabindex 让键盘可
+                 达，并用 aria-live 容器播报音符数与选中状态。 -->
+            <canvas id="piano-roll" role="application" tabindex="0"
+                    aria-label="钢琴卷帘编辑器：双击空白添加音符，双击音符编辑歌词，Delete 删除选中"></canvas>
+            <p id="piano-roll-a11y-status" class="sr-only" aria-live="polite" aria-atomic="true"></p>
           </div>
         </div>
         <div id="inspector-resize" class="inspector-resize"></div>

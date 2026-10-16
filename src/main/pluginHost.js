@@ -57,6 +57,8 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const contract = require('../shared/pluginContract.js');
+// A1: 权限声明/模块分类（CJS，与主进程和 worker 的 require 路径都兼容）
+const permissionsContract = require('../shared/pluginPermissions.js');
 const wire = require('./pluginWorker.js');
 
 /**
@@ -266,6 +268,21 @@ function isInside(base, child) {
  * 读取并解析 manifest.json。
  * @param {string} manifestPath
  */
+/**
+ * A1：插件 worker 的资源上限。
+ *
+ * worker_threads 与宿主共享进程地址空间（每个线程有独立 isolate，但共享进程
+ * 的句柄表与原生内存），所以插件线程里的无限递归 / 泄漏照样能拖垮应用。这里
+ * 给 V8 堆设上限：超限时 worker 会以 'err_oom' 退出并被宿主捕获成一条插件错误，
+ * 而不是把主进程一起带走。
+ */
+const PLUGIN_WORKER_RESOURCE_LIMITS = Object.freeze({
+  maxOldGenerationSizeMb: 512,
+  maxYoungGenerationSizeMb: 64,
+  // 插件常做深度递归（音素树/序列化），默认 984KB 的栈不够；给到 4MB
+  stackSizeMb: 4,
+});
+
 function readManifest(manifestPath) {
   const raw = fs.readFileSync(manifestPath, 'utf8');
   try {
@@ -336,6 +353,10 @@ function validateManifest(manifest, dirName) {
     }
   }
 
+  // A1: 可选的权限声明。给了就必须合法；没给则不启用 require 拦截（兼容存量插件）。
+  const perms = permissionsContract.validatePermissions(manifest.permissions);
+  if (!perms.ok) return { ok: false, error: perms.error };
+
   return {
     ok: true,
     value: {
@@ -350,6 +371,7 @@ function validateManifest(manifest, dirName) {
       trackKinds,
       // 执行模式缺省 'worker'；'inprocess' 还要过 decideExecutionMode 的白名单
       executionMode: manifest.executionMode === 'inprocess' ? 'inprocess' : DEFAULT_EXECUTION_MODE,
+      permissions: perms.value,
     },
   };
 }
@@ -1137,7 +1159,11 @@ function createPluginHost(options) {
     if (!entry) {
       throw new Error(`找不到插件 worker 入口（已尝试：${WORKER_ENTRY_CANDIDATES.join('、')}）`);
     }
-    const worker = new Worker(entry);
+    // A1：worker_threads 不是安全边界（插件仍与宿主同进程、可 require 任意模块），
+    // 但至少要把它的资源封顶：一个跑飞的插件不该把整个应用拖进 OOM。
+    const worker = new Worker(entry, {
+      resourceLimits: PLUGIN_WORKER_RESOURCE_LIMITS,
+    });
     record.worker = worker;
     // 新线程的插件实例是全新的：调用前必须先重新 initialize
     record.needsInit = true;
@@ -1174,7 +1200,12 @@ function createPluginHost(options) {
       worker.on('message', onMeta);
     });
 
-    worker.postMessage({ type: 'init', entry: record.entry });
+    // 权限白名单随 init 一起下发：插件线程据此拦截高危模块的 require（A1）。
+    worker.postMessage({
+      type: 'init',
+      entry: record.entry,
+      permissions: Array.isArray(record.permissions) ? record.permissions : null,
+    });
     const meta = await metaPromise;
     if (!meta.ok) {
       await terminateWorker(record);
@@ -1352,6 +1383,8 @@ function createPluginHost(options) {
       has: null,
       needsInit: true,
       consecutiveTimeouts: 0,
+      // A1: manifest 里声明的权限白名单（空数组 = 未声明，不做 require 拦截）
+      permissions: Array.isArray(manifestValue.permissions) ? manifestValue.permissions : [],
     };
 
     let meta;
@@ -1418,7 +1451,7 @@ function createPluginHost(options) {
       }
 
       // ---- in-process：插件代码直载进主进程（见文件头的"无法抢占"说明）----
-      // eslint-disable-next-line global-require, import/no-dynamic-require
+      // eslint-disable-next-line global-require
       const mod = require(entry);
       const checkedModule = validateModule(mod, checkedManifest.value);
       if (!checkedModule.ok) {

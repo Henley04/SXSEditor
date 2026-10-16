@@ -1,9 +1,11 @@
-const { dialog, app } = require('electron');
+const { dialog } = require('electron');
 const themeStorage = require('../themes/themeStorage');
 const BUILTIN_THEMES = require('../themes/builtins/index.js');
 const { loadSettings, saveSettingsFile, DEFAULT_THEME } = require('./settings');
 const { getAllWebContents } = require('./windowManager');
 const { safeHandle } = require('./ipcSafe');
+const { getUserDataDir } = require('./configStore');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 /**
  * Resolve extends chain into a flat token map (same logic as renderer flattenTheme).
@@ -27,7 +29,7 @@ function flattenTheme(themeObj) {
 
 function listAllThemes() {
   const _settings = loadSettings();
-  const userDir = app.getPath('userData');
+  const userDir = getUserDataDir();
   const { themes: userThemes } = themeStorage.loadUserThemes(userDir);
   return [
     ...BUILTIN_THEMES.BUILTIN_THEMES.map(t => ({
@@ -64,7 +66,7 @@ function resolveTheme(themeId) {
   if (meta.source === 'builtin') {
     themeObj = BUILTIN_THEMES.BUILTIN_THEMES.find(b => b.id === themeId) || null;
   } else {
-    const userDir = app.getPath('userData');
+    const userDir = getUserDataDir();
     const { themes } = themeStorage.loadUserThemes(userDir);
     themeObj = themes.find(t => t.id === themeId) || null;
   }
@@ -74,26 +76,26 @@ function resolveTheme(themeId) {
 
 function broadcastThemeChanged(themeId, scope) {
   for (const wc of getAllWebContents()) {
-    try { wc.send('theme:changed', { themeId, scope }); } catch (_) {}
+    try { wc.send(IPC_CHANNELS.THEME_CHANGED, { themeId, scope }); } catch (_) {}
   }
 }
 
 function broadcastThemeListChanged() {
   for (const wc of getAllWebContents()) {
-    try { wc.send('theme:list-changed'); } catch (_) {}
+    try { wc.send(IPC_CHANNELS.THEME_LIST_CHANGED); } catch (_) {}
   }
 }
 
 function registerThemeIpc() {
-  safeHandle('theme:list', async () => {
+  safeHandle(IPC_CHANNELS.THEME_LIST, async () => {
     return listAllThemes();
   });
 
-  safeHandle('theme:get', async (event, themeId) => {
+  safeHandle(IPC_CHANNELS.THEME_GET, async (event, themeId) => {
     return resolveTheme(themeId);
   });
 
-  safeHandle('theme:current', async (event, options) => {
+  safeHandle(IPC_CHANNELS.THEME_CURRENT, async (event, options) => {
     const settings = loadSettings();
     const win = options && options.scope;
     if (win && win !== 'global' && settings.themePerWindow && settings.themePerWindow[win]) {
@@ -102,7 +104,7 @@ function registerThemeIpc() {
     return { themeId: settings.theme, scope: 'global', globalId: settings.theme };
   });
 
-  safeHandle('theme:apply', async (event, themeId, options) => {
+  safeHandle(IPC_CHANNELS.THEME_APPLY, async (event, themeId, options) => {
     if (!themeId || typeof themeId !== 'string') {
       return { success: false, error: 'themeId must be a string' };
     }
@@ -126,12 +128,12 @@ function registerThemeIpc() {
     return { success: true, themeId, scope };
   });
 
-  safeHandle('theme:save', async (event, themeObj) => {
+  safeHandle(IPC_CHANNELS.THEME_SAVE, async (event, themeObj) => {
     try {
       if (!themeObj || !themeStorage.isValidId(themeObj.id)) {
         return { success: false, error: 'invalid id' };
       }
-      const userDir = app.getPath('userData');
+      const userDir = getUserDataDir();
       const result = themeStorage.saveTheme(userDir, themeObj);
       broadcastThemeListChanged();
       return { success: true, ...result };
@@ -140,7 +142,7 @@ function registerThemeIpc() {
     }
   });
 
-  safeHandle('theme:delete', async (event, themeId) => {
+  safeHandle(IPC_CHANNELS.THEME_DELETE, async (event, themeId) => {
     try {
       if (!themeId || !themeStorage.isValidId(themeId)) {
         return { success: false, error: 'invalid id' };
@@ -148,7 +150,7 @@ function registerThemeIpc() {
       if (themeStorage.BUILTIN_IDS.has(themeId)) {
         return { success: false, error: 'Cannot delete built-in theme' };
       }
-      const userDir = app.getPath('userData');
+      const userDir = getUserDataDir();
       const result = themeStorage.deleteTheme(userDir, themeId);
       const settings = loadSettings();
       if (settings.theme === themeId) settings.theme = DEFAULT_THEME;
@@ -165,7 +167,7 @@ function registerThemeIpc() {
     }
   });
 
-  safeHandle('theme:import', async (_event) => {
+  safeHandle(IPC_CHANNELS.THEME_IMPORT, async (_event) => {
     try {
       const result = await dialog.showOpenDialog({
         title: 'Import Theme',
@@ -179,7 +181,7 @@ function registerThemeIpc() {
         return { success: false, canceled: true };
       }
       const obj = themeStorage.importThemeFromFile(result.filePaths[0]);
-      const userDir = app.getPath('userData');
+      const userDir = getUserDataDir();
       const saved = themeStorage.saveTheme(userDir, obj);
       broadcastThemeListChanged();
       return { success: true, themeId: obj.id, filePath: saved.filePath };
@@ -188,7 +190,7 @@ function registerThemeIpc() {
     }
   });
 
-  safeHandle('theme:export', async (event, themeId) => {
+  safeHandle(IPC_CHANNELS.THEME_EXPORT, async (event, themeId) => {
     try {
       if (!themeId || !themeStorage.isValidId(themeId)) {
         return { success: false, error: 'invalid id' };
@@ -197,7 +199,7 @@ function registerThemeIpc() {
       if (themeStorage.BUILTIN_IDS.has(themeId)) {
         themeObj = BUILTIN_THEMES.BUILTIN_THEMES.find(b => b.id === themeId);
       } else {
-        const userDir = app.getPath('userData');
+        const userDir = getUserDataDir();
         const { themes } = themeStorage.loadUserThemes(userDir);
         themeObj = themes.find(t => t.id === themeId);
       }
@@ -218,7 +220,7 @@ function registerThemeIpc() {
     }
   });
 
-  safeHandle('theme:reset', async () => {
+  safeHandle(IPC_CHANNELS.THEME_RESET, async () => {
     const settings = loadSettings();
     settings.theme = DEFAULT_THEME;
     settings.themePerWindow = {};
@@ -227,7 +229,7 @@ function registerThemeIpc() {
     return { success: true, themeId: DEFAULT_THEME };
   });
 
-  safeHandle('theme:bootstrap', async (_event) => {
+  safeHandle(IPC_CHANNELS.THEME_BOOTSTRAP, async (_event) => {
     const settings = loadSettings();
     const all = listAllThemes();
     return {

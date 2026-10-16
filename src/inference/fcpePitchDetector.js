@@ -2,46 +2,28 @@ const path = require('node:path');
 const ort = require('onnxruntime-node');
 const { resampleAudio } = require('../utils/resampleAudio');
 const { buildSessionOptions } = require('./shared/ortOptions');
+const {
+    TARGET_SAMPLE_RATE,
+    TARGET_HOP_SIZE,
+    requireSampleRate,
+    createFloatTensor,
+    outputToFloat32,
+    resampleF0Frames,
+    framesToF0Array,
+    f0ToMidi,
+    f0ToNotes,
+    groupIntoNotes,
+    createNoteFromGroup,
+} = require('./shared/pitchF0Utils');
 
-// float16 patch 由 nativeSvsPipeline.js 统一执行，此处不再重复
-let _noteIdCounter = 0;
-
-// Float32 <-> Float16 转换工具（Float16Array 原生转换，TypedArray.set 走
-// native 路径而非逐元素 JS 赋值）
-function float32ToF16Buffer(f32Data) {
-    const f16 = new Float16Array(f32Data.length);
-    f16.set(f32Data);
-    return new Uint16Array(f16.buffer, f16.byteOffset, f16.length);
-}
-
-function f16BufferToFloat32(u16Data) {
-    const f16 = new Float16Array(u16Data.buffer, u16Data.byteOffset, u16Data.length);
-    const f32 = new Float32Array(f16.length);
-    f32.set(f16);
-    return f32;
-}
-
-function createFloatTensor(type, f32Data, dims) {
-    if (type === 'float16') {
-        return new ort.Tensor('float16', float32ToF16Buffer(f32Data), dims);
-    }
-    return new ort.Tensor('float32', f32Data, dims);
-}
-
-function outputToFloat32(tensor) {
-    if (tensor.type === 'float16') {
-        return f16BufferToFloat32(tensor.data);
-    }
-    return new Float32Array(tensor.data);
-}
+// float16 patch 由 nativeSvsPipeline.js 统一执行，此处不再重复。
+// 张量工具、F0 后处理与采样率校验已收敛到 ./shared/pitchF0Utils（审查项 2.2/2.3），
+// 此前与 rmvpePitchDetector.js 逐字重复的 108 行不再各存一份。
 
 const FCPE_SAMPLE_RATE = 16000;
 const FCPE_HOP_SIZE = 160; // 10ms at 16kHz
 const F0_MIN = 50;
 const F0_MAX = 1100;
-const TARGET_SAMPLE_RATE = 24000;
-const TARGET_HOP_SIZE = 480;
-const MAX_DURATION = 300;
 
 class FcpePitchDetector {
   constructor(modelDir, options = {}) {
@@ -140,13 +122,16 @@ class FcpePitchDetector {
     console.log('[FcpePitchDetector] fell back to CPU inference');
   }
 
-  async extractF0(audioData, sampleRate = 44100) {
+  async extractF0(audioData, sampleRate) {
     if (!this.initialized) {
       await this.init();
     }
+    // 2.3: 不再用 `= 44100` 兜底 —— 漏传采样率会让 24kHz 音频被按 44.1kHz
+    // 重采样（F0 时间轴偏快 1.8375 倍）且不报错。改为显式失败。
+    const sr = requireSampleRate(sampleRate, 'FcpePitchDetector.extractF0');
 
-    const resampledAudio = sampleRate !== FCPE_SAMPLE_RATE
-      ? resampleAudio(audioData, sampleRate, FCPE_SAMPLE_RATE)
+    const resampledAudio = sr !== FCPE_SAMPLE_RATE
+      ? resampleAudio(audioData, sr, FCPE_SAMPLE_RATE)
       : audioData;
 
     // ONNX model expects input shape (1, n_samples, 1)
@@ -211,148 +196,30 @@ class FcpePitchDetector {
       rawF0, resampledAudio.length, FCPE_SAMPLE_RATE, TARGET_SAMPLE_RATE, TARGET_HOP_SIZE
     );
 
-    const frameDuration = TARGET_HOP_SIZE / TARGET_SAMPLE_RATE;
-    const f0Array = [];
-
-    for (let i = 0; i < interpolatedF0.length; i++) {
-      f0Array.push({
-        time: i * frameDuration,
-        f0: interpolatedF0[i],
-        confidence: 0,
-      });
-    }
-
-    return f0Array;
+    return framesToF0Array(interpolatedF0, TARGET_HOP_SIZE, TARGET_SAMPLE_RATE);
   }
 
   static interpolateF0(f0Data, originalLength, originalSr, targetSr, hopSize) {
-    const srcHop = FCPE_HOP_SIZE;
-    const srcSr = FCPE_SAMPLE_RATE;
-
-    const batchMaxLength = Math.floor(MAX_DURATION * targetSr / hopSize);
-    const durationInSeconds = originalLength / originalSr;
-    const effectiveTargetLength = Math.floor(durationInSeconds * targetSr);
-    const originalFrames = Math.ceil(effectiveTargetLength / hopSize);
-    const targetFrames = Math.min(originalFrames, batchMaxLength);
-
-    const result = new Float32Array(targetFrames);
-
-    if (f0Data.length === 0) {
-      return result;
-    }
-
-    if (f0Data.length === 1) {
-      result[0] = f0Data[0];
-      return result;
-    }
-
-    const srcStep = srcHop / srcSr;
-    const tgtStep = hopSize / targetSr;
-    const tSrcMax = (f0Data.length - 1) * srcStep;
-
-    for (let i = 0; i < targetFrames; i++) {
-      const t = i * tgtStep;
-
-      if (t > tSrcMax) {
-        result[i] = 0;
-        continue;
-      }
-
-      const srcFloatIdx = t / srcStep;
-      const srcIdx = Math.floor(srcFloatIdx);
-
-      if (srcIdx >= f0Data.length - 1) {
-        result[i] = f0Data[f0Data.length - 1];
-      } else {
-        const frac = srcFloatIdx - srcIdx;
-        result[i] = f0Data[srcIdx] * (1 - frac) + f0Data[srcIdx + 1] * frac;
-      }
-    }
-
-    return result;
+    return resampleF0Frames(
+      f0Data, originalLength, originalSr, targetSr, hopSize,
+      FCPE_HOP_SIZE, FCPE_SAMPLE_RATE
+    );
   }
 
   f0ToMidi(f0) {
-    if (f0 <= 0 || f0 < F0_MIN) return 0;
-    return Math.round(69 + 12 * Math.log2(f0 / 440));
+    return f0ToMidi(f0, F0_MIN);
   }
 
   f0ToNotes(f0Array, bpm = 120, minNoteDuration = 0.1, f0Threshold = 50) {
-    const notes = [];
-    if (f0Array.length === 0) return notes;
-
-    const activeFrames = [];
-    for (const frame of f0Array) {
-      if (frame.f0 > f0Threshold) {
-        activeFrames.push(frame);
-      } else {
-        if (activeFrames.length > 0) {
-          const segments = this.groupIntoNotes(activeFrames, minNoteDuration, bpm);
-          notes.push(...segments);
-          activeFrames.length = 0;
-        }
-      }
-    }
-
-    if (activeFrames.length > 0) {
-      const segments = this.groupIntoNotes(activeFrames, minNoteDuration, bpm);
-      notes.push(...segments);
-    }
-
-    return notes;
+    return f0ToNotes(f0Array, F0_MIN, { bpm, minNoteDuration, f0Threshold });
   }
 
   groupIntoNotes(frames, minNoteDuration, bpm) {
-    const notes = [];
-    if (frames.length === 0) return notes;
-
-    let currentGroup = [frames[0]];
-
-    for (let i = 1; i < frames.length; i++) {
-      const frame = frames[i];
-      const prevFrame = frames[i - 1];
-      const currentMidi = this.f0ToMidi(frame.f0);
-      const prevMidi = this.f0ToMidi(prevFrame.f0);
-
-      if (currentMidi === prevMidi && Math.abs(frame.f0 - prevFrame.f0) / prevFrame.f0 < 0.1) {
-        currentGroup.push(frame);
-      } else {
-        const note = this.createNoteFromGroup(currentGroup, minNoteDuration, bpm);
-        if (note) notes.push(note);
-        currentGroup = [frame];
-      }
-    }
-
-    const lastNote = this.createNoteFromGroup(currentGroup, minNoteDuration, bpm);
-    if (lastNote) notes.push(lastNote);
-
-    return notes;
+    return groupIntoNotes(frames, F0_MIN, minNoteDuration, bpm);
   }
 
   createNoteFromGroup(group, minNoteDuration, bpm) {
-    if (group.length === 0) return null;
-
-    const avgF0 = group.reduce((sum, f) => sum + f.f0, 0) / group.length;
-    const midiPitch = this.f0ToMidi(avgF0);
-
-    if (midiPitch < 24 || midiPitch > 108) return null;
-
-    const startTime = group[0].time;
-    const endTime = group[group.length - 1].time + (TARGET_HOP_SIZE / TARGET_SAMPLE_RATE);
-    const duration = endTime - startTime;
-
-    if (duration < minNoteDuration) return null;
-
-    const beatDuration = (60 / bpm);
-    const noteDurationBeats = duration / beatDuration;
-
-    return {
-      id: ++_noteIdCounter,
-      pitch: midiPitch,
-      start: startTime / beatDuration,
-      duration: noteDurationBeats,
-      lyric: 'la',
-    };
+    return createNoteFromGroup(group, F0_MIN, minNoteDuration, bpm);
   }
 
   getDeviceInfo() {

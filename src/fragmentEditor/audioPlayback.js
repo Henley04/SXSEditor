@@ -1,5 +1,9 @@
 // B2: wavEncoder.js is now CommonJS — use require instead of ESM import.
 const { encodeWav, applyEnvelopesToAudio } = require('../audio/wavEncoder.js');
+// 2.4: 清理型副作用统一走 safeCleanup，失败留痕不打断主流程（原先是 12 处空 catch）
+import safeCallModule from '../shared/safeCall.js';
+
+const { safeCleanup } = safeCallModule;
 import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
@@ -40,7 +44,7 @@ import { updateFragmentPlayButton } from './uiControls.js';
 let _fragmentRemoveEndedListener = null;
 function _detachFragmentEndedListener() {
   if (_fragmentRemoveEndedListener) {
-    try { _fragmentRemoveEndedListener(); } catch (_) {}
+    safeCleanup('fragmentAudio.detachEndedListener', _fragmentRemoveEndedListener);
     _fragmentRemoveEndedListener = null;
   }
 }
@@ -343,16 +347,16 @@ function stopStreamingPlayback() {
   _streamingFirstChunkAudioOffset = 0;
   for (const src of streamingSources) {
     if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
-    try { src.onended = null; src.stop(); } catch (_) {}
+    safeCleanup('fragmentAudio.src.stop', () => { src.onended = null; src.stop(); });
   }
   streamingSources = [];
   if (streamingCleanup) {
-    try { streamingCleanup(); } catch (_) {}
+    safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
     streamingCleanup = null;
   }
   // 断开并释放流式 fade 增益节点
   if (streamingFadeGainNode) {
-    try { streamingFadeGainNode.disconnect(); } catch (_) {}
+    safeCleanup('fragmentAudio.streamingFadeGain.disconnect', () => streamingFadeGainNode.disconnect());
     streamingFadeGainNode = null;
   }
   // 停止 scheduler：解除 AudioContext 冻结 + 取消 watchdog
@@ -635,9 +639,9 @@ async function playFragmentShared() {
     // 每次播放新建的中间节点在此断开，避免自然结束后 env/fade/pan 三个节点
     // 仍挂在共享 gainNode 下随播放次数累积（stop() 路径会先置 onended=null，
     // 节点随 source 一起释放）。
-    try { panNode.disconnect(); } catch (_) {}
-    try { fadeGainNode.disconnect(); } catch (_) {}
-    try { envGainNode.disconnect(); } catch (_) {}
+    safeCleanup('fragmentAudio.panNode.disconnect', () => panNode.disconnect());
+    safeCleanup('fragmentAudio.fadeGainNode.disconnect', () => fadeGainNode.disconnect());
+    safeCleanup('fragmentAudio.envGainNode.disconnect', () => envGainNode.disconnect());
     setFragmentIsPlaying(false);
     const raf = getFragmentPlayheadRaf();
     if (raf) {
@@ -1119,7 +1123,7 @@ export async function playFragment() {
       _pendingSeekStartTime = null;
       if (_scheduler) await _scheduler.setInferenceDone();
       if (streamingCleanup) {
-        try { streamingCleanup(); } catch (_) {}
+        safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
         streamingCleanup = null;
       }
       setFragmentPlayStartPosition(seekPos);
@@ -1151,7 +1155,7 @@ export async function playFragment() {
     // 注意：必须在 inferenceDone 设置之后移除，否则 underrun 检测
     // 仍会等待（推理未完成标记）。
     if (streamingCleanup) {
-      try { streamingCleanup(); } catch (_) {}
+      safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
       streamingCleanup = null;
     }
 

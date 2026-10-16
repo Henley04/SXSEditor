@@ -6,6 +6,7 @@ const { Worker } = require('worker_threads');
 const { t } = require('./locale');
 const { getMainWindow } = require('./windowManager');
 const { isPathAllowed, isSystemPath, authorizePath } = require('./security');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 const SXSSINGER_FORMAT_VERSION = '1.0.0';
 
@@ -150,7 +151,7 @@ function encodeSingerFileContentAsync(singerData, fields) {
 }
 
 function registerSingerIpc() {
-  safeHandle('saveSingerFile', async (event, singerData) => {
+  safeHandle(IPC_CHANNELS.SAVE_SINGER_FILE, async (event, singerData) => {
     try {
       // If filePath is provided, save directly to it (save-in-place).
       // Otherwise show a Save As dialog to pick a path.
@@ -213,7 +214,7 @@ function registerSingerIpc() {
       if (shouldNotify) {
         const mainWindow = getMainWindow();
         if (mainWindow && !mainWindow.isDestroyed()) {
-          mainWindow.webContents.send('singerCreated', {
+          mainWindow.webContents.send(IPC_CHANNELS.SINGER_CREATED, {
             filePath: filePath,
             singerName: singerData.singerName,
             color: singerData.color,

@@ -6,6 +6,7 @@ const { openDoc, openOnlineDoc, DOC_ENTRIES } = require('./docs');
 
 const isDev = !require('electron').app.isPackaged;
 const { safeHandle } = require('./ipcSafe');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 let mainWindow = null;
 let settingsWindow = null;
@@ -41,7 +42,7 @@ function notifyRelayout(win) {
   if (!win || win.isDestroyed()) return;
   const send = () => {
     try {
-      if (!win.isDestroyed()) win.webContents.send('app:relayout');
+      if (!win.isDestroyed()) win.webContents.send(IPC_CHANNELS.RELAYOUT);
     } catch (_) {}
   };
   send();
@@ -100,7 +101,7 @@ function buildAppMenu() {
           accelerator: 'CommandOrControl+S',
           click: () => {
             if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('main-menu:save-request');
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_SAVE_REQUEST);
             }
           },
         },
@@ -109,7 +110,7 @@ function buildAppMenu() {
           accelerator: 'CommandOrControl+Shift+S',
           click: () => {
             if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('main-menu:save-as-request');
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_SAVE_AS_REQUEST);
             }
           },
         },
@@ -296,7 +297,7 @@ function createWindow(opts = {}) {
     if (isDirty) {
       e.preventDefault();
       closePending = true;
-      mainWindow.webContents.send('close-confirm');
+      mainWindow.webContents.send(IPC_CHANNELS.CLOSE_CONFIRM);
     }
   });
 
@@ -311,7 +312,7 @@ function openSettingsWindow() {
   // 未知位置（长间隔场景尤其明显）。打开设置即暂停：记录当前位置，
   // 回到主窗口后可从暂停点手动继续。
   if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('settings-window:opened'); } catch (_) {}
+    try { mainWindow.webContents.send(IPC_CHANNELS.SETTINGS_WINDOW_OPENED); } catch (_) {}
   }
   if (settingsWindow) {
     settingsWindow.focus();
@@ -427,10 +428,10 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
   modelDownloadWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   modelDownloadWindow.webContents.once('did-finish-load', () => {
-    modelDownloadWindow.webContents.send('model-download:missing-files', missingFiles);
-    modelDownloadWindow.webContents.send('model-download:precision', currentPrecision);
+    modelDownloadWindow.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_MISSING_FILES, missingFiles);
+    modelDownloadWindow.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PRECISION, currentPrecision);
     if (revision) {
-      modelDownloadWindow.webContents.send('model-download:revision', revision);
+      modelDownloadWindow.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_REVISION, revision);
     }
     modelDownloadWindow.focus();
   });
@@ -440,7 +441,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
     // 通知所有窗口（特别是设置窗口）：模型下载窗口已关闭，
     // 让设置页面可以刷新模型状态总览区，反映最新下载/更新结果。
     for (const wc of getAllWebContents()) {
-      try { wc.send('model-download:window-closed'); } catch (_) {}
+      try { wc.send(IPC_CHANNELS.MODEL_DOWNLOAD_WINDOW_CLOSED); } catch (_) {}
     }
   });
 }
@@ -485,7 +486,7 @@ function openUpdateNotificationWindow(data) {
   updateNotificationWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   updateNotificationWindow.webContents.once('did-finish-load', () => {
-    updateNotificationWindow.webContents.send('update:notification-show', data);
+    updateNotificationWindow.webContents.send(IPC_CHANNELS.UPDATE_NOTIFICATION_SHOW, data);
   });
 
   updateNotificationWindow.on('closed', () => {
@@ -499,7 +500,7 @@ function openFragmentEditor(fragment, project, wavBuffer, backend) {
   const sendData = { fragment, project, wavBuffer, backend: trackBackend };
   if (fragmentWindows[fragment.id] && !fragmentWindows[fragment.id].isDestroyed()) {
     fragmentWindows[fragment.id].focus();
-    fragmentWindows[fragment.id].webContents.send('loadFragment', sendData);
+    fragmentWindows[fragment.id].webContents.send(IPC_CHANNELS.LOAD_FRAGMENT, sendData);
     // 窗口复用时也更新 pendingFragmentData 快照，确保 fallback getFragmentData
     // 拿到的是最新数据，避免分片编辑器在守卫放行后仍读到旧快照。
     pendingFragmentData[fragment.id] = sendData;
@@ -540,7 +541,7 @@ function openFragmentEditor(fragment, project, wavBuffer, backend) {
   fragmentWindows[fragment.id] = fragmentWindow;
 
   fragmentWindow.webContents.once('did-finish-load', () => {
-    fragmentWindow.webContents.send('loadFragment', sendData);
+    fragmentWindow.webContents.send(IPC_CHANNELS.LOAD_FRAGMENT, sendData);
   });
 
   fragmentWindow.on('closed', () => {
@@ -570,7 +571,7 @@ function buildSingerCreatorMenu(win) {
           accelerator: 'CommandOrControl+S',
           click: () => {
             if (win && !win.isDestroyed()) {
-              win.webContents.send('singer-creator:save-request');
+              win.webContents.send(IPC_CHANNELS.SINGER_CREATOR_SAVE_REQUEST);
             }
           },
         },
@@ -579,7 +580,7 @@ function buildSingerCreatorMenu(win) {
           accelerator: 'CommandOrControl+Shift+S',
           click: () => {
             if (win && !win.isDestroyed()) {
-              win.webContents.send('singer-creator:save-as-request');
+              win.webContents.send(IPC_CHANNELS.SINGER_CREATOR_SAVE_AS_REQUEST);
             }
           },
         },
@@ -741,7 +742,7 @@ function openAudioPreprocess(data) {
 
   if (audioPreprocessWindow) {
     audioPreprocessWindow.focus();
-    audioPreprocessWindow.webContents.send('loadPreprocessData', { data: pendingPreprocessData, wavBuffer: preprocessWavBuffer });
+    audioPreprocessWindow.webContents.send(IPC_CHANNELS.LOAD_PREPROCESS_DATA, { data: pendingPreprocessData, wavBuffer: preprocessWavBuffer });
     return;
   }
 
@@ -770,7 +771,7 @@ function openAudioPreprocess(data) {
   audioPreprocessWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   audioPreprocessWindow.webContents.once('did-finish-load', () => {
-    audioPreprocessWindow.webContents.send('loadPreprocessData', { data: pendingPreprocessData, wavBuffer: preprocessWavBuffer });
+    audioPreprocessWindow.webContents.send(IPC_CHANNELS.LOAD_PREPROCESS_DATA, { data: pendingPreprocessData, wavBuffer: preprocessWavBuffer });
     preprocessWavBuffer = null;
   });
 
@@ -801,21 +802,21 @@ function getAllWebContents() {
 }
 
 function registerWindowIpc() {
-  safeHandle('openFragmentEditor', async (event, { fragment, project, wavBuffer, backend }) => {
+  safeHandle(IPC_CHANNELS.OPEN_FRAGMENT_EDITOR, async (event, { fragment, project, wavBuffer, backend }) => {
     openFragmentEditor(fragment, project, wavBuffer, backend);
   });
 
-  safeHandle('getFragmentData', async (event, fragmentId) => {
+  safeHandle(IPC_CHANNELS.GET_FRAGMENT_DATA, async (event, fragmentId) => {
     return pendingFragmentData[fragmentId] || null;
   });
 
-  safeHandle('saveFragmentDataSync', async (event, fragmentId, data) => {
+  safeHandle(IPC_CHANNELS.SAVE_FRAGMENT_DATA_SYNC, async (event, fragmentId, data) => {
     try {
       if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
-        fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
+        fragmentWindows[fragmentId].webContents.send(IPC_CHANNELS.FRAGMENT_DATA_SAVED, { fragmentId, ...data });
       }
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('fragmentDataSaved', { fragmentId, ...data });
+        mainWindow.webContents.send(IPC_CHANNELS.FRAGMENT_DATA_SAVED, { fragmentId, ...data });
       }
       return true;
     } catch (err) {
@@ -824,27 +825,27 @@ function registerWindowIpc() {
     }
   });
 
-  safeHandle('saveFragmentData', async (event, fragmentId, data) => {
+  safeHandle(IPC_CHANNELS.SAVE_FRAGMENT_DATA, async (event, fragmentId, data) => {
     if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
-      fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
+      fragmentWindows[fragmentId].webContents.send(IPC_CHANNELS.FRAGMENT_DATA_SAVED, { fragmentId, ...data });
     }
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('fragmentDataSaved', { fragmentId, ...data });
+      mainWindow.webContents.send(IPC_CHANNELS.FRAGMENT_DATA_SAVED, { fragmentId, ...data });
     }
     return { success: true };
   });
 
-  safeHandle('fragment:close', async (event, fragmentId) => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_CLOSE, async (event, fragmentId) => {
     closeFragmentEditor(fragmentId);
     return { success: true };
   });
 
-  safeHandle('fragment:closeAll', async () => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_CLOSE_ALL, async () => {
     closeAllFragmentEditors();
     return { success: true };
   });
 
-  safeHandle('updateFragmentBounds', async (event, fragmentId, data) => {
+  safeHandle(IPC_CHANNELS.UPDATE_FRAGMENT_BOUNDS, async (event, fragmentId, data) => {
     // 同步刷新 pendingFragmentData 快照里的边界，避免分片编辑器在 currentFragment
     // 就绪前收到 fragmentBoundsChanged 被守卫丢弃后，又用旧快照覆盖 currentFragment，
     // 导致主页面对分片长度/结尾的修改偶现不同步。
@@ -854,21 +855,21 @@ function registerWindowIpc() {
       if (data.duration !== undefined) pending.fragment.duration = data.duration;
     }
     if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
-      fragmentWindows[fragmentId].webContents.send('fragmentBoundsChanged', { fragmentId, ...data });
+      fragmentWindows[fragmentId].webContents.send(IPC_CHANNELS.FRAGMENT_BOUNDS_CHANGED, { fragmentId, ...data });
     }
     return { success: true };
   });
 
-  safeHandle('updateProjectSettings', async (event, projectData) => {
+  safeHandle(IPC_CHANNELS.UPDATE_PROJECT_SETTINGS, async (event, projectData) => {
     for (const id in fragmentWindows) {
       if (fragmentWindows[id] && !fragmentWindows[id].isDestroyed()) {
-        fragmentWindows[id].webContents.send('projectSettingsChanged', projectData);
+        fragmentWindows[id].webContents.send(IPC_CHANNELS.PROJECT_SETTINGS_CHANGED, projectData);
       }
     }
     return { success: true };
   });
 
-  safeHandle('openSingerCreator', async () => {
+  safeHandle(IPC_CHANNELS.OPEN_SINGER_CREATOR, async () => {
     openSingerCreator();
   });
 
@@ -876,24 +877,24 @@ function registerWindowIpc() {
     openSingerMarket();
   });
 
-  safeHandle('openAudioPreprocess', async (event, data) => {
+  safeHandle(IPC_CHANNELS.OPEN_AUDIO_PREPROCESS, async (event, data) => {
     openAudioPreprocess(data);
   });
 
-  safeHandle('sendPreprocessData', async (event, data) => {
+  safeHandle(IPC_CHANNELS.SEND_PREPROCESS_DATA, async (event, data) => {
     if (singerCreatorWindow && !singerCreatorWindow.isDestroyed()) {
-      singerCreatorWindow.webContents.send('preprocessDataSaved', data);
+      singerCreatorWindow.webContents.send(IPC_CHANNELS.PREPROCESS_DATA_SAVED, data);
     }
     return { success: true };
   });
 
 
-  safeHandle('set-dirty', async (event, dirty) => {
+  safeHandle(IPC_CHANNELS.SET_DIRTY, async (event, dirty) => {
     isDirty = dirty;
     return { success: true };
   });
 
-  safeHandle('close-confirmed', async () => {
+  safeHandle(IPC_CHANNELS.CLOSE_CONFIRMED, async () => {
     if (closePending && mainWindow && !mainWindow.isDestroyed()) {
       closePending = false;
       isDirty = false;
@@ -902,11 +903,11 @@ function registerWindowIpc() {
     return { success: true };
   });
 
-  safeHandle('reload-main-window', async () => {
+  safeHandle(IPC_CHANNELS.RELOAD_MAIN_WINDOW, async () => {
     buildAppMenu();
     if (mainWindow && !mainWindow.isDestroyed()) {
       // Apply locale in place. Reloading destroys the unsaved in-memory project.
-      mainWindow.webContents.send('locale-changed');
+      mainWindow.webContents.send(IPC_CHANNELS.LOCALE_CHANGED);
     }
   });
 }

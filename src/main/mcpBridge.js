@@ -1,3 +1,4 @@
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -8,8 +9,8 @@ const pending = new Map();
 const AUTOMATION_TIMEOUT_MS = 600000; // 长任务（合成/导出/提取）可能远超 120s
 const MIDI_MAX_BYTES = 64 * 1024 * 1024; // MIDI 是文本二进制协议，64 MiB 上限绰绰有余
 let server, endpointFile, sequence = 0;
-function registerMcpReplyIpc(ipcMain) { ipcMain.on('mcp:automation-response', (_e, m) => { const p = pending.get(m?.id); if (!p) return; pending.delete(m.id); clearTimeout(p.timer); m.ok ? p.resolve(m.result) : p.reject(new Error(m.error || 'Automation failed')); }); }
-function callRenderer(method, params = {}) { const win = getMainWindow(); if (!win || win.isDestroyed()) return Promise.reject(new Error('SXSEditor main window is unavailable')); const id = ++sequence; return new Promise((resolve,reject) => { const timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Automation timeout: ${method}`));},AUTOMATION_TIMEOUT_MS); pending.set(id,{resolve,reject,timer}); win.webContents.send('mcp:automation-request',{id,method,params}); }); }
+function registerMcpReplyIpc(ipcMain) { ipcMain.on(IPC_CHANNELS.MCP_AUTOMATION_RESPONSE, (_e, m) => { const p = pending.get(m?.id); if (!p) return; pending.delete(m.id); clearTimeout(p.timer); m.ok ? p.resolve(m.result) : p.reject(new Error(m.error || 'Automation failed')); }); }
+function callRenderer(method, params = {}) { const win = getMainWindow(); if (!win || win.isDestroyed()) return Promise.reject(new Error('SXSEditor main window is unavailable')); const id = ++sequence; return new Promise((resolve,reject) => { const timer=setTimeout(()=>{pending.delete(id);reject(new Error(`Automation timeout: ${method}`));},AUTOMATION_TIMEOUT_MS); pending.set(id,{resolve,reject,timer}); win.webContents.send(IPC_CHANNELS.MCP_AUTOMATION_REQUEST,{id,method,params}); }); }
 async function dispatch(method, params) {
   if (method === 'midi.importFile') {
     // 与渲染端 authorize() 语义对齐：拒绝系统目录（C:\Windows 等），

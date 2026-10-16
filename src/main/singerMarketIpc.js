@@ -38,6 +38,7 @@ const dns = require('node:dns');
 const net = require('node:net');
 const { URL } = require('node:url');
 const { t } = require('./locale');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 const { isPathAllowed } = require('./security');
 
 const DEFAULT_API_BASE = 'https://singer-files.15240287482.workers.dev';
@@ -611,7 +612,7 @@ function registerSingerMarketIpc() {
   console.log('[SingerMarket] main build 2026-09-26.3 (licenses API + upload license field)');
 
   // ----- Auth -----
-  safeHandle('singer-market:register', async (event, { username, password }) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_REGISTER, async (event, { username, password }) => {
     try {
       const res = await request('POST', '/api/auth/register', {
         body: { username, password },
@@ -627,7 +628,7 @@ function registerSingerMarketIpc() {
     }
   });
 
-  safeHandle('singer-market:login', async (event, { username, password }) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_LOGIN, async (event, { username, password }) => {
     try {
       const res = await request('POST', '/api/auth/login', {
         body: { username, password },
@@ -643,7 +644,7 @@ function registerSingerMarketIpc() {
     }
   });
 
-  safeHandle('singer-market:logout', async () => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_LOGOUT, async () => {
     try {
       await request('POST', '/api/auth/logout', { headers: withAuth() });
     } catch (_) {
@@ -653,7 +654,7 @@ function registerSingerMarketIpc() {
     return { success: true };
   });
 
-  safeHandle('singer-market:me', async () => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_ME, async () => {
     if (!getToken()) return { success: false, user: null };
     try {
       const res = await request('GET', '/api/auth/me', { headers: withAuth() });
@@ -677,7 +678,7 @@ function registerSingerMarketIpc() {
   });
 
   // ----- File listing / search / filter -----
-  safeHandle('singer-market:list', async (event, params = {}) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_LIST, async (event, params = {}) => {
     try {
       const query = new URLSearchParams();
       // Only show public files for browsing (private files only visible to owner)
@@ -702,7 +703,7 @@ function registerSingerMarketIpc() {
     }
   });
 
-  safeHandle('singer-market:file-detail', async (event, fileId) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_FILE_DETAIL, async (event, fileId) => {
     try {
       const res = await request('GET', `/api/files/${encodeURIComponent(fileId)}`, {
         headers: withAuth(),
@@ -718,7 +719,7 @@ function registerSingerMarketIpc() {
   });
 
   // ----- Tags -----
-  safeHandle('singer-market:tags', async (event, params = {}) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_TAGS, async (event, params = {}) => {
     try {
       const query = new URLSearchParams();
       if (params.q) query.set('q', params.q);
@@ -740,7 +741,7 @@ function registerSingerMarketIpc() {
   // ----- Licenses -----
   // License catalog (13 presets + optional custom slot). Used by the upload
   // dialog's license selector and shown as metadata on file detail views.
-  safeHandle('singer-market:licenses', async () => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_LICENSES, async () => {
     try {
       const res = await request('GET', '/api/licenses');
       const data = tryParseJson(res.body) || {};
@@ -756,7 +757,7 @@ function registerSingerMarketIpc() {
   // ----- Upload -----
   // The file is streamed from disk between small multipart prefix/suffix
   // buffers, so even tens-of-MB .sxssinger files never double the memory.
-  safeHandle('singer-market:upload', async (event, payload) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_UPLOAD, async (event, payload) => {
     if (!getToken()) {
       return { success: false, error: 'Not logged in' };
     }
@@ -844,7 +845,7 @@ function registerSingerMarketIpc() {
   // responsible for prompting the user for a save location and writing the
   // file to disk via the existing file:saveFile IPC. Progress is streamed to
   // the sender via 'singer-market:download-progress' events.
-  safeHandle('singer-market:download', async (event, fileId) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_DOWNLOAD, async (event, fileId) => {
     try {
       const res = await request('GET', `/api/files/${encodeURIComponent(fileId)}/download`, {
         headers: withAuth(),
@@ -852,7 +853,7 @@ function registerSingerMarketIpc() {
         onProgress: (received, total) => {
           try {
             if (!event.sender.isDestroyed()) {
-              event.sender.send('singer-market:download-progress', { fileId, received, total });
+              event.sender.send(IPC_CHANNELS.SINGER_MARKET_DOWNLOAD_PROGRESS, { fileId, received, total });
             }
           } catch (_) {}
         },
@@ -887,7 +888,7 @@ function registerSingerMarketIpc() {
   });
 
   // ----- Pick .sxssinger file for upload (uses native dialog) -----
-  safeHandle('singer-market:pick-file', async () => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_PICK_FILE, async () => {
     const { dialog } = require('electron');
     const result = await dialog.showOpenDialog({
       title: 'Select a .sxssinger file',
@@ -907,7 +908,7 @@ function registerSingerMarketIpc() {
   });
 
   // ----- Pick save destination for downloaded .sxssinger file -----
-  safeHandle('singer-market:pick-save-path', async (event, suggestedName) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_PICK_SAVE_PATH, async (event, suggestedName) => {
     const { dialog } = require('electron');
     const result = await dialog.showSaveDialog({
       title: 'Save Singer File',
@@ -926,7 +927,7 @@ function registerSingerMarketIpc() {
   });
 
   // ----- Get server health -----
-  safeHandle('singer-market:health', async () => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_HEALTH, async () => {
     try {
       const res = await request('GET', '/health');
       const data = tryParseJson(res.body) || {};

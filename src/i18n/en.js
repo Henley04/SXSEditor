@@ -8,6 +8,7 @@ export default {
     warnings: 'Warnings:'
   },
   main: {
+    a11yFragmentTimelineStatus: 'Timeline: {singers} tracks, {fragments} fragments',
     play: 'Play',
     pause: 'Pause',
     continue: 'Continue',
@@ -686,6 +687,8 @@ export default {
     vocoderChunkFramesHint: 'Chunk size must be a multiple of 8. Larger values use more VRAM but reduce crossfade count; smaller values save VRAM but increase crossfade overhead. Default 1024 frames (~20.5 seconds of audio).',
     vocoderChunkSmartInfo: 'Waiting for GPU detection to display smart allocation result',
     vocoderChunkSmartResult: 'Smart allocation result: {frames} frames ({vram} VRAM, {gpu})',
+    vocoderChunkDetecting: 'Detecting GPU VRAM (up to 30s)…',
+    vocoderChunkDetectTimeout: 'GPU VRAM detection timed out; using the default tier. See Resource Manager for details.',
     vocoderChunkTableTitle: 'VRAM Reference Table',
     vocoderChunkTableHint: 'Recommended chunk size for each VRAM tier, computed with the current precision and vocoder type. Budget column shows available VRAM after deducting resident weights / diff_step / OS. The row matching the current GPU is highlighted.',
     vocoderChunkTableVram: 'VRAM',
@@ -927,6 +930,7 @@ export default {
     startDownload: 'Start Download',
     cancelDownload: 'Cancel Download',
     close: 'Close',
+    retry: 'Retry',
     downloading: 'Downloading: {file}',
     downloadingMultiple: 'Downloading {active} files ({completed}/{total} completed)',
     allComplete: 'All model files downloaded!',

@@ -1,3 +1,4 @@
+const { IPC_CHANNELS } = require('../../shared/ipcChannels');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -1492,7 +1493,7 @@ class OnnxSVSPipeline {
                 if (wc) {
                     const reqId = `svs-webnn-unload-${Date.now()}`;
                     ipcMain.handleOnce(`webnn:unloadModel:response:${reqId}`, () => {});
-                    wc.send('webnn:unloadModel:request', { requestId: reqId, modelId });
+                    wc.send(IPC_CHANNELS.WEBNN_UNLOAD_MODEL_REQUEST, { requestId: reqId, modelId });
                 }
             } catch (_) {}
         };
@@ -1552,7 +1553,7 @@ class OnnxSVSPipeline {
                     const nextPath = this._getModelPath(nextFile);
                     const wc = getMainWindowWebContents();
                     if (wc) {
-                        prefetchPromise = wc.send('webnn:prefetch:request', { modelPath: nextPath });
+                        prefetchPromise = wc.send(IPC_CHANNELS.WEBNN_PREFETCH_REQUEST, { modelPath: nextPath });
                     }
                     break;
                 }
@@ -4630,7 +4631,7 @@ class OnnxSVSPipeline {
                     for (const key of Object.keys(this.sessions)) {
                         const reqId = `svs-dispose-webnn-${Date.now()}-${key}`;
                         ipcMain.handleOnce(`webnn:unloadModel:response:${reqId}`, () => {});
-                        wc.send('webnn:unloadModel:request', { requestId: reqId, modelId: key });
+                        wc.send(IPC_CHANNELS.WEBNN_UNLOAD_MODEL_REQUEST, { requestId: reqId, modelId: key });
                     }
                 }
             } catch (_) {}

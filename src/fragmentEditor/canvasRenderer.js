@@ -1,4 +1,6 @@
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
+// U3: canvas 内容对读屏不可见 —— 渲染时把一句状态摘要写进 aria-live 容器。
+import { announce } from '../utils/a11yAnnounce.js';
 import {
   PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, PARAM_CURVE_HEIGHT,
   BLACK_KEYS, PITCH_CURVE_SAMPLE_INTERVAL,
@@ -229,13 +231,23 @@ export { getNoteById, getNoteMap };
  *
  * Returns beats so the hot zone scales naturally with zoomX.
  */
+// 交互性：resize 热区的像素下限。4px 在高 DPI 屏上只有 2 个 CSS 像素，
+// 缩得越小越抓不住 —— 手指/鼠标都点不中音符边缘，用户只会觉得"这软件反应迟钝"。
+// 实测 6px 是"能稳定命中"的下限，且与触摸目标 44px 的建议不冲突（这里是边缘窄条，
+// 不是独立控件）。
+const MIN_RESIZE_HOT_ZONE_PX = 6;
+const MAX_RESIZE_HOT_ZONE_PX = 12;
+
 function _resizeHotZoneBeats() {
   const pxPerBeat = BEAT_WIDTH * getZoomX();
   if (pxPerBeat <= 0) return 0.06;
   const gridPx = getSnapGrid() * pxPerBeat;
   const targetPx = gridPx / 2;
-  const clampedPx = Math.max(4, Math.min(12, targetPx));
-  return clampedPx / pxPerBeat;
+  const clampedPx = Math.max(MIN_RESIZE_HOT_ZONE_PX, Math.min(MAX_RESIZE_HOT_ZONE_PX, targetPx));
+  // 再兜一层：转换回"拍"之后换算成像素，如果缩放小到连下限都表达不出来
+  // （pxPerBeat 极大时 clampedPx/pxPerBeat 可能被浮点吃掉），就按 6px 直接算。
+  const beats = clampedPx / pxPerBeat;
+  return (beats * pxPerBeat >= MIN_RESIZE_HOT_ZONE_PX - 0.5) ? beats : MIN_RESIZE_HOT_ZONE_PX / pxPerBeat;
 }
 
 export function findNoteAt(x, y) {
@@ -1994,6 +2006,21 @@ export function render() {
   _renderRaf = requestAnimationFrame(() => { _renderRaf = 0; _doRender(); });
 }
 
+/**
+ * U3：把当前画布状态写成一句读屏可播报的摘要。
+ * 只在音符数量 / 选中数量变化时才播报（announce 内部还会再节流一次），
+ * 所以拖拽缩放之类的高频渲染不会刷屏。
+ */
+function _announceCanvasState() {
+  const notes = getNotes();
+  const sel = getSelectedNoteIds();
+  const selCount = sel ? (sel.size ?? sel.length) : 0;
+  const text = selCount > 0
+    ? `共 ${notes.length} 个音符，已选中 ${selCount} 个`
+    : `共 ${notes.length} 个音符`;
+  announce('piano-roll-a11y-status', text);
+}
+
 // Static layer cache (background + grid lines)
 let _staticCacheCanvas = null;
 let _staticCacheKey = '';
@@ -2021,6 +2048,7 @@ function _doRender() {
   _renderInFlight++;
   try {
     _doRenderImpl(w, h);
+    _announceCanvasState();
   } finally {
     _renderInFlight--;
   }

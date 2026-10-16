@@ -40,6 +40,8 @@
 'use strict';
 
 const { parentPort, isMainThread } = require('node:worker_threads');
+// A1：权限组分类与 manifest 校验（CJS 版本 —— 本文件由 node 直接加载，不能 require ESM）
+const contract = require('../shared/pluginPermissions.js');
 
 // ---------------------------------------------------------------------------
 // 线上标记：跨线程搬运时用这些形状表达"这里原本放不下"
@@ -455,17 +457,51 @@ function startWorkerRuntime() {
   }
 
   /**
+   * 安装 require 拦截（A1）。
+   *
+   * @param {string[]|null} permissions manifest 声明的权限；null/空数组 = 不拦截。
+   */
+  function installRequireGuard(permissions) {
+    if (!Array.isArray(permissions) || permissions.length === 0) return;
+    const allowed = new Set(permissions);
+    // eslint-disable-next-line global-require
+    const Module = require('node:module');
+    if (Module.__sxsPluginGuarded) return; // 同一个线程只装一次
+    const origLoad = Module._load;
+    Module._load = function guardedLoad(request, parent, isMain) {
+      const group = contract.classifyModulePermission(request);
+      if (group && !allowed.has(group)) {
+        const err = new Error(
+          `插件未声明 '${group}' 权限，已拒绝 require('${request}')。` +
+          `如需使用请在 manifest.json 的 permissions 里声明。`
+        );
+        err.code = 'PLUGIN_PERMISSION_DENIED';
+        throw err;
+      }
+      return origLoad.call(this, request, parent, isMain);
+    };
+    Module.__sxsPluginGuarded = true;
+  }
+
+  /**
    * 载入插件入口，并把契约校验需要的元数据回给主进程 —— 主进程据此校验，
    * 不需要自己 require 插件（require 只发生在这个线程里）。
    * @param {{entry:string}} msg
    */
   function handleInit(msg) {
+    // A1：插件与宿主同进程（worker_threads 不是安全边界），这里按 manifest 声明的
+    // permissions 拦截高危模块的 require。插件**没有**声明 permissions 时不启用
+    // 拦截（保持旧行为，避免一次性打挂存量插件）；一旦声明了，白名单之外的
+    // child_process / fs / net / worker_threads / vm 一律拒绝加载。
+    installRequireGuard(msg && msg.permissions);
     let mod;
     try {
-      // eslint-disable-next-line global-require, import/no-dynamic-require
+      // eslint-disable-next-line global-require
       mod = require(msg.entry);
     } catch (err) {
-      post({ type: 'meta', ok: false, error: `require 入口失败：${describeError(err)}` });
+      const denied = err && err.code === 'PLUGIN_PERMISSION_DENIED';
+      if (denied) post({ type: 'meta', ok: false, error: `权限被拒：${err.message}` });
+      else post({ type: 'meta', ok: false, error: `require 入口失败：${describeError(err)}` });
       return;
     }
     if (!mod || typeof mod !== 'object') {

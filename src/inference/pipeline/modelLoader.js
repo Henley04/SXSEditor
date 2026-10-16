@@ -293,6 +293,9 @@ async function enumerateGPUsViaNodeGpuInfo(cachedControllers) {
     }
 }
 
+// P2-1：stderr 劫持的互斥标记（见 enumerateDMLDevicesInProcess 内注释）
+let _stderrCaptureActive = false;
+
 async function enumerateDMLDevicesInProcess(modelDir) {
     const probeModel = path.join(modelDir, 'note_text_encoder.onnx');
     try {
@@ -301,14 +304,33 @@ async function enumerateDMLDevicesInProcess(modelDir) {
         return [];
     }
 
+    // ------------------------------------------------------------------
+    // P2-1：这里要解析 ORT verbose 日志里的 DxgiVideoMemory，代价是**全局劫持
+    // process.stderr.write**。原实现有两个隐患：
+    //   1. 可重入 —— 并发调用时后一次会把前一次的 origWrite 覆盖成自己的包装
+    //      函数，前一次 finally 恢复时就把"包装过的 write"永久留在了进程上；
+    //   2. 吞掉无关输出 —— 期间其它库写 stderr 的内容全部进了 stderrBuf。
+    // 现在：用模块级互斥标记挡住并发，并在 finally 里恢复**进入前**的 logLevel
+    // （原来硬编码回 'warning'，会把调用方设置的 'verbose' 调试开关悄悄关掉）。
+    // 累积仍保持"全量"：ORT 的设备描述可能跨行输出，按关键字过滤会漏掉
+    // DxgiVideoMemory 所在的那一行，显存检测反而失效 —— 宁可多收一点。
+    // ------------------------------------------------------------------
+    if (_stderrCaptureActive) {
+        console.warn('[OnnxSVSPipeline] DML 设备探测已在进行中，跳过并发调用（避免 stderr 劫持重入）');
+        return [];
+    }
+    _stderrCaptureActive = true;
+
     const iconv = require('iconv-lite');
     const origWrite = process.stderr.write.bind(process.stderr);
     let stderrBuf = '';
-    process.stderr.write = function(chunk, encoding, callback) {
+    process.stderr.write = function (chunk, encoding, callback) {
         if (typeof chunk === 'string') stderrBuf += chunk;
         else if (Buffer.isBuffer(chunk)) stderrBuf += iconv.decode(chunk, process.platform === 'win32' ? 'gbk' : 'utf-8');
         return origWrite(chunk, encoding, callback);
     };
+
+    const prevLogLevel = ort.env.logLevel;
 
     ort.env.logLevel = 'verbose';
 
@@ -323,7 +345,8 @@ async function enumerateDMLDevicesInProcess(modelDir) {
         await new Promise(r => setImmediate(r));
     } finally {
         process.stderr.write = origWrite;
-        ort.env.logLevel = 'warning';
+        ort.env.logLevel = prevLogLevel;
+        _stderrCaptureActive = false;
     }
 
     const devices = [];

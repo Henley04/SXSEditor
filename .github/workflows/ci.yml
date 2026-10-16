@@ -79,6 +79,12 @@ jobs:
           if (-not $text.Contains("d2h-copy-v3")) { throw "prebuilt addon missing d2h-copy-v3 marker" }
           Write-Host "prebuilt synced and verified"
 
+      - name: IPC channel contract check
+        run: npm run lint:ipc
+
+      - name: Lint
+        run: npm run lint
+
       - name: Run tests (skip network & model loading/inference)
         run: npm run test:ci
 

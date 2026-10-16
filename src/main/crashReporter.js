@@ -21,6 +21,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
 const { safeHandle } = require('./ipcSafe');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 const MAX_LOGS = 10;
 const MAX_DUMPS = 3;
@@ -222,14 +223,14 @@ function attachRendererErrorHandler(webContents) {
 function registerIpc() {
   // Renderer → main log forwarding (used by preload's window.onerror /
   // unhandledrejection / console.error listeners).
-  ipcMain.on('crash:log', (_event, payload) => {
+  ipcMain.on(IPC_CHANNELS.CRASH_LOG, (_event, payload) => {
     try {
       const { level = 'INFO', message = '', source = 'renderer' } = payload || {};
       writeLog(String(level).toUpperCase(), `[${source}] ${message}`);
     } catch (_) {}
   });
 
-  safeHandle('crash:getReportInfo', async () => ({
+  safeHandle(IPC_CHANNELS.CRASH_GET_REPORT_INFO, async () => ({
     logDir: LOG_DIR,
     dumpDir: DUMP_DIR,
     currentLog: currentLogFileName,
@@ -238,11 +239,11 @@ function registerIpc() {
     bootedAt,
   }));
 
-  safeHandle('crash:openLogDir', async () => {
+  safeHandle(IPC_CHANNELS.CRASH_OPEN_LOG_DIR, async () => {
     try { shell.openPath(LOG_DIR); return true; } catch { return false; }
   });
 
-  safeHandle('crash:openDumpDir', async () => {
+  safeHandle(IPC_CHANNELS.CRASH_OPEN_DUMP_DIR, async () => {
     try { shell.openPath(DUMP_DIR); return true; } catch { return false; }
   });
 }

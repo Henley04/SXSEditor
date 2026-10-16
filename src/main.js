@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { IPC_CHANNELS } = require('./shared/ipcChannels');
 
 // Fix Windows console encoding for Chinese log output.
 // Fire-and-forget async exec: spawning cmd.exe synchronously costs ~50-200ms
@@ -290,10 +291,10 @@ app.whenReady().then(() => {
   // handler itself is trivial (just app.getVersion()) and has no heavy
   // deps, so registering it here eliminates the 200-500ms "v-" flicker
   // in the version badge that was introduced by the STEP 4 deferral.
-  ipcMain.handle('app:getVersion', async () => app.getVersion());
+  ipcMain.handle(IPC_CHANNELS.APP_GET_VERSION, async () => app.getVersion());
   let resolveHeavyIpcReady;
   const heavyIpcReady = new Promise(resolve => { resolveHeavyIpcReady = resolve; });
-  ipcMain.handle('app:waitForHeavyIpc', () => heavyIpcReady);
+  ipcMain.handle(IPC_CHANNELS.APP_WAIT_FOR_HEAVY_IPC, () => heavyIpcReady);
 
   // ========================================================================
   // STEP 2: Fast setup (registrations only, no heavy I/O).

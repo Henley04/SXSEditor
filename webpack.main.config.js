@@ -41,43 +41,53 @@ module.exports = {
         {
           from: path.resolve(__dirname, 'src/inference/phone_set.json'),
           to: path.resolve(__dirname, '.webpack/main/phone_set.json'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/inference/en_g2p_dict.json'),
           to: path.resolve(__dirname, '.webpack/main/en_g2p_dict.json'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/inference/en_phoneme_durations.json'),
           to: path.resolve(__dirname, '.webpack/main/en_phoneme_durations.json'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/inference/pipeline/jpKanjiDict.json'),
           to: path.resolve(__dirname, '.webpack/main/jpKanjiDict.json'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/audio/audioWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/audio/audioWorker.js'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/audio/audioFormatUtils.js'),
           to: path.resolve(__dirname, '.webpack/main/audio/audioFormatUtils.js'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/utils/gpuWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/utils/gpuWorker.js'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/utils/deviceClassifier.js'),
           to: path.resolve(__dirname, '.webpack/main/utils/deviceClassifier.js'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/main'),
           to: path.resolve(__dirname, '.webpack/main/main'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/utils'),
           to: path.resolve(__dirname, '.webpack/main/utils'),
           globOptions: { ignore: ['**/gpuWorker.js', '**/deviceClassifier.js'] },
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/inference'),
@@ -85,26 +95,32 @@ module.exports = {
           globOptions: {
             ignore: ['**/pitchWorker.js', '**/svsWorker.js', '**/rmvpePitchDetector.js', '**/pipeline/float16Patch.js', '**/pipeline/jpKanjiDict.json'],
           },
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/inference/svsWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/inference/svsWorker.js'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/inference/pitchWorker.js'),
           to: path.resolve(__dirname, '.webpack/main/inference/pitchWorker.js'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/inference/rmvpePitchDetector.js'),
           to: path.resolve(__dirname, '.webpack/main/inference/rmvpePitchDetector.js'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/utils/resampleAudio.js'),
           to: path.resolve(__dirname, '.webpack/main/utils/resampleAudio.js'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/inference/pipeline/float16Patch.js'),
           to: path.resolve(__dirname, '.webpack/main/inference/pipeline/float16Patch.js'),
+          noErrorOnMissing: true,
         },
         {
           // These files run in an isolated child process and therefore cannot
@@ -113,10 +129,12 @@ module.exports = {
           // existing inference modules beside it.
           from: path.resolve(__dirname, 'src/inference/winml/trtDiagnosticRunner.js'),
           to: path.resolve(__dirname, '.webpack/main/inference/winml/trtDiagnosticRunner.js'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/inference/winml/trtDiagnostic.js'),
           to: path.resolve(__dirname, '.webpack/main/inference/winml/trtDiagnostic.js'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'native/build/Release/executorch_runtime.node'),
@@ -138,10 +156,12 @@ module.exports = {
         {
           from: path.resolve(__dirname, 'src/inference/pipeline/jpKanjiDict.json'),
           to: path.resolve(__dirname, '.webpack/main/inference/pipeline/jpKanjiDict.json'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'assets/SXS.png'),
           to: path.resolve(__dirname, '.webpack/main/SXS.png'),
+          noErrorOnMissing: true,
         },
         {
           from: path.resolve(__dirname, 'src/build-info.json'),

@@ -57,7 +57,12 @@ module.exports = {
 
   packagerConfig: {
     asar: {
-      unpack: '**/*.{node,dll}',
+      // 审查项 §5：原来只 unpack .node/.dll，漏掉了 wasm。
+      // onnxruntime-web（ort-wasm-simd-threaded*.wasm）与 tfjs-backend-wasm
+      // （tfjs-backend-wasm-threaded-simd.wasm）都是**二进制**而不是文本：
+      // 塞进 asar 后由 file:// 加载时会被当成待解压文本，轻则解码失败、
+      // 重则整个 WebNN/CPU 推理后端起不来。与 .node/.dll 同等对待即可。
+      unpack: '**/*.{node,dll,wasm}',
       ...(skipOnnxModels ? {} : { unpackDir: 'onnx_models' })
     },
     prune: true,

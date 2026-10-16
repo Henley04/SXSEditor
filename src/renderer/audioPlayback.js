@@ -10,6 +10,11 @@ import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './tim
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
 import { getSingerBackend, normalizeBackend } from '../editor/trackManager.js';
 import { clearPluginBlockingOverlay } from './pluginBlockingOverlay.js';
+// 2.4: 渲染进程此前没有统一的异常兜底策略，静默 catch 占全库 44.8%。
+// 清理型副作用（disconnect / stop / 退订）统一走 safeCleanup，失败留痕但不打断主流程。
+import safeCallModule from '../shared/safeCall.js';
+
+const { safeCleanup, safeCallAsync } = safeCallModule;
 
 // ==================== 插件后端接线 ====================
 
@@ -127,7 +132,7 @@ let _sharedUpdateFn = null;
 let _exclusiveRemoveEndedListener = null;
 function _detachExclusiveEndedListener() {
   if (_exclusiveRemoveEndedListener) {
-    try { _exclusiveRemoveEndedListener(); } catch (_) {}
+    safeCleanup('audioPlayback.detachExclusiveEndedListener', _exclusiveRemoveEndedListener);
     _exclusiveRemoveEndedListener = null;
   }
 }
@@ -575,7 +580,7 @@ export async function playAll() {
             if (lateSec >= chunkDurSec) {
               // 整个 chunk 已过期：内容无可播部分，丢弃（buffer 前沿已覆盖
               // 其范围；播放头会经过一小段静音，直到下一个 chunk）。
-              try { source.disconnect(); } catch (_) {}
+              safeCleanup('audioPlayback.source.disconnect', () => source.disconnect());
               if (chunkInfo.isLast) {
                 _scheduler.markLastReceived();
               }
@@ -616,7 +621,7 @@ export async function playAll() {
         // Let queued svs:chunk-audio IPC messages run before removing the listener.
         await new Promise(resolve => setTimeout(resolve, 0));
         // 合成完成：移除 chunk 监听器
-        if (streamingChunkCleanup) { try { streamingChunkCleanup(); } catch (_) {} streamingChunkCleanup = null; }
+        if (streamingChunkCleanup) { safeCleanup('audioPlayback.streamingChunkCleanup', streamingChunkCleanup); streamingChunkCleanup = null; }
 
         state.currentAudioData = mixedAudio;
         // Always rebuild the complete playback mix. On cache-fast replays the IPC
@@ -653,14 +658,14 @@ export async function playAll() {
         }
         // 否则流式播放仍在进行，playhead 动画已在运行，不重置 timeDisplay
       } catch (error) {
-        if (streamingChunkCleanup) { try { streamingChunkCleanup(); } catch (_) {} streamingChunkCleanup = null; }
+        if (streamingChunkCleanup) { safeCleanup('audioPlayback.streamingChunkCleanup', streamingChunkCleanup); streamingChunkCleanup = null; }
         // 停止已调度的流式 source
         state.streamingFinished = true;
         _streamingActive = false;
         if (_scheduler) _scheduler.deactivate();
         for (const src of state.streamingSources) {
           if (!src) continue;
-          try { src.onended = null; src.stop(); } catch (_) {}
+          safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
         }
         state.streamingSources = [];
         throw error;
@@ -787,7 +792,7 @@ export async function playAll() {
       setLabel(dom.btnPlay, t('main.play'), { icon: 'play' });
     }
     dom.btnPlay.disabled = false;
-    if (playProgressCleanup) { try { playProgressCleanup(); } catch (_) {} playProgressCleanup = null; }
+    if (playProgressCleanup) { safeCleanup('audioPlayback.playProgressCleanup', playProgressCleanup); playProgressCleanup = null; }
   }
 }
 
@@ -1110,7 +1115,7 @@ export function pausePlayback() {
     _streamingActive = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
-      try { src.onended = null; src.stop(); } catch (_) {}
+      safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
     }
     state.streamingSources = [];
     state.isPlaying = false;
@@ -1165,7 +1170,7 @@ export function stopPlayback() {
     _streamingActive = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
-      try { src.onended = null; src.stop(); } catch (_) {}
+      safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
     }
     state.streamingSources = [];
   }
@@ -1202,7 +1207,7 @@ export async function seekPlayback(newOffset) {
     _streamingActive = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
-      try { src.onended = null; src.stop(); } catch (_) {}
+      safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
     }
     state.streamingSources = [];
     state.isPlaying = false;
@@ -1319,7 +1324,7 @@ export function startPlayheadAnimation() {
         _streamingActive = false;
         for (const src of (state.streamingSources || [])) {
           if (!src) continue;
-          try { src.onended = null; src.stop(); } catch (_) {}
+          safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
         }
         state.streamingSources = [];
         stopPlayheadAnimation();
@@ -1534,7 +1539,7 @@ export async function runExportJob(opts) {
     }
   } finally {
     if (fragmentProgressCleanup) {
-      try { fragmentProgressCleanup(); } catch (_) {}
+      safeCleanup('audioPlayback.fragmentProgressCleanup', fragmentProgressCleanup);
       fragmentProgressCleanup = null;
     }
   }

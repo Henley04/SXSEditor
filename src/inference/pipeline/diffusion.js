@@ -1,6 +1,6 @@
 const ort = require('onnxruntime-node');
 const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
-const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16, throwIfCancelled } = require('./utils');
+const { createFloatTensor, outputToFloat32, outputToFloat32Into, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16, throwIfCancelled } = require('./utils');
 const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
@@ -716,6 +716,9 @@ class Diffusion {
             // 替代原先每步 2 次 new Float32Array(targetLen)。
             condPredBuf: new Float32Array(targetLen),
             uncondPredBuf: new Float32Array(targetLen),
+            // P1-3：模型输出落地缓冲。CFG batch 路径一次输出 [2, seqLen, MEL_DIM]，
+            // 按这个上界分配一次，之后每步复用（原来是每步 new Float32Array 1~2MB）。
+            predScratchBuf: new Float32Array(2 * seqLen * MEL_DIM),
         };
 
         // evalDiffStep: 执行 cond + (可选)uncond 推理，返回 {condPred, uncondPred}
@@ -789,8 +792,8 @@ class Diffusion {
                     throw err;
                 }
                 const batchPredRaw = batchResults[io.outName];
-                const batchPred = outputToFloat32(batchPredRaw);
-                // outputToFloat32 returns a fresh Float32Array; safe to dispose source now
+                // P1-3：写进跨步复用的 predScratchBuf，本步读完立刻切片搬走，不保留引用
+                const batchPred = outputToFloat32Into(batchPredRaw, buffers.predScratchBuf);
                 disposeTensor(batchPredRaw);
 
                 // Split batchPred [diffBatch, seqLen, MEL_DIM] into cond + uncond target slices.
@@ -830,7 +833,8 @@ class Diffusion {
                 throw err;
             }
             const predRaw = results[io.outName];
-            const pred = outputToFloat32(predRaw);
+            // P1-3：同上，复用 predScratchBuf（本步内消费完）
+            const pred = outputToFloat32Into(predRaw, buffers.predScratchBuf);
             disposeTensor(predRaw);
 
             // Slice target segment (skip prompt prefix) — target frames are

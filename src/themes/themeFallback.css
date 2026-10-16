@@ -1,0 +1,157 @@
+/* ============================================================================
+ * themeFallback —— CSS 层的主题变量兜底（审查项 U2）
+ *
+ * 问题：全仓 CSS 里没有一处 `:root` / `[data-theme]` 定义，所有 `--bg-app`、
+ * `--space-4`、`--radius-lg` 这类变量都由主题 JS 用
+ * `documentElement.style.setProperty()` 注入。JS 执行之前（样式表已生效、
+ * 主题脚本还没跑完，或脚本 404 / 抛错）这些变量全部为空，`var(--bg-app)`
+ * 直接解析失败 → 背景塌陷成透明/白，首屏闪一下（FOUC）。
+ *
+ * 解决：把"内置 ACG 主题"的核心 token 以静态 CSS 写在这里，随 common.css
+ * 一起打包。优先级链是：
+ *   1. themeBootstrap.js 的内联 <style>  （最早，但只覆盖它列出的变量）
+ *   2. 本文件（普通 CSS 规则，与 1 同优先级、顺序在后，因此胜出）
+ *   3. themeInit/themeManager 写入的 inline style  （最高优先级，最终生效）
+ * 也就是说用户选定的主题依然会正常覆盖这里的默认值，这里只负责"JS 还没来"
+ * 的那几十毫秒。
+ *
+ * 维护约定：本文件与 src/themes/themeBootstrap.js 的兜底块必须保持一致 ——
+ * test/themeFallback.test.js 会逐项比对两者，不一致直接让 CI 失败。
+ * ========================================================================== */
+:root {
+  /* ---- 排版与尺度 ---- */
+  --space-0: 0;
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 20px;
+  --space-8: 24px;
+  --space-9: 32px;
+  --space-10: 40px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius-2xl: 16px;
+  --radius-full: 9999px;
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-base: 13px;
+  --font-md: 14px;
+  --font-lg: 15px;
+  --font-xl: 18px;
+  --font-2xl: 22px;
+  --motion-fast: 0.15s;
+  --motion-base: 0.2s;
+  --motion-slow: 0.3s;
+
+  /* ---- 阴影 ---- */
+  --shadow-sm: 0 1px 2px rgba(42, 52, 65, 0.06);
+  --shadow-md: 0 1px 3px rgba(42, 52, 65, 0.08);
+  --shadow-lg: 0 4px 12px rgba(42, 52, 65, 0.12);
+  --shadow-xl: 0 8px 24px rgba(42, 52, 65, 0.18);
+  --shadow-color: rgba(42, 52, 65, 0.08);
+  --shadow-color-mid: rgba(42, 52, 65, 0.12);
+  --shadow-color-strong: rgba(42, 52, 65, 0.20);
+
+  /* ---- 表面与前景 ---- */
+  --bg-app: #ece8da;
+  --bg-panel: #faf8f2;
+  --bg-elevated: #ffffff;
+  --bg-input: #ffffff;
+  --bg-overlay: rgba(42, 52, 65, 0.35);
+  --bg-toolbar-start: #faf8f2;
+  --bg-toolbar-end: #faf8f2;
+  --bg-header-start: #f6f2e8;
+  --bg-header-end: #f6f2e8;
+  --bg-button: #faf8f2;
+  --bg-button-hover: #f2ede0;
+  --bg-button-active: #e0dac4;
+  --bg-button-primary: #3fb8c9;
+  --bg-button-primary-hover: #5cc8d6;
+  --bg-button-success: #6db86b;
+  --bg-button-success-hover: #90d490;
+  --bg-button-danger: #d96a6a;
+  --bg-button-danger-hover: #f09090;
+  --fg-primary: #2a3441;
+  --fg-secondary: #4a5568;
+  --fg-muted: #8a93a2;
+  --fg-disabled: #b0a88e;
+  --fg-on-accent: #ffffff;
+  --fg-on-success: #ffffff;
+  --fg-on-warning: #2a3441;
+
+  /* ---- 强调色与语义色 ---- */
+  --accent: #3fb8c9;
+  --accent-hover: #5cc8d6;
+  --accent-pressed: #2a8e9c;
+  --accent-soft: rgba(63, 184, 201, 0.12);
+  --accent-softer: rgba(63, 184, 201, 0.04);
+  --accent-glow: rgba(63, 184, 201, 0.22);
+  --accent-glow-strong: rgba(63, 184, 201, 0.32);
+  --accent-line: rgba(63, 184, 201, 0.25);
+  --accent-line-strong: rgba(63, 184, 201, 0.40);
+  --accent-fg: #2a8e9c;
+  --success: #6db86b;
+  --success-soft: rgba(109, 184, 107, 0.15);
+  --success-glow: rgba(109, 184, 107, 0.30);
+  --warning: #f2c14e;
+  --warning-soft: rgba(242, 193, 78, 0.15);
+  --warning-line: rgba(242, 193, 78, 0.25);
+  --warning-glow: rgba(242, 193, 78, 0.08);
+  --danger: #d96a6a;
+  --danger-soft: rgba(217, 106, 106, 0.15);
+  --danger-glow: rgba(217, 106, 106, 0.30);
+  --info: #3fb8c9;
+  --purple-soft: rgba(154, 136, 201, 0.15);
+
+  /* ---- 边框 / 滚动条 / 选中 ---- */
+  --border-subtle: #e8e2ce;
+  --border-default: #e0dac4;
+  --border-strong: #ccc6aa;
+  --border-accent: #3fb8c9;
+  --panel-line: rgba(200, 194, 166, 0.5);
+  --panel-bg: var(--bg-panel);
+  --panel-border: #e0dac4;
+  --panel-fg: var(--fg-primary);
+  --overlay-scrim: rgba(42, 52, 65, 0.35);
+  --ink-soft: rgba(138, 147, 162, 0.30);
+  --scrollbar-thumb: rgba(200, 194, 166, 0.5);
+  --scrollbar-thumb-hover: rgba(173, 166, 136, 0.7);
+  --scrollbar-track: transparent;
+  --selection-bg: rgba(63, 184, 201, 0.25);
+  --focus-ring: 0 0 0 2px rgba(63, 184, 201, 0.35);
+
+  /* ---- 控件语义别名 ---- */
+  --button-primary-bg: var(--bg-button-primary);
+  --button-primary-fg: var(--fg-on-accent);
+  --button-primary-hover: var(--bg-button-primary-hover);
+  --button-secondary-bg: var(--bg-button);
+  --button-secondary-fg: var(--fg-primary);
+  --button-secondary-border: #e0dac4;
+  --button-disabled-bg: #e8e2ce;
+  --button-danger-bg: var(--bg-button-danger);
+  --input-bg: var(--bg-input);
+  --input-border: #dad4be;
+  --input-fg: var(--fg-primary);
+  --input-focus-ring: var(--focus-ring);
+  --input-placeholder: #ada688;
+  --tooltip-bg: #2a3441;
+  --tooltip-fg: #ffffff;
+  --selection-bg-token: var(--selection-bg);
+  --selection-fg: var(--fg-primary);
+
+  /* ---- 装饰：ACG 斜切角与条纹 ---- */
+  --clip-button: polygon(4px 0, 100% 0, 100% calc(100% - 4px), calc(100% - 4px) 100%, 0 100%, 0 4px);
+  --clip-panel: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
+  --clip-badge: polygon(3px 0, 100% 0, 100% calc(100% - 3px), calc(100% - 3px) 100%, 0 100%, 0 3px);
+  --deco-accent-bar: 3px;
+  --deco-stripe: repeating-linear-gradient(45deg, transparent 0, transparent 3px, rgba(63, 184, 201, 0.06) 3px, rgba(63, 184, 201, 0.06) 4px);
+  --toolbar-accent-line: 3px;
+
+  /* 让原生控件在主题脚本到达之前也跟随浅色主题 */
+  --color-scheme: light;
+}

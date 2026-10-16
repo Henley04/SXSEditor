@@ -9,6 +9,7 @@
 // from the critical path to first paint.
 
 const { contextBridge, ipcRenderer } = require('electron');
+const { IPC_CHANNELS } = require('./shared/ipcChannels');
 
 // Forward splash renderer errors to main process for centralized logging.
 // The splash window is minimal but still can throw errors during early
@@ -16,7 +17,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 (function attachSplashErrorForwarding() {
   try {
     const fwd = (level, message) => {
-      try { ipcRenderer.send('crash:log', { level, source: 'splash', message }); } catch (_) {}
+      try { ipcRenderer.send(IPC_CHANNELS.CRASH_LOG, { level, source: 'splash', message }); } catch (_) {}
     };
     const fmt = (e) => {
       if (e instanceof Error) return e.stack || e.message;
@@ -35,5 +36,5 @@ const { contextBridge, ipcRenderer } = require('electron');
 })();
 
 contextBridge.exposeInMainWorld('splashAPI', {
-  getBuildInfo: () => ipcRenderer.invoke('splash:getBuildInfo'),
+  getBuildInfo: () => ipcRenderer.invoke(IPC_CHANNELS.SPLASH_GET_BUILD_INFO),
 });

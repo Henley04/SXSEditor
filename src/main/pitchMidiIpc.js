@@ -6,11 +6,13 @@ const { RmvpePitchDetector } = require('../inference/rmvpePitchDetector');
 const { BasicPitchDetector } = require('../inference/basicPitch');
 const { RosvotDetector } = require('../inference/rosvotDetector');
 const { FcpePitchDetector } = require('../inference/fcpePitchDetector');
+const { requireSampleRate } = require('../inference/shared/pitchF0Utils');
 const pp = require('../inference/pitchPostprocess');
 const { parseMidiFile, parseMidiFileMultiTrack, parseMidiProjectInfo } = require('../inference/midiParser');
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
 const { createLazyInitializer } = require('./lazyInitializer');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 /**
  * Get the base model directory (without precision subdirectory).
@@ -290,7 +292,7 @@ async function extractFcpeViaWorker(audioData, sampleRate, bpm, options) {
 // FCPE 9 步管线的主线程同步版本，作为 worker 不可用/崩溃时的 fallback；
 // 必须与 pitchWorker.js 的 runFcpeExtraction 保持逐行语义一致。
 async function runFcpePipeline(detector, audioData, sampleRate, bpm, options) {
-  const sr = sampleRate || 44100;
+  const sr = requireSampleRate(sampleRate, 'runFcpePipeline');
   const opts = options || {};
   const bpmVal = opts.bpm || bpm || 120;
 
@@ -355,15 +357,15 @@ async function runFcpePipeline(detector, audioData, sampleRate, bpm, options) {
 }
 
 function registerPitchMidiIpc() {
-  safeHandle('extractF0:onnx', async (event, { audioData, sampleRate }) => {
+  safeHandle(IPC_CHANNELS.EXTRACT_F0_ONNX, async (event, { audioData, sampleRate }) => {
     try {
       try {
-        const f0Array = await extractF0ViaWorker(audioData, sampleRate || 44100);
+        const f0Array = await extractF0ViaWorker(audioData, requireSampleRate(sampleRate, 'extractF0:onnx'));
         return { success: true, f0Array };
       } catch (workerErr) {
         console.warn('[Main] pitchWorker unavailable, falling back to sync:', workerErr.message);
         const detector = await rmvpeLazy.get();
-        const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
+        const f0Array = await detector.extractF0(new Float32Array(audioData), requireSampleRate(sampleRate, 'extractF0:onnx fallback'));
         return { success: true, f0Array };
       }
     } catch (err) {
@@ -372,13 +374,13 @@ function registerPitchMidiIpc() {
     }
   });
 
-  safeHandle('extractMidi:rosvot', async (event, { audioData, sampleRate, bpm }) => {
+  safeHandle(IPC_CHANNELS.EXTRACT_MIDI_ROSVOT, async (event, { audioData, sampleRate, bpm }) => {
     try {
       const settings = loadSettings();
       const useRosvot = settings?.useRosvot === true;
       const rosvotModelPath = path.join(getBaseModelDir(), 'preprocess', 'rosvot_model.onnx');
       const result = await extractMidiViaWorker(
-        audioData, sampleRate || 44100, bpm || 120, useRosvot, fs.existsSync(rosvotModelPath)
+        audioData, requireSampleRate(sampleRate, 'extractMidi:rosvot'), bpm || 120, useRosvot, fs.existsSync(rosvotModelPath)
       );
       return { success: true, f0Array: result.f0Array, notes: result.notes };
     } catch (workerErr) {
@@ -387,12 +389,12 @@ function registerPitchMidiIpc() {
       console.warn('[Main] pitchWorker MIDI path unavailable, falling back to sync:', workerErr.message);
       try {
         const detector = await rmvpeLazy.get();
-        const f0Array = await detector.extractF0(new Float32Array(audioData), sampleRate || 44100);
+        const f0Array = await detector.extractF0(new Float32Array(audioData), requireSampleRate(sampleRate, 'extractMidi:rosvot fallback'));
         let notes = detector.f0ToNotes(f0Array, bpm || 120);
         if (loadSettings()?.useRosvot === true) {
           try {
             const rosvot = await rosvotLazy.get();
-            const candidate = await rosvot.extractNotes(new Float32Array(audioData), sampleRate || 44100, f0Array, bpm || 120);
+            const candidate = await rosvot.extractNotes(new Float32Array(audioData), requireSampleRate(sampleRate, 'extractMidi:rosvot rosvot'), f0Array, bpm || 120);
             if (candidate.some(n => n.pitch > 0)) notes = candidate;
           } catch (_) { resetRosvot(); }
         }
@@ -404,10 +406,10 @@ function registerPitchMidiIpc() {
     }
   });
 
-  safeHandle('extractF0:basicPitch', async (event, { audioData, sampleRate, bpm }) => {
+  safeHandle(IPC_CHANNELS.EXTRACT_F0_BASIC_PITCH, async (event, { audioData, sampleRate, bpm }) => {
     try {
       const detector = await basicPitchLazy.get();
-      const result = await detector.extractF0AndNotes(new Float32Array(audioData), sampleRate || 44100, bpm || 120);
+      const result = await detector.extractF0AndNotes(new Float32Array(audioData), requireSampleRate(sampleRate, 'extractMidi:basicpitch'), bpm || 120);
       return { success: true, f0Array: result.f0Array, notes: result.notes };
     } catch (err) {
       console.error('[Main] Basic Pitch extraction failed:', err);
@@ -415,8 +417,8 @@ function registerPitchMidiIpc() {
     }
   });
 
-  safeHandle('extractMidi:fcpe', async (event, { audioData, sampleRate, bpm, options }) => {
-    const sr = sampleRate || 44100;
+  safeHandle(IPC_CHANNELS.EXTRACT_MIDI_FCPE, async (event, { audioData, sampleRate, bpm, options }) => {
+    const sr = requireSampleRate(sampleRate, 'extractMidi:fcpe');
     // Worker 优先：重采样 + ONNX 推理 + 后处理全部离开主进程，不再冻结窗口；
     // worker 不可用（spawn 失败/初始化冷却/崩溃）时回退到本进程同步执行，
     // 功能不丢失（与 RMVPE 路径同一模式）。
@@ -441,7 +443,7 @@ function registerPitchMidiIpc() {
     }
   });
 
-  safeHandle('midi:import', async () => {
+  safeHandle(IPC_CHANNELS.MIDI_IMPORT, async () => {
     try {
       const { dialog } = require('electron');
       const { t } = require('./locale');
@@ -467,7 +469,7 @@ function registerPitchMidiIpc() {
     }
   });
 
-  safeHandle('midi:importMultiTrack', async () => {
+  safeHandle(IPC_CHANNELS.MIDI_IMPORT_MULTI_TRACK, async () => {
     try {
       const { dialog } = require('electron');
       const { t } = require('./locale');

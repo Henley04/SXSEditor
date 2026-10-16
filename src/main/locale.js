@@ -1,6 +1,4 @@
 const { app } = require('electron');
-const path = require('node:path');
-const fs = require('node:fs');
 
 // B7: NOTE — there are two parallel i18n systems in this codebase:
 //   1. This file (src/main/locale.js) — CJS, used by the main process.
@@ -190,16 +188,12 @@ const mainLocales = {
 let mainLocale = 'en';
 
 function loadMainLocale() {
-  try {
-    const configPath = path.join(app.getPath('userData'), 'sxseditor-locale.json');
-    if (fs.existsSync(configPath)) {
-      const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-      if (data.locale && mainLocales[data.locale]) {
-        mainLocale = data.locale;
-        return;
-      }
-    }
-  } catch (err) { console.warn('[Main] Failed to load locale config:', err.message); }
+  // A6: 配置读取统一走 ConfigStore，避免文件名在主进程里被多处硬编码。
+  const data = require('./configStore').readJsonConfig('locale');
+  if (data && data.locale && mainLocales[data.locale]) {
+    mainLocale = data.locale;
+    return;
+  }
   // No config file — detect system language
   const sysLang = app.getLocale(); // e.g. 'zh-CN', 'en-US', 'ja'
   if (sysLang.startsWith('zh')) {

@@ -24,6 +24,7 @@ const { BrowserWindow, ipcMain, app } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { safeHandle } = require('./ipcSafe');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 let splashWindow = null;
 let splashReadyAt = 0; // ms timestamp when splash content first painted
@@ -62,7 +63,7 @@ function readBuildInfo() {
 }
 
 function registerSplashIpc() {
-  safeHandle('splash:getBuildInfo', async () => readBuildInfo());
+  safeHandle(IPC_CHANNELS.SPLASH_GET_BUILD_INFO, async () => readBuildInfo());
 }
 
 function createSplashWindow() {

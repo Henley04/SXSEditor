@@ -1709,35 +1709,14 @@ class Postprocessing {
         const f0 = new Float32Array(Math.floor(resampled.length / HOP_SIZE));
         const minRms = 0.01;
         const frameSize = HOP_SIZE;
+        const minLag = Math.floor(SAMPLE_RATE / 1000);
+        const maxLag = Math.floor(SAMPLE_RATE / 50);
         for (let i = 0; i < f0.length; i++) {
             const start = i * frameSize;
-            const end = Math.min(start + frameSize, resampled.length);
-            let rms = 0;
-            for (let j = start; j < end; j++) {
-                rms += resampled[j] * resampled[j];
-            }
-            rms = Math.sqrt(rms / (end - start));
-            if (rms < minRms) {
-                f0[i] = 0;
-                continue;
-            }
-            let bestLag = 0;
-            let bestCorr = 0;
-            const minLag = Math.floor(SAMPLE_RATE / 1000);
-            const maxLag = Math.floor(SAMPLE_RATE / 50);
-            for (let lag = minLag; lag <= maxLag; lag++) {
-                let corr = 0;
-                let energy = 0;
-                for (let j = 0; j < Math.min(frameSize, resampled.length - start - lag); j++) {
-                    corr += resampled[start + j] * resampled[start + j + lag];
-                    energy += resampled[start + j] * resampled[start + j];
-                }
-                if (energy > 0) corr /= energy;
-                if (corr > bestCorr) {
-                    bestCorr = corr;
-                    bestLag = lag;
-                }
-            }
+            // P2-2：自相关核心抽到 _autocorrBestLag（平方和前缀表，约 2× 提速）
+            const { bestLag, bestCorr } = _autocorrBestLag(
+                resampled, start, frameSize, minLag, maxLag, minRms
+            );
             if (bestCorr > 0.3 && bestLag > 0) {
                 f0[i] = SAMPLE_RATE / bestLag;
             } else {
@@ -1758,38 +1737,14 @@ class Postprocessing {
         const minRms = 0.01;
         const frameSize = HOP_SIZE;
         const EXTRACT_F0_YIELD_EVERY = 32;
+        const minLag = Math.floor(SAMPLE_RATE / 1000);
+        const maxLag = Math.floor(SAMPLE_RATE / 50);
         for (let i = 0; i < f0.length; i++) {
             const start = i * frameSize;
-            const end = Math.min(start + frameSize, resampled.length);
-            let rms = 0;
-            for (let j = start; j < end; j++) {
-                rms += resampled[j] * resampled[j];
-            }
-            rms = Math.sqrt(rms / (end - start));
-            if (rms < minRms) {
-                f0[i] = 0;
-                if ((i % EXTRACT_F0_YIELD_EVERY) === 0 && i > 0) {
-                    await new Promise(r => setImmediate(r));
-                }
-                continue;
-            }
-            let bestLag = 0;
-            let bestCorr = 0;
-            const minLag = Math.floor(SAMPLE_RATE / 1000);
-            const maxLag = Math.floor(SAMPLE_RATE / 50);
-            for (let lag = minLag; lag <= maxLag; lag++) {
-                let corr = 0;
-                let energy = 0;
-                for (let j = 0; j < Math.min(frameSize, resampled.length - start - lag); j++) {
-                    corr += resampled[start + j] * resampled[start + j + lag];
-                    energy += resampled[start + j] * resampled[start + j];
-                }
-                if (energy > 0) corr /= energy;
-                if (corr > bestCorr) {
-                    bestCorr = corr;
-                    bestLag = lag;
-                }
-            }
+            // 与同步版共用同一个自相关核心，两份实现不再各写一遍（审查项 2.2）
+            const { bestLag, bestCorr } = _autocorrBestLag(
+                resampled, start, frameSize, minLag, maxLag, minRms
+            );
             if (bestCorr > 0.3 && bestLag > 0) {
                 f0[i] = SAMPLE_RATE / bestLag;
             } else {
@@ -1848,6 +1803,66 @@ class Postprocessing {
     }
 }
 
+/**
+ * 单帧自相关基频估计 —— 参考音频 F0 提取的热路径（同步版与异步版共用）。
+ *
+ * P2-2 性能修复：原实现把 energy 的累加写在 lag 循环**内部**，而
+ * `energy = Σ x[start+j]²` 与 lag 无关（只有帧紧贴音频末尾、累加长度被
+ * `resampled.length - start - lag` 截断时才随 lag 变化）。于是同一段平方和被
+ * 重复累加 (maxLag - minLag + 1) ≈ 457 次，直接浪费约一半算力。
+ *
+ * 这里改用平方和前缀表：energy 变成 O(1) 查表，内层循环只剩 corr 的乘加，
+ * 整体约 2× 提速，且浮点累加顺序与原来一致（前缀表同样按 j 递增累加），
+ * 数值结果与旧实现逐位相同。
+ *
+ * @param {Float32Array} resampled 已重采样到 SAMPLE_RATE 的音频
+ * @param {number} start 帧起始采样下标
+ * @param {number} frameSize 帧长
+ * @param {number} minLag 最小滞后（对应最高频率）
+ * @param {number} maxLag 最大滞后（对应最低频率）
+ * @param {number} minRms 低于该 RMS 直接判定为静音帧，跳过自相关
+ * @returns {{bestLag:number, bestCorr:number, rms:number}}
+ */
+// _autocorrBestLag 复用的平方和前缀表缓冲（避免每帧一次 Float64Array 分配）
+let _prefixSqBuf = new Float64Array(0);
+
+function _autocorrBestLag(resampled, start, frameSize, minLag, maxLag, minRms = 0.01) {
+    const maxN = Math.min(frameSize, resampled.length - start);
+    if (maxN <= 0) return { bestLag: 0, bestCorr: 0, rms: 0 };
+
+    // 平方和前缀表：prefixSq[k] = Σ_{j<k} x[start+j]²
+    // 每帧都新建一个 Float64Array(frameSize+1) 会把省下来的算力又交给了 GC，
+    // 因此复用模块级缓冲（本函数内部无 await，不存在重入）。
+    if (_prefixSqBuf.length < maxN + 1) _prefixSqBuf = new Float64Array(maxN + 1);
+    const prefixSq = _prefixSqBuf;
+    for (let j = 0; j < maxN; j++) {
+        const v = resampled[start + j];
+        prefixSq[j + 1] = prefixSq[j] + v * v;
+    }
+
+    // RMS 顺带从前缀表得出，省掉原来的第二次遍历
+    const rms = Math.sqrt(prefixSq[maxN] / maxN);
+    if (rms < minRms) return { bestLag: 0, bestCorr: 0, rms };
+
+    let bestLag = 0;
+    let bestCorr = 0;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+        const n = Math.min(frameSize, resampled.length - start - lag);
+        if (n <= 0) break;
+        let corr = 0;
+        for (let j = 0; j < n; j++) {
+            corr += resampled[start + j] * resampled[start + j + lag];
+        }
+        const energy = prefixSq[n];
+        if (energy > 0) corr /= energy;
+        if (corr > bestCorr) {
+            bestCorr = corr;
+            bestLag = lag;
+        }
+    }
+    return { bestLag, bestCorr, rms };
+}
+
 module.exports = {
     Postprocessing,
     parseWavBuffer,
@@ -1867,5 +1882,9 @@ module.exports = {
     isSilentMel,
     isVramOOMError,
     guardMelFinite,
-    __test: { countNonFinite: _countNonFinite, melTransformInputRank: _melTransformInputRank },
+    __test: {
+        countNonFinite: _countNonFinite,
+        melTransformInputRank: _melTransformInputRank,
+        autocorrBestLag: _autocorrBestLag,
+    },
 };

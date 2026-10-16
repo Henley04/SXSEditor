@@ -2,7 +2,20 @@ const { expect } = require('chai');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { OnnxSVSPipeline } = require('../src/inference/pipeline');
+// 测试有效性 / CI 稳定性：本文件 require 的 src/inference/pipeline 会连带加载
+// onnxruntime-node（原生模块）。test:ci 只 ignore 了 onnxModelLoading.test.js，
+// 本文件却同样依赖它 —— 一旦 CI 机器上原生模块没装好（或 npm ci 被 --omit 裁剪），
+// 整个 test job 会在"收集阶段"就崩，而不是优雅跳过。
+// 这里先探测依赖是否可用，不可用就跳过整个 describe。
+let OnnxSVSPipeline = null;
+let ortLoadable = true;
+try {
+  require('onnxruntime-node');
+  ({ OnnxSVSPipeline } = require('../src/inference/pipeline'));
+} catch (err) {
+  ortLoadable = false;
+  console.warn(`[test] 跳过 vocoderPrecisionDetection：onnxruntime-node 不可用（${err && err.message}）`);
+}
 
 /**
  * Vocoder 精度自动检测回归测试。
@@ -15,7 +28,9 @@ const { OnnxSVSPipeline } = require('../src/inference/pipeline');
  *   给 TRT-RTX 等严格 EP 喂 float16 而报
  *   "Unexpected input data type. Actual: float16, expected: float"。
  */
-describe('Vocoder precision detection (_detectVocoderPrecision)', () => {
+const describeOrSkip = ortLoadable ? describe : describe.skip;
+
+describeOrSkip('Vocoder precision detection (_detectVocoderPrecision)', () => {
   let pipeline;
   let tmpDir;
 

@@ -11,6 +11,7 @@ const { safeHandle } = require('./ipcSafe');
 // 插件宿主：registerPluginIpc 由 registerSvsIpc() 在末尾调用（main.js 暂不可改）；
 // runPluginBackend 是三个 synthesize handler 的参数透传入口。
 const { runPluginBackend, registerPluginIpc } = require('./pluginIpc');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 let currentLanguage = null; // Track current pipeline language
 
@@ -420,7 +421,7 @@ function registerSvsIpc() {
     _diffStepIncompatibleNotified = true;
     try {
       if (win && !win.isDestroyed()) {
-        win.send('svs:model-incompatible');
+        win.send(IPC_CHANNELS.SVS_MODEL_INCOMPATIBLE);
       }
     } catch (_) {}
   }
@@ -430,14 +431,14 @@ function registerSvsIpc() {
     return !!(pipeline && pipeline.diffStepLegacyInt8Incompatible === true);
   }
 
-  safeHandle('svs:init', async (event) => {
+  safeHandle(IPC_CHANNELS.SVS_INIT, async (event) => {
     await svsPipelineLazy.get();
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
     return { success: true, diffStepLegacyInt8Incompatible: incompatible };
   });
 
-  safeHandle('svs:synthesize', async (event, { notes, bpm, options }) => {
+  safeHandle(IPC_CHANNELS.SVS_SYNTHESIZE, async (event, { notes, bpm, options }) => {
     // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
@@ -463,7 +464,7 @@ function registerSvsIpc() {
       lastProgressSentAt = now;
       lastProgressValue = progress;
       try {
-        if (win && !win.isDestroyed()) win.send('svs:progress', { progress });
+        if (win && !win.isDestroyed()) win.send(IPC_CHANNELS.SVS_PROGRESS, { progress });
       } catch (_) {}
     };
     // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）。
@@ -523,7 +524,7 @@ function registerSvsIpc() {
 
   // 多分片时间交错流式合成（主页面 Play All 启用分块时使用）
   // 接收所有分片，按时间顺序交错推理各分片的 diffusion chunk，边推理边推送音频
-  safeHandle('svs:synthesizeMultiStreaming', async (event, { fragments, bpm }) => {
+  safeHandle(IPC_CHANNELS.SVS_SYNTHESIZE_MULTI_STREAMING, async (event, { fragments, bpm }) => {
     const settingsForLang = loadSettings();
     const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
 
@@ -543,14 +544,14 @@ function registerSvsIpc() {
       onProgress: (progress) => {
         try {
           if (win && !win.isDestroyed()) {
-            win.send('svs:progress', { progress });
+            win.send(IPC_CHANNELS.SVS_PROGRESS, { progress });
           }
         } catch (_) {}
       },
       onChunkAudio: (chunkInfo) => {
         try {
           if (win && !win.isDestroyed()) {
-            win.send('svs:chunk-audio', chunkInfo);
+            win.send(IPC_CHANNELS.SVS_CHUNK_AUDIO, chunkInfo);
           }
         } catch (_) {}
       },
@@ -628,7 +629,7 @@ function registerSvsIpc() {
     return _mixTrackAudio(tracks);
   });
 
-  safeHandle('svs:cancel', async () => {
+  safeHandle(IPC_CHANNELS.SVS_CANCEL, async () => {
     // 优先命中当前持有 mutex 的实例（覆盖 lazy 实例尚未注册的初始化窗口，
     // 以及延迟重置清空 getInstance() 后仍在收尾的场景）。
     const target = _activeCancellable || svsPipelineLazy.getInstance();
@@ -647,23 +648,23 @@ function registerSvsIpc() {
     return { success: true };
   });
 
-  safeHandle('svs:dispose', async () => {
+  safeHandle(IPC_CHANNELS.SVS_DISPOSE, async () => {
     resetSvsPipeline();
     return { success: true };
   });
 
-  safeHandle('fragment-svs:getSampleRate', async () => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_GET_SAMPLE_RATE, async () => {
     return SAMPLE_RATE;
   });
 
-  safeHandle('fragment-svs:init', async (event) => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_INIT, async (event) => {
     await svsPipelineLazy.get();
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
     return { success: true, diffStepLegacyInt8Incompatible: incompatible };
   });
 
-  safeHandle('fragment-svs:synthesize', async (event, { notes, bpm, options }) => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_SYNTHESIZE, async (event, { notes, bpm, options }) => {
     // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
@@ -689,7 +690,7 @@ function registerSvsIpc() {
       lastProgressValue = progress;
       try {
         if (!win.isDestroyed()) {
-          win.send('fragment-svs:progress', { progress });
+          win.send(IPC_CHANNELS.FRAGMENT_SVS_PROGRESS, { progress });
         }
       } catch (_) {}
     };
@@ -701,7 +702,7 @@ function registerSvsIpc() {
       : (chunkInfo) => {
         try {
           if (!win.isDestroyed()) {
-            win.send('fragment-svs:chunk-audio', chunkInfo);
+            win.send(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, chunkInfo);
           }
         } catch (_) {}
       };
@@ -761,11 +762,11 @@ function registerSvsIpc() {
     }
   });
 
-  safeHandle('fragment-svs:dispose', async () => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_DISPOSE, async () => {
     return { success: true };
   });
 
-  safeHandle('fragment-svs:resolvePhonemes', async (event, { lyrics }) => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_RESOLVE_PHONEMES, async (event, { lyrics }) => {
     try {
       const pipeline = svsPipelineLazy.getInstance();
       if (!pipeline || !pipeline.initialized) {
@@ -782,7 +783,7 @@ function registerSvsIpc() {
     }
   });
 
-  safeHandle('svs:checkJpModels', async () => {
+  safeHandle(IPC_CHANNELS.SVS_CHECK_JP_MODELS, async () => {
     const settings = loadSettings();
     const precision = settings.modelPrecision || 'fp32';
     const modelDir = getModelDir();

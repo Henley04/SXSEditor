@@ -4,6 +4,7 @@ const { t } = require('./locale');
 const fs = require('node:fs');
 const path = require('node:path');
 const { safeHandle } = require('./ipcSafe');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 // file:authorizePath 允许渲染进程"自我授权"的最小路径集合。
 //
@@ -219,7 +220,7 @@ function _resolveRealPath(targetPath) {
 }
 
 function registerDialogIpc() {
-  safeHandle('dialog:showSaveDialog', async (event, options) => {
+  safeHandle(IPC_CHANNELS.DIALOG_SAVE, async (event, options) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     const safeOptions = {
       title: typeof options.title === 'string' ? options.title : undefined,
@@ -233,7 +234,7 @@ function registerDialogIpc() {
     return result;
   });
 
-  safeHandle('dialog:showOpenDialog', async (event, options) => {
+  safeHandle(IPC_CHANNELS.DIALOG_OPEN, async (event, options) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     const safeOptions = {
       title: typeof options.title === 'string' ? options.title : undefined,
@@ -254,7 +255,7 @@ function registerDialogIpc() {
   // rename over the target. A crash/power loss mid-write can no longer leave
   // a truncated .sxsproj. The previous version is kept as <file>.bak so the
   // user always has one fallback copy.
-  safeHandle('file:saveFile', async (event, filePath, data) => {
+  safeHandle(IPC_CHANNELS.FILE_SAVE, async (event, filePath, data) => {
     if (!isPathAllowed(filePath)) {
       return { success: false, error: t('error.pathNotAllowed') };
     }
@@ -291,7 +292,7 @@ function registerDialogIpc() {
     }
   });
 
-  safeHandle('file:readFile', async (event, filePath) => {
+  safeHandle(IPC_CHANNELS.FILE_READ, async (event, filePath) => {
     if (!isPathAllowed(filePath)) {
       throw new Error(t('error.pathNotAllowed'));
     }
@@ -304,7 +305,7 @@ function registerDialogIpc() {
     }
   });
 
-  safeHandle('file:readFileBuffer', async (event, filePath) => {
+  safeHandle(IPC_CHANNELS.FILE_READ_BUFFER, async (event, filePath) => {
     if (!isPathAllowed(filePath)) {
       throw new Error(t('error.pathNotAllowed'));
     }
@@ -317,7 +318,7 @@ function registerDialogIpc() {
     }
   });
 
-  safeHandle('file:exists', async (event, filePath) => {
+  safeHandle(IPC_CHANNELS.FILE_EXISTS, async (event, filePath) => {
     if (!isPathAllowed(filePath)) return false;
     try {
       await fs.promises.access(filePath, fs.constants.R_OK);
@@ -327,7 +328,7 @@ function registerDialogIpc() {
     }
   });
 
-  safeHandle('file:authorizePath', async (event, dirPath) => {
+  safeHandle(IPC_CHANNELS.FILE_AUTHORIZE, async (event, dirPath) => {
     const { isSystemPath } = require('./security');
     if (typeof dirPath !== 'string' || dirPath.length === 0) {
       return { success: false, error: 'Invalid path' };
@@ -396,7 +397,7 @@ function registerDialogIpc() {
     return { success: true };
   });
 
-  safeHandle('resolvePath', async (event, basePath, relativePath) => {
+  safeHandle(IPC_CHANNELS.RESOLVE_PATH, async (event, basePath, relativePath) => {
     const resolved = path.resolve(basePath, relativePath);
     const normalizedBase = path.resolve(basePath);
     if (!resolved.startsWith(normalizedBase + path.sep) && resolved !== normalizedBase) {
@@ -405,14 +406,14 @@ function registerDialogIpc() {
     return resolved;
   });
 
-  safeHandle('getDirName', async (event, filePath) => {
+  safeHandle(IPC_CHANNELS.GET_DIR_NAME, async (event, filePath) => {
     if (!isPathAllowed(filePath)) throw new Error(t('error.pathNotAllowed'));
     return path.dirname(filePath);
   });
 
   // 在系统文件管理器中显示指定文件（高亮选中该文件）
   // 用于导出完成后自动打开导出位置
-  safeHandle('shell:showItemInFolder', async (event, filePath) => {
+  safeHandle(IPC_CHANNELS.SHELL_SHOW_ITEM_IN_FOLDER, async (event, filePath) => {
     try {
       const resolved = path.resolve(filePath);
       // Only reveal files under already-authorized paths. Previously this
@@ -435,7 +436,7 @@ function registerDialogIpc() {
   // 仅允许 https 且主机名命中白名单，防止被攻陷的渲染进程拉起任意 URI
   // （file://、smb://、钓鱼站点等）。主机名按"边界匹配"，避免
   // github.com.evil.com 之类的前缀绕过。
-  safeHandle('shell:open-external', async (event, url) => {
+  safeHandle(IPC_CHANNELS.SHELL_OPEN_EXTERNAL, async (event, url) => {
     const ALLOWED_HOSTS = [
       'arxiv.org',
       'github.com',

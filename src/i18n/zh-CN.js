@@ -8,6 +8,7 @@ export default {
     warnings: '警告:'
   },
   main: {
+    a11yFragmentTimelineStatus: '时间轴：{singers} 条轨道，{fragments} 个分片',
     play: '播放',
     pause: '暂停',
     continue: '继续',
@@ -683,6 +684,9 @@ export default {
     vocoderChunkFramesHint: '分片长度必须是 8 的倍数。值越大显存占用越高但拼接次数越少；值越小越省显存但拼接开销增加。默认 1024 帧（约 20.5 秒音频）。',
     vocoderChunkSmartInfo: '等待 GPU 检测完成后显示智能分配结果',
     vocoderChunkSmartResult: '智能分配结果：{frames} 帧（{vram} VRAM, {gpu}）',
+    // 长任务反馈：GPU 检测最长要等 30 秒，之前这段时间界面上没有任何提示
+    vocoderChunkDetecting: '正在检测显卡显存（最长 30 秒）…',
+    vocoderChunkDetectTimeout: '显卡显存检测超时，已按默认档位计算，可在资源管理器中查看',
     vocoderChunkTableTitle: '不同显存对照表',
     vocoderChunkTableHint: '以当前精度和 vocoder 类型计算各档显存的推荐分片。预算列为已扣除常驻权重/diff_step/OS 后的可用显存。当前显卡对应的行会高亮。',
     vocoderChunkTableVram: '显存',
@@ -944,6 +948,9 @@ export default {
     precisionInt8NpuDesc: '固定维度模型，替换 NPU 不支持的算子并固化静态 shape，推荐 NPU 用户使用',
     precisionChangeConfirm: '切换精度将检查对应模型文件，已有文件不会被删除。是否继续？',
     downloadNotAvailable: '该精度的模型下载尚未开放，请通过量化脚本本地生成',
+    // 交互性：下载失败后必须有出口 —— 此前只把文案改成"下载失败"，没有按钮，
+    // 用户只能关掉窗口重开（审查项"空态/错误态/重试缺失"）。
+    retry: '重试',
     // Overview section
     mainModel: '主模型',
     jpModel: '日语模型',

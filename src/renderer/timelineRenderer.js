@@ -6,6 +6,8 @@ import {
   FRAGMENT_BASE_BEAT_WIDTH,
 } from './constants.js';
 import { t } from '../i18n/index.js';
+// U3: 分片时间轴是 canvas，DOM 里没有可读节点 —— 渲染时把摘要写进 aria-live 容器。
+import { announce } from '../utils/a11yAnnounce.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 import { computeLuminanceCached } from '../themes/colorUtils.js';
 import { showConfirmDialog } from '../alertDialog.js';
@@ -303,6 +305,12 @@ export function renderFragmentTimeline() {
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
   const dpr = window.devicePixelRatio || 1;
+
+  // U3：读屏播报（内容相同/过频时 announce 内部自动跳过）
+  announce('fragment-canvas-a11y-status', t('main.a11yFragmentTimelineStatus', {
+    fragments: fragments.length,
+    singers: singers.length,
+  }));
 
   const beatWidth = getBeatWidth();
   const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);

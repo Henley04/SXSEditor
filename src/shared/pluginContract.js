@@ -36,6 +36,8 @@
  * 插件目录只允许从 `<userData>/plugins` 加载，且必须先经安全层授权。
  */
 
+import { PLUGIN_PERMISSIONS, classifyModulePermission, validatePermissions } from './pluginPermissions.js';
+
 export const PLUGIN_API_VERSION = 1;
 
 /** 单次插件调用（synthesize / prepare）的默认超时（毫秒）。 */
@@ -293,4 +295,9 @@ function defaultForType(type) {
 export {
   PLUGIN_ID_RE,
   KIND_ID_RE,
+  // 权限相关（定义在 pluginPermissions.js —— CommonJS，主进程与插件 worker 都要
+  // 用 require 直接加载，不能是 ESM）
+  PLUGIN_PERMISSIONS,
+  classifyModulePermission,
+  validatePermissions,
 };
