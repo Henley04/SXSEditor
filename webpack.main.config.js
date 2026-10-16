@@ -59,13 +59,24 @@ module.exports = {
           noErrorOnMissing: true,
         },
         {
-          from: path.resolve(__dirname, 'src/audio/audioWorker.js'),
-          to: path.resolve(__dirname, '.webpack/main/audio/audioWorker.js'),
+          // src/audio 整树拷贝：audioWorker.js 是裸加载的 worker 入口，它在运行时
+          // 按路径加载同目录的 audioOutputManager.js（见该文件的 CANDIDATES 探测），
+          // 而 audioOutputManager / wavEncoder 又被 src/main/cli.js、audioIpc.js
+          // 以 ../audio/xxx 相对引用。逐文件拷贝只覆盖了 worker 本身，闭包是断的。
+          from: path.resolve(__dirname, 'src/audio'),
+          to: path.resolve(__dirname, '.webpack/main/audio'),
           noErrorOnMissing: true,
         },
         {
-          from: path.resolve(__dirname, 'src/audio/audioFormatUtils.js'),
-          to: path.resolve(__dirname, '.webpack/main/audio/audioFormatUtils.js'),
+          // src/shared 整树拷贝：svsWorker / pitchWorker / pluginWorker 是**按路径
+          // 裸加载**的（worker_threads / fork 直接跑 .webpack 下的原始副本，不经过
+          // webpack 模块解析）。pipeline/index.js、pipeline/textProcessing.js、
+          // pluginWorker.js 现在都 require 了 ../shared 下的模块，缺这一条就是
+          // 运行时 MODULE_NOT_FOUND（svs:init 直接失败，整条合成链路起不来）。
+          // 单元测试测不出来：测试 require 的是 src/ 源码，不是 .webpack 副本。
+          // 守卫：test/copyWebpackClosure.test.js
+          from: path.resolve(__dirname, 'src/shared'),
+          to: path.resolve(__dirname, '.webpack/main/shared'),
           noErrorOnMissing: true,
         },
         {
