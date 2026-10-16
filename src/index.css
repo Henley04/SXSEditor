@@ -194,7 +194,10 @@
   align-items: center;
   gap: var(--space-4);
   padding: 0 var(--space-4);
-  height: 64px;
+  /* 行高与右侧分片时间轴的 canvas 行高必须一致（renderer/constants.js 的
+     SINGER_ROW_HEIGHT，由 state.js 发布成 --singer-row-height）。
+     不要在这里写死 px：两侧一旦不同步就会逐行错位。 */
+  height: var(--singer-row-height, 80px);
   border-bottom: 1px solid var(--border-subtle);
   cursor: pointer;
   transition: background-color var(--motion-fast) var(--ease-standard);
@@ -210,8 +213,9 @@
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
+/* 对应 canvas 顶部的拍号表头（HEADER_HEIGHT），让第0 行与右侧第 0 行同高起始 */
 .singer-row-spacer {
-  height: var(--space-8);
+  height: var(--timeline-header-height, 24px);
   flex-shrink: 0;
 }
 

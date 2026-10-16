@@ -96,15 +96,18 @@ global.__canvasContextOf = function (canvas) {
 
 const sinon = require('sinon');
 
-// Polyfill CustomEvent for JSDOM
-if (typeof global.CustomEvent === 'undefined') {
-  global.CustomEvent = class CustomEvent extends Event {
+// CustomEvent 必须用 jsdom realm 的实现：document.dispatchEvent 按 jsdom 的
+// 内部品牌校验收事件，Node 22+ 自带的全局 CustomEvent（另一 realm）会被拒收
+// （"parameter 1 is not of type 'Event'"），setLocale / themeManager 的
+// 事件派发都会挂。不能再用 `typeof global.CustomEvent === 'undefined'` 判断
+// —— 新版 Node 早已自带 CustomEvent，那个 polyfill 条件永远不成立。
+global.CustomEvent = dom.window.CustomEvent
+  || class CustomEvent extends dom.window.Event {
     constructor(type, options = {}) {
       super(type, options);
       this.detail = options.detail || null;
     }
   };
-}
 
 // Register SVGElement global for JSDOM
 if (typeof global.SVGElement === 'undefined') {

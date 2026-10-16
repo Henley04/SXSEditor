@@ -1,8 +1,19 @@
 import { TrackManager } from '../editor/trackManager.js';
 import { HistoryManager } from '../editor/historyManager.js';
+import { SINGER_ROW_HEIGHT, HEADER_HEIGHT } from './constants.js';
 
 export const trackManager = new TrackManager();
 export const history = new HistoryManager();
+
+// 左侧歌手列表（DOM）与右侧分片时间轴（canvas）必须按同一套行高排版，
+// 否则两者会逐行漂移：canvas 用 SINGER_ROW_HEIGHT 画行与做命中测试，
+// DOM 侧若在 CSS 里写死另一个数值（历史上是 64px vs 80px），第 N 行就偏 16×N px，
+// 滚动同步（singerListEl.scrollTop = fragmentScrollY）也跟着对不上。
+// 这里把常量发布成 CSS 变量，index.css 只消费变量 —— 行高只有constants.js 一个真源。
+if (typeof document !== 'undefined' && document.documentElement) {
+  document.documentElement.style.setProperty('--singer-row-height', `${SINGER_ROW_HEIGHT}px`);
+  document.documentElement.style.setProperty('--timeline-header-height', `${HEADER_HEIGHT}px`);
+}
 
 export const state = {
   // Project

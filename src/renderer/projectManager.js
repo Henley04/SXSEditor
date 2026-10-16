@@ -331,11 +331,26 @@ export async function loadAccompanimentFile(singerId, buffer, filePath) {
 }
 
 export function showSingerSelectDialog(singerId) {
+  // 插件建轨会在本对话框之上再叠一层"创建插件轨道"对话框（见
+  // pluginTrackDialog.js）。建轨成功后内层那层会自己关掉，但外层这层没人管，
+  // 于是它立刻重新露出来继续盖住整个主窗口 —— 用户看到的就是"新建轨道后
+  // 提示窗不自动消失"。所以 onCreated 里要把本对话框一起收掉。
+  let dialogRef = null;
+  const closeSelf = () => {
+    if (dialogRef) {
+      dialogRef.close();
+      dialogRef = null;
+    }
+  };
+
   // 插件后端分区：清单走异步 IPC，分区内部自带加载态与失败兜底，
   // 因此这里不会阻塞对话框打开。
   const pluginSection = createPluginBackendSection({
     singerId,
     onCreated: async () => {
+      // 先关窗再刷新：refreshAll 是同步重绘，先关可以避免用户看到
+      // "遮罩还在、列表已更新"的中间态。
+      closeSelf();
       markDirty();
       // Dynamic import to avoid circular dependency with timelineRenderer
       const { refreshAll } = await import('./timelineRenderer.js');
@@ -343,7 +358,7 @@ export function showSingerSelectDialog(singerId) {
     },
   });
 
-  createDialog({
+  dialogRef = createDialog({
     title: t('main.selectSinger'),
     minWidth: 320,
     contentElement: pluginSection,
@@ -398,6 +413,8 @@ export function showSingerSelectDialog(singerId) {
       buttonAlign: 'stretch',
     },
   });
+
+  return dialogRef;
 }
 
 /**

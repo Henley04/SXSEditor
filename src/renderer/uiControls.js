@@ -172,10 +172,16 @@ export function createDialog(options) {
     });
 
     btn.addEventListener('click', () => {
-      if (btnConfig.onClick) {
-        btnConfig.onClick();
+      // try/finally：onClick 抛错时 close() 也必须执行。
+      // 否则回调里任何一次同步异常（读插件字段、coerce 参数等）都会让
+      // 点击"确定"后弹窗原地不动，用户只能再去点一次"取消"。
+      try {
+        if (btnConfig.onClick) {
+          btnConfig.onClick();
+        }
+      } finally {
+        close();
       }
-      close();
     });
 
     btnContainer.appendChild(btn);
