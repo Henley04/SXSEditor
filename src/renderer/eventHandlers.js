@@ -153,6 +153,7 @@ function _updatePlayheadVisual(seconds) {
 function _endPlayheadDrag() {
   if (!_isPlayheadDragging) return;
   _isPlayheadDragging = false;
+  _detachPlayheadDragWindowListeners();
   _hidePlayheadTooltip();
   if (_playheadDragRaf) {
     cancelAnimationFrame(_playheadDragRaf);
@@ -163,6 +164,32 @@ function _endPlayheadDrag() {
     _wasPlayingBeforeDrag = false;
     startAudioPlayback(state.playbackPauseOffset);
   }
+}
+
+// Window 级拖拽跟踪：playhead 拖拽期间把 mousemove/mouseup 挂到 window，
+// 指针越出 canvas（甚至窗口）边界后仍持续跟踪，位置由 _canvasXToClampedSeconds
+// clamp 到真实边界（0 或 duration - margin）。
+// 此前依赖 canvas mouseleave 终结拖拽：快速拖出左边界时，最后一次落在 canvas
+// 内侧的 mousemove 采样成为终值——拖得越快，该采样离边界越远（事件采样间隔 ×
+// 速度），造成归零残留约 0.08~0.13s。
+function _onWindowPlayheadDragMove(e) {
+  if (!_isPlayheadDragging) return;
+  const x = _mouseToCanvasX(e);
+  _updatePlayheadVisual(_canvasXToClampedSeconds(x));
+}
+function _onWindowPlayheadDragUp() {
+  _endPlayheadDrag();
+}
+function _attachPlayheadDragWindowListeners() {
+  window.addEventListener('mousemove', _onWindowPlayheadDragMove);
+  window.addEventListener('mouseup', _onWindowPlayheadDragUp);
+  // 兜底：拖拽中窗口失焦（如 Alt+Tab）时收尾，避免拖拽状态卡死
+  window.addEventListener('blur', _onWindowPlayheadDragUp);
+}
+function _detachPlayheadDragWindowListeners() {
+  window.removeEventListener('mousemove', _onWindowPlayheadDragMove);
+  window.removeEventListener('mouseup', _onWindowPlayheadDragUp);
+  window.removeEventListener('blur', _onWindowPlayheadDragUp);
 }
 
 // BPM and time signature inputs
@@ -286,6 +313,7 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
         _wasPlayingBeforeDrag = false;
       }
       _isPlayheadDragging = true;
+      _attachPlayheadDragWindowListeners();
       _updatePlayheadVisual(newSeconds);
       _hidePlayheadTooltip();
       return;
@@ -340,13 +368,9 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
 });
 
 dom.fragmentCanvas.addEventListener('mousemove', (e) => {
-  // 拖拽 playhead 优先级最高：只更新视觉（不重启 source，避免卡顿）
-  if (_isPlayheadDragging) {
-    const x = _mouseToCanvasX(e);
-    const newSeconds = _canvasXToClampedSeconds(x);
-    _updatePlayheadVisual(newSeconds);
-    return;
-  }
+  // 拖拽 playhead 时的移动更新由 window 级监听 _onWindowPlayheadDragMove 统一处理
+  // （本事件会冒泡到 window），此处只负责非拖拽态的悬停光标/tooltip。
+  if (_isPlayheadDragging) return;
 
   if (!state.dragState) {
     // 鼠标悬停在 playhead 上时：显示 ew-resize 光标 + 时间 tooltip
@@ -485,7 +509,9 @@ dom.fragmentCanvas.addEventListener('mouseleave', () => {
     state.fragmentDragSnapshot = null;
   }
   _clickStartPos = null;
-  _endPlayheadDrag();
+  // 注意：playhead 拖拽不能在这里终结——快速拖出边界时 mouseleave 会把最后一次
+  // canvas 内侧采样定格为终值，造成归零残留（0.08~0.13s，取决于速度）。
+  // 拖拽由 window 级 mouseup/blur（_onWindowPlayheadDragUp）收尾。
   finishDrag();
 });
 
