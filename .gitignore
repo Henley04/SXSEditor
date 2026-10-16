@@ -277,3 +277,6 @@ scripts/mel_proj_train_output/
 .trae/
 .atomcode/
 intro-video/
+
+# 本地工具日志目录（slidep 命令记录等）
+.slidep/
