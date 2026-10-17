@@ -3276,19 +3276,27 @@ class OnnxSVSPipeline {
         const totalMixedSamples = Math.ceil((maxEndBeat / bpm) * 60 * SAMPLE_RATE);
 
         // ===== Phase 2: 构建全局时间顺序 chunk 队列 =====
+        // regionStartSec 必须加上 region 自身的时间轴偏移：同一个 fragment 被
+        // _splitLongRestRegions() 切成多个 region 时，所有 region 共用 fragment 的
+        // startTimeBeat，region 在时间轴上的真实位置只体现在 firstNoteStartBeat
+        // （= 该 region 首音符相对 fragment 起点的 beat，见 Phase 1 的注释）。
+        // 漏掉这一项时，后段 region 的 chunk 全部按 chunkStart=0 起算，与正在播放的
+        // 前段 region 抢推理顺序：后段（时间轴上很靠后）的音频先被合成推送，
+        // 而当前 region 的下一块迟迟不到 —— 播放头被 min-frontier 钉在当前 region
+        // 末端，UI 一直显示"等待推理"，进度条却已跑到很后面（严重预览延迟）。
         const globalChunks = [];
         for (let pi = 0; pi < prepared.length; pi++) {
             const p = prepared[pi];
-            const fragStartSec = (p.startTimeBeat / bpm) * 60;
+            const regionStartSec = (p.startTimeBeat / bpm) * 60 + (p.firstNoteStartBeat / bpm) * 60;
             if (p.chunkPlan) {
                 for (let ci = 0; ci < p.chunkPlan.specs.length; ci++) {
                     const spec = p.chunkPlan.specs[ci];
-                    const chunkGlobalTimeSec = fragStartSec + (spec.chunkStart / MEL_FRAME_RATE);
+                    const chunkGlobalTimeSec = regionStartSec + (spec.chunkStart / MEL_FRAME_RATE);
                     globalChunks.push({ prepIdx: pi, chunkIdx: ci, spec, globalTimeSec: chunkGlobalTimeSec, isChunked: true });
                 }
             } else {
                 // 无分块：整段作为一个"chunk"
-                globalChunks.push({ prepIdx: pi, chunkIdx: 0, spec: { chunkStart: 0, chunkEnd: p.totalFrames, currentChunkFrames: p.totalFrames, isFirst: true, isLast: true }, globalTimeSec: fragStartSec, isChunked: false });
+                globalChunks.push({ prepIdx: pi, chunkIdx: 0, spec: { chunkStart: 0, chunkEnd: p.totalFrames, currentChunkFrames: p.totalFrames, isFirst: true, isLast: true }, globalTimeSec: regionStartSec, isChunked: false });
             }
         }
         globalChunks.sort((a, b) => a.globalTimeSec - b.globalTimeSec);

@@ -1918,3 +1918,115 @@ describe('分片级缓存 (Segment-level cache) - 未改动 segment 不再推理
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// 回归：长休止切分出的多个 region 必须按真实时间轴顺序推送 chunk
+//
+// 背景（用户报告的"严重预览延迟"）：synthesizeMultiStreaming 的 Phase 2 用
+//   chunkGlobalTimeSec = fragment.startTimeBeat→秒 + chunkStart/MEL_FRAME_RATE
+// 计算全局排序键。同一 fragment 被 _splitLongRestRegions() 切成多个 region 时，
+// 各 region 共用 fragment 的 startTimeBeat，region 的真实位置只存在于
+// firstNoteStartBeat。漏掉它 → 后段 region 的 chunk 全部按 chunkStart=0 起算，
+// 挤到队列最前面与正在播放的前段 region 抢推理：播放头被 min-frontier 钉在前段
+// region 末端（UI 一直"等待推理"），而模型已经把时间轴很靠后的音频合成出来了。
+//
+// 不变量：onChunkAudio 收到的 sampleOffset 序列必须单调递增（全局时间顺序）。
+// ---------------------------------------------------------------------------
+describe('回归：multi-region 流式 chunk 必须按全局时间顺序推送', () => {
+  let pipeline;
+
+  /** 构造 [演唱, 长休止, 演唱] 的分片音符（bpm=120，1 beat = 0.5s） */
+  function makeFragmentWithLongRest(singSec, restSec) {
+    const bpm = 120;
+    const beatsOf = (sec) => sec * (bpm / 60);
+    const notes = [];
+    const noteLen = 0.5;
+    for (let t = 0; t < singSec; t += noteLen) {
+      notes.push({ pitch: 60, start: beatsOf(t), duration: beatsOf(noteLen), lyric: 'la' });
+    }
+    // 长休止（>= LONG_REST_SEC=1.5s）→ splitLongRestRegions 会在此切分
+    notes.push({ pitch: 0, start: beatsOf(singSec), duration: beatsOf(restSec), lyric: '<SP>', noteType: 1 });
+    for (let t = singSec + restSec; t < singSec * 2 + restSec; t += noteLen) {
+      notes.push({ pitch: 62, start: beatsOf(t), duration: beatsOf(noteLen), lyric: 'la' });
+    }
+    return notes;
+  }
+
+  beforeEach(() => {
+    pipeline = buildMockPipeline();
+  });
+
+  it('含长休止的单分片：chunk 推送顺序必须是全局时间单调递增', async () => {
+    const chunks = [];
+    await pipeline.synthesizeMultiStreaming(
+      [{
+        notes: makeFragmentWithLongRest(20, 20),
+        startTimeBeat: 0,
+        durationBeats: 80,
+        options: { diffStepChunk: true, diffStepChunkFrames: 500, diffStepOverlapFrames: 50, nSteps: 1, cfg: 0 },
+      }],
+      120,
+      { onChunkAudio: (c) => chunks.push({ offset: c.sampleOffset, end: c.sampleEnd, key: c.streamKey }) }
+    );
+
+    // 必须切出 >= 2 个 region（否则这条用例没有覆盖到被测路径）
+    const keys = [...new Set(chunks.map((c) => c.key))];
+    expect(keys.length).to.be.at.least(2, '应切分出多个 region');
+
+    // 核心不变量：按推送顺序，sampleOffset 单调不减
+    for (let i = 1; i < chunks.length; i++) {
+      expect(chunks[i].offset).to.be.at.least(
+        chunks[i - 1].offset,
+        `chunk #${i} 的 sampleOffset(${chunks[i].offset}) 早于 #${i - 1}(${chunks[i - 1].offset})：`
+        + '后段 region 的 chunk 抢到了前段 region 前面'
+      );
+    }
+  });
+
+  it('多个分片各自含长休止：同样必须全局时间单调', async () => {
+    const chunks = [];
+    await pipeline.synthesizeMultiStreaming(
+      [
+        {
+          notes: makeFragmentWithLongRest(20, 20),
+          startTimeBeat: 0,
+          durationBeats: 80,
+          options: { diffStepChunk: true, diffStepChunkFrames: 500, diffStepOverlapFrames: 50, nSteps: 1, cfg: 0 },
+        },
+        {
+          notes: makeFragmentWithLongRest(18, 18),
+          startTimeBeat: 20,
+          durationBeats: 72,
+          options: { diffStepChunk: true, diffStepChunkFrames: 500, diffStepOverlapFrames: 50, nSteps: 1, cfg: 0 },
+        },
+      ],
+      120,
+      { onChunkAudio: (c) => chunks.push({ offset: c.sampleOffset, end: c.sampleEnd, key: c.streamKey }) }
+    );
+
+    expect([...new Set(chunks.map((c) => c.key))].length).to.be.at.least(4);
+    for (let i = 1; i < chunks.length; i++) {
+      expect(chunks[i].offset).to.be.at.least(chunks[i - 1].offset);
+    }
+  });
+
+  it('无分块时（chunkPlan=null）region 排序同样计入 region 偏移', async () => {
+    const chunks = [];
+    await pipeline.synthesizeMultiStreaming(
+      [{
+        notes: makeFragmentWithLongRest(20, 20),
+        startTimeBeat: 0,
+        durationBeats: 80,
+        // diffStepChunkFrames 大于总帧数 → _planChunks 返回 null，走整段分支
+        options: { diffStepChunk: true, diffStepChunkFrames: 100000, diffStepOverlapFrames: 50, nSteps: 1, cfg: 0 },
+      }],
+      120,
+      { onChunkAudio: (c) => chunks.push({ offset: c.sampleOffset, end: c.sampleEnd, key: c.streamKey }) }
+    );
+
+    expect([...new Set(chunks.map((c) => c.key))].length).to.be.at.least(2);
+    for (let i = 1; i < chunks.length; i++) {
+      expect(chunks[i].offset).to.be.at.least(chunks[i - 1].offset);
+    }
+  });
+});
