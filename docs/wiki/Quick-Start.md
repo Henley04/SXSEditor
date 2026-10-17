@@ -207,7 +207,7 @@ Back in the main window:
 1. Click **📤 Export** in the main window toolbar.
 2. The entire project is synthesized at export quality (using "Export Inference Parameters" from Settings — more diffusion steps = higher quality).
 3. Choose a save location for the WAV file.
-4. The exported file is 48kHz 16-bit PCM WAV by default. Export sample rate is selectable: 24/44.1/48/96 kHz.
+4. The exported file is 48 kHz, 32-bit float WAV by default (bit depth selectable 16 / 24 / 32-bit). Export sample rate is selectable: 24/44.1/48/96 kHz.
 
 ---
 

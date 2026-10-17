@@ -118,7 +118,9 @@ For Chinese singing, enter Chinese characters (e.g., `你好`). You may append a
 
 ### What is a slur note?
 
-A slur (continuation) note extends the previous note's sound without re-attacking. Create one by adding a note with an empty lyric or a dash `-`. The note continues the phoneme of the previous note.
+A slur (continuation) note extends the previous note's sound without re-attacking. Create one by typing a half-width dash `-` as the note's lyric. The note continues the phoneme of the previous note.
+
+**An empty lyric is not a slur** — an empty lyric is a rest and always sings as silence, with or without a pitch. Only `-` marks a continuation.
 
 ### How do I draw pitch curves?
 
@@ -187,7 +189,7 @@ Synthesis runs at 24kHz internally (the SVS model's native rate). The default ou
 
 ### What format is the exported WAV?
 
-48 kHz, 16-bit PCM WAV by default. Export sample rate is selectable: 24/44.1/48/96 kHz. The SVS model runs at 24 kHz internally and the output is resampled with 2× oversampling anti-aliasing.
+48 kHz, 32-bit IEEE float WAV by default (bit depth selectable 16 / 24 / 32-bit in the Export dialog). Export sample rate is selectable: 24/44.1/48/96 kHz. The SVS model runs at 24 kHz internally and the output is resampled with 2× oversampling anti-aliasing.
 
 ---
 

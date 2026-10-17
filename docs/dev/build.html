@@ -298,15 +298,14 @@ npm run test:watch        # Watch mode</code></pre>
 │   │                          #   settingsIpc, svsIpc, audioIpc, themeIpc, ...)
 │   ├── renderer/              # Main window renderer (timeline, project IO)
 │   ├── fragmentEditor/        # Fragment editor renderer (piano roll)
-│   ├── editor/                # Shared editor modules (trackManager, pianoRoll,
-│   │                          #   envelopeEditor, historyManager)
+│   ├── editor/                # Shared editor modules (trackManager, historyManager)
 │   ├── inference/             # Neural inference pipelines
 │   │   ├── pipeline/          # Main SVS pipeline (OnnxSVSPipeline)
 │   │   ├── webnn/             # WebNN NPU pipeline
 │   │   ├── rmvpePitchDetector.js
-│   │   ├── fcpeDetector.js    # FCPE pitch detector (default MIDI extraction)
+│   │   ├── fcpePitchDetector.js  # FCPE pitch detector (default MIDI extraction)
 │   │   ├── basicPitch.js
-│   │   └── phone_set.json     # Phoneme vocabulary (2820 entries)
+│   │   └── phone_set.json     # Phoneme vocabulary (3033 entries)
 │   ├── audio/                 # AudioOutputManager (WASAPI), wavEncoder, lrcExport
 │   ├── themes/                # Theme system (builtins, manager, tokens)
 │   ├── i18n/                  # Internationalization (en, zh-CN)

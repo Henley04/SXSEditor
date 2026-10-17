@@ -122,8 +122,6 @@ SXSEditor/
 │   │   └── constants.js       # Editor constants
 │   ├── editor/                # Shared editor modules
 │   │   ├── trackManager.js    # Multi-track timeline management
-│   │   ├── pianoRoll.js       # Piano roll rendering engine
-│   │   ├── envelopeEditor.js  # Envelope curve editor
 │   │   └── historyManager.js  # Undo/redo (200 steps)
 │   ├── inference/             # Neural inference pipelines
 │   │   ├── pipeline/          # Main SVS pipeline
@@ -145,11 +143,11 @@ SXSEditor/
 │   │   │   └── utils.js
 │   │   ├── webnn/             # WebNN NPU pipeline
 │   │   ├── rmvpePitchDetector.js  # RMVPE F0 extraction
-│   │   ├── fcpeDetector.js    # FCPE pitch detector (ONNX, default MIDI extraction)
+│   │   ├── fcpePitchDetector.js  # FCPE pitch detector (ONNX, default MIDI extraction)
 │   │   ├── basicPitch.js      # Basic Pitch MIDI extraction
 │   │   ├── rosvotDetector.js  # RosVot voice onset detection
 │   │   ├── midiParser.js      # Standard MIDI file parsing
-│   │   ├── phone_set.json     # Phoneme vocabulary (2820 entries)
+│   │   ├── phone_set.json     # Phoneme vocabulary (3033 entries)
 │   │   └── en_g2p_dict.json   # English G2P dictionary (126k words)
 │   ├── audio/                 # Audio subsystem
 │   │   ├── audioOutputManager.js  # WASAPI output via decibri
@@ -302,7 +300,7 @@ python build_en_phoneme_duration_stats.py --min-samples 10  # filter low-frequen
 
 ### FCPE Pitch Detector
 
-`src/inference/fcpeDetector.js` is an ONNX-based pitch detector that has replaced Basic Pitch as the recommended MIDI extraction tool. It features a configurable post-processing pipeline for note onset/offset detection and pitch quantization.
+`src/inference/fcpePitchDetector.js` is an ONNX-based pitch detector that has replaced Basic Pitch as the recommended MIDI extraction tool. It features a configurable post-processing pipeline for note onset/offset detection and pitch quantization.
 
 The FCPE model is registered in `modelRegistry.js` alongside RMVPE and Basic Pitch. When selected in Settings > Audio > MIDI Extraction Tool, it is used by both the Audio Preprocessing window and the Audio to MIDI feature.
 
@@ -354,9 +352,9 @@ The `AbortController` is created per synthesis call and its signal is threaded t
 
 ### Segment-Level Synthesis Cache
 
-A segment-level LRU cache (32 entries, up to 300 MB) stores completed synthesis results keyed by a hash of the input parameters (notes, lyrics, pitch curve, singer data, diffusion settings). When a segment with unchanged inputs is requested again, the cached audio is returned instantly.
+A per-segment LRU cache (**32 entries, up to 300 MB**) stores the raw audio of individual segments (pre-crossfade), keyed by an FNV-1a hash of the segment content (notes, bpm, and option fields). A second, whole-synthesis LRU cache (**4 entries, up to 200 MB**) stores complete `synthesize()` results. When a segment with unchanged inputs is requested again, the cached audio is returned instantly.
 
-The cache lives in the main process and is shared across all synthesis calls (preview and export). Editing any parameter that affects the output invalidates the relevant cache entries. The LRU eviction policy ensures memory usage stays bounded.
+Both caches live in the main process and are shared across all synthesis calls (preview and export). `clearSynthCache()` — called when the vocoder type, SiFiGAN precision, or language changes — empties both levels. Editing any parameter that affects the output invalidates the relevant cache entries. The LRU eviction policy ensures memory usage stays bounded.
 
 ### Viewport-Sized Timeline Canvas
 

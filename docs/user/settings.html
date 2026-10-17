@@ -322,8 +322,8 @@
           </tr>
           <tr>
             <td><span data-lang="en">Chunk Frames (manual)</span><span data-lang="zh">分片帧数（手动）</span></td>
-            <td><span data-lang="en">Must be a multiple of 8. Range 256–2048. ~20 seconds of audio at 1008 frames.</span><span data-lang="zh">必须是 8 的倍数。范围 256–2048。1008 帧约 20 秒音频。</span></td>
-            <td><span data-lang="en">1008</span><span data-lang="zh">1008</span></td>
+            <td><span data-lang="en">Must be a multiple of 8. Range 256–4096. 1024 frames ≈ 20.5 s of audio (at the 24 kHz model rate, hop 480).</span><span data-lang="zh">必须是 8 的倍数。范围 256–4096。1024 帧约 20.5 秒音频（按 24 kHz 模型率、hop 480 计算）。</span></td>
+            <td><span data-lang="en">1024</span><span data-lang="zh">1024</span></td>
           </tr>
         </tbody>
       </table>
@@ -556,14 +556,14 @@
         </thead>
         <tbody>
           <tr>
-            <td><span data-lang="en">Threshold</span><span data-lang="zh">阈值</span></td>
-            <td><span data-lang="en">Confidence threshold for pitch detection. Higher values reject uncertain F0 estimates.</span><span data-lang="zh">音高检测的置信度阈值。值越高，不确定的 F0 估计会被拒绝。</span></td>
-            <td><span data-lang="en">0.03</span><span data-lang="zh">0.03</span></td>
+            <td><span data-lang="en">Silence Threshold</span><span data-lang="zh">静音阈值</span></td>
+            <td><span data-lang="en">Per-frame RMS gate: frames below the threshold have their F0 zeroed. <strong>Low</strong> = 0.003 (keeps weak signals), <strong>Mid</strong> = 0.006, <strong>High</strong> = 0.01 (filters more noise). Only applies to FCPE.</span><span data-lang="zh">按帧 RMS 静音门：低于阈值的帧 F0 会被清零。<strong>低</strong> = 0.003（保留更多弱信号），<strong>中</strong> = 0.006，<strong>高</strong> = 0.01（过滤更多噪声）。仅对 FCPE 生效。</span></td>
+            <td><span data-lang="en">Mid (0.006)</span><span data-lang="zh">中（0.006）</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Smoothing</span><span data-lang="zh">平滑</span></td>
-            <td><span data-lang="en">Applies a smoothing filter to the extracted F0 curve before note conversion.</span><span data-lang="zh">在转换为音符前对提取的 F0 曲线施加平滑滤波。</span></td>
-            <td><span data-lang="en">Off</span><span data-lang="zh">关闭</span></td>
+            <td><span data-lang="en">Applies a median smoothing filter to the extracted F0 curve before note conversion. Low / Medium / High.</span><span data-lang="zh">在转换为音符前对提取的 F0 曲线施加中值平滑滤波。低 / 中 / 高三档。</span></td>
+            <td><span data-lang="en">Medium</span><span data-lang="zh">中</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Quantization Mode</span><span data-lang="zh">量化模式</span></td>
@@ -572,18 +572,18 @@
           </tr>
           <tr>
             <td><span data-lang="en">F0 Range</span><span data-lang="zh">F0 范围</span></td>
-            <td><span data-lang="en">Minimum and maximum F0 frequency for detection (Hz).</span><span data-lang="zh">检测的最小和最大 F0 频率（Hz）。</span></td>
-            <td><span data-lang="en">50–1100 Hz</span><span data-lang="zh">50–1100 Hz</span></td>
+            <td><span data-lang="en">Minimum and maximum F0 frequency for detection (Hz), adjustable 20–2000. <strong>Auto range is on by default</strong>; uncheck it to set the bounds manually (80–880 Hz by default).</span><span data-lang="zh">检测的最小和最大 F0 频率（Hz），可调范围 20–2000。<strong>默认开启自动范围</strong>；取消勾选后可手动设置（默认 80–880 Hz）。</span></td>
+            <td><span data-lang="en">Auto (80–880 Hz when manual)</span><span data-lang="zh">自动（手动时 80–880 Hz）</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Minimum Note Duration</span><span data-lang="zh">最短音符时长</span></td>
-            <td><span data-lang="en">Shortest note length to emit (ms). Shorter F0 segments are merged into neighbors.</span><span data-lang="zh">输出的最短音符长度（ms）。更短的 F0 片段会被合并到相邻音符。</span></td>
-            <td><span data-lang="en">100 ms</span><span data-lang="zh">100 ms</span></td>
+            <td><span data-lang="en">Shortest note length to emit (ms), adjustable 10–1000. Shorter F0 segments are merged into neighbors.</span><span data-lang="zh">输出的最短音符长度（ms），可调 10–1000。更短的 F0 片段会被合并到相邻音符。</span></td>
+            <td><span data-lang="en">50 ms</span><span data-lang="zh">50 ms</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Normalization</span><span data-lang="zh">归一化</span></td>
             <td><span data-lang="en">Enable/disable F0 normalization before note conversion.</span><span data-lang="zh">在转换为音符前启用/禁用 F0 归一化。</span></td>
-            <td><span data-lang="en">Off</span><span data-lang="zh">关闭</span></td>
+            <td><span data-lang="en">On</span><span data-lang="zh">开启</span></td>
           </tr>
         </tbody>
       </table>
@@ -607,7 +607,7 @@
         </thead>
         <tbody>
           <tr>
-            <td><span data-lang="en"><strong>FP16</strong> (default)</span><span data-lang="zh"><strong>FP16</strong>（默认）</span></td>
+            <td><span data-lang="en"><strong>FP32</strong> (default)</span><span data-lang="zh"><strong>FP32</strong>（默认）</span></td>
             <td><span data-lang="en">Half precision. Best balance of quality and speed for discrete GPUs (4GB+ VRAM).</span><span data-lang="zh">半精度。独显（4GB+ 显存）质量与速度的最佳平衡。</span></td>
             <td><span data-lang="en">~1.5 GB</span><span data-lang="zh">约 1.5 GB</span></td>
           </tr>

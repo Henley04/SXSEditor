@@ -79,7 +79,7 @@
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
         <div class="callout-body">
-          <p data-lang="en">Edits in the Fragment Editor are automatically synced to the main window — <strong>there is no Save button</strong>. After any edit (MIDI notes, lyrics, pitch curve, envelopes, phoneme parameters), a <strong>500ms debounced auto-save</strong> fires and pushes the updated fragment data to the main window.</span></p>
+          <p data-lang="en">Edits in the Fragment Editor are automatically synced to the main window — <strong>there is no Save button</strong>. After any edit (MIDI notes, lyrics, pitch curve, envelopes, phoneme parameters), a <strong>500ms debounced auto-save</strong> fires and pushes the updated fragment data to the main window.</p>
           <p data-lang="zh">片段编辑器中的编辑会自动同步到主窗口——<strong>没有保存按钮</strong>。任何编辑（MIDI 音符、歌词、音高曲线、包络、音素参数）后都会触发 <strong>500ms 防抖自动保存</strong>，将更新后的片段数据推送到主窗口。</p>
         </div>
       </div>
@@ -198,18 +198,132 @@
             <td><span data-lang="en">Built-in CMU pronunciation dictionary (126,000 words). Unknown words fall back to letter-by-letter estimation.</span><span data-lang="zh">内置 CMU 发音词典（12.6 万词）。未知单词回退到逐字母音素估算。</span></td>
           </tr>
           <tr>
-            <td><span data-lang="en">Special</span><span data-lang="zh">特殊</span></td>
-            <td><span data-lang="en">Empty lyric</span><span data-lang="zh">空歌词</span></td>
-            <td><span data-lang="en">Treated as <code>&lt;SP&gt;</code> (short pause/silence)</span><span data-lang="zh">作为 <code>&lt;SP&gt;</code>（短停顿/静音）</span></td>
+            <td><span data-lang="en">Continuation</span><span data-lang="zh">连音</span></td>
+            <td><span data-lang="en">Half-width dash <code>-</code></span><span data-lang="zh">半角连字符 <code>-</code></span></td>
+            <td><span data-lang="en">Slur / continuation — re-sings nothing, extends the previous note's phoneme (noteType 3)</span><span data-lang="zh">连音（延续）——不重新起音，延续前一个音符的音素（noteType 3）</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Rest</span><span data-lang="zh">休止</span></td>
+            <td><span data-lang="en">Empty lyric, or the literal token <code>&lt;SP&gt;</code></span><span data-lang="zh">空歌词，或字面 token <code>&lt;SP&gt;</code></span></td>
+            <td><span data-lang="en">Silence. <code>&lt;SP&gt;</code> is the silence phoneme (noteType 1); an empty lyric is also a rest and sings as silence too — with or without a pitch. (New notes start out with the default lyric <code>la</code>; clear the lyric to make a note silent.)</span><span data-lang="zh">静音。<code>&lt;SP&gt;</code> 即静音音素（noteType 1）；空歌词同样按休止处理——无论有无音高都唱静音。（新建音符的默认歌词是 <code>la</code>；把歌词清空即可让该音符静音。）</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Aspiration</span><span data-lang="zh">吸气</span></td>
+            <td><span data-lang="en">The literal token <code>&lt;AP&gt;</code></span><span data-lang="zh">字面 token <code>&lt;AP&gt;</code></span></td>
+            <td><span data-lang="en">Audible breath / aspiration — the note keeps its pitch slot but is sung as an unvoiced breath (noteType 2, f0 = 0)</span><span data-lang="zh">可听见的吸气 / 气声——音符保留音高位置，但以无声带振动的气声演唱（noteType 2，f0 = 0）</span></td>
           </tr>
         </tbody>
       </table>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Empty lyric is not a slur.</strong> Only the dash <code>-</code> marks a continuation note. An empty lyric is a rest and always sings as silence, whether or not the note has a pitch. Mixing the two up is the most common cause of "the model sang through my rest" bugs.</p>
+          <p data-lang="zh"><strong>空歌词不是连音。</strong>只有连字符 <code>-</code> 表示延续音符。空歌词表示休止——无论音符有无音高，都按静音处理。混淆这两者是"模型在我的休止段照样唱"这类问题最常见的原因。</p>
+        </div>
+      </div>
       <h3>
         <span data-lang="en">Slur (Continuation) Notes</span>
         <span data-lang="zh">连音（延续）音符</span>
       </h3>
-      <p data-lang="en">A <strong>slur</strong> note continues the previous note's sound without re-attacking. To create a slur, add a note with an empty lyric (or a dash <code>-</code>). It will be treated as a continuation of the previous note's phoneme.</p>
-      <p data-lang="zh"><strong>连音</strong>音符延续前一个音符的发音而不重新起音。双击后续音符并输入半角连字符 <code>-</code>，编辑器会把它保存为内部连音状态；音符上仍显示 <code>-</code>，但该字符不会作为歌词送入模型。不要用空歌词表示连音，空歌词表示休止。</p>
+      <p data-lang="en">A <strong>slur</strong> note continues the previous note's sound without re-attacking. To create a slur, double-click a note and type a half-width dash <code>-</code>; the editor stores it as an internal continuation state. The note still displays <code>-</code>, but that character is never sent to the model as a lyric. <strong>Do not use an empty lyric for a slur</strong> — an empty lyric means rest.</p>
+      <p data-lang="zh"><strong>连音</strong>音符延续前一个音符的发音而不重新起音。双击后续音符并输入半角连字符 <code>-</code>，编辑器会把它保存为内部连音状态；音符上仍显示 <code>-</code>，但该字符不会作为歌词送入模型。<strong>不要用空歌词表示连音</strong>——空歌词表示休止。</p>
+
+      <h2 id="note-types-notetype">
+        <span data-lang="en">Note Types (noteType)</span>
+        <span data-lang="zh">音符类型（notetype）</span>
+      </h2>
+      <p data-lang="en">Every note carries an internal <strong>note type</strong> that tells the model how to treat it. You never set it directly — it is derived from the lyric you type. The three values are:</p>
+      <p data-lang="zh">每个音符都带有一个内部<strong>音符类型</strong>，告诉模型该如何处理它。你无需直接设置——它由你输入的歌词自动推导。三个取值如下：</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">noteType</span><span data-lang="zh">音符类型</span></th>
+            <th><span data-lang="en">Triggered by</span><span data-lang="zh">触发条件</span></th>
+            <th><span data-lang="en">What the model does</span><span data-lang="zh">模型行为</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>1</code> <span data-lang="en">— SP (silence)</span><span data-lang="zh">— 静音</span></td>
+            <td><span data-lang="en">Lyric <code>&lt;SP&gt;</code>, an empty lyric (whether or not the note has a pitch), or a note with pitch 0</span><span data-lang="zh">歌词为 <code>&lt;SP&gt;</code>、空歌词（无论该音符有无音高），或音高为 0 的音符</span></td>
+            <td><span data-lang="en">Silence phoneme <code>&lt;SP&gt;</code>; no pitch is sung, the frame is unvoiced (f0 = 0)</span><span data-lang="zh">静音音素 <code>&lt;SP&gt;</code>；不唱音高，该帧为清音（f0 = 0）</span></td>
+          </tr>
+          <tr>
+            <td><code>2</code> <span data-lang="en">— normal (sung)</span><span data-lang="zh">— 普通（演唱）</span></td>
+            <td><span data-lang="en">Any real lyric: Chinese characters, English words, kana, or <code>&lt;AP&gt;</code> — including the default <code>la</code> every new note starts with</span><span data-lang="zh">任意真实歌词：汉字、英文单词、假名，或 <code>&lt;AP&gt;</code>——包括每个新音符默认带的 <code>la</code></span></td>
+            <td><span data-lang="en">Sung normally from the lyric's phonemes</span><span data-lang="zh">按歌词音素正常演唱</span></td>
+          </tr>
+          <tr>
+            <td><code>3</code> <span data-lang="en">— slur (continuation)</span><span data-lang="zh">— 连音（延续）</span></td>
+            <td><span data-lang="en">Lyric <code>-</code></span><span data-lang="zh">歌词为 <code>-</code></span></td>
+            <td><span data-lang="en">Extends the previous note's phoneme without a new attack — use it for one syllable held over several notes</span><span data-lang="zh">延续前一个音符的音素而不重新起音——用于一个音节跨越多个音符的情况</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Why it matters:</strong> a mis-typed note type changes what the model sings, not just how it looks. A slur typed as an empty lyric becomes a rest; a rest typed as a lyric makes the model sing through the silence. The phoneme editor (press <kbd class="kbd">5</kbd>) shows the phoneme sequence the model will actually receive, so you can verify a note landed on the type you intended.</p>
+          <p data-lang="zh"><strong>为什么重要：</strong>音符类型输错会改变模型<em>唱出的内容</em>，而不只是显示效果。连音输成空歌词会变成休止；休止段输了歌词会让模型在静音处发声。音素编辑器（按 <kbd class="kbd">5</kbd>）会显示模型实际收到的音素序列，可用来核对音符是否落到了预期类型上。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Special Phonemes: Aspiration &lt;AP&gt; and Silence &lt;SP&gt;</span>
+        <span data-lang="zh">特殊音素：吸气 &lt;AP&gt; 与静音 &lt;SP&gt;</span>
+      </h2>
+      <p data-lang="en">Two lyrics are not text at all — they are phonemes in the model's own vocabulary. Type them <strong>literally</strong>, including the angle brackets, exactly as shown below.</p>
+      <p data-lang="zh">有两个"歌词"不是文本，而是模型音素表里的音素。请<strong>按字面</strong>输入，包括尖括号，与下方写法完全一致。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Token</span><span data-lang="zh">符号</span></th>
+            <th><span data-lang="en">Name</span><span data-lang="zh">名称</span></th>
+            <th><span data-lang="en">Sounds like</span><span data-lang="zh">听感</span></th>
+            <th><span data-lang="en">Model treatment</span><span data-lang="zh">模型处理</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>&lt;SP&gt;</code></td>
+            <td><span data-lang="en">Silence phoneme</span><span data-lang="zh">静音音素</span></td>
+            <td><span data-lang="en">Nothing — a silent frame</span><span data-lang="zh">无声——静音帧</span></td>
+            <td><span data-lang="en">noteType 1, pitch slot ignored, f0 = 0 (unvoiced)</span><span data-lang="zh">noteType 1，忽略音高，f0 = 0（清音）</span></td>
+          </tr>
+          <tr>
+            <td><code>&lt;AP&gt;</code></td>
+            <td><span data-lang="en">Aspiration phoneme</span><span data-lang="zh">吸气音素</span></td>
+            <td><span data-lang="en">An audible breath / inhale before a phrase</span><span data-lang="zh">乐句前可听见的吸气 / 换气声</span></td>
+            <td><span data-lang="en">noteType 2 (sung), but f0 = 0 — it is voiced as a breath, not as silence</span><span data-lang="zh">noteType 2（演唱），但 f0 = 0——以气声发出，而非静音</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <ul>
+        <li><span data-lang="en">Use <code>&lt;SP&gt;</code> where the singer should be <strong>silent</strong> (rests, gaps between phrases).</span><span data-lang="zh">在歌手应当<strong>静默</strong>的位置使用 <code>&lt;SP&gt;</code>（休止、乐句间的空隙）。</span></li>
+        <li><span data-lang="en">Use <code>&lt;AP&gt;</code> where you want a <strong>real breath sound</strong> — for example on a short note right before a phrase starts. It makes the take sound performed rather than machine-assembled.</span><span data-lang="zh">在需要<strong>真实换气声</strong>的位置使用 <code>&lt;AP&gt;</code>——例如乐句起始前的短音符。它会让成品听起来像真实演唱而非机器拼接。</span></li>
+        <li><span data-lang="en">Both tokens are skipped when <a href="synthesis-export.html">exporting LRC lyrics</a> — they never appear in the lyric file.</span><span data-lang="zh">导出 <a href="synthesis-export.html">LRC 歌词</a>时这两个 token 都会被跳过，不会出现在歌词文件中。</span></li>
+        <li><span data-lang="en">A <code>&lt;AP&gt;</code> note is <strong>never</strong> treated as a rest by the long-gap logic — it is audible content, so it stays inside the inference region.</span><span data-lang="zh">长空档逻辑<strong>绝不</strong>把 <code>&lt;AP&gt;</code> 音符当作休止——它是可听见的内容，会保留在推理区间内。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Long Gaps Are Handled Automatically</span>
+        <span data-lang="zh">长空档自动处理</span>
+      </h2>
+      <p data-lang="en">You do not need to split a long song into pieces by hand. When a fragment contains a long rest, SXSEditor removes it from the neural inference and stitches the result back onto the timeline:</p>
+      <p data-lang="zh">无需手动把长歌曲切段。当分片中含有较长休止时，SXSEditor 会把它从神经推理中剔除，再把结果拼回时间线：</p>
+      <ol>
+        <li><span data-lang="en"><strong>Rests of 1.5 s or longer</strong> are excluded from inference — the model never spends time "singing" silence. Shorter rests stay in as timing context.</span><span data-lang="zh"><strong>1.5 秒及以上的休止</strong>会被排除出推理——模型不会把时间花在"唱"静音上。更短的休止会保留，作为时序上下文。</span></li>
+        <li><span data-lang="en"><strong>150 ms of rest context</strong> is kept on both sides of the split, so consonant releases and the next attack still see a natural <code>&lt;SP&gt;</code>-like boundary.</span><span data-lang="zh">切口<strong>两侧各保留 150 ms 休止上下文</strong>，使辅音释放与下一次起音仍能拍到自然的 <code>&lt;SP&gt;</code> 式边界。</span></li>
+        <li><span data-lang="en">Any remaining audio longer than <strong>20 s</strong> is split into segments of <strong>8–20 s</strong> with a <strong>2 s overlap</strong> between neighbours, then crossfaded back together.</span><span data-lang="zh">剩余超过 <strong>20 秒</strong>的音频会被切为 <strong>8–20 秒</strong>的分段，相邻分段<strong>重叠 2 秒</strong>，再交叉淡入淡出拼回。</span></li>
+        <li><span data-lang="en">The gap you hear in playback is exactly the gap in your score — splitting never shifts note positions.</span><span data-lang="zh">播放中听到的空档与谱面上的空档完全一致——分段不会改变音符位置。</span></li>
+      </ol>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Because Extrapolated Euler and STORK-2 keep state across diffusion steps, that state resets at every segment boundary. For long fragments, <strong>Euler or Heun</strong> is the safer sampler choice (see <a href="synthesis-export.html#diffusion-sampler">Diffusion Sampler</a>).</p>
+          <p data-lang="zh">由于 Extrapolated Euler 与 STORK-2 会跨扩散步保留状态，该状态会在每个分段边界重置。因此长分片更推荐 <strong>Euler 或 Heun</strong>（见<a href="synthesis-export.html#diffusion-sampler">扩散求解器</a>）。</p>
+        </div>
+      </div>
 
       <h3>
         <span data-lang="en">Kanji / Kana Auto-Grouping</span>

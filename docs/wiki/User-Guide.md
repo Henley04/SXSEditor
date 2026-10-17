@@ -450,7 +450,10 @@ Right-click a note (or a selection of notes) in the Fragment Editor to open the 
 
 - **Chinese**: Enter Chinese characters (e.g., `你好世界`). You may append a digit `1`–`5` after a character to force a specific tone (e.g., `你2 好3`), where 1–4 are the four tones and 5 is the neutral tone (轻声). The system uses `pinyin-pro` to convert characters to Pinyin (with the forced tone if a digit is present), then to `zh_*` phonemes. Pinyin text (e.g., `ni hao`) is **not** accepted as Chinese — ASCII input is routed to the English G2P path.
 - **English**: Enter standard English words (e.g., `hello`, `love`). The system uses a built-in CMU pronunciation dictionary (126,000 words) to convert to phonemes. Unknown words fall back to letter-by-letter phoneme estimation.
-- **Special tokens**: Empty lyrics are treated as `<SP>` (short pause/silence).
+- **Continuation (slur)**: Type a half-width dash `-`. The note extends the previous note's phoneme without a new attack (noteType 3).
+- **Rest**: An empty lyric is a *rest*, not a slur — it always sings as silence, whether or not the note has a pitch. (New notes start out with the default lyric `la`; clearing it makes the note silent.) Typing the literal token `<SP>` forces the silence phoneme (noteType 1).
+- **Aspiration**: Type the literal token `<AP>` for an audible breath — the note keeps its slot but is sung unvoiced (noteType 2, f0 = 0).
+- **noteType summary**: `1` = silence (`<SP>`), `2` = normal sung note (including `<AP>`), `3` = slur (`-`). The type is derived from the lyric automatically — you never set it by hand.
 
 ### Phoneme Editing
 
@@ -464,7 +467,9 @@ Switch to Phoneme mode (press `5` or click the Phoneme tab):
 ### Slur Notes
 
 A **slur** (continuation) note is a note that continues the previous note's sound without re-attacking. To create a slur:
-- Add a note with an empty lyric (or a dash `-`). It will be treated as a continuation of the previous note.
+- Add a note and type a half-width dash `-` as its lyric. It will be treated as a continuation of the previous note.
+
+> **Empty lyric ≠ slur.** An empty lyric is a *rest* and always sings as silence, whether or not the note has a pitch. Typing `-` is the only way to mark a continuation.
 
 ### Kanji / Kana Auto-Grouping
 
@@ -577,7 +582,7 @@ In the Fragment Editor, **▶ Play** synthesizes and plays only the current frag
 
 ### Synthesis Cache
 
-SXSEditor maintains a segment-level LRU cache (32 entries, up to 300 MB) for synthesis results. When you replay a fragment whose notes, lyrics, pitch curve, and singer data have not changed, the cached audio is reused instantly — no re-synthesis is needed. Editing any parameter that affects the output invalidates the relevant cache entries.
+SXSEditor maintains a per-segment LRU cache (**32 entries, up to 300 MB**) for synthesis results. When you replay a fragment whose notes, lyrics, pitch curve, and singer data have not changed, the cached audio is reused instantly — no re-synthesis is needed. Editing any parameter that affects the output invalidates the relevant cache entries.
 
 ### Audio Quality Enhancements
 
@@ -598,7 +603,7 @@ In the Fragment Editor, click **💿 Export**:
 2. After confirming, the fragment is synthesized using the chosen parameters.
 3. A file save dialog appears.
 4. Choose a location and filename.
-5. The WAV file is saved (48kHz by default, 16-bit PCM). Export sample rate is selectable: 24/44.1/48/96 kHz.
+5. The WAV file is saved (48 kHz and **32-bit float** by default; bit depth selectable 16 / 24 / 32-bit). Export sample rate is selectable: 24/44.1/48/96 kHz.
 
 ### Exporting the Entire Project
 

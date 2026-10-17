@@ -60,8 +60,8 @@
         <span data-lang="zh">测试与命令行</span>
       </h1>
 
-      <p data-lang="en">SXSEditor ships with a Mocha + Chai + Sinon + JSDOM test suite and a built-in CLI debug helper. The test suite covers 1628 cases across 66 test files (approx. 1612 in CI, which excludes <code>test/onnxModelLoading.test.js</code>); the CLI lets you verify GPU detection, model loading, and end-to-end synthesis from a terminal without opening the GUI.</p>
-      <p data-lang="zh">SXSEditor 内置 Mocha + Chai + Sinon + JSDOM 测试套件与 CLI 调试助手。测试套件覆盖 66 个测试文件、1628 个用例（CI 中排除 <code>test/onnxModelLoading.test.js</code>，实际执行约 1612 条）；CLI 让你在终端中验证 GPU 检测、模型加载与端到端合成，无需打开 GUI。</p>
+      <p data-lang="en">SXSEditor ships with a Mocha + Chai + Sinon + JSDOM test suite and a built-in CLI debug helper. The test suite covers 1651 cases across 70 test files (1635 in CI, which excludes <code>test/onnxModelLoading.test.js</code>); the CLI lets you verify GPU detection, model loading, and end-to-end synthesis from a terminal without opening the GUI.</p>
+      <p data-lang="zh">SXSEditor 内置 Mocha + Chai + Sinon + JSDOM 测试套件与 CLI 调试助手。测试套件覆盖 70 个测试文件、1651 个用例（CI 中排除 <code>test/onnxModelLoading.test.js</code>，实际执行 1635 条）；CLI 让你在终端中验证 GPU 检测、模型加载与端到端合成，无需打开 GUI。</p>
 
       <div class="callout note">
         <div class="callout-icon">ℹ️</div>
@@ -296,6 +296,11 @@ SXSEditor.exe --cli &lt;command&gt; [options]</code></pre>
             <td><span data-lang="en">—</span><span data-lang="zh">—</span></td>
           </tr>
           <tr>
+            <td><code>winml</code></td>
+            <td><span data-lang="en">Detect Windows ML plugin EPs (experimental)</span><span data-lang="zh">检测 Windows ML 插件执行提供器（实验性）</span></td>
+            <td><span data-lang="en">—</span><span data-lang="zh">—</span></td>
+          </tr>
+          <tr>
             <td><code>models</code></td>
             <td><span data-lang="en">List <code>onnx_models</code>, mark missing required files</span><span data-lang="zh">列出 <code>onnx_models</code>，标记缺失的必需文件</span></td>
             <td><span data-lang="en">—</span><span data-lang="zh">—</span></td>
@@ -314,6 +319,16 @@ SXSEditor.exe --cli &lt;command&gt; [options]</code></pre>
             <td><code>synth</code></td>
             <td><span data-lang="en">Run a minimal synthesis and print audio stats (no file written by default)</span><span data-lang="zh">运行最小合成并输出音频统计（默认不写文件）</span></td>
             <td><code>--out &lt;path.wav&gt;</code>, <code>--steps &lt;N&gt;</code>, <code>--notes &lt;json&gt;</code>, <code>--bpm &lt;N&gt;</code></td>
+          </tr>
+          <tr>
+            <td><code>synth-project</code></td>
+            <td><span data-lang="en">Synthesize a window of a real <code>.sxsproj</code> project (with its singer reference) and print the execution provider actually used</span><span data-lang="zh">合成真实 <code>.sxsproj</code> 工程的指定窗口（含歌手参考），并输出实际使用的执行提供器</span></td>
+            <td><code>--file &lt;.sxsproj&gt;</code> (required), <code>--fragment &lt;N&gt;</code>, <code>--from/--to/--duration</code>, <code>--singer</code>, <code>--precision</code>, <code>--steps</code>, <code>--sampler</code>, <code>--cfg</code>, <code>--cfg-rescale</code>, <code>--cfg-schedule</code>, <code>--qdrift</code>, <code>--seed</code>, <code>--dry-run</code></td>
+          </tr>
+          <tr>
+            <td><code>qdrift-conds</code></td>
+            <td><span data-lang="en">Export Q-Drift calibration conditions (prompt mel + cond) from one or more <code>.sxsproj</code> projects into an output directory</span><span data-lang="zh">从一个或多个 <code>.sxsproj</code> 工程导出 Q-Drift 标定条件（prompt mel + cond）到输出目录</span></td>
+            <td><code>--file &lt;.sxsproj&gt;</code> (repeatable, required), <code>--fragment &lt;N&gt;</code>, <code>--out &lt;dir&gt;</code>, <code>--max-items-per-frag</code>, <code>--min-sec</code>, <code>--max-sec</code>, <code>--max-prompt-frames</code>, <code>--full-prompt-items</code>, <code>--force</code></td>
           </tr>
         </tbody>
       </table>
