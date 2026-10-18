@@ -251,8 +251,6 @@ const IPC_CHANNELS = {
   SINGER_MARKET_REGISTER: 'singer-market:register',
   SINGER_MARKET_TAGS: 'singer-market:tags',
   SINGER_MARKET_UPLOAD: 'singer-market:upload',
-  // ---- splash ----
-  SPLASH_GET_BUILD_INFO: 'splash:getBuildInfo',
   // ---- svs ----
   SVS_CANCEL: 'svs:cancel',
   SVS_MODEL_INCOMPATIBLE: 'svs:model-incompatible',

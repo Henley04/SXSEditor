@@ -11,9 +11,9 @@
         width: 100%;
         height: 100%;
         overflow: hidden;
-        /* Matches BrowserWindow backgroundColor and SVG solid fill
-           (THEME.bgApp = #14141f = --bg-app in dark-aurora.theme.json),
-           so the empty window → painted-SVG transition is invisible. */
+        /* Matches the BrowserWindow backgroundColor and the SVG solid fill
+           (THEME.bgApp = #14141f = --bg-app in dark-aurora.theme.json), so
+           the empty window -> painted-SVG transition is invisible. */
         background: #14141f;
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
           "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
@@ -36,9 +36,21 @@
       did-finish-load fires for the splash itself, with zero JS
       execution on the critical path.
 
-      splash.js runs AFTER first paint and only enriches the existing
-      SVG (updates #splash-version, #splash-build-date, #splash-icon).
-      If JS or IPC fails, the default values below remain visible.
+      The version / build-date text is written DIRECTLY into the markup by
+      scripts/generate-build-info.js at build time (and by prestart in dev).
+      It used to be filled in by splash.js over IPC after first paint; that
+      round-trip is now gone, which is what lets this window drop its
+      preload entirely (see the note in webpack.renderer.config.js about
+      splash_preload) and with it ~100ms of renderer-process startup on the
+      critical path.
+
+      ICON_SOURCE below is substituted at build time. webpack's HtmlWebpack-
+      style substitution is not available for the webpack plugin's HTML
+      pipeline, so generate-build-info.js writes the resolved relative path
+      in as a literal (see the SPLASH_ICON comment there). The default
+      "./SXS.png" is correct for both dev and packaged builds; the
+      substitution exists only so a future non-standard asset layout does not
+      need to touch this file.
     -->
     <div id="splash-root">
       <svg xmlns="http://www.w3.org/2000/svg"
@@ -51,12 +63,10 @@
         <!-- 3px accent bar at the top, matching --toolbar-accent-line. -->
         <rect x="0" y="0" width="440" height="3" fill="#5b8def" />
 
-        <!-- App icon (top-left, 64x64). Initially empty; splash.js
-             fills it via #splash-icon href once IPC resolves. A
-             relative ./SXS.png path is used so the icon can load
-             directly without an IPC round-trip. -->
+        <!-- App icon (top-left, 64x64). Loaded by the SVG directly via a
+             relative URL so it resolves in parallel with HTML parse. -->
         <image id="splash-icon" x="20" y="20" width="64" height="64"
-               preserveAspectRatio="xMidYMid meet" href="./SXS.png" />
+               preserveAspectRatio="xMidYMid meet" href="__SPLASH_ICON__" />
 
         <!-- App name -->
         <text x="100" y="50"
@@ -78,25 +88,31 @@
         <line x1="20" y1="240" x2="420" y2="240"
               stroke="#2a2a3d" stroke-width="1" />
 
-        <!-- Version (left) — updated by splash.js -->
+        <!-- Version (left) — build-time substituted, no IPC needed. -->
         <text id="splash-version" x="20" y="262"
               font-size="11" font-weight="500"
               fill="#8888a8"
-              font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
-        </text>
+              font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">__SPLASH_VERSION__</text>
 
-        <!-- Build date (right) — updated by splash.js -->
+        <!-- Build date (right) — build-time substituted, no IPC needed. -->
         <text id="splash-build-date" x="420" y="262" text-anchor="end"
               font-size="11" font-weight="400"
               fill="#8888a8"
-              font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">
-          Build dev
-        </text>
+              font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif">__SPLASH_BUILD_DATE__</text>
       </svg>
     </div>
-    <!-- splash.js is auto-injected by webpack at end of body. It runs
-         AFTER the inline SVG paints and only enriches the existing
-         elements (version, build date, icon). Removing it from the
-         critical path is what makes the splash appear instantly. -->
+    <!--
+      No <script> tag on purpose.
+
+      This window previously loaded splashPreload.js (to expose splashAPI)
+      plus splash.js (to fill version/date/icon over IPC). Both are gone:
+      the payload above is fully resolved at build time, so first paint needs
+      no JavaScript at all. Removing the preload also removes the preload
+      script compilation + execution from before-first-paint, measured at
+      roughly 100ms of renderer startup on the critical path.
+
+      If a future splash needs interactivity, reintroduce the preload and
+      measure again — do not add script tags that block first paint.
+    -->
   </body>
 </html>

@@ -14,11 +14,20 @@ const WINDOW_NAMES = [
   'settings_window',
   'model_download_window',
   'resource_manager_window',
-  'splash_window',
   'singer_market_window',
   // updateNotification.html 里同样有 <script src="./themes/themeBootstrap.js">，
   // 原先漏在列表外 → 打包后该窗口 404，首屏防闪烁脚本不生效（审查项 U2）。
   'update_notification_window',
+  // ⚠️ 这里**故意没有** 'splash_window'。splash 不是 webpack 渲染入口，
+  // 不产生 .webpack/renderer/splash_window/ 目录：它的首帧必须零JS（无 preload
+  // 编译、无 bundle 执行），而 @electron-forge/plugin-webpack 强制要求每个
+  // entryPoint 都有 js，给不出就报 schema 错误。splash 的 HTML 由
+  // webpack.main.config.js 的 CopyPlugin 拷到 .webpack/main/splash.html，
+  // 由 splashManager 用 loadFile() 加载 —— 详见 forge.config.js
+  // entryPoints 上方与 src/main/splashManager.js 顶部的说明。
+  //
+  // 因此这里也不需要给 splash 拷 themeBootstrap.js：它的模板里没有任何
+  // <script>（包括 themeBootstrap），少这一份拷贝是正确的，不是遗漏。
 ];
 
 // Windows that need onnxruntime-web wasm/JS files copied alongside.
@@ -130,18 +139,7 @@ module.exports = {
           to: path.resolve(__dirname, `.webpack/renderer/${name}/themes/themeBootstrap.js`),
           noErrorOnMissing: true,
         },
-      ]).concat(onnxruntimeWasmPatterns).concat([
-        // Splash window icon: the inline SVG in splash.html references
-        // ./SXS.png via a relative URL so the icon loads in parallel
-        // with HTML parse (no IPC round-trip on the critical path to
-        // first paint). Only the splash_window needs this copy because
-        // other windows don't render the splash SVG.
-        {
-          from: path.resolve(__dirname, 'assets/SXS.png'),
-          to: path.resolve(__dirname, '.webpack/renderer/splash_window/SXS.png'),
-          noErrorOnMissing: true,
-        },
-      ]),
+      ]).concat(onnxruntimeWasmPatterns),
     }),
   ],
   resolve: {

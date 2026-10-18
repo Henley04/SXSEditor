@@ -41,6 +41,18 @@ const REQUIRED_RENDERER_ASSETS = [
   'src/themes/themeBootstrap.js',
 ];
 
+// Splash 窗口不走 webpack 渲染入口（forge 的 entryPoints 强制要求 js，splash
+// 恰恰要零 JS），HTML 由 webpack.main.config.js 的 CopyPlugin 拷到
+// .webpack/main/splash.html，splashManager 用 loadFile() 加载。
+//
+// 它必须出现在这份清单里：CopyPlugin 的 pattern 带 noErrorOnMissing，生成产物
+// src/splash.html 缺失时只会静默跳过拷贝 → 打包成功但启动画面 404（空白窗口）。
+// prepackage 里本脚本先于 generate-build-info.js 运行，所以校验的是**模板**
+// src/splash.html.template（受版本控制，一定存在）；模板缺失即产物必缺失。
+const REQUIRED_SPLASH_ASSETS = [
+  'src/splash.html.template',
+];
+
 // 可选资源：缺失只警告，不阻断（例如 native 预构建在干净 clone 上不存在）
 const OPTIONAL_ASSETS = [
   'native/ort-bridge/build/Release/ort_bridge.node',
@@ -55,7 +67,11 @@ function check(list) {
   return missing;
 }
 
-const missingRequired = check([...REQUIRED_MAIN_ASSETS, ...REQUIRED_RENDERER_ASSETS]);
+const missingRequired = check([
+  ...REQUIRED_MAIN_ASSETS,
+  ...REQUIRED_RENDERER_ASSETS,
+  ...REQUIRED_SPLASH_ASSETS,
+]);
 const missingOptional = check(OPTIONAL_ASSETS);
 
 if (missingOptional.length > 0) {
@@ -74,4 +90,6 @@ if (missingRequired.length > 0) {
   process.exit(1);
 }
 
-console.log(`[verify-build-assets] OK：${REQUIRED_MAIN_ASSETS.length + REQUIRED_RENDERER_ASSETS.length} 个必需资源齐全。`);
+console.log(
+  `[verify-build-assets] OK：${REQUIRED_MAIN_ASSETS.length + REQUIRED_RENDERER_ASSETS.length + REQUIRED_SPLASH_ASSETS.length} 个必需资源齐全。`
+);

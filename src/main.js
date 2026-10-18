@@ -4,12 +4,30 @@ const fs = require('node:fs');
 const { IPC_CHANNELS } = require('./shared/ipcChannels');
 
 // Fix Windows console encoding for Chinese log output.
-// Fire-and-forget async exec: spawning cmd.exe synchronously costs ~50-200ms
-// on the critical path before splash appears. The encoding switch takes
-// effect ~100ms later; the early startup window has essentially no Chinese
-// log output, so the delay is acceptable.
-if (process.platform === 'win32') {
-  try { require('child_process').exec('chcp 65001', { stdio: ['ignore', 'ignore', 'ignore'] }, () => {}); } catch (_) {}
+//
+// This used to run as the very first statement, ahead of everything else.
+// Two reasons it no longer does:
+//   1. `child_process.exec` spawns cmd.exe. Measured ~25ms just to issue the
+//      spawn, and that happened before app.whenReady() — i.e. before the
+//      splash window exists. On the critical path that is time the user
+//      stares at a blank screen.
+//   2. It only affects *console* output. A packaged build launched by
+//      double-click has no console attached (Windows GUI subsystem), so it is
+//      pure cost there; and the log file written by crashReporter is UTF-8
+//      regardless of the OEM code page.
+//
+// So: skip it entirely when no console is attached, and keep it off the
+// critical path (called from inside whenReady, after the splash is up).
+// Set SXS_FORCE_CHCP=1 to force it regardless — useful when launching the
+// packaged exe from a shell that does attach a console.
+function fixConsoleEncoding() {
+  if (process.platform !== 'win32') return;
+  const hasConsole = process.env.SXS_FORCE_CHCP === '1'
+    || (process.stdout && process.stdout.isTTY);
+  if (!hasConsole) return;
+  try {
+    require('node:child_process').exec('chcp 65001', { stdio: 'ignore' }, () => {});
+  } catch (_) {}
 }
 
 // Suppress EPIPE errors when stdout/stderr pipe breaks (e.g. terminal closed)
@@ -127,7 +145,6 @@ const {
   closeSplashWindow,
   getSplashReadyAt,
   waitForSplashReady,
-  registerSplashIpc,
 } = require('./main/splashManager');
 
 // ---- Light module placeholders (assigned in STEP 1.5 inside app.whenReady) ----
@@ -218,6 +235,10 @@ app.whenReady().then(() => {
   // or file cleanup runs. The splash window paints its backgroundColor
   // synchronously on creation, so it's visible even before did-finish-load
   // fires for the splash itself.
+  //
+  // The splash has no preload and no renderer bundle (see the comment in
+  // src/splash.html.template), so its first paint is pure HTML parse of a
+  // small inline-SVG document — no JS compile/execute in the critical path.
   // ========================================================================
   if (showSplash) {
     createSplashWindow();
@@ -231,6 +252,10 @@ app.whenReady().then(() => {
   } else {
     initMainSteps();
   }
+
+  // Console code-page fix, now that the splash is already on screen. No
+  // console means no spawn at all (see fixConsoleEncoding).
+  fixConsoleEncoding();
 
   function initMainSteps() {
   // ========================================================================
@@ -279,7 +304,6 @@ app.whenReady().then(() => {
   registerSingerIpc();
   registerSingerMarketIpc();
   registerWebnnIpc();
-  registerSplashIpc();
   const { registerMcpReplyIpc, startMcpBridge } = require('./main/mcpBridge');
   registerMcpReplyIpc(ipcMain);
 

@@ -3,6 +3,12 @@
 # git lets it drift from the real source of truth — the highest semver git tag.
 src/build-info.json
 
+# Generated from src/splash.html.template by the same script. The template is
+# the tracked source of truth; this output carries the build date/version, so
+# it must be regenerated per build rather than committed (it would otherwise
+# show a stale build date in the splash window).
+src/splash.html
+
 # Logs
 logs
 *.log

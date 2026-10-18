@@ -93,7 +93,7 @@
 │  settings             (src/settings.js)      Device, inference, audio config             │
 │  model_download       (src/modelDownload.js) Chunked parallel download from ModelScope   │
 │  resource_manager     (src/resourceManager.js) GPU/VRAM monitor, model load/unload       │
-│  splash               (src/splash.js)        Startup splash (packaged builds only)       │
+│  splash               (src/splash.html.template) Splash; static HTML, no JS, no preload   │
 └───────────────────────────────────────────────────────────────────────────────────────────┘</code></pre>
 
       <h2>
@@ -285,8 +285,8 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
         <span data-lang="en">Window Types</span>
         <span data-lang="zh">窗口类型</span>
       </h2>
-      <p data-lang="en">Each window is registered as a webpack entry point in <code>forge.config.js</code> and has its own HTML + JS bundle. All windows share the same preload (<code>src/preload.js</code>), except the splash window which uses <code>src/splashPreload.js</code>.</p>
-      <p data-lang="zh">每个窗口在 <code>forge.config.js</code> 中注册为 webpack 入口，并拥有独立的 HTML + JS bundle。所有窗口共享同一个 preload（<code>src/preload.js</code>），启动画面窗口除外，它使用 <code>src/splashPreload.js</code>。</p>
+      <p data-lang="en">Each window is registered as a webpack entry point in <code>forge.config.js</code> and has its own HTML + JS bundle. All windows share the same preload (<code>src/preload.js</code>). The splash window is the exception and is <strong>not</strong> a webpack entry point at all — see the note below.</p>
+      <p data-lang="zh">除启动画面外，每个窗口都在 <code>forge.config.js</code> 中注册为 webpack 入口，并拥有独立的 HTML + JS bundle，所有窗口共享同一个 preload（<code>src/preload.js</code>）。启动画面是唯一的例外，它<strong>根本不是</strong> webpack 入口 —— 详见下表说明。</p>
 
       <table class="doc-table">
         <thead>
@@ -339,8 +339,8 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
           </tr>
           <tr>
             <td><code>splash_window</code></td>
-            <td><code>src/splash.js</code></td>
-            <td><span data-lang="en">Startup splash (packaged builds only; skipped in <code>npm start</code>).</span><span data-lang="zh">启动画面（仅打包构建使用；<code>npm start</code> 时跳过）。</span></td>
+            <td><em data-lang="en">not a webpack entry point</em><em data-lang="zh">非 webpack 入口</em></td>
+            <td><span data-lang="en">Startup splash (packaged builds only; skipped in <code>npm start</code>). Not registered as a webpack entry point: <code>@electron-forge/plugin-webpack</code> requires every <code>entryPoints[]</code> item to have a <code>js</code>, and the splash's whole point is a first frame with <strong>zero JavaScript</strong>. Instead the generated <code>src/splash.html</code> is copied verbatim to <code>.webpack/main/splash.html</code> by <code>webpack.main.config.js</code>'s CopyPlugin and loaded with <code>loadFile()</code>. It therefore has no JS bundle and no preload, and no <code>*_WEBPACK_ENTRY</code> constant.</span><span data-lang="zh">启动画面（仅打包构建使用；<code>npm start</code> 时跳过）。<strong>不注册为 webpack 入口</strong>：<code>@electron-forge/plugin-webpack</code> 强制要求每个 <code>entryPoints[]</code> 都带 <code>js</code>，而启动画面的全部意义就是<strong>首帧零 JavaScript</strong>。因此改为由 <code>webpack.main.config.js</code> 的 CopyPlugin 把生成产物 <code>src/splash.html</code> 逐字拷到 <code>.webpack/main/splash.html</code>，再用 <code>loadFile()</code> 加载。它没有 JS bundle、没有 preload，也没有 <code>*_WEBPACK_ENTRY</code> 常量。</span></td>
           </tr>
         </tbody>
       </table>

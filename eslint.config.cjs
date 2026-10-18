@@ -160,8 +160,6 @@ module.exports = [
             'src/modelDownload.js',
             'src/resourceManager.js',
             'src/alertDialog.js',
-            'src/splash.js',
-            'src/splashPreload.js',
             'src/updateNotification.js',
             // 这些文件使用 ESM export 语法，但被主进程 require（webpack interop）
             'src/audio/wavEncoder.js',
