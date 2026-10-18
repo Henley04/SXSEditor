@@ -93,7 +93,7 @@ export async function openExportDialog() {
       exportCfgStrength: settings.exportCfgStrength ?? 3.0,
       exportCfgRescale: settings.exportCfgRescale ?? 0.7,
       exportSampler: settings.exportSampler || 'euler',
-      autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : true,
+      autoShift: dom.autoShiftCheck ? dom.autoShiftCheck.checked : false,
       outputSampleRate: [24000, 44100, 48000, 96000].includes(settings.exportSampleRate) ? settings.exportSampleRate : 48000,
       outputBitDepth: [16, 24, 32].includes(settings.exportBitDepth) ? settings.exportBitDepth : 32,
       vocoderType: settings.vocoderType === 'sifigan' ? 'sifigan' : 'default',
