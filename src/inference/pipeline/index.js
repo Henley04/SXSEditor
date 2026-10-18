@@ -573,7 +573,13 @@ class OnnxSVSPipeline {
     interpolateEnvelope(envelope, beatTime) { return this._preprocessing.interpolateEnvelope(envelope, beatTime); }
     buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0) { return this._preprocessing.buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0); }
     quantizeF0(f0Frames, f0Shift) { return this._preprocessing.quantizeF0(f0Frames, f0Shift); }
-    notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift) { return this._preprocessing.notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift); }
+    // ⚠️ pitchCurveOffsetSec 必须透传：多 segment 路径的 segmentNotes.start 是相对
+    // segStart 的坐标，而 pitchCurveF0 是整片段绝对时间序列。漏掉这个参数时每个
+    // segment 都从曲线第 0 帧取值 —— segment 0 恰好正确，后续段的手绘音高/颤音
+    // （以及 F0 平滑）整体错位，表现为"第一段正常，后面唱的音高是歪的"。
+    notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift = 0, pitchCurveOffsetSec = 0) {
+        return this._preprocessing.notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift, pitchCurveOffsetSec);
+    }
     _buildMel2token(phLocations, tokenCount, totalFrames) { return this._preprocessing._buildMel2token(phLocations, tokenCount, totalFrames); }
 
     // Delegate diffusion methods
