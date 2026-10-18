@@ -230,24 +230,20 @@ app.whenReady().then(() => {
   // STEP 1: Show the splash window IMMEDIATELY.
   //
   // This is the very first thing we do inside whenReady so the user sees
-  // *something* (the splash's dark background + SVG) the moment Electron
-  // is ready, before any heavy module loading, CSP setup, locale loading,
-  // or file cleanup runs. The splash window paints its backgroundColor
-  // synchronously on creation, so it's visible even before did-finish-load
-  // fires for the splash itself.
+  // *something* the moment Electron is ready, before any heavy module loading,
+  // CSP setup, locale loading, or file cleanup runs.
   //
-  // The splash has no preload and no renderer bundle (see the comment in
-  // src/splash.html.template), so its first paint is pure HTML parse of a
-  // small inline-SVG document — no JS compile/execute in the critical path.
+  // The splash is a BaseWindow + ImageView (see src/main/splashManager.js):
+  // no renderer process, no HTML, no preload. Its first paint is "decode one
+  // local PNG and blit it" — no JS compile/execute and no font shaping
+  // anywhere in the critical path.
   // ========================================================================
   if (showSplash) {
     createSplashWindow();
-    // Yield once so the splash's did-finish-load event can be delivered
-    // and the SVG can paint BEFORE STEP 1.5+2+3 block the main thread
-    // for ~50-150ms. Without this yield, the user sees a dark rectangle
-    // (the splash's backgroundColor) for 100-200ms before the branded
-    // SVG appears. In dev mode (no splash) we call initMainSteps()
-    // directly to avoid the ~5ms setImmediate overhead.
+    // Yield once so the compositor can put the splash frame on screen before
+    // STEP 1.5+2+3 block the main thread for ~50-150ms. In dev mode (no
+    // splash) we call initMainSteps() directly to avoid the ~5ms setImmediate
+    // overhead.
     setImmediate(initMainSteps);
   } else {
     initMainSteps();

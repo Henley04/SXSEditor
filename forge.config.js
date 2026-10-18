@@ -186,22 +186,23 @@ module.exports = {
           config: './webpack.renderer.config.js',
           // ⚠️ 这里**故意没有** splash_window 入口。
           //
-          // 启动画面要求首帧零JS：无 preload、无 renderer bundle，整个载荷是
-          // 一段内联 SVG + 构建期替换好的版本号/日期/图标。这样可以把 before-
-          // first-paint 路径上的 preload 编译+执行（实测约 100ms 的渲染进程
-          // 启动开销）整段去掉。
+          // 启动画面根本不进渲染进程：它用 BaseWindow + ImageView 在主进程里
+          // 直接把一张构建期烘焙好的位图画到窗口上（版本号/时间/亚克力版面全在
+          // 像素里，见 scripts/generate-splash-image.js）。既没有 HTML，也没有
+          // JS bundle 和 preload —— 省掉的是整个渲染进程的启动开销。
           //
-          // 但 @electron-forge/plugin-webpack 无法表达"有 HTML 入口、没有 JS
-          // 入口"：WebpackConfig.js:230 无条件执行
+          // 顺带说明为什么不能"给 splash 配一个只带 html 的 entryPoint"：
+          // @electron-forge/plugin-webpack 无法表达"有 HTML 入口、没有 JS 入口"，
+          // WebpackConfig.js:230 无条件执行
           // `entry[name] = (prefixedEntries||[]).concat([entryPoint.js])`，
           // 缺 js 会得到 `entry.splash_window = [undefined]`，webpack schema
           // 校验直接报 "should be a non-empty string"，整个 dev server 起不来
-          // （渲染入口数组在这里是整体校验的，坏一个全盘失败）。
+          // （渲染入口数组是整体校验的，坏一个全盘失败）。何况现在连 HTML 都
+          // 不需要了。
           //
-          // 所以 splash 走**旁路**：webpack.main.config.js 的 CopyPlugin 把
-          // 生成产物 src/splash.html 拷到 .webpack/main/splash.html，
-          // splashManager 用 loadFile() 直接加载。见 src/main/splashManager.js
-          // 顶部说明。
+          // 所以 splash 走**旁路**：webpack.main.config.js 的 CopyPlugin 把生成的
+          // splash@2x/3x.png 拷到 .webpack/main/，splashManager 用 readFileSync
+          // 读进来交给 ImageView。见 src/main/splashManager.js 顶部说明。
           entryPoints: [
             {
               html: './src/index.html',

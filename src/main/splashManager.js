@@ -1,73 +1,119 @@
 // Splash window manager.
 //
-// Shows a small frameless splash window while the main window boots.
+// Shows a small frameless splash while the main window boots — but NOT through a
+// BrowserWindow. It uses Electron's `BaseWindow` + `ImageView`: an `ImageView`
+// paints a `nativeImage` straight into a plain window view.
 //
-// The splash payload is a self-contained HTML file (generated from
-// src/splash.html.template by scripts/generate-build-info.js) whose entire
-// visible content is an INLINE SVG, with the version string, build date and
-// app-icon URL substituted at build time. There is deliberately no renderer
-// bundle and no preload: first paint is pure HTML parse.
+// Why that matters:
+//   A BrowserWindow needs a renderer process — spawn it, parse HTML, run CSS,
+//   decode the image, composite. That is ~100ms of "nothing on screen" before
+//   the first pixel, and it was the single biggest chunk of the splash's
+//   latency (measured A/B on this machine: dropping the preload alone was worth
+//   ~100ms before this change; dropping the renderer entirely is worth more).
+//   `ImageView` is created and painted on the main process's UI thread: no
+//   renderer, no HTML, no preload, no font matching, no text shaping. The
+//   window is up as soon as the PNG decodes.
 //
-// Why that matters: a preload script must be compiled and executed before the
-// page paints, and it runs in a renderer process that has to start up first.
-// An A/B measurement of splash-with-preload vs splash-without on this machine
-// put that cost at ~100ms of renderer startup on the critical path — time the
-// user spends looking at nothing. Removing it is the single largest win in the
-// splash's first-paint latency.
+// What is on screen: a build-time artefact. scripts/generate-splash-image.js
+// bakes the layout, the acrylic card, the version string and the build timestamp
+// into the pixels (see that file for why raster, and why those resolutions), so
+// the runtime does literally zero text work. The card's 0.86 opacity and its
+// 14px rounded corners are baked into the PNG's alpha too — ImageView/View have
+// no opacity API, and BaseWindow's constructor-level `opacity` goes through
+// SetLayeredWindowAttributes, which conflicts with the per-pixel alpha a
+// transparent window relies on.
 //
-// (An earlier version used a preload + splash.js to fetch build info over IPC
-// and patch the SVG after paint. That round-trip is gone.)
+// DPI: one nativeImage carries two representations (2x and 3x). Electron picks
+// the one closest to the window's device scale factor, so a 2x display shows the
+// 2x bitmap 1:1 and a 1x display downscales the 2x one by exactly 2 — never the
+// "single 4x master" that had to be squashed 4x and looked soft.
 //
-// How the HTML gets here — and why NOT through webpack:
-//   The obvious way to serve a renderer HTML in electron-forge is to register
-//   it as an entryPoint in forge.config.js. That does not work for the splash:
-//   @electron-forge/plugin-webpack unconditionally builds
-//   `entry[name] = (prefixedEntries||[]).concat([entryPoint.js])`, so an
-//   entryPoint without `js` yields `entry.splash_window = [undefined]` and
-//   webpack's schema validation rejects the whole config ("should be a
-//   non-empty string") — the dev server never starts. Forge has no way to
-//   express "an HTML entry with no JS".
+// History: this window used to be a BrowserWindow loading a generated HTML file
+// with an inline SVG (and before that, a preload + IPC round-trip to fill in the
+// version). Both are gone; git history has the rationale if the trade-offs ever
+// need revisiting.
 //
-//   So the splash bypasses the renderer pipeline entirely:
-//     · webpack.main.config.js's CopyPlugin copies the generated
-//       src/splash.html verbatim to .webpack/main/splash.html (next to
-//       SXS.png, which is what the template's relative "./SXS.png" resolves
-//       to — same relative path works in dev and in the packaged app);
-//     · this window loads it with loadFile() instead of loadURL().
-//
-//   Side benefit: because the file is copied byte-for-byte, no
-//   HtmlWebpackPlugin post-processing runs, so nothing injects a
-//   <script defer src="index.js"> back into it.
-//
-//   Consequence: this file is the ONE window that does not use a
-//   `*_WEBPACK_ENTRY` constant. If you ever need script in the splash, either
-//   give it a real preload + bundle via entryPoints (and eat the ~100ms), or
-//   inline a <script> into the template (it will be copied through as-is) —
-//   measure before adding either.
-//
-// Timing strategy:
-//   - The splash window is shown IMMEDIATELY on creation (show: true)
-//     with a dark backgroundColor so the user sees *something* right
-//     away, before the SVG even paints.
-//   - did-finish-load fires once the splash's HTML (with inline SVG)
-//     has parsed; we record that timestamp so the main process can
-//     enforce a minimum *visible* splash duration measured from when
-//     content actually appeared (not from when the empty window was
-//     created).
+// ⚠️ `ImageView` is marked experimental in Electron's docs ("may be changed or
+// removed"). createSplashWindow() therefore degrades to "no splash" instead of
+// throwing if the classes are missing or the bitmaps were never generated —
+// a missing splash must never keep the app from starting.
 
-const { BrowserWindow } = require('electron');
+const { BaseWindow, ImageView, nativeImage, screen } = require('electron');
+const fs = require('node:fs');
 const path = require('node:path');
 
 let splashWindow = null;
-let splashReadyAt = 0; // ms timestamp when splash content first painted
+let splashView = null;
+let splashReadyAt = 0; // ms timestamp when the splash content first painted
 let splashReadyResolvers = []; // resolved when splash content first paints
 
-// No build-info IPC handler is registered any more. The splash window has no
-// preload and no renderer bundle, so there is nothing left to ask: its version
-// / build date / icon are substituted into the HTML at build time by
-// scripts/generate-build-info.js. Registering a handler for a channel with no
-// consumer would only be dead surface area (and the IPC channel registry in
-// shared/ipcChannels.js is asserted by scripts/check-ipc-channels.js).
+// Must match LOGICAL_W / LOGICAL_H in scripts/generate-splash-image.js.
+const SPLASH_WIDTH = 480;
+const SPLASH_HEIGHT = 272;
+
+// Representations in ascending scale factor. 2x covers 1x and 2x displays (1x
+// downscales by 2), 3x covers 2.5x/3x.
+const SPLASH_REPS = [
+  { scaleFactor: 2, file: 'splash@2x.png' },
+  { scaleFactor: 3, file: 'splash@3x.png' },
+];
+
+/**
+ * Skips representations no attached display can use.
+ *
+ * Attaching the 3x bitmap on a 2x machine would still decode 235 KiB of pixels
+ * that never reach the screen — visible as a few extra ms on the critical
+ * path. `screen.getAllDisplays()` is a cached lookup after ready, so the filter
+ * costs less than the decode it avoids.
+ */
+function repsForDisplays() {
+  let maxScale = 2;
+  try {
+    for (const d of screen.getAllDisplays()) {
+      if (d.scaleFactor > maxScale) maxScale = d.scaleFactor;
+    }
+  } catch {
+    // Screen module unavailable (shouldn't happen after ready) — keep the
+    // default so we still show something.
+  }
+  const wanted = Math.ceil(maxScale + 0.01);
+  const reps = SPLASH_REPS.filter((r) => r.scaleFactor <= wanted);
+  // 1x displays: nothing matches the filter (there is no 1x bitmap by design),
+  // fall back to the smallest available so the window still shows.
+  return reps.length ? reps : [SPLASH_REPS[0]];
+}
+
+/**
+ * Builds the multi-representation image from the generated PNGs next to this
+ * bundle (.webpack/main/, copied verbatim by webpack.main.config.js's
+ * CopyPlugin). Returns null when none could be read.
+ */
+function loadSplashImage() {
+  const image = nativeImage.createEmpty();
+  let added = 0;
+  for (const rep of repsForDisplays()) {
+    const file = path.join(__dirname, rep.file);
+    try {
+      image.addRepresentation({
+        scaleFactor: rep.scaleFactor,
+        buffer: fs.readFileSync(file),
+      });
+      added += 1;
+    } catch (err) {
+      // Missing bitmap = no splash (degraded), not a launch failure.
+      console.warn(`[splash] 读取 ${rep.file} 失败：${err.message}`);
+    }
+  }
+  return added > 0 ? image : null;
+}
+
+function markSplashReady() {
+  if (splashReadyAt > 0) return;
+  splashReadyAt = Date.now();
+  const waiters = splashReadyResolvers;
+  splashReadyResolvers = [];
+  for (const resolve of waiters) resolve();
+}
 
 function createSplashWindow() {
   if (splashWindow && !splashWindow.isDestroyed()) {
@@ -78,71 +124,54 @@ function createSplashWindow() {
   splashReadyAt = 0;
   splashReadyResolvers = [];
 
-  splashWindow = new BrowserWindow({
-    width: 440,
-    height: 280,
+  // Capability guard: ImageView landed in Electron 32 and is still experimental.
+  if (typeof BaseWindow !== 'function' || typeof ImageView !== 'function') {
+    console.warn('[splash] 当前 Electron 不提供 BaseWindow/ImageView，跳过启动画面');
+    markSplashReady();
+    return null;
+  }
+
+  const image = loadSplashImage();
+  if (!image) {
+    console.warn('[splash] 没有可用的启动画面位图（构建期应先跑 npm run splash:image），跳过');
+    markSplashReady();
+    return null;
+  }
+
+  splashWindow = new BaseWindow({
+    width: SPLASH_WIDTH,
+    height: SPLASH_HEIGHT,
     frame: false,
+    // Needed for the rounded corners: outside the card radius the PNG is fully
+    // transparent, and only a transparent window lets that through.
+    transparent: true,
+    backgroundColor: '#00000000',
+    hasShadow: false,
     resizable: false,
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
     skipTaskbar: true,
-    // Show IMMEDIATELY. The window paints backgroundColor first, then
-    // the SVG renders on top once did-finish-load fires. This avoids
-    // the "splash appears after main is already done" race.
+    // Nothing to wait for: the view is painted in-process, so show right away.
     show: true,
-    transparent: false,
-    alwaysOnTop: false,
     center: true,
-    // Matches the SVG's solid fill (THEME.bgApp = #14141f, same as
-    // --bg-app in dark-aurora.theme.json) so the empty window and the
-    // painted SVG blend seamlessly.
-    backgroundColor: '#14141f',
-    icon: path.join(__dirname, 'SXS.png'),
-    webPreferences: {
-      // No preload. The splash HTML is a self-contained inline SVG whose
-      // version/date/icon are substituted at BUILD time
-      // (scripts/generate-build-info.js), so first paint needs zero
-      // JavaScript. Dropping the preload removes its compile+execute from
-      // the before-first-paint path — measured at ~100ms of renderer startup.
-      nodeIntegration: false,
-      contextIsolation: true,
-      // 安全加固：渲染进程开 OS 级沙箱。该窗口不加载 preload，因此这里没有
-      // "preload 需要 Node 内建模块" 的兼容性问题（其余窗口的 preload 只用
-      // electron 的 contextBridge / ipcRenderer，在 sandbox:true 下同样正常）。
-      sandbox: true,
-      spellcheck: false,
-    },
   });
 
-  // loadFile, not loadURL: this window has no webpack entry (see the header
-  // comment), so there is no *_WEBPACK_ENTRY constant for it. The file is the
-  // byte-for-byte CopyPlugin copy of the generated src/splash.html, sitting
-  // next to SXS.png in the same directory — which is exactly what the
-  // template's relative "./SXS.png" resolves against.
-  //
-  // resolve() so a stray relative __dirname (shouldn't happen: webpack.main
-  // sets node.__filename/__dirname to false, so __dirname is the real
-  // .webpack/main) can't silently produce a bad path.
-  splashWindow.loadFile(path.resolve(__dirname, 'splash.html'));
-
-  splashWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
-  splashWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-
-  // Record when the splash content actually finishes painting.
-  splashWindow.webContents.once('did-finish-load', () => {
-    splashReadyAt = Date.now();
-    // Resolve any waiters so the main process can proceed with
-    // revealing the main window only after the splash has painted.
-    const waiters = splashReadyResolvers;
-    splashReadyResolvers = [];
-    for (const resolve of waiters) resolve();
-  });
-
+  // No webContents exists on this window: no preload to compile, no HTML to
+  // parse, no navigation to block. The renderer attack surface is gone rather
+  // than configured away.
+  splashView = new ImageView();
+  splashView.setImage(image);
+  splashWindow.setContentView(splashView);
   splashWindow.on('closed', () => {
     splashWindow = null;
+    splashView = null;
   });
 
+  // Synchronous paint: unlike did-finish-load, setContentView has already
+  // committed the frame by the time it returns (the remaining gap to the
+  // compositor is one frame, well below the intervals this timestamp feeds).
+  markSplashReady();
   return splashWindow;
 }
 
@@ -155,10 +184,10 @@ function getSplashReadyAt() {
 }
 
 // Returns a promise that resolves once the splash's content has
-// painted (did-finish-load fired). Used to guarantee the splash is
-// actually visible before the main window is revealed, even when the
-// minimum visible duration is 0. Resolves immediately if the splash
-// has already painted, was never created, or has been destroyed.
+// painted. Used to guarantee the splash is actually visible before the
+// main window is revealed, even when the minimum visible duration is 0.
+// Resolves immediately if the splash has already painted, was never created,
+// or has been destroyed.
 function waitForSplashReady() {
   if (splashReadyAt > 0) return Promise.resolve();
   if (!splashWindow || splashWindow.isDestroyed()) return Promise.resolve();
@@ -169,8 +198,10 @@ function waitForSplashReady() {
 
 function closeSplashWindow() {
   if (splashWindow && !splashWindow.isDestroyed()) {
-    splashWindow.close();
+    const win = splashWindow;
     splashWindow = null;
+    splashView = null;
+    win.close();
   }
 }
 

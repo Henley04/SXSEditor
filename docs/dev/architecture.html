@@ -93,7 +93,7 @@
 │  settings             (src/settings.js)      Device, inference, audio config             │
 │  model_download       (src/modelDownload.js) Chunked parallel download from ModelScope   │
 │  resource_manager     (src/resourceManager.js) GPU/VRAM monitor, model load/unload       │
-│  splash               (src/splash.html.template) Splash; static HTML, no JS, no preload   │
+│  splash               BaseWindow + ImageView; no renderer, no HTML, no preload        │
 └───────────────────────────────────────────────────────────────────────────────────────────┘</code></pre>
 
       <h2>
@@ -340,7 +340,7 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
           <tr>
             <td><code>splash_window</code></td>
             <td><em data-lang="en">not a webpack entry point</em><em data-lang="zh">非 webpack 入口</em></td>
-            <td><span data-lang="en">Startup splash (packaged builds only; skipped in <code>npm start</code>). Not registered as a webpack entry point: <code>@electron-forge/plugin-webpack</code> requires every <code>entryPoints[]</code> item to have a <code>js</code>, and the splash's whole point is a first frame with <strong>zero JavaScript</strong>. Instead the generated <code>src/splash.html</code> is copied verbatim to <code>.webpack/main/splash.html</code> by <code>webpack.main.config.js</code>'s CopyPlugin and loaded with <code>loadFile()</code>. It therefore has no JS bundle and no preload, and no <code>*_WEBPACK_ENTRY</code> constant.</span><span data-lang="zh">启动画面（仅打包构建使用；<code>npm start</code> 时跳过）。<strong>不注册为 webpack 入口</strong>：<code>@electron-forge/plugin-webpack</code> 强制要求每个 <code>entryPoints[]</code> 都带 <code>js</code>，而启动画面的全部意义就是<strong>首帧零 JavaScript</strong>。因此改为由 <code>webpack.main.config.js</code> 的 CopyPlugin 把生成产物 <code>src/splash.html</code> 逐字拷到 <code>.webpack/main/splash.html</code>，再用 <code>loadFile()</code> 加载。它没有 JS bundle、没有 preload，也没有 <code>*_WEBPACK_ENTRY</code> 常量。</span></td>
+            <td><span data-lang="en">Startup splash (packaged builds only; skipped in <code>npm start</code>). Not a webpack entry point and <strong>not a BrowserWindow</strong>: it is a <code>BaseWindow</code> whose content view is an <code>ImageView</code> painting a build-time rasterised PNG (<code>splash@2x.png</code> / <code>splash@3x.png</code>). <code>scripts/generate-splash-image.js</code> bakes the layout, the acrylic card, the version string and the build timestamp into the pixels, and the two scale factors are attached as representations of one <code>nativeImage</code> so each display picks a 1:1 bitmap. No renderer process, no HTML, no preload, no font shaping — the first frame costs one PNG decode. <code>ImageView</code> is experimental, so a missing class or bitmap degrades to "no splash" rather than failing the launch.</span><span data-lang="zh">启动画面（仅打包构建使用；<code>npm start</code> 时跳过）。<strong>不是 webpack 入口，也不是 BrowserWindow</strong>：而是一个 <code>BaseWindow</code>，内容视图是 <code>ImageView</code>，直接绘制构建期烘焙好的 PNG（<code>splash@2x.png</code> / <code>splash@3x.png</code>）。版面、亚克力卡片、版本号与构建时间都由 <code>scripts/generate-splash-image.js</code> 写进像素；两个倍率作为同一个 <code>nativeImage</code> 的 representation 挂上去，各屏幕各取 1:1 的那张。没有渲染进程、没有 HTML、没有 preload、没有字形 shaping —— 首帧成本只有一次 PNG 解码。<code>ImageView</code> 属实验 API，类或位图缺失时降级为"不显示启动画面"，绝不影响启动。</span></td>
           </tr>
         </tbody>
       </table>

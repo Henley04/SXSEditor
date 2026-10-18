@@ -41,16 +41,19 @@ const REQUIRED_RENDERER_ASSETS = [
   'src/themes/themeBootstrap.js',
 ];
 
-// Splash 窗口不走 webpack 渲染入口（forge 的 entryPoints 强制要求 js，splash
-// 恰恰要零 JS），HTML 由 webpack.main.config.js 的 CopyPlugin 拷到
-// .webpack/main/splash.html，splashManager 用 loadFile() 加载。
+// Splash 窗口用 BaseWindow + ImageView 直接显示位图（主进程内绘制，不经过
+// 渲染进程，所以既没有 webpack 入口也没有 HTML）。两张 PNG 由
+// webpack.main.config.js 的 CopyPlugin 拷到 .webpack/main/，splashManager 用
+// readFileSync 同步读取。
 //
-// 它必须出现在这份清单里：CopyPlugin 的 pattern 带 noErrorOnMissing，生成产物
-// src/splash.html 缺失时只会静默跳过拷贝 → 打包成功但启动画面 404（空白窗口）。
-// prepackage 里本脚本先于 generate-build-info.js 运行，所以校验的是**模板**
-// src/splash.html.template（受版本控制，一定存在）；模板缺失即产物必缺失。
+// 校验的是**生成器**，不是生成产物：splash@2x.png / splash@3x.png 是构建产物
+// （.gitignore 忽略），而本脚本在 prepackage 里**先于** generate-build-info.js
+// 运行，此刻它们可能还不存在，所以校验生成器脚本本身 —— 生成器缺失才是真的
+// 没人产出图片。
+// 为什么必须校验：CopyPlugin 的 pattern 带 noErrorOnMissing，产物缺失时只会
+// 静默跳过拷贝 → 打包成功但启动画面不显示。
 const REQUIRED_SPLASH_ASSETS = [
-  'src/splash.html.template',
+  'scripts/generate-splash-image.js',
 ];
 
 // 可选资源：缺失只警告，不阻断（例如 native 预构建在干净 clone 上不存在）

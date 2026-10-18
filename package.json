@@ -25,7 +25,8 @@
     "cli": "electron-forge start -- --cli",
     "cli:help": "electron-forge start -- --cli help",
     "build:native": "node scripts/build-native-electron.js",
-    "mcp": "node scripts/sxseditor-mcp.js"
+    "mcp": "node scripts/sxseditor-mcp.js",
+    "splash:image": "node scripts/generate-splash-image.js"
   },
   "keywords": [
     "electron",
@@ -53,6 +54,7 @@
     "@electron-forge/plugin-webpack": "^7.11.2",
     "@electron/fuses": "^1.8.0",
     "@electron/rebuild": "^4.0.4",
+    "@napi-rs/canvas": "^1.0.11",
     "@vercel/webpack-asset-relocator-loader": "^1.10.0",
     "babel-loader": "^10.1.1",
     "chai": "^6.2.2",

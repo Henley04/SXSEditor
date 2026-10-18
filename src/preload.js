@@ -11,8 +11,8 @@ async function invokeHeavy(channel,...args){if(!heavyIpcReadyPromise)heavyIpcRea
 // renderer failures — and persists them to the same log file used by the
 // main process. This runs before contextBridge.exposeInMainWorld so it
 // applies to every renderer (main, fragment, settings, modelDownload,
-// resourceManager, singerCreator, audioPreprocess, splash,
-// updateNotification) without any per-window setup.
+// resourceManager, singerCreator, audioPreprocess, updateNotification)
+// without any per-window setup.
 (function attachRendererErrorForwarding() {
   try {
     const fmt = (e) => {

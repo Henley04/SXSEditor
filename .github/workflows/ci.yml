@@ -157,6 +157,11 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
           echo "make_latest=$MAKE_LATEST" >> $GITHUB_OUTPUT
+          # Splash 图里的 "Version X (Stable/Nightly)" 标签。generate-build-info.js
+          # 读 SXS_CHANNEL（只认 stable），写进 build-info.json 再烘焙进位图。
+          # 走 GITHUB_ENV 是为了让后续所有 step（含 npm run package:lite 的
+          # prepackage 钩子）都能读到。
+          echo "SXS_CHANNEL=$([ "$IS_RELEASE" = "true" ] && echo stable || echo nightly)" >> $GITHUB_ENV
           echo "[ci] branch=$BRANCH version=$NEW_VERSION build_version=$BUILD_VERSION tag=$TAG prerelease=$PRERELEASE make_latest=$MAKE_LATEST"
 
       - name: Install dependencies

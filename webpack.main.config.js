@@ -174,27 +174,27 @@ module.exports = {
           to: path.resolve(__dirname, '.webpack/main/SXS.png'),
           noErrorOnMissing: true,
         },
-        // Splash window HTML —— 不走 webpack 渲染入口（原因见 forge.config.js
-        // entryPoints 上方的说明）：@electron-forge/plugin-webpack 强制要求每个
-        // entryPoint 都有 js，而 splash 的设计目标恰恰是"零 JS"。
+        // Splash 位图 —— splash 窗口走的是 BaseWindow + ImageView（主进程内直接
+        // 画 nativeImage，不经过渲染进程），所以既没有 webpack 入口，也没有
+        // HTML：只需要把两张 PNG 放到主 bundle 同目录，splashManager 用
+        // path.join(__dirname, 'splash@2x.png') 同步读取。
         //
-        // 走主进程 CopyPlugin + splashManager.loadFile() 反而更合适：
-        //   · 产物是**逐字拷贝**，没有 HtmlWebpackPlugin 二次处理，也就不会被
-        //     注入 <script defer src="index.js">；
-        //   · 与 assets/SXS.png（就在上面一条）落在同一目录，模板里的相对 URL
-        //     "./SXS.png" 天然解析到 .webpack/main/SXS.png，dev 与 packaged
-        //     两条路径都不需要改；
-        //   · packagerConfig.ignore 的白名单已包含 .webpack，所以打包后
-        //     app.asar/.webpack/main/splash.html 存在，loadFile 可直接读。
+        // 逐字拷贝：不经任何 loader/plugin 处理，像素与生成时完全一致。
+        // packagerConfig.ignore 的白名单已包含 .webpack，所以打包后
+        // app.asar/.webpack/main/splash@2x.png 存在，readFileSync 可直接读。
         //
-        // noErrorOnMissing 是刻意的：src/splash.html 是**生成产物**
-        // （.gitignore 忽略），由 prestart / prepackage 的
-        // scripts/generate-build-info.js 从 .template 生成。prepackage 阶段
-        // verify-build-assets.js 会校验它（见该脚本的REQUIRED_RENDERER_ASSETS），
-        // 缺失时阻断打包，所以这里静默跳过不会掩盖真实问题。
+        // noErrorOnMissing 是刻意的：两张 PNG 是**生成产物**（.gitignore 忽略），
+        // 由 prestart / prepackage 的 scripts/generate-build-info.js →
+        // generate-splash-image.js 生成。prepackage 阶段 verify-build-assets.js
+        // 会校验生成器存在，缺失时阻断打包，所以这里静默跳过不会掩盖真实问题。
         {
-          from: path.resolve(__dirname, 'src/splash.html'),
-          to: path.resolve(__dirname, '.webpack/main/splash.html'),
+          from: path.resolve(__dirname, 'src/splash@2x.png'),
+          to: path.resolve(__dirname, '.webpack/main/splash@2x.png'),
+          noErrorOnMissing: true,
+        },
+        {
+          from: path.resolve(__dirname, 'src/splash@3x.png'),
+          to: path.resolve(__dirname, '.webpack/main/splash@3x.png'),
           noErrorOnMissing: true,
         },
         {
