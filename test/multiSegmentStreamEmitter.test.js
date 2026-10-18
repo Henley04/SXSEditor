@@ -168,7 +168,7 @@ describe('多 segment 流式发射器 (_createSegmentStreamEmitter)', () => {
       expect(chunks[0].isLast).to.equal(true);
     });
 
-    it('最后一个 segment 为空时补 1 样本静音 chunk 承载 isLast', () => {
+    it('最后一个 segment 为空时补静音 chunk 承载 isLast（时间轴补到末尾）', () => {
       const segA = { startBeat: 0, endBeat: 10 };
       const segB = { startBeat: 10, endBeat: 20 };
       const { emitter, chunks } = makeEmitter([segA, segB]);
@@ -176,9 +176,31 @@ describe('多 segment 流式发射器 (_createSegmentStreamEmitter)', () => {
       emitter.segmentDone(1, new Float32Array(0)); // 空结果（全休止 / 异常）
       expect(chunks).to.have.lengthOf(2);
       expect(chunks[0].isLast).to.equal(false);
-      expect(chunks[1].audio.length).to.equal(1);
-      expect(chunks[1].audio[0]).to.equal(0);
+      // 末段无音频：补一段静音把时间轴补到末尾，并承载 isLast
       expect(chunks[1].isLast).to.equal(true);
+      expect(chunks[1].sampleOffset).to.equal(Math.round(10 * SEC));
+      expect(chunks[1].sampleEnd).to.equal(Math.round(20 * SEC));
+      for (let i = 0; i < chunks[1].audio.length; i++) {
+        if (chunks[1].audio[i] !== 0) throw new Error(`tail silence nonzero at ${i}`);
+      }
+    });
+
+    it('末段 vocoder 取整导致的尾部缺口由最后一个 chunk 补静音（流式长度 == 最终长度）', () => {
+      // 真模型实测：末段音频比时间轴短约 241 样本（~10ms）
+      const totalSamples = Math.round(10.01 * SEC);
+      const segA = { startBeat: 0, endBeat: 10 };
+      const audioA = makeAudio(10, 0.1);
+      const { emitter, chunks } = makeEmitter([segA], { totalSamples });
+      emitter.segmentDone(0, audioA);
+      expect(chunks).to.have.lengthOf(1); // 补在最后一个 chunk 内，不追加
+      const last = chunks[0];
+      expect(last.isLast).to.equal(true);
+      expect(last.sampleEnd).to.equal(totalSamples);      // 流式时间轴 == 最终时间轴
+      expect(last.audio.length).to.equal(totalSamples);
+      for (let i = audioA.length; i < last.audio.length; i++) {
+        if (last.audio[i] !== 0) throw new Error(`tail padding nonzero at ${i}`);
+      }
+      expect(audioA.length).to.equal(Math.round(10 * SEC)); // 原始音频不被就地扩写
     });
   });
 

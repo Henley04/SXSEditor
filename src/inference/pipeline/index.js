@@ -3001,6 +3001,18 @@ class OnnxSVSPipeline {
                     // 后续 segment 与本段重叠（其头部将被裁剪）→ 本段尾部渐出防爆破
                     if (nextMeta && nextMeta.relStart < meta.relEnd) fadeOutTail(audio);
                 }
+                if (isLastSeg) {
+                    // 末段尾部补静音：vocoder 输出按帧取整，末段音频常比时间轴短几个
+                    // 采样（实测 ~241 样本 ≈10ms）。补齐后流式时间轴长度与最终混音
+                    // 完全一致，播放头不会在末尾差一截就停。必须并入本 chunk 而不是
+                    // 追加一个新 chunk —— 追加的会被渲染端 isLastReceived 之后的守卫丢弃。
+                    const wantLen = totalSamplesRel - frontier;
+                    if (wantLen > audio.length) {
+                        const padded = new Float32Array(wantLen);
+                        padded.set(audio, 0);
+                        audio = padded;
+                    }
+                }
                 const emitted = emitChunk(audio, isLastSeg);
                 meta.audio = null; // 释放引用
                 nextTimeIdx++;
@@ -4304,25 +4316,7 @@ class OnnxSVSPipeline {
             // chunkFrames < totalFrames <= 50 时会进入流式路径但 _planChunks 返回 null，
             // 导致 segmentAudios 为空、audioData 全零（静音）。因此条件必须与
             // _planChunks 的 safeChunk 逻辑一致。
-            // 短句细分：diffStepChunk 开启但总帧数不足一个 chunk（≤500 帧 ≈10s）时，
-            // 把 chunkFrames 细分为总帧数的一半（下限 50 帧安全值，且必须大于 overlap），
-            // 使短 fragment 预览同样能"边推理边播"。旧实现短句直接落回整段 diffusion
-            // + 整段 vocoder 单 chunk（≤20.5s 走 single-chunk 快路径、只在最后推一个
-            // chunk），分片编辑器播放要等全部推理完才出声。仅影响走流式推送的预览
-            // 路径：导出（不传 onChunkAudio）与多分片流式路径不受影响。
-            // chunkOpts 即 this._currentDiffStepChunkOpts（synthesize() 入口每次重建
-            // 的 per-call 状态），此处改写是为了让 _runDiffusionLoop 的 safeChunk
-            // 判定与本处条件保持一致，否则会落回整段 diffusion。
-            let safeChunkFrames = Math.max(50, Math.floor(chunkOpts?.chunkFrames || 0));
-            if (chunkOpts && chunkOpts.enabled && singleSegOnChunk && !this.useStaticShapes
-                && totalFrames > 100 && totalFrames <= safeChunkFrames) {
-                const halfFrames = Math.floor(totalFrames / 2);
-                if (halfFrames > 50 && halfFrames > (chunkOpts.overlapFrames || 50)) {
-                    chunkOpts.chunkFrames = halfFrames;
-                    safeChunkFrames = Math.max(50, halfFrames);
-                    console.log(`[OnnxSVSPipeline] Short-fragment chunk subdivision: chunkFrames=${chunkOpts.chunkFrames} (totalFrames=${totalFrames})`);
-                }
-            }
+            const safeChunkFrames = Math.max(50, Math.floor(chunkOpts?.chunkFrames || 0));
             // mel 命中时不走分块流式扩散：没有 diffusion 要跑，直接整段 vocoder
             //（调用方对"无 chunk 事件"有整段播放回退，见渲染层 _streamingStarted 兜底）。
             const useStreamingChunked = chunkOpts && chunkOpts.enabled && !this.useStaticShapes
