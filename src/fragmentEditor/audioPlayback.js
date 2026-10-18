@@ -36,6 +36,7 @@ import {
   getTrackBackend,
 } from './state.js';
 import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
+import { buildMelPostprocessPayload, serializePostprocessForSignature } from './postprocessAccess.js';
 import { updateFragmentPlayButton } from './uiControls.js';
 
 // 独占模式 onAudioEnded 退订函数的模块级持有。旧实现只在 rAF 闭包内能退订，
@@ -847,7 +848,10 @@ export function computeFragmentAudioSignature() {
   const notes = getClippedNotes();
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
   const previewOpts = getFragmentPreviewInferenceOptions();
-  const pitchCurveF0 = buildPitchCurveF0Data();
+  // 签名只需要"输入变了"的哈希：F0 后处理链的结果已由下方 ppHash（曲线序列化）
+  // 单独覆盖，这里跳过整条滤波（400ms 自动推理轮询会反复调用本函数，
+  // 长分片实测每次 7–15ms），真正的合成路径（playFragment 等）仍走完整后处理。
+  const pitchCurveF0 = buildPitchCurveF0Data({ postprocess: false });
   const refAudioWavBuffer = getWavFileBuffer();
   const autoShiftEl = document.getElementById('autoShiftCheck');
   const autoShift = autoShiftEl ? autoShiftEl.checked : false;
@@ -880,6 +884,14 @@ export function computeFragmentAudioSignature() {
   // pitchCurveF0 hash — FNV-1a，与服务端 hashArray 一致（消除下采样盲区）
   const f0Hash = pitchCurveF0 ? _hashArrayFNV(pitchCurveF0) : 0;
 
+  // 音色 / 后处理曲线 hash：F0 平滑已体现在 f0Hash 里，但频谱后处理
+  // （mel 平滑 / 过渡插值）不改变 F0，必须单独进签名，否则改曲线后仍播旧音频。
+  let ppHash = 0;
+  const ppSignature = serializePostprocessForSignature();
+  for (let i = 0; i < ppSignature.length; i++) {
+    ppHash = ((ppHash << 5) - ppHash + ppSignature.charCodeAt(i)) | 0;
+  }
+
   // refAudioWavBuffer hash — FNV-1a 全量采样 + 长度折叠，与服务端一致。
   // 旧实现仅用 byteLength：换同长度参考音频时签名不变，会直接播旧音频。
   let refHash = 0;
@@ -890,7 +902,7 @@ export function computeFragmentAudioSignature() {
     refHash = _hashArrayFNV(refBytes);
   }
 
-  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}`;
+  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}`;
 }
 
 export async function playFragment() {
@@ -1109,6 +1121,14 @@ export async function playFragment() {
         cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
         dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
         dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
+        // 频谱后处理（时频平滑 / 过渡频谱插值）：逐帧参数在主进程 vocoder 之前应用。
+        // 未启用时 buildMelPostprocessPayload 返回 null，管线走零开销快路径。
+        melPostprocess: buildMelPostprocessPayload(
+          getClippedNotes(),
+          getCurrentProject() ? getCurrentProject().bpm : 120,
+          getSampleRate(),
+          480,
+        ),
       }),
     });
     setFragmentAudioData(padAudioToFragmentDuration(audioData));
@@ -1265,6 +1285,12 @@ export async function synthesizeFragmentInBackground(opts = {}) {
         cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
         dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
         dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
+        melPostprocess: buildMelPostprocessPayload(
+          notes,
+          getCurrentProject() ? getCurrentProject().bpm : 120,
+          getSampleRate(),
+          480,
+        ),
         // 优先推理：播放进度条所在分段（0 = 交给主进程按"第一个改动分段"决定）
         priorityTimeSec: Number.isFinite(opts.priorityTimeSec) ? opts.priorityTimeSec : 0,
       }),
@@ -1332,6 +1358,12 @@ export async function exportFragment() {
         nSteps: exportOpts.nSteps,
         cfg: exportOpts.cfg,
         cfgRescale: exportOpts.cfgRescale,
+        melPostprocess: buildMelPostprocessPayload(
+          getClippedNotes(),
+          getCurrentProject() ? getCurrentProject().bpm : 120,
+          getSampleRate(),
+          480,
+        ),
       }),
     });
     const paddedAudio = padAudioToFragmentDuration(audioData);

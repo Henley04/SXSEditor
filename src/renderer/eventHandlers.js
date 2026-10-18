@@ -8,7 +8,7 @@ import { setLabel } from '../icons/iconHelper.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty, addAccompanimentFromFile } from './projectManager.js';
 import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
-import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
+import { getBeatWidth, renderFragmentTimeline, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { exportProjectLrc } from './lrcExport.js';
@@ -608,17 +608,19 @@ function _processPendingWheel() {
 
       const newBeatWidth = getBeatWidth();
       state.fragmentScrollX = mouseBeats * newBeatWidth - mouseXInContainer;
-      renderFragmentTimeline();
+      // 不在这里渲染：尾巴上统一 sync + render 一次。旧代码在这里渲染后又走一遍
+      // 尾巴，等于每个缩放帧画两遍整条时间轴（含全部精灵与波形），缩放因此发钝。
     } else if (shift) {
       state.fragmentScrollX += (dx !== 0 ? dx : dy);
     } else {
       state.fragmentScrollY += dy;
     }
-    syncFragmentScroll();
+    // syncFragmentScroll() 不必在这里再调：renderFragmentTimeline() 内部在 clamp
+    // 之后已经调用过（一次 layout 读 + 一次 scrollTop 写）。每帧多调一次等于
+    // 每帧多一次强制同步布局，缩放/滚动这种高频路径上直接吃掉帧预算。
     renderFragmentTimeline();
   } else if (target === dom.singerListEl) {
     state.fragmentScrollY += dy;
-    syncFragmentScroll();
     renderFragmentTimeline();
   }
 }
@@ -629,13 +631,15 @@ function _pushWheel(e, target) {
     _wheelAcc.has = true;
     _wheelAcc.dx = 0;
     _wheelAcc.dy = 0;
-    _wheelAcc.clientX = e.clientX;
     _wheelAcc.zoom = e.ctrlKey || e.metaKey;
     _wheelAcc.shift = e.shiftKey;
     _wheelAcc.target = target;
   }
   _wheelAcc.dx += _normalizeWheel(e, e.deltaX);
   _wheelAcc.dy += _normalizeWheel(e, e.deltaY);
+  // 缩放锚点取「本帧最后一个」鼠标位置，而不是批内第一个：实际绘制发生在帧末，
+  // 用旧位置做锚点会让缩放中心落在指针后方，鼠标划得快时锚点明显漂移。
+  _wheelAcc.clientX = e.clientX;
   if (_wheelRaf) return;
   _wheelRaf = requestAnimationFrame(_processPendingWheel);
 }

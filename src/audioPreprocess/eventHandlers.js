@@ -256,29 +256,39 @@ export function setupEventHandlers() {
     dom.waveformCanvas.style.cursor = 'default';
   });
 
-  // Waveform canvas wheel — rAF-coalesced to avoid layout thrash on trackpads.
-  // The latest wheel event is captured and processed inside a single rAF callback;
-  // subsequent events before the frame fires just overwrite the pending state.
+  // Waveform canvas wheel — rAF-coalesced.
+  // 关键：同一帧内的多个 wheel 事件必须「累加」delta，而不是用最后一个覆盖 ——
+  // 触控板一帧能推 3~5 次事件，覆盖式合并会吃掉大部分滚动/缩放量，手感发飘、
+  // 缩放不跟手。修饰键与鼠标位置取批内最后一个事件（绘制在帧末，锚点要最新）。
   let _wheelRaf = 0;
-  let _pendingWheel = null;
+  const _wheelAcc = { dx: 0, dy: 0, zoom: false, shift: false, ev: null, has: false };
+  const _normWheel = (ev, v) => (ev.deltaMode === 1 ? v * 16 : ev.deltaMode === 2 ? v * 100 : v);
   dom.waveformCanvas.addEventListener('wheel', (e) => {
     if (!state.wavAudioBuffer || !state.pianoRoll) return;
     e.preventDefault();
-    _pendingWheel = e;
+    _wheelAcc.dx += _normWheel(e, e.deltaX);
+    _wheelAcc.dy += _normWheel(e, e.deltaY);
+    _wheelAcc.zoom = e.ctrlKey || e.metaKey;
+    _wheelAcc.shift = e.shiftKey;
+    _wheelAcc.ev = e;
+    _wheelAcc.has = true;
     if (_wheelRaf) return;
     _wheelRaf = requestAnimationFrame(() => {
       _wheelRaf = 0;
-      const ev = _pendingWheel;
-      _pendingWheel = null;
+      if (!_wheelAcc.has) return;
+      const { dx, dy, zoom, shift, ev } = _wheelAcc;
+      _wheelAcc.has = false;
+      _wheelAcc.dx = 0;
+      _wheelAcc.dy = 0;
+      _wheelAcc.ev = null;
       if (!ev || !state.pianoRoll) return;
 
       const rect = dom.waveformCanvas.getBoundingClientRect();
       const pos = { x: ev.clientX - rect.left, y: ev.clientY - rect.top };
 
-      if (ev.ctrlKey || ev.metaKey) {
+      if (zoom) {
         const oldZoomX = state.pianoRoll.zoomX;
-        const delta = ev.deltaY > 0 ? 0.9 : 1.1;
-        state.pianoRoll.zoomX = Math.max(0.05, Math.min(4, state.pianoRoll.zoomX * delta));
+        state.pianoRoll.zoomX = Math.max(0.05, Math.min(4, oldZoomX * Math.pow(0.9, dy / 100)));
         const mouseBeats = (pos.x + state.pianoRoll.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
         state.pianoRoll.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * state.pianoRoll.zoomX - pos.x;
         state.pianoRoll.scrollX = Math.max(0, Math.min(getMaxScrollX(), state.pianoRoll.scrollX));
@@ -286,15 +296,15 @@ export function setupEventHandlers() {
         state.waveformZoomX = state.pianoRoll.zoomX;
         state.pianoRoll._staticCacheDirty = true;
         state.pianoRoll.render();
-      } else if (ev.shiftKey) {
-        state.pianoRoll.scrollX += ev.deltaY;
+      } else if (shift) {
+        state.pianoRoll.scrollX += (dx !== 0 ? dx : dy);
         state.pianoRoll.scrollX = Math.max(0, Math.min(getMaxScrollX(), state.pianoRoll.scrollX));
         state.waveformScrollX = state.pianoRoll.scrollX;
         state.waveformZoomX = state.pianoRoll.zoomX;
         state.pianoRoll._staticCacheDirty = true;
         state.pianoRoll.render();
       } else {
-        state.pianoRoll.scrollY += ev.deltaY;
+        state.pianoRoll.scrollY += dy;
         state.pianoRoll.scrollY = Math.max(0, Math.min(getMaxScrollY(), state.pianoRoll.scrollY));
         state.pianoRoll.render();
       }

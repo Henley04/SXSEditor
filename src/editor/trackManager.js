@@ -141,6 +141,11 @@ function createFragment(data = {}) {
     notes: data.notes ?? [],
     envelopes,
     pitchCurve: data.pitchCurve ?? createPitchCurve(),
+    // 汉字分组与音色/后处理曲线都是分片的持久化字段：createFragment 是显式
+    // 白名单对象，漏登记的字段会在工程 load→addFragment 时被静默丢弃
+    // （postprocess 丢失后编辑器回退全默认，首次自动保存还会把默认值写回）。
+    kanjiGroups: data.kanjiGroups ?? [],
+    postprocess: data.postprocess ?? null,
   };
 }
 

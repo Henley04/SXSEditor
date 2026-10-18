@@ -52,6 +52,59 @@ function _readEnableAntiAliasing() {
 }
 
 /**
+ * 流式预览的共享推送增益（取代逐 chunk 独立的 normalizePeakTo）。
+ *
+ * 为什么不能逐 chunk 独立归一化：normalizePeakTo 只在 peak > 0.95 时缩放，
+ * 于是只有"超标"的 chunk 被压、不超标的 chunk 原样保留 —— 段与段之间的相对电平
+ * 被系统性改写（实测弱唱 0.40 / 高潮 2.50 / 次高潮 1.20 三段，原始动态 15.9 dB
+ * 被压到 7.5 dB）；而推送切点正好落在 WSOLA 重叠区起点（w≈0，前后本应连续），
+ * 相邻两次推送用不同缩放系数就会在该点形成阶跃 → 可听的咔哒/电平跳变。
+ * 最终 output 不受影响（循环结束后统一 normalizePeakTo + loudnormFinal），
+ * 所以症状是"预览与导出听感不一致"。
+ *
+ * 现在的策略：整条流共享一个增益系数。
+ *   - 只在"本段乘上当前增益后仍会超过 TARGET"时才下调增益；
+ *   - 下调的那一段用 ~5 ms 升余弦淡入（从 0 升到新增益），把推送切点上的电平
+ *     阶跃抹平 → 不产生咔哒；同时整段幅度不超过 TARGET（如果改成"从上一增益
+ *     慢慢渐变到新增益"，响段开头的样本仍可能远超 1.0，在设备端硬削波）；
+ *   - 增益永不回升（已推送的段无法回溯，回升会在边界上制造向上跳变）。
+ * 结果是段内动态完整保留，只有"更响的段出现"这一件事会导致整体下调一次，
+ * 且下调点只有 5 ms 的轻微凹陷。
+ *
+ * @param {Float32Array} buf - 待推送的音频段（原地修改）
+ * @param {{gain: number}} state - 跨段共享状态，初始 { gain: 1 }
+ */
+function _applyStreamGain(buf, state) {
+    const TARGET_PEAK = 0.95;
+    // 淡入长度：5 ms @ 24 kHz。足够抹掉阶跃的高频能量（咔哒），短到听不出凹陷。
+    const FADE_SAMPLES = 120;
+    const n = buf.length;
+    if (n === 0) return;
+
+    let peak = 0;
+    for (let i = 0; i < n; i++) {
+        const abs = Math.abs(buf[i]);
+        if (abs > peak) peak = abs;
+    }
+
+    const prev = state.gain;
+    if (peak * prev <= TARGET_PEAK) {
+        if (prev !== 1) {
+            for (let i = 0; i < n; i++) buf[i] *= prev;
+        }
+        return;
+    }
+    const next = TARGET_PEAK / peak;
+    const fade = Math.min(n, FADE_SAMPLES);
+    for (let i = 0; i < fade; i++) {
+        // 升余弦：i=0 权重 0，i=fade 权重 1（淡入只在增益变化的那一段出现）
+        buf[i] *= next * 0.5 * (1 - Math.cos(Math.PI * i / fade));
+    }
+    for (let i = fade; i < n; i++) buf[i] *= next;
+    state.gain = next;
+}
+
+/**
  * 2nd-order Butterworth low-pass filter (biquad, bilinear-transformed IIR).
  *
  * Provides steeper stopband rejection (−12 dB/oct vs −6 dB/oct for 1st-order)
@@ -126,13 +179,19 @@ function _oversample2xAntiAlias(samples, srcSr, dstSr) {
     const N = samples.length;
     if (N === 0) return samples;
 
-    // Step 1: 2× upsample via zero-stuffing
-    // Insert zeros between samples: [s0, 0, s1, 0, s2, 0, ...]
-    // The spectral effect is: original spectrum replicated at multiples of srcSr.
+    // Step 1: 2× upsample via zero-stuffing, with the mandatory L=2 gain.
+    // Insert zeros between samples: [2·s0, 0, 2·s1, 0, 2·s2, 0, ...]
+    // The spectral effect is: original spectrum replicated at multiples of srcSr
+    // AND scaled by 1/L (zero-stuffing spreads the same energy over L times the
+    // samples). The anti-image LP below has unity DC gain, so without the ×L the
+    // reconstructed sequence comes out at 1/L = −6.02 dB. That gain error used to
+    // hit every reference-audio feature extraction down this path: mel amplitude
+    // shifted down 6 dB, and extractRefF0FromWav's minRms gate halved (quiet
+    // reference phrases read as silence → F0 = 0).
     const upN = N * 2;
     const upsampled = new Float32Array(upN);
     for (let i = 0; i < N; i++) {
-        upsampled[i * 2] = samples[i];
+        upsampled[i * 2] = samples[i] * 2;
         // odd indices remain 0 (zero-stuffing)
     }
 
@@ -1424,11 +1483,11 @@ class Postprocessing {
             // M7: streaming preview consistency — push the peak-normalized
             // chunk to onChunkComplete BEFORE loudnorm, so the streaming
             // preview receives the same peak-normalized audio as the
-            // multi-chunk path (whose onChunkComplete also sends
-            // normalizePeakTo(chunkAudio), with loudnorm applied only to the
-            // final merged output). The final returned `output` is loudnorm'd
-            // below, matching the multi-chunk path's final loudnormFinal.
-            // 单 chunk 路径：一次性推送全部音频（流式播放用）
+            // multi-chunk path (which pushes its segments through the shared
+            // _applyStreamGain, with loudnorm applied only to the final merged
+            // output). The final returned `output` is loudnorm'd below, matching
+            // the multi-chunk path's final loudnormFinal. 单 chunk 只有一次推送，
+            // 全局归一化与"共享增益"等价。
             if (onChunkComplete) {
                 try {
                     onChunkComplete({
@@ -1514,6 +1573,8 @@ class Postprocessing {
         //   validateVocoderOutput 拦截此类无效输出。
         const totalChunkCount = chunkSpecs.length;
         let committedSamples = 0;
+        // 流式推送的共享增益状态（跨 chunk 保持，见 _applyStreamGain 注释）。
+        const streamGain = { gain: 1 };
         for (let i = 0; i < totalChunkCount; i++) {
             const spec = chunkSpecs[i];
             // 流式创建当前 chunk 的输入张量（不预存到 chunkSpecs）。
@@ -1656,14 +1717,16 @@ class Postprocessing {
             // - 首 chunk：stableEnd = (isLast ? chunkEnd : chunkEnd - overlapFrames) * vocoderHopSize
             // - 中间 chunk：包含头部 overlap 的 crossfade 结果 + 稳定段（weightSum=1）
             // - 末 chunk：stableEnd = chunkEnd * vocoderHopSize（尾部无 fade）
-            // 注意：peak 归一化在每 chunk 推送前独立应用（仅向下缩放，peak>0.95 时生效），
-            // 防止流式音频在 Int16 转换时削波。最终 output 仍会在循环结束后统一 normalizePeakTo。
+            // 注意：推送前按"整条流共享一个增益系数"缩放（_applyStreamGain），
+            // 而不是每个 chunk 独立归一化 —— 后者会把段间相对电平抹平并在推送切点
+            // 制造阶跃（详见 _applyStreamGain 注释）。最终 output 自身不被推送缩放影响，
+            // 循环结束后仍统一 normalizePeakTo + loudnormFinal。
             if (onChunkComplete) {
                 const stableEndFrames = spec.isLast ? spec.chunkEnd : (spec.chunkEnd - overlapFrames);
                 const stableEnd = Math.min(stableEndFrames * vocoderHopSize, totalSamples);
                 if (stableEnd > committedSamples) {
                     const chunkAudio = output.slice(committedSamples, stableEnd);
-                    normalizePeakTo(chunkAudio);
+                    _applyStreamGain(chunkAudio, streamGain);
                     try {
                         onChunkComplete({
                             chunkIndex: i,
@@ -1886,5 +1949,8 @@ module.exports = {
         countNonFinite: _countNonFinite,
         melTransformInputRank: _melTransformInputRank,
         autocorrBestLag: _autocorrBestLag,
+        // 抗混叠管线 / 流式共享增益：供单测直接验证增益与跨段连续性
+        oversample2xAntiAlias: _oversample2xAntiAlias,
+        applyStreamGain: _applyStreamGain,
     },
 };

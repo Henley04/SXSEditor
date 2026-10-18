@@ -185,11 +185,11 @@ DirectML supports NVIDIA, AMD, and Intel GPUs (both discrete and integrated). NP
 
 ### What is the output sample rate?
 
-Synthesis runs at 24kHz internally (the SVS model's native rate). The default output sample rate is **48 kHz** (changed from 24 kHz in earlier versions), with 2× oversampling anti-aliasing for improved quality. Output sample rate is configurable in Settings (22050 to 192000 Hz). In exclusive mode, the device must support the selected rate.
+Synthesis runs at 24kHz internally (the SVS model's native rate). The default output sample rate is **48 kHz** (changed from 24 kHz in earlier versions), with a band-limited Kaiser windowed-sinc resampler for accurate high-frequency reproduction. Output sample rate is configurable in Settings (22050 to 192000 Hz). In exclusive mode, the device must support the selected rate.
 
 ### What format is the exported WAV?
 
-48 kHz, 32-bit IEEE float WAV by default (bit depth selectable 16 / 24 / 32-bit in the Export dialog). Export sample rate is selectable: 24/44.1/48/96 kHz. The SVS model runs at 24 kHz internally and the output is resampled with 2× oversampling anti-aliasing.
+48 kHz, 32-bit IEEE float WAV by default (bit depth selectable 16 / 24 / 32-bit in the Export dialog). Export sample rate is selectable: 24/44.1/48/96 kHz. The SVS model runs at 24 kHz internally and the output is resampled with a band-limited Kaiser windowed-sinc interpolator.
 
 ---
 
@@ -242,7 +242,7 @@ Dynamic Thresholding is a per-frame percentile clipping technique (Imagen, arXiv
 
 ### Why was the default sample rate changed to 48 kHz?
 
-The SVS model runs at 24 kHz internally. Previously, the output was also 24 kHz, which limited high-frequency fidelity. The default is now 48 kHz with 2× oversampling anti-aliasing, which significantly improves output quality. The export sample rate is selectable (24/44.1/48/96 kHz) if you need a different rate.
+The SVS model runs at 24 kHz internally. Previously, the output was also 24 kHz, which limited high-frequency fidelity. The default is now 48 kHz, upsampled by a band-limited Kaiser windowed-sinc interpolator, which preserves the full band the model produces. The export sample rate is selectable (24/44.1/48/96 kHz) if you need a different rate.
 
 ---
 

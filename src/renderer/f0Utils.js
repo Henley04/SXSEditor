@@ -1,4 +1,6 @@
 import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
+import { buildF0PostprocessParams, hasF0PostprocessEffect } from '../shared/postprocessCurves.js';
+import { applyF0Postprocess } from '../fragmentEditor/f0Smoothing.js';
 
 // 复用分片编辑器 buildPitchCurveF0Data + getPitchAtTime + generateAutoPitchPoints 的逻辑，
 // 但接受 fragment 参数（不依赖分片编辑器全局 state）。
@@ -10,7 +12,10 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
   if (!clippedNotes || clippedNotes.length === 0) return null;
   const sortedNotes = clippedNotes.slice().sort((a, b) => a.start - b.start || b.duration - a.duration);
   const hasVibrato = sortedNotes.some(n => n.vibrato && n.vibrato.enabled);
-  if (!hasCustom && !hasVibrato) return null;
+  // F0 后处理（中值 / Savitzky-Golay / 贝塞尔过渡）即使没有手绘音高曲线也必须生效，
+  // 否则用户在"音色"lane 里开的平滑只对改过音高的分片有效（与分片编辑器一致）。
+  const ppActive = hasF0PostprocessEffect(fragment.postprocess || null);
+  if (!hasCustom && !hasVibrato && !ppActive) return null;
 
   const fragDuration = fragment.duration || Infinity;
   const lastNote = sortedNotes[sortedNotes.length - 1];
@@ -46,14 +51,26 @@ export function buildFragmentPitchCurveF0(fragment, clippedNotes, bpm) {
       continue;
     }
     let pitch = _getPitchAtTimeForFragment(pc, sortedAnchors, autoPoints, frameBeat, autoPointsUsable);
+    // 纯 MIDI 回退（与编辑器 getPitchAtTime 的 activeNote 回退一致）：
+    // autoPoints 全部 breakAfter 时上面的函数恒返回 null，若无此回退，
+    // "纯 MIDI 分片 + 开 F0 后处理"会产出全零 F0 → 整段静音。
+    if (pitch === null) pitch = note.pitch;
     if (note.vibrato && note.vibrato.enabled) {
-      if (pitch === null) pitch = note.pitch;
       pitch += _computeVibratoOffset(note, frameBeat, bpm);
     }
     if (pitch !== null && pitch > 0) {
       f0Array[i] = 440 * Math.pow(2, (pitch - 69) / 12);
     } else {
       f0Array[i] = 0;
+    }
+  }
+
+  // F0 后处理：与分片编辑器 buildPitchCurveF0Data 相同的三步链（中值→SG→贝塞尔），
+  // 逐帧参数来自 fragment.postprocess 曲线，保证主窗口播放/导出与分片编辑器听感一致。
+  if (ppActive && totalFrames > 0) {
+    const params = buildF0PostprocessParams(fragment.postprocess || null, totalFrames, bpm, SAMPLE_RATE, SVS_HOP_SIZE);
+    if (params.active) {
+      return applyF0Postprocess(f0Array, params, { sampleRate: SAMPLE_RATE, hopSize: SVS_HOP_SIZE });
     }
   }
   return f0Array;

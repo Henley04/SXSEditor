@@ -104,7 +104,7 @@ export function initPianoRoll() {
         cancelAnimationFrame(this._wheelRaf);
         this._wheelRaf = 0;
       }
-      this._pendingWheel = null;
+      this._wheelAcc = null;
       window.removeEventListener('resize', this._boundResize);
       document.removeEventListener('mouseup', this._boundMouseUp);
       document.removeEventListener('keydown', this._boundKeyDown);
@@ -334,41 +334,59 @@ export function initPianoRoll() {
 
     _onWheel(e) {
       e.preventDefault();
-      // rAF-coalesce wheel events: trackpads fire many events per frame, and
-      // re-rendering the piano roll on every event causes jank. Capture the
-      // latest event and process it inside a single rAF callback; subsequent
-      // events before the frame fires just overwrite the pending state.
-      this._pendingWheel = e;
+      // rAF 合并 wheel：一帧内到达的多个事件必须「累加」delta，不能只保留最后一个。
+      // 触控板一帧能推 3~5 次事件，只留最后一个会把大部分滚动/缩放量吃掉 ——
+      // 表现就是缩放/滚动慢半拍、不跟手。缩放量按 delta 指数映射，与手势幅度成正比。
+      if (!this._wheelAcc) {
+        this._wheelAcc = { dx: 0, dy: 0, zoom: false, shift: false, ev: null, has: false };
+      }
+      const acc = this._wheelAcc;
+      const norm = (v) => (e.deltaMode === 1 ? v * 16 : e.deltaMode === 2 ? v * 100 : v);
+      acc.dx += norm(e.deltaX);
+      acc.dy += norm(e.deltaY);
+      // 修饰键与鼠标位置取「本帧最后一个」事件：绘制发生在帧末，用旧位置做
+      // 缩放锚点会让缩放中心落后于指针。
+      acc.zoom = e.ctrlKey || e.metaKey;
+      acc.shift = e.shiftKey;
+      acc.ev = e;
+      acc.has = true;
       if (this._wheelRaf) return;
-      this._wheelRaf = requestAnimationFrame(() => {
-        this._wheelRaf = 0;
-        const ev = this._pendingWheel;
-        this._pendingWheel = null;
-        if (!ev) return;
+      this._wheelRaf = requestAnimationFrame(() => this._applyWheelAcc());
+    },
 
-        const pos = this._getMousePos(ev);
-        if (ev.ctrlKey || ev.metaKey) {
-          const oldZoomX = this.zoomX;
-          const delta = ev.deltaY > 0 ? 0.9 : 1.1;
-          this.zoomX = Math.max(0.05, Math.min(4, this.zoomX * delta));
-          const mouseBeats = (pos.x + this.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
-          this.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * this.zoomX - pos.x;
-          this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
-          state.waveformZoomX = this.zoomX;
-          state.waveformScrollX = this.scrollX;
-          drawWaveformWithPlayhead(this.getCurrentTime());
-        } else if (ev.shiftKey) {
-          this.scrollX += ev.deltaY;
-          this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
-          state.waveformScrollX = this.scrollX;
-          drawWaveformWithPlayhead(this.getCurrentTime());
-        } else {
-          this.scrollY += ev.deltaY;
-          this.scrollY = Math.max(0, Math.min(getMaxScrollY(), this.scrollY));
-        }
-        this._staticCacheDirty = true;
-        this.render();
-      });
+    _applyWheelAcc() {
+      this._wheelRaf = 0;
+      const acc = this._wheelAcc;
+      if (!acc || !acc.has) return;
+      acc.has = false;
+      const { dx, dy, zoom, shift, ev } = acc;
+      acc.dx = 0;
+      acc.dy = 0;
+      acc.ev = null;
+      if (!ev) return;
+
+      const pos = this._getMousePos(ev);
+      if (zoom) {
+        const oldZoomX = this.zoomX;
+        const nextZoomX = Math.max(0.05, Math.min(4, oldZoomX * Math.pow(0.9, dy / 100)));
+        this.zoomX = nextZoomX;
+        const mouseBeats = (pos.x + this.scrollX - PIANO_KEY_WIDTH) / (BEAT_WIDTH * oldZoomX);
+        this.scrollX = PIANO_KEY_WIDTH + mouseBeats * BEAT_WIDTH * this.zoomX - pos.x;
+        this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
+        state.waveformZoomX = this.zoomX;
+        state.waveformScrollX = this.scrollX;
+        drawWaveformWithPlayhead(this.getCurrentTime());
+      } else if (shift) {
+        this.scrollX += (dx !== 0 ? dx : dy);
+        this.scrollX = Math.max(0, Math.min(getMaxScrollX(), this.scrollX));
+        state.waveformScrollX = this.scrollX;
+        drawWaveformWithPlayhead(this.getCurrentTime());
+      } else {
+        this.scrollY += dy;
+        this.scrollY = Math.max(0, Math.min(getMaxScrollY(), this.scrollY));
+      }
+      this._staticCacheDirty = true;
+      this.render();
     },
 
     _secondsToBeats(seconds) {

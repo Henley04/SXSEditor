@@ -752,7 +752,8 @@
   gap: 4px;
 }
 
-.pitch-ctx-preset {
+.pitch-ctx-preset,
+.pitch-ctx-strength-preset {
   padding: 4px 6px;
   font-size: var(--font-xs);
   color: var(--fg-primary);
@@ -765,12 +766,14 @@
               border-color var(--motion-fast) var(--ease-standard),
               transform var(--motion-fast) var(--ease-standard);
 }
-.pitch-ctx-preset:hover {
+.pitch-ctx-preset:hover,
+.pitch-ctx-strength-preset:hover {
   background: var(--accent-softer);
   border-color: var(--accent-soft);
   color: var(--accent-fg);
 }
-.pitch-ctx-preset.active {
+.pitch-ctx-preset.active,
+.pitch-ctx-strength-preset.active {
   background: var(--accent);
   border-color: var(--accent-hover);
   color: var(--fg-on-accent);
@@ -1104,3 +1107,118 @@
     scroll-behavior: auto !important;
   }
 }
+
+/* ==================== Timbre / Postprocess lane ==================== */
+/* 参数面板头部改为可换行：音色 lane 需要第二行放参数子标签（每个参数一条曲线）。 */
+.param-panel-header {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 32px;
+  padding: 4px var(--space-3);
+  row-gap: 4px;
+}
+
+.param-subtabs {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-left: 36px;
+}
+
+.pp-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  opacity: 0.75;
+  margin-right: 2px;
+}
+.pp-group-label:not(:first-child) {
+  margin-left: 10px;
+}
+
+.pp-chip {
+  padding: 2px 9px;
+  font-size: var(--font-sm, 12px);
+  font-weight: 600;
+  background: var(--bg-button);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard);
+}
+.pp-chip:hover {
+  background: var(--bg-button-hover);
+  color: var(--fg-primary);
+}
+.pp-chip.active {
+  background: var(--accent-soft, rgba(91, 141, 239, 0.18));
+  border-color: var(--accent);
+  color: var(--accent-fg, var(--accent));
+}
+
+/* 检查器里的参数滑块行 */
+.pp-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pp-row-group {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  opacity: 0.75;
+  margin: 6px 0 2px;
+}
+.pp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pp-row-label {
+  flex: 0 0 78px;
+  text-align: left;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-size: var(--font-sm, 12px);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pp-row-label:hover { color: var(--fg-primary); }
+.pp-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+  height: 16px;
+  cursor: pointer;
+}
+.pp-row-val {
+  flex: 0 0 44px;
+  text-align: right;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 10.5px;
+  color: var(--fg-secondary);
+}
+.pp-select {
+  flex: 1 1 auto;
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+  padding: 2px 6px;
+  height: 24px;
+}
+.pp-select:hover { border-color: var(--accent); }

@@ -152,11 +152,40 @@ function _groupFragmentsBySinger(fragments) {
 // ---------------------------------------------------------------------------
 const NOTE_SPRITE_MIN_NOTES = 24;
 const NOTE_SPRITE_MAX_ENTRIES = 96;
+// 精灵位图分辨率必须与「当前缩放后的屏宽」解耦：
+//   旧实现把缓存键写成精确的 cssW（= fragWidth），Ctrl+滚轮每缩放一点，屏宽就
+//   变一点 → 每个可见分片每帧都 cache miss，于是每帧都新建一张离屏 canvas 并把
+//   分片里所有音符重画一遍。缩放 60 帧 = 60×N 次位图分配（数 MB/帧），帧时间
+//   直接飙到几十毫秒，表现为"缩放不跟手"，而滚动时屏宽不变所以完全正常。
+//   现在改为：位图按「当前屏宽 × 2」建一次，之后只要分辨率够用就直接
+//   drawImage 缩放复用（缩小属降采样、轻微放大属插值，观感无损）。
+//   连续放大时屏宽必须翻倍才会触发下一次重建：0.25×→4× 全程每个分片只重建 4 次，
+//   其余帧零分配；缩小方向永不重建。
+const NOTE_SPRITE_MAX_CSS_W = 3072; // 位图上限：64 拍分片在 4× 缩放下屏宽上万 px，
+                                    // 不设上限会瞬间分配出十几 MB 的位图
+const NOTE_SPRITE_MIN_CSS_W = 24;   // 极小分片（<24px）没必要为它建位图
+const NOTE_SPRITE_GROWTH = 2;       // 建图时超采样倍数 = 下一次重建前的放大余量
+// 缓存总字节预算：条目数不是好的内存度量（一张 3072px 宽的位图在 dpr=2 下约
+// 1.4MB）。超预算整表清空（与旧的条目数上限同一策略），避免长工程缩放浏览时
+// 驻留位图无限增长。
+const NOTE_SPRITE_MAX_BYTES = 48 * 1024 * 1024;
 let _noteSpriteCache = new Map();
+let _noteSpriteCacheBytes = 0;
+
+/** 当前屏宽下精灵至少需要的 CSS 宽度（夹到 [MIN, MAX]，MAX 之上不再重建）。 */
+function _spriteNeedWidth(fragWidth) {
+  return Math.min(NOTE_SPRITE_MAX_CSS_W, Math.max(NOTE_SPRITE_MIN_CSS_W, fragWidth));
+}
 
 /** 分片音符内容或主题变化后调用，强制重建精灵。 */
 export function invalidateFragmentNoteSprites() {
   _noteSpriteCache.clear();
+  _noteSpriteCacheBytes = 0;
+}
+
+/** 单张精灵位图的近似字节数（RGBA 4 字节/像素）。 */
+function _spriteBytes(cssW, dpr) {
+  return Math.max(1, Math.floor(cssW * dpr)) * Math.max(1, Math.floor(FRAGMENT_HEIGHT * dpr)) * 4;
 }
 
 function _buildNoteSprite(fragment, cssW, fragDuration, dpr) {
@@ -166,10 +195,9 @@ function _buildNoteSprite(fragment, cssW, fragDuration, dpr) {
   const c2 = cv.getContext('2d');
   if (!c2) return null;
   c2.setTransform(dpr, 0, 0, dpr, 0, 0);
-  c2.beginPath();
-  c2.roundRect(0, 0, cssW, FRAGMENT_HEIGHT, 6);
-  c2.clip();
-
+  // 不在这里做圆角裁剪：位图分辨率与屏幕显示宽度不再相等（见 _spriteNeedWidth），
+  // 位图内的圆角半径在缩放后会被拉伸成椭圆/超大圆角。改为绘制时用分片自身的
+  // roundRect 裁剪（半径恒为 6px），位图只负责音符条本身。
   const notes = fragment.notes;
   const midiAreaTop = 22;
   const midiAreaHeight = FRAGMENT_HEIGHT - 26;
@@ -194,19 +222,36 @@ function _buildNoteSprite(fragment, cssW, fragDuration, dpr) {
 function _getNoteSprite(fragment, fragWidth, fragDuration, dpr) {
   const notes = fragment.notes;
   if (!notes || notes.length < NOTE_SPRITE_MIN_NOTES) return null;
-  const cssW = Math.max(1, Math.round(fragWidth));
+  const needW = _spriteNeedWidth(fragWidth);
   const hit = _noteSpriteCache.get(fragment.id);
-  if (hit && hit.w === cssW && hit.color === fragment.color
+  // 命中条件：内容未变，且位图分辨率 ≥ 当前需求。
+  // 位图比需求大是好事（缩小/轻微放大都直接插值复用），不要为此重建 ——
+  // 旧实现要求精确相等，导致缩放时每帧重建全部精灵。
+  if (hit && hit.w >= needW && hit.color === fragment.color
       && hit.len === notes.length && hit.dur === fragDuration && hit.dpr === dpr) {
     return hit.canvas;
   }
-  const cv = _buildNoteSprite(fragment, cssW, fragDuration, dpr);
+  // 重建分辨率取「当前需求 × 超采样」与「旧位图分辨率」的较大者：
+  // 内容变化（改色/加音符）触发重建时不要顺手把分辨率降下来，否则随后放大又要重建一次。
+  const buildW = Math.min(
+    NOTE_SPRITE_MAX_CSS_W,
+    Math.max(needW * NOTE_SPRITE_GROWTH, hit ? hit.w : 0),
+  );
+  const cv = _buildNoteSprite(fragment, buildW, fragDuration, dpr);
   if (!cv) return null;
-  if (_noteSpriteCache.size >= NOTE_SPRITE_MAX_ENTRIES) _noteSpriteCache.clear();
+  // 记账：替换旧条目时先扣掉它的占用
+  if (hit) _noteSpriteCacheBytes -= _spriteBytes(hit.w, hit.dpr);
+  const bytes = _spriteBytes(buildW, dpr);
+  if (_noteSpriteCache.size >= NOTE_SPRITE_MAX_ENTRIES
+      || _noteSpriteCacheBytes + bytes > NOTE_SPRITE_MAX_BYTES) {
+    _noteSpriteCache.clear();
+    _noteSpriteCacheBytes = 0;
+  }
   _noteSpriteCache.set(fragment.id, {
-    canvas: cv, w: cssW, color: fragment.color,
+    canvas: cv, w: buildW, color: fragment.color,
     len: notes.length, dur: fragDuration, dpr,
   });
+  _noteSpriteCacheBytes += bytes;
   return cv;
 }
 
@@ -526,10 +571,17 @@ export function renderFragmentTimeline() {
 
       // MIDI note visualization
       if (fragment.notes && fragment.notes.length > 0) {
-        // 音符较多时复用离屏精灵，拖动/滚动时每帧只做一次 drawImage
+        // 音符较多时复用离屏精灵，拖动/滚动/缩放时每帧只做一次 drawImage。
+        // 精灵位图分辨率与屏宽解耦（见 _spriteNeedWidth），因此这里必须用分片
+        // 自身的圆角矩形裁剪：否则位图四角的音符条会溢出圆角。
         const sprite = _getNoteSprite(fragment, fragWidth, fragment.duration, dpr);
         if (sprite) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(fragX, fragY, fragWidth, FRAGMENT_HEIGHT, radius);
+          ctx.clip();
           ctx.drawImage(sprite, fragX, fragY, fragWidth, FRAGMENT_HEIGHT);
+          ctx.restore();
         } else {
           ctx.save();
           ctx.beginPath();

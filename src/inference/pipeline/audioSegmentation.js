@@ -355,6 +355,22 @@ class AudioSegmentation {
         // singerId 必须纳入缓存键：分片移动到不同歌手时，即使参考音频内容相同（或均为空），
         // 也必须触发重新合成，否则会命中旧缓存返回上一个歌手的音频。
         const singerId = options.singerId || null;
+        // melPostprocess（频谱后处理曲线）直接改写 vocoder 输入的 mel，不纳入键时
+        // "只改曲线"会命中旧缓存返回改前音频，且渲染层会把旧音频打上新签名。
+        // hashArray 对长数组按步长采样（≤2000 点），对每帧载荷的开销可忽略。
+        const mp = options.melPostprocess || null;
+        let melHash = 'off';
+        if (mp && typeof mp === 'object') {
+            melHash = [
+                mp.frames || 0,
+                Number.isFinite(Number(mp.startBeat)) ? Number(mp.startBeat).toFixed(4) : 'x',
+                Number(mp.bpm) || 'x',
+                this.hashArray(mp.sigmaT || []),
+                this.hashArray(mp.sigmaF || []),
+                this.hashArray(mp.blend || []),
+                this.hashArray(mp.boundaries || []),
+            ].join(':');
+        }
 
         let notesHash = 0;
         for (let i = 0; i < notes.length; i++) {
@@ -409,7 +425,7 @@ class AudioSegmentation {
             }
         }
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_mp${melHash}`;
     }
 
     /**

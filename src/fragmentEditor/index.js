@@ -18,6 +18,8 @@ import {
   getNotes,
   getEnvelopes,
   getPitchCurve,
+  getKanjiGroups,
+  getPostprocess,
 } from './state.js';
 
 // Initialize pipeline
@@ -180,11 +182,17 @@ window.addEventListener('beforeunload', () => {
       currentFragment.notes = getNotes();
       currentFragment.envelopes = getEnvelopes();
       currentFragment.pitchCurve = getPitchCurve();
+      currentFragment.kanjiGroups = getKanjiGroups();
+      currentFragment.postprocess = getPostprocess();
+      // 自动保存有 500ms 防抖：关窗前最后一段编辑必须靠这次同步保存兜底，
+      // 漏掉 postprocess/kanjiGroups 就等于丢掉刚画的曲线/汉字分组。
       if (window.electronAPI?.saveFragmentDataSync) {
         window.electronAPI.saveFragmentDataSync(currentFragment.id, {
           notes: getNotes(),
           envelopes: getEnvelopes(),
           pitchCurve: getPitchCurve(),
+          kanjiGroups: getKanjiGroups(),
+          postprocess: getPostprocess(),
           startTime: currentFragment.startTime,
           duration: currentFragment.duration,
         });

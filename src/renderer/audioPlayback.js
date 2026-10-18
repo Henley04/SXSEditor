@@ -1,5 +1,6 @@
 import { state, dom, trackManager } from './state.js';
-import { SAMPLE_RATE } from './constants.js';
+import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
+import { buildMelPostprocessPayload } from '../shared/postprocessCurves.js';
 import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
 import { showAlertDialog } from '../alertDialog.js';
@@ -405,6 +406,15 @@ export async function playAll() {
             cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
             dynamicThresholdEnabled: inferenceOpts.dynamicThresholdEnabled,
             dynamicThresholdPercentile: inferenceOpts.dynamicThresholdPercentile,
+            // 频谱后处理（音色 → 频谱曲线）：随该 fragment 的 postprocess 下发，
+            // 主窗口播放/导出与分片编辑器听感一致（未启用时为 null，零开销）。
+            melPostprocess: buildMelPostprocessPayload(
+              fragment.postprocess || null,
+              clippedNotes,
+              state.project.bpm,
+              SAMPLE_RATE,
+              SVS_HOP_SIZE,
+            ),
           }, singer),
         });
       }
@@ -721,6 +731,15 @@ export async function playAll() {
             cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
             dynamicThresholdEnabled: inferenceOpts.dynamicThresholdEnabled,
             dynamicThresholdPercentile: inferenceOpts.dynamicThresholdPercentile,
+            // 频谱后处理（音色 → 频谱曲线）：随该 fragment 的 postprocess 下发，
+            // 主窗口播放/导出与分片编辑器听感一致（未启用时为 null，零开销）。
+            melPostprocess: buildMelPostprocessPayload(
+              fragment.postprocess || null,
+              clippedNotes,
+              state.project.bpm,
+              SAMPLE_RATE,
+              SVS_HOP_SIZE,
+            ),
           }, singer),
         });
 

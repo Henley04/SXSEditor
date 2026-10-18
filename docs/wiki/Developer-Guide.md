@@ -338,7 +338,7 @@ Several audio post-processing improvements have been added to the synthesis outp
 
 - **WSOLA crossfade**: At vocoder chunk boundaries (where long audio is split for processing), WSOLA (Waveform Similarity Overlap-Add) replaces the previous Hann overlap-add method. This produces smoother transitions by matching waveform similarity at crossfade points, reducing audible clicks and discontinuities.
 - **EBU R128 loudness normalization**: The final mix is normalized to −14 LUFS with a true-peak limiter at −1 dBTP, ensuring consistent loudness across projects and compliance with streaming platform standards.
-- **2× oversampling anti-aliasing**: A full oversampling pipeline is applied during resampling from the model's native 24 kHz to the output sample rate (default 48 kHz). This reduces aliasing artifacts and improves high-frequency fidelity.
+- **Kaiser windowed-sinc resampling**: the model's native 24 kHz output is upsampled to the selected output rate (48 kHz by default) by a Kaiser-windowed sinc interpolator (β=5, ±12 taps) that band-limits at 0.95 × destination Nyquist. An optional 2× oversampling anti-aliasing stage (`enableAntiAliasing`) applies only to *reference-audio downsampling* (44.1k/48k → 24k, for reference mel/F0 extraction) — it cannot affect exported audio, because export is an upsampling path.
 
 ### Cooperative Synthesis Cancellation
 

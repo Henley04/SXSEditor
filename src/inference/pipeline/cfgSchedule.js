@@ -152,6 +152,14 @@ function interpolateKeyframes(keyframes, step, start, end, totalSteps) {
  * 与 cfgRescale 的区别：cfgRescale 通过方差匹配全局缩放；
  * dynamic threshold 通过分位数截断局部极端值。两者可叠加使用。
  *
+ * 与 Imagen 原式的差异（有意为之）：论文写作 x ← clamp(x, −s, s) / s，
+ * 那个 /s 的前提是图像像素域已经落在 [−1, 1]，s ≥ 1 时除以 s 才等价于
+ * "把越界样本拉回合法值域"。本项目这一层的变量是**标准化 mel 域**的速度场
+ * （mean≈0、std≈1，p99.5 量级 2~3），没有统一的 [−1, 1] 值域：逐帧除 s 会把
+ * 速度场整体缩小 2~3 倍，等效于把采样步数砍掉一半以上，直接破坏
+ * Q-Drift（Euler@32 + CFG 3.0 + rescale 0.7）的校准合约。因此这里只做
+ * 截断（保留符号、幅值压到阈值），不做 /s 重映射。
+ *
  * 分位数在 mel 维度上估计（128 维/帧，保持时间局部性），并使用
  * 线性插值（percentile × (n-1)，取相邻两 rank 插值）而不是 floor 取整：
  * floor(percentile × 128) 在 percentile ∈ [0.99219, 1.0) 时恒等于 127

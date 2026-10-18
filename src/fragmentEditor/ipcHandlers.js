@@ -32,8 +32,10 @@ import {
   invalidatePitchCurveCache,
   setFragmentDataReceived,
   getKanjiGroups, setKanjiGroups,
+  setPostprocess, invalidateTimbreCache, getSelectedTimbreAnchors,
 } from './state.js';
 import { PARAM_MODES } from './constants.js';
+import { normalizePostprocessState } from '../shared/postprocessCurves.js';
 import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
 import { updateParamModeButtons } from './uiControls.js';
 import { normalizeTrackBackend } from './pluginEditorMode.js';
@@ -141,6 +143,14 @@ async function handleFragmentData(data) {
     });
   }
   invalidatePitchCurveCache();
+
+  // 音色 / 后处理曲线：旧工程没有该字段 → 退回全默认（所有处理关闭，音频与旧版本一致）。
+  // normalizePostprocessState 逐参数合并到注册表默认值上，并把默认值/锚点值全部
+  // 夹紧到注册表值域 —— 手改工程或跨版本字段越界时不会把越界 σ/百分比送进管线
+  // （σ 越界会让高斯核半径按 3σ 膨胀，最坏情况长时间卡死主进程）。
+  setPostprocess(normalizePostprocessState(data.fragment.postprocess || null));
+  invalidateTimbreCache();
+  getSelectedTimbreAnchors().clear();
 
   setDragOperation(null);
   setDragMode(null);

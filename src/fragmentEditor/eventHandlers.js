@@ -1,5 +1,5 @@
 import { showAlertDialog } from '../alertDialog.js';
-import { HistoryManager } from '../editor/historyManager.js';
+import { t } from '../i18n/index.js';
 import { initPipeline } from './pipeline.js';
 import {
   BEAT_WIDTH, NOTE_HEIGHT, HEADER_HEIGHT, PARAM_CURVE_HEIGHT, PARAM_MODES,
@@ -62,13 +62,22 @@ import {
   getParamPanelCollapsed, setParamPanelCollapsed,
   getParamPanelMode, setParamPanelMode,
   getKanjiGroups, setKanjiGroups,
+  getPostprocessCurves, invalidateTimbreCache,
+  getActiveTimbreParam,
+  getSelectedTimbreAnchors, setSelectedTimbreAnchors,
+  getTimbreDragAnchorIdx, setTimbreDragAnchorIdx,
+  getTimbreDragAnchorStarts, setTimbreDragAnchorStarts,
+  getTimbreDragStartValue, setTimbreDragStartValue,
+  getTimbreDragStartTime, setTimbreDragStartTime,
+  getTimbreEnvelopeSnapshotBeforeDrag, setTimbreEnvelopeSnapshotBeforeDrag,
+  setAnchorDragHud,
 } from './state.js';
 import {
   canvas, ctx,
   timeToX, xToTime, pitchToY, yToPitch, yToPitchContinuous,
   snapBeats, findNoteAt, findKanjiGroupAt, findPlayheadAt, getPlayheadX,
   _getParamCurveAreaTop, _getParamCurveAreaBottom, _getParamCurveYRange,
-  _valueToParamY,
+  _valueToParamY, _paramYToValue,
   deepClone, clonePitchCurveState, applyPitchCurveSnapshot,
   cloneEnvelopeState, applyEnvelopeSnapshot,
   genNoteId, hasNoteOverlap, hasNoteOverlapMulti, clampNotePosition,
@@ -91,8 +100,11 @@ import {
 import { stopFragmentPlayback, playFragment, exportFragment, seekFragmentPlayback } from './audioPlayback.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel } from './uiControls.js';
+import { snapshotAnchors, clampStrength, clampSmoothness } from './automationCurve.js';
+import { getTimbreKeyframes } from './postprocessAccess.js';
+import { POSTPROCESS_PARAMS, quantizeParamValue, formatParamValue } from './postprocessParams.js';
 
-const history = new HistoryManager();
+import { history } from './history.js';
 
 export { history };
 
@@ -294,9 +306,18 @@ function applyPitchAnchorDrag(pos) {
   return true;
 }
 
-// 右键拖拽调节 smoothness：水平移动（右增左减）+ 垂直移动（上增下减），
-// 两轴合并使用，1px ≈ 1 单位（总范围 0~100）。
-// 同时作用于所有选中的锚点，便于批量调整。
+// 右键拖拽锚点：水平方向调"锚点强度"，垂直方向调"平滑过渡"。
+//   → 右移增强（锚点把曲线拉得更紧，锚点值被更完整地走一遍）
+//   ← 左移减弱（0 = 曲线完全绕过该锚点，退化为前后锚点连线）
+//   ↑ 上移更平滑（smoothstep 缓入缓出更强）
+//   ↓ 下移更线性
+// 拖动期间在指针旁实时回显两个数值（见 canvasRenderer._drawAnchorDragHud），
+// 松开鼠标才提交一次 history。
+function _applyStrengthSmoothness(anchor, start, dx, dy) {
+  anchor.strength = clampStrength((start.strength ?? 100) + dx);
+  anchor.smoothness = clampSmoothness((start.smoothness ?? 0) - dy);
+}
+
 function applyPitchSmoothnessDrag(pos) {
   if (getDragMode() !== 'pitch-smoothness') return false;
   const starts = getPitchSmoothDragAnchorStarts();
@@ -310,16 +331,26 @@ function applyPitchSmoothnessDrag(pos) {
   }
   if (!getPitchSmoothDragMoved()) return true;
 
-  // dx 正向（右）增加，dy 负向（上）增加
-  const delta = dx - dy;
   const pitchCurve = getPitchCurve();
+  let lastStrength = 100;
+  let lastSmooth = 0;
   for (const [idx, start] of starts) {
     const ap = pitchCurve.anchorPoints[idx];
     if (!ap) continue;
-    const next = Math.max(0, Math.min(100, Math.round(start.smoothness + delta)));
-    ap.smoothness = next;
+    _applyStrengthSmoothness(ap, start, dx, dy);
+    lastStrength = ap.strength;
+    lastSmooth = ap.smoothness;
   }
   invalidatePitchCurveCache();
+  setAnchorDragHud({
+    x: pos.x,
+    y: pos.y,
+    title: t('fragment.hudPitchAnchor'),
+    strength: Math.round(lastStrength),
+    smoothness: Math.round(lastSmooth),
+    strengthLabel: t('fragment.anchorStrength'),
+    smoothnessLabel: t('fragment.smoothing'),
+  });
   render();
   return true;
 }
@@ -332,6 +363,7 @@ function _pitchSmoothnessDragHasChange(startSnapshot) {
     const ap = pitchCurve.anchorPoints[idx];
     if (!ap) continue;
     if ((ap.smoothness ?? 0) !== (start.smoothness ?? 0)) return true;
+    if ((ap.strength ?? 100) !== (start.strength ?? 100)) return true;
   }
   return false;
 }
@@ -342,6 +374,7 @@ function _finalizePitchSmoothnessDrag(commitHistory) {
   getPitchSmoothDragAnchorStarts().clear();
   setPitchSmoothDragMoved(false);
   setPitchSmoothDragRightClickPos(null);
+  setAnchorDragHud(null);
 
   if (commitHistory && startSnapshot) {
     const newSnapshot = clonePitchCurveState();
@@ -375,6 +408,14 @@ function showPitchContextMenu(clientX, clientY, anchorIdx) {
   if (slider) slider.value = String(currentValue);
   if (valueLabel) valueLabel.textContent = String(currentValue);
   _updatePresetActiveState(currentValue);
+
+  // 强度滑块同步
+  const strength = Math.max(0, Math.min(100, Math.round(ap.strength ?? 100)));
+  const strengthSlider = document.getElementById('pitch-ctx-strength-slider');
+  const strengthLabel = document.getElementById('pitch-ctx-strength-value');
+  if (strengthSlider) strengthSlider.value = String(strength);
+  if (strengthLabel) strengthLabel.textContent = String(strength);
+  _updateStrengthPresetActiveState(strength);
 
   // 计算菜单位置，避免溢出窗口
   const vw = window.innerWidth;
@@ -418,6 +459,42 @@ function _updatePresetActiveState(currentValue) {
     const v = parseInt(btn.getAttribute('data-smoothness') || '-1', 10);
     btn.classList.toggle('active', v === currentValue);
   });
+}
+
+function _updateStrengthPresetActiveState(currentValue) {
+  const menu = document.getElementById('pitch-anchor-context-menu');
+  if (!menu) return;
+  menu.querySelectorAll('.pitch-ctx-strength-preset').forEach(btn => {
+    const v = parseInt(btn.getAttribute('data-strength') || '-1', 10);
+    btn.classList.toggle('active', v === currentValue);
+  });
+}
+
+function _applyStrengthToAnchor(anchorIdx, newValue, commitHistory) {
+  const ap = getPitchCurve().anchorPoints[anchorIdx];
+  if (!ap) return;
+  const value = clampStrength(Math.round(newValue));
+  if ((ap.strength ?? 100) === value) return;
+  ap.strength = value;
+  invalidatePitchCurveCache();
+  _updateStrengthPresetActiveState(value);
+  const label = document.getElementById('pitch-ctx-strength-value');
+  const slider = document.getElementById('pitch-ctx-strength-slider');
+  if (label) label.textContent = String(value);
+  if (slider) slider.value = String(value);
+  render();
+  if (commitHistory) {
+    const startSnapshot = getPitchCurveSnapshotBeforeDrag();
+    if (startSnapshot) {
+      const newSnapshot = clonePitchCurveState();
+      history.push({
+        undo() { applyPitchCurveSnapshot(startSnapshot); },
+        redo() { applyPitchCurveSnapshot(newSnapshot); }
+      });
+      setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
+    }
+  }
+  scheduleAutoSave();
 }
 
 function _applySmoothnessToAnchor(anchorIdx, newValue, commitHistory) {
@@ -488,6 +565,36 @@ function _setupPitchContextMenuListeners() {
       if (anchorIdx < 0) return;
       const value = parseInt(btn.getAttribute('data-smoothness') || '0', 10);
       _applySmoothnessToAnchor(anchorIdx, value, true);
+    });
+  });
+
+  // 强度滑块：input 实时预览，change 提交一次 history
+  const strengthSlider = document.getElementById('pitch-ctx-strength-slider');
+  if (strengthSlider) {
+    strengthSlider.addEventListener('input', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      const ap = getPitchCurve().anchorPoints[anchorIdx];
+      if (!ap) return;
+      ap.strength = clampStrength(parseInt(strengthSlider.value, 10));
+      invalidatePitchCurveCache();
+      _updateStrengthPresetActiveState(Math.round(ap.strength));
+      const label = document.getElementById('pitch-ctx-strength-value');
+      if (label) label.textContent = String(Math.round(ap.strength));
+      render();
+    });
+    strengthSlider.addEventListener('change', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      _applyStrengthToAnchor(anchorIdx, parseInt(strengthSlider.value, 10), true);
+    });
+  }
+
+  menu.querySelectorAll('.pitch-ctx-strength-preset').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const anchorIdx = getContextMenuAnchorIdx();
+      if (anchorIdx < 0) return;
+      _applyStrengthToAnchor(anchorIdx, parseInt(btn.getAttribute('data-strength') || '100', 10), true);
     });
   });
 
@@ -1618,6 +1725,199 @@ function handleParamEnvelopeMouseDown(pos) {
   scheduleAutoSave();
 }
 
+// ==================== 音色 / 后处理曲线交互 ====================
+// 每个参数一条独立曲线（量纲不同），因此所有交互都作用在"当前激活参数"的曲线上。
+//   左键点击空白 → 新增锚点；左键拖动 → 改时间（水平）+ 改数值（垂直）
+//   右键按住拖动 → 水平调强度 / 垂直调平滑（与音高曲线同一套手感）
+//   Shift+右键 / Delete → 删除锚点
+
+function _getTimbreAnchors() {
+  return getTimbreKeyframes(getActiveTimbreParam());
+}
+
+function _findTimbreAnchorAt(pos) {
+  const anchors = _getTimbreAnchors();
+  for (let i = 0; i < anchors.length; i++) {
+    const px = timeToX(anchors[i].time);
+    const py = _valueToParamY(anchors[i].value);
+    if (Math.hypot(pos.x - px, pos.y - py) <= 8) return i;
+  }
+  return -1;
+}
+
+function _timbreCurveSnapshot() {
+  return snapshotAnchors(_getTimbreAnchors());
+}
+
+function _applyTimbreSnapshot(paramId, snapshot) {
+  const curve = getPostprocessCurves()[paramId];
+  if (!curve) return;
+  curve.keyframes = (snapshot || []).map((a) => ({ ...a }));
+  invalidateTimbreCache();
+}
+
+function _deleteTimbreAnchor(anchorIdx) {
+  const paramId = getActiveTimbreParam();
+  const anchors = _getTimbreAnchors();
+  if (!anchors || anchorIdx < 0 || anchorIdx >= anchors.length) return;
+  const oldSnapshot = _timbreCurveSnapshot();
+  anchors.splice(anchorIdx, 1);
+  invalidateTimbreCache();
+  const selected = getSelectedTimbreAnchors();
+  selected.clear();
+  const newSnapshot = _timbreCurveSnapshot();
+  history.push({
+    undo() { _applyTimbreSnapshot(paramId, oldSnapshot); },
+    redo() { _applyTimbreSnapshot(paramId, newSnapshot); },
+  });
+  render();
+  scheduleAutoSave();
+}
+
+function handleTimbreMouseDown(pos, e) {
+  const paramId = getActiveTimbreParam();
+  const def = POSTPROCESS_PARAMS[paramId];
+  const anchors = _getTimbreAnchors();
+  if (!def) return;
+
+  setTimbreEnvelopeSnapshotBeforeDrag(_timbreCurveSnapshot());
+  const idx = _findTimbreAnchorAt(pos);
+
+  if (idx >= 0) {
+    const selected = getSelectedTimbreAnchors();
+    if (e && (e.ctrlKey || e.metaKey)) {
+      if (selected.has(idx)) selected.delete(idx);
+      else selected.add(idx);
+    } else if (!selected.has(idx)) {
+      selected.clear();
+      selected.add(idx);
+    }
+    setTimbreDragAnchorIdx(idx);
+    setTimbreDragStartTime(anchors[idx].time);
+    setTimbreDragStartValue(anchors[idx].value);
+    setDragStartX(pos.x);
+    setDragStartY(pos.y);
+    setDragMode('timbre-anchor');
+    setDragOperation({ type: 'timbreAnchorMove', paramId, anchorIndex: idx });
+    render();
+    return;
+  }
+
+  // 空白处：新增锚点（数值按当前 y 位置量化到该参数的取值步进）
+  const time = Math.max(0, xToTime(pos.x));
+  const value = quantizeParamValue(paramId, _paramYToValue(pos.y));
+  anchors.push({ time, value, strength: 100, smoothness: 30 });
+  invalidateTimbreCache();
+  const newIdx = anchors.length - 1;
+  const selected = getSelectedTimbreAnchors();
+  selected.clear();
+  selected.add(newIdx);
+  setTimbreDragAnchorIdx(newIdx);
+  setTimbreDragStartTime(time);
+  setTimbreDragStartValue(value);
+  setDragStartX(pos.x);
+  setDragStartY(pos.y);
+  setDragMode('timbre-anchor');
+  setDragOperation({ type: 'timbreAnchorAdd', paramId, anchorIndex: newIdx });
+  scheduleAutoSave();
+  render();
+}
+
+function applyTimbreAnchorDrag(pos) {
+  if (getDragMode() !== 'timbre-anchor') return false;
+  const idx = getTimbreDragAnchorIdx();
+  if (idx < 0) return false;
+  const paramId = getActiveTimbreParam();
+  const anchors = _getTimbreAnchors();
+  const anchor = anchors[idx];
+  if (!anchor) return false;
+
+  const dxBeats = xToTime(pos.x) - xToTime(getDragStartX());
+  anchor.time = Math.max(0, getTimbreDragStartTime() + dxBeats);
+  const { min, max } = _getParamCurveYRange();
+  const areaTop = _getParamCurveAreaTop();
+  const areaHeight = Math.max(1, _getParamCurveAreaBottom() - areaTop);
+  const dyValue = -((pos.y - getDragStartY()) / areaHeight) * (max - min);
+  anchor.value = quantizeParamValue(paramId, getTimbreDragStartValue() + dyValue);
+  invalidateTimbreCache();
+  render();
+  return true;
+}
+
+function applyTimbreStrengthDrag(pos) {
+  if (getDragMode() !== 'timbre-strength') return false;
+  const starts = getTimbreDragAnchorStarts();
+  if (starts.size === 0) return false;
+  const dx = pos.x - getDragStartX();
+  const dy = pos.y - getDragStartY();
+  if (!getPitchSmoothDragMoved() && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
+    setPitchSmoothDragMoved(true);
+  }
+  if (!getPitchSmoothDragMoved()) return true;
+
+  const anchors = _getTimbreAnchors();
+  let lastStrength = 100;
+  let lastSmooth = 0;
+  for (const [idx, start] of starts) {
+    const anchor = anchors[idx];
+    if (!anchor) continue;
+    _applyStrengthSmoothness(anchor, start, dx, dy);
+    lastStrength = anchor.strength;
+    lastSmooth = anchor.smoothness;
+  }
+  invalidateTimbreCache();
+  const paramId = getActiveTimbreParam();
+  const def = POSTPROCESS_PARAMS[paramId];
+  setAnchorDragHud({
+    x: pos.x,
+    y: pos.y,
+    title: def ? `${t(def.labelKey)} ${formatParamValue(paramId, anchors[getTimbreDragAnchorIdx()]?.value ?? 0, t)}` : '',
+    strength: Math.round(lastStrength),
+    smoothness: Math.round(lastSmooth),
+    strengthLabel: t('fragment.anchorStrength'),
+    smoothnessLabel: t('fragment.smoothing'),
+  });
+  render();
+  return true;
+}
+
+function _timbreDragHasChange(startSnapshot) {
+  if (!startSnapshot) return false;
+  const anchors = _getTimbreAnchors();
+  if (!anchors || anchors.length !== startSnapshot.length) return true;
+  for (let i = 0; i < anchors.length; i++) {
+    const a = anchors[i];
+    const s = startSnapshot[i];
+    if (!s) return true;
+    if (a.time !== s.time || a.value !== s.value ||
+        (a.strength ?? 100) !== (s.strength ?? 100) ||
+        (a.smoothness ?? 0) !== (s.smoothness ?? 0)) return true;
+  }
+  return false;
+}
+
+function _finalizeTimbreCurveDrag(commitHistory) {
+  const paramId = getActiveTimbreParam();
+  const startSnapshot = getTimbreEnvelopeSnapshotBeforeDrag();
+  setDragMode(null);
+  setDragOperation(null);
+  setTimbreDragAnchorIdx(-1);
+  getTimbreDragAnchorStarts().clear();
+  setPitchSmoothDragMoved(false);
+  setPitchSmoothDragRightClickPos(null);
+  setAnchorDragHud(null);
+  setTimbreEnvelopeSnapshotBeforeDrag(null);
+
+  if (commitHistory && startSnapshot && _timbreDragHasChange(startSnapshot)) {
+    const newSnapshot = _timbreCurveSnapshot();
+    history.push({
+      undo() { _applyTimbreSnapshot(paramId, startSnapshot); },
+      redo() { _applyTimbreSnapshot(paramId, newSnapshot); },
+    });
+    scheduleAutoSave();
+  }
+}
+
 function lyricEditorValue(note) {
   return (note.isContinuation || note.isSlur || note.noteType === 3) ? '-' : (note.lyric || '');
 }
@@ -1864,12 +2164,16 @@ export function setupEventListeners() {
       const currentParamMode = getCurrentParamMode();
       const pitchCurve = getPitchCurve();
       if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
-        // 当底部面板展开为 Phoneme 时，底部区域右键交给音素面板，避免误吞。
+        // 底部面板展开为 Phoneme 时，底部区域右键交给音素面板，避免误吞。
         if (!getParamPanelCollapsed() && getParamPanelMode() === 'Phoneme') {
           const areaTop = _getParamCurveAreaTop();
           if (pos.y >= areaTop) return;
         }
-        const anchorIdx = findAnchorPointAt(pos.x, pos.y);
+        // 音色 lane：底部区域的右键属于该 lane 的锚点强度拖拽，这里跳过音高锚点命中，
+        // 但不能 return —— 否则下面的音色分支永远收不到事件。
+        const inTimbreLane = !getParamPanelCollapsed() &&
+          getParamPanelMode() === 'Timbre' && pos.y >= _getParamCurveAreaTop();
+        const anchorIdx = inTimbreLane ? -1 : findAnchorPointAt(pos.x, pos.y);
         if (anchorIdx >= 0) {
           const selectedAnchorIndices = getSelectedAnchorIndices();
           if (!selectedAnchorIndices.has(anchorIdx)) {
@@ -1879,7 +2183,7 @@ export function setupEventListeners() {
           const starts = new Map();
           for (const idx of selectedAnchorIndices) {
             const ap = pitchCurve.anchorPoints[idx];
-            if (ap) starts.set(idx, { smoothness: ap.smoothness ?? 0 });
+            if (ap) starts.set(idx, { smoothness: ap.smoothness ?? 0, strength: ap.strength ?? 100 });
           }
           setPitchSmoothDragAnchorStarts(starts);
           setPitchSmoothDragMoved(false);
@@ -1890,6 +2194,40 @@ export function setupEventListeners() {
           setActiveAnchorIdx(anchorIdx); // 按压反馈
           setPitchCurveSnapshotBeforeDrag(clonePitchCurveState());
           render();
+          return;
+        }
+      }
+      // 音色 / 后处理 lane：右键按住锚点 → 拖拽调"强度 / 平滑"（与音高曲线一致）
+      if (!getParamPanelCollapsed() && getParamPanelMode() === 'Timbre') {
+        const areaTop = _getParamCurveAreaTop();
+        if (pos.y >= areaTop) {
+          const tIdx = _findTimbreAnchorAt(pos);
+          if (tIdx >= 0) {
+            if (e.shiftKey) {
+              // Shift+右键 = 删除该锚点（音色 lane 没有多选，右键留给强度拖拽）
+              _deleteTimbreAnchor(tIdx);
+              e.preventDefault();
+              return;
+            }
+            setSelectedTimbreAnchors(new Set([tIdx]));
+            const starts = new Map();
+            const anchor = _getTimbreAnchors()[tIdx];
+            if (anchor) {
+              starts.set(tIdx, { strength: anchor.strength ?? 100, smoothness: anchor.smoothness ?? 0 });
+            }
+            setTimbreDragAnchorStarts(starts);
+            setTimbreDragAnchorIdx(tIdx);
+            setPitchSmoothDragMoved(false);
+            setPitchSmoothDragRightClickPos({ x: e.clientX, y: e.clientY, canvasX: pos.x, canvasY: pos.y });
+            setTimbreEnvelopeSnapshotBeforeDrag(_timbreCurveSnapshot());
+            setDragStartX(pos.x);
+            setDragStartY(pos.y);
+            setDragMode('timbre-strength');
+            render();
+            return;
+          }
+          // 空白处右键：不弹菜单（音色 lane 用检查器面板做精确输入）
+          e.preventDefault();
           return;
         }
       }
@@ -1936,6 +2274,10 @@ export function setupEventListeners() {
         }
         if (panelMode === 'Phoneme') {
           handlePhonemeMouseDown(e, pos);
+          return;
+        }
+        if (panelMode === 'Timbre') {
+          handleTimbreMouseDown(pos, e);
           return;
         }
       }
@@ -2095,6 +2437,16 @@ export function setupEventListeners() {
       return;
     }
 
+    if (dragMode === 'timbre-anchor') {
+      applyTimbreAnchorDrag(pos);
+      return;
+    }
+
+    if (dragMode === 'timbre-strength') {
+      applyTimbreStrengthDrag(pos);
+      return;
+    }
+
     if (getPhonemeDragState()) {
       handlePhonemeMouseMove(pos);
       return;
@@ -2112,6 +2464,13 @@ export function setupEventListeners() {
       // Bottom panel area takes precedence (see mousedown handler) — check the
       // phoneme lane first so cursor reflects phoneme interactions even when
       // the top toolbar is in Pitch mode.
+      if (!getParamPanelCollapsed() && getParamPanelMode() === 'Timbre') {
+        const areaTop = _getParamCurveAreaTop();
+        if (pos.y >= areaTop) {
+          canvas.style.cursor = _findTimbreAnchorAt(pos) >= 0 ? 'grab' : 'crosshair';
+          return;
+        }
+      }
       if (!getParamPanelCollapsed() && getParamPanelMode() === 'Phoneme') {
         const areaTop = _getParamCurveAreaTop();
         const areaBottom = _getParamCurveAreaBottom();
@@ -2223,6 +2582,18 @@ export function setupEventListeners() {
       return;
     }
 
+    if (e.button === 2 && getDragMode() === 'timbre-strength') {
+      _finalizeTimbreCurveDrag(true);
+      render();
+      return;
+    }
+
+    if (getDragMode() === 'timbre-anchor') {
+      _finalizeTimbreCurveDrag(true);
+      render();
+      return;
+    }
+
     if (getDragMode() === 'pitch-brush' && getIsBrushDrawing() && getCurrentBrushStroke()) {
       if (getCurrentBrushStroke().points.length >= 2) {
         convertBrushStrokeToAnchorPoints(getCurrentBrushStroke());
@@ -2325,6 +2696,10 @@ export function setupEventListeners() {
       const startSnapshot = getPitchCurveSnapshotBeforeDrag();
       const hadChange = startSnapshot && _pitchSmoothnessDragHasChange(startSnapshot);
       _finalizePitchSmoothnessDrag(!!hadChange);
+    }
+    // 音色 lane 拖拽中离开 canvas → 同样提交并清理（含 HUD）
+    if (getDragMode() === 'timbre-anchor' || getDragMode() === 'timbre-strength') {
+      _finalizeTimbreCurveDrag(true);
     }
     finalizeDragOperation();
     setDragMode(null);
@@ -2483,6 +2858,8 @@ export function setupEventListeners() {
       }
       getSelectedNoteIds().clear();
       getSelectedAnchorIndices().clear();
+      getSelectedTimbreAnchors().clear();
+      setAnchorDragHud(null);
       render();
       return;
     }
@@ -2542,8 +2919,37 @@ export function setupEventListeners() {
       resizeCanvases();
       return;
     }
+    if (e.key === '6') {
+      setParamPanelMode('Timbre');
+      setParamPanelCollapsed(false);
+      updateParamPanelState();
+      resizeCanvases();
+      return;
+    }
 
     if (e.key === 'Delete' || e.key === 'Backspace') {
+      // 音色 / 后处理 lane：删除选中的锚点（先于音高 / 音符分支，
+      // 否则展开音色 lane 时按 Delete 会误删音符）
+      if (!getParamPanelCollapsed() && getParamPanelMode() === 'Timbre') {
+        const selectedTimbre = getSelectedTimbreAnchors();
+        if (selectedTimbre.size > 0) {
+          const paramId = getActiveTimbreParam();
+          const anchors = _getTimbreAnchors();
+          const oldSnapshot = _timbreCurveSnapshot();
+          const indices = [...selectedTimbre].sort((a, b) => b - a);
+          for (const idx of indices) anchors.splice(idx, 1);
+          invalidateTimbreCache();
+          selectedTimbre.clear();
+          const newSnapshot = _timbreCurveSnapshot();
+          history.push({
+            undo() { _applyTimbreSnapshot(paramId, oldSnapshot); },
+            redo() { _applyTimbreSnapshot(paramId, newSnapshot); },
+          });
+          render();
+          scheduleAutoSave();
+          return;
+        }
+      }
       const currentParamMode = getCurrentParamMode();
       const pitchCurve = getPitchCurve();
       if (currentParamMode === 'Pitch' && pitchCurve.enabled) {
@@ -2751,15 +3157,16 @@ export function setupEventListeners() {
       _wheelAcc.has = true;
       _wheelAcc.dx = 0;
       _wheelAcc.dy = 0;
-      // 只在一段滚动的开始取一次鼠标位置，缩放锚点更稳定
-      const pos = getMousePos(e);
-      _wheelAcc.mouseX = pos.x;
-      _wheelAcc.mouseY = pos.y;
       _wheelAcc.zoom = e.ctrlKey || e.metaKey;
       _wheelAcc.shift = e.shiftKey;
     }
     _wheelAcc.dx += _normalizeWheel(e, e.deltaX);
     _wheelAcc.dy += _normalizeWheel(e, e.deltaY);
+    // 锚点跟随「本帧最后一个」鼠标位置：绘制发生在帧末，用批内第一个位置会让
+    // 缩放中心落后于指针（快速划动时肉眼可见地"不跟手"）。
+    const pos = getMousePos(e);
+    _wheelAcc.mouseX = pos.x;
+    _wheelAcc.mouseY = pos.y;
     if (_wheelRaf) return;
     _wheelRaf = requestAnimationFrame(() => {
       _wheelRaf = 0;

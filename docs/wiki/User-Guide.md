@@ -16,18 +16,20 @@ Complete documentation of all SXSEditor features.
 10. [Note Context Menu](#note-context-menu)
 11. [Lyrics and Phonemes](#lyrics-and-phonemes)
 12. [Pitch Curves](#pitch-curves)
-13. [Volume and Pan Envelopes](#volume-and-pan-envelopes)
-14. [Synthesis and Playback](#synthesis-and-playback)
-15. [Export](#export)
-16. [Audio to MIDI](#audio-to-midi)
-17. [MIDI Import](#midi-import)
-18. [Settings](#settings)
-19. [Model Download](#model-download)
-20. [Resource Manager](#resource-manager)
-21. [Themes](#themes)
-22. [Project Files](#project-files)
-23. [Keyboard Shortcuts](#keyboard-shortcuts)
-24. [Uninstall](#uninstall)
+13. [F0 Smoothing and Spectral Post-Processing](#f0-smoothing-and-spectral-post-processing)
+14. [Alignment Guides Between Notes and the Lane](#alignment-guides-between-notes-and-the-lane)
+15. [Volume and Pan Envelopes](#volume-and-pan-envelopes)
+16. [Synthesis and Playback](#synthesis-and-playback)
+17. [Export](#export)
+18. [Audio to MIDI](#audio-to-midi)
+19. [MIDI Import](#midi-import)
+20. [Settings](#settings)
+21. [Model Download](#model-download)
+22. [Resource Manager](#resource-manager)
+23. [Themes](#themes)
+24. [Project Files](#project-files)
+25. [Keyboard Shortcuts](#keyboard-shortcuts)
+26. [Uninstall](#uninstall)
 
 ---
 
@@ -373,7 +375,7 @@ The bottom panel has tabs for different parameter lanes:
 - **VOL**: Volume envelope curve.
 - **PAN**: Stereo pan envelope curve.
 - **Phoneme**: Phoneme-level editing (duration ratios, per-phoneme volume, lock).
-- **Timbre**: (Coming soon) Timbre expression controls.
+- **Timbre**: F0 smoothing / spectral post-processing automation. Each of the seven parameters (three F0, four Mel) has its own curve — see [F0 Smoothing and Spectral Post-Processing](#f0-smoothing-and-spectral-post-processing).
 
 ---
 
@@ -506,6 +508,19 @@ Press `2` or click the **Pitch** button in the toolbar. The pitch curve editing 
 - **Shift+drag** to draw freehand pitch curves.
 - The **Smoothing** slider (0–100) controls how much brush strokes are smoothed. Higher = smoother curves.
 
+### Anchor Strength and Smoothing
+
+Every anchor carries two extra properties beyond time and pitch:
+
+| Property | Range | Meaning |
+| --- | --- | --- |
+| **Strength** | 0–100 (default 100) | How hard the anchor pulls the curve. 100 = the curve passes exactly through the anchor (legacy behaviour). 0 = the anchor is ignored and the curve becomes the straight line between its neighbours. The first and last anchor have no two-sided neighbours, so strength does not apply to them. |
+| **Smoothing** | 0–100 (default 30) | Shape of the segment leaving this anchor: 0 = linear ramp, 100 = full ease-in/ease-out (smoothstep). Taken from the anchor on the left of each segment. |
+
+- **Right-hold and drag** an anchor: left/right adjusts **strength**, up/down adjusts **smoothing**. A HUD next to the cursor shows both numbers live and the curve redraws as you drag.
+- **Right-click** an anchor opens the menu with a strength slider, a smoothing slider with presets, and delete.
+- When strength is below 100, a dashed guide links the anchor to where the curve actually runs, so the pull is visible.
+
 ### Reset
 
 Click **↺ Reset** to clear all pitch curve modifications and return to the auto-generated curve based on MIDI notes.
@@ -517,6 +532,82 @@ The pitch curve consists of:
 - **Brush segments**: Freehand-drawn segments (stored as sequences of points).
 
 The final pitch is: MIDI note pitch + pitch curve offset.
+
+---
+
+## F0 Smoothing and Spectral Post-Processing
+
+The **Timbre** lane (bottom parameter panel, press `6`) exposes seven post-processing parameters that clean up three common neural-vocal artefacts: frame-to-frame pitch jitter, mechanical pitch steps at note changes, and harsh high-frequency edges in the spectrogram.
+
+All seven are **off by default**, so existing projects sound exactly as before until you enable something.
+
+### Two Groups, Two Stages
+
+| Group | Runs in | Affects |
+| --- | --- | --- |
+| **F0** (smoothing, outlier removal, transition overshoot, transition length) | The editor, on the F0 curve sent to the model | Preview **and** export identically |
+| **Spectral** (spectral interpolation, time sigma, frequency sigma) | The inference pipeline, on the Mel spectrogram just before the vocoder | Preview **and** export identically |
+
+Mel frame rate is 24 kHz / 480 = **50 frames per second** (20 ms per frame); frame-based values use those frames.
+
+### Parameters
+
+| Parameter | Range | What it does |
+| --- | --- | --- |
+| Smoothing (F0) | 0–100% | Blends the raw F0 with a Savitzky-Golay filtered copy (7-frame window, cubic order). The local polynomial fit keeps the overall pitch trend (vibrato, drawn slides) while removing frame-to-frame jitter. Runs in the cents domain and never crosses a silent gap. |
+| Outlier removal (F0) | 0–9 frames | Median filter window. Removes isolated pitch spikes (octave errors, detector glitches) without smearing the note. 0 = off; 3–5 is typical. |
+| Transition overshoot (F0) | 0–100% | At every detected pitch jump the step is replaced by a cubic Bezier that overshoots the target and settles back, like a singer leaning into a leap. A candidate must pass two checks so natural vibrato is never touched: adjacent frames differ by more than 50 cents, and the median level well before/after the jump differs by at least 75 cents (vibrato oscillates back to its midline; a step does not). Higher = more overshoot (up to 35% of the interval). 0 leaves the jump untouched. |
+| Transition length (F0) | 0–300 ms | Duration of the Bezier transition. Only meaningful when overshoot is above 0. |
+| Spectral interpolation (mel) | 0–100% | At every note / phoneme boundary, frames in a +/-3-frame window are blended toward the linear interpolation of the spectra on both sides, weighted by a raised cosine. The spectral envelope then changes continuously across the transition instead of jumping in one frame. |
+| Time-freq smoothing, time (mel) | 0–6 sigma | Gaussian sigma along the Mel time axis. Light values (0.8–1.5) tame diffusion grit and breath noise; large values blur consonants. |
+| Time-freq smoothing, freq (mel) | 0–6 sigma | Gaussian sigma along the Mel frequency axis. Smooths harmonic edges and removes the buzzy high-frequency fringe. |
+
+### One Curve per Parameter
+
+The seven values are **not** drawn on one shared lane — percentages, integer frame counts and Gaussian sigmas have different units and ranges. Each parameter owns its own automation curve:
+
+- The **chips** in the lane header (grouped *F0 smoothing* / *Spectral*) switch the active curve; the lane always shows only the active parameter, in its own units.
+- An **empty curve means "constant"** — the value comes from the inspector slider. Add an anchor and the curve takes over between the first and last anchor; outside that span the endpoint value holds.
+- The inspector banner reads **Manual** (constant) or **Auto** (curve active).
+
+### Editing the Curves
+
+- **Click** empty lane space to add an anchor at that time and value.
+- **Drag** an anchor: left/right changes time, up/down changes value (quantised to the parameter step).
+- **Right-hold and drag**: left/right changes **strength**, up/down changes **smoothing**, with a live HUD and instant curve update.
+- **Shift+right-click** deletes an anchor; `Delete` deletes all selected anchors.
+- Selecting an anchor retargets the inspector slider to *that anchor* (exact numeric input); with no anchor selected the slider edits the global constant.
+- `Ctrl+Z` / `Ctrl+Y` undo and redo curve edits.
+
+### Presets
+
+The inspector's **Preset** dropdown writes a tested combination into the global defaults without touching anchors you have drawn:
+
+| Preset | Smoothing / Outlier / Overshoot | Interp / sigma time / sigma freq | Typical use |
+| --- | --- | --- | --- |
+| Off | 0 / 0 / 0 | 0 / 0 / 0 | Bit-exact legacy output |
+| Gentle | 25% / 3 / 20% | 25% / 0.8 / 0.4 | Light cleanup, keeps all transients |
+| Standard | 50% / 3 / 35% | 45% / 1.2 / 0.6 | Good default for sung vocals |
+| Strong | 80% / 5 / 55% | 70% / 2.0 / 1.0 | Very jittery takes; may dull consonants |
+
+> These settings also apply outside the fragment editor: the main window's **Play All** and **Export All** rebuild the same per-fragment F0 curve (with F0 post-processing) and send the same spectral payload, so exported project audio matches the editor.
+
+### Notes
+
+- Any change to these curves invalidates the fragment's preview-audio signature, so the next playback re-synthesises instead of replaying stale audio.
+- F0 settings change the F0 hash; spectral settings are hashed separately because they do not alter the F0 curve at all.
+- Spectral automation is aligned to **the first note of the fragment** (the model renders from the first note, not from bar 1). If a fragment starts with a long rest, the curve's bar positions and the mel frame numbers differ by that rest, but the curve still follows wall-clock time.
+
+---
+
+## Alignment Guides Between Notes and the Lane
+
+Whenever a parameter lane is open (VOL / PAN / Phoneme / Timbre), every note's **start and end** is marked with a vertical dashed line, so you can see exactly where a note begins and ends while editing the curve underneath:
+
+- **Piano-roll area** — a faint dashed line runs from the bottom edge of each note down to the top of the lane. Notes at different pitches in the same column each draw their own segment from their own row.
+- **Inside the lane** — the line continues through the full lane height at slightly higher contrast, so it survives being drawn under envelope curves and phoneme bars. A short tick at the lane's top edge keeps boundaries readable in dense content.
+- Lines are pixel-snapped (half-pixel offset) so they stay crisp 1px at any zoom; inside the lane, duplicate edges (a note ending exactly where the next begins) are drawn once (in the piano-roll area each note draws its own line from its own row).
+- Only notes inside the viewport are drawn, so scrolling a long fragment costs nothing extra.
 
 ---
 
@@ -590,7 +681,7 @@ The synthesis output benefits from several post-processing improvements:
 
 - **EBU R128 loudness normalization**: The final mix is normalized to −14 LUFS with a true-peak limiter at −1 dBTP, ensuring consistent loudness across projects.
 - **WSOLA crossfade**: At chunk boundaries (where long audio is split for processing), WSOLA (Waveform Similarity Overlap-Add) crossfading replaces the previous Hann overlap-add, producing smoother transitions.
-- **2× oversampling anti-aliasing**: A full oversampling pipeline is applied during resampling for better high-frequency fidelity.
+- **Kaiser windowed-sinc resampling**: the 24 kHz model output is upsampled to the selected output rate by a band-limited Kaiser-windowed sinc interpolator for accurate high-frequency reproduction.
 
 ---
 
@@ -810,7 +901,7 @@ Controls the number of overlapping frames used at vocoder chunk boundaries for s
 
 #### Sample Rate
 Options: 22050, 24000 (native), 44100, 48000 (default), 96000, 192000 Hz.
-- The default is 48 kHz (changed from 24 kHz in earlier versions). The SVS model runs at 24 kHz internally and the output is resampled to the selected rate with 2× oversampling anti-aliasing for improved quality.
+- The default is 48 kHz (changed from 24 kHz in earlier versions). The SVS model runs at 24 kHz internally and the output is upsampled to the selected rate with a band-limited Kaiser windowed-sinc interpolator.
 - In exclusive mode, the device must support the selected rate or it falls back to shared mode.
 
 #### Bit Depth

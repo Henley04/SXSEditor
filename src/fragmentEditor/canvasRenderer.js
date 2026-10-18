@@ -1,6 +1,7 @@
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 // U3: canvas 内容对读屏不可见 —— 渲染时把一句状态摘要写进 aria-live 容器。
 import { announce } from '../utils/a11yAnnounce.js';
+import { t } from '../i18n/index.js';
 import {
   PIANO_KEY_WIDTH, NOTE_HEIGHT, BEAT_WIDTH, HEADER_HEIGHT, PARAM_CURVE_HEIGHT,
   BLACK_KEYS, PITCH_CURVE_SAMPLE_INTERVAL,
@@ -52,7 +53,21 @@ import {
   getParamPanelMode,
   getDragMode,
   getKanjiGroups,
+  getActiveTimbreParam,
+  getSelectedTimbreAnchors,
+  getTimbreDragAnchorIdx,
+  getAnchorDragHud,
 } from './state.js';
+import { buildEffectiveValues, evalSortedCurve } from './automationCurve.js';
+import { applyF0Postprocess } from './f0Smoothing.js';
+import {
+  buildF0ParamArrays,
+  hasF0PostprocessEffect,
+  getTimbreValueAt,
+  getTimbreDefault,
+  getTimbreKeyframes,
+} from './postprocessAccess.js';
+import { POSTPROCESS_PARAMS, formatParamValue } from './postprocessParams.js';
 
 const canvas = document.getElementById('piano-roll');
 const ctx = canvas.getContext('2d');
@@ -64,7 +79,7 @@ export { canvas, ctx, pianoKeysCanvas, pianoKeysCtx };
 function isParamAreaVisible() {
   if (getParamPanelCollapsed()) return false;
   const mode = getParamPanelMode();
-  return mode === 'VOL' || mode === 'PAN' || mode === 'Phoneme';
+  return mode === 'VOL' || mode === 'PAN' || mode === 'Phoneme' || mode === 'Timbre';
 }
 
 export function dpr() {
@@ -130,8 +145,6 @@ export function xToTime(x) {
 
 export function pitchToY(pitch) {
   const pianoAreaTop = HEADER_HEIGHT;
-  const showParamArea = isParamAreaVisible();
-  const _pianoAreaBottom = _getParentHeight() - (showParamArea ? PARAM_CURVE_HEIGHT : 0);
   const maxPitch = 127;
   return pianoAreaTop + (maxPitch - pitch) * NOTE_HEIGHT - getScrollY();
 }
@@ -430,11 +443,26 @@ export function _getParamCurveAreaBottom() {
 export function _getParamCurveYRange() {
   const mode = getParamPanelMode();
   if (mode === 'Phoneme') return { min: 0, max: 1 };
+  if (mode === 'Timbre') {
+    // 每个音色 / 后处理参数有各自的量纲（%、帧、ms、σ），因此取值域随当前参数切换。
+    const def = POSTPROCESS_PARAMS[getActiveTimbreParam()];
+    return def ? { min: def.min, max: def.max } : { min: 0, max: 1 };
+  }
   switch (mode) {
     case 'VOL': return { min: 0, max: 1 };
     case 'PAN': return { min: -1, max: 1 };
     default: return { min: 0, max: 1 };
   }
+}
+
+/** 画布 y 坐标 → 参数值（VOL/PAN/Timbre 三条 lane 共用）。 */
+export function _paramYToValue(y) {
+  const areaTop = _getParamCurveAreaTop();
+  const areaHeight = _getParamCurveAreaBottom() - areaTop;
+  const { min, max } = _getParamCurveYRange();
+  const ratio = areaHeight > 0 ? (y - areaTop) / areaHeight : 0;
+  const value = min + (1 - ratio) * (max - min);
+  return Math.max(min, Math.min(max, value));
 }
 
 export function _valueToParamY(value) {
@@ -487,13 +515,25 @@ export function getClippedNotes() {
   return clipped;
 }
 
-export function buildPitchCurveF0Data() {
+/**
+ * 构建送往模型的 F0 曲线。
+ * @param {{postprocess?:boolean}} [options]
+ *   postprocess: false 时跳过 F0 后处理链（中值/SG/贝塞尔）。
+ *   用途：computeFragmentAudioSignature 只需要一个"输入变了"的哈希 ——
+ *   后处理链的结果已由 ppHash（曲线序列化）单独覆盖，无需在 400ms 轮询里
+ *   反复跑整条滤波（长分片实测每次 7–15ms）。
+ */
+export function buildPitchCurveF0Data(options = {}) {
+  const applyPostprocess = options.postprocess !== false;
   const pitchCurve = getPitchCurve();
   const notes = getNotes();
   if (!pitchCurve.enabled || notes.length === 0) return null;
 
   const hasCustom = isPitchCurveCustomized();
-  if (!hasCustom) return null;
+  // F0 后处理（中值 / Savitzky-Golay / 贝塞尔过渡）即使没有手绘音高曲线也必须生效，
+  // 否则用户在"音色"lane 里开的平滑只对改过音高的分片有效。
+  const smoothingActive = applyPostprocess && hasF0PostprocessEffect();
+  if (!hasCustom && !smoothingActive) return null;
 
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
   const currentFragment = getCurrentFragment();
@@ -506,7 +546,7 @@ export function buildPitchCurveF0Data() {
   const hopSize = 480;
   const totalFrames = Math.floor(totalSeconds * getSampleRate() / hopSize);
 
-  const f0Array = new Float32Array(totalFrames);
+  let f0Array = new Float32Array(totalFrames);
   for (let i = 0; i < totalFrames; i++) {
     const frameTimeSec = (i * hopSize) / getSampleRate();
     const frameBeat = (frameTimeSec / 60) * bpm;
@@ -520,6 +560,16 @@ export function buildPitchCurveF0Data() {
       f0Array[i] = 440 * Math.pow(2, (pitch - 69) / 12);
     } else {
       f0Array[i] = 0;
+    }
+  }
+
+  if (smoothingActive && totalFrames > 0) {
+    const params = buildF0ParamArrays(totalFrames, bpm, getSampleRate(), hopSize);
+    if (params.active) {
+      f0Array = applyF0Postprocess(f0Array, params, {
+        sampleRate: getSampleRate(),
+        hopSize,
+      });
     }
   }
 
@@ -965,6 +1015,20 @@ export function getSortedAnchorPoints() {
   return getSortedAnchorPointsCache();
 }
 
+// 音高锚点的"强度生效后数值"缓存。渲染与 F0 构建都会逐帧调用 getPitchAtTime，
+// 不能每次重算（O(锚点数)）；所有修改路径都会 invalidatePitchCurveCache() 自增版本。
+let _effectivePitchCache = null;
+function _getEffectivePitchValues(sorted) {
+  const version = getPitchCurveVersion();
+  if (_effectivePitchCache && _effectivePitchCache.version === version &&
+      _effectivePitchCache.len === sorted.length) {
+    return _effectivePitchCache.eff;
+  }
+  const eff = buildEffectiveValues(sorted, 'pitch');
+  _effectivePitchCache = { version, len: sorted.length, eff };
+  return eff;
+}
+
 /**
  * 在按 time 升序排列的点数组中，二分查找包含 time 的区间左端索引。
  * 语义等价于线性 `for(i) if (time>=pts[i].time && time<=pts[i+1].time) return i`：
@@ -998,13 +1062,9 @@ export function getPitchAtTime(time) {
     if (!(time < sorted[0].time || time > sorted[sorted.length - 1].time)) {
       const i = _bisectSegmentIndex(sorted, time);
       if (i >= 0) {
-        const t = (sorted[i + 1].time - sorted[i].time) > 0
-          ? (time - sorted[i].time) / (sorted[i + 1].time - sorted[i].time)
-          : 0;
-        const smoothness = (sorted[i].smoothness || 0) / 100;
-        const smoothStepT = t * t * (3 - 2 * t);
-        const smoothT = t + (smoothStepT - t) * smoothness;
-        basePitch = sorted[i].pitch + smoothT * (sorted[i + 1].pitch - sorted[i].pitch);
+        // 锚点强度：先把锚点值按强度拉向"相邻锚点连线"，再做原有平滑插值。
+        // 强度 100（缺省）时 eff 与 value 完全一致，历史曲线逐点不变。
+        basePitch = evalSortedCurve(sorted, _getEffectivePitchValues(sorted), time);
       }
       if (basePitch === null) basePitch = sorted[sorted.length - 1].pitch;
     }
@@ -1470,30 +1530,71 @@ export function getVisibleDuration() {
   return visibleBeats / beatsPerSecond;
 }
 
+// 上一次实际写入 canvas 的尺寸。写 canvas.width/height 会**清空后备缓冲**，
+// 在清空与下一次 rAF 绘制之间就是一张空白画布 —— 如果 resizeCanvases 被反复
+// 调用（窗口拖拽缩放、ResizeObserver 抖动），每帧都会闪一下。因此只在尺寸/
+// dpr 真正变化时才写，并且在写入后立刻同步重绘，不留空白帧。
+let _lastCanvasMetrics = null;
+
 export function resizeCanvases() {
-  const containerRect = document.getElementById('piano-roll-container').getBoundingClientRect();
-  const keysContainerRect = document.getElementById('piano-keys-container').getBoundingClientRect();
+  const containerEl = document.getElementById('piano-roll-container');
+  const keysContainerEl = document.getElementById('piano-keys-container');
+  if (!containerEl || !keysContainerEl) return;
+  const containerRect = containerEl.getBoundingClientRect();
+  const keysContainerRect = keysContainerEl.getBoundingClientRect();
   const h = keysContainerRect.height;
   const w = containerRect.width;
 
-  canvas.style.width = `${w}px`;
-  canvas.style.height = `${h}px`;
-  canvas.width = Math.floor(w * dpr());
-  canvas.height = Math.floor(h * dpr());
+  // 窗口最小化 / 隐藏时尺寸为 0：不要写 0×0 后备缓冲（恢复时会先闪一帧空白），
+  // 等尺寸回来由 ResizeObserver 再次触发。
+  if (!(w > 0) || !(h > 0)) return;
 
-  pianoKeysCanvas.style.width = `${PIANO_KEY_WIDTH}px`;
-  pianoKeysCanvas.style.height = `${h}px`;
-  pianoKeysCanvas.width = Math.floor(PIANO_KEY_WIDTH * dpr());
-  pianoKeysCanvas.height = Math.floor(h * dpr());
+  const dprVal = dpr();
+  const pxW = Math.max(1, Math.round(w * dprVal));
+  const pxH = Math.max(1, Math.round(h * dprVal));
+  const metricsChanged = !_lastCanvasMetrics ||
+    _lastCanvasMetrics.w !== w ||
+    _lastCanvasMetrics.h !== h ||
+    _lastCanvasMetrics.dpr !== dprVal ||
+    _lastCanvasMetrics.pxW !== pxW ||
+    _lastCanvasMetrics.pxH !== pxH;
 
-  pianoKeysCtx.setTransform(dpr(), 0, 0, dpr(), 0, 0);
-  ctx.setTransform(dpr(), 0, 0, dpr(), 0, 0);
+  if (metricsChanged) {
+    _lastCanvasMetrics = { w, h, dpr: dprVal, pxW, pxH };
+    canvas.style.width = `${w}px`;
+    canvas.style.height = `${h}px`;
+    canvas.width = pxW;
+    canvas.height = pxH;
+
+    pianoKeysCanvas.style.width = `${PIANO_KEY_WIDTH}px`;
+    pianoKeysCanvas.style.height = `${h}px`;
+    pianoKeysCanvas.width = Math.max(1, Math.round(PIANO_KEY_WIDTH * dprVal));
+    pianoKeysCanvas.height = pxH;
+
+    pianoKeysCtx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
+    ctx.setTransform(dprVal, 0, 0, dprVal, 0, 0);
+  }
 
   // 容器尺寸已变化：失效 parent 高度缓存与 canvas rect 缓存，
   // 否则 hit-test / wheel 仍按旧尺寸计算，出现点击与绘制错位。
   invalidateLayoutCache();
   _staticCacheDirty = true;
-  render();
+
+  if (metricsChanged) {
+    // 同步补一帧，避免"改了后备缓冲但还没画"的那一帧露白。
+    _renderRafPendingCancel();
+    _doRender();
+  } else {
+    render();
+  }
+}
+
+/** 取消已排队但尚未执行的 rAF 绘制（同步绘制后它就多余了）。 */
+function _renderRafPendingCancel() {
+  if (_renderRaf) {
+    cancelAnimationFrame(_renderRaf);
+    _renderRaf = 0;
+  }
 }
 
 export function computeInitialScrollY() {
@@ -1864,6 +1965,31 @@ function renderPitchCurve(c) {
       const py = pitchToY(ap.pitch);
       const isSelected = selectedAnchorIndices.has(i) || i === pitchDragAnchorIdx;
       const isActive = i === getActiveAnchorIdx(); // 鼠标按住此锚点
+      const strength = Math.max(0, Math.min(100, Math.round(ap.strength ?? 100)));
+
+      // 强度 < 100：锚点不再"咬住"曲线，用虚线把锚点连到曲线实际经过的位置，
+      // 让用户一眼看出这个锚点被拉走了多少。
+      if (strength < 100) {
+        const effPitch = getPitchAtTime(ap.time);
+        if (effPitch !== null && Math.abs(effPitch - ap.pitch) > 0.01) {
+          const effY = pitchToY(effPitch);
+          ctx.save();
+          ctx.strokeStyle = c.accentLine || c.fgMuted;
+          ctx.globalAlpha = 0.85;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([2, 3]);
+          ctx.beginPath();
+          ctx.moveTo(px, py);
+          ctx.lineTo(px, effY);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.beginPath();
+          ctx.arc(px, effY, 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = c.pitchLine;
+          ctx.fill();
+          ctx.restore();
+        }
+      }
 
       // 按压反馈：放大 + 发光阴影，让用户清楚知道"按下了哪个锚点"。
       if (isActive) {
@@ -1891,9 +2017,10 @@ function renderPitchCurve(c) {
         ctx.arc(px, py, 12, 0, Math.PI * 2);
         ctx.stroke();
 
-        // 在选中锚点旁显示其 smoothness 值，便于右键拖拽时实时观察变化。
+        // 在选中锚点旁显示 数值 / 强度 / 平滑，便于右键拖拽时实时观察变化。
         const sm = Math.max(0, Math.min(100, Math.round(ap.smoothness ?? 0)));
-        const label = `S${sm}`;
+        const pitchLabel = Number.isInteger(ap.pitch) ? String(ap.pitch) : ap.pitch.toFixed(2);
+        const label = `P${pitchLabel} 强${strength} 平${sm}`;
         ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
@@ -1903,8 +2030,8 @@ function renderPitchCurve(c) {
         const metrics = ctx.measureText(label);
         const tw = metrics.width;
         const th = 11;
-        // 半透明背景便于阅读
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        // 主题表面色背景便于阅读（浅色主题下深底深字不可读）
+        ctx.fillStyle = c.hudBg;
         ctx.fillRect(labelX - padX, labelY - th / 2 - padY, tw + padX * 2, th + padY * 2);
         ctx.fillStyle = c.accentLine || c.fgPrimary;
         ctx.fillText(label, labelX, labelY);
@@ -1925,6 +2052,169 @@ function renderPitchCurve(c) {
     }
     ctx.stroke();
   }
+}
+
+/**
+ * 音色 / 后处理 lane：绘制当前参数（f0Smooth / specSmoothT / …）的自动化曲线。
+ *
+ * 每个参数一条独立曲线、各自量纲，所以这里只绘制"当前选中参数"的曲线：
+ * 把百分比、整数帧、毫秒、σ 混画在同一条 lane 上既无法读数也无法比较，
+ * 参数切换由参数面板的子标签完成（DOM 层）。
+ */
+function renderTimbreLane(c, w, areaTop, areaBottom) {
+  const paramId = getActiveTimbreParam();
+  const def = POSTPROCESS_PARAMS[paramId];
+  if (!def) return;
+  const color = c[def.colorKey] || c.accent;
+  const { min, max } = _getParamCurveYRange();
+
+  // 刻度与参数名（右上角），与 VOL/PAN lane 保持同一布局
+  ctx.save();
+  ctx.fillStyle = c.fgDisabled;
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(formatParamValue(paramId, max, t), 4, areaTop + 12);
+  ctx.fillText(formatParamValue(paramId, min, t), 4, areaBottom - 4);
+  ctx.textAlign = 'right';
+  ctx.fillStyle = color;
+  ctx.fillText(`${def.unit || ''}`, w - 4, areaTop + 12);
+
+  const startBeat = xToTime(0);
+  const endBeat = xToTime(w);
+  const anchors = getTimbreKeyframes(paramId);
+
+  // 空曲线：画默认值参考线，提示"当前为常量"
+  if (anchors.length === 0) {
+    const y = _valueToParamY(getTimbreDefault(paramId));
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.45;
+    ctx.lineWidth = 1.5;
+    ctx.setLineDash([5, 4]);
+    ctx.beginPath();
+    ctx.moveTo(0, y);
+    ctx.lineTo(w, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    ctx.restore();
+    return;
+  }
+
+  // 曲线：逐像素采样（参数曲线不像音高那样需要亚像素精度）
+  const steps = Math.max(120, Math.min(1200, Math.round(w)));
+  const span = Math.max(0.001, endBeat - startBeat);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  for (let i = 0; i <= steps; i++) {
+    const t = startBeat + (i / steps) * span;
+    const value = getTimbreValueAt(paramId, t);
+    const px = (i / steps) * w;
+    const py = _valueToParamY(value);
+    if (i === 0) ctx.moveTo(px, py);
+    else ctx.lineTo(px, py);
+  }
+  ctx.stroke();
+
+  // 锚点
+  const selected = getSelectedTimbreAnchors();
+  const dragIdx = getTimbreDragAnchorIdx();
+  for (let i = 0; i < anchors.length; i++) {
+    const kf = anchors[i];
+    const px = timeToX(kf.time);
+    if (px < -12 || px > w + 12) continue;
+    const py = _valueToParamY(kf.value);
+    const isSelected = selected.has(i) || i === dragIdx;
+    const strength = Math.max(0, Math.min(100, Math.round(kf.strength ?? 100)));
+
+    // 强度 < 100 时用虚线连到曲线实际位置
+    if (strength < 100) {
+      const effValue = getTimbreValueAt(paramId, kf.time);
+      const effY = _valueToParamY(effValue);
+      if (Math.abs(effY - py) > 1) {
+        ctx.save();
+        ctx.strokeStyle = c.accentLine || c.fgMuted;
+        ctx.globalAlpha = 0.85;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 3]);
+        ctx.beginPath();
+        ctx.moveTo(px, py);
+        ctx.lineTo(px, effY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.arc(px, effY, 2.5, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.restore();
+      }
+    }
+
+    ctx.beginPath();
+    ctx.arc(px, py, isSelected ? 6.5 : 5, 0, Math.PI * 2);
+    ctx.fillStyle = isSelected ? c.fgPrimary : color;
+    ctx.fill();
+    ctx.strokeStyle = isSelected ? c.accent : c.shadowColor;
+    ctx.lineWidth = isSelected ? 2.5 : 1.5;
+    ctx.stroke();
+
+    if (isSelected) {
+      const label = `${formatParamValue(paramId, kf.value, t)} 强${strength} 平${Math.round(kf.smoothness ?? 0)}`;
+      ctx.font = '10px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      const tw = ctx.measureText(label).width;
+      const labelX = Math.min(w - tw - 8, px + 12);
+      const labelY = Math.max(areaTop + 20, py - 14);
+      ctx.fillStyle = c.hudBg;  // 主题表面色：浅色主题下不能画深底深字
+      ctx.fillRect(labelX - 3, labelY - 6.5, tw + 6, 14);
+      ctx.fillStyle = c.fgPrimary;
+      ctx.fillText(label, labelX, labelY);
+    }
+  }
+  ctx.restore();
+}
+
+/**
+ * 拖拽锚点时贴在指针旁的数值 HUD（音高曲线与音色曲线共用）。
+ * 右键按住锚点上下左右拖动会同时修改"强度"和"平滑过渡"，这里实时回显两者，
+ * 加上正在拖动的数值本身，用户不必去看检查器。
+ */
+function _drawAnchorDragHud(c, w, h) {
+  const hud = getAnchorDragHud();
+  if (!hud) return;
+  const lines = [];
+  if (hud.title) lines.push(hud.title);
+  lines.push(`${hud.strengthLabel || '强度'} ${hud.strength}   ${hud.smoothnessLabel || '平滑'} ${hud.smoothness}`);
+  if (hud.valueLabel) lines.push(hud.valueLabel);
+
+  ctx.save();
+  ctx.font = '11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  let maxW = 0;
+  for (const line of lines) maxW = Math.max(maxW, ctx.measureText(line).width);
+  const padX = 8;
+  const lineH = 14;
+  const boxW = maxW + padX * 2;
+  const boxH = lines.length * lineH + 8;
+  let x = hud.x + 16;
+  let y = hud.y - boxH - 10;
+  if (x + boxW > w - 4) x = Math.max(4, hud.x - boxW - 16);
+  if (y < 4) y = Math.min(h - boxH - 4, hud.y + 18);
+
+  // 主题表面色：浅色主题下不能画"深底 + 深字"（fgPrimary 在浅色主题是深色）
+  ctx.fillStyle = c.hudBg;
+  ctx.fillRect(x, y, boxW, boxH);
+  ctx.strokeStyle = c.hudBorder;
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, boxW - 1, boxH - 1);
+  ctx.fillStyle = c.fgPrimary;
+  for (let i = 0; i < lines.length; i++) {
+    ctx.fillText(lines[i], x + padX, y + 4 + lineH * (i + 0.5));
+  }
+  ctx.restore();
 }
 
 /**
@@ -2039,6 +2329,10 @@ for (let i = 0; i < _NOTE_STYLE_GROUPS; i++) _noteGroups.push([]);
 const EMPTY_NOTE_ID_SET = new Set();
 
 function _doRender() {
+  // 窗口关闭 / DOM 卸载后仍可能有一个已排队的 rAF 回调到达：此时 canvas 已脱离
+  // 文档，parentElement 为 null。跳过这一帧而不是抛异常（异常会打断调用方的
+  // 拖拽收尾逻辑）。
+  if (!canvas.parentElement) return;
   const w = canvas.parentElement.clientWidth;
   const h = canvas.parentElement.clientHeight;
   // 缓存 clientHeight/Width 供本帧所有 helper 复用，避免 O(N) 次 layout 读取（性能审查 #1）
@@ -2335,6 +2629,11 @@ function _doRenderImpl(w, h) {
     }
   }
 
+  // 音符起止点 → 参数 lane 的对齐虚线（画在音符之上、曲线之下）
+  if (showParamArea) {
+    _drawPianoAlignmentGuides(c, visibleNotes, w, pianoAreaBottom);
+  }
+
   // Draw kanji group brackets and labels above kana notes
   _drawKanjiGroups(ctx, c);
 
@@ -2397,6 +2696,8 @@ function _doRenderImpl(w, h) {
     const panelMode = getParamPanelMode();
     if (panelMode === 'Phoneme') {
       renderPhonemeEditor(ctx, w, h, areaTop, areaBottom, c);
+    } else if (panelMode === 'Timbre') {
+      renderTimbreLane(c, w, areaTop, areaBottom);
     } else {
       const { min, max } = _getParamCurveYRange();
       ctx.fillStyle = c.fgDisabled;
@@ -2441,11 +2742,104 @@ function _doRenderImpl(w, h) {
         }
       }
     }
+
+    // 音符起止点的对齐虚线画在 lane 内容之上：音素条 / 包络曲线都是不透明填充，
+    // 画在底下会被盖住，而这条线的作用恰恰是"看清音符边界落在 lane 的哪里"。
+    // 用较低不透明度 + 细虚线，避免压住曲线本身的读数。
+    _drawParamAlignmentGuides(c, visibleNotes, w, areaTop, areaBottom);
   }
 
   renderPianoKeys(c);
   drawPlayhead(ctx, w, h, c);
+  _drawAnchorDragHud(c, w, h);
   updateInlineInputPosition();
+}
+
+/**
+ * 音符→参数 lane 的对齐虚线（钢琴卷帘区域）。
+ *
+ * 每个音符的起点 / 终点向下拉一条虚线到参数面板顶部，让"上面的 MIDI"与
+ * "下面的自动化曲线 / 音素条"在同一 x 上对齐。线从音符本体下沿开始，不穿过
+ * 音符矩形（否则会压住歌词与选中态）。
+ */
+export function _drawPianoAlignmentGuides(c, notes, w, areaTop) {
+  if (!arrayHasItems(notes) || !(areaTop > HEADER_HEIGHT)) return;
+  const beatToPixel = BEAT_WIDTH * getZoomX();
+  const scrollX = getScrollX();
+  ctx.save();
+  ctx.globalAlpha = 0.32;
+  ctx.strokeStyle = c.fgDisabled;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([2, 4]);
+  ctx.beginPath();
+  for (const note of notes) {
+    const y0 = pitchToY(note.pitch) + NOTE_HEIGHT + 2;
+    if (y0 >= areaTop - 2) continue;
+    const xs = [
+      note.start * beatToPixel - scrollX,
+      (note.start + note.duration) * beatToPixel - scrollX,
+    ];
+    for (const raw of xs) {
+      if (raw < -1 || raw > w + 1) continue;
+      const x = Math.round(raw) + 0.5;
+      ctx.moveTo(x, y0);
+      ctx.lineTo(x, areaTop);
+    }
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+/**
+ * 音符→参数 lane 的对齐虚线（lane 内部）。同一 x 只画一次（连音/同位置音符不去重
+ * 会叠出更深的虚线，看起来像高亮）。
+ */
+export function _drawParamAlignmentGuides(c, notes, w, areaTop, areaBottom) {
+  if (!arrayHasItems(notes)) return;
+  const beatToPixel = BEAT_WIDTH * getZoomX();
+  const scrollX = getScrollX();
+  const seen = new Set();
+  const xs = [];
+  for (const note of notes) {
+    const edges = [
+      note.start * beatToPixel - scrollX,
+      (note.start + note.duration) * beatToPixel - scrollX,
+    ];
+    for (const raw of edges) {
+      if (raw < -1 || raw > w + 1) continue;
+      const key = Math.round(raw);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      xs.push(key + 0.5);
+    }
+  }
+  if (xs.length === 0) return;
+  ctx.save();
+  // 画在 lane 内容之上，所以不透明度比钢琴区那半段更低，避免压住曲线读数
+  ctx.globalAlpha = 0.4;
+  ctx.strokeStyle = c.fgDisabled;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 4]);
+  ctx.beginPath();
+  for (const x of xs) {
+    ctx.moveTo(x, areaTop + 1);
+    ctx.lineTo(x, areaBottom - 1);
+  }
+  ctx.stroke();
+  // 顶部小刻度：lane 内容较密（音素条）时也能一眼看出音符边界
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 0.55;
+  ctx.beginPath();
+  for (const x of xs) {
+    ctx.moveTo(x, areaTop + 1);
+    ctx.lineTo(x, areaTop + 4);
+  }
+  ctx.stroke();
+  ctx.restore();
+}
+
+function arrayHasItems(notes) {
+  return !!(notes && notes.length > 0);
 }
 
 function drawPlayhead(ctxToUse, w, h, c) {

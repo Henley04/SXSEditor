@@ -103,13 +103,15 @@
           </div>
           <!-- Expression / Timbre -->
           <div class="insp-section" id="timbre-section">
-            <div class="insp-head">Expression <span class="tag">AUTO</span></div>
+            <div class="insp-head"><span data-i18n="fragment.inspPostprocess">音色 / 后处理</span> <span class="tag" id="pp-mode-tag" data-i18n="fragment.ppManual">手动</span></div>
             <div class="insp-body">
-              <div class="field-row"><div class="lbl">Breath</div><div class="ctrl"><div class="insp-slider"><div class="track"></div><div class="fill" style="width:35%"></div><div class="thumb" style="left:35%"></div><div class="val">35</div></div></div></div>
-              <div class="field-row"><div class="lbl">Tension</div><div class="ctrl"><div class="insp-slider"><div class="track"></div><div class="fill" style="width:58%"></div><div class="thumb" style="left:58%"></div><div class="val">58</div></div></div></div>
-              <div class="field-row"><div class="lbl">Gender</div><div class="ctrl"><div class="insp-slider"><div class="track"></div><div class="fill" style="width:46%"></div><div class="thumb" style="left:46%"></div><div class="val">+4</div></div></div></div>
-              <div class="field-row"><div class="lbl">Vibrato</div><div class="ctrl"><div class="insp-slider"><div class="track"></div><div class="fill" style="width:70%"></div><div class="thumb" style="left:70%"></div><div class="val">70</div></div></div></div>
-              <div class="field-row"><div class="lbl">Tone</div><div class="ctrl"><div class="insp-slider"><div class="track"></div><div class="fill" style="width:52%"></div><div class="thumb" style="left:52%"></div><div class="val">52</div></div></div></div>
+              <div class="field-row">
+                <div class="lbl" data-i18n="fragment.ppPreset">预设</div>
+                <div class="ctrl">
+                  <select id="pp-preset-select" class="pp-select"></select>
+                </div>
+              </div>
+              <div id="pp-inspector-rows" class="pp-rows"></div>
             </div>
           </div>
         </div>
@@ -124,14 +126,17 @@
             <option value="VOL">VOL</option>
             <option value="PAN">PAN</option>
             <option value="Phoneme">Phoneme</option>
-            <option value="Timbre" disabled>音色 (开发中)</option>
+            <option value="Timbre">音色</option>
           </select>
           <div class="param-lane-tabs" id="param-lane-tabs">
             <button class="param-lane-tab active" data-lane="VOL">VOL</button>
             <button class="param-lane-tab" data-lane="PAN">PAN</button>
             <button class="param-lane-tab" data-lane="Phoneme">Phoneme</button>
-            <button class="param-lane-tab disabled" data-lane="Timbre">音色</button>
+            <button class="param-lane-tab" data-lane="Timbre" data-i18n="fragment.laneTimbre">音色</button>
           </div>
+          <!-- 音色 lane 的参数子标签：每个参数一条独立曲线（量纲不同，不能共用一条曲线）。
+               DOM 由 uiControls.js 按 postprocessParams 注册表动态生成。 -->
+          <div class="param-subtabs" id="param-subtabs" style="display:none"></div>
         </div>
       </div>
 
@@ -163,7 +168,7 @@
               <div class="shortcut-row"><kbd>Ctrl+S</kbd><span data-i18n="fragment.shortcutSave">保存</span></div>
               <div class="shortcut-row"><kbd>Space</kbd><span data-i18n="fragment.shortcutPlayStop">播放/停止</span></div>
               <div class="shortcut-row"><kbd>1</kbd><kbd>2</kbd><span>切换 MIDI/Pitch</span></div>
-              <div class="shortcut-row"><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><span>切换 VOL/PAN/音素 (展开参数面板)</span></div>
+              <div class="shortcut-row"><kbd>3</kbd><kbd>4</kbd><kbd>5</kbd><kbd>6</kbd><span>切换 VOL/PAN/音素/音色 (展开参数面板)</span></div>
               <div class="shortcut-row"><kbd>F1</kbd><span data-i18n="fragment.shortcutHelp">快捷键帮助</span></div>
             </div>
             <div class="shortcut-section">
@@ -190,9 +195,18 @@
               <div class="shortcut-row"><kbd data-i18n="fragment.kbdClick">点击</kbd><span data-i18n="fragment.shortcutAddAnchor">添加锚点</span></div>
               <div class="shortcut-row"><kbd data-i18n="fragment.kbdDragAnchor">拖拽锚点</kbd><span data-i18n="fragment.shortcutMoveAnchor">移动锚点</span></div>
               <div class="shortcut-row"><kbd data-i18n="fragment.kbdShiftDrag">Shift+拖拽</kbd><span data-i18n="fragment.shortcutBrushMode">画笔模式</span></div>
-              <div class="shortcut-row"><kbd data-i18n="fragment.kbdRightClick">右键</kbd><span data-i18n="fragment.shortcutDeleteAnchor">删除锚点</span></div>
+              <div class="shortcut-row"><kbd data-i18n="fragment.kbdRightDragAnchor">右键按住拖动</kbd><span data-i18n="fragment.shortcutAnchorStrength">左右调强度 · 上下调平滑（实时显示数值）</span></div>
+              <div class="shortcut-row"><kbd data-i18n="fragment.kbdRightClick">右键</kbd><span data-i18n="fragment.shortcutDeleteAnchor">打开菜单（强度 / 平滑 / 删除）</span></div>
               <div class="shortcut-row"><kbd>Delete</kbd><span data-i18n="fragment.shortcutDeleteSelectedAnchor">删除选中锚点</span></div>
               <div class="shortcut-row"><kbd>↑↓←→</kbd><span data-i18n="fragment.shortcutMoveSelectedAnchor">移动选中锚点</span></div>
+            </div>
+            <div class="shortcut-section">
+              <div class="shortcut-section-title" data-i18n="fragment.shortcutTimbreEdit">音色 / 后处理</div>
+              <div class="shortcut-row"><kbd>6</kbd><span data-i18n="fragment.shortcutSwitchToTimbre">展开音色 lane</span></div>
+              <div class="shortcut-row"><kbd data-i18n="fragment.kbdClick">点击</kbd><span data-i18n="fragment.shortcutTimbreAddAnchor">在当前参数曲线上添加锚点</span></div>
+              <div class="shortcut-row"><kbd data-i18n="fragment.kbdDragAnchor">拖拽锚点</kbd><span data-i18n="fragment.shortcutTimbreMoveAnchor">左右改时间 · 上下改数值</span></div>
+              <div class="shortcut-row"><kbd data-i18n="fragment.kbdRightDragAnchor">右键按住拖动</kbd><span data-i18n="fragment.shortcutAnchorStrength">左右调强度 · 上下调平滑（实时显示数值）</span></div>
+              <div class="shortcut-row"><kbd data-i18n="fragment.kbdShiftRightClick">Shift+右键</kbd><span data-i18n="fragment.shortcutTimbreDeleteAnchor">删除锚点</span></div>
             </div>
             <div class="shortcut-section">
               <div class="shortcut-section-title" data-i18n="fragment.shortcutPhonemeEdit">音素编辑</div>
@@ -214,6 +228,18 @@
 
     <!-- Pitch anchor right-click context menu -->
     <div id="pitch-anchor-context-menu" class="pitch-ctx-menu" role="menu" aria-hidden="true" style="display:none">
+      <div class="pitch-ctx-header">
+        <span data-i18n="fragment.anchorStrength">强度</span>
+        <span class="pitch-ctx-value" id="pitch-ctx-strength-value">100</span>
+      </div>
+      <input type="range" id="pitch-ctx-strength-slider" min="0" max="100" value="100" class="brush-smoothing-slider pitch-ctx-slider">
+      <div class="pitch-ctx-presets">
+        <button type="button" class="pitch-ctx-strength-preset" data-strength="0" data-i18n="fragment.strengthOff">0</button>
+        <button type="button" class="pitch-ctx-strength-preset" data-strength="50">50</button>
+        <button type="button" class="pitch-ctx-strength-preset" data-strength="75">75</button>
+        <button type="button" class="pitch-ctx-strength-preset" data-strength="100" data-i18n="fragment.strengthFull">100</button>
+      </div>
+      <div class="pitch-ctx-divider"></div>
       <div class="pitch-ctx-header">
         <span data-i18n="fragment.smoothing">平滑</span>
         <span class="pitch-ctx-value" id="pitch-ctx-smoothness-value">30</span>

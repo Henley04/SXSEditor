@@ -1043,9 +1043,14 @@ class Diffusion {
      * 在 runDiffusionLoop 主循环结束后调用（仅当 settings.enableSDEditRepair=true）。
      * 检测 mel 局部异常帧（NaN/Inf 或帧能量 > 中位数 ×5），对每个异常区间：
      *   1. 保存原始 mel（用于边界交叉淡入淡出）
-     *   2. 加浅噪声重噪到 t=0.3 水平：xt = 0.7*x0 + 0.3*noise
-     *   3. 用 STORK-2 求解器运行 5 步重采样
+     *   2. 重噪到模型 t = 0.7（30% 噪声）：xt = 0.3*eps + 0.7*x0
+     *   3. 用 STORK-2 求解器把 t 从 0.7 积分到 1.0（5 步）
      *   4. 仅更新异常区间帧，边界用 Hann 窗交叉淡入淡出平滑过渡
+     *
+     * 时间约定（与 samplers/index.js 一致）：本项目 t=0 是标准高斯噪声、
+     * t=1 是干净数据（主循环从 randomNoise() 起积分到 t=1）。因此
+     * "30% 噪声"对应 t=0.7，插值是线性的（rectified flow）：
+     * xt = (1-t)*eps + t*x0，不走 DDPM/VP 的 sqrt 权重。
      *
      * 复用 runDiffusionLoop 闭包内的 evalDiffStep / combine / buffers，无需重建张量。
      * 默认 false 时此方法不被调用（零开销）。
@@ -1056,7 +1061,8 @@ class Diffusion {
     async _sdeditRepair(ctx) {
         const { xt, totalFrames, evalDiffStep, combine, buffers, diagnosticMode } = ctx;
         const REPAIR_STEPS = 5;
-        const REPAIR_T0 = 0.3;            // shallow noise level
+        // 修复起点（模型 t：0 = 纯噪声，1 = 干净数据）。0.7 ⇒ 30% 噪声的浅修复。
+        const REPAIR_DATA_T = 0.7;
         const ENERGY_SPIKE_FACTOR = 5.0;  // frame energy > median × 5 = anomaly
         const CROSSFADE_PAD = 3;          // frames to pad each side for Hann blend
 
@@ -1119,11 +1125,15 @@ class Diffusion {
         if (regions.length === 0) return;
 
         // 5. 对每个区间：保存原始 mel → 加浅噪声 → 5 步 STORK-2 重采样 → Hann 混合
-        const repairSampler = createSampler('stork2');
         const originalBuf = new Float32Array(targetLen);
 
         for (const region of regions) {
             const { start, end, coreStart, coreEnd } = region;
+
+            // 每个区间一个全新的求解器实例：STORK-2 的跨步速度历史（_velPreds）
+            // 只在同一条轨迹内有效，复用会把上一区的速度当成前一超步做有限差分，
+            // 让第二个区间起就丢掉 bootstrap 且差分方向错位。
+            const repairSampler = createSampler('stork2');
 
             // 保存原始 mel（含边距），用于后续 Hann 混合。
             // NaN/Inf 帧归零保存，否则 Hann 混合时 (1-weight)*NaN = NaN 会传播。
@@ -1133,24 +1143,35 @@ class Diffusion {
                 originalBuf[i] = Number.isFinite(xtData[i]) ? xtData[i] : 0;
             }
 
-            // 加浅噪声到 t=0.3 水平：xt = (1-t)*x0 + t*noise = 0.7*x0 + 0.3*noise
-            // NaN/Inf 帧需先归零（否则 0.7*NaN = NaN 会传播），用 0 作为 x0 重噪。
-            const sqrtOneMinusT = Math.sqrt(1 - REPAIR_T0);
-            const sqrtT = Math.sqrt(REPAIR_T0);
+            // 重噪到模型 t = REPAIR_DATA_T：rectified flow 的线性插值
+            //   xt = (1 - t)·eps + t·x0        （eps ~ N(0,1)，x0 = 原 mel）
+            // t=0.7 ⇒ 0.3·eps + 0.7·x0 = 30% 噪声的浅修复。
+            // 旧实现用 DDPM/VP 的 √(1-t)/√t 权重（0.8367·x0 + 0.5477·noise），
+            // 与 Flow Matching 的线性路径不符；噪声还是 [-1,1] 均匀分布
+            // （方差 1/3），而模型在 t=0 边界期待的是标准高斯。
+            // NaN/Inf 帧需先归零（否则 t*NaN = NaN 会传播），用 0 作为 x0 重噪。
+            const regionNoise = this.randomNoise(end - start, MEL_DIM).data;
+            const noiseShare = 1 - REPAIR_DATA_T;
             for (let i = regionOffset; i < regionOffset + regionBytes; i++) {
                 const x0 = Number.isFinite(xtData[i]) ? xtData[i] : 0;
-                const noise = (this._rng || Math.random)() * 2 - 1;
-                xtData[i] = sqrtOneMinusT * x0 + sqrtT * noise;
+                xtData[i] = noiseShare * regionNoise[i - regionOffset] + REPAIR_DATA_T * x0;
             }
 
-            // 5 步 STORK-2 重采样：仅更新区间内帧
-            // M3: repairCombine forwards step/REPAIR_STEPS to combine so the CFG
-            // schedule resolves against the repair loop's 0..4/5 progress instead
-            // of the stale main-loop currentStep (totalSteps-1)/totalSteps.
-            for (let step = 0; step < REPAIR_STEPS; step++) {
-                const repairCombine = (condPred, uncondPred) => combine(condPred, uncondPred, step, REPAIR_STEPS);
+            // 5 步 STORK-2 重采样：仅更新区间内帧。积分区间是 [REPAIR_DATA_T, 1]，
+            // 因此不能直接把 step 传 0..4（那样第一次评估的 t=0.1，等于把 30% 噪声
+            // 的状态当成"几乎纯噪声"喂给模型，是 OOD）。采样器的 t 映射是
+            //   tVal = (step + 0.5) / totalSteps，dt = 1 / totalSteps，
+            // 取 totalSteps = REPAIR_STEPS / (1 - REPAIR_DATA_T)（=16.67）、
+            // step 起点 = REPAIR_DATA_T * totalSteps（=11.67），则 5 次评估的
+            // t = 0.73, 0.79 … 0.97，累计推进正好 0.3，落在 [0.7, 1] 上；
+            // step 允许非整数（求解器只用它算 tVal 与 CFG 进度）。
+            const repairTotalSteps = REPAIR_STEPS / (1 - REPAIR_DATA_T);
+            const repairStepBase = REPAIR_DATA_T * repairTotalSteps;
+            for (let k = 0; k < REPAIR_STEPS; k++) {
+                const step = repairStepBase + k;
+                const repairCombine = (condPred, uncondPred) => combine(condPred, uncondPred, step, repairTotalSteps);
                 await repairSampler.step({
-                    evalDiffStep, combine: repairCombine, step, totalSteps: REPAIR_STEPS,
+                    evalDiffStep, combine: repairCombine, step, totalSteps: repairTotalSteps,
                     xtData: xt.data, buffers,
                 });
                 const delta = buffers.deltaBuf;
@@ -1370,8 +1391,11 @@ class Diffusion {
         // subXt.data，因此污染会同时进入两条分支，CFG 无法抑制反而放大偏差。
         // 所以重噪必须作用在**共享来源** chunkNoise 上（这里做），而不是某一分支。
         //
-        // 做法（SDEdit 式）：xt = √(1-t0)·eps + √t0·x_prev，eps 为本仓库 randomNoise()
-        // 生成的标准高斯（内部走 this._rng || Math.random，setNoiseSeed 的确定性仍然生效）。
+        // 做法（SDEdit 式，rectified flow 线性路径）：xt = (1-t0)·eps + t0·x_prev。
+        // 注意不能用 DDPM/VP 的 √(1-t0)/√t0：本模型是 Flow Matching，t=0 是噪声、
+        // 权重随 t 线性变化，开方会把噪声占比系统性放大（t0=0.3 时 0.55 vs 0.30）。
+        // eps 为本仓库 randomNoise() 生成的标准高斯（内部走 this._rng || Math.random，
+        // setNoiseSeed 的确定性仍然生效）。
         // t0 = 0（默认）即纯高斯，与整段推理的初始条件完全一致；t0 ∈ (0,0.3] 时保留少量
         // 前块信息以减小块间跳变，代价是仍轻微偏离 t=0 流形。
         if (!isFirst) {
@@ -1380,12 +1404,10 @@ class Diffusion {
                 const t0 = Number.isFinite(ctx.chunkOverlapNoiseLevel)
                     ? Math.min(1, Math.max(0, ctx.chunkOverlapNoiseLevel))
                     : 0;
-                const sqrtOneMinusT = Math.sqrt(1 - t0);
-                const sqrtT = Math.sqrt(t0);
                 const ovNoise = this.randomNoise(renoiseOv, MEL_DIM);
                 const ovEnd = renoiseOv * MEL_DIM;
                 for (let i = 0; i < ovEnd; i++) {
-                    chunkNoise[i] = sqrtOneMinusT * ovNoise.data[i] + sqrtT * chunkNoise[i];
+                    chunkNoise[i] = (1 - t0) * ovNoise.data[i] + t0 * chunkNoise[i];
                 }
             }
         }

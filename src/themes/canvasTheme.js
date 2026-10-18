@@ -128,6 +128,12 @@ export function getCanvasColors() {
 
         // Loading overlay
         loadingBg:      v('--bg-overlay')      || 'rgba(10, 10, 20, 0.7)',
+
+        // HUD（锚点拖拽读数、锚点数值标签等画布浮层）。
+        // 必须跟随主题表面色：旧实现硬编码 rgba(8,10,18,.82) 深底 + fgPrimary 文字，
+        // 浅色主题下 fgPrimary(#2a3441) 是深色 → 深底深字不可读。
+        hudBg:          v('--bg-elevated')     || '#1e1e2e',
+        hudBorder:      v('--border-strong')   || '#3a3a52',
     };
     _cachedVersion = _version;
     return _cached;

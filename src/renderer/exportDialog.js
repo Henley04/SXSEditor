@@ -119,7 +119,7 @@ export async function openExportDialog() {
       vocoderOverlapFrames: Number.isFinite(settings.vocoderOverlapFrames) ? settings.vocoderOverlapFrames : 32,
       diagnosticMode: settings.diagnosticMode === true,
       enableLoudnormFinal: settings.enableLoudnormFinal !== false,
-      enableAntiAliasing: settings.enableAntiAliasing === true,
+      enableAntiAliasing: settings.enableAntiAliasing === true, // 仅在设置页可改，这里原样透传
       enableSDEditRepair: settings.enableSDEditRepair === true,
       // Q-Drift 对 FP16 / INT8 量化模型生效。_qdriftPref 按精度分别记住用户意愿
       //（显式设置过用设置值，否则 FP16 默认开、INT8 默认关）；其他精度下置灰且不生效。
@@ -841,13 +841,10 @@ function buildAdvancedSection(form, settings) {
     onChange: (v) => { form.enableLoudnormFinal = v; },
   }));
 
-  // Task 16: Anti-aliasing toggle (default off)
-  content.appendChild(buildCheckboxField({
-    labelKey: 'main.exportDialog.enableAntiAliasing',
-    descKey: 'main.exportDialog.enableAntiAliasingHint',
-    checked: form.enableAntiAliasing,
-    onChange: (v) => { form.enableAntiAliasing = v; },
-  }));
+  // 抗混叠开关不再出现在导出对话框：resampleLinear 只在参考音频降采样
+  // （extractRefMel / extractRefF0FromWav）里被调用，导出路径是 24k→48k 上采样，
+  // 这个开关对导出音质零影响。它仍保留在设置页「后处理」分组，文案已改为
+  // 仅描述参考音频预处理的作用。
 
   // Task 17: SDEdit repair toggle (default off)
   content.appendChild(buildCheckboxField({
