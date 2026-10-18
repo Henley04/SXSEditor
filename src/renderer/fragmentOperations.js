@@ -11,10 +11,13 @@ export function openFragmentEditor(fragment) {
     const singer = trackManager.getSingers().find(s => s.id === fragment.singerId);
     const wavBuffer = singer?.wavBuffer || null;
 
+    // 轨道后端随分片一起送到分片编辑器：跨进程 payload 由主进程原样转发。
+    // 老工程 / 内置轨道没有 backend 字段，缺省按内置后端处理。
     window.electronAPI.openFragmentEditor({
       fragment,
       project: state.project,
       wavBuffer,
+      backend: singer?.backend ?? { type: 'sxs' },
     });
   } else {
     showAlertDialog(t('main.fragmentEditorNotImplemented'));

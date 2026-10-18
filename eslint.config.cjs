@@ -14,6 +14,8 @@ module.exports = [
     {
         ignores: [
             'node_modules/**',
+            // dynwinrt-codegen 生成的 WinRT 绑定代码 —— 自动生成，不参与 lint
+            'src/inference/winml/winrt-bindings/**',
             '.webpack/**',
             '.webpack_cache/**',
             'out/**',
@@ -63,26 +65,38 @@ module.exports = [
             'src/inference/basicPitch.js',
             'src/inference/midiParser.js',
             'src/inference/rmvpePitchDetector.js',
+            // FCPE 与 RMVPE 同为 CJS 的 ONNX 检测器；此前漏在列表外，导致整个
+            // 文件从未被 lint 覆盖（require/console 全被判 no-undef）。
+            'src/inference/fcpePitchDetector.js',
             'src/inference/rosvotDetector.js',
             'src/inference/pitchWorker.js',
+            'src/inference/svsWorker.js',
             'src/inference/pitchPostprocess.js',
+            // WinML 后端：主进程 CJS（此前漏在分档外，整个目录的 require/console
+            // 全被判 no-undef，等于完全没有 lint 覆盖）
+            'src/inference/winml/**/*.js',
             'src/audio/**/*.js',
             'src/utils/**/*.js',
             'src/shared/ipcChannels.js',
+            'src/shared/jpPhonemeMap.js',
+            'src/shared/pluginPermissions.js',
+            // 主进程与渲染进程共用的异常兜底工具（CJS，default import 给渲染侧）
+            'src/shared/safeCall.js',
             'src/modelManager.js',
             'src/modelRegistry.js',
             'src/preload.js',
             'src/main.js',
             'test/**/*.js',
             'scripts/**/*.js',
+            'scripts/**/*.cjs',
             '*.config.js',
             'eslint.config.cjs',
         ],
         // 排除实际为 ESM 的文件（虽在 utils/audio 目录，但使用 export 语法）
         ignores: [
+            'src/inference/winml/winrt-bindings/**/*.js',
             'src/audio/wavEncoder.js',
             'src/utils/escapeHtml.js',
-            'src/utils/gpuCache.js',
             'src/inference/pipeline/qdrift/defaults.js',
         ],
         languageOptions: {
@@ -129,6 +143,8 @@ module.exports = [
             'src/fragmentEditor/**/*.js',
             // 仅渲染进程引用的共享模块（使用 window/document/ResizeObserver 等浏览器全局）
             'src/shared/autoRelayout.js',
+            // 插件契约：ESM，被主进程 pluginHost 与渲染层共用（含 console.warn）
+            'src/shared/pluginContract.js',
             // 流式调度器：ESM，被渲染层 bundle（watchdog 用 setTimeout/console）
             'src/shared/streamingScheduler.js',
             'src/audioPreprocess/**/*.js',
@@ -144,15 +160,15 @@ module.exports = [
             'src/modelDownload.js',
             'src/resourceManager.js',
             'src/alertDialog.js',
-            'src/splash.js',
-            'src/splashPreload.js',
             'src/updateNotification.js',
             // 这些文件使用 ESM export 语法，但被主进程 require（webpack interop）
             'src/audio/wavEncoder.js',
             'src/utils/escapeHtml.js',
-            'src/utils/gpuCache.js',
             // Q-Drift 默认策略：ESM 纯函数，被主进程 CJS 与渲染层共用
             'src/inference/pipeline/qdrift/defaults.js',
+            // 独立仿真/验证脚本（.mjs 是 ESM）。此前落在默认档，require/console
+            // 全被判 no-undef，等于这些脚本从未被 lint 覆盖。
+            'scripts/**/*.mjs',
         ],
         languageOptions: {
             sourceType: 'module',

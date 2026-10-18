@@ -213,9 +213,16 @@
         <span data-lang="zh">第 2 步：提取 MIDI 音符</span>
       </h3>
       <ul>
-        <li><span data-lang="en">Click <strong>Extract MIDI</strong>. This uses Basic Pitch (the recommended tool) to detect note boundaries and pitches.</span><span data-lang="zh">点击 <strong>Extract MIDI</strong>。此操作使用 Basic Pitch（推荐工具）检测音符边界和音高。</span></li>
+        <li><span data-lang="en">Click <strong>Extract MIDI</strong>. This runs the tool selected in <a href="settings.html">Settings &gt; Audio &gt; MIDI Extraction Tool</a> — <strong>FCPE by default</strong> (recommended: an ONNX-based pitch detector with a configurable post-processing pipeline), Basic Pitch (neural network, stable), or RMVPE (F0-to-notes, experimental). FCPE needs its optional model downloaded; the window will prompt you if it is missing.</span><span data-lang="zh">点击 <strong>Extract MIDI</strong>。此操作使用<a href="settings.html">设置 &gt; 音频 &gt; MIDI 提取工具</a>中所选的工具——<strong>默认为 FCPE</strong>（推荐：基于 ONNX 的音高检测器，配有可配置的后处理流水线）、Basic Pitch（神经网络，结果稳定）或 RMVPE（F0 转音符，实验性）。FCPE 需要下载其可选模型；若缺失，窗口会提示你下载。</span></li>
         <li><span data-lang="en">Extracted notes appear on the MIDI canvas, and the note count is displayed.</span><span data-lang="zh">提取的音符显示在 MIDI 画布上，并显示音符数量。</span></li>
       </ul>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">The two toolbar buttons do different jobs: <strong>RMVPE Extract F0</strong> only produces the F0 curve (no notes), while <strong>Extract MIDI</strong> produces notes using whichever tool is selected in Settings. When FCPE is selected, an FCPE parameter panel appears in the extract panel.</p>
+          <p data-lang="zh">工具栏两个按钮职责不同：<strong>RMVPE 提取 F0</strong> 只生成 F0 曲线（不生成音符），而 <strong>提取 MIDI</strong> 使用设置中所选的工具生成音符。选择 FCPE 时，提取参数面板会显示 FCPE 参数组。</p>
+        </div>
+      </div>
 
       <h3>
         <span data-lang="en">Step 3: Edit MIDI Notes (Mandatory)</span>

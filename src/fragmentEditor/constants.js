@@ -8,6 +8,13 @@ export const PITCH_CURVE_SAMPLE_INTERVAL = 0.02;
 
 export const PARAM_MODES = {
   MIDI: 'MIDI',
+  // 顶部 lane 的"音高"模式：历史上这个模式只有字符串字面量 'Pitch'（见
+  // state.js 初值、eventHandlers.js setCurrentParamMode('Pitch')、uiControls.js
+  // 的 modes = ['MIDI','Pitch']、canvasRenderer.js 的 === 'Pitch' 判断），
+  // 没进这个枚举。补进来后 pluginEditorMode 的 lane 收敛才能正确比对——
+  // 否则 PARAM_MODES.PITCH 是 undefined，既判不出"正停在 Pitch"，也会把
+  // currentParamMode 写成 undefined，导致 MIDI/Pitch 两个按钮都不高亮。
+  PITCH: 'Pitch',
   VOL: 'VOL',
   PAN: 'PAN',
   F0: 'F0',

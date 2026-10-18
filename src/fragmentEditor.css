@@ -752,7 +752,8 @@
   gap: 4px;
 }
 
-.pitch-ctx-preset {
+.pitch-ctx-preset,
+.pitch-ctx-strength-preset {
   padding: 4px 6px;
   font-size: var(--font-xs);
   color: var(--fg-primary);
@@ -765,12 +766,14 @@
               border-color var(--motion-fast) var(--ease-standard),
               transform var(--motion-fast) var(--ease-standard);
 }
-.pitch-ctx-preset:hover {
+.pitch-ctx-preset:hover,
+.pitch-ctx-strength-preset:hover {
   background: var(--accent-softer);
   border-color: var(--accent-soft);
   color: var(--accent-fg);
 }
-.pitch-ctx-preset.active {
+.pitch-ctx-preset.active,
+.pitch-ctx-strength-preset.active {
   background: var(--accent);
   border-color: var(--accent-hover);
   color: var(--fg-on-accent);
@@ -1043,6 +1046,58 @@
   outline-offset: 2px;
 }
 
+/* ==================== 插件轨道形态（pluginEditorMode.js） ==================== */
+/* 未启用的面板只加 class（不从 DOM 移除），其它模块持有的节点引用不受影响。 */
+.plugin-panel-off {
+  display: none !important;
+}
+/* 主画布 + 左侧琴键整块关闭时，#main-content 少了两个 grid 子项，
+   inspector 会被自动排到第一列（80px）挤成一团 —— 这里显式锁列位。 */
+#app.plugin-no-pianoroll #main-content {
+  grid-template-columns: 0 0 4px 1fr;
+}
+#app.plugin-no-pianoroll #inspector-resize {
+  grid-column: 3;
+}
+#app.plugin-no-pianoroll #inspector {
+  grid-column: 4;
+}
+/* readOnly：面板保持可见但编辑入口被 pointer-events 挡住（画布 + 输入控件），
+   键盘类入口由 pluginEditorMode.js 的 capture 守卫拦截。 */
+#app.plugin-readonly #piano-roll,
+#app.plugin-readonly #piano-keys,
+#app.plugin-readonly #inspector input,
+#app.plugin-readonly #inspector select,
+#app.plugin-readonly #inspector textarea,
+#app.plugin-readonly #inspector .insp-slider {
+  pointer-events: none;
+}
+/* mode === 'plugin' 的占位面板（插件自定义面板尚未接入渲染） */
+.plugin-panel-placeholder {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg-app);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3, 8px);
+  padding: var(--space-5, 16px);
+}
+.plugin-panel-head {
+  font-size: var(--font-lg, 15px);
+  font-weight: 600;
+  color: var(--fg-primary);
+}
+.plugin-panel-body {
+  font-size: var(--font-base, 13px);
+  color: var(--fg-secondary);
+  line-height: 1.6;
+}
+.plugin-panel-desc {
+  margin-top: var(--space-2, 6px);
+  color: var(--fg-muted);
+}
+
 /* ==================== Reduced motion ==================== */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -1051,4 +1106,163 @@
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ==================== Timbre / Postprocess lane ==================== */
+/* 参数面板头部改为可换行：音色 lane 需要第二行放参数子标签（每个参数一条曲线）。 */
+.param-panel-header {
+  flex-wrap: wrap;
+  height: auto;
+  min-height: 32px;
+  padding: 4px var(--space-3);
+  row-gap: 4px;
+}
+
+.param-subtabs {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-left: 36px;
+}
+
+.pp-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  opacity: 0.75;
+  margin-right: 2px;
+}
+.pp-group-label:not(:first-child) {
+  margin-left: 10px;
+}
+
+.pp-chip {
+  padding: 2px 9px;
+  font-size: var(--font-sm, 12px);
+  font-weight: 600;
+  background: var(--bg-button);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: 999px;
+  color: var(--fg-muted);
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-standard),
+              color var(--motion-fast) var(--ease-standard),
+              border-color var(--motion-fast) var(--ease-standard);
+}
+.pp-chip:hover {
+  background: var(--bg-button-hover);
+  color: var(--fg-primary);
+}
+.pp-chip.active {
+  background: var(--accent-soft, rgba(91, 141, 239, 0.18));
+  border-color: var(--accent);
+  color: var(--accent-fg, var(--accent));
+}
+
+/* 检查器里的参数滑块行 */
+.pp-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pp-row-group {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  opacity: 0.75;
+  margin: 6px 0 2px;
+}
+.pp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.pp-row-label {
+  flex: 0 0 78px;
+  text-align: left;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--fg-muted);
+  font-size: var(--font-sm, 12px);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pp-row-label:hover { color: var(--fg-primary); }
+.pp-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--accent);
+  height: 16px;
+  cursor: pointer;
+}
+.pp-row-val {
+  flex: 0 0 44px;
+  text-align: right;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 10.5px;
+  color: var(--fg-secondary);
+}
+.pp-select {
+  flex: 1 1 auto;
+  background: var(--bg-elevated);
+  color: var(--fg-primary);
+  border: 1px solid var(--button-secondary-border);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+  padding: 2px 6px;
+  height: 24px;
+}
+.pp-select:hover { border-color: var(--accent); }
+
+/* ---- 音色参数悬浮提示卡 ----
+   替代原生 title：跟随主题、可排版、120ms 出现。刻意不加光晕
+   （不使用 --accent-glow / 彩色发光投影），只留 1px 描边 + 一层浅投影。 */
+.pp-tip {
+  position: fixed;
+  z-index: 3000;
+  max-width: 272px;
+  padding: 7px 10px 8px;
+  background: var(--tooltip-bg, var(--bg-elevated));
+  color: var(--tooltip-fg, var(--fg-primary));
+  border: 1px solid var(--border-strong);
+  border-color: color-mix(in srgb, var(--tooltip-fg, var(--fg-primary)) 18%, transparent);
+  border-radius: var(--radius-md);
+  font-size: 11.5px;
+  line-height: 1.5;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(3px);
+  transition: opacity var(--motion-fast) var(--ease-standard),
+              transform var(--motion-fast) var(--ease-standard);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+.pp-tip.visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.pp-tip-title {
+  font-size: 12px;
+  font-weight: 600;
+}
+.pp-tip-meta {
+  margin-top: 2px;
+  font-family: 'Consolas', 'Monaco', monospace;
+  font-size: 10.5px;
+  opacity: 0.68;
+}
+.pp-tip-desc {
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px solid var(--border-strong);
+  border-top-color: color-mix(in srgb, var(--tooltip-fg, var(--fg-primary)) 14%, transparent);
+  opacity: 0.9;
 }

@@ -142,6 +142,89 @@
         </tbody>
       </table>
 
+      <h2 id="tensor-io">
+        <span data-lang="en">Tensor-Level Input / Output Contract</span>
+        <span data-lang="zh">张量级输入 / 输出契约</span>
+      </h2>
+      <p data-lang="en">The table below is the exact wire contract the pipeline feeds and reads. It is derived from the <code>session.run({...})</code> call sites in <code>preprocessing.js</code>, <code>diffusion.js</code> and <code>postprocessing.js</code> — not from the ONNX files themselves, so names are what the <em>caller</em> binds. Shapes use <code>T</code> = token count (phoneme-level), <code>F</code> = mel frame count, <code>F'</code> = conditioning frame count (prompt mel + target), <code>S</code> = <code>NPU_STATIC_SEQ_LEN=2048</code> or <code>NPU_VOCODER_SEQ_LEN=500</code> on the static-shape path.</p>
+      <p data-lang="zh">下表是管线实际喂入与读取的线上契约，来源于 <code>preprocessing.js</code>、<code>diffusion.js</code> 与 <code>postprocessing.js</code> 中的 <code>session.run({...})</code> 调用点——而非 ONNX 文件本身，因此名称是<em>调用方</em>绑定的名称。形状记号：<code>T</code> = token 数（音素级），<code>F</code> = mel 帧数，<code>F'</code> = 条件帧数（prompt mel + 目标），<code>S</code> = 静态形状路径上的 <code>NPU_STATIC_SEQ_LEN=2048</code> 或 <code>NPU_VOCODER_SEQ_LEN=500</code>。</p>
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Model</span><span data-lang="zh">模型</span></th>
+            <th><span data-lang="en">Inputs (name · dtype · shape)</span><span data-lang="zh">输入（名称 · 类型 · 形状）</span></th>
+            <th><span data-lang="en">Outputs</span><span data-lang="zh">输出</span></th>
+            <th><span data-lang="en">Semantics</span><span data-lang="zh">语义</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>note_text_encoder.onnx</code></td>
+            <td><code>input_ids</code> · int64 · <code>[1, T]</code></td>
+            <td rowspan="4"><span data-lang="en">single tensor <code>embeddings</code> (or <code>output</code> for renamed int8 builds) · float32/16 · <code>[1, T, 512]</code></span><span data-lang="zh">单张量 <code>embeddings</code>（int8 重命名版本为 <code>output</code>）· float32/16 · <code>[1, T, 512]</code></span></td>
+            <td><span data-lang="en">Phoneme embedding. Input is <code>noteTextSeq</code> (PAD/BOW + phoneme ids).</span><span data-lang="zh">音素嵌入。输入为 <code>noteTextSeq</code>（PAD/BOW + 音素 id）。</span></td>
+          </tr>
+          <tr>
+            <td><code>note_pitch_encoder.onnx</code></td>
+            <td><code>input_ids</code> · int64 · <code>[1, T]</code></td>
+            <td><span data-lang="en">MIDI pitch embedding. Input is <code>notePitchSeq</code> (0 for rests).</span><span data-lang="zh">MIDI 音高嵌入。输入为 <code>notePitchSeq</code>（休止为 0）。</span></td>
+          </tr>
+          <tr>
+            <td><code>note_type_encoder.onnx</code></td>
+            <td><code>input_ids</code> · int64 · <code>[1, T]</code></td>
+            <td><span data-lang="en">noteType embedding. Input is <code>noteTypeSeq</code> ∈ {1, 2, 3} — see <a href="inference-pipeline.html#notetype">Note Type Classification</a>.</span><span data-lang="zh">音符类型嵌入。输入为 <code>noteTypeSeq</code> ∈ {1, 2, 3}——见<a href="inference-pipeline.html#notetype">音符类型分类</a>。</span></td>
+          </tr>
+          <tr>
+            <td><code>f0_encoder.onnx</code></td>
+            <td><code>input_ids</code> · int64 · <code>[1, F]</code></td>
+            <td><span data-lang="en">Quantized-F0 embedding. Input is <code>f0Ids</code> ∈ [0, <code>F0_BIN-1</code>=360]; bin 0 = unvoiced.</span><span data-lang="zh">量化 F0 嵌入。输入为 <code>f0Ids</code> ∈ [0, <code>F0_BIN-1</code>=360]；bin 0 = 清音。</span></td>
+          </tr>
+          <tr>
+            <td><code>preflow.onnx</code></td>
+            <td><code>features</code> · float32/16 · <code>[1, T, 512]</code></td>
+            <td><code>processed_features</code> · <code>[1, T, 512]</code></td>
+            <td><span data-lang="en">ConvNeXtV2 pre-flow. Input is the <strong>element-wise sum</strong> of the text, pitch and type embeddings.</span><span data-lang="zh">ConvNeXtV2 预流。输入为文本、音高、类型三个嵌入的<strong>逐元素和</strong>。</span></td>
+          </tr>
+          <tr>
+            <td><code>cond_emb.onnx</code></td>
+            <td><code>cond_code</code> · float32/16 · <code>[1, F', 512]</code></td>
+            <td><code>cond_embedding</code> · <code>[1, F', 1024]</code></td>
+            <td><span data-lang="en">Frame-level conditioning. Input = preflow output expanded to frames via <code>mel2token</code>, plus the F0 embedding, with the reference prompt mel prepended.</span><span data-lang="zh">帧级条件。输入 = preflow 输出经 <code>mel2token</code> 展开到帧，叠加 F0 嵌入，并在前面拼接参考 prompt mel。</span></td>
+          </tr>
+          <tr>
+            <td><code>diff_step_dml.onnx</code></td>
+            <td><span data-lang="en">legacy: <code>xt_input</code> float <code>[1, F', 128]</code>, <code>t</code> float <code>[1]</code>, <code>cond</code> float <code>[1, F', 1024]</code>, <code>xt_mask</code> float <code>[1, F']</code><br/>QDIT: <code>x</code>, <code>diffusion_step</code>, <code>cond</code>, <code>x_mask</code> <strong>bool</strong> (Uint8 0/1)</span><span data-lang="zh">legacy：<code>xt_input</code> float <code>[1, F', 128]</code>、<code>t</code> float <code>[1]</code>、<code>cond</code> float <code>[1, F', 1024]</code>、<code>xt_mask</code> float <code>[1, F']</code><br/>QDIT：<code>x</code>、<code>diffusion_step</code>、<code>cond</code>、<code>x_mask</code> <strong>bool</strong>（Uint8 0/1）</span></td>
+            <td><code>flow_pred</code> · <code>[1, F', 128]</code></td>
+            <td><span data-lang="en">Velocity field <code>v(x, t)</code> of the flow-matching ODE. Names are resolved at runtime by <code>_resolveDiffStepIO()</code>; the mask dtype is read from <code>inputMetadata</code>.</span><span data-lang="zh">flow-matching ODE 的速度场 <code>v(x, t)</code>。名称由 <code>_resolveDiffStepIO()</code> 在运行时解析；mask 的 dtype 从 <code>inputMetadata</code> 读取。</span></td>
+          </tr>
+          <tr>
+            <td><code>mel_transform.onnx</code></td>
+            <td><code>audio</code> / <code>waveform</code> · float32/16 · <code>[1, N]</code> or <code>[1, 1, N]</code> (rank from metadata)</td>
+            <td><code>mel</code> / <code>mel_spectrogram</code> / <code>output</code> · <code>[1, ⌈N/480⌉, 128]</code></td>
+            <td><span data-lang="en">Reference-audio mel extraction at the model rate. Input/output names differ per export; the loader takes <code>inputNames[0]</code> / <code>outputNames[0]</code>. Static path pads N to 240000.</span><span data-lang="zh">按模型率提取参考音频的 mel。不同导出版本的输入/输出名不同；加载器取 <code>inputNames[0]</code> / <code>outputNames[0]</code>。静态路径将 N 填充到 240000。</span></td>
+          </tr>
+          <tr>
+            <td><code>vocoder_dml.onnx</code></td>
+            <td><code>mel</code> · float32/16 · <code>[1, C, 128]</code></td>
+            <td><code>waveform</code> · <code>[1, C×480]</code></td>
+            <td><span data-lang="en">C = chunk frames (<code>VOCODER_CHUNK_FRAMES=1024</code> default). Output picked by <code>pickVocoderWaveform()</code> (prefers <code>waveform</code>, then <code>outputNames[0]</code>, then the only key).</span><span data-lang="zh">C = 分块帧数（默认 <code>VOCODER_CHUNK_FRAMES=1024</code>）。输出由 <code>pickVocoderWaveform()</code> 选取（优先 <code>waveform</code>，其次 <code>outputNames[0]</code>，最后唯一键）。</span></td>
+          </tr>
+          <tr>
+            <td><code>sifigan_*.onnx</code> <span data-lang="en">(optional)</span><span data-lang="zh">（可选）</span></td>
+            <td><code>mel</code> · <code>[1, C×4, 128]</code> + <code>f0</code> · <code>[1, C×4, 1]</code></td>
+            <td><code>waveform</code> · <code>[1, C×4×120]</code></td>
+            <td><span data-lang="en">SiFiGAN runs at 200 Hz (hop 120), so mel and F0 are 4× nearest-neighbour upsampled from the 50 Hz SVS rate. Same total duration as the default vocoder.</span><span data-lang="zh">SiFiGAN 以 200 Hz（hop 120）运行，因此 mel 与 F0 从 50 Hz SVS 帧率做 4× 最近邻上采样。输出总时长与默认声码器一致。</span></td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Why the names are resolved dynamically.</strong> Four separate exports of the same graph use different tensor names (legacy vs QDIT <code>diff_step</code>; <code>audio</code> vs <code>waveform</code> in <code>mel_transform</code>; <code>embeddings</code> vs <code>output</code> in the encoders). Hard-coding any one of them makes the pipeline break on a different precision folder, so every call site resolves names from <code>session.inputNames</code> / <code>session.outputNames</code> with a documented fallback order.</p>
+          <p data-lang="zh"><strong>为什么要动态解析名称。</strong>同一张图有四种不同导出，张量名各不相同（legacy 与 QDIT 的 <code>diff_step</code>；<code>mel_transform</code> 的 <code>audio</code> 与 <code>waveform</code>；编码器的 <code>embeddings</code> 与 <code>output</code>）。硬编码任何一个都会让管线在另一种精度目录下崩溃，因此所有调用点都从 <code>session.inputNames</code> / <code>session.outputNames</code> 解析名称，并配有明确的回退顺序。</p>
+        </div>
+      </div>
+
       <h2>
         <span data-lang="en">Model Groups &amp; Device Placement</span>
         <span data-lang="zh">模型分组与设备分配</span>
@@ -278,7 +361,7 @@
           </tr>
           <tr>
             <td><code>sifigan_vocoder_dml.onnx</code></td>
-            <td>611 MB</td>
+            <td>45.8 MB</td>
             <td><span data-lang="en">FP32 DML-optimized variant (fallback)</span><span data-lang="zh">FP32 DML 优化变体（回退）</span></td>
           </tr>
           <tr>
@@ -335,8 +418,17 @@
           </tr>
         </tbody>
       </table>
-      <p data-lang="en"><code>createSessionWithValidation</code> creates a DML session first (with <code>enableMemPattern: false</code> and <code>executionMode: 'sequential'</code> to avoid DML over-allocation), runs a dummy inference against the model's expected input shape to verify it actually executes, and falls back to CPU on any failure. NPU static-shape models skip DML validation and load directly on CPU (they are consumed by the WebNN proxy, not DML).</p>
-      <p data-lang="zh"><code>createSessionWithValidation</code> 优先创建 DML 会话（设置 <code>enableMemPattern: false</code> 与 <code>executionMode: 'sequential'</code> 以避免 DML 过度分配），用模型期望的输入形状跑一次 dummy 推理验证其确实可执行，任何失败都回退到 CPU。NPU 静态形状模型跳过 DML 校验，直接在 CPU 上加载（它们由 WebNN 代理消费，而非 DML）。</p>
+      <p data-lang="en"><code>createSessionWithValidation</code> creates a DML session first (with <code>enableMemPattern: false</code> and <code>executionMode: 'sequential'</code> to avoid DML over-allocation), runs a dummy inference against the model's expected input shape to verify it actually executes, and falls back to CPU on any failure.</p>
+      <p data-lang="zh"><code>createSessionWithValidation</code> 优先创建 DML 会话（设置 <code>enableMemPattern: false</code> 与 <code>executionMode: 'sequential'</code> 以避免 DML 过度分配），用模型期望的输入形状跑一次 dummy 推理验证其确实可执行，任何失败都回退到 CPU。</p>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>NPU static-shape models still try DML first.</strong> The <code>useStaticShapes</code> branch in <code>modelLoader.js</code> creates the session with <code>graphOptimizationLevel: 'basic'</code> and EP list <code>['dml', 'cpu']</code>, then runs the same dummy validation. Only if DML creation or validation throws does it fall back to CPU. The reasoning (from the source comment): the offline-optimized static-shape graphs are pure <code>onnxsim</code> products, and <code>diff_step</code> was measured on real calibration data at <code>fp16-vs-cpu cos≈0.99996</code> / <code>fp32-vs-cpu cos=1.0</code> with ~2.3× speedup, so DML-first is a net win. The WebNN/NPU path (renderer, <code>onnxruntime-web</code>) does not go through this loader at all.</p>
+          <p data-lang="zh"><strong>NPU 静态形状模型仍然优先尝试 DML。</strong><code>modelLoader.js</code> 中的 <code>useStaticShapes</code> 分支以 <code>graphOptimizationLevel: 'basic'</code>、EP 列表 <code>['dml', 'cpu']</code> 创建会话，然后执行同样的 dummy 校验；只有 DML 创建或校验抛错时才回退 CPU。源码注释中的理由：离线优化的静态形状图纯粹是 <code>onnxsim</code> 产物，且 <code>diff_step</code> 已在真实校准数据上实测 <code>fp16-vs-cpu cos≈0.99996</code> / <code>fp32-vs-cpu cos=1.0</code> 并带来约 2.3× 提速，因此 DML 优先是净收益。WebNN/NPU 路径（渲染进程 <code>onnxruntime-web</code>）完全不经过此加载器。</p>
+        </div>
+      </div>
+      <p data-lang="en"><strong>Small detectors have no dummy inputs.</strong> FCPE / RMVPE / ROSVOT return a CPU session at the top of the function and never enter the WinML / DML chain. <code>mel_transform</code> is explicitly excluded from the WinML eligible set: its <code>waveform</code> input length equals the resampled reference-audio sample count and is therefore unpredictable, so a TRT-RTX engine would pass load-time validation and then fail on every real inference at <code>IExecutionContext::setInputShape()</code>.</p>
+      <p data-lang="zh"><strong>小型检测器没有 dummy 输入。</strong>FCPE / RMVPE / ROSVOT 在函数开头即返回 CPU 会话，绝不进入 WinML / DML 链。<code>mel_transform</code> 被显式排除在 WinML 候选集之外：其 <code>waveform</code> 输入长度等于参考音频重采样后的采样点数，完全不可预测，TRT-RTX 引擎会通过加载期校验，然后在每次真实推理的 <code>IExecutionContext::setInputShape()</code> 处失败。</p>
 
       <h2>
         <span data-lang="en">WebNN Session Proxy</span>
@@ -378,7 +470,7 @@
       <p data-lang="zh">所有模型以 <strong>opset 20</strong> 导出（DirectML EP 支持的最大版本）。导出 / 后处理阶段处理的 DML 兼容性约束：</p>
       <ul>
         <li><span data-lang="en"><strong>No <code>-1</code> in Reshape shapes</strong>: DML returns <code>E_INVALIDARG 0x80070057</code> for any <code>-1</code> in a Reshape shape. A post-processing step resolves all <code>-1</code> values to concrete dimensions.</span><span data-lang="zh"><strong>Reshape 形状不含 <code>-1</code></strong>：DML 对 Reshape 形状中的任何 <code>-1</code> 都返回 <code>E_INVALIDARG 0x80070057</code>。后处理步骤将所有 <code>-1</code> 解析为具体维度。</span></li>
-        <li><span data-lang="en"><strong>Precomputed RoPE tables</strong>: diffusion models precompute full <code>cos/sin</code> RoPE tables <code>[1, 4096, 64]</code> and use dynamic <code>Slice</code> instead of <code>Range(0, T, 1)</code>, because DML does not support dynamic <code>limit</code> in <code>Range</code> and produces NaN output.</span><span data-lang="zh"><strong>预计算 RoPE 表</strong>：扩散模型预计算完整的 <code>cos/sin</code> RoPE 表 <code>[1, 4096, 64]</code>，并使用动态 <code>Slice</code> 替代 <code>Range(0, T, 1)</code>，因为 DML 不支持 <code>Range</code> 的动态 <code>limit</code>，且会产生 NaN 输出。</span></li>
+        <li><span data-lang="en"><strong>Precomputed RoPE tables</strong>: diffusion models bake full <code>cos/sin</code> RoPE tables <code>[1, 8192, 64]</code> into the weights and use dynamic <code>Slice</code> instead of <code>Range(0, T, 1)</code>, because DML does not support dynamic <code>limit</code> in <code>Range</code> and produces NaN output. Baking the tables as weights also removes the runtime fp32 position <code>MatMul</code>, which TensorRT-RTX executed on an 11-bit mantissa grid and corrupted phases beyond frame 2048 (fixed in fp16 v2).</span><span data-lang="zh"><strong>预计算 RoPE 表</strong>：扩散模型将完整的 <code>cos/sin</code> RoPE 表 <code>[1, 8192, 64]</code> 烘焙进权重，并使用动态 <code>Slice</code> 替代 <code>Range(0, T, 1)</code>，因为 DML 不支持 <code>Range</code> 的动态 <code>limit</code>，且会产生 NaN 输出。将表烘焙为权重同时移除了运行时 fp32 位置 <code>MatMul</code>——TensorRT-RTX 以 11 位尾数精度执行该算子，会破坏 2048 帧之后的相位（fp16 v2 已修复）。</span></li>
         <li><span data-lang="en"><strong>Cooley-Tukey mel_transform</strong>: <code>mel_transform.onnx</code> decomposes the N=1920 DFT into 64×30 via MatMul (Cooley-Tukey FFT) instead of a direct Conv1D DFT, reducing numerical error from O(√N)≈43.8ε to O(√64+√30)≈13.5ε and improving SNR from 49.86 dB to 83.54 dB.</span><span data-lang="zh"><strong>Cooley-Tukey mel_transform</strong>：<code>mel_transform.onnx</code> 通过 MatMul 将 N=1920 的 DFT 分解为 64×30（Cooley-Tukey FFT），而非直接 Conv1D DFT，将数值误差从 O(√N)≈43.8ε 降到 O(√64+√30)≈13.5ε，SNR 从 49.86 dB 提升到 83.54 dB。</span></li>
         <li><span data-lang="en"><strong>W16A32 input casting</strong>: W16A32 models (FP16 weights, FP32 activations) require <code>Cast(FP16→FP32)</code> nodes on diff_step/vocoder inputs to prevent DML input type errors.</span><span data-lang="zh"><strong>W16A32 输入转换</strong>：W16A32 模型（FP16 权重、FP32 激活）需要在 diff_step/vocoder 输入上加 <code>Cast(FP16→FP32)</code> 节点，避免 DML 输入类型错误。</span></li>
         <li><span data-lang="en"><strong>Olive post-process type fix</strong>: Olive's <code>onnxscript_optimize</code> pass removes <code>Cast(FP16→FP32)</code> nodes in W16A32 <code>diff_step_dml</code> (treating them as redundant) but does not update the weight initializer dtype, leaving <code>MatMul</code> with mismatched FP32/FP16 inputs. The conversion script runs <strong>full Olive optimization</strong> (all passes enabled) then post-processes the optimized model with <code>fix_type_mismatches()</code> to re-insert the deleted <code>Cast</code> nodes. This preserves all Olive benefits (node fusion, dead code elimination, reshape fusion) while restoring type safety. TrueFP16 <code>diff_step_dml</code> has a similar post-fix for <code>Cast(INT64→FP32)</code> that <code>onnxconverter_common</code> misses (the <code>to</code> attribute and corresponding <code>value_info</code> are updated to FP16).</span><span data-lang="zh"><strong>Olive 后处理类型修复</strong>：Olive 的 <code>onnxscript_optimize</code> pass 会删除 W16A32 <code>diff_step_dml</code> 中的 <code>Cast(FP16→FP32)</code> 节点（误判为冗余），但不更新权重初始化器的 dtype，导致 <code>MatMul</code> 输入类型不匹配（FP32/FP16 混合）。转换脚本运行<strong>完整 Olive 优化</strong>（所有 pass 启用），然后对优化后的模型执行 <code>fix_type_mismatches()</code> 后处理，重新插入被删除的 <code>Cast</code> 节点。这样既保留了 Olive 的全部优化收益（节点融合、死代码消除、reshape 融合），又恢复了类型安全。TrueFP16 <code>diff_step_dml</code> 有类似的后处理修复：<code>onnxconverter_common</code> 漏掉了 <code>Cast(INT64→FP32)</code> 的 <code>to</code> 属性更新，后处理会同时更新 <code>to</code> 属性和对应的 <code>value_info</code> 为 FP16。</span></li>
@@ -405,8 +497,8 @@ await pipeline.swapSifiganPrecision('fp16');
 
 // swap language models (JP) without reloading the vocoder
 await pipeline.swapLanguageModels('ja');</code></pre>
-      <p data-lang="en">Switching vocoder type, SiFiGAN precision, or language invalidates the synthesis cache (32 entries / 300 MB LRU), so the next <code>synthesize()</code> re-runs the vocoder.</p>
-      <p data-lang="zh">切换声码器类型、SiFiGAN 精度或语言都会使合成缓存（32 条 / 300MB LRU）失效，因此下一次 <code>synthesize()</code> 会重新运行声码器。</p>
+      <p data-lang="en">Switching vocoder type, SiFiGAN precision, or language calls <code>clearSynthCache()</code>, which empties both LRU levels (per-segment: 32 entries / 300 MB; whole-synthesis: 4 entries / 200 MB), so the next <code>synthesize()</code> re-runs the vocoder.</p>
+      <p data-lang="zh">切换声码器类型、SiFiGAN 精度或语言都会调用 <code>clearSynthCache()</code>，同时清空两级 LRU 缓存（分段级：32 条 / 300MB；整曲级：4 条 / 200MB），因此下一次 <code>synthesize()</code> 会重新运行声码器。</p>
 
       <h2>
         <span data-lang="en">Device Enumeration</span>

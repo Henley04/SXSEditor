@@ -1,3 +1,10 @@
+/* ==================== 主题变量兜底（必须最先加载） ====================
+ * U2：所有 --bg-app / --space-4 / --radius-lg 之类变量此前只由主题 JS 注入，
+ * 脚本没跑完（或 404）时它们全是空值，首屏直接闪白/闪黑。这里给出静态
+ * 默认值；用户的主题通过 inline style 覆盖，优先级更高，不会冲突。
+ */
+@import './themes/themeFallback.css';
+
 /* ==================== 共享组件样式 ==================== */
 @import './components.css';
 @import './icons/icons.css';
@@ -294,4 +301,27 @@ input[type="radio"]:disabled {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* ==================== 无障碍工具类 ==================== */
+/* U3：读屏可见、视觉隐藏。用于 aria-live 状态播报容器与 canvas 的文字性说明。
+   注意不能用 display:none / visibility:hidden —— 那样读屏也会忽略。 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 键盘焦点可见性：canvas 加了 tabindex 之后必须让焦点看得见，否则键盘用户
+   完全不知道焦点在哪 */
+canvas:focus-visible,
+[role="application"]:focus-visible {
+  outline: 2px solid var(--accent, #3fb8c9);
+  outline-offset: -2px;
 }

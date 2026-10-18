@@ -1,9 +1,17 @@
 // B2: wavEncoder.js is now CommonJS — use require instead of ESM import.
 const { encodeWav, applyEnvelopesToAudio } = require('../audio/wavEncoder.js');
+// 2.4: 清理型副作用统一走 safeCleanup，失败留痕不打断主流程（原先是 12 处空 catch）
+import safeCallModule from '../shared/safeCall.js';
+
+const { safeCleanup } = safeCallModule;
 import { showAlertDialog } from '../alertDialog.js';
 import { t } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import { initPipeline, getFragmentPreviewInferenceOptions, getFragmentExportInferenceOptions } from './pipeline.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
+// 播放头必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
+// （输出设备缓冲会让声音晚 20–120 ms 到喇叭 → 指示器稳定跑在声音前面）。
+import { getAudibleElapsedSec } from '../shared/audioOutputClock.js';
 import {
   getSampleRate,
   getFragmentAudioContext, setFragmentAudioContext,
@@ -28,8 +36,10 @@ import {
   getCurrentProject,
   getCurrentFragment,
   getEnvelopes,
+  getTrackBackend,
 } from './state.js';
 import { getClippedNotes, buildPitchCurveF0Data, render } from './canvasRenderer.js';
+import { buildMelPostprocessPayload, serializePostprocessForSignature } from './postprocessAccess.js';
 import { updateFragmentPlayButton } from './uiControls.js';
 
 // 独占模式 onAudioEnded 退订函数的模块级持有。旧实现只在 rAF 闭包内能退订，
@@ -38,9 +48,35 @@ import { updateFragmentPlayButton } from './uiControls.js';
 let _fragmentRemoveEndedListener = null;
 function _detachFragmentEndedListener() {
   if (_fragmentRemoveEndedListener) {
-    try { _fragmentRemoveEndedListener(); } catch (_) {}
+    safeCleanup('fragmentAudio.detachEndedListener', _fragmentRemoveEndedListener);
     _fragmentRemoveEndedListener = null;
   }
+}
+
+/**
+ * 把当前分片的后端声明挂到合成 options 上（options.backend）。
+ *
+ * 约定见 src/main/svsIpc.js 的 _resolvePluginBackend()：只要 options.backend.type
+ * === 'plugin'，主进程就把这一个 options 引用整体交给插件，不再走内置 pipeline。
+ * 分片编辑器此前完全没接这条线 —— 插件轨道在这里的预览播放 / 后台推理 / 导出
+ * 会静默跑内置 SoulX-Singer，与轨道上显示的插件名不符。
+ *
+ * 两条纪律（与 src/renderer/audioPlayback.js 的 attachPluginBackend 保持一致）：
+ *   · 内置后端不留痕：{type:'sxs'} 时压根不写 backend 字段，内置链路零差异。
+ *   · 其余参数一个都不删：需求要求"给模型的参数都要能传给插件"，这里只追加。
+ *
+ * @param {object} options
+ * @returns {object} options 本身
+ */
+function attachPluginBackend(options) {
+  if (!options) return options;
+  const backend = getTrackBackend();
+  if (backend && backend.type === 'plugin') {
+    // 浅拷贝：主进程把同一个 options 引用交给插件，插件改写不能透回
+    // 模块级的 trackBackend（那是工程数据）。
+    options.backend = { ...backend };
+  }
+  return options;
 }
 
 /**
@@ -229,12 +265,31 @@ function _createFragmentScheduler() {
   _scheduler = new StreamingScheduler({
     getCtx: () => getFragmentAudioContext(),
     getElapsed: () => {
+      // 必须与 rAF 路径（_checkFragmentStreamingUnderrun）同基准：绝对播放位置
+      // = playbackOffset + (ctx.currentTime - playbackStartTime)。漏加 offset 时
+      // watchdog 传出的 elapsed 比真实播放头小 playbackOffset 秒 —— 从中段起播
+      // 时 watchdog 要多等 offset 秒才触发，窗口最小化时 AudioContext 不会被
+      // suspend，播放头直接冲进静音区无人接管。
       const ctx = getFragmentAudioContext();
-      return ctx ? ctx.currentTime - getFragmentPlaybackStartTime() : 0;
+      return ctx ? getFragmentPlaybackOffset() + (ctx.currentTime - getFragmentPlaybackStartTime()) : 0;
     },
     onWaitStateChange: (isWaiting) => {
-      // Fragment editor: freezing/ thawing handled by rAF loop check
+      if (isWaiting) {
+        // 进入等待推理（rAF / watchdog 两条路径统一入口）：
+        // 取消 playhead rAF（恢复时由 chunk 回调重启，避免双循环叠加），
+        // 并在按钮上给出"等待推理"反馈——否则用户只会看到播放头无端冻住。
+        const raf = getFragmentPlayheadRaf();
+        if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+        const btn = document.getElementById('btn-play-fragment');
+        if (btn) setLabel(btn, t('fragment.waitingForInference'), { icon: 'stop' });
+      } else {
+        updateFragmentPlayButton();
+      }
     },
+    // watchdog 兜底检测带 0.3s 提前量（>= 250ms tick 周期 + suspend 延迟），
+    // 使冻结发生在 buffer 前沿之前：恢复时 chunk 的原始调度时间仍在未来，
+    // 按原位无缝衔接，播放头不会先冲过前沿再回跳（可听静音缝 + 视觉跳动）。
+    watchdogMarginSec: 0.3,
     onFinish: _onFragmentStreamingFinished,
   });
 }
@@ -296,16 +351,16 @@ function stopStreamingPlayback() {
   _streamingFirstChunkAudioOffset = 0;
   for (const src of streamingSources) {
     if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
-    try { src.onended = null; src.stop(); } catch (_) {}
+    safeCleanup('fragmentAudio.src.stop', () => { src.onended = null; src.stop(); });
   }
   streamingSources = [];
   if (streamingCleanup) {
-    try { streamingCleanup(); } catch (_) {}
+    safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
     streamingCleanup = null;
   }
   // 断开并释放流式 fade 增益节点
   if (streamingFadeGainNode) {
-    try { streamingFadeGainNode.disconnect(); } catch (_) {}
+    safeCleanup('fragmentAudio.streamingFadeGain.disconnect', () => streamingFadeGainNode.disconnect());
     streamingFadeGainNode = null;
   }
   // 停止 scheduler：解除 AudioContext 冻结 + 取消 watchdog
@@ -428,7 +483,13 @@ export async function seekFragmentPlayback(newStartTime) {
 
   // 复用已缓存的 audioData 重启播放
   const audioData = getFragmentAudioData();
-  if (!audioData || audioData.length === 0) return;
+  if (!audioData || audioData.length === 0) {
+    // 无可播音频：不能静默返回 —— 播放状态已停但视觉未更新，用户会以为
+    // 点击无效。渲染一次让停止态立即生效。
+    render();
+    updateFragmentPlayButton();
+    return;
+  }
 
   if (getFragmentUseExclusiveMode()) {
     await playFragmentExclusive();
@@ -460,6 +521,8 @@ function _checkFragmentStreamingUnderrun() {
   if (!getFragmentIsPlaying()) return false;
   const ctx = getFragmentAudioContext();
   if (!ctx) return false;
+  // underrun 是"渲染域"事件（缓冲是否被吃空），必须与 watchdog 的 getElapsed
+  // 同基准用 ctx.currentTime；不要换成可听时间（见 audioOutputClock 使用边界）。
   const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
   const curTime = getFragmentPlaybackOffset() + elapsed;
   return _scheduler.checkUnderrun(curTime, () => {
@@ -479,7 +542,8 @@ export function updateFragmentPlayhead() {
   const ctx = getFragmentAudioContext();
   if (!ctx) return;
 
-  const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
+  // 播放头取"耳朵听到的位置"：渲染时钟减去设备输出延迟（见 audioOutputClock）。
+  const elapsed = getAudibleElapsedSec(ctx, getFragmentPlaybackStartTime());
   setFragmentCurrentTime(getFragmentPlaybackOffset() + elapsed);
 
   // Buffer underrun detection (see _checkFragmentStreamingUnderrun).
@@ -582,9 +646,9 @@ async function playFragmentShared() {
     // 每次播放新建的中间节点在此断开，避免自然结束后 env/fade/pan 三个节点
     // 仍挂在共享 gainNode 下随播放次数累积（stop() 路径会先置 onended=null，
     // 节点随 source 一起释放）。
-    try { panNode.disconnect(); } catch (_) {}
-    try { fadeGainNode.disconnect(); } catch (_) {}
-    try { envGainNode.disconnect(); } catch (_) {}
+    safeCleanup('fragmentAudio.panNode.disconnect', () => panNode.disconnect());
+    safeCleanup('fragmentAudio.fadeGainNode.disconnect', () => fadeGainNode.disconnect());
+    safeCleanup('fragmentAudio.envGainNode.disconnect', () => envGainNode.disconnect());
     setFragmentIsPlaying(false);
     const raf = getFragmentPlayheadRaf();
     if (raf) {
@@ -596,11 +660,14 @@ async function playFragmentShared() {
     updateFragmentPlayButton();
     render();
   };
-  // source.start(when, offset) — offset 是音频缓冲区内的时间偏移
-  source.start(0, Math.max(0, startOffset));
+  // source.start(when, offset) — offset 是音频缓冲区内的时间偏移。
+  // 时间基准取 start 前的 currentTime 并用 start(when) 精确对齐：start(0) 只
+  // 保证"下一个渲染量子"（24 kHz 下 ≈5 ms），基准取 start 之后会让播放头略超前。
+  const startAt = ctx.currentTime;
+  source.start(startAt, Math.max(0, startOffset));
   setFragmentAudioSource(source);
   setFragmentIsPlaying(true);
-  setFragmentPlaybackStartTime(ctx.currentTime);
+  setFragmentPlaybackStartTime(startAt);
   setFragmentPlaybackOffset(startOffset);
   setFragmentCurrentTime(startOffset);
   updateFragmentPlayhead();
@@ -747,9 +814,42 @@ function padAudioToFragmentDuration(audioData) {
 }
 
 /**
+ * 与服务端 AudioSegmentation.hashArray（src/inference/pipeline/audioSegmentation.js）
+ * 语义一致的 FNV-1a 32-bit 哈希：短数组（≤2000 元素）全量、长数组 2000 采样 +
+ * 尾部补偿 + 长度折叠，float64 字节展开保留小数编辑。
+ *
+ * ⚠️ 两端必须同步修改。旧 renderer 签名用多项式哈希 + 4000 采样 + 仅取
+ * refAudioWavBuffer.byteLength —— 微调单点 pitch 落在采样盲区、或换同长度
+ * 参考音频时签名不变 → 直接复用旧音频，服务端全量哈希没有纠正机会。
+ */
+function _hashArrayFNV(arr) {
+  if (!arr) return 0;
+  let h = 0x811c9dc5;
+  const bytes = new Uint8Array(8);
+  const view = new DataView(bytes.buffer);
+  const hashValue = (value) => {
+    view.setFloat64(0, Number.isFinite(Number(value)) ? Number(value) : 0, true);
+    for (let j = 0; j < bytes.length; j++) {
+      h ^= bytes[j];
+      h = Math.imul(h, 0x01000193);
+    }
+  };
+  const step = Math.max(1, Math.floor(arr.length / 2000));
+  let lastHashed = -1;
+  for (let i = 0; i < arr.length; i += step) {
+    hashValue(arr[i]);
+    lastHashed = i;
+  }
+  // 采样必须包含尾部：编辑器曲线的最后一个关键帧常落在尾部
+  if (arr.length > 0 && lastHashed !== arr.length - 1) hashValue(arr[arr.length - 1]);
+  hashValue(arr.length);
+  return h | 0;
+}
+
+/**
  * 计算当前 fragment 合成输入的签名（notes + 选项）。
  * 与服务端 computeSynthCacheKey 覆盖的字段一致：notes 内容、bpm、pitchCurveF0、
- * refAudioWavBuffer 长度、autoShift、nSteps、cfg、cfgRescale、singerId。
+ * refAudioWavBuffer 内容、autoShift、nSteps、cfg、cfgRescale、singerId。
  * 用于判断 fragmentAudioData 是否可复用，避免重复 IPC 合成调用。
  * 注意：签名不包含 playStartPosition — 起始位置变化不影响音频内容。
  */
@@ -757,7 +857,10 @@ export function computeFragmentAudioSignature() {
   const notes = getClippedNotes();
   const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
   const previewOpts = getFragmentPreviewInferenceOptions();
-  const pitchCurveF0 = buildPitchCurveF0Data();
+  // 签名只需要"输入变了"的哈希：F0 后处理链的结果已由下方 ppHash（曲线序列化）
+  // 单独覆盖，这里跳过整条滤波（400ms 自动推理轮询会反复调用本函数，
+  // 长分片实测每次 7–15ms），真正的合成路径（playFragment 等）仍走完整后处理。
+  const pitchCurveF0 = buildPitchCurveF0Data({ postprocess: false });
   const refAudioWavBuffer = getWavFileBuffer();
   const autoShiftEl = document.getElementById('autoShiftCheck');
   const autoShift = autoShiftEl ? autoShiftEl.checked : false;
@@ -787,21 +890,28 @@ export function computeFragmentAudioSignature() {
     }
   }
 
-  // pitchCurveF0 hash
-  let f0Hash = 0;
-  if (pitchCurveF0) {
-    const step = Math.max(1, Math.floor(pitchCurveF0.length / 4000));
-    for (let i = 0; i < pitchCurveF0.length; i += step) {
-      f0Hash = ((f0Hash << 5) - f0Hash + (Math.floor(pitchCurveF0[i] * 1000) | 0)) | 0;
-    }
+  // pitchCurveF0 hash — FNV-1a，与服务端 hashArray 一致（消除下采样盲区）
+  const f0Hash = pitchCurveF0 ? _hashArrayFNV(pitchCurveF0) : 0;
+
+  // 音色 / 后处理曲线 hash：F0 平滑已体现在 f0Hash 里，但频谱后处理
+  // （mel 平滑 / 过渡插值）不改变 F0，必须单独进签名，否则改曲线后仍播旧音频。
+  let ppHash = 0;
+  const ppSignature = serializePostprocessForSignature();
+  for (let i = 0; i < ppSignature.length; i++) {
+    ppHash = ((ppHash << 5) - ppHash + ppSignature.charCodeAt(i)) | 0;
   }
 
-  // refAudioWavBuffer hash — 仅用长度，避免对大 buffer 做完整哈希
-  const refHash = refAudioWavBuffer
-    ? (refAudioWavBuffer.byteLength || refAudioWavBuffer.length || 0)
-    : 0;
+  // refAudioWavBuffer hash — FNV-1a 全量采样 + 长度折叠，与服务端一致。
+  // 旧实现仅用 byteLength：换同长度参考音频时签名不变，会直接播旧音频。
+  let refHash = 0;
+  if (refAudioWavBuffer) {
+    const refBytes = refAudioWavBuffer instanceof ArrayBuffer
+      ? new Uint8Array(refAudioWavBuffer)
+      : refAudioWavBuffer;
+    refHash = _hashArrayFNV(refBytes);
+  }
 
-  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}`;
+  return `${notesHash}_${bpm}_${f0Hash}_${refHash}_${previewOpts.nSteps}_${previewOpts.cfg}_${previewOpts.cfgRescale}_${autoShift}_${singerId || 'noid'}_${previewOpts.diffStepChunk ? 1 : 0}_${previewOpts.diffStepChunkFrames || 500}_${previewOpts.diffStepOverlapFrames !== undefined ? previewOpts.diffStepOverlapFrames : 50}_pp${ppHash}`;
 }
 
 export async function playFragment() {
@@ -847,9 +957,12 @@ export async function playFragment() {
       return;
     }
 
-    // 注册 chunk 监听：vocoder 每完成一个 chunk 即开始播放（边合成边播）
-    // chunk 顺序由 IPC 保证（按发送顺序触发），无需额外排序
-    streamingCleanup = window.electronAPI.onFragmentSVSChunkAudio(async (chunkInfo) => {
+    // 注册 chunk 监听：vocoder 每完成一个 chunk 即开始播放（边合成边播）。
+    // IPC 按发送顺序派发，但回调体内有 await（getFragmentAudioContextInternal /
+    // resumeFromWait 会让出事件循环）——若并发执行，chunk B 可能在 chunk A 更新
+    // streamingNextStart 之前基于同一个值调度 → 音频错序/重叠（underrun 恢复
+    // 瞬间的高危竞态）。用 promise 链串行化：每个 chunk 完整处理完才处理下一个。
+    const handleStreamingChunk = async (chunkInfo) => {
       try {
         if (!chunkInfo || !chunkInfo.audio || chunkInfo.audio.length === 0) return;
         if (streamingFinished) return;
@@ -926,25 +1039,26 @@ export async function playFragment() {
         source.buffer = audioBuffer;
         const effectiveChunkDuration = chunkAudio.length / getSampleRate();
 
-        // Buffer underrun recovery: if the previous chunk's scheduled end has
-        // already passed (inference slower than realtime), clamp to now.
-        // If still waiting for inference (chunk arrived ahead of the clamp
-        // threshold), reset the time base to align with buffer frontier.
-        // Both cases are merged into a single recovery path to avoid
-        // duplicate playbackStartTime recalculation causing playhead jitter.
-        if (streamingNextStart < ctx.currentTime + 0.01 || (_scheduler && _scheduler.isWaiting)) {
+        // Buffer underrun recovery（顺序调度 + 时间基准重置设计）：
+        // - 等待推理恢复：AudioContext 解冻，共享时钟（playbackStartTime）不变。
+        //   watchdogMarginSec=0.3 使冻结点落在前沿之前，chunk 的原始调度时间
+        //   仍在未来 → 直接按原位无缝衔接，无需任何调整。
+        // - 迟到 chunk：调度时间已过 → 钳到当前时刻，并把时间基准同步前移，
+        //   让播放头与音频一起回退 δ 秒。后续 chunk 排在本次之后
+        //   （streamingNextStart += dur），无重叠、无内容丢失。
+        if (_scheduler && _scheduler.isWaiting) {
           await _scheduler.resumeFromWait();
-          if (streamingNextStart < ctx.currentTime + 0.01) {
-            // Late chunk: clamp scheduling time to now, adjust time base.
-            const offsetFromPlayStart = streamingNextStart - getFragmentPlaybackStartTime();
-            setFragmentPlaybackStartTime(ctx.currentTime + 0.05 - offsetFromPlayStart);
-            streamingNextStart = ctx.currentTime + 0.05;
-          } else {
-            // Chunk arrived while waiting (schedule time still future):
-            // reset time base to align playhead with buffer frontier.
-            setFragmentPlaybackStartTime(ctx.currentTime - _scheduler.bufferEndSec + getFragmentPlaybackOffset());
+          // 等待进入时 rAF 已被 onWaitStateChange 取消，这里重启；
+          // 幂等守卫防止与残留循环叠加成双 rAF 链。
+          if (getFragmentIsPlaying() && !getFragmentPlayheadRaf()) {
+            updateFragmentPlayhead();
           }
-          updateFragmentPlayhead();
+        }
+        if (streamingNextStart < ctx.currentTime + 0.01) {
+          // Late chunk: clamp scheduling time to now, adjust time base.
+          const offsetFromPlayStart = streamingNextStart - getFragmentPlaybackStartTime();
+          setFragmentPlaybackStartTime(ctx.currentTime + 0.05 - offsetFromPlayStart);
+          streamingNextStart = ctx.currentTime + 0.05;
         }
 
         // Update buffer frontier (furthest audio end in playhead seconds)
@@ -983,6 +1097,12 @@ export async function playFragment() {
       } catch (e) {
         console.warn('[FragmentAudio] Streaming chunk playback failed:', e.message);
       }
+    };
+    let chunkQueue = Promise.resolve();
+    streamingCleanup = window.electronAPI.onFragmentSVSChunkAudio((chunkInfo) => {
+      chunkQueue = chunkQueue
+        .then(() => handleStreamingChunk(chunkInfo))
+        .catch((e) => console.warn('[FragmentAudio] Streaming chunk queue error:', e && e.message));
     });
 
     const pitchCurveF0 = buildPitchCurveF0Data();
@@ -993,7 +1113,7 @@ export async function playFragment() {
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes: getClippedNotes(),
       bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
-      options: {
+      options: attachPluginBackend({
         f0Envelope: null,
         pitchCurveF0: pitchCurveF0Serializable,
         refAudioWavBuffer: getWavFileBuffer() || null,
@@ -1010,7 +1130,15 @@ export async function playFragment() {
         cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
         dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
         dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
-      },
+        // 频谱后处理（时频平滑 / 过渡频谱插值）：逐帧参数在主进程 vocoder 之前应用。
+        // 未启用时 buildMelPostprocessPayload 返回 null，管线走零开销快路径。
+        melPostprocess: buildMelPostprocessPayload(
+          getClippedNotes(),
+          getCurrentProject() ? getCurrentProject().bpm : 120,
+          getSampleRate(),
+          480,
+        ),
+      }),
     });
     setFragmentAudioData(padAudioToFragmentDuration(audioData));
     // 合成成功后更新签名，后续播放可复用此缓存
@@ -1024,7 +1152,7 @@ export async function playFragment() {
       _pendingSeekStartTime = null;
       if (_scheduler) await _scheduler.setInferenceDone();
       if (streamingCleanup) {
-        try { streamingCleanup(); } catch (_) {}
+        safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
         streamingCleanup = null;
       }
       setFragmentPlayStartPosition(seekPos);
@@ -1056,7 +1184,7 @@ export async function playFragment() {
     // 注意：必须在 inferenceDone 设置之后移除，否则 underrun 检测
     // 仍会等待（推理未完成标记）。
     if (streamingCleanup) {
-      try { streamingCleanup(); } catch (_) {}
+      safeCleanup('fragmentAudio.streamingCleanup', streamingCleanup);
       streamingCleanup = null;
     }
 
@@ -1079,6 +1207,14 @@ export async function playFragment() {
     // W24: use t(key, params) instead of t(key) + ': ' + value concatenation.
     showAlertDialog(t('fragment.synthesisFailedDetail', { detail: error.message }));
     stopStreamingPlayback();
+    // stopStreamingPlayback 只清理流式资源，不重置播放状态。异常路径若不补这些
+    // 清理，会留下 isPlaying=true + audioData 为空的组合：后续 seek/点击走空
+    // 分支静默 return 且无渲染，播放头完全不动（"点击无响应"的根因之一）；
+    // rAF 残留也会持续空转。
+    setFragmentIsPlaying(false);
+    const raf = getFragmentPlayheadRaf();
+    if (raf) { cancelAnimationFrame(raf); setFragmentPlayheadRaf(null); }
+    updateFragmentPlayButton();
   } finally {
     setFragmentIsSynthesizing(false);
     // 合成流程结束（成功或失败）后清除待跳转标记，避免残留影响下一次播放
@@ -1139,7 +1275,7 @@ export async function synthesizeFragmentInBackground(opts = {}) {
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes,
       bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
-      options: {
+      options: attachPluginBackend({
         // 后台推理：主进程不下发流式 chunk，避免无意义的分片间 IPC 拷贝
         background: true,
         f0Envelope: null,
@@ -1158,9 +1294,15 @@ export async function synthesizeFragmentInBackground(opts = {}) {
         cfgScheduleKeyframes: previewOpts.cfgScheduleKeyframes,
         dynamicThresholdEnabled: previewOpts.dynamicThresholdEnabled,
         dynamicThresholdPercentile: previewOpts.dynamicThresholdPercentile,
+        melPostprocess: buildMelPostprocessPayload(
+          notes,
+          getCurrentProject() ? getCurrentProject().bpm : 120,
+          getSampleRate(),
+          480,
+        ),
         // 优先推理：播放进度条所在分段（0 = 交给主进程按"第一个改动分段"决定）
         priorityTimeSec: Number.isFinite(opts.priorityTimeSec) ? opts.priorityTimeSec : 0,
-      },
+      }),
     });
 
     // 推理期间状态可能已变：
@@ -1174,6 +1316,15 @@ export async function synthesizeFragmentInBackground(opts = {}) {
     console.log('[FragmentAudio] Background inference done (preview audio refreshed)');
     return 'ok';
   } catch (error) {
+    // 取消/被取代不算推理失败：SVS_SUPERSEDED（worker 端排队期间被更新请求
+    // 取代）与 SYNTHESIS_CANCELLED（协作式取消安全点抛出）都是主动放弃，
+    // 归为 'skip' —— 归为 'error' 会误触发 15 秒冷却，冷却期间用户的编辑
+    // 不再自动推理。error.code 可能经 IPC 序列化丢失，同时匹配消息文本兜底。
+    const code = (error && error.code) || '';
+    const msg = (error && error.message) || '';
+    const isCancelled = code === 'SVS_SUPERSEDED' || code === 'SYNTHESIS_CANCELLED'
+      || /superseded|cancelled|canceled|abort/i.test(msg);
+    if (isCancelled) return 'skip';
     // 后台失败不打扰用户：失败可能是模型缺失、显存不足等，
     // 下次手动播放会以正常路径报错提示。
     console.warn('[FragmentAudio] Background inference failed:', error && error.message);
@@ -1190,7 +1341,7 @@ export async function exportFragment() {
   const btnExportFragment = document.getElementById('btn-export-fragment');
   const originalText = btnExportFragment.textContent;
   btnExportFragment.disabled = true;
-  btnExportFragment.textContent = t('fragment.exporting');
+  setLabel(btnExportFragment, t('fragment.exporting'), { icon: 'download' });
   setFragmentIsExporting(true);
   try {
     if (!getPipelineInitialized()) {
@@ -1207,7 +1358,7 @@ export async function exportFragment() {
     const audioData = await window.electronAPI.synthesizeFragmentSVS({
       notes: getClippedNotes(),
       bpm: getCurrentProject() ? getCurrentProject().bpm : 120,
-      options: {
+      options: attachPluginBackend({
         f0Envelope: null,
         pitchCurveF0: pitchCurveF0Serializable,
         refAudioWavBuffer: getWavFileBuffer() || null,
@@ -1216,7 +1367,13 @@ export async function exportFragment() {
         nSteps: exportOpts.nSteps,
         cfg: exportOpts.cfg,
         cfgRescale: exportOpts.cfgRescale,
-      },
+        melPostprocess: buildMelPostprocessPayload(
+          getClippedNotes(),
+          getCurrentProject() ? getCurrentProject().bpm : 120,
+          getSampleRate(),
+          480,
+        ),
+      }),
     });
     const paddedAudio = padAudioToFragmentDuration(audioData);
     const bpm = getCurrentProject() ? getCurrentProject().bpm : 120;
@@ -1237,6 +1394,6 @@ export async function exportFragment() {
   } finally {
     setFragmentIsExporting(false);
     btnExportFragment.disabled = false;
-    btnExportFragment.textContent = originalText;
+    setLabel(btnExportFragment, originalText, { icon: 'download' });
   }
 }

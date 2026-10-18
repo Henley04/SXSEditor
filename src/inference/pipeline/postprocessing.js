@@ -52,6 +52,59 @@ function _readEnableAntiAliasing() {
 }
 
 /**
+ * 流式预览的共享推送增益（取代逐 chunk 独立的 normalizePeakTo）。
+ *
+ * 为什么不能逐 chunk 独立归一化：normalizePeakTo 只在 peak > 0.95 时缩放，
+ * 于是只有"超标"的 chunk 被压、不超标的 chunk 原样保留 —— 段与段之间的相对电平
+ * 被系统性改写（实测弱唱 0.40 / 高潮 2.50 / 次高潮 1.20 三段，原始动态 15.9 dB
+ * 被压到 7.5 dB）；而推送切点正好落在 WSOLA 重叠区起点（w≈0，前后本应连续），
+ * 相邻两次推送用不同缩放系数就会在该点形成阶跃 → 可听的咔哒/电平跳变。
+ * 最终 output 不受影响（循环结束后统一 normalizePeakTo + loudnormFinal），
+ * 所以症状是"预览与导出听感不一致"。
+ *
+ * 现在的策略：整条流共享一个增益系数。
+ *   - 只在"本段乘上当前增益后仍会超过 TARGET"时才下调增益；
+ *   - 下调的那一段用 ~5 ms 升余弦淡入（从 0 升到新增益），把推送切点上的电平
+ *     阶跃抹平 → 不产生咔哒；同时整段幅度不超过 TARGET（如果改成"从上一增益
+ *     慢慢渐变到新增益"，响段开头的样本仍可能远超 1.0，在设备端硬削波）；
+ *   - 增益永不回升（已推送的段无法回溯，回升会在边界上制造向上跳变）。
+ * 结果是段内动态完整保留，只有"更响的段出现"这一件事会导致整体下调一次，
+ * 且下调点只有 5 ms 的轻微凹陷。
+ *
+ * @param {Float32Array} buf - 待推送的音频段（原地修改）
+ * @param {{gain: number}} state - 跨段共享状态，初始 { gain: 1 }
+ */
+function _applyStreamGain(buf, state) {
+    const TARGET_PEAK = 0.95;
+    // 淡入长度：5 ms @ 24 kHz。足够抹掉阶跃的高频能量（咔哒），短到听不出凹陷。
+    const FADE_SAMPLES = 120;
+    const n = buf.length;
+    if (n === 0) return;
+
+    let peak = 0;
+    for (let i = 0; i < n; i++) {
+        const abs = Math.abs(buf[i]);
+        if (abs > peak) peak = abs;
+    }
+
+    const prev = state.gain;
+    if (peak * prev <= TARGET_PEAK) {
+        if (prev !== 1) {
+            for (let i = 0; i < n; i++) buf[i] *= prev;
+        }
+        return;
+    }
+    const next = TARGET_PEAK / peak;
+    const fade = Math.min(n, FADE_SAMPLES);
+    for (let i = 0; i < fade; i++) {
+        // 升余弦：i=0 权重 0，i=fade 权重 1（淡入只在增益变化的那一段出现）
+        buf[i] *= next * 0.5 * (1 - Math.cos(Math.PI * i / fade));
+    }
+    for (let i = fade; i < n; i++) buf[i] *= next;
+    state.gain = next;
+}
+
+/**
  * 2nd-order Butterworth low-pass filter (biquad, bilinear-transformed IIR).
  *
  * Provides steeper stopband rejection (−12 dB/oct vs −6 dB/oct for 1st-order)
@@ -126,13 +179,19 @@ function _oversample2xAntiAlias(samples, srcSr, dstSr) {
     const N = samples.length;
     if (N === 0) return samples;
 
-    // Step 1: 2× upsample via zero-stuffing
-    // Insert zeros between samples: [s0, 0, s1, 0, s2, 0, ...]
-    // The spectral effect is: original spectrum replicated at multiples of srcSr.
+    // Step 1: 2× upsample via zero-stuffing, with the mandatory L=2 gain.
+    // Insert zeros between samples: [2·s0, 0, 2·s1, 0, 2·s2, 0, ...]
+    // The spectral effect is: original spectrum replicated at multiples of srcSr
+    // AND scaled by 1/L (zero-stuffing spreads the same energy over L times the
+    // samples). The anti-image LP below has unity DC gain, so without the ×L the
+    // reconstructed sequence comes out at 1/L = −6.02 dB. That gain error used to
+    // hit every reference-audio feature extraction down this path: mel amplitude
+    // shifted down 6 dB, and extractRefF0FromWav's minRms gate halved (quiet
+    // reference phrases read as silence → F0 = 0).
     const upN = N * 2;
     const upsampled = new Float32Array(upN);
     for (let i = 0; i < N; i++) {
-        upsampled[i * 2] = samples[i];
+        upsampled[i * 2] = samples[i] * 2;
         // odd indices remain 0 (zero-stuffing)
     }
 
@@ -176,7 +235,50 @@ function _oversample2xAntiAlias(samples, srcSr, dstSr) {
  * @param {number} chunkIndex - chunk 索引（用于错误信息）
  * @throws {Error} 当波形为空、包含 NaN 或全零时
  */
-function validateVocoderOutput(waveform, chunkIndex) {
+/**
+ * mel 的「静音电平」阈值（归一化域）。
+ *
+ * mel_transform 会把能量 clamp 到 1e-5 再取 log，再按 (log_mel - MEL_MEAN)/√MEL_VAR
+ * 标准化（见 preprocessing / melSpec 标准化），所以休止帧的归一化 mel 恒等于
+ * (log(1e-5) - MEL_MEAN)/√MEL_VAR ≈ -2.31。这里在此之上留 0.5 的容差：
+ * 归一化值 -1.81 对应线性幅度约 4e-5（≈ -87 dB），仍远低于任何可听阈值。
+ * 因此「全部抽样点 ≤ 该阈值」等价于「这段 mel 没有可听能量」。
+ */
+const MEL_SILENCE_LEVEL = (Math.log(1e-5) - MEL_MEAN) / Math.sqrt(MEL_VAR) + 0.5;
+
+/**
+ * 判断一段 mel 是否「无能量」（休止 / 极静音），用于区分
+ *   (a) 合法的静音输出（输入 mel 本来就是休止，声码器输出全零是正确的）
+ *   (b) DML silent failure（显存耗尽返回全零）
+ * 送进声码器的是**标准化** mel（mean≈0, std≈1，见 effectiveMelData 注释），
+ * 静音帧不是一个接近 0 的值，而是贴近 mel 下限的常数（≈ -2.31），
+ * 所以判据是「全部抽样点都 ≤ MEL_SILENCE_LEVEL」而不是「≈ 0」。
+ *
+ * NaN/Inf 一律视为非静音（保守）：mel 里出现非有限值时保留原有的全零拦截，
+ * 让问题暴露在 NaN 校验而不是被静音分支放过去。
+ *
+ * @param {Float32Array|number[]} melData - 该 chunk 的 mel（frames*MEL_DIM 平铺，已标准化）
+ * @param {number} [threshold=MEL_SILENCE_LEVEL] - 归一化域的静音电平上界
+ * @returns {boolean} true = 该段 mel 无能量
+ */
+function isSilentMel(melData, threshold = MEL_SILENCE_LEVEL) {
+    if (!melData || melData.length === 0) return true;
+    const step = Math.max(1, Math.floor(melData.length / 1024));
+    for (let i = 0; i < melData.length; i += step) {
+        // !(v <= threshold)：NaN/Inf 落到这里为 true → 判定非静音
+        if (!(melData[i] <= threshold)) return false;
+    }
+    return true;
+}
+
+/**
+ * @param {Float32Array} waveform - vocoder 输出波形
+ * @param {number} chunkIndex - chunk 索引（用于错误信息）
+ * @param {{silentInputMel?: boolean}} [opts] - silentInputMel=true 表示本 chunk 的输入 mel
+ *   本身无能量（休止/极静音），此时全零输出是合法的，跳过全零拦截。
+ * @throws {Error} 当波形为空、包含 NaN 或（输入 mel 有能量时）全零时
+ */
+function validateVocoderOutput(waveform, chunkIndex, opts = null) {
     if (!waveform || waveform.length === 0) {
         throw new Error(`Vocoder chunk ${chunkIndex} returned empty waveform (length=0, likely GPU VRAM exhaustion)`);
     }
@@ -192,7 +294,16 @@ function validateVocoderOutput(waveform, chunkIndex) {
         sampledCount++;
     }
     if (sampledCount > 0 && nonZeroCount === 0) {
-        throw new Error(`Vocoder chunk ${chunkIndex} produced all-zero output (GPU VRAM exhaustion or device removed)`);
+        // 全零也可能是「本 chunk 的 mel 本来就是休止/极静音」的合法输出：fillNoteGaps
+        // 会插入 pitch<=0 的休止帧，量化声码器可能给出精确的 0。只有输入 mel 有能量时
+        // 才能判定为 DML silent failure，否则会误杀合法静音段（长休止工程直接合成失败）。
+        if (opts && opts.silentInputMel) {
+            if (_readDiagnosticMode()) {
+                console.log(`[Vocoder] chunk ${chunkIndex} all-zero output but input mel is silent — treating as valid silence`);
+            }
+            return;
+        }
+        throw new Error(`Vocoder chunk ${chunkIndex} produced all-zero output while input mel had energy (GPU VRAM exhaustion or device removed)`);
     }
 }
 
@@ -1336,7 +1447,7 @@ class Postprocessing {
                 }
             }
             // 校验输出：DML 在显存边界可能返回全零/NaN 而不抛错（silent failure）
-            validateVocoderOutput(waveform, 0);
+            validateVocoderOutput(waveform, 0, { silentInputMel: isSilentMel(effectiveMelData) });
             // 诊断：vocoder 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
             // 纯统计采样，受 diagnosticMode 控制
             if (_readDiagnosticMode()) {
@@ -1372,11 +1483,11 @@ class Postprocessing {
             // M7: streaming preview consistency — push the peak-normalized
             // chunk to onChunkComplete BEFORE loudnorm, so the streaming
             // preview receives the same peak-normalized audio as the
-            // multi-chunk path (whose onChunkComplete also sends
-            // normalizePeakTo(chunkAudio), with loudnorm applied only to the
-            // final merged output). The final returned `output` is loudnorm'd
-            // below, matching the multi-chunk path's final loudnormFinal.
-            // 单 chunk 路径：一次性推送全部音频（流式播放用）
+            // multi-chunk path (which pushes its segments through the shared
+            // _applyStreamGain, with loudnorm applied only to the final merged
+            // output). The final returned `output` is loudnorm'd below, matching
+            // the multi-chunk path's final loudnormFinal. 单 chunk 只有一次推送，
+            // 全局归一化与"共享增益"等价。
             if (onChunkComplete) {
                 try {
                     onChunkComplete({
@@ -1462,6 +1573,8 @@ class Postprocessing {
         //   validateVocoderOutput 拦截此类无效输出。
         const totalChunkCount = chunkSpecs.length;
         let committedSamples = 0;
+        // 流式推送的共享增益状态（跨 chunk 保持，见 _applyStreamGain 注释）。
+        const streamGain = { gain: 1 };
         for (let i = 0; i < totalChunkCount; i++) {
             const spec = chunkSpecs[i];
             // 流式创建当前 chunk 的输入张量（不预存到 chunkSpecs）。
@@ -1516,7 +1629,8 @@ class Postprocessing {
             }
 
             // 校验输出：拦截 DML silent failure（全零/NaN）
-            validateVocoderOutput(waveform, i);
+            // melSub 是本 chunk 的原始 mel（不含静态形状补零，补零会把「静音」判成有能量）。
+            validateVocoderOutput(waveform, i, { silentInputMel: isSilentMel(melSub) });
             // 诊断：首 chunk 输出开头能量分布（排查"第一个 midi 开头缺音"问题）
             // 纯统计采样，受 diagnosticMode 控制
             if (spec.isFirst && _readDiagnosticMode()) {
@@ -1603,14 +1717,16 @@ class Postprocessing {
             // - 首 chunk：stableEnd = (isLast ? chunkEnd : chunkEnd - overlapFrames) * vocoderHopSize
             // - 中间 chunk：包含头部 overlap 的 crossfade 结果 + 稳定段（weightSum=1）
             // - 末 chunk：stableEnd = chunkEnd * vocoderHopSize（尾部无 fade）
-            // 注意：peak 归一化在每 chunk 推送前独立应用（仅向下缩放，peak>0.95 时生效），
-            // 防止流式音频在 Int16 转换时削波。最终 output 仍会在循环结束后统一 normalizePeakTo。
+            // 注意：推送前按"整条流共享一个增益系数"缩放（_applyStreamGain），
+            // 而不是每个 chunk 独立归一化 —— 后者会把段间相对电平抹平并在推送切点
+            // 制造阶跃（详见 _applyStreamGain 注释）。最终 output 自身不被推送缩放影响，
+            // 循环结束后仍统一 normalizePeakTo + loudnormFinal。
             if (onChunkComplete) {
                 const stableEndFrames = spec.isLast ? spec.chunkEnd : (spec.chunkEnd - overlapFrames);
                 const stableEnd = Math.min(stableEndFrames * vocoderHopSize, totalSamples);
                 if (stableEnd > committedSamples) {
                     const chunkAudio = output.slice(committedSamples, stableEnd);
-                    normalizePeakTo(chunkAudio);
+                    _applyStreamGain(chunkAudio, streamGain);
                     try {
                         onChunkComplete({
                             chunkIndex: i,
@@ -1656,35 +1772,14 @@ class Postprocessing {
         const f0 = new Float32Array(Math.floor(resampled.length / HOP_SIZE));
         const minRms = 0.01;
         const frameSize = HOP_SIZE;
+        const minLag = Math.floor(SAMPLE_RATE / 1000);
+        const maxLag = Math.floor(SAMPLE_RATE / 50);
         for (let i = 0; i < f0.length; i++) {
             const start = i * frameSize;
-            const end = Math.min(start + frameSize, resampled.length);
-            let rms = 0;
-            for (let j = start; j < end; j++) {
-                rms += resampled[j] * resampled[j];
-            }
-            rms = Math.sqrt(rms / (end - start));
-            if (rms < minRms) {
-                f0[i] = 0;
-                continue;
-            }
-            let bestLag = 0;
-            let bestCorr = 0;
-            const minLag = Math.floor(SAMPLE_RATE / 1000);
-            const maxLag = Math.floor(SAMPLE_RATE / 50);
-            for (let lag = minLag; lag <= maxLag; lag++) {
-                let corr = 0;
-                let energy = 0;
-                for (let j = 0; j < Math.min(frameSize, resampled.length - start - lag); j++) {
-                    corr += resampled[start + j] * resampled[start + j + lag];
-                    energy += resampled[start + j] * resampled[start + j];
-                }
-                if (energy > 0) corr /= energy;
-                if (corr > bestCorr) {
-                    bestCorr = corr;
-                    bestLag = lag;
-                }
-            }
+            // P2-2：自相关核心抽到 _autocorrBestLag（平方和前缀表，约 2× 提速）
+            const { bestLag, bestCorr } = _autocorrBestLag(
+                resampled, start, frameSize, minLag, maxLag, minRms
+            );
             if (bestCorr > 0.3 && bestLag > 0) {
                 f0[i] = SAMPLE_RATE / bestLag;
             } else {
@@ -1705,38 +1800,14 @@ class Postprocessing {
         const minRms = 0.01;
         const frameSize = HOP_SIZE;
         const EXTRACT_F0_YIELD_EVERY = 32;
+        const minLag = Math.floor(SAMPLE_RATE / 1000);
+        const maxLag = Math.floor(SAMPLE_RATE / 50);
         for (let i = 0; i < f0.length; i++) {
             const start = i * frameSize;
-            const end = Math.min(start + frameSize, resampled.length);
-            let rms = 0;
-            for (let j = start; j < end; j++) {
-                rms += resampled[j] * resampled[j];
-            }
-            rms = Math.sqrt(rms / (end - start));
-            if (rms < minRms) {
-                f0[i] = 0;
-                if ((i % EXTRACT_F0_YIELD_EVERY) === 0 && i > 0) {
-                    await new Promise(r => setImmediate(r));
-                }
-                continue;
-            }
-            let bestLag = 0;
-            let bestCorr = 0;
-            const minLag = Math.floor(SAMPLE_RATE / 1000);
-            const maxLag = Math.floor(SAMPLE_RATE / 50);
-            for (let lag = minLag; lag <= maxLag; lag++) {
-                let corr = 0;
-                let energy = 0;
-                for (let j = 0; j < Math.min(frameSize, resampled.length - start - lag); j++) {
-                    corr += resampled[start + j] * resampled[start + j + lag];
-                    energy += resampled[start + j] * resampled[start + j];
-                }
-                if (energy > 0) corr /= energy;
-                if (corr > bestCorr) {
-                    bestCorr = corr;
-                    bestLag = lag;
-                }
-            }
+            // 与同步版共用同一个自相关核心，两份实现不再各写一遍（审查项 2.2）
+            const { bestLag, bestCorr } = _autocorrBestLag(
+                resampled, start, frameSize, minLag, maxLag, minRms
+            );
             if (bestCorr > 0.3 && bestLag > 0) {
                 f0[i] = SAMPLE_RATE / bestLag;
             } else {
@@ -1795,6 +1866,66 @@ class Postprocessing {
     }
 }
 
+/**
+ * 单帧自相关基频估计 —— 参考音频 F0 提取的热路径（同步版与异步版共用）。
+ *
+ * P2-2 性能修复：原实现把 energy 的累加写在 lag 循环**内部**，而
+ * `energy = Σ x[start+j]²` 与 lag 无关（只有帧紧贴音频末尾、累加长度被
+ * `resampled.length - start - lag` 截断时才随 lag 变化）。于是同一段平方和被
+ * 重复累加 (maxLag - minLag + 1) ≈ 457 次，直接浪费约一半算力。
+ *
+ * 这里改用平方和前缀表：energy 变成 O(1) 查表，内层循环只剩 corr 的乘加，
+ * 整体约 2× 提速，且浮点累加顺序与原来一致（前缀表同样按 j 递增累加），
+ * 数值结果与旧实现逐位相同。
+ *
+ * @param {Float32Array} resampled 已重采样到 SAMPLE_RATE 的音频
+ * @param {number} start 帧起始采样下标
+ * @param {number} frameSize 帧长
+ * @param {number} minLag 最小滞后（对应最高频率）
+ * @param {number} maxLag 最大滞后（对应最低频率）
+ * @param {number} minRms 低于该 RMS 直接判定为静音帧，跳过自相关
+ * @returns {{bestLag:number, bestCorr:number, rms:number}}
+ */
+// _autocorrBestLag 复用的平方和前缀表缓冲（避免每帧一次 Float64Array 分配）
+let _prefixSqBuf = new Float64Array(0);
+
+function _autocorrBestLag(resampled, start, frameSize, minLag, maxLag, minRms = 0.01) {
+    const maxN = Math.min(frameSize, resampled.length - start);
+    if (maxN <= 0) return { bestLag: 0, bestCorr: 0, rms: 0 };
+
+    // 平方和前缀表：prefixSq[k] = Σ_{j<k} x[start+j]²
+    // 每帧都新建一个 Float64Array(frameSize+1) 会把省下来的算力又交给了 GC，
+    // 因此复用模块级缓冲（本函数内部无 await，不存在重入）。
+    if (_prefixSqBuf.length < maxN + 1) _prefixSqBuf = new Float64Array(maxN + 1);
+    const prefixSq = _prefixSqBuf;
+    for (let j = 0; j < maxN; j++) {
+        const v = resampled[start + j];
+        prefixSq[j + 1] = prefixSq[j] + v * v;
+    }
+
+    // RMS 顺带从前缀表得出，省掉原来的第二次遍历
+    const rms = Math.sqrt(prefixSq[maxN] / maxN);
+    if (rms < minRms) return { bestLag: 0, bestCorr: 0, rms };
+
+    let bestLag = 0;
+    let bestCorr = 0;
+    for (let lag = minLag; lag <= maxLag; lag++) {
+        const n = Math.min(frameSize, resampled.length - start - lag);
+        if (n <= 0) break;
+        let corr = 0;
+        for (let j = 0; j < n; j++) {
+            corr += resampled[start + j] * resampled[start + j + lag];
+        }
+        const energy = prefixSq[n];
+        if (energy > 0) corr /= energy;
+        if (corr > bestCorr) {
+            bestCorr = corr;
+            bestLag = lag;
+        }
+    }
+    return { bestLag, bestCorr, rms };
+}
+
 module.exports = {
     Postprocessing,
     parseWavBuffer,
@@ -1811,7 +1942,15 @@ module.exports = {
     extractMelSpectrogram,
     extractMelSpectrogramAsync,
     validateVocoderOutput,
+    isSilentMel,
     isVramOOMError,
     guardMelFinite,
-    __test: { countNonFinite: _countNonFinite, melTransformInputRank: _melTransformInputRank },
+    __test: {
+        countNonFinite: _countNonFinite,
+        melTransformInputRank: _melTransformInputRank,
+        autocorrBestLag: _autocorrBestLag,
+        // 抗混叠管线 / 流式共享增益：供单测直接验证增益与跨段连续性
+        oversample2xAntiAlias: _oversample2xAntiAlias,
+        applyStreamGain: _applyStreamGain,
+    },
 };

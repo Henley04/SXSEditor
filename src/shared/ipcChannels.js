@@ -122,6 +122,23 @@ const IPC_CHANNELS = {
   GET_LOCALE: 'get-locale',
   LOCALE_CHANGED: 'locale-changed',
 
+  // ==================== Plugin Host (第三方歌声后端) ====================
+  PLUGIN_LIST: 'plugin:list',
+  PLUGIN_RELOAD: 'plugin:reload',
+  PLUGIN_GET_VOICES: 'plugin:getVoices',
+  PLUGIN_SYNTHESIZE: 'plugin:synthesize',
+  PLUGIN_GET_PLUGINS_DIR: 'plugin:getPluginsDir',
+  PLUGIN_OPEN_PLUGINS_FOLDER: 'plugin:openPluginsFolder',
+  PLUGIN_CANCEL_TICKET: 'plugin:cancelTicket',
+  // 主进程 → 渲染进程：插件阻滞播放的 ticket 生命周期（对应 host.blockPlayback）
+  PLUGIN_BLOCKING_START: 'plugin:blocking-start',
+  PLUGIN_BLOCKING_UPDATE: 'plugin:blocking-update',
+  PLUGIN_BLOCKING_END: 'plugin:blocking-end',
+  // 主进程 → 渲染进程：插件输出通道（进度 / 流式音频 / 诊断）
+  PLUGIN_PROGRESS: 'plugin:progress',
+  PLUGIN_AUDIO: 'plugin:audio',
+  PLUGIN_DIAGNOSTICS: 'plugin:diagnostics',
+
   // ==================== Resource Manager ====================
   RESMGR_OPEN: 'resmgr:open',
   RESMGR_GET_GPU_INFO: 'resmgr:getGPUInfo',
@@ -172,6 +189,81 @@ const IPC_CHANNELS = {
   UPDATE_OPEN_DOWNLOAD_PAGE: 'update:open-download-page',
   UPDATE_OPEN_MODEL_DOWNLOAD: 'update:open-model-download',
   UPDATE_NOTIFICATION_SHOW: 'update:notification-show',
+
+  // ==================== 补充收录（从现有调用点汇总） ====================
+  // 这些通道此前只以裸字符串形式散落在 src/main/*.js 与 src/preload.js 里，
+  // 从未登记进常量表 —— 这正是审查项 A3 的另一半：常量表覆盖了 150 个，
+  // 实际还有 56 个通道一直在裸写。scripts/check-ipc-channels.js 会守住这条线。
+  // ---- app ----
+  APP_WAIT_FOR_HEAVY_IPC: 'app:waitForHeavyIpc',
+  // ---- crash ----
+  CRASH_GET_REPORT_INFO: 'crash:getReportInfo',
+  CRASH_LOG: 'crash:log',
+  CRASH_OPEN_DUMP_DIR: 'crash:openDumpDir',
+  CRASH_OPEN_LOG_DIR: 'crash:openLogDir',
+  // ---- fragment ----
+  FRAGMENT_CLOSE: 'fragment:close',
+  FRAGMENT_CLOSE_ALL: 'fragment:closeAll',
+  // ---- fragment-svs ----
+  FRAGMENT_SVS_CHUNK_AUDIO: 'fragment-svs:chunk-audio',
+  // ---- main-menu ----
+  MAIN_MENU_SAVE_AS_REQUEST: 'main-menu:save-as-request',
+  MAIN_MENU_SAVE_REQUEST: 'main-menu:save-request',
+  // ---- mcp ----
+  MCP_AUTOMATION_REQUEST: 'mcp:automation-request',
+  MCP_AUTOMATION_RESPONSE: 'mcp:automation-response',
+  // ---- model-download ----
+  MODEL_DOWNLOAD_CHECK_ALL_VERSIONS: 'model-download:check-all-versions',
+  MODEL_DOWNLOAD_CHECK_JP_VERSION: 'model-download:check-jp-version',
+  MODEL_DOWNLOAD_CHECK_SIFIGAN: 'model-download:check-sifigan',
+  MODEL_DOWNLOAD_CHECK_SIFIGAN_VERSION: 'model-download:check-sifigan-version',
+  MODEL_DOWNLOAD_CHECK_VERSION: 'model-download:check-version',
+  MODEL_DOWNLOAD_START_SIFIGAN: 'model-download:start-sifigan',
+  MODEL_DOWNLOAD_UNLOAD_SIFIGAN: 'model-download:unload-sifigan',
+  MODEL_DOWNLOAD_UPDATE: 'model-download:update',
+  MODEL_DOWNLOAD_UPDATE_JP: 'model-download:update-jp',
+  MODEL_DOWNLOAD_UPDATE_SIFIGAN: 'model-download:update-sifigan',
+  MODEL_DOWNLOAD_WINDOW_CLOSED: 'model-download:window-closed',
+  // ---- settings ----
+  SETTINGS_GET_VOCODER_CHUNK_FRAMES_INFO: 'settings:getVocoderChunkFramesInfo',
+  SETTINGS_GET_VOCODER_CHUNK_FRAMES_TABLE: 'settings:getVocoderChunkFramesTable',
+  SETTINGS_RUN_TRTRTX_DIAGNOSTIC: 'settings:run-trtrtx-diagnostic',
+  // ---- settings-window ----
+  SETTINGS_WINDOW_OPENED: 'settings-window:opened',
+  // ---- shell ----
+  SHELL_OPEN_EXTERNAL: 'shell:open-external',
+  SHELL_SHOW_ITEM_IN_FOLDER: 'shell:showItemInFolder',
+  // ---- singer-creator ----
+  SINGER_CREATOR_SAVE_AS_REQUEST: 'singer-creator:save-as-request',
+  SINGER_CREATOR_SAVE_REQUEST: 'singer-creator:save-request',
+  // ---- singer-market ----
+  SINGER_MARKET_DOWNLOAD: 'singer-market:download',
+  SINGER_MARKET_DOWNLOAD_PROGRESS: 'singer-market:download-progress',
+  SINGER_MARKET_FILE_DETAIL: 'singer-market:file-detail',
+  SINGER_MARKET_HEALTH: 'singer-market:health',
+  SINGER_MARKET_LICENSES: 'singer-market:licenses',
+  SINGER_MARKET_LIST: 'singer-market:list',
+  SINGER_MARKET_LOGIN: 'singer-market:login',
+  SINGER_MARKET_LOGOUT: 'singer-market:logout',
+  SINGER_MARKET_ME: 'singer-market:me',
+  SINGER_MARKET_PICK_FILE: 'singer-market:pick-file',
+  SINGER_MARKET_PICK_SAVE_PATH: 'singer-market:pick-save-path',
+  SINGER_MARKET_REGISTER: 'singer-market:register',
+  SINGER_MARKET_TAGS: 'singer-market:tags',
+  SINGER_MARKET_UPLOAD: 'singer-market:upload',
+  // ---- svs ----
+  SVS_CANCEL: 'svs:cancel',
+  SVS_MODEL_INCOMPATIBLE: 'svs:model-incompatible',
+  SVS_PROGRESS: 'svs:progress',
+  // ---- update ----
+  UPDATE_CANCEL_DOWNLOAD: 'update:cancel-download',
+  UPDATE_DOWNLOAD_COMPLETE: 'update:download-complete',
+  UPDATE_DOWNLOAD_ERROR: 'update:download-error',
+  UPDATE_DOWNLOAD_INSTALLER: 'update:download-installer',
+  UPDATE_DOWNLOAD_PROGRESS: 'update:download-progress',
+  UPDATE_INSTALL_INSTALLER: 'update:install-installer',
+  // ---- webnn ----
+  WEBNN_CLEAR_NPU_CACHE: 'webnn:clearNpuCache',
 };
 
 module.exports = { IPC_CHANNELS };

@@ -1,4 +1,5 @@
 import { PARAM_MODES } from './constants.js';
+import { createDefaultPostprocessState } from './postprocessParams.js';
 
 let SAMPLE_RATE = 24000;
 let pipelineInitialized = false;
@@ -32,6 +33,10 @@ let wavFileBuffer = null;
 
 let currentFragment = null;
 let currentProject = null;
+// 当前分片所属轨道的后端 {type:'sxs'} 或 {type:'plugin', pluginId, kindId, ...}。
+// 由 handleFragmentData() 从 loadFragment payload 的 backend 字段写入；
+// 为 null 表示分片数据还没到（此时一律按内置轨道处理）。
+let trackBackend = null;
 let currentParamMode = PARAM_MODES.MIDI;
 let notes = [];
 // Snap grid for the fragmentEditor piano roll, in beats per grid cell.
@@ -120,6 +125,26 @@ let activeInlineEditNote = null;
 let paramPanelCollapsed = false;
 let paramPanelMode = 'VOL'; // 'VOL' | 'PAN' | 'Phoneme' | 'Timbre'
 
+// ---- 音色 / 后处理自动化 ----
+// postprocess = { defaults: {paramId: number}, curves: {paramId: {keyframes: []}} }
+// 每个参数一条独立曲线（量纲不同，不能混用一条 lane 曲线）：
+//   defaults[paramId] —— 曲线为空时的常量取值（检查器滑块写入）
+//   curves[paramId].keyframes —— 锚点数组，结构同音高锚点（time/value/strength/smoothness）
+let postprocess = createDefaultPostprocessState();
+let activeTimbreParam = 'f0Smooth';
+// 曲线缓存版本号：任何曲线 / 默认值变化都自增，用于失效排序锚点缓存与 F0/mel 参数采样
+let timbreVersion = 0;
+let selectedTimbreAnchors = new Set();
+let timbreDragAnchorIdx = -1;
+let timbreDragAnchorStarts = new Map();
+let timbreDragStartValue = 0;
+let timbreDragStartTime = 0;
+let timbreEnvelopeSnapshotBeforeDrag = null;
+// 右键按住锚点拖动（强度/平滑）时的实时 HUD：{ x, y, strength, smoothness, value, label }
+let anchorDragHud = null;
+// 右键菜单目标：{ kind: 'pitch' } 或 { kind: 'timbre', paramId }
+let curveContextMenuTarget = { kind: 'pitch' };
+
 let fragmentDataReceived = false;
 
 // 缓存在 currentFragment 就绪前到达的 fragmentBoundsChanged，待 handleFragmentData 完成后回放
@@ -199,6 +224,9 @@ export function setCurrentFragment(v) { currentFragment = v; }
 
 export function getCurrentProject() { return currentProject; }
 export function setCurrentProject(v) { currentProject = v; }
+
+export function getTrackBackend() { return trackBackend; }
+export function setTrackBackend(v) { trackBackend = v; }
 
 export function getCurrentParamMode() { return currentParamMode; }
 export function setCurrentParamMode(v) { currentParamMode = v; }
@@ -367,6 +395,44 @@ export function setParamPanelCollapsed(v) { paramPanelCollapsed = v; }
 
 export function getParamPanelMode() { return paramPanelMode; }
 export function setParamPanelMode(v) { paramPanelMode = v; }
+
+export function getPostprocess() { return postprocess; }
+export function setPostprocess(v) {
+  postprocess = v;
+  timbreVersion++;
+}
+export function getPostprocessDefaults() { return postprocess.defaults; }
+export function getPostprocessCurves() { return postprocess.curves; }
+
+export function getActiveTimbreParam() { return activeTimbreParam; }
+export function setActiveTimbreParam(v) { activeTimbreParam = v; }
+
+export function getTimbreVersion() { return timbreVersion; }
+export function invalidateTimbreCache() { timbreVersion++; }
+
+export function getSelectedTimbreAnchors() { return selectedTimbreAnchors; }
+export function setSelectedTimbreAnchors(v) { selectedTimbreAnchors = v; }
+
+export function getTimbreDragAnchorIdx() { return timbreDragAnchorIdx; }
+export function setTimbreDragAnchorIdx(v) { timbreDragAnchorIdx = v; }
+
+export function getTimbreDragAnchorStarts() { return timbreDragAnchorStarts; }
+export function setTimbreDragAnchorStarts(v) { timbreDragAnchorStarts = v; }
+
+export function getTimbreDragStartValue() { return timbreDragStartValue; }
+export function setTimbreDragStartValue(v) { timbreDragStartValue = v; }
+
+export function getTimbreDragStartTime() { return timbreDragStartTime; }
+export function setTimbreDragStartTime(v) { timbreDragStartTime = v; }
+
+export function getTimbreEnvelopeSnapshotBeforeDrag() { return timbreEnvelopeSnapshotBeforeDrag; }
+export function setTimbreEnvelopeSnapshotBeforeDrag(v) { timbreEnvelopeSnapshotBeforeDrag = v; }
+
+export function getAnchorDragHud() { return anchorDragHud; }
+export function setAnchorDragHud(v) { anchorDragHud = v; }
+
+export function getCurveContextMenuTarget() { return curveContextMenuTarget; }
+export function setCurveContextMenuTarget(v) { curveContextMenuTarget = v; }
 
 export function getFragmentDataReceived() { return fragmentDataReceived; }
 export function setFragmentDataReceived(v) { fragmentDataReceived = v; }

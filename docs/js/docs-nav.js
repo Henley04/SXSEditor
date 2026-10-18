@@ -28,6 +28,12 @@
           ]
         },
         {
+          title: { en: 'Extending', zh: '扩展' },
+          items: [
+            { href: 'plugins.html', title: { en: 'Plugin Backends', zh: '插件后端' } }
+          ]
+        },
+        {
           title: { en: 'Reference', zh: '参考' },
           items: [
             { href: 'settings.html', title: { en: 'Settings', zh: '设置' } },
@@ -60,6 +66,7 @@
         {
           title: { en: 'Extending', zh: '扩展开发' },
           items: [
+            { href: 'plugins.html', title: { en: 'Plugin Backends', zh: '插件后端' } },
             { href: 'themes.html', title: { en: 'Themes & UI', zh: '主题与界面' } },
             { href: 'testing-cli.html', title: { en: 'Testing & CLI', zh: '测试与命令行' } },
             { href: 'singer-market.html', title: { en: 'Singer Market', zh: '歌手市场' } }

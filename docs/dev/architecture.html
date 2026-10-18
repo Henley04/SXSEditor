@@ -93,7 +93,7 @@
 │  settings             (src/settings.js)      Device, inference, audio config             │
 │  model_download       (src/modelDownload.js) Chunked parallel download from ModelScope   │
 │  resource_manager     (src/resourceManager.js) GPU/VRAM monitor, model load/unload       │
-│  splash               (src/splash.js)        Startup splash (packaged builds only)       │
+│  splash               BaseWindow + ImageView; no renderer, no HTML, no preload        │
 └───────────────────────────────────────────────────────────────────────────────────────────┘</code></pre>
 
       <h2>
@@ -120,7 +120,7 @@
       <p data-lang="en">Each renderer is a self-contained Vanilla JS app communicating only through <code>window.electronAPI</code>. Renderers never touch Node.js APIs directly.</p>
       <p data-lang="zh">每个渲染进程都是独立的原生 JS 应用，仅通过 <code>window.electronAPI</code> 通信。渲染进程绝不直接调用 Node.js API。</p>
       <ul>
-        <li><span data-lang="en"><strong>Canvas rendering</strong> — <code>editor/pianoRoll.js</code> and <code>renderer/timelineRenderer.js</code> draw the piano roll and multi-track timeline.</span><span data-lang="zh"><strong>Canvas 渲染</strong>— <code>editor/pianoRoll.js</code> 与 <code>renderer/timelineRenderer.js</code> 绘制钢琴卷帘与多轨时间线。</span></li>
+        <li><span data-lang="en"><strong>Canvas rendering</strong> — <code>fragmentEditor/canvasRenderer.js</code> and <code>renderer/timelineRenderer.js</code> draw the piano roll and multi-track timeline.</span><span data-lang="zh"><strong>Canvas 渲染</strong>—<code>fragmentEditor/canvasRenderer.js</code> 与 <code>renderer/timelineRenderer.js</code> 绘制钢琴卷帘与多轨时间线。</span></li>
         <li><span data-lang="en"><strong>User interaction</strong> — mouse/keyboard handlers in <code>fragmentEditor/eventHandlers.js</code> and <code>renderer/eventHandlers.js</code>.</span><span data-lang="zh"><strong>用户交互</strong>— <code>fragmentEditor/eventHandlers.js</code> 与 <code>renderer/eventHandlers.js</code> 中的鼠标/键盘处理。</span></li>
         <li><span data-lang="en"><strong>Audio playback control</strong> — renderers issue <code>audioPlay</code> / <code>audioStop</code> requests; the main process owns the actual WASAPI session.</span><span data-lang="zh"><strong>音频播放控制</strong>— 渲染进程发起 <code>audioPlay</code> / <code>audioStop</code> 请求，主进程持有真正的 WASAPI 会话。</span></li>
         <li><span data-lang="en"><strong>State management</strong> — <code>renderer/state.js</code> wraps TrackManager + HistoryManager; <code>fragmentEditor/state.js</code> holds editor state.</span><span data-lang="zh"><strong>状态管理</strong>— <code>renderer/state.js</code> 封装 TrackManager + HistoryManager；<code>fragmentEditor/state.js</code> 持有编辑器状态。</span></li>
@@ -285,8 +285,8 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
         <span data-lang="en">Window Types</span>
         <span data-lang="zh">窗口类型</span>
       </h2>
-      <p data-lang="en">Each window is registered as a webpack entry point in <code>forge.config.js</code> and has its own HTML + JS bundle. All windows share the same preload (<code>src/preload.js</code>), except the splash window which uses <code>src/splashPreload.js</code>.</p>
-      <p data-lang="zh">每个窗口在 <code>forge.config.js</code> 中注册为 webpack 入口，并拥有独立的 HTML + JS bundle。所有窗口共享同一个 preload（<code>src/preload.js</code>），启动画面窗口除外，它使用 <code>src/splashPreload.js</code>。</p>
+      <p data-lang="en">Each window is registered as a webpack entry point in <code>forge.config.js</code> and has its own HTML + JS bundle. All windows share the same preload (<code>src/preload.js</code>). The splash window is the exception and is <strong>not</strong> a webpack entry point at all — see the note below.</p>
+      <p data-lang="zh">除启动画面外，每个窗口都在 <code>forge.config.js</code> 中注册为 webpack 入口，并拥有独立的 HTML + JS bundle，所有窗口共享同一个 preload（<code>src/preload.js</code>）。启动画面是唯一的例外，它<strong>根本不是</strong> webpack 入口 —— 详见下表说明。</p>
 
       <table class="doc-table">
         <thead>
@@ -339,8 +339,8 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
           </tr>
           <tr>
             <td><code>splash_window</code></td>
-            <td><code>src/splash.js</code></td>
-            <td><span data-lang="en">Startup splash (packaged builds only; skipped in <code>npm start</code>).</span><span data-lang="zh">启动画面（仅打包构建使用；<code>npm start</code> 时跳过）。</span></td>
+            <td><em data-lang="en">not a webpack entry point</em><em data-lang="zh">非 webpack 入口</em></td>
+            <td><span data-lang="en">Startup splash (packaged builds only; skipped in <code>npm start</code>). Not a webpack entry point and <strong>not a BrowserWindow</strong>: it is a <code>BaseWindow</code> whose content view is an <code>ImageView</code> painting a build-time rasterised PNG (<code>splash@2x.png</code> / <code>splash@3x.png</code>). <code>scripts/generate-splash-image.js</code> bakes the layout, the acrylic card, the version string and the build timestamp into the pixels, and the two scale factors are attached as representations of one <code>nativeImage</code> so each display picks a 1:1 bitmap. No renderer process, no HTML, no preload, no font shaping — the first frame costs one PNG decode. <code>ImageView</code> is experimental, so a missing class or bitmap degrades to "no splash" rather than failing the launch.</span><span data-lang="zh">启动画面（仅打包构建使用；<code>npm start</code> 时跳过）。<strong>不是 webpack 入口，也不是 BrowserWindow</strong>：而是一个 <code>BaseWindow</code>，内容视图是 <code>ImageView</code>，直接绘制构建期烘焙好的 PNG（<code>splash@2x.png</code> / <code>splash@3x.png</code>）。版面、亚克力卡片、版本号与构建时间都由 <code>scripts/generate-splash-image.js</code> 写进像素；两个倍率作为同一个 <code>nativeImage</code> 的 representation 挂上去，各屏幕各取 1:1 的那张。没有渲染进程、没有 HTML、没有 preload、没有字形 shaping —— 首帧成本只有一次 PNG 解码。<code>ImageView</code> 属实验 API，类或位图缺失时降级为"不显示启动画面"，绝不影响启动。</span></td>
           </tr>
         </tbody>
       </table>
@@ -371,9 +371,9 @@ electronAPI.themeAPI.list()                         // theme:list</code></pre>
         <span data-lang="zh">新模块（v1.0.8 之后）</span>
       </h2>
       <ul>
-        <li><span data-lang="en"><strong><code>src/inference/fcpeDetector.js</code></strong> — FCPE (Fast Context-Free Pitch Estimator) ONNX-based F0 extraction. Now the default MIDI extraction tool, replacing Basic Pitch.</span><span data-lang="zh"><strong><code>src/inference/fcpeDetector.js</code></strong>— 基于 ONNX 的 FCPE（Fast Context-Free Pitch Estimator）F0 提取。现为默认 MIDI 提取工具，替代 Basic Pitch。</span></li>
-        <li><span data-lang="en"><strong><code>src/audio/lrcExport.js</code></strong> — LRC lyrics file export module. Exports project lyrics as a timed <code>.lrc</code> file synchronized with note timings.</span><span data-lang="zh"><strong><code>src/audio/lrcExport.js</code></strong>— LRC 歌词文件导出模块。将项目歌词导出为与音符时间同步的 <code>.lrc</code> 文件。</span></li>
-        <li><span data-lang="en"><strong><code>src/editor/accompanimentTrack.js</code></strong> — Accompaniment track management: import audio files, multi-channel support, per-track volume control, and drag-to-move positioning on the timeline.</span><span data-lang="zh"><strong><code>src/editor/accompanimentTrack.js</code></strong>— 伴奏轨道管理：导入音频文件、多通道支持、逐轨音量控制，以及时间线上的拖拽移动定位。</span></li>
+        <li><span data-lang="en"><strong><code>src/inference/fcpePitchDetector.js</code></strong> — FCPE (Fast Context-Free Pitch Estimator) ONNX-based F0 extraction. Now the default MIDI extraction tool, replacing Basic Pitch.</span><span data-lang="zh"><strong><code>src/inference/fcpePitchDetector.js</code></strong>— 基于 ONNX 的 FCPE（Fast Context-Free Pitch Estimator）F0 提取。现为默认 MIDI 提取工具，替代 Basic Pitch。</span></li>
+        <li><span data-lang="en"><strong><code>src/renderer/lrcExport.js</code></strong> — LRC lyrics file export module. Exports project lyrics as a timed <code>.lrc</code> file synchronized with note timings.</span><span data-lang="zh"><strong><code>src/renderer/lrcExport.js</code></strong>— LRC 歌词文件导出模块。将项目歌词导出为与音符时间同步的 <code>.lrc</code> 文件。</span></li>
+        <li><span data-lang="en"><strong><code>src/renderer/projectManager.js</code> + <code>src/renderer/audioPlayback.js</code></strong> — Accompaniment track management: import audio files, multi-channel support, per-track volume control, and drag-to-move positioning on the timeline.</span><span data-lang="zh"><strong><code>src/renderer/projectManager.js</code> + <code>src/renderer/audioPlayback.js</code></strong>— 伴奏轨道管理：导入音频文件、多通道支持、逐轨音量控制，以及时间线上的拖拽移动定位。</span></li>
       </ul>
 
       <h2>

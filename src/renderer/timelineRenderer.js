@@ -6,11 +6,15 @@ import {
   FRAGMENT_BASE_BEAT_WIDTH,
 } from './constants.js';
 import { t } from '../i18n/index.js';
+// U3: 分片时间轴是 canvas，DOM 里没有可读节点 —— 渲染时把摘要写进 aria-live 容器。
+import { announce } from '../utils/a11yAnnounce.js';
 import { getCanvasColors, invalidateCanvasThemeCache } from '../themes/canvasTheme.js';
 import { computeLuminanceCached } from '../themes/colorUtils.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { loadSingerFile, showSingerSelectDialog, markDirty, loadAccompanimentFile } from './projectManager.js';
 import { createIcon } from '../icons/iconHelper.js';
+import { describeTrackBackend, ensurePluginCatalog, hasPluginCatalog } from './pluginBackend.js';
+import { isPluginTrack } from '../editor/trackManager.js';
 
 export function getBeatWidth() {
   return FRAGMENT_BASE_BEAT_WIDTH * state.fragmentZoomX;
@@ -148,11 +152,40 @@ function _groupFragmentsBySinger(fragments) {
 // ---------------------------------------------------------------------------
 const NOTE_SPRITE_MIN_NOTES = 24;
 const NOTE_SPRITE_MAX_ENTRIES = 96;
+// 精灵位图分辨率必须与「当前缩放后的屏宽」解耦：
+//   旧实现把缓存键写成精确的 cssW（= fragWidth），Ctrl+滚轮每缩放一点，屏宽就
+//   变一点 → 每个可见分片每帧都 cache miss，于是每帧都新建一张离屏 canvas 并把
+//   分片里所有音符重画一遍。缩放 60 帧 = 60×N 次位图分配（数 MB/帧），帧时间
+//   直接飙到几十毫秒，表现为"缩放不跟手"，而滚动时屏宽不变所以完全正常。
+//   现在改为：位图按「当前屏宽 × 2」建一次，之后只要分辨率够用就直接
+//   drawImage 缩放复用（缩小属降采样、轻微放大属插值，观感无损）。
+//   连续放大时屏宽必须翻倍才会触发下一次重建：0.25×→4× 全程每个分片只重建 4 次，
+//   其余帧零分配；缩小方向永不重建。
+const NOTE_SPRITE_MAX_CSS_W = 3072; // 位图上限：64 拍分片在 4× 缩放下屏宽上万 px，
+                                    // 不设上限会瞬间分配出十几 MB 的位图
+const NOTE_SPRITE_MIN_CSS_W = 24;   // 极小分片（<24px）没必要为它建位图
+const NOTE_SPRITE_GROWTH = 2;       // 建图时超采样倍数 = 下一次重建前的放大余量
+// 缓存总字节预算：条目数不是好的内存度量（一张 3072px 宽的位图在 dpr=2 下约
+// 1.4MB）。超预算整表清空（与旧的条目数上限同一策略），避免长工程缩放浏览时
+// 驻留位图无限增长。
+const NOTE_SPRITE_MAX_BYTES = 48 * 1024 * 1024;
 let _noteSpriteCache = new Map();
+let _noteSpriteCacheBytes = 0;
+
+/** 当前屏宽下精灵至少需要的 CSS 宽度（夹到 [MIN, MAX]，MAX 之上不再重建）。 */
+function _spriteNeedWidth(fragWidth) {
+  return Math.min(NOTE_SPRITE_MAX_CSS_W, Math.max(NOTE_SPRITE_MIN_CSS_W, fragWidth));
+}
 
 /** 分片音符内容或主题变化后调用，强制重建精灵。 */
 export function invalidateFragmentNoteSprites() {
   _noteSpriteCache.clear();
+  _noteSpriteCacheBytes = 0;
+}
+
+/** 单张精灵位图的近似字节数（RGBA 4 字节/像素）。 */
+function _spriteBytes(cssW, dpr) {
+  return Math.max(1, Math.floor(cssW * dpr)) * Math.max(1, Math.floor(FRAGMENT_HEIGHT * dpr)) * 4;
 }
 
 function _buildNoteSprite(fragment, cssW, fragDuration, dpr) {
@@ -162,10 +195,9 @@ function _buildNoteSprite(fragment, cssW, fragDuration, dpr) {
   const c2 = cv.getContext('2d');
   if (!c2) return null;
   c2.setTransform(dpr, 0, 0, dpr, 0, 0);
-  c2.beginPath();
-  c2.roundRect(0, 0, cssW, FRAGMENT_HEIGHT, 6);
-  c2.clip();
-
+  // 不在这里做圆角裁剪：位图分辨率与屏幕显示宽度不再相等（见 _spriteNeedWidth），
+  // 位图内的圆角半径在缩放后会被拉伸成椭圆/超大圆角。改为绘制时用分片自身的
+  // roundRect 裁剪（半径恒为 6px），位图只负责音符条本身。
   const notes = fragment.notes;
   const midiAreaTop = 22;
   const midiAreaHeight = FRAGMENT_HEIGHT - 26;
@@ -190,19 +222,36 @@ function _buildNoteSprite(fragment, cssW, fragDuration, dpr) {
 function _getNoteSprite(fragment, fragWidth, fragDuration, dpr) {
   const notes = fragment.notes;
   if (!notes || notes.length < NOTE_SPRITE_MIN_NOTES) return null;
-  const cssW = Math.max(1, Math.round(fragWidth));
+  const needW = _spriteNeedWidth(fragWidth);
   const hit = _noteSpriteCache.get(fragment.id);
-  if (hit && hit.w === cssW && hit.color === fragment.color
+  // 命中条件：内容未变，且位图分辨率 ≥ 当前需求。
+  // 位图比需求大是好事（缩小/轻微放大都直接插值复用），不要为此重建 ——
+  // 旧实现要求精确相等，导致缩放时每帧重建全部精灵。
+  if (hit && hit.w >= needW && hit.color === fragment.color
       && hit.len === notes.length && hit.dur === fragDuration && hit.dpr === dpr) {
     return hit.canvas;
   }
-  const cv = _buildNoteSprite(fragment, cssW, fragDuration, dpr);
+  // 重建分辨率取「当前需求 × 超采样」与「旧位图分辨率」的较大者：
+  // 内容变化（改色/加音符）触发重建时不要顺手把分辨率降下来，否则随后放大又要重建一次。
+  const buildW = Math.min(
+    NOTE_SPRITE_MAX_CSS_W,
+    Math.max(needW * NOTE_SPRITE_GROWTH, hit ? hit.w : 0),
+  );
+  const cv = _buildNoteSprite(fragment, buildW, fragDuration, dpr);
   if (!cv) return null;
-  if (_noteSpriteCache.size >= NOTE_SPRITE_MAX_ENTRIES) _noteSpriteCache.clear();
+  // 记账：替换旧条目时先扣掉它的占用
+  if (hit) _noteSpriteCacheBytes -= _spriteBytes(hit.w, hit.dpr);
+  const bytes = _spriteBytes(buildW, dpr);
+  if (_noteSpriteCache.size >= NOTE_SPRITE_MAX_ENTRIES
+      || _noteSpriteCacheBytes + bytes > NOTE_SPRITE_MAX_BYTES) {
+    _noteSpriteCache.clear();
+    _noteSpriteCacheBytes = 0;
+  }
   _noteSpriteCache.set(fragment.id, {
-    canvas: cv, w: cssW, color: fragment.color,
+    canvas: cv, w: buildW, color: fragment.color,
     len: notes.length, dur: fragDuration, dpr,
   });
+  _noteSpriteCacheBytes += bytes;
   return cv;
 }
 
@@ -301,6 +350,12 @@ export function renderFragmentTimeline() {
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
   const dpr = window.devicePixelRatio || 1;
+
+  // U3：读屏播报（内容相同/过频时 announce 内部自动跳过）
+  announce('fragment-canvas-a11y-status', t('main.a11yFragmentTimelineStatus', {
+    fragments: fragments.length,
+    singers: singers.length,
+  }));
 
   const beatWidth = getBeatWidth();
   const fragmentMaxBeat = fragments.reduce((max, f) => Math.max(max, f.startTime + f.duration), 0);
@@ -434,8 +489,16 @@ export function renderFragmentTimeline() {
 
           ctx.strokeStyle = c.fragmentText || '#fff';
           ctx.lineWidth = 1;
+          // 只绘制视口内的像素列。等价性：每列是一条独立的竖线段
+          // (moveTo+lineTo)，横向无连续性，裁剪不会产生接缝；画布 backing store
+          // 恰为视口大小且已 clip 到 roundRect，[ _viewLeft, _viewRight ] 之外的列
+          // 本来就会被裁掉；samplesPerPixel 只依赖 buf.length/accWidth，不随循环
+          // 范围变化，故每一列的 sampleStart/sampleEnd 与旧代码完全相同。
+          // 左右各外扩 1px 是防御性的，覆盖 lineWidth=1 的半像素边与 dpr 缩放。
+          const pxStart = Math.max(0, Math.floor(_viewLeft - accX) - 1);
+          const pxEnd = Math.min(accWidth - 1, Math.ceil(_viewRight - accX) + 1);
           ctx.beginPath();
-          for (let px = 0; px < accWidth; px++) {
+          for (let px = pxStart; px <= pxEnd; px++) {
             const sampleStart = Math.floor(px * samplesPerPixel);
             const sampleEnd = Math.min(sampleStart + samplesPerPixel, buf.length);
             let peak;
@@ -508,10 +571,17 @@ export function renderFragmentTimeline() {
 
       // MIDI note visualization
       if (fragment.notes && fragment.notes.length > 0) {
-        // 音符较多时复用离屏精灵，拖动/滚动时每帧只做一次 drawImage
+        // 音符较多时复用离屏精灵，拖动/滚动/缩放时每帧只做一次 drawImage。
+        // 精灵位图分辨率与屏宽解耦（见 _spriteNeedWidth），因此这里必须用分片
+        // 自身的圆角矩形裁剪：否则位图四角的音符条会溢出圆角。
         const sprite = _getNoteSprite(fragment, fragWidth, fragment.duration, dpr);
         if (sprite) {
+          ctx.save();
+          ctx.beginPath();
+          ctx.roundRect(fragX, fragY, fragWidth, FRAGMENT_HEIGHT, radius);
+          ctx.clip();
           ctx.drawImage(sprite, fragX, fragY, fragWidth, FRAGMENT_HEIGHT);
+          ctx.restore();
         } else {
           ctx.save();
           ctx.beginPath();
@@ -733,16 +803,46 @@ function commitTrackNameEdit(singer, newName) {
   }
 }
 
+/**
+ * 把轨道后端标签写进歌手行：内置后端是既有的 'SXS INFERENCE' 品牌标识，
+ * 插件后端由插件自己声明名称（见 pluginBackend.describeTrackBackend）。
+ */
+function appendBackendConfig(infoDiv, singer) {
+  const desc = describeTrackBackend(singer);
+  const configDiv = document.createElement('div');
+  configDiv.className = 'singer-config';
+  configDiv.textContent = desc.label;
+  infoDiv.appendChild(configDiv);
+  if (desc.detail) {
+    const subDiv = document.createElement('div');
+    subDiv.className = 'singer-config';
+    subDiv.style.opacity = '0.72';
+    subDiv.textContent = desc.detail;
+    infoDiv.appendChild(subDiv);
+  }
+}
+
 export function renderSingerList() {
   const singers = trackManager.getSingers();
+
+  // 插件轨道的标签来自插件清单（异步 IPC）。清单未就绪时先用 kindId 顶着，
+  // 到达后靠缓存键变化触发一次重绘 —— 不能因为等 IPC 就阻塞列表渲染。
+  if (!hasPluginCatalog() && singers.some(isPluginTrack)) {
+    ensurePluginCatalog().then(() => renderSingerList()).catch(() => {});
+  }
+
   // 单次遍历拼接缓存键：原先 5 次 map().join() 会产生 10 个临时数组与字符串，
   // 歌手数量一多时 refreshAll 会有可感知的额外开销。
   let key = String(state.editingTrackNameId || '');
+  // 插件清单状态与后端信息进缓存键：清单异步到达/切换后端后标签必须重建
+  key += `|cat${hasPluginCatalog() ? 1 : 0}`;
   for (let i = 0; i < singers.length; i++) {
     const s = singers[i];
     // color/avatarPath 参与缓存键：换色或换头像后列表 UI 必须重建，
     // 否则用户改完看不到变化（功能性 bug）。
     key += `|${s.id}~${s.trackName}~${s.singerFileMissing ? 1 : 0}${s.audioFileMissing ? 1 : 0}${s.type || 'singer'}~${s.color || ''}~${s.avatarPath || ''}`;
+    const backend = s.backend;
+    key += `~${backend ? backend.type : 'sxs'}${backend && backend.pluginId ? backend.pluginId : ''}${backend && backend.kindId ? backend.kindId : ''}${backend && backend.voiceId ? backend.voiceId : ''}${s.backendMissing ? 1 : 0}`;
   }
   const cacheKey = key;
   if (renderSingerList._cacheKey === cacheKey && dom.singerListEl.childElementCount > 0) return;
@@ -834,10 +934,7 @@ export function renderSingerList() {
         warningDiv.textContent = t('main.singerFileNotFound');
         infoDiv.appendChild(warningDiv);
       } else {
-        const configDiv = document.createElement('div');
-        configDiv.className = 'singer-config';
-        configDiv.textContent = 'SXS INFERENCE';
-        infoDiv.appendChild(configDiv);
+        appendBackendConfig(infoDiv, singer);
       }
 
       input.addEventListener('keydown', (e) => {
@@ -967,10 +1064,7 @@ export function renderSingerList() {
         });
         infoDiv.appendChild(relocateBtn);
       } else {
-        const configDiv = document.createElement('div');
-        configDiv.className = 'singer-config';
-        configDiv.textContent = 'SXS INFERENCE';
-        infoDiv.appendChild(configDiv);
+        appendBackendConfig(infoDiv, singer);
       }
 
       trackNameDiv.addEventListener('dblclick', (e) => {

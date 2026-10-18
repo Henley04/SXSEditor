@@ -107,8 +107,8 @@
           </tr>
           <tr>
             <td><span data-lang="en">OS</span><span data-lang="zh">操作系统</span></td>
-            <td><span data-lang="en">Windows (primary), macOS, Linux</span><span data-lang="zh">Windows（主要）、macOS、Linux</span></td>
-            <td><span data-lang="en">Native DirectML execution provider is Windows-only. macOS/Linux can still build and run with CPU fallback.</span><span data-lang="zh">DirectML 原生执行提供者仅支持 Windows。macOS/Linux 仍可构建并以 CPU 回退方式运行。</span></td>
+            <td><span data-lang="en">Windows (primary), macOS/Linux (source build, CPU-only, unverified)</span><span data-lang="zh">Windows（主要）、macOS/Linux（源码构建，仅 CPU，未验证）</span></td>
+            <td><span data-lang="en">Native DirectML execution provider is Windows-only. macOS/Linux can still build and run with CPU fallback, but there is <strong>no CI coverage and no released binary</strong> — treat it as experimental.</span><span data-lang="zh">DirectML 原生执行提供者仅支持 Windows。macOS/Linux 仍可构建并以 CPU 回退方式运行，但<strong>无 CI 覆盖、无官方二进制</strong>，请视为实验性支持。</span></td>
           </tr>
           <tr>
             <td><span data-lang="en">Windows SDK</span><span data-lang="zh">Windows SDK</span></td>
@@ -226,6 +226,13 @@ npm run test:watch        # Watch mode</code></pre>
       <pre><code>npm run make</code></pre>
       <p data-lang="en">Makers configured in <code>forge.config.js</code>:</p>
       <p data-lang="zh"><code>forge.config.js</code> 中配置的 maker：</p>
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en">Only the Windows maker is exercised by CI (<code>.github/workflows/ci.yml</code> runs on <code>windows-latest</code> only) and shipped as an installer. The macOS/Linux makers are untested convenience targets.</p>
+          <p data-lang="zh">CI 只会执行 Windows 平台的 maker（<code>.github/workflows/ci.yml</code> 仅在 <code>windows-latest</code> 上运行）并发布安装包。macOS/Linux 的 maker 属于未验证的便利目标。</p>
+        </div>
+      </div>
       <table class="doc-table">
         <thead>
           <tr>
@@ -291,15 +298,14 @@ npm run test:watch        # Watch mode</code></pre>
 │   │                          #   settingsIpc, svsIpc, audioIpc, themeIpc, ...)
 │   ├── renderer/              # Main window renderer (timeline, project IO)
 │   ├── fragmentEditor/        # Fragment editor renderer (piano roll)
-│   ├── editor/                # Shared editor modules (trackManager, pianoRoll,
-│   │                          #   envelopeEditor, historyManager)
+│   ├── editor/                # Shared editor modules (trackManager, historyManager)
 │   ├── inference/             # Neural inference pipelines
 │   │   ├── pipeline/          # Main SVS pipeline (OnnxSVSPipeline)
 │   │   ├── webnn/             # WebNN NPU pipeline
 │   │   ├── rmvpePitchDetector.js
-│   │   ├── fcpeDetector.js    # FCPE pitch detector (default MIDI extraction)
+│   │   ├── fcpePitchDetector.js  # FCPE pitch detector (default MIDI extraction)
 │   │   ├── basicPitch.js
-│   │   └── phone_set.json     # Phoneme vocabulary (2820 entries)
+│   │   └── phone_set.json     # Phoneme vocabulary (3033 entries)
 │   ├── audio/                 # AudioOutputManager (WASAPI), wavEncoder, lrcExport
 │   ├── themes/                # Theme system (builtins, manager, tokens)
 │   ├── i18n/                  # Internationalization (en, zh-CN)
@@ -324,6 +330,18 @@ npm run test:watch        # Watch mode</code></pre>
       <p data-lang="en">ESLint (Flat Config) lints <code>src</code>, <code>test</code>, <code>scripts</code>, and root config files:</p>
       <p data-lang="zh">ESLint（Flat Config）会对 <code>src</code>、<code>test</code>、<code>scripts</code> 以及根目录配置文件进行检查：</p>
       <pre><code>npm run lint</code></pre>
+
+      <h2>
+        <span data-lang="en">Branch &amp; Release Sync Policy</span>
+        <span data-lang="zh">分支与发布同步策略</span>
+      </h2>
+      <p data-lang="en">Two long-lived branches exist: <code>master</code> (development) and <code>release</code> (release history). They were once unrelated histories, and commit <code>720d8c1</code> joined them with <code>git merge -s ours</code> to unblock PR #33. That strategy keeps <em>only</em> the receiving side's tree, permanently marks the other branch as merged, and silently discards any file that existed solely on the incoming branch — so it must not be used again.</p>
+      <p data-lang="zh">仓库有两条长期分支：<code>master</code>（开发）与 <code>release</code>（发布历史）。两者曾是不相关的历史，提交 <code>720d8c1</code> 曾用 <code>git merge -s ours</code> 合并它们以解除 PR #33 的冲突。该策略<em>只</em>保留接收方的目录树，会把另一方永久标记为已合并，并静默丢弃仅存在于合入分支上的文件——因此不得再次使用。</p>
+      <ul>
+        <li><span data-lang="en">Before merging <code>release</code> → <code>master</code>: rebase the release commits onto <code>master</code> first (<code>git rebase --onto master &lt;old-base&gt; release</code>) and open a PR; then verify nothing unique is lost with <code>git diff --diff-filter=D &lt;release-tip&gt; HEAD</code>.</span><span data-lang="zh">在把 <code>release</code> 合并到 <code>master</code> 之前：先把 release 的提交 rebase 到 <code>master</code> 上（<code>git rebase --onto master &lt;old-base&gt; release</code>）再走 PR；随后用 <code>git diff --diff-filter=D &lt;release-tip&gt; HEAD</code> 确认没有独有文件丢失。</span></li>
+        <li><span data-lang="en">Never resolve conflicts with <code>-s ours</code> / <code>-X ours</code>. Cherry-pick individual commits (<code>git cherry-pick &lt;sha&gt;</code>) instead — a branch already marked as merged cannot be re-merged.</span><span data-lang="zh">禁止用 <code>-s ours</code> / <code>-X ours</code> 解决冲突。请改用 <code>git cherry-pick &lt;sha&gt;</code> 逐笔搬运——已被标记为已合并的分支无法再次合并。</span></li>
+        <li><span data-lang="en">The merge commit <code>720d8c1</code> carries a <code>git note</code> recording what it discarded (view with <code>git log --show-notes</code> / <code>git notes show 720d8c1</code>). The history itself was not rewritten — the released tags depend on it.</span><span data-lang="zh">合并提交 <code>720d8c1</code> 附带一条 <code>git note</code>，记录了它丢弃了什么（用 <code>git log --show-notes</code> 或 <code>git notes show 720d8c1</code> 查看）。历史本身没有被重写——已发布的 tag 依赖于它。</span></li>
+      </ul>
 
       <h2>
         <span data-lang="en">Next Steps</span>

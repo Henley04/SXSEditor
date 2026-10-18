@@ -2,7 +2,64 @@
  * 轨道管理模块
  * 负责 Track、Singer、Fragment 的增删改查
  * Fragment(分片) 包含 midi、f0、vol、L/R 等完整歌唱数据
+ *
+ * 歌声后端（backend）：
+ *   · { type: 'sxs' } —— 内置 SoulX-Singer 推理，缺省值；
+ *   · { type: 'plugin', pluginId, kindId, voiceId, params } —— 第三方/自定义插件后端，
+ *     由插件契约 v1（src/shared/pluginContract.js）的 trackKind 决定轨道形态。
+ * 后端判定统一走本文件的 getSingerBackend() / isPluginTrack()，不要在各处手写
+ * `singer.backend?.type === 'plugin'`，否则插件被删除后的兼容策略会散落得到处都是。
  */
+
+/** 内置后端（缺省）。每次返回新对象，避免调用方共享引用后互相污染。 */
+export function createBuiltinBackend() {
+  return { type: 'sxs' };
+}
+
+/**
+ * 规范化一个插件后端。pluginId/kindId 只做类型收敛，不做存在性校验 ——
+ * 插件是否还装着要在拿到插件清单后才知道（见 renderer/pluginBackend.js），
+ * 工程加载阶段缺插件只做标记，不改写 backend 本身。
+ * @param {object} data
+ * @returns {{type:'plugin', pluginId:string, kindId:string|null, voiceId:string|null, params:object}}
+ */
+export function createPluginBackend(data = {}) {
+  const input = data || {};
+  return {
+    type: 'plugin',
+    pluginId: typeof input.pluginId === 'string' ? input.pluginId : '',
+    kindId: typeof input.kindId === 'string' ? input.kindId : null,
+    voiceId: typeof input.voiceId === 'string' ? input.voiceId : null,
+    params: input.params && typeof input.params === 'object' && !Array.isArray(input.params)
+      ? { ...input.params }
+      : {},
+  };
+}
+
+/**
+ * 把一个可能是任意来源（工程文件、IPC、旧数据）的 backend 收敛成合法形状。
+ * 非法/缺失一律退回内置后端；type 不是 'plugin' 但确实是对象时原样保留，
+ * 这样将来新增后端类型不会被静默降级成 sxs。
+ * @param {unknown} backend
+ */
+export function normalizeBackend(backend) {
+  if (!backend || typeof backend !== 'object' || Array.isArray(backend)) return createBuiltinBackend();
+  if (backend.type === 'plugin') return createPluginBackend(backend);
+  if (typeof backend.type !== 'string' || !backend.type) return createBuiltinBackend();
+  return { ...backend };
+}
+
+/** 取轨道后端（一定返回对象，调用方无需判空）。 */
+export function getSingerBackend(singer) {
+  const backend = singer && singer.backend;
+  if (backend && typeof backend === 'object') return backend;
+  return createBuiltinBackend();
+}
+
+/** 是否插件后端。 */
+export function isPluginTrack(singer) {
+  return getSingerBackend(singer).type === 'plugin';
+}
 
 const TRACK_COLORS = [
   '#f87171', '#fb923c', '#fbbf24', '#4ade80',
@@ -55,6 +112,8 @@ function createSinger(data = {}) {
     accompanimentVolume: data.accompanimentVolume ?? 1,
     audioSampleRate: data.audioSampleRate ?? null,
     numberOfChannels: data.numberOfChannels ?? 1,
+    // 'sxs' = 内置 SoulX-Singer 推理（缺省）；'plugin' = 第三方/自定义歌声后端
+    backend: normalizeBackend(data.backend),
   };
 }
 
@@ -82,6 +141,11 @@ function createFragment(data = {}) {
     notes: data.notes ?? [],
     envelopes,
     pitchCurve: data.pitchCurve ?? createPitchCurve(),
+    // 汉字分组与音色/后处理曲线都是分片的持久化字段：createFragment 是显式
+    // 白名单对象，漏登记的字段会在工程 load→addFragment 时被静默丢弃
+    // （postprocess 丢失后编辑器回退全默认，首次自动保存还会把默认值写回）。
+    kanjiGroups: data.kanjiGroups ?? [],
+    postprocess: data.postprocess ?? null,
   };
 }
 
@@ -207,4 +271,4 @@ class TrackManager {
   }
 }
 
-export { TrackManager, TRACK_COLORS };
+export { TrackManager, TRACK_COLORS, createSinger };

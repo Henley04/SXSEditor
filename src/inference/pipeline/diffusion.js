@@ -1,6 +1,6 @@
 const ort = require('onnxruntime-node');
 const { MEL_DIM, COND_DIM, NPU_STATIC_SEQ_LEN } = require('./constants');
-const { createFloatTensor, outputToFloat32, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16, throwIfCancelled } = require('./utils');
+const { createFloatTensor, outputToFloat32, outputToFloat32Into, disposeTensor, gpuDrainAdaptive, float32ToFloat16, batchFloat32ToFloat16, throwIfCancelled } = require('./utils');
 const { createSampler, DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
 const { resolveCfgAtStep, applyDynamicThreshold } = require('./cfgSchedule');
@@ -106,6 +106,9 @@ class Diffusion {
         // 只有在做精度/EP 对比测量时才注入种子，否则两条路径的初始噪声不同，
         // 测出来的差异会被「换种子」本身（实测 ~15 dB LSD）完全淹没。
         this._rng = null;
+        // 记录当前生效的种子（null = 随机），供合成缓存键纳入 seed 维度：
+        // 换 seed 后初始噪声不同，缓存键不含 seed 会命中上一次的音频。
+        this._noiseSeed = null;
     }
 
     /**
@@ -114,7 +117,8 @@ class Diffusion {
      */
     setNoiseSeed(seed) {
         const n = Number(seed);
-        if (!Number.isFinite(n)) { this._rng = null; return; }
+        if (!Number.isFinite(n)) { this._rng = null; this._noiseSeed = null; return; }
+        this._noiseSeed = n >>> 0;
         let a = n >>> 0;
         this._rng = () => {
             a = (a + 0x6D2B79F5) >>> 0;
@@ -123,6 +127,14 @@ class Diffusion {
             t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
             return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
         };
+    }
+
+    /**
+     * 当前生效的噪声种子（null = 随机 Math.random）。
+     * @returns {number|null}
+     */
+    getNoiseSeed() {
+        return this._noiseSeed;
     }
 
     /**
@@ -437,17 +449,46 @@ class Diffusion {
             (ptFrameCount + totalFrames) * MEL_DIM));
 
         // === Uncond branch: xt = xtData (target only), cond = zeros, mask = ones for target ===
-        const uncondXtData = new Float32Array(seqLen * MEL_DIM);
-        // Place target xt at position 0 (no prompt prefix)
+        //
+        // 跨步复用（reuseBufs 由 runDiffusionLoop 传入）：原本每步新建这三张张量，
+        // 分配量 ≈ seqLen*MEL_DIM*4 + seqLen*COND_DIM*4 字节（典型 ~6.5MB/步 × 32 步），
+        // 全部交给 GC/finalizer 回收。这里改为首次创建、之后只覆写内容。
+        //
+        // 注意三张张量的语义不同，不能一律「创建一次就不管」：
+        //   · uncondXtData 是**当前采样状态**（每步的 xt 都不同）→ 复用分配，
+        //     但每步都必须 .set() 重新写入；
+        //   · uncondCondData（全零）与 uncondMaskData（target 段置 1）只依赖
+        //     totalFrames/seqLen，在一次 runDiffusionLoop 内恒定 → 首次写入后不再改写。
+        let uncondXtData, uncondXtTensor, uncondCondTensor, uncondMaskTensor;
+        if (reuseBufs && reuseBufs.uncondXtTensor) {
+            uncondXtData = reuseBufs.uncondXtData;
+            uncondXtTensor = reuseBufs.uncondXtTensor;
+            uncondCondTensor = reuseBufs.uncondCondTensor;
+            uncondMaskTensor = reuseBufs.uncondMaskTensor;
+        } else {
+            uncondXtData = new Float32Array(seqLen * MEL_DIM);
+            // Uncond cond = zeros, mask = ones for target only
+            const uncondCondData = new Float32Array(seqLen * COND_DIM); // zeros
+            const uncondMaskData = new Float32Array(seqLen); // zeros
+            for (let i = 0; i < totalFrames; i++) uncondMaskData[i] = 1;
+            uncondXtTensor = createFloatTensor(floatType, uncondXtData, [1, seqLen, MEL_DIM]);
+            uncondCondTensor = createFloatTensor(floatType, uncondCondData, [1, seqLen, COND_DIM]);
+            uncondMaskTensor = _createMaskTensor(io, floatType, uncondMaskData, [1, seqLen]);
+            if (reuseBufs) {
+                reuseBufs.uncondXtData = uncondXtData;
+                reuseBufs.uncondXtTensor = uncondXtTensor;
+                reuseBufs.uncondCondTensor = uncondCondTensor;
+                reuseBufs.uncondMaskTensor = uncondMaskTensor;
+            }
+        }
+        // Place target xt at position 0 (no prompt prefix) — 每步覆写（采样状态在变）。
+        // 尾部 padding 区（totalFrames..seqLen）保持首次分配时的 0，与原先每步新建一致。
         uncondXtData.set(xtData.subarray(0, totalFrames * MEL_DIM));
-        const uncondXtTensor = createFloatTensor(floatType, uncondXtData, [1, seqLen, MEL_DIM]);
-
-        // Uncond cond = zeros, mask = ones for target only
-        const uncondCondData = new Float32Array(seqLen * COND_DIM); // zeros
-        const uncondMaskData = new Float32Array(seqLen); // zeros
-        for (let i = 0; i < totalFrames; i++) uncondMaskData[i] = 1;
-        const uncondCondTensor = createFloatTensor(floatType, uncondCondData, [1, seqLen, COND_DIM]);
-        const uncondMaskTensor = _createMaskTensor(io, floatType, uncondMaskData, [1, seqLen]);
+        if (floatType === 'float16') {
+            batchFloat32ToFloat16(uncondXtData, uncondXtTensor.data, uncondXtData.length);
+        } else {
+            uncondXtTensor.data.set(uncondXtData);
+        }
 
         // Reuse tTensor (same t value), just ensure t buffer has correct value
         // (already set above for cond branch; t is the same for uncond)
@@ -461,9 +502,8 @@ class Diffusion {
         const uncondPredRaw = uncondResults[io.outName];
         const uncondPredFull = outputToFloat32(uncondPredRaw);
         disposeTensor(uncondPredRaw);
-        disposeTensor(uncondXtTensor);
-        disposeTensor(uncondCondTensor);
-        disposeTensor(uncondMaskTensor);
+        // uncond 三张输入张量现在跨步复用，不能在步内 dispose ——
+        // 由 runDiffusionLoop 的 _disposeAllTensors 在循环结束时统一释放。
 
         // Slice uncond target segment (starts at position 0, no prompt
         // offset) — contiguous, single memcpy.
@@ -647,6 +687,11 @@ class Diffusion {
             if (cfgTTensor) disposeTensor(cfgTTensor);
             if (cfgCondTensor) disposeTensor(cfgCondTensor);
             if (cfgMaskTensor) disposeTensor(cfgMaskTensor);
+            // _evalDiffStepSeparate（CFG 分离分支，batch=1 回退路径）的 uncond 输入张量
+            // 挂在 buffers 上跨步复用，必须在这里释放，否则每次 runDiffusionLoop 泄漏 3 张。
+            if (buffers.uncondXtTensor) disposeTensor(buffers.uncondXtTensor);
+            if (buffers.uncondCondTensor) disposeTensor(buffers.uncondCondTensor);
+            if (buffers.uncondMaskTensor) disposeTensor(buffers.uncondMaskTensor);
         };
 
         const progressPerStep = progressRange / totalSteps;
@@ -671,6 +716,9 @@ class Diffusion {
             // 替代原先每步 2 次 new Float32Array(targetLen)。
             condPredBuf: new Float32Array(targetLen),
             uncondPredBuf: new Float32Array(targetLen),
+            // P1-3：模型输出落地缓冲。CFG batch 路径一次输出 [2, seqLen, MEL_DIM]，
+            // 按这个上界分配一次，之后每步复用（原来是每步 new Float32Array 1~2MB）。
+            predScratchBuf: new Float32Array(2 * seqLen * MEL_DIM),
         };
 
         // evalDiffStep: 执行 cond + (可选)uncond 推理，返回 {condPred, uncondPred}
@@ -744,8 +792,8 @@ class Diffusion {
                     throw err;
                 }
                 const batchPredRaw = batchResults[io.outName];
-                const batchPred = outputToFloat32(batchPredRaw);
-                // outputToFloat32 returns a fresh Float32Array; safe to dispose source now
+                // P1-3：写进跨步复用的 predScratchBuf，本步读完立刻切片搬走，不保留引用
+                const batchPred = outputToFloat32Into(batchPredRaw, buffers.predScratchBuf);
                 disposeTensor(batchPredRaw);
 
                 // Split batchPred [diffBatch, seqLen, MEL_DIM] into cond + uncond target slices.
@@ -785,7 +833,8 @@ class Diffusion {
                 throw err;
             }
             const predRaw = results[io.outName];
-            const pred = outputToFloat32(predRaw);
+            // P1-3：同上，复用 predScratchBuf（本步内消费完）
+            const pred = outputToFloat32Into(predRaw, buffers.predScratchBuf);
             disposeTensor(predRaw);
 
             // Slice target segment (skip prompt prefix) — target frames are
@@ -843,7 +892,7 @@ class Diffusion {
                 cfgAdjMean += cfgDelta / n;
                 cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
             }
-            // Dynamic thresholding (arXiv:2507.08965): clip extreme CFG values
+            // Dynamic thresholding (Imagen, arXiv:2205.11487): clip extreme CFG values
             // per-frame before rescale. Prevents over-exposure artifacts from
             // large cond-uncond divergence at high CFG strengths.
             // NOTE: Welford cfgAdjM2 above was accumulated on pre-threshold cfgVal,
@@ -994,9 +1043,14 @@ class Diffusion {
      * 在 runDiffusionLoop 主循环结束后调用（仅当 settings.enableSDEditRepair=true）。
      * 检测 mel 局部异常帧（NaN/Inf 或帧能量 > 中位数 ×5），对每个异常区间：
      *   1. 保存原始 mel（用于边界交叉淡入淡出）
-     *   2. 加浅噪声重噪到 t=0.3 水平：xt = 0.7*x0 + 0.3*noise
-     *   3. 用 STORK-2 求解器运行 5 步重采样
+     *   2. 重噪到模型 t = 0.7（30% 噪声）：xt = 0.3*eps + 0.7*x0
+     *   3. 用 STORK-2 求解器把 t 从 0.7 积分到 1.0（5 步）
      *   4. 仅更新异常区间帧，边界用 Hann 窗交叉淡入淡出平滑过渡
+     *
+     * 时间约定（与 samplers/index.js 一致）：本项目 t=0 是标准高斯噪声、
+     * t=1 是干净数据（主循环从 randomNoise() 起积分到 t=1）。因此
+     * "30% 噪声"对应 t=0.7，插值是线性的（rectified flow）：
+     * xt = (1-t)*eps + t*x0，不走 DDPM/VP 的 sqrt 权重。
      *
      * 复用 runDiffusionLoop 闭包内的 evalDiffStep / combine / buffers，无需重建张量。
      * 默认 false 时此方法不被调用（零开销）。
@@ -1007,7 +1061,8 @@ class Diffusion {
     async _sdeditRepair(ctx) {
         const { xt, totalFrames, evalDiffStep, combine, buffers, diagnosticMode } = ctx;
         const REPAIR_STEPS = 5;
-        const REPAIR_T0 = 0.3;            // shallow noise level
+        // 修复起点（模型 t：0 = 纯噪声，1 = 干净数据）。0.7 ⇒ 30% 噪声的浅修复。
+        const REPAIR_DATA_T = 0.7;
         const ENERGY_SPIKE_FACTOR = 5.0;  // frame energy > median × 5 = anomaly
         const CROSSFADE_PAD = 3;          // frames to pad each side for Hann blend
 
@@ -1070,11 +1125,15 @@ class Diffusion {
         if (regions.length === 0) return;
 
         // 5. 对每个区间：保存原始 mel → 加浅噪声 → 5 步 STORK-2 重采样 → Hann 混合
-        const repairSampler = createSampler('stork2');
         const originalBuf = new Float32Array(targetLen);
 
         for (const region of regions) {
             const { start, end, coreStart, coreEnd } = region;
+
+            // 每个区间一个全新的求解器实例：STORK-2 的跨步速度历史（_velPreds）
+            // 只在同一条轨迹内有效，复用会把上一区的速度当成前一超步做有限差分，
+            // 让第二个区间起就丢掉 bootstrap 且差分方向错位。
+            const repairSampler = createSampler('stork2');
 
             // 保存原始 mel（含边距），用于后续 Hann 混合。
             // NaN/Inf 帧归零保存，否则 Hann 混合时 (1-weight)*NaN = NaN 会传播。
@@ -1084,24 +1143,35 @@ class Diffusion {
                 originalBuf[i] = Number.isFinite(xtData[i]) ? xtData[i] : 0;
             }
 
-            // 加浅噪声到 t=0.3 水平：xt = (1-t)*x0 + t*noise = 0.7*x0 + 0.3*noise
-            // NaN/Inf 帧需先归零（否则 0.7*NaN = NaN 会传播），用 0 作为 x0 重噪。
-            const sqrtOneMinusT = Math.sqrt(1 - REPAIR_T0);
-            const sqrtT = Math.sqrt(REPAIR_T0);
+            // 重噪到模型 t = REPAIR_DATA_T：rectified flow 的线性插值
+            //   xt = (1 - t)·eps + t·x0        （eps ~ N(0,1)，x0 = 原 mel）
+            // t=0.7 ⇒ 0.3·eps + 0.7·x0 = 30% 噪声的浅修复。
+            // 旧实现用 DDPM/VP 的 √(1-t)/√t 权重（0.8367·x0 + 0.5477·noise），
+            // 与 Flow Matching 的线性路径不符；噪声还是 [-1,1] 均匀分布
+            // （方差 1/3），而模型在 t=0 边界期待的是标准高斯。
+            // NaN/Inf 帧需先归零（否则 t*NaN = NaN 会传播），用 0 作为 x0 重噪。
+            const regionNoise = this.randomNoise(end - start, MEL_DIM).data;
+            const noiseShare = 1 - REPAIR_DATA_T;
             for (let i = regionOffset; i < regionOffset + regionBytes; i++) {
                 const x0 = Number.isFinite(xtData[i]) ? xtData[i] : 0;
-                const noise = (this._rng || Math.random)() * 2 - 1;
-                xtData[i] = sqrtOneMinusT * x0 + sqrtT * noise;
+                xtData[i] = noiseShare * regionNoise[i - regionOffset] + REPAIR_DATA_T * x0;
             }
 
-            // 5 步 STORK-2 重采样：仅更新区间内帧
-            // M3: repairCombine forwards step/REPAIR_STEPS to combine so the CFG
-            // schedule resolves against the repair loop's 0..4/5 progress instead
-            // of the stale main-loop currentStep (totalSteps-1)/totalSteps.
-            for (let step = 0; step < REPAIR_STEPS; step++) {
-                const repairCombine = (condPred, uncondPred) => combine(condPred, uncondPred, step, REPAIR_STEPS);
+            // 5 步 STORK-2 重采样：仅更新区间内帧。积分区间是 [REPAIR_DATA_T, 1]，
+            // 因此不能直接把 step 传 0..4（那样第一次评估的 t=0.1，等于把 30% 噪声
+            // 的状态当成"几乎纯噪声"喂给模型，是 OOD）。采样器的 t 映射是
+            //   tVal = (step + 0.5) / totalSteps，dt = 1 / totalSteps，
+            // 取 totalSteps = REPAIR_STEPS / (1 - REPAIR_DATA_T)（=16.67）、
+            // step 起点 = REPAIR_DATA_T * totalSteps（=11.67），则 5 次评估的
+            // t = 0.73, 0.79 … 0.97，累计推进正好 0.3，落在 [0.7, 1] 上；
+            // step 允许非整数（求解器只用它算 tVal 与 CFG 进度）。
+            const repairTotalSteps = REPAIR_STEPS / (1 - REPAIR_DATA_T);
+            const repairStepBase = REPAIR_DATA_T * repairTotalSteps;
+            for (let k = 0; k < REPAIR_STEPS; k++) {
+                const step = repairStepBase + k;
+                const repairCombine = (condPred, uncondPred) => combine(condPred, uncondPred, step, repairTotalSteps);
                 await repairSampler.step({
-                    evalDiffStep, combine: repairCombine, step, totalSteps: REPAIR_STEPS,
+                    evalDiffStep, combine: repairCombine, step, totalSteps: repairTotalSteps,
                     xtData: xt.data, buffers,
                 });
                 const delta = buffers.deltaBuf;
@@ -1198,6 +1268,11 @@ class Diffusion {
         const safeChunk = Math.max(50, Math.floor(chunkFrames));
         let safeOverlap = Math.max(0, Math.floor(overlapFrames));
         if (safeOverlap >= safeChunk) safeOverlap = Math.floor(safeChunk / 2);
+        // 防死循环钳制：overlap ≥ 0.75×chunk 时，F0 边界搜索下界
+        // lo = chunkStart + max(0.75·chunk, chunk − overlap) ≤ framePos，
+        // 边界可被选为 framePos 本身 → 状态不变 → while 死循环挂死主进程。
+        // 将 overlap 压到 chunk 的 1/4 以下即可结构性地排除该区间。
+        if (safeOverlap * 4 >= safeChunk * 3) safeOverlap = Math.floor(safeChunk / 4);
         if (safeChunk >= totalFrames) return null;
         // safeOverlap === 0 时无交叉淡入淡出
         if (safeOverlap < 1) safeOverlap = 0;
@@ -1221,7 +1296,21 @@ class Diffusion {
         const specs = [];
         let framePos = 0;
         let chunkIdx = 0;
+        // 兜底：正常情况下每轮 framePos 严格前进。最小前进量：
+        //   非 F0 路径 = safeChunk - safeOverlap（固定步长）
+        //   F0 搜索路径 ≥ minBeats - safeOverlap（边界下界 chunkStart+minBeats）
+        // 超限说明规划异常，强制退出而不是挂死主进程。
+        const minAdvance = Math.max(1,
+            (canSearch
+                ? Math.max(Math.floor(safeChunk * 0.75), safeChunk - safeOverlap)
+                : safeChunk) - safeOverlap);
+        const maxIters = Math.ceil(totalFrames / minAdvance) + 8;
+        let iterCount = 0;
         while (framePos < totalFrames) {
+            if (++iterCount > maxIters) {
+                console.error(`[DiffusionChunk] _planChunks exceeded maxIters=${maxIters}, aborting plan (totalFrames=${totalFrames}, chunk=${safeChunk}, overlap=${safeOverlap})`);
+                break;
+            }
             const isFirst = chunkIdx === 0;
             const chunkStart = isFirst ? 0 : Math.max(0, framePos - safeOverlap);
             const defaultChunkEnd = Math.min(chunkStart + safeChunk, totalFrames);
@@ -1232,7 +1321,9 @@ class Diffusion {
             } else if (canSearch) {
                 // Task 15: search [chunkStart + minBeats, chunkStart + maxBeats]
                 // for the boundary with smallest |f0Slope[boundary]|.
-                const lo = Math.max(chunkStart + minBeats, chunkStart + 1);
+                // 结构保证：下界必须严格大于当前进度 framePos，否则边界可能
+                // 被选为 framePos 本身 → framePos 不前进 → while 死循环。
+                const lo = Math.max(chunkStart + minBeats, chunkStart + 1, framePos + 1);
                 const hi = Math.min(chunkStart + maxBeats, totalFrames - 1);
                 let bestBoundary = defaultChunkEnd;
                 let bestSlope = Infinity;
@@ -1244,7 +1335,8 @@ class Diffusion {
                         bestBoundary = b;
                     }
                 }
-                chunkEnd = bestBoundary;
+                // lo > hi（搜索区塌缩）时回退到默认边界，保证 chunkEnd > framePos。
+                chunkEnd = (lo <= hi) ? bestBoundary : defaultChunkEnd;
             } else {
                 chunkEnd = defaultChunkEnd;
             }
@@ -1266,6 +1358,8 @@ class Diffusion {
      * @param {Object} ctx - 分块上下文（由调用方持有，跨块共享 xt.data 状态）
      *   { sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond,
      *     totalSteps, cfgStrength, cfgRescale, isFP16, useStaticShapes, overlap }
+     *   chunkOverlapNoiseLevel?: number - 非首块 overlap 前缀的重噪强度 t0 ∈ [0,1]，
+     *     默认 0（纯高斯，与整段推理初值一致）；>0 时按 SDEdit 保留部分前块 mel。
      * @param {Object} spec - 分块规格 { chunkStart, chunkEnd, currentChunkFrames, isFirst, isLast }
      * @param {Function} onProgress
      * @param {number} progressStart
@@ -1283,6 +1377,40 @@ class Diffusion {
         // 1. 提取当前块的噪声
         const chunkNoise = new Float32Array(currentChunkFrames * MEL_DIM);
         chunkNoise.set(xtOut.subarray(chunkStart * MEL_DIM, chunkEnd * MEL_DIM));
+        // --- 非首块 overlap 前缀重噪（F-04）---
+        // 为什么必须重噪：runDiffusionLoop 从 t=0 起积分（sampler 的 tVal=(step+0.5)/totalSteps，
+        // step 0 ≈ 0），rectified flow 的 t=0 边界条件是标准高斯噪声（整段推理的初值就是
+        // randomNoise()）。而非首块的 chunkStart 落在上一块已提交区域内（_planChunks:
+        // chunkStart = framePos - overlap），这块区域在上一块第 4 步写回时已经被替换成
+        // 「去噪完成 + WSOLA 交叉淡入淡出后的干净 mel」。把干净 mel 当 t=0 的输入是 OOD：
+        // 模型在噪声时刻收到干净信号，速度场预测失真。
+        //
+        // 更关键的是 CFG 双分支共用同一份 xt：evalDiffStep 里 cond 行
+        // `xtInputBuf.set(xtData, ptFrameCount*MEL_DIM)` 与 uncond 行
+        // `cfgBatchBuf.set(xtData.subarray(0, totalFrames*MEL_DIM), row1Off)` 都取自
+        // subXt.data，因此污染会同时进入两条分支，CFG 无法抑制反而放大偏差。
+        // 所以重噪必须作用在**共享来源** chunkNoise 上（这里做），而不是某一分支。
+        //
+        // 做法（SDEdit 式，rectified flow 线性路径）：xt = (1-t0)·eps + t0·x_prev。
+        // 注意不能用 DDPM/VP 的 √(1-t0)/√t0：本模型是 Flow Matching，t=0 是噪声、
+        // 权重随 t 线性变化，开方会把噪声占比系统性放大（t0=0.3 时 0.55 vs 0.30）。
+        // eps 为本仓库 randomNoise() 生成的标准高斯（内部走 this._rng || Math.random，
+        // setNoiseSeed 的确定性仍然生效）。
+        // t0 = 0（默认）即纯高斯，与整段推理的初始条件完全一致；t0 ∈ (0,0.3] 时保留少量
+        // 前块信息以减小块间跳变，代价是仍轻微偏离 t=0 流形。
+        if (!isFirst) {
+            const renoiseOv = Math.min(overlap, currentChunkFrames);
+            if (renoiseOv > 0) {
+                const t0 = Number.isFinite(ctx.chunkOverlapNoiseLevel)
+                    ? Math.min(1, Math.max(0, ctx.chunkOverlapNoiseLevel))
+                    : 0;
+                const ovNoise = this.randomNoise(renoiseOv, MEL_DIM);
+                const ovEnd = renoiseOv * MEL_DIM;
+                for (let i = 0; i < ovEnd; i++) {
+                    chunkNoise[i] = (1 - t0) * ovNoise.data[i] + t0 * chunkNoise[i];
+                }
+            }
+        }
         const subXt = { data: chunkNoise, dims: [1, currentChunkFrames, MEL_DIM] };
 
         // 2. 构建当前块的条件向量

@@ -7,8 +7,9 @@ import { initPipeline } from './pipeline.js';
 import { resizeCanvases } from './canvasRenderer.js';
 import { setupEventListeners, _invalidateCanvasRect } from './eventHandlers.js';
 import { setupIpcHandlers, loadFragmentFromHash } from './ipcHandlers.js';
-import { setupUiControls } from './uiControls.js';
+import { setupUiControls, refreshPostprocessLabels } from './uiControls.js';
 import { startAutoInferenceWatcher, stopAutoInferenceWatcher } from './autoInference.js';
+import { applyPluginEditorLayout } from './pluginEditorMode.js';
 import { installAutoRelayout } from '../shared/autoRelayout.js';
 import {
   getAutoSaveTimer, setAutoSaveTimer,
@@ -17,7 +18,14 @@ import {
   getNotes,
   getEnvelopes,
   getPitchCurve,
+  getKanjiGroups,
+  getPostprocess,
 } from './state.js';
+
+// 尽早启动 i18n：initI18n() 的同步部分（读 localStorage）会立刻把 currentLocale
+// 设对，后面的 setupUiControls() 才能用正确语言生成音色参数名等动态文案。
+// 异步部分（向主进程要 locale）由下面的 i18nReady.then 兜底刷新。
+const i18nReady = initI18n();
 
 // Initialize pipeline
 initPipeline();
@@ -143,15 +151,29 @@ setupUiControls();
 // Load fragment from hash if needed
 loadFragmentFromHash();
 
+// 插件轨道：按 trackKind.editor 裁剪内置编辑器形态。
+// 全程异步（等 IPC 里的 backend + 插件清单），不占窗口首帧；内置轨道直接跳过。
+applyPluginEditorLayout();
+
 // 编辑后自动实时推理监听（设置项 autoRealtimeInference，默认关闭）。
 // 放在 loadFragmentFromHash 之后：此时 currentFragment 已就绪，才能比对签名。
 startAutoInferenceWatcher();
 
 // Initialize i18n
-initI18n().then(() => {
+// ⚠️ applyLocale() 只刷带 data-i18n 的**静态**节点；音色 lane 的子标签、
+// 检查器参数行、预设下拉是 setupUiControls() 里用 t() 现场生成的，
+// 而那一刻 initI18n() 还没执行（本文件第 54 行 vs 这里），locale 仍是模块
+// 默认值 'en' —— 结果就是"整页中文、唯独音色参数名是英文"。语言就绪后
+// 必须再刷一遍这些动态文案（切语言时同理，监听 localeChanged）。
+i18nReady.then(() => {
   applyLocale();
+  refreshPostprocessLabels();
   document.documentElement.lang = getLocale();
   hydrateIcons(document);
+});
+document.addEventListener('localeChanged', () => {
+  applyLocale();
+  refreshPostprocessLabels();
 });
 
 console.log(t('fragment.consoleStarted'));
@@ -175,11 +197,17 @@ window.addEventListener('beforeunload', () => {
       currentFragment.notes = getNotes();
       currentFragment.envelopes = getEnvelopes();
       currentFragment.pitchCurve = getPitchCurve();
+      currentFragment.kanjiGroups = getKanjiGroups();
+      currentFragment.postprocess = getPostprocess();
+      // 自动保存有 500ms 防抖：关窗前最后一段编辑必须靠这次同步保存兜底，
+      // 漏掉 postprocess/kanjiGroups 就等于丢掉刚画的曲线/汉字分组。
       if (window.electronAPI?.saveFragmentDataSync) {
         window.electronAPI.saveFragmentDataSync(currentFragment.id, {
           notes: getNotes(),
           envelopes: getEnvelopes(),
           pitchCurve: getPitchCurve(),
+          kanjiGroups: getKanjiGroups(),
+          postprocess: getPostprocess(),
           startTime: currentFragment.startTime,
           duration: currentFragment.duration,
         });

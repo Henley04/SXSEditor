@@ -1,5 +1,5 @@
 const { expect } = require('chai');
-const { resolveCfgAtStep, resolveScheduleMode, VALID_MODES, DEFAULT_MODE } = require('../src/inference/pipeline/cfgSchedule');
+const { resolveCfgAtStep, resolveScheduleMode, VALID_MODES, DEFAULT_MODE, applyDynamicThreshold } = require('../src/inference/pipeline/cfgSchedule');
 
 /**
  * Task 11: CFG 强度曲线调度测试。
@@ -283,6 +283,69 @@ describe('cfgSchedule - Task 11 CFG strength scheduling', () => {
                 prev = v;
             }
             expect(prev).to.be.closeTo(CFG, 1e-10);
+        });
+    });
+
+    describe('applyDynamicThreshold', () => {
+        const MEL_DIM = 128;
+
+        // 回归：旧实现 k = floor(percentile × 128)，percentile ∈ [0.99219, 1.0)
+        // 时 k 恒为 127（帧内绝对值最大值的 rank）→ threshold = max(mean, max) = max
+        // → 截断分支永不触发 → 功能静默空转。修复后用线性插值分位数。
+        it('percentile=0.995（默认）必须实际截断极端值（no-op 回归）', () => {
+            const buf = new Float32Array(4 * MEL_DIM);
+            // 填充标准正态分布样值，并在每帧尾部放一个极端离群值
+            let seed = 12345;
+            const rand = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+            for (let f = 0; f < 4; f++) {
+                for (let d = 0; d < MEL_DIM; d++) {
+                    // Box-Muller 近似：两个均匀随机数之和居中
+                    buf[f * MEL_DIM + d] = (rand() + rand() - 1) * 2;
+                }
+                buf[f * MEL_DIM + MEL_DIM - 1] = 100.0; // 极端离群值
+            }
+            const snapshot = Float32Array.from(buf);
+            applyDynamicThreshold(buf, buf.length, MEL_DIM, 0.995);
+            let changed = 0;
+            for (let i = 0; i < buf.length; i++) {
+                if (buf[i] !== snapshot[i]) changed++;
+            }
+            expect(changed, 'outlier bins must be clipped at percentile=0.995').to.be.greaterThan(0);
+            // 离群值必须被压到阈值内（阈值 ≈ 帧内高分位，远小于 100）
+            for (let f = 0; f < 4; f++) {
+                expect(Math.abs(buf[f * MEL_DIM + MEL_DIM - 1])).to.be.lessThan(100.0);
+            }
+        });
+
+        it('插值分位数：单帧已知分布的阈值与手算一致', () => {
+            const buf = new Float32Array(MEL_DIM);
+            for (let d = 0; d < MEL_DIM; d++) buf[d] = d + 1; // 1..128
+            applyDynamicThreshold(buf, buf.length, MEL_DIM, 0.995);
+            // 排序后 rank = 0.995 × 127 = 126.365 → 插值 between arr[126]=127, arr[127]=128
+            // 插值分位 ≈ 127.365；mean = 64.5 → threshold = max(64.5, 127.365) = 127.365
+            // 只有 128 被截断到 127.365
+            expect(buf[127]).to.be.closeTo(127 + 0.365, 1e-3);
+            expect(buf[126]).to.equal(127);
+        });
+
+        it('percentile 越小截断越激进', () => {
+            const mkBuf = () => {
+                const b = new Float32Array(2 * MEL_DIM);
+                for (let i = 0; i < b.length; i++) b[i] = (i % 17) + 1;
+                return b;
+            };
+            const bHigh = mkBuf(), bLow = mkBuf();
+            applyDynamicThreshold(bHigh, bHigh.length, MEL_DIM, 0.999);
+            applyDynamicThreshold(bLow, bLow.length, MEL_DIM, 0.90);
+            const maxOf = (b) => Math.max(...b);
+            expect(maxOf(bLow)).to.be.lessThan(maxOf(bHigh));
+        });
+
+        it('percentile 越界时原样返回', () => {
+            const buf = new Float32Array(MEL_DIM).fill(5);
+            applyDynamicThreshold(buf, buf.length, MEL_DIM, 1.0);
+            applyDynamicThreshold(buf, buf.length, MEL_DIM, 0);
+            for (let i = 0; i < buf.length; i++) expect(buf[i]).to.equal(5);
         });
     });
 });

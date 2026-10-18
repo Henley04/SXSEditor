@@ -3,6 +3,8 @@ import { initI18n, applyLocale, getLocale, tOr } from '../i18n/index.js';
 import { markDirty, autoSaveProject, saveProject, showSaveBeforeCloseDialog } from './projectManager.js';
 import { refreshAll, invalidateFragmentNoteSprites } from './timelineRenderer.js';
 import { showAlertDialog } from '../alertDialog.js';
+// 2.2: 与主题管理共用同一份 token 注入实现，不再在本文件里复制一份。
+import { injectTokens } from '../themes/themeInit.js';
 
 // int8 旧版 diff_step 模型不兼容弹窗（主进程在 svs:init 时检测并推送一次）
 if (window.electronAPI?.onSVSDiffStepIncompatible) {
@@ -47,13 +49,15 @@ if (window.electronAPI?.onSingerCreated) {
 // Fragment saved IPC handler
 if (window.electronAPI?.onFragmentSaved) {
   const cleanup = window.electronAPI.onFragmentSaved((data) => {
-    const { fragmentId, notes, envelopes, pitchCurve, kanjiGroups, startTime, duration } = data;
+    const { fragmentId, notes, envelopes, pitchCurve, kanjiGroups, postprocess, startTime, duration } = data;
     const fragment = trackManager.getFragments().find(f => f.id === fragmentId);
     if (fragment) {
       if (notes) fragment.notes = notes;
       if (envelopes) fragment.envelopes = envelopes;
       if (pitchCurve) fragment.pitchCurve = pitchCurve;
       if (kanjiGroups) fragment.kanjiGroups = kanjiGroups;
+      // 音色 / 后处理曲线（F0 平滑、频谱后处理）：随分片保存，主窗口只做透传持久化
+      if (postprocess) fragment.postprocess = postprocess;
       if (startTime !== undefined) fragment.startTime = startTime;
       if (duration !== undefined) fragment.duration = duration;
       // 音符内容可能已变（增删改），分片预览精灵必须重建，否则拖到主窗口
@@ -262,21 +266,6 @@ if (window.electronAPI?.onCloseConfirm) {
 (async () => {
   const api = window.electronAPI;
   if (!api?.themeAPI) return;
-
-  function injectTokens(tokens) {
-    if (!tokens || typeof document === 'undefined') return;
-    const root = document.documentElement;
-    // Clear previous theme inline styles to avoid stale tokens from prior themes
-    const toRemove = [];
-    for (let i = 0; i < root.style.length; i++) {
-      if (root.style[i].startsWith('--')) toRemove.push(root.style[i]);
-    }
-    for (const prop of toRemove) root.style.removeProperty(prop);
-    // Apply new theme tokens
-    for (const [k, v] of Object.entries(tokens)) {
-      try { root.style.setProperty(k, v); } catch (_) {}
-    }
-  }
 
   async function applyTheme(themeId) {
     if (!themeId) return;

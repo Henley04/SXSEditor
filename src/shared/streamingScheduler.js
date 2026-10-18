@@ -48,6 +48,8 @@ export class StreamingScheduler {
     this.inferenceDone = false;
     this.isLastReceived = false;
     this.activeSourceCount = 0;
+    // onFinish 的一次性标志：一轮会话只允许触发一次，直到下次 reset()。
+    this._finished = false;
 
     this._active = false;
     this._waitingForInference = false;
@@ -65,7 +67,9 @@ export class StreamingScheduler {
   addSource() { this.activeSourceCount++; }
 
   sourceEnded() {
-    this.activeSourceCount--;
+    // 下界钳制：onended 重复触发（或跨会话残留 source）不能把计数压成负数，
+    // 否则 _checkCompletion 的 "<= 0" 判断会把「还有源在播」误判为「全部结束」。
+    if (this.activeSourceCount > 0) this.activeSourceCount--;
     this._checkCompletion();
   }
 
@@ -150,6 +154,7 @@ export class StreamingScheduler {
     this.inferenceDone = false;
     this.isLastReceived = false;
     this.activeSourceCount = 0;
+    this._finished = false;
     this._waitingForInference = false;
     this._contextSuspended = false;
     this._suspendInFlight = null;
@@ -222,7 +227,10 @@ export class StreamingScheduler {
   }
 
   _checkCompletion() {
+    // 一次性标志：onFinish 只允许触发一次，直到下次 reset()（新会话）。
+    if (this._finished) return;
     if (this.isLastReceived && this.activeSourceCount <= 0) {
+      this._finished = true;
       this._onFinish();
     }
   }

@@ -1,4 +1,4 @@
-const { ipcMain } = require('electron');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 const path = require('node:path');
 const fs = require('node:fs');
 const { getModelGroups } = require('../modelRegistry');
@@ -9,6 +9,7 @@ const { getSvsPipeline } = require('./svsIpc');
 const { getRmvpeDetector, getBasicPitchDetector, getRosvotDetector, getFcpeDetector, rmvpeLazy, basicPitchLazy, rosvotLazy, fcpeLazy } = require('./pitchMidiIpc');
 const { openResourceManagerWindow } = require('./windowManager');
 const { getCachedDMLDevices, setCachedDMLDevices } = require('./settingsIpc');
+const { safeHandle } = require('./ipcSafe');
 
 // #9: 缓存文件检查结果
 let modelFilesCache = null;
@@ -128,12 +129,12 @@ function cleanupOnLoadFailure(groupId) {
 }
 
 function registerResourceManagerIpc() {
-  ipcMain.handle('resmgr:open', async () => {
+  safeHandle(IPC_CHANNELS.RESMGR_OPEN, async () => {
     openResourceManagerWindow();
     return { success: true };
   });
 
-  ipcMain.handle('resmgr:getGPUInfo', async () => {
+  safeHandle(IPC_CHANNELS.RESMGR_GET_GPU_INFO, async () => {
     try {
       // 并行获取 VRAM、GPU 控制器和 NPU 状态
       const [vramData, controllers, npuResult] = await Promise.all([
@@ -186,7 +187,7 @@ function registerResourceManagerIpc() {
     }
   });
 
-  ipcMain.handle('resmgr:getModelGroups', async () => {
+  safeHandle(IPC_CHANNELS.RESMGR_GET_MODEL_GROUPS, async () => {
     const groups = getModelGroups();
     const filesInfo = await getModelFilesInfo();
 
@@ -255,7 +256,7 @@ function registerResourceManagerIpc() {
     return { success: true, groups: result };
   });
 
-  ipcMain.handle('resmgr:loadModel', async (event, { groupId, modelId }) => {
+  safeHandle(IPC_CHANNELS.RESMGR_LOAD_MODEL, async (event, { groupId, modelId }) => {
     try {
       return await loadSingleModel(groupId, modelId);
     } catch (err) {
@@ -265,7 +266,7 @@ function registerResourceManagerIpc() {
     }
   });
 
-  ipcMain.handle('resmgr:unloadModel', async (event, { groupId, modelId }) => {
+  safeHandle(IPC_CHANNELS.RESMGR_UNLOAD_MODEL, async (event, { groupId, modelId }) => {
     try {
       return await unloadSingleModel(groupId, modelId);
     } catch (err) {
@@ -274,7 +275,7 @@ function registerResourceManagerIpc() {
     }
   });
 
-  ipcMain.handle('resmgr:loadGroup', async (event, { groupId }) => {
+  safeHandle(IPC_CHANNELS.RESMGR_LOAD_GROUP, async (event, { groupId }) => {
     try {
       if (groupId === 'svs') {
         const pipeline = getSvsPipeline();
@@ -299,7 +300,7 @@ function registerResourceManagerIpc() {
     }
   });
 
-  ipcMain.handle('resmgr:unloadGroup', async (event, { groupId }) => {
+  safeHandle(IPC_CHANNELS.RESMGR_UNLOAD_GROUP, async (event, { groupId }) => {
     try {
       if (groupId === 'svs') {
         const pipeline = getSvsPipeline();

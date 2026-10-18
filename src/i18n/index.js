@@ -119,8 +119,10 @@ function applyLocale() {
                 // inputs, SVG icons and event handlers nested below it.
                 let textNode = Array.from(el.childNodes).find(n => n.nodeType === Node.TEXT_NODE);
                 if (!textNode) {
+                    // 追加而非插到第一个子节点之前：hydrateIcons() 会把 <svg class="icon">
+                    // prepend 进 [data-icon] 元素，insertBefore 会让文本跑到图标前面。
                     textNode = document.createTextNode('');
-                    el.insertBefore(textNode, el.firstChild);
+                    el.appendChild(textNode);
                 }
                 textNode.nodeValue = value;
             }

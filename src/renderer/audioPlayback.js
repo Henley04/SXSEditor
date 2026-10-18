@@ -1,12 +1,72 @@
 import { state, dom, trackManager } from './state.js';
-import { SAMPLE_RATE } from './constants.js';
+import { SAMPLE_RATE, SVS_HOP_SIZE } from './constants.js';
+import { buildMelPostprocessPayload } from '../shared/postprocessCurves.js';
 import { t } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import { showAlertDialog } from '../alertDialog.js';
 import { resolveQDriftDefault } from '../inference/pipeline/qdrift/defaults.js';
 import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './timelineRenderer.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
+// 播放头/时间码必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
+// （输出设备缓冲会让声音晚 20–120 ms 到喇叭 → 指示器稳定跑在声音前面）。
+import { getAudibleElapsedSec, getAudibleContextTime } from '../shared/audioOutputClock.js';
+import { getSingerBackend, normalizeBackend } from '../editor/trackManager.js';
+import { clearPluginBlockingOverlay } from './pluginBlockingOverlay.js';
+// 2.4: 渲染进程此前没有统一的异常兜底策略，静默 catch 占全库 44.8%。
+// 清理型副作用（disconnect / stop / 退订）统一走 safeCleanup，失败留痕但不打断主流程。
+import safeCallModule from '../shared/safeCall.js';
+
+const { safeCleanup, safeCallAsync } = safeCallModule;
+
+// ==================== 插件后端接线 ====================
+
+/**
+ * 参与演唱的分片是否全部交由插件后端负责。
+ *
+ * 全部是插件轨道时不必初始化内置 SVS pipeline —— 用户没下载 SXS 模型、或模型
+ * 加载失败，都不该连带挡住插件轨道的播放/导出。一旦混入内置轨道就照旧初始化。
+ *
+ * @param {Array} allFragments
+ * @param {Map<string, object>} singerMap
+ * @returns {boolean}
+ */
+function allFragmentsUsePluginBackend(allFragments, singerMap) {
+  if (!allFragments || allFragments.length === 0) return false;
+  return allFragments.every((fragment) => {
+    const singer = singerMap.get(fragment.singerId);
+    return !!singer && getSingerBackend(singer).type === 'plugin';
+  });
+}
+
+/**
+ * 把 singer 的后端声明挂到合成 options 上（options.backend）。
+ *
+ * 约定见 src/main/svsIpc.js 的 _resolvePluginBackend()：只要 options.backend.type
+ * === 'plugin'，主进程就把这一个 options 引用整体交给插件，不再走内置 pipeline。
+ *
+ * 两条纪律：
+ *   · **内置轨道不留痕**：{type:'sxs'} 时压根不写 backend 字段 —— 少一个字段的请求
+ *     与本次改动之前逐字节等价，内置链路不会有任何行为差异，也不必担心哪些未知
+ *     字段被下游误读。
+ *   · **其余参数一个都不许删**：需求要求"给模型传递的参数都要能传递给插件"，主进程
+ *     侧的透传已经实现，渲染侧只负责追加 backend，不挑字段、不裁剪。
+ *
+ * 返回值是同一份 options（就地追加），方便直接嵌进调用点的对象字面量。
+ *
+ * @param {object} options 合成参数（f0Envelope / pitchCurveF0 / nSteps / …）
+ * @param {object} [singer] 该分片所属轨道
+ * @returns {object} options 本身
+ */
+function attachPluginBackend(options, singer) {
+  if (!singer || !options) return options;
+  // normalizeBackend() 顺带做了一份防御性浅拷贝：主进程把同一个 options 引用交给
+  // 插件，插件理论上能改写它，这种改写不能透回 singer.backend（那是工程数据）。
+  const backend = normalizeBackend(getSingerBackend(singer));
+  if (backend.type === 'plugin') options.backend = backend;
+  return options;
+}
 
 // ==================== Accompaniment helpers ====================
 
@@ -76,7 +136,7 @@ let _sharedUpdateFn = null;
 let _exclusiveRemoveEndedListener = null;
 function _detachExclusiveEndedListener() {
   if (_exclusiveRemoveEndedListener) {
-    try { _exclusiveRemoveEndedListener(); } catch (_) {}
+    safeCleanup('audioPlayback.detachExclusiveEndedListener', _exclusiveRemoveEndedListener);
     _exclusiveRemoveEndedListener = null;
   }
 }
@@ -144,11 +204,13 @@ function _createScheduler() {
         state.playheadRaf = null;
       }
       dom.timeDisplay.textContent = t('main.waitingForInference');
-      dom.btnPlay.textContent = t('main.waitingForInference');
+      setLabel(dom.btnPlay, t('main.waitingForInference'), { icon: 'play' });
       // watchdog 带 0.3s 提前量时冻结点在 buffer 前沿之前，
       // 播放头画在当前（即将冻结的）位置而非前沿，避免恢复后回跳。
       const waitCtx = state.audioContext;
-      const waitElapsed = waitCtx ? Math.max(0, waitCtx.currentTime - state.playbackStartTime) : 0;
+      const waitElapsed = waitCtx
+        ? Math.max(0, getAudibleContextTime(waitCtx) - state.playbackStartTime)
+        : 0;
       drawPlayheadLine(waitElapsed);
     },
     // watchdog 兜底检测带 0.3s 提前量（>= 250ms tick 周期 + suspend 延迟），
@@ -184,7 +246,7 @@ function _enterStreamingWaitIfUnderrun(ctx, elapsed) {
     }
     dom.timeDisplay.textContent = t('main.waitingForInference');
     drawPlayheadLine(_scheduler.bufferEndSec);
-    dom.btnPlay.textContent = t('main.waitingForInference');
+    setLabel(dom.btnPlay, t('main.waitingForInference'), { icon: 'play' });
   });
 }
 
@@ -200,7 +262,7 @@ function _finishStreamingPlayback() {
   stopPlayheadAnimation();
   dom.timeDisplay.textContent = formatTime(0);
   clearPlayheadLine();
-  dom.btnPlay.textContent = t('main.play');
+  setLabel(dom.btnPlay, t('main.play'), { icon: 'play' });
   dom.btnPlay.disabled = false;
 }
 
@@ -234,14 +296,14 @@ export async function playAll() {
   state.isSynthesizing = true;
   state.synthesisCancelled = false;
   dom.btnPlay.disabled = true;
-  dom.btnPlay.textContent = t('main.synthesizing');
+  setLabel(dom.btnPlay, t('main.synthesizing'), { icon: 'play' });
 
   // 注册推理进度监听：更新按钮文本显示百分比（与分片编辑器对齐）
   let playProgressCleanup = null;
   try {
     playProgressCleanup = window.electronAPI.onSVSProgress((progress) => {
       if (state.isSynthesizing) {
-        dom.btnPlay.textContent = t('main.synthesizingProgress', { progress });
+        setLabel(dom.btnPlay, t('main.synthesizingProgress', { progress }), { icon: 'play' });
       }
     });
   } catch (_) {}
@@ -294,7 +356,10 @@ export async function playAll() {
       if (fragEnd > globalLastEnd) globalLastEnd = fragEnd;
     }
 
-    await ensurePipelineInitialized();
+    // 全插件工程：跳过内置 pipeline 初始化（没下载 SXS 模型也能唱）。
+    if (!allFragmentsUsePluginBackend(allFragments, singerMap)) {
+      await ensurePipelineInitialized();
+    }
 
     const inferenceOpts = getPreviewInferenceOptions();
 
@@ -324,7 +389,10 @@ export async function playAll() {
           notes: clippedNotes,
           startTimeBeat: fragment.startTime,
           durationBeats: fragment.duration,
-          options: {
+          // synthesizeMultiStreaming 是**逐分片**路由的（每个分片单独交给插件合成
+          // 后按 startTimeBeat 混音），因此必须逐个分片带上自己轨道的 backend，
+          // 不能整批沿用第一个分片的。混合多后端会被引擎拒绝，属预期行为。
+          options: attachPluginBackend({
             f0Envelope: null,
             pitchCurveF0,
             refAudioWavBuffer: singer?.wavBuffer || null,
@@ -343,7 +411,16 @@ export async function playAll() {
             cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
             dynamicThresholdEnabled: inferenceOpts.dynamicThresholdEnabled,
             dynamicThresholdPercentile: inferenceOpts.dynamicThresholdPercentile,
-          },
+            // 频谱后处理（音色 → 频谱曲线）：随该 fragment 的 postprocess 下发，
+            // 主窗口播放/导出与分片编辑器听感一致（未启用时为 null，零开销）。
+            melPostprocess: buildMelPostprocessPayload(
+              fragment.postprocess || null,
+              clippedNotes,
+              state.project.bpm,
+              SAMPLE_RATE,
+              SVS_HOP_SIZE,
+            ),
+          }, singer),
         });
       }
 
@@ -426,7 +503,7 @@ export async function playAll() {
               state.playbackStartTime = ctx.currentTime + 0.05;
               state.playbackPauseOffset = 0;
               state.isPlaying = true;
-              if (dom.btnPause) dom.btnPause.textContent = t('main.pause');
+              if (dom.btnPause) setLabel(dom.btnPause, t('main.pause'), { icon: 'pause' });
               startPlayheadAnimation();
 
               // Schedule accompaniment tracks as independent BufferSources
@@ -487,7 +564,7 @@ export async function playAll() {
                   cancelAnimationFrame(state.playheadRaf);
                   state.playheadRaf = null;
                 }
-                dom.btnPlay.textContent = t('main.waitingForInference');
+                setLabel(dom.btnPlay, t('main.waitingForInference'), { icon: 'play' });
               });
             }
 
@@ -518,7 +595,7 @@ export async function playAll() {
             if (lateSec >= chunkDurSec) {
               // 整个 chunk 已过期：内容无可播部分，丢弃（buffer 前沿已覆盖
               // 其范围；播放头会经过一小段静音，直到下一个 chunk）。
-              try { source.disconnect(); } catch (_) {}
+              safeCleanup('audioPlayback.source.disconnect', () => source.disconnect());
               if (chunkInfo.isLast) {
                 _scheduler.markLastReceived();
               }
@@ -559,7 +636,7 @@ export async function playAll() {
         // Let queued svs:chunk-audio IPC messages run before removing the listener.
         await new Promise(resolve => setTimeout(resolve, 0));
         // 合成完成：移除 chunk 监听器
-        if (streamingChunkCleanup) { try { streamingChunkCleanup(); } catch (_) {} streamingChunkCleanup = null; }
+        if (streamingChunkCleanup) { safeCleanup('audioPlayback.streamingChunkCleanup', streamingChunkCleanup); streamingChunkCleanup = null; }
 
         state.currentAudioData = mixedAudio;
         // Always rebuild the complete playback mix. On cache-fast replays the IPC
@@ -596,14 +673,14 @@ export async function playAll() {
         }
         // 否则流式播放仍在进行，playhead 动画已在运行，不重置 timeDisplay
       } catch (error) {
-        if (streamingChunkCleanup) { try { streamingChunkCleanup(); } catch (_) {} streamingChunkCleanup = null; }
+        if (streamingChunkCleanup) { safeCleanup('audioPlayback.streamingChunkCleanup', streamingChunkCleanup); streamingChunkCleanup = null; }
         // 停止已调度的流式 source
         state.streamingFinished = true;
         _streamingActive = false;
         if (_scheduler) _scheduler.deactivate();
         for (const src of state.streamingSources) {
           if (!src) continue;
-          try { src.onended = null; src.stop(); } catch (_) {}
+          safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
         }
         state.streamingSources = [];
         throw error;
@@ -640,7 +717,7 @@ export async function playAll() {
         const audioData = await window.electronAPI.synthesizeSVS({
           notes: clippedNotes,
           bpm: state.project.bpm,
-          options: {
+          options: attachPluginBackend({
             f0Envelope: null,
             pitchCurveF0,
             refAudioWavBuffer: singer?.wavBuffer || null,
@@ -659,7 +736,16 @@ export async function playAll() {
             cfgScheduleKeyframes: inferenceOpts.cfgScheduleKeyframes,
             dynamicThresholdEnabled: inferenceOpts.dynamicThresholdEnabled,
             dynamicThresholdPercentile: inferenceOpts.dynamicThresholdPercentile,
-          },
+            // 频谱后处理（音色 → 频谱曲线）：随该 fragment 的 postprocess 下发，
+            // 主窗口播放/导出与分片编辑器听感一致（未启用时为 null，零开销）。
+            melPostprocess: buildMelPostprocessPayload(
+              fragment.postprocess || null,
+              clippedNotes,
+              state.project.bpm,
+              SAMPLE_RATE,
+              SVS_HOP_SIZE,
+            ),
+          }, singer),
         });
 
         // padding 到 fragment 时长，并在前面填充 firstNoteOffsetSample 个零样本：
@@ -725,12 +811,12 @@ export async function playAll() {
     // 流式播放仍在进行时：若正在等待推理显示"等待推理..."，否则显示"播放"。
     // 流式播放未启动或已结束时：显示"播放"。
     if (_streamingActive && state.isPlaying && _scheduler && _scheduler.isWaiting) {
-      dom.btnPlay.textContent = t('main.waitingForInference');
+      setLabel(dom.btnPlay, t('main.waitingForInference'), { icon: 'play' });
     } else {
-      dom.btnPlay.textContent = t('main.play');
+      setLabel(dom.btnPlay, t('main.play'), { icon: 'play' });
     }
     dom.btnPlay.disabled = false;
-    if (playProgressCleanup) { try { playProgressCleanup(); } catch (_) {} playProgressCleanup = null; }
+    if (playProgressCleanup) { safeCleanup('audioPlayback.playProgressCleanup', playProgressCleanup); playProgressCleanup = null; }
   }
 }
 
@@ -905,10 +991,14 @@ export function startSharedPlayback(offset) {
     }
   };
 
-  source.start(0, offset);
+  // 时间基准必须与 source 真正开始发声的时刻对齐：先取基准、再用 start(when)
+  // 精确落在该时刻。start(0) 只保证"下一个渲染量子"（24 kHz 下 ≈5 ms），
+  // 基准取 start 之后的 currentTime 会让播放头从一开始就略微超前。
+  const startAt = context.currentTime;
+  source.start(startAt, offset);
   state.currentAudioSource = source;
   state.isPlaying = true;
-  state.playbackStartTime = context.currentTime - offset;
+  state.playbackStartTime = startAt - offset;
   state.playbackPauseOffset = offset;
 
   startPlayheadAnimation();
@@ -1047,13 +1137,14 @@ export function pausePlayback() {
   // 流式播放暂停：停止所有流式 source，记录当前位置
   if (state.streamingSources && state.streamingSources.length > 0) {
     const context = getAudioContext();
-    const elapsed = context.currentTime - state.playbackStartTime;
+    // 暂停位置取"听到的位置"：续播时从该位置重新调度，视觉与听觉才一致。
+    const elapsed = getAudibleElapsedSec(context, state.playbackStartTime);
     state.playbackPauseOffset = Math.max(0, elapsed);
     state.streamingFinished = true;
     _streamingActive = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
-      try { src.onended = null; src.stop(); } catch (_) {}
+      safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
     }
     state.streamingSources = [];
     state.isPlaying = false;
@@ -1064,7 +1155,7 @@ export function pausePlayback() {
     }
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
-    if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
+    if (dom.btnPause) setLabel(dom.btnPause, t('main.continue'), { icon: 'play' });
     return;
   }
 
@@ -1080,18 +1171,18 @@ export function pausePlayback() {
     }
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
-    if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
+    if (dom.btnPause) setLabel(dom.btnPause, t('main.continue'), { icon: 'play' });
   } else {
     if (!state.currentAudioSource) return;
     const context = getAudioContext();
-    const elapsed = context.currentTime - state.playbackStartTime;
+    const elapsed = getAudibleElapsedSec(context, state.playbackStartTime);
     state.playbackPauseOffset = elapsed;
     stopAudioSource();
     state.isPlaying = false;
     // stopAudioSource 已 cancel rAF，但不会清除画布；这里手动绘制暂停态播放头
     dom.timeDisplay.textContent = t('main.pausedTime', { time: formatTime(elapsed) });
     drawPausedPlayheadAt(elapsed);
-    if (dom.btnPause) dom.btnPause.textContent = t('main.continue');
+    if (dom.btnPause) setLabel(dom.btnPause, t('main.continue'), { icon: 'play' });
   }
 }
 
@@ -1108,11 +1199,14 @@ export function stopPlayback() {
     _streamingActive = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
-      try { src.onended = null; src.stop(); } catch (_) {}
+      safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
     }
     state.streamingSources = [];
   }
   if (_scheduler) _scheduler.deactivate();
+  // 播放被中止：插件可能还挂着阻滞浮层（它的 end 事件依赖插件走完整条流程），
+  // 这里兜底收掉，避免 UI 停在阻滞态。正常路径（无插件）是 no-op。
+  clearPluginBlockingOverlay('playback-stopped');
   if (state.useExclusiveMode) {
     stopExclusivePlayback();
   }
@@ -1123,7 +1217,7 @@ export function stopPlayback() {
   state.currentAudioData = null;
   state.currentAudioBuffer = null;
   dom.timeDisplay.textContent = formatTime(0);
-  if (dom.btnPause) dom.btnPause.textContent = t('main.pause');
+  if (dom.btnPause) setLabel(dom.btnPause, t('main.pause'), { icon: 'pause' });
 }
 
 /**
@@ -1142,7 +1236,7 @@ export async function seekPlayback(newOffset) {
     _streamingActive = false;
     for (const src of state.streamingSources) {
       if (!src) continue;  // 已 onended 释放的中间 chunk 跳过
-      try { src.onended = null; src.stop(); } catch (_) {}
+      safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
     }
     state.streamingSources = [];
     state.isPlaying = false;
@@ -1202,7 +1296,8 @@ export function getCurrentPlaybackSeconds() {
       return Math.max(0, Date.now() / 1000 - state.playbackStartTime);
     }
     if (state.audioContext) {
-      return Math.max(0, state.audioContext.currentTime - state.playbackStartTime);
+      // hit test / tooltip 用的是"用户看到并听到的位置"，与播放头同一基准。
+      return getAudibleElapsedSec(state.audioContext, state.playbackStartTime);
     }
     return 0;
   }
@@ -1235,14 +1330,18 @@ export function startPlayheadAnimation() {
     if (!state.isPlaying) return;
 
     const context = getAudioContext();
-    const elapsed = context.currentTime - state.playbackStartTime;
+    // 两个时钟域，不可混用（混用 = 补偿量重复计入，人声真的与时间轴错开）：
+    //   renderedElapsed —— 渲染域位置：chunk 对齐、underrun 前沿、结束判定用。
+    //   elapsed         —— 可听域位置：只有播放头与时间码用（见 audioOutputClock）。
+    const renderedElapsed = context.currentTime - state.playbackStartTime;
+    const elapsed = getAudibleElapsedSec(context, state.playbackStartTime);
 
     // 流式播放 buffer underrun 检测：
     // 当 playhead 到达已收到音频的最远位置（buffer 前沿）且推理尚未完成时，
     // 暂停 playhead 并显示"等待推理"，直到下一个 chunk 到达后自动恢复。
     // 这解决了"分段1播完但分段2未推理完"时 playhead 继续前进穿过静音区的问题。
     // 窗口最小化时 rAF 会被挂起，由 _ensureStreamingWatchdog 兜底检测。
-    if (_enterStreamingWaitIfUnderrun(context, elapsed)) return;
+    if (_enterStreamingWaitIfUnderrun(context, renderedElapsed)) return;
 
     // 流式播放兜底停止：推理已完成且 playhead 越过播放前沿后，
     // 说明所有已调度的 source 已播完（或 onended 清理未触发）。
@@ -1251,7 +1350,7 @@ export function startPlayheadAnimation() {
     // 播放前沿取 {人声 chunk 前沿, 伴奏结束位置} 的最大值，避免伴奏长于
     // 人声时在人声结束后就提前停止（会截断仍在播放的伴奏）。
     const totalFrontierSec = Math.max(_scheduler.bufferEndSec, _streamingAccEndSec);
-    if (_scheduler.inferenceDone && elapsed >= totalFrontierSec + 0.5) {
+    if (_scheduler.inferenceDone && renderedElapsed >= totalFrontierSec + 0.5) {
       if (!state.streamingFinished) {
         state.streamingFinished = true;
         state.isPlaying = false;
@@ -1259,12 +1358,12 @@ export function startPlayheadAnimation() {
         _streamingActive = false;
         for (const src of (state.streamingSources || [])) {
           if (!src) continue;
-          try { src.onended = null; src.stop(); } catch (_) {}
+          safeCleanup('audioPlayback.src.stop', () => { src.onended = null; src.stop(); });
         }
         state.streamingSources = [];
         stopPlayheadAnimation();
         dom.timeDisplay.textContent = formatTime(0);
-        dom.btnPlay.textContent = t('main.play');
+        setLabel(dom.btnPlay, t('main.play'), { icon: 'play' });
         dom.btnPlay.disabled = false;
         clearPlayheadLine();
       }
@@ -1273,7 +1372,7 @@ export function startPlayheadAnimation() {
 
     if (state.currentAudioBuffer) {
       const duration = state.currentAudioBuffer.duration;
-      if (elapsed >= duration) {
+      if (renderedElapsed >= duration) {
         stopPlayback();
         dom.timeDisplay.textContent = formatTime(0);
         clearPlayheadLine();
@@ -1371,7 +1470,10 @@ export async function runExportJob(opts) {
 
   if (onStatus) onStatus('progressPreparing');
 
-  await ensurePipelineInitialized();
+  // 与 playAll 同一策略：全插件工程不初始化内置 pipeline。
+  if (!allFragmentsUsePluginBackend(allFragments, singerMap)) {
+    await ensurePipelineInitialized();
+  }
   await loadAudioSettings();
 
   const totalFragments = allFragments.length;
@@ -1424,7 +1526,7 @@ export async function runExportJob(opts) {
       const audioData = await window.electronAPI.synthesizeSVS({
         notes: clippedNotes,
         bpm: state.project.bpm,
-        options: {
+        options: attachPluginBackend({
           refAudioWavBuffer: singer?.wavBuffer || null,
           refMidiNotes: singer?.midiNotes || null,
           refF0Data: singer?.f0Data || null,
@@ -1441,7 +1543,7 @@ export async function runExportJob(opts) {
           cfgScheduleKeyframes: opts.cfgScheduleKeyframes,
           dynamicThresholdEnabled: opts.dynamicThresholdEnabled,
           dynamicThresholdPercentile: opts.dynamicThresholdPercentile,
-        },
+        }, singer),
       });
 
       // padding 到 fragment 时长，并在前面填充 firstNoteOffsetSample 个零样本：
@@ -1471,7 +1573,7 @@ export async function runExportJob(opts) {
     }
   } finally {
     if (fragmentProgressCleanup) {
-      try { fragmentProgressCleanup(); } catch (_) {}
+      safeCleanup('audioPlayback.fragmentProgressCleanup', fragmentProgressCleanup);
       fragmentProgressCleanup = null;
     }
   }

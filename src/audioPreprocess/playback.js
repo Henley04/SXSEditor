@@ -1,5 +1,6 @@
 import { state, dom } from './state.js';
 import { t } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import { drawWaveformWithPlayhead } from './canvasRenderer.js';
 
 export function togglePlayback() {
@@ -41,7 +42,7 @@ export async function startPlayback() {
       if (!state.isPlaying) return;
       const realElapsed = (performance.now() - playbackStartWallTime) / 1000;
       state.isPlaying = false;
-      dom.btnPlayPause.textContent = t('preprocess.play');
+      setLabel(dom.btnPlayPause, t('preprocess.play'), { icon: 'play' });
       stopPlaybackRaf();
       if (realElapsed < 0.2) {
         // 播放刚启动就结束（用户拖拽到接近末尾）：保留当前位置，不重置到 0
@@ -61,7 +62,7 @@ export async function startPlayback() {
     state.audioSource = source;
     state.isPlaying = true;
     state.playStartTime = performance.now();
-    dom.btnPlayPause.textContent = t('preprocess.pause');
+    setLabel(dom.btnPlayPause, t('preprocess.pause'), { icon: 'pause' });
 
     // 统一播放循环，确保waveform和pianoRoll使用同一个时间源
     if (state.pianoRoll) {
@@ -97,7 +98,7 @@ export function pausePlayback() {
     state.playStartOffset = 0;
   }
 
-  dom.btnPlayPause.textContent = t('preprocess.play');
+  setLabel(dom.btnPlayPause, t('preprocess.play'), { icon: 'play' });
   stopPlaybackRaf();
 
   const currentTime = state.playStartOffset;
@@ -120,7 +121,7 @@ export function stopPlayback() {
   }
   stopPlaybackRaf();
   state.playStartOffset = 0;
-  dom.btnPlayPause.textContent = t('preprocess.play');
+  setLabel(dom.btnPlayPause, t('preprocess.play'), { icon: 'play' });
   drawWaveformWithPlayhead(0);
   if (state.pianoRoll) state.pianoRoll.stopPlayback();
 }

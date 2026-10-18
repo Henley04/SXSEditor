@@ -1,12 +1,14 @@
-const { ipcMain, shell } = require('electron');
+const { shell } = require('electron');
 const { loadSettings, saveSettingsFile, ALLOWED_SETTINGS_KEYS, updateLocaleSetting, normalizeSettings } = require('./settings');
 const { classifyDeviceFromName, ensureGPUInfo, getGPUPhase, detectNPUCached, getVocoderChunkFramesInfo, getVocoderChunkFramesTable } = require('./gpuInfo');
 const { getModelDir } = require('./modelDir');
 const { enumerateDMLDevices } = require('../inference/pipeline');
 const { getSvsPipeline, resetSvsPipeline } = require('./svsIpc');
 const { resetRmvpe, resetBasicPitch, resetRosvot } = require('./pitchMidiIpc');
-const { isSystemPath } = require('./security');
+const { isSystemPath, authorizePathExact } = require('./security');
 const { t } = require('./locale');
+const { safeHandle } = require('./ipcSafe');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 // W10: Semantic value validation for known setting keys.
 // The whitelist (ALLOWED_SETTINGS_KEYS) only filters by key name; these
@@ -84,14 +86,14 @@ function invalidateDMLDevices() {
 
 function registerSettingsIpc() {
   // 硬件检测状态（供 UI 显示加载进度）
-  ipcMain.handle('settings:getHardwareStatus', async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_GET_HARDWARE_STATUS, async () => {
     return {
       gpuPhase: getGPUPhase(), // 'none' | 'fast' | 'full'
       hasCachedDevices: !!(cachedDMLDevices && cachedDMLDevices.length > 0),
     };
   });
 
-  ipcMain.handle('settings:getDMLDevices', async (_event, options = {}) => {
+  safeHandle(IPC_CHANNELS.SETTINGS_GET_DML_DEVICES, async (_event, options = {}) => {
     try {
       const includeWebnn = options.includeWebnn === true;
       const enrich = options.enrich === true;
@@ -124,7 +126,7 @@ function registerSettingsIpc() {
     }
   });
 
-  ipcMain.handle('settings:getWinmlProviders', async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_GET_WINML_PROVIDERS, async () => {
     if (process.platform !== 'win32') return [];
     try {
       return await require('../inference/winml/winmlProvider').listCompatibleProviders();
@@ -134,7 +136,7 @@ function registerSettingsIpc() {
     }
   });
 
-  ipcMain.handle('settings:getCurrentHardware', async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_GET_CURRENT_HARDWARE, async () => {
     try {
       const pipeline = getSvsPipeline();
       if (pipeline && pipeline.initialized) {
@@ -149,7 +151,7 @@ function registerSettingsIpc() {
 
   // 智能分配的 vocoder 分片帧数（设置页 UI 显示用）
   // GPU 检测完成后基于最大显存计算，启动前返回默认值。
-  ipcMain.handle('settings:getVocoderChunkFramesInfo', async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_GET_VOCODER_CHUNK_FRAMES_INFO, async () => {
     try {
       // 传入当前模型精度 + vocoderType，让设置页显示按精度扣除常驻权重 + 按 vocoder 类型独立分档的 smartFrames
       // SiFiGAN 模式下返回值不再除以上采样倍率（模型体积小，可用更长分片）
@@ -165,7 +167,7 @@ function registerSettingsIpc() {
   // 不同显存档位下的 vocoder 分片对照表（设置页 UI 展示用）。
   // 以 8GB 为基准，向下扩展到核显（2GB）、向上扩展到旗舰独显（24GB）。
   // 当精度或 vocoder 类型切换时，前端会重新调用此接口刷新对照表。
-  ipcMain.handle('settings:getVocoderChunkFramesTable', async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_GET_VOCODER_CHUNK_FRAMES_TABLE, async () => {
     try {
       const settings = loadSettings();
       const vocoderType = settings.vocoderType === 'sifigan' ? 'sifigan' : 'default';
@@ -176,11 +178,11 @@ function registerSettingsIpc() {
     }
   });
 
-  ipcMain.handle('settings:getSettings', async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_GET, async () => {
     return loadSettings();
   });
 
-  ipcMain.handle('settings:validateDevices', async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_VALIDATE_DEVICES, async () => {
     const settings = loadSettings();
     const deviceMode = settings.deviceMode || 'smart';
     const issues = [];
@@ -233,7 +235,7 @@ function registerSettingsIpc() {
     return { issues, deviceMode, npuAvailable, devices: allDevices };
   });
 
-  ipcMain.handle('settings:saveSettings', async (event, settings) => {
+  safeHandle(IPC_CHANNELS.SETTINGS_SAVE, async (event, settings) => {
     const current = loadSettings();
     const filtered = {};
     for (const key of ALLOWED_SETTINGS_KEYS) {
@@ -360,11 +362,11 @@ function registerSettingsIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('get-locale', async () => {
+  safeHandle(IPC_CHANNELS.GET_LOCALE, async () => {
     return require('./locale').getLocale();
   });
 
-  ipcMain.handle('settings:run-trtrtx-diagnostic', async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_RUN_TRTRTX_DIAGNOSTIC, async () => {
     try {
       const settings = loadSettings();
       const hw = await ensureGPUInfo().catch(() => null);
@@ -472,7 +474,7 @@ function registerSettingsIpc() {
     }
   });
 
-  ipcMain.handle('settings:check-models', async () => {
+  safeHandle(IPC_CHANNELS.SETTINGS_CHECK_MODELS, async () => {
     const { checkMissingFiles } = require('../modelManager');
     const modelDir = getModelDir();
     const precisions = ['fp32', 'fp16', 'int8', 'int8-npu'];
@@ -484,14 +486,14 @@ function registerSettingsIpc() {
     return result;
   });
 
-  ipcMain.handle('save-locale', async (event, locale) => {
+  safeHandle(IPC_CHANNELS.SAVE_LOCALE, async (event, locale) => {
     try {
       const mainLocales = require('./locale').getMainLocales();
       if (typeof locale !== 'string' || !mainLocales[locale]) {
         return { success: false, error: 'Invalid locale' };
       }
-      const configPath = require('node:path').join(require('electron').app.getPath('userData'), 'sxseditor-locale.json');
-      await require('node:fs').promises.writeFile(configPath, JSON.stringify({ locale }), 'utf8');
+      // A6: 与 src/main/settings.js:updateLocaleSetting 共用 ConfigStore 写入口。
+      await require('./configStore').writeJsonConfig('locale', { locale });
       require('./locale').setLocale(locale);
       return { success: true };
     } catch (err) {
@@ -499,8 +501,22 @@ function registerSettingsIpc() {
     }
   });
 
-  ipcMain.handle('getModelDir', async () => {
-    return getModelDir();
+  safeHandle(IPC_CHANNELS.GET_MODEL_DIR, async () => {
+    const dir = getModelDir();
+    // 模型目录可由用户改到任意盘，因此不在 ALLOWED_SAVE_DIRS 覆盖范围内。
+    // 这里由主进程内部授权（值来自主进程持有的 settings，不是渲染进程传参），
+    // 使渲染进程能继续用 file:exists 探测 SiFiGAN 等模型文件，
+    // 而不必再调用 file:authorizePath 自我授权。
+    //
+    // 只登记目录本身（authorizePathExact），不登记父目录：
+    // isPathAllowed() 除了"精确命中"还会命中"父目录在白名单里"，而
+    // authorizePath() 会顺手把 dirname 也写进白名单 —— 用户把模型目录设成
+    // D:\models 时，D:\ 会跟着进白名单，于是 D:\ 下任意直接子文件（D:\evil.txt）
+    // 都被连带放行，等于授权整个盘。所以这里不能用父目录连带放行来凑，
+    // 只授权必要的最小范围：D:\models 自己。模型文件都是它的直接子项，
+    // 走"父目录命中"照样能读。
+    if (dir) authorizePathExact(dir);
+    return dir;
   });
 }
 

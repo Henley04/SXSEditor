@@ -28,7 +28,8 @@
  * loading forever. Failures surface a clear "network unreachable" message.
  */
 
-const { ipcMain, app } = require('electron');
+const { app } = require('electron');
+const { safeHandle } = require('./ipcSafe');
 const https = require('node:https');
 const http = require('node:http');
 const fs = require('node:fs');
@@ -37,12 +38,17 @@ const dns = require('node:dns');
 const net = require('node:net');
 const { URL } = require('node:url');
 const { t } = require('./locale');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
+const { isPathAllowed } = require('./security');
 
 const DEFAULT_API_BASE = 'https://singer-files.15240287482.workers.dev';
 // Socket idle timeout (connect + TLS handshake + stalled reads) and a hard
 // per-request ceiling so nothing can hang indefinitely.
 const SOCKET_IDLE_TIMEOUT_MS = 5000;
 const TOTAL_TIMEOUT_MS = 30000;
+// 单个歌姬包上传的字节上限。.sxssinger 通常只有几 MB，这里只是兜底，
+// 避免误选（或被诱导选中）一个大文件把机器上的数据无上限地流出。
+const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
 const MSG_UNREACHABLE =
   'Unable to connect to the singer market service. It may be blocked or unreachable from your network.';
@@ -314,7 +320,7 @@ function buildMultipart(fields, file) {
 //   2. A raw TCP connect probe to the API host (443) — distinguishes TCP-level
 //      blocking from TLS/SNI reset.
 //   3. Public-IP geolocation via several endpoints reachable from CN
-//      (ip-api.com over HTTP, Baidu qifu, ipip), falling back to the system
+//      (Baidu qifu, ipip — both over HTTPS), falling back to the system
 //      timezone. Mainland China = country code CN (HK/MO/TW excluded).
 // The renderer then shows a region-specific message plus these diagnostics
 // (attempts, timeout settings, IPs) instead of a bare error.
@@ -323,8 +329,11 @@ function buildMultipart(fields, file) {
 const DIAG_CACHE_MS = 10 * 60 * 1000;
 const DIAG_TIMEOUT_MS = 3500;
 // Endpoints tried in order; first successful answer wins.
+// 只保留 HTTPS：这些响应里带着用户的公网 IP，明文一跳就会把它暴露给链路
+// 上的任何观察者，中间人还能篡改 countryCode 影响"中国大陆不可用"的判定。
+// 原先排在首位的 ip-api.com 免费档不支持 HTTPS，故移除；两个 HTTPS 备选
+// 在中国大陆均可直达。
 const GEO_ENDPOINTS = [
-  { url: 'http://ip-api.com/json/?fields=status,message,country,countryCode,query,timezone', source: 'ip-api.com' },
   { url: 'https://qifu-api.baidubce.com/ip/local/geo/v1/district', source: 'qifu.baidu' },
   { url: 'https://myip.ipip.net/json', source: 'ipip.net' },
 ];
@@ -383,7 +392,7 @@ function rawGetJson(urlStr, timeoutMs) {
 /** Best-effort parse of the various geo-IP response shapes. */
 function parseGeo(json) {
   if (!json || typeof json !== 'object') return null;
-  // ip-api.com: { status, country, countryCode, query, timezone }
+  // Generic shape: { status, country, countryCode, query, timezone }
   if (json.countryCode) {
     return {
       country: String(json.countryCode).toUpperCase(),
@@ -603,7 +612,7 @@ function registerSingerMarketIpc() {
   console.log('[SingerMarket] main build 2026-09-26.3 (licenses API + upload license field)');
 
   // ----- Auth -----
-  ipcMain.handle('singer-market:register', async (event, { username, password }) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_REGISTER, async (event, { username, password }) => {
     try {
       const res = await request('POST', '/api/auth/register', {
         body: { username, password },
@@ -619,7 +628,7 @@ function registerSingerMarketIpc() {
     }
   });
 
-  ipcMain.handle('singer-market:login', async (event, { username, password }) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_LOGIN, async (event, { username, password }) => {
     try {
       const res = await request('POST', '/api/auth/login', {
         body: { username, password },
@@ -635,7 +644,7 @@ function registerSingerMarketIpc() {
     }
   });
 
-  ipcMain.handle('singer-market:logout', async () => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_LOGOUT, async () => {
     try {
       await request('POST', '/api/auth/logout', { headers: withAuth() });
     } catch (_) {
@@ -645,7 +654,7 @@ function registerSingerMarketIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('singer-market:me', async () => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_ME, async () => {
     if (!getToken()) return { success: false, user: null };
     try {
       const res = await request('GET', '/api/auth/me', { headers: withAuth() });
@@ -669,7 +678,7 @@ function registerSingerMarketIpc() {
   });
 
   // ----- File listing / search / filter -----
-  ipcMain.handle('singer-market:list', async (event, params = {}) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_LIST, async (event, params = {}) => {
     try {
       const query = new URLSearchParams();
       // Only show public files for browsing (private files only visible to owner)
@@ -694,7 +703,7 @@ function registerSingerMarketIpc() {
     }
   });
 
-  ipcMain.handle('singer-market:file-detail', async (event, fileId) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_FILE_DETAIL, async (event, fileId) => {
     try {
       const res = await request('GET', `/api/files/${encodeURIComponent(fileId)}`, {
         headers: withAuth(),
@@ -710,7 +719,7 @@ function registerSingerMarketIpc() {
   });
 
   // ----- Tags -----
-  ipcMain.handle('singer-market:tags', async (event, params = {}) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_TAGS, async (event, params = {}) => {
     try {
       const query = new URLSearchParams();
       if (params.q) query.set('q', params.q);
@@ -732,7 +741,7 @@ function registerSingerMarketIpc() {
   // ----- Licenses -----
   // License catalog (13 presets + optional custom slot). Used by the upload
   // dialog's license selector and shown as metadata on file detail views.
-  ipcMain.handle('singer-market:licenses', async () => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_LICENSES, async () => {
     try {
       const res = await request('GET', '/api/licenses');
       const data = tryParseJson(res.body) || {};
@@ -748,17 +757,56 @@ function registerSingerMarketIpc() {
   // ----- Upload -----
   // The file is streamed from disk between small multipart prefix/suffix
   // buffers, so even tens-of-MB .sxssinger files never double the memory.
-  ipcMain.handle('singer-market:upload', async (event, payload) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_UPLOAD, async (event, payload) => {
     if (!getToken()) {
       return { success: false, error: 'Not logged in' };
     }
     let fileStream = null;
     try {
       const { filePath, description, tags, visibility, license } = payload;
-      if (!filePath) return { success: false, error: 'Missing file path' };
+      if (!filePath || typeof filePath !== 'string') {
+        return { success: false, error: 'Missing file path' };
+      }
+      // filePath 是渲染进程自由传入的字符串。缺少下面几道校验时，只要用户
+      // 处于登录态，被攻陷的渲染进程就能把本机任意文件（token、SSH 私钥、
+      // 浏览器 cookie）以字节流 POST 到当前 apiBase。
+      // 正常流程是 pickFile() → 对话框选中的 .sxssinger（已 authorizePath）
+      // → upload()，各项校验都会通过。
+      if (!isPathAllowed(filePath)) {
+        return { success: false, error: 'Path not allowed' };
+      }
+      // 只允许上传歌姬包，与 pick-file 对话框的扩展名过滤保持一致。
+      if (!filePath.toLowerCase().endsWith('.sxssinger')) {
+        return { success: false, error: 'Only .sxssinger files can be uploaded' };
+      }
 
-      const fileStat = await fs.promises.stat(filePath);
-      const filename = path.basename(filePath);
+      // 解析真实路径：Documents/x.sxssinger 若是指向 ~/.ssh/id_rsa 的符号链接，
+      // 上面两道校验看的都还是链接本身（路径在白名单内、扩展名也是 .sxssinger），
+      // 而后续 stat / createReadStream 会顺着链接读到真正的目标。因此必须先
+      // realpath 展开，再用真实路径把 isPathAllowed 与扩展名校验重新做一遍；
+      // 链接指向白名单之外的一律拒绝。
+      let realFilePath;
+      try {
+        realFilePath = fs.realpathSync(filePath);
+      } catch (_) {
+        return { success: false, error: 'File not found' };
+      }
+      if (!isPathAllowed(realFilePath)) {
+        return { success: false, error: 'Path not allowed' };
+      }
+      if (!realFilePath.toLowerCase().endsWith('.sxssinger')) {
+        return { success: false, error: 'Only .sxssinger files can be uploaded' };
+      }
+
+      // 之后所有 stat / 读取都用真实路径，避免 TOCTOU 式的"校验链接、读取本体"。
+      const fileStat = await fs.promises.stat(realFilePath);
+      if (!fileStat.isFile()) return { success: false, error: 'Not a file' };
+      if (fileStat.size > MAX_UPLOAD_BYTES) {
+        return { success: false, error: 'File too large' };
+      }
+      // filename 会被拼进 multipart 的 Content-Disposition 头，去掉引号与
+      // CRLF，避免出现头部注入。
+      const filename = path.basename(realFilePath).replace(/["\r\n]/g, '_');
 
       const fields = {};
       if (description) fields.description = description;
@@ -774,7 +822,7 @@ function registerSingerMarketIpc() {
       });
       const contentLength = prefix.length + fileStat.size + suffix.length;
 
-      fileStream = fs.createReadStream(filePath);
+      fileStream = fs.createReadStream(realFilePath);
       const res = await request('POST', '/api/files', {
         headers: withAuth({ 'Content-Type': contentType }),
         bodyStream: fileStream,
@@ -797,7 +845,7 @@ function registerSingerMarketIpc() {
   // responsible for prompting the user for a save location and writing the
   // file to disk via the existing file:saveFile IPC. Progress is streamed to
   // the sender via 'singer-market:download-progress' events.
-  ipcMain.handle('singer-market:download', async (event, fileId) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_DOWNLOAD, async (event, fileId) => {
     try {
       const res = await request('GET', `/api/files/${encodeURIComponent(fileId)}/download`, {
         headers: withAuth(),
@@ -805,7 +853,7 @@ function registerSingerMarketIpc() {
         onProgress: (received, total) => {
           try {
             if (!event.sender.isDestroyed()) {
-              event.sender.send('singer-market:download-progress', { fileId, received, total });
+              event.sender.send(IPC_CHANNELS.SINGER_MARKET_DOWNLOAD_PROGRESS, { fileId, received, total });
             }
           } catch (_) {}
         },
@@ -840,7 +888,7 @@ function registerSingerMarketIpc() {
   });
 
   // ----- Pick .sxssinger file for upload (uses native dialog) -----
-  ipcMain.handle('singer-market:pick-file', async () => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_PICK_FILE, async () => {
     const { dialog } = require('electron');
     const result = await dialog.showOpenDialog({
       title: 'Select a .sxssinger file',
@@ -860,7 +908,7 @@ function registerSingerMarketIpc() {
   });
 
   // ----- Pick save destination for downloaded .sxssinger file -----
-  ipcMain.handle('singer-market:pick-save-path', async (event, suggestedName) => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_PICK_SAVE_PATH, async (event, suggestedName) => {
     const { dialog } = require('electron');
     const result = await dialog.showSaveDialog({
       title: 'Save Singer File',
@@ -879,7 +927,7 @@ function registerSingerMarketIpc() {
   });
 
   // ----- Get server health -----
-  ipcMain.handle('singer-market:health', async () => {
+  safeHandle(IPC_CHANNELS.SINGER_MARKET_HEALTH, async () => {
     try {
       const res = await request('GET', '/health');
       const data = tryParseJson(res.body) || {};

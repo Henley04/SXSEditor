@@ -6,8 +6,10 @@ on:
   pull_request:
     branches: [master, release]
 
+# Least privilege by default: jobs declare what they actually need (see the
+# per-job `permissions` blocks below). Only `build-and-release` writes contents.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -16,11 +18,45 @@ concurrency:
 env:
   INSTALLER_NAME: sxsinstaller_x64_no_models.exe
 
+# ---------------------------------------------------------------------------
+# TODO(security): pin every `uses:` below to a full 40-char commit SHA.
+# Today all 7 references float on a major-version tag (@v4 / @v2), so a
+# compromised or retagged upstream release would run with this workflow's
+# permissions on the next build.
+#
+# The SHAs were NOT filled in here: the machine that authored this comment had
+# no network access (gh unauthenticated, api.github.com unreachable), and a
+# guessed hash is worse than a floating tag — it breaks the build silently.
+# Resolve them on a networked machine and replace each `@vN` in place, keeping
+# the human-readable version in a trailing comment:
+#
+#   gh api repos/actions/checkout/git/ref/tags/v4            --jq .object.sha
+#   gh api repos/actions/setup-node/git/ref/tags/v4          --jq .object.sha
+#   gh api repos/actions/upload-artifact/git/ref/tags/v4     --jq .object.sha
+#   gh api repos/softprops/action-gh-release/git/ref/tags/v2 --jq .object.sha
+#
+# (If the returned object is an annotated tag object, deref once more:
+#  gh api repos/<owner>/<repo>/git/tags/<sha> --jq .object.sha)
+#
+# Then, e.g.:  uses: actions/checkout@<SHA> # v4.2.2
+#
+# Actions to pin (4 distinct, 7 occurrences):
+#   actions/checkout          @v4  x2  (test, build-and-release)
+#   actions/setup-node        @v4  x2  (test, build-and-release)
+#   actions/upload-artifact   @v4  x2  (build log, installer)
+#   softprops/action-gh-release @v2 x1 (third-party; holds GITHUB_TOKEN with
+#                                       contents: write — pin this one first)
+# Dependabot/Renovate can keep SHA pins fresh automatically once they exist.
+# ---------------------------------------------------------------------------
+
 jobs:
   test:
     name: Test
     runs-on: windows-latest
+    permissions:
+      contents: read
     steps:
+      # TODO(pin): replace @v4 with a 40-char SHA — see the block above "jobs:".
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -28,7 +64,8 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci
+      - name: Install dependencies
+        run: npm ci --registry=https://registry.npmjs.org
 
       - name: Build native ORT bridge for Electron
         run: npm run build:native
@@ -42,6 +79,12 @@ jobs:
           if (-not $text.Contains("d2h-copy-v3")) { throw "prebuilt addon missing d2h-copy-v3 marker" }
           Write-Host "prebuilt synced and verified"
 
+      - name: IPC channel contract check
+        run: npm run lint:ipc
+
+      - name: Lint
+        run: npm run lint
+
       - name: Run tests (skip network & model loading/inference)
         run: npm run test:ci
 
@@ -50,7 +93,11 @@ jobs:
     needs: test
     runs-on: windows-latest
     if: github.event_name == 'push'
+    permissions:
+      # Required to create/update the GitHub Release and upload its assets.
+      contents: write
     steps:
+      # TODO(pin): replace @v4 with a 40-char SHA — see the block above "jobs:".
       - uses: actions/checkout@v4
         with:
           # Fetch full history so git tags are available for version bumping
@@ -110,10 +157,15 @@ jobs:
           echo "branch=$BRANCH" >> $GITHUB_OUTPUT
           echo "is_release=$IS_RELEASE" >> $GITHUB_OUTPUT
           echo "make_latest=$MAKE_LATEST" >> $GITHUB_OUTPUT
+          # Splash 图里的 "Version X (Stable/Nightly)" 标签。generate-build-info.js
+          # 读 SXS_CHANNEL（只认 stable），写进 build-info.json 再烘焙进位图。
+          # 走 GITHUB_ENV 是为了让后续所有 step（含 npm run package:lite 的
+          # prepackage 钩子）都能读到。
+          echo "SXS_CHANNEL=$([ "$IS_RELEASE" = "true" ] && echo stable || echo nightly)" >> $GITHUB_ENV
           echo "[ci] branch=$BRANCH version=$NEW_VERSION build_version=$BUILD_VERSION tag=$TAG prerelease=$PRERELEASE make_latest=$MAKE_LATEST"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --registry=https://registry.npmjs.org
         env:
           # Ensure Electron binary downloads even if postinstall was silently skipped
           ELECTRON_SKIP_BINARY_DOWNLOAD: '0'
@@ -143,8 +195,14 @@ jobs:
             Write-Host "Electron binary missing, running install script..."
             node node_modules/electron/install.js
             if (-not (Test-Path $electronExe)) {
-              Write-Host "Default source failed, trying npmmirror..."
+              # FALLBACK ONLY: the Electron binary does not come from npm (no
+              # integrity check covers it), so this mirrors the download to a
+              # third-party host when the official source is unreachable. It is
+              # a last resort, not the default path — keeping the log line below
+              # makes any fallback visible when auditing a build.
+              Write-Host "Default source failed, trying npmmirror fallback..."
               $env:ELECTRON_MIRROR = "https://npmmirror.com/mirrors/electron/"
+              Write-Host "Using ELECTRON_MIRROR fallback: $env:ELECTRON_MIRROR"
               node node_modules/electron/install.js
             }
             if (-not (Test-Path $electronExe)) {
@@ -261,6 +319,7 @@ jobs:
 
       - name: Upload build log on failure
         if: failure()
+        # TODO(pin): replace @v4 with a 40-char SHA — see the block above "jobs:".
         uses: actions/upload-artifact@v4
         with:
           name: build-log-${{ github.ref_name }}
@@ -298,6 +357,7 @@ jobs:
           Write-Host "Installer built: $installer"
 
       - name: Upload installer artifact
+        # TODO(pin): replace @v4 with a 40-char SHA — see the block above "jobs:".
         uses: actions/upload-artifact@v4
         with:
           name: sxsinstaller-${{ github.ref_name }}
@@ -305,6 +365,9 @@ jobs:
           retention-days: 30
 
       - name: Create/Update GitHub Release
+        # TODO(pin): highest-risk reference — third-party action holding
+        # GITHUB_TOKEN with contents:write. Replace @v2 with a 40-char SHA
+        # first; see the block above "jobs:" for the resolution command.
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.tag }}

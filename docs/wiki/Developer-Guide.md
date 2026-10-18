@@ -21,7 +21,8 @@ Build from source, understand the architecture, run tests, and contribute.
 
 - **Node.js** >= 18
 - **npm** >= 9
-- **Windows** (primary target; macOS/Linux supported via Electron Forge makers)
+- **Windows** (primary target; the only CI-verified platform with released binaries)
+- **macOS/Linux** (source build only: CPU inference, no DirectML/Windows ML, unverified — makers exist but are not exercised in CI)
 - **Git**
 - ONNX models are downloaded automatically on first launch, or can be placed manually in `onnx_models/`
 
@@ -121,8 +122,6 @@ SXSEditor/
 │   │   └── constants.js       # Editor constants
 │   ├── editor/                # Shared editor modules
 │   │   ├── trackManager.js    # Multi-track timeline management
-│   │   ├── pianoRoll.js       # Piano roll rendering engine
-│   │   ├── envelopeEditor.js  # Envelope curve editor
 │   │   └── historyManager.js  # Undo/redo (200 steps)
 │   ├── inference/             # Neural inference pipelines
 │   │   ├── pipeline/          # Main SVS pipeline
@@ -144,11 +143,11 @@ SXSEditor/
 │   │   │   └── utils.js
 │   │   ├── webnn/             # WebNN NPU pipeline
 │   │   ├── rmvpePitchDetector.js  # RMVPE F0 extraction
-│   │   ├── fcpeDetector.js    # FCPE pitch detector (ONNX, default MIDI extraction)
+│   │   ├── fcpePitchDetector.js  # FCPE pitch detector (ONNX, default MIDI extraction)
 │   │   ├── basicPitch.js      # Basic Pitch MIDI extraction
 │   │   ├── rosvotDetector.js  # RosVot voice onset detection
 │   │   ├── midiParser.js      # Standard MIDI file parsing
-│   │   ├── phone_set.json     # Phoneme vocabulary (2820 entries)
+│   │   ├── phone_set.json     # Phoneme vocabulary (3033 entries)
 │   │   └── en_g2p_dict.json   # English G2P dictionary (126k words)
 │   ├── audio/                 # Audio subsystem
 │   │   ├── audioOutputManager.js  # WASAPI output via decibri
@@ -301,7 +300,7 @@ python build_en_phoneme_duration_stats.py --min-samples 10  # filter low-frequen
 
 ### FCPE Pitch Detector
 
-`src/inference/fcpeDetector.js` is an ONNX-based pitch detector that has replaced Basic Pitch as the recommended MIDI extraction tool. It features a configurable post-processing pipeline for note onset/offset detection and pitch quantization.
+`src/inference/fcpePitchDetector.js` is an ONNX-based pitch detector that has replaced Basic Pitch as the recommended MIDI extraction tool. It features a configurable post-processing pipeline for note onset/offset detection and pitch quantization.
 
 The FCPE model is registered in `modelRegistry.js` alongside RMVPE and Basic Pitch. When selected in Settings > Audio > MIDI Extraction Tool, it is used by both the Audio Preprocessing window and the Audio to MIDI feature.
 
@@ -316,7 +315,7 @@ Detection is based on input/output tensor names and graph structure. The diffusi
 
 ### Dynamic Thresholding
 
-Per-frame percentile clipping (arXiv:2507.08965) applied during diffusion sampling. After each diffusion step, mel bins that exceed the configured percentile threshold (default 0.999, range 0.9–0.999) are clipped to the threshold value. This suppresses outlier activations that cause artifacts, without sacrificing overall spectral detail.
+Per-frame percentile clipping (Imagen, arXiv:2205.11487) applied during diffusion sampling. After each diffusion step, mel bins that exceed the configured percentile threshold (default 0.995, range 0.9–0.999) are clipped to the threshold value. This suppresses outlier activations that cause artifacts, without sacrificing overall spectral detail.
 
 The thresholding is applied in `pipeline/diffusion.js` after the CFG combine step, before accumulating the delta onto `xt`. It can be toggled and configured independently for preview and export paths.
 
@@ -339,7 +338,7 @@ Several audio post-processing improvements have been added to the synthesis outp
 
 - **WSOLA crossfade**: At vocoder chunk boundaries (where long audio is split for processing), WSOLA (Waveform Similarity Overlap-Add) replaces the previous Hann overlap-add method. This produces smoother transitions by matching waveform similarity at crossfade points, reducing audible clicks and discontinuities.
 - **EBU R128 loudness normalization**: The final mix is normalized to −14 LUFS with a true-peak limiter at −1 dBTP, ensuring consistent loudness across projects and compliance with streaming platform standards.
-- **2× oversampling anti-aliasing**: A full oversampling pipeline is applied during resampling from the model's native 24 kHz to the output sample rate (default 48 kHz). This reduces aliasing artifacts and improves high-frequency fidelity.
+- **Kaiser windowed-sinc resampling**: the model's native 24 kHz output is upsampled to the selected output rate (48 kHz by default) by a Kaiser-windowed sinc interpolator (β=5, ±12 taps) that band-limits at 0.95 × destination Nyquist. An optional 2× oversampling anti-aliasing stage (`enableAntiAliasing`) applies only to *reference-audio downsampling* (44.1k/48k → 24k, for reference mel/F0 extraction) — it cannot affect exported audio, because export is an upsampling path.
 
 ### Cooperative Synthesis Cancellation
 
@@ -353,9 +352,9 @@ The `AbortController` is created per synthesis call and its signal is threaded t
 
 ### Segment-Level Synthesis Cache
 
-A segment-level LRU cache (32 entries, up to 300 MB) stores completed synthesis results keyed by a hash of the input parameters (notes, lyrics, pitch curve, singer data, diffusion settings). When a segment with unchanged inputs is requested again, the cached audio is returned instantly.
+A per-segment LRU cache (**32 entries, up to 300 MB**) stores the raw audio of individual segments (pre-crossfade), keyed by an FNV-1a hash of the segment content (notes, bpm, and option fields). A second, whole-synthesis LRU cache (**4 entries, up to 200 MB**) stores complete `synthesize()` results. When a segment with unchanged inputs is requested again, the cached audio is returned instantly.
 
-The cache lives in the main process and is shared across all synthesis calls (preview and export). Editing any parameter that affects the output invalidates the relevant cache entries. The LRU eviction policy ensures memory usage stays bounded.
+Both caches live in the main process and are shared across all synthesis calls (preview and export). `clearSynthCache()` — called when the vocoder type, SiFiGAN precision, or language changes — empties both levels. Editing any parameter that affects the output invalidates the relevant cache entries. The LRU eviction policy ensures memory usage stays bounded.
 
 ### Viewport-Sized Timeline Canvas
 
@@ -464,9 +463,11 @@ npm run make            # Create distributables (.exe, .zip, .deb)
 ```
 
 The packaging uses Electron Forge with makers configured for:
-- **Windows**: Squirrel installer (.exe)
-- **macOS**: DMG (.dmg)
-- **Linux**: DEB (.deb) and RPM (.rpm)
+- **Windows**: Squirrel installer (.exe) — the only maker exercised by CI
+- **macOS**: ZIP archive (.zip) — untested, no CI coverage
+- **Linux**: DEB (.deb) and RPM (.rpm) — untested, no CI coverage
+
+On macOS/Linux only CPU inference is available (no DirectML/Windows ML), and no official binaries are published.
 
 ---
 

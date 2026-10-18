@@ -88,7 +88,7 @@
       </h3>
       <ul>
         <li><span data-lang="en"><strong>Windows</strong>: Primary target with pre-built installers. Windows 10/11 64-bit required.</span><span data-lang="zh"><strong>Windows</strong>：主要平台，提供预构建安装包。需要 Windows 10/11 64 位。</span></li>
-        <li><span data-lang="en"><strong>macOS / Linux</strong>: Can be built from source using Electron Forge. See the Developer Guide.</span><span data-lang="zh"><strong>macOS / Linux</strong>：可使用 Electron Forge 从源码构建。详见开发者指南。</span></li>
+        <li><span data-lang="en"><strong>macOS / Linux</strong>: Can be built from source using Electron Forge (CPU inference only — no DirectML/Windows ML; not covered by CI, no official binaries). See the Developer Guide.</span><span data-lang="zh"><strong>macOS / Linux</strong>：可使用 Electron Forge 从源码构建（仅 CPU 推理，不含 DirectML/Windows ML；无 CI 覆盖、无官方二进制）。详见开发者指南。</span></li>
       </ul>
 
       <h3>
@@ -250,8 +250,8 @@
         <span data-lang="en">What is a slur note?</span>
         <span data-lang="zh">什么是连音音符？</span>
       </h3>
-      <p data-lang="en">A slur (continuation) note extends the previous note's sound without re-attacking. Create one by adding a note with an empty lyric or a dash <code>-</code>. The note continues the phoneme of the previous note.</p>
-      <p data-lang="zh">连音（延续）音符延续前一个音符的声音而不重新起音。创建方法是添加一个空歌词或破折号 <code>-</code> 的音符。该音符延续前一个音符的音素。</p>
+      <p data-lang="en">A slur (continuation) note extends the previous note's sound without re-attacking. Create one by typing a half-width dash <code>-</code> as the note's lyric. The note continues the phoneme of the previous note. <strong>An empty lyric is not a slur</strong> — an empty lyric is a rest and always sings as silence, whether or not the note has a pitch. See <a href="fragment-editor.html#note-types-notetype">Note Types</a>.</p>
+      <p data-lang="zh">连音（延续）音符延续前一个音符的声音而不重新起音。创建方法是在该音符的歌词位置输入半角连字符 <code>-</code>，该音符会延续前一个音符的音素。<strong>空歌词不是连音</strong>——空歌词表示休止，无论音符有无音高都按静音处理。详见<a href="fragment-editor.html#note-types-notetype">音符类型</a>。</p>
 
       <h3>
         <span data-lang="en">How do I draw pitch curves?</span>
@@ -364,8 +364,8 @@
         <span data-lang="en">What format is the exported WAV?</span>
         <span data-lang="zh">导出的 WAV 是什么格式？</span>
       </h3>
-      <p data-lang="en">48 kHz, 16-bit PCM WAV by default (the model runs at 24 kHz internally, with linear upsampling to the selected export rate). Export sample rate is selectable: 24 / 44.1 / 48 / 96 kHz.</p>
-      <p data-lang="zh">默认为 48kHz、16-bit PCM WAV（模型内部以 24kHz 运行，线性上采样到所选导出采样率）。导出采样率可选：24 / 44.1 / 48 / 96 kHz。</p>
+      <p data-lang="en">48 kHz, 32-bit IEEE float WAV by default (the model runs at 24 kHz internally, with linear upsampling to the selected export rate). Export sample rate is selectable: 24 / 44.1 / 48 / 96 kHz, and bit depth 16 / 24 / 32-bit in the Export dialog.</p>
+      <p data-lang="zh">默认为 48kHz、32-bit IEEE float WAV（模型内部以 24kHz 运行，线性上采样到所选导出采样率）。导出采样率可选：24 / 44.1 / 48 / 96 kHz，位深度可在导出对话框中选择 16 / 24 / 32 位。</p>
 
       <h2>
         <span data-lang="en">Audio to MIDI</span>

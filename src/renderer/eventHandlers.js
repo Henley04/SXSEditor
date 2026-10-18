@@ -4,10 +4,11 @@ import {
   HEADER_HEIGHT,
 } from './constants.js';
 import { t } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import { updateProjectSettings, saveProject, saveProjectAs, loadProject, showSingerSelectDialog, markDirty, addAccompanimentFromFile } from './projectManager.js';
 import { playAll, pausePlayback, stopPlayback, exportAll, getCurrentPlaybackSeconds, startAudioPlayback } from './audioPlayback.js';
 import { formatTime } from './uiControls.js';
-import { getBeatWidth, renderFragmentTimeline, syncFragmentScroll, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
+import { getBeatWidth, renderFragmentTimeline, refreshAll, playbackTimeToX, xToPlaybackTime, PLAYHEAD_HIT_WIDTH, drawPausedPlayheadAt } from './timelineRenderer.js';
 import { openFragmentEditor, finishDrag, handleAudioToMidi, handleImportMidi } from './fragmentOperations.js';
 import { showConfirmDialog } from '../alertDialog.js';
 import { exportProjectLrc } from './lrcExport.js';
@@ -152,6 +153,7 @@ function _updatePlayheadVisual(seconds) {
 function _endPlayheadDrag() {
   if (!_isPlayheadDragging) return;
   _isPlayheadDragging = false;
+  _detachPlayheadDragWindowListeners();
   _hidePlayheadTooltip();
   if (_playheadDragRaf) {
     cancelAnimationFrame(_playheadDragRaf);
@@ -162,6 +164,32 @@ function _endPlayheadDrag() {
     _wasPlayingBeforeDrag = false;
     startAudioPlayback(state.playbackPauseOffset);
   }
+}
+
+// Window 级拖拽跟踪：playhead 拖拽期间把 mousemove/mouseup 挂到 window，
+// 指针越出 canvas（甚至窗口）边界后仍持续跟踪，位置由 _canvasXToClampedSeconds
+// clamp 到真实边界（0 或 duration - margin）。
+// 此前依赖 canvas mouseleave 终结拖拽：快速拖出左边界时，最后一次落在 canvas
+// 内侧的 mousemove 采样成为终值——拖得越快，该采样离边界越远（事件采样间隔 ×
+// 速度），造成归零残留约 0.08~0.13s。
+function _onWindowPlayheadDragMove(e) {
+  if (!_isPlayheadDragging) return;
+  const x = _mouseToCanvasX(e);
+  _updatePlayheadVisual(_canvasXToClampedSeconds(x));
+}
+function _onWindowPlayheadDragUp() {
+  _endPlayheadDrag();
+}
+function _attachPlayheadDragWindowListeners() {
+  window.addEventListener('mousemove', _onWindowPlayheadDragMove);
+  window.addEventListener('mouseup', _onWindowPlayheadDragUp);
+  // 兜底：拖拽中窗口失焦（如 Alt+Tab）时收尾，避免拖拽状态卡死
+  window.addEventListener('blur', _onWindowPlayheadDragUp);
+}
+function _detachPlayheadDragWindowListeners() {
+  window.removeEventListener('mousemove', _onWindowPlayheadDragMove);
+  window.removeEventListener('mouseup', _onWindowPlayheadDragUp);
+  window.removeEventListener('blur', _onWindowPlayheadDragUp);
 }
 
 // BPM and time signature inputs
@@ -203,7 +231,7 @@ dom.btnPause.addEventListener('click', async () => {
     pausePlayback();
   } else if (state.currentAudioData && state.currentAudioData.length > 0) {
     await startAudioPlayback(state.playbackPauseOffset || 0);
-    dom.btnPause.textContent = t('main.pause');
+    setLabel(dom.btnPause, t('main.pause'), { icon: 'pause' });
   }
 });
 
@@ -255,9 +283,11 @@ dom.btnImportMidi.addEventListener('click', handleImportMidi);
 
 // Fragment canvas mouse events
 dom.fragmentCanvas.addEventListener('mousedown', (e) => {
+  // 统一使用虚拟时间轴坐标系：canvas 是视口尺寸、绘制时 ctx.translate(-scrollX, -scrollY)，
+  // 事件坐标必须加回滚动偏移，否则滚动后播放头/分片/伴奏的命中测试全部错位。
   const rect = _getFragmentCanvasRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  const x = e.clientX - rect.left + state.fragmentScrollX;
+  const y = e.clientY - rect.top + state.fragmentScrollY;
 
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
@@ -283,6 +313,7 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
         _wasPlayingBeforeDrag = false;
       }
       _isPlayheadDragging = true;
+      _attachPlayheadDragWindowListeners();
       _updatePlayheadVisual(newSeconds);
       _hidePlayheadTooltip();
       return;
@@ -337,19 +368,15 @@ dom.fragmentCanvas.addEventListener('mousedown', (e) => {
 });
 
 dom.fragmentCanvas.addEventListener('mousemove', (e) => {
-  // 拖拽 playhead 优先级最高：只更新视觉（不重启 source，避免卡顿）
-  if (_isPlayheadDragging) {
-    const x = _mouseToCanvasX(e);
-    const newSeconds = _canvasXToClampedSeconds(x);
-    _updatePlayheadVisual(newSeconds);
-    return;
-  }
+  // 拖拽 playhead 时的移动更新由 window 级监听 _onWindowPlayheadDragMove 统一处理
+  // （本事件会冒泡到 window），此处只负责非拖拽态的悬停光标/tooltip。
+  if (_isPlayheadDragging) return;
 
   if (!state.dragState) {
     // 鼠标悬停在 playhead 上时：显示 ew-resize 光标 + 时间 tooltip
-    const rect = _getFragmentCanvasRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    // 虚拟坐标系（与 mousedown/绘制侧一致），漏加 scrollX 会导致滚动后命中错位
+    const x = _mouseToCanvasX(e);
+    const y = _mouseToCanvasY(e);
     const playheadX = _getCurrentPlayheadX();
     const onPlayhead = Math.abs(x - playheadX) <= PLAYHEAD_HIT_WIDTH / 2
       && (state.playbackPauseOffset > 0 || state.isPlaying || state.currentAudioData);
@@ -482,14 +509,16 @@ dom.fragmentCanvas.addEventListener('mouseleave', () => {
     state.fragmentDragSnapshot = null;
   }
   _clickStartPos = null;
-  _endPlayheadDrag();
+  // 注意：playhead 拖拽不能在这里终结——快速拖出边界时 mouseleave 会把最后一次
+  // canvas 内侧采样定格为终值，造成归零残留（0.08~0.13s，取决于速度）。
+  // 拖拽由 window 级 mouseup/blur（_onWindowPlayheadDragUp）收尾。
   finishDrag();
 });
 
 dom.fragmentCanvas.addEventListener('dblclick', (e) => {
-  const rect = _getFragmentCanvasRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  // 虚拟坐标系（与 mousedown/绘制侧一致）
+  const x = _mouseToCanvasX(e);
+  const y = _mouseToCanvasY(e);
 
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
@@ -516,9 +545,9 @@ dom.fragmentCanvas.addEventListener('dblclick', (e) => {
 
 dom.fragmentCanvas.addEventListener('contextmenu', (e) => {
   e.preventDefault();
-  const rect = _getFragmentCanvasRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
+  // 虚拟坐标系（与 mousedown/绘制侧一致）
+  const x = _mouseToCanvasX(e);
+  const y = _mouseToCanvasY(e);
 
   const singers = trackManager.getSingers();
   const fragments = trackManager.getFragments();
@@ -579,17 +608,19 @@ function _processPendingWheel() {
 
       const newBeatWidth = getBeatWidth();
       state.fragmentScrollX = mouseBeats * newBeatWidth - mouseXInContainer;
-      renderFragmentTimeline();
+      // 不在这里渲染：尾巴上统一 sync + render 一次。旧代码在这里渲染后又走一遍
+      // 尾巴，等于每个缩放帧画两遍整条时间轴（含全部精灵与波形），缩放因此发钝。
     } else if (shift) {
       state.fragmentScrollX += (dx !== 0 ? dx : dy);
     } else {
       state.fragmentScrollY += dy;
     }
-    syncFragmentScroll();
+    // syncFragmentScroll() 不必在这里再调：renderFragmentTimeline() 内部在 clamp
+    // 之后已经调用过（一次 layout 读 + 一次 scrollTop 写）。每帧多调一次等于
+    // 每帧多一次强制同步布局，缩放/滚动这种高频路径上直接吃掉帧预算。
     renderFragmentTimeline();
   } else if (target === dom.singerListEl) {
     state.fragmentScrollY += dy;
-    syncFragmentScroll();
     renderFragmentTimeline();
   }
 }
@@ -600,13 +631,15 @@ function _pushWheel(e, target) {
     _wheelAcc.has = true;
     _wheelAcc.dx = 0;
     _wheelAcc.dy = 0;
-    _wheelAcc.clientX = e.clientX;
     _wheelAcc.zoom = e.ctrlKey || e.metaKey;
     _wheelAcc.shift = e.shiftKey;
     _wheelAcc.target = target;
   }
   _wheelAcc.dx += _normalizeWheel(e, e.deltaX);
   _wheelAcc.dy += _normalizeWheel(e, e.deltaY);
+  // 缩放锚点取「本帧最后一个」鼠标位置，而不是批内第一个：实际绘制发生在帧末，
+  // 用旧位置做锚点会让缩放中心落在指针后方，鼠标划得快时锚点明显漂移。
+  _wheelAcc.clientX = e.clientX;
   if (_wheelRaf) return;
   _wheelRaf = requestAnimationFrame(_processPendingWheel);
 }
@@ -622,8 +655,16 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
     e.preventDefault();
     if (history.canUndo()) {
-      history.undo();
-      refreshAll();
+      // undo() 失败时会把命令退回 undoStack 并重新抛错（见 historyManager.js），
+      // 用 try/finally 保证这一步无论成败都刷新 UI —— 部分回滚后的界面必须
+      // 反映真实状态，不能停在"看起来没反应"的旧画面上。
+      try {
+        history.undo();
+      } catch (err) {
+        console.error('[Renderer] Undo failed:', err && err.message ? err.message : err);
+      } finally {
+        refreshAll();
+      }
     }
     return;
   }
@@ -631,8 +672,14 @@ document.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey) || (e.key === 'Z' && e.shiftKey))) {
     e.preventDefault();
     if (history.canRedo()) {
-      history.redo();
-      refreshAll();
+      // 同上：redo() 失败时命令退回 redoStack 并重抛，刷新放在 finally 里。
+      try {
+        history.redo();
+      } catch (err) {
+        console.error('[Renderer] Redo failed:', err && err.message ? err.message : err);
+      } finally {
+        refreshAll();
+      }
     }
     return;
   }

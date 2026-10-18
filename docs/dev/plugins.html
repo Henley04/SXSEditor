@@ -1,0 +1,605 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Plugin Backends — SXSEditor Developer Docs</title>
+  <link rel="icon" href="../images/icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <header class="site-header">
+    <div class="site-header-inner">
+      <a class="brand" href="../index.html">
+        <img src="../images/icon.png" alt="SXSEditor" class="brand-logo" />
+        <span class="brand-name" data-i18n="brand.name">SXSEditor</span>
+      </a>
+      <nav class="header-nav" data-header-nav>
+        <a class="nav-link" href="../index.html" data-i18n="nav.home">Home</a>
+        <a class="nav-link" href="../user/quick-start.html" data-i18n="nav.user">User Guide</a>
+        <a class="nav-link" href="build.html" data-i18n="nav.dev">Developer Guide</a>
+        <a class="nav-link" href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .5C5.7.5.5 5.7.5 12c0 5.1 3.3 9.4 7.9 10.9.6.1.8-.2.8-.5v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1.1-.7.1-.7.1-.7 1.2.1 1.8 1.2 1.8 1.2 1 1.8 2.8 1.8 1.8 1.8.9 0 1.6-.6 1.9-1.2-2.5-.3-5.2-1.3-5.2-5.8 0-1.3.5-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 1-.3 3.3 1.2 0 0 2.2-.3 4.6 1.3.9-1.4 2.2-1.9 3.4-1.9 1.2 0 2.6.5 3.4 1.9 2.5-1.7 4.6-1.3 4.6-1.3 2.3 1.8 1.2 2.8 1.2 3.1 0 4.6-2.6 5.5-5.2 5.8.4.4.8 1.1.8 2.2v3.3c0 .6.2.7.8.5 4.6-1.5 7.9-5.7 7.9-10.9C23.5 5.7 18.3.5 12 .5z"/></svg>
+          <span data-i18n="nav.github">GitHub</span>
+        </a>
+      </nav>
+      <div class="header-actions">
+        <div class="lang-switcher" role="group" aria-label="Language">
+          <button class="lang-btn" data-lang-btn="en" type="button">EN</button>
+          <button class="lang-btn" data-lang-btn="zh" type="button">中文</button>
+        </div>
+        <button class="theme-toggle" data-theme-toggle type="button" aria-label="Toggle theme">
+          <svg class="icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+          <svg class="icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+        </button>
+        <button class="menu-btn" data-menu-btn type="button" aria-label="Open menu">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h18M3 6h18M3 18h18"/></svg>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="docs-layout">
+    <aside class="docs-sidebar scrollbar-thin" data-nav-section="dev"></aside>
+
+    <main class="prose">
+      <nav class="breadcrumb">
+        <a href="../index.html" data-i18n="nav.home">Home</a>
+        <span class="sep">/</span>
+        <a href="build.html" data-i18n="sidebar.dev">Developer Guide</a>
+        <span class="sep">/</span>
+        <span data-lang="en">Plugin Backends</span><span data-lang="zh">插件后端</span>
+      </nav>
+
+      <h1>
+        <span data-lang="en">Plugin Backends</span>
+        <span data-lang="zh">插件后端</span>
+      </h1>
+
+      <p data-lang="en">SXSEditor's plugin system lets a third-party singing backend replace the built-in SoulX-Singer pipeline — including classical concatenation approaches that use no neural model at all. A plugin declares its own track kinds, receives every parameter the built-in model would have received, and returns audio through a validated channel. This document specifies contract version 1 and is the normative reference for plugin authors.</p>
+      <p data-lang="zh">SXSEditor 插件系统允许第三方歌声后端替换内置的 SoulX-Singer 管线——包括完全不使用神经网络的传统拼接方案。插件声明自己的轨道种类，收下内置模型本会收到的全部参数，并通过受校验的通道返回音频。本文档规定契约版本 1，是插件作者规范性参考。</p>
+
+      <div class="callout note">
+        <div class="callout-icon">ℹ️</div>
+        <div class="callout-body">
+          <p data-lang="en">Source files: <code>src/shared/pluginContract.js</code> (the single source of truth for validation), <code>src/main/pluginHost.js</code> (host kernel), <code>src/main/pluginWorker.js</code> (worker runtime and cross-thread codec), <code>src/main/pluginIpc.js</code> (IPC surface), and <code>plugins/example-concat/</code> (a runnable template plugin).</p>
+          <p data-lang="zh">相关源文件：<code>src/shared/pluginContract.js</code>（校验唯一真源）、<code>src/main/pluginHost.js</code>（宿主内核）、<code>src/main/pluginWorker.js</code>（worker 运行时与跨线程编解码）、<code>src/main/pluginIpc.js</code>（IPC 接口），以及 <code>plugins/example-concat/</code>（可直接运行的模板插件）。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Execution Model</span>
+        <span data-lang="zh">执行模型</span>
+      </h2>
+
+      <p data-lang="en">Plugins run in a <code>worker_threads</code> worker by default. This is a correctness requirement rather than a preference. Consider a plugin that busy-waits synchronously:</p>
+      <p data-lang="zh">插件默认运行在 <code>worker_threads</code> worker 中。这是正确性要求而非偏好。设想一个同步忙等的插件：</p>
+
+      <pre><code>const t = Date.now();
+while (Date.now() - t &lt; 2000) { /* ordinary plugin code */ }</code></pre>
+
+      <p data-lang="en">Loaded in the main process, this code monopolises the event loop: the host's <code>setTimeout</code> cannot fire, so the timeout arm of <code>Promise.race([call, timeout])</code> never runs — a 2-second busy-wait survives a 300ms timeout. No mechanism inside a single thread can preempt synchronous code. The only reliable interruption is terminating the thread from outside.</p>
+      <p data-lang="zh">若载入主进程，这段代码会独占事件循环：宿主的 <code>setTimeout</code> 无法到点执行，<code>Promise.race([call, timeout])</code> 的超时分支永远不会跑——实测 2秒忙等在 300ms 超时下照样返回。单线程内部没有任何手段能抢占同步代码，唯一可靠的打断方式是从外部终止该线程。</p>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Mode</span><span data-lang="zh">模式</span></th>
+            <th><span data-lang="en">Declaration</span><span data-lang="zh">声明方式</span></th>
+            <th><span data-lang="en">Timeout</span><span data-lang="zh">超时可否抢占</span></th>
+            <th><span data-lang="en">Use</span><span data-lang="zh">适用</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>worker</code><br><span data-lang="en">(default)</span><span data-lang="zh">（默认）</span></td>
+            <td><span data-lang="en">Omit, or set <code>"executionMode": "worker"</code></span><span data-lang="zh">省略，或写 <code>"executionMode": "worker"</code></span></td>
+            <td><span data-lang="en">Yes — <code>worker.terminate()</code> at the deadline</span><span data-lang="zh">可以 —— 到点 <code>worker.terminate()</code></span></td>
+            <td><span data-lang="en">Almost all plugins</span><span data-lang="zh">绝大多数插件</span></td>
+          </tr>
+          <tr>
+            <td><code>inprocess</code></td>
+            <td><span data-lang="en">Must be declared <em>and</em> listed in the host's <code>inprocessWhitelist</code></span><span data-lang="zh">必须显式声明 <em>且</em>加入宿主 <code>inprocessWhitelist</code></span></td>
+            <td><span data-lang="en">No — see the boundary below</span><span data-lang="zh">不能 —— 见下方边界</span></td>
+            <td><span data-lang="en">Backends requiring main-process resources (custom WebNN/WebGPU contexts)</span><span data-lang="zh">需要主进程资源的后端（自定义 WebNN/WebGPU 上下文）</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Boundary of <code>inprocess</code>.</strong> This mode uses <code>Promise.race</code> plus a timer, which only intercepts <em>awaiting</em> a promise that never settles. A synchronous busy-wait or infinite loop keeps the main thread frozen until the plugin returns on its own; no timeout can help. Selecting this mode means accepting that constraint and guaranteeing yourself that no unbounded synchronous work runs on the main thread. The host logs a warning at load time so this boundary appears in the runtime record rather than only in documentation.</p>
+          <p data-lang="zh"><strong><code>inprocess</code> 模式的边界。</strong>该模式用 <code>Promise.race</code> + 定时器，只能拦住「await 一个永不settle 的 Promise」。同步忙等或死循环会让主线程一直冻结到插件自己返回，任何超时都不起作用。选择该模式即等于接受这一约束，并由你自行保证不在主线程上运行不可控长度的同步代码。宿主在加载时会打一条 warn，使这条边界出现在运行现场，而不只是文档里。</p>
+        </div>
+      </div>
+
+      <h3>
+        <span data-lang="en">Measured cost of worker mode</span>
+        <span data-lang="zh">worker 模式的实测代价</span>
+      </h3>
+
+      <ul>
+        <li>
+          <span data-lang="en"><strong>Large arrays are zero-copy.</strong> Float32Arrays in the request and the returned <code>pcm</code> travel via the <code>postMessage</code> transfer list, so ownership moves instead of the bytes being copied. A transferred request array becomes detached (<code>byteLength === 0</code>) — that is the evidence no copy occurred. A 4MB buffer measures in the low milliseconds.</span>
+          <span data-lang="zh"><strong>大数组零拷贝。</strong>请求中的 Float32Array 与返回的 <code>pcm</code> 走 <code>postMessage</code> 的 transfer list，所有权转移而非复制。转移后请求侧数组变为 detached（<code>byteLength === 0</code>）—— 这正是「没有发生复制」的判据。4MB 实测在毫秒级。</span>
+        </li>
+        <li>
+          <span data-lang="en"><strong>Functions cannot cross threads.</strong> Functions in <code>options</code> (<code>onProgress</code>, <code>refF0Extractor</code>, …) stay in the main process; the plugin receives a proxy of the same name. Calling <code>host.emitProgress(50)</code> posts a message that the main process forwards to the real function. The call signature the plugin sees is identical in both modes, so <strong>a plugin must not branch on its execution mode</strong>.</span>
+          <span data-lang="zh"><strong>函数不能跨线程。</strong><code>options</code> 中的函数（<code>onProgress</code>、<code>refF0Extractor</code> 等）留在主进程，插件侧拿到同名代理。调用 <code>host.emitProgress(50)</code> 会 postMessage 到主进程再调用真函数。两种模式下插件看到的签名完全一致，因此<strong>插件不应按执行模式写分支</strong>。</span>
+        </li>
+        <li>
+          <span data-lang="en"><strong>Non-cloneable values</strong> (symbols, exotic host objects) are replaced with a skip marker and logged, rather than failing the whole call.</span>
+          <span data-lang="zh"><strong>不可克隆的值</strong>（Symbol、特殊宿主对象）会被换成 skip 标记并记录日志，而不是让整次调用抛错。</span>
+        </li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Installation Layout</span>
+        <span data-lang="zh">安装目录结构</span>
+      </h2>
+
+      <pre><code>&lt;userData&gt;/plugins/          # plugin root; authorized before loading
+└── &lt;pluginId&gt;/              # directory name must equal manifest.id
+    ├── manifest.json        # required
+    └── index.js             # entry named by manifest.main (CommonJS)</code></pre>
+
+      <p data-lang="en">On Windows <code>&lt;userData&gt;</code> is <code>%APPDATA%\SXSEditor</code>. The host scans only this directory: the repository's <code>plugins/example-concat/</code> is a template and is <strong>never loaded automatically</strong> — copy the directory into <code>&lt;userData&gt;/plugins/</code> to install it, or place it there from the in-app <em>Open Plugins Folder</em> button and then reload. In the app, the plugin section lives in the <strong>Add Singer</strong> dialog (<code>#btn-add-singer</code> in the main window); the <em>Reload</em> button there re-scans without restarting.</p>
+      <p data-lang="zh">Windows 下 <code>&lt;userData&gt;</code> 为 <code>%APPDATA%\SXSEditor</code>。宿主只扫描该目录：仓库内的 <code>plugins/example-concat/</code> 是模板，<strong>永远不会被自动加载</strong>——把整个目录复制到 <code>&lt;userData&gt;/plugins/</code> 即完成安装，或在应用内点「打开插件目录」放入后再重载。应用中的插件分区位于<strong>「添加歌手」对话框</strong>（主窗口的 <code>#btn-add-singer</code>），其中的「重新加载」按钮可在不重启的前提下重新扫描。</p>
+
+      <h2>
+        <span data-lang="en">Manifest</span>
+        <span data-lang="zh">清单文件</span>
+      </h2>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Field</span><span data-lang="zh">字段</span></th>
+            <th><span data-lang="en">Required</span><span data-lang="zh">必填</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>id</code></td><td>✅</td><td><span data-lang="en">Reverse-domain style <code>[a-z0-9][a-z0-9._-]*</code>; must not be <code>builtin</code> or <code>sxs</code>; must equal the directory name</span><span data-lang="zh">反向域名风格 <code>[a-z0-9][a-z0-9._-]*</code>；不得为 <code>builtin</code> / <code>sxs</code>；必须与目录名一致</span></td></tr>
+          <tr><td><code>name</code></td><td>✅</td><td><span data-lang="en">Display name</span><span data-lang="zh">显示名</span></td></tr>
+          <tr><td><code>version</code></td><td>✅</td><td><span data-lang="en"><code>x.y.z</code>, optional <code>-beta.1</code> suffix</span><span data-lang="zh"><code>x.y.z</code>，允许 <code>-beta.1</code> 后缀</span></td></tr>
+          <tr><td><code>apiVersion</code></td><td>✅</td><td><span data-lang="en">Must be <code>1</code>; any other value is rejected at load time</span><span data-lang="zh">必须为 <code>1</code>，其他值直接拒绝加载</span></td></tr>
+          <tr><td><code>main</code></td><td>✅</td><td><span data-lang="en">Entry file, <strong>relative</strong> — absolute paths, URLs, and <code>..</code> are rejected</span><span data-lang="zh">入口文件，<strong>相对路径</strong>——绝对路径、URL、<code>..</code> 一律拒绝</span></td></tr>
+          <tr><td><code>executionMode</code></td><td>—</td><td><span data-lang="en"><code>worker</code> (default) or <code>inprocess</code>; an unknown value rejects the manifest. <code>inprocess</code> additionally requires whitelisting, otherwise it is downgraded to worker with a warning</span><span data-lang="zh"><code>worker</code>（默认）或 <code>inprocess</code>；写其他值按非法清单拒绝。<code>inprocess</code> 还须通过白名单，否则降级为 worker 并记 warn</span></td></tr>
+          <tr><td><code>capabilities</code></td><td>✅</td><td><code>{synthesize, blockPlayback, streaming, voices}</code><span data-lang="en">; missing entries default to <code>false</code></span><span data-lang="zh">；缺失项按 <code>false</code> 补齐</span></td></tr>
+          <tr><td><code>trackKinds</code></td><td>—</td><td><span data-lang="en">Track kind declarations, at most 32, each validated</span><span data-lang="zh">轨道种类声明，最多 32 条，逐条校验</span></td></tr>
+          <tr><td><code>description</code> / <code>author</code></td><td>—</td><td><span data-lang="en">Optional metadata</span><span data-lang="zh">可选元信息</span></td></tr>
+        </tbody>
+      </table>
+
+      <p data-lang="en">A validation failure never crashes the main process: the reason is written to the log and returned to the UI through <code>errors[]</code> on <code>plugin:list</code> and <code>plugin:reload</code>.</p>
+      <p data-lang="zh">校验失败不会使主进程崩溃：失败原因写入主进程日志，并通过 <code>plugin:list</code> / <code>plugin:reload</code> 的 <code>errors[]</code> 返回给界面。</p>
+
+      <pre><code>{
+  "id": "example-concat",
+  "name": "示例拼接后端",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "main": "index.js",
+  "capabilities": { "synthesize": true, "blockPlayback": true, "streaming": false, "voices": true }
+}</code></pre>
+
+      <h2>
+        <span data-lang="en">Entry Module</span>
+        <span data-lang="zh">入口模块导出</span>
+      </h2>
+
+      <pre><code>module.exports = {
+  id, name, version, apiVersion: 1,
+  capabilities: { synthesize, blockPlayback, streaming, voices },
+  trackKinds: [ /* validated declarations */ ],
+  async initialize(ctx),// optional; failure sets state='failed'
+  async getVoices(kindId),   // required when capabilities.voices=true
+  async synthesize(request, host) -&gt; SynthResult,
+  async dispose(),            // optional; hot reload and shutdown
+};</code></pre>
+
+      <p data-lang="en">The host is lenient where it can be and strict where it must be: declaring <code>capabilities.synthesize</code> without a <code>synthesize()</code> function rejects the plugin; declaring <code>voices</code> without <code>getVoices()</code> only downgrades the capability and warns. Track kinds exported from the module take precedence over the manifest, because the module is the runtime truth. A missing <code>initialize</code> counts as success, a missing <code>dispose</code> as a no-op.</p>
+      <p data-lang="zh">宿主在可以宽松处宽松、在必须严格处严格：声明 <code>capabilities.synthesize</code> 却没有 <code>synthesize()</code> 会拒绝加载；声明 <code>voices</code> 却没有 <code>getVoices()</code> 只降级能力并告警。模块导出的 <code>trackKinds</code> 优先于 manifest，因为模块是运行时真源。缺省 <code>initialize</code> 视为成功，缺省 <code>dispose</code> 视为空操作。</p>
+
+      <h3>
+        <span data-lang="en">Track kinds and the editor mode</span>
+        <span data-lang="zh">轨道种类与编辑器形态</span>
+      </h3>
+
+      <p data-lang="en">Each track kind selects how the fragment editor presents it. <code>editor.mode</code> accepts three values:</p>
+      <p data-lang="zh">每个轨道种类决定片段编辑器如何呈现它。<code>editor.mode</code> 有三种取值：</p>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Mode</span><span data-lang="zh">形态</span></th>
+            <th><span data-lang="en">Behaviour</span><span data-lang="zh">行为</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>plugin</code></td>
+            <td><span data-lang="en">The plugin provides its own panel; currently rendered read-only</span><span data-lang="zh">插件自带面板；当前以只读方式呈现</span></td>
+          </tr>
+          <tr>
+            <td><code>midi</code></td>
+            <td><span data-lang="en">Full built-in MIDI fragment editor</span><span data-lang="zh">完整的内置 MIDI 分片编辑器</span></td>
+          </tr>
+          <tr>
+            <td><code>midi-partial</code></td>
+            <td><span data-lang="en">A selected subset of the built-in panels, via <code>editor.use</code> / <code>editor.hide</code> — lets a plugin reuse the piano roll, parameters, or envelope without adopting the whole editor</span><span data-lang="zh">通过 <code>editor.use</code> / <code>editor.hide</code> 指定内置面板子集——插件可复用钢琴卷帘、参数或包络，而不必整体接管编辑器</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>
+        <span data-lang="en">Context object</span>
+        <span data-lang="zh">ctx 对象</span>
+      </h3>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Field</span><span data-lang="zh">字段</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>pluginDir</code></td><td><span data-lang="en">Absolute path of the plugin directory (already authorized)</span><span data-lang="zh">插件目录绝对路径（已授权）</span></td></tr>
+          <tr><td><code>hostVersion</code></td><td><span data-lang="en">Host application version</span><span data-lang="zh">宿主应用版本</span></td></tr>
+          <tr><td><code>log(level, msg)</code></td><td><span data-lang="en"><code>debug</code> / <code>info</code> / <code>warn</code> / <code>error</code>, prefixed <code>[plugins] [id]</code></span><span data-lang="zh"><code>debug</code> / <code>info</code> / <code>warn</code> / <code>error</code>，统一 <code>[plugins] [id]</code> 前缀</span></td></tr>
+          <tr><td><code>getSetting(key)</code></td><td><span data-lang="en">Read a main-process setting</span><span data-lang="zh">读取主进程设置项</span></td></tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Synthesis Interface</span>
+        <span data-lang="zh">合成接口</span>
+      </h2>
+
+      <h3>
+        <span data-lang="en">Request</span>
+        <span data-lang="zh">request（合成入参）</span>
+      </h3>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Field</span><span data-lang="zh">字段</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>kindId</code>, <code>pluginId</code>, <code>trackId</code></td><td><span data-lang="en">Track kind, plugin identity, calling track</span><span data-lang="zh">轨道种类、插件标识、调用方轨道</span></td></tr>
+          <tr><td><code>notes</code></td><td><span data-lang="en">Notes, structurally identical to the built-in pipeline: <code>{start, duration, pitch, lyric}</code> with <code>pitch</code> in MIDI numbers and <code>0</code> meaning rest; time in beats</span><span data-lang="zh">音符数组，与内置管线同构：<code>{start, duration, pitch, lyric}</code>，<code>pitch</code> 为 MIDI 音高、<code>0</code> 表示休止；时间以拍计</span></td></tr>
+          <tr><td><code>bpm</code>, <code>sampleRate</code></td><td><span data-lang="en">Tempo and project sample rate (default 44100)</span><span data-lang="zh">速度与工程采样率（缺省 44100）</span></td></tr>
+          <tr><td><code>options</code></td><td><span data-lang="en">★ The <strong>complete</strong> options object, <strong>same reference</strong> the built-in model would receive — including <code>language</code>, <code>onProgress</code>, <code>refF0Extractor</code>, and the renderer's Float32Arrays such as <code>refAudioWavBuffer</code>, <code>pitchCurveF0</code>, <code>refF0Data</code>. Nothing is filtered or cloned</span><span data-lang="zh">★ <strong>完整</strong> options，与内置模型将收到的<strong>同一对象引用</strong>——包含 <code>language</code>、<code>onProgress</code>、<code>refF0Extractor</code>，以及渲染层传来的 <code>refAudioWavBuffer</code>、<code>pitchCurveF0</code>、<code>refF0Data</code> 等 Float32Array。不挑字段、不克隆</span></td></tr>
+          <tr><td><code>params</code></td><td><span data-lang="en">Plugin-defined parameters from <code>trackKinds[].paramSchema</code> and user choices; keys not declared in the schema are dropped</span><span data-lang="zh">来自 <code>trackKinds[].paramSchema</code> 与用户选择的插件自定义参数；schema 未声明的键会被丢弃</span></td></tr>
+          <tr><td><code>voiceId</code></td><td><span data-lang="en">Selected voice, when the kind declares voices</span><span data-lang="zh">所选音色（当该种类声明了 voices）</span></td></tr>
+          <tr><td><code>scratch</code></td><td><span data-lang="en">Optional caller-allocated buffer the plugin may write into to avoid allocation</span><span data-lang="zh">可选的调用方预分配缓冲，插件可写入以避免分配</span></td></tr>
+          <tr><td><code>abortSignal</code></td><td><span data-lang="en">Aborted on cancellation</span><span data-lang="zh">取消时 abort</span></td></tr>
+        </tbody>
+      </table>
+
+      <div class="callout warn">
+        <div class="callout-icon">⚠️</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>The cost of sharing by reference.</strong> A plugin may mutate <code>request.options</code>. The caller therefore returns immediately once it takes the plugin branch and never hands the same options to the built-in pipeline. Any future dual-path rendering must shallow-copy first.</p>
+          <p data-lang="zh"><strong>共享引用的代价。</strong>插件可以改写 <code>request.options</code>。因此调用方一旦命中插件分支就<strong>立刻return</strong>，绝不再把同一个 options 交给内置 pipeline。若将来要做「插件 + 内置」双路并行，调用方必须自行浅拷贝。</p>
+        </div>
+      </div>
+
+      <h3>
+        <span data-lang="en">Host callbacks — the plugin's output channel</span>
+        <span data-lang="zh">host 回调 —— 插件的输出通道</span>
+      </h3>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Method</span><span data-lang="zh">方法</span></th>
+            <th><span data-lang="en">Description</span><span data-lang="zh">说明</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>emitProgress(p)</code></td><td><span data-lang="en">0–100, throttled (first frame and 100 always sent), delivered as <code>plugin:progress</code></span><span data-lang="zh">0–100，节流（首帧与 100 必发）后推 <code>plugin:progress</code></span></td></tr>
+          <tr><td><code>emitAudio(chunk)</code></td><td><span data-lang="en">Streaming push: <code>{pcm, channels, sampleRate, startTimeSec, isLast}</code></span><span data-lang="zh">流式推送：<code>{pcm, channels, sampleRate, startTimeSec, isLast}</code></span></td></tr>
+          <tr><td><code>log(level, msg)</code></td><td><span data-lang="en">Write to the main-process log</span><span data-lang="zh">写主进程日志</span></td></tr>
+          <tr><td><code>blockPlayback(spec)</code></td><td><span data-lang="en">Create a blocking-playback ticket, returns the ticket or <code>null</code></span><span data-lang="zh">创建阻滞播放 ticket，返回 ticket 或 <code>null</code></span></td></tr>
+          <tr><td><code>isCancelled()</code></td><td><span data-lang="en">True once the ticket is cancelled or <code>abortSignal</code> fires</span><span data-lang="zh">ticket 被取消或 <code>abortSignal</code> 已 abort 时为 true</span></td></tr>
+          <tr><td><code>diagnostics(obj)</code></td><td><span data-lang="en">Arbitrary diagnostic payload → <code>plugin:diagnostics</code></span><span data-lang="zh">任意诊断对象 → <code>plugin:diagnostics</code></span></td></tr>
+        </tbody>
+      </table>
+
+      <p data-lang="en">Under worker mode these are proxies: the arguments are posted to the main process, which performs the real call. A ticket's <code>id</code> is pre-allocated before the call, so it is available <strong>synchronously</strong> in the plugin; <code>update()</code> and <code>end()</code> are likewise messages. <code>isCancelled()</code> is an asynchronous query, so refresh it at await points. Plugins must not depend on return values from <code>host.*</code>, and must not branch on execution mode.</p>
+      <p data-lang="zh">worker 模式下这些是代理：参数 postMessage 回主进程，由主进程执行真调用。ticket 的 <code>id</code> 在调用前预分配，因此插件侧是<strong>同步</strong>拿到的；<code>update()</code> / <code>end()</code> 同样是消息。<code>isCancelled()</code> 是异步查询，请在 await 点刷新。插件不依赖 <code>host.*</code> 的返回值，也不应按执行模式写分支。</p>
+
+      <h3>
+        <span data-lang="en">Result and validation</span>
+        <span data-lang="zh">返回值与校验</span>
+      </h3>
+
+      <pre><code>{
+  pcm: Float32Array | Float32Array[] | null,  // null only for streaming plugins
+  channels: number,       // &gt;1 means interleaved (array form = per channel)
+  sampleRate: number,     // finite integer within 8000..768000
+  leadingSamples: number, // leading zeros needed before pcm[0]
+  diagnostics: object,
+}</code></pre>
+
+      <p data-lang="en">An invalid result is rejected outright and never reaches the mixing chain. <code>sampleRate</code> and <code>leadingSamples</code> are checked before <code>pcm</code>, because the duration limit needs <code>sampleRate</code> to convert sample count to seconds.</p>
+      <p data-lang="zh">不合法的结果会被直接拒绝，绝不会进入混音链路。<code>sampleRate</code> 与 <code>leadingSamples</code> 先于 <code>pcm</code> 校验，因为时长上限需要用 <code>sampleRate</code> 把样本数换算成秒。</p>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Check</span><span data-lang="zh">校验项</span></th>
+            <th><span data-lang="en">Rule</span><span data-lang="zh">规则</span></th>
+            <th><span data-lang="en">Rationale</span><span data-lang="zh">原因</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Type</span><span data-lang="zh">类型</span></td>
+            <td><span data-lang="en"><code>Float32Array</code> or a per-channel array of them</span><span data-lang="zh">必须是 <code>Float32Array</code>（或逐声道的 <code>Float32Array[]</code>）</span></td>
+            <td><span data-lang="en">The built-in chain only consumes Float32</span><span data-lang="zh">内置链路只吃 Float32</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Finite values</span><span data-lang="zh">有限值</span></td>
+            <td><span data-lang="en"><strong>Every</strong> sample scanned for NaN and ±Infinity</span><span data-lang="zh"><strong>逐个样本</strong>扫 NaN / ±Infinity</span></td>
+            <td><span data-lang="en">One NaN turns an export into crackling or a silent block, and NaN leaks out of divisions readily</span><span data-lang="zh">一个 NaN 就会让整段导出变成爆音或静音块，而 NaN 很容易从除零里滑出来</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Length</span><span data-lang="zh">长度</span></td>
+            <td><span data-lang="en">Mono ≤ <code>sampleRate × 3600</code> (1 hour) and ≤ 256MiB total</span><span data-lang="zh">单声道 ≤ <code>sampleRate × 3600</code>（1 小时），总字节 ≤ 256MiB</span></td>
+            <td><span data-lang="en">Earlier builds accepted multi-hundred-megabyte returns; real singing segments are far smaller</span><span data-lang="zh">旧实现连数百MB的返回值也照收；正常歌声片段远达不到这个量</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Sample rate</span><span data-lang="zh">采样率</span></td>
+            <td><span data-lang="en">Finite integer within 8000–768000</span><span data-lang="zh">必须是 8000–768000 的有限整数</span></td>
+            <td><span data-lang="en"><code>NaN</code> is rejected rather than silently falling back to a default</span><span data-lang="zh"><code>NaN</code> 不再静默回落成缺省值，而是直接拒绝</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="callout tip">
+        <div class="callout-icon">✅</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Why the scan is exhaustive.</strong> Sampling would be N times cheaper but can miss an isolated NaN from a division by zero or <code>log(0)</code>, which still corrupts the export. The measured cost of the full scan is 0.59ms per 1.0MiB, 3.15ms per 4.0MiB, and 12.57ms per 16.0MiB — roughly 3ms per million samples. Synthesizing 16MiB (about three minutes) takes seconds, so a linear pass is negligible. The hot loop makes no function calls (<code>v !== v</code> for NaN, direct comparison against ±Infinity) and allocates nothing.</p>
+          <p data-lang="zh"><strong>为何全量扫描。</strong>抽样成本约为 1/N，但会漏掉除零或 <code>log(0)</code> 产生的孤立 NaN，一旦漏掉照样导出损坏音频。全量扫描实测 1.0MiB≈0.59ms、4.0MiB≈3.15ms、16.0MiB≈12.57ms（约每百万样本 3ms）。合成 16MiB（约三分钟）音频本身耗时以秒计，线性扫描可忽略。热循环里不做函数调用（<code>v !== v</code> 判 NaN、直接与 ±Infinity 比较），也不额外分配内存。</p>
+        </div>
+      </div>
+
+      <h2>
+        <span data-lang="en">Host Guardrails</span>
+        <span data-lang="zh">宿主护栏</span>
+      </h2>
+
+      <ol>
+        <li><span data-lang="en"><strong>Lifecycle.</strong> Calls are rejected unless the plugin state is <code>ready</code>.</span><span data-lang="zh"><strong>生命周期。</strong>状态非 <code>ready</code>（未 initialize / initialize 失败 / 已 dispose）一律拒绝调用。</span></li>
+        <li>
+          <span data-lang="en"><strong>Timeout.</strong> In worker mode the deadline calls <code>worker.terminate()</code> — a genuine preemption; a busy-looping plugin dies immediately. The host then rebuilds the worker and re-runs <code>initialize</code>, because one timeout may simply mean the limit was too low; only <strong>consecutive</strong> timeouts (3) mark the plugin failed.</span>
+          <span data-lang="zh"><strong>超时。</strong>worker 模式下到点直接 <code>worker.terminate()</code>——这是唯一的真抢占，忙循环的插件会被即时掐断。之后宿主重建 worker 并重跑 <code>initialize</code>（单次超时可能只是超时值给小了，不该一棍子打死）；<strong>连续</strong>超时达到 3 次才把插件标成 <code>failed</code>。</span>
+        </li>
+        <li><span data-lang="en"><strong>Exception isolation.</strong> A throwing plugin is logged and returns <code>{success:false, error}</code>; messages crossing IPC are sanitized and never carry the plugin's internal stack.</span><span data-lang="zh"><strong>异常隔离。</strong>插件抛错只记日志并返回 <code>{success:false, error}</code>；过 IPC 的错误经脱敏，不会带出插件内部堆栈。</span></li>
+        <li><span data-lang="en"><strong>Result validation.</strong> See above.</span><span data-lang="zh"><strong>结果校验。</strong>见上节。</span></li>
+        <li><span data-lang="en"><strong>Capability checks.</strong> Without <code>capabilities.synthesize</code> a plugin cannot synthesize; without <code>blockPlayback</code> it cannot create tickets.</span><span data-lang="zh"><strong>能力校验。</strong>未声明 <code>capabilities.synthesize</code> 不能合成，未声明 <code>blockPlayback</code> 不能创建 ticket。</span></li>
+        <li><span data-lang="en"><strong>Path guard.</strong> The entry file must resolve inside the plugin directory after <code>realpath</code>, which blocks <code>..</code>, absolute paths, and symlink escapes. Both the plugin root and the entry file are authorized before loading. A plugin that reads models or assets must go through the host's path check; failing it is an error, and the existing allowlist cannot be widened.</span><span data-lang="zh"><strong>路径护栏。</strong>入口 <code>main</code> 在 <code>realpath</code> 后必须落在插件目录内，挡掉 <code>..</code>、绝对路径与符号链接逃逸；插件根目录与入口文件加载前都会授权。插件读取模型或素材须走宿主路径校验，不通过即报错，且不允许放宽现有白名单。</span></li>
+        <li><span data-lang="en"><strong>Fault isolation.</strong> One plugin failing to load, initialize, or synthesize marks only itself <code>failed</code>; the others keep working.</span><span data-lang="zh"><strong>故障域隔离。</strong>单个插件加载 / initialize / 合成失败，只把它自己标成 <code>failed</code>，其它插件照常可用。</span></li>
+        <li><span data-lang="en"><strong>Hot reload.</strong> A reload disposes everything and rescans. Old plugin code disappears with <code>terminate()</code> in worker mode; <code>inprocess</code> additionally clears <code>require.cache</code>. Both modes reap leftover tickets.</span><span data-lang="zh"><strong>热重载。</strong>重载即 dispose 全部后重新扫描加载。worker 模式下旧代码随 <code>terminate()</code> 一起消失，in-process 模式则靠清 <code>require.cache</code>；两模式都会收掉所有残留 ticket。</span></li>
+        <li><span data-lang="en"><strong>Update throttling.</strong> Ticket updates are pushed at most every 100ms and only when progress moves by at least 2%; the terminal states are always sent. Measured: 400 updates become 51 pushes.</span><span data-lang="zh"><strong>ticket 推送节流。</strong>一次 <code>update()</code> 以前是一条 IPC，现按最小间隔 100ms 且进度变化 ≥ 2% 节流，进度到 100 / 取消 / 结束必发。实测 400 次 <code>update()</code> → 推送 51 次。</span></li>
+      </ol>
+
+      <h2>
+        <span data-lang="en">Blocking Playback</span>
+        <span data-lang="zh">阻滞播放</span>
+      </h2>
+
+      <p data-lang="en">For preparation that must finish before audio starts, a ticket lets the UI show why it is waiting and for how long:</p>
+      <p data-lang="zh">对于必须在播放前完成的耗时准备步骤，ticket 让界面显示等待原因与进度：</p>
+
+      <pre><code>const ticket = host.blockPlayback({ title: 'Preparing source', message: 'Loading…', cancellable: true });
+ticket.update({ message: 'Concatenating…', progress: 40 });
+ticket.end();  // required</code></pre>
+
+      <ul>
+        <li><span data-lang="en">A <code>null</code> return means the plugin did not declare <code>capabilities.blockPlayback</code>; the call is refused and logged.</span><span data-lang="zh">返回 <code>null</code> 表示插件未声明 <code>capabilities.blockPlayback</code>，调用被拒绝并记日志。</span></li>
+        <li><span data-lang="en">Events <code>plugin:blocking-start</code> / <code>-update</code> / <code>-end</code> carry <code>{ticketId, pluginId, title, message, progress, cancellable, reason, cancelled}</code>.</span><span data-lang="zh">主进程事件 <code>plugin:blocking-start</code> / <code>-update</code> / <code>-end</code>，载荷 <code>{ticketId, pluginId, title, message, progress, cancellable, reason, cancelled}</code>。</span></li>
+        <li><span data-lang="en">When <code>cancellable</code> is set, the UI may cancel; the plugin observes this through <code>host.isCancelled()</code> or <code>request.abortSignal</code>.</span><span data-lang="zh"><code>cancellable</code> 为 true 时界面可取消，插件通过 <code>host.isCancelled()</code> / <code>request.abortSignal</code> 感知。</span></li>
+        <li><span data-lang="en"><strong>Fail-safe.</strong> When a <code>synthesize</code> call returns — success, failure, or timeout — the host ends every ticket that call created, so a forgotten <code>end()</code> cannot wedge the UI. A ten-minute watchdog and reload/dispose cover tickets created by background tasks. At most 8 tickets per call.</span><span data-lang="zh"><strong>兜底。</strong>一次 <code>synthesize</code> 调用返回（成功 / 失败 / 超时）后，宿主自动 <code>end()</code> 本次创建的所有 ticket，插件忘记 <code>end()</code> 也不会把界面永久卡死；另有 10 分钟 watchdog 与 reload/dispose 兜住后台另起的 ticket。单次调用最多 8 个。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">Integration with the Built-in Pipeline</span>
+        <span data-lang="zh">与内置管线的接线</span>
+      </h2>
+
+      <p data-lang="en">All three synthesis handlers accept a plugin backend declared in <code>options</code>:</p>
+      <p data-lang="zh">三个合成 handler 都支持在 <code>options</code> 里声明插件后端：</p>
+
+      <pre><code>options.backend = { type: 'plugin', pluginId: 'example-concat', kindId: 'concat-basic', params: { waveform: 'pulse' } };</code></pre>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Handler</span><span data-lang="zh">handler</span></th>
+            <th><span data-lang="en">Plugin branch</span><span data-lang="zh">插件分支行为</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>svs:synthesize</code></td>
+            <td><span data-lang="en">After <code>opts</code> is fully assembled — including injected <code>language</code>, <code>onProgress</code>, <code>refF0Extractor</code> — the same object is handed to the plugin and the handler returns without invoking the built-in pipeline</span><span data-lang="zh">构造完 <code>opts</code> 后把<strong>同一个对象</strong>交给插件并直接 return，不调用内置 pipeline</span></td>
+          </tr>
+          <tr>
+            <td><code>fragment-svs:synthesize</code></td>
+            <td><span data-lang="en">As above</span><span data-lang="zh">同上</span></td>
+          </tr>
+          <tr>
+            <td><code>svs:synthesizeMultiStreaming</code></td>
+            <td><span data-lang="en"><strong>Fragments are grouped per declared backend</strong>: plugin fragments go to their plugin, built-in fragments to the built-in pipeline, and every group is summed on one timeline starting at beat 0. Mixing several backends in one project is therefore supported rather than an error</span><span data-lang="zh"><strong>逐分片按各自声明的后端分组</strong>：插件分片交给对应插件、内置分片交给内置管线，各组结果在 beat 0 起的同一条时间轴上叠加，多后端混排不再报错</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <p data-lang="en">The plugin's <code>{pcm, channels, sampleRate, leadingSamples}</code> is reduced to the same mono Float32Array the built-in chain uses (leading zeros applied by the host, first channel taken for multichannel), so <strong>the renderer never distinguishes backends</strong>. The renderer may also call a plugin directly via <code>pluginAPI.synthesize()</code> for preview or panel self-tests.</p>
+      <p data-lang="zh">插件返回的 <code>{pcm, channels, sampleRate, leadingSamples}</code> 由宿主压成内置链路的同款单声道 Float32Array（<code>leadingSamples</code> 由宿主补零，多声道取第一声道），因此<strong>渲染层无需区分后端</strong>。渲染层也可绕过 SVS 通道直接调用 <code>pluginAPI.synthesize()</code>（用于预览或面板自测）。</p>
+
+      <h2>
+        <span data-lang="en">IPC Surface</span>
+        <span data-lang="zh">IPC 接口</span>
+      </h2>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Channel</span><span data-lang="zh">通道</span></th>
+            <th><span data-lang="en">Direction</span><span data-lang="zh">方向</span></th>
+            <th><span data-lang="en">Purpose</span><span data-lang="zh">用途</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>plugin:list</code></td><td>R→M</td><td><span data-lang="en"><code>{success, pluginsDir, plugins[], errors[]}</code></span><span data-lang="zh"><code>{success, pluginsDir, plugins[], errors[]}</code></span></td></tr>
+          <tr><td><code>plugin:reload</code></td><td>R→M</td><td><span data-lang="en">Rescan and hot-reload</span><span data-lang="zh">重新扫描并热重载</span></td></tr>
+          <tr><td><code>plugin:getVoices</code></td><td>R→M</td><td><span data-lang="en"><code>{pluginId, kindId}</code> → <code>{success, voices[]}</code></span><span data-lang="zh"><code>{pluginId, kindId}</code> → <code>{success, voices[]}</code></span></td></tr>
+          <tr><td><code>plugin:synthesize</code></td><td>R→M</td><td><span data-lang="en">Single synthesis call</span><span data-lang="zh">单次合成</span></td></tr>
+          <tr><td><code>plugin:getPluginsDir</code></td><td>R→M</td><td><span data-lang="en">Plugin root, path-checked</span><span data-lang="zh">插件目录（走路径校验）</span></td></tr>
+          <tr><td><code>plugin:openPluginsFolder</code></td><td>R→M</td><td><span data-lang="en">Open the plugin root in the file manager</span><span data-lang="zh">在文件管理器中打开插件目录</span></td></tr>
+          <tr><td><code>plugin:cancelTicket</code></td><td>R→M</td><td><span data-lang="en">Cancel a cancellable ticket</span><span data-lang="zh">取消可取消的 ticket</span></td></tr>
+          <tr><td><code>plugin:blocking-start</code> / <code>-update</code> / <code>-end</code></td><td>M→R</td><td><span data-lang="en">Blocking-playback lifecycle</span><span data-lang="zh">阻滞播放生命周期</span></td></tr>
+          <tr><td><code>plugin:progress</code> / <code>plugin:audio</code> / <code>plugin:diagnostics</code></td><td>M→R</td><td><span data-lang="en">Plugin output channels</span><span data-lang="zh">插件输出通道</span></td></tr>
+        </tbody>
+      </table>
+
+      <p data-lang="en">Every handler is registered through <code>safeHandle</code>, matching the rest of the codebase: the full error is logged in the main process while only a sanitized message crosses IPC. The renderer entry point is <code>window.electronAPI.pluginAPI</code>.</p>
+      <p data-lang="zh">全部 handler 用 <code>safeHandle</code> 注册，与仓库其它 IPC 一致：主进程记全量错误，过 IPC 的只有脱敏后的 message。渲染层入口是 <code>window.electronAPI.pluginAPI</code>。</p>
+
+      <h2>
+        <span data-lang="en">Writing a Plugin</span>
+        <span data-lang="zh">开发自己的插件</span>
+      </h2>
+
+      <ol>
+        <li><span data-lang="en">Copy the template: <code>cp -r plugins/example-concat &lt;userData&gt;/plugins/my-backend</code>, then change both the directory name and <code>manifest.id</code> to <code>my-backend</code>.</span><span data-lang="zh">复制模板：<code>cp -r plugins/example-concat &lt;userData&gt;/plugins/my-backend</code>，把目录名与 <code>manifest.id</code> 一起改成 <code>my-backend</code>。</span></li>
+        <li><span data-lang="en">Replace the body of <code>synthesize()</code> with your own inference or concatenation logic. A plugin may <code>require</code> its own dependencies; everything inside the plugin directory is the plugin's own responsibility.</span><span data-lang="zh">把 <code>synthesize()</code> 换成你自己的推理或拼接逻辑。插件可以 <code>require</code> 自己的依赖，插件目录内的一切由插件自己负责。</span></li>
+        <li><span data-lang="en">Expose user-adjustable parameters through <code>trackKinds[].paramSchema</code>; the host turns UI values into <code>request.params</code> and drops undeclared keys.</span><span data-lang="zh">要提供用户可调参数，就在 <code>trackKinds[].paramSchema</code> 里声明；宿主把界面取值算成 <code>request.params</code>，未声明的键会被丢弃。</span></li>
+        <li><span data-lang="en">Use <code>host.blockPlayback()</code> for preparation that must complete before playback.</span><span data-lang="zh">需要在播放前完成的准备步骤，用 <code>host.blockPlayback()</code>。</span></li>
+        <li><span data-lang="en">Reload from the plugin section in the Add Singer dialog — no application restart required.</span><span data-lang="zh">在「添加歌手」对话框的插件分区点「重新加载」即可生效，无需重启应用。</span></li>
+      </ol>
+
+      <div class="callout danger">
+        <div class="callout-icon">🚫</div>
+        <div class="callout-body">
+          <p data-lang="en"><strong>Practices to avoid.</strong> Do not mutate <code>request.options</code> and expect the built-in pipeline to consume it afterwards. Do not <code>structuredClone</code> or <code>JSON.parse(JSON.stringify())</code> large objects on the hot path. Do not declare an <code>apiVersion</code> other than 1. Do not perform minute-long loading in <code>initialize</code> without telling the user through <code>blockPlayback</code> — the UI will appear frozen.</p>
+          <p data-lang="zh"><strong>不要做的事。</strong>不要改写 <code>request.options</code> 后指望内置 pipeline 还能用它；不要在热路径上 <code>structuredClone</code> / <code>JSON.parse(JSON.stringify())</code> 大对象；不要声明 <code>apiVersion</code> 以外的版本号（会被拒绝）；不要在 <code>initialize</code> 里做分钟级加载而不用 <code>blockPlayback</code> 告诉用户（界面会看起来像卡死）。</p>
+        </div>
+      </div>
+
+      <h3>
+        <span data-lang="en">Regression smoke test</span>
+        <span data-lang="zh">回归冒烟</span>
+      </h3>
+
+      <p data-lang="en">After changing the host or the contract, run:</p>
+      <p data-lang="zh">改动宿主或契约后跑一次：</p>
+
+      <pre><code>node scripts/plugin-smoke.js     # no electron, no node_modules required</code></pre>
+
+      <p data-lang="en">Twenty-six assertions cover discovery and loading, voices, same-reference <code>options</code> pass-through, blocking-ticket start/update/end balance, whether a synchronously busy-waiting plugin is genuinely preempted by the timeout (a plugin busy-waiting five seconds must die under a one-second limit), rejection of PCM containing NaN, and recognition and synthesis of a <code>midi-partial</code> track kind. The busy-wait case is the only assertion that can distinguish a real timeout from a <code>Promise.race</code> illusion; it turns red immediately if the default mode is ever changed back to <code>inprocess</code>.</p>
+      <p data-lang="zh">26 项断言覆盖插件发现与加载、音色、<code>options</code> 同引用透传、阻滞 ticket 的 start/update/end 配平、<strong>同步忙等插件能否被超时真实抢占</strong>（构造一个忙等 5 秒的插件，在 1 秒超时下必须被杀）、含 NaN 的 PCM 必须被拒，以及 <code>midi-partial</code> 轨道种类的识别与合成。其中「忙等抢占」是唯一能区分真超时与 <code>Promise.race</code> 假超时的用例——若哪天有人把默认执行模式改回 <code>inprocess</code>，这条会立刻变红。</p>
+
+      <h2>
+        <span data-lang="en">Host Injection Points</span>
+        <span data-lang="zh">宿主可注入参数</span>
+      </h2>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Parameter</span><span data-lang="zh">参数</span></th>
+            <th><span data-lang="en">Default</span><span data-lang="zh">默认</span></th>
+            <th><span data-lang="en">Purpose</span><span data-lang="zh">用途</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td><code>pluginsDir</code></td><td><code>&lt;userData&gt;/plugins</code></td><td><span data-lang="en">Injectable, for pure-Node tests and custom directories</span><span data-lang="zh">可注入，供纯 Node 单测与自定义目录</span></td></tr>
+          <tr><td><code>security</code></td><td><code>./security</code></td><td><span data-lang="en">Path authorization layer</span><span data-lang="zh">路径授权层</span></td></tr>
+          <tr><td><code>callTimeoutMs</code></td><td><code>PLUGIN_CALL_TIMEOUT_MS</code></td><td><span data-lang="en">Call timeout; in worker mode this is when <code>terminate()</code> fires</span><span data-lang="zh">调用超时（worker 模式下即 <code>terminate()</code> 的时机）</span></td></tr>
+          <tr><td><code>inprocessWhitelist</code></td><td><span data-lang="en">empty</span><span data-lang="zh">空</span></td><td><span data-lang="en">Plugin ids or directory names allowed to use <code>inprocess</code>; anything unlisted is downgraded to worker with a warning</span><span data-lang="zh">允许使用 <code>inprocess</code> 的插件 id / 目录名集合；不在名单里的一律降级为 worker 并记 warn</span></td></tr>
+          <tr><td><code>ticketWatchdogMs</code></td><td><span data-lang="en">10 minutes</span><span data-lang="zh">10 分钟</span></td><td><span data-lang="en">Ticket fail-safe lifetime</span><span data-lang="zh">ticket兜底寿命</span></td></tr>
+          <tr><td><code>hostVersion</code>, <code>getSetting</code>, <code>log</code>, <code>now</code></td><td>—</td><td><span data-lang="en">Test seams</span><span data-lang="zh">便于测试与定制</span></td></tr>
+        </tbody>
+      </table>
+
+      <h2>
+        <span data-lang="en">Known Boundaries</span>
+        <span data-lang="zh">已知边界</span>
+      </h2>
+
+      <table class="doc-table">
+        <thead>
+          <tr>
+            <th><span data-lang="en">Item</span><span data-lang="zh">项</span></th>
+            <th><span data-lang="en">Status</span><span data-lang="zh">现状</span></th>
+            <th><span data-lang="en">Reason</span><span data-lang="zh">原因</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><span data-lang="en">Synchronous blocking in <code>inprocess</code></span><span data-lang="zh"><code>inprocess</code> 模式的同步阻塞</span></td>
+            <td><span data-lang="en">Not preemptible</span><span data-lang="zh">无法抢占</span></td>
+            <td><span data-lang="en">A single thread cannot preempt synchronous code; <code>terminate()</code> only affects a different thread</span><span data-lang="zh">单线程里没有抢占同步代码的机制，<code>terminate()</code> 只能作用于另一条线程</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Node privileges inside the worker</span><span data-lang="zh">worker 模式下的 Node 权限</span></td>
+            <td><span data-lang="en">Full Node remains available (<code>require</code>, <code>fs</code>, subprocesses)</span><span data-lang="zh">worker 内仍是完整 Node（<code>require</code> / <code>fs</code> / 子进程均可）</span></td>
+            <td><span data-lang="en">Real confinement needs the worker permission model or a separate process with a minimal IPC surface; path authorization already blocks the common "read any file" route</span><span data-lang="zh">真正的收敛要走 worker 权限模型或独立进程 + 最小 IPC 面；路径授权已挡住「读任意文件」这条最常见的路</span></td>
+          </tr>
+          <tr>
+            <td><span data-lang="en">Plugin-provided editor panels</span><span data-lang="zh">插件自带编辑器面板</span></td>
+            <td><span data-lang="en">Rendered read-only</span><span data-lang="zh">以只读方式呈现</span></td>
+            <td><span data-lang="en">Reusing the built-in panels through <code>midi-partial</code> is the supported path today</span><span data-lang="zh">当前受支持的路径是用 <code>midi-partial</code> 复用内置面板</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <nav class="doc-pager">
+        <a href="singer-market.html"><div class="pager-card"><div class="pager-label" data-i18n="pager.prev">Previous</div><div class="pager-title"><span data-lang="en">Singer Market</span><span data-lang="zh">歌手市场</span></div></div></a>
+        <a href="testing-cli.html" class="next"><div class="pager-card"><div class="pager-label" data-i18n="pager.next">Next</div><div class="pager-title"><span data-lang="en">Testing &amp; CLI</span><span data-lang="zh">测试与命令行</span></div></div></a>
+      </nav>
+    </main>
+
+    <aside class="docs-toc scrollbar-thin">
+      <div class="toc-title" data-i18n="toc.title">On this page</div>
+      <div data-toc></div>
+    </aside>
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div class="footer-links">
+        <a href="../index.html" data-i18n="footer.docs">Documentation</a>
+        <a href="../user/faq.html" data-i18n="footer.help">Help &amp; FAQ</a>
+        <a href="https://github.com/Henley04/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.github">GitHub Repository</a>
+        <a href="https://gitcode.com/qq_50331623/SXSEditor" target="_blank" rel="noopener" data-i18n="footer.gitcode">GitCode Mirror</a>
+        <a href="https://github.com/Henley04/SXSEditor/issues" target="_blank" rel="noopener" data-i18n="footer.issues">Issue Tracker</a>
+      </div>
+      <div class="footer-copy" data-i18n="footer.copy">© 2026 SXSEditor. MIT License.</div>
+    </div>
+  </footer>
+
+  <button class="back-to-top" data-back-to-top type="button" aria-label="Back to top">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 15l-6-6-6 6"/></svg>
+  </button>
+
+  <script src="../js/i18n.js"></script>
+  <script src="../js/docs-nav.js"></script>
+  <script src="../js/layout.js"></script>
+</body>
+</html>

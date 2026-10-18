@@ -36,7 +36,7 @@ Highlights since v1.0.8:
 - **FCPE Pitch Detector** — ONNX-based, now the default MIDI extraction tool with a configurable post-processing pipeline
 - **Accompaniment Tracks** — Import WAV/MP3/FLAC/OGG/M4A/AAC as accompaniment alongside vocal fragments
 - **Switchable Diffusion Samplers** — Euler, Heun, Extrapolated Euler, STORK-2 (ICLR 2026)
-- **Dynamic Thresholding** — Per-frame percentile clipping (arXiv:2507.08965) for improved audio quality
+- **Dynamic Thresholding** — Per-frame percentile clipping (Imagen, arXiv:2205.11487) for improved audio quality
 - **Singer Market** — Browse and download community-created singers directly in the app
 - **Note Context Menu** — Right-click notes for vibrato and fade in/out controls
 - **48 kHz Default Playback** — Up from 24 kHz; export selectable at 24/44.1/48/96 kHz
@@ -67,7 +67,7 @@ See the [User Guide](User-Guide) for full details on all features.
 - [GitHub Release (latest installer)](https://github.com/Henley04/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
 - [GitCode Mirror (China, latest installer)](https://gitcode.com/qq_50331623/SXSEditor/releases/latest/download/sxsinstaller_x64_no_models.exe)
 
-macOS and Linux: build from source — see the [Developer Guide](Developer-Guide).
+macOS and Linux: build from source (CPU inference only — no DirectML/Windows ML; not covered by CI, no official binaries) — see the [Developer Guide](Developer-Guide).
 
 ---
 

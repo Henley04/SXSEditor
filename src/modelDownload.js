@@ -308,7 +308,7 @@ function renderVersionInfo(info) {
   refreshVersionSelector();
 }
 
-document.getElementById('updateModelBtn').addEventListener('click', async () => {
+async function runModelUpdate() {
   if (isDownloading) return;
   const confirmMsg = isMainModelTargetV0OrLegacy()
     ? t('modelDownload.v0LegacyConfirmMessage')
@@ -332,15 +332,11 @@ document.getElementById('updateModelBtn').addEventListener('click', async () => 
   const result = await window.electronAPI.modelDownloadUpdate(currentPrecision, currentRevision);
   if (result && !result.success && result.error) {
     document.getElementById('statusText').textContent = t('modelDownload.downloadNotAvailable');
-    document.getElementById('errorMessage').textContent = result.error;
-    document.getElementById('errorMessage').style.display = 'block';
-    document.getElementById('cancelBtn').style.display = 'none';
-    document.getElementById('closeBtn').style.display = 'inline-block';
-    document.getElementById('changeDirBtn').disabled = false;
-    document.getElementById('precisionSection').style.display = 'block';
-    isDownloading = false;
+    showRetryableError(result.error, runModelUpdate);
   }
-});
+}
+
+document.getElementById('updateModelBtn').addEventListener('click', runModelUpdate);
 
 function formatSpeed(bytesPerSec) {
   if (bytesPerSec <= 0) return '';
@@ -537,7 +533,27 @@ window.electronAPI.onModelDownloadError((data) => {
   isDownloading = false;
 });
 
-document.getElementById('startBtn').addEventListener('click', async () => {
+/**
+ * 错误态出口（交互性审查项）：下载/更新失败时除了"关闭"，必须给一个"重试"。
+ * 之前失败只把文案改成"下载失败"，按钮区只剩关闭 —— 用户只能关掉窗口重开，
+ * 而重开又要再走一遍模型检测。
+ * @param {Function} action 重试时要执行的操作
+ */
+let _retryAction = null;
+function showRetryableError(message, action) {
+  document.getElementById('errorMessage').textContent = message;
+  document.getElementById('errorMessage').style.display = 'block';
+  document.getElementById('cancelBtn').style.display = 'none';
+  document.getElementById('retryBtn').style.display = 'inline-block';
+  document.getElementById('closeBtn').style.display = 'inline-block';
+  document.getElementById('changeDirBtn').disabled = false;
+  document.getElementById('precisionSection').style.display = 'block';
+  document.getElementById('progressSection').style.display = 'none';
+  isDownloading = false;
+  _retryAction = typeof action === 'function' ? action : null;
+}
+
+async function runMainDownload() {
   const selectedRadio = document.querySelector('input[name="modelPrecision"]:checked');
   currentPrecision = selectedRadio ? selectedRadio.value : 'fp16';
 
@@ -549,6 +565,7 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   }
 
   document.getElementById('startBtn').style.display = 'none';
+  document.getElementById('retryBtn').style.display = 'none';
   document.getElementById('closeBtn').style.display = 'none';
   document.getElementById('cancelBtn').style.display = 'inline-block';
   document.getElementById('changeDirBtn').disabled = true;
@@ -563,15 +580,17 @@ document.getElementById('startBtn').addEventListener('click', async () => {
   if (result && !result.success && result.error) {
     document.getElementById('statusText').textContent = t('modelDownload.downloadNotAvailable');
     document.getElementById('speedInfo').textContent = '';
-    document.getElementById('errorMessage').textContent = result.error;
-    document.getElementById('errorMessage').style.display = 'block';
-    document.getElementById('cancelBtn').style.display = 'none';
-    document.getElementById('closeBtn').style.display = 'inline-block';
-    document.getElementById('changeDirBtn').disabled = false;
-    document.getElementById('precisionSection').style.display = 'block';
-    document.getElementById('progressSection').style.display = 'none';
-    isDownloading = false;
+    showRetryableError(result.error, runMainDownload);
   }
+}
+
+document.getElementById('startBtn').addEventListener('click', runMainDownload);
+
+document.getElementById('retryBtn').addEventListener('click', async () => {
+  const action = _retryAction;
+  document.getElementById('retryBtn').style.display = 'none';
+  document.getElementById('errorMessage').style.display = 'none';
+  if (action) await action();
 });
 
 // 精度切换时检查对应模型文件（不删除已有文件，不同精度可共存）

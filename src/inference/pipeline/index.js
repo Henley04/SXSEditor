@@ -1,3 +1,4 @@
+const { IPC_CHANNELS } = require('../../shared/ipcChannels');
 const path = require('node:path');
 const fs = require('node:fs');
 
@@ -12,7 +13,8 @@ const { Preprocessing } = require('./preprocessing');
 const { Diffusion } = require('./diffusion');
 const { DEFAULT_SOLVER } = require('./samplers');
 const { wsolaCrossfadeMel } = require('./wsola');
-const { Postprocessing, parseWavBuffer, resampleLinear, extractMelSpectrogram, isVramOOMError } = require('./postprocessing');
+const { Postprocessing, parseWavBuffer, isVramOOMError } = require('./postprocessing');
+const { normalizeMelPostprocessOptions, applyMelPostprocess, applyMelPostprocessWindow, computeMelFrameOffset } = require('./melPostprocess');
 const { AudioSegmentation } = require('./audioSegmentation');
 const { createFloatTensor, outputToFloat32, normalizePeakTo, gpuDrainAdaptive, gpuDrainLong, markGpuOom, throwIfCancelled, cancelledError } = require('./utils');
 const { requestModelLoad, requestSynthesis } = require('./webnnIpc');
@@ -146,10 +148,19 @@ class OnnxSVSPipeline {
         this._segCacheBytes = 0;                 // 当前分片缓存占用字节数
         // Streaming chunk cache. Entries are committed immediately after each
         // diffusion+vocoder chunk, so cancellation does not discard completed work.
-        this._chunkCacheMap = null;              // Map<key, {audio, mel, ranges, size}>
+        this._chunkCacheMap = null;              // Map<key, {audio, mel, mpKey, ranges, size}>
         this._chunkCacheMaxEntries = 128;
         this._chunkCacheMaxBytes = 384 * 1024 * 1024;
         this._chunkCacheBytes = 0;
+        // mel 级 LRU 缓存：缓存 diffstep 的**原始** mel（未做频谱后处理）。
+        // 音色曲线（melPostprocess）只改写 vocoder 输入，与 diffstep 产物无关 ——
+        // 其缓存键不含 melPostprocess（_computeMelCacheKey），音色曲线修改后命中
+        // 即跳过 encoder+diffusion，仅重新后处理 + vocoder。
+        // 音高曲线在键内（pitchCurveF0），改动必然重新推理。
+        this._melCacheMap = null;                // Map<key, {mel, frames, size}>，按插入顺序天然 LRU
+        this._melCacheMaxEntries = 8;
+        this._melCacheMaxBytes = 384 * 1024 * 1024;
+        this._melCacheBytes = 0;
         // One-entry whole-stream cache: avoids repeating region preparation, encoders,
         // diffusion and vocoder work on immediate replay. Chunk copies are retained so
         // cached playback preserves the same streaming timing/event contract.
@@ -562,7 +573,13 @@ class OnnxSVSPipeline {
     interpolateEnvelope(envelope, beatTime) { return this._preprocessing.interpolateEnvelope(envelope, beatTime); }
     buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0) { return this._preprocessing.buildF0FrameSequence(notes, bpm, f0Envelope, pitchCurveF0); }
     quantizeF0(f0Frames, f0Shift) { return this._preprocessing.quantizeF0(f0Frames, f0Shift); }
-    notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift) { return this._preprocessing.notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift); }
+    // ⚠️ pitchCurveOffsetSec 必须透传：多 segment 路径的 segmentNotes.start 是相对
+    // segStart 的坐标，而 pitchCurveF0 是整片段绝对时间序列。漏掉这个参数时每个
+    // segment 都从曲线第 0 帧取值 —— segment 0 恰好正确，后续段的手绘音高/颤音
+    // （以及 F0 平滑）整体错位，表现为"第一段正常，后面唱的音高是歪的"。
+    notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift = 0, pitchCurveOffsetSec = 0) {
+        return this._preprocessing.notesToSequences(notes, bpm, f0Envelope, pitchCurveF0, f0Shift, pitchCurveOffsetSec);
+    }
     _buildMel2token(phLocations, tokenCount, totalFrames) { return this._preprocessing._buildMel2token(phLocations, tokenCount, totalFrames); }
 
     // Delegate diffusion methods
@@ -587,9 +604,43 @@ class OnnxSVSPipeline {
     _buildVocalSegments(notes, bpm) { return this._audioSegmentation.buildVocalSegments(notes, bpm); }
     _splitLongRestRegions(notes, bpm) { return this._audioSegmentation.splitLongRestRegions(notes, bpm); }
     _hashArray(arr) { return this._audioSegmentation.hashArray(arr); }
-    _computeSynthCacheKey(notes, bpm, options) { return this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this)); }
-    _computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) { return this._audioSegmentation.computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount); }
+    _computeSynthCacheKey(notes, bpm, options) {
+        const base = this._audioSegmentation.computeSynthCacheKey(notes, bpm, options, this.interpolateEnvelope.bind(this));
+        // seed 与 qdrift 改变合成结果，但 audioSegmentation 不感知 pipeline 状态，
+        // 无法纳入 base 键 —— 在此统一追加，覆盖全曲/分段/chunk 各级缓存的派生键：
+        //   - seed：CLI --seed / 固定种子设置用于精度与 EP 的 A/B 对比，换 seed 后
+        //     初始噪声不同，缓存键不含 seed 会命中上一次的音频，对比结论失真。
+        //   - qdrift：Q-Drift 开启时强制改写 solver/steps/CFG/rescale 并关闭 CFG
+        //     调度、动态阈值、SDEdit，开关后必须失效旧缓存。
+        const seedPart = this._diffusion && this._diffusion.getNoiseSeed() != null
+            ? this._diffusion.getNoiseSeed()
+            : 'auto';
+        return `${base}_sd${seedPart}_qd${this._currentQDriftEnabled ? 1 : 0}`;
+    }
+    _computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
+        // 复用 _computeSynthCacheKey（已含 seed/qdrift 后缀）
+        const base = this._computeSynthCacheKey(segNotes, bpm, options);
+        return `${base}_sb${segStartBeat}_fs${segF0Shift}_pt${ptFrameCount || 0}`;
+    }
+    /**
+     * diffstep 输入键（不含 melPostprocess）：音频级键去掉 `_mp...` 段。
+     * 音色曲线（频谱后处理）只改 vocoder 输入 mel，原始 mel 的缓存身份与它无关；
+     * 音高曲线（pitchCurveF0）在键内，修改必然重新推理。seed/qdrift 后缀与
+     * _computeSynthCacheKey 保持一致（见其注释）。
+     */
+    _computeMelCacheKey(notes, bpm, options) {
+        const base = this._audioSegmentation.computeMelCacheKey(notes, bpm, options);
+        const seedPart = this._diffusion && this._diffusion.getNoiseSeed() != null
+            ? this._diffusion.getNoiseSeed()
+            : 'auto';
+        return `${base}_sd${seedPart}_qd${this._currentQDriftEnabled ? 1 : 0}`;
+    }
+    _computeSegmentMelKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
+        const base = this._computeMelCacheKey(segNotes, bpm, options);
+        return `${base}_sb${segStartBeat}_fs${segF0Shift}_pt${ptFrameCount || 0}`;
+    }
     _median(arr) { return this._audioSegmentation.median(arr); }
+    _isRestNote(note) { return this._audioSegmentation._isRestNote(note); }
 
     /**
      * Diffusion can produce non-zero rest mel even with pitch/F0=0. Vocos then
@@ -603,11 +654,11 @@ class OnnxSVSPipeline {
         const fadeSamples = Math.max(1, Math.round(0.015 * SAMPLE_RATE));
         const intervals = [];
         for (const note of notes) {
-            const lyric = String(note.lyric || '').trim();
-            // <AP> is audible aspiration even when its score pitch is zero.
-            const isRest = lyric !== '<AP>' && (note.pitch <= 0 || note.noteType === 1
-                || lyric === '<SP>');
-            if (isRest) continue;
+            // 统一使用与 region 切分（AudioSegmentation._isRestNote）相同的休止
+            // 判据 —— 旧内联判据把"空歌词的非延音音符"当非休止保留，而 region
+            // 切分阶段把它当休止排除：两侧结论相反会导致切分与静音阶段行为
+            // 不一致（切段排除了它、静音阶段又保留它，或反过来）。
+            if (this._isRestNote(note)) continue;
             const rawStart = Math.round((note.start - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE);
             const rawEnd = Math.round((note.start + note.duration - bufferStartBeat) * secondsPerBeat * SAMPLE_RATE);
             const start = Math.max(0, rawStart);
@@ -653,9 +704,9 @@ class OnnxSVSPipeline {
         // 基础模型覆盖更广（28-88），但 JP 必须收紧到训练分布内。
         const isJp = this.languageOverride === 'ja';
         const MIN_EFFECTIVE_PITCH = isJp ? 48 : 28; // JP: C3 / base: ~E1
-        // SiFiGAN 对 f0 敏感（过高导致激励畸变→口齿不清，见 index.js:1574 注释），
-        // 上限收紧到 84（~C6），避免 autoShift 将高音推入 SiFiGAN 失真区。
-        // 默认 vocoder 上限 88（~E6）。JP 任何 vocoder 都用 84。
+        // SiFiGAN 对 f0 敏感（过高导致激励畸变→口齿不清，根因注释见 _synthesizeImpl()
+        // 中的 autoShift 钳制分支），上限收紧到 84（~C6），避免 autoShift 将高音推入
+        // SiFiGAN 失真区。默认 vocoder 上限 88（~E6）。JP 任何 vocoder 都用 84。
         const MAX_EFFECTIVE_PITCH = (isJp || this.vocoderType === 'sifigan') ? 84 : 88;
         let minPitch = targetNotePitches[0];
         let maxPitch = targetNotePitches[0];
@@ -920,7 +971,51 @@ class OnnxSVSPipeline {
         this._segCacheBytes = 0;
         this._chunkCacheMap = null;
         this._chunkCacheBytes = 0;
+        this._melCacheMap = null;
+        this._melCacheBytes = 0;
         this._multiStreamResultCache = null;
+    }
+
+    /**
+     * mel 级 LRU 读取（原始 diffstep mel，未做频谱后处理）。
+     * @param {string} key - _computeMelCacheKey / _computeSegmentMelKey 派生键
+     * @returns {{mel:Float32Array, frames:number}|null}
+     */
+    _melCacheGet(key) {
+        if (!this._melCacheMap || !this._melCacheMap.has(key)) return null;
+        const entry = this._melCacheMap.get(key);
+        this._melCacheMap.delete(key);
+        this._melCacheMap.set(key, entry);
+        return entry;
+    }
+
+    /**
+     * mel 级 LRU 写入。条目保存 diffstep 的原始输出 mel；调用方保证之后不再
+     * 原地改写该数组（_postprocessMel 系列均为纯函数返回新数组）。
+     * @param {string} key
+     * @param {{mel:Float32Array, frames:number}} entry
+     */
+    _melCachePut(key, entry) {
+        if (!entry || !entry.mel || !(entry.frames > 0)) return;
+        if (_hasNonFinite(entry.mel)) {
+            console.warn('[OnnxSVSPipeline][mel-cache] rejected non-finite mel (NaN/Inf) — not cached');
+            return;
+        }
+        if (!this._melCacheMap) this._melCacheMap = new Map();
+        const map = this._melCacheMap;
+        if (map.has(key)) {
+            this._melCacheBytes -= map.get(key).size;
+            map.delete(key);
+        }
+        const stored = { mel: entry.mel, frames: entry.frames, size: entry.mel.byteLength };
+        map.set(key, stored);
+        this._melCacheBytes += stored.size;
+        while ((map.size > this._melCacheMaxEntries) ||
+               (this._melCacheBytes > this._melCacheMaxBytes && map.size > 1)) {
+            const oldestKey = map.keys().next().value;
+            this._melCacheBytes -= map.get(oldestKey).size;
+            map.delete(oldestKey);
+        }
     }
 
     _chunkCacheGet(key) {
@@ -1475,7 +1570,7 @@ class OnnxSVSPipeline {
                 if (wc) {
                     const reqId = `svs-webnn-unload-${Date.now()}`;
                     ipcMain.handleOnce(`webnn:unloadModel:response:${reqId}`, () => {});
-                    wc.send('webnn:unloadModel:request', { requestId: reqId, modelId });
+                    wc.send(IPC_CHANNELS.WEBNN_UNLOAD_MODEL_REQUEST, { requestId: reqId, modelId });
                 }
             } catch (_) {}
         };
@@ -1535,7 +1630,7 @@ class OnnxSVSPipeline {
                     const nextPath = this._getModelPath(nextFile);
                     const wc = getMainWindowWebContents();
                     if (wc) {
-                        prefetchPromise = wc.send('webnn:prefetch:request', { modelPath: nextPath });
+                        prefetchPromise = wc.send(IPC_CHANNELS.WEBNN_PREFETCH_REQUEST, { modelPath: nextPath });
                     }
                     break;
                 }
@@ -2041,9 +2136,19 @@ class OnnxSVSPipeline {
         return this._diffusion.runDiffStep(this.sessions, xtInputData, tVal, condData, maskData, totalFramesWithPrompt, this.diffStepIsFP16, this.useStaticShapes);
     }
 
-    async _runVocoderChunked(melData, totalFrames, onChunkComplete = null) {
+    /**
+     * 计算"本次 vocoder 输入 mel 的首音符绝对拍"对应的载荷帧偏移。
+     * 载荷（options.melPostprocess）锚在分片第一个音符；多段 / 多 region /
+     * 单音符 padding 等 re-base 路径的 mel 都从这里换算回真实时间。
+     */
+    _melPostprocessFrameOffset(absFirstNoteBeat) {
+        return computeMelFrameOffset(this._melPostprocessOptions, absFirstNoteBeat, SAMPLE_RATE / HOP_SIZE);
+    }
+
+    async _runVocoderChunked(melData, totalFrames, onChunkComplete = null, frameOffset = 0, melCtx = null) {
         // Vocoder is loaded via DML (dynamic shapes), never use static shape padding
         // SiFiGAN 双输入：传入 vocoderType、F0 序列、stats 缺失标志；default vocoder 仅用 mel
+        melData = this._postprocessMel(melData, totalFrames, frameOffset, '[Vocoder]', melCtx);
         const chunkFrames = this._resolveVocoderChunkFrames();
         const overlapFramesOverride = this._resolveVocoderOverlapFrames();
         console.log(`[OnnxSVSPipeline] Vocoder EP: ${this.sessionEPs.vocoder || 'unknown'}, vocoderIsFP16=${this.vocoderIsFP16}, isFP16=${this.isFP16}, vocoderType=${this.vocoderType}, resolvedFile=${this._resolvedVocoderFile}`);
@@ -2151,7 +2256,8 @@ class OnnxSVSPipeline {
      * 2. 接受 f0Override 参数（每段 mel 对应不同的 F0 片段）
      * 3. 不做 vocoderType 一致性检测（已在主路径做过，片段路径重复检测浪费）
      */
-    async _runVocoderChunkedForSegment(melData, segFrames, f0Override, onChunkComplete) {
+    async _runVocoderChunkedForSegment(melData, segFrames, f0Override, onChunkComplete, frameOffset = 0, melCtx = null) {
+        melData = this._postprocessMel(melData, segFrames, frameOffset, '[VocoderSeg]', melCtx);
         const chunkFrames = this._resolveVocoderChunkFrames();
         const overlapFramesOverride = this._resolveVocoderOverlapFrames();
         const runVocoder = () => this._postprocessing.runVocoderChunked(
@@ -2169,6 +2275,77 @@ class OnnxSVSPipeline {
                 }
                 throw err;
             }
+        }
+    }
+
+    /**
+     * 应用分片编辑器传入的 Mel 频谱后处理（时频平滑 / 过渡频谱插值）。
+     *
+     * 调用点：所有 vocoder 入口（_runVocoderChunked / _runVocoderChunkedForSegment）。
+     * frameOffset = 本次 mel 片段对应的载荷帧起点，由调用方用
+     * _melPostprocessFrameOffset(首音符绝对拍) (+ chunk 相对帧) 算出，
+     * 用于逐帧参数（σ、插值强度、过渡边界）的索引对齐。
+     *
+     * melCtx（可选）：{ fullMel, totalFrames, startFrame, payloadBase, rightFinal }
+     * —— 完整 mel 上下文。提供时走 applyMelPostprocessWindow：时间轴模糊 / 过渡
+     * 插值可以读取区间外的真实邻居帧（左侧总是上一 chunk 已提交的最终 mel；右侧
+     * 仅在 rightFinal 时启用），使分块流式预览与整段导出逐位一致。
+     * startFrame = 本次区间在完整 mel 中的起始帧；payloadBase = 完整 mel 第 0 帧
+     * 对应的载荷帧索引（region/segment 首音符 ≠ 分片首音符时的偏移）。
+     * 缺省按独立片段处理（镜像边界）。
+     *
+     * 未配置参数时原引用返回（零开销）；参数非法的形状只告警一次，不影响合成。
+     *
+     * @param {Float32Array} melData
+     * @param {number} frames
+     * @param {number} frameOffset
+     * @param {string} tag 日志前缀
+     * @param {{fullMel?:Float32Array, totalFrames?:number, rightFinal?:boolean}|null} [melCtx]
+     * @returns {Float32Array}
+     */
+    _postprocessMel(melData, frames, frameOffset, tag, melCtx = null) {
+        const opts = this._melPostprocessOptions;
+        if (!opts || !melData || !(frames > 0)) return melData;
+        const expected = frames * MEL_DIM;
+        if (melData.length < expected) {
+            if (!this._melPostprocessShapeWarned) {
+                this._melPostprocessShapeWarned = true;
+                console.warn(`${tag} mel postprocess skipped: mel length ${melData.length} < ${expected} (frames=${frames}, dim=${MEL_DIM})`);
+            }
+            return melData;
+        }
+        try {
+            if (melCtx && melCtx.fullMel && (melCtx.totalFrames | 0) > 0 &&
+                melCtx.fullMel.length >= melCtx.totalFrames * MEL_DIM) {
+                const startFrame = Math.max(0, Math.min(melCtx.totalFrames - frames, Math.round(melCtx.startFrame) || 0));
+                const processed = applyMelPostprocessWindow(
+                    melCtx.fullMel,
+                    melCtx.totalFrames,
+                    MEL_DIM,
+                    opts,
+                    startFrame,
+                    frames,
+                    { left: true, right: melCtx.rightFinal !== false },
+                    Math.round(melCtx.payloadBase) || 0,
+                );
+                if (processed) return processed;
+                // 未启用任何处理（或上下文非法）→ 原样返回
+                return melData;
+            }
+            const processed = applyMelPostprocess(
+                melData.length === expected ? melData : melData.subarray(0, expected),
+                frames,
+                MEL_DIM,
+                opts,
+                Math.max(0, Math.round(frameOffset) || 0),
+            );
+            return processed;
+        } catch (err) {
+            if (!this._melPostprocessErrorLogged) {
+                this._melPostprocessErrorLogged = true;
+                console.warn(`${tag} mel postprocess failed, falling back to raw mel: ${err && err.message}`);
+            }
+            return melData;
         }
     }
 
@@ -2566,7 +2743,7 @@ class OnnxSVSPipeline {
         return this._diffusion.runDiffusionLoop(this.sessions, xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, this.diffStepIsFP16, onProgress, progressStart, progressRange, this.useStaticShapes, samplerName, cfgScheduleOpts, dynamicThresholdOpts, abortSignal, _suppressChunkLog);
     }
 
-    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0, abortSignal = null) {
+    async _synthesizeSegment(segmentNotes, bpm, f0Envelope, pitchCurveF0, f0Shift, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, onChunkAudio = null, segStartBeat = 0, abortSignal = null, melCacheKey = null) {
         throwIfCancelled(abortSignal);
         // 多 segment 路径：segmentNotes.start 是相对 segStart，需要传 segStartBeat
         // 让 notesToSequences 正确索引绝对时间的 pitchCurveF0，否则 f0 错位 → 电流声。
@@ -2587,6 +2764,13 @@ class OnnxSVSPipeline {
         }
 
         console.log(`[OnnxSVSPipeline] Segmented synthesis: frames=${totalFrames}, tokens=${tokenCount}, steps=${totalSteps}`);
+
+        // 频谱后处理时间对齐：本次 mel 第 0 帧对应 segmentNotes[0].start（segment
+        // 相对坐标），绝对拍 = segStartBeat + 该值；载荷锚在分片首音符（startBeat），
+        // 两者之差换算为载荷帧偏移，否则曲线在 segment > 0 时整体平移 regionStart。
+        const _melBaseOffset = this._melPostprocessFrameOffset(
+            segStartBeat + (segmentNotes.length > 0 ? segmentNotes[0].start : 0)
+        );
 
         // NPU 静态形状模型限制：ptFrameCount+totalFrames 不得超过 NPU_STATIC_SEQ_LEN。
         // 大 ref prompt（>50 帧）时按 Math.min(ptFrameCount,50) 预留 target 会不足预留，
@@ -2625,7 +2809,7 @@ class OnnxSVSPipeline {
             // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder
             this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
             // Vocoder 在主进程 DML 执行（支持 default + SiFiGAN）
-            const audioData = await this._runVocoderChunked(result.xtData, totalFrames, onChunkAudio);
+            const audioData = await this._runVocoderChunked(result.xtData, totalFrames, onChunkAudio, _melBaseOffset, { fullMel: result.xtData, totalFrames });
             const ms = performance.now() - t0;
             console.log(`[OnnxSVSPipeline] WebNN synthesis: ${totalFrames}frames, ${totalSteps}steps, ${ms.toFixed(0)}ms`);
             onProgress(Math.round(progressStart + progressRange));
@@ -2649,18 +2833,31 @@ class OnnxSVSPipeline {
             }
         }
         if (!xt) {
-            const combinedCond = await this._runEncoder(sequences, tokenCount, totalFrames, ptFrameCount);
-
-            // GPU 排空点 1：encoder（6 次推理）→ diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
-            await gpuDrainAdaptive();
-
-            xt = this.randomNoise(totalFrames, MEL_DIM);
-
             // Task 15: per-frame F0 curve for F0-aware chunked diffusion boundary
             // selection. Slice to totalFrames to match the segment's frame range.
             this._currentPitchCurveF0 = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
 
-            await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, null, abortSignal);
+            // mel 级缓存命中：跳过 encoder+diffusion（GPU 重活），仅重跑 vocoder。
+            // 触发场景：音色曲线（melPostprocess）修改 —— segment 原始 mel 与上次相同。
+            const cachedSegMel = melCacheKey ? this._melCacheGet(melCacheKey) : null;
+            if (cachedSegMel && cachedSegMel.frames === totalFrames) {
+                xt = { data: cachedSegMel.mel, dims: [1, totalFrames, MEL_DIM] };
+                console.log('[OnnxSVSPipeline] >>> SEGMENT MEL CACHE HIT <<< skipping encoder+diffusion (vocoder only)');
+            } else {
+                const combinedCond = await this._runEncoder(sequences, tokenCount, totalFrames, ptFrameCount);
+
+                // GPU 排空点 1：encoder（6 次推理）→ diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
+                await gpuDrainAdaptive();
+
+                xt = this.randomNoise(totalFrames, MEL_DIM);
+
+                await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, progressStart, progressRange, null, abortSignal);
+
+                // 缓存原始 mel（音色曲线后续修改时复用）
+                if (melCacheKey) {
+                    this._melCachePut(melCacheKey, { mel: xt.data, frames: totalFrames });
+                }
+            }
         }
 
         // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
@@ -2700,9 +2897,148 @@ class OnnxSVSPipeline {
         // Cache F0 (Hz, mel frame rate=50Hz) for SiFiGAN dual-input vocoder; truncated to totalFrames to match mel after NPU/MAX_SAFE truncation. null when unavailable.
         this._currentF0Hz = sequences.f0Hz ? sequences.f0Hz.subarray(0, totalFrames) : null;
 
-        const audioData = await this._runVocoderChunked(xt.data, totalFrames);
+        const audioData = await this._runVocoderChunked(xt.data, totalFrames, null, _melBaseOffset, { fullMel: xt.data, totalFrames });
 
         return { audio: audioData, frames: totalFrames };
+    }
+
+    /**
+     * 多 segment 流式发射器（分片编辑器预览专用，synthesize() 多 segment 路径用）。
+     *
+     * 旧行为：多 segment 路径（分片 >20s 或含 ≥1.5s 长休止被 buildVocalSegments /
+     * splitLongRestRegions 切段）完全不推送 chunk —— _synthesizeSegment 的
+     * onChunkAudio 传 null，分片编辑器播放预览必须等全部 segment 推理完才开播。
+     *
+     * 设计约束：渲染端（fragmentEditor/audioPlayback.js handleStreamingChunk）按
+     * 到达顺序无缝拼接 chunk，不感知采样偏移。因此主进程必须保证 chunk 严格按
+     * 时间顺序、时间轴连续地发射：
+     *   - segment 按 startBeat 时间序排序；segment 合成（或缓存命中）完成后入队，
+     *     前面的 segment 全部发射完才轮到它。priorityTimeSec 重排 / 分片缓存命中
+     *     导致的乱序完成会被缓冲，绝不提前发射未覆盖区间。
+     *   - 相邻 region 间的长休止中心（splitLongRestRegions 刻意不送推理的区间，
+     *     最终混音里就是 weightSum=0 的静音）补一段静音 chunk，保证播放头时间轴
+     *     与最终混音一致。
+     *   - 同 region 内 20s 分段有 SEGMENT_OVERLAP_SEC(2s) 重叠（最终混音做交叉
+     *     淡化）。顺序流式无法做 OLA 叠加：保留前序 segment 整段、裁掉后续
+     *     segment 的重叠头部，接头处两端 15ms 余弦渐变防爆音。流式接缝听感与
+     *     最终缓存版略有差异，属预期（重播走缓存即为交叉淡化版本）。
+     *   - isLast 只随时间轴上最后一个 chunk 发出（空 segment 收尾时补 1 样本
+     *     静音 chunk 承载 isLast），否则渲染端 markLastReceived 永不触发。
+     *
+     * @param {Array<{startBeat:number,endBeat:number}>} segments - synthesize() 里的 segments
+     * @param {number} bpm
+     * @param {number} firstNoteStartBeat - filledNotes[0].start（最终 audioData[0] 对应的绝对拍位）
+     * @param {number} totalSamples - 多 segment 路径的 finalAudio 总样本数（含前导休止）
+     * @param {function} onChunkAudio - synthesize() 的流式推送回调
+     * @returns {{segmentDone: (segIdx:number, audio:Float32Array|null) => void}}
+     */
+    _createSegmentStreamEmitter(segments, bpm, firstNoteStartBeat, totalSamples, onChunkAudio) {
+        const firstNoteStartSample = Math.floor((firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE);
+        const totalSamplesRel = Math.max(0, totalSamples - firstNoteStartSample);
+        const timeOrder = segments.map((_, i) => i)
+            .sort((a, b) => segments[a].startBeat - segments[b].startBeat);
+        const metas = new Map();
+        for (const idx of timeOrder) {
+            metas.set(idx, {
+                relStart: Math.floor((segments[idx].startBeat / bpm) * 60 * SAMPLE_RATE) - firstNoteStartSample,
+                relEnd: Math.floor((segments[idx].endBeat / bpm) * 60 * SAMPLE_RATE) - firstNoteStartSample,
+                audio: null,
+            });
+        }
+        // 采样取整误差内视为连续（不补静音），≈21ms
+        const CONTIG_EPS = Math.round(0.021 * SAMPLE_RATE);
+        const FADE_SAMPLES = Math.max(1, Math.round(0.015 * SAMPLE_RATE));
+        let frontier = 0;    // 已发射前沿（相对 firstNoteStart 的采样位置）
+        let nextTimeIdx = 0; // timeOrder 中下一个待发射的 segment
+        let finished = false;
+
+        const fadeInHead = (audio) => {
+            const n = Math.min(FADE_SAMPLES, audio.length);
+            for (let i = 0; i < n; i++) {
+                audio[i] *= 0.5 * (1 - Math.cos((Math.PI * i) / n));
+            }
+        };
+        const fadeOutTail = (audio) => {
+            const n = Math.min(FADE_SAMPLES, audio.length);
+            const base = audio.length - n;
+            for (let i = 0; i < n; i++) {
+                audio[base + i] *= 0.5 * (1 + Math.cos((Math.PI * i) / n));
+            }
+        };
+        const emitChunk = (audio, isLast) => {
+            if (!audio || audio.length === 0) return false;
+            try {
+                onChunkAudio({
+                    chunkIndex: nextTimeIdx,
+                    sampleOffset: frontier,
+                    sampleEnd: frontier + audio.length,
+                    audio,
+                    totalSamples: totalSamplesRel,
+                    isLast,
+                });
+            } catch (_) {}
+            frontier += audio.length;
+            return true;
+        };
+
+        const tryEmit = () => {
+            while (!finished && nextTimeIdx < timeOrder.length) {
+                const segIdx = timeOrder[nextTimeIdx];
+                const meta = metas.get(segIdx);
+                if (!meta || !meta.audio) break; // 该 segment 尚未完成，等待
+                const isLastSeg = nextTimeIdx === timeOrder.length - 1;
+                // 前置静音：region 间长休止中心（与最终混音的零填充区一致）
+                const gapSamples = meta.relStart - frontier;
+                if (gapSamples > CONTIG_EPS) {
+                    emitChunk(new Float32Array(gapSamples), false);
+                }
+                let audio = meta.audio;
+                const trim = Math.max(0, Math.min(frontier - meta.relStart, audio.length));
+                if (trim > 0) {
+                    // 与前序 segment 的 2s 重叠：裁掉头部，接头做 15ms 渐入
+                    audio = audio.slice(trim);
+                    fadeInHead(audio);
+                } else {
+                    // 复制后再施加渐变，避免污染分片缓存里的原始音频
+                    audio = audio.slice();
+                }
+                if (!isLastSeg) {
+                    const nextMeta = metas.get(timeOrder[nextTimeIdx + 1]);
+                    // 后续 segment 与本段重叠（其头部将被裁剪）→ 本段尾部渐出防爆破
+                    if (nextMeta && nextMeta.relStart < meta.relEnd) fadeOutTail(audio);
+                }
+                if (isLastSeg) {
+                    // 末段尾部补静音：vocoder 输出按帧取整，末段音频常比时间轴短几个
+                    // 采样（实测 ~241 样本 ≈10ms）。补齐后流式时间轴长度与最终混音
+                    // 完全一致，播放头不会在末尾差一截就停。必须并入本 chunk 而不是
+                    // 追加一个新 chunk —— 追加的会被渲染端 isLastReceived 之后的守卫丢弃。
+                    const wantLen = totalSamplesRel - frontier;
+                    if (wantLen > audio.length) {
+                        const padded = new Float32Array(wantLen);
+                        padded.set(audio, 0);
+                        audio = padded;
+                    }
+                }
+                const emitted = emitChunk(audio, isLastSeg);
+                meta.audio = null; // 释放引用
+                nextTimeIdx++;
+                if (isLastSeg && !emitted) {
+                    // 最后一个 segment 无音频（全休止 / 空结果）：补 1 样本静音承载 isLast
+                    emitChunk(new Float32Array(1), true);
+                }
+            }
+            if (nextTimeIdx >= timeOrder.length) finished = true;
+        };
+
+        return {
+            segmentDone(segIdx, audio) {
+                if (finished) return;
+                const meta = metas.get(segIdx);
+                if (!meta || meta.audio) return; // 未知 segment / 重复完成
+                meta.audio = (audio && audio.length > 0) ? audio : new Float32Array(0);
+                tryEmit();
+            },
+        };
     }
 
     /**
@@ -2749,6 +3085,11 @@ class OnnxSVSPipeline {
         if (framesA === 0) return [{ audio: [], frames: 0 }, await this._synthesizeSegment(segBNotes, bpm, f0Envelope, pitchCurveF0, f0ShiftB, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segBStartBeat, abortSignal)];
         if (framesB === 0) return [await this._synthesizeSegment(segANotes, bpm, f0Envelope, pitchCurveF0, f0ShiftA, ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale, npuDiffBatchSize, npuVocoderBatchSize, onProgress, progressStart, progressRange, null, segAStartBeat, abortSignal), { audio: [], frames: 0 }];
 
+        // 频谱后处理时间对齐：各 segment 的 mel 第 0 帧对应其首音符
+        // （segXStartBeat + segXNotes[0].start 为绝对拍），分别换算载荷帧偏移。
+        const _melBaseOffsetA = this._melPostprocessFrameOffset(segAStartBeat + (segANotes.length > 0 ? segANotes[0].start : 0));
+        const _melBaseOffsetB = this._melPostprocessFrameOffset(segBStartBeat + (segBNotes.length > 0 ? segBNotes[0].start : 0));
+
         console.log(`[OnnxSVSPipeline] Batch synthesis: segA=${framesA}frames, segB=${framesB}frames`);
 
         onProgress(Math.round(progressStart));
@@ -2793,7 +3134,8 @@ class OnnxSVSPipeline {
             const r = results[si];
             const seq = si === 0 ? seqA : seqB;
             this._currentF0Hz = seq.f0Hz ? seq.f0Hz.subarray(0, r.totalFrames) : null;
-            const audioData = await this._runVocoderChunked(r.xtData, r.totalFrames, null);
+            const melBaseOffset = si === 0 ? _melBaseOffsetA : _melBaseOffsetB;
+            const audioData = await this._runVocoderChunked(r.xtData, r.totalFrames, null, melBaseOffset, { fullMel: r.xtData, totalFrames: r.totalFrames });
             audioResults.push({ audio: audioData, frames: r.totalFrames });
         }
         return audioResults;
@@ -2937,13 +3279,16 @@ class OnnxSVSPipeline {
         this._currentSamplerName = firstOpts.sampler || DEFAULT_SOLVER;
         // Q-Drift 漂移校正开关（预览/导出各自独立，由调用方按路径传入）
         this._currentQDriftEnabled = firstOpts.qdrift === true;
+        // 频谱后处理：多分片路径取首片段配置（与其它全局选项一致），并显式重置，
+        // 避免上一次 synthesize() 的曲线参数残留到本次。
+        this._melPostprocessOptions = normalizeMelPostprocessOptions(firstOpts.melPostprocess);
         // Task 11: CFG 强度曲线调度（取首片段配置，多片段必须一致）
         this._currentCfgScheduleOpts = {
             mode: firstOpts.cfgScheduleMode || 'linear',
             cfgStrengthStart: firstOpts.cfgStrengthStart ?? null,
             keyframes: firstOpts.cfgScheduleKeyframes ?? null,
         };
-        // Dynamic thresholding (arXiv:2507.08965): per-frame percentile clipping
+        // Dynamic thresholding (Imagen, arXiv:2205.11487): per-frame percentile clipping
         this._currentDynamicThresholdOpts = firstOpts.dynamicThresholdEnabled
             ? { enabled: true, percentile: firstOpts.dynamicThresholdPercentile ?? 0.995 }
             : null;
@@ -3237,13 +3582,21 @@ class OnnxSVSPipeline {
                 // Cache is scoped to the inference region, not the original
                 // fragment. Editing a different region will not invalidate this
                 // one, while boundary/context changes produce a different key.
-                cacheBaseKey: [
-                    this._computeSynthCacheKey(filledNotes, bpm, fragOpts),
+                // melBaseKey 不含 melPostprocess：chunk 缓存的是**原始** mel，
+                // 音色曲线修改后 mel 直接复用，仅重跑 vocoder（见 Phase 3 的 mpKey 比对）。
+                melBaseKey: [
+                    this._computeMelCacheKey(filledNotes, bpm, fragOpts),
                     frag.sourceFragIdx, frag.regionIdx,
                     frag.regionStartBeat, frag.regionEndBeat,
                 ].join('|'),
+                // 该 region 的 melPostprocess 身份：与 chunk 缓存条目记录的 mpKey
+                // 比对，一致才复用缓存音频，否则用缓存的原始 mel 重跑 vocoder。
+                mpKey: this._audioSegmentation.computeMelPostprocessHash(fragOpts),
                 committedFrames: 0,
                 filledNotes,
+                // 频谱后处理按 region 各自的曲线（多分片的 melPostprocess 是
+                // per-fragment 选项，不能沿用首片段的 this._melPostprocessOptions）
+                melPostprocessOptions: normalizeMelPostprocessOptions(fragOpts.melPostprocess),
                 segAudio: new Float32Array(totalFrames * HOP_SIZE),
             });
             console.log(`[MultiStream] Fragment ${frag.sourceFragIdx} region ${frag.regionIdx} prepared: ${totalFrames} frames, startTime=${frag.startTimeBeat}beat, firstNoteStart=${firstNoteStartBeat}beat, chunks=${chunkPlan ? chunkPlan.specs.length : 0}`);
@@ -3258,19 +3611,27 @@ class OnnxSVSPipeline {
         const totalMixedSamples = Math.ceil((maxEndBeat / bpm) * 60 * SAMPLE_RATE);
 
         // ===== Phase 2: 构建全局时间顺序 chunk 队列 =====
+        // regionStartSec 必须加上 region 自身的时间轴偏移：同一个 fragment 被
+        // _splitLongRestRegions() 切成多个 region 时，所有 region 共用 fragment 的
+        // startTimeBeat，region 在时间轴上的真实位置只体现在 firstNoteStartBeat
+        // （= 该 region 首音符相对 fragment 起点的 beat，见 Phase 1 的注释）。
+        // 漏掉这一项时，后段 region 的 chunk 全部按 chunkStart=0 起算，与正在播放的
+        // 前段 region 抢推理顺序：后段（时间轴上很靠后）的音频先被合成推送，
+        // 而当前 region 的下一块迟迟不到 —— 播放头被 min-frontier 钉在当前 region
+        // 末端，UI 一直显示"等待推理"，进度条却已跑到很后面（严重预览延迟）。
         const globalChunks = [];
         for (let pi = 0; pi < prepared.length; pi++) {
             const p = prepared[pi];
-            const fragStartSec = (p.startTimeBeat / bpm) * 60;
+            const regionStartSec = (p.startTimeBeat / bpm) * 60 + (p.firstNoteStartBeat / bpm) * 60;
             if (p.chunkPlan) {
                 for (let ci = 0; ci < p.chunkPlan.specs.length; ci++) {
                     const spec = p.chunkPlan.specs[ci];
-                    const chunkGlobalTimeSec = fragStartSec + (spec.chunkStart / MEL_FRAME_RATE);
+                    const chunkGlobalTimeSec = regionStartSec + (spec.chunkStart / MEL_FRAME_RATE);
                     globalChunks.push({ prepIdx: pi, chunkIdx: ci, spec, globalTimeSec: chunkGlobalTimeSec, isChunked: true });
                 }
             } else {
                 // 无分块：整段作为一个"chunk"
-                globalChunks.push({ prepIdx: pi, chunkIdx: 0, spec: { chunkStart: 0, chunkEnd: p.totalFrames, currentChunkFrames: p.totalFrames, isFirst: true, isLast: true }, globalTimeSec: fragStartSec, isChunked: false });
+                globalChunks.push({ prepIdx: pi, chunkIdx: 0, spec: { chunkStart: 0, chunkEnd: p.totalFrames, currentChunkFrames: p.totalFrames, isFirst: true, isLast: true }, globalTimeSec: regionStartSec, isChunked: false });
             }
         }
         globalChunks.sort((a, b) => a.globalTimeSec - b.globalTimeSec);
@@ -3317,6 +3678,8 @@ class OnnxSVSPipeline {
         for (let gi = 0; gi < globalChunks.length; gi++) {
             const gc = globalChunks[gi];
             const p = prepared[gc.prepIdx];
+            // 频谱后处理按 region 切换（_postprocessMel 在 vocoder 调用时读取）
+            this._melPostprocessOptions = p.melPostprocessOptions || null;
             throwIfCancelled(abortSignal);
 
             if (gc.isChunked) {
@@ -3325,7 +3688,11 @@ class OnnxSVSPipeline {
                     : Math.max(0, gc.spec.chunkEnd - p.chunkPlan.overlap);
                 const expectedMelStart = p.committedFrames;
                 const chunkCacheKey = [
-                    'stream-v1', p.cacheBaseKey, gc.chunkIdx,
+                    // v3：缓存改为 mel 级（键不含 melPostprocess，条目携带 mpKey）。
+                    // v2：分块扩散修复了 overlap 前缀的 t=0 边界条件（非首块重噪），
+                    // chunk 输出语义变了，旧缓存条目不能复用（否则旧结果被写回
+                    // p.xt.data，overlap 区依旧是上一块的干净 mel，修复被绕过）。
+                    'stream-v3', p.melBaseKey, gc.chunkIdx,
                     gc.spec.chunkStart, gc.spec.chunkEnd,
                     expectedMelStart, expectedCommitted,
                     totalSteps, cfgStrength, cfgRescale,
@@ -3335,12 +3702,20 @@ class OnnxSVSPipeline {
                     this.modelPrecision || '', this.vocoderType || '',
                 ].join('|');
                 const cachedChunk = this._chunkCacheGet(chunkCacheKey);
-                if (cachedChunk && cachedChunk.melStart === expectedMelStart &&
-                    cachedChunk.melEnd === expectedCommitted) {
+                const chunkCacheHit = !!(cachedChunk && cachedChunk.melStart === expectedMelStart &&
+                    cachedChunk.melEnd === expectedCommitted);
+                // 音频复用还要求缓存条目由相同 melPostprocess（音色曲线）产出。
+                // 曲线变化时原始 mel 与 diffstep 产物不变：写回 p.xt.data 跳过
+                // diffusion，仅用新曲线重跑 vocoder（vocoder-only 快路径）。
+                const audioReusable = chunkCacheHit && cachedChunk.mpKey === p.mpKey;
+                if (chunkCacheHit) {
                     p.xt.data.set(cachedChunk.mel, cachedChunk.xtStart * MEL_DIM);
+                    p.committedFrames = cachedChunk.melEnd;
+                }
+
+                if (audioReusable) {
                     const segSampleOffset = cachedChunk.melStart * HOP_SIZE;
                     p.segAudio.set(cachedChunk.audio, segSampleOffset);
-                    p.committedFrames = cachedChunk.melEnd;
                     if (onChunkAudio) {
                         const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
                         const firstNoteOffsetSample = Math.floor((p.firstNoteStartBeat / bpm) * 60 * SAMPLE_RATE);
@@ -3361,36 +3736,41 @@ class OnnxSVSPipeline {
                     continue;
                 }
 
-                // 分块路径：执行 single diffusion chunk
-                const ctx = {
-                    sessions: this.sessions,
-                    xt: p.xt,
-                    ptMelData: p.ptMelData,
-                    ptFrameCount: p.ptFrameCount,
-                    combinedCond: p.combinedCond,
-                    totalSteps, cfgStrength, cfgRescale,
-                    isFP16: this.diffStepIsFP16,
-                    useStaticShapes: this.useStaticShapes,
-                    overlap: p.chunkPlan.overlap,
-                    // 透传用户选择的推理参数，否则 _runSingleDiffusionChunk → runDiffusionLoop
-                    // 会 fallback 到默认值，导致多分片与单片段输出不一致
-                    samplerName: this._currentSamplerName,
-                    cfgScheduleOpts: this._currentCfgScheduleOpts,
-                    dynamicThresholdOpts: this._currentDynamicThresholdOpts,
-                    abortSignal,
-                    // 逐 chunk 日志静默：多 chunk 流式合成时由 _suppressChunkDiffLog 控制，
-                    // diagnosticMode 仍会强制输出（runDiffusionLoop 内部检查）。
-                    suppressDoneLog: !!this._suppressChunkDiffLog,
-                };
-                const { newCommitted } = await this._diffusion._runSingleDiffusionChunk(
-                    ctx, gc.spec, onProgress,
-                    gi * progressPerChunk, progressPerChunk
-                );
+                let newCommitted = p.committedFrames;
+                if (!chunkCacheHit) {
+                    // 分块路径：执行 single diffusion chunk
+                    const ctx = {
+                        sessions: this.sessions,
+                        xt: p.xt,
+                        ptMelData: p.ptMelData,
+                        ptFrameCount: p.ptFrameCount,
+                        combinedCond: p.combinedCond,
+                        totalSteps, cfgStrength, cfgRescale,
+                        isFP16: this.diffStepIsFP16,
+                        useStaticShapes: this.useStaticShapes,
+                        overlap: p.chunkPlan.overlap,
+                        // 透传用户选择的推理参数，否则 _runSingleDiffusionChunk → runDiffusionLoop
+                        // 会 fallback 到默认值，导致多分片与单片段输出不一致
+                        samplerName: this._currentSamplerName,
+                        cfgScheduleOpts: this._currentCfgScheduleOpts,
+                        dynamicThresholdOpts: this._currentDynamicThresholdOpts,
+                        abortSignal,
+                        // 逐 chunk 日志静默：多 chunk 流式合成时由 _suppressChunkDiffLog 控制，
+                        // diagnosticMode 仍会强制输出（runDiffusionLoop 内部检查）。
+                        suppressDoneLog: !!this._suppressChunkDiffLog,
+                    };
+                    ({ newCommitted } = await this._diffusion._runSingleDiffusionChunk(
+                        ctx, gc.spec, onProgress,
+                        gi * progressPerChunk, progressPerChunk
+                    ));
+                }
 
-                // Vocoder on committed region
-                if (newCommitted > p.committedFrames) {
-                    const melStart = p.committedFrames;
-                    const melEnd = newCommitted;
+                // Vocoder on committed region（miss = 新提交区；hit+曲线变化 = 缓存窗口）
+                const vocMelStart = chunkCacheHit ? cachedChunk.melStart : p.committedFrames;
+                const vocMelEnd = chunkCacheHit ? cachedChunk.melEnd : newCommitted;
+                if (vocMelEnd > vocMelStart) {
+                    const melStart = vocMelStart;
+                    const melEnd = vocMelEnd;
                     const melLen = melEnd - melStart;
                     const melData = new Float32Array(melLen * MEL_DIM);
                     melData.set(p.xt.data.subarray(melStart * MEL_DIM, melEnd * MEL_DIM));
@@ -3424,26 +3804,44 @@ class OnnxSVSPipeline {
                         }
                     } : null;
 
-                    const segAudio = await this._runVocoderChunkedForSegment(melData, melLen, segF0, vocoderOnChunk);
+                    // 频谱后处理对齐：region mel 第 0 帧 = firstNoteStartBeat（绝对拍），
+                    // 载荷锚在分片首音符 → 基础偏移 + chunk 相对帧；窗口化处理读取
+                    // 完整 mel 的真实邻居（右侧仅最后一个 diffusion chunk 启用）。
+                    const _melBaseOffset = this._melPostprocessFrameOffset(p.firstNoteStartBeat);
+                    const segAudio = await this._runVocoderChunkedForSegment(
+                        melData, melLen, segF0, vocoderOnChunk,
+                        _melBaseOffset + melStart,
+                        { fullMel: p.xt.data, totalFrames: p.totalFrames, startFrame: melStart, payloadBase: _melBaseOffset, rightFinal: !!gc.spec.isLast },
+                    );
 
                     // 存储到分片音频（用于 Phase 4 混合；流式播放已由 vocoderOnChunk 推送，不重复推送）
                     const copyLen = Math.min(segAudio.length, p.segAudio.length - segSampleOffset);
                     p.segAudio.set(segAudio.subarray(0, copyLen), segSampleOffset);
 
-                    // Commit before the next cancellation check. Store the full
-                    // generated mel chunk, including overlap needed by the next
-                    // chunk, plus only the newly committed vocoder audio.
-                    const xtStart = gc.spec.chunkStart;
-                    const xtEnd = gc.spec.chunkEnd;
-                    this._chunkCachePut(chunkCacheKey, {
-                        melStart,
-                        melEnd: newCommitted,
-                        xtStart,
-                        xtEnd,
-                        mel: p.xt.data.slice(xtStart * MEL_DIM, xtEnd * MEL_DIM),
-                        audio: segAudio.subarray(0, copyLen),
-                    });
-                    p.committedFrames = newCommitted;
+                    if (chunkCacheHit) {
+                        // 音色曲线变化：就地更新条目的音频与 mpKey（mel 不变，不重复存储）。
+                        // 拷贝而非视图：缓存条目必须拥有自己的 buffer（与 _chunkCachePut 一致）。
+                        cachedChunk.audio = segAudio.slice(0, copyLen);
+                        cachedChunk.size = cachedChunk.audio.byteLength + cachedChunk.mel.byteLength;
+                        cachedChunk.mpKey = p.mpKey;
+                        console.log(`[MultiStream][chunk-cache] mel reused, vocoder re-run (timbre curve changed) fragment=${p.fragIdx} region=${p.regionIdx} chunk=${gc.chunkIdx}`);
+                    } else {
+                        // Commit before the next cancellation check. Store the full
+                        // generated mel chunk, including overlap needed by the next
+                        // chunk, plus only the newly committed vocoder audio.
+                        const xtStart = gc.spec.chunkStart;
+                        const xtEnd = gc.spec.chunkEnd;
+                        this._chunkCachePut(chunkCacheKey, {
+                            melStart,
+                            melEnd,
+                            xtStart,
+                            xtEnd,
+                            mel: p.xt.data.slice(xtStart * MEL_DIM, xtEnd * MEL_DIM),
+                            audio: segAudio.subarray(0, copyLen),
+                            mpKey: p.mpKey,
+                        });
+                    }
+                    p.committedFrames = melEnd;
                 }
             } else {
                 // 无分块路径：整段 diffusion + vocoder
@@ -3451,7 +3849,16 @@ class OnnxSVSPipeline {
                 this._currentPitchCurveF0 = p.f0Hz || null;
                 // 静态形状分段合成：p.xt.data 已是逐段拼接好的完整 mel，无需再扩散。
                 if (!p.segmentedMel) {
-                    await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk, null, abortSignal);
+                    // region 级 mel 缓存：音色曲线（melPostprocess）修改时原始 mel
+                    // 直接复用，跳过 diffusion，仅重跑 vocoder。
+                    const cachedRegionMel = this._melCacheGet(p.melBaseKey);
+                    if (cachedRegionMel && cachedRegionMel.frames === p.totalFrames) {
+                        p.xt.data.set(cachedRegionMel.mel, 0);
+                        console.log(`[MultiStream] region mel cache hit: fragment=${p.fragIdx} region=${p.regionIdx} (vocoder only)`);
+                    } else {
+                        await this._runDiffusionLoop(p.xt, p.totalFrames, p.ptMelData, p.ptFrameCount, p.combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, gi * progressPerChunk, progressPerChunk, null, abortSignal);
+                        this._melCachePut(p.melBaseKey, { mel: p.xt.data, frames: p.totalFrames });
+                    }
                     await gpuDrainAdaptive();
                 }
                 const fragStartSample = Math.round((p.startTimeBeat / bpm) * 60 * SAMPLE_RATE);
@@ -3474,7 +3881,13 @@ class OnnxSVSPipeline {
                         console.warn(`[MultiStream] onChunkAudio error: ${e.message}`);
                     }
                 } : null;
-                const segAudio = await this._runVocoderChunkedForSegment(p.xt.data, p.totalFrames, p.f0Hz, vocoderOnChunk);
+                // 非分块：整段 region mel 可用，窗口化处理退化为整段处理（左右都有真实边界）
+                const _melBaseOffset = this._melPostprocessFrameOffset(p.firstNoteStartBeat);
+                const segAudio = await this._runVocoderChunkedForSegment(
+                    p.xt.data, p.totalFrames, p.f0Hz, vocoderOnChunk,
+                    _melBaseOffset,
+                    { fullMel: p.xt.data, totalFrames: p.totalFrames, startFrame: 0, payloadBase: _melBaseOffset, rightFinal: true },
+                );
                 const copyLen = Math.min(segAudio.length, p.segAudio.length);
                 p.segAudio.set(segAudio.subarray(0, copyLen), 0);
 
@@ -3485,6 +3898,18 @@ class OnnxSVSPipeline {
         }
 
         // ===== Phase 4: 混合所有分片音频 =====
+        // 完整性自检（与 runDiffusionLoopChunked 末尾的断言等价）：某个 region 若
+        // 因 chunkPlan 非单调 / vocoder 提前返回导致 committedFrames 未达
+        // totalFrames，对应区间会在 segAudio 里保持全零 → 静音，静默失败比报错
+        // 更难排查。混合前显式断言。
+        for (const p of prepared) {
+            if (p.committedFrames !== p.totalFrames) {
+                throw new Error(
+                    `Multi-stream synthesis incomplete: fragment=${p.fragIdx} region=${p.regionIdx} ` +
+                    `committed ${p.committedFrames}/${p.totalFrames} frames`
+                );
+            }
+        }
         const mixedAudio = new Float32Array(totalMixedSamples);
         for (const p of prepared) {
             // Enforce score silence in the stored waveform too. Streaming callbacks
@@ -3566,7 +3991,7 @@ class OnnxSVSPipeline {
             cfgStrengthStart: options.cfgStrengthStart ?? null,
             keyframes: options.cfgScheduleKeyframes ?? null,
         };
-        // Dynamic thresholding (arXiv:2507.08965): per-frame percentile clipping
+        // Dynamic thresholding (Imagen, arXiv:2205.11487): per-frame percentile clipping
         // of CFG-predicted mel before rescale. Prevents over-exposure at high CFG.
         this._currentDynamicThresholdOpts = options.dynamicThresholdEnabled
             ? { enabled: true, percentile: options.dynamicThresholdPercentile ?? 0.995 }
@@ -3576,10 +4001,15 @@ class OnnxSVSPipeline {
             chunkFrames: options.diffStepChunkFrames || 500,
             overlapFrames: options.diffStepOverlapFrames !== undefined ? options.diffStepOverlapFrames : 50,
         };
+        // 频谱后处理（分片编辑器"音色 → 频谱"曲线）：在 vocoder 之前作用于 mel。
+        // 无参数时归一化返回 null，后续 _postprocessMel 走零开销快路径。
+        this._melPostprocessOptions = normalizeMelPostprocessOptions(options.melPostprocess);
 
         const filledNotes = this._fillNoteGaps(notes);
 
         const cacheKey = this._computeSynthCacheKey(notes, bpm, options);
+        // mel 级缓存键：不含 melPostprocess（音色曲线只改 vocoder 输入，diffstep 产物与它无关）
+        const melKey = this._computeMelCacheKey(notes, bpm, options);
         const cachedAudio = this._synthCacheGet(cacheKey);
         if (cachedAudio) {
             console.warn(`[OnnxSVSPipeline] >>> CACHE HIT <<< key=${cacheKey.substring(0, 32)}... | Returning CACHED audio, vocoder will NOT run! (Clear cache: switch model or restart app)`);
@@ -3791,6 +4221,11 @@ class OnnxSVSPipeline {
                 console.log(`[OnnxSVSPipeline] Single-note context padding: +${restFrames} rest frames before/after`);
             }
 
+            // 频谱后处理时间对齐：mel 第 0 帧对应 segNotes[0].start（contextPadding
+            // 时是垫入的前置休止 = 拍 0），载荷锚在分片首音符 → 单音符 padding 时
+            // 偏移为负（曲线向 0 夹紧，休止区沿用曲线首值）。
+            const _melBaseOffset = this._melPostprocessFrameOffset(segNotes.length > 0 ? segNotes[0].start : 0);
+
             const effectiveF0Shift = localSegShifts ? 0 : f0Shift;
             const sequences = this.notesToSequences(segNotes, bpm, f0Envelope, pitchCurveF0, effectiveF0Shift, pitchCurveOffsetSec);
             if (localSegShifts) {
@@ -3852,13 +4287,23 @@ class OnnxSVSPipeline {
             }
             let combinedCond = null;
             let xt;
+            // mel 级缓存命中：跳过 encoder+diffusion（GPU 重活），仅重跑 vocoder。
+            // 触发场景：只改了音色曲线（melPostprocess）——原始 mel 与上次完全相同。
+            let melCacheHit = false;
             if (segMel) {
                 xt = { data: segMel, dims: [1, totalFrames, MEL_DIM] };
             } else {
-                combinedCond = await this._runEncoder(sequences, sequences.tokenCount, totalFrames, ptFrameCount);
-                // GPU 排空点：encoder→diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
-                await gpuDrainAdaptive();
-                xt = this.randomNoise(totalFrames, MEL_DIM);
+                const cachedMel = this._melCacheGet(melKey);
+                if (cachedMel && cachedMel.frames === totalFrames) {
+                    xt = { data: cachedMel.mel, dims: [1, totalFrames, MEL_DIM] };
+                    melCacheHit = true;
+                    console.log('[OnnxSVSPipeline] >>> MEL CACHE HIT <<< skipping encoder+diffusion (vocoder only)');
+                } else {
+                    combinedCond = await this._runEncoder(sequences, sequences.tokenCount, totalFrames, ptFrameCount);
+                    // GPU 排空点：encoder→diffusion 切换前等待 DML 回收 encoder 的 GPU 资源
+                    await gpuDrainAdaptive();
+                    xt = this.randomNoise(totalFrames, MEL_DIM);
+                }
             }
 
             // 提前设置 F0（分块流式路径在 diffusion 期间就需要 F0 片段）
@@ -3878,9 +4323,11 @@ class OnnxSVSPipeline {
             // 导致 segmentAudios 为空、audioData 全零（静音）。因此条件必须与
             // _planChunks 的 safeChunk 逻辑一致。
             const safeChunkFrames = Math.max(50, Math.floor(chunkOpts?.chunkFrames || 0));
+            // mel 命中时不走分块流式扩散：没有 diffusion 要跑，直接整段 vocoder
+            //（调用方对"无 chunk 事件"有整段播放回退，见渲染层 _streamingStarted 兜底）。
             const useStreamingChunked = chunkOpts && chunkOpts.enabled && !this.useStaticShapes
                 && chunkOpts.chunkFrames > 0 && totalFrames > safeChunkFrames
-                && singleSegOnChunk; // 流式推送可用时才走此路径
+                && singleSegOnChunk && !melCacheHit; // 流式推送可用时才走此路径
 
             if (useStreamingChunked) {
                 // ===== 分块流式路径：每 diffusion chunk 完成后立即 vocoder 推送音频 =====
@@ -3912,11 +4359,22 @@ class OnnxSVSPipeline {
                             isLast: isLast && info.isLast,
                         });
                     };
-                    const segAudio = await this._runVocoderChunkedForSegment(melData, segFrames, segF0, wrappedOnChunk);
+                    // 窗口化 mel 后处理：左侧读上一 chunk 已提交的最终 mel，右侧仅在
+                    // 最后一个 chunk 启用（此前的帧尚非最终数据，不能当真实邻居）。
+                    const segAudio = await this._runVocoderChunkedForSegment(
+                        melData, segFrames, segF0, wrappedOnChunk,
+                        _melBaseOffset + frameStart,
+                        { fullMel: xt.data, totalFrames, startFrame: frameStart, payloadBase: _melBaseOffset, rightFinal: !!isLast },
+                    );
                     segmentAudios.push({ frameStart, audio: segAudio });
                 };
 
                 await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, onChunkMel, abortSignal);
+
+                // 缓存原始 mel：分块流式扩散也写满整个 xt.data，完成后同样可复用
+                if (!melCacheHit && !segMel) {
+                    this._melCachePut(melKey, { mel: xt.data, frames: totalFrames });
+                }
 
                 // 拼接各段音频为完整 audioData（用于缓存和返回）
                 let audioData = new Float32Array(totalSamplesEst);
@@ -3950,8 +4408,10 @@ class OnnxSVSPipeline {
 
             // ===== 常规路径：整段 diffusion → 整段 vocoder =====
             // 静态形状分段合成：xt.data 已是完整 mel，跳过 diffusion。
-            if (!segMel) {
+            if (!segMel && !melCacheHit) {
                 await this._runDiffusionLoop(xt, totalFrames, ptMelData, ptFrameCount, combinedCond, totalSteps, cfgStrength, cfgRescale, onProgress, 40, 50, null, abortSignal);
+                // 缓存原始 mel（音色曲线后续修改时复用，跳过 encoder+diffusion）
+                this._melCachePut(melKey, { mel: xt.data, frames: totalFrames });
             }
 
             // 诊断：扩散输出（vocoder 输入 mel）统计 - 检查是否包含 NaN/异常值
@@ -3997,7 +4457,7 @@ class OnnxSVSPipeline {
                 this._silenceNonVocalRegions(info.audio, filledNotes, bpm, chunkStartBeat);
                 singleSegOnChunk(info);
             } : null;
-            let audioData = await this._runVocoderChunked(xt.data, totalFrames, _silencingOnChunk);
+            let audioData = await this._runVocoderChunked(xt.data, totalFrames, _silencingOnChunk, _melBaseOffset, { fullMel: xt.data, totalFrames });
 
             // 单 note 上下文 padding：截取有效音频（丢弃前后 rest padding）
             // 注意：外部 totalFrames 始终是 50Hz 帧数（SVS mel 帧率），
@@ -4031,7 +4491,8 @@ class OnnxSVSPipeline {
         const finalAudio = new Float32Array(totalSamples);
         const weightSum = new Float32Array(totalSamples);
 
-        // Prompt mel 帧数：与单 segment 路径 (index.js:1645) 保持一致，按总帧数 10% 计算，
+        // Prompt mel 帧数：与单 segment 路径（_synthesizeImpl 中 `segments.length === 1`
+        // 分支里的 ptFrameCount 计算）保持一致，按总帧数 10% 计算，
         // 上限 50 帧、下限 10 帧。旧版多 segment 路径恒为 10 帧，导致长音频（无 ref audio）
         // 扩散 conditioning 信号弱，音色稳定性与发音清晰度下降。
         if (!ptMelData || ptFrameCount === 0) {
@@ -4094,6 +4555,7 @@ class OnnxSVSPipeline {
         //   - 自定义音高曲线（pitchCurveF0 非空）随音符 start/duration 变化 → f0Hash 变化 →
         //     全部分片失效。这两种场景下退化为整曲重算，行为与未引入分片缓存时一致。
         const segCacheKeys = new Array(segments.length);
+        const segMelCacheKeys = new Array(segments.length);
         const segCachedAudios = new Array(segments.length);
         let segCacheHits = 0;
         for (let i = 0; i < segments.length; i++) {
@@ -4101,6 +4563,9 @@ class OnnxSVSPipeline {
             const sF0Shift = this._computeSegF0Shift(f0Shift, globalTargetMedian, s.notes);
             const sKey = this._computeSegmentCacheKey(s.notes, bpm, options, s.startBeat, sF0Shift, ptFrameCount);
             segCacheKeys[i] = sKey;
+            // mel 级键（不含 melPostprocess）：音色曲线变化时 segment 原始 mel 仍可复用，
+            // 跳过该 segment 的 encoder+diffusion，仅重跑 vocoder。
+            segMelCacheKeys[i] = this._computeSegmentMelKey(s.notes, bpm, options, s.startBeat, sF0Shift, ptFrameCount);
             const hit = this._segCacheGet(sKey);
             segCachedAudios[i] = hit;
             if (hit) segCacheHits++;
@@ -4108,6 +4573,17 @@ class OnnxSVSPipeline {
         if (segCacheHits > 0) {
             console.log(`[OnnxSVSPipeline] Segment cache: ${segCacheHits}/${segments.length} hits, skipping synthesis for unchanged segments`);
         }
+
+        // 多 segment 流式推送（分片编辑器预览）：segment 粒度、按时间顺序门控发射。
+        // 旧实现本路径 onChunkAudio 全程传 null，分片 >20s 或含长休止时预览必须
+        // 等全部推理完才开播。onChunkAudio 仅 fragment-svs:synthesize（非后台）注入，
+        // 导出与主页面 svs:synthesize 不受影响。
+        const streamEmitter = onChunkAudio
+            ? this._createSegmentStreamEmitter(
+                segments, bpm,
+                filledNotes.length > 0 ? filledNotes[0].start : 0,
+                totalSamples, onChunkAudio)
+            : null;
 
         // ===== 分段遍历顺序：优先推理变动处 =====
         // 未命中分片缓存的 segment 即"被用户改动的分段"，也只有它们需要真正跑
@@ -4185,6 +4661,12 @@ class OnnxSVSPipeline {
                 if (pairResult[0].audio.length > 0) this._segCachePut(segCacheKeys[segIdx], pairResult[0].audio);
                 if (pairResult[1].audio.length > 0) this._segCachePut(segCacheKeys[segIdx + 1], pairResult[1].audio);
 
+                // 流式推送：两段完成后入队（发射器内部按时间序门控）
+                if (streamEmitter) {
+                    streamEmitter.segmentDone(segIdx, pairResult[0].audio);
+                    streamEmitter.segmentDone(segIdx + 1, pairResult[1].audio);
+                }
+
                 // Write both segments' audio to finalAudio
                 for (let si = 0; si < 2; si++) {
                     const seg = segments[segIdx + si];
@@ -4247,12 +4729,18 @@ class OnnxSVSPipeline {
                     ptMelData, ptFrameCount, totalSteps, cfgStrength, cfgRescale,
                     npuDiffBatchSize, npuVocoderBatchSize,
                     onProgress, segProgressStart, segProgressRange,
-                    null, seg.startBeat, abortSignal
+                    null, seg.startBeat, abortSignal, segMelCacheKeys[segIdx]
                 );
                 // 分片缓存写入：miss 后重算的结果存入，供后续未改动场景复用
                 if (segResult.audio.length > 0) {
                     this._segCachePut(segCacheKeys[segIdx], segResult.audio);
                 }
+            }
+
+            // 流式推送：完成后入队（含缓存命中与空结果，发射器内部按时间序门控；
+            // 乱序完成时先缓冲，前面的 segment 发射完才轮到本段）
+            if (streamEmitter) {
+                streamEmitter.segmentDone(segIdx, segResult.audio);
             }
 
             if (segResult.audio.length === 0) continue;
@@ -4597,7 +5085,7 @@ class OnnxSVSPipeline {
                     for (const key of Object.keys(this.sessions)) {
                         const reqId = `svs-dispose-webnn-${Date.now()}-${key}`;
                         ipcMain.handleOnce(`webnn:unloadModel:response:${reqId}`, () => {});
-                        wc.send('webnn:unloadModel:request', { requestId: reqId, modelId: key });
+                        wc.send(IPC_CHANNELS.WEBNN_UNLOAD_MODEL_REQUEST, { requestId: reqId, modelId: key });
                     }
                 }
             } catch (_) {}
@@ -4620,6 +5108,8 @@ class OnnxSVSPipeline {
         this._synthCacheBytes = 0;
         this._segCacheMap = null;
         this._segCacheBytes = 0;
+        this._melCacheMap = null;
+        this._melCacheBytes = 0;
         this._currentF0Hz = null;
         console.log('[OnnxSVSPipeline] ONNX Runtime sessions released');
     }

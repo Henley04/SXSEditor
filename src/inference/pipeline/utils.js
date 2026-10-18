@@ -10,7 +10,7 @@ const ort = require('onnxruntime-node');
 //     memcpy，比元素级循环快 2-3 倍
 //   - Fallback (Node 22 LTS test env, no native Float16Array): manual IEEE 754
 //     half-precision bit conversion via Uint16Array storage
-let float32ToF16Buffer, f16BufferToFloat32;
+let float32ToF16Buffer, f16BufferToFloat32, f16BufferToFloat32Into;
 
 if (typeof Float16Array !== 'undefined') {
     float32ToF16Buffer = (f32Data) => {
@@ -23,6 +23,11 @@ if (typeof Float16Array !== 'undefined') {
         const f32 = new Float32Array(f16.length);
         f32.set(f16);
         return f32;
+    };
+    f16BufferToFloat32Into = (u16Data, dst) => {
+        const f16 = new Float16Array(u16Data.buffer, u16Data.byteOffset, u16Data.length);
+        dst.set(f16);
+        return dst;
     };
 } else {
     // Shared buffer for float32 bit reinterpretation (avoid per-call allocation)
@@ -120,6 +125,12 @@ if (typeof Float16Array !== 'undefined') {
         }
         return f32;
     };
+    f16BufferToFloat32Into = (u16Data, dst) => {
+        for (let i = 0; i < u16Data.length; i++) {
+            dst[i] = f16BitsToF32(u16Data[i]);
+        }
+        return dst;
+    };
 }
 
 // Float32 → Float16 single-element conversion (returns Uint16 bit pattern).
@@ -188,6 +199,33 @@ function outputToFloat32(tensor) {
         return f16BufferToFloat32(tensor.data);
     }
     return new Float32Array(tensor.data);
+}
+
+/**
+ * 把 Model 输出写入**调用方提供的**缓冲区（P1-3）。
+ *
+ * 扩散循环每步都会调用一次 outputToFloat32：seqLen=2048 的 mel 输出是
+ * 2048×128×4B = 1MB（batch 合并路径 2MB），32 步就是几十 MB 的临时数组，
+ * 全部丢给 GC —— 这是纯分配开销，数据本身下一步就丢。
+ *
+ * 在"读完立刻消费、不保留引用"的调用点（diffusion.js 的 CFG batch 路径与
+ * no-CFG 路径，结果马上被 set 进跨步复用的 condPredBuf/uncondPredBuf）改用
+ * 这个版本，每步 0 分配。
+ *
+ * 注意：dst 会被**覆盖**，调用方必须保证上一步的结果已经用完。
+ *
+ * @param {import('onnxruntime-node').Tensor} tensor
+ * @param {Float32Array} dst 容量 >= tensor 元素数的复用缓冲
+ * @returns {Float32Array} 返回 dst 本身
+ */
+function outputToFloat32Into(tensor, dst) {
+    if (tensor.type === 'float16') {
+        return f16BufferToFloat32Into(tensor.data, dst);
+    }
+    // FP32 输出：ORT 的 data 就是 Float32Array（或 subarray 视图），dst.set 走
+    // native 拷贝，不新建数组。
+    dst.set(tensor.data);
+    return dst;
 }
 
 /**
@@ -288,6 +326,8 @@ function normalizePeakTo(arr, len, threshold = 0.95) {
 module.exports = {
     float32ToF16Buffer,
     f16BufferToFloat32,
+    f16BufferToFloat32Into,
+    outputToFloat32Into,
     float32ToFloat16,
     batchFloat32ToFloat16,
     createFloatTensor,

@@ -63,7 +63,7 @@ const SIFIGAN_STATS_FILE = 'sifigan_stats.joblib';
 const MODEL_SIZES = {
     diff_step: 846.27 * 1024 * 1024,
     vocoder: 495.42 * 1024 * 1024,
-    sifigan: 611.42 * 1024 * 1024,        // FP32 DML 优化版 (含 .data)
+    sifigan: 45.8 * 1024 * 1024,          // FP32 DML 优化版 (含 .data, 与 sifigan_fp16 相差 ~1.99x)
     sifigan_fp16: 23.1 * 1024 * 1024,     // FP16 量化版 (含 .data, ~1.99x 压缩)
     note_text_encoder: 2.93 * 1024 * 1024,
     note_pitch_encoder: 0.13 * 1024 * 1024,

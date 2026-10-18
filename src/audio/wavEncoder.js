@@ -111,10 +111,6 @@ function encodeWav(float32Array, sampleRate, numChannels = 1, bitDepth = 32) {
   return _encodeWavBase(float32Array, sampleRate, numChannels, bitDepth);
 }
 
-function encodeWavStereo(interleavedStereo, sampleRate) {
-  return _encodeWavBase(interleavedStereo, sampleRate, 2);
-}
-
 function applyEnvelopesToAudio(monoAudio, sampleRate, bpm, volumeEnvelope, panEnvelope, noteFades) {
   const numSamples = monoAudio.length;
   const stereoData = new Float32Array(numSamples * 2);
@@ -246,27 +242,6 @@ function _fadeGainAt(state, i) {
     g *= ng;
   }
   return g;
-}
-
-function _interpEnv(envelope, time) {
-  const kfs = envelope.keyframes;
-  const len = kfs.length;
-  if (len === 0) return 0;
-  if (len === 1) return kfs[0].value;
-  if (time <= kfs[0].time) return kfs[0].value;
-  if (time >= kfs[len - 1].time) return kfs[len - 1].value;
-
-  // Binary search for the segment containing `time`
-  let lo = 0, hi = len - 1;
-  while (lo < hi - 1) {
-    const mid = (lo + hi) >>> 1;
-    if (kfs[mid].time <= time) lo = mid;
-    else hi = mid;
-  }
-  const t = (time - kfs[lo].time) / (kfs[lo + 1].time - kfs[lo].time);
-  const smoothness = (kfs[lo].smoothness || 0) / 100;
-  const smoothT = smoothstep(t, smoothness);
-  return kfs[lo].value + smoothT * (kfs[lo + 1].value - kfs[lo].value);
 }
 
 // B2: use CommonJS module.exports to match the rest of src/audio modules.

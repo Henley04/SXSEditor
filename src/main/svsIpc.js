@@ -1,4 +1,3 @@
-const { ipcMain } = require('electron');
 const { OnnxSVSPipeline, SAMPLE_RATE } = require('../inference/pipeline');
 const { loadSettings } = require('./settings');
 const { getModelDir } = require('./modelDir');
@@ -8,6 +7,11 @@ const { createLazyInitializer } = require('./lazyInitializer');
 const { getRmvpeDetector, getBaseModelDir } = require('./pitchMidiIpc');
 const { SvsWorkerClient } = require('./svsWorkerClient');
 const { detectJapaneseNotes: _detectJapaneseNotes, detectEnglishNotes: _detectEnglishNotes, resolveLanguage: _resolveLanguage } = require('./languageDetection');
+const { safeHandle } = require('./ipcSafe');
+// 插件宿主：registerPluginIpc 由 registerSvsIpc() 在末尾调用（main.js 暂不可改）；
+// runPluginBackend 是三个 synthesize handler 的参数透传入口。
+const { runPluginBackend, registerPluginIpc } = require('./pluginIpc');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 let currentLanguage = null; // Track current pipeline language
 
@@ -215,6 +219,199 @@ function _makeRmvpeExtractor() {
   };
 }
 
+/**
+ * 判断某次合成请求是否走插件后端。
+ *
+ * 判定依据（渲染进程在 options 里声明）：
+ *   options.backend = { type: 'plugin', pluginId, kindId?, params?, voiceId? }
+ *
+ * 注意：不做克隆、不做字段挑选 —— 下面把**同一个 options 对象引用**交给插件，
+ * 这样 svsIpc 注入的 language / onProgress / refF0Extractor 与渲染进程传来的
+ * refAudioWavBuffer / pitchCurveF0 / refF0Data（Float32Array）都会完整到达插件。
+ *
+ * @param {object} options
+ * @returns {object|null} 插件后端描述，走内置 pipeline 时返回 null
+ */
+function _resolvePluginBackend(options) {
+  const backend = options && options.backend;
+  if (!backend || typeof backend !== 'object') return null;
+  if (backend.type !== 'plugin') return null;
+  return backend;
+}
+
+/** 分组 key：内置管线。 */
+const BUILTIN_GROUP_KEY = '__builtin__';
+
+/**
+ * 按“分片自己声明的后端”计算分组 key。
+ *
+ *   内置管线 → '__builtin__'
+ *   插件     → 'plugin:<pluginId>/<kindId>'（kindId 缺失时按 '-' 参与，
+ *              因此同一插件的不同音色不会误并到同一组）
+ *
+ * 只要求 backend.type === 'plugin' 即可成组：pluginId 缺失/非法属于
+ * “声明了插件后端却指向不存在的插件”，由 runPluginBackend().validateBackend()
+ * 给出明确错误，而不是静默退回内置管线（旧实现正是静默退回）。
+ * @param {object} frag
+ * @returns {string}
+ */
+function _backendKeyOf(frag) {
+  const backend = _resolvePluginBackend(frag && frag.options);
+  if (!backend) return BUILTIN_GROUP_KEY;
+  return `plugin:${backend.pluginId || '(missing-id)'}/${backend.kindId || '-'}`;
+}
+
+/**
+ * 把一批分片按各自声明的后端分组（保持首次出现顺序）。
+ *
+ * 这是 P1-4 的根治点：旧实现用 fragments[0] 的后端决定**整批**走向，因此
+ * “插件轨 + 内置轨混排”的工程要么把内置分片整批塞给插件（静默产出错误结果），
+ * 要么被全等校验直接硬报错。分组之后每个分片只走自己那条路。
+ *
+ * @param {Array} fragments
+ * @returns {Array<{key:string, backend:object|null, fragments:object[]}>}
+ */
+function _groupFragmentsByBackend(fragments) {
+  const map = new Map();
+  for (const frag of fragments || []) {
+    const key = _backendKeyOf(frag);
+    const group = map.get(key);
+    if (group) {
+      group.fragments.push(frag);
+    } else {
+      map.set(key, { key, backend: _resolvePluginBackend(frag && frag.options), fragments: [frag] });
+    }
+  }
+  return Array.from(map.values());
+}
+
+/**
+ * 把某一组（占 0-100 中的 [startPercent, endPercent] 区间）的进度换算回全局百分比。
+ *
+ * 分组渲染后每组内部都会报 0→100，直接透传会让 UI 进度条反复跳回 0，
+ * 这里按分片段数占比线性缩放到全局区间。只有一组时区间就是 0-100，原样返回
+ * 同一个 opts 引用（保持既有行为的字节级一致）。
+ */
+function _scopeProgress(opts, startPercent, endPercent) {
+  if (startPercent <= 0 && endPercent >= 100) return opts;
+  const onProgress = opts && opts.onProgress;
+  const span = Math.max(0, endPercent - startPercent);
+  return {
+    ...opts,
+    onProgress: (progress) => {
+      if (typeof onProgress !== 'function') return;
+      const clamped = Math.max(0, Math.min(100, Number(progress) || 0));
+      onProgress(Math.round(startPercent + (clamped / 100) * span));
+    },
+  };
+}
+
+// 插件组混音缓冲的时长上限（秒）。startTimeBeat / bpm 都来自渲染进程，损坏或
+// 恶意的工程数据可以把 offset 放大到任意值，而下面会按它一次性 new Float32Array，
+// 没有上界就等于把 OOM 的开关交给了渲染进程。30 分钟 @ 24kHz ≈ 1.7e8 采样
+// （约 170 MB），足以覆盖任何真实工程；超出的按错误处理而不是硬撑。
+const MAX_PLUGIN_MIX_SECONDS = 30 * 60;
+
+/**
+ * 单组插件分片：逐分片调用插件，再按 startTimeBeat 混合成一条单声道，
+ * 与内置 synthesizeMultiStreaming 的返回形态（Float32Array，beat 0 起算）保持一致。
+ *
+ * 组内后端一致由 _groupFragmentsByBackend 保证，因此无需再逐个比对
+ * （旧实现在这里做全等校验并在不一致时报“无法混合”——那正是本次要消除的
+ * “混排即失败”行为）。真正不可解的混排现在会按各自的后端分别渲染。
+ * @param {object} args
+ * @returns {Promise<{ok:boolean, audio?:Float32Array, error?:string}>}
+ */
+async function _runPluginGroup({ group, bpm, sender, sampleRate }) {
+  const sr = Number.isFinite(sampleRate) ? sampleRate : SAMPLE_RATE;
+  const maxSamples = Math.floor(MAX_PLUGIN_MIX_SECONDS * sr);
+  // bpm 同样来自渲染进程：非正数 / 非有限值时退回 120（与旧实现的 `bpm || 120`
+  // 一致），但极小值（如 1e-9）会把 offset 放大几个数量级，交给下面的上限兜住。
+  const effectiveBpm = Number.isFinite(bpm) && bpm > 0 ? bpm : 120;
+  const parts = [];
+  let totalSamples = 0;
+
+  for (let i = 0; i < group.fragments.length; i++) {
+    const frag = group.fragments[i];
+    // ★ 传 frag.options 本身：分片级完整 options（含该分片的 pitchCurveF0 等）
+    const result = await runPluginBackend({
+      backend: group.backend,
+      notes: frag.notes,
+      bpm,
+      options: frag.options,
+      sender,
+      sampleRate: sr,
+      trackId: frag.trackId || frag.id || null,
+    });
+    if (!result || !result.ok) {
+      // 带上分片位置与 trackId：混排工程里“哪个插件挂了”必须一眼可见
+      const reason = result && result.error ? result.error : '插件合成失败';
+      const track = frag.trackId || frag.id || `#${i + 1}`;
+      return { ok: false, error: `分片 ${i + 1}/${group.fragments.length}（trackId=${track}）合成失败：${reason}` };
+    }
+
+    // startTimeBeat 必须是有限的非负数：NaN/Infinity 会让 offset 变成 NaN
+    // （Math.max(0, NaN) 仍是 NaN，随后的下标写全是 undefined）或天文数字。
+    const startBeat = Number(frag.startTimeBeat);
+    if (!Number.isFinite(startBeat) || startBeat < 0) {
+      return { ok: false, error: `分片 ${i + 1}/${group.fragments.length}（trackId=${frag.trackId || frag.id || `#${i + 1}`}）的 startTimeBeat 非法：${frag.startTimeBeat}` };
+    }
+    const offset = Math.max(0, Math.round(((startBeat / effectiveBpm) * 60) * sr));
+    const endSample = offset + result.audio.length;
+    if (!Number.isFinite(endSample) || endSample > maxSamples) {
+      return {
+        ok: false,
+        error: `分片 ${i + 1}/${group.fragments.length}（trackId=${frag.trackId || frag.id || `#${i + 1}`}）的混音长度 ${endSample} 采样`
+          + ` 超出上限（${MAX_PLUGIN_MIX_SECONDS} 秒 @ ${sr} Hz = ${maxSamples} 采样）：请检查工程的 startTimeBeat / BPM`,
+      };
+    }
+    parts.push({ audio: result.audio, offset });
+    totalSamples = Math.max(totalSamples, endSample);
+  }
+
+  // 只有最后一次分配（混音缓冲），分片音频是插件直接产出的，不再逐样本拷贝中间态
+  const mixed = new Float32Array(totalSamples);
+  for (const part of parts) {
+    for (let i = 0; i < part.audio.length; i++) mixed[part.offset + i] += part.audio[i];
+  }
+  return { ok: true, audio: mixed };
+}
+
+/**
+ * 把各组已渲染好的音频叠加到同一条 beat 0 起算的单声道。
+ *
+ * 每组结果都已经是“绝对路径”布局（内置管线 Phase 4 与插件组混合都按
+ * startTimeBeat 从 beat 0 起算），所以这里直接逐样本相加即可。
+ *
+ * 归一化：多组叠加后峰值可能远超 1.0（两条各 0.95 的音轨同时段叠加达 1.9），
+ * Int16 转换会严重削波。这里统一按 0.95 阈值归一化 —— 与内置
+ * synthesizeMultiStreaming 末尾的 normalizePeakTo 同一阈值、同一语义。
+ * @param {Float32Array[]} tracks
+ * @returns {Float32Array}
+ */
+function _mixTrackAudio(tracks) {
+  let totalSamples = 0;
+  for (const audio of tracks) {
+    if (audio && audio.length > totalSamples) totalSamples = audio.length;
+  }
+  const mixed = new Float32Array(totalSamples);
+  let peak = 0;
+  for (const audio of tracks) {
+    if (!audio || audio.length === 0) continue;
+    for (let i = 0; i < audio.length; i++) {
+      const v = mixed[i] + audio[i];
+      mixed[i] = v;
+      const abs = v < 0 ? -v : v;
+      if (abs > peak) peak = abs;
+    }
+  }
+  if (peak > 0.95) {
+    const gain = 0.95 / peak;
+    for (let i = 0; i < totalSamples; i++) mixed[i] *= gain;
+  }
+  return mixed;
+}
+
 function registerSvsIpc() {
   // 当 int8 目录下检测到旧版 diff_step 模型（cond≠1024）时，向触发初始化的窗口推送提示事件。
   // 由渲染进程用自身 i18n 渲染弹窗文案（主/渲染进程双语字典各自维护）。
@@ -224,7 +421,7 @@ function registerSvsIpc() {
     _diffStepIncompatibleNotified = true;
     try {
       if (win && !win.isDestroyed()) {
-        win.send('svs:model-incompatible');
+        win.send(IPC_CHANNELS.SVS_MODEL_INCOMPATIBLE);
       }
     } catch (_) {}
   }
@@ -234,14 +431,14 @@ function registerSvsIpc() {
     return !!(pipeline && pipeline.diffStepLegacyInt8Incompatible === true);
   }
 
-  ipcMain.handle('svs:init', async (event) => {
+  safeHandle(IPC_CHANNELS.SVS_INIT, async (event) => {
     await svsPipelineLazy.get();
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
     return { success: true, diffStepLegacyInt8Incompatible: incompatible };
   });
 
-  ipcMain.handle('svs:synthesize', async (event, { notes, bpm, options }) => {
+  safeHandle(IPC_CHANNELS.SVS_SYNTHESIZE, async (event, { notes, bpm, options }) => {
     // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
@@ -249,6 +446,57 @@ function registerSvsIpc() {
 
     // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);
+
+    // ---- 合成参数装配（内置管线与插件共用同一份 opts）----
+    // 装配必须排在"内置管线初始化"之前：插件后端不依赖任何 ONNX 模型，若把插件
+    // 派发塞在 ensurePipelineLanguage() 之后，没装 SoulX-Singer 模型的用户就
+    // 完全用不了第三方后端 —— 与插件系统"允许非 SoulX 模型"的立项目标正面冲突。
+    const opts = options || {};
+    opts.language = language; // 用于缓存 key 区分（避免命中错误模型的结果）
+    // 进度回调：推送 'svs:progress' 到主窗口，与 fragment-svs:progress 对齐。
+    // 之前主页面合成无进度推送，导致推理预览百分比不显示。
+    const win = event.sender;
+    let lastProgressSentAt = 0;
+    let lastProgressValue = -1;
+    opts.onProgress = (progress) => {
+      const now = Date.now();
+      if (progress < 100 && now - lastProgressSentAt < 100 && Math.abs(progress - lastProgressValue) < 2) return;
+      lastProgressSentAt = now;
+      lastProgressValue = progress;
+      try {
+        if (win && !win.isDestroyed()) win.send(IPC_CHANNELS.SVS_PROGRESS, { progress });
+      } catch (_) {}
+    };
+    // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）。
+    // 插件路径下 RMVPE 往往压根没初始化（用户没装内置模型），这里容错处理：
+    // 取不到就不注入，由插件自己的 F0 逻辑兜底，不能因为内置模型缺失而阻塞插件。
+    if (opts.autoShift && opts.refAudioWavBuffer) {
+      try { opts.refF0Extractor = _makeRmvpeExtractor(); } catch (_) { opts.refF0Extractor = null; }
+    }
+
+    // ---- 插件后端透传（options.backend = {type:'plugin', ...}）----
+    // 此刻 opts 已经是"内置 pipeline.synthesize() 会收到的完整 options"：
+    // 渲染进程的原始参数 + 这里注入的 language / onProgress / refF0Extractor。
+    // 直接把这一个引用交给插件，保证给模型的参数全部能给到插件。
+    //
+    // ★ 引用共享的代价：插件可以改写 opts。因此一旦命中插件分支就立刻 return，
+    //   绝不再把同一个 opts 交给内置 pipeline（否则内置链路会读到被插件改过的
+    //   参数）。若将来需要"插件 + 内置"双路并行，调用方必须自行浅拷贝 opts。
+    const pluginBackend = _resolvePluginBackend(opts);
+    if (pluginBackend) {
+      const pluginResult = await runPluginBackend({
+        backend: pluginBackend,
+        notes,
+        bpm,
+        options: opts,
+        sender: win,
+        sampleRate: SAMPLE_RATE,
+      });
+      if (!pluginResult.ok) {
+        throw new Error(`PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}`);
+      }
+      return pluginResult.audio;
+    }
 
     // Check if JP models are needed but missing (only in jp-lora mode)
     if (language === 'ja') {
@@ -266,26 +514,7 @@ function registerSvsIpc() {
       if (!pipeline) {
         throw new Error(t('error.svsNotInitialized'));
       }
-      // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）
-      const opts = options || {};
-      opts.language = language; // 用于缓存 key 区分（避免命中错误模型的结果）
-      // 进度回调：推送 'svs:progress' 到主窗口，与 fragment-svs:progress 对齐。
-      // 之前主页面合成无进度推送，导致推理预览百分比不显示。
-      const win = event.sender;
-      let lastProgressSentAt = 0;
-      let lastProgressValue = -1;
-      opts.onProgress = (progress) => {
-        const now = Date.now();
-        if (progress < 100 && now - lastProgressSentAt < 100 && Math.abs(progress - lastProgressValue) < 2) return;
-        lastProgressSentAt = now;
-        lastProgressValue = progress;
-        try {
-          if (win && !win.isDestroyed()) win.send('svs:progress', { progress });
-        } catch (_) {}
-      };
-      if (opts.autoShift && opts.refAudioWavBuffer) {
-        opts.refF0Extractor = _makeRmvpeExtractor();
-      }
+
       return await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts), pipeline);
     } catch (err) {
       console.error('[Main] svs:synthesize failed:', err.message);
@@ -295,15 +524,56 @@ function registerSvsIpc() {
 
   // 多分片时间交错流式合成（主页面 Play All 启用分块时使用）
   // 接收所有分片，按时间顺序交错推理各分片的 diffusion chunk，边推理边推送音频
-  ipcMain.handle('svs:synthesizeMultiStreaming', async (event, { fragments, bpm }) => {
+  safeHandle(IPC_CHANNELS.SVS_SYNTHESIZE_MULTI_STREAMING, async (event, { fragments, bpm }) => {
     const settingsForLang = loadSettings();
     const japaneseVocalization = settingsForLang.japaneseVocalization || 'hybrid';
 
-    // 确定第一个分片的语言用于 pipeline 初始化（假设所有分片同语言）
-    const firstNotes = fragments && fragments.length > 0 ? fragments[0].notes : [];
-    const language = _resolveLanguage(firstNotes, japaneseVocalization);
+    // 确定语言用于 pipeline 初始化（假设所有内置分片同语言）。
+    // 注意：必须取**内置分片**的首个音符——旧实现取 fragments[0]，当第一条轨是
+    // 插件轨时，会拿插件轨的语言去初始化管线（日语/英语分流取决于轨道顺序）。
+    const groups = _groupFragmentsByBackend(fragments);
+    const builtinGroup = groups.find((g) => !g.backend) || null;
+    const langNotes = builtinGroup
+      ? (builtinGroup.fragments[0].notes || [])
+      : (fragments && fragments.length > 0 ? fragments[0].notes || [] : []);
+    const language = _resolveLanguage(langNotes, japaneseVocalization);
 
-    if (language === 'ja') {
+    // 参数装配与插件派发一律排在内置管线初始化之前（理由同 svs:synthesize）。
+    const win = event.sender;
+    const opts = {
+      onProgress: (progress) => {
+        try {
+          if (win && !win.isDestroyed()) {
+            win.send(IPC_CHANNELS.SVS_PROGRESS, { progress });
+          }
+        } catch (_) {}
+      },
+      onChunkAudio: (chunkInfo) => {
+        try {
+          if (win && !win.isDestroyed()) {
+            win.send(IPC_CHANNELS.SVS_CHUNK_AUDIO, chunkInfo);
+          }
+        } catch (_) {}
+      },
+    };
+    // 注入 RMVPE F0 提取器（所有匹配的 fragment 都需要注入，
+    // 否则后续 fragment 在 pipeline 中回退到自相关 F0，导致 autoShift 值不一致）
+    // 插件路径下 RMVPE 可能未初始化，容错不注入（插件用自己的 F0 逻辑）。
+    for (const frag of fragments) {
+      if (frag.options && frag.options.autoShift && frag.options.refAudioWavBuffer) {
+        try { frag.options.refF0Extractor = _makeRmvpeExtractor(); } catch (_) { frag.options.refF0Extractor = null; }
+      }
+    }
+
+    // ---- 逐分片按自己的后端路由（P1-4）----
+    // 分片级 options 在这里已经注入完 refF0Extractor，是“内置 pipeline 会收到
+    // 的完整 options”；插件拿到的就是这些同一引用（见 _resolvePluginBackend 注释）。
+    //
+    // 每条脉各走各的路：插件组 → runPluginBackend，内置组 → 内置 pipeline，
+    // 两组结果都在 beat 0 起算的同一条时间轴上，最后叠加成一条单声道。
+    // 只有真的存在内置分片时才初始化内置管线 —— 纯插件工程依旧不需要 SXS 模型
+    // （这是“插件派发排在 ensurePipelineLanguage 之前”的那条硬约束）。
+    if (builtinGroup && language === 'ja') {
       const settings = loadSettings();
       const precision = settings.modelPrecision || 'fp32';
       const modelDir = getModelDir();
@@ -313,43 +583,53 @@ function registerSvsIpc() {
       }
     }
 
-    try {
-      const pipeline = await ensurePipelineLanguage(language);
-      if (!pipeline) {
-        throw new Error(t('error.svsNotInitialized'));
-      }
-      const win = event.sender;
-      const opts = {
-        onProgress: (progress) => {
-          try {
-            if (win && !win.isDestroyed()) {
-              win.send('svs:progress', { progress });
-            }
-          } catch (_) {}
-        },
-        onChunkAudio: (chunkInfo) => {
-          try {
-            if (win && !win.isDestroyed()) {
-              win.send('svs:chunk-audio', chunkInfo);
-            }
-          } catch (_) {}
-        },
-      };
-      // 注入 RMVPE F0 提取器（所有匹配的 fragment 都需要注入，
-      // 否则后续 fragment 在 pipeline 中回退到自相关 F0，导致 autoShift 值不一致）
-      for (const frag of fragments) {
-        if (frag.options && frag.options.autoShift && frag.options.refAudioWavBuffer) {
-          frag.options.refF0Extractor = _makeRmvpeExtractor();
+    const totalFragments = groups.reduce((n, g) => n + g.fragments.length, 0);
+    const tracks = [];
+    let doneFragments = 0;
+    for (const group of groups) {
+      const startPercent = totalFragments > 0 ? Math.round((doneFragments / totalFragments) * 100) : 0;
+      doneFragments += group.fragments.length;
+      const endPercent = totalFragments > 0 ? Math.round((doneFragments / totalFragments) * 100) : 100;
+
+      if (group.backend) {
+        const pluginResult = await _runPluginGroup({
+          group,
+          bpm,
+          sender: win,
+          sampleRate: SAMPLE_RATE,
+        });
+        if (!pluginResult.ok) {
+          throw new Error(`PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}`);
+        }
+        tracks.push(pluginResult.audio);
+      } else {
+        try {
+          const pipeline = await ensurePipelineLanguage(language);
+          if (!pipeline) {
+            throw new Error(t('error.svsNotInitialized'));
+          }
+          // 多组并行渲染时每组内部都报 0→100，缩放到自己的区间避免进度条回跳
+          const builtinOpts = _scopeProgress(opts, startPercent, endPercent);
+          const builtinAudio = await _withSynthMutex(
+            () => pipeline.synthesizeMultiStreaming(group.fragments, bpm, builtinOpts),
+            pipeline,
+          );
+          // 明确报错而不是让空值一路滑到 _mixTrackAudio 里抛 TypeError
+          if (!builtinAudio || typeof builtinAudio.length !== 'number') {
+            throw new Error('内置管线多分片合成未返回音频数据');
+          }
+          tracks.push(builtinAudio);
+        } catch (err) {
+          console.error('[Main] svs:synthesizeMultiStreaming failed:', err.message);
+          throw err;
         }
       }
-      return await _withSynthMutex(() => pipeline.synthesizeMultiStreaming(fragments, bpm, opts), pipeline);
-    } catch (err) {
-      console.error('[Main] svs:synthesizeMultiStreaming failed:', err.message);
-      throw err;
     }
+
+    return _mixTrackAudio(tracks);
   });
 
-  ipcMain.handle('svs:cancel', async () => {
+  safeHandle(IPC_CHANNELS.SVS_CANCEL, async () => {
     // 优先命中当前持有 mutex 的实例（覆盖 lazy 实例尚未注册的初始化窗口，
     // 以及延迟重置清空 getInstance() 后仍在收尾的场景）。
     const target = _activeCancellable || svsPipelineLazy.getInstance();
@@ -368,23 +648,23 @@ function registerSvsIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('svs:dispose', async () => {
+  safeHandle(IPC_CHANNELS.SVS_DISPOSE, async () => {
     resetSvsPipeline();
     return { success: true };
   });
 
-  ipcMain.handle('fragment-svs:getSampleRate', async () => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_GET_SAMPLE_RATE, async () => {
     return SAMPLE_RATE;
   });
 
-  ipcMain.handle('fragment-svs:init', async (event) => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_INIT, async (event) => {
     await svsPipelineLazy.get();
     const incompatible = getDiffStepIncompatible();
     if (incompatible) notifyDiffStepIncompatible(event.sender);
     return { success: true, diffStepLegacyInt8Incompatible: incompatible };
   });
 
-  ipcMain.handle('fragment-svs:synthesize', async (event, { notes, bpm, options }) => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_SYNTHESIZE, async (event, { notes, bpm, options }) => {
     // Load japaneseVocalization setting: 'hybrid' (default) / 'en-phonemes' use English phonemes on base model;
     // 'jp-lora' uses JP LoRA models (in development)
     const settingsForLang = loadSettings();
@@ -392,6 +672,65 @@ function registerSvsIpc() {
 
     // Detect language: en-phonemes / hybrid mode always uses base model (null); jp-lora mode uses original logic
     const language = _resolveLanguage(notes, japaneseVocalization);
+
+    // 参数装配与插件派发一律排在内置管线初始化之前（理由同 svs:synthesize）：
+    // 插件后端不依赖内置 ONNX 模型，没装 SoulX-Singer 也要能用第三方后端。
+    const win = event.sender;
+    const opts = options || {};
+    opts.language = language; // 用于缓存 key 区分（避免命中错误模型的结果）
+    // 进度推送节流：与 svs:synthesize 一致（100ms / 2% 变化阈值）。长合成时
+    // diffusion 每步都回调，无节流会形成 IPC 风暴（每秒数百次 win.send +
+    // Float32Array 之外的序列化开销），拖慢主进程与渲染进程。
+    let lastProgressSentAt = 0;
+    let lastProgressValue = -1;
+    opts.onProgress = (progress) => {
+      const now = Date.now();
+      if (progress < 100 && now - lastProgressSentAt < 100 && Math.abs(progress - lastProgressValue) < 2) return;
+      lastProgressSentAt = now;
+      lastProgressValue = progress;
+      try {
+        if (!win.isDestroyed()) {
+          win.send(IPC_CHANNELS.FRAGMENT_SVS_PROGRESS, { progress });
+        }
+      } catch (_) {}
+    };
+    // 流式 chunk 音频推送：vocoder 每完成一个 chunk 即推送到 fragment 窗口，实现边合成边播放。
+    // background=true（编辑后自动实时推理）时不需要边合成边播，跳过 chunk 推送以免
+    // 每帧 Float32Array 白白跨进程序列化；合成结果本身完全一致。
+    opts.onChunkAudio = opts.background === true
+      ? null
+      : (chunkInfo) => {
+        try {
+          if (!win.isDestroyed()) {
+            win.send(IPC_CHANNELS.FRAGMENT_SVS_CHUNK_AUDIO, chunkInfo);
+          }
+        } catch (_) {}
+      };
+    // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）。
+    // 插件路径下 RMVPE 可能未初始化，容错不注入，由插件自己的 F0 逻辑兜底。
+    if (opts.autoShift && opts.refAudioWavBuffer) {
+      try { opts.refF0Extractor = _makeRmvpeExtractor(); } catch (_) { opts.refF0Extractor = null; }
+    }
+
+    // ---- 插件后端透传 ----
+    // 与 svs:synthesize 同一套语义：opts 是内置 pipeline 会收到的完整 options，
+    // 插件拿到同一引用；命中插件分支直接 return，不再调用内置 pipeline。
+    // 返回值仍是 { data }，渲染层无需区分后端。
+    const pluginBackend = _resolvePluginBackend(opts);
+    if (pluginBackend) {
+      const pluginResult = await runPluginBackend({
+        backend: pluginBackend,
+        notes,
+        bpm,
+        options: opts,
+        sender: win,
+        sampleRate: SAMPLE_RATE,
+      });
+      if (!pluginResult.ok) {
+        return { error: `PLUGIN_SYNTHESIS_FAILED: ${pluginResult.error}` };
+      }
+      return { data: pluginResult.audio };
+    }
 
     // Check if JP models are needed but missing (only in jp-lora mode)
     if (language === 'ja') {
@@ -415,32 +754,6 @@ function registerSvsIpc() {
       return { error: t('error.fragmentSvsNotInitialized') };
     }
 
-    const win = event.sender;
-    const opts = options || {};
-    opts.language = language; // 用于缓存 key 区分（避免命中错误模型的结果）
-    opts.onProgress = (progress) => {
-      try {
-        if (!win.isDestroyed()) {
-          win.send('fragment-svs:progress', { progress });
-        }
-      } catch (_) {}
-    };
-    // 流式 chunk 音频推送：vocoder 每完成一个 chunk 即推送到 fragment 窗口，实现边合成边播放。
-    // background=true（编辑后自动实时推理）时不需要边合成边播，跳过 chunk 推送以免
-    // 每帧 Float32Array 白白跨进程序列化；合成结果本身完全一致。
-    opts.onChunkAudio = opts.background === true
-      ? null
-      : (chunkInfo) => {
-        try {
-          if (!win.isDestroyed()) {
-            win.send('fragment-svs:chunk-audio', chunkInfo);
-          }
-        } catch (_) {}
-      };
-    // 注入 RMVPE F0 提取器（仅在 autoShift + refAudio 路径下使用）
-    if (opts.autoShift && opts.refAudioWavBuffer) {
-      opts.refF0Extractor = _makeRmvpeExtractor();
-    }
     try {
       const data = await _withSynthMutex(() => pipeline.synthesize(notes, bpm, opts), pipeline);
       return { data };
@@ -449,11 +762,11 @@ function registerSvsIpc() {
     }
   });
 
-  ipcMain.handle('fragment-svs:dispose', async () => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_DISPOSE, async () => {
     return { success: true };
   });
 
-  ipcMain.handle('fragment-svs:resolvePhonemes', async (event, { lyrics }) => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_SVS_RESOLVE_PHONEMES, async (event, { lyrics }) => {
     try {
       const pipeline = svsPipelineLazy.getInstance();
       if (!pipeline || !pipeline.initialized) {
@@ -470,12 +783,17 @@ function registerSvsIpc() {
     }
   });
 
-  ipcMain.handle('svs:checkJpModels', async () => {
+  safeHandle(IPC_CHANNELS.SVS_CHECK_JP_MODELS, async () => {
     const settings = loadSettings();
     const precision = settings.modelPrecision || 'fp32';
     const modelDir = getModelDir();
     return checkJpModelsExist(modelDir, precision);
   });
+
+  // 插件宿主 IPC（plugin:*）与 SVS 同属 STEP 4 重型阶段，且 svsIpc 是插件
+  // 合成的调用方，因此在这里一并注册。main.js 解锁后可挪到 registerSvsIpc()
+  // 旁边单独一行调用，行为等价。
+  registerPluginIpc();
 }
 
 module.exports = {

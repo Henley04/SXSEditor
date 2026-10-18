@@ -278,4 +278,112 @@ describe('inference/pipeline/postprocessing - DSP', () => {
       expect(out.length).to.equal(0);
     });
   });
+
+  describe('_oversample2xAntiAlias (2× oversampling anti-aliasing)', () => {
+    const { oversample2xAntiAlias } = require('../src/inference/pipeline/postprocessing').__test;
+
+    function tone(freq, sr, seconds = 1) {
+      const n = Math.round(sr * seconds);
+      const a = new Float32Array(n);
+      for (let i = 0; i < n; i++) a[i] = Math.sin(2 * Math.PI * freq * i / sr);
+      return a;
+    }
+
+    function rms(a, skip = 2000) {
+      let s = 0, c = 0;
+      for (let i = skip; i < a.length; i++) { s += a[i] * a[i]; c++; }
+      return Math.sqrt(s / c);
+    }
+
+    // 回归：零填充后必须补 L=2 增益，否则整条管线 −6.02 dB（曾导致参考音频
+    // mel 整体下移、extractRefF0FromWav 的 minRms 门限把安静段误判为静音）。
+    it('should preserve passband level (no −6 dB zero-stuff loss)', () => {
+      const x = tone(1000, 48000);
+      const y = oversample2xAntiAlias(x, 48000, 24000);
+      const gainDb = 20 * Math.log10(rms(y) / rms(x));
+      expect(gainDb).to.be.closeTo(0, 0.5);
+    });
+
+    it('should keep DC gain at unity', () => {
+      const x = new Float32Array(4800).fill(0.5);
+      const y = oversample2xAntiAlias(x, 48000, 24000);
+      expect(y[y.length - 1]).to.be.closeTo(0.5, 0.01);
+    });
+
+    it('should attenuate content above the destination Nyquist', () => {
+      const x = tone(20000, 48000);
+      const y = oversample2xAntiAlias(x, 48000, 24000);
+      const gainDb = 20 * Math.log10(rms(y) / rms(x));
+      expect(gainDb).to.be.lessThan(-10);
+    });
+  });
+
+  describe('_applyStreamGain (streaming preview shared gain)', () => {
+    const { applyStreamGain } = require('../src/inference/pipeline/postprocessing').__test;
+
+    function peakOf(arr) {
+      let p = 0;
+      for (let i = 0; i < arr.length; i++) p = Math.max(p, Math.abs(arr[i]));
+      return p;
+    }
+
+    it('should leave quiet chunks untouched when nothing exceeds the ceiling', () => {
+      const state = { gain: 1 };
+      const seg = new Float32Array([0.4, -0.4, 0.2]);
+      applyStreamGain(seg, state);
+      expect(seg[0]).to.be.closeTo(0.4, 1e-6);
+      expect(seg[1]).to.be.closeTo(-0.4, 1e-6);
+      expect(seg[2]).to.be.closeTo(0.2, 1e-6);
+      expect(state.gain).to.equal(1);
+    });
+
+    it('should keep relative dynamics across chunks (no per-chunk flattening)', () => {
+      const state = { gain: 1 };
+      // 弱唱 → 高潮 → 中段 → 弱尾，对应报告里被压缩 8.4 dB 的序列
+      const peaks = [0.40, 2.50, 1.20, 0.50];
+      const outPeaks = peaks.map((p) => {
+        const seg = new Float32Array(1024).fill(p); // 常值段峰值 = p
+        applyStreamGain(seg, state);
+        return peakOf(seg);
+      });
+      // 第一段不被压；后续段统一用同一增益（0.95/2.50 = 0.38）
+      expect(outPeaks[0]).to.be.closeTo(0.40, 1e-5);
+      expect(outPeaks[1]).to.be.closeTo(0.95, 1e-5);
+      expect(outPeaks[2]).to.be.closeTo(1.20 * 0.38, 1e-3);
+      expect(outPeaks[3]).to.be.closeTo(0.50 * 0.38, 1e-3);
+      // 原始动态 0.40..2.50 = 15.9 dB。逐块独立归一化会把 2.50/1.20 都压到 0.95
+      // （15.9 dB → 7.5 dB）；共享增益只让"更响的段"触发一次下调，之后所有段
+      // 按同一系数缩放，段间比例保持不变。
+      const ratioBefore = peaks[3] / peaks[2];
+      const ratioAfter = outPeaks[3] / outPeaks[2];
+      expect(ratioAfter).to.be.closeTo(ratioBefore, 1e-3);
+    });
+
+    it('should fade in over ~5 ms when the shared gain drops (no boundary step)', () => {
+      const state = { gain: 1 };
+      const loud = new Float32Array(1024).fill(2.0);
+      applyStreamGain(loud, state);
+      // 段首从 0 淡入（抹掉阶跃），120 样本后到达新增益 0.95/2.0 → 幅度 0.95
+      expect(loud[0]).to.be.closeTo(0, 1e-6);
+      expect(loud[120]).to.be.closeTo(0.95, 1e-5);
+      expect(state.gain).to.be.closeTo(0.475, 1e-6);
+      // 整段不超过 ceiling（不会在设备端硬削波）
+      expect(peakOf(loud)).to.be.at.most(0.95 + 1e-5);
+      // 下一段用同一增益，边界处没有阶跃
+      const nextSeg = new Float32Array(1024).fill(2.0);
+      applyStreamGain(nextSeg, state);
+      expect(nextSeg[0]).to.be.closeTo(loud[loud.length - 1], 1e-5);
+    });
+
+    it('should never raise the gain back (pushed audio cannot be retro-scaled)', () => {
+      const state = { gain: 1 };
+      const loud = new Float32Array(64).fill(2.0);
+      applyStreamGain(loud, state);
+      const gainAfterLoud = state.gain;
+      const quiet = new Float32Array(64).fill(0.01);
+      applyStreamGain(quiet, state);
+      expect(state.gain).to.equal(gainAfterLoud);
+      expect(peakOf(quiet)).to.be.closeTo(0.01 * gainAfterLoud, 1e-6);
+    });
+  });
 });

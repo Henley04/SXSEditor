@@ -6,6 +6,8 @@ const { isPathAllowed, isSystemPath } = require('./security');
 const { getModelDir } = require('./modelDir');
 // 系统级 PnP NPU 检测（独立模块，避免与 gpuInfo 循环 require）
 const { detectNPUByPnp, invalidatePnpNpuCache } = require('./npuHardware');
+const { safeHandle } = require('./ipcSafe');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 // Model files read via webnn:readModelFile are capped at 2GB to prevent a
 // compromised renderer from forcing the main process to allocate unbounded
@@ -163,9 +165,9 @@ function _isCacheExpired() {
 }
 
 function registerWebnnIpc() {
-  ipcMain.handle('webnn:detectNPU', async () => detectNPUAvailability());
+  safeHandle(IPC_CHANNELS.WEBNN_DETECT_NPU, async () => detectNPUAvailability());
 
-  ipcMain.handle('webnn:loadModel', async (_, modelId, modelPath, options) => {
+  safeHandle(IPC_CHANNELS.WEBNN_LOAD_MODEL, async (_, modelId, modelPath, options) => {
     const wc = getMainWindowWebContents();
     if (!wc) return { success: false, error: 'No renderer window' };
 
@@ -185,11 +187,11 @@ function registerWebnnIpc() {
         resolve(result);
       });
 
-      wc.send('webnn:loadModel:request', { requestId, modelId, modelPath, options });
+      wc.send(IPC_CHANNELS.WEBNN_LOAD_MODEL_REQUEST, { requestId, modelId, modelPath, options });
     });
   });
 
-  ipcMain.handle('webnn:unloadModel', async (_, modelId) => {
+  safeHandle(IPC_CHANNELS.WEBNN_UNLOAD_MODEL, async (_, modelId) => {
     const wc = getMainWindowWebContents();
     if (!wc) return { success: false, error: 'No renderer window' };
 
@@ -206,11 +208,11 @@ function registerWebnnIpc() {
         resolve(result);
       });
 
-      wc.send('webnn:unloadModel:request', { requestId, modelId });
+      wc.send(IPC_CHANNELS.WEBNN_UNLOAD_MODEL_REQUEST, { requestId, modelId });
     });
   });
 
-  ipcMain.handle('webnn:runInference', async (_, modelId, inputs) => {
+  safeHandle(IPC_CHANNELS.WEBNN_RUN_INFERENCE, async (_, modelId, inputs) => {
     const wc = getMainWindowWebContents();
     if (!wc) throw new Error('No renderer window');
 
@@ -234,11 +236,11 @@ function registerWebnnIpc() {
         }
       });
 
-      wc.send('webnn:runInference:request', { requestId, modelId, inputs });
+      wc.send(IPC_CHANNELS.WEBNN_RUN_INFERENCE_REQUEST, { requestId, modelId, inputs });
     });
   });
 
-  ipcMain.handle('webnn:getStatus', async () => {
+  safeHandle(IPC_CHANNELS.WEBNN_GET_STATUS, async () => {
     const wc = getMainWindowWebContents();
     if (!wc) return {};
 
@@ -255,12 +257,12 @@ function registerWebnnIpc() {
         resolve(result);
       });
 
-      wc.send('webnn:getStatus:request', { requestId });
+      wc.send(IPC_CHANNELS.WEBNN_GET_STATUS_REQUEST, { requestId });
     });
   });
 
   // 完整合成管线 — 在渲染进程本地运行所有推理，消除逐次 IPC 开销
-  ipcMain.handle('webnn:runSynthesis', async (_, params) => {
+  safeHandle(IPC_CHANNELS.WEBNN_RUN_SYNTHESIS, async (_, params) => {
     const wc = getMainWindowWebContents();
     if (!wc) return { error: 'No renderer window' };
 
@@ -277,7 +279,7 @@ function registerWebnnIpc() {
         resolve(result);
       });
 
-      wc.send('webnn:runSynthesis:request', { requestId, params });
+      wc.send(IPC_CHANNELS.WEBNN_RUN_SYNTHESIS_REQUEST, { requestId, params });
     });
   });
 
@@ -286,7 +288,7 @@ function registerWebnnIpc() {
   // 避免 ipcMain.handle 的结构化克隆复制 846MB 模型文件。
   // 每个请求携带唯一 reqId，回复使用 `webnn:readModelFile:reply:<reqId>` 频道，
   // 避免并发请求时回复错位。
-  ipcMain.on('webnn:readModelFile', async (event, payload) => {
+  ipcMain.on(IPC_CHANNELS.WEBNN_READ_MODEL_FILE, async (event, payload) => {
     const filePath = typeof payload === 'string' ? payload : payload.filePath;
     const reqId = typeof payload === 'string' ? null : payload.reqId;
     const replyChannel = reqId != null
@@ -413,7 +415,7 @@ async function detectNPUAvailability() {
             resolve(r || {});
           });
 
-          wc.send('webnn:detectNPU:request', { requestId });
+          wc.send(IPC_CHANNELS.WEBNN_DETECT_NPU_REQUEST, { requestId });
         });
       });
     } catch (err) {
@@ -490,7 +492,7 @@ function clearNPUFailureCache() {
   // 'webnn:clearNpuCache'（若桥接未暴露则依赖渲染端 success-TTL 自动过期，无副作用）。
   const wc = getMainWindowWebContents();
   if (wc) {
-    try { wc.send('webnn:clearNpuCache'); } catch (_) { /* renderer gone — nothing to do */ }
+    try { wc.send(IPC_CHANNELS.WEBNN_CLEAR_NPU_CACHE); } catch (_) { /* renderer gone — nothing to do */ }
   }
 }
 

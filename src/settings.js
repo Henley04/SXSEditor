@@ -1992,12 +1992,16 @@ if (reEnableReminderBtn) {
 
 initUpdateSection().catch(() => {});
 
+// 版本号的唯一真源是 package.json 的 version（git tag 经 scripts/check-version.js
+// 守卫对齐，打包时由 scripts/generate-build-info.js 写入 src/build-info.json）；
+// 这里经 app:getVersion（= app.getVersion()）读取。取不到时不要写死 'v1.0.0'，
+// 那会引入第三套来源；保留 HTML 里的 'v-' 占位即可。
 (async () => {
     try {
         const version = await window.electronAPI.getAppVersion();
-        document.getElementById('settings-version').textContent = `v${version}`;
-    } catch (_) {
-        document.getElementById('settings-version').textContent = 'v1.0.0';
+        if (version) document.getElementById('settings-version').textContent = `v${version}`;
+    } catch (err) {
+        console.warn('[Settings] 读取应用版本失败：', err && err.message ? err.message : err);
     }
 })();
 
@@ -2017,10 +2021,19 @@ loadVocoderChunkFramesTable();
 // until gpuPhase === 'full' (max 30s).
 (async () => {
     const deadline = Date.now() + 30000;
+    // 交互性：这段轮询最长 30 秒，此前界面上全程没有任何反馈 —— 用户看到的是
+    // 一片空白（或上一次的旧文案），只能干等。先给一个明确的"正在检测"，
+    // 超时也要说清楚发生了什么，而不是悄悄放弃。
+    if (vocoderChunkSmartText) {
+        vocoderChunkSmartText.textContent = t('settings.vocoderChunkDetecting');
+    }
     while (Date.now() < deadline) {
         await loadVocoderChunkFramesInfo();
         if (_vocoderChunkInfoLoaded) break;
         await new Promise(r => setTimeout(r, 2000));
+    }
+    if (!_vocoderChunkInfoLoaded && vocoderChunkSmartText) {
+        vocoderChunkSmartText.textContent = t('settings.vocoderChunkDetectTimeout');
     }
 })();
 
@@ -2747,7 +2760,7 @@ const PAPER_GROUPS = [
         label: 'aboutPage.pgAlgo',
         items: [
             { title: 'Classifier-Free Diffusion Guidance', id: '2207.12598' },
-            { title: 'Improving Classifier-Free Guidance in Masked Diffusion: Low-Dim Theoretical Insights with High-Dim Impact', id: '2507.08965' },
+            { title: 'Photorealistic Text-to-Image Diffusion Models with Deep Language Understanding (Imagen, Dynamic Thresholding)', id: '2205.11487' },
             { title: 'STORK: Faster Diffusion and Flow Matching Sampling by Resolving Both Stiffness and Structure-Dependence', id: '2505.24210' },
             { title: 'Q-Drift', id: '2603.18095' },
             { title: 'RDSinger', id: '2410.21641' },

@@ -400,8 +400,8 @@
                     <div class="setting-group">
                         <label class="device-mode-radio">
                             <input type="checkbox" id="enableAntiAliasing">
-                            <span class="radio-label" data-i18n="settings.enableAntiAliasing">2× 过采样抗混叠</span>
-                            <span class="radio-desc" data-i18n="settings.enableAntiAliasingHint">降采样前执行 2× 过采样→低通滤波→降采样完整管线，减少高频混叠。</span>
+                            <span class="radio-label" data-i18n="settings.enableAntiAliasing">参考音频降采样抗混叠</span>
+                            <span class="radio-desc" data-i18n="settings.enableAntiAliasingHint">在参考音频降采样前追加 2× 过采样 + 二阶 Butterworth 低通，高频混叠抑制更好（11 kHz 以上约 2–4 dB 衰减）。不影响导出音质。</span>
                         </label>
                     </div>
                 </div>

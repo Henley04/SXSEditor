@@ -304,7 +304,7 @@ export async function runDiffusionLoop({
             cfgAdjMean += cfgDelta / n;
             cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
         }
-        // Dynamic thresholding (arXiv:2507.08965): clip extreme CFG values
+        // Dynamic thresholding (Imagen, arXiv:2205.11487): clip extreme CFG values
         // per-frame before rescale. Aligned with DML path.
         // NOTE: Welford cfgAdjM2 above was accumulated on pre-threshold cfgVal,
         // so cfgAdjStd is slightly inflated. This makes rescale conservative
@@ -592,7 +592,7 @@ export async function runBatchDiffusionLoop({
                         cfgAdjM2 += cfgDelta * (cfgVal - cfgAdjMean);
                     }
                 }
-                // Dynamic thresholding (arXiv:2507.08965): clip extreme CFG values
+                // Dynamic thresholding (Imagen, arXiv:2205.11487): clip extreme CFG values
                 // per-frame before rescale. Aligned with DML path.
                 if (dynamicThresholdOpts && dynamicThresholdOpts.percentile > 0) {
                     applyDynamicThreshold(cfgPredBuf, s.totalFrames * MEL_DIM, MEL_DIM, dynamicThresholdOpts.percentile);

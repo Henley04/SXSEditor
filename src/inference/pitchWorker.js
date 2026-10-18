@@ -8,6 +8,7 @@ try { require('./pipeline/float16Patch'); } catch (_) {}
 const { RmvpePitchDetector } = require('./rmvpePitchDetector');
 const { RosvotDetector } = require('./rosvotDetector');
 const { FcpePitchDetector } = require('./fcpePitchDetector');
+const { requireSampleRate } = require('./shared/pitchF0Utils');
 const pp = require('./pitchPostprocess');
 
 // 检测器按需懒加载：worker 启动不再立刻加载 RMVPE，仅使用 FCPE（默认 MIDI
@@ -78,7 +79,7 @@ function ensureFcpe() {
 //（5 分钟音频约 3.4s），连同后处理一起在 worker 内完成。
 async function runFcpeExtraction(msg) {
   const opts = msg.options || {};
-  const sr = msg.sampleRate || 44100;
+  const sr = requireSampleRate(msg.sampleRate, 'pitchWorker.runFcpeExtraction');
   const bpmVal = opts.bpm || msg.bpm || 120;
 
   const audioInput = msg.audioData instanceof Float32Array
@@ -172,7 +173,7 @@ parentPort.on('message', async (msg) => {
     const audioData = msg.audioData instanceof Float32Array
       ? msg.audioData
       : new Float32Array(msg.audioData);
-    const f0Array = await detector.extractF0(audioData, msg.sampleRate || 44100);
+    const f0Array = await detector.extractF0(audioData, requireSampleRate(msg.sampleRate, 'pitchWorker.extract'));
     let notes = null;
     if (msg.type === 'extract-midi') {
       if (msg.useRosvot && msg.rosvotAvailable) {
@@ -181,7 +182,7 @@ parentPort.on('message', async (msg) => {
             rosvot = new RosvotDetector(workerData.modelDir, { deviceId: workerData.deviceId });
             await rosvot.init();
           }
-          notes = await rosvot.extractNotes(audioData, msg.sampleRate || 44100, f0Array, msg.bpm || 120);
+          notes = await rosvot.extractNotes(audioData, requireSampleRate(msg.sampleRate, 'pitchWorker.rosvot'), f0Array, msg.bpm || 120);
           if (!notes.some(n => n.pitch > 0)) notes = detector.f0ToNotes(f0Array, msg.bpm || 120);
         } catch (err) {
           try { rosvot?.dispose(); } catch (_) {}

@@ -1,14 +1,33 @@
 const { app, BrowserWindow, ipcMain, dialog, net } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { IPC_CHANNELS } = require('./shared/ipcChannels');
 
 // Fix Windows console encoding for Chinese log output.
-// Fire-and-forget async exec: spawning cmd.exe synchronously costs ~50-200ms
-// on the critical path before splash appears. The encoding switch takes
-// effect ~100ms later; the early startup window has essentially no Chinese
-// log output, so the delay is acceptable.
-if (process.platform === 'win32') {
-  try { require('child_process').exec('chcp 65001', { stdio: ['ignore', 'ignore', 'ignore'] }, () => {}); } catch (_) {}
+//
+// This used to run as the very first statement, ahead of everything else.
+// Two reasons it no longer does:
+//   1. `child_process.exec` spawns cmd.exe. Measured ~25ms just to issue the
+//      spawn, and that happened before app.whenReady() — i.e. before the
+//      splash window exists. On the critical path that is time the user
+//      stares at a blank screen.
+//   2. It only affects *console* output. A packaged build launched by
+//      double-click has no console attached (Windows GUI subsystem), so it is
+//      pure cost there; and the log file written by crashReporter is UTF-8
+//      regardless of the OEM code page.
+//
+// So: skip it entirely when no console is attached, and keep it off the
+// critical path (called from inside whenReady, after the splash is up).
+// Set SXS_FORCE_CHCP=1 to force it regardless — useful when launching the
+// packaged exe from a shell that does attach a console.
+function fixConsoleEncoding() {
+  if (process.platform !== 'win32') return;
+  const hasConsole = process.env.SXS_FORCE_CHCP === '1'
+    || (process.stdout && process.stdout.isTTY);
+  if (!hasConsole) return;
+  try {
+    require('node:child_process').exec('chcp 65001', { stdio: 'ignore' }, () => {});
+  } catch (_) {}
 }
 
 // Suppress EPIPE errors when stdout/stderr pipe breaks (e.g. terminal closed)
@@ -42,20 +61,28 @@ app.commandLine.appendSwitch('enable-features', 'WebMachineLearningNeuralNetwork
 // 禁用未使用的 Chromium 子系统以加速浏览器进程初始化。
 // 每个 disabled feature 都避免在启动时加载其服务实现，省 20-100ms。
 // 这些功能 SXSEditor 均不使用：内置翻译、Cast 发现、Dial 媒体路由、
-// 扩展系统、自动填充服务器通信、证书验证器后台任务。
+// 扩展系统、自动填充服务器通信、原生窗口遮挡探测、cross-origin 站点隔离。
+//
+// 已移除的两条（此前误以为生效）及其移除理由：
+//   · 'CertificateVerifier' —— 这不是有效的 feature 名（真正的名字是
+//     CertVerifierService），写在这里会被 Chromium 静默忽略。它的存在让人
+//     误读为"本应用关闭了证书校验"，而实际上我们从未关闭过。TLS 校验照常生效。
+//   · 'site-per-process' —— 它是命令行**开关**（--site-per-process），不是
+//     feature 名，写进 disable-features 同样不生效。本应用也不需要关闭站点
+//     隔离：所有窗口均为本地同源 + contextIsolation: true，且 10 个渲染进程
+//     已全部开启 OS 沙箱（见 windowManager.js / splashManager.js）。
 app.commandLine.appendSwitch('disable-features', [
   'Translate',
   'MediaRouter',
   'DialMediaRouteProvider',
   'Extensions',
   'AutofillServerCommunication',
-  'CertificateVerifier',
   // Windows 原生窗口遮挡探测会在启动时同步枚举顶层窗口，冷启动常见 50-150ms
   // 卡顿。SXSEditor 不做遮挡优化，直接关掉。
   'CalculateNativeWinOcclusion',
-  // 站点隔离/进程外 iframe 相关后台服务，本应用所有内容均为本地同源。
+  // 有效且保留：本应用不存在跨源 iframe，站点隔离带来的额外进程只有开销、
+  // 没有安全收益（所有页面本地同源，且渲染进程已开 OS 沙箱）。
   'IsolateOrigins',
-  'site-per-process',
 ].join(','));
 // Disable background throttling & renderer backgrounding so audio playback
 // keeps running smoothly when the window is occluded/minimized. Audio
@@ -118,7 +145,6 @@ const {
   closeSplashWindow,
   getSplashReadyAt,
   waitForSplashReady,
-  registerSplashIpc,
 } = require('./main/splashManager');
 
 // ---- Light module placeholders (assigned in STEP 1.5 inside app.whenReady) ----
@@ -204,24 +230,28 @@ app.whenReady().then(() => {
   // STEP 1: Show the splash window IMMEDIATELY.
   //
   // This is the very first thing we do inside whenReady so the user sees
-  // *something* (the splash's dark background + SVG) the moment Electron
-  // is ready, before any heavy module loading, CSP setup, locale loading,
-  // or file cleanup runs. The splash window paints its backgroundColor
-  // synchronously on creation, so it's visible even before did-finish-load
-  // fires for the splash itself.
+  // *something* the moment Electron is ready, before any heavy module loading,
+  // CSP setup, locale loading, or file cleanup runs.
+  //
+  // The splash is a BaseWindow + ImageView (see src/main/splashManager.js):
+  // no renderer process, no HTML, no preload. Its first paint is "decode one
+  // local PNG and blit it" — no JS compile/execute and no font shaping
+  // anywhere in the critical path.
   // ========================================================================
   if (showSplash) {
     createSplashWindow();
-    // Yield once so the splash's did-finish-load event can be delivered
-    // and the SVG can paint BEFORE STEP 1.5+2+3 block the main thread
-    // for ~50-150ms. Without this yield, the user sees a dark rectangle
-    // (the splash's backgroundColor) for 100-200ms before the branded
-    // SVG appears. In dev mode (no splash) we call initMainSteps()
-    // directly to avoid the ~5ms setImmediate overhead.
+    // Yield once so the compositor can put the splash frame on screen before
+    // STEP 1.5+2+3 block the main thread for ~50-150ms. In dev mode (no
+    // splash) we call initMainSteps() directly to avoid the ~5ms setImmediate
+    // overhead.
     setImmediate(initMainSteps);
   } else {
     initMainSteps();
   }
+
+  // Console code-page fix, now that the splash is already on screen. No
+  // console means no spawn at all (see fixConsoleEncoding).
+  fixConsoleEncoding();
 
   function initMainSteps() {
   // ========================================================================
@@ -270,7 +300,6 @@ app.whenReady().then(() => {
   registerSingerIpc();
   registerSingerMarketIpc();
   registerWebnnIpc();
-  registerSplashIpc();
   const { registerMcpReplyIpc, startMcpBridge } = require('./main/mcpBridge');
   registerMcpReplyIpc(ipcMain);
 
@@ -282,10 +311,10 @@ app.whenReady().then(() => {
   // handler itself is trivial (just app.getVersion()) and has no heavy
   // deps, so registering it here eliminates the 200-500ms "v-" flicker
   // in the version badge that was introduced by the STEP 4 deferral.
-  ipcMain.handle('app:getVersion', async () => app.getVersion());
+  ipcMain.handle(IPC_CHANNELS.APP_GET_VERSION, async () => app.getVersion());
   let resolveHeavyIpcReady;
   const heavyIpcReady = new Promise(resolve => { resolveHeavyIpcReady = resolve; });
-  ipcMain.handle('app:waitForHeavyIpc', () => heavyIpcReady);
+  ipcMain.handle(IPC_CHANNELS.APP_WAIT_FOR_HEAVY_IPC, () => heavyIpcReady);
 
   // ========================================================================
   // STEP 2: Fast setup (registrations only, no heavy I/O).

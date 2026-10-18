@@ -21,7 +21,7 @@
         <div class="toolbar-group">
           <label>BPM <input id="bpm-input" type="number" value="120" min="1" max="999" /></label>
           <label data-i18n="main.timeSignature">拍号 <input id="time-sig-num" type="number" value="4" min="1" max="32" /> / <input id="time-sig-den" type="number" value="4" min="1" max="32" /></label>
-          <label><input type="checkbox" id="auto-shift-check" checked />Auto Shift</label>
+          <label><input type="checkbox" id="auto-shift-check" />Auto Shift</label>
         </div>
         <div class="toolbar-divider"></div>
         <div class="toolbar-group">
@@ -62,8 +62,13 @@
             <span id="bpm-display-badge"><span data-icon="music-note" data-icon-class="icon--md"></span><span id="bpm-display-text">120 BPM</span></span>
           </div>
           <div id="fragment-canvas-container">
-            <canvas id="fragment-canvas" role="img" aria-label="分片时间轴"></canvas>
-            <canvas id="fragment-playhead-canvas" role="img" aria-label="播放指针"></canvas>
+            <!-- a11y(U3)：分片时间轴是**可交互控件**而不是一张图片。role="img" 会让
+                 读屏软件把它当静态图念一句 label 就结束，键盘也无法聚焦。改为
+                 role="application" + tabindex，并挂一个 aria-live 容器播报状态。 -->
+            <canvas id="fragment-canvas" role="application" tabindex="0"
+                    aria-label="分片时间轴：方向键移动选择，Delete 删除，Enter 打开分片编辑器"></canvas>
+            <canvas id="fragment-playhead-canvas" role="presentation" aria-hidden="true" aria-label="播放指针"></canvas>
+            <p id="fragment-canvas-a11y-status" class="sr-only" aria-live="polite" aria-atomic="true"></p>
           </div>
         </div>
       </div>

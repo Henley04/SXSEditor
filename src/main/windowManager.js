@@ -1,10 +1,12 @@
-const { BrowserWindow, dialog, ipcMain, shell } = require('electron');
+const { BrowserWindow, dialog, shell } = require('electron');
 const path = require('node:path');
 const { t } = require('./locale');
 // 文档入口：本地优先（随应用分发的 docs/），线上版本作为独立入口
 const { openDoc, openOnlineDoc, DOC_ENTRIES } = require('./docs');
 
 const isDev = !require('electron').app.isPackaged;
+const { safeHandle } = require('./ipcSafe');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 let mainWindow = null;
 let settingsWindow = null;
@@ -40,7 +42,7 @@ function notifyRelayout(win) {
   if (!win || win.isDestroyed()) return;
   const send = () => {
     try {
-      if (!win.isDestroyed()) win.webContents.send('app:relayout');
+      if (!win.isDestroyed()) win.webContents.send(IPC_CHANNELS.RELAYOUT);
     } catch (_) {}
   };
   send();
@@ -99,7 +101,7 @@ function buildAppMenu() {
           accelerator: 'CommandOrControl+S',
           click: () => {
             if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('main-menu:save-request');
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_SAVE_REQUEST);
             }
           },
         },
@@ -108,7 +110,7 @@ function buildAppMenu() {
           accelerator: 'CommandOrControl+Shift+S',
           click: () => {
             if (mainWindow && !mainWindow.isDestroyed()) {
-              mainWindow.webContents.send('main-menu:save-as-request');
+              mainWindow.webContents.send(IPC_CHANNELS.MAIN_MENU_SAVE_AS_REQUEST);
             }
           },
         },
@@ -266,7 +268,12 @@ function createWindow(opts = {}) {
       preload: MAIN_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      // 安全加固：渲染进程开 OS 级沙箱。preload（src/preload.js）只 require
+      // electron 的 contextBridge / ipcRenderer，不使用任何 Node 内建模块，
+      // 因此在 sandbox:true 下仍可正常工作。此前为 false，意味着一旦渲染进程
+      // 被攻陷（Chromium 漏洞 / 依赖链 XSS / 市场窗口渲染的远端内容），缺少
+      // 第二层 OS 拦截。
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -290,7 +297,7 @@ function createWindow(opts = {}) {
     if (isDirty) {
       e.preventDefault();
       closePending = true;
-      mainWindow.webContents.send('close-confirm');
+      mainWindow.webContents.send(IPC_CHANNELS.CLOSE_CONFIRM);
     }
   });
 
@@ -305,7 +312,7 @@ function openSettingsWindow() {
   // 未知位置（长间隔场景尤其明显）。打开设置即暂停：记录当前位置，
   // 回到主窗口后可从暂停点手动继续。
   if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('settings-window:opened'); } catch (_) {}
+    try { mainWindow.webContents.send(IPC_CHANNELS.SETTINGS_WINDOW_OPENED); } catch (_) {}
   }
   if (settingsWindow) {
     settingsWindow.focus();
@@ -330,7 +337,7 @@ function openSettingsWindow() {
       preload: SETTINGS_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -366,7 +373,7 @@ function openResourceManagerWindow() {
       preload: RESOURCE_MANAGER_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -409,7 +416,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
       preload: MODEL_DOWNLOAD_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -421,10 +428,10 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
   modelDownloadWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   modelDownloadWindow.webContents.once('did-finish-load', () => {
-    modelDownloadWindow.webContents.send('model-download:missing-files', missingFiles);
-    modelDownloadWindow.webContents.send('model-download:precision', currentPrecision);
+    modelDownloadWindow.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_MISSING_FILES, missingFiles);
+    modelDownloadWindow.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PRECISION, currentPrecision);
     if (revision) {
-      modelDownloadWindow.webContents.send('model-download:revision', revision);
+      modelDownloadWindow.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_REVISION, revision);
     }
     modelDownloadWindow.focus();
   });
@@ -434,7 +441,7 @@ function createModelDownloadWindow(missingFiles, precision, DEFAULT_PRECISION, r
     // 通知所有窗口（特别是设置窗口）：模型下载窗口已关闭，
     // 让设置页面可以刷新模型状态总览区，反映最新下载/更新结果。
     for (const wc of getAllWebContents()) {
-      try { wc.send('model-download:window-closed'); } catch (_) {}
+      try { wc.send(IPC_CHANNELS.MODEL_DOWNLOAD_WINDOW_CLOSED); } catch (_) {}
     }
   });
 }
@@ -467,7 +474,7 @@ function openUpdateNotificationWindow(data) {
       preload: UPDATE_NOTIFICATION_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -479,7 +486,7 @@ function openUpdateNotificationWindow(data) {
   updateNotificationWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   updateNotificationWindow.webContents.once('did-finish-load', () => {
-    updateNotificationWindow.webContents.send('update:notification-show', data);
+    updateNotificationWindow.webContents.send(IPC_CHANNELS.UPDATE_NOTIFICATION_SHOW, data);
   });
 
   updateNotificationWindow.on('closed', () => {
@@ -487,11 +494,13 @@ function openUpdateNotificationWindow(data) {
   });
 }
 
-function openFragmentEditor(fragment, project, wavBuffer) {
-  const sendData = { fragment, project, wavBuffer };
+function openFragmentEditor(fragment, project, wavBuffer, backend) {
+  // backend 缺省按内置后端：老工程 / 内置轨道没有这个字段。
+  const trackBackend = backend && typeof backend === 'object' ? backend : { type: 'sxs' };
+  const sendData = { fragment, project, wavBuffer, backend: trackBackend };
   if (fragmentWindows[fragment.id] && !fragmentWindows[fragment.id].isDestroyed()) {
     fragmentWindows[fragment.id].focus();
-    fragmentWindows[fragment.id].webContents.send('loadFragment', sendData);
+    fragmentWindows[fragment.id].webContents.send(IPC_CHANNELS.LOAD_FRAGMENT, sendData);
     // 窗口复用时也更新 pendingFragmentData 快照，确保 fallback getFragmentData
     // 拿到的是最新数据，避免分片编辑器在守卫放行后仍读到旧快照。
     pendingFragmentData[fragment.id] = sendData;
@@ -512,7 +521,7 @@ function openFragmentEditor(fragment, project, wavBuffer) {
       preload: FRAGMENT_EDITOR_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -532,7 +541,7 @@ function openFragmentEditor(fragment, project, wavBuffer) {
   fragmentWindows[fragment.id] = fragmentWindow;
 
   fragmentWindow.webContents.once('did-finish-load', () => {
-    fragmentWindow.webContents.send('loadFragment', sendData);
+    fragmentWindow.webContents.send(IPC_CHANNELS.LOAD_FRAGMENT, sendData);
   });
 
   fragmentWindow.on('closed', () => {
@@ -562,7 +571,7 @@ function buildSingerCreatorMenu(win) {
           accelerator: 'CommandOrControl+S',
           click: () => {
             if (win && !win.isDestroyed()) {
-              win.webContents.send('singer-creator:save-request');
+              win.webContents.send(IPC_CHANNELS.SINGER_CREATOR_SAVE_REQUEST);
             }
           },
         },
@@ -571,7 +580,7 @@ function buildSingerCreatorMenu(win) {
           accelerator: 'CommandOrControl+Shift+S',
           click: () => {
             if (win && !win.isDestroyed()) {
-              win.webContents.send('singer-creator:save-as-request');
+              win.webContents.send(IPC_CHANNELS.SINGER_CREATOR_SAVE_AS_REQUEST);
             }
           },
         },
@@ -633,7 +642,7 @@ function openSingerCreator() {
       preload: SINGER_CREATOR_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -649,6 +658,22 @@ function openSingerCreator() {
     singerCreatorWindow = null;
   });
 }
+
+// Singer Market 窗口允许交给系统浏览器打开的域名。
+// 原先这里只判断 scheme 就 openExternal，等于 market 页面里任何链接
+// （含服务端下发的 license URL、任何一处 DOM 注入）都能把用户送到任意
+// 站点。策略与 dialogIpc.js 的 'shell:open-external' 保持一致：只准 https，
+// 且主机按"边界匹配"命中白名单（github.com.evil.com 不算命中）。
+// 若后续市场新增 license 域名，往这里补一项即可。
+const SINGER_MARKET_EXTERNAL_HOSTS = [
+  'henley04.github.io',   // 使用条款 DISCLAIMER_URL
+  'github.com',
+  'github.io',
+  'huggingface.co',
+  'modelscope.cn',
+  'creativecommons.org',  // CC 系列 license 正文
+  'opensource.org',       // MIT / Apache 等 license 正文
+];
 
 function openSingerMarket() {
   if (singerMarketWindow) {
@@ -669,7 +694,7 @@ function openSingerMarket() {
       preload: SINGER_MARKET_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -679,11 +704,23 @@ function openSingerMarket() {
   singerMarketWindow.webContents.on('will-navigate', (e) => { e.preventDefault(); });
   // target="_blank" links in the market UI (terms-of-use disclaimer, license
   // URLs, …) must open in the system browser. A blanket deny made those
-  // clicks silently no-op. Only http(s) is allowed through to openExternal;
-  // everything else stays denied.
+  // clicks silently no-op. 但也不能对任意 http(s) 放行：这里改为只准 https
+  // 且主机命中 SINGER_MARKET_EXTERNAL_HOSTS，其余一律 deny 并记日志。
   singerMarketWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:\/\//i.test(url)) {
+    let host = null;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'https:') host = parsed.hostname.toLowerCase();
+    } catch (_) {
+      // 不是合法 URL —— host 保持 null，走 deny 分支
+    }
+    const allowed = !!host && SINGER_MARKET_EXTERNAL_HOSTS.some(
+      domain => host === domain || host.endsWith('.' + domain)
+    );
+    if (allowed) {
       shell.openExternal(url);
+    } else {
+      console.warn('[Main] Blocked singer-market external URL:', url);
     }
     return { action: 'deny' };
   });
@@ -705,7 +742,7 @@ function openAudioPreprocess(data) {
 
   if (audioPreprocessWindow) {
     audioPreprocessWindow.focus();
-    audioPreprocessWindow.webContents.send('loadPreprocessData', { data: pendingPreprocessData, wavBuffer: preprocessWavBuffer });
+    audioPreprocessWindow.webContents.send(IPC_CHANNELS.LOAD_PREPROCESS_DATA, { data: pendingPreprocessData, wavBuffer: preprocessWavBuffer });
     return;
   }
 
@@ -723,7 +760,7 @@ function openAudioPreprocess(data) {
       preload: AUDIO_PREPROCESS_WINDOW_PRELOAD_WEBPACK_ENTRY,
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: false,
+      sandbox: true,
       spellcheck: false,
     },
   });
@@ -734,7 +771,7 @@ function openAudioPreprocess(data) {
   audioPreprocessWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
   audioPreprocessWindow.webContents.once('did-finish-load', () => {
-    audioPreprocessWindow.webContents.send('loadPreprocessData', { data: pendingPreprocessData, wavBuffer: preprocessWavBuffer });
+    audioPreprocessWindow.webContents.send(IPC_CHANNELS.LOAD_PREPROCESS_DATA, { data: pendingPreprocessData, wavBuffer: preprocessWavBuffer });
     preprocessWavBuffer = null;
   });
 
@@ -765,21 +802,21 @@ function getAllWebContents() {
 }
 
 function registerWindowIpc() {
-  ipcMain.handle('openFragmentEditor', async (event, { fragment, project, wavBuffer }) => {
-    openFragmentEditor(fragment, project, wavBuffer);
+  safeHandle(IPC_CHANNELS.OPEN_FRAGMENT_EDITOR, async (event, { fragment, project, wavBuffer, backend }) => {
+    openFragmentEditor(fragment, project, wavBuffer, backend);
   });
 
-  ipcMain.handle('getFragmentData', async (event, fragmentId) => {
+  safeHandle(IPC_CHANNELS.GET_FRAGMENT_DATA, async (event, fragmentId) => {
     return pendingFragmentData[fragmentId] || null;
   });
 
-  ipcMain.handle('saveFragmentDataSync', async (event, fragmentId, data) => {
+  safeHandle(IPC_CHANNELS.SAVE_FRAGMENT_DATA_SYNC, async (event, fragmentId, data) => {
     try {
       if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
-        fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
+        fragmentWindows[fragmentId].webContents.send(IPC_CHANNELS.FRAGMENT_DATA_SAVED, { fragmentId, ...data });
       }
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('fragmentDataSaved', { fragmentId, ...data });
+        mainWindow.webContents.send(IPC_CHANNELS.FRAGMENT_DATA_SAVED, { fragmentId, ...data });
       }
       return true;
     } catch (err) {
@@ -788,27 +825,27 @@ function registerWindowIpc() {
     }
   });
 
-  ipcMain.handle('saveFragmentData', async (event, fragmentId, data) => {
+  safeHandle(IPC_CHANNELS.SAVE_FRAGMENT_DATA, async (event, fragmentId, data) => {
     if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
-      fragmentWindows[fragmentId].webContents.send('fragmentDataSaved', { fragmentId, ...data });
+      fragmentWindows[fragmentId].webContents.send(IPC_CHANNELS.FRAGMENT_DATA_SAVED, { fragmentId, ...data });
     }
     if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('fragmentDataSaved', { fragmentId, ...data });
+      mainWindow.webContents.send(IPC_CHANNELS.FRAGMENT_DATA_SAVED, { fragmentId, ...data });
     }
     return { success: true };
   });
 
-  ipcMain.handle('fragment:close', async (event, fragmentId) => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_CLOSE, async (event, fragmentId) => {
     closeFragmentEditor(fragmentId);
     return { success: true };
   });
 
-  ipcMain.handle('fragment:closeAll', async () => {
+  safeHandle(IPC_CHANNELS.FRAGMENT_CLOSE_ALL, async () => {
     closeAllFragmentEditors();
     return { success: true };
   });
 
-  ipcMain.handle('updateFragmentBounds', async (event, fragmentId, data) => {
+  safeHandle(IPC_CHANNELS.UPDATE_FRAGMENT_BOUNDS, async (event, fragmentId, data) => {
     // 同步刷新 pendingFragmentData 快照里的边界，避免分片编辑器在 currentFragment
     // 就绪前收到 fragmentBoundsChanged 被守卫丢弃后，又用旧快照覆盖 currentFragment，
     // 导致主页面对分片长度/结尾的修改偶现不同步。
@@ -818,46 +855,46 @@ function registerWindowIpc() {
       if (data.duration !== undefined) pending.fragment.duration = data.duration;
     }
     if (fragmentWindows[fragmentId] && !fragmentWindows[fragmentId].isDestroyed()) {
-      fragmentWindows[fragmentId].webContents.send('fragmentBoundsChanged', { fragmentId, ...data });
+      fragmentWindows[fragmentId].webContents.send(IPC_CHANNELS.FRAGMENT_BOUNDS_CHANGED, { fragmentId, ...data });
     }
     return { success: true };
   });
 
-  ipcMain.handle('updateProjectSettings', async (event, projectData) => {
+  safeHandle(IPC_CHANNELS.UPDATE_PROJECT_SETTINGS, async (event, projectData) => {
     for (const id in fragmentWindows) {
       if (fragmentWindows[id] && !fragmentWindows[id].isDestroyed()) {
-        fragmentWindows[id].webContents.send('projectSettingsChanged', projectData);
+        fragmentWindows[id].webContents.send(IPC_CHANNELS.PROJECT_SETTINGS_CHANGED, projectData);
       }
     }
     return { success: true };
   });
 
-  ipcMain.handle('openSingerCreator', async () => {
+  safeHandle(IPC_CHANNELS.OPEN_SINGER_CREATOR, async () => {
     openSingerCreator();
   });
 
-  ipcMain.handle('openSingerMarket', async () => {
+  safeHandle('openSingerMarket', async () => {
     openSingerMarket();
   });
 
-  ipcMain.handle('openAudioPreprocess', async (event, data) => {
+  safeHandle(IPC_CHANNELS.OPEN_AUDIO_PREPROCESS, async (event, data) => {
     openAudioPreprocess(data);
   });
 
-  ipcMain.handle('sendPreprocessData', async (event, data) => {
+  safeHandle(IPC_CHANNELS.SEND_PREPROCESS_DATA, async (event, data) => {
     if (singerCreatorWindow && !singerCreatorWindow.isDestroyed()) {
-      singerCreatorWindow.webContents.send('preprocessDataSaved', data);
+      singerCreatorWindow.webContents.send(IPC_CHANNELS.PREPROCESS_DATA_SAVED, data);
     }
     return { success: true };
   });
 
 
-  ipcMain.handle('set-dirty', async (event, dirty) => {
+  safeHandle(IPC_CHANNELS.SET_DIRTY, async (event, dirty) => {
     isDirty = dirty;
     return { success: true };
   });
 
-  ipcMain.handle('close-confirmed', async () => {
+  safeHandle(IPC_CHANNELS.CLOSE_CONFIRMED, async () => {
     if (closePending && mainWindow && !mainWindow.isDestroyed()) {
       closePending = false;
       isDirty = false;
@@ -866,11 +903,11 @@ function registerWindowIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('reload-main-window', async () => {
+  safeHandle(IPC_CHANNELS.RELOAD_MAIN_WINDOW, async () => {
     buildAppMenu();
     if (mainWindow && !mainWindow.isDestroyed()) {
       // Apply locale in place. Reloading destroys the unsaved in-memory project.
-      mainWindow.webContents.send('locale-changed');
+      mainWindow.webContents.send(IPC_CHANNELS.LOCALE_CHANGED);
     }
   });
 }

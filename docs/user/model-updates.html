@@ -72,8 +72,17 @@
       </div>
 
       <h2>
-        <span data-lang="en">v1 (Current)</span>
-        <span data-lang="zh">v1（当前版本）</span>
+        <span data-lang="en">v2 (Current)</span>
+        <span data-lang="zh">v2（当前版本）</span>
+      </h2>
+      <ul>
+        <li><span data-lang="en"><strong>TRT-RTX long-generation fix</strong> — the RoPE position <code>cos/sin</code> tables are now baked directly into the diffusion model's weights (<code>[1, 8192, 64]</code> fp16, 8192-frame capacity), removing the runtime fp32 position <code>MatMul</code>. TensorRT-RTX (the NvTensorRtRtx / WinML execution provider) executed that <code>MatMul</code> on an 11-bit mantissa grid, rounding odd-frame phases for positions beyond 2048 and producing a tail energy dip / loudness collapse on longer generations. The fix applies to every execution provider.</span><span data-lang="zh"><strong>TRT-RTX 长片段修复</strong>——RoPE 位置 <code>cos/sin</code> 表现在直接烘焙进扩散模型权重（<code>[1, 8192, 64]</code> fp16，8192 帧容量），移除了运行时的 fp32 位置 <code>MatMul</code>。TensorRT-RTX（NvTensorRtRtx / WinML 执行提供者）会以 11 位尾数精度执行该 <code>MatMul</code>，导致 2048 帧之后奇数帧相位被舍入，长片段生成出现尾部能量凹陷 / 响度塌缩。该修复对所有执行提供者生效。</span></li>
+        <li><span data-lang="en"><strong>W16A32 vocoder re-export</strong> — the vocoder has been re-exported with W16A32 precision (FP16 weights + FP32 activations) and hardware-agnostic Olive optimization. It ships as a single self-contained file, so existing download manifests remain compatible.</span><span data-lang="zh"><strong>W16A32 声码器重导出</strong>——声码器以 W16A32 精度（FP16 权重 + FP32 激活）配合硬件无关的 Olive 优化重新导出，以单文件自包含形式发布，现有下载清单保持兼容。</span></li>
+      </ul>
+
+      <h2>
+        <span data-lang="en">v1</span>
+        <span data-lang="zh">v1</span>
       </h2>
       <ul>
         <li><span data-lang="en"><strong>diff_step RoPE table baked into weights (TRT-RTX fix)</strong> — the fp16 <code>diff_step</code> model now ships the RoPE position table as offline-baked fp16 weight initializers ([1, 8192, 64] cos/sin tables + runtime Slice) instead of a runtime fp32 position MatMul. This root-fixes the TensorRT-RTX (NvTensorRtRtxExecutionProvider) 2048-frame boundary corruption: Myelin's fused fp32 MatMul rounded odd-frame phases on an 11-bit mantissa grid, amplifying into a tail energy dip. Measured per-frame cosine at seq = 2100 / 4096 is ≈ 0.9986+ on TRT-RTX (matching DML / CPU), and the diff_step sequence cap rises from 2047 to 8192 frames (~163.8 s).</span><span data-lang="zh"><strong>diff_step RoPE 表烘焙进权重（TRT-RTX 修复）</strong>——fp16 <code>diff_step</code> 模型现把 RoPE 位置表离线烘焙为 fp16 权重初始化器（[1, 8192, 64] cos/sin 表 + 运行时 Slice），不再使用运行时 fp32 位置 MatMul。根治 TensorRT-RTX（NvTensorRtRtxExecutionProvider）的 2048 帧边界错误：Myelin 融合的 fp32 MatMul 以 11 位尾数网格舍入奇数帧相位，放大为尾部能量凹陷。实测 TRT-RTX 在 seq = 2100 / 4096 的逐帧余弦 ≈ 0.9986+（与 DML / CPU 一致），diff_step 序列上限从 2047 提升至 8192 帧（约 163.8 秒）。</span></li>

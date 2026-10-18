@@ -1,4 +1,3 @@
-const { app } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { setLocale } = require('./locale');
@@ -61,7 +60,8 @@ let _settingsCache = null;
 let cachedDMLDevices = null;
 
 function getSettingsFilePath() {
-  return path.join(app.getPath('userData'), 'settings.json');
+  // A6: 文件名由 ConfigStore 统一登记，主进程不再就地拼 userData 路径。
+  return require('./configStore').getConfigPath('settings');
 }
 
 function setCachedDMLDevices(devices) {
@@ -169,8 +169,11 @@ function loadSettings() {
     _settingsCache.enableLoudnormFinal = true;
   }
 
-  // resampleLinear 降采样前的 Butterworth 1st-order IIR 抗混叠低通滤波（截止 = dstSr/2）。
-  // 默认关闭以保持默认输出特征不变；开启后可减少降采样混叠（以少量 CPU 开销为代价）。
+  // 参考音频降采样（44.1k/48k → 24k）前的 2× 过采样抗混叠管线：
+  // 2× 零填充（含 L=2 增益补偿）→ 二阶 Butterworth 抗镜像 LP（srcSr/2）
+  // → 抗混叠 LP（dstSr/2）→ 抽取。只作用于 resampleLinear 的降采样分支，
+  // 即参考 mel / 参考 F0 提取；导出路径（24k → 48k）是上采样，不走这条分支。
+  // 默认关闭以保持默认输出特征不变；开启后高频混叠抑制更好（11 kHz 以上约 2–4 dB 衰减）。
   if (typeof _settingsCache.enableAntiAliasing !== 'boolean') {
     _settingsCache.enableAntiAliasing = false;
   }
@@ -247,7 +250,7 @@ function loadSettings() {
     _settingsCache.exportCfgScheduleKeyframes = null;
   }
 
-  // ===== Dynamic Thresholding (arXiv:2507.08965) =====
+  // ===== Dynamic Thresholding (Imagen, arXiv:2205.11487) =====
   // Per-frame percentile clipping of CFG-predicted mel before rescale.
   // Prevents over-exposure artifacts at high CFG strengths.
   // previewDynamicThresholdEnabled / exportDynamicThresholdEnabled: boolean (default false)
@@ -532,10 +535,8 @@ async function updateLocaleSetting(locale) {
   const mainLocales = require('./locale').getMainLocales();
   if (locale && mainLocales[locale]) {
     setLocale(locale);
-    try {
-      const configPath = path.join(app.getPath('userData'), 'sxseditor-locale.json');
-      await fs.promises.writeFile(configPath, JSON.stringify({ locale }), 'utf8');
-    } catch (_) {}
+    // A6: 与 settingsIpc.js:updateLocale 走同一个写入口（此前两处各拼一次路径）。
+    await require('./configStore').writeJsonConfig('locale', { locale });
   }
 }
 

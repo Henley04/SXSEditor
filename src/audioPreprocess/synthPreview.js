@@ -1,5 +1,6 @@
 import { state, dom } from './state.js';
 import { t } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import { stopPlayback } from './playback.js';
 
 function midiToHz(midi) {
@@ -83,7 +84,7 @@ export function stopSynth() {
     try { state.synthContext.close(); } catch (_) {}
   }
   state.synthContext = null;
-  if (dom.btnAudition) dom.btnAudition.textContent = t('preprocess.auditionSynth');
+  if (dom.btnAudition) setLabel(dom.btnAudition, t('preprocess.auditionSynth'), { icon: 'music' });
 }
 
 export async function startSynth() {
@@ -118,7 +119,7 @@ export async function startSynth() {
   }
   state.synthSources = sources;
   state.synthPlaying = true;
-  if (dom.btnAudition) dom.btnAudition.textContent = t('preprocess.stopAudition');
+  if (dom.btnAudition) setLabel(dom.btnAudition, t('preprocess.stopAudition'), { icon: 'stop' });
   return true;
 }
 

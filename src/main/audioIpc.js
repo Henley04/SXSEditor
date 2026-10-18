@@ -1,6 +1,8 @@
-const { ipcMain, BrowserWindow } = require('electron');
+const { BrowserWindow } = require('electron');
 const { AudioOutputManager } = require('../audio/audioOutputManager');
 const { getFragmentWindows } = require('./windowManager');
+const { safeHandle } = require('./ipcSafe');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 let _audioManager = null;
 let _fragmentAudioManager = null;
@@ -52,7 +54,7 @@ function resetAudioManagers() {
 }
 
 function registerAudioIpc() {
-  ipcMain.handle('audio:getDevices', async () => {
+  safeHandle(IPC_CHANNELS.AUDIO_GET_DEVICES, async () => {
     try {
       // S13: Use sequential awaits instead of Promise.all so the shared
       // _defaultInstance isn't destroyed mid-call by whichever resolves first.
@@ -65,7 +67,7 @@ function registerAudioIpc() {
     }
   });
 
-  ipcMain.handle('audio:play', async (event, { audioData, options }) => {
+  safeHandle(IPC_CHANNELS.AUDIO_PLAY, async (event, { audioData, options }) => {
     try {
       const manager = _getAudioManagerForSender(event);
       // S13: Serialize concurrent play calls on the same instance.
@@ -76,7 +78,7 @@ function registerAudioIpc() {
         manager.onEnded(() => {
           try {
             if (!event.sender.isDestroyed()) {
-              event.sender.send('audio:ended', {});
+              event.sender.send(IPC_CHANNELS.AUDIO_ENDED, {});
             }
           } catch (_) {}
         });
@@ -91,7 +93,7 @@ function registerAudioIpc() {
     }
   });
 
-  ipcMain.handle('audio:stop', async (event) => {
+  safeHandle(IPC_CHANNELS.AUDIO_STOP, async (event) => {
     try {
       const manager = _getAudioManagerForSender(event);
       await manager.stop();
@@ -102,7 +104,7 @@ function registerAudioIpc() {
     }
   });
 
-  ipcMain.handle('audio:getPosition', async (event) => {
+  safeHandle(IPC_CHANNELS.AUDIO_GET_POSITION, async (event) => {
     try {
       const manager = _getAudioManagerForSender(event);
       if (manager.isPlaying()) {
@@ -114,7 +116,7 @@ function registerAudioIpc() {
     }
   });
 
-  ipcMain.handle('audio:isAvailable', async () => {
+  safeHandle(IPC_CHANNELS.AUDIO_IS_AVAILABLE, async () => {
     const available = await AudioOutputManager.isAvailable();
     return { available };
   });

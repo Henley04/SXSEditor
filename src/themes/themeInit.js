@@ -6,7 +6,16 @@
  *   initWindowTheme(ipcCleanupsArray);
  */
 
-function injectTokens(tokens) {
+/**
+ * 把主题 token 写进 :root 的 inline style。
+ *
+ * 审查项 2.2：这个函数此前在三个文件里各写了一份
+ * （themes/themeInit.js、themes/themeManager.js、renderer/ipcHandlers.js）。
+ * themeManager 那份**既不清理旧变量也不派发 theme:changed**，切主题时会残留
+ * 上一个主题的脏 CSS 变量，且 canvas 渲染层缓存的颜色不会失效 —— 现在统一到
+ * 这一份实现：先清空旧的 --* 变量，再写入新 token，最后广播 theme:changed。
+ */
+export function injectTokens(tokens) {
     if (!tokens || typeof document === 'undefined') return;
     const root = document.documentElement;
     // Clear previous inline CSS variables to avoid stale tokens

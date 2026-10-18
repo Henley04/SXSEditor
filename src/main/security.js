@@ -1,28 +1,62 @@
 const { app } = require('electron');
 const path = require('node:path');
+const fs = require('node:fs');
 
+// 无需任何授权即可访问的目录。这里曾经列着 app.getPath('home') 与 'temp'，
+// 而 isPathAllowed() 对它们是递归前缀匹配 —— 等于让渲染进程无条件读写
+// 整个用户主目录（~/.ssh、~/.aws、浏览器 cookie……）与系统临时目录。
+// 保留范围只到"本应用确实会把文件放在这里"的三个目录；其余位置必须经
+// 原生对话框（dialogIpc.js 的 authorizePath 调用点）或 file:authorizePath
+// 的白名单规则授权。模型目录（可能在任意盘）由主进程 getModelDir 内部授权。
 const ALLOWED_SAVE_DIRS = [
   () => app.getPath('userData'),
   () => app.getPath('documents'),
   () => app.getPath('desktop'),
-  () => app.getPath('home'),
-  () => app.getPath('temp'),
 ];
 
 const dialogAuthorizedPaths = new Set();
 
 function authorizePath(filePath) {
   if (typeof filePath === 'string' && filePath.length > 0) {
-    dialogAuthorizedPaths.add(path.resolve(filePath));
-    const dir = path.dirname(path.resolve(filePath));
-    dialogAuthorizedPaths.add(dir);
-    if (dialogAuthorizedPaths.size > 1000) {
-      const entries = [...dialogAuthorizedPaths];
-      dialogAuthorizedPaths.clear();
-      for (let i = Math.floor(entries.length / 2); i < entries.length; i++) {
-        dialogAuthorizedPaths.add(entries[i]);
-      }
+    const canonical = _canonicalize(filePath);
+    _addAuthorized(canonical);
+    // 连带把父目录也写进白名单：授权一个素材文件后，同目录的工程伴生文件
+    // （伴奏、歌姬包）才不必逐个再授权一次。
+    // 注意：对"目录"不能用这个版本的授权 —— 一旦授权 D:\models，父目录 D:\
+    // 也会进白名单，等于放行整个盘。授权目录请用 authorizePathExact()。
+    _addAuthorized(path.dirname(canonical));
+  }
+}
+
+// 只授权路径本身，不连带父目录。用于"模型目录"这类用户可配到任意盘的位置：
+// 授权 D:\models 之后，isPathAllowed() 对 D:\models\*.onnx 依然成立（父目录命中），
+// 但 D:\ 本身不在白名单里，D:\evil.txt 不会被连带放行。
+function authorizePathExact(filePath) {
+  if (typeof filePath === 'string' && filePath.length > 0) {
+    _addAuthorized(_canonicalize(filePath));
+  }
+}
+
+function _addAuthorized(resolvedPath) {
+  dialogAuthorizedPaths.add(resolvedPath);
+  if (dialogAuthorizedPaths.size > 1000) {
+    const entries = [...dialogAuthorizedPaths];
+    dialogAuthorizedPaths.clear();
+    for (let i = Math.floor(entries.length / 2); i < entries.length; i++) {
+      dialogAuthorizedPaths.add(entries[i]);
     }
+  }
+}
+
+// 路径自身或任一祖先已经在白名单中。供 file:authorizePath 做幂等判断：
+// 已经放行过的目录再授权一次不应被新规则拒绝。
+function isAuthorizedAncestor(resolvedPath) {
+  let cur = path.resolve(resolvedPath);
+  for (;;) {
+    if (dialogAuthorizedPaths.has(cur)) return true;
+    const parent = path.dirname(cur);
+    if (parent === cur) return false;
+    cur = parent;
   }
 }
 
@@ -32,19 +66,54 @@ function _normalizeSep(p) {
   return p.replace(/\\/g, '/');
 }
 
+/**
+ * 解析出"真实路径"，用于阻断符号链接 / junction / hardlink 穿透。
+ *
+ * 白名单比对只看 path.resolve() 的结果是不够的：攻击者只要在已授权目录里
+ * 放一个指向白名单外的软链（userData/link -> C:\Windows\System32\config\SAM），
+ * resolve() 后仍在 userData 之下，就直接被放行。因此：
+ *   1. 目标存在 → 用 fs.realpathSync 得到真实路径；
+ *   2. 目标尚不存在（新建保存）→ 至少把**父目录** realpath，再拼回末段，
+ *      这样"父目录是软链"的绕过同样被拦住；
+ *   3. 两段都失败（路径与父目录都不存在，或跨 OS 校验如 Linux CI 校验
+ *      Windows 路径）→ 退回 path.resolve 保持原有行为，不因校验失败而
+ *      误拒合法的新建保存。
+ */
+function _canonicalize(p) {
+  const resolved = path.resolve(p);
+  try {
+    return fs.realpathSync(resolved);
+  } catch (_) { /* 目标尚不存在，落到父目录分支 */ }
+  try {
+    const realParent = fs.realpathSync(path.dirname(resolved));
+    return path.join(realParent, path.basename(resolved));
+  } catch (_) {
+    return resolved;
+  }
+}
+
 function isPathAllowed(filePath) {
   try {
+    const canonical = _canonicalize(filePath);
     const resolved = path.resolve(filePath);
+    // 真实路径与原始路径都要比对：canonical 拦软链穿透，resolved 保证
+    // "目标尚未创建、两段 realpath 都失败"的场景仍按旧规则判定。
+    if (dialogAuthorizedPaths.has(canonical)) return true;
+    if (dialogAuthorizedPaths.has(path.dirname(canonical))) return true;
     if (dialogAuthorizedPaths.has(resolved)) return true;
     if (dialogAuthorizedPaths.has(path.dirname(resolved))) return true;
+    const normalizedCanonical = _normalizeSep(canonical);
     const normalizedResolved = _normalizeSep(resolved);
     return ALLOWED_SAVE_DIRS.some(dirFn => {
       try {
         // Use a separator after the prefix to avoid prefix confusion: without
         // it, an allowed dir "/home/user" would also match "/home/userevil/...".
         // Must match either the exact dir or a path strictly beneath it.
-        const allowed = _normalizeSep(path.resolve(dirFn()));
-        return normalizedResolved === allowed || normalizedResolved.startsWith(allowed + '/');
+        // 允许的目录本身也 realpath：userData / documents 在 Windows 上可能被
+        // OneDrive 之类重定向到 junction 后面，不 realpath 会导致合法路径被误拒。
+        const allowed = _normalizeSep(_canonicalize(dirFn()));
+        const matches = (n) => n === allowed || n.startsWith(allowed + '/');
+        return matches(normalizedCanonical) || matches(normalizedResolved);
       } catch (_) {
         return false;
       }
@@ -92,6 +161,8 @@ function isSystemPath(dirPath) {
 
 module.exports = {
   authorizePath,
+  authorizePathExact,
+  isAuthorizedAncestor,
   isPathAllowed,
   isSystemPath,
   getForbiddenPrefixes,

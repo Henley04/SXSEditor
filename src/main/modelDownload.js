@@ -1,4 +1,4 @@
-const { ipcMain, dialog, shell } = require('electron');
+const { dialog, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const { t } = require('./locale');
@@ -9,6 +9,8 @@ const { isPathAllowed, isSystemPath } = require('./security');
 const { getModelDir, setCustomModelDir } = require('./modelDir');
 const { checkMissingFiles, checkMissingFilesAsync, deleteModelFiles, downloadMissingFiles, DEFAULT_PRECISION, isPrecisionDownloadable, MODEL_IDS, getSifiganFileDownloadUrl, getFcpeFileDownloadUrl, getFcpeLocalFilePath, downloadFileWithRetry, downloadFileChunked, MIN_FILE_SIZE_FOR_CHUNKING, checkModelVersion, checkJpModelVersion, saveJpModelVersion, checkSifiganVersion, saveSifiganVersion, saveModelVersion, invalidateJpModelsCache, getModelTags, getJpModelTags, getSifiganTags, getFcpeRevision, getLatestTag, getRemoteFileSizeByUrl, saveFcpeVersion, checkFcpeVersion } = require('../modelManager');
 const { createModelDownloadWindow, getModelDownloadWindow, getMainWindow } = require('./windowManager');
+const { safeHandle } = require('./ipcSafe');
+const { IPC_CHANNELS } = require('../shared/ipcChannels');
 
 // W5: Per-download-key AbortController map. Replaces the single shared
 // `downloadAbortController` global so concurrent downloads (main/JP/SiFiGAN)
@@ -180,7 +182,7 @@ async function startModelDownload(modelDir, missingFiles, precision, revision) {
       onProgress: (data) => {
         const win = getModelDownloadWindow();
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:progress', data);
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PROGRESS, data);
         }
       },
       onFilesResolved: (resolvedFiles) => {
@@ -188,26 +190,26 @@ async function startModelDownload(modelDir, missingFiles, precision, revision) {
         // 推送给渲染进程让 UI 显示最终的下载列表
         const win = getModelDownloadWindow();
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:missing-files', resolvedFiles);
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_MISSING_FILES, resolvedFiles);
         }
       },
       onFileStart: (filePath, fileIndex, totalFiles) => {
         const win = getModelDownloadWindow();
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:file-start', { filePath, fileIndex, totalFiles });
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_FILE_START, { filePath, fileIndex, totalFiles });
         }
       },
       onFileComplete: (filePath, fileIndex, totalFiles) => {
         const win = getModelDownloadWindow();
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:file-complete', { filePath, fileIndex, totalFiles });
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_FILE_COMPLETE, { filePath, fileIndex, totalFiles });
         }
       },
     });
 
     const win = getModelDownloadWindow();
     if (win && !win.isDestroyed()) {
-      win.webContents.send('model-download:complete');
+      win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_COMPLETE);
     }
     console.log('[Main] All model files downloaded');
   } catch (err) {
@@ -217,7 +219,7 @@ async function startModelDownload(modelDir, missingFiles, precision, revision) {
       console.error('[Main] Model download failed:', err);
       const win = getModelDownloadWindow();
       if (win && !win.isDestroyed()) {
-        win.webContents.send('model-download:error', { message: err.message });
+        win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_ERROR, { message: err.message });
       }
     }
   } finally {
@@ -301,7 +303,7 @@ function registerModelDownloadIpc() {
   // Open an external URL in the system default browser (for model-updates docs link).
   // NOTE: this stays online on purpose — model/app update notes must reflect the
   // newest published release, which the bundled docs snapshot cannot contain.
-  ipcMain.handle('model-download:open-external', async (event, url) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_OPEN_EXTERNAL, async (event, url) => {
     const ALLOWED_EXTERNAL_URLS = [
       ONLINE_DOCS_BASE_URL,
     ];
@@ -321,7 +323,7 @@ function registerModelDownloadIpc() {
   // List available model versions (tags) from ModelScope for a given precision.
   // Tags are fetched from the /revisions endpoint; branches are NOT shown.
   // Downloads are tag-only — there is no 'master' (latest) option.
-  ipcMain.handle('model-download:list-versions', async (event, precision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_LIST_VERSIONS, async (event, precision) => {
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     try {
       const tags = await getModelTags(currentPrecision);
@@ -332,7 +334,7 @@ function registerModelDownloadIpc() {
   });
 
   // List available JP model versions (tags) from ModelScope
-  ipcMain.handle('model-download:list-jp-versions', async (event, precision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_LIST_JP_VERSIONS, async (event, precision) => {
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     try {
       const tags = await getJpModelTags(currentPrecision);
@@ -343,7 +345,7 @@ function registerModelDownloadIpc() {
   });
 
   // List available SiFiGAN model versions (tags) from ModelScope
-  ipcMain.handle('model-download:list-sifigan-versions', async () => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_LIST_SIFIGAN_VERSIONS, async () => {
     try {
       const tags = await getSifiganTags();
       return { success: true, tags };
@@ -352,7 +354,7 @@ function registerModelDownloadIpc() {
     }
   });
 
-  ipcMain.handle('model-download:start', async (event, precision, revision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_START, async (event, precision, revision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     // If no revision (tag) specified or 'latest' requested, fetch the latest tag from ModelScope
@@ -384,7 +386,7 @@ function registerModelDownloadIpc() {
   // W5: cancel a specific in-flight download by key (e.g. 'main' | 'jp' |
   // 'sifigan'), or — for backwards compatibility — abort all in-flight
   // downloads when no key is provided.
-  ipcMain.handle('model-download:cancel', async (event, key) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CANCEL, async (event, key) => {
     if (key) {
       const controller = downloadAbortControllers.get(key);
       if (controller) {
@@ -400,14 +402,14 @@ function registerModelDownloadIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('model-download:check', async (event, precision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK, async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     const { missing, existing } = checkMissingFiles(modelDir, currentPrecision);
     return { missing, existing };
   });
 
-  ipcMain.handle('model-download:change-dir', async () => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHANGE_DIR, async () => {
     const defaultDir = getCustomModelDir() || path.join(require('electron').app.getPath('userData'), 'onnx_models');
     const result = await dialog.showOpenDialog(getModelDownloadWindow() || getMainWindow(), {
       title: t('dialog.selectModelDownloadLocation'),
@@ -452,11 +454,11 @@ function registerModelDownloadIpc() {
     return { canceled: false, modelDir: downloadDir, missing, existing };
   });
 
-  ipcMain.handle('model-download:get-dir', async () => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_GET_DIR, async () => {
     return getModelDir();
   });
 
-  ipcMain.handle('model-download:open', async (event, precision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_OPEN, async (event, precision) => {
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     const modelDir = getModelDir();
     const { missing } = checkMissingFiles(modelDir, currentPrecision);
@@ -464,33 +466,33 @@ function registerModelDownloadIpc() {
     return { success: true, missingCount: missing.length };
   });
 
-  ipcMain.handle('model-download:delete-and-recheck', async (event, precision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_DELETE_AND_RECHECK, async (event, precision) => {
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     const modelDir = getModelDir();
     deleteModelFiles(modelDir, currentPrecision);
     const { missing } = checkMissingFiles(modelDir, currentPrecision);
     const win = getModelDownloadWindow();
     if (win && !win.isDestroyed()) {
-      win.webContents.send('model-download:missing-files', missing);
-      win.webContents.send('model-download:precision', currentPrecision);
+      win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_MISSING_FILES, missing);
+      win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PRECISION, currentPrecision);
     }
     return { success: true, missingCount: missing.length };
   });
 
-  ipcMain.handle('model-download:recheck', async (event, precision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_RECHECK, async (event, precision) => {
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     const modelDir = getModelDir();
     const { missing } = checkMissingFiles(modelDir, currentPrecision);
     const win = getModelDownloadWindow();
     if (win && !win.isDestroyed()) {
-      win.webContents.send('model-download:missing-files', missing);
-      win.webContents.send('model-download:precision', currentPrecision);
+      win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_MISSING_FILES, missing);
+      win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PRECISION, currentPrecision);
     }
     return { success: true, missingCount: missing.length };
   });
 
   // JP model download handlers
-  ipcMain.handle('model-download:check-jp', async (event, precision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK_JP, async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     const { checkMissingJpFiles } = require('../modelManager');
@@ -498,7 +500,7 @@ function registerModelDownloadIpc() {
     return { missing, existing };
   });
 
-  ipcMain.handle('model-download:start-jp', async (event, precision, revision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_START_JP, async (event, precision, revision) => {
     const { checkMissingJpFiles, getJpLocalFilePath, getJpFileDownloadUrl, JP_MODEL_IDS } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
@@ -552,13 +554,13 @@ function registerModelDownloadIpc() {
 
         const win = getModelDownloadWindow();
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:file-complete', { filePath: file.filePath });
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_FILE_COMPLETE, { filePath: file.filePath });
         }
       }
 
       const win = getModelDownloadWindow();
       if (win && !win.isDestroyed()) {
-        win.webContents.send('model-download:complete');
+        win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_COMPLETE);
       }
       // 失效 JP 模型存在性缓存，让下次合成重新检查文件
       invalidateJpModelsCache(modelDir, currentPrecision);
@@ -572,7 +574,7 @@ function registerModelDownloadIpc() {
         console.error('[Main] JP model download failed:', err);
         const win = getModelDownloadWindow();
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:error', { message: err.message });
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_ERROR, { message: err.message });
         }
       }
     } finally {
@@ -582,7 +584,7 @@ function registerModelDownloadIpc() {
     return { success: true };
   });
 
-  ipcMain.handle('model-download:check-jp-exists', async () => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK_JP_EXISTS, async () => {
     const { checkJpModelsExist } = require('../modelManager');
     const modelDir = getModelDir();
     const precision = loadSettings().modelPrecision || DEFAULT_PRECISION;
@@ -597,7 +599,7 @@ function registerModelDownloadIpc() {
 
   // Returns: { status: 'installed' | 'not_downloaded' | 'download_url_not_configured',
   //            files: { ... }, allExist: boolean }
-  ipcMain.handle('model-download:check-sifigan', async () => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK_SIFIGAN, async () => {
     const modelDir = getModelDir();
     const { allExist, files } = checkSifiganFilesExist(modelDir);
     const sifiganId = MODEL_IDS.sifigan || '';
@@ -623,7 +625,7 @@ function registerModelDownloadIpc() {
   // Start SiFiGAN download. Downloads the 3 expected files from the
   // ModelScope repo (MODEL_IDS.sifigan) to the root of onnx_models/.
   // Uses chunked download for files >= 16MB, single-threaded for smaller.
-  ipcMain.handle('model-download:start-sifigan', async (event, revision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_START_SIFIGAN, async (event, revision) => {
     const sifiganId = MODEL_IDS.sifigan || '';
     // If no revision (tag) specified or 'latest' requested, fetch the latest SiFiGAN tag from ModelScope
     let currentRevision = revision;
@@ -700,7 +702,7 @@ function registerModelDownloadIpc() {
         fs.mkdirSync(path.dirname(destPath), { recursive: true });
 
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:file-start', {
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_FILE_START, {
             filePath: fileName,
             fileIndex: missingFiles.indexOf(fileName),
             totalFiles: missingFiles.length,
@@ -718,7 +720,7 @@ function registerModelDownloadIpc() {
             abortSignal,
             onProgress: (downloaded, total) => {
               if (win && !win.isDestroyed()) {
-                win.webContents.send('model-download:progress', {
+                win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PROGRESS, {
                   currentFile: fileName,
                   fileIndex: missingFiles.indexOf(fileName),
                   totalFiles: missingFiles.length,
@@ -737,7 +739,7 @@ function registerModelDownloadIpc() {
             abortSignal,
             onProgress: (downloaded, total) => {
               if (win && !win.isDestroyed()) {
-                win.webContents.send('model-download:progress', {
+                win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PROGRESS, {
                   currentFile: fileName,
                   fileIndex: missingFiles.indexOf(fileName),
                   totalFiles: missingFiles.length,
@@ -754,7 +756,7 @@ function registerModelDownloadIpc() {
         cumulativeDownloaded += remoteSize;
 
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:file-complete', {
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_FILE_COMPLETE, {
             filePath: fileName,
             fileIndex: missingFiles.indexOf(fileName),
             totalFiles: missingFiles.length,
@@ -769,7 +771,7 @@ function registerModelDownloadIpc() {
         saveSifiganVersion(modelDir, currentRevision);
       }
       if (win && !win.isDestroyed()) {
-        win.webContents.send('model-download:complete');
+        win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_COMPLETE);
       }
       console.log('[Main] SiFiGAN model download complete');
       return {
@@ -783,7 +785,7 @@ function registerModelDownloadIpc() {
       } else {
         console.error('[Main] SiFiGAN model download failed:', err);
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:error', { message: err.message });
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_ERROR, { message: err.message });
         }
       }
       const { allExist: errExists, files: errFiles } = checkSifiganFilesExist(modelDir);
@@ -801,7 +803,7 @@ function registerModelDownloadIpc() {
   // in settings.json, and release the InferenceSession if the SVS pipeline
   // has it loaded. Reuses the existing pipeline.unloadModel(sessionKey)
   // API to dispose the session without tearing down the whole pipeline.
-  ipcMain.handle('model-download:unload-sifigan', async () => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_UNLOAD_SIFIGAN, async () => {
     const modelDir = getModelDir();
     const result = deleteSifiganFiles(modelDir);
 
@@ -855,7 +857,7 @@ function registerModelDownloadIpc() {
 
   // Returns: { status: 'installed' | 'not_downloaded' | 'download_url_not_configured',
   //            files: { ... }, allExist: boolean }
-  ipcMain.handle('model-download:check-fcpe', async () => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK_FCPE, async () => {
     const modelDir = getModelDir();
     const { allExist, files } = checkFcpeFilesExist(modelDir);
     const fcpeId = MODEL_IDS.fcpe || '';
@@ -881,7 +883,7 @@ function registerModelDownloadIpc() {
   // Start FCPE download. Downloads fcpe_model.onnx from MODEL_IDS.fcpe and
   // places it at preprocess/fcpe_model.onnx. Uses chunked download for the
   // ~47MB file.
-  ipcMain.handle('model-download:start-fcpe', async (event, revision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_START_FCPE, async (event, revision) => {
     const fcpeId = MODEL_IDS.fcpe || '';
     // If no revision resolved, fall back to the latest tag or 'master'
     // (the FCPE repo currently has no tags — master is used).
@@ -957,7 +959,7 @@ function registerModelDownloadIpc() {
         fs.mkdirSync(path.dirname(destPath), { recursive: true });
 
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:file-start', {
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_FILE_START, {
             filePath: remote,
             fileIndex: i,
             totalFiles: missingFiles.length,
@@ -973,7 +975,7 @@ function registerModelDownloadIpc() {
             abortSignal,
             onProgress: (downloaded, total) => {
               if (win && !win.isDestroyed()) {
-                win.webContents.send('model-download:progress', {
+                win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PROGRESS, {
                   currentFile: remote,
                   fileIndex: i,
                   totalFiles: missingFiles.length,
@@ -990,7 +992,7 @@ function registerModelDownloadIpc() {
             abortSignal,
             onProgress: (downloaded, total) => {
               if (win && !win.isDestroyed()) {
-                win.webContents.send('model-download:progress', {
+                win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PROGRESS, {
                   currentFile: remote,
                   fileIndex: i,
                   totalFiles: missingFiles.length,
@@ -1007,7 +1009,7 @@ function registerModelDownloadIpc() {
         cumulativeDownloaded += remoteSize;
 
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:file-complete', {
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_FILE_COMPLETE, {
             filePath: remote,
             fileIndex: i,
             totalFiles: missingFiles.length,
@@ -1021,7 +1023,7 @@ function registerModelDownloadIpc() {
         saveFcpeVersion(modelDir, currentRevision);
       }
       if (win && !win.isDestroyed()) {
-        win.webContents.send('model-download:complete');
+        win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_COMPLETE);
       }
       console.log('[Main] FCPE model download complete');
       return {
@@ -1035,7 +1037,7 @@ function registerModelDownloadIpc() {
       } else {
         console.error('[Main] FCPE model download failed:', err);
         if (win && !win.isDestroyed()) {
-          win.webContents.send('model-download:error', { message: err.message });
+          win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_ERROR, { message: err.message });
         }
       }
       const { allExist: errExists, files: errFiles } = checkFcpeFilesExist(modelDir);
@@ -1051,7 +1053,7 @@ function registerModelDownloadIpc() {
 
   // Unload FCPE: delete the model file + version file, and release any loaded
   // FCPE InferenceSession via the pipeline.
-  ipcMain.handle('model-download:unload-fcpe', async () => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_UNLOAD_FCPE, async () => {
     const modelDir = getModelDir();
     const result = deleteFcpeFiles(modelDir);
 
@@ -1083,34 +1085,34 @@ function registerModelDownloadIpc() {
 
   // Check model version for a given precision (or all precisions)
   // Returns { updateAvailable, localVersion, latestVersion, hasModelFiles }
-  ipcMain.handle('model-download:check-version', async (event, precision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK_VERSION, async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     return await checkModelVersion(modelDir, currentPrecision);
   });
 
   // Check JP model version
-  ipcMain.handle('model-download:check-jp-version', async (event, precision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK_JP_VERSION, async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     return await checkJpModelVersion(modelDir, currentPrecision);
   });
 
   // Check SiFiGAN model version
-  ipcMain.handle('model-download:check-sifigan-version', async () => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK_SIFIGAN_VERSION, async () => {
     const modelDir = getModelDir();
     return await checkSifiganVersion(modelDir);
   });
 
   // Check FCPE model version
-  ipcMain.handle('model-download:check-fcpe-version', async () => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK_FCPE_VERSION, async () => {
     const modelDir = getModelDir();
     return await checkFcpeVersion(modelDir);
   });
 
   // Check versions for all model groups at once (main + jp + sifigan + fcpe)
   // Returns { main, jp, sifigan, fcpe } where each is the version check result
-  ipcMain.handle('model-download:check-all-versions', async (event, precision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_CHECK_ALL_VERSIONS, async (event, precision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     const [main, jp, sifigan, fcpe] = await Promise.all([
@@ -1128,7 +1130,7 @@ function registerModelDownloadIpc() {
   // When invoked from an already-open download window, the download is
   // started in that window directly (createModelDownloadWindow would
   // otherwise no-op because the window already exists).
-  ipcMain.handle('model-download:update', async (event, precision, revision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_UPDATE, async (event, precision, revision) => {
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
     // If no revision (tag) specified or 'latest' requested, fetch the latest tag from ModelScope
@@ -1168,9 +1170,9 @@ function registerModelDownloadIpc() {
     // and revision into it, then start the download in that same window.
     const existingWin = getModelDownloadWindow();
     if (existingWin && !existingWin.isDestroyed()) {
-      existingWin.webContents.send('model-download:missing-files', missing);
-      existingWin.webContents.send('model-download:precision', currentPrecision);
-      existingWin.webContents.send('model-download:revision', currentRevision);
+      existingWin.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_MISSING_FILES, missing);
+      existingWin.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PRECISION, currentPrecision);
+      existingWin.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_REVISION, currentRevision);
       await startModelDownload(modelDir, missing, currentPrecision, currentRevision);
       return { success: true, missingCount: missing.length };
     }
@@ -1182,7 +1184,7 @@ function registerModelDownloadIpc() {
   });
 
   // Update JP models: delete and re-download
-  ipcMain.handle('model-download:update-jp', async (event, precision, revision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_UPDATE_JP, async (event, precision, revision) => {
     const { getJpLocalFilePath, JP_MODEL_IDS, JP_MODEL_FILE_MANIFEST } = require('../modelManager');
     const modelDir = getModelDir();
     const currentPrecision = precision || loadSettings().modelPrecision || DEFAULT_PRECISION;
@@ -1228,17 +1230,17 @@ function registerModelDownloadIpc() {
     // Trigger JP download through the existing start-jp IPC flow
     const win = getModelDownloadWindow();
     if (win && !win.isDestroyed()) {
-      win.webContents.send('model-download:missing-files', missing);
-      win.webContents.send('model-download:precision', currentPrecision);
+      win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_MISSING_FILES, missing);
+      win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_PRECISION, currentPrecision);
       if (currentRevision) {
-        win.webContents.send('model-download:revision', currentRevision);
+        win.webContents.send(IPC_CHANNELS.MODEL_DOWNLOAD_REVISION, currentRevision);
       }
     }
     return { success: true, missingCount: missing.length };
   });
 
   // Update SiFiGAN: delete and re-download
-  ipcMain.handle('model-download:update-sifigan', async (event, revision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_UPDATE_SIFIGAN, async (event, revision) => {
     const modelDir = getModelDir();
     const sifiganId = MODEL_IDS.sifigan || '';
     if (!sifiganId) {
@@ -1280,7 +1282,7 @@ function registerModelDownloadIpc() {
   });
 
   // Update FCPE: delete and re-download
-  ipcMain.handle('model-download:update-fcpe', async (event, revision) => {
+  safeHandle(IPC_CHANNELS.MODEL_DOWNLOAD_UPDATE_FCPE, async (event, revision) => {
     const modelDir = getModelDir();
     const fcpeId = MODEL_IDS.fcpe || '';
     if (!fcpeId) {

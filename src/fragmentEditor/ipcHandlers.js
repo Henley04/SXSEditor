@@ -1,4 +1,5 @@
 import { t, tOr } from '../i18n/index.js';
+import { setLabel } from '../icons/iconHelper.js';
 import {
   getFragmentIsSynthesizing,
   getFragmentIsExporting,
@@ -27,13 +28,17 @@ import {
   setPitchCurve,
   setCurrentFragment,
   setCurrentProject,
+  setTrackBackend,
   invalidatePitchCurveCache,
   setFragmentDataReceived,
   getKanjiGroups, setKanjiGroups,
+  setPostprocess, invalidateTimbreCache, getSelectedTimbreAnchors,
 } from './state.js';
 import { PARAM_MODES } from './constants.js';
+import { normalizePostprocessState } from '../shared/postprocessCurves.js';
 import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
-import { updateParamModeButtons } from './uiControls.js';
+import { updateParamModeButtons, syncPostprocessUi } from './uiControls.js';
+import { normalizeTrackBackend } from './pluginEditorMode.js';
 import { autoDetectKanjiGroups, cleanupKanjiGroups } from './kanjiGroupUtils.js';
 import { showAlertDialog } from '../alertDialog.js';
 
@@ -54,10 +59,10 @@ export function setupIpcHandlers() {
     // 而导出时因 fragmentIsSynthesizing=false 两个按钮都不更新。
     if (getFragmentIsSynthesizing()) {
       const btnPlayFragment = document.getElementById('btn-play-fragment');
-      if (btnPlayFragment) btnPlayFragment.textContent = t('fragment.synthesizingProgress', { progress });
+      if (btnPlayFragment) setLabel(btnPlayFragment, t('fragment.synthesizingProgress', { progress }), { icon: 'play' });
     } else if (getFragmentIsExporting()) {
       const btnExportFragment = document.getElementById('btn-export-fragment');
-      if (btnExportFragment) btnExportFragment.textContent = t('fragment.exportingProgress', { progress });
+      if (btnExportFragment) setLabel(btnExportFragment, t('fragment.exportingProgress', { progress }), { icon: 'download' });
     }
   });
   if (cleanupProgress) _ipcCleanups.push(cleanupProgress);
@@ -104,6 +109,10 @@ async function handleFragmentData(data) {
 
   setCurrentFragment(data.fragment);
   setCurrentProject(data.project);
+  // 轨道后端（内置 {type:'sxs'} 或插件 {type:'plugin', pluginId, kindId}）。
+  // 走 getFragmentData 兜底路径时 payload 可能没有 backend 字段（老工程/旧主进程），
+  // 这里退化成内置后端而不是报错 —— 形态裁剪由 pluginEditorMode.js 负责。
+  setTrackBackend(normalizeTrackBackend(data.backend));
   document.getElementById('fragment-name').textContent = data.fragment.name || t('fragment.fragment');
   // 规范化 notes：为旧项目的 note 补全 vibrato/fadeIn/fadeOut 字段。
   // vibrato 在首次启用时由 ensureVibrato() 补全，这里只确保 fadeIn/fadeOut 有默认值。
@@ -134,6 +143,17 @@ async function handleFragmentData(data) {
     });
   }
   invalidatePitchCurveCache();
+
+  // 音色 / 后处理曲线：旧工程没有该字段 → 退回全默认（所有处理关闭，音频与旧版本一致）。
+  // normalizePostprocessState 逐参数合并到注册表默认值上，并把默认值/锚点值全部
+  // 夹紧到注册表值域 —— 手改工程或跨版本字段越界时不会把越界 σ/百分比送进管线
+  // （σ 越界会让高斯核半径按 3σ 膨胀，最坏情况长时间卡死主进程）。
+  setPostprocess(normalizePostprocessState(data.fragment.postprocess || null));
+  invalidateTimbreCache();
+  getSelectedTimbreAnchors().clear();
+  // 检查器是在 setupPostprocessUi() 里按"启动时的空状态"建好的；工程里的
+  // 默认值/曲线此刻才载入，不刷新的话右侧面板会一直显示上一个分片的数值。
+  syncPostprocessUi();
 
   setDragOperation(null);
   setDragMode(null);

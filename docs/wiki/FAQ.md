@@ -13,7 +13,7 @@ Yes. SXSEditor is open-source under the MIT License.
 ### What platforms are supported?
 
 - **Windows**: Primary target with pre-built installers. Windows 10/11 64-bit required.
-- **macOS / Linux**: Can be built from source using Electron Forge. See the [Developer Guide](Developer-Guide).
+- **macOS / Linux**: Can be built from source using Electron Forge (CPU inference only; not covered by CI, no official binaries). See the [Developer Guide](Developer-Guide).
 
 ### What languages can it sing?
 
@@ -118,7 +118,9 @@ For Chinese singing, enter Chinese characters (e.g., `你好`). You may append a
 
 ### What is a slur note?
 
-A slur (continuation) note extends the previous note's sound without re-attacking. Create one by adding a note with an empty lyric or a dash `-`. The note continues the phoneme of the previous note.
+A slur (continuation) note extends the previous note's sound without re-attacking. Create one by typing a half-width dash `-` as the note's lyric. The note continues the phoneme of the previous note.
+
+**An empty lyric is not a slur** — an empty lyric is a rest and always sings as silence, with or without a pitch. Only `-` marks a continuation.
 
 ### How do I draw pitch curves?
 
@@ -183,11 +185,11 @@ DirectML supports NVIDIA, AMD, and Intel GPUs (both discrete and integrated). NP
 
 ### What is the output sample rate?
 
-Synthesis runs at 24kHz internally (the SVS model's native rate). The default output sample rate is **48 kHz** (changed from 24 kHz in earlier versions), with 2× oversampling anti-aliasing for improved quality. Output sample rate is configurable in Settings (22050 to 192000 Hz). In exclusive mode, the device must support the selected rate.
+Synthesis runs at 24kHz internally (the SVS model's native rate). The default output sample rate is **48 kHz** (changed from 24 kHz in earlier versions), with a band-limited Kaiser windowed-sinc resampler for accurate high-frequency reproduction. Output sample rate is configurable in Settings (22050 to 192000 Hz). In exclusive mode, the device must support the selected rate.
 
 ### What format is the exported WAV?
 
-48 kHz, 16-bit PCM WAV by default. Export sample rate is selectable: 24/44.1/48/96 kHz. The SVS model runs at 24 kHz internally and the output is resampled with 2× oversampling anti-aliasing.
+48 kHz, 32-bit IEEE float WAV by default (bit depth selectable 16 / 24 / 32-bit in the Export dialog). Export sample rate is selectable: 24/44.1/48/96 kHz. The SVS model runs at 24 kHz internally and the output is resampled with a band-limited Kaiser windowed-sinc interpolator.
 
 ---
 
@@ -236,11 +238,11 @@ For most users, **Euler** is the best choice for preview (fast) and **Heun** or 
 
 ### What is Dynamic Thresholding?
 
-Dynamic Thresholding is a per-frame percentile clipping technique (arXiv:2507.08965) that suppresses outlier mel bins during diffusion sampling, reducing artifacts without sacrificing detail. The percentile is adjustable (0.9–0.999); higher values preserve more detail, lower values are more aggressive at suppressing artifacts.
+Dynamic Thresholding is a per-frame percentile clipping technique (Imagen, arXiv:2205.11487) that suppresses outlier mel bins during diffusion sampling, reducing artifacts without sacrificing detail. The percentile is adjustable (0.9–0.999); higher values preserve more detail, lower values are more aggressive at suppressing artifacts.
 
 ### Why was the default sample rate changed to 48 kHz?
 
-The SVS model runs at 24 kHz internally. Previously, the output was also 24 kHz, which limited high-frequency fidelity. The default is now 48 kHz with 2× oversampling anti-aliasing, which significantly improves output quality. The export sample rate is selectable (24/44.1/48/96 kHz) if you need a different rate.
+The SVS model runs at 24 kHz internally. Previously, the output was also 24 kHz, which limited high-frequency fidelity. The default is now 48 kHz, upsampled by a band-limited Kaiser windowed-sinc interpolator, which preserves the full band the model produces. The export sample rate is selectable (24/44.1/48/96 kHz) if you need a different rate.
 
 ---
 

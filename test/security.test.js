@@ -68,14 +68,17 @@ describe('Security Module', function () {
       expect(isPathAllowed(filePath)).to.be.true;
     });
 
-    it('should allow paths in home directory', function () {
+    // home 与 temp 已从 ALLOWED_SAVE_DIRS 移除：对这两个目录的前缀匹配等于
+    // 无条件放行整个用户主目录（~/.ssh、~/.aws、浏览器 cookie 等）。需要访问
+    // 时必须先经原生对话框或 file:authorizePath 的白名单规则授权。
+    it('should not allow arbitrary paths in home directory', function () {
       const filePath = path.join('C:\\Users\\test', 'file.txt');
-      expect(isPathAllowed(filePath)).to.be.true;
+      expect(isPathAllowed(filePath)).to.be.false;
     });
 
-    it('should allow paths in temp directory', function () {
+    it('should not allow paths in temp directory', function () {
       const filePath = path.join('C:\\Users\\test\\AppData\\Local\\Temp', 'temp.wav');
-      expect(isPathAllowed(filePath)).to.be.true;
+      expect(isPathAllowed(filePath)).to.be.false;
     });
 
     it('should reject paths in system directories', function () {
