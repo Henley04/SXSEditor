@@ -472,3 +472,131 @@ describe('音色参数量化与共享撤销栈', () => {
     expect(state.getPostprocessDefaults().f0Smooth).to.equal(0);
   });
 });
+
+describe('音色曲线编辑 → 检查器读数跟随', () => {
+  // 回归：以前只有"选预设 / 拖滑块"会刷新右侧面板；在 lane 里改曲线（新增/拖动/
+  // 删除锚点、撤销重做）时 state 变了但面板读数不动，用户看到"曲线是这个值、
+  // 面板还是那个值"。这里真的把鼠标事件打到 canvas 上走一遍完整链路。
+  const eventHandlers = require('../src/fragmentEditor/eventHandlers');
+  const { history: fragmentHistory } = require('../src/fragmentEditor/history');
+  const { formatParamValue, createDefaultPostprocessState } = require('../src/fragmentEditor/postprocessParams');
+
+  const LANE_H = 600;   // 人造容器高度：lane = [520, 600)，80px 高
+
+  function mouse(type, x, y, extra = {}) {
+    cr.canvas.dispatchEvent(new window.MouseEvent(type, {
+      clientX: x, clientY: y, button: 0, bubbles: true, ...extra,
+    }));
+  }
+
+  function sliderValue(paramId) {
+    return parseFloat(document.querySelector(`.pp-slider[data-param="${paramId}"]`).value);
+  }
+
+  function labelText(paramId) {
+    return document.querySelector(`.pp-row-val[data-param="${paramId}"]`).textContent;
+  }
+
+  before(() => {
+    document.body.innerHTML = PAGE_HTML;
+    // canvasRenderer 在模块加载时就抓住了 #piano-roll；整页替换后那个节点已脱离文档，
+    // 把它换回 DOM，否则 _getParentHeight()/getBoundingClientRect 都拿不到东西。
+    const live = document.getElementById('piano-roll');
+    if (live && live !== cr.canvas) live.replaceWith(cr.canvas);
+    const parent = cr.canvas.parentElement;
+    // jsdom 不做布局：给容器人造尺寸，lane 的坐标才可预测
+    Object.defineProperty(parent, 'clientHeight', { value: LANE_H, configurable: true });
+    Object.defineProperty(parent, 'clientWidth', { value: 900, configurable: true });
+    cr.invalidateLayoutCache();
+    uiControls.setupPostprocessUi();
+    eventHandlers.setupEventListeners();
+  });
+
+  after(() => {
+    document.body.innerHTML = '<canvas id="piano-roll"></canvas><canvas id="piano-keys"></canvas>';
+    cr.invalidateLayoutCache();
+  });
+
+  beforeEach(() => {
+    state.setPostprocess(createDefaultPostprocessState());
+    state.setActiveTimbreParam('f0Smooth');
+    state.setParamPanelCollapsed(false);
+    state.setParamPanelMode('Timbre');
+    state.setZoomX(1);
+    state.setScrollX(0);
+    state.setScrollY(0);
+    state.getSelectedTimbreAnchors().clear();
+    state.setTimbreDragAnchorIdx(-1);
+    state.setDragMode(null);
+    state.setDragOperation(null);
+    state.setFragmentPlayStartPosition(0);
+    fragmentHistory.clear();
+    cr.invalidateLayoutCache();
+    uiControls.syncPostprocessUi();
+  });
+
+  it('在 lane 空白处按下新增锚点 → 检查器读数 = 新锚点数值', () => {
+    // y=580 → (1 - 60/80) * 100 = 25（f0Smooth 值域 0..100）
+    mouse('mousedown', 120, 580);
+    const anchors = state.getPostprocessCurves().f0Smooth.keyframes;
+    expect(anchors).to.have.length(1);
+    expect(anchors[0].value).to.equal(25);
+    expect(sliderValue('f0Smooth')).to.equal(25);
+    expect(labelText('f0Smooth')).to.equal(formatParamValue('f0Smooth', 25, t));
+    // 曲线存在 → 模式标签变"自动"
+    expect(document.getElementById('pp-mode-tag').textContent).to.equal(t('fragment.ppAuto'));
+  });
+
+  it('纵向拖动锚点 → 读数逐帧跟手（不是停在按下时的旧值）', () => {
+    mouse('mousedown', 120, 580);
+    expect(sliderValue('f0Smooth')).to.equal(25);
+
+    // 上拖 20px = +25（100 的量程 / 80px 的 lane）
+    mouse('mousemove', 120, 560);
+    const anchors = state.getPostprocessCurves().f0Smooth.keyframes;
+    expect(anchors[0].value).to.equal(50);
+    expect(sliderValue('f0Smooth')).to.equal(50);
+    expect(labelText('f0Smooth')).to.equal(formatParamValue('f0Smooth', 50, t));
+
+    mouse('mouseup', 120, 560);
+    expect(state.getDragMode()).to.equal(null);
+    expect(sliderValue('f0Smooth')).to.equal(50);
+  });
+
+  it('撤销 / 重做曲线编辑 → 读数跟着回到对应状态', () => {
+    mouse('mousedown', 120, 580);
+    mouse('mousemove', 120, 560);
+    mouse('mouseup', 120, 560);
+    expect(sliderValue('f0Smooth')).to.equal(50);
+
+    // Ctrl+Z：锚点被撤销 → 曲线为空 → 读数回到默认值
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true }));
+    expect(state.getPostprocessCurves().f0Smooth.keyframes).to.have.length(0);
+    expect(sliderValue('f0Smooth')).to.equal(state.getPostprocessDefaults().f0Smooth);
+
+    // Ctrl+Y：重做 → 锚点回来 → 读数回到锚点值
+    document.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'y', ctrlKey: true, bubbles: true }));
+    expect(state.getPostprocessCurves().f0Smooth.keyframes).to.have.length(1);
+    expect(sliderValue('f0Smooth')).to.equal(state.getPostprocessCurves().f0Smooth.keyframes[0].value);
+  });
+
+  it('Ctrl 点选取消选中后仍拖动锚点 → 读数跟拖动的那个锚点，松手回默认', () => {
+    const anchors = state.getPostprocessCurves().f0Smooth.keyframes;
+    anchors.push({ time: 2, value: 40, strength: 100, smoothness: 30 });
+    state.invalidateTimbreCache();
+    state.setTimbreDragAnchorIdx(0); // 拖动中，但选中集合为空
+    uiControls.syncTimbreParamValue('f0Smooth');
+    expect(sliderValue('f0Smooth')).to.equal(40);
+
+    state.setTimbreDragAnchorIdx(-1);
+    uiControls.syncTimbreParamValue('f0Smooth');
+    expect(sliderValue('f0Smooth')).to.equal(state.getPostprocessDefaults().f0Smooth);
+  });
+
+  it('载入工程后检查器按工程里的默认值刷新（不显示启动时的空状态）', () => {
+    state.getPostprocessDefaults().specSmoothT = 2.4;
+    expect(sliderValue('specSmoothT')).to.equal(0);
+    uiControls.syncPostprocessUi(); // ipcHandlers 在 setPostprocess() 之后调用它
+    expect(sliderValue('specSmoothT')).to.equal(2.4);
+  });
+});

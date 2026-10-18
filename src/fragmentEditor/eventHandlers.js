@@ -99,7 +99,7 @@ import {
 } from './kanjiGroupUtils.js';
 import { stopFragmentPlayback, playFragment, exportFragment, seekFragmentPlayback } from './audioPlayback.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
-import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel } from './uiControls.js';
+import { updateFragmentPlayButton, updateParamModeButtons, updateParamPanelState, showShortcutsPanel, hideShortcutsPanel, syncTimbreParamValue } from './uiControls.js';
 import { snapshotAnchors, clampStrength, clampSmoothness } from './automationCurve.js';
 import { getTimbreKeyframes } from './postprocessAccess.js';
 import { POSTPROCESS_PARAMS, quantizeParamValue, formatParamValue } from './postprocessParams.js';
@@ -1781,6 +1781,9 @@ function _applyTimbreSnapshot(paramId, snapshot) {
   if (!curve) return;
   curve.keyframes = (snapshot || []).map((a) => ({ ...a }));
   invalidateTimbreCache();
+  // 撤销/重做改的是曲线本身：检查器读数必须跟着回到新状态，
+  // 否则滑块还停在旧的锚点值上（"面板和曲线对不上"）。
+  syncTimbreParamValue(paramId);
 }
 
 function _deleteTimbreAnchor(anchorIdx) {
@@ -1798,6 +1801,7 @@ function _deleteTimbreAnchor(anchorIdx) {
     redo() { _applyTimbreSnapshot(paramId, newSnapshot); },
   });
   render();
+  syncTimbreParamValue(paramId); // 删掉选中锚点后读数回落到默认值 / 曲线状态
   scheduleAutoSave();
 }
 
@@ -1827,6 +1831,8 @@ function handleTimbreMouseDown(pos, e) {
     setDragMode('timbre-anchor');
     setDragOperation({ type: 'timbreAnchorMove', paramId, anchorIndex: idx });
     render();
+    // 选中锚点 = 检查器改为编辑这个锚点，读数必须立刻切过去（否则滑块还停在默认值）。
+    syncTimbreParamValue(paramId);
     return;
   }
 
@@ -1848,6 +1854,7 @@ function handleTimbreMouseDown(pos, e) {
   setDragOperation({ type: 'timbreAnchorAdd', paramId, anchorIndex: newIdx });
   scheduleAutoSave();
   render();
+  syncTimbreParamValue(paramId); // 新增锚点后读数 = 新锚点数值
 }
 
 function applyTimbreAnchorDrag(pos) {
@@ -1868,6 +1875,8 @@ function applyTimbreAnchorDrag(pos) {
   anchor.value = quantizeParamValue(paramId, getTimbreDragStartValue() + dyValue);
   invalidateTimbreCache();
   render();
+  // 拖动锚点 = 改数值：检查器读数逐帧跟手（值没变时写同样的值，无副作用）
+  syncTimbreParamValue(paramId);
   return true;
 }
 
@@ -1930,6 +1939,9 @@ function _finalizeTimbreCurveDrag(commitHistory) {
     });
     scheduleAutoSave();
   }
+  // 拖动结束：dragIdx 已清零，读数回到"选中锚点 / 默认值"。没有这一步时，
+  // Ctrl+点选取消选中后拖动的锚点，松手瞬间面板会停在一个不再成立的值上。
+  syncTimbreParamValue(paramId);
 }
 
 function lyricEditorValue(note) {
@@ -2879,6 +2891,8 @@ export function setupEventListeners() {
       getSelectedTimbreAnchors().clear();
       setAnchorDragHud(null);
       render();
+      // 取消选中 = 检查器不再编辑锚点，读数回到默认值
+      syncTimbreParamValue(getActiveTimbreParam());
       return;
     }
 
@@ -2964,6 +2978,7 @@ export function setupEventListeners() {
             redo() { _applyTimbreSnapshot(paramId, newSnapshot); },
           });
           render();
+          syncTimbreParamValue(paramId); // 删除后读数回落到默认值
           scheduleAutoSave();
           return;
         }

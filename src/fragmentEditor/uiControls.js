@@ -22,6 +22,7 @@ import {
   getPostprocessDefaults, getPostprocessCurves,
   getActiveTimbreParam, setActiveTimbreParam,
   getSelectedTimbreAnchors,
+  getTimbreDragAnchorIdx,
   invalidateTimbreCache,
 } from './state.js';
 import {
@@ -333,6 +334,29 @@ function _selectedTimbreAnchorIndex(paramId) {
   return anchors[idx] ? idx : -1;
 }
 
+/**
+ * 检查器读数的取值来源（写回目标仍是 _selectedTimbreAnchorIndex，见 _applyParamValue）：
+ *   1. 该参数选中了唯一锚点 → 该锚点的数值；
+ *   2. 否则若正在拖动该参数的某个锚点（Ctrl+点选取消选中后仍可拖动）→ 拖动的那个；
+ *   3. 否则 → 该参数的全局默认值（无锚点时的常量）。
+ * 2 必须存在：canvas 的拖动反馈选中的是 dragIdx，若这里退回默认值，
+ * 拖动时面板会显示一个和曲线无关的数字。
+ */
+function _inspectorAnchorIndex(paramId) {
+  const idx = _selectedTimbreAnchorIndex(paramId);
+  if (idx >= 0) return idx;
+  if (paramId !== getActiveTimbreParam()) return -1;
+  const dragIdx = getTimbreDragAnchorIdx();
+  if (dragIdx < 0) return -1;
+  return getTimbreKeyframes(paramId)[dragIdx] ? dragIdx : -1;
+}
+
+/** 某参数在检查器里应当显示的数值（锚点值或默认值）。 */
+function _inspectorValue(paramId) {
+  const idx = _inspectorAnchorIndex(paramId);
+  return idx >= 0 ? getTimbreKeyframes(paramId)[idx].value : getTimbreDefault(paramId);
+}
+
 function _applyParamValue(paramId, rawValue) {
   const value = quantizeParamValue(paramId, rawValue);
   const idx = _selectedTimbreAnchorIndex(paramId);
@@ -601,13 +625,10 @@ export function syncPostprocessUi() {
     chip.classList.toggle('active', chip.dataset.param === activeParam);
   });
 
-  const anchorIdx = _selectedTimbreAnchorIndex(activeParam);
   document.querySelectorAll('.pp-slider').forEach(slider => {
     const paramId = slider.dataset.param;
     if (!paramId) return;
-    const anchors = getTimbreKeyframes(paramId);
-    const idx = paramId === activeParam ? anchorIdx : -1;
-    const value = idx >= 0 ? anchors[idx].value : getTimbreDefault(paramId);
+    const value = _inspectorValue(paramId);
     if (document.activeElement !== slider) {
       slider.value = String(value);
     }
@@ -624,4 +645,20 @@ export function syncPostprocessUi() {
       Object.entries(preset.values).every(([id, v]) => Math.abs((defaults[id] ?? 0) - v) < 1e-6));
     if (match) presetSelect.value = match.id;
   }
+}
+
+/**
+ * 只刷新单个参数的检查器读数（曲线拖动 / 增删锚点这类高频路径）。
+ *
+ * 整面板 syncPostprocessUi() 会遍历全部滑块并重算预设高亮；拖锚点时每帧都跑一遍
+ * 没有必要，而且在拖动中重写所有滑块只会让读数闪。这里只动受影响的那一行。
+ */
+export function syncTimbreParamValue(paramId) {
+  if (!paramId) return;
+  const value = _inspectorValue(paramId);
+  const slider = document.querySelector(`.pp-slider[data-param="${paramId}"]`);
+  // 用户正在拖这个滑块时不回写，避免和输入打架
+  if (slider && document.activeElement !== slider) slider.value = String(value);
+  _syncValueLabel(paramId, value);
+  if (paramId === getActiveTimbreParam()) _syncModeTag(paramId);
 }

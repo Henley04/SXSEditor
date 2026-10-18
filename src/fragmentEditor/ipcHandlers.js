@@ -37,7 +37,7 @@ import {
 import { PARAM_MODES } from './constants.js';
 import { normalizePostprocessState } from '../shared/postprocessCurves.js';
 import { render, resizeCanvases, computeInitialScrollY, convertExistingBrushSegmentsToAnchorPoints, resolvePhonemesFromPipeline, genNoteId } from './canvasRenderer.js';
-import { updateParamModeButtons } from './uiControls.js';
+import { updateParamModeButtons, syncPostprocessUi } from './uiControls.js';
 import { normalizeTrackBackend } from './pluginEditorMode.js';
 import { autoDetectKanjiGroups, cleanupKanjiGroups } from './kanjiGroupUtils.js';
 import { showAlertDialog } from '../alertDialog.js';
@@ -151,6 +151,9 @@ async function handleFragmentData(data) {
   setPostprocess(normalizePostprocessState(data.fragment.postprocess || null));
   invalidateTimbreCache();
   getSelectedTimbreAnchors().clear();
+  // 检查器是在 setupPostprocessUi() 里按"启动时的空状态"建好的；工程里的
+  // 默认值/曲线此刻才载入，不刷新的话右侧面板会一直显示上一个分片的数值。
+  syncPostprocessUi();
 
   setDragOperation(null);
   setDragMode(null);
