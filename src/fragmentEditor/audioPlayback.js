@@ -9,6 +9,9 @@ import { t } from '../i18n/index.js';
 import { setLabel } from '../icons/iconHelper.js';
 import { initPipeline, getFragmentPreviewInferenceOptions, getFragmentExportInferenceOptions } from './pipeline.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
+// 播放头必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
+// （输出设备缓冲会让声音晚 20–120 ms 到喇叭 → 指示器稳定跑在声音前面）。
+import { getAudibleElapsedSec } from '../shared/audioOutputClock.js';
 import {
   getSampleRate,
   getFragmentAudioContext, setFragmentAudioContext,
@@ -518,6 +521,8 @@ function _checkFragmentStreamingUnderrun() {
   if (!getFragmentIsPlaying()) return false;
   const ctx = getFragmentAudioContext();
   if (!ctx) return false;
+  // underrun 是"渲染域"事件（缓冲是否被吃空），必须与 watchdog 的 getElapsed
+  // 同基准用 ctx.currentTime；不要换成可听时间（见 audioOutputClock 使用边界）。
   const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
   const curTime = getFragmentPlaybackOffset() + elapsed;
   return _scheduler.checkUnderrun(curTime, () => {
@@ -537,7 +542,8 @@ export function updateFragmentPlayhead() {
   const ctx = getFragmentAudioContext();
   if (!ctx) return;
 
-  const elapsed = ctx.currentTime - getFragmentPlaybackStartTime();
+  // 播放头取"耳朵听到的位置"：渲染时钟减去设备输出延迟（见 audioOutputClock）。
+  const elapsed = getAudibleElapsedSec(ctx, getFragmentPlaybackStartTime());
   setFragmentCurrentTime(getFragmentPlaybackOffset() + elapsed);
 
   // Buffer underrun detection (see _checkFragmentStreamingUnderrun).
@@ -654,11 +660,14 @@ async function playFragmentShared() {
     updateFragmentPlayButton();
     render();
   };
-  // source.start(when, offset) — offset 是音频缓冲区内的时间偏移
-  source.start(0, Math.max(0, startOffset));
+  // source.start(when, offset) — offset 是音频缓冲区内的时间偏移。
+  // 时间基准取 start 前的 currentTime 并用 start(when) 精确对齐：start(0) 只
+  // 保证"下一个渲染量子"（24 kHz 下 ≈5 ms），基准取 start 之后会让播放头略超前。
+  const startAt = ctx.currentTime;
+  source.start(startAt, Math.max(0, startOffset));
   setFragmentAudioSource(source);
   setFragmentIsPlaying(true);
-  setFragmentPlaybackStartTime(ctx.currentTime);
+  setFragmentPlaybackStartTime(startAt);
   setFragmentPlaybackOffset(startOffset);
   setFragmentCurrentTime(startOffset);
   updateFragmentPlayhead();

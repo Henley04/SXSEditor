@@ -9,6 +9,9 @@ import { buildFragmentPitchCurveF0 } from './f0Utils.js';
 import { formatTime } from './uiControls.js';
 import { drawPlayheadLine, drawPausedPlayheadAt, clearPlayheadLine } from './timelineRenderer.js';
 import { StreamingScheduler } from '../shared/streamingScheduler.js';
+// 播放头/时间码必须按"耳朵听到的位置"走，而不是渲染线程的 currentTime
+// （输出设备缓冲会让声音晚 20–120 ms 到喇叭 → 指示器稳定跑在声音前面）。
+import { getAudibleElapsedSec, getAudibleContextTime } from '../shared/audioOutputClock.js';
 import { getSingerBackend, normalizeBackend } from '../editor/trackManager.js';
 import { clearPluginBlockingOverlay } from './pluginBlockingOverlay.js';
 // 2.4: 渲染进程此前没有统一的异常兜底策略，静默 catch 占全库 44.8%。
@@ -205,7 +208,9 @@ function _createScheduler() {
       // watchdog 带 0.3s 提前量时冻结点在 buffer 前沿之前，
       // 播放头画在当前（即将冻结的）位置而非前沿，避免恢复后回跳。
       const waitCtx = state.audioContext;
-      const waitElapsed = waitCtx ? Math.max(0, waitCtx.currentTime - state.playbackStartTime) : 0;
+      const waitElapsed = waitCtx
+        ? Math.max(0, getAudibleContextTime(waitCtx) - state.playbackStartTime)
+        : 0;
       drawPlayheadLine(waitElapsed);
     },
     // watchdog 兜底检测带 0.3s 提前量（>= 250ms tick 周期 + suspend 延迟），
@@ -986,10 +991,14 @@ export function startSharedPlayback(offset) {
     }
   };
 
-  source.start(0, offset);
+  // 时间基准必须与 source 真正开始发声的时刻对齐：先取基准、再用 start(when)
+  // 精确落在该时刻。start(0) 只保证"下一个渲染量子"（24 kHz 下 ≈5 ms），
+  // 基准取 start 之后的 currentTime 会让播放头从一开始就略微超前。
+  const startAt = context.currentTime;
+  source.start(startAt, offset);
   state.currentAudioSource = source;
   state.isPlaying = true;
-  state.playbackStartTime = context.currentTime - offset;
+  state.playbackStartTime = startAt - offset;
   state.playbackPauseOffset = offset;
 
   startPlayheadAnimation();
@@ -1128,7 +1137,8 @@ export function pausePlayback() {
   // 流式播放暂停：停止所有流式 source，记录当前位置
   if (state.streamingSources && state.streamingSources.length > 0) {
     const context = getAudioContext();
-    const elapsed = context.currentTime - state.playbackStartTime;
+    // 暂停位置取"听到的位置"：续播时从该位置重新调度，视觉与听觉才一致。
+    const elapsed = getAudibleElapsedSec(context, state.playbackStartTime);
     state.playbackPauseOffset = Math.max(0, elapsed);
     state.streamingFinished = true;
     _streamingActive = false;
@@ -1165,7 +1175,7 @@ export function pausePlayback() {
   } else {
     if (!state.currentAudioSource) return;
     const context = getAudioContext();
-    const elapsed = context.currentTime - state.playbackStartTime;
+    const elapsed = getAudibleElapsedSec(context, state.playbackStartTime);
     state.playbackPauseOffset = elapsed;
     stopAudioSource();
     state.isPlaying = false;
@@ -1286,7 +1296,8 @@ export function getCurrentPlaybackSeconds() {
       return Math.max(0, Date.now() / 1000 - state.playbackStartTime);
     }
     if (state.audioContext) {
-      return Math.max(0, state.audioContext.currentTime - state.playbackStartTime);
+      // hit test / tooltip 用的是"用户看到并听到的位置"，与播放头同一基准。
+      return getAudibleElapsedSec(state.audioContext, state.playbackStartTime);
     }
     return 0;
   }
@@ -1319,14 +1330,18 @@ export function startPlayheadAnimation() {
     if (!state.isPlaying) return;
 
     const context = getAudioContext();
-    const elapsed = context.currentTime - state.playbackStartTime;
+    // 两个时钟域，不可混用（混用 = 补偿量重复计入，人声真的与时间轴错开）：
+    //   renderedElapsed —— 渲染域位置：chunk 对齐、underrun 前沿、结束判定用。
+    //   elapsed         —— 可听域位置：只有播放头与时间码用（见 audioOutputClock）。
+    const renderedElapsed = context.currentTime - state.playbackStartTime;
+    const elapsed = getAudibleElapsedSec(context, state.playbackStartTime);
 
     // 流式播放 buffer underrun 检测：
     // 当 playhead 到达已收到音频的最远位置（buffer 前沿）且推理尚未完成时，
     // 暂停 playhead 并显示"等待推理"，直到下一个 chunk 到达后自动恢复。
     // 这解决了"分段1播完但分段2未推理完"时 playhead 继续前进穿过静音区的问题。
     // 窗口最小化时 rAF 会被挂起，由 _ensureStreamingWatchdog 兜底检测。
-    if (_enterStreamingWaitIfUnderrun(context, elapsed)) return;
+    if (_enterStreamingWaitIfUnderrun(context, renderedElapsed)) return;
 
     // 流式播放兜底停止：推理已完成且 playhead 越过播放前沿后，
     // 说明所有已调度的 source 已播完（或 onended 清理未触发）。
@@ -1335,7 +1350,7 @@ export function startPlayheadAnimation() {
     // 播放前沿取 {人声 chunk 前沿, 伴奏结束位置} 的最大值，避免伴奏长于
     // 人声时在人声结束后就提前停止（会截断仍在播放的伴奏）。
     const totalFrontierSec = Math.max(_scheduler.bufferEndSec, _streamingAccEndSec);
-    if (_scheduler.inferenceDone && elapsed >= totalFrontierSec + 0.5) {
+    if (_scheduler.inferenceDone && renderedElapsed >= totalFrontierSec + 0.5) {
       if (!state.streamingFinished) {
         state.streamingFinished = true;
         state.isPlaying = false;
@@ -1357,7 +1372,7 @@ export function startPlayheadAnimation() {
 
     if (state.currentAudioBuffer) {
       const duration = state.currentAudioBuffer.duration;
-      if (elapsed >= duration) {
+      if (renderedElapsed >= duration) {
         stopPlayback();
         dom.timeDisplay.textContent = formatTime(0);
         clearPlayheadLine();
