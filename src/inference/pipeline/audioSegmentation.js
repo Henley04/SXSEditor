@@ -336,9 +336,37 @@ class AudioSegmentation {
     }
 
     /**
-     * Compute synthesis cache key
+     * melPostprocess 载荷哈希（`mp{...}` 缓存键段）。
+     * 独立导出：流式分块缓存的条目需要记录"由哪一版音色曲线产出"，
+     * 曲线变化时只重跑 vocoder（mel 复用），哈希算法必须与缓存键完全一致。
      */
-    computeSynthCacheKey(notes, bpm, options, _interpolateEnvelope) {
+    computeMelPostprocessHash(options) {
+        const mp = options.melPostprocess || null;
+        if (!mp || typeof mp !== 'object') return 'off';
+        return [
+            mp.frames || 0,
+            Number.isFinite(Number(mp.startBeat)) ? Number(mp.startBeat).toFixed(4) : 'x',
+            Number(mp.bpm) || 'x',
+            this.hashArray(mp.sigmaT || []),
+            this.hashArray(mp.sigmaF || []),
+            this.hashArray(mp.blend || []),
+            this.hashArray(mp.boundaries || []),
+        ].join(':');
+    }
+
+    /**
+     * diffstep 输入缓存键（不含 melPostprocess 段）。
+     *
+     * mel 后处理（音色 → 频谱曲线）只改写 vocoder 的输入 mel，diffstep 的产物
+     * 与它无关。因此"原始 mel"的缓存身份用本键：
+     *   - 音高曲线（pitchCurveF0）作用于 diffstep → 在键内，改动必然重新推理；
+     *   - 音色曲线（specBlend/specSmoothT/specSmoothF）不在此键 → 改动后 mel
+     *     直接复用上一次的原始结果，仅需重新后处理 + vocoder。
+     *
+     * computeSynthCacheKey = 本键 + `_mp${melPostprocessHash}`，两者字段构成
+     * 必须保持一致（新增影响 mel 的选项时两处同步）。
+     */
+    computeMelCacheKey(notes, bpm, options, _interpolateEnvelope) {
         const f0Envelope = options.f0Envelope || null;
         const pitchCurveF0 = options.pitchCurveF0 || null;
         const refAudioWavBuffer = options.refAudioWavBuffer || null;
@@ -355,22 +383,6 @@ class AudioSegmentation {
         // singerId 必须纳入缓存键：分片移动到不同歌手时，即使参考音频内容相同（或均为空），
         // 也必须触发重新合成，否则会命中旧缓存返回上一个歌手的音频。
         const singerId = options.singerId || null;
-        // melPostprocess（频谱后处理曲线）直接改写 vocoder 输入的 mel，不纳入键时
-        // "只改曲线"会命中旧缓存返回改前音频，且渲染层会把旧音频打上新签名。
-        // hashArray 对长数组按步长采样（≤2000 点），对每帧载荷的开销可忽略。
-        const mp = options.melPostprocess || null;
-        let melHash = 'off';
-        if (mp && typeof mp === 'object') {
-            melHash = [
-                mp.frames || 0,
-                Number.isFinite(Number(mp.startBeat)) ? Number(mp.startBeat).toFixed(4) : 'x',
-                Number(mp.bpm) || 'x',
-                this.hashArray(mp.sigmaT || []),
-                this.hashArray(mp.sigmaF || []),
-                this.hashArray(mp.blend || []),
-                this.hashArray(mp.boundaries || []),
-            ].join(':');
-        }
 
         let notesHash = 0;
         for (let i = 0; i < notes.length; i++) {
@@ -425,7 +437,20 @@ class AudioSegmentation {
             }
         }
 
-        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}_mp${melHash}`;
+        return `${notesHash}_${bpm}_${f0EnvHash}_${f0Hash}_${refHash}_${totalSteps}_${cfgStrength}_${cfgRescale}_${autoShift}_${pitchShift}_${language || 'base'}_${singerId || 'noid'}_dc${diffStepChunk}_${diffStepChunkFrames}_${diffStepOverlapFrames}_ss${options.smartSegmentation ? 1 : 0}`;
+    }
+
+    /**
+     * Compute synthesis cache key
+     *
+     * = computeMelCacheKey（diffstep 输入）+ `_mp${melPostprocessHash}`（音频级身份）。
+     * 音频缓存（最终音频）必须感知 melPostprocess：音色曲线直接改写 vocoder 输入的
+     * mel，不纳入键时"只改曲线"会命中旧缓存返回改前音频，且渲染层会把旧音频打上
+     * 新签名。而 mel 级缓存（原始 diffstep 产物）用 computeMelCacheKey，与曲线无关。
+     */
+    computeSynthCacheKey(notes, bpm, options, _interpolateEnvelope) {
+        const base = this.computeMelCacheKey(notes, bpm, options, _interpolateEnvelope);
+        return `${base}_mp${this.computeMelPostprocessHash(options)}`;
     }
 
     /**
@@ -450,6 +475,15 @@ class AudioSegmentation {
      */
     computeSegmentCacheKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
         const base = this.computeSynthCacheKey(segNotes, bpm, options);
+        return `${base}_sb${segStartBeat}_fs${segF0Shift}_pt${ptFrameCount || 0}`;
+    }
+
+    /**
+     * 单个 segment 的 mel 级缓存键：computeSegmentCacheKey 去掉 melPostprocess 段。
+     * 音色曲线只改 vocoder 输入，segment 的原始 mel（diffstep 产物）可跨曲线修改复用。
+     */
+    computeSegmentMelKey(segNotes, bpm, options, segStartBeat, segF0Shift, ptFrameCount) {
+        const base = this.computeMelCacheKey(segNotes, bpm, options);
         return `${base}_sb${segStartBeat}_fs${segF0Shift}_pt${ptFrameCount || 0}`;
     }
 
