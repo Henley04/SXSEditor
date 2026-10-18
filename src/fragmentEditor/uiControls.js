@@ -19,17 +19,17 @@ import {
   getParamPanelCollapsed, setParamPanelCollapsed,
   getParamPanelMode, setParamPanelMode,
   getPostprocess, setPostprocess,
-  getPostprocessDefaults,
+  getPostprocessDefaults, getPostprocessCurves,
   getActiveTimbreParam, setActiveTimbreParam,
   getSelectedTimbreAnchors,
   invalidateTimbreCache,
 } from './state.js';
 import {
-  POSTPROCESS_GROUPS, POSTPROCESS_PARAM_LIST, POSTPROCESS_PRESETS,
+  POSTPROCESS_GROUPS, POSTPROCESS_PARAM_LIST, POSTPROCESS_PRESETS, POSTPROCESS_PARAMS,
   formatParamValue, quantizeParamValue,
 } from './postprocessParams.js';
 import { getTimbreDefault, getTimbreKeyframes } from './postprocessAccess.js';
-import { attachHoverTip, installHoverTipGlobalDismiss } from './paramTooltip.js';
+import { attachHoverTip, hideHoverTip, installHoverTipGlobalDismiss } from './paramTooltip.js';
 import { scheduleAutoSave, saveFragmentData } from './projectIO.js';
 import { render, resizeCanvases, resolvePhonemesFromPipeline, clonePitchCurveState, applyPitchCurveSnapshot, genNoteId } from './canvasRenderer.js';
 import { playFragment, stopFragmentPlayback, exportFragment } from './audioPlayback.js';
@@ -373,6 +373,7 @@ function _buildParamSubtabs() {
   for (const group of POSTPROCESS_GROUPS) {
     const label = document.createElement('span');
     label.className = 'pp-group-label';
+    label.dataset.group = group.id;
     label.textContent = t(group.labelKey);
     attachHoverTip(label, () => ({ title: t(group.labelKey), desc: t(group.descKey) }));
     host.appendChild(label);
@@ -405,6 +406,7 @@ function _buildInspectorRows() {
   for (const group of POSTPROCESS_GROUPS) {
     const title = document.createElement('div');
     title.className = 'pp-row-group';
+    title.dataset.group = group.id;
     title.textContent = t(group.labelKey);
     attachHoverTip(title, () => ({ title: t(group.labelKey), desc: t(group.descKey) }));
     host.appendChild(title);
@@ -519,9 +521,17 @@ export function setupPostprocessUi() {
       const preset = POSTPROCESS_PRESETS.find(p => p.id === presetSelect.value);
       if (!preset) return;
       const before = _snapshotPostprocess();
+      // 预设替换**整组**状态：默认值 + 清空全部自动化锚点。
+      // 旧行为只写默认值、保留曲线锚点 —— 锚点优先级高于默认值，导致"选了预设
+      // 但音频没变"；且重开工程时下拉按默认值高亮该预设、曲线却是旧状态，
+      // 与保存内容自相矛盾（预设显示"无"但曲线仍在）。撤销栈可恢复。
       const defaults = getPostprocessDefaults();
+      const curves = getPostprocessCurves();
       for (const [paramId, value] of Object.entries(preset.values)) {
         if (defaults[paramId] !== undefined) defaults[paramId] = quantizeParamValue(paramId, value);
+      }
+      for (const paramId of Object.keys(curves)) {
+        curves[paramId] = { keyframes: [] };
       }
       invalidateTimbreCache();
       const after = _snapshotPostprocess();
@@ -542,6 +552,49 @@ export function setupPostprocessUi() {
  * 把 state 里的取值同步到子标签 / 滑块（不写回 state，纯展示）。
  * 正在拖动的滑块（document.activeElement）跳过，避免和用户操作打架。
  */
+/**
+ * 语言就绪 / 切换后重刷"动态生成"的音色文案。
+ *
+ * 子标签、检查器行、预设下拉是 setupPostprocessUi() 里用 t() 现场拼出来的，
+ * 而它比 initI18n() 先跑（index.js），那时 locale 还是模块默认的 'en'；
+ * applyLocale() 又只认带 data-i18n 的静态节点 —— 于是这些控件会永远停在
+ * 英文。这里按注册表把文本全部重写一遍；悬浮卡内容本来就是每次显示重算，
+ * 只需把已弹出的那张收掉。
+ */
+export function refreshPostprocessLabels() {
+  const groupLabel = (id) => {
+    const g = POSTPROCESS_GROUPS.find(x => x.id === id);
+    return g ? t(g.labelKey) : null;
+  };
+  const paramLabel = (id) => {
+    const p = POSTPROCESS_PARAMS[id];
+    return p ? t(p.labelKey) : null;
+  };
+
+  for (const el of document.querySelectorAll('.pp-group-label[data-group], .pp-row-group[data-group]')) {
+    const text = groupLabel(el.dataset.group);
+    if (text) el.textContent = text;
+  }
+  for (const el of document.querySelectorAll('.pp-chip[data-param], .pp-row-label[data-param]')) {
+    const text = paramLabel(el.dataset.param);
+    if (text) el.textContent = text;
+  }
+
+  // 预设下拉的 option 文本
+  const presetSelect = document.getElementById('pp-preset-select');
+  if (presetSelect) {
+    for (const opt of Array.from(presetSelect.options)) {
+      const preset = POSTPROCESS_PRESETS.find(p => p.id === opt.value);
+      if (preset) opt.textContent = t(preset.labelKey);
+    }
+  }
+
+  // 读数里的单位（帧 / σ）与手动/自动标签也随语言变化
+  syncPostprocessUi();
+  // 正在显示的那张悬浮卡是旧语言渲染的，收掉让它下次悬浮重新生成
+  hideHoverTip();
+}
+
 export function syncPostprocessUi() {
   const activeParam = getActiveTimbreParam();
   document.querySelectorAll('.pp-chip').forEach(chip => {

@@ -141,6 +141,30 @@ describe('分片编辑器 音色 / 后处理 lane 接线', () => {
     expect(tip.querySelector('.pp-tip-desc').textContent).to.contain(t('fragment.ppF0MedianDesc'));
   });
 
+  it('语言切换后，动态生成的参数名跟着变（不再永远停在英文）', () => {
+    // 回归：子标签/检查器行在 setupPostprocessUi() 里用 t() 现场生成，而它比
+    // initI18n() 先跑，locale 还是默认的 'en'；applyLocale() 只刷静态节点，
+    // 于是这些控件会一直是英文（整页中文里唯独音色参数名是英文）。
+    const { setLocale } = require('../src/i18n/index.js');
+    const chip = document.querySelector('.pp-chip[data-param="f0Median"]');
+    const english = chip.textContent;
+    try {
+      setLocale('zh-CN');
+      uiControls.refreshPostprocessLabels();
+      expect(chip.textContent).to.equal(t('fragment.ppF0Median'));
+      expect(chip.textContent).to.not.equal(english);
+      expect(document.querySelector('.pp-row-label[data-param="f0Median"]').textContent)
+        .to.equal(t('fragment.ppF0Median'));
+      expect(document.querySelector('.pp-group-label[data-group="spec"]').textContent)
+        .to.equal(t('fragment.ppGroupSpec'));
+      expect(document.querySelector('.pp-row-group[data-group="f0"]').textContent)
+        .to.equal(t('fragment.ppGroupF0'));
+    } finally {
+      setLocale('en');
+      uiControls.refreshPostprocessLabels();
+    }
+  });
+
   it('右键按住锚点的 HUD 会画出操作提示行（左右调强度 · 上下调平滑）', () => {
     const ctx = cr.ctx;
     ctx.__reset();
