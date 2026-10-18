@@ -31,6 +31,7 @@ let DUMP_DIR = null;
 let currentLogFileName = null;
 let currentLogStream = null;
 let initialized = false;
+let deferredInitialized = false;
 let bootedAt = Date.now();
 
 function ensureDirs() {
@@ -252,31 +253,30 @@ function init() {
   if (initialized) return;
   initialized = true;
 
+  // ---- pre-ready 最小集（必须在 app.ready 前完成）----
+  //
+  // Electron 要求 crashReporter.start() 与 app.setPath('crashDumps') 在
+  // app.ready 之前调用，否则渲染进程的原生崩溃不会被捕获。这两项是本函数
+  // 唯一不能延后的部分。
+  //
+  // 其余工作（建目录、日志轮转、开日志流、patchConsole）合计实测 ~10ms，
+  // 全部同步阻塞在 whenReady 之前 —— 而 splash 窗口是在 whenReady 回调的
+  // 第一行才创建的，所以这段时间用户屏幕上什么都没有。它们对崩溃捕获也
+  // 不是必需的（start() 自己会用 DUMP_DIR），因此延后到 ready 之后。
   LOG_DIR = path.join(app.getPath('userData'), 'logs');
   DUMP_DIR = path.join(app.getPath('userData'), 'dumps');
-  ensureDirs();
-  rotateLogs();
-  rotateDumps();
 
-  // Open log file for this session (append mode; one file per launch).
-  currentLogFileName = `sxseditor-${timestamp()}-${process.pid}.log`;
-  try {
-    currentLogStream = fs.createWriteStream(path.join(LOG_DIR, currentLogFileName), { flags: 'a' });
-  } catch (e) {
-    try { process.stderr.write(`[crashReporter] Failed to open log: ${e.message}\n`); } catch (_) {}
-  }
+  // DUMP_DIR 必须**立刻**建出来：crashReporter.start() 下面就会往这个
+  // 目录写 minidump，目录不存在时原生崩溃会静默丢失。mkdirSync 实测
+  // ~0.9ms（已存在时立即返回），留在 pre-ready 无害。
+  // LOG_DIR 只被日志流用，交给 initDeferred。
+  try { fs.mkdirSync(DUMP_DIR, { recursive: true }); } catch (_) {}
 
-  logBootBanner();
-
-  // Mirror all main-process console output to the log file.
-  patchConsole();
-
-  // Configure native crash dumps directory & start crash reporter.
-  // Both must run BEFORE app.ready to capture renderer native crashes.
   try {
     app.setPath('crashDumps', DUMP_DIR);
   } catch (e) {
-    writeLog('WARN', `setPath('crashDumps') failed: ${e.message}`);
+    // setPath 尚未生效时 writeLog 还没有日志流可用，直接写 stderr。
+    try { process.stderr.write(`[crashReporter] setPath('crashDumps') failed: ${e.message}\n`); } catch (_) {}
   }
   try {
     crashReporter.start({
@@ -285,13 +285,20 @@ function init() {
       uploadToServer: false,
       ignoreSystemCrashHandler: true,
     });
-    writeLog('INFO', `Crash reporter started (native dumps -> ${DUMP_DIR})`);
   } catch (e) {
-    writeLog('WARN', `crashReporter.start failed: ${e.message}`);
+    try { process.stderr.write(`[crashReporter] crashReporter.start failed: ${e.message}\n`); } catch (_) {}
+  }
+
+  // 剩余初始化挪到 app.ready 之后立刻执行（见 initDeferred）。
+  if (app.isReady()) {
+    initDeferred();
+  } else {
+    app.once('ready', initDeferred);
   }
 
   // Process-level error handlers. These replace the minimal stderr-only
   // handlers in main.js with full log-file + dump-info recording.
+  // 注册在 pre-ready：ready 之前崩溃时至少还有 uncaughtException 兜底。
   process.on('uncaughtException', (err) => {
     handleFatal(err, 'uncaughtException');
   });
@@ -315,6 +322,36 @@ function init() {
   } catch (_) {}
 
   registerIpc();
+}
+
+// 建目录 / 轮转 / 开日志流 / patchConsole。
+//
+// 由 app 'ready' 事件触发（在 main.js 的 whenReady 回调之外注册，所以不会
+// 和 splash 创建抢同一个微任务队列的头部）。做完这步 main.js 才继续
+// 加载模块并显示窗口 —— 日志系统因此仍能覆盖启动期的绝大多数事件，只是
+// 少了 pre-ready 那几毫秒内的 console 输出。
+function initDeferred() {
+  if (deferredInitialized) return;
+  deferredInitialized = true;
+
+  ensureDirs();
+  rotateLogs();
+  rotateDumps();
+
+  // Open log file for this session (append mode; one file per launch).
+  currentLogFileName = `sxseditor-${timestamp()}-${process.pid}.log`;
+  try {
+    currentLogStream = fs.createWriteStream(path.join(LOG_DIR, currentLogFileName), { flags: 'a' });
+  } catch (e) {
+    try { process.stderr.write(`[crashReporter] Failed to open log: ${e.message}\n`); } catch (_) {}
+  }
+
+  logBootBanner();
+
+  // Mirror all main-process console output to the log file.
+  patchConsole();
+
+  writeLog('INFO', `Crash reporter started (native dumps -> ${DUMP_DIR})`);
 }
 
 module.exports = {

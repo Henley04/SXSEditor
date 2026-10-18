@@ -23,11 +23,22 @@ const skipDocs = process.env.SKIP_DOCS === '1';
 //     require('onnxruntime-web')，也不在 webpack externals 里
 //     （见 webpack.main.config.js），运行时文件由 CopyPlugin 拷进 .webpack。
 //   · @types/* 是纯类型声明，运行时不需要。
+//   · node_modules/.cache/ 是 @babel/register 的**开发期**转译缓存
+//     （package.json 里 @babel/register 是 devDependency，全仓 src/ 零引用，
+//     运行期没有任何代码读它）。实测该目录在本机 node_modules 下有 64 MB，
+//     其中 @babel/register/.babel.*.development.json 单文件 54.3 MB。
+//   · *.map 源映射：生产构建 devtool:false（见 webpack.*.config.js），
+//    残留的 .map 全部来自 node_modules 里的第三方包，运行时不用。
 //
 // 重要：这些排除只在 **Windows 发行** 上生效。仓库仍保留 maker-zip(deb/rpm/darwin)
 // 作为"源码构建"目标（README 明确标注 macOS/Linux 为 source-build / CPU-only），
 // 对那些目标 onnxruntime-node 的 darwin / linux 二进制恰恰是**必需**的。
 // 因此这里按 process.platform 分支，而不是无条件砍掉。
+//
+// ⚠️ 启动性能：asar 体积直接决定冷启动成本 —— Electron 每次启动都要
+// 读取并 JSON.parse 整个 asar header（本包header 1.12 MB / 4292 条），
+// 而 Windows Defender 实时保护还要扫描这些字节。裁掉 ~118 MB 死重
+// 既减小安装体积，也缩短冷启动 I/O 与杀软扫描时间。
 // ---------------------------------------------------------------------------
 const isWindowsTarget = process.platform === 'win32';
 
@@ -41,16 +52,31 @@ const WINDOWS_DEAD_WEIGHT_PREFIXES = [
   'node_modules/onnxruntime-web/',
   // 纯类型声明。
   'node_modules/@types/',
+  // 开发期转译缓存（@babel/register 等），运行期零引用。约 64 MB。
+  'node_modules/.cache/',
+];
+
+// 死重后缀（按整条路径判定，与目录前缀无关）。
+const WINDOWS_DEAD_WEIGHT_SUFFIXES = [
+  // 第三方包自带的 source map。生产构建 devtool:false，自有 bundle 不带
+  // .map；残留的 143 个 .map（约 47.8 MB）全部来自 node_modules。
+  '.map',
 ];
 
 /**
- * 命中上述前缀即视为死重。
+ * 命中上述前缀或后缀即视为死重。
  * @param {string} normalized 前导斜杠已剥离、反斜杠已转正斜杠的相对路径
  * @returns {boolean}
  */
 function isDeadWeight(normalized) {
   if (!isWindowsTarget) return false;
-  return WINDOWS_DEAD_WEIGHT_PREFIXES.some(prefix => normalized.startsWith(prefix));
+  if (WINDOWS_DEAD_WEIGHT_PREFIXES.some(prefix => normalized.startsWith(prefix))) {
+    return true;
+  }
+  // 只砍 node_modules 下的 .map：.webpack/ 是我们自己产出的，构建配置
+  // （devtool）已经管过，不在这里重复干预。
+  return normalized.startsWith('node_modules/')
+    && WINDOWS_DEAD_WEIGHT_SUFFIXES.some(suffix => normalized.endsWith(suffix));
 }
 
 module.exports = {
